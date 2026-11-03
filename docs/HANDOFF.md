@@ -45,6 +45,10 @@
 - 테스트: `cargo test`, `vitest`(테마 해석, 토큰 대비 검사기, i18n 키 패리티,
   단축키, 모의 백엔드), Playwright 스모크 7건(온보딩→홈, 테마 4종 전환·유지,
   언어 전환, 전 라우트·팔레트, 자연어 명령, 설정·보존 저장, 모델 관리자).
+- 실제 런타임 확인(Linux, Xvfb): `tauri build --debug --no-bundle` 바이너리를
+  `DOCULENS_APP_DATA` 픽스처로 헤드리스 실행 → settings.json 로드·정규화,
+  `active_workspace` 자동 열기(`startup workspace: Opened`), `.doculens/` 14개
+  디렉터리·lock 생성, 웹뷰→Rust IPC(settings/workspace/hw/registry) 오류 로그 0건.
 - 라이선스 게이트: `deny.toml`(cargo-deny), `scripts/check-licenses.mjs`(npm),
   `THIRD-PARTY-NOTICES.md`, `docs/LICENSE-POLICY.md`.
 - CI: `.github/workflows/ci.yml`(rust / web / license / windows-check),
