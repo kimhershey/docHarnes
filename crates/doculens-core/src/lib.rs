@@ -1,0 +1,23 @@
+//! DocuLens core library.
+//!
+//! Pure Rust (no UI/Tauri dependencies). Everything the desktop shell needs to
+//! bootstrap: global settings, workspace folders, hardware probing & tiering,
+//! VRAM budgeting, the model registry and the deterministic natural-language
+//! pre-router. Later phases add engine management, the document pipeline,
+//! search and the NL planner on top of this crate.
+//!
+//! Policy: every dependency must be permissively licensed (no source-disclosure
+//! obligation). See `docs/LICENSE-POLICY.md`.
+
+pub mod error;
+pub mod hw;
+pub mod memory;
+pub mod paths;
+pub mod prerouter;
+pub mod registry;
+pub mod retention;
+pub mod settings;
+pub mod version;
+pub mod workspace;
+
+pub use error::{CoreError, Result};

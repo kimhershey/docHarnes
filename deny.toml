@@ -1,0 +1,53 @@
+# cargo-deny configuration — license gate for Rust dependencies
+# (design §3.2, docs/LICENSE-POLICY.md). Run: cargo deny check licenses
+
+[graph]
+targets = [
+  { triple = "x86_64-pc-windows-msvc" },
+  { triple = "x86_64-unknown-linux-gnu" },
+]
+all-features = false
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "MIT-0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "CC0-1.0",
+  "0BSD",
+  "BSL-1.0",
+  "OpenSSL",
+  "MPL-2.0",   # allowed only unmodified (decision 10)
+  "Unlicense",
+]
+exceptions = []
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "allow"
+deny = [
+  # copyleft bindings explicitly rejected by the design (Appendix C)
+  { crate = "kiwi-rs", reason = "LGPL" },
+  { crate = "pdfium-sys", reason = "use pdfium-render + pdfium-binaries (MIT/BSD-3)" },
+]
+
+[advisories]
+version = 2
+ignore = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

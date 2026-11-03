@@ -1,0 +1,499 @@
+{
+  "app": {
+    "name": "DocuLens",
+    "tagline": "오프라인 VLM 문서처리",
+    "loading": "불러오는 중…",
+    "preview_mode": "브라우저 미리보기 모드 (Tauri 없음 · 모의 백엔드)"
+  },
+  "common": {
+    "ok": "확인",
+    "cancel": "취소",
+    "save": "저장",
+    "saved": "저장했습니다",
+    "close": "닫기",
+    "next": "다음",
+    "back": "이전",
+    "done": "완료",
+    "later": "나중에",
+    "copy": "복사",
+    "copied": "복사했습니다",
+    "refresh": "새로 고침",
+    "browse": "폴더 선택…",
+    "create": "만들기",
+    "open": "열기",
+    "retry": "다시 시도",
+    "yes": "예",
+    "no": "아니요",
+    "none": "없음",
+    "unknown": "알 수 없음",
+    "auto": "자동",
+    "manual": "수동",
+    "name": "이름",
+    "path": "경로",
+    "size": "크기",
+    "license": "라이선스",
+    "status": "상태",
+    "installed": "설치됨",
+    "not_installed": "미설치",
+    "forever": "무기한",
+    "days": "일",
+    "loading": "불러오는 중…",
+    "error": "오류",
+    "warning": "주의",
+    "planned_in": "{{phase}} 단계에서 구현",
+    "phase2": "2차(v1.1)",
+    "open_folder": "폴더 열기",
+    "select": "선택",
+    "enabled": "사용",
+    "disabled": "사용 안 함"
+  },
+  "nav": {
+    "home": "홈",
+    "library": "문서 라이브러리",
+    "search": "검색",
+    "assistant": "어시스턴트",
+    "review": "검토 큐",
+    "schemas": "추출 스키마 / 양식",
+    "knowledge": "지식 베이스",
+    "generate": "문서 생성",
+    "projects": "프로젝트",
+    "organize": "정리 / 내보내기",
+    "jobs": "작업",
+    "models": "모델 관리자",
+    "settings": "설정",
+    "collapse": "사이드바 접기",
+    "expand": "사이드바 펼치기",
+    "main": "주요 화면",
+    "phase2_group": "2차 범위"
+  },
+  "topbar": {
+    "command": "자연어 명령 또는 검색…",
+    "workspace": "워크스페이스",
+    "no_workspace": "워크스페이스 없음",
+    "open_other": "다른 폴더 열기…",
+    "new_workspace": "새 워크스페이스…",
+    "recent": "최근 워크스페이스",
+    "close_workspace": "워크스페이스 닫기",
+    "jobs": "작업 {{count}}건",
+    "theme": "테마",
+    "language": "언어",
+    "no_model": "모델 없음",
+    "tier": "티어"
+  },
+  "statusbar": {
+    "engine": "엔진",
+    "engine_not_started": "엔진 미연결 (P1)",
+    "engine_no_model": "모델 없음",
+    "vram": "VRAM",
+    "queue": "큐 {{count}}건",
+    "model": "모델",
+    "network_offline": "네트워크 없음 (오프라인)",
+    "network_online": "온라인",
+    "preview": "미리보기"
+  },
+  "theme": {
+    "light": "라이트",
+    "dark": "다크",
+    "system": "시스템",
+    "high-contrast": "고대비",
+    "toggle": "라이트/다크 전환",
+    "changed": "테마를 '{{theme}}'(으)로 변경했습니다",
+    "preview_title": "미리보기",
+    "preview_body": "본문 텍스트와 보조 텍스트, 강조 색상이 이렇게 보입니다.",
+    "desc": {
+      "light": "밝은 배경, 일반 사무 환경",
+      "dark": "어두운 배경, 눈의 피로 감소",
+      "system": "Windows 설정을 따릅니다",
+      "high-contrast": "WCAG AAA 대비, Windows 고대비 모드 연동"
+    }
+  },
+  "language": {
+    "ko": "한국어",
+    "en": "English",
+    "changed": "언어를 '{{language}}'(으)로 변경했습니다"
+  },
+  "palette": {
+    "placeholder": "명령을 입력하거나 화면 이름을 검색하세요 (예: /테마 다크, 설정 열어줘)",
+    "no_results": "결과 없음 — Enter로 어시스턴트에게 보냅니다",
+    "navigate": "이동",
+    "actions": "동작",
+    "run": "바로 실행",
+    "send_to_assistant": "어시스턴트에게 보내기: \"{{text}}\"",
+    "set_theme": "테마: {{theme}}",
+    "set_language": "언어: {{language}}",
+    "open_screen": "{{screen}} 열기",
+    "help": "도움말",
+    "toggle_theme": "라이트/다크 전환",
+    "open_workspace": "다른 워크스페이스 열기"
+  },
+  "onboarding": {
+    "title": "DocuLens 시작하기",
+    "subtitle": "세 단계면 준비가 끝납니다. 모든 처리는 이 PC 안에서만 이루어집니다.",
+    "steps": {
+      "workspace": "워크스페이스",
+      "hardware": "하드웨어",
+      "model": "모델 준비"
+    },
+    "workspace": {
+      "intro": "문서와 추론 데이터를 보관할 폴더를 선택하세요. 폴더 안에 .doculens/ 가 만들어지고, 모델도 그 안에 저장됩니다(이동 가능).",
+      "path_label": "워크스페이스 폴더",
+      "path_placeholder": "예: C:\\Work\\Docs",
+      "name_label": "표시 이름 (선택)",
+      "name_placeholder": "예: 회계팀 문서",
+      "recent": "최근 워크스페이스",
+      "inspect_new": "새 워크스페이스를 만듭니다.",
+      "inspect_existing": "기존 워크스페이스 '{{name}}'을(를) 엽니다.",
+      "inspect_documents": "문서 파일 {{count}}개를 발견했습니다. 가져오기는 P2 단계에서 제공됩니다.",
+      "inspect_missing": "폴더가 아직 없습니다. 만들고 열기를 누르면 새로 만듭니다.",
+      "inspect_unsafe": "드라이브 루트나 홈 폴더는 워크스페이스로 사용할 수 없습니다.",
+      "inspect_locked": "다른 인스턴스(pid {{pid}}, {{host}})가 이 워크스페이스를 사용 중입니다.",
+      "inspect_stale": "이전 실행의 잠금 파일이 남아 있습니다. 자동으로 복구됩니다.",
+      "force_unlock": "강제로 열기",
+      "create_and_open": "만들고 열기",
+      "open": "열기",
+      "browser_hint": "브라우저 미리보기에서는 폴더 선택창 대신 경로를 직접 입력합니다.",
+      "settings_sync": "선택한 경로는 설정 파일(settings.json)의 active_workspace 에 저장되며, 설정 > 워크스페이스에서 바꿀 수 있습니다."
+    },
+    "hardware": {
+      "intro": "감지된 하드웨어로 티어를 산정하고 권장 모델을 고릅니다. 모델 관리자에서 언제든 수동으로 바꿀 수 있습니다.",
+      "gpu": "GPU",
+      "no_gpu": "GPU를 감지하지 못했습니다 (CPU 전용 티어)",
+      "vram": "VRAM (가용 / 전체)",
+      "ram": "RAM (가용 / 전체)",
+      "cpu": "CPU",
+      "os": "운영체제",
+      "tier": "산정 티어",
+      "recommended": "권장 모델",
+      "basis": "산정 근거",
+      "warnings": "주의 사항",
+      "refresh": "다시 감지"
+    },
+    "model": {
+      "intro": "VLM 모델 파일(GGUF + mmproj)이 있어야 분류·OCR·추출이 동작합니다. 지금 준비하지 않아도 가져오기·검색·정리는 사용할 수 있습니다.",
+      "download": "온라인 다운로드",
+      "download_desc": "네트워크가 있을 때 Hugging Face에서 받아 SHA-256으로 검증합니다. P1 단계에서 제공됩니다.",
+      "download_offline": "현재 네트워크 연결이 없습니다.",
+      "import": "USB·폴더에서 가져오기",
+      "import_desc": "다른 PC에서 받은 GGUF + mmproj 파일을 워크스페이스의 모델 폴더에 넣으면 자동으로 등록됩니다(드롭인 폴더).",
+      "later": "나중에",
+      "later_desc": "모델 없이 시작합니다. 모델 관리자에서 언제든 준비할 수 있습니다.",
+      "required_files": "필요 파일 목록 내보내기",
+      "required_files_hint": "파일명·크기·SHA-256·URL을 텍스트로 복사해 다른 PC에서 내려받으세요.",
+      "models_dir": "모델 폴더",
+      "finish": "시작하기"
+    }
+  },
+  "hw": {
+    "warn": {
+      "cpu_only_slow": "GPU가 없어 CPU로 실행합니다. OCR은 페이지당 2~4분이 걸릴 수 있습니다.",
+      "no_nvml": "NVIDIA 드라이버(NVML)를 찾지 못했습니다. AMD/Intel GPU는 Vulkan 백엔드(P1)로 지원됩니다.",
+      "low_ram": "RAM이 8 GB 미만입니다. 큰 문서 처리 시 느려질 수 있습니다.",
+      "cuda_driver_too_old": "드라이버의 CUDA 버전이 12.1 미만입니다. 드라이버를 업데이트하거나 Vulkan 백엔드를 사용하세요.",
+      "old_gpu_arch": "GPU 아키텍처가 오래되어(CC < 7.0) 일부 커널이 느리거나 지원되지 않을 수 있습니다."
+    },
+    "basis": {
+      "nvml_free_vram": "NVML 가용 VRAM 기준",
+      "engine_free_vram": "엔진 보고 가용 VRAM 기준",
+      "no_gpu": "GPU 미감지",
+      "manual_override": "수동 고정"
+    },
+    "tier": {
+      "cpu_only": "CPU 전용",
+      "vram_6gb": "6 GB",
+      "vram_8gb": "8 GB",
+      "vram_12gb": "12 GB",
+      "vram_16gb": "16 GB",
+      "vram_24gb_plus": "24 GB 이상"
+    },
+    "nvml": "NVML",
+    "nvml_available": "NVML 사용 가능",
+    "nvml_unavailable": "NVML 없음",
+    "cuda_driver": "드라이버 CUDA",
+    "compute_capability": "Compute Capability",
+    "cores": "{{physical}}코어 / {{logical}}스레드",
+    "probed_at": "감지 시각"
+  },
+  "home": {
+    "welcome": "{{name}}",
+    "welcome_sub": "워크스페이스: {{path}}",
+    "stats": {
+      "new": "신규",
+      "processing": "처리 중",
+      "review": "검토 대기",
+      "done": "완료"
+    },
+    "stats_hint": "문서 통계는 P2~P4 단계에서 채워집니다.",
+    "engine_card": "하드웨어 · 엔진",
+    "command_title": "자연어로 명령하세요",
+    "command_hint": "테마·언어·화면 이동은 즉시 실행되고, 문서 작업 명령은 어시스턴트(P5 플래너)로 전달됩니다.",
+    "command_placeholder": "예: inbox 처리해줘 / 지난달 영수증 합계 / 다크 모드로 바꿔",
+    "examples": ["inbox 처리", "지난달 영수증 합계", "세금계산서 → 엑셀", "다크 모드로 바꿔", "설정 열어줘"],
+    "quick": {
+      "title": "빠른 작업",
+      "import": "문서 가져오기",
+      "models": "모델 준비",
+      "settings": "설정",
+      "assistant": "어시스턴트 열기"
+    },
+    "recent_docs": "최근 문서",
+    "recent_empty": "아직 문서가 없습니다. 가져오기는 P2 단계에서 제공됩니다.",
+    "no_workspace": "워크스페이스를 먼저 열어주세요."
+  },
+  "assistant": {
+    "title": "어시스턴트",
+    "new_chat": "새 대화",
+    "scope": {
+      "label": "범위",
+      "all": "전체",
+      "folder": "현재 폴더",
+      "selection": "선택 문서"
+    },
+    "placeholder": "자연어로 명령하거나 질문하세요 (한국어 / English) · /로 슬래시 명령",
+    "send": "보내기",
+    "empty": "무엇을 도와드릴까요? 예시를 눌러 시작해 보세요.",
+    "help_title": "도움말",
+    "help_body": "지금(P0) 바로 실행되는 명령: /테마 다크|라이트|시스템|고대비, /언어 한국어|영어, /열기 <화면>, 설정 열어줘, 다크 모드로 바꿔. 문서 가져오기·분류·OCR·추출·검색·요약·정리·내보내기 명령은 P5 플래너에서 플랜 카드로 확인 후 실행됩니다.",
+    "executed": "실행했습니다",
+    "pending_title": "플래너(P5)에서 처리됩니다",
+    "pending_body": "이 명령은 자연어 플래너가 플랜 카드(단계·영향 범위·미리보기)를 만든 뒤 승인 후 실행합니다. 지금은 해석 결과만 보여드립니다.",
+    "date_resolved": "날짜 범위 해석: {{from}} ~ {{to}} ({{label}})",
+    "source_slash": "슬래시 명령",
+    "source_phrase": "문장 규칙",
+    "confidence": "신뢰도 {{value}}",
+    "examples_title": "예시",
+    "examples": ["inbox 처리", "지난달 영수증 합계", "세금계산서 → 엑셀", "/테마 다크", "영어로 바꿔줘", "/열기 모델"]
+  },
+  "models": {
+    "title": "모델 관리자",
+    "hardware": "하드웨어 감지",
+    "tier": "티어",
+    "tier_mode": "티어 산정",
+    "tier_auto": "자동 (가용 VRAM 기준)",
+    "tier_manual": "수동 고정",
+    "active_model": "활성 모델",
+    "active_auto": "자동 (티어 권장 모델)",
+    "recommended": "권장",
+    "registry": "모델 레지스트리",
+    "columns": {
+      "model": "모델",
+      "role": "역할",
+      "size": "크기",
+      "license": "라이선스",
+      "tiers": "티어",
+      "status": "상태"
+    },
+    "role": {
+      "vlm": "VLM",
+      "llm": "LLM",
+      "embedding": "임베딩",
+      "reranker": "리랭커"
+    },
+    "open_models_dir": "모델 폴더 열기",
+    "required_files": "필요 파일 목록",
+    "download": "다운로드",
+    "import": "가져오기",
+    "activate": "활성화",
+    "p1_hint": "P1 단계에서 제공",
+    "backend": "백엔드",
+    "profile": "프로파일",
+    "profiles": {
+      "accuracy": "정확도",
+      "balanced": "균형",
+      "speed": "속도",
+      "fine_print": "잔글씨"
+    },
+    "backends": {
+      "auto": "자동",
+      "cuda": "CUDA (cu121 / cu129 팩)",
+      "vulkan": "Vulkan",
+      "cpu": "CPU"
+    },
+    "models_dir": "모델 저장 위치",
+    "no_workspace": "워크스페이스를 열면 설치 상태를 확인할 수 있습니다.",
+    "missing_files": "누락: {{files}}",
+    "verified": "검증됨",
+    "unverified": "해시 미고정",
+    "drop_in_hint": "GGUF + mmproj 파일을 이 폴더의 하위 폴더에 넣으면 자동 등록됩니다(P1). 지금은 파일 이름으로 설치 여부만 확인합니다.",
+    "engine": "엔진",
+    "engine_hint": "llama-server 사이드카(라우터 모드)는 P1 단계에서 연결됩니다.",
+    "estimated_memory": "예상 VRAM",
+    "vision": "비전",
+    "text_only": "텍스트 전용"
+  },
+  "settings": {
+    "title": "설정",
+    "tabs": {
+      "general": "일반",
+      "theme": "테마",
+      "workspace": "워크스페이스",
+      "processing": "처리",
+      "privacy": "프라이버시 · 보존",
+      "shortcuts": "단축키",
+      "about": "정보"
+    },
+    "general": {
+      "language": "언어",
+      "language_hint": "UI와 명령 모두 한국어가 기본이며 영어도 사용할 수 있습니다.",
+      "scale": "UI 배율",
+      "scale_hint": "90~150%. Ctrl+Shift+(+/−)로도 조절됩니다. Windows DPI 설정과 독립입니다.",
+      "reduced_motion": "애니메이션 줄이기",
+      "reduced_motion_system": "시스템 설정 따름",
+      "reduced_motion_on": "항상 줄이기",
+      "reduced_motion_off": "줄이지 않음",
+      "sidebar": "사이드바 접기"
+    },
+    "theme": {
+      "title": "테마",
+      "hint": "선택은 settings.json에 저장되고 창 제목표시줄에도 적용됩니다. 문서 이미지는 다크 모드에서도 반전되지 않습니다."
+    },
+    "workspace": {
+      "active": "활성 워크스페이스",
+      "none": "열린 워크스페이스가 없습니다.",
+      "change": "다른 폴더 열기…",
+      "new": "새 워크스페이스…",
+      "recent": "최근 워크스페이스",
+      "forget": "목록에서 제거",
+      "settings_file": "설정 파일",
+      "settings_file_hint": "active_workspace 값을 직접 편집해도 다음 시작 시 반영됩니다. 경로가 없으면 온보딩으로 이동합니다.",
+      "open_file": "파일 위치 열기",
+      "close": "워크스페이스 닫기",
+      "models_location": "모델 저장 위치",
+      "models_in_workspace": "워크스페이스 내부 (.doculens/models)",
+      "preferred_model": "권장 모델 (워크스페이스)",
+      "created": "생성",
+      "id": "ID"
+    },
+    "processing": {
+      "auto_level": "가져오기 후 자동 처리",
+      "auto_levels": {
+        "classify_only": "분류까지",
+        "classify_and_ocr": "분류 + OCR",
+        "full": "분류 + OCR + 추출"
+      },
+      "render_dpi": "기본 렌더 DPI",
+      "review_threshold": "검토 임계치",
+      "review_threshold_hint": "이 신뢰도 미만 필드는 검토 큐로 보냅니다.",
+      "audit_sample": "고신뢰 필드 무작위 감사 비율",
+      "organize_reviewed_only": "검토 완료 문서만 정리/이동",
+      "inbox_watch": "inbox 폴더 감시",
+      "cache": "페이지 캐시 상한",
+      "hint": "실제 파이프라인은 P2~P4 단계에서 연결됩니다. 값은 지금 저장됩니다."
+    },
+    "privacy": {
+      "pii_masking": "고유식별정보 마스킹 저장",
+      "pii_masking_hint": "주민등록번호·외국인등록번호·계좌번호는 추출 즉시 마스킹 형태(YYMMDD-G******)만 저장하고 원문은 저장하지 않습니다.",
+      "retention_title": "보존 / 파기 기간",
+      "retention_hint": "워크스페이스별로 저장됩니다. 만료 항목은 매일 파기 작업이 OS 휴지통을 거치지 않고 삭제하고 내역을 감사 로그에 남깁니다.",
+      "items": {
+        "documents_days": "원본 문서",
+        "extractions_days": "추출 결과 · 필드",
+        "job_logs_days": "작업 로그",
+        "app_logs_days": "앱 로그",
+        "journal_days": "파일 조작 저널(되돌리기)",
+        "chats_days": "대화 기록",
+        "temp_days": "마스킹 전 임시 데이터",
+        "golden_exports_days": "골든셋 내보내기본"
+      },
+      "forever": "무기한",
+      "same_as_documents": "문서와 동일",
+      "immediate": "즉시 파기",
+      "page_cache": "페이지 캐시 상한 (GB, LRU)",
+      "purge_enabled": "매일 파기 작업 실행",
+      "purge_hour": "파기 작업 시각",
+      "purge_log": "파기 내역 보기",
+      "purge_log_empty": "아직 파기 내역이 없습니다 (P7).",
+      "requires_workspace": "보존 기간은 워크스페이스를 열어야 설정할 수 있습니다.",
+      "saved": "보존 정책을 저장했습니다"
+    },
+    "shortcuts": {
+      "action": "동작",
+      "keys": "키",
+      "hint": "단축키 편집은 다음 단계에서 제공됩니다. 한글 입력 조합 중에는 Enter가 무시됩니다.",
+      "actions": {
+        "command_palette": "명령 바",
+        "toggle_theme": "라이트/다크 전환",
+        "execute_plan": "플랜 실행",
+        "close": "닫기",
+        "review_approve": "검토: 승인",
+        "review_edit": "검토: 수정",
+        "review_hold": "검토: 보류",
+        "review_next": "검토: 다음",
+        "explain_selection": "선택 영역 설명",
+        "undo": "되돌리기",
+        "redo": "다시 실행",
+        "zoom_in": "확대",
+        "zoom_out": "축소",
+        "zoom_reset": "원래 크기",
+        "ui_scale_up": "UI 배율 키우기",
+        "ui_scale_down": "UI 배율 줄이기",
+        "go_home": "홈으로",
+        "go_library": "라이브러리로",
+        "go_assistant": "어시스턴트로",
+        "go_settings": "설정으로"
+      }
+    },
+    "about": {
+      "version": "버전",
+      "settings_path": "설정 파일",
+      "app_data": "앱 데이터 폴더",
+      "runtime": "런타임",
+      "licenses": "오픈소스 고지",
+      "licenses_hint": "소스 공개 의무가 없는 라이선스(Apache-2.0 / MIT / BSD / ISC / OFL 등)만 사용합니다. 모델 가중치는 Apache-2.0(Qwen3.5) 및 MIT(bge-m3)입니다.",
+      "notices": "THIRD-PARTY-NOTICES 보기",
+      "design_doc": "설계 문서",
+      "font": "글꼴: Pretendard Variable (OFL-1.1, 원본 파일 동봉)"
+    }
+  },
+  "placeholder": {
+    "title": "{{phase}} 단계에서 구현됩니다",
+    "features": "이 화면에서 제공될 기능",
+    "phase2_title": "2차(v1.1) 범위로 미뤄진 기능입니다",
+    "phase2_body": "1차(v1.0)는 P0~P4와 플래너 핵심 op까지입니다. 문서 자동 생성과 프로젝트 정합성 검증은 2차에서 구현합니다."
+  },
+  "pages": {
+    "library": {
+      "features": ["폴더 트리(inbox / documents / exports)와 필터(유형·날짜·거래처·상태·태그·신뢰도·중복)", "썸네일 그리드 / 리스트 전환, 가상 스크롤", "드래그앤드롭 → 가져오기 미리보기(HWP/HWPX/DOCX 변환 배지)", "다중 선택 일괄 작업: 분류·OCR·추출·요약·정리·내보내기·태그·병합·삭제", "집계 바(건수·합계·평균, 검토 대기 포함 토글)"]
+    },
+    "search": {
+      "features": ["키워드(형태소 + trigram) / 시맨틱 / 하이브리드 검색", "문서·페이지·스니펫·점수 결과, 클릭 → 뷰어 하이라이트", "임베딩 모델 미설치 시 안내"]
+    },
+    "review": {
+      "features": ["저신뢰·검증 실패 필드 큐, 임계치 슬라이더(기본 0.8)와 무작위 감사 샘플링", "키보드 검토: Enter 승인 · E 수정 · S 보류 · N 다음 (한글 조합 중 Enter 무시)", "이미지 크롭 미리보기, 일괄 승인, 강한 모델/잔글씨 재추출", "필수 필드 전부 승인 → 문서 상태 '검토 완료'"]
+    },
+    "schemas": {
+      "features": ["양식 등록: 샘플 문서 → VLM 필드 도출 → 확인 → 유형·스키마·템플릿 저장", "내장 샘플 양식 6종(세금계산서·영수증·사업자등록증·계약서·신청서·거래명세서)", "자연어로 스키마 만들기/수정하기, 필드 그리드(key/라벨/타입/필수/정규식)", "유형→스키마 매핑, 버전 이력, 스키마 린트, 샘플 테스트 실행"]
+    },
+    "knowledge": {
+      "features": ["적재 마법사(폴더·파일 다중 선택, 컬렉션·메타데이터, 진행률)", "컬렉션·문서 버전(신·구판)·용어집 관리", "구조 인지 청킹(조·항·표) + 형태소/trigram FTS + 임베딩(bge-m3) 하이브리드 검색", "질문 테스트 패널과 답변 피드백 통계"]
+    },
+    "organize": {
+      "features": ["파일명·폴더 템플릿 편집기({{year}} {{month}} {{doc_type}} {{vendor}} {{total}} …)", "미리보기 diff 테이블(dry-run), 검토 완료 문서만 기본", "실행 / 되돌리기(저널 기반 배치 이력)", "내보내기 마법사: XLSX / CSV / JSONL / Markdown / 검색 가능 PDF"]
+    },
+    "jobs": {
+      "features": ["큐 / 진행 중 / 완료 / 실패 탭, 진행률·ETA·토큰/초", "취소·재시도·일시정지/재개·우선순위, 항목별 오류 로그", "완료 OS 알림, 절전 방지, 디스크·캐시 예상 용량, 엔진 메트릭"]
+    },
+    "generate": {
+      "features": ["양식 선택 또는 형식 자연어 설명 + 내용 자연어 입력 → 자동 작성(한국어 기본)", "지식 베이스 근거 패널(출처 인용, 제외/추가)", "HWPX / DOCX / PDF / Markdown 저장 + 라이브러리 자동 등록"]
+    },
+    "projects": {
+      "features": ["케이스 단위 문서 묶음, 필수 문서 체크리스트, 접수 상태 칸반", "자연어 → 정합성 규칙 변환·실행, 결과 표(통과/불일치/판단불가, 근거 링크)", "보완요청서 생성, 관계 그래프"]
+    }
+  },
+  "errors": {
+    "io": "파일 입출력 오류: {{message}}",
+    "json": "설정 파일 형식 오류: {{message}}",
+    "workspace_locked": "다른 인스턴스가 워크스페이스를 사용 중입니다 (pid {{pid}}, {{host}}).",
+    "invalid_workspace": "워크스페이스로 사용할 수 없는 경로입니다: {{message}}",
+    "no_workspace": "열린 워크스페이스가 없습니다.",
+    "unknown_model": "알 수 없는 모델입니다: {{message}}",
+    "invalid": "잘못된 값입니다: {{message}}",
+    "internal": "내부 오류: {{message}}",
+    "generic": "오류: {{message}}"
+  },
+  "startup": {
+    "settings_recovered": "설정 파일이 손상되어 기본값으로 복구했습니다. 백업: {{backup}}",
+    "workspace_missing": "설정된 워크스페이스({{path}})를 찾을 수 없어 온보딩으로 이동합니다.",
+    "workspace_locked": "워크스페이스({{path}})가 다른 인스턴스(pid {{pid}}, {{host}})에 의해 사용 중입니다.",
+    "workspace_failed": "워크스페이스({{path}})를 열지 못했습니다: {{message}}"
+  }
+}

@@ -1,0 +1,27 @@
+[package]
+name = "doculens-core"
+description = "DocuLens core: settings, workspace, hardware tiering, model registry (no UI dependencies)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["nvml"]
+# NVIDIA NVML probing (nvml.dll / libnvidia-ml.so is loaded dynamically at runtime; absence is not an error)
+nvml = ["dep:nvml-wrapper"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+dirs.workspace = true
+sysinfo.workspace = true
+nvml-wrapper = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true

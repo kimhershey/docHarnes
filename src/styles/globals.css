@@ -1,0 +1,245 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------------
+   Fonts — Pretendard Variable (OFL-1.1, unmodified file bundled locally;
+   see public/fonts/LICENSE-Pretendard.txt). Falls back to Noto Sans KR / system.
+   ------------------------------------------------------------------------ */
+@font-face {
+  font-family: "Pretendard Variable";
+  font-weight: 45 920;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/PretendardVariable.woff2") format("woff2-variations");
+}
+
+/* ------------------------------------------------------------------------
+   Design tokens (design §3.7.4). Each theme redefines the same variables on
+   html[data-theme=...]. `system` is resolved to light/dark by the inline
+   script in index.html and by ThemeProvider (data-theme always holds a
+   concrete theme; data-theme-setting holds the user's choice).
+   ------------------------------------------------------------------------ */
+:root,
+html[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f7f7f8;
+  --bg-elevated: #ffffff;
+  --bg-sunken: #eeeef0;
+  --fg: #1b1b1f;
+  --fg-muted: #5c5f66;
+  --fg-subtle: #80848c;
+  --border: #d9dadf;
+  --border-strong: #b9bbc2;
+  --accent: #2458d6;
+  --accent-fg: #ffffff;
+  --accent-soft: #e3eaff;
+  --danger: #c62828;
+  --danger-soft: #fde7e7;
+  --ok: #1e7b3a;
+  --ok-soft: #e1f3e6;
+  --warn: #9a5b00;
+  --warn-soft: #fff0d6;
+  --info: #0b6a8a;
+  --info-soft: #dff2f8;
+  --ring: #2458d6;
+  --selection: #c9d7ff;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 4px 16px rgb(0 0 0 / 0.06);
+  --radius: 8px;
+  --radius-sm: 6px;
+  --radius-lg: 12px;
+  --canvas: #e2e3e8; /* document canvas background; page images are never inverted */
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #141518;
+  --bg-elevated: #1d1f24;
+  --bg-sunken: #0f1012;
+  --fg: #e8e9ec;
+  --fg-muted: #a8acb5;
+  --fg-subtle: #7d828c;
+  --border: #2d3037;
+  --border-strong: #454953;
+  --accent: #7da2ff;
+  --accent-fg: #0b1733;
+  --accent-soft: #1f2b4d;
+  --danger: #ff7b7b;
+  --danger-soft: #3d1c1c;
+  --ok: #6fd48a;
+  --ok-soft: #173224;
+  --warn: #ffc466;
+  --warn-soft: #3d2d12;
+  --info: #6fcbe6;
+  --info-soft: #0f2d38;
+  --ring: #7da2ff;
+  --selection: #2b3d73;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.5), 0 6px 20px rgb(0 0 0 / 0.45);
+  --canvas: #0b0c0e;
+}
+
+/* WCAG AAA (≥ 7:1) palette; also used when Windows high-contrast mode is on. */
+html[data-theme="high-contrast"] {
+  color-scheme: dark;
+  --bg: #000000;
+  --bg-elevated: #0a0a0a;
+  --bg-sunken: #000000;
+  --fg: #ffffff;
+  --fg-muted: #f2f2f2;
+  --fg-subtle: #d9d9d9;
+  --border: #ffffff;
+  --border-strong: #ffffff;
+  --accent: #ffd400;
+  --accent-fg: #000000;
+  --accent-soft: #3a3200;
+  --danger: #ff6e6e;
+  --danger-soft: #1a0000;
+  --ok: #5cff8a;
+  --ok-soft: #003a12;
+  --warn: #ffc14d;
+  --warn-soft: #3a2a00;
+  --info: #7fe8ff;
+  --info-soft: #003a44;
+  --ring: #ffd400;
+  --selection: #5a4b00;
+  --shadow: none;
+  --radius: 4px;
+  --radius-sm: 2px;
+  --radius-lg: 6px;
+  --canvas: #000000;
+}
+
+/* Windows forced-colors mode: let the OS palette through. */
+@media (forced-colors: active) {
+  :root {
+    --bg: Canvas;
+    --bg-elevated: Canvas;
+    --bg-sunken: Canvas;
+    --fg: CanvasText;
+    --fg-muted: CanvasText;
+    --fg-subtle: GrayText;
+    --border: CanvasText;
+    --border-strong: CanvasText;
+    --accent: Highlight;
+    --accent-fg: HighlightText;
+    --accent-soft: Canvas;
+    --ring: Highlight;
+  }
+}
+
+/* Expose tokens to Tailwind utilities (bg-bg, text-fg, border-border, ...). */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-bg-elevated: var(--bg-elevated);
+  --color-bg-sunken: var(--bg-sunken);
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-ring: var(--ring);
+  --color-canvas: var(--canvas);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius);
+  --radius-lg: var(--radius-lg);
+  --font-sans: "Pretendard Variable", Pretendard, "Noto Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Cascadia Code", "JetBrains Mono", Consolas, "D2Coding", ui-monospace, monospace;
+}
+
+/* UI scale (90–150 %) is applied as the root font size; everything uses rem. */
+html {
+  font-size: calc(16px * var(--ui-scale, 1));
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-feature-settings: "tnum" 1; /* tabular numbers for amounts */
+  word-break: keep-all; /* Korean line breaking */
+  overflow-wrap: anywhere;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  user-select: none;
+  cursor: default;
+}
+
+#root {
+  height: 100%;
+}
+
+::selection {
+  background: var(--selection);
+}
+
+input, textarea, [contenteditable="true"], .selectable {
+  user-select: text;
+  cursor: auto;
+}
+
+*:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html:not([data-reduced-motion="off"]) *,
+  html:not([data-reduced-motion="off"]) *::before,
+  html:not([data-reduced-motion="off"]) *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+html[data-reduced-motion="on"] *,
+html[data-reduced-motion="on"] *::before,
+html[data-reduced-motion="on"] *::after {
+  animation-duration: 0.001ms !important;
+  transition-duration: 0.001ms !important;
+}
+
+/* Thin, theme-aware scrollbars (WebView2 / Chromium). */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 8px; border: 2px solid var(--bg); }
+::-webkit-scrollbar-track { background: transparent; }
+
+kbd {
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--bg-sunken);
+  color: var(--fg-muted);
+}
+
+/* cmdk items */
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.5rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+.palette-item[data-selected="true"] {
+  background: var(--accent-soft);
+}
+.palette-item[data-disabled="true"] {
+  opacity: 0.5;
+  pointer-events: none;
+}

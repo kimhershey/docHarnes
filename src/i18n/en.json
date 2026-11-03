@@ -1,0 +1,499 @@
+{
+  "app": {
+    "name": "DocuLens",
+    "tagline": "Offline VLM document processing",
+    "loading": "Loading…",
+    "preview_mode": "Browser preview mode (no Tauri · mock backend)"
+  },
+  "common": {
+    "ok": "OK",
+    "cancel": "Cancel",
+    "save": "Save",
+    "saved": "Saved",
+    "close": "Close",
+    "next": "Next",
+    "back": "Back",
+    "done": "Done",
+    "later": "Later",
+    "copy": "Copy",
+    "copied": "Copied",
+    "refresh": "Refresh",
+    "browse": "Choose folder…",
+    "create": "Create",
+    "open": "Open",
+    "retry": "Retry",
+    "yes": "Yes",
+    "no": "No",
+    "none": "None",
+    "unknown": "Unknown",
+    "auto": "Auto",
+    "manual": "Manual",
+    "name": "Name",
+    "path": "Path",
+    "size": "Size",
+    "license": "License",
+    "status": "Status",
+    "installed": "Installed",
+    "not_installed": "Not installed",
+    "forever": "Forever",
+    "days": "days",
+    "loading": "Loading…",
+    "error": "Error",
+    "warning": "Warning",
+    "planned_in": "Planned for phase {{phase}}",
+    "phase2": "Phase 2 (v1.1)",
+    "open_folder": "Open folder",
+    "select": "Select",
+    "enabled": "Enabled",
+    "disabled": "Disabled"
+  },
+  "nav": {
+    "home": "Home",
+    "library": "Document library",
+    "search": "Search",
+    "assistant": "Assistant",
+    "review": "Review queue",
+    "schemas": "Schemas / forms",
+    "knowledge": "Knowledge base",
+    "generate": "Generate document",
+    "projects": "Projects",
+    "organize": "Organize / export",
+    "jobs": "Jobs",
+    "models": "Model manager",
+    "settings": "Settings",
+    "collapse": "Collapse sidebar",
+    "expand": "Expand sidebar",
+    "main": "Main",
+    "phase2_group": "Phase 2"
+  },
+  "topbar": {
+    "command": "Natural-language command or search…",
+    "workspace": "Workspace",
+    "no_workspace": "No workspace",
+    "open_other": "Open another folder…",
+    "new_workspace": "New workspace…",
+    "recent": "Recent workspaces",
+    "close_workspace": "Close workspace",
+    "jobs": "{{count}} jobs",
+    "theme": "Theme",
+    "language": "Language",
+    "no_model": "No model",
+    "tier": "Tier"
+  },
+  "statusbar": {
+    "engine": "Engine",
+    "engine_not_started": "Engine not connected (P1)",
+    "engine_no_model": "No model",
+    "vram": "VRAM",
+    "queue": "{{count}} queued",
+    "model": "Model",
+    "network_offline": "No network (offline)",
+    "network_online": "Online",
+    "preview": "Preview"
+  },
+  "theme": {
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System",
+    "high-contrast": "High contrast",
+    "toggle": "Toggle light/dark",
+    "changed": "Theme changed to '{{theme}}'",
+    "preview_title": "Preview",
+    "preview_body": "Body text, secondary text and the accent colour look like this.",
+    "desc": {
+      "light": "Light background for ordinary office lighting",
+      "dark": "Dark background, less eye strain",
+      "system": "Follows the Windows setting",
+      "high-contrast": "WCAG AAA contrast, follows Windows high-contrast mode"
+    }
+  },
+  "language": {
+    "ko": "한국어",
+    "en": "English",
+    "changed": "Language changed to '{{language}}'"
+  },
+  "palette": {
+    "placeholder": "Type a command or search a screen (e.g. /theme dark, open settings)",
+    "no_results": "No results — press Enter to send to the assistant",
+    "navigate": "Go to",
+    "actions": "Actions",
+    "run": "Run now",
+    "send_to_assistant": "Send to assistant: \"{{text}}\"",
+    "set_theme": "Theme: {{theme}}",
+    "set_language": "Language: {{language}}",
+    "open_screen": "Open {{screen}}",
+    "help": "Help",
+    "toggle_theme": "Toggle light/dark",
+    "open_workspace": "Open another workspace"
+  },
+  "onboarding": {
+    "title": "Welcome to DocuLens",
+    "subtitle": "Three steps and you are ready. Everything stays on this PC.",
+    "steps": {
+      "workspace": "Workspace",
+      "hardware": "Hardware",
+      "model": "Model"
+    },
+    "workspace": {
+      "intro": "Choose the folder that will hold your documents and inference data. A .doculens/ directory is created inside it and models are stored there too (portable).",
+      "path_label": "Workspace folder",
+      "path_placeholder": "e.g. C:\\Work\\Docs",
+      "name_label": "Display name (optional)",
+      "name_placeholder": "e.g. Accounting documents",
+      "recent": "Recent workspaces",
+      "inspect_new": "A new workspace will be created.",
+      "inspect_existing": "Existing workspace '{{name}}' will be opened.",
+      "inspect_documents": "Found {{count}} document files. Import arrives in phase P2.",
+      "inspect_missing": "The folder does not exist yet. 'Create and open' will create it.",
+      "inspect_unsafe": "A drive root or the home folder cannot be used as a workspace.",
+      "inspect_locked": "Another instance (pid {{pid}} on {{host}}) is using this workspace.",
+      "inspect_stale": "A lock file from a previous run was found. It will be recovered automatically.",
+      "force_unlock": "Open anyway",
+      "create_and_open": "Create and open",
+      "open": "Open",
+      "browser_hint": "In the browser preview there is no native folder picker; type a path instead.",
+      "settings_sync": "The path is stored as active_workspace in settings.json and can be changed under Settings › Workspace."
+    },
+    "hardware": {
+      "intro": "The detected hardware decides the tier and the recommended model. You can override both in the model manager at any time.",
+      "gpu": "GPU",
+      "no_gpu": "No GPU detected (CPU-only tier)",
+      "vram": "VRAM (free / total)",
+      "ram": "RAM (available / total)",
+      "cpu": "CPU",
+      "os": "Operating system",
+      "tier": "Tier",
+      "recommended": "Recommended model",
+      "basis": "Basis",
+      "warnings": "Warnings",
+      "refresh": "Probe again"
+    },
+    "model": {
+      "intro": "Classification, OCR and extraction need a VLM (GGUF + mmproj). You can skip this now; import, search and organizing work without a model.",
+      "download": "Download online",
+      "download_desc": "Fetches from Hugging Face and verifies SHA-256 when a network is available. Arrives in phase P1.",
+      "download_offline": "No network connection right now.",
+      "import": "Import from USB / folder",
+      "import_desc": "Drop GGUF + mmproj files fetched on another PC into the workspace model folder; they are registered automatically (drop-in folder).",
+      "later": "Later",
+      "later_desc": "Start without a model. You can prepare one in the model manager any time.",
+      "required_files": "Export required file list",
+      "required_files_hint": "Copy file names, sizes, SHA-256 and URLs as text to download them on another PC.",
+      "models_dir": "Model folder",
+      "finish": "Get started"
+    }
+  },
+  "hw": {
+    "warn": {
+      "cpu_only_slow": "No usable GPU: running on the CPU. OCR may take 2–4 minutes per page.",
+      "no_nvml": "NVIDIA driver (NVML) not found. AMD/Intel GPUs are supported through the Vulkan backend (P1).",
+      "low_ram": "Less than 8 GB of RAM. Large documents may process slowly.",
+      "cuda_driver_too_old": "The driver's CUDA version is below 12.1. Update the driver or use the Vulkan backend.",
+      "old_gpu_arch": "Old GPU architecture (CC < 7.0): some kernels may be slow or unsupported."
+    },
+    "basis": {
+      "nvml_free_vram": "Free VRAM reported by NVML",
+      "engine_free_vram": "Free VRAM reported by the engine",
+      "no_gpu": "No GPU detected",
+      "manual_override": "Manual override"
+    },
+    "tier": {
+      "cpu_only": "CPU only",
+      "vram_6gb": "6 GB",
+      "vram_8gb": "8 GB",
+      "vram_12gb": "12 GB",
+      "vram_16gb": "16 GB",
+      "vram_24gb_plus": "24 GB+"
+    },
+    "nvml": "NVML",
+    "nvml_available": "NVML available",
+    "nvml_unavailable": "NVML unavailable",
+    "cuda_driver": "Driver CUDA",
+    "compute_capability": "Compute capability",
+    "cores": "{{physical}} cores / {{logical}} threads",
+    "probed_at": "Probed at"
+  },
+  "home": {
+    "welcome": "{{name}}",
+    "welcome_sub": "Workspace: {{path}}",
+    "stats": {
+      "new": "New",
+      "processing": "Processing",
+      "review": "Awaiting review",
+      "done": "Done"
+    },
+    "stats_hint": "Document statistics are filled in phases P2–P4.",
+    "engine_card": "Hardware · engine",
+    "command_title": "Command in natural language",
+    "command_hint": "Theme, language and navigation run immediately; document commands go to the assistant (P5 planner).",
+    "command_placeholder": "e.g. process the inbox / last month's receipt total / switch to dark mode",
+    "examples": ["process inbox", "last month's receipt total", "tax invoices → Excel", "switch to dark mode", "open settings"],
+    "quick": {
+      "title": "Quick actions",
+      "import": "Import documents",
+      "models": "Prepare a model",
+      "settings": "Settings",
+      "assistant": "Open assistant"
+    },
+    "recent_docs": "Recent documents",
+    "recent_empty": "No documents yet. Import arrives in phase P2.",
+    "no_workspace": "Open a workspace first."
+  },
+  "assistant": {
+    "title": "Assistant",
+    "new_chat": "New chat",
+    "scope": {
+      "label": "Scope",
+      "all": "All",
+      "folder": "Current folder",
+      "selection": "Selected documents"
+    },
+    "placeholder": "Command or ask in natural language (한국어 / English) · / for slash commands",
+    "send": "Send",
+    "empty": "How can I help? Try one of the examples.",
+    "help_title": "Help",
+    "help_body": "Commands that run right now (P0): /theme dark|light|system|high-contrast, /lang ko|en, /open <screen>, open settings, switch to dark mode. Import, classify, OCR, extract, search, summarize, organize and export commands are executed by the P5 planner after you approve a plan card.",
+    "executed": "Done",
+    "pending_title": "Handled by the planner (P5)",
+    "pending_body": "The natural-language planner will turn this into a plan card (steps, affected files, preview) and run it after approval. For now only the interpretation is shown.",
+    "date_resolved": "Date range: {{from}} – {{to}} ({{label}})",
+    "source_slash": "slash command",
+    "source_phrase": "phrase rule",
+    "confidence": "confidence {{value}}",
+    "examples_title": "Examples",
+    "examples": ["process inbox", "last month's receipt total", "tax invoices → Excel", "/theme dark", "switch to Korean", "/open models"]
+  },
+  "models": {
+    "title": "Model manager",
+    "hardware": "Hardware",
+    "tier": "Tier",
+    "tier_mode": "Tier selection",
+    "tier_auto": "Automatic (free VRAM)",
+    "tier_manual": "Manual",
+    "active_model": "Active model",
+    "active_auto": "Automatic (tier recommendation)",
+    "recommended": "Recommended",
+    "registry": "Model registry",
+    "columns": {
+      "model": "Model",
+      "role": "Role",
+      "size": "Size",
+      "license": "License",
+      "tiers": "Tiers",
+      "status": "Status"
+    },
+    "role": {
+      "vlm": "VLM",
+      "llm": "LLM",
+      "embedding": "Embedding",
+      "reranker": "Reranker"
+    },
+    "open_models_dir": "Open model folder",
+    "required_files": "Required files",
+    "download": "Download",
+    "import": "Import",
+    "activate": "Activate",
+    "p1_hint": "Arrives in phase P1",
+    "backend": "Backend",
+    "profile": "Profile",
+    "profiles": {
+      "accuracy": "Accuracy",
+      "balanced": "Balanced",
+      "speed": "Speed",
+      "fine_print": "Fine print"
+    },
+    "backends": {
+      "auto": "Automatic",
+      "cuda": "CUDA (cu121 / cu129 pack)",
+      "vulkan": "Vulkan",
+      "cpu": "CPU"
+    },
+    "models_dir": "Model storage",
+    "no_workspace": "Open a workspace to see installation status.",
+    "missing_files": "Missing: {{files}}",
+    "verified": "Verified",
+    "unverified": "Hash not pinned",
+    "drop_in_hint": "Put GGUF + mmproj files into a sub-folder here and they are registered automatically (P1). For now only file names are checked.",
+    "engine": "Engine",
+    "engine_hint": "The llama-server sidecar (router mode) is connected in phase P1.",
+    "estimated_memory": "Estimated VRAM",
+    "vision": "Vision",
+    "text_only": "Text only"
+  },
+  "settings": {
+    "title": "Settings",
+    "tabs": {
+      "general": "General",
+      "theme": "Theme",
+      "workspace": "Workspace",
+      "processing": "Processing",
+      "privacy": "Privacy · retention",
+      "shortcuts": "Shortcuts",
+      "about": "About"
+    },
+    "general": {
+      "language": "Language",
+      "language_hint": "Korean is the default for the UI and commands; English works too.",
+      "scale": "UI scale",
+      "scale_hint": "90–150 %. Also Ctrl+Shift+(+/−). Independent of the Windows DPI setting.",
+      "reduced_motion": "Reduce motion",
+      "reduced_motion_system": "Follow system",
+      "reduced_motion_on": "Always reduce",
+      "reduced_motion_off": "Never reduce",
+      "sidebar": "Collapse sidebar"
+    },
+    "theme": {
+      "title": "Theme",
+      "hint": "The choice is stored in settings.json and applied to the window title bar. Document images are never inverted in dark mode."
+    },
+    "workspace": {
+      "active": "Active workspace",
+      "none": "No workspace is open.",
+      "change": "Open another folder…",
+      "new": "New workspace…",
+      "recent": "Recent workspaces",
+      "forget": "Remove from list",
+      "settings_file": "Settings file",
+      "settings_file_hint": "Editing active_workspace by hand is picked up on the next start. A missing path leads to onboarding.",
+      "open_file": "Show file",
+      "close": "Close workspace",
+      "models_location": "Model storage",
+      "models_in_workspace": "Inside the workspace (.doculens/models)",
+      "preferred_model": "Preferred model (workspace)",
+      "created": "Created",
+      "id": "ID"
+    },
+    "processing": {
+      "auto_level": "Automatic processing after import",
+      "auto_levels": {
+        "classify_only": "Classify only",
+        "classify_and_ocr": "Classify + OCR",
+        "full": "Classify + OCR + extract"
+      },
+      "render_dpi": "Default render DPI",
+      "review_threshold": "Review threshold",
+      "review_threshold_hint": "Fields below this confidence go to the review queue.",
+      "audit_sample": "Random audit sample of high-confidence fields",
+      "organize_reviewed_only": "Organize/move reviewed documents only",
+      "inbox_watch": "Watch the inbox folder",
+      "cache": "Page cache cap",
+      "hint": "The pipeline itself is connected in phases P2–P4. Values are saved now."
+    },
+    "privacy": {
+      "pii_masking": "Store identifiers masked",
+      "pii_masking_hint": "Resident/foreigner registration numbers and bank accounts are stored only in masked form (YYMMDD-G******); the original is never stored.",
+      "retention_title": "Retention / purge",
+      "retention_hint": "Stored per workspace. A daily purge job deletes expired items without the OS recycle bin and writes the counts to the audit log.",
+      "items": {
+        "documents_days": "Original documents",
+        "extractions_days": "Extraction results · fields",
+        "job_logs_days": "Job logs",
+        "app_logs_days": "App logs",
+        "journal_days": "File-operation journal (undo)",
+        "chats_days": "Conversations",
+        "temp_days": "Temporary pre-masking data",
+        "golden_exports_days": "Golden-set exports"
+      },
+      "forever": "Forever",
+      "same_as_documents": "Same as documents",
+      "immediate": "Purge immediately",
+      "page_cache": "Page cache cap (GB, LRU)",
+      "purge_enabled": "Run the daily purge job",
+      "purge_hour": "Purge time",
+      "purge_log": "Show purge history",
+      "purge_log_empty": "No purge history yet (P7).",
+      "requires_workspace": "Open a workspace to edit retention.",
+      "saved": "Retention policy saved"
+    },
+    "shortcuts": {
+      "action": "Action",
+      "keys": "Keys",
+      "hint": "Editing shortcuts arrives in a later phase. Enter is ignored while composing Korean text.",
+      "actions": {
+        "command_palette": "Command bar",
+        "toggle_theme": "Toggle light/dark",
+        "execute_plan": "Execute plan",
+        "close": "Close",
+        "review_approve": "Review: approve",
+        "review_edit": "Review: edit",
+        "review_hold": "Review: hold",
+        "review_next": "Review: next",
+        "explain_selection": "Explain selection",
+        "undo": "Undo",
+        "redo": "Redo",
+        "zoom_in": "Zoom in",
+        "zoom_out": "Zoom out",
+        "zoom_reset": "Reset zoom",
+        "ui_scale_up": "Increase UI scale",
+        "ui_scale_down": "Decrease UI scale",
+        "go_home": "Go to home",
+        "go_library": "Go to library",
+        "go_assistant": "Go to assistant",
+        "go_settings": "Go to settings"
+      }
+    },
+    "about": {
+      "version": "Version",
+      "settings_path": "Settings file",
+      "app_data": "App data folder",
+      "runtime": "Runtime",
+      "licenses": "Open-source notices",
+      "licenses_hint": "Only licenses without a source-disclosure obligation are used (Apache-2.0 / MIT / BSD / ISC / OFL …). Model weights are Apache-2.0 (Qwen3.5) and MIT (bge-m3).",
+      "notices": "Open THIRD-PARTY-NOTICES",
+      "design_doc": "Design document",
+      "font": "Font: Pretendard Variable (OFL-1.1, unmodified file bundled)"
+    }
+  },
+  "placeholder": {
+    "title": "Implemented in phase {{phase}}",
+    "features": "What this screen will provide",
+    "phase2_title": "Deferred to phase 2 (v1.1)",
+    "phase2_body": "Phase 1 (v1.0) covers P0–P4 plus the core planner operations. Document generation and project consistency checks follow in phase 2."
+  },
+  "pages": {
+    "library": {
+      "features": ["Folder tree (inbox / documents / exports) and filters (type, date, vendor, status, tags, confidence, duplicates)", "Thumbnail grid / list view with virtual scrolling", "Drag-and-drop → import preview (HWP/HWPX/DOCX conversion badge)", "Bulk actions on selections: classify, OCR, extract, summarize, organize, export, tag, merge, delete", "Aggregation bar (count, sum, average, include-pending toggle)"]
+    },
+    "search": {
+      "features": ["Keyword (morpheme + trigram) / semantic / hybrid search", "Document, page, snippet and score results; click → highlight in the viewer", "Guidance when no embedding model is installed"]
+    },
+    "review": {
+      "features": ["Queue of low-confidence / failed-validation fields, threshold slider (default 0.8) and random audit sampling", "Keyboard review: Enter approve · E edit · S hold · N next (Enter ignored while composing Korean)", "Image crop preview, bulk approve, re-extract with a stronger model / fine-print profile", "All required fields approved → document status 'reviewed'"]
+    },
+    "schemas": {
+      "features": ["Form registration: sample document → VLM field discovery → confirm → save type, schema and template", "Six built-in sample forms (tax invoice, receipt, business registration, contract, application, transaction statement)", "Create/edit schemas in natural language, field grid (key / label / type / required / regex)", "Type → schema mapping, version history, schema lint, sample test runs"]
+    },
+    "knowledge": {
+      "features": ["Ingestion wizard (multi-select folders/files, collection and metadata, progress)", "Collections, document versions (old/new) and glossary", "Structure-aware chunking (articles, clauses, tables) + morpheme/trigram FTS + embeddings (bge-m3) hybrid search", "Question test panel and answer feedback statistics"]
+    },
+    "organize": {
+      "features": ["File-name and folder template editor ({{year}} {{month}} {{doc_type}} {{vendor}} {{total}} …)", "Preview diff table (dry run), reviewed documents only by default", "Run / undo (journal-based batch history)", "Export wizard: XLSX / CSV / JSONL / Markdown / searchable PDF"]
+    },
+    "jobs": {
+      "features": ["Queued / running / done / failed tabs with progress, ETA and tokens per second", "Cancel, retry, pause/resume, priorities, per-item error logs", "OS notification on completion, keep-awake, disk/cache estimates, engine metrics"]
+    },
+    "generate": {
+      "features": ["Pick a form or describe the format in natural language, then describe the content → automatic drafting (Korean by default)", "Knowledge-base evidence panel (citations, include/exclude)", "Save as HWPX / DOCX / PDF / Markdown and register in the library"]
+    },
+    "projects": {
+      "features": ["Case-level document bundles, required-document checklist, intake status board", "Natural language → consistency rules, result table (pass / mismatch / undetermined with evidence links)", "Supplement-request letters, relationship graph"]
+    }
+  },
+  "errors": {
+    "io": "File error: {{message}}",
+    "json": "Settings file format error: {{message}}",
+    "workspace_locked": "Another instance is using the workspace (pid {{pid}} on {{host}}).",
+    "invalid_workspace": "This path cannot be used as a workspace: {{message}}",
+    "no_workspace": "No workspace is open.",
+    "unknown_model": "Unknown model: {{message}}",
+    "invalid": "Invalid value: {{message}}",
+    "internal": "Internal error: {{message}}",
+    "generic": "Error: {{message}}"
+  },
+  "startup": {
+    "settings_recovered": "The settings file was corrupt and has been reset to defaults. Backup: {{backup}}",
+    "workspace_missing": "The configured workspace ({{path}}) was not found; showing onboarding.",
+    "workspace_locked": "The workspace ({{path}}) is in use by another instance (pid {{pid}} on {{host}}).",
+    "workspace_failed": "Could not open the workspace ({{path}}): {{message}}"
+  }
+}
