@@ -25,6 +25,20 @@ pub enum CoreError {
     UnknownModel(String),
     #[error("invalid value: {0}")]
     Invalid(String),
+    #[error("invalid GGUF file {path}: {reason}")]
+    Gguf { path: PathBuf, reason: String },
+    #[error("engine binary not found: {0}")]
+    EngineNotFound(String),
+    #[error("engine error: {0}")]
+    Engine(String),
+    #[error("engine is not running")]
+    EngineNotRunning,
+    #[error("download failed: {0}")]
+    Download(String),
+    #[error("operation cancelled")]
+    Cancelled,
+    #[error("timed out: {0}")]
+    Timeout(String),
 }
 
 impl CoreError {
@@ -33,6 +47,12 @@ impl CoreError {
     }
     pub fn json(path: impl Into<PathBuf>, source: serde_json::Error) -> Self {
         CoreError::Json { path: path.into(), source }
+    }
+    pub fn gguf(path: impl Into<PathBuf>, reason: impl Into<String>) -> Self {
+        CoreError::Gguf { path: path.into(), reason: reason.into() }
+    }
+    pub fn engine(reason: impl Into<String>) -> Self {
+        CoreError::Engine(reason.into())
     }
     /// Stable machine-readable code for the UI (i18n lookup key).
     pub fn code(&self) -> &'static str {
@@ -44,6 +64,13 @@ impl CoreError {
             CoreError::NoWorkspace => "no_workspace",
             CoreError::UnknownModel(_) => "unknown_model",
             CoreError::Invalid(_) => "invalid",
+            CoreError::Gguf { .. } => "invalid_gguf",
+            CoreError::EngineNotFound(_) => "engine_not_found",
+            CoreError::Engine(_) => "engine",
+            CoreError::EngineNotRunning => "engine_not_running",
+            CoreError::Download(_) => "download",
+            CoreError::Cancelled => "cancelled",
+            CoreError::Timeout(_) => "timeout",
         }
     }
 }

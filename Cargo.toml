@@ -21,6 +21,12 @@ dirs = "6"
 sysinfo = { version = "0.37", default-features = false, features = ["system"] }
 nvml-wrapper = "0.11"
 tempfile = "3"
+sha2 = "0.10"
+blake3 = "1"
+ureq = { version = "3", default-features = false, features = ["json", "gzip", "native-tls-no-default"] }
+notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
+libc = "0.2"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security"] }
 
 # See https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

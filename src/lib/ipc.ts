@@ -6,9 +6,19 @@ import type {
   AppInfo,
   AppSettings,
   Assessment,
+  ChatTestResult,
   DateRange,
+  EngineBinaryInfo,
+  EngineDevice,
+  EngineStatus,
   HardwareSummary,
+  ImportMode,
+  ImportPlan,
+  Job,
   Language,
+  LogLine,
+  ModelIndex,
+  ModelInstanceStatus,
   PreRouteResult,
   RegistryView,
   RetentionPolicy,
@@ -26,6 +36,11 @@ type InvokeArgs = Record<string, unknown> | undefined;
 
 let mockModule: Promise<typeof import("./mock-backend")> | null = null;
 
+function mock(): Promise<typeof import("./mock-backend")> {
+  mockModule ??= import("./mock-backend");
+  return mockModule;
+}
+
 async function invoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
   if (isTauri) {
     const { invoke: tauriInvoke } = await import("@tauri-apps/api/core");
@@ -37,9 +52,22 @@ async function invoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
       throw e;
     }
   }
-  mockModule ??= import("./mock-backend");
-  const mock = await mockModule;
-  return mock.mockInvoke<T>(cmd, args);
+  const m = await mock();
+  return m.mockInvoke<T>(cmd, args);
+}
+
+/**
+ * Subscribes to a backend event (`engine://status`, `jobs://update`, …).
+ * Resolves to an unsubscribe function.
+ */
+export async function subscribe<T>(event: string, handler: (payload: T) => void): Promise<() => void> {
+  if (isTauri) {
+    const { listen } = await import("@tauri-apps/api/event");
+    const unlisten = await listen<T>(event, (e) => handler(e.payload));
+    return () => void unlisten();
+  }
+  const m = await mock();
+  return m.mockSubscribe<T>(event, handler);
 }
 
 export const api = {
@@ -73,6 +101,33 @@ export const api = {
   registryList: () => invoke<RegistryView>("registry_list"),
   registryRequiredFilesText: (modelId: string) => invoke<string>("registry_required_files_text", { modelId }),
 
+  modelsScan: () => invoke<ModelIndex>("models_scan"),
+  modelsList: () => invoke<ModelIndex>("models_list"),
+  modelsImportPlan: (paths: string[], mode: ImportMode, folderName: string | null = null) =>
+    invoke<ImportPlan>("models_import_plan", { args: { paths, mode, folder_name: folderName } }),
+  modelsImportRun: (plan: ImportPlan) => invoke<string>("models_import_run", { plan }),
+  modelsDownload: (modelId: string) => invoke<string>("models_download", { modelId }),
+  modelsHash: (folder: string) => invoke<string>("models_hash", { folder }),
+  modelsDelete: (folder: string) => invoke<void>("models_delete", { folder }),
+
+  engineStatus: () => invoke<EngineStatus>("engine_status"),
+  engineStart: () => invoke<EngineStatus>("engine_start"),
+  engineStop: () => invoke<void>("engine_stop"),
+  engineRestart: () => invoke<EngineStatus>("engine_restart"),
+  engineLoadModel: (modelId: string, warmup: boolean | null = null) => invoke<string>("engine_load_model", { modelId, warmup }),
+  engineUnloadModel: (modelId: string) => invoke<void>("engine_unload_model", { modelId }),
+  engineRefreshModels: (reload = false) => invoke<ModelInstanceStatus[]>("engine_refresh_models", { reload }),
+  engineChatTest: (modelId: string | null = null, prompt: string | null = null) =>
+    invoke<ChatTestResult>("engine_chat_test", { modelId, prompt }),
+  engineListDevices: () => invoke<EngineDevice[]>("engine_list_devices"),
+  engineBinaryInfo: () => invoke<EngineBinaryInfo>("engine_binary_info"),
+  engineLogs: (lines = 200) => invoke<LogLine[]>("engine_logs", { lines }),
+  presetsPreview: () => invoke<string>("presets_preview"),
+
+  jobsList: () => invoke<Job[]>("jobs_list"),
+  jobsCancel: (jobId: string) => invoke<boolean>("jobs_cancel", { jobId }),
+  jobsClearFinished: () => invoke<void>("jobs_clear_finished"),
+
   prerouterRoute: (text: string) => invoke<PreRouteResult>("prerouter_route", { text }),
   prerouterResolveDate: (text: string) => invoke<DateRange | null>("prerouter_resolve_date", { text }),
 };
@@ -82,6 +137,29 @@ export async function pickFolder(title: string, defaultPath?: string): Promise<s
   if (!isTauri) return null;
   const { open } = await import("@tauri-apps/plugin-dialog");
   const result = await open({ directory: true, multiple: false, title, defaultPath });
+  return typeof result === "string" ? result : null;
+}
+
+/** Native multi-file picker for GGUF files (Tauri only). Returns [] when cancelled or unavailable. */
+export async function pickGgufFiles(title: string, defaultPath?: string): Promise<string[]> {
+  if (!isTauri) return [];
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const result = await open({
+    directory: false,
+    multiple: true,
+    title,
+    defaultPath,
+    filters: [{ name: "GGUF", extensions: ["gguf"] }],
+  });
+  if (Array.isArray(result)) return result;
+  return typeof result === "string" ? [result] : [];
+}
+
+/** Native single-file picker for the llama-server binary (Tauri only). */
+export async function pickExecutable(title: string): Promise<string | null> {
+  if (!isTauri) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const result = await open({ directory: false, multiple: false, title });
   return typeof result === "string" ? result : null;
 }
 

@@ -50,6 +50,34 @@ jobs:
           name: playwright-report
           path: playwright-report
 
+  engine-real:
+    name: Real llama-server (CPU) + tiny Qwen3.5 fixture
+    runs-on: ubuntu-24.04
+    # The release asset names are matched by pattern; verified on the first run.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Download the pinned llama.cpp release (ubuntu x64)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=$(node -p "require('./engines/manifest.json').tag")
+          mkdir -p /tmp/engine && cd /tmp/engine
+          gh release download "$TAG" --repo ggml-org/llama.cpp --pattern '*ubuntu*x64*' --dir .
+          ls -la
+          for f in *.zip; do [ -f "$f" ] && unzip -q "$f"; done
+          for f in *.tar.gz; do [ -f "$f" ] && tar -xzf "$f"; done
+          BIN=$(find . -type f -name llama-server | head -1)
+          test -n "$BIN"
+          chmod +x "$BIN"
+          echo "DOCULENS_LLAMA_SERVER=$(readlink -f "$BIN")" >> "$GITHUB_ENV"
+          "$BIN" --version || true
+      - run: cargo test -p doculens-core --test real_engine -- --nocapture
+        env:
+          DOCULENS_TEST_MODELS_DIR: ${{ github.workspace }}/crates/doculens-core/tests/fixtures
+
   license:
     name: License gate
     runs-on: ubuntu-24.04

@@ -1,0 +1,14 @@
+{
+  "$comment": "Pinned llama.cpp release for the official packs (design §3.2: ≥ b11747). sha256 values are null until recorded with `node scripts/fetch-engine.mjs --pin` on a machine with GitHub access.",
+  "schema_version": 1,
+  "tag": "b12066",
+  "min_build": 11747,
+  "release_url": "https://github.com/ggml-org/llama.cpp/releases/tag/b12066",
+  "assets": {
+    "cpu": { "match": ["bin-win-cpu-x64"], "sha256": null },
+    "vulkan": { "match": ["bin-win-vulkan-x64"], "sha256": null },
+    "linux": { "match": ["bin-ubuntu-x64", "bin-ubuntu-cpu-x64"], "sha256": null, "pack": "cpu" },
+    "cu121": { "self_built": true, "toolkit": "12.1", "archs": "61;70;75;80;86;89;90" },
+    "cu129": { "self_built": true, "toolkit": "12.9", "archs": "75;80;86;89;90;120" }
+  }
+}

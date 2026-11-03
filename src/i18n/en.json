@@ -89,7 +89,15 @@
     "model": "Model",
     "network_offline": "No network (offline)",
     "network_online": "Online",
-    "preview": "Preview"
+    "preview": "Preview",
+    "engine_stopped": "Engine stopped",
+    "engine_starting": "Starting",
+    "engine_restarting": "Restarting",
+    "engine_loading": "Loading model",
+    "engine_ready": "Ready",
+    "engine_idle": "Idle (no model loaded)",
+    "engine_degraded": "Engine error",
+    "vram_used": "VRAM used"
   },
   "theme": {
     "light": "Light",
@@ -171,7 +179,7 @@
     "model": {
       "intro": "Classification, OCR and extraction need a VLM (GGUF + mmproj). You can skip this now; import, search and organizing work without a model.",
       "download": "Download online",
-      "download_desc": "Fetches from Hugging Face and verifies SHA-256 when a network is available. Arrives in phase P1.",
+      "download_desc": "Fetched from Hugging Face when online and verified with SHA-256.",
       "download_offline": "No network connection right now.",
       "import": "Import from USB / folder",
       "import_desc": "Drop GGUF + mmproj files fetched on another PC into the workspace model folder; they are registered automatically (drop-in folder).",
@@ -180,7 +188,10 @@
       "required_files": "Export required file list",
       "required_files_hint": "Copy file names, sizes, SHA-256 and URLs as text to download them on another PC.",
       "models_dir": "Model folder",
-      "finish": "Get started"
+      "finish": "Get started",
+      "download_action": "Start download",
+      "import_action": "Import GGUF…",
+      "installed": "Installed — you can start right away."
     }
   },
   "hw": {
@@ -304,7 +315,25 @@
     "open_models_dir": "Open model folder",
     "required_files": "Required files",
     "download": "Download",
-    "import": "Import",
+    "import": {
+      "title": "Import GGUF",
+      "paths_label": "GGUF file paths (one per line, weights + mmproj)",
+      "pick": "Choose files…",
+      "mode": "Mode",
+      "modes": {
+        "copy": "Copy (default)",
+        "move": "Move",
+        "link": "Hard link (same drive)"
+      },
+      "folder": "Folder name (optional)",
+      "target": "Target folder",
+      "files": "Files",
+      "auto_paired": "The mmproj file next to the weights was paired automatically.",
+      "already": "The same files already exist in the target folder.",
+      "plan": "Validate",
+      "run": "Import",
+      "started": "Import started. Follow the progress on the Jobs screen."
+    },
     "activate": "Activate",
     "p1_hint": "Arrives in phase P1",
     "backend": "Backend",
@@ -326,12 +355,120 @@
     "missing_files": "Missing: {{files}}",
     "verified": "Verified",
     "unverified": "Hash not pinned",
-    "drop_in_hint": "Put GGUF + mmproj files into a sub-folder here and they are registered automatically (P1). For now only file names are checked.",
+    "drop_in_hint": "Put GGUF + mmproj files into a sub-folder here: they are detected, verified and registered automatically. The import button is a convenience that copies into the same folder.",
     "engine": "Engine",
-    "engine_hint": "The llama-server sidecar (router mode) is connected in phase P1.",
+    "engine_hint": "The llama-server sidecar (router mode) runs with the app; models are hot-swapped through /models/load.",
     "estimated_memory": "Estimated VRAM",
     "vision": "Vision",
-    "text_only": "Text only"
+    "text_only": "Text only",
+    "registry_hint": "Built-in registry plus models found in the drop-in folder. Downloads need a network connection.",
+    "user_added": "User added",
+    "download_hint": "Fetched from Hugging Face and verified with SHA-256.",
+    "download_disabled": "Online downloads are disabled in settings.",
+    "download_started": "Download started. Follow the progress on the Jobs screen.",
+    "hash_started": "Hash verification started.",
+    "load_started": "Model load started.",
+    "delete_confirm": "Delete the folder '{{folder}}' and the model files in it? This cannot be undone.",
+    "packs": {
+      "cpu": "CPU",
+      "vulkan": "Vulkan",
+      "cu121": "CUDA 12.1 pack",
+      "cu129": "CUDA 12.9 pack"
+    },
+    "instance": {
+      "unloaded": "Unloaded",
+      "loading": "Loading",
+      "loaded": "Loaded",
+      "sleeping": "Sleeping",
+      "failed": "Load failed",
+      "downloading": "Downloading",
+      "incomplete": "Incomplete"
+    },
+    "health": {
+      "ready": "Ready",
+      "copying": "Copying",
+      "unsupported": "Unsupported",
+      "incomplete": "Incomplete",
+      "invalid": "Invalid"
+    },
+    "matched_by": {
+      "hash": "Hash match",
+      "name": "Name match"
+    },
+    "actions": {
+      "load": "Load",
+      "unload": "Unload",
+      "hash": "Verify hash",
+      "hash_hint": "Computes SHA-256/BLAKE3 and compares with the registry pins (takes minutes).",
+      "delete": "Delete"
+    },
+    "discovered": {
+      "title": "Model folder (drop-in)",
+      "empty": "No GGUF files in the model folder yet. Import or download a model.",
+      "folder": "Folder",
+      "rescan": "Rescan",
+      "scanned_at": "Last scan: {{at}}"
+    },
+    "warn": {
+      "no_chat_template": "This GGUF has no chat template; the default ChatML template is used.",
+      "gdn_low_precision": "GDN state tensors (ssm_*) are quantised below Q8_0; accuracy may suffer.",
+      "no_license_file": "No LICENSE/NOTICE file in the folder. Copy them from the source repository.",
+      "unverified_hash": "Matched by file name only. Run hash verification to confirm.",
+      "unsupported_arch": "Architecture not in the supported list. It may load, but the document prompts are not tuned for it.",
+      "mmproj_ignored": "Embedding models do not use an mmproj."
+    },
+    "engine_card": {
+      "title": "Engine (llama-server)",
+      "start": "Start",
+      "stop": "Stop",
+      "restart": "Restart",
+      "test": "Test model",
+      "state": {
+        "stopped": "Stopped",
+        "starting": "Starting",
+        "running": "Running",
+        "restarting": "Restarting (attempt {{attempt}})",
+        "degraded": "Halted",
+        "stopping": "Stopping"
+      },
+      "degraded_hint": "The engine kept crashing and restarts were stopped. Switch to a smaller quantisation/context or the CPU backend, then restart.",
+      "last_error": "Last error",
+      "not_found": "llama-server binary not found ({{error}})",
+      "install_hint": "Install it under engines\\<version>\\<pack>\\ with the script in engines/README.md, or point to a binary below.",
+      "binary": "Binary",
+      "version": "Version",
+      "too_old": "needs b{{min}} or newer",
+      "backend": "Backend",
+      "port": "Address",
+      "restarts": "{{count}} restart(s)",
+      "loaded_models": "Loaded models",
+      "none_loaded": "No model loaded",
+      "memory": "Measured memory",
+      "warmed_up": "warmed up",
+      "packs": "Installed packs",
+      "no_packs": "No engine packs installed.",
+      "auto_start": "Start automatically when a workspace opens",
+      "warmup": "One warm-up request after load",
+      "vision_cpu": "Audit mode (vision encoder on the CPU)",
+      "sleep_idle": "Idle sleep (seconds, 0 = off)",
+      "resident_max": "Resident models",
+      "binary_override": "Custom binary",
+      "binary_pick": "Choose…",
+      "binary_clear": "Clear",
+      "logs": "Engine log",
+      "presets": "presets.ini",
+      "devices": "List devices",
+      "devices_title": "Devices reported by the engine (--list-devices)",
+      "no_logs": "No log lines yet.",
+      "presets_title": "presets.ini preview"
+    },
+    "test": {
+      "title": "Model test",
+      "prompt": "Prompt (empty = default sentence)",
+      "run": "Run",
+      "result": "Response",
+      "stats": "{{tokens}} output tokens · {{prompt}} prompt tokens · {{ms}} ms · {{tps}} tok/s"
+    }
   },
   "settings": {
     "title": "Settings",
@@ -543,7 +680,14 @@
     "unknown_model": "Unknown model: {{message}}",
     "invalid": "Invalid value: {{message}}",
     "internal": "Internal error: {{message}}",
-    "generic": "Error: {{message}}"
+    "generic": "Error: {{message}}",
+    "invalid_gguf": "Cannot read GGUF file: {{message}}",
+    "engine_not_found": "llama-server binary not found: {{message}}",
+    "engine": "Engine error: {{message}}",
+    "engine_not_running": "The engine is not running.",
+    "download": "Download failed: {{message}}",
+    "cancelled": "Cancelled.",
+    "timeout": "Timed out: {{message}}"
   },
   "startup": {
     "settings_recovered": "The settings file was corrupt and has been reset to defaults. Backup: {{backup}}",
@@ -551,5 +695,31 @@
     "workspace_locked": "The workspace ({{path}}) is in use by another instance (pid {{pid}} on {{host}}).",
     "workspace_failed": "Could not open the workspace ({{path}}): {{message}}",
     "settings_partial": "Some settings sections ({{sections}}) were invalid and have been reset to defaults."
+  },
+  "jobs": {
+    "title": "Jobs",
+    "clear_finished": "Clear finished",
+    "p5_hint": "P1 only has model load / import / download / hash jobs. Pause, priorities and retries arrive in phase P5.",
+    "tabs": {
+      "active": "Active",
+      "finished": "Finished"
+    },
+    "empty": "No active jobs.",
+    "empty_finished": "No finished jobs.",
+    "cancel": "Cancel",
+    "kind": {
+      "engine_start": "Engine start",
+      "model_load": "Model load",
+      "model_import": "Model import",
+      "model_download": "Model download",
+      "model_hash": "Hash verification"
+    },
+    "state": {
+      "queued": "Queued",
+      "running": "Running",
+      "done": "Done",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    }
   }
 }

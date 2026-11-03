@@ -2,6 +2,8 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { isTauri } from "@/lib/ipc";
+import { useEngineStore } from "@/stores/engine";
+import { useJobsStore } from "@/stores/jobs";
 import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -23,6 +25,12 @@ export function AppBootstrap({ children }: { children: ReactNode }) {
     void loadSettings();
     void loadWorkspace();
   }, [loadSettings, loadWorkspace]);
+
+  useEffect(() => {
+    if (!settingsLoaded || !workspaceLoaded) return;
+    void useEngineStore.getState().init();
+    void useJobsStore.getState().init();
+  }, [settingsLoaded, workspaceLoaded]);
 
   useEffect(() => {
     if (!startup || announced.current) return;

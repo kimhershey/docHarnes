@@ -5,10 +5,14 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { HardwarePanel } from "@/features/models/HardwarePanel";
+import { ImportDialog } from "@/features/models/ImportDialog";
 import { RequiredFilesDialog } from "@/features/models/RequiredFilesDialog";
-import { revealPath } from "@/lib/ipc";
+import { api, revealPath } from "@/lib/ipc";
 import { useAssessment } from "@/lib/queries";
+import { queryClient, queryKeys } from "@/lib/query-client";
+import { describeError } from "@/lib/errors";
 import { cn } from "@/lib/utils";
+import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
 import { ThemeMenu } from "@/app/layout/ThemeMenu";
@@ -24,7 +28,25 @@ export function OnboardingWizard() {
   const [step, setStep] = useState<Step>(workspace ? 1 : 0);
   const { data: assessment } = useAssessment();
   const [filesOpen, setFilesOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const online = typeof navigator !== "undefined" ? navigator.onLine : false;
+  const allowDownload = useSettingsStore((s) => s.settings?.models.allow_online_download ?? false);
+  const toast = useUiStore((s) => s.toast);
+  const installed = assessment?.active_model_installed?.installed ?? false;
+  const download = async () => {
+    if (!assessment?.active_model) return;
+    try {
+      await api.modelsDownload(assessment.active_model.id);
+      toast(t("models.download_started"), "ok");
+    } catch (e) {
+      toast(describeError(e, t), "danger");
+    }
+  };
+  const afterImport = () => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.assessment });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.registry });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.modelIndex });
+  };
 
   useEffect(() => {
     setActive(true);
@@ -110,21 +132,31 @@ export function OnboardingWizard() {
             </CardHeader>
             <CardContent className="flex flex-col gap-4">
               <div className="grid gap-3 md:grid-cols-3">
-                <OptionCard icon={Download} title={t("onboarding.model.download")} body={online ? t("onboarding.model.download_desc") : t("onboarding.model.download_offline")} disabled hint={t("models.p1_hint")} />
+                <OptionCard
+                  icon={Download}
+                  title={t("onboarding.model.download")}
+                  body={online ? (allowDownload ? t("onboarding.model.download_desc") : t("models.download_disabled")) : t("onboarding.model.download_offline")}
+                  disabled={!online || !allowDownload || !assessment?.active_model || installed}
+                  action={() => void download()}
+                  actionLabel={t("onboarding.model.download_action")}
+                />
                 <OptionCard
                   icon={FolderInput}
                   title={t("onboarding.model.import")}
                   body={t("onboarding.model.import_desc")}
-                  action={workspace ? () => void revealPath(workspace.models_dir) : undefined}
-                  actionLabel={t("onboarding.model.models_dir")}
+                  action={workspace ? () => setImportOpen(true) : undefined}
+                  actionLabel={t("onboarding.model.import_action")}
+                  secondaryAction={workspace ? () => void revealPath(workspace.models_dir) : undefined}
+                  secondaryLabel={t("onboarding.model.models_dir")}
                 />
                 <OptionCard icon={Clock} title={t("onboarding.model.later")} body={t("onboarding.model.later_desc")} action={finish} actionLabel={t("onboarding.model.finish")} primary />
               </div>
               {assessment?.active_model && (
-                <div className="flex flex-wrap items-center gap-2 text-sm text-fg-muted">
+                <div className="flex flex-wrap items-center gap-2 text-sm text-fg-muted" data-testid="onboarding-model-state">
                   <span>
                     {t("onboarding.hardware.recommended")}: <strong className="text-fg">{assessment.active_model.display}</strong>
                   </span>
+                  {installed && <span className="text-ok">{t("onboarding.model.installed")}</span>}
                   <Button variant="link" size="sm" onClick={() => setFilesOpen(true)}>
                     {t("onboarding.model.required_files")}
                   </Button>
@@ -143,6 +175,7 @@ export function OnboardingWizard() {
         )}
       </div>
       {assessment?.active_model && <RequiredFilesDialog modelId={assessment.active_model.id} open={filesOpen} onOpenChange={setFilesOpen} />}
+      <ImportDialog open={importOpen} onOpenChange={setImportOpen} onStarted={afterImport} />
     </div>
   );
 }
@@ -153,6 +186,8 @@ function OptionCard({
   body,
   action,
   actionLabel,
+  secondaryAction,
+  secondaryLabel,
   disabled,
   hint,
   primary,
@@ -162,6 +197,8 @@ function OptionCard({
   body: string;
   action?: () => void;
   actionLabel?: string;
+  secondaryAction?: () => void;
+  secondaryLabel?: string;
   disabled?: boolean;
   hint?: string;
   primary?: boolean;
@@ -175,6 +212,11 @@ function OptionCard({
       {action && actionLabel && (
         <Button variant={primary ? "default" : "secondary"} size="sm" onClick={action} disabled={disabled}>
           {actionLabel}
+        </Button>
+      )}
+      {secondaryAction && secondaryLabel && (
+        <Button variant="ghost" size="sm" onClick={secondaryAction}>
+          {secondaryLabel}
         </Button>
       )}
     </div>

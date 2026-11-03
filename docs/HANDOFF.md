@@ -17,83 +17,125 @@
 
 | 단계 | 상태 | 비고 |
 |---|---|---|
-| P0 스캐폴드 | **완료 (이 브랜치)** | 아래 "P0 산출물" 참조 |
-| P1 엔진·모델 | 다음 | llama-server 사이드카, GGUF 검증, 드롭인 폴더 감시, 모델 다운로드 |
-| P2 워크스페이스·문서 | 대기 | SQLite 마이그레이션, 가져오기, HWP/HWPX/DOCX 변환, pdfium 렌더, 뷰어 |
+| P0 스캐폴드 | 완료 (`main`) | Tauri 2 셸, 테마 4종, i18n, 설정/워크스페이스, CI |
+| P1 엔진·모델 | **완료 (브랜치 `phase/p1-engine`)** | 아래 "P1 산출물" 참조 |
+| P2 워크스페이스·문서 | 다음 | SQLite 마이그레이션, 가져오기, HWP/HWPX/DOCX 변환, pdfium 렌더, 뷰어 |
 | P3 지식 베이스 | 대기 | 청킹, lindera FTS5 + trigram, bge-m3 + sqlite-vec, 근거 기반 Q&A |
 | P4 파이프라인 | 대기 | 분류·OCR·KIE, 양식 등록, 검증기, 검토 큐 |
 | P5 자연어·작업 | 대기(핵심 op만 1차) | 플래너 PlanSchema, 확인 카드, Job 러너, 정리/되돌리기, 내보내기 |
 
-## P0 산출물
+## P1 산출물
 
-- Cargo 워크스페이스: `crates/doculens-core` (순수 Rust, 31 단위 테스트) +
-  `src-tauri` (Tauri 2 셸, 23 commands).
-  - `settings`(settings.json, 손상 복구·정규화), `workspace`(.doculens 초기화,
-    잠금·stale 복구, inspect), `hw`(sysinfo + NVML 프로브, 티어 표, 백엔드 선택),
-    `memory`(하이브리드 KV 공식, 로드 전 예산), `registry`(내장 registry.json,
-    적응형 양자화, 설치 상태, 필요 파일 목록), `retention`(보존/파기 정책),
-    `prerouter`(슬래시/문장 규칙 + 상대 날짜 해석), `paths`.
-- 프런트엔드: React 19 + Vite 8 + Tailwind v4 + Radix/shadcn 패턴 + cmdk +
-  i18next(ko 기본/en) + zustand + TanStack Query.
-  - 테마 4종(`html[data-theme]`, 시스템 추적, forced-colors, 깜빡임 방지 인라인
-    스크립트, 창 제목표시줄 동기화), UI 배율, 단축키(Ctrl+K, Ctrl+Shift+T …).
-  - 화면: 온보딩 3단계, 홈(자연어 명령 바), 어시스턴트(프리라우터 실행/플래너
-    대기 카드), 모델 관리자(하드웨어·티어·레지스트리·필요 파일), 설정 7탭
-    (일반/테마/워크스페이스/처리/프라이버시·보존/단축키/정보), 나머지 화면은
-    단계 배지가 있는 플레이스홀더.
-  - 브라우저 모의 백엔드(`src/lib/mock-backend.ts`)로 Tauri 없이 전체 UI 실행 가능.
-- 테스트: `cargo test`, `vitest`(테마 해석, 토큰 대비 검사기, i18n 키 패리티,
-  단축키, 모의 백엔드), Playwright 스모크 7건(온보딩→홈, 테마 4종 전환·유지,
-  언어 전환, 전 라우트·팔레트, 자연어 명령, 설정·보존 저장, 모델 관리자).
-- 실제 런타임 확인(Linux, Xvfb): `tauri build --debug --no-bundle` 바이너리를
-  `DOCULENS_APP_DATA` 픽스처로 헤드리스 실행 → settings.json 로드·정규화,
-  `active_workspace` 자동 열기(`startup workspace: Opened`), `.doculens/` 14개
-  디렉터리·lock 생성, 웹뷰→Rust IPC(settings/workspace/hw/registry) 오류 로그 0건.
-  리뷰 반영 후 재빌드(d078afe)에서도 동일하게 통과(비동기 `hw_probe` 경로, 토큰 잠금 확인).
-- 라이선스 게이트: `deny.toml`(cargo-deny), `scripts/check-licenses.mjs`(npm),
-  `THIRD-PARTY-NOTICES.md`, `docs/LICENSE-POLICY.md`.
-- CI: `.github/workflows/ci.yml`(rust / web / license / windows-check),
-  `release-windows.yml`(수동 NSIS 빌드).
+### Rust 코어 (`crates/doculens-core`)
 
-## P1 착수 메모
+- `gguf`: GGUF v2/v3 헤더·메타데이터·텐서 디스크립터 파서(텐서 데이터 미로드, 대형 배열은
+  길이만 보관), `ModelMeta` 요약(아키텍처, 양자화 라벨, 라이선스, chat_template 유무,
+  block_count / head_count_kv / key_length / full_attention_interval → `memory::ModelArch`,
+  split 정보, mmproj 프로젝터 타입, GDN 민감 텐서(`ssm_alpha/beta/a/dt/norm/conv1d`) 정밀도
+  경고), SHA-256 + BLAKE3 단일 패스 해시(취소 가능), 2 MiB 지문(변경 감지), 테스트/픽스처용
+  최소 GGUF 라이터.
+- `modelstore`: 드롭인 폴더 스캔(`<models>/<폴더>/*.gguf` + `mmproj*.gguf` + `model.json` +
+  LICENSE), split 세트 그룹화·누락 검출, 복사 중(최근 mtime) 판정, 레지스트리 매칭(해시 우선 →
+  파일명), `ModelHealth {ready, copying, unsupported, incomplete, invalid}`, 경고 키
+  (`models.warn.*`), 해시 캐시(`.doculens-hashes.json`), `install_state`(P0 이름 검사 대체),
+  미등록 모델의 `user_added` 레지스트리 항목 합성(`merged_registry`), 가져오기 계획/실행
+  (복사·이동·하드링크, mmproj 자동 짝짓기, LICENSE 동반 복사, `.part` → rename, 취소 시 정리),
+  이어받기 다운로드(Range, SHA-256 검증, `ureq` + 플랫폼 TLS), `notify` 폴더 감시(2초 안정화).
+- `engine::locate`: 실행 파일 탐색 순서(`DOCULENS_LLAMA_SERVER` → 설정 `engine_binary` →
+  `engines/<버전>/<팩>` 최신 → 번들 폴더), `--version` 빌드 번호 파싱, 최소 빌드 b11747 검사
+  (태그 없는 로컬 빌드 0은 허용).
+- `engine::devices`: `--list-devices` 파싱 → `GpuInfo(source = engine)`.
+- `engine::presets`: `presets.ini` 생성기(§3.3.2). 전역 `[*]`(flash-attn, q8_0 KV, fit=off,
+  image-min-tokens 1024, jinja, metrics, slots=false) + 모델별 섹션(절대경로 model/mmproj,
+  프로파일별 ctx/image-max-tokens, 12 GB+ 2슬롯 kv-unified, 샘플링, `reasoning = off` +
+  `reasoning-budget = 0`, CPU 백엔드 n-gpu-layers 0, 감사 모드 mmproj-offload=false, 임베딩
+  섹션). INI에 표현 불가한 경로(`;` `#`)는 건너뛰고 사유 보고.
+  **설계 §3.3.2와의 차이**: 이 빌드(b12066)는 `--reasoning off`가 존재하며 `chat-template-kwargs`
+  방식은 deprecated 경고를 내므로 `reasoning = off`를 사용. `--no-webui`는 존재하지 않아 생략.
+- `engine::client`: 라우터 API 블로킹 클라이언트(`/health`, `/models[?reload=1]`,
+  `/models/load|unload`, `/models/sse` 구독, `/v1/chat/completions` 비스트리밍·스트리밍,
+  `/v1/embeddings`, `/props`, `/metrics`), OpenAI 호환 `ChatRequest`(json_schema, 이미지
+  data URL 헬퍼), 메모리 실측 합산(`memory.effective.devices[kind=device]`).
+- `engine::process`: 스폰 격리 — Windows `CreateJobObject` + `KILL_ON_JOB_CLOSE` +
+  `CREATE_NO_WINDOW`, Unix `setpgid` + Linux `PR_SET_PDEATHSIG`, `killpg` 종료, stdout/stderr
+  라인 펌프.
+- `engine::manager`: 생명주기 상태기계(Stopped/Starting/Running/Restarting/Degraded/Stopping),
+  랜덤 루프백 포트, API 키는 `LLAMA_API_KEY` 환경변수로만 전달, `/health` 대기, SSE 스레드,
+  크래시 감시 + 지수 백오프(1·2·4초, 3회) 후 Degraded, 60초 이상 정상 가동 시 카운터 리셋,
+  재기동 후 활성 모델 재로드, `load_model`(상태 폴링 + 워밍업 1토큰), `unload_model`(라우터의
+  비동기 중지 대기), 로그 링(1,000줄), 이벤트 구독.
+- `engine::fake_router`: std 전용 가짜 llama-server(라우터 API 부분집합 + SSE + 스트리밍 채팅 +
+  `--version`/`--list-devices`/`--models-preset`). 프로세스 수준 테스트는 테스트 실행 파일이
+  스스로를 가짜 서버로 재실행(`DOCULENS_FAKE_ROUTER=1`).
+- 설정 추가: `models.auto_start_engine`, `warmup_after_load`, `vision_on_cpu`, `engine_binary`.
+  오류 코드 추가: `invalid_gguf`, `engine_not_found`, `engine`, `engine_not_running`,
+  `download`, `cancelled`, `timeout`.
 
-1. `crates/doculens-core/src/engine/` 신설: `llama-server` 프로세스 매니저
-   (라우터 모드, `--models-preset`, 헬스/`/models` 상태 대기, 재기동 백오프,
-   Windows Job Object), `presets.ini` 생성기(§3.3.2, 절대경로), `/models/load|unload`,
-   `/models/sse` 구독 → Tauri 이벤트.
-2. GGUF 헤더 파서(`general.architecture`, chat_template, `clip.projector_type`,
-   `split.count`, 양자화 타입) + blake3/sha256 해시 → 드롭인 폴더 감시(notify).
-3. `registry::install_state` 를 헤더 검증 기반으로 교체, `verified` 고정.
-4. 엔진 바이너리 배치: `<AppData>/DocuLens/engines/<version>/{cpu|vulkan|cu121|cu129}`,
-   `engines/README.md` 의 해시 고정 스크립트.
-5. 이 환경에서는 llama.cpp CPU 빌드 + 2층 랜덤 초기화 Qwen3.5 GGUF로 생명주기
-   통합 테스트(§4.2). 실모델은 사용자 PC(부록 B).
-6. UI: 모델 관리자 다운로드/가져오기 활성화, 상태바 엔진 상태 실데이터,
-   Jobs 화면에 모델 로드 진행률.
+### Tauri 셸 (`src-tauri`)
 
-## P0 단계 말 리뷰 반영 (2026-11-03)
+- `engine_bridge`: 워크스페이스 변경 시 스캔 + 폴더 감시 + (설정 시) 엔진 자동 시작과 활성 모델
+  로드, `presets.ini` 재생성(`<AppData>/DocuLens/presets.ini`) + `?reload=1`, 엔진 이벤트 →
+  `engine://status|log|model`, 스캔 → `models://changed`, 작업 → `jobs://update`.
+- `jobs`: P1용 경량 작업부(엔진 시작·모델 로드·가져오기·다운로드·해시, 진행률/취소/정리).
+  P5의 Job 러너가 대체하되 이벤트 형태는 유지.
+- 커맨드 23 → 44: `models_scan/list/import_plan/import_run/download/hash/delete`,
+  `engine_status/start/stop/restart/load_model/unload_model/refresh_models/chat_test/list_devices/
+  binary_info/logs`, `presets_preview`, `jobs_list/cancel/clear_finished`. `hw_assess`·`registry_list`는
+  병합 레지스트리 + 스캔 기반 설치 상태를 반환. 앱 종료 시 엔진 정지.
 
-독립 리뷰 서브에이전트 15건 중 14건 반영, 1건(저우선 StrictMode 중복 전송)도 반영:
+### 프런트엔드
 
-- 프리라우터: 날짜 수량 클램프(`최근 0주`·거대 수치에서 패닉 → 앱 종료 방지), 문장 규칙을 보수적으로
-  재작성(작업 동사 포함 시 미라우팅, 화면 열기는 "화면 별칭만 남는" 경우만), 일 단위 절대 날짜
-  (`2026-10-05`, `10월 5일`) 지원. 리뷰어가 제시한 오탐 11문장이 테스트에 포함됨.
-- 워크스페이스 잠금: 핸들별 토큰으로 자기 잠금만 삭제, `create_new`로 원자적 획득, 같은 폴더
-  재선택 시 잠금 유지(`AppState::open_workspace_inner` 조기 반환), 매니페스트는 검증 후 교체.
-- 검사(`workspace_inspect`)·하드웨어 프로브는 `async` 커맨드로 전환(메인 스레드 프리즈 방지),
-  문서 수 집계는 방문 2만 개·깊이 8 제한, 심링크/정션 미추적, 루트·홈 경로는 집계 생략.
-- 설정 파일: 섹션 단위 관대 파싱(`"theme":"blue"` 같은 값은 해당 섹션만 기본값, 파일 보존 →
-  `partially_recovered` 토스트), 저장 시 fsync 후 rename.
-- 경로 정규화: 따옴표 제거, `C:` → `C:\`, 루트/홈 비교는 canonicalize 후.
-- UI: 단축키 `Ctrl+Shift+-`(`_`) 인식, 테마 토큰을 `[data-theme]`로 스코프(설정 테마 카드 미리보기가
-  각자 테마로 렌더), 고대비는 네이티브 제목표시줄 Dark, 오류 토스트 i18n(`errors.*`), 워크스페이스
-  선택기는 제출 시 최신 검사 결과로 열기/생성 판단, 어시스턴트 전달 입력 1회만 소비.
-- 릴리스 워크플로 산출물 경로 수정(`target/x86_64-pc-windows-msvc/...`).
-- 남은 PLAUSIBLE: `install_state`의 부분 설치 폴더 선택은 설치 대상 폴더를 반환하도록 변경 완료;
-  `cargo deny`는 CI(`EmbarkStudios/cargo-deny-action`)에서 통과 확인.
+- 모델 관리자: 엔진 카드(상태 배지, 시작/중지/재시작/모델 테스트, 실행 파일·버전·백엔드·주소,
+  로드된 모델과 메모리 실측, 설치된 팩, 자동 시작/워밍업/감사 모드/유휴 슬립/상주 수/실행 파일
+  직접 지정, 로그·presets.ini·장치 조회), 드롭인 폴더 표(상태·매칭·경고·로드/언로드/해시/삭제),
+  레지스트리 표(설치 상태·검증·다운로드·로드·활성화), GGUF 가져오기 다이얼로그(경로 입력 또는
+  네이티브 선택, 검증 계획 → 실행), 모델 테스트 다이얼로그.
+- 작업 화면(진행 중/완료, 진행률·바이트·취소·정리), 상태바(엔진 ● 상태/모델/VRAM 사용/큐),
+  상단바 작업 수, 온보딩 3단계(다운로드 시작·GGUF 가져오기 활성화, 설치됨 표시).
+- 브라우저 모의 백엔드가 엔진 생명주기·모델 폴더·가져오기/다운로드/해시·작업을 타이머로
+  시뮬레이션(`doculens.mock.fast`로 10배속). 이벤트 구독 추상화(`subscribe()`).
+
+### 테스트·검증
+
+| 종류 | 수 | 비고 |
+|---|---|---|
+| `cargo test -p doculens-core` (lib) | 59 | gguf 5, modelstore 7, engine 12 포함 |
+| `tests/engine_process.rs` (harness=false) | 3 | 실제 자식 프로세스: 생명주기·크래시 재기동·크래시 루프 Degraded |
+| `tests/real_engine.rs` | 1 | `DOCULENS_LLAMA_SERVER` + `DOCULENS_TEST_MODELS_DIR` 설정 시에만 실행 |
+| vitest | 24 | i18n 패리티 포함 |
+| Playwright | 10 | P0 7 + P1 3 (가져오기→로드→상태바, 다운로드·중지/시작·삭제, 온보딩 3단계·영어) |
+
+- **실제 llama-server 검증(이 환경, CPU)**: llama.cpp `b12066` 소스를 CPU로 빌드하고,
+  `scripts/gen-tiny-qwen35.py`로 만든 2층 랜덤 초기화 Qwen3.5 VLM(텍스트 660 KB + mmproj 195 KB,
+  `crates/doculens-core/tests/fixtures/tiny-qwen35/`)으로 `real_engine` 테스트 통과:
+  라우터 기동 ≈170 ms → `/models` 목록 → 로드 ≈430 ms(워밍업 포함) → 텍스트 채팅(8토큰,
+  timings 수신) → 스트리밍(델타 수신) → json_schema 제약 출력(`{"ok": true}`) → 이미지 요청
+  (프롬프트 토큰 1,060, mmproj 경로 확인) → 언로드 → 재시작 → 정지. 출력 텍스트는 랜덤
+  가중치라 무의미하며 경로 검증 용도.
+- CI: `engine-real` 작업이 핀 고정 릴리스(`engines/manifest.json`)의 ubuntu 빌드를 받아 같은
+  테스트를 실행(`continue-on-error: true` — 릴리스 자산 이름 패턴은 첫 실행에서 확인 후 고정).
+
+## P2 착수 메모
+
+1. `crates/doculens-core/src/db/`: rusqlite(bundled, MIT) + 마이그레이션(§3.6 스키마),
+   `journal_mode=WAL`(네트워크/동기화 폴더 감지 시 DELETE), `workspace.db`.
+2. 가져오기: 드롭/폴더/inbox 감시(`notify` 재사용), 중복 검사(BLAKE3 — `gguf::hash_file` 재사용 가능),
+   미리보기 다이얼로그.
+3. 변환: HWPX(zip+XML) → HTML → PDF, DOCX(docx-rs 계열 MIT) → HTML, HWP 5.0은 읽기 전용
+   파서(라이선스 확인). 렌더: `pdfium-render` + pdfium-binaries(BSD-3), 페이지 캐시
+   `cache/pages/<doc>/<page>.png`, DPI 200, 썸네일.
+4. 라이브러리·뷰어 UI(가상 스크롤, 썸네일 스트립, 탭). `models://changed`·`jobs://update`와 같은
+   이벤트 패턴으로 `documents://changed`.
+5. P1에서 넘기는 숙제: 엔진 로그 파일(`<AppData>/logs/llama-server.log`, 현재는 링 버퍼만),
+   `--list-devices` 기반 티어 재산정의 UI 반영(현재는 하드웨어 패널 새로고침 후 반영),
+   `engines/manifest.json` SHA-256 고정, 다운로드 재개 시 `.part` 재검증.
 
 ## 알려진 제약
 
-- HF 차단으로 `models/registry.json` 의 크기·SHA-256 미고정(`verified: false`).
+- HF 차단으로 `models/registry.json`의 크기·SHA-256 미고정(`verified: false`); 다운로드 검증은
+  핀이 생기면 자동 적용. `engines/manifest.json`의 자산 해시도 미고정.
+- GPU 없음: CUDA/Vulkan 팩, 실모델 VRAM 실측, `--list-devices` GPU 출력은 사용자 PC
+  (`docs/user-pc-checklist.md` P1 항목).
 - Linux 빌드는 CI 전용(배포 범위 외). Windows 실창 E2E(tauri-driver)는 사용자 PC.
 - 모의 백엔드의 프리라우터는 Rust 구현의 부분 집합(브라우저 데모 용도).
+- 라우터의 `memory` 실측은 CPU 전용 빌드에서는 비어 있음(GPU 장치가 있을 때만 채워짐).

@@ -1,9 +1,11 @@
 //! DocuLens desktop shell: wires the Tauri runtime to `doculens-core`.
 
 mod commands;
+mod engine_bridge;
+mod jobs;
 mod state;
 
-use tauri::Manager;
+use tauri::{Manager, RunEvent};
 
 use doculens_core::settings::Theme;
 
@@ -13,7 +15,7 @@ use crate::state::AppState;
 pub fn run() {
     let state = AppState::bootstrap();
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(
@@ -25,7 +27,10 @@ pub fn run() {
         )
         .manage(state)
         .setup(|app| {
+            let handle = app.handle().clone();
             let state = app.state::<AppState>();
+            let _ = state.app.set(handle.clone());
+            state.jobs.attach(handle.clone());
             // Apply the persisted theme to the native window (title bar) before the
             // first paint; the webview applies the same theme via `data-theme`.
             let theme = state.settings.lock().map(|s| s.ui.theme).unwrap_or_default();
@@ -33,8 +38,10 @@ pub fn run() {
                 let _ = window.set_theme(native_theme(theme));
                 let _ = window.set_title(doculens_core::version::APP_NAME);
             }
-            // Open the workspace recorded in settings.json (decision 14).
+            // Open the workspace recorded in settings.json (decision 14), then scan
+            // the model folder, start the watcher and (when enabled) the engine.
             state.open_startup_workspace();
+            engine_bridge::on_workspace_changed(&handle);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -58,12 +65,44 @@ pub fn run() {
             commands::hw_assess,
             commands::registry_list,
             commands::registry_required_files_text,
+            commands::models_scan,
+            commands::models_list,
+            commands::models_import_plan,
+            commands::models_import_run,
+            commands::models_download,
+            commands::models_hash,
+            commands::models_delete,
+            commands::engine_status,
+            commands::engine_start,
+            commands::engine_stop,
+            commands::engine_restart,
+            commands::engine_load_model,
+            commands::engine_unload_model,
+            commands::engine_refresh_models,
+            commands::engine_chat_test,
+            commands::engine_list_devices,
+            commands::engine_binary_info,
+            commands::engine_logs,
+            commands::presets_preview,
+            commands::jobs_list,
+            commands::jobs_cancel,
+            commands::jobs_clear_finished,
             commands::prerouter_route,
             commands::prerouter_resolve_date,
             commands::startup_status,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app, event| {
+        if let RunEvent::Exit = event {
+            // Belt and braces: the job object / process group already ties the
+            // sidecar to this process, but a clean stop lets the router shut its
+            // model instances down gracefully.
+            let state = app.state::<AppState>();
+            let _ = state.engine.stop();
+        }
+    });
 }
 
 /// Native window theme for a persisted theme choice (`System` = follow OS).

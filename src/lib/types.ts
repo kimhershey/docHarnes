@@ -1,5 +1,5 @@
 // TypeScript mirror of the Rust types exchanged over Tauri IPC
-// (crates/doculens-core). Keep field names in snake_case to match serde.
+// (crates/doculens-core, src-tauri). Keep field names in snake_case to match serde.
 
 export type Theme = "light" | "dark" | "system" | "high-contrast";
 export type ResolvedTheme = Exclude<Theme, "system">;
@@ -14,6 +14,7 @@ export const TIERS: Tier[] = ["cpu_only", "vram_6gb", "vram_8gb", "vram_12gb", "
 export type TierMode = "auto" | "manual";
 export type Profile = "accuracy" | "balanced" | "speed" | "fine_print";
 export type BackendPreference = "auto" | "cuda" | "vulkan" | "cpu";
+export type Backend = "cu129" | "cu121" | "vulkan" | "cpu";
 export type AutoProcessingLevel = "classify_only" | "classify_and_ocr" | "full";
 export type ReducedMotion = "system" | "on" | "off";
 
@@ -40,6 +41,10 @@ export interface ModelSettings {
   resident_models_max: number;
   sleep_idle_seconds: number;
   allow_online_download: boolean;
+  auto_start_engine: boolean;
+  warmup_after_load: boolean;
+  vision_on_cpu: boolean;
+  engine_binary: string | null;
 }
 
 export interface ProcessingSettings {
@@ -239,10 +244,120 @@ export interface ModelEntry {
   user_added: boolean;
 }
 
+// --- model store (drop-in folders) -----------------------------------------
+
+export type ModelHealth =
+  | { kind: "ready" }
+  | { kind: "copying" }
+  | { kind: "unsupported"; reason: string }
+  | { kind: "incomplete"; missing: string[] }
+  | { kind: "invalid"; reason: string };
+
+export type MatchBy = "hash" | "name";
+
+export interface RegistryMatch {
+  id: string;
+  by: MatchBy;
+  verified: boolean | null;
+}
+
+export interface FileHashes {
+  size: number;
+  sha256: string;
+  blake3: string;
+}
+
+export interface ModelMeta {
+  kind: "llm" | "mmproj" | "unknown";
+  architecture: string;
+  name: string | null;
+  file_type: number | null;
+  quantization: string | null;
+  license: string | null;
+  license_link: string | null;
+  source_url: string | null;
+  source_repo: string | null;
+  has_chat_template: boolean;
+  block_count: number | null;
+  context_length: number | null;
+  embedding_length: number | null;
+  head_count: number | null;
+  head_count_kv: number | null;
+  key_length: number | null;
+  full_attention_interval: number | null;
+  split_count: number | null;
+  split_no: number | null;
+  projector_type: string | null;
+  has_vision_encoder: boolean | null;
+  has_audio_encoder: boolean | null;
+  tensor_count: number;
+  tensor_types: Record<string, number>;
+  gdn_tensor_types: Record<string, string>;
+  gdn_low_precision: string[];
+  parameter_count: number | null;
+  data_bytes: number;
+}
+
+export interface ScannedFile {
+  path: string;
+  name: string;
+  size: number;
+  modified: string | null;
+  stable: boolean;
+  meta: ModelMeta | null;
+  hashes: FileHashes | null;
+  error: string | null;
+}
+
+export interface ModelJson {
+  id: string | null;
+  display: string | null;
+  family: string | null;
+  role: ModelRole | null;
+  prompt_profile: string | null;
+  license: string | null;
+  license_url: string | null;
+  min_free_vram_mib: number | null;
+  defaults: Record<string, unknown> | null;
+}
+
+export interface DiscoveredModel {
+  folder: string;
+  folder_name: string;
+  id: string;
+  display: string;
+  weights: ScannedFile[];
+  mmproj: ScannedFile | null;
+  extra_ggufs: string[];
+  model_json: ModelJson | null;
+  license_files: string[];
+  architecture: string | null;
+  quantization: string | null;
+  has_chat_template: boolean;
+  has_vision: boolean;
+  role: ModelRole;
+  total_bytes: number;
+  health: ModelHealth;
+  warnings: string[];
+  registry_match: RegistryMatch | null;
+  hashed: boolean;
+  scanned_at: string;
+}
+
+export interface ModelIndex {
+  discovered: DiscoveredModel[];
+  roots: string[];
+  scanned_at: string | null;
+}
+
 export interface InstallState {
   installed: boolean;
   folder: string | null;
   missing_files: string[];
+  verified: boolean | null;
+  health: ModelHealth | null;
+  matched_by: MatchBy | null;
+  warnings: string[];
 }
 
 export interface RegistryModelView extends ModelEntry {
@@ -263,6 +378,154 @@ export interface Assessment {
   active_model: ModelEntry | null;
   active_model_installed: InstallState | null;
 }
+
+export type ImportMode = "copy" | "move" | "link";
+export const IMPORT_MODES: ImportMode[] = ["copy", "move", "link"];
+
+export interface ImportPlanFile {
+  source: string;
+  dest_name: string;
+  size: number;
+  meta: ModelMeta | null;
+  is_mmproj: boolean;
+}
+
+export interface ImportPlan {
+  folder_name: string;
+  target_folder: string;
+  files: ImportPlanFile[];
+  license_files: string[];
+  total_bytes: number;
+  mode: ImportMode;
+  auto_paired_mmproj: boolean;
+  architecture: string | null;
+  quantization: string | null;
+  has_vision: boolean;
+  warnings: string[];
+  already_present: boolean;
+}
+
+// --- engine ----------------------------------------------------------------
+
+export type EngineState =
+  | { kind: "stopped" }
+  | { kind: "starting" }
+  | { kind: "running" }
+  | { kind: "restarting"; attempt: number; delay_ms: number }
+  | { kind: "degraded"; reason: string }
+  | { kind: "stopping" };
+
+export type EngineSource = "env" | "override" | "app_data" | "bundled";
+
+export interface EngineBinary {
+  path: string;
+  backend: Backend;
+  version: string | null;
+  build_number: number | null;
+  source: EngineSource;
+}
+
+export interface InstalledPack {
+  backend: Backend;
+  version: string;
+  build_number: number | null;
+  path: string;
+}
+
+export interface EngineBinaryInfo {
+  resolved: EngineBinary | null;
+  error: string | null;
+  installed_packs: InstalledPack[];
+  engines_dir: string;
+  bundled_roots: string[];
+  min_build: number;
+}
+
+export type ModelInstanceState = "unloaded" | "loading" | "loaded" | "sleeping" | "downloading" | "incomplete" | string;
+
+export interface ModelInstanceStatus {
+  id: string;
+  status: ModelInstanceState;
+  failed: boolean;
+  exit_code: number | null;
+  progress: number | null;
+  stage: string | null;
+  memory_effective_bytes: number | null;
+  memory_min_bytes: number | null;
+  mmproj_bytes: number;
+  input_modalities: string[];
+  loaded_at: string | null;
+  warmed_up: boolean;
+}
+
+export interface EngineStatus {
+  state: EngineState;
+  binary: EngineBinary | null;
+  pid: number | null;
+  host: string;
+  port: number | null;
+  started_at: string | null;
+  restarts: number;
+  last_error: string | null;
+  last_exit_code: number | null;
+  models: ModelInstanceStatus[];
+  presets_path: string | null;
+  active_model: string | null;
+  sleep_idle_seconds: number;
+}
+
+export type LogStream = "stdout" | "stderr" | "app";
+
+export interface LogLine {
+  at: string;
+  stream: LogStream;
+  text: string;
+}
+
+export interface EngineDevice {
+  name: string;
+  description: string;
+  total_mib: number;
+  free_mib: number;
+}
+
+export interface ChatTestResult {
+  model: string;
+  prompt: string;
+  content: string;
+  finish_reason: string | null;
+  prompt_tokens: number;
+  completion_tokens: number;
+  elapsed_ms: number;
+  tokens_per_second: number | null;
+}
+
+// --- jobs ------------------------------------------------------------------
+
+export type JobKind = "engine_start" | "model_load" | "model_import" | "model_download" | "model_hash";
+export type JobState = "queued" | "running" | "done" | "failed" | "cancelled";
+
+export interface Job {
+  id: string;
+  kind: JobKind;
+  subject: string;
+  state: JobState;
+  progress: number | null;
+  detail: string | null;
+  bytes_done: number | null;
+  bytes_total: number | null;
+  error: string | null;
+  cancel_requested: boolean;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
+}
+
+export function isJobFinished(j: Job): boolean {
+  return j.state === "done" || j.state === "failed" || j.state === "cancelled";
+}
+
+// --- misc ------------------------------------------------------------------
 
 export type Screen =
   | "home"
@@ -325,6 +588,8 @@ export interface AppInfo {
   version: string;
   settings_path: string;
   app_data_dir: string;
+  engines_dir: string;
+  presets_path: string;
   os: string;
   arch: string;
   debug: boolean;
@@ -355,3 +620,12 @@ export const SCREEN_ROUTES: Record<Screen, string> = {
   models: "/models",
   settings: "/settings",
 };
+
+/** Event names emitted by the Rust shell (`engine_bridge.rs`, `jobs.rs`). */
+export const EVENTS = {
+  engineStatus: "engine://status",
+  engineLog: "engine://log",
+  engineModel: "engine://model",
+  modelsChanged: "models://changed",
+  jobsUpdate: "jobs://update",
+} as const;
