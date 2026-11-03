@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ko" data-theme="light" data-theme-setting="system">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>DocuLens</title>
+    <script>
+      // Flash-free theme bootstrap: mirror of settings.json kept in localStorage
+      // by the app. Rust is the source of truth and reconciles after startup.
+      (function () {
+        try {
+          var raw = localStorage.getItem("doculens.ui");
+          var ui = raw ? JSON.parse(raw) : {};
+          var setting = ui.theme || "system";
+          var dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+          var forced = window.matchMedia && window.matchMedia("(forced-colors: active)").matches;
+          var resolved = setting === "system" ? (dark ? "dark" : "light") : setting;
+          if (forced && setting === "system") resolved = "high-contrast";
+          var html = document.documentElement;
+          html.setAttribute("data-theme", resolved);
+          html.setAttribute("data-theme-setting", setting);
+          if (ui.language) html.setAttribute("lang", ui.language);
+          if (ui.scale_percent) html.style.setProperty("--ui-scale", String(ui.scale_percent / 100));
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
