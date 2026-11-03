@@ -16,7 +16,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { isTauri, openExternal, revealPath } from "@/lib/ipc";
 import { useAppInfo } from "@/lib/queries";
 import { LANGUAGES, RETENTION_DAY_ITEMS, THEMES, type AutoProcessingLevel, type ReducedMotion, type RetentionPolicy } from "@/lib/types";
-import { cn, errorMessage, formatDate } from "@/lib/utils";
+import { describeError } from "@/lib/errors";
+import { cn, formatDate } from "@/lib/utils";
 import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -266,7 +267,7 @@ function WorkspaceTab() {
                     <div className="truncate text-xs text-fg-subtle selectable">{w.path}</div>
                   </div>
                   {w.path !== workspace?.path && (
-                    <Button variant="outline" size="sm" onClick={() => void open(w.path).catch((e) => toast(errorMessage(e), "danger"))}>
+                    <Button variant="outline" size="sm" onClick={() => void open(w.path).catch((e) => toast(describeError(e, t), "danger"))}>
                       {t("common.open")}
                     </Button>
                   )}
@@ -363,7 +364,7 @@ function PrivacyTab() {
       await setRetention(draft);
       toast(t("settings.privacy.saved"), "ok");
     } catch (e) {
-      toast(errorMessage(e), "danger");
+      toast(describeError(e, t), "danger");
     }
   };
 
@@ -428,7 +429,7 @@ function PrivacyTab() {
               <div className="grid gap-3 md:grid-cols-3">
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="page-cache">{t("settings.privacy.page_cache")}</Label>
-                  <Input id="page-cache" type="number" min={0.5} max={1000} step={0.5} value={draft.page_cache_max_gb} onChange={(e) => setDraft({ ...draft, page_cache_max_gb: Number(e.target.value) || 0.5 })} />
+                  <Input id="page-cache" type="number" min={0.5} max={1000} step={0.5} value={draft.page_cache_max_gb} onChange={(e) => setDraft({ ...draft, page_cache_max_gb: Math.min(1000, Math.max(0.5, Number(e.target.value) || 0.5)) })} />
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="purge-hour">{t("settings.privacy.purge_hour")}</Label>

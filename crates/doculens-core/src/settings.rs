@@ -380,6 +380,11 @@ pub fn default_shortcuts() -> BTreeMap<String, String> {
 pub enum LoadStatus {
     Loaded,
     Created,
+    /// The file is valid JSON but some sections held invalid values; those
+    /// sections were reset to defaults and the rest was kept.
+    PartiallyRecovered {
+        sections: Vec<String>,
+    },
     /// The file could not be parsed; it was renamed to `*.broken-<timestamp>`.
     RecoveredFromCorrupt {
         backup: PathBuf,
@@ -388,14 +393,21 @@ pub enum LoadStatus {
 
 impl AppSettings {
     /// Loads settings from `path`, applying defaults for missing fields and
-    /// clamping out-of-range values. Never fails on a corrupt file.
+    /// clamping out-of-range values. Never fails on a corrupt file: invalid
+    /// JSON is moved aside, and an invalid value only resets its own section.
     pub fn load(path: &Path) -> Result<(AppSettings, LoadStatus)> {
         match std::fs::read(path) {
-            Ok(bytes) => match serde_json::from_slice::<AppSettings>(&bytes) {
-                Ok(mut s) => {
+            Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                Ok(value) => {
+                    let (mut s, bad) = AppSettings::from_value(value);
                     s.migrate();
                     s.normalize();
-                    Ok((s, LoadStatus::Loaded))
+                    if bad.is_empty() {
+                        Ok((s, LoadStatus::Loaded))
+                    } else {
+                        log::warn!("settings.json: sections reset to defaults: {bad:?}");
+                        Ok((s, LoadStatus::PartiallyRecovered { sections: bad }))
+                    }
                 }
                 Err(e) => {
                     let backup = path.with_extension(format!("json.broken-{}", Utc::now().format("%Y%m%d%H%M%S")));
@@ -409,6 +421,45 @@ impl AppSettings {
         }
     }
 
+    /// Lenient deserialisation: each top-level section is parsed on its own
+    /// and falls back to its default when invalid. Returns the names of the
+    /// sections that were reset.
+    pub fn from_value(value: serde_json::Value) -> (AppSettings, Vec<String>) {
+        fn take<T: serde::de::DeserializeOwned>(
+            map: &serde_json::Map<String, serde_json::Value>,
+            key: &str,
+            target: &mut T,
+            bad: &mut Vec<String>,
+        ) {
+            if let Some(v) = map.get(key) {
+                match serde_json::from_value::<T>(v.clone()) {
+                    Ok(parsed) => *target = parsed,
+                    Err(e) => {
+                        log::warn!("settings.json: invalid `{key}` ({e}); using defaults");
+                        bad.push(key.to_string());
+                    }
+                }
+            }
+        }
+        let mut out = AppSettings::default();
+        let mut bad = Vec::new();
+        let serde_json::Value::Object(map) = value else {
+            return (out, vec!["root".to_string()]);
+        };
+        take(&map, "schema_version", &mut out.schema_version, &mut bad);
+        take(&map, "active_workspace", &mut out.active_workspace, &mut bad);
+        take(&map, "workspaces", &mut out.workspaces, &mut bad);
+        take(&map, "ui", &mut out.ui, &mut bad);
+        take(&map, "models", &mut out.models, &mut bad);
+        take(&map, "processing", &mut out.processing, &mut bad);
+        take(&map, "cache", &mut out.cache, &mut bad);
+        take(&map, "privacy", &mut out.privacy, &mut bad);
+        take(&map, "notifications", &mut out.notifications, &mut bad);
+        take(&map, "shortcuts", &mut out.shortcuts, &mut bad);
+        take(&map, "window", &mut out.window, &mut bad);
+        (out, bad)
+    }
+
     /// Atomically writes settings (temp file + rename).
     pub fn save(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
@@ -416,7 +467,12 @@ impl AppSettings {
         }
         let tmp = path.with_extension("json.tmp");
         let json = serde_json::to_vec_pretty(self).map_err(|e| CoreError::json(path, e))?;
-        std::fs::write(&tmp, json).map_err(|e| CoreError::io(&tmp, e))?;
+        {
+            use std::io::Write;
+            let mut f = std::fs::File::create(&tmp).map_err(|e| CoreError::io(&tmp, e))?;
+            f.write_all(&json).map_err(|e| CoreError::io(&tmp, e))?;
+            f.sync_all().map_err(|e| CoreError::io(&tmp, e))?;
+        }
         std::fs::rename(&tmp, path).map_err(|e| CoreError::io(path, e))?;
         Ok(())
     }
@@ -498,6 +554,24 @@ mod tests {
         assert_eq!(s.ui.theme, Theme::System);
         assert_eq!(s.models.active_model, "auto");
         assert_eq!(s.shortcuts.get("command_palette").map(String::as_str), Some("Ctrl+K"));
+    }
+
+    #[test]
+    fn invalid_value_resets_only_its_section() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"active_workspace":"C:\\Work","ui":{"theme":"blue"},"models":{"manual_tier":"8gb","active_model":"x"},"processing":{"render_dpi":300}}"#,
+        )
+        .unwrap();
+        let (s, status) = AppSettings::load(&path).unwrap();
+        assert_eq!(status, LoadStatus::PartiallyRecovered { sections: vec!["ui".into(), "models".into()] });
+        assert_eq!(s.active_workspace.as_deref(), Some(Path::new("C:\\Work")));
+        assert_eq!(s.processing.render_dpi, 300);
+        assert_eq!(s.ui, UiSettings::default());
+        assert_eq!(s.models, ModelSettings::default());
+        assert!(path.exists(), "a partially valid file is kept, not moved aside");
     }
 
     #[test]

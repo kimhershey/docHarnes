@@ -304,6 +304,7 @@ export interface DateRange {
 export type LoadStatus =
   | { kind: "loaded" }
   | { kind: "created" }
+  | { kind: "partially_recovered"; sections: string[] }
   | { kind: "recovered_from_corrupt"; backup: string };
 
 export type StartupWorkspaceStatus =

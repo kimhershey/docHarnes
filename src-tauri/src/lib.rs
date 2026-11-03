@@ -69,8 +69,9 @@ pub fn run() {
 /// Native window theme for a persisted theme choice (`System` = follow OS).
 pub(crate) fn native_theme(theme: Theme) -> Option<tauri::Theme> {
     match theme {
-        Theme::Light | Theme::HighContrast => Some(tauri::Theme::Light),
-        Theme::Dark => Some(tauri::Theme::Dark),
+        Theme::Light => Some(tauri::Theme::Light),
+        // The high-contrast palette is black-on-white-text (`color-scheme: dark`).
+        Theme::Dark | Theme::HighContrast => Some(tauri::Theme::Dark),
         Theme::System => None,
     }
 }

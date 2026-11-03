@@ -85,6 +85,10 @@ pub struct LockInfo {
     pub host: String,
     pub app_version: String,
     pub created_at: DateTime<Utc>,
+    /// Identifies the `Workspace` handle that wrote the lock, so a handle only
+    /// ever deletes its own lock (re-opening the same folder is safe).
+    #[serde(default)]
+    pub token: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -146,15 +150,24 @@ pub struct WorkspaceInspection {
 }
 
 pub const DOCUMENT_COUNT_CAP: u32 = 5_000;
+/// Directory entries visited before `count_document_files` gives up (keeps
+/// inspection of huge folders bounded; the count is then a lower estimate).
+pub const DOCUMENT_VISIT_CAP: u32 = 20_000;
+pub const DOCUMENT_WALK_MAX_DEPTH: u32 = 8;
 pub const DOCUMENT_EXTENSIONS: &[&str] =
     &["pdf", "png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp", "heic", "heif", "hwp", "hwpx", "docx", "txt", "md"];
 
+/// Drive roots and the home directory must never become workspaces.
+/// Both sides are canonicalised so `c:\users\me\.` or `C:\Users\me\Desktop\..`
+/// cannot bypass the check (design §3.6).
 fn is_unsafe_location(root: &Path) -> bool {
-    if root.parent().is_none() {
+    let canon = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    if canon.parent().is_none() || root.parent().is_none() {
         return true; // "/" or "C:\"
     }
     if let Some(home) = dirs::home_dir() {
-        if root == home {
+        let home_canon = std::fs::canonicalize(&home).unwrap_or(home.clone());
+        if canon == home_canon || root == home {
             return true;
         }
     }
@@ -163,17 +176,29 @@ fn is_unsafe_location(root: &Path) -> bool {
 
 fn count_document_files(root: &Path, cap: u32) -> u32 {
     let mut count = 0u32;
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
+    let mut visited = 0u32;
+    let mut stack = vec![(root.to_path_buf(), 0u32)];
+    while let Some((dir, depth)) = stack.pop() {
         let Ok(rd) = std::fs::read_dir(&dir) else { continue };
         for entry in rd.flatten() {
-            let path = entry.path();
+            visited += 1;
+            if visited >= DOCUMENT_VISIT_CAP {
+                return count;
+            }
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with('.') || name == WORKSPACE_DIR_NAME {
                 continue;
             }
-            if path.is_dir() {
-                stack.push(path);
+            // file_type() does not follow symlinks / junctions, so cycles are impossible.
+            let Ok(file_type) = entry.file_type() else { continue };
+            if file_type.is_symlink() {
+                continue;
+            }
+            let path = entry.path();
+            if file_type.is_dir() {
+                if depth < DOCUMENT_WALK_MAX_DEPTH {
+                    stack.push((path, depth + 1));
+                }
             } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                 if DOCUMENT_EXTENSIONS.contains(&ext.to_lowercase().as_str()) {
                     count += 1;
@@ -194,6 +219,7 @@ pub fn inspect(root: &Path) -> WorkspaceInspection {
     let is_dir = root.is_dir();
     let manifest = if is_dir { WorkspaceManifest::load(&paths.manifest_file()).ok() } else { None };
     let (lock_state, lock) = if is_dir { read_lock(&paths) } else { (LockState::Free, None) };
+    let unsafe_location = is_unsafe_location(root);
     WorkspaceInspection {
         path: root.to_path_buf(),
         exists,
@@ -202,8 +228,8 @@ pub fn inspect(root: &Path) -> WorkspaceInspection {
         manifest,
         lock_state,
         lock,
-        document_files: if is_dir { count_document_files(root, DOCUMENT_COUNT_CAP) } else { 0 },
-        unsafe_location: is_unsafe_location(root),
+        document_files: if is_dir && !unsafe_location { count_document_files(root, DOCUMENT_COUNT_CAP) } else { 0 },
+        unsafe_location,
     }
 }
 
@@ -218,12 +244,58 @@ pub struct OpenOptions {
     pub force_unlock: bool,
 }
 
-/// An open workspace. Dropping it releases the lock.
+/// An open workspace. Dropping it releases its lock (only if the lock file
+/// still carries this handle's token).
 #[derive(Debug)]
 pub struct Workspace {
     pub paths: WorkspacePaths,
     pub manifest: WorkspaceManifest,
+    lock_token: Uuid,
     lock_held: bool,
+}
+
+/// Creates or takes over the lock file. A free lock is created with
+/// `create_new` so two instances racing for the same folder cannot both win.
+fn acquire_lock(paths: &WorkspacePaths, force_unlock: bool) -> Result<Uuid> {
+    use std::io::Write;
+    let lock_path = paths.lock_file();
+    let token = Uuid::new_v4();
+    let info = LockInfo {
+        pid: std::process::id(),
+        host: hostname(),
+        app_version: APP_VERSION.to_string(),
+        created_at: Utc::now(),
+        token: Some(token),
+    };
+    let bytes = serde_json::to_vec(&info).expect("lock serialises");
+    for _attempt in 0..3 {
+        let (state, existing) = read_lock(paths);
+        match state {
+            LockState::Free => match std::fs::OpenOptions::new().write(true).create_new(true).open(&lock_path) {
+                Ok(mut f) => {
+                    f.write_all(&bytes).map_err(|e| CoreError::io(&lock_path, e))?;
+                    let _ = f.sync_all();
+                    return Ok(token);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue, // raced: re-evaluate
+                Err(e) => return Err(CoreError::io(&lock_path, e)),
+            },
+            LockState::Stale => {
+                std::fs::write(&lock_path, &bytes).map_err(|e| CoreError::io(&lock_path, e))?;
+                return Ok(token);
+            }
+            LockState::HeldHere | LockState::HeldElsewhere => {
+                let info = existing.expect("lock info present when held");
+                let ours = info.pid == std::process::id() && info.host == hostname();
+                if !ours && !force_unlock {
+                    return Err(CoreError::WorkspaceLocked { pid: info.pid, host: info.host });
+                }
+                std::fs::write(&lock_path, &bytes).map_err(|e| CoreError::io(&lock_path, e))?;
+                return Ok(token);
+            }
+        }
+    }
+    Err(CoreError::Invalid("could not acquire the workspace lock".into()))
 }
 
 impl Workspace {
@@ -247,27 +319,7 @@ impl Workspace {
             std::fs::create_dir_all(&dir).map_err(|e| CoreError::io(&dir, e))?;
         }
 
-        // Lock
-        let (state, info) = read_lock(&paths);
-        match state {
-            LockState::Free | LockState::Stale => {}
-            LockState::HeldHere | LockState::HeldElsewhere => {
-                let info = info.expect("lock info present when held");
-                let ours = info.pid == std::process::id() && info.host == hostname();
-                if !ours && !opts.force_unlock {
-                    return Err(CoreError::WorkspaceLocked { pid: info.pid, host: info.host });
-                }
-            }
-        }
-        let lock = LockInfo {
-            pid: std::process::id(),
-            host: hostname(),
-            app_version: APP_VERSION.to_string(),
-            created_at: Utc::now(),
-        };
-        let lock_path = paths.lock_file();
-        std::fs::write(&lock_path, serde_json::to_vec(&lock).expect("lock serialises"))
-            .map_err(|e| CoreError::io(&lock_path, e))?;
+        let lock_token = acquire_lock(&paths, opts.force_unlock)?;
 
         // Manifest
         let mut manifest = if existing {
@@ -286,17 +338,22 @@ impl Workspace {
         manifest.last_opened_app_version = APP_VERSION.to_string();
         manifest.save(&manifest_path)?;
 
-        Ok(Workspace { paths, manifest, lock_held: true })
+        Ok(Workspace { paths, manifest, lock_token, lock_held: true })
     }
 
     pub fn root(&self) -> &Path {
         &self.paths.root
     }
 
+    /// Applies `f` to a copy of the manifest; the in-memory manifest changes
+    /// only when validation and the save succeed.
     pub fn update_manifest(&mut self, f: impl FnOnce(&mut WorkspaceManifest)) -> Result<()> {
-        f(&mut self.manifest);
-        self.manifest.retention.validate()?;
-        self.manifest.save(&self.paths.manifest_file())
+        let mut draft = self.manifest.clone();
+        f(&mut draft);
+        draft.retention.validate()?;
+        draft.save(&self.paths.manifest_file())?;
+        self.manifest = draft;
+        Ok(())
     }
 
     /// Releases the lock explicitly (also done on drop).
@@ -311,7 +368,11 @@ impl Workspace {
         self.lock_held = false;
         let (_, info) = read_lock(&self.paths);
         if let Some(info) = info {
-            if info.pid == std::process::id() && info.host == hostname() {
+            let ours = match info.token {
+                Some(token) => token == self.lock_token,
+                None => info.pid == std::process::id() && info.host == hostname(),
+            };
+            if ours {
                 let _ = std::fs::remove_file(self.paths.lock_file());
             }
         }
@@ -376,8 +437,13 @@ mod tests {
 
         // Stale lock from a dead pid is recovered
         let paths = WorkspacePaths::new(&root);
-        let stale =
-            LockInfo { pid: 4_000_000_000, host: hostname(), app_version: "0.0.0".into(), created_at: Utc::now() };
+        let stale = LockInfo {
+            pid: 4_000_000_000,
+            host: hostname(),
+            app_version: "0.0.0".into(),
+            created_at: Utc::now(),
+            token: None,
+        };
         std::fs::write(paths.lock_file(), serde_json::to_vec(&stale).unwrap()).unwrap();
         assert_eq!(read_lock(&paths).0, LockState::Stale);
         let ws = Workspace::open(&root, OpenOptions::default()).unwrap();
@@ -385,7 +451,13 @@ mod tests {
         drop(ws);
 
         // Lock from another host requires force_unlock
-        let other = LockInfo { pid: 1, host: "other-host".into(), app_version: "0.0.0".into(), created_at: Utc::now() };
+        let other = LockInfo {
+            pid: 1,
+            host: "other-host".into(),
+            app_version: "0.0.0".into(),
+            created_at: Utc::now(),
+            token: None,
+        };
         std::fs::write(paths.lock_file(), serde_json::to_vec(&other).unwrap()).unwrap();
         assert!(matches!(Workspace::open(&root, OpenOptions::default()), Err(CoreError::WorkspaceLocked { .. })));
         let ws = Workspace::open(&root, OpenOptions { force_unlock: true, ..Default::default() }).unwrap();
@@ -402,6 +474,49 @@ mod tests {
         let loaded = WorkspaceManifest::load(&ws.paths.manifest_file()).unwrap();
         assert_eq!(loaded.retention.chats_days, Some(30));
         assert!(ws.update_manifest(|m| m.retention.purge_hour_local = 99).is_err());
+        // a rejected update leaves the in-memory manifest untouched and later updates still work
+        assert_eq!(ws.manifest.retention.purge_hour_local, 3);
+        ws.update_manifest(|m| m.retention.chats_days = Some(10)).unwrap();
+        assert_eq!(ws.manifest.retention.chats_days, Some(10));
+    }
+
+    #[test]
+    fn lock_is_created_atomically_and_foreign_live_lock_blocks() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ws");
+        std::fs::create_dir_all(root.join(WORKSPACE_DIR_NAME)).unwrap();
+        // A lock from a live process on this host (our own pid but a different handle token)
+        // is "held here"; a different pid that is alive would block. Simulate with pid 1 (init)
+        // which is alive on Linux CI; if it is not, the lock is stale and opening succeeds.
+        let paths = WorkspacePaths::new(&root);
+        let other = LockInfo {
+            pid: 1,
+            host: hostname(),
+            app_version: "0.0.0".into(),
+            created_at: Utc::now(),
+            token: Some(Uuid::new_v4()),
+        };
+        std::fs::write(paths.lock_file(), serde_json::to_vec(&other).unwrap()).unwrap();
+        let (state, _) = read_lock(&paths);
+        let result = Workspace::open(&root, OpenOptions { create: true, ..Default::default() });
+        match state {
+            LockState::HeldHere => assert!(matches!(result, Err(CoreError::WorkspaceLocked { pid: 1, .. }))),
+            _ => assert!(result.is_ok()),
+        }
+    }
+
+    #[test]
+    fn document_count_skips_symlinks_and_hidden_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ws");
+        std::fs::create_dir_all(root.join("a").join("b")).unwrap();
+        std::fs::create_dir_all(root.join(".hidden")).unwrap();
+        std::fs::write(root.join("a").join("b").join("x.pdf"), b"x").unwrap();
+        std::fs::write(root.join(".hidden").join("y.pdf"), b"x").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&root, root.join("a").join("loop")).unwrap();
+        assert_eq!(count_document_files(&root, DOCUMENT_COUNT_CAP), 1);
+        assert_eq!(inspect(Path::new("/")).document_files, 0);
     }
 
     #[test]

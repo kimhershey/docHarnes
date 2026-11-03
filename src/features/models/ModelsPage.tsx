@@ -11,7 +11,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { revealPath } from "@/lib/ipc";
 import { useAssessment, useRegistry } from "@/lib/queries";
 import { TIERS, type BackendPreference, type Profile, type Tier } from "@/lib/types";
-import { errorMessage, formatBytes } from "@/lib/utils";
+import { describeError } from "@/lib/errors";
+import { formatBytes } from "@/lib/utils";
 import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspace } from "@/stores/workspace";
@@ -39,7 +40,7 @@ export function ModelsPage() {
   const manualTier = settings.models.manual_tier ?? assessment?.tier.tier ?? "vram_8gb";
   const vlms = registry?.models.filter((m) => m.role === "vlm") ?? [];
 
-  const guard = (p: Promise<unknown>) => p.catch((e) => toast(errorMessage(e), "danger"));
+  const guard = (p: Promise<unknown>) => p.catch((e) => toast(describeError(e, t), "danger"));
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-4 p-6" data-testid="page-models">

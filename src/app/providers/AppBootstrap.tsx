@@ -30,6 +30,9 @@ export function AppBootstrap({ children }: { children: ReactNode }) {
     if (startup.settings.kind === "recovered_from_corrupt") {
       toast(t("startup.settings_recovered", { backup: startup.settings.backup }), "warn");
     }
+    if (startup.settings.kind === "partially_recovered") {
+      toast(t("startup.settings_partial", { sections: startup.settings.sections.join(", ") }), "warn");
+    }
     const ws = startup.workspace;
     if (ws.kind === "missing") toast(t("startup.workspace_missing", { path: ws.path }), "warn");
     if (ws.kind === "locked") toast(t("startup.workspace_locked", { path: ws.path, pid: ws.pid, host: ws.host }), "danger");

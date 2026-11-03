@@ -162,10 +162,20 @@ impl WorkspacePaths {
     }
 }
 
-/// Normalise a user-supplied folder path: trims whitespace, strips a trailing
-/// separator, expands a leading `~`.
+/// Normalise a user-supplied folder path: trims whitespace and surrounding
+/// quotes (Explorer "Copy as path"), strips a trailing separator (but keeps a
+/// drive root as `C:\`), expands a leading `~`.
 pub fn normalize_user_path(input: &str) -> PathBuf {
-    let trimmed = input.trim().trim_end_matches(['/', '\\']);
+    let trimmed = input.trim().trim_matches(['"', '\'']).trim();
+    let trimmed = trimmed.trim_end_matches(['/', '\\']);
+    if trimmed.is_empty() {
+        let raw = input.trim().trim_matches(['"', '\'']).trim();
+        return PathBuf::from(if raw.is_empty() { "" } else { "/" });
+    }
+    let bytes = trimmed.as_bytes();
+    if bytes.len() == 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        return PathBuf::from(format!("{trimmed}\\"));
+    }
     if let Some(rest) = trimmed.strip_prefix('~') {
         if let Some(home) = dirs::home_dir() {
             return home.join(rest.trim_start_matches(['/', '\\']));
@@ -201,5 +211,10 @@ mod tests {
     fn normalize_strips_trailing_separators() {
         assert_eq!(normalize_user_path("  C:\\Work\\Docs\\  "), PathBuf::from("C:\\Work\\Docs"));
         assert_eq!(normalize_user_path("/home/u/docs/"), PathBuf::from("/home/u/docs"));
+        assert_eq!(normalize_user_path("\"C:\\Work\\Docs\""), PathBuf::from("C:\\Work\\Docs"));
+        assert_eq!(normalize_user_path("C:\\"), PathBuf::from("C:\\"));
+        assert_eq!(normalize_user_path("C:"), PathBuf::from("C:\\"));
+        assert_eq!(normalize_user_path("/"), PathBuf::from("/"));
+        assert_eq!(normalize_user_path("   "), PathBuf::from(""));
     }
 }

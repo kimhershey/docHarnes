@@ -47,7 +47,8 @@ export function matchesChord(e: KeyboardEvent, chord: Chord | string, mac = fals
   if (c.shift !== e.shiftKey) return false;
   if (c.alt !== e.altKey) return false;
   let key = e.key.toLowerCase();
-  if (key === "+") key = "=";
+  if (key === "+") key = "="; // Shift+= on US / Korean layouts
+  if (key === "_") key = "-"; // Shift+-
   if (c.key.length === 1 && key.length === 1) return key === c.key;
   return key === c.key;
 }

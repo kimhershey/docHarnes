@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { errorMessage } from "@/lib/utils";
+import { describeError } from "@/lib/errors";
 import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -21,7 +21,7 @@ export function WorkspaceSwitcher() {
     try {
       await open(path);
     } catch (e) {
-      toast(errorMessage(e), "danger");
+      toast(describeError(e, t), "danger");
     }
   };
 

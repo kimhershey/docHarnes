@@ -142,7 +142,8 @@ fn view(ws: &doculens_core::workspace::Workspace) -> WorkspaceView {
     }
 }
 
-#[tauri::command]
+/// Async: walks the folder (bounded) off the main thread so typing a path never freezes the UI.
+#[tauri::command(async)]
 pub fn workspace_inspect(path: String) -> WorkspaceInspection {
     workspace::inspect(&normalize_user_path(&path))
 }
@@ -220,7 +221,8 @@ pub fn workspace_set_preferred_model(state: State<'_, AppState>, model_id: Optio
 // Hardware / tier
 // ---------------------------------------------------------------------------
 
-#[tauri::command]
+/// Async: NVML initialisation can stall for a noticeable time.
+#[tauri::command(async)]
 pub fn hw_probe(state: State<'_, AppState>, refresh: Option<bool>) -> UiResult<HardwareSummary> {
     let mut guard = state.hardware.lock().map_err(|_| UiError::poisoned())?;
     if refresh.unwrap_or(false) || guard.is_none() {
@@ -237,7 +239,7 @@ pub struct Assessment {
     pub active_model_installed: Option<InstallState>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn hw_assess(state: State<'_, AppState>) -> UiResult<Assessment> {
     let hw = {
         let mut guard = state.hardware.lock().map_err(|_| UiError::poisoned())?;

@@ -227,7 +227,13 @@
     "command_title": "Command in natural language",
     "command_hint": "Theme, language and navigation run immediately; document commands go to the assistant (P5 planner).",
     "command_placeholder": "e.g. process the inbox / last month's receipt total / switch to dark mode",
-    "examples": ["process inbox", "last month's receipt total", "tax invoices → Excel", "switch to dark mode", "open settings"],
+    "examples": [
+      "process inbox",
+      "last month's receipt total",
+      "tax invoices → Excel",
+      "switch to dark mode",
+      "open settings"
+    ],
     "quick": {
       "title": "Quick actions",
       "import": "Import documents",
@@ -261,7 +267,14 @@
     "source_phrase": "phrase rule",
     "confidence": "confidence {{value}}",
     "examples_title": "Examples",
-    "examples": ["process inbox", "last month's receipt total", "tax invoices → Excel", "/theme dark", "switch to Korean", "/open models"]
+    "examples": [
+      "process inbox",
+      "last month's receipt total",
+      "tax invoices → Excel",
+      "/theme dark",
+      "switch to Korean",
+      "/open models"
+    ]
   },
   "models": {
     "title": "Model manager",
@@ -452,31 +465,73 @@
   },
   "pages": {
     "library": {
-      "features": ["Folder tree (inbox / documents / exports) and filters (type, date, vendor, status, tags, confidence, duplicates)", "Thumbnail grid / list view with virtual scrolling", "Drag-and-drop → import preview (HWP/HWPX/DOCX conversion badge)", "Bulk actions on selections: classify, OCR, extract, summarize, organize, export, tag, merge, delete", "Aggregation bar (count, sum, average, include-pending toggle)"]
+      "features": [
+        "Folder tree (inbox / documents / exports) and filters (type, date, vendor, status, tags, confidence, duplicates)",
+        "Thumbnail grid / list view with virtual scrolling",
+        "Drag-and-drop → import preview (HWP/HWPX/DOCX conversion badge)",
+        "Bulk actions on selections: classify, OCR, extract, summarize, organize, export, tag, merge, delete",
+        "Aggregation bar (count, sum, average, include-pending toggle)"
+      ]
     },
     "search": {
-      "features": ["Keyword (morpheme + trigram) / semantic / hybrid search", "Document, page, snippet and score results; click → highlight in the viewer", "Guidance when no embedding model is installed"]
+      "features": [
+        "Keyword (morpheme + trigram) / semantic / hybrid search",
+        "Document, page, snippet and score results; click → highlight in the viewer",
+        "Guidance when no embedding model is installed"
+      ]
     },
     "review": {
-      "features": ["Queue of low-confidence / failed-validation fields, threshold slider (default 0.8) and random audit sampling", "Keyboard review: Enter approve · E edit · S hold · N next (Enter ignored while composing Korean)", "Image crop preview, bulk approve, re-extract with a stronger model / fine-print profile", "All required fields approved → document status 'reviewed'"]
+      "features": [
+        "Queue of low-confidence / failed-validation fields, threshold slider (default 0.8) and random audit sampling",
+        "Keyboard review: Enter approve · E edit · S hold · N next (Enter ignored while composing Korean)",
+        "Image crop preview, bulk approve, re-extract with a stronger model / fine-print profile",
+        "All required fields approved → document status 'reviewed'"
+      ]
     },
     "schemas": {
-      "features": ["Form registration: sample document → VLM field discovery → confirm → save type, schema and template", "Six built-in sample forms (tax invoice, receipt, business registration, contract, application, transaction statement)", "Create/edit schemas in natural language, field grid (key / label / type / required / regex)", "Type → schema mapping, version history, schema lint, sample test runs"]
+      "features": [
+        "Form registration: sample document → VLM field discovery → confirm → save type, schema and template",
+        "Six built-in sample forms (tax invoice, receipt, business registration, contract, application, transaction statement)",
+        "Create/edit schemas in natural language, field grid (key / label / type / required / regex)",
+        "Type → schema mapping, version history, schema lint, sample test runs"
+      ]
     },
     "knowledge": {
-      "features": ["Ingestion wizard (multi-select folders/files, collection and metadata, progress)", "Collections, document versions (old/new) and glossary", "Structure-aware chunking (articles, clauses, tables) + morpheme/trigram FTS + embeddings (bge-m3) hybrid search", "Question test panel and answer feedback statistics"]
+      "features": [
+        "Ingestion wizard (multi-select folders/files, collection and metadata, progress)",
+        "Collections, document versions (old/new) and glossary",
+        "Structure-aware chunking (articles, clauses, tables) + morpheme/trigram FTS + embeddings (bge-m3) hybrid search",
+        "Question test panel and answer feedback statistics"
+      ]
     },
     "organize": {
-      "features": ["File-name and folder template editor ({{year}} {{month}} {{doc_type}} {{vendor}} {{total}} …)", "Preview diff table (dry run), reviewed documents only by default", "Run / undo (journal-based batch history)", "Export wizard: XLSX / CSV / JSONL / Markdown / searchable PDF"]
+      "features": [
+        "File-name and folder template editor ({{year}} {{month}} {{doc_type}} {{vendor}} {{total}} …)",
+        "Preview diff table (dry run), reviewed documents only by default",
+        "Run / undo (journal-based batch history)",
+        "Export wizard: XLSX / CSV / JSONL / Markdown / searchable PDF"
+      ]
     },
     "jobs": {
-      "features": ["Queued / running / done / failed tabs with progress, ETA and tokens per second", "Cancel, retry, pause/resume, priorities, per-item error logs", "OS notification on completion, keep-awake, disk/cache estimates, engine metrics"]
+      "features": [
+        "Queued / running / done / failed tabs with progress, ETA and tokens per second",
+        "Cancel, retry, pause/resume, priorities, per-item error logs",
+        "OS notification on completion, keep-awake, disk/cache estimates, engine metrics"
+      ]
     },
     "generate": {
-      "features": ["Pick a form or describe the format in natural language, then describe the content → automatic drafting (Korean by default)", "Knowledge-base evidence panel (citations, include/exclude)", "Save as HWPX / DOCX / PDF / Markdown and register in the library"]
+      "features": [
+        "Pick a form or describe the format in natural language, then describe the content → automatic drafting (Korean by default)",
+        "Knowledge-base evidence panel (citations, include/exclude)",
+        "Save as HWPX / DOCX / PDF / Markdown and register in the library"
+      ]
     },
     "projects": {
-      "features": ["Case-level document bundles, required-document checklist, intake status board", "Natural language → consistency rules, result table (pass / mismatch / undetermined with evidence links)", "Supplement-request letters, relationship graph"]
+      "features": [
+        "Case-level document bundles, required-document checklist, intake status board",
+        "Natural language → consistency rules, result table (pass / mismatch / undetermined with evidence links)",
+        "Supplement-request letters, relationship graph"
+      ]
     }
   },
   "errors": {
@@ -494,6 +549,7 @@
     "settings_recovered": "The settings file was corrupt and has been reset to defaults. Backup: {{backup}}",
     "workspace_missing": "The configured workspace ({{path}}) was not found; showing onboarding.",
     "workspace_locked": "The workspace ({{path}}) is in use by another instance (pid {{pid}} on {{host}}).",
-    "workspace_failed": "Could not open the workspace ({{path}}): {{message}}"
+    "workspace_failed": "Could not open the workspace ({{path}}): {{message}}",
+    "settings_partial": "Some settings sections ({{sections}}) were invalid and have been reset to defaults."
   }
 }

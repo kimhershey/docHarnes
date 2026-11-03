@@ -29,4 +29,4 @@ jobs:
         with:
           name: DocuLens-Setup-Lite
           path: |
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+            target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe

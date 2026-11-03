@@ -7,7 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, isTauri, pickFolder } from "@/lib/ipc";
 import type { WorkspaceInspection, WorkspaceView } from "@/lib/types";
-import { errorCode, errorMessage } from "@/lib/utils";
+import { describeError } from "@/lib/errors";
+import { errorCode } from "@/lib/utils";
 import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -66,14 +67,17 @@ export function WorkspaceChooser({ mode, onOpened, showRecent = true }: Workspac
     if (!p) return;
     setBusy(true);
     try {
-      const ws = inspection?.initialized ? await open(p, forceUnlock) : await create(p, name.trim() || null, null, forceUnlock);
+      // Decide open vs. create from a fresh inspection (the debounced one may be stale or pending).
+      const insp = inspection && inspection.path === p ? inspection : await api.workspaceInspect(p);
+      if (insp.unsafe_location) return;
+      const ws = insp.initialized ? await open(p, forceUnlock) : await create(p, name.trim() || null, null, forceUnlock);
       onOpened(ws);
     } catch (e) {
       if (errorCode(e) === "workspace_locked") {
         const d = (e as { detail?: { pid?: number; host?: string } }).detail;
         setLockedBy({ pid: d?.pid ?? 0, host: d?.host ?? "?" });
       } else {
-        toast(errorMessage(e), "danger");
+        toast(describeError(e, t), "danger");
       }
     } finally {
       setBusy(false);

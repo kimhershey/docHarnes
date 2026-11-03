@@ -33,6 +33,7 @@ export function AssistantPage() {
   const [text, setText] = useState("");
   const [scope, setScope] = useState<"all" | "folder" | "selection">("all");
   const listRef = useRef<HTMLDivElement>(null);
+  const consumed = useRef<string | null>(null);
   const examples = t("assistant.examples", { returnObjects: true }) as string[];
 
   const push = (m: NewMessage) => setMessages((prev) => [...prev, { ...m, id: seq++ } as Message]);
@@ -57,7 +58,8 @@ export function AssistantPage() {
   };
 
   useEffect(() => {
-    if (pending) {
+    if (pending && consumed.current !== pending) {
+      consumed.current = pending;
       setPending(null);
       void send(pending);
     }

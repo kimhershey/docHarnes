@@ -144,6 +144,20 @@ impl AppState {
     /// Opens (or creates) a workspace, closing the current one first, and
     /// records it as active in settings.
     pub fn open_workspace_inner(&self, path: &Path, opts: OpenOptions) -> Result<()> {
+        // Re-selecting the folder that is already open must not touch the lock.
+        {
+            let guard = self.workspace.lock().map_err(|_| CoreError::Invalid("lock poisoned".into()))?;
+            if let Some(current) = guard.as_ref() {
+                if current.root() == path {
+                    let name = current.manifest.name.clone();
+                    drop(guard);
+                    let mut s = self.settings.lock().map_err(|_| CoreError::Invalid("lock poisoned".into()))?;
+                    s.remember_workspace(path, &name);
+                    s.save(&self.settings_path())?;
+                    return Ok(());
+                }
+            }
+        }
         let ws = Workspace::open(path, opts)?;
         let name = ws.manifest.name.clone();
         {

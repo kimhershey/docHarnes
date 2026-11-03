@@ -20,9 +20,9 @@ function tokens(selector: string): Record<string, string> {
 }
 
 const THEMES: { selector: string; min: number }[] = [
-  { selector: 'html[data-theme="light"]', min: 4.5 },
-  { selector: 'html[data-theme="dark"]', min: 4.5 },
-  { selector: 'html[data-theme="high-contrast"]', min: 7 },
+  { selector: '[data-theme="light"]', min: 4.5 },
+  { selector: '[data-theme="dark"]', min: 4.5 },
+  { selector: '[data-theme="high-contrast"]', min: 7 },
 ];
 
 describe("theme token contrast", () => {

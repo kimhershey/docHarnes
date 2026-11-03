@@ -225,9 +225,12 @@ pub struct InstallState {
 
 /// Phase-0 check: a model counts as installed when every registry file name
 /// exists in `<models_dir>/<model id>/` or in any immediate sub-folder.
+/// When nothing is installed, `folder` is the install target
+/// (`<models_dir>/<model id>/`) and `missing_files` is computed against it.
 /// Phase 1 replaces name matching with GGUF-header + hash verification.
 pub fn install_state(models_dir: &Path, model: &ModelEntry) -> InstallState {
-    let mut candidates = vec![models_dir.join(&model.id)];
+    let target = models_dir.join(&model.id);
+    let mut candidates = vec![target.clone()];
     if let Ok(rd) = std::fs::read_dir(models_dir) {
         for e in rd.flatten() {
             let p = e.path();
@@ -236,23 +239,15 @@ pub fn install_state(models_dir: &Path, model: &ModelEntry) -> InstallState {
             }
         }
     }
-    let mut best: Option<InstallState> = None;
-    for dir in candidates {
-        let missing: Vec<String> =
-            model.files.iter().filter(|f| !dir.join(&f.name).is_file()).map(|f| f.name.clone()).collect();
-        let state = InstallState { installed: missing.is_empty(), folder: Some(dir), missing_files: missing };
-        if state.installed {
-            return state;
-        }
-        if best.as_ref().map(|b| state.missing_files.len() < b.missing_files.len()).unwrap_or(true) {
-            best = Some(state);
+    let missing_in = |dir: &Path| -> Vec<String> {
+        model.files.iter().filter(|f| !dir.join(&f.name).is_file()).map(|f| f.name.clone()).collect()
+    };
+    for dir in &candidates {
+        if missing_in(dir).is_empty() {
+            return InstallState { installed: true, folder: Some(dir.clone()), missing_files: Vec::new() };
         }
     }
-    best.unwrap_or(InstallState {
-        installed: false,
-        folder: None,
-        missing_files: model.files.iter().map(|f| f.name.clone()).collect(),
-    })
+    InstallState { installed: false, missing_files: missing_in(&target), folder: Some(target) }
 }
 
 /// Text for "필요 파일 목록 내보내기" (design §3.3.4): file name, size, SHA-256 and URL
@@ -321,7 +316,9 @@ mod tests {
         std::fs::write(custom.join("Qwen3.5-4B-Q4_K_M.gguf"), b"x").unwrap();
         let s = install_state(dir.path(), m);
         assert!(!s.installed);
-        assert_eq!(s.missing_files, vec!["mmproj-F16.gguf".to_string()]);
+        // not installed -> the install target is reported, never a partial foreign folder
+        assert_eq!(s.folder, Some(dir.path().join("qwen3.5-4b-q4km")));
+        assert_eq!(s.missing_files.len(), 2);
         std::fs::write(custom.join("mmproj-F16.gguf"), b"x").unwrap();
         let s = install_state(dir.path(), m);
         assert!(s.installed);
