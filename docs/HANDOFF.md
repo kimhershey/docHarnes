@@ -49,6 +49,7 @@
   `DOCULENS_APP_DATA` 픽스처로 헤드리스 실행 → settings.json 로드·정규화,
   `active_workspace` 자동 열기(`startup workspace: Opened`), `.doculens/` 14개
   디렉터리·lock 생성, 웹뷰→Rust IPC(settings/workspace/hw/registry) 오류 로그 0건.
+  리뷰 반영 후 재빌드(d078afe)에서도 동일하게 통과(비동기 `hw_probe` 경로, 토큰 잠금 확인).
 - 라이선스 게이트: `deny.toml`(cargo-deny), `scripts/check-licenses.mjs`(npm),
   `THIRD-PARTY-NOTICES.md`, `docs/LICENSE-POLICY.md`.
 - CI: `.github/workflows/ci.yml`(rust / web / license / windows-check),
