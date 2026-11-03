@@ -29,7 +29,13 @@ let mockModule: Promise<typeof import("./mock-backend")> | null = null;
 async function invoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
   if (isTauri) {
     const { invoke: tauriInvoke } = await import("@tauri-apps/api/core");
-    return tauriInvoke<T>(cmd, args);
+    try {
+      return await tauriInvoke<T>(cmd, args);
+    } catch (e) {
+      // Surface IPC failures in the Rust log file as well as the webview console.
+      void import("@tauri-apps/plugin-log").then(({ error }) => error(`invoke ${cmd} failed: ${JSON.stringify(e)}`)).catch(() => undefined);
+      throw e;
+    }
   }
   mockModule ??= import("./mock-backend");
   const mock = await mockModule;

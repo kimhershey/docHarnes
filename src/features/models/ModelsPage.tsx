@@ -196,7 +196,7 @@ export function ModelsPage() {
           <CardDescription>{t("models.engine_hint")}</CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
-          <table className="w-full text-sm" data-testid="registry-table">
+          <table className="w-full text-sm [&_td]:align-top [&_th]:whitespace-nowrap" data-testid="registry-table">
             <thead className="text-left text-xs uppercase tracking-wide text-fg-subtle">
               <tr>
                 <th className="py-2 pr-3">{t("models.columns.model")}</th>
@@ -214,7 +214,7 @@ export function ModelsPage() {
                 const isRecommended = assessment?.recommended_model?.id === m.id;
                 return (
                   <tr key={m.id} className={isActive ? "bg-accent-soft/40" : undefined}>
-                    <td className="py-2 pr-3">
+                    <td className="py-2 pr-3 min-w-64">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span className="font-medium">{m.display}</span>
                         {isRecommended && <Badge variant="info">{t("models.recommended")}</Badge>}
@@ -223,9 +223,9 @@ export function ModelsPage() {
                       </div>
                       <div className="text-xs text-fg-subtle selectable">{m.id}</div>
                     </td>
-                    <td className="py-2 pr-3">{t(`models.role.${m.role}`)}</td>
-                    <td className="py-2 pr-3 tabular-nums">{formatBytes(m.total_size)}</td>
-                    <td className="py-2 pr-3">{m.license}</td>
+                    <td className="py-2 pr-3 whitespace-nowrap">{t(`models.role.${m.role}`)}</td>
+                    <td className="py-2 pr-3 tabular-nums whitespace-nowrap">{formatBytes(m.total_size)}</td>
+                    <td className="py-2 pr-3 whitespace-nowrap">{m.license}</td>
                     <td className="py-2 pr-3">
                       <div className="flex flex-wrap gap-1">
                         {m.requirements.tiers.map((tier) => (
@@ -242,7 +242,7 @@ export function ModelsPage() {
                         <span className="text-fg-subtle">—</span>
                       )}
                     </td>
-                    <td className="py-2">
+                    <td className="py-2 whitespace-nowrap">
                       <div className="flex justify-end gap-1">
                         <Button variant="ghost" size="sm" onClick={() => setFilesFor(m.id)}>
                           <ListChecks />

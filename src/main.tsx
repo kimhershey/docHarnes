@@ -23,6 +23,13 @@ function initialLanguage(): Language {
 
 initI18n(initialLanguage());
 
+// Forward uncaught webview errors to the Rust log (tauri-plugin-log → <AppData>/logs).
+if ("__TAURI_INTERNALS__" in window) {
+  const forward = (message: string) => void import("@tauri-apps/plugin-log").then(({ error }) => error(message)).catch(() => undefined);
+  window.addEventListener("error", (e) => forward(`webview error: ${e.message} (${e.filename}:${e.lineno})`));
+  window.addEventListener("unhandledrejection", (e) => forward(`webview unhandled rejection: ${JSON.stringify(e.reason, Object.getOwnPropertyNames(e.reason ?? {}))}`));
+}
+
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
