@@ -57,27 +57,34 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Download the pinned llama.cpp release (ubuntu x64)
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Resolve the pinned llama.cpp tag
+        id: tag
+        run: echo "tag=$(node -p "require('./engines/manifest.json').tag")" >> "$GITHUB_OUTPUT"
+      - name: Cache the llama-server CPU build
+        id: engine-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/engine/bin
+          key: llama-server-cpu-${{ steps.tag.outputs.tag }}-ubuntu-24.04-v1
+      - name: Build llama-server (CPU only) from the pinned tag
+        if: steps.engine-cache.outputs.cache-hit != 'true'
         run: |
-          TAG=$(node -p "require('./engines/manifest.json').tag")
-          mkdir -p /tmp/engine && cd /tmp/engine
-          # Only the plain CPU build: a looser pattern also pulls the OpenVINO /
-          # Vulkan packages, and ggml's dynamic loader would pick up every
-          # libggml-*.so unpacked next to the binary (the OpenVINO backend then
-          # grabs the graph and fails on Qwen3.5's GDN ops).
-          gh release download "$TAG" --repo ggml-org/llama.cpp --pattern "llama-${TAG}-bin-ubuntu-x64.zip" --pattern "llama-${TAG}-bin-ubuntu-x64.tar.gz" --dir .
-          ls -la
-          test "$(ls *.zip *.tar.gz 2>/dev/null | wc -l)" -eq 1
-          for f in *.zip; do [ -f "$f" ] && unzip -q "$f"; done
-          for f in *.tar.gz; do [ -f "$f" ] && tar -xzf "$f"; done
-          BIN=$(find . -type f -name llama-server | head -1)
-          test -n "$BIN"
-          chmod +x "$BIN"
-          echo "backends next to the binary:"; ls "$(dirname "$BIN")" | grep -i ggml
-          test -z "$(ls "$(dirname "$BIN")" | grep -iE 'openvino|vulkan|cuda')"
-          echo "DOCULENS_LLAMA_SERVER=$(readlink -f "$BIN")" >> "$GITHUB_ENV"
+          # The release only ships CUDA / OpenVINO / ROCm packages for Linux, and
+          # ggml would load every backend library next to the binary, so a plain
+          # CPU build (static CPU backend, no dynamic loading) is built from source.
+          TAG="${{ steps.tag.outputs.tag }}"
+          git clone --depth 1 --branch "$TAG" https://github.com/ggml-org/llama.cpp /tmp/engine/src
+          cmake -S /tmp/engine/src -B /tmp/engine/build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=OFF \
+            -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=ON
+          cmake --build /tmp/engine/build --config Release --target llama-server -j "$(nproc)"
+          mkdir -p /tmp/engine/bin && cp /tmp/engine/build/bin/* /tmp/engine/bin/
+      - name: Point the test at the engine
+        run: |
+          BIN=/tmp/engine/bin/llama-server
+          test -x "$BIN"
+          echo "libraries next to the binary:"; ls /tmp/engine/bin | grep -i ggml || true
+          test -z "$(ls /tmp/engine/bin | grep -iE 'openvino|vulkan|cuda|rocm')"
+          echo "DOCULENS_LLAMA_SERVER=$BIN" >> "$GITHUB_ENV"
           "$BIN" --version || true
       - run: cargo test -p doculens-core --test real_engine -- --nocapture
         env:
