@@ -2,7 +2,7 @@
 //! jobs, the auto-processing hook after imports, form registration and
 //! natural-language schema calls, and the `pipeline://changed` event.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,6 +13,7 @@ use doculens_core::db::Db;
 use doculens_core::documents::import::ImportSource;
 use doculens_core::pipeline::run::{self, PipelineDeps};
 use doculens_core::pipeline::schema::SchemaDraft;
+use doculens_core::pipeline::split as splitter;
 use doculens_core::pipeline::vlm::Vlm;
 use doculens_core::pipeline::{forms, repo, PipelineLevel, ProcessRequest};
 use doculens_core::settings::{AutoProcessingLevel, ProcessingSettings, Profile};
@@ -87,8 +88,9 @@ pub fn vision_model_info(app: &AppHandle) -> VisionModelInfo {
 }
 
 /// Resolves the vision model. With `load`, starts the engine / loads the
-/// model when needed (blocking — job threads and explicit user actions only).
-pub fn vision_model(app: &AppHandle, load: bool) -> UiResult<String> {
+/// model when needed (blocking — job threads and explicit user actions only;
+/// `cancel` aborts a pending load).
+pub fn vision_model(app: &AppHandle, load: bool, cancel: Option<&AtomicBool>) -> UiResult<String> {
     let state = app.state::<AppState>();
     let model = knowledge_bridge::chat_model(app)?;
     if !state.engine.is_running() {
@@ -102,7 +104,11 @@ pub fn vision_model(app: &AppHandle, load: bool) -> UiResult<String> {
         if !load {
             return Err(UiError::invalid("model_not_loaded"));
         }
-        state.engine.load_model(&model, MODEL_LOAD_TIMEOUT, false)?;
+        // The router's presets may predate the drop-in folder scan (startup race):
+        // rescan the folder, regenerate the presets and reload the model list first.
+        engine_bridge::rescan_and_sync(app);
+        engine_bridge::start_engine(app)?;
+        state.engine.load_model_cancellable(&model, MODEL_LOAD_TIMEOUT, false, cancel)?;
     }
     Ok(model)
 }
@@ -125,7 +131,7 @@ pub fn process_job(app: &AppHandle, req: ProcessRequest) -> UiResult<Option<Stri
     let subject = format!("{} documents", req.document_ids.len());
     let Some((job, cancel)) = state.jobs.create_if_idle(JobKind::Pipeline, &subject) else {
         if let Ok(mut q) = state.pipeline_queue.lock() {
-            q.push(PendingProcess { ids: req.document_ids.clone(), level: req.level });
+            q.push(PendingProcess { req: req.clone() });
         }
         return Ok(None);
     };
@@ -138,7 +144,7 @@ pub fn process_job(app: &AppHandle, req: ProcessRequest) -> UiResult<Option<Stri
         move |app| {
             let state = app.state::<AppState>();
             state.jobs.update(&job_id, |j| j.detail = Some("loading model".into()));
-            let model = vision_model(app, true).map_err(|e| e.message)?;
+            let model = vision_model(app, true, Some(&cancel)).map_err(|e| e.message)?;
             let deps = PipelineDeps {
                 import: ctx.docs.deps(),
                 chat: &state.engine,
@@ -198,7 +204,7 @@ pub fn process_job(app: &AppHandle, req: ProcessRequest) -> UiResult<Option<Stri
             let next =
                 state.pipeline_queue.lock().ok().and_then(|mut q| if q.is_empty() { None } else { Some(q.remove(0)) });
             if let Some(p) = next {
-                let _ = process_job(app, ProcessRequest { document_ids: p.ids, level: p.level, ..Default::default() });
+                let _ = process_job(app, p.req);
             }
         }) as AfterJob),
     );
@@ -257,8 +263,7 @@ pub fn split_job(app: &AppHandle, doc_id: String, boundaries: Vec<u32>) -> UiRes
         job.clone(),
         move |app| {
             let deps = ctx.docs.deps();
-            let ids = doculens_core::pipeline::split::split_document(&deps, &doc, &boundaries, Some(&cancel))
-                .map_err(|e| e.to_string())?;
+            let ids = splitter::split_document(&deps, &doc, &boundaries, Some(&cancel)).map_err(|e| e.to_string())?;
             if let Ok(mut n) = new_ids.lock() {
                 *n = ids.clone();
             }
@@ -291,6 +296,9 @@ pub fn merge_job(app: &AppHandle, ids: Vec<String>, name: Option<String>) -> UiR
     if documents.len() < 2 {
         return Err(UiError::invalid("merge needs at least two documents"));
     }
+    if let Some(n) = name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+        splitter::safe_stem(n).map_err(|_| UiError::invalid("merge_name_invalid"))?;
+    }
     let (job, cancel) = state.jobs.create(JobKind::DocumentMerge, &format!("{} documents", documents.len()));
     let generation = ctx.docs.generation;
     let merged_id: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
@@ -301,7 +309,7 @@ pub fn merge_job(app: &AppHandle, ids: Vec<String>, name: Option<String>) -> UiR
         job.clone(),
         move |app| {
             let deps = ctx.docs.deps();
-            let id = doculens_core::pipeline::split::merge_documents(&deps, &documents, name.as_deref(), Some(&cancel))
+            let id = splitter::merge_documents(&deps, &documents, name.as_deref(), Some(&cancel))
                 .map_err(|e| e.to_string())?;
             if let Ok(mut m) = merged_id.lock() {
                 *m = Some(id.clone());
@@ -335,8 +343,8 @@ pub fn form_derive(app: &AppHandle, doc_id: &str, name: Option<&str>) -> UiResul
     let ctx = context(app)?;
     let doc = docs_bridge::document(app, doc_id)?;
     let state = app.state::<AppState>();
-    let model = vision_model(app, false).ok();
-    let vlm = model.map(|m| Vlm { chat: &state.engine, model: m, profile: ctx.profile, cancel: None });
+    let model = vision_model(app, false, None).ok();
+    let vlm = model.map(|m| Vlm::new(&state.engine, m, ctx.profile, None));
     Ok(forms::derive(&ctx.docs.deps(), vlm.as_ref(), &doc, name)?)
 }
 
@@ -350,8 +358,8 @@ pub fn nl_schema(app: &AppHandle, description: &str, base_id: Option<&str>) -> U
         None => None,
     };
     let state = app.state::<AppState>();
-    let model = vision_model(app, true)?;
-    let vlm = Vlm { chat: &state.engine, model, profile: ctx.profile, cancel: None };
+    let model = vision_model(app, true, None)?;
+    let vlm = Vlm::new(&state.engine, model, ctx.profile, None);
     Ok(forms::nl_schema(&vlm, description, base.as_ref())?)
 }
 

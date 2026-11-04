@@ -74,7 +74,7 @@ impl World {
     }
 
     fn vlm(&self) -> Vlm<'_> {
-        Vlm { chat: &self.chat, model: "scripted".into(), profile: Profile::Balanced, cancel: None }
+        Vlm::new(&self.chat, "scripted".into(), Profile::Balanced, None)
     }
 
     /// Registers a document with `pages` (text per page; `None` = image-only page with a render).
@@ -550,7 +550,13 @@ fn schema_crud_defaults_versions_and_doc_types() {
     let versions = w.db.with(|c| repo::schema_versions(c, &q.id)).unwrap();
     assert_eq!(versions.len(), 1);
     assert_eq!(versions[0].0, 1);
-    assert_eq!(versions[0].2.as_deref(), Some("거래처 추가"));
+    assert_eq!(versions[0].2, None, "version 1 was saved without a note");
+    assert_eq!(q2.note.as_deref(), Some("거래처 추가"), "the note describes the version it created");
+    let q3 =
+        w.db.with(|c| repo::save_schema(c, &SchemaDraft { note: Some("세 번째".into()), ..edit.clone() })).unwrap();
+    assert_eq!(q3.version, 3);
+    let versions = w.db.with(|c| repo::schema_versions(c, &q.id)).unwrap();
+    assert_eq!((versions[0].0, versions[0].2.as_deref()), (2, Some("거래처 추가")));
     edit.definition.fields[1].key = "Bad Key".into();
     let err = w.db.with(|c| repo::save_schema(c, &edit)).unwrap_err();
     assert!(err.to_string().contains("schema_invalid"));
@@ -711,4 +717,198 @@ fn split_registers_parts_and_archives_the_original() {
     let m = w.doc(&merged);
     assert_eq!(m.rel_path, "documents/다시 합침.pdf");
     assert_eq!(lopdf::Document::load(w.paths.root.join(&m.rel_path)).unwrap().get_pages().len(), 4);
+}
+
+/// Phase-end review gaps: nothing unmasked in the run result / mirror, the
+/// precision pass samples with its own temperature, a changed file resets the
+/// pipeline state (manual type kept), revalidation is idempotent, corrections
+/// on enum / masked fields, merge names are validated, one default per type.
+#[test]
+fn review_gaps_pii_precision_reset_and_defaults() {
+    let w = World::new();
+    w.add_doc("r1", "receipt.pdf", SourceKind::Pdf, &[None]);
+    w.chat.push("classify", classify_reply("receipt", 0));
+    w.chat.push_ocr(RECEIPT_OCR);
+    let mut kie = receipt_kie();
+    kie["cash_receipt_id"] = sv("010-1234-5678", "식별번호 010-1234-5678", 88);
+    kie["items"][0]["name"] = json!("홍길동 850315-2345678 아메리카노");
+    kie["store_name"] = sv("스타벅스 역삼점", "담당 900101-1234567 스타벅스 역삼점", 95);
+    w.chat.push("kie_receipt", kie.clone());
+    w.chat.push("kie_receipt", kie);
+    let deps = w.deps(None);
+    let req = ProcessRequest { document_ids: vec!["r1".into()], precise: Some(true), ..Default::default() };
+    let report = run::process(&deps, &req, &mut |_| {}).unwrap();
+    assert_eq!(report.extracted, 1, "{report:?}");
+
+    // Precision mode: two KIE samples, the second with its own temperature / seed.
+    let kie_reqs: Vec<_> = w
+        .chat
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|r| StageChat::stage_of(r).as_deref() == Some("kie_receipt"))
+        .cloned()
+        .collect();
+    assert_eq!(kie_reqs.len(), 2);
+    assert_eq!((kie_reqs[0].temperature, kie_reqs[0].seed), (Some(0.0), Some(7)));
+    assert_eq!((kie_reqs[1].temperature, kie_reqs[1].seed), (Some(0.3), Some(11)));
+    assert_eq!(kie_reqs[0].messages, kie_reqs[1].messages, "same prompt, different sampling");
+
+    // No full resident / phone number anywhere: fields, run result, mirror files.
+    let runs = w.db.with(|c| repo::list_runs(c, "r1")).unwrap();
+    assert!(runs[0].precise);
+    let leaks = ["850315-2345678", "900101-1234567", "010-1234-5678"];
+    let has_leak = |s: &str| leaks.iter().any(|l| s.contains(l));
+    for f in w.fields("r1") {
+        for v in [&f.value, &f.evidence, &f.normalized].into_iter().flatten() {
+            assert!(!has_leak(v), "{}: {v}", f.path);
+        }
+    }
+    let raw = w.db.with(|c| repo::run_result(c, &runs[0].id)).unwrap().unwrap().to_string();
+    assert!(!has_leak(&raw), "{raw}");
+    assert!(raw.contains("850315-2******") && raw.contains("***-****-5678"), "{raw}");
+    let dir = w.paths.extractions_dir().join("r1").join(&runs[0].id);
+    for name in ["result.json", "p0001.md"] {
+        let s = std::fs::read_to_string(dir.join(name)).unwrap();
+        assert!(!has_leak(&s), "{name}: {s}");
+    }
+    let f = |p: &str| w.fields("r1").into_iter().find(|f| f.path == p).unwrap();
+    assert_eq!(f("cash_receipt_id").value.as_deref(), Some("***-****-5678"));
+    assert_eq!(f("items[0].name").value.as_deref(), Some("홍길동 850315-2****** 아메리카노"));
+
+    // Revalidation is idempotent and keeps the stored scores.
+    let first = review::revalidate(&w.db, "r1", 0.8, 0).unwrap();
+    let second = review::revalidate(&w.db, "r1", 0.8, 0).unwrap();
+    let snap = |v: &[super::FieldRecord]| -> Vec<(String, f64, Option<ReviewReason>)> {
+        v.iter().map(|f| (f.path.clone(), f.confidence, f.review_reason)).collect()
+    };
+    assert_eq!(snap(&first), snap(&second));
+    let before: Vec<(String, f64)> = w.fields("r1").iter().map(|f| (f.path.clone(), f.confidence)).collect();
+    assert_eq!(snap(&first).iter().map(|(p, c, _)| (p.clone(), *c)).collect::<Vec<_>>(), before);
+
+    // Corrections honour the schema: an enum value outside its options is flagged,
+    // a masked (account) field never stores the full number.
+    let pm = f("payment_method");
+    let out = review::apply(&w.db, &[pm.id], &ReviewAction::Correct { value: "상품권".into() }, None).unwrap();
+    assert!(out[0].validation.iter().any(|i| i.rule == "enum_option"), "{:?}", out[0].validation);
+    let id = f("cash_receipt_id");
+    let out = review::apply(&w.db, &[id.id], &ReviewAction::Correct { value: "010-9876-5432".into() }, None).unwrap();
+    assert_eq!(out[0].value.as_deref(), Some("***-****-5432"));
+    let history = w.db.with(|c| repo::field_history(c, "r1")).unwrap();
+    assert!(history
+        .iter()
+        .all(|h| !has_leak(h.new_value.as_deref().unwrap_or(""))
+            && !h.new_value.as_deref().unwrap_or("").contains("9876")));
+
+    // Changed content resets what the pipeline derived; a manual type survives.
+    w.db.with(|c| docs::set_doc_type(c, "r1", Some("invoice_exempt"), Some("manual"))).unwrap();
+    w.db.with(|c| docs::set_file_info(c, "r1", "hash-r1", 10, None)).unwrap();
+    assert!(w.doc("r1").classified_at.is_some(), "same hash: nothing changes");
+    w.db.with(|c| docs::set_file_info(c, "r1", "hash-r1-v2", 11, None)).unwrap();
+    let doc = w.doc("r1");
+    assert_eq!((doc.doc_type.as_deref(), doc.doc_type_source.as_deref()), (Some("invoice_exempt"), Some("manual")));
+    assert!(doc.classified_at.is_none() && doc.ocr_at.is_none() && doc.extracted_at.is_none());
+    assert_eq!((doc.review_status, doc.last_run_id, doc.confidence), (ReviewStatus::None, None, None));
+    let page = &w.pages("r1")[0];
+    assert!(page.text.is_none() && page.text_source.is_none() && page.ocr_at.is_none() && page.page_doc_type.is_none());
+    w.add_doc("r2", "auto.pdf", SourceKind::Pdf, &[None]);
+    w.db.with(|c| docs::set_doc_type(c, "r2", Some("receipt"), Some("auto"))).unwrap();
+    w.db.with(|c| docs::set_file_info(c, "r2", "other", 11, None)).unwrap();
+    assert_eq!(w.doc("r2").doc_type, None, "an automatic type is forgotten with the content");
+
+    // A merge name that is not a plain file stem is refused before anything is written.
+    let deps = w.import_deps();
+    let docs_dir = w.paths.documents_dir();
+    let before = std::fs::read_dir(&docs_dir).unwrap().count();
+    for bad in ["../escape", "a/b", "con:fig"] {
+        let err = super::split::merge_documents(&deps, &[w.doc("r1"), w.doc("r2")], Some(bad), None).unwrap_err();
+        assert!(err.to_string().contains("invalid name"), "{bad}: {err}");
+    }
+    assert_eq!(std::fs::read_dir(&docs_dir).unwrap().count(), before);
+
+    // Exactly one default per document type when a schema moves between types.
+    let q =
+        w.db.with(|c| {
+            repo::save_schema(
+                c,
+                &SchemaDraft {
+                    name: "견적서".into(),
+                    doc_type: "quotation".into(),
+                    source: SchemaSource::User,
+                    definition: SchemaDef::new(vec![FieldDef::new("total", "합계", "Total", FieldKind::Amount)], &[]),
+                    ..Default::default()
+                },
+            )
+        })
+        .unwrap();
+    assert!(q.is_default);
+    let moved =
+        w.db.with(|c| {
+            repo::save_schema(
+                c,
+                &SchemaDraft {
+                    id: Some(q.id.clone()),
+                    name: "견적서".into(),
+                    doc_type: "receipt".into(),
+                    source: SchemaSource::User,
+                    definition: q.definition.clone(),
+                    ..Default::default()
+                },
+            )
+        })
+        .unwrap();
+    assert!(!moved.is_default, "the sample receipt schema keeps the slot");
+    let defaults =
+        |t: &str| w.db.with(repo::list_schemas).unwrap().iter().filter(|s| s.doc_type == t && s.is_default).count();
+    assert_eq!((defaults("receipt"), defaults("quotation")), (1, 0));
+    let back =
+        w.db.with(|c| {
+            repo::save_schema(
+                c,
+                &SchemaDraft {
+                    id: Some(q.id.clone()),
+                    name: "견적서".into(),
+                    doc_type: "quotation".into(),
+                    source: SchemaSource::User,
+                    definition: q.definition.clone(),
+                    ..Default::default()
+                },
+            )
+        })
+        .unwrap();
+    assert!(back.is_default, "a type without a default adopts the arriving schema");
+    assert_eq!((defaults("receipt"), defaults("quotation")), (1, 1));
+    // A draft may not claim the builtin source.
+    let fake =
+        w.db.with(|c| {
+            repo::save_schema(
+                c,
+                &SchemaDraft {
+                    name: "가짜 내장".into(),
+                    doc_type: "quotation".into(),
+                    source: SchemaSource::Builtin,
+                    definition: q.definition.clone(),
+                    ..Default::default()
+                },
+            )
+        })
+        .unwrap();
+    assert_eq!(fake.source, SchemaSource::User);
+    assert!(w.db.with(|c| repo::delete_schema(c, &fake.id)).unwrap());
+}
+
+#[test]
+fn extraction_page_budget_keeps_first_then_last() {
+    let w = World::new();
+    w.add_doc("m", "multi.pdf", SourceKind::Pdf, &[Some("1"), Some("2"), Some("3"), Some("4"), Some("5")]);
+    let pages = w.pages("m");
+    let nos = |max: usize, only: &[u32]| -> Vec<u32> {
+        run::extraction_pages(&pages, max, only).iter().map(|p| p.page_no).collect()
+    };
+    assert_eq!(nos(1, &[]), vec![1], "a one-page budget is the first page");
+    assert_eq!(nos(2, &[]), vec![1, 5]);
+    assert_eq!(nos(4, &[]), vec![1, 2, 3, 5]);
+    assert_eq!(nos(9, &[]), vec![1, 2, 3, 4, 5]);
+    assert_eq!(nos(2, &[2, 3, 4]), vec![2, 4], "an explicit page list is honoured");
 }

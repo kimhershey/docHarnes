@@ -162,8 +162,10 @@ pub fn format_brn(digits: &str) -> String {
 
 fn rrn_regex() -> &'static Regex {
     static RRN: OnceLock<Regex> = OnceLock::new();
-    // 6 digits, optional separator, gender digit 1-8 + 6 digits; not inside a longer digit run.
-    re(&RRN, r"(?P<a>(?:^|[^0-9]))(?P<ymd>\d{6})\s*[-–]?\s*(?P<g>[1-8])(?P<rest>\d{6})(?P<z>[^0-9]|$)")
+    // 6 digits, then either nothing or a hyphen (spaces only around a hyphen), gender digit 1-8
+    // + 6 digits; not inside a longer digit run. Two plain numbers separated by a space
+    // ("150000 1500000") must not be taken for a resident number.
+    re(&RRN, r"(?P<a>(?:^|[^0-9]))(?P<ymd>\d{6})(?:\s*[-–]\s*)?(?P<g>[1-8])(?P<rest>\d{6})(?P<z>[^0-9]|$)")
 }
 
 /// Masks every 주민등록번호 / 외국인등록번호 in `text` to `YYMMDD-G******`.
@@ -249,6 +251,11 @@ pub fn mask_value(def: &FieldDef, value: &str) -> String {
 pub fn validate_value(def: &FieldDef, value: &str) -> (Option<String>, Vec<ValidationIssue>) {
     let mut issues = Vec::new();
     let v = value.trim();
+    let masked_kind = def.mask || def.kind.is_pii();
+    if masked_kind && v.contains('*') {
+        // Already masked (re-validation of a stored value): nothing left to parse.
+        return (Some(v.to_string()), issues);
+    }
     let normalized = match def.kind {
         FieldKind::Amount => match normalize_amount(v) {
             Some(n) => Some(format_number(n)),
@@ -327,6 +334,8 @@ pub fn validate_value(def: &FieldDef, value: &str) -> (Option<String>, Vec<Valid
             }
         }
     }
+    // The normalised form of a masked field is masked too (§3.8: no full value anywhere).
+    let normalized = if masked_kind { normalized.map(|n| mask_value(def, &n)) } else { normalized };
     (normalized, issues)
 }
 
@@ -576,7 +585,8 @@ pub fn value_in_text(def: &FieldDef, value: &str, text: &str) -> bool {
     match def.kind {
         FieldKind::Amount | FieldKind::Integer | FieldKind::Brn | FieldKind::Phone | FieldKind::Account => {
             let digits: String = value.chars().filter(|c| c.is_ascii_digit()).collect();
-            if digits.len() < 2 {
+            if digits.len() < 5 {
+                // "1,000" → "1000" is a substring of almost any page's digit run: exact text only.
                 return find_evidence(text, value).is_some();
             }
             let text_digits: String = text.chars().filter(|c| c.is_ascii_digit() || c.is_whitespace()).collect();
@@ -703,6 +713,12 @@ mod tests {
         assert_eq!(mask_text("주민번호 900101-1234567 입니다"), "주민번호 900101-1****** 입니다");
         assert_eq!(mask_text("9001011234567"), "900101-1******");
         assert_eq!(mask_text("계좌 110-123-456789"), "계좌 110-123-456789", "account numbers need a labelled field");
+        assert_eq!(
+            mask_text("승인 150000 1500000 합계"),
+            "승인 150000 1500000 합계",
+            "two numbers are not a resident number"
+        );
+        assert_eq!(mask_text("900101 - 1234567"), "900101-1******");
         assert!(contains_rrn("850315-2345678"));
         assert!(!contains_rrn("2026-10-14 12:31"));
         assert_eq!(mask_account("110-123-456789"), "***-***-**6789");
@@ -713,6 +729,10 @@ mod tests {
         assert_eq!(n.as_deref(), Some("900101-1******"));
         let birth = FieldDef::new("birth", "생년월일", "", FieldKind::Date).masked();
         assert_eq!(mask_value(&birth, "1990.01.01"), "1990-**-**");
+        let (n, issues) = validate_value(&birth, "1990.01.01");
+        assert_eq!((n.as_deref(), issues.len()), (Some("1990-**-**"), 0), "normalised form is masked too");
+        let (n, issues) = validate_value(&birth, "1990-**-**");
+        assert_eq!((n.as_deref(), issues.len()), (Some("1990-**-**"), 0), "re-validating a masked value is a no-op");
         let s = FieldDef::new("s", "비밀", "", FieldKind::String).masked();
         assert_eq!(mask_value(&s, "ABCDEFGH"), "****EFGH");
     }

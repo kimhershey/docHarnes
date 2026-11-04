@@ -284,6 +284,9 @@ pub struct SchemaRecord {
     pub enabled: bool,
     pub is_default: bool,
     pub use_count: u64,
+    /// Change note of the current version (older notes live in `schema_versions`).
+    #[serde(default)]
+    pub note: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -788,7 +791,12 @@ fn lint_field(f: &FieldDef, path: &str, nested: bool, out: &mut Vec<LintIssue>) 
     }
     if let Some(r) = &f.regex_hint {
         if !(r.starts_with('^') && r.ends_with('$')) {
-            out.push(issue("warn", path, "regex_anchor", "regex hints must be anchored ^…$ (llama.cpp grammar)"));
+            out.push(issue(
+                "warn",
+                path,
+                "regex_anchor",
+                "regex hints must be anchored ^…$ (validator; not part of the grammar)",
+            ));
         }
         if r.contains("(?") {
             out.push(issue("warn", path, "regex_feature", "look-around / flags are not supported by the grammar"));

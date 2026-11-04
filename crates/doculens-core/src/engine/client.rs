@@ -442,6 +442,11 @@ impl RouterClient {
                         return Err(CoreError::Cancelled);
                     }
                 }
+                if let Some(r) = choice.get("delta").and_then(|d| d.get("reasoning_content")).and_then(Value::as_str) {
+                    if !r.is_empty() {
+                        out.reasoning.get_or_insert_with(String::new).push_str(r);
+                    }
+                }
                 if let Some(fr) = choice.get("finish_reason").and_then(Value::as_str) {
                     out.finish_reason = Some(fr.to_string());
                 }

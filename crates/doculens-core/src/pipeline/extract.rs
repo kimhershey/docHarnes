@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use serde_json::{json, Value};
 
 use crate::engine::client::{user_message, user_message_with_image};
-use crate::error::Result;
+use crate::error::{CoreError, Result};
 
 use super::prompts::{self, Stage};
 use super::repo::NewField;
@@ -24,33 +24,118 @@ pub struct PageInput<'a> {
     pub text: Option<&'a str>,
 }
 
+/// llama-server refuses a prompt longer than the slot's context ("request (N tokens)
+/// exceeds the available context size (M tokens)"); small presets (CPU, 4K) hit this
+/// with a dense page text next to the image and the schema summary.
+pub fn context_overflow(e: &CoreError) -> bool {
+    matches!(e, CoreError::Engine(m) if m.contains("exceeds the available context size"))
+}
+
 /// Extracts one page. `temperature` overrides the preset (precision-mode second sample).
+/// When the prompt does not fit the context, the page-text anchor is shortened
+/// (half, then a quarter, then dropped) before giving up.
 pub fn extract_page(
     vlm: &Vlm<'_>,
     schema: &SchemaRecord,
     page: &PageInput<'_>,
     temperature: Option<f32>,
 ) -> Result<(Value, Reply)> {
-    let prompt = prompts::kie(&schema.definition, &schema.name, page.page_no, page.page_count, page.text);
-    let system = json!({ "role": "system", "content": prompts::SYSTEM_JSON });
-    let messages = match page.image_url {
-        Some(url) => vec![system, user_message_with_image(&prompt, url)],
-        None => vec![system, user_message(&prompt)],
-    };
     let js = schema::json_schema(&schema.definition);
     let name = format!("kie_{}", schema.doc_type);
-    match temperature {
-        None => vlm.call_json(Stage::Kie, &messages, &name, &js, None),
-        Some(t) => {
-            // Same call with a sampled temperature (the backend keeps the stage preset otherwise).
-            let sampled = Vlm { chat: vlm.chat, model: vlm.model.clone(), profile: vlm.profile, cancel: vlm.cancel };
-            let mut req_messages = messages.clone();
-            if let Some(Value::Object(m)) = req_messages.first_mut() {
-                m.insert("content".into(), Value::String(format!("{}\n(sample T={t})", prompts::SYSTEM_JSON)));
+    // Precision mode (§3.4): the same request sampled at T=t with another seed —
+    // greedy decoding twice would return the same answer and prove nothing.
+    let sampled = temperature
+        .map(|t| Vlm::new(vlm.chat, vlm.model.clone(), vlm.profile, vlm.cancel).with_sampling(Some(t), Some(11)));
+    let caller = sampled.as_ref().unwrap_or(vlm);
+    let mut text_chars = page.text.map(|t| t.chars().count().min(prompts::KIE_TEXT_CHARS)).unwrap_or(0);
+    loop {
+        let shortened;
+        let text = match (page.text, text_chars) {
+            (Some(t), n) if n > 0 => {
+                shortened = prompts::truncate(t, n);
+                Some(shortened.as_str())
             }
-            sampled.call_json(Stage::Kie, &req_messages, &name, &js, None)
+            _ => None,
+        };
+        let prompt = prompts::kie(&schema.definition, &schema.name, page.page_no, page.page_count, text);
+        let system = json!({ "role": "system", "content": prompts::SYSTEM_JSON });
+        let messages = match page.image_url {
+            Some(url) => vec![system, user_message_with_image(&prompt, url)],
+            None => vec![system, user_message(&prompt)],
+        };
+        match caller.call_json(Stage::Kie, &messages, &name, &js, None) {
+            Err(e) if context_overflow(&e) && text_chars > 0 => {
+                text_chars = if text_chars > 1_000 { text_chars / 2 } else { 0 };
+                log::warn!(
+                    "kie page {}: prompt exceeds the context, retrying with {text_chars} text chars",
+                    page.page_no
+                );
+            }
+            r => return r,
         }
     }
+}
+
+/// Masks the model's raw output before it is stored or mirrored (§3.8): PII-kind
+/// and `mask` fields through `mask_value`, every string through the resident-number
+/// pattern when masking is on.
+pub fn mask_output(def: &SchemaDef, raw: &Value, pii_masking: bool) -> Value {
+    fn mask_scalar(f: &FieldDef, obj: &mut Value, pii: bool) {
+        let Some(m) = obj.as_object_mut() else { return };
+        for key in ["value", "evidence"] {
+            if let Some(Value::String(s)) = m.get(key) {
+                let mut out = if f.kind.is_pii() || f.mask { validate::mask_value(f, s) } else { s.clone() };
+                if pii {
+                    out = validate::mask_text(&out);
+                }
+                m.insert(key.into(), Value::String(out));
+            }
+        }
+    }
+    fn mask_all_strings(v: &mut Value) {
+        match v {
+            Value::String(s) => *s = validate::mask_text(s),
+            Value::Array(a) => a.iter_mut().for_each(mask_all_strings),
+            Value::Object(o) => o.values_mut().for_each(mask_all_strings),
+            _ => {}
+        }
+    }
+    let mut out = raw.clone();
+    for f in &def.fields {
+        match f.kind {
+            FieldKind::Table => {
+                if let Some(rows) = out.get_mut(&f.key).and_then(Value::as_array_mut) {
+                    for row in rows.iter_mut() {
+                        if let Some(m) = row.as_object_mut() {
+                            for c in f.fields.iter().filter(|c| c.kind.is_pii() || c.mask) {
+                                if let Some(Value::String(s)) = m.get(&c.key) {
+                                    m.insert(c.key.clone(), Value::String(validate::mask_value(c, s)));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            FieldKind::Group => {
+                if let Some(g) = out.get_mut(&f.key) {
+                    for c in &f.fields {
+                        if let Some(obj) = g.get_mut(&c.key) {
+                            mask_scalar(c, obj, pii_masking);
+                        }
+                    }
+                }
+            }
+            _ => {
+                if let Some(obj) = out.get_mut(&f.key) {
+                    mask_scalar(f, obj, pii_masking);
+                }
+            }
+        }
+    }
+    if pii_masking {
+        mask_all_strings(&mut out);
+    }
+    out
 }
 
 fn conf_of(obj: &Value) -> Option<u8> {
@@ -179,10 +264,16 @@ fn value_lookup(def: &FieldDef, texts: &BTreeMap<u32, String>, page: Option<u32>
     Some(order.iter().any(|p| texts.get(p).is_some_and(|t| validate::value_in_text(def, value, t))))
 }
 
-/// Deterministic audit sample: hash of document + path in `0..100`.
-fn audit_bucket(doc_id: &str, path: &str) -> u8 {
-    let h = blake3::hash(format!("{doc_id}|{path}").as_bytes());
-    h.as_bytes()[0] % 100
+/// Deterministic audit sample (§3.7.2 "고신뢰 필드 중 무작위 p% 감사"), drawn per
+/// document so that `audit_sample_percent` is the share of documents that get one
+/// extra look — not the share of fields, which would flag almost every document.
+fn audit_pick(doc_id: &str, percent: u8, candidates: usize) -> Option<usize> {
+    if percent == 0 || candidates == 0 {
+        return None;
+    }
+    let h = blake3::hash(doc_id.as_bytes());
+    let bytes = h.as_bytes();
+    (bytes[0] % 100 < percent).then(|| (u16::from_le_bytes([bytes[1], bytes[2]]) as usize) % candidates)
 }
 
 fn build_scalar(
@@ -222,7 +313,10 @@ fn build_scalar(
         Some(e) => evidence_lookup(texts, page, e),
         None => (None, page),
     };
-    let value_found = value_lookup(def, texts, page, &raw);
+    // PII values are looked up in their masked form (the page text is masked the same way).
+    let stored = if opts.pii_masking || def.kind.is_pii() { validate::mask_value(def, &raw) } else { raw.clone() };
+    let stored = if opts.pii_masking { validate::mask_text(&stored) } else { stored };
+    let value_found = value_lookup(def, texts, page, &stored);
     if evidence_found.is_some() || value_found.is_some() {
         f.page = page_found.or(page);
     }
@@ -244,8 +338,6 @@ fn build_scalar(
         has_fail,
         has_warn,
     });
-    let stored = if opts.pii_masking || def.kind.is_pii() { validate::mask_value(def, &raw) } else { raw.clone() };
-    let stored = if opts.pii_masking { validate::mask_text(&stored) } else { stored };
     f.value = Some(stored);
     f.normalized = normalized.map(|n| if opts.pii_masking { validate::mask_text(&n) } else { n });
     f.evidence = evidence_raw.map(|e| {
@@ -260,11 +352,10 @@ fn build_scalar(
         f.review_reason = Some(ReviewReason::ValidationFailed);
     } else if f.confidence < opts.review_threshold {
         f.review_reason = Some(ReviewReason::LowConfidence);
-    } else if opts.audit_percent > 0 && audit_bucket(doc_id, path) < opts.audit_percent {
-        f.review_reason = Some(ReviewReason::Audit);
     }
     issues.retain(|i| i.level != "ok");
     f.validation = issues;
+    let _ = doc_id;
     f
 }
 
@@ -288,10 +379,19 @@ pub fn build_fields(
                 let arr = merged.get(&f.key).and_then(Value::as_array).cloned().unwrap_or_default();
                 for (ri, row) in arr.iter().take(schema::MAX_ROWS).enumerate() {
                     let page = row.get("page").and_then(Value::as_u64).map(|p| p as u32);
+                    // Row evidence is built from the *stored* (masked) cell values.
                     let row_text: Vec<String> = f
                         .fields
                         .iter()
-                        .filter_map(|c| validate::value_text(row.get(&c.key).unwrap_or(&Value::Null)))
+                        .filter_map(|c| validate::value_text(row.get(&c.key).unwrap_or(&Value::Null)).map(|v| (c, v)))
+                        .map(|(c, v)| {
+                            let v = if opts.pii_masking || c.kind.is_pii() { validate::mask_value(c, &v) } else { v };
+                            if opts.pii_masking {
+                                validate::mask_text(&v)
+                            } else {
+                                v
+                            }
+                        })
                         .collect();
                     for c in &f.fields {
                         let path = format!("{}[{}].{}", f.key, ri, c.key);
@@ -325,6 +425,8 @@ pub fn build_fields(
                                 raw.clone()
                             };
                             nf.value = Some(if opts.pii_masking { validate::mask_text(&stored) } else { stored });
+                            let normalized =
+                                normalized.map(|n| if opts.pii_masking { validate::mask_text(&n) } else { n });
                             nf.normalized = normalized.clone();
                             nf.evidence = Some(row_text.join(" | "));
                             if has_fail {
@@ -385,6 +487,16 @@ pub fn build_fields(
             }
         }
     }
+    // Audit sampling: one clean field of a sampled document gets a human look.
+    let candidates: Vec<usize> = fields
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.row.is_none() && f.value.is_some() && f.review_reason.is_none())
+        .map(|(i, _)| i)
+        .collect();
+    if let Some(pick) = audit_pick(doc_id, opts.audit_percent, candidates.len()) {
+        fields[candidates[pick]].review_reason = Some(ReviewReason::Audit);
+    }
     let with_value: Vec<&NewField> = fields.iter().filter(|f| f.value.is_some()).collect();
     let min_confidence =
         with_value.iter().map(|f| f.confidence).fold(None, |m: Option<f64>, c| Some(m.map_or(c, |x| x.min(c))));
@@ -419,6 +531,7 @@ mod tests {
             enabled: true,
             is_default: true,
             use_count: 0,
+            note: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
@@ -506,6 +619,83 @@ mod tests {
         assert!(f("store_name").confidence > f("total").confidence);
         assert!(f("total").confidence <= 0.5);
         assert_eq!(f("datetime").review_reason, Some(ReviewReason::RequiredMissing));
-        assert_eq!(f("store_name").review_reason, Some(ReviewReason::Audit), "audit sampling at 100%");
+        // Audit sampling is per document: exactly one clean field of a sampled document.
+        let audits = built.fields.iter().filter(|f| f.review_reason == Some(ReviewReason::Audit)).count();
+        assert_eq!(audits, 1, "{:?}", built.fields.iter().map(|f| (&f.path, f.review_reason)).collect::<Vec<_>>());
+        let none = build_fields(
+            &s,
+            &merged,
+            Some(&second),
+            &BTreeMap::new(),
+            FieldOptions { review_threshold: 0.8, audit_percent: 0, pii_masking: true },
+            "d",
+        );
+        assert_eq!(none.fields.iter().filter(|f| f.review_reason == Some(ReviewReason::Audit)).count(), 0);
+    }
+
+    #[test]
+    fn context_overflow_shortens_the_text_anchor() {
+        use super::super::vlm::testing::StageChat;
+        let s = receipt_schema();
+        let chat = StageChat::new();
+        let overflow =
+            "/v1/chat/completions: HTTP 400: request (6272 tokens) exceeds the available context size (4096 tokens)";
+        chat.fail_queue.lock().unwrap().extend([overflow.to_string(), overflow.to_string()]);
+        chat.push("kie_receipt", json!({ "total": sv("1,000", "합계 1,000", 90) }));
+        let vlm = Vlm::new(&chat, "m".into(), crate::settings::Profile::Balanced, None);
+        let text = "가".repeat(4_000);
+        let page = PageInput { page_no: 1, page_count: 1, image_url: None, text: Some(&text) };
+        let (v, _) = extract_page(&vlm, &s, &page, None).unwrap();
+        assert_eq!(v["total"]["value"], "1,000");
+        let prompts: Vec<usize> = chat
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.messages[1]["content"].as_str().unwrap().chars().count())
+            .collect();
+        assert_eq!(prompts.len(), 3);
+        assert!(prompts[0] > prompts[1] && prompts[1] > prompts[2], "{prompts:?}");
+        assert!(prompts[2] < prompts[0] - 2_000, "the third try carries at most 1,000 text chars: {prompts:?}");
+
+        // With the text gone the overflow is final.
+        let chat = StageChat::new();
+        *chat.fail_with.lock().unwrap() = Some(overflow.into());
+        let vlm = Vlm::new(&chat, "m".into(), crate::settings::Profile::Balanced, None);
+        let err = extract_page(&vlm, &s, &page, None).unwrap_err();
+        assert!(context_overflow(&err));
+        assert_eq!(chat.requests.lock().unwrap().len(), 4, "4000 → 2000 → 1000 → none");
+    }
+
+    #[test]
+    fn pii_never_survives_in_raw_output_or_row_evidence() {
+        let s = receipt_schema();
+        let merged = json!({
+            "store_name": sv("한빛", "담당 900101-1234567 한빛", 90),
+            "cash_receipt_id": sv("010-1234-5678", "식별 010-1234-5678", 90),
+            "items": [{ "name": "홍길동 850315-2345678", "quantity": "1", "unit_price": "1,000", "amount": "1,000" }]
+        });
+        let masked = mask_output(&s.definition, &merged, true);
+        let text = masked.to_string();
+        assert!(!text.contains("1234567") && !text.contains("2345678") && !text.contains("010-1234"), "{text}");
+        assert_eq!(masked["cash_receipt_id"]["value"], "***-****-5678");
+        assert_eq!(masked["store_name"]["evidence"], "담당 900101-1****** 한빛");
+        let built = build_fields(
+            &s,
+            &merged,
+            None,
+            &BTreeMap::new(),
+            FieldOptions { review_threshold: 0.5, audit_percent: 0, pii_masking: true },
+            "d",
+        );
+        for f in &built.fields {
+            for v in [&f.value, &f.evidence, &f.normalized].into_iter().flatten() {
+                assert!(!v.contains("1234567") && !v.contains("2345678"), "{}: {v}", f.path);
+            }
+        }
+        assert_eq!(
+            built.fields.iter().find(|f| f.path == "items[0].quantity").unwrap().evidence.as_deref(),
+            Some("홍길동 850315-2****** | 1 | 1,000 | 1,000")
+        );
     }
 }

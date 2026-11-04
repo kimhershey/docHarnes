@@ -164,15 +164,12 @@ pub fn merge_pdfs(sources: &[PathBuf], out: &Path) -> Result<u32> {
     Ok(count)
 }
 
-/// Wraps a JPEG into a one-page PDF (DCTDecode, no re-encoding) so image
+/// Wraps an image into a one-page PDF (re-encoded as RGB JPEG, DCTDecode) so image
 /// documents can take part in a merge. `dpi` sets the page size.
-pub fn jpeg_to_pdf(jpeg: &Path, out: &Path, dpi: f32) -> Result<()> {
-    let bytes = std::fs::read(jpeg).map_err(|e| CoreError::io(jpeg, e))?;
-    let (w, h) = image::ImageReader::new(std::io::Cursor::new(&bytes))
-        .with_guessed_format()
-        .map_err(|e| CoreError::io(jpeg, e))?
-        .into_dimensions()
-        .map_err(|e| CoreError::Render(format!("{}: {e}", jpeg.display())))?;
+pub fn jpeg_to_pdf(source: &Path, out: &Path, dpi: f32) -> Result<()> {
+    let img = crate::documents::render::decode_image(source)?;
+    let (w, h) = (img.width(), img.height());
+    let bytes = super::image::encode_jpeg(&img)?;
     let scale = 72.0 / dpi.max(36.0);
     let (w_pt, h_pt) = (w as f32 * scale, h as f32 * scale);
     let mut doc = Document::with_version("1.5");
@@ -280,18 +277,46 @@ pub fn split_document(
     let stem = abs.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
     let parts = split_pdf(&src, boundaries, &dir, &stem)?;
     let mut ids = Vec::new();
-    for (path, _) in &parts {
-        let id = register(deps, path, doc.role, cancel)?;
-        if let Some(dt) = &doc.doc_type {
-            deps.db.with(|c| docs::set_doc_type(c, &id, Some(dt), doc.doc_type_source.as_deref()))?;
+    let result: Result<()> = (|| {
+        for (path, _) in &parts {
+            let id = register(deps, path, doc.role, cancel)?;
+            ids.push(id.clone());
+            if let Some(dt) = &doc.doc_type {
+                deps.db.with(|c| docs::set_doc_type(c, &id, Some(dt), doc.doc_type_source.as_deref()))?;
+            }
+            if !doc.tags.is_empty() {
+                deps.db.with(|c| docs::set_tags(c, &id, &doc.tags))?;
+            }
         }
-        if !doc.tags.is_empty() {
-            deps.db.with(|c| docs::set_tags(c, &id, &doc.tags))?;
+        Ok(())
+    })();
+    if let Err(e) = result {
+        // All or nothing: a cancelled / failed split leaves neither half-registered parts nor files.
+        for id in &ids {
+            let _ = import::delete_document(deps, id, false);
         }
-        ids.push(id);
+        for (path, _) in &parts {
+            let _ = std::fs::remove_file(path);
+        }
+        return Err(e);
     }
     deps.db.with(|c| docs::set_status(c, &doc.id, DocumentStatus::Archived, None))?;
     Ok(ids)
+}
+
+/// A user-supplied file stem: one path component, no traversal, no control characters.
+pub fn safe_stem(name: &str) -> Result<String> {
+    let n = name.trim().trim_end_matches(".pdf").trim_end_matches(".PDF").trim();
+    let bad = n.is_empty()
+        || n.len() > 120
+        || n.starts_with('.')
+        || n == ".."
+        || n.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|'])
+        || n.chars().any(|c| c.is_control());
+    if bad {
+        return Err(CoreError::Invalid("invalid name".into()));
+    }
+    Ok(crate::documents::nfc(n))
 }
 
 /// Merges documents (in the given order) into one PDF under `documents/`.
@@ -304,23 +329,24 @@ pub fn merge_documents(
     if documents.len() < 2 {
         return Err(CoreError::Invalid("merge needs at least two documents".into()));
     }
+    // Validate the name before any file is written.
+    let stem = match name.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(n) => safe_stem(n)?,
+        None => {
+            let first = Path::new(&documents[0].original_name)
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            format!("{first}_merged")
+        }
+    };
     let mut sources = Vec::new();
     for d in documents {
         sources.push(pdf_source(deps, d)?);
     }
-    let stem =
-        name.map(str::trim).filter(|n| !n.is_empty()).map(|n| n.trim_end_matches(".pdf").to_string()).unwrap_or_else(
-            || {
-                let first = Path::new(&documents[0].original_name)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                format!("{first}_merged")
-            },
-        );
     let dir = deps.paths.documents_dir();
     std::fs::create_dir_all(&dir).map_err(|e| CoreError::io(&dir, e))?;
-    let out = import::unique_target(&dir, &format!("{}.pdf", crate::documents::nfc(&stem)), &|p| p.exists());
+    let out = import::unique_target(&dir, &format!("{stem}.pdf"), &|p| p.exists());
     merge_pdfs(&sources, &out)?;
     register(deps, &out, documents[0].role, cancel)
 }
@@ -367,5 +393,9 @@ mod tests {
         assert_eq!(d.get_pages().len(), 1);
         let merged = dir.path().join("two.pdf");
         assert_eq!(merge_pdfs(&[out.clone(), out.clone()], &merged).unwrap(), 2);
+        assert_eq!(safe_stem(" 합친 문서.pdf ").unwrap(), "합친 문서");
+        for bad in ["../x", "/tmp/x", "a/b", "..", ".hidden", "con:fig", ""] {
+            assert!(safe_stem(bad).is_err(), "{bad}");
+        }
     }
 }

@@ -37,7 +37,7 @@ fn placeholders(n: usize) -> String {
 
 const SCHEMA_COLUMNS: &str =
     "id, name, name_en, doc_type, source, version, description_ko, description_en, definition, \
-form_document_id, builtin_key, enabled, is_default, use_count, created_at, updated_at";
+form_document_id, builtin_key, enabled, is_default, use_count, created_at, updated_at, note";
 
 fn row_to_schema(r: &Row<'_>) -> rusqlite::Result<SchemaRecord> {
     let source: String = r.get(4)?;
@@ -59,6 +59,7 @@ fn row_to_schema(r: &Row<'_>) -> rusqlite::Result<SchemaRecord> {
         use_count: r.get::<_, i64>(13)?.max(0) as u64,
         created_at: parse_ts(r.get(14)?).unwrap_or_else(Utc::now),
         updated_at: parse_ts(r.get(15)?).unwrap_or_else(Utc::now),
+        note: r.get(16)?,
     })
 }
 
@@ -151,9 +152,14 @@ pub fn doc_types(conn: &Connection) -> rusqlite::Result<Vec<DocTypeInfo>> {
     for s in all.into_iter().filter(|s| s.enabled) {
         if let Some(e) = out.iter_mut().find(|d| d.slug == s.doc_type) {
             e.use_count += s.use_count;
-            if !e.builtin && s.is_default {
+            // The type's default schema names it (one default per type); a type with a user
+            // schema is no longer "sample only".
+            if s.is_default {
                 e.schema_id = Some(s.id.clone());
+                e.label_ko = s.name.clone();
+                e.label_en = s.name_en.clone().unwrap_or_else(|| s.name.clone());
             }
+            e.builtin = e.builtin && s.source == SchemaSource::Builtin;
             continue;
         }
         out.push(DocTypeInfo {
@@ -190,7 +196,8 @@ pub fn save_schema(conn: &Connection, draft: &SchemaDraft) -> rusqlite::Result<S
     let id = match &draft.id {
         Some(id) => {
             let Some(current) = get_schema(conn, id)? else { return Err(typed("schema_not_found")) };
-            // Keep the previous definition as a version row before overwriting.
+            // Keep the previous definition as a version row before overwriting, with the
+            // note that version was saved with; the draft's note describes the new version.
             conn.execute(
                 "INSERT OR IGNORE INTO schema_versions (schema_id, version, definition, note, created_at) \
                  VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -198,22 +205,34 @@ pub fn save_schema(conn: &Connection, draft: &SchemaDraft) -> rusqlite::Result<S
                     id,
                     current.version as i64,
                     serde_json::to_string(&current.definition).unwrap_or_default(),
-                    draft.note,
+                    current.note,
                     now
                 ],
             )?;
-            // Moving a schema to another type releases the old default slot.
+            // Moving a schema to another type: the old type promotes another schema when this
+            // was its default; the new type keeps exactly one default.
             if current.doc_type != doc_type {
+                if current.is_default {
+                    conn.execute(
+                        "UPDATE schemas SET is_default = 1 WHERE doc_type = ?1 AND id = \
+                         (SELECT id FROM schemas WHERE doc_type = ?1 AND id <> ?2 ORDER BY (source = 'builtin'), updated_at DESC LIMIT 1)",
+                        params![current.doc_type, id],
+                    )?;
+                }
+                let has_default: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM schemas WHERE doc_type = ?1 AND is_default = 1 AND id <> ?2",
+                    params![doc_type, id],
+                    |r| r.get(0),
+                )?;
                 conn.execute(
-                    "UPDATE schemas SET is_default = 1 WHERE doc_type = ?1 AND id = \
-                     (SELECT id FROM schemas WHERE doc_type = ?1 AND id <> ?2 ORDER BY (source = 'builtin'), updated_at DESC LIMIT 1)",
-                    params![current.doc_type, id],
+                    "UPDATE schemas SET is_default = ?2 WHERE id = ?1",
+                    params![id, (has_default == 0) as i64],
                 )?;
             }
             conn.execute(
                 "UPDATE schemas SET name = ?2, name_en = ?3, doc_type = ?4, description_ko = ?5, description_en = ?6, \
-                 definition = ?7, version = version + 1, form_document_id = COALESCE(?8, form_document_id), updated_at = ?9 \
-                 WHERE id = ?1",
+                 definition = ?7, version = version + 1, form_document_id = COALESCE(?8, form_document_id), updated_at = ?9, \
+                 note = ?10 WHERE id = ?1",
                 params![
                     id,
                     name,
@@ -223,13 +242,16 @@ pub fn save_schema(conn: &Connection, draft: &SchemaDraft) -> rusqlite::Result<S
                     draft.description_en,
                     def,
                     draft.form_document_id,
-                    now
+                    now,
+                    draft.note.as_deref().map(str::trim).filter(|s| !s.is_empty()),
                 ],
             )?;
             id.clone()
         }
         None => {
             let id = crate::documents::new_id();
+            // Only bundled rows are `builtin`; a new draft claiming it would become undeletable.
+            let source = if draft.source == SchemaSource::Builtin { SchemaSource::User } else { draft.source };
             // The first non-builtin schema of a type becomes its default (user forms win over samples).
             let has_user_default: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM schemas WHERE doc_type = ?1 AND is_default = 1 AND source <> 'builtin'",
@@ -242,20 +264,21 @@ pub fn save_schema(conn: &Connection, draft: &SchemaDraft) -> rusqlite::Result<S
             }
             conn.execute(
                 "INSERT INTO schemas (id, name, name_en, doc_type, source, version, description_ko, description_en, \
-                 definition, form_document_id, builtin_key, enabled, is_default, use_count, created_at, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, ?8, ?9, NULL, 1, ?10, 0, ?11, ?11)",
+                 definition, form_document_id, builtin_key, enabled, is_default, use_count, created_at, updated_at, note) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, ?8, ?9, NULL, 1, ?10, 0, ?11, ?11, ?12)",
                 params![
                     id,
                     name,
                     draft.name_en.as_deref().map(str::trim).filter(|s| !s.is_empty()),
                     doc_type,
-                    draft.source.as_str(),
+                    source.as_str(),
                     draft.description_ko,
                     draft.description_en,
                     def,
                     draft.form_document_id,
                     is_default as i64,
-                    now
+                    now,
+                    draft.note.as_deref().map(str::trim).filter(|s| !s.is_empty())
                 ],
             )?;
             id
@@ -392,7 +415,11 @@ pub fn set_page_ocr(
          WHERE document_id = ?1 AND page_no = ?2",
         params![doc_id, page_no as i64, text, text.is_some() as i64, now, profile, model],
     )?;
-    conn.execute("UPDATE documents SET ocr_at = ?2, updated_at = ?2 WHERE id = ?1", params![doc_id, now])?;
+    conn.execute(
+        "UPDATE documents SET ocr_at = ?2, pipeline_error = NULL, updated_at = ?2, \
+         has_text_layer = CASE WHEN ?3 THEN 1 ELSE has_text_layer END WHERE id = ?1",
+        params![doc_id, now, text.is_some()],
+    )?;
     Ok(())
 }
 

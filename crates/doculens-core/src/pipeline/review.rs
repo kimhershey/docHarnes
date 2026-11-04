@@ -13,7 +13,7 @@ use crate::documents::ReviewStatus;
 use crate::error::Result;
 
 use super::repo::{self, ReviewFilter};
-use super::schema::FieldDef;
+use super::schema::{FieldDef, SchemaDef};
 use super::validate::{self, ConfidenceInput};
 use super::{FieldRecord, FieldStatus, ReviewReason, ValidationIssue};
 
@@ -30,7 +30,18 @@ pub enum ReviewAction {
     },
 }
 
-fn field_def_for(f: &FieldRecord) -> FieldDef {
+/// The schema field behind a stored row (options, regex hint, mask), falling back
+/// to what the row itself records when the schema is gone.
+fn field_def_for(f: &FieldRecord, def: Option<&SchemaDef>) -> FieldDef {
+    if let Some(def) = def {
+        if let Some(t) = f.path.split('[').next().filter(|_| f.row.is_some()) {
+            if let Some(col) = def.table(t).and_then(|t| t.fields.iter().find(|c| c.key == f.key)) {
+                return col.clone();
+            }
+        } else if let Some(d) = def.field(&f.path) {
+            return d.clone();
+        }
+    }
     FieldDef {
         key: f.key.clone(),
         label_ko: f.label_ko.clone(),
@@ -39,6 +50,13 @@ fn field_def_for(f: &FieldRecord) -> FieldDef {
         required: f.required,
         ..Default::default()
     }
+}
+
+/// Schema definition of a run (`None` when the schema was deleted).
+fn schema_of_run(conn: &Connection, run_id: &str) -> rusqlite::Result<Option<SchemaDef>> {
+    let Some(run) = repo::get_run(conn, run_id)? else { return Ok(None) };
+    let Some(id) = run.schema_id else { return Ok(None) };
+    Ok(repo::get_schema(conn, &id)?.map(|s| s.definition))
 }
 
 /// Applies one action to several fields (one transaction) and recomputes the
@@ -50,8 +68,14 @@ pub fn apply(db: &Db, field_ids: &[i64], action: &ReviewAction, note: Option<&st
     db.with_tx(move |tx| {
         let mut out = Vec::new();
         let mut touched: BTreeSet<String> = BTreeSet::new();
+        let mut defs: std::collections::HashMap<String, Option<SchemaDef>> = std::collections::HashMap::new();
         for id in &ids {
             let Some(current) = repo::get_field(tx, *id)? else { return Err(repo::typed("field_not_found")) };
+            if !defs.contains_key(&current.run_id) {
+                let d = schema_of_run(tx, &current.run_id)?;
+                defs.insert(current.run_id.clone(), d);
+            }
+            let schema_def = defs.get(&current.run_id).and_then(|d| d.as_ref());
             let updated = match &action {
                 ReviewAction::Approve => {
                     repo::update_field_status(tx, *id, FieldStatus::Approved, None, None, note.as_deref())?
@@ -70,17 +94,22 @@ pub fn apply(db: &Db, field_ids: &[i64], action: &ReviewAction, note: Option<&st
                     if v.is_empty() {
                         return Err(repo::typed("field_value_empty"));
                     }
-                    let def = field_def_for(&current);
-                    let (normalized, _) = validate::validate_value(&def, v);
+                    let def = field_def_for(&current, schema_def);
+                    let (normalized, mut issues) = validate::validate_value(&def, v);
                     let stored = validate::mask_value(&def, v);
-                    repo::update_field_status(
+                    let updated = repo::update_field_status(
                         tx,
                         *id,
                         FieldStatus::Corrected,
                         Some(&stored),
                         normalized.as_deref(),
                         note.as_deref(),
-                    )?
+                    )?;
+                    // The corrected value is still checked (enum options, regex, checksum) so a
+                    // typo in the correction shows up; the field stays resolved either way.
+                    issues.retain(|i| i.level != "ok");
+                    repo::update_field_validation(tx, *id, updated.confidence, updated.review_reason, &issues)?;
+                    repo::get_field(tx, *id)?.unwrap_or(updated)
                 }
             };
             touched.insert(updated.document_id.clone());
@@ -157,7 +186,7 @@ pub fn revalidate(db: &Db, doc_id: &str, threshold: f64, audit_percent: u8) -> R
     let mut rows: Vec<(String, u32, String, Option<String>)> = Vec::new();
     let mut per_field: Vec<(i64, Option<String>, Vec<ValidationIssue>, bool)> = Vec::new();
     for f in &fields {
-        let def = field_def_for(f);
+        let def = field_def_for(f, schema.as_ref().map(|s| &s.definition));
         let (normalized, issues) = match f.effective_value() {
             Some(v) => validate::validate_value(&def, v),
             None => (None, Vec::new()),
@@ -191,12 +220,18 @@ pub fn revalidate(db: &Db, doc_id: &str, threshold: f64, audit_percent: u8) -> R
             }
             let has_fail = issues.iter().any(|i| i.level == "fail");
             let has_warn = issues.iter().any(|i| i.level == "warn");
+            let had_fail = f.validation.iter().any(|i| i.level == "fail");
+            let had_warn = f.validation.iter().any(|i| i.level == "warn");
+            // Idempotent: the stored score stands unless the validation outcome changed
+            // (the evidence / value signals of the original run are not re-derivable here).
             let base = if f.status.is_resolved() {
                 1.0
+            } else if has_fail == had_fail && has_warn == had_warn {
+                f.confidence
             } else {
                 validate::confidence(ConfidenceInput {
                     model: f.model_confidence,
-                    evidence_found: f.evidence.as_ref().map(|_| true),
+                    evidence_found: None,
                     value_found: None,
                     agreement: None,
                     has_fail,

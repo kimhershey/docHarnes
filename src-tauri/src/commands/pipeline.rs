@@ -17,9 +17,10 @@ use crate::pipeline_bridge::{self, VisionModelInfo};
 use crate::protocol;
 use crate::state::{AppState, UiError, UiResult};
 
-/// Repository / core errors with a stable code → typed UI errors.
+/// Repository / core errors with a stable code → typed UI errors (`code` carries
+/// the key the frontend translates; the message repeats it for logs).
 fn typed_error(e: doculens_core::CoreError) -> UiError {
-    const CODES: [&str; 12] = [
+    const CODES: [&str; 14] = [
         "schema_name_empty",
         "schema_doc_type_invalid",
         "schema_invalid",
@@ -32,10 +33,17 @@ fn typed_error(e: doculens_core::CoreError) -> UiError {
         "description_empty",
         "no_model",
         "no_text",
+        "no documents",
+        "invalid name",
     ];
     let m = e.to_string();
     if let Some(code) = CODES.iter().find(|c| m.contains(*c)) {
-        return UiError::invalid(*code);
+        let code = match *code {
+            "no documents" => "no_documents",
+            "invalid name" => "merge_name_invalid",
+            c => c,
+        };
+        return UiError { code: code.into(), message: code.into(), detail: None };
     }
     e.into()
 }
@@ -66,6 +74,9 @@ pub fn pipeline_status(app: AppHandle) -> UiResult<PipelineStatusView> {
 
 #[tauri::command(async)]
 pub fn pipeline_process(app: AppHandle, req: ProcessRequest) -> UiResult<Option<String>> {
+    if req.document_ids.is_empty() {
+        return Err(UiError { code: "no_documents".into(), message: "no_documents".into(), detail: None });
+    }
     pipeline_bridge::process_job(&app, req)
 }
 
@@ -145,20 +156,34 @@ pub fn pipeline_schema_lint(definition: SchemaDef) -> Vec<LintIssue> {
     schema::lint(&definition)
 }
 
+/// Shell errors that wrap a core message keep the stable code the frontend keys on.
+fn retype(e: UiError) -> UiError {
+    for code in [
+        "description_empty",
+        "schema_not_found",
+        "no_model",
+        "engine_not_running",
+        "model_not_loaded",
+        "no_active_model",
+    ] {
+        if e.message.contains(code) || e.code == code {
+            return UiError { code: code.into(), message: code.into(), detail: None };
+        }
+    }
+    e
+}
+
 #[tauri::command(async)]
 pub fn pipeline_schema_from_nl(app: AppHandle, description: String, base_id: Option<String>) -> UiResult<SchemaDraft> {
-    pipeline_bridge::nl_schema(&app, &description, base_id.as_deref())
+    if description.trim().is_empty() {
+        return Err(UiError { code: "description_empty".into(), message: "description_empty".into(), detail: None });
+    }
+    pipeline_bridge::nl_schema(&app, &description, base_id.as_deref()).map_err(retype)
 }
 
 #[tauri::command(async)]
 pub fn pipeline_form_derive(app: AppHandle, document_id: String, name: Option<String>) -> UiResult<SchemaDraft> {
-    pipeline_bridge::form_derive(&app, &document_id, name.as_deref()).map_err(|e| {
-        if e.code == "invalid" && e.message.contains("no_model") {
-            UiError::invalid("no_model")
-        } else {
-            e
-        }
-    })
+    pipeline_bridge::form_derive(&app, &document_id, name.as_deref()).map_err(retype)
 }
 
 #[tauri::command(async)]
@@ -346,5 +371,5 @@ pub fn pipeline_split(app: AppHandle, document_id: String, boundaries: Vec<u32>)
 
 #[tauri::command(async)]
 pub fn pipeline_merge(app: AppHandle, ids: Vec<String>, name: Option<String>) -> UiResult<String> {
-    pipeline_bridge::merge_job(&app, ids, name)
+    pipeline_bridge::merge_job(&app, ids, name).map_err(retype)
 }

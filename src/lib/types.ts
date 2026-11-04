@@ -1181,6 +1181,8 @@ export interface SchemaRecord {
   enabled: boolean;
   is_default: boolean;
   use_count: number;
+  /** Change note of the current version (older notes are in the version list). */
+  note?: string | null;
   created_at: string;
   updated_at: string;
 }

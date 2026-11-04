@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS schemas (
   enabled          INTEGER NOT NULL DEFAULT 1,
   is_default       INTEGER NOT NULL DEFAULT 1, -- the schema `doc_type` maps to (one per type)
   use_count        INTEGER NOT NULL DEFAULT 0,
+  note             TEXT,                       -- change note of the current version
   created_at       TEXT NOT NULL,
   updated_at       TEXT NOT NULL
 );
