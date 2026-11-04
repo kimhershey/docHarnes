@@ -120,6 +120,24 @@ pub fn models_from_preset(path: &Path) -> Vec<String> {
         .collect()
 }
 
+/// Section names with `load-on-startup = true`.
+pub fn load_on_startup_from_preset(path: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read_to_string(path) else { return Vec::new() };
+    let mut out = Vec::new();
+    let mut current: Option<String> = None;
+    for line in text.lines().map(str::trim) {
+        if line.starts_with('[') && line.ends_with(']') {
+            let name = line[1..line.len() - 1].trim().to_string();
+            current = (name != "*").then_some(name);
+        } else if let (Some(sec), Some((k, v))) = (&current, line.split_once('=')) {
+            if k.trim() == "load-on-startup" && v.trim() == "true" {
+                out.push(sec.clone());
+            }
+        }
+    }
+    out
+}
+
 pub struct FakeRouter {
     pub port: u16,
     stop: Arc<AtomicBool>,
@@ -166,7 +184,30 @@ pub fn serve(listener: TcpListener, cfg: FakeRouterConfig, stop: Arc<AtomicBool>
             }
         }
     }
+    let startup: Vec<String> = cfg.preset_path.as_ref().map(|p| load_on_startup_from_preset(p)).unwrap_or_default();
+    let load_delay = cfg.load_delay;
     let state = Arc::new(Mutex::new(State { cfg, models, sse: Vec::new() }));
+    // `load-on-startup = true` sections start loading as soon as the router is up.
+    for id in startup {
+        let st = state.clone();
+        {
+            let mut s = st.lock().unwrap();
+            if let Some((_, m)) = s.models.iter_mut().find(|(m, _)| *m == id) {
+                m.status = "loading".into();
+            }
+            s.broadcast("model_status", &id, json!({ "status": "loading" }));
+        }
+        std::thread::spawn(move || {
+            std::thread::sleep(load_delay);
+            let mut s = st.lock().unwrap();
+            if let Some((_, m)) = s.models.iter_mut().find(|(m, _)| *m == id) {
+                if m.status == "loading" {
+                    m.status = "loaded".into();
+                    s.broadcast("model_status", &id, json!({ "status": "loaded", "info": {} }));
+                }
+            }
+        });
+    }
     while !stop.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, _)) => {
@@ -317,7 +358,19 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>) {
                 );
                 return;
             };
-            let known = state.lock().unwrap().models.iter().any(|(m, _)| *m == id);
+            let running = {
+                let s = state.lock().unwrap();
+                s.models
+                    .iter()
+                    .find(|(m, _)| *m == id)
+                    .map(|(_, m)| ["loading", "loaded", "sleeping"].contains(&m.status.as_str()))
+            };
+            if running == Some(true) {
+                // llama.cpp router: HTTP 400 while the instance is loading / loaded / sleeping
+                respond_json(&mut stream, 400, error_json(400, "model is already running", "invalid_request_error"));
+                return;
+            }
+            let known = running.is_some();
             if !known {
                 respond_json(
                     &mut stream,
@@ -511,8 +564,10 @@ fn handle(mut stream: TcpStream, state: Arc<Mutex<State>>) {
 /// `--host`, `--port`, `--models-preset`, `--version`, `--list-devices`, the
 /// `LLAMA_API_KEY` environment variable and, for tests:
 /// `DOCULENS_FAKE_LOAD_DELAY_MS`, `DOCULENS_FAKE_CRASH_AFTER_MS` (exit with
-/// code 3 after the delay) and `DOCULENS_FAKE_CRASH_ONCE_MARKER` (crash only
-/// when the marker file does not exist yet; it is created on the first run).
+/// code 3 after the delay), `DOCULENS_FAKE_CRASH_ONCE_MARKER` (crash only
+/// when the marker file does not exist yet; it is created on the first run)
+/// and `DOCULENS_FAKE_FAIL_START_AFTER_MARKER` (every run after the first
+/// exits with code 2 before listening).
 /// Returns the process exit code.
 pub fn run_from_args(args: &[String]) -> i32 {
     let mut cfg = FakeRouterConfig::default();
@@ -546,6 +601,14 @@ pub fn run_from_args(args: &[String]) -> i32 {
     cfg.api_key = std::env::var("LLAMA_API_KEY").ok().filter(|k| !k.is_empty());
     if let Some(ms) = std::env::var("DOCULENS_FAKE_LOAD_DELAY_MS").ok().and_then(|v| v.parse::<u64>().ok()) {
         cfg.load_delay = Duration::from_millis(ms);
+    }
+    if let Ok(marker) = std::env::var("DOCULENS_FAKE_FAIL_START_AFTER_MARKER") {
+        // First run: create the marker and behave normally; later runs exit before binding.
+        if Path::new(&marker).exists() {
+            eprintln!("fake router: simulated start failure");
+            return 2;
+        }
+        let _ = std::fs::write(&marker, b"started once");
     }
     let crash_after = std::env::var("DOCULENS_FAKE_CRASH_AFTER_MS").ok().and_then(|v| v.parse::<u64>().ok());
     let crash_once_marker = std::env::var("DOCULENS_FAKE_CRASH_ONCE_MARKER").ok();

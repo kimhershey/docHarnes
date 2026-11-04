@@ -1,5 +1,5 @@
 import { Activity, FileText, Play, RefreshCw, ScrollText, Square, Cpu } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +14,7 @@ import { useEngineBinaryInfo } from "@/lib/queries";
 import { queryClient, queryKeys } from "@/lib/query-client";
 import type { EngineDevice, EngineState, EngineStatus } from "@/lib/types";
 import { describeError } from "@/lib/errors";
+import { isComposing } from "@/lib/shortcuts";
 import { formatBytes, formatMiB } from "@/lib/utils";
 import { useEngineStore } from "@/stores/engine";
 import { useSettingsStore } from "@/stores/settings";
@@ -37,11 +38,81 @@ export function engineStateVariant(state: EngineState | undefined): "ok" | "warn
   }
 }
 
-export function EngineCard() {
+/** Text/number field that commits on blur or Enter (not on every keystroke). */
+function CommitInput({
+  id,
+  value,
+  onCommit,
+  type = "text",
+  min,
+  max,
+  step,
+  placeholder,
+  className,
+}: {
+  id: string;
+  value: string;
+  onCommit: (v: string) => void;
+  type?: "text" | "number";
+  min?: number;
+  max?: number;
+  step?: number;
+  placeholder?: string;
+  className?: string;
+}) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  const commit = () => {
+    if (draft !== value) onCommit(draft);
+  };
+  return (
+    <Input
+      id={id}
+      type={type}
+      min={min}
+      max={max}
+      step={step}
+      className={className}
+      placeholder={placeholder}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" && !isComposing(e.nativeEvent)) {
+          e.preventDefault();
+          commit();
+        }
+      }}
+    />
+  );
+}
+
+/** Subscribes to the log ring only while open (hundreds of lines per second during a load). */
+function EngineLogPanel() {
   const { t, i18n } = useTranslation();
-  const status = useEngineStore((s) => s.status);
   const logs = useEngineStore((s) => s.logs);
-  const engine = useEngineStore();
+  const loadLogs = useEngineStore((s) => s.loadLogs);
+  useEffect(() => {
+    void loadLogs();
+  }, [loadLogs]);
+  return (
+    <pre className="max-h-64 overflow-auto rounded-md border border-border bg-bg p-3 text-xs selectable whitespace-pre-wrap" data-testid="engine-logs">
+      {logs.length === 0
+        ? t("models.engine_card.no_logs")
+        : logs
+            .slice(-150)
+            .map((l) => `${new Date(l.at).toLocaleTimeString(i18n.language)} [${l.stream}] ${l.text}`)
+            .join("\n")}
+    </pre>
+  );
+}
+
+export function EngineCard() {
+  const { t } = useTranslation();
+  const status = useEngineStore((s) => s.status);
+  const start = useEngineStore((s) => s.start);
+  const stop = useEngineStore((s) => s.stop);
+  const restart = useEngineStore((s) => s.restart);
   const settings = useSettingsStore((s) => s.settings);
   const update = useSettingsStore((s) => s.update);
   const toast = useUiStore((s) => s.toast);
@@ -69,6 +140,7 @@ export function EngineCard() {
       setBusy(null);
     }
   };
+  const save = (mutate: (s: NonNullable<typeof settings>) => void) => update(mutate).catch((e) => toast(describeError(e, t), "danger"));
 
   const loaded = status?.models.filter((m) => m.status === "loaded" || m.status === "sleeping") ?? [];
   const resolved = binary.data?.resolved ?? status?.binary ?? null;
@@ -85,15 +157,15 @@ export function EngineCard() {
             </Badge>
           </CardTitle>
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" disabled={!workspace || !stopped || busy !== null} onClick={() => void run("start", () => engine.start())} data-testid="engine-start">
+            <Button size="sm" disabled={!workspace || !stopped || busy !== null} onClick={() => void run("start", () => start())} data-testid="engine-start">
               <Play />
               {t("models.engine_card.start")}
             </Button>
-            <Button size="sm" variant="secondary" disabled={stopped || busy !== null} onClick={() => void run("stop", () => engine.stop())} data-testid="engine-stop">
+            <Button size="sm" variant="secondary" disabled={stopped || busy !== null} onClick={() => void run("stop", () => stop())} data-testid="engine-stop">
               <Square />
               {t("models.engine_card.stop")}
             </Button>
-            <Button size="sm" variant="secondary" disabled={!workspace || busy !== null} onClick={() => void run("restart", () => engine.restart())} data-testid="engine-restart">
+            <Button size="sm" variant="secondary" disabled={!workspace || busy !== null} onClick={() => void run("restart", () => restart())} data-testid="engine-restart">
               <RefreshCw />
               {t("models.engine_card.restart")}
             </Button>
@@ -154,7 +226,7 @@ export function EngineCard() {
                 {loaded.map((m) => (
                   <li key={m.id} className="flex flex-wrap items-center gap-2">
                     <span className="font-medium">{m.id}</span>
-                    <Badge variant={m.status === "loaded" ? "ok" : "muted"}>{t(`models.instance.${m.status}`)}</Badge>
+                    <Badge variant={m.status === "loaded" ? "ok" : "muted"}>{t(`models.instance.${m.status}`, { defaultValue: m.status })}</Badge>
                     {m.memory_effective_bytes != null && (
                       <span className="text-xs text-fg-muted">
                         {t("models.engine_card.memory")}: {formatBytes(m.memory_effective_bytes)}
@@ -185,66 +257,67 @@ export function EngineCard() {
         <div className="grid gap-3 md:grid-cols-2">
           <label className="flex items-center justify-between gap-3 text-sm">
             <span>{t("models.engine_card.auto_start")}</span>
-            <Switch checked={settings.models.auto_start_engine} onCheckedChange={(v) => void update((s) => void (s.models.auto_start_engine = v))} />
+            <Switch checked={settings.models.auto_start_engine} onCheckedChange={(v) => void save((s) => void (s.models.auto_start_engine = v))} />
           </label>
           <label className="flex items-center justify-between gap-3 text-sm">
             <span>{t("models.engine_card.warmup")}</span>
-            <Switch checked={settings.models.warmup_after_load} onCheckedChange={(v) => void update((s) => void (s.models.warmup_after_load = v))} />
+            <Switch checked={settings.models.warmup_after_load} onCheckedChange={(v) => void save((s) => void (s.models.warmup_after_load = v))} />
           </label>
           <label className="flex items-center justify-between gap-3 text-sm">
             <span>{t("models.engine_card.vision_cpu")}</span>
-            <Switch checked={settings.models.vision_on_cpu} onCheckedChange={(v) => void update((s) => void (s.models.vision_on_cpu = v))} />
+            <Switch checked={settings.models.vision_on_cpu} onCheckedChange={(v) => void save((s) => void (s.models.vision_on_cpu = v))} />
           </label>
           <div className="flex items-center justify-between gap-3 text-sm">
             <Label htmlFor="sleep-idle">{t("models.engine_card.sleep_idle")}</Label>
-            <Input
+            <CommitInput
               id="sleep-idle"
               type="number"
               min={0}
               step={60}
               className="w-28"
-              value={settings.models.sleep_idle_seconds}
-              onChange={(e) => void update((s) => void (s.models.sleep_idle_seconds = Math.max(0, Number(e.target.value) || 0)))}
+              value={String(settings.models.sleep_idle_seconds)}
+              onCommit={(v) => void save((s) => void (s.models.sleep_idle_seconds = Math.max(0, Math.round(Number(v)) || 0)))}
             />
           </div>
           <div className="flex items-center justify-between gap-3 text-sm">
             <Label htmlFor="resident-max">{t("models.engine_card.resident_max")}</Label>
-            <Input
+            <CommitInput
               id="resident-max"
               type="number"
               min={1}
-              max={8}
+              max={4}
               className="w-28"
-              value={settings.models.resident_models_max}
-              onChange={(e) => void update((s) => void (s.models.resident_models_max = Math.min(8, Math.max(1, Number(e.target.value) || 1))))}
+              value={String(settings.models.resident_models_max)}
+              onCommit={(v) => void save((s) => void (s.models.resident_models_max = Math.min(4, Math.max(1, Math.round(Number(v)) || 1))))}
             />
           </div>
           <div className="flex flex-col gap-1.5 text-sm md:col-span-2">
             <Label htmlFor="engine-binary">{t("models.engine_card.binary_override")}</Label>
             <div className="flex gap-2">
-              <Input
+              <CommitInput
                 id="engine-binary"
                 className="flex-1"
                 value={settings.models.engine_binary ?? ""}
                 placeholder="…\\engines\\b12066\\cu121\\llama-server.exe"
-                onChange={(e) => void update((s) => void (s.models.engine_binary = e.target.value.trim() || null))}
+                onCommit={(v) => void save((s) => void (s.models.engine_binary = v.trim() || null))}
               />
               {isTauri && (
                 <Button
                   variant="secondary"
                   onClick={() =>
                     void pickExecutable(t("models.engine_card.binary_override")).then((p) => {
-                      if (p) void update((s) => void (s.models.engine_binary = p)).then(() => queryClient.invalidateQueries({ queryKey: queryKeys.engineBinary }));
+                      if (p) void save((s) => void (s.models.engine_binary = p));
                     })
                   }
                 >
                   {t("models.engine_card.binary_pick")}
                 </Button>
               )}
-              <Button variant="ghost" disabled={!settings.models.engine_binary} onClick={() => void update((s) => void (s.models.engine_binary = null)).then(() => queryClient.invalidateQueries({ queryKey: queryKeys.engineBinary }))}>
+              <Button variant="ghost" disabled={!settings.models.engine_binary} onClick={() => void save((s) => void (s.models.engine_binary = null))}>
                 {t("models.engine_card.binary_clear")}
               </Button>
             </div>
+            <p className="text-xs text-fg-subtle">{t("models.engine_card.apply_on_restart")}</p>
           </div>
         </div>
 
@@ -257,7 +330,21 @@ export function EngineCard() {
             <FileText />
             {t("models.engine_card.presets")}
           </Button>
-          <Button variant="ghost" size="sm" disabled={!workspace} onClick={() => void run("devices", async () => setDevices(await api.engineListDevices()))}>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={!workspace}
+            onClick={() =>
+              void run("devices", async () => {
+                setDevices(await api.engineListDevices());
+                // Engine-reported devices replace the NVML rows → tier may change.
+                await Promise.all([
+                  queryClient.invalidateQueries({ queryKey: queryKeys.hardware }),
+                  queryClient.invalidateQueries({ queryKey: queryKeys.assessment }),
+                ]);
+              })
+            }
+          >
             {t("models.engine_card.devices")}
           </Button>
         </div>
@@ -277,16 +364,7 @@ export function EngineCard() {
             )}
           </div>
         )}
-        {showLogs && (
-          <pre className="max-h-64 overflow-auto rounded-md border border-border bg-bg p-3 text-xs selectable whitespace-pre-wrap" data-testid="engine-logs">
-            {logs.length === 0
-              ? t("models.engine_card.no_logs")
-              : logs
-                  .slice(-150)
-                  .map((l) => `${new Date(l.at).toLocaleTimeString(i18n.language)} [${l.stream}] ${l.text}`)
-                  .join("\n")}
-          </pre>
-        )}
+        {showLogs && <EngineLogPanel />}
       </CardContent>
 
       <Dialog open={presets !== null} onOpenChange={(o) => !o && setPresets(null)}>

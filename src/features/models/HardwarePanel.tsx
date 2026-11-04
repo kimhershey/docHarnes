@@ -7,20 +7,27 @@ import { Spinner } from "@/components/ui/spinner";
 import { api } from "@/lib/ipc";
 import { useAssessment, useHardware } from "@/lib/queries";
 import { queryClient, queryKeys } from "@/lib/query-client";
+import { describeError } from "@/lib/errors";
 import { formatMiB } from "@/lib/utils";
+import { useUiStore } from "@/stores/ui";
 
 /** Hardware probe + tier assessment (onboarding step 2 and the model manager). */
 export function HardwarePanel() {
   const { t, i18n } = useTranslation();
   const hw = useHardware();
   const assessment = useAssessment();
+  const toast = useUiStore((s) => s.toast);
 
   const refresh = async () => {
-    await api.hwProbe(true);
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: queryKeys.hardware }),
-      queryClient.invalidateQueries({ queryKey: queryKeys.assessment }),
-    ]);
+    try {
+      await api.hwProbe(true);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.hardware }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.assessment }),
+      ]);
+    } catch (e) {
+      toast(describeError(e, t), "danger");
+    }
   };
 
   if (hw.isLoading || !hw.data) {

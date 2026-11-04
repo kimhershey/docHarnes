@@ -42,6 +42,7 @@ export function ChatTestDialog({ open, onOpenChange, modelId }: { open: boolean;
           <Input
             value={prompt}
             placeholder={t("models.test.prompt")}
+            aria-label={t("models.test.prompt")}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !isComposing(e.nativeEvent)) {
@@ -60,7 +61,7 @@ export function ChatTestDialog({ open, onOpenChange, modelId }: { open: boolean;
         {result && (
           <div className="flex flex-col gap-2" data-testid="chat-test-result">
             <p className="text-xs text-fg-muted">{t("models.test.result")}</p>
-            <pre className="max-h-60 overflow-auto rounded-md border border-border bg-bg p-3 text-sm selectable whitespace-pre-wrap">{result.content || "(empty)"}</pre>
+            <pre className="max-h-60 overflow-auto rounded-md border border-border bg-bg p-3 text-sm selectable whitespace-pre-wrap">{result.content || t("models.test.empty")}</pre>
             <p className="text-xs text-fg-subtle">
               {t("models.test.stats", {
                 tokens: result.completion_tokens,

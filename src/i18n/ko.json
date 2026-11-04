@@ -97,7 +97,8 @@
     "engine_ready": "준비",
     "engine_idle": "대기 (모델 미로드)",
     "engine_degraded": "엔진 오류",
-    "vram_used": "VRAM 사용"
+    "vram_used": "VRAM 사용",
+    "engine_stopping": "중지 중"
   },
   "theme": {
     "light": "라이트",
@@ -192,7 +193,8 @@
       "download_action": "다운로드 시작",
       "import_action": "GGUF 가져오기…",
       "installed": "설치됨 — 바로 시작할 수 있습니다."
-    }
+    },
+    "steps_label": "설정 단계"
   },
   "hw": {
     "warn": {
@@ -460,14 +462,16 @@
       "devices": "장치 조회",
       "devices_title": "엔진이 보고한 장치 (--list-devices)",
       "no_logs": "아직 로그가 없습니다.",
-      "presets_title": "presets.ini 미리보기"
+      "presets_title": "presets.ini 미리보기",
+      "apply_on_restart": "엔진 재시작 후 적용됩니다."
     },
     "test": {
       "title": "모델 테스트",
       "prompt": "프롬프트 (비우면 기본 문장)",
       "run": "실행",
       "result": "응답",
-      "stats": "출력 {{tokens}} 토큰 · 입력 {{prompt}} 토큰 · {{ms}} ms · {{tps}} tok/s"
+      "stats": "출력 {{tokens}} 토큰 · 입력 {{prompt}} 토큰 · {{ms}} ms · {{tps}} tok/s",
+      "empty": "(빈 응답)"
     }
   },
   "settings": {

@@ -34,6 +34,7 @@ test.describe("P1 engine & models", () => {
     await expect(page.getByTestId("engine-state")).toHaveText("실행 중", { timeout: 10_000 });
     await expect(page.getByTestId("statusbar-engine")).toContainText("모델 없음");
     await expect(page.getByTestId("discovered-empty")).toBeVisible();
+    await expect(page.getByTestId("models-import")).toHaveText("GGUF 가져오기");
 
     // Import: one weights file, the mmproj next to it is paired automatically.
     await page.getByTestId("models-import").click();
@@ -62,8 +63,9 @@ test.describe("P1 engine & models", () => {
     // Jobs screen lists the finished load.
     await page.getByTestId("nav-jobs").click();
     await page.getByTestId("jobs-tab-finished").click();
-    await expect(page.getByTestId("job-model_load-qwen3.5-4b-q6k")).toContainText("완료");
-    await expect(page.getByTestId("job-model_import-qwen3.5-4b-q6_k")).toContainText("완료");
+    await expect(page.locator('[data-job-kind="model_load"][data-job-subject="qwen3.5-4b-q6k"]').first()).toContainText("완료");
+    await expect(page.locator('[data-job-kind="model_import"][data-job-subject="qwen3.5-4b-q6_k"]').first()).toContainText("완료");
+    await expect(page.locator('[data-job-kind="engine_start"]').first()).toContainText("완료");
   });
 
   test("download job installs a registry model and engine stop/start buttons work", async ({ page }) => {
@@ -74,12 +76,12 @@ test.describe("P1 engine & models", () => {
     await expect(page.getByTestId("engine-state")).toHaveText("실행 중", { timeout: 10_000 });
 
     await page.getByTestId("download-qwen3.5-4b-q4km").click();
-    await expect(page.getByTestId("topbar-jobs")).toContainText("1");
+    await expect(page.getByTestId("topbar-jobs")).toHaveText(/작업 1건/);
     await expect(page.getByTestId("install-qwen3.5-4b-q4km")).toHaveText("설치됨", { timeout: 15_000 });
     await expect(page.getByTestId("discovered-qwen3.5-4b-q4km")).toBeVisible();
 
     await page.getByTestId("engine-stop").click();
-    await expect(page.getByTestId("engine-state")).toHaveText("중지됨");
+    await expect(page.getByTestId("engine-state")).toHaveText("중지됨", { timeout: 10_000 });
     await expect(page.getByTestId("statusbar-engine")).toContainText("엔진 중지");
     await page.getByTestId("engine-start").click();
     await expect(page.getByTestId("engine-state")).toHaveText("실행 중", { timeout: 10_000 });

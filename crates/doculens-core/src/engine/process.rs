@@ -38,6 +38,69 @@ impl LogLine {
 
 pub type LogSink = Arc<dyn Fn(LogLine) + Send + Sync>;
 
+/// `Command` for an engine binary with the platform defaults applied: no
+/// console window on Windows (the app is a GUI subsystem binary), no stdin.
+pub fn engine_command(binary: &std::path::Path) -> Command {
+    let mut cmd = Command::new(binary);
+    cmd.stdin(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+/// Output of a short-lived engine invocation (`--version`, `--list-devices`).
+#[derive(Debug, Default)]
+pub struct CapturedOutput {
+    pub status: Option<ExitStatus>,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// Runs a short-lived command, draining both pipes (backend init logs can
+/// exceed the pipe buffer), and kills it after `timeout`.
+pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<CapturedOutput> {
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| CoreError::engine(format!("cannot run {:?}: {e}", cmd.get_program())))?;
+    let drain = |pipe: Option<Box<dyn std::io::Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut s = String::new();
+            if let Some(mut p) = pipe {
+                let mut buf = Vec::new();
+                let _ = p.read_to_end(&mut buf);
+                s = String::from_utf8_lossy(&buf).into_owned();
+            }
+            s
+        })
+    };
+    let out = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn std::io::Read + Send>));
+    let err = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn std::io::Read + Send>));
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(st)) => break Some(st),
+            Ok(None) if start.elapsed() > timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => return Err(CoreError::engine(format!("wait: {e}"))),
+        }
+    };
+    let stdout = out.join().unwrap_or_default();
+    let stderr = err.join().unwrap_or_default();
+    if status.is_none() {
+        return Err(CoreError::Timeout(format!("{:?} did not exit within {} s", cmd.get_program(), timeout.as_secs())));
+    }
+    Ok(CapturedOutput { status, stdout, stderr })
+}
+
 #[derive(Clone)]
 pub struct SpawnSpec {
     pub binary: PathBuf,
@@ -64,8 +127,8 @@ impl std::fmt::Debug for EngineChild {
 
 /// Spawns the process with piped output and the platform containment.
 pub fn spawn(spec: &SpawnSpec) -> Result<EngineChild> {
-    let mut cmd = Command::new(&spec.binary);
-    cmd.args(&spec.args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut cmd = engine_command(&spec.binary);
+    cmd.args(&spec.args).stdout(Stdio::piped()).stderr(Stdio::piped());
     for (k, v) in &spec.env {
         cmd.env(k, v);
     }
@@ -82,11 +145,7 @@ pub fn spawn(spec: &SpawnSpec) -> Result<EngineChild> {
         cmd.process_group(0);
     }
     #[cfg(windows)]
-    let job = {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
-        job::JobHandle::kill_on_close().map_err(|e| CoreError::engine(format!("job object: {e}"))).ok()
-    };
+    let job = job::JobHandle::kill_on_close().map_err(|e| CoreError::engine(format!("job object: {e}"))).ok();
 
     let mut child =
         cmd.spawn().map_err(|e| CoreError::engine(format!("cannot start {}: {e}", spec.binary.display())))?;

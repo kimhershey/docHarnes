@@ -480,22 +480,34 @@ pub fn scan_model_folder(
 
 fn match_registry(registry: &Registry, weights: &[ScannedFile], mmproj: Option<&ScannedFile>) -> Option<RegistryMatch> {
     let files: Vec<&ScannedFile> = weights.iter().chain(mmproj).collect();
-    // By hash: any pinned sha256 equal to a computed one.
+    fn hash_of(sf: &ScannedFile) -> Option<&str> {
+        sf.hashes.as_ref().map(|h| h.sha256.as_str())
+    }
+    // By hash: only *weights* pins identify a model (several registry entries
+    // share one mmproj file); the entry with the most weights hits wins.
+    let mut best: Option<(usize, &crate::registry::ModelEntry)> = None;
     for entry in &registry.models {
-        let pinned: Vec<&ModelFile> = entry.files.iter().filter(|f| f.sha256.is_some()).collect();
-        if pinned.is_empty() {
+        let weight_pins: Vec<&ModelFile> =
+            entry.files.iter().filter(|f| f.sha256.is_some() && !f.is_mmproj()).collect();
+        if weight_pins.is_empty() {
             continue;
         }
-        let hits = pinned
-            .iter()
-            .filter(|pf| {
-                files.iter().any(|sf| sf.hashes.as_ref().is_some_and(|h| Some(&h.sha256) == pf.sha256.as_ref()))
-            })
-            .count();
-        if hits > 0 {
-            let all = hits == pinned.len() && files.iter().all(|f| f.hashes.is_some());
-            return Some(RegistryMatch { id: entry.id.clone(), by: MatchBy::Hash, verified: Some(all) });
+        let hits = weight_pins.iter().filter(|pf| weights.iter().any(|sf| hash_of(sf) == pf.sha256.as_deref())).count();
+        if hits > 0 && best.is_none_or(|(h, _)| hits > h) {
+            best = Some((hits, entry));
         }
+    }
+    if let Some((_, entry)) = best {
+        let all_pins_match = entry.files.iter().all(|pf| match &pf.sha256 {
+            Some(pin) => files.iter().any(|sf| hash_of(sf) == Some(pin.as_str())),
+            None => true,
+        });
+        let all_hashed = files.iter().all(|f| f.hashes.is_some());
+        return Some(RegistryMatch {
+            id: entry.id.clone(),
+            by: MatchBy::Hash,
+            verified: Some(all_pins_match && all_hashed),
+        });
     }
     // By name: every registry file name present.
     for entry in &registry.models {
@@ -506,15 +518,18 @@ fn match_registry(registry: &Registry, weights: &[ScannedFile], mmproj: Option<&
         if !all_present {
             continue;
         }
+        // Name match: a computed hash that contradicts a *weights* pin marks the
+        // folder invalid; a differing mmproj (other precision) only leaves it unverified.
         let mut verified = None;
         for rf in &entry.files {
             let Some(pin) = &rf.sha256 else { continue };
             let Some(sf) = files.iter().find(|sf| sf.name.eq_ignore_ascii_case(&rf.name)) else { continue };
             match &sf.hashes {
                 Some(h) if &h.sha256 == pin => verified = verified.or(Some(true)),
-                Some(_) => {
+                Some(_) if !rf.is_mmproj() => {
                     return Some(RegistryMatch { id: entry.id.clone(), by: MatchBy::Name, verified: Some(false) })
                 }
+                Some(_) => verified = None,
                 None => {}
             }
         }
@@ -998,6 +1013,7 @@ pub fn run_import(plan: &ImportPlan, progress: &mut dyn FnMut(&ImportProgress) -
                 let _ = fs::remove_file(&f.source);
             }
         }
+        mark_settled(&dest);
         total_done += f.size;
         progress(&ImportProgress {
             file: f.dest_name.clone(),
@@ -1057,7 +1073,21 @@ pub fn delete_model_folder(models_dir: &Path, folder: &Path) -> Result<()> {
     if !canon.starts_with(&canon_dir) || canon == canon_dir {
         return Err(CoreError::Invalid(format!("{} is not inside the models folder", folder.display())));
     }
-    fs::remove_dir_all(&canon).map_err(|e| CoreError::io(&canon, e))
+    // A just-unloaded instance may keep the mmap'd GGUF open for a moment.
+    let mut last = None;
+    for attempt in 0..6 {
+        match fs::remove_dir_all(&canon) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => {
+                last = Some(e);
+                if attempt < 5 {
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+            }
+        }
+    }
+    Err(CoreError::io(&canon, last.expect("error recorded")))
 }
 
 // ---------------------------------------------------------------------------
@@ -1086,9 +1116,17 @@ pub struct DownloadOutcome {
 /// HTTP agent used for downloads (TLS via the platform store; honours the
 /// usual proxy environment variables).
 pub fn download_agent() -> ureq::Agent {
+    use ureq::tls::{RootCerts, TlsConfig, TlsProvider};
+    // ureq never picks a TLS provider automatically: without this an https
+    // request panics ("provider is Rustls but feature is not enabled").
+    let tls = TlsConfig::builder().provider(TlsProvider::NativeTls).root_certs(RootCerts::PlatformVerifier).build();
     let config = ureq::Agent::config_builder()
+        .tls_config(tls)
+        // statuses (206 / 416 / 4xx) are handled explicitly in `download_file`
+        .http_status_as_error(false)
         .timeout_connect(Some(Duration::from_secs(20)))
-        .timeout_recv_body(Some(Duration::from_secs(600)))
+        // stall detection per read, not a budget for the whole (multi-GB) body
+        .timeout_per_read(Some(Duration::from_secs(60)))
         .user_agent(concat!("DocuLens/", env!("CARGO_PKG_VERSION")))
         .build();
     config.new_agent()
@@ -1116,12 +1154,30 @@ pub fn download_file(
     }
     let mut response = request.call().map_err(|e| CoreError::Download(e.to_string()))?;
     let status = response.status().as_u16();
+    let content_range = response.headers().get("Content-Range").and_then(|v| v.to_str().ok()).map(str::to_string);
     let (resumed_from, append) = match status {
-        206 if existing > 0 => (existing, true),
+        206 if existing > 0 => {
+            // The server must continue exactly where the partial file ends.
+            match content_range_start(content_range.as_deref()) {
+                Some(start) if start == existing => (existing, true),
+                _ => {
+                    let _ = fs::remove_file(&part);
+                    return Err(CoreError::Download(format!("server ignored the resume offset for {}", req.url)));
+                }
+            }
+        }
         200 => (0, false),
         416 => {
-            // Range not satisfiable: the partial file may already be complete.
-            return finish_download(req, &part, existing, progress);
+            // Range not satisfiable: complete when the partial file already has the full size.
+            let full = content_range_total(content_range.as_deref()).or(req.expected_size);
+            if existing > 0 && full == Some(existing) {
+                return finish_download(req, &part, existing, progress);
+            }
+            let _ = fs::remove_file(&part);
+            return Err(CoreError::Download(format!(
+                "partial file for {} was unusable and has been discarded; retry",
+                req.url
+            )));
         }
         s => return Err(CoreError::Download(format!("HTTP {s} for {}", req.url))),
     };
@@ -1178,8 +1234,23 @@ pub fn download_file(
 }
 
 fn content_range_total(header: Option<&str>) -> Option<u64> {
-    // "bytes 100-999/1000"
+    // "bytes 100-999/1000" or "bytes */1000"
     header?.rsplit_once('/')?.1.trim().parse().ok()
+}
+
+fn content_range_start(header: Option<&str>) -> Option<u64> {
+    // "bytes 100-999/1000"
+    let h = header?.trim().strip_prefix("bytes")?.trim();
+    h.split_once('-')?.0.trim().parse().ok()
+}
+
+/// Files the app wrote itself are complete by construction: back-date the
+/// mtime past the copy-settle window so the next scan reports them `Ready`.
+pub fn mark_settled(path: &Path) {
+    let t = SystemTime::now() - Duration::from_secs(COPY_SETTLE_SECONDS + 1);
+    if let Ok(f) = fs::File::options().write(true).open(path) {
+        let _ = f.set_modified(t);
+    }
 }
 
 fn finish_download(
@@ -1205,6 +1276,7 @@ fn finish_download(
         None => (None, None),
     };
     fs::rename(part, &req.dest).map_err(|e| CoreError::io(&req.dest, e))?;
+    mark_settled(&req.dest);
     Ok(DownloadOutcome { path: req.dest.clone(), bytes, resumed_from: 0, sha256, verified })
 }
 
@@ -1555,6 +1627,69 @@ mod tests {
         assert!(delete_model_folder(&models, &src).is_err());
         delete_model_folder(&models, &folder).unwrap();
         assert!(!folder.exists());
+    }
+
+    #[test]
+    fn hash_match_ignores_shared_mmproj_pins() {
+        let tmp = tempfile::tempdir().unwrap();
+        let models = tmp.path().join("models");
+        make_folder(&models, "six", "Qwen3.5-4B-Q6_K.gguf", true);
+        let mut reg = Registry::builtin();
+        let found = scan_models_dir(&models, &reg, ScanOptions::default());
+        let hashes = hash_model(&models, &found[0], &mut |_, _, _| true).unwrap();
+        let weights_sha = hashes.iter().find(|(n, _)| n == "Qwen3.5-4B-Q6_K.gguf").unwrap().1.sha256.clone();
+        let mmproj_sha = hashes.iter().find(|(n, _)| n == "mmproj-F16.gguf").unwrap().1.sha256.clone();
+        // Pin the (shared) mmproj on every 4B entry and the weights only on q6k.
+        for m in reg.models.iter_mut().filter(|m| m.id.starts_with("qwen3.5-4b")) {
+            for f in m.files.iter_mut().filter(|f| f.is_mmproj()) {
+                f.sha256 = Some(mmproj_sha.clone());
+            }
+        }
+        reg.models.iter_mut().find(|m| m.id == "qwen3.5-4b-q6k").unwrap().files[0].sha256 = Some(weights_sha);
+        let found = scan_models_dir(&models, &reg, ScanOptions::default());
+        let rm = found[0].registry_match.as_ref().unwrap();
+        assert_eq!(rm.id, "qwen3.5-4b-q6k");
+        assert_eq!(rm.by, MatchBy::Hash);
+        assert_eq!(rm.verified, Some(true));
+        assert!(found[0].health.is_ready());
+        // A differing mmproj pin alone never invalidates a name match.
+        for m in reg.models.iter_mut().filter(|m| m.id == "qwen3.5-4b-q6k") {
+            m.files[0].sha256 = None;
+            m.files[1].sha256 = Some("ff".repeat(32));
+        }
+        let found = scan_models_dir(&models, &reg, ScanOptions::default());
+        let rm = found[0].registry_match.as_ref().unwrap();
+        assert_eq!((rm.id.as_str(), rm.by, rm.verified), ("qwen3.5-4b-q6k", MatchBy::Name, None));
+        assert!(found[0].health.is_ready());
+    }
+
+    #[test]
+    fn download_agent_has_a_tls_provider() {
+        // Must fail with a connection error, never panic on the missing-provider path.
+        let agent = download_agent();
+        let r = agent.get("https://127.0.0.1:1/x.gguf").call();
+        assert!(r.is_err());
+        assert_eq!(content_range_start(Some("bytes 100-999/1000")), Some(100));
+        assert_eq!(content_range_total(Some("bytes */1000")), Some(1000));
+    }
+
+    #[test]
+    fn imported_files_scan_as_ready_immediately() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("usb");
+        fs::create_dir_all(&src).unwrap();
+        write_minimal_gguf(
+            &src.join("Fresh-Q4_K_M.gguf"),
+            &synthetic_qwen35_metadata("Fresh", 15, true),
+            &[("a", &[64], 0)],
+        )
+        .unwrap();
+        let models = tmp.path().join("models");
+        let plan = plan_import(&models, &[src.join("Fresh-Q4_K_M.gguf")], ImportMode::Copy, None).unwrap();
+        run_import(&plan, &mut |_| true).unwrap();
+        let found = scan_models_dir(&models, &Registry::builtin(), ScanOptions::default());
+        assert_eq!(found.len(), 1);
+        assert!(found[0].health.is_ready(), "{:?}", found[0].health);
     }
 
     #[test]

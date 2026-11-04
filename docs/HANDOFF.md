@@ -100,10 +100,10 @@
 
 | 종류 | 수 | 비고 |
 |---|---|---|
-| `cargo test -p doculens-core` (lib) | 59 | gguf 5, modelstore 7, engine 12 포함 |
-| `tests/engine_process.rs` (harness=false) | 3 | 실제 자식 프로세스: 생명주기·크래시 재기동·크래시 루프 Degraded |
+| `cargo test -p doculens-core` (lib) | 62 | gguf 5, modelstore 10, engine 12 포함 |
+| `tests/engine_process.rs` (harness=false) | 5 | 실제 자식 프로세스: 생명주기·startup 로드/취소·크래시 재기동·크래시 루프·재기동 실패 Degraded |
 | `tests/real_engine.rs` | 1 | `DOCULENS_LLAMA_SERVER` + `DOCULENS_TEST_MODELS_DIR` 설정 시에만 실행 |
-| vitest | 24 | i18n 패리티 포함 |
+| vitest | 27 | i18n 패리티 + 정적 t() 키 해석 검사 포함 |
 | Playwright | 10 | P0 7 + P1 3 (가져오기→로드→상태바, 다운로드·중지/시작·삭제, 온보딩 3단계·영어) |
 
 - **실제 llama-server 검증(이 환경, CPU)**: llama.cpp `b12066` 소스를 CPU로 빌드하고,
@@ -115,6 +115,38 @@
   가중치라 무의미하며 경로 검증 용도.
 - CI: `engine-real` 작업이 핀 고정 릴리스(`engines/manifest.json`)의 ubuntu 빌드를 받아 같은
   테스트를 실행(`continue-on-error: true` — 릴리스 자산 이름 패턴은 첫 실행에서 확인 후 고정).
+
+## P1 단계 말 리뷰 반영 (2026-11-04)
+
+독립 리뷰 2건(Rust 코어·셸 11건, 프런트엔드 11건 + 메모)을 모두 반영했다. 핵심:
+
+- **(치명) 다운로드 HTTPS 패닉**: `ureq`는 TLS 제공자를 자동 선택하지 않아 첫 `https://` 요청에서
+  패닉(릴리스 `panic = "abort"` → 앱 종료). `TlsProvider::NativeTls` + 플랫폼 루트 인증서를 명시하고
+  회귀 테스트 추가(`download_agent_has_a_tls_provider`). 상태 코드는 직접 처리(`http_status_as_error(false)`),
+  본문 타임아웃은 읽기 단위(60초)로 변경, 206은 `Content-Range` 시작 오프셋 검증, 416은 크기가 맞을 때만 완료 처리.
+- **로드 중/슬립 모델에 `/models/load` → 400**: 라우터는 loading/loaded/sleeping 모두 "already running"으로 거부.
+  `load_model`은 해당 상태면 POST를 건너뛰고 usable(loaded|sleeping)까지 대기. 가짜 라우터도 400을 내고
+  `load-on-startup`을 흉내내며, 프로세스 테스트 `load_on_startup_and_cancel`로 고정.
+- **가져온/다운로드한 모델이 "복사 중"으로 고정**: 앱이 직접 쓴 파일은 mtime을 settle 윈도 밖으로 되돌리고
+  (`mark_settled`), 스캔에 복사 중 모델이 있으면 settle 후 한 번 더 자동 재검색, `models_scan`은 변경 시
+  presets 재생성 + 라우터 reload(`rescan_and_sync`).
+- **재기동 실패 시 루프 중단**: 모니터가 실패한 재기동 시도도 횟수로 세어 `Degraded`까지 진행
+  (`relaunch_failure_degrades` 테스트).
+- 생명주기 직렬화: `start/stop/restart`와 모니터 재기동이 `lifecycle` 뮤텍스를 공유, `start()`는 실행 중이면 멱등,
+  presets 재생성 + reload는 `AppState::presets_lock`으로 직렬화(`regenerate_and_reload`).
+- Windows: `--version`/`--list-devices` 실행에도 `CREATE_NO_WINDOW` + 타임아웃 + stderr 드레인
+  (`process::engine_command` / `run_with_timeout`).
+- 해시 매칭: 가중치 파일 핀만 모델을 식별(여러 항목이 같은 mmproj를 공유), mmproj 불일치는 "미검증"일 뿐
+  Invalid가 아님(`hash_match_ignores_shared_mmproj_pins`).
+- 가져오기 계획은 서버에서 재계산(웹뷰 제공 plan 미신뢰), `model.json` pooling 화이트리스트, INI 값 전수
+  검증, 비 UTF-8 경로 건너뜀, GGUF 중첩 배열 깊이 제한·산술 포화·데이터 절단 검사.
+- 삭제는 공유 위반 대비 재시도, 로드 취소는 반로드 인스턴스를 언로드, 작업 스레드 패닉은 작업 실패로 기록,
+  해시 진행률 누적 보정, 워크스페이스 전환 시 자동 시작 꺼져 있어도 presets reload.
+- 프런트: `t("models.import")` 객체 키 오류(가져오기 버튼) 수정 + 정적 `t()` 키가 ko/en에서 문자열로 해석되는지
+  검사하는 vitest 추가, 엔진 카드 입력은 blur/Enter 시 커밋(키 입력마다 settings.json 저장 금지, 상주 수 1~4),
+  오류 코드 7종 지역화 + `engine_too_old` 안내, 로그 패널은 열릴 때만 구독하고 링 버퍼를 불러옴, 상태바
+  "중지 중", 작업 취소는 취소 가능한 종류만, 상태 스냅샷이 이벤트를 덮어쓰지 않도록 시퀀스 검사, 접근성
+  (select id/label, aria-label i18n, 상태 사유 텍스트 노출), 모의 백엔드 정합성(엔진 시작 작업, 정규화, 중지 중 틱).
 
 ## P2 착수 메모
 

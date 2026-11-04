@@ -104,6 +104,8 @@ pub struct AppState {
     pub watcher: Mutex<Option<ModelWatcher>>,
     pub jobs: JobBook,
     pub app: OnceLock<AppHandle>,
+    /// Serialises `presets.ini` regeneration + router reload.
+    pub presets_lock: Mutex<()>,
 }
 
 impl AppState {
@@ -134,6 +136,7 @@ impl AppState {
             watcher: Mutex::new(None),
             jobs: JobBook::default(),
             app: OnceLock::new(),
+            presets_lock: Mutex::new(()),
         }
     }
 

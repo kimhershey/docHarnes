@@ -108,8 +108,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     if (!current) return;
     const draft: AppSettings = structuredClone(current);
     mutate(draft);
-    get().apply(await api.settingsUpdate(draft));
+    const next = await api.settingsUpdate(draft);
+    get().apply(next);
     invalidateModelQueries();
+    if (next.models.backend !== current.models.backend || next.models.engine_binary !== current.models.engine_binary) {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.engineBinary });
+    }
   },
 }));
 

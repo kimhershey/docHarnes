@@ -3,7 +3,6 @@
 //! and finally packs bundled next to the application.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
@@ -221,9 +220,10 @@ pub fn locate(inputs: &LocateInputs) -> Result<EngineBinary> {
 /// Runs `llama-server --version` and extracts the build number
 /// (`version: 12066 (abc123)` / `build: 12066 (...)` / `b12066`).
 pub fn probe_version(path: &Path) -> Option<(String, u32)> {
-    let out = Command::new(path).arg("--version").output().ok()?;
-    let text = format!("{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-    parse_version_output(&text)
+    let mut cmd = super::process::engine_command(path);
+    cmd.arg("--version");
+    let out = super::process::run_with_timeout(cmd, std::time::Duration::from_secs(20)).ok()?;
+    parse_version_output(&format!("{}\n{}", out.stdout, out.stderr))
 }
 
 pub fn parse_version_output(text: &str) -> Option<(String, u32)> {

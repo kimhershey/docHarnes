@@ -28,6 +28,8 @@ const MAX_TENSORS: u64 = 1 << 20;
 const MAX_STRING: u64 = 64 << 20;
 const MAX_ARRAY: u64 = 1 << 28;
 const MAX_DIMS: u32 = 8;
+/// Nested arrays deeper than this are rejected (stack-overflow guard).
+const MAX_ARRAY_DEPTH: u32 = 4;
 /// Arrays longer than this (vocabularies, merges, token types) are skipped
 /// and summarised as [`GgufValue::LargeArray`].
 pub const INLINE_ARRAY_LIMIT: u64 = 4096;
@@ -149,8 +151,9 @@ impl TensorInfo {
     pub fn type_name(&self) -> &'static str {
         ggml_type_name(self.ggml_type)
     }
+    /// Element count (saturating: crafted dimensions must not overflow).
     pub fn n_elements(&self) -> u64 {
-        self.dims.iter().product()
+        self.dims.iter().try_fold(1u64, |acc, d| acc.checked_mul(*d)).unwrap_or(u64::MAX)
     }
 }
 
@@ -357,8 +360,11 @@ fn read_string<R: Read>(c: &mut Cursor<R>, path: &Path, what: &str) -> Result<St
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
-fn read_value<R: Read>(c: &mut Cursor<R>, ty: u32, path: &Path, key: &str) -> Result<GgufValue> {
+fn read_value<R: Read>(c: &mut Cursor<R>, ty: u32, path: &Path, key: &str, depth: u32) -> Result<GgufValue> {
     let io_err = |e: io::Error| bad(path, format!("key `{key}`: {e}"));
+    if depth > MAX_ARRAY_DEPTH {
+        return Err(bad(path, format!("key `{key}`: arrays nested deeper than {MAX_ARRAY_DEPTH}")));
+    }
     Ok(match ty {
         0 => GgufValue::U8(c.u8().map_err(io_err)?),
         1 => GgufValue::I8(c.u8().map_err(io_err)? as i8),
@@ -381,7 +387,7 @@ fn read_value<R: Read>(c: &mut Cursor<R>, ty: u32, path: &Path, key: &str) -> Re
                     Some(sz) => c.skip(len * sz).map_err(io_err)?,
                     None => {
                         for _ in 0..len {
-                            read_value(c, elem_ty, path, key)?;
+                            read_value(c, elem_ty, path, key, depth + 1)?;
                         }
                     }
                 }
@@ -389,7 +395,7 @@ fn read_value<R: Read>(c: &mut Cursor<R>, ty: u32, path: &Path, key: &str) -> Re
             } else {
                 let mut items = Vec::with_capacity(len as usize);
                 for _ in 0..len {
-                    items.push(read_value(c, elem_ty, path, key)?);
+                    items.push(read_value(c, elem_ty, path, key, depth + 1)?);
                 }
                 GgufValue::Array(items)
             }
@@ -425,7 +431,7 @@ pub fn read_header(path: &Path) -> Result<GgufHeader> {
     for _ in 0..n_kv {
         let key = read_string(&mut c, path, "metadata key")?;
         let ty = c.u32().map_err(|e| bad(path, format!("key `{key}` type: {e}")))?;
-        let value = read_value(&mut c, ty, path, &key)?;
+        let value = read_value(&mut c, ty, path, &key, 0)?;
         metadata.insert(key, value);
     }
 
@@ -455,6 +461,17 @@ pub fn read_header(path: &Path) -> Result<GgufHeader> {
     let data_offset = header_end.div_ceil(align) * align;
     if data_offset > file_size {
         return Err(bad(path, "file truncated before tensor data"));
+    }
+    // Every tensor must end inside the file (a half-copied GGUF has a complete header).
+    let data_end = tensors.iter().map(|t| t.offset.saturating_add(tensor_bytes(t))).max().unwrap_or(0);
+    if data_offset.saturating_add(data_end) > file_size {
+        return Err(bad(
+            path,
+            format!(
+                "truncated: tensor data needs {} bytes, file has {file_size}",
+                data_offset.saturating_add(data_end)
+            ),
+        ));
     }
     Ok(GgufHeader { version, alignment, metadata, tensors, data_offset, file_size })
 }
@@ -554,7 +571,7 @@ pub fn summarize(h: &GgufHeader) -> ModelMeta {
                 gdn_low.insert(suffix.to_string());
             }
         }
-        data_bytes = data_bytes.max(t.offset + tensor_bytes(t));
+        data_bytes = data_bytes.max(t.offset.saturating_add(tensor_bytes(t)));
     }
     let file_type = h.get_u32("general.file_type");
     let quantization =
@@ -639,7 +656,7 @@ fn type_traits(t: u32) -> Option<(u64, u64)> {
 
 fn tensor_bytes(t: &TensorInfo) -> u64 {
     match type_traits(t.ggml_type) {
-        Some((block_bytes, block_elems)) => t.n_elements().div_ceil(block_elems) * block_bytes,
+        Some((block_bytes, block_elems)) => t.n_elements().div_ceil(block_elems).saturating_mul(block_bytes),
         None => 0,
     }
 }
@@ -944,6 +961,22 @@ mod tests {
         evil[16..24].copy_from_slice(&u64::MAX.to_le_bytes());
         std::fs::write(&trunc, &evil).unwrap();
         assert!(read_header(&trunc).is_err());
+
+        // complete header, tensor data cut off (half-copied file)
+        let h = read_header(&good).unwrap();
+        std::fs::write(&trunc, &bytes[..(h.data_offset as usize + 4)]).unwrap();
+        let e = read_header(&trunc).unwrap_err();
+        assert!(e.to_string().contains("truncated"), "{e}");
+
+        // deeply nested arrays are rejected instead of overflowing the stack
+        let mut nested = GgufValue::U8(1);
+        for _ in 0..64 {
+            nested = GgufValue::Array(vec![nested]);
+        }
+        let deep = dir.path().join("deep.gguf");
+        write_minimal_gguf(&deep, &[("general.architecture", GgufValue::String("x".into())), ("evil", nested)], &[])
+            .unwrap();
+        assert!(read_header(&deep).unwrap_err().to_string().contains("nested"));
     }
 
     #[test]

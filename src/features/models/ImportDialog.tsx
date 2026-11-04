@@ -66,7 +66,7 @@ export function ImportDialog({ open, onOpenChange, onStarted }: { open: boolean;
     if (!plan) return;
     setBusy(true);
     try {
-      const job = await api.modelsImportRun({ ...plan, mode });
+      const job = await api.modelsImportRun(paths, mode, folderName.trim() || null);
       toast(t("models.import.started"), "ok");
       onStarted?.(job);
       onOpenChange(false);
@@ -113,9 +113,9 @@ export function ImportDialog({ open, onOpenChange, onStarted }: { open: boolean;
           </div>
           <div className="grid gap-3 md:grid-cols-2">
             <div className="flex flex-col gap-1.5">
-              <Label>{t("models.import.mode")}</Label>
+              <Label htmlFor="import-mode">{t("models.import.mode")}</Label>
               <Select value={mode} onValueChange={(v) => setMode(v as ImportMode)}>
-                <SelectTrigger data-testid="import-mode">
+                <SelectTrigger id="import-mode" data-testid="import-mode">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

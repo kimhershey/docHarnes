@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { api } from "@/lib/ipc";
+import { describeError } from "@/lib/errors";
 import { useUiStore } from "@/stores/ui";
 
 export function RequiredFilesDialog({ modelId, open, onOpenChange }: { modelId: string; open: boolean; onOpenChange: (o: boolean) => void }) {
@@ -14,8 +15,11 @@ export function RequiredFilesDialog({ modelId, open, onOpenChange }: { modelId: 
 
   useEffect(() => {
     if (!open) return;
-    void api.registryRequiredFilesText(modelId).then(setText);
-  }, [open, modelId]);
+    api
+      .registryRequiredFilesText(modelId)
+      .then(setText)
+      .catch((e) => toast(describeError(e, t), "danger"));
+  }, [open, modelId, toast, t]);
 
   const copy = async () => {
     try {

@@ -113,11 +113,12 @@ impl JobBook {
                 updated_at: now,
                 finished_at: None,
             });
-            // Trim old finished jobs.
+            // Trim the oldest finished jobs beyond the cap.
             let finished: Vec<usize> =
                 jobs.iter().enumerate().filter(|(_, j)| j.state.is_finished()).map(|(i, _)| i).collect();
             if finished.len() > MAX_FINISHED {
-                for i in finished.into_iter().take(finished_overflow(jobs.len())).rev() {
+                let overflow = finished.len() - MAX_FINISHED;
+                for i in finished.into_iter().take(overflow).rev() {
                     jobs.remove(i);
                 }
             }
@@ -208,8 +209,4 @@ impl JobBook {
         }
         self.emit();
     }
-}
-
-fn finished_overflow(total: usize) -> usize {
-    total.saturating_sub(MAX_FINISHED)
 }

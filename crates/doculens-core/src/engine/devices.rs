@@ -1,14 +1,12 @@
 //! `llama-server --list-devices` (design §3.3.3): the free VRAM the engine
 //! itself sees, which is what the tier table is defined on.
 
-use std::io::Read;
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::{CoreError, Result};
+use crate::error::Result;
 use crate::hw::{GpuInfo, GpuSource, GpuVendor};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,34 +46,10 @@ pub fn parse_list_devices(text: &str) -> Vec<EngineDevice> {
 
 /// Runs the binary with `--list-devices` (bounded by `timeout`).
 pub fn list_devices(binary: &Path, timeout: Duration) -> Result<Vec<EngineDevice>> {
-    let mut child = Command::new(binary)
-        .arg("--list-devices")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| CoreError::engine(format!("cannot run {}: {e}", binary.display())))?;
-    let mut stdout = child.stdout.take().expect("piped");
-    let reader = std::thread::spawn(move || {
-        let mut s = String::new();
-        let _ = stdout.read_to_string(&mut s);
-        s
-    });
-    let start = Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if start.elapsed() > timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(CoreError::Timeout("llama-server --list-devices".into()));
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-            Err(e) => return Err(CoreError::engine(format!("--list-devices: {e}"))),
-        }
-    }
-    let text = reader.join().unwrap_or_default();
-    Ok(parse_list_devices(&text))
+    let mut cmd = super::process::engine_command(binary);
+    cmd.arg("--list-devices");
+    let out = super::process::run_with_timeout(cmd, timeout)?;
+    Ok(parse_list_devices(&out.stdout))
 }
 
 /// Engine devices as [`GpuInfo`] rows (`source = engine`).

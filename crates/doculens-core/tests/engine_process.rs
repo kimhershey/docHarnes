@@ -25,8 +25,13 @@ fn main() {
 
     let exe = std::env::current_exe().expect("current exe");
     type TestFn = fn(&Path) -> Result<(), String>;
-    let tests: Vec<(&str, TestFn)> =
-        vec![("lifecycle", lifecycle), ("crash_restart", crash_restart), ("crash_loop_degraded", crash_loop_degraded)];
+    let tests: Vec<(&str, TestFn)> = vec![
+        ("lifecycle", lifecycle),
+        ("load_on_startup_and_cancel", load_on_startup_and_cancel),
+        ("crash_restart", crash_restart),
+        ("crash_loop_degraded", crash_loop_degraded),
+        ("relaunch_failure_degrades", relaunch_failure_degrades),
+    ];
     let filter = args.iter().skip(1).find(|a| !a.starts_with("--")).cloned();
     let mut failed = 0;
     for (name, f) in tests {
@@ -35,6 +40,7 @@ fn main() {
         }
         std::env::remove_var("DOCULENS_FAKE_CRASH_AFTER_MS");
         std::env::remove_var("DOCULENS_FAKE_CRASH_ONCE_MARKER");
+        std::env::remove_var("DOCULENS_FAKE_FAIL_START_AFTER_MARKER");
         let start = Instant::now();
         match f(&exe) {
             Ok(()) => println!("test engine_process::{name} ... ok ({} ms)", start.elapsed().as_millis()),
@@ -60,10 +66,17 @@ fn check(cond: bool, msg: impl Into<String>) -> Result<(), String> {
 }
 
 fn config(exe: &Path, dir: &Path, models: &[&str]) -> EngineConfig {
+    config_with_startup(exe, dir, models, None)
+}
+
+fn config_with_startup(exe: &Path, dir: &Path, models: &[&str], load_on_startup: Option<&str>) -> EngineConfig {
     let presets = dir.join("presets.ini");
     let mut ini = String::from("version = 1\n[*]\njinja = true\n");
     for m in models {
         ini.push_str(&format!("\n[{m}]\nmodel = {}\n", dir.join(format!("{m}.gguf")).display()));
+        if load_on_startup == Some(m) {
+            ini.push_str("load-on-startup = true\n");
+        }
     }
     std::fs::write(&presets, ini).unwrap();
     let binary = EngineBinary {
@@ -169,6 +182,64 @@ fn lifecycle(exe: &Path) -> Result<(), String> {
     check(m.status().state == EngineState::Stopped, "not stopped")?;
     check(wait_for(Duration::from_secs(3), || !pid_alive(pid)), format!("child {pid} still alive after stop"))?;
     check(m.client().is_err(), "client available after stop")?;
+    Ok(())
+}
+
+fn load_on_startup_and_cancel(exe: &Path) -> Result<(), String> {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DOCULENS_FAKE_LOAD_DELAY_MS", "600");
+    let cfg = config_with_startup(exe, tmp.path(), &["alpha", "beta"], Some("alpha"));
+    let m = EngineManager::new();
+    m.start(cfg).map_err(|e| format!("start: {e}"))?;
+    // alpha is already loading (load-on-startup): load_model must not POST (400) and must wait for it.
+    let st =
+        m.load_model("alpha", Duration::from_secs(10), true).map_err(|e| format!("load during startup load: {e}"))?;
+    check(st.is_loaded() && st.warmed_up, format!("alpha not loaded: {st:?}"))?;
+    // Loading again while loaded is a no-op success.
+    m.load_model("alpha", Duration::from_secs(5), false).map_err(|e| format!("re-load: {e}"))?;
+    // Cancelling a load unloads the half-loaded instance and reports Cancelled.
+    let cancel = Arc::new(AtomicBool::new(false));
+    let c2 = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        c2.store(true, std::sync::atomic::Ordering::Relaxed);
+    });
+    let err = m.load_model_cancellable("beta", Duration::from_secs(10), false, Some(&cancel)).unwrap_err();
+    check(err.code() == "cancelled", format!("expected cancelled, got {err}"))?;
+    let beta = wait_for(Duration::from_secs(5), || m.status().model("beta").is_some_and(|b| b.status == "unloaded"));
+    check(beta, format!("beta still running after cancel: {:?}", m.status().model("beta")))?;
+    // Starting an already running engine is idempotent (no second router).
+    let pid = m.status().pid;
+    let again = m.start(m.config().unwrap()).map_err(|e| format!("second start: {e}"))?;
+    check(again.pid == pid && again.state == EngineState::Running, "start() restarted a running engine")?;
+    m.stop().map_err(|e| format!("stop: {e}"))?;
+    std::env::set_var("DOCULENS_FAKE_LOAD_DELAY_MS", "150");
+    Ok(())
+}
+
+fn relaunch_failure_degrades(exe: &Path) -> Result<(), String> {
+    let tmp = tempfile::tempdir().unwrap();
+    let marker: PathBuf = tmp.path().join("started-once");
+    std::env::set_var("DOCULENS_FAKE_FAIL_START_AFTER_MARKER", &marker);
+    std::env::set_var("DOCULENS_FAKE_CRASH_AFTER_MS", "500");
+    let mut cfg = config(exe, tmp.path(), &["alpha"]);
+    cfg.max_restarts = 2;
+    cfg.health_timeout = Duration::from_secs(5);
+    let m = EngineManager::new();
+    m.start(cfg).map_err(|e| format!("start: {e}"))?;
+    // First instance crashes after 500 ms; every relaunch exits before listening →
+    // each failed attempt counts and the manager ends in Degraded.
+    let degraded = wait_for(Duration::from_secs(20), || matches!(m.status().state, EngineState::Degraded { .. }));
+    let s = m.status();
+    check(degraded, format!("expected degraded after failed relaunches, got {:?}", s.state))?;
+    check(s.restarts == 0, format!("no relaunch succeeded, restarts must be 0 (got {})", s.restarts))?;
+    check(
+        m.recent_logs(100).iter().filter(|l| l.text.contains("restart attempt")).count() >= 2,
+        "attempts not logged",
+    )?;
+    m.stop().map_err(|e| format!("stop: {e}"))?;
     Ok(())
 }
 

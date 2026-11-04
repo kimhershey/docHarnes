@@ -71,7 +71,7 @@ export function OnboardingWizard() {
           <h1 className="text-2xl font-semibold">{t("onboarding.title")}</h1>
           <p className="mt-1 text-fg-muted">{t("onboarding.subtitle")}</p>
         </div>
-        <ol className="flex items-center gap-2 text-sm" aria-label="steps">
+        <ol className="flex items-center gap-2 text-sm" aria-label={t("onboarding.steps_label")}>
           {steps.map((s, i) => (
             <li key={s.key} className="flex items-center gap-2">
               <span

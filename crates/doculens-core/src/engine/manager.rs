@@ -1,7 +1,9 @@
 //! Sidecar lifecycle (design §3.3.1): start → wait for `/health` → router
 //! running; model load/unload through the router API with status tracking
 //! from `/models/sse`; crash detection with exponential back-off restarts
-//! (3 attempts) and a "degraded" terminal state; graceful stop.
+//! (3 attempts, each attempt may itself fail to come up) and a "degraded"
+//! terminal state; graceful stop. `start`/`stop`/`restart` and the monitor's
+//! relaunch are serialised by a lifecycle mutex.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::net::TcpListener;
@@ -62,7 +64,7 @@ pub struct ModelInstanceStatus {
 
 impl ModelInstanceStatus {
     fn from_router(m: &RouterModel, mmproj_bytes: u64, prev: Option<&ModelInstanceStatus>) -> ModelInstanceStatus {
-        let loaded = m.is_loaded();
+        let usable = is_usable_status(&m.status);
         ModelInstanceStatus {
             id: m.id.clone(),
             status: m.status.clone(),
@@ -73,17 +75,33 @@ impl ModelInstanceStatus {
             memory_effective_bytes: m
                 .effective_device_bytes()
                 .map(|b| b + mmproj_bytes)
-                .or_else(|| prev.and_then(|p| p.memory_effective_bytes).filter(|_| loaded)),
+                .or_else(|| prev.and_then(|p| p.memory_effective_bytes).filter(|_| usable)),
             memory_min_bytes: m.min_device_bytes().map(|b| b + mmproj_bytes),
             mmproj_bytes,
             input_modalities: m.input_modalities.clone(),
-            loaded_at: if loaded { prev.and_then(|p| p.loaded_at).or_else(|| Some(Utc::now())) } else { None },
-            warmed_up: loaded && prev.is_some_and(|p| p.warmed_up),
+            loaded_at: if usable { prev.and_then(|p| p.loaded_at).or_else(|| Some(Utc::now())) } else { None },
+            warmed_up: usable && prev.is_some_and(|p| p.warmed_up),
         }
     }
     pub fn is_loaded(&self) -> bool {
         self.status == "loaded"
     }
+    /// Loaded or sleeping: the router answers requests (waking the instance if needed).
+    pub fn is_usable(&self) -> bool {
+        is_usable_status(&self.status)
+    }
+    /// Loading, loaded or sleeping — the router rejects `/models/load` for these.
+    pub fn is_running(&self) -> bool {
+        is_running_status(&self.status)
+    }
+}
+
+pub fn is_usable_status(status: &str) -> bool {
+    status == "loaded" || status == "sleeping"
+}
+
+pub fn is_running_status(status: &str) -> bool {
+    status == "loaded" || status == "sleeping" || status == "loading"
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -131,9 +149,9 @@ impl EngineStatus {
     pub fn model(&self, id: &str) -> Option<&ModelInstanceStatus> {
         self.models.iter().find(|m| m.id == id)
     }
-    /// Loaded model with the largest memory footprint (status-bar display).
+    /// Instances that answer requests (loaded or sleeping).
     pub fn loaded_models(&self) -> impl Iterator<Item = &ModelInstanceStatus> {
-        self.models.iter().filter(|m| m.is_loaded())
+        self.models.iter().filter(|m| m.is_usable())
     }
 }
 
@@ -223,6 +241,8 @@ struct Inner {
     client: Mutex<Option<RouterClient>>,
     subscribers: Mutex<Vec<mpsc::Sender<EngineEvent>>>,
     logs: Mutex<VecDeque<LogLine>>,
+    /// Serialises start / stop / restart and the monitor's relaunch.
+    lifecycle: Mutex<()>,
     generation: AtomicU64,
     stopping: AtomicBool,
     restart_attempts: AtomicU32,
@@ -278,6 +298,10 @@ impl Inner {
         self.client.lock().ok().and_then(|c| c.clone()).ok_or(CoreError::EngineNotRunning)
     }
 
+    fn mmproj_size(&self, id: &str) -> u64 {
+        self.cfg.lock().ok().and_then(|c| c.as_ref().and_then(|c| c.mmproj_sizes.get(id).copied())).unwrap_or(0)
+    }
+
     fn apply_router_models(&self, models: &[RouterModel]) -> Vec<ModelInstanceStatus> {
         let mmproj = self.cfg.lock().ok().and_then(|c| c.as_ref().map(|c| c.mmproj_sizes.clone())).unwrap_or_default();
         self.update_status(|s| {
@@ -299,12 +323,7 @@ impl Inner {
     fn apply_event(&self, ev: RouterEvent) {
         match ev {
             RouterEvent::ModelStatus { model, status, progress, failed } => {
-                let mmproj = self
-                    .cfg
-                    .lock()
-                    .ok()
-                    .and_then(|c| c.as_ref().and_then(|c| c.mmproj_sizes.get(&model).copied()))
-                    .unwrap_or(0);
+                let mmproj = self.mmproj_size(&model);
                 let snapshot = self.update_status(|s| {
                     let entry = match s.models.iter_mut().find(|m| m.id == model) {
                         Some(m) => m,
@@ -340,12 +359,7 @@ impl Inner {
                 }
             }
             RouterEvent::ModelMemory { model, data } => {
-                let mmproj = self
-                    .cfg
-                    .lock()
-                    .ok()
-                    .and_then(|c| c.as_ref().and_then(|c| c.mmproj_sizes.get(&model).copied()))
-                    .unwrap_or(0);
+                let mmproj = self.mmproj_size(&model);
                 let effective = data.get("effective").and_then(super::client::sum_device_bytes).map(|b| b + mmproj);
                 let min = data.get("min").and_then(super::client::sum_device_bytes).map(|b| b + mmproj);
                 self.update_status(|s| {
@@ -372,6 +386,26 @@ impl Inner {
             RouterEvent::DownloadProgress { .. } | RouterEvent::Other { .. } => {}
         }
     }
+
+    /// Kills the child (if any) and resets the runtime state. Caller holds `lifecycle`.
+    fn stop_locked(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        let child = self.child.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(mut c) = child {
+            self.update_status(|s| s.state = EngineState::Stopping);
+            let status = c.terminate(Duration::from_secs(5));
+            self.log(LogLine::app(format!("engine stopped (pid {}, exit {:?})", c.pid, status.and_then(|s| s.code()))));
+        }
+        *self.client.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.update_status(|s| {
+            s.state = EngineState::Stopped;
+            s.pid = None;
+            s.port = None;
+            s.models.clear();
+            s.active_model = None;
+        });
+    }
 }
 
 fn free_port(host: &str) -> Result<u16> {
@@ -389,6 +423,7 @@ impl EngineManager {
                 client: Mutex::new(None),
                 subscribers: Mutex::new(Vec::new()),
                 logs: Mutex::new(VecDeque::new()),
+                lifecycle: Mutex::new(()),
                 generation: AtomicU64::new(0),
                 stopping: AtomicBool::new(false),
                 restart_attempts: AtomicU32::new(0),
@@ -412,6 +447,11 @@ impl EngineManager {
         self.inner.status().is_running()
     }
 
+    /// True while a start is in flight (another thread is waiting for `/health`).
+    pub fn is_starting(&self) -> bool {
+        matches!(self.inner.status().state, EngineState::Starting)
+    }
+
     pub fn recent_logs(&self, n: usize) -> Vec<LogLine> {
         self.inner
             .logs
@@ -429,15 +469,26 @@ impl EngineManager {
     }
 
     /// Starts the router and blocks until `/health` answers (or the health
-    /// timeout elapses). A running engine is stopped first.
+    /// timeout elapses). Idempotent: when the engine is already running (or
+    /// another start just finished while we waited for the lock) the current
+    /// status is returned without restarting.
     pub fn start(&self, cfg: EngineConfig) -> Result<EngineStatus> {
+        let _guard = self.inner.lifecycle.lock().unwrap_or_else(|e| e.into_inner());
+        if self.inner.status().is_running() && self.inner.child.lock().map(|c| c.is_some()).unwrap_or(false) {
+            return Ok(self.inner.status());
+        }
+        self.start_locked(cfg)
+    }
+
+    fn start_locked(&self, cfg: EngineConfig) -> Result<EngineStatus> {
         if self.inner.child.lock().map(|c| c.is_some()).unwrap_or(false) {
-            self.stop()?;
+            self.inner.stop_locked();
         }
         self.inner.stopping.store(false, Ordering::SeqCst);
         self.inner.restart_attempts.store(0, Ordering::SeqCst);
         let generation = self.inner.generation.fetch_add(1, Ordering::SeqCst) + 1;
         *self.inner.cfg.lock().map_err(|_| CoreError::engine("state poisoned"))? = Some(cfg.clone());
+        let restarts = self.inner.status().restarts;
         self.inner.update_status(|s| {
             *s = EngineStatus {
                 state: EngineState::Starting,
@@ -445,6 +496,7 @@ impl EngineManager {
                 host: cfg.host.clone(),
                 presets_path: Some(cfg.presets_path.clone()),
                 sleep_idle_seconds: cfg.sleep_idle_seconds,
+                restarts,
                 ..EngineStatus::default()
             };
         });
@@ -456,36 +508,22 @@ impl EngineManager {
 
     /// Stops the sidecar (process group / job object) and clears the state.
     pub fn stop(&self) -> Result<()> {
-        self.inner.stopping.store(true, Ordering::SeqCst);
-        self.inner.generation.fetch_add(1, Ordering::SeqCst);
-        self.inner.update_status(|s| s.state = EngineState::Stopping);
-        let child = self.inner.child.lock().map_err(|_| CoreError::engine("state poisoned"))?.take();
-        if let Some(mut c) = child {
-            let status = c.terminate(Duration::from_secs(5));
-            self.inner.log(LogLine::app(format!(
-                "engine stopped (pid {}, exit {:?})",
-                c.pid,
-                status.and_then(|s| s.code())
-            )));
-        }
-        *self.inner.client.lock().map_err(|_| CoreError::engine("state poisoned"))? = None;
-        self.inner.update_status(|s| {
-            s.state = EngineState::Stopped;
-            s.pid = None;
-            s.port = None;
-            s.models.clear();
-            s.active_model = None;
-        });
+        let _guard = self.inner.lifecycle.lock().unwrap_or_else(|e| e.into_inner());
+        self.inner.stop_locked();
         Ok(())
     }
 
+    /// Stop + start with the previous configuration (restart counter kept).
     pub fn restart(&self) -> Result<EngineStatus> {
         let cfg = self.config().ok_or_else(|| CoreError::engine("engine was never started"))?;
-        self.stop()?;
-        let restarts = self.inner.status().restarts;
-        let st = self.start(cfg)?;
-        self.inner.update_status(|s| s.restarts = restarts);
-        Ok(st)
+        self.restart_with(cfg)
+    }
+
+    /// Stop + start with a fresh configuration (e.g. regenerated presets), under one lock.
+    pub fn restart_with(&self, cfg: EngineConfig) -> Result<EngineStatus> {
+        let _guard = self.inner.lifecycle.lock().unwrap_or_else(|e| e.into_inner());
+        self.inner.stop_locked();
+        self.start_locked(cfg)
     }
 
     /// `GET /models` (or `?reload=1`) → updated instance list.
@@ -495,18 +533,31 @@ impl EngineManager {
         Ok(self.inner.apply_router_models(&models))
     }
 
-    /// Loads a model and waits until the router reports `loaded` (or a failure
-    /// / the timeout). Optionally sends a one-token warm-up request.
+    /// Loads a model and waits until the router reports it usable (loaded or
+    /// sleeping), a failure, or the timeout. Optionally sends a one-token
+    /// warm-up request (which also wakes a sleeping instance).
     pub fn load_model(&self, id: &str, timeout: Duration, warmup: bool) -> Result<ModelInstanceStatus> {
+        self.load_model_cancellable(id, timeout, warmup, None)
+    }
+
+    /// Like [`load_model`], but aborts (unloading the half-loaded instance)
+    /// when `cancel` becomes true.
+    pub fn load_model_cancellable(
+        &self,
+        id: &str,
+        timeout: Duration,
+        warmup: bool,
+        cancel: Option<&AtomicBool>,
+    ) -> Result<ModelInstanceStatus> {
         let c = self.inner.client()?;
         let known = c.models()?;
-        if !known.iter().any(|m| m.id == id) {
+        let Some(current) = known.iter().find(|m| m.id == id) else {
             return Err(CoreError::UnknownModel(id.to_string()));
-        }
-        if let Some(m) = known.iter().find(|m| m.id == id) {
-            if !m.is_loaded() {
-                c.load(id)?;
-            }
+        };
+        // The router rejects `/models/load` while the model is loading, loaded or
+        // sleeping ("model is already running"); e.g. a `load-on-startup` model.
+        if !is_running_status(&current.status) {
+            c.load(id)?;
         }
         self.inner.log(LogLine::app(format!("loading model {id}")));
         let start = Instant::now();
@@ -516,11 +567,16 @@ impl EngineManager {
             let Some(m) = models.iter().find(|m| m.id == id) else {
                 return Err(CoreError::UnknownModel(id.to_string()));
             };
-            if m.is_loaded() {
+            if is_usable_status(&m.status) {
                 break;
             }
             if m.failed && m.status == "unloaded" {
                 return Err(CoreError::engine(format!("model {id} failed to load (exit code {:?})", m.exit_code)));
+            }
+            if cancel.is_some_and(|f| f.load(Ordering::Relaxed)) {
+                let _ = c.unload(id);
+                self.inner.log(LogLine::app(format!("load of {id} cancelled")));
+                return Err(CoreError::Cancelled);
             }
             if start.elapsed() > timeout {
                 return Err(CoreError::Timeout(format!("loading {id}")));
@@ -549,7 +605,7 @@ impl EngineManager {
     }
 
     /// Unloads a model and waits (up to 60 s) until the router no longer
-    /// reports it as loaded — the router stops the instance asynchronously
+    /// reports it as running — the router stops the instance asynchronously
     /// (`stop-timeout`, default 10 s, then SIGKILL).
     pub fn unload_model(&self, id: &str) -> Result<()> {
         let c = self.inner.client()?;
@@ -557,8 +613,7 @@ impl EngineManager {
         let start = Instant::now();
         let models = loop {
             let models = c.models()?;
-            let still =
-                models.iter().find(|m| m.id == id).is_some_and(|m| m.status == "loaded" || m.status == "sleeping");
+            let still = models.iter().find(|m| m.id == id).is_some_and(|m| is_running_status(&m.status));
             if !still || start.elapsed() > Duration::from_secs(60) {
                 break models;
             }
@@ -659,10 +714,12 @@ fn launch(inner: &Arc<Inner>, cfg: &EngineConfig, generation: u64) -> Result<()>
     Ok(())
 }
 
-/// Watches the child; restarts with exponential back-off after a crash.
+/// Watches the child; after a crash, relaunches with exponential back-off.
+/// Every attempt — including one whose relaunch fails to come up — counts,
+/// and `max_restarts` exhausted attempts end in `Degraded`.
 fn spawn_monitor(inner: &Arc<Inner>, generation: u64) {
     let weak = Arc::downgrade(inner);
-    let _ = std::thread::Builder::new().name("doculens-engine-monitor".into()).spawn(move || loop {
+    let _ = std::thread::Builder::new().name("doculens-engine-monitor".into()).spawn(move || 'monitor: loop {
         std::thread::sleep(Duration::from_millis(300));
         let Some(inner) = weak.upgrade() else { break };
         if inner.stopping.load(Ordering::SeqCst) || inner.generation.load(Ordering::SeqCst) != generation {
@@ -670,10 +727,7 @@ fn spawn_monitor(inner: &Arc<Inner>, generation: u64) {
         }
         let exited = {
             let mut guard = inner.child.lock().unwrap_or_else(|e| e.into_inner());
-            match guard.as_mut() {
-                Some(c) => c.try_wait().map(|st| (st.code(), c.started_at.elapsed())),
-                None => None,
-            }
+            guard.as_mut().and_then(|c| c.try_wait().map(|st| (st.code(), c.started_at.elapsed())))
         };
         let Some((code, uptime)) = exited else { continue };
         let Some(cfg) = inner.cfg.lock().ok().and_then(|c| c.clone()) else { break };
@@ -682,42 +736,57 @@ fn spawn_monitor(inner: &Arc<Inner>, generation: u64) {
         if uptime >= STABLE_UPTIME {
             inner.restart_attempts.store(0, Ordering::SeqCst);
         }
-        let attempt = inner.restart_attempts.fetch_add(1, Ordering::SeqCst) + 1;
         inner.log(LogLine::app(format!("engine exited unexpectedly (code {code:?}) after {} s", uptime.as_secs())));
-        if attempt > cfg.max_restarts {
+        let mut last_code = code;
+        loop {
+            let attempt = inner.restart_attempts.fetch_add(1, Ordering::SeqCst) + 1;
+            if attempt > cfg.max_restarts {
+                inner.update_status(|s| {
+                    s.state = EngineState::Degraded {
+                        reason: format!("crashed {} times; last exit code {last_code:?}", attempt - 1),
+                    };
+                    s.pid = None;
+                    s.last_exit_code = last_code;
+                    s.last_error = Some("engine_crash_loop".into());
+                    s.models.clear();
+                });
+                break 'monitor;
+            }
+            let delay = cfg.restart_backoff * 2u32.pow(attempt - 1);
             inner.update_status(|s| {
-                s.state =
-                    EngineState::Degraded { reason: format!("crashed {} times; last exit code {code:?}", attempt - 1) };
+                s.state = EngineState::Restarting { attempt, delay_ms: delay.as_millis() as u64 };
                 s.pid = None;
-                s.last_exit_code = code;
-                s.last_error = Some("engine_crash_loop".into());
+                s.last_exit_code = last_code;
                 s.models.clear();
             });
-            break;
-        }
-        let delay = cfg.restart_backoff * 2u32.pow(attempt - 1);
-        inner.update_status(|s| {
-            s.state = EngineState::Restarting { attempt, delay_ms: delay.as_millis() as u64 };
-            s.pid = None;
-            s.last_exit_code = code;
-            s.models.clear();
-        });
-        std::thread::sleep(delay);
-        if inner.stopping.load(Ordering::SeqCst) || inner.generation.load(Ordering::SeqCst) != generation {
-            break;
-        }
-        match launch(&inner, &cfg, generation) {
-            Ok(()) => {
-                let active = inner.status().active_model;
-                inner.update_status(|s| s.restarts += 1);
-                // Re-load the model that was active before the crash.
-                if let Some(id) = active {
-                    if let Ok(c) = inner.client() {
-                        let _ = c.load(&id);
+            std::thread::sleep(delay);
+            if inner.stopping.load(Ordering::SeqCst) || inner.generation.load(Ordering::SeqCst) != generation {
+                break 'monitor;
+            }
+            let result = {
+                let _guard = inner.lifecycle.lock().unwrap_or_else(|e| e.into_inner());
+                if inner.stopping.load(Ordering::SeqCst) || inner.generation.load(Ordering::SeqCst) != generation {
+                    break 'monitor;
+                }
+                launch(&inner, &cfg, generation)
+            };
+            match result {
+                Ok(()) => {
+                    let active = inner.status().active_model;
+                    inner.update_status(|s| s.restarts += 1);
+                    // Re-load the model that was active before the crash.
+                    if let Some(id) = active {
+                        if let Ok(c) = inner.client() {
+                            let _ = c.load(&id);
+                        }
                     }
+                    continue 'monitor;
+                }
+                Err(e) => {
+                    inner.log(LogLine::app(format!("restart attempt {attempt} failed: {e}")));
+                    last_code = inner.status().last_exit_code;
                 }
             }
-            Err(e) => inner.log(LogLine::app(format!("restart attempt {attempt} failed: {e}"))),
         }
     });
 }
@@ -794,11 +863,17 @@ mod tests {
         assert!(first.loaded_at.is_some());
         let again = ModelInstanceStatus::from_router(&rm, 50, Some(&first));
         assert_eq!(again.loaded_at, first.loaded_at);
+        let sleeping =
+            RouterModel::from_json(&serde_json::json!({ "id": "q", "status": { "value": "sleeping" } })).unwrap();
+        let s = ModelInstanceStatus::from_router(&sleeping, 50, Some(&first));
+        assert!(s.is_usable() && !s.is_loaded() && s.is_running());
+        assert_eq!(s.loaded_at, first.loaded_at);
         let unloaded =
             RouterModel::from_json(&serde_json::json!({ "id": "q", "status": { "value": "unloaded" } })).unwrap();
         let u = ModelInstanceStatus::from_router(&unloaded, 50, Some(&first));
         assert!(u.loaded_at.is_none());
         assert_eq!(u.memory_effective_bytes, None);
+        assert!(is_running_status("loading") && !is_usable_status("loading"));
     }
 
     #[test]

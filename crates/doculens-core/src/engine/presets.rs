@@ -165,7 +165,9 @@ fn model_options(entry: Option<&ModelEntry>, d: &DiscoveredModel, ctx: &PresetCo
 
     if role == ModelRole::Embedding {
         push(&mut opts, "embeddings", "true".into());
-        push(&mut opts, "pooling", defaults.get("pooling").and_then(|v| v.as_str()).unwrap_or("cls").to_string());
+        let pooling = defaults.get("pooling").and_then(|v| v.as_str()).unwrap_or("cls");
+        let pooling = if ["none", "mean", "cls", "last", "rank"].contains(&pooling) { pooling } else { "cls" };
+        push(&mut opts, "pooling", pooling.to_string());
         let c = num(&defaults, "ctx").unwrap_or(2_048).min(if ctx_max > 0 { ctx_max } else { u64::MAX });
         push(&mut opts, "ctx-size", c.to_string());
         push(&mut opts, "batch-size", c.max(512).to_string());
@@ -259,10 +261,8 @@ pub fn build_presets(registry: &Registry, discovered: &[DiscoveredModel], ctx: &
             build.skipped.push((id, "no_weights".into()));
             continue;
         };
-        if !ini_section_ok(&id)
-            || !ini_value_ok(&weights.to_string_lossy())
-            || d.mmproj_path().is_some_and(|p| !ini_value_ok(&p.to_string_lossy()))
-        {
+        let path_ok = |p: &Path| p.to_str().is_some_and(ini_value_ok);
+        if !ini_section_ok(&id) || !path_ok(weights) || d.mmproj_path().is_some_and(|p| !path_ok(p)) {
             build.skipped.push((id, "path_not_representable".into()));
             continue;
         }
@@ -271,7 +271,9 @@ pub fn build_presets(registry: &Registry, discovered: &[DiscoveredModel], ctx: &
             continue;
         }
         let entry = registry.get(&id);
-        let options = model_options(entry, d, ctx);
+        // Every value comes from registry defaults or `model.json`; the INI has no escaping.
+        let options: Vec<(String, String)> =
+            model_options(entry, d, ctx).into_iter().filter(|(_, v)| ini_value_ok(v)).collect();
         if let Some(mm) = &d.mmproj {
             build.mmproj_sizes.insert(id.clone(), mm.size);
         }

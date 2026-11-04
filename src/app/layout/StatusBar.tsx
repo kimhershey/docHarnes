@@ -33,7 +33,8 @@ export function engineIndicator(
   const loading = status?.models.some((m) => m.status === "loading") ?? false;
   const loaded = status?.models.some((m) => m.status === "loaded" || m.status === "sleeping") ?? false;
   if (state === "degraded") return { key: "engine_degraded", color: "bg-danger" };
-  if (state === "starting" || state === "stopping") return { key: "engine_starting", color: "bg-warn" };
+  if (state === "starting") return { key: "engine_starting", color: "bg-warn" };
+  if (state === "stopping") return { key: "engine_stopping", color: "bg-warn" };
   if (state === "restarting") return { key: "engine_restarting", color: "bg-warn" };
   if (state === "running") {
     if (loading) return { key: "engine_loading", color: "bg-warn" };

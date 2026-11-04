@@ -306,7 +306,7 @@ pub fn registry_required_files_text(state: State<'_, AppState>, model_id: String
 
 #[tauri::command(async)]
 pub fn models_scan(app: AppHandle) -> ModelIndex {
-    engine_bridge::rescan(&app)
+    engine_bridge::rescan_and_sync(&app)
 }
 
 #[tauri::command]
@@ -335,11 +335,16 @@ pub fn models_import_plan(state: State<'_, AppState>, args: ImportArgs) -> UiRes
 }
 
 #[tauri::command(async)]
-pub fn models_import_run(app: AppHandle, plan: ImportPlan) -> UiResult<String> {
+/// The plan is recomputed here from the arguments (the webview-supplied plan
+/// is display-only), so destination names and folders are always derived by
+/// the core from validated GGUF headers.
+pub fn models_import_run(app: AppHandle, args: ImportArgs) -> UiResult<String> {
     let state = app.state::<AppState>();
     let models_dir = state.workspace_models_dir().ok_or(CoreError::NoWorkspace)?;
-    if !plan.target_folder.starts_with(&models_dir) {
-        return Err(UiError::invalid("import target must be inside the workspace models folder"));
+    let sources: Vec<PathBuf> = args.paths.iter().map(|p| normalize_user_path(p)).collect();
+    let plan: ImportPlan = modelstore::plan_import(&models_dir, &sources, args.mode, args.folder_name.as_deref())?;
+    if plan.already_present {
+        return Err(UiError::invalid("the same files are already in the target folder"));
     }
     Ok(engine_bridge::import_job(&app, plan))
 }
@@ -360,17 +365,14 @@ pub fn models_delete(app: AppHandle, state: State<'_, AppState>, folder: String)
     let index = state.model_index();
     let folder_path = normalize_user_path(&folder);
     if let Some(d) = index.discovered.iter().find(|d| d.folder == folder_path || d.folder_name == folder) {
-        if state.engine.is_running() && state.engine.status().model(&d.id).is_some_and(|m| m.is_loaded()) {
+        if state.engine.is_running() && state.engine.status().model(&d.id).is_some_and(|m| m.is_running()) {
             state.engine.unload_model(&d.id)?;
         }
         modelstore::delete_model_folder(&models_dir, &d.folder)?;
     } else {
         modelstore::delete_model_folder(&models_dir, &folder_path)?;
     }
-    engine_bridge::rescan(&app);
-    if state.engine.is_running() {
-        let _ = engine_bridge::write_presets(&state).and_then(|_| state.engine.refresh_models(true));
-    }
+    engine_bridge::rescan_and_sync(&app);
     Ok(())
 }
 
@@ -394,12 +396,8 @@ pub fn engine_stop(state: State<'_, AppState>) -> UiResult<()> {
 }
 
 #[tauri::command(async)]
-pub fn engine_restart(app: AppHandle, state: State<'_, AppState>) -> UiResult<EngineStatus> {
-    let restarts = state.engine.status().restarts;
-    state.engine.stop()?;
-    let st = engine_bridge::start_engine(&app)?;
-    let _ = restarts;
-    Ok(st)
+pub fn engine_restart(app: AppHandle) -> UiResult<EngineStatus> {
+    Ok(engine_bridge::restart_engine(&app)?)
 }
 
 /// Loads a model as a background job (starts the engine first when stopped).
@@ -412,6 +410,9 @@ pub fn engine_load_model(
 ) -> UiResult<String> {
     if !state.engine.is_running() {
         engine_bridge::start_engine(&app)?;
+    } else if state.engine.status().model(&model_id).is_none() {
+        // A model that appeared after the last preset generation.
+        engine_bridge::regenerate_and_reload(&state)?;
     }
     Ok(engine_bridge::load_model_job(&app, &model_id, warmup))
 }
@@ -424,9 +425,10 @@ pub fn engine_unload_model(state: State<'_, AppState>, model_id: String) -> UiRe
 #[tauri::command(async)]
 pub fn engine_refresh_models(state: State<'_, AppState>, reload: Option<bool>) -> UiResult<Vec<ModelInstanceStatus>> {
     if reload.unwrap_or(false) {
-        engine_bridge::write_presets(&state)?;
+        engine_bridge::regenerate_and_reload(&state)?;
+        return Ok(state.engine.status().models);
     }
-    Ok(state.engine.refresh_models(reload.unwrap_or(false))?)
+    Ok(state.engine.refresh_models(false)?)
 }
 
 #[derive(Debug, Clone, Serialize)]

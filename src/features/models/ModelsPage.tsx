@@ -1,5 +1,5 @@
 import { Download, FolderInput, FolderOpen, Hash, ListChecks, RefreshCw, Trash2, Upload, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +25,21 @@ import { ImportDialog } from "./ImportDialog";
 import { RequiredFilesDialog } from "./RequiredFilesDialog";
 
 const PROFILES: Profile[] = ["accuracy", "balanced", "speed", "fine_print"];
+
+function useOnline(): boolean {
+  const [online, setOnline] = useState(typeof navigator === "undefined" ? false : navigator.onLine);
+  useEffect(() => {
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => {
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", off);
+    };
+  }, []);
+  return online;
+}
 const BACKENDS: BackendPreference[] = ["auto", "cuda", "vulkan", "cpu"];
 
 function healthVariant(h: ModelHealth | null | undefined): "ok" | "warn" | "danger" | "muted" | "info" {
@@ -46,12 +61,15 @@ function healthVariant(h: ModelHealth | null | undefined): "ok" | "warn" | "dang
 function HealthBadge({ health }: { health: ModelHealth | null | undefined }) {
   const { t } = useTranslation();
   if (!health) return <Badge variant="muted">{t("common.not_installed")}</Badge>;
-  const extra = health.kind === "incomplete" ? ` (${health.missing.length})` : health.kind === "unsupported" || health.kind === "invalid" ? `: ${health.reason}` : "";
+  const reason = health.kind === "incomplete" ? health.missing.join(", ") : health.kind === "unsupported" || health.kind === "invalid" ? health.reason : null;
   return (
-    <Badge variant={healthVariant(health)} title={extra}>
-      {t(`models.health.${health.kind}`)}
-      {health.kind === "incomplete" ? extra : ""}
-    </Badge>
+    <div className="flex flex-col gap-0.5">
+      <Badge variant={healthVariant(health)}>
+        {t(`models.health.${health.kind}`)}
+        {health.kind === "incomplete" ? ` (${health.missing.length})` : ""}
+      </Badge>
+      {reason && <span className="max-w-56 break-all text-xs text-fg-muted selectable">{reason}</span>}
+    </div>
   );
 }
 
@@ -72,13 +90,12 @@ export function ModelsPage() {
   const [filesFor, setFilesFor] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const online = typeof navigator !== "undefined" ? navigator.onLine : false;
+  const online = useOnline();
 
   if (!settings) return null;
   const tierMode = settings.models.tier_mode;
   const manualTier = settings.models.manual_tier ?? assessment?.tier.tier ?? "vram_8gb";
   const vlms = registry?.models.filter((m) => m.role === "vlm" || (m.user_added && m.role === "llm")) ?? [];
-  const engineRunning = engineStatus?.state.kind === "running";
 
   const guard = async (key: string, p: () => Promise<unknown>, okMessage?: string) => {
     setBusy(key);
@@ -116,7 +133,7 @@ export function ModelsPage() {
         <div className="flex flex-wrap gap-2">
           <Button variant="secondary" size="sm" disabled={!workspace} onClick={() => setImportOpen(true)} data-testid="models-import">
             <FolderInput />
-            {t("models.import")}
+            {t("models.import.title")}
           </Button>
           <Button variant="secondary" size="sm" disabled={!workspace} onClick={() => workspace && void revealPath(workspace.models_dir)}>
             <FolderOpen />
@@ -148,10 +165,10 @@ export function ModelsPage() {
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
-              <Label>{t("models.tier_mode")}</Label>
+              <Label htmlFor="tier-mode">{t("models.tier_mode")}</Label>
               <div className="flex gap-2">
                 <Select value={tierMode} onValueChange={(v) => void guard("tier", () => setTierMode(v as "auto" | "manual", v === "manual" ? (manualTier as Tier) : null))}>
-                  <SelectTrigger className="w-56" data-testid="tier-mode">
+                  <SelectTrigger id="tier-mode" className="w-56" data-testid="tier-mode">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -161,7 +178,7 @@ export function ModelsPage() {
                 </Select>
                 {tierMode === "manual" && (
                   <Select value={manualTier} onValueChange={(v) => void guard("tier", () => setTierMode("manual", v as Tier))}>
-                    <SelectTrigger className="w-40" data-testid="manual-tier">
+                    <SelectTrigger className="w-40" data-testid="manual-tier" aria-label={t("models.tier_manual")}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -177,9 +194,9 @@ export function ModelsPage() {
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <Label>{t("models.active_model")}</Label>
+              <Label htmlFor="active-model">{t("models.active_model")}</Label>
               <Select value={settings.models.active_model} onValueChange={(v) => void guard("active", () => setActiveModel(v))}>
-                <SelectTrigger data-testid="active-model">
+                <SelectTrigger id="active-model" data-testid="active-model">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -225,9 +242,9 @@ export function ModelsPage() {
 
             <div className="grid grid-cols-2 gap-3">
               <div className="flex flex-col gap-1.5">
-                <Label>{t("models.profile")}</Label>
+                <Label htmlFor="model-profile">{t("models.profile")}</Label>
                 <Select value={settings.models.profile} onValueChange={(v) => void guard("profile", () => update((s) => void (s.models.profile = v as Profile)))}>
-                  <SelectTrigger>
+                  <SelectTrigger id="model-profile">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -240,9 +257,9 @@ export function ModelsPage() {
                 </Select>
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label>{t("models.backend")}</Label>
+                <Label htmlFor="model-backend">{t("models.backend")}</Label>
                 <Select value={settings.models.backend} onValueChange={(v) => void guard("backend", () => update((s) => void (s.models.backend = v as BackendPreference)))}>
-                  <SelectTrigger>
+                  <SelectTrigger id="model-backend">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -334,7 +351,7 @@ export function ModelsPage() {
                         {inst ? (
                           <div className="flex flex-col gap-0.5">
                             <Badge variant={loaded ? "ok" : inst.status === "loading" ? "warn" : "muted"} data-testid={`instance-${d.id}`}>
-                              {t(`models.instance.${inst.failed && inst.status === "unloaded" ? "failed" : inst.status}`)}
+                              {t(`models.instance.${inst.failed && inst.status === "unloaded" ? "failed" : inst.status}`, { defaultValue: inst.status })}
                               {inst.status === "loading" && inst.progress != null ? ` ${Math.round(inst.progress * 100)}%` : ""}
                             </Badge>
                             {loaded && inst.memory_effective_bytes != null && <span className="text-xs text-fg-muted">{formatBytes(inst.memory_effective_bytes)}</span>}
@@ -469,7 +486,6 @@ export function ModelsPage() {
                             onClick={() => (instance(m.id)?.status === "loaded" ? void guard(`unload-${m.id}`, () => unloadModel(m.id)) : void guard(`load-${m.id}`, () => loadModel(m.id), t("models.load_started")))}
                           >
                             {instance(m.id)?.status === "loaded" ? t("models.actions.unload") : t("models.actions.load")}
-                            {engineRunning ? "" : ""}
                           </Button>
                         )}
                         {(m.role === "vlm" || (m.user_added && m.role === "llm")) && !isActive && (

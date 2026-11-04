@@ -97,7 +97,8 @@
     "engine_ready": "Ready",
     "engine_idle": "Idle (no model loaded)",
     "engine_degraded": "Engine error",
-    "vram_used": "VRAM used"
+    "vram_used": "VRAM used",
+    "engine_stopping": "Stopping"
   },
   "theme": {
     "light": "Light",
@@ -192,7 +193,8 @@
       "download_action": "Start download",
       "import_action": "Import GGUF…",
       "installed": "Installed — you can start right away."
-    }
+    },
+    "steps_label": "Setup steps"
   },
   "hw": {
     "warn": {
@@ -460,14 +462,16 @@
       "devices": "List devices",
       "devices_title": "Devices reported by the engine (--list-devices)",
       "no_logs": "No log lines yet.",
-      "presets_title": "presets.ini preview"
+      "presets_title": "presets.ini preview",
+      "apply_on_restart": "Applied after the engine restarts."
     },
     "test": {
       "title": "Model test",
       "prompt": "Prompt (empty = default sentence)",
       "run": "Run",
       "result": "Response",
-      "stats": "{{tokens}} output tokens · {{prompt}} prompt tokens · {{ms}} ms · {{tps}} tok/s"
+      "stats": "{{tokens}} output tokens · {{prompt}} prompt tokens · {{ms}} ms · {{tps}} tok/s",
+      "empty": "(empty response)"
     }
   },
   "settings": {

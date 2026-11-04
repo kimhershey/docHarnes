@@ -173,6 +173,9 @@ function loadSettings(): AppSettings {
 
 function saveSettings(s: AppSettings): AppSettings {
   s.ui.scale_percent = Math.min(150, Math.max(90, s.ui.scale_percent));
+  // mirrors AppSettings::normalize()
+  s.models.resident_models_max = Math.min(4, Math.max(1, Math.round(s.models.resident_models_max) || 1));
+  s.models.sleep_idle_seconds = Math.max(0, Math.round(s.models.sleep_idle_seconds) || 0);
   write(SETTINGS_KEY, s);
   return s;
 }
@@ -722,9 +725,10 @@ function setModelSilently(id: string): ModelInstanceStatus {
   };
 }
 
-function engineStop(): void {
+async function engineStop(): Promise<void> {
   if (engine.state.kind === "stopped") return;
   setEngine({ state: { kind: "stopping" } });
+  await new Promise((r) => setTimeout(r, tick(200)));
   log("engine stopped (pid 4242, exit Some(0))");
   setEngine({ state: { kind: "stopped" }, pid: null, port: null, models: [], active_model: null });
 }
@@ -764,14 +768,19 @@ function afterWorkspaceChanged(): void {
   const s = loadSettings();
   if (current && s.models.auto_start_engine) {
     void (async () => {
-      await engineStart();
+      if (engine.state.kind !== "running") {
+        const job = createJob("engine_start", "engine");
+        updateJob(job.id, { detail: "starting" });
+        await engineStart();
+        finishJob(job.id, { ok: true, detail: `running on port ${engine.port}` });
+      }
       const a = assess();
       if (a.active_model && a.active_model_installed?.installed) {
         await loadModelJob(a.active_model.id, s.models.warmup_after_load);
       }
     })();
   } else if (!current) {
-    engineStop();
+    void engineStop();
   }
 }
 
@@ -912,6 +921,8 @@ function deleteModel(folder: string): void {
   }
   saveModels(list.filter((x) => x.folder_name !== m.folder_name));
   setEngine({ models: engine.models.filter((x) => x.id !== m.id) });
+  // cancel a running load job for the deleted model
+  for (const j of jobs.filter((j) => j.kind === "model_load" && j.subject === m.id && (j.state === "queued" || j.state === "running"))) cancelled.add(j.id);
   emit(EVENTS.modelsChanged, modelIndex());
 }
 
@@ -1215,8 +1226,12 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       const { paths, mode, folder_name } = a.args as { paths: string[]; mode: ImportMode; folder_name: string | null };
       return r(importPlan(paths, mode ?? "copy", folder_name ?? null));
     }
-    case "models_import_run":
-      return r(importRun(a.plan as ImportPlan));
+    case "models_import_run": {
+      const { paths, mode, folder_name } = a.args as { paths: string[]; mode: ImportMode; folder_name: string | null };
+      const plan = importPlan(paths, mode ?? "copy", folder_name ?? null);
+      if (plan.already_present) throw err("invalid", "the same files are already in the target folder");
+      return r(importRun(plan));
+    }
     case "models_download":
       return r(downloadJob(String(a.modelId)));
     case "models_hash":
@@ -1229,11 +1244,11 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "engine_start":
       return r(await engineStart());
     case "engine_stop":
-      engineStop();
+      await engineStop();
       return r(undefined);
     case "engine_restart": {
       const restarts = engine.restarts;
-      engineStop();
+      await engineStop();
       const st = await engineStart();
       setEngine({ restarts });
       return r(st);

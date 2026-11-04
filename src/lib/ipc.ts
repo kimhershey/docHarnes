@@ -105,7 +105,8 @@ export const api = {
   modelsList: () => invoke<ModelIndex>("models_list"),
   modelsImportPlan: (paths: string[], mode: ImportMode, folderName: string | null = null) =>
     invoke<ImportPlan>("models_import_plan", { args: { paths, mode, folder_name: folderName } }),
-  modelsImportRun: (plan: ImportPlan) => invoke<string>("models_import_run", { plan }),
+  modelsImportRun: (paths: string[], mode: ImportMode, folderName: string | null = null) =>
+    invoke<string>("models_import_run", { args: { paths, mode, folder_name: folderName } }),
   modelsDownload: (modelId: string) => invoke<string>("models_download", { modelId }),
   modelsHash: (folder: string) => invoke<string>("models_hash", { folder }),
   modelsDelete: (folder: string) => invoke<void>("models_delete", { folder }),

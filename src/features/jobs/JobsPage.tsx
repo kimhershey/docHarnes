@@ -7,9 +7,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { describeError } from "@/lib/errors";
 import { isJobFinished, type Job } from "@/lib/types";
 import { formatBytes, formatDate } from "@/lib/utils";
 import { useJobsStore } from "@/stores/jobs";
+import { useUiStore } from "@/stores/ui";
+
+/** Engine start cannot be interrupted (P1); every other kind unloads / discards partial files on cancel. */
+const CANCELLABLE: Job["kind"][] = ["model_load", "model_import", "model_download", "model_hash"];
 
 function stateVariant(j: Job): "ok" | "warn" | "danger" | "muted" | "info" {
   switch (j.state) {
@@ -30,7 +35,7 @@ function JobRow({ job, onCancel }: { job: Job; onCancel: (id: string) => void })
   const { t, i18n } = useTranslation();
   const finished = isJobFinished(job);
   return (
-    <li className="flex flex-col gap-2 py-3" data-testid={`job-${job.kind}-${job.subject}`}>
+    <li className="flex flex-col gap-2 py-3" data-testid={`job-${job.id}`} data-job-kind={job.kind} data-job-subject={job.subject}>
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant="outline">{t(`jobs.kind.${job.kind}`)}</Badge>
         <span className="font-medium selectable">{job.subject}</span>
@@ -40,7 +45,7 @@ function JobRow({ job, onCancel }: { job: Job; onCancel: (id: string) => void })
         <span className="text-xs text-fg-subtle">{formatDate(job.created_at, i18n.language)}</span>
         <span className="ml-auto flex items-center gap-2">
           {job.progress != null && !finished && <span className="text-xs tabular-nums text-fg-muted">{Math.round(job.progress * 100)}%</span>}
-          {!finished && (
+          {!finished && CANCELLABLE.includes(job.kind) && (
             <Button variant="ghost" size="sm" disabled={job.cancel_requested} onClick={() => onCancel(job.id)} data-testid="job-cancel">
               <X />
               {t("jobs.cancel")}
@@ -65,9 +70,12 @@ function JobRow({ job, onCancel }: { job: Job; onCancel: (id: string) => void })
 export function JobsPage() {
   const { t } = useTranslation();
   const jobs = useJobsStore((s) => s.jobs);
-  const cancel = useJobsStore((s) => s.cancel);
-  const clearFinished = useJobsStore((s) => s.clearFinished);
+  const cancelJob = useJobsStore((s) => s.cancel);
+  const clearFinishedJobs = useJobsStore((s) => s.clearFinished);
+  const toast = useUiStore((s) => s.toast);
   const [tab, setTab] = useState("active");
+  const cancel = (id: string) => cancelJob(id).catch((e) => toast(describeError(e, t), "danger"));
+  const clearFinished = () => clearFinishedJobs().catch((e) => toast(describeError(e, t), "danger"));
   const active = jobs.filter((j) => !isJobFinished(j));
   const finished = jobs.filter(isJobFinished).slice().reverse();
 
