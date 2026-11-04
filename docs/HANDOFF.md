@@ -119,9 +119,15 @@
   (`engine ready`) → 활성 모델 `load-on-startup` 경로로 로드 → 워밍업 완료, 폴더 감시 루프·IPC 오류 없음.
   이 확인에서 두 가지 결함을 잡았다: `PR_SET_PDEATHSIG`가 스폰 스레드 종료 시 엔진을 SIGKILL 하던 문제,
   엔진의 모델 mmap(inotify OPEN 이벤트)이 2초마다 재검색을 유발하던 문제.
-- CI: `engine-real` 작업이 핀 고정 릴리스(`engines/manifest.json`)의 ubuntu 빌드를 받아 같은 테스트를
-  실행한다(자산 패턴 `*ubuntu*x64*` 확인됨, 차단 작업). Windows 작업은 `cargo test -p doculens-core`로
-  프로세스 수준 테스트까지 실행하므로 Job Object 경로가 매 푸시마다 검증된다.
+- CI: `engine-real` 작업은 핀 고정 태그(`engines/manifest.json`)의 llama.cpp 소스를 받아 **CPU 전용
+  정적 빌드**(`GGML_NATIVE=OFF`, `GGML_BACKEND_DL=OFF`)로 `llama-server`를 만들고 태그별로 캐시한 뒤
+  같은 테스트를 실행한다(차단 작업). 릴리스 자산을 쓰지 않는 이유: b12066 릴리스의 Linux 패키지는
+  CUDA·OpenVINO·ROCm뿐이고, 느슨한 패턴으로 받은 OpenVINO 패키지를 같은 폴더에 풀자 ggml 동적 로더가
+  `libggml-openvino.so`를 불러와 `OPENVINO0` 장치로 그래프를 돌리다 Qwen3.5의 GDN/KV 연산에서
+  `Compute error`를 냈다(**한 폴더에는 한 백엔드 계열만** — `engines/README.md`). 동적 CPU 변형 빌드
+  (`GGML_CPU_ALL_VARIANTS`)는 기본 선택과 `haswell` 강제 모두 로컬 통과. Windows 작업은
+  `cargo test -p doculens-core`로 프로세스 수준 테스트까지 실행하므로 Job Object 경로가 매 푸시마다
+  검증된다(크래시 재기동 후 SSE 재연결 시 `/models` 재동기화로 Windows 경합 해결).
 
 ## P1 단계 말 리뷰 반영 (2026-11-04)
 

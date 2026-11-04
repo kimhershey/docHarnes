@@ -23,6 +23,7 @@
 
 - [ ] `node scripts/fetch-engine.mjs --tag b12066 --packs cpu,vulkan --pin` 으로 공식 팩을 받고
       `engines/manifest.json` 에 SHA-256 이 기록되는가 (자산 이름 패턴 `bin-win-cpu-x64` / `bin-win-vulkan-x64` 확인)
+- [ ] 팩 폴더마다 백엔드 계열이 하나뿐인가 (`engines\b12066\cpu\`에 `ggml-vulkan.dll`/`ggml-cuda.dll` 등이 섞여 있지 않은가 — 섞이면 다른 백엔드가 그래프를 가로채 `Compute error`가 난다)
 - [ ] 모델 관리자 > 엔진 카드에 실행 파일·버전(b12066)·백엔드(cu121/cu129/vulkan/cpu)·설치된 팩이 표시되는가
 - [ ] "장치 조회"가 `CUDA0: … (8188 MiB, 7126 MiB free)` 를 보여 주고, 하드웨어 패널 새로고침 후 티어 근거가 "엔진 보고 가용 VRAM 기준"으로 바뀌는가
 - [ ] 실제 Qwen3.5-4B GGUF + mmproj 를 `.doculens\models\<폴더>\` 에 복사하면 2초 안에 "준비됨"으로 감지되는가 (복사 중에는 "복사 중")
