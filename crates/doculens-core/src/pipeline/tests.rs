@@ -137,6 +137,7 @@ impl World {
                 height_px: h,
                 text: text.map(str::to_string),
                 dpi: Some(200),
+                is_blank: has_image.then_some(false),
                 ..Default::default()
             });
         }
@@ -365,6 +366,33 @@ fn rotation_is_applied_and_manual_type_wins() {
     let doc = w.doc("p1");
     assert_eq!(doc.doc_type.as_deref(), Some("receipt"));
     assert_eq!(doc.doc_type_source.as_deref(), Some("manual"));
+}
+
+#[test]
+fn blank_verdict_needs_the_pixel_heuristic() {
+    // A garbage model answering is_blank=true must not blank out a page the renderer saw ink on.
+    let w = World::new();
+    w.add_doc("b1", "receipt.pdf", SourceKind::Pdf, &[None]);
+    w.chat.push("classify", json!({ "doc_type": "receipt", "rotation": 0, "is_blank": true, "language": "ko" }));
+    w.chat.push_ocr(RECEIPT_OCR);
+    w.chat.push("kie_receipt", receipt_kie());
+    let deps = w.deps(None);
+    let report =
+        run::process(&deps, &ProcessRequest { document_ids: vec!["b1".into()], ..Default::default() }, &mut |_| {})
+            .unwrap();
+    assert_eq!(report.failed, Vec::<(String, String)>::new());
+    assert_eq!((report.ocr_pages, report.extracted), (1, 1));
+    assert_eq!(w.pages("b1")[0].is_blank, Some(false));
+    // A page the renderer could not judge takes the model's word and is skipped gracefully.
+    w.add_doc("b2", "scan.pdf", SourceKind::Pdf, &[None]);
+    w.db.with(|c| c.execute("UPDATE pages SET is_blank = NULL WHERE document_id = 'b2'", [])).unwrap();
+    w.chat.push("classify", json!({ "doc_type": "receipt", "rotation": 0, "is_blank": true, "language": "ko" }));
+    let report =
+        run::process(&deps, &ProcessRequest { document_ids: vec!["b2".into()], ..Default::default() }, &mut |_| {})
+            .unwrap();
+    assert_eq!(report.failed, Vec::<(String, String)>::new());
+    assert_eq!((report.ocr_pages, report.extracted), (0, 0));
+    assert!(w.doc("b2").pipeline_error.is_none());
 }
 
 #[test]

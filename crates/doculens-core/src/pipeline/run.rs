@@ -200,6 +200,11 @@ fn process_document(
                     Err(e) => log::warn!("rotation of {} p{page_no} failed: {e}", doc.id),
                 }
             }
+            // The render-time pixel heuristic decides blankness; the model can only
+            // confirm it (a weak or garbage model must never blank out real pages).
+            if class.is_blank && pages[idx].is_blank == Some(false) {
+                class.is_blank = false;
+            }
             db.with(|c| repo::set_page_class(c, &doc.id, pages[idx].page_no, &class))?;
             if class.is_blank {
                 pages[idx].is_blank = Some(true);
@@ -287,6 +292,11 @@ fn process_document(
     }
 
     // ---- 3. extraction -----------------------------------------------------
+    if extraction_pages(&pages, deps.settings.kie_max_pages as usize).is_empty() {
+        // Blank-only / unrendered documents have nothing to extract; not an error.
+        log::info!("pipeline {}: no usable pages, extraction skipped", doc.id);
+        return Ok(out);
+    }
     progress("extract", None);
     let schema = resolve_schema(db, &doc, &req.schema)?;
     let run_id = crate::documents::new_id();
