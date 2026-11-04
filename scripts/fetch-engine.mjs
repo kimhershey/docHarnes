@@ -71,7 +71,10 @@ for (const pack of packs) {
     console.log(`skip ${pack}: self-built pack (see engines/README.md)`);
     continue;
   }
-  const asset = release.assets.find((a) => entry.match.some((m) => a.name.includes(m)) && !a.name.includes("cudart") && !a.name.includes("arm64"));
+  const excluded = ["cudart", "arm64", ...(entry.exclude ?? [])];
+  // A pack directory must hold exactly one backend family: ggml loads every
+  // ggml-*.dll/.so it finds next to llama-server.
+  const asset = release.assets.find((a) => entry.match.some((m) => a.name.includes(m)) && !excluded.some((x) => a.name.toLowerCase().includes(x)));
   if (!asset) {
     console.error(`no asset for ${pack} (patterns ${entry.match.join(", ")}); available: ${release.assets.map((a) => a.name).join(", ")}`);
     process.exitCode = 1;

@@ -64,3 +64,10 @@ never on the system PATH). `cu129` is the same with the 12.9 toolkit and
 
 The model manager shows the resolved binary, its build number, the installed
 packs and the engine-reported devices (free VRAM is what the tier table uses).
+
+**One backend family per pack directory.** ggml loads every `ggml-*.dll` /
+`libggml-*.so` found next to `llama-server`, so never unpack two release
+archives (e.g. CPU + OpenVINO, or CPU + Vulkan) into the same folder: the extra
+backend registers a device, takes over the graph and — for Qwen3.5's hybrid
+layers — fails with "Compute error". This is exactly what a too-loose download
+pattern did in CI.
