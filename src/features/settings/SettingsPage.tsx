@@ -361,6 +361,41 @@ function ProcessingTab() {
   );
 }
 
+/** Numeric setting edited as free text; clamped and persisted on blur / Enter (not per keystroke). */
+function NumberField({ id, value, min, max, step, onCommit, testId }: { id: string; value: number; min: number; max: number; step: number; onCommit: (v: number) => void; testId: string }) {
+  const [draft, setDraft] = useState(String(value));
+  const [editing, setEditing] = useState(false);
+  const shown = editing ? draft : String(value);
+  const commit = () => {
+    setEditing(false);
+    const n = Number(draft);
+    if (!Number.isFinite(n) || draft.trim() === "") return;
+    const clamped = Math.min(max, Math.max(min, Math.round(n)));
+    if (clamped !== value) onCommit(clamped);
+  };
+  return (
+    <Input
+      id={id}
+      type="number"
+      min={min}
+      max={max}
+      step={step}
+      value={shown}
+      onFocus={() => {
+        setDraft(String(value));
+        setEditing(true);
+      }}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+      }}
+      className="w-32"
+      data-testid={testId}
+    />
+  );
+}
+
 function KnowledgeTab() {
   const { t } = useTranslation();
   const settings = useSettingsStore((s) => s.settings)!;
@@ -371,19 +406,14 @@ function KnowledgeTab() {
   const DEFAULT = "__default__";
   const numberRow = (key: "context_tokens" | "top_k" | "chunk_target_tokens", label: string, min: number, max: number, step: number) => (
     <Row label={label} htmlFor={`kb-${key}`}>
-      <Input
+      <NumberField
         id={`kb-${key}`}
-        type="number"
+        value={k[key]}
         min={min}
         max={max}
         step={step}
-        value={k[key]}
-        onChange={(e) => {
-          const v = Number(e.target.value);
-          if (Number.isFinite(v)) void update((s) => void (s.knowledge[key] = Math.min(max, Math.max(min, Math.round(v)))));
-        }}
-        className="w-32"
-        data-testid={`kb-${key}`}
+        onCommit={(v) => void update((s) => void (s.knowledge[key] = v))}
+        testId={`kb-${key}`}
       />
     </Row>
   );
@@ -420,6 +450,12 @@ function KnowledgeTab() {
         </Row>
         <Row label={t("settings.knowledge.allow_general")} hint={t("settings.knowledge.allow_general_hint")}>
           <Switch checked={k.allow_general_knowledge} onCheckedChange={(v) => void update((s) => void (s.knowledge.allow_general_knowledge = v))} data-testid="kb-allow-general" />
+        </Row>
+        <Row label={t("settings.knowledge.min_similarity")} hint={t("settings.knowledge.min_similarity_hint")}>
+          <div className="flex items-center gap-3">
+            <Slider min={0.2} max={0.9} step={0.05} value={[k.min_vector_similarity]} onValueCommit={([v]) => void update((s) => void (s.knowledge.min_vector_similarity = v ?? 0.5))} className="w-56" aria-label={t("settings.knowledge.min_similarity")} />
+            <span className="w-10 text-xs tabular-nums">{k.min_vector_similarity.toFixed(2)}</span>
+          </div>
         </Row>
         {numberRow("context_tokens", t("settings.knowledge.context_tokens"), 1000, 24000, 500)}
         {numberRow("top_k", t("settings.knowledge.top_k"), 1, 20, 1)}

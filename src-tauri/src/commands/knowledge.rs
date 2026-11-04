@@ -17,6 +17,33 @@ use crate::docs_bridge;
 use crate::knowledge_bridge::{self, EmbeddingModelInfo};
 use crate::state::{UiError, UiResult};
 
+/// Repository functions signal expected failures as `rusqlite::Error::InvalidParameterName(code)`
+/// (surfacing as `CoreError::Db("Invalid parameter name: <code>")`); map those to typed UI errors.
+fn typed_error(e: doculens_core::CoreError) -> UiError {
+    const CODES: [&str; 8] = [
+        "collection_name_taken",
+        "collection_name_empty",
+        "collection_not_found",
+        "document_not_found",
+        "glossary_term_empty",
+        "glossary_term_taken",
+        "version_group_empty",
+        "feedback_invalid",
+    ];
+    if let doculens_core::CoreError::Db(m) = &e {
+        if let Some(code) = CODES.iter().find(|c| m.contains(*c)) {
+            return UiError::invalid(*code);
+        }
+        if m.contains("UNIQUE constraint failed: collections.name") {
+            return UiError::invalid("collection_name_taken");
+        }
+        if m.contains("UNIQUE constraint failed: glossary.term") {
+            return UiError::invalid("glossary_term_taken");
+        }
+    }
+    e.into()
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct KnowledgeStatusView {
     #[serde(flatten)]
@@ -29,7 +56,11 @@ pub struct KnowledgeStatusView {
 #[tauri::command(async)]
 pub fn knowledge_status(app: AppHandle) -> UiResult<KnowledgeStatusView> {
     let ctx = knowledge_bridge::context(&app)?;
-    let status = index_status(&ctx.index_deps())?;
+    let mut status = index_status(&ctx.index_deps())?;
+    if status.tokenizer.kind != "ko-dic" {
+        // Tell the user where the dictionary belongs instead of leaving the path empty.
+        status.tokenizer.path = Some(knowledge_bridge::expected_kodic_dir(&app).display().to_string());
+    }
     let state = app.state::<crate::state::AppState>();
     Ok(KnowledgeStatusView {
         status,
@@ -44,17 +75,13 @@ pub fn knowledge_status(app: AppHandle) -> UiResult<KnowledgeStatusView> {
 #[tauri::command(async)]
 pub fn knowledge_collections(app: AppHandle) -> UiResult<Vec<Collection>> {
     let ctx = knowledge_bridge::context(&app)?;
-    Ok(ctx.db.with(repo::list_collections)?)
+    Ok(ctx.db.with_read(repo::list_collections)?)
 }
 
 #[tauri::command(async)]
 pub fn knowledge_collection_save(app: AppHandle, input: CollectionInput) -> UiResult<Collection> {
     let ctx = knowledge_bridge::context(&app)?;
-    let saved = ctx.db.with(|c| repo::save_collection(c, &input)).map_err(|e| match e {
-        doculens_core::CoreError::Db(m) if m.contains("UNIQUE") => UiError::invalid("collection_name_taken"),
-        doculens_core::CoreError::Db(m) if m.contains("empty") => UiError::invalid("collection_name_empty"),
-        other => other.into(),
-    })?;
+    let saved = ctx.db.with(|c| repo::save_collection(c, &input)).map_err(typed_error)?;
     ctx.emit(&app, "collections", vec![saved.id.clone()]);
     Ok(saved)
 }
@@ -70,14 +97,8 @@ pub fn knowledge_collection_delete(app: AppHandle, id: String) -> UiResult<bool>
 #[tauri::command(async)]
 pub fn knowledge_collection_docs(app: AppHandle, id: String) -> UiResult<Vec<DocumentView>> {
     let ctx = knowledge_bridge::context(&app)?;
-    let ids = ctx.db.with(|c| repo::collection_doc_ids(c, &id))?;
-    let mut out = Vec::new();
-    for d in ids {
-        if let Some(doc) = ctx.db.with(|c| docs::get_document(c, &d))? {
-            out.push(view(&app, doc)?);
-        }
-    }
-    Ok(out)
+    let docs = ctx.db.with_read(|c| repo::collection_documents(c, &id))?;
+    docs.into_iter().map(|d| view(&app, d)).collect()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -92,15 +113,18 @@ pub struct CollectionDocsArgs {
 #[tauri::command(async)]
 pub fn knowledge_collection_add(app: AppHandle, args: CollectionDocsArgs) -> UiResult<u32> {
     let ctx = knowledge_bridge::context(&app)?;
-    let n = ctx.db.with_tx(|tx| {
-        let n = repo::add_docs_to_collection(tx, &args.id, &args.doc_ids)?;
-        if args.set_role {
-            for d in &args.doc_ids {
-                docs::set_role(tx, d, DocumentRole::Knowledge)?;
+    let n = ctx
+        .db
+        .with_tx(|tx| {
+            let n = repo::add_docs_to_collection(tx, &args.id, &args.doc_ids)?;
+            if args.set_role {
+                for d in &args.doc_ids {
+                    docs::set_role(tx, d, DocumentRole::Knowledge)?;
+                }
             }
-        }
-        Ok(n)
-    })?;
+            Ok(n)
+        })
+        .map_err(typed_error)?;
     ctx.emit(&app, "collections", vec![args.id]);
     if args.set_role {
         docs_bridge::emit_changed(&app, "updated", args.doc_ids);
@@ -119,7 +143,7 @@ pub fn knowledge_collection_remove(app: AppHandle, args: CollectionDocsArgs) -> 
 #[tauri::command(async)]
 pub fn knowledge_document_collections(app: AppHandle, id: String) -> UiResult<Vec<(String, String)>> {
     let ctx = knowledge_bridge::context(&app)?;
-    Ok(ctx.db.with(|c| repo::collections_of_document(c, &id))?)
+    Ok(ctx.db.with_read(|c| repo::collections_of_document(c, &id))?)
 }
 
 #[tauri::command(async)]
@@ -161,7 +185,8 @@ pub fn knowledge_reset_embeddings(app: AppHandle) -> UiResult<()> {
 // -- search / answers -------------------------------------------------------
 
 #[tauri::command(async)]
-pub fn knowledge_search(app: AppHandle, req: SearchRequest) -> UiResult<SearchResponse> {
+pub fn knowledge_search(app: AppHandle, mut req: SearchRequest) -> UiResult<SearchResponse> {
+    req.query = req.query.chars().take(2_000).collect();
     let ctx = knowledge_bridge::context(&app)?;
     let embedder = knowledge_bridge::embedder(&app, false)?;
     let deps = ctx.search_deps(embedder.as_ref().map(|e| e as &dyn embed::Embedder));
@@ -171,13 +196,18 @@ pub fn knowledge_search(app: AppHandle, req: SearchRequest) -> UiResult<SearchRe
 #[tauri::command(async)]
 pub fn knowledge_chunks(app: AppHandle, document_id: String) -> UiResult<Vec<Chunk>> {
     let ctx = knowledge_bridge::context(&app)?;
-    Ok(ctx.db.with(|c| repo::list_chunks(c, &document_id))?)
+    Ok(ctx.db.with_read(|c| repo::list_chunks(c, &document_id))?)
 }
 
 #[tauri::command(async)]
 pub fn knowledge_answer(app: AppHandle, req: AnswerRequest, request_id: Option<String>) -> UiResult<Answer> {
     let request_id = request_id.unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
     knowledge_bridge::answer(&app, req, request_id)
+}
+
+#[tauri::command(async)]
+pub fn knowledge_answer_cancel(app: AppHandle, request_id: String) -> UiResult<bool> {
+    Ok(knowledge_bridge::cancel_answer(&app, &request_id))
 }
 
 #[tauri::command(async)]
@@ -188,7 +218,7 @@ pub fn knowledge_answers(
     limit: Option<u32>,
 ) -> UiResult<Vec<SavedAnswer>> {
     let ctx = knowledge_bridge::context(&app)?;
-    Ok(ctx.db.with(|c| repo::list_answers(c, kind, document_id.as_deref(), limit.unwrap_or(50)))?)
+    Ok(ctx.db.with_read(|c| repo::list_answers(c, kind, document_id.as_deref(), limit.unwrap_or(50).min(500)))?)
 }
 
 #[tauri::command(async)]
@@ -198,6 +228,10 @@ pub fn knowledge_answer_feedback(
     feedback: Option<i8>,
     note: Option<String>,
 ) -> UiResult<bool> {
+    if !matches!(feedback, None | Some(1) | Some(-1)) {
+        return Err(UiError::invalid("feedback_invalid"));
+    }
+    let note: Option<String> = note.map(|n| n.chars().take(2_000).collect());
     let ctx = knowledge_bridge::context(&app)?;
     let ok = ctx.db.with(|c| repo::set_answer_feedback(c, id, feedback, note.as_deref()))?;
     ctx.emit(&app, "answers", vec![id.to_string()]);
@@ -217,16 +251,13 @@ pub fn knowledge_answer_delete(app: AppHandle, id: i64) -> UiResult<bool> {
 #[tauri::command(async)]
 pub fn knowledge_glossary(app: AppHandle) -> UiResult<Vec<GlossaryEntry>> {
     let ctx = knowledge_bridge::context(&app)?;
-    Ok(ctx.db.with(repo::list_glossary)?)
+    Ok(ctx.db.with_read(repo::list_glossary)?)
 }
 
 #[tauri::command(async)]
 pub fn knowledge_glossary_save(app: AppHandle, input: GlossaryInput) -> UiResult<GlossaryEntry> {
     let ctx = knowledge_bridge::context(&app)?;
-    let saved = ctx.db.with(|c| repo::save_glossary(c, &input)).map_err(|e| match e {
-        doculens_core::CoreError::Db(m) if m.contains("empty") => UiError::invalid("glossary_term_empty"),
-        other => other.into(),
-    })?;
+    let saved = ctx.db.with(|c| repo::save_glossary(c, &input)).map_err(typed_error)?;
     ctx.emit(&app, "glossary", vec![saved.id.to_string()]);
     Ok(saved)
 }
@@ -242,16 +273,13 @@ pub fn knowledge_glossary_delete(app: AppHandle, id: i64) -> UiResult<bool> {
 #[tauri::command(async)]
 pub fn knowledge_versions(app: AppHandle) -> UiResult<Vec<VersionGroup>> {
     let ctx = knowledge_bridge::context(&app)?;
-    Ok(ctx.db.with(repo::list_version_groups)?)
+    Ok(ctx.db.with_read(repo::list_version_groups)?)
 }
 
 #[tauri::command(async)]
 pub fn knowledge_version_set(app: AppHandle, input: VersionInput) -> UiResult<VersionInfo> {
     let ctx = knowledge_bridge::context(&app)?;
-    let v = ctx.db.with(|c| repo::set_version(c, &input)).map_err(|e| match e {
-        doculens_core::CoreError::Db(m) if m.contains("empty") => UiError::invalid("version_group_empty"),
-        other => other.into(),
-    })?;
+    let v = ctx.db.with(|c| repo::set_version(c, &input)).map_err(typed_error)?;
     ctx.emit(&app, "versions", vec![v.document_id.clone()]);
     Ok(v)
 }

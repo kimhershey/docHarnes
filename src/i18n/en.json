@@ -293,7 +293,7 @@
       "/open models"
     ],
     "qa_hint": "Ask a question and the assistant answers from the knowledge base with per-sentence sources.",
-    "answering": "Answering…"
+    "pending_hint": "Work commands such as totals or organising run through the P5 planner. Questions are answered from the knowledge base."
   },
   "models": {
     "title": "Model manager",
@@ -619,7 +619,9 @@
       "allow_general_hint": "Off by default (prevents hallucination). Such answers are labelled 'general knowledge'.",
       "context_tokens": "Evidence token budget",
       "top_k": "Evidence chunks",
-      "chunk_target": "Chunk size (tokens)"
+      "chunk_target": "Chunk size (tokens)",
+      "min_similarity": "Semantic evidence threshold (cosine similarity)",
+      "min_similarity_hint": "Chunks found only by embedding similarity count as evidence above this value (bge-m3 ≈ 0.5)."
     }
   },
   "placeholder": {
@@ -733,7 +735,11 @@
       "no_active_model": "No model is loaded in the engine. Load one on the Models screen and retry.",
       "embedding_model_not_installed": "The embedding model is not installed. Install it on the Models screen.",
       "no_text": "This document has no text layer (scans are supported after P4 OCR).",
-      "document_id_required": "Select a document first."
+      "document_id_required": "Select a document first.",
+      "glossary_term_taken": "That term already exists.",
+      "collection_not_found": "Collection not found (it may have been deleted).",
+      "document_not_found": "Document not found.",
+      "feedback_invalid": "Invalid feedback value."
     }
   },
   "startup": {
@@ -786,7 +792,8 @@
       "rendered": "{{count}} rendered",
       "index_summary": "indexed {{indexed}} ({{chunks}} chunks) · unchanged {{unchanged}} · no text {{no_text}} · failed {{failed}}",
       "embed_summary": "embedded {{embedded}} · failed {{failed}} · remaining {{remaining}}",
-      "loading_model": "loading model"
+      "loading_model": "loading model",
+      "embed_rebuilt": "{{summary}} (rebuilt for a new model)"
     }
   },
   "library": {
@@ -851,7 +858,8 @@
     "grid_label": "Document cards",
     "import_existing_hint": "Scans the whole workspace folder (except .doculens) and opens the preview.",
     "role_knowledge": "Knowledge",
-    "kb_added": "Added {{count}} documents to '{{name}}'."
+    "kb_added": "Added {{count}} documents to '{{name}}'.",
+    "kb_added_one": "Added {{count}} document to '{{name}}'."
   },
   "documents": {
     "status": {
@@ -987,7 +995,6 @@
     "thumb_label": "Go to page {{page}}",
     "toolbar": "Document tools",
     "kb_badge": "Knowledge",
-    "collections_label": "Collections",
     "add_to_kb": "Add to knowledge base",
     "explain": "Explain",
     "explain_shortcut": "Ctrl+E",
@@ -1000,8 +1007,7 @@
       "history": "Answers for this document",
       "none": "No questions yet.",
       "scope_doc": "This document",
-      "scope_kb": "Whole knowledge base",
-      "explain_prefix": "Explain: "
+      "scope_kb": "Whole knowledge base"
     },
     "summary": {
       "title": "Summary",
@@ -1024,7 +1030,8 @@
       "save": "Save",
       "clear": "Remove from group",
       "saved": "Version saved."
-    }
+    },
+    "explain_with_chord": "Explain ({{chord}})"
   },
   "answer": {
     "sources": "Sources",
@@ -1050,7 +1057,11 @@
       "compare": "Comparison"
     },
     "delete": "Delete",
-    "deleted": "Answer deleted."
+    "deleted": "Answer deleted.",
+    "stop": "Stop",
+    "cancelled": "Answer generation stopped.",
+    "follow_up": "Follow-up (keep previous evidence)",
+    "citation_aria": "Source {{index}}: {{label}}"
   },
   "search": {
     "title": "Search",
@@ -1084,7 +1095,8 @@
       "vector": "semantic"
     },
     "open": "Open",
-    "ask": "Ask about this"
+    "ask": "Ask about this",
+    "results_one": "{{count}} result · {{ms}}ms"
   },
   "knowledge": {
     "title": "Knowledge base",
@@ -1119,7 +1131,10 @@
       "label": "Tokenizer",
       "kodic": "ko-dic (lindera)",
       "simple": "Simple tokenizer",
-      "simple_hint": "The ko-dic dictionary was not found, so the simple tokenizer (words + bigrams) is used. Run node scripts/fetch-kodic.mjs to enable particle stripping and compound splitting."
+      "simple_hint": "The ko-dic dictionary was not found, so the simple tokenizer (words + bigrams) is used. Install the dictionary into the folder below (bundled with the installer, see docs/engines) to enable particle stripping and compound splitting.",
+      "folder": "Dictionary folder",
+      "open_folder": "Open folder",
+      "restart_hint": "Restart the app after installing the dictionary; the next index run re-chunks every document with the new analyzer."
     },
     "embedding": {
       "label": "Embedding model",
@@ -1140,7 +1155,8 @@
       "index_started": "Indexing started.",
       "index_running": "Indexing is already running.",
       "embed_started": "Embedding started.",
-      "embed_none": "No chunks to embed."
+      "embed_none": "No chunks to embed.",
+      "reindex_confirm": "Re-chunk and re-index every document? Stored embeddings are cleared and recomputed."
     },
     "collections": {
       "title": "Collections",
@@ -1161,14 +1177,15 @@
       "remove_doc": "Remove",
       "no_docs": "This collection has no documents.",
       "select": "Select a collection",
-      "none_option": "No collection",
       "add_title": "Add to knowledge base",
       "add_hint": "Adds the {{count}} selected documents to a collection and marks them as knowledge documents.",
       "create_inline": "Create a new collection",
       "name_placeholder": "e.g. Company regulations",
       "saved": "Collection saved.",
       "deleted": "Collection deleted.",
-      "open_doc": "Open document"
+      "open_doc": "Open document",
+      "docs_count_one": "{{count}} doc",
+      "chunks_count_one": "{{count}} chunk"
     },
     "wizard": {
       "title": "Knowledge ingest wizard",
@@ -1190,20 +1207,17 @@
       "previewing": "Checking files…",
       "summary": "new {{new}} · relink {{relink}} · duplicates {{dup}} · registered {{registered}} · unsupported {{unsupported}}",
       "nothing": "No new files to ingest (already registered documents are only added to the collection).",
-      "role_hint": "Ingested documents get the 'knowledge' role and serve as evidence for search and answers."
+      "role_hint": "Ingested documents get the 'knowledge' role and serve as evidence for search and answers.",
+      "steps_label": "Steps"
     },
     "versions": {
       "title": "Document versions",
       "hint": "Group editions of one title; search and answers use the latest edition by default.",
-      "group": "Version group",
-      "label": "Edition",
-      "effective": "Effective date",
       "latest": "Latest",
       "superseded": "Superseded",
       "set_latest": "Make latest",
       "clear": "Remove from group",
       "empty": "No version groups yet. Register one from the viewer's 'Version' menu.",
-      "document": "Document",
       "saved": "Saved."
     },
     "glossary": {
@@ -1230,14 +1244,12 @@
       "none": "No evidence retrieved.",
       "terms": "Terms",
       "expanded": "Expanded terms",
-      "channels": "Channels",
       "elapsed": "{{ms}}ms",
       "score": "Score"
     },
     "answers": {
       "title": "Answer log",
       "empty": "No saved answers.",
-      "filter_all": "All",
       "stats": "helpful {{helpful}} · wrong {{wrong}}"
     }
   }

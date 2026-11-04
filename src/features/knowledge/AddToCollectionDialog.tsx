@@ -21,12 +21,19 @@ export function AddToCollectionDialog({ open, onOpenChange, docIds, onDone }: { 
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
 
+  const [touched, setTouched] = useState(false);
   useEffect(() => {
     if (open) {
-      setChoice(collections && collections.length > 0 ? (collections[0]?.id ?? NEW) : NEW);
+      setChoice(NEW);
       setName("");
+      setTouched(false);
     }
-  }, [open, collections]);
+  }, [open]);
+  // Default to the first existing collection once the list is known (never after the user chose).
+  useEffect(() => {
+    if (open && !touched && collections && collections.length > 0) setChoice(collections[0]?.id ?? NEW);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, collections === undefined]);
 
   const submit = async () => {
     setBusy(true);
@@ -51,13 +58,19 @@ export function AddToCollectionDialog({ open, onOpenChange, docIds, onDone }: { 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-testid="add-to-kb-dialog">
+      <DialogContent data-testid="add-to-kb-dialog" closeLabel={t("common.close")}>
         <DialogHeader>
           <DialogTitle>{t("knowledge.collections.add_title")}</DialogTitle>
           <DialogDescription>{t("knowledge.collections.add_hint", { count: docIds.length })}</DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
-          <Select value={choice} onValueChange={setChoice}>
+          <Select
+            value={choice}
+            onValueChange={(v) => {
+              setTouched(true);
+              setChoice(v);
+            }}
+          >
             <SelectTrigger aria-label={t("knowledge.collections.select")} data-testid="add-to-kb-collection">
               <SelectValue />
             </SelectTrigger>

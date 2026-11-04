@@ -293,7 +293,7 @@
       "/열기 모델"
     ],
     "qa_hint": "질문하면 지식 베이스에서 근거를 찾아 문장별 출처와 함께 답합니다.",
-    "answering": "답변 생성 중…"
+    "pending_hint": "집계·정리 같은 작업 명령은 P5 플래너에서 실행됩니다. 질문은 지식 베이스에서 근거를 찾아 답합니다."
   },
   "models": {
     "title": "모델 관리자",
@@ -619,7 +619,9 @@
       "allow_general_hint": "기본은 끔(환각 방지). 켜면 답변에 '일반 지식' 표시가 붙습니다.",
       "context_tokens": "근거 토큰 예산",
       "top_k": "근거 청크 수",
-      "chunk_target": "청크 크기(토큰)"
+      "chunk_target": "청크 크기(토큰)",
+      "min_similarity": "의미 검색 근거 임계(코사인 유사도)",
+      "min_similarity_hint": "키워드 일치가 없고 임베딩 유사도만 있는 청크는 이 값 이상일 때만 근거로 씁니다(bge-m3 ≈ 0.5)."
     }
   },
   "placeholder": {
@@ -733,7 +735,11 @@
       "no_active_model": "엔진에 로드된 모델이 없습니다. 모델 화면에서 모델을 로드한 뒤 다시 시도하세요.",
       "embedding_model_not_installed": "임베딩 모델이 설치되지 않았습니다. 모델 화면에서 설치하세요.",
       "no_text": "텍스트 레이어가 없는 문서입니다(스캔 문서는 P4 OCR 이후 지원).",
-      "document_id_required": "문서를 먼저 선택하세요."
+      "document_id_required": "문서를 먼저 선택하세요.",
+      "glossary_term_taken": "같은 용어가 이미 있습니다.",
+      "collection_not_found": "컬렉션을 찾을 수 없습니다(삭제되었을 수 있습니다).",
+      "document_not_found": "문서를 찾을 수 없습니다.",
+      "feedback_invalid": "피드백 값이 올바르지 않습니다."
     }
   },
   "startup": {
@@ -786,7 +792,8 @@
       "rendered": "{{count}}개 렌더 완료",
       "index_summary": "{{indexed}}건 색인({{chunks}} 청크) · 변경 없음 {{unchanged}} · 텍스트 없음 {{no_text}} · 실패 {{failed}}",
       "embed_summary": "{{embedded}}개 임베딩 · 실패 {{failed}} · 남음 {{remaining}}",
-      "loading_model": "모델 로드 중"
+      "loading_model": "모델 로드 중",
+      "embed_rebuilt": "{{summary}} (모델 교체로 재생성)"
     }
   },
   "library": {
@@ -851,7 +858,8 @@
     "grid_label": "문서 카드",
     "import_existing_hint": "워크스페이스 폴더 전체를 검사해 미리보기를 엽니다(.doculens 제외).",
     "role_knowledge": "지식",
-    "kb_added": "{{count}}개 문서를 '{{name}}'에 추가했습니다."
+    "kb_added": "{{count}}개 문서를 '{{name}}'에 추가했습니다.",
+    "kb_added_one": "{{count}}개 문서를 '{{name}}'에 추가했습니다."
   },
   "documents": {
     "status": {
@@ -987,7 +995,6 @@
     "thumb_label": "{{page}}쪽으로 이동",
     "toolbar": "문서 도구",
     "kb_badge": "지식",
-    "collections_label": "컬렉션",
     "add_to_kb": "지식 베이스에 추가",
     "explain": "설명",
     "explain_shortcut": "Ctrl+E",
@@ -1000,8 +1007,7 @@
       "history": "이 문서의 답변",
       "none": "아직 질문이 없습니다.",
       "scope_doc": "이 문서",
-      "scope_kb": "지식 베이스 전체",
-      "explain_prefix": "설명: "
+      "scope_kb": "지식 베이스 전체"
     },
     "summary": {
       "title": "요약",
@@ -1024,7 +1030,8 @@
       "save": "저장",
       "clear": "그룹 해제",
       "saved": "버전 정보를 저장했습니다."
-    }
+    },
+    "explain_with_chord": "설명 ({{chord}})"
   },
   "answer": {
     "sources": "근거",
@@ -1050,7 +1057,11 @@
       "compare": "비교"
     },
     "delete": "삭제",
-    "deleted": "답변을 삭제했습니다."
+    "deleted": "답변을 삭제했습니다.",
+    "stop": "중지",
+    "cancelled": "답변 생성을 중지했습니다.",
+    "follow_up": "후속 질문(이전 근거 유지)",
+    "citation_aria": "근거 {{index}}: {{label}}"
   },
   "search": {
     "title": "검색",
@@ -1084,7 +1095,8 @@
       "vector": "의미"
     },
     "open": "열기",
-    "ask": "이 결과로 질문"
+    "ask": "이 결과로 질문",
+    "results_one": "{{count}}건 · {{ms}}ms"
   },
   "knowledge": {
     "title": "지식 베이스",
@@ -1119,7 +1131,10 @@
       "label": "형태소 분석기",
       "kodic": "ko-dic (lindera)",
       "simple": "간이 분석기",
-      "simple_hint": "ko-dic 사전이 없어 간이 분석기(어절+2음절)를 사용합니다. node scripts/fetch-kodic.mjs 로 설치하면 조사 분리·복합명사 분해가 됩니다."
+      "simple_hint": "ko-dic 사전이 없어 간이 분석기(어절+2음절)를 사용합니다. 아래 폴더에 사전을 설치하면 조사 분리·복합명사 분해가 됩니다(설치파일 동봉 또는 docs/engines 안내).",
+      "folder": "사전 폴더",
+      "open_folder": "폴더 열기",
+      "restart_hint": "사전을 설치한 뒤에는 앱을 다시 시작해야 적용됩니다. 다음 색인 실행 때 전체 문서가 새 분석기로 다시 청킹됩니다."
     },
     "embedding": {
       "label": "임베딩 모델",
@@ -1140,7 +1155,8 @@
       "index_started": "색인을 시작했습니다.",
       "index_running": "색인이 이미 진행 중입니다.",
       "embed_started": "임베딩을 시작했습니다.",
-      "embed_none": "임베딩할 청크가 없습니다."
+      "embed_none": "임베딩할 청크가 없습니다.",
+      "reindex_confirm": "모든 문서를 다시 청킹·색인할까요? 기존 임베딩은 지워지고 다시 계산됩니다."
     },
     "collections": {
       "title": "컬렉션",
@@ -1161,14 +1177,15 @@
       "remove_doc": "제거",
       "no_docs": "이 컬렉션에 문서가 없습니다.",
       "select": "컬렉션 선택",
-      "none_option": "컬렉션 없음",
       "add_title": "지식 베이스에 추가",
       "add_hint": "선택한 {{count}}개 문서를 컬렉션에 추가하고 지식 문서로 표시합니다.",
       "create_inline": "새 컬렉션 만들기",
       "name_placeholder": "예: 사내 규정",
       "saved": "컬렉션을 저장했습니다.",
       "deleted": "컬렉션을 삭제했습니다.",
-      "open_doc": "문서 열기"
+      "open_doc": "문서 열기",
+      "docs_count_one": "문서 {{count}}",
+      "chunks_count_one": "청크 {{count}}"
     },
     "wizard": {
       "title": "지식 적재 마법사",
@@ -1190,20 +1207,17 @@
       "previewing": "파일을 확인하는 중…",
       "summary": "신규 {{new}} · 다시 연결 {{relink}} · 중복 {{dup}} · 이미 등록 {{registered}} · 미지원 {{unsupported}}",
       "nothing": "적재할 새 파일이 없습니다(이미 등록된 문서는 컬렉션에만 추가됩니다).",
-      "role_hint": "적재한 문서는 '지식' 역할로 표시되고 검색·답변의 근거로 사용됩니다."
+      "role_hint": "적재한 문서는 '지식' 역할로 표시되고 검색·답변의 근거로 사용됩니다.",
+      "steps_label": "단계"
     },
     "versions": {
       "title": "문서 버전",
       "hint": "같은 제목의 신·구판을 묶으면 검색·답변은 기본적으로 최신본만 사용합니다.",
-      "group": "버전 그룹",
-      "label": "판 표시",
-      "effective": "시행일",
       "latest": "최신본",
       "superseded": "구판",
       "set_latest": "최신본으로",
       "clear": "그룹 해제",
       "empty": "등록된 버전 그룹이 없습니다. 뷰어의 '버전' 메뉴에서 등록하세요.",
-      "document": "문서",
       "saved": "저장했습니다."
     },
     "glossary": {
@@ -1230,14 +1244,12 @@
       "none": "검색된 근거가 없습니다.",
       "terms": "분석 토큰",
       "expanded": "확장 토큰",
-      "channels": "채널",
       "elapsed": "{{ms}}ms",
       "score": "점수"
     },
     "answers": {
       "title": "답변 기록",
       "empty": "저장된 답변이 없습니다.",
-      "filter_all": "전체",
       "stats": "도움됨 {{helpful}} · 틀림 {{wrong}}"
     }
   }

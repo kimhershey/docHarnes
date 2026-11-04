@@ -19,6 +19,7 @@ use doculens_core::knowledge::index::{self, IndexDeps};
 use doculens_core::knowledge::search::SearchDeps;
 use doculens_core::knowledge::tokenize::{Analyzer, KODIC_DIR_NAME};
 use doculens_core::knowledge::{Answer, AnswerKind, AnswerRequest};
+use doculens_core::registry::ModelRole;
 use doculens_core::settings::KnowledgeSettings;
 
 use crate::docs_bridge::{self, spawn_job_thread, AfterJob};
@@ -67,6 +68,11 @@ fn kodic_candidates(app: &AppHandle) -> Vec<PathBuf> {
 }
 
 /// Loads ko-dic once per process (falls back to the built-in analyzer).
+/// Where the app expects the dictionary when it is not installed (shown to the user).
+pub fn expected_kodic_dir(app: &AppHandle) -> PathBuf {
+    app.state::<AppState>().app_paths.tokenizers_dir().join(KODIC_DIR_NAME)
+}
+
 pub fn analyzer(app: &AppHandle) -> Arc<Analyzer> {
     ANALYZER
         .get_or_init(|| {
@@ -175,6 +181,36 @@ pub fn embedder(app: &AppHandle, load: bool) -> UiResult<Option<RouterEmbedder>>
     Ok(Some(RouterEmbedder { client, model }))
 }
 
+/// The chat (VLM) model answers are generated with: the engine's active model
+/// unless that is the embedding model (loading bge-m3 makes it "active"), then
+/// the configured / assessed model, then any loaded non-embedding model.
+pub fn chat_model(app: &AppHandle) -> UiResult<String> {
+    let state = app.state::<AppState>();
+    let is_embedding = |id: &str| {
+        state.registry.get(id).map(|e| e.role == ModelRole::Embedding).unwrap_or(false)
+            || state
+                .models
+                .lock()
+                .map(|m| m.discovered.iter().any(|d| d.id == id && d.role == ModelRole::Embedding))
+                .unwrap_or(false)
+    };
+    let status = state.engine.status();
+    if let Some(active) = status.active_model.as_deref() {
+        if !is_embedding(active) && status.model(active).is_some_and(|m| m.is_usable()) {
+            return Ok(active.to_string());
+        }
+    }
+    if let Some(configured) = engine_bridge::active_model_id(&state)? {
+        if !is_embedding(&configured) {
+            return Ok(configured);
+        }
+    }
+    if let Some(loaded) = status.loaded_models().map(|m| m.id.clone()).find(|id| !is_embedding(id)) {
+        return Ok(loaded);
+    }
+    Err(UiError::invalid("no_active_model"))
+}
+
 // ---------------------------------------------------------------------------
 // Jobs
 // ---------------------------------------------------------------------------
@@ -183,8 +219,7 @@ pub fn embedder(app: &AppHandle, load: bool) -> UiResult<Option<RouterEmbedder>>
 /// run is already active (it will re-run afterwards) or no workspace is open.
 pub fn index_job(app: &AppHandle, ids: Option<Vec<String>>, force: bool) -> UiResult<Option<String>> {
     let state = app.state::<AppState>();
-    if state.jobs.is_active_kind(&[JobKind::KnowledgeIndex]) {
-        state.knowledge_dirty.store(true, Ordering::SeqCst);
+    if state.switching.load(Ordering::SeqCst) {
         return Ok(None);
     }
     let ctx = context(app)?;
@@ -192,9 +227,13 @@ pub fn index_job(app: &AppHandle, ids: Option<Vec<String>>, force: bool) -> UiRe
         Some(ids) => format!("{} documents", ids.len()),
         None => "library".to_string(),
     };
-    let (job, cancel) = state.jobs.create(JobKind::KnowledgeIndex, &subject);
+    let Some((job, cancel)) = state.jobs.create_if_idle(JobKind::KnowledgeIndex, &subject) else {
+        state.knowledge_dirty.store(true, Ordering::SeqCst);
+        return Ok(None);
+    };
     let job_id = job.clone();
     let auto_embed = ctx.settings.auto_embed;
+    let generation = ctx.generation;
     spawn_job_thread(
         "doculens-kb-index",
         app.clone(),
@@ -238,6 +277,11 @@ pub fn index_job(app: &AppHandle, ids: Option<Vec<String>>, force: bool) -> UiRe
         },
         Some(Box::new(move |app: &AppHandle| {
             let state = app.state::<AppState>();
+            // Never chain into a workspace that is being closed / was switched meanwhile.
+            if state.switching.load(Ordering::SeqCst) || state.workspace_generation.load(Ordering::SeqCst) != generation
+            {
+                return;
+            }
             if state.knowledge_dirty.swap(false, Ordering::SeqCst) {
                 let _ = index_job(app, None, false);
             } else if auto_embed {
@@ -253,7 +297,7 @@ pub fn index_job(app: &AppHandle, ids: Option<Vec<String>>, force: bool) -> UiRe
 /// already loaded model.
 pub fn embed_job(app: &AppHandle, load_model: bool) -> UiResult<Option<String>> {
     let state = app.state::<AppState>();
-    if state.jobs.is_active_kind(&[JobKind::KnowledgeEmbed]) {
+    if state.switching.load(Ordering::SeqCst) || state.jobs.is_active_kind(&[JobKind::KnowledgeEmbed]) {
         return Ok(None);
     }
     let ctx = context(app)?;
@@ -270,10 +314,15 @@ pub fn embed_job(app: &AppHandle, load_model: bool) -> UiResult<Option<String>> 
     if pending == 0 && !stale {
         return Ok(None);
     }
-    if !load_model && (!info.engine_running || !info.loaded) {
+    // Automatic runs never start the engine, but they do load the (CPU) embedding
+    // model into a running engine so background embedding actually happens.
+    if !load_model && !info.engine_running {
         return Ok(None);
     }
-    let (job, cancel) = state.jobs.create(JobKind::KnowledgeEmbed, &model);
+    let load_model = load_model || !info.loaded;
+    let Some((job, cancel)) = state.jobs.create_if_idle(JobKind::KnowledgeEmbed, &model) else {
+        return Ok(None);
+    };
     let job_id = job.clone();
     spawn_job_thread(
         "doculens-kb-embed",
@@ -308,6 +357,9 @@ pub fn embed_job(app: &AppHandle, load_model: bool) -> UiResult<Option<String>> 
 /// Called after document jobs: chunk whatever changed (when enabled).
 pub fn auto_index(app: &AppHandle) {
     let state = app.state::<AppState>();
+    if state.switching.load(Ordering::SeqCst) {
+        return;
+    }
     let enabled = state.settings_snapshot().map(|s| s.knowledge.auto_index).unwrap_or(true);
     if enabled {
         match index_job(app, None, false) {
@@ -339,15 +391,31 @@ pub fn on_workspace_changed(app: &AppHandle) {
 pub fn answer(app: &AppHandle, req: AnswerRequest, request_id: String) -> UiResult<Answer> {
     let ctx = context(app)?;
     let state = app.state::<AppState>();
+    let model = chat_model(app)?;
     let embedder = embedder(app, false)?;
+    let mut req = req;
+    if req.min_similarity.is_none() {
+        req.min_similarity = Some(ctx.settings.min_vector_similarity);
+    }
+    if let Ok(mut r) = state.answer_running.lock() {
+        r.insert(request_id.clone());
+    }
+    let rid = request_id.clone();
+    let app_c = app.clone();
+    let cancelled = move || app_c.state::<AppState>().answer_cancels.lock().map(|c| c.contains(&rid)).unwrap_or(false);
     let deps = AnswerDeps {
         search: ctx.search_deps(embedder.as_ref().map(|e| e as &dyn Embedder)),
         chat: &state.engine,
-        model: None,
+        model: Some(model),
+        cancelled: Some(&cancelled),
     };
     let rid = request_id.clone();
     let app2 = app.clone();
+    let cancelled_ref = &cancelled;
     let mut on_delta = move |d: &str| {
+        if cancelled_ref() {
+            return false;
+        }
         let _ = app2.emit(EV_ANSWER, AnswerDelta { request_id: rid.clone(), delta: d.to_string(), done: false });
         true
     };
@@ -356,10 +424,26 @@ pub fn answer(app: &AppHandle, req: AnswerRequest, request_id: String) -> UiResu
         AnswerKind::Summary => answer::summarize(&deps, &req, &mut on_delta),
         AnswerKind::Compare => answer::compare(&deps, &req, &mut on_delta),
     };
+    if let Ok(mut c) = state.answer_cancels.lock() {
+        c.remove(&request_id);
+    }
+    if let Ok(mut r) = state.answer_running.lock() {
+        r.remove(&request_id);
+    }
     let _ = app.emit(EV_ANSWER, AnswerDelta { request_id, delta: String::new(), done: true });
     let out = result?;
     if out.id.is_some() {
         ctx.emit(app, "answers", Vec::new());
     }
     Ok(out)
+}
+
+/// Stops the streamed answer tagged `request_id` at its next delta.
+pub fn cancel_answer(app: &AppHandle, request_id: &str) -> bool {
+    let state = app.state::<AppState>();
+    let running = state.answer_running.lock().map(|r| r.contains(request_id)).unwrap_or(false);
+    if !running {
+        return false; // finished (or unknown) requests leave nothing behind
+    }
+    state.answer_cancels.lock().map(|mut c| c.insert(request_id.to_string())).unwrap_or(false)
 }

@@ -97,18 +97,9 @@ pub fn to_blob(v: &[f32]) -> Vec<u8> {
     out
 }
 
-fn kv_get(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
-    use rusqlite::OptionalExtension;
-    conn.query_row("SELECT value FROM kv WHERE key = ?1", [key], |r| r.get(0)).optional()
-}
-
-fn kv_set(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT INTO kv (key, value, updated_at) VALUES (?1, ?2, ?3) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-        params![key, value, chrono::Utc::now().to_rfc3339()],
-    )?;
-    Ok(())
-}
+use super::repo::{kv_get, kv_set};
+/// Consecutive failed batches that abort an embedding run (engine gone).
+const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 
 pub fn embedding_info(conn: &Connection) -> rusqlite::Result<EmbeddingInfo> {
     let (total, embedded) = repo::chunk_counts(conn)?;
@@ -197,28 +188,34 @@ pub fn embed_pending(
     report.remaining = total;
     let mut last_id: i64 = 0;
     let mut table_ready = false;
+    let mut consecutive_failures = 0u32;
     while report.embedded + report.failed < total {
         if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
             report.cancelled = true;
             break;
         }
         progress(report.embedded, total);
-        let rows: Vec<(i64, Option<String>, String)> = db.with(|c| {
+        let rows: Vec<(i64, Option<String>, String, String)> = db.with(|c| {
             let mut st = c.prepare(
-                "SELECT id, heading_path, text FROM chunks WHERE embedded_at IS NULL AND id > ?1 ORDER BY id LIMIT ?2",
+                "SELECT id, heading_path, text, text_hash FROM chunks WHERE embedded_at IS NULL AND id > ?1 ORDER BY id LIMIT ?2",
             )?;
-            let rows = st.query_map(params![last_id, batch as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            let rows =
+                st.query_map(params![last_id, batch as i64], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
             rows.collect::<rusqlite::Result<Vec<_>>>()
         })?;
         if rows.is_empty() {
             break;
         }
         last_id = rows.last().map(|r| r.0).unwrap_or(last_id);
-        let inputs: Vec<String> = rows.iter().map(|(_, h, t)| embed_input(h.as_deref(), t)).collect();
+        let inputs: Vec<String> = rows.iter().map(|(_, h, t, _)| embed_input(h.as_deref(), t)).collect();
         let vectors = match embedder.embed(&inputs) {
-            Ok(v) => v,
+            Ok(v) => {
+                consecutive_failures = 0;
+                v
+            }
             Err(e) => {
-                if report.embedded == 0 && report.failed == 0 {
+                consecutive_failures += 1;
+                if (report.embedded == 0 && report.failed == 0) || consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
                     return Err(e);
                 }
                 log::warn!("embedding batch failed: {e}");
@@ -239,28 +236,35 @@ pub fn embed_pending(
         }
         let model = embedder.model_id().to_string();
         let now = chrono::Utc::now().to_rfc3339();
-        let ids: Vec<i64> = rows.iter().map(|r| r.0).collect();
         let first_batch = !table_ready;
-        let reset = db.with_tx(|tx| {
+        let (reset, stored) = db.with_tx(|tx| {
             let reset = if first_batch { ensure_vec_table(tx, &model, dim)? } else { false };
             let mut del = tx.prepare("DELETE FROM chunks_vec WHERE rowid = ?1")?;
             let mut ins = tx.prepare("INSERT INTO chunks_vec (rowid, embedding) VALUES (?1, ?2)")?;
-            let mut upd = tx.prepare("UPDATE chunks SET embedded_at = ?2 WHERE id = ?1")?;
-            for (id, v) in ids.iter().zip(vectors.iter()) {
+            // Only the chunk whose text was embedded is marked: a concurrent re-index may
+            // have replaced the row (same id, other text) meanwhile.
+            let mut upd = tx.prepare(
+                "UPDATE chunks SET embedded_at = ?2 WHERE id = ?1 AND text_hash = ?3 AND embedded_at IS NULL",
+            )?;
+            let mut stored = 0u64;
+            for ((id, _, _, hash), v) in rows.iter().zip(vectors.iter()) {
                 let mut v = v.clone();
                 l2_normalize(&mut v);
                 del.execute([id])?;
-                ins.execute(params![id, to_blob(&v)])?;
-                upd.execute(params![id, now])?;
+                if upd.execute(params![id, now, hash])? == 1 {
+                    ins.execute(params![id, to_blob(&v)])?;
+                    stored += 1;
+                }
             }
-            Ok(reset)
+            Ok((reset, stored))
         })?;
         if reset {
             report.reset = true;
         }
         table_ready = true;
         report.dim = Some(dim as u32);
-        report.embedded += rows.len() as u64;
+        report.embedded += stored;
+        report.failed += rows.len() as u64 - stored;
     }
     report.remaining = db.with(pending_count)?;
     progress(report.embedded, total);
@@ -291,6 +295,28 @@ pub fn knn(
         return Ok(Vec::new());
     }
     let blob = to_blob(query);
+    if let Some(docs) = repo::sql_scope(allowed) {
+        // sqlite-vec accepts a rowid IN (...) constraint on KNN queries: the top-k is
+        // then taken inside the scope. Falls back to widening when the build lacks it.
+        let placeholders = (3..3 + docs.len()).map(|i| format!("?{i}")).collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT v.rowid, v.distance FROM chunks_vec v WHERE v.embedding MATCH ?1 AND v.k = ?2 \
+             AND v.rowid IN (SELECT id FROM chunks WHERE document_id IN ({placeholders})) ORDER BY v.distance"
+        );
+        let k_i = k.max(1) as i64;
+        let mut args: Vec<&dyn rusqlite::ToSql> = vec![&blob, &k_i];
+        for d in &docs {
+            args.push(d);
+        }
+        let attempt = conn.prepare(&sql).and_then(|mut st| {
+            st.query_map(args.as_slice(), |r| Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)? as f32)))?
+                .collect::<rusqlite::Result<Vec<_>>>()
+        });
+        match attempt {
+            Ok(rows) => return Ok(rows),
+            Err(e) => log::debug!("scoped KNN unsupported, widening instead: {e}"),
+        }
+    }
     let mut fetch = k.max(1);
     let max_fetch = 4_096;
     loop {

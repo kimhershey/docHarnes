@@ -41,13 +41,14 @@ export function ViewerKnowledgePanel({ doc, explainSelection, onExplained, onCit
 
   const ask = async (q: string, extra: Partial<AnswerRequest> = {}) => {
     const text = q.trim();
-    if (!text && !extra.selection) return;
+    if ((!text && !extra.selection) || qa.pending) return;
     setQuestion("");
     await qa.ask({ question: text, kind: "answer", ...baseRequest(), ...extra });
   };
 
   useEffect(() => {
     if (explainSelection) {
+      if (qa.pending) qa.cancel();
       void qa.ask({ question: "", kind: "explain", selection: explainSelection, ...baseRequest(), scope: { latest_only: knowledge?.latest_only ?? true } });
       onExplained();
     }
@@ -94,6 +95,7 @@ export function ViewerKnowledgePanel({ doc, explainSelection, onExplained, onCit
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
             placeholder={t("viewer.qa.placeholder")}
+            aria-label={t("viewer.qa.title")}
             className="resize-none text-sm"
             data-testid="viewer-qa-input"
             onKeyDown={(e) => {
@@ -118,6 +120,7 @@ export function ViewerKnowledgePanel({ doc, explainSelection, onExplained, onCit
           onCitation={onCitation}
           onAskGeneral={qa.lastRequest ? () => void qa.ask({ ...qa.lastRequest!, allow_general: true }) : undefined}
           onFeedback={(id, v) => void feedback(id, v)}
+          onCancel={qa.pending ? qa.cancel : undefined}
           compact
         />
       )}
@@ -142,7 +145,7 @@ export function ViewerKnowledgePanel({ doc, explainSelection, onExplained, onCit
           </Button>
         </div>
         {summary.pending || !!summary.answer || !!summary.error ? (
-          <AnswerCard answer={summary.answer} pending={summary.pending} streamText={summary.streamText} error={summary.error} onCitation={onCitation} compact />
+          <AnswerCard answer={summary.answer} pending={summary.pending} streamText={summary.streamText} error={summary.error} onCitation={onCitation} onCancel={summary.pending ? summary.cancel : undefined} compact />
         ) : (
           (() => {
             const last = history?.find((a) => a.kind === "summary");

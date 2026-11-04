@@ -131,6 +131,7 @@ pub fn run() {
             commands::knowledge::knowledge_search,
             commands::knowledge::knowledge_chunks,
             commands::knowledge::knowledge_answer,
+            commands::knowledge::knowledge_answer_cancel,
             commands::knowledge::knowledge_answers,
             commands::knowledge::knowledge_answer_feedback,
             commands::knowledge::knowledge_answer_delete,

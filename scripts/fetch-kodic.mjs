@@ -12,7 +12,7 @@
 // The tarball is sha256-pinned in engines/kodic.json; the dictionary's Apache-2.0
 // COPYING and a NOTICE are copied next to the built files (design §3.2).
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, copyFileSync, rmSync, writeFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, copyFileSync, renameSync, rmSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -79,24 +79,30 @@ if (!existsSync(path.join(srcDir, "matrix.def"))) {
   throw new Error(`${srcDir} does not look like a mecab-ko-dic source directory`);
 }
 
-rmSync(dest, { recursive: true, force: true });
-mkdirSync(dest, { recursive: true });
+// Build next to the destination and swap at the end: a failed build keeps the
+// previous dictionary, and a running app (mmap on Windows) is never half-replaced.
+const staging = `${dest}.tmp`;
+rmSync(staging, { recursive: true, force: true });
+mkdirSync(staging, { recursive: true });
 const builder = opt("builder", null);
 const cmd = builder
-  ? spawnSync(builder, ["build", srcDir, dest], { stdio: "inherit" })
-  : spawnSync("cargo", ["run", "--release", "-q", "-p", "doculens-kodic", "--", "build", srcDir, dest], {
+  ? spawnSync(builder, ["build", srcDir, staging], { stdio: "inherit" })
+  : spawnSync("cargo", ["run", "--release", "-q", "-p", "doculens-kodic", "--", "build", srcDir, staging], {
       stdio: "inherit",
       cwd: ROOT,
       shell: process.platform === "win32",
     });
-if (cmd.status !== 0) throw new Error("doculens-kodic build failed");
+if (cmd.status !== 0) {
+  rmSync(staging, { recursive: true, force: true });
+  throw new Error("doculens-kodic build failed");
+}
 
 for (const f of ["COPYING", "README", "NEWS"]) {
   const p = path.join(srcDir, f);
-  if (existsSync(p)) copyFileSync(p, path.join(dest, f === "COPYING" ? "LICENSE-mecab-ko-dic.txt" : `${f}-mecab-ko-dic.txt`));
+  if (existsSync(p)) copyFileSync(p, path.join(staging, f === "COPYING" ? "LICENSE-mecab-ko-dic.txt" : `${f}-mecab-ko-dic.txt`));
 }
 writeFileSync(
-  path.join(dest, "NOTICE.txt"),
+  path.join(staging, "NOTICE.txt"),
   [
     `This directory contains a binary build of ${manifest.name} ${manifest.version}`,
     `(https://bitbucket.org/eunjeon/mecab-ko-dic), licensed under the Apache License 2.0`,
@@ -104,8 +110,21 @@ writeFileSync(
     "",
   ].join("\n"),
 );
-const missing = manifest.output_files.filter((f) => !existsSync(path.join(dest, f)));
-if (missing.length) throw new Error(`build incomplete, missing: ${missing.join(", ")}`);
+const missing = manifest.output_files.filter((f) => !existsSync(path.join(staging, f)));
+if (missing.length) {
+  rmSync(staging, { recursive: true, force: true });
+  throw new Error(`build incomplete, missing: ${missing.join(", ")}`);
+}
+const previous = `${dest}.old`;
+rmSync(previous, { recursive: true, force: true });
+if (existsSync(dest)) renameSync(dest, previous);
+try {
+  renameSync(staging, dest);
+} catch (e) {
+  if (existsSync(previous)) renameSync(previous, dest);
+  throw e;
+}
+rmSync(previous, { recursive: true, force: true });
 const size = readdirSync(dest).reduce((n, f) => n + (statSafe(path.join(dest, f)) ?? 0), 0);
 console.log(`ko-dic ${manifest.version} ready in ${dest} (${(size / 1048576).toFixed(0)} MB)`);
 rmSync(tmp, { recursive: true, force: true });

@@ -430,7 +430,7 @@ fn grounded_answers_cite_sources_and_handle_no_evidence() {
                 .into(),
         model: "qwen-test".into(),
     };
-    let deps = AnswerDeps { search: w.search_deps(None), chat: &chat, model: None };
+    let deps = AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None };
     let mut streamed = String::new();
     let a = answer(&deps, &AnswerRequest::question("출장비는 무엇으로 구성되나요?"), &mut |d| {
         streamed.push_str(d);
@@ -446,7 +446,7 @@ fn grounded_answers_cite_sources_and_handle_no_evidence() {
         a.sentences[1].citations,
         vec![1, 2].into_iter().filter(|n| *n as usize <= a.sources.len()).collect::<Vec<_>>()
     );
-    assert_eq!(a.conflicts.as_deref(), Some("없음"));
+    assert_eq!(a.conflicts, None, "\"상충: 없음\" is not a conflict");
     assert_eq!(a.model.as_deref(), Some("qwen-test"));
     let id = a.id.expect("saved");
     let saved = w.db.with(|c| repo::list_answers(c, Some(AnswerKind::Answer), None, 10)).unwrap();
@@ -458,7 +458,7 @@ fn grounded_answers_cite_sources_and_handle_no_evidence() {
 
     // No evidence: nonsense query → canned text, no model call.
     let silent = ScriptedChat { reply: "SHOULD NOT BE CALLED".into(), model: "m".into() };
-    let deps = AnswerDeps { search: w.search_deps(None), chat: &silent, model: None };
+    let deps = AnswerDeps { search: w.search_deps(None), chat: &silent, model: None, cancelled: None };
     let a = answer(&deps, &AnswerRequest::question("플루토늄 원자로 냉각수 xyzzy"), &mut |_| true).unwrap();
     assert!(a.no_evidence && a.sources.is_empty());
     assert_eq!(a.text, super::answer::no_evidence_text(true));
@@ -475,7 +475,7 @@ fn grounded_answers_cite_sources_and_handle_no_evidence() {
     let chat = ScriptedChat {
         reply: "지체상금은 납품 지연 시 부과되는 금액입니다[1].".into(), model: "m".into()
     };
-    let deps = AnswerDeps { search: w.search_deps(None), chat: &chat, model: None };
+    let deps = AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None };
     let mut req = AnswerRequest::question("");
     req.kind = AnswerKind::Explain;
     req.selection = Some("지체일수 1일당 계약금액의 0.1%".into());
@@ -504,7 +504,7 @@ fn grounded_answers_cite_sources_and_handle_no_evidence() {
             unreachable!()
         }
     }
-    let deps = AnswerDeps { search: w.search_deps(None), chat: &NoModel, model: None };
+    let deps = AnswerDeps { search: w.search_deps(None), chat: &NoModel, model: None, cancelled: None };
     let err = answer(&deps, &AnswerRequest::question("출장비"), &mut |_| true).unwrap_err();
     assert!(err.to_string().contains("no_active_model"), "{err}");
 }
@@ -516,7 +516,7 @@ fn summaries_map_reduce_and_comparisons() {
         reply: "- 출장비는 교통비·숙박비·일비로 구성된다[1].\n- 숙박비 한도는 150,000원이다[2].".into(),
         model: "m".into(),
     };
-    let deps = AnswerDeps { search: w.search_deps(None), chat: &chat, model: None };
+    let deps = AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None };
     let mut req = AnswerRequest::question("");
     req.kind = AnswerKind::Summary;
     req.document_id = Some("reg2".into());
@@ -647,4 +647,161 @@ fn collections_glossary_and_version_crud() {
             &VersionInput { document_id: "d1".into(), group_key: " ".into(), ..VersionInput::default() }
         ))
         .is_err());
+}
+
+#[test]
+fn scoped_search_takes_the_top_n_inside_the_scope() {
+    // 120 filler documents outrank the target on BM25 for "제1조"; with limit 1 the
+    // global candidate window (50) would never reach it unless the scope is in the SQL.
+    let db = Db::open_in_memory().unwrap();
+    for i in 0..120 {
+        let text = format!("제1조 목적 {}\n{}", i, "제1조 제1조 제1조 제1조 목적 목적 목적 ".repeat(3));
+        add_doc(&db, &format!("f{i}"), &format!("filler{i}.pdf"), DocumentRole::Knowledge, &[&text]);
+    }
+    add_doc(&db, "target", "target.pdf", DocumentRole::Knowledge, &["제1조 목적 이 규정은 대상 문서를 위한 것이다."]);
+    let analyzer = analyzer();
+    let deps = IndexDeps { db: &db, analyzer: &analyzer, options: ChunkOptions::default() };
+    index_pending(&deps, None, false, None, &mut |_| {}).unwrap();
+    let mut req = SearchRequest::new("제1조 목적");
+    req.limit = 1;
+    req.scope.documents = vec!["target".into()];
+    let resp = search(&SearchDeps { db: &db, analyzer: &analyzer, embedder: None }, &req).unwrap();
+    assert_eq!(resp.hits.len(), 1, "{resp:?}");
+    assert_eq!(resp.hits[0].document_id, "target");
+    // Vector channel with a scope: the KNN is also scoped (or widened) to the document.
+    let embedder = HashEmbedder::new(16);
+    embed::embed_pending(&db, &embedder, 64, None, &mut |_, _| {}).unwrap();
+    req.mode = SearchMode::Semantic;
+    let resp = search(&SearchDeps { db: &db, analyzer: &analyzer, embedder: Some(&embedder) }, &req).unwrap();
+    assert!(resp.used_vector);
+    assert!(resp.hits.iter().all(|h| h.document_id == "target"), "{resp:?}");
+}
+
+#[test]
+fn explain_from_a_superseded_edition_still_cites_that_document() {
+    let w = World::new();
+    let chat = ScriptedChat { reply: "구판의 한도는 120,000원입니다[1].".into(), model: "m".into() };
+    let deps = AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None };
+    let mut req = AnswerRequest::question("");
+    req.kind = AnswerKind::Explain;
+    req.selection = Some("숙박비는 1박당 120,000원을 한도로 한다".into());
+    req.document_id = Some("reg1".into()); // is_latest = 0
+    let a = answer(&deps, &req, &mut |_| true).unwrap();
+    assert!(
+        a.sources.iter().any(|c| c.document_id == "reg1"),
+        "{:?}",
+        a.sources.iter().map(|c| &c.document_id).collect::<Vec<_>>()
+    );
+    // Explicit document scopes ignore latest_only / inactive-collection exclusions.
+    let mut sreq = SearchRequest::new("숙박비 한도");
+    sreq.scope.documents = vec!["reg1".into()];
+    let hits = search(&w.search_deps(None), &sreq).unwrap().hits;
+    assert!(hits.iter().any(|h| h.document_id == "reg1"));
+}
+
+#[test]
+fn metadata_updates_do_not_requeue_and_a_new_analyzer_signature_reindexes_everything() {
+    let w = World::new();
+    // A role change bumps updated_at → the document would be re-read; the run touches indexed_at instead.
+    w.db.with(|c| docs::set_role(c, "sec", DocumentRole::Knowledge)).unwrap();
+    let pending_before = w.db.with(|c| repo::documents_to_index(c, None, false)).unwrap();
+    assert!(pending_before.iter().any(|d| d.id == "sec"));
+    let report = index_pending(&w.index_deps(), None, false, None, &mut |_| {}).unwrap();
+    assert_eq!(report.unchanged, 1);
+    assert!(w.db.with(|c| repo::documents_to_index(c, None, false)).unwrap().is_empty());
+    assert_eq!(index_status(&w.index_deps()).unwrap().documents_pending, 0);
+    // Explicit ids are indexed even when nothing changed (force path through ids).
+    let only = w.db.with(|c| repo::documents_to_index(c, Some(&["con".to_string()]), false)).unwrap();
+    assert_eq!(only.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), vec!["con"]);
+    // A different tokenizer / chunk size recorded in kv forces a full re-chunk.
+    w.db.with(|c| repo::kv_set(c, super::index::KV_INDEX_SIGNATURE, "v1|other@x|target=99")).unwrap();
+    let report = index_pending(&w.index_deps(), Some(&["con".to_string()]), false, None, &mut |_| {}).unwrap();
+    assert_eq!(report.indexed.len(), 6, "{report:?}");
+    let sig = w.db.with(|c| repo::kv_get(c, super::index::KV_INDEX_SIGNATURE)).unwrap().unwrap();
+    assert!(sig.contains("target="), "{sig}");
+}
+
+#[test]
+fn importing_into_a_deleted_collection_is_a_typed_error_and_feedback_is_validated() {
+    let w = World::new();
+    assert!(!w.db.with(|c| repo::collection_exists(c, "gone")).unwrap());
+    let err = w.db.with(|c| repo::add_docs_to_collection(c, "gone", &["sec".into()])).unwrap_err();
+    assert!(err.to_string().contains("collection_not_found"), "{err}");
+    let err =
+        w.db.with(|c| {
+            repo::set_version(
+                c,
+                &VersionInput { document_id: "nope".into(), group_key: "g".into(), ..VersionInput::default() },
+            )
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("document_not_found"), "{err}");
+    let col =
+        w.db.with(|c| repo::save_collection(c, &CollectionInput { name: "A".into(), ..CollectionInput::default() }))
+            .unwrap();
+    let err =
+        w.db.with(|c| repo::save_collection(c, &CollectionInput { name: "a".into(), ..CollectionInput::default() }))
+            .unwrap_err();
+    assert!(err.to_string().contains("collection_name_taken"), "{err}");
+    let err =
+        w.db.with(|c| {
+            repo::save_collection(
+                c,
+                &CollectionInput { id: Some("missing".into()), name: "B".into(), ..CollectionInput::default() },
+            )
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("collection_not_found"), "{err}");
+    let g = w
+        .db
+        .with(|c| repo::save_glossary(c, &GlossaryInput { id: None, term: "VAT".into(), ..GlossaryInput::default() }))
+        .unwrap();
+    let err =
+        w.db.with(|c| {
+            repo::save_glossary(c, &GlossaryInput { id: Some(g.id), term: "출장비".into(), ..GlossaryInput::default() })
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("glossary_term_taken"), "{err}");
+    assert!(w.db.with(|c| repo::collection_exists(c, &col.id)).unwrap());
+}
+
+#[test]
+fn embedding_aborts_after_consecutive_failures_and_skips_replaced_chunks() {
+    struct FlakySync {
+        fail_after: usize,
+        calls: std::sync::Mutex<usize>,
+    }
+    impl Embedder for FlakySync {
+        fn model_id(&self) -> &str {
+            "flaky"
+        }
+        fn embed(&self, inputs: &[String]) -> crate::error::Result<Vec<Vec<f32>>> {
+            let mut c = self.calls.lock().unwrap();
+            *c += 1;
+            if *c > self.fail_after {
+                return Err(crate::error::CoreError::Engine("engine gone".into()));
+            }
+            Ok(inputs.iter().map(|_| vec![1.0, 0.0, 0.0, 0.0]).collect())
+        }
+    }
+    let w = World::new();
+    let flaky = FlakySync { fail_after: 1, calls: std::sync::Mutex::new(0) };
+    let err = embed::embed_pending(&w.db, &flaky, 2, None, &mut |_, _| {}).unwrap_err();
+    assert!(err.to_string().contains("engine gone"), "{err}");
+    assert_eq!(*flaky.calls.lock().unwrap(), 1 + 3, "one success, then three consecutive failures abort");
+    // The store step only marks the chunk whose text was embedded: a stale hash matches nothing.
+    let chunk = w.db.with(|c| repo::list_chunks(c, "sec")).unwrap()[0].clone();
+    let n =
+        w.db.with(|c| {
+            c.execute(
+                "UPDATE chunks SET embedded_at = ?2 WHERE id = ?1 AND text_hash = ?3 AND embedded_at IS NULL",
+                rusqlite::params![chunk.id, "now", "stale-hash"],
+            )
+        })
+        .unwrap();
+    assert_eq!(n, 0);
+    let ok = HashEmbedder::new(8);
+    let report = embed::embed_pending(&w.db, &ok, 64, None, &mut |_, _| {}).unwrap();
+    assert_eq!(report.failed, 0, "{report:?}");
+    assert!(report.embedded > 0);
 }

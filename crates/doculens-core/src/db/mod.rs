@@ -91,6 +91,10 @@ fn is_remote_drive_windows(root: &Path) -> bool {
 /// jobs + UI reads) is small.
 pub struct Db {
     conn: Mutex<Connection>,
+    /// Second, read-only connection (file databases only) so searches and status
+    /// queries do not wait for a long write transaction; WAL readers never block
+    /// the writer.
+    reader: Option<Mutex<Connection>>,
     path: PathBuf,
     journal_mode: JournalMode,
 }
@@ -136,7 +140,12 @@ impl Db {
         }
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
         let conn = Connection::open_with_flags(path, flags)?;
-        Self::init(conn, path.to_path_buf(), journal_mode)
+        let mut db = Self::init(conn, path.to_path_buf(), journal_mode)?;
+        let reader =
+            Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
+        reader.busy_timeout(Duration::from_secs(5))?;
+        db.reader = Some(Mutex::new(reader));
+        Ok(db)
     }
 
     /// In-memory database (tests, dry runs).
@@ -154,7 +163,7 @@ impl Db {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "temp_store", "MEMORY")?;
-        let db = Db { conn: Mutex::new(conn), path, journal_mode };
+        let db = Db { conn: Mutex::new(conn), reader: None, path, journal_mode };
         db.migrate()?;
         Ok(db)
     }
@@ -171,6 +180,18 @@ impl Db {
         // A panic while holding the guard poisons it, but the connection itself is still
         // usable (an open transaction rolled back when it was dropped).
         Ok(self.conn.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Runs a read-only query on the reader connection when there is one (file
+    /// databases), otherwise on the main connection.
+    pub fn with_read<T>(&self, f: impl FnOnce(&Connection) -> rusqlite::Result<T>) -> Result<T> {
+        match &self.reader {
+            Some(r) => {
+                let guard = r.lock().unwrap_or_else(|e| e.into_inner());
+                Ok(f(&guard)?)
+            }
+            None => self.with(f),
+        }
     }
 
     /// Runs `f` with the connection.

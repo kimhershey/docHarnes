@@ -43,7 +43,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/kodic
-          key: kodic-${{ steps.kodic.outputs.ver }}-v1
+          key: kodic-${{ steps.kodic.outputs.ver }}-${{ hashFiles('crates/doculens-kodic/**', 'engines/kodic.json', 'scripts/fetch-kodic.mjs') }}
       - name: Build ko-dic (mecab-ko-dic, sha256 pinned → lindera format)
         if: steps.kodic-cache.outputs.cache-hit != 'true'
         run: node scripts/fetch-kodic.mjs --dest /tmp/kodic
@@ -154,7 +154,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}\kodic
-          key: kodic-windows-${{ steps.kodic.outputs.ver }}-v1
+          key: kodic-windows-${{ steps.kodic.outputs.ver }}-${{ hashFiles('crates/doculens-kodic/**', 'engines/kodic.json', 'scripts/fetch-kodic.mjs') }}
       - name: Build ko-dic (Windows)
         if: steps.kodic-cache.outputs.cache-hit != 'true'
         run: node scripts/fetch-kodic.mjs --dest "$env:RUNNER_TEMP\kodic"

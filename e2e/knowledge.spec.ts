@@ -1,5 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import ko from "../src/i18n/ko.json" with { type: "json" };
+
+const t_general_badge = ko.answer.general_badge;
+const t_summary = (key: string, vars: Record<string, number>) => ko.knowledge.wizard.summary.replace(/\{\{(\w+)\}\}/g, (_, k: string) => String(vars[k]));
+
 // P3 acceptance (design §4.1): ingest wizard → chunking/index status →
 // collections → hybrid search with highlights → grounded answers with
 // per-sentence citations (assistant + viewer), explain/summary, glossary,
@@ -55,7 +60,7 @@ test.describe("P3 knowledge base", () => {
     await page.getByTestId("ingest-new-collection").fill("사내 규정");
     await page.getByTestId("ingest-preview").click();
     await expect(page.getByTestId("ingest-plan")).toBeVisible();
-    await expect(page.getByTestId("ingest-plan")).toContainText("신규 2");
+    await expect(page.getByTestId("ingest-plan")).toContainText(t_summary("", { new: 2, relink: 0, dup: 0, registered: 0, unsupported: 0 }));
     await page.getByTestId("ingest-start").click();
     await expect(page.getByTestId("ingest-wizard")).toBeHidden();
 
@@ -71,7 +76,7 @@ test.describe("P3 knowledge base", () => {
     await page.getByTestId("knowledge-tab-collections").click();
     const col = page.locator('[data-testid="collection-item"][data-collection-name="사내 규정"]');
     await expect(col).toBeVisible();
-    await expect(col).toContainText("문서 2");
+    await expect(col).toContainText(ko.knowledge.collections.docs_count.replace("{{count}}", "2"));
     await col.click();
     await expect(page.getByTestId("collection-doc")).toHaveCount(2);
 
@@ -86,7 +91,7 @@ test.describe("P3 knowledge base", () => {
     await expect(page.getByTestId("search-meta")).toBeVisible();
     const hits = page.getByTestId("search-hit");
     await expect(hits.first()).toBeVisible();
-    expect(await hits.count()).toBeGreaterThanOrEqual(2);
+    await expect(hits.nth(1)).toBeVisible();
     await expect(hits.first().locator("mark").first()).toContainText("텍스트");
     await expect(page.getByTestId("search-keyword-only")).toBeVisible();
     await hits.first().getByTestId("search-hit-title").click();
@@ -113,13 +118,10 @@ test.describe("P3 knowledge base", () => {
     await expect(card.getByTestId("citation-chip").first()).toBeVisible();
     await expect(card.getByTestId("answer-source").first()).toBeVisible();
     await card.getByTestId("answer-helpful").click();
-    // Citation chips open the cited page in the viewer.
-    await card.getByTestId("citation-chip").first().click();
-    await expect(page.getByTestId("page-viewer")).toBeVisible();
-    await expect(page).toHaveURL(/page=1/);
+    await expect(card.getByTestId("answer-helpful")).toHaveAttribute("aria-pressed", "true");
 
-    // No evidence → explicit banner; the user may opt into general knowledge.
-    await page.getByTestId("nav-assistant").click();
+    // A second, unrelated question is retrieved afresh (no follow-up) → explicit "no evidence" banner,
+    // and the user may opt into general knowledge.
     await page.getByTestId("assistant-input").fill("xyzzy 플루토늄 원자로");
     await page.getByTestId("assistant-send").click();
     const second = page.locator('[data-testid="assistant-card-answer"] [data-testid="answer-card"]').last();
@@ -128,13 +130,25 @@ test.describe("P3 knowledge base", () => {
     await second.getByTestId("answer-ask-general").click();
     const third = page.locator('[data-testid="assistant-card-answer"] [data-testid="answer-card"]').last();
     await expect(third).toHaveAttribute("data-answer-state", "done", { timeout: 15_000 });
-    await expect(third).toContainText("일반 지식");
+    await expect(third.getByTestId("answer-general-badge")).toHaveText(t_general_badge);
 
-    // The answer log keeps both, with the feedback.
+    // Work items are not answered as questions: they wait for the planner card.
+    await page.getByTestId("assistant-input").fill("지난달 영수증 정리해줘");
+    await page.getByTestId("assistant-send").click();
+    await expect(page.getByTestId("assistant-pending").last()).toBeVisible();
+
+    // Citation chips of the first answer open the cited page in the viewer.
+    await card.getByTestId("citation-chip").first().click();
+    await expect(page.getByTestId("page-viewer")).toBeVisible();
+    await expect(page).toHaveURL(/page=1/);
+    await expect(page.getByTestId("viewer-text").locator("mark").first()).toBeVisible();
+
+    // The answer log keeps the three answers, with the feedback.
     await page.getByTestId("nav-knowledge").click();
     await page.getByTestId("knowledge-tab-answers").click();
     await expect(page.getByTestId("knowledge-answers").getByTestId("answer-card")).toHaveCount(3);
-    await expect(page.getByTestId("kb-stat-feedback")).toBeHidden();
+    // The log is newest-first: the feedback went to the first (oldest) answer.
+    await expect(page.getByTestId("knowledge-answers").getByTestId("answer-helpful").last()).toHaveAttribute("aria-pressed", "true");
   });
 
   test("viewer Q&A, explain, summary, version and glossary and knowledge settings", async ({ page }) => {
@@ -167,7 +181,7 @@ test.describe("P3 knowledge base", () => {
     await page.getByTestId("viewer-explain").click();
     const explain = page.getByTestId("viewer-qa").getByTestId("answer-card").first();
     await expect(explain).toHaveAttribute("data-answer-state", "done", { timeout: 15_000 });
-    await expect(explain).toContainText("설명");
+    await expect(explain).toContainText(ko.answer.kinds.explain);
 
     // Version registration.
     await page.getByTestId("viewer-version").click();

@@ -69,6 +69,8 @@ pub struct JobBook {
     jobs: Mutex<Vec<Job>>,
     cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     app: OnceLock<AppHandle>,
+    /// Serialises `create_if_idle` (check + create).
+    create_gate: Mutex<()>,
 }
 
 impl JobBook {
@@ -116,6 +118,16 @@ impl JobBook {
             .lock()
             .map(|j| j.iter().any(|j| j.kind == kind && j.subject == subject && !j.state.is_finished()))
             .unwrap_or(false)
+    }
+
+    /// Creates a job unless one of `kind` is still active — the check and the
+    /// creation happen under one gate so two threads cannot both pass.
+    pub fn create_if_idle(&self, kind: JobKind, subject: &str) -> Option<(String, Arc<AtomicBool>)> {
+        let _gate = self.create_gate.lock().unwrap_or_else(|e| e.into_inner());
+        if self.is_active_kind(&[kind]) {
+            return None;
+        }
+        Some(self.create(kind, subject))
     }
 
     pub fn create(&self, kind: JobKind, subject: &str) -> (String, Arc<AtomicBool>) {

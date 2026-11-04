@@ -1,6 +1,6 @@
 //! Process-wide state shared by all commands.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -121,6 +121,13 @@ pub struct AppState {
     pub inbox_dirty: AtomicBool,
     /// Documents changed while a knowledge index job ran: re-run it afterwards.
     pub knowledge_dirty: AtomicBool,
+    /// Answer request ids the user cancelled while streaming.
+    pub answer_cancels: Mutex<HashSet<String>>,
+    /// Answer request ids currently streaming (cancelled on a workspace switch).
+    pub answer_running: Mutex<HashSet<String>>,
+    /// True between `before_workspace_change` and the next `on_workspace_changed`:
+    /// background work must not start against the workspace being closed.
+    pub switching: AtomicBool,
     /// HTML → PDF printer backed by the webview (set in `setup`).
     pub printer: OnceLock<Arc<dyn PdfPrinter>>,
     pub inbox_watcher: Mutex<Option<DirWatcher>>,
@@ -163,6 +170,9 @@ impl AppState {
             workspace_generation: AtomicU64::new(0),
             inbox_dirty: AtomicBool::new(false),
             knowledge_dirty: AtomicBool::new(false),
+            answer_cancels: Mutex::new(HashSet::new()),
+            answer_running: Mutex::new(HashSet::new()),
+            switching: AtomicBool::new(false),
             printer: OnceLock::new(),
             inbox_watcher: Mutex::new(None),
             import_plans: Mutex::new(HashMap::new()),

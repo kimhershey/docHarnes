@@ -24,14 +24,23 @@ export function VersionDialog({ open, onOpenChange, doc }: { open: boolean; onOp
   const [latest, setLatest] = useState(true);
   const [busy, setBusy] = useState(false);
 
+  const [dirty, setDirty] = useState(false);
   useEffect(() => {
     if (!open) return;
-    setGroup(current?.group_key ?? (doc.title ?? doc.original_name).replace(/\.[a-z0-9]+$/i, "").replace(/[\s_-]*\d{4}.*$/, "").trim());
+    setDirty(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  // Prefill from the stored version (when it arrives) or from the title, but never over the user's typing.
+  useEffect(() => {
+    if (!open || dirty) return;
+    const base = (doc.title ?? doc.original_name).replace(/\.[a-z0-9]+$/i, "");
+    const m = base.match(/^(.+?)[\s_-]+\d{4}(?:\D.*)?$/);
+    setGroup(current?.group_key ?? (m?.[1] ?? base).trim());
     setLabel(current?.version_label ?? "");
     setEffective(current?.effective_date ?? "");
     setLatest(current?.is_latest ?? true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, current?.document_id]);
+  }, [open, current?.document_id, groups === undefined]);
 
   const save = async () => {
     setBusy(true);
@@ -59,26 +68,58 @@ export function VersionDialog({ open, onOpenChange, doc }: { open: boolean; onOp
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-testid="version-dialog">
+      <DialogContent data-testid="version-dialog" closeLabel={t("common.close")}>
         <DialogHeader>
           <DialogTitle>{t("viewer.version.title")}</DialogTitle>
         </DialogHeader>
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-1">
             <Label htmlFor="ver-group">{t("viewer.version.group")}</Label>
-            <Input id="ver-group" value={group} onChange={(e) => setGroup(e.target.value)} list="version-groups" data-testid="version-group" />
+            <Input
+              id="ver-group"
+              value={group}
+              onChange={(e) => {
+                setDirty(true);
+                setGroup(e.target.value);
+              }}
+              list="version-groups"
+              data-testid="version-group"
+            />
             <datalist id="version-groups">{groups?.map((g) => <option key={g.group_key} value={g.group_key} />)}</datalist>
           </div>
           <div className="flex flex-col gap-1">
             <Label htmlFor="ver-label">{t("viewer.version.label")}</Label>
-            <Input id="ver-label" value={label} onChange={(e) => setLabel(e.target.value)} data-testid="version-label" />
+            <Input
+              id="ver-label"
+              value={label}
+              onChange={(e) => {
+                setDirty(true);
+                setLabel(e.target.value);
+              }}
+              data-testid="version-label"
+            />
           </div>
           <div className="flex flex-col gap-1">
             <Label htmlFor="ver-date">{t("viewer.version.effective")}</Label>
-            <Input id="ver-date" type="date" value={effective} onChange={(e) => setEffective(e.target.value)} />
+            <Input
+              id="ver-date"
+              type="date"
+              value={effective}
+              onChange={(e) => {
+                setDirty(true);
+                setEffective(e.target.value);
+              }}
+            />
           </div>
           <label className="flex items-center gap-2 text-sm">
-            <Switch checked={latest} onCheckedChange={setLatest} data-testid="version-latest" />
+            <Switch
+              checked={latest}
+              onCheckedChange={(v) => {
+                setDirty(true);
+                setLatest(v);
+              }}
+              data-testid="version-latest"
+            />
             {t("viewer.version.latest")}
           </label>
         </div>

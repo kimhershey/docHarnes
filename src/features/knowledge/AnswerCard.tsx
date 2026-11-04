@@ -1,4 +1,4 @@
-import { Copy, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
+import { Copy, Square, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
@@ -16,14 +16,31 @@ export function citationLabel(c: Citation, t: (k: string, o?: Record<string, unk
   return [c.title, page, c.clause ?? ""].filter(Boolean).join(" · ");
 }
 
+/**
+ * Groups sentences back into the paragraphs of the original text (the backend
+ * flattens lines when it splits sentences): a sentence starts a new paragraph
+ * when the original has a line break before it.
+ */
+export function paragraphsOf(text: string, sentences: AnswerSentence[]): AnswerSentence[][] {
+  const paragraphs: AnswerSentence[][] = [];
+  let cursor = 0;
+  for (const s of sentences) {
+    const idx = text.indexOf(s.text, cursor);
+    const between = idx >= 0 ? text.slice(cursor, idx) : "";
+    const newParagraph = paragraphs.length === 0 || between.includes("\n") || /^[-*•]\s/.test(s.text);
+    if (newParagraph) paragraphs.push([s]);
+    else paragraphs[paragraphs.length - 1]!.push(s);
+    if (idx >= 0) cursor = idx + s.text.length;
+  }
+  return paragraphs;
+}
+
 /** Splits a sentence into text and `[n]` markers rendered as clickable chips. */
 function SentenceView({ sentence, sources, onCitation }: { sentence: AnswerSentence; sources: Citation[]; onCitation?: (c: Citation) => void }) {
   const { t } = useTranslation();
   const parts = sentence.text.split(/(\[[\d,\s]+\])/g);
-  const bullet = /^[-*•]\s/.test(sentence.text);
-  const cls = cn("selectable", bullet && "block pl-3");
   return (
-    <span className={cls}>
+    <span className="selectable">
       {parts.map((p, i) => {
         const m = p.match(/^\[([\d,\s]+)\]$/);
         if (!m) return <span key={i}>{p}</span>;
@@ -31,12 +48,14 @@ function SentenceView({ sentence, sources, onCitation }: { sentence: AnswerSente
         return nums.map((n) => {
           const c = sources.find((s) => s.index === n);
           if (!c) return <span key={`${i}-${n}`}>[{n}]</span>;
+          const label = citationLabel(c, t);
           return (
             <button
               key={`${i}-${n}`}
               type="button"
               className="mx-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-accent-soft px-1.5 align-text-bottom text-[11px] font-medium text-accent hover:bg-accent hover:text-accent-fg cursor-pointer"
-              title={citationLabel(c, t)}
+              title={label}
+              aria-label={t("answer.citation_aria", { index: n, label })}
               onClick={() => onCitation?.(c)}
               data-testid="citation-chip"
               data-citation={n}
@@ -59,6 +78,7 @@ export function AnswerCard({
   onAskGeneral,
   onFeedback,
   onDelete,
+  onCancel,
   compact,
 }: {
   answer: AnyAnswer | null;
@@ -69,6 +89,7 @@ export function AnswerCard({
   onAskGeneral?: () => void;
   onFeedback?: (id: number, feedback: number | null) => void;
   onDelete?: (id: number) => void;
+  onCancel?: () => void;
   compact?: boolean;
 }) {
   const { t } = useTranslation();
@@ -83,12 +104,18 @@ export function AnswerCard({
     }
   };
   const id = answer?.id ?? null;
+  const state = pending ? "pending" : answer ? (answer.no_evidence && !answer.used_general_knowledge ? "no_evidence" : "done") : error ? "error" : "idle";
+  const paragraphs = answer ? paragraphsOf(answer.text, answer.sentences) : [];
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-border bg-bg-elevated p-3 text-sm" data-testid="answer-card" data-answer-state={pending ? "pending" : answer ? (answer.no_evidence && !answer.used_general_knowledge ? "no_evidence" : "done") : error ? "error" : "idle"}>
+    <div className="flex flex-col gap-2 rounded-lg border border-border bg-bg-elevated p-3 text-sm" data-testid="answer-card" data-answer-state={state}>
       {answer && (
         <div className="flex flex-wrap items-center gap-2 text-xs text-fg-subtle">
           <Badge variant="info">{t(`answer.kinds.${answer.kind}`)}</Badge>
-          {answer.used_general_knowledge && <Badge variant="warn">{t("answer.general_badge")}</Badge>}
+          {answer.used_general_knowledge && (
+            <Badge variant="warn" data-testid="answer-general-badge">
+              {t("answer.general_badge")}
+            </Badge>
+          )}
           {answer.model && "elapsed_ms" in answer && <span>{t("answer.meta", { model: answer.model, ms: answer.elapsed_ms })}</span>}
           {!compact && answer.question && <span className="truncate">· {answer.question}</span>}
         </div>
@@ -96,9 +123,15 @@ export function AnswerCard({
       {pending && (
         <div className="flex items-start gap-2" role="status">
           <Spinner className="mt-0.5" />
-          <p className="whitespace-pre-wrap break-words selectable" data-testid="answer-stream">
+          <p className="min-w-0 flex-1 whitespace-pre-wrap break-words selectable" data-testid="answer-stream">
             {streamText || t("answer.thinking")}
           </p>
+          {onCancel && (
+            <Button size="sm" variant="ghost" onClick={onCancel} aria-label={t("answer.stop")} data-testid="answer-stop">
+              <Square />
+              {t("answer.stop")}
+            </Button>
+          )}
         </div>
       )}
       {!pending && !!error && (
@@ -106,7 +139,7 @@ export function AnswerCard({
           {describeError(error, t)}
         </p>
       )}
-      {!pending && answer && answer.no_evidence && !answer.used_general_knowledge && (
+      {state === "no_evidence" && (
         <div className="flex flex-wrap items-center gap-2 rounded-md bg-warn-soft px-2 py-1.5 text-warn" data-testid="answer-no-evidence">
           <span>{t("answer.no_evidence")}</span>
           {onAskGeneral && (
@@ -116,10 +149,16 @@ export function AnswerCard({
           )}
         </div>
       )}
-      {!pending && answer && !(answer.no_evidence && !answer.used_general_knowledge) && (
-        <div className="leading-relaxed" data-testid="answer-text">
-          {answer.sentences.length > 0 ? (
-            answer.sentences.map((s, i) => <SentenceView key={i} sentence={s} sources={answer.sources} onCitation={onCitation} />)
+      {state === "done" && answer && (
+        <div className="flex flex-col gap-1 leading-relaxed" data-testid="answer-text">
+          {paragraphs.length > 0 ? (
+            paragraphs.map((para, i) => (
+              <p key={i} className={cn(/^[-*•]\s/.test(para[0]?.text ?? "") && "pl-3")}>
+                {para.map((s, j) => (
+                  <SentenceView key={j} sentence={s} sources={answer.sources} onCitation={onCitation} />
+                ))}
+              </p>
+            ))
           ) : (
             <p className="whitespace-pre-wrap selectable">{answer.text}</p>
           )}
@@ -145,6 +184,7 @@ export function AnswerCard({
                   onClick={() => onCitation?.(c)}
                   data-testid="answer-source"
                   title={t("answer.open_source")}
+                  aria-label={t("answer.citation_aria", { index: c.index, label: citationLabel(c, t) })}
                 >
                   [{c.index}]
                 </button>
@@ -161,11 +201,11 @@ export function AnswerCard({
         <div className="flex items-center gap-1">
           {onFeedback && id != null && (
             <>
-              <Button size="sm" variant={answer.feedback === 1 ? "default" : "ghost"} onClick={() => onFeedback(id, answer.feedback === 1 ? null : 1)} aria-label={t("answer.feedback_helpful")} data-testid="answer-helpful">
+              <Button size="sm" variant={answer.feedback === 1 ? "default" : "ghost"} aria-pressed={answer.feedback === 1} onClick={() => onFeedback(id, answer.feedback === 1 ? null : 1)} aria-label={t("answer.feedback_helpful")} data-testid="answer-helpful">
                 <ThumbsUp />
                 {t("answer.feedback_helpful")}
               </Button>
-              <Button size="sm" variant={answer.feedback === -1 ? "default" : "ghost"} onClick={() => onFeedback(id, answer.feedback === -1 ? null : -1)} aria-label={t("answer.feedback_wrong")} data-testid="answer-wrong">
+              <Button size="sm" variant={answer.feedback === -1 ? "default" : "ghost"} aria-pressed={answer.feedback === -1} onClick={() => onFeedback(id, answer.feedback === -1 ? null : -1)} aria-label={t("answer.feedback_wrong")} data-testid="answer-wrong">
                 <ThumbsDown />
                 {t("answer.feedback_wrong")}
               </Button>

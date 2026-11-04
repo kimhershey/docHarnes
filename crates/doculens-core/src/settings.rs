@@ -338,6 +338,8 @@ pub struct KnowledgeSettings {
     pub top_k: u32,
     /// Target chunk size in tokens (400–800 per design).
     pub chunk_target_tokens: u32,
+    /// Vector-only hits below this cosine similarity are not evidence (bge-m3 ≈ 0.5).
+    pub min_vector_similarity: f32,
 }
 
 impl Default for KnowledgeSettings {
@@ -351,7 +353,21 @@ impl Default for KnowledgeSettings {
             context_tokens: 6_000,
             top_k: 8,
             chunk_target_tokens: 500,
+            min_vector_similarity: 0.5,
         }
+    }
+}
+
+impl KnowledgeSettings {
+    /// Keeps the knobs inside the ranges the answer / chunker code supports.
+    pub fn normalize(&mut self) {
+        self.context_tokens = self.context_tokens.clamp(1_000, 24_000);
+        self.top_k = self.top_k.clamp(1, 32);
+        self.chunk_target_tokens = self.chunk_target_tokens.clamp(120, 2_000);
+        if !self.min_vector_similarity.is_finite() {
+            self.min_vector_similarity = 0.5;
+        }
+        self.min_vector_similarity = self.min_vector_similarity.clamp(0.0, 1.0);
     }
 }
 
@@ -540,6 +556,7 @@ impl AppSettings {
 
     /// Clamps numeric ranges, fills missing shortcuts, de-duplicates workspaces.
     pub fn normalize(&mut self) {
+        self.knowledge.normalize();
         self.ui.scale_percent = self.ui.scale_percent.clamp(UI_SCALE_MIN, UI_SCALE_MAX);
         self.processing.render_dpi = self.processing.render_dpi.clamp(72, 600);
         self.processing.review_threshold = self.processing.review_threshold.clamp(0.0, 1.0);
