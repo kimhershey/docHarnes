@@ -113,8 +113,15 @@
   timings 수신) → 스트리밍(델타 수신) → json_schema 제약 출력(`{"ok": true}`) → 이미지 요청
   (프롬프트 토큰 1,060, mmproj 경로 확인) → 언로드 → 재시작 → 정지. 출력 텍스트는 랜덤
   가중치라 무의미하며 경로 검증 용도.
-- CI: `engine-real` 작업이 핀 고정 릴리스(`engines/manifest.json`)의 ubuntu 빌드를 받아 같은
-  테스트를 실행(`continue-on-error: true` — 릴리스 자산 이름 패턴은 첫 실행에서 확인 후 고정).
+- **실제 데스크톱 바이너리 헤드리스 확인(Linux, Xvfb)**: `tauri build --debug --no-bundle` 바이너리를
+  `DOCULENS_APP_DATA` 픽스처(워크스페이스 `.doculens/models/tiny-qwen35/` + 설정 `active_model`,
+  `auto_start_engine`)와 `DOCULENS_LLAMA_SERVER`로 실행 → 워크스페이스 자동 열기 → 엔진 자동 시작
+  (`engine ready`) → 활성 모델 `load-on-startup` 경로로 로드 → 워밍업 완료, 폴더 감시 루프·IPC 오류 없음.
+  이 확인에서 두 가지 결함을 잡았다: `PR_SET_PDEATHSIG`가 스폰 스레드 종료 시 엔진을 SIGKILL 하던 문제,
+  엔진의 모델 mmap(inotify OPEN 이벤트)이 2초마다 재검색을 유발하던 문제.
+- CI: `engine-real` 작업이 핀 고정 릴리스(`engines/manifest.json`)의 ubuntu 빌드를 받아 같은 테스트를
+  실행한다(자산 패턴 `*ubuntu*x64*` 확인됨, 차단 작업). Windows 작업은 `cargo test -p doculens-core`로
+  프로세스 수준 테스트까지 실행하므로 Job Object 경로가 매 푸시마다 검증된다.
 
 ## P1 단계 말 리뷰 반영 (2026-11-04)
 
