@@ -74,8 +74,10 @@ fn is_remote_drive_windows(root: &Path) -> bool {
     /// `DRIVE_REMOTE` (Win32 `WinBase.h`); lives in `Win32::System::WindowsProgramming` in windows-sys.
     const DRIVE_REMOTE: u32 = 4;
     let Some(prefix) = root.components().next() else { return false };
-    let drive = std::path::Path::new(prefix.as_os_str()).join("\\");
-    let wide: Vec<u16> = drive.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    // `GetDriveTypeW` wants the root with a trailing separator (`C:\`, `\\server\share\`).
+    let mut drive = prefix.as_os_str().to_os_string();
+    drive.push("\\");
+    let wide: Vec<u16> = drive.encode_wide().chain(std::iter::once(0)).collect();
     // SAFETY: `wide` is a NUL-terminated UTF-16 string that outlives the call.
     unsafe { GetDriveTypeW(wide.as_ptr()) == DRIVE_REMOTE }
 }
