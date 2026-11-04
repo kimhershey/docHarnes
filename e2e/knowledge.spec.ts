@@ -147,7 +147,8 @@ test.describe("P3 knowledge base", () => {
     await page.getByTestId("nav-knowledge").click();
     await page.getByTestId("knowledge-tab-answers").click();
     await expect(page.getByTestId("knowledge-answers").getByTestId("answer-card")).toHaveCount(3);
-    await expect(page.getByTestId("knowledge-answers").getByTestId("answer-helpful").first()).toHaveAttribute("aria-pressed", "true");
+    // The log is newest-first: the feedback went to the first (oldest) answer.
+    await expect(page.getByTestId("knowledge-answers").getByTestId("answer-helpful").last()).toHaveAttribute("aria-pressed", "true");
   });
 
   test("viewer Q&A, explain, summary, version and glossary and knowledge settings", async ({ page }) => {

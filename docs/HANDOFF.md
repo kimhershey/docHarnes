@@ -361,10 +361,10 @@
 
 | 항목 | 결과 |
 |---|---|
-| `cargo test --workspace` (ko-dic + PDFium) | 코어 lib 117 통과(+1 ignored), 엔진 프로세스·real_engine 통과 |
+| `cargo test --workspace` (ko-dic + PDFium) | 코어 lib 124 통과(+1 ignored; 지식 모듈 33), 엔진 프로세스·real_engine 통과 |
 | 합성 골든셋 15문항 | ko-dic: 재현율@10 15/15, top-1 조항 ≥ 75% · 간이 분석기: 14/15, 14/15 |
 | `cargo clippy --workspace --all-targets -D warnings`, `cargo fmt --check` | 통과 |
-| vitest / Playwright | 27 / 17 통과 |
+| vitest / Playwright | 27 / 17 통과 (리뷰 반영 후 재실행) |
 | `npm run licenses:check`, `cargo deny check licenses bans sources` | 통과 (lindera MIT, mecab-ko-dic Apache-2.0, sqlite-vec MIT/Apache) |
 | CI (c51ca53) | Rust·Web·License·실엔진·Windows(ko-dic 빌드 포함) 전부 성공 |
 | ko-dic 빌드 | `scripts/fetch-kodic.mjs`: 다운로드(sha256 핀) → 빌드 5초 → 82 MB, 재실행 시 건너뜀 |

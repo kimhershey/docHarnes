@@ -750,8 +750,9 @@ pub fn summarize(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn 
             }
             used += cost;
             group.push(p.clone());
-            let last_overall = i + 1 == n && (used + 0 <= req.context_tokens) && merged.is_empty();
             if i + 1 == n {
+                // The final flush of a level that produced nothing else yields the answer text.
+                let last_overall = merged.is_empty();
                 flush(&mut group, &mut merged, last_overall)?;
             }
         }
