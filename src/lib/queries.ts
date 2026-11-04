@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { api } from "./ipc";
 import { queryKeys } from "./query-client";
@@ -29,7 +29,14 @@ export function useEngineBinaryInfo(enabled = true) {
 }
 
 export function useDocuments(filter: DocumentFilter, enabled = true) {
-  return useQuery({ queryKey: queryKeys.documentsList(filter), queryFn: () => api.documentsList(filter), enabled, staleTime: 5_000 });
+  return useQuery({
+    queryKey: queryKeys.documentsList(filter),
+    queryFn: () => api.documentsList(filter),
+    enabled,
+    staleTime: 5_000,
+    // Keep the previous list on filter / search changes so the grid never unmounts into a spinner.
+    placeholderData: keepPreviousData,
+  });
 }
 
 export function useDocumentStats(enabled = true) {
@@ -46,10 +53,6 @@ export function useDocumentPages(id: string | undefined, withText = false) {
     queryFn: () => api.documentsPages(id ?? "", withText),
     enabled: !!id,
   });
-}
-
-export function useDocumentTags(enabled = true) {
-  return useQuery({ queryKey: queryKeys.documentTags, queryFn: () => api.documentsTags(), enabled, staleTime: 10_000 });
 }
 
 export function usePdfiumInfo(enabled = true) {

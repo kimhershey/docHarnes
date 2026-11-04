@@ -146,6 +146,11 @@ impl Ctx<'_> {
             .or_else(|| xml::find_zip_entry(self.archive, &format!("Contents/{href}")))?;
         match xml::read_zip_entry(self.archive, &name, xml::MAX_BINARY_BYTES) {
             Ok(Some(bytes)) if !bytes.is_empty() => {
+                let total: usize = self.images.iter().map(|i| i.bytes.len()).sum();
+                if total + bytes.len() > xml::MAX_IMAGE_TOTAL_BYTES {
+                    self.notes.push(format!("이미지 생략(용량 상한): {href}"));
+                    return None;
+                }
                 let id = format!("img{}", self.images.len() + 1);
                 self.images.push(ImageData { id: id.clone(), mime, bytes });
                 Some(id)
@@ -278,9 +283,11 @@ fn picture(ctx: &mut Ctx<'_>, pic: &Element) -> Option<Block> {
 }
 
 fn table(ctx: &mut Ctx<'_>, tbl: &Element) -> Table {
-    let row_cnt = tbl.attr_u32("rowCnt").unwrap_or(0) as usize;
-    let col_cnt = tbl.attr_u32("colCnt").unwrap_or(0) as usize;
-    let mut rows: Vec<Vec<Cell>> = vec![Vec::new(); row_cnt.max(tbl.children_named("tr").count())];
+    // Attribute values are untrusted: clamp before allocating.
+    let row_cnt = (tbl.attr_u32("rowCnt").unwrap_or(0) as usize).min(xml::MAX_TABLE_ROWS);
+    let col_cnt = (tbl.attr_u32("colCnt").unwrap_or(0) as usize).min(xml::MAX_TABLE_COLS);
+    let mut rows: Vec<Vec<Cell>> =
+        vec![Vec::new(); row_cnt.max(tbl.children_named("tr").count().min(xml::MAX_TABLE_ROWS))];
     let mut col_widths: Vec<f32> = vec![0.0; col_cnt];
     for (ri, tr) in tbl.children_named("tr").enumerate() {
         for tc in tr.children_named("tc") {
@@ -288,8 +295,13 @@ fn table(ctx: &mut Ctx<'_>, tbl: &Element) -> Table {
             let row = addr.and_then(|a| a.attr_u32("rowAddr")).map(|r| r as usize).unwrap_or(ri);
             let col = addr.and_then(|a| a.attr_u32("colAddr")).map(|c| c as usize);
             let span = tc.child("cellSpan");
-            let col_span = span.and_then(|s| s.attr_u32("colSpan")).unwrap_or(1).max(1) as u16;
-            let row_span = span.and_then(|s| s.attr_u32("rowSpan")).unwrap_or(1).max(1) as u16;
+            let col_span =
+                span.and_then(|s| s.attr_u32("colSpan")).unwrap_or(1).clamp(1, xml::MAX_TABLE_COLS as u32) as u16;
+            let row_span =
+                span.and_then(|s| s.attr_u32("rowSpan")).unwrap_or(1).clamp(1, xml::MAX_TABLE_ROWS as u32) as u16;
+            if row >= xml::MAX_TABLE_ROWS || col.is_some_and(|c| c >= xml::MAX_TABLE_COLS) {
+                continue;
+            }
             if let (Some(c), Some(w)) = (col, tc.child("cellSz").and_then(|s| s.attr_f32("width"))) {
                 if col_span == 1 && c < col_widths.len() && col_widths[c] == 0.0 {
                     col_widths[c] = hwpunit_to_mm(w);

@@ -10,7 +10,6 @@ interface DocumentsState {
   view: "grid" | "list";
   folder: string | null;
   query: string;
-  lastChange: DocumentsChanged | null;
   init: () => Promise<void>;
   setView: (view: "grid" | "list") => void;
   setFolder: (folder: string | null) => void;
@@ -33,15 +32,11 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
   view: "grid",
   folder: null,
   query: "",
-  lastChange: null,
 
   init: async () => {
     if (get().initialized) return;
     set({ initialized: true });
-    await subscribe<DocumentsChanged>(EVENTS.documentsChanged, (change) => {
-      set({ lastChange: change });
-      scheduleInvalidate();
-    });
+    await subscribe<DocumentsChanged>(EVENTS.documentsChanged, () => scheduleInvalidate());
   },
 
   setView: (view) => set({ view }),

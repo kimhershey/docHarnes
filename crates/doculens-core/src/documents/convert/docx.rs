@@ -107,6 +107,11 @@ impl Ctx<'_> {
         }
         match xml::read_zip_entry(self.archive, &name, xml::MAX_BINARY_BYTES) {
             Ok(Some(bytes)) if !bytes.is_empty() => {
+                let total: usize = self.images.iter().map(|i| i.bytes.len()).sum();
+                if total + bytes.len() > xml::MAX_IMAGE_TOTAL_BYTES {
+                    self.notes.push(format!("이미지 생략(용량 상한): {name}"));
+                    return None;
+                }
                 let id = format!("img{}", self.images.len() + 1);
                 self.images.push(ImageData { id: id.clone(), mime, bytes });
                 Some(id)
@@ -258,12 +263,19 @@ fn table(ctx: &mut Ctx<'_>, tbl: &Element) -> Table {
         v_continue: bool,
     }
     let mut raw_rows: Vec<Vec<Raw>> = Vec::new();
-    for tr in tbl.children_named("tr") {
+    for tr in tbl.children_named("tr").take(xml::MAX_TABLE_ROWS) {
         let mut row = Vec::new();
         let mut grid_col = 0usize;
         for tc in tr.children_named("tc") {
             let pr = tc.child("tcPr");
-            let span = pr.and_then(|p| p.child("gridSpan")).and_then(|g| g.attr_u32("val")).unwrap_or(1).max(1);
+            let span = pr
+                .and_then(|p| p.child("gridSpan"))
+                .and_then(|g| g.attr_u32("val"))
+                .unwrap_or(1)
+                .clamp(1, xml::MAX_TABLE_COLS as u32);
+            if grid_col >= xml::MAX_TABLE_COLS {
+                break; // attribute-driven geometry beyond any real document
+            }
             let v_merge = pr.and_then(|p| p.child("vMerge"));
             let v_continue = v_merge.is_some_and(|v| v.attr("val").is_none_or(|val| val == "continue"));
             let mut blocks = Vec::new();

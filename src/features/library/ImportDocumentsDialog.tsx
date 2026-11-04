@@ -1,5 +1,5 @@
 import { FolderInput } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
@@ -12,7 +12,14 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { describeError } from "@/lib/errors";
 import { api, isTauri, pickDocumentFiles } from "@/lib/ipc";
-import { defaultImportOptions, type DocumentImportPlan, type ImportDestination, type ImportItem, type ImportOptions } from "@/lib/types";
+import {
+  defaultImportOptions,
+  type DocumentImportPlan,
+  type ImportDestination,
+  type ImportItem,
+  type ImportOptions,
+  type ImportSource,
+} from "@/lib/types";
 import { formatBytes } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspace } from "@/stores/workspace";
@@ -32,19 +39,29 @@ function itemVariant(item: ImportItem): "ok" | "warn" | "muted" | "info" | "dang
   }
 }
 
+function splitPaths(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((s) => s.trim().replace(/^"|"$/g, ""))
+    .filter(Boolean);
+}
+
 /**
  * Import preview (design §3.4): file list with new / duplicate / unsupported
  * reasons, destination and copy-vs-move, then the import runs as a job.
+ * `initialPaths` (drop, folder) are previewed as soon as the dialog opens.
  */
 export function ImportDocumentsDialog({
   open,
   onOpenChange,
   initialPaths,
+  source = "drop",
   onStarted,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   initialPaths?: string[];
+  source?: ImportSource;
   onStarted?: (jobId: string) => void;
 }) {
   const { t } = useTranslation();
@@ -55,51 +72,58 @@ export function ImportDocumentsDialog({
   const [plan, setPlan] = useState<DocumentImportPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Serial number of the latest preview request; stale responses are dropped.
+  const requestSeq = useRef(0);
 
-  const paths = pathsText
-    .split(/\r?\n/)
-    .map((s) => s.trim().replace(/^"|"$/g, ""))
-    .filter(Boolean);
+  const paths = splitPaths(pathsText);
 
-  useEffect(() => {
-    if (open) {
-      setPlan(null);
-      setError(null);
-      if (initialPaths && initialPaths.length > 0) setPathsText(initialPaths.join("\n"));
-    }
-  }, [open, initialPaths]);
-
-  // Dropped files skip straight to the preview.
-  useEffect(() => {
-    if (open && initialPaths && initialPaths.length > 0 && !plan && !busy) {
-      void preview(initialPaths);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, initialPaths]);
-
-  const pick = async () => {
-    const files = await pickDocumentFiles(t("import_docs.pick"), workspace?.inbox_dir);
-    if (files.length > 0) {
-      setPathsText(files.join("\n"));
-      setPlan(null);
-      setError(null);
-    }
-  };
-
-  const preview = async (list = paths) => {
+  const preview = async (list: string[], opts: ImportOptions) => {
     if (list.length === 0) {
       setError(t("import_docs.no_paths"));
       return;
     }
+    const seq = ++requestSeq.current;
     setBusy(true);
     setError(null);
     try {
-      setPlan(await api.documentsImportPlan(list, options, "drop"));
+      const p = await api.documentsImportPlan(list, opts, source);
+      if (seq !== requestSeq.current) return;
+      setPlan(p);
     } catch (e) {
+      if (seq !== requestSeq.current) return;
       setPlan(null);
       setError(describeError(e, t));
     } finally {
+      if (seq === requestSeq.current) setBusy(false);
+    }
+  };
+
+  // Opening (or new dropped paths while open): reset and preview immediately.
+  useEffect(() => {
+    if (!open) {
+      requestSeq.current += 1;
+      setPlan(null);
+      setError(null);
       setBusy(false);
+      setPathsText("");
+      return;
+    }
+    setPlan(null);
+    setError(null);
+    if (initialPaths && initialPaths.length > 0) {
+      setPathsText(initialPaths.join("\n"));
+      void preview(initialPaths, options);
+    }
+    // `options` are read at open time on purpose; a later option change requires a manual preview.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initialPaths]);
+
+  const pick = async () => {
+    const files = await pickDocumentFiles(t("import_docs.pick"), t("import_docs.filter_name"), workspace?.documents_dir);
+    if (files.length > 0) {
+      setPathsText(files.join("\n"));
+      setPlan(null);
+      setError(null);
     }
   };
 
@@ -112,8 +136,6 @@ export function ImportDocumentsDialog({
       toast(t("import_docs.started"), "ok");
       onStarted?.(jobId);
       onOpenChange(false);
-      setPathsText("");
-      setPlan(null);
     } catch (e) {
       setError(describeError(e, t));
     } finally {
@@ -125,7 +147,7 @@ export function ImportDocumentsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl" closeLabel={t("common.close")}>
+      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto" closeLabel={t("common.close")}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FolderInput className="size-4" aria-hidden="true" />
@@ -192,6 +214,13 @@ export function ImportDocumentsDialog({
             </p>
           )}
 
+          {busy && !plan && (
+            <p className="flex items-center gap-2 text-sm text-fg-muted" role="status">
+              <Spinner className="size-4" />
+              {t("import_docs.previewing")}
+            </p>
+          )}
+
           {plan && (
             <div className="grid gap-2" data-testid="doc-import-plan">
               <p className="text-sm">
@@ -206,9 +235,9 @@ export function ImportDocumentsDialog({
               </p>
               {plan.copying_count > 0 && <p className="text-xs text-warn">{t("import_docs.copying", { count: plan.copying_count })}</p>}
               {plan.truncated && <p className="text-xs text-warn">{t("import_docs.truncated")}</p>}
-              <ul className="max-h-64 divide-y divide-border overflow-y-auto rounded-md border border-border text-sm">
-                {plan.items.map((item) => (
-                  <li key={item.path} className="flex items-center gap-2 px-3 py-1.5" data-testid="doc-import-item" data-item-status={item.status.kind}>
+              <ul className="max-h-64 divide-y divide-border overflow-y-auto rounded-md border border-border text-sm" aria-label={t("import_docs.items")}>
+                {plan.items.map((item, i) => (
+                  <li key={`${i}-${item.path}`} className="flex items-center gap-2 px-3 py-1.5" data-testid="doc-import-item" data-item-status={item.status.kind}>
                     <Badge variant={itemVariant(item)}>
                       {item.status.kind === "duplicate" && t("import_docs.item_status.duplicate", { of: item.status.of_rel_path })}
                       {item.status.kind === "duplicate_in_batch" && t("import_docs.item_status.duplicate_in_batch", { of: item.status.of })}
@@ -237,8 +266,7 @@ export function ImportDocumentsDialog({
           <Button variant="secondary" onClick={() => onOpenChange(false)}>
             {t("common.cancel")}
           </Button>
-          <Button variant="outline" onClick={() => void preview()} disabled={busy || paths.length === 0} data-testid="doc-import-preview">
-            {busy && !plan ? <Spinner className="size-4" /> : null}
+          <Button variant="outline" onClick={() => void preview(paths, options)} disabled={busy || paths.length === 0} data-testid="doc-import-preview">
             {t("import_docs.preview")}
           </Button>
           <Button onClick={() => void run()} disabled={busy || !plan || importable === 0} data-testid="doc-import-run">

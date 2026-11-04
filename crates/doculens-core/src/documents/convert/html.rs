@@ -196,13 +196,17 @@ fn blocks_html(blocks: &[Block], out: &mut String) {
 /// Renders the model as a complete HTML document. Image blocks reference
 /// `img/<id>` relative files; see [`write_bundle`].
 pub fn to_html(model: &DocModel) -> String {
+    render_html(model.title.as_deref(), &model.blocks)
+}
+
+fn render_html(title: Option<&str>, blocks: &[Block]) -> String {
     let mut out = String::with_capacity(4096);
     out.push_str("<!doctype html>\n<html lang=\"ko\"><head><meta charset=\"utf-8\">\n<title>");
-    out.push_str(&escape(model.title.as_deref().unwrap_or("document")));
+    out.push_str(&escape(title.unwrap_or("document")));
     out.push_str("</title>\n<meta name=\"viewport\" content=\"width=device-width\">\n<style>");
     out.push_str(CSS);
     out.push_str("</style></head>\n<body><article>\n");
-    blocks_html(&model.blocks, &mut out);
+    blocks_html(blocks, &mut out);
     out.push_str("</article></body></html>\n");
     out
 }
@@ -231,14 +235,15 @@ pub fn write_bundle(model: &DocModel, dir: &Path) -> Result<std::path::PathBuf> 
         std::fs::create_dir_all(&img_dir).map_err(|e| CoreError::io(&img_dir, e))?;
     }
     // Image blocks reference the id; map ids to the file name with extension.
-    let mut model_for_html = model.clone();
+    // Only the block tree is copied (not the image bytes).
+    let mut blocks = model.blocks.clone();
     for img in &model.images {
         let file = image_file_name(&img.id, &img.mime);
         let path = img_dir.join(&file);
         std::fs::write(&path, &img.bytes).map_err(|e| CoreError::io(&path, e))?;
-        rename_image_refs(&mut model_for_html.blocks, &img.id, &file);
+        rename_image_refs(&mut blocks, &img.id, &file);
     }
-    let html = to_html(&model_for_html);
+    let html = render_html(model.title.as_deref(), &blocks);
     let index = dir.join("index.html");
     std::fs::write(&index, html).map_err(|e| CoreError::io(&index, e))?;
     Ok(index)

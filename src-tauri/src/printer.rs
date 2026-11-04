@@ -88,9 +88,17 @@ fn run_print(app: &AppHandle, token: &str, pdf: &Path) -> Result<()> {
             let Some(tx) = tx_load.lock().ok().and_then(|mut g| g.take()) else { return };
             let pdf_path = pdf_path.clone();
             let tx2 = tx.clone();
-            let dispatched = window.with_webview(move |webview| platform::print(webview, &pdf_path, tx));
-            if let Err(e) = dispatched {
-                let _ = tx2.send(Err(format!("with_webview: {e}")));
+            // `on_page_load` runs inside the webview's navigation callback; print on the next
+            // event-loop turn instead of re-entrantly from that callback.
+            let w = window.clone();
+            let deferred = window.app_handle().run_on_main_thread(move || {
+                let tx3 = tx.clone();
+                if let Err(e) = w.with_webview(move |webview| platform::print(webview, &pdf_path, tx)) {
+                    let _ = tx3.send(Err(format!("with_webview: {e}")));
+                }
+            });
+            if let Err(e) = deferred {
+                let _ = tx2.send(Err(format!("run_on_main_thread: {e}")));
             }
         });
     let window = builder.build().map_err(|e| CoreError::Convert(format!("print window: {e}")))?;
@@ -131,7 +139,10 @@ mod platform {
         let op = PrintOperation::new(&wv);
         let settings = gtk::PrintSettings::new();
         settings.set(gtk::PRINT_SETTINGS_OUTPUT_FILE_FORMAT.as_str(), Some("pdf"));
-        settings.set(gtk::PRINT_SETTINGS_OUTPUT_URI.as_str(), Some(&format!("file://{}", pdf.display())));
+        let uri = tauri::Url::from_file_path(pdf)
+            .map(|u| u.to_string())
+            .unwrap_or_else(|_| format!("file://{}", pdf.display()));
+        settings.set(gtk::PRINT_SETTINGS_OUTPUT_URI.as_str(), Some(&uri));
         settings.set_printer("Print to File");
         settings.set_paper_size(&gtk::PaperSize::new(Some(gtk::PAPER_NAME_A4.as_str())));
         op.set_print_settings(&settings);

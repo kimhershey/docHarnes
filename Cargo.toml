@@ -41,5 +41,7 @@ unicode-normalization = "0.1"
 codegen-units = 1
 lto = true
 opt-level = 3
-panic = "abort"
+# Keep unwinding: job threads, the HWP parser (which panics on malformed input) and the PDFium
+# worker all recover from panics with `catch_unwind`; `abort` would turn them into app crashes.
+panic = "unwind"
 strip = true

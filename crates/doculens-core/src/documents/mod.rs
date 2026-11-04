@@ -275,14 +275,15 @@ pub struct FolderCount {
 }
 
 /// Converts an absolute path inside the workspace into the stored form:
-/// relative, `/` separators, NFC-normalised. `None` when outside the root.
+/// relative with `/` separators. The on-disk spelling is kept as is (NTFS and
+/// ext4 compare names byte-exact, so an NFD-named file must stay NFD);
+/// names the app creates itself are NFC (`nfc`). `None` when outside the root.
 pub fn to_rel_path(root: &Path, path: &Path) -> Option<String> {
-    use unicode_normalization::UnicodeNormalization;
     let rel = path.strip_prefix(root).ok()?;
     let mut parts = Vec::new();
     for c in rel.components() {
         match c {
-            std::path::Component::Normal(s) => parts.push(s.to_string_lossy().nfc().collect::<String>()),
+            std::path::Component::Normal(s) => parts.push(s.to_string_lossy().into_owned()),
             std::path::Component::CurDir => {}
             _ => return None,
         }
@@ -305,6 +306,17 @@ pub fn new_id() -> String {
     uuid::Uuid::new_v4().simple().to_string()
 }
 
+/// NFC form of a display name (search / titles / files the app writes).
+pub fn nfc(s: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    s.nfc().collect()
+}
+
+/// Document ids are UUID hex; anything else must never reach a file system path.
+pub fn is_safe_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 /// Cache layout for one document: `cache/pages/<id>/p0001.jpg`,
 /// `cache/thumbs/<id>/p0001.jpg`, `cache/converted/<id>/document.pdf`.
 #[derive(Debug, Clone)]
@@ -316,10 +328,13 @@ pub struct DocumentCache {
 
 impl DocumentCache {
     pub fn for_document(paths: &WorkspacePaths, id: &str) -> DocumentCache {
+        // Defensive: callers validate ids (DB lookup / `is_safe_id`), but a path
+        // separator in an id must never escape the cache folder.
+        let id = if is_safe_id(id) { id.to_string() } else { "invalid".to_string() };
         DocumentCache {
-            pages_dir: paths.page_cache_dir().join(id),
-            thumbs_dir: paths.thumb_cache_dir().join(id),
-            converted_dir: paths.cache_dir().join("converted").join(id),
+            pages_dir: paths.page_cache_dir().join(&id),
+            thumbs_dir: paths.thumb_cache_dir().join(&id),
+            converted_dir: paths.cache_dir().join("converted").join(&id),
         }
     }
 
@@ -360,10 +375,13 @@ mod tests {
         assert_eq!(to_rel_path(root, Path::new("/other/a.pdf")), None);
         assert_eq!(to_rel_path(root, Path::new("/w")), None);
         assert_eq!(from_rel_path(root, "inbox/a.pdf"), PathBuf::from("/w/inbox/a.pdf"));
-        // NFD → NFC (macOS / some scanners write decomposed Hangul)
+        // The on-disk spelling is kept (NFD stays NFD); `nfc` is for names the app creates.
         let nfd = "inbox/\u{1112}\u{1161}\u{11ab}.pdf";
         let rel = to_rel_path(root, &Path::new("/w").join(nfd)).unwrap();
-        assert_eq!(rel, "inbox/\u{d55c}.pdf");
+        assert_eq!(rel, nfd);
+        assert_eq!(nfc("\u{1112}\u{1161}\u{11ab}"), "\u{d55c}");
+        assert!(is_safe_id("0123abcdef") && !is_safe_id("../x"));
+        assert!(DocumentCache::for_document(&WorkspacePaths::new("/w"), "../x").pages_dir.ends_with("invalid"));
     }
 
     #[test]

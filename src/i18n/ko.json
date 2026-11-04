@@ -162,8 +162,7 @@
       "open": "열기",
       "browser_hint": "브라우저 미리보기에서는 폴더 선택창 대신 경로를 직접 입력합니다.",
       "settings_sync": "선택한 경로는 설정 파일(settings.json)의 active_workspace 에 저장되며, 설정 > 워크스페이스에서 바꿀 수 있습니다.",
-      "import_existing": "발견한 파일 지금 가져오기",
-      "import_started": "기존 파일 가져오기를 시작했습니다."
+      "import_existing": "발견한 파일 지금 가져오기"
     },
     "hardware": {
       "intro": "감지된 하드웨어로 티어를 산정하고 권장 모델을 고릅니다. 모델 관리자에서 언제든 수동으로 바꿀 수 있습니다.",
@@ -699,7 +698,13 @@
     "not_found": "찾을 수 없습니다: {{message}}",
     "unsupported": "지원하지 않습니다: {{message}}",
     "convert": "변환 실패: {{message}}",
-    "render": "렌더 실패: {{message}}"
+    "render": "렌더 실패: {{message}}",
+    "reasons": {
+      "nothing_to_import": "가져올 새 파일이 없습니다(모두 중복이거나 미지원).",
+      "no_files": "파일을 선택하거나 경로를 입력하세요.",
+      "no_documents": "선택한 문서가 없습니다.",
+      "rotation": "회전 각도는 90도 단위여야 합니다."
+    }
   },
   "startup": {
     "settings_recovered": "설정 파일이 손상되어 기본값으로 복구했습니다. 백업: {{backup}}",
@@ -735,6 +740,18 @@
       "done": "완료",
       "failed": "실패",
       "cancelled": "취소됨"
+    },
+    "subject": {
+      "files": "파일 {{count}}개",
+      "documents": "문서 {{count}}개",
+      "inbox": "inbox 폴더",
+      "library": "라이브러리",
+      "engine": "엔진"
+    },
+    "detail": {
+      "import_summary": "가져옴 {{imported}} · 다시 연결 {{relinked}} · 실패 {{failed}} · 건너뜀 {{skipped}}",
+      "rescan_summary": "검사 {{checked}} · 파일 없음 {{missing}} · 복구 {{restored}} · 변경 {{changed}} · 실패 {{failed}}",
+      "rendered": "{{count}}개 렌더 완료"
     }
   },
   "library": {
@@ -760,18 +777,17 @@
     "empty_title": "아직 문서가 없습니다",
     "empty_body": "PDF·이미지·HWP·HWPX·DOCX 파일을 여기에 끌어다 놓거나 '가져오기'를 누르세요. inbox/ 폴더에 넣어도 자동으로 등록됩니다.",
     "no_match": "조건에 맞는 문서가 없습니다.",
-    "drop_hint": "놓으면 가져오기 미리보기를 엽니다",
     "drop_overlay": "여기에 놓아 가져오기",
     "selected": "{{count}}개 선택",
     "total": "문서 {{count}}개 · {{pages}}쪽",
     "actions": {
-      "open": "열기",
       "rerender": "다시 렌더",
       "delete": "삭제(휴지통)",
       "delete_confirm": "선택한 문서 {{count}}개를 삭제할까요? 파일은 휴지통으로 이동합니다.",
-      "reveal": "폴더에서 보기",
       "clear_selection": "선택 해제",
-      "select_all": "모두 선택"
+      "select_all": "모두 선택",
+      "delete_title": "문서 삭제",
+      "open_doc": "문서 열기"
     },
     "columns": {
       "name": "이름",
@@ -779,16 +795,25 @@
       "pages": "쪽",
       "status": "상태",
       "imported": "가져온 시각",
-      "size": "크기",
-      "tags": "태그",
-      "folder": "폴더"
+      "size": "크기"
     },
     "pages_count": "{{count}}쪽",
     "converted": "변환본",
     "rerender_started": "다시 렌더 작업을 시작했습니다.",
     "delete_done": "문서 {{count}}개를 삭제했습니다.",
     "pdfium_missing": "PDF 렌더러(PDFium)를 찾을 수 없어 PDF 페이지가 표시되지 않습니다. 설치 안내: engines/README.md (pdfium). 등록과 텍스트 추출은 계속 동작합니다.",
-    "error_badge": "오류"
+    "sort": "정렬",
+    "sort_options": {
+      "imported_desc": "최근 가져온 순",
+      "imported_asc": "오래된 순",
+      "name_asc": "이름 가나다순",
+      "name_desc": "이름 역순",
+      "size_desc": "큰 파일 순"
+    },
+    "rescan_running": "라이브러리 검사가 이미 진행 중입니다.",
+    "list_label": "문서 목록",
+    "grid_label": "문서 카드",
+    "import_existing_hint": "워크스페이스 폴더 전체를 검사해 미리보기를 엽니다(.doculens 제외)."
   },
   "documents": {
     "status": {
@@ -861,7 +886,10 @@
     "truncated": "파일이 너무 많아 처음 5,000개만 표시합니다.",
     "nothing": "가져올 새 파일이 없습니다.",
     "started": "가져오기 작업을 시작했습니다. 작업 화면에서 진행률을 볼 수 있습니다.",
-    "no_paths": "파일을 선택하거나 경로를 입력하세요."
+    "no_paths": "파일을 선택하거나 경로를 입력하세요.",
+    "filter_name": "문서 파일",
+    "previewing": "파일을 검사하는 중…",
+    "items": "가져올 파일"
   },
   "viewer": {
     "back": "라이브러리",
@@ -912,6 +940,13 @@
       "yes": "있음",
       "no": "없음"
     },
-    "shortcuts": "← → 쪽 이동 · +/- 확대/축소 · 0 맞춤"
+    "shortcuts": "← → 쪽 이동 · +/- 확대/축소 · 0 맞춤",
+    "remove_tag": "태그 '{{tag}}' 삭제",
+    "page_image_alt": "{{name}} {{page}}쪽",
+    "loading_pages": "페이지를 불러오는 중…",
+    "delete_title": "문서 삭제",
+    "reveal_failed": "원본 폴더를 열 수 없습니다: {{message}}",
+    "thumb_label": "{{page}}쪽으로 이동",
+    "toolbar": "문서 도구"
   }
 }

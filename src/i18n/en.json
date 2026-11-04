@@ -162,8 +162,7 @@
       "open": "Open",
       "browser_hint": "In the browser preview there is no native folder picker; type a path instead.",
       "settings_sync": "The path is stored as active_workspace in settings.json and can be changed under Settings › Workspace.",
-      "import_existing": "Import the found files now",
-      "import_started": "Import of the existing files started."
+      "import_existing": "Import the found files now"
     },
     "hardware": {
       "intro": "The detected hardware decides the tier and the recommended model. You can override both in the model manager at any time.",
@@ -699,7 +698,13 @@
     "not_found": "Not found: {{message}}",
     "unsupported": "Unsupported: {{message}}",
     "convert": "Conversion failed: {{message}}",
-    "render": "Render failed: {{message}}"
+    "render": "Render failed: {{message}}",
+    "reasons": {
+      "nothing_to_import": "Nothing new to import (all duplicates or unsupported).",
+      "no_files": "Choose files or type paths.",
+      "no_documents": "No documents selected.",
+      "rotation": "Rotation must be a multiple of 90 degrees."
+    }
   },
   "startup": {
     "settings_recovered": "The settings file was corrupt and has been reset to defaults. Backup: {{backup}}",
@@ -735,6 +740,18 @@
       "done": "Done",
       "failed": "Failed",
       "cancelled": "Cancelled"
+    },
+    "subject": {
+      "files": "{{count}} file(s)",
+      "documents": "{{count}} document(s)",
+      "inbox": "inbox folder",
+      "library": "library",
+      "engine": "engine"
+    },
+    "detail": {
+      "import_summary": "imported {{imported}} · relinked {{relinked}} · failed {{failed}} · skipped {{skipped}}",
+      "rescan_summary": "checked {{checked}} · missing {{missing}} · restored {{restored}} · changed {{changed}} · failed {{failed}}",
+      "rendered": "{{count}} rendered"
     }
   },
   "library": {
@@ -760,18 +777,17 @@
     "empty_title": "No documents yet",
     "empty_body": "Drop PDF, image, HWP, HWPX or DOCX files here or click Import. Files placed in inbox/ are registered automatically.",
     "no_match": "No documents match the filter.",
-    "drop_hint": "Drop to open the import preview",
     "drop_overlay": "Drop here to import",
     "selected": "{{count}} selected",
-    "total": "{{count}} documents · {{pages}} pages",
+    "total": "{{count}} document(s) · {{pages}} page(s)",
     "actions": {
-      "open": "Open",
       "rerender": "Re-render",
       "delete": "Delete (trash)",
       "delete_confirm": "Delete {{count}} selected document(s)? Files move to the trash.",
-      "reveal": "Show in folder",
       "clear_selection": "Clear selection",
-      "select_all": "Select all"
+      "select_all": "Select all",
+      "delete_title": "Delete documents",
+      "open_doc": "Open document"
     },
     "columns": {
       "name": "Name",
@@ -779,16 +795,25 @@
       "pages": "Pages",
       "status": "Status",
       "imported": "Imported",
-      "size": "Size",
-      "tags": "Tags",
-      "folder": "Folder"
+      "size": "Size"
     },
-    "pages_count": "{{count}} pages",
+    "pages_count": "{{count}} page(s)",
     "converted": "converted",
     "rerender_started": "Re-render job started.",
     "delete_done": "Deleted {{count}} document(s).",
     "pdfium_missing": "The PDF renderer (PDFium) was not found, so PDF pages are not displayed. See engines/README.md (pdfium). Registration and text extraction keep working.",
-    "error_badge": "error"
+    "sort": "Sort",
+    "sort_options": {
+      "imported_desc": "Newest import first",
+      "imported_asc": "Oldest import first",
+      "name_asc": "Name A→Z",
+      "name_desc": "Name Z→A",
+      "size_desc": "Largest first"
+    },
+    "rescan_running": "A library rescan is already running.",
+    "list_label": "Document list",
+    "grid_label": "Document cards",
+    "import_existing_hint": "Scans the whole workspace folder (except .doculens) and opens the preview."
   },
   "documents": {
     "status": {
@@ -861,7 +886,10 @@
     "truncated": "Too many files; only the first 5,000 are shown.",
     "nothing": "Nothing new to import.",
     "started": "Import started. Progress is shown on the Jobs screen.",
-    "no_paths": "Choose files or type paths."
+    "no_paths": "Choose files or type paths.",
+    "filter_name": "Documents",
+    "previewing": "Checking files…",
+    "items": "Files to import"
   },
   "viewer": {
     "back": "Library",
@@ -912,6 +940,13 @@
       "yes": "yes",
       "no": "no"
     },
-    "shortcuts": "← → pages · +/- zoom · 0 fit"
+    "shortcuts": "← → pages · +/- zoom · 0 fit",
+    "remove_tag": "Remove tag '{{tag}}'",
+    "page_image_alt": "{{name}} page {{page}}",
+    "loading_pages": "Loading pages…",
+    "delete_title": "Delete document",
+    "reveal_failed": "Cannot open the original folder: {{message}}",
+    "thumb_label": "Go to page {{page}}",
+    "toolbar": "Document tools"
   }
 }

@@ -175,6 +175,7 @@ pub struct OpenArgs {
 #[tauri::command(async)]
 pub fn workspace_open(app: AppHandle, state: State<'_, AppState>, args: OpenArgs) -> UiResult<WorkspaceView> {
     let path = normalize_user_path(&args.path);
+    crate::docs_bridge::before_workspace_change(&app);
     state.open_workspace_inner(&path, OpenOptions { force_unlock: args.force_unlock, ..Default::default() })?;
     let v = state.with_workspace(view)?;
     engine_bridge::on_workspace_changed(&app);
@@ -197,6 +198,7 @@ pub struct CreateArgs {
 pub fn workspace_create(app: AppHandle, state: State<'_, AppState>, args: CreateArgs) -> UiResult<WorkspaceView> {
     let path = normalize_user_path(&args.path);
     let locale = args.locale.or_else(|| state.settings_snapshot().ok().map(|s| s.ui.language));
+    crate::docs_bridge::before_workspace_change(&app);
     state.open_workspace_inner(
         &path,
         OpenOptions { create: true, name: args.name, locale, force_unlock: args.force_unlock },
@@ -209,6 +211,7 @@ pub fn workspace_create(app: AppHandle, state: State<'_, AppState>, args: Create
 
 #[tauri::command(async)]
 pub fn workspace_close(app: AppHandle, state: State<'_, AppState>) -> UiResult<()> {
+    crate::docs_bridge::before_workspace_change(&app);
     state.close_workspace()?;
     engine_bridge::on_workspace_changed(&app);
     crate::docs_bridge::on_workspace_changed(&app);

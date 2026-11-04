@@ -115,8 +115,10 @@ fn percent_decode(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hex = &s[i + 1..i + 3];
-            if let Ok(v) = u8::from_str_radix(hex, 16) {
+            // Byte slice, not `&str[..]`: a multibyte char after `%` must not panic.
+            if let Ok(v) =
+                std::str::from_utf8(&bytes[i + 1..i + 3]).ok().and_then(|h| u8::from_str_radix(h, 16).ok()).ok_or(())
+            {
                 out.push(v);
                 i += 3;
                 continue;
@@ -159,6 +161,7 @@ mod tests {
         assert!(!is_safe_id(""));
         assert_eq!(percent_decode("/print/t/%EA%B2%AC%EC%A0%81.png"), "/print/t/견적.png");
         assert_eq!(percent_decode("/a%2"), "/a%2");
+        assert_eq!(percent_decode("/a%한글"), "/a%한글");
         assert!(page_url("abc", 3, true, Some("v1")).contains("/thumbs/abc/p0003.jpg?v=v1"));
     }
 }

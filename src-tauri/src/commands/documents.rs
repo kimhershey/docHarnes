@@ -151,6 +151,8 @@ pub fn documents_import_run(app: AppHandle, args: ImportRunArgs) -> UiResult<Str
     docs_bridge::import_job(&app, plan)
 }
 
+/// Returns the job id, or `None` when an import / render / rescan is already
+/// running (a rescan would reprocess documents the running job is writing).
 #[tauri::command(async)]
 pub fn documents_rescan(app: AppHandle) -> UiResult<Option<String>> {
     docs_bridge::context(&app)?;
@@ -194,7 +196,7 @@ pub fn documents_delete(app: AppHandle, ids: Vec<String>, keep_files: Option<boo
 #[tauri::command(async)]
 pub fn documents_set_tags(app: AppHandle, id: String, tags: Vec<String>) -> UiResult<DocumentView> {
     let ctx = docs_bridge::context(&app)?;
-    ctx.db.with(|c| repo::set_tags(c, &id, &tags))?;
+    ctx.db.with_tx(|tx| repo::set_tags(tx, &id, &tags))?;
     docs_bridge::emit_changed(&app, "updated", vec![id.clone()]);
     view(&app, docs_bridge::document(&app, &id)?)
 }

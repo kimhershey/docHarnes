@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowLeft, ChevronLeft, ChevronRight, FolderOpen, Maximize2, RefreshCw, RotateCcw, RotateCw, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -6,6 +7,7 @@ import { useNavigate, useParams } from "react-router";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog, type ConfirmRequest } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
@@ -15,14 +17,23 @@ import { api, revealPath } from "@/lib/ipc";
 import { useDocument, useDocumentPages } from "@/lib/queries";
 import { queryClient, queryKeys } from "@/lib/query-client";
 import { isComposing } from "@/lib/shortcuts";
-import type { PageView } from "@/lib/types";
+import type { DocumentView, PageView } from "@/lib/types";
 import { cn, formatBytes, formatDate } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui";
 
-import { statusVariant } from "./LibraryPage";
+import { statusVariant } from "./status";
 
 const DOC_TYPES = ["tax_invoice", "invoice_exempt", "receipt", "business_registration", "contract", "application_form", "general", "other"];
 const NONE = "__none__";
+const THUMB_H = 128;
+
+/** Keys the viewer owns; everything else (tabs, selects, buttons, inputs) keeps its own keyboard behaviour. */
+function isViewerKeyTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return true;
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement) return false;
+  if (target.isContentEditable) return false;
+  return !target.closest('[role="tablist"],[role="tab"],[role="combobox"],[role="listbox"],[role="dialog"],button,a');
+}
 
 /**
  * Document viewer (design §3.7.6, P2 subset): page image with zoom, thumbnail
@@ -35,12 +46,23 @@ export function DocumentViewer() {
   const navigate = useNavigate();
   const toast = useUiStore((s) => s.toast);
   const { data: doc, error, isLoading } = useDocument(id);
-  const { data: pages } = useDocumentPages(id, false);
+  const { data: pages, isLoading: pagesLoading } = useDocumentPages(id, false);
   const [pageNo, setPageNo] = useState(1);
   const [zoom, setZoom] = useState<number | "fit">("fit");
   const [tagInput, setTagInput] = useState("");
   const [titleDraft, setTitleDraft] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  // One component instance serves every /library/:id — reset per document.
+  useEffect(() => {
+    setPageNo(1);
+    setZoom("fit");
+    setTagInput("");
+    setTitleDraft(null);
+    rootRef.current?.focus();
+  }, [id]);
 
   const total = pages?.length ?? 0;
   const page: PageView | undefined = pages?.find((p) => p.page_no === pageNo) ?? pages?.[0];
@@ -54,38 +76,36 @@ export function DocumentViewer() {
     if (total > 0 && pageNo > total) setPageNo(total);
   }, [total, pageNo]);
 
-  const go = useCallback(
-    (delta: number) => setPageNo((p) => Math.min(Math.max(1, p + delta), Math.max(1, total))),
-    [total],
-  );
-
+  // New page → start at the top of the canvas.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.ctrlKey || e.metaKey) return;
-      if (e.key === "ArrowLeft" || e.key === "PageUp") go(-1);
-      else if (e.key === "ArrowRight" || e.key === "PageDown") go(1);
-      else if (e.key === "+" || e.key === "=") setZoom((z) => Math.min(4, (z === "fit" ? 1 : z) + 0.25));
-      else if (e.key === "-") setZoom((z) => Math.max(0.25, (z === "fit" ? 1 : z) - 0.25));
-      else if (e.key === "0") setZoom("fit");
-      else return;
-      e.preventDefault();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [go]);
+    scrollRef.current?.scrollTo({ top: 0, left: 0 });
+  }, [pageNo]);
 
-  const invalidate = () => {
-    if (!id) return;
-    void queryClient.invalidateQueries({ queryKey: queryKeys.document(id) });
-    void queryClient.invalidateQueries({ queryKey: queryKeys.documentPages(id, false) });
+  const go = useCallback((delta: number) => setPageNo((p) => Math.min(Math.max(1, p + delta), Math.max(1, total))), [total]);
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || !isViewerKeyTarget(e.target)) return;
+    if (e.key === "ArrowLeft" || e.key === "PageUp") go(-1);
+    else if (e.key === "ArrowRight" || e.key === "PageDown") go(1);
+    else if (e.key === "+" || e.key === "=") setZoom((z) => Math.min(4, (z === "fit" ? 1 : z) + 0.25));
+    else if (e.key === "-") setZoom((z) => Math.max(0.25, (z === "fit" ? 1 : z) - 0.25));
+    else if (e.key === "0") setZoom("fit");
+    else return;
+    e.preventDefault();
   };
+
+  // Write-through cache updates: the command returns the fresh record, so no refetch is needed
+  // (the `documents://changed` event still invalidates the library lists).
+  const applyDoc = (view: DocumentView) => queryClient.setQueryData(queryKeys.document(view.id), view);
 
   const rotate = async (delta: number) => {
     if (!id || !page) return;
     const rotation = (page.rotation + delta + 360) % 360;
     try {
-      await api.documentsRotatePage(id, page.page_no, rotation);
-      invalidate();
+      const updated = await api.documentsRotatePage(id, page.page_no, rotation);
+      queryClient.setQueryData<PageView[]>(queryKeys.documentPages(id, false), (old) =>
+        old ? old.map((p) => (p.page_no === updated.page_no ? { ...updated, text: undefined } : p)) : old,
+      );
       toast(t("viewer.rotated"), "ok");
     } catch (e) {
       toast(describeError(e, t), "danger");
@@ -102,23 +122,38 @@ export function DocumentViewer() {
     }
   };
 
-  const remove = async () => {
+  const reveal = async () => {
     if (!doc) return;
-    if (!window.confirm(t("viewer.delete_confirm", { name: doc.original_name }))) return;
     try {
-      await api.documentsDelete([doc.id], false);
-      toast(t("viewer.deleted"), "ok");
-      navigate("/library");
+      await revealPath(doc.absolute_path);
     } catch (e) {
-      toast(describeError(e, t), "danger");
+      toast(t("viewer.reveal_failed", { message: describeError(e, t) }), "danger");
     }
+  };
+
+  const remove = () => {
+    if (!doc) return;
+    setConfirm({
+      title: t("viewer.delete_title"),
+      description: t("viewer.delete_confirm", { name: doc.original_name }),
+      confirmLabel: t("viewer.delete"),
+      danger: true,
+      onConfirm: async () => {
+        try {
+          await api.documentsDelete([doc.id], false);
+          toast(t("viewer.deleted"), "ok");
+          navigate("/library");
+        } catch (e) {
+          toast(describeError(e, t), "danger");
+        }
+      },
+    });
   };
 
   const setTags = async (tags: string[]) => {
     if (!doc) return;
     try {
-      await api.documentsSetTags(doc.id, tags);
-      invalidate();
+      applyDoc(await api.documentsSetTags(doc.id, tags));
     } catch (e) {
       toast(describeError(e, t), "danger");
     }
@@ -135,8 +170,7 @@ export function DocumentViewer() {
   const setDocType = async (v: string) => {
     if (!doc) return;
     try {
-      await api.documentsSetDocType(doc.id, v === NONE ? null : v);
-      invalidate();
+      applyDoc(await api.documentsSetDocType(doc.id, v === NONE ? null : v));
     } catch (e) {
       toast(describeError(e, t), "danger");
     }
@@ -148,8 +182,7 @@ export function DocumentViewer() {
     setTitleDraft(null);
     if ((doc.title ?? "") === v) return;
     try {
-      await api.documentsSetTitle(doc.id, v || null);
-      invalidate();
+      applyDoc(await api.documentsSetTitle(doc.id, v || null));
     } catch (e) {
       toast(describeError(e, t), "danger");
     }
@@ -176,14 +209,16 @@ export function DocumentViewer() {
   }
   if (isLoading || !doc) {
     return (
-      <div className="flex h-full items-center justify-center text-fg-muted">
+      <div className="flex h-full items-center justify-center text-fg-muted" role="status">
         <Spinner />
       </div>
     );
   }
 
+  const displayName = doc.title ?? doc.original_name;
+
   return (
-    <div className="flex h-full min-h-0 flex-col" data-testid="page-viewer" data-doc-id={doc.id}>
+    <div ref={rootRef} tabIndex={-1} onKeyDown={onKeyDown} className="flex h-full min-h-0 flex-col outline-none" data-testid="page-viewer" data-doc-id={doc.id}>
       <header className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
         <Button size="sm" variant="ghost" onClick={() => navigate("/library")} data-testid="viewer-back">
           <ArrowLeft />
@@ -226,11 +261,11 @@ export function DocumentViewer() {
             ))}
           </SelectContent>
         </Select>
-        <div className="flex flex-wrap items-center gap-1" aria-label={t("viewer.tags")} data-testid="viewer-tags">
+        <div role="group" className="flex flex-wrap items-center gap-1" aria-label={t("viewer.tags")} data-testid="viewer-tags">
           {doc.tags.map((tag) => (
             <Badge key={tag} variant="muted" className="gap-1">
               {tag}
-              <button type="button" onClick={() => void setTags(doc.tags.filter((x) => x !== tag))} aria-label={`${t("common.close")} ${tag}`} className="rounded-full hover:text-danger">
+              <button type="button" onClick={() => void setTags(doc.tags.filter((x) => x !== tag))} aria-label={t("viewer.remove_tag", { tag })} className="rounded-full hover:text-danger">
                 <X className="size-3" />
               </button>
             </Badge>
@@ -252,11 +287,11 @@ export function DocumentViewer() {
         </div>
       </header>
 
-      <div className="flex flex-wrap items-center gap-1 border-b border-border px-3 py-1.5">
+      <div className="flex flex-wrap items-center gap-1 border-b border-border px-3 py-1.5" role="toolbar" aria-label={t("viewer.toolbar")}>
         <Button size="icon-sm" variant="ghost" onClick={() => go(-1)} disabled={pageNo <= 1} aria-label={t("viewer.prev")} data-testid="viewer-prev">
           <ChevronLeft />
         </Button>
-        <span className="min-w-20 text-center text-sm tabular-nums" data-testid="viewer-page">
+        <span className="min-w-20 text-center text-sm tabular-nums" aria-live="polite" data-testid="viewer-page">
           {t("viewer.page", { page: total === 0 ? 0 : pageNo, total })}
         </span>
         <Button size="icon-sm" variant="ghost" onClick={() => go(1)} disabled={pageNo >= total} aria-label={t("viewer.next")} data-testid="viewer-next">
@@ -286,11 +321,11 @@ export function DocumentViewer() {
           <RefreshCw />
           {t("viewer.rerender")}
         </Button>
-        <Button size="sm" variant="ghost" onClick={() => void revealPath(doc.absolute_path)} data-testid="viewer-reveal">
+        <Button size="sm" variant="ghost" onClick={() => void reveal()} data-testid="viewer-reveal">
           <FolderOpen />
           {t("viewer.reveal")}
         </Button>
-        <Button size="sm" variant="ghost" className="text-danger" onClick={() => void remove()} data-testid="viewer-delete">
+        <Button size="sm" variant="ghost" className="text-danger" onClick={remove} data-testid="viewer-delete">
           <Trash2 />
           {t("viewer.delete")}
         </Button>
@@ -298,28 +333,19 @@ export function DocumentViewer() {
       </div>
 
       <div className="flex min-h-0 flex-1">
-        <aside className="hidden w-32 shrink-0 overflow-y-auto border-r border-border p-2 md:block" aria-label={t("viewer.thumbnails")} data-testid="viewer-thumbs">
-          {(pages ?? []).map((p) => (
-            <button
-              key={p.page_no}
-              type="button"
-              onClick={() => setPageNo(p.page_no)}
-              className={cn("mb-2 flex w-full flex-col items-center gap-1 rounded-md border p-1 text-xs", p.page_no === pageNo ? "border-accent bg-accent-soft" : "border-transparent hover:bg-bg-sunken")}
-              aria-current={p.page_no === pageNo ? "page" : undefined}
-              data-testid={`viewer-thumb-${p.page_no}`}
-            >
-              {p.thumb_url ? <img src={p.thumb_url} alt="" className="w-full bg-white object-contain" loading="lazy" draggable={false} /> : <div className="h-20 w-full bg-bg-sunken" />}
-              <span>{p.page_no}</span>
-            </button>
-          ))}
-        </aside>
+        <ThumbStrip pages={pages ?? []} current={pageNo} onSelect={setPageNo} />
 
         <div ref={scrollRef} className="min-w-0 flex-1 overflow-auto bg-bg-sunken p-4" data-testid="viewer-canvas">
-          {page?.image_url ? (
+          {pagesLoading && !pages ? (
+            <div className="flex h-full items-center justify-center gap-2 text-sm text-fg-muted" role="status">
+              <Spinner />
+              {t("viewer.loading_pages")}
+            </div>
+          ) : page?.image_url ? (
             <img
               key={`${page.page_no}-${page.rendered_at ?? ""}`}
               src={page.image_url}
-              alt={t("viewer.page", { page: page.page_no, total })}
+              alt={t("viewer.page_image_alt", { name: displayName, page: page.page_no })}
               className="mx-auto block bg-white shadow"
               style={imageStyle}
               draggable={false}
@@ -397,6 +423,41 @@ export function DocumentViewer() {
           </dl>
         </aside>
       </div>
+      <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
     </div>
+  );
+}
+
+/** Virtualised page thumbnails (a scanned contract can have hundreds of pages). */
+function ThumbStrip({ pages, current, onSelect }: { pages: PageView[]; current: number; onSelect: (page: number) => void }) {
+  const { t } = useTranslation();
+  const parentRef = useRef<HTMLDivElement | null>(null);
+  const virtualizer = useVirtualizer({ count: pages.length, getScrollElement: () => parentRef.current, estimateSize: () => THUMB_H, overscan: 6 });
+  useEffect(() => {
+    if (pages.length > 0) virtualizer.scrollToIndex(Math.max(0, current - 1), { align: "auto" });
+  }, [current, pages.length, virtualizer]);
+  return (
+    <nav ref={parentRef} className="hidden w-32 shrink-0 overflow-y-auto border-r border-border p-2 md:block" aria-label={t("viewer.thumbnails")} data-testid="viewer-thumbs">
+      <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+        {virtualizer.getVirtualItems().map((row) => {
+          const p = pages[row.index]!;
+          return (
+            <button
+              key={p.page_no}
+              type="button"
+              onClick={() => onSelect(p.page_no)}
+              className={cn("absolute left-0 flex w-full flex-col items-center gap-1 rounded-md border p-1 text-xs", p.page_no === current ? "border-accent bg-accent-soft" : "border-transparent hover:bg-bg-sunken")}
+              style={{ transform: `translateY(${row.start}px)`, height: row.size - 8 }}
+              aria-current={p.page_no === current ? "page" : undefined}
+              aria-label={t("viewer.thumb_label", { page: p.page_no })}
+              data-testid={`viewer-thumb-${p.page_no}`}
+            >
+              {p.thumb_url ? <img src={p.thumb_url} alt="" className="max-h-24 w-full bg-white object-contain" loading="lazy" draggable={false} /> : <div className="h-20 w-full bg-bg-sunken" />}
+              <span>{p.page_no}</span>
+            </button>
+          );
+        })}
+      </div>
+    </nav>
   );
 }

@@ -20,8 +20,8 @@ use crate::version::WORKSPACE_DIR_NAME;
 use super::convert::{self, PdfPrinter};
 use super::render::{self, RenderOptions, RenderService};
 use super::{
-    from_rel_path, new_id, repo, to_rel_path, DocumentCache, DocumentRecord, DocumentRole, DocumentStatus, NewDocument,
-    NewPage, SourceKind,
+    from_rel_path, new_id, nfc, repo, to_rel_path, DocumentCache, DocumentRecord, DocumentRole, DocumentStatus,
+    NewDocument, NewPage, SourceKind,
 };
 
 /// Files modified more recently than this are treated as still being copied
@@ -167,6 +167,10 @@ pub fn collect_paths(sources: &[PathBuf], max_files: usize) -> (Vec<PathBuf>, bo
     let mut seen = HashSet::new();
     let mut truncated = false;
     for src in sources {
+        let is_link = std::fs::symlink_metadata(src).map(|m| m.file_type().is_symlink()).unwrap_or(false);
+        if is_link {
+            continue; // same policy as nested entries: links are never followed
+        }
         if src.is_file() {
             if seen.insert(src.clone()) {
                 out.push(src.clone());
@@ -390,10 +394,11 @@ pub struct ImportReport {
     pub cancelled: bool,
 }
 
-/// Picks a free file name inside `dir` for `name` (`name_2.ext`, …).
-pub fn unique_target(dir: &Path, name: &str) -> PathBuf {
+/// Picks a free file name inside `dir` for `name` (`name_2.ext`, …). `taken`
+/// lets callers also exclude names that are registered in the database.
+pub fn unique_target(dir: &Path, name: &str, taken: &dyn Fn(&Path) -> bool) -> PathBuf {
     let candidate = dir.join(name);
-    if !candidate.exists() {
+    if !candidate.exists() && !taken(&candidate) {
         return candidate;
     }
     let (stem, ext) = match name.rsplit_once('.') {
@@ -402,7 +407,7 @@ pub fn unique_target(dir: &Path, name: &str) -> PathBuf {
     };
     for i in 2..10_000 {
         let c = dir.join(format!("{stem}_{i}{ext}"));
-        if !c.exists() {
+        if !c.exists() && !taken(&c) {
             return c;
         }
     }
@@ -469,7 +474,8 @@ pub fn run(
                 break;
             }
             Err(e) => {
-                log::warn!("import {}: {e}", item.path.display());
+                // Names/paths stay out of the log (design §3.8); the UI payload carries them.
+                log::debug!("import item failed: {e}");
                 report.failed.push((item.name.clone(), e.to_string()));
             }
         }
@@ -477,6 +483,9 @@ pub fn run(
         progress(&prog);
     }
     report.skipped = plan.duplicate_count + plan.registered_count + plan.unsupported_count + plan.copying_count;
+    if !report.failed.is_empty() {
+        log::warn!("import batch {}: {} of {} items failed", batch_id, report.failed.len(), total);
+    }
     deps.db.with(|c| {
         repo::finish_batch(
             c,
@@ -501,54 +510,39 @@ fn import_one(
     page_progress: &mut dyn FnMut((u32, u32)),
 ) -> Result<(String, bool)> {
     let kind = item.kind.ok_or_else(|| CoreError::Unsupported("unsupported_extension".into()))?;
-    // 1. Place the file inside the workspace.
+    let display_name = nfc(&item.name);
+    // 1. Place the file inside the workspace. Copies get an NFC name (the app's
+    //    own spelling); in-place files keep whatever the file system has.
+    let mut copied: Option<PathBuf> = None;
     let (abs, rel) = if item.inside_workspace {
         let rel = item.rel_path.clone().ok_or_else(|| CoreError::Invalid("missing rel_path".into()))?;
         (from_rel_path(&deps.paths.root, &rel), rel)
     } else {
-        let target = unique_target(dest_dir, &item.name);
+        let root = deps.paths.root.clone();
+        let db = deps.db;
+        let taken = |p: &Path| -> bool {
+            to_rel_path(&root, p)
+                .is_some_and(|rel| db.with(|c| repo::find_by_rel_path(c, &rel)).ok().flatten().is_some())
+        };
+        let target = unique_target(dest_dir, &display_name, &taken);
         copy_or_move(&item.path, &target, plan.options.move_files)?;
+        copied = Some(target.clone());
         let rel = to_rel_path(&deps.paths.root, &target)
             .ok_or_else(|| CoreError::Invalid(format!("{} is outside the workspace", target.display())))?;
         (target, rel)
     };
-    let meta = std::fs::metadata(&abs).map_err(|e| CoreError::io(&abs, e))?;
-    let hash = match &item.content_hash {
-        Some(h) => h.clone(),
-        None => blake3_file(&abs)?,
-    };
-    // 2. Register or relink.
-    let (id, relinked) = match &item.status {
-        ImportItemStatus::Relink { id, .. } => {
-            deps.db.with(|c| {
-                repo::set_rel_path(c, id, &rel, &item.name)?;
-                repo::set_file_info(c, id, &hash, meta.len(), modified_at(&meta))?;
-                repo::set_status(c, id, DocumentStatus::Importing, None)
-            })?;
-            (id.clone(), true)
-        }
-        _ => {
-            let id = new_id();
-            deps.db.with(|c| {
-                repo::insert_document(
-                    c,
-                    &NewDocument {
-                        id: id.clone(),
-                        rel_path: rel.clone(),
-                        original_name: item.name.clone(),
-                        source_kind: kind,
-                        content_hash: hash.clone(),
-                        size_bytes: meta.len(),
-                        file_modified_at: modified_at(&meta),
-                        role: plan.options.role,
-                        import_batch_id: Some(batch_id.to_string()),
-                    },
-                )
-            })?;
-            (id, false)
+    let (id, relinked) = match register(deps, plan, item, kind, &display_name, &abs, &rel, batch_id) {
+        Ok(v) => v,
+        Err(e) => {
+            // Never leave an unregistered copy behind (with `move_files` the
+            // source is already gone, so that file stays where it landed).
+            if let Some(p) = copied.filter(|_| !plan.options.move_files) {
+                let _ = std::fs::remove_file(p);
+            }
+            return Err(e);
         }
     };
-    // 3. Convert + render (a relinked document with cached pages is kept as is).
+    // 2. Convert + render (a relinked document with cached pages is kept as is).
     let doc = deps.db.with(|c| repo::get_document(c, &id))?.ok_or_else(|| CoreError::NotFound(id.clone()))?;
     let keep_pages =
         relinked && doc.page_count > 0 && DocumentCache::for_document(deps.paths, &id).page_file(1).is_file();
@@ -558,6 +552,59 @@ fn import_one(
         process_document(deps, &doc, plan.options.render, plan.options.dpi, cancel, page_progress)?;
     }
     Ok((id, relinked))
+}
+
+/// Inserts the row, relinks a `missing` document, or — when the path is
+/// already registered (e.g. a `missing` row at the same path whose content
+/// changed) — refreshes that row instead of hitting the UNIQUE constraint.
+#[allow(clippy::too_many_arguments)]
+fn register(
+    deps: &ImportDeps<'_>,
+    plan: &ImportPlan,
+    item: &ImportItem,
+    kind: SourceKind,
+    display_name: &str,
+    abs: &Path,
+    rel: &str,
+    batch_id: &str,
+) -> Result<(String, bool)> {
+    let meta = std::fs::metadata(abs).map_err(|e| CoreError::io(abs, e))?;
+    let hash = match &item.content_hash {
+        Some(h) => h.clone(),
+        None => blake3_file(abs)?,
+    };
+    let modified = modified_at(&meta);
+    let size = meta.len();
+    let existing_id = match &item.status {
+        ImportItemStatus::Relink { id, .. } => Some(id.clone()),
+        _ => deps.db.with(|c| repo::find_by_rel_path(c, rel))?.map(|d| d.id),
+    };
+    if let Some(id) = existing_id {
+        deps.db.with_tx(|tx| {
+            repo::set_rel_path(tx, &id, rel, display_name)?;
+            repo::set_file_info(tx, &id, &hash, size, modified)?;
+            repo::set_status(tx, &id, DocumentStatus::Importing, None)
+        })?;
+        return Ok((id, true));
+    }
+    let id = new_id();
+    deps.db.with(|c| {
+        repo::insert_document(
+            c,
+            &NewDocument {
+                id: id.clone(),
+                rel_path: rel.to_string(),
+                original_name: display_name.to_string(),
+                source_kind: kind,
+                content_hash: hash.clone(),
+                size_bytes: size,
+                file_modified_at: modified,
+                role: plan.options.role,
+                import_batch_id: Some(batch_id.to_string()),
+            },
+        )
+    })?;
+    Ok((id, false))
 }
 
 /// Converts (office formats) and renders a registered document, replacing its
@@ -571,6 +618,9 @@ pub fn process_document(
     cancel: Option<&AtomicBool>,
     page_progress: &mut dyn FnMut((u32, u32)),
 ) -> Result<()> {
+    // Crash safety: if the process dies inside a parser/renderer (abort, OOM), the row
+    // must not stay `importing` (which the startup rescan would retry forever).
+    deps.db.with(|c| repo::set_status(c, &doc.id, DocumentStatus::Error, Some("interrupted while processing")))?;
     let result = process_inner(deps, doc, render_pages, dpi, cancel, page_progress);
     match &result {
         Ok(status) => {
@@ -638,7 +688,7 @@ fn process_inner(
         // Register only: keep whatever pages exist, store converted text for search.
         if let Some(text) = fallback_text {
             let page = NewPage { page_no: 1, text: Some(text), ..Default::default() };
-            deps.db.with(|c| repo::replace_pages(c, &doc.id, &[page], None, converted, note.as_deref()))?;
+            deps.db.with_tx(|tx| repo::replace_pages(tx, &doc.id, &[page], None, converted, note.as_deref()))?;
         }
         return Ok(DocumentStatus::New);
     }
@@ -670,7 +720,7 @@ fn process_inner(
     };
     let rendered = pages.iter().any(|p| p.width_px > 0);
     render::prune_cache(&cache, pages.len() as u32);
-    deps.db.with(|c| repo::replace_pages(c, &doc.id, &pages, Some(opts.dpi), converted, note.as_deref()))?;
+    deps.db.with_tx(|tx| repo::replace_pages(tx, &doc.id, &pages, Some(opts.dpi), converted, note.as_deref()))?;
     Ok(if rendered { DocumentStatus::Rendered } else { DocumentStatus::New })
 }
 
@@ -732,6 +782,23 @@ pub fn rescan(
             break;
         }
         report.checked += 1;
+        // One unreadable / locked file must not abort the whole pass.
+        if let Err(e) = rescan_one(deps, &doc, cancel, &mut report, on_document) {
+            log::debug!("rescan: document {} failed: {e}", doc.id);
+            report.failed.push((doc.id.clone(), e.to_string()));
+        }
+    }
+    Ok(report)
+}
+
+fn rescan_one(
+    deps: &ImportDeps<'_>,
+    doc: &DocumentRecord,
+    cancel: Option<&AtomicBool>,
+    report: &mut RescanReport,
+    on_document: &mut dyn FnMut(&str),
+) -> Result<()> {
+    {
         let abs = doc.absolute_path(deps.paths);
         let meta = match std::fs::metadata(&abs) {
             Ok(m) if m.is_file() => m,
@@ -741,7 +808,7 @@ pub fn rescan(
                     report.missing.push(doc.id.clone());
                     on_document(&doc.id);
                 }
-                continue;
+                return Ok(());
             }
         };
         let size_changed = meta.len() != doc.size_bytes;
@@ -774,15 +841,15 @@ pub fn rescan(
             }
         }
         if needs_process {
-            let fresh = deps.db.with(|c| repo::get_document(c, &doc.id))?.unwrap_or(doc.clone());
-            match process_document(deps, &fresh, true, None, cancel, &mut |_| {}) {
+            let fresh = deps.db.with(|c| repo::get_document(c, &doc.id))?.unwrap_or_else(|| doc.clone());
+            match process_document(deps, &fresh, true, doc.render_dpi, cancel, &mut |_| {}) {
                 Ok(()) => report.reprocessed.push(doc.id.clone()),
                 Err(e) => report.failed.push((doc.id.clone(), e.to_string())),
             }
             on_document(&doc.id);
         }
     }
-    Ok(report)
+    Ok(())
 }
 
 /// Files in `inbox/` that are not registered yet (settled only).
@@ -822,11 +889,14 @@ pub fn delete_document(deps: &ImportDeps<'_>, id: &str, keep_file: bool) -> Resu
         match trash::delete(&abs) {
             Ok(()) => {}
             Err(e) => {
-                log::info!("os trash unavailable for {}: {e}; using workspace trash", abs.display());
+                log::info!("os trash unavailable ({e}); using the workspace trash folder");
                 let trash_dir = deps.paths.trash_dir();
                 std::fs::create_dir_all(&trash_dir).map_err(|e| CoreError::io(&trash_dir, e))?;
-                let target =
-                    unique_target(&trash_dir, &format!("{}_{}", &doc.id[..8.min(doc.id.len())], doc.original_name));
+                let target = unique_target(
+                    &trash_dir,
+                    &format!("{}_{}", &doc.id[..8.min(doc.id.len())], doc.original_name),
+                    &|_| false,
+                );
                 std::fs::rename(&abs, &target).or_else(|_| copy_or_move(&abs, &target, true))?;
                 moved_to = Some(target);
             }
@@ -972,6 +1042,36 @@ mod tests {
         if let Some(p) = moved {
             assert!(p.starts_with(e.paths.trash_dir()));
         }
+    }
+
+    #[test]
+    fn nfd_named_files_keep_their_spelling_and_copies_become_nfc() {
+        let e = env();
+        let d = deps(&e, None);
+        let nfd = "\u{1112}\u{1161}\u{11ab}.png"; // 한.png in decomposed form
+                                                  // In place (inbox): the stored rel_path must match the file on disk byte for byte.
+        let inside = e.paths.inbox_dir().join(nfd);
+        RgbImage::from_pixel(16, 16, Rgb([0, 0, 0])).save(&inside).unwrap();
+        crate::modelstore::mark_settled(&inside);
+        // External copy: the copy gets an NFC name.
+        let ext = external_dir(&e);
+        let outside = ext.join(nfd);
+        RgbImage::from_pixel(24, 16, Rgb([0, 0, 0])).save(&outside).unwrap();
+        let plan =
+            plan(&e.db, &e.paths, &[inside.clone(), outside.clone()], &ImportOptions::default(), ImportSource::Folder)
+                .unwrap();
+        assert_eq!(plan.new_count, 2, "{:?}", plan.items);
+        let report = run(&d, &plan, None, &mut |_| {}, &mut |_, _| {}).unwrap();
+        assert_eq!(report.imported.len(), 2, "{:?}", report.failed);
+        let docs = e.db.with(|c| repo::list_documents(c, &DocumentFilter::default())).unwrap();
+        let in_place = docs.iter().find(|x| x.rel_path.starts_with("inbox/")).unwrap();
+        assert_eq!(in_place.rel_path, format!("inbox/{nfd}"), "on-disk spelling kept");
+        assert_eq!(in_place.original_name, "\u{d55c}.png", "display name is NFC");
+        assert_eq!(in_place.status, DocumentStatus::Rendered);
+        let copied = docs.iter().find(|x| x.rel_path.starts_with("documents/")).unwrap();
+        assert_eq!(copied.rel_path, "documents/\u{d55c}.png", "copies are written with an NFC name");
+        assert!(e.paths.documents_dir().join("\u{d55c}.png").is_file());
+        assert_eq!(copied.status, DocumentStatus::Rendered);
     }
 
     #[test]

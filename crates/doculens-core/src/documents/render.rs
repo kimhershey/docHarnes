@@ -89,22 +89,28 @@ pub struct RenderService {
     pub library: PathBuf,
 }
 
-static GLOBAL: OnceLock<std::result::Result<RenderService, String>> = OnceLock::new();
+static GLOBAL: OnceLock<RenderService> = OnceLock::new();
+static GLOBAL_INIT: Mutex<()> = Mutex::new(());
 
 impl RenderService {
     /// Binds the library once per process. Later calls return the same
-    /// service (the path is ignored after the first successful bind).
+    /// service (the path is ignored after the first successful bind); a failed
+    /// bind is not cached, so a later call with a fixed installation can succeed.
     pub fn global(library: &Path) -> Result<&'static RenderService> {
-        let r = GLOBAL.get_or_init(|| Self::start(library).map_err(|e| e.to_string()));
-        match r {
-            Ok(s) => Ok(s),
-            Err(e) => Err(CoreError::Render(format!("pdfium: {e}"))),
+        if let Some(s) = GLOBAL.get() {
+            return Ok(s);
         }
+        let _guard = GLOBAL_INIT.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(s) = GLOBAL.get() {
+            return Ok(s);
+        }
+        let service = Self::start(library)?;
+        Ok(GLOBAL.get_or_init(|| service))
     }
 
     /// The service if it was already started.
     pub fn get() -> Option<&'static RenderService> {
-        GLOBAL.get().and_then(|r| r.as_ref().ok())
+        GLOBAL.get()
     }
 
     fn start(library: &Path) -> Result<RenderService> {
@@ -120,14 +126,19 @@ impl RenderService {
             .spawn(move || {
                 let pdfium = pdfium;
                 while let Ok(job) = rx.recv() {
-                    job(&pdfium);
+                    // A panicking job must not take the (irreplaceable) worker down with it.
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&pdfium)));
+                    if outcome.is_err() {
+                        log::error!("pdfium worker: a render job panicked; the worker keeps running");
+                    }
                 }
             })
             .map_err(|e| CoreError::Render(format!("pdfium worker: {e}")))?;
         Ok(RenderService { tx: Mutex::new(tx), library: library.to_path_buf() })
     }
 
-    /// Runs `f` on the worker thread and waits for its result.
+    /// Runs `f` on the worker thread and waits for its result. A panic inside
+    /// `f` surfaces as a render error (the job's reply channel is dropped).
     pub fn run<T: Send + 'static>(&self, f: impl FnOnce(&Pdfium) -> Result<T> + Send + 'static) -> Result<T> {
         let (rtx, rrx) = mpsc::channel::<Result<T>>();
         let job: Job = Box::new(move |p| {
@@ -138,7 +149,7 @@ impl RenderService {
             .map_err(|_| CoreError::Render("render queue poisoned".into()))?
             .send(job)
             .map_err(|_| CoreError::Render("render worker stopped".into()))?;
-        rrx.recv().map_err(|_| CoreError::Render("render worker dropped the job".into()))?
+        rrx.recv().map_err(|_| CoreError::Render("render job aborted (renderer panic)".into()))?
     }
 }
 

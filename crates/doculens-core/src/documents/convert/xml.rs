@@ -10,9 +10,14 @@ use quick_xml::{Reader, XmlVersion};
 use crate::error::{CoreError, Result};
 
 /// Largest XML part we are willing to parse (decompressed).
-pub const MAX_XML_BYTES: u64 = 256 * 1024 * 1024;
+pub const MAX_XML_BYTES: u64 = 64 * 1024 * 1024;
 /// Largest binary part (image) we copy out of an archive.
-pub const MAX_BINARY_BYTES: u64 = 128 * 1024 * 1024;
+pub const MAX_BINARY_BYTES: u64 = 64 * 1024 * 1024;
+/// Total embedded image bytes kept per document; later images are dropped with a note.
+pub const MAX_IMAGE_TOTAL_BYTES: usize = 256 * 1024 * 1024;
+/// Upper bounds for table geometry taken from file attributes (OOM guard).
+pub const MAX_TABLE_ROWS: usize = 10_000;
+pub const MAX_TABLE_COLS: usize = 1_024;
 const MAX_DEPTH: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Default)]

@@ -1251,13 +1251,16 @@ function makeImportPlan(paths: string[], options: ImportOptions, source: ImportS
   const wsPath = current?.path ?? "";
   const seen = new Map<string, string>();
   const items: ImportItem[] = [];
+  const seenPaths = new Set<string>();
   for (const raw of paths) {
     const path = raw.trim().replace(/^"|"$/g, "");
-    if (!path) continue;
+    if (!path || seenPaths.has(path)) continue; // Rust dedupes identical paths in collect_paths
+    seenPaths.add(path);
     const name = basename(path);
     const kind = kindOf(name);
     const inside = wsPath !== "" && path.startsWith(wsPath);
     const rel = inside ? path.slice(wsPath.length).replace(/^[\\/]+/, "").split(/[\\/]/).join("/") : null;
+    // Content hash stands in for the file name: the same name in two folders counts as the same content.
     const hash = `mock-${name.toLowerCase()}`;
     const item: ImportItem = { path, name, size: 120_000 + name.length * 9_000, kind, inside_workspace: inside, rel_path: rel, content_hash: null, status: { kind: "new" } };
     if (!kind) {
@@ -1443,6 +1446,7 @@ function mockDocuments(cmd: string, a: Record<string, any>): unknown { // eslint
       return runDocumentImport(plan);
     }
     case "documents_rescan": {
+      if (jobs.some((j) => ["document_import", "document_rescan", "document_render"].includes(j.kind) && !["done", "failed", "cancelled"].includes(j.state))) return null;
       const job = createJob("document_rescan", "library");
       void simulate(job.id, 2, 120, () => undefined).then(() => finishJob(job.id, { ok: true, detail: `checked ${wsDocs().length}` }));
       return job.id;
@@ -1522,8 +1526,13 @@ function mockDocuments(cmd: string, a: Record<string, any>): unknown { // eslint
       saveSettings(s);
       return s.processing.inbox_watch;
     }
-    case "documents_pdfium_info":
-      return { library: "(browser) simulated pdfium", error: null, searched: [] } satisfies PdfiumInfo;
+    case "documents_pdfium_info": {
+      // `localStorage.doculens.mock.nopdfium` simulates a missing renderer (UI banner).
+      const missing = read<string | null>("doculens.mock.nopdfium", null) !== null;
+      return (missing
+        ? { library: null, error: "pdfium_not_found", searched: ["(browser)/pdfium"] }
+        : { library: "(browser) simulated pdfium", error: null, searched: [] }) satisfies PdfiumInfo;
+    }
     default:
       throw err("internal", `mock backend: unknown command ${cmd}`);
   }

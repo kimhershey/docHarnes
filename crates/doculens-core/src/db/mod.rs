@@ -70,10 +70,13 @@ pub fn is_network_or_sync_folder(root: &Path) -> bool {
 #[cfg(windows)]
 fn is_remote_drive_windows(root: &Path) -> bool {
     use std::os::windows::ffi::OsStrExt;
+    use std::path::Component;
     use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
     /// `DRIVE_REMOTE` (Win32 `WinBase.h`); lives in `Win32::System::WindowsProgramming` in windows-sys.
     const DRIVE_REMOTE: u32 = 4;
-    let Some(prefix) = root.components().next() else { return false };
+    // Only paths with a drive / UNC prefix can be asked; a bare `\foo` (no drive) would
+    // turn into `\\`, which GetDriveTypeW reports as a remote root.
+    let Some(Component::Prefix(prefix)) = root.components().next() else { return false };
     // `GetDriveTypeW` wants the root with a trailing separator (`C:\`, `\\server\share\`).
     let mut drive = prefix.as_os_str().to_os_string();
     drive.push("\\");
@@ -142,7 +145,9 @@ impl Db {
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, Connection>> {
-        self.conn.lock().map_err(|_| CoreError::Db("database lock poisoned".into()))
+        // A panic while holding the guard poisons it, but the connection itself is still
+        // usable (an open transaction rolled back when it was dropped).
+        Ok(self.conn.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     /// Runs `f` with the connection.
@@ -276,7 +281,14 @@ mod tests {
         assert_eq!(journal_mode_for(Path::new("\\\\nas\\share\\docs")), JournalMode::Delete);
         assert_eq!(journal_mode_for(Path::new("C:\\Users\\me\\OneDrive\\Docs")), JournalMode::Delete);
         assert_eq!(journal_mode_for(Path::new("/home/me/Dropbox/docs")), JournalMode::Delete);
+        // A local folder: the Linux form everywhere, plus the system drive on Windows
+        // (where a drive-less path cannot be classified and must not count as remote).
         assert_eq!(journal_mode_for(Path::new("/home/me/docs")), JournalMode::Wal);
+        #[cfg(windows)]
+        {
+            let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+            assert_eq!(journal_mode_for(Path::new(&format!("{system}\\Work\\Docs"))), JournalMode::Wal);
+        }
     }
 
     #[test]

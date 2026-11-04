@@ -164,7 +164,7 @@ export const api = {
 };
 
 /** Native multi-file picker for documents (Tauri only). Returns [] when cancelled or unavailable. */
-export async function pickDocumentFiles(title: string, defaultPath?: string): Promise<string[]> {
+export async function pickDocumentFiles(title: string, filterName: string, defaultPath?: string): Promise<string[]> {
   if (!isTauri) return [];
   const { open } = await import("@tauri-apps/plugin-dialog");
   const result = await open({
@@ -172,9 +172,7 @@ export async function pickDocumentFiles(title: string, defaultPath?: string): Pr
     multiple: true,
     title,
     defaultPath,
-    filters: [
-      { name: "Documents", extensions: ["pdf", "png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp", "gif", "hwpx", "docx", "hwp"] },
-    ],
+    filters: [{ name: filterName, extensions: ["pdf", "png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp", "gif", "hwpx", "docx", "hwp"] }],
   });
   if (Array.isArray(result)) return result;
   return typeof result === "string" ? [result] : [];
@@ -221,7 +219,9 @@ export async function revealPath(path: string): Promise<void> {
   try {
     await opener.revealItemInDir(path);
   } catch {
-    await opener.openPath(path);
+    // Fallback for paths the reveal API rejects (e.g. a missing file): open the containing folder.
+    const dir = path.replace(/[\\/][^\\/]*$/, "");
+    await opener.openPath(dir || path);
   }
 }
 

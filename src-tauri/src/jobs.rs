@@ -88,6 +88,26 @@ impl JobBook {
         self.jobs.lock().ok()?.iter().find(|j| j.id == id).cloned()
     }
 
+    /// True when any job of one of these kinds is still queued/running.
+    pub fn is_active_kind(&self, kinds: &[JobKind]) -> bool {
+        self.jobs.lock().map(|j| j.iter().any(|j| kinds.contains(&j.kind) && !j.state.is_finished())).unwrap_or(false)
+    }
+
+    /// Requests cancellation of every active job of these kinds; returns their ids.
+    pub fn cancel_kinds(&self, kinds: &[JobKind]) -> Vec<String> {
+        let ids: Vec<String> = self
+            .jobs
+            .lock()
+            .map(|j| {
+                j.iter().filter(|j| kinds.contains(&j.kind) && !j.state.is_finished()).map(|j| j.id.clone()).collect()
+            })
+            .unwrap_or_default();
+        for id in &ids {
+            self.cancel(id);
+        }
+        ids
+    }
+
     /// True when a job of this kind is still queued/running for `subject`.
     pub fn is_active(&self, kind: JobKind, subject: &str) -> bool {
         self.jobs

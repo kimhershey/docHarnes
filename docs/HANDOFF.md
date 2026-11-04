@@ -236,10 +236,10 @@
 
 | 종류 | 수 | 비고 |
 |---|---|---|
-| `cargo test -p doculens-core` (lib) | 90 (+1 ignored) | db 4, documents 25(변환 10, 렌더 4, 가져오기 4, 저장소 2, 픽스처 1 + `gen_fixtures` ignored …), fswatch 1; PDFium 테스트는 `DOCULENS_PDFIUM` 설정 시 실행(없으면 건너뜀) |
+| `cargo test -p doculens-core` (lib) | 91 (+1 ignored) | db 4, documents 25(변환 10, 렌더 4, 가져오기 4, 저장소 2, 픽스처 1 + `gen_fixtures` ignored …), fswatch 1; PDFium 테스트는 `DOCULENS_PDFIUM` 설정 시 실행(없으면 건너뜀) |
 | `tests/engine_process.rs` / `tests/real_engine.rs` | 5 / 1 | P1과 동일 |
 | vitest | 27 | i18n 패리티 + 정적 키 해석(새 화면 키 포함) |
-| Playwright | 13 | P0 7 + P1 3 + **P2 3**(가져오기 미리보기→렌더→라이브러리·필터·홈 / 뷰어 쪽 이동·회전·태그·유형·삭제 / 일괄 작업·inbox 토글) |
+| Playwright | 14 | P0 7 + P1 3 + **P2 4**(가져오기 미리보기→렌더→라이브러리·필터·홈 / 뷰어 쪽 이동·키보드·회전·태그·유형·삭제 / 일괄 작업·선택 정리·inbox 토글 / PDFium 없음 배너·폴더 가져오기 미리보기) |
 
 - **실제 변환·렌더 검증(이 환경)**: PDFium chromium/8125 Linux 빌드로 100쪽 PDF 렌더(텍스트 레이어·공백 판정·
   회전·취소), 생성 HWPX/DOCX 파싱, 스텁 프린터 경로의 전 파이프라인(가져오기→변환→렌더→DB) 통과.
@@ -258,6 +258,45 @@
   `render::write_jpeg` 한 곳. LRU 상한(설정 `cache.page_cache_max_gb`)은 보존/파기 작업(P5/P7)에서 적용.
 - 멀티 페이지 TIFF와 CCITT G4 TIFF는 첫 페이지/미지원(`image` 크레이트 한계) — PDF로 변환 후 투입 안내.
 - HWPX/DOCX 변환은 근사 렌더("변환본" 배지): 글상자·도형은 텍스트만, 수식은 스크립트 텍스트, 머리글/꼬리글 생략.
+
+## P2 단계 말 리뷰 반영 (2026-11-04)
+
+독립 리뷰 2건(Rust 코어·셸: 치명 2·높음 5·중간 9·낮음 16 / 프런트엔드: 치명 1·높음 2·중간 8·낮음 15)을 반영했다. 핵심:
+
+- **릴리스 프로파일 `panic = "unwind"`**: 작업 스레드·HWP 파서(`hwp` 크레이트는 손상 파일에서 panic)·PDFium
+  워커가 `catch_unwind`에 의존하므로 `abort`면 앱이 통째로 죽고, 행이 `importing`으로 남아 시작 시 재검사가
+  같은 파일을 다시 처리하는 크래시 루프가 된다. 추가로 `process_document`가 **처리 전에 상태를 `error`("interrupted
+  while processing")로 기록**해 두고 끝나면 덮어쓰므로, 프로세스가 중간에 죽어도(OOM·abort) 다시 반복되지 않는다.
+  PDFium 워커는 작업별 `catch_unwind`로 살아남고, 바인딩 실패는 캐시하지 않아 라이브러리를 나중에 넣으면 복구된다.
+- **Windows 빌드**: `DRIVE_REMOTE`는 `Win32::System::WindowsProgramming`에 있어 상수값(4)을 직접 사용,
+  `PrintToPdfCompletedHandler` 클로저는 `bool`을 받음, 드라이브 접두사가 없는 경로는 원격 판정에서 제외(`\`가 UNC로
+  읽혀 DELETE 저널이 되던 문제). 로컬에서 `x86_64-pc-windows-gnu` 타깃으로 `cargo check` + `clippy`를 교차 검증하고
+  CI Windows 작업이 통과.
+- **경로 철자**: `rel_path`는 디스크의 철자를 그대로 저장(NTFS/ext4는 NFC≠NFD). 앱이 복사해 넣는 파일 이름과
+  `original_name`만 NFC. NFD 파일을 제자리/복사로 가져오는 테스트 추가.
+- **워크스페이스 전환**: 전환·닫기 전에 문서 작업(가져오기·재검사·렌더)을 취소하고 최대 8초 대기
+  (`before_workspace_change`), `DocsContext`가 워크스페이스 세대를 들고 있어 늦게 끝나는 작업은 이벤트를 내지 않음.
+- **inbox**: 가져오기 작업 중 들어온 파일은 `inbox_dirty` 플래그로 작업 종료 후 재검사; 해시 계산은 감시 스레드가
+  아니라 별도 스레드(`spawn_inbox_scan`)에서; inbox 대상 가져오기와 감시기의 경합은 "가져오기 작업 종류 단위"
+  활성 검사로 회피. 재검사는 다른 문서 작업이 돌 때 거부(`null` → "이미 진행 중" 안내).
+- **재검사 내성**: 파일 하나가 잠겨 있어도 문서별로 실패를 기록하고 계속 진행; 재처리 시 문서의 저장 DPI 사용.
+- **입력 파일 방어**: 표 행/열·`gridSpan`·`cellAddr`를 10,000행·1,024열로 clamp(속성값 기반 할당 OOM 방지),
+  XML 파트 64 MiB·이미지 64 MiB/문서 합계 256 MiB, HTML 번들 생성 시 이미지 바이트를 복제하지 않음,
+  `percent_decode` 바이트 슬라이스, 캐시 폴더 id 검증, 최상위 심링크도 건너뜀.
+- **DB**: 페이지 교체·태그 교체·다시 연결은 트랜잭션; 같은 경로가 이미 등록된 경우(파일 없음 행 등)는 UNIQUE 오류
+  대신 그 행을 갱신; 복사 후 등록에 실패하면 복사본 제거; poisoned 뮤텍스 복구.
+- **인쇄 경로**: `on_page_load` 안에서 재진입 호출하지 않고 `run_on_main_thread`로 다음 턴에 인쇄, GTK 출력 URI는
+  `Url::from_file_path`(공백·한글 경로).
+- **로그**: 파일명·경로는 debug 레벨로만, warn은 건수(§3.8).
+- **프런트엔드**: 선택 집합은 보이는 문서로만 유지(필터·폴더·검색·삭제 시 자동 정리, 부분 선택 indeterminate);
+  뷰어 단축키는 뷰어 루트 스코프 + Radix 탭/셀렉트/버튼 제외; 검색·필터 변경 시 이전 목록 유지(`keepPreviousData`);
+  드롭 중 재드롭도 즉시 미리보기(요청 순번으로 지연 응답 폐기); "기존 파일 가져오기"는 미리보기 다이얼로그 경유;
+  썸네일 스트립 가상화·페이지 전환 시 스크롤 리셋·문서별 상태 초기화; 명령 반환값을 캐시에 직접 반영(이중 refetch
+  제거); `window.confirm` 대신 테마 적용 ConfirmDialog; 작업 제목/요약·`invalid` 사유 한국어화; 리스트 grid 시맨틱·
+  라벨·포커스 복귀; 모의 백엔드는 동일 경로 중복 제거·재검사 `null`·PDFium 없음 스위치; 로컬 e2e는 빌드 후 실행.
+- 보류(기록): 삭제 되돌리기(저널, P5), 다시 렌더 DPI 선택 UI, 태그 필터, 일괄 태그, 온보딩 마법사 내 "지금
+  가져오기"(라이브러리 빈 상태로 이동), 가져오기 "검토 완료 전 이동 금지"(정리 기능 P5), 변환본 텍스트의 쪽 배분
+  (인쇄 PDF에 텍스트 레이어가 없을 때 1쪽에 몰림), 페이지 이미지 프로토콜의 비동기 응답(USB/NAS).
 
 ## P3 착수 메모
 
@@ -279,5 +318,6 @@
 - 모의 백엔드의 프리라우터는 Rust 구현의 부분 집합(브라우저 데모 용도).
 - 라우터의 `memory` 실측은 CPU 전용 빌드에서는 비어 있음(GPU 장치가 있을 때만 채워짐).
 - WebView2 `PrintToPdf`(HWPX/DOCX/HWP 변환본)는 이 환경에서 실행 불가 — Linux WebKitGTK 경로로 동일 파이프라인을
-  검증했고 Windows 경로는 컴파일 검사만 거침(`docs/user-pc-checklist.md` P2 항목).
+  검증했고 Windows 경로는 컴파일·clippy 검사(교차 타깃 + CI)만 거침(`docs/user-pc-checklist.md` P2 항목). 숨은 창에서
+  `PrintToPdf`가 완료되는지, 실패한 내비게이션(오류 페이지)이 인쇄되지 않는지는 사용자 PC에서 확인.
 - 이 환경에는 한글 글꼴이 제한적이라 변환본 렌더 품질(글꼴 대체)은 사용자 PC에서 확인.
