@@ -38,5 +38,7 @@ dist-ssr
 
 # Local models / workspaces must never be committed
 *.gguf
+# …except the synthetic (random-weight, <1 MB) test fixture used by the real-engine test
+!crates/doculens-core/tests/fixtures/**/*.gguf
 /.doculens/
 /workspace/
