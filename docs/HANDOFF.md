@@ -18,7 +18,7 @@
 | 단계 | 상태 | 비고 |
 |---|---|---|
 | P0 스캐폴드 | 완료 (`main`) | Tauri 2 셸, 테마 4종, i18n, 설정/워크스페이스, CI |
-| P1 엔진·모델 | **완료 (브랜치 `phase/p1-engine`)** | 아래 "P1 산출물" 참조 |
+| P1 엔진·모델 | **완료 (`main`에 병합, PR #2)** | 아래 "P1 산출물" 참조. 병합 후 CI 엔진 빌드 수정은 `phase/p1-engine` 후속 PR |
 | P2 워크스페이스·문서 | 다음 | SQLite 마이그레이션, 가져오기, HWP/HWPX/DOCX 변환, pdfium 렌더, 뷰어 |
 | P3 지식 베이스 | 대기 | 청킹, lindera FTS5 + trigram, bge-m3 + sqlite-vec, 근거 기반 Q&A |
 | P4 파이프라인 | 대기 | 분류·OCR·KIE, 양식 등록, 검증기, 검토 큐 |

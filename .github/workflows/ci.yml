@@ -65,7 +65,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /tmp/engine/bin
-          key: llama-server-cpu-${{ steps.tag.outputs.tag }}-ubuntu-24.04-v1
+          key: llama-server-cpu-${{ steps.tag.outputs.tag }}-ubuntu-24.04-v2
       - name: Build llama-server (CPU only) from the pinned tag
         if: steps.engine-cache.outputs.cache-hit != 'true'
         run: |
@@ -74,7 +74,10 @@ jobs:
           # CPU build (static CPU backend, no dynamic loading) is built from source.
           TAG="${{ steps.tag.outputs.tag }}"
           git clone --depth 1 --branch "$TAG" https://github.com/ggml-org/llama.cpp /tmp/engine/src
+          # Static libraries → one self-contained binary that survives the cache
+          # restore (a shared build keeps an RPATH into the vanished build tree).
           cmake -S /tmp/engine/src -B /tmp/engine/build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=OFF \
+            -DBUILD_SHARED_LIBS=OFF -DCMAKE_INSTALL_RPATH='$ORIGIN' -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=ON
           cmake --build /tmp/engine/build --config Release --target llama-server -j "$(nproc)"
           mkdir -p /tmp/engine/bin && cp /tmp/engine/build/bin/* /tmp/engine/bin/
@@ -82,6 +85,7 @@ jobs:
         run: |
           BIN=/tmp/engine/bin/llama-server
           test -x "$BIN"
+          ldd "$BIN" | grep -i "not found" && exit 1
           echo "libraries next to the binary:"; ls /tmp/engine/bin | grep -i ggml || true
           test -z "$(ls /tmp/engine/bin | grep -iE 'openvino|vulkan|cuda|rocm')"
           echo "DOCULENS_LLAMA_SERVER=$BIN" >> "$GITHUB_ENV"
