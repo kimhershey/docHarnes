@@ -1,7 +1,7 @@
 //! Spawning the sidecar so that nothing survives the app (design §3.3.1 #6):
 //! Windows → job object with `KILL_ON_JOB_CLOSE` (the router's model child
-//! processes inherit it); Unix → own process group (+ `PR_SET_PDEATHSIG` on
-//! Linux) and `killpg`. stdout/stderr are pumped line by line to a sink.
+//! processes inherit it); Unix → own process group and `killpg` on stop /
+//! drop / app exit. stdout/stderr are pumped line by line to a sink.
 
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
@@ -74,16 +74,12 @@ pub fn spawn(spec: &SpawnSpec) -> Result<EngineChild> {
     }
     #[cfg(unix)]
     {
+        // Own process group so the whole tree (router + model instances) can be
+        // signalled with killpg. PR_SET_PDEATHSIG is deliberately NOT used: on
+        // Linux it fires when the spawning *thread* exits, and the engine is
+        // started from short-lived worker threads.
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
-        #[cfg(target_os = "linux")]
-        unsafe {
-            cmd.pre_exec(|| {
-                // Die with the parent even if the parent is killed with SIGKILL.
-                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
-                Ok(())
-            });
-        }
     }
     #[cfg(windows)]
     let job = {

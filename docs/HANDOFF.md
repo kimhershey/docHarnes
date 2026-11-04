@@ -57,8 +57,9 @@
   `/v1/embeddings`, `/props`, `/metrics`), OpenAI 호환 `ChatRequest`(json_schema, 이미지
   data URL 헬퍼), 메모리 실측 합산(`memory.effective.devices[kind=device]`).
 - `engine::process`: 스폰 격리 — Windows `CreateJobObject` + `KILL_ON_JOB_CLOSE` +
-  `CREATE_NO_WINDOW`, Unix `setpgid` + Linux `PR_SET_PDEATHSIG`, `killpg` 종료, stdout/stderr
-  라인 펌프.
+  `CREATE_NO_WINDOW`, Unix `setpgid` + `killpg` 종료(앱 종료 `RunEvent::Exit`에서 명시적 stop),
+  stdout/stderr 라인 펌프. `PR_SET_PDEATHSIG`는 스폰한 *스레드*가 끝나면 발동하므로 사용하지
+  않음(헤드리스 검증에서 자동 시작 스레드 종료 직후 엔진이 SIGKILL 되는 현상으로 확인).
 - `engine::manager`: 생명주기 상태기계(Stopped/Starting/Running/Restarting/Degraded/Stopping),
   랜덤 루프백 포트, API 키는 `LLAMA_API_KEY` 환경변수로만 전달, `/health` 대기, SSE 스레드,
   크래시 감시 + 지수 백오프(1·2·4초, 3회) 후 Degraded, 60초 이상 정상 가동 시 카운터 리셋,

@@ -621,8 +621,15 @@ pub struct InstallState {
 
 /// Installation state of a registry model given the scan results.
 pub fn install_state(models_dir: &Path, model: &ModelEntry, discovered: &[DiscoveredModel]) -> InstallState {
-    let candidates: Vec<&DiscoveredModel> =
-        discovered.iter().filter(|d| d.registry_match.as_ref().is_some_and(|m| m.id == model.id)).collect();
+    // Built-in entries match through `registry_match`; user-added entries
+    // (synthesised from a folder) match by their id.
+    let candidates: Vec<&DiscoveredModel> = discovered
+        .iter()
+        .filter(|d| match &d.registry_match {
+            Some(m) => m.id == model.id,
+            None => model.user_added && d.id == model.id,
+        })
+        .collect();
     // Prefer a ready, hash-verified folder.
     let best = candidates
         .iter()
@@ -1423,6 +1430,9 @@ mod tests {
         let merged = merged_registry(&reg, &found);
         assert_eq!(merged.models.len(), reg.models.len() + 2);
         let e = merged.get("custom-one").unwrap();
+        let st = install_state(&models, e, &found);
+        assert!(st.installed, "user-added models must report their folder as installed: {st:?}");
+        assert_eq!(st.folder, Some(models.join("custom one")));
         assert!(e.user_added);
         assert_eq!(e.defaults["ctx"], 4096);
         assert_eq!(e.prompt_profile.as_deref(), Some("qwen3.5-doc-v1"));
