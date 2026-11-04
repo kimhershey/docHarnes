@@ -4,11 +4,13 @@
 //! file prevents two instances from opening the same folder.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::db::{self, Db};
 use crate::error::{CoreError, Result};
 use crate::paths::WorkspacePaths;
 use crate::retention::RetentionPolicy;
@@ -245,11 +247,13 @@ pub struct OpenOptions {
 }
 
 /// An open workspace. Dropping it releases its lock (only if the lock file
-/// still carries this handle's token).
+/// still carries this handle's token). The database is opened (and migrated)
+/// together with the lock, so an open workspace always has a usable `db`.
 #[derive(Debug)]
 pub struct Workspace {
     pub paths: WorkspacePaths,
     pub manifest: WorkspaceManifest,
+    pub db: Arc<Db>,
     lock_token: Uuid,
     lock_held: bool,
 }
@@ -320,6 +324,13 @@ impl Workspace {
         }
 
         let lock_token = acquire_lock(&paths, opts.force_unlock)?;
+        let db = match Db::open(&paths.db_file(), db::journal_mode_for(root)) {
+            Ok(db) => Arc::new(db),
+            Err(e) => {
+                let _ = std::fs::remove_file(paths.lock_file());
+                return Err(e);
+            }
+        };
 
         // Manifest
         let mut manifest = if existing {
@@ -338,7 +349,7 @@ impl Workspace {
         manifest.last_opened_app_version = APP_VERSION.to_string();
         manifest.save(&manifest_path)?;
 
-        Ok(Workspace { paths, manifest, lock_token, lock_held: true })
+        Ok(Workspace { paths, manifest, db, lock_token, lock_held: true })
     }
 
     pub fn root(&self) -> &Path {
@@ -358,6 +369,7 @@ impl Workspace {
 
     /// Releases the lock explicitly (also done on drop).
     pub fn close(mut self) {
+        let _ = self.db.checkpoint();
         self.release_lock();
     }
 
@@ -424,6 +436,8 @@ mod tests {
         assert!(ws.paths.models_dir().is_dir());
         assert!(ws.paths.inbox_dir().is_dir());
         assert!(ws.paths.lock_file().is_file());
+        assert!(ws.paths.db_file().is_file(), "workspace.db is created with the workspace");
+        assert_eq!(ws.db.user_version().unwrap(), crate::db::SCHEMA_VERSION);
 
         // Same process re-open is allowed (lock is ours)
         let insp = inspect(&root);

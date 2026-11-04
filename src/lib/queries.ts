@@ -1,7 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { api } from "./ipc";
 import { queryKeys } from "./query-client";
+import type { DocumentFilter } from "./types";
 
 export function useAppInfo() {
   return useQuery({ queryKey: queryKeys.appInfo, queryFn: () => api.appInfo(), staleTime: Infinity });
@@ -25,4 +26,35 @@ export function useModelIndex() {
 
 export function useEngineBinaryInfo(enabled = true) {
   return useQuery({ queryKey: queryKeys.engineBinary, queryFn: () => api.engineBinaryInfo(), enabled, staleTime: 60_000 });
+}
+
+export function useDocuments(filter: DocumentFilter, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.documentsList(filter),
+    queryFn: () => api.documentsList(filter),
+    enabled,
+    staleTime: 5_000,
+    // Keep the previous list on filter / search changes so the grid never unmounts into a spinner.
+    placeholderData: keepPreviousData,
+  });
+}
+
+export function useDocumentStats(enabled = true) {
+  return useQuery({ queryKey: queryKeys.documentsStats, queryFn: () => api.documentsStats(), enabled, staleTime: 5_000 });
+}
+
+export function useDocument(id: string | undefined) {
+  return useQuery({ queryKey: queryKeys.document(id ?? ""), queryFn: () => api.documentsGet(id ?? ""), enabled: !!id });
+}
+
+export function useDocumentPages(id: string | undefined, withText = false) {
+  return useQuery({
+    queryKey: queryKeys.documentPages(id ?? "", withText),
+    queryFn: () => api.documentsPages(id ?? "", withText),
+    enabled: !!id,
+  });
+}
+
+export function usePdfiumInfo(enabled = true) {
+  return useQuery({ queryKey: queryKeys.pdfium, queryFn: () => api.documentsPdfiumInfo(), enabled, staleTime: Infinity });
 }

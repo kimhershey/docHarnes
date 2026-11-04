@@ -1,13 +1,18 @@
 //! Process-wide state shared by all commands.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tauri::AppHandle;
 
+use doculens_core::documents::convert::PdfPrinter;
+use doculens_core::documents::import::ImportPlan;
 use doculens_core::engine::EngineManager;
+use doculens_core::fswatch::DirWatcher;
 use doculens_core::hw::HardwareSummary;
 use doculens_core::modelstore::{self, DiscoveredModel, ModelWatcher};
 use doculens_core::paths::AppPaths;
@@ -106,6 +111,21 @@ pub struct AppState {
     pub app: OnceLock<AppHandle>,
     /// Serialises `presets.ini` regeneration + router reload.
     pub presets_lock: Mutex<()>,
+    /// PDFium library path once resolved, or why the last attempt failed
+    /// (failures are retried on the next use).
+    pub pdfium: Mutex<Option<std::result::Result<PathBuf, String>>>,
+    /// Bumped on every workspace open/close; document jobs carry the value they
+    /// started with and stop publishing once it is stale.
+    pub workspace_generation: AtomicU64,
+    /// An inbox change arrived while an import was running → re-check at job end.
+    pub inbox_dirty: AtomicBool,
+    /// HTML → PDF printer backed by the webview (set in `setup`).
+    pub printer: OnceLock<Arc<dyn PdfPrinter>>,
+    pub inbox_watcher: Mutex<Option<DirWatcher>>,
+    /// Import previews waiting for confirmation, keyed by token.
+    pub import_plans: Mutex<HashMap<String, ImportPlan>>,
+    /// Print bundle token → directory served by the `doculens://print/` route.
+    pub print_bundles: Mutex<HashMap<String, PathBuf>>,
 }
 
 impl AppState {
@@ -137,6 +157,13 @@ impl AppState {
             jobs: JobBook::default(),
             app: OnceLock::new(),
             presets_lock: Mutex::new(()),
+            pdfium: Mutex::new(None),
+            workspace_generation: AtomicU64::new(0),
+            inbox_dirty: AtomicBool::new(false),
+            printer: OnceLock::new(),
+            inbox_watcher: Mutex::new(None),
+            import_plans: Mutex::new(HashMap::new()),
+            print_bundles: Mutex::new(HashMap::new()),
         }
     }
 
@@ -242,6 +269,7 @@ impl AppState {
                 old.close();
             }
             *guard = Some(ws);
+            self.workspace_generation.fetch_add(1, Ordering::SeqCst);
         }
         let mut s = self.settings.lock().map_err(|_| CoreError::Invalid("lock poisoned".into()))?;
         s.remember_workspace(path, &name);
@@ -254,6 +282,7 @@ impl AppState {
         if let Some(ws) = guard.take() {
             ws.close();
         }
+        self.workspace_generation.fetch_add(1, Ordering::SeqCst);
         drop(guard);
         self.update_settings(|s| s.active_workspace = None)?;
         Ok(())

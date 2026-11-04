@@ -15,6 +15,19 @@ import type {
   ChatTestResult,
   DateRange,
   DiscoveredModel,
+  DocumentFilter,
+  DocumentImportPlan,
+  DocumentRecord,
+  DocumentSort,
+  DocumentView,
+  DocumentsChanged,
+  ImportItem,
+  ImportOptions,
+  ImportSource,
+  LibraryStats,
+  PageView,
+  PdfiumInfo,
+  SourceKind,
   EngineBinaryInfo,
   EngineDevice,
   EngineStatus,
@@ -45,7 +58,7 @@ import type {
   WorkspaceManifest,
   WorkspaceView,
 } from "./types";
-import { EVENTS } from "./types";
+import { defaultImportOptions, EVENTS } from "./types";
 
 const SETTINGS_KEY = "doculens.mock.settings";
 const WORKSPACES_KEY = "doculens.mock.workspaces";
@@ -1064,6 +1077,467 @@ function resolveDate(text: string): DateRange | null {
 
 const MOCK_DEVICES: EngineDevice[] = [{ name: "CUDA0", description: "NVIDIA GeForce RTX 4060 (mock)", total_mib: 8188, free_mib: 7126 }];
 
+// ---------------------------------------------------------------------------
+// Documents (P2, simulated): import plan/run, rendering, rescan, viewer data
+// ---------------------------------------------------------------------------
+
+const DOCS_KEY = "doculens.mock.documents";
+
+interface MockPage {
+  page_no: number;
+  width_px: number;
+  height_px: number;
+  rotation: number;
+  text: string | null;
+  is_blank: boolean;
+  rendered_at: string;
+}
+
+interface MockDoc extends DocumentRecord {
+  workspace: string;
+  pages: MockPage[];
+}
+
+function loadDocs(): MockDoc[] {
+  return read<MockDoc[]>(DOCS_KEY, []);
+}
+
+function saveDocs(list: MockDoc[]): void {
+  write(DOCS_KEY, list);
+}
+
+function wsDocs(): MockDoc[] {
+  const ws = current?.path;
+  return loadDocs().filter((d) => d.workspace === ws && !d.deleted_at);
+}
+
+function relDir(rel: string): string {
+  const i = rel.lastIndexOf("/");
+  return i >= 0 ? rel.slice(0, i) : "";
+}
+
+function kindOf(name: string): SourceKind | null {
+  const ext = name.toLowerCase().split(".").pop() ?? "";
+  if (ext === "pdf") return "pdf";
+  if (["png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp", "gif"].includes(ext)) return "image";
+  if (ext === "hwpx") return "hwpx";
+  if (ext === "docx") return "docx";
+  if (ext === "hwp") return "hwp";
+  return null;
+}
+
+function unsupportedReason(name: string): string {
+  const ext = name.toLowerCase().split(".").pop() ?? "";
+  if (["heic", "heif"].includes(ext)) return "heic";
+  if (["doc", "xls", "ppt", "pptx", "xlsx", "hml"].includes(ext)) return "office_legacy";
+  if (["txt", "md", "csv", "json", "xml", "html", "htm"].includes(ext)) return "text";
+  if (!name.includes(".")) return "no_extension";
+  return "unsupported_extension";
+}
+
+/** Deterministic page count from the file name (`…-12p.pdf` → 12 pages). */
+function pageCountFor(name: string, kind: SourceKind): number {
+  const m = name.match(/(\d+)p\./i);
+  if (m) return Math.max(1, Math.min(500, Number(m[1])));
+  if (kind === "image") return 1;
+  if (kind === "pdf") return 3;
+  return 2;
+}
+
+function svgPage(title: string, pageNo: number, w: number, h: number, thumb: boolean): string {
+  const fs = thumb ? 28 : 36;
+  const lines = thumb ? 6 : 18;
+  let body = "";
+  for (let i = 0; i < lines; i += 1) {
+    const y = Math.round(h * 0.2 + i * (h * 0.7) / lines);
+    const len = 0.5 + ((i * 7) % 5) / 10;
+    body += `<rect x="${Math.round(w * 0.1)}" y="${y}" width="${Math.round(w * 0.8 * len)}" height="${Math.max(4, Math.round(h / 90))}" fill="#9aa3ad"/>`;
+  }
+  const safe = title.replace(/[<>&"]/g, "");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><rect width="100%" height="100%" fill="#ffffff"/><rect x="2" y="2" width="${w - 4}" height="${h - 4}" fill="none" stroke="#d0d5dc"/><text x="${Math.round(w * 0.1)}" y="${Math.round(h * 0.12)}" font-family="sans-serif" font-size="${fs}" fill="#333">${safe} — p.${pageNo}</text>${body}</svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+function docView(d: MockDoc): DocumentView {
+  const { workspace, pages, ...record } = d;
+  const first = pages[0];
+  const s = sep(workspace);
+  return {
+    ...record,
+    absolute_path: `${workspace}${s}${d.rel_path.split("/").join(s)}`,
+    thumb_url: first && first.width_px > 0 ? svgPage(d.original_name, 1, 160, Math.round((160 * first.height_px) / first.width_px), true) : null,
+  };
+}
+
+function pageView(d: MockDoc, p: MockPage, withText: boolean): PageView {
+  const hasImage = p.width_px > 0;
+  return {
+    document_id: d.id,
+    page_no: p.page_no,
+    width_px: p.width_px,
+    height_px: p.height_px,
+    width_pt: null,
+    height_pt: null,
+    dpi: d.render_dpi,
+    rotation: p.rotation,
+    has_text: !!p.text,
+    text: withText ? p.text : undefined,
+    is_blank: p.is_blank,
+    rendered_at: p.rendered_at,
+    image_url: hasImage ? svgPage(d.original_name, p.page_no, p.width_px, p.height_px, false) : null,
+    thumb_url: hasImage ? svgPage(d.original_name, p.page_no, 160, Math.round((160 * p.height_px) / p.width_px), true) : null,
+  };
+}
+
+function matchesFilter(d: MockDoc, f: DocumentFilter): boolean {
+  if (f.statuses && f.statuses.length > 0 && !f.statuses.includes(d.status)) return false;
+  if (f.kinds && f.kinds.length > 0 && !f.kinds.includes(d.source_kind)) return false;
+  if (f.folder !== undefined && f.folder !== null) {
+    const dir = relDir(d.rel_path);
+    if (f.folder === "" ? dir !== "" : !(dir === f.folder || dir.startsWith(`${f.folder}/`))) return false;
+  }
+  if (f.query && f.query.trim()) {
+    const q = f.query.trim().toLowerCase();
+    if (!d.original_name.toLowerCase().includes(q) && !(d.title ?? "").toLowerCase().includes(q) && !d.rel_path.toLowerCase().includes(q)) return false;
+  }
+  if (f.tag && !d.tags.some((t) => t.toLowerCase() === f.tag!.toLowerCase())) return false;
+  if (f.doc_type && d.doc_type !== f.doc_type) return false;
+  return true;
+}
+
+function sortDocs(list: MockDoc[], sort: DocumentSort | undefined): MockDoc[] {
+  const s = [...list];
+  switch (sort ?? "imported_desc") {
+    case "imported_asc":
+      return s.sort((a, b) => a.imported_at.localeCompare(b.imported_at));
+    case "name_asc":
+      return s.sort((a, b) => a.original_name.localeCompare(b.original_name));
+    case "name_desc":
+      return s.sort((a, b) => b.original_name.localeCompare(a.original_name));
+    case "size_desc":
+      return s.sort((a, b) => b.size_bytes - a.size_bytes);
+    default:
+      return s.sort((a, b) => b.imported_at.localeCompare(a.imported_at));
+  }
+}
+
+function libraryStats(): LibraryStats {
+  const docs = wsDocs();
+  const by_status: Record<string, number> = {};
+  const by_kind: Record<string, number> = {};
+  const folders: Record<string, number> = {};
+  let total_pages = 0;
+  for (const d of docs) {
+    by_status[d.status] = (by_status[d.status] ?? 0) + 1;
+    by_kind[d.source_kind] = (by_kind[d.source_kind] ?? 0) + 1;
+    folders[relDir(d.rel_path)] = (folders[relDir(d.rel_path)] ?? 0) + 1;
+    total_pages += d.page_count;
+  }
+  return {
+    total: docs.length,
+    by_status,
+    by_kind,
+    folders: Object.entries(folders)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([rel_dir, count]) => ({ rel_dir, count })),
+    total_pages,
+  };
+}
+
+const importPlans = new Map<string, DocumentImportPlan>();
+
+function makeImportPlan(paths: string[], options: ImportOptions, source: ImportSource): DocumentImportPlan {
+  const docs = wsDocs();
+  const wsPath = current?.path ?? "";
+  const seen = new Map<string, string>();
+  const items: ImportItem[] = [];
+  const seenPaths = new Set<string>();
+  for (const raw of paths) {
+    const path = raw.trim().replace(/^"|"$/g, "");
+    if (!path || seenPaths.has(path)) continue; // Rust dedupes identical paths in collect_paths
+    seenPaths.add(path);
+    const name = basename(path);
+    const kind = kindOf(name);
+    const inside = wsPath !== "" && path.startsWith(wsPath);
+    const rel = inside ? path.slice(wsPath.length).replace(/^[\\/]+/, "").split(/[\\/]/).join("/") : null;
+    // Content hash stands in for the file name: the same name in two folders counts as the same content.
+    const hash = `mock-${name.toLowerCase()}`;
+    const item: ImportItem = { path, name, size: 120_000 + name.length * 9_000, kind, inside_workspace: inside, rel_path: rel, content_hash: null, status: { kind: "new" } };
+    if (!kind) {
+      item.status = { kind: "unsupported", reason: unsupportedReason(name) };
+    } else if (rel && docs.some((d) => d.rel_path === rel && d.status !== "missing")) {
+      item.status = { kind: "already_registered", id: docs.find((d) => d.rel_path === rel)!.id };
+    } else if (seen.has(hash)) {
+      item.status = { kind: "duplicate_in_batch", of: seen.get(hash)! };
+    } else {
+      item.content_hash = hash;
+      const dup = docs.find((d) => d.content_hash === hash && d.status !== "missing");
+      const missing = docs.find((d) => d.content_hash === hash && d.status === "missing");
+      if (dup) item.status = { kind: "duplicate", of: dup.id, of_rel_path: dup.rel_path };
+      else if (missing) item.status = { kind: "relink", id: missing.id, old_rel_path: missing.rel_path };
+      seen.set(hash, name);
+    }
+    items.push(item);
+  }
+  const count = (k: string) => items.filter((i) => i.status.kind === k).length;
+  const plan: DocumentImportPlan = {
+    token: crypto.randomUUID().replace(/-/g, ""),
+    source,
+    options,
+    items,
+    new_count: count("new"),
+    relink_count: count("relink"),
+    duplicate_count: count("duplicate") + count("duplicate_in_batch"),
+    registered_count: count("already_registered"),
+    unsupported_count: count("unsupported"),
+    copying_count: 0,
+    new_bytes: items.filter((i) => i.status.kind === "new").reduce((a, i) => a + i.size, 0),
+    truncated: false,
+  };
+  importPlans.set(plan.token, plan);
+  return plan;
+}
+
+function renderDocPages(d: MockDoc, dpi: number): void {
+  const n = pageCountFor(d.original_name, d.source_kind);
+  const scale = dpi / 200;
+  const now = new Date().toISOString();
+  d.pages = Array.from({ length: n }, (_, i) => ({
+    page_no: i + 1,
+    width_px: Math.round(1654 * scale),
+    height_px: Math.round(2339 * scale),
+    rotation: 0,
+    text: d.source_kind === "image" ? null : `${d.original_name} ${i + 1}쪽의 텍스트 레이어입니다.\n합계 12,500원`,
+    is_blank: false,
+    rendered_at: now,
+  }));
+  d.page_count = n;
+  d.has_text_layer = d.source_kind !== "image";
+  d.render_dpi = dpi;
+  d.converted = ["hwpx", "docx", "hwp"].includes(d.source_kind);
+  d.conversion_note = d.converted ? "변환본(근사 렌더): 글상자·수식은 생략될 수 있습니다." : null;
+  d.status = "rendered";
+  d.updated_at = now;
+}
+
+function upsertDoc(doc: MockDoc): void {
+  const all = loadDocs().filter((d) => d.id !== doc.id);
+  all.push(doc);
+  saveDocs(all);
+}
+
+async function runDocumentImport(plan: DocumentImportPlan): Promise<string> {
+  const importable = plan.items.filter((i) => i.status.kind === "new" || i.status.kind === "relink");
+  if (importable.length === 0) throw err("invalid", "nothing to import");
+  const subject = plan.source === "inbox" ? "inbox" : `${importable.length} files`;
+  const job = createJob("document_import", subject);
+  const settings = loadSettings();
+  const dpi = plan.options.dpi ?? settings.processing.render_dpi;
+  void (async () => {
+    let done = 0;
+    const ids: string[] = [];
+    for (const item of importable) {
+      if (cancelled.has(job.id)) break;
+      updateJob(job.id, { progress: done / importable.length, detail: item.name });
+      const now = new Date().toISOString();
+      const destDir = plan.options.destination === "inbox" ? "inbox" : "documents";
+      const rel = item.inside_workspace && item.rel_path ? item.rel_path : `${destDir}/${item.name}`;
+      let doc: MockDoc;
+      if (item.status.kind === "relink") {
+        const existing = loadDocs().find((d) => d.id === (item.status as { id: string }).id)!;
+        doc = { ...existing, rel_path: rel, original_name: item.name, status: existing.pages.length > 0 ? "rendered" : "importing", updated_at: now };
+      } else {
+        doc = {
+          workspace: current!.path,
+          pages: [],
+          id: crypto.randomUUID().replace(/-/g, ""),
+          rel_path: rel,
+          original_name: item.name,
+          source_kind: item.kind!,
+          content_hash: item.content_hash ?? `mock-${item.name.toLowerCase()}`,
+          size_bytes: item.size,
+          file_modified_at: now,
+          imported_at: now,
+          updated_at: now,
+          status: "importing",
+          role: plan.options.role,
+          title: null,
+          doc_type: null,
+          vendor: null,
+          doc_date: null,
+          total_amount: null,
+          language: null,
+          page_count: 0,
+          has_text_layer: false,
+          converted: false,
+          conversion_note: null,
+          render_dpi: null,
+          error: null,
+          import_batch_id: job.id,
+          deleted_at: null,
+          tags: [],
+        };
+      }
+      upsertDoc(doc);
+      emit(EVENTS.documentsChanged, { kind: "imported", ids: [doc.id] } satisfies DocumentsChanged);
+      if (doc.status === "importing") {
+        const pages = pageCountFor(doc.original_name, doc.source_kind);
+        const steps = Math.min(6, pages);
+        const ok = await simulate(job.id, steps, 150, (i) => {
+          updateJob(job.id, { progress: (done + i / steps) / importable.length, detail: `${item.name} (${Math.round((pages * i) / steps)}/${pages})` });
+        });
+        if (!ok) {
+          doc.status = "new";
+          upsertDoc(doc);
+          emit(EVENTS.documentsChanged, { kind: "updated", ids: [doc.id] } satisfies DocumentsChanged);
+          break;
+        }
+        if (plan.options.render) renderDocPages(doc, dpi);
+        else doc.status = "new";
+        upsertDoc(doc);
+        emit(EVENTS.documentsChanged, { kind: "updated", ids: [doc.id] } satisfies DocumentsChanged);
+      }
+      ids.push(doc.id);
+      done += 1;
+    }
+    if (ids.length > 0) emit(EVENTS.documentsChanged, { kind: "batch", ids } satisfies DocumentsChanged);
+    if (cancelled.has(job.id)) finishJob(job.id, { ok: false, error: "cancelled" });
+    else finishJob(job.id, { ok: true, detail: `imported ${ids.length} / skipped ${plan.duplicate_count + plan.unsupported_count}` });
+  })();
+  return job.id;
+}
+
+function mockDocuments(cmd: string, a: Record<string, any>): unknown { // eslint-disable-line @typescript-eslint/no-explicit-any
+  if (!current) throw err("no_workspace", "no workspace is open");
+  switch (cmd) {
+    case "documents_list": {
+      const f = (a.filter ?? {}) as DocumentFilter;
+      let list = sortDocs(wsDocs().filter((d) => matchesFilter(d, f)), f.sort);
+      if (f.limit) list = list.slice(f.offset ?? 0, (f.offset ?? 0) + f.limit);
+      return list.map(docView);
+    }
+    case "documents_stats":
+      return libraryStats();
+    case "documents_get": {
+      const d = wsDocs().find((x) => x.id === a.id);
+      if (!d) throw err("not_found", String(a.id));
+      return docView(d);
+    }
+    case "documents_pages": {
+      const d = wsDocs().find((x) => x.id === a.id);
+      if (!d) throw err("not_found", String(a.id));
+      return d.pages.map((p) => pageView(d, p, Boolean(a.withText)));
+    }
+    case "documents_page_text": {
+      const d = wsDocs().find((x) => x.id === a.id);
+      return d?.pages.find((p) => p.page_no === Number(a.pageNo))?.text ?? null;
+    }
+    case "documents_import_plan": {
+      const args = a.args as { paths: string[]; options: ImportOptions; source: ImportSource };
+      if (!args.paths?.length) throw err("invalid", "no files");
+      return makeImportPlan(args.paths, args.options, args.source ?? "drop");
+    }
+    case "documents_import_run": {
+      const args = a.args as { token: string | null; paths: string[]; options: ImportOptions | null; source: ImportSource };
+      let plan = args.token ? importPlans.get(args.token) : undefined;
+      if (plan && args.options) plan = { ...plan, options: args.options };
+      if (!plan) plan = makeImportPlan(args.paths ?? [], args.options ?? defaultImportOptions(), args.source ?? "drop");
+      if (args.token) importPlans.delete(args.token);
+      return runDocumentImport(plan);
+    }
+    case "documents_rescan": {
+      if (jobs.some((j) => ["document_import", "document_rescan", "document_render"].includes(j.kind) && !["done", "failed", "cancelled"].includes(j.state))) return null;
+      const job = createJob("document_rescan", "library");
+      void simulate(job.id, 2, 120, () => undefined).then(() => finishJob(job.id, { ok: true, detail: `checked ${wsDocs().length}` }));
+      return job.id;
+    }
+    case "documents_inbox_scan":
+      return undefined;
+    case "documents_rerender": {
+      const ids = (a.ids ?? []) as string[];
+      if (ids.length === 0) throw err("invalid", "no documents");
+      const job = createJob("document_render", `${ids.length} documents`);
+      const dpi = (a.dpi as number | null) ?? loadSettings().processing.render_dpi;
+      void (async () => {
+        for (const [i, id] of ids.entries()) {
+          const d = wsDocs().find((x) => x.id === id);
+          if (!d) continue;
+          updateJob(job.id, { progress: i / ids.length, detail: d.original_name });
+          const ok = await simulate(job.id, 2, 150, () => undefined);
+          if (!ok) break;
+          renderDocPages(d, dpi);
+          upsertDoc(d);
+          emit(EVENTS.documentsChanged, { kind: "updated", ids: [id] } satisfies DocumentsChanged);
+        }
+        if (cancelled.has(job.id)) finishJob(job.id, { ok: false, error: "cancelled" });
+        else finishJob(job.id, { ok: true, detail: `rendered ${ids.length}` });
+      })();
+      return job.id;
+    }
+    case "documents_rotate_page": {
+      const d = wsDocs().find((x) => x.id === a.id);
+      const p = d?.pages.find((x) => x.page_no === Number(a.pageNo));
+      if (!d || !p) throw err("not_found", `page ${a.pageNo}`);
+      const rotation = Number(a.rotation) % 360;
+      if (rotation % 90 !== 0) throw err("invalid", "rotation must be a multiple of 90");
+      const swapped = (rotation / 90) % 2 !== (p.rotation / 90) % 2;
+      if (swapped) [p.width_px, p.height_px] = [p.height_px, p.width_px];
+      p.rotation = rotation;
+      p.rendered_at = new Date().toISOString();
+      d.updated_at = p.rendered_at;
+      upsertDoc(d);
+      emit(EVENTS.documentsChanged, { kind: "updated", ids: [d.id] } satisfies DocumentsChanged);
+      return pageView(d, p, true);
+    }
+    case "documents_delete": {
+      const ids = (a.ids ?? []) as string[];
+      const all = loadDocs();
+      const removed = all.filter((d) => ids.includes(d.id)).map((d) => d.id);
+      saveDocs(all.filter((d) => !ids.includes(d.id)));
+      if (removed.length > 0) emit(EVENTS.documentsChanged, { kind: "removed", ids: removed } satisfies DocumentsChanged);
+      return removed;
+    }
+    case "documents_set_tags":
+    case "documents_set_doc_type":
+    case "documents_set_title": {
+      const d = wsDocs().find((x) => x.id === a.id);
+      if (!d) throw err("not_found", String(a.id));
+      if (cmd === "documents_set_tags") {
+        const tags = ((a.tags ?? []) as string[]).map((t) => t.trim()).filter(Boolean);
+        d.tags = Array.from(new Set(tags)).sort((x, y) => x.localeCompare(y));
+      } else if (cmd === "documents_set_doc_type") {
+        d.doc_type = (a.docType as string | null)?.trim() || null;
+      } else {
+        d.title = (a.title as string | null)?.trim() || null;
+      }
+      d.updated_at = new Date().toISOString();
+      upsertDoc(d);
+      emit(EVENTS.documentsChanged, { kind: "updated", ids: [d.id] } satisfies DocumentsChanged);
+      return docView(d);
+    }
+    case "documents_tags": {
+      const counts = new Map<string, number>();
+      for (const d of wsDocs()) for (const t of d.tags) counts.set(t, (counts.get(t) ?? 0) + 1);
+      return Array.from(counts.entries()).sort(([x], [y]) => x.localeCompare(y));
+    }
+    case "documents_set_inbox_watch": {
+      const s = loadSettings();
+      s.processing.inbox_watch = Boolean(a.enabled);
+      saveSettings(s);
+      return s.processing.inbox_watch;
+    }
+    case "documents_pdfium_info": {
+      // `localStorage.doculens.mock.nopdfium` simulates a missing renderer (UI banner).
+      const missing = read<string | null>("doculens.mock.nopdfium", null) !== null;
+      return (missing
+        ? { library: null, error: "pdfium_not_found", searched: ["(browser)/pdfium"] }
+        : { library: "(browser) simulated pdfium", error: null, searched: [] }) satisfies PdfiumInfo;
+    }
+    default:
+      throw err("internal", `mock backend: unknown command ${cmd}`);
+  }
+}
+
 export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   resolveStartup();
   const a = (args ?? {}) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -1324,6 +1798,25 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       jobs = jobs.filter((j) => !["done", "failed", "cancelled"].includes(j.state));
       emit(EVENTS.jobsUpdate, jobs);
       return r(undefined);
+    case "documents_list":
+    case "documents_stats":
+    case "documents_get":
+    case "documents_pages":
+    case "documents_page_text":
+    case "documents_import_plan":
+    case "documents_import_run":
+    case "documents_rescan":
+    case "documents_inbox_scan":
+    case "documents_rerender":
+    case "documents_rotate_page":
+    case "documents_delete":
+    case "documents_set_tags":
+    case "documents_set_doc_type":
+    case "documents_set_title":
+    case "documents_tags":
+    case "documents_set_inbox_watch":
+    case "documents_pdfium_info":
+      return r(await mockDocuments(cmd, a));
     case "prerouter_route":
       return r(mockRoute(String(a.text)));
     case "prerouter_resolve_date":
@@ -1338,6 +1831,8 @@ export function resetMock(): void {
   localStorage.removeItem(SETTINGS_KEY);
   localStorage.removeItem(WORKSPACES_KEY);
   localStorage.removeItem(MODELS_KEY);
+  localStorage.removeItem(DOCS_KEY);
+  importPlans.clear();
   current = null;
   startupResolved = false;
   jobs = [];

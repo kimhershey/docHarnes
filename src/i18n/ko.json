@@ -152,7 +152,7 @@
       "recent": "최근 워크스페이스",
       "inspect_new": "새 워크스페이스를 만듭니다.",
       "inspect_existing": "기존 워크스페이스 '{{name}}'을(를) 엽니다.",
-      "inspect_documents": "문서 파일 {{count}}개를 발견했습니다. 가져오기는 P2 단계에서 제공됩니다.",
+      "inspect_documents": "문서 파일 {{count}}개를 발견했습니다. 워크스페이스를 연 뒤 바로 가져올 수 있습니다.",
       "inspect_missing": "폴더가 아직 없습니다. 만들고 열기를 누르면 새로 만듭니다.",
       "inspect_unsafe": "드라이브 루트나 홈 폴더는 워크스페이스로 사용할 수 없습니다.",
       "inspect_locked": "다른 인스턴스(pid {{pid}}, {{host}})가 이 워크스페이스를 사용 중입니다.",
@@ -161,7 +161,8 @@
       "create_and_open": "만들고 열기",
       "open": "열기",
       "browser_hint": "브라우저 미리보기에서는 폴더 선택창 대신 경로를 직접 입력합니다.",
-      "settings_sync": "선택한 경로는 설정 파일(settings.json)의 active_workspace 에 저장되며, 설정 > 워크스페이스에서 바꿀 수 있습니다."
+      "settings_sync": "선택한 경로는 설정 파일(settings.json)의 active_workspace 에 저장되며, 설정 > 워크스페이스에서 바꿀 수 있습니다.",
+      "import_existing": "발견한 파일 지금 가져오기"
     },
     "hardware": {
       "intro": "감지된 하드웨어로 티어를 산정하고 권장 모델을 고릅니다. 모델 관리자에서 언제든 수동으로 바꿀 수 있습니다.",
@@ -235,7 +236,7 @@
       "review": "검토 대기",
       "done": "완료"
     },
-    "stats_hint": "문서 통계는 P2~P4 단계에서 채워집니다.",
+    "stats_hint": "신규/렌더 현황은 라이브러리 기준이며, 검토·완료는 P4 단계에서 채워집니다.",
     "engine_card": "하드웨어 · 엔진",
     "command_title": "자연어로 명령하세요",
     "command_hint": "테마·언어·화면 이동은 즉시 실행되고, 문서 작업 명령은 어시스턴트(P5 플래너)로 전달됩니다.",
@@ -255,8 +256,9 @@
       "assistant": "어시스턴트 열기"
     },
     "recent_docs": "최근 문서",
-    "recent_empty": "아직 문서가 없습니다. 가져오기는 P2 단계에서 제공됩니다.",
-    "no_workspace": "워크스페이스를 먼저 열어주세요."
+    "recent_empty": "아직 문서가 없습니다. 라이브러리에서 가져오거나 inbox/ 폴더에 넣으세요.",
+    "no_workspace": "워크스페이스를 먼저 열어주세요.",
+    "recent_open": "라이브러리 열기"
   },
   "assistant": {
     "title": "어시스턴트",
@@ -691,7 +693,18 @@
     "engine_not_running": "엔진이 실행 중이 아닙니다.",
     "download": "다운로드 실패: {{message}}",
     "cancelled": "취소되었습니다.",
-    "timeout": "시간 초과: {{message}}"
+    "timeout": "시간 초과: {{message}}",
+    "db": "데이터베이스 오류: {{message}}",
+    "not_found": "찾을 수 없습니다: {{message}}",
+    "unsupported": "지원하지 않습니다: {{message}}",
+    "convert": "변환 실패: {{message}}",
+    "render": "렌더 실패: {{message}}",
+    "reasons": {
+      "nothing_to_import": "가져올 새 파일이 없습니다(모두 중복이거나 미지원).",
+      "no_files": "파일을 선택하거나 경로를 입력하세요.",
+      "no_documents": "선택한 문서가 없습니다.",
+      "rotation": "회전 각도는 90도 단위여야 합니다."
+    }
   },
   "startup": {
     "settings_recovered": "설정 파일이 손상되어 기본값으로 복구했습니다. 백업: {{backup}}",
@@ -716,7 +729,10 @@
       "model_load": "모델 로드",
       "model_import": "모델 가져오기",
       "model_download": "모델 다운로드",
-      "model_hash": "해시 검증"
+      "model_hash": "해시 검증",
+      "document_import": "문서 가져오기",
+      "document_rescan": "라이브러리 검사",
+      "document_render": "페이지 렌더"
     },
     "state": {
       "queued": "대기",
@@ -724,6 +740,213 @@
       "done": "완료",
       "failed": "실패",
       "cancelled": "취소됨"
+    },
+    "subject": {
+      "files": "파일 {{count}}개",
+      "documents": "문서 {{count}}개",
+      "inbox": "inbox 폴더",
+      "library": "라이브러리",
+      "engine": "엔진"
+    },
+    "detail": {
+      "import_summary": "가져옴 {{imported}} · 다시 연결 {{relinked}} · 실패 {{failed}} · 건너뜀 {{skipped}}",
+      "rescan_summary": "검사 {{checked}} · 파일 없음 {{missing}} · 복구 {{restored}} · 변경 {{changed}} · 실패 {{failed}}",
+      "rendered": "{{count}}개 렌더 완료"
     }
+  },
+  "library": {
+    "title": "문서 라이브러리",
+    "import": "가져오기",
+    "inbox_watch": "inbox 감시",
+    "inbox_watch_hint": "inbox/ 폴더에 넣은 파일을 자동으로 가져옵니다.",
+    "rescan": "다시 검사",
+    "rescan_started": "라이브러리를 다시 검사합니다.",
+    "search_placeholder": "파일명·제목 검색",
+    "view_grid": "그리드",
+    "view_list": "리스트",
+    "folders": {
+      "all": "전체",
+      "root": "(워크스페이스 루트)",
+      "title": "폴더"
+    },
+    "filters": {
+      "status": "상태",
+      "kind": "형식",
+      "all": "전체"
+    },
+    "empty_title": "아직 문서가 없습니다",
+    "empty_body": "PDF·이미지·HWP·HWPX·DOCX 파일을 여기에 끌어다 놓거나 '가져오기'를 누르세요. inbox/ 폴더에 넣어도 자동으로 등록됩니다.",
+    "no_match": "조건에 맞는 문서가 없습니다.",
+    "drop_overlay": "여기에 놓아 가져오기",
+    "selected": "{{count}}개 선택",
+    "total": "문서 {{count}}개 · {{pages}}쪽",
+    "actions": {
+      "rerender": "다시 렌더",
+      "delete": "삭제(휴지통)",
+      "delete_confirm": "선택한 문서 {{count}}개를 삭제할까요? 파일은 휴지통으로 이동합니다.",
+      "clear_selection": "선택 해제",
+      "select_all": "모두 선택",
+      "delete_title": "문서 삭제",
+      "open_doc": "문서 열기"
+    },
+    "columns": {
+      "name": "이름",
+      "kind": "형식",
+      "pages": "쪽",
+      "status": "상태",
+      "imported": "가져온 시각",
+      "size": "크기"
+    },
+    "pages_count": "{{count}}쪽",
+    "converted": "변환본",
+    "rerender_started": "다시 렌더 작업을 시작했습니다.",
+    "delete_done": "문서 {{count}}개를 삭제했습니다.",
+    "pdfium_missing": "PDF 렌더러(PDFium)를 찾을 수 없어 PDF 페이지가 표시되지 않습니다. 설치 안내: engines/README.md (pdfium). 등록과 텍스트 추출은 계속 동작합니다.",
+    "sort": "정렬",
+    "sort_options": {
+      "imported_desc": "최근 가져온 순",
+      "imported_asc": "오래된 순",
+      "name_asc": "이름 가나다순",
+      "name_desc": "이름 역순",
+      "size_desc": "큰 파일 순"
+    },
+    "rescan_running": "라이브러리 검사가 이미 진행 중입니다.",
+    "list_label": "문서 목록",
+    "grid_label": "문서 카드",
+    "import_existing_hint": "워크스페이스 폴더 전체를 검사해 미리보기를 엽니다(.doculens 제외)."
+  },
+  "documents": {
+    "status": {
+      "importing": "가져오는 중",
+      "new": "신규",
+      "rendered": "렌더됨",
+      "extracted": "추출됨",
+      "reviewed": "검토 완료",
+      "archived": "보관",
+      "missing": "파일 없음",
+      "error": "오류"
+    },
+    "kind": {
+      "pdf": "PDF",
+      "image": "이미지",
+      "hwpx": "HWPX",
+      "docx": "DOCX",
+      "hwp": "HWP"
+    },
+    "unsupported": {
+      "heic": "HEIC/HEIF는 JPG로 변환 후 가져오세요",
+      "office_legacy": "지원하지 않는 오피스 형식(PDF로 저장 후 가져오기)",
+      "text": "텍스트 파일은 문서로 가져오지 않습니다",
+      "no_extension": "확장자가 없습니다",
+      "unsupported_extension": "지원하지 않는 형식",
+      "empty": "빈 파일",
+      "too_large": "파일이 너무 큽니다(2 GB 초과)",
+      "unreadable": "읽을 수 없는 파일"
+    },
+    "doc_types": {
+      "tax_invoice": "세금계산서",
+      "invoice_exempt": "계산서",
+      "receipt": "영수증",
+      "business_registration": "사업자등록증",
+      "contract": "계약서",
+      "application_form": "신청서",
+      "general": "일반(표/차트)",
+      "other": "기타"
+    }
+  },
+  "import_docs": {
+    "title": "문서 가져오기",
+    "description": "PDF·이미지·HWP·HWPX·DOCX 파일을 등록하고 페이지를 렌더링합니다. 워크스페이스 밖의 파일은 선택한 폴더로 복사됩니다.",
+    "pick": "파일 선택…",
+    "paths_label": "파일 경로(줄마다 하나)",
+    "paths_placeholder": "예: D:\\scan\\영수증-3p.pdf",
+    "browser_hint": "브라우저 미리보기에서는 파일 선택창 대신 경로를 직접 입력합니다.",
+    "preview": "미리보기",
+    "run": "가져오기 시작",
+    "summary": "신규 {{new}} · 다시 연결 {{relink}} · 중복 {{dup}} · 이미 등록 {{registered}} · 미지원 {{unsupported}}",
+    "copying": "복사 중인 파일 {{count}}개는 잠시 후 다시 시도하세요.",
+    "new_bytes": "복사/등록 용량 {{size}}",
+    "destination": "저장 위치",
+    "destinations": {
+      "documents": "documents/ (정리 대상)",
+      "inbox": "inbox/"
+    },
+    "in_place": "워크스페이스 안의 파일은 그 자리에서 등록됩니다.",
+    "move_files": "복사 대신 이동",
+    "render_pages": "페이지 렌더링(미리보기·OCR 준비)",
+    "item_status": {
+      "new": "신규",
+      "duplicate": "중복: {{of}}",
+      "duplicate_in_batch": "중복(목록 안): {{of}}",
+      "already_registered": "이미 등록됨",
+      "relink": "다시 연결: {{old}}",
+      "unsupported": "미지원",
+      "copying": "복사 중"
+    },
+    "truncated": "파일이 너무 많아 처음 5,000개만 표시합니다.",
+    "nothing": "가져올 새 파일이 없습니다.",
+    "started": "가져오기 작업을 시작했습니다. 작업 화면에서 진행률을 볼 수 있습니다.",
+    "no_paths": "파일을 선택하거나 경로를 입력하세요.",
+    "filter_name": "문서 파일",
+    "previewing": "파일을 검사하는 중…",
+    "items": "가져올 파일"
+  },
+  "viewer": {
+    "back": "라이브러리",
+    "page": "{{page}} / {{total}}",
+    "prev": "이전 쪽",
+    "next": "다음 쪽",
+    "zoom_in": "확대",
+    "zoom_out": "축소",
+    "zoom_fit": "맞춤",
+    "rotate_cw": "시계 방향 회전 저장",
+    "rotate_ccw": "반시계 방향 회전 저장",
+    "rerender": "다시 렌더",
+    "reveal": "원본 폴더 열기",
+    "delete": "삭제(휴지통)",
+    "delete_confirm": "'{{name}}' 문서를 삭제할까요? 파일은 휴지통으로 이동합니다.",
+    "tabs": {
+      "text": "텍스트",
+      "fields": "필드",
+      "tables": "표",
+      "qa": "Q&A",
+      "history": "이력"
+    },
+    "text_empty": "이 쪽에는 텍스트 레이어가 없습니다. OCR은 P4 파이프라인에서 제공됩니다.",
+    "no_image": "페이지 이미지가 없습니다. 다시 렌더를 눌러 생성하세요.",
+    "no_pages": "렌더된 페이지가 없습니다.",
+    "converted_badge": "변환본",
+    "conversion_note": "변환 메모",
+    "tags": "태그",
+    "add_tag": "태그 추가",
+    "tag_placeholder": "태그 입력 후 Enter",
+    "doc_type": "유형",
+    "no_doc_type": "유형 미지정",
+    "title_placeholder": "제목(선택)",
+    "thumbnails": "페이지",
+    "rotated": "회전을 저장했습니다. 재OCR은 P4에서 제안됩니다.",
+    "deleted": "문서를 삭제했습니다.",
+    "placeholder_fields": "추출 필드 그리드는 P4(파이프라인)에서 제공됩니다.",
+    "placeholder_tables": "표 탭(XLSX/CSV/클립보드)은 P4에서 제공됩니다.",
+    "placeholder_qa": "문서 Q&A는 P3(지식 베이스)에서 제공됩니다.",
+    "placeholder_history": "실행 이력·필드 스냅샷은 P4에서 제공됩니다.",
+    "info": {
+      "path": "경로",
+      "size": "크기",
+      "pages": "쪽수",
+      "imported": "가져온 시각",
+      "dpi": "렌더 DPI",
+      "text_layer": "텍스트 레이어",
+      "yes": "있음",
+      "no": "없음"
+    },
+    "shortcuts": "← → 쪽 이동 · +/- 확대/축소 · 0 맞춤",
+    "remove_tag": "태그 '{{tag}}' 삭제",
+    "page_image_alt": "{{name}} {{page}}쪽",
+    "loading_pages": "페이지를 불러오는 중…",
+    "delete_title": "문서 삭제",
+    "reveal_failed": "원본 폴더를 열 수 없습니다: {{message}}",
+    "thumb_label": "{{page}}쪽으로 이동",
+    "toolbar": "문서 도구"
   }
 }

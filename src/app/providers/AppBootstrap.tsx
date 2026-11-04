@@ -2,6 +2,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { isTauri } from "@/lib/ipc";
+import { useDocumentsStore } from "@/stores/documents";
 import { useEngineStore } from "@/stores/engine";
 import { useJobsStore } from "@/stores/jobs";
 import { useSettingsStore } from "@/stores/settings";
@@ -30,6 +31,7 @@ export function AppBootstrap({ children }: { children: ReactNode }) {
     if (!settingsLoaded || !workspaceLoaded) return;
     void useEngineStore.getState().init();
     void useJobsStore.getState().init();
+    void useDocumentsStore.getState().init();
   }, [settingsLoaded, workspaceLoaded]);
 
   useEffect(() => {

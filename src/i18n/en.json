@@ -152,7 +152,7 @@
       "recent": "Recent workspaces",
       "inspect_new": "A new workspace will be created.",
       "inspect_existing": "Existing workspace '{{name}}' will be opened.",
-      "inspect_documents": "Found {{count}} document files. Import arrives in phase P2.",
+      "inspect_documents": "Found {{count}} document file(s). You can import them right after opening the workspace.",
       "inspect_missing": "The folder does not exist yet. 'Create and open' will create it.",
       "inspect_unsafe": "A drive root or the home folder cannot be used as a workspace.",
       "inspect_locked": "Another instance (pid {{pid}} on {{host}}) is using this workspace.",
@@ -161,7 +161,8 @@
       "create_and_open": "Create and open",
       "open": "Open",
       "browser_hint": "In the browser preview there is no native folder picker; type a path instead.",
-      "settings_sync": "The path is stored as active_workspace in settings.json and can be changed under Settings › Workspace."
+      "settings_sync": "The path is stored as active_workspace in settings.json and can be changed under Settings › Workspace.",
+      "import_existing": "Import the found files now"
     },
     "hardware": {
       "intro": "The detected hardware decides the tier and the recommended model. You can override both in the model manager at any time.",
@@ -235,7 +236,7 @@
       "review": "Awaiting review",
       "done": "Done"
     },
-    "stats_hint": "Document statistics are filled in phases P2–P4.",
+    "stats_hint": "New/rendered counts come from the library; review and done fill in with P4.",
     "engine_card": "Hardware · engine",
     "command_title": "Command in natural language",
     "command_hint": "Theme, language and navigation run immediately; document commands go to the assistant (P5 planner).",
@@ -255,8 +256,9 @@
       "assistant": "Open assistant"
     },
     "recent_docs": "Recent documents",
-    "recent_empty": "No documents yet. Import arrives in phase P2.",
-    "no_workspace": "Open a workspace first."
+    "recent_empty": "No documents yet. Import them in the library or drop them into inbox/.",
+    "no_workspace": "Open a workspace first.",
+    "recent_open": "Open library"
   },
   "assistant": {
     "title": "Assistant",
@@ -691,7 +693,18 @@
     "engine_not_running": "The engine is not running.",
     "download": "Download failed: {{message}}",
     "cancelled": "Cancelled.",
-    "timeout": "Timed out: {{message}}"
+    "timeout": "Timed out: {{message}}",
+    "db": "Database error: {{message}}",
+    "not_found": "Not found: {{message}}",
+    "unsupported": "Unsupported: {{message}}",
+    "convert": "Conversion failed: {{message}}",
+    "render": "Render failed: {{message}}",
+    "reasons": {
+      "nothing_to_import": "Nothing new to import (all duplicates or unsupported).",
+      "no_files": "Choose files or type paths.",
+      "no_documents": "No documents selected.",
+      "rotation": "Rotation must be a multiple of 90 degrees."
+    }
   },
   "startup": {
     "settings_recovered": "The settings file was corrupt and has been reset to defaults. Backup: {{backup}}",
@@ -716,7 +729,10 @@
       "model_load": "Model load",
       "model_import": "Model import",
       "model_download": "Model download",
-      "model_hash": "Hash verification"
+      "model_hash": "Hash verification",
+      "document_import": "Document import",
+      "document_rescan": "Library rescan",
+      "document_render": "Page render"
     },
     "state": {
       "queued": "Queued",
@@ -724,6 +740,213 @@
       "done": "Done",
       "failed": "Failed",
       "cancelled": "Cancelled"
+    },
+    "subject": {
+      "files": "{{count}} file(s)",
+      "documents": "{{count}} document(s)",
+      "inbox": "inbox folder",
+      "library": "library",
+      "engine": "engine"
+    },
+    "detail": {
+      "import_summary": "imported {{imported}} · relinked {{relinked}} · failed {{failed}} · skipped {{skipped}}",
+      "rescan_summary": "checked {{checked}} · missing {{missing}} · restored {{restored}} · changed {{changed}} · failed {{failed}}",
+      "rendered": "{{count}} rendered"
     }
+  },
+  "library": {
+    "title": "Document library",
+    "import": "Import",
+    "inbox_watch": "Watch inbox",
+    "inbox_watch_hint": "Files placed in inbox/ are imported automatically.",
+    "rescan": "Rescan",
+    "rescan_started": "Rescanning the library.",
+    "search_placeholder": "Search file name / title",
+    "view_grid": "Grid",
+    "view_list": "List",
+    "folders": {
+      "all": "All",
+      "root": "(workspace root)",
+      "title": "Folders"
+    },
+    "filters": {
+      "status": "Status",
+      "kind": "Format",
+      "all": "All"
+    },
+    "empty_title": "No documents yet",
+    "empty_body": "Drop PDF, image, HWP, HWPX or DOCX files here or click Import. Files placed in inbox/ are registered automatically.",
+    "no_match": "No documents match the filter.",
+    "drop_overlay": "Drop here to import",
+    "selected": "{{count}} selected",
+    "total": "{{count}} document(s) · {{pages}} page(s)",
+    "actions": {
+      "rerender": "Re-render",
+      "delete": "Delete (trash)",
+      "delete_confirm": "Delete {{count}} selected document(s)? Files move to the trash.",
+      "clear_selection": "Clear selection",
+      "select_all": "Select all",
+      "delete_title": "Delete documents",
+      "open_doc": "Open document"
+    },
+    "columns": {
+      "name": "Name",
+      "kind": "Format",
+      "pages": "Pages",
+      "status": "Status",
+      "imported": "Imported",
+      "size": "Size"
+    },
+    "pages_count": "{{count}} page(s)",
+    "converted": "converted",
+    "rerender_started": "Re-render job started.",
+    "delete_done": "Deleted {{count}} document(s).",
+    "pdfium_missing": "The PDF renderer (PDFium) was not found, so PDF pages are not displayed. See engines/README.md (pdfium). Registration and text extraction keep working.",
+    "sort": "Sort",
+    "sort_options": {
+      "imported_desc": "Newest import first",
+      "imported_asc": "Oldest import first",
+      "name_asc": "Name A→Z",
+      "name_desc": "Name Z→A",
+      "size_desc": "Largest first"
+    },
+    "rescan_running": "A library rescan is already running.",
+    "list_label": "Document list",
+    "grid_label": "Document cards",
+    "import_existing_hint": "Scans the whole workspace folder (except .doculens) and opens the preview."
+  },
+  "documents": {
+    "status": {
+      "importing": "Importing",
+      "new": "New",
+      "rendered": "Rendered",
+      "extracted": "Extracted",
+      "reviewed": "Reviewed",
+      "archived": "Archived",
+      "missing": "File missing",
+      "error": "Error"
+    },
+    "kind": {
+      "pdf": "PDF",
+      "image": "Image",
+      "hwpx": "HWPX",
+      "docx": "DOCX",
+      "hwp": "HWP"
+    },
+    "unsupported": {
+      "heic": "Convert HEIC/HEIF to JPG first",
+      "office_legacy": "Unsupported office format (save as PDF first)",
+      "text": "Text files are not imported as documents",
+      "no_extension": "No file extension",
+      "unsupported_extension": "Unsupported format",
+      "empty": "Empty file",
+      "too_large": "File too large (over 2 GB)",
+      "unreadable": "Unreadable file"
+    },
+    "doc_types": {
+      "tax_invoice": "Tax invoice",
+      "invoice_exempt": "Invoice (exempt)",
+      "receipt": "Receipt",
+      "business_registration": "Business registration",
+      "contract": "Contract",
+      "application_form": "Application form",
+      "general": "General (table/chart)",
+      "other": "Other"
+    }
+  },
+  "import_docs": {
+    "title": "Import documents",
+    "description": "Registers PDF, image, HWP, HWPX and DOCX files and renders their pages. Files outside the workspace are copied into the chosen folder.",
+    "pick": "Choose files…",
+    "paths_label": "File paths (one per line)",
+    "paths_placeholder": "e.g. D:\\scan\\receipt-3p.pdf",
+    "browser_hint": "In the browser preview, type paths instead of using the file picker.",
+    "preview": "Preview",
+    "run": "Start import",
+    "summary": "new {{new}} · relink {{relink}} · duplicates {{dup}} · registered {{registered}} · unsupported {{unsupported}}",
+    "copying": "{{count}} file(s) are still being copied; try again shortly.",
+    "new_bytes": "{{size}} to copy/register",
+    "destination": "Destination",
+    "destinations": {
+      "documents": "documents/ (organised)",
+      "inbox": "inbox/"
+    },
+    "in_place": "Files already inside the workspace are registered in place.",
+    "move_files": "Move instead of copy",
+    "render_pages": "Render pages (preview / OCR input)",
+    "item_status": {
+      "new": "new",
+      "duplicate": "duplicate of {{of}}",
+      "duplicate_in_batch": "duplicate (in list): {{of}}",
+      "already_registered": "already registered",
+      "relink": "relink: {{old}}",
+      "unsupported": "unsupported",
+      "copying": "copying"
+    },
+    "truncated": "Too many files; only the first 5,000 are shown.",
+    "nothing": "Nothing new to import.",
+    "started": "Import started. Progress is shown on the Jobs screen.",
+    "no_paths": "Choose files or type paths.",
+    "filter_name": "Documents",
+    "previewing": "Checking files…",
+    "items": "Files to import"
+  },
+  "viewer": {
+    "back": "Library",
+    "page": "{{page}} / {{total}}",
+    "prev": "Previous page",
+    "next": "Next page",
+    "zoom_in": "Zoom in",
+    "zoom_out": "Zoom out",
+    "zoom_fit": "Fit",
+    "rotate_cw": "Save clockwise rotation",
+    "rotate_ccw": "Save counter-clockwise rotation",
+    "rerender": "Re-render",
+    "reveal": "Show original",
+    "delete": "Delete (trash)",
+    "delete_confirm": "Delete '{{name}}'? The file moves to the trash.",
+    "tabs": {
+      "text": "Text",
+      "fields": "Fields",
+      "tables": "Tables",
+      "qa": "Q&A",
+      "history": "History"
+    },
+    "text_empty": "This page has no text layer. OCR arrives with the P4 pipeline.",
+    "no_image": "No page image. Click Re-render to create it.",
+    "no_pages": "No rendered pages.",
+    "converted_badge": "converted",
+    "conversion_note": "Conversion notes",
+    "tags": "Tags",
+    "add_tag": "Add tag",
+    "tag_placeholder": "Type a tag and press Enter",
+    "doc_type": "Type",
+    "no_doc_type": "No type",
+    "title_placeholder": "Title (optional)",
+    "thumbnails": "Pages",
+    "rotated": "Rotation saved. Re-OCR will be offered in P4.",
+    "deleted": "Document deleted.",
+    "placeholder_fields": "The extracted-field grid arrives in P4 (pipeline).",
+    "placeholder_tables": "The tables tab (XLSX/CSV/clipboard) arrives in P4.",
+    "placeholder_qa": "Document Q&A arrives in P3 (knowledge base).",
+    "placeholder_history": "Run history and field snapshots arrive in P4.",
+    "info": {
+      "path": "Path",
+      "size": "Size",
+      "pages": "Pages",
+      "imported": "Imported",
+      "dpi": "Render DPI",
+      "text_layer": "Text layer",
+      "yes": "yes",
+      "no": "no"
+    },
+    "shortcuts": "← → pages · +/- zoom · 0 fit",
+    "remove_tag": "Remove tag '{{tag}}'",
+    "page_image_alt": "{{name}} page {{page}}",
+    "loading_pages": "Loading pages…",
+    "delete_title": "Delete document",
+    "reveal_failed": "Cannot open the original folder: {{message}}",
+    "thumb_label": "Go to page {{page}}",
+    "toolbar": "Document tools"
   }
 }

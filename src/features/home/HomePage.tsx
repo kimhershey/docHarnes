@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { executePreRoute } from "@/lib/commands";
 import { api } from "@/lib/ipc";
-import { useAssessment } from "@/lib/queries";
+import { useAssessment, useDocumentStats, useDocuments } from "@/lib/queries";
 import { isComposing } from "@/lib/shortcuts";
 import { SCREEN_ROUTES } from "@/lib/types";
 import { formatMiB } from "@/lib/utils";
@@ -21,6 +21,8 @@ export function HomePage() {
   const navigate = useNavigate();
   const workspace = useWorkspace();
   const { data: assessment } = useAssessment();
+  const { data: libraryStats } = useDocumentStats(!!workspace);
+  const { data: recent } = useDocuments({ limit: 6, sort: "imported_desc" }, !!workspace);
   const setPending = useUiStore((s) => s.setPendingAssistantInput);
   const [text, setText] = useState("");
   const examples = t("home.examples", { returnObjects: true }) as string[];
@@ -90,14 +92,27 @@ export function HomePage() {
       </Card>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        {stats.map((s) => (
-          <Card key={s.key}>
-            <CardContent className="p-4">
-              <p className="text-xs text-fg-muted">{t(`home.stats.${s.key}`)}</p>
-              <p className="mt-1 text-2xl font-semibold tabular-nums">—</p>
-            </CardContent>
-          </Card>
-        ))}
+        {stats.map((s) => {
+          const by = libraryStats?.by_status ?? {};
+          const value =
+            s.key === "new"
+              ? (by.new ?? 0) + (by.importing ?? 0)
+              : s.key === "processing"
+                ? by.rendered ?? 0
+                : s.key === "review"
+                  ? by.extracted ?? 0
+                  : by.reviewed ?? 0;
+          return (
+            <Card key={s.key}>
+              <CardContent className="p-4">
+                <p className="text-xs text-fg-muted">{t(`home.stats.${s.key}`)}</p>
+                <p className="mt-1 text-2xl font-semibold tabular-nums" data-testid={`home-stat-${s.key}`}>
+                  {libraryStats ? value : "—"}
+                </p>
+              </CardContent>
+            </Card>
+          );
+        })}
       </div>
       <p className="-mt-2 text-xs text-fg-subtle">{t("home.stats_hint")}</p>
 
@@ -168,7 +183,27 @@ export function HomePage() {
           <CardTitle>{t("home.recent_docs")}</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-fg-muted">{t("home.recent_empty")}</p>
+          {recent && recent.length > 0 ? (
+            <ul className="divide-y divide-border" data-testid="home-recent">
+              {recent.map((d) => (
+                <li key={d.id}>
+                  <Link to={`/library/${d.id}`} className="flex items-center gap-3 py-2 text-sm hover:underline">
+                    {d.thumb_url ? <img src={d.thumb_url} alt="" className="h-10 w-8 bg-white object-contain" /> : <FolderInput className="size-4 text-fg-subtle" aria-hidden="true" />}
+                    <span className="min-w-0 flex-1 truncate">{d.title ?? d.original_name}</span>
+                    <Badge variant="outline">{t(`documents.kind.${d.source_kind}`)}</Badge>
+                    <span className="text-xs text-fg-subtle">{t("library.pages_count", { count: d.page_count })}</span>
+                  </Link>
+                </li>
+              ))}
+              <li className="pt-2">
+                <Link to={SCREEN_ROUTES.library} className="text-sm text-accent hover:underline">
+                  {t("home.recent_open")}
+                </Link>
+              </li>
+            </ul>
+          ) : (
+            <p className="text-sm text-fg-muted">{t("home.recent_empty")}</p>
+          )}
         </CardContent>
       </Card>
     </div>

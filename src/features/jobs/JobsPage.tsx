@@ -13,8 +13,18 @@ import { formatBytes, formatDate } from "@/lib/utils";
 import { useJobsStore } from "@/stores/jobs";
 import { useUiStore } from "@/stores/ui";
 
+import { describeJobDetail, describeJobSubject } from "./describe";
+
 /** Engine start cannot be interrupted (P1); every other kind unloads / discards partial files on cancel. */
-const CANCELLABLE: Job["kind"][] = ["model_load", "model_import", "model_download", "model_hash"];
+const CANCELLABLE: Job["kind"][] = [
+  "model_load",
+  "model_import",
+  "model_download",
+  "model_hash",
+  "document_import",
+  "document_rescan",
+  "document_render",
+];
 
 function stateVariant(j: Job): "ok" | "warn" | "danger" | "muted" | "info" {
   switch (j.state) {
@@ -34,11 +44,13 @@ function stateVariant(j: Job): "ok" | "warn" | "danger" | "muted" | "info" {
 function JobRow({ job, onCancel }: { job: Job; onCancel: (id: string) => void }) {
   const { t, i18n } = useTranslation();
   const finished = isJobFinished(job);
+  const subject = describeJobSubject(job, t);
+  const detail = describeJobDetail(job, t);
   return (
     <li className="flex flex-col gap-2 py-3" data-testid={`job-${job.id}`} data-job-kind={job.kind} data-job-subject={job.subject}>
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant="outline">{t(`jobs.kind.${job.kind}`)}</Badge>
-        <span className="font-medium selectable">{job.subject}</span>
+        <span className="font-medium selectable">{subject}</span>
         <Badge variant={stateVariant(job)} data-testid="job-state">
           {t(`jobs.state.${job.state}`)}
         </Badge>
@@ -53,14 +65,14 @@ function JobRow({ job, onCancel }: { job: Job; onCancel: (id: string) => void })
           )}
         </span>
       </div>
-      {!finished && <Progress value={job.state === "queued" ? null : job.progress} label={job.subject} />}
+      {!finished && <Progress value={job.state === "queued" ? null : job.progress} label={subject} />}
       <div className="flex flex-wrap gap-3 text-xs text-fg-muted">
         {job.bytes_total != null && (
           <span className="tabular-nums">
             {formatBytes(job.bytes_done ?? 0)} / {formatBytes(job.bytes_total)}
           </span>
         )}
-        {job.detail && <span className="selectable">{job.detail}</span>}
+        {detail && <span className="selectable" data-testid="job-detail">{detail}</span>}
         {job.error && <span className="text-danger selectable">{job.error}</span>}
       </div>
     </li>

@@ -1,8 +1,11 @@
 //! DocuLens desktop shell: wires the Tauri runtime to `doculens-core`.
 
 mod commands;
+mod docs_bridge;
 mod engine_bridge;
 mod jobs;
+mod printer;
+mod protocol;
 mod state;
 
 use tauri::{Manager, RunEvent};
@@ -26,6 +29,7 @@ pub fn run() {
                 .build(),
         )
         .manage(state)
+        .register_uri_scheme_protocol(protocol::SCHEME, protocol::handle)
         .setup(|app| {
             let handle = app.handle().clone();
             let state = app.state::<AppState>();
@@ -40,8 +44,10 @@ pub fn run() {
             }
             // Open the workspace recorded in settings.json (decision 14), then scan
             // the model folder, start the watcher and (when enabled) the engine.
+            let _ = state.printer.set(std::sync::Arc::new(printer::WebviewPdfPrinter::new(handle.clone())));
             state.open_startup_workspace();
             engine_bridge::on_workspace_changed(&handle);
+            docs_bridge::on_workspace_changed(&handle);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -90,6 +96,24 @@ pub fn run() {
             commands::prerouter_route,
             commands::prerouter_resolve_date,
             commands::startup_status,
+            commands::documents::documents_list,
+            commands::documents::documents_stats,
+            commands::documents::documents_get,
+            commands::documents::documents_pages,
+            commands::documents::documents_page_text,
+            commands::documents::documents_import_plan,
+            commands::documents::documents_import_run,
+            commands::documents::documents_rescan,
+            commands::documents::documents_inbox_scan,
+            commands::documents::documents_rerender,
+            commands::documents::documents_rotate_page,
+            commands::documents::documents_delete,
+            commands::documents::documents_set_tags,
+            commands::documents::documents_set_doc_type,
+            commands::documents::documents_set_title,
+            commands::documents::documents_tags,
+            commands::documents::documents_set_inbox_watch,
+            commands::documents::documents_pdfium_info,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

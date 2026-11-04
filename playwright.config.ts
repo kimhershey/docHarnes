@@ -21,7 +21,8 @@ export default defineConfig({
     launchOptions: executablePath ? { executablePath } : {},
   },
   webServer: {
-    command: "npm run preview",
+    // Build first so the preview never serves a stale dist/ (CI builds separately; the rebuild is cheap).
+    command: "npm run build && npm run preview",
     url: "http://127.0.0.1:4173/",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

@@ -18,6 +18,7 @@ import { useAppInfo } from "@/lib/queries";
 import { LANGUAGES, RETENTION_DAY_ITEMS, THEMES, type AutoProcessingLevel, type ReducedMotion, type RetentionPolicy } from "@/lib/types";
 import { describeError } from "@/lib/errors";
 import { cn, formatDate } from "@/lib/utils";
+import { api } from "@/lib/ipc";
 import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -301,6 +302,7 @@ function ProcessingTab() {
   const { t } = useTranslation();
   const settings = useSettingsStore((s) => s.settings)!;
   const update = useSettingsStore((s) => s.update);
+  const reload = useSettingsStore((s) => s.load);
   const p = settings.processing;
   return (
     <Card>
@@ -336,8 +338,16 @@ function ProcessingTab() {
         <Row label={t("settings.processing.organize_reviewed_only")}>
           <Switch checked={p.organize_reviewed_only} onCheckedChange={(v) => void update((s) => void (s.processing.organize_reviewed_only = v))} />
         </Row>
-        <Row label={t("settings.processing.inbox_watch")}>
-          <Switch checked={p.inbox_watch} onCheckedChange={(v) => void update((s) => void (s.processing.inbox_watch = v))} />
+        <Row label={t("settings.processing.inbox_watch")} hint={t("library.inbox_watch_hint")}>
+          <Switch
+            checked={p.inbox_watch}
+            onCheckedChange={(v) =>
+              void api
+                .documentsSetInboxWatch(v)
+                .then(() => reload())
+                .catch(() => update((s) => void (s.processing.inbox_watch = v)))
+            }
+          />
         </Row>
         <Row label={t("settings.processing.cache")} htmlFor="cache-gb">
           <Input id="cache-gb" type="number" min={0.5} max={1000} step={0.5} className="w-28" defaultValue={settings.cache.page_cache_max_gb} onBlur={(e) => void update((s) => void (s.cache.page_cache_max_gb = Number(e.target.value) || 5))} />

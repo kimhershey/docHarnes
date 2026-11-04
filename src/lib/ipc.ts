@@ -8,17 +8,25 @@ import type {
   Assessment,
   ChatTestResult,
   DateRange,
+  DocumentFilter,
+  DocumentImportPlan,
+  DocumentView,
   EngineBinaryInfo,
   EngineDevice,
   EngineStatus,
   HardwareSummary,
   ImportMode,
+  ImportOptions,
   ImportPlan,
+  ImportSource,
   Job,
   Language,
+  LibraryStats,
   LogLine,
   ModelIndex,
   ModelInstanceStatus,
+  PageView,
+  PdfiumInfo,
   PreRouteResult,
   RegistryView,
   RetentionPolicy,
@@ -131,7 +139,44 @@ export const api = {
 
   prerouterRoute: (text: string) => invoke<PreRouteResult>("prerouter_route", { text }),
   prerouterResolveDate: (text: string) => invoke<DateRange | null>("prerouter_resolve_date", { text }),
+
+  documentsList: (filter: DocumentFilter = {}) => invoke<DocumentView[]>("documents_list", { filter }),
+  documentsStats: () => invoke<LibraryStats>("documents_stats"),
+  documentsGet: (id: string) => invoke<DocumentView>("documents_get", { id }),
+  documentsPages: (id: string, withText = false) => invoke<PageView[]>("documents_pages", { id, withText }),
+  documentsPageText: (id: string, pageNo: number) => invoke<string | null>("documents_page_text", { id, pageNo }),
+  documentsImportPlan: (paths: string[], options: ImportOptions, source: ImportSource = "drop") =>
+    invoke<DocumentImportPlan>("documents_import_plan", { args: { paths, options, source } }),
+  documentsImportRun: (token: string | null, paths: string[], options: ImportOptions, source: ImportSource = "drop") =>
+    invoke<string>("documents_import_run", { args: { token, paths, options, source } }),
+  documentsRescan: () => invoke<string | null>("documents_rescan"),
+  documentsInboxScan: () => invoke<void>("documents_inbox_scan"),
+  documentsRerender: (ids: string[], dpi: number | null = null) => invoke<string>("documents_rerender", { ids, dpi }),
+  documentsRotatePage: (id: string, pageNo: number, rotation: number) =>
+    invoke<PageView>("documents_rotate_page", { id, pageNo, rotation }),
+  documentsDelete: (ids: string[], keepFiles = false) => invoke<string[]>("documents_delete", { ids, keepFiles }),
+  documentsSetTags: (id: string, tags: string[]) => invoke<DocumentView>("documents_set_tags", { id, tags }),
+  documentsSetDocType: (id: string, docType: string | null) => invoke<DocumentView>("documents_set_doc_type", { id, docType }),
+  documentsSetTitle: (id: string, title: string | null) => invoke<DocumentView>("documents_set_title", { id, title }),
+  documentsTags: () => invoke<[string, number][]>("documents_tags"),
+  documentsSetInboxWatch: (enabled: boolean) => invoke<boolean>("documents_set_inbox_watch", { enabled }),
+  documentsPdfiumInfo: () => invoke<PdfiumInfo>("documents_pdfium_info"),
 };
+
+/** Native multi-file picker for documents (Tauri only). Returns [] when cancelled or unavailable. */
+export async function pickDocumentFiles(title: string, filterName: string, defaultPath?: string): Promise<string[]> {
+  if (!isTauri) return [];
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const result = await open({
+    directory: false,
+    multiple: true,
+    title,
+    defaultPath,
+    filters: [{ name: filterName, extensions: ["pdf", "png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp", "gif", "hwpx", "docx", "hwp"] }],
+  });
+  if (Array.isArray(result)) return result;
+  return typeof result === "string" ? [result] : [];
+}
 
 /** Native folder picker (Tauri only). Returns null when cancelled or unavailable. */
 export async function pickFolder(title: string, defaultPath?: string): Promise<string | null> {
@@ -174,7 +219,9 @@ export async function revealPath(path: string): Promise<void> {
   try {
     await opener.revealItemInDir(path);
   } catch {
-    await opener.openPath(path);
+    // Fallback for paths the reveal API rejects (e.g. a missing file): open the containing folder.
+    const dir = path.replace(/[\\/][^\\/]*$/, "");
+    await opener.openPath(dir || path);
   }
 }
 

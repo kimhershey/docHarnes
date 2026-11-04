@@ -6,6 +6,7 @@ import { GeneratePage } from "@/features/generate/GeneratePage";
 import { HomePage } from "@/features/home/HomePage";
 import { JobsPage } from "@/features/jobs/JobsPage";
 import { KnowledgePage } from "@/features/knowledge/KnowledgePage";
+import { DocumentViewer } from "@/features/library/DocumentViewer";
 import { LibraryPage } from "@/features/library/LibraryPage";
 import { ModelsPage } from "@/features/models/ModelsPage";
 import { OnboardingWizard } from "@/features/onboarding/OnboardingWizard";
@@ -37,6 +38,7 @@ function Gate() {
       <Route element={<AppShell />}>
         <Route index element={<HomePage />} />
         <Route path="library" element={<LibraryPage />} />
+        <Route path="library/:id" element={<DocumentViewer />} />
         <Route path="search" element={<SearchPage />} />
         <Route path="assistant" element={<AssistantPage />} />
         <Route path="review" element={<ReviewPage />} />

@@ -1,0 +1,11 @@
+{
+  "$comment": "Pinned PDFium build (bblanchon/pdfium-binaries, BSD-3 / MIT). pdfium-render 0.9.x targets this exact build (`pdfium_8125`). Fetch with `node scripts/fetch-pdfium.mjs`.",
+  "schema_version": 1,
+  "tag": "chromium/8125",
+  "version": "158.0.8125.0",
+  "release_url": "https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium%2F8125",
+  "assets": {
+    "win-x64": { "file": "pdfium-win-x64.tgz", "library": "bin/pdfium.dll", "sha256": "9a964261760cff52570aabf038ab346d3a5034dd8b30d0d5fe8861235d356b8b" },
+    "linux-x64": { "file": "pdfium-linux-x64.tgz", "library": "lib/libpdfium.so", "sha256": "e1c3ce6e270cb5e0c20816b379ad9f2c1309972697c505f508de92bf5e7d6659" }
+  }
+}
