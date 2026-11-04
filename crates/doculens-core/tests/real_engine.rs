@@ -114,8 +114,21 @@ fn real_llama_server_load_chat_switch() {
     let loaded = m.load_model(&first, Duration::from_secs(600), true).expect("load model");
     eprintln!("loaded {first} in {} ms: {:?}", t1.elapsed().as_millis(), loaded);
     assert!(loaded.is_loaded());
+    for l in m.recent_logs(400).iter().filter(|l| {
+        l.text.contains("load_backend")
+            || l.text.contains("system_info")
+            || l.text.contains("flash_attn")
+            || l.text.contains("n_ctx")
+    }) {
+        eprintln!("  engine: {}", l.text);
+    }
+    // On failure, print what the engine said (backend variant, kernel errors) before panicking.
+    let dump = |m: &EngineManager, what: &str, e: &dyn std::fmt::Display| -> ! {
+        let tail: Vec<String> = m.recent_logs(80).iter().map(|l| format!("  {:?} {}", l.stream, l.text)).collect();
+        panic!("{what}: {e}\nengine log tail:\n{}", tail.join("\n"));
+    };
 
-    let r = m.chat(&ChatRequest::text(&first, "Say hello.").max_tokens(8)).expect("chat");
+    let r = m.chat(&ChatRequest::text(&first, "Say hello.").max_tokens(8)).unwrap_or_else(|e| dump(&m, "chat", &e));
     eprintln!("chat → {:?} finish={:?} usage={:?} timings={:?}", r.content, r.finish_reason, r.usage, r.timings);
     assert!(r.usage.is_some_and(|u| u.completion_tokens >= 1));
 
@@ -125,14 +138,14 @@ fn real_llama_server_load_chat_switch() {
             deltas += 1;
             true
         })
-        .expect("stream");
+        .unwrap_or_else(|e| dump(&m, "stream", &e));
     eprintln!("stream → {} deltas, {:?}", deltas, s.content);
     assert!(deltas >= 1);
 
     let schema = serde_json::json!({ "type": "object", "properties": { "ok": { "type": "boolean" } }, "required": ["ok"], "additionalProperties": false });
     let j = m
         .chat(&ChatRequest::text(&first, "Reply with ok=true.").max_tokens(64).json_schema("probe", schema))
-        .expect("json schema chat");
+        .unwrap_or_else(|e| dump(&m, "json schema chat", &e));
     eprintln!("json_schema → {:?} (finish {:?})", j.content, j.finish_reason);
     // Random weights may pad with whitespace until the token budget ends; a
     // complete answer must be valid JSON, a cut-off one at least a JSON prefix.
@@ -155,7 +168,7 @@ fn real_llama_server_load_chat_switch() {
             max_tokens: Some(8),
             ..Default::default()
         };
-        let v = m.chat(&req).expect("image chat");
+        let v = m.chat(&req).unwrap_or_else(|e| dump(&m, "image chat", &e));
         eprintln!("image chat → {:?} usage={:?}", v.content, v.usage);
         assert!(v.usage.is_some_and(|u| u.prompt_tokens > 10), "image did not add prompt tokens");
     }
