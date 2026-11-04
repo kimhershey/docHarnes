@@ -718,6 +718,14 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 
 (진행 중 — 프런트엔드 검증 후 테스트 수·E2E 결과를 기록한다.)
 
+### 헤드리스 검증 (실제 데스크톱 바이너리 + 실제 llama-server, Xvfb + WebKitGTK)
+
+- P4 스모크(`inbox/`의 사진·DOCX → 가져오기 → inbox 자동 처리 full)를 P5 러너 경로로 다시 실행: 자동 처리 요청이 `jobs` 테이블의
+  영속 작업(`kind=pipeline`, 스펙 JSON 212 B, 우선순위 normal, 시도 1회)으로 제출되어 `planner_bridge` 워커가 모델을 로드
+  (`pipeline: vision model tiny-qwen35 (context 4096)`)하고 분류·OCR을 끝냈으며(두 문서 모두 `doc_type` 기록), KIE는 P4와 같은
+  무작위 모델 한계(컨텍스트 630토큰 절단 / 출력 파서 500 재시도 3회)로 실패해 작업이 `failed` + 오류 문자열 + 결과 JSON(409 B)으로
+  저장됐다. 저널 배치 0건(정리 없음), 스키마 버전 4 마이그레이션 적용. 스크립트: 세션 스크래치패드 `smoke-p5/run-p5.sh`.
+
 ### 실엔진 검증 (`tests/real_engine.rs`, 초소형 무작위 Qwen3.5 + llama-server CPU)
 
 - 채팅·KIE 문법에 이어 **플래너 PlanSchema 문법**(33개 op `anyOf`)이 실제 서버에 받아들여지고(400 없음), 4K 컨텍스트에서
