@@ -419,11 +419,12 @@ pub fn answer(app: &AppHandle, req: AnswerRequest, request_id: String) -> UiResu
         let _ = app2.emit(EV_ANSWER, AnswerDelta { request_id: rid.clone(), delta: d.to_string(), done: false });
         true
     };
-    let result = match req.kind {
+    // Interactive request: a running batch yields at its next page boundary (§3.9).
+    let result = state.gate.interactive(|| match req.kind {
         AnswerKind::Answer | AnswerKind::Explain => answer::answer(&deps, &req, &mut on_delta),
         AnswerKind::Summary => answer::summarize(&deps, &req, &mut on_delta),
         AnswerKind::Compare => answer::compare(&deps, &req, &mut on_delta),
-    };
+    });
     if let Ok(mut c) = state.answer_cancels.lock() {
         c.remove(&request_id);
     }

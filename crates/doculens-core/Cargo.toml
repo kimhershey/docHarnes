@@ -38,6 +38,9 @@ regex.workspace = true
 lopdf.workspace = true
 lindera.workspace = true
 sqlite-vec.workspace = true
+rust_xlsxwriter.workspace = true
+csv.workspace = true
+pdf-writer.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

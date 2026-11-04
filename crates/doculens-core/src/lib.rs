@@ -9,18 +9,23 @@
 //! Policy: every dependency must be permissively licensed (no source-disclosure
 //! obligation). See `docs/LICENSE-POLICY.md`.
 
+pub mod aggregate;
 pub mod db;
 pub mod documents;
 pub mod engine;
 pub mod error;
+pub mod export;
 pub mod fswatch;
 pub mod gguf;
 pub mod hw;
+pub mod jobs;
 pub mod knowledge;
 pub mod memory;
 pub mod modelstore;
+pub mod organize;
 pub mod paths;
 pub mod pipeline;
+pub mod planner;
 pub mod prerouter;
 pub mod registry;
 pub mod retention;

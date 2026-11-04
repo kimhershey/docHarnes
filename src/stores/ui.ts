@@ -28,6 +28,9 @@ interface UiState {
   /** Onboarding wizard stays visible after step 1 opened a workspace. */
   onboardingActive: boolean;
   setOnboardingActive: (active: boolean) => void;
+  /** Document (and page) the viewer showed last — the assistant's "이 문서" scope (P5). */
+  lastDocument: { id: string; page: number | null } | null;
+  setLastDocument: (doc: { id: string; page: number | null } | null) => void;
 }
 
 let toastSeq = 1;
@@ -52,6 +55,8 @@ export const useUiStore = create<UiState>((set, get) => ({
   closeWorkspaceDialog: () => set({ workspaceDialog: null }),
   onboardingActive: false,
   setOnboardingActive: (active) => set({ onboardingActive: active }),
+  lastDocument: null,
+  setLastDocument: (doc) => set({ lastDocument: doc }),
 }));
 
 export function toast(message: string, kind: ToastKind = "info"): void {

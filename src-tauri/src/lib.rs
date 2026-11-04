@@ -6,6 +6,7 @@ mod engine_bridge;
 mod jobs;
 mod knowledge_bridge;
 mod pipeline_bridge;
+mod planner_bridge;
 mod printer;
 mod protocol;
 mod state;
@@ -37,6 +38,7 @@ pub fn run() {
             let state = app.state::<AppState>();
             let _ = state.app.set(handle.clone());
             state.jobs.attach(handle.clone());
+            planner_bridge::install_worker(&handle);
             // Apply the persisted theme to the native window (title bar) before the
             // first paint; the webview applies the same theme via `data-theme`.
             let theme = state.settings.lock().map(|s| s.ui.theme).unwrap_or_default();
@@ -171,6 +173,22 @@ pub fn run() {
             commands::pipeline::pipeline_table_export,
             commands::pipeline::pipeline_split,
             commands::pipeline::pipeline_merge,
+            commands::planner::planner_plan,
+            commands::planner::planner_execute,
+            commands::planner::organize_plan,
+            commands::planner::organize_apply,
+            commands::planner::journal_batches,
+            commands::planner::journal_entries,
+            commands::planner::journal_undo,
+            commands::planner::journal_redo,
+            commands::planner::aggregate_run,
+            commands::planner::export_preview,
+            commands::planner::export_run,
+            commands::planner::jobs_get,
+            commands::planner::jobs_pause,
+            commands::planner::jobs_resume,
+            commands::planner::jobs_retry,
+            commands::planner::jobs_prioritize,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

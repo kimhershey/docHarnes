@@ -16,6 +16,8 @@ pub enum Stage {
     Kie,
     FormFields,
     NlSchema,
+    /// Natural-language planner (text only, grammar-constrained plan JSON).
+    Plan,
 }
 
 impl Stage {
@@ -26,6 +28,7 @@ impl Stage {
             Stage::Kie => "kie",
             Stage::FormFields => "form_fields",
             Stage::NlSchema => "nl_schema",
+            Stage::Plan => "plan",
         }
     }
 }
@@ -84,6 +87,7 @@ pub fn params(stage: Stage, profile: Profile) -> StageParams {
         Stage::NlSchema => {
             StageParams { temperature: 0.0, top_p: 0.9, top_k: 20, max_tokens: 2_048, image_tokens: None }
         }
+        Stage::Plan => StageParams { temperature: 0.0, top_p: 0.9, top_k: 20, max_tokens: 1_024, image_tokens: None },
     }
 }
 

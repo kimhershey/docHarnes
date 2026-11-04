@@ -10,10 +10,13 @@ interface DocumentsState {
   view: "grid" | "list";
   folder: string | null;
   query: string;
+  /** Library selection (document ids), shared with the assistant's "선택 문서" scope and the aggregate bar (P5). */
+  selectedIds: string[];
   init: () => Promise<void>;
   setView: (view: "grid" | "list") => void;
   setFolder: (folder: string | null) => void;
   setQuery: (query: string) => void;
+  setSelectedIds: (ids: string[]) => void;
 }
 
 let invalidateTimer: ReturnType<typeof setTimeout> | null = null;
@@ -32,6 +35,7 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
   view: "grid",
   folder: null,
   query: "",
+  selectedIds: [],
 
   init: async () => {
     if (get().initialized) return;
@@ -42,10 +46,11 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
   setView: (view) => set({ view }),
   setFolder: (folder) => set({ folder }),
   setQuery: (query) => set({ query }),
+  setSelectedIds: (ids) => set({ selectedIds: ids }),
 }));
 
 /** Call after a workspace switch: library queries belong to the old folder. */
 export function resetDocumentQueries(): void {
-  useDocumentsStore.setState({ folder: null, query: "" });
+  useDocumentsStore.setState({ folder: null, query: "", selectedIds: [] });
   void queryClient.invalidateQueries({ queryKey: queryKeys.documents });
 }

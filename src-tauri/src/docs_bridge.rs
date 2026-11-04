@@ -35,7 +35,7 @@ const INBOX_RETRY: Duration = Duration::from_secs(4);
 const CANCEL_WAIT: Duration = Duration::from_secs(8);
 const DOC_JOBS: [JobKind; 3] = [JobKind::DocumentImport, JobKind::DocumentRescan, JobKind::DocumentRender];
 /// Everything that touches the workspace DB on a background thread.
-const WORKSPACE_JOBS: [JobKind; 8] = [
+const WORKSPACE_JOBS: [JobKind; 13] = [
     JobKind::DocumentImport,
     JobKind::DocumentRescan,
     JobKind::DocumentRender,
@@ -44,6 +44,11 @@ const WORKSPACE_JOBS: [JobKind; 8] = [
     JobKind::Pipeline,
     JobKind::DocumentSplit,
     JobKind::DocumentMerge,
+    JobKind::Plan,
+    JobKind::Export,
+    JobKind::Organize,
+    JobKind::Undo,
+    JobKind::Redo,
 ];
 
 /// Work chained after a job has been marked finished.
@@ -203,9 +208,9 @@ pub fn before_workspace_change(app: &AppHandle) {
     if let Ok(mut m) = state.import_plans.lock() {
         m.clear();
     }
-    if let Ok(mut q) = state.pipeline_queue.lock() {
-        q.clear();
-    }
+    // Persistent jobs: running ones are cancelled and marked interrupted (retryable), queued ones
+    // stay queued in the workspace database and come back when it is opened again.
+    state.jobs.detach_from_workspace();
     // Streaming answers hold the old database too: stop them at their next delta.
     if let (Ok(running), Ok(mut cancels)) = (state.answer_running.lock(), state.answer_cancels.lock()) {
         for id in running.iter() {
