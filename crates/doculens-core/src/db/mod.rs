@@ -18,10 +18,11 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (1, include_str!("schema/0001_init.sql")),
     (2, include_str!("schema/0002_knowledge.sql")),
     (3, include_str!("schema/0003_pipeline.sql")),
+    (4, include_str!("schema/0004_jobs_journal.sql")),
 ];
 
 /// Schema version the current build expects.
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]

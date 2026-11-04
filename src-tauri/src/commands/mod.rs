@@ -4,6 +4,7 @@
 pub mod documents;
 pub mod knowledge;
 pub mod pipeline;
+pub mod planner;
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
