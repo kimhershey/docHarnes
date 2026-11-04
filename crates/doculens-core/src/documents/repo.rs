@@ -390,6 +390,9 @@ pub fn set_role(conn: &Connection, id: &str, role: DocumentRole) -> rusqlite::Re
 }
 
 pub fn delete_document(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
+    // Chunks and FTS rows cascade (triggers); vectors live in a virtual table
+    // without foreign keys and are removed explicitly.
+    crate::knowledge::repo::clear_chunks(conn, id)?;
     let n = conn.execute("DELETE FROM documents WHERE id = ?1", [id])?;
     Ok(n > 0)
 }

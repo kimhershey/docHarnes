@@ -6,6 +6,7 @@ import type { Language, RetentionPolicy, StartupStatus, WorkspaceView } from "@/
 import { errorMessage } from "@/lib/utils";
 
 import { resetDocumentQueries } from "./documents";
+import { resetKnowledgeQueries } from "./knowledge";
 import { useSettingsStore } from "./settings";
 
 interface WorkspaceState {
@@ -24,6 +25,7 @@ interface WorkspaceState {
 
 function afterWorkspaceChange() {
   resetDocumentQueries();
+  resetKnowledgeQueries();
   void useSettingsStore.getState().load();
   void queryClient.invalidateQueries({ queryKey: queryKeys.assessment });
   void queryClient.invalidateQueries({ queryKey: queryKeys.registry });

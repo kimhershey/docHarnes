@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowLeft, ChevronLeft, ChevronRight, FolderOpen, Maximize2, RefreshCw, RotateCcw, RotateCw, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
+import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, FolderOpen, GitBranch, Maximize2, MessageSquareText, RefreshCw, RotateCcw, RotateCw, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate, useParams } from "react-router";
+import { useNavigate, useParams, useSearchParams } from "react-router";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,16 +12,20 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { AddToCollectionDialog } from "@/features/knowledge/AddToCollectionDialog";
+import { Snippet } from "@/features/search/SearchPage";
 import { describeError } from "@/lib/errors";
 import { api, revealPath } from "@/lib/ipc";
-import { useDocument, useDocumentPages } from "@/lib/queries";
+import { useDocument, useDocumentCollections, useDocumentPages } from "@/lib/queries";
 import { queryClient, queryKeys } from "@/lib/query-client";
 import { isComposing } from "@/lib/shortcuts";
-import type { DocumentView, PageView } from "@/lib/types";
+import type { Citation, DocumentView, PageView } from "@/lib/types";
 import { cn, formatBytes, formatDate } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui";
 
 import { statusVariant } from "./status";
+import { VersionDialog } from "./VersionDialog";
+import { ViewerKnowledgePanel } from "./ViewerKnowledgePanel";
 
 const DOC_TYPES = ["tax_invoice", "invoice_exempt", "receipt", "business_registration", "contract", "application_form", "general", "other"];
 const NONE = "__none__";
@@ -54,6 +58,14 @@ export function DocumentViewer() {
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const highlightQuery = searchParams.get("q") ?? "";
+  const [tab, setTab] = useState<string>("text");
+  const [explainSelection, setExplainSelection] = useState<string | null>(null);
+  const [selectionText, setSelectionText] = useState("");
+  const [versionOpen, setVersionOpen] = useState(false);
+  const [addToKb, setAddToKb] = useState(false);
+  const { data: docCollections } = useDocumentCollections(id);
 
   // One component instance serves every /library/:id — reset per document.
   useEffect(() => {
@@ -61,8 +73,42 @@ export function DocumentViewer() {
     setZoom("fit");
     setTagInput("");
     setTitleDraft(null);
+    setExplainSelection(null);
+    setSelectionText("");
     rootRef.current?.focus();
   }, [id]);
+
+  // Search / citation links open a specific page (`?page=N`) and highlight the query (`?q=`).
+  const pageParam = searchParams.get("page");
+  useEffect(() => {
+    const n = Number(pageParam);
+    if (pageParam && Number.isFinite(n) && n >= 1) setPageNo(n);
+  }, [pageParam, id]);
+
+  const clearHighlight = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("q");
+    next.delete("chunk");
+    setSearchParams(next, { replace: true });
+  };
+
+  const captureSelection = () => {
+    const sel = window.getSelection()?.toString().trim() ?? "";
+    setSelectionText(sel.length >= 2 ? sel : "");
+  };
+  const explain = (selection?: string) => {
+    const sel = (selection ?? selectionText).trim();
+    if (!sel) return;
+    setTab("qa");
+    setExplainSelection(sel);
+  };
+  const onCitation = (c: Citation) => {
+    if (c.document_id !== id) {
+      navigate(`/library/${c.document_id}?page=${c.page_start}&chunk=${c.chunk_id}`);
+      return;
+    }
+    setPageNo(c.page_start);
+  };
 
   const total = pages?.length ?? 0;
   const page: PageView | undefined = pages?.find((p) => p.page_no === pageNo) ?? pages?.[0];
@@ -71,6 +117,32 @@ export function DocumentViewer() {
     queryFn: () => api.documentsPageText(id ?? "", page?.page_no ?? 0),
     enabled: !!id && !!page,
   });
+
+  const highlightNeedles = useMemo(() => highlightQuery.split(/\s+/).map((w) => w.trim()).filter((w) => w.length >= 1), [highlightQuery]);
+  const highlights = useMemo<[number, number][]>(() => {
+    if (!text || highlightNeedles.length === 0) return [];
+    const chars = Array.from(text);
+    const lower = chars.map((c) => c.toLowerCase());
+    const out: [number, number][] = [];
+    for (const n of [...highlightNeedles].sort((a, b) => b.length - a.length)) {
+      const needle = Array.from(n.toLowerCase());
+      for (let i = 0; i + needle.length <= lower.length; i += 1) {
+        let ok = true;
+        for (let k = 0; k < needle.length; k += 1) {
+          if (lower[i + k] !== needle[k]) {
+            ok = false;
+            break;
+          }
+        }
+        if (ok && !out.some(([a, b]) => i < b && i + needle.length > a)) {
+          out.push([i, i + needle.length]);
+          i += needle.length - 1;
+        }
+      }
+    }
+    return out.sort((a, b) => a[0] - b[0]);
+  }, [text, highlightNeedles]);
+
 
   useEffect(() => {
     if (total > 0 && pageNo > total) setPageNo(total);
@@ -84,6 +156,15 @@ export function DocumentViewer() {
   const go = useCallback((delta: number) => setPageNo((p) => Math.min(Math.max(1, p + delta), Math.max(1, total))), [total]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "e" || e.key === "E")) {
+      captureSelection();
+      const sel = window.getSelection()?.toString().trim() ?? "";
+      if (sel.length >= 2) {
+        e.preventDefault();
+        explain(sel);
+      }
+      return;
+    }
     if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || !isViewerKeyTarget(e.target)) return;
     if (e.key === "ArrowLeft" || e.key === "PageUp") go(-1);
     else if (e.key === "ArrowRight" || e.key === "PageDown") go(1);
@@ -248,6 +329,13 @@ export function DocumentViewer() {
             {t("viewer.converted_badge")}
           </Badge>
         )}
+        {doc.role === "knowledge" && (
+          <Badge variant="info" data-testid="viewer-kb-badge" title={docCollections?.map(([, name]) => name).join(", ")}>
+            <BookOpen className="size-3" />
+            {t("viewer.kb_badge")}
+            {docCollections && docCollections.length > 0 && <span className="ml-1 font-normal">· {docCollections.map(([, name]) => name).join(", ")}</span>}
+          </Badge>
+        )}
         <Select value={doc.doc_type ?? NONE} onValueChange={(v) => void setDocType(v)}>
           <SelectTrigger className="h-8 w-40" aria-label={t("viewer.doc_type")} data-testid="viewer-doc-type">
             <SelectValue />
@@ -321,6 +409,18 @@ export function DocumentViewer() {
           <RefreshCw />
           {t("viewer.rerender")}
         </Button>
+        <Button size="sm" variant="ghost" onClick={() => setAddToKb(true)} data-testid="viewer-add-to-kb">
+          <BookOpen />
+          {t("viewer.add_to_kb")}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => setVersionOpen(true)} data-testid="viewer-version">
+          <GitBranch />
+          {t("viewer.version.menu")}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => explain()} disabled={!selectionText} title={t("viewer.explain_shortcut")} data-testid="viewer-explain">
+          <MessageSquareText />
+          {t("viewer.explain")}
+        </Button>
         <Button size="sm" variant="ghost" onClick={() => void reveal()} data-testid="viewer-reveal">
           <FolderOpen />
           {t("viewer.reveal")}
@@ -359,7 +459,7 @@ export function DocumentViewer() {
         </div>
 
         <aside className="flex w-80 shrink-0 flex-col border-l border-border">
-          <Tabs defaultValue="text" className="flex min-h-0 flex-1 flex-col">
+          <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col">
             <TabsList className="m-2">
               {(["text", "fields", "tables", "qa", "history"] as const).map((tab) => (
                 <TabsTrigger key={tab} value={tab} data-testid={`viewer-tab-${tab}`}>
@@ -368,11 +468,19 @@ export function DocumentViewer() {
               ))}
             </TabsList>
             <TabsContent value="text" className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+              {highlightQuery && (
+                <div className="mb-2 flex items-center gap-2 rounded-md bg-warn-soft px-2 py-1 text-xs" data-testid="viewer-highlight">
+                  <span className="truncate">{t("viewer.highlight", { q: highlightQuery })}</span>
+                  <Button size="sm" variant="ghost" className="ml-auto h-6 px-2" onClick={clearHighlight}>
+                    {t("viewer.clear_highlight")}
+                  </Button>
+                </div>
+              )}
               {textLoading ? (
                 <Spinner />
               ) : text ? (
-                <pre className="whitespace-pre-wrap break-words font-sans text-sm selectable" data-testid="viewer-text">
-                  {text}
+                <pre className="whitespace-pre-wrap break-words font-sans text-sm selectable" data-testid="viewer-text" onMouseUp={captureSelection} onKeyUp={captureSelection}>
+                  {highlights.length > 0 ? <Snippet text={text} highlights={highlights} /> : text}
                 </pre>
               ) : (
                 <p className="text-sm text-fg-muted" data-testid="viewer-text-empty">
@@ -386,8 +494,8 @@ export function DocumentViewer() {
             <TabsContent value="tables" className="px-3 pb-3 text-sm text-fg-muted">
               {t("viewer.placeholder_tables")}
             </TabsContent>
-            <TabsContent value="qa" className="px-3 pb-3 text-sm text-fg-muted">
-              {t("viewer.placeholder_qa")}
+            <TabsContent value="qa" className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+              <ViewerKnowledgePanel doc={doc} explainSelection={explainSelection} onExplained={() => setExplainSelection(null)} onCitation={onCitation} />
             </TabsContent>
             <TabsContent value="history" className="px-3 pb-3 text-sm text-fg-muted">
               {t("viewer.placeholder_history")}
@@ -424,6 +532,8 @@ export function DocumentViewer() {
         </aside>
       </div>
       <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
+      <VersionDialog open={versionOpen} onOpenChange={setVersionOpen} doc={doc} />
+      <AddToCollectionDialog open={addToKb} onOpenChange={setAddToKb} docIds={[doc.id]} />
     </div>
   );
 }

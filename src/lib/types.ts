@@ -89,8 +89,20 @@ export interface AppSettings {
   cache: CacheSettings;
   privacy: PrivacySettings;
   notifications: NotificationSettings;
+  knowledge: KnowledgeSettings;
   shortcuts: Record<string, string>;
   window: WindowState;
+}
+
+export interface KnowledgeSettings {
+  auto_index: boolean;
+  auto_embed: boolean;
+  embedding_model: string | null;
+  latest_only: boolean;
+  allow_general_knowledge: boolean;
+  context_tokens: number;
+  top_k: number;
+  chunk_target_tokens: number;
 }
 
 export interface RetentionPolicy {
@@ -510,7 +522,9 @@ export type JobKind =
   | "model_hash"
   | "document_import"
   | "document_rescan"
-  | "document_render";
+  | "document_render"
+  | "knowledge_index"
+  | "knowledge_embed";
 export type JobState = "queued" | "running" | "done" | "failed" | "cancelled";
 
 export interface Job {
@@ -637,6 +651,8 @@ export const EVENTS = {
   modelsChanged: "models://changed",
   jobsUpdate: "jobs://update",
   documentsChanged: "documents://changed",
+  knowledgeChanged: "knowledge://changed",
+  knowledgeAnswer: "knowledge://answer",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -758,6 +774,8 @@ export interface ImportOptions {
   render: boolean;
   role: DocumentRole;
   dpi: number | null;
+  /** Knowledge collection that receives the whole batch (ingest wizard). */
+  collection_id?: string | null;
 }
 
 export type ImportItemStatus =
@@ -807,5 +825,258 @@ export interface PdfiumInfo {
 }
 
 export function defaultImportOptions(): ImportOptions {
-  return { destination: "documents", move_files: false, render: true, role: "work", dpi: null };
+  return { destination: "documents", move_files: false, render: true, role: "work", dpi: null, collection_id: null };
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge base (P3) — mirrors crates/doculens-core/src/knowledge and
+// src-tauri/src/commands/knowledge.rs
+// ---------------------------------------------------------------------------
+
+export interface Collection {
+  id: string;
+  name: string;
+  description: string | null;
+  color: string | null;
+  active: boolean;
+  watch_folder: string | null;
+  created_at: string;
+  updated_at: string;
+  doc_count: number;
+  chunk_count: number;
+}
+
+export interface CollectionInput {
+  id?: string | null;
+  name: string;
+  description?: string | null;
+  color?: string | null;
+  active?: boolean;
+  watch_folder?: string | null;
+}
+
+export interface VersionInfo {
+  document_id: string;
+  title: string;
+  group_key: string;
+  version_label: string | null;
+  effective_date: string | null;
+  is_latest: boolean;
+  note: string | null;
+}
+
+export interface VersionGroup {
+  group_key: string;
+  documents: VersionInfo[];
+}
+
+export interface VersionInput {
+  document_id: string;
+  group_key: string;
+  version_label?: string | null;
+  effective_date?: string | null;
+  is_latest?: boolean;
+  note?: string | null;
+}
+
+export interface GlossaryEntry {
+  id: number;
+  term: string;
+  definition: string | null;
+  synonyms: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GlossaryInput {
+  id?: number | null;
+  term: string;
+  definition?: string | null;
+  synonyms?: string[];
+}
+
+export type ChunkKind = "text" | "table" | "heading" | "list";
+
+export interface Chunk {
+  id: number;
+  document_id: string;
+  chunk_index: number;
+  page_start: number;
+  page_end: number;
+  kind: ChunkKind;
+  heading_path: string | null;
+  clause: string | null;
+  text: string;
+  token_estimate: number;
+  embedded: boolean;
+}
+
+export type SearchMode = "hybrid" | "keyword" | "semantic";
+export type SearchChannel = "morph" | "trigram" | "like" | "vector";
+
+export interface SearchScope {
+  collections?: string[];
+  documents?: string[];
+  roles?: DocumentRole[];
+  folder?: string | null;
+  latest_only?: boolean;
+  active_collections_only?: boolean;
+}
+
+export interface SearchRequest {
+  query: string;
+  mode?: SearchMode;
+  scope?: SearchScope;
+  limit?: number;
+  expand_glossary?: boolean;
+  per_document?: number;
+}
+
+export interface SearchHit {
+  chunk_id: number;
+  document_id: string;
+  title: string;
+  rel_path: string;
+  role: DocumentRole;
+  doc_type: string | null;
+  page_start: number;
+  page_end: number;
+  kind: ChunkKind;
+  heading_path: string | null;
+  clause: string | null;
+  text: string;
+  snippet: string;
+  highlights: [number, number][];
+  score: number;
+  channels: SearchChannel[];
+  vector_similarity: number | null;
+}
+
+export interface SearchResponse {
+  hits: SearchHit[];
+  query_terms: string[];
+  expanded_terms: string[];
+  used_vector: boolean;
+  used_like_fallback: boolean;
+  elapsed_ms: number;
+  total_candidates: number;
+}
+
+export interface TokenizerInfo {
+  kind: string;
+  path: string | null;
+  version: string | null;
+}
+
+export interface EmbeddingModelInfo {
+  model: string | null;
+  installed: boolean;
+  engine_running: boolean;
+  loaded: boolean;
+}
+
+export interface KnowledgeStatus {
+  documents_total: number;
+  documents_indexed: number;
+  documents_pending: number;
+  documents_no_text: number;
+  documents_failed: number;
+  knowledge_documents: number;
+  chunks_total: number;
+  chunks_embedded: number;
+  embedding_model: string | null;
+  embedding_dim: number | null;
+  tokenizer: TokenizerInfo;
+  collections: number;
+  glossary_terms: number;
+  answers: number;
+  answers_helpful: number;
+  answers_wrong: number;
+  embedding: EmbeddingModelInfo;
+  index_running: boolean;
+  embed_running: boolean;
+}
+
+export type AnswerKind = "answer" | "explain" | "summary" | "compare";
+export type SummaryMode = "one_line" | "key_points" | "one_page";
+export type AnswerLanguage = "auto" | "ko" | "en";
+
+export interface AnswerRequest {
+  question: string;
+  kind?: AnswerKind;
+  scope?: SearchScope;
+  allow_general?: boolean;
+  top_k?: number;
+  context_tokens?: number;
+  language?: AnswerLanguage;
+  selection?: string | null;
+  document_id?: string | null;
+  compare_document_id?: string | null;
+  summary_mode?: SummaryMode;
+  keep_chunks?: number[];
+  save?: boolean;
+}
+
+export interface Citation {
+  index: number;
+  chunk_id: number;
+  document_id: string;
+  title: string;
+  page_start: number;
+  page_end: number;
+  heading_path: string | null;
+  clause: string | null;
+  score: number;
+  excerpt: string;
+}
+
+export interface AnswerSentence {
+  text: string;
+  citations: number[];
+}
+
+export interface Answer {
+  id: number | null;
+  kind: AnswerKind;
+  question: string;
+  text: string;
+  sentences: AnswerSentence[];
+  sources: Citation[];
+  no_evidence: boolean;
+  used_general_knowledge: boolean;
+  conflicts: string | null;
+  model: string | null;
+  elapsed_ms: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  document_id: string | null;
+  created_at: string | null;
+  feedback: number | null;
+}
+
+export interface SavedAnswer {
+  id: number;
+  kind: AnswerKind;
+  question: string;
+  text: string;
+  sentences: AnswerSentence[];
+  sources: Citation[];
+  no_evidence: boolean;
+  used_general_knowledge: boolean;
+  model: string | null;
+  document_id: string | null;
+  feedback: number | null;
+  feedback_note: string | null;
+  created_at: string;
+}
+
+export interface KnowledgeChanged {
+  kind: "indexed" | "embedded" | "collections" | "glossary" | "versions" | "answers" | "status";
+  ids: string[];
+}
+
+export interface AnswerDelta {
+  request_id: string;
+  delta: string;
+  done: boolean;
 }

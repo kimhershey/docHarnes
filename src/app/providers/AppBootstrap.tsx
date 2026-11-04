@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { isTauri } from "@/lib/ipc";
 import { useDocumentsStore } from "@/stores/documents";
+import { useKnowledgeStore } from "@/stores/knowledge";
 import { useEngineStore } from "@/stores/engine";
 import { useJobsStore } from "@/stores/jobs";
 import { useSettingsStore } from "@/stores/settings";
@@ -32,6 +33,7 @@ export function AppBootstrap({ children }: { children: ReactNode }) {
     void useEngineStore.getState().init();
     void useJobsStore.getState().init();
     void useDocumentsStore.getState().init();
+    void useKnowledgeStore.getState().init();
   }, [settingsLoaded, workspaceLoaded]);
 
   useEffect(() => {

@@ -4,7 +4,7 @@
 //! shared memory is unreliable.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, Once};
 use std::time::Duration;
 
 use chrono::Utc;
@@ -14,10 +14,11 @@ use crate::error::{CoreError, Result};
 
 /// Embedded migrations, applied in order; `PRAGMA user_version` records the
 /// last one applied.
-const MIGRATIONS: &[(u32, &str)] = &[(1, include_str!("schema/0001_init.sql"))];
+const MIGRATIONS: &[(u32, &str)] =
+    &[(1, include_str!("schema/0001_init.sql")), (2, include_str!("schema/0002_knowledge.sql"))];
 
 /// Schema version the current build expects.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -100,6 +101,26 @@ impl std::fmt::Debug for Db {
     }
 }
 
+/// Registers sqlite-vec (`vec0` virtual tables, `vec_*` functions) as an
+/// auto-extension so every connection opened afterwards has it. Process-wide,
+/// idempotent; the extension is statically linked into the bundled SQLite.
+pub fn register_extensions() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        type InitFn = unsafe extern "C" fn(
+            *mut rusqlite::ffi::sqlite3,
+            *mut *mut std::os::raw::c_char,
+            *const rusqlite::ffi::sqlite3_api_routines,
+        ) -> std::os::raw::c_int;
+        // SAFETY: sqlite3_vec_init has the sqlite3 extension entry-point ABI; the
+        // crate declares it without arguments, so the signature is restored here.
+        unsafe {
+            let init: InitFn = std::mem::transmute::<*const (), InitFn>(sqlite_vec::sqlite3_vec_init as *const ());
+            rusqlite::ffi::sqlite3_auto_extension(Some(init));
+        }
+    });
+}
+
 impl From<rusqlite::Error> for CoreError {
     fn from(e: rusqlite::Error) -> Self {
         CoreError::Db(e.to_string())
@@ -109,6 +130,7 @@ impl From<rusqlite::Error> for CoreError {
 impl Db {
     /// Opens (creating if needed) and migrates the database at `path`.
     pub fn open(path: &Path, journal_mode: JournalMode) -> Result<Db> {
+        register_extensions();
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| CoreError::io(parent, e))?;
         }
@@ -119,6 +141,7 @@ impl Db {
 
     /// In-memory database (tests, dry runs).
     pub fn open_in_memory() -> Result<Db> {
+        register_extensions();
         let conn = Connection::open_in_memory()?;
         Self::init(conn, PathBuf::from(":memory:"), JournalMode::Delete)
     }

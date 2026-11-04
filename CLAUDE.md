@@ -33,6 +33,9 @@ that processes Korean/English business documents with a local VLM
 - PDFium (optional, enables the render/import tests): `node scripts/fetch-pdfium.mjs --dest /tmp/pdfium` then
   `DOCULENS_PDFIUM=/tmp/pdfium/libpdfium.so cargo test -p doculens-core`.
 - Sample documents: `DOCULENS_FIXTURE_OUT=<dir> cargo test -p doculens-core --lib -- --ignored gen_fixtures`.
+- ko-dic (optional, enables the morphological tokenizer tests; the built-in simple analyzer is used otherwise):
+  `node scripts/fetch-kodic.mjs --dest /tmp/kodic` (downloads the pinned mecab-ko-dic tarball and builds it with
+  `cargo run -p doculens-kodic`) then `DOCULENS_KODIC=/tmp/kodic cargo test -p doculens-core`.
 - Web: `npm run typecheck`, `npm test` (vitest), `npm run build`,
   `PW_CHROMIUM_PATH=/opt/pw-browsers/chromium npm run e2e` (browser mode, mock backend).
 - Desktop (Windows / Linux with webkit2gtk): `npm run tauri dev`, `npm run tauri build`.
@@ -43,14 +46,24 @@ that processes Korean/English business documents with a local VLM
   `gguf` (header parser, hashes), `modelstore` (drop-in folders, import, download), `fswatch` (debounced watcher),
   `engine/` (locate, devices, presets, client, process, manager, fake_router),
   `db/` (rusqlite + embedded migrations), `documents/` (repo, import plan/run/rescan, render via PDFium,
-  `convert/` HWPX·DOCX·HWP → model → HTML → PDF through a `PdfPrinter`, fixtures).
+  `convert/` HWPX·DOCX·HWP → model → HTML → PDF through a `PdfPrinter`, fixtures),
+  `knowledge/` (tokenize: lindera ko-dic / simple analyzer, chunker: structure-aware chunking, repo, index,
+  embed: sqlite-vec + `Embedder`, search: hybrid RRF, answer: grounded answers / explain / summarize / compare).
+- `crates/doculens-kodic/` — bin that compiles the mecab-ko-dic sources into lindera's dictionary format
+  (driven by `scripts/fetch-kodic.mjs`; descriptors in `assets/`).
 - `src-tauri/` — Tauri shell (`src/commands/{mod,documents}.rs`, `src/state.rs`, `src/engine_bridge.rs`,
-  `src/docs_bridge.rs`, `src/protocol.rs` (`doculens://` page images / print bundles), `src/printer.rs`
+  `src/docs_bridge.rs`, `src/knowledge_bridge.rs` (analyzer lifetime, index/embed jobs, answer streaming),
+  `src/commands/knowledge.rs`, `src/protocol.rs` (`doculens://` page images / print bundles), `src/printer.rs`
   (WebView2 / WebKitGTK print-to-PDF), `src/jobs.rs`), `tauri.conf.json`, capabilities.
 - `src/` — React app: `app/` (layout, providers, hooks), `features/<screen>/`, `components/ui/`, `lib/` (ipc, types, theme, shortcuts, mock backend), `stores/`, `i18n/`, `styles/`.
-- `models/registry.json`, `engines/` (llama.cpp manifest, `pdfium.json`, placement docs), `docs/`, `scripts/`
-  (`fetch-engine.mjs`, `fetch-pdfium.mjs`, `gen-tiny-qwen35.py`), `e2e/`, `.github/workflows/`.
+- `models/registry.json`, `engines/` (llama.cpp manifest, `pdfium.json`, `kodic.json`, placement docs), `docs/`,
+  `scripts/` (`fetch-engine.mjs`, `fetch-pdfium.mjs`, `fetch-kodic.mjs`, `gen-tiny-qwen35.py`), `e2e/`,
+  `.github/workflows/`.
 - Events from Rust to the webview: `engine://status|log|model`, `models://changed`, `jobs://update`,
-  `documents://changed`.
-- Workspace data: `.doculens/workspace.db` (schema in `crates/doculens-core/src/db/schema/`), page cache
-  `.doculens/cache/{pages,thumbs,converted}/<doc_id>/`; DB rows store workspace-relative paths only.
+  `documents://changed`, `knowledge://changed`, `knowledge://answer` (streamed answer deltas).
+- Workspace data: `.doculens/workspace.db` (schema in `crates/doculens-core/src/db/schema/`; knowledge tables
+  `chunks` + FTS5 `chunks_fts`/`chunks_fts_tri`, sqlite-vec `chunks_vec`, `collections`, `doc_versions`, `glossary`,
+  `answers`), page cache `.doculens/cache/{pages,thumbs,converted}/<doc_id>/`; DB rows store workspace-relative
+  paths only.
+- Runtime assets (never committed): PDFium (`scripts/fetch-pdfium.mjs`) and the ko-dic dictionary
+  (`scripts/fetch-kodic.mjs`); both are located via env → bundled resources → `<AppData>/DocuLens/`.

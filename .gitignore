@@ -46,3 +46,7 @@ dist-ssr
 # PDFium binaries placed by scripts/fetch-pdfium.mjs --bundle (never committed)
 src-tauri/resources/pdfium/*
 !src-tauri/resources/pdfium/.gitkeep
+
+# ko-dic dictionary built by scripts/fetch-kodic.mjs --bundle (never committed)
+src-tauri/resources/ko-dic/*
+!src-tauri/resources/ko-dic/.gitkeep

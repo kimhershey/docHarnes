@@ -25,6 +25,8 @@ pub enum JobKind {
     DocumentImport,
     DocumentRescan,
     DocumentRender,
+    KnowledgeIndex,
+    KnowledgeEmbed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

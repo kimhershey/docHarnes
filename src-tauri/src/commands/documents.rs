@@ -24,7 +24,7 @@ pub struct DocumentView {
     pub thumb_url: Option<String>,
 }
 
-fn view(app: &AppHandle, d: DocumentRecord) -> UiResult<DocumentView> {
+pub(crate) fn view(app: &AppHandle, d: DocumentRecord) -> UiResult<DocumentView> {
     let state = app.state::<AppState>();
     let paths = state.with_workspace(|ws| ws.paths.clone())?;
     let version = d.updated_at.timestamp_millis().to_string();

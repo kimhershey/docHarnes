@@ -1,0 +1,16 @@
+{
+  "$comment": "Pinned Korean dictionary source (mecab-ko-dic, Apache-2.0) compiled by crates/doculens-kodic into lindera's binary format and loaded at runtime (DOCULENS_KODIC, resources/ko-dic/ or <AppData>/DocuLens/tokenizers/ko-dic/). Fetch + build with `node scripts/fetch-kodic.mjs`.",
+  "schema_version": 1,
+  "name": "mecab-ko-dic",
+  "version": "2.1.1-20180720",
+  "lindera": "6.2",
+  "license": "Apache-2.0",
+  "source": {
+    "file": "mecab-ko-dic-2.1.1-20180720.tar.gz",
+    "url": "https://bitbucket.org/eunjeon/mecab-ko-dic/downloads/mecab-ko-dic-2.1.1-20180720.tar.gz",
+    "sha256": "fd62d3d6d8fa85145528065fabad4d7cb20f6b2201e71be4081a4e9701a5b330",
+    "md5": "34d036b7061a2d5093f6742fe2e61589",
+    "dir": "mecab-ko-dic-2.1.1-20180720"
+  },
+  "output_files": ["char_def.bin", "dict.trie", "dict.vals", "dict.valsidx", "dict.words", "dict.wordsidx", "matrix.mtx", "metadata.json", "unk.bin", "VERSION.json"]
+}

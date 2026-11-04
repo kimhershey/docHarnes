@@ -34,9 +34,17 @@ const INBOX_RETRY: Duration = Duration::from_secs(4);
 /// How long a workspace switch waits for cancelled document jobs to stop.
 const CANCEL_WAIT: Duration = Duration::from_secs(8);
 const DOC_JOBS: [JobKind; 3] = [JobKind::DocumentImport, JobKind::DocumentRescan, JobKind::DocumentRender];
+/// Everything that touches the workspace DB on a background thread.
+const WORKSPACE_JOBS: [JobKind; 5] = [
+    JobKind::DocumentImport,
+    JobKind::DocumentRescan,
+    JobKind::DocumentRender,
+    JobKind::KnowledgeIndex,
+    JobKind::KnowledgeEmbed,
+];
 
 /// Work chained after a job has been marked finished.
-type AfterJob = Box<dyn FnOnce(&AppHandle) + Send>;
+pub(crate) type AfterJob = Box<dyn FnOnce(&AppHandle) + Send>;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DocumentsChanged {
@@ -190,12 +198,12 @@ pub fn before_workspace_change(app: &AppHandle) {
     if let Ok(mut m) = state.import_plans.lock() {
         m.clear();
     }
-    let cancelled = state.jobs.cancel_kinds(&DOC_JOBS);
+    let cancelled = state.jobs.cancel_kinds(&WORKSPACE_JOBS);
     if cancelled.is_empty() {
         return;
     }
     let deadline = Instant::now() + CANCEL_WAIT;
-    while state.jobs.is_active_kind(&DOC_JOBS) && Instant::now() < deadline {
+    while state.jobs.is_active_kind(&WORKSPACE_JOBS) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(50));
     }
     if state.jobs.is_active_kind(&DOC_JOBS) {
@@ -256,7 +264,7 @@ pub fn set_inbox_watch(app: &AppHandle, enabled: bool) -> UiResult<()> {
 /// Runs a job body on a named thread; a panic inside the body fails the job
 /// instead of leaving it "running" forever. `after` runs once the job has
 /// been marked finished (chained work that must not see this job as active).
-fn spawn_job_thread(
+pub(crate) fn spawn_job_thread(
     name: &str,
     app: AppHandle,
     job: String,
@@ -374,6 +382,7 @@ pub fn import_job(app: &AppHandle, plan: ImportPlan) -> UiResult<String> {
             if source == ImportSource::Inbox || state.inbox_dirty.swap(false, Ordering::SeqCst) {
                 spawn_inbox_scan(app);
             }
+            crate::knowledge_bridge::auto_index(app);
         })),
     );
     Ok(job)
@@ -462,7 +471,12 @@ pub fn rescan_job(app: &AppHandle, then_inbox: bool) -> Option<String> {
                 report.failed.len()
             )))
         },
-        then_inbox.then(|| Box::new(|app: &AppHandle| spawn_inbox_scan(app)) as AfterJob),
+        Some(Box::new(move |app: &AppHandle| {
+            if then_inbox {
+                spawn_inbox_scan(app);
+            }
+            crate::knowledge_bridge::auto_index(app);
+        }) as AfterJob),
     );
     Some(job)
 }
@@ -520,7 +534,7 @@ pub fn rerender_job(app: &AppHandle, ids: Vec<String>, dpi: Option<u16>) -> UiRe
             }
             Ok(Some(format!("rendered {total}")))
         },
-        None,
+        Some(Box::new(|app: &AppHandle| crate::knowledge_bridge::auto_index(app)) as AfterJob),
     );
     Ok(job)
 }

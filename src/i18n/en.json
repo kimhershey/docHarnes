@@ -267,7 +267,9 @@
       "label": "Scope",
       "all": "All",
       "folder": "Current folder",
-      "selection": "Selected documents"
+      "selection": "Selected documents",
+      "knowledge": "Knowledge base",
+      "collection": "Collection: {{name}}"
     },
     "placeholder": "Command or ask in natural language (한국어 / English) · / for slash commands",
     "send": "Send",
@@ -289,7 +291,9 @@
       "/theme dark",
       "switch to Korean",
       "/open models"
-    ]
+    ],
+    "qa_hint": "Ask a question and the assistant answers from the knowledge base with per-sentence sources.",
+    "answering": "Answering…"
   },
   "models": {
     "title": "Model manager",
@@ -485,7 +489,8 @@
       "processing": "Processing",
       "privacy": "Privacy · retention",
       "shortcuts": "Shortcuts",
-      "about": "About"
+      "about": "About",
+      "knowledge": "Knowledge base"
     },
     "general": {
       "language": "Language",
@@ -598,6 +603,23 @@
       "notices": "Open THIRD-PARTY-NOTICES",
       "design_doc": "Design document",
       "font": "Font: Pretendard Variable (OFL-1.1, unmodified file bundled)"
+    },
+    "knowledge": {
+      "title": "Knowledge base",
+      "hint": "Defaults for chunking, indexing, embeddings and grounded answers.",
+      "auto_index": "Index imported documents automatically",
+      "auto_index_hint": "Chunks changed documents after import, rescan and re-render.",
+      "auto_embed": "Generate embeddings automatically",
+      "auto_embed_hint": "Embeds new chunks in the background while the embedding model is loaded.",
+      "embedding_model": "Embedding model",
+      "embedding_default": "Registry default ({{model}})",
+      "latest_only": "Use latest editions only",
+      "latest_only_hint": "Superseded editions in a version group are excluded from search and answers.",
+      "allow_general": "Allow general-knowledge answers when there is no evidence",
+      "allow_general_hint": "Off by default (prevents hallucination). Such answers are labelled 'general knowledge'.",
+      "context_tokens": "Evidence token budget",
+      "top_k": "Evidence chunks",
+      "chunk_target": "Chunk size (tokens)"
     }
   },
   "placeholder": {
@@ -703,7 +725,15 @@
       "nothing_to_import": "Nothing new to import (all duplicates or unsupported).",
       "no_files": "Choose files or type paths.",
       "no_documents": "No documents selected.",
-      "rotation": "Rotation must be a multiple of 90 degrees."
+      "rotation": "Rotation must be a multiple of 90 degrees.",
+      "collection_name_taken": "A collection with that name already exists.",
+      "collection_name_empty": "Enter a collection name.",
+      "glossary_term_empty": "Enter a term.",
+      "version_group_empty": "Enter a version group name.",
+      "no_active_model": "No model is loaded in the engine. Load one on the Models screen and retry.",
+      "embedding_model_not_installed": "The embedding model is not installed. Install it on the Models screen.",
+      "no_text": "This document has no text layer (scans are supported after P4 OCR).",
+      "document_id_required": "Select a document first."
     }
   },
   "startup": {
@@ -732,7 +762,9 @@
       "model_hash": "Hash verification",
       "document_import": "Document import",
       "document_rescan": "Library rescan",
-      "document_render": "Page render"
+      "document_render": "Page render",
+      "knowledge_index": "Knowledge index",
+      "knowledge_embed": "Embeddings"
     },
     "state": {
       "queued": "Queued",
@@ -751,7 +783,10 @@
     "detail": {
       "import_summary": "imported {{imported}} · relinked {{relinked}} · failed {{failed}} · skipped {{skipped}}",
       "rescan_summary": "checked {{checked}} · missing {{missing}} · restored {{restored}} · changed {{changed}} · failed {{failed}}",
-      "rendered": "{{count}} rendered"
+      "rendered": "{{count}} rendered",
+      "index_summary": "indexed {{indexed}} ({{chunks}} chunks) · unchanged {{unchanged}} · no text {{no_text}} · failed {{failed}}",
+      "embed_summary": "embedded {{embedded}} · failed {{failed}} · remaining {{remaining}}",
+      "loading_model": "loading model"
     }
   },
   "library": {
@@ -787,7 +822,8 @@
       "clear_selection": "Clear selection",
       "select_all": "Select all",
       "delete_title": "Delete documents",
-      "open_doc": "Open document"
+      "open_doc": "Open document",
+      "add_to_kb": "Add to knowledge base"
     },
     "columns": {
       "name": "Name",
@@ -813,7 +849,9 @@
     "rescan_running": "A library rescan is already running.",
     "list_label": "Document list",
     "grid_label": "Document cards",
-    "import_existing_hint": "Scans the whole workspace folder (except .doculens) and opens the preview."
+    "import_existing_hint": "Scans the whole workspace folder (except .doculens) and opens the preview.",
+    "role_knowledge": "Knowledge",
+    "kb_added": "Added {{count}} documents to '{{name}}'."
   },
   "documents": {
     "status": {
@@ -947,6 +985,260 @@
     "delete_title": "Delete document",
     "reveal_failed": "Cannot open the original folder: {{message}}",
     "thumb_label": "Go to page {{page}}",
-    "toolbar": "Document tools"
+    "toolbar": "Document tools",
+    "kb_badge": "Knowledge",
+    "collections_label": "Collections",
+    "add_to_kb": "Add to knowledge base",
+    "explain": "Explain",
+    "explain_shortcut": "Ctrl+E",
+    "highlight": "Highlighting: {{q}}",
+    "clear_highlight": "Clear highlight",
+    "qa": {
+      "title": "Ask this document",
+      "placeholder": "e.g. What is the contract amount?",
+      "ask": "Ask",
+      "history": "Answers for this document",
+      "none": "No questions yet.",
+      "scope_doc": "This document",
+      "scope_kb": "Whole knowledge base",
+      "explain_prefix": "Explain: "
+    },
+    "summary": {
+      "title": "Summary",
+      "run": "Summarise",
+      "running": "Summarising…",
+      "none": "No summary yet.",
+      "modes": {
+        "one_line": "One line",
+        "key_points": "Key points",
+        "one_page": "One page"
+      }
+    },
+    "version": {
+      "menu": "Version",
+      "title": "Document version",
+      "group": "Version group (title)",
+      "label": "Edition label (e.g. 2024 revision)",
+      "effective": "Effective date",
+      "latest": "This is the latest edition",
+      "save": "Save",
+      "clear": "Remove from group",
+      "saved": "Version saved."
+    }
+  },
+  "answer": {
+    "sources": "Sources",
+    "no_evidence": "No evidence was found in the knowledge base.",
+    "ask_general": "Answer from general knowledge",
+    "general_badge": "General knowledge",
+    "conflicts": "Conflict",
+    "feedback_helpful": "Helpful",
+    "feedback_wrong": "Wrong",
+    "feedback_saved": "Feedback saved.",
+    "thinking": "Answering…",
+    "open_source": "Open source",
+    "citation_page": "p.{{page}}",
+    "citation_pages": "p.{{from}}-{{to}}",
+    "copy": "Copy",
+    "copied": "Copied.",
+    "meta": "{{model}} · {{ms}}ms",
+    "follow_up_hint": "Follow-up questions keep the same evidence.",
+    "kinds": {
+      "answer": "Answer",
+      "explain": "Explanation",
+      "summary": "Summary",
+      "compare": "Comparison"
+    },
+    "delete": "Delete",
+    "deleted": "Answer deleted."
+  },
+  "search": {
+    "title": "Search",
+    "placeholder": "Search (e.g. travel allowance limit, 123-45-67890)",
+    "run": "Search",
+    "mode": {
+      "label": "Mode",
+      "hybrid": "Hybrid",
+      "keyword": "Keyword",
+      "semantic": "Semantic"
+    },
+    "scope": {
+      "label": "Scope",
+      "all": "All documents",
+      "knowledge": "Knowledge base",
+      "collection": "Collection: {{name}}"
+    },
+    "results": "{{count}} results · {{ms}}ms",
+    "no_results": "No results.",
+    "empty_hint": "Morpheme (particle-aware), substring and semantic search are combined. Two-character queries work too.",
+    "keyword_only": "The embedding model is not loaded, so these are keyword results.",
+    "like_fallback": "Short query not in the indexes — matched by substring in the text.",
+    "semantic_unavailable": "Install and load the embedding model (bge-m3) for semantic search.",
+    "latest_only": "Latest only",
+    "terms": "Terms",
+    "expanded": "Expanded (glossary)",
+    "channel": {
+      "morph": "morpheme",
+      "trigram": "substring",
+      "like": "text",
+      "vector": "semantic"
+    },
+    "open": "Open",
+    "ask": "Ask about this"
+  },
+  "knowledge": {
+    "title": "Knowledge base",
+    "subtitle": "Load regulations, guidelines and past documents and answer with evidence.",
+    "tabs": {
+      "overview": "Overview",
+      "collections": "Collections",
+      "versions": "Versions",
+      "glossary": "Glossary",
+      "test": "Question test",
+      "answers": "Answer log"
+    },
+    "status": {
+      "title": "Index status",
+      "documents": "Documents",
+      "indexed": "Indexed",
+      "pending": "Pending",
+      "no_text": "No text",
+      "failed": "Failed",
+      "chunks": "Chunks",
+      "embedded": "Embedded",
+      "knowledge_docs": "Knowledge docs",
+      "collections": "Collections",
+      "glossary_terms": "Terms",
+      "answers": "Answers",
+      "helpful": "Helpful",
+      "wrong": "Wrong",
+      "index_running": "Indexing",
+      "embed_running": "Embedding"
+    },
+    "tokenizer": {
+      "label": "Tokenizer",
+      "kodic": "ko-dic (lindera)",
+      "simple": "Simple tokenizer",
+      "simple_hint": "The ko-dic dictionary was not found, so the simple tokenizer (words + bigrams) is used. Run node scripts/fetch-kodic.mjs to enable particle stripping and compound splitting."
+    },
+    "embedding": {
+      "label": "Embedding model",
+      "none": "The registry has no embedding model.",
+      "not_installed": "The embedding model ({{model}}) is not installed; keyword search only. Install it on the Models screen.",
+      "not_loaded": "The embedding model ({{model}}) is installed. Run to load it into the engine and embed the chunks.",
+      "ready": "Embedding model ({{model}}) available",
+      "progress": "{{embedded}} / {{total}} chunks embedded",
+      "run": "Run embeddings",
+      "reset": "Reset embeddings",
+      "reset_confirm": "Delete all stored embeddings? They are recomputed on the next run.",
+      "reset_done": "Embeddings reset."
+    },
+    "actions": {
+      "ingest": "Ingest wizard",
+      "index": "Update index",
+      "reindex": "Re-index all",
+      "index_started": "Indexing started.",
+      "index_running": "Indexing is already running.",
+      "embed_started": "Embedding started.",
+      "embed_none": "No chunks to embed."
+    },
+    "collections": {
+      "title": "Collections",
+      "new": "New collection",
+      "edit": "Edit",
+      "name": "Name",
+      "description": "Description",
+      "active": "Active",
+      "inactive": "Inactive",
+      "docs_count": "{{count}} docs",
+      "chunks_count": "{{count}} chunks",
+      "empty": "No collections yet. Use the ingest wizard to add regulations and guidelines.",
+      "delete": "Delete",
+      "delete_confirm": "Delete collection '{{name}}'? Its documents stay in the library.",
+      "save": "Save",
+      "cancel": "Cancel",
+      "docs_title": "Collection documents",
+      "remove_doc": "Remove",
+      "no_docs": "This collection has no documents.",
+      "select": "Select a collection",
+      "none_option": "No collection",
+      "add_title": "Add to knowledge base",
+      "add_hint": "Adds the {{count}} selected documents to a collection and marks them as knowledge documents.",
+      "create_inline": "Create a new collection",
+      "name_placeholder": "e.g. Company regulations",
+      "saved": "Collection saved.",
+      "deleted": "Collection deleted.",
+      "open_doc": "Open document"
+    },
+    "wizard": {
+      "title": "Knowledge ingest wizard",
+      "step_files": "1. Files & folders",
+      "step_collection": "2. Collection & options",
+      "step_preview": "3. Preview",
+      "paths_hint": "Enter file or folder paths one per line, or use the pickers. Folders include their subfolders.",
+      "pick_files": "Pick files",
+      "pick_folder": "Pick folder",
+      "next": "Next",
+      "back": "Back",
+      "start": "Start ingest",
+      "started": "Ingest started. Import → chunking → indexing run in the background.",
+      "collection_label": "Collection",
+      "new_collection_name": "New collection name",
+      "render_label": "Render pages (thumbnails, viewer)",
+      "move_label": "Move originals into the workspace",
+      "preview": "Preview",
+      "previewing": "Checking files…",
+      "summary": "new {{new}} · relink {{relink}} · duplicates {{dup}} · registered {{registered}} · unsupported {{unsupported}}",
+      "nothing": "No new files to ingest (already registered documents are only added to the collection).",
+      "role_hint": "Ingested documents get the 'knowledge' role and serve as evidence for search and answers."
+    },
+    "versions": {
+      "title": "Document versions",
+      "hint": "Group editions of one title; search and answers use the latest edition by default.",
+      "group": "Version group",
+      "label": "Edition",
+      "effective": "Effective date",
+      "latest": "Latest",
+      "superseded": "Superseded",
+      "set_latest": "Make latest",
+      "clear": "Remove from group",
+      "empty": "No version groups yet. Register one from the viewer's 'Version' menu.",
+      "document": "Document",
+      "saved": "Saved."
+    },
+    "glossary": {
+      "title": "Glossary",
+      "hint": "Terms and synonyms expand search queries (e.g. 출장비 ↔ 여비).",
+      "term": "Term",
+      "definition": "Definition",
+      "synonyms": "Synonyms (comma separated)",
+      "add": "Add term",
+      "edit": "Edit",
+      "delete": "Delete",
+      "delete_confirm": "Delete the term '{{term}}'?",
+      "empty": "No terms yet.",
+      "save": "Save",
+      "cancel": "Cancel",
+      "saved": "Term saved.",
+      "deleted": "Term deleted."
+    },
+    "test": {
+      "title": "Question test",
+      "hint": "Shows which evidence a question retrieves (no model call).",
+      "placeholder": "e.g. What is the settlement deadline?",
+      "run": "Search",
+      "none": "No evidence retrieved.",
+      "terms": "Terms",
+      "expanded": "Expanded terms",
+      "channels": "Channels",
+      "elapsed": "{{ms}}ms",
+      "score": "Score"
+    },
+    "answers": {
+      "title": "Answer log",
+      "empty": "No saved answers.",
+      "filter_all": "All",
+      "stats": "helpful {{helpful}} · wrong {{wrong}}"
+    }
   }
 }

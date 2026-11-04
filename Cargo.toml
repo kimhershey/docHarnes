@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/doculens-core", "src-tauri"]
+members = ["crates/doculens-core", "crates/doculens-kodic", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -35,6 +35,12 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 trash = "5"
 hwp = "0.2"
 unicode-normalization = "0.1"
+# Korean morphological analyzer (MIT); the ko-dic dictionary (Apache-2.0) is built by crates/doculens-kodic
+# from the pinned mecab-ko-dic source and loaded at runtime (never downloaded at build time).
+lindera = "6.2"
+lindera-dictionary = "6.2"
+# Vector search inside SQLite (MIT OR Apache-2.0), statically linked into the bundled SQLite.
+sqlite-vec = "0.1.9"
 
 # See https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

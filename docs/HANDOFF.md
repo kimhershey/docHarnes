@@ -19,9 +19,9 @@
 |---|---|---|
 | P0 스캐폴드 | 완료 (`main`) | Tauri 2 셸, 테마 4종, i18n, 설정/워크스페이스, CI |
 | P1 엔진·모델 | **완료 (`main`에 병합, PR #2)** | 아래 "P1 산출물" 참조. 병합 후 CI 엔진 빌드 수정은 `phase/p1-engine` 후속 PR |
-| P2 워크스페이스·문서 | **완료 (`phase/p2-documents`, PR 대기)** | 아래 "P2 산출물" 참조. `phase/p1-engine` 후속 커밋(CI 엔진 빌드) 위에 쌓였으므로 P1 후속 PR → P2 PR 순으로 병합 |
-| P3 지식 베이스 | 다음 | 청킹, lindera FTS5 + trigram, bge-m3 + sqlite-vec, 근거 기반 Q&A |
-| P4 파이프라인 | 대기 | 분류·OCR·KIE, 양식 등록, 검증기, 검토 큐 |
+| P2 워크스페이스·문서 | **완료 (`main`에 병합, PR #3)** | 아래 "P2 산출물" 참조 |
+| P3 지식 베이스 | **완료 (`phase/p3-knowledge`, PR 대기)** | 아래 "P3 산출물" 참조. 청킹, ko-dic FTS5 + trigram + LIKE, bge-m3 + sqlite-vec, 하이브리드 검색, 근거 기반 Q&A·설명·요약·비교 |
+| P4 파이프라인 | 다음 | 분류·OCR·KIE, 양식 등록, 검증기, 검토 큐 |
 | P5 자연어·작업 | 대기(핵심 op만 1차) | 플래너 PlanSchema, 확인 카드, Job 러너, 정리/되돌리기, 내보내기 |
 
 ## P1 산출물
@@ -298,15 +298,96 @@
   가져오기"(라이브러리 빈 상태로 이동), 가져오기 "검토 완료 전 이동 금지"(정리 기능 P5), 변환본 텍스트의 쪽 배분
   (인쇄 PDF에 텍스트 레이어가 없을 때 1쪽에 몰림), 페이지 이미지 프로토콜의 비동기 응답(USB/NAS).
 
-## P3 착수 메모
+## P3 산출물
 
-1. 청킹: `pages.text`(디지털 PDF·변환본) 기반 구조 인지 청킹(제목 경로·조항·표 셀) → `chunks` 테이블(마이그레이션
-   0002), 문서 역할 `knowledge`·컬렉션(`collections`, `collection_docs`).
-2. 색인: lindera + ko-dic(사전 벤더링) FTS5 토크나이저 + trigram 보조 테이블 + 2자 이하 LIKE 폴백; sqlite-vec는
-   임베딩 모델(bge-m3 GGUF, `llama-server --embeddings`, P1 `engine::client::embeddings`) 설치 시 백그라운드 작업.
-3. 적재 마법사·컬렉션·버전·용어집 UI, 검색 화면(하이브리드), 뷰어 Q&A 탭·드래그→설명, 문장별 출처 칩.
-4. P2에서 넘기는 숙제: 페이지 캐시 LRU 정리, 뷰어 썸네일 스트립 가상화(수백 쪽), 가져오기 "예상 소요 시간",
-   TIFF 다중 페이지, `engines/manifest.json`·`models/registry.json` 해시 고정(사용자 PC).
+### Rust 코어 (`crates/doculens-core`)
+
+- `db/schema/0002_knowledge.sql` + `db/mod.rs`: `documents` 색인 컬럼(indexed_at·index_version·index_error·text_hash·chunk_count),
+  `collections`·`collection_docs`·`doc_versions`·`chunks`(rowid 공유)·`chunks_fts`(unicode61, 사전 분석 토큰 열)·
+  `chunks_fts_tri`(trigram, 원문)·트리거 동기화·`glossary`·`answers`. sqlite-vec(`vec0`, cosine)는 `register_extensions()`로
+  자동 확장 등록(정적 링크), `chunks_vec`는 임베딩 차원을 알게 될 때 지연 생성·모델 교체 시 재생성.
+- `knowledge/tokenize.rs`: `Analyzer` — lindera 6.2 + ko-dic(런타임 로드, `DOCULENS_KODIC` → 리소스 `ko-dic/` →
+  `<AppData>/tokenizers/ko-dic/`) 또는 간이 분석기(어절+2음절 바이그램) 폴백. 조사·어미 제거, 활용형 어간 복원(expression),
+  사전 복합어 + 인접 명사 결합형(`사업자등록번호`) + 복합어·미등록어 바이그램(`정산서`→`정산`), 코드 토큰(`1,000,000`→`1000000`,
+  `제 12 조`→`제12조`), 4,000자 창 분할. 질의 측은 같은 분석기(1음절 의존명사·단위명사 제외).
+- `knowledge/chunker.rs`: 구조 인지 청킹 — 장/절/조(괄호 제목+본문 분리)·항(①/(1))·호(1)/1.)·목(가.)·점 번호·마크다운·대괄호
+  제목 인식, 제목 스택 → `heading_path`("제2장 출장비 > 제3조 출장비의 구성")·`clause`("제3조 제2항"), 표 행 그룹(머리행 반복),
+  긴 문단 문장 단위 분할, 목표 500/최대 800/최소 60 토큰(설정 `chunk_target_tokens`), 쪽 범위 기록, 토큰 추정기.
+- `knowledge/repo.rs`: 컬렉션·버전·용어집·청크(트랜잭션 교체, 벡터 정리)·검색 프리미티브(FTS MATCH bm25, LIKE 폴백,
+  범위→문서 집합(컬렉션·문서·역할·폴더·최신본·비활성 컬렉션 제외))·답변 저장/피드백·상태 집계·색인 후보 조회.
+- `knowledge/index.rs`: 페이지 텍스트 해시로 증분 재청킹, 텍스트 없는 문서 처리, 문서별 실패 격리, 상태 대시보드.
+- `knowledge/embed.rs`: `Embedder` 트레이트(`RouterEmbedder` = llama-server `/v1/embeddings`, `HashEmbedder` = 테스트·모의),
+  배치 임베딩(HTTP는 트랜잭션 밖, L2 정규화, 커서로 재시도 무한루프 방지), 모델 변경 감지 → 전체 재생성, 범위 필터 KNN(부족 시 확장).
+- `knowledge/search.rs`: 하이브리드 — 형태소 AND → 부족하면 OR(용어 절반 이상 포함 필터) + trigram OR + (둘 다 0건이면) LIKE
+  폴백 + 벡터 KNN → RRF(k=60, 채널 가중) → 문서당 상한 → 스니펫·하이라이트(문자 오프셋). 용어집 동의어로 질의 확장.
+- `knowledge/answer.rs`: `ChatBackend`(EngineManager 구현, `ScriptedChat` 테스트용), 근거 검색(후속 질문 keep_chunks, 토큰 예산),
+  번호 근거 프롬프트(한/영, thinking off, T=0.1), 스트리밍, 문장 분할 + `[n]` 인용 파싱, "상충:" 단락 추출, 근거 없음 처리
+  (`allow_general` 전까지 모델 호출 없음), 요약(map-reduce)·비교(표) 저장.
+- `documents/import.rs`: `ImportOptions.collection_id` — 배치의 신규·다시 연결·이미 등록·중복 문서를 컬렉션에 붙이고 역할 지정.
+- `settings.rs`: `KnowledgeSettings`(auto_index, auto_embed, embedding_model, latest_only, allow_general_knowledge,
+  context_tokens, top_k, chunk_target_tokens).
+- `crates/doculens-kodic`: mecab-ko-dic 원본 → lindera 바이너리 사전 빌더(`build`/`check`), 사전 디스크립터 벤더링.
+- 테스트: 토크나이저(간이·ko-dic), 청킹(규정·표·긴 문단·제목 규칙), 저장소 CRUD, 증분 색인, 합성 골든셋 15문항
+  (재현율@10·top-1 조항), 조사/2자/숫자 질의, 용어집 확장, 범위·버전·컬렉션, 임베딩·KNN·모델 교체·삭제 정리, 답변·설명·후속·
+  근거 없음·요약·비교.
+
+### Tauri 셸 (`src-tauri`)
+
+- `knowledge_bridge.rs`: 분석기 `OnceLock`(리소스/AppData 후보), `KnowledgeContext`(세대 검사), 임베딩 모델 상태
+  (레지스트리 `default_embedding`/설정 → 설치·로드 여부), `index_job`(진행 중이면 dirty 표시 후 재실행, 끝나면 auto_embed),
+  `embed_job`(사용자 실행 시 엔진 기동·모델 로드, 자동 실행은 로드된 모델만), 가져오기·재검사·재렌더 후 `auto_index`,
+  답변 스트리밍(`knowledge://answer {request_id, delta, done}`), `knowledge://changed {kind, ids}`.
+- `commands/knowledge.rs`: 24개 명령(status/collections CRUD·문서 추가·역할/index/embed/reset/search/chunks/answer/answers·
+  feedback·delete/glossary/versions). `docs_bridge`: 워크스페이스 전환 시 지식 작업도 취소·대기, 작업 종류
+  `knowledge_index`·`knowledge_embed`.
+- `tauri.conf.json` 리소스 `ko-dic/`, `.gitignore`, CI(ko-dic 빌드 캐시 + `DOCULENS_KODIC`, Linux·Windows).
+
+### 프런트엔드
+
+- 지식 베이스 화면: 개요(색인 통계, 형태소 분석기/임베딩 카드, 색인 갱신·전체 재색인·임베딩 실행·초기화), 적재 마법사
+  (파일·폴더 → 컬렉션·옵션 → 미리보기 → 실행; `role=knowledge`, `collection_id`), 컬렉션(생성·편집·활성·삭제·문서 목록·제거),
+  버전 그룹(최신본 지정·해제), 용어집(용어·동의어·정의), 질문 테스트(검색 근거·토큰·채널), 답변 기록(피드백·삭제).
+- 검색 화면: 방식(하이브리드/키워드/의미)·범위(전체/지식 베이스/컬렉션)·최신본만, 결과(제목·쪽·조항·제목 경로·채널 배지·
+  하이라이트 스니펫), 키워드 전용/LIKE 폴백 안내, 열기(뷰어 `?page&q&chunk`)·이 결과로 질문.
+- 어시스턴트: 프리라우터 미매칭 입력은 지식 베이스 Q&A(범위 선택, 후속 질문은 직전 근거 유지), `AnswerCard`(문장별 출처 칩 →
+  뷰어 쪽 이동, 근거 없음 배너 + "일반 지식으로 답하기", 상충 단락, 피드백·복사), 스트리밍 표시.
+- 뷰어: 지식 배지(컬렉션), "지식 베이스에 추가"·"버전"·"설명(Ctrl+E)" 버튼, 텍스트 탭 검색어 하이라이트(`?q=`), Q&A 탭
+  (이 문서/전체 범위 질문, 설명, 요약 모드 3종, 문서별 답변 기록). 라이브러리: 일괄 "지식 베이스에 추가", 지식 역할 배지.
+- 설정 > 지식 베이스 탭. 작업 화면: `knowledge_index`/`knowledge_embed` 종류·요약 번역. 오류 사유 번역 8종.
+- 모의 백엔드 `mock-knowledge.ts`(문단 청킹, 부분 문자열 검색, 스트리밍 정답 생성, 색인/임베딩 작업 시뮬레이션,
+  `doculens.mock.embedding=1`로 임베딩 모델 설치 상태). Playwright `knowledge.spec.ts` 3건, P0 어시스턴트 테스트는 Q&A 흐름으로 갱신.
+
+### 테스트·검증
+
+| 항목 | 결과 |
+|---|---|
+| `cargo test --workspace` (ko-dic + PDFium) | 코어 lib 117 통과(+1 ignored), 엔진 프로세스·real_engine 통과 |
+| 합성 골든셋 15문항 | ko-dic: 재현율@10 15/15, top-1 조항 ≥ 75% · 간이 분석기: 14/15, 14/15 |
+| `cargo clippy --workspace --all-targets -D warnings`, `cargo fmt --check` | 통과 |
+| vitest / Playwright | 27 / 17 통과 |
+| `npm run licenses:check`, `cargo deny check licenses bans sources` | 통과 (lindera MIT, mecab-ko-dic Apache-2.0, sqlite-vec MIT/Apache) |
+| ko-dic 빌드 | `scripts/fetch-kodic.mjs`: 다운로드(sha256 핀) → 빌드 5초 → 82 MB, 재실행 시 건너뜀 |
+| 헤드리스 실행(Linux) | 아래 "헤드리스 검증" 참조 |
+
+### 설계 대비 범위 메모
+
+- 형태소 토크나이저는 FTS5 사용자 토크나이저(C API) 대신 **사전 분석 토큰 열** 방식(`chunks.tokens` + unicode61)으로 구현 —
+  동일 분석기를 색인·질의에 쓰므로 기능은 같고 C FFI가 없다. 하이라이트는 원문에서 표면형을 찾아 계산.
+- 사전은 저장소에 벤더링하지 않고(82 MB) PDFium처럼 스크립트로 빌드·설치한다(설계의 `<AppData>/tokenizers/`).
+  lindera의 `embed-ko-dic`은 빌드 시 lindera.dev에서 내려받는데 이 환경에서 차단되어 bitbucket 원본(sha256 핀)을 쓴다.
+- 리랭커는 미도입(설계 §3.14.2 "RRF 상위" 경로). 컬렉션 폴더 감시(`watch_folder` 열만 예약)·질의 확장의 형태소 동의어
+  자동 생성은 미구현. 답변 피드백 통계는 개요·답변 기록에 표시(품질 루프의 골든셋 평가는 사용자 PC).
+- 어시스턴트의 작업 명령(정리·추출 등)은 아직 Q&A로 흐른다 — P5 플래너가 op로 분기할 때까지.
+- P2에서 넘긴 숙제 중 미해결: 페이지 캐시 LRU, 가져오기 예상 소요 시간, TIFF 다중 페이지, 해시 고정(사용자 PC).
+
+## P4 착수 메모
+
+1. 분류·OCR·KIE 호출기(프롬프트 프로파일, 이미지 토큰 정책 §3.4) — `engine::client` 이미지 메시지·json_schema 사용,
+   `pages.text`가 비어 있는 스캔 문서의 OCR 결과를 `pages.text`에 기록하면 P3 색인(`index_pending`)이 그대로 청킹한다
+   (`documents.updated_at` 갱신 → 색인 후보).
+2. 양식 등록(필드 도출→확인), 스키마 6종 + NL 생성, 검증기(사업자번호 체크섬·합계식·마스킹), 신뢰도·검토 큐, 추출 미러.
+3. P3 숙제: 컬렉션 폴더 감시(`DirWatcher` 재사용), 임베딩 모델 미설치 안내에서 모델 화면으로 바로 이동, 답변 저장을
+   메모/문서로 내보내기(P5 내보내기와 함께), 검색 결과 그룹(문서 단위) 보기.
 
 ## 알려진 제약
 
@@ -321,3 +402,7 @@
   검증했고 Windows 경로는 컴파일·clippy 검사(교차 타깃 + CI)만 거침(`docs/user-pc-checklist.md` P2 항목). 숨은 창에서
   `PrintToPdf`가 완료되는지, 실패한 내비게이션(오류 페이지)이 인쇄되지 않는지는 사용자 PC에서 확인.
 - 이 환경에는 한글 글꼴이 제한적이라 변환본 렌더 품질(글꼴 대체)은 사용자 PC에서 확인.
+- 실제 bge-m3·Qwen3.5 모델을 받을 수 없어 임베딩·답변 생성은 해시 임베더·대본 모델(테스트)과 모의 라우터로만 검증했다
+  (경로·스트리밍·인용 파싱). 실제 검색 품질(재현율·인용 정확도)과 답변 품질은 사용자 PC 골든셋 항목
+  (`docs/user-pc-checklist.md` P3).
+- lindera.dev 차단으로 ko-dic 원본은 bitbucket에서 받는다(sha256 핀). CI는 빌드 결과를 캐시한다.

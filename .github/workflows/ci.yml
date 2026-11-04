@@ -35,11 +35,24 @@ jobs:
       - name: Fetch PDFium (bblanchon/pdfium-binaries, sha256 pinned)
         if: steps.pdfium-cache.outputs.cache-hit != 'true'
         run: node scripts/fetch-pdfium.mjs --dest /tmp/pdfium
+      - name: Resolve the pinned ko-dic dictionary
+        id: kodic
+        run: echo "ver=$(node -p "require('./engines/kodic.json').version")-lindera$(node -p "require('./engines/kodic.json').lindera")" >> "$GITHUB_OUTPUT"
+      - name: Cache the built ko-dic dictionary
+        id: kodic-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/kodic
+          key: kodic-${{ steps.kodic.outputs.ver }}-v1
+      - name: Build ko-dic (mecab-ko-dic, sha256 pinned → lindera format)
+        if: steps.kodic-cache.outputs.cache-hit != 'true'
+        run: node scripts/fetch-kodic.mjs --dest /tmp/kodic
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
         env:
           DOCULENS_PDFIUM: /tmp/pdfium/libpdfium.so
+          DOCULENS_KODIC: /tmp/kodic
 
   web:
     name: Web (typecheck, unit, build, e2e)
@@ -132,7 +145,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Fetch PDFium (Windows build, sha256 pinned)
         run: node scripts/fetch-pdfium.mjs --dest "$env:RUNNER_TEMP\pdfium"
+      - name: Resolve the pinned ko-dic dictionary
+        id: kodic
+        shell: bash
+        run: echo "ver=$(node -p "require('./engines/kodic.json').version")-lindera$(node -p "require('./engines/kodic.json').lindera")" >> "$GITHUB_OUTPUT"
+      - name: Cache the built ko-dic dictionary
+        id: kodic-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\kodic
+          key: kodic-windows-${{ steps.kodic.outputs.ver }}-v1
+      - name: Build ko-dic (Windows)
+        if: steps.kodic-cache.outputs.cache-hit != 'true'
+        run: node scripts/fetch-kodic.mjs --dest "$env:RUNNER_TEMP\kodic"
       - run: cargo check --workspace
       - run: cargo test -p doculens-core
         env:
           DOCULENS_PDFIUM: ${{ runner.temp }}\pdfium\pdfium.dll
+          DOCULENS_KODIC: ${{ runner.temp }}\kodic

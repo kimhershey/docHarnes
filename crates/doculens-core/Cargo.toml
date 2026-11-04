@@ -34,6 +34,8 @@ image.workspace = true
 trash.workspace = true
 hwp.workspace = true
 unicode-normalization.workspace = true
+lindera.workspace = true
+sqlite-vec.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

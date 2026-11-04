@@ -89,7 +89,8 @@ test.describe("P0 shell", () => {
     await page.getByTestId("home-command").fill("지난달 영수증 합계");
     await page.getByTestId("home-command-send").click();
     await expect(page.getByTestId("page-assistant")).toBeVisible();
-    await expect(page.getByTestId("assistant-card-pending")).toContainText("last_month");
+    // Work items are answered from the knowledge base (P3); the planner (P5) will route them as ops.
+    await expect(page.locator('[data-testid="assistant-card-answer"] [data-testid="answer-card"]').first()).toHaveAttribute("data-answer-state", "no_evidence", { timeout: 15_000 });
     await page.getByTestId("assistant-input").fill("/언어 영어");
     await page.getByTestId("assistant-send").click();
     await expect(page.getByTestId("assistant-card-executed")).toBeVisible();

@@ -14,7 +14,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { isTauri, openExternal, revealPath } from "@/lib/ipc";
-import { useAppInfo } from "@/lib/queries";
+import { useAppInfo, useRegistry } from "@/lib/queries";
 import { LANGUAGES, RETENTION_DAY_ITEMS, THEMES, type AutoProcessingLevel, type ReducedMotion, type RetentionPolicy } from "@/lib/types";
 import { describeError } from "@/lib/errors";
 import { cn, formatDate } from "@/lib/utils";
@@ -23,7 +23,7 @@ import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
 
-const TABS = ["general", "theme", "workspace", "processing", "privacy", "shortcuts", "about"] as const;
+const TABS = ["general", "theme", "workspace", "processing", "knowledge", "privacy", "shortcuts", "about"] as const;
 
 function Row({ label, hint, children, htmlFor }: { label: string; hint?: string; children: React.ReactNode; htmlFor?: string }) {
   return (
@@ -63,6 +63,9 @@ export function SettingsPage() {
         </TabsContent>
         <TabsContent value="processing">
           <ProcessingTab />
+        </TabsContent>
+        <TabsContent value="knowledge">
+          <KnowledgeTab />
         </TabsContent>
         <TabsContent value="privacy">
           <PrivacyTab />
@@ -353,6 +356,74 @@ function ProcessingTab() {
           <Input id="cache-gb" type="number" min={0.5} max={1000} step={0.5} className="w-28" defaultValue={settings.cache.page_cache_max_gb} onBlur={(e) => void update((s) => void (s.cache.page_cache_max_gb = Number(e.target.value) || 5))} />
           <span className="text-sm text-fg-muted">GB</span>
         </Row>
+      </CardContent>
+    </Card>
+  );
+}
+
+function KnowledgeTab() {
+  const { t } = useTranslation();
+  const settings = useSettingsStore((s) => s.settings)!;
+  const update = useSettingsStore((s) => s.update);
+  const { data: registry } = useRegistry();
+  const k = settings.knowledge;
+  const embeddings = (registry?.models ?? []).filter((m) => m.role === "embedding");
+  const DEFAULT = "__default__";
+  const numberRow = (key: "context_tokens" | "top_k" | "chunk_target_tokens", label: string, min: number, max: number, step: number) => (
+    <Row label={label} htmlFor={`kb-${key}`}>
+      <Input
+        id={`kb-${key}`}
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={k[key]}
+        onChange={(e) => {
+          const v = Number(e.target.value);
+          if (Number.isFinite(v)) void update((s) => void (s.knowledge[key] = Math.min(max, Math.max(min, Math.round(v)))));
+        }}
+        className="w-32"
+        data-testid={`kb-${key}`}
+      />
+    </Row>
+  );
+  return (
+    <Card data-testid="settings-knowledge">
+      <CardHeader>
+        <CardTitle>{t("settings.knowledge.title")}</CardTitle>
+        <CardDescription>{t("settings.knowledge.hint")}</CardDescription>
+      </CardHeader>
+      <CardContent className="divide-y divide-border">
+        <Row label={t("settings.knowledge.auto_index")} hint={t("settings.knowledge.auto_index_hint")}>
+          <Switch checked={k.auto_index} onCheckedChange={(v) => void update((s) => void (s.knowledge.auto_index = v))} data-testid="kb-auto-index" />
+        </Row>
+        <Row label={t("settings.knowledge.auto_embed")} hint={t("settings.knowledge.auto_embed_hint")}>
+          <Switch checked={k.auto_embed} onCheckedChange={(v) => void update((s) => void (s.knowledge.auto_embed = v))} />
+        </Row>
+        <Row label={t("settings.knowledge.embedding_model")}>
+          <Select value={k.embedding_model ?? DEFAULT} onValueChange={(v) => void update((s) => void (s.knowledge.embedding_model = v === DEFAULT ? null : v))}>
+            <SelectTrigger className="w-72" aria-label={t("settings.knowledge.embedding_model")}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={DEFAULT}>{t("settings.knowledge.embedding_default", { model: registry?.default_embedding ?? "-" })}</SelectItem>
+              {embeddings.map((m) => (
+                <SelectItem key={m.id} value={m.id}>
+                  {m.display}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Row>
+        <Row label={t("settings.knowledge.latest_only")} hint={t("settings.knowledge.latest_only_hint")}>
+          <Switch checked={k.latest_only} onCheckedChange={(v) => void update((s) => void (s.knowledge.latest_only = v))} />
+        </Row>
+        <Row label={t("settings.knowledge.allow_general")} hint={t("settings.knowledge.allow_general_hint")}>
+          <Switch checked={k.allow_general_knowledge} onCheckedChange={(v) => void update((s) => void (s.knowledge.allow_general_knowledge = v))} data-testid="kb-allow-general" />
+        </Row>
+        {numberRow("context_tokens", t("settings.knowledge.context_tokens"), 1000, 24000, 500)}
+        {numberRow("top_k", t("settings.knowledge.top_k"), 1, 20, 1)}
+        {numberRow("chunk_target_tokens", t("settings.knowledge.chunk_target"), 120, 2000, 20)}
       </CardContent>
     </Card>
   );

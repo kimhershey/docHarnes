@@ -33,5 +33,10 @@ export function describeJobDetail(job: Job, t: TFunction): string | null {
   if (m) return t("jobs.detail.import_summary", { imported: Number(m[1]), relinked: 0, failed: 0, skipped: Number(m[2]) });
   m = d.match(/^checked (\d+)$/);
   if (m) return t("jobs.detail.rescan_summary", { checked: Number(m[1]), missing: 0, restored: 0, changed: 0, failed: 0 });
+  m = d.match(/^indexed (\d+) \((\d+) chunks\) \/ unchanged (\d+) \/ no text (\d+) \/ failed (\d+)$/);
+  if (m) return t("jobs.detail.index_summary", { indexed: Number(m[1]), chunks: Number(m[2]), unchanged: Number(m[3]), no_text: Number(m[4]), failed: Number(m[5]) });
+  m = d.match(/^embedded (\d+) \/ failed (\d+) \/ remaining (\d+)/);
+  if (m) return t("jobs.detail.embed_summary", { embedded: Number(m[1]), failed: Number(m[2]), remaining: Number(m[3]) });
+  if (d === "loading model") return t("jobs.detail.loading_model");
   return d;
 }

@@ -19,6 +19,11 @@ or vendor-modify an MPL dependency (currently: `lightningcss` through Tailwind;
 through `dirs`). The OpenSSL license (allowed in `deny.toml`) only reaches the
 Linux CI build via `native-tls`; Windows uses schannel.
 
+Data / dictionaries: mecab-ko-dic (Apache-2.0) is compiled into lindera's binary
+format by `scripts/fetch-kodic.mjs` and shipped with its `COPYING` + `NOTICE`
+(no source obligation; attribution only). Kiwi's `kiwi-rs` binding stays denied
+(LGPL) — see the design BOM.
+
 Proprietary but documented exceptions (binary redistribution, no source
 obligation): NVIDIA CUDA runtime DLLs (optional CUDA pack; EULA conditions —
 app-private directory, no system PATH), Microsoft WebView2 Runtime installer

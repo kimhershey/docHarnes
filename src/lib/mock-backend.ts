@@ -65,7 +65,7 @@ const WORKSPACES_KEY = "doculens.mock.workspaces";
 const MODELS_KEY = "doculens.mock.models";
 
 /** Speed-up factor for simulated work (Playwright sets `doculens.mock.fast`). */
-function tick(ms: number): number {
+export function tick(ms: number): number {
   try {
     return localStorage.getItem("doculens.mock.fast") ? Math.max(5, ms / 10) : ms;
   } catch {
@@ -145,6 +145,7 @@ export function defaultSettings(): AppSettings {
     cache: { page_cache_max_gb: 5, keep_thumbnails: true },
     privacy: { pii_masking: true, db_encryption: false },
     notifications: { job_complete: true, prevent_sleep_during_jobs: false },
+    knowledge: { auto_index: true, auto_embed: true, embedding_model: null, latest_only: true, allow_general_knowledge: false, context_tokens: 6000, top_k: 8, chunk_target_tokens: 500 },
     shortcuts: defaultShortcuts(),
     window: { width: 1280, height: 800, maximized: false, x: null, y: null },
   };
@@ -179,6 +180,7 @@ function loadSettings(): AppSettings {
     cache: { ...d.cache, ...(stored.cache ?? {}) },
     privacy: { ...d.privacy, ...(stored.privacy ?? {}) },
     notifications: { ...d.notifications, ...(stored.notifications ?? {}) },
+    knowledge: { ...d.knowledge, ...(stored.knowledge ?? {}) },
     shortcuts: { ...d.shortcuts, ...(stored.shortcuts ?? {}) },
     window: { ...d.window, ...(stored.window ?? {}) },
   };
@@ -206,7 +208,17 @@ function saveWorkspaces(list: MockWorkspace[]): void {
 let current: MockWorkspace | null = null;
 let startupResolved = false;
 
-function err(code: string, message: string, detail?: Record<string, unknown>): UiError {
+/** Path of the open mock workspace (null when none). */
+export function currentWorkspacePath(): string | null {
+  return current?.path ?? null;
+}
+
+/** True when a job was cancelled from the UI (shared with the knowledge mock). */
+export function isCancelled(jobId: string): boolean {
+  return cancelled.has(jobId);
+}
+
+export function err(code: string, message: string, detail?: Record<string, unknown>): UiError {
   return { code, message, detail };
 }
 
@@ -304,7 +316,7 @@ export function mockSubscribe<T>(event: string, handler: (payload: T) => void): 
   };
 }
 
-function emit(event: string, payload: unknown): void {
+export function emit(event: string, payload: unknown): void {
   const set = listeners.get(event);
   if (!set) return;
   for (const h of Array.from(set)) {
@@ -576,7 +588,7 @@ function assess(): Assessment {
 let jobs: Job[] = [];
 const cancelled = new Set<string>();
 
-function createJob(kind: JobKind, subject: string): Job {
+export function createJob(kind: JobKind, subject: string): Job {
   const now = new Date().toISOString();
   const job: Job = {
     id: crypto.randomUUID().replace(/-/g, ""),
@@ -598,12 +610,12 @@ function createJob(kind: JobKind, subject: string): Job {
   return job;
 }
 
-function updateJob(id: string, patch: Partial<Job>): void {
+export function updateJob(id: string, patch: Partial<Job>): void {
   jobs = jobs.map((j) => (j.id === id ? { ...j, ...patch, state: patch.state ?? (j.state === "queued" ? "running" : j.state), updated_at: new Date().toISOString() } : j));
   emit(EVENTS.jobsUpdate, jobs);
 }
 
-function finishJob(id: string, result: { ok: true; detail?: string } | { ok: false; error: string }): void {
+export function finishJob(id: string, result: { ok: true; detail?: string } | { ok: false; error: string }): void {
   const wasCancelled = cancelled.has(id);
   cancelled.delete(id);
   updateJob(id, {
@@ -616,7 +628,7 @@ function finishJob(id: string, result: { ok: true; detail?: string } | { ok: fal
 }
 
 /** Runs `steps` ticks of simulated work; resolves false when cancelled. */
-function simulate(jobId: string, steps: number, stepMs: number, onTick: (i: number) => void): Promise<boolean> {
+export function simulate(jobId: string, steps: number, stepMs: number, onTick: (i: number) => void): Promise<boolean> {
   return new Promise((resolve) => {
     let i = 0;
     const run = () => {
@@ -1083,7 +1095,7 @@ const MOCK_DEVICES: EngineDevice[] = [{ name: "CUDA0", description: "NVIDIA GeFo
 
 const DOCS_KEY = "doculens.mock.documents";
 
-interface MockPage {
+export interface MockPage {
   page_no: number;
   width_px: number;
   height_px: number;
@@ -1093,20 +1105,20 @@ interface MockPage {
   rendered_at: string;
 }
 
-interface MockDoc extends DocumentRecord {
+export interface MockDoc extends DocumentRecord {
   workspace: string;
   pages: MockPage[];
 }
 
-function loadDocs(): MockDoc[] {
+export function loadDocs(): MockDoc[] {
   return read<MockDoc[]>(DOCS_KEY, []);
 }
 
-function saveDocs(list: MockDoc[]): void {
+export function saveDocs(list: MockDoc[]): void {
   write(DOCS_KEY, list);
 }
 
-function wsDocs(): MockDoc[] {
+export function wsDocs(): MockDoc[] {
   const ws = current?.path;
   return loadDocs().filter((d) => d.workspace === ws && !d.deleted_at);
 }
@@ -1158,7 +1170,7 @@ function svgPage(title: string, pageNo: number, w: number, h: number, thumb: boo
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
-function docView(d: MockDoc): DocumentView {
+export function docView(d: MockDoc): DocumentView {
   const { workspace, pages, ...record } = d;
   const first = pages[0];
   const s = sep(workspace);
@@ -1320,7 +1332,7 @@ function renderDocPages(d: MockDoc, dpi: number): void {
   d.updated_at = now;
 }
 
-function upsertDoc(doc: MockDoc): void {
+export function upsertDoc(doc: MockDoc): void {
   const all = loadDocs().filter((d) => d.id !== doc.id);
   all.push(doc);
   saveDocs(all);
@@ -1403,6 +1415,12 @@ async function runDocumentImport(plan: DocumentImportPlan): Promise<string> {
     if (ids.length > 0) emit(EVENTS.documentsChanged, { kind: "batch", ids } satisfies DocumentsChanged);
     if (cancelled.has(job.id)) finishJob(job.id, { ok: false, error: "cancelled" });
     else finishJob(job.id, { ok: true, detail: `imported ${ids.length} / skipped ${plan.duplicate_count + plan.unsupported_count}` });
+    const kb = await import("./mock-knowledge");
+    if (plan.options.collection_id) {
+      const touched = [...ids, ...plan.items.flatMap((i) => (i.status.kind === "already_registered" ? [i.status.id] : i.status.kind === "duplicate" ? [i.status.of] : []))];
+      kb.attachToCollection(plan.options.collection_id, touched, plan.options.role);
+    }
+    kb.autoIndex();
   })();
   return job.id;
 }
@@ -1817,6 +1835,34 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "documents_set_inbox_watch":
     case "documents_pdfium_info":
       return r(await mockDocuments(cmd, a));
+    case "knowledge_status":
+    case "knowledge_collections":
+    case "knowledge_collection_save":
+    case "knowledge_collection_delete":
+    case "knowledge_collection_docs":
+    case "knowledge_collection_add":
+    case "knowledge_collection_remove":
+    case "knowledge_document_collections":
+    case "knowledge_set_role":
+    case "knowledge_index":
+    case "knowledge_embed":
+    case "knowledge_reset_embeddings":
+    case "knowledge_search":
+    case "knowledge_chunks":
+    case "knowledge_answer":
+    case "knowledge_answers":
+    case "knowledge_answer_feedback":
+    case "knowledge_answer_delete":
+    case "knowledge_glossary":
+    case "knowledge_glossary_save":
+    case "knowledge_glossary_delete":
+    case "knowledge_versions":
+    case "knowledge_version_set":
+    case "knowledge_version_clear": {
+      if (!current) throw err("no_workspace", "no workspace is open");
+      const kb = await import("./mock-knowledge");
+      return r(await kb.mockKnowledge(cmd, a));
+    }
     case "prerouter_route":
       return r(mockRoute(String(a.text)));
     case "prerouter_resolve_date":
@@ -1832,6 +1878,7 @@ export function resetMock(): void {
   localStorage.removeItem(WORKSPACES_KEY);
   localStorage.removeItem(MODELS_KEY);
   localStorage.removeItem(DOCS_KEY);
+  localStorage.removeItem("doculens.mock.knowledge");
   importPlans.clear();
   current = null;
   startupResolved = false;
