@@ -193,6 +193,14 @@ pub struct ModelSettings {
     pub sleep_idle_seconds: u32,
     /// Online downloads are only offered when the OS reports connectivity.
     pub allow_online_download: bool,
+    /// Start the llama-server sidecar automatically when a workspace opens.
+    pub auto_start_engine: bool,
+    /// Send a one-token warm-up request after a model loads (Turing JIT, §3.3.1).
+    pub warmup_after_load: bool,
+    /// "Audit mode": run the vision encoder on the CPU (`mmproj-offload = false`).
+    pub vision_on_cpu: bool,
+    /// Explicit `llama-server` binary instead of the installed packs.
+    pub engine_binary: Option<PathBuf>,
 }
 
 impl Default for ModelSettings {
@@ -206,6 +214,10 @@ impl Default for ModelSettings {
             resident_models_max: 2,
             sleep_idle_seconds: 900,
             allow_online_download: true,
+            auto_start_engine: true,
+            warmup_after_load: true,
+            vision_on_cpu: false,
+            engine_binary: None,
         }
     }
 }

@@ -1,12 +1,12 @@
 //! Model registry (`models/registry.json`, design §3.3.4 / §2.6).
 //!
-//! The built-in registry is embedded at compile time; a workspace can add
-//! drop-in models (phase 1) which are merged on top. `tier_defaults` maps a
+//! The built-in registry is embedded at compile time; drop-in models found in
+//! a workspace (`modelstore`) are merged on top with `user_added = true`. `tier_defaults` maps a
 //! hardware tier to a model id or to `auto:<family-size>` which resolves via
 //! the adaptive quantisation rules (decision 5).
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -214,42 +214,6 @@ impl Registry {
     }
 }
 
-/// Installation state of a model inside a workspace models directory.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InstallState {
-    pub installed: bool,
-    /// Folder that holds the files (drop-in folders may have any name).
-    pub folder: Option<PathBuf>,
-    pub missing_files: Vec<String>,
-}
-
-/// Phase-0 check: a model counts as installed when every registry file name
-/// exists in `<models_dir>/<model id>/` or in any immediate sub-folder.
-/// When nothing is installed, `folder` is the install target
-/// (`<models_dir>/<model id>/`) and `missing_files` is computed against it.
-/// Phase 1 replaces name matching with GGUF-header + hash verification.
-pub fn install_state(models_dir: &Path, model: &ModelEntry) -> InstallState {
-    let target = models_dir.join(&model.id);
-    let mut candidates = vec![target.clone()];
-    if let Ok(rd) = std::fs::read_dir(models_dir) {
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.is_dir() && !candidates.contains(&p) {
-                candidates.push(p);
-            }
-        }
-    }
-    let missing_in = |dir: &Path| -> Vec<String> {
-        model.files.iter().filter(|f| !dir.join(&f.name).is_file()).map(|f| f.name.clone()).collect()
-    };
-    for dir in &candidates {
-        if missing_in(dir).is_empty() {
-            return InstallState { installed: true, folder: Some(dir.clone()), missing_files: Vec::new() };
-        }
-    }
-    InstallState { installed: false, missing_files: missing_in(&target), folder: Some(target) }
-}
-
 /// Text for "필요 파일 목록 내보내기" (design §3.3.4): file name, size, SHA-256 and URL
 /// so the files can be fetched on another PC and carried over by USB.
 pub fn required_files_text(model: &ModelEntry, target_folder: &Path) -> String {
@@ -300,29 +264,6 @@ mod tests {
         assert_eq!(r.default_model_for(Tier::Vram24gbPlus, Some(23_000)).unwrap().id, "qwen3.5-27b-q4km");
         assert_eq!(r.resolve("qwen3-vl-4b-q4km", None).unwrap().family, "qwen3-vl");
         assert!(r.resolve("auto:nope", None).is_none());
-    }
-
-    #[test]
-    fn install_state_matches_files_in_any_folder() {
-        let r = Registry::builtin();
-        let m = r.get("qwen3.5-4b-q4km").unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let s = install_state(dir.path(), m);
-        assert!(!s.installed);
-        assert_eq!(s.missing_files.len(), 2);
-
-        let custom = dir.path().join("my-custom-folder");
-        std::fs::create_dir_all(&custom).unwrap();
-        std::fs::write(custom.join("Qwen3.5-4B-Q4_K_M.gguf"), b"x").unwrap();
-        let s = install_state(dir.path(), m);
-        assert!(!s.installed);
-        // not installed -> the install target is reported, never a partial foreign folder
-        assert_eq!(s.folder, Some(dir.path().join("qwen3.5-4b-q4km")));
-        assert_eq!(s.missing_files.len(), 2);
-        std::fs::write(custom.join("mmproj-F16.gguf"), b"x").unwrap();
-        let s = install_state(dir.path(), m);
-        assert!(s.installed);
-        assert_eq!(s.folder, Some(custom));
     }
 
     #[test]

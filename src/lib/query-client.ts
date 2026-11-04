@@ -11,4 +11,6 @@ export const queryKeys = {
   hardware: ["hardware"] as const,
   assessment: ["assessment"] as const,
   registry: ["registry"] as const,
+  modelIndex: ["model-index"] as const,
+  engineBinary: ["engine-binary"] as const,
 };

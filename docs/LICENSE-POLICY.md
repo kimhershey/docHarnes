@@ -14,7 +14,10 @@ CDLA-Permissive-2.0 (datasets), Python-2.0 / PSF-2.0 (eval tooling).
 
 **MPL-2.0: only unmodified** (design decision 10). The file-level copyleft is
 never triggered as long as the MPL files are shipped as received. Never patch
-or vendor-modify an MPL dependency (currently: `lightningcss` through Tailwind).
+or vendor-modify an MPL dependency (currently: `lightningcss` through Tailwind;
+`selectors`, `cssparser`, `dtoa-short` through `tauri-utils`; `option-ext`
+through `dirs`). The OpenSSL license (allowed in `deny.toml`) only reaches the
+Linux CI build via `native-tls`; Windows uses schannel.
 
 Proprietary but documented exceptions (binary redistribution, no source
 obligation): NVIDIA CUDA runtime DLLs (optional CUDA pack; EULA conditions —

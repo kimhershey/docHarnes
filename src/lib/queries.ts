@@ -18,3 +18,11 @@ export function useAssessment() {
 export function useRegistry() {
   return useQuery({ queryKey: queryKeys.registry, queryFn: () => api.registryList() });
 }
+
+export function useModelIndex() {
+  return useQuery({ queryKey: queryKeys.modelIndex, queryFn: () => api.modelsList() });
+}
+
+export function useEngineBinaryInfo(enabled = true) {
+  return useQuery({ queryKey: queryKeys.engineBinary, queryFn: () => api.engineBinaryInfo(), enabled, staleTime: 60_000 });
+}

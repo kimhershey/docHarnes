@@ -1,16 +1,22 @@
 //! Process-wide state shared by all commands.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
+use chrono::{DateTime, Utc};
 use serde::Serialize;
+use tauri::AppHandle;
 
+use doculens_core::engine::EngineManager;
 use doculens_core::hw::HardwareSummary;
+use doculens_core::modelstore::{self, DiscoveredModel, ModelWatcher};
 use doculens_core::paths::AppPaths;
 use doculens_core::registry::Registry;
 use doculens_core::settings::{AppSettings, LoadStatus};
 use doculens_core::workspace::{OpenOptions, Workspace};
 use doculens_core::{CoreError, Result};
+
+use crate::jobs::JobBook;
 
 /// Error payload sent to the webview (`invoke` rejects with this object).
 #[derive(Debug, Clone, Serialize)]
@@ -34,6 +40,9 @@ impl From<CoreError> for UiError {
 impl UiError {
     pub fn poisoned() -> Self {
         UiError { code: "internal".into(), message: "state lock poisoned".into(), detail: None }
+    }
+    pub fn invalid(message: impl Into<String>) -> Self {
+        UiError { code: "invalid".into(), message: message.into(), detail: None }
     }
 }
 
@@ -70,14 +79,33 @@ pub struct StartupStatus {
     pub workspace: StartupWorkspaceStatus,
 }
 
+/// Result of the latest drop-in folder scan (`models://changed` payload).
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct ModelIndex {
+    pub discovered: Vec<DiscoveredModel>,
+    pub roots: Vec<PathBuf>,
+    pub scanned_at: Option<DateTime<Utc>>,
+    /// `modelstore::scan_signature` of `discovered` (change detection).
+    #[serde(skip)]
+    pub signature: String,
+}
+
 pub struct AppState {
     pub app_paths: AppPaths,
     pub settings: Mutex<AppSettings>,
     pub settings_status: LoadStatus,
     pub workspace: Mutex<Option<Workspace>>,
     pub startup_workspace: Mutex<StartupWorkspaceStatus>,
+    /// Built-in registry; drop-in models are merged on demand (`merged_registry`).
     pub registry: Registry,
     pub hardware: Mutex<Option<HardwareSummary>>,
+    pub engine: EngineManager,
+    pub models: Mutex<ModelIndex>,
+    pub watcher: Mutex<Option<ModelWatcher>>,
+    pub jobs: JobBook,
+    pub app: OnceLock<AppHandle>,
+    /// Serialises `presets.ini` regeneration + router reload.
+    pub presets_lock: Mutex<()>,
 }
 
 impl AppState {
@@ -103,11 +131,21 @@ impl AppState {
             startup_workspace: Mutex::new(StartupWorkspaceStatus::None),
             registry: Registry::builtin(),
             hardware: Mutex::new(None),
+            engine: EngineManager::new(),
+            models: Mutex::new(ModelIndex::default()),
+            watcher: Mutex::new(None),
+            jobs: JobBook::default(),
+            app: OnceLock::new(),
+            presets_lock: Mutex::new(()),
         }
     }
 
     pub fn settings_path(&self) -> PathBuf {
         self.app_paths.settings_file()
+    }
+
+    pub fn app(&self) -> Option<&AppHandle> {
+        self.app.get()
     }
 
     /// Runs `f` on the settings and persists the result.
@@ -121,6 +159,44 @@ impl AppState {
 
     pub fn settings_snapshot(&self) -> UiResult<AppSettings> {
         Ok(self.settings.lock().map_err(|_| UiError::poisoned())?.clone())
+    }
+
+    /// Cached probe (runs it on first use).
+    pub fn hardware(&self) -> UiResult<HardwareSummary> {
+        let mut guard = self.hardware.lock().map_err(|_| UiError::poisoned())?;
+        if guard.is_none() {
+            *guard = Some(doculens_core::hw::probe());
+        }
+        Ok(guard.clone().expect("probed"))
+    }
+
+    /// Workspace models dir plus the global store when it exists.
+    pub fn models_roots(&self) -> Vec<PathBuf> {
+        let mut roots = Vec::new();
+        if let Ok(guard) = self.workspace.lock() {
+            if let Some(ws) = guard.as_ref() {
+                roots.push(ws.paths.models_dir());
+            }
+        }
+        let global = self.app_paths.global_models_dir();
+        if global.is_dir() {
+            roots.push(global);
+        }
+        roots
+    }
+
+    pub fn workspace_models_dir(&self) -> Option<PathBuf> {
+        self.workspace.lock().ok().and_then(|g| g.as_ref().map(|w| w.paths.models_dir()))
+    }
+
+    pub fn model_index(&self) -> ModelIndex {
+        self.models.lock().map(|m| m.clone()).unwrap_or_default()
+    }
+
+    /// Built-in registry plus drop-in models of the last scan.
+    pub fn merged_registry(&self) -> Registry {
+        let index = self.model_index();
+        modelstore::merged_registry(&self.registry, &index.discovered)
     }
 
     /// Opens the workspace recorded in `settings.json` at startup.

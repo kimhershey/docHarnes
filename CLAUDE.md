@@ -27,15 +27,20 @@ that processes Korean/English business documents with a local VLM
    consistency checks are v1.1.
 
 ## Commands
-- Rust: `cargo test -p doculens-core`, `cargo check -p doculens`,
+- Rust: `cargo test --workspace` (lib + `tests/engine_process.rs`), `cargo check -p doculens`,
   `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all`.
+- Real engine (optional): `DOCULENS_LLAMA_SERVER=<llama-server> DOCULENS_TEST_MODELS_DIR=crates/doculens-core/tests/fixtures cargo test -p doculens-core --test real_engine -- --nocapture`.
 - Web: `npm run typecheck`, `npm test` (vitest), `npm run build`,
   `PW_CHROMIUM_PATH=/opt/pw-browsers/chromium npm run e2e` (browser mode, mock backend).
 - Desktop (Windows / Linux with webkit2gtk): `npm run tauri dev`, `npm run tauri build`.
 - Linux build deps: `libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev`.
 
 ## Layout
-- `crates/doculens-core/` — settings, workspace, hw/tier, memory, registry, retention, prerouter.
-- `src-tauri/` — Tauri shell (`src/commands/`, `src/state.rs`), `tauri.conf.json`, capabilities.
+- `crates/doculens-core/` — settings, workspace, hw/tier, memory, registry, retention, prerouter,
+  `gguf` (header parser, hashes), `modelstore` (drop-in folders, import, download, watcher),
+  `engine/` (locate, devices, presets, client, process, manager, fake_router).
+- `src-tauri/` — Tauri shell (`src/commands/`, `src/state.rs`, `src/engine_bridge.rs`, `src/jobs.rs`), `tauri.conf.json`, capabilities.
 - `src/` — React app: `app/` (layout, providers, hooks), `features/<screen>/`, `components/ui/`, `lib/` (ipc, types, theme, shortcuts, mock backend), `stores/`, `i18n/`, `styles/`.
-- `models/registry.json`, `docs/`, `scripts/`, `e2e/`, `.github/workflows/`.
+- `models/registry.json`, `engines/` (manifest + placement docs), `docs/`, `scripts/`
+  (`fetch-engine.mjs`, `gen-tiny-qwen35.py`), `e2e/`, `.github/workflows/`.
+- Events from Rust to the webview: `engine://status|log|model`, `models://changed`, `jobs://update`.

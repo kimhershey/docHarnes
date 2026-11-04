@@ -38,6 +38,19 @@ this header; the entries here cover direct dependencies and bundled assets.
 | uuid | MIT OR Apache-2.0 |
 | dirs | MIT OR Apache-2.0 |
 | sysinfo | MIT |
+| sha2 (RustCrypto) | MIT OR Apache-2.0 |
+| blake3 | CC0-1.0 OR Apache-2.0 |
+| ureq (HTTP client; `native-tls` on Windows via schannel) | MIT OR Apache-2.0 |
+| native-tls, schannel | MIT OR Apache-2.0 / MIT |
+| flate2 | MIT OR Apache-2.0 |
+| notify (file-system watcher) | CC0-1.0 |
+| libc (Unix process groups, CI only) | MIT OR Apache-2.0 |
+| windows-sys (job objects) | MIT OR Apache-2.0 |
+
+MPL-2.0 components (consumed unmodified only — decision 10): `lightningcss`
+(via Tailwind), `selectors` / `cssparser` / `dtoa-short` (via `tauri-utils` →
+`dom_query`), `option-ext` (via `dirs` → `dirs-sys`). OpenSSL-licensed code is
+linked only on Linux (CI builds) through `native-tls`.
 | nvml-wrapper | MIT OR Apache-2.0 (NVML itself is loaded from the user's NVIDIA driver at runtime; not redistributed) |
 
 ## Fonts

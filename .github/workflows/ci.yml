@@ -50,6 +50,39 @@ jobs:
           name: playwright-report
           path: playwright-report
 
+  engine-real:
+    name: Real llama-server (CPU) + tiny Qwen3.5 fixture
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Download the pinned llama.cpp release (ubuntu x64)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=$(node -p "require('./engines/manifest.json').tag")
+          mkdir -p /tmp/engine && cd /tmp/engine
+          # Only the plain CPU build: a looser pattern also pulls the OpenVINO /
+          # Vulkan packages, and ggml's dynamic loader would pick up every
+          # libggml-*.so unpacked next to the binary (the OpenVINO backend then
+          # grabs the graph and fails on Qwen3.5's GDN ops).
+          gh release download "$TAG" --repo ggml-org/llama.cpp --pattern "llama-${TAG}-bin-ubuntu-x64.zip" --pattern "llama-${TAG}-bin-ubuntu-x64.tar.gz" --dir .
+          ls -la
+          test "$(ls *.zip *.tar.gz 2>/dev/null | wc -l)" -eq 1
+          for f in *.zip; do [ -f "$f" ] && unzip -q "$f"; done
+          for f in *.tar.gz; do [ -f "$f" ] && tar -xzf "$f"; done
+          BIN=$(find . -type f -name llama-server | head -1)
+          test -n "$BIN"
+          chmod +x "$BIN"
+          echo "backends next to the binary:"; ls "$(dirname "$BIN")" | grep -i ggml
+          test -z "$(ls "$(dirname "$BIN")" | grep -iE 'openvino|vulkan|cuda')"
+          echo "DOCULENS_LLAMA_SERVER=$(readlink -f "$BIN")" >> "$GITHUB_ENV"
+          "$BIN" --version || true
+      - run: cargo test -p doculens-core --test real_engine -- --nocapture
+        env:
+          DOCULENS_TEST_MODELS_DIR: ${{ github.workspace }}/crates/doculens-core/tests/fixtures
+
   license:
     name: License gate
     runs-on: ubuntu-24.04

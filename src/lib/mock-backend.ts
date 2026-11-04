@@ -2,20 +2,39 @@
 // and Playwright). State lives in localStorage so reloads behave like the
 // real settings.json. Only the subset of behaviour needed by the UI is
 // reproduced; the Rust crate is the source of truth and has its own tests.
+//
+// Phase 1 adds a simulated llama-server (start/load/chat with timers), a
+// simulated drop-in model folder (import / download / hash / delete) and the
+// job book, all publishing the same events as the Rust shell.
 
 import registryJson from "../../models/registry.json";
 import type {
   AppInfo,
   AppSettings,
   Assessment,
+  ChatTestResult,
   DateRange,
+  DiscoveredModel,
+  EngineBinaryInfo,
+  EngineDevice,
+  EngineStatus,
   HardwareSummary,
+  ImportMode,
+  ImportPlan,
+  InstallState,
+  Job,
+  JobKind,
   Language,
+  LogLine,
   ModelEntry,
+  ModelHealth,
+  ModelIndex,
+  ModelInstanceStatus,
   PreRouteResult,
   PreRoutedOp,
   RegistryView,
   RetentionPolicy,
+  ScannedFile,
   Screen,
   StartupStatus,
   Theme,
@@ -26,9 +45,20 @@ import type {
   WorkspaceManifest,
   WorkspaceView,
 } from "./types";
+import { EVENTS } from "./types";
 
 const SETTINGS_KEY = "doculens.mock.settings";
 const WORKSPACES_KEY = "doculens.mock.workspaces";
+const MODELS_KEY = "doculens.mock.models";
+
+/** Speed-up factor for simulated work (Playwright sets `doculens.mock.fast`). */
+function tick(ms: number): number {
+  try {
+    return localStorage.getItem("doculens.mock.fast") ? Math.max(5, ms / 10) : ms;
+  } catch {
+    return ms;
+  }
+}
 
 export function defaultRetention(): RetentionPolicy {
   return {
@@ -86,6 +116,10 @@ export function defaultSettings(): AppSettings {
       resident_models_max: 2,
       sleep_idle_seconds: 900,
       allow_online_download: true,
+      auto_start_engine: true,
+      warmup_after_load: true,
+      vision_on_cpu: false,
+      engine_binary: null,
     },
     processing: {
       auto_level: "classify_and_ocr",
@@ -139,6 +173,9 @@ function loadSettings(): AppSettings {
 
 function saveSettings(s: AppSettings): AppSettings {
   s.ui.scale_percent = Math.min(150, Math.max(90, s.ui.scale_percent));
+  // mirrors AppSettings::normalize()
+  s.models.resident_models_max = Math.min(4, Math.max(1, Math.round(s.models.resident_models_max) || 1));
+  s.models.sleep_idle_seconds = Math.max(0, Math.round(s.models.sleep_idle_seconds) || 0);
   write(SETTINGS_KEY, s);
   return s;
 }
@@ -169,15 +206,19 @@ function basename(p: string): string {
   return parts[parts.length - 1] ?? p;
 }
 
+function sep(path: string): string {
+  return path.includes("\\") ? "\\" : "/";
+}
+
 function view(ws: MockWorkspace): WorkspaceView {
-  const sep = ws.path.includes("\\") ? "\\" : "/";
+  const s = sep(ws.path);
   return {
     path: ws.path,
     manifest: ws.manifest,
-    models_dir: `${ws.path}${sep}.doculens${sep}models`,
-    inbox_dir: `${ws.path}${sep}inbox`,
-    documents_dir: `${ws.path}${sep}documents`,
-    exports_dir: `${ws.path}${sep}exports`,
+    models_dir: `${ws.path}${s}.doculens${s}models`,
+    inbox_dir: `${ws.path}${s}inbox`,
+    documents_dir: `${ws.path}${s}documents`,
+    exports_dir: `${ws.path}${s}exports`,
   };
 }
 
@@ -220,6 +261,7 @@ function openWorkspace(path: string, create: boolean, name: string | null, local
   const s = loadSettings();
   rememberWorkspace(s, p, ws.manifest.name);
   saveSettings(s);
+  afterWorkspaceChanged();
   return view(ws);
 }
 
@@ -232,6 +274,38 @@ function resolveStartup(): void {
     if (ws) current = ws;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Events
+// ---------------------------------------------------------------------------
+
+const listeners = new Map<string, Set<(payload: unknown) => void>>();
+
+export function mockSubscribe<T>(event: string, handler: (payload: T) => void): () => void {
+  const set = listeners.get(event) ?? new Set();
+  const h = handler as (payload: unknown) => void;
+  set.add(h);
+  listeners.set(event, set);
+  return () => {
+    set.delete(h);
+  };
+}
+
+function emit(event: string, payload: unknown): void {
+  const set = listeners.get(event);
+  if (!set) return;
+  for (const h of Array.from(set)) {
+    try {
+      h(payload);
+    } catch (e) {
+      console.error("[mock] listener failed", event, e);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Hardware / registry
+// ---------------------------------------------------------------------------
 
 const MOCK_HW: HardwareSummary = {
   os: "Browser preview",
@@ -284,7 +358,179 @@ function resolveModel(idOrAuto: string, free: number | null): ModelEntry | null 
       ?? rules.sort((a, b) => a.min_free_vram_mib - b.min_free_vram_mib)[0];
     return chosen ? registry.models.find((m) => m.id === chosen.model) ?? null : null;
   }
-  return registry.models.find((m) => m.id === idOrAuto) ?? null;
+  return mergedModels().find((m) => m.id === idOrAuto) ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Drop-in model folder (simulated)
+// ---------------------------------------------------------------------------
+
+interface MockModel {
+  folder_name: string;
+  id: string;
+  display: string;
+  files: { name: string; size: number; sha256: string | null }[];
+  mmproj: string | null;
+  arch: string;
+  quant: string | null;
+  registry_id: string | null;
+  hashed: boolean;
+  health: ModelHealth;
+}
+
+function loadModels(): MockModel[] {
+  return read<MockModel[]>(MODELS_KEY, []);
+}
+
+function saveModels(list: MockModel[]): void {
+  write(MODELS_KEY, list);
+}
+
+function modelsDir(): string | null {
+  return current ? view(current).models_dir : null;
+}
+
+function scannedFile(folder: string, name: string, size: number, sha: string | null, mmproj: boolean, m: MockModel): ScannedFile {
+  return {
+    path: `${folder}${sep(folder)}${name}`,
+    name,
+    size,
+    modified: new Date().toISOString(),
+    stable: true,
+    meta: {
+      kind: mmproj ? "mmproj" : "llm",
+      architecture: mmproj ? "clip" : m.arch,
+      name: m.display,
+      file_type: null,
+      quantization: mmproj ? "F16" : m.quant,
+      license: "apache-2.0",
+      license_link: null,
+      source_url: null,
+      source_repo: null,
+      has_chat_template: !mmproj,
+      block_count: mmproj ? null : 32,
+      context_length: mmproj ? null : 262144,
+      embedding_length: null,
+      head_count: null,
+      head_count_kv: mmproj ? null : 4,
+      key_length: mmproj ? null : 256,
+      full_attention_interval: mmproj ? null : 4,
+      split_count: null,
+      split_no: null,
+      projector_type: mmproj ? "qwen3vl_merger" : null,
+      has_vision_encoder: mmproj ? true : null,
+      has_audio_encoder: null,
+      tensor_count: mmproj ? 400 : 500,
+      tensor_types: {},
+      gdn_tensor_types: {},
+      gdn_low_precision: [],
+      parameter_count: null,
+      data_bytes: size,
+    },
+    hashes: sha ? { size, sha256: sha, blake3: sha } : null,
+    error: null,
+  };
+}
+
+function discovered(): DiscoveredModel[] {
+  const dir = modelsDir();
+  if (!dir) return [];
+  return loadModels().map((m) => {
+    const folder = `${dir}${sep(dir)}${m.folder_name}`;
+    const weights = m.files.filter((f) => f.name !== m.mmproj).map((f) => scannedFile(folder, f.name, f.size, f.sha256, false, m));
+    const mm = m.files.find((f) => f.name === m.mmproj);
+    return {
+      folder,
+      folder_name: m.folder_name,
+      id: m.id,
+      display: m.display,
+      weights,
+      mmproj: mm ? scannedFile(folder, mm.name, mm.size, mm.sha256, true, m) : null,
+      extra_ggufs: [],
+      model_json: null,
+      license_files: ["LICENSE"],
+      architecture: m.arch,
+      quantization: m.quant,
+      has_chat_template: true,
+      has_vision: !!m.mmproj,
+      role: m.arch === "bert" ? "embedding" : m.mmproj ? "vlm" : "llm",
+      total_bytes: m.files.reduce((a, f) => a + f.size, 0),
+      health: m.health,
+      warnings: m.registry_id && !m.hashed ? ["models.warn.unverified_hash"] : [],
+      registry_match: m.registry_id ? { id: m.registry_id, by: m.hashed ? "hash" : "name", verified: m.hashed ? true : null } : null,
+      hashed: m.hashed,
+      scanned_at: new Date().toISOString(),
+    };
+  });
+}
+
+function modelIndex(): ModelIndex {
+  const dir = modelsDir();
+  return { discovered: discovered(), roots: dir ? [dir] : [], scanned_at: new Date().toISOString() };
+}
+
+function userAddedEntries(): ModelEntry[] {
+  return loadModels()
+    .filter((m) => !m.registry_id)
+    .map((m) => ({
+      id: m.id,
+      family: m.arch,
+      role: m.arch === "bert" ? "embedding" : m.mmproj ? "vlm" : "llm",
+      display: m.display,
+      license: "apache-2.0",
+      license_url: null,
+      source_repo: null,
+      arch: m.arch,
+      modalities: m.mmproj ? ["text", "image"] : ["text"],
+      ctx_max: 262144,
+      files: m.files.map((f) => ({ name: f.name, sha256: f.sha256, size: f.size, hf: null })),
+      requirements: { min_free_vram_mib: Math.round(m.files.reduce((a, f) => a + f.size, 0) / 1048576) + 1536, min_ram_mib: 8192, tiers: ["vram_8gb", "vram_12gb", "vram_16gb", "vram_24gb_plus"] },
+      defaults: { ctx: 32768, kv: "q8_0" },
+      capabilities: { json_schema: true },
+      prompt_profile: "qwen3.5-doc-v1",
+      verified: m.hashed,
+      user_added: true,
+    }));
+}
+
+function mergedModels(): ModelEntry[] {
+  return [...registry.models, ...userAddedEntries()];
+}
+
+function installState(entry: ModelEntry): InstallState | null {
+  const dir = modelsDir();
+  if (!dir) return null;
+  const m = loadModels().find((x) => x.registry_id === entry.id || (!x.registry_id && x.id === entry.id));
+  if (!m) {
+    return { installed: false, folder: `${dir}${sep(dir)}${entry.id}`, missing_files: entry.files.map((f) => f.name), verified: null, health: null, matched_by: null, warnings: [] };
+  }
+  return {
+    installed: m.health.kind === "ready",
+    folder: `${dir}${sep(dir)}${m.folder_name}`,
+    missing_files: m.health.kind === "incomplete" ? m.health.missing : [],
+    verified: m.hashed ? true : null,
+    health: m.health,
+    matched_by: m.registry_id ? (m.hashed ? "hash" : "name") : null,
+    warnings: m.registry_id && !m.hashed ? ["models.warn.unverified_hash"] : [],
+  };
+}
+
+function addRegistryModel(entry: ModelEntry, folderName = entry.id): void {
+  const list = loadModels().filter((m) => m.folder_name !== folderName);
+  list.push({
+    folder_name: folderName,
+    id: entry.id,
+    display: entry.display,
+    files: entry.files.map((f) => ({ name: f.name, size: f.size, sha256: null })),
+    mmproj: entry.files.find((f) => f.name.toLowerCase().startsWith("mmproj"))?.name ?? null,
+    arch: entry.arch,
+    quant: entry.id.includes("q6k") ? "Q6_K" : entry.id.includes("q5km") ? "Q5_K_M" : entry.id.includes("q4km") ? "Q4_K_M" : "Q8_0",
+    registry_id: entry.id,
+    hashed: false,
+    health: { kind: "ready" },
+  });
+  saveModels(list);
+  emit(EVENTS.modelsChanged, modelIndex());
 }
 
 function assess(): Assessment {
@@ -294,7 +540,7 @@ function assess(): Assessment {
   const manual = s.models.tier_mode === "manual" && s.models.manual_tier;
   const tier: Tier = manual ? s.models.manual_tier! : tierFromFree(free);
   const recommended = resolveModel(registry.tier_defaults[tier], free);
-  const active = s.models.active_model === "auto" ? recommended : registry.models.find((m) => m.id === s.models.active_model) ?? null;
+  const active = s.models.active_model === "auto" ? recommended : mergedModels().find((m) => m.id === s.models.active_model) ?? null;
   return {
     tier: {
       tier,
@@ -306,8 +552,378 @@ function assess(): Assessment {
     },
     recommended_model: recommended,
     active_model: active,
-    active_model_installed: active && current ? { installed: false, folder: null, missing_files: active.files.map((f) => f.name) } : null,
+    active_model_installed: active ? installState(active) : null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Jobs
+// ---------------------------------------------------------------------------
+
+let jobs: Job[] = [];
+const cancelled = new Set<string>();
+
+function createJob(kind: JobKind, subject: string): Job {
+  const now = new Date().toISOString();
+  const job: Job = {
+    id: crypto.randomUUID().replace(/-/g, ""),
+    kind,
+    subject,
+    state: "queued",
+    progress: null,
+    detail: null,
+    bytes_done: null,
+    bytes_total: null,
+    error: null,
+    cancel_requested: false,
+    created_at: now,
+    updated_at: now,
+    finished_at: null,
+  };
+  jobs = [...jobs, job];
+  emit(EVENTS.jobsUpdate, jobs);
+  return job;
+}
+
+function updateJob(id: string, patch: Partial<Job>): void {
+  jobs = jobs.map((j) => (j.id === id ? { ...j, ...patch, state: patch.state ?? (j.state === "queued" ? "running" : j.state), updated_at: new Date().toISOString() } : j));
+  emit(EVENTS.jobsUpdate, jobs);
+}
+
+function finishJob(id: string, result: { ok: true; detail?: string } | { ok: false; error: string }): void {
+  const wasCancelled = cancelled.has(id);
+  cancelled.delete(id);
+  updateJob(id, {
+    state: result.ok ? "done" : wasCancelled ? "cancelled" : "failed",
+    progress: result.ok ? 1 : undefined,
+    detail: result.ok ? (result.detail ?? null) : undefined,
+    error: result.ok || wasCancelled ? null : result.error,
+    finished_at: new Date().toISOString(),
+  });
+}
+
+/** Runs `steps` ticks of simulated work; resolves false when cancelled. */
+function simulate(jobId: string, steps: number, stepMs: number, onTick: (i: number) => void): Promise<boolean> {
+  return new Promise((resolve) => {
+    let i = 0;
+    const run = () => {
+      if (cancelled.has(jobId)) {
+        resolve(false);
+        return;
+      }
+      i += 1;
+      onTick(i);
+      if (i >= steps) {
+        resolve(true);
+        return;
+      }
+      setTimeout(run, tick(stepMs));
+    };
+    setTimeout(run, tick(stepMs));
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Engine (simulated llama-server router)
+// ---------------------------------------------------------------------------
+
+const MOCK_BINARY = { path: "C:\\Users\\me\\AppData\\Local\\DocuLens\\engines\\b12066\\cu121\\llama-server.exe", backend: "cu121" as const, version: "b12066", build_number: 12066, source: "app_data" as const };
+
+let engine: EngineStatus = {
+  state: { kind: "stopped" },
+  binary: null,
+  pid: null,
+  host: "127.0.0.1",
+  port: null,
+  started_at: null,
+  restarts: 0,
+  last_error: null,
+  last_exit_code: null,
+  models: [],
+  presets_path: null,
+  active_model: null,
+  sleep_idle_seconds: 900,
+};
+let engineLogs: LogLine[] = [];
+
+function log(text: string, stream: LogLine["stream"] = "app"): void {
+  const line: LogLine = { at: new Date().toISOString(), stream, text };
+  engineLogs = [...engineLogs.slice(-499), line];
+  emit(EVENTS.engineLog, line);
+}
+
+function setEngine(patch: Partial<EngineStatus>): void {
+  engine = { ...engine, ...patch };
+  emit(EVENTS.engineStatus, engine);
+}
+
+function setModel(id: string, patch: Partial<ModelInstanceStatus>): ModelInstanceStatus {
+  const existing = engine.models.find((m) => m.id === id);
+  const next: ModelInstanceStatus = {
+    id,
+    status: "unloaded",
+    failed: false,
+    exit_code: null,
+    progress: null,
+    stage: null,
+    memory_effective_bytes: null,
+    memory_min_bytes: null,
+    mmproj_bytes: 0,
+    input_modalities: ["text", "image"],
+    loaded_at: null,
+    warmed_up: false,
+    ...existing,
+    ...patch,
+  };
+  setEngine({ models: engine.models.some((m) => m.id === id) ? engine.models.map((m) => (m.id === id ? next : m)) : [...engine.models, next] });
+  emit(EVENTS.engineModel, next);
+  return next;
+}
+
+function loadableIds(): string[] {
+  return discovered().filter((d) => d.health.kind === "ready").map((d) => d.id);
+}
+
+function presetsText(): string {
+  const s = loadSettings();
+  const lines = ["version = 1", "; generated by DocuLens (browser preview)", "", "[*]", "flash-attn = on", "cache-type-k = q8_0", "cache-type-v = q8_0", "fit = off", "n-gpu-layers = all", "image-min-tokens = 1024", "jinja = true", "metrics = true", "slots = false"];
+  for (const d of discovered().filter((d) => d.health.kind === "ready")) {
+    lines.push("", `[${d.id}]`, `model = ${d.weights[0]?.path ?? ""}`);
+    if (d.mmproj) lines.push(`mmproj = ${d.mmproj.path}`);
+    lines.push(`load-on-startup = ${assess().active_model?.id === d.id}`, `ctx-size = ${s.models.profile === "speed" ? 8192 : s.models.profile === "balanced" ? 16384 : 32768}`, "parallel = 1", "reasoning = off", "reasoning-budget = 0");
+  }
+  return lines.join("\n") + "\n";
+}
+
+async function engineStart(): Promise<EngineStatus> {
+  if (!current) throw err("no_workspace", "no workspace is open");
+  if (engine.state.kind === "running") return engine;
+  setEngine({ state: { kind: "starting" }, binary: MOCK_BINARY, pid: 4242, port: 41805, started_at: new Date().toISOString(), presets_path: "(browser) presets.ini", models: [], last_error: null });
+  log(`starting ${MOCK_BINARY.path} --host 127.0.0.1 --port 41805 --models-preset presets.ini --models-max 2 --models-memory-margin 1024 --sleep-idle-seconds 900 --jinja --metrics --no-slots`);
+  await new Promise((r) => setTimeout(r, tick(400)));
+  log("srv  server_on_li: listening on http://127.0.0.1:41805", "stderr");
+  setEngine({ state: { kind: "running" }, models: loadableIds().map((id) => ({ ...setModelSilently(id) })) });
+  log("engine ready on 127.0.0.1:41805 (pid 4242)");
+  return engine;
+}
+
+function setModelSilently(id: string): ModelInstanceStatus {
+  const d = discovered().find((x) => x.id === id);
+  return {
+    id,
+    status: "unloaded",
+    failed: false,
+    exit_code: null,
+    progress: null,
+    stage: null,
+    memory_effective_bytes: null,
+    memory_min_bytes: null,
+    mmproj_bytes: d?.mmproj?.size ?? 0,
+    input_modalities: d?.has_vision ? ["text", "image"] : ["text"],
+    loaded_at: null,
+    warmed_up: false,
+  };
+}
+
+async function engineStop(): Promise<void> {
+  if (engine.state.kind === "stopped") return;
+  setEngine({ state: { kind: "stopping" } });
+  await new Promise((r) => setTimeout(r, tick(200)));
+  log("engine stopped (pid 4242, exit Some(0))");
+  setEngine({ state: { kind: "stopped" }, pid: null, port: null, models: [], active_model: null });
+}
+
+async function loadModelJob(modelId: string, warmup: boolean): Promise<string> {
+  const existing = jobs.find((j) => j.kind === "model_load" && j.subject === modelId && (j.state === "queued" || j.state === "running"));
+  if (existing) return existing.id;
+  if (engine.state.kind !== "running") await engineStart();
+  if (!loadableIds().includes(modelId)) throw err("unknown_model", `unknown model id: ${modelId}`);
+  const job = createJob("model_load", modelId);
+  void (async () => {
+    updateJob(job.id, { detail: "loading" });
+    log(`loading model ${modelId}`);
+    setModel(modelId, { status: "loading", progress: 0, stage: "text_model" });
+    const ok = await simulate(job.id, 8, 150, (i) => {
+      const p = i / 8;
+      setModel(modelId, { status: "loading", progress: p, stage: p < 0.7 ? "text_model" : "mmproj_model" });
+      updateJob(job.id, { progress: p, detail: p < 0.7 ? "text_model" : "mmproj_model" });
+    });
+    if (!ok) {
+      setModel(modelId, { status: "unloaded", progress: null, stage: null });
+      finishJob(job.id, { ok: false, error: "cancelled" });
+      return;
+    }
+    const d = discovered().find((x) => x.id === modelId);
+    const bytes = Math.round((d?.total_bytes ?? 3.4e9) * 1.05) + 1.1e9;
+    setModel(modelId, { status: "loaded", progress: null, stage: null, memory_effective_bytes: bytes, loaded_at: new Date().toISOString(), warmed_up: warmup });
+    setEngine({ active_model: modelId });
+    log(`warm-up done for ${modelId} in 420 ms`);
+    finishJob(job.id, { ok: true, detail: `loaded (${bytes} bytes)` });
+  })();
+  return job.id;
+}
+
+function afterWorkspaceChanged(): void {
+  emit(EVENTS.modelsChanged, modelIndex());
+  const s = loadSettings();
+  if (current && s.models.auto_start_engine) {
+    void (async () => {
+      if (engine.state.kind !== "running") {
+        const job = createJob("engine_start", "engine");
+        updateJob(job.id, { detail: "starting" });
+        await engineStart();
+        finishJob(job.id, { ok: true, detail: `running on port ${engine.port}` });
+      }
+      const a = assess();
+      if (a.active_model && a.active_model_installed?.installed) {
+        await loadModelJob(a.active_model.id, s.models.warmup_after_load);
+      }
+    })();
+  } else if (!current) {
+    void engineStop();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Import / download / hash / delete (simulated)
+// ---------------------------------------------------------------------------
+
+function importPlan(paths: string[], mode: ImportMode, folderName: string | null): ImportPlan {
+  const dir = modelsDir();
+  if (!dir) throw err("no_workspace", "no workspace is open");
+  if (paths.length === 0) throw err("invalid", "no files selected");
+  for (const p of paths) {
+    if (!p.toLowerCase().endsWith(".gguf")) throw err("invalid", `not a .gguf file: ${basename(p)}`);
+  }
+  const files = paths.map((p) => {
+    const name = basename(p);
+    const isMm = name.toLowerCase().startsWith("mmproj");
+    return { source: p, dest_name: name, size: isMm ? 660_000_000 : 3_400_000_000, meta: null, is_mmproj: isMm };
+  });
+  const weights = files.filter((f) => !f.is_mmproj);
+  if (weights.length === 0) throw err("invalid", "select the language model .gguf file (mmproj alone is not a model)");
+  let autoPaired = false;
+  if (weights.length === 1 && !files.some((f) => f.is_mmproj)) {
+    const base = weights[0]!.source.slice(0, -basename(weights[0]!.source).length);
+    files.push({ source: `${base}mmproj-F16.gguf`, dest_name: "mmproj-F16.gguf", size: 660_000_000, meta: null, is_mmproj: true });
+    autoPaired = true;
+  }
+  const stem = weights[0]!.dest_name.replace(/\.gguf$/i, "");
+  const folder = (folderName?.trim() || stem).toLowerCase().replace(/[^a-z0-9._]+/g, "-").replace(/^-+|-+$/g, "") || "model";
+  const already = loadModels().some((m) => m.folder_name === folder);
+  return {
+    folder_name: folder,
+    target_folder: `${dir}${sep(dir)}${folder}`,
+    files,
+    license_files: [`${weights[0]!.source.slice(0, -basename(weights[0]!.source).length)}LICENSE`],
+    total_bytes: files.reduce((a, f) => a + f.size, 0),
+    mode,
+    auto_paired_mmproj: autoPaired,
+    architecture: "qwen35",
+    quantization: /q6_k/i.test(stem) ? "Q6_K" : /q5_k_m/i.test(stem) ? "Q5_K_M" : /q4_k_m/i.test(stem) ? "Q4_K_M" : "F16",
+    has_vision: files.some((f) => f.is_mmproj),
+    warnings: [],
+    already_present: already,
+  };
+}
+
+function registryMatchFor(fileNames: string[]): ModelEntry | null {
+  const lower = fileNames.map((n) => n.toLowerCase());
+  return registry.models.find((m) => m.files.every((f) => lower.includes(f.name.toLowerCase()))) ?? null;
+}
+
+function importRun(plan: ImportPlan): string {
+  const job = createJob("model_import", plan.folder_name);
+  void (async () => {
+    updateJob(job.id, { bytes_total: plan.total_bytes, detail: plan.mode });
+    const ok = await simulate(job.id, 10, 120, (i) => {
+      const done = Math.round((plan.total_bytes * i) / 10);
+      updateJob(job.id, { progress: i / 10, bytes_done: done, bytes_total: plan.total_bytes, detail: plan.files[Math.min(plan.files.length - 1, Math.floor((i - 1) / (10 / plan.files.length)))]?.dest_name ?? null });
+    });
+    if (!ok) {
+      finishJob(job.id, { ok: false, error: "cancelled" });
+      return;
+    }
+    const match = registryMatchFor(plan.files.map((f) => f.dest_name));
+    const list = loadModels().filter((m) => m.folder_name !== plan.folder_name);
+    list.push({
+      folder_name: plan.folder_name,
+      id: match?.id ?? plan.folder_name,
+      display: match?.display ?? `${plan.folder_name} (${plan.quantization ?? "?"})`,
+      files: plan.files.map((f) => ({ name: f.dest_name, size: f.size, sha256: null })),
+      mmproj: plan.files.find((f) => f.is_mmproj)?.dest_name ?? null,
+      arch: plan.architecture ?? "qwen35",
+      quant: plan.quantization,
+      registry_id: match?.id ?? null,
+      hashed: false,
+      health: { kind: "ready" },
+    });
+    saveModels(list);
+    emit(EVENTS.modelsChanged, modelIndex());
+    if (engine.state.kind === "running") setModel(match?.id ?? plan.folder_name, {});
+    finishJob(job.id, { ok: true, detail: plan.target_folder });
+  })();
+  return job.id;
+}
+
+function downloadJob(modelId: string): string {
+  const s = loadSettings();
+  if (!s.models.allow_online_download) throw err("invalid", "online downloads are disabled in settings");
+  if (!modelsDir()) throw err("no_workspace", "no workspace is open");
+  const entry = registry.models.find((m) => m.id === modelId);
+  if (!entry) throw err("unknown_model", `unknown model id: ${modelId}`);
+  if (jobs.some((j) => j.kind === "model_download" && j.subject === modelId && !["done", "failed", "cancelled"].includes(j.state))) throw err("invalid", "download already running");
+  const job = createJob("model_download", modelId);
+  const total = entry.files.reduce((a, f) => a + f.size, 0);
+  void (async () => {
+    updateJob(job.id, { bytes_total: total, detail: entry.files[0]?.name ?? null });
+    const ok = await simulate(job.id, 20, 100, (i) => {
+      updateJob(job.id, { progress: i / 20, bytes_done: Math.round((total * i) / 20), bytes_total: total, detail: entry.files[i > 16 ? entry.files.length - 1 : 0]?.name ?? null });
+    });
+    if (!ok) {
+      finishJob(job.id, { ok: false, error: "cancelled" });
+      return;
+    }
+    addRegistryModel(entry);
+    if (engine.state.kind === "running") setModel(entry.id, {});
+    finishJob(job.id, { ok: true, detail: `${modelsDir()}${sep(modelsDir()!)}${entry.id}` });
+  })();
+  return job.id;
+}
+
+function hashJob(folder: string): string {
+  const list = loadModels();
+  const m = list.find((x) => x.folder_name === folder || `${modelsDir()}${sep(modelsDir() ?? "/")}${x.folder_name}` === folder);
+  if (!m) throw err("invalid", `unknown model folder ${folder}`);
+  const job = createJob("model_hash", m.folder_name);
+  const total = m.files.reduce((a, f) => a + f.size, 0);
+  void (async () => {
+    const ok = await simulate(job.id, 10, 100, (i) => updateJob(job.id, { progress: i / 10, bytes_done: Math.round((total * i) / 10), bytes_total: total, detail: m.files[0]?.name ?? null }));
+    if (!ok) {
+      finishJob(job.id, { ok: false, error: "cancelled" });
+      return;
+    }
+    const updated = loadModels().map((x) => (x.folder_name === m.folder_name ? { ...x, hashed: true, files: x.files.map((f, i) => ({ ...f, sha256: `${(i + 1).toString(16).padStart(4, "0")}${"ab".repeat(30)}` })) } : x));
+    saveModels(updated);
+    emit(EVENTS.modelsChanged, modelIndex());
+    finishJob(job.id, { ok: true, detail: m.files.map((f) => `${f.name}: ${"0001abab"}…`).join(", ") });
+  })();
+  return job.id;
+}
+
+function deleteModel(folder: string): void {
+  const list = loadModels();
+  const m = list.find((x) => x.folder_name === folder || `${modelsDir()}${sep(modelsDir() ?? "/")}${x.folder_name}` === folder);
+  if (!m) throw err("invalid", `${folder} is not inside the models folder`);
+  if (engine.models.some((x) => x.id === m.id && x.status === "loaded")) {
+    setModel(m.id, { status: "unloaded", memory_effective_bytes: null, loaded_at: null, warmed_up: false });
+    if (engine.active_model === m.id) setEngine({ active_model: null });
+  }
+  saveModels(list.filter((x) => x.folder_name !== m.folder_name));
+  setEngine({ models: engine.models.filter((x) => x.id !== m.id) });
+  // cancel a running load job for the deleted model
+  for (const j of jobs.filter((j) => j.kind === "model_load" && j.subject === m.id && (j.state === "queued" || j.state === "running"))) cancelled.add(j.id);
+  emit(EVENTS.modelsChanged, modelIndex());
 }
 
 // --- minimal pre-router mirror (slash + a few phrases) -------------------
@@ -446,6 +1062,8 @@ function resolveDate(text: string): DateRange | null {
   return null;
 }
 
+const MOCK_DEVICES: EngineDevice[] = [{ name: "CUDA0", description: "NVIDIA GeForce RTX 4060 (mock)", total_mib: 8188, free_mib: 7126 }];
+
 export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   resolveStartup();
   const a = (args ?? {}) as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -457,6 +1075,8 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
         version: "0.1.0",
         settings_path: "(browser) localStorage:doculens.mock.settings",
         app_data_dir: "(browser)",
+        engines_dir: "(browser)/engines",
+        presets_path: "(browser)/presets.ini",
         os: "browser",
         arch: "wasm",
         debug: true,
@@ -495,7 +1115,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "settings_set_active_model": {
       const s = loadSettings();
       const id = String(a.modelId);
-      if (id !== "auto" && !registry.models.some((m) => m.id === id)) throw err("unknown_model", `unknown model id: ${id}`);
+      if (id !== "auto" && !mergedModels().some((m) => m.id === id)) throw err("unknown_model", `unknown model id: ${id}`);
       s.models.active_model = id;
       return r(saveSettings(s));
     }
@@ -524,7 +1144,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "workspace_current":
       return r(current ? view(current) : null);
     case "workspace_open": {
-      const { path, force_unlock: _force } = a.args as { path: string; force_unlock: boolean };
+      const { path } = a.args as { path: string; force_unlock: boolean };
       return r(openWorkspace(path, false, null, null));
     }
     case "workspace_create": {
@@ -536,6 +1156,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       const s = loadSettings();
       s.active_workspace = null;
       saveSettings(s);
+      afterWorkspaceChanged();
       return r(undefined);
     }
     case "workspace_forget": {
@@ -565,11 +1186,11 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "hw_assess":
       return r(assess());
     case "registry_list": {
-      const models_dir = current ? view(current).models_dir : null;
+      const models_dir = modelsDir();
       const out: RegistryView = {
-        models: registry.models.map((m) => ({
+        models: mergedModels().map((m) => ({
           ...m,
-          install: models_dir ? { installed: false, folder: null, missing_files: m.files.map((f) => f.name) } : null,
+          install: installState(m),
           total_size: m.files.reduce((acc, f) => acc + f.size, 0),
         })),
         tier_defaults: registry.tier_defaults,
@@ -579,7 +1200,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       return r(out);
     }
     case "registry_required_files_text": {
-      const m = registry.models.find((x) => x.id === a.modelId);
+      const m = mergedModels().find((x) => x.id === a.modelId);
       if (!m) throw err("unknown_model", `unknown model id: ${a.modelId}`);
       const target = current ? `${view(current).models_dir}/${m.id}` : `<workspace>/.doculens/models/${m.id}`;
       const lines = [
@@ -598,6 +1219,111 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       ];
       return r(lines.join("\n"));
     }
+    case "models_scan":
+    case "models_list":
+      return r(modelIndex());
+    case "models_import_plan": {
+      const { paths, mode, folder_name } = a.args as { paths: string[]; mode: ImportMode; folder_name: string | null };
+      return r(importPlan(paths, mode ?? "copy", folder_name ?? null));
+    }
+    case "models_import_run": {
+      const { paths, mode, folder_name } = a.args as { paths: string[]; mode: ImportMode; folder_name: string | null };
+      const plan = importPlan(paths, mode ?? "copy", folder_name ?? null);
+      if (plan.already_present) throw err("invalid", "the same files are already in the target folder");
+      return r(importRun(plan));
+    }
+    case "models_download":
+      return r(downloadJob(String(a.modelId)));
+    case "models_hash":
+      return r(hashJob(String(a.folder)));
+    case "models_delete":
+      deleteModel(String(a.folder));
+      return r(undefined);
+    case "engine_status":
+      return r(engine);
+    case "engine_start":
+      return r(await engineStart());
+    case "engine_stop":
+      await engineStop();
+      return r(undefined);
+    case "engine_restart": {
+      const restarts = engine.restarts;
+      await engineStop();
+      const st = await engineStart();
+      setEngine({ restarts });
+      return r(st);
+    }
+    case "engine_load_model":
+      return r(await loadModelJob(String(a.modelId), (a.warmup as boolean | null) ?? loadSettings().models.warmup_after_load));
+    case "engine_unload_model": {
+      if (engine.state.kind !== "running") throw err("engine_not_running", "engine is not running");
+      const id = String(a.modelId);
+      setModel(id, { status: "unloaded", memory_effective_bytes: null, loaded_at: null, warmed_up: false, progress: null, stage: null });
+      if (engine.active_model === id) setEngine({ active_model: null });
+      log(`unloaded model ${id} in 310 ms`);
+      return r(undefined);
+    }
+    case "engine_refresh_models": {
+      if (engine.state.kind !== "running") throw err("engine_not_running", "engine is not running");
+      const ids = loadableIds();
+      setEngine({ models: [...engine.models.filter((m) => ids.includes(m.id)), ...ids.filter((id) => !engine.models.some((m) => m.id === id)).map(setModelSilently)] });
+      return r(engine.models);
+    }
+    case "engine_chat_test": {
+      if (engine.state.kind !== "running") throw err("engine_not_running", "engine is not running");
+      const model = (a.modelId as string | null) ?? engine.active_model ?? assess().active_model?.id ?? null;
+      if (!model) throw err("invalid", "no active model");
+      const inst = engine.models.find((m) => m.id === model);
+      if (!inst) throw err("unknown_model", `unknown model id: ${model}`);
+      if (inst.status !== "loaded") await loadModelJob(model, true);
+      await new Promise((res) => setTimeout(res, tick(600)));
+      const prompt = (a.prompt as string | null) ?? "안녕하세요. 한 문장으로 자기소개를 해 주세요.";
+      const out: ChatTestResult = {
+        model,
+        prompt,
+        content: "안녕하세요, 저는 DocuLens에 내장된 문서 처리 모델(브라우저 미리보기 응답)입니다.",
+        finish_reason: "stop",
+        prompt_tokens: 31,
+        completion_tokens: 24,
+        elapsed_ms: 612,
+        tokens_per_second: 48.7,
+      };
+      return r(out);
+    }
+    case "engine_list_devices":
+      return r(MOCK_DEVICES);
+    case "engine_binary_info": {
+      const info: EngineBinaryInfo = {
+        resolved: MOCK_BINARY,
+        error: null,
+        installed_packs: [
+          { backend: "cpu", version: "b12066", build_number: 12066, path: MOCK_BINARY.path.replace("cu121", "cpu") },
+          { backend: "cu121", version: "b12066", build_number: 12066, path: MOCK_BINARY.path },
+        ],
+        engines_dir: "C:\\Users\\me\\AppData\\Local\\DocuLens\\engines",
+        bundled_roots: [],
+        min_build: 11747,
+      };
+      return r(info);
+    }
+    case "engine_logs":
+      return r(engineLogs.slice(-Number(a.lines ?? 200)));
+    case "presets_preview":
+      return r(presetsText());
+    case "jobs_list":
+      return r(jobs);
+    case "jobs_cancel": {
+      const id = String(a.jobId);
+      const j = jobs.find((x) => x.id === id);
+      if (!j || ["done", "failed", "cancelled"].includes(j.state)) return r(false);
+      cancelled.add(id);
+      updateJob(id, { cancel_requested: true });
+      return r(true);
+    }
+    case "jobs_clear_finished":
+      jobs = jobs.filter((j) => !["done", "failed", "cancelled"].includes(j.state));
+      emit(EVENTS.jobsUpdate, jobs);
+      return r(undefined);
     case "prerouter_route":
       return r(mockRoute(String(a.text)));
     case "prerouter_resolve_date":
@@ -611,6 +1337,11 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
 export function resetMock(): void {
   localStorage.removeItem(SETTINGS_KEY);
   localStorage.removeItem(WORKSPACES_KEY);
+  localStorage.removeItem(MODELS_KEY);
   current = null;
   startupResolved = false;
+  jobs = [];
+  cancelled.clear();
+  engineLogs = [];
+  engine = { ...engine, state: { kind: "stopped" }, pid: null, port: null, models: [], active_model: null, restarts: 0 };
 }

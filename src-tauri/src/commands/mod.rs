@@ -2,21 +2,26 @@
 //! `doculens-core`; this layer only adapts state and error types.
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
-use doculens_core::hw::{self, HardwareSummary, TierAssessment};
+use doculens_core::engine::{ChatRequest, EngineDevice, EngineStatus, LogLine, ModelInstanceStatus};
+use doculens_core::hw::{self, GpuSource, HardwareSummary};
+use doculens_core::modelstore::{self, ImportMode, ImportPlan, InstallState};
 use doculens_core::paths::normalize_user_path;
 use doculens_core::prerouter::{self, DateRange, PreRouteResult};
-use doculens_core::registry::{self, InstallState, ModelEntry};
+use doculens_core::registry::{self, ModelEntry};
 use doculens_core::retention::RetentionPolicy;
 use doculens_core::settings::{AppSettings, Language, Theme, TierMode};
 use doculens_core::workspace::{self, OpenOptions, WorkspaceInspection, WorkspaceManifest};
-use doculens_core::{hw::Tier, version};
+use doculens_core::{hw::Tier, version, CoreError};
 
+use crate::engine_bridge::{self, Assessment, EngineBinaryInfo};
+use crate::jobs::Job;
 use crate::native_theme;
-use crate::state::{AppState, StartupStatus, UiError, UiResult};
+use crate::state::{AppState, ModelIndex, StartupStatus, UiError, UiResult};
 
 // ---------------------------------------------------------------------------
 // App / startup
@@ -28,6 +33,8 @@ pub struct AppInfo {
     pub version: &'static str,
     pub settings_path: PathBuf,
     pub app_data_dir: PathBuf,
+    pub engines_dir: PathBuf,
+    pub presets_path: PathBuf,
     pub os: String,
     pub arch: &'static str,
     pub debug: bool,
@@ -40,6 +47,8 @@ pub fn app_info(state: State<'_, AppState>) -> AppInfo {
         version: version::APP_VERSION,
         settings_path: state.settings_path(),
         app_data_dir: state.app_paths.root.clone(),
+        engines_dir: state.app_paths.engines_dir(),
+        presets_path: state.app_paths.presets_file(),
         os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH,
         debug: cfg!(debug_assertions),
@@ -96,8 +105,8 @@ pub fn settings_set_ui_scale(state: State<'_, AppState>, scale_percent: u16) -> 
 
 #[tauri::command]
 pub fn settings_set_active_model(state: State<'_, AppState>, model_id: String) -> UiResult<AppSettings> {
-    if model_id != "auto" && state.registry.get(&model_id).is_none() {
-        return Err(doculens_core::CoreError::UnknownModel(model_id).into());
+    if model_id != "auto" && state.merged_registry().get(&model_id).is_none() {
+        return Err(CoreError::UnknownModel(model_id).into());
     }
     state.update_settings(|s| s.models.active_model = model_id)
 }
@@ -109,7 +118,7 @@ pub fn settings_set_tier_mode(
     manual_tier: Option<Tier>,
 ) -> UiResult<AppSettings> {
     if mode == TierMode::Manual && manual_tier.is_none() {
-        return Err(UiError { code: "invalid".into(), message: "manual tier requires a tier".into(), detail: None });
+        return Err(UiError::invalid("manual tier requires a tier"));
     }
     state.update_settings(|s| {
         s.models.tier_mode = mode;
@@ -161,11 +170,13 @@ pub struct OpenArgs {
     pub force_unlock: bool,
 }
 
-#[tauri::command]
-pub fn workspace_open(state: State<'_, AppState>, args: OpenArgs) -> UiResult<WorkspaceView> {
+#[tauri::command(async)]
+pub fn workspace_open(app: AppHandle, state: State<'_, AppState>, args: OpenArgs) -> UiResult<WorkspaceView> {
     let path = normalize_user_path(&args.path);
     state.open_workspace_inner(&path, OpenOptions { force_unlock: args.force_unlock, ..Default::default() })?;
-    state.with_workspace(view)
+    let v = state.with_workspace(view)?;
+    engine_bridge::on_workspace_changed(&app);
+    Ok(v)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -179,20 +190,24 @@ pub struct CreateArgs {
     pub force_unlock: bool,
 }
 
-#[tauri::command]
-pub fn workspace_create(state: State<'_, AppState>, args: CreateArgs) -> UiResult<WorkspaceView> {
+#[tauri::command(async)]
+pub fn workspace_create(app: AppHandle, state: State<'_, AppState>, args: CreateArgs) -> UiResult<WorkspaceView> {
     let path = normalize_user_path(&args.path);
     let locale = args.locale.or_else(|| state.settings_snapshot().ok().map(|s| s.ui.language));
     state.open_workspace_inner(
         &path,
         OpenOptions { create: true, name: args.name, locale, force_unlock: args.force_unlock },
     )?;
-    state.with_workspace(view)
+    let v = state.with_workspace(view)?;
+    engine_bridge::on_workspace_changed(&app);
+    Ok(v)
 }
 
-#[tauri::command]
-pub fn workspace_close(state: State<'_, AppState>) -> UiResult<()> {
-    state.close_workspace()
+#[tauri::command(async)]
+pub fn workspace_close(app: AppHandle, state: State<'_, AppState>) -> UiResult<()> {
+    state.close_workspace()?;
+    engine_bridge::on_workspace_changed(&app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -224,48 +239,20 @@ pub fn workspace_set_preferred_model(state: State<'_, AppState>, model_id: Optio
 /// Async: NVML initialisation can stall for a noticeable time.
 #[tauri::command(async)]
 pub fn hw_probe(state: State<'_, AppState>, refresh: Option<bool>) -> UiResult<HardwareSummary> {
-    let mut guard = state.hardware.lock().map_err(|_| UiError::poisoned())?;
-    if refresh.unwrap_or(false) || guard.is_none() {
+    if refresh.unwrap_or(false) {
+        let mut guard = state.hardware.lock().map_err(|_| UiError::poisoned())?;
         *guard = Some(hw::probe());
     }
-    Ok(guard.clone().expect("probed"))
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct Assessment {
-    pub tier: TierAssessment,
-    pub recommended_model: Option<ModelEntry>,
-    pub active_model: Option<ModelEntry>,
-    pub active_model_installed: Option<InstallState>,
+    state.hardware()
 }
 
 #[tauri::command(async)]
 pub fn hw_assess(state: State<'_, AppState>) -> UiResult<Assessment> {
-    let hw = {
-        let mut guard = state.hardware.lock().map_err(|_| UiError::poisoned())?;
-        if guard.is_none() {
-            *guard = Some(hw::probe());
-        }
-        guard.clone().expect("probed")
-    };
-    let settings = state.settings_snapshot()?;
-    let tier = hw::assess(&hw, &settings.models);
-    let recommended = state.registry.default_model_for(tier.tier, tier.free_vram_mib).cloned();
-    let active = if settings.models.active_model == "auto" {
-        recommended.clone()
-    } else {
-        state.registry.get(&settings.models.active_model).cloned()
-    };
-    let models_dir = state.workspace.lock().map_err(|_| UiError::poisoned())?.as_ref().map(|w| w.paths.models_dir());
-    let installed = match (&active, &models_dir) {
-        (Some(m), Some(dir)) => Some(registry::install_state(dir, m)),
-        _ => None,
-    };
-    Ok(Assessment { tier, recommended_model: recommended, active_model: active, active_model_installed: installed })
+    engine_bridge::assess(&state)
 }
 
 // ---------------------------------------------------------------------------
-// Registry
+// Registry / models
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
@@ -286,36 +273,268 @@ pub struct RegistryView {
 
 #[tauri::command]
 pub fn registry_list(state: State<'_, AppState>) -> UiResult<RegistryView> {
-    let models_dir = state.workspace.lock().map_err(|_| UiError::poisoned())?.as_ref().map(|w| w.paths.models_dir());
-    let models = state
-        .registry
+    let models_dir = state.workspace_models_dir();
+    let registry = state.merged_registry();
+    let index = state.model_index();
+    let models = registry
         .models
         .iter()
         .map(|m| RegistryModelView {
-            install: models_dir.as_ref().map(|d| registry::install_state(d, m)),
+            install: models_dir.as_ref().map(|d| modelstore::install_state(d, m, &index.discovered)),
             total_size: m.total_size(),
             entry: m.clone(),
         })
         .collect();
     Ok(RegistryView {
         models,
-        tier_defaults: state.registry.tier_defaults.clone(),
-        default_embedding: state.registry.default_embedding.clone(),
+        tier_defaults: registry.tier_defaults.clone(),
+        default_embedding: registry.default_embedding.clone(),
         models_dir,
     })
 }
 
 #[tauri::command]
 pub fn registry_required_files_text(state: State<'_, AppState>, model_id: String) -> UiResult<String> {
-    let model = state.registry.require(&model_id)?;
+    let registry = state.merged_registry();
+    let model = registry.require(&model_id)?;
     let target = state
-        .workspace
-        .lock()
-        .map_err(|_| UiError::poisoned())?
-        .as_ref()
-        .map(|w| w.paths.models_dir().join(&model.id))
+        .workspace_models_dir()
+        .map(|d| d.join(&model.id))
         .unwrap_or_else(|| PathBuf::from("<workspace>/.doculens/models").join(&model.id));
     Ok(registry::required_files_text(model, &target))
+}
+
+#[tauri::command(async)]
+pub fn models_scan(app: AppHandle) -> ModelIndex {
+    engine_bridge::rescan_and_sync(&app)
+}
+
+#[tauri::command]
+pub fn models_list(state: State<'_, AppState>) -> ModelIndex {
+    state.model_index()
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImportArgs {
+    pub paths: Vec<String>,
+    #[serde(default = "default_import_mode")]
+    pub mode: ImportMode,
+    #[serde(default)]
+    pub folder_name: Option<String>,
+}
+
+fn default_import_mode() -> ImportMode {
+    ImportMode::Copy
+}
+
+#[tauri::command(async)]
+pub fn models_import_plan(state: State<'_, AppState>, args: ImportArgs) -> UiResult<ImportPlan> {
+    let models_dir = state.workspace_models_dir().ok_or(CoreError::NoWorkspace)?;
+    let sources: Vec<PathBuf> = args.paths.iter().map(|p| normalize_user_path(p)).collect();
+    Ok(modelstore::plan_import(&models_dir, &sources, args.mode, args.folder_name.as_deref())?)
+}
+
+#[tauri::command(async)]
+/// The plan is recomputed here from the arguments (the webview-supplied plan
+/// is display-only), so destination names and folders are always derived by
+/// the core from validated GGUF headers.
+pub fn models_import_run(app: AppHandle, args: ImportArgs) -> UiResult<String> {
+    let state = app.state::<AppState>();
+    let models_dir = state.workspace_models_dir().ok_or(CoreError::NoWorkspace)?;
+    let sources: Vec<PathBuf> = args.paths.iter().map(|p| normalize_user_path(p)).collect();
+    let plan: ImportPlan = modelstore::plan_import(&models_dir, &sources, args.mode, args.folder_name.as_deref())?;
+    if plan.already_present {
+        return Err(UiError::invalid("the same files are already in the target folder"));
+    }
+    Ok(engine_bridge::import_job(&app, plan))
+}
+
+#[tauri::command(async)]
+pub fn models_download(app: AppHandle, model_id: String) -> UiResult<String> {
+    engine_bridge::download_job(&app, &model_id)
+}
+
+#[tauri::command(async)]
+pub fn models_hash(app: AppHandle, folder: String) -> UiResult<String> {
+    engine_bridge::hash_job(&app, &folder)
+}
+
+#[tauri::command(async)]
+pub fn models_delete(app: AppHandle, state: State<'_, AppState>, folder: String) -> UiResult<()> {
+    let models_dir = state.workspace_models_dir().ok_or(CoreError::NoWorkspace)?;
+    let index = state.model_index();
+    let folder_path = normalize_user_path(&folder);
+    if let Some(d) = index.discovered.iter().find(|d| d.folder == folder_path || d.folder_name == folder) {
+        if state.engine.is_running() && state.engine.status().model(&d.id).is_some_and(|m| m.is_running()) {
+            state.engine.unload_model(&d.id)?;
+        }
+        modelstore::delete_model_folder(&models_dir, &d.folder)?;
+    } else {
+        modelstore::delete_model_folder(&models_dir, &folder_path)?;
+    }
+    engine_bridge::rescan_and_sync(&app);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Engine
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn engine_status(state: State<'_, AppState>) -> EngineStatus {
+    state.engine.status()
+}
+
+#[tauri::command(async)]
+pub fn engine_start(app: AppHandle) -> UiResult<EngineStatus> {
+    Ok(engine_bridge::start_engine(&app)?)
+}
+
+#[tauri::command(async)]
+pub fn engine_stop(state: State<'_, AppState>) -> UiResult<()> {
+    Ok(state.engine.stop()?)
+}
+
+#[tauri::command(async)]
+pub fn engine_restart(app: AppHandle) -> UiResult<EngineStatus> {
+    Ok(engine_bridge::restart_engine(&app)?)
+}
+
+/// Loads a model as a background job (starts the engine first when stopped).
+#[tauri::command(async)]
+pub fn engine_load_model(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    model_id: String,
+    warmup: Option<bool>,
+) -> UiResult<String> {
+    if !state.engine.is_running() {
+        engine_bridge::start_engine(&app)?;
+    } else if state.engine.status().model(&model_id).is_none() {
+        // A model that appeared after the last preset generation.
+        engine_bridge::regenerate_and_reload(&state)?;
+    }
+    Ok(engine_bridge::load_model_job(&app, &model_id, warmup))
+}
+
+#[tauri::command(async)]
+pub fn engine_unload_model(state: State<'_, AppState>, model_id: String) -> UiResult<()> {
+    Ok(state.engine.unload_model(&model_id)?)
+}
+
+#[tauri::command(async)]
+pub fn engine_refresh_models(state: State<'_, AppState>, reload: Option<bool>) -> UiResult<Vec<ModelInstanceStatus>> {
+    if reload.unwrap_or(false) {
+        engine_bridge::regenerate_and_reload(&state)?;
+        return Ok(state.engine.status().models);
+    }
+    Ok(state.engine.refresh_models(false)?)
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ChatTestResult {
+    pub model: String,
+    pub prompt: String,
+    pub content: String,
+    pub finish_reason: Option<String>,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub elapsed_ms: u64,
+    pub tokens_per_second: Option<f64>,
+}
+
+/// Smoke test / benchmark request (model manager "test" button).
+#[tauri::command(async)]
+pub fn engine_chat_test(
+    state: State<'_, AppState>,
+    model_id: Option<String>,
+    prompt: Option<String>,
+) -> UiResult<ChatTestResult> {
+    let model = match model_id {
+        Some(m) => m,
+        None => state
+            .engine
+            .status()
+            .active_model
+            .or_else(|| engine_bridge::active_model_id(&state).ok().flatten())
+            .ok_or_else(|| UiError::invalid("no active model"))?,
+    };
+    let prompt = prompt.unwrap_or_else(|| "안녕하세요. 한 문장으로 자기소개를 해 주세요.".to_string());
+    let start = Instant::now();
+    let req = ChatRequest::text(&model, &prompt).max_tokens(64);
+    let r = state.engine.chat(&req)?;
+    let elapsed = start.elapsed();
+    let tps = r.timings.as_ref().and_then(|t| t.get("predicted_per_second")).and_then(|v| v.as_f64());
+    Ok(ChatTestResult {
+        model,
+        prompt,
+        content: r.content,
+        finish_reason: r.finish_reason,
+        prompt_tokens: r.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0),
+        completion_tokens: r.usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0),
+        elapsed_ms: elapsed.as_millis() as u64,
+        tokens_per_second: tps,
+    })
+}
+
+/// `llama-server --list-devices`; engine-reported GPUs replace the NVML rows
+/// (the tier is defined on the engine's free VRAM, design §3.3.3).
+#[tauri::command(async)]
+pub fn engine_list_devices(app: AppHandle, state: State<'_, AppState>) -> UiResult<Vec<EngineDevice>> {
+    let settings = state.settings_snapshot()?;
+    let binary = engine_bridge::resolve_binary(&app, &settings)?;
+    let devices = doculens_core::engine::devices::list_devices(&binary.path, Duration::from_secs(60))?;
+    if !devices.is_empty() {
+        let gpus = doculens_core::engine::devices::to_gpu_infos(&devices);
+        let mut guard = state.hardware.lock().map_err(|_| UiError::poisoned())?;
+        if let Some(hw) = guard.as_mut() {
+            // Keep NVML driver/CC details when the names match.
+            let mut merged = gpus;
+            for g in &mut merged {
+                if let Some(n) = hw.gpus.iter().find(|n| n.source == GpuSource::Nvml && n.name == g.name) {
+                    g.driver_version = n.driver_version.clone();
+                    g.cuda_driver_version = n.cuda_driver_version;
+                    g.compute_capability = n.compute_capability;
+                }
+            }
+            hw.gpus = merged;
+        }
+    }
+    Ok(devices)
+}
+
+#[tauri::command(async)]
+pub fn engine_binary_info(app: AppHandle) -> UiResult<EngineBinaryInfo> {
+    engine_bridge::binary_info(&app)
+}
+
+#[tauri::command]
+pub fn engine_logs(state: State<'_, AppState>, lines: Option<usize>) -> Vec<LogLine> {
+    state.engine.recent_logs(lines.unwrap_or(200))
+}
+
+#[tauri::command(async)]
+pub fn presets_preview(state: State<'_, AppState>) -> UiResult<String> {
+    Ok(engine_bridge::presets_preview(&state)?)
+}
+
+// ---------------------------------------------------------------------------
+// Jobs
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn jobs_list(state: State<'_, AppState>) -> Vec<Job> {
+    state.jobs.list()
+}
+
+#[tauri::command]
+pub fn jobs_cancel(state: State<'_, AppState>, job_id: String) -> bool {
+    state.jobs.cancel(&job_id)
+}
+
+#[tauri::command]
+pub fn jobs_clear_finished(state: State<'_, AppState>) {
+    state.jobs.clear_finished();
 }
 
 // ---------------------------------------------------------------------------
