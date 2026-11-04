@@ -443,7 +443,7 @@
 
 - `db/schema/0003_pipeline.sql`: `documents` 파이프라인 열(doc_type_source·classified_at·ocr_at·extracted_at·last_run_id·schema_id·
   review_status·confidence·pipeline_error), `pages` 열(text_source layer|converted|ocr·ocr_at·ocr_profile·ocr_model·classified_at·
-  page_doc_type·page_language·page_rotation), `schemas`(+`name_en`, 출처 builtin|nl|user|form, 유형 슬러그, 기본 여부, 사용 횟수)·
+  page_doc_type·page_language·page_rotation), `schemas`(+`name_en`, 출처 builtin|nl|user|form, 유형 슬러그, 기본 여부, 사용 횟수, 현재 버전 메모 `note`)·
   `schema_versions`·`extraction_runs`(모델·프롬프트 버전·프로파일·정밀 모드·토큰·시간·신뢰도·검토 수)·`fields`(경로·행·종류·값·정규화값·
   원본값·쪽·bbox·근거·신뢰도·모델 신뢰도·상태·검토 사유·검증 JSON)·`field_history`. `documents::repo::replace_pages`는 재렌더 시
   OCR 텍스트·분류 열을 보존한다(자기 텍스트 레이어가 생기면 OCR 사본은 버림).
@@ -460,40 +460,51 @@
 - `pipeline/prompts.rs`: 단계별 프리셋(분류·KIE·스키마 T=0, OCR 0.1, top_p 0.9, top_k 20; 이미지 예산 분류 1,024·OCR 1,200~3,072·
   KIE 1,024~2,048 토큰), `enable_thinking:false`, 자체 작성 프롬프트(분류 동적 enum, OCR → Markdown+HTML 표+`<stamp>`/`<signature/>`/
   ☐☑, KIE 2단계 복사 원칙·근거 인용, 양식 필드 도출, NL 스키마 생성/수정), n-gram 루프 감지.
-- `pipeline/vlm.rs`: `Vlm` 호출기 — `ChatBackend::complete`(엔진·대본 공용), json_schema 응답, `reasoning_content` 누출·`finish_reason=length`
-  (예산 ×1.5)·루프(온도 +0.2) 재시도 ≤3회, 취소 검사, 코드 펜스 허용 JSON 파서. `pipeline/image.rs`: 캐시 페이지 JPEG를 토큰 예산
-  (32 px/토큰)에 맞춰 축소 → data URL.
+- `pipeline/vlm.rs`: `Vlm` 호출기 — `ChatBackend::complete_cancellable`(엔진·대본 공용, 스트림 토큰마다 취소 검사), json_schema
+  응답, 재시도 ≤3회(`finish_reason=length` → 예산 ×1.5, OCR은 ×2 한 번; 루프 → 온도 +0.2·seed 변경; `reasoning_content`만 오면
+  seed 변경; HTTP 4xx는 즉시 실패; 서버 출력 파서 500은 seed·온도를 바꿔 재시도; 컨텍스트를 채워 잘린 답은 예산을 늘리지
+  않음), 정밀 모드용 온도·seed 재정의(`with_sampling`), 로드된 인스턴스의 컨텍스트 크기
+  (`with_context`)로 본문 앵커 예산 산정(`prompts::text_budget`) + 서버가 컨텍스트 초과(400)를 돌려주면 앵커를 ½→¼→제거하며
+  재시도, 코드 펜스 허용 JSON 파서. `pipeline/image.rs`: 캐시 페이지 JPEG를 토큰 예산(32 px/토큰)에 맞춰 축소 → data URL.
 - `pipeline/classify.rs`(페이지 분류 파싱, 문서 투표 — 첫 쪽 우선, `other` 다수여도 유형 쪽이 이김) · `pipeline/ocr.rs`(펜스/`null` 정리,
   표 셀 수, HTML·마크다운 표 파서, CSV) · `pipeline/extract.rs`(쪽별 KIE, 쪽 병합 — 신뢰도 높은 값·표 행 연결, 필드 행 생성 —
-  검증·마스킹·근거/값 탐색·정밀 모드 일치·검토 사유 low_confidence|validation_failed|required_missing|audit(결정적 해시 샘플링)·
-  문서 메타(거래처·날짜·합계)).
+  검증·마스킹(모델 원문도 `mask_output`으로 가린 뒤 저장)·근거/값 탐색·정밀 모드 일치(2차 샘플 T=0.3)·검토 사유
+  low_confidence|validation_failed|required_missing|audit(문서 단위 결정적 해시 샘플링, 문서당 1필드)·문서 메타(거래처·날짜·합계)).
 - `pipeline/run.rs`: 실행기 — 문서별 격리, 분류(앞 8쪽+마지막, 회전≠0이면 `rotate_page` 재렌더 후 재분류, 수동 유형 보존) → OCR
   (이미지 있는 쪽, 텍스트 레이어는 `ocr_digital_pdf`일 때만, 밀집 쪽은 잔글씨 재패스, PII 마스킹, `pages.text`에 기록 → P3 색인이
   `updated_at`으로 재청킹) → 추출(스키마: 명시 → 문서 재정의 → 유형 매핑 → 일반; 앞 N−1쪽+마지막; 정밀 모드 2차 샘플) → 필드
   저장·실행 기록·문서 상태(`extracted`/`reviewed`, `review_status`) → `extractions/<doc>/<run>/{result.json, pNNNN.md}` + `LATEST` 미러.
-- `pipeline/review.rs`: 승인/수정(재검증·마스킹)/보류/거부/되돌림, 이력 기록, 문서 재계산(대기 없음 + 필수 필드 값 있음 → `reviewed`),
-  문서 일괄 승인, 이력 복원, 재검증(교차 규칙 포함). `pipeline/forms.rs`: HWPX/DOCX 표 구조(라벨 셀+빈 셀, 머리행+빈 행 → 반복 표,
+- `pipeline/review.rs`: 승인/수정(스키마 `FieldDef`로 재검증·마스킹, 교정값의 검증 이슈 보존)/보류/거부/되돌림, 이력 기록, 문서
+  재계산(대기 없음 + 필수 필드 값 있음 → `reviewed`), 문서 일괄 승인, 이력 복원, 재검증(교차 규칙 포함, 검증 결과가 같으면 신뢰도
+  유지 — 멱등). `pipeline/forms.rs`: HWPX/DOCX 표 구조(라벨 셀+빈 셀, 머리행+빈 행 → 반복 표,
   "라벨: ____")·텍스트 휴리스틱·VLM 메타스키마 도출, 양식 등록(문서 role=form·유형=슬러그), NL 생성/수정(수정은 유형·규칙 유지),
   한국어 양식명 → 슬러그. `pipeline/split.rs`: lopdf로 PDF 분할(`<stem>_partN.pdf`, 원본 `archived`)·병합(이미지는 JPEG→PDF 래핑),
   새 문서 등록·렌더.
 - `settings.rs`: `AutoProcessingLevel::None` 추가, `ProcessingSettings`에 inbox 자동 처리 수준(기본 full; 드롭/폴더는 classify_only),
   `ocr_digital_pdf`·`kie_max_pages`·`precise_mode`·`dense_reocr`·`dense_cells`. `ImportOptions.auto_level`(가져오기 다이얼로그 선택).
-- `engine/client.rs`: `ChatResponse.reasoning`(`message.reasoning_content`). `knowledge/answer.rs`: `ChatBackend::complete`.
-- 테스트(38): 스키마·린트·메타스키마, 검증기 전반, 프롬프트/프리셋/루프, 호출기 재시도·취소, 이미지 예산, 분류 투표, OCR 표 파서,
-  추출 병합·필드 생성·정밀 모드·감사, 분할/병합, 양식 도출, 대본 백엔드 통합: 스캔 영수증 end-to-end(분류→OCR(PII 마스킹)→KIE→
+- `engine/client.rs`: `ChatResponse.reasoning`(`message.reasoning_content`, 스트림 델타 포함), `RouterModel::context_size`
+  (`memory.effective.n_ctx`) → `ModelInstanceStatus.ctx`. `knowledge/answer.rs`: `ChatBackend::complete` / `complete_cancellable`.
+  `documents/repo.rs`: `set_file_info`가 내용 해시 변경 시 파이프라인 상태 초기화(`reset_pipeline_state`).
+- 테스트(44): 스키마·린트·메타스키마, 검증기 전반, 프롬프트/프리셋/루프/텍스트 예산, 호출기 재시도(4xx·OCR 예산·샘플링)·취소,
+  이미지 예산, 분류 투표, OCR 표 파서·CSV 주입 방지, 추출 병합·필드 생성·정밀 모드·감사·PII 원문 마스킹·컨텍스트 초과 축소,
+  분할/병합·이름 검증, 양식 도출, 대본 백엔드 통합: 스캔 영수증 end-to-end(분류→OCR(PII 마스킹)→KIE→
   검증→검토 큐→미러→지식 색인 재청킹), 디지털 PDF(OCR 생략·텍스트 KIE·필수 누락), 회전 재렌더·수동 유형, 취소·실패 격리, 검토
-  흐름(이력·승격·복원·재검증), 스키마 CRUD·기본·버전·재정의, 양식 등록(구조/VLM)·NL 생성/수정, 분할 등록·병합.
+  흐름(이력·승격·복원·재검증), 스키마 CRUD·기본·버전·재정의, 양식 등록(구조/VLM)·NL 생성/수정, 분할 등록·병합, 리뷰 공백
+  (정밀 샘플링·PII 미러·재검증 멱등·교정 검증·내용 변경 초기화·병합 이름·기본 스키마 이동·추출 쪽 예산).
 
 ### Tauri 셸 (`src-tauri`)
 
-- `pipeline_bridge.rs`: 비전 모델 선택(`knowledge_bridge::chat_model` + 엔진 기동/로드), `process_job`(`JobKind::Pipeline`, 진행률
-  = 문서+쪽, 끝나면 `knowledge_bridge::auto_index` + 대기열 처리), `auto_process`(가져오기 후: 드롭/폴더 → `auto_level`, inbox →
+- `pipeline_bridge.rs`: 비전 모델 선택(`knowledge_bridge::chat_model` + 드롭인 재스캔 + 엔진 기동/취소 가능한 로드, 라우터가
+  보고한 컨텍스트 크기를 `PipelineDeps.ctx`로 전달), `process_job`(`JobKind::Pipeline`, 진행률 = 문서+쪽, 끝나면
+  `knowledge_bridge::auto_index` + 대기열(`ProcessRequest` 전체 보존) 처리), `auto_process`(가져오기 후: 드롭/폴더 → `auto_level`, inbox →
   `inbox_auto_level`, 다이얼로그 선택 우선; 모델 없음/엔진 꺼짐이면 `pipeline://changed {kind: no_model|engine_off}`), 분할/병합 작업,
   양식 도출(로드된 모델이 있을 때만 VLM, 아니면 구조/텍스트), NL 스키마(모델 로드), 워크스페이스 열 때 내장 양식 시드·중단 실행 정리.
 - `commands/pipeline.rs` 28개 명령(status/process/doc_types/schemas CRUD·기본·사용·린트·NL·양식 도출/등록/문서 스키마 재정의/
   runs/fields/history/restore/revalidate/review_queue(문서명·유형·쪽 이미지 URL 포함)/review_apply/approve_document/tables/
-  table_csv/table_export/split/merge). `docs_bridge`: 작업 종류 `pipeline`·`document_split`·`document_merge`를 워크스페이스
-  작업으로 취소·대기, 가져오기 작업 후 자동 파이프라인. 문서 삭제 시 추출 미러 폴더 삭제. 수동 유형 변경은 `doc_type_source=manual`.
+  table_csv/table_export/split/merge; 오류 코드는 `UiError.code`에 — `no_documents`·`description_empty`·`merge_name_invalid`·
+  `no_model`·`engine_not_running`·`model_not_loaded`…). `docs_bridge`: 작업 종류 `pipeline`·`document_split`·`document_merge`를
+  워크스페이스 작업으로 취소·대기, 가져오기 작업 후 자동 파이프라인, 작업 실패 로그. 문서 삭제 시 추출 미러 폴더 삭제. 수동 유형
+  변경은 `doc_type_source=manual`.
 
 ### 프런트엔드
 
@@ -511,23 +522,40 @@
   다이얼로그 "가져온 뒤 자동 처리"(설정값/없음/분류/OCR/전체) + 예상 소요; 설정 > 처리(없음 수준·inbox 수준·텍스트 레이어 OCR·
   추출 쪽수·정밀 모드·밀집 재OCR); 홈 검토 대기 수 + 검토 큐 링크; 사이드바 검토 큐 배지; 작업 종류·요약 번역.
 - 모의 백엔드 `mock-pipeline.ts`(파일명 분류, 유형별 OCR 텍스트·KIE 템플릿, 검증·마스킹, 검토·이력, 스키마 CRUD·버전·NL 파서·
-  양식 도출, 표 파서, 분할/병합 시뮬레이션). Playwright `pipeline.spec.ts` 3건.
+  양식 도출, 표 파서, 분할/병합 시뮬레이션, 비전 모델 상태 플래그·대기열). Playwright `pipeline.spec.ts` 4건(IME 조합 포함),
+  공용 헬퍼 `e2e/helpers.ts`.
 
 ### 테스트·검증
 
 | 항목 | 결과 |
 |---|---|
-| `cargo test --workspace` (ko-dic + PDFium) | 코어 lib 161 통과(+1 ignored; 파이프라인 38), 셸·엔진 프로세스·real_engine 통과 |
+| `cargo test --workspace` (ko-dic + PDFium) | 코어 lib 168 통과(+1 ignored; 파이프라인 44), 셸·엔진 프로세스·real_engine 통과 |
 | `cargo clippy --workspace --all-targets -D warnings`, `cargo fmt --check` | 통과 |
-| vitest / Playwright | 27 / 20 통과(P4 3건 추가) |
+| vitest / Playwright | 27 / 21 통과(P4 4건: 처리·검토 큐·스키마/양식·IME) |
 | `npm run licenses:check`, `cargo deny check licenses bans sources` | 통과 (lopdf MIT, regex MIT/Apache) |
 | 실제 llama-server(CPU) + 초소형 Qwen3.5 | `real_engine` 테스트에 P4 경로 추가: 이미지+분류 문법 JSON, KIE 문법 수용, `reasoning_content` 없음 |
 | 헤드리스 실행(Linux) | 아래 "헤드리스 검증" 참조 |
 
 ### 헤드리스 검증 (실제 데스크톱 바이너리 + 실제 llama-server, Xvfb + WebKitGTK)
 
-스크립트 스크래치패드 `smoke-p4/run-p4.sh`: 초소형 Qwen3.5 fixture를 드롭인 모델 폴더에 두고 `active_model`로 지정, inbox 자동
-처리 `full`, `DOCULENS_LLAMA_SERVER`(CPU 빌드). 결과: (기록 예정)
+스크립트 스크래치패드 `smoke-p4/run-p4.sh`: 초소형 Qwen3.5 fixture(무작위 가중치, 4K 컨텍스트)를 드롭인 모델 폴더에 두고
+`active_model`로 지정, inbox에 `sample-photo.jpg`·`sample-contract.docx`, 자동 처리 `full`, `DOCULENS_LLAMA_SERVER`(CPU 빌드),
+PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
+
+- 앱 기동 → 내장 양식 7종 시드 → inbox 가져오기(DOCX 변환 포함) → 엔진 자동 기동 → 모델 로드(드롭인 재스캔 뒤; 라우터가 보고한
+  컨텍스트 4,096을 파이프라인이 받음) → 두 문서 자동 처리가 모델 로드 후 9초 안에 끝남.
+- 분류: 두 문서 모두 실제 서버의 문법 제약 JSON으로 분류됨(무작위 모델이라 유형은 `tax_invoice`, 쪽 유형·언어·회전 기록).
+- OCR: 사진 1쪽 → `pages.text` 3,185자(`text_source=ocr`, `ocr_profile=accuracy`), `has_text_layer=1`, 지식 색인이 4청크로
+  재청킹; 변환된 DOCX는 텍스트 레이어라 OCR 생략.
+- KIE: 계약서(세금계산서 스키마) → 프롬프트 3,462토큰이 4K 컨텍스트를 거의 채워 생성이 630토큰에서 잘림 → "컨텍스트에 의해
+  잘림, 재시도 안 함" 경고 후 실행 `failed`·`pipeline_error` 기록(무작위 모델은 JSON을 닫지 못하므로 예상된 결과). 사진 →
+  서버가 출력 파서 오류 500("output does not match the expected peg-native format", 무작위 토큰이 `<tool_call>` 조각을
+  만든 것)을 돌려줘 3회 재시도 후 실패 — 이후 이런 500은 seed·온도를 바꿔 재시도하도록 수정(단위 테스트; 실서버 재확인은
+  아래). 필드·미러는 생성되지 않음(실패 실행은 미러를 쓰지 않음).
+- 교훈: 4 vCPU 상자에서 다른 프로세스가 코어 하나를 점유하면 llama.cpp CPU 스레드 풀이 초당 ~200토큰에서 1.4토큰으로 무너진다
+  (3·4회차가 "멈춘" 원인 — 이전 셸 명령이 남긴 `rev` 프로세스). CPU 폴백 프리셋의 `--threads`를 물리 코어−1로 두는 것을 P5
+  엔진 튜닝 항목으로 둔다. 또 `timeout`으로 앱을 죽이면 Linux에서는 엔진 자식이 남는다(Windows는 작업 객체로 정리) — 스크립트가
+  뒤처리.
 
 ### 설계 대비 범위 메모
 
@@ -542,13 +570,88 @@
   휴리스틱. NL 스키마는 모델을 로드한다.
 - 어시스턴트의 분류/추출/검토 명령(`classify`·`extract`·`review` op)은 P5 플래너에서 연결; 지금은 라이브러리/뷰어 GUI만.
 - 실제 Qwen3.5-4B로는 검증하지 못했다(HF 차단): 분류 정확도·OCR CER·KIE 필드 F1·신뢰도 임계 보정은 사용자 PC 골든셋 항목.
+  실서버에서 본 두 경계 사례 — 4K 컨텍스트에서 KIE 프롬프트가 컨텍스트를 채우는 것(속도·GPU 프리셋은 8K/16K라 본문 앵커가
+  그대로 들어감)과 출력 파서 500 — 는 실모델에서 재확인한다(`docs/user-pc-checklist.md` P4).
+
+## P4 단계 말 리뷰 반영 (2026-11-04)
+
+리뷰 서브에이전트 2건(Rust 2 High·13 Medium·17 Low, 프런트엔드 3 High·14 Medium·14 Low)의 지적을 다음과 같이 반영했다.
+보고서 원문은 세션 스크래치패드(`review-rust-p4.md`, `review-frontend-p4.md`).
+
+**Rust — 반영(높음·중간 전부 + 낮음 대부분)**
+
+- PII(§3.8): 모델 원문(`extraction_runs.result_json`·미러 `result.json`)과 표 행 근거에 주민번호·전화·계좌가 그대로 남던 문제 →
+  `extract::mask_output`이 스키마를 따라 PII 종류·`mask` 필드를 `mask_value`로, 모든 문자열을 주민번호 패턴으로 가린 뒤 저장·미러;
+  표 행 근거는 가려진 셀 값으로 구성, 정규화값도 마스킹(이미 가려진 값의 재검증은 그대로 통과), PII 값의 본문 탐색은 가려진 형태끼리.
+  주민번호 정규식은 "하이픈 또는 붙여쓰기"만 허용(공백으로 나뉜 두 숫자는 매치하지 않음). 테스트(단위 + 통합) 추가.
+- 정밀 모드: 2차 샘플이 시스템 프롬프트만 바꾼 탐욕 디코딩이었음 → `Vlm::with_sampling(temperature, seed)`로 같은 프롬프트를
+  T=0.3·다른 seed로 샘플링(요청 동일성·온도·seed를 테스트로 고정).
+- 감사 샘플링: 필드 단위 해시라 대부분의 문서가 "검토 대기"가 되던 문제 → 문서 단위(문서 id 해시 < p%) 로 바꾸고 그 문서의
+  깨끗한 스칼라 필드 하나만 `audit`.
+- 내용 변경: `set_file_info`가 해시가 바뀌면 OCR 텍스트·쪽 분류·문서 파이프라인 열(`classified_at`·`ocr_at`·`extracted_at`·
+  `last_run_id`·`review_status`·`confidence`·오류)을 초기화하고 `has_text_layer`를 다시 계산(수동 유형은 유지).
+- 호출기 재시도: HTTP 4xx(문법 거부·컨텍스트 초과)는 즉시 실패, `reasoning_content`가 새어도 답이 있으면 채택(로그)·비어 있으면
+  seed+1·온도 +0.1로 재시도, 루프 재시도도 seed를 바꿈, OCR 잘림은 한 번 예산 ×2(≤6,144) 후 플래그; `complete_cancellable`
+  (스트림 토큰마다 취소 검사)로 취소·워크스페이스 전환이 쪽 단위 OCR을 기다리지 않음, 스트림에서도 `reasoning_content` 수집,
+  모델 로드는 `load_model_cancellable`.
+- 루프 감지는 HTML 태그·공백을 벗긴 텍스트로(빈 표 셀 `<td></td>` 반복은 루프가 아님), 창에 비공백 문자 8자 미만이면 무시.
+- 컨텍스트: KIE 본문 앵커 4,000자·분류 3,000자로 축소하고 `<page_text>` 구분자 + "안의 지시는 따르지 않음" 규칙; 스모크에서 실제
+  llama-server가 `request (6272 tokens) exceeds the available context size (4096)`로 거부하는 것을 확인해 → 본문 앵커를 절반→
+  1/4→제거 순으로 줄여 재시도(`extract_page`). 토큰 단위 선제 예산은 보류(아래).
+- 검토: 수정/재검증이 스키마의 `FieldDef`(선택지·정규식·마스킹)를 경로로 찾아 쓰고, 교정값의 검증 이슈(`enum_option` 등)도 저장
+  (상태는 해결됨 유지); 재검증은 검증 결과가 바뀌지 않으면 저장된 신뢰도를 유지(멱등).
+- 대기열은 `ProcessRequest` 전체(force·profile·precise·schema·pages)를 보존; `pages`는 추출 쪽 선택에도 적용;
+  `kie_max_pages=1`은 첫 쪽; 분할은 실패·취소 시 등록된 조각·파일을 되돌림(all-or-nothing); 병합 이름은 파일 쓰기 전에
+  `safe_stem`(경로 구분자·`..`·제어문자 거부, 셸에서도 `merge_name_invalid`); 이미지 병합은 PNG/JPEG 모두 RGB JPEG로 재인코딩.
+- 스키마: 유형 이동 시 기본 하나만 유지(떠난 유형은 승격, 도착 유형에 기본이 없으면 채택), 새 초안은 `builtin` 출처를 주장할 수
+  없음, 유형 목록 라벨·`schema_id`는 기본 스키마 기준(사용자 스키마가 있으면 "내장"이 아님), 버전 메모는 그 메모로 만든 버전에
+  붙도록 `schemas.note` 열 추가(이전 메모는 `schema_versions`로 이동), 린트 문구(정규식은 검증기 전용).
+- 기타: CSV 수식 주입 방지(`=`,`@`,`+x`,`-x`,탭/CR 셀 앞에 `'`), 성공한 실행·OCR이 이전 `pipeline_error`를 지움, OCR 뒤
+  `has_text_layer=1`(지식 상태 "텍스트 없음" 오계산), 5자리 미만 숫자 값은 본문 정확 일치만 인정, 명령 오류 코드를
+  `UiError.code`에 통일(`no_documents`·`description_empty`·`merge_name_invalid`·`no_model`·`engine_not_running`…),
+  `vision_model`이 로드 전에 드롭인 폴더를 재스캔(`rescan_and_sync`; 스모크의 "unknown model id" 원인), 작업 실패 로그.
+
+**Rust — 보류(HANDOFF 숙제)**: 프리셋 컨텍스트 크기 기반 선제 토큰 예산(지금은 400 응답에 적응), 문법 속성 순서(알파벳 —
+동작엔 무관), 워크스페이스 전환 후 대기열 폐기(P5 러너로 교체), OCR 출력 건전성 검사(이전 패스보다 훨씬 짧거나 쪽 어휘가 없으면
+거부), llama.cpp 문법 변환기 CI 검사, 실모델 임계 보정(사용자 PC).
+
+**프런트엔드 — 반영**
+
+- 필드 패널: 행 컴포넌트를 모듈 수준 `memo`로 올려 한글 조합 중 입력 상자가 다시 마운트되지 않음(인라인 수정 DOM 유지, IME Enter
+  무시); 확신이 높아 큐에 없는 필드도 수정·거부·되돌리기 가능(표 셀은 ⋯ 메뉴), 보류 행도 되돌리기; "검토 큐에서 보기" 진입점;
+  검증 메시지 언어 분리(한/영), 실행 선택 aria, 정밀 표시 i18n; 뷰어 패널 `key={doc.id}`; 유형 출처·처리 오류를 정보 목록에 표시.
+- 검토 큐: Enter가 포커스된 버튼·링크·슬라이더를 가로채지 않음(거부 버튼에서 Enter → 승인되던 문제), 목록을 roving-tabindex
+  `listbox/option`으로, 진입 시·편집 다이얼로그 닫힌 뒤 루트 포커스(단축키가 바로 동작), `aria-live`로 현재 항목 안내,
+  `@tanstack/react-virtual` 가상화 + 행 memo + 낙관적 제거(`setQueryData`), 임계치 변경 시 파이프라인 쿼리 무효화 + 안내문,
+  문서 칩에 문서명, 보류는 처리 수에서 제외, 빈 값 Enter 저장 금지·진행 중 다이얼로그 유지.
+- 신뢰도 색·글리프가 설정 임계치를 따름(`confidenceTone(c, threshold)`: ok ≥ 임계치, warn ≥ 임계치−0.2), 동적 Tailwind
+  클래스 → 정적 맵.
+- 스키마 화면: NL/양식 다이얼로그가 닫힌 뒤 도착한 모델 결과를 버림(요청 시퀀스), 저장 안 한 초안을 바꾸는 모든 경로에 확인
+  다이얼로그(`schemas.editor.discard`), 목록 행 memo, 린트 코드 16종 i18n(`schemas.lint.*`), 복제 이름 i18n, 키 제안은 라벨
+  blur 시·사용자가 키를 만지기 전까지만 + Rust `key_from_label`의 한국어 표(80항목)·접미 규칙·종류 추정 이식, 행 uid 키(인덱스
+  키 제거), 린트 응답 순서 보호, 매핑표 `<thead>`, 재분류 배너에 스키마 이름. (라우트 이동 차단은 `HashRouter`라 `useBlocker`
+  불가 — 보류.)
+- 라이브러리·처리: 이미 추출/검토된 문서를 다시 "표준 처리"하면 새 실행으로 대체한다는 확인 다이얼로그, 병합은 라이브러리
+  목록 순서, 검토 배지 클릭 → 그 문서로 필터된 검토 큐, 목록 보기에도 유형·검토 열, 파이프라인 상태 칩(모델 준비/미로드/없음/
+  엔진 꺼짐 + 처리 중·대기 수; 상태 표시줄·라이브러리) + 모델 없으면 처리 메뉴 비활성, 가져오기 예상 소요를 수준별로
+  (분류만은 초 단위), 설정 처리 숫자 입력을 `NumberField`(Enter 확정·외부 변경 반영)로 + `dense_cells` 편집, 작업 진행
+  단계명 번역, 사이드바 검토 큐 링크 이름에 대기 수, 홈 빠른 가져오기 활성(`/library?import=1`), 오래된 문구(P1/P4 안내) 정리,
+  미사용 i18n 키 삭제.
+- 모의 백엔드: 비전 모델 상태 플래그(`doculens.mock.vision` = ready|not_loaded|none|engine_off)로 `no_model`/`engine_off`
+  경로 재현, 파이프라인 작업 중 요청은 대기열(`null`) 후 순서대로 실행, 버전 저장 부작용 제거. E2E 헬퍼를 `e2e/helpers.ts`로
+  통합(5개 spec), 작업 요약 문자열을 i18n 템플릿에서 생성, IME 조합 중 Enter가 승인/저장되지 않는 케이스 추가(21건).
+
+**프런트엔드 — 보류**: 라우트 이동 시 미저장 초안 차단(데이터 라우터 전환 필요), 큐의 "강한 모델로 재추출"(단일 모델 구성이라
+해당 없음 — 설계 §3.7.2 문구만 남김), bbox 근거 크롭, 표 XLSX 내보내기(P5 내보내기와 함께), 가져오기 ETA의 실제 쪽수 반영
+(가져오기 계획에 쪽수 없음).
 
 ## P5 착수 메모
 
 1. 플래너(PlanSchema, 부록 D op 전수 중 1차 범위) + 확인 카드 + Job 러너(우선 큐·일시정지·재시도): `pipeline_bridge::process_job`의
    대기열(`pipeline_queue`)과 `JobBook`을 영속 러너로 교체(설계 §3.9 스케줄링).
 2. 정리/이름변경/이동 + 저널·되돌리기, 집계(검토 미완료 분리), 내보내기 5종(필드·표 CSV는 `ocr::table_csv`·`fields` 재사용).
-3. P4 숙제: bbox 그라운딩(디지털 PDF 문자 박스), 배치 PDF 자동 경계 탐지, 답변/필드 내보내기, 컬렉션 폴더 감시.
+3. P4 숙제: bbox 그라운딩(디지털 PDF 문자 박스), 배치 PDF 자동 경계 탐지, 답변/필드 내보내기, 컬렉션 폴더 감시, 워크스페이스
+   전환 후 파이프라인 대기열 보존(P5 러너), OCR 출력 건전성 검사, 스키마 화면 라우트 이동 차단(데이터 라우터 전환), 표 XLSX.
 
 ## 알려진 제약
 

@@ -29,7 +29,7 @@ that processes Korean/English business documents with a local VLM
 ## Commands
 - Rust: `cargo test --workspace` (lib + `tests/engine_process.rs`), `cargo check -p doculens`,
   `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all`.
-- Real engine (optional): `DOCULENS_LLAMA_SERVER=<llama-server> DOCULENS_TEST_MODELS_DIR=crates/doculens-core/tests/fixtures cargo test -p doculens-core --test real_engine -- --nocapture`.
+- Real engine (optional): `DOCULENS_LLAMA_SERVER=<llama-server> DOCULENS_TEST_MODELS_DIR=$PWD/crates/doculens-core/tests/fixtures cargo test -p doculens-core --test real_engine -- --nocapture` (absolute path: the test binary runs from the crate directory).
 - PDFium (optional, enables the render/import tests): `node scripts/fetch-pdfium.mjs --dest /tmp/pdfium` then
   `DOCULENS_PDFIUM=/tmp/pdfium/libpdfium.so cargo test -p doculens-core`.
 - Sample documents: `DOCULENS_FIXTURE_OUT=<dir> cargo test -p doculens-core --lib -- --ignored gen_fixtures`.

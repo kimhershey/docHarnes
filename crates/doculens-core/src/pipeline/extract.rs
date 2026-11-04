@@ -17,6 +17,7 @@ use super::vlm::{Reply, Vlm};
 use super::{ReviewReason, ValidationIssue};
 
 /// One page's input to the extractor.
+#[derive(Clone, Copy)]
 pub struct PageInput<'a> {
     pub page_no: u32,
     pub page_count: u32,
@@ -44,10 +45,20 @@ pub fn extract_page(
     let name = format!("kie_{}", schema.doc_type);
     // Precision mode (§3.4): the same request sampled at T=t with another seed —
     // greedy decoding twice would return the same answer and prove nothing.
-    let sampled = temperature
-        .map(|t| Vlm::new(vlm.chat, vlm.model.clone(), vlm.profile, vlm.cancel).with_sampling(Some(t), Some(11)));
+    let sampled = temperature.map(|t| {
+        Vlm::new(vlm.chat, vlm.model.clone(), vlm.profile, vlm.cancel)
+            .with_sampling(Some(t), Some(11))
+            .with_context(vlm.ctx)
+    });
     let caller = sampled.as_ref().unwrap_or(vlm);
-    let mut text_chars = page.text.map(|t| t.chars().count().min(prompts::KIE_TEXT_CHARS)).unwrap_or(0);
+    // Proactive budget: the prompt without text (instructions + schema summary) and the image
+    // must leave room for the reply inside the instance's context.
+    let p = caller.params(Stage::Kie);
+    let fixed = prompts::kie(&schema.definition, &schema.name, page.page_no, page.page_count, None).chars().count()
+        + prompts::SYSTEM_JSON.chars().count();
+    let image_tokens = page.image_url.map(|_| p.image_tokens.unwrap_or(1_024)).unwrap_or(0);
+    let budget = prompts::text_budget(caller.ctx, image_tokens, p.max_tokens, fixed, prompts::KIE_TEXT_CHARS);
+    let mut text_chars = page.text.map(|t| t.chars().count().min(budget)).unwrap_or(0);
     loop {
         let shortened;
         let text = match (page.text, text_chars) {
@@ -657,6 +668,26 @@ mod tests {
         assert_eq!(prompts.len(), 3);
         assert!(prompts[0] > prompts[1] && prompts[1] > prompts[2], "{prompts:?}");
         assert!(prompts[2] < prompts[0] - 2_000, "the third try carries at most 1,000 text chars: {prompts:?}");
+
+        // A known small context shortens the anchor before the first call.
+        let chat = StageChat::new();
+        chat.push("kie_receipt", json!({ "total": sv("1,000", "합계 1,000", 90) }));
+        let vlm = Vlm::new(&chat, "m".into(), crate::settings::Profile::Balanced, None).with_context(Some(6_144));
+        extract_page(&vlm, &s, &page, None).unwrap();
+        let first = chat.requests.lock().unwrap()[0].messages[1]["content"].as_str().unwrap().chars().count();
+        assert!(
+            first < prompts[0] && first > prompts[2],
+            "6K context: between the full and the 1,000-char prompt ({first})"
+        );
+        // A context that the image (1,024 tokens) and the reply (2,048) already fill: no text at all.
+        let with_image = PageInput { image_url: Some("data:image/jpeg;base64,AA=="), ..page };
+        let vlm = Vlm::new(&chat, "m".into(), crate::settings::Profile::Balanced, None).with_context(Some(3_328));
+        extract_page(&vlm, &s, &with_image, None).unwrap();
+        let second = chat.requests.lock().unwrap()[1].messages[1]["content"][1]["text"].as_str().unwrap().to_string();
+        assert!(
+            !second.contains("<page_text>\n") && second.ends_with("이미지만 사용]"),
+            "small context: image / instructions only — {second}"
+        );
 
         // With the text gone the overflow is final.
         let chat = StageChat::new();

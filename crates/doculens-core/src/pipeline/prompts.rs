@@ -122,6 +122,21 @@ pub fn classify(doc_types: &[DocTypeInfo]) -> String {
 pub const KIE_TEXT_CHARS: usize = 4_000;
 pub const CLASSIFY_TEXT_CHARS: usize = 3_000;
 
+/// Characters of page text that fit next to the image, the rest of the prompt and the
+/// reply in a context of `ctx` tokens (Korean ≈ 1 token per character, so characters
+/// are counted as tokens). `None` = unknown context → the stage maximum.
+pub fn text_budget(
+    ctx: Option<u32>,
+    image_tokens: u32,
+    reply_tokens: u32,
+    fixed_chars: usize,
+    max_chars: usize,
+) -> usize {
+    let Some(ctx) = ctx else { return max_chars };
+    let reserved = image_tokens as usize + reply_tokens as usize + fixed_chars + 256;
+    ctx.saturating_sub(reserved as u32).min(max_chars as u32) as usize
+}
+
 /// Classification from text only (pages without an image).
 pub fn classify_text(doc_types: &[DocTypeInfo], text: &str) -> String {
     format!(
@@ -303,5 +318,9 @@ mod tests {
         assert!(!looks_looped(&table));
         assert!(kie(&crate::pipeline::schema::builtins()[0].def, "x", 1, 1, Some("본문"))
             .contains("<page_text>\n본문\n</page_text>"));
+        assert_eq!(text_budget(None, 1_024, 2_048, 900, 4_000), 4_000);
+        assert_eq!(text_budget(Some(16_384), 1_024, 2_048, 900, 4_000), 4_000);
+        assert_eq!(text_budget(Some(8_192), 1_024, 2_048, 900, 4_000), 3_964);
+        assert_eq!(text_budget(Some(4_096), 1_024, 2_048, 900, 4_000), 0, "a 4K context leaves no room for text");
     }
 }

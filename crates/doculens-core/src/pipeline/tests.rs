@@ -70,6 +70,7 @@ impl World {
             profile: Profile::Balanced,
             pii_masking: true,
             cancel,
+            ctx: None,
         }
     }
 

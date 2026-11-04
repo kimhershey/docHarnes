@@ -42,6 +42,8 @@ pub struct PipelineDeps<'a> {
     pub profile: Profile,
     pub pii_masking: bool,
     pub cancel: Option<&'a AtomicBool>,
+    /// Context size of the loaded model instance (prompt budgeting); `None` = unknown.
+    pub ctx: Option<u32>,
 }
 
 impl PipelineDeps<'_> {
@@ -83,7 +85,7 @@ pub fn process(
     let documents = db.with(|c| repo::candidate_documents(c, &req.document_ids))?;
     let doc_types = db.with(repo::doc_types)?;
     let profile = req.profile.unwrap_or(deps.profile);
-    let vlm = Vlm::new(deps.chat, deps.model.clone(), profile, deps.cancel);
+    let vlm = Vlm::new(deps.chat, deps.model.clone(), profile, deps.cancel).with_context(deps.ctx);
     let mut report = ProcessReport::default();
     for id in &req.document_ids {
         if !documents.iter().any(|d| &d.id == id) {
@@ -255,7 +257,8 @@ fn process_document(
             if let Some(t) = &text {
                 if ocr::table_cells(t) >= deps.settings.dense_cells as usize {
                     // Dense page (§3.4 밀집 영역): a second pass at the fine-print budget.
-                    let fine = Vlm::new(vlm.chat, vlm.model.clone(), Profile::FinePrint, vlm.cancel);
+                    let fine =
+                        Vlm::new(vlm.chat, vlm.model.clone(), Profile::FinePrint, vlm.cancel).with_context(vlm.ctx);
                     if let Some(img2) = page_image(&cache, page, fine.params(Stage::Ocr).image_tokens.unwrap_or(3_072))?
                     {
                         match ocr::ocr_page(&fine, &img2.url, None) {

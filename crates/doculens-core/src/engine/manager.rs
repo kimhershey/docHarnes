@@ -60,6 +60,8 @@ pub struct ModelInstanceStatus {
     pub input_modalities: Vec<String>,
     pub loaded_at: Option<DateTime<Utc>>,
     pub warmed_up: bool,
+    /// Context size (tokens) the router reports for the instance; prompts are budgeted against it.
+    pub ctx: Option<u32>,
 }
 
 impl ModelInstanceStatus {
@@ -77,6 +79,7 @@ impl ModelInstanceStatus {
                 .map(|b| b + mmproj_bytes)
                 .or_else(|| prev.and_then(|p| p.memory_effective_bytes).filter(|_| usable)),
             memory_min_bytes: m.min_device_bytes().map(|b| b + mmproj_bytes),
+            ctx: m.context_size().or_else(|| prev.and_then(|p| p.ctx).filter(|_| usable)),
             mmproj_bytes,
             input_modalities: m.input_modalities.clone(),
             loaded_at: if usable { prev.and_then(|p| p.loaded_at).or_else(|| Some(Utc::now())) } else { None },

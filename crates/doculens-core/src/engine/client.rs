@@ -69,6 +69,14 @@ impl RouterModel {
     pub fn min_device_bytes(&self) -> Option<u64> {
         sum_device_bytes(self.memory.as_ref()?.get("min")?)
     }
+    /// Context size of the running instance (`memory.effective.n_ctx`, else `min.n_ctx`).
+    pub fn context_size(&self) -> Option<u32> {
+        let m = self.memory.as_ref()?;
+        ["effective", "min"]
+            .iter()
+            .find_map(|k| m.get(k)?.get("n_ctx")?.as_u64())
+            .map(|n| n.min(u32::MAX as u64) as u32)
+    }
     /// Load progress 0..1 from the `progress` object.
     pub fn progress_value(&self) -> Option<f32> {
         self.progress.as_ref()?.get("value")?.as_f64().map(|v| v as f32)

@@ -87,6 +87,11 @@ pub fn vision_model_info(app: &AppHandle) -> VisionModelInfo {
     VisionModelInfo { model, engine_running: status.is_running(), loaded }
 }
 
+/// Context size the router reports for a loaded model (prompt budgeting).
+fn model_context(state: &AppState, model: &str) -> Option<u32> {
+    state.engine.status().model(model).and_then(|m| m.ctx)
+}
+
 /// Resolves the vision model. With `load`, starts the engine / loads the
 /// model when needed (blocking — job threads and explicit user actions only;
 /// `cancel` aborts a pending load).
@@ -145,6 +150,11 @@ pub fn process_job(app: &AppHandle, req: ProcessRequest) -> UiResult<Option<Stri
             let state = app.state::<AppState>();
             state.jobs.update(&job_id, |j| j.detail = Some("loading model".into()));
             let model = vision_model(app, true, Some(&cancel)).map_err(|e| e.message)?;
+            let model_ctx = model_context(&state, &model);
+            log::info!(
+                "pipeline: vision model {model} (context {})",
+                model_ctx.map_or("unknown".to_string(), |c| c.to_string())
+            );
             let deps = PipelineDeps {
                 import: ctx.docs.deps(),
                 chat: &state.engine,
@@ -153,6 +163,7 @@ pub fn process_job(app: &AppHandle, req: ProcessRequest) -> UiResult<Option<Stri
                 profile: ctx.profile,
                 pii_masking: ctx.pii_masking,
                 cancel: Some(&cancel),
+                ctx: model_ctx,
             };
             let total = req.document_ids.len() as u32;
             let report = run::process(&deps, &req, &mut |p| {
@@ -344,7 +355,10 @@ pub fn form_derive(app: &AppHandle, doc_id: &str, name: Option<&str>) -> UiResul
     let doc = docs_bridge::document(app, doc_id)?;
     let state = app.state::<AppState>();
     let model = vision_model(app, false, None).ok();
-    let vlm = model.map(|m| Vlm::new(&state.engine, m, ctx.profile, None));
+    let vlm = model.map(|m| {
+        let c = model_context(&state, &m);
+        Vlm::new(&state.engine, m, ctx.profile, None).with_context(c)
+    });
     Ok(forms::derive(&ctx.docs.deps(), vlm.as_ref(), &doc, name)?)
 }
 
@@ -359,7 +373,8 @@ pub fn nl_schema(app: &AppHandle, description: &str, base_id: Option<&str>) -> U
     };
     let state = app.state::<AppState>();
     let model = vision_model(app, true, None)?;
-    let vlm = Vlm::new(&state.engine, model, ctx.profile, None);
+    let c = model_context(&state, &model);
+    let vlm = Vlm::new(&state.engine, model, ctx.profile, None).with_context(c);
     Ok(forms::nl_schema(&vlm, description, base.as_ref())?)
 }
 
