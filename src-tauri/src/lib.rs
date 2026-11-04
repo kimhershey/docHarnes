@@ -5,6 +5,7 @@ mod docs_bridge;
 mod engine_bridge;
 mod jobs;
 mod knowledge_bridge;
+mod pipeline_bridge;
 mod printer;
 mod protocol;
 mod state;
@@ -50,6 +51,7 @@ pub fn run() {
             engine_bridge::on_workspace_changed(&handle);
             docs_bridge::on_workspace_changed(&handle);
             knowledge_bridge::on_workspace_changed(&handle);
+            pipeline_bridge::on_workspace_changed(&handle);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -141,6 +143,33 @@ pub fn run() {
             commands::knowledge::knowledge_versions,
             commands::knowledge::knowledge_version_set,
             commands::knowledge::knowledge_version_clear,
+            commands::pipeline::pipeline_status,
+            commands::pipeline::pipeline_process,
+            commands::pipeline::pipeline_doc_types,
+            commands::pipeline::pipeline_schemas,
+            commands::pipeline::pipeline_schema_get,
+            commands::pipeline::pipeline_schema_versions,
+            commands::pipeline::pipeline_schema_save,
+            commands::pipeline::pipeline_schema_delete,
+            commands::pipeline::pipeline_schema_set_default,
+            commands::pipeline::pipeline_schema_set_enabled,
+            commands::pipeline::pipeline_schema_lint,
+            commands::pipeline::pipeline_schema_from_nl,
+            commands::pipeline::pipeline_form_derive,
+            commands::pipeline::pipeline_form_register,
+            commands::pipeline::pipeline_document_schema,
+            commands::pipeline::pipeline_runs,
+            commands::pipeline::pipeline_fields,
+            commands::pipeline::pipeline_field_history,
+            commands::pipeline::pipeline_restore,
+            commands::pipeline::pipeline_revalidate,
+            commands::pipeline::pipeline_review_queue,
+            commands::pipeline::pipeline_review_apply,
+            commands::pipeline::pipeline_review_approve_document,
+            commands::pipeline::pipeline_tables,
+            commands::pipeline::pipeline_table_csv,
+            commands::pipeline::pipeline_split,
+            commands::pipeline::pipeline_merge,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

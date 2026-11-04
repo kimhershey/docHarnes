@@ -3,6 +3,7 @@
 
 pub mod documents;
 pub mod knowledge;
+pub mod pipeline;
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -182,6 +183,7 @@ pub fn workspace_open(app: AppHandle, state: State<'_, AppState>, args: OpenArgs
     engine_bridge::on_workspace_changed(&app);
     crate::docs_bridge::on_workspace_changed(&app);
     crate::knowledge_bridge::on_workspace_changed(&app);
+    crate::pipeline_bridge::on_workspace_changed(&app);
     Ok(v)
 }
 
@@ -209,6 +211,7 @@ pub fn workspace_create(app: AppHandle, state: State<'_, AppState>, args: Create
     engine_bridge::on_workspace_changed(&app);
     crate::docs_bridge::on_workspace_changed(&app);
     crate::knowledge_bridge::on_workspace_changed(&app);
+    crate::pipeline_bridge::on_workspace_changed(&app);
     Ok(v)
 }
 
@@ -219,6 +222,7 @@ pub fn workspace_close(app: AppHandle, state: State<'_, AppState>) -> UiResult<(
     engine_bridge::on_workspace_changed(&app);
     crate::docs_bridge::on_workspace_changed(&app);
     crate::knowledge_bridge::on_workspace_changed(&app);
+    crate::pipeline_bridge::on_workspace_changed(&app);
     Ok(())
 }
 

@@ -20,6 +20,7 @@ pub mod knowledge;
 pub mod memory;
 pub mod modelstore;
 pub mod paths;
+pub mod pipeline;
 pub mod prerouter;
 pub mod registry;
 pub mod retention;

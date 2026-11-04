@@ -80,6 +80,11 @@ pub struct ImportOptions {
     /// (new, relinked, already registered and duplicates alike).
     #[serde(default)]
     pub collection_id: Option<String>,
+    /// Pipeline level to run after the import (`None` = the settings default
+    /// for the source: drop/folder → `processing.auto_level`, inbox →
+    /// `processing.inbox_auto_level`).
+    #[serde(default)]
+    pub auto_level: Option<crate::settings::AutoProcessingLevel>,
 }
 
 impl Default for ImportOptions {
@@ -91,6 +96,7 @@ impl Default for ImportOptions {
             role: DocumentRole::Work,
             dpi: None,
             collection_id: None,
+            auto_level: None,
         }
     }
 }
@@ -940,6 +946,7 @@ pub fn delete_document(deps: &ImportDeps<'_>, id: &str, keep_file: bool) -> Resu
         }
     }
     DocumentCache::for_document(deps.paths, id).remove_all();
+    crate::pipeline::run::remove_mirror(deps.paths, id);
     deps.db.with(|c| repo::delete_document(c, id))?;
     Ok(moved_to)
 }

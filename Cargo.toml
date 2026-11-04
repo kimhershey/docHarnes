@@ -35,6 +35,10 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 trash = "5"
 hwp = "0.2"
 unicode-normalization = "0.1"
+# Validators / PII masking patterns (MIT OR Apache-2.0; already in the tree through lindera).
+regex = "1"
+# PDF page split / merge without re-rendering (MIT).
+lopdf = { version = "0.47", default-features = false }
 # Korean morphological analyzer (MIT); the ko-dic dictionary (Apache-2.0) is built by crates/doculens-kodic
 # from the pinned mecab-ko-dic source and loaded at runtime (never downloaded at build time).
 lindera = "6.2"

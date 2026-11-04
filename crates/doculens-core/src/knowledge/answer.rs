@@ -21,6 +21,18 @@ pub trait ChatBackend: Send + Sync {
     /// Model to use when the request does not name one.
     fn model_id(&self) -> Option<String>;
     fn chat_stream(&self, req: &ChatRequest, on_delta: &mut dyn FnMut(&str) -> bool) -> Result<ChatResponse>;
+    /// Non-streamed completion (pipeline JSON calls). The default collects the stream.
+    fn complete(&self, req: &ChatRequest) -> Result<ChatResponse> {
+        let mut text = String::new();
+        let mut res = self.chat_stream(req, &mut |d| {
+            text.push_str(d);
+            true
+        })?;
+        if res.content.is_empty() {
+            res.content = text;
+        }
+        Ok(res)
+    }
 }
 
 impl ChatBackend for EngineManager {
@@ -29,6 +41,9 @@ impl ChatBackend for EngineManager {
     }
     fn chat_stream(&self, req: &ChatRequest, on_delta: &mut dyn FnMut(&str) -> bool) -> Result<ChatResponse> {
         EngineManager::chat_stream(self, req, on_delta)
+    }
+    fn complete(&self, req: &ChatRequest) -> Result<ChatResponse> {
+        EngineManager::chat(self, req)
     }
 }
 

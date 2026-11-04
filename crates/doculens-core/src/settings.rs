@@ -127,14 +127,28 @@ pub enum BackendPreference {
     Cpu,
 }
 
-/// How much to do automatically after import.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+/// How much of the pipeline runs automatically after an import (§3.4
+/// `auto_pipeline`): nothing, classification, classification + OCR, or the
+/// full chain up to extraction / validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AutoProcessingLevel {
+    None,
     ClassifyOnly,
     #[default]
     ClassifyAndOcr,
     Full,
+}
+
+impl AutoProcessingLevel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AutoProcessingLevel::None => "none",
+            AutoProcessingLevel::ClassifyOnly => "classify_only",
+            AutoProcessingLevel::ClassifyAndOcr => "classify_and_ocr",
+            AutoProcessingLevel::Full => "full",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -225,7 +239,10 @@ impl Default for ModelSettings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProcessingSettings {
+    /// Level for drop / folder imports (design default: classification).
     pub auto_level: AutoProcessingLevel,
+    /// Level for files that arrive through the inbox watcher (design default: full).
+    pub inbox_auto_level: AutoProcessingLevel,
     /// Default render DPI (150-300).
     pub render_dpi: u16,
     /// Fields below this confidence go to the review queue (0.0-1.0).
@@ -235,17 +252,33 @@ pub struct ProcessingSettings {
     /// Organise/rename only documents whose review is complete.
     pub organize_reviewed_only: bool,
     pub inbox_watch: bool,
+    /// Run the VLM OCR even on pages that carry a PDF text layer (off: the
+    /// text layer is used as is — design §3.4 "digital PDF hybrid").
+    pub ocr_digital_pdf: bool,
+    /// Pages per document sent to the field extractor (first N−1 + last page).
+    pub kie_max_pages: u8,
+    /// Precision mode: a second extraction sample (T=0.3) whose agreement feeds the confidence.
+    pub precise_mode: bool,
+    /// Re-OCR dense pages (≥ `dense_cells` table cells) at the fine-print budget.
+    pub dense_reocr: bool,
+    pub dense_cells: u16,
 }
 
 impl Default for ProcessingSettings {
     fn default() -> Self {
         Self {
-            auto_level: AutoProcessingLevel::ClassifyAndOcr,
+            auto_level: AutoProcessingLevel::ClassifyOnly,
+            inbox_auto_level: AutoProcessingLevel::Full,
             render_dpi: 200,
             review_threshold: 0.8,
             audit_sample_percent: 5,
             organize_reviewed_only: true,
             inbox_watch: true,
+            ocr_digital_pdf: false,
+            kie_max_pages: 4,
+            precise_mode: false,
+            dense_reocr: true,
+            dense_cells: 80,
         }
     }
 }
@@ -561,6 +594,8 @@ impl AppSettings {
         self.processing.render_dpi = self.processing.render_dpi.clamp(72, 600);
         self.processing.review_threshold = self.processing.review_threshold.clamp(0.0, 1.0);
         self.processing.audit_sample_percent = self.processing.audit_sample_percent.min(100);
+        self.processing.kie_max_pages = self.processing.kie_max_pages.clamp(1, 32);
+        self.processing.dense_cells = self.processing.dense_cells.clamp(10, 2000);
         self.models.resident_models_max = self.models.resident_models_max.clamp(1, 4);
         self.cache.page_cache_max_gb = self.cache.page_cache_max_gb.clamp(0.5, 1000.0);
         if self.models.active_model.trim().is_empty() {

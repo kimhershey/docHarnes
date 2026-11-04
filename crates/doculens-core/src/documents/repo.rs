@@ -8,12 +8,13 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
 
 use super::{
     DocumentFilter, DocumentRecord, DocumentRole, DocumentSort, DocumentStatus, FolderCount, LibraryStats, NewDocument,
-    NewPage, PageRecord, SourceKind,
+    NewPage, PageRecord, ReviewStatus, SourceKind,
 };
 
 const DOC_COLUMNS: &str = "id, rel_path, original_name, source_kind, content_hash, size_bytes, file_modified_at, imported_at, \
 updated_at, status, role, title, doc_type, vendor, doc_date, total_amount, language, page_count, has_text_layer, converted, \
-conversion_note, render_dpi, error, import_batch_id, deleted_at";
+conversion_note, render_dpi, error, import_batch_id, deleted_at, doc_type_source, classified_at, ocr_at, extracted_at, \
+last_run_id, schema_id, review_status, confidence, pipeline_error";
 
 fn parse_ts(s: Option<String>) -> Option<DateTime<Utc>> {
     s.and_then(|s| DateTime::parse_from_rfc3339(&s).ok().map(|d| d.with_timezone(&Utc)))
@@ -54,6 +55,15 @@ fn row_to_document(row: &Row<'_>) -> rusqlite::Result<DocumentRecord> {
         import_batch_id: row.get(23)?,
         deleted_at: parse_ts(row.get(24)?),
         tags: Vec::new(),
+        doc_type_source: row.get(25)?,
+        classified_at: parse_ts(row.get(26)?),
+        ocr_at: parse_ts(row.get(27)?),
+        extracted_at: parse_ts(row.get(28)?),
+        last_run_id: row.get(29)?,
+        schema_id: row.get(30)?,
+        review_status: ReviewStatus::parse(&row.get::<_, String>(31)?).unwrap_or_default(),
+        confidence: row.get(32)?,
+        pipeline_error: row.get(33)?,
     })
 }
 
@@ -180,6 +190,18 @@ pub fn list_documents(conn: &Connection, filter: &DocumentFilter) -> rusqlite::R
         );
         args.push(Box::new(tag.to_string()));
     }
+    if let Some(rs) = filter.review_status {
+        sql.push_str(" AND review_status = ?");
+        args.push(Box::new(rs.as_str().to_string()));
+    }
+    if let Some(max) = filter.max_confidence {
+        sql.push_str(" AND confidence IS NOT NULL AND confidence < ?");
+        args.push(Box::new(max));
+    }
+    if let Some(role) = filter.role {
+        sql.push_str(" AND role = ?");
+        args.push(Box::new(role.as_str().to_string()));
+    }
     sql.push_str(match filter.sort {
         DocumentSort::ImportedDesc => " ORDER BY imported_at DESC, rel_path",
         DocumentSort::ImportedAsc => " ORDER BY imported_at ASC, rel_path",
@@ -250,16 +272,55 @@ pub fn replace_pages(
     converted: bool,
     conversion_note: Option<&str>,
 ) -> rusqlite::Result<()> {
+    // OCR results and classifications survive a re-render (the pixels did not change);
+    // a page that now carries its own text layer drops the OCR copy.
+    let mut kept: BTreeMap<u32, OcrColumns> = BTreeMap::new();
+    {
+        let mut old = conn.prepare_cached(
+            "SELECT page_no, text, ocr_at, ocr_profile, ocr_model, classified_at, page_doc_type, page_language, page_rotation \
+             FROM pages WHERE document_id = ?1 AND (text_source = 'ocr' OR classified_at IS NOT NULL)",
+        )?;
+        let rows = old.query_map([id], |r| {
+            Ok((
+                r.get::<_, i64>(0)?.max(0) as u32,
+                OcrColumns {
+                    text: r.get(1)?,
+                    ocr_at: r.get(2)?,
+                    ocr_profile: r.get(3)?,
+                    ocr_model: r.get(4)?,
+                    classified_at: r.get(5)?,
+                    page_doc_type: r.get(6)?,
+                    page_language: r.get(7)?,
+                    page_rotation: r.get(8)?,
+                },
+            ))
+        })?;
+        for row in rows {
+            let (n, c) = row?;
+            kept.insert(n, c);
+        }
+    }
     conn.execute("DELETE FROM pages WHERE document_id = ?1", [id])?;
     let now = ts(&Utc::now());
     let mut stmt = conn.prepare_cached(
         "INSERT INTO pages (document_id, page_no, width_px, height_px, width_pt, height_pt, dpi, rotation, has_text, text, \
-         is_blank, rendered_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+         is_blank, rendered_at, text_source, ocr_at, ocr_profile, ocr_model, classified_at, page_doc_type, page_language, \
+         page_rotation) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
     )?;
     let mut has_text = false;
     for p in pages {
-        let text = p.text.as_deref().map(str::trim).filter(|t| !t.is_empty());
-        has_text |= text.is_some();
+        let own = p.text.as_deref().map(str::trim).filter(|t| !t.is_empty());
+        let old = kept.get(&p.page_no);
+        let ocr = old.filter(|_| own.is_none()).and_then(|c| c.text.as_deref()).filter(|t| !t.trim().is_empty());
+        let text = own.or(ocr);
+        let text_source = if own.is_some() {
+            Some(if converted { "converted" } else { "layer" })
+        } else if ocr.is_some() {
+            Some("ocr")
+        } else {
+            None
+        };
+        has_text |= own.is_some();
         stmt.execute(params![
             id,
             p.page_no as i64,
@@ -273,6 +334,14 @@ pub fn replace_pages(
             text,
             p.is_blank.map(|b| b as i64),
             now,
+            text_source,
+            ocr.and(old.and_then(|c| c.ocr_at.clone())),
+            ocr.and(old.and_then(|c| c.ocr_profile.clone())),
+            ocr.and(old.and_then(|c| c.ocr_model.clone())),
+            old.and_then(|c| c.classified_at.clone()),
+            old.and_then(|c| c.page_doc_type.clone()),
+            old.and_then(|c| c.page_language.clone()),
+            old.and_then(|c| c.page_rotation),
         ])?;
     }
     conn.execute(
@@ -291,10 +360,23 @@ pub fn replace_pages(
     Ok(())
 }
 
+/// OCR / classification columns carried over a re-render.
+struct OcrColumns {
+    text: Option<String>,
+    ocr_at: Option<String>,
+    ocr_profile: Option<String>,
+    ocr_model: Option<String>,
+    classified_at: Option<String>,
+    page_doc_type: Option<String>,
+    page_language: Option<String>,
+    page_rotation: Option<i64>,
+}
+
 pub fn list_pages(conn: &Connection, id: &str, with_text: bool) -> rusqlite::Result<Vec<PageRecord>> {
     let mut stmt = conn.prepare_cached(
         "SELECT document_id, page_no, width_px, height_px, width_pt, height_pt, dpi, rotation, has_text, text, is_blank, \
-         rendered_at FROM pages WHERE document_id = ?1 ORDER BY page_no",
+         rendered_at, text_source, ocr_at, ocr_profile, ocr_model, classified_at, page_doc_type, page_language, page_rotation \
+         FROM pages WHERE document_id = ?1 ORDER BY page_no",
     )?;
     let rows = stmt.query_map([id], |r| {
         Ok(PageRecord {
@@ -310,6 +392,14 @@ pub fn list_pages(conn: &Connection, id: &str, with_text: bool) -> rusqlite::Res
             text: if with_text { r.get(9)? } else { None },
             is_blank: r.get::<_, Option<i64>>(10)?.map(|v| v != 0),
             rendered_at: parse_ts(r.get(11)?),
+            text_source: r.get(12)?,
+            ocr_at: parse_ts(r.get(13)?),
+            ocr_profile: r.get(14)?,
+            ocr_model: r.get(15)?,
+            classified_at: parse_ts(r.get(16)?),
+            page_doc_type: r.get(17)?,
+            page_language: r.get(18)?,
+            page_rotation: r.get::<_, Option<i64>>(19)?.map(|v| v.rem_euclid(360) as u16),
         })
     })?;
     rows.collect()
@@ -365,10 +455,12 @@ pub fn set_file_info(
     Ok(())
 }
 
-pub fn set_doc_type(conn: &Connection, id: &str, doc_type: Option<&str>) -> rusqlite::Result<()> {
+/// Sets the document type. `source` records who decided (`manual` wins over the
+/// classifier on later runs; `None` keeps the stored source).
+pub fn set_doc_type(conn: &Connection, id: &str, doc_type: Option<&str>, source: Option<&str>) -> rusqlite::Result<()> {
     conn.execute(
-        "UPDATE documents SET doc_type = ?2, updated_at = ?3 WHERE id = ?1",
-        params![id, doc_type, ts(&Utc::now())],
+        "UPDATE documents SET doc_type = ?2, doc_type_source = COALESCE(?3, doc_type_source), updated_at = ?4 WHERE id = ?1",
+        params![id, doc_type, source, ts(&Utc::now())],
     )?;
     Ok(())
 }
