@@ -369,6 +369,14 @@
 | ko-dic 빌드 | `scripts/fetch-kodic.mjs`: 다운로드(sha256 핀) → 빌드 5초 → 82 MB, 재실행 시 건너뜀 |
 | 헤드리스 실행(Linux) | 아래 "헤드리스 검증" 참조 |
 
+### 헤드리스 검증 (실제 데스크톱 바이너리, Xvfb + WebKitGTK)
+
+`cargo build -p doculens` 결과를 `DOCULENS_PDFIUM`·`DOCULENS_KODIC`과 함께 실행, inbox에 P2 샘플 4건(100쪽 PDF·HWPX·DOCX·JPG)
+→ 시작 시 inbox 가져오기·렌더 → `auto_index`가 청킹·색인. 결과(`workspace.db`): `user_version=2`, 문서 4건 모두 `indexed_at`
+기록·오류 없음(JPG는 텍스트 없음 처리), 청크 4개(910 토큰; 100쪽 PDF는 2청크 p.1-62/63-100), 형태소 색인 MATCH
+`견적`·`계약`·`홍길동`·`1250000` 각 1건, trigram MATCH `노트북`·`1,250,000`·`계약서` 각 1건, 로그에 ko-dic 적재 확인·경고 없음.
+스크립트: 스크래치패드 `smoke-p3/run-p3.sh`(P2 스모크 변형).
+
 ### 설계 대비 범위 메모
 
 - 형태소 토크나이저는 FTS5 사용자 토크나이저(C API) 대신 **사전 분석 토큰 열** 방식(`chunks.tokens` + unicode61)으로 구현 —
