@@ -255,7 +255,7 @@ export function FieldsPanel({ doc, onGoToPage, onStartExtract }: { doc: Document
           </div>
           {grouped.tables.map((tbl) => (
             <div key={tbl.key} className="flex flex-col gap-1" data-testid={`fields-table-${tbl.key}`}>
-              <span className="text-xs font-semibold text-fg-muted">{fieldLabel({ label_ko: tbl.rows[0]?.[0] ? tbl.key : tbl.key, label_en: tbl.key, key: tbl.key }, i18n.language)}</span>
+              <span className="text-xs font-semibold text-fg-muted">{tbl.key}</span>
               {tbl.rows.map((row, ri) => (
                 <div key={ri} className="rounded-md border border-dashed border-border p-1">
                   <span className="text-[10px] text-fg-subtle">{t("viewer.fields.table_row", { table: tbl.key, row: ri + 1 })}</span>
