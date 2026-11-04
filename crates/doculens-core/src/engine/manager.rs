@@ -800,6 +800,13 @@ fn spawn_sse(inner: &Arc<Inner>, generation: u64) {
             break;
         }
         let client = inner.client.lock().ok().and_then(|c| c.clone());
+        if let Some(c) = &client {
+            // Events emitted while the subscription was down (crash → relaunch →
+            // active model re-load) are reconciled from `/models` before listening.
+            if let Ok(models) = c.models() {
+                inner.apply_router_models(&models);
+            }
+        }
         drop(inner);
         if let Some(c) = client {
             let weak2 = weak.clone();
