@@ -236,7 +236,7 @@
 
 | 종류 | 수 | 비고 |
 |---|---|---|
-| `cargo test -p doculens-core` (lib) | 91 | db 4, documents 24(변환 10, 렌더 4, 가져오기 4, 저장소 2, 픽스처 1 …), fswatch 1; PDFium 테스트는 `DOCULENS_PDFIUM` 설정 시 실행(없으면 건너뜀) |
+| `cargo test -p doculens-core` (lib) | 90 (+1 ignored) | db 4, documents 25(변환 10, 렌더 4, 가져오기 4, 저장소 2, 픽스처 1 + `gen_fixtures` ignored …), fswatch 1; PDFium 테스트는 `DOCULENS_PDFIUM` 설정 시 실행(없으면 건너뜀) |
 | `tests/engine_process.rs` / `tests/real_engine.rs` | 5 / 1 | P1과 동일 |
 | vitest | 27 | i18n 패리티 + 정적 키 해석(새 화면 키 포함) |
 | Playwright | 13 | P0 7 + P1 3 + **P2 3**(가져오기 미리보기→렌더→라이브러리·필터·홈 / 뷰어 쪽 이동·회전·태그·유형·삭제 / 일괄 작업·inbox 토글) |

@@ -13,9 +13,10 @@ import { existsSync, mkdirSync, readFileSync, cpSync, rmSync, writeFileSync } fr
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(readFileSync(path.join(ROOT, "engines", "pdfium.json"), "utf8"));
 
 const args = process.argv.slice(2);

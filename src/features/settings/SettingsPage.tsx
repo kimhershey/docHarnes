@@ -302,6 +302,7 @@ function ProcessingTab() {
   const { t } = useTranslation();
   const settings = useSettingsStore((s) => s.settings)!;
   const update = useSettingsStore((s) => s.update);
+  const reload = useSettingsStore((s) => s.load);
   const p = settings.processing;
   return (
     <Card>
