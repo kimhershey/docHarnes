@@ -38,6 +38,9 @@ export function IngestWizard({ open, onOpenChange, collectionId }: { open: boole
     setStep(0);
     setPlan(null);
     setError(null);
+    setPathsText("");
+    setRender(true);
+    setMove(false);
     setChoice(collectionId ?? (collections && collections.length > 0 ? (collections[0]?.id ?? NEW) : NEW));
     setNewName("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -66,7 +69,10 @@ export function IngestWizard({ open, onOpenChange, collectionId }: { open: boole
     setError(null);
     try {
       let cid = choice;
-      if (choice === NEW) cid = (await api.knowledgeCollectionSave({ name: newName })).id;
+      if (choice === NEW) {
+        cid = (await api.knowledgeCollectionSave({ name: newName })).id;
+        setChoice(cid); // a failed import run can be retried without re-creating the collection
+      }
       const opts = { ...options(), collection_id: cid };
       await api.documentsImportRun(plan.token, paths, opts, "folder");
       toast(t("knowledge.wizard.started"), "ok");
@@ -85,12 +91,12 @@ export function IngestWizard({ open, onOpenChange, collectionId }: { open: boole
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl" data-testid="ingest-wizard">
+      <DialogContent className="max-w-2xl" data-testid="ingest-wizard" closeLabel={t("common.close")}>
         <DialogHeader>
           <DialogTitle>{t("knowledge.wizard.title")}</DialogTitle>
           <DialogDescription>{t("knowledge.wizard.role_hint")}</DialogDescription>
         </DialogHeader>
-        <ol className="flex gap-3 text-xs" aria-label="steps">
+        <ol className="flex gap-3 text-xs" aria-label={t("knowledge.wizard.steps_label")}>
           {(["step_files", "step_collection", "step_preview"] as const).map((k, i) => (
             <li key={k} className={i === step ? "font-semibold text-accent" : "text-fg-subtle"} aria-current={i === step ? "step" : undefined}>
               {t(`knowledge.wizard.${k}`)}
@@ -100,9 +106,9 @@ export function IngestWizard({ open, onOpenChange, collectionId }: { open: boole
         {step === 0 && (
           <div className="flex flex-col gap-2">
             <p className="text-xs text-fg-muted">{t("knowledge.wizard.paths_hint")}</p>
-            <Textarea rows={6} value={pathsText} onChange={(e) => setPathsText(e.target.value)} className="font-mono text-xs" data-testid="ingest-paths" />
+            <Textarea rows={6} value={pathsText} onChange={(e) => setPathsText(e.target.value)} className="font-mono text-xs" aria-label={t("knowledge.wizard.step_files")} data-testid="ingest-paths" />
             <div className="flex gap-2">
-              <Button size="sm" variant="outline" onClick={() => void pickDocumentFiles(t("knowledge.wizard.pick_files"), "Documents").then(addPicked)}>
+              <Button size="sm" variant="outline" onClick={() => void pickDocumentFiles(t("knowledge.wizard.pick_files"), t("import_docs.filter_name")).then(addPicked)}>
                 <Upload />
                 {t("knowledge.wizard.pick_files")}
               </Button>
@@ -116,9 +122,9 @@ export function IngestWizard({ open, onOpenChange, collectionId }: { open: boole
         {step === 1 && (
           <div className="flex flex-col gap-3">
             <div className="flex flex-col gap-1">
-              <Label>{t("knowledge.wizard.collection_label")}</Label>
+              <Label htmlFor="ingest-collection">{t("knowledge.wizard.collection_label")}</Label>
               <Select value={choice} onValueChange={setChoice}>
-                <SelectTrigger data-testid="ingest-collection">
+                <SelectTrigger id="ingest-collection" aria-label={t("knowledge.wizard.collection_label")} data-testid="ingest-collection">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

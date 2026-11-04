@@ -35,8 +35,11 @@ export function describeJobDetail(job: Job, t: TFunction): string | null {
   if (m) return t("jobs.detail.rescan_summary", { checked: Number(m[1]), missing: 0, restored: 0, changed: 0, failed: 0 });
   m = d.match(/^indexed (\d+) \((\d+) chunks\) \/ unchanged (\d+) \/ no text (\d+) \/ failed (\d+)$/);
   if (m) return t("jobs.detail.index_summary", { indexed: Number(m[1]), chunks: Number(m[2]), unchanged: Number(m[3]), no_text: Number(m[4]), failed: Number(m[5]) });
-  m = d.match(/^embedded (\d+) \/ failed (\d+) \/ remaining (\d+)/);
-  if (m) return t("jobs.detail.embed_summary", { embedded: Number(m[1]), failed: Number(m[2]), remaining: Number(m[3]) });
+  m = d.match(/^embedded (\d+) \/ failed (\d+) \/ remaining (\d+)( \(rebuilt for a new model\))?$/);
+  if (m) {
+    const summary = t("jobs.detail.embed_summary", { embedded: Number(m[1]), failed: Number(m[2]), remaining: Number(m[3]) });
+    return m[4] ? t("jobs.detail.embed_rebuilt", { summary }) : summary;
+  }
   if (d === "loading model") return t("jobs.detail.loading_model");
   return d;
 }

@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS doc_versions (
 CREATE INDEX IF NOT EXISTS idx_doc_versions_group ON doc_versions(group_key);
 
 CREATE TABLE IF NOT EXISTS chunks (
-  id             INTEGER PRIMARY KEY,           -- rowid shared with chunks_fts / chunks_fts_tri / chunks_vec
+  id             INTEGER PRIMARY KEY AUTOINCREMENT, -- never reused: FTS / vec rows and citations key on it
   document_id    TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   chunk_index    INTEGER NOT NULL,
   page_start     INTEGER NOT NULL,

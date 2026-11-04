@@ -9,7 +9,7 @@ import { ConfirmDialog, type ConfirmRequest } from "@/components/ui/confirm-dial
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { describeError } from "@/lib/errors";
-import { api } from "@/lib/ipc";
+import { api, revealPath } from "@/lib/ipc";
 import { useKnowledgeStatus } from "@/lib/queries";
 import { queryClient, queryKeys } from "@/lib/query-client";
 import type { KnowledgeStatus } from "@/lib/types";
@@ -57,6 +57,14 @@ function Overview({ status, onIngest }: { status: KnowledgeStatus | undefined; o
       const job = await api.knowledgeIndex(null, force);
       toast(job ? t("knowledge.actions.index_started") : t("knowledge.actions.index_running"), "info");
     });
+  const reindexAll = () =>
+    setConfirm({
+      title: t("knowledge.actions.reindex"),
+      description: t("knowledge.actions.reindex_confirm"),
+      confirmLabel: t("knowledge.actions.reindex"),
+      danger: true,
+      onConfirm: () => index(true),
+    });
   const embed = () =>
     run("embed", async () => {
       const job = await api.knowledgeEmbed(true);
@@ -88,7 +96,7 @@ function Overview({ status, onIngest }: { status: KnowledgeStatus | undefined; o
           <RefreshCw />
           {t("knowledge.actions.index")}
         </Button>
-        <Button variant="ghost" onClick={() => void index(true)} disabled={busy !== null || status.index_running}>
+        <Button variant="ghost" onClick={reindexAll} disabled={busy !== null || status.index_running}>
           {t("knowledge.actions.reindex")}
         </Button>
         {status.index_running && (
@@ -134,8 +142,20 @@ function Overview({ status, onIngest }: { status: KnowledgeStatus | undefined; o
             </CardDescription>
           </CardHeader>
           {tokenizerSimple && (
-            <CardContent className="text-xs text-warn selectable" data-testid="kb-tokenizer-hint">
-              {t("knowledge.tokenizer.simple_hint")}
+            <CardContent className="flex flex-col gap-1 text-xs" data-testid="kb-tokenizer-hint">
+              <p className="text-warn selectable">{t("knowledge.tokenizer.simple_hint")}</p>
+              <p className="text-fg-subtle">{t("knowledge.tokenizer.restart_hint")}</p>
+              {status.tokenizer.path && (
+                <p className="flex items-center gap-2">
+                  <span className="text-fg-subtle">{t("knowledge.tokenizer.folder")}:</span>
+                  <code className="truncate selectable" title={status.tokenizer.path}>
+                    {status.tokenizer.path}
+                  </code>
+                  <Button size="sm" variant="ghost" className="ml-auto h-6 px-2" onClick={() => void revealPath(status.tokenizer.path ?? "").catch(() => undefined)}>
+                    {t("knowledge.tokenizer.open_folder")}
+                  </Button>
+                </p>
+              )}
             </CardContent>
           )}
         </Card>

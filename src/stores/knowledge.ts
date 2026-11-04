@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 import { subscribe } from "@/lib/ipc";
 import { queryClient, queryKeys } from "@/lib/query-client";
-import { EVENTS, type AnswerDelta, type KnowledgeChanged, type SearchMode } from "@/lib/types";
+import { EVENTS, type AnswerDelta, type KnowledgeChanged, type SearchMode, type SearchResponse } from "@/lib/types";
 
 /** Knowledge/search UI state that survives navigation plus the event wiring. */
 interface KnowledgeState {
@@ -11,10 +11,15 @@ interface KnowledgeState {
   searchQuery: string;
   searchMode: SearchMode;
   searchScope: string;
-  /** Streaming answer text per request id (cleared when the answer resolves). */
+  /** Knowledge screen "question test" result (kept across tab switches). */
+  testQuestion: string;
+  testResult: SearchResponse | null;
+  /** Streaming answer text per request id, registered by `beginStream` before the call. */
   streams: Record<string, string>;
   init: () => Promise<void>;
   setSearch: (patch: Partial<Pick<KnowledgeState, "searchQuery" | "searchMode" | "searchScope">>) => void;
+  setTest: (question: string, result: SearchResponse | null) => void;
+  beginStream: (requestId: string) => void;
   clearStream: (requestId: string) => void;
 }
 
@@ -36,6 +41,8 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
   searchQuery: "",
   searchMode: "hybrid",
   searchScope: "all",
+  testQuestion: "",
+  testResult: null,
   streams: {},
 
   init: async () => {
@@ -47,7 +54,7 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
           invalidateSoon("collections", [queryKeys.collections, queryKeys.knowledgeStatus, ["knowledge", "doc-collections"], ["knowledge", "search"]]);
           break;
         case "glossary":
-          invalidateSoon("glossary", [queryKeys.glossary, queryKeys.knowledgeStatus]);
+          invalidateSoon("glossary", [queryKeys.glossary, queryKeys.knowledgeStatus, ["knowledge", "search"]]);
           break;
         case "versions":
           invalidateSoon("versions", [queryKeys.versions, ["knowledge", "search"]]);
@@ -61,13 +68,19 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
     });
     await subscribe<AnswerDelta>(EVENTS.knowledgeAnswer, (ev) => {
       set((s) => {
-        if (ev.done) return s;
-        return { streams: { ...s.streams, [ev.request_id]: (s.streams[ev.request_id] ?? "") + ev.delta } };
+        // Only requests this UI started are tracked; `done` releases the entry.
+        if (!(ev.request_id in s.streams)) return s;
+        const next = { ...s.streams };
+        if (ev.done) delete next[ev.request_id];
+        else next[ev.request_id] = (next[ev.request_id] ?? "") + ev.delta;
+        return { streams: next };
       });
     });
   },
 
   setSearch: (patch) => set(patch),
+  setTest: (question, result) => set({ testQuestion: question, testResult: result }),
+  beginStream: (requestId) => set((s) => ({ streams: { ...s.streams, [requestId]: "" } })),
   clearStream: (requestId) =>
     set((s) => {
       if (!(requestId in s.streams)) return s;
@@ -79,7 +92,7 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
 
 /** Call after a workspace switch: knowledge queries belong to the old folder. */
 export function resetKnowledgeQueries(): void {
-  useKnowledgeStore.setState({ searchQuery: "", searchScope: "all", streams: {} });
+  useKnowledgeStore.setState({ searchQuery: "", searchScope: "all", testQuestion: "", testResult: null });
   void queryClient.invalidateQueries({ queryKey: queryKeys.knowledge });
 }
 

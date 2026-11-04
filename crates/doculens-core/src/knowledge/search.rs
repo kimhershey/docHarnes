@@ -21,6 +21,9 @@ pub struct SearchDeps<'a> {
 
 const RRF_K: f32 = 60.0;
 const SNIPPET_CHARS: usize = 240;
+/// Query terms beyond this are ignored (a pasted paragraph must not become hundreds of AND groups).
+const MAX_QUERY_TERMS: usize = 24;
+const MAX_QUERY_CHARS: usize = 2_000;
 
 fn weight(channel: SearchChannel) -> f32 {
     match channel {
@@ -187,29 +190,35 @@ impl Fusion {
 /// Runs a search request.
 pub fn search(deps: &SearchDeps<'_>, req: &SearchRequest) -> Result<SearchResponse> {
     let started = Instant::now();
-    let query = req.query.trim();
+    let query_owned: String = req.query.trim().chars().take(MAX_QUERY_CHARS).collect();
+    let query = query_owned.as_str();
     let mut resp = SearchResponse::default();
     if query.is_empty() {
         return Ok(resp);
     }
     let limit = req.limit.clamp(1, 200);
-    let terms = deps.analyzer.query_terms(query);
-    let words = raw_words(query);
+    let mut terms = deps.analyzer.query_terms(query);
+    terms.truncate(MAX_QUERY_TERMS);
+    let mut words = raw_words(query);
+    words.truncate(MAX_QUERY_TERMS);
     let expansions = if req.expand_glossary && !terms.is_empty() {
-        deps.db.with(|c| repo::glossary_expansions(c, &terms))?
+        deps.db.with_read(|c| repo::glossary_expansions(c, &terms))?
     } else {
         Vec::new()
     };
     resp.query_terms = terms.clone();
     resp.expanded_terms = expansions.iter().flat_map(|(_, f)| f.iter().cloned()).collect();
 
-    let allowed = deps.db.with(|c| repo::scope_doc_ids(c, &req.scope))?;
+    let allowed = deps.db.with_read(|c| repo::scope_doc_ids(c, &req.scope))?;
     if allowed.as_ref().is_some_and(|a| a.is_empty()) {
         resp.elapsed_ms = started.elapsed().as_millis() as u64;
         return Ok(resp);
     }
-    // Candidates per channel: generous when the scope filters afterwards.
-    let fetch = if allowed.is_some() { limit * 20 } else { limit * 5 }.clamp(50, 2_000);
+    // Candidates per channel. A small scope is applied inside the SQL (top-N within the scope);
+    // a very large one is filtered afterwards, so fetch generously then.
+    let scoped_in_sql = allowed.as_ref().is_some_and(|a| a.len() <= repo::SCOPE_SQL_MAX_DOCS);
+    let fetch = if allowed.is_some() && !scoped_in_sql { limit * 20 } else { limit * 5 }.clamp(50, 2_000);
+    let scope_ref = allowed.as_ref();
     let mut fusion = Fusion::new();
     let mut similarity: HashMap<i64, f32> = HashMap::new();
 
@@ -217,7 +226,7 @@ pub fn search(deps: &SearchDeps<'_>, req: &SearchRequest) -> Result<SearchRespon
         let expr_all = morph_expr(deps.analyzer, &terms, &expansions, true);
         let mut morph: Vec<i64> = deps
             .db
-            .with(|c| repo::fts_match(c, FtsTable::Morph, &expr_all, fetch))?
+            .with_read(|c| repo::fts_match(c, FtsTable::Morph, &expr_all, fetch, scope_ref))?
             .into_iter()
             .map(|(id, _)| id)
             .collect();
@@ -225,10 +234,10 @@ pub fn search(deps: &SearchDeps<'_>, req: &SearchRequest) -> Result<SearchRespon
             // Relaxed query: chunks must still cover at least half of the terms
             // (one stray word must not count as evidence).
             let expr_any = morph_expr(deps.analyzer, &terms, &expansions, false);
-            let more = deps.db.with(|c| repo::fts_match(c, FtsTable::Morph, &expr_any, fetch))?;
+            let more = deps.db.with_read(|c| repo::fts_match(c, FtsTable::Morph, &expr_any, fetch, scope_ref))?;
             let ids: Vec<i64> = more.iter().map(|(id, _)| *id).filter(|id| !morph.contains(id)).collect();
             let need = if terms.len() >= 3 { terms.len().div_ceil(2) } else { 1 };
-            let tokens = deps.db.with(|c| repo::chunk_tokens(c, &ids))?;
+            let tokens = deps.db.with_read(|c| repo::chunk_tokens(c, &ids))?;
             let mut alternatives: Vec<Vec<String>> = Vec::new();
             for t in &terms {
                 let mut alts = vec![t.clone()];
@@ -250,23 +259,24 @@ pub fn search(deps: &SearchDeps<'_>, req: &SearchRequest) -> Result<SearchRespon
         if let Some(expr) = trigram_expr(&terms, &words, &expansions) {
             let tri: Vec<i64> = deps
                 .db
-                .with(|c| repo::fts_match(c, FtsTable::Trigram, &expr, fetch))?
+                .with_read(|c| repo::fts_match(c, FtsTable::Trigram, &expr, fetch, scope_ref))?
                 .into_iter()
                 .map(|(id, _)| id)
                 .collect();
             fusion.add(SearchChannel::Trigram, &tri);
         }
-        if fusion.scores.is_empty() {
-            // Nothing from the indexes (e.g. a 2-character word the trigram index
-            // cannot see and the morpheme index tokenised differently): substring scan.
+        let short_word = words.iter().chain(terms.iter()).any(|w| w.chars().count() < 3);
+        if fusion.scores.is_empty() && short_word {
+            // Nothing from the indexes and a word the trigram index cannot see (< 3 chars)
+            // that the morpheme index may have tokenised differently: substring scan.
             let needles: Vec<String> = if words.is_empty() { terms.clone() } else { words.clone() };
             let first = needles[0].clone();
             let rest: Vec<String> = needles[1..].to_vec();
-            let ids = deps.db.with(|c| repo::like_search(c, &first, fetch))?;
+            let ids = deps.db.with_read(|c| repo::like_search(c, &first, fetch, scope_ref))?;
             let ids: Vec<i64> = if rest.is_empty() {
                 ids
             } else {
-                let rows = deps.db.with(|c| repo::chunk_rows(c, &ids))?;
+                let rows = deps.db.with_read(|c| repo::chunk_rows(c, &ids))?;
                 rows.into_iter()
                     .filter(|r| {
                         let folded = normalize(&r.chunk.text);
@@ -287,7 +297,7 @@ pub fn search(deps: &SearchDeps<'_>, req: &SearchRequest) -> Result<SearchRespon
             match embed::embed_query(embedder, query) {
                 Ok(q) => {
                     let k = (limit * 4).clamp(20, 400) as usize;
-                    let hits = deps.db.with(|c| embed::knn(c, &q, k, allowed.as_ref()))?;
+                    let hits = deps.db.with_read(|c| embed::knn(c, &q, k, allowed.as_ref()))?;
                     if !hits.is_empty() {
                         resp.used_vector = true;
                         let ids: Vec<i64> = hits.iter().map(|(id, _)| *id).collect();
@@ -305,9 +315,33 @@ pub fn search(deps: &SearchDeps<'_>, req: &SearchRequest) -> Result<SearchRespon
     resp.total_candidates = fusion.scores.len() as u32;
     let mut ranked: Vec<(i64, f32)> = fusion.scores.iter().map(|(id, s)| (*id, *s)).collect();
     ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
-    let ids: Vec<i64> = ranked.iter().map(|(id, _)| *id).collect();
-    let rows = deps.db.with(|c| repo::chunk_rows(c, &ids))?;
+    // Select the final hits on (id → document) alone, then load text only for those.
+    let candidate_ids: Vec<i64> = ranked.iter().map(|(id, _)| *id).collect();
+    let doc_of: HashMap<i64, String> =
+        deps.db.with_read(|c| repo::chunk_docs(c, &candidate_ids))?.into_iter().collect();
+    let mut chosen: Vec<(i64, f32)> = Vec::new();
+    let mut per_doc: HashMap<String, u32> = HashMap::new();
+    for (id, score) in &ranked {
+        let Some(doc) = doc_of.get(id) else { continue };
+        if allowed.as_ref().is_some_and(|a| !a.contains(doc)) {
+            continue;
+        }
+        if req.per_document > 0 {
+            let n = per_doc.entry(doc.clone()).or_insert(0);
+            if *n >= req.per_document {
+                continue;
+            }
+            *n += 1;
+        }
+        chosen.push((*id, *score));
+        if chosen.len() as u32 >= limit {
+            break;
+        }
+    }
+    let ids: Vec<i64> = chosen.iter().map(|(id, _)| *id).collect();
+    let rows = deps.db.with_read(|c| repo::chunk_rows(c, &ids))?;
     let by_id: HashMap<i64, ChunkRow> = rows.into_iter().map(|r| (r.chunk.id, r)).collect();
+    let ranked = chosen;
 
     let mut needles: Vec<String> = Vec::new();
     needles.extend(terms.iter().cloned());
@@ -317,20 +351,9 @@ pub fn search(deps: &SearchDeps<'_>, req: &SearchRequest) -> Result<SearchRespon
     needles.sort();
     needles.dedup();
 
-    let mut per_doc: HashMap<String, u32> = HashMap::new();
     let mut hits = Vec::new();
     for (id, score) in ranked {
         let Some(row) = by_id.get(&id) else { continue };
-        if allowed.as_ref().is_some_and(|a| !a.contains(&row.chunk.document_id)) {
-            continue;
-        }
-        if req.per_document > 0 {
-            let n = per_doc.entry(row.chunk.document_id.clone()).or_insert(0);
-            if *n >= req.per_document {
-                continue;
-            }
-            *n += 1;
-        }
         let (snip, highlights) = snippet(&row.chunk.text, &needles);
         hits.push(SearchHit {
             chunk_id: id,
@@ -351,9 +374,6 @@ pub fn search(deps: &SearchDeps<'_>, req: &SearchRequest) -> Result<SearchRespon
             channels: fusion.channels.get(&id).cloned().unwrap_or_default(),
             vector_similarity: similarity.get(&id).copied(),
         });
-        if hits.len() as u32 >= limit {
-            break;
-        }
     }
     resp.hits = hits;
     resp.elapsed_ms = started.elapsed().as_millis() as u64;

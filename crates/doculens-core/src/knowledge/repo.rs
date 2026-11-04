@@ -30,6 +30,42 @@ fn placeholders(n: usize) -> String {
     std::iter::repeat_n("?", n).collect::<Vec<_>>().join(",")
 }
 
+/// Explicitly numbered placeholders `?from, ?from+1, …` (needed when they follow
+/// numbered ones in the statement text; bare `?` would restart the numbering).
+fn numbered_placeholders(from: usize, n: usize) -> String {
+    (from..from + n).map(|i| format!("?{i}")).collect::<Vec<_>>().join(",")
+}
+
+/// Above this many documents a scope is applied after the candidate fetch
+/// instead of inside the SQL (`IN (...)` list size).
+pub const SCOPE_SQL_MAX_DOCS: usize = 900;
+
+pub fn kv_get(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row("SELECT value FROM kv WHERE key = ?1", [key], |r| r.get(0)).optional()
+}
+
+pub fn kv_set(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO kv (key, value, updated_at) VALUES (?1, ?2, ?3) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        params![key, value, now()],
+    )?;
+    Ok(())
+}
+
+/// Typed failure carried through `rusqlite::Error` (the command layer maps the code).
+fn typed(code: &str) -> rusqlite::Error {
+    rusqlite::Error::InvalidParameterName(code.to_string())
+}
+
+pub fn collection_exists(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
+    conn.query_row("SELECT COUNT(*) FROM collections WHERE id = ?1", [id], |r| r.get::<_, i64>(0)).map(|n| n > 0)
+}
+
+pub fn document_exists(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
+    conn.query_row("SELECT COUNT(*) FROM documents WHERE id = ?1 AND deleted_at IS NULL", [id], |r| r.get::<_, i64>(0))
+        .map(|n| n > 0)
+}
+
 // ---------------------------------------------------------------------------
 // Collections
 // ---------------------------------------------------------------------------
@@ -69,11 +105,22 @@ pub fn get_collection(conn: &Connection, id: &str) -> rusqlite::Result<Option<Co
 pub fn save_collection(conn: &Connection, input: &CollectionInput) -> rusqlite::Result<Collection> {
     let name = input.name.trim();
     if name.is_empty() {
-        return Err(rusqlite::Error::InvalidParameterName("collection name is empty".into()));
+        return Err(typed("collection_name_empty"));
+    }
+    let taken: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM collections WHERE name = ?1 COLLATE NOCASE AND id <> COALESCE(?2, '')",
+        params![name, input.id],
+        |r| r.get(0),
+    )?;
+    if taken > 0 {
+        return Err(typed("collection_name_taken"));
     }
     let now = now();
     let id = match &input.id {
         Some(id) => {
+            if !collection_exists(conn, id)? {
+                return Err(typed("collection_not_found"));
+            }
             conn.execute(
                 "UPDATE collections SET name = ?2, description = ?3, color = ?4, active = ?5, watch_folder = ?6, updated_at = ?7 WHERE id = ?1",
                 params![id, name, input.description, input.color, input.active as i64, input.watch_folder, now],
@@ -103,6 +150,9 @@ pub fn collection_doc_ids(conn: &Connection, id: &str) -> rusqlite::Result<Vec<S
 }
 
 pub fn add_docs_to_collection(conn: &Connection, id: &str, doc_ids: &[String]) -> rusqlite::Result<u32> {
+    if !collection_exists(conn, id)? {
+        return Err(typed("collection_not_found"));
+    }
     let now = now();
     let mut st = conn
         .prepare("INSERT OR IGNORE INTO collection_docs (collection_id, document_id, added_at) VALUES (?1, ?2, ?3)")?;
@@ -121,6 +171,20 @@ pub fn remove_docs_from_collection(conn: &Connection, id: &str, doc_ids: &[Strin
         n += st.execute(params![id, d])? as u32;
     }
     Ok(n)
+}
+
+/// Documents of a collection in insertion order (deleted documents skipped).
+pub fn collection_documents(conn: &Connection, id: &str) -> rusqlite::Result<Vec<DocumentRecord>> {
+    let ids = collection_doc_ids(conn, id)?;
+    let mut out = Vec::with_capacity(ids.len());
+    for d in &ids {
+        if let Some(doc) = crate::documents::repo::get_document(conn, d)? {
+            if doc.deleted_at.is_none() {
+                out.push(doc);
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// `(collection id, name)` pairs of a document.
@@ -174,7 +238,10 @@ pub fn get_version(conn: &Connection, doc_id: &str) -> rusqlite::Result<Option<V
 pub fn set_version(conn: &Connection, input: &VersionInput) -> rusqlite::Result<VersionInfo> {
     let group = input.group_key.trim();
     if group.is_empty() {
-        return Err(rusqlite::Error::InvalidParameterName("version group is empty".into()));
+        return Err(typed("version_group_empty"));
+    }
+    if !document_exists(conn, &input.document_id)? {
+        return Err(typed("document_not_found"));
     }
     let now = now();
     conn.execute(
@@ -222,7 +289,17 @@ pub fn list_glossary(conn: &Connection) -> rusqlite::Result<Vec<GlossaryEntry>> 
 pub fn save_glossary(conn: &Connection, input: &GlossaryInput) -> rusqlite::Result<GlossaryEntry> {
     let term = input.term.trim();
     if term.is_empty() {
-        return Err(rusqlite::Error::InvalidParameterName("glossary term is empty".into()));
+        return Err(typed("glossary_term_empty"));
+    }
+    if let Some(id) = input.id {
+        let clash: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM glossary WHERE term = ?1 COLLATE NOCASE AND id <> ?2",
+            params![term, id],
+            |r| r.get(0),
+        )?;
+        if clash > 0 {
+            return Err(typed("glossary_term_taken"));
+        }
     }
     let synonyms: Vec<String> = input
         .synonyms
@@ -385,6 +462,12 @@ pub fn clear_chunks(conn: &Connection, doc_id: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Marks an unchanged document as checked now (stops metadata-only updates from re-queuing it).
+pub fn touch_indexed(conn: &Connection, doc_id: &str) -> rusqlite::Result<()> {
+    conn.execute("UPDATE documents SET indexed_at = ?2, index_error = NULL WHERE id = ?1", params![doc_id, now()])?;
+    Ok(())
+}
+
 pub fn set_index_error(conn: &Connection, doc_id: &str, error: &str) -> rusqlite::Result<()> {
     conn.execute("UPDATE documents SET index_error = ?2 WHERE id = ?1", params![doc_id, error])?;
     Ok(())
@@ -473,6 +556,20 @@ pub fn chunk_rows(conn: &Connection, ids: &[i64]) -> rusqlite::Result<Vec<ChunkR
     Ok(out)
 }
 
+/// `(chunk id, document id)` for the given chunks — cheap enough for thousands of candidates.
+pub fn chunk_docs(conn: &Connection, ids: &[i64]) -> rusqlite::Result<Vec<(i64, String)>> {
+    let mut out = Vec::with_capacity(ids.len());
+    for group in ids.chunks(500) {
+        let mut st =
+            conn.prepare(&format!("SELECT id, document_id FROM chunks WHERE id IN ({})", placeholders(group.len())))?;
+        out.extend(
+            st.query_map(params_from_iter(group.iter()), |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+        );
+    }
+    Ok(out)
+}
+
 /// `id → tokens` for the given chunks (query-term coverage checks).
 pub fn chunk_tokens(conn: &Connection, ids: &[i64]) -> rusqlite::Result<std::collections::HashMap<i64, String>> {
     let mut out = std::collections::HashMap::new();
@@ -495,24 +592,76 @@ pub enum FtsTable {
     Trigram,
 }
 
-/// `(chunk id, bm25)` for an FTS5 MATCH expression; lower bm25 = better.
-pub fn fts_match(conn: &Connection, table: FtsTable, expr: &str, limit: u32) -> rusqlite::Result<Vec<(i64, f64)>> {
-    let (name, _) = match table {
-        FtsTable::Morph => ("chunks_fts", "tokens"),
-        FtsTable::Trigram => ("chunks_fts_tri", "text"),
+/// Sorted document ids when the scope is small enough to go into the SQL.
+pub fn sql_scope(allowed: Option<&HashSet<String>>) -> Option<Vec<String>> {
+    allowed.filter(|a| a.len() <= SCOPE_SQL_MAX_DOCS).map(|a| {
+        let mut v: Vec<String> = a.iter().cloned().collect();
+        v.sort();
+        v
+    })
+}
+
+/// `(chunk id, bm25)` for an FTS5 MATCH expression; lower bm25 = better. A
+/// small document scope is applied inside the query so the top-N is taken
+/// within the scope, not globally.
+pub fn fts_match(
+    conn: &Connection,
+    table: FtsTable,
+    expr: &str,
+    limit: u32,
+    allowed: Option<&HashSet<String>>,
+) -> rusqlite::Result<Vec<(i64, f64)>> {
+    let name = match table {
+        FtsTable::Morph => "chunks_fts",
+        FtsTable::Trigram => "chunks_fts_tri",
     };
-    let sql = format!("SELECT rowid, bm25({name}) FROM {name} WHERE {name} MATCH ?1 ORDER BY bm25({name}) LIMIT ?2");
+    let scope = sql_scope(allowed);
+    let limit = limit as i64;
+    let mut args: Vec<&dyn rusqlite::ToSql> = vec![&expr, &limit];
+    let sql = match &scope {
+        Some(docs) => {
+            for d in docs {
+                args.push(d);
+            }
+            format!(
+                "SELECT rowid, bm25({name}) FROM {name} WHERE {name} MATCH ?1 AND rowid IN (SELECT id FROM chunks WHERE document_id IN ({})) ORDER BY bm25({name}) LIMIT ?2",
+                numbered_placeholders(3, docs.len())
+            )
+        }
+        None => format!("SELECT rowid, bm25({name}) FROM {name} WHERE {name} MATCH ?1 ORDER BY bm25({name}) LIMIT ?2"),
+    };
     let mut st = conn.prepare(&sql)?;
-    let rows = st.query_map(params![expr, limit as i64], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?)))?;
+    let rows = st.query_map(args.as_slice(), |r| Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?)))?;
     let out = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(out)
 }
 
 /// Substring fallback for queries the FTS indexes cannot serve (≤ 2 chars).
-pub fn like_search(conn: &Connection, needle: &str, limit: u32) -> rusqlite::Result<Vec<i64>> {
+pub fn like_search(
+    conn: &Connection,
+    needle: &str,
+    limit: u32,
+    allowed: Option<&HashSet<String>>,
+) -> rusqlite::Result<Vec<i64>> {
     let escaped = needle.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
-    let mut st = conn.prepare("SELECT id FROM chunks WHERE text LIKE ?1 ESCAPE '\\' ORDER BY id LIMIT ?2")?;
-    let rows = st.query_map(params![format!("%{escaped}%"), limit as i64], |r| r.get::<_, i64>(0))?;
+    let pattern = format!("%{escaped}%");
+    let scope = sql_scope(allowed);
+    let limit = limit as i64;
+    let mut args: Vec<&dyn rusqlite::ToSql> = vec![&pattern, &limit];
+    let sql = match &scope {
+        Some(docs) => {
+            for d in docs {
+                args.push(d);
+            }
+            format!(
+                "SELECT id FROM chunks WHERE text LIKE ?1 ESCAPE '\\' AND document_id IN ({}) ORDER BY id LIMIT ?2",
+                numbered_placeholders(3, docs.len())
+            )
+        }
+        None => "SELECT id FROM chunks WHERE text LIKE ?1 ESCAPE '\\' ORDER BY id LIMIT ?2".to_string(),
+    };
+    let mut st = conn.prepare(&sql)?;
+    let rows = st.query_map(args.as_slice(), |r| r.get::<_, i64>(0))?;
     let out = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(out)
 }
@@ -571,6 +720,10 @@ pub fn scope_doc_ids(conn: &Connection, scope: &SearchScope) -> rusqlite::Result
              HAVING SUM(CASE WHEN (SELECT active FROM collections c WHERE c.id = cd.collection_id) = 1 THEN 1 ELSE 0 END) = 0",
         )?;
         excluded.extend(st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?);
+    }
+    // Documents named explicitly are wanted even when superseded or in an inactive collection.
+    for d in &scope.documents {
+        excluded.remove(d);
     }
     if excluded.is_empty() {
         return Ok(if restricted { allowed } else { None });
@@ -694,7 +847,7 @@ pub fn index_status(conn: &Connection) -> rusqlite::Result<IndexStatus> {
     conn.query_row(
         "SELECT COUNT(*), \
                 SUM(CASE WHEN indexed_at IS NOT NULL AND index_version = ?1 AND index_error IS NULL THEN 1 ELSE 0 END), \
-                SUM(CASE WHEN has_text_layer = 1 AND (indexed_at IS NULL OR index_version <> ?1) AND index_error IS NULL THEN 1 ELSE 0 END), \
+                SUM(CASE WHEN has_text_layer = 1 AND (indexed_at IS NULL OR index_version <> ?1 OR updated_at > indexed_at) AND index_error IS NULL THEN 1 ELSE 0 END), \
                 SUM(CASE WHEN has_text_layer = 0 THEN 1 ELSE 0 END), \
                 SUM(CASE WHEN index_error IS NOT NULL THEN 1 ELSE 0 END), \
                 SUM(CASE WHEN role = 'knowledge' THEN 1 ELSE 0 END) \
@@ -737,26 +890,40 @@ pub fn documents_to_index(
     ids: Option<&[String]>,
     force: bool,
 ) -> rusqlite::Result<Vec<DocumentRecord>> {
-    let mut sql = String::from(
-        "SELECT id FROM documents WHERE deleted_at IS NULL AND status NOT IN ('importing', 'missing', 'error')",
-    );
-    if !force && ids.is_none() {
-        sql.push_str(
-            " AND (indexed_at IS NULL OR index_version <> ?1 OR index_error IS NOT NULL OR updated_at > indexed_at)",
-        );
-    }
-    sql.push_str(" ORDER BY imported_at");
-    let mut st = conn.prepare(&sql)?;
-    let found: Vec<String> = if !force && ids.is_none() {
-        st.query_map([INDEX_VERSION as i64], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
-    } else {
-        st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
-    };
-    let mut out = Vec::new();
-    for id in found {
-        if ids.is_some_and(|ids| !ids.contains(&id)) {
-            continue;
+    let mut found: Vec<String> = Vec::new();
+    match ids {
+        Some(ids) => {
+            for group in ids.chunks(500) {
+                let mut st = conn.prepare(&format!(
+                    "SELECT id FROM documents WHERE deleted_at IS NULL AND status NOT IN ('importing', 'missing', 'error') AND id IN ({}) ORDER BY imported_at",
+                    placeholders(group.len())
+                ))?;
+                found.extend(
+                    st.query_map(params_from_iter(group.iter()), |r| r.get::<_, String>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?,
+                );
+            }
         }
+        None => {
+            let mut sql = String::from(
+                "SELECT id FROM documents WHERE deleted_at IS NULL AND status NOT IN ('importing', 'missing', 'error')",
+            );
+            if !force {
+                sql.push_str(
+                    " AND (indexed_at IS NULL OR index_version <> ?1 OR index_error IS NOT NULL OR updated_at > indexed_at)",
+                );
+            }
+            sql.push_str(" ORDER BY imported_at");
+            let mut st = conn.prepare(&sql)?;
+            found = if force {
+                st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+            } else {
+                st.query_map([INDEX_VERSION as i64], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+            };
+        }
+    }
+    let mut out = Vec::with_capacity(found.len());
+    for id in found {
         if let Some(d) = crate::documents::repo::get_document(conn, &id)? {
             out.push(d);
         }

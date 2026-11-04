@@ -103,6 +103,7 @@ export interface KnowledgeSettings {
   context_tokens: number;
   top_k: number;
   chunk_target_tokens: number;
+  min_vector_similarity: number;
 }
 
 export interface RetentionPolicy {
@@ -1015,6 +1016,7 @@ export interface AnswerRequest {
   summary_mode?: SummaryMode;
   keep_chunks?: number[];
   save?: boolean;
+  min_similarity?: number | null;
 }
 
 export interface Citation {

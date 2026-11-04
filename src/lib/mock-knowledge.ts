@@ -98,6 +98,16 @@ function embeddingInstalled(): boolean {
   return localStorage.getItem(EMBEDDING_FLAG) === "1";
 }
 
+/** Settings override → registry default (mirrors knowledge_bridge::embedding_model). */
+function embeddingModelId(): string {
+  try {
+    const settings = JSON.parse(localStorage.getItem("doculens.mock.settings") ?? "{}") as { knowledge?: { embedding_model?: string | null } };
+    return settings.knowledge?.embedding_model || "embed-bge-m3-q8";
+  } catch {
+    return "embed-bge-m3-q8";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Chunking (paragraphs of the mock page text) + indexing
 // ---------------------------------------------------------------------------
@@ -198,8 +208,8 @@ async function embedJob(loadModel: boolean): Promise<string | null> {
   }
   const s = load();
   const pending = Object.values(s.chunks).flat().filter((c) => !c.embedded);
-  if (pending.length === 0 && s.embeddedModel === "embed-bge-m3-q8") return null;
-  const job = createJob("knowledge_embed", "embed-bge-m3-q8");
+  if (pending.length === 0 && s.embeddedModel === embeddingModelId()) return null;
+  const job = createJob("knowledge_embed", embeddingModelId());
   embedRunning = true;
   void (async () => {
     const steps = Math.max(1, Math.ceil(pending.length / 4));
@@ -207,7 +217,7 @@ async function embedJob(loadModel: boolean): Promise<string | null> {
       const st = load();
       const todo = Object.values(st.chunks).flat().filter((c) => !c.embedded).slice(0, 4);
       for (const c of todo) c.embedded = true;
-      st.embeddedModel = "embed-bge-m3-q8";
+      st.embeddedModel = embeddingModelId();
       save(st);
       void i;
     });
@@ -441,12 +451,21 @@ function citation(index: number, h: SearchHit): Citation {
   };
 }
 
-async function stream(requestId: string, text: string): Promise<void> {
+const cancelledAnswers = new Set<string>();
+
+/** Streams the text in small deltas; returns false when the request was cancelled midway. */
+async function stream(requestId: string, text: string): Promise<boolean> {
   for (let i = 0; i < text.length; i += 6) {
+    if (cancelledAnswers.has(requestId)) {
+      cancelledAnswers.delete(requestId);
+      emit(EVENTS.knowledgeAnswer, { request_id: requestId, delta: "", done: true } satisfies AnswerDelta);
+      return false;
+    }
     emit(EVENTS.knowledgeAnswer, { request_id: requestId, delta: text.slice(i, i + 6), done: false } satisfies AnswerDelta);
     await new Promise((r) => setTimeout(r, tick(20)));
   }
   emit(EVENTS.knowledgeAnswer, { request_id: requestId, delta: "", done: true } satisfies AnswerDelta);
+  return true;
 }
 
 function parseSentences(text: string, max: number): AnswerSentence[] {
@@ -525,9 +544,11 @@ async function answer(req: AnswerRequest, requestId: string): Promise<Answer> {
     const query = kind === "explain" ? `${req.selection ?? ""} ${req.question}`.trim() : req.question;
     const scope: SearchScope = { ...(req.scope ?? {}) };
     if (kind === "explain" && req.document_id && scope.documents?.length && !scope.documents.includes(req.document_id)) scope.documents = [...scope.documents, req.document_id];
-    const hits = req.keep_chunks?.length
+    const kept = (req.keep_chunks ?? []).length
       ? Object.values(s.chunks).flat().filter((c) => req.keep_chunks?.includes(c.id)).map((c) => hitFromChunk(c, wsDocs().find((x) => x.id === c.document_id), ["morph"]))
-      : search({ query, scope, limit: (req.top_k ?? 8) * 2, per_document: 4 }).hits;
+      : [];
+    const fresh = query.trim() ? search({ query, scope, limit: (req.top_k ?? 8) * 2, per_document: 4 }).hits : [];
+    const hits = [...kept, ...fresh.filter((h) => !kept.some((k) => k.chunk_id === h.chunk_id))];
     const top = hits.slice(0, req.top_k ?? 8);
     base.sources = top.map((h, i) => citation(i + 1, h));
     if (top.length === 0) {
@@ -553,7 +574,7 @@ async function answer(req: AnswerRequest, requestId: string): Promise<Answer> {
       }
     }
   }
-  await stream(requestId, base.text);
+  if (!(await stream(requestId, base.text))) throw err("cancelled", "cancelled");
   base.sentences = parseSentences(base.text.replace(/^상충:.*$/m, "").replace(/^Conflict:.*$/m, ""), base.sources.length);
   base.prompt_tokens = 400 + base.sources.length * 300;
   base.completion_tokens = Math.ceil(base.text.length / 2);
@@ -593,7 +614,7 @@ function status(): KnowledgeStatus {
     answers: s.answers.length,
     answers_helpful: s.answers.filter((a) => a.feedback === 1).length,
     answers_wrong: s.answers.filter((a) => a.feedback === -1).length,
-    embedding: { model: "embed-bge-m3-q8", installed: embeddingInstalled(), engine_running: embeddingInstalled(), loaded: embeddingInstalled() },
+    embedding: { model: embeddingModelId(), installed: embeddingInstalled(), engine_running: embeddingInstalled(), loaded: embeddingInstalled() },
     index_running: indexRunning,
     embed_running: embedRunning,
   };
@@ -682,6 +703,9 @@ export async function mockKnowledge(cmd: string, a: Record<string, any>): Promis
       return s.chunks[String(a.documentId)] ?? [];
     case "knowledge_answer":
       return answer(a.req as AnswerRequest, String(a.requestId ?? `req-${Date.now()}`));
+    case "knowledge_answer_cancel":
+      cancelledAnswers.add(String(a.requestId));
+      return true;
     case "knowledge_answers":
       return s.answers.filter((x) => (a.kind ? x.kind === a.kind : true) && (a.documentId ? x.document_id === a.documentId : true)).slice(0, Number(a.limit ?? 50));
     case "knowledge_answer_feedback": {
@@ -708,6 +732,7 @@ export async function mockKnowledge(cmd: string, a: Record<string, any>): Promis
       if (!term) throw err("invalid", "glossary_term_empty");
       const synonyms = [...new Set((input.synonyms ?? []).map((x) => x.trim()).filter((x) => x && x !== term))];
       let g = input.id ? s.glossary.find((x) => x.id === input.id) : s.glossary.find((x) => x.term.toLowerCase() === term.toLowerCase());
+      if (input.id && s.glossary.some((x) => x.id !== input.id && x.term.toLowerCase() === term.toLowerCase())) throw err("invalid", "glossary_term_taken");
       if (!g) {
         g = { id: nextId(s), term, definition: null, synonyms: [], created_at: now(), updated_at: now() };
         s.glossary.push(g);

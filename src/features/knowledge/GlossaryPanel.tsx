@@ -108,7 +108,7 @@ export function GlossaryPanel() {
         </table>
       )}
       <Dialog open={edit.open} onOpenChange={(open) => setEdit((s) => ({ ...s, open }))}>
-        <DialogContent data-testid="glossary-dialog">
+        <DialogContent data-testid="glossary-dialog" closeLabel={t("common.close")}>
           <DialogHeader>
             <DialogTitle>{edit.entry ? t("knowledge.glossary.edit") : t("knowledge.glossary.add")}</DialogTitle>
           </DialogHeader>

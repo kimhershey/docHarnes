@@ -43,7 +43,7 @@ function EditDialog({ open, initial, onOpenChange }: { open: boolean; initial: C
   };
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-testid="collection-dialog">
+      <DialogContent data-testid="collection-dialog" closeLabel={t("common.close")}>
         <DialogHeader>
           <DialogTitle>{initial ? t("knowledge.collections.edit") : t("knowledge.collections.new")}</DialogTitle>
         </DialogHeader>

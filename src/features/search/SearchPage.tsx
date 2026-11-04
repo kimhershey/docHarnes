@@ -1,5 +1,5 @@
 import { Search as SearchIcon, Sparkles } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 
@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
 import { describeError } from "@/lib/errors";
 import { useCollections, useKnowledgeStatus, useSearch } from "@/lib/queries";
 import type { SearchHit, SearchMode, SearchRequest, SearchScope } from "@/lib/types";
@@ -67,7 +68,13 @@ export function SearchPage() {
   const setSearch = useKnowledgeStore((s) => s.setSearch);
   const setPendingAssistantInput = useUiStore((s) => s.setPendingAssistantInput);
   const [draft, setDraft] = useState(query);
-  const [latestOnly, setLatestOnly] = useState(settings?.knowledge.latest_only ?? true);
+  const settingsLatestOnly = settings?.knowledge.latest_only ?? true;
+  const [latestOnly, setLatestOnly] = useState(settingsLatestOnly);
+  // Follow the setting until the user overrides it here; a workspace switch resets the store query → clear the draft.
+  useEffect(() => setLatestOnly(settingsLatestOnly), [settingsLatestOnly]);
+  useEffect(() => {
+    if (!query) setDraft("");
+  }, [query]);
   const { data: collections } = useCollections(!!workspace);
   const { data: status } = useKnowledgeStatus(!!workspace);
 
@@ -117,7 +124,7 @@ export function SearchPage() {
             </SelectContent>
           </Select>
           <label className="flex items-center gap-1 text-xs text-fg-muted">
-            <input type="checkbox" checked={latestOnly} onChange={(e) => setLatestOnly(e.target.checked)} />
+            <Switch checked={latestOnly} onCheckedChange={setLatestOnly} aria-label={t("search.latest_only")} />
             {t("search.latest_only")}
           </label>
           <Button type="submit" data-testid="search-run">

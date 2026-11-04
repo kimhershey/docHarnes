@@ -145,7 +145,7 @@ export function defaultSettings(): AppSettings {
     cache: { page_cache_max_gb: 5, keep_thumbnails: true },
     privacy: { pii_masking: true, db_encryption: false },
     notifications: { job_complete: true, prevent_sleep_during_jobs: false },
-    knowledge: { auto_index: true, auto_embed: true, embedding_model: null, latest_only: true, allow_general_knowledge: false, context_tokens: 6000, top_k: 8, chunk_target_tokens: 500 },
+    knowledge: { auto_index: true, auto_embed: true, embedding_model: null, latest_only: true, allow_general_knowledge: false, context_tokens: 6000, top_k: 8, chunk_target_tokens: 500, min_vector_similarity: 0.5 },
     shortcuts: defaultShortcuts(),
     window: { width: 1280, height: 800, maximized: false, x: null, y: null },
   };
@@ -1850,6 +1850,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "knowledge_search":
     case "knowledge_chunks":
     case "knowledge_answer":
+    case "knowledge_answer_cancel":
     case "knowledge_answers":
     case "knowledge_answer_feedback":
     case "knowledge_answer_delete":

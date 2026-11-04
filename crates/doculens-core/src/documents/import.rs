@@ -454,6 +454,12 @@ pub fn run(
         ImportDestination::Documents => deps.paths.documents_dir(),
         ImportDestination::Inbox => deps.paths.inbox_dir(),
     };
+    // The target collection must exist (a deleted one would fail every registration on the FK).
+    if let Some(cid) = plan.options.collection_id.as_deref() {
+        if !deps.db.with(|c| crate::knowledge::repo::collection_exists(c, cid))? {
+            return Err(CoreError::Invalid("collection_not_found".into()));
+        }
+    }
     // Documents this batch merely re-encountered still join the collection.
     if plan.options.collection_id.is_some() {
         for item in &plan.items {

@@ -5,9 +5,27 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 
+use unicode_normalization::UnicodeNormalization;
+
 use super::chunker::{chunk_document, ChunkOptions, PageText};
 use super::tokenize::Analyzer;
 use super::{embed, repo, IndexStatus, INDEX_VERSION};
+
+/// `kv` key holding the analyzer + chunk-size signature the index was built with.
+pub const KV_INDEX_SIGNATURE: &str = "knowledge.index_signature";
+
+/// Identity of the chunker configuration: a different dictionary or chunk size
+/// means every document is re-chunked on the next run.
+pub fn index_signature(analyzer: &Analyzer, options: &ChunkOptions) -> String {
+    let info = analyzer.info();
+    format!(
+        "v{}|{}@{}|target={}",
+        INDEX_VERSION,
+        info.kind,
+        info.version.unwrap_or_else(|| "-".into()),
+        options.target_tokens
+    )
+}
 use crate::db::Db;
 use crate::documents::{repo as docs, DocumentRecord, PageRecord};
 use crate::error::Result;
@@ -71,16 +89,24 @@ pub fn index_document(deps: &IndexDeps<'_>, doc: &DocumentRecord, force: bool) -
                 && state.index_version == INDEX_VERSION
                 && state.text_hash.as_deref() == Some(hash.as_str())
             {
+                // Metadata-only updates (tags, title, role…) bumped `updated_at`; note the check
+                // so the document stops showing up as pending.
+                let id = doc.id.clone();
+                deps.db.with(|c| repo::touch_indexed(c, &id))?;
                 return Ok(IndexOutcome::Unchanged);
             }
         }
     }
-    let texts: Vec<PageText<'_>> = pages
+    // NFC so that decomposed Hangul (macOS-made PDFs) matches composed queries in the
+    // trigram / LIKE channels.
+    let normalized: Vec<(u32, String)> = pages
         .iter()
         .filter_map(|p| {
-            p.text.as_deref().filter(|t| !t.trim().is_empty()).map(|t| PageText { page_no: p.page_no, text: t })
+            p.text.as_deref().filter(|t| !t.trim().is_empty()).map(|t| (p.page_no, t.nfc().collect::<String>()))
         })
         .collect();
+    let texts: Vec<PageText<'_>> =
+        normalized.iter().map(|(page_no, text)| PageText { page_no: *page_no, text: text.as_str() }).collect();
     if texts.is_empty() {
         let id = doc.id.clone();
         deps.db.with_tx(|tx| {
@@ -110,6 +136,12 @@ pub fn index_pending(
     cancel: Option<&AtomicBool>,
     progress: &mut dyn FnMut(&IndexProgress<'_>),
 ) -> Result<IndexReport> {
+    // A different analyzer / chunk size invalidates every chunk.
+    let signature = index_signature(deps.analyzer, &deps.options);
+    let stored = deps.db.with(|c| repo::kv_get(c, KV_INDEX_SIGNATURE))?;
+    let signature_changed = stored.as_deref().is_some_and(|s| s != signature);
+    let force = force || signature_changed;
+    let ids = if signature_changed { None } else { ids };
     let candidates = deps.db.with(|c| repo::documents_to_index(c, ids, force))?;
     let total = candidates.len() as u32;
     let mut report = IndexReport::default();
@@ -135,15 +167,22 @@ pub fn index_pending(
         }
     }
     progress(&IndexProgress { done: total, total, current: "" });
+    if !report.cancelled {
+        deps.db.with(|c| repo::kv_set(c, KV_INDEX_SIGNATURE, &signature))?;
+    }
     Ok(report)
 }
 
 /// Dashboard numbers plus tokenizer / embedding info.
 pub fn index_status(deps: &IndexDeps<'_>) -> Result<IndexStatus> {
-    let mut status = deps.db.with(repo::index_status)?;
+    let (mut status, model, dim) = deps.db.with_read(|c| {
+        let status = repo::index_status(c)?;
+        let model = repo::kv_get(c, embed::KV_EMBEDDING_MODEL)?;
+        let dim = repo::kv_get(c, embed::KV_EMBEDDING_DIM)?.and_then(|d| d.parse().ok());
+        Ok((status, model, dim))
+    })?;
     status.tokenizer = deps.analyzer.info();
-    let info = deps.db.with(embed::embedding_info)?;
-    status.embedding_model = info.model;
-    status.embedding_dim = info.dim;
+    status.embedding_model = model;
+    status.embedding_dim = dim;
     Ok(status)
 }

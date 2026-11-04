@@ -196,6 +196,7 @@ export const api = {
   knowledgeSearch: (req: SearchRequest) => invoke<SearchResponse>("knowledge_search", { req }),
   knowledgeChunks: (documentId: string) => invoke<Chunk[]>("knowledge_chunks", { documentId }),
   knowledgeAnswer: (req: AnswerRequest, requestId: string) => invoke<Answer>("knowledge_answer", { req, requestId }),
+  knowledgeAnswerCancel: (requestId: string) => invoke<boolean>("knowledge_answer_cancel", { requestId }),
   knowledgeAnswers: (kind: AnswerKind | null = null, documentId: string | null = null, limit = 50) =>
     invoke<SavedAnswer[]>("knowledge_answers", { kind, documentId, limit }),
   knowledgeAnswerFeedback: (id: number, feedback: number | null, note: string | null = null) =>

@@ -192,27 +192,39 @@ pub fn document(app: &AppHandle, id: &str) -> UiResult<DocumentRecord> {
 /// about to be closed, waiting (bounded) for them to release the database.
 pub fn before_workspace_change(app: &AppHandle) {
     let state = app.state::<AppState>();
+    // Chained `after` hooks and auto-index must not start new work on the closing workspace.
+    state.switching.store(true, Ordering::SeqCst);
     if let Ok(mut g) = state.inbox_watcher.lock() {
         *g = None;
     }
     if let Ok(mut m) = state.import_plans.lock() {
         m.clear();
     }
+    // Streaming answers hold the old database too: stop them at their next delta.
+    if let (Ok(running), Ok(mut cancels)) = (state.answer_running.lock(), state.answer_cancels.lock()) {
+        for id in running.iter() {
+            cancels.insert(id.clone());
+        }
+    }
+    let answers_running = || state.answer_running.lock().map(|r| !r.is_empty()).unwrap_or(false);
     let cancelled = state.jobs.cancel_kinds(&WORKSPACE_JOBS);
-    if cancelled.is_empty() {
+    if cancelled.is_empty() && !answers_running() {
         return;
     }
     let deadline = Instant::now() + CANCEL_WAIT;
-    while state.jobs.is_active_kind(&WORKSPACE_JOBS) && Instant::now() < deadline {
+    while (state.jobs.is_active_kind(&WORKSPACE_JOBS) || answers_running()) && Instant::now() < deadline {
+        // A job spawned by an `after` hook in the meantime gets the cancel too.
+        state.jobs.cancel_kinds(&WORKSPACE_JOBS);
         std::thread::sleep(Duration::from_millis(50));
     }
-    if state.jobs.is_active_kind(&DOC_JOBS) {
-        log::warn!("document jobs did not stop within {CANCEL_WAIT:?}; they will stop at the next cancel point");
+    if state.jobs.is_active_kind(&WORKSPACE_JOBS) {
+        log::warn!("workspace jobs did not stop within {CANCEL_WAIT:?}; they will stop at the next cancel point");
     }
 }
 
 pub fn on_workspace_changed(app: &AppHandle) {
     let state = app.state::<AppState>();
+    state.switching.store(false, Ordering::SeqCst);
     if let Ok(mut g) = state.inbox_watcher.lock() {
         *g = None;
     }
@@ -379,6 +391,9 @@ pub fn import_job(app: &AppHandle, plan: ImportPlan) -> UiResult<String> {
         // itself) are picked up once the job is no longer active.
         Some(Box::new(move |app| {
             let state = app.state::<AppState>();
+            if state.switching.load(Ordering::SeqCst) {
+                return;
+            }
             if source == ImportSource::Inbox || state.inbox_dirty.swap(false, Ordering::SeqCst) {
                 spawn_inbox_scan(app);
             }
@@ -472,6 +487,9 @@ pub fn rescan_job(app: &AppHandle, then_inbox: bool) -> Option<String> {
             )))
         },
         Some(Box::new(move |app: &AppHandle| {
+            if app.state::<AppState>().switching.load(Ordering::SeqCst) {
+                return;
+            }
             if then_inbox {
                 spawn_inbox_scan(app);
             }

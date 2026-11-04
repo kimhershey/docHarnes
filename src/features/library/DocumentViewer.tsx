@@ -16,11 +16,12 @@ import { AddToCollectionDialog } from "@/features/knowledge/AddToCollectionDialo
 import { Snippet } from "@/features/search/SearchPage";
 import { describeError } from "@/lib/errors";
 import { api, revealPath } from "@/lib/ipc";
-import { useDocument, useDocumentCollections, useDocumentPages } from "@/lib/queries";
+import { useDocument, useDocumentChunks, useDocumentCollections, useDocumentPages } from "@/lib/queries";
 import { queryClient, queryKeys } from "@/lib/query-client";
-import { isComposing } from "@/lib/shortcuts";
+import { formatChord, isComposing, matchesChord } from "@/lib/shortcuts";
 import type { Citation, DocumentView, PageView } from "@/lib/types";
-import { cn, formatBytes, formatDate } from "@/lib/utils";
+import { cn, formatBytes, formatDate, isMac } from "@/lib/utils";
+import { useShortcut } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 
 import { statusVariant } from "./status";
@@ -60,6 +61,9 @@ export function DocumentViewer() {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const highlightQuery = searchParams.get("q") ?? "";
+  const chunkParam = searchParams.get("chunk");
+  const { data: docChunks } = useDocumentChunks(chunkParam ? id : undefined);
+  const explainChord = useShortcut("explain_selection");
   const [tab, setTab] = useState<string>("text");
   const [explainSelection, setExplainSelection] = useState<string | null>(null);
   const [selectionText, setSelectionText] = useState("");
@@ -83,7 +87,8 @@ export function DocumentViewer() {
   useEffect(() => {
     const n = Number(pageParam);
     if (pageParam && Number.isFinite(n) && n >= 1) setPageNo(n);
-  }, [pageParam, id]);
+    if (searchParams.get("q") || searchParams.get("chunk")) setTab("text");
+  }, [pageParam, id, searchParams]);
 
   const clearHighlight = () => {
     const next = new URLSearchParams(searchParams);
@@ -92,10 +97,18 @@ export function DocumentViewer() {
     setSearchParams(next, { replace: true });
   };
 
-  const captureSelection = () => {
-    const sel = window.getSelection()?.toString().trim() ?? "";
+  const textRef = useRef<HTMLPreElement | null>(null);
+  const captureSelection = useCallback(() => {
+    const selection = window.getSelection();
+    const anchor = selection?.anchorNode ?? null;
+    const inside = !!anchor && !!textRef.current && textRef.current.contains(anchor);
+    const sel = inside ? (selection?.toString().trim() ?? "") : "";
     setSelectionText(sel.length >= 2 ? sel : "");
-  };
+  }, []);
+  useEffect(() => {
+    document.addEventListener("selectionchange", captureSelection);
+    return () => document.removeEventListener("selectionchange", captureSelection);
+  }, [captureSelection]);
   const explain = (selection?: string) => {
     const sel = (selection ?? selectionText).trim();
     if (!sel) return;
@@ -118,7 +131,19 @@ export function DocumentViewer() {
     enabled: !!id && !!page,
   });
 
-  const highlightNeedles = useMemo(() => highlightQuery.split(/\s+/).map((w) => w.trim()).filter((w) => w.length >= 1), [highlightQuery]);
+  const citedChunk = useMemo(() => (chunkParam ? docChunks?.find((c) => String(c.id) === chunkParam) : undefined), [chunkParam, docChunks]);
+  const highlightNeedles = useMemo(() => {
+    if (highlightQuery.trim()) return highlightQuery.split(/\s+/).map((w) => w.trim()).filter((w) => w.length >= 1);
+    if (!citedChunk) return [];
+    // A citation without a query: mark the opening lines of the cited passage.
+    const body = citedChunk.heading_path && citedChunk.text.startsWith(citedChunk.heading_path) ? citedChunk.text.slice(citedChunk.heading_path.length) : citedChunk.text;
+    return body
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length >= 4)
+      .slice(0, 3)
+      .map((l) => Array.from(l).slice(0, 80).join(""));
+  }, [highlightQuery, citedChunk]);
   const highlights = useMemo<[number, number][]>(() => {
     if (!text || highlightNeedles.length === 0) return [];
     const chars = Array.from(text);
@@ -156,9 +181,10 @@ export function DocumentViewer() {
   const go = useCallback((delta: number) => setPageNo((p) => Math.min(Math.max(1, p + delta), Math.max(1, total))), [total]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "e" || e.key === "E")) {
-      captureSelection();
-      const sel = window.getSelection()?.toString().trim() ?? "";
+    if (matchesChord(e.nativeEvent, explainChord, isMac())) {
+      const selection = window.getSelection();
+      const anchor = selection?.anchorNode ?? null;
+      const sel = anchor && textRef.current?.contains(anchor) ? (selection?.toString().trim() ?? "") : selectionText;
       if (sel.length >= 2) {
         e.preventDefault();
         explain(sel);
@@ -417,9 +443,9 @@ export function DocumentViewer() {
           <GitBranch />
           {t("viewer.version.menu")}
         </Button>
-        <Button size="sm" variant="ghost" onClick={() => explain()} disabled={!selectionText} title={t("viewer.explain_shortcut")} data-testid="viewer-explain">
+        <Button size="sm" variant="ghost" onClick={() => explain()} disabled={!selectionText} title={t("viewer.explain_with_chord", { chord: formatChord(explainChord, isMac()) })} data-testid="viewer-explain">
           <MessageSquareText />
-          {t("viewer.explain")}
+          {t("viewer.explain_with_chord", { chord: formatChord(explainChord, isMac()) })}
         </Button>
         <Button size="sm" variant="ghost" onClick={() => void reveal()} data-testid="viewer-reveal">
           <FolderOpen />
@@ -479,7 +505,7 @@ export function DocumentViewer() {
               {textLoading ? (
                 <Spinner />
               ) : text ? (
-                <pre className="whitespace-pre-wrap break-words font-sans text-sm selectable" data-testid="viewer-text" onMouseUp={captureSelection} onKeyUp={captureSelection}>
+                <pre ref={textRef} className="whitespace-pre-wrap break-words font-sans text-sm selectable" data-testid="viewer-text">
                   {highlights.length > 0 ? <Snippet text={text} highlights={highlights} /> : text}
                 </pre>
               ) : (
@@ -494,7 +520,7 @@ export function DocumentViewer() {
             <TabsContent value="tables" className="px-3 pb-3 text-sm text-fg-muted">
               {t("viewer.placeholder_tables")}
             </TabsContent>
-            <TabsContent value="qa" className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+            <TabsContent value="qa" forceMount className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 data-[state=inactive]:hidden">
               <ViewerKnowledgePanel doc={doc} explainSelection={explainSelection} onExplained={() => setExplainSelection(null)} onCitation={onCitation} />
             </TabsContent>
             <TabsContent value="history" className="px-3 pb-3 text-sm text-fg-muted">

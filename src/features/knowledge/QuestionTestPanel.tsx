@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
-import type { SearchResponse } from "@/lib/types";
+import { useKnowledgeStore } from "@/stores/knowledge";
 
 import { hitHref, Snippet } from "../search/SearchPage";
 
@@ -16,8 +16,10 @@ import { hitHref, Snippet } from "../search/SearchPage";
 export function QuestionTestPanel() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const [question, setQuestion] = useState("");
-  const [result, setResult] = useState<SearchResponse | null>(null);
+  const storedQuestion = useKnowledgeStore((s) => s.testQuestion);
+  const result = useKnowledgeStore((s) => s.testResult);
+  const setTest = useKnowledgeStore((s) => s.setTest);
+  const [question, setQuestion] = useState(storedQuestion);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
@@ -27,7 +29,8 @@ export function QuestionTestPanel() {
     setBusy(true);
     setError(null);
     try {
-      setResult(await api.knowledgeSearch({ query: question, mode: "hybrid", limit: 10, per_document: 3 }));
+      const r = await api.knowledgeSearch({ query: question, mode: "hybrid", limit: 10, per_document: 3 });
+      setTest(question, r);
     } catch (err) {
       setError(err);
     } finally {
@@ -40,7 +43,7 @@ export function QuestionTestPanel() {
       <h2 className="text-sm font-semibold">{t("knowledge.test.title")}</h2>
       <p className="text-xs text-fg-muted">{t("knowledge.test.hint")}</p>
       <form className="flex gap-2" onSubmit={run}>
-        <Input value={question} onChange={(e) => setQuestion(e.target.value)} placeholder={t("knowledge.test.placeholder")} data-testid="kb-test-input" />
+        <Input value={question} onChange={(e) => setQuestion(e.target.value)} placeholder={t("knowledge.test.placeholder")} aria-label={t("knowledge.test.title")} data-testid="kb-test-input" />
         <Button type="submit" disabled={busy || !question.trim()} data-testid="kb-test-run">
           {t("knowledge.test.run")}
         </Button>
@@ -73,7 +76,7 @@ export function QuestionTestPanel() {
                   <button type="button" className="text-fg hover:underline cursor-pointer" onClick={() => navigate(hitHref(h, question))}>
                     {h.title}
                   </button>
-                  <span>p.{h.page_start}</span>
+                  <span>{h.page_start === h.page_end ? t("answer.citation_page", { page: h.page_start }) : t("answer.citation_pages", { from: h.page_start, to: h.page_end })}</span>
                   {h.clause && <span>§ {h.clause}</span>}
                   <span className="ml-auto flex gap-1">
                     {h.channels.map((c) => (

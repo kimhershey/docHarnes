@@ -439,6 +439,9 @@ pub struct AnswerRequest {
     /// Persist the answer in `answers` (default true).
     #[serde(default = "default_true")]
     pub save: bool,
+    /// Cosine-similarity floor for vector-only evidence (None = built-in default).
+    #[serde(default)]
+    pub min_similarity: Option<f32>,
 }
 
 impl AnswerRequest {
@@ -457,6 +460,7 @@ impl AnswerRequest {
             summary_mode: SummaryMode::KeyPoints,
             keep_chunks: Vec::new(),
             save: true,
+            min_similarity: None,
         }
     }
 }
