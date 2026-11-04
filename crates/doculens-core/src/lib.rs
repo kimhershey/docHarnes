@@ -9,8 +9,11 @@
 //! Policy: every dependency must be permissively licensed (no source-disclosure
 //! obligation). See `docs/LICENSE-POLICY.md`.
 
+pub mod db;
+pub mod documents;
 pub mod engine;
 pub mod error;
+pub mod fswatch;
 pub mod gguf;
 pub mod hw;
 pub mod memory;

@@ -11,14 +11,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant, SystemTime};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, Result};
+use crate::fswatch::DirWatcher;
 use crate::gguf::{self, FileHashes, GgufKind, ModelMeta};
 use crate::hw::Tier;
 use crate::memory::MIB;
@@ -1286,88 +1285,36 @@ fn finish_download(
 
 /// Watches a models directory and calls `on_change` once the folder has been
 /// quiet for `settle`. Dropping the handle stops the watcher.
+/// Watches a drop-in model folder; see [`crate::fswatch::DirWatcher`].
 pub struct ModelWatcher {
-    _watcher: notify::RecommendedWatcher,
-    stop: Arc<AtomicBool>,
-    thread: Option<std::thread::JoinHandle<()>>,
-    pub root: PathBuf,
+    inner: DirWatcher,
+}
+
+impl std::fmt::Debug for ModelWatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ModelWatcher").field("root", &self.inner.root).finish()
+    }
 }
 
 impl ModelWatcher {
     pub fn start(root: &Path, settle: Duration, on_change: impl Fn() + Send + 'static) -> Result<ModelWatcher> {
-        use notify::{RecursiveMode, Watcher};
-        let (tx, rx) = mpsc::channel::<()>();
-        let mut watcher = notify::recommended_watcher(move |res: std::result::Result<notify::Event, notify::Error>| {
-            if let Ok(ev) = res {
-                if !is_content_change(&ev.kind) {
-                    return; // opens / reads / metadata-only changes (e.g. the engine mmapping a model)
-                }
-                // Only react to GGUF / model.json / license files and folders
-                // (ignore our own hash-cache writes).
-                let relevant = ev.paths.iter().any(|p| {
-                    let name = p.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-                    name.ends_with(".gguf")
-                        || name.ends_with(".gguf.part")
-                        || name == MODEL_JSON
-                        || is_license_file(&name)
-                }) || ev.paths.iter().any(|p| p.is_dir() || p.extension().is_none());
-                if relevant {
-                    let _ = tx.send(());
-                }
-            }
-        })
-        .map_err(|e| CoreError::engine(format!("watcher: {e}")))?;
-        fs::create_dir_all(root).map_err(|e| CoreError::io(root, e))?;
-        watcher
-            .watch(root, RecursiveMode::Recursive)
-            .map_err(|e| CoreError::engine(format!("watch {}: {e}", root.display())))?;
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop2 = stop.clone();
-        let thread = std::thread::Builder::new()
-            .name("doculens-model-watch".into())
-            .spawn(move || {
-                let mut pending = false;
-                let mut last_event = Instant::now();
-                while !stop2.load(Ordering::Relaxed) {
-                    match rx.recv_timeout(Duration::from_millis(250)) {
-                        Ok(()) => {
-                            pending = true;
-                            last_event = Instant::now();
-                        }
-                        Err(mpsc::RecvTimeoutError::Timeout) => {}
-                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    }
-                    if pending && last_event.elapsed() >= settle {
-                        pending = false;
-                        on_change();
-                    }
-                }
-            })
-            .map_err(|e| CoreError::engine(format!("watcher thread: {e}")))?;
-        Ok(ModelWatcher { _watcher: watcher, stop, thread: Some(thread), root: root.to_path_buf() })
+        // Only react to GGUF / model.json / license files and folders
+        // (ignore our own hash-cache writes).
+        let relevant = |p: &Path| {
+            let name = p.file_name().map(|n| n.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+            name.ends_with(".gguf")
+                || name.ends_with(".gguf.part")
+                || name == MODEL_JSON
+                || is_license_file(&name)
+                || p.is_dir()
+                || p.extension().is_none()
+        };
+        let inner = DirWatcher::start(root, settle, "doculens-model-watch", relevant, on_change)?;
+        Ok(ModelWatcher { inner })
     }
-}
 
-impl Drop for ModelWatcher {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
-        }
-    }
-}
-
-/// Create / data-modify / rename / remove events change what a scan would see;
-/// access, open/close and metadata-only events do not (notify's inotify backend
-/// subscribes to `OPEN` and `ATTRIB` as well, which the engine triggers while
-/// loading a model).
-fn is_content_change(kind: &notify::EventKind) -> bool {
-    use notify::event::{EventKind, ModifyKind};
-    match kind {
-        EventKind::Create(_) | EventKind::Remove(_) | EventKind::Any => true,
-        EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Name(_) | ModifyKind::Any) => true,
-        EventKind::Modify(ModifyKind::Metadata(_) | ModifyKind::Other) => false,
-        EventKind::Access(_) | EventKind::Other => false,
+    pub fn root(&self) -> &Path {
+        &self.inner.root
     }
 }
 

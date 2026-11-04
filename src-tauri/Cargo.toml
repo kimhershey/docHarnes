@@ -27,3 +27,13 @@ serde_json.workspace = true
 log.workspace = true
 chrono.workspace = true
 uuid.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Printing converted documents to PDF through WebKitGTK (dev / CI builds only).
+gtk = "0.18"
+webkit2gtk = "2.0"
+
+[target.'cfg(windows)'.dependencies]
+# WebView2 `PrintToPdf` for converted documents (same versions wry uses).
+webview2-com = "0.39"
+windows-core = "0.62"

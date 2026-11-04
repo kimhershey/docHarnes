@@ -14,7 +14,15 @@ import { useJobsStore } from "@/stores/jobs";
 import { useUiStore } from "@/stores/ui";
 
 /** Engine start cannot be interrupted (P1); every other kind unloads / discards partial files on cancel. */
-const CANCELLABLE: Job["kind"][] = ["model_load", "model_import", "model_download", "model_hash"];
+const CANCELLABLE: Job["kind"][] = [
+  "model_load",
+  "model_import",
+  "model_download",
+  "model_hash",
+  "document_import",
+  "document_rescan",
+  "document_render",
+];
 
 function stateVariant(j: Job): "ok" | "warn" | "danger" | "muted" | "info" {
   switch (j.state) {

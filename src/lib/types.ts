@@ -502,7 +502,15 @@ export interface ChatTestResult {
 
 // --- jobs ------------------------------------------------------------------
 
-export type JobKind = "engine_start" | "model_load" | "model_import" | "model_download" | "model_hash";
+export type JobKind =
+  | "engine_start"
+  | "model_load"
+  | "model_import"
+  | "model_download"
+  | "model_hash"
+  | "document_import"
+  | "document_rescan"
+  | "document_render";
 export type JobState = "queued" | "running" | "done" | "failed" | "cancelled";
 
 export interface Job {
@@ -628,4 +636,176 @@ export const EVENTS = {
   engineModel: "engine://model",
   modelsChanged: "models://changed",
   jobsUpdate: "jobs://update",
+  documentsChanged: "documents://changed",
 } as const;
+
+// ---------------------------------------------------------------------------
+// Documents (P2) — mirrors crates/doculens-core/src/documents and
+// src-tauri/src/commands/documents.rs
+// ---------------------------------------------------------------------------
+
+export type SourceKind = "pdf" | "image" | "hwpx" | "docx" | "hwp";
+export const SOURCE_KINDS: SourceKind[] = ["pdf", "image", "hwpx", "docx", "hwp"];
+export type DocumentStatus =
+  | "importing"
+  | "new"
+  | "rendered"
+  | "extracted"
+  | "reviewed"
+  | "archived"
+  | "missing"
+  | "error";
+export const DOCUMENT_STATUSES: DocumentStatus[] = [
+  "importing",
+  "new",
+  "rendered",
+  "extracted",
+  "reviewed",
+  "archived",
+  "missing",
+  "error",
+];
+export type DocumentRole = "work" | "knowledge" | "form" | "generated";
+export type DocumentSort = "imported_desc" | "imported_asc" | "name_asc" | "name_desc" | "size_desc";
+
+export interface DocumentRecord {
+  id: string;
+  rel_path: string;
+  original_name: string;
+  source_kind: SourceKind;
+  content_hash: string;
+  size_bytes: number;
+  file_modified_at: string | null;
+  imported_at: string;
+  updated_at: string;
+  status: DocumentStatus;
+  role: DocumentRole;
+  title: string | null;
+  doc_type: string | null;
+  vendor: string | null;
+  doc_date: string | null;
+  total_amount: number | null;
+  language: string | null;
+  page_count: number;
+  has_text_layer: boolean;
+  converted: boolean;
+  conversion_note: string | null;
+  render_dpi: number | null;
+  error: string | null;
+  import_batch_id: string | null;
+  deleted_at: string | null;
+  tags: string[];
+}
+
+/** `DocumentRecord` plus the URLs / paths the UI needs (`documents_list`, `documents_get`). */
+export interface DocumentView extends DocumentRecord {
+  absolute_path: string;
+  thumb_url: string | null;
+}
+
+export interface PageRecord {
+  document_id: string;
+  page_no: number;
+  width_px: number;
+  height_px: number;
+  width_pt: number | null;
+  height_pt: number | null;
+  dpi: number | null;
+  rotation: number;
+  has_text: boolean;
+  text?: string | null;
+  is_blank: boolean | null;
+  rendered_at: string | null;
+}
+
+export interface PageView extends PageRecord {
+  image_url: string | null;
+  thumb_url: string | null;
+}
+
+export interface DocumentFilter {
+  statuses?: DocumentStatus[];
+  kinds?: SourceKind[];
+  folder?: string | null;
+  query?: string | null;
+  tag?: string | null;
+  doc_type?: string | null;
+  include_deleted?: boolean;
+  sort?: DocumentSort;
+  limit?: number | null;
+  offset?: number;
+}
+
+export interface FolderCount {
+  rel_dir: string;
+  count: number;
+}
+
+export interface LibraryStats {
+  total: number;
+  by_status: Record<string, number>;
+  by_kind: Record<string, number>;
+  folders: FolderCount[];
+  total_pages: number;
+}
+
+export type ImportSource = "drop" | "folder" | "inbox" | "onboarding" | "rescan";
+export type ImportDestination = "documents" | "inbox";
+
+export interface ImportOptions {
+  destination: ImportDestination;
+  move_files: boolean;
+  render: boolean;
+  role: DocumentRole;
+  dpi: number | null;
+}
+
+export type ImportItemStatus =
+  | { kind: "new" }
+  | { kind: "duplicate"; of: string; of_rel_path: string }
+  | { kind: "duplicate_in_batch"; of: string }
+  | { kind: "already_registered"; id: string }
+  | { kind: "relink"; id: string; old_rel_path: string }
+  | { kind: "unsupported"; reason: string }
+  | { kind: "copying" };
+
+export interface ImportItem {
+  path: string;
+  name: string;
+  size: number;
+  kind: SourceKind | null;
+  inside_workspace: boolean;
+  rel_path: string | null;
+  content_hash: string | null;
+  status: ImportItemStatus;
+}
+
+export interface DocumentImportPlan {
+  token: string;
+  source: ImportSource;
+  options: ImportOptions;
+  items: ImportItem[];
+  new_count: number;
+  relink_count: number;
+  duplicate_count: number;
+  registered_count: number;
+  unsupported_count: number;
+  copying_count: number;
+  new_bytes: number;
+  truncated: boolean;
+}
+
+export interface DocumentsChanged {
+  kind: "imported" | "updated" | "removed" | "rescanned" | "batch";
+  ids: string[];
+}
+
+export interface PdfiumInfo {
+  library: string | null;
+  error: string | null;
+  searched: string[];
+}
+
+export function defaultImportOptions(): ImportOptions {
+  return { destination: "documents", move_files: false, render: true, role: "work", dpi: null };
+}

@@ -27,7 +27,7 @@
         "default-src": "'self'",
         "script-src": "'self'",
         "style-src": "'self' 'unsafe-inline'",
-        "img-src": "'self' asset: http://asset.localhost data: blob:",
+        "img-src": "'self' asset: http://asset.localhost doculens: http://doculens.localhost data: blob:",
         "font-src": "'self' data:",
         "connect-src": "'self' ipc: http://ipc.localhost",
         "worker-src": "'self' blob:"
@@ -51,7 +51,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../THIRD-PARTY-NOTICES.md": "THIRD-PARTY-NOTICES.md"
+      "../THIRD-PARTY-NOTICES.md": "THIRD-PARTY-NOTICES.md",
+      "resources/pdfium/": "pdfium/"
     },
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },

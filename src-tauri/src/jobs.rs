@@ -22,6 +22,9 @@ pub enum JobKind {
     ModelImport,
     ModelDownload,
     ModelHash,
+    DocumentImport,
+    DocumentRescan,
+    DocumentRender,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

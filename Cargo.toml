@@ -26,7 +26,15 @@ blake3 = "1"
 ureq = { version = "3", default-features = false, features = ["json", "gzip", "native-tls-no-default"] }
 notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
 libc = "0.2"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security", "Win32_Storage_FileSystem"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
+pdfium-render = { version = "0.9", default-features = false, features = ["pdfium_latest", "image_latest", "thread_safe"] }
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+quick-xml = "0.42"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff", "webp", "bmp", "gif"] }
+trash = "5"
+hwp = "0.2"
+unicode-normalization = "0.1"
 
 # See https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

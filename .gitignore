@@ -42,3 +42,7 @@ dist-ssr
 !crates/doculens-core/tests/fixtures/**/*.gguf
 /.doculens/
 /workspace/
+
+# PDFium binaries placed by scripts/fetch-pdfium.mjs --bundle (never committed)
+src-tauri/resources/pdfium/*
+!src-tauri/resources/pdfium/.gitkeep

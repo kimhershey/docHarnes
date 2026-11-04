@@ -1,6 +1,8 @@
 //! Tauri commands. Thin wrappers: validation and business logic live in
 //! `doculens-core`; this layer only adapts state and error types.
 
+pub mod documents;
+
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -176,6 +178,7 @@ pub fn workspace_open(app: AppHandle, state: State<'_, AppState>, args: OpenArgs
     state.open_workspace_inner(&path, OpenOptions { force_unlock: args.force_unlock, ..Default::default() })?;
     let v = state.with_workspace(view)?;
     engine_bridge::on_workspace_changed(&app);
+    crate::docs_bridge::on_workspace_changed(&app);
     Ok(v)
 }
 
@@ -200,6 +203,7 @@ pub fn workspace_create(app: AppHandle, state: State<'_, AppState>, args: Create
     )?;
     let v = state.with_workspace(view)?;
     engine_bridge::on_workspace_changed(&app);
+    crate::docs_bridge::on_workspace_changed(&app);
     Ok(v)
 }
 
@@ -207,6 +211,7 @@ pub fn workspace_create(app: AppHandle, state: State<'_, AppState>, args: Create
 pub fn workspace_close(app: AppHandle, state: State<'_, AppState>) -> UiResult<()> {
     state.close_workspace()?;
     engine_bridge::on_workspace_changed(&app);
+    crate::docs_bridge::on_workspace_changed(&app);
     Ok(())
 }
 

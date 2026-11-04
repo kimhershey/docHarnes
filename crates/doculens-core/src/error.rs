@@ -39,6 +39,16 @@ pub enum CoreError {
     Cancelled,
     #[error("timed out: {0}")]
     Timeout(String),
+    #[error("database error: {0}")]
+    Db(String),
+    #[error("not found: {0}")]
+    NotFound(String),
+    #[error("unsupported: {0}")]
+    Unsupported(String),
+    #[error("conversion failed: {0}")]
+    Convert(String),
+    #[error("render failed: {0}")]
+    Render(String),
 }
 
 impl CoreError {
@@ -71,6 +81,11 @@ impl CoreError {
             CoreError::Download(_) => "download",
             CoreError::Cancelled => "cancelled",
             CoreError::Timeout(_) => "timeout",
+            CoreError::Db(_) => "db",
+            CoreError::NotFound(_) => "not_found",
+            CoreError::Unsupported(_) => "unsupported",
+            CoreError::Convert(_) => "convert",
+            CoreError::Render(_) => "render",
         }
     }
 }
