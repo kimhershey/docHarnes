@@ -46,12 +46,35 @@ this header; the entries here cover direct dependencies and bundled assets.
 | notify (file-system watcher) | CC0-1.0 |
 | libc (Unix process groups, CI only) | MIT OR Apache-2.0 |
 | windows-sys (job objects) | MIT OR Apache-2.0 |
+| nvml-wrapper | MIT OR Apache-2.0 (NVML itself is loaded from the user's NVIDIA driver at runtime; not redistributed) |
+| rusqlite, libsqlite3-sys (bundled SQLite) | MIT (SQLite itself is public domain) |
+| pdfium-render | MIT OR Apache-2.0 (© Alastair Carey) |
+| zip (deflate via flate2 / zlib-rs) | MIT |
+| quick-xml | MIT |
+| image (JPEG/PNG/TIFF/WebP/BMP/GIF codecs, pure Rust) | MIT OR Apache-2.0 |
+| trash (Recycle Bin / freedesktop trash) | MIT |
+| hwp (hahnlee/hwp-rs — HWP 5.0 parser; "본 제품은 한글과컴퓨터의 한/글 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.") + cfb, aes, num | Apache-2.0 / MIT OR Apache-2.0 |
+| unicode-normalization | MIT OR Apache-2.0 |
+| gtk, webkit2gtk (Linux CI/dev builds only — print-to-PDF) | MIT |
+| webview2-com, windows-core (Windows print-to-PDF) | MIT / MIT OR Apache-2.0 |
+| @tanstack/react-virtual | MIT (© Tanner Linsley) |
 
 MPL-2.0 components (consumed unmodified only — decision 10): `lightningcss`
 (via Tailwind), `selectors` / `cssparser` / `dtoa-short` (via `tauri-utils` →
 `dom_query`), `option-ext` (via `dirs` → `dirs-sys`). OpenSSL-licensed code is
 linked only on Linux (CI builds) through `native-tls`.
-| nvml-wrapper | MIT OR Apache-2.0 (NVML itself is loaded from the user's NVIDIA driver at runtime; not redistributed) |
+
+## PDF renderer (PDFium, installed by `scripts/fetch-pdfium.mjs`)
+
+- **PDFium** — BSD-3-Clause, © The PDFium Authors / The Chromium Authors. Prebuilt by
+  **bblanchon/pdfium-binaries** (MIT, © Benoit Blanchon), pinned in `engines/pdfium.json`
+  (chromium/8125). The library (`pdfium.dll` / `libpdfium.so`) is loaded at runtime from the
+  installer's `pdfium/` resource folder or `<AppData>/DocuLens/pdfium/`.
+- The archive's `LICENSE` and the 18 third-party notices under `licenses/` (FreeType FTL,
+  libjpeg-turbo IJG/zlib, OpenJPEG BSD-2, ICU Unicode-3.0, Abseil / Highway Apache-2.0,
+  llvm-libc Apache-2.0 WITH LLVM-exception, HarfBuzz Old-MIT, lcms MIT, libpng, zlib, agg23,
+  fast_float, simdutf, dragonbox) are copied next to the library by the fetch script and must
+  ship with the installer unchanged (design §3.2).
 
 ## Fonts
 

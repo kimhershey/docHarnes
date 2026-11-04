@@ -19,8 +19,8 @@
 |---|---|---|
 | P0 스캐폴드 | 완료 (`main`) | Tauri 2 셸, 테마 4종, i18n, 설정/워크스페이스, CI |
 | P1 엔진·모델 | **완료 (`main`에 병합, PR #2)** | 아래 "P1 산출물" 참조. 병합 후 CI 엔진 빌드 수정은 `phase/p1-engine` 후속 PR |
-| P2 워크스페이스·문서 | 다음 | SQLite 마이그레이션, 가져오기, HWP/HWPX/DOCX 변환, pdfium 렌더, 뷰어 |
-| P3 지식 베이스 | 대기 | 청킹, lindera FTS5 + trigram, bge-m3 + sqlite-vec, 근거 기반 Q&A |
+| P2 워크스페이스·문서 | **완료 (`phase/p2-documents`, PR 대기)** | 아래 "P2 산출물" 참조. `phase/p1-engine` 후속 커밋(CI 엔진 빌드) 위에 쌓였으므로 P1 후속 PR → P2 PR 순으로 병합 |
+| P3 지식 베이스 | 다음 | 청킹, lindera FTS5 + trigram, bge-m3 + sqlite-vec, 근거 기반 Q&A |
 | P4 파이프라인 | 대기 | 분류·OCR·KIE, 양식 등록, 검증기, 검토 큐 |
 | P5 자연어·작업 | 대기(핵심 op만 1차) | 플래너 PlanSchema, 확인 카드, Job 러너, 정리/되돌리기, 내보내기 |
 
@@ -161,20 +161,113 @@
   "중지 중", 작업 취소는 취소 가능한 종류만, 상태 스냅샷이 이벤트를 덮어쓰지 않도록 시퀀스 검사, 접근성
   (select id/label, aria-label i18n, 상태 사유 텍스트 노출), 모의 백엔드 정합성(엔진 시작 작업, 정규화, 중지 중 틱).
 
-## P2 착수 메모
+## P2 산출물
 
-1. `crates/doculens-core/src/db/`: rusqlite(bundled, MIT) + 마이그레이션(§3.6 스키마),
-   `journal_mode=WAL`(네트워크/동기화 폴더 감지 시 DELETE), `workspace.db`.
-2. 가져오기: 드롭/폴더/inbox 감시(`notify` 재사용), 중복 검사(BLAKE3 — `gguf::hash_file` 재사용 가능),
-   미리보기 다이얼로그.
-3. 변환: HWPX(zip+XML) → HTML → PDF, DOCX(docx-rs 계열 MIT) → HTML, HWP 5.0은 읽기 전용
-   파서(라이선스 확인). 렌더: `pdfium-render` + pdfium-binaries(BSD-3), 페이지 캐시
-   `cache/pages/<doc>/<page>.png`, DPI 200, 썸네일.
-4. 라이브러리·뷰어 UI(가상 스크롤, 썸네일 스트립, 탭). `models://changed`·`jobs://update`와 같은
-   이벤트 패턴으로 `documents://changed`.
-5. P1에서 넘기는 숙제: 엔진 로그 파일(`<AppData>/logs/llama-server.log`, 현재는 링 버퍼만),
-   `--list-devices` 기반 티어 재산정의 UI 반영(현재는 하드웨어 패널 새로고침 후 반영),
-   `engines/manifest.json` SHA-256 고정, 다운로드 재개 시 `.part` 재검증.
+### Rust 코어 (`crates/doculens-core`)
+
+- `db`: rusqlite(bundled SQLite, MIT) + 컴파일 타임 임베드 마이그레이션(`db/schema/0001_init.sql`,
+  `PRAGMA user_version`), 로컬 디스크는 `journal_mode=WAL`, UNC·원격 드라이브(`GetDriveTypeW`)·
+  OneDrive/Dropbox/Google Drive 경로는 `DELETE`. `Workspace::open`이 잠금과 함께 DB를 열고(`ws.db`),
+  닫을 때 WAL 체크포인트. 테이블: `documents`(상대경로·BLAKE3·상태·역할·유형·쪽수·변환 메모·오류),
+  `pages`(픽셀/포인트 크기·DPI·회전·텍스트 레이어·공백 판정), `tags`/`document_tags`, `import_batches`, `kv`.
+- `documents::repo`: 삽입/조회/필터(상태·형식·폴더 접두사·이름 검색(LIKE 이스케이프)·태그·유형·정렬·페이지네이션)/
+  통계(상태·형식·폴더별 건수, 총 쪽수)/페이지 교체/회전/경로 재연결/태그·유형·제목/삭제(CASCADE).
+- `documents::import`: **계획**(드롭·폴더 재귀 수집 ≤5,000, 숨김·`.doculens`·심링크 제외; 확장자 지원 판정과
+  미지원 사유 `heic|office_legacy|text|no_extension|unsupported_extension|empty|too_large|unreadable`;
+  BLAKE3 전수 해시로 워크스페이스 중복·목록 내 중복·이미 등록·**파일 없음 문서와 해시 일치 시 다시 연결**;
+  inbox 소스는 3초 안정화 전 "복사 중") → **실행**(워크스페이스 밖 파일은 `documents/` 또는 `inbox/`로
+  복사·이동(`_2` 충돌 접미사, `.part` → rename), 등록 → 변환 → 렌더, 문서별 오류 격리, 취소, 배치 기록) →
+  **재검사**(파일 없음/복귀/내용 변경 재렌더/중단된 `importing` 재처리) → **inbox 계획**(미등록·안정화 파일만) →
+  **삭제**(OS 휴지통 `trash` 크레이트, 실패 시 `.doculens/trash/` 폴백, 캐시·행 정리).
+- `documents::convert`: 공통 문서 모델(문단·런 서식·제목 레벨·목록·병합 셀 표·그림·쪽 나눔) → HTML 번들
+  (`index.html` + `img/`, A4 CSS, 여백은 콘텐츠 패딩) → `PdfPrinter` 트레이트로 PDF.
+  - `hwpx`: OWPML 리더(`zip` + `quick-xml` 미니 DOM, 접두사 무시) — `content.hpf` 스파인·바이너리 항목,
+    `header.xml` 글자/문단 속성(굵게·기울임·밑줄·크기, 정렬, 개요 레벨→제목, 번호/글머리), 섹션 `pagePr` 용지,
+    `tab/lineBreak/nbSpace`, 표 `cellAddr/cellSpan/cellSz`, 그림 `binaryItemIDRef`, 글상자·도형의 `subList` 텍스트,
+    수식 스크립트. 테스트용 HWPX 작성기 포함.
+  - `docx`: WordprocessingML 리더 — `styles.xml`(heading N / outlineLvl, basedOn 체인), `numbering.xml`,
+    `document.xml.rels` 이미지, `gridSpan`/`vMerge` 병합 해석, `br type=page`, 하이퍼링크·sdt·텍스트 상자.
+  - `hwp`: HWP 5.0은 `hwp` 크레이트(Apache-2.0)로 파싱하되 `catch_unwind`로 패닉 격리, CFB 매직·크기 검사,
+    암호화 문서 거부, 배포용 문서는 ViewText, UTF-16 서로게이트 처리, 표·그림·글상자·각주.
+  - 스텁 프린터(`write_blank_pdf`)로 셸 없이도 PDF 경로를 테스트.
+- `documents::render`: PDFium(`pdfium-render` 0.9, `thread_safe`, 런타임 동적 로드, 프로세스당 1회 바인딩)을
+  전용 워커 스레드에서 실행하는 `RenderService`; 8쪽 단위 청크로 뷰어 요청과 교차; DPI→스케일(긴 변 ≤4096),
+  사용자 회전, 폼 데이터 렌더, 텍스트 레이어 추출, JPEG(q90) 페이지 + 320px 썸네일(`.part` → rename),
+  공백 페이지 휴리스틱(루마<160 비율<0.03%); 이미지는 `image` 크레이트로 디코드 + **EXIF Orientation** 적용;
+  `locate_pdfium`(`DOCULENS_PDFIUM` → 후보 폴더).
+- `fswatch::DirWatcher`: 모델 폴더 감시기를 일반화(경로 필터 + 안정화 창), inbox 감시에 재사용.
+- `documents::fixtures`: 100쪽 PDF·3구역 HWPX·2쪽 DOCX·JPG 샘플 세트 생성(`gen_fixtures` ignored 테스트).
+
+### Tauri 셸 (`src-tauri`)
+
+- `protocol.rs`: `doculens://` 스킴(Windows `http://doculens.localhost`) — `/pages|thumbs/<doc>/pNNNN.jpg`는
+  id 검증 후 코어가 만든 캐시 경로만 서빙, `/print/<token>/…`은 등록된 번들 폴더 안에서만(canonicalize) 서빙.
+- `printer.rs`: 숨은 `WebviewWindow`(미표시·작업 표시줄 제외)가 번들을 로드하면 `on_page_load(Finished)`에서
+  **Windows WebView2 `ICoreWebView2_7::PrintToPdf`**(A4, 여백 0, 배경 인쇄; `ICoreWebView2Environment6::CreatePrintSettings`)
+  또는 **WebKitGTK `PrintOperation`**(Print to File, A4)으로 인쇄 → 완료 신호 → 창 파괴; 직렬화·120초 타임아웃.
+- `docs_bridge.rs`: PDFium 탐색(리소스 `pdfium/` → 실행 파일 옆 → `<AppData>/pdfium/`)과 1회 바인딩,
+  `DocsContext`(Arc<Db> + 경로 + 렌더 서비스 + 프린터 + 렌더 옵션), inbox `DirWatcher`(3초) → `inbox_job`
+  (복사 중이면 4초 후 재시도), 워크스페이스 전환 시 재검사 작업 + inbox 스캔, 작업 종류
+  `document_import`/`document_rescan`/`document_render`(진행률 = 문서 + 쪽 비율, 취소), `documents://changed`
+  (`imported|updated|removed|rescanned|batch` + id 목록).
+- 명령 18종(`documents_list/stats/get/pages/page_text/import_plan/import_run/rescan/inbox_scan/rerender/
+  rotate_page/delete/set_tags/set_doc_type/set_title/tags/set_inbox_watch/pdfium_info`). 미리보기 계획은 토큰으로
+  보관했다가 실행 시 소비(해시 재계산 없음); `DocumentView`/`PageView`는 레코드 + 절대경로 + 이미지 URL(`?v=` 캐시 무효화).
+- `tauri.conf.json`: CSP `img-src`에 `doculens:` / `http://doculens.localhost`, 번들 리소스 `resources/pdfium/`.
+
+### 프런트엔드
+
+- 라이브러리(`features/library/LibraryPage.tsx`): 폴더 트리(통계의 `rel_dir`), 상태·형식·정렬 필터 + 디바운스
+  검색, **가상 스크롤** 그리드/리스트(`@tanstack/react-virtual`), 카드 체크박스 다중 선택 → 다시 렌더·삭제(휴지통),
+  모두 선택, inbox 감시 토글(백엔드 감시기 재시작), 다시 검사, PDFium 없음 경고, 빈 상태(가져오기 / 폴더의 기존
+  파일 가져오기), 드롭 존(`useDocumentDrop`: Tauri `onDragDropEvent` 경로, 브라우저는 파일명).
+- 가져오기 미리보기(`ImportDocumentsDialog.tsx`): 경로 입력/파일 선택 → 항목별 배지(신규·중복(대상)·목록 내
+  중복·이미 등록·다시 연결·미지원 사유·복사 중) + 요약·용량, 저장 위치(documents/inbox)·이동·렌더 옵션 → 작업 시작.
+- 뷰어(`DocumentViewer.tsx`, 경로 `/library/:id`): 제목 편집·형식/상태/변환본 배지·유형 드롭다운(내장 8종)·태그
+  편집기, 툴바(쪽 이동·확대/축소/맞춤·회전 저장(좌/우)·다시 렌더·원본 폴더·삭제), 썸네일 스트립, 페이지 이미지,
+  우측 탭 [텍스트(텍스트 레이어)] + 필드/표/Q&A/이력 자리표시(P3·P4), 정보 패널(경로·크기·쪽수·DPI·텍스트 레이어·
+  변환 메모·오류), 키보드 ←/→/+/−/0.
+- 홈: 최근 문서 6건 + 통계 타일(신규/렌더/추출/검토) 실데이터. 작업 화면: 문서 작업 3종 취소 가능.
+- 모의 백엔드: 문서 저장소·가져오기 계획/작업(파일명 `-12p.pdf` → 12쪽)·SVG 페이지/썸네일 데이터 URL·회전·
+  태그·삭제·통계를 시뮬레이션. i18n: `library.*`, `documents.*`, `import_docs.*`, `viewer.*`, 작업 종류, 오류 코드
+  `db/not_found/unsupported/convert/render`.
+
+### 테스트·검증
+
+| 종류 | 수 | 비고 |
+|---|---|---|
+| `cargo test -p doculens-core` (lib) | 91 | db 4, documents 24(변환 10, 렌더 4, 가져오기 4, 저장소 2, 픽스처 1 …), fswatch 1; PDFium 테스트는 `DOCULENS_PDFIUM` 설정 시 실행(없으면 건너뜀) |
+| `tests/engine_process.rs` / `tests/real_engine.rs` | 5 / 1 | P1과 동일 |
+| vitest | 27 | i18n 패리티 + 정적 키 해석(새 화면 키 포함) |
+| Playwright | 13 | P0 7 + P1 3 + **P2 3**(가져오기 미리보기→렌더→라이브러리·필터·홈 / 뷰어 쪽 이동·회전·태그·유형·삭제 / 일괄 작업·inbox 토글) |
+
+- **실제 변환·렌더 검증(이 환경)**: PDFium chromium/8125 Linux 빌드로 100쪽 PDF 렌더(텍스트 레이어·공백 판정·
+  회전·취소), 생성 HWPX/DOCX 파싱, 스텁 프린터 경로의 전 파이프라인(가져오기→변환→렌더→DB) 통과.
+- **실제 데스크톱 바이너리 헤드리스 확인(Linux, Xvfb)**: 샘플 4종(100쪽 PDF, 3구역 HWPX, 2쪽 DOCX, JPG)을
+  `inbox/`에 둔 워크스페이스로 앱 실행 → DB 마이그레이션 → PDFium 로드 → 시작 시 inbox 스캔이 가져오기 작업을 만들고
+  **WebKitGTK 인쇄로 HWPX·DOCX 변환본 PDF 생성** → 106쪽 렌더(텍스트 레이어 105쪽) → 상태 `rendered`, 배치 4/4,
+  오류 0. HWPX 변환본 1쪽을 눈으로 확인: 제목(가운데·굵게), 서식 런, 글머리표, 병합 헤더 표, 그림 정상.
+- CI: Rust 작업과 Windows 작업이 `scripts/fetch-pdfium.mjs`(SHA-256 핀)로 PDFium을 받아 캐시하고 렌더 테스트까지
+  실행한다. Windows WebView2 인쇄 경로는 컴파일만 검증(실행은 사용자 PC 체크리스트).
+
+### 설계 대비 범위 메모
+
+- 가져오기 미리보기의 "예상 소요 시간"과 "자동 처리 수준 선택"은 P4(분류·OCR 파이프라인)에서 붙인다(지금은
+  등록+렌더만). 양식 등록·분할/병합·집계 바도 P3·P4.
+- 페이지 캐시는 설계의 WebP 대신 JPEG(q90)로 저장한다(순수 Rust 인코더, 손실 WebP는 libwebp C 의존). 교체는
+  `render::write_jpeg` 한 곳. LRU 상한(설정 `cache.page_cache_max_gb`)은 보존/파기 작업(P5/P7)에서 적용.
+- 멀티 페이지 TIFF와 CCITT G4 TIFF는 첫 페이지/미지원(`image` 크레이트 한계) — PDF로 변환 후 투입 안내.
+- HWPX/DOCX 변환은 근사 렌더("변환본" 배지): 글상자·도형은 텍스트만, 수식은 스크립트 텍스트, 머리글/꼬리글 생략.
+
+## P3 착수 메모
+
+1. 청킹: `pages.text`(디지털 PDF·변환본) 기반 구조 인지 청킹(제목 경로·조항·표 셀) → `chunks` 테이블(마이그레이션
+   0002), 문서 역할 `knowledge`·컬렉션(`collections`, `collection_docs`).
+2. 색인: lindera + ko-dic(사전 벤더링) FTS5 토크나이저 + trigram 보조 테이블 + 2자 이하 LIKE 폴백; sqlite-vec는
+   임베딩 모델(bge-m3 GGUF, `llama-server --embeddings`, P1 `engine::client::embeddings`) 설치 시 백그라운드 작업.
+3. 적재 마법사·컬렉션·버전·용어집 UI, 검색 화면(하이브리드), 뷰어 Q&A 탭·드래그→설명, 문장별 출처 칩.
+4. P2에서 넘기는 숙제: 페이지 캐시 LRU 정리, 뷰어 썸네일 스트립 가상화(수백 쪽), 가져오기 "예상 소요 시간",
+   TIFF 다중 페이지, `engines/manifest.json`·`models/registry.json` 해시 고정(사용자 PC).
 
 ## 알려진 제약
 
@@ -185,3 +278,6 @@
 - Linux 빌드는 CI 전용(배포 범위 외). Windows 실창 E2E(tauri-driver)는 사용자 PC.
 - 모의 백엔드의 프리라우터는 Rust 구현의 부분 집합(브라우저 데모 용도).
 - 라우터의 `memory` 실측은 CPU 전용 빌드에서는 비어 있음(GPU 장치가 있을 때만 채워짐).
+- WebView2 `PrintToPdf`(HWPX/DOCX/HWP 변환본)는 이 환경에서 실행 불가 — Linux WebKitGTK 경로로 동일 파이프라인을
+  검증했고 Windows 경로는 컴파일 검사만 거침(`docs/user-pc-checklist.md` P2 항목).
+- 이 환경에는 한글 글꼴이 제한적이라 변환본 렌더 품질(글꼴 대체)은 사용자 PC에서 확인.

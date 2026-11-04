@@ -71,3 +71,20 @@ archives (e.g. CPU + OpenVINO, or CPU + Vulkan) into the same folder: the extra
 backend registers a device, takes over the graph and — for Qwen3.5's hybrid
 layers — fails with "Compute error". This is exactly what a too-loose download
 pattern did in CI.
+
+## PDFium (PDF 렌더러)
+
+PDF 페이지 렌더링과 텍스트 레이어 추출은 PDFium(BSD-3)을 런타임에 동적 로드한다
+(`pdfium-render` 0.9, 핀 `engines/pdfium.json` = chromium/8125 — 크레이트 기본 기능
+`pdfium_8125`와 같은 빌드). 바이너리는 커밋하지 않는다.
+
+```bash
+node scripts/fetch-pdfium.mjs             # <app-data>/pdfium/  (개발·사용자 PC)
+node scripts/fetch-pdfium.mjs --bundle    # src-tauri/resources/pdfium/ (tauri build 가 설치파일에 동봉)
+node scripts/fetch-pdfium.mjs --dest DIR  # 임의 위치 (DOCULENS_PDFIUM=DIR/pdfium.dll)
+```
+
+탐색 순서(`doculens_core::documents::render::locate_pdfium`): `DOCULENS_PDFIUM`(파일 또는
+폴더) → 리소스 폴더 `pdfium/` → 실행 파일 옆 / `pdfium/` → `<app-data>/pdfium/`. 없으면 PDF는
+등록만 되고(텍스트·페이지 없음) 라이브러리 상단에 경고가 뜬다. 아카이브의 `LICENSE`와
+`licenses/`(18개 고지)는 스크립트가 같이 복사하며 설치파일에 그대로 포함해야 한다.

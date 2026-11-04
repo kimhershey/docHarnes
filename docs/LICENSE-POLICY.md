@@ -45,6 +45,11 @@ Elasticsearch, GPL TEDS implementations, axe-core (dev only).
 - npm: `npm run licenses:check` (`scripts/check-licenses.mjs`).
 - Models: `models/registry.json` `license` field; LICENSE/NOTICE files are
   copied next to imported weights.
+- PDFium: `engines/pdfium.json` pins the bblanchon/pdfium-binaries build;
+  `scripts/fetch-pdfium.mjs` verifies the SHA-256 and copies the archive's
+  `LICENSE` + `licenses/` (18 notices) next to the library — ship them unchanged.
+- HWP 5.0 parsing uses `hwp` (Apache-2.0); keep its notice ("한글과컴퓨터의 한/글
+  문서 파일(.hwp) 공개 문서를 참고") in `THIRD-PARTY-NOTICES.md`.
 - Generated notices: `THIRD-PARTY-NOTICES.md` (phase P7 automates the full list).
 
 ## UI code reuse

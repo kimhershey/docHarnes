@@ -30,6 +30,9 @@ that processes Korean/English business documents with a local VLM
 - Rust: `cargo test --workspace` (lib + `tests/engine_process.rs`), `cargo check -p doculens`,
   `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all`.
 - Real engine (optional): `DOCULENS_LLAMA_SERVER=<llama-server> DOCULENS_TEST_MODELS_DIR=crates/doculens-core/tests/fixtures cargo test -p doculens-core --test real_engine -- --nocapture`.
+- PDFium (optional, enables the render/import tests): `node scripts/fetch-pdfium.mjs --dest /tmp/pdfium` then
+  `DOCULENS_PDFIUM=/tmp/pdfium/libpdfium.so cargo test -p doculens-core`.
+- Sample documents: `DOCULENS_FIXTURE_OUT=<dir> cargo test -p doculens-core --lib -- --ignored gen_fixtures`.
 - Web: `npm run typecheck`, `npm test` (vitest), `npm run build`,
   `PW_CHROMIUM_PATH=/opt/pw-browsers/chromium npm run e2e` (browser mode, mock backend).
 - Desktop (Windows / Linux with webkit2gtk): `npm run tauri dev`, `npm run tauri build`.
@@ -37,10 +40,17 @@ that processes Korean/English business documents with a local VLM
 
 ## Layout
 - `crates/doculens-core/` — settings, workspace, hw/tier, memory, registry, retention, prerouter,
-  `gguf` (header parser, hashes), `modelstore` (drop-in folders, import, download, watcher),
-  `engine/` (locate, devices, presets, client, process, manager, fake_router).
-- `src-tauri/` — Tauri shell (`src/commands/`, `src/state.rs`, `src/engine_bridge.rs`, `src/jobs.rs`), `tauri.conf.json`, capabilities.
+  `gguf` (header parser, hashes), `modelstore` (drop-in folders, import, download), `fswatch` (debounced watcher),
+  `engine/` (locate, devices, presets, client, process, manager, fake_router),
+  `db/` (rusqlite + embedded migrations), `documents/` (repo, import plan/run/rescan, render via PDFium,
+  `convert/` HWPX·DOCX·HWP → model → HTML → PDF through a `PdfPrinter`, fixtures).
+- `src-tauri/` — Tauri shell (`src/commands/{mod,documents}.rs`, `src/state.rs`, `src/engine_bridge.rs`,
+  `src/docs_bridge.rs`, `src/protocol.rs` (`doculens://` page images / print bundles), `src/printer.rs`
+  (WebView2 / WebKitGTK print-to-PDF), `src/jobs.rs`), `tauri.conf.json`, capabilities.
 - `src/` — React app: `app/` (layout, providers, hooks), `features/<screen>/`, `components/ui/`, `lib/` (ipc, types, theme, shortcuts, mock backend), `stores/`, `i18n/`, `styles/`.
-- `models/registry.json`, `engines/` (manifest + placement docs), `docs/`, `scripts/`
-  (`fetch-engine.mjs`, `gen-tiny-qwen35.py`), `e2e/`, `.github/workflows/`.
-- Events from Rust to the webview: `engine://status|log|model`, `models://changed`, `jobs://update`.
+- `models/registry.json`, `engines/` (llama.cpp manifest, `pdfium.json`, placement docs), `docs/`, `scripts/`
+  (`fetch-engine.mjs`, `fetch-pdfium.mjs`, `gen-tiny-qwen35.py`), `e2e/`, `.github/workflows/`.
+- Events from Rust to the webview: `engine://status|log|model`, `models://changed`, `jobs://update`,
+  `documents://changed`.
+- Workspace data: `.doculens/workspace.db` (schema in `crates/doculens-core/src/db/schema/`), page cache
+  `.doculens/cache/{pages,thumbs,converted}/<doc_id>/`; DB rows store workspace-relative paths only.
