@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { executePreRoute } from "@/lib/commands";
 import { api } from "@/lib/ipc";
-import { useAssessment, useDocumentStats, useDocuments } from "@/lib/queries";
+import { useAssessment, useDocumentStats, useDocuments, usePipelineStatus } from "@/lib/queries";
 import { isComposing } from "@/lib/shortcuts";
 import { SCREEN_ROUTES } from "@/lib/types";
 import { formatMiB } from "@/lib/utils";
@@ -22,6 +22,7 @@ export function HomePage() {
   const workspace = useWorkspace();
   const { data: assessment } = useAssessment();
   const { data: libraryStats } = useDocumentStats(!!workspace);
+  const { data: pipeline } = usePipelineStatus(!!workspace);
   const { data: recent } = useDocuments({ limit: 6, sort: "imported_desc" }, !!workspace);
   const setPending = useUiStore((s) => s.setPendingAssistantInput);
   const [text, setText] = useState("");
@@ -100,7 +101,7 @@ export function HomePage() {
               : s.key === "processing"
                 ? by.rendered ?? 0
                 : s.key === "review"
-                  ? by.extracted ?? 0
+                  ? (pipeline?.review_pending ?? by.extracted ?? 0)
                   : by.reviewed ?? 0;
           return (
             <Card key={s.key}>
@@ -114,7 +115,14 @@ export function HomePage() {
           );
         })}
       </div>
-      <p className="-mt-2 text-xs text-fg-subtle">{t("home.stats_hint")}</p>
+      <p className="-mt-2 flex items-center gap-2 text-xs text-fg-subtle">
+        <span>{t("home.stats_hint")}</span>
+        {pipeline && pipeline.review_fields > 0 && (
+          <Link to={SCREEN_ROUTES.review} className="text-accent hover:underline" data-testid="home-review-link">
+            {t("home.review_fields", { count: pipeline.review_fields })} · {t("home.review_link")}
+          </Link>
+        )}
+      </p>
 
       <div className="grid gap-4 md:grid-cols-2">
         <Card>

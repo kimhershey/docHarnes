@@ -228,6 +228,10 @@ pub struct ChatResponse {
     /// llama.cpp `timings` (prompt_ms, predicted_per_second …) when present.
     pub timings: Option<Value>,
     pub model: Option<String>,
+    /// `message.reasoning_content` when the model thought despite `enable_thinking: false`
+    /// (pipeline callers treat that as a failed call, design §3.4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
 }
 
 impl ChatResponse {
@@ -239,12 +243,20 @@ impl ChatResponse {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
+        let reasoning = choice
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("reasoning_content"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+            .map(str::to_string);
         ChatResponse {
             content,
             finish_reason: choice.and_then(|c| c.get("finish_reason")).and_then(Value::as_str).map(str::to_string),
             usage: v.get("usage").and_then(|u| serde_json::from_value(u.clone()).ok()),
             timings: v.get("timings").cloned(),
             model: v.get("model").and_then(Value::as_str).map(str::to_string),
+            reasoning,
         }
     }
 }

@@ -9,7 +9,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -35,12 +35,15 @@ const INBOX_RETRY: Duration = Duration::from_secs(4);
 const CANCEL_WAIT: Duration = Duration::from_secs(8);
 const DOC_JOBS: [JobKind; 3] = [JobKind::DocumentImport, JobKind::DocumentRescan, JobKind::DocumentRender];
 /// Everything that touches the workspace DB on a background thread.
-const WORKSPACE_JOBS: [JobKind; 5] = [
+const WORKSPACE_JOBS: [JobKind; 8] = [
     JobKind::DocumentImport,
     JobKind::DocumentRescan,
     JobKind::DocumentRender,
     JobKind::KnowledgeIndex,
     JobKind::KnowledgeEmbed,
+    JobKind::Pipeline,
+    JobKind::DocumentSplit,
+    JobKind::DocumentMerge,
 ];
 
 /// Work chained after a job has been marked finished.
@@ -200,6 +203,9 @@ pub fn before_workspace_change(app: &AppHandle) {
     if let Ok(mut m) = state.import_plans.lock() {
         m.clear();
     }
+    if let Ok(mut q) = state.pipeline_queue.lock() {
+        q.clear();
+    }
     // Streaming answers hold the old database too: stop them at their next delta.
     if let (Ok(running), Ok(mut cancels)) = (state.answer_running.lock(), state.answer_cancels.lock()) {
         for id in running.iter() {
@@ -337,6 +343,10 @@ pub fn import_job(app: &AppHandle, plan: ImportPlan) -> UiResult<String> {
     let (job, cancel) = state.jobs.create(JobKind::DocumentImport, &subject);
     let job_id = job.clone();
     let source = plan.source;
+    let auto_level = plan.options.auto_level;
+    // Ids of the documents this import touched, handed to the auto pipeline afterwards.
+    let processed: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let processed_after = processed.clone();
     spawn_job_thread(
         "doculens-doc-import",
         app.clone(),
@@ -370,7 +380,12 @@ pub fn import_job(app: &AppHandle, plan: ImportPlan) -> UiResult<String> {
             )
             .map_err(|e| e.to_string())?;
             if !batch_ids.is_empty() {
-                ctx.emit(app, "batch", batch_ids);
+                ctx.emit(app, "batch", batch_ids.clone());
+            }
+            if let Ok(mut p) = processed.lock() {
+                p.extend(report.imported.iter().cloned());
+                p.extend(report.relinked.iter().cloned());
+                p.retain(|id| batch_ids.contains(id));
             }
             if report.cancelled || cancel.load(Ordering::Relaxed) {
                 return Err("cancelled".into());
@@ -398,6 +413,8 @@ pub fn import_job(app: &AppHandle, plan: ImportPlan) -> UiResult<String> {
                 spawn_inbox_scan(app);
             }
             crate::knowledge_bridge::auto_index(app);
+            let ids = processed_after.lock().map(|p| p.clone()).unwrap_or_default();
+            crate::pipeline_bridge::auto_process(app, ids, auto_level, source);
         })),
     );
     Ok(job)

@@ -205,7 +205,7 @@ pub fn documents_set_tags(app: AppHandle, id: String, tags: Vec<String>) -> UiRe
 pub fn documents_set_doc_type(app: AppHandle, id: String, doc_type: Option<String>) -> UiResult<DocumentView> {
     let ctx = docs_bridge::context(&app)?;
     let dt = doc_type.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-    ctx.db.with(|c| repo::set_doc_type(c, &id, dt.as_deref()))?;
+    ctx.db.with(|c| repo::set_doc_type(c, &id, dt.as_deref(), Some("manual")))?;
     docs_bridge::emit_changed(&app, "updated", vec![id.clone()]);
     view(&app, docs_bridge::document(&app, &id)?)
 }

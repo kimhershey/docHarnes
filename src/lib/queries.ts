@@ -2,7 +2,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { api } from "./ipc";
 import { queryKeys } from "./query-client";
-import type { AnswerKind, DocumentFilter, SearchRequest } from "./types";
+import type { AnswerKind, DocumentFilter, ReviewFilter, SearchRequest } from "./types";
 
 export function useAppInfo() {
   return useQuery({ queryKey: queryKeys.appInfo, queryFn: () => api.appInfo(), staleTime: Infinity });
@@ -110,4 +110,46 @@ export function useSearch(req: SearchRequest | null) {
     staleTime: 15_000,
     placeholderData: keepPreviousData,
   });
+}
+
+// -- pipeline (P4) --
+
+export function usePipelineStatus(enabled = true) {
+  return useQuery({ queryKey: queryKeys.pipelineStatus, queryFn: () => api.pipelineStatus(), enabled, staleTime: 5_000 });
+}
+
+export function useDocTypes(enabled = true) {
+  return useQuery({ queryKey: queryKeys.docTypes, queryFn: () => api.pipelineDocTypes(), enabled, staleTime: 30_000 });
+}
+
+export function useSchemas(enabled = true) {
+  return useQuery({ queryKey: queryKeys.schemas, queryFn: () => api.pipelineSchemas(), enabled, staleTime: 30_000 });
+}
+
+export function useSchemaVersions(id: string | null) {
+  return useQuery({ queryKey: queryKeys.schemaVersions(id ?? ""), queryFn: () => api.pipelineSchemaVersions(id ?? ""), enabled: !!id });
+}
+
+export function useRuns(documentId: string | undefined) {
+  return useQuery({ queryKey: queryKeys.runs(documentId ?? ""), queryFn: () => api.pipelineRuns(documentId ?? ""), enabled: !!documentId });
+}
+
+export function useFields(documentId: string | undefined, runId: string | null = null) {
+  return useQuery({
+    queryKey: queryKeys.fields(documentId ?? "", runId),
+    queryFn: () => api.pipelineFields(documentId ?? "", runId),
+    enabled: !!documentId,
+  });
+}
+
+export function useFieldHistory(documentId: string | undefined) {
+  return useQuery({ queryKey: queryKeys.fieldHistory(documentId ?? ""), queryFn: () => api.pipelineFieldHistory(documentId ?? ""), enabled: !!documentId });
+}
+
+export function useReviewQueue(filter: ReviewFilter, enabled = true) {
+  return useQuery({ queryKey: queryKeys.reviewQueue(filter), queryFn: () => api.pipelineReviewQueue(filter), enabled, placeholderData: keepPreviousData });
+}
+
+export function useTables(documentId: string | undefined) {
+  return useQuery({ queryKey: queryKeys.tables(documentId ?? ""), queryFn: () => api.pipelineTables(documentId ?? ""), enabled: !!documentId });
 }

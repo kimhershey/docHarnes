@@ -16,6 +16,7 @@ use doculens_core::fswatch::DirWatcher;
 use doculens_core::hw::HardwareSummary;
 use doculens_core::modelstore::{self, DiscoveredModel, ModelWatcher};
 use doculens_core::paths::AppPaths;
+use doculens_core::pipeline::PipelineLevel;
 use doculens_core::registry::Registry;
 use doculens_core::settings::{AppSettings, LoadStatus};
 use doculens_core::workspace::{OpenOptions, Workspace};
@@ -135,6 +136,15 @@ pub struct AppState {
     pub import_plans: Mutex<HashMap<String, ImportPlan>>,
     /// Print bundle token → directory served by the `doculens://print/` route.
     pub print_bundles: Mutex<HashMap<String, PathBuf>>,
+    /// Processing requests that arrived while a pipeline job was running (run afterwards, in order).
+    pub pipeline_queue: Mutex<Vec<PendingProcess>>,
+}
+
+/// A deferred pipeline request (document ids + level).
+#[derive(Debug, Clone)]
+pub struct PendingProcess {
+    pub ids: Vec<String>,
+    pub level: PipelineLevel,
 }
 
 impl AppState {
@@ -177,6 +187,7 @@ impl AppState {
             inbox_watcher: Mutex::new(None),
             import_plans: Mutex::new(HashMap::new()),
             print_bundles: Mutex::new(HashMap::new()),
+            pipeline_queue: Mutex::new(Vec::new()),
         }
     }
 

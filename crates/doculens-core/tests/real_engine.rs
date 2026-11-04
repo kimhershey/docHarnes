@@ -16,6 +16,9 @@ use doculens_core::engine::{devices, ChatRequest, EngineConfig, EngineManager, E
 use doculens_core::engine::{locate, presets};
 use doculens_core::hw::{Backend, Tier};
 use doculens_core::modelstore::{scan_models_dir, ScanOptions};
+use doculens_core::pipeline::prompts::{self, Stage};
+use doculens_core::pipeline::vlm::Vlm;
+use doculens_core::pipeline::{self, DocTypeInfo};
 use doculens_core::registry::Registry;
 use doculens_core::settings::{ModelSettings, Profile};
 
@@ -171,6 +174,53 @@ fn real_llama_server_load_chat_switch() {
         let v = m.chat(&req).unwrap_or_else(|e| dump(&m, "image chat", &e));
         eprintln!("image chat → {:?} usage={:?}", v.content, v.usage);
         assert!(v.usage.is_some_and(|u| u.prompt_tokens > 10), "image did not add prompt tokens");
+
+        // P4 pipeline path: the classifier / extractor requests (page image +
+        // grammar-constrained JSON, thinking disabled) go through the real server.
+        // Random weights may pad until the token budget, so a cut-off reply only
+        // has to be a JSON prefix; a complete one must parse.
+        let vlm = Vlm { chat: &m, model: first.clone(), profile: Profile::Speed, cancel: None };
+        let types = vec![DocTypeInfo {
+            slug: "receipt".into(),
+            label_ko: "영수증".into(),
+            label_en: "Receipt".into(),
+            schema_id: None,
+            builtin: true,
+            use_count: 0,
+        }];
+        let page = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(96, 128, image::Rgb([250, 250, 250])));
+        let img = pipeline::image::prepare_image(&page, 64).expect("page image");
+        let messages = vec![
+            serde_json::json!({ "role": "system", "content": prompts::SYSTEM_JSON }),
+            user_message_with_image(&prompts::classify(&types), &img.url),
+        ];
+        let schema = pipeline::schema::classify_schema(&["receipt".to_string()]);
+        let reply = vlm
+            .call(Stage::Classify, &messages, Some(("classify", &schema)), Some(48))
+            .unwrap_or_else(|e| dump(&m, "pipeline classify", &e));
+        eprintln!("pipeline classify → {:?} truncated={} attempts={}", reply.content, reply.truncated, reply.attempts);
+        if !reply.truncated {
+            let parsed = pipeline::vlm::parse_json(&reply.content).expect("constrained classify output must be JSON");
+            let class = pipeline::classify::parse_class(&parsed, &["receipt".to_string()]);
+            assert!(["receipt", "other"].contains(&class.doc_type.as_str()));
+        } else {
+            assert!(reply.content.trim_start().starts_with('{'), "not a JSON prefix: {}", reply.content);
+        }
+        // The KIE grammar of a built-in schema is accepted by the server (no 400 on the schema).
+        let receipt = pipeline::schema::builtins().into_iter().find(|b| b.key == "receipt").unwrap();
+        let kie_schema = pipeline::schema::json_schema(&receipt.def);
+        let kie = ChatRequest {
+            model: first.clone(),
+            messages: vec![user_message_with_image("extract", &img.url)],
+            max_tokens: Some(24),
+            chat_template_kwargs: Some(prompts::template_kwargs()),
+            ..Default::default()
+        }
+        .json_schema("kie_receipt", kie_schema);
+        let k = m.chat(&kie).unwrap_or_else(|e| dump(&m, "pipeline kie grammar", &e));
+        eprintln!("pipeline kie → {:?} finish={:?}", k.content, k.finish_reason);
+        assert!(k.content.trim_start().starts_with('{'), "KIE grammar did not constrain the output: {}", k.content);
+        assert!(k.reasoning.is_none(), "thinking leaked despite enable_thinking=false");
     }
 
     // Hot swap when a second model exists.

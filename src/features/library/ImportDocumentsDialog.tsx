@@ -18,9 +18,9 @@ import {
   type ImportDestination,
   type ImportItem,
   type ImportOptions,
-  type ImportSource,
-} from "@/lib/types";
+  type ImportSource, AUTO_PROCESSING_LEVELS, type AutoProcessingLevel } from "@/lib/types";
 import { formatBytes } from "@/lib/utils";
+import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspace } from "@/stores/workspace";
 
@@ -67,6 +67,7 @@ export function ImportDocumentsDialog({
   const { t } = useTranslation();
   const toast = useUiStore((s) => s.toast);
   const workspace = useWorkspace();
+  const defaultLevel = useSettingsStore((s) => (source === "inbox" ? s.settings?.processing.inbox_auto_level : s.settings?.processing.auto_level) ?? "classify_only");
   const [pathsText, setPathsText] = useState("");
   const [options, setOptions] = useState<ImportOptions>(defaultImportOptions());
   const [plan, setPlan] = useState<DocumentImportPlan | null>(null);
@@ -206,6 +207,27 @@ export function ImportDocumentsDialog({
               <Switch checked={options.render} onCheckedChange={(v) => setOptions({ ...options, render: v })} data-testid="doc-import-render" />
               {t("import_docs.render_pages")}
             </label>
+            <div className="grid gap-1.5">
+              <Label htmlFor="doc-import-auto">{t("import_docs.auto_level")}</Label>
+              <Select value={options.auto_level ?? "__default__"} onValueChange={(v) => setOptions({ ...options, auto_level: v === "__default__" ? null : (v as AutoProcessingLevel) })}>
+                <SelectTrigger id="doc-import-auto" data-testid="doc-import-auto-level">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__default__">{t("import_docs.auto_level_default", { level: t(`settings.processing.auto_levels.${defaultLevel}`) })}</SelectItem>
+                  {AUTO_PROCESSING_LEVELS.map((l) => (
+                    <SelectItem key={l} value={l}>
+                      {t(`settings.processing.auto_levels.${l}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {plan && (options.auto_level ?? defaultLevel) !== "none" && plan.new_count + plan.relink_count > 0 && (
+                <p className="text-xs text-fg-subtle" data-testid="doc-import-eta">
+                  {t("import_docs.eta", { minutes: Math.max(1, Math.round(((plan.new_count + plan.relink_count) * 3 * 40) / 60)) })}
+                </p>
+              )}
+            </div>
           </div>
 
           {error && (

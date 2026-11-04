@@ -24,6 +24,11 @@ const CANCELLABLE: Job["kind"][] = [
   "document_import",
   "document_rescan",
   "document_render",
+  "knowledge_index",
+  "knowledge_embed",
+  "pipeline",
+  "document_split",
+  "document_merge",
 ];
 
 function stateVariant(j: Job): "ok" | "warn" | "danger" | "muted" | "info" {

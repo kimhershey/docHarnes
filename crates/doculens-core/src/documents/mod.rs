@@ -171,6 +171,49 @@ pub struct DocumentRecord {
     pub import_batch_id: Option<String>,
     pub deleted_at: Option<DateTime<Utc>>,
     pub tags: Vec<String>,
+    // -- pipeline (P4) --
+    /// `auto` (classifier), `manual` (user), `form` (registered form).
+    pub doc_type_source: Option<String>,
+    pub classified_at: Option<DateTime<Utc>>,
+    pub ocr_at: Option<DateTime<Utc>>,
+    pub extracted_at: Option<DateTime<Utc>>,
+    /// Latest extraction run.
+    pub last_run_id: Option<String>,
+    /// Schema override chosen in the viewer ("스키마 변경").
+    pub schema_id: Option<String>,
+    pub review_status: ReviewStatus,
+    /// Lowest field confidence of the latest run (0..1).
+    pub confidence: Option<f64>,
+    pub pipeline_error: Option<String>,
+}
+
+/// Review state of a document's latest extraction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewStatus {
+    /// Nothing extracted yet, or no field needed review.
+    #[default]
+    None,
+    /// At least one field is waiting in the review queue.
+    Pending,
+    /// Every flagged field was approved / corrected / rejected.
+    Done,
+}
+
+impl ReviewStatus {
+    pub const ALL: [ReviewStatus; 3] = [ReviewStatus::None, ReviewStatus::Pending, ReviewStatus::Done];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReviewStatus::None => "none",
+            ReviewStatus::Pending => "pending",
+            ReviewStatus::Done => "done",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<ReviewStatus> {
+        ReviewStatus::ALL.into_iter().find(|k| k.as_str() == s)
+    }
 }
 
 impl DocumentRecord {
@@ -200,6 +243,17 @@ pub struct PageRecord {
     pub text: Option<String>,
     pub is_blank: Option<bool>,
     pub rendered_at: Option<DateTime<Utc>>,
+    // -- pipeline (P4) --
+    /// `layer` (PDF text layer), `converted` (office reader), `ocr` (VLM).
+    pub text_source: Option<String>,
+    pub ocr_at: Option<DateTime<Utc>>,
+    pub ocr_profile: Option<String>,
+    pub ocr_model: Option<String>,
+    pub classified_at: Option<DateTime<Utc>>,
+    pub page_doc_type: Option<String>,
+    pub page_language: Option<String>,
+    /// Rotation reported by the classifier (already applied to the render when non-zero).
+    pub page_rotation: Option<u16>,
 }
 
 /// Fields needed to insert a document.
@@ -251,6 +305,11 @@ pub struct DocumentFilter {
     pub query: Option<String>,
     pub tag: Option<String>,
     pub doc_type: Option<String>,
+    /// Pipeline review state (P4).
+    pub review_status: Option<ReviewStatus>,
+    /// Only documents whose latest run confidence is below this value (0..1).
+    pub max_confidence: Option<f64>,
+    pub role: Option<DocumentRole>,
     pub include_deleted: bool,
     pub sort: DocumentSort,
     pub limit: Option<u32>,

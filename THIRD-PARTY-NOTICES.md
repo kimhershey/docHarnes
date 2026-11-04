@@ -57,6 +57,8 @@ this header; the entries here cover direct dependencies and bundled assets.
 | unicode-normalization | MIT OR Apache-2.0 |
 | lindera, lindera-dictionary (Korean morphological analysis; dictionary loaded at runtime) + crawdad, daachorse, rkyv, encoding_rs, memmap2, csv, byteorder, strum | MIT / MIT OR Apache-2.0 / (encoding_rs: Apache-2.0 OR MIT, BSD-3-Clause) / (csv, byteorder: Unlicense OR MIT) |
 | sqlite-vec (vector search inside SQLite, statically linked C) | MIT OR Apache-2.0 (© Alex Garcia) |
+| lopdf (PDF page split / merge) + nom, weezl, md-5, aes / ecb / cbc (RustCrypto), rangemap, indexmap | MIT / MIT OR Apache-2.0 |
+| regex, regex-automata, regex-syntax, aho-corasick (validators, PII masking) | MIT OR Apache-2.0 / Unlicense OR MIT |
 | gtk, webkit2gtk (Linux CI/dev builds only — print-to-PDF) | MIT |
 | webview2-com, windows-core (Windows print-to-PDF) | MIT / MIT OR Apache-2.0 |
 | @tanstack/react-virtual | MIT (© Tanner Linsley) |

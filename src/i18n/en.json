@@ -236,7 +236,7 @@
       "review": "Awaiting review",
       "done": "Done"
     },
-    "stats_hint": "New/rendered counts come from the library; review and done fill in with P4.",
+    "stats_hint": "Awaiting review / done come from the pipeline. Check low-confidence fields in the review queue.",
     "engine_card": "Hardware · engine",
     "command_title": "Command in natural language",
     "command_hint": "Theme, language and navigation run immediately; document commands go to the assistant (P5 planner).",
@@ -258,7 +258,9 @@
     "recent_docs": "Recent documents",
     "recent_empty": "No documents yet. Import them in the library or drop them into inbox/.",
     "no_workspace": "Open a workspace first.",
-    "recent_open": "Open library"
+    "recent_open": "Open library",
+    "review_link": "Open the review queue",
+    "review_fields": "{{count}} field(s) awaiting review"
   },
   "assistant": {
     "title": "Assistant",
@@ -527,9 +529,10 @@
     "processing": {
       "auto_level": "Automatic processing after import",
       "auto_levels": {
-        "classify_only": "Classify only",
+        "classify_only": "Classify",
         "classify_and_ocr": "Classify + OCR",
-        "full": "Classify + OCR + extract"
+        "full": "Classify + OCR + extract / validate",
+        "none": "Nothing (import + render only)"
       },
       "render_dpi": "Default render DPI",
       "review_threshold": "Review threshold",
@@ -538,7 +541,16 @@
       "organize_reviewed_only": "Organize/move reviewed documents only",
       "inbox_watch": "Watch the inbox folder",
       "cache": "Page cache cap",
-      "hint": "The pipeline itself is connected in phases P2–P4. Values are saved now."
+      "hint": "How far imported documents are processed automatically, the review-queue threshold and extraction options.",
+      "inbox_auto_level": "Auto-processing for inbox files",
+      "ocr_digital_pdf": "OCR pages that already have a text layer",
+      "ocr_digital_pdf_hint": "By default the text layer of digital PDFs is used as is (§3.4 hybrid).",
+      "kie_max_pages": "Pages sent to the extractor",
+      "kie_max_pages_hint": "First N−1 pages plus the last one. Raise it for long contracts.",
+      "precise_mode": "Precision mode (second sample agreement)",
+      "precise_hint": "A second sample (T=0.3) lowers the confidence of values that differ. Time ×1.5–2.",
+      "dense_reocr": "Fine-print re-OCR of dense pages",
+      "dense_reocr_hint": "Pages with {{cells}}+ table cells get a second OCR pass at the fine-print budget."
     },
     "privacy": {
       "pii_masking": "Store identifiers masked",
@@ -739,7 +751,23 @@
       "glossary_term_taken": "That term already exists.",
       "collection_not_found": "Collection not found (it may have been deleted).",
       "document_not_found": "Document not found.",
-      "feedback_invalid": "Invalid feedback value."
+      "feedback_invalid": "Invalid feedback value.",
+      "schema_name_empty": "Enter a schema name.",
+      "schema_doc_type_invalid": "The type slug must be snake_case starting with a lower-case letter.",
+      "schema_invalid": "The schema has errors; see the grammar check.",
+      "schema_not_found": "Schema not found.",
+      "schema_builtin": "Built-in sample forms cannot be deleted (duplicate and edit instead).",
+      "field_not_found": "Field not found.",
+      "field_value_empty": "Enter a value.",
+      "change_not_found": "History entry not found.",
+      "description_empty": "Enter a description.",
+      "no_model": "No vision model is loaded. Load one on the Models screen (HWPX/DOCX forms work without a model).",
+      "engine_not_running": "The engine is not running.",
+      "model_not_loaded": "The model is not loaded.",
+      "no_fields": "No fields selected.",
+      "no_split_boundary": "Pick a split page inside the document (page 2 or later).",
+      "merge_two": "Select at least two documents to merge.",
+      "table_not_found": "Table not found."
     }
   },
   "startup": {
@@ -770,7 +798,10 @@
       "document_rescan": "Library rescan",
       "document_render": "Page render",
       "knowledge_index": "Knowledge index",
-      "knowledge_embed": "Embeddings"
+      "knowledge_embed": "Embeddings",
+      "pipeline": "Document processing",
+      "document_split": "Document split",
+      "document_merge": "Document merge"
     },
     "state": {
       "queued": "Queued",
@@ -793,7 +824,10 @@
       "index_summary": "indexed {{indexed}} ({{chunks}} chunks) · unchanged {{unchanged}} · no text {{no_text}} · failed {{failed}}",
       "embed_summary": "embedded {{embedded}} · failed {{failed}} · remaining {{remaining}}",
       "loading_model": "loading model",
-      "embed_rebuilt": "{{summary}} (rebuilt for a new model)"
+      "embed_rebuilt": "{{summary}} (rebuilt for a new model)",
+      "process_summary": "processed {{processed}} · classified {{classified}} · OCR {{ocr}} pages · extracted {{extracted}} · review {{review}} · failed {{failed}}",
+      "split_summary": "split into {{count}}",
+      "merge_summary": "merged {{count}}"
     }
   },
   "library": {
@@ -814,7 +848,9 @@
     "filters": {
       "status": "Status",
       "kind": "Format",
-      "all": "All"
+      "all": "All",
+      "doc_type": "Type",
+      "review": "Review"
     },
     "empty_title": "No documents yet",
     "empty_body": "Drop PDF, image, HWP, HWPX or DOCX files here or click Import. Files placed in inbox/ are registered automatically.",
@@ -830,7 +866,13 @@
       "select_all": "Select all",
       "delete_title": "Delete documents",
       "open_doc": "Open document",
-      "add_to_kb": "Add to knowledge base"
+      "add_to_kb": "Add to knowledge base",
+      "process": "Process",
+      "classify": "Classify",
+      "ocr": "OCR",
+      "extract": "Extract",
+      "register_form": "Register as form",
+      "merge": "Merge"
     },
     "columns": {
       "name": "Name",
@@ -838,7 +880,9 @@
       "pages": "Pages",
       "status": "Status",
       "imported": "Imported",
-      "size": "Size"
+      "size": "Size",
+      "doc_type": "Type",
+      "confidence": "Confidence"
     },
     "pages_count": "{{count}} page(s)",
     "converted": "converted",
@@ -859,7 +903,9 @@
     "import_existing_hint": "Scans the whole workspace folder (except .doculens) and opens the preview.",
     "role_knowledge": "Knowledge",
     "kb_added": "Added {{count}} documents to '{{name}}'.",
-    "kb_added_one": "Added {{count}} document to '{{name}}'."
+    "kb_added_one": "Added {{count}} document to '{{name}}'.",
+    "review_pending": "Review",
+    "process_started": "Processing started."
   },
   "documents": {
     "status": {
@@ -935,7 +981,10 @@
     "no_paths": "Choose files or type paths.",
     "filter_name": "Documents",
     "previewing": "Checking files…",
-    "items": "Files to import"
+    "items": "Files to import",
+    "auto_level": "Auto-process after import",
+    "auto_level_default": "Use setting ({{level}})",
+    "eta": "Estimated ~{{minutes}} min (30–50 s per page, model load excluded)"
   },
   "viewer": {
     "back": "Library",
@@ -958,7 +1007,7 @@
       "qa": "Q&A",
       "history": "History"
     },
-    "text_empty": "This page has no text layer. OCR arrives with the P4 pipeline.",
+    "text_empty": "This page has no text yet. Run 'Process' to OCR it.",
     "no_image": "No page image. Click Re-render to create it.",
     "no_pages": "No rendered pages.",
     "converted_badge": "converted",
@@ -970,7 +1019,7 @@
     "no_doc_type": "No type",
     "title_placeholder": "Title (optional)",
     "thumbnails": "Pages",
-    "rotated": "Rotation saved. Re-OCR will be offered in P4.",
+    "rotated": "Rotation saved. Re-process if OCR results exist.",
     "deleted": "Document deleted.",
     "placeholder_fields": "The extracted-field grid arrives in P4 (pipeline).",
     "placeholder_tables": "The tables tab (XLSX/CSV/clipboard) arrives in P4.",
@@ -1031,7 +1080,70 @@
       "clear": "Remove from group",
       "saved": "Version saved."
     },
-    "explain_with_chord": "Explain ({{chord}})"
+    "explain_with_chord": "Explain ({{chord}})",
+    "fields": {
+      "title": "Fields",
+      "run": "Run #{{n}}",
+      "schema": "Schema",
+      "none": "No extraction yet. Start one with 'Process'.",
+      "extract": "Extract now",
+      "approve": "Approve",
+      "correct": "Correct",
+      "hold": "Hold",
+      "next": "Next",
+      "reject": "Reject",
+      "validation": "Validation",
+      "revalidate": "Re-run validation",
+      "revalidated": "Validation re-run.",
+      "evidence": "Evidence",
+      "confidence": "Confidence",
+      "change_schema": "Change schema",
+      "schema_auto": "Automatic (type mapping)",
+      "pending": "{{count}} awaiting review",
+      "approve_all": "Approve all",
+      "table_row": "{{table}} row {{row}}",
+      "edit_placeholder": "New value",
+      "empty_value": "(none)",
+      "page_link": "p.{{page}}",
+      "schema_changed": "Schema changed. Re-extract to apply it."
+    },
+    "tables": {
+      "none": "No tables found in the text. HTML tables and Markdown tables from OCR appear here.",
+      "copy": "Copy to clipboard",
+      "csv": "Save CSV",
+      "copied": "Table copied.",
+      "saved": "CSV saved.",
+      "page": "Page {{page}} · table {{index}}",
+      "rows": "{{count}} rows",
+      "rows_one": "{{count}} row"
+    },
+    "history": {
+      "runs": "Extraction runs",
+      "changes": "Field changes",
+      "none": "No history.",
+      "restore": "Restore this value",
+      "restored": "Value restored.",
+      "run_line": "{{model}} · {{fields}} fields · {{review}} to review · {{ms}} ms",
+      "status": {
+        "running": "Running",
+        "done": "Done",
+        "failed": "Failed",
+        "cancelled": "Cancelled"
+      }
+    },
+    "process": {
+      "menu": "Re-process",
+      "pipeline_error": "Pipeline error"
+    },
+    "split": "Split",
+    "review_badge": {
+      "pending": "Awaiting review",
+      "done": "Reviewed"
+    },
+    "confidence_badge": "Confidence {{value}}",
+    "type_changed": "Type changed. Re-extract with the new type's schema?",
+    "reextract": "Re-extract",
+    "ocr_badge": "OCR"
   },
   "answer": {
     "sources": "Sources",
@@ -1252,5 +1364,233 @@
       "empty": "No saved answers.",
       "stats": "helpful {{helpful}} · wrong {{wrong}}"
     }
+  },
+  "pipeline": {
+    "levels": {
+      "classify": "Classify",
+      "ocr": "OCR",
+      "extract": "Extract"
+    },
+    "process": {
+      "menu": "Process",
+      "standard": "Standard (classify → OCR → extract)",
+      "fine_print": "Re-process with the fine-print profile",
+      "precise": "Re-extract in precision mode",
+      "classify": "Classify only",
+      "ocr": "Classify + OCR",
+      "extract": "Extract (keep existing results)",
+      "force": "From scratch (overwrite results)",
+      "started": "Processing started ({{count}} document(s)).",
+      "queued": "Queued behind the running pipeline job ({{count}} document(s)).",
+      "no_model": "Auto-processing was skipped: no vision model is loaded. Load a model on the Models screen, then press 'Process'.",
+      "engine_off": "Auto-processing was skipped: the engine is off. Start it, or enable auto-start in Settings.",
+      "model_ready": "Vision model {{model}} ready",
+      "model_not_loaded": "Vision model {{model}} is not loaded; it loads when processing starts.",
+      "model_none": "No vision model. Install one in the Model manager."
+    },
+    "review_status": {
+      "none": "No review needed",
+      "pending": "Awaiting review",
+      "done": "Reviewed"
+    },
+    "doc_type_source": {
+      "auto": "Classifier",
+      "manual": "Manual",
+      "form": "Form"
+    },
+    "confidence": "Confidence",
+    "reason": {
+      "low_confidence": "Low confidence",
+      "validation_failed": "Validation failed",
+      "required_missing": "Required missing",
+      "audit": "Random audit"
+    },
+    "field_status": {
+      "auto": "Auto",
+      "approved": "Approved",
+      "corrected": "Corrected",
+      "rejected": "Rejected",
+      "held": "Held"
+    },
+    "kinds": {
+      "string": "Text",
+      "amount": "Amount",
+      "integer": "Integer",
+      "date": "Date",
+      "boolean": "Yes/no",
+      "enum": "Choice",
+      "brn": "Business reg. no.",
+      "rrn": "Resident reg. no. (masked)",
+      "account": "Account / id (masked)",
+      "phone": "Phone",
+      "email": "Email",
+      "table": "Table (rows)",
+      "group": "Group"
+    },
+    "split": {
+      "title": "Split document",
+      "hint": "A new document starts at each checked page. The original is archived; the parts are auto-processed.",
+      "start_here": "New document starts here",
+      "boundaries": "Split at page(s) {{pages}}",
+      "none": "Pick at least one split page (page 2 or later).",
+      "run": "Split",
+      "started": "Split job started.",
+      "clear": "Clear",
+      "page": "Page {{page}}"
+    },
+    "merge": {
+      "title": "Merge documents",
+      "hint": "Combines the {{count}} selected documents, in library order, into one PDF. The originals stay.",
+      "name": "File name (optional)",
+      "run": "Merge",
+      "started": "Merge job started."
+    }
+  },
+  "schemas": {
+    "title": "Extraction schemas / forms",
+    "subtitle": "Registered forms and the built-in sample forms define document types and the fields to extract.",
+    "list": {
+      "user": "Registered forms · user schemas",
+      "builtin": "Built-in sample forms",
+      "empty": "No registered forms yet. Start with 'Register form' or 'Create from description'.",
+      "disabled": "Disabled"
+    },
+    "new": "New schema",
+    "nl_create": "Create from description",
+    "nl_modify": "Modify by description",
+    "register_form": "Register form",
+    "default": "Default",
+    "set_default": "Make default for this type",
+    "enabled": "Used by the classifier",
+    "version": "v{{version}}",
+    "source": {
+      "builtin": "Built-in",
+      "nl": "Description",
+      "user": "User",
+      "form": "Form"
+    },
+    "uses": "{{count}} use(s)",
+    "editor": {
+      "name": "Name (Korean)",
+      "name_en": "Name (English)",
+      "doc_type": "Type slug",
+      "doc_type_hint": "Lower-case ASCII, digits, _ (the classifier's type value)",
+      "description": "Description",
+      "fields": "Fields",
+      "add_field": "Add field",
+      "add_column": "Add column",
+      "key": "Key",
+      "label_ko": "Label (ko)",
+      "label_en": "Label (en)",
+      "kind": "Type",
+      "required": "Required",
+      "regex": "Regex hint (^…$)",
+      "example": "Example",
+      "options": "Options (comma separated)",
+      "mask": "Mask",
+      "columns": "Columns",
+      "remove": "Remove",
+      "up": "Move up",
+      "down": "Move down",
+      "save": "Save",
+      "saved": "Schema saved.",
+      "registered": "Form registered. It now feeds the classifier and the extractor.",
+      "lint_ok": "Grammar check passed (GBNF-convertible)",
+      "lint_errors": "{{count}} error(s)",
+      "lint_warnings": "{{count}} warning(s)",
+      "delete": "Delete",
+      "delete_confirm": "Delete schema '{{name}}'? Existing extractions are kept.",
+      "deleted": "Schema deleted.",
+      "versions": "Version history",
+      "no_versions": "No earlier versions.",
+      "restore_version": "Load this version",
+      "note": "Change note (optional)",
+      "duplicate": "Duplicate",
+      "test": "Test on a sample document",
+      "test_hint": "Extracts the chosen document with this schema (fill rate in the viewer's Fields tab).",
+      "test_started": "Test extraction started.",
+      "test_pick": "Choose document",
+      "form_doc": "Form document",
+      "open_form_doc": "Open form document",
+      "new_draft": "New schema (unsaved)",
+      "unsaved": "You have unsaved changes.",
+      "discard": "Discard"
+    },
+    "mapping": {
+      "title": "Type → schema mapping",
+      "hint": "The classifier's type enum is built from the enabled schemas' type slugs. Registered forms take precedence over samples.",
+      "type": "Type",
+      "schema": "Default schema",
+      "builtin": "Built-in",
+      "user": "User"
+    },
+    "nl": {
+      "title": "Create a schema from a description",
+      "modify_title": "Modify '{{name}}' by description",
+      "description": "Description",
+      "placeholder": "e.g. Quotation: vendor, quote date, items (name · qty · unit price · amount), total, valid until",
+      "generate": "Generate fields",
+      "generating": "The model is deriving fields…",
+      "hint": "Review the generated fields in the grid, then save. A model must be loaded."
+    },
+    "form": {
+      "title": "Register a form",
+      "hint": "Finds the input items of a sample document (blank form or filled example) and creates a schema plus a document type. HWPX/DOCX forms are read from their table structure; PDFs / images use the vision model.",
+      "document": "Form document",
+      "pick": "Pick from the library",
+      "name": "Form name",
+      "name_hint": "Leave empty to use the document title / file name.",
+      "derive": "Derive fields",
+      "deriving": "Looking for fields in the form…",
+      "confirm": "Check and edit the derived fields, then register.",
+      "register": "Register form",
+      "no_docs": "The library is empty. Import the form document first."
+    },
+    "reclassify": {
+      "banner": "New type '{{name}}' added. Re-classify the {{count}} document(s) typed 'other'?",
+      "run": "Re-classify",
+      "started": "Re-classification started."
+    }
+  },
+  "review": {
+    "title": "Review queue",
+    "subtitle": "Approve or correct low-confidence, failed-validation and missing required fields from the keyboard.",
+    "filters": {
+      "doc_type": "Type",
+      "reason": "Reason",
+      "document": "Document",
+      "all": "All"
+    },
+    "empty": "Nothing to review.",
+    "count": "{{count}} fields",
+    "count_one": "{{count}} field",
+    "threshold": "Threshold {{value}}",
+    "keys": "Enter approve · E edit · S hold · N next · R reject",
+    "approve": "Approve",
+    "edit": "Edit",
+    "hold": "Hold",
+    "next": "Next",
+    "reject": "Reject",
+    "reset": "Reset",
+    "approve_doc": "Approve whole document",
+    "approved": "Approved.",
+    "corrected": "Corrected.",
+    "held": "Held.",
+    "rejected": "Rejected.",
+    "doc_approved": "{{count}} field(s) approved.",
+    "reextract": "Re-extract (fine print)",
+    "reextract_precise": "Re-extract (precision mode)",
+    "open_doc": "Open document",
+    "value": "Value",
+    "evidence": "Evidence",
+    "validation": "Validation",
+    "page": "Page {{page}}",
+    "edit_title": "Edit value",
+    "edit_hint": "Type the value as printed; amounts and dates are normalised on save.",
+    "no_image": "No page image.",
+    "document_promoted": "The document is now 'reviewed'.",
+    "list": "Review items",
+    "current": "Current item",
+    "status_line": "{{done}} / {{total}} handled"
   }
 }

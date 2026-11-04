@@ -48,22 +48,28 @@ that processes Korean/English business documents with a local VLM
   `db/` (rusqlite + embedded migrations), `documents/` (repo, import plan/run/rescan, render via PDFium,
   `convert/` HWPX·DOCX·HWP → model → HTML → PDF through a `PdfPrinter`, fixtures),
   `knowledge/` (tokenize: lindera ko-dic / simple analyzer, chunker: structure-aware chunking, repo, index,
-  embed: sqlite-vec + `Embedder`, search: hybrid RRF, answer: grounded answers / explain / summarize / compare).
+  embed: sqlite-vec + `Embedder`, search: hybrid RRF, answer: grounded answers / explain / summarize / compare),
+  `pipeline/` (schema: built-in sample forms + grammar-safe JSON schema + lint, prompts, vlm: retrying caller, image,
+  classify, ocr, extract, validate: normalisers / BRN checksum / sum rules / PII masking / confidence, run: orchestrator +
+  `extractions/` mirror, review, forms: form registration + NL schemas, split: lopdf split / merge, repo).
 - `crates/doculens-kodic/` — bin that compiles the mecab-ko-dic sources into lindera's dictionary format
   (driven by `scripts/fetch-kodic.mjs`; descriptors in `assets/`).
-- `src-tauri/` — Tauri shell (`src/commands/{mod,documents}.rs`, `src/state.rs`, `src/engine_bridge.rs`,
+- `src-tauri/` — Tauri shell (`src/commands/{mod,documents,knowledge,pipeline}.rs`, `src/state.rs`, `src/engine_bridge.rs`,
   `src/docs_bridge.rs`, `src/knowledge_bridge.rs` (analyzer lifetime, index/embed jobs, answer streaming),
-  `src/commands/knowledge.rs`, `src/protocol.rs` (`doculens://` page images / print bundles), `src/printer.rs`
+  `src/pipeline_bridge.rs` (vision model, processing / split / merge jobs, auto pipeline after import, forms / NL schemas),
+  `src/protocol.rs` (`doculens://` page images / print bundles), `src/printer.rs`
   (WebView2 / WebKitGTK print-to-PDF), `src/jobs.rs`), `tauri.conf.json`, capabilities.
 - `src/` — React app: `app/` (layout, providers, hooks), `features/<screen>/`, `components/ui/`, `lib/` (ipc, types, theme, shortcuts, mock backend), `stores/`, `i18n/`, `styles/`.
 - `models/registry.json`, `engines/` (llama.cpp manifest, `pdfium.json`, `kodic.json`, placement docs), `docs/`,
   `scripts/` (`fetch-engine.mjs`, `fetch-pdfium.mjs`, `fetch-kodic.mjs`, `gen-tiny-qwen35.py`), `e2e/`,
   `.github/workflows/`.
 - Events from Rust to the webview: `engine://status|log|model`, `models://changed`, `jobs://update`,
-  `documents://changed`, `knowledge://changed`, `knowledge://answer` (streamed answer deltas).
+  `documents://changed`, `knowledge://changed`, `knowledge://answer` (streamed answer deltas), `pipeline://changed`.
 - Workspace data: `.doculens/workspace.db` (schema in `crates/doculens-core/src/db/schema/`; knowledge tables
   `chunks` + FTS5 `chunks_fts`/`chunks_fts_tri`, sqlite-vec `chunks_vec`, `collections`, `doc_versions`, `glossary`,
-  `answers`), page cache `.doculens/cache/{pages,thumbs,converted}/<doc_id>/`; DB rows store workspace-relative
-  paths only.
+  `answers`; pipeline tables `schemas`, `schema_versions`, `extraction_runs`, `fields`, `field_history`), page cache
+  `.doculens/cache/{pages,thumbs,converted}/<doc_id>/`, extraction mirror `.doculens/extractions/<doc_id>/<run_id>/`;
+  DB rows store workspace-relative paths only. OCR text lives in `pages.text` (`text_source = ocr`) so the knowledge
+  indexer re-chunks it.
 - Runtime assets (never committed): PDFium (`scripts/fetch-pdfium.mjs`) and the ko-dic dictionary
   (`scripts/fetch-kodic.mjs`); both are located via env → bundled resources → `<AppData>/DocuLens/`.

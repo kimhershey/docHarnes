@@ -23,7 +23,9 @@ import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SCREEN_ROUTES, type Screen } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { usePipelineStatus } from "@/lib/queries";
 import { useSettingsStore } from "@/stores/settings";
+import { useWorkspace } from "@/stores/workspace";
 
 const MAIN: { screen: Screen; icon: typeof Home }[] = [
   { screen: "home", icon: Home },
@@ -83,6 +85,9 @@ export function Sidebar() {
   const { t } = useTranslation();
   const collapsed = useSettingsStore((s) => s.settings?.ui.sidebar_collapsed ?? false);
   const update = useSettingsStore((s) => s.update);
+  const workspace = useWorkspace();
+  const { data: pipeline } = usePipelineStatus(!!workspace);
+  const reviewFields = pipeline?.review_fields ?? 0;
 
   return (
     <nav
@@ -99,7 +104,7 @@ export function Sidebar() {
         <ul className="flex flex-col gap-0.5">
           {MAIN.map((it) => (
             <li key={it.screen}>
-              <Item {...it} collapsed={collapsed} />
+              <Item {...it} collapsed={collapsed} badge={it.screen === "review" && reviewFields > 0 ? String(reviewFields) : undefined} />
             </li>
           ))}
         </ul>

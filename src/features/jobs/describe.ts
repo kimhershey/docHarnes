@@ -40,6 +40,12 @@ export function describeJobDetail(job: Job, t: TFunction): string | null {
     const summary = t("jobs.detail.embed_summary", { embedded: Number(m[1]), failed: Number(m[2]), remaining: Number(m[3]) });
     return m[4] ? t("jobs.detail.embed_rebuilt", { summary }) : summary;
   }
+  m = d.match(/^processed (\d+) \/ classified (\d+) \/ ocr pages (\d+) \/ extracted (\d+) \/ review (\d+) \/ failed (\d+)$/);
+  if (m) return t("jobs.detail.process_summary", { processed: Number(m[1]), classified: Number(m[2]), ocr: Number(m[3]), extracted: Number(m[4]), review: Number(m[5]), failed: Number(m[6]) });
+  m = d.match(/^split into (\d+)$/);
+  if (m) return t("jobs.detail.split_summary", { count: Number(m[1]) });
+  m = d.match(/^merged (\d+)$/);
+  if (m) return t("jobs.detail.merge_summary", { count: Number(m[1]) });
   if (d === "loading model") return t("jobs.detail.loading_model");
   return d;
 }

@@ -15,7 +15,8 @@ export type TierMode = "auto" | "manual";
 export type Profile = "accuracy" | "balanced" | "speed" | "fine_print";
 export type BackendPreference = "auto" | "cuda" | "vulkan" | "cpu";
 export type Backend = "cu129" | "cu121" | "vulkan" | "cpu";
-export type AutoProcessingLevel = "classify_only" | "classify_and_ocr" | "full";
+export type AutoProcessingLevel = "none" | "classify_only" | "classify_and_ocr" | "full";
+export const AUTO_PROCESSING_LEVELS: AutoProcessingLevel[] = ["none", "classify_only", "classify_and_ocr", "full"];
 export type ReducedMotion = "system" | "on" | "off";
 
 export interface WorkspaceEntry {
@@ -49,11 +50,17 @@ export interface ModelSettings {
 
 export interface ProcessingSettings {
   auto_level: AutoProcessingLevel;
+  inbox_auto_level: AutoProcessingLevel;
   render_dpi: number;
   review_threshold: number;
   audit_sample_percent: number;
   organize_reviewed_only: boolean;
   inbox_watch: boolean;
+  ocr_digital_pdf: boolean;
+  kie_max_pages: number;
+  precise_mode: boolean;
+  dense_reocr: boolean;
+  dense_cells: number;
 }
 
 export interface CacheSettings {
@@ -525,7 +532,10 @@ export type JobKind =
   | "document_rescan"
   | "document_render"
   | "knowledge_index"
-  | "knowledge_embed";
+  | "knowledge_embed"
+  | "pipeline"
+  | "document_split"
+  | "document_merge";
 export type JobState = "queued" | "running" | "done" | "failed" | "cancelled";
 
 export interface Job {
@@ -654,6 +664,7 @@ export const EVENTS = {
   documentsChanged: "documents://changed",
   knowledgeChanged: "knowledge://changed",
   knowledgeAnswer: "knowledge://answer",
+  pipelineChanged: "pipeline://changed",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -683,6 +694,7 @@ export const DOCUMENT_STATUSES: DocumentStatus[] = [
   "error",
 ];
 export type DocumentRole = "work" | "knowledge" | "form" | "generated";
+export type ReviewStatus = "none" | "pending" | "done";
 export type DocumentSort = "imported_desc" | "imported_asc" | "name_asc" | "name_desc" | "size_desc";
 
 export interface DocumentRecord {
@@ -712,6 +724,16 @@ export interface DocumentRecord {
   import_batch_id: string | null;
   deleted_at: string | null;
   tags: string[];
+  // -- pipeline (P4) --
+  doc_type_source: string | null;
+  classified_at: string | null;
+  ocr_at: string | null;
+  extracted_at: string | null;
+  last_run_id: string | null;
+  schema_id: string | null;
+  review_status: ReviewStatus;
+  confidence: number | null;
+  pipeline_error: string | null;
 }
 
 /** `DocumentRecord` plus the URLs / paths the UI needs (`documents_list`, `documents_get`). */
@@ -733,6 +755,15 @@ export interface PageRecord {
   text?: string | null;
   is_blank: boolean | null;
   rendered_at: string | null;
+  // -- pipeline (P4) --
+  text_source: string | null;
+  ocr_at: string | null;
+  ocr_profile: string | null;
+  ocr_model: string | null;
+  classified_at: string | null;
+  page_doc_type: string | null;
+  page_language: string | null;
+  page_rotation: number | null;
 }
 
 export interface PageView extends PageRecord {
@@ -747,6 +778,9 @@ export interface DocumentFilter {
   query?: string | null;
   tag?: string | null;
   doc_type?: string | null;
+  review_status?: ReviewStatus | null;
+  max_confidence?: number | null;
+  role?: DocumentRole | null;
   include_deleted?: boolean;
   sort?: DocumentSort;
   limit?: number | null;
@@ -777,6 +811,7 @@ export interface ImportOptions {
   dpi: number | null;
   /** Knowledge collection that receives the whole batch (ingest wizard). */
   collection_id?: string | null;
+  auto_level?: AutoProcessingLevel | null;
 }
 
 export type ImportItemStatus =
@@ -1081,4 +1116,248 @@ export interface AnswerDelta {
   request_id: string;
   delta: string;
   done: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline (P4) — mirrors crates/doculens-core/src/pipeline and
+// src-tauri/src/commands/pipeline.rs
+// ---------------------------------------------------------------------------
+
+export type PipelineLevel = "classify" | "ocr" | "extract";
+export const PIPELINE_LEVELS: PipelineLevel[] = ["classify", "ocr", "extract"];
+export type SchemaChoice = { kind: "auto" } | { kind: "id"; id: string };
+
+export interface ProcessRequest {
+  document_ids: string[];
+  level: PipelineLevel;
+  schema?: SchemaChoice;
+  force?: boolean;
+  profile?: Profile | null;
+  pages?: number[];
+  precise?: boolean | null;
+}
+
+export type FieldKind = "string" | "amount" | "integer" | "date" | "boolean" | "enum" | "brn" | "rrn" | "account" | "phone" | "email" | "table" | "group";
+export const SCALAR_FIELD_KINDS: FieldKind[] = ["string", "amount", "integer", "date", "boolean", "enum", "brn", "rrn", "account", "phone", "email"];
+export const FIELD_KINDS: FieldKind[] = [...SCALAR_FIELD_KINDS, "table", "group"];
+
+export interface FieldDef {
+  key: string;
+  label_ko: string;
+  label_en: string;
+  kind: FieldKind;
+  required: boolean;
+  regex_hint: string | null;
+  example: string | null;
+  description: string | null;
+  options: string[];
+  fields: FieldDef[];
+  mask: boolean;
+}
+
+export function newFieldDef(key = "", kind: FieldKind = "string"): FieldDef {
+  return { key, label_ko: "", label_en: "", kind, required: false, regex_hint: null, example: null, description: null, options: [], fields: [], mask: false };
+}
+
+export interface SchemaDef {
+  fields: FieldDef[];
+  rules: string[];
+}
+
+export type SchemaSource = "builtin" | "nl" | "user" | "form";
+
+export interface SchemaRecord {
+  id: string;
+  name: string;
+  name_en: string | null;
+  doc_type: string;
+  source: SchemaSource;
+  version: number;
+  description_ko: string | null;
+  description_en: string | null;
+  definition: SchemaDef;
+  form_document_id: string | null;
+  builtin_key: string | null;
+  enabled: boolean;
+  is_default: boolean;
+  use_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SchemaDraft {
+  id: string | null;
+  name: string;
+  name_en: string | null;
+  doc_type: string;
+  source: SchemaSource;
+  description_ko: string | null;
+  description_en: string | null;
+  definition: SchemaDef;
+  form_document_id: string | null;
+  note: string | null;
+}
+
+export function draftFromSchema(s: SchemaRecord): SchemaDraft {
+  return {
+    id: s.id,
+    name: s.name,
+    name_en: s.name_en,
+    doc_type: s.doc_type,
+    source: s.source,
+    description_ko: s.description_ko,
+    description_en: s.description_en,
+    definition: structuredClone(s.definition),
+    form_document_id: s.form_document_id,
+    note: null,
+  };
+}
+
+export interface LintIssue {
+  level: "error" | "warn";
+  path: string;
+  code: string;
+  message: string;
+}
+
+export interface SchemaVersionView {
+  version: number;
+  definition: SchemaDef;
+  note: string | null;
+  created_at: string;
+}
+
+export type FieldStatus = "auto" | "approved" | "corrected" | "rejected" | "held";
+export type ReviewReason = "low_confidence" | "validation_failed" | "required_missing" | "audit";
+export const REVIEW_REASONS: ReviewReason[] = ["low_confidence", "validation_failed", "required_missing", "audit"];
+
+export interface ValidationIssue {
+  rule: string;
+  level: "ok" | "warn" | "fail";
+  message: string;
+}
+
+export interface FieldRecord {
+  id: number;
+  run_id: string;
+  document_id: string;
+  path: string;
+  key: string;
+  row: number | null;
+  label_ko: string;
+  label_en: string;
+  kind: FieldKind;
+  required: boolean;
+  value: string | null;
+  normalized: string | null;
+  original_value: string | null;
+  page: number | null;
+  bbox: [number, number, number, number] | null;
+  evidence: string | null;
+  confidence: number;
+  model_confidence: number | null;
+  status: FieldStatus;
+  review_reason: ReviewReason | null;
+  validation: ValidationIssue[];
+  reviewed_at: string | null;
+}
+
+/** A field whose review is still open (flagged and not approved / corrected / rejected). */
+export function fieldNeedsReview(f: FieldRecord): boolean {
+  return f.review_reason !== null && !["approved", "corrected", "rejected"].includes(f.status);
+}
+
+export interface ExtractionRun {
+  id: string;
+  document_id: string;
+  schema_id: string | null;
+  schema_version: number | null;
+  doc_type: string | null;
+  model: string | null;
+  prompt_version: string | null;
+  profile: string | null;
+  precise: boolean;
+  status: "running" | "done" | "failed" | "cancelled";
+  error: string | null;
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | null;
+  prompt_tokens: number;
+  completion_tokens: number;
+  pages_done: number;
+  confidence: number | null;
+  field_count: number;
+  review_count: number;
+}
+
+export interface FieldChange {
+  id: number;
+  field_id: number;
+  document_id: string;
+  path: string;
+  old_value: string | null;
+  new_value: string | null;
+  old_status: FieldStatus;
+  new_status: FieldStatus;
+  changed_at: string;
+  note: string | null;
+}
+
+export interface DocTypeInfo {
+  slug: string;
+  label_ko: string;
+  label_en: string;
+  schema_id: string | null;
+  builtin: boolean;
+  use_count: number;
+}
+
+export interface VisionModelInfo {
+  model: string | null;
+  engine_running: boolean;
+  loaded: boolean;
+}
+
+export interface PipelineStatus {
+  documents: number;
+  classified: number;
+  ocr_done: number;
+  extracted: number;
+  review_pending: number;
+  reviewed: number;
+  review_fields: number;
+  failed: number;
+  running: boolean;
+  queued: number;
+  model: VisionModelInfo;
+  review_threshold: number;
+}
+
+export interface ExtractedTable {
+  page: number;
+  index: number;
+  header: string[];
+  rows: string[][];
+}
+
+export interface ReviewFilter {
+  document_id?: string | null;
+  doc_type?: string | null;
+  reason?: ReviewReason | null;
+  include_resolved?: boolean;
+  limit?: number | null;
+}
+
+export interface ReviewItem extends FieldRecord {
+  document_name: string;
+  doc_type: string | null;
+  page_image_url: string | null;
+  page_count: number;
+}
+
+export type ReviewAction = { kind: "approve" } | { kind: "reject" } | { kind: "hold" } | { kind: "reset" } | { kind: "correct"; value: string };
+
+export interface PipelineChanged {
+  kind: "processed" | "fields" | "schemas" | "review" | "status" | "engine_off" | "no_model";
+  ids: string[];
 }

@@ -34,6 +34,8 @@ image.workspace = true
 trash.workspace = true
 hwp.workspace = true
 unicode-normalization.workspace = true
+regex.workspace = true
+lopdf.workspace = true
 lindera.workspace = true
 sqlite-vec.workspace = true
 

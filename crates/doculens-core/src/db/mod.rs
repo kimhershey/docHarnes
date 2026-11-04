@@ -14,11 +14,14 @@ use crate::error::{CoreError, Result};
 
 /// Embedded migrations, applied in order; `PRAGMA user_version` records the
 /// last one applied.
-const MIGRATIONS: &[(u32, &str)] =
-    &[(1, include_str!("schema/0001_init.sql")), (2, include_str!("schema/0002_knowledge.sql"))];
+const MIGRATIONS: &[(u32, &str)] = &[
+    (1, include_str!("schema/0001_init.sql")),
+    (2, include_str!("schema/0002_knowledge.sql")),
+    (3, include_str!("schema/0003_pipeline.sql")),
+];
 
 /// Schema version the current build expects.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]

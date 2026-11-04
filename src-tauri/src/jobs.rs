@@ -27,6 +27,10 @@ pub enum JobKind {
     DocumentRender,
     KnowledgeIndex,
     KnowledgeEmbed,
+    /// Classification / OCR / extraction over a set of documents (P4).
+    Pipeline,
+    DocumentSplit,
+    DocumentMerge,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
