@@ -21,7 +21,7 @@
 | P1 엔진·모델 | **완료 (`main`에 병합, PR #2)** | 아래 "P1 산출물" 참조. 병합 후 CI 엔진 빌드 수정은 `phase/p1-engine` 후속 PR |
 | P2 워크스페이스·문서 | **완료 (`main`에 병합, PR #3)** | 아래 "P2 산출물" 참조 |
 | P3 지식 베이스 | **완료 (`main`에 병합, PR #4; 리뷰 반영 3커밋은 `phase/p3-knowledge` 후속 PR 대기)** | 아래 "P3 산출물" 참조. 청킹, ko-dic FTS5 + trigram + LIKE, bge-m3 + sqlite-vec, 하이브리드 검색, 근거 기반 Q&A·설명·요약·비교 |
-| P4 파이프라인 | **완료 (`phase/p4-pipeline`, PR 대기; `phase/p3-knowledge` 위에 쌓음)** | 아래 "P4 산출물" 참조. 분류·OCR·KIE 호출기, 내장 양식 7종 + 양식 등록 + NL 스키마, 검증기·신뢰도, 검토 큐, 추출 미러, 분할/병합 |
+| P4 파이프라인 | **완료 (`phase/p4-pipeline`, PR #7 열림 — 사용자 생성; `phase/p3-knowledge` 위에 쌓음, 단계 말 리뷰 반영 완료)** | 아래 "P4 산출물" 참조. 분류·OCR·KIE 호출기, 내장 양식 7종 + 양식 등록 + NL 스키마, 검증기·신뢰도, 검토 큐, 추출 미러, 분할/병합 |
 | P5 자연어·작업 | 다음(핵심 op만 1차) | 플래너 PlanSchema, 확인 카드, Job 러너, 정리/되돌리기, 내보내기 |
 
 ## P1 산출물
@@ -485,7 +485,7 @@
 - `engine/client.rs`: `ChatResponse.reasoning`(`message.reasoning_content`, 스트림 델타 포함), `RouterModel::context_size`
   (`memory.effective.n_ctx`) → `ModelInstanceStatus.ctx`. `knowledge/answer.rs`: `ChatBackend::complete` / `complete_cancellable`.
   `documents/repo.rs`: `set_file_info`가 내용 해시 변경 시 파이프라인 상태 초기화(`reset_pipeline_state`).
-- 테스트(44): 스키마·린트·메타스키마, 검증기 전반, 프롬프트/프리셋/루프/텍스트 예산, 호출기 재시도(4xx·OCR 예산·샘플링)·취소,
+- 테스트(43): 스키마·린트·메타스키마, 검증기 전반, 프롬프트/프리셋/루프/텍스트 예산, 호출기 재시도(4xx·OCR 예산·샘플링)·취소,
   이미지 예산, 분류 투표, OCR 표 파서·CSV 주입 방지, 추출 병합·필드 생성·정밀 모드·감사·PII 원문 마스킹·컨텍스트 초과 축소,
   분할/병합·이름 검증, 양식 도출, 대본 백엔드 통합: 스캔 영수증 end-to-end(분류→OCR(PII 마스킹)→KIE→
   검증→검토 큐→미러→지식 색인 재청킹), 디지털 PDF(OCR 생략·텍스트 KIE·필수 누락), 회전 재렌더·수동 유형, 취소·실패 격리, 검토
@@ -529,7 +529,7 @@
 
 | 항목 | 결과 |
 |---|---|
-| `cargo test --workspace` (ko-dic + PDFium) | 코어 lib 168 통과(+1 ignored; 파이프라인 44), 셸·엔진 프로세스·real_engine 통과 |
+| `cargo test --workspace` (ko-dic + PDFium) | 코어 lib 166 통과(+1 ignored; 파이프라인 43), 셸·엔진 프로세스·real_engine 통과 |
 | `cargo clippy --workspace --all-targets -D warnings`, `cargo fmt --check` | 통과 |
 | vitest / Playwright | 27 / 21 통과(P4 4건: 처리·검토 큐·스키마/양식·IME) |
 | `npm run licenses:check`, `cargo deny check licenses bans sources` | 통과 (lopdf MIT, regex MIT/Apache) |
