@@ -179,7 +179,7 @@ fn real_llama_server_load_chat_switch() {
         // grammar-constrained JSON, thinking disabled) go through the real server.
         // Random weights may pad until the token budget, so a cut-off reply only
         // has to be a JSON prefix; a complete one must parse.
-        let vlm = Vlm { chat: &m, model: first.clone(), profile: Profile::Speed, cancel: None };
+        let vlm = Vlm::new(&m, first.clone(), Profile::Speed, None);
         let types = vec![DocTypeInfo {
             slug: "receipt".into(),
             label_ko: "영수증".into(),

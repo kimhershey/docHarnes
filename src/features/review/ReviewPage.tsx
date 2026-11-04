@@ -1,5 +1,7 @@
+import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
+import type { TFunction } from "i18next";
 import { Check, ChevronRight, ExternalLink, Pencil, Pause, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 
@@ -11,33 +13,101 @@ import { Kbd } from "@/components/ui/kbd";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
-import { confidenceGlyph, confidenceTone, docTypeLabel, fieldTitle, formatConfidence, reasonVariant } from "@/features/pipeline/labels";
+import { CONFIDENCE_TEXT_CLASS, DEFAULT_REVIEW_THRESHOLD, confidenceGlyph, confidenceTone, docTypeLabel, fieldTitle, formatConfidence, reasonVariant } from "@/features/pipeline/labels";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
 import { useDocTypes, usePipelineStatus, useReviewQueue } from "@/lib/queries";
-import { queryClient } from "@/lib/query-client";
+import { queryClient, queryKeys } from "@/lib/query-client";
 import { isComposing } from "@/lib/shortcuts";
-import { REVIEW_REASONS, type ReviewAction, type ReviewItem, type ReviewReason } from "@/lib/types";
+import { REVIEW_REASONS, type DocTypeInfo, type ReviewAction, type ReviewItem, type ReviewReason } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { usePipelineStore } from "@/stores/pipeline";
 import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 
-/** Keys the queue owns; inputs, dialogs and controls keep their own keyboard behaviour. */
+/** Estimated row height (three text lines + padding); mounted rows are measured. */
+const ROW_H = 72;
+/** Prefix of every review-queue query (all filters). */
+const REVIEW_QUEUE_KEY = ["pipeline", "review"] as const;
+
+/**
+ * Keys the queue owns: the page root and the options of its own listbox. Inputs, buttons, links,
+ * sliders and foreign widgets (selects, dialogs) keep their own keyboard behaviour, so Enter on a
+ * focused 거부 / 다음 / 문서 열기 button activates that button instead of approving.
+ */
 function isQueueTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return true;
-  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target.isContentEditable) return false;
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target.isContentEditable) return false;
+  if (target.closest('button,a,[role="slider"],[role="switch"],[role="tab"],[role="menuitem"]')) return false;
+  if (target.closest("[data-review-list]")) return true;
   return !target.closest('[role="dialog"],[role="combobox"],[role="listbox"]');
 }
+
+function shortId(id: string): string {
+  return id.length > 8 ? `${id.slice(0, 8)}…` : id;
+}
+
+interface ReviewRowProps {
+  item: ReviewItem;
+  index: number;
+  selected: boolean;
+  /** Offset inside the virtualized list. */
+  start: number;
+  threshold: number;
+  docTypes: DocTypeInfo[] | undefined;
+  lang: string;
+  t: TFunction;
+  onSelect: (index: number) => void;
+  measure: (el: HTMLLIElement | null) => void;
+}
+
+/** One queue row; module-level + memo so moving the selection re-renders only the two rows that changed. */
+const ReviewRow = memo(function ReviewRow({ item, index, selected, start, threshold, docTypes, lang, t, onSelect, measure }: ReviewRowProps) {
+  const tone = confidenceTone(item.confidence, threshold);
+  return (
+    <li
+      ref={measure}
+      role="option"
+      aria-selected={selected}
+      tabIndex={selected ? 0 : -1}
+      onClick={() => onSelect(index)}
+      className={cn(
+        "absolute left-0 top-0 flex w-full cursor-pointer flex-col gap-0.5 border-b border-border px-3 py-2 text-left text-sm outline-none hover:bg-bg-sunken focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
+        selected && "bg-accent-soft",
+      )}
+      style={{ transform: `translateY(${start}px)` }}
+      data-index={index}
+      data-testid={`review-item-${item.id}`}
+      data-field-path={item.path}
+    >
+      <span className="flex items-center gap-1">
+        <span className="truncate font-medium">{fieldTitle(item, t, lang)}</span>
+        <Badge variant={reasonVariant(item.review_reason)} className="ml-auto text-[10px]">
+          {item.review_reason ? t(`pipeline.reason.${item.review_reason}`) : ""}
+        </Badge>
+      </span>
+      <span className="truncate text-xs text-fg-muted">
+        {item.document_name} · {docTypeLabel(item.doc_type, docTypes, t, lang)}
+      </span>
+      <span className={cn("truncate text-xs", CONFIDENCE_TEXT_CLASS[tone])}>
+        {confidenceGlyph(item.confidence, threshold)} {formatConfidence(item.confidence)} · {item.value ?? t("viewer.fields.empty_value")}
+        {item.status === "held" && ` · ${t("pipeline.field_status.held")}`}
+      </span>
+    </li>
+  );
+});
 
 /**
  * 검토 큐 (design §3.7.2): low-confidence / failed / missing fields across
  * documents, keyboard review (Enter approve · E edit · S hold · N next · R
  * reject, Enter ignored while composing Korean), page preview, bulk approval
  * per document, threshold slider, re-extraction with the fine-print profile.
+ * The list is a virtualized roving-tabindex listbox: the shortcuts act when
+ * the page root or one of its options has focus.
  */
 export function ReviewPage() {
   const { t, i18n } = useTranslation();
+  const lang = i18n.language;
   const navigate = useNavigate();
   const toast = useUiStore((s) => s.toast);
   const settings = useSettingsStore((s) => s.settings);
@@ -50,6 +120,7 @@ export function ReviewPage() {
   const { data: docTypes } = useDocTypes();
   const { data: status } = usePipelineStatus();
   const query = useMemo(() => ({ doc_type: filter.docType === "all" ? null : filter.docType, reason: filter.reason === "all" ? null : filter.reason, document_id: filter.document }), [filter]);
+  const queueKey = useMemo(() => queryKeys.reviewQueue(query), [query]);
   const { data: items, isLoading } = useReviewQueue(query);
   const [index, setIndex] = useState(0);
   const [editOpen, setEditOpen] = useState(false);
@@ -57,52 +128,124 @@ export function ReviewPage() {
   const [busy, setBusy] = useState(false);
   const [handled, setHandled] = useState(0);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLUListElement | null>(null);
+  /** Roving focus: set when a key moved the selection (or the focused row left the queue) while an option had focus. */
+  const focusOptionRef = useRef(false);
+  const hadCurrentRef = useRef(false);
 
   const list: ReviewItem[] = items ?? [];
-  const current = list[Math.min(index, Math.max(0, list.length - 1))];
+  const safeIndex = Math.min(index, Math.max(0, list.length - 1));
+  const current = list[safeIndex];
+  const nextIndex = list.length === 0 ? 0 : (safeIndex + 1) % list.length;
+  const threshold = settings?.processing.review_threshold ?? DEFAULT_REVIEW_THRESHOLD;
+  /** Colour / glyph cut-off: the threshold the backend flagged with; the slider value until the status refetches. */
+  const toneThreshold = status?.review_threshold ?? threshold;
+  const currentTitle = current ? fieldTitle(current, t, lang) : "";
+
+  const virtualizer = useVirtualizer<HTMLDivElement, HTMLLIElement>({
+    count: list.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ROW_H,
+    overscan: 16,
+    // Always render the current option, even when scrolled out of view, so roving focus never sits on an unmounted row.
+    rangeExtractor: (range: Range) => {
+      const r = defaultRangeExtractor(range);
+      return list.length === 0 || r.includes(safeIndex) ? r : [...r, safeIndex].sort((a, b) => a - b);
+    },
+  });
+
   useEffect(() => {
     if (index >= list.length) setIndex(Math.max(0, list.length - 1));
   }, [list.length, index]);
   useEffect(() => {
-    listRef.current?.querySelector<HTMLElement>(`[data-index="${index}"]`)?.scrollIntoView({ block: "nearest" });
-  }, [index]);
+    if (list.length > 0) virtualizer.scrollToIndex(safeIndex, { align: "auto" });
+  }, [safeIndex, list.length, virtualizer]);
+  // Shortcuts work on arrival: take focus from the nav link we came by, never from a control inside the page.
+  useEffect(() => {
+    rootRef.current?.focus({ preventScroll: true });
+  }, []);
+  useEffect(() => {
+    const had = hadCurrentRef.current;
+    hadCurrentRef.current = current !== undefined;
+    if (!current || had || editOpen) return;
+    const root = rootRef.current;
+    const active = document.activeElement;
+    if (root && (!active || active === document.body || !root.contains(active))) root.focus({ preventScroll: true });
+  }, [current, editOpen]);
+  // Roving tabindex: focus follows the current option once it is rendered (or the root when the queue ran empty).
+  useEffect(() => {
+    if (!focusOptionRef.current) return;
+    const el = listRef.current?.querySelector<HTMLElement>(`[data-index="${safeIndex}"]`);
+    if (el) el.focus({ preventScroll: true });
+    else if (list.length === 0) rootRef.current?.focus({ preventScroll: true });
+    else return; // not rendered yet; the virtualizer's scroll triggers another render
+    focusOptionRef.current = false;
+  });
 
   const apply = useCallback(
-    async (action: ReviewAction, item: ReviewItem | undefined = current) => {
-      if (!item || busy) return;
+    async (action: ReviewAction, item: ReviewItem | undefined = current): Promise<boolean> => {
+      if (!item || busy) return false;
       setBusy(true);
+      const focusInList = listRef.current?.contains(document.activeElement) ?? false;
       try {
-        const out = await api.pipelineReviewApply([item.id], action);
+        await api.pipelineReviewApply([item.id], action);
         const key = action.kind === "approve" ? "approved" : action.kind === "correct" ? "corrected" : action.kind === "hold" ? "held" : "rejected";
         toast(t(`review.${key}`), "ok");
-        setHandled((n) => n + 1);
-        if (action.kind === "hold") setIndex((i) => Math.min(i + 1, Math.max(0, list.length - 1)));
-        // The item leaves the queue (unless held); the same index now shows the next one.
-        await queryClient.invalidateQueries({ queryKey: ["pipeline", "review"] });
-        void out;
+        if (action.kind === "hold") {
+          // Held fields stay in the queue (marked held); step past it.
+          queryClient.setQueryData<ReviewItem[]>(queueKey, (old) => old?.map((x) => (x.id === item.id ? { ...x, status: "held" } : x)));
+          setIndex((i) => Math.min(i + 1, Math.max(0, list.length - 1)));
+        } else {
+          // The field leaves the queue; the same index now shows the next one.
+          setHandled((n) => n + 1);
+          queryClient.setQueryData<ReviewItem[]>(queueKey, (old) => old?.filter((x) => x.id !== item.id));
+        }
+        if (focusInList) focusOptionRef.current = true;
+        void queryClient.invalidateQueries({ queryKey: REVIEW_QUEUE_KEY });
+        return true;
       } catch (e) {
         toast(describeError(e, t), "danger");
+        void queryClient.invalidateQueries({ queryKey: REVIEW_QUEUE_KEY });
+        return false;
       } finally {
         setBusy(false);
       }
     },
-    [busy, current, list.length, t, toast],
+    [busy, current, list.length, queueKey, t, toast],
   );
 
-  const next = () => setIndex((i) => (list.length === 0 ? 0 : (i + 1) % list.length));
+  const selectRow = useCallback((i: number) => setIndex(i), []);
+  /** Keyboard navigation: the selection moves and, when an option had focus, focus follows it. */
+  const moveTo = (i: number) => {
+    focusOptionRef.current = listRef.current?.contains(document.activeElement) ?? false;
+    setIndex(i);
+  };
   const openEdit = () => {
     if (!current) return;
     setEditValue(current.value ?? "");
     setEditOpen(true);
   };
+  const saveEdit = async () => {
+    const value = editValue.trim();
+    if (!value || busy) return;
+    if (await apply({ kind: "correct", value })) setEditOpen(false);
+  };
   const approveDocument = async () => {
-    if (!current) return;
+    if (!current || busy) return;
+    const docId = current.document_id;
+    setBusy(true);
     try {
-      const n = await api.pipelineReviewApproveDocument(current.document_id, null);
+      const n = await api.pipelineReviewApproveDocument(docId, null);
       toast(t("review.doc_approved", { count: n }), "ok");
+      setHandled((h) => h + list.filter((x) => x.document_id === docId).length);
+      queryClient.setQueryData<ReviewItem[]>(queueKey, (old) => old?.filter((x) => x.document_id !== docId));
+      void queryClient.invalidateQueries({ queryKey: REVIEW_QUEUE_KEY });
     } catch (e) {
       toast(describeError(e, t), "danger");
+      void queryClient.invalidateQueries({ queryKey: REVIEW_QUEUE_KEY });
+    } finally {
+      setBusy(false);
     }
   };
   const reextract = async (profile: "fine_print" | null, precise: boolean) => {
@@ -113,6 +256,11 @@ export function ReviewPage() {
     } catch (e) {
       toast(describeError(e, t), "danger");
     }
+  };
+  const commitThreshold = async (v: number) => {
+    await updateSettings((s) => void (s.processing.review_threshold = v));
+    // Existing flags are recomputed only by future extractions / "re-run validation"; refresh what the backend reports now.
+    void queryClient.invalidateQueries({ queryKey: queryKeys.pipeline });
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -129,17 +277,23 @@ export function ReviewPage() {
       void apply({ kind: "hold" });
     } else if (e.key === "n" || e.key === "N" || e.key === "ArrowDown") {
       e.preventDefault();
-      next();
+      moveTo(nextIndex);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setIndex((i) => Math.max(0, i - 1));
+      moveTo(Math.max(0, safeIndex - 1));
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      moveTo(0);
+    } else if (e.key === "End") {
+      e.preventDefault();
+      moveTo(Math.max(0, list.length - 1));
     } else if (e.key === "r" || e.key === "R") {
       e.preventDefault();
       void apply({ kind: "reject" });
     }
   };
 
-  const threshold = settings?.processing.review_threshold ?? 0.8;
+  const docChipName = filter.document ? (list.find((x) => x.document_id === filter.document)?.document_name ?? shortId(filter.document)) : null;
 
   return (
     <div ref={rootRef} tabIndex={-1} onKeyDown={onKeyDown} className="flex h-full min-h-0 flex-col outline-none" data-testid="page-review">
@@ -156,7 +310,7 @@ export function ReviewPage() {
             <SelectItem value="all">{t("review.filters.all")}</SelectItem>
             {(docTypes ?? []).map((d) => (
               <SelectItem key={d.slug} value={d.slug}>
-                {docTypeLabel(d.slug, docTypes, t, i18n.language)}
+                {docTypeLabel(d.slug, docTypes, t, lang)}
               </SelectItem>
             ))}
           </SelectContent>
@@ -174,15 +328,20 @@ export function ReviewPage() {
             ))}
           </SelectContent>
         </Select>
-        {filter.document && (
-          <Button size="sm" variant="ghost" onClick={() => setFilter({ reviewDocument: null })} data-testid="review-clear-document">
+        {docChipName && (
+          <Button size="sm" variant="ghost" onClick={() => setFilter({ reviewDocument: null })} aria-label={t("review.filters.clear_document", { name: docChipName })} title={t("review.filters.clear_document", { name: docChipName })} data-testid="review-clear-document">
             <X />
-            {t("review.filters.document")}
+            <span className="max-w-48 truncate">{t("review.filters.document_chip", { name: docChipName })}</span>
           </Button>
         )}
-        <div className="flex items-center gap-2 text-xs" title={t("settings.processing.review_threshold_hint")}>
-          <span>{t("review.threshold", { value: threshold.toFixed(2) })}</span>
-          <Slider min={0.5} max={1} step={0.05} value={[threshold]} onValueCommit={([v]) => void updateSettings((s) => void (s.processing.review_threshold = v ?? 0.8))} className="w-32" aria-label={t("settings.processing.review_threshold")} data-testid="review-threshold" />
+        <div className="flex flex-col gap-0.5 text-xs" title={t("settings.processing.review_threshold_hint")}>
+          <div className="flex items-center gap-2">
+            <span>{t("review.threshold", { value: threshold.toFixed(2) })}</span>
+            <Slider min={0.5} max={1} step={0.05} value={[threshold]} onValueCommit={([v]) => void commitThreshold(v ?? DEFAULT_REVIEW_THRESHOLD)} className="w-32" aria-label={t("settings.processing.review_threshold")} data-testid="review-threshold" />
+          </div>
+          <p className="max-w-64 text-[11px] leading-tight text-fg-muted" data-testid="review-threshold-hint">
+            {t("review.threshold_hint")}
+          </p>
         </div>
       </header>
       <div className="flex items-center gap-3 border-b border-border px-4 py-1.5 text-xs text-fg-muted" data-testid="review-stats">
@@ -192,54 +351,39 @@ export function ReviewPage() {
           <Kbd chord="Enter" /> {t("review.approve")} · <Kbd chord="E" /> {t("review.edit")} · <Kbd chord="S" /> {t("review.hold")} · <Kbd chord="N" /> {t("review.next")} · <Kbd chord="R" /> {t("review.reject")}
         </span>
       </div>
+      {/* Screen readers hear which field is current as the selection moves or the queue advances. */}
+      <div aria-live="polite" aria-atomic="true" className="sr-only" data-testid="review-live">
+        {current ? t("review.announce", { title: currentTitle, index: safeIndex + 1, total: list.length }) : !isLoading && list.length === 0 ? t("review.empty") : ""}
+      </div>
       <div className="flex min-h-0 flex-1">
-        <ul ref={listRef} className="w-80 shrink-0 overflow-y-auto border-r border-border" aria-label={t("review.list")} data-testid="review-list">
+        <div ref={scrollRef} className="w-80 shrink-0 overflow-y-auto border-r border-border">
           {isLoading && !items && (
-            <li className="p-3">
+            <div className="p-3">
               <Spinner />
-            </li>
+            </div>
           )}
           {list.length === 0 && !isLoading && (
-            <li className="p-3 text-sm text-fg-muted" data-testid="review-empty">
+            <p className="p-3 text-sm text-fg-muted" data-testid="review-empty">
               {t("review.empty")}
-            </li>
+            </p>
           )}
-          {list.map((item, i) => (
-            <li key={item.id} data-index={i}>
-              <button
-                type="button"
-                onClick={() => setIndex(i)}
-                className={cn("flex w-full flex-col gap-0.5 border-b border-border px-3 py-2 text-left text-sm hover:bg-bg-sunken", i === index && "bg-accent-soft")}
-                aria-current={i === index ? "true" : undefined}
-                data-testid={`review-item-${item.id}`}
-                data-field-path={item.path}
-              >
-                <span className="flex items-center gap-1">
-                  <span className="truncate font-medium">{fieldTitle(item, t, i18n.language)}</span>
-                  <Badge variant={reasonVariant(item.review_reason)} className="ml-auto text-[10px]">
-                    {item.review_reason ? t(`pipeline.reason.${item.review_reason}`) : ""}
-                  </Badge>
-                </span>
-                <span className="truncate text-xs text-fg-muted">
-                  {item.document_name} · {docTypeLabel(item.doc_type, docTypes, t, i18n.language)}
-                </span>
-                <span className={cn("text-xs", `text-${confidenceTone(item.confidence)}`)}>
-                  {confidenceGlyph(item.confidence)} {formatConfidence(item.confidence)} · {item.value ?? t("viewer.fields.empty_value")}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
+          <ul ref={listRef} role="listbox" aria-label={t("review.list")} className="relative w-full" style={{ height: virtualizer.getTotalSize() }} data-review-list="" data-testid="review-list">
+            {virtualizer.getVirtualItems().map((row) => {
+              const item = list[row.index];
+              return item ? <ReviewRow key={item.id} item={item} index={row.index} selected={row.index === safeIndex} start={row.start} threshold={toneThreshold} docTypes={docTypes} lang={lang} t={t} onSelect={selectRow} measure={virtualizer.measureElement} /> : null;
+            })}
+          </ul>
+        </div>
         <section className="flex min-w-0 flex-1 flex-col gap-3 overflow-y-auto p-4" aria-label={t("review.current")}>
           {current ? (
             <>
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-base font-semibold" data-testid="review-current-title">
-                  {fieldTitle(current, t, i18n.language)}
+                  {currentTitle}
                 </h2>
                 <Badge variant={reasonVariant(current.review_reason)}>{current.review_reason ? t(`pipeline.reason.${current.review_reason}`) : ""}</Badge>
-                <Badge variant={confidenceTone(current.confidence)} data-testid="review-current-confidence">
-                  {confidenceGlyph(current.confidence)} {formatConfidence(current.confidence)}
+                <Badge variant={confidenceTone(current.confidence, toneThreshold)} data-testid="review-current-confidence">
+                  {confidenceGlyph(current.confidence, toneThreshold)} {formatConfidence(current.confidence)}
                 </Badge>
                 {current.status === "held" && <Badge variant="warn">{t("pipeline.field_status.held")}</Badge>}
                 <span className="ml-auto flex items-center gap-1">
@@ -253,7 +397,7 @@ export function ReviewPage() {
                   <Button size="sm" variant="ghost" onClick={() => void reextract(null, true)}>
                     {t("review.reextract_precise")}
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={() => void approveDocument()} data-testid="review-approve-doc">
+                  <Button size="sm" variant="ghost" onClick={() => void approveDocument()} disabled={busy} data-testid="review-approve-doc">
                     {t("review.approve_doc")}
                   </Button>
                 </span>
@@ -304,7 +448,7 @@ export function ReviewPage() {
                   <X />
                   {t("review.reject")} <Kbd chord="R" />
                 </Button>
-                <Button variant="ghost" onClick={next} data-testid="review-next">
+                <Button variant="ghost" onClick={() => setIndex(nextIndex)} data-testid="review-next">
                   <ChevronRight />
                   {t("review.next")} <Kbd chord="N" />
                 </Button>
@@ -315,8 +459,22 @@ export function ReviewPage() {
           )}
         </section>
       </div>
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="max-w-md" closeLabel={t("common.close")} data-testid="review-edit-dialog">
+      <Dialog
+        open={editOpen}
+        onOpenChange={(open) => {
+          if (!open && busy) return; // the correction is in flight: keep the dialog until it settles
+          setEditOpen(open);
+        }}
+      >
+        <DialogContent
+          className="max-w-md"
+          closeLabel={t("common.close")}
+          onCloseAutoFocus={(e) => {
+            e.preventDefault();
+            rootRef.current?.focus({ preventScroll: true });
+          }}
+          data-testid="review-edit-dialog"
+        >
           <DialogHeader>
             <DialogTitle>{t("review.edit_title")}</DialogTitle>
             <DialogDescription>{t("review.edit_hint")}</DialogDescription>
@@ -328,31 +486,22 @@ export function ReviewPage() {
             onKeyDown={(e) => {
               if (e.key === "Enter" && !isComposing(e)) {
                 e.preventDefault();
-                setEditOpen(false);
-                void apply({ kind: "correct", value: editValue });
+                void saveEdit();
               }
             }}
             aria-label={t("review.value")}
             data-testid="review-edit-input"
           />
           <DialogFooter>
-            <Button variant="secondary" onClick={() => setEditOpen(false)}>
+            <Button variant="secondary" onClick={() => setEditOpen(false)} disabled={busy}>
               {t("common.cancel")}
             </Button>
-            <Button
-              onClick={() => {
-                setEditOpen(false);
-                void apply({ kind: "correct", value: editValue });
-              }}
-              disabled={!editValue.trim()}
-              data-testid="review-edit-save"
-            >
+            <Button onClick={() => void saveEdit()} disabled={busy || !editValue.trim()} aria-busy={busy || undefined} data-testid="review-edit-save">
               {t("common.save")}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      {status && status.review_fields > 0 && list.length === 0 && filter.docType === "all" && filter.reason === "all" && !filter.document && <span className="sr-only">{t("home.review_fields", { count: status.review_fields })}</span>}
     </div>
   );
 }

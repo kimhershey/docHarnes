@@ -1,31 +1,16 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+
+import { createWorkspace, freshApp } from "./helpers";
 
 // P1 acceptance (design §4.1): engine lifecycle, model import / download /
 // load and the job list, driven against the browser mock backend (the real
 // llama-server path is covered by the Rust integration tests).
-
-async function freshApp(page: Page) {
-  await page.goto("/");
-  await page.evaluate(() => {
-    localStorage.clear();
-    localStorage.setItem("doculens.mock.fast", "1");
-  });
-  await page.reload();
-}
-
-async function createWorkspace(page: Page, path = "C:\\Work\\Docs") {
-  await expect(page.getByTestId("onboarding")).toBeVisible();
-  await page.getByTestId("workspace-path").fill(path);
-  await expect(page.getByTestId("workspace-inspection")).toBeVisible();
-  await page.getByTestId("workspace-submit").click();
-  await expect(page.getByTestId("hardware-panel")).toBeVisible();
-  await page.getByTestId("onboarding-next").click();
-}
+// The tests stay on the onboarding model step (`finish: false`) so step 3 can be inspected.
 
 test.describe("P1 engine & models", () => {
   test("engine auto-starts, import registers a model, load shows it ready in the status bar", async ({ page }) => {
     await freshApp(page);
-    await createWorkspace(page);
+    await createWorkspace(page, undefined, { finish: false });
     await page.getByTestId("onboarding-finish").click();
     await expect(page.getByTestId("app-shell")).toBeVisible();
 
@@ -70,7 +55,7 @@ test.describe("P1 engine & models", () => {
 
   test("download job installs a registry model and engine stop/start buttons work", async ({ page }) => {
     await freshApp(page);
-    await createWorkspace(page);
+    await createWorkspace(page, undefined, { finish: false });
     await page.getByTestId("onboarding-finish").click();
     await page.getByTestId("nav-models").click();
     await expect(page.getByTestId("engine-state")).toHaveText("실행 중", { timeout: 10_000 });
@@ -95,7 +80,7 @@ test.describe("P1 engine & models", () => {
 
   test("onboarding step 3 offers download and import, and English labels exist", async ({ page }) => {
     await freshApp(page);
-    await createWorkspace(page);
+    await createWorkspace(page, undefined, { finish: false });
     await expect(page.getByText("다운로드 시작")).toBeVisible();
     await expect(page.getByText("GGUF 가져오기…")).toBeVisible();
     await page.getByText("GGUF 가져오기…").click();

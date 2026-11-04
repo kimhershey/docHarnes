@@ -42,6 +42,8 @@ pub struct PipelineDeps<'a> {
     pub profile: Profile,
     pub pii_masking: bool,
     pub cancel: Option<&'a AtomicBool>,
+    /// Context size of the loaded model instance (prompt budgeting); `None` = unknown.
+    pub ctx: Option<u32>,
 }
 
 impl PipelineDeps<'_> {
@@ -83,7 +85,7 @@ pub fn process(
     let documents = db.with(|c| repo::candidate_documents(c, &req.document_ids))?;
     let doc_types = db.with(repo::doc_types)?;
     let profile = req.profile.unwrap_or(deps.profile);
-    let vlm = Vlm { chat: deps.chat, model: deps.model.clone(), profile, cancel: deps.cancel };
+    let vlm = Vlm::new(deps.chat, deps.model.clone(), profile, deps.cancel).with_context(deps.ctx);
     let mut report = ProcessReport::default();
     for id in &req.document_ids {
         if !documents.iter().any(|d| &d.id == id) {
@@ -102,6 +104,8 @@ pub fn process(
         };
         match process_document(deps, &vlm, &doc_types, req, doc, &mut stage_progress) {
             Ok(out) => {
+                // A completed run clears the failure of an earlier attempt (status counts).
+                let _ = db.with(|c| repo::set_pipeline_error(c, &doc.id, None));
                 report.processed.push(doc.id.clone());
                 report.classified += out.classified as u32;
                 report.ocr_pages += out.ocr_pages;
@@ -253,12 +257,8 @@ fn process_document(
             if let Some(t) = &text {
                 if ocr::table_cells(t) >= deps.settings.dense_cells as usize {
                     // Dense page (§3.4 밀집 영역): a second pass at the fine-print budget.
-                    let fine = Vlm {
-                        chat: vlm.chat,
-                        model: vlm.model.clone(),
-                        profile: Profile::FinePrint,
-                        cancel: vlm.cancel,
-                    };
+                    let fine =
+                        Vlm::new(vlm.chat, vlm.model.clone(), Profile::FinePrint, vlm.cancel).with_context(vlm.ctx);
                     if let Some(img2) = page_image(&cache, page, fine.params(Stage::Ocr).image_tokens.unwrap_or(3_072))?
                     {
                         match ocr::ocr_page(&fine, &img2.url, None) {
@@ -292,7 +292,7 @@ fn process_document(
     }
 
     // ---- 3. extraction -----------------------------------------------------
-    if extraction_pages(&pages, deps.settings.kie_max_pages as usize).is_empty() {
+    if extraction_pages(&pages, deps.settings.kie_max_pages as usize, &req.pages).is_empty() {
         // Blank-only / unrendered documents have nothing to extract; not an error.
         log::info!("pipeline {}: no usable pages, extraction skipped", doc.id);
         return Ok(out);
@@ -316,7 +316,7 @@ fn process_document(
         )
     })?;
     let started = Instant::now();
-    match extract_document(deps, vlm, &schema, &pages, precise, progress) {
+    match extract_document(deps, vlm, &schema, &pages, &req.pages, precise, progress) {
         Ok((merged, second, run_usage, pages_done)) => {
             usage.add(run_usage);
             let texts: BTreeMap<u32, String> =
@@ -329,6 +329,9 @@ fn process_document(
             let built = extract::build_fields(&schema, &merged, second.as_ref(), &texts, opts, &doc.id);
             let review_pending = built.review_count > 0;
             let field_count = built.fields.len() as u32;
+            // Nothing unmasked reaches the database or the mirror (§3.8).
+            let merged = extract::mask_output(&schema.definition, &merged, deps.pii_masking);
+            let second = second.map(|s| extract::mask_output(&schema.definition, &s, deps.pii_masking));
             let raw = if let Some(s) = &second { json!({ "primary": merged, "second": s }) } else { merged.clone() };
             let (rid, did, sid) = (run_id.clone(), doc.id.clone(), schema.id.clone());
             db.with_tx(|tx| {
@@ -418,15 +421,26 @@ pub fn resolve_schema(db: &Db, doc: &DocumentRecord, choice: &SchemaChoice) -> R
     })
 }
 
-/// Pages the extractor sees: non-blank pages with a render or text, the first
-/// `kie_max_pages − 1` plus the last one.
-fn extraction_pages(pages: &[PageRecord], max: usize) -> Vec<&PageRecord> {
-    let usable: Vec<&PageRecord> =
-        pages.iter().filter(|p| p.is_blank != Some(true) && (p.width_px > 0 || has_text(p))).collect();
-    if usable.len() <= max.max(1) {
+/// Pages the extractor sees: non-blank pages with a render or text (restricted to
+/// `only` when given), the first `kie_max_pages − 1` plus the last one; a budget of
+/// one page means the first page.
+pub(crate) fn extraction_pages<'a>(pages: &'a [PageRecord], max: usize, only: &[u32]) -> Vec<&'a PageRecord> {
+    let usable: Vec<&PageRecord> = pages
+        .iter()
+        .filter(|p| {
+            (only.is_empty() || only.contains(&p.page_no))
+                && p.is_blank != Some(true)
+                && (p.width_px > 0 || has_text(p))
+        })
+        .collect();
+    let max = max.max(1);
+    if usable.len() <= max {
         return usable;
     }
-    let mut chosen: Vec<&PageRecord> = usable[..max.max(1) - 1].to_vec();
+    if max == 1 {
+        return vec![usable[0]];
+    }
+    let mut chosen: Vec<&PageRecord> = usable[..max - 1].to_vec();
     chosen.push(usable[usable.len() - 1]);
     chosen
 }
@@ -438,11 +452,12 @@ fn extract_document(
     vlm: &Vlm<'_>,
     schema: &SchemaRecord,
     pages: &[PageRecord],
+    only: &[u32],
     precise: bool,
     progress: StageProgress<'_>,
 ) -> Result<Extracted> {
     let cache = DocumentCache::for_document(deps.import.paths, &pages[0].document_id);
-    let chosen = extraction_pages(pages, deps.settings.kie_max_pages as usize);
+    let chosen = extraction_pages(pages, deps.settings.kie_max_pages as usize, only);
     if chosen.is_empty() {
         return Err(CoreError::Invalid("no usable pages (blank or unrendered)".into()));
     }

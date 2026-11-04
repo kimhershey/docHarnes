@@ -1,49 +1,15 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 import ko from "../src/i18n/ko.json" with { type: "json" };
+import { createWorkspace, freshApp, importViaLibrary, tpl } from "./helpers";
 
 const t_general_badge = ko.answer.general_badge;
-const t_summary = (key: string, vars: Record<string, number>) => ko.knowledge.wizard.summary.replace(/\{\{(\w+)\}\}/g, (_, k: string) => String(vars[k]));
 
 // P3 acceptance (design §4.1): ingest wizard → chunking/index status →
 // collections → hybrid search with highlights → grounded answers with
 // per-sentence citations (assistant + viewer), explain/summary, glossary,
 // versions and settings — against the browser mock backend. Korean
 // morphology / recall@10 are covered by the Rust golden-set tests.
-
-async function freshApp(page: Page, flags: Record<string, string> = {}) {
-  await page.goto("/");
-  await page.evaluate((f) => {
-    localStorage.clear();
-    localStorage.setItem("doculens.mock.fast", "1");
-    for (const [k, v] of Object.entries(f)) localStorage.setItem(k, v);
-  }, flags);
-  await page.reload();
-}
-
-async function createWorkspace(page: Page, path = "C:\\Work\\Docs") {
-  await expect(page.getByTestId("onboarding")).toBeVisible();
-  await page.getByTestId("workspace-path").fill(path);
-  await expect(page.getByTestId("workspace-inspection")).toBeVisible();
-  await page.getByTestId("workspace-submit").click();
-  await expect(page.getByTestId("hardware-panel")).toBeVisible();
-  await page.getByTestId("onboarding-next").click();
-  await page.getByTestId("onboarding-finish").click();
-  await expect(page.getByTestId("app-shell")).toBeVisible();
-}
-
-async function importViaLibrary(page: Page, paths: string[]) {
-  await page.getByTestId("nav-library").click();
-  await page.getByTestId("library-import").click();
-  await page.getByTestId("doc-import-paths").fill(paths.join("\n"));
-  await page.getByTestId("doc-import-preview").click();
-  await expect(page.getByTestId("doc-import-plan")).toBeVisible();
-  await page.getByTestId("doc-import-run").click();
-  for (const p of paths) {
-    const name = p.split("\\").pop()!;
-    await expect(page.locator(`[data-testid^="doc-card-"][data-doc-name="${name}"]`)).toHaveAttribute("data-doc-status", "rendered", { timeout: 15_000 });
-  }
-}
 
 test.describe("P3 knowledge base", () => {
   test("ingest wizard indexes documents into a collection and search finds them with highlights", async ({ page }) => {
@@ -60,7 +26,7 @@ test.describe("P3 knowledge base", () => {
     await page.getByTestId("ingest-new-collection").fill("사내 규정");
     await page.getByTestId("ingest-preview").click();
     await expect(page.getByTestId("ingest-plan")).toBeVisible();
-    await expect(page.getByTestId("ingest-plan")).toContainText(t_summary("", { new: 2, relink: 0, dup: 0, registered: 0, unsupported: 0 }));
+    await expect(page.getByTestId("ingest-plan")).toContainText(tpl(ko.knowledge.wizard.summary, { new: 2, relink: 0, dup: 0, registered: 0, unsupported: 0 }));
     await page.getByTestId("ingest-start").click();
     await expect(page.getByTestId("ingest-wizard")).toBeHidden();
 
@@ -76,7 +42,7 @@ test.describe("P3 knowledge base", () => {
     await page.getByTestId("knowledge-tab-collections").click();
     const col = page.locator('[data-testid="collection-item"][data-collection-name="사내 규정"]');
     await expect(col).toBeVisible();
-    await expect(col).toContainText(ko.knowledge.collections.docs_count.replace("{{count}}", "2"));
+    await expect(col).toContainText(tpl(ko.knowledge.collections.docs_count, { count: 2 }));
     await col.click();
     await expect(page.getByTestId("collection-doc")).toHaveCount(2);
 

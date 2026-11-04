@@ -33,6 +33,20 @@ pub trait ChatBackend: Send + Sync {
         }
         Ok(res)
     }
+    /// Completion that gives up at the next streamed token once `cancelled()`
+    /// turns true (the server drops the abandoned request), so a cancel or a
+    /// workspace switch does not wait for a whole OCR page.
+    fn complete_cancellable(&self, req: &ChatRequest, cancelled: &dyn Fn() -> bool) -> Result<ChatResponse> {
+        let mut text = String::new();
+        let mut res = self.chat_stream(req, &mut |d| {
+            text.push_str(d);
+            !cancelled()
+        })?;
+        if res.content.is_empty() {
+            res.content = text;
+        }
+        Ok(res)
+    }
 }
 
 impl ChatBackend for EngineManager {

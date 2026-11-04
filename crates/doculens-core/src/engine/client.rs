@@ -69,6 +69,14 @@ impl RouterModel {
     pub fn min_device_bytes(&self) -> Option<u64> {
         sum_device_bytes(self.memory.as_ref()?.get("min")?)
     }
+    /// Context size of the running instance (`memory.effective.n_ctx`, else `min.n_ctx`).
+    pub fn context_size(&self) -> Option<u32> {
+        let m = self.memory.as_ref()?;
+        ["effective", "min"]
+            .iter()
+            .find_map(|k| m.get(k)?.get("n_ctx")?.as_u64())
+            .map(|n| n.min(u32::MAX as u64) as u32)
+    }
     /// Load progress 0..1 from the `progress` object.
     pub fn progress_value(&self) -> Option<f32> {
         self.progress.as_ref()?.get("value")?.as_f64().map(|v| v as f32)
@@ -440,6 +448,11 @@ impl RouterClient {
                     out.content.push_str(delta);
                     if !on_delta(delta) {
                         return Err(CoreError::Cancelled);
+                    }
+                }
+                if let Some(r) = choice.get("delta").and_then(|d| d.get("reasoning_content")).and_then(Value::as_str) {
+                    if !r.is_empty() {
+                        out.reasoning.get_or_insert_with(String::new).push_str(r);
                     }
                 }
                 if let Some(fr) = choice.get("finish_reason").and_then(Value::as_str) {

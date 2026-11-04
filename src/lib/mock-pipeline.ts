@@ -11,6 +11,7 @@ import {
   emit,
   err,
   finishJob,
+  hasActiveJob,
   isCancelled,
   loadDocs,
   loadSettings,
@@ -48,9 +49,35 @@ import {
   type SchemaRecord,
   type SchemaSource,
   type ValidationIssue,
+  type VisionModelInfo,
 } from "./types";
 
 const KEY = "doculens.mock.pipeline";
+
+/**
+ * `localStorage.doculens.mock.vision` = ready (default) | not_loaded | none | engine_off — set by
+ * Playwright (and by hand in the browser) to exercise the no-model / engine-off paths of the UI.
+ */
+const VISION_KEY = "doculens.mock.vision";
+type VisionMode = "ready" | "not_loaded" | "none" | "engine_off";
+const VISION_MODEL = "qwen3.5-4b-q6k";
+
+function visionMode(): VisionMode {
+  try {
+    const v = localStorage.getItem(VISION_KEY);
+    return v === "not_loaded" || v === "none" || v === "engine_off" ? v : "ready";
+  } catch {
+    return "ready";
+  }
+}
+
+function visionInfo(): VisionModelInfo {
+  const mode = visionMode();
+  return { model: mode === "none" ? null : VISION_MODEL, engine_running: mode !== "engine_off", loaded: mode === "ready" };
+}
+
+/** Requests that arrived while a pipeline job was running; drained in order when it finishes (like the shell's queue). */
+const pendingProcess: ProcessRequest[] = [];
 
 interface PState {
   schemas: SchemaRecord[];
@@ -705,6 +732,15 @@ async function processJob(req: ProcessRequest): Promise<string | null> {
   const settings = loadSettings();
   const docs = wsDocs().filter((d) => req.document_ids.includes(d.id) && !["importing", "missing", "error"].includes(d.status));
   if (req.document_ids.length === 0) throw err("invalid", "no documents");
+  const mode = visionMode();
+  if (mode === "engine_off") throw err("invalid", "engine_not_running");
+  if (mode === "none") throw err("invalid", "no_model");
+  // One pipeline job at a time (like the shell): a later request is queued and runs afterwards.
+  if (hasActiveJob("pipeline")) {
+    pendingProcess.push(req);
+    changed("status");
+    return null;
+  }
   const job = createJob("pipeline", `${req.document_ids.length} documents`);
   void (async () => {
     const s = load();
@@ -716,6 +752,11 @@ async function processJob(req: ProcessRequest): Promise<string | null> {
     const processed: string[] = [];
     updateJob(job.id, { detail: "loading model" });
     await simulate(job.id, 2, 120, () => undefined);
+    if (mode === "not_loaded") {
+      // The shell loads the vision model on first use; from here on the status reports it as loaded.
+      localStorage.setItem(VISION_KEY, "ready");
+      changed("status");
+    }
     for (const [i, d0] of docs.entries()) {
       if (isCancelled(job.id)) break;
       const doc = loadDocs().find((x) => x.id === d0.id);
@@ -820,6 +861,9 @@ async function processJob(req: ProcessRequest): Promise<string | null> {
     else finishJob(job.id, { ok: true, detail: `processed ${processed.length} / classified ${classified} / ocr pages ${ocrPages} / extracted ${extracted} / review ${review} / failed ${failed.length}` });
     const kb = await import("./mock-knowledge");
     kb.autoIndex();
+    const next = pendingProcess.shift();
+    if (next) void processJob(next).catch(() => undefined);
+    changed("status");
   })();
   return job.id;
 }
@@ -832,7 +876,13 @@ export function autoProcess(ids: string[], level: AutoProcessingLevel | null, so
   const map: Record<AutoProcessingLevel, PipelineLevel | null> = { none: null, classify_only: "classify", classify_and_ocr: "ocr", full: "extract" };
   const target = map[lvl];
   if (!target) return;
-  void processJob({ document_ids: ids, level: target });
+  const mode = visionMode();
+  if (mode === "engine_off" || mode === "none") {
+    // The shell skips the auto pipeline and notifies the library instead of failing the import.
+    changed(mode === "engine_off" ? "engine_off" : "no_model");
+    return;
+  }
+  void processJob({ document_ids: ids, level: target }).catch(() => undefined);
 }
 
 // ---------------------------------------------------------------------------
@@ -860,7 +910,7 @@ function saveSchema(s: PState, draft: SchemaDraft): SchemaRecord {
   if (draft.id) {
     const cur = s.schemas.find((x) => x.id === draft.id);
     if (!cur) throw err("invalid", "schema_not_found");
-    versionsOf(s, cur.id).unshift({ version: cur.version, definition: structuredClone(cur.definition), note: draft.note, created_at: now() });
+    pushVersion(cur.id, { version: cur.version, definition: structuredClone(cur.definition), note: draft.note, created_at: now() });
     cur.name = name;
     cur.name_en = draft.name_en?.trim() || null;
     cur.doc_type = draft.doc_type.trim();
@@ -898,14 +948,31 @@ function saveSchema(s: PState, draft: SchemaDraft): SchemaRecord {
 }
 
 const VERSIONS_KEY = "doculens.mock.schema-versions";
-function versionsOf(s: PState, id: string): { version: number; definition: SchemaDef; note: string | null; created_at: string }[] {
-  void s;
-  const all = JSON.parse(localStorage.getItem(VERSIONS_KEY) ?? "{}") as Record<string, { version: number; definition: SchemaDef; note: string | null; created_at: string }[]>;
-  const list = all[id] ?? [];
-  all[id] = list;
-  // Persist on every access so unshift() above is stored.
-  queueMicrotask(() => localStorage.setItem(VERSIONS_KEY, JSON.stringify(all)));
-  return list;
+
+interface SchemaVersion {
+  version: number;
+  definition: SchemaDef;
+  note: string | null;
+  created_at: string;
+}
+
+function loadVersions(): Record<string, SchemaVersion[]> {
+  try {
+    return JSON.parse(localStorage.getItem(VERSIONS_KEY) ?? "{}") as Record<string, SchemaVersion[]>;
+  } catch {
+    return {};
+  }
+}
+
+/** Records the schema's current definition as a version before it is overwritten (persisted right away). */
+function pushVersion(id: string, entry: SchemaVersion): void {
+  const all = loadVersions();
+  (all[id] ??= []).unshift(entry);
+  localStorage.setItem(VERSIONS_KEY, JSON.stringify(all));
+}
+
+function versionsOf(id: string): SchemaVersion[] {
+  return loadVersions()[id] ?? [];
 }
 
 const SLUGS: Record<string, string> = { 견적서: "quotation", 발주서: "purchase_order", 거래명세서: "transaction_statement", 공문: "official_letter", 보고서: "report", 회의록: "minutes", 청구서: "bill", 휴가신청서: "leave_request", 출장신청서: "trip_request", 계약서: "contract", 신청서: "application_form", 영수증: "receipt", 세금계산서: "tax_invoice" };
@@ -1099,9 +1166,9 @@ function status(s: PState): PipelineStatus {
     reviewed: docs.filter((d) => d.status === "reviewed").length,
     review_fields: pending.length,
     failed: docs.filter((d) => d.pipeline_error).length,
-    running: false,
-    queued: 0,
-    model: { model: "qwen3.5-4b-q6k", engine_running: true, loaded: true },
+    running: hasActiveJob("pipeline"),
+    queued: pendingProcess.length,
+    model: visionInfo(),
     review_threshold: settings.processing.review_threshold,
   };
 }
@@ -1178,7 +1245,7 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
       return sc;
     }
     case "pipeline_schema_versions":
-      return versionsOf(s, String(a.id));
+      return versionsOf(String(a.id));
     case "pipeline_schema_save": {
       const saved = saveSchema(s, a.draft as SchemaDraft);
       save(s);
@@ -1222,6 +1289,8 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
     case "pipeline_form_derive": {
       const doc = wsDocs().find((d) => d.id === a.documentId);
       if (!doc) throw err("not_found", String(a.documentId));
+      // Scanned forms need the vision model; HWPX / DOCX / HWP forms are derived from their structure.
+      if (visionMode() === "none" && !["hwpx", "docx", "hwp"].includes(doc.source_kind)) throw err("invalid", "no_model");
       await new Promise((res) => setTimeout(res, 150));
       return deriveForm(doc, (a.name as string | null) ?? null);
     }

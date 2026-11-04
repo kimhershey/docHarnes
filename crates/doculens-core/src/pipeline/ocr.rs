@@ -186,10 +186,18 @@ pub fn strip_tags(s: &str) -> String {
 pub fn table_csv(t: &ExtractedTable) -> String {
     let mut s = String::from("\u{feff}");
     let quote = |c: &str| {
-        if c.contains(',') || c.contains('"') || c.contains('\n') {
-            format!("\"{}\"", c.replace('"', "\"\""))
+        // Spreadsheet formula injection guard: a cell that would be evaluated (=, @, tab, CR,
+        // or +/- not followed by a digit) is stored as text.
+        let mut cell = c.to_string();
+        let evaluated = cell.starts_with(['=', '@', '\t', '\r'])
+            || (cell.starts_with(['+', '-']) && !cell[1..].starts_with(|ch: char| ch.is_ascii_digit()));
+        if evaluated {
+            cell.insert(0, '\'');
+        }
+        if cell.contains(',') || cell.contains('"') || cell.contains('\n') {
+            format!("\"{}\"", cell.replace('"', "\"\""))
         } else {
-            c.to_string()
+            cell
         }
     };
     if !t.header.is_empty() {
@@ -227,5 +235,12 @@ mod tests {
         assert_eq!(table_cells(text), 8);
         let csv = table_csv(&tables[0]);
         assert!(csv.starts_with('\u{feff}') && csv.contains("라떼 & 우유,\"5,000\","));
+        let hostile = ExtractedTable {
+            page: 1,
+            index: 0,
+            header: vec![],
+            rows: vec![vec!["=SUM(A1)".into(), "-500".into(), "+cmd".into()]],
+        };
+        assert!(table_csv(&hostile).contains("'=SUM(A1),-500,'+cmd"));
     }
 }

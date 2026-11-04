@@ -1181,6 +1181,8 @@ export interface SchemaRecord {
   enabled: boolean;
   is_default: boolean;
   use_count: number;
+  /** Change note of the current version (older notes are in the version list). */
+  note?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -1209,7 +1211,7 @@ export function draftFromSchema(s: SchemaRecord): SchemaDraft {
     description_en: s.description_en,
     definition: structuredClone(s.definition),
     form_document_id: s.form_document_id,
-    note: null,
+    note: s.note ?? null,
   };
 }
 

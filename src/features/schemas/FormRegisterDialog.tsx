@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -24,28 +24,46 @@ export function FormRegisterDialog({ open, onOpenChange, documentId, onDraft }: 
   const [docId, setDocId] = useState<string>("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  // Sequence of the model request this dialog is waiting for. Closing or
+  // cancelling bumps it, so a result that arrives afterwards is dropped
+  // instead of replacing whatever the user has opened in the editor meanwhile.
+  const requestSeq = useRef(0);
+  const dropPending = useCallback(() => {
+    requestSeq.current += 1;
+    setBusy(false);
+  }, []);
   useEffect(() => {
     if (open) {
       setDocId(documentId ?? "");
       setName("");
-      setBusy(false);
+    } else {
+      dropPending();
     }
-  }, [open, documentId]);
+  }, [open, documentId, dropPending]);
+
+  const close = () => {
+    dropPending();
+    onOpenChange(false);
+  };
   const derive = async () => {
     if (!docId) return;
+    requestSeq.current += 1;
+    const seq = requestSeq.current;
     setBusy(true);
     try {
       const d = await api.pipelineFormDerive(docId, name.trim() || null);
+      if (seq !== requestSeq.current) return; // closed / cancelled while the model was working
+      setBusy(false);
       onDraft(d);
       onOpenChange(false);
     } catch (e) {
-      toast(describeError(e, t), "danger");
-    } finally {
+      if (seq !== requestSeq.current) return;
       setBusy(false);
+      toast(describeError(e, t), "danger");
     }
   };
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(o) => (o ? onOpenChange(true) : close())}>
       <DialogContent closeLabel={t("common.close")} data-testid="form-register-dialog">
         <DialogHeader>
           <DialogTitle>{t("schemas.form.title")}</DialogTitle>
@@ -76,14 +94,17 @@ export function FormRegisterDialog({ open, onOpenChange, documentId, onDraft }: 
             <Input id="form-name" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("schemas.form.name_hint")} data-testid="form-register-name" />
           </div>
         </div>
-        <DialogFooter>
+        <DialogFooter className="items-center">
           {busy && (
-            <span className="mr-auto flex items-center gap-2 text-sm text-fg-muted" role="status">
-              <Spinner />
-              {t("schemas.form.deriving")}
+            <span className="mr-auto flex flex-col gap-0.5 text-sm text-fg-muted" role="status" data-testid="form-register-pending">
+              <span className="flex items-center gap-2">
+                <Spinner />
+                {t("schemas.form.deriving")}
+              </span>
+              <span className="text-xs text-fg-subtle">{t("schemas.pending_hint")}</span>
             </span>
           )}
-          <Button variant="secondary" onClick={() => onOpenChange(false)}>
+          <Button variant="secondary" onClick={close} data-testid="form-register-cancel">
             {t("common.cancel")}
           </Button>
           <Button onClick={() => void derive()} disabled={busy || !docId} data-testid="form-register-derive">

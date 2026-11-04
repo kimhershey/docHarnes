@@ -1,5 +1,6 @@
+import type { TFunction } from "i18next";
 import { Copy, FilePlus2, MessageSquareText, Save, Star, Trash2, Upload } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router";
 
@@ -27,6 +28,44 @@ function emptyDraft(): SchemaDraft {
   return { id: null, name: "", name_en: null, doc_type: "", source: "user", description_ko: null, description_en: null, definition: { fields: [newFieldDef("field_1")], rules: [] }, form_document_id: null, note: null };
 }
 
+/** A schema the user just saved under a new type slug: offers to re-classify the documents typed "other". */
+interface NewType {
+  slug: string;
+  name: string;
+  name_en: string | null;
+}
+
+/** One entry of the schema list; module-level + memoized so editor keystrokes neither remount nor re-render the list. */
+const SchemaRow = memo(function SchemaRow({ s, selected, onSelect, ko, t }: { s: SchemaRecord; selected: boolean; onSelect: (s: SchemaRecord) => void; ko: boolean; t: TFunction }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(s)}
+      className={cn("flex w-full flex-col gap-1 rounded-md border px-2 py-1.5 text-left text-sm hover:bg-bg-sunken", selected ? "border-accent bg-accent-soft" : "border-transparent")}
+      aria-current={selected ? "true" : undefined}
+      data-testid={`schema-row-${s.id}`}
+      data-schema-doc-type={s.doc_type}
+    >
+      <span className="flex items-center gap-1">
+        <span className="truncate font-medium">{ko ? s.name : (s.name_en ?? s.name)}</span>
+        {s.is_default && (
+          <Badge variant="ok" className="text-[10px]">
+            {t("schemas.default")}
+          </Badge>
+        )}
+        {!s.enabled && (
+          <Badge variant="muted" className="text-[10px]">
+            {t("schemas.list.disabled")}
+          </Badge>
+        )}
+      </span>
+      <span className="flex items-center gap-1 text-xs text-fg-subtle">
+        <code>{s.doc_type}</code> · {t(`schemas.source.${s.source}`)} · {t("schemas.version", { version: s.version })} · {t("schemas.uses", { count: s.use_count })}
+      </span>
+    </button>
+  );
+});
+
 /**
  * 추출 스키마 / 양식 screen (design §3.7.2): registered forms + sample forms,
  * the field grid, NL create/modify, form registration, type → schema mapping,
@@ -49,7 +88,7 @@ export function SchemasPage() {
   const [formDoc, setFormDoc] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const [testDoc, setTestDoc] = useState("");
-  const [newType, setNewType] = useState<string | null>(null);
+  const [newType, setNewType] = useState<NewType | null>(null);
   const { data: versions } = useSchemaVersions(draft?.id ?? null);
   const { data: docs } = useDocuments({ limit: 300, sort: "imported_desc" });
   const { data: otherDocs } = useDocuments({ doc_type: "other", limit: 1000 }, !!newType);
@@ -72,11 +111,36 @@ export function SchemasPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [registerDoc]);
 
-  const select = (s: SchemaRecord) => {
-    setSelectedId(s.id);
-    setDraft(draftFromSchema(s));
-    setDirty(false);
-  };
+  /**
+   * Every replacement of a dirty draft (another schema, a new / duplicated / generated
+   * draft) is confirmed first. In-app route changes are not blocked: the app runs on a
+   * declarative `HashRouter`, and react-router's `useBlocker` needs a data router.
+   */
+  const guardDirty = useCallback(
+    (action: () => void) => {
+      if (!dirty) {
+        action();
+        return;
+      }
+      setConfirm({
+        title: t("schemas.editor.discard"),
+        description: t("schemas.editor.discard_confirm"),
+        confirmLabel: t("schemas.editor.discard"),
+        danger: true,
+        onConfirm: action,
+      });
+    },
+    [dirty, t],
+  );
+  const select = useCallback(
+    (s: SchemaRecord) =>
+      guardDirty(() => {
+        setSelectedId(s.id);
+        setDraft(draftFromSchema(s));
+        setDirty(false);
+      }),
+    [guardDirty],
+  );
   const openDraft = (d: SchemaDraft) => {
     setSelectedId(d.id);
     setDraft(d);
@@ -86,6 +150,13 @@ export function SchemasPage() {
     setDraft(d);
     setDirty(true);
   };
+  const newSchema = () => guardDirty(() => openDraft(emptyDraft()));
+  const openNl = (base: SchemaRecord | null) =>
+    guardDirty(() => {
+      setNlBase(base);
+      setNlOpen(true);
+    });
+  const openForm = () => guardDirty(() => setFormOpen(true));
 
   const save = async () => {
     if (!draft) return;
@@ -93,7 +164,7 @@ export function SchemasPage() {
     try {
       const saved = draft.source === "form" && !draft.id ? await api.pipelineFormRegister(draft) : await api.pipelineSchemaSave(draft);
       toast(draft.source === "form" && !draft.id ? t("schemas.editor.registered") : t("schemas.editor.saved"), "ok");
-      if (!draft.id && !docTypes?.some((d) => d.slug === saved.doc_type)) setNewType(saved.doc_type);
+      if (!draft.id && !docTypes?.some((d) => d.slug === saved.doc_type)) setNewType({ slug: saved.doc_type, name: saved.name, name_en: saved.name_en });
       await queryClient.invalidateQueries({ queryKey: queryKeys.schemas });
       await queryClient.invalidateQueries({ queryKey: queryKeys.docTypes });
       setSelectedId(saved.id);
@@ -118,6 +189,7 @@ export function SchemasPage() {
           if (selectedId === s.id) {
             setSelectedId(null);
             setDraft(null);
+            setDirty(false);
           }
         } catch (e) {
           toast(describeError(e, t), "danger");
@@ -138,7 +210,18 @@ export function SchemasPage() {
       toast(describeError(e, t), "danger");
     }
   };
-  const duplicate = (s: SchemaRecord) => openDraft({ ...draftFromSchema(s), id: null, name: `${s.name} (복제)`, source: "user", form_document_id: null });
+  // The Korean name gets the Korean suffix and the English name the English one, whatever the UI language.
+  const duplicate = (s: SchemaRecord) =>
+    guardDirty(() =>
+      openDraft({
+        ...draftFromSchema(s),
+        id: null,
+        name: i18n.getFixedT("ko")("schemas.editor.duplicate_name", { name: s.name }),
+        name_en: s.name_en ? i18n.getFixedT("en")("schemas.editor.duplicate_name", { name: s.name_en }) : null,
+        source: "user",
+        form_document_id: null,
+      }),
+    );
   const testRun = async () => {
     if (!draft?.id || !testDoc) return;
     try {
@@ -160,33 +243,6 @@ export function SchemasPage() {
     }
   };
 
-  const Row = ({ s }: { s: SchemaRecord }) => (
-    <button
-      type="button"
-      onClick={() => select(s)}
-      className={cn("flex w-full flex-col gap-1 rounded-md border px-2 py-1.5 text-left text-sm hover:bg-bg-sunken", selectedId === s.id ? "border-accent bg-accent-soft" : "border-transparent")}
-      data-testid={`schema-row-${s.id}`}
-      data-schema-doc-type={s.doc_type}
-    >
-      <span className="flex items-center gap-1">
-        <span className="truncate font-medium">{ko ? s.name : (s.name_en ?? s.name)}</span>
-        {s.is_default && (
-          <Badge variant="ok" className="text-[10px]">
-            {t("schemas.default")}
-          </Badge>
-        )}
-        {!s.enabled && (
-          <Badge variant="muted" className="text-[10px]">
-            {t("schemas.list.disabled")}
-          </Badge>
-        )}
-      </span>
-      <span className="flex items-center gap-1 text-xs text-fg-subtle">
-        <code>{s.doc_type}</code> · {t(`schemas.source.${s.source}`)} · {t("schemas.version", { version: s.version })} · {t("schemas.uses", { count: s.use_count })}
-      </span>
-    </button>
-  );
-
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="page-schemas">
       <header className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
@@ -194,22 +250,22 @@ export function SchemasPage() {
           <h1 className="text-lg font-semibold">{t("schemas.title")}</h1>
           <p className="text-xs text-fg-muted">{t("schemas.subtitle")}</p>
         </div>
-        <Button size="sm" onClick={() => setFormOpen(true)} data-testid="schemas-register-form">
+        <Button size="sm" onClick={openForm} data-testid="schemas-register-form">
           <Upload />
           {t("schemas.register_form")}
         </Button>
-        <Button size="sm" variant="secondary" onClick={() => { setNlBase(null); setNlOpen(true); }} data-testid="schemas-nl-create">
+        <Button size="sm" variant="secondary" onClick={() => openNl(null)} data-testid="schemas-nl-create">
           <MessageSquareText />
           {t("schemas.nl_create")}
         </Button>
-        <Button size="sm" variant="secondary" onClick={() => openDraft(emptyDraft())} data-testid="schemas-new">
+        <Button size="sm" variant="secondary" onClick={newSchema} data-testid="schemas-new">
           <FilePlus2 />
           {t("schemas.new")}
         </Button>
       </header>
       {newType && (
-        <div className="flex items-center gap-2 border-b border-border bg-info-soft px-4 py-1.5 text-xs" role="status" data-testid="schemas-reclassify-banner">
-          <span>{t("schemas.reclassify.banner", { name: newType, count: otherDocs?.length ?? 0 })}</span>
+        <div className="flex items-center gap-2 border-b border-border bg-info-soft px-4 py-1.5 text-xs" role="status" data-testid="schemas-reclassify-banner" data-new-type={newType.slug}>
+          <span>{t("schemas.reclassify.banner", { name: ko ? newType.name : (newType.name_en ?? newType.name), count: otherDocs?.length ?? 0 })}</span>
           <Button size="sm" variant="secondary" className="h-6" onClick={() => void reclassify()} disabled={!otherDocs || otherDocs.length === 0}>
             {t("schemas.reclassify.run")}
           </Button>
@@ -223,12 +279,12 @@ export function SchemasPage() {
           {isLoading && <Spinner />}
           <div>
             <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-subtle">{t("schemas.list.user")}</h2>
-            {user.length === 0 ? <p className="text-xs text-fg-muted">{t("schemas.list.empty")}</p> : user.map((s) => <Row key={s.id} s={s} />)}
+            {user.length === 0 ? <p className="text-xs text-fg-muted">{t("schemas.list.empty")}</p> : user.map((s) => <SchemaRow key={s.id} s={s} selected={selectedId === s.id} onSelect={select} ko={ko} t={t} />)}
           </div>
           <div>
             <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-subtle">{t("schemas.list.builtin")}</h2>
             {builtin.map((s) => (
-              <Row key={s.id} s={s} />
+              <SchemaRow key={s.id} s={s} selected={selectedId === s.id} onSelect={select} ko={ko} t={t} />
             ))}
           </div>
           <Card>
@@ -238,6 +294,16 @@ export function SchemasPage() {
             </CardHeader>
             <CardContent className="p-3 pt-0">
               <table className="w-full text-xs" data-testid="schemas-mapping">
+                <thead>
+                  <tr className="text-left text-fg-subtle">
+                    <th scope="col" className="py-1 font-medium">
+                      {t("schemas.mapping.type")}
+                    </th>
+                    <th scope="col" colSpan={2} className="py-1 font-medium">
+                      {t("schemas.mapping.schema")}
+                    </th>
+                  </tr>
+                </thead>
                 <tbody>
                   {(docTypes ?? []).map((d) => (
                     <tr key={d.slug} className="border-t border-border">
@@ -277,7 +343,7 @@ export function SchemasPage() {
                         <Copy />
                         {t("schemas.editor.duplicate")}
                       </Button>
-                      <Button size="sm" variant="ghost" onClick={() => { setNlBase(selected); setNlOpen(true); }} data-testid="schema-nl-modify">
+                      <Button size="sm" variant="ghost" onClick={() => openNl(selected)} data-testid="schema-nl-modify">
                         <MessageSquareText />
                         {t("schemas.nl_modify")}
                       </Button>

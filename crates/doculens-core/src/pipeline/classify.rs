@@ -26,10 +26,16 @@ pub fn classify_page(
             serde_json::json!({ "role": "system", "content": prompts::SYSTEM_JSON }),
             user_message_with_image(&prompts::classify(doc_types), url),
         ],
-        (None, Some(t)) => vec![
-            serde_json::json!({ "role": "system", "content": prompts::SYSTEM_JSON }),
-            user_message(&prompts::classify_text(doc_types, t)),
-        ],
+        (None, Some(t)) => {
+            let p = vlm.params(Stage::Classify);
+            let fixed = prompts::classify(doc_types).chars().count() + prompts::SYSTEM_JSON.chars().count();
+            let budget = prompts::text_budget(vlm.ctx, 0, p.max_tokens, fixed, prompts::CLASSIFY_TEXT_CHARS);
+            let shortened = prompts::truncate(t, budget.max(200));
+            vec![
+                serde_json::json!({ "role": "system", "content": prompts::SYSTEM_JSON }),
+                user_message(&prompts::classify_text(doc_types, &shortened)),
+            ]
+        }
         (None, None) => {
             return Ok((
                 PageClass { doc_type: "other".into(), rotation: 0, is_blank: true, language: "ko".into() },

@@ -15,6 +15,12 @@ interface PipelineState {
   notice: PipelineChanged["kind"] | null;
   init: () => Promise<void>;
   setReviewFilter: (patch: Partial<Pick<PipelineState, "reviewDocType" | "reviewReason" | "reviewDocument">>) => void;
+  /**
+   * Narrow the review queue to one document (the type / reason filters are reset so the whole
+   * document shows). Sets the filter only; callers navigate to `/review` themselves, e.g.
+   * `usePipelineStore.getState().openReviewForDocument(id); navigate("/review")`.
+   */
+  openReviewForDocument: (id: string) => void;
   clearNotice: () => void;
 }
 
@@ -58,5 +64,6 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
   },
 
   setReviewFilter: (patch) => set(patch),
+  openReviewForDocument: (id) => set({ reviewDocument: id, reviewDocType: "all", reviewReason: "all" }),
   clearNotice: () => set({ notice: null }),
 }));

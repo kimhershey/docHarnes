@@ -64,7 +64,8 @@
     "collapse": "Collapse sidebar",
     "expand": "Expand sidebar",
     "main": "Main",
-    "phase2_group": "Phase 2"
+    "phase2_group": "Phase 2",
+    "with_pending": "{{label}}, {{count}} pending"
   },
   "topbar": {
     "command": "Natural-language command or search…",
@@ -537,6 +538,7 @@
       "render_dpi": "Default render DPI",
       "review_threshold": "Review threshold",
       "review_threshold_hint": "Fields below this confidence go to the review queue.",
+      "review_threshold_scope": "Applies to new extractions and to 'Re-run validation' in the Fields tab; flags of already extracted documents stay as they are.",
       "audit_sample": "Random audit sample of high-confidence fields",
       "organize_reviewed_only": "Organize/move reviewed documents only",
       "inbox_watch": "Watch the inbox folder",
@@ -550,7 +552,8 @@
       "precise_mode": "Precision mode (second sample agreement)",
       "precise_hint": "A second sample (T=0.3) lowers the confidence of values that differ. Time ×1.5–2.",
       "dense_reocr": "Fine-print re-OCR of dense pages",
-      "dense_reocr_hint": "Pages with {{cells}}+ table cells get a second OCR pass at the fine-print budget."
+      "dense_reocr_hint": "Pages with {{cells}}+ table cells get a second OCR pass at the fine-print budget.",
+      "dense_cells": "Table cells that make a page dense"
     },
     "privacy": {
       "pii_masking": "Store identifiers masked",
@@ -746,7 +749,7 @@
       "version_group_empty": "Enter a version group name.",
       "no_active_model": "No model is loaded in the engine. Load one on the Models screen and retry.",
       "embedding_model_not_installed": "The embedding model is not installed. Install it on the Models screen.",
-      "no_text": "This document has no text layer (scans are supported after P4 OCR).",
+      "no_text": "This document has no text. Run OCR ('Process ▸ Classify + OCR') and try again.",
       "document_id_required": "Select a document first.",
       "glossary_term_taken": "That term already exists.",
       "collection_not_found": "Collection not found (it may have been deleted).",
@@ -780,7 +783,7 @@
   "jobs": {
     "title": "Jobs",
     "clear_finished": "Clear finished",
-    "p5_hint": "P1 only has model load / import / download / hash jobs. Pause, priorities and retries arrive in phase P5.",
+    "p5_hint": "Jobs run in the order requested; document processing (classify · OCR · extract) runs one job at a time (later requests wait). Pause, priorities and retries arrive in a later phase.",
     "tabs": {
       "active": "Active",
       "finished": "Finished"
@@ -867,10 +870,6 @@
       "delete_title": "Delete documents",
       "open_doc": "Open document",
       "add_to_kb": "Add to knowledge base",
-      "process": "Process",
-      "classify": "Classify",
-      "ocr": "OCR",
-      "extract": "Extract",
       "register_form": "Register as form",
       "merge": "Merge"
     },
@@ -882,7 +881,8 @@
       "imported": "Imported",
       "size": "Size",
       "doc_type": "Type",
-      "confidence": "Confidence"
+      "confidence": "Confidence",
+      "review": "Review"
     },
     "pages_count": "{{count}} page(s)",
     "converted": "converted",
@@ -905,6 +905,7 @@
     "kb_added": "Added {{count}} documents to '{{name}}'.",
     "kb_added_one": "Added {{count}} document to '{{name}}'.",
     "review_pending": "Review",
+    "review_open": "Open in the review queue: {{name}}",
     "process_started": "Processing started."
   },
   "documents": {
@@ -984,7 +985,10 @@
     "items": "Files to import",
     "auto_level": "Auto-process after import",
     "auto_level_default": "Use setting ({{level}})",
-    "eta": "Estimated ~{{minutes}} min (30–50 s per page, model load excluded)"
+    "eta": "Estimated ~{{minutes}} min (30–50 s per page, model load excluded)",
+    "eta_ocr": "Estimated ~{{minutes}} min (20–30 s per page, no extraction, model load excluded)",
+    "eta_classify": "Estimated ~{{minutes}} min (10–20 s per document, classification only, model load excluded)",
+    "eta_short": "Estimated under a minute (model load excluded)"
   },
   "viewer": {
     "back": "Library",
@@ -1032,6 +1036,7 @@
       "imported": "Imported",
       "dpi": "Render DPI",
       "text_layer": "Text layer",
+      "doc_type_source": "Type source",
       "yes": "yes",
       "no": "no"
     },
@@ -1082,7 +1087,6 @@
     },
     "explain_with_chord": "Explain ({{chord}})",
     "fields": {
-      "title": "Fields",
       "run": "Run #{{n}}",
       "schema": "Schema",
       "none": "No extraction yet. Start one with 'Process'.",
@@ -1092,7 +1096,6 @@
       "hold": "Hold",
       "next": "Next",
       "reject": "Reject",
-      "validation": "Validation",
       "revalidate": "Re-run validation",
       "revalidated": "Validation re-run.",
       "evidence": "Evidence",
@@ -1105,7 +1108,11 @@
       "edit_placeholder": "New value",
       "empty_value": "(none)",
       "page_link": "p.{{page}}",
-      "schema_changed": "Schema changed. Re-extract to apply it."
+      "schema_changed": "Schema changed. Re-extract to apply it.",
+      "precise": "precise",
+      "run_select": "Select run",
+      "open_queue": "Open in review queue",
+      "more": "More actions"
     },
     "tables": {
       "none": "No tables found in the text. HTML tables and Markdown tables from OCR appear here.",
@@ -1141,6 +1148,7 @@
       "done": "Reviewed"
     },
     "confidence_badge": "Confidence {{value}}",
+    "type_changed_title": "Re-extract with the new type",
     "type_changed": "Type changed. Re-extract with the new type's schema?",
     "reextract": "Re-extract",
     "ocr_badge": "OCR"
@@ -1378,7 +1386,6 @@
       "precise": "Re-extract in precision mode",
       "classify": "Classify only",
       "ocr": "Classify + OCR",
-      "extract": "Extract (keep existing results)",
       "force": "From scratch (overwrite results)",
       "started": "Processing started ({{count}} document(s)).",
       "queued": "Queued behind the running pipeline job ({{count}} document(s)).",
@@ -1386,7 +1393,20 @@
       "engine_off": "Auto-processing was skipped: the engine is off. Start it, or enable auto-start in Settings.",
       "model_ready": "Vision model {{model}} ready",
       "model_not_loaded": "Vision model {{model}} is not loaded; it loads when processing starts.",
-      "model_none": "No vision model. Install one in the Model manager."
+      "model_none": "No vision model. Install one in the Model manager.",
+      "confirm_title": "Replace existing extraction results",
+      "confirm_body": "{{count}} document(s) already have extraction results; a new run replaces them. Approvals and corrections of the previous run stay in the History tab, but the Fields tab and the review queue switch to the new results.",
+      "confirm_ok": "Extract again"
+    },
+    "status": {
+      "label": "Processing pipeline",
+      "ready": "Model ready",
+      "not_loaded": "Model not loaded",
+      "none": "No model",
+      "engine_off": "Engine off",
+      "running": "Processing",
+      "running_count": "Processing {{count}}",
+      "queued": "{{count}} queued"
     },
     "review_status": {
       "none": "No review needed",
@@ -1398,7 +1418,6 @@
       "manual": "Manual",
       "form": "Form"
     },
-    "confidence": "Confidence",
     "reason": {
       "low_confidence": "Low confidence",
       "validation_failed": "Validation failed",
@@ -1470,6 +1489,7 @@
       "form": "Form"
     },
     "uses": "{{count}} use(s)",
+    "pending_hint": "Waiting for the model. Cancelling discards the result when it arrives.",
     "editor": {
       "name": "Name (Korean)",
       "name_en": "Name (English)",
@@ -1510,11 +1530,30 @@
       "test_hint": "Extracts the chosen document with this schema (fill rate in the viewer's Fields tab).",
       "test_started": "Test extraction started.",
       "test_pick": "Choose document",
-      "form_doc": "Form document",
       "open_form_doc": "Open form document",
       "new_draft": "New schema (unsaved)",
       "unsaved": "You have unsaved changes.",
-      "discard": "Discard"
+      "discard": "Discard",
+      "discard_confirm": "You have unsaved changes. Discard them and continue?",
+      "duplicate_name": "{{name}} (copy)"
+    },
+    "lint": {
+      "fields_empty": "A schema needs at least one field.",
+      "fields_many": "More than {{n}} fields.",
+      "key_duplicate": "Duplicate key.",
+      "key_reserved": "value / evidence / confidence are reserved keys.",
+      "key_format": "Keys must be ASCII snake_case (a-z, 0-9, _).",
+      "label_missing": "A Korean or English label is required.",
+      "regex_anchor": "Regex hints must be anchored ^…$ (validator only; not part of the grammar).",
+      "regex_feature": "Look-around / flags are not supported by the grammar.",
+      "enum_empty": "A choice field needs at least one option.",
+      "enum_large": "More than {{n}} options bloat the grammar.",
+      "nesting": "Tables and groups cannot be nested (no $ref in the grammar).",
+      "children_empty": "A table / group needs at least one column.",
+      "columns_many": "More than {{n}} columns.",
+      "children_ignored": "A scalar field cannot have columns.",
+      "options_ignored": "Options only apply to choice fields.",
+      "rule_unknown": "Unknown rule '{{detail}}' is ignored."
     },
     "mapping": {
       "title": "Type → schema mapping",
@@ -1559,13 +1598,15 @@
       "doc_type": "Type",
       "reason": "Reason",
       "document": "Document",
+      "document_chip": "Document: {{name}}",
+      "clear_document": "Clear document filter ({{name}})",
       "all": "All"
     },
     "empty": "Nothing to review.",
     "count": "{{count}} fields",
     "count_one": "{{count}} field",
     "threshold": "Threshold {{value}}",
-    "keys": "Enter approve · E edit · S hold · N next · R reject",
+    "threshold_hint": "Applies to future extractions and 'Re-run validation'; items already flagged stay as they are.",
     "approve": "Approve",
     "edit": "Edit",
     "hold": "Hold",
@@ -1588,9 +1629,9 @@
     "edit_title": "Edit value",
     "edit_hint": "Type the value as printed; amounts and dates are normalised on save.",
     "no_image": "No page image.",
-    "document_promoted": "The document is now 'reviewed'.",
     "list": "Review items",
     "current": "Current item",
-    "status_line": "{{done}} / {{total}} handled"
+    "status_line": "{{done}} / {{total}} handled",
+    "announce": "Current item {{title}} ({{index}}/{{total}})"
   }
 }

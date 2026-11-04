@@ -1,39 +1,27 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { createWorkspace, freshApp } from "./helpers";
+
 // P0 acceptance (design §4.1): "empty screens work together with theme and
 // language switching", plus settings persistence and the NL pre-router.
+// These run the mock at its normal speed and check the detected tier on the way in.
 
-async function freshApp(page: Page) {
-  await page.goto("/");
-  await page.evaluate(() => localStorage.clear());
-  await page.reload();
-}
-
-async function createWorkspace(page: Page, path = "C:\\Work\\Docs") {
-  await expect(page.getByTestId("onboarding")).toBeVisible();
-  await page.getByTestId("workspace-path").fill(path);
-  await expect(page.getByTestId("workspace-inspection")).toBeVisible();
-  await page.getByTestId("workspace-submit").click();
-  await expect(page.getByTestId("hardware-panel")).toBeVisible();
-  await expect(page.getByTestId("tier-badge")).toHaveText("8 GB");
-  await page.getByTestId("onboarding-next").click();
-  await page.getByTestId("onboarding-finish").click();
-  await expect(page.getByTestId("app-shell")).toBeVisible();
-}
+const freshShell = (page: Page) => freshApp(page, {}, { fast: false });
+const onboard = (page: Page, path?: string) => createWorkspace(page, path, { expectTier: "8 GB" });
 
 test.describe("P0 shell", () => {
   test("onboarding → home, Korean by default", async ({ page }) => {
-    await freshApp(page);
+    await freshShell(page);
     await expect(page.locator("html")).toHaveAttribute("lang", "ko");
-    await createWorkspace(page);
+    await onboard(page);
     await expect(page.getByTestId("page-home")).toBeVisible();
     await expect(page.getByTestId("nav-settings")).toHaveText("설정");
     await expect(page.getByTestId("workspace-switcher")).toContainText("Docs");
   });
 
   test("all four themes apply and persist across reload", async ({ page }) => {
-    await freshApp(page);
-    await createWorkspace(page);
+    await freshShell(page);
+    await onboard(page);
     for (const theme of ["dark", "light", "high-contrast", "system"]) {
       await page.getByTestId("theme-menu").click();
       await page.getByTestId(`theme-option-${theme}`).click();
@@ -51,8 +39,8 @@ test.describe("P0 shell", () => {
   });
 
   test("language switch re-renders navigation and persists", async ({ page }) => {
-    await freshApp(page);
-    await createWorkspace(page);
+    await freshShell(page);
+    await onboard(page);
     await page.getByTestId("theme-menu").click();
     await page.getByTestId("language-option-en").click();
     await expect(page.getByTestId("nav-settings")).toHaveText("Settings");
@@ -65,8 +53,8 @@ test.describe("P0 shell", () => {
   });
 
   test("every route renders and the command palette navigates", async ({ page }) => {
-    await freshApp(page);
-    await createWorkspace(page);
+    await freshShell(page);
+    await onboard(page);
     for (const screen of ["library", "search", "assistant", "review", "schemas", "knowledge", "organize", "jobs", "models", "settings", "generate", "projects"]) {
       await page.getByTestId(`nav-${screen}`).click();
       await expect(page.getByTestId(`page-${screen}`)).toBeVisible();
@@ -80,8 +68,8 @@ test.describe("P0 shell", () => {
   });
 
   test("natural-language commands: settings ops run, work items go to the assistant", async ({ page }) => {
-    await freshApp(page);
-    await createWorkspace(page);
+    await freshShell(page);
+    await onboard(page);
     await page.getByTestId("home-command").fill("설정 열어줘");
     await page.getByTestId("home-command-send").click();
     await expect(page.getByTestId("page-settings")).toBeVisible();
@@ -98,8 +86,8 @@ test.describe("P0 shell", () => {
   });
 
   test("settings: workspace path mirrors the active workspace and retention saves", async ({ page }) => {
-    await freshApp(page);
-    await createWorkspace(page, "D:\\Scans\\2026");
+    await freshShell(page);
+    await onboard(page, "D:\\Scans\\2026");
     await page.getByTestId("nav-settings").click();
     await page.getByTestId("settings-tab-workspace").click();
     await expect(page.getByTestId("workspace-path-display")).toHaveText("D:\\Scans\\2026");
@@ -114,8 +102,8 @@ test.describe("P0 shell", () => {
   });
 
   test("model manager lists the registry and switches tier manually", async ({ page }) => {
-    await freshApp(page);
-    await createWorkspace(page);
+    await freshShell(page);
+    await onboard(page);
     await page.getByTestId("nav-models").click();
     await expect(page.getByTestId("registry-table")).toContainText("Qwen3.5-4B");
     await page.getByTestId("tier-mode").click();

@@ -160,9 +160,11 @@ export function HomePage() {
             <CardTitle>{t("home.quick.title")}</CardTitle>
           </CardHeader>
           <CardContent className="grid grid-cols-2 gap-2">
-            <Button variant="secondary" disabled title={t("common.planned_in", { phase: "P2" })}>
-              <FolderInput />
-              {t("home.quick.import")}
+            <Button variant="secondary" asChild>
+              <Link to={`${SCREEN_ROUTES.library}?import=1`} data-testid="home-quick-import">
+                <FolderInput />
+                {t("home.quick.import")}
+              </Link>
             </Button>
             <Button variant="secondary" asChild>
               <Link to={SCREEN_ROUTES.models}>

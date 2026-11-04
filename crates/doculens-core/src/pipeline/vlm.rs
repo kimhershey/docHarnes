@@ -21,6 +21,43 @@ pub struct Vlm<'a> {
     pub model: String,
     pub profile: Profile,
     pub cancel: Option<&'a AtomicBool>,
+    /// Starting temperature override (precision-mode second sample); `None` = stage preset.
+    pub temperature: Option<f32>,
+    /// Sampling seed override (`None` = the fixed default, reproducible runs).
+    pub seed: Option<u64>,
+    /// Context size of the loaded instance (`None` = unknown → preset anchors, adaptive retry only).
+    pub ctx: Option<u32>,
+}
+
+impl<'a> Vlm<'a> {
+    pub fn new(chat: &'a dyn ChatBackend, model: String, profile: Profile, cancel: Option<&'a AtomicBool>) -> Vlm<'a> {
+        Vlm { chat, model, profile, cancel, temperature: None, seed: None, ctx: None }
+    }
+    /// Budgets page-text anchors against the instance's context size.
+    pub fn with_context(mut self, ctx: Option<u32>) -> Vlm<'a> {
+        self.ctx = ctx;
+        self
+    }
+    /// The same backend with its own sampling (second sample of precision mode).
+    pub fn with_sampling(mut self, temperature: Option<f32>, seed: Option<u64>) -> Vlm<'a> {
+        self.temperature = temperature;
+        self.seed = seed;
+        self
+    }
+}
+
+/// HTTP 4xx from the server: the request itself is wrong (grammar rejected, context
+/// overflow) and repeating it cannot help.
+fn is_client_error(e: &CoreError) -> bool {
+    matches!(e, CoreError::Engine(m) if m.contains("HTTP 4"))
+}
+
+/// llama-server's output parser rejected what the model generated ("The model produced
+/// output that does not match the expected … format": a tool-call fragment inside a JSON
+/// string, an unterminated think tag). Deterministic sampling would reproduce it exactly,
+/// so the retry has to sample differently.
+fn is_output_format_error(e: &CoreError) -> bool {
+    matches!(e, CoreError::Engine(m) if m.contains("does not match the expected"))
 }
 
 /// Token usage of one or more calls.
@@ -56,12 +93,14 @@ impl Vlm<'_> {
         prompts::params(stage, self.profile)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn request(
         &self,
         stage: Stage,
         messages: &[Value],
         schema: Option<(&str, &Value)>,
         temperature: f32,
+        seed: u64,
         max_tokens: u32,
     ) -> ChatRequest {
         let p = self.params(stage);
@@ -73,7 +112,7 @@ impl Vlm<'_> {
             top_p: Some(p.top_p),
             top_k: Some(p.top_k),
             chat_template_kwargs: Some(prompts::template_kwargs()),
-            seed: Some(7),
+            seed: Some(seed),
             ..Default::default()
         };
         if let Some((name, s)) = schema {
@@ -92,19 +131,27 @@ impl Vlm<'_> {
         max_tokens: Option<u32>,
     ) -> Result<Reply> {
         let p = self.params(stage);
-        let mut temperature = p.temperature;
+        let mut temperature = self.temperature.unwrap_or(p.temperature);
+        let mut seed = self.seed.unwrap_or(7);
         let mut budget = max_tokens.unwrap_or(p.max_tokens);
         let mut usage = Usage::default();
         let mut last_err: Option<CoreError> = None;
         let mut last: Option<ChatResponse> = None;
+        let cancelled = || self.cancelled();
         for attempt in 1..=MAX_ATTEMPTS {
             if self.cancelled() {
                 return Err(CoreError::Cancelled);
             }
-            let req = self.request(stage, messages, schema, temperature, budget);
-            match self.chat.complete(&req) {
+            let req = self.request(stage, messages, schema, temperature, seed, budget);
+            match self.chat.complete_cancellable(&req, &cancelled) {
+                Err(CoreError::Cancelled) => return Err(CoreError::Cancelled),
+                Err(e) if is_client_error(&e) => return Err(e),
                 Err(e) => {
                     log::warn!("{} attempt {attempt}: {e}", stage.as_str());
+                    if is_output_format_error(&e) {
+                        seed += 1;
+                        temperature = (temperature + 0.1).min(0.5);
+                    }
                     last_err = Some(e);
                     continue;
                 }
@@ -115,20 +162,57 @@ impl Vlm<'_> {
                         usage.calls += 1;
                     }
                     if res.reasoning.is_some() {
-                        // Thinking leaked despite `enable_thinking: false` → retry (design §3.4).
-                        log::warn!("{} attempt {attempt}: reasoning_content present, retrying", stage.as_str());
-                        last_err = Some(CoreError::engine("model produced reasoning_content with thinking disabled"));
-                        continue;
+                        // Thinking leaked despite `enable_thinking: false` (design §3.4). A usable
+                        // answer is kept (logged); an empty one is retried with other sampling.
+                        if res.content.trim().is_empty() && attempt < MAX_ATTEMPTS {
+                            log::warn!(
+                                "{} attempt {attempt}: reasoning_content without content, retrying",
+                                stage.as_str()
+                            );
+                            last_err =
+                                Some(CoreError::engine("model produced reasoning_content with thinking disabled"));
+                            seed += 1;
+                            temperature = (temperature + 0.1).min(0.5);
+                            continue;
+                        }
+                        log::warn!(
+                            "{} attempt {attempt}: reasoning_content present, keeping the answer",
+                            stage.as_str()
+                        );
                     }
                     let truncated = res.finish_reason.as_deref() == Some("length");
-                    if truncated && attempt < MAX_ATTEMPTS && stage != Stage::Ocr {
-                        // JSON cut mid-way is unusable; give the model more room once.
-                        budget = (budget * 3 / 2).min(8_192);
-                        last = Some(res);
-                        continue;
+                    // A reply that already fills the context cannot grow: a bigger budget would
+                    // only repeat the (slow) generation and be cut at the same place.
+                    let context_full = match (self.ctx, res.usage.as_ref()) {
+                        (Some(ctx), Some(u)) => u.prompt_tokens + u.completion_tokens + 16 >= ctx as u64,
+                        _ => false,
+                    };
+                    if truncated && context_full {
+                        log::warn!(
+                            "{}: reply cut by the context size ({:?} tokens), not retrying",
+                            stage.as_str(),
+                            self.ctx
+                        );
+                        return Ok(Reply { content: res.content, usage, truncated, attempts: attempt });
                     }
-                    if prompts::looks_looped(&res.content) && attempt < MAX_ATTEMPTS {
+                    if truncated && attempt < MAX_ATTEMPTS {
+                        // JSON cut mid-way is unusable: ×1.5 up to three tries. OCR gets one ×2 pass
+                        // (a dense Korean page with tables routinely needs more than 2K tokens).
+                        if stage == Stage::Ocr {
+                            if attempt == 1 {
+                                budget = (budget * 2).min(6_144);
+                                last = Some(res);
+                                continue;
+                            }
+                        } else {
+                            budget = (budget * 3 / 2).min(8_192);
+                            last = Some(res);
+                            continue;
+                        }
+                    }
+                    if !truncated && prompts::looks_looped(&res.content) && attempt < MAX_ATTEMPTS {
                         temperature = (temperature + 0.2).min(0.5);
+                        seed += 1;
                         last = Some(res);
                         continue;
                     }
@@ -139,6 +223,9 @@ impl Vlm<'_> {
         if let Some(res) = last {
             // Exhausted retries with a (possibly looped / truncated) reply: hand it back flagged.
             let truncated = res.finish_reason.as_deref() == Some("length") || prompts::looks_looped(&res.content);
+            if truncated {
+                log::warn!("{}: reply still truncated after {MAX_ATTEMPTS} attempts", stage.as_str());
+            }
             return Ok(Reply { content: res.content, usage, truncated, attempts: MAX_ATTEMPTS });
         }
         Err(last_err.unwrap_or_else(|| CoreError::engine("no reply")))
@@ -205,6 +292,12 @@ pub(crate) mod testing {
         pub ocr: Mutex<Vec<String>>,
         pub finish: Mutex<Option<String>>,
         pub reasoning: Mutex<Option<String>>,
+        /// Error returned by every call while set (transport / HTTP simulation).
+        pub fail_with: Mutex<Option<String>>,
+        /// Errors returned once each, in order, before replies are served.
+        pub fail_queue: Mutex<Vec<String>>,
+        /// `(prompt_tokens, completion_tokens)` reported with every reply.
+        pub usage: Mutex<Option<(u64, u64)>>,
     }
 
     impl StageChat {
@@ -216,6 +309,9 @@ pub(crate) mod testing {
                 ocr: Mutex::new(Vec::new()),
                 finish: Mutex::new(None),
                 reasoning: Mutex::new(None),
+                fail_with: Mutex::new(None),
+                fail_queue: Mutex::new(Vec::new()),
+                usage: Mutex::new(None),
             }
         }
         /// Queues a JSON reply for the named stage (consumed first-in first-out; the last consumed one repeats).
@@ -256,6 +352,15 @@ pub(crate) mod testing {
         }
         fn complete(&self, req: &ChatRequest) -> Result<ChatResponse> {
             self.requests.lock().unwrap().push(req.clone());
+            if let Some(e) = self.fail_with.lock().unwrap().clone() {
+                return Err(CoreError::engine(e));
+            }
+            {
+                let mut q = self.fail_queue.lock().unwrap();
+                if !q.is_empty() {
+                    return Err(CoreError::engine(q.remove(0)));
+                }
+            }
             let content = match Self::stage_of(req) {
                 Some(stage) => {
                     let mut replies = self.replies.lock().unwrap();
@@ -286,10 +391,9 @@ pub(crate) mod testing {
             Ok(ChatResponse {
                 content,
                 finish_reason: Some(self.finish.lock().unwrap().clone().unwrap_or_else(|| "stop".into())),
-                usage: Some(crate::engine::client::ChatUsage {
-                    prompt_tokens: 100,
-                    completion_tokens: 20,
-                    total_tokens: 120,
+                usage: Some({
+                    let (p, c) = self.usage.lock().unwrap().unwrap_or((100, 20));
+                    crate::engine::client::ChatUsage { prompt_tokens: p, completion_tokens: c, total_tokens: p + c }
                 }),
                 timings: None,
                 model: Some("scripted".into()),
@@ -309,7 +413,7 @@ mod tests {
     fn requests_disable_thinking_and_carry_the_preset() {
         let chat = StageChat::new();
         chat.push("probe", json!({ "ok": true }));
-        let vlm = Vlm { chat: &chat, model: "m".into(), profile: Profile::Balanced, cancel: None };
+        let vlm = Vlm::new(&chat, "m".into(), Profile::Balanced, None);
         let (v, reply) = vlm
             .call_json(
                 Stage::Classify,
@@ -330,20 +434,73 @@ mod tests {
 
     #[test]
     fn reasoning_leak_and_truncation_retry() {
+        // A leaked reasoning block with a usable answer is kept (one call, logged).
         let chat = StageChat::new();
         chat.push("probe", json!({ "ok": true }));
         *chat.reasoning.lock().unwrap() = Some("thinking…".into());
-        let vlm = Vlm { chat: &chat, model: "m".into(), profile: Profile::Balanced, cancel: None };
+        let vlm = Vlm::new(&chat, "m".into(), Profile::Balanced, None);
+        let (v, reply) =
+            vlm.call_json(Stage::Kie, &[crate::engine::client::user_message("hi")], "probe", &json!({}), None).unwrap();
+        assert_eq!((v, reply.attempts), (json!({ "ok": true }), 1));
+        assert_eq!(chat.calls("probe"), 1);
+
+        // HTTP 4xx is not retried: the request itself is wrong.
+        let chat = StageChat::new();
+        *chat.fail_with.lock().unwrap() = Some("/v1/chat/completions: HTTP 400: grammar".into());
+        let vlm = Vlm::new(&chat, "m".into(), Profile::Balanced, None);
         let err = vlm
-            .call_json(Stage::Kie, &[crate::engine::client::user_message("hi")], "probe", &json!({}), None)
+            .call(Stage::Kie, &[crate::engine::client::user_message("hi")], Some(("probe", &json!({}))), None)
             .unwrap_err();
-        assert!(err.to_string().contains("reasoning_content"), "{err}");
-        assert_eq!(chat.calls("probe"), MAX_ATTEMPTS as usize);
+        assert!(err.to_string().contains("HTTP 400"), "{err}");
+        assert_eq!(chat.requests.lock().unwrap().len(), 1);
+
+        // OCR truncation gets exactly one doubled budget.
+        let chat = StageChat::new();
+        chat.push_ocr("partial page text");
+        *chat.finish.lock().unwrap() = Some("length".into());
+        let vlm = Vlm::new(&chat, "m".into(), Profile::Balanced, None);
+        let reply = vlm.call(Stage::Ocr, &[crate::engine::client::user_message("ocr")], None, None).unwrap();
+        assert!(reply.truncated && reply.attempts == 2);
+        let budgets: Vec<Option<u32>> = chat.requests.lock().unwrap().iter().map(|r| r.max_tokens).collect();
+        assert_eq!(budgets, vec![Some(2_048), Some(4_096)]);
+
+        // The server's output-format 500 is retried with other sampling (T=0 would repeat it).
+        let chat = StageChat::new();
+        let fmt_err = "stream error: {\"code\":500,\"message\":\"The model produced output that does not match the expected peg-native format\"}";
+        chat.fail_queue.lock().unwrap().extend([fmt_err.to_string(), fmt_err.to_string()]);
+        chat.push("probe", json!({ "ok": true }));
+        let vlm = Vlm::new(&chat, "m".into(), Profile::Balanced, None);
+        let (_, reply) =
+            vlm.call_json(Stage::Kie, &[crate::engine::client::user_message("hi")], "probe", &json!({}), None).unwrap();
+        assert_eq!(reply.attempts, 3);
+        let sampling: Vec<(Option<f32>, Option<u64>)> =
+            chat.requests.lock().unwrap().iter().map(|r| (r.temperature, r.seed)).collect();
+        assert_eq!(sampling, vec![(Some(0.0), Some(7)), (Some(0.1), Some(8)), (Some(0.2), Some(9))]);
+
+        // A reply cut by the context itself is not retried with a bigger budget.
+        let chat = StageChat::new();
+        chat.push("probe", json!({ "ok": true }));
+        *chat.finish.lock().unwrap() = Some("length".into());
+        *chat.usage.lock().unwrap() = Some((3_000, 1_090));
+        let vlm = Vlm::new(&chat, "m".into(), Profile::Balanced, None).with_context(Some(4_096));
+        let reply = vlm
+            .call(Stage::Kie, &[crate::engine::client::user_message("hi")], Some(("probe", &json!({}))), None)
+            .unwrap();
+        assert!(reply.truncated && reply.attempts == 1);
+        assert_eq!(chat.requests.lock().unwrap().len(), 1);
+
+        // The precision-mode sample carries its own temperature and seed.
+        let chat = StageChat::new();
+        chat.push("probe", json!({ "ok": true }));
+        let vlm = Vlm::new(&chat, "m".into(), Profile::Balanced, None).with_sampling(Some(0.3), Some(11));
+        vlm.call_json(Stage::Kie, &[crate::engine::client::user_message("hi")], "probe", &json!({}), None).unwrap();
+        let req = chat.requests.lock().unwrap()[0].clone();
+        assert_eq!((req.temperature, req.seed), (Some(0.3), Some(11)));
 
         let chat = StageChat::new();
         chat.push("probe", json!({ "ok": true }));
         *chat.finish.lock().unwrap() = Some("length".into());
-        let vlm = Vlm { chat: &chat, model: "m".into(), profile: Profile::Balanced, cancel: None };
+        let vlm = Vlm::new(&chat, "m".into(), Profile::Balanced, None);
         let (_, reply) = vlm
             .call_json(Stage::Kie, &[crate::engine::client::user_message("hi")], "probe", &json!({}), Some(100))
             .unwrap();
@@ -364,7 +521,7 @@ mod tests {
         let chat = StageChat::new();
         chat.push("probe", json!({}));
         let flag = AtomicBool::new(true);
-        let vlm = Vlm { chat: &chat, model: "m".into(), profile: Profile::Balanced, cancel: Some(&flag) };
+        let vlm = Vlm::new(&chat, "m".into(), Profile::Balanced, Some(&flag));
         assert!(matches!(vlm.call(Stage::Kie, &[], Some(("probe", &json!({}))), None), Err(CoreError::Cancelled)));
     }
 }

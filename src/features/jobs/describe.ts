@@ -47,5 +47,13 @@ export function describeJobDetail(job: Job, t: TFunction): string | null {
   m = d.match(/^merged (\d+)$/);
   if (m) return t("jobs.detail.merge_summary", { count: Number(m[1]) });
   if (d === "loading model") return t("jobs.detail.loading_model");
+  // Per-document stage progress from `pipeline_bridge.rs`: "<doc> · classify (2/5)", "<doc> · ocr" or a bare
+  // stage; the stage words are the level names, so `pipeline.levels.*` translates them.
+  m = d.match(/^(?:(.+) · )?(classify|ocr|extract)(?: \((\d+)\/(\d+)\))?$/);
+  if (m) {
+    const stage = `${t(`pipeline.levels.${m[2]}`)}${m[3] ? ` (${m[3]}/${m[4]})` : ""}`;
+    return m[1] ? `${m[1]} · ${stage}` : stage;
+  }
+  if (d === "done") return t("jobs.state.done");
   return d;
 }

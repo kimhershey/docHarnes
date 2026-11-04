@@ -15,6 +15,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { isTauri, openExternal, revealPath } from "@/lib/ipc";
 import { useAppInfo, useRegistry } from "@/lib/queries";
+import { queryClient, queryKeys } from "@/lib/query-client";
 import { LANGUAGES, RETENTION_DAY_ITEMS, THEMES, type AutoProcessingLevel, type ReducedMotion, type RetentionPolicy, AUTO_PROCESSING_LEVELS } from "@/lib/types";
 import { describeError } from "@/lib/errors";
 import { cn, formatDate } from "@/lib/utils";
@@ -25,7 +26,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 
 const TABS = ["general", "theme", "workspace", "processing", "knowledge", "privacy", "shortcuts", "about"] as const;
 
-function Row({ label, hint, children, htmlFor }: { label: string; hint?: string; children: React.ReactNode; htmlFor?: string }) {
+function Row({ label, hint, children, htmlFor }: { label: string; hint?: React.ReactNode; children: React.ReactNode; htmlFor?: string }) {
   return (
     <div className="grid gap-2 py-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] md:items-center">
       <div>
@@ -307,6 +308,15 @@ function ProcessingTab() {
   const update = useSettingsStore((s) => s.update);
   const reload = useSettingsStore((s) => s.load);
   const p = settings.processing;
+  // The threshold is read by every new extraction and by "검증 다시 실행": drop the cached pipeline
+  // queries so the status / queue pick the new value up on their next fetch (review M8).
+  const commitThreshold = async (v: number) => {
+    try {
+      await update((s) => void (s.processing.review_threshold = v));
+    } finally {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.pipeline });
+    }
+  };
   return (
     <Card>
       <CardHeader>
@@ -345,23 +355,36 @@ function ProcessingTab() {
           <Switch checked={p.ocr_digital_pdf} onCheckedChange={(v) => void update((s) => void (s.processing.ocr_digital_pdf = v))} data-testid="settings-ocr-digital" />
         </Row>
         <Row label={t("settings.processing.kie_max_pages")} hint={t("settings.processing.kie_max_pages_hint")} htmlFor="kie-max-pages">
-          <Input id="kie-max-pages" type="number" min={1} max={32} className="w-28" defaultValue={p.kie_max_pages} onBlur={(e) => void update((s) => void (s.processing.kie_max_pages = Math.min(32, Math.max(1, Number(e.target.value) || 4))))} />
+          <NumberField id="kie-max-pages" value={p.kie_max_pages} min={1} max={32} step={1} onCommit={(v) => void update((s) => void (s.processing.kie_max_pages = v))} testId="settings-kie-max-pages" />
         </Row>
         <Row label={t("settings.processing.precise_mode")} hint={t("settings.processing.precise_hint")}>
           <Switch checked={p.precise_mode} onCheckedChange={(v) => void update((s) => void (s.processing.precise_mode = v))} data-testid="settings-precise-mode" />
         </Row>
         <Row label={t("settings.processing.dense_reocr")} hint={t("settings.processing.dense_reocr_hint", { cells: p.dense_cells })}>
-          <Switch checked={p.dense_reocr} onCheckedChange={(v) => void update((s) => void (s.processing.dense_reocr = v))} />
+          <Switch checked={p.dense_reocr} onCheckedChange={(v) => void update((s) => void (s.processing.dense_reocr = v))} data-testid="settings-dense-reocr" />
+        </Row>
+        <Row label={t("settings.processing.dense_cells")} htmlFor="dense-cells">
+          <NumberField id="dense-cells" value={p.dense_cells} min={10} max={2000} step={10} onCommit={(v) => void update((s) => void (s.processing.dense_cells = v))} testId="settings-dense-cells" />
         </Row>
         <Row label={t("settings.processing.render_dpi")} htmlFor="render-dpi">
-          <Input id="render-dpi" type="number" min={72} max={600} step={10} className="w-28" defaultValue={p.render_dpi} onBlur={(e) => void update((s) => void (s.processing.render_dpi = Number(e.target.value) || 200))} />
+          <NumberField id="render-dpi" value={p.render_dpi} min={72} max={600} step={10} onCommit={(v) => void update((s) => void (s.processing.render_dpi = v))} testId="settings-render-dpi" />
         </Row>
-        <Row label={t("settings.processing.review_threshold")} hint={t("settings.processing.review_threshold_hint")}>
-          <Slider min={0.5} max={1} step={0.05} value={[p.review_threshold]} onValueCommit={([v]) => void update((s) => void (s.processing.review_threshold = v ?? 0.8))} className="w-56" aria-label={t("settings.processing.review_threshold")} />
+        <Row
+          label={t("settings.processing.review_threshold")}
+          hint={
+            <>
+              {t("settings.processing.review_threshold_hint")}
+              <span className="mt-0.5 block" data-testid="settings-review-threshold-scope">
+                {t("settings.processing.review_threshold_scope")}
+              </span>
+            </>
+          }
+        >
+          <Slider min={0.5} max={1} step={0.05} value={[p.review_threshold]} onValueCommit={([v]) => void commitThreshold(v ?? 0.8)} className="w-56" aria-label={t("settings.processing.review_threshold")} data-testid="settings-review-threshold" />
           <span className="w-12 text-sm tabular-nums">{p.review_threshold.toFixed(2)}</span>
         </Row>
         <Row label={t("settings.processing.audit_sample")} htmlFor="audit-sample">
-          <Input id="audit-sample" type="number" min={0} max={100} className="w-28" defaultValue={p.audit_sample_percent} onBlur={(e) => void update((s) => void (s.processing.audit_sample_percent = Math.min(100, Math.max(0, Number(e.target.value) || 0))))} />
+          <NumberField id="audit-sample" value={p.audit_sample_percent} min={0} max={100} step={1} onCommit={(v) => void update((s) => void (s.processing.audit_sample_percent = v))} testId="settings-audit-sample" />
           <span className="text-sm text-fg-muted">%</span>
         </Row>
         <Row label={t("settings.processing.organize_reviewed_only")}>
@@ -379,7 +402,7 @@ function ProcessingTab() {
           />
         </Row>
         <Row label={t("settings.processing.cache")} htmlFor="cache-gb">
-          <Input id="cache-gb" type="number" min={0.5} max={1000} step={0.5} className="w-28" defaultValue={settings.cache.page_cache_max_gb} onBlur={(e) => void update((s) => void (s.cache.page_cache_max_gb = Number(e.target.value) || 5))} />
+          <NumberField id="cache-gb" value={settings.cache.page_cache_max_gb} min={0.5} max={1000} step={0.5} precision={1} onCommit={(v) => void update((s) => void (s.cache.page_cache_max_gb = v))} testId="settings-cache-gb" />
           <span className="text-sm text-fg-muted">GB</span>
         </Row>
       </CardContent>
@@ -387,8 +410,12 @@ function ProcessingTab() {
   );
 }
 
-/** Numeric setting edited as free text; clamped and persisted on blur / Enter (not per keystroke). */
-function NumberField({ id, value, min, max, step, onCommit, testId }: { id: string; value: number; min: number; max: number; step: number; onCommit: (v: number) => void; testId: string }) {
+/**
+ * Numeric setting edited as free text; clamped (rounded to `precision` decimals) and persisted on blur /
+ * Enter, not per keystroke. Controlled: while not being edited it shows the live value, so an external
+ * settings reload refreshes it.
+ */
+function NumberField({ id, value, min, max, step, precision = 0, onCommit, testId }: { id: string; value: number; min: number; max: number; step: number; precision?: number; onCommit: (v: number) => void; testId: string }) {
   const [draft, setDraft] = useState(String(value));
   const [editing, setEditing] = useState(false);
   const shown = editing ? draft : String(value);
@@ -396,7 +423,8 @@ function NumberField({ id, value, min, max, step, onCommit, testId }: { id: stri
     setEditing(false);
     const n = Number(draft);
     if (!Number.isFinite(n) || draft.trim() === "") return;
-    const clamped = Math.min(max, Math.max(min, Math.round(n)));
+    const factor = 10 ** precision;
+    const clamped = Math.min(max, Math.max(min, Math.round(n * factor) / factor));
     if (clamped !== value) onCommit(clamped);
   };
   return (

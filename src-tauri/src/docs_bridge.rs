@@ -295,7 +295,14 @@ pub(crate) fn spawn_job_thread(
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(&app)));
             let state = app.state::<AppState>();
             match outcome {
-                Ok(result) => state.jobs.finish(&job, result),
+                Ok(result) => {
+                    if let Err(e) = &result {
+                        if !e.contains("cancelled") {
+                            log::warn!("job {job} failed: {e}");
+                        }
+                    }
+                    state.jobs.finish(&job, result)
+                }
                 Err(p) => {
                     let msg = p
                         .downcast_ref::<String>()
