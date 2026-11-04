@@ -53,8 +53,6 @@ jobs:
   engine-real:
     name: Real llama-server (CPU) + tiny Qwen3.5 fixture
     runs-on: ubuntu-24.04
-    # The release asset names are matched by pattern; verified on the first run.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

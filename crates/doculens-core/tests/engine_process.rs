@@ -223,15 +223,15 @@ fn relaunch_failure_degrades(exe: &Path) -> Result<(), String> {
     let tmp = tempfile::tempdir().unwrap();
     let marker: PathBuf = tmp.path().join("started-once");
     std::env::set_var("DOCULENS_FAKE_FAIL_START_AFTER_MARKER", &marker);
-    std::env::set_var("DOCULENS_FAKE_CRASH_AFTER_MS", "500");
+    std::env::set_var("DOCULENS_FAKE_CRASH_AFTER_MS", "1500");
     let mut cfg = config(exe, tmp.path(), &["alpha"]);
     cfg.max_restarts = 2;
     cfg.health_timeout = Duration::from_secs(5);
     let m = EngineManager::new();
     m.start(cfg).map_err(|e| format!("start: {e}"))?;
-    // First instance crashes after 500 ms; every relaunch exits before listening →
+    // First instance crashes after 1.5 s; every relaunch exits before listening →
     // each failed attempt counts and the manager ends in Degraded.
-    let degraded = wait_for(Duration::from_secs(20), || matches!(m.status().state, EngineState::Degraded { .. }));
+    let degraded = wait_for(Duration::from_secs(40), || matches!(m.status().state, EngineState::Degraded { .. }));
     let s = m.status();
     check(degraded, format!("expected degraded after failed relaunches, got {:?}", s.state))?;
     check(s.restarts == 0, format!("no relaunch succeeded, restarts must be 0 (got {})", s.restarts))?;
@@ -246,7 +246,8 @@ fn relaunch_failure_degrades(exe: &Path) -> Result<(), String> {
 fn crash_restart(exe: &Path) -> Result<(), String> {
     let tmp = tempfile::tempdir().unwrap();
     let marker: PathBuf = tmp.path().join("crashed-once");
-    std::env::set_var("DOCULENS_FAKE_CRASH_AFTER_MS", "700");
+    // Generous: Windows runners need > 700 ms for spawn + /health + the load call.
+    std::env::set_var("DOCULENS_FAKE_CRASH_AFTER_MS", "2500");
     std::env::set_var("DOCULENS_FAKE_CRASH_ONCE_MARKER", &marker);
     let cfg = config(exe, tmp.path(), &["alpha"]);
     let m = EngineManager::new();
@@ -254,8 +255,8 @@ fn crash_restart(exe: &Path) -> Result<(), String> {
     let first_pid = st.pid.ok_or("no pid")?;
     m.load_model("alpha", Duration::from_secs(10), false).map_err(|e| format!("load: {e}"))?;
 
-    // The first instance exits with code 3 after ~700 ms; the monitor restarts it.
-    let ok = wait_for(Duration::from_secs(10), || {
+    // The first instance exits with code 3 after ~2.5 s; the monitor restarts it.
+    let ok = wait_for(Duration::from_secs(30), || {
         let s = m.status();
         s.state == EngineState::Running && s.restarts == 1 && s.pid.is_some_and(|p| p != first_pid)
     });
@@ -264,7 +265,7 @@ fn crash_restart(exe: &Path) -> Result<(), String> {
     check(s.last_exit_code == Some(3), format!("exit code not recorded: {:?}", s.last_exit_code))?;
     check(m.recent_logs(200).iter().any(|l| l.text.contains("exited unexpectedly")), "crash not logged")?;
     // The model that was active before the crash is loaded again.
-    let reloaded = wait_for(Duration::from_secs(10), || m.status().model("alpha").is_some_and(|m| m.is_loaded()));
+    let reloaded = wait_for(Duration::from_secs(20), || m.status().model("alpha").is_some_and(|m| m.is_loaded()));
     check(reloaded, format!("active model not re-loaded after restart: {:?}", m.status().models))?;
     // Still usable.
     m.chat(&ChatRequest::text("alpha", "after restart")).map_err(|e| format!("chat after restart: {e}"))?;
@@ -274,12 +275,12 @@ fn crash_restart(exe: &Path) -> Result<(), String> {
 
 fn crash_loop_degraded(exe: &Path) -> Result<(), String> {
     let tmp = tempfile::tempdir().unwrap();
-    std::env::set_var("DOCULENS_FAKE_CRASH_AFTER_MS", "300");
+    std::env::set_var("DOCULENS_FAKE_CRASH_AFTER_MS", "1500");
     let mut cfg = config(exe, tmp.path(), &["alpha"]);
     cfg.max_restarts = 2;
     let m = EngineManager::new();
     m.start(cfg).map_err(|e| format!("start: {e}"))?;
-    let degraded = wait_for(Duration::from_secs(20), || matches!(m.status().state, EngineState::Degraded { .. }));
+    let degraded = wait_for(Duration::from_secs(40), || matches!(m.status().state, EngineState::Degraded { .. }));
     let s = m.status();
     check(degraded, format!("expected degraded, got {:?} (restarts {})", s.state, s.restarts))?;
     check(s.restarts == 2, format!("expected 2 successful restarts before giving up, got {}", s.restarts))?;

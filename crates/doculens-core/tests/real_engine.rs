@@ -37,6 +37,17 @@ fn real_llama_server_load_chat_switch() {
     };
     let bin = PathBuf::from(bin);
     let models_dir = PathBuf::from(models_dir);
+    // A fresh checkout makes the fixture files younger than the copy-settle
+    // window (they would scan as "copying"); they are complete by construction.
+    for entry in std::fs::read_dir(&models_dir).into_iter().flatten().flatten() {
+        if let Ok(files) = std::fs::read_dir(entry.path()) {
+            for f in files.flatten() {
+                if f.path().extension().is_some_and(|e| e == "gguf") {
+                    doculens_core::modelstore::mark_settled(&f.path());
+                }
+            }
+        }
+    }
     let registry = Registry::builtin();
     let discovered = scan_models_dir(&models_dir, &registry, ScanOptions::default());
     let ready: Vec<_> = discovered.iter().filter(|d| d.health.is_ready()).collect();
