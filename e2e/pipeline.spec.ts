@@ -1,6 +1,7 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 
 import ko from "../src/i18n/ko.json" with { type: "json" };
+import { card, createWorkspace, docId, freshApp, importViaLibrary, tplPattern } from "./helpers";
 
 // P4 acceptance (design §4.1): bulk processing (classify → OCR → extract) →
 // review flags on the card and in the viewer's Fields tab → keyboard review
@@ -9,55 +10,24 @@ import ko from "../src/i18n/ko.json" with { type: "json" };
 // browser mock backend. Real VLM calls, validators and the mirror are covered
 // by the Rust tests.
 
-async function freshApp(page: Page, flags: Record<string, string> = {}) {
-  await page.goto("/");
-  await page.evaluate((f) => {
-    localStorage.clear();
-    localStorage.setItem("doculens.mock.fast", "1");
-    for (const [k, v] of Object.entries(f)) localStorage.setItem(k, v);
-  }, flags);
-  await page.reload();
+/** Imports the receipt without auto-processing, then runs 표준 처리 on it from the library bulk bar. */
+async function processReceipt(page: Parameters<typeof freshApp>[0]) {
+  await importViaLibrary(page, ["D:\\scan\\영수증-1p.jpg"], { autoLevel: "none" });
+  await page.getByTestId(`doc-select-${await docId(page, "영수증-1p.jpg")}`).check();
+  await page.getByTestId("library-process").click();
+  await page.getByTestId("library-process-standard").click();
+  await expect(card(page, "영수증-1p.jpg")).toHaveAttribute("data-doc-status", "extracted", { timeout: 15_000 });
 }
-
-async function createWorkspace(page: Page, path = "C:\\Work\\Docs") {
-  await expect(page.getByTestId("onboarding")).toBeVisible();
-  await page.getByTestId("workspace-path").fill(path);
-  await expect(page.getByTestId("workspace-inspection")).toBeVisible();
-  await page.getByTestId("workspace-submit").click();
-  await expect(page.getByTestId("hardware-panel")).toBeVisible();
-  await page.getByTestId("onboarding-next").click();
-  await page.getByTestId("onboarding-finish").click();
-  await expect(page.getByTestId("app-shell")).toBeVisible();
-}
-
-async function importViaLibrary(page: Page, paths: string[]) {
-  await page.getByTestId("nav-library").click();
-  await page.getByTestId("library-import").click();
-  await page.getByTestId("doc-import-paths").fill(paths.join("\n"));
-  await page.getByTestId("doc-import-preview").click();
-  await expect(page.getByTestId("doc-import-plan")).toBeVisible();
-  // No automatic processing for this batch — the tests start it explicitly.
-  await page.getByTestId("doc-import-auto-level").click();
-  await page.getByRole("option", { name: ko.settings.processing.auto_levels.none }).click();
-  await page.getByTestId("doc-import-run").click();
-  for (const p of paths) {
-    const name = p.split("\\").pop()!;
-    await expect(page.locator(`[data-testid^="doc-card-"][data-doc-name="${name}"]`)).toHaveAttribute("data-doc-status", "rendered", { timeout: 15_000 });
-  }
-}
-
-const card = (page: Page, name: string) => page.locator(`[data-testid^="doc-card-"][data-doc-name="${name}"]`);
 
 test.describe("P4 pipeline", () => {
   test("bulk processing extracts fields, flags low-confidence values and the viewer review promotes the document", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
-    await importViaLibrary(page, ["D:\\scan\\영수증-1p.jpg", "D:\\scan\\세금계산서-2p.pdf"]);
+    await importViaLibrary(page, ["D:\\scan\\영수증-1p.jpg", "D:\\scan\\세금계산서-2p.pdf"], { autoLevel: "none" });
 
     // Select both cards → 처리 ▾ → 표준 처리.
     for (const name of ["영수증-1p.jpg", "세금계산서-2p.pdf"]) {
-      const id = (await card(page, name).getAttribute("data-testid"))!.replace("doc-card-", "");
-      await page.getByTestId(`doc-select-${id}`).check();
+      await page.getByTestId(`doc-select-${await docId(page, name)}`).check();
     }
     await page.getByTestId("library-process").click();
     await page.getByTestId("library-process-standard").click();
@@ -71,7 +41,7 @@ test.describe("P4 pipeline", () => {
     await page.getByTestId("jobs-tab-finished").click();
     const job = page.locator('[data-job-kind="pipeline"]').first();
     await expect(job).toContainText(ko.jobs.kind.pipeline);
-    await expect(job.getByTestId("job-detail")).toContainText("처리 2");
+    await expect(job.getByTestId("job-detail")).toContainText(tplPattern(ko.jobs.detail.process_summary, { processed: 2, classified: 2, extracted: 2, failed: 0 }));
 
     // Viewer: Fields tab lists extracted values with confidence glyphs; OCR text is in the text tab.
     await page.getByTestId("nav-library").click();
@@ -110,12 +80,7 @@ test.describe("P4 pipeline", () => {
   test("review queue: keyboard approval, editing and the reason filter", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
-    await importViaLibrary(page, ["D:\\scan\\영수증-1p.jpg"]);
-    const id = (await card(page, "영수증-1p.jpg").getAttribute("data-testid"))!.replace("doc-card-", "");
-    await page.getByTestId(`doc-select-${id}`).check();
-    await page.getByTestId("library-process").click();
-    await page.getByTestId("library-process-standard").click();
-    await expect(card(page, "영수증-1p.jpg")).toHaveAttribute("data-doc-status", "extracted", { timeout: 15_000 });
+    await processReceipt(page);
 
     await page.getByTestId("nav-review").click();
     await expect(page.getByTestId("page-review")).toBeVisible();
@@ -147,10 +112,42 @@ test.describe("P4 pipeline", () => {
     await expect(card(page, "영수증-1p.jpg")).toHaveAttribute("data-doc-status", "reviewed");
   });
 
+  test("review edit dialog: Enter during a Korean IME composition neither saves nor approves", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await processReceipt(page);
+
+    await page.getByTestId("nav-review").click();
+    await expect(page.getByTestId("page-review")).toBeVisible();
+    const items = page.locator('[data-testid^="review-item-"]');
+    await expect(items.first()).toBeVisible();
+    const initial = await items.count();
+    await page.getByTestId("page-review").focus();
+    await page.keyboard.press("e");
+    const dialog = page.getByTestId("review-edit-dialog");
+    await expect(dialog).toBeVisible();
+    const input = page.getByTestId("review-edit-input");
+    await input.fill("수정");
+
+    // While a composition is open the browser reports Enter with isComposing = true / keyCode 229
+    // (the IME commits the syllable); that Enter must neither save the value nor approve the item.
+    await input.dispatchEvent("compositionstart");
+    await input.dispatchEvent("keydown", { key: "Enter", code: "Enter", keyCode: 229, isComposing: true });
+    await expect(dialog).toBeVisible();
+    await expect(input).toHaveValue("수정");
+    await expect(items).toHaveCount(initial);
+
+    // After the composition ends, Enter saves the correction and the item leaves the queue.
+    await input.dispatchEvent("compositionend");
+    await page.keyboard.press("Enter");
+    await expect(dialog).toBeHidden();
+    await expect(items).toHaveCount(initial - 1);
+  });
+
   test("schemas: natural-language creation, form registration from the library and the type mapping", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
-    await importViaLibrary(page, ["D:\\forms\\견적서 양식.hwpx"]);
+    await importViaLibrary(page, ["D:\\forms\\견적서 양식.hwpx"], { autoLevel: "none" });
 
     // Built-in samples are listed; NL creation opens a draft in the editor.
     await page.getByTestId("nav-schemas").click();
@@ -175,8 +172,7 @@ test.describe("P4 pipeline", () => {
 
     // Form registration from the library: derive → confirm → the document becomes a form.
     await page.getByTestId("nav-library").click();
-    const id = (await card(page, "견적서 양식.hwpx").getAttribute("data-testid"))!.replace("doc-card-", "");
-    await page.getByTestId(`doc-select-${id}`).check();
+    await page.getByTestId(`doc-select-${await docId(page, "견적서 양식.hwpx")}`).check();
     await page.getByTestId("library-register-form").click();
     await expect(page.getByTestId("form-register-dialog")).toBeVisible();
     await page.getByTestId("form-register-name").fill("견적서");

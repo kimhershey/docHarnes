@@ -633,6 +633,11 @@ export function finishJob(id: string, result: { ok: true; detail?: string } | { 
   });
 }
 
+/** True while a job of `kind` is queued or running (the pipeline runs one job at a time, like the shell). */
+export function hasActiveJob(kind: JobKind): boolean {
+  return jobs.some((j) => j.kind === kind && !["done", "failed", "cancelled"].includes(j.state));
+}
+
 /** Runs `steps` ticks of simulated work; resolves false when cancelled. */
 export function simulate(jobId: string, steps: number, stepMs: number, onTick: (i: number) => void): Promise<boolean> {
   return new Promise((resolve) => {
@@ -1942,6 +1947,7 @@ export function resetMock(): void {
   localStorage.removeItem("doculens.mock.knowledge");
   localStorage.removeItem("doculens.mock.pipeline");
   localStorage.removeItem("doculens.mock.schema-versions");
+  localStorage.removeItem("doculens.mock.vision");
   importPlans.clear();
   current = null;
   startupResolved = false;

@@ -2,9 +2,9 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { BookOpen, FileText, FolderInput, FolderOpen, Image as ImageIcon, LayoutGrid, List, Merge, RefreshCw, Trash2, Upload } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 
-import { Badge } from "@/components/ui/badge";
+import { Badge, badgeVariants } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog, type ConfirmRequest } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
@@ -13,12 +13,14 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { AddToCollectionDialog } from "@/features/knowledge/AddToCollectionDialog";
 import { docTypeLabel } from "@/features/pipeline/labels";
+import { PipelineStatusChip } from "@/features/pipeline/PipelineStatusChip";
 import { ProcessMenu } from "@/features/pipeline/ProcessMenu";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
 import { useDocTypes, useDocumentStats, useDocuments, usePdfiumInfo } from "@/lib/queries";
 import {
   DOCUMENT_STATUSES,
+  SCREEN_ROUTES,
   SOURCE_KINDS,
   type DocumentFilter,
   type DocumentSort,
@@ -45,6 +47,8 @@ const CARD_H = 268;
 const ROW_H = 44;
 const SORTS: DocumentSort[] = ["imported_desc", "imported_asc", "name_asc", "name_desc", "size_desc"];
 
+type TFn = (k: string, o?: Record<string, unknown>) => string;
+
 function KindIcon({ kind, className }: { kind: SourceKind; className?: string }) {
   return kind === "image" ? <ImageIcon className={className} aria-hidden="true" /> : <FileText className={className} aria-hidden="true" />;
 }
@@ -63,6 +67,7 @@ function Thumb({ doc, className }: { doc: DocumentView; className?: string }) {
 export function LibraryPage() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const workspace = useWorkspace();
   const toast = useUiStore((s) => s.toast);
   const view = useDocumentsStore((s) => s.view);
@@ -80,6 +85,7 @@ export function LibraryPage() {
   const [mergeOpen, setMergeOpen] = useState(false);
   const notice = usePipelineStore((s) => s.notice);
   const clearNotice = usePipelineStore((s) => s.clearNotice);
+  const openReviewForDocument = usePipelineStore((s) => s.openReviewForDocument);
   const { data: docTypes } = useDocTypes(!!workspace);
   const [sort, setSort] = useState<DocumentSort>("imported_desc");
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -138,7 +144,20 @@ export function LibraryPage() {
   const onDrop = useCallback((paths: string[]) => openImport(paths, "drop"), [openImport]);
   const dragOver = useDocumentDrop(!!workspace, onDrop);
 
-  const selectedVisible = useMemo(() => [...selected].filter((id) => visibleIds.has(id)), [selected, visibleIds]);
+  // `/library?import=1` (the home quick action) opens the import dialog once and drops the flag from the URL.
+  const importParam = searchParams.get("import");
+  useEffect(() => {
+    if (importParam !== "1") return;
+    openImport();
+    const next = new URLSearchParams(searchParams);
+    next.delete("import");
+    setSearchParams(next, { replace: true });
+  }, [importParam, openImport, searchParams, setSearchParams]);
+
+  // Selected documents in the library's current order: the merge dialog promises "라이브러리 순서대로",
+  // and a `Set` would hand the backend the click order instead (review M7).
+  const selectedDocs = useMemo(() => list.filter((d) => selected.has(d.id)), [list, selected]);
+  const selectedVisible = useMemo(() => selectedDocs.map((d) => d.id), [selectedDocs]);
   const allSelected = list.length > 0 && selectedVisible.length === list.length;
   const someSelected = selectedVisible.length > 0 && !allSelected;
   const toggle = (id: string) =>
@@ -200,6 +219,15 @@ export function LibraryPage() {
   };
 
   const open = (id: string) => navigate(`/library/${id}`);
+  // The "검토 대기" badge opens the review queue narrowed to that document (review M9).
+  const openReview = useCallback(
+    (id: string) => {
+      openReviewForDocument(id);
+      navigate(SCREEN_ROUTES.review);
+    },
+    [navigate, openReviewForDocument],
+  );
+  const typeLabel = useCallback((slug: string) => docTypeLabel(slug, docTypes, t, i18n.language), [docTypes, t, i18n.language]);
 
   return (
     <div className="relative flex h-full min-h-0" data-testid="page-library">
@@ -291,7 +319,7 @@ export function LibraryPage() {
                 <SelectItem value="all">{t("library.filters.all")}</SelectItem>
                 {[...(docTypes ?? []).map((d) => d.slug), "other"].map((d) => (
                   <SelectItem key={d} value={d}>
-                    {docTypeLabel(d, docTypes, t, i18n.language)}
+                    {typeLabel(d)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -346,11 +374,12 @@ export function LibraryPage() {
         )}
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-1.5 text-xs text-fg-muted" data-testid="library-stats">
           <span>{t("library.total", { count: stats?.total ?? 0, pages: stats?.total_pages ?? 0 })}</span>
+          <PipelineStatusChip />
           {selectedVisible.length > 0 && (
             <>
               <span className="mx-1">·</span>
               <span data-testid="library-selected">{t("library.selected", { count: selectedVisible.length })}</span>
-              <ProcessMenu ids={selectedVisible} variant="ghost" testId="library-process" />
+              <ProcessMenu ids={selectedVisible} docs={selectedDocs} variant="ghost" testId="library-process" />
               {selectedVisible.length === 1 && (
                 <Button size="sm" variant="ghost" onClick={() => navigate(`/schemas?register=${selectedVisible[0]}`)} data-testid="library-register-form">
                   <Upload />
@@ -431,9 +460,9 @@ export function LibraryPage() {
         {docs && list.length > 0 && (
           <div className={cn("flex min-h-0 flex-1 flex-col transition-opacity", isPlaceholderData && "opacity-60")} aria-busy={isPlaceholderData}>
             {view === "grid" ? (
-              <GridView docs={list} selected={selected} onToggle={toggle} onOpen={open} typeLabel={(slug) => docTypeLabel(slug, docTypes, t, i18n.language)} />
+              <GridView docs={list} selected={selected} onToggle={toggle} onOpen={open} onOpenReview={openReview} typeLabel={typeLabel} />
             ) : (
-              <ListView docs={list} selected={selected} onToggle={toggle} onOpen={open} locale={i18n.language} />
+              <ListView docs={list} selected={selected} onToggle={toggle} onOpen={open} onOpenReview={openReview} typeLabel={typeLabel} locale={i18n.language} />
             )}
           </div>
         )}
@@ -480,7 +509,27 @@ function useColumns(ref: React.RefObject<HTMLDivElement | null>, itemWidth: numb
   return cols;
 }
 
-function GridView({ docs, selected, onToggle, onOpen, typeLabel }: { docs: DocumentView[]; selected: Set<string>; onToggle: (id: string) => void; onOpen: (id: string) => void; typeLabel: (slug: string) => string }) {
+/** "검토 대기" as a control: opens the review queue filtered to the document (same badge in grid and list). */
+function ReviewBadge({ doc, onOpen, t }: { doc: DocumentView; onOpen: (id: string) => void; t: TFn }) {
+  const label = t("library.review_open", { name: doc.title ?? doc.original_name });
+  return (
+    <button
+      type="button"
+      className={cn(badgeVariants({ variant: "warn" }), "cursor-pointer hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent")}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen(doc.id);
+      }}
+      title={label}
+      aria-label={label}
+      data-testid={`doc-review-${doc.id}`}
+    >
+      {t("library.review_pending")}
+    </button>
+  );
+}
+
+function GridView({ docs, selected, onToggle, onOpen, onOpenReview, typeLabel }: { docs: DocumentView[]; selected: Set<string>; onToggle: (id: string) => void; onOpen: (id: string) => void; onOpenReview: (id: string) => void; typeLabel: (slug: string) => string }) {
   const { t } = useTranslation();
   const parentRef = useRef<HTMLDivElement | null>(null);
   const cols = useColumns(parentRef, CARD_W);
@@ -492,7 +541,7 @@ function GridView({ docs, selected, onToggle, onOpen, typeLabel }: { docs: Docum
         {virtualizer.getVirtualItems().map((row) => (
           <div key={row.key} className="absolute left-0 flex w-full gap-4 px-2" style={{ transform: `translateY(${row.start}px)`, height: row.size }}>
             {docs.slice(row.index * cols, row.index * cols + cols).map((doc) => (
-              <DocCard key={doc.id} doc={doc} selected={selected.has(doc.id)} onToggle={() => onToggle(doc.id)} onOpen={() => onOpen(doc.id)} t={t} typeLabel={typeLabel} />
+              <DocCard key={doc.id} doc={doc} selected={selected.has(doc.id)} onToggle={() => onToggle(doc.id)} onOpen={() => onOpen(doc.id)} onOpenReview={onOpenReview} t={t} typeLabel={typeLabel} />
             ))}
           </div>
         ))}
@@ -501,7 +550,7 @@ function GridView({ docs, selected, onToggle, onOpen, typeLabel }: { docs: Docum
   );
 }
 
-function DocCard({ doc, selected, onToggle, onOpen, t, typeLabel }: { doc: DocumentView; selected: boolean; onToggle: () => void; onOpen: () => void; t: (k: string, o?: Record<string, unknown>) => string; typeLabel: (slug: string) => string }) {
+function DocCard({ doc, selected, onToggle, onOpen, onOpenReview, t, typeLabel }: { doc: DocumentView; selected: boolean; onToggle: () => void; onOpen: () => void; onOpenReview: (id: string) => void; t: TFn; typeLabel: (slug: string) => string }) {
   return (
     <div
       role="listitem"
@@ -522,48 +571,54 @@ function DocCard({ doc, selected, onToggle, onOpen, t, typeLabel }: { doc: Docum
       />
       <button type="button" className="flex min-h-0 flex-1 flex-col text-left" onClick={onOpen} aria-label={`${t("library.actions.open_doc")}: ${doc.title ?? doc.original_name}`} data-testid={`doc-open-${doc.id}`}>
         <Thumb doc={doc} className="h-44 w-full border-b border-border" />
-        <div className="flex min-h-0 flex-1 flex-col gap-1 p-2">
+        <div className="flex min-h-0 flex-1 flex-col gap-0.5 p-2 pb-1">
           <span className="truncate text-sm font-medium" title={doc.original_name}>
             {doc.title ?? doc.original_name}
-          </span>
-          <span className="flex flex-wrap items-center gap-1 text-xs text-fg-muted">
-            <Badge variant="outline">{t(`documents.kind.${doc.source_kind}`)}</Badge>
-            <Badge variant={statusVariant(doc.status)} data-testid={`doc-status-${doc.id}`}>
-              {t(`documents.status.${doc.status}`)}
-            </Badge>
-            {doc.converted && <Badge variant="info">{t("library.converted")}</Badge>}
-            {doc.doc_type && (
-              <Badge variant="outline" data-testid={`doc-type-${doc.id}`}>
-                {typeLabel(doc.doc_type)}
-              </Badge>
-            )}
-            {doc.review_status === "pending" && (
-              <Badge variant="warn" data-testid={`doc-review-${doc.id}`}>
-                {t("library.review_pending")}
-              </Badge>
-            )}
-            {doc.role === "knowledge" && (
-              <Badge variant="info" data-testid={`doc-role-${doc.id}`}>
-                {t("library.role_knowledge")}
-              </Badge>
-            )}
           </span>
           <span className="text-xs text-fg-subtle">
             {t("library.pages_count", { count: doc.page_count })} · {formatBytes(doc.size_bytes)}
           </span>
         </div>
       </button>
+      {/* Badges live outside the open button so the review badge can be a button of its own (no nested controls). */}
+      <div className="flex shrink-0 flex-wrap items-center gap-1 px-2 pb-2 text-xs text-fg-muted">
+        <Badge variant="outline">{t(`documents.kind.${doc.source_kind}`)}</Badge>
+        <Badge variant={statusVariant(doc.status)} data-testid={`doc-status-${doc.id}`}>
+          {t(`documents.status.${doc.status}`)}
+        </Badge>
+        {doc.converted && <Badge variant="info">{t("library.converted")}</Badge>}
+        {doc.doc_type && (
+          <Badge variant="outline" data-testid={`doc-type-${doc.id}`}>
+            {typeLabel(doc.doc_type)}
+          </Badge>
+        )}
+        {doc.review_status === "pending" && <ReviewBadge doc={doc} onOpen={onOpenReview} t={t} />}
+        {doc.role === "knowledge" && (
+          <Badge variant="info" data-testid={`doc-role-${doc.id}`}>
+            {t("library.role_knowledge")}
+          </Badge>
+        )}
+      </div>
     </div>
   );
 }
 
-const LIST_COLS = "grid-cols-[28px_minmax(0,2fr)_80px_60px_100px_150px_90px]";
+const LIST_COLS = "grid-cols-[28px_minmax(0,2fr)_80px_60px_100px_110px_90px_150px_90px]";
 
-function ListView({ docs, selected, onToggle, onOpen, locale }: { docs: DocumentView[]; selected: Set<string>; onToggle: (id: string) => void; onOpen: (id: string) => void; locale: string }) {
+function ListView({ docs, selected, onToggle, onOpen, onOpenReview, typeLabel, locale }: { docs: DocumentView[]; selected: Set<string>; onToggle: (id: string) => void; onOpen: (id: string) => void; onOpenReview: (id: string) => void; typeLabel: (slug: string) => string; locale: string }) {
   const { t } = useTranslation();
   const parentRef = useRef<HTMLDivElement | null>(null);
   const virtualizer = useVirtualizer({ count: docs.length, getScrollElement: () => parentRef.current, estimateSize: () => ROW_H, overscan: 10, scrollMargin: ROW_H });
-  const headers = [t("library.columns.name"), t("library.columns.kind"), t("library.columns.pages"), t("library.columns.status"), t("library.columns.imported"), t("library.columns.size")];
+  const headers = [
+    t("library.columns.name"),
+    t("library.columns.kind"),
+    t("library.columns.pages"),
+    t("library.columns.status"),
+    t("library.columns.doc_type"),
+    t("library.columns.review"),
+    t("library.columns.imported"),
+    t("library.columns.size"),
+  ];
   return (
     <div ref={parentRef} className="min-h-0 flex-1 overflow-y-auto" role="grid" aria-label={t("library.list_label")} aria-rowcount={docs.length + 1} data-testid="library-list">
       <div role="row" className={cn("sticky top-0 z-10 grid gap-2 border-b border-border bg-bg px-3 py-1.5 text-xs font-medium text-fg-muted", LIST_COLS)} style={{ height: ROW_H }}>
@@ -587,6 +642,7 @@ function ListView({ docs, selected, onToggle, onOpen, locale }: { docs: Document
               style={{ transform: `translateY(${row.start - virtualizer.options.scrollMargin}px)`, height: row.size }}
               data-testid={`doc-row-${doc.id}`}
               data-doc-name={doc.original_name}
+              data-doc-status={doc.status}
             >
               <span role="gridcell">
                 <input type="checkbox" checked={selected.has(doc.id)} onChange={() => onToggle(doc.id)} aria-label={`${t("common.select")}: ${doc.original_name}`} />
@@ -606,6 +662,21 @@ function ListView({ docs, selected, onToggle, onOpen, locale }: { docs: Document
               </span>
               <span role="gridcell">
                 <Badge variant={statusVariant(doc.status)}>{t(`documents.status.${doc.status}`)}</Badge>
+              </span>
+              <span role="gridcell" className="min-w-0">
+                {doc.doc_type && (
+                  <Badge variant="outline" className="max-w-full truncate" data-testid={`doc-type-${doc.id}`}>
+                    {typeLabel(doc.doc_type)}
+                  </Badge>
+                )}
+              </span>
+              <span role="gridcell">
+                {doc.review_status === "pending" && <ReviewBadge doc={doc} onOpen={onOpenReview} t={t} />}
+                {doc.review_status === "done" && (
+                  <Badge variant="ok" data-testid={`doc-review-done-${doc.id}`}>
+                    {t("pipeline.review_status.done")}
+                  </Badge>
+                )}
               </span>
               <span role="gridcell" className="text-xs text-fg-muted">
                 {formatDate(doc.imported_at, locale)}

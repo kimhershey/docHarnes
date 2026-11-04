@@ -13,12 +13,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AddToCollectionDialog } from "@/features/knowledge/AddToCollectionDialog";
-import { confidenceGlyph, confidenceTone, docTypeLabel, formatConfidence } from "@/features/pipeline/labels";
+import { confidenceGlyph, confidenceTone, DEFAULT_REVIEW_THRESHOLD, docTypeLabel, formatConfidence } from "@/features/pipeline/labels";
 import { ProcessMenu } from "@/features/pipeline/ProcessMenu";
 import { Snippet } from "@/features/search/SearchPage";
 import { describeError } from "@/lib/errors";
 import { api, revealPath } from "@/lib/ipc";
-import { useDocTypes, useDocument, useDocumentChunks, useDocumentCollections, useDocumentPages } from "@/lib/queries";
+import { useDocTypes, useDocument, useDocumentChunks, useDocumentCollections, useDocumentPages, usePipelineStatus } from "@/lib/queries";
 import { queryClient, queryKeys } from "@/lib/query-client";
 import { formatChord, isComposing, matchesChord } from "@/lib/shortcuts";
 import type { Citation, DocumentView, PageView } from "@/lib/types";
@@ -78,6 +78,9 @@ export function DocumentViewer() {
   const [splitAt, setSplitAt] = useState<number | null>(null);
   const { data: docCollections } = useDocumentCollections(id);
   const { data: docTypes } = useDocTypes();
+  const { data: pipeline } = usePipelineStatus();
+  // Confidence colour / glyph follow the review threshold (design §3.7.4: colour, icon and label agree).
+  const threshold = pipeline?.review_threshold ?? DEFAULT_REVIEW_THRESHOLD;
 
   // One component instance serves every /library/:id — reset per document.
   useEffect(() => {
@@ -310,8 +313,16 @@ export function DocumentViewer() {
     if (!doc) return;
     try {
       applyDoc(await api.documentsSetDocType(doc.id, v === NONE ? null : v));
-      // Design §3.7.3: a manual type change suggests re-extraction (never runs it automatically).
-      if (doc.last_run_id) toast(t("viewer.type_changed"), "info");
+      // Design §3.7.3: a manual type change suggests re-extraction (never runs it automatically);
+      // the offer is a real dialog so it can be answered, cancel just closes it.
+      if (doc.last_run_id) {
+        setConfirm({
+          title: t("viewer.type_changed_title"),
+          description: t("viewer.type_changed"),
+          confirmLabel: t("viewer.reextract"),
+          onConfirm: () => extractNow(),
+        });
+      }
     } catch (e) {
       toast(describeError(e, t), "danger");
     }
@@ -415,8 +426,8 @@ export function DocumentViewer() {
           </Badge>
         )}
         {doc.confidence !== null && (
-          <Badge variant={confidenceTone(doc.confidence)} title={t("viewer.confidence_badge", { value: formatConfidence(doc.confidence) })} data-testid="viewer-confidence">
-            {confidenceGlyph(doc.confidence)} {formatConfidence(doc.confidence)}
+          <Badge variant={confidenceTone(doc.confidence, threshold)} title={t("viewer.confidence_badge", { value: formatConfidence(doc.confidence) })} data-testid="viewer-confidence">
+            {confidenceGlyph(doc.confidence, threshold)} {formatConfidence(doc.confidence)}
           </Badge>
         )}
         {doc.pipeline_error && (
@@ -569,16 +580,16 @@ export function DocumentViewer() {
               )}
             </TabsContent>
             <TabsContent value="fields" className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-              <FieldsPanel doc={doc} onGoToPage={goToEvidence} onStartExtract={() => void extractNow()} />
+              <FieldsPanel key={doc.id} doc={doc} onGoToPage={goToEvidence} onStartExtract={() => void extractNow()} />
             </TabsContent>
             <TabsContent value="tables" className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-              <TablesPanel doc={doc} onGoToPage={setPageNo} />
+              <TablesPanel key={doc.id} doc={doc} onGoToPage={setPageNo} />
             </TabsContent>
             <TabsContent value="qa" forceMount className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 data-[state=inactive]:hidden">
               <ViewerKnowledgePanel doc={doc} explainSelection={explainSelection} onExplained={() => setExplainSelection(null)} onCitation={onCitation} />
             </TabsContent>
             <TabsContent value="history" className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-              <HistoryPanel doc={doc} />
+              <HistoryPanel key={doc.id} doc={doc} />
             </TabsContent>
           </Tabs>
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 border-t border-border p-3 text-xs" data-testid="viewer-info">
@@ -603,6 +614,12 @@ export function DocumentViewer() {
                 </Badge>
               )}
             </dd>
+            {doc.doc_type_source && (
+              <>
+                <dt className="text-fg-subtle">{t("viewer.info.doc_type_source")}</dt>
+                <dd data-testid="viewer-doc-type-source">{t(`pipeline.doc_type_source.${doc.doc_type_source}`, { defaultValue: doc.doc_type_source })}</dd>
+              </>
+            )}
             {doc.conversion_note && (
               <>
                 <dt className="text-fg-subtle">{t("viewer.conversion_note")}</dt>
@@ -613,6 +630,14 @@ export function DocumentViewer() {
               <>
                 <dt className="text-fg-subtle">{t("common.error")}</dt>
                 <dd className="whitespace-pre-wrap text-danger selectable">{doc.error}</dd>
+              </>
+            )}
+            {doc.pipeline_error && (
+              <>
+                <dt className="text-fg-subtle">{t("viewer.process.pipeline_error")}</dt>
+                <dd className="whitespace-pre-wrap text-danger selectable" data-testid="viewer-pipeline-error-detail">
+                  {doc.pipeline_error}
+                </dd>
               </>
             )}
           </dl>

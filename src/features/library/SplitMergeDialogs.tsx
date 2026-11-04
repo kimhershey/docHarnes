@@ -58,7 +58,7 @@ export function SplitDialog({ open, onOpenChange, doc, pages, initial }: { open:
               aria-label={`${t("pipeline.split.start_here")}: ${t("pipeline.split.page", { page: p.page_no })}`}
               data-testid={`split-page-${p.page_no}`}
             >
-              {p.thumb_url ? <img src={p.thumb_url} alt="" className="h-20 w-full bg-white object-contain" draggable={false} /> : <div className="h-20 w-full bg-bg-sunken" />}
+              {p.thumb_url ? <img src={p.thumb_url} alt="" className="h-20 w-full bg-white object-contain" loading="lazy" decoding="async" draggable={false} /> : <div className="h-20 w-full bg-bg-sunken" />}
               <span>{t("pipeline.split.page", { page: p.page_no })}</span>
               {marks.has(p.page_no) && <span className="text-[10px] text-accent">{t("pipeline.split.start_here")}</span>}
             </button>

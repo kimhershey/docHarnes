@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next";
 import { FolderInput } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -44,6 +45,22 @@ function splitPaths(text: string): string[] {
     .split(/\r?\n/)
     .map((s) => s.trim().replace(/^"|"$/g, ""))
     .filter(Boolean);
+}
+
+/**
+ * Rough wall-clock estimate for the auto pipeline, scaled by the chosen level (review L7). The plan
+ * carries no page counts, so a document is assumed to have ~3 pages; classification is one VLM call
+ * per document, OCR and extraction are per page.
+ */
+function estimateEta(level: AutoProcessingLevel, docs: number, t: TFunction): string | null {
+  if (level === "none" || docs <= 0) return null;
+  const pages = docs * 3;
+  const seconds = level === "classify_only" ? docs * 15 : level === "classify_and_ocr" ? pages * 25 : pages * 40;
+  if (seconds < 60) return t("import_docs.eta_short");
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  if (level === "classify_only") return t("import_docs.eta_classify", { minutes });
+  if (level === "classify_and_ocr") return t("import_docs.eta_ocr", { minutes });
+  return t("import_docs.eta", { minutes });
 }
 
 /**
@@ -145,6 +162,8 @@ export function ImportDocumentsDialog({
   };
 
   const importable = plan ? plan.new_count + plan.relink_count : 0;
+  const level = options.auto_level ?? defaultLevel;
+  const eta = plan ? estimateEta(level, importable, t) : null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -222,9 +241,9 @@ export function ImportDocumentsDialog({
                   ))}
                 </SelectContent>
               </Select>
-              {plan && (options.auto_level ?? defaultLevel) !== "none" && plan.new_count + plan.relink_count > 0 && (
-                <p className="text-xs text-fg-subtle" data-testid="doc-import-eta">
-                  {t("import_docs.eta", { minutes: Math.max(1, Math.round(((plan.new_count + plan.relink_count) * 3 * 40) / 60)) })}
+              {eta && (
+                <p className="text-xs text-fg-subtle" data-testid="doc-import-eta" data-eta-level={level}>
+                  {eta}
                 </p>
               )}
             </div>

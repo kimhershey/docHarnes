@@ -1211,7 +1211,7 @@ export function draftFromSchema(s: SchemaRecord): SchemaDraft {
     description_en: s.description_en,
     definition: structuredClone(s.definition),
     form_document_id: s.form_document_id,
-    note: null,
+    note: s.note ?? null,
   };
 }
 

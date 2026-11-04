@@ -46,9 +46,11 @@ const PHASE2: { screen: Screen; icon: typeof Home }[] = [
   { screen: "projects", icon: Briefcase },
 ];
 
-function Item({ screen, icon: Icon, collapsed, badge }: { screen: Screen; icon: typeof Home; collapsed: boolean; badge?: string }) {
+function Item({ screen, icon: Icon, collapsed, badge, ariaLabel }: { screen: Screen; icon: typeof Home; collapsed: boolean; badge?: string; ariaLabel?: string }) {
   const { t } = useTranslation();
   const label = t(`nav.${screen}`);
+  // The accessible name carries what the badge shows ("검토 큐, 대기 12"), the visible text stays short.
+  const name = ariaLabel ?? label;
   const link = (
     <NavLink
       to={SCREEN_ROUTES[screen]}
@@ -61,7 +63,7 @@ function Item({ screen, icon: Icon, collapsed, badge }: { screen: Screen; icon: 
           collapsed && "justify-center px-0",
         )
       }
-      aria-label={label}
+      aria-label={name}
     >
       <Icon className="size-4 shrink-0" aria-hidden="true" />
       {!collapsed && <span className="flex-1 truncate">{label}</span>}
@@ -76,7 +78,7 @@ function Item({ screen, icon: Icon, collapsed, badge }: { screen: Screen; icon: 
   return (
     <Tooltip>
       <TooltipTrigger asChild>{link}</TooltipTrigger>
-      <TooltipContent side="right">{label}</TooltipContent>
+      <TooltipContent side="right">{name}</TooltipContent>
     </Tooltip>
   );
 }
@@ -104,7 +106,12 @@ export function Sidebar() {
         <ul className="flex flex-col gap-0.5">
           {MAIN.map((it) => (
             <li key={it.screen}>
-              <Item {...it} collapsed={collapsed} badge={it.screen === "review" && reviewFields > 0 ? String(reviewFields) : undefined} />
+              <Item
+                {...it}
+                collapsed={collapsed}
+                badge={it.screen === "review" && reviewFields > 0 ? String(reviewFields) : undefined}
+                ariaLabel={it.screen === "review" && reviewFields > 0 ? t("nav.with_pending", { label: t("nav.review"), count: reviewFields }) : undefined}
+              />
             </li>
           ))}
         </ul>

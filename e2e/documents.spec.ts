@@ -1,37 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { createWorkspace, freshApp, openImportPreview } from "./helpers";
+
 // P2 acceptance (design §4.1): import (preview with duplicates / unsupported
 // reasons) → rendered pages → library grid/list → viewer navigation, rotation,
 // tags and deletion, driven against the browser mock backend (the real
 // PDFium / HWPX path is covered by the Rust integration tests).
-
-async function freshApp(page: Page, flags: Record<string, string> = {}) {
-  await page.goto("/");
-  await page.evaluate((f) => {
-    localStorage.clear();
-    localStorage.setItem("doculens.mock.fast", "1");
-    for (const [k, v] of Object.entries(f)) localStorage.setItem(k, v);
-  }, flags);
-  await page.reload();
-}
-
-async function createWorkspace(page: Page, path = "C:\\Work\\Docs") {
-  await expect(page.getByTestId("onboarding")).toBeVisible();
-  await page.getByTestId("workspace-path").fill(path);
-  await expect(page.getByTestId("workspace-inspection")).toBeVisible();
-  await page.getByTestId("workspace-submit").click();
-  await expect(page.getByTestId("hardware-panel")).toBeVisible();
-  await page.getByTestId("onboarding-next").click();
-  await page.getByTestId("onboarding-finish").click();
-  await expect(page.getByTestId("app-shell")).toBeVisible();
-}
-
-async function importFiles(page: Page, paths: string[]) {
-  await page.getByTestId("library-import").click();
-  await page.getByTestId("doc-import-paths").fill(paths.join("\n"));
-  await page.getByTestId("doc-import-preview").click();
-  await expect(page.getByTestId("doc-import-plan")).toBeVisible();
-}
 
 const item = (page: Page, status: string) => page.locator(`[data-testid="doc-import-item"][data-item-status="${status}"]`);
 
@@ -43,7 +17,7 @@ test.describe("P2 documents", () => {
     await expect(page.getByTestId("library-empty")).toBeVisible();
 
     // The same receipt in two folders = same content (mock hashes by name) → in-batch duplicate.
-    await importFiles(page, ["D:\\scan\\영수증-3p.pdf", "D:\\scan\\견적서.hwpx", "D:\\scan\\photo.heic", "D:\\backup\\영수증-3p.pdf", "D:\\scan\\IMG_0001.jpg"]);
+    await openImportPreview(page, ["D:\\scan\\영수증-3p.pdf", "D:\\scan\\견적서.hwpx", "D:\\scan\\photo.heic", "D:\\backup\\영수증-3p.pdf", "D:\\scan\\IMG_0001.jpg"]);
     await expect(page.getByTestId("doc-import-item")).toHaveCount(5);
     await expect(item(page, "unsupported")).toHaveCount(1);
     await expect(item(page, "duplicate_in_batch")).toHaveCount(1);
@@ -71,7 +45,7 @@ test.describe("P2 documents", () => {
 
     // Re-importing the same file is a duplicate of the registered copy and nothing can run.
     await page.getByTestId("nav-library").click();
-    await importFiles(page, ["D:\\scan\\영수증-3p.pdf", "C:\\Work\\Docs\\documents\\견적서.hwpx"]);
+    await openImportPreview(page, ["D:\\scan\\영수증-3p.pdf", "C:\\Work\\Docs\\documents\\견적서.hwpx"]);
     await expect(item(page, "duplicate")).toHaveCount(1);
     await expect(item(page, "already_registered")).toHaveCount(1);
     await expect(page.getByTestId("doc-import-run")).toBeDisabled();
@@ -103,7 +77,7 @@ test.describe("P2 documents", () => {
     await freshApp(page);
     await createWorkspace(page);
     await page.getByTestId("nav-library").click();
-    await importFiles(page, ["D:\\scan\\계약서-12p.pdf"]);
+    await openImportPreview(page, ["D:\\scan\\계약서-12p.pdf"]);
     await page.getByTestId("doc-import-run").click();
     const card = page.locator('[data-testid^="doc-card-"][data-doc-name="계약서-12p.pdf"]');
     await expect(card).toHaveAttribute("data-doc-status", "rendered", { timeout: 15_000 });
@@ -164,7 +138,7 @@ test.describe("P2 documents", () => {
     await freshApp(page);
     await createWorkspace(page);
     await page.getByTestId("nav-library").click();
-    await importFiles(page, ["D:\\a\\one.pdf", "D:\\a\\two.docx"]);
+    await openImportPreview(page, ["D:\\a\\one.pdf", "D:\\a\\two.docx"]);
     await page.getByTestId("doc-import-run").click();
     await expect(page.locator('[data-testid^="doc-card-"][data-doc-status="rendered"]')).toHaveCount(2, { timeout: 15_000 });
     await page.getByLabel("모두 선택").check();

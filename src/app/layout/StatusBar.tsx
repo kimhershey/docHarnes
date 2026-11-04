@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
 
+import { PipelineStatusChip } from "@/features/pipeline/PipelineStatusChip";
 import { isTauri } from "@/lib/ipc";
 import { useAssessment, useModelIndex } from "@/lib/queries";
 import { SCREEN_ROUTES } from "@/lib/types";
@@ -74,6 +75,7 @@ export function StatusBar() {
       <Link to={SCREEN_ROUTES.jobs} className="hover:text-fg" data-testid="statusbar-jobs">
         {t("statusbar.queue", { count: jobs.length })}
       </Link>
+      <PipelineStatusChip className="hidden md:inline-flex" />
       <span className="ml-auto">{online ? t("statusbar.network_online") : t("statusbar.network_offline")}</span>
       {!isTauri && <span className="rounded bg-warn-soft px-1.5 text-warn">{t("statusbar.preview")}</span>}
     </footer>

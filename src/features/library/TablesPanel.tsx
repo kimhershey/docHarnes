@@ -44,7 +44,8 @@ export function TablesPanel({ doc, onGoToPage }: { doc: DocumentView; onGoToPage
         a.href = url;
         a.download = name;
         a.click();
-        URL.revokeObjectURL(url);
+        // The browser fetches the blob after the click returns; revoking at once can cancel the download.
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
       }
       toast(t("viewer.tables.saved"), "ok");
     } catch (e) {

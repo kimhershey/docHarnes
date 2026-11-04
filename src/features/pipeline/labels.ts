@@ -19,16 +19,29 @@ export function fieldLabel(f: { label_ko: string; label_en: string; key: string 
   return l || f.key;
 }
 
-/** Colour + icon label for a confidence (colour-blind safe: badge text carries the meaning too). */
-export function confidenceTone(c: number | null | undefined): "ok" | "warn" | "danger" | "muted" {
-  if (c == null) return "muted";
-  if (c >= 0.8) return "ok";
-  if (c >= 0.6) return "warn";
+/** Fallback for `processing.review_threshold` when the live value is not at hand (mirrors the settings default). */
+export const DEFAULT_REVIEW_THRESHOLD = 0.8;
+
+export type ConfidenceTone = "ok" | "warn" | "danger" | "muted";
+
+/** Static text classes per tone: Tailwind only generates classes it can see as literals (`text-${tone}` is not one). */
+export const CONFIDENCE_TEXT_CLASS: Record<ConfidenceTone, string> = { ok: "text-ok", warn: "text-warn", danger: "text-danger", muted: "text-fg-muted" };
+
+/**
+ * Colour + icon label for a confidence, derived from the review threshold so colour, glyph and the
+ * "low confidence" flag agree (design §3.7.4): `ok` at or above the threshold, `warn` within 0.2
+ * below it, `danger` further down. Colour-blind safe: the badge text carries the meaning too.
+ */
+export function confidenceTone(c: number | null | undefined, threshold = DEFAULT_REVIEW_THRESHOLD): ConfidenceTone {
+  if (c == null || Number.isNaN(c)) return "muted";
+  const v = c + 1e-9; // 0.6 must count as "warn" at 0.8 although 0.8 - 0.2 > 0.6 in floating point
+  if (v >= threshold) return "ok";
+  if (v >= threshold - 0.2) return "warn";
   return "danger";
 }
 
-export function confidenceGlyph(c: number | null | undefined): string {
-  const tone = confidenceTone(c);
+export function confidenceGlyph(c: number | null | undefined, threshold = DEFAULT_REVIEW_THRESHOLD): string {
+  const tone = confidenceTone(c, threshold);
   return tone === "ok" ? "✔" : tone === "warn" ? "●" : tone === "danger" ? "▲" : "–";
 }
 

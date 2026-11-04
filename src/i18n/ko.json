@@ -64,7 +64,8 @@
     "collapse": "사이드바 접기",
     "expand": "사이드바 펼치기",
     "main": "주요 화면",
-    "phase2_group": "2차 범위"
+    "phase2_group": "2차 범위",
+    "with_pending": "{{label}}, 대기 {{count}}"
   },
   "topbar": {
     "command": "자연어 명령 또는 검색…",
@@ -537,6 +538,7 @@
       "render_dpi": "기본 렌더 DPI",
       "review_threshold": "검토 임계치",
       "review_threshold_hint": "이 신뢰도 미만 필드는 검토 큐로 보냅니다.",
+      "review_threshold_scope": "새로 추출하는 문서와 필드 탭의 '검증 다시 실행'에 적용됩니다. 이미 추출된 문서의 검토 표시는 그대로입니다.",
       "audit_sample": "고신뢰 필드 무작위 감사 비율",
       "organize_reviewed_only": "검토 완료 문서만 정리/이동",
       "inbox_watch": "inbox 폴더 감시",
@@ -550,7 +552,8 @@
       "precise_mode": "정밀 모드(2회 샘플 일치도)",
       "precise_hint": "두 번째 샘플(T=0.3)과 값이 다르면 신뢰도를 낮춥니다. 시간 ×1.5~2.",
       "dense_reocr": "밀집 페이지 잔글씨 재OCR",
-      "dense_reocr_hint": "표 셀이 {{cells}}개 이상인 페이지는 잔글씨 예산으로 한 번 더 OCR합니다."
+      "dense_reocr_hint": "표 셀이 {{cells}}개 이상인 페이지는 잔글씨 예산으로 한 번 더 OCR합니다.",
+      "dense_cells": "밀집 페이지 기준 표 셀 수"
     },
     "privacy": {
       "pii_masking": "고유식별정보 마스킹 저장",
@@ -746,7 +749,7 @@
       "version_group_empty": "버전 그룹 이름을 입력하세요.",
       "no_active_model": "엔진에 로드된 모델이 없습니다. 모델 화면에서 모델을 로드한 뒤 다시 시도하세요.",
       "embedding_model_not_installed": "임베딩 모델이 설치되지 않았습니다. 모델 화면에서 설치하세요.",
-      "no_text": "텍스트 레이어가 없는 문서입니다(스캔 문서는 P4 OCR 이후 지원).",
+      "no_text": "텍스트가 없는 문서입니다. '처리 ▸ 분류 + OCR'로 OCR을 실행한 뒤 다시 시도하세요.",
       "document_id_required": "문서를 먼저 선택하세요.",
       "glossary_term_taken": "같은 용어가 이미 있습니다.",
       "collection_not_found": "컬렉션을 찾을 수 없습니다(삭제되었을 수 있습니다).",
@@ -780,7 +783,7 @@
   "jobs": {
     "title": "작업",
     "clear_finished": "완료 항목 지우기",
-    "p5_hint": "P1에서는 모델 로드·가져오기·다운로드·해시 작업만 있습니다. 일시정지·우선순위·재시도는 P5 단계에서 추가됩니다.",
+    "p5_hint": "작업은 요청한 순서대로 실행되며, 문서 처리(분류·OCR·추출)는 한 번에 하나씩 돌아갑니다(뒤에 요청한 처리는 대기). 일시정지·우선순위·재시도는 다음 단계에서 추가됩니다.",
     "tabs": {
       "active": "진행 중",
       "finished": "완료"
@@ -867,10 +870,6 @@
       "delete_title": "문서 삭제",
       "open_doc": "문서 열기",
       "add_to_kb": "지식 베이스에 추가",
-      "process": "처리",
-      "classify": "분류",
-      "ocr": "OCR",
-      "extract": "추출",
       "register_form": "양식으로 등록",
       "merge": "병합"
     },
@@ -882,7 +881,8 @@
       "imported": "가져온 시각",
       "size": "크기",
       "doc_type": "유형",
-      "confidence": "신뢰도"
+      "confidence": "신뢰도",
+      "review": "검토"
     },
     "pages_count": "{{count}}쪽",
     "converted": "변환본",
@@ -905,6 +905,7 @@
     "kb_added": "{{count}}개 문서를 '{{name}}'에 추가했습니다.",
     "kb_added_one": "{{count}}개 문서를 '{{name}}'에 추가했습니다.",
     "review_pending": "검토 대기",
+    "review_open": "검토 큐에서 보기: {{name}}",
     "process_started": "처리 작업을 시작했습니다."
   },
   "documents": {
@@ -984,7 +985,10 @@
     "items": "가져올 파일",
     "auto_level": "가져온 뒤 자동 처리",
     "auto_level_default": "설정값 사용 ({{level}})",
-    "eta": "예상 소요 약 {{minutes}}분 (쪽당 30~50초, 모델 로드 제외)"
+    "eta": "예상 소요 약 {{minutes}}분 (쪽당 30~50초, 모델 로드 제외)",
+    "eta_ocr": "예상 소요 약 {{minutes}}분 (쪽당 20~30초, 추출 없음, 모델 로드 제외)",
+    "eta_classify": "예상 소요 약 {{minutes}}분 (문서당 10~20초, 분류만, 모델 로드 제외)",
+    "eta_short": "예상 소요 1분 미만 (모델 로드 제외)"
   },
   "viewer": {
     "back": "라이브러리",
@@ -1032,6 +1036,7 @@
       "imported": "가져온 시각",
       "dpi": "렌더 DPI",
       "text_layer": "텍스트 레이어",
+      "doc_type_source": "유형 출처",
       "yes": "있음",
       "no": "없음"
     },
@@ -1082,7 +1087,6 @@
     },
     "explain_with_chord": "설명 ({{chord}})",
     "fields": {
-      "title": "필드",
       "run": "실행 #{{n}}",
       "schema": "스키마",
       "none": "아직 추출 결과가 없습니다. '처리'로 추출을 시작하세요.",
@@ -1092,7 +1096,6 @@
       "hold": "보류",
       "next": "다음",
       "reject": "거부",
-      "validation": "검증 결과",
       "revalidate": "검증 다시 실행",
       "revalidated": "검증을 다시 실행했습니다.",
       "evidence": "근거",
@@ -1105,7 +1108,11 @@
       "edit_placeholder": "새 값",
       "empty_value": "(없음)",
       "page_link": "{{page}}쪽",
-      "schema_changed": "스키마를 바꿨습니다. 다시 추출하면 반영됩니다."
+      "schema_changed": "스키마를 바꿨습니다. 다시 추출하면 반영됩니다.",
+      "precise": "정밀",
+      "run_select": "실행 선택",
+      "open_queue": "검토 큐에서 보기",
+      "more": "더 보기"
     },
     "tables": {
       "none": "텍스트에서 찾은 표가 없습니다. OCR 결과의 HTML 표와 마크다운 표를 표시합니다.",
@@ -1141,6 +1148,7 @@
       "done": "검토 완료"
     },
     "confidence_badge": "신뢰도 {{value}}",
+    "type_changed_title": "새 유형으로 다시 추출",
     "type_changed": "유형을 바꿨습니다. 새 유형의 스키마로 다시 추출할까요?",
     "reextract": "다시 추출",
     "ocr_badge": "OCR"
@@ -1378,7 +1386,6 @@
       "precise": "정밀 모드로 다시 추출",
       "classify": "분류만",
       "ocr": "분류 + OCR",
-      "extract": "추출(기존 결과 유지)",
       "force": "처음부터 다시(결과 덮어쓰기)",
       "started": "처리 작업을 시작했습니다 ({{count}}건).",
       "queued": "진행 중인 처리가 끝나면 이어서 실행합니다 ({{count}}건).",
@@ -1386,7 +1393,20 @@
       "engine_off": "엔진이 꺼져 있어 자동 처리를 건너뛰었습니다. 엔진을 시작하거나 설정에서 엔진 자동 시작을 켜세요.",
       "model_ready": "비전 모델 {{model}} 준비됨",
       "model_not_loaded": "비전 모델 {{model}}이(가) 로드되지 않았습니다. 처리 시작 시 자동으로 로드합니다.",
-      "model_none": "비전 모델이 없습니다. 모델 관리자에서 모델을 설치하세요."
+      "model_none": "비전 모델이 없습니다. 모델 관리자에서 모델을 설치하세요.",
+      "confirm_title": "기존 추출 결과 대체",
+      "confirm_body": "이미 추출된 문서 {{count}}건의 결과를 새 실행으로 대체합니다. 이전 실행의 승인·수정 내역은 이력 탭에 남지만, 필드 탭과 검토 큐는 새 결과 기준으로 바뀝니다.",
+      "confirm_ok": "새로 추출"
+    },
+    "status": {
+      "label": "처리 파이프라인",
+      "ready": "모델 준비됨",
+      "not_loaded": "모델 미로드",
+      "none": "모델 없음",
+      "engine_off": "엔진 꺼짐",
+      "running": "처리 중",
+      "running_count": "처리 중 {{count}}건",
+      "queued": "대기 {{count}}건"
     },
     "review_status": {
       "none": "검토 불필요",
@@ -1398,7 +1418,6 @@
       "manual": "수동 지정",
       "form": "양식"
     },
-    "confidence": "신뢰도",
     "reason": {
       "low_confidence": "저신뢰",
       "validation_failed": "검증 실패",
@@ -1470,6 +1489,7 @@
       "form": "양식"
     },
     "uses": "사용 {{count}}회",
+    "pending_hint": "모델 결과를 기다리는 중입니다. 취소하면 도착하는 결과는 무시됩니다.",
     "editor": {
       "name": "이름(한국어)",
       "name_en": "이름(영어)",
@@ -1510,11 +1530,30 @@
       "test_hint": "이 스키마로 선택한 문서를 추출합니다(채움률은 뷰어 필드 탭에서 확인).",
       "test_started": "테스트 추출을 시작했습니다.",
       "test_pick": "문서 선택",
-      "form_doc": "양식 문서",
       "open_form_doc": "양식 문서 열기",
       "new_draft": "새 스키마(미저장)",
       "unsaved": "저장되지 않은 변경이 있습니다.",
-      "discard": "버리기"
+      "discard": "버리기",
+      "discard_confirm": "저장되지 않은 변경이 있습니다. 버리고 계속할까요?",
+      "duplicate_name": "{{name}} (복제)"
+    },
+    "lint": {
+      "fields_empty": "필드가 최소 1개 필요합니다.",
+      "fields_many": "필드가 {{n}}개를 넘습니다.",
+      "key_duplicate": "키가 중복됩니다.",
+      "key_reserved": "value·evidence·confidence는 예약된 키입니다.",
+      "key_format": "키는 영문 소문자·숫자·_ 의 snake_case만 사용할 수 있습니다.",
+      "label_missing": "한국어 또는 영어 라벨이 필요합니다.",
+      "regex_anchor": "정규식 힌트는 ^…$로 감싸야 합니다(검증기 전용, 문법에는 포함되지 않음).",
+      "regex_feature": "전방·후방 탐색이나 플래그는 문법에서 지원하지 않습니다.",
+      "enum_empty": "선택형 필드에는 선택지가 최소 1개 필요합니다.",
+      "enum_large": "선택지가 {{n}}개를 넘으면 문법이 비대해집니다.",
+      "nesting": "표·그룹은 중첩할 수 없습니다(문법에 $ref 없음).",
+      "children_empty": "표·그룹에는 열이 최소 1개 필요합니다.",
+      "columns_many": "열이 {{n}}개를 넘습니다.",
+      "children_ignored": "스칼라 필드에는 열을 둘 수 없습니다.",
+      "options_ignored": "선택지는 선택형 필드에만 적용됩니다.",
+      "rule_unknown": "알 수 없는 규칙 '{{detail}}'은(는) 무시됩니다."
     },
     "mapping": {
       "title": "유형 → 스키마 매핑",
@@ -1559,13 +1598,15 @@
       "doc_type": "유형",
       "reason": "사유",
       "document": "문서",
+      "document_chip": "문서: {{name}}",
+      "clear_document": "문서 필터 해제 ({{name}})",
       "all": "전체"
     },
     "empty": "검토할 필드가 없습니다.",
     "count": "{{count}}개 필드",
     "count_one": "{{count}}개 필드",
     "threshold": "임계치 {{value}}",
-    "keys": "Enter 승인 · E 수정 · S 보류 · N 다음 · R 거부",
+    "threshold_hint": "임계치는 이후 추출과 '검증 다시 실행'에 적용됩니다. 이미 표시된 항목은 바뀌지 않습니다.",
     "approve": "승인",
     "edit": "수정",
     "hold": "보류",
@@ -1588,9 +1629,9 @@
     "edit_title": "값 수정",
     "edit_hint": "인쇄된 값을 그대로 입력하세요. 금액·날짜는 저장 시 정규화됩니다.",
     "no_image": "페이지 이미지가 없습니다.",
-    "document_promoted": "문서가 '검토 완료'가 되었습니다.",
     "list": "검토 항목",
     "current": "현재 항목",
-    "status_line": "{{done}} / {{total}} 처리"
+    "status_line": "{{done}} / {{total}} 처리",
+    "announce": "현재 항목 {{title}} ({{index}}/{{total}})"
   }
 }
