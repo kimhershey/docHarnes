@@ -70,7 +70,9 @@ pub fn is_network_or_sync_folder(root: &Path) -> bool {
 #[cfg(windows)]
 fn is_remote_drive_windows(root: &Path) -> bool {
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, DRIVE_REMOTE};
+    use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
+    /// `DRIVE_REMOTE` (Win32 `WinBase.h`); lives in `Win32::System::WindowsProgramming` in windows-sys.
+    const DRIVE_REMOTE: u32 = 4;
     let Some(prefix) = root.components().next() else { return false };
     let drive = std::path::Path::new(prefix.as_os_str()).join("\\");
     let wide: Vec<u16> = drive.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
