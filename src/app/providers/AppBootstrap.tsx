@@ -6,6 +6,7 @@ import { useDocumentsStore } from "@/stores/documents";
 import { useKnowledgeStore } from "@/stores/knowledge";
 import { useEngineStore } from "@/stores/engine";
 import { useJobsStore } from "@/stores/jobs";
+import { usePipelineStore } from "@/stores/pipeline";
 import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -34,6 +35,7 @@ export function AppBootstrap({ children }: { children: ReactNode }) {
     void useJobsStore.getState().init();
     void useDocumentsStore.getState().init();
     void useKnowledgeStore.getState().init();
+    void usePipelineStore.getState().init();
   }, [settingsLoaded, workspaceLoaded]);
 
   useEffect(() => {

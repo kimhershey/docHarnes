@@ -135,12 +135,18 @@ export function defaultSettings(): AppSettings {
       engine_binary: null,
     },
     processing: {
-      auto_level: "classify_and_ocr",
+      auto_level: "classify_only",
+      inbox_auto_level: "full",
       render_dpi: 200,
       review_threshold: 0.8,
       audit_sample_percent: 5,
       organize_reviewed_only: true,
       inbox_watch: true,
+      ocr_digital_pdf: false,
+      kie_max_pages: 4,
+      precise_mode: false,
+      dense_reocr: true,
+      dense_cells: 80,
     },
     cache: { page_cache_max_gb: 5, keep_thumbnails: true },
     privacy: { pii_masking: true, db_encryption: false },
@@ -168,7 +174,7 @@ function write(key: string, value: unknown): void {
   }
 }
 
-function loadSettings(): AppSettings {
+export function loadSettings(): AppSettings {
   const stored = read<Partial<AppSettings>>(SETTINGS_KEY, {});
   const d = defaultSettings();
   return {
@@ -1103,6 +1109,10 @@ export interface MockPage {
   text: string | null;
   is_blank: boolean;
   rendered_at: string;
+  text_source?: string | null;
+  ocr_at?: string | null;
+  page_doc_type?: string | null;
+  classified_at?: string | null;
 }
 
 export interface MockDoc extends DocumentRecord {
@@ -1110,8 +1120,11 @@ export interface MockDoc extends DocumentRecord {
   pages: MockPage[];
 }
 
+/** Pipeline columns added in P4 (older stored documents get the defaults). */
+const DOC_PIPELINE_DEFAULTS = { doc_type_source: null, classified_at: null, ocr_at: null, extracted_at: null, last_run_id: null, schema_id: null, review_status: "none" as const, confidence: null, pipeline_error: null };
+
 export function loadDocs(): MockDoc[] {
-  return read<MockDoc[]>(DOCS_KEY, []);
+  return read<MockDoc[]>(DOCS_KEY, []).map((d) => ({ ...DOC_PIPELINE_DEFAULTS, ...d }));
 }
 
 export function saveDocs(list: MockDoc[]): void {
@@ -1196,6 +1209,14 @@ function pageView(d: MockDoc, p: MockPage, withText: boolean): PageView {
     text: withText ? p.text : undefined,
     is_blank: p.is_blank,
     rendered_at: p.rendered_at,
+    text_source: p.text_source ?? (p.text ? (d.converted ? "converted" : "layer") : null),
+    ocr_at: p.ocr_at ?? null,
+    ocr_profile: null,
+    ocr_model: null,
+    classified_at: p.classified_at ?? null,
+    page_doc_type: p.page_doc_type ?? null,
+    page_language: null,
+    page_rotation: null,
     image_url: hasImage ? svgPage(d.original_name, p.page_no, p.width_px, p.height_px, false) : null,
     thumb_url: hasImage ? svgPage(d.original_name, p.page_no, 160, Math.round((160 * p.height_px) / p.width_px), true) : null,
   };
@@ -1214,6 +1235,9 @@ function matchesFilter(d: MockDoc, f: DocumentFilter): boolean {
   }
   if (f.tag && !d.tags.some((t) => t.toLowerCase() === f.tag!.toLowerCase())) return false;
   if (f.doc_type && d.doc_type !== f.doc_type) return false;
+  if (f.review_status && d.review_status !== f.review_status) return false;
+  if (f.role && d.role !== f.role) return false;
+  if (f.max_confidence != null && !(d.confidence !== null && d.confidence < f.max_confidence)) return false;
   return true;
 }
 
@@ -1388,6 +1412,7 @@ async function runDocumentImport(plan: DocumentImportPlan): Promise<string> {
           import_batch_id: job.id,
           deleted_at: null,
           tags: [],
+          ...DOC_PIPELINE_DEFAULTS,
         };
       }
       upsertDoc(doc);
@@ -1421,6 +1446,8 @@ async function runDocumentImport(plan: DocumentImportPlan): Promise<string> {
       kb.attachToCollection(plan.options.collection_id, touched, plan.options.role);
     }
     kb.autoIndex();
+    const pl = await import("./mock-pipeline");
+    pl.autoProcess(ids, plan.options.auto_level ?? null, plan.source);
   })();
   return job.id;
 }
@@ -1525,6 +1552,7 @@ function mockDocuments(cmd: string, a: Record<string, any>): unknown { // eslint
         d.tags = Array.from(new Set(tags)).sort((x, y) => x.localeCompare(y));
       } else if (cmd === "documents_set_doc_type") {
         d.doc_type = (a.docType as string | null)?.trim() || null;
+        d.doc_type_source = "manual";
       } else {
         d.title = (a.title as string | null)?.trim() || null;
       }
@@ -1864,6 +1892,38 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       const kb = await import("./mock-knowledge");
       return r(await kb.mockKnowledge(cmd, a));
     }
+    case "pipeline_status":
+    case "pipeline_process":
+    case "pipeline_doc_types":
+    case "pipeline_schemas":
+    case "pipeline_schema_get":
+    case "pipeline_schema_versions":
+    case "pipeline_schema_save":
+    case "pipeline_schema_delete":
+    case "pipeline_schema_set_default":
+    case "pipeline_schema_set_enabled":
+    case "pipeline_schema_lint":
+    case "pipeline_schema_from_nl":
+    case "pipeline_form_derive":
+    case "pipeline_form_register":
+    case "pipeline_document_schema":
+    case "pipeline_runs":
+    case "pipeline_fields":
+    case "pipeline_field_history":
+    case "pipeline_restore":
+    case "pipeline_revalidate":
+    case "pipeline_review_queue":
+    case "pipeline_review_apply":
+    case "pipeline_review_approve_document":
+    case "pipeline_tables":
+    case "pipeline_table_csv":
+    case "pipeline_table_export":
+    case "pipeline_split":
+    case "pipeline_merge": {
+      if (!current) throw err("no_workspace", "no workspace is open");
+      const pl = await import("./mock-pipeline");
+      return r(await pl.mockPipeline(cmd, a));
+    }
     case "prerouter_route":
       return r(mockRoute(String(a.text)));
     case "prerouter_resolve_date":
@@ -1880,6 +1940,8 @@ export function resetMock(): void {
   localStorage.removeItem(MODELS_KEY);
   localStorage.removeItem(DOCS_KEY);
   localStorage.removeItem("doculens.mock.knowledge");
+  localStorage.removeItem("doculens.mock.pipeline");
+  localStorage.removeItem("doculens.mock.schema-versions");
   importPlans.clear();
   current = null;
   startupResolved = false;

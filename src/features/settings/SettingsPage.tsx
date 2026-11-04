@@ -15,7 +15,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { isTauri, openExternal, revealPath } from "@/lib/ipc";
 import { useAppInfo, useRegistry } from "@/lib/queries";
-import { LANGUAGES, RETENTION_DAY_ITEMS, THEMES, type AutoProcessingLevel, type ReducedMotion, type RetentionPolicy } from "@/lib/types";
+import { LANGUAGES, RETENTION_DAY_ITEMS, THEMES, type AutoProcessingLevel, type ReducedMotion, type RetentionPolicy, AUTO_PROCESSING_LEVELS } from "@/lib/types";
 import { describeError } from "@/lib/errors";
 import { cn, formatDate } from "@/lib/utils";
 import { api } from "@/lib/ipc";
@@ -319,13 +319,39 @@ function ProcessingTab() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {(["classify_only", "classify_and_ocr", "full"] as const).map((lvl) => (
+              {AUTO_PROCESSING_LEVELS.map((lvl) => (
                 <SelectItem key={lvl} value={lvl}>
                   {t(`settings.processing.auto_levels.${lvl}`)}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
+        </Row>
+        <Row label={t("settings.processing.inbox_auto_level")}>
+          <Select value={p.inbox_auto_level} onValueChange={(v) => void update((s) => void (s.processing.inbox_auto_level = v as AutoProcessingLevel))}>
+            <SelectTrigger className="w-56" data-testid="settings-inbox-auto-level">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {AUTO_PROCESSING_LEVELS.map((lvl) => (
+                <SelectItem key={lvl} value={lvl}>
+                  {t(`settings.processing.auto_levels.${lvl}`)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Row>
+        <Row label={t("settings.processing.ocr_digital_pdf")} hint={t("settings.processing.ocr_digital_pdf_hint")}>
+          <Switch checked={p.ocr_digital_pdf} onCheckedChange={(v) => void update((s) => void (s.processing.ocr_digital_pdf = v))} data-testid="settings-ocr-digital" />
+        </Row>
+        <Row label={t("settings.processing.kie_max_pages")} hint={t("settings.processing.kie_max_pages_hint")} htmlFor="kie-max-pages">
+          <Input id="kie-max-pages" type="number" min={1} max={32} className="w-28" defaultValue={p.kie_max_pages} onBlur={(e) => void update((s) => void (s.processing.kie_max_pages = Math.min(32, Math.max(1, Number(e.target.value) || 4))))} />
+        </Row>
+        <Row label={t("settings.processing.precise_mode")} hint={t("settings.processing.precise_hint")}>
+          <Switch checked={p.precise_mode} onCheckedChange={(v) => void update((s) => void (s.processing.precise_mode = v))} data-testid="settings-precise-mode" />
+        </Row>
+        <Row label={t("settings.processing.dense_reocr")} hint={t("settings.processing.dense_reocr_hint", { cells: p.dense_cells })}>
+          <Switch checked={p.dense_reocr} onCheckedChange={(v) => void update((s) => void (s.processing.dense_reocr = v))} />
         </Row>
         <Row label={t("settings.processing.render_dpi")} htmlFor="render-dpi">
           <Input id="render-dpi" type="number" min={72} max={600} step={10} className="w-28" defaultValue={p.render_dpi} onBlur={(e) => void update((s) => void (s.processing.render_dpi = Number(e.target.value) || 200))} />

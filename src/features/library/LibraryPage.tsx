@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { BookOpen, FileText, FolderInput, FolderOpen, Image as ImageIcon, LayoutGrid, List, RefreshCw, Trash2 } from "lucide-react";
+import { BookOpen, FileText, FolderInput, FolderOpen, Image as ImageIcon, LayoutGrid, List, Merge, RefreshCw, Trash2, Upload } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
@@ -12,9 +12,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { AddToCollectionDialog } from "@/features/knowledge/AddToCollectionDialog";
+import { docTypeLabel } from "@/features/pipeline/labels";
+import { ProcessMenu } from "@/features/pipeline/ProcessMenu";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
-import { useDocumentStats, useDocuments, usePdfiumInfo } from "@/lib/queries";
+import { useDocTypes, useDocumentStats, useDocuments, usePdfiumInfo } from "@/lib/queries";
 import {
   DOCUMENT_STATUSES,
   SOURCE_KINDS,
@@ -23,15 +25,18 @@ import {
   type DocumentStatus,
   type DocumentView,
   type ImportSource,
+  type ReviewStatus,
   type SourceKind,
 } from "@/lib/types";
 import { cn, formatBytes, formatDate } from "@/lib/utils";
 import { useDocumentsStore } from "@/stores/documents";
+import { usePipelineStore } from "@/stores/pipeline";
 import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspace } from "@/stores/workspace";
 
 import { ImportDocumentsDialog } from "./ImportDocumentsDialog";
+import { MergeDialog } from "./SplitMergeDialogs";
 import { statusVariant } from "./status";
 import { useDocumentDrop } from "./useDocumentDrop";
 
@@ -70,6 +75,12 @@ export function LibraryPage() {
   const reloadSettings = useSettingsStore((s) => s.load);
   const [status, setStatus] = useState<DocumentStatus | "all">("all");
   const [kind, setKind] = useState<SourceKind | "all">("all");
+  const [docType, setDocType] = useState<string>("all");
+  const [review, setReview] = useState<ReviewStatus | "all">("all");
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const notice = usePipelineStore((s) => s.notice);
+  const clearNotice = usePipelineStore((s) => s.clearNotice);
+  const { data: docTypes } = useDocTypes(!!workspace);
   const [sort, setSort] = useState<DocumentSort>("imported_desc");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [importOpen, setImportOpen] = useState(false);
@@ -91,9 +102,11 @@ export function LibraryPage() {
       kinds: kind === "all" ? [] : [kind],
       folder,
       query: debounced || null,
+      doc_type: docType === "all" ? null : docType,
+      review_status: review === "all" ? null : review,
       sort,
     }),
-    [status, kind, folder, debounced, sort],
+    [status, kind, folder, debounced, docType, review, sort],
   );
   const { data: docs, isLoading, isPlaceholderData, error } = useDocuments(filter, !!workspace);
   const { data: stats } = useDocumentStats(!!workspace);
@@ -270,6 +283,32 @@ export function LibraryPage() {
                 ))}
               </SelectContent>
             </Select>
+            <Select value={docType} onValueChange={setDocType}>
+              <SelectTrigger className="h-8 w-36" aria-label={t("library.filters.doc_type")} data-testid="library-filter-type">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{t("library.filters.all")}</SelectItem>
+                {[...(docTypes ?? []).map((d) => d.slug), "other"].map((d) => (
+                  <SelectItem key={d} value={d}>
+                    {docTypeLabel(d, docTypes, t, i18n.language)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={review} onValueChange={(v) => setReview(v as ReviewStatus | "all")}>
+              <SelectTrigger className="h-8 w-32" aria-label={t("library.filters.review")} data-testid="library-filter-review">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{t("library.filters.all")}</SelectItem>
+                {(["pending", "done", "none"] as const).map((r) => (
+                  <SelectItem key={r} value={r}>
+                    {t(`pipeline.review_status.${r}`)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Select value={sort} onValueChange={(v) => setSort(v as DocumentSort)}>
               <SelectTrigger className="h-8 w-40" aria-label={t("library.sort")} data-testid="library-sort">
                 <SelectValue />
@@ -297,12 +336,33 @@ export function LibraryPage() {
           </p>
         )}
 
-        <div className="flex items-center gap-2 border-b border-border px-4 py-1.5 text-xs text-fg-muted" data-testid="library-stats">
+        {notice && (
+          <p className="flex items-center gap-2 border-b border-border bg-warn-soft px-4 py-1.5 text-xs text-warn" role="status" data-testid="library-pipeline-notice">
+            <span>{t(`pipeline.process.${notice}`)}</span>
+            <Button size="sm" variant="ghost" className="ml-auto h-6" onClick={clearNotice}>
+              {t("common.close")}
+            </Button>
+          </p>
+        )}
+        <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-1.5 text-xs text-fg-muted" data-testid="library-stats">
           <span>{t("library.total", { count: stats?.total ?? 0, pages: stats?.total_pages ?? 0 })}</span>
           {selectedVisible.length > 0 && (
             <>
               <span className="mx-1">·</span>
               <span data-testid="library-selected">{t("library.selected", { count: selectedVisible.length })}</span>
+              <ProcessMenu ids={selectedVisible} variant="ghost" testId="library-process" />
+              {selectedVisible.length === 1 && (
+                <Button size="sm" variant="ghost" onClick={() => navigate(`/schemas?register=${selectedVisible[0]}`)} data-testid="library-register-form">
+                  <Upload />
+                  {t("library.actions.register_form")}
+                </Button>
+              )}
+              {selectedVisible.length >= 2 && (
+                <Button size="sm" variant="ghost" onClick={() => setMergeOpen(true)} data-testid="library-merge">
+                  <Merge />
+                  {t("library.actions.merge")}
+                </Button>
+              )}
               <Button size="sm" variant="ghost" onClick={() => void rerenderSelected()} data-testid="library-rerender">
                 <RefreshCw />
                 {t("library.actions.rerender")}
@@ -371,7 +431,7 @@ export function LibraryPage() {
         {docs && list.length > 0 && (
           <div className={cn("flex min-h-0 flex-1 flex-col transition-opacity", isPlaceholderData && "opacity-60")} aria-busy={isPlaceholderData}>
             {view === "grid" ? (
-              <GridView docs={list} selected={selected} onToggle={toggle} onOpen={open} />
+              <GridView docs={list} selected={selected} onToggle={toggle} onOpen={open} typeLabel={(slug) => docTypeLabel(slug, docTypes, t, i18n.language)} />
             ) : (
               <ListView docs={list} selected={selected} onToggle={toggle} onOpen={open} locale={i18n.language} />
             )}
@@ -382,6 +442,7 @@ export function LibraryPage() {
       <ImportDocumentsDialog open={importOpen} onOpenChange={setImportOpen} initialPaths={importPaths} source={importSource} />
       <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
       <AddToCollectionDialog open={addToKb} onOpenChange={setAddToKb} docIds={selectedVisible} onDone={() => setSelected(new Set())} />
+      <MergeDialog open={mergeOpen} onOpenChange={setMergeOpen} ids={selectedVisible} onDone={() => setSelected(new Set())} />
     </div>
   );
 }
@@ -419,7 +480,7 @@ function useColumns(ref: React.RefObject<HTMLDivElement | null>, itemWidth: numb
   return cols;
 }
 
-function GridView({ docs, selected, onToggle, onOpen }: { docs: DocumentView[]; selected: Set<string>; onToggle: (id: string) => void; onOpen: (id: string) => void }) {
+function GridView({ docs, selected, onToggle, onOpen, typeLabel }: { docs: DocumentView[]; selected: Set<string>; onToggle: (id: string) => void; onOpen: (id: string) => void; typeLabel: (slug: string) => string }) {
   const { t } = useTranslation();
   const parentRef = useRef<HTMLDivElement | null>(null);
   const cols = useColumns(parentRef, CARD_W);
@@ -431,7 +492,7 @@ function GridView({ docs, selected, onToggle, onOpen }: { docs: DocumentView[]; 
         {virtualizer.getVirtualItems().map((row) => (
           <div key={row.key} className="absolute left-0 flex w-full gap-4 px-2" style={{ transform: `translateY(${row.start}px)`, height: row.size }}>
             {docs.slice(row.index * cols, row.index * cols + cols).map((doc) => (
-              <DocCard key={doc.id} doc={doc} selected={selected.has(doc.id)} onToggle={() => onToggle(doc.id)} onOpen={() => onOpen(doc.id)} t={t} />
+              <DocCard key={doc.id} doc={doc} selected={selected.has(doc.id)} onToggle={() => onToggle(doc.id)} onOpen={() => onOpen(doc.id)} t={t} typeLabel={typeLabel} />
             ))}
           </div>
         ))}
@@ -440,7 +501,7 @@ function GridView({ docs, selected, onToggle, onOpen }: { docs: DocumentView[]; 
   );
 }
 
-function DocCard({ doc, selected, onToggle, onOpen, t }: { doc: DocumentView; selected: boolean; onToggle: () => void; onOpen: () => void; t: (k: string, o?: Record<string, unknown>) => string }) {
+function DocCard({ doc, selected, onToggle, onOpen, t, typeLabel }: { doc: DocumentView; selected: boolean; onToggle: () => void; onOpen: () => void; t: (k: string, o?: Record<string, unknown>) => string; typeLabel: (slug: string) => string }) {
   return (
     <div
       role="listitem"
@@ -471,6 +532,16 @@ function DocCard({ doc, selected, onToggle, onOpen, t }: { doc: DocumentView; se
               {t(`documents.status.${doc.status}`)}
             </Badge>
             {doc.converted && <Badge variant="info">{t("library.converted")}</Badge>}
+            {doc.doc_type && (
+              <Badge variant="outline" data-testid={`doc-type-${doc.id}`}>
+                {typeLabel(doc.doc_type)}
+              </Badge>
+            )}
+            {doc.review_status === "pending" && (
+              <Badge variant="warn" data-testid={`doc-review-${doc.id}`}>
+                {t("library.review_pending")}
+              </Badge>
+            )}
             {doc.role === "knowledge" && (
               <Badge variant="info" data-testid={`doc-role-${doc.id}`}>
                 {t("library.role_knowledge")}

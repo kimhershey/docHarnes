@@ -33,6 +33,22 @@ export function describeError(e: unknown, t: TFunction): string {
       embedding_model_not_installed: "errors.reasons.embedding_model_not_installed",
       no_text: "errors.reasons.no_text",
       "document_id required": "errors.reasons.document_id_required",
+      schema_name_empty: "errors.reasons.schema_name_empty",
+      schema_doc_type_invalid: "errors.reasons.schema_doc_type_invalid",
+      schema_invalid: "errors.reasons.schema_invalid",
+      schema_not_found: "errors.reasons.schema_not_found",
+      schema_builtin: "errors.reasons.schema_builtin",
+      field_not_found: "errors.reasons.field_not_found",
+      field_value_empty: "errors.reasons.field_value_empty",
+      change_not_found: "errors.reasons.change_not_found",
+      description_empty: "errors.reasons.description_empty",
+      no_model: "errors.reasons.no_model",
+      engine_not_running: "errors.reasons.engine_not_running",
+      model_not_loaded: "errors.reasons.model_not_loaded",
+      "no fields": "errors.reasons.no_fields",
+      "no split boundary inside the document": "errors.reasons.no_split_boundary",
+      "merge needs at least two documents": "errors.reasons.merge_two",
+      table_not_found: "errors.reasons.table_not_found",
     };
     const key = known[reason.trim()];
     if (key) return t(key);

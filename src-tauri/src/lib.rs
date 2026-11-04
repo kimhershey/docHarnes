@@ -168,6 +168,7 @@ pub fn run() {
             commands::pipeline::pipeline_review_approve_document,
             commands::pipeline::pipeline_tables,
             commands::pipeline::pipeline_table_csv,
+            commands::pipeline::pipeline_table_export,
             commands::pipeline::pipeline_split,
             commands::pipeline::pipeline_merge,
         ])

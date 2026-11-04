@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, FolderOpen, GitBranch, Maximize2, MessageSquareText, RefreshCw, RotateCcw, RotateCw, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
+import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, FolderOpen, GitBranch, Maximize2, MessageSquareText, RefreshCw, RotateCcw, RotateCw, Scissors, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams, useSearchParams } from "react-router";
@@ -13,10 +13,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AddToCollectionDialog } from "@/features/knowledge/AddToCollectionDialog";
+import { confidenceGlyph, confidenceTone, docTypeLabel, formatConfidence } from "@/features/pipeline/labels";
+import { ProcessMenu } from "@/features/pipeline/ProcessMenu";
 import { Snippet } from "@/features/search/SearchPage";
 import { describeError } from "@/lib/errors";
 import { api, revealPath } from "@/lib/ipc";
-import { useDocument, useDocumentChunks, useDocumentCollections, useDocumentPages } from "@/lib/queries";
+import { useDocTypes, useDocument, useDocumentChunks, useDocumentCollections, useDocumentPages } from "@/lib/queries";
 import { queryClient, queryKeys } from "@/lib/query-client";
 import { formatChord, isComposing, matchesChord } from "@/lib/shortcuts";
 import type { Citation, DocumentView, PageView } from "@/lib/types";
@@ -24,11 +26,14 @@ import { cn, formatBytes, formatDate, isMac } from "@/lib/utils";
 import { useShortcut } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 
+import { FieldsPanel } from "./FieldsPanel";
+import { HistoryPanel } from "./HistoryPanel";
+import { SplitDialog } from "./SplitMergeDialogs";
 import { statusVariant } from "./status";
+import { TablesPanel } from "./TablesPanel";
 import { VersionDialog } from "./VersionDialog";
 import { ViewerKnowledgePanel } from "./ViewerKnowledgePanel";
 
-const DOC_TYPES = ["tax_invoice", "invoice_exempt", "receipt", "business_registration", "contract", "application_form", "general", "other"];
 const NONE = "__none__";
 const THUMB_H = 128;
 
@@ -69,7 +74,10 @@ export function DocumentViewer() {
   const [selectionText, setSelectionText] = useState("");
   const [versionOpen, setVersionOpen] = useState(false);
   const [addToKb, setAddToKb] = useState(false);
+  const [splitOpen, setSplitOpen] = useState(false);
+  const [splitAt, setSplitAt] = useState<number | null>(null);
   const { data: docCollections } = useDocumentCollections(id);
+  const { data: docTypes } = useDocTypes();
 
   // One component instance serves every /library/:id — reset per document.
   useEffect(() => {
@@ -84,11 +92,35 @@ export function DocumentViewer() {
 
   // Search / citation links open a specific page (`?page=N`) and highlight the query (`?q=`).
   const pageParam = searchParams.get("page");
+  const tabParam = searchParams.get("tab");
   useEffect(() => {
     const n = Number(pageParam);
     if (pageParam && Number.isFinite(n) && n >= 1) setPageNo(n);
-    if (searchParams.get("q") || searchParams.get("chunk")) setTab("text");
-  }, [pageParam, id, searchParams]);
+    if (tabParam && ["text", "fields", "tables", "qa", "history"].includes(tabParam)) setTab(tabParam);
+    else if (searchParams.get("q") || searchParams.get("chunk")) setTab("text");
+  }, [pageParam, tabParam, id, searchParams]);
+
+  // Evidence click in the fields tab: jump to the page and highlight the quoted text.
+  const goToEvidence = (page: number, needle?: string) => {
+    setPageNo(page);
+    if (needle) {
+      const next = new URLSearchParams(searchParams);
+      next.set("q", needle.slice(0, 80));
+      next.delete("chunk");
+      next.delete("tab");
+      setSearchParams(next, { replace: true });
+      setTab("text");
+    }
+  };
+  const extractNow = async () => {
+    if (!doc) return;
+    try {
+      await api.pipelineProcess({ document_ids: [doc.id], level: "extract" });
+      toast(t("pipeline.process.started", { count: 1 }), "info");
+    } catch (e) {
+      toast(describeError(e, t), "danger");
+    }
+  };
 
   const clearHighlight = () => {
     const next = new URLSearchParams(searchParams);
@@ -278,6 +310,8 @@ export function DocumentViewer() {
     if (!doc) return;
     try {
       applyDoc(await api.documentsSetDocType(doc.id, v === NONE ? null : v));
+      // Design §3.7.3: a manual type change suggests re-extraction (never runs it automatically).
+      if (doc.last_run_id) toast(t("viewer.type_changed"), "info");
     } catch (e) {
       toast(describeError(e, t), "danger");
     }
@@ -363,18 +397,33 @@ export function DocumentViewer() {
           </Badge>
         )}
         <Select value={doc.doc_type ?? NONE} onValueChange={(v) => void setDocType(v)}>
-          <SelectTrigger className="h-8 w-40" aria-label={t("viewer.doc_type")} data-testid="viewer-doc-type">
+          <SelectTrigger className="h-8 w-44" aria-label={t("viewer.doc_type")} title={doc.doc_type_source ? t(`pipeline.doc_type_source.${doc.doc_type_source}`) : undefined} data-testid="viewer-doc-type">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={NONE}>{t("viewer.no_doc_type")}</SelectItem>
-            {DOC_TYPES.map((d) => (
+            {[...(docTypes ?? []).map((d) => d.slug), ...(doc.doc_type && !docTypes?.some((d) => d.slug === doc.doc_type) && doc.doc_type !== "other" ? [doc.doc_type] : []), "other"].map((d) => (
               <SelectItem key={d} value={d}>
-                {t(`documents.doc_types.${d}`)}
+                {docTypeLabel(d, docTypes, t, i18n.language)}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
+        {doc.review_status !== "none" && (
+          <Badge variant={doc.review_status === "pending" ? "warn" : "ok"} data-testid="viewer-review-badge">
+            {t(`viewer.review_badge.${doc.review_status}`)}
+          </Badge>
+        )}
+        {doc.confidence !== null && (
+          <Badge variant={confidenceTone(doc.confidence)} title={t("viewer.confidence_badge", { value: formatConfidence(doc.confidence) })} data-testid="viewer-confidence">
+            {confidenceGlyph(doc.confidence)} {formatConfidence(doc.confidence)}
+          </Badge>
+        )}
+        {doc.pipeline_error && (
+          <Badge variant="danger" title={doc.pipeline_error} data-testid="viewer-pipeline-error">
+            {t("viewer.process.pipeline_error")}
+          </Badge>
+        )}
         <div role="group" className="flex flex-wrap items-center gap-1" aria-label={t("viewer.tags")} data-testid="viewer-tags">
           {doc.tags.map((tag) => (
             <Badge key={tag} variant="muted" className="gap-1">
@@ -434,6 +483,11 @@ export function DocumentViewer() {
         <Button size="sm" variant="ghost" onClick={() => void rerender()} data-testid="viewer-rerender">
           <RefreshCw />
           {t("viewer.rerender")}
+        </Button>
+        <ProcessMenu ids={[doc.id]} label={t("viewer.process.menu")} variant="ghost" testId="viewer-process" />
+        <Button size="sm" variant="ghost" onClick={() => { setSplitAt(pageNo > 1 ? pageNo : null); setSplitOpen(true); }} disabled={total < 2} data-testid="viewer-split">
+          <Scissors />
+          {t("viewer.split")}
         </Button>
         <Button size="sm" variant="ghost" onClick={() => setAddToKb(true)} data-testid="viewer-add-to-kb">
           <BookOpen />
@@ -514,17 +568,17 @@ export function DocumentViewer() {
                 </p>
               )}
             </TabsContent>
-            <TabsContent value="fields" className="px-3 pb-3 text-sm text-fg-muted">
-              {t("viewer.placeholder_fields")}
+            <TabsContent value="fields" className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+              <FieldsPanel doc={doc} onGoToPage={goToEvidence} onStartExtract={() => void extractNow()} />
             </TabsContent>
-            <TabsContent value="tables" className="px-3 pb-3 text-sm text-fg-muted">
-              {t("viewer.placeholder_tables")}
+            <TabsContent value="tables" className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+              <TablesPanel doc={doc} onGoToPage={setPageNo} />
             </TabsContent>
             <TabsContent value="qa" forceMount className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 data-[state=inactive]:hidden">
               <ViewerKnowledgePanel doc={doc} explainSelection={explainSelection} onExplained={() => setExplainSelection(null)} onCitation={onCitation} />
             </TabsContent>
-            <TabsContent value="history" className="px-3 pb-3 text-sm text-fg-muted">
-              {t("viewer.placeholder_history")}
+            <TabsContent value="history" className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+              <HistoryPanel doc={doc} />
             </TabsContent>
           </Tabs>
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 border-t border-border p-3 text-xs" data-testid="viewer-info">
@@ -541,7 +595,14 @@ export function DocumentViewer() {
             <dt className="text-fg-subtle">{t("viewer.info.dpi")}</dt>
             <dd>{doc.render_dpi ?? "—"}</dd>
             <dt className="text-fg-subtle">{t("viewer.info.text_layer")}</dt>
-            <dd>{doc.has_text_layer ? t("viewer.info.yes") : t("viewer.info.no")}</dd>
+            <dd>
+              {doc.has_text_layer ? t("viewer.info.yes") : t("viewer.info.no")}
+              {page?.text_source === "ocr" && (
+                <Badge variant="info" className="ml-1 text-[10px]" data-testid="viewer-ocr-badge">
+                  {t("viewer.ocr_badge")}
+                </Badge>
+              )}
+            </dd>
             {doc.conversion_note && (
               <>
                 <dt className="text-fg-subtle">{t("viewer.conversion_note")}</dt>
@@ -560,6 +621,7 @@ export function DocumentViewer() {
       <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
       <VersionDialog open={versionOpen} onOpenChange={setVersionOpen} doc={doc} />
       <AddToCollectionDialog open={addToKb} onOpenChange={setAddToKb} docIds={[doc.id]} />
+      <SplitDialog open={splitOpen} onOpenChange={setSplitOpen} doc={doc} pages={pages ?? []} initial={splitAt} />
     </div>
   );
 }

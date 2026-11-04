@@ -327,6 +327,18 @@ pub fn pipeline_table_csv(app: AppHandle, document_id: String, page: u32, index:
     Ok(ocr::table_csv(t))
 }
 
+/// Writes a table's CSV to a path the user picked in the native save dialog.
+#[tauri::command(async)]
+pub fn pipeline_table_export(app: AppHandle, document_id: String, page: u32, index: u32, path: String) -> UiResult<()> {
+    let csv = pipeline_table_csv(app, document_id, page, index)?;
+    let target = doculens_core::paths::normalize_user_path(&path);
+    if target.as_os_str().is_empty() || target.is_dir() {
+        return Err(UiError::invalid("invalid export path"));
+    }
+    std::fs::write(&target, csv.as_bytes()).map_err(|e| doculens_core::CoreError::io(&target, e))?;
+    Ok(())
+}
+
 #[tauri::command(async)]
 pub fn pipeline_split(app: AppHandle, document_id: String, boundaries: Vec<u32>) -> UiResult<String> {
     pipeline_bridge::split_job(&app, document_id, boundaries)
