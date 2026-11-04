@@ -196,8 +196,8 @@ mod platform {
             }
             let path = HSTRING::from(pdf.as_os_str());
             let tx_done = tx.clone();
-            let handler = PrintToPdfCompletedHandler::create(Box::new(move |hr, ok| {
-                let _ = tx_done.send(if hr.is_ok() && ok.as_bool() {
+            let handler = PrintToPdfCompletedHandler::create(Box::new(move |hr, ok: bool| {
+                let _ = tx_done.send(if hr.is_ok() && ok {
                     Ok(())
                 } else {
                     Err(format!("PrintToPdf reported failure ({hr:?})"))
