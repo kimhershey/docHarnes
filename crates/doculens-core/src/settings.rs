@@ -316,6 +316,46 @@ pub struct WorkspaceEntry {
 }
 
 // ---------------------------------------------------------------------------
+// Knowledge base (design §3.14)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KnowledgeSettings {
+    /// Chunk + index documents automatically after import / rescan / re-render.
+    pub auto_index: bool,
+    /// Embed new chunks in the background whenever the embedding model is installed.
+    pub auto_embed: bool,
+    /// Embedding model id (None = the registry's `default_embedding`).
+    pub embedding_model: Option<String>,
+    /// Hide superseded document editions from search and answers.
+    pub latest_only: bool,
+    /// Let the model answer from general knowledge when the knowledge base has no evidence.
+    pub allow_general_knowledge: bool,
+    /// Token budget for evidence chunks in one answer.
+    pub context_tokens: u32,
+    /// Max evidence chunks per answer.
+    pub top_k: u32,
+    /// Target chunk size in tokens (400–800 per design).
+    pub chunk_target_tokens: u32,
+}
+
+impl Default for KnowledgeSettings {
+    fn default() -> Self {
+        Self {
+            auto_index: true,
+            auto_embed: true,
+            embedding_model: None,
+            latest_only: true,
+            allow_general_knowledge: false,
+            context_tokens: 6_000,
+            top_k: 8,
+            chunk_target_tokens: 500,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Root
 // ---------------------------------------------------------------------------
 
@@ -333,6 +373,7 @@ pub struct AppSettings {
     pub cache: CacheSettings,
     pub privacy: PrivacySettings,
     pub notifications: NotificationSettings,
+    pub knowledge: KnowledgeSettings,
     /// Action id → key chord (e.g. `"command_palette": "Ctrl+K"`).
     pub shortcuts: BTreeMap<String, String>,
     pub window: WindowState,
@@ -350,6 +391,7 @@ impl Default for AppSettings {
             cache: CacheSettings::default(),
             privacy: PrivacySettings::default(),
             notifications: NotificationSettings::default(),
+            knowledge: KnowledgeSettings::default(),
             shortcuts: default_shortcuts(),
             window: WindowState::default(),
         }

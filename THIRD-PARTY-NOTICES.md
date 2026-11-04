@@ -55,6 +55,8 @@ this header; the entries here cover direct dependencies and bundled assets.
 | trash (Recycle Bin / freedesktop trash) | MIT |
 | hwp (hahnlee/hwp-rs — HWP 5.0 parser; "본 제품은 한글과컴퓨터의 한/글 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.") + cfb, aes, num | Apache-2.0 / MIT OR Apache-2.0 |
 | unicode-normalization | MIT OR Apache-2.0 |
+| lindera, lindera-dictionary (Korean morphological analysis; dictionary loaded at runtime) + crawdad, daachorse, rkyv, encoding_rs, memmap2, csv, byteorder, strum | MIT / MIT OR Apache-2.0 / (encoding_rs: Apache-2.0 OR MIT, BSD-3-Clause) / (csv, byteorder: Unlicense OR MIT) |
+| sqlite-vec (vector search inside SQLite, statically linked C) | MIT OR Apache-2.0 (© Alex Garcia) |
 | gtk, webkit2gtk (Linux CI/dev builds only — print-to-PDF) | MIT |
 | webview2-com, windows-core (Windows print-to-PDF) | MIT / MIT OR Apache-2.0 |
 | @tanstack/react-virtual | MIT (© Tanner Linsley) |
@@ -75,6 +77,18 @@ linked only on Linux (CI builds) through `native-tls`.
   llvm-libc Apache-2.0 WITH LLVM-exception, HarfBuzz Old-MIT, lcms MIT, libpng, zlib, agg23,
   fast_float, simdutf, dragonbox) are copied next to the library by the fetch script and must
   ship with the installer unchanged (design §3.2).
+
+## Korean dictionary (mecab-ko-dic, built by `scripts/fetch-kodic.mjs`)
+
+- **mecab-ko-dic 2.1.1-20180720** — Apache-2.0 (© Eunjeon project, https://bitbucket.org/eunjeon/mecab-ko-dic),
+  pinned by SHA-256 in `engines/kodic.json`. The CSV sources are compiled by `crates/doculens-kodic`
+  (lindera's `DictionaryBuilder`) into lindera's binary layout (~82 MB) and loaded at runtime from the
+  installer's `ko-dic/` resource folder or `<AppData>/DocuLens/tokenizers/ko-dic/`. Nothing is downloaded
+  at build time and the dictionary is never committed.
+- The dictionary's `COPYING` (Apache License 2.0) is copied next to the built files as
+  `LICENSE-mecab-ko-dic.txt` together with a `NOTICE.txt`; both must ship with the installer.
+- `crates/doculens-kodic/assets/{metadata.json,context_id_freq.txt}` are the dictionary descriptors
+  shipped by the `lindera-ko-dic` crate (MIT, © Minoru Osuka / Lindera project).
 
 ## Fonts
 

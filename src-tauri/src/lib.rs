@@ -4,6 +4,7 @@ mod commands;
 mod docs_bridge;
 mod engine_bridge;
 mod jobs;
+mod knowledge_bridge;
 mod printer;
 mod protocol;
 mod state;
@@ -48,6 +49,7 @@ pub fn run() {
             state.open_startup_workspace();
             engine_bridge::on_workspace_changed(&handle);
             docs_bridge::on_workspace_changed(&handle);
+            knowledge_bridge::on_workspace_changed(&handle);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -114,6 +116,30 @@ pub fn run() {
             commands::documents::documents_tags,
             commands::documents::documents_set_inbox_watch,
             commands::documents::documents_pdfium_info,
+            commands::knowledge::knowledge_status,
+            commands::knowledge::knowledge_collections,
+            commands::knowledge::knowledge_collection_save,
+            commands::knowledge::knowledge_collection_delete,
+            commands::knowledge::knowledge_collection_docs,
+            commands::knowledge::knowledge_collection_add,
+            commands::knowledge::knowledge_collection_remove,
+            commands::knowledge::knowledge_document_collections,
+            commands::knowledge::knowledge_set_role,
+            commands::knowledge::knowledge_index,
+            commands::knowledge::knowledge_embed,
+            commands::knowledge::knowledge_reset_embeddings,
+            commands::knowledge::knowledge_search,
+            commands::knowledge::knowledge_chunks,
+            commands::knowledge::knowledge_answer,
+            commands::knowledge::knowledge_answers,
+            commands::knowledge::knowledge_answer_feedback,
+            commands::knowledge::knowledge_answer_delete,
+            commands::knowledge::knowledge_glossary,
+            commands::knowledge::knowledge_glossary_save,
+            commands::knowledge::knowledge_glossary_delete,
+            commands::knowledge::knowledge_versions,
+            commands::knowledge::knowledge_version_set,
+            commands::knowledge::knowledge_version_clear,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

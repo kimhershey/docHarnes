@@ -88,3 +88,21 @@ node scripts/fetch-pdfium.mjs --dest DIR  # 임의 위치 (DOCULENS_PDFIUM=DIR/p
 폴더) → 리소스 폴더 `pdfium/` → 실행 파일 옆 / `pdfium/` → `<app-data>/pdfium/`. 없으면 PDF는
 등록만 되고(텍스트·페이지 없음) 라이브러리 상단에 경고가 뜬다. 아카이브의 `LICENSE`와
 `licenses/`(18개 고지)는 스크립트가 같이 복사하며 설치파일에 그대로 포함해야 한다.
+
+## ko-dic (한국어 형태소 사전)
+
+검색 색인과 질의 분석은 lindera(MIT) + mecab-ko-dic(Apache-2.0)을 쓴다. 사전은 빌드 시
+내려받지 않고, `scripts/fetch-kodic.mjs`가 핀(`engines/kodic.json`, SHA-256)된 원본 tarball을
+받아 `crates/doculens-kodic`(lindera `DictionaryBuilder`)로 바이너리 사전(약 82 MB)을 만든다.
+바이너리는 커밋하지 않는다.
+
+```bash
+node scripts/fetch-kodic.mjs                   # <app-data>/tokenizers/ko-dic/  (개발·사용자 PC)
+node scripts/fetch-kodic.mjs --bundle          # src-tauri/resources/ko-dic/     (설치파일 동봉)
+node scripts/fetch-kodic.mjs --dest DIR        # 임의 위치 (DOCULENS_KODIC=DIR)
+node scripts/fetch-kodic.mjs --source FILE     # 오프라인: 받아 둔 tarball 사용
+```
+
+탐색 순서(`src-tauri/src/knowledge_bridge.rs`): `DOCULENS_KODIC` → 리소스 폴더 `ko-dic/` →
+`<app-data>/tokenizers/ko-dic/`. 없으면 간이 분석기(어절 + 2음절)로 동작하고 지식 베이스
+화면에 안내가 뜬다. 사전 폴더의 `LICENSE-mecab-ko-dic.txt`·`NOTICE.txt`는 설치파일에 그대로 포함한다.

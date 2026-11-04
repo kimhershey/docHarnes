@@ -119,6 +119,8 @@ pub struct AppState {
     pub workspace_generation: AtomicU64,
     /// An inbox change arrived while an import was running → re-check at job end.
     pub inbox_dirty: AtomicBool,
+    /// Documents changed while a knowledge index job ran: re-run it afterwards.
+    pub knowledge_dirty: AtomicBool,
     /// HTML → PDF printer backed by the webview (set in `setup`).
     pub printer: OnceLock<Arc<dyn PdfPrinter>>,
     pub inbox_watcher: Mutex<Option<DirWatcher>>,
@@ -160,6 +162,7 @@ impl AppState {
             pdfium: Mutex::new(None),
             workspace_generation: AtomicU64::new(0),
             inbox_dirty: AtomicBool::new(false),
+            knowledge_dirty: AtomicBool::new(false),
             printer: OnceLock::new(),
             inbox_watcher: Mutex::new(None),
             import_plans: Mutex::new(HashMap::new()),

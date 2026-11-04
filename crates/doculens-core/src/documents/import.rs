@@ -76,6 +76,10 @@ pub struct ImportOptions {
     pub role: DocumentRole,
     /// Override of the settings render DPI.
     pub dpi: Option<u16>,
+    /// Knowledge-base collection that receives every document of this batch
+    /// (new, relinked, already registered and duplicates alike).
+    #[serde(default)]
+    pub collection_id: Option<String>,
 }
 
 impl Default for ImportOptions {
@@ -86,6 +90,7 @@ impl Default for ImportOptions {
             render: true,
             role: DocumentRole::Work,
             dpi: None,
+            collection_id: None,
         }
     }
 }
@@ -449,6 +454,19 @@ pub fn run(
         ImportDestination::Documents => deps.paths.documents_dir(),
         ImportDestination::Inbox => deps.paths.inbox_dir(),
     };
+    // Documents this batch merely re-encountered still join the collection.
+    if plan.options.collection_id.is_some() {
+        for item in &plan.items {
+            let existing = match &item.status {
+                ImportItemStatus::AlreadyRegistered { id } => Some(id.clone()),
+                ImportItemStatus::Duplicate { of, .. } => Some(of.clone()),
+                _ => None,
+            };
+            if let Some(id) = existing {
+                deps.db.with(|c| attach_to_collection(c, &plan.options, &id))?;
+            }
+        }
+    }
     for item in plan.importable() {
         if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
             report.cancelled = true;
@@ -583,7 +601,8 @@ fn register(
         deps.db.with_tx(|tx| {
             repo::set_rel_path(tx, &id, rel, display_name)?;
             repo::set_file_info(tx, &id, &hash, size, modified)?;
-            repo::set_status(tx, &id, DocumentStatus::Importing, None)
+            repo::set_status(tx, &id, DocumentStatus::Importing, None)?;
+            attach_to_collection(tx, &plan.options, &id)
         })?;
         return Ok((id, true));
     }
@@ -602,9 +621,21 @@ fn register(
                 role: plan.options.role,
                 import_batch_id: Some(batch_id.to_string()),
             },
-        )
+        )?;
+        attach_to_collection(c, &plan.options, &id)
     })?;
     Ok((id, false))
+}
+
+/// Adds a document to the batch's knowledge collection (and gives it the
+/// batch role when that is not the default) — no-op without `collection_id`.
+fn attach_to_collection(conn: &rusqlite::Connection, options: &ImportOptions, id: &str) -> rusqlite::Result<()> {
+    let Some(cid) = options.collection_id.as_deref() else { return Ok(()) };
+    crate::knowledge::repo::add_docs_to_collection(conn, cid, std::slice::from_ref(&id.to_string()))?;
+    if options.role != DocumentRole::Work {
+        repo::set_role(conn, id, options.role)?;
+    }
+    Ok(())
 }
 
 /// Converts (office formats) and renders a registered document, replacing its

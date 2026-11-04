@@ -267,7 +267,9 @@
       "label": "범위",
       "all": "전체",
       "folder": "현재 폴더",
-      "selection": "선택 문서"
+      "selection": "선택 문서",
+      "knowledge": "지식 베이스",
+      "collection": "컬렉션: {{name}}"
     },
     "placeholder": "자연어로 명령하거나 질문하세요 (한국어 / English) · /로 슬래시 명령",
     "send": "보내기",
@@ -289,7 +291,9 @@
       "/테마 다크",
       "영어로 바꿔줘",
       "/열기 모델"
-    ]
+    ],
+    "qa_hint": "질문하면 지식 베이스에서 근거를 찾아 문장별 출처와 함께 답합니다.",
+    "answering": "답변 생성 중…"
   },
   "models": {
     "title": "모델 관리자",
@@ -485,7 +489,8 @@
       "processing": "처리",
       "privacy": "프라이버시 · 보존",
       "shortcuts": "단축키",
-      "about": "정보"
+      "about": "정보",
+      "knowledge": "지식 베이스"
     },
     "general": {
       "language": "언어",
@@ -598,6 +603,23 @@
       "notices": "THIRD-PARTY-NOTICES 보기",
       "design_doc": "설계 문서",
       "font": "글꼴: Pretendard Variable (OFL-1.1, 원본 파일 동봉)"
+    },
+    "knowledge": {
+      "title": "지식 베이스",
+      "hint": "청킹·색인·임베딩과 근거 기반 답변의 기본값입니다.",
+      "auto_index": "가져온 문서 자동 색인",
+      "auto_index_hint": "가져오기·재검사·재렌더 후 변경된 문서를 자동으로 청킹합니다.",
+      "auto_embed": "임베딩 자동 생성",
+      "auto_embed_hint": "임베딩 모델이 로드되어 있을 때 새 청크를 백그라운드에서 임베딩합니다.",
+      "embedding_model": "임베딩 모델",
+      "embedding_default": "레지스트리 기본값 ({{model}})",
+      "latest_only": "최신본만 사용",
+      "latest_only_hint": "버전 그룹의 구판은 검색·답변에서 제외합니다.",
+      "allow_general": "근거가 없으면 일반 지식으로 답변 허용",
+      "allow_general_hint": "기본은 끔(환각 방지). 켜면 답변에 '일반 지식' 표시가 붙습니다.",
+      "context_tokens": "근거 토큰 예산",
+      "top_k": "근거 청크 수",
+      "chunk_target": "청크 크기(토큰)"
     }
   },
   "placeholder": {
@@ -703,7 +725,15 @@
       "nothing_to_import": "가져올 새 파일이 없습니다(모두 중복이거나 미지원).",
       "no_files": "파일을 선택하거나 경로를 입력하세요.",
       "no_documents": "선택한 문서가 없습니다.",
-      "rotation": "회전 각도는 90도 단위여야 합니다."
+      "rotation": "회전 각도는 90도 단위여야 합니다.",
+      "collection_name_taken": "같은 이름의 컬렉션이 이미 있습니다.",
+      "collection_name_empty": "컬렉션 이름을 입력하세요.",
+      "glossary_term_empty": "용어를 입력하세요.",
+      "version_group_empty": "버전 그룹 이름을 입력하세요.",
+      "no_active_model": "엔진에 로드된 모델이 없습니다. 모델 화면에서 모델을 로드한 뒤 다시 시도하세요.",
+      "embedding_model_not_installed": "임베딩 모델이 설치되지 않았습니다. 모델 화면에서 설치하세요.",
+      "no_text": "텍스트 레이어가 없는 문서입니다(스캔 문서는 P4 OCR 이후 지원).",
+      "document_id_required": "문서를 먼저 선택하세요."
     }
   },
   "startup": {
@@ -732,7 +762,9 @@
       "model_hash": "해시 검증",
       "document_import": "문서 가져오기",
       "document_rescan": "라이브러리 검사",
-      "document_render": "페이지 렌더"
+      "document_render": "페이지 렌더",
+      "knowledge_index": "지식 색인",
+      "knowledge_embed": "임베딩 생성"
     },
     "state": {
       "queued": "대기",
@@ -751,7 +783,10 @@
     "detail": {
       "import_summary": "가져옴 {{imported}} · 다시 연결 {{relinked}} · 실패 {{failed}} · 건너뜀 {{skipped}}",
       "rescan_summary": "검사 {{checked}} · 파일 없음 {{missing}} · 복구 {{restored}} · 변경 {{changed}} · 실패 {{failed}}",
-      "rendered": "{{count}}개 렌더 완료"
+      "rendered": "{{count}}개 렌더 완료",
+      "index_summary": "{{indexed}}건 색인({{chunks}} 청크) · 변경 없음 {{unchanged}} · 텍스트 없음 {{no_text}} · 실패 {{failed}}",
+      "embed_summary": "{{embedded}}개 임베딩 · 실패 {{failed}} · 남음 {{remaining}}",
+      "loading_model": "모델 로드 중"
     }
   },
   "library": {
@@ -787,7 +822,8 @@
       "clear_selection": "선택 해제",
       "select_all": "모두 선택",
       "delete_title": "문서 삭제",
-      "open_doc": "문서 열기"
+      "open_doc": "문서 열기",
+      "add_to_kb": "지식 베이스에 추가"
     },
     "columns": {
       "name": "이름",
@@ -813,7 +849,9 @@
     "rescan_running": "라이브러리 검사가 이미 진행 중입니다.",
     "list_label": "문서 목록",
     "grid_label": "문서 카드",
-    "import_existing_hint": "워크스페이스 폴더 전체를 검사해 미리보기를 엽니다(.doculens 제외)."
+    "import_existing_hint": "워크스페이스 폴더 전체를 검사해 미리보기를 엽니다(.doculens 제외).",
+    "role_knowledge": "지식",
+    "kb_added": "{{count}}개 문서를 '{{name}}'에 추가했습니다."
   },
   "documents": {
     "status": {
@@ -947,6 +985,260 @@
     "delete_title": "문서 삭제",
     "reveal_failed": "원본 폴더를 열 수 없습니다: {{message}}",
     "thumb_label": "{{page}}쪽으로 이동",
-    "toolbar": "문서 도구"
+    "toolbar": "문서 도구",
+    "kb_badge": "지식",
+    "collections_label": "컬렉션",
+    "add_to_kb": "지식 베이스에 추가",
+    "explain": "설명",
+    "explain_shortcut": "Ctrl+E",
+    "highlight": "검색어 강조: {{q}}",
+    "clear_highlight": "강조 해제",
+    "qa": {
+      "title": "이 문서에 질문",
+      "placeholder": "예: 계약금액은 얼마인가요?",
+      "ask": "질문",
+      "history": "이 문서의 답변",
+      "none": "아직 질문이 없습니다.",
+      "scope_doc": "이 문서",
+      "scope_kb": "지식 베이스 전체",
+      "explain_prefix": "설명: "
+    },
+    "summary": {
+      "title": "요약",
+      "run": "요약 생성",
+      "running": "요약 생성 중…",
+      "none": "아직 요약이 없습니다.",
+      "modes": {
+        "one_line": "한 줄",
+        "key_points": "핵심 5개",
+        "one_page": "한 쪽"
+      }
+    },
+    "version": {
+      "menu": "버전",
+      "title": "문서 버전 등록",
+      "group": "버전 그룹(제목)",
+      "label": "판 표시(예: 2024년 개정)",
+      "effective": "시행일",
+      "latest": "이 문서를 최신본으로",
+      "save": "저장",
+      "clear": "그룹 해제",
+      "saved": "버전 정보를 저장했습니다."
+    }
+  },
+  "answer": {
+    "sources": "근거",
+    "no_evidence": "지식 베이스에 근거가 없습니다.",
+    "ask_general": "일반 지식으로 답하기",
+    "general_badge": "일반 지식",
+    "conflicts": "상충",
+    "feedback_helpful": "도움됨",
+    "feedback_wrong": "틀림",
+    "feedback_saved": "피드백을 저장했습니다.",
+    "thinking": "답변 생성 중…",
+    "open_source": "근거 열기",
+    "citation_page": "p.{{page}}",
+    "citation_pages": "p.{{from}}-{{to}}",
+    "copy": "복사",
+    "copied": "복사했습니다.",
+    "meta": "{{model}} · {{ms}}ms",
+    "follow_up_hint": "후속 질문은 같은 근거를 유지합니다.",
+    "kinds": {
+      "answer": "답변",
+      "explain": "설명",
+      "summary": "요약",
+      "compare": "비교"
+    },
+    "delete": "삭제",
+    "deleted": "답변을 삭제했습니다."
+  },
+  "search": {
+    "title": "검색",
+    "placeholder": "검색어 (예: 출장비 한도, 123-45-67890)",
+    "run": "검색",
+    "mode": {
+      "label": "방식",
+      "hybrid": "하이브리드",
+      "keyword": "키워드",
+      "semantic": "의미"
+    },
+    "scope": {
+      "label": "범위",
+      "all": "전체 문서",
+      "knowledge": "지식 베이스",
+      "collection": "컬렉션: {{name}}"
+    },
+    "results": "{{count}}건 · {{ms}}ms",
+    "no_results": "검색 결과가 없습니다.",
+    "empty_hint": "형태소(조사 분리)·부분 문자열·의미 검색을 함께 사용합니다. 2자 검색어도 됩니다.",
+    "keyword_only": "임베딩 모델이 로드되지 않아 키워드 검색 결과입니다.",
+    "like_fallback": "색인에 없는 짧은 검색어라 본문 부분 일치로 찾았습니다.",
+    "semantic_unavailable": "의미 검색을 쓰려면 임베딩 모델(bge-m3)을 설치하고 로드하세요.",
+    "latest_only": "최신본만",
+    "terms": "분석 토큰",
+    "expanded": "확장(용어집)",
+    "channel": {
+      "morph": "형태소",
+      "trigram": "부분일치",
+      "like": "본문",
+      "vector": "의미"
+    },
+    "open": "열기",
+    "ask": "이 결과로 질문"
+  },
+  "knowledge": {
+    "title": "지식 베이스",
+    "subtitle": "규정·지침·과거 문서를 적재하고 근거 기반으로 답합니다.",
+    "tabs": {
+      "overview": "개요",
+      "collections": "컬렉션",
+      "versions": "버전",
+      "glossary": "용어집",
+      "test": "질문 테스트",
+      "answers": "답변 기록"
+    },
+    "status": {
+      "title": "색인 상태",
+      "documents": "문서",
+      "indexed": "색인됨",
+      "pending": "색인 대기",
+      "no_text": "텍스트 없음",
+      "failed": "실패",
+      "chunks": "청크",
+      "embedded": "임베딩됨",
+      "knowledge_docs": "지식 문서",
+      "collections": "컬렉션",
+      "glossary_terms": "용어",
+      "answers": "답변",
+      "helpful": "도움됨",
+      "wrong": "틀림",
+      "index_running": "색인 진행 중",
+      "embed_running": "임베딩 진행 중"
+    },
+    "tokenizer": {
+      "label": "형태소 분석기",
+      "kodic": "ko-dic (lindera)",
+      "simple": "간이 분석기",
+      "simple_hint": "ko-dic 사전이 없어 간이 분석기(어절+2음절)를 사용합니다. node scripts/fetch-kodic.mjs 로 설치하면 조사 분리·복합명사 분해가 됩니다."
+    },
+    "embedding": {
+      "label": "임베딩 모델",
+      "none": "레지스트리에 임베딩 모델이 없습니다.",
+      "not_installed": "임베딩 모델({{model}})이 설치되지 않아 키워드 검색만 사용합니다. 모델 화면에서 설치하세요.",
+      "not_loaded": "임베딩 모델({{model}})이 설치되어 있습니다. 실행하면 엔진에 로드하고 청크를 임베딩합니다.",
+      "ready": "임베딩 모델({{model}}) 사용 가능",
+      "progress": "{{embedded}} / {{total}} 청크 임베딩됨",
+      "run": "임베딩 실행",
+      "reset": "임베딩 초기화",
+      "reset_confirm": "저장된 임베딩을 모두 지울까요? 다음 실행 때 다시 계산합니다.",
+      "reset_done": "임베딩을 초기화했습니다."
+    },
+    "actions": {
+      "ingest": "적재 마법사",
+      "index": "색인 갱신",
+      "reindex": "전체 재색인",
+      "index_started": "색인을 시작했습니다.",
+      "index_running": "색인이 이미 진행 중입니다.",
+      "embed_started": "임베딩을 시작했습니다.",
+      "embed_none": "임베딩할 청크가 없습니다."
+    },
+    "collections": {
+      "title": "컬렉션",
+      "new": "새 컬렉션",
+      "edit": "편집",
+      "name": "이름",
+      "description": "설명",
+      "active": "활성",
+      "inactive": "비활성",
+      "docs_count": "문서 {{count}}",
+      "chunks_count": "청크 {{count}}",
+      "empty": "컬렉션이 없습니다. 적재 마법사로 규정·지침을 넣어 보세요.",
+      "delete": "삭제",
+      "delete_confirm": "컬렉션 '{{name}}'을(를) 삭제할까요? 문서는 라이브러리에 남습니다.",
+      "save": "저장",
+      "cancel": "취소",
+      "docs_title": "컬렉션 문서",
+      "remove_doc": "제거",
+      "no_docs": "이 컬렉션에 문서가 없습니다.",
+      "select": "컬렉션 선택",
+      "none_option": "컬렉션 없음",
+      "add_title": "지식 베이스에 추가",
+      "add_hint": "선택한 {{count}}개 문서를 컬렉션에 추가하고 지식 문서로 표시합니다.",
+      "create_inline": "새 컬렉션 만들기",
+      "name_placeholder": "예: 사내 규정",
+      "saved": "컬렉션을 저장했습니다.",
+      "deleted": "컬렉션을 삭제했습니다.",
+      "open_doc": "문서 열기"
+    },
+    "wizard": {
+      "title": "지식 적재 마법사",
+      "step_files": "1. 파일·폴더",
+      "step_collection": "2. 컬렉션·옵션",
+      "step_preview": "3. 미리보기",
+      "paths_hint": "파일이나 폴더 경로를 한 줄에 하나씩 입력하거나 선택기를 사용하세요. 폴더는 하위 폴더까지 포함합니다.",
+      "pick_files": "파일 선택",
+      "pick_folder": "폴더 선택",
+      "next": "다음",
+      "back": "이전",
+      "start": "적재 시작",
+      "started": "적재를 시작했습니다. 가져오기 → 청킹 → 색인이 백그라운드에서 진행됩니다.",
+      "collection_label": "컬렉션",
+      "new_collection_name": "새 컬렉션 이름",
+      "render_label": "페이지 렌더(썸네일·뷰어)",
+      "move_label": "원본 파일을 워크스페이스로 이동",
+      "preview": "미리보기",
+      "previewing": "파일을 확인하는 중…",
+      "summary": "신규 {{new}} · 다시 연결 {{relink}} · 중복 {{dup}} · 이미 등록 {{registered}} · 미지원 {{unsupported}}",
+      "nothing": "적재할 새 파일이 없습니다(이미 등록된 문서는 컬렉션에만 추가됩니다).",
+      "role_hint": "적재한 문서는 '지식' 역할로 표시되고 검색·답변의 근거로 사용됩니다."
+    },
+    "versions": {
+      "title": "문서 버전",
+      "hint": "같은 제목의 신·구판을 묶으면 검색·답변은 기본적으로 최신본만 사용합니다.",
+      "group": "버전 그룹",
+      "label": "판 표시",
+      "effective": "시행일",
+      "latest": "최신본",
+      "superseded": "구판",
+      "set_latest": "최신본으로",
+      "clear": "그룹 해제",
+      "empty": "등록된 버전 그룹이 없습니다. 뷰어의 '버전' 메뉴에서 등록하세요.",
+      "document": "문서",
+      "saved": "저장했습니다."
+    },
+    "glossary": {
+      "title": "용어집",
+      "hint": "용어·동의어는 검색 질의 확장에 사용됩니다(예: 출장비 ↔ 여비).",
+      "term": "용어",
+      "definition": "정의",
+      "synonyms": "동의어(쉼표 구분)",
+      "add": "용어 추가",
+      "edit": "편집",
+      "delete": "삭제",
+      "delete_confirm": "용어 '{{term}}'을(를) 삭제할까요?",
+      "empty": "용어가 없습니다.",
+      "save": "저장",
+      "cancel": "취소",
+      "saved": "용어를 저장했습니다.",
+      "deleted": "용어를 삭제했습니다."
+    },
+    "test": {
+      "title": "질문 테스트",
+      "hint": "이 질문에 어떤 근거가 검색되는지 확인합니다(모델 호출 없음).",
+      "placeholder": "예: 출장비 정산 기한은?",
+      "run": "검색",
+      "none": "검색된 근거가 없습니다.",
+      "terms": "분석 토큰",
+      "expanded": "확장 토큰",
+      "channels": "채널",
+      "elapsed": "{{ms}}ms",
+      "score": "점수"
+    },
+    "answers": {
+      "title": "답변 기록",
+      "empty": "저장된 답변이 없습니다.",
+      "filter_all": "전체",
+      "stats": "도움됨 {{helpful}} · 틀림 {{wrong}}"
+    }
   }
 }

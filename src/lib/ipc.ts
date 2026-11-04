@@ -3,13 +3,29 @@
 // backend so the whole UI can be exercised without the desktop runtime.
 
 import type {
+  Answer,
+  AnswerKind,
+  AnswerRequest,
   AppInfo,
+  Chunk,
+  Collection,
+  CollectionInput,
+  GlossaryEntry,
+  GlossaryInput,
+  KnowledgeStatus,
+  SavedAnswer,
+  SearchRequest,
+  SearchResponse,
+  VersionGroup,
+  VersionInfo,
+  VersionInput,
   AppSettings,
   Assessment,
   ChatTestResult,
   DateRange,
   DocumentFilter,
   DocumentImportPlan,
+  DocumentRole,
   DocumentView,
   EngineBinaryInfo,
   EngineDevice,
@@ -161,6 +177,36 @@ export const api = {
   documentsTags: () => invoke<[string, number][]>("documents_tags"),
   documentsSetInboxWatch: (enabled: boolean) => invoke<boolean>("documents_set_inbox_watch", { enabled }),
   documentsPdfiumInfo: () => invoke<PdfiumInfo>("documents_pdfium_info"),
+
+  // -- knowledge base (P3) --
+  knowledgeStatus: () => invoke<KnowledgeStatus>("knowledge_status"),
+  knowledgeCollections: () => invoke<Collection[]>("knowledge_collections"),
+  knowledgeCollectionSave: (input: CollectionInput) => invoke<Collection>("knowledge_collection_save", { input }),
+  knowledgeCollectionDelete: (id: string) => invoke<boolean>("knowledge_collection_delete", { id }),
+  knowledgeCollectionDocs: (id: string) => invoke<DocumentView[]>("knowledge_collection_docs", { id }),
+  knowledgeCollectionAdd: (id: string, docIds: string[], setRole = true) =>
+    invoke<number>("knowledge_collection_add", { args: { id, doc_ids: docIds, set_role: setRole } }),
+  knowledgeCollectionRemove: (id: string, docIds: string[]) =>
+    invoke<number>("knowledge_collection_remove", { args: { id, doc_ids: docIds, set_role: false } }),
+  knowledgeDocumentCollections: (id: string) => invoke<[string, string][]>("knowledge_document_collections", { id }),
+  knowledgeSetRole: (ids: string[], role: DocumentRole) => invoke<number>("knowledge_set_role", { ids, role }),
+  knowledgeIndex: (ids: string[] | null = null, force = false) => invoke<string | null>("knowledge_index", { ids, force }),
+  knowledgeEmbed: (loadModel = true) => invoke<string | null>("knowledge_embed", { loadModel }),
+  knowledgeResetEmbeddings: () => invoke<void>("knowledge_reset_embeddings"),
+  knowledgeSearch: (req: SearchRequest) => invoke<SearchResponse>("knowledge_search", { req }),
+  knowledgeChunks: (documentId: string) => invoke<Chunk[]>("knowledge_chunks", { documentId }),
+  knowledgeAnswer: (req: AnswerRequest, requestId: string) => invoke<Answer>("knowledge_answer", { req, requestId }),
+  knowledgeAnswers: (kind: AnswerKind | null = null, documentId: string | null = null, limit = 50) =>
+    invoke<SavedAnswer[]>("knowledge_answers", { kind, documentId, limit }),
+  knowledgeAnswerFeedback: (id: number, feedback: number | null, note: string | null = null) =>
+    invoke<boolean>("knowledge_answer_feedback", { id, feedback, note }),
+  knowledgeAnswerDelete: (id: number) => invoke<boolean>("knowledge_answer_delete", { id }),
+  knowledgeGlossary: () => invoke<GlossaryEntry[]>("knowledge_glossary"),
+  knowledgeGlossarySave: (input: GlossaryInput) => invoke<GlossaryEntry>("knowledge_glossary_save", { input }),
+  knowledgeGlossaryDelete: (id: number) => invoke<boolean>("knowledge_glossary_delete", { id }),
+  knowledgeVersions: () => invoke<VersionGroup[]>("knowledge_versions"),
+  knowledgeVersionSet: (input: VersionInput) => invoke<VersionInfo>("knowledge_version_set", { input }),
+  knowledgeVersionClear: (documentId: string) => invoke<boolean>("knowledge_version_clear", { documentId }),
 };
 
 /** Native multi-file picker for documents (Tauri only). Returns [] when cancelled or unavailable. */

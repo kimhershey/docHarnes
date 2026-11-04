@@ -6,17 +6,25 @@ import { useNavigate } from "react-router";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { AnswerCard } from "@/features/knowledge/AnswerCard";
+import { openCitation } from "@/features/knowledge/AnswersPanel";
+import { scopeFor } from "@/features/search/SearchPage";
 import { describePreRoute, executePreRoute } from "@/lib/commands";
+import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
+import { useCollections } from "@/lib/queries";
 import { isComposing } from "@/lib/shortcuts";
-import type { DateRange, PreRouteResult } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import type { Answer, AnswerRequest, PreRouteResult } from "@/lib/types";
+import { newRequestId, useKnowledgeStore } from "@/stores/knowledge";
+import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
+import { useWorkspaceStore } from "@/stores/workspace";
 
 type Message =
   | { id: number; role: "user"; text: string }
   | { id: number; role: "assistant"; kind: "executed"; text: string; route: PreRouteResult }
-  | { id: number; role: "assistant"; kind: "pending"; text: string; date: DateRange | null }
+  | { id: number; role: "assistant"; kind: "answer"; requestId: string; request: AnswerRequest; answer: Answer | null; error: unknown; pending: boolean }
   | { id: number; role: "assistant"; kind: "help" };
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
@@ -24,19 +32,58 @@ type NewMessage = DistributiveOmit<Message, "id">;
 
 let seq = 1;
 
+/**
+ * Assistant (design §3.7.6, P3 subset): slash / phrase commands run through the
+ * pre-router; everything else is a question answered from the knowledge base
+ * with per-sentence citations. The planner (P5) will route the remaining ops.
+ */
 export function AssistantPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const pending = useUiStore((s) => s.pendingAssistantInput);
   const setPending = useUiStore((s) => s.setPendingAssistantInput);
+  const workspace = useWorkspaceStore((s) => s.current);
+  const knowledge = useSettingsStore((s) => s.settings?.knowledge);
+  const streams = useKnowledgeStore((s) => s.streams);
+  const clearStream = useKnowledgeStore((s) => s.clearStream);
+  const { data: collections } = useCollections(!!workspace);
   const [messages, setMessages] = useState<Message[]>([]);
   const [text, setText] = useState("");
-  const [scope, setScope] = useState<"all" | "folder" | "selection">("all");
+  const [scope, setScope] = useState<string>("all");
   const listRef = useRef<HTMLDivElement>(null);
   const consumed = useRef<string | null>(null);
   const examples = t("assistant.examples", { returnObjects: true }) as string[];
 
-  const push = (m: NewMessage) => setMessages((prev) => [...prev, { ...m, id: seq++ } as Message]);
+  const push = (m: NewMessage) => {
+    const id = seq++;
+    setMessages((prev) => [...prev, { ...m, id } as Message]);
+    return id;
+  };
+  const patch = (id: number, f: (m: Message) => Message) => setMessages((prev) => prev.map((m) => (m.id === id ? f(m) : m)));
+
+  const askKnowledge = async (question: string, extra: Partial<AnswerRequest> = {}) => {
+    const previous = [...messages].reverse().find((m): m is Extract<Message, { kind: "answer" }> => m.role === "assistant" && m.kind === "answer" && !!m.answer && !m.answer.no_evidence);
+    const request: AnswerRequest = {
+      question,
+      kind: "answer",
+      scope: scopeFor(scope, knowledge?.latest_only ?? true),
+      allow_general: knowledge?.allow_general_knowledge ?? false,
+      top_k: knowledge?.top_k ?? 8,
+      context_tokens: knowledge?.context_tokens ?? 6000,
+      keep_chunks: previous ? previous.answer!.sources.slice(0, 4).map((s) => s.chunk_id) : [],
+      ...extra,
+    };
+    const requestId = newRequestId();
+    const id = push({ role: "assistant", kind: "answer", requestId, request, answer: null, error: null, pending: true });
+    try {
+      const answer = await api.knowledgeAnswer(request, requestId);
+      patch(id, (m) => (m.role === "assistant" && m.kind === "answer" ? { ...m, answer, pending: false } : m));
+    } catch (e) {
+      patch(id, (m) => (m.role === "assistant" && m.kind === "answer" ? { ...m, error: e, pending: false } : m));
+    } finally {
+      clearStream(requestId);
+    }
+  };
 
   const send = async (value: string) => {
     const v = value.trim();
@@ -53,8 +100,7 @@ export function AssistantPage() {
       push({ role: "assistant", kind: "executed", text: outcome.summary || describePreRoute(route, t), route });
       return;
     }
-    const date = await api.prerouterResolveDate(v);
-    push({ role: "assistant", kind: "pending", text: v, date });
+    await askKnowledge(v);
   };
 
   useEffect(() => {
@@ -68,7 +114,16 @@ export function AssistantPage() {
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
-  }, [messages]);
+  }, [messages, streams]);
+
+  const feedback = async (messageId: number, id: number, value: number | null) => {
+    try {
+      await api.knowledgeAnswerFeedback(id, value);
+      patch(messageId, (m) => (m.role === "assistant" && m.kind === "answer" && m.answer ? { ...m, answer: { ...m.answer, feedback: value } } : m));
+    } catch (e) {
+      useUiStore.getState().toast(describeError(e, t), "danger");
+    }
+  };
 
   return (
     <div className="flex h-full flex-col" data-testid="page-assistant">
@@ -77,20 +132,22 @@ export function AssistantPage() {
         <Button variant="ghost" size="sm" onClick={() => setMessages([])}>
           {t("assistant.new_chat")}
         </Button>
-        <div className="ml-auto flex items-center gap-1 text-xs text-fg-muted" role="radiogroup" aria-label={t("assistant.scope.label")}>
+        <div className="ml-auto flex items-center gap-2 text-xs text-fg-muted">
           <span>{t("assistant.scope.label")}:</span>
-          {(["all", "folder", "selection"] as const).map((s) => (
-            <button
-              key={s}
-              type="button"
-              role="radio"
-              aria-checked={scope === s}
-              onClick={() => setScope(s)}
-              className={cn("rounded-full px-2 py-0.5 cursor-pointer", scope === s ? "bg-accent-soft text-fg" : "hover:bg-bg-sunken")}
-            >
-              {t(`assistant.scope.${s}`)}
-            </button>
-          ))}
+          <Select value={scope} onValueChange={setScope}>
+            <SelectTrigger className="h-8 w-44" aria-label={t("assistant.scope.label")} data-testid="assistant-scope">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">{t("assistant.scope.all")}</SelectItem>
+              <SelectItem value="knowledge">{t("assistant.scope.knowledge")}</SelectItem>
+              {(collections ?? []).map((c) => (
+                <SelectItem key={c.id} value={`col:${c.id}`}>
+                  {t("assistant.scope.collection", { name: c.name })}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
@@ -99,6 +156,7 @@ export function AssistantPage() {
           <div className="flex h-full flex-col items-center justify-center gap-3 text-fg-muted">
             <Sparkles className="size-8 text-accent" aria-hidden="true" />
             <p>{t("assistant.empty")}</p>
+            <p className="text-xs">{t("assistant.qa_hint")}</p>
           </div>
         )}
         <div className="mx-auto flex max-w-3xl flex-col gap-3">
@@ -111,37 +169,42 @@ export function AssistantPage() {
             ) : (
               <div key={m.id} className="flex items-start gap-2">
                 <Bot className="mt-2 size-4 text-accent" aria-hidden="true" />
-                <div className="w-full rounded-lg border border-border bg-bg-elevated p-3 text-sm" data-testid={`assistant-card-${m.kind}`}>
-                  {m.kind === "executed" && (
-                    <div className="flex flex-col gap-1">
-                      <div className="flex items-center gap-2">
-                        <Badge variant="ok">{t("assistant.executed")}</Badge>
-                        <span className="text-xs text-fg-subtle">
-                          {m.route.source === "slash" ? t("assistant.source_slash") : t("assistant.source_phrase")} · {t("assistant.confidence", { value: m.route.confidence.toFixed(2) })}
-                        </span>
+                {m.kind === "answer" ? (
+                  <div className="w-full" data-testid="assistant-card-answer">
+                    <AnswerCard
+                      answer={m.answer}
+                      pending={m.pending}
+                      streamText={streams[m.requestId] ?? ""}
+                      error={m.error}
+                      onCitation={(c) => openCitation(navigate, c)}
+                      onAskGeneral={() => void askKnowledge(m.request.question, { allow_general: true, keep_chunks: [] })}
+                      onFeedback={(id, v) => void feedback(m.id, id, v)}
+                    />
+                  </div>
+                ) : (
+                  <div className="w-full rounded-lg border border-border bg-bg-elevated p-3 text-sm" data-testid={`assistant-card-${m.kind}`}>
+                    {m.kind === "executed" && (
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-2">
+                          <Badge variant="ok">{t("assistant.executed")}</Badge>
+                          <span className="text-xs text-fg-subtle">
+                            {m.route.source === "slash" ? t("assistant.source_slash") : t("assistant.source_phrase")} · {t("assistant.confidence", { value: m.route.confidence.toFixed(2) })}
+                          </span>
+                        </div>
+                        <p>{m.text}</p>
                       </div>
-                      <p>{m.text}</p>
-                    </div>
-                  )}
-                  {m.kind === "pending" && (
-                    <div className="flex flex-col gap-1">
-                      <div className="flex items-center gap-2">
-                        <Badge variant="info">{t("assistant.pending_title")}</Badge>
+                    )}
+                    {m.kind === "help" && (
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-2 font-medium">
+                          <HelpCircle className="size-4" aria-hidden="true" />
+                          {t("assistant.help_title")}
+                        </div>
+                        <p className="text-fg-muted">{t("assistant.help_body")}</p>
                       </div>
-                      <p className="text-fg-muted">{t("assistant.pending_body")}</p>
-                      {m.date && <p className="text-fg">{t("assistant.date_resolved", { from: m.date.from, to: m.date.to, label: m.date.label })}</p>}
-                    </div>
-                  )}
-                  {m.kind === "help" && (
-                    <div className="flex flex-col gap-1">
-                      <div className="flex items-center gap-2 font-medium">
-                        <HelpCircle className="size-4" aria-hidden="true" />
-                        {t("assistant.help_title")}
-                      </div>
-                      <p className="text-fg-muted">{t("assistant.help_body")}</p>
-                    </div>
-                  )}
-                </div>
+                    )}
+                  </div>
+                )}
               </div>
             ),
           )}

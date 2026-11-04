@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { FileText, FolderInput, FolderOpen, Image as ImageIcon, LayoutGrid, List, RefreshCw, Trash2 } from "lucide-react";
+import { BookOpen, FileText, FolderInput, FolderOpen, Image as ImageIcon, LayoutGrid, List, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
+import { AddToCollectionDialog } from "@/features/knowledge/AddToCollectionDialog";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
 import { useDocumentStats, useDocuments, usePdfiumInfo } from "@/lib/queries";
@@ -75,6 +76,7 @@ export function LibraryPage() {
   const [importPaths, setImportPaths] = useState<string[] | undefined>(undefined);
   const [importSource, setImportSource] = useState<ImportSource>("drop");
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+  const [addToKb, setAddToKb] = useState(false);
   const [debounced, setDebounced] = useState(query);
   const headingRef = useRef<HTMLHeadingElement | null>(null);
 
@@ -305,6 +307,10 @@ export function LibraryPage() {
                 <RefreshCw />
                 {t("library.actions.rerender")}
               </Button>
+              <Button size="sm" variant="ghost" onClick={() => setAddToKb(true)} data-testid="library-add-to-kb">
+                <BookOpen />
+                {t("library.actions.add_to_kb")}
+              </Button>
               <Button size="sm" variant="ghost" className="text-danger" onClick={deleteSelected} data-testid="library-delete">
                 <Trash2 />
                 {t("library.actions.delete")}
@@ -375,6 +381,7 @@ export function LibraryPage() {
 
       <ImportDocumentsDialog open={importOpen} onOpenChange={setImportOpen} initialPaths={importPaths} source={importSource} />
       <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
+      <AddToCollectionDialog open={addToKb} onOpenChange={setAddToKb} docIds={selectedVisible} onDone={() => setSelected(new Set())} />
     </div>
   );
 }
@@ -464,6 +471,11 @@ function DocCard({ doc, selected, onToggle, onOpen, t }: { doc: DocumentView; se
               {t(`documents.status.${doc.status}`)}
             </Badge>
             {doc.converted && <Badge variant="info">{t("library.converted")}</Badge>}
+            {doc.role === "knowledge" && (
+              <Badge variant="info" data-testid={`doc-role-${doc.id}`}>
+                {t("library.role_knowledge")}
+              </Badge>
+            )}
           </span>
           <span className="text-xs text-fg-subtle">
             {t("library.pages_count", { count: doc.page_count })} · {formatBytes(doc.size_bytes)}
@@ -511,6 +523,7 @@ function ListView({ docs, selected, onToggle, onOpen, locale }: { docs: Document
               <span role="gridcell" className="min-w-0">
                 <button type="button" className="max-w-full truncate text-left hover:underline" onClick={() => onOpen(doc.id)} title={doc.rel_path} data-testid={`doc-open-${doc.id}`}>
                   {doc.title ?? doc.original_name}
+                  {doc.role === "knowledge" && <span className="ml-2 rounded bg-info-soft px-1 text-xs text-info">{t("library.role_knowledge")}</span>}
                   {doc.tags.length > 0 && <span className="ml-2 text-xs text-fg-subtle">{doc.tags.map((x) => `#${x}`).join(" ")}</span>}
                 </button>
               </span>

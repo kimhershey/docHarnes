@@ -2,7 +2,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { api } from "./ipc";
 import { queryKeys } from "./query-client";
-import type { DocumentFilter } from "./types";
+import type { AnswerKind, DocumentFilter, SearchRequest } from "./types";
 
 export function useAppInfo() {
   return useQuery({ queryKey: queryKeys.appInfo, queryFn: () => api.appInfo(), staleTime: Infinity });
@@ -57,4 +57,57 @@ export function useDocumentPages(id: string | undefined, withText = false) {
 
 export function usePdfiumInfo(enabled = true) {
   return useQuery({ queryKey: queryKeys.pdfium, queryFn: () => api.documentsPdfiumInfo(), enabled, staleTime: Infinity });
+}
+
+// -- knowledge base (P3) --
+
+export function useKnowledgeStatus(enabled = true) {
+  return useQuery({ queryKey: queryKeys.knowledgeStatus, queryFn: () => api.knowledgeStatus(), enabled, staleTime: 5_000 });
+}
+
+export function useCollections(enabled = true) {
+  return useQuery({ queryKey: queryKeys.collections, queryFn: () => api.knowledgeCollections(), enabled, staleTime: 10_000 });
+}
+
+export function useCollectionDocs(id: string | null) {
+  return useQuery({ queryKey: queryKeys.collectionDocs(id ?? ""), queryFn: () => api.knowledgeCollectionDocs(id ?? ""), enabled: !!id });
+}
+
+export function useDocumentCollections(id: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.documentCollections(id ?? ""),
+    queryFn: () => api.knowledgeDocumentCollections(id ?? ""),
+    enabled: !!id,
+  });
+}
+
+export function useGlossary(enabled = true) {
+  return useQuery({ queryKey: queryKeys.glossary, queryFn: () => api.knowledgeGlossary(), enabled });
+}
+
+export function useVersions(enabled = true) {
+  return useQuery({ queryKey: queryKeys.versions, queryFn: () => api.knowledgeVersions(), enabled });
+}
+
+export function useAnswers(kind: AnswerKind | null, documentId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.answers(kind, documentId),
+    queryFn: () => api.knowledgeAnswers(kind, documentId, 50),
+    enabled,
+  });
+}
+
+export function useDocumentChunks(documentId: string | undefined) {
+  return useQuery({ queryKey: queryKeys.chunks(documentId ?? ""), queryFn: () => api.knowledgeChunks(documentId ?? ""), enabled: !!documentId });
+}
+
+/** Runs a search when `req` is set (null = idle); previous results stay while typing. */
+export function useSearch(req: SearchRequest | null) {
+  return useQuery({
+    queryKey: queryKeys.search(req),
+    queryFn: () => api.knowledgeSearch(req as SearchRequest),
+    enabled: !!req && req.query.trim().length > 0,
+    staleTime: 15_000,
+    placeholderData: keepPreviousData,
+  });
 }

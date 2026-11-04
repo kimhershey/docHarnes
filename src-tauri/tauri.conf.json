@@ -52,7 +52,8 @@
     ],
     "resources": {
       "../THIRD-PARTY-NOTICES.md": "THIRD-PARTY-NOTICES.md",
-      "resources/pdfium/": "pdfium/"
+      "resources/pdfium/": "pdfium/",
+      "resources/ko-dic/": "ko-dic/"
     },
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },

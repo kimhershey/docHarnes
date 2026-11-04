@@ -16,6 +16,7 @@ pub mod error;
 pub mod fswatch;
 pub mod gguf;
 pub mod hw;
+pub mod knowledge;
 pub mod memory;
 pub mod modelstore;
 pub mod paths;
