@@ -1011,9 +1011,11 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   `%LOCALAPPDATA%\tauri\NSIS`에 배치하고(설치된 CLI가 그 플러그인 버전을 참조할 때만), 워크플로는 NSIS 캐시 + `tauri build` 3회
   재시도. 결과 `DocuLens-Setup-Lite-0.1.0-x64.exe` 43.0 MB, SHA-256 `1f16c170810da8f01969b7d3a0adbbe64e072fd238950a843a3efda34d884b17`,
   7-Zip 목록 159개 파일·303 MB(압축 전): `engines\cpu`·`engines\vulkan`(ggml-base, ggml-cpu-* 14종, ggml-rpc, ggml-vulkan 42 MB,
-  llama-server.exe 런처 + llama-server-impl/llama/mtmd DLL), `pdfium\pdfium.dll` 7.6 MB + 라이선스 18종, `ko-dic\` 사전 85 MB,
-  고지 파일·SBOM·라이선스 원문. 고정한 팩 해시와 일치. llama.cpp 최신 빌드의 `llama-server.exe`는 9.7 KB 런처이고 서버 본체는
-  `llama-server-impl.dll`이다(로컬 참조 빌드도 동일 구조).
+  llama-server.exe), `pdfium\pdfium.dll` 7.6 MB + 라이선스 18종, `ko-dic\` 사전 85 MB, 고지 파일·SBOM·라이선스 원문. 고정한 팩
+  해시와 일치. 참고: 최근 llama.cpp 빌드의 `llama-server.exe`는 9.7 KB 런처이고 서버 본체는 별도 라이브러리다(로컬 참조 빌드는
+  `libllama-server-impl.so` + `libllama.so` + `libmtmd.so`); 목록 필터가 ggml DLL과 런처만 찍어 나머지 DLL은 다음 빌드부터 출력된다.
+  공식 zip의 다른 도구 실행파일(llama-cli 등)도 팩 폴더에 그대로 들어가므로 설치파일을 더 줄이려면 `llama-server*` + DLL만 남기는
+  정리가 가능하다(v1.x 메모).
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
