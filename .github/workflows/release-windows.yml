@@ -170,7 +170,21 @@ jobs:
           path: ~\AppData\Local\tauri
           key: tauri-tools-windows-${{ hashFiles('package-lock.json') }}
           restore-keys: tauri-tools-windows-
-      - run: npx tauri build --target x86_64-pc-windows-msvc
+      # Best effort: pre-seed the toolset with the retrying, API-first downloader (scripts/fetch-nsis.mjs);
+      # tauri-bundler keeps verifying it and downloads itself when the seed is absent or wrong.
+      - name: Seed the NSIS toolset
+        continue-on-error: true
+        run: node scripts/fetch-nsis.mjs
+      - name: Build the app and the NSIS installer (retries the bundling step on a download failure)
+        shell: pwsh
+        run: |
+          $attempts = 3
+          for ($i = 1; $i -le $attempts; $i++) {
+            npx tauri build --target x86_64-pc-windows-msvc
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            if ($i -lt $attempts) { Write-Host "::warning::tauri build failed (attempt $i of $attempts); retrying in 60 s"; Start-Sleep -Seconds 60 }
+          }
+          exit 1
 
       - name: Name the installer and write its SHA-256
         shell: pwsh
