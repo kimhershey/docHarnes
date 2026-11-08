@@ -1006,6 +1006,14 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   릴리스 다운로드 장애(HTTP 504)로 llama.cpp 팩 단계에서 실패 → fetch 스크립트가 REST 자산 엔드포인트(API → 서명된 CDN
   리디렉션)를 먼저 쓰고 공개 URL로 폴백하도록 바꿔 통과. 이때 받은 공식 팩 해시를 `engines/manifest.json`에 고정(cpu
   `cc2aad48…`, vulkan `8eec3c8a…`; PDFium은 기존 핀과 일치). 설치파일 내용 7-Zip 목록·필수 항목 검사 단계를 워크플로에 추가.
+- **검증 빌드(run 42475854955, 5adb585)**: 같은 장애로 3·4번째 빌드가 `tauri build`의 NSIS 도구 다운로드(단일 요청, 재시도 없음)에서
+  504로 실패 → `scripts/fetch-nsis.mjs`가 NSIS 3.13 + nsis_tauri_utils 0.5.3을 API 우선 경로로 받아 SHA-1 검증 후
+  `%LOCALAPPDATA%\tauri\NSIS`에 배치하고(설치된 CLI가 그 플러그인 버전을 참조할 때만), 워크플로는 NSIS 캐시 + `tauri build` 3회
+  재시도. 결과 `DocuLens-Setup-Lite-0.1.0-x64.exe` 43.0 MB, SHA-256 `1f16c170810da8f01969b7d3a0adbbe64e072fd238950a843a3efda34d884b17`,
+  7-Zip 목록 159개 파일·303 MB(압축 전): `engines\cpu`·`engines\vulkan`(ggml-base, ggml-cpu-* 14종, ggml-rpc, ggml-vulkan 42 MB,
+  llama-server.exe 런처 + llama-server-impl/llama/mtmd DLL), `pdfium\pdfium.dll` 7.6 MB + 라이선스 18종, `ko-dic\` 사전 85 MB,
+  고지 파일·SBOM·라이선스 원문. 고정한 팩 해시와 일치. llama.cpp 최신 빌드의 `llama-server.exe`는 9.7 KB 런처이고 서버 본체는
+  `llama-server-impl.dll`이다(로컬 참조 빌드도 동일 구조).
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
@@ -1019,7 +1027,7 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | Playwright(모의 백엔드) | 34/34 (`generate.spec.ts`·`projects.spec.ts` 추가; 모의 백엔드가 Rust 페이로드 모양만 내므로 E2E가 실제 계약을 검증) |
 | `npm run notices` 결정성 | 두 번 실행 결과 동일 — crates 628(runtime 354)·npm 75·SBOM 컴포넌트 709 |
 | GitHub CI(License·Web·Rust Linux·Windows compile·notices·eval-gate·실엔진) | 커밋 a0fcafb·9308de3에서 실엔진 잡만 실패(위 수정으로 0e200ec에서 7개 잡 모두 통과). 리뷰 반영 커밋 84e5fdd에서는 License gate·Windows compile 잡이 **GitHub 릴리스 자산 다운로드 장애**(cargo-deny-action의 바이너리 tar가 손상 수신 "gzip: invalid magic", PDFium 다운로드 HTTP 504)로 실패 — 코드와 무관. ece44cc: License gate를 `taiki-e/install-action`(체크섬 검증 prebuilt cargo-deny 0.20.2)으로 바꿔 통과, 나머지 6개 잡 통과; Windows 잡은 여전히 504. c505b81: `scripts/lib/fetch-retry.mjs`(5xx·네트워크 오류·잘린 본문 지수 백오프 재시도 3회)를 fetch-pdfium/engine/kodic에 적용하고 Windows 잡에도 PDFium `actions/cache` 추가 — 장애가 이어져 Windows 잡은 재시도 3회 후에도 504. 6975410: Windows 잡의 PDFium 다운로드를 `continue-on-error`(경고 주석)로 바꿔 컴파일·테스트는 항상 수행(PDFium 테스트는 라이브러리 없으면 자체 skip, Linux 잡은 엄격 유지) → **7개 잡 모두 통과**(다운로드도 복구되어 Windows 잡이 PDFium 테스트까지 실제 수행) |
-| 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공(run 42471185353): NSIS 43.1 MB, 동봉 자산 검증 통과 — 위 "패키징·고지" 참조. Full은 CUDA 팩 워크플로가 main에 있어야 실행 가능 |
+| 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 2회(run 42471185353·42475854955): NSIS 43 MB, 설치파일 내용 검사(159 파일) 통과 — 위 "패키징·고지" 참조. Full은 CUDA 팩 워크플로가 main에 있어야 실행 가능 |
 
 이 환경에서 못 한 것: Windows 러너 전용(설치파일 빌드·CUDA 팩·릴리스 게시·`tauri build`), 실제 Qwen3.5-4B로 초안 품질·
 규칙 변환 품질·파이프라인 지표, 한컴/Word에서 생성 HWPX/DOCX 열기, OS 토스트·절전 방지 실동작 — 모두 `docs/user-pc-checklist.md`

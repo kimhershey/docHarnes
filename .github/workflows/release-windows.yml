@@ -212,7 +212,9 @@ jobs:
           $required = @("engines\cpu\llama-server.exe", "engines\vulkan\llama-server.exe", "pdfium\pdfium.dll", "ko-dic\", "THIRD-PARTY-NOTICES.md", "sbom.cdx.json", "licenses\THIRD-PARTY-LICENSES.txt")
           if ("${{ inputs.variant }}" -eq "full") { $required += @("engines\cu121\llama-server.exe", "engines\cu129\llama-server.exe") }
           $missing = @($required | Where-Object { $text -notmatch [regex]::Escape($_) })
-          $listing | Where-Object { $_ -match "llama-server\.exe|ggml-[a-z0-9-]*\.dll|pdfium\.dll|ko-dic|NOTICES|sbom|LICENSES|DocuLens\.exe|\d+ files" } | ForEach-Object { Write-Host $_ }
+          # llama-server.exe is a small launcher since llama.cpp split the server into llama-server-impl.dll;
+          # print the whole family so the log shows the complete pack.
+          $listing | Where-Object { $_ -match "llama[a-z-]*\.(exe|dll)|mtmd[a-z-]*\.dll|ggml[a-z0-9-]*\.dll|pdfium\.dll|ko-dic|NOTICES|sbom|LICENSES|DocuLens\.exe|\d+ files" } | ForEach-Object { Write-Host $_ }
           if ($missing.Count -gt 0) { Write-Host "::error::bundled assets missing from the installer: $($missing -join ', ')"; exit 1 }
           Write-Host "installer contents OK: $($required.Count) required entries present"
 
