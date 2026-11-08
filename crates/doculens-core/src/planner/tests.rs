@@ -197,6 +197,16 @@ fn example_commands_plan_without_a_model() {
         matches!(&r.plan.operations[0], Op::Open { target: OpenTarget::Screen, reference } if reference == "settings")
     );
 
+    // A short topic without a command verb is a knowledge-base lookup (P3 behaviour kept).
+    let r = planned("xyzzy 플루토늄 원자로");
+    assert!(matches!(&r.plan.operations[0], Op::Answer { .. }), "{r:?}");
+    assert!(r.plan.confidence >= MIN_CONFIDENCE);
+    // A bare question about an amount is Q&A, not a library-wide aggregate.
+    let r = planned("합계 금액은?");
+    assert_eq!(kinds(&r.plan), [OpKind::Answer], "{r:?}");
+    let r = planned("전체 영수증 합계");
+    assert!(matches!(&r.plan.operations[0], Op::Aggregate { func: AggregateFn::Sum, .. }), "{r:?}");
+
     // more single-intent phrases
     let r = planned("영수증 몇 건이야?");
     assert!(matches!(&r.plan.operations[0], Op::Aggregate { func: AggregateFn::Count, field: None, .. }), "{r:?}");
@@ -435,7 +445,10 @@ fn model_path_requeries_once_with_feedback() {
     assert_eq!(prompts::tier_for(&c, text, None, Some(minimal), None), prompts::Tier::Minimal);
     assert_eq!(prompts::tier_for(&c, text, None, Some(100), None), prompts::Tier::Minimal);
     assert_eq!(prompts::tier_for(&c, text, None, None, None), prompts::Tier::Full);
-    assert!(minimal <= prompts::prompt_budget(Some(4096), llm::REPLY_TOKENS).unwrap(), "minimal prompt must fit a 4K context: {minimal}");
+    assert!(
+        minimal <= prompts::prompt_budget(Some(4096), llm::REPLY_TOKENS).unwrap(),
+        "minimal prompt must fit a 4K context: {minimal}"
+    );
     let compact_msgs = prompts::messages_for(&c, text, None, prompts::Tier::Compact, None);
     let system = compact_msgs[0]["content"].as_str().unwrap();
     assert!(system.contains("스키마 영수증[receipt]"));
@@ -450,7 +463,10 @@ fn model_path_requeries_once_with_feedback() {
         // 4K never gets the full prompt; the exact tier depends on the estimate.
         let reqs = chat.requests.lock().unwrap();
         assert!(reqs[0].messages.len() <= 1 + 4 * 2 + 1);
-        assert!(prompts::tier_for(&c, text, None, prompts::prompt_budget(Some(4096), llm::REPLY_TOKENS), None) < prompts::Tier::Full);
+        assert!(
+            prompts::tier_for(&c, text, None, prompts::prompt_budget(Some(4096), llm::REPLY_TOKENS), None)
+                < prompts::Tier::Full
+        );
         let minimal_msgs = prompts::messages_for(&c, text, None, prompts::Tier::Minimal, None);
         let system = minimal_msgs[0]["content"].as_str().unwrap();
         assert!(system.starts_with("You are the command planner"));
@@ -459,7 +475,10 @@ fn model_path_requeries_once_with_feedback() {
     }
     // The server counting more tokens than the estimate → one retry at a smaller tier.
     let chat = StageChat::new();
-    chat.fail_queue.lock().unwrap().push("HTTP 400: request (5736 tokens) exceeds the available context size (4096 tokens)".into());
+    chat.fail_queue
+        .lock()
+        .unwrap()
+        .push("HTTP 400: request (5736 tokens) exceeds the available context size (4096 tokens)".into());
     chat.push("plan", json!({ "summary": "x", "intent": "search", "scope": {}, "operations": [{ "op": "search", "query": "한빛" }], "requires_confirmation": false, "confidence": 0.9 }));
     let mut d = deps(&chat);
     d.ctx_size = Some(16_384);
@@ -771,7 +790,12 @@ fn print_prompt_sizes() {
     for tier in [prompts::Tier::Full, prompts::Tier::Compact, prompts::Tier::Minimal] {
         let msgs = prompts::messages_for(&c, text, None, tier, None);
         let chars: usize = msgs.iter().map(|m| m["content"].as_str().unwrap_or("").chars().count()).sum();
-        let ascii: usize = msgs.iter().map(|m| m["content"].as_str().unwrap_or("").chars().filter(|c| c.is_ascii()).count()).sum();
-        eprintln!("{tier:?}: est={} chars={chars} ascii={ascii} non_ascii={}", prompts::message_tokens(&msgs), chars - ascii);
+        let ascii: usize =
+            msgs.iter().map(|m| m["content"].as_str().unwrap_or("").chars().filter(|c| c.is_ascii()).count()).sum();
+        eprintln!(
+            "{tier:?}: est={} chars={chars} ascii={ascii} non_ascii={}",
+            prompts::message_tokens(&msgs),
+            chars - ascii
+        );
     }
 }

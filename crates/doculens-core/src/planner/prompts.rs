@@ -318,7 +318,11 @@ pub fn messages_for(
     let system = format!(
         "{}\n\n{}\n{}\n{}\n{}",
         rules,
-        if ko { "## op 표 (op: 설명 [파라미터?:타입 — 설명])" } else { "## ops (op: description [param?:type — description])" },
+        if ko {
+            "## op 표 (op: 설명 [파라미터?:타입 — 설명])"
+        } else {
+            "## ops (op: description [param?:type — description])"
+        },
         table,
         if ko { "## 워크스페이스" } else { "## workspace" },
         context_block(ctx, text, compact)
@@ -337,12 +341,19 @@ pub fn messages_for(
     let mut user = String::new();
     user.push_str(&format!("<command>\n{}\n</command>", text.trim()));
     if let Some(d) = date {
-        user.push_str(&format!("\n({}: {} ~ {} [{}])", if ko { "날짜 범위" } else { "date range" }, d.from, d.to, d.label));
+        user.push_str(&format!(
+            "\n({}: {} ~ {} [{}])",
+            if ko { "날짜 범위" } else { "date range" },
+            d.from,
+            d.to,
+            d.label
+        ));
     }
     out.push(json!({ "role": "user", "content": user }));
     if let Some((previous, issues)) = feedback {
         out.push(json!({ "role": "assistant", "content": previous }));
-        let list: Vec<String> = issues.iter().filter(|i| i.blocking).map(|i| format!("- {}: {} ({})", i.path, i.message, i.code)).collect();
+        let list: Vec<String> =
+            issues.iter().filter(|i| i.blocking).map(|i| format!("- {}: {} ({})", i.path, i.message, i.code)).collect();
         out.push(json!({
             "role": "user",
             "content": format!(
@@ -362,7 +373,13 @@ pub fn message_tokens(messages: &[Value]) -> u32 {
 }
 
 /// Picks the largest tier whose prompt fits `budget` (`None` = unknown context → `Full`).
-pub fn tier_for(ctx: &PlanContext, text: &str, date: Option<&DateRange>, budget: Option<u32>, feedback: Option<(&str, &[PlanIssue])>) -> Tier {
+pub fn tier_for(
+    ctx: &PlanContext,
+    text: &str,
+    date: Option<&DateRange>,
+    budget: Option<u32>,
+    feedback: Option<(&str, &[PlanIssue])>,
+) -> Tier {
     let Some(budget) = budget else { return Tier::Full };
     let mut tier = Tier::Full;
     loop {
@@ -377,7 +394,13 @@ pub fn tier_for(ctx: &PlanContext, text: &str, date: Option<&DateRange>, budget:
 }
 
 /// Builds the chat messages at the tier that fits the context budget.
-pub fn messages(ctx: &PlanContext, text: &str, date: Option<&DateRange>, budget: Option<u32>, feedback: Option<(&str, &[PlanIssue])>) -> (Vec<Value>, Tier) {
+pub fn messages(
+    ctx: &PlanContext,
+    text: &str,
+    date: Option<&DateRange>,
+    budget: Option<u32>,
+    feedback: Option<(&str, &[PlanIssue])>,
+) -> (Vec<Value>, Tier) {
     let tier = tier_for(ctx, text, date, budget, feedback);
     (messages_for(ctx, text, date, tier, feedback), tier)
 }

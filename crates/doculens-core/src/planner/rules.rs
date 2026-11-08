@@ -521,6 +521,31 @@ fn aggregate(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     if !t.has(TRIGGERS) {
         return None;
     }
+    // "합계 금액은?" on its own is a question about a document, not a library-wide total:
+    // aggregate only when the sentence names a type, a period, a grouping or the whole library.
+    let dt_hint = doc_type(t, ctx).is_some();
+    let scoped = dt_hint
+        || date(t, ctx).is_some()
+        || t.has(&[
+            "월별",
+            "거래처별",
+            "유형별",
+            "monthly",
+            "byvendor",
+            "bytype",
+            "집계",
+            "총합",
+            "모든",
+            "모두",
+            "전부",
+            "전체",
+            "across",
+            "all ",
+        ])
+        || !selection_ids(ctx).is_empty() && t.has(SELECTION_WORDS);
+    if !scoped {
+        return None;
+    }
     let func = if t.has(&["평균", "average", "avg", "mean"]) {
         AggregateFn::Avg
     } else if t.has(&["최대", "가장큰", "가장비싼", "max", "highest", "largest"]) {
@@ -1155,6 +1180,71 @@ fn answer(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     ))
 }
 
+const COMMAND_MARKERS: &[&str] = &[
+    "해줘",
+    "해주세요",
+    "하세요",
+    "해라",
+    "하자",
+    "시켜",
+    "바꿔",
+    "바꾸",
+    "옮겨",
+    "지워",
+    "삭제",
+    "정리",
+    "추출",
+    "분류",
+    "내보내",
+    "변환",
+    "만들어",
+    "실행",
+    "열어",
+    "보여",
+    "찾아",
+    "검색",
+    "이동",
+    "설정",
+    "켜줘",
+    "꺼줘",
+    "처리",
+    "돌려",
+    "저장",
+    "export",
+    "delete",
+    "move",
+    "rename",
+    "run ",
+    "open",
+    "show",
+    "make",
+    "create",
+    "set ",
+    "turn",
+    "switch",
+    "process",
+    "extract",
+    "classify",
+    "organi",
+    "import",
+];
+
+/// A short topic with no command verb ("xyzzy 플루토늄 원자로", "계약 해지 조건") is a
+/// knowledge-base lookup: answer it rather than asking what to do.
+fn topic(t: &Text<'_>) -> Option<Plan> {
+    let words = t.raw.split_whitespace().count();
+    if words == 0 || words > 8 || t.compact.chars().count() < 2 || t.has(COMMAND_MARKERS) {
+        return None;
+    }
+    Some(mk(
+        Op::Answer { question: t.raw.trim().to_string(), cite: Some(true) },
+        Scope::default(),
+        0.7,
+        t.t("지식 베이스·문서에서 근거를 찾아 답합니다", "Answer with evidence from the knowledge base / documents")
+            .into(),
+    ))
+}
+
 /// Tries the rules in order; `None` leaves the command to the model.
 pub fn plan(text: &str, ctx: &PlanContext) -> Option<Plan> {
     let raw = text.trim();
@@ -1183,4 +1273,5 @@ pub fn plan(text: &str, ctx: &PlanContext) -> Option<Plan> {
         .or_else(|| search(&t, ctx))
         .or_else(|| open_document(&t))
         .or_else(|| answer(&t, ctx))
+        .or_else(|| topic(&t))
 }

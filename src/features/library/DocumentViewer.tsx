@@ -93,6 +93,12 @@ export function DocumentViewer() {
     rootRef.current?.focus();
   }, [id]);
 
+  // The assistant's "이 문서" scope (P5): remember the open document / page while the viewer is mounted.
+  useEffect(() => {
+    if (id) useUiStore.getState().setLastDocument({ id, page: pageNo });
+  }, [id, pageNo]);
+  useEffect(() => () => useUiStore.getState().setLastDocument(null), []);
+
   // Search / citation links open a specific page (`?page=N`) and highlight the query (`?q=`).
   const pageParam = searchParams.get("page");
   const tabParam = searchParams.get("tab");

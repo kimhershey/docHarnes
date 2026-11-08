@@ -1,7 +1,7 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { api } from "./ipc";
-import { queryKeys } from "./query-client";
+import { queryClient, queryKeys } from "./query-client";
 import type { AnswerKind, DocumentFilter, ReviewFilter, SearchRequest } from "./types";
 
 export function useAppInfo() {
@@ -152,4 +152,27 @@ export function useReviewQueue(filter: ReviewFilter, enabled = true) {
 
 export function useTables(documentId: string | undefined) {
   return useQuery({ queryKey: queryKeys.tables(documentId ?? ""), queryFn: () => api.pipelineTables(documentId ?? ""), enabled: !!documentId });
+}
+
+// -- journal (P5) --
+
+/** Query keys of the file-operation journal (batch list / entries); `journalKeys.all` invalidates both. */
+export const journalKeys = {
+  all: ["journal"] as const,
+  batches: (limit: number) => ["journal", "batches", limit] as const,
+  entries: (batchId: string) => ["journal", "entries", batchId] as const,
+};
+
+export function useJournalBatches(limit = 100, enabled = true) {
+  return useQuery({ queryKey: journalKeys.batches(limit), queryFn: () => api.journalBatches(limit), enabled, staleTime: 5_000 });
+}
+
+export function useJournalEntries(batchId: string | null) {
+  return useQuery({ queryKey: journalKeys.entries(batchId ?? ""), queryFn: () => api.journalEntries(batchId ?? ""), enabled: !!batchId });
+}
+
+/** After an organise / undo / redo: the journal and the library (paths changed) are stale. */
+export function invalidateJournal(): void {
+  void queryClient.invalidateQueries({ queryKey: journalKeys.all });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.documents });
 }

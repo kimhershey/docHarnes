@@ -1,0 +1,162 @@
+import { expect, test, type Page } from "@playwright/test";
+
+import ko from "../src/i18n/ko.json" with { type: "json" };
+import { card, createWorkspace, docId, freshApp, importViaLibrary, tpl } from "./helpers";
+
+// P5 assistant planner (design §3.5 / §3.7.6) against the browser mock: the
+// aggregate card, plan → execution → result cards of an export, the organise
+// diff preview + Ctrl+Enter + undo, instant slash commands and the
+// clarification card. Rule planning, validation and the executor are covered
+// by the Rust tests.
+
+const assistantCard = (page: Page, kind: string) => page.locator(`[data-testid="assistant-card-${kind}"]`);
+
+async function openAssistant(page: Page) {
+  await page.getByTestId("nav-assistant").click();
+  await expect(page.getByTestId("page-assistant")).toBeVisible();
+}
+
+async function send(page: Page, text: string) {
+  await page.getByTestId("assistant-input").fill(text);
+  await page.getByTestId("assistant-send").click();
+}
+
+/** Runs 표준 처리 on the (already imported) receipt from the library bulk bar. */
+async function processReceipt(page: Page) {
+  await page.getByTestId(`doc-select-${await docId(page, "영수증-1p.jpg")}`).check();
+  await page.getByTestId("library-process").click();
+  await page.getByTestId("library-process-standard").click();
+  await expect(card(page, "영수증-1p.jpg")).toHaveAttribute("data-doc-status", "extracted", { timeout: 15_000 });
+}
+
+/** Approves every flagged field of the receipt in the review queue so the file operations may move it. */
+async function approveReceipt(page: Page) {
+  await page.getByTestId("nav-review").click();
+  await expect(page.getByTestId("page-review")).toBeVisible();
+  await page.getByTestId("review-approve-doc").click();
+  await expect(page.getByTestId("review-empty")).toBeVisible();
+  await page.getByTestId("nav-library").click();
+  await expect(card(page, "영수증-1p.jpg")).toHaveAttribute("data-doc-status", "reviewed");
+}
+
+/** Plans without side effects run at once; otherwise approve the plan card. Resolves once the card reports done. */
+async function approveIfPending(page: Page, plan: ReturnType<typeof assistantCard>) {
+  const execute = plan.getByTestId("plan-execute");
+  if ((await plan.getAttribute("data-plan-status")) === "pending" && (await execute.isVisible())) await execute.click();
+  await expect(plan).toHaveAttribute("data-plan-status", "done", { timeout: 15_000 });
+}
+
+test.describe("P5 planner", () => {
+  test("aggregate: '지난달 영수증 합계' shows the aggregate card with the 검토 대기 포함 switch", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\영수증-1p.jpg", "D:\\scan\\세금계산서-2p.pdf"], { autoLevel: "none" });
+    await processReceipt(page);
+
+    await openAssistant(page);
+    await send(page, "지난달 영수증 합계");
+    const aggregate = assistantCard(page, "aggregate").last();
+    await expect(aggregate).toBeVisible({ timeout: 15_000 });
+    await expect(aggregate).toContainText(ko.planner.aggregate.basis.doc_date);
+    await expect(aggregate.getByTestId("aggregate-value")).toBeVisible();
+    const toggle = aggregate.getByTestId("aggregate-include-unreviewed");
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await toggle.click();
+    await expect(aggregate).toHaveAttribute("data-include-unreviewed", "true", { timeout: 10_000 });
+    await aggregate.getByTestId("aggregate-toggle-documents").click();
+    await expect(aggregate.getByTestId("aggregate-documents")).toBeVisible();
+  });
+
+  test("export: '세금계산서 → 엑셀' plan card → execution card → result card with the export path", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\영수증-1p.jpg", "D:\\scan\\세금계산서-2p.pdf"], { autoLevel: "none" });
+    // Classify + extract both documents so the tax invoice carries its type (the export scope is `doc_type = tax_invoice`).
+    for (const name of ["영수증-1p.jpg", "세금계산서-2p.pdf"]) await page.getByTestId(`doc-select-${await docId(page, name)}`).check();
+    await page.getByTestId("library-process").click();
+    await page.getByTestId("library-process-standard").click();
+    await expect(card(page, "세금계산서-2p.pdf")).toHaveAttribute("data-doc-status", "extracted", { timeout: 15_000 });
+
+    await openAssistant(page);
+    await send(page, "세금계산서 → 엑셀");
+    const plan = assistantCard(page, "plan").last();
+    await expect(plan).toBeVisible({ timeout: 15_000 });
+    await expect(plan).toContainText(ko.planner.ops.export);
+    await expect(plan.getByTestId("plan-step-0")).toBeVisible();
+    await expect(plan.getByTestId("plan-impact")).toContainText(tpl(ko.planner.card.impact_export, { count: 1 }));
+    await approveIfPending(page, plan);
+    await expect(assistantCard(page, "execution").last()).toBeVisible({ timeout: 15_000 });
+    const result = assistantCard(page, "result").last();
+    await expect(result).toBeVisible({ timeout: 20_000 });
+    await expect(result).toHaveAttribute("data-result-status", "done");
+    await expect(result.getByTestId("result-export-path")).toContainText(/exports\/.*\.xlsx$/);
+    await expect(result.getByTestId("result-open-folder")).toBeVisible();
+
+    // The job appears on the Jobs page's 완료 tab with its structured result.
+    await page.getByTestId("nav-jobs").click();
+    await page.getByTestId("jobs-tab-finished").click();
+    const job = page.locator('[data-job-kind="plan"]').first();
+    await expect(job).toContainText(ko.jobs.kind.plan);
+    await expect(job.getByTestId("job-state")).toHaveText(ko.jobs.state.done);
+    await expect(job.getByTestId("job-priority")).toBeVisible();
+    await job.getByTestId("job-result").locator("summary").click();
+    await expect(job.getByTestId("job-result-steps")).toContainText(ko.planner.ops.export);
+  });
+
+  test("organise: diff preview → Ctrl+Enter → result card → 되돌리기 toast", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\영수증-1p.jpg"], { autoLevel: "none" });
+    await processReceipt(page);
+    await approveReceipt(page);
+
+    await openAssistant(page);
+    await send(page, "영수증 월별 폴더로 옮겨");
+    const plan = assistantCard(page, "plan").last();
+    await expect(plan).toBeVisible({ timeout: 15_000 });
+    await expect(plan).toHaveAttribute("data-plan-status", "pending");
+    await expect(plan).toHaveAttribute("data-plan-active", "true");
+    await expect(plan).toContainText(ko.planner.ops.move);
+    await expect(plan.getByTestId("plan-only-reviewed")).toBeVisible();
+    await expect(plan.getByTestId("plan-impact")).toContainText(tpl(ko.planner.card.impact_moves, { count: 1 }));
+    const row = plan.locator('[data-testid="plan-preview-row"][data-item-status="move"]').first();
+    await expect(row).toBeVisible();
+    await expect(row).toContainText("영수증-1p.jpg");
+    await page.keyboard.press("Control+Enter");
+    await expect(plan).toHaveAttribute("data-plan-status", "done", { timeout: 15_000 });
+    const result = assistantCard(page, "result").last();
+    await expect(result).toBeVisible({ timeout: 20_000 });
+    await expect(result).toHaveAttribute("data-result-status", "done");
+    await expect(result.getByTestId("result-step-0")).toHaveAttribute("data-step-status", "done");
+    await result.getByTestId("result-toggle-moves").click();
+    await expect(result.getByTestId("result-moves")).toBeVisible();
+    const undo = result.getByTestId("result-undo");
+    await expect(undo).toBeVisible();
+    await undo.click();
+    await expect(page.getByTestId("toaster")).toContainText(tpl(ko.palette.undo_done, { restored: 1, skipped: 0 }), { timeout: 10_000 });
+    await expect(undo).toBeDisabled();
+  });
+
+  test("slash commands still run at once; an unknown sentence asks for clarification; Esc / Ctrl+Z", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openAssistant(page);
+
+    await send(page, "/테마 다크");
+    await expect(assistantCard(page, "executed").last()).toBeVisible();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+    await send(page, "보라색 코끼리를 춤추게 해줘");
+    const clarify = assistantCard(page, "clarify").last();
+    await expect(clarify).toBeVisible({ timeout: 15_000 });
+    await expect(clarify.getByTestId("clarify-question")).not.toBeEmpty();
+    // The composer keeps the sentence for a rephrase.
+    await expect(page.getByTestId("assistant-input")).toHaveValue("보라색 코끼리를 춤추게 해줘");
+
+    // Ctrl+Z outside a text field: nothing journaled yet → "되돌릴 작업이 없습니다".
+    await page.getByTestId("assistant-messages").click();
+    await page.keyboard.press("Control+z");
+    await expect(page.getByTestId("toaster")).toContainText(ko.palette.nothing_to_undo);
+  });
+});

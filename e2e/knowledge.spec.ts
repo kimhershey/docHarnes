@@ -98,10 +98,10 @@ test.describe("P3 knowledge base", () => {
     await expect(third).toHaveAttribute("data-answer-state", "done", { timeout: 15_000 });
     await expect(third.getByTestId("answer-general-badge")).toHaveText(t_general_badge);
 
-    // Work items are not answered as questions: they wait for the planner card.
+    // Work items are not answered as questions: the planner (P5) replies with a plan / clarification card.
     await page.getByTestId("assistant-input").fill("지난달 영수증 정리해줘");
     await page.getByTestId("assistant-send").click();
-    await expect(page.getByTestId("assistant-pending").last()).toBeVisible();
+    await expect(page.locator('[data-testid="assistant-card-plan"], [data-testid="assistant-card-clarify"], [data-testid="assistant-card-result"], [data-testid="assistant-card-execution"]').last()).toBeVisible({ timeout: 15_000 });
 
     // Citation chips of the first answer open the cited page in the viewer.
     await card.getByTestId("citation-chip").first().click();

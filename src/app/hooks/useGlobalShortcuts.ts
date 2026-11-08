@@ -1,6 +1,8 @@
 import { useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 
+import { runJournal } from "@/lib/commands";
 import { matchesChord } from "@/lib/shortcuts";
 import { SCREEN_ROUTES } from "@/lib/types";
 import { isMac } from "@/lib/utils";
@@ -19,9 +21,15 @@ function isEditable(target: EventTarget | null): boolean {
   return target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
 }
 
+/** A modal layer (dialog, command palette) owns the keyboard while open. */
+function dialogOpen(): boolean {
+  return document.querySelector('[role="dialog"], [cmdk-dialog]') !== null;
+}
+
 /** App-wide key bindings from settings.shortcuts (design §3.7.4). */
 export function useGlobalShortcuts() {
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const shortcuts = useSettingsStore((s) => s.settings?.shortcuts);
 
   useEffect(() => {
@@ -58,6 +66,14 @@ export function useGlobalShortcuts() {
               ui.closePalette();
             }
             return;
+          case "undo":
+          case "redo":
+            // Ctrl+Z / Ctrl+Y revert the last journaled file batch (design §3.5) — never inside a text
+            // field (the editor's own undo) or while a dialog / the palette owns the keyboard.
+            if (isEditable(e.target) || dialogOpen() || ui.paletteOpen) return;
+            e.preventDefault();
+            void runJournal(t, { redo: action === "redo" });
+            return;
           default: {
             const screen = NAV_ACTIONS[action];
             if (screen) {
@@ -71,5 +87,5 @@ export function useGlobalShortcuts() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [shortcuts, navigate]);
+  }, [shortcuts, navigate, t]);
 }

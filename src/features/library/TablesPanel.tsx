@@ -1,4 +1,4 @@
-import { Copy, Download } from "lucide-react";
+import { Copy, Download, FileSpreadsheet } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -52,6 +52,16 @@ export function TablesPanel({ doc, onGoToPage }: { doc: DocumentView; onGoToPage
       toast(describeError(e, t), "danger");
     }
   };
+  // One XLSX for the whole document (a sheet per table) through the P5 export job; the result
+  // (path, "폴더 열기") is on the Jobs page.
+  const xlsx = async () => {
+    try {
+      await api.exportRun({ format: "xlsx", target: "table", scope: { doc_ids: [doc.id] }, overwrite: true });
+      toast(t("export.started"), "ok");
+    } catch (e) {
+      toast(describeError(e, t), "danger");
+    }
+  };
   if (isLoading && !tables) return <Spinner />;
   if (!tables || tables.length === 0) return <p className="text-sm text-fg-muted" data-testid="tables-empty">{t("viewer.tables.none")}</p>;
   return (
@@ -68,6 +78,9 @@ export function TablesPanel({ doc, onGoToPage }: { doc: DocumentView; onGoToPage
             </Button>
             <Button size="icon-sm" variant="ghost" onClick={() => void csv(tbl)} aria-label={t("viewer.tables.csv")} data-testid="table-csv">
               <Download />
+            </Button>
+            <Button size="icon-sm" variant="ghost" onClick={() => void xlsx()} aria-label={t("export.table_xlsx")} title={t("export.table_xlsx")} data-testid="table-xlsx">
+              <FileSpreadsheet />
             </Button>
           </div>
           <div className="overflow-auto rounded-md border border-border">

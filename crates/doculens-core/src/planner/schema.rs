@@ -414,7 +414,8 @@ fn type_label(ty: ParamType) -> String {
 pub fn op_names() -> String {
     let mut out = String::new();
     for s in OP_SPECS {
-        let req: Vec<String> = s.params.iter().filter(|p| p.required).map(|p| format!("{}:{}", p.name, type_label(p.ty))).collect();
+        let req: Vec<String> =
+            s.params.iter().filter(|p| p.required).map(|p| format!("{}:{}", p.name, type_label(p.ty))).collect();
         let opt: Vec<&str> = s.params.iter().filter(|p| !p.required).map(|p| p.name).collect();
         out.push_str(&format!(
             "- {}{}{}\n",

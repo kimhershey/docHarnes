@@ -1,14 +1,17 @@
+import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
 
 import { PipelineStatusChip } from "@/features/pipeline/PipelineStatusChip";
-import { isTauri } from "@/lib/ipc";
+import { api, isTauri } from "@/lib/ipc";
 import { useAssessment, useModelIndex } from "@/lib/queries";
+import { queryKeys } from "@/lib/query-client";
 import { SCREEN_ROUTES } from "@/lib/types";
 import { formatBytes, formatMiB } from "@/lib/utils";
 import { useEngineStore } from "@/stores/engine";
 import { useActiveJobs } from "@/stores/jobs";
+import { useWorkspace } from "@/stores/workspace";
 
 function useOnline(): boolean {
   const [online, setOnline] = useState(typeof navigator === "undefined" ? false : navigator.onLine);
@@ -45,13 +48,24 @@ export function engineIndicator(
   return { key: installed ? "engine_stopped" : "engine_no_model", color: "bg-fg-subtle" };
 }
 
+/** "배치 작업 중 — 약 N초 후 응답" (P5 engine gate): seconds rounded up, omitted when the estimate is 0. */
+export function gateNotice(gate: { batch_busy: boolean; estimated_wait_ms: number } | null | undefined, t: (k: string, o?: Record<string, unknown>) => string): string | null {
+  if (!gate?.batch_busy) return null;
+  const seconds = Math.ceil((gate.estimated_wait_ms ?? 0) / 1000);
+  return seconds > 0 ? t("statusbar.gate_busy", { seconds }) : t("statusbar.gate_busy_short");
+}
+
 export function StatusBar() {
   const { t } = useTranslation();
   const online = useOnline();
+  const workspace = useWorkspace();
   const { data: assessment } = useAssessment();
   const { data: index } = useModelIndex();
   const status = useEngineStore((s) => s.status);
   const jobs = useActiveJobs();
+  const batchRunning = jobs.some((j) => (j.kind === "pipeline" || j.kind === "plan") && j.state === "running");
+  // The gate flips at page boundaries while a batch runs: poll a little faster than the change events then.
+  const { data: pipeline } = useQuery({ queryKey: queryKeys.pipelineStatus, queryFn: () => api.pipelineStatus(), enabled: !!workspace, staleTime: 5_000, refetchInterval: batchRunning ? 3_000 : false });
   // "no model" only when nothing loadable exists at all (design §3.3.4 "모델 미설치 상태").
   const installed = (assessment?.active_model_installed?.installed ?? false) || (index?.discovered.some((d) => d.health.kind === "ready") ?? false);
   const ind = engineIndicator(status, installed);
@@ -59,6 +73,11 @@ export function StatusBar() {
   const total = assessment?.tier.total_vram_mib;
   const vram = loaded?.memory_effective_bytes != null ? `${formatBytes(loaded.memory_effective_bytes, 1)} / ${formatMiB(total)}` : assessment?.tier.free_vram_mib != null ? `${formatMiB(assessment.tier.free_vram_mib)} / ${formatMiB(total)}` : "—";
   const modelLabel = loaded ? loaded.id : (assessment?.active_model?.display ?? t("topbar.no_model"));
+  const running = jobs.filter((j) => j.state === "running").length;
+  const paused = jobs.filter((j) => j.state === "paused").length;
+  const queued = jobs.length - running - paused;
+  const queueTooltip = t("statusbar.queue_tooltip", { running, queued, paused });
+  const gate = gateNotice(pipeline?.gate, t);
 
   return (
     <footer className="flex h-7 shrink-0 items-center gap-4 border-t border-border bg-bg-elevated px-3 text-xs text-fg-muted" data-testid="statusbar">
@@ -72,9 +91,15 @@ export function StatusBar() {
       <span className="truncate" data-testid="statusbar-model">
         {t("statusbar.model")}: {modelLabel}
       </span>
-      <Link to={SCREEN_ROUTES.jobs} className="hover:text-fg" data-testid="statusbar-jobs">
+      <Link to={SCREEN_ROUTES.jobs} className="hover:text-fg" title={queueTooltip} aria-label={`${t("statusbar.queue", { count: jobs.length })} — ${queueTooltip}`} data-testid="statusbar-jobs" data-paused={paused}>
         {t("statusbar.queue", { count: jobs.length })}
+        {paused > 0 && <span className="ml-1 text-warn">({t("jobs.state.paused")} {paused})</span>}
       </Link>
+      {gate && (
+        <span className="text-warn" role="status" aria-live="polite" data-testid="statusbar-gate">
+          {gate}
+        </span>
+      )}
       <PipelineStatusChip className="hidden md:inline-flex" />
       <span className="ml-auto">{online ? t("statusbar.network_online") : t("statusbar.network_offline")}</span>
       {!isTauri && <span className="rounded bg-warn-soft px-1.5 text-warn">{t("statusbar.preview")}</span>}

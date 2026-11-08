@@ -242,8 +242,9 @@ fn real_llama_server_load_chat_switch() {
             ..Default::default()
         };
         let t = Instant::now();
-        let planned = doculens_core::planner::llm::plan(Some(&pdeps), "한빛과 거래한 계약 중 작년 것만 골라서 보여줘", &pctx)
-            .expect("planner call");
+        let planned =
+            doculens_core::planner::llm::plan(Some(&pdeps), "한빛과 거래한 계약 중 작년 것만 골라서 보여줘", &pctx)
+                .expect("planner call");
         eprintln!(
             "planner → source={:?} attempts={} intent={:?} issues={:?} raw={:?} in {} ms",
             planned.source,
@@ -253,8 +254,16 @@ fn real_llama_server_load_chat_switch() {
             planned.raw.as_deref().map(|r| r.chars().take(160).collect::<String>()),
             t.elapsed().as_millis()
         );
-        assert!(!planned.issues.iter().any(|i| i.code == "model_error"), "planner grammar / transport error: {:?}", planned.issues);
-        assert!(planned.raw.as_deref().is_some_and(|r| r.trim_start().starts_with('{')), "plan output not constrained: {:?}", planned.raw);
+        assert!(
+            !planned.issues.iter().any(|i| i.code == "model_error"),
+            "planner grammar / transport error: {:?}",
+            planned.issues
+        );
+        assert!(
+            planned.raw.as_deref().is_some_and(|r| r.trim_start().starts_with('{')),
+            "plan output not constrained: {:?}",
+            planned.raw
+        );
     }
 
     // Hot swap when a second model exists.
