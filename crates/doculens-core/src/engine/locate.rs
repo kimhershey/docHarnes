@@ -218,7 +218,8 @@ pub fn locate(inputs: &LocateInputs) -> Result<EngineBinary> {
 }
 
 /// Runs `llama-server --version` and extracts the build number
-/// (`version: 12066 (abc123)` / `build: 12066 (...)` / `b12066`).
+/// (`version: 12066 (abc123)` / `version: 0.8.0 (build 12066, commit abc123)` / `build: 12066 (...)` /
+/// `b12066`).
 pub fn probe_version(path: &Path) -> Option<(String, u32)> {
     let mut cmd = super::process::engine_command(path);
     cmd.arg("--version");
@@ -231,7 +232,17 @@ pub fn parse_version_output(text: &str) -> Option<(String, u32)> {
         let l = line.trim();
         for prefix in ["version:", "build:"] {
             if let Some(rest) = l.strip_prefix(prefix) {
-                let digits: String = rest.trim().chars().take_while(|c| c.is_ascii_digit()).collect();
+                let rest = rest.trim();
+                // llama.cpp ≥ 0.8 prints `version: 0.8.0 (build 12066, commit 713319e)`.
+                if let Some(after) = rest.split("build ").nth(1) {
+                    let digits: String = after.trim().chars().take_while(|c| c.is_ascii_digit()).collect();
+                    if let Ok(n) = digits.parse::<u32>() {
+                        // 0 = untagged checkout, 1 = shallow clone (`git rev-list --count` of one commit):
+                        // the build is unknown either way.
+                        return (n > 1).then(|| (format!("b{n}"), n));
+                    }
+                }
+                let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
                 if let Ok(n) = digits.parse::<u32>() {
                     // 0 = built from an untagged checkout: version unknown
                     return (n > 0).then(|| (format!("b{n}"), n));
@@ -271,6 +282,15 @@ mod tests {
         assert_eq!(parse_version_output("llama-server b11747"), Some(("b11747".into(), 11747)));
         assert_eq!(parse_version_output("nothing"), None);
         assert_eq!(parse_version_output("version: 0 (unknown)"), None);
+        // llama.cpp ≥ 0.8 format; shallow-clone / untagged builds report build 1 / 0.
+        assert_eq!(
+            parse_version_output(
+                "version: 0.8.0 (build 12066, commit 713319e)\nbuilt with MSVC 19.44 for Windows AMD64"
+            ),
+            Some(("b12066".into(), 12066))
+        );
+        assert_eq!(parse_version_output("version: 0.8.0-dev (build 1, commit 713319e)"), None);
+        assert_eq!(parse_version_output("version: 0.8.0-dev (build 0, commit unknown)"), None);
     }
 
     #[test]

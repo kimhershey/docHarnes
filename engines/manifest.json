@@ -47,7 +47,8 @@
         "cublas_12.1",
         "cublas_dev_12.1",
         "thrust_12.1",
-        "visual_studio_integration_12.1"
+        "visual_studio_integration_12.1",
+        "documentation_12.1"
       ],
       "msvc_toolset": "14.39",
       "msvc_component": "Microsoft.VisualStudio.Component.VC.14.39.17.9.x86.x64",
@@ -70,7 +71,8 @@
         "cublas_12.9",
         "cublas_dev_12.9",
         "thrust_12.9",
-        "visual_studio_integration_12.9"
+        "visual_studio_integration_12.9",
+        "documentation_12.9"
       ],
       "msvc_toolset": null,
       "msvc_component": null,

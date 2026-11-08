@@ -120,7 +120,9 @@ jobs:
           "$cuda\bin" >> $env:GITHUB_PATH
 
       - name: Clone llama.cpp at the pinned tag
-        run: git clone --depth 1 --branch ${{ steps.def.outputs.tag }} https://github.com/ggml-org/llama.cpp llama.cpp
+        # Full history: llama.cpp derives its build number from `git rev-list --count HEAD` (a shallow clone
+        # reports build 1, which the app would read as unknown instead of b12066).
+        run: git clone --single-branch --branch ${{ steps.def.outputs.tag }} https://github.com/ggml-org/llama.cpp llama.cpp
 
       - name: Configure and build (cmake flags from engines/README.md "Building the CUDA packs")
         shell: cmd
@@ -152,8 +154,16 @@ jobs:
             Copy-Item $src $out
           }
           Copy-Item llama.cpp/LICENSE "$out/LICENSE-llama.cpp.txt"
-          $eula = Get-ChildItem $env:CUDA_PATH -File | Where-Object { $_.Name -match '^(EULA|License)' } | Select-Object -First 1
-          if (-not $eula) { Write-Host "::error::the CUDA toolkit EULA text was not found in $env:CUDA_PATH (appendix E: it must ship inside the pack)"; exit 1 }
+          # EULA.txt sits at the toolkit root when the documentation subpackage is installed; search two levels
+          # deep as well (older toolkits), and list the root for diagnosis when it is still missing.
+          $eula = Get-ChildItem $env:CUDA_PATH -File -Recurse -Depth 2 -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^(EULA|License|LICENSE)' -and $_.Extension -in '.txt', '' } |
+            Sort-Object { $_.FullName.Length } | Select-Object -First 1
+          if (-not $eula) {
+            Write-Host "toolkit root:"; Get-ChildItem $env:CUDA_PATH | ForEach-Object { Write-Host "  $($_.Name)" }
+            Write-Host "::error::the CUDA toolkit EULA text was not found under $env:CUDA_PATH (appendix E: it must ship inside the pack)"; exit 1
+          }
+          Write-Host "EULA: $($eula.FullName)"
           Copy-Item $eula.FullName "$out/NVIDIA-CUDA-EULA.txt"
           if (-not (Test-Path "$out/ggml-cuda.dll")) { Write-Host "::error::ggml-cuda.dll missing — the CUDA backend was not built"; exit 1 }
           # One backend family per pack folder (engines/README.md).
