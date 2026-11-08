@@ -712,11 +712,46 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 
 ### 프런트엔드
 
-(진행 중 — 어시스턴트 플랜 카드·정리/내보내기 화면·작업 화면·모의 백엔드 작업이 끝나면 이 절을 채운다.)
+- `types.ts`/`ipc.ts`: P5 계약(Op 33종·Scope·Plan·PlanResult/PlanResponse/PlanPreview·PlanExecution·Organize*·Journal*·Aggregate*·
+  Export*·UiPlanContext, Job의 `priority`/`persistent`/`attempts`/`result`/`label`, `PipelineStatus.gate`)과 16개 명령 래퍼.
+- 어시스턴트(`features/assistant/`): 입력 → 프리라우터(슬래시·설정은 즉시) → `plannerPlan`(범위 선택기: 전체/현재 폴더/선택 문서 N건/
+  지식 베이스·컬렉션; `lastDocument`로 "이 문서"). 단일 `answer` 플랜은 기존 스트리밍 Q&A로, UI op는 `commands.ts`
+  `executeUiOp`(테마·언어·설정·모델·프로파일·열기(문서 이름 해석)·스키마 화면·작업 제어·엔진·재색인·inbox 감시·도움말)로 즉시 실행.
+  **플랜 카드**(`PlanCard`): 출처·신뢰도·해석, 단계 체크리스트(op 라벨·파라미터 요약 `describePlan.ts`), 미리보기(정리 diff 행·
+  보류 표시·전체 보기, 내보내기 경로·덮어쓰기, 삭제 건수), 영향 줄, "검토 미완료 문서는 이동하지 않음" 토글, 검증 경고, 인라인 편집
+  (`PlanEditor`: `opSpecs.ts` = Rust `OP_SPECS` 사본으로 생성하는 자체 폼 + 범위 편집), 승인 Ctrl+Enter / 취소 Esc(IME 가드).
+  **실행 카드**(`ExecutionCard`): 작업 진행률·단계 상세·일시정지/재개/취소/Jobs 열기, 게이트 대기 안내. **결과 카드**(`ResultCard`):
+  단계별 ✔/✖·요약, 검토 큐 열기(N)·이동 내역·↶ 되돌리기(`journalUndo` + 토스트)·폴더 열기·검색 결과 칩·요약·답변 카드 재사용,
+  `ui_actions` 순차 실행. **집계 카드**(`AggregateCard`): 기준 날짜·건수·헤드라인 값·검토 완료/대기 분리·"검토 대기 포함" 재집계·
+  월별 그룹·문서 목록. **명확화 카드**(`ClarifyCard`): 질문 + 입력 프리필, `no_model`이면 "모델 로드" 버튼. 예시 칩 추가.
+- 작업(`features/jobs/`): 대기/진행 중/완료/실패 탭, 우선순위·시도 횟수 배지, 일시정지/재개/재시도/우선 버튼, 결과 섹션(`JobResult`:
+  플랜 단계·내보내기 경로(폴더 열기)·정리 건수), `describe.ts`가 러너의 상세 문자열(`plan 3/5 · …`, `1/5 · import`, `exported N → path`,
+  `moved/failed/skipped`, `restored/skipped`, interrupted/workspace closed)을 번역. `stores/jobs.ts`에 pause/resume/retry/prioritize.
+- 정리/내보내기(`features/organize/`): 세 탭 — **정리**(범위 섹션 `ScopeSection`: 전체/폴더/유형/날짜/라이브러리 선택, 파일명 템플릿
+  편집기 `TemplateEditor`(변수 칩·실시간 예시), 폴더 프리셋 월별/거래처별/유형별/사용자 정의, 검토 완료만, 미리보기 diff 표(상태 배지·
+  값 미상 ⚠·50행 + 전체 보기), 확인 다이얼로그 → `organizeApply` 작업 추적(`useJob`) → 결과 토스트 + 되돌리기), **내보내기**(대상·형식·
+  범위·열 체크박스·공통 열·레이아웃·경로(미리보기 기본값)·덮어쓰기, 미리보기 줄, 작업 추적, 결과 경로·폴더 열기·추가 파일),
+  **이력**(저널 배치 목록·되돌리기/다시 실행·항목 펼치기·불가 사유 번역; `pipeline://changed{journal}`로 갱신). `/organize?tab=&selection=1`.
+- 라이브러리: 선택을 `useDocumentsStore.selectedIds`로 공유, 일괄 바에 "정리…"/"내보내기…", **집계 바**(`AggregateBar`: 유형 필터 또는
+  선택 시 표시, 필드/함수/검토 대기 포함, 300 ms 디바운스 재집계, 월별 칩); 표 탭 XLSX 내보내기(`exportRun target=table`);
+  뷰어가 `lastDocument`를 기록. 상태바: `gate.batch_busy`면 "배치 작업 중 — 약 N초 후 응답". 전역 Ctrl+Z/Ctrl+Y(입력 중·다이얼로그 제외).
+- 모의 백엔드(`lib/mock-planner.ts` + `mock-backend.ts`/`mock-pipeline.ts`): 규칙 플래너 TS 포트(`planText`/`rulesPlan`), 미리보기,
+  인라인/작업 실행(파이프라인 모의 재사용), 정리 템플릿 렌더·저널(`doculens.mock.journal`)·되돌리기/다시 실행, 집계, 내보내기 레지스트리
+  (`doculens.mock.exports`), 영속 작업(우선순위·레인·일시정지/재개/재시도/우선), `doculens.mock.planner_model=on`이면 미해석 문장을
+  "모델" 출처 검색 플랜으로. i18n 섹션 `planner`(ops·params·card·execution·result·aggregate·clarify·ui), `organize`, `export`,
+  `aggregate`, `jobs` 확장(탭 4개·우선순위·결과), `assistant` 확장.
 
 ### 테스트·검증
 
-(진행 중 — 프런트엔드 검증 후 테스트 수·E2E 결과를 기록한다.)
+| 항목 | 결과 |
+|---|---|
+| `cargo test --workspace` | 202 통과(2 ignored) — P5 모듈 35건: 플래너 8(예시 명령 12종+α, 스펙↔serde, 검증기, 모델 경로 재질의·단계·축소 재시도, 실행기 2), 정리/저널 7(템플릿·diff·충돌·보류·적용·되돌리기/다시 실행·삭제 복원), 작업 2(저장소·우선순위·게이트), 집계 7, 내보내기 11 |
+| `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --check` | 통과 |
+| `cargo deny check licenses bans sources` | 통과(rust_xlsxwriter·csv·pdf-writer 추가) |
+| 실엔진(`tests/real_engine.rs`, 초소형 모델) | 채팅·KIE·**플래너 문법** 통과(아래) |
+| `npm run typecheck`, `npm test` | 통과 — vitest 9파일 51건(플랜 설명·템플릿·집계 헬퍼·i18n 패리티 포함) |
+| `npm run e2e` | 28건 통과 — 신규 `planner.spec.ts` 4건(집계 카드, 내보내기 플랜→실행→결과, 정리 diff→Ctrl+Enter→되돌리기, 슬래시/명확화/Esc/Ctrl+Z), `organize.spec.ts` 3건(보류→월별 이동→이력 되돌리기, CSV 내보내기, 집계 바·정리 바로가기); P3 지식 Q&A spec은 플래너 경유로 유지 |
+| `npm run licenses:check` | 통과 |
 
 ### 헤드리스 검증 (실제 데스크톱 바이너리 + 실제 llama-server, Xvfb + WebKitGTK)
 
