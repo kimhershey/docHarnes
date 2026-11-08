@@ -132,9 +132,14 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run licenses:check
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      # cargo-deny as a prebuilt, checksum-verified binary (the Docker-based cargo-deny-action
+      # downloads its binary unauthenticated at image build time and hit "gzip: invalid magic"
+      # on two consecutive runs); pinned to the version verified locally.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
         with:
-          command: check licenses bans sources
+          tool: cargo-deny@0.20.2
+      - run: cargo deny check licenses bans sources
 
   windows-check:
     name: Windows compile check
