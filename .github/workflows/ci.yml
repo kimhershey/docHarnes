@@ -148,7 +148,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Resolve the pinned PDFium build
+        id: pdfium
+        shell: bash
+        run: echo "tag=$(node -p "require('./engines/pdfium.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Cache PDFium
+        id: pdfium-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\pdfium
+          key: pdfium-windows-x64-${{ steps.pdfium.outputs.tag }}
       - name: Fetch PDFium (Windows build, sha256 pinned)
+        if: steps.pdfium-cache.outputs.cache-hit != 'true'
         run: node scripts/fetch-pdfium.mjs --dest "$env:RUNNER_TEMP\pdfium"
       - name: Resolve the pinned ko-dic dictionary
         id: kodic

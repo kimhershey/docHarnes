@@ -18,6 +18,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { downloadBuffer } from "./lib/fetch-retry.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(readFileSync(path.join(ROOT, "engines", "kodic.json"), "utf8"));
@@ -58,10 +59,9 @@ if (archive) {
 } else {
   const url = manifest.source.url;
   console.log(`downloading ${url}`);
-  const res = await fetch(url, { headers: { "User-Agent": "DocuLens-fetch-kodic" }, redirect: "follow" });
-  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+  const buf = await downloadBuffer(url, { headers: { "User-Agent": "DocuLens-fetch-kodic" }, redirect: "follow" });
   archive = path.join(tmp, manifest.source.file);
-  writeFileSync(archive, Buffer.from(await res.arrayBuffer()));
+  writeFileSync(archive, buf);
 }
 const sha = createHash("sha256").update(readFileSync(archive)).digest("hex");
 console.log(`  sha256 ${sha}`);

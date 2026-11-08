@@ -20,6 +20,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { downloadBuffer, fetchWithRetry } from "./lib/fetch-retry.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifestPath = path.join(ROOT, "engines", "manifest.json");
@@ -68,16 +69,14 @@ function githubHeaders(extra = {}) {
 }
 
 async function githubJson(url) {
-  const res = await fetch(url, { headers: githubHeaders({ Accept: "application/vnd.github+json" }) });
+  const res = await fetchWithRetry(url, { headers: githubHeaders({ Accept: "application/vnd.github+json" }) });
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
   return res.json();
 }
 
 async function download(url, file) {
   // Release assets redirect to a CDN host; the token is only for api.github.com.
-  const res = await fetch(url, { headers: { "User-Agent": "DocuLens-fetch-engine" } });
-  if (!res.ok || !res.body) throw new Error(`${url}: HTTP ${res.status}`);
-  const buf = Buffer.from(await res.arrayBuffer());
+  const buf = await downloadBuffer(url, { headers: { "User-Agent": "DocuLens-fetch-engine" } });
   writeFileSync(file, buf);
   return createHash("sha256").update(buf).digest("hex");
 }
