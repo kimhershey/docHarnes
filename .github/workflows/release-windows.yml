@@ -162,6 +162,14 @@ jobs:
       - name: Generate THIRD-PARTY-NOTICES / SBOM / license texts (bundled by tauri.conf.json)
         run: node scripts/gen-notices.mjs
       - run: npm run build
+      # tauri-bundler downloads the NSIS toolset (tauri-apps/binary-releases) into %LOCALAPPDATA%\tauri on first
+      # use; cache it so a GitHub release-download outage (HTTP 504 seen on 2026-11-08) cannot fail the bundling step.
+      - name: Cache the Tauri bundler tools (NSIS)
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\tauri
+          key: tauri-tools-windows-${{ hashFiles('package-lock.json') }}
+          restore-keys: tauri-tools-windows-
       - run: npx tauri build --target x86_64-pc-windows-msvc
 
       - name: Name the installer and write its SHA-256
