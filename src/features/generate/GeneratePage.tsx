@@ -177,7 +177,7 @@ export function GeneratePage() {
     } catch (e) {
       const code = errorCode(e);
       const message = String((e as { message?: unknown }).message ?? "");
-      if (code === "invalid" && message.includes("file_exists")) setSaveError(t("generate.save.exists"));
+      if (code === "invalid" && (message.includes("export_exists") || message.includes("file_exists"))) setSaveError(t("generate.save.exists"));
       else setSaveError(describeError(e, t));
     } finally {
       setSaving(false);

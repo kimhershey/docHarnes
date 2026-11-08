@@ -612,7 +612,10 @@ fn model_path_requeries_once_with_feedback() {
     assert_eq!(prompts::tier_for(&c, text, None, Some(full), None), prompts::Tier::Full);
     assert_eq!(prompts::tier_for(&c, text, None, Some(compact), None), prompts::Tier::Compact);
     assert_eq!(prompts::tier_for(&c, text, None, Some(minimal), None), prompts::Tier::Minimal);
-    assert_eq!(prompts::tier_for(&c, text, None, Some(100), None), prompts::Tier::Minimal);
+    // Below the minimal size the last-resort tier (op names only, no examples) is used.
+    let tiny = prompts::message_tokens(&prompts::messages_for(&c, text, None, prompts::Tier::Tiny, None));
+    assert!(tiny < minimal / 2, "{tiny} {minimal}");
+    assert_eq!(prompts::tier_for(&c, text, None, Some(100), None), prompts::Tier::Tiny);
     assert_eq!(prompts::tier_for(&c, text, None, None, None), prompts::Tier::Full);
     assert!(
         minimal <= prompts::prompt_budget(Some(4096), llm::REPLY_TOKENS).unwrap(),

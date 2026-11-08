@@ -237,6 +237,8 @@ pub fn approx_tokens(text: &str) -> u32 {
 /// Prompt size tier (chosen from the model's context budget).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Tier {
+    /// Last resort for tiny slots: three-line English rules, op names only, no examples, type slugs only.
+    Tiny,
     /// English rules, op names with required parameters only, two examples.
     Minimal,
     /// Korean rules, parameter names without descriptions, four examples, mentioned schemas only.
@@ -249,8 +251,9 @@ impl Tier {
     pub fn smaller(self) -> Option<Tier> {
         match self {
             Tier::Full => Some(Tier::Compact),
+            Tier::Minimal => Some(Tier::Tiny),
+            Tier::Tiny => None,
             Tier::Compact => Some(Tier::Minimal),
-            Tier::Minimal => None,
         }
     }
 }
@@ -361,10 +364,13 @@ pub fn messages_for(
     feedback: Option<(&str, &[PlanIssue])>,
 ) -> Vec<Value> {
     let ko = ctx.language == Language::Ko;
+    if tier == Tier::Tiny {
+        return tiny_messages(ctx, text, date, feedback);
+    }
     let (rules, table, compact) = match tier {
         Tier::Full => (if ko { SYSTEM_PLANNER_KO } else { SYSTEM_PLANNER_EN }, schema::op_table(ko, false), false),
         Tier::Compact => (if ko { SYSTEM_PLANNER_KO } else { SYSTEM_PLANNER_EN }, schema::op_table(ko, true), true),
-        Tier::Minimal => (SYSTEM_PLANNER_EN, schema::op_names(), true),
+        Tier::Minimal | Tier::Tiny => (SYSTEM_PLANNER_EN, schema::op_names(), true),
     };
     let system = format!(
         "{}\n\n{}\n{}\n{}\n{}",
@@ -383,7 +389,7 @@ pub fn messages_for(
     let keep = match tier {
         Tier::Full => shots.len(),
         Tier::Compact => 4.min(shots.len()),
-        Tier::Minimal => 2.min(shots.len()),
+        Tier::Minimal | Tier::Tiny => 2.min(shots.len()),
     };
     for (user, plan) in &shots[..keep] {
         out.push(json!({ "role": "user", "content": user }));
@@ -423,6 +429,39 @@ pub fn message_tokens(messages: &[Value]) -> u32 {
     messages.iter().map(|m| approx_tokens(m["content"].as_str().unwrap_or("")) + 4).sum()
 }
 
+/// Smallest prompt: for slots where even the minimal table does not fit (4K contexts shared
+/// between two slots, fragmented tokenizers). Op names only, no examples, type slugs only.
+fn tiny_messages(
+    ctx: &PlanContext,
+    text: &str,
+    date: Option<&DateRange>,
+    feedback: Option<(&str, &[PlanIssue])>,
+) -> Vec<Value> {
+    let names: Vec<&str> = super::OpKind::ALL.iter().map(|k| k.as_str()).collect();
+    let types: Vec<&str> = ctx.doc_types.iter().map(|d| d.slug.as_str()).collect();
+    let system = format!(
+        "Plan the user's command as ONE JSON object {{summary, intent, scope, operations[], requires_confirmation, confidence}}. \
+Use only these ops: {}. Scope filters: doc_type ({}), date_from/date_to (YYYY-MM-DD), doc_ids. \
+If the command is unclear emit a single clarify op. Today {}.",
+        names.join(", "),
+        types.join(", "),
+        ctx.today
+    );
+    let mut out = vec![json!({ "role": "system", "content": system })];
+    let mut user = format!("<command>\n{}\n</command>", text.trim());
+    if let Some(d) = date {
+        user.push_str(&format!("\n(date range: {} ~ {})", d.from, d.to));
+    }
+    out.push(json!({ "role": "user", "content": user }));
+    if let Some((previous, issues)) = feedback {
+        out.push(json!({ "role": "assistant", "content": previous }));
+        let list: Vec<String> =
+            issues.iter().filter(|i| i.blocking).map(|i| format!("- {}: {}", i.path, i.code)).collect();
+        out.push(json!({ "role": "user", "content": format!("Validation failed. Output only the corrected plan JSON:\n{}", list.join("\n")) }));
+    }
+    out
+}
+
 /// Picks the largest tier whose prompt fits `budget` (`None` = unknown context → `Full`).
 pub fn tier_for(
     ctx: &PlanContext,
@@ -439,7 +478,7 @@ pub fn tier_for(
         }
         match tier.smaller() {
             Some(t) => tier = t,
-            None => return Tier::Minimal,
+            None => return Tier::Tiny,
         }
     }
 }
