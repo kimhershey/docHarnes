@@ -11,16 +11,22 @@ import {
   emit,
   err,
   finishJob,
+  gateStatus,
   hasActiveJob,
-  isCancelled,
   loadDocs,
   loadSettings,
+  pace,
+  persistentQueued,
   simulate,
+  submitJob,
   updateJob,
   upsertDoc,
+  workerFailure,
   wsDocs,
+  type JobControl,
   type MockDoc,
   type MockPage,
+  type WorkerOutcome,
 } from "./mock-backend";
 import {
   EVENTS,
@@ -35,6 +41,7 @@ import {
   type FieldRecord,
   type FieldStatus,
   type ImportSource,
+  type Job,
   type LintIssue,
   type PipelineChanged,
   type PipelineLevel,
@@ -76,8 +83,17 @@ function visionInfo(): VisionModelInfo {
   return { model: mode === "none" ? null : VISION_MODEL, engine_running: mode !== "engine_off", loaded: mode === "ready" };
 }
 
-/** Requests that arrived while a pipeline job was running; drained in order when it finishes (like the shell's queue). */
-const pendingProcess: ProcessRequest[] = [];
+/** `ready` | `not_loaded` | `none` | `engine_off` — the planner checks this before model-bound steps. */
+export function visionAvailability(): VisionMode {
+  return visionMode();
+}
+
+/** The shell loads the vision model on first use; from then on the status reports it as loaded. */
+export function markVisionLoaded(): void {
+  if (visionMode() !== "not_loaded") return;
+  localStorage.setItem(VISION_KEY, "ready");
+  changed("status");
+}
 
 interface PState {
   schemas: SchemaRecord[];
@@ -728,44 +744,59 @@ function recomputeDoc(s: PState, doc: MockDoc): void {
   doc.updated_at = now();
 }
 
-async function processJob(req: ProcessRequest): Promise<string | null> {
+/** Mirror of `pipeline::run::ProcessReport` (the payload of a pipeline job / plan step). */
+export interface MockProcessReport {
+  processed: string[];
+  failed: [string, string][];
+  classified: number;
+  ocr_pages: number;
+  extracted: number;
+  review_pending: number;
+  cancelled: boolean;
+}
+
+/** Mirror of `pipeline::ProcessProgress` (`page` = (done, total) inside the current document). */
+export interface ProcessProgress {
+  stage: string;
+  current: string;
+  done: number;
+  total: number;
+  page: [number, number] | null;
+}
+
+/** Shell `progress_detail`: `name · ocr (2/4)`, `name · classify`, or the stage alone. */
+export function progressDetail(p: ProcessProgress): string {
+  if (p.page && p.page[1] > 0) return `${p.current} · ${p.stage} (${p.page[0]}/${p.page[1]})`;
+  if (!p.current) return p.stage;
+  return `${p.current} · ${p.stage}`;
+}
+
+function isCancellation(e: unknown): boolean {
+  const x = e as { code?: unknown; message?: unknown } | null;
+  return x?.code === "cancelled" || x?.message === "cancelled";
+}
+
+/**
+ * Runs one `ProcessRequest` over the mock documents (classification by file name, canned OCR
+ * text, template extraction with confidences). Shared by the persistent pipeline job and the
+ * planner's classify / ocr / extract steps; `ctl` honours pause / cancel between documents and
+ * pages, a cancelled run returns `cancelled: true` with what was done so far.
+ */
+export async function runProcess(req: ProcessRequest, ctl: JobControl | null, progress: (p: ProcessProgress) => void): Promise<MockProcessReport> {
   const settings = loadSettings();
+  const s = load();
   const docs = wsDocs().filter((d) => req.document_ids.includes(d.id) && !["importing", "missing", "error"].includes(d.status));
-  if (req.document_ids.length === 0) throw err("invalid", "no documents");
-  const mode = visionMode();
-  if (mode === "engine_off") throw err("invalid", "engine_not_running");
-  if (mode === "none") throw err("invalid", "no_model");
-  // One pipeline job at a time (like the shell): a later request is queued and runs afterwards.
-  if (hasActiveJob("pipeline")) {
-    pendingProcess.push(req);
-    changed("status");
-    return null;
-  }
-  const job = createJob("pipeline", `${req.document_ids.length} documents`);
-  void (async () => {
-    const s = load();
-    let classified = 0;
-    let ocrPages = 0;
-    let extracted = 0;
-    let review = 0;
-    const failed: string[] = [];
-    const processed: string[] = [];
-    updateJob(job.id, { detail: "loading model" });
-    await simulate(job.id, 2, 120, () => undefined);
-    if (mode === "not_loaded") {
-      // The shell loads the vision model on first use; from here on the status reports it as loaded.
-      localStorage.setItem(VISION_KEY, "ready");
-      changed("status");
-    }
+  const report: MockProcessReport = { processed: [], failed: [], classified: 0, ocr_pages: 0, extracted: 0, review_pending: 0, cancelled: false };
+  const wantedPages = req.pages && req.pages.length > 0 ? new Set(req.pages) : null;
+  try {
     for (const [i, d0] of docs.entries()) {
-      if (isCancelled(job.id)) break;
       const doc = loadDocs().find((x) => x.id === d0.id);
       if (!doc) continue;
       const name = doc.title ?? doc.original_name;
       try {
         if (doc.pages.length === 0) throw new Error("no pages (render the document first)");
-        updateJob(job.id, { progress: i / docs.length, detail: `${name} · classify` });
-        await simulate(job.id, 1, 120, () => undefined);
+        progress({ stage: "classify", current: name, done: i, total: docs.length, page: null });
+        await pace(ctl, 120);
         if (req.force || !doc.classified_at) {
           const type = classifyName(doc.original_name, s);
           if (doc.doc_type_source !== "manual") {
@@ -778,27 +809,30 @@ async function processJob(req: ProcessRequest): Promise<string | null> {
             p.page_doc_type = type;
             p.classified_at = now();
           }
-          classified += 1;
+          report.classified += 1;
         }
         doc.pipeline_error = null;
         if (req.level !== "classify") {
           const type = doc.doc_type ?? "other";
+          let ocrPages = 0;
           for (const [pi, p] of doc.pages.entries()) {
+            if (wantedPages && !wantedPages.has(p.page_no)) continue;
             const ownText = !!p.text && p.text_source !== "ocr";
             const doOcr = p.text_source === "ocr" ? !!req.force : ownText ? settings.processing.ocr_digital_pdf : true;
             if (!doOcr || p.width_px === 0) continue;
-            updateJob(job.id, { progress: (i + 0.3) / docs.length, detail: `${name} · ocr (${pi + 1}/${doc.pages.length})` });
-            await simulate(job.id, 1, 120, () => undefined);
+            progress({ stage: "ocr", current: name, done: i, total: docs.length, page: [pi + 1, doc.pages.length] });
+            await pace(ctl, 120);
             p.text = ocrText(doc, type, p.page_no);
             p.text_source = "ocr";
             p.ocr_at = now();
             ocrPages += 1;
           }
           if (ocrPages > 0) doc.ocr_at = now();
+          report.ocr_pages += ocrPages;
         }
         if (req.level === "extract") {
-          updateJob(job.id, { progress: (i + 0.6) / docs.length, detail: `${name} · extract` });
-          await simulate(job.id, 1, 160, () => undefined);
+          progress({ stage: "extract", current: name, done: i, total: docs.length, page: null });
+          await pace(ctl, 160);
           const schema = schemaFor(s, doc, req.schema);
           const run: ExtractionRun = {
             id: crypto.randomUUID().replace(/-/g, ""),
@@ -841,31 +875,159 @@ async function processJob(req: ProcessRequest): Promise<string | null> {
           doc.total_amount = total ? Number(total) : doc.total_amount;
           doc.status = run.review_count > 0 ? "extracted" : "reviewed";
           doc.review_status = run.review_count > 0 ? "pending" : "none";
-          extracted += 1;
-          if (run.review_count > 0) review += 1;
+          report.extracted += 1;
+          if (run.review_count > 0) report.review_pending += 1;
         }
         doc.updated_at = now();
         upsertDoc(doc);
-        processed.push(doc.id);
+        report.processed.push(doc.id);
       } catch (e) {
+        if (isCancellation(e)) throw e;
         doc.pipeline_error = e instanceof Error ? e.message : String(e);
         upsertDoc(doc);
-        failed.push(doc.id);
+        report.failed.push([doc.id, doc.pipeline_error]);
       }
       docsChanged([doc.id]);
+      save(s);
     }
-    save(s);
-    changed("processed", [...processed, ...failed]);
-    if (isCancelled(job.id)) finishJob(job.id, { ok: false, error: "cancelled" });
-    else if (failed.length > 0 && processed.length === 0) finishJob(job.id, { ok: false, error: "no pages (render the document first)" });
-    else finishJob(job.id, { ok: true, detail: `processed ${processed.length} / classified ${classified} / ocr pages ${ocrPages} / extracted ${extracted} / review ${review} / failed ${failed.length}` });
-    const kb = await import("./mock-knowledge");
-    kb.autoIndex();
-    const next = pendingProcess.shift();
-    if (next) void processJob(next).catch(() => undefined);
-    changed("status");
-  })();
-  return job.id;
+  } catch (e) {
+    if (!isCancellation(e)) throw e;
+    report.cancelled = true;
+  }
+  save(s);
+  changed("processed", [...report.processed, ...report.failed.map(([id]) => id)]);
+  return report;
+}
+
+/** Worker of a persistent `pipeline` job (shell `run_pipeline`): loads the model, runs the request, reports like the shell. */
+export async function pipelineWorker(job: Job, req: ProcessRequest, ctl: JobControl): Promise<WorkerOutcome> {
+  const mode = visionMode();
+  if (mode === "engine_off") throw workerFailure("engine_not_running");
+  if (mode === "none") throw workerFailure("no_model");
+  updateJob(job.id, { detail: "loading model" });
+  await pace(ctl, 240);
+  markVisionLoaded();
+  const total = req.document_ids.length;
+  const report = await runProcess(req, ctl, (p) => {
+    const pagePart = p.page && p.page[1] > 0 ? p.page[0] / p.page[1] : 0;
+    const frac = p.total === 0 ? null : Math.min(1, (p.done + pagePart * 0.9) / p.total);
+    updateJob(job.id, { progress: frac, bytes_done: p.done, bytes_total: total, detail: progressDetail(p) });
+  });
+  const kb = await import("./mock-knowledge");
+  kb.autoIndex();
+  changed("status");
+  if (report.cancelled) throw workerFailure("cancelled", report);
+  if (report.failed.length > 0 && report.processed.length === 0) throw workerFailure(report.failed.map(([id, e]) => `${id}: ${e}`).join("; "), report);
+  return {
+    detail: `processed ${report.processed.length} / classified ${report.classified} / ocr pages ${report.ocr_pages} / extracted ${report.extracted} / review ${report.review_pending} / failed ${report.failed.length}`,
+    result: report,
+  };
+}
+
+/** `pipeline_process`: queues a persistent engine-lane job (one runs at a time, like the shell) and returns its id. */
+function processJob(req: ProcessRequest): string {
+  if (req.document_ids.length === 0) throw err("invalid", "no documents");
+  const mode = visionMode();
+  if (mode === "engine_off") throw err("invalid", "engine_not_running");
+  if (mode === "none") throw err("invalid", "no_model");
+  const id = submitJob({ kind: "pipeline", req }, `${req.document_ids.length} documents`, "normal");
+  changed("status");
+  return id;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers shared with the planner mock (fields, schemas, review, tables)
+// ---------------------------------------------------------------------------
+
+/** Fields of the document's latest run (`pipeline::repo::latest_fields`). */
+export function latestFields(documentId: string): FieldRecord[] {
+  const s = load();
+  const doc = loadDocs().find((d) => d.id === documentId);
+  return doc?.last_run_id ? s.fields.filter((f) => f.run_id === doc.last_run_id) : [];
+}
+
+/** Default enabled schema of a document type (`pipeline::repo::schema_for_doc_type`). */
+export function schemaForDocType(slug: string): SchemaRecord | null {
+  const s = load();
+  return (
+    s.schemas
+      .filter((x) => x.doc_type === slug && x.enabled)
+      .sort((a, b) => Number(b.is_default) - Number(a.is_default) || Number(a.source === "builtin") - Number(b.source === "builtin") || b.use_count - a.use_count || b.updated_at.localeCompare(a.updated_at))[0] ?? null
+  );
+}
+
+export function getSchema(id: string): SchemaRecord | null {
+  return load().schemas.find((x) => x.id === id) ?? null;
+}
+
+export function listSchemas(): SchemaRecord[] {
+  return load().schemas;
+}
+
+export function docTypeList(): DocTypeInfo[] {
+  return docTypes(load());
+}
+
+/** Approves every pending field of the document (`review::approve_document`); returns how many. */
+export function approveDocument(documentId: string, reason: ReviewReason | null): number {
+  const s = load();
+  const ids = reviewQueue(s, { document_id: documentId, reason }).map((x) => x.id);
+  if (ids.length > 0) applyReview(s, ids, { kind: "approve" }, "bulk");
+  else {
+    const doc = loadDocs().find((d) => d.id === documentId);
+    if (doc) {
+      recomputeDoc(s, doc);
+      upsertDoc(doc);
+      docsChanged([doc.id]);
+    }
+  }
+  save(s);
+  changed("review", [documentId]);
+  return ids.length;
+}
+
+/** Rejects every pending field of the document; returns how many. */
+export function rejectPending(documentId: string, reason: ReviewReason | null): number {
+  const s = load();
+  const ids = reviewQueue(s, { document_id: documentId, reason }).map((x) => x.id);
+  if (ids.length === 0) return 0;
+  applyReview(s, ids, { kind: "reject" }, "planner");
+  save(s);
+  changed("review", [documentId]);
+  return ids.length;
+}
+
+/** Re-runs the validators over the latest fields (`review::revalidate`); returns the fields. */
+export function revalidateDocument(documentId: string): FieldRecord[] {
+  const s = load();
+  const doc = wsDocs().find((d) => d.id === documentId);
+  const threshold = loadSettings().processing.review_threshold;
+  const fields = doc?.last_run_id ? s.fields.filter((x) => x.run_id === doc.last_run_id) : [];
+  for (const fld of fields) {
+    if (["approved", "corrected"].includes(fld.status)) continue;
+    if (fld.value === null) {
+      fld.review_reason = fld.required ? "required_missing" : null;
+      continue;
+    }
+    const { issues } = normalizeValue(fld.kind, fld.value);
+    fld.validation = issues;
+    const fail = issues.some((i) => i.level === "fail");
+    fld.review_reason = fail ? "validation_failed" : fld.confidence < threshold ? "low_confidence" : null;
+  }
+  if (doc) {
+    recomputeDoc(s, doc);
+    upsertDoc(doc);
+    docsChanged([doc.id]);
+  }
+  save(s);
+  changed("fields", doc ? [doc.id] : []);
+  return fields;
+}
+
+/** Tables found in the document's page texts (`pipeline::run::document_tables`). */
+export function documentTables(documentId: string): ExtractedTable[] {
+  const doc = wsDocs().find((d) => d.id === documentId);
+  return doc ? doc.pages.flatMap((p) => parseTables(p.text ?? "", p.page_no)) : [];
 }
 
 /** Called after imports: the configured level for the source (or the dialog's choice). */
@@ -882,7 +1044,7 @@ export function autoProcess(ids: string[], level: AutoProcessingLevel | null, so
     changed(mode === "engine_off" ? "engine_off" : "no_model");
     return;
   }
-  void processJob({ document_ids: ids, level: target }).catch(() => undefined);
+  processJob({ document_ids: ids, level: target });
 }
 
 // ---------------------------------------------------------------------------
@@ -1166,10 +1328,11 @@ function status(s: PState): PipelineStatus {
     reviewed: docs.filter((d) => d.status === "reviewed").length,
     review_fields: pending.length,
     failed: docs.filter((d) => d.pipeline_error).length,
-    running: hasActiveJob("pipeline"),
-    queued: pendingProcess.length,
+    running: hasActiveJob("pipeline") || hasActiveJob("plan"),
+    queued: persistentQueued(),
     model: visionInfo(),
     review_threshold: settings.processing.review_threshold,
+    gate: gateStatus(),
   };
 }
 
@@ -1339,30 +1502,8 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
       changed("fields", [ch.document_id]);
       return out[0];
     }
-    case "pipeline_revalidate": {
-      const doc = wsDocs().find((d) => d.id === a.documentId);
-      const threshold = loadSettings().processing.review_threshold;
-      const fields = doc?.last_run_id ? s.fields.filter((x) => x.run_id === doc.last_run_id) : [];
-      for (const fld of fields) {
-        if (["approved", "corrected"].includes(fld.status)) continue;
-        if (fld.value === null) {
-          fld.review_reason = fld.required ? "required_missing" : null;
-          continue;
-        }
-        const { issues } = normalizeValue(fld.kind, fld.value);
-        fld.validation = issues;
-        const fail = issues.some((i) => i.level === "fail");
-        fld.review_reason = fail ? "validation_failed" : fld.confidence < threshold ? "low_confidence" : null;
-      }
-      if (doc) {
-        recomputeDoc(s, doc);
-        upsertDoc(doc);
-        docsChanged([doc.id]);
-      }
-      save(s);
-      changed("fields", doc ? [doc.id] : []);
-      return fields;
-    }
+    case "pipeline_revalidate":
+      return revalidateDocument(String(a.documentId));
     case "pipeline_review_queue":
       return reviewQueue(s, (a.filter as ReviewFilter | null) ?? {});
     case "pipeline_review_apply": {
@@ -1373,29 +1514,12 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
       changed("review", [...new Set(out.map((x) => x.document_id))]);
       return out;
     }
-    case "pipeline_review_approve_document": {
-      const pending = reviewQueue(s, { document_id: String(a.documentId), reason: (a.reason as ReviewReason | null) ?? null });
-      const ids = pending.map((x) => x.id);
-      if (ids.length > 0) applyReview(s, ids, { kind: "approve" }, "bulk");
-      else {
-        const doc = loadDocs().find((d) => d.id === a.documentId);
-        if (doc) {
-          recomputeDoc(s, doc);
-          upsertDoc(doc);
-          docsChanged([doc.id]);
-        }
-      }
-      save(s);
-      changed("review", [String(a.documentId)]);
-      return ids.length;
-    }
-    case "pipeline_tables": {
-      const doc = wsDocs().find((d) => d.id === a.documentId);
-      return doc ? doc.pages.flatMap((p) => parseTables(p.text ?? "", p.page_no)) : [];
-    }
+    case "pipeline_review_approve_document":
+      return approveDocument(String(a.documentId), (a.reason as ReviewReason | null) ?? null);
+    case "pipeline_tables":
+      return documentTables(String(a.documentId));
     case "pipeline_table_csv": {
-      const doc = wsDocs().find((d) => d.id === a.documentId);
-      const t = doc?.pages.flatMap((p) => parseTables(p.text ?? "", p.page_no)).find((x) => x.page === a.page && x.index === a.index);
+      const t = documentTables(String(a.documentId)).find((x) => x.page === a.page && x.index === a.index);
       if (!t) throw err("invalid", "table_not_found");
       return tableCsv(t);
     }

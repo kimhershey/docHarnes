@@ -22,7 +22,8 @@
 | P2 워크스페이스·문서 | **완료 (`main`에 병합, PR #3)** | 아래 "P2 산출물" 참조 |
 | P3 지식 베이스 | **완료 (`main`에 병합, PR #4; 리뷰 반영 3커밋은 `phase/p3-knowledge` 후속 PR 대기)** | 아래 "P3 산출물" 참조. 청킹, ko-dic FTS5 + trigram + LIKE, bge-m3 + sqlite-vec, 하이브리드 검색, 근거 기반 Q&A·설명·요약·비교 |
 | P4 파이프라인 | **완료 (`phase/p4-pipeline`, PR #7 열림 — 사용자 생성; `phase/p3-knowledge` 위에 쌓음, 단계 말 리뷰 반영 완료)** | 아래 "P4 산출물" 참조. 분류·OCR·KIE 호출기, 내장 양식 7종 + 양식 등록 + NL 스키마, 검증기·신뢰도, 검토 큐, 추출 미러, 분할/병합 |
-| P5 자연어·작업 | 다음(핵심 op만 1차) | 플래너 PlanSchema, 확인 카드, Job 러너, 정리/되돌리기, 내보내기 |
+| P5 자연어·작업 | **완료 (`phase/p5-planner`, `phase/p4-pipeline` 위에 쌓음)** | 아래 "P5 산출물" 참조. 플래너(PlanSchema·규칙·검증기·실행기), 확인 카드, 영속 Job 러너, 정리/저널/되돌리기, 집계, 내보내기 5종 |
+| P6 프로젝트·정합성 | 다음(v1.1) | §3.15 프로젝트·규칙·보완요청서 |
 
 ## P1 산출물
 
@@ -646,13 +647,210 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 해당 없음 — 설계 §3.7.2 문구만 남김), bbox 근거 크롭, 표 XLSX 내보내기(P5 내보내기와 함께), 가져오기 ETA의 실제 쪽수 반영
 (가져오기 계획에 쪽수 없음).
 
-## P5 착수 메모
+## P5 산출물
 
-1. 플래너(PlanSchema, 부록 D op 전수 중 1차 범위) + 확인 카드 + Job 러너(우선 큐·일시정지·재시도): `pipeline_bridge::process_job`의
-   대기열(`pipeline_queue`)과 `JobBook`을 영속 러너로 교체(설계 §3.9 스케줄링).
-2. 정리/이름변경/이동 + 저널·되돌리기, 집계(검토 미완료 분리), 내보내기 5종(필드·표 CSV는 `ocr::table_csv`·`fields` 재사용).
-3. P4 숙제: bbox 그라운딩(디지털 PDF 문자 박스), 배치 PDF 자동 경계 탐지, 답변/필드 내보내기, 컬렉션 폴더 감시, 워크스페이스
-   전환 후 파이프라인 대기열 보존(P5 러너), OCR 출력 건전성 검사, 스키마 화면 라우트 이동 차단(데이터 라우터 전환), 표 XLSX.
+### Rust 코어 (`crates/doculens-core`)
+
+- `planner/`: 설계 §3.5·부록 D의 v1.0 서브셋 33개 op를 serde 타입으로 고정(`Op`, `deny_unknown_fields` — 표에 없는
+  파라미터는 거부), `Scope{folder, doc_ids, filter{doc_type, date_from/to, keyword, vendor, status, tags, min_confidence,
+  review_status}}`, `Plan{intent, scope, operations ≤12, requires_confirmation, confidence, clarification_question, summary}`.
+  - `schema.rs`: op·파라미터 표(`OP_SPECS`, 한/영 설명)가 프롬프트 도구 표와 `response_format` PlanSchema(`anyOf` 33개 op 객체,
+    `const` 판별자, `additionalProperties:false`)를 함께 생성. 테스트가 serde 타입과 표의 일치를 검사.
+  - `rules.rs`: 결정적 문장 규칙 — 되돌리기/다시 실행, 작업 제어(일시정지·재개·취소·재시도·우선), 엔진, 설정 복합문
+    ("다크 테마로 바꾸고 모델을 9B로 올려"), 스키마 정의/수정, 내보내기(형식·필드·대상), 집계(함수·필드·그룹·날짜), inbox 처리
+    (가져오기→분류→OCR→추출→이동), 정리/이동/이름변경, 태그, 삭제, 처리(분류/OCR/추출/검증/요약, 선택 문서·현재 쪽 범위),
+    검토, 검색(프레임 단어 제거), 문서 열기, 질문→answer. 유형·필드는 컨텍스트의 라벨/키로 해석("합계만"→`grand_total`).
+  - `prompts.rs`: 시스템 규칙(한/영) + op 표 + 워크스페이스 컨텍스트(유형·스키마 필드·폴더·태그·선택 문서·모델) + few-shot
+    (한 8·영 3). 컨텍스트 예산(`ctx − 1,024 − 128`)에 맞춰 Full → Compact(설명 생략·언급 스키마만·예시 4) → Minimal(영문 규칙·
+    op 이름+필수 파라미터·예시 2) 단계 선택, 서버가 더 많이 세면 한 단계 작게 재시도.
+  - `validate.rs`: op 수·ISO 날짜·`date_to ≥ date_from`·워크스페이스 상대 경로(`..`·드라이브·`.doculens` 거부)·유형/스키마/
+    필드/모델/설정값 해석(라벨→슬러그·키), 템플릿 변수, 확인 플래그 재계산, 상대 날짜의 결정적 치환, 신뢰도 정규화.
+  - `llm.rs`: 프리라우터 → 규칙 → 모델(thinking off, T=0, 문법 제약) → 검증 실패 시 오류 피드백 재질의 1회 → 명확화;
+    신뢰도 < 0.6이면 명확화 우선; 모델 오류는 `model_error` 이슈 + 명확화로 돌려주고 취소만 전파.
+  - `scope.rs`: 범위 → 문서 목록(날짜 기준 `doc_date` → 없으면 가져온 날짜). `exec.rs`: 결정적 실행기 — 단계별로 가져오기
+    (inbox/폴더)·분류·OCR·추출(파이프라인 `run::process` 재사용, 쪽 경계 체크포인트)·검증·검토 일괄 승인/거부·검색·답변·요약·
+    집계·정리/이름변경/이동·태그·삭제·내보내기·되돌리기/다시 실행; UI op(테마·언어·설정·모델·열기·작업·엔진·도움말)는
+    `ui_actions`로 반환; 첫 실패 이후 단계는 건너뜀; `preview()`가 확인 카드용 영향(정리 diff, 내보내기 경로·덮어쓰기, 삭제 건수,
+    되돌릴 배치)을 계산.
+- `organize/`: `template.rs`(`{{year}} {{month}} {{day}} {{doc_type}} {{vendor}} {{total}} {{title}} {{original_name}} {{name}}
+  {{tags}} {{seq}} {{ext}}`, 값 없음 → `미상` + 검토 필요 표시, Windows 금지문자·예약어·NFC·≤240자), `mod.rs`(dry-run diff:
+  이동/변경 없음/보류(검토 대기)/파일 없음, 폴더별 `{{seq}}`, 배치 내·디스크 충돌 `_2`; `apply`가 그 diff를 그대로 재생 —
+  rename(복사 폴백) → DB 경로 갱신 → 저널 기록, 취소 시 부분 적용 유지), `journal.rs`(`journal_batches`/`ops_journal` +
+  `journal/ops-YYYYMM.jsonl` 미러, LIFO 되돌리기 전 blake3 해시 검증·대상 점유 검사 → 항목별 "불가(사유: changed/missing/
+  target_occupied/os_trash)", 되돌리기 자체도 배치로 기록되어 redo = 마지막 undo 되돌리기, 워크스페이스 휴지통 폴백 삭제는
+  복원 후 재가져오기 경로 반환, 보존일 정리 `purge`).
+- `aggregate.rs`: sum/count/avg/min/max, 필드는 유형별 스키마에서 키·라벨·기본 합계 필드로 해석, 검토 미완료(문서 pending 또는
+  필드 검토 대기) 분리 집계 + `include_unreviewed`, 월/거래처/유형 그룹, 값 없는 문서 `missing`, 문서 목록 ≤500.
+- `export.rs`: 필드/표/본문 대상 × XLSX(유형별 시트 + 품목 시트 또는 단일 시트, 공통 열 토글)·CSV(BOM, 품목 `_items.csv`)·
+  JSONL·Markdown·검색 가능 PDF(pdf-writer: 쪽 JPEG + 보이지 않는 텍스트 레이어, Identity-H + ToUnicode), 기본 경로
+  `exports/YYYY-MM-DD_<유형>.<ext>`, 워크스페이스 밖 경로 거부, 기존 파일은 `overwrite` 필요(`export_exists`), `.part` → rename,
+  검토 완료만 옵션. 새 의존성 `rust_xlsxwriter`(MIT/Apache-2.0)·`csv`(Unlicense/MIT)·`pdf-writer`(MIT/Apache-2.0) —
+  `cargo deny` 통과.
+- `jobs/`: `jobs` 테이블(스펙 JSON·우선순위·상태 queued/running/paused/done/failed/cancelled/interrupted·시도 횟수·결과),
+  `JobSpec{Pipeline, Plan, Export, Organize, Undo, Redo}`와 레인(엔진 레인은 한 번에 하나), `pick_next`(우선순위 → 생성 순),
+  `JobControl`(취소·일시정지·재개), `EngineGate`(배치가 쪽 경계 `checkpoint`에서 양보 → 대화형 요청 `interactive` 끼어들기,
+  상태바용 예상 대기 시간), 재시작 시 running → interrupted(재시도 가능).
+- 마이그레이션 `0004_jobs_journal.sql`(`journal_batches`, `ops_journal`, `jobs`), `pipeline::prompts::Stage::Plan` 프리셋
+  (T=0, 1,024 토큰), `documents::import` 재사용.
+
+### Tauri 셸 (`src-tauri`)
+
+- `jobs.rs`: 작업부를 영속 러너로 확장 — 가벼운 셸 작업(엔진·모델·가져오기·렌더·색인·분할/병합)은 그대로, 스펙이 있는 작업
+  (`pipeline`·`plan`·`export`·`organize`·`undo`·`redo`)은 워크스페이스 DB에 저장하고 우선순위·레인에 따라 스케줄(`submit` →
+  `schedule`), 일시정지/재개/재시도/우선/취소, 워크스페이스 열 때 복원(running → interrupted), 닫을 때 분리(대기열은 DB에
+  보존 — P4 숙제 "전환 후 대기열 보존" 해결). `jobs://update` 페이로드에 `priority`·`persistent`·`attempts`·`result`·`label` 추가.
+- `pipeline_bridge::process_job`이 큐 대신 러너에 제출(`pipeline_queue` 제거), 쪽 경계마다 `EngineGate::checkpoint`(일시정지·
+  대화형 양보); 답변·NL 스키마·양식 도출은 `gate.interactive`로 끼어듦. `pipeline_status`에 `gate` 상태.
+- `planner_bridge.rs`: `plan`(컨텍스트 = 유형·스키마 필드·폴더·태그·모델 id + UI 범위; 규칙으로 못 풀 때만 모델 로드 후 게이트
+  안에서 호출; 미리보기 동봉), `execute`(재검증 → 검색/집계/태그/유형/검증/검토 승인·거부/UI op는 인라인, 나머지는 `plan` 작업),
+  러너 워커(`run_spec`: 파이프라인/플랜/내보내기/정리/되돌리기 — 변경 이벤트·자동 색인·휴지통 복원 파일 재가져오기),
+  정리 미리보기/적용(작업), 저널 조회/되돌리기(≤50건 인라인, 그 이상 작업)/다시 실행, 집계, 내보내기 미리보기/실행(작업).
+- 명령(`commands/planner.rs`): `planner_plan`, `planner_execute`, `organize_plan`, `organize_apply`, `journal_batches`,
+  `journal_entries`, `journal_undo`, `journal_redo`, `aggregate_run`, `export_preview`, `export_run`, `jobs_get`, `jobs_pause`,
+  `jobs_resume`, `jobs_retry`, `jobs_prioritize`. 오류 코드: `plan_invalid`(detail=이슈), `plan_clarify`, `organize_nothing`,
+  `nothing_to_undo`/`nothing_to_redo`, `export_exists`, `path_outside`, `template_variable`, `no_model`.
+
+### 프런트엔드
+
+- `types.ts`/`ipc.ts`: P5 계약(Op 33종·Scope·Plan·PlanResult/PlanResponse/PlanPreview·PlanExecution·Organize*·Journal*·Aggregate*·
+  Export*·UiPlanContext, Job의 `priority`/`persistent`/`attempts`/`result`/`label`, `PipelineStatus.gate`)과 16개 명령 래퍼.
+- 어시스턴트(`features/assistant/`): 입력 → 프리라우터(슬래시·설정은 즉시) → `plannerPlan`(범위 선택기: 전체/현재 폴더/선택 문서 N건/
+  지식 베이스·컬렉션; `lastDocument`로 "이 문서"). 단일 `answer` 플랜은 기존 스트리밍 Q&A로, UI op는 `commands.ts`
+  `executeUiOp`(테마·언어·설정·모델·프로파일·열기(문서 이름 해석)·스키마 화면·작업 제어·엔진·재색인·inbox 감시·도움말)로 즉시 실행.
+  **플랜 카드**(`PlanCard`): 출처·신뢰도·해석, 단계 체크리스트(op 라벨·파라미터 요약 `describePlan.ts`), 미리보기(정리 diff 행·
+  보류 표시·전체 보기, 내보내기 경로·덮어쓰기, 삭제 건수), 영향 줄, "검토 미완료 문서는 이동하지 않음" 토글, 검증 경고, 인라인 편집
+  (`PlanEditor`: `opSpecs.ts` = Rust `OP_SPECS` 사본으로 생성하는 자체 폼 + 범위 편집), 승인 Ctrl+Enter / 취소 Esc(IME 가드).
+  **실행 카드**(`ExecutionCard`): 작업 진행률·단계 상세·일시정지/재개/취소/Jobs 열기, 게이트 대기 안내. **결과 카드**(`ResultCard`):
+  단계별 ✔/✖·요약, 검토 큐 열기(N)·이동 내역·↶ 되돌리기(`journalUndo` + 토스트)·폴더 열기·검색 결과 칩·요약·답변 카드 재사용,
+  `ui_actions` 순차 실행. **집계 카드**(`AggregateCard`): 기준 날짜·건수·헤드라인 값·검토 완료/대기 분리·"검토 대기 포함" 재집계·
+  월별 그룹·문서 목록. **명확화 카드**(`ClarifyCard`): 질문 + 입력 프리필, `no_model`이면 "모델 로드" 버튼. 예시 칩 추가.
+- 작업(`features/jobs/`): 대기/진행 중/완료/실패 탭, 우선순위·시도 횟수 배지, 일시정지/재개/재시도/우선 버튼, 결과 섹션(`JobResult`:
+  플랜 단계·내보내기 경로(폴더 열기)·정리 건수), `describe.ts`가 러너의 상세 문자열(`plan 3/5 · …`, `1/5 · import`, `exported N → path`,
+  `moved/failed/skipped`, `restored/skipped`, interrupted/workspace closed)을 번역. `stores/jobs.ts`에 pause/resume/retry/prioritize.
+- 정리/내보내기(`features/organize/`): 세 탭 — **정리**(범위 섹션 `ScopeSection`: 전체/폴더/유형/날짜/라이브러리 선택, 파일명 템플릿
+  편집기 `TemplateEditor`(변수 칩·실시간 예시), 폴더 프리셋 월별/거래처별/유형별/사용자 정의, 검토 완료만, 미리보기 diff 표(상태 배지·
+  값 미상 ⚠·50행 + 전체 보기), 확인 다이얼로그 → `organizeApply` 작업 추적(`useJob`) → 결과 토스트 + 되돌리기), **내보내기**(대상·형식·
+  범위·열 체크박스·공통 열·레이아웃·경로(미리보기 기본값)·덮어쓰기, 미리보기 줄, 작업 추적, 결과 경로·폴더 열기·추가 파일),
+  **이력**(저널 배치 목록·되돌리기/다시 실행·항목 펼치기·불가 사유 번역; `pipeline://changed{journal}`로 갱신). `/organize?tab=&selection=1`.
+- 라이브러리: 선택을 `useDocumentsStore.selectedIds`로 공유, 일괄 바에 "정리…"/"내보내기…", **집계 바**(`AggregateBar`: 유형 필터 또는
+  선택 시 표시, 필드/함수/검토 대기 포함, 300 ms 디바운스 재집계, 월별 칩); 표 탭 XLSX 내보내기(`exportRun target=table`);
+  뷰어가 `lastDocument`를 기록. 상태바: `gate.batch_busy`면 "배치 작업 중 — 약 N초 후 응답". 전역 Ctrl+Z/Ctrl+Y(입력 중·다이얼로그 제외).
+- 모의 백엔드(`lib/mock-planner.ts` + `mock-backend.ts`/`mock-pipeline.ts`): 규칙 플래너 TS 포트(`planText`/`rulesPlan`), 미리보기,
+  인라인/작업 실행(파이프라인 모의 재사용), 정리 템플릿 렌더·저널(`doculens.mock.journal`)·되돌리기/다시 실행, 집계, 내보내기 레지스트리
+  (`doculens.mock.exports`), 영속 작업(우선순위·레인·일시정지/재개/재시도/우선), `doculens.mock.planner_model=on`이면 미해석 문장을
+  "모델" 출처 검색 플랜으로. i18n 섹션 `planner`(ops·params·card·execution·result·aggregate·clarify·ui), `organize`, `export`,
+  `aggregate`, `jobs` 확장(탭 4개·우선순위·결과), `assistant` 확장.
+
+### 테스트·검증
+
+| 항목 | 결과 |
+|---|---|
+| `cargo test --workspace` | 205 통과(2 ignored) — P5 모듈 38건: 플래너 10(예시 명령 12종+α, 규칙 오탐 14문장, 스펙↔serde, 검증기·범위 필수, 모델 경로 재질의·단계·축소 재시도, 실행기 2), 정리/저널 9(템플릿·diff·충돌·보류·적용·되돌리기/다시 실행·삭제 복원·복구 0건·redo 무효화), 작업 3(저장소·우선순위·게이트·패닉/취소), 집계 7, 내보내기 11 |
+| `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --check` | 통과 |
+| `cargo deny check licenses bans sources` | 통과(rust_xlsxwriter·csv·pdf-writer 추가) |
+| 실엔진(`tests/real_engine.rs`, 초소형 모델) | 채팅·KIE·**플래너 문법** 통과(아래) |
+| `npm run typecheck`, `npm test` | 통과 — vitest 12파일 66건(플랜 설명·템플릿·집계·작업 설명·숫자 강제·어시스턴트 스토어·i18n 패리티) |
+| `npm run e2e` | 28건 통과 — 신규 `planner.spec.ts` 4건(집계 카드, 내보내기 플랜→실행→결과, 정리 diff→Ctrl+Enter→되돌리기, 슬래시/명확화/Esc/Ctrl+Z), `organize.spec.ts` 3건(보류→월별 이동→이력 되돌리기, CSV 내보내기, 집계 바·정리 바로가기); P3 지식 Q&A spec은 플래너 경유로 유지 |
+| `npm run licenses:check` | 통과 |
+
+### 헤드리스 검증 (실제 데스크톱 바이너리 + 실제 llama-server, Xvfb + WebKitGTK)
+
+- P4 스모크(`inbox/`의 사진·DOCX → 가져오기 → inbox 자동 처리 full)를 P5 러너 경로로 다시 실행: 자동 처리 요청이 `jobs` 테이블의
+  영속 작업(`kind=pipeline`, 스펙 JSON 212 B, 우선순위 normal, 시도 1회)으로 제출되어 `planner_bridge` 워커가 모델을 로드
+  (`pipeline: vision model tiny-qwen35 (context 4096)`)하고 분류·OCR을 끝냈으며(두 문서 모두 `doc_type` 기록), KIE는 P4와 같은
+  무작위 모델 한계(컨텍스트 630토큰 절단 / 출력 파서 500 재시도 3회)로 실패해 작업이 `failed` + 오류 문자열 + 결과 JSON(409 B)으로
+  저장됐다. 저널 배치 0건(정리 없음), 스키마 버전 4 마이그레이션 적용. 스크립트: 세션 스크래치패드 `smoke-p5/run-p5.sh`.
+
+### 실엔진 검증 (`tests/real_engine.rs`, 초소형 무작위 Qwen3.5 + llama-server CPU)
+
+- 채팅·KIE 문법에 이어 **플래너 PlanSchema 문법**(33개 op `anyOf`)이 실제 서버에 받아들여지고(400 없음), 4K 컨텍스트에서
+  프롬프트 단계가 Minimal로 내려가 요청이 컨텍스트에 맞으며, 무작위 가중치의 출력은 문법 안의 JSON(`{"confidence": 1553,
+  "intent":"undo", …}`)으로 돌아와 검증기가 신뢰도 정규화 → 명확화로 끝낸다(모델 오류 없음, 0.7초).
+- 첫 실행에서 Compact 프롬프트(추정 1.9K 토큰)를 서버가 5.7K 토큰으로 세어 400이 났고(초소형 모델의 바이트 수준 토크나이저),
+  그래서 "컨텍스트 초과 → 한 단계 작은 프롬프트로 재시도"를 넣었다. 실제 Qwen 토크나이저에서의 실제 토큰 수는 사용자 PC
+  체크리스트 항목.
+- 무작위 모델은 가끔 도구 호출 조각을 내어 서버의 출력 파서 500("does not match the expected … format")으로 끝난다(P4와 동일
+  한 현상, seed·온도 재시도 3회 후에도). 테스트는 이 경우만 모델 아티팩트로 허용하고 400(문법·컨텍스트)과 그 밖의 엔진 오류는
+  여전히 실패로 본다 — CI의 실엔진 잡이 두 번 중 한 번꼴로 이 경로를 탄다.
+
+### 설계 대비 범위 메모
+
+- op 집합은 부록 D 전수가 아니라 v1.0 핵심 서브셋(33개): render/rotate/split/merge/register_form/draft_document/add_to_kb/
+  manage_collection/define_term/create_project/add_to_project/define_rule/check_consistency/request_supplement/set_retention/
+  set_tier/set_backend/import_model/download_model/benchmark/open_workspace/compare/explain은 GUI 전용(P6·v1.1).
+  `review correct`(필드·값)는 검증만 하고 실행은 검토 큐로 안내. `ocr region=selection`은 현재 쪽 + 잔글씨 프로파일로 근사
+  (bbox 영역 재OCR은 P4 숙제 그대로).
+- 플랜 카드 인라인 편집은 rjsf 대신 op 표(`OP_SPECS`)로 생성하는 자체 폼(의존성 추가 없음).
+- 집계 `count`(필드 없음)는 검토 상태와 무관하게 범위 문서 수; 값이 있는 집계만 검토 완료/대기 분리.
+- 삭제의 되돌리기는 워크스페이스 휴지통 폴백(USB 등)만 앱이 복원하고 OS 휴지통은 OS에 위임(설계 §3.5).
+- Job 러너의 "완료 OS 알림·절전 방지"는 P7(패키징)에서 Windows API와 함께; 작업 로그 파일(`jobs/<id>.log`)은 DB `result`로 대체.
+- 보존/파기 작업(저널 90일 등)은 `journal::purge`·`jobs::prune` 함수만 두고 일일 파기 작업은 P7.
+
+## P5 단계 말 리뷰 반영 (2026-11-08)
+
+리뷰 서브에이전트 2건(Rust 3 High·9 Medium·13 Low, 프런트엔드 2 High·7 Medium·10 Low)의 지적을 다음과 같이 반영했다. 보고서 원문은
+세션 스크래치패드(`review-rust-p5.md`, `review-frontend-p5.md`).
+
+**Rust — 반영**
+
+- 플랜 안전장치: `import source=folder`는 항상 확인 카드(절대 경로 허용, 기본 비재귀, 미리보기에 폴더·파일 수 표시); 문서를 바꾸는
+  op(`set_doc_type`·`tag`·`delete`·`rename`·`move`·`organize`·`review approve|reject|correct`)가 빈 범위(=전체 라이브러리)로 오면
+  "전부/모든 문서"라고 말하지 않은 한 명확화로 전환(`validate::scope_required`, 실행 명령에서도 재검사 → `plan_invalid`); 2건 이상의
+  `tag`/`set_doc_type`/검토 일괄은 확인 필요; 플래너 내보내기 경로는 `exports/` 아래만; 내보내기가 등록된 문서 경로를 덮어쓰지
+  않도록 `path_is_document` 거부; 기본 이름 내보내기가 이미 있으면 `_2`로 비켜감; `define_schema`·`open` 문자열 길이 상한.
+- 규칙 오탐: 라틴 트리거는 단어 경계 매칭(`"move"`≠remove, `"tag"`≠stage; 접두 매칭은 `classif*`처럼 표기), 영어 일시정지/재개는
+  작업 단어 필요("find my resume"), 내보내기는 조사("로/to/as")가 아니라 동사·화살표·4단어 이하 짧은 명령만, 질문문(알려줘·있어?·
+  what/how…)은 내보내기/inbox/정리/삭제/태그/처리 규칙을 건너뛰어 답변으로, "정리해서 알려줘"는 요약 질문, "읽어줘"는 OCR 아님,
+  "재"만으로 강제 재실행 안 함, 삭제 규칙을 정리 규칙보다 먼저("remove these documents"), "이동"은 동사형만, 집계는 유형·기간·
+  그룹·"전체"가 있을 때만(“합계 금액은?”은 Q&A), 짧은 주제어("xyzzy 플루토늄 원자로")는 지식 베이스 조회.
+- 저널: 복구가 0건이면 배치를 되돌린 것으로 표시하지 않고 빈 되돌리기 배치도 지움(드라이브 재연결 후 재시도 가능); 삭제 복원의
+  "다시 실행"은 재가져온 문서를 고아로 만들므로 `restore_not_redoable`로 건너뜀; 더 새로운 파일 배치가 생기면 redo 스택 무효화.
+- 정리: 파일 이동 후 DB 갱신이 실패하면 파일을 되돌리고 그 항목만 실패 처리; 충돌 검사는 대소문자 무시(Windows); 렌더된 폴더/이름이
+  `.`으로 시작하면 `_`로(`.doculens` 생성 차단).
+- 러너/게이트: `EngineGate`에 RAII 가드(`batch_begin → BatchGuard`, 대화형 카운터 가드) — 워커 패닉이 게이트를 잠그지 않음,
+  대기 중 취소 가능(`interactive_cancellable`); 플랜 작업은 모델 단계(분류/OCR/추출/답변/요약)에서만 엔진을 점유(`EngineLease`),
+  가져오기·내보내기 중에는 Q&A가 기다리지 않음; 워크스페이스 전환 시 실행 중 영속 작업이 끝날 때까지(≤5초) 대기 후 분리, 전환
+  중에는 새 작업을 시작하지 않음; `jobs://update`는 `result`를 빼고 보냄(`jobs_list`/`jobs_get`이 반환); 작업 제어 명령은 비동기;
+  "마지막 작업 되돌리기"는 카드가 보여 준 배치 id로 고정; `.part` 임시 파일은 쓰기 실패 시에도 정리.
+- 테스트 추가: 규칙 오탐 14문장, 범위 필수·폴더 가져오기 확인·내보내기 경로, 모델 플랜의 빈 범위 → 명확화, 복구 0건 되돌리기·
+  redo 무효화·삭제 복원 redo 거부, 게이트 패닉/취소, 문서 경로 내보내기 거부, 기본 이름 중복 `_2`.
+
+**Rust — 보류(HANDOFF 숙제)**: `set_rel_path`가 `original_name`을 덮어써 `{{original_name}}`이 첫 이름변경 후 바뀜(표시 이름과 분리
+필요), 요약 `set` 모드(묶음 요약) 미구현, 작업 결과 payload 상한(집계 500건·정리 항목 전체), 플래너 모델 로드가 명령 바 호출
+안에서 동기 실행(진행 표시만), `jobs.rs` 셸 러너 단위 테스트 부재, 집계/내보내기 N+1 질의.
+
+**프런트엔드 — 반영**
+
+- 계약 변경 대응: `jobs://update`에서 빠진 `result`를 스토어가 id별로 캐시·병합하고(`useJobsStore.fetch`/`useJobResultLoaded`), 완료
+  전이 시 한 번 `jobs_list`를 새로고침; 실행 카드·작업 화면·정리/내보내기 탭이 결과를 `jobs_get`으로 읽음(로딩 표시).
+- "이 문서" 범위 복구: 뷰어가 `lastDocument`를 언마운트 때 지우지 않고(워크스페이스 전환 때만), 어시스턴트 범위 선택기에 "현재 문서:
+  <이름>" 옵션 + 빈 상태 힌트; `uiContextFor`에 `document` 범위.
+- 정리 탭: 입력(템플릿·범위·검토 완료만)이 바뀌면 미리보기 플랜을 무효화(요청 키 비교) — 오래된 diff를 실행하지 않음.
+- 모의 백엔드 `plan_invalid.detail`을 Rust처럼 `PlanIssue[]`로; E2E에 잘못된 편집(폴더 `../x`) → `plan-errors` 표시 → 수정 후 실행 흐름 추가.
+- 내보내기 탭: 열 0개면 실행 차단 + 안내; 보이지 않는 탭에서는 미리보기 디바운스 중단(`active`).
+- 실행 카드: 스토어에 없는 작업은 `jobs_get`/새로고침으로 복구, 사라진 작업은 "작업 목록에서 제거됨", 결과는 완료 후 로드,
+  `onFinished` 1회 보장.
+- 플랜 편집기 숫자 강제(`numeric.ts`: 정수 trunc·0 이상·NaN 거부), Esc는 입력 중(컴포저·편집기)엔 카드를 취소하지 않음.
+- 뷰어 표 XLSX: 미리보기 후 같은 이름이 있으면 내보내기 탭으로 안내, 언어 전달, 작업 추적 후 "폴더 열기" 토스트(토스트 액션 추가).
+- 어시스턴트 대화를 `stores/assistant.ts`(워크스페이스별)로 옮겨 화면 이동에도 유지; 작업 기반 플랜의 `ui_actions`는 job id별로
+  추적해 완료 관찰 시 정확히 한 번 실행(`claimUiActions`), 워크스페이스 전환 시 초기화.
+- 백엔드 오류 문자열 번역(`describeJobError`: engine_not_running·model_not_loaded·workspace closed·interrupted·schema_not_found·
+  export_exists·path_outside·no_documents·단계별 실패), 작업 결과의 파이프라인 요약 번역, `plan_clarify` 사유 추가.
+- 접근성: 미리보기 diff·이동 표에 `<caption>`/`<th>`, 아이콘 `role="img"`, 결과 카드 `aria-live`, 실행 카드 라이브 텍스트에 일시정지,
+  여러 배치면 "마지막 배치 되돌리기" 라벨, 열거 라벨 번역.
+- 테스트: Esc 취소/비취소, 집계 헤드라인·분리 값 변화, 잘못된 편집, 현재 문서 힌트(E2E); `describe.test.ts`·`numeric.test.ts`·
+  `assistant.test.ts`(vitest 66건).
+
+**프런트엔드 — 보류**: 플랜·실행·작업 행의 ETA/tok/s(백엔드 수치 없음), 집계 카드 "월별 보기" 재집계·"엑셀로 내보내기" 버튼,
+결과 카드의 추출 결과 인용 칩, 명확화 카드 선택지 버튼, 어시스턴트 세션 목록(§3.7.6), 모델 경로에서 다중 op 플랜을 보여 주는 모의
+(현재 미해석 문장 → 검색 플랜).
+
+## P6 착수 메모
+
+1. v1.1 범위 확인 후 §3.15 프로젝트·규칙·정합성·보완요청서, §3.13 문서 생성(플래너 op `draft_document` 등 부록 D 나머지 연결).
+2. P4·P5 숙제: bbox 그라운딩(디지털 PDF 문자 박스), 배치 PDF 자동 경계 탐지, 컬렉션 폴더 감시, OCR 출력 건전성 검사,
+   스키마 화면 라우트 이동 차단(데이터 라우터 전환), 일일 파기 작업(저널·작업·캐시 LRU), 완료 OS 알림·절전 방지, 플래너
+   골든셋(명령→플랜 100건) 정확도 측정, 실모델 플래너 토큰 수·지연 보정.
 
 ## 알려진 제약
 

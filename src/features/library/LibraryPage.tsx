@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { BookOpen, FileText, FolderInput, FolderOpen, Image as ImageIcon, LayoutGrid, List, Merge, RefreshCw, Trash2, Upload } from "lucide-react";
+import { BookOpen, FileOutput, FileText, FolderInput, FolderOpen, FolderTree, Image as ImageIcon, LayoutGrid, List, Merge, RefreshCw, Trash2, Upload } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router";
@@ -37,6 +37,7 @@ import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspace } from "@/stores/workspace";
 
+import { AggregateBar } from "./AggregateBar";
 import { ImportDocumentsDialog } from "./ImportDocumentsDialog";
 import { MergeDialog } from "./SplitMergeDialogs";
 import { statusVariant } from "./status";
@@ -76,6 +77,7 @@ export function LibraryPage() {
   const setFolder = useDocumentsStore((s) => s.setFolder);
   const query = useDocumentsStore((s) => s.query);
   const setQuery = useDocumentsStore((s) => s.setQuery);
+  const setSelectedIds = useDocumentsStore((s) => s.setSelectedIds);
   const inboxWatch = useSettingsStore((s) => s.settings?.processing.inbox_watch ?? true);
   const reloadSettings = useSettingsStore((s) => s.load);
   const [status, setStatus] = useState<DocumentStatus | "all">("all");
@@ -88,7 +90,9 @@ export function LibraryPage() {
   const openReviewForDocument = usePipelineStore((s) => s.openReviewForDocument);
   const { data: docTypes } = useDocTypes(!!workspace);
   const [sort, setSort] = useState<DocumentSort>("imported_desc");
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Starts from the shared selection so coming back from 정리 / 내보내기 keeps the picked documents.
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(useDocumentsStore.getState().selectedIds));
+  const [aggregateOpen, setAggregateOpen] = useState(true);
   const [importOpen, setImportOpen] = useState(false);
   const [importPaths, setImportPaths] = useState<string[] | undefined>(undefined);
   const [importSource, setImportSource] = useState<ImportSource>("drop");
@@ -122,14 +126,14 @@ export function LibraryPage() {
   const visibleIds = useMemo(() => new Set(list.map((d) => d.id)), [list]);
 
   // Selection only ever refers to documents that are currently listed: prune on
-  // every list change (filters, folder, search, workspace switch, deletions).
+  // every list change (filters, folder, search, workspace switch, deletions) once the list is known.
   useEffect(() => {
-    if (isPlaceholderData) return;
+    if (isPlaceholderData || !docs) return;
     setSelected((s) => {
       const next = new Set([...s].filter((id) => visibleIds.has(id)));
       return next.size === s.size ? s : next;
     });
-  }, [visibleIds, isPlaceholderData]);
+  }, [visibleIds, isPlaceholderData, docs]);
 
   // A folder that lost its last document falls back to "all".
   useEffect(() => {
@@ -158,6 +162,12 @@ export function LibraryPage() {
   // and a `Set` would hand the backend the click order instead (review M7).
   const selectedDocs = useMemo(() => list.filter((d) => selected.has(d.id)), [list, selected]);
   const selectedVisible = useMemo(() => selectedDocs.map((d) => d.id), [selectedDocs]);
+  // Mirror the selection into the store: the assistant's "선택 문서" scope and 정리 / 내보내기 read it
+  // (it is kept on unmount; a workspace switch clears it in `resetDocumentQueries`).
+  useEffect(() => {
+    if (!docs) return;
+    setSelectedIds(selectedVisible);
+  }, [docs, selectedVisible, setSelectedIds]);
   const allSelected = list.length > 0 && selectedVisible.length === list.length;
   const someSelected = selectedVisible.length > 0 && !allSelected;
   const toggle = (id: string) =>
@@ -358,6 +368,10 @@ export function LibraryPage() {
           </div>
         </div>
 
+        {(docType !== "all" || selectedVisible.length > 0) && (
+          <AggregateBar docType={docType === "all" ? null : docType} selectedDocs={selectedDocs} typeLabel={typeLabel} open={aggregateOpen} onOpenChange={setAggregateOpen} />
+        )}
+
         {pdfium && !pdfium.library && (
           <p className="border-b border-border bg-warn-soft px-4 py-1.5 text-xs text-warn" role="status" data-testid="library-pdfium-missing">
             {t("library.pdfium_missing")}
@@ -380,6 +394,14 @@ export function LibraryPage() {
               <span className="mx-1">·</span>
               <span data-testid="library-selected">{t("library.selected", { count: selectedVisible.length })}</span>
               <ProcessMenu ids={selectedVisible} docs={selectedDocs} variant="ghost" testId="library-process" />
+              <Button size="sm" variant="ghost" onClick={() => navigate("/organize?selection=1")} data-testid="library-organize">
+                <FolderTree />
+                {t("library.organize_selected")}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => navigate("/organize?tab=export&selection=1")} data-testid="library-export">
+                <FileOutput />
+                {t("library.export_selected")}
+              </Button>
               {selectedVisible.length === 1 && (
                 <Button size="sm" variant="ghost" onClick={() => navigate(`/schemas?register=${selectedVisible[0]}`)} data-testid="library-register-form">
                   <Upload />

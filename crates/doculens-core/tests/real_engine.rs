@@ -221,6 +221,56 @@ fn real_llama_server_load_chat_switch() {
         eprintln!("pipeline kie → {:?} finish={:?}", k.content, k.finish_reason);
         assert!(k.content.trim_start().starts_with('{'), "KIE grammar did not constrain the output: {}", k.content);
         assert!(k.reasoning.is_none(), "thinking leaked despite enable_thinking=false");
+
+        // P5 planner path: the PlanSchema grammar (anyOf over every op object) is accepted by
+        // the server, and the planner ends with a model plan or a clarification — never with a
+        // transport / grammar error. Random weights produce junk inside the grammar, so only
+        // the constrained shape and the error handling are checked here.
+        let pdeps = doculens_core::planner::llm::PlannerDeps {
+            chat: &m,
+            model: first.clone(),
+            profile: Profile::Speed,
+            ctx_size: m.status().model(&first).and_then(|x| x.ctx),
+            cancel: None,
+        };
+        let pctx = doculens_core::planner::PlanContext {
+            doc_types: vec![doculens_core::planner::DocTypeSummary {
+                slug: "receipt".into(),
+                label_ko: "영수증".into(),
+                label_en: "Receipt".into(),
+            }],
+            ..Default::default()
+        };
+        let t = Instant::now();
+        let planned =
+            doculens_core::planner::llm::plan(Some(&pdeps), "한빛과 거래한 계약 중 작년 것만 골라서 보여줘", &pctx)
+                .expect("planner call");
+        eprintln!(
+            "planner → source={:?} attempts={} intent={:?} issues={:?} raw={:?} in {} ms",
+            planned.source,
+            planned.attempts,
+            planned.plan.intent,
+            planned.issues.iter().map(|i| i.code.as_str()).collect::<Vec<_>>(),
+            planned.raw.as_deref().map(|r| r.chars().take(160).collect::<String>()),
+            t.elapsed().as_millis()
+        );
+        // Random weights sometimes emit tool-call fragments the server's output parser rejects
+        // (HTTP 500 "does not match the expected … format", the P4 smoke artefact); that is a model
+        // artefact, not a grammar / transport problem, so only other engine errors fail the test.
+        let output_parser_500 =
+            planned.issues.iter().any(|i| i.code == "model_error" && i.message.contains("does not match the expected"));
+        assert!(
+            output_parser_500 || !planned.issues.iter().any(|i| i.code == "model_error"),
+            "planner grammar / transport error: {:?}",
+            planned.issues
+        );
+        if !output_parser_500 {
+            assert!(
+                planned.raw.as_deref().is_some_and(|r| r.trim_start().starts_with('{')),
+                "plan output not constrained: {:?}",
+                planned.raw
+            );
+        }
     }
 
     // Hot swap when a second model exists.

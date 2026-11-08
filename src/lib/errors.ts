@@ -8,7 +8,8 @@ import { errorCode, errorMessage } from "./utils";
 export function describeError(e: unknown, t: TFunction): string {
   const message = errorMessage(e);
   const code = errorCode(e);
-  const detail = (e as { detail?: Record<string, unknown> }).detail ?? {};
+  const rawDetail = (e as { detail?: unknown }).detail;
+  const detail: Record<string, unknown> = typeof rawDetail === "object" && rawDetail !== null && !Array.isArray(rawDetail) ? (rawDetail as Record<string, unknown>) : {};
   // Core messages are "<context>: <reason>"; show only the reason inside the localised template.
   const reason = message.includes(": ") ? message.slice(message.indexOf(": ") + 2) : message;
   // `engine_too_old:<version>:<min>` from the engine bridge.
@@ -49,6 +50,7 @@ export function describeError(e: unknown, t: TFunction): string {
       "no split boundary inside the document": "errors.reasons.no_split_boundary",
       "merge needs at least two documents": "errors.reasons.merge_two",
       table_not_found: "errors.reasons.table_not_found",
+      plan_clarify: "errors.reasons.plan_clarify",
     };
     const key = known[reason.trim()];
     if (key) return t(key);

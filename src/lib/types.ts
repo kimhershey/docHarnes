@@ -535,8 +535,14 @@ export type JobKind =
   | "knowledge_embed"
   | "pipeline"
   | "document_split"
-  | "document_merge";
-export type JobState = "queued" | "running" | "done" | "failed" | "cancelled";
+  | "document_merge"
+  | "plan"
+  | "export"
+  | "organize"
+  | "undo"
+  | "redo";
+export type JobState = "queued" | "running" | "paused" | "done" | "failed" | "cancelled" | "interrupted";
+export type JobPriority = "low" | "normal" | "high" | "interactive";
 
 export interface Job {
   id: string;
@@ -552,10 +558,19 @@ export interface Job {
   created_at: string;
   updated_at: string;
   finished_at: string | null;
+  // -- persistent runner (P5) --
+  priority: JobPriority;
+  /** Stored in the workspace database: survives restarts, can be paused / retried / prioritised. */
+  persistent: boolean;
+  attempts: number;
+  /** Structured outcome (PlanExecution, ExportResult, ApplyReport, UndoReport …) once finished. */
+  result?: unknown;
+  /** Human-readable label of the request (plan text, organise label …). */
+  label?: string | null;
 }
 
 export function isJobFinished(j: Job): boolean {
-  return j.state === "done" || j.state === "failed" || j.state === "cancelled";
+  return j.state === "done" || j.state === "failed" || j.state === "cancelled" || j.state === "interrupted";
 }
 
 // --- misc ------------------------------------------------------------------
@@ -631,7 +646,8 @@ export interface AppInfo {
 export interface UiError {
   code: string;
   message: string;
-  detail?: Record<string, unknown>;
+  /** Structured detail: an object (template vars, pids …) or an array (`plan_invalid` → `PlanIssue[]`). */
+  detail?: unknown;
 }
 
 export function isUiError(e: unknown): e is UiError {
@@ -1333,6 +1349,14 @@ export interface PipelineStatus {
   queued: number;
   model: VisionModelInfo;
   review_threshold: number;
+  /** Engine gate (P5): a batch is inside a page / interactive requests waiting. */
+  gate: GateStatus;
+}
+
+export interface GateStatus {
+  batch_busy: boolean;
+  waiting: number;
+  estimated_wait_ms: number;
 }
 
 export interface ExtractedTable {
@@ -1360,6 +1384,441 @@ export interface ReviewItem extends FieldRecord {
 export type ReviewAction = { kind: "approve" } | { kind: "reject" } | { kind: "hold" } | { kind: "reset" } | { kind: "correct"; value: string };
 
 export interface PipelineChanged {
-  kind: "processed" | "fields" | "schemas" | "review" | "status" | "engine_off" | "no_model";
+  kind: "processed" | "fields" | "schemas" | "review" | "status" | "engine_off" | "no_model" | "journal";
   ids: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Planner / organise / journal / aggregate / export (P5) — mirrors
+// crates/doculens-core/src/{planner,organize,aggregate,export}.rs and
+// src-tauri/src/commands/planner.rs
+// ---------------------------------------------------------------------------
+
+export type OpKind =
+  | "import"
+  | "set_inbox_watch"
+  | "classify"
+  | "set_doc_type"
+  | "ocr"
+  | "define_schema"
+  | "extract"
+  | "validate"
+  | "review"
+  | "reindex"
+  | "search"
+  | "answer"
+  | "summarize"
+  | "aggregate"
+  | "organize"
+  | "rename"
+  | "move"
+  | "tag"
+  | "delete"
+  | "export"
+  | "set_model"
+  | "set_profile"
+  | "set_theme"
+  | "set_language"
+  | "set_setting"
+  | "open"
+  | "job"
+  | "engine"
+  | "undo"
+  | "redo"
+  | "help"
+  | "clarify"
+  | "noop";
+
+export type AggregateFn = "sum" | "count" | "avg" | "min" | "max";
+export type GroupBy = "month" | "vendor" | "doc_type" | "none";
+export type ExportFormat = "xlsx" | "csv" | "jsonl" | "md" | "pdf_searchable";
+export const EXPORT_FORMATS: ExportFormat[] = ["xlsx", "csv", "jsonl", "md", "pdf_searchable"];
+export type ExportLayout = "sheet_per_type" | "single";
+export type ExportInclude = "evidence" | "confidence" | "status";
+export type ExportTarget = "fields" | "table" | "text";
+export type SettingKey = "render_dpi" | "pii_masking" | "auto_pipeline" | "inbox_watch" | "review_threshold" | "cache_limit_gb" | "journal_days";
+export type ReviewOp = "show" | "approve" | "reject" | "correct";
+export type ReviewOnly = "low_confidence" | "failed" | "all";
+export type JobOp = "show" | "cancel" | "retry" | "pause" | "resume" | "prioritize";
+export type EngineOp = "restart" | "sleep" | "wake";
+export type OpenTarget = "document" | "page" | "folder" | "screen";
+
+/** One plan step (appendix D parameters; optional ones may be absent or null). */
+export type Op =
+  | { op: "import"; source?: "inbox" | "folder" | "files"; path?: string | null; recursive?: boolean | null; auto_pipeline?: "none" | "classify" | "full" | null }
+  | { op: "set_inbox_watch"; enabled: boolean }
+  | { op: "classify"; doc_types?: string[]; force?: boolean | null }
+  | { op: "set_doc_type"; doc_type: string }
+  | { op: "ocr"; pages?: number[]; profile?: "standard" | "fine_print" | null; force?: boolean | null }
+  | { op: "define_schema"; name?: string | null; description?: string | null; mode?: "create" | "modify" | null; base?: string | null }
+  | { op: "extract"; schema_ref?: string | null; fields?: string[]; force?: boolean | null }
+  | { op: "validate" }
+  | { op: "review"; action: ReviewOp; field?: string | null; value?: string | null; only?: ReviewOnly | null }
+  | { op: "reindex"; scope?: "fts" | "vec" | "all" | null }
+  | { op: "search"; query: string; mode?: SearchMode | null; top_k?: number | null }
+  | { op: "answer"; question: string; cite?: boolean | null }
+  | { op: "summarize"; target?: "each_doc" | "set" | null; length?: "short" | "long" | null }
+  | { op: "aggregate"; fn: AggregateFn; field?: string | null; group_by?: GroupBy | null; include_unreviewed?: boolean | null }
+  | { op: "organize"; template?: string | null; folder_template?: string | null; group_by?: GroupBy | null; only_reviewed?: boolean | null; dry_run?: boolean | null }
+  | { op: "rename"; template: string; only_reviewed?: boolean | null }
+  | { op: "move"; folder: string; group_by?: GroupBy | null; only_reviewed?: boolean | null }
+  | { op: "tag"; add?: string[]; remove?: string[] }
+  | { op: "delete"; to_trash?: boolean | null }
+  | { op: "export"; format: ExportFormat; path?: string | null; columns?: string[]; layout?: ExportLayout | null; include?: ExportInclude[]; target?: ExportTarget | null }
+  | { op: "set_model"; id: string }
+  | { op: "set_profile"; profile: Profile }
+  | { op: "set_theme"; theme: Theme }
+  | { op: "set_language"; lang: Language }
+  | { op: "set_setting"; key: SettingKey; value: string | number | boolean }
+  | { op: "open"; target: OpenTarget; ref: string }
+  | { op: "job"; action: JobOp; id?: string | null }
+  | { op: "engine"; action: EngineOp }
+  | { op: "undo"; target?: string | null }
+  | { op: "redo" }
+  | { op: "help" }
+  | { op: "clarify"; question: string }
+  | { op: "noop" };
+
+export interface ScopeFilter {
+  doc_type?: string | null;
+  date_from?: string | null;
+  date_to?: string | null;
+  keyword?: string | null;
+  vendor?: string | null;
+  status?: string | null;
+  tags?: string[];
+  min_confidence?: number | null;
+  review_status?: ReviewStatus | null;
+}
+
+export interface Scope {
+  folder?: string | null;
+  doc_ids?: string[];
+  filter?: ScopeFilter;
+}
+
+export interface Plan {
+  intent: OpKind;
+  scope: Scope;
+  operations: Op[];
+  requires_confirmation: boolean;
+  confidence: number;
+  clarification_question?: string | null;
+  /** One-line interpretation ("해석: …"). */
+  summary?: string | null;
+}
+
+export interface PlanIssue {
+  path: string;
+  code: string;
+  message: string;
+  blocking: boolean;
+}
+
+export type PlanSource = "prerouter" | "rules" | "model" | "none";
+
+export interface PlanResult {
+  text: string;
+  source: PlanSource;
+  plan: Plan;
+  issues: PlanIssue[];
+  date: DateRange | null;
+  attempts: number;
+  model: string | null;
+  prompt_tokens: number;
+  completion_tokens: number;
+  raw?: string | null;
+}
+
+export interface DocTypeSummary {
+  slug: string;
+  label_ko: string;
+  label_en: string;
+}
+
+export interface FieldSummary {
+  key: string;
+  label_ko: string;
+  label_en: string;
+  kind: string;
+}
+
+export interface SchemaSummary {
+  id: string;
+  name: string;
+  name_en: string;
+  doc_type: string;
+  fields: FieldSummary[];
+}
+
+export interface PlanContext {
+  today: string;
+  language: Language;
+  folders: string[];
+  doc_types: DocTypeSummary[];
+  schemas: SchemaSummary[];
+  tags: string[];
+  current_folder: string | null;
+  selected_doc_ids: string[];
+  current_document: string | null;
+  current_page: number | null;
+  document_count: number;
+  model_ids: string[];
+}
+
+/** What the UI is showing when a command is sent (default scope). */
+export interface UiPlanContext {
+  folder?: string | null;
+  selected_doc_ids?: string[];
+  current_document?: string | null;
+  current_page?: number | null;
+}
+
+export interface StepPreview {
+  index: number;
+  op: OpKind;
+  summary: string;
+  payload: unknown;
+  confirm: boolean;
+}
+
+export interface PlanPreview {
+  document_count: number;
+  document_ids: string[];
+  steps: StepPreview[];
+  requires_confirmation: boolean;
+}
+
+export interface PlanResponse {
+  result: PlanResult;
+  preview: PlanPreview | null;
+  context: PlanContext;
+}
+
+export type StepStatus = "pending" | "running" | "done" | "skipped" | "failed" | "ui" | "cancelled";
+
+export interface StepResult {
+  index: number;
+  op: OpKind;
+  status: StepStatus;
+  summary: string;
+  payload: unknown;
+  error?: string | null;
+  elapsed_ms: number;
+}
+
+export interface PlanExecution {
+  steps: StepResult[];
+  cancelled: boolean;
+  documents: string[];
+  /** Ops the UI performs itself (settings, navigation, job / engine control, help). */
+  ui_actions: Op[];
+  /** Journal batch ids created (undo entry points). */
+  batches: string[];
+  restored_paths?: string[];
+}
+
+export interface ExecuteResponse {
+  /** Set when the plan runs as a background job (its result lands in `Job.result`). */
+  job_id: string | null;
+  /** Set when the plan ran inline. */
+  execution: PlanExecution | null;
+}
+
+// -- organise / journal --
+
+export interface OrganizeRequest {
+  scope?: Scope;
+  /** File-name template (null = keep the name). */
+  name_template?: string | null;
+  /** Folder template, workspace-relative (null = keep the folder). */
+  folder_template?: string | null;
+  only_reviewed?: boolean;
+  language?: Language;
+}
+
+export const TEMPLATE_VARIABLES = ["year", "month", "day", "doc_type", "vendor", "total", "title", "original_name", "name", "tags", "seq", "ext"] as const;
+export const DEFAULT_NAME_TEMPLATE = "{{year}}-{{month}}-{{day}}_{{doc_type}}_{{vendor}}_{{total}}";
+export const FOLDER_TEMPLATES: Record<GroupBy, string> = {
+  month: "documents/{{year}}/{{month}}/{{doc_type}}",
+  vendor: "documents/{{vendor}}/{{doc_type}}",
+  doc_type: "documents/{{doc_type}}",
+  none: "documents/{{doc_type}}",
+};
+
+export type OrganizeItemStatus = "move" | "unchanged" | "held" | "missing" | "done" | "failed";
+
+export interface OrganizeItem {
+  doc_id: string;
+  name: string;
+  from: string;
+  to: string | null;
+  status: OrganizeItemStatus;
+  /** `review_pending` | `missing_file` | `source_changed` | an error. */
+  reason?: string | null;
+  /** Template variables that rendered as 미상. */
+  missing?: string[];
+}
+
+export interface OrganizePlan {
+  items: OrganizeItem[];
+  moves: number;
+  unchanged: number;
+  held: number;
+  missing_files: number;
+  needs_review: number;
+  name_template: string | null;
+  folder_template: string | null;
+  only_reviewed: boolean;
+}
+
+export interface ApplyReport {
+  batch_id: string | null;
+  moved: number;
+  skipped: number;
+  failed: [string, string][];
+  cancelled: boolean;
+  items: OrganizeItem[];
+  documents: string[];
+}
+
+export type JournalEntryKind = "move" | "rename" | "delete";
+
+export interface JournalBatch {
+  id: string;
+  /** organize | rename | move | delete | undo | redo */
+  kind: string;
+  label: string | null;
+  source: string | null;
+  created_at: string;
+  entries: number;
+  undone_at: string | null;
+  undone_by: string | null;
+  redo_of: string | null;
+}
+
+export interface JournalEntry {
+  id: number;
+  batch_id: string;
+  seq: number;
+  kind: JournalEntryKind;
+  document_id: string | null;
+  from_path: string;
+  to_path: string | null;
+  trash_path: string | null;
+  content_hash: string | null;
+  size_bytes: number | null;
+  created_at: string;
+  undone_at: string | null;
+  undo_error: string | null;
+}
+
+export interface UndoReport {
+  source_batch: string;
+  source_kind: string;
+  batch_id: string;
+  restored: number;
+  /** [path, reason] — reason ∈ missing | changed | target_occupied | os_trash. */
+  skipped: [string, string][];
+  restored_paths: string[];
+  documents: string[];
+}
+
+export interface UndoResponse {
+  job_id: string | null;
+  report: UndoReport | null;
+}
+
+// -- aggregate --
+
+export interface AggregateRequest {
+  func: AggregateFn;
+  field?: string | null;
+  group_by?: GroupBy;
+  include_unreviewed?: boolean;
+  scope?: Scope;
+}
+
+export interface Totals {
+  value: number;
+  count: number;
+}
+
+export interface AggregateGroup {
+  key: string;
+  value: number;
+  count: number;
+  reviewed: Totals;
+  unreviewed: Totals;
+}
+
+export interface AggregateDocument {
+  id: string;
+  name: string;
+  rel_path: string;
+  doc_type: string | null;
+  date: string | null;
+  basis: string;
+  vendor: string | null;
+  value: number | null;
+  field_key: string | null;
+  reviewed: boolean;
+}
+
+export interface AggregateResult {
+  func: AggregateFn;
+  field: string | null;
+  field_label: string | null;
+  doc_type: string | null;
+  /** doc_date | imported_at | mixed */
+  basis: string;
+  date_from: string | null;
+  date_to: string | null;
+  include_unreviewed: boolean;
+  /** Headline number (reviewed only unless include_unreviewed). */
+  value: number;
+  count: number;
+  reviewed: Totals;
+  unreviewed: Totals;
+  missing: number;
+  groups: AggregateGroup[];
+  documents: AggregateDocument[];
+}
+
+// -- export --
+
+export interface ExportRequest {
+  format: ExportFormat;
+  target?: ExportTarget;
+  /** Workspace-relative; null → exports/YYYY-MM-DD_<유형>.<ext>. */
+  path?: string | null;
+  columns?: string[];
+  layout?: ExportLayout;
+  include?: ExportInclude[];
+  scope?: Scope;
+  only_reviewed?: boolean;
+  overwrite?: boolean;
+  language?: Language;
+}
+
+export interface ExportPreview {
+  path: string;
+  exists: boolean;
+  documents: number;
+  skipped: number;
+  columns: string[];
+  sheets: string[];
+}
+
+export interface ExportResult {
+  path: string;
+  absolute: string;
+  format: ExportFormat;
+  target: ExportTarget;
+  documents: number;
+  rows: number;
+  sheets: string[];
+  overwritten: boolean;
+  skipped: [string, string][];
+  extra_files: string[];
 }

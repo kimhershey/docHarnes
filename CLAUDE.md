@@ -29,7 +29,7 @@ that processes Korean/English business documents with a local VLM
 ## Commands
 - Rust: `cargo test --workspace` (lib + `tests/engine_process.rs`), `cargo check -p doculens`,
   `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all`.
-- Real engine (optional): `DOCULENS_LLAMA_SERVER=<llama-server> DOCULENS_TEST_MODELS_DIR=$PWD/crates/doculens-core/tests/fixtures cargo test -p doculens-core --test real_engine -- --nocapture` (absolute path: the test binary runs from the crate directory).
+- Real engine (optional): `DOCULENS_LLAMA_SERVER=<llama-server> DOCULENS_TEST_MODELS_DIR=$PWD/crates/doculens-core/tests/fixtures cargo test -p doculens-core --test real_engine -- --nocapture` (absolute path: the test binary runs from the crate directory; covers the chat, KIE and planner grammars).
 - PDFium (optional, enables the render/import tests): `node scripts/fetch-pdfium.mjs --dest /tmp/pdfium` then
   `DOCULENS_PDFIUM=/tmp/pdfium/libpdfium.so cargo test -p doculens-core`.
 - Sample documents: `DOCULENS_FIXTURE_OUT=<dir> cargo test -p doculens-core --lib -- --ignored gen_fixtures`.
@@ -51,14 +51,23 @@ that processes Korean/English business documents with a local VLM
   embed: sqlite-vec + `Embedder`, search: hybrid RRF, answer: grounded answers / explain / summarize / compare),
   `pipeline/` (schema: built-in sample forms + grammar-safe JSON schema + lint, prompts, vlm: retrying caller, image,
   classify, ocr, extract, validate: normalisers / BRN checksum / sum rules / PII masking / confidence, run: orchestrator +
-  `extractions/` mirror, review, forms: form registration + NL schemas, split: lopdf split / merge, repo).
+  `extractions/` mirror, review, forms: form registration + NL schemas, split: lopdf split / merge, repo),
+  `planner/` (mod: typed ops / scope / plan (appendix D v1.0 subset), schema: op spec table + PlanSchema grammar, rules:
+  deterministic phrase rules, prompts: tiered planner prompt, llm: pre-router → rules → model with one re-query, validate,
+  scope: scope → documents, exec: deterministic executor + previews), `organize/` (template: file-name / folder templates,
+  mod: dry-run diff + apply, journal: `ops_journal` + `journal/ops-YYYYMM.jsonl`, LIFO undo / redo), `aggregate` (sum /
+  count / avg / min / max with the reviewed / unreviewed split), `export` (XLSX / CSV / JSONL / MD / searchable PDF),
+  `jobs/` (persistent job rows + specs, priorities / lanes, `JobControl` pause / cancel, `EngineGate` interactive cut-in).
 - `crates/doculens-kodic/` — bin that compiles the mecab-ko-dic sources into lindera's dictionary format
   (driven by `scripts/fetch-kodic.mjs`; descriptors in `assets/`).
 - `src-tauri/` — Tauri shell (`src/commands/{mod,documents,knowledge,pipeline}.rs`, `src/state.rs`, `src/engine_bridge.rs`,
   `src/docs_bridge.rs`, `src/knowledge_bridge.rs` (analyzer lifetime, index/embed jobs, answer streaming),
   `src/pipeline_bridge.rs` (vision model, processing / split / merge jobs, auto pipeline after import, forms / NL schemas),
+  `src/planner_bridge.rs` (plan + preview, inline / job execution, the persistent-job worker, organise / journal /
+  aggregate / export helpers), `src/commands/planner.rs`,
   `src/protocol.rs` (`doculens://` page images / print bundles), `src/printer.rs`
-  (WebView2 / WebKitGTK print-to-PDF), `src/jobs.rs`), `tauri.conf.json`, capabilities.
+  (WebView2 / WebKitGTK print-to-PDF), `src/jobs.rs` (job book + persistent runner: priority queue, lanes, pause /
+  resume / retry / prioritise, restored per workspace)), `tauri.conf.json`, capabilities.
 - `src/` — React app: `app/` (layout, providers, hooks), `features/<screen>/`, `components/ui/`, `lib/` (ipc, types, theme, shortcuts, mock backend), `stores/`, `i18n/`, `styles/`.
 - `models/registry.json`, `engines/` (llama.cpp manifest, `pdfium.json`, `kodic.json`, placement docs), `docs/`,
   `scripts/` (`fetch-engine.mjs`, `fetch-pdfium.mjs`, `fetch-kodic.mjs`, `gen-tiny-qwen35.py`), `e2e/`,
@@ -67,7 +76,8 @@ that processes Korean/English business documents with a local VLM
   `documents://changed`, `knowledge://changed`, `knowledge://answer` (streamed answer deltas), `pipeline://changed`.
 - Workspace data: `.doculens/workspace.db` (schema in `crates/doculens-core/src/db/schema/`; knowledge tables
   `chunks` + FTS5 `chunks_fts`/`chunks_fts_tri`, sqlite-vec `chunks_vec`, `collections`, `doc_versions`, `glossary`,
-  `answers`; pipeline tables `schemas`, `schema_versions`, `extraction_runs`, `fields`, `field_history`), page cache
+  `answers`; pipeline tables `schemas`, `schema_versions`, `extraction_runs`, `fields`, `field_history`; P5 tables
+  `journal_batches`, `ops_journal`, `jobs`), page cache
   `.doculens/cache/{pages,thumbs,converted}/<doc_id>/`, extraction mirror `.doculens/extractions/<doc_id>/<run_id>/`;
   DB rows store workspace-relative paths only. OCR text lives in `pages.text` (`text_source = ocr`) so the knowledge
   indexer re-chunks it.

@@ -22,6 +22,19 @@ export function Toaster() {
           <div key={t.id} className={cn("pointer-events-auto flex items-start gap-2 rounded-md border-l-4 border border-border bg-bg-elevated p-3 text-sm text-fg shadow-[var(--shadow)]", COLORS[t.kind])} role="status">
             <Icon className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
             <span className="flex-1 text-fg selectable">{t.message}</span>
+            {t.action && (
+              <button
+                type="button"
+                className="shrink-0 rounded-md border border-border px-2 py-0.5 text-xs text-fg hover:bg-bg-sunken cursor-pointer"
+                onClick={() => {
+                  t.action?.onClick();
+                  dismiss(t.id);
+                }}
+                data-testid="toast-action"
+              >
+                {t.action.label}
+              </button>
+            )}
             <button type="button" className="text-fg-muted hover:text-fg cursor-pointer" onClick={() => dismiss(t.id)} aria-label="dismiss">
               <X className="size-4" />
             </button>

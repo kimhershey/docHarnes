@@ -56,6 +56,8 @@ pub struct PipelineStatusView {
     pub queued: usize,
     pub model: VisionModelInfo,
     pub review_threshold: f32,
+    /// Engine gate: a batch is inside a page / interactive requests waiting (status bar hint).
+    pub gate: doculens_core::jobs::GateStatus,
 }
 
 #[tauri::command(async)]
@@ -65,10 +67,11 @@ pub fn pipeline_status(app: AppHandle) -> UiResult<PipelineStatusView> {
     let state = app.state::<AppState>();
     Ok(PipelineStatusView {
         status,
-        running: state.jobs.is_active_kind(&[crate::jobs::JobKind::Pipeline]),
-        queued: state.pipeline_queue.lock().map(|q| q.len()).unwrap_or(0),
+        running: state.jobs.is_active_kind(&[crate::jobs::JobKind::Pipeline, crate::jobs::JobKind::Plan]),
+        queued: state.jobs.persistent_queued(),
         model: pipeline_bridge::vision_model_info(&app),
         review_threshold: ctx.settings.review_threshold,
+        gate: state.gate.status(),
     })
 }
 

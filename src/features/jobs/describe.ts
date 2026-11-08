@@ -1,12 +1,13 @@
 import type { TFunction } from "i18next";
 
-import type { Job } from "@/lib/types";
+import { OP_KINDS } from "@/features/assistant/opSpecs";
+import type { Job, JobPriority, OpKind } from "@/lib/types";
 
 /**
  * The shell reports job subjects / details as compact English strings
  * (`"3 files"`, `"imported 3 / relinked 0 / failed 0 / skipped 2"`). Known
- * shapes are rendered through i18n; anything else (model ids, error text) is
- * shown verbatim.
+ * shapes are rendered through i18n; anything else (model ids, plan
+ * summaries, export paths, error text) is shown verbatim.
  */
 export function describeJobSubject(job: Job, t: TFunction): string {
   const s = job.subject;
@@ -14,10 +15,22 @@ export function describeJobSubject(job: Job, t: TFunction): string {
   if (m) return t("jobs.subject.files", { count: Number(m[1]) });
   m = s.match(/^(\d+) documents$/);
   if (m) return t("jobs.subject.documents", { count: Number(m[1]) });
+  m = s.match(/^(\d+) entries$/);
+  if (m) return t("jobs.subject.entries", { count: Number(m[1]) });
   if (s === "inbox") return t("jobs.subject.inbox");
   if (s === "library") return t("jobs.subject.library");
   if (s === "engine") return t("jobs.subject.engine");
   return s;
+}
+
+export function describeJobPriority(priority: JobPriority | undefined, t: TFunction): string {
+  return t(`jobs.priority.${priority ?? "normal"}`);
+}
+
+/** Stage word of a plan / pipeline progress line: pipeline levels, planner ops, else verbatim. */
+export function describeStage(stage: string, t: TFunction): string {
+  if (stage === "classify" || stage === "ocr" || stage === "extract") return t(`pipeline.levels.${stage}`);
+  return t(`planner.ops.${stage}`, { defaultValue: stage });
 }
 
 export function describeJobDetail(job: Job, t: TFunction): string | null {
@@ -47,6 +60,24 @@ export function describeJobDetail(job: Job, t: TFunction): string | null {
   m = d.match(/^merged (\d+)$/);
   if (m) return t("jobs.detail.merge_summary", { count: Number(m[1]) });
   if (d === "loading model") return t("jobs.detail.loading_model");
+  // -- persistent runner (P5, `planner_bridge.rs`) --
+  m = d.match(/^plan (\d+)\/(\d+) · (.*)$/);
+  if (m) return t("jobs.detail.plan_summary", { done: Number(m[1]), total: Number(m[2]), summary: m[3] });
+  m = d.match(/^(\d+)\/(\d+) · ([a-z_]+) · (.+) \((\d+)\/(\d+)\)$/);
+  if (m) return t("jobs.detail.step_progress_doc", { step: Number(m[1]), steps: Number(m[2]), stage: describeStage(m[3]!, t), name: m[4], done: Number(m[5]), total: Number(m[6]) });
+  m = d.match(/^(\d+)\/(\d+) · ([a-z_]+)$/);
+  if (m) return t("jobs.detail.step_progress", { step: Number(m[1]), steps: Number(m[2]), stage: describeStage(m[3]!, t) });
+  m = d.match(/^exported (\d+) documents → (.+)$/);
+  if (m) return t("jobs.detail.exported", { count: Number(m[1]), path: m[2] });
+  m = d.match(/^moved (\d+) \/ failed (\d+) \/ skipped (\d+)$/);
+  if (m) return t("jobs.detail.organize_summary", { moved: Number(m[1]), failed: Number(m[2]), skipped: Number(m[3]) });
+  m = d.match(/^restored (\d+) \/ skipped (\d+)$/);
+  if (m) return t("jobs.detail.undo_summary", { restored: Number(m[1]), skipped: Number(m[2]) });
+  if (d === "nothing to undo") return t("jobs.detail.nothing_to_undo");
+  if (d === "nothing to redo") return t("jobs.detail.nothing_to_redo");
+  if (d === "interrupted") return t("jobs.detail.interrupted");
+  if (d === "workspace closed") return t("jobs.detail.workspace_closed");
+  if (d === "cancelled") return t("jobs.state.cancelled");
   // Per-document stage progress from `pipeline_bridge.rs`: "<doc> · classify (2/5)", "<doc> · ocr" or a bare
   // stage; the stage words are the level names, so `pipeline.levels.*` translates them.
   m = d.match(/^(?:(.+) · )?(classify|ocr|extract)(?: \((\d+)\/(\d+)\))?$/);
@@ -56,4 +87,44 @@ export function describeJobDetail(job: Job, t: TFunction): string | null {
   }
   if (d === "done") return t("jobs.state.done");
   return d;
+}
+
+/** Stable error codes the shell / workers put into `Job.error`, with their `jobs.error.*` keys. */
+const ERROR_CODES: Record<string, string> = {
+  engine_not_running: "jobs.error.engine_not_running",
+  model_not_loaded: "jobs.error.model_not_loaded",
+  "workspace closed": "jobs.error.workspace_closed",
+  workspace_closed: "jobs.error.workspace_closed",
+  interrupted: "jobs.error.interrupted",
+  cancelled: "jobs.error.cancelled",
+  no_model: "jobs.error.no_model",
+  export_exists: "jobs.error.export_exists",
+  path_outside: "jobs.error.path_outside",
+  no_documents: "jobs.error.no_documents",
+};
+
+function describeErrorText(raw: string, t: TFunction): string {
+  const text = raw.trim();
+  if (!text) return text;
+  const key = ERROR_CODES[text];
+  if (key) return t(key);
+  let m = text.match(/^schema_not_found(?::\s*(.*))?$/);
+  if (m) return t("jobs.error.schema_not_found", { name: m[1]?.trim() || "?" });
+  // Plan workers report "<op>: <reason>" (`planner_bridge.rs`): translate the op and recurse on the reason.
+  m = text.match(/^([a-z_]+):\s*(.*)$/s);
+  if (m && (OP_KINDS as readonly string[]).includes(m[1]!)) return t("jobs.error.step", { op: t(`planner.ops.${m[1] as OpKind}`), message: describeErrorText(m[2]!, t) || t("jobs.state.failed") });
+  // A known code somewhere inside a longer message ("export: export_exists", "…: engine_not_running").
+  for (const [code, k] of Object.entries(ERROR_CODES)) if (code.length > 6 && text.includes(code)) return t(k);
+  return text;
+}
+
+/**
+ * Localised `Job.error` (review L1): the stable codes of the shell / workers
+ * (`engine_not_running`, `workspace closed`, `schema_not_found: …`,
+ * `export_exists` …) through `jobs.error.*`; anything else verbatim. Null
+ * when the job has no error.
+ */
+export function describeJobError(job: Pick<Job, "error">, t: TFunction): string | null {
+  if (!job.error) return null;
+  return describeErrorText(job.error, t);
 }

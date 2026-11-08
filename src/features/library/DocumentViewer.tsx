@@ -93,6 +93,13 @@ export function DocumentViewer() {
     rootRef.current?.focus();
   }, [id]);
 
+  // The assistant's "이 문서" scope (P5): remember the last viewed document / page. It is kept after the
+  // viewer unmounts (the assistant is a sibling route) until another document is opened or the workspace
+  // switches (`resetDocumentQueries`), so "이 문서 요약해줘" from the assistant targets what was open.
+  useEffect(() => {
+    if (id) useUiStore.getState().setLastDocument({ id, page: pageNo });
+  }, [id, pageNo]);
+
   // Search / citation links open a specific page (`?page=N`) and highlight the query (`?q=`).
   const pageParam = searchParams.get("page");
   const tabParam = searchParams.get("tab");

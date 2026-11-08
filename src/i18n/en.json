@@ -99,7 +99,10 @@
     "engine_idle": "Idle (no model loaded)",
     "engine_degraded": "Engine error",
     "vram_used": "VRAM used",
-    "engine_stopping": "Stopping"
+    "engine_stopping": "Stopping",
+    "gate_busy": "Batch running — responding in about {{seconds}}s",
+    "gate_busy_short": "Batch running",
+    "queue_tooltip": "running {{running}} · queued {{queued}} · paused {{paused}}"
   },
   "theme": {
     "light": "Light",
@@ -134,7 +137,13 @@
     "open_screen": "Open {{screen}}",
     "help": "Help",
     "toggle_theme": "Toggle light/dark",
-    "open_workspace": "Open another workspace"
+    "open_workspace": "Open another workspace",
+    "undo_done": "{{restored}} restored ({{skipped}} skipped)",
+    "redo_done": "{{restored}} redone ({{skipped}} skipped)",
+    "undo_started": "Undo started as a job (see Jobs).",
+    "redo_started": "Redo started as a job (see Jobs).",
+    "nothing_to_undo": "Nothing to undo.",
+    "nothing_to_redo": "Nothing to redo."
   },
   "onboarding": {
     "title": "Welcome to DocuLens",
@@ -272,16 +281,18 @@
       "folder": "Current folder",
       "selection": "Selected documents",
       "knowledge": "Knowledge base",
-      "collection": "Collection: {{name}}"
+      "collection": "Collection: {{name}}",
+      "folder_named": "Current folder {{folder}}",
+      "selection_count": "Selected documents ({{count}})",
+      "document": "Current document",
+      "document_named": "Current document: {{name}}"
     },
     "placeholder": "Command or ask in natural language (한국어 / English) · / for slash commands",
     "send": "Send",
     "empty": "How can I help? Try one of the examples.",
     "help_title": "Help",
-    "help_body": "Commands that run right now (P0): /theme dark|light|system|high-contrast, /lang ko|en, /open <screen>, open settings, switch to dark mode. Import, classify, OCR, extract, search, summarize, organize and export commands are executed by the P5 planner after you approve a plan card.",
+    "help_body": "Natural-language commands become a plan card (steps · impact · preview) that runs after your approval. Examples: process inbox, last month's receipt total, tax invoices → Excel, move receipts into monthly folders, summarize the selected documents, undo the last rename. Instant commands: /theme dark|light|system|high-contrast, /lang ko|en, /open <screen>, /job pause, /undo. Questions are answered from the knowledge base with per-sentence sources. Ctrl+Enter approves · Esc cancels · Ctrl+Z undoes.",
     "executed": "Done",
-    "pending_title": "Handled by the planner (P5)",
-    "pending_body": "The natural-language planner will turn this into a plan card (steps, affected files, preview) and run it after approval. For now only the interpretation is shown.",
     "date_resolved": "Date range: {{from}} – {{to}} ({{label}})",
     "source_slash": "slash command",
     "source_phrase": "phrase rule",
@@ -291,12 +302,287 @@
       "process inbox",
       "last month's receipt total",
       "tax invoices → Excel",
+      "move receipts into monthly folders",
+      "summarize the selected documents",
+      "undo the last rename",
       "/theme dark",
       "switch to Korean",
       "/open models"
     ],
     "qa_hint": "Ask a question and the assistant answers from the knowledge base with per-sentence sources.",
-    "pending_hint": "Work commands such as totals or organising run through the P5 planner. Questions are answered from the knowledge base."
+    "planning": "Interpreting…"
+  },
+  "planner": {
+    "ops": {
+      "import": "Import",
+      "set_inbox_watch": "Inbox watch",
+      "classify": "Classify",
+      "set_doc_type": "Set type",
+      "ocr": "OCR",
+      "define_schema": "Define schema",
+      "extract": "Extract",
+      "validate": "Validate",
+      "review": "Review",
+      "reindex": "Reindex",
+      "search": "Search",
+      "answer": "Answer",
+      "summarize": "Summarize",
+      "aggregate": "Aggregate",
+      "organize": "Organize",
+      "rename": "Rename",
+      "move": "Move",
+      "tag": "Tag",
+      "delete": "Delete",
+      "export": "Export",
+      "set_model": "Switch model",
+      "set_profile": "Set profile",
+      "set_theme": "Set theme",
+      "set_language": "Set language",
+      "set_setting": "Change setting",
+      "open": "Open",
+      "job": "Job control",
+      "engine": "Engine control",
+      "undo": "Undo",
+      "redo": "Redo",
+      "help": "Help",
+      "clarify": "Clarify",
+      "noop": "No-op"
+    },
+    "source": {
+      "prerouter": "slash",
+      "rules": "phrase rule",
+      "model": "model",
+      "none": "none"
+    },
+    "fn": {
+      "sum": "sum",
+      "count": "count",
+      "avg": "average",
+      "min": "minimum",
+      "max": "maximum"
+    },
+    "params": {
+      "source_inbox": "inbox/",
+      "source_folder": "folder {{path}}",
+      "source_files": "files",
+      "recursive": "include subfolders",
+      "auto_pipeline": "auto-process: {{level}}",
+      "on": "on",
+      "off": "off",
+      "candidate_types": "{{count}} candidate types",
+      "all_types": "all types",
+      "force": "re-run",
+      "pages": "{{count}} pages",
+      "all_pages": "all pages",
+      "profile_standard": "standard profile",
+      "profile_fine_print": "fine-print profile",
+      "mode_create": "create",
+      "mode_modify": "modify: {{base}}",
+      "schema": "schema {{name}}",
+      "schema_auto": "auto (schema per type)",
+      "fields": "{{count}} fields",
+      "all_fields": "all fields",
+      "review_show": "show review queue",
+      "review_approve": "approve all",
+      "review_reject": "reject all",
+      "review_correct": "correct",
+      "only_low_confidence": "low-confidence fields only",
+      "only_failed": "failed-validation fields only",
+      "only_all": "all fields",
+      "scope": "scope: {{scope}}",
+      "top_k": "{{count}} results",
+      "each_doc": "per document",
+      "set": "one summary",
+      "short": "short",
+      "long": "long",
+      "group_by": "group_by={{value}}",
+      "include_unreviewed": "include unreviewed",
+      "with_unreviewed": "include unreviewed",
+      "dry_run": "preview only",
+      "to_trash": "to the recycle bin",
+      "permanent": "permanent delete",
+      "default_path": "(default path)",
+      "columns": "{{count}} columns",
+      "layout_sheet_per_type": "sheet per type",
+      "layout_single": "single sheet",
+      "include": "extra columns: {{list}}",
+      "target_fields": "fields",
+      "target_table": "tables",
+      "target_text": "page text",
+      "open_document": "document",
+      "open_page": "page",
+      "open_folder": "folder",
+      "open_screen": "screen",
+      "job_show": "show",
+      "job_cancel": "cancel",
+      "job_retry": "retry",
+      "job_pause": "pause",
+      "job_resume": "resume",
+      "job_prioritize": "prioritize",
+      "last_job": "last job",
+      "engine_restart": "restart",
+      "engine_sleep": "sleep",
+      "engine_wake": "wake",
+      "undo_last": "last file batch",
+      "undo_batch": "batch {{id}}",
+      "cache_limit_gb": "page cache limit (GB)"
+    },
+    "scope": {
+      "title": "Scope",
+      "doc_type": "Type",
+      "date_from": "From",
+      "date_to": "To",
+      "folder": "Folder",
+      "documents": "Documents",
+      "doc_ids": "{{count}} selected",
+      "any": "(all)"
+    },
+    "editor": {
+      "step": "{{index}}. {{op}}",
+      "param_default": "(default)",
+      "list_hint": "comma-separated",
+      "scalar_hint": "string · number · true/false"
+    },
+    "card": {
+      "title": "Plan",
+      "aria": "Plan: {{summary}}",
+      "source": "source: {{source}}",
+      "interpretation": "Interpretation: {{summary}}",
+      "steps": "Steps",
+      "preview_count": "preview {{shown}} of {{total}}",
+      "show_all": "Show all",
+      "show_less": "Show less",
+      "held": "(held) move after review",
+      "missing_values": "unknown values: {{vars}}",
+      "organize_summary": "{{moves}} moves · {{held}} held · {{unchanged}} unchanged",
+      "export_path": "{{count}} documents → {{path}}",
+      "overwrite": "(overwrites the existing file)",
+      "impact": "Side effects: {{effects}} · {{count}} documents in scope",
+      "impact_moves": "≤{{count}} file moves (journaled, undoable)",
+      "impact_delete": "{{count}} to the recycle bin (undoable)",
+      "impact_export": "{{count}} file(s) created",
+      "impact_none": "none",
+      "needs_confirmation": "needs confirmation",
+      "only_reviewed": "Do not move documents that are not reviewed",
+      "warnings": "Warnings",
+      "execute": "Approve and run",
+      "run": "Run",
+      "edit": "Edit plan",
+      "edit_done": "Done editing",
+      "rephrase": "Rephrase",
+      "cancel": "Cancel",
+      "executing": "Starting…",
+      "executed": "Executed",
+      "cancelled": "Cancelled",
+      "invalid": "The plan cannot run. Edit it and try again.",
+      "preview_error": "Preview update failed: {{message}}",
+      "preview_caption": "Organise preview (from → to)",
+      "columns": {
+        "from": "From",
+        "to": "To",
+        "status": "Status"
+      }
+    },
+    "execution": {
+      "title": "Running · job #{{id}}",
+      "finished": "Execution finished",
+      "queued": "Queued",
+      "paused": "Paused",
+      "pause": "Pause",
+      "resume": "Resume",
+      "cancel": "Cancel",
+      "open_jobs": "Open Jobs",
+      "gate_notice": "Interactive requests are handled at the next page boundary (≈{{seconds}}s)",
+      "job_missing": "The job is no longer in the job book.",
+      "job_removed": "Removed from the job list"
+    },
+    "result": {
+      "title": "Result",
+      "done": "Done",
+      "failed": "Failed",
+      "cancelled": "Cancelled",
+      "step_failed": "failed: {{error}}",
+      "status": {
+        "pending": "pending",
+        "running": "running",
+        "done": "done",
+        "skipped": "skipped",
+        "failed": "failed",
+        "ui": "handled in the UI",
+        "cancelled": "cancelled"
+      },
+      "open_review": "Open review queue ({{count}})",
+      "moves": "Move log",
+      "undo": "↶ Undo",
+      "undone": "{{restored}} restored ({{skipped}} skipped)",
+      "hits": "{{count}} search hits",
+      "item_status": {
+        "move": "move",
+        "unchanged": "unchanged",
+        "held": "held",
+        "missing": "missing file",
+        "done": "done",
+        "failed": "failed"
+      },
+      "undo_last_batch": "↶ Undo last batch",
+      "moves_caption": "Move log (from → to)"
+    },
+    "aggregate": {
+      "title": "Aggregate — {{summary}}",
+      "range": "{{from}} – {{to}}",
+      "basis": {
+        "doc_date": "basis: document date",
+        "imported_at": "basis: import date",
+        "mixed": "basis: document / import date (mixed)"
+      },
+      "count": "{{count}} {{type}}",
+      "all_types": "documents",
+      "missing": "{{count}} without a value",
+      "won": "{{value}} KRW",
+      "unit_count": "{{value}}",
+      "split": "= reviewed {{reviewed_count}} {{reviewed}} + pending {{unreviewed_count}} {{unreviewed}}",
+      "include_unreviewed": "Include unreviewed",
+      "groups": "By group",
+      "documents": "Documents",
+      "columns": {
+        "group": "Group",
+        "value": "Value",
+        "count": "Count",
+        "reviewed": "Reviewed",
+        "unreviewed": "Pending"
+      },
+      "open_doc": "Open document",
+      "evidence": "Evidence: the '{{field}}' field of each document"
+    },
+    "clarify": {
+      "title": "Clarification",
+      "fallback": "What would you like to do? Please be a little more specific.",
+      "no_model": "No planner model is loaded, so only the phrase rules were used. Load the model to understand more commands.",
+      "load_model": "Load model ({{model}})",
+      "open_models": "Open model manager",
+      "loading": "Loading the model…",
+      "retry_hint": "Answer the question or rephrase the command."
+    },
+    "ui": {
+      "set_setting": "Setting changed: {{key}} = {{value}}",
+      "set_model": "Loading model {{id}}",
+      "set_profile": "Profile: {{profile}}",
+      "open_document": "Opening document: {{name}}",
+      "open_page": "Opening {{name}} page {{page}}",
+      "open_folder": "Opening folder: {{folder}}",
+      "define_schema": "Create the schema on the schema screen from '{{description}}'.",
+      "job": "Job {{action}}: #{{id}}",
+      "job_none": "No matching job.",
+      "engine_restart": "Restarting the engine.",
+      "engine_sleep": "Unloaded {{count}} model(s).",
+      "engine_wake": "Engine woken up.",
+      "reindex": "Rebuilding the search index.",
+      "inbox_watch_on": "Inbox watching turned on.",
+      "inbox_watch_off": "Inbox watching turned off.",
+      "document_not_found": "Document not found: {{ref}}",
+      "unknown_screen": "Unknown screen: {{ref}}",
+      "noop": "Nothing to do."
+    }
   },
   "models": {
     "title": "Model manager",
@@ -770,7 +1056,8 @@
       "no_fields": "No fields selected.",
       "no_split_boundary": "Pick a split page inside the document (page 2 or later).",
       "merge_two": "Select at least two documents to merge.",
-      "table_not_found": "Table not found."
+      "table_not_found": "Table not found.",
+      "plan_clarify": "The plan is a clarification question — answer it first."
     }
   },
   "startup": {
@@ -783,10 +1070,11 @@
   "jobs": {
     "title": "Jobs",
     "clear_finished": "Clear finished",
-    "p5_hint": "Jobs run in the order requested; document processing (classify · OCR · extract) runs one job at a time (later requests wait). Pause, priorities and retries arrive in a later phase.",
     "tabs": {
-      "active": "Active",
-      "finished": "Finished"
+      "queued": "Queued",
+      "active": "Running",
+      "finished": "Finished",
+      "failed": "Failed"
     },
     "empty": "No active jobs.",
     "empty_finished": "No finished jobs.",
@@ -804,21 +1092,29 @@
       "knowledge_embed": "Embeddings",
       "pipeline": "Document processing",
       "document_split": "Document split",
-      "document_merge": "Document merge"
+      "document_merge": "Document merge",
+      "plan": "Plan",
+      "export": "Export",
+      "organize": "Organize",
+      "undo": "Undo",
+      "redo": "Redo"
     },
     "state": {
       "queued": "Queued",
       "running": "Running",
       "done": "Done",
       "failed": "Failed",
-      "cancelled": "Cancelled"
+      "cancelled": "Cancelled",
+      "paused": "Paused",
+      "interrupted": "Interrupted"
     },
     "subject": {
       "files": "{{count}} file(s)",
       "documents": "{{count}} document(s)",
       "inbox": "inbox folder",
       "library": "library",
-      "engine": "engine"
+      "engine": "engine",
+      "entries": "{{count}} entries"
     },
     "detail": {
       "import_summary": "imported {{imported}} · relinked {{relinked}} · failed {{failed}} · skipped {{skipped}}",
@@ -830,8 +1126,47 @@
       "embed_rebuilt": "{{summary}} (rebuilt for a new model)",
       "process_summary": "processed {{processed}} · classified {{classified}} · OCR {{ocr}} pages · extracted {{extracted}} · review {{review}} · failed {{failed}}",
       "split_summary": "split into {{count}}",
-      "merge_summary": "merged {{count}}"
-    }
+      "merge_summary": "merged {{count}}",
+      "plan_summary": "plan {{done}}/{{total}} · {{summary}}",
+      "step_progress": "{{step}}/{{steps}} · {{stage}}",
+      "step_progress_doc": "{{step}}/{{steps}} · {{stage}} · {{name}} ({{done}}/{{total}})",
+      "exported": "exported {{count}} documents → {{path}}",
+      "organize_summary": "moved {{moved}} · failed {{failed}} · skipped {{skipped}}",
+      "undo_summary": "restored {{restored}} · skipped {{skipped}}",
+      "nothing_to_undo": "nothing to undo",
+      "nothing_to_redo": "nothing to redo",
+      "interrupted": "interrupted by app shutdown (retryable)",
+      "workspace_closed": "workspace closed"
+    },
+    "empty_queued": "No queued jobs.",
+    "empty_failed": "No failed jobs.",
+    "pause": "Pause",
+    "resume": "Resume",
+    "retry": "Retry",
+    "prioritize": "Prioritize",
+    "attempts": "attempt {{count}}",
+    "result": "Result",
+    "result_export": "{{documents}} documents · {{rows}} rows",
+    "priority": {
+      "low": "Low",
+      "normal": "Normal",
+      "high": "High",
+      "interactive": "Interactive"
+    },
+    "error": {
+      "engine_not_running": "The engine is not running.",
+      "model_not_loaded": "The model is not loaded.",
+      "workspace_closed": "Interrupted: the workspace was closed.",
+      "interrupted": "Interrupted by app shutdown (retryable).",
+      "cancelled": "Cancelled.",
+      "no_model": "No vision model is loaded. Load one on the Models screen.",
+      "schema_not_found": "Schema not found: {{name}}",
+      "export_exists": "A file with this name already exists (overwrite required).",
+      "path_outside": "The output path is outside the workspace.",
+      "no_documents": "No matching documents.",
+      "step": "{{op}}: {{message}}"
+    },
+    "result_loading": "Loading result…"
   },
   "library": {
     "title": "Document library",
@@ -906,7 +1241,9 @@
     "kb_added_one": "Added {{count}} document to '{{name}}'.",
     "review_pending": "Review",
     "review_open": "Open in the review queue: {{name}}",
-    "process_started": "Processing started."
+    "process_started": "Processing started.",
+    "organize_selected": "Organise…",
+    "export_selected": "Export…"
   },
   "documents": {
     "status": {
@@ -1633,5 +1970,251 @@
     "current": "Current item",
     "status_line": "{{done}} / {{total}} handled",
     "announce": "Current item {{title}} ({{index}}/{{total}})"
+  },
+  "organize": {
+    "tabs": {
+      "organize": "Organise",
+      "export": "Export",
+      "history": "History"
+    },
+    "scope": {
+      "title": "Document scope",
+      "mode": "Scope",
+      "all": "All documents",
+      "selection": "Library selection ({{count}})",
+      "folder": "Folder: {{folder}}",
+      "root_folder": "(workspace root)",
+      "doc_type": "Type",
+      "all_types": "All types",
+      "date_from": "From",
+      "date_to": "To",
+      "date_hint": "By document date (import date when unknown)"
+    },
+    "name": {
+      "title": "File-name template",
+      "keep": "Keep file names",
+      "variables": "Insert variable",
+      "insert": "Insert {{label}}",
+      "example": "Example",
+      "example_doc": "Sample document: receipt · 스타벅스 역삼점 · 2026-10-14 · 12,500 · scan_0008.jpg (inbox/)",
+      "reset": "Reset to default"
+    },
+    "variables": {
+      "year": "Year",
+      "month": "Month",
+      "day": "Day",
+      "doc_type": "Type",
+      "vendor": "Vendor",
+      "total": "Total",
+      "title": "Title",
+      "original_name": "Original name",
+      "name": "Original name",
+      "tags": "Tags",
+      "seq": "Sequence",
+      "ext": "Extension"
+    },
+    "folder": {
+      "title": "Folder template",
+      "preset": "Group by",
+      "presets": {
+        "month": "By month",
+        "vendor": "By vendor",
+        "doc_type": "By type",
+        "custom": "Custom"
+      },
+      "keep": "Keep folders"
+    },
+    "only_reviewed": "Reviewed documents only",
+    "only_reviewed_hint": "When on, documents waiting for review are held back. The default lives in Settings › Processing.",
+    "preview": "Preview",
+    "previewing": "Building preview…",
+    "run": "Run",
+    "summary": "Move {{moves}} · Held {{held}} · Unchanged {{unchanged}} · Unknown values {{needs_review}}",
+    "summary_missing_files": "Missing files {{count}}",
+    "columns": {
+      "name": "Document",
+      "from": "Current path",
+      "to": "New path",
+      "status": "Status"
+    },
+    "status": {
+      "move": "Move",
+      "unchanged": "Unchanged",
+      "held": "Held (review pending)",
+      "missing": "File missing",
+      "done": "Done",
+      "failed": "Failed"
+    },
+    "reason": {
+      "review_pending": "Review pending",
+      "missing_file": "File missing",
+      "source_changed": "Source changed",
+      "document_missing": "Document missing"
+    },
+    "unknown_values": "Unknown values: {{vars}}",
+    "show_all": "Show all ({{count}})",
+    "show_less": "Show less",
+    "rows_shown": "{{shown}} / {{total}} rows shown",
+    "empty_plan": "No documents in scope.",
+    "confirm_title": "Run organise",
+    "confirm_body": "{{count}} file(s) will be moved / renamed. The operation is journaled and can be undone.",
+    "batch_label": "Organise {{count}} file(s)",
+    "running": "Organising…",
+    "started": "Organise job started.",
+    "done": "Moved {{moved}} · Failed {{failed}}",
+    "cancelled": "The organise job was cancelled.",
+    "failed": "Organise failed: {{message}}",
+    "undo": "Undo",
+    "undo_done": "{{restored}} restored · {{skipped}} skipped",
+    "undo_started": "Undo job started.",
+    "redo_started": "Redo job started.",
+    "errors": {
+      "organize_nothing": "Nothing to move.",
+      "template_variable": "Unknown template variable: {{vars}}",
+      "nothing_to_undo": "Nothing to undo.",
+      "nothing_to_redo": "Nothing to redo.",
+      "batch_already_undone": "This batch was already undone.",
+      "no_documents": "No documents in scope."
+    },
+    "history": {
+      "title": "Batch history",
+      "hint": "File moves, renames and deletions are journaled and can be undone per batch. File hashes are checked first; changed items are skipped.",
+      "empty": "No file operations recorded yet.",
+      "kind": {
+        "organize": "Organise",
+        "rename": "Rename",
+        "move": "Move",
+        "delete": "Delete",
+        "undo": "Undo",
+        "redo": "Redo"
+      },
+      "entries": "{{count}} item(s)",
+      "undone": "Undone",
+      "redo": "Redo",
+      "show_entries": "Show items",
+      "hide_entries": "Hide items",
+      "entry_kind": {
+        "move": "Move",
+        "rename": "Rename",
+        "delete": "Delete"
+      },
+      "no_entries": "No items.",
+      "undo_reason": {
+        "missing": "File missing",
+        "changed": "Changed",
+        "target_occupied": "Target location occupied",
+        "os_trash": "OS recycle bin (restore manually)"
+      },
+      "undo_failed": "Cannot undo: {{reason}}"
+    }
+  },
+  "export": {
+    "title": "Export wizard",
+    "target": {
+      "title": "Target",
+      "fields": "Fields",
+      "table": "Tables",
+      "text": "Body text"
+    },
+    "target_hint": {
+      "fields": "Extracted field values (schema columns per type)",
+      "table": "Tables found in OCR / text layer",
+      "text": "Page text"
+    },
+    "format": {
+      "title": "Format",
+      "xlsx": "XLSX",
+      "csv": "CSV",
+      "jsonl": "JSONL",
+      "md": "Markdown",
+      "pdf_searchable": "Searchable PDF"
+    },
+    "pdf_hint": "A searchable PDF puts an invisible text layer over the page images. The target is fixed to body text.",
+    "scope_title": "Scope",
+    "only_reviewed": "Reviewed documents only",
+    "columns": {
+      "title": "Columns",
+      "hint": "Choose a type to pick its schema fields. With nothing picked every field is exported.",
+      "all": "Select all",
+      "none": "Clear",
+      "common": "Common columns",
+      "evidence": "Evidence",
+      "confidence": "Confidence",
+      "status": "Status",
+      "selected": "{{selected}} / {{total}} selected",
+      "none_selected": "Select at least one column to export."
+    },
+    "layout": {
+      "title": "Layout",
+      "sheet_per_type": "Sheet per type + items sheet",
+      "single": "Single sheet"
+    },
+    "path": {
+      "title": "Save path",
+      "hint": "Relative to the workspace. Default: exports/YYYY-MM-DD_<type>.<ext>",
+      "overwrite": "Overwrite existing file",
+      "exists": "A file with this name already exists."
+    },
+    "preview_line": "{{documents}} document(s) · {{columns}} column(s)",
+    "preview_sheets": "Sheets: {{sheets}}",
+    "preview_skipped": "Skipped {{count}} (review pending)",
+    "preview_loading": "Computing preview…",
+    "run": "Export",
+    "started": "Export job started.",
+    "running": "Exporting…",
+    "result_title": "Export finished",
+    "result_rows": "{{documents}} document(s) · {{rows}} row(s)",
+    "result_sheets": "Sheets: {{sheets}}",
+    "result_overwritten": "The existing file was overwritten.",
+    "result_skipped": "Skipped {{count}}",
+    "extra_files": "Additional files",
+    "open_folder": "Open folder",
+    "failed": "Export failed: {{message}}",
+    "cancelled": "The export was cancelled.",
+    "errors": {
+      "export_exists": "A file with this name already exists. Turn on 'Overwrite existing file' and try again.",
+      "path_outside": "The save path must stay inside the workspace (outside the .doculens folder).",
+      "no_documents": "No documents to export."
+    },
+    "table_xlsx": "Save as XLSX (all tables of the document)",
+    "table_xlsx_exists": "A file with this name already exists. Change the path or choose overwrite on the Export tab.",
+    "table_xlsx_done": "Table XLSX saved: {{path}}"
+  },
+  "aggregate": {
+    "title": "Aggregate",
+    "field": "Field",
+    "fn_label": "Function",
+    "count": "Count",
+    "fn": {
+      "sum": "Sum",
+      "count": "Count",
+      "avg": "Average",
+      "min": "Min",
+      "max": "Max"
+    },
+    "include_unreviewed": "Include review pending",
+    "run": "Aggregate",
+    "monthly": "By month",
+    "collapse": "Collapse aggregate bar",
+    "expand": "Expand aggregate bar",
+    "count_value": "{{count}}",
+    "reviewed": "reviewed {{count}} {{value}}",
+    "pending": "pending {{count}} {{value}}",
+    "pending_excluded": "pending {{count}} {{value}} excluded",
+    "reviewed_count": "reviewed {{count}}",
+    "pending_count": "pending {{count}}",
+    "pending_count_excluded": "pending {{count}} excluded",
+    "missing": "no value {{count}}",
+    "group": "{{key}}: {{value}} ({{count}})",
+    "no_groups": "No groups.",
+    "empty": "No documents to aggregate.",
+    "basis": {
+      "doc_date": "by document date",
+      "imported_at": "by import date",
+      "mixed": "by document date (import date when unknown)"
+    },
+    "running": "Aggregating…",
+    "scope_selection": "{{count}} selected",
+    "scope_type": "type {{type}}"
   }
 }

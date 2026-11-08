@@ -45,6 +45,11 @@ lindera = "6.2"
 lindera-dictionary = "6.2"
 # Vector search inside SQLite (MIT OR Apache-2.0), statically linked into the bundled SQLite.
 sqlite-vec = "0.1.9"
+# Exports (design §3.2 BOM): XLSX writer (MIT OR Apache-2.0), CSV (Unlicense OR MIT),
+# searchable-PDF text layer writer (MIT OR Apache-2.0).
+rust_xlsxwriter = { version = "0.102", default-features = false }
+csv = "1.4"
+pdf-writer = "0.15"
 
 # See https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

@@ -14,9 +14,9 @@ use doculens_core::documents::import::ImportPlan;
 use doculens_core::engine::EngineManager;
 use doculens_core::fswatch::DirWatcher;
 use doculens_core::hw::HardwareSummary;
+use doculens_core::jobs::EngineGate;
 use doculens_core::modelstore::{self, DiscoveredModel, ModelWatcher};
 use doculens_core::paths::AppPaths;
-use doculens_core::pipeline::ProcessRequest;
 use doculens_core::registry::Registry;
 use doculens_core::settings::{AppSettings, LoadStatus};
 use doculens_core::workspace::{OpenOptions, Workspace};
@@ -136,14 +136,8 @@ pub struct AppState {
     pub import_plans: Mutex<HashMap<String, ImportPlan>>,
     /// Print bundle token → directory served by the `doculens://print/` route.
     pub print_bundles: Mutex<HashMap<String, PathBuf>>,
-    /// Processing requests that arrived while a pipeline job was running (run afterwards, in order).
-    pub pipeline_queue: Mutex<Vec<PendingProcess>>,
-}
-
-/// A deferred pipeline request (kept whole: force / profile / precision / schema / pages).
-#[derive(Debug, Clone)]
-pub struct PendingProcess {
-    pub req: ProcessRequest,
+    /// Single-slot engine arbitration: batch jobs yield to interactive requests at page boundaries (§3.9).
+    pub gate: EngineGate,
 }
 
 impl AppState {
@@ -186,7 +180,7 @@ impl AppState {
             inbox_watcher: Mutex::new(None),
             import_plans: Mutex::new(HashMap::new()),
             print_bundles: Mutex::new(HashMap::new()),
-            pipeline_queue: Mutex::new(Vec::new()),
+            gate: EngineGate::new(),
         }
     }
 

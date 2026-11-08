@@ -11,7 +11,7 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use doculens_core::db::Db;
 use doculens_core::documents::import::ImportSource;
-use doculens_core::pipeline::run::{self, PipelineDeps};
+use doculens_core::jobs::{JobPriority, JobSpec};
 use doculens_core::pipeline::schema::SchemaDraft;
 use doculens_core::pipeline::split as splitter;
 use doculens_core::pipeline::vlm::Vlm;
@@ -22,7 +22,7 @@ use crate::docs_bridge::{self, spawn_job_thread, AfterJob, DocsContext};
 use crate::engine_bridge;
 use crate::jobs::JobKind;
 use crate::knowledge_bridge;
-use crate::state::{AppState, PendingProcess, UiError, UiResult};
+use crate::state::{AppState, UiError, UiResult};
 
 pub const EV_PIPELINE_CHANGED: &str = "pipeline://changed";
 const MODEL_LOAD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
@@ -122,8 +122,8 @@ pub fn vision_model(app: &AppHandle, load: bool, cancel: Option<&AtomicBool>) ->
 // Jobs
 // ---------------------------------------------------------------------------
 
-/// Runs a processing request as a job. Returns `None` when a pipeline job is
-/// already active (the request is queued and runs afterwards).
+/// Queues a processing request as a persistent job (engine lane: one at a time,
+/// priority order, pausable, restored after a restart). Returns the job id.
 pub fn process_job(app: &AppHandle, req: ProcessRequest) -> UiResult<Option<String>> {
     let state = app.state::<AppState>();
     if state.switching.load(Ordering::SeqCst) {
@@ -132,94 +132,9 @@ pub fn process_job(app: &AppHandle, req: ProcessRequest) -> UiResult<Option<Stri
     if req.document_ids.is_empty() {
         return Err(UiError::invalid("no documents"));
     }
-    let ctx = context(app)?;
     let subject = format!("{} documents", req.document_ids.len());
-    let Some((job, cancel)) = state.jobs.create_if_idle(JobKind::Pipeline, &subject) else {
-        if let Ok(mut q) = state.pipeline_queue.lock() {
-            q.push(PendingProcess { req: req.clone() });
-        }
-        return Ok(None);
-    };
-    let job_id = job.clone();
-    let generation = ctx.docs.generation;
-    spawn_job_thread(
-        "doculens-pipeline",
-        app.clone(),
-        job.clone(),
-        move |app| {
-            let state = app.state::<AppState>();
-            state.jobs.update(&job_id, |j| j.detail = Some("loading model".into()));
-            let model = vision_model(app, true, Some(&cancel)).map_err(|e| e.message)?;
-            let model_ctx = model_context(&state, &model);
-            log::info!(
-                "pipeline: vision model {model} (context {})",
-                model_ctx.map_or("unknown".to_string(), |c| c.to_string())
-            );
-            let deps = PipelineDeps {
-                import: ctx.docs.deps(),
-                chat: &state.engine,
-                model,
-                settings: ctx.settings.clone(),
-                profile: ctx.profile,
-                pii_masking: ctx.pii_masking,
-                cancel: Some(&cancel),
-                ctx: model_ctx,
-            };
-            let total = req.document_ids.len() as u32;
-            let report = run::process(&deps, &req, &mut |p| {
-                let page_part = p.page.map(|(d, t)| if t == 0 { 0.0 } else { d as f32 / t as f32 }).unwrap_or(0.0);
-                let frac = if p.total == 0 {
-                    None
-                } else {
-                    Some(((p.done as f32 + page_part * 0.9) / p.total as f32).min(1.0))
-                };
-                let detail = match p.page {
-                    Some((d, t)) if t > 0 => format!("{} · {} ({d}/{t})", p.current, p.stage),
-                    _ if p.current.is_empty() => p.stage.clone(),
-                    _ => format!("{} · {}", p.current, p.stage),
-                };
-                state.jobs.progress(&job_id, frac, Some(p.done as u64), Some(total as u64), Some(detail));
-            })
-            .map_err(|e| e.to_string())?;
-            let mut ids = report.processed.clone();
-            ids.extend(report.failed.iter().map(|(id, _)| id.clone()));
-            if !ids.is_empty() {
-                docs_bridge::emit_changed(app, "updated", ids.clone());
-                ctx.emit(app, "processed", ids);
-            }
-            if report.cancelled {
-                return Err("cancelled".into());
-            }
-            let summary = format!(
-                "processed {} / classified {} / ocr pages {} / extracted {} / review {} / failed {}",
-                report.processed.len(),
-                report.classified,
-                report.ocr_pages,
-                report.extracted,
-                report.review_pending,
-                report.failed.len()
-            );
-            if !report.failed.is_empty() && report.processed.is_empty() {
-                return Err(report.failed.iter().map(|(id, e)| format!("{id}: {e}")).collect::<Vec<_>>().join("; "));
-            }
-            Ok(Some(summary))
-        },
-        Some(Box::new(move |app: &AppHandle| {
-            let state = app.state::<AppState>();
-            if state.switching.load(Ordering::SeqCst) || state.workspace_generation.load(Ordering::SeqCst) != generation
-            {
-                return;
-            }
-            // OCR text changed `updated_at` → the knowledge indexer re-chunks those documents.
-            knowledge_bridge::auto_index(app);
-            let next =
-                state.pipeline_queue.lock().ok().and_then(|mut q| if q.is_empty() { None } else { Some(q.remove(0)) });
-            if let Some(p) = next {
-                let _ = process_job(app, p.req);
-            }
-        }) as AfterJob),
-    );
-    Ok(Some(job))
+    let id = state.jobs.submit(JobSpec::Pipeline { req }, &subject, JobPriority::Normal)?;
+    Ok(Some(id))
 }
 
 /// Runs the configured auto pipeline on freshly imported documents (§3.4
@@ -359,7 +274,7 @@ pub fn form_derive(app: &AppHandle, doc_id: &str, name: Option<&str>) -> UiResul
         let c = model_context(&state, &m);
         Vlm::new(&state.engine, m, ctx.profile, None).with_context(c)
     });
-    Ok(forms::derive(&ctx.docs.deps(), vlm.as_ref(), &doc, name)?)
+    state.gate.interactive(|| Ok(forms::derive(&ctx.docs.deps(), vlm.as_ref(), &doc, name)?))
 }
 
 /// Creates or modifies a schema from a description (loads the model if needed).
@@ -375,16 +290,15 @@ pub fn nl_schema(app: &AppHandle, description: &str, base_id: Option<&str>) -> U
     let model = vision_model(app, true, None)?;
     let c = model_context(&state, &model);
     let vlm = Vlm::new(&state.engine, model, ctx.profile, None).with_context(c);
-    Ok(forms::nl_schema(&vlm, description, base.as_ref())?)
+    state.gate.interactive(|| Ok(forms::nl_schema(&vlm, description, base.as_ref())?))
 }
 
-/// Workspace opened: seed the sample forms, fail runs interrupted by a crash.
+/// Workspace opened: seed the sample forms, fail runs interrupted by a crash,
+/// bring the persistent job queue back.
 pub fn on_workspace_changed(app: &AppHandle) {
     let state = app.state::<AppState>();
-    if let Ok(mut q) = state.pipeline_queue.lock() {
-        q.clear();
-    }
     let Ok(ctx) = context(app) else { return };
+    state.jobs.restore_from_workspace();
     let app2 = app.clone();
     std::thread::Builder::new()
         .name("doculens-pipeline-init".into())

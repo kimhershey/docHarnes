@@ -3,6 +3,19 @@
 // backend so the whole UI can be exercised without the desktop runtime.
 
 import type {
+  AggregateRequest,
+  AggregateResult,
+  ExecuteResponse,
+  ExportPreview,
+  ExportRequest,
+  JournalBatch,
+  JournalEntry,
+  OrganizePlan,
+  OrganizeRequest,
+  Plan,
+  PlanResponse,
+  UiPlanContext,
+  UndoResponse,
   Answer,
   AnswerKind,
   AnswerRequest,
@@ -256,6 +269,24 @@ export const api = {
   pipelineTableExport: (documentId: string, page: number, index: number, path: string) => invoke<void>("pipeline_table_export", { documentId, page, index, path }),
   pipelineSplit: (documentId: string, boundaries: number[]) => invoke<string>("pipeline_split", { documentId, boundaries }),
   pipelineMerge: (ids: string[], name: string | null = null) => invoke<string>("pipeline_merge", { ids, name }),
+
+  // -- planner / organise / journal / aggregate / export / job control (P5) --
+  plannerPlan: (text: string, context: UiPlanContext = {}) => invoke<PlanResponse>("planner_plan", { text, context }),
+  plannerExecute: (plan: Plan, text: string, context: UiPlanContext = {}) => invoke<ExecuteResponse>("planner_execute", { args: { plan, text, context } }),
+  organizePlan: (req: OrganizeRequest) => invoke<OrganizePlan>("organize_plan", { req }),
+  organizeApply: (plan: OrganizePlan, label: string | null = null) => invoke<string>("organize_apply", { plan, label }),
+  journalBatches: (limit = 50) => invoke<JournalBatch[]>("journal_batches", { limit }),
+  journalEntries: (batchId: string) => invoke<JournalEntry[]>("journal_entries", { batchId }),
+  journalUndo: (batchId: string | null = null) => invoke<UndoResponse>("journal_undo", { batchId }),
+  journalRedo: () => invoke<UndoResponse>("journal_redo"),
+  aggregateRun: (req: AggregateRequest) => invoke<AggregateResult>("aggregate_run", { req }),
+  exportPreview: (req: ExportRequest) => invoke<ExportPreview>("export_preview", { req }),
+  exportRun: (req: ExportRequest) => invoke<string>("export_run", { req }),
+  jobsGet: (jobId: string) => invoke<Job | null>("jobs_get", { jobId }),
+  jobsPause: (jobId: string) => invoke<boolean>("jobs_pause", { jobId }),
+  jobsResume: (jobId: string) => invoke<boolean>("jobs_resume", { jobId }),
+  jobsRetry: (jobId: string) => invoke<boolean>("jobs_retry", { jobId }),
+  jobsPrioritize: (jobId: string) => invoke<boolean>("jobs_prioritize", { jobId }),
 };
 
 /** Native multi-file picker for documents (Tauri only). Returns [] when cancelled or unavailable. */
