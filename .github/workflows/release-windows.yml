@@ -46,6 +46,8 @@ jobs:
     env:
       # Authenticates scripts/fetch-engine.mjs (GitHub API rate limit) and `gh release …`.
       GH_TOKEN: ${{ github.token }}
+      # Release downloads: more retries than the default 4 (scripts/lib/fetch-retry.mjs).
+      DOCULENS_FETCH_ATTEMPTS: "6"
     steps:
       - uses: actions/checkout@v4
         with:

@@ -15,7 +15,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { downloadBuffer } from "./lib/fetch-retry.mjs";
+import { downloadGithubAsset, githubReleaseAsset } from "./lib/fetch-retry.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifest = JSON.parse(readFileSync(path.join(ROOT, "engines", "pdfium.json"), "utf8"));
@@ -41,7 +41,8 @@ const dest = opt("dest", flag("bundle") ? path.join(ROOT, "src-tauri", "resource
 
 const url = `https://github.com/bblanchon/pdfium-binaries/releases/download/${encodeURIComponent(manifest.tag)}/${entry.file}`;
 console.log(`downloading ${url}`);
-const buf = await downloadBuffer(url, { headers: { "User-Agent": "DocuLens-fetch-pdfium" } });
+const asset = await githubReleaseAsset({ owner: "bblanchon", repo: "pdfium-binaries", tag: manifest.tag, name: entry.file, userAgent: "DocuLens-fetch-pdfium" });
+const buf = await downloadGithubAsset({ apiUrl: asset?.url, browserUrl: url, userAgent: "DocuLens-fetch-pdfium" });
 const sha = createHash("sha256").update(buf).digest("hex");
 console.log(`  sha256 ${sha}`);
 if (entry.sha256 && entry.sha256 !== sha) {
