@@ -4,7 +4,8 @@
 Offline, Windows-only desktop client (Tauri 2 + React/TypeScript UI, Rust core)
 that processes Korean/English business documents with a local VLM
 (Qwen3.5-4B via llama-server). Design: `docs/design/doculens-design-v1.1.md`
-(Korean, authoritative). Status and next steps: `docs/HANDOFF.md`.
+(Korean, authoritative). Status and next steps: `docs/HANDOFF.md`. How to install / run / build / verify on a
+user PC: `docs/RUN-GUIDE.md`.
 
 ## Hard rules
 - **Licenses**: only dependencies without a source-disclosure obligation
@@ -33,6 +34,7 @@ that processes Korean/English business documents with a local VLM
 - PDFium (optional, enables the render/import tests): `node scripts/fetch-pdfium.mjs --dest /tmp/pdfium` then
   `DOCULENS_PDFIUM=/tmp/pdfium/libpdfium.so cargo test -p doculens-core`.
 - Sample documents: `DOCULENS_FIXTURE_OUT=<dir> cargo test -p doculens-core --lib -- --ignored gen_fixtures`.
+- Export samples (XLSX / CSV / JSONL / MD / searchable PDF from seeded data): `DOCULENS_EXPORT_OUT=<dir> cargo test -p doculens-core --lib -- --ignored gen_export_samples`.
 - ko-dic (optional, enables the morphological tokenizer tests; the built-in simple analyzer is used otherwise):
   `node scripts/fetch-kodic.mjs --dest /tmp/kodic` (downloads the pinned mecab-ko-dic tarball and builds it with
   `cargo run -p doculens-kodic`) then `DOCULENS_KODIC=/tmp/kodic cargo test -p doculens-core`.

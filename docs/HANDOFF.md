@@ -2,6 +2,7 @@
 
 > 단계마다 새 세션으로 진행합니다. 다음 세션은 이 파일과 `CLAUDE.md`,
 > `docs/design/doculens-design-v1.1.md` 만 읽으면 이어서 작업할 수 있습니다.
+> 사용자 PC에서 설치·실행·빌드·검증하는 절차는 `docs/RUN-GUIDE.md`, 확인 항목은 `docs/user-pc-checklist.md`.
 
 ## 범위 결정 (2026-11-03)
 
@@ -745,7 +746,7 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 
 | 항목 | 결과 |
 |---|---|
-| `cargo test --workspace` | 205 통과(2 ignored) — P5 모듈 38건: 플래너 10(예시 명령 12종+α, 규칙 오탐 14문장, 스펙↔serde, 검증기·범위 필수, 모델 경로 재질의·단계·축소 재시도, 실행기 2), 정리/저널 9(템플릿·diff·충돌·보류·적용·되돌리기/다시 실행·삭제 복원·복구 0건·redo 무효화), 작업 3(저장소·우선순위·게이트·패닉/취소), 집계 7, 내보내기 11 |
+| `cargo test --workspace` | 205 통과(3 ignored: `gen_fixtures`·`gen_export_samples` 생성기 등) — P5 모듈 38건: 플래너 10(예시 명령 12종+α, 규칙 오탐 14문장, 스펙↔serde, 검증기·범위 필수, 모델 경로 재질의·단계·축소 재시도, 실행기 2), 정리/저널 9(템플릿·diff·충돌·보류·적용·되돌리기/다시 실행·삭제 복원·복구 0건·redo 무효화), 작업 3(저장소·우선순위·게이트·패닉/취소), 집계 7, 내보내기 11 |
 | `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --check` | 통과 |
 | `cargo deny check licenses bans sources` | 통과(rust_xlsxwriter·csv·pdf-writer 추가) |
 | 실엔진(`tests/real_engine.rs`, 초소형 모델) | 채팅·KIE·**플래너 문법** 통과(아래) |
