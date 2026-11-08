@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "e2e": "playwright test",
     "licenses:check": "node scripts/check-licenses.mjs",
+    "notices": "node scripts/gen-notices.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

@@ -169,6 +169,42 @@ pub fn few_shots(ko: bool) -> Vec<(String, Value)> {
             }),
         ),
         (
+            "등록된 견적서 양식으로 ㈜한빛에 노트북 10대, 대당 1,200,000원, 유효기간 30일 견적서 만들어줘".to_string(),
+            json!({
+                "summary": "견적서 템플릿으로 ㈜한빛 노트북 10대 견적 초안을 만들어 문서 생성 화면에서 확인",
+                "intent": "draft_document",
+                "scope": {},
+                "operations": [{ "op": "draft_document", "form_ref": "quotation", "content": "㈜한빛에 노트북 10대, 대당 1,200,000원, 유효기간 30일 견적서", "output": "hwpx" }],
+                "requires_confirmation": true,
+                "confidence": 0.88
+            }),
+        ),
+        (
+            "세금계산서의 공급자 사업자번호는 사업자등록증 번호와 같아야 해 (프로젝트: 한빛 심사)".to_string(),
+            json!({
+                "summary": "한빛 심사 프로젝트에 공급자 사업자번호 일치 규칙을 추가(규칙 그리드에서 확인)",
+                "intent": "define_rule",
+                "scope": {},
+                "operations": [{ "op": "define_rule", "project": "한빛 심사", "description": "세금계산서의 공급자 사업자번호는 사업자등록증 번호와 같아야 해" }],
+                "requires_confirmation": true,
+                "confidence": 0.86
+            }),
+        ),
+        (
+            "check the consistency of the Hanbit audit project and draft a supplement request".to_string(),
+            json!({
+                "summary": "Run the project's rules, then draft a supplement request from the findings",
+                "intent": "check_consistency",
+                "scope": {},
+                "operations": [
+                    { "op": "check_consistency", "project": "Hanbit audit" },
+                    { "op": "request_supplement", "project": "Hanbit audit", "output": "docx" }
+                ],
+                "requires_confirmation": true,
+                "confidence": 0.84
+            }),
+        ),
+        (
             "switch to dark mode and use the 9B model (models: qwen3.5-4b-q6k, qwen3.5-9b-q4km)".to_string(),
             json!({
                 "summary": "Dark theme, then switch the active model to qwen3.5-9b-q4km",
@@ -279,6 +315,21 @@ pub fn context_block(ctx: &PlanContext, text: &str, compact: bool) -> String {
     }
     if let Some(f) = ctx.current_folder.as_deref() {
         s.push_str(&format!("{}: {f}\n", if ko { "현재 폴더" } else { "current folder" }));
+    }
+    if !ctx.projects.is_empty() {
+        let projects: Vec<String> = ctx
+            .projects
+            .iter()
+            .take(20)
+            .map(|p| {
+                if Some(p.id.as_str()) == ctx.current_project.as_deref() {
+                    format!("{} ({}, {})", p.name, p.status, if ko { "열림" } else { "open" })
+                } else {
+                    format!("{} ({})", p.name, p.status)
+                }
+            })
+            .collect();
+        s.push_str(&format!("{}: {}\n", if ko { "프로젝트" } else { "projects" }, projects.join(", ")));
     }
     if !ctx.selected_doc_ids.is_empty() {
         s.push_str(&format!(

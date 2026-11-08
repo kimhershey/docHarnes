@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "name": "예시 — gen_fixtures 합성 샘플(값은 형식 설명용이며 실제 정답이 아님)",
+  "strict_keys": false,
+  "documents": [
+    {
+      "path": "../fixtures/sample-photo.jpg",
+      "doc_type": "receipt",
+      "fields": { "store_name": "DocuLens 샘플", "total": "12,500", "approval_no": null },
+      "pages": [1],
+      "note": "합성 이미지(줄무늬) — 분류·OCR·추출 경로 확인용. null 은 '비어 있어야 함'"
+    },
+    {
+      "path": "../fixtures/sample-100p.pdf",
+      "doc_type": "general",
+      "pages": [1, 2],
+      "text": "DocuLens sample page 1 of 100\nDocuLens sample page 2 of 100",
+      "note": "텍스트 레이어 PDF — 기본 설정(ocr_digital_pdf=false)에서는 레이어 텍스트가 그대로 쓰여 CER 0 이 기대값"
+    },
+    {
+      "path": "../fixtures/sample-contract.docx",
+      "doc_type": "contract",
+      "fields": {},
+      "note": "DOCX → HTML → PDF(StubPdfPrinter) 변환 후 렌더 — 변환 경로 확인용"
+    },
+    {
+      "path": "../fixtures/sample-quote.hwpx",
+      "doc_type": "general",
+      "pages": [1]
+    }
+  ]
+}

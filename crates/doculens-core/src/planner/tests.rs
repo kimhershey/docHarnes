@@ -86,6 +86,8 @@ fn ctx() -> PlanContext {
         current_page: Some(1),
         document_count: 42,
         model_ids: vec!["qwen3.5-4b-q6k".into(), "qwen3.5-9b-q4km".into()],
+        projects: Vec::new(),
+        current_project: None,
     }
 }
 
@@ -229,6 +231,98 @@ fn example_commands_plan_without_a_model() {
     c.current_document = None;
     let r = plan(None, "문서 삭제해", &c).unwrap();
     assert!(r.plan.is_clarification(), "{r:?}");
+}
+
+#[test]
+fn p6_rules_plan_drafts_projects_explanations_and_retention() {
+    use super::{ProjectSummary, RetentionTarget};
+    use crate::generate::OutputFormat;
+    let mut c = ctx();
+    c.projects = vec![
+        ProjectSummary { id: "p-hanbit".into(), name: "한빛 심사".into(), status: "intake".into() },
+        ProjectSummary { id: "p-acme".into(), name: "Acme onboarding".into(), status: "validating".into() },
+    ];
+    c.current_project = Some("p-hanbit".into());
+    let planned = |text: &str| plan(None, text, &c).unwrap();
+
+    // Drafting: a built-in template picked from the keyword, the whole sentence as content.
+    let r = planned("등록된 견적서 양식으로 ㈜한빛에 노트북 10대, 대당 1,200,000원, 유효기간 30일 견적서 만들어줘");
+    assert_eq!(kinds(&r.plan), [OpKind::DraftDocument], "{r:?}");
+    assert!(
+        matches!(&r.plan.operations[0], Op::DraftDocument { form_ref, content, .. } if form_ref.as_deref() == Some("quotation") && content.contains("노트북"))
+    );
+    assert!(r.plan.requires_confirmation);
+    assert!(!has_errors(&r.issues), "{:?}", r.issues);
+    // Rewrite the open contract → the selection is a source.
+    let r = planned("이 계약서 내용으로 갑·을 바꿔서 계약서 다시 써줘");
+    assert!(
+        matches!(&r.plan.operations[0], Op::DraftDocument { form_ref, sources, .. } if form_ref.as_deref() == Some("contract") && sources == &["d1a2".to_string()]),
+        "{r:?}"
+    );
+    // A report from the aggregate card, as PDF: aggregate the receipts first, then draft from the totals.
+    let r = planned("지난달 영수증 집계 결과로 경비 보고서 초안 작성해줘 pdf로");
+    assert_eq!(kinds(&r.plan), [OpKind::Aggregate, OpKind::DraftDocument], "{r:?}");
+    assert_eq!(r.plan.scope.filter.doc_type.as_deref(), Some("receipt"));
+    assert_eq!(r.plan.scope.filter.date_from.as_deref(), Some("2026-10-01"));
+    assert!(
+        matches!(&r.plan.operations[1], Op::DraftDocument { form_ref, sources, output: Some(OutputFormat::Pdf), .. } if form_ref.as_deref() == Some("report") && sources.contains(&"aggregate".to_string())),
+        "{r:?}"
+    );
+    // Field labels that contain 작성 do not trigger drafting; organising wins.
+    let r = planned("계약서 작성일자별로 정리해줘");
+    assert!(!matches!(&r.plan.operations[0], Op::DraftDocument { .. }), "{r:?}");
+
+    // Projects.
+    let r = planned("'한빛 2차 심사' 프로젝트 만들어줘");
+    assert!(matches!(&r.plan.operations[0], Op::CreateProject { name, .. } if name == "한빛 2차 심사"), "{r:?}");
+    let r = planned("create project Acme renewal");
+    assert!(matches!(&r.plan.operations[0], Op::CreateProject { name, .. } if name == "Acme renewal"), "{r:?}");
+    let r = planned("선택한 문서를 한빛 심사 프로젝트에 추가해");
+    assert!(matches!(&r.plan.operations[0], Op::AddToProject { project: Some(p), .. } if p == "p-hanbit"), "{r:?}");
+    assert_eq!(r.plan.scope.doc_ids, vec!["d1a2".to_string()]);
+    let r = planned("정합성 검사 돌려줘");
+    assert!(
+        matches!(&r.plan.operations[0], Op::CheckConsistency { project: Some(p), .. } if p == "p-hanbit"),
+        "the open project is filled in: {r:?}"
+    );
+    assert!(!has_errors(&r.issues), "{:?}", r.issues);
+    let r = planned("세금계산서의 공급자 사업자번호는 사업자등록증 번호와 같아야 해");
+    assert!(
+        matches!(&r.plan.operations[0], Op::DefineRule { description, .. } if description.contains("같아야")),
+        "{r:?}"
+    );
+    assert!(r.plan.requires_confirmation);
+    let r = planned("보완요청서 만들어줘");
+    assert!(matches!(&r.plan.operations[0], Op::RequestSupplement { .. }), "{r:?}");
+    // Without an open project the project ops ask for one.
+    let mut c2 = c.clone();
+    c2.current_project = None;
+    let r = plan(None, "정합성 검사 돌려줘", &c2).unwrap();
+    assert!(r.plan.is_clarification() || has_errors(&r.issues), "{r:?}");
+
+    // Explain / compare.
+    let r = planned("이 문장 설명해줘");
+    assert!(matches!(&r.plan.operations[0], Op::Explain { .. }), "{r:?}");
+    let mut c3 = c.clone();
+    c3.selected_doc_ids = vec!["a".into(), "b".into()];
+    let r = plan(None, "선택한 두 문서 비교해줘", &c3).unwrap();
+    assert!(matches!(&r.plan.operations[0], Op::Compare { doc_ids, .. } if doc_ids.len() == 2), "{r:?}");
+    let r = planned("이 두 문서 비교해줘");
+    assert!(r.plan.is_clarification(), "one selected document: {r:?}");
+
+    // Retention and form registration (UI ops).
+    let r = planned("저널은 30일만 보관해");
+    assert!(matches!(&r.plan.operations[0], Op::SetRetention { item: RetentionTarget::Journal, days: 30 }), "{r:?}");
+    let r = planned("keep chat history for 6 months");
+    assert!(matches!(&r.plan.operations[0], Op::SetRetention { item: RetentionTarget::Chats, days: 180 }), "{r:?}");
+    let r = planned("원본 문서는 무기한 보존");
+    assert!(matches!(&r.plan.operations[0], Op::SetRetention { item: RetentionTarget::Documents, days: -1 }));
+    let r = planned("이 문서를 '휴가신청서' 양식으로 등록해");
+    assert!(
+        matches!(&r.plan.operations[0], Op::RegisterForm { doc_ref: Some(d), name: Some(n), .. } if d == "d1a2" && n == "휴가신청서"),
+        "{r:?}"
+    );
+    assert!(OpKind::RegisterForm.runs_in_ui() && OpKind::SetRetention.runs_in_ui());
 }
 
 #[test]

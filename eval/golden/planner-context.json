@@ -1,0 +1,161 @@
+{
+  "today": "2026-11-08",
+  "language": "ko",
+  "folders": [
+    "inbox",
+    "documents/2026/10",
+    "documents/2026/11"
+  ],
+  "doc_types": [
+    {
+      "slug": "receipt",
+      "label_ko": "영수증",
+      "label_en": "Receipt"
+    },
+    {
+      "slug": "tax_invoice",
+      "label_ko": "세금계산서",
+      "label_en": "Tax invoice"
+    },
+    {
+      "slug": "business_registration",
+      "label_ko": "사업자등록증",
+      "label_en": "Business registration"
+    },
+    {
+      "slug": "contract",
+      "label_ko": "계약서",
+      "label_en": "Contract"
+    },
+    {
+      "slug": "quotation",
+      "label_ko": "견적서",
+      "label_en": "Quotation"
+    }
+  ],
+  "schemas": [
+    {
+      "id": "s-receipt",
+      "name": "영수증",
+      "name_en": "Receipt",
+      "doc_type": "receipt",
+      "fields": [
+        {
+          "key": "store_name",
+          "label_ko": "상호",
+          "label_en": "Store",
+          "kind": "string"
+        },
+        {
+          "key": "datetime",
+          "label_ko": "일시",
+          "label_en": "Date / time",
+          "kind": "date"
+        },
+        {
+          "key": "supply_amount",
+          "label_ko": "공급가액",
+          "label_en": "Supply amount",
+          "kind": "amount"
+        },
+        {
+          "key": "vat",
+          "label_ko": "부가세",
+          "label_en": "VAT",
+          "kind": "amount"
+        },
+        {
+          "key": "total",
+          "label_ko": "합계",
+          "label_en": "Total",
+          "kind": "amount"
+        },
+        {
+          "key": "approval_no",
+          "label_ko": "승인번호",
+          "label_en": "Approval no.",
+          "kind": "string"
+        }
+      ]
+    },
+    {
+      "id": "s-tax",
+      "name": "세금계산서",
+      "name_en": "Tax invoice",
+      "doc_type": "tax_invoice",
+      "fields": [
+        {
+          "key": "issue_date",
+          "label_ko": "작성일자",
+          "label_en": "Issue date",
+          "kind": "date"
+        },
+        {
+          "key": "supply_total",
+          "label_ko": "공급가액 합계",
+          "label_en": "Supply total",
+          "kind": "amount"
+        },
+        {
+          "key": "tax_total",
+          "label_ko": "세액 합계",
+          "label_en": "Tax total",
+          "kind": "amount"
+        },
+        {
+          "key": "grand_total",
+          "label_ko": "합계금액",
+          "label_en": "Grand total",
+          "kind": "amount"
+        },
+        {
+          "key": "nts_approval_no",
+          "label_ko": "국세청 승인번호",
+          "label_en": "NTS approval no.",
+          "kind": "string"
+        }
+      ]
+    },
+    {
+      "id": "s-brn",
+      "name": "사업자등록증",
+      "name_en": "Business registration",
+      "doc_type": "business_registration",
+      "fields": [
+        {
+          "key": "registration_no",
+          "label_ko": "등록번호",
+          "label_en": "Registration no.",
+          "kind": "brn"
+        },
+        {
+          "key": "company_name",
+          "label_ko": "상호(법인명)",
+          "label_en": "Company name",
+          "kind": "string"
+        }
+      ]
+    }
+  ],
+  "tags": [
+    "경비",
+    "중요"
+  ],
+  "current_folder": "inbox",
+  "selected_doc_ids": [],
+  "current_document": "d1a2",
+  "current_page": 1,
+  "document_count": 42,
+  "model_ids": [
+    "qwen3.5-4b-q6k",
+    "qwen3.5-9b-q4km"
+  ],
+  "projects": [
+    {
+      "id": "p-hanbit",
+      "name": "한빛 납품",
+      "status": "intake"
+    }
+  ],
+  "current_project": "p-hanbit"
+}

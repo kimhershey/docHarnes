@@ -1,11 +1,15 @@
 # engines/
 
 `llama-server` builds the app can run (design §3.3 / §3.12). Binaries are
-**never committed**; they live under the app-data directory:
+**never committed**; they live under the app-data directory (replaceable per
+version) or, bundled by the installer, in the Tauri resource directory (flat,
+no version level):
 
 ```
-%LOCALAPPDATA%\DocuLens\engines\<version>\<pack>\llama-server.exe   (Windows)
+%LOCALAPPDATA%\DocuLens\engines\<version>\<pack>\llama-server.exe   (Windows, app data — wins over bundled)
 ~/.local/share/DocuLens/engines/<version>/<pack>/llama-server       (Linux, CI only)
+<install dir>\engines\<pack>\llama-server.exe                        (bundled: Lite = cpu + vulkan, Full = + cu121 + cu129)
+src-tauri/resources/engines/<pack>/                                 (where `--bundle` puts them before `tauri build`; git-ignored)
 ```
 
 | pack | source | notes |
@@ -32,28 +36,68 @@ build number; locally built binaries without tags report `0` and are accepted.
 ## Placing the official packs
 
 ```bash
-node scripts/fetch-engine.mjs --tag b12066 --packs cpu,vulkan
+node scripts/fetch-engine.mjs --tag b12066 --packs cpu,vulkan      # <app-data>/engines/b12066/<pack>/ (development, user PC)
+node scripts/fetch-engine.mjs --bundle --packs cpu,vulkan          # src-tauri/resources/engines/<pack>/ (tauri build bundles them)
+node scripts/fetch-engine.mjs --bundle --dry-run                   # print the target folders, no network
 ```
 
 The script reads the release asset list from the GitHub API, downloads the
 matching zips, verifies SHA-256 against `engines/manifest.json` (prints the
-hashes with `--pin` so they can be recorded the first time), and unpacks into
-`<app-data>/engines/<tag>/<pack>/`. `--dest <dir>` overrides the destination,
-`--linux` fetches the `ubuntu-x64` build for CI.
+hashes with `--pin` so they can be recorded the first time), wipes the target
+pack folder and unpacks into `<app-data>/engines/<tag>/<pack>/` — or, with
+`--bundle`, into the flat resource layout `src-tauri/resources/engines/<pack>/`
+that the installer ships as `engines/<pack>/`. `--dest <dir>` overrides the
+destination (versioned layout), `--linux` fetches the `ubuntu-x64` build for
+CI, and `GH_TOKEN` / `GITHUB_TOKEN` authenticates the API call (CI rate limits).
+`.github/workflows/release-windows.yml` runs the `--bundle` form before
+`tauri build`.
 
-## Building the CUDA packs (user PC, Windows)
+## Building the CUDA packs
 
-```powershell
-git clone --depth 1 --branch b12066 https://github.com/ggml-org/llama.cpp
-cmake -B build-cu121 -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="61;70;75;80;86;89;90" -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF
-cmake --build build-cu121 --config Release --target llama-server -j
-# copy build-cu121/bin/Release/* + cudart64_12.dll, cublas64_12.dll, cublasLt64_12.dll
-#   → %LOCALAPPDATA%\DocuLens\engines\b12066\cu121\
+The CUDA packs are built by the manual workflow **"CUDA engine packs (manual)"**
+(`.github/workflows/cuda-packs.yml`, inputs `pack` = `cu121` | `cu129`,
+`publish`, `allow_unsupported_compiler`) on a GitHub-hosted Windows runner. It
+reads the pack definition from `engines/manifest.json` (`toolkit_installer_url`
+— the official NVIDIA network installer, `toolkit_subpackages` — the silent
+`-s` component ids, `msvc_toolset` / `msvc_component` — the host compiler the
+toolkit supports, `archs`, `runtime_dlls`), installs the toolkit silently,
+clones llama.cpp at the pinned tag, builds with
+
+```
+cmake -S llama.cpp -B build -G "Ninja Multi-Config" -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="<archs>" ^
+  -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON ^
+  -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON
+cmake --build build --config Release -j
 ```
 
-The CUDA runtime DLLs stay inside that pack directory (NVIDIA EULA: app-private,
-never on the system PATH). `cu129` is the same with the 12.9 toolkit and
-`-DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;90;120"`.
+(`GGML_NATIVE=OFF` + `GGML_CPU_ALL_VARIANTS` make the CPU code portable like the
+official zips — a `-march=native` build from the runner would crash on other
+CPUs), and zips `llama-server.exe` + all `*.dll` from `build/bin/Release/` +
+`cudart64_12.dll`, `cublas64_12.dll`, `cublasLt64_12.dll` from the toolkit
+`bin/` + `LICENSE-llama.cpp.txt` + `NVIDIA-CUDA-EULA.txt` + `pack.json` as
+`DocuLens-EnginePack-<pack>-<tag>.zip` (+ `.sha256`). With `publish=true` the
+zip becomes an asset of the GitHub Release `v<app version>`; the Full
+installer build (`release-windows.yml`, `variant=full`) downloads exactly these
+assets and bundles them as `engines/cu121/` and `engines/cu129/`. A user PC can
+also unzip an asset into `%LOCALAPPDATA%\DocuLens\engines\<tag>\<pack>\`.
+
+| pack | toolkit | host compiler | archs |
+|---|---|---|---|
+| `cu121` | CUDA 12.1.1 network installer | MSVC 14.39 (VS 2022 17.9 toolset, installed on the runner — nvcc 12.1 rejects newer `cl`; `allow_unsupported_compiler=true` passes `-allow-unsupported-compiler` instead) | `61;70;75;80;86;89;90` (Pascal … Hopper incl. Turing SASS) |
+| `cu129` | CUDA 12.9.1 network installer | default VS 2022 toolset | `75;80;86;89;90;120` (adds Blackwell) |
+
+Building by hand on a Windows PC with the toolkit installed is the same
+sequence: `git clone --depth 1 --branch b12066 https://github.com/ggml-org/llama.cpp`,
+the `cmake` lines above (from a "x64 Native Tools" prompt), then copy the files
+listed above into `%LOCALAPPDATA%\DocuLens\engines\b12066\cu121\`.
+
+**NVIDIA CUDA EULA** (design appendix E): only the Attachment-A runtime
+libraries (cudart, cublas, cublasLt) are redistributed, they stay inside the
+app-private pack directory (never on the system PATH or in a shared location),
+the toolkit EULA text ships in the pack, no developer tools are redistributed,
+and the DocuLens application EULA must mirror NVIDIA's terms before a Full
+installer is distributed (still open). If DocuLens itself is ever released
+under an open-source license, the CUDA packs must become a separate download.
 
 ## Verifying a pack
 

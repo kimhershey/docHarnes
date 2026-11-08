@@ -182,6 +182,7 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
         issues.push(PlanIssue::error("operations", "clarify_mixed", "clarify must be the only operation"));
     }
     let scope_doc_type = plan.scope.filter.doc_type.clone();
+    let plan_scope_empty = plan.scope.is_empty();
     for (i, op) in plan.operations.iter_mut().enumerate() {
         let at = |field: &str| format!("operations[{i}].{field}");
         match op {
@@ -479,6 +480,158 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
                     issues.push(PlanIssue::error(at("question"), "question_empty", "clarify needs a question"));
                 }
             }
+            Op::DraftDocument { form_ref, format_description, content, sources, .. } => {
+                *content = content.trim().chars().take(6_000).collect();
+                if content.is_empty() {
+                    issues.push(PlanIssue::error(at("content"), "content_empty", "draft_document needs content"));
+                }
+                for (name, v) in [("form_ref", form_ref), ("format_description", format_description)] {
+                    if let Some(x) = v.as_mut() {
+                        *x = x.trim().chars().take(300).collect();
+                        if x.is_empty() {
+                            *v = None;
+                        } else if name == "form_ref"
+                            && !ctx.schemas.is_empty()
+                            && ctx.schema(x).is_none()
+                            && crate::generate::TemplateKind::parse(x).is_none()
+                            && !crate::generate::templates().iter().any(|t| {
+                                compact(&t.name_ko) == compact(x)
+                                    || compact(&t.name_en) == compact(x)
+                                    || t.keywords.iter().any(|k| compact(k) == compact(x))
+                            })
+                        {
+                            issues.push(PlanIssue::warn(
+                                at("form_ref"),
+                                "form_unknown",
+                                format!("'{x}' is not a registered form or built-in template; the layout is inferred"),
+                            ));
+                        }
+                    }
+                }
+                sources.retain(|s| !s.trim().is_empty());
+                sources.truncate(20);
+                for (i, src) in sources.iter_mut().enumerate() {
+                    *src = src.trim().to_string();
+                    if src != "selection" && src != "aggregate" && !crate::documents::is_safe_id(src) {
+                        issues.push(PlanIssue::error(
+                            at(&format!("sources[{i}]")),
+                            "source_invalid",
+                            format!("'{src}' is not a document id, 'selection' or 'aggregate'"),
+                        ));
+                    }
+                }
+            }
+            Op::RegisterForm { doc_ref, name, doc_type_slug } => {
+                for v in [doc_ref, name, doc_type_slug] {
+                    if let Some(x) = v.as_mut() {
+                        *x = x.trim().chars().take(200).collect();
+                        if x.is_empty() {
+                            *v = None;
+                        }
+                    }
+                }
+            }
+            Op::Explain { selection, question, .. } => {
+                for v in [&mut *selection, &mut *question] {
+                    if let Some(x) = v.as_mut() {
+                        *x = x.trim().chars().take(4_000).collect();
+                        if x.is_empty() {
+                            *v = None;
+                        }
+                    }
+                }
+                if selection.is_none() && question.is_none() {
+                    issues.push(PlanIssue::error(
+                        at("selection"),
+                        "selection_empty",
+                        "explain needs a selection or a question",
+                    ));
+                }
+            }
+            Op::Compare { doc_ids, aspects } => {
+                doc_ids.retain(|d| !d.trim().is_empty());
+                doc_ids.dedup();
+                if !(2..=5).contains(&doc_ids.len()) {
+                    issues.push(PlanIssue::error(at("doc_ids"), "compare_count", "compare needs 2 to 5 documents"));
+                }
+                aspects.retain(|a| !a.trim().is_empty());
+                aspects.truncate(10);
+            }
+            Op::CreateProject { name, template, doc_types_required } => {
+                *name = name.trim().chars().take(120).collect();
+                if name.is_empty() {
+                    issues.push(PlanIssue::error(at("name"), "name_empty", "create_project needs a name"));
+                } else if ctx.project(Some(name)).is_some() {
+                    issues.push(PlanIssue::warn(
+                        at("name"),
+                        "project_exists",
+                        format!("project '{name}' already exists"),
+                    ));
+                }
+                if let Some(t) = template.as_mut() {
+                    *t = t.trim().chars().take(120).collect();
+                    if t.is_empty() {
+                        *template = None;
+                    }
+                }
+                for (i, dt) in doc_types_required.iter_mut().enumerate() {
+                    match ctx.doc_type(dt) {
+                        Some(d) => *dt = d.slug.clone(),
+                        None if ctx.doc_types.is_empty() => {}
+                        None => issues.push(PlanIssue::error(
+                            at(&format!("doc_types_required[{i}]")),
+                            "doc_type_unknown",
+                            format!("unknown document type '{dt}'; known: {}", known_types(ctx)),
+                        )),
+                    }
+                }
+            }
+            Op::AddToProject { project, doc_ids } => {
+                check_project(project, ctx, &at("project"), &mut issues);
+                doc_ids.retain(|d| !d.trim().is_empty());
+                if doc_ids.is_empty() && plan_scope_empty {
+                    issues.push(PlanIssue::error(
+                        at("doc_ids"),
+                        "scope_required",
+                        "add_to_project needs documents: a selection, a folder / type filter or doc_ids",
+                    ));
+                }
+            }
+            Op::DefineRule { project, template, description } => {
+                *description = description.trim().chars().take(1_000).collect();
+                if description.is_empty() {
+                    issues.push(PlanIssue::error(
+                        at("description"),
+                        "description_empty",
+                        "define_rule needs a description",
+                    ));
+                }
+                if let Some(t) = template.as_mut() {
+                    *t = t.trim().chars().take(120).collect();
+                    if t.is_empty() {
+                        *template = None;
+                    }
+                }
+                if template.is_none() {
+                    check_project(project, ctx, &at("project"), &mut issues);
+                }
+            }
+            Op::CheckConsistency { project, rules } => {
+                check_project(project, ctx, &at("project"), &mut issues);
+                rules.retain(|r| !r.trim().is_empty());
+            }
+            Op::RequestSupplement { project, findings, .. } => {
+                check_project(project, ctx, &at("project"), &mut issues);
+                findings.retain(|r| !r.trim().is_empty());
+            }
+            Op::SetRetention { days, .. } => {
+                if *days < -1 {
+                    *days = -1;
+                }
+                if *days > 36_500 {
+                    issues.push(PlanIssue::error(at("days"), "days_range", "retention must be at most 36,500 days"));
+                }
+            }
             Op::SetInboxWatch { .. }
             | Op::Validate {}
             | Op::Reindex { .. }
@@ -511,6 +664,36 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
 
 fn known_types(ctx: &PlanContext) -> String {
     ctx.doc_types.iter().map(|d| format!("{}({})", d.slug, d.label_ko)).collect::<Vec<_>>().join(", ")
+}
+
+/// Resolves a project reference (id / name) to its id; `None` means the project open in the UI,
+/// which must exist when project ops are planned.
+fn check_project(project: &mut Option<String>, ctx: &PlanContext, path: &str, issues: &mut Vec<PlanIssue>) {
+    if let Some(p) = project.as_mut() {
+        *p = p.trim().chars().take(120).collect();
+        if p.is_empty() {
+            *project = None;
+        }
+    }
+    match project.as_deref() {
+        Some(r) => match ctx.project(Some(r)) {
+            Some(p) => *project = Some(p.id.clone()),
+            None if ctx.projects.is_empty() => {}
+            None => issues.push(PlanIssue::error(
+                path,
+                "project_unknown",
+                format!(
+                    "unknown project '{r}'; known: {}",
+                    ctx.projects.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
+                ),
+            )),
+        },
+        None => match ctx.current_project.clone() {
+            // The open project is the default target; the executor needs the id.
+            Some(id) => *project = Some(id),
+            None => issues.push(PlanIssue::error(path, "project_required", "no project is open: name the project")),
+        },
+    }
 }
 
 fn known_schemas(ctx: &PlanContext) -> String {

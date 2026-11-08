@@ -7,18 +7,46 @@ DocuLens를 **실제 Windows PC에서 설치·실행·빌드·검증**하는 절
 > 한눈에: ① 도구 설치 → ② `npm install` → ③ 엔진 팩·PDFium 받기 → ④ `npm run tauri dev`
 > → ⑤ 온보딩 3단계(워크스페이스 → 하드웨어 → 모델) → ⑥ 문서 가져오기·처리 → ⑦ 어시스턴트 명령.
 
-## 1. 실행 방식 세 가지
+## 1. 실행 방식 네 가지
 
 | 방식 | 명령 | 필요 조건 | 용도 |
 |---|---|---|---|
 | A. 데스크톱 개발 실행 | `npm run tauri dev` | Windows 10/11, Node 22, Rust stable(MSVC), VS Build Tools C++, WebView2 | 실제 엔진·모델·파일 처리까지 전 기능 |
 | B. 브라우저 미리보기 | `npm run dev` → http://localhost:1420 | Node 22만 | 화면 흐름 확인(모의 백엔드 — 실제 파일·모델 처리 없음) |
 | C. 설치파일 빌드 | `npm run tauri build` → `target\release\bundle\nsis\DocuLens_0.1.0_x64-setup.exe` | A와 동일(첫 빌드 때 NSIS를 자동으로 받음) | 다른 PC에 설치(사용자 단위 설치, 관리자 권한 불필요) |
+| D. 배포 설치파일 설치 | GitHub Releases → `DocuLens-Setup-Lite-<버전>-x64.exe` 다운로드 → 실행 | Windows 10 1803+/11 x64만(개발 도구 불필요) | **사용자 PC 권장 경로** — §1.1. 엔진 팩·PDFium·ko-dic 동봉, 모델만 앱에서 준비 |
 
 - 첫 `tauri dev`/`tauri build`는 Rust 의존성 전체를 컴파일하므로 수 분~십여 분 걸립니다. 이후에는 증분 빌드입니다.
-- GitHub Actions의 "Windows installer (manual)" 워크플로를 수동 실행하면 같은 설치파일(Lite)을 아티팩트
-  `DocuLens-Setup-Lite`로 받을 수 있습니다(런타임 자산은 포함되지 않음 — §2.2).
+- 방식 C의 로컬 빌드는 `src-tauri/resources/`에 들어 있는 것만 동봉합니다. 런타임 자산을 포함하려면 빌드 전에
+  `node scripts/fetch-engine.mjs --bundle --packs cpu,vulkan`, `node scripts/fetch-pdfium.mjs --bundle`,
+  `node scripts/fetch-kodic.mjs --bundle`, `npm run notices`를 실행합니다(§2.2). 고지 파일(`THIRD-PARTY-NOTICES.md`,
+  `sbom.cdx.json`, `licenses/THIRD-PARTY-LICENSES.txt`)은 `npm run notices`가 만들며 `tauri build`가 함께 담습니다.
+- GitHub Actions의 "Windows installer (manual)" 워크플로(`.github/workflows/release-windows.yml`)를 수동 실행하면 위
+  자산을 모두 동봉한 설치파일을 만듭니다. 입력: `ref`(기본 `main`), `variant`(`lite` | `full`), `publish`(릴리스 업로드).
+  결과는 아티팩트 `DocuLens-Setup-<Lite|Full>-<버전>-x64`(설치파일 + `.sha256`)이고, `publish=true`면 GitHub Release
+  `v<버전>`에 설치파일·해시·`THIRD-PARTY-NOTICES.md`·`sbom.cdx.json`을 올립니다. Full은 "CUDA engine packs (manual)"
+  워크플로가 먼저 릴리스에 올려 둔 `DocuLens-EnginePack-cu121-<태그>.zip`·`cu129`를 내려받아 넣습니다(`engines/README.md`).
 - Linux 실행은 개발·CI 전용입니다(배포 범위 외). 필요한 패키지는 `CLAUDE.md`의 "Linux build deps".
+
+### 1.1 배포 설치파일 설치 (방식 D)
+
+1. GitHub Releases의 `v<버전>`에서 `DocuLens-Setup-Lite-<버전>-x64.exe`(또는 `-Full-`)와 같은 이름의 `.sha256` 파일을 받습니다.
+   - **Lite**: 앱 + llama-server CPU·Vulkan 팩(`engines\cpu`, `engines\vulkan`) + PDFium(`pdfium\`) + ko-dic(`ko-dic\`)
+     + 고지 파일(`THIRD-PARTY-NOTICES.md`, `sbom.cdx.json`, `licenses\THIRD-PARTY-LICENSES.txt`). 약 200 MB.
+   - **Full**: Lite + CUDA 팩 `engines\cu121`(드라이버 CUDA 12.1~12.7) · `engines\cu129`(12.8+, RTX 50 포함). NVIDIA GPU가 없으면 Lite로 충분합니다.
+   - **모델(GGUF)은 어느 쪽에도 들어 있지 않습니다.** 첫 실행 뒤 모델 관리자에서 준비합니다(§2.3, §3).
+2. SHA-256을 확인합니다(명령 프롬프트 또는 PowerShell).
+   ```
+   certutil -hashfile DocuLens-Setup-Lite-0.1.0-x64.exe SHA256
+   ```
+   출력된 해시가 `.sha256` 파일의 값(공백 앞 64자)과 같아야 합니다(대소문자 무관). 다르면 실행하지 말고 다시 받으세요.
+3. 실행합니다. 설치파일은 **코드 서명이 없어** SmartScreen이 "Windows의 PC 보호" 창을 띄웁니다 → **추가 정보 → 실행**.
+   해시가 맞는 파일만 실행하세요. 사용자 단위 설치(관리자 권한 불필요)이며 설치 언어(한국어/영어)를 고를 수 있습니다.
+4. WebView2 Runtime은 Windows 10 1803+/11에 기본 포함입니다. 없으면 설치 중 Microsoft에서 자동으로 내려받습니다
+   (`downloadBootstrapper` — 이때만 인터넷이 필요. 완전 오프라인 PC는 Microsoft의 WebView2 Evergreen 독립 실행형 설치
+   관리자를 먼저 설치해 두세요).
+5. 설치 후 첫 실행에서 모델 관리자 엔진 카드에 동봉된 팩이 잡힙니다(백엔드 자동 선택 — §2.2). 더 새 엔진을 쓰려면
+   `%LOCALAPPDATA%\DocuLens\engines\<태그>\<팩>\`에 팩을 넣으면 그쪽이 동봉 팩보다 우선합니다.
 
 ## 2. 준비물 (Windows)
 
@@ -40,14 +68,16 @@ npm install
 
 | 자산 | 받는 방법 | 설치 위치 | 없을 때 |
 |---|---|---|---|
-| **llama-server 엔진 팩** | `node scripts/fetch-engine.mjs --tag b12066 --packs cpu,vulkan --pin` | `%LOCALAPPDATA%\DocuLens\engines\b12066\cpu\`, `...\vulkan\` | 엔진 카드에 "실행 파일을 찾지 못했습니다" → 분류·OCR·추출·답변 불가 |
-| **CUDA 팩**(NVIDIA, 선택) | `engines/README.md`대로 llama.cpp b12066을 CUDA 12.1(또는 12.9) 툴킷으로 자체 빌드 | `...\engines\b12066\cu121\` (`cu129`) | Vulkan/CPU 팩으로 동작(느림) |
+| **llama-server 엔진 팩** | `node scripts/fetch-engine.mjs --tag b12066 --packs cpu,vulkan --pin` (설치파일 동봉용은 `--bundle`) | `%LOCALAPPDATA%\DocuLens\engines\b12066\cpu\`, `...\vulkan\` (`--bundle`: `src-tauri\resources\engines\<팩>\`) | 엔진 카드에 "실행 파일을 찾지 못했습니다" → 분류·OCR·추출·답변 불가 |
+| **CUDA 팩**(NVIDIA, 선택) | Full 설치파일, 또는 GitHub Release 자산 `DocuLens-EnginePack-cu121-b12066.zip`(워크플로 "CUDA engine packs (manual)")을 풀어 넣기, 또는 `engines/README.md`대로 자체 빌드 | `...\engines\b12066\cu121\` (`cu129`) | Vulkan/CPU 팩으로 동작(느림) |
 | **PDFium**(PDF 렌더·텍스트 레이어) | `node scripts/fetch-pdfium.mjs` | `%LOCALAPPDATA%\DocuLens\pdfium\pdfium.dll` | PDF 가져오기·렌더 불가, 라이브러리 상단 "PDFium 없음" 경고 |
 | **ko-dic**(한국어 형태소 사전, 선택) | `node scripts/fetch-kodic.mjs` (Rust 필요, 약 82 MB, 수 분) | `%LOCALAPPDATA%\DocuLens\tokenizers\ko-dic\` | 간이 분석기로 동작(검색 재현율이 낮음) |
 | **VLM 모델**(GGUF + mmproj) | §2.3 | `<워크스페이스>\.doculens\models\<폴더>\` | 가져오기·검색·정리·내보내기만 가능 |
 
 - `--pin`은 받은 zip의 SHA-256을 `engines/manifest.json`에 기록합니다(첫 PC에서 한 번).
-- 설치파일에 PDFium·ko-dic을 동봉하려면 빌드 전에 `--bundle`로 받습니다(`src-tauri/resources/`에 들어감).
+- 설치파일에 엔진 팩·PDFium·ko-dic을 동봉하려면 빌드 전에 각 스크립트를 `--bundle`로 실행합니다
+  (`src-tauri/resources/{engines,pdfium,ko-dic}/`에 들어가며 git에는 올라가지 않음). `node scripts/fetch-engine.mjs --bundle --dry-run`은
+  네트워크 없이 대상 폴더만 보여 줍니다. 배포 설치파일(§1.1)에는 이미 들어 있으므로 이 표의 자산을 따로 받을 필요가 없습니다.
 - **팩 폴더 하나에는 백엔드 계열 하나만** 둡니다. CPU 팩 폴더에 `ggml-vulkan.dll`·`ggml-cuda.dll`이 섞이면 다른 백엔드가
   그래프를 가로채 "Compute error"가 납니다. 엔진은 b11747 미만 빌드를 거부합니다.
 - 백엔드 선택: NVIDIA 드라이버의 CUDA 12.8+ → `cu129`, 12.1~12.7 → `cu121`, 그 외 GPU → `vulkan`, GPU 없음 → `cpu`.
@@ -98,7 +128,15 @@ npm install
    "근거 없음" 배너가 뜹니다.
 7. **어시스턴트**(Ctrl+3) — 자연어 명령 → 플랜 카드(출처: 문장 규칙 또는 모델, 영향 미리보기) → Ctrl+Enter 승인 / Esc 취소 →
    실행 카드(진행률·일시정지·취소) → 결과 카드(되돌리기·폴더 열기). 정리 / 내보내기 화면과 작업 화면은 같은 작업 큐를 씁니다.
-8. 사이드바의 "문서 생성"·"프로젝트"는 2차 범위(v1.1) 자리표시자입니다.
+8. **문서 생성** — 내장 템플릿(공문·견적서·거래명세서·계약서·보고서·회의록) 또는 등록 양식을 고르고 내용을 적으면 모델이
+   초안(필드·품목표·본문·근거 인용)을 만듭니다. 좌측 미리보기, 우측 편집 그리드(합계 불일치 "제안 적용"), 참고 문서 패널 →
+   HWPX·DOCX·PDF·Markdown으로 저장하면 라이브러리에 "생성" 문서로 등록됩니다. 등록 양식이 HWPX/DOCX면 원본 양식 파일을 그대로
+   채웁니다.
+9. **프로젝트** — 템플릿(인증 심사·거래처 등록·구매 정산)로 케이스를 만들고 문서를 넣으면 필수 문서 체크리스트, 자연어로 적은
+   정합성 규칙(→ 규칙 그리드 확인), 검사 결과(통과/불일치/판단불가/누락 + 근거 링크), 관계 그래프, 요약 리포트, 보완요청서 초안을
+   제공합니다. `inbox\<폴더>\`에 넣은 파일은 같은 이름의 프로젝트에 자동으로 들어갑니다.
+10. **보존/파기** — 설정 > 프라이버시 · 보존의 기간대로 매일 새벽(기본 03시) 파기 작업이 돌고, "지금 파기 실행"으로 즉시 돌릴 수
+   있습니다. 긴 작업이 끝나면 Windows 알림이 뜨고(설정), "배치 중 절전 방지"를 켜면 작업 중 PC가 잠들지 않습니다.
 
 ## 4. 어시스턴트 명령·슬래시·단축키
 
@@ -113,6 +151,12 @@ npm install
 - "다크 테마로 바꾸고 모델을 9B로 올려"
 - "선택 영역 다시 OCR 해줘"
 - "방금 이름 바꾼 거 되돌려", "작업 일시정지"
+
+**v1.1 추가 명령(P6)**: "등록된 견적서 양식으로 ㈜한빛에 노트북 10대, 대당 1,200,000원, 유효기간 30일 견적서 만들어줘"(초안 →
+문서 생성 화면), "지난달 영수증 집계 결과로 경비 보고서 초안 작성해줘"(집계 → 초안), "'한빛 심사' 프로젝트 만들어줘", "선택한
+문서를 한빛 심사 프로젝트에 추가해", "세금계산서의 공급자 사업자번호는 사업자등록증 번호와 같아야 해"(규칙 정의), "정합성 검사
+돌려줘", "보완요청서 만들어줘", "이 조항 설명해줘", "선택한 두 문서 비교해줘", "저널은 30일만 보관해", "이 문서를 '휴가신청서' 양식으로
+등록해".
 
 규칙이 못 푸는 문장(예: "한빛과 거래한 계약 중 작년 것만 골라서 보여줘")은 로드된 모델이 플랜을 만듭니다(문법 제약 JSON,
 검증 실패 시 재질의 1회, 그래도 안 되면 명확화 질문). 문서를 바꾸는 명령에 범위가 없으면 "전부"라고 말하지 않은 한
@@ -165,6 +209,9 @@ npm install
 | `DOCULENS_LLAMA_SERVER=<llama-server> DOCULENS_TEST_MODELS_DIR=$PWD/crates/doculens-core/tests/fixtures cargo test -p doculens-core --test real_engine -- --nocapture` | 실제 llama-server + 초소형 Qwen3.5 픽스처(채팅·KIE·플래너 문법) | 통과 |
 | `DOCULENS_FIXTURE_OUT=<dir> cargo test -p doculens-core --lib -- --ignored gen_fixtures` | 샘플 입력 문서 생성 | — |
 | `DOCULENS_EXPORT_OUT=<dir> cargo test -p doculens-core --lib -- --ignored gen_export_samples` | 내보내기 5종 샘플 파일 생성(XLSX·CSV·JSONL·MD·검색 가능 PDF) | 9개 파일 |
+| `cargo run -p doculens-eval -- planner --golden eval/golden/planner.json --baseline eval/baselines/planner-rules.json` | 플래너 골든셋 100건 정확도 + 회귀 게이트(0.5pt) | CI 게이트 |
+| `cargo run -p doculens-eval -- pipeline --manifest … --engine … --model …` / `scorecard` | 실모델 파이프라인 지표(분류 F1·정확일치·ANLS*·CER·p50/p95)·양자화 스코어카드 | 사용자 PC |
+| `npm run notices` | THIRD-PARTY-NOTICES · SBOM(CycloneDX) · 라이선스 전문 재생성 | CI `notices` 잡이 최신성 검사 |
 
 GitHub Actions `CI`(푸시·PR)가 위 항목을 License gate / Web / Real llama-server / Rust Linux / Windows compile 다섯 작업으로
 실행합니다. Windows 실창 E2E(tauri-driver)와 GPU 실측은 사용자 PC 항목입니다.
@@ -208,7 +255,11 @@ GitHub Actions `CI`(푸시·PR)가 위 항목을 License gate / Web / Real llama
    (탐색기에서 바꾼 항목만 건너뜀), 내보내기 5종을 Excel/Acrobat에서 열어 한글 확인(CSV BOM, PDF Ctrl+F), 집계의 검토 완료/대기
    분리, 배치 중 질문 끼어들기(쪽 경계), 일시정지·재개·우선순위·재시도, 강제 종료 후 "중단됨"과 대기열 복원, 저널 파일과
    `jobs` 테이블 (P5).
-7. **골든셋**(사용자 제공) — 분류 F1·OCR CER·KIE 필드 정확도·플래너 명령→플랜 100건.
+7. **문서 생성·프로젝트(v1.1)** — 실모델 초안 생성과 HWPX/DOCX/PDF 저장(한컴·Word에서 열기), 등록 양식 채우기, 규칙 정의·정합성
+   검사·보완요청서, inbox 하위 폴더 매핑 (P6).
+8. **품질·배포(v1.1)** — 릴리스 설치파일(Lite/Full) 오프라인 설치, 평가 하네스로 양자화 스코어카드 채우기, 파기 작업·알림·절전
+   방지 (P7).
+9. **골든셋**(사용자 제공) — 분류 F1·OCR CER·KIE 필드 정확도·플래너 명령→플랜 100건(`doculens-eval`로 측정).
 
 확인 결과는 이슈로 남기거나 다음 세션에 전달해 주세요. 특히 **레지스트리 크기·SHA-256 고정**(모델·엔진 팩)은 첫 PC에서
 한 번만 하면 이후 다운로드 검증이 자동으로 적용됩니다.

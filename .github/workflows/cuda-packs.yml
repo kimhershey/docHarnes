@@ -1,0 +1,204 @@
+name: CUDA engine packs (manual)
+
+# Builds the self-built llama-server CUDA packs (design §3.12, decision 13: CUDA 12.1–12.9 environments) on a
+# GitHub-hosted Windows runner — the official llama.cpp release only ships CUDA 12.4 / 13.x builds:
+#   cu121 — CUDA 12.1 toolkit, SASS sm_61…sm_90 (Pascal … Hopper, Turing included; runs on drivers for CUDA 12.1–12.9)
+#   cu129 — CUDA 12.9 toolkit, SASS sm_75…sm_120 (adds Blackwell; drivers for CUDA 12.8+)
+# Toolkit installer URL, silent-install subpackage ids, MSVC host toolset, archs and the runtime DLL list are read
+# from engines/manifest.json (assets.cu121 / assets.cu129). Output: DocuLens-EnginePack-<pack>-<tag>.zip + .sha256
+# as a workflow artifact and, with publish=true, as assets of the GitHub Release v<app version> (created when
+# missing). release-windows.yml (variant=full) downloads those assets and bundles them as engines/<pack>/ inside the
+# Full installer; users can also unzip a pack into %LOCALAPPDATA%\DocuLens\engines\<tag>\<pack>\.
+#
+# NVIDIA CUDA EULA constraints (design appendix E, "CUDA EULA" checklist):
+#   * Only the redistributable runtime libraries from the EULA's Attachment A are shipped (cudart64_12.dll,
+#     cublas64_12.dll, cublasLt64_12.dll). No developer tools, headers or import libraries leave the runner.
+#   * The DLLs stay inside the app-private pack directory (<install dir>\engines\<pack>\ or
+#     %LOCALAPPDATA%\DocuLens\engines\<tag>\<pack>\): never on the system PATH, never in a shared location,
+#     only DocuLens starts llama-server from there.
+#   * The toolkit EULA text is copied into the pack (NVIDIA-CUDA-EULA.txt) next to llama.cpp's MIT license.
+#   * The DocuLens application EULA must mirror NVIDIA's terms (no reverse engineering, NVIDIA IP, user privacy)
+#     before a Full installer is distributed — that EULA is still an open item. No NVIDIA sponsorship or
+#     endorsement may be implied.
+#   * If DocuLens itself is ever released under an open-source license, the CUDA packs must become a separate
+#     download (the EULA forbids making the SDK subject to an OSS license).
+
+on:
+  workflow_dispatch:
+    inputs:
+      pack:
+        description: "CUDA pack to build"
+        type: choice
+        options: [cu121, cu129]
+        default: cu121
+      publish:
+        description: "Upload the zip + .sha256 to Release v<app version> (created when missing)"
+        type: boolean
+        default: false
+      allow_unsupported_compiler:
+        description: "Pass -allow-unsupported-compiler to nvcc (fallback when the pinned MSVC toolset cannot be installed)"
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    name: Build ${{ inputs.pack }} pack
+    # windows-2022 (Visual Studio 2022) instead of windows-latest: nvcc rejects host compilers newer than it knows
+    # (CUDA 12.1 → MSVC ≤ 14.39 / VS 17.9, CUDA 12.9 → MSVC < 14.50), and a newer image may only ship a newer VS.
+    runs-on: windows-2022
+    timeout-minutes: 350
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the pack definition (engines/manifest.json)
+        id: def
+        shell: pwsh
+        run: |
+          $m = Get-Content engines/manifest.json -Raw | ConvertFrom-Json
+          $p = $m.assets."${{ inputs.pack }}"
+          if (-not $p -or -not $p.self_built) { Write-Host "::error::${{ inputs.pack }} is not a self-built pack in engines/manifest.json"; exit 1 }
+          foreach ($k in 'toolkit', 'toolkit_version', 'toolkit_installer_url', 'toolkit_subpackages', 'archs', 'runtime_dlls') {
+            if (-not $p.$k) { Write-Host "::error::engines/manifest.json assets.${{ inputs.pack }}.$k is missing"; exit 1 }
+          }
+          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          "tag=$($m.tag)" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "toolkit=$($p.toolkit)" >> $env:GITHUB_OUTPUT
+          "toolkit_version=$($p.toolkit_version)" >> $env:GITHUB_OUTPUT
+          "installer_url=$($p.toolkit_installer_url)" >> $env:GITHUB_OUTPUT
+          "subpackages=$($p.toolkit_subpackages -join ' ')" >> $env:GITHUB_OUTPUT
+          "msvc_toolset=$($p.msvc_toolset)" >> $env:GITHUB_OUTPUT
+          "msvc_component=$($p.msvc_component)" >> $env:GITHUB_OUTPUT
+          "archs=$($p.archs)" >> $env:GITHUB_OUTPUT
+          "runtime_dlls=$($p.runtime_dlls -join ';')" >> $env:GITHUB_OUTPUT
+          "zip=DocuLens-EnginePack-${{ inputs.pack }}-$($m.tag).zip" >> $env:GITHUB_OUTPUT
+          Write-Host "llama.cpp $($m.tag), CUDA $($p.toolkit_version), archs $($p.archs), app $version"
+
+      - name: Locate Visual Studio (vswhere → VSPATH)
+        shell: pwsh
+        run: |
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsPath) { Write-Host "::error::no Visual Studio with the C++ workload found"; exit 1 }
+          Write-Host "Visual Studio: $vsPath"
+          "VSPATH=$vsPath" >> $env:GITHUB_ENV
+
+      - name: Install the MSVC host toolset this CUDA version supports
+        if: steps.def.outputs.msvc_component != ''
+        shell: pwsh
+        run: |
+          Write-Host "adding ${{ steps.def.outputs.msvc_component }} to $env:VSPATH"
+          $vsArgs = @("modify", "--installPath", "`"$env:VSPATH`"", "--add", "${{ steps.def.outputs.msvc_component }}", "--quiet", "--norestart", "--nocache")
+          $p = Start-Process -FilePath "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe" -ArgumentList $vsArgs -Wait -PassThru -NoNewWindow
+          if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { Write-Host "::error::vs_installer exited with $($p.ExitCode) (retry with allow_unsupported_compiler=true if this keeps failing)"; exit 1 }
+          Get-ChildItem "$env:VSPATH\VC\Tools\MSVC" -Directory | ForEach-Object { Write-Host "MSVC toolset available: $($_.Name)" }
+
+      - name: Install the CUDA toolkit (official network installer, silent, toolkit components only)
+        shell: pwsh
+        run: |
+          $url = "${{ steps.def.outputs.installer_url }}"
+          $exe = Join-Path $env:RUNNER_TEMP (Split-Path $url -Leaf)
+          Write-Host "downloading $url"
+          Invoke-WebRequest -Uri $url -OutFile $exe -UseBasicParsing
+          $sub = "${{ steps.def.outputs.subpackages }}".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          Write-Host "installing: $($sub -join ' ')"
+          $p = Start-Process -FilePath $exe -ArgumentList (@("-s") + $sub) -Wait -PassThru -NoNewWindow
+          if ($p.ExitCode -ne 0) {
+            Write-Host "::error::CUDA installer exited with $($p.ExitCode)"
+            Get-ChildItem "$env:TEMP\cuda" -Filter *.log -Recurse -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "--- $($_.FullName)"; Get-Content $_.FullName -Tail 40 }
+            exit 1
+          }
+          $cuda = "${env:ProgramFiles}\NVIDIA GPU Computing Toolkit\CUDA\v${{ steps.def.outputs.toolkit }}"
+          if (-not (Test-Path "$cuda\bin\nvcc.exe")) { Write-Host "::error::nvcc.exe not found under $cuda"; exit 1 }
+          & "$cuda\bin\nvcc.exe" --version
+          "CUDA_PATH=$cuda" >> $env:GITHUB_ENV
+          "CUDA_PATH_V$("${{ steps.def.outputs.toolkit }}".Replace('.', '_'))=$cuda" >> $env:GITHUB_ENV
+          "CUDACXX=$cuda\bin\nvcc.exe" >> $env:GITHUB_ENV
+          "$cuda\bin" >> $env:GITHUB_PATH
+
+      - name: Clone llama.cpp at the pinned tag
+        run: git clone --depth 1 --branch ${{ steps.def.outputs.tag }} https://github.com/ggml-org/llama.cpp llama.cpp
+
+      - name: Configure and build (cmake flags from engines/README.md "Building the CUDA packs")
+        shell: cmd
+        run: |
+          set "VCVARS_VER="
+          if not "${{ steps.def.outputs.msvc_toolset }}"=="" set "VCVARS_VER=-vcvars_ver=${{ steps.def.outputs.msvc_toolset }}"
+          call "%VSPATH%\VC\Auxiliary\Build\vcvarsall.bat" x64 %VCVARS_VER% || exit /b 1
+          where cl
+          set "CUDA_FLAGS="
+          if "${{ inputs.allow_unsupported_compiler }}"=="true" set "CUDA_FLAGS=-DCMAKE_CUDA_FLAGS=-allow-unsupported-compiler"
+          cmake -S llama.cpp -B build -G "Ninja Multi-Config" ^
+            -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="${{ steps.def.outputs.archs }}" ^
+            -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON ^
+            -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON ^
+            %CUDA_FLAGS% || exit /b 1
+          cmake --build build --config Release -j %NUMBER_OF_PROCESSORS% || exit /b 1
+          dir build\bin\Release
+
+      - name: Assemble the pack (llama-server + ggml DLLs + Attachment-A runtime DLLs + notices)
+        shell: pwsh
+        run: |
+          $out = "pack"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          Copy-Item build/bin/Release/llama-server.exe $out
+          Get-ChildItem build/bin/Release -Filter *.dll | Copy-Item -Destination $out
+          foreach ($dll in "${{ steps.def.outputs.runtime_dlls }}".Split(';')) {
+            $src = Join-Path $env:CUDA_PATH "bin\$dll"
+            if (-not (Test-Path $src)) { Write-Host "::error::$src not found"; exit 1 }
+            Copy-Item $src $out
+          }
+          Copy-Item llama.cpp/LICENSE "$out/LICENSE-llama.cpp.txt"
+          $eula = Get-ChildItem $env:CUDA_PATH -File | Where-Object { $_.Name -match '^(EULA|License)' } | Select-Object -First 1
+          if (-not $eula) { Write-Host "::error::the CUDA toolkit EULA text was not found in $env:CUDA_PATH (appendix E: it must ship inside the pack)"; exit 1 }
+          Copy-Item $eula.FullName "$out/NVIDIA-CUDA-EULA.txt"
+          if (-not (Test-Path "$out/ggml-cuda.dll")) { Write-Host "::error::ggml-cuda.dll missing — the CUDA backend was not built"; exit 1 }
+          # One backend family per pack folder (engines/README.md).
+          $foreign = Get-ChildItem $out -Filter 'ggml-*.dll' | Where-Object { $_.Name -match '^ggml-(vulkan|opencl|openvino|hip|sycl|musa|cann|blas|webgpu)' }
+          if ($foreign) { Write-Host "::error::unexpected backend DLLs in the pack: $($foreign.Name -join ', ')"; exit 1 }
+          @{
+            tag = "${{ steps.def.outputs.tag }}"; pack = "${{ inputs.pack }}"; toolkit = "${{ steps.def.outputs.toolkit_version }}"
+            archs = "${{ steps.def.outputs.archs }}"; built_at = (Get-Date).ToUniversalTime().ToString("o")
+            workflow_run = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          } | ConvertTo-Json | Set-Content "$out/pack.json" -Encoding utf8
+          # Smoke test: no GPU on the runner, so ggml falls back to CPU, but the binary and its DLLs must load.
+          & "$out/llama-server.exe" --version
+          Get-ChildItem $out | Format-Table Name, @{ n = 'MB'; e = { [math]::Round($_.Length / 1MB, 1) } } -AutoSize | Out-String | Write-Host
+          exit 0
+
+      - name: Zip and hash
+        shell: pwsh
+        run: |
+          $zip = "${{ steps.def.outputs.zip }}"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path pack/* -DestinationPath "dist/$zip" -CompressionLevel Optimal
+          $hash = (Get-FileHash "dist/$zip" -Algorithm SHA256).Hash.ToLower()
+          [IO.File]::WriteAllText("$PWD/dist/$zip.sha256", "$hash *$zip`n")
+          Write-Host ("{0}  {1}  ({2:N1} MB)" -f $zip, $hash, ((Get-Item "dist/$zip").Length / 1MB))
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DocuLens-EnginePack-${{ inputs.pack }}-${{ steps.def.outputs.tag }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Publish to GitHub Release v${{ steps.def.outputs.version }}
+        if: inputs.publish
+        shell: pwsh
+        run: |
+          $version = "${{ steps.def.outputs.version }}"
+          $tag = "v$version"
+          $repo = $env:GITHUB_REPOSITORY
+          gh release view $tag --repo $repo --json tagName 2>$null | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            $sha = (git rev-parse HEAD).Trim()
+            Write-Host "creating release $tag at $sha"
+            gh release create $tag --repo $repo --target $sha --title "DocuLens $version" --generate-notes
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+          $zip = "${{ steps.def.outputs.zip }}"
+          gh release upload $tag --repo $repo --clobber "dist/$zip" "dist/$zip.sha256"
+          exit $LASTEXITCODE

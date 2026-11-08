@@ -394,6 +394,23 @@ pub fn import_job(app: &AppHandle, plan: ImportPlan) -> UiResult<String> {
             if !batch_ids.is_empty() {
                 ctx.emit(app, "batch", batch_ids.clone());
             }
+            // §3.15: `inbox/<folder>/…` joins the project mapped to that folder (created on demand).
+            let mut assigned: Vec<String> = Vec::new();
+            for id in report.imported.iter().chain(report.relinked.iter()) {
+                if let Ok(Some(doc)) = ctx.db.with(|c| repo::get_document(c, id)) {
+                    match doculens_core::projects::assign_inbox_document(&ctx.db, id, &doc.rel_path, true) {
+                        Ok(Some(pid)) => assigned.push(pid),
+                        Ok(None) => {}
+                        Err(e) => log::warn!("inbox project mapping failed for {id}: {e}"),
+                    }
+                }
+            }
+            if !assigned.is_empty() {
+                assigned.sort();
+                assigned.dedup();
+                let _ =
+                    app.emit(crate::projects_bridge::PROJECTS_EVENT, serde_json::json!({ "project_ids": assigned }));
+            }
             if let Ok(mut p) = processed.lock() {
                 p.extend(report.imported.iter().cloned());
                 p.extend(report.relinked.iter().cloned());

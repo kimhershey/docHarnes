@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::{CoreError, Result};
+use crate::generate::DraftRequest;
 use crate::organize::OrganizePlan;
 use crate::pipeline::ProcessRequest;
 use crate::planner::{Plan, PlanContext};
@@ -100,12 +101,37 @@ impl JobState {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum JobSpec {
-    Pipeline { req: ProcessRequest },
-    Plan { plan: Box<Plan>, text: String, context: Box<PlanContext> },
-    Export { req: Value },
-    Organize { plan: Box<OrganizePlan>, label: String, source: String, batch_kind: String },
-    Undo { batch_id: Option<String> },
+    Pipeline {
+        req: ProcessRequest,
+    },
+    Plan {
+        plan: Box<Plan>,
+        text: String,
+        context: Box<PlanContext>,
+    },
+    Export {
+        req: Value,
+    },
+    Organize {
+        plan: Box<OrganizePlan>,
+        label: String,
+        source: String,
+        batch_kind: String,
+    },
+    Undo {
+        batch_id: Option<String>,
+    },
     Redo,
+    /// §3.13 document draft (planner `draft_document`, the 문서 생성 screen, §3.15 보완요청서).
+    Draft {
+        req: Box<DraftRequest>,
+        /// Project the draft belongs to (보완요청서), for the result card link.
+        project_id: Option<String>,
+        /// `generate` | `planner` | `project`.
+        source: String,
+    },
+    /// §3.8 daily retention purge (journal, jobs, conversations, cache LRU, trash, logs, temp).
+    Maintenance,
 }
 
 impl JobSpec {
@@ -117,6 +143,8 @@ impl JobSpec {
             JobSpec::Organize { .. } => "organize",
             JobSpec::Undo { .. } => "undo",
             JobSpec::Redo => "redo",
+            JobSpec::Draft { .. } => "draft",
+            JobSpec::Maintenance => "maintenance",
         }
     }
 
@@ -126,6 +154,8 @@ impl JobSpec {
         match self {
             JobSpec::Pipeline { .. } => Lane::Engine,
             JobSpec::Plan { plan, .. } if plan.needs_model() => Lane::Engine,
+            // Drafts call the model (the rule-based 보완요청서 path finishes quickly anyway).
+            JobSpec::Draft { .. } => Lane::Engine,
             _ => Lane::Io,
         }
     }
@@ -344,6 +374,14 @@ pub fn prune(conn: &Connection, keep: u32) -> rusqlite::Result<usize> {
         "DELETE FROM jobs WHERE state NOT IN ('queued','running','paused') AND id NOT IN (
             SELECT id FROM jobs WHERE state NOT IN ('queued','running','paused') ORDER BY finished_at DESC, created_at DESC LIMIT ?1)",
         [keep as i64],
+    )
+}
+
+/// Deletes finished jobs whose `finished_at` is older than `cutoff` (retention purge, §3.8 job logs).
+pub fn purge_finished_before(conn: &Connection, cutoff: &chrono::DateTime<Utc>) -> rusqlite::Result<usize> {
+    conn.execute(
+        "DELETE FROM jobs WHERE state NOT IN ('queued','running','paused') AND finished_at IS NOT NULL AND finished_at < ?1",
+        [ts(cutoff)],
     )
 }
 

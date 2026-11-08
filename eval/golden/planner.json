@@ -1,0 +1,1884 @@
+{
+  "schema_version": 1,
+  "context": "planner-context.json",
+  "description": "플래너 골든셋 — 명령 → 기대 플랜 100건(한국어 70·영어 20·혼합 10). 기대값은 규칙 출력이 아니라 사람이 기대하는 플랜입니다. 비교 규칙은 eval/README.md 참조.",
+  "items": [
+    {
+      "id": "ko-01",
+      "category": "ko",
+      "text": "inbox 폴더의 영수증을 전부 처리하고 월별 폴더로 정리해줘",
+      "expected": {
+        "intent": "import",
+        "ops": [
+          "import",
+          "classify",
+          "ocr",
+          "extract",
+          "move"
+        ],
+        "params": [
+          null,
+          null,
+          null,
+          null,
+          {
+            "group_by": "month"
+          }
+        ],
+        "scope": {
+          "folder": "inbox",
+          "filter": {
+            "doc_type": "receipt"
+          }
+        }
+      },
+      "note": "설계 예시 1"
+    },
+    {
+      "id": "ko-02",
+      "category": "ko",
+      "text": "세금계산서에서 공급가액·세액·합계만 뽑아서 엑셀로",
+      "expected": {
+        "intent": "extract",
+        "ops": [
+          "extract",
+          "export"
+        ],
+        "params": [
+          {
+            "fields": [
+              "supply_total",
+              "tax_total",
+              "grand_total"
+            ]
+          },
+          {
+            "format": "xlsx"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "tax_invoice"
+          }
+        }
+      },
+      "note": "설계 예시 2"
+    },
+    {
+      "id": "ko-03",
+      "category": "ko",
+      "text": "지난달 영수증 합계 얼마야?",
+      "expected": {
+        "intent": "aggregate",
+        "ops": [
+          "aggregate"
+        ],
+        "params": [
+          {
+            "fn": "sum",
+            "field": "total"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "receipt",
+            "date_from": "2026-10-01",
+            "date_to": "2026-10-31"
+          }
+        }
+      },
+      "note": "설계 예시 3"
+    },
+    {
+      "id": "ko-04",
+      "category": "ko",
+      "text": "거래처명이 ㈜한빛인 문서 찾아줘",
+      "expected": {
+        "intent": "search",
+        "ops": [
+          "search"
+        ],
+        "params": [
+          {
+            "query": "㈜한빛"
+          }
+        ]
+      },
+      "note": "설계 예시 4"
+    },
+    {
+      "id": "ko-05",
+      "category": "ko",
+      "text": "이 계약서의 계약기간과 위약금 조항 알려줘",
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      },
+      "note": "설계 예시 5"
+    },
+    {
+      "id": "ko-06",
+      "category": "ko",
+      "text": "사업자등록증 스키마에 '사업자단위과세' 필드 추가해",
+      "expected": {
+        "intent": "define_schema",
+        "ops": [
+          "define_schema"
+        ],
+        "params": [
+          {
+            "mode": "modify",
+            "base": "사업자등록증"
+          }
+        ]
+      },
+      "note": "설계 예시 6"
+    },
+    {
+      "id": "ko-07",
+      "category": "ko",
+      "text": "다크 테마로 바꾸고 모델을 9B로 올려",
+      "expected": {
+        "intent": "set_theme",
+        "ops": [
+          "set_theme",
+          "set_model"
+        ],
+        "params": [
+          {
+            "theme": "dark"
+          },
+          {
+            "id": "qwen3.5-9b-q4km"
+          }
+        ]
+      },
+      "note": "설계 예시 7"
+    },
+    {
+      "id": "ko-08",
+      "category": "ko",
+      "text": "선택 영역 다시 OCR 해줘",
+      "expected": {
+        "intent": "ocr",
+        "ops": [
+          "ocr"
+        ],
+        "params": [
+          {
+            "profile": "fine_print",
+            "force": true,
+            "pages": [
+              1
+            ]
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      },
+      "note": "설계 예시 8"
+    },
+    {
+      "id": "ko-09",
+      "category": "ko",
+      "text": "방금 이름 바꾼 거 되돌려",
+      "expected": {
+        "intent": "undo",
+        "ops": [
+          "undo"
+        ]
+      },
+      "note": "설계 예시 9"
+    },
+    {
+      "id": "ko-10",
+      "category": "ko",
+      "text": "작업 일시정지",
+      "expected": {
+        "intent": "job",
+        "ops": [
+          "job"
+        ],
+        "params": [
+          {
+            "action": "pause"
+          }
+        ]
+      },
+      "note": "설계 예시 10"
+    },
+    {
+      "id": "ko-11",
+      "category": "ko",
+      "text": "세금계산서 → 엑셀",
+      "expected": {
+        "intent": "export",
+        "ops": [
+          "export"
+        ],
+        "params": [
+          {
+            "format": "xlsx"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "tax_invoice"
+          }
+        }
+      },
+      "note": "설계 예시 12"
+    },
+    {
+      "id": "ko-12",
+      "category": "ko",
+      "text": "inbox 처리",
+      "expected": {
+        "intent": "import",
+        "ops": [
+          "import",
+          "classify",
+          "ocr",
+          "extract"
+        ],
+        "scope": {
+          "folder": "inbox"
+        }
+      },
+      "note": "어시스턴트 예시 칩"
+    },
+    {
+      "id": "ko-13",
+      "category": "ko",
+      "text": "inbox에 있는 파일 가져오기만 해줘",
+      "expected": {
+        "intent": "import",
+        "ops": [
+          "import"
+        ],
+        "params": [
+          {
+            "source": "inbox"
+          }
+        ],
+        "scope": {
+          "folder": "inbox"
+        }
+      }
+    },
+    {
+      "id": "ko-14",
+      "category": "ko",
+      "text": "inbox 감시 꺼줘",
+      "expected": {
+        "intent": "set_inbox_watch",
+        "ops": [
+          "set_inbox_watch"
+        ],
+        "params": [
+          {
+            "enabled": false
+          }
+        ]
+      }
+    },
+    {
+      "id": "ko-15",
+      "category": "ko",
+      "text": "이 문서를 양식으로 등록해줘",
+      "expected": {
+        "intent": "register_form",
+        "ops": [
+          "register_form"
+        ]
+      },
+      "note": "P6 양식 등록 — 파라미터는 채점하지 않음"
+    },
+    {
+      "id": "ko-16",
+      "category": "ko",
+      "text": "여기 있는 문서 분류해줘",
+      "expected": {
+        "intent": "classify",
+        "ops": [
+          "classify"
+        ],
+        "params": [
+          {
+            "force": null
+          }
+        ],
+        "scope": {
+          "folder": "inbox"
+        }
+      },
+      "note": "force 가 없어야 함(재분류 아님)"
+    },
+    {
+      "id": "ko-17",
+      "category": "ko",
+      "text": "선택한 문서 유형을 견적서로 바꿔",
+      "expected": {
+        "intent": "set_doc_type",
+        "ops": [
+          "set_doc_type"
+        ],
+        "params": [
+          {
+            "doc_type": "quotation"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      }
+    },
+    {
+      "id": "ko-18",
+      "category": "ko",
+      "text": "이 문서 OCR 다시 돌려",
+      "expected": {
+        "intent": "ocr",
+        "ops": [
+          "ocr"
+        ],
+        "params": [
+          {
+            "force": true
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      }
+    },
+    {
+      "id": "ko-19",
+      "category": "ko",
+      "text": "고마워, 수고했어",
+      "expected": {
+        "intent": "noop",
+        "ops": [
+          "noop"
+        ]
+      },
+      "note": "잡담 — 아무 작업도 하지 않음"
+    },
+    {
+      "id": "ko-20",
+      "category": "ko",
+      "text": "견적서 양식으로 새 스키마 만들어줘",
+      "expected": {
+        "intent": "define_schema",
+        "ops": [
+          "define_schema"
+        ],
+        "params": [
+          {
+            "mode": "create"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ko-21",
+      "category": "ko",
+      "text": "영수증 스키마에서 승인번호 필드 빼줘",
+      "expected": {
+        "intent": "define_schema",
+        "ops": [
+          "define_schema"
+        ],
+        "params": [
+          {
+            "mode": "modify",
+            "base": "영수증"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ko-22",
+      "category": "ko",
+      "text": "선택 문서에서 필드 다시 추출해",
+      "expected": {
+        "intent": "extract",
+        "ops": [
+          "extract"
+        ],
+        "params": [
+          {
+            "force": true
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      }
+    },
+    {
+      "id": "ko-23",
+      "category": "ko",
+      "text": "이번 달 세금계산서 추출하고 검증해줘",
+      "expected": {
+        "intent": "extract",
+        "ops": [
+          "extract",
+          "validate"
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "tax_invoice",
+            "date_from": "2026-11-01",
+            "date_to": "2026-11-30"
+          }
+        }
+      }
+    },
+    {
+      "id": "ko-24",
+      "category": "ko",
+      "text": "선택 문서 검증 규칙 다시 돌려",
+      "expected": {
+        "intent": "validate",
+        "ops": [
+          "validate"
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      }
+    },
+    {
+      "id": "ko-25",
+      "category": "ko",
+      "text": "세금계산서에서 국세청 승인번호랑 합계금액 추출해",
+      "expected": {
+        "intent": "extract",
+        "ops": [
+          "extract"
+        ],
+        "params": [
+          {
+            "fields": [
+              "nts_approval_no",
+              "grand_total"
+            ]
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "tax_invoice"
+          }
+        }
+      }
+    },
+    {
+      "id": "ko-26",
+      "category": "ko",
+      "text": "저신뢰 필드 전부 승인해줘",
+      "expected": {
+        "intent": "review",
+        "ops": [
+          "review"
+        ],
+        "params": [
+          {
+            "action": "approve",
+            "only": "low_confidence"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ko-27",
+      "category": "ko",
+      "text": "검토 큐 열어줘",
+      "expected": {
+        "intent": "open",
+        "ops": [
+          "open"
+        ],
+        "params": [
+          {
+            "target": "screen",
+            "ref": "review"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ko-28",
+      "category": "ko",
+      "text": "세금계산서 공급자 사업자번호는 사업자등록증 번호와 같아야 한다는 규칙 추가해",
+      "expected": {
+        "intent": "define_rule",
+        "ops": [
+          "define_rule"
+        ]
+      },
+      "note": "P6 정합성 규칙"
+    },
+    {
+      "id": "ko-29",
+      "category": "ko",
+      "text": "색인 다시 만들어줘",
+      "expected": {
+        "intent": "reindex",
+        "ops": [
+          "reindex"
+        ]
+      }
+    },
+    {
+      "id": "ko-30",
+      "category": "ko",
+      "text": "선택한 두 계약서 비교해줘",
+      "context": {
+        "selected_doc_ids": [
+          "d1a2",
+          "d7f3"
+        ]
+      },
+      "expected": {
+        "intent": "compare",
+        "ops": [
+          "compare"
+        ],
+        "params": [
+          {
+            "doc_ids": [
+              "d1a2",
+              "d7f3"
+            ]
+          }
+        ]
+      },
+      "note": "P6 비교 — 이 항목만 문서 2건이 선택된 컨텍스트(context 덮어쓰기)로 실행"
+    },
+    {
+      "id": "ko-31",
+      "category": "ko",
+      "text": "'위약금' 들어간 계약서 찾아줘",
+      "expected": {
+        "intent": "search",
+        "ops": [
+          "search"
+        ],
+        "params": [
+          {
+            "query": "위약금"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "contract"
+          }
+        }
+      }
+    },
+    {
+      "id": "ko-32",
+      "category": "ko",
+      "text": "이 영수증 합계 금액이 얼마야?",
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      },
+      "note": "열린 문서에 대한 질문 — 라이브러리 집계가 아님"
+    },
+    {
+      "id": "ko-33",
+      "category": "ko",
+      "text": "부가세 신고 기한이 언제야?",
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ]
+      }
+    },
+    {
+      "id": "ko-34",
+      "category": "ko",
+      "text": "이 문서 한 줄로 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "target": "each_doc",
+            "length": "short"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      }
+    },
+    {
+      "id": "ko-35",
+      "category": "ko",
+      "text": "선택한 계약서들 하나로 묶어서 자세히 요약",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "target": "set",
+            "length": "long"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      }
+    },
+    {
+      "id": "ko-36",
+      "category": "ko",
+      "text": "올해 세금계산서 세액 합계",
+      "expected": {
+        "intent": "aggregate",
+        "ops": [
+          "aggregate"
+        ],
+        "params": [
+          {
+            "fn": "sum",
+            "field": "tax_total"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "tax_invoice",
+            "date_from": "2026-01-01",
+            "date_to": "2026-12-31"
+          }
+        }
+      }
+    },
+    {
+      "id": "ko-37",
+      "category": "ko",
+      "text": "영수증 월별 건수 알려줘",
+      "expected": {
+        "intent": "aggregate",
+        "ops": [
+          "aggregate"
+        ],
+        "params": [
+          {
+            "fn": "count",
+            "group_by": "month"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "receipt"
+          }
+        }
+      }
+    },
+    {
+      "id": "ko-38",
+      "category": "ko",
+      "text": "거래처별 영수증 평균 금액",
+      "expected": {
+        "intent": "aggregate",
+        "ops": [
+          "aggregate"
+        ],
+        "params": [
+          {
+            "fn": "avg",
+            "field": "total",
+            "group_by": "vendor"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "receipt"
+          }
+        }
+      }
+    },
+    {
+      "id": "ko-39",
+      "category": "ko",
+      "text": "작년 세금계산서 중 가장 큰 합계금액은?",
+      "expected": {
+        "intent": "aggregate",
+        "ops": [
+          "aggregate"
+        ],
+        "params": [
+          {
+            "fn": "max",
+            "field": "grand_total"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "tax_invoice",
+            "date_from": "2025-01-01",
+            "date_to": "2025-12-31"
+          }
+        }
+      }
+    },
+    {
+      "id": "ko-40",
+      "category": "ko",
+      "text": "검토 대기 포함해서 이번 달 영수증 합계",
+      "expected": {
+        "intent": "aggregate",
+        "ops": [
+          "aggregate"
+        ],
+        "params": [
+          {
+            "fn": "sum",
+            "field": "total",
+            "include_unreviewed": true
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "receipt",
+            "date_from": "2026-11-01",
+            "date_to": "2026-11-30"
+          }
+        }
+      }
+    },
+    {
+      "id": "ko-41",
+      "category": "ko",
+      "text": "영수증 이름을 템플릿대로 바꾸고 유형별 폴더로 정리해",
+      "expected": {
+        "intent": "organize",
+        "ops": [
+          "organize"
+        ],
+        "params": [
+          {
+            "group_by": "doc_type"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "receipt"
+          }
+        }
+      }
+    },
+    {
+      "id": "ko-42",
+      "category": "ko",
+      "text": "검토 완료된 영수증 파일명 바꿔줘",
+      "expected": {
+        "intent": "rename",
+        "ops": [
+          "rename"
+        ],
+        "params": [
+          {
+            "only_reviewed": true
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "receipt"
+          }
+        }
+      }
+    },
+    {
+      "id": "ko-43",
+      "category": "ko",
+      "text": "이 폴더 문서들 거래처별 폴더로 옮겨",
+      "expected": {
+        "intent": "move",
+        "ops": [
+          "move"
+        ],
+        "params": [
+          {
+            "group_by": "vendor"
+          }
+        ],
+        "scope": {
+          "folder": "inbox"
+        }
+      }
+    },
+    {
+      "id": "ko-44",
+      "category": "ko",
+      "text": "선택한 문서를 보관 폴더로 옮겨",
+      "expected": {
+        "intent": "move",
+        "ops": [
+          "move"
+        ],
+        "params": [
+          {
+            "folder": "documents/보관"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      }
+    },
+    {
+      "id": "ko-45",
+      "category": "ko",
+      "text": "선택 문서에 태그 경비, 10월 추가해줘",
+      "expected": {
+        "intent": "tag",
+        "ops": [
+          "tag"
+        ],
+        "params": [
+          {
+            "add": [
+              "경비",
+              "10월"
+            ]
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      }
+    },
+    {
+      "id": "ko-46",
+      "category": "ko",
+      "text": "이 문서에서 중요 태그 빼줘",
+      "expected": {
+        "intent": "tag",
+        "ops": [
+          "tag"
+        ],
+        "params": [
+          {
+            "remove": [
+              "중요"
+            ]
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      }
+    },
+    {
+      "id": "ko-47",
+      "category": "ko",
+      "text": "작년 계약서 전부 삭제",
+      "expected": {
+        "intent": "delete",
+        "ops": [
+          "delete"
+        ],
+        "params": [
+          {
+            "to_trash": true
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "contract",
+            "date_from": "2025-01-01",
+            "date_to": "2025-12-31"
+          }
+        }
+      }
+    },
+    {
+      "id": "ko-48",
+      "category": "ko",
+      "text": "선택한 문서를 한빛 납품 프로젝트에 추가해",
+      "expected": {
+        "intent": "add_to_project",
+        "ops": [
+          "add_to_project"
+        ]
+      },
+      "note": "P6 프로젝트"
+    },
+    {
+      "id": "ko-49",
+      "category": "ko",
+      "text": "지난달 영수증 CSV로 내보내줘",
+      "expected": {
+        "intent": "export",
+        "ops": [
+          "export"
+        ],
+        "params": [
+          {
+            "format": "csv"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "receipt",
+            "date_from": "2026-10-01",
+            "date_to": "2026-10-31"
+          }
+        }
+      }
+    },
+    {
+      "id": "ko-50",
+      "category": "ko",
+      "text": "이 계약서를 검색 가능한 PDF로 저장해",
+      "expected": {
+        "intent": "export",
+        "ops": [
+          "export"
+        ],
+        "params": [
+          {
+            "format": "pdf_searchable",
+            "target": "text"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      }
+    },
+    {
+      "id": "ko-51",
+      "category": "ko",
+      "text": "세금계산서 표만 엑셀로 뽑아줘",
+      "expected": {
+        "intent": "export",
+        "ops": [
+          "export"
+        ],
+        "params": [
+          {
+            "format": "xlsx",
+            "target": "table"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "tax_invoice"
+          }
+        }
+      }
+    },
+    {
+      "id": "ko-52",
+      "category": "ko",
+      "text": "견적서 양식으로 한빛에 보낼 견적서 초안 작성해줘",
+      "expected": {
+        "intent": "draft_document",
+        "ops": [
+          "draft_document"
+        ]
+      },
+      "note": "P6 문서 생성"
+    },
+    {
+      "id": "ko-53",
+      "category": "ko",
+      "text": "모델을 4B로 바꿔",
+      "expected": {
+        "intent": "set_model",
+        "ops": [
+          "set_model"
+        ],
+        "params": [
+          {
+            "id": "qwen3.5-4b-q6k"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ko-54",
+      "category": "ko",
+      "text": "정확도 우선 프로파일로 바꿔줘",
+      "expected": {
+        "intent": "set_profile",
+        "ops": [
+          "set_profile"
+        ],
+        "params": [
+          {
+            "profile": "accuracy"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ko-55",
+      "category": "ko",
+      "text": "이 조항이 무슨 뜻인지 설명해줘",
+      "expected": {
+        "intent": "explain",
+        "ops": [
+          "explain"
+        ]
+      },
+      "note": "P6 설명(선택 문장)"
+    },
+    {
+      "id": "ko-56",
+      "category": "ko",
+      "text": "고대비 테마 켜줘",
+      "expected": {
+        "intent": "set_theme",
+        "ops": [
+          "set_theme"
+        ],
+        "params": [
+          {
+            "theme": "high-contrast"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ko-57",
+      "category": "ko",
+      "text": "UI를 영어로 바꿔줘",
+      "expected": {
+        "intent": "set_language",
+        "ops": [
+          "set_language"
+        ],
+        "params": [
+          {
+            "lang": "en"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ko-58",
+      "category": "ko",
+      "text": "렌더링 DPI를 300으로 설정해",
+      "expected": {
+        "intent": "set_setting",
+        "ops": [
+          "set_setting"
+        ],
+        "params": [
+          {
+            "key": "render_dpi",
+            "value": 300
+          }
+        ]
+      }
+    },
+    {
+      "id": "ko-59",
+      "category": "ko",
+      "text": "대화 기록은 180일만 보관해",
+      "expected": {
+        "intent": "set_retention",
+        "ops": [
+          "set_retention"
+        ],
+        "params": [
+          {
+            "item": "chats",
+            "days": 180
+          }
+        ]
+      },
+      "note": "P6 보존 기간"
+    },
+    {
+      "id": "ko-60",
+      "category": "ko",
+      "text": "2026 감사 대응 프로젝트 만들어줘",
+      "expected": {
+        "intent": "create_project",
+        "ops": [
+          "create_project"
+        ],
+        "params": [
+          {
+            "name": "2026 감사 대응"
+          }
+        ]
+      },
+      "note": "P6 프로젝트"
+    },
+    {
+      "id": "ko-61",
+      "category": "ko",
+      "text": "설정 열어줘",
+      "expected": {
+        "intent": "open",
+        "ops": [
+          "open"
+        ],
+        "params": [
+          {
+            "target": "screen",
+            "ref": "settings"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ko-62",
+      "category": "ko",
+      "text": "계약서_2026.pdf 열어줘",
+      "expected": {
+        "intent": "open",
+        "ops": [
+          "open"
+        ],
+        "params": [
+          {
+            "target": "document",
+            "ref": "계약서_2026.pdf"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ko-63",
+      "category": "ko",
+      "text": "작업 목록 보여줘",
+      "expected": {
+        "intent": "open",
+        "ops": [
+          "open"
+        ],
+        "params": [
+          {
+            "target": "screen",
+            "ref": "jobs"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ko-64",
+      "category": "ko",
+      "text": "실패한 작업 재시도해",
+      "expected": {
+        "intent": "job",
+        "ops": [
+          "job"
+        ],
+        "params": [
+          {
+            "action": "retry"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ko-65",
+      "category": "ko",
+      "text": "한빛 납품 프로젝트 정합성 검사 돌려",
+      "expected": {
+        "intent": "check_consistency",
+        "ops": [
+          "check_consistency"
+        ]
+      },
+      "note": "P6 정합성 검사"
+    },
+    {
+      "id": "ko-66",
+      "category": "ko",
+      "text": "엔진 재시작해줘",
+      "expected": {
+        "intent": "engine",
+        "ops": [
+          "engine"
+        ],
+        "params": [
+          {
+            "action": "restart"
+          }
+        ]
+      }
+    },
+    {
+      "id": "ko-67",
+      "category": "ko",
+      "text": "불일치 항목으로 보완요청서 만들어줘",
+      "expected": {
+        "intent": "request_supplement",
+        "ops": [
+          "request_supplement"
+        ]
+      },
+      "note": "P6 보완요청서(열린 프로젝트)"
+    },
+    {
+      "id": "ko-68",
+      "category": "ko",
+      "text": "되돌린 거 다시 실행해",
+      "expected": {
+        "intent": "redo",
+        "ops": [
+          "redo"
+        ]
+      }
+    },
+    {
+      "id": "ko-69",
+      "category": "ko",
+      "text": "도움말",
+      "expected": {
+        "intent": "help",
+        "ops": [
+          "help"
+        ]
+      }
+    },
+    {
+      "id": "ko-70",
+      "category": "ko",
+      "text": "삭제해줘",
+      "expected": {
+        "intent": "clarify",
+        "ops": [
+          "clarify"
+        ]
+      },
+      "note": "대상이 없음 — 되물어야 함"
+    },
+    {
+      "id": "en-01",
+      "category": "en",
+      "text": "find documents from Hanbit",
+      "expected": {
+        "intent": "search",
+        "ops": [
+          "search"
+        ],
+        "params": [
+          {
+            "query": "Hanbit"
+          }
+        ]
+      },
+      "note": "설계 예시 11"
+    },
+    {
+      "id": "en-02",
+      "category": "en",
+      "text": "pause the job",
+      "expected": {
+        "intent": "job",
+        "ops": [
+          "job"
+        ],
+        "params": [
+          {
+            "action": "pause"
+          }
+        ]
+      }
+    },
+    {
+      "id": "en-03",
+      "category": "en",
+      "text": "process everything in the inbox",
+      "expected": {
+        "intent": "import",
+        "ops": [
+          "import",
+          "classify",
+          "ocr",
+          "extract"
+        ],
+        "scope": {
+          "folder": "inbox"
+        }
+      }
+    },
+    {
+      "id": "en-04",
+      "category": "en",
+      "text": "export last month's receipts to Excel",
+      "expected": {
+        "intent": "export",
+        "ops": [
+          "export"
+        ],
+        "params": [
+          {
+            "format": "xlsx"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "receipt",
+            "date_from": "2026-10-01",
+            "date_to": "2026-10-31"
+          }
+        }
+      }
+    },
+    {
+      "id": "en-05",
+      "category": "en",
+      "text": "how many tax invoices did we get this year?",
+      "expected": {
+        "intent": "aggregate",
+        "ops": [
+          "aggregate"
+        ],
+        "params": [
+          {
+            "fn": "count"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "tax_invoice",
+            "date_from": "2026-01-01",
+            "date_to": "2026-12-31"
+          }
+        }
+      }
+    },
+    {
+      "id": "en-06",
+      "category": "en",
+      "text": "total of last month's receipts",
+      "expected": {
+        "intent": "aggregate",
+        "ops": [
+          "aggregate"
+        ],
+        "params": [
+          {
+            "fn": "sum",
+            "field": "total"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "receipt",
+            "date_from": "2026-10-01",
+            "date_to": "2026-10-31"
+          }
+        }
+      }
+    },
+    {
+      "id": "en-07",
+      "category": "en",
+      "text": "summarize this document briefly",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "target": "each_doc",
+            "length": "short"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      }
+    },
+    {
+      "id": "en-08",
+      "category": "en",
+      "text": "what does this contract say about termination?",
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      }
+    },
+    {
+      "id": "en-09",
+      "category": "en",
+      "text": "re-OCR this page with the fine print profile",
+      "expected": {
+        "intent": "ocr",
+        "ops": [
+          "ocr"
+        ],
+        "params": [
+          {
+            "profile": "fine_print",
+            "force": true,
+            "pages": [
+              1
+            ]
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      }
+    },
+    {
+      "id": "en-10",
+      "category": "en",
+      "text": "move the selected documents into monthly folders",
+      "expected": {
+        "intent": "move",
+        "ops": [
+          "move"
+        ],
+        "params": [
+          {
+            "group_by": "month"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      }
+    },
+    {
+      "id": "en-11",
+      "category": "en",
+      "text": "rename reviewed receipts using the template",
+      "expected": {
+        "intent": "rename",
+        "ops": [
+          "rename"
+        ],
+        "params": [
+          {
+            "only_reviewed": true
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "receipt"
+          }
+        }
+      }
+    },
+    {
+      "id": "en-12",
+      "category": "en",
+      "text": "tag these documents as urgent",
+      "expected": {
+        "intent": "tag",
+        "ops": [
+          "tag"
+        ],
+        "params": [
+          {
+            "add": [
+              "urgent"
+            ]
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      }
+    },
+    {
+      "id": "en-13",
+      "category": "en",
+      "text": "delete last year's quotations",
+      "expected": {
+        "intent": "delete",
+        "ops": [
+          "delete"
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "quotation",
+            "date_from": "2025-01-01",
+            "date_to": "2025-12-31"
+          }
+        }
+      }
+    },
+    {
+      "id": "en-14",
+      "category": "en",
+      "text": "switch to the light theme",
+      "expected": {
+        "intent": "set_theme",
+        "ops": [
+          "set_theme"
+        ],
+        "params": [
+          {
+            "theme": "light"
+          }
+        ]
+      }
+    },
+    {
+      "id": "en-15",
+      "category": "en",
+      "text": "open the review queue",
+      "expected": {
+        "intent": "open",
+        "ops": [
+          "open"
+        ],
+        "params": [
+          {
+            "target": "screen",
+            "ref": "review"
+          }
+        ]
+      }
+    },
+    {
+      "id": "en-16",
+      "category": "en",
+      "text": "restart the engine",
+      "expected": {
+        "intent": "engine",
+        "ops": [
+          "engine"
+        ],
+        "params": [
+          {
+            "action": "restart"
+          }
+        ]
+      }
+    },
+    {
+      "id": "en-17",
+      "category": "en",
+      "text": "draft an official letter to Hanbit about the overdue invoice",
+      "expected": {
+        "intent": "draft_document",
+        "ops": [
+          "draft_document"
+        ]
+      },
+      "note": "P6 문서 생성"
+    },
+    {
+      "id": "en-18",
+      "category": "en",
+      "text": "set the review threshold to 90%",
+      "expected": {
+        "intent": "set_setting",
+        "ops": [
+          "set_setting"
+        ],
+        "params": [
+          {
+            "key": "review_threshold",
+            "value": 0.9
+          }
+        ]
+      }
+    },
+    {
+      "id": "en-19",
+      "category": "en",
+      "text": "classify the documents in this folder",
+      "expected": {
+        "intent": "classify",
+        "ops": [
+          "classify"
+        ],
+        "scope": {
+          "folder": "inbox"
+        }
+      }
+    },
+    {
+      "id": "en-20",
+      "category": "en",
+      "text": "mark this document as a business registration",
+      "expected": {
+        "intent": "set_doc_type",
+        "ops": [
+          "set_doc_type"
+        ],
+        "params": [
+          {
+            "doc_type": "business_registration"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      }
+    },
+    {
+      "id": "mx-01",
+      "category": "mixed",
+      "text": "inbox 폴더 receipt만 분류해줘",
+      "expected": {
+        "intent": "import",
+        "ops": [
+          "import",
+          "classify"
+        ],
+        "scope": {
+          "folder": "inbox",
+          "filter": {
+            "doc_type": "receipt"
+          }
+        }
+      },
+      "note": "분류만 — OCR·추출 없음"
+    },
+    {
+      "id": "mx-02",
+      "category": "mixed",
+      "text": "tax invoice 전부 excel로 export 해줘",
+      "expected": {
+        "intent": "export",
+        "ops": [
+          "export"
+        ],
+        "params": [
+          {
+            "format": "xlsx"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "tax_invoice"
+          }
+        }
+      }
+    },
+    {
+      "id": "mx-03",
+      "category": "mixed",
+      "text": "이 contract 요약 short로",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "target": "each_doc",
+            "length": "short"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      }
+    },
+    {
+      "id": "mx-04",
+      "category": "mixed",
+      "text": "last month 영수증 total 얼마?",
+      "expected": {
+        "intent": "aggregate",
+        "ops": [
+          "aggregate"
+        ],
+        "params": [
+          {
+            "fn": "sum",
+            "field": "total"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "receipt",
+            "date_from": "2026-10-01",
+            "date_to": "2026-10-31"
+          }
+        }
+      }
+    },
+    {
+      "id": "mx-05",
+      "category": "mixed",
+      "text": "OCR profile을 fine print로 해서 이 페이지 다시",
+      "expected": {
+        "intent": "ocr",
+        "ops": [
+          "ocr"
+        ],
+        "params": [
+          {
+            "profile": "fine_print",
+            "force": true,
+            "pages": [
+              1
+            ]
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      }
+    },
+    {
+      "id": "mx-06",
+      "category": "mixed",
+      "text": "theme dark로 바꿔줘",
+      "expected": {
+        "intent": "set_theme",
+        "ops": [
+          "set_theme"
+        ],
+        "params": [
+          {
+            "theme": "dark"
+          }
+        ]
+      }
+    },
+    {
+      "id": "mx-07",
+      "category": "mixed",
+      "text": "model을 9B로 switch",
+      "expected": {
+        "intent": "set_model",
+        "ops": [
+          "set_model"
+        ],
+        "params": [
+          {
+            "id": "qwen3.5-9b-q4km"
+          }
+        ]
+      }
+    },
+    {
+      "id": "mx-08",
+      "category": "mixed",
+      "text": "search for 위약금",
+      "expected": {
+        "intent": "search",
+        "ops": [
+          "search"
+        ],
+        "params": [
+          {
+            "query": "위약금"
+          }
+        ]
+      }
+    },
+    {
+      "id": "mx-09",
+      "category": "mixed",
+      "text": "선택한 contract 두 개 compare 해줘",
+      "context": {
+        "selected_doc_ids": [
+          "d1a2",
+          "d7f3"
+        ]
+      },
+      "expected": {
+        "intent": "compare",
+        "ops": [
+          "compare"
+        ],
+        "params": [
+          {
+            "doc_ids": [
+              "d1a2",
+              "d7f3"
+            ]
+          }
+        ]
+      },
+      "note": "P6 비교 — 이 항목만 문서 2건이 선택된 컨텍스트(context 덮어쓰기)로 실행"
+    },
+    {
+      "id": "mx-10",
+      "category": "mixed",
+      "text": "Hanbit 거래 문서에 tag '거래처A' 추가",
+      "expected": {
+        "intent": "tag",
+        "ops": [
+          "tag"
+        ],
+        "params": [
+          {
+            "add": [
+              "거래처A"
+            ]
+          }
+        ]
+      },
+      "note": "범위(거래처 Hanbit)는 모델이 채워야 함 — 범위는 채점하지 않음"
+    }
+  ]
+}

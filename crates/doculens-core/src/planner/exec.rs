@@ -17,6 +17,7 @@ use crate::documents::import::{self, ImportDeps, ImportOptions};
 use crate::documents::{repo as docs, DocumentRecord};
 use crate::error::{CoreError, Result};
 use crate::export::{self, ExportRequest};
+use crate::generate::{self, DraftRequest, GenerateDeps, SourceRef};
 use crate::knowledge::answer::{self, AnswerDeps, ChatBackend};
 use crate::knowledge::embed::Embedder;
 use crate::knowledge::search::{self, SearchDeps};
@@ -27,12 +28,14 @@ use crate::paths::WorkspacePaths;
 use crate::pipeline::repo::{self as pipeline_repo, ReviewFilter};
 use crate::pipeline::review::{self, ReviewAction};
 use crate::pipeline::run::{self as pipeline_run, PipelineDeps};
+use crate::pipeline::vlm::Vlm;
 use crate::pipeline::{PipelineLevel, ProcessRequest, ReviewReason, SchemaChoice};
+use crate::projects::{self, repo as projects_repo, ProjectDeps, ProjectInput, TemplateInput};
 use crate::settings::{KnowledgeSettings, Language, ProcessingSettings, Profile};
 
 use super::{
-    scope, AggregateFn, ExportLayout, ExportTarget, GroupBy, OcrProfile, Op, OpKind, Plan, ReviewOnly, ReviewOp,
-    SummarizeTarget, SummaryLength,
+    compact, scope, AggregateFn, ExplainScope, ExportLayout, ExportTarget, GroupBy, OcrProfile, Op, OpKind, Plan,
+    ReviewOnly, ReviewOp, SummarizeTarget, SummaryLength,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -892,6 +895,281 @@ fn run_step(
                 })
             }
         },
+        Op::DraftDocument { form_ref, format_description, content, sources, output, tone, length } => {
+            let chat = deps.chat.ok_or_else(|| no_model(deps))?;
+            let model = deps.model.clone().ok_or_else(|| no_model(deps))?;
+            let _lease = LeaseGuard::acquire(deps.lease);
+            let vlm = Vlm::new(chat, model, deps.profile, deps.cancel).with_context(deps.ctx_size);
+            let mut srcs: Vec<SourceRef> = Vec::new();
+            for s in sources {
+                match s.as_str() {
+                    "selection" => {
+                        for id in &plan.scope.doc_ids {
+                            srcs.push(SourceRef::Document { doc_id: id.clone() });
+                        }
+                    }
+                    "aggregate" => {
+                        if let Some(v) = out
+                            .steps
+                            .iter()
+                            .rev()
+                            .find(|st| st.op == OpKind::Aggregate && st.status == StepStatus::Done)
+                            .map(|st| st.payload.clone())
+                        {
+                            srcs.push(SourceRef::Aggregate { result: v });
+                        }
+                    }
+                    id => srcs.push(SourceRef::Document { doc_id: id.to_string() }),
+                }
+            }
+            if srcs.is_empty() && !plan.scope.is_empty() {
+                for d in working_set(deps, plan, imported)?.iter().take(10) {
+                    srcs.push(SourceRef::Document { doc_id: d.id.clone() });
+                }
+            }
+            let req = DraftRequest {
+                form_ref: form_ref.clone(),
+                format_description: format_description.clone(),
+                content: content.clone(),
+                sources: srcs,
+                output: output.unwrap_or_default(),
+                tone: tone.unwrap_or_default(),
+                length: length.unwrap_or_default(),
+                language: deps.language,
+                ..DraftRequest::default()
+            };
+            let gdeps = GenerateDeps {
+                db,
+                paths: deps.paths(),
+                vlm: Some(&vlm),
+                knowledge: Some(SearchDeps { db, analyzer: deps.analyzer, embedder: deps.embedder }),
+                printer: Some(deps.import.printer),
+                import: Some(&deps.import),
+                cancel: deps.cancel,
+                language: deps.language,
+            };
+            progress("draft", 0, 1, content);
+            let outcome = generate::draft(&gdeps, &req)?;
+            let _ = generate::store::save(deps.paths(), &outcome.draft);
+            let summary = if deps.ko() {
+                format!("'{}' 초안 생성 — 문서 생성 화면에서 확인·저장", outcome.draft.title)
+            } else {
+                format!("Drafted '{}' — review and save in the document generator", outcome.draft.title)
+            };
+            Ok(StepOutcome { summary, payload: serde_json::to_value(&outcome).unwrap_or(Value::Null), imported: None })
+        }
+        Op::Explain { selection, question, scope: explain_scope, allow_general_knowledge } => {
+            let chat = deps.chat.ok_or_else(|| no_model(deps))?;
+            let _lease = LeaseGuard::acquire(deps.lease);
+            let mut req = AnswerRequest::question(question.as_deref().unwrap_or(""));
+            req.kind = AnswerKind::Explain;
+            req.selection = selection.clone();
+            match explain_scope {
+                Some(ExplainScope::Document) => {
+                    req.document_id = plan.scope.doc_ids.first().cloned();
+                    req.scope.documents = plan.scope.doc_ids.clone();
+                }
+                _ => {
+                    if !plan.scope.is_empty() {
+                        req.scope.documents = ids(&working_set(deps, plan, imported)?);
+                    }
+                }
+            }
+            req.scope.latest_only = deps.knowledge.latest_only;
+            req.allow_general = allow_general_knowledge.unwrap_or(deps.knowledge.allow_general_knowledge);
+            req.top_k = deps.knowledge.top_k;
+            req.context_tokens = deps.knowledge.context_tokens;
+            req.min_similarity = Some(deps.knowledge.min_vector_similarity);
+            let cancelled = || deps.cancelled();
+            let adeps = AnswerDeps {
+                search: SearchDeps { db, analyzer: deps.analyzer, embedder: deps.embedder },
+                chat,
+                model: deps.model.clone(),
+                cancelled: Some(&cancelled),
+            };
+            let ans = answer::answer(&adeps, &req, &mut |_| !deps.cancelled())?;
+            Ok(StepOutcome {
+                summary: if ans.no_evidence {
+                    deps.t("근거를 찾지 못했습니다", "No evidence found").into()
+                } else {
+                    crate::pipeline::prompts::truncate(&ans.text, 200)
+                },
+                payload: serde_json::to_value(&ans).unwrap_or(Value::Null),
+                imported: None,
+            })
+        }
+        Op::Compare { doc_ids, aspects } => {
+            let chat = deps.chat.ok_or_else(|| no_model(deps))?;
+            let _lease = LeaseGuard::acquire(deps.lease);
+            // The knowledge comparer works on a pair; further documents are compared against the first.
+            let mut req = AnswerRequest::question(&aspects.join(", "));
+            req.kind = AnswerKind::Compare;
+            req.document_id = doc_ids.first().cloned();
+            req.compare_document_id = doc_ids.get(1).cloned();
+            req.scope.documents = doc_ids.clone();
+            req.context_tokens = deps.knowledge.context_tokens;
+            let cancelled = || deps.cancelled();
+            let adeps = AnswerDeps {
+                search: SearchDeps { db, analyzer: deps.analyzer, embedder: deps.embedder },
+                chat,
+                model: deps.model.clone(),
+                cancelled: Some(&cancelled),
+            };
+            let ans = answer::compare(&adeps, &req, &mut |_| !deps.cancelled())?;
+            Ok(StepOutcome {
+                summary: crate::pipeline::prompts::truncate(&ans.text, 200),
+                payload: serde_json::to_value(&ans).unwrap_or(Value::Null),
+                imported: None,
+            })
+        }
+        Op::CreateProject { name, template, doc_types_required } => {
+            let templates = db.with(projects_repo::list_templates)?;
+            let mut template_id = template.as_deref().and_then(|t| {
+                templates
+                    .iter()
+                    .find(|tp| tp.id == t || compact(&tp.name_ko) == compact(t) || compact(&tp.name_en) == compact(t))
+                    .map(|tp| tp.id.clone())
+            });
+            if template_id.is_none() && !doc_types_required.is_empty() {
+                // Ad-hoc checklist: a user template named after the project.
+                let tp = db.with(|c| {
+                    projects_repo::save_template(
+                        c,
+                        &TemplateInput {
+                            name_ko: name.clone(),
+                            required_doc_types: doc_types_required.clone(),
+                            ..TemplateInput::default()
+                        },
+                    )
+                })?;
+                template_id = Some(tp.id);
+            }
+            let input = ProjectInput { name: name.clone(), template_id, ..ProjectInput::default() };
+            let project = db.with(|c| projects_repo::save_project(c, &input))?;
+            let mut added = 0u32;
+            if !plan.scope.is_empty() {
+                let docs_ = working_set(deps, plan, imported)?;
+                if !docs_.is_empty() {
+                    added = db.with(|c| projects_repo::add_documents(c, &project.id, &ids(&docs_)))?;
+                    out.documents.extend(ids(&docs_));
+                }
+            }
+            let summary = if deps.ko() {
+                format!(
+                    "'{}' 프로젝트 생성{}",
+                    project.name,
+                    if added > 0 { format!(" · 문서 {added}건 추가") } else { String::new() }
+                )
+            } else {
+                format!(
+                    "Created project '{}'{}",
+                    project.name,
+                    if added > 0 { format!(" · {added} documents added") } else { String::new() }
+                )
+            };
+            Ok(StepOutcome { summary, payload: serde_json::to_value(&project).unwrap_or(Value::Null), imported: None })
+        }
+        Op::AddToProject { project, doc_ids } => {
+            let pid = project.clone().ok_or_else(|| CoreError::Invalid("project_required".into()))?;
+            let target = if doc_ids.is_empty() { ids(&working_set(deps, plan, imported)?) } else { doc_ids.clone() };
+            if target.is_empty() {
+                return Err(CoreError::Invalid("no_documents".into()));
+            }
+            let added = db.with(|c| projects_repo::add_documents(c, &pid, &target))?;
+            out.documents.extend(target.iter().cloned());
+            let detail = db.with(|c| projects_repo::get_project(c, &pid))?;
+            Ok(StepOutcome {
+                summary: if deps.ko() {
+                    format!("프로젝트에 문서 {added}건 추가")
+                } else {
+                    format!("{added} documents added to the project")
+                },
+                payload: json!({ "project_id": pid, "added": added, "project": detail }),
+                imported: None,
+            })
+        }
+        Op::DefineRule { project, template, description } => {
+            let vlm = match (deps.chat, deps.model.clone()) {
+                (Some(c), Some(m)) => Some(Vlm::new(c, m, deps.profile, deps.cancel).with_context(deps.ctx_size)),
+                _ => None,
+            };
+            let _lease = vlm.as_ref().map(|_| LeaseGuard::acquire(deps.lease));
+            let pdeps = ProjectDeps { db, vlm: vlm.as_ref(), language: deps.language };
+            let draft = projects::define_rule(&pdeps, project.as_deref(), template.as_deref(), description)?;
+            let mut saved = false;
+            if let Some(pid) = project.as_deref() {
+                if draft.confidence >= 0.6 && draft.unresolved.is_empty() && draft.issues.is_empty() {
+                    db.with(|c| projects_repo::save_rule(c, pid, &draft.rule))?;
+                    saved = true;
+                }
+            }
+            let summary = match (saved, deps.ko()) {
+                (true, true) => format!("규칙 저장: {}", draft.rule.description),
+                (true, false) => format!("Rule saved: {}", draft.rule.description),
+                (false, true) => "규칙 초안 — 프로젝트 화면의 규칙 그리드에서 확인하세요".to_string(),
+                (false, false) => "Rule draft — confirm it in the project's rule grid".to_string(),
+            };
+            Ok(StepOutcome {
+                summary,
+                payload: json!({ "project_id": project, "saved": saved, "draft": draft }),
+                imported: None,
+            })
+        }
+        Op::CheckConsistency { project, rules } => {
+            let pid = project.clone().ok_or_else(|| CoreError::Invalid("project_required".into()))?;
+            let pdeps = ProjectDeps { db, vlm: None, language: deps.language };
+            let run = projects::check(&pdeps, &pid, rules)?;
+            let summary = if deps.ko() {
+                format!(
+                    "통과 {} · 불일치 {} · 판단불가 {} · 누락 {}",
+                    run.pass, run.mismatch, run.undetermined, run.missing
+                )
+            } else {
+                format!(
+                    "pass {} · mismatch {} · undetermined {} · missing {}",
+                    run.pass, run.mismatch, run.undetermined, run.missing
+                )
+            };
+            Ok(StepOutcome { summary, payload: serde_json::to_value(&run).unwrap_or(Value::Null), imported: None })
+        }
+        Op::RequestSupplement { project, findings, output } => {
+            let pid = project.clone().ok_or_else(|| CoreError::Invalid("project_required".into()))?;
+            let run = db
+                .with(|c| projects_repo::last_run(c, &pid))?
+                .ok_or_else(|| CoreError::Invalid("no_check_run".into()))?;
+            let req =
+                projects::supplement_request(db, &pid, &run, findings, output.unwrap_or_default(), deps.language)?;
+            let vlm = match (deps.chat, deps.model.clone()) {
+                (Some(c), Some(m)) => Some(Vlm::new(c, m, deps.profile, deps.cancel).with_context(deps.ctx_size)),
+                _ => None,
+            };
+            let _lease = vlm.as_ref().map(|_| LeaseGuard::acquire(deps.lease));
+            let gdeps = GenerateDeps {
+                db,
+                paths: deps.paths(),
+                vlm: vlm.as_ref(),
+                knowledge: None,
+                printer: Some(deps.import.printer),
+                import: Some(&deps.import),
+                cancel: deps.cancel,
+                language: deps.language,
+            };
+            let outcome = generate::draft(&gdeps, &req)?;
+            let _ = generate::store::save(deps.paths(), &outcome.draft);
+            let mut payload = serde_json::to_value(&outcome).unwrap_or(Value::Null);
+            if let Some(o) = payload.as_object_mut() {
+                o.insert("project_id".into(), json!(pid));
+            }
+            Ok(StepOutcome {
+                summary: if deps.ko() {
+                    "보완요청서 초안 생성 — 문서 생성 화면에서 확인·저장".into()
+                } else {
+                    "Supplement request drafted — review and save in the document generator".into()
+                },
+                payload,
+                imported: None,
+            })
+        }
         // UI-side ops never reach here (`runs_in_ui`).
         _ => Ok(StepOutcome { summary: String::new(), payload: Value::Null, imported: None }),
     }
@@ -1269,6 +1547,62 @@ pub fn preview(
                     (if ko { format!("신규 {n}개") } else { format!("{n} new files") }, json!({ "new": n }), false)
                 }
             },
+            Op::DraftDocument { form_ref, sources, output, .. } => (
+                if ko {
+                    format!(
+                        "{} 초안을 모델이 생성합니다(출처 {}건) → 문서 생성 화면에서 확인·저장",
+                        form_ref.as_deref().unwrap_or("문서"),
+                        sources.len()
+                    )
+                } else {
+                    format!(
+                        "The model drafts a {} ({} sources) → review and save in the document generator",
+                        form_ref.as_deref().unwrap_or("document"),
+                        sources.len()
+                    )
+                },
+                json!({ "form_ref": form_ref, "sources": sources, "output": output }),
+                true,
+            ),
+            Op::DefineRule { description, .. } => (
+                if ko {
+                    "규칙 JSON으로 변환한 뒤 규칙 그리드에서 확인합니다".into()
+                } else {
+                    "Converted to rule JSON, then confirmed in the rule grid".into()
+                },
+                json!({ "description": description }),
+                true,
+            ),
+            Op::RequestSupplement { output, .. } => (
+                if ko {
+                    "마지막 검사의 불일치·누락으로 보완요청서 초안을 만듭니다".into()
+                } else {
+                    "Drafts a supplement request from the last check's findings".into()
+                },
+                json!({ "output": output }),
+                true,
+            ),
+            Op::SetRetention { item, days } => (
+                match (ko, *days) {
+                    (true, -1) => format!("{} 보존 기간을 무기한으로 바꿉니다", item.as_str()),
+                    (true, d) => {
+                        format!("{} 보존 기간을 {d}일로 바꿉니다(지난 항목은 다음 파기 작업에서 삭제)", item.as_str())
+                    }
+                    (false, -1) => format!("Keep {} forever", item.as_str()),
+                    (false, d) => format!("Keep {} for {d} days (older items go at the next purge)", item.as_str()),
+                },
+                json!({ "item": item, "days": days }),
+                true,
+            ),
+            Op::RegisterForm { doc_ref, name, .. } => (
+                if ko {
+                    "문서에서 필드를 도출해 양식으로 등록합니다(필드 그리드 확인)".into()
+                } else {
+                    "Derives the fields and registers the form (field grid)".into()
+                },
+                json!({ "doc_ref": doc_ref, "name": name }),
+                true,
+            ),
             _ => (String::new(), Value::Null, op.needs_confirmation()),
         };
         if confirm {

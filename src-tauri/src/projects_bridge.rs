@@ -1,0 +1,200 @@
+//! Projects / consistency bridge (P6 §3.15): CRUD on projects, templates and
+//! rules, deterministic consistency checks, relation graph, summary report and
+//! the 보완요청서 draft job. Natural-language rule definition uses the loaded
+//! model only as a fallback (phrase rules first) through the interactive gate.
+
+use serde::Serialize;
+use serde_json::json;
+use tauri::{AppHandle, Emitter, Manager};
+
+use doculens_core::generate::OutputFormat;
+use doculens_core::pipeline::vlm::Vlm;
+use doculens_core::projects::{
+    self, repo, CheckRun, Project, ProjectDeps, ProjectDetail, ProjectInput, ProjectStatus, ProjectTemplate, Rule,
+    RuleDraft, TemplateInput,
+};
+
+use crate::state::{AppState, UiError, UiResult};
+use crate::{generate_bridge, pipeline_bridge};
+
+pub const PROJECTS_EVENT: &str = "projects://changed";
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReportResponse {
+    pub markdown: String,
+}
+
+fn emit(app: &AppHandle, ids: Vec<String>) {
+    let _ = app.emit(PROJECTS_EVENT, json!({ "project_ids": ids }));
+}
+
+fn language(app: &AppHandle) -> doculens_core::settings::Language {
+    app.state::<AppState>().settings.lock().map(|s| s.ui.language).unwrap_or_default()
+}
+
+pub fn list(app: &AppHandle) -> UiResult<Vec<Project>> {
+    let pctx = pipeline_bridge::context(app)?;
+    pctx.db().with(repo::list_projects).map_err(UiError::from)
+}
+
+pub fn create(app: &AppHandle, mut input: ProjectInput) -> UiResult<Project> {
+    input.id = None;
+    if input.name.trim().is_empty() {
+        return Err(UiError::invalid("name_empty"));
+    }
+    let pctx = pipeline_bridge::context(app)?;
+    let project = pctx.db().with(|c| repo::save_project(c, &input))?;
+    emit(app, vec![project.id.clone()]);
+    Ok(project)
+}
+
+pub fn update(app: &AppHandle, input: ProjectInput) -> UiResult<Project> {
+    if input.id.is_none() {
+        return Err(UiError::invalid("id_required"));
+    }
+    let pctx = pipeline_bridge::context(app)?;
+    let project = pctx.db().with(|c| repo::save_project(c, &input))?;
+    emit(app, vec![project.id.clone()]);
+    Ok(project)
+}
+
+pub fn delete(app: &AppHandle, id: &str) -> UiResult<bool> {
+    let pctx = pipeline_bridge::context(app)?;
+    let ok = pctx.db().with(|c| repo::delete_project(c, id))?;
+    if ok {
+        emit(app, vec![id.to_string()]);
+    }
+    Ok(ok)
+}
+
+pub fn get(app: &AppHandle, id: &str) -> UiResult<ProjectDetail> {
+    let pctx = pipeline_bridge::context(app)?;
+    projects::detail(pctx.db(), id, language(app)).map_err(UiError::from)
+}
+
+pub fn add_documents(app: &AppHandle, id: &str, doc_ids: &[String]) -> UiResult<ProjectDetail> {
+    let pctx = pipeline_bridge::context(app)?;
+    pctx.db().with(|c| repo::add_documents(c, id, doc_ids))?;
+    emit(app, vec![id.to_string()]);
+    get(app, id)
+}
+
+pub fn remove_document(app: &AppHandle, id: &str, doc_id: &str) -> UiResult<ProjectDetail> {
+    let pctx = pipeline_bridge::context(app)?;
+    pctx.db().with(|c| repo::remove_document(c, id, doc_id))?;
+    emit(app, vec![id.to_string()]);
+    get(app, id)
+}
+
+pub fn set_status(app: &AppHandle, id: &str, status: ProjectStatus) -> UiResult<Project> {
+    let pctx = pipeline_bridge::context(app)?;
+    let project = pctx.db().with(|c| {
+        repo::set_status(c, id, status)?;
+        repo::get_project(c, id)
+    })?;
+    let project = project.ok_or_else(|| UiError::from(doculens_core::CoreError::NotFound(id.to_string())))?;
+    emit(app, vec![id.to_string()]);
+    Ok(project)
+}
+
+pub fn templates(app: &AppHandle) -> UiResult<Vec<ProjectTemplate>> {
+    let pctx = pipeline_bridge::context(app)?;
+    pctx.db().with(repo::list_templates).map_err(UiError::from)
+}
+
+pub fn template_save(app: &AppHandle, input: TemplateInput) -> UiResult<ProjectTemplate> {
+    if input.name_ko.trim().is_empty() {
+        return Err(UiError::invalid("name_empty"));
+    }
+    let pctx = pipeline_bridge::context(app)?;
+    let tp = pctx.db().with(|c| repo::save_template(c, &input))?;
+    emit(app, Vec::new());
+    Ok(tp)
+}
+
+pub fn template_delete(app: &AppHandle, id: &str) -> UiResult<bool> {
+    let pctx = pipeline_bridge::context(app)?;
+    let ok = pctx.db().with(|c| repo::delete_template(c, id))?;
+    emit(app, Vec::new());
+    Ok(ok)
+}
+
+/// The loaded chat / vision model, when the engine already has it (never loads: the user
+/// is waiting on a dialog). `None` → phrase rules only.
+fn loaded_model(app: &AppHandle) -> Option<(String, Option<u32>)> {
+    let state = app.state::<AppState>();
+    let m = pipeline_bridge::vision_model(app, false, None).ok()?;
+    let ctx = state.engine.status().model(&m).and_then(|x| x.ctx);
+    Some((m, ctx))
+}
+
+pub fn define_rule(app: &AppHandle, id: &str, description: &str) -> UiResult<RuleDraft> {
+    if description.trim().is_empty() {
+        return Err(UiError::invalid("description_empty"));
+    }
+    let pctx = pipeline_bridge::context(app)?;
+    let state = app.state::<AppState>();
+    let model = loaded_model(app);
+    let vlm = model.as_ref().map(|(m, ctx)| Vlm::new(&state.engine, m.clone(), pctx.profile, None).with_context(*ctx));
+    let deps = ProjectDeps { db: pctx.db(), vlm: vlm.as_ref(), language: language(app) };
+    let run = || projects::define_rule(&deps, Some(id), None, description);
+    let draft = if vlm.is_some() { state.gate.interactive(run) } else { run() };
+    draft.map_err(UiError::from)
+}
+
+pub fn save_rule(app: &AppHandle, id: &str, rule: Rule) -> UiResult<Rule> {
+    if rule.description.trim().is_empty() {
+        return Err(UiError::invalid("description_empty"));
+    }
+    let pctx = pipeline_bridge::context(app)?;
+    let saved = pctx.db().with(|c| repo::save_rule(c, id, &rule))?;
+    emit(app, vec![id.to_string()]);
+    Ok(saved)
+}
+
+pub fn delete_rule(app: &AppHandle, id: &str, rule_id: &str) -> UiResult<bool> {
+    let pctx = pipeline_bridge::context(app)?;
+    let ok = pctx.db().with(|c| repo::delete_rule(c, id, rule_id))?;
+    emit(app, vec![id.to_string()]);
+    Ok(ok)
+}
+
+/// Deterministic check (inline: a handful of rules over a handful of documents). The model
+/// is only consulted for fuzzy name comparisons when it is already loaded.
+pub fn check(app: &AppHandle, id: &str, rule_ids: &[String]) -> UiResult<CheckRun> {
+    let pctx = pipeline_bridge::context(app)?;
+    let state = app.state::<AppState>();
+    let model = loaded_model(app);
+    let vlm = model.as_ref().map(|(m, ctx)| Vlm::new(&state.engine, m.clone(), pctx.profile, None).with_context(*ctx));
+    let deps = ProjectDeps { db: pctx.db(), vlm: vlm.as_ref(), language: language(app) };
+    let run = || projects::check(&deps, id, rule_ids);
+    let result = if vlm.is_some() { state.gate.interactive(run) } else { run() };
+    let run = result.map_err(UiError::from)?;
+    emit(app, vec![id.to_string()]);
+    Ok(run)
+}
+
+pub fn runs(app: &AppHandle, id: &str) -> UiResult<Vec<CheckRun>> {
+    let pctx = pipeline_bridge::context(app)?;
+    pctx.db().with(|c| repo::list_runs(c, id, 20)).map_err(UiError::from)
+}
+
+pub fn report(app: &AppHandle, id: &str) -> UiResult<ReportResponse> {
+    let pctx = pipeline_bridge::context(app)?;
+    let markdown = projects::report(pctx.db(), id, language(app)).map_err(UiError::from)?;
+    Ok(ReportResponse { markdown })
+}
+
+/// Builds the 보완요청서 request from the last check run and queues the draft job.
+pub fn request_supplement(
+    app: &AppHandle,
+    id: &str,
+    finding_ids: &[String],
+    output: Option<OutputFormat>,
+) -> UiResult<String> {
+    let pctx = pipeline_bridge::context(app)?;
+    let run = pctx.db().with(|c| repo::last_run(c, id))?.ok_or_else(|| UiError::invalid("no_check_run"))?;
+    let req = projects::supplement_request(pctx.db(), id, &run, finding_ids, output.unwrap_or_default(), language(app))
+        .map_err(UiError::from)?;
+    generate_bridge::draft(app, req, Some(id.to_string()), "project")
+}

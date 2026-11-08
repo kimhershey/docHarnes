@@ -130,10 +130,147 @@ impl RetentionPolicy {
     }
 }
 
+// ---------------------------------------------------------------------------
+// File-system helpers for the daily purge job (§3.8: no OS recycle bin)
+// ---------------------------------------------------------------------------
+
+/// Outcome of a file-system purge step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct FsPurge {
+    pub files: u64,
+    pub bytes: u64,
+}
+
+fn modified(meta: &std::fs::Metadata) -> Option<std::time::SystemTime> {
+    meta.modified().ok()
+}
+
+/// Total size of a directory tree (0 when it does not exist).
+pub fn dir_size(dir: &std::path::Path) -> u64 {
+    let mut total = 0u64;
+    let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
+    for entry in rd.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        if meta.is_dir() {
+            total += dir_size(&entry.path());
+        } else {
+            total += meta.len();
+        }
+    }
+    total
+}
+
+/// Deletes every file under `dir` whose modification time is older than `cutoff`
+/// (recursively), then removes directories left empty. Missing `dir` → no-op.
+pub fn purge_old_files(dir: &std::path::Path, cutoff: std::time::SystemTime) -> FsPurge {
+    let mut out = FsPurge::default();
+    let Ok(rd) = std::fs::read_dir(dir) else { return out };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        let Ok(meta) = entry.metadata() else { continue };
+        if meta.is_dir() {
+            let inner = purge_old_files(&path, cutoff);
+            out.files += inner.files;
+            out.bytes += inner.bytes;
+            let _ = std::fs::remove_dir(&path); // only succeeds when empty
+        } else if modified(&meta).is_some_and(|m| m < cutoff) && std::fs::remove_file(&path).is_ok() {
+            out.files += 1;
+            out.bytes += meta.len();
+        }
+    }
+    out
+}
+
+/// Size-capped LRU trim over the per-document sub-directories of a cache folder:
+/// while the tree is larger than `max_bytes`, the least recently modified sub-directory
+/// that is older than `min_age` is removed. Returns the removed directories and bytes.
+pub fn trim_lru_dirs(dir: &std::path::Path, max_bytes: u64, min_age: std::time::Duration) -> FsPurge {
+    let mut out = FsPurge::default();
+    let mut total = dir_size(dir);
+    if total <= max_bytes {
+        return out;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else { return out };
+    let now = std::time::SystemTime::now();
+    let mut subdirs: Vec<(std::time::SystemTime, std::path::PathBuf, u64)> = rd
+        .flatten()
+        .filter_map(|e| {
+            let meta = e.metadata().ok()?;
+            if !meta.is_dir() {
+                return None;
+            }
+            let newest = newest_mtime(&e.path()).or_else(|| modified(&meta))?;
+            Some((newest, e.path(), dir_size(&e.path())))
+        })
+        .collect();
+    subdirs.sort_by_key(|(m, _, _)| *m);
+    for (mtime, path, size) in subdirs {
+        if total <= max_bytes {
+            break;
+        }
+        if now.duration_since(mtime).map(|age| age < min_age).unwrap_or(true) {
+            continue;
+        }
+        if std::fs::remove_dir_all(&path).is_ok() {
+            out.files += 1;
+            out.bytes += size;
+            total = total.saturating_sub(size);
+        }
+    }
+    out
+}
+
+/// Most recent modification time inside a directory tree (what "last used" means for a
+/// page cache that is only written when rendered).
+fn newest_mtime(dir: &std::path::Path) -> Option<std::time::SystemTime> {
+    let mut newest: Option<std::time::SystemTime> = None;
+    let rd = std::fs::read_dir(dir).ok()?;
+    for entry in rd.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        let m = if meta.is_dir() { newest_mtime(&entry.path()) } else { modified(&meta) };
+        if let Some(m) = m {
+            if newest.is_none_or(|n| m > n) {
+                newest = Some(m);
+            }
+        }
+    }
+    newest
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn fs_purge_removes_old_files_and_trims_lru_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("docA");
+        let new = dir.path().join("docB");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&new).unwrap();
+        std::fs::write(old.join("p1.jpg"), vec![0u8; 1000]).unwrap();
+        std::fs::write(new.join("p1.jpg"), vec![0u8; 1000]).unwrap();
+        let past = std::time::SystemTime::now() - std::time::Duration::from_secs(10 * 86_400);
+        let f = std::fs::File::options().write(true).open(old.join("p1.jpg")).unwrap();
+        f.set_modified(past).unwrap();
+        drop(f);
+        assert_eq!(dir_size(dir.path()), 2000);
+        // LRU: the cap of 1,500 bytes evicts the old directory only.
+        let trimmed = trim_lru_dirs(dir.path(), 1_500, std::time::Duration::from_secs(86_400));
+        assert_eq!((trimmed.files, trimmed.bytes), (1, 1000));
+        assert!(!old.exists() && new.exists());
+        // Age-based purge: nothing older than the cutoff is left.
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("x.log"), b"abc").unwrap();
+        let f = std::fs::File::options().write(true).open(old.join("x.log")).unwrap();
+        f.set_modified(past).unwrap();
+        drop(f);
+        let purged = purge_old_files(dir.path(), std::time::SystemTime::now() - std::time::Duration::from_secs(86_400));
+        assert_eq!((purged.files, purged.bytes), (1, 3));
+        assert!(!old.exists(), "empty directory removed");
+        assert!(new.join("p1.jpg").exists());
+    }
 
     #[test]
     fn defaults_match_design() {

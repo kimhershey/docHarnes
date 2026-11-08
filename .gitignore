@@ -50,3 +50,16 @@ src-tauri/resources/pdfium/*
 # ko-dic dictionary built by scripts/fetch-kodic.mjs --bundle (never committed)
 src-tauri/resources/ko-dic/*
 !src-tauri/resources/ko-dic/.gitkeep
+
+# llama-server packs placed by scripts/fetch-engine.mjs --bundle (never committed)
+src-tauri/resources/engines/*
+!src-tauri/resources/engines/.gitkeep
+
+# Third-party license texts generated at build time by scripts/gen-notices.mjs
+# (THIRD-PARTY-NOTICES.md and sbom.cdx.json are generated too, but committed and checked by CI)
+src-tauri/resources/licenses/*
+!src-tauri/resources/licenses/.gitkeep
+
+# Evaluation harness: locally generated fixtures / outputs (eval/README.md)
+/eval/fixtures/
+/eval/out/

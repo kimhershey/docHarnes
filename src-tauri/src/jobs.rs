@@ -53,6 +53,10 @@ pub enum JobKind {
     Organize,
     Undo,
     Redo,
+    /// Document draft generation (P6 §3.13).
+    Draft,
+    /// Daily retention purge (P7 §3.8).
+    Maintenance,
 }
 
 impl JobKind {
@@ -63,6 +67,8 @@ impl JobKind {
             "organize" => JobKind::Organize,
             "undo" => JobKind::Undo,
             "redo" => JobKind::Redo,
+            "draft" => JobKind::Draft,
+            "maintenance" => JobKind::Maintenance,
             _ => JobKind::Pipeline,
         }
     }
@@ -346,6 +352,9 @@ impl JobBook {
         if let Ok(mut c) = self.cancels.lock() {
             c.remove(id);
         }
+        if let (Some(app), Some(job)) = (self.app.get(), self.get(id)) {
+            crate::notify::job_finished(app, &job);
+        }
     }
 
     pub fn cancel_flag(&self, id: &str) -> Option<Arc<AtomicBool>> {
@@ -587,6 +596,9 @@ impl JobBook {
                 if let Ok(mut c) = state.jobs.cancels.lock() {
                     c.remove(&id);
                 }
+                if let Some(job) = state.jobs.get(&id) {
+                    crate::notify::job_finished(&app, &job);
+                }
                 state.jobs.schedule();
             })
             .ok();
@@ -752,6 +764,8 @@ impl Job {
             JobKind::Organize => "organize",
             JobKind::Undo => "undo",
             JobKind::Redo => "redo",
+            JobKind::Draft => "draft",
+            JobKind::Maintenance => "maintenance",
             _ => "job",
         }
     }

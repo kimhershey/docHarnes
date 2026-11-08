@@ -23,8 +23,9 @@
 | P2 워크스페이스·문서 | **완료 (`main`에 병합, PR #3)** | 아래 "P2 산출물" 참조 |
 | P3 지식 베이스 | **완료 (`main`에 병합, PR #4; 리뷰 반영 3커밋은 `phase/p3-knowledge` 후속 PR 대기)** | 아래 "P3 산출물" 참조. 청킹, ko-dic FTS5 + trigram + LIKE, bge-m3 + sqlite-vec, 하이브리드 검색, 근거 기반 Q&A·설명·요약·비교 |
 | P4 파이프라인 | **완료 (`phase/p4-pipeline`, PR #7 열림 — 사용자 생성; `phase/p3-knowledge` 위에 쌓음, 단계 말 리뷰 반영 완료)** | 아래 "P4 산출물" 참조. 분류·OCR·KIE 호출기, 내장 양식 7종 + 양식 등록 + NL 스키마, 검증기·신뢰도, 검토 큐, 추출 미러, 분할/병합 |
-| P5 자연어·작업 | **완료 (`phase/p5-planner`, `phase/p4-pipeline` 위에 쌓음)** | 아래 "P5 산출물" 참조. 플래너(PlanSchema·규칙·검증기·실행기), 확인 카드, 영속 Job 러너, 정리/저널/되돌리기, 집계, 내보내기 5종 |
-| P6 프로젝트·정합성 | 다음(v1.1) | §3.15 프로젝트·규칙·보완요청서 |
+| P5 자연어·작업 | **완료 (`main`에 병합, PR #8)** | 아래 "P5 산출물" 참조. 플래너(PlanSchema·규칙·검증기·실행기), 확인 카드, 영속 Job 러너, 정리/저널/되돌리기, 집계, 내보내기 5종 |
+| P6 문서 생성·프로젝트 정합성 (v1.1) | **완료 (`phase/p6-p7`, P7과 한 세션에서 진행 — 사용자 결정 2026-11-08)** | 아래 "P6·P7 산출물" 참조. §3.13 문서 생성(템플릿·양식 채우기·HWPX/DOCX/PDF/MD), §3.15 프로젝트·규칙·정합성 검사·보완요청서·관계 그래프, 플래너 op 10종 추가 |
+| P7 품질·배포 (v1.1) | **완료 (`phase/p6-p7`)** | 평가 하네스(`doculens-eval`)·플래너 골든셋 100건·회귀 게이트, NSIS Lite/Full 릴리스 워크플로·CUDA 팩 워크플로, NOTICES/SBOM 자동화, 보존/파기 일일 작업, 완료 알림, 절전 방지 |
 
 ## P1 산출물
 
@@ -846,12 +847,149 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 결과 카드의 추출 결과 인용 칩, 명확화 카드 선택지 버튼, 어시스턴트 세션 목록(§3.7.6), 모델 경로에서 다중 op 플랜을 보여 주는 모의
 (현재 미해석 문장 → 검색 플랜).
 
-## P6 착수 메모
+## P6·P7 산출물 (2026-11-08, 브랜치 `phase/p6-p7`)
 
-1. v1.1 범위 확인 후 §3.15 프로젝트·규칙·정합성·보완요청서, §3.13 문서 생성(플래너 op `draft_document` 등 부록 D 나머지 연결).
-2. P4·P5 숙제: bbox 그라운딩(디지털 PDF 문자 박스), 배치 PDF 자동 경계 탐지, 컬렉션 폴더 감시, OCR 출력 건전성 검사,
-   스키마 화면 라우트 이동 차단(데이터 라우터 전환), 일일 파기 작업(저널·작업·캐시 LRU), 완료 OS 알림·절전 방지, 플래너
-   골든셋(명령→플랜 100건) 정확도 측정, 실모델 플래너 토큰 수·지연 보정.
+사용자 결정으로 P6(문서 생성·프로젝트 정합성, v1.1)과 P7(품질·배포)을 한 세션에서 진행했다. 코어 두 모듈·프런트엔드·
+평가 하네스·패키징은 서브에이전트 5개가 병렬로 구현하고(계약은 `generate/mod.rs`·`projects/mod.rs`에 먼저 고정),
+플래너 op 확장과 셸 통합은 직접 작업했다.
+
+### 플래너 (`planner/`, 직접)
+
+- op 33 → **43**: `draft_document`(초안 생성 → 문서 생성 화면), `register_form`(UI), `explain`, `compare`, `create_project`,
+  `add_to_project`, `define_rule`, `check_consistency`, `request_supplement`, `set_retention`(UI, `days < 0` = 무기한).
+  `OP_SPECS`·PlanSchema·serde 타입·검증기(내용 길이, `sources` = 문서 id | `selection` | `aggregate`, 비교 2~5건, 프로젝트
+  참조 → id 정규화 + 열린 프로젝트 기본값 채움, 보존 일수 범위)·확인 카드(초안·규칙 그리드·보완요청서·양식·보존 단축) 확장.
+- `PlanContext`에 `projects[]`·`current_project` 추가(셸이 `projects_repo::list_projects`로 채움; UI가 열린 프로젝트를 넘김),
+  프롬프트 컨텍스트 블록에 프로젝트 줄, few-shot 3건(견적서 초안·규칙 정의·검사 → 보완요청서) 추가.
+- 규칙: `draft_document`(템플릿 키워드 표 + 등록 양식 우선순위 — "<유형> 양식으로"가 있을 때만 양식, 집계 결과 인용이면
+  `aggregate → draft_document` 2단계), `project_ops`(보완요청서 → 정합성 검사 → 규칙 정의(비교 어구: 같아야/필수/이내/must equal…)
+  → 프로젝트에 추가 → 프로젝트 만들기; 알려진 프로젝트 이름은 문장에서 가장 긴 일치로 해석), `explain_compare`(선택·용어·조항
+  어구가 있을 때만 설명, 선택 문서 2건 이상일 때 비교), `set_retention`(항목 + N일/주/개월/년, 무기한, 즉시), `register_form`.
+  오탐 방지: 질문문·정리/내보내기/검색 문장·"작성일자" 제외, "이어서 설명해줘"는 일반 질문 유지.
+- 실행기: 초안(`generate::draft`, 출처 = 범위 문서 / 선택 / 직전 집계 payload / 지식 베이스, 결과 payload = `DraftOutcome` →
+  결과 카드 "문서 생성 화면에서 열기"), 설명/비교(`knowledge::answer` explain·compare), 프로젝트 생성(+ 필수 유형이면 임시
+  템플릿, 범위 문서 자동 추가)·추가·규칙 정의(확신 ≥0.6·미해석 없음이면 저장, 아니면 그리드용 초안)·검사·보완요청서.
+
+### 셸 (`src-tauri`, 직접)
+
+- `generate_bridge`: `draft` 작업(`JobSpec::Draft`, 엔진 레인, 보완요청서처럼 규칙으로 채울 수 있으면 모델 미로드) → 결과
+  `DraftOutcome`(+`project_id`·`source`), 미리보기(HTML·MD)·재검증·저장(라이브러리 등록 → `documents://changed`)·초안 저장소.
+- `projects_bridge`: 프로젝트/템플릿/규칙 CRUD, NL 규칙 정의와 검사는 **로드된 모델이 있을 때만** 대화형 게이트로 보조(없으면
+  구문 규칙만), 요약 리포트, 보완요청서 → 초안 작업, `projects://changed { project_ids }`. 가져오기 작업 끝에 `inbox/<폴더>/`
+  문서를 같은 이름 프로젝트에 자동 배정(없으면 생성).
+- `maintenance`: `JobSpec::Maintenance`(IO 레인, 낮은 우선순위) — 저널 `purge` + 워크스페이스 휴지통, 완료 작업
+  (`jobs::purge_finished_before`), 대화(`knowledge::repo::purge_answers_before`), 로그(워크스페이스·앱), 임시 파일, 오래된
+  추출 런(`pipeline::repo::purge_runs_before`: 문서의 최신 런 제외 + 미러 폴더), 보존 기간이 설정된 문서(휴지통 없이 삭제),
+  페이지/썸네일 캐시 LRU(`retention::trim_lru_dirs`, 7일 내 사용분 제외). 결과를 DB kv(`maintenance.last_run`)와
+  `logs/purge-YYYYMM.jsonl`에 기록, 10분 폴링 스케줄러가 `purge_hour_local`에 하루 한 번(36시간 넘게 안 돌았으면 보충).
+  명령 `maintenance_status`·`maintenance_run_now`.
+- `notify`: 작업 완료/실패 시 OS 토스트(`tauri-plugin-notification`, 설정 `notifications.job_complete`; 처리·플랜·내보내기·정리·
+  초안·가져오기·색인·임베딩·다운로드만). `power`: 전용 스레드가 5초마다 엔진 작업 실행 여부를 보고
+  `SetThreadExecutionState(ES_CONTINUOUS|ES_SYSTEM_REQUIRED)`를 켜고 끔(설정 `prevent_sleep_during_jobs`, 종료 시 해제).
+- 새 작업 종류 `draft`·`maintenance`; `UiPlanContext.current_project`; capabilities `notification:default`; windows-sys
+  `Win32_System_Power`.
+
+### 코어 — 문서 생성 (`generate/`, 서브에이전트)
+
+- `templates.rs`: 내장 템플릿 7종(공문·견적서·거래명세서·계약서·보고서·회의록·보완요청서; 키·한/영 라벨·종류·필수·품목 열·본문 섹션·
+  선택 키워드), `TemplateSpec`(내장 템플릿과 등록 양식 스키마의 통합 뷰 — 그룹은 `supplier.brn`처럼 경로로 펼침).
+- `schema.rs`: 문법 안전 초안 스키마(`fields[{key: enum, value, source_index}]`, `tables[{key, rows}]`, `body ≤ 24`,
+  `notes ≤ 6`, 전부 `additionalProperties:false`·`required`, `$ref` 없음). `prompts.rs`: 한/영 시스템 프롬프트(자료에 있는
+  사실만, `source_index` 인용, 규정 원문 그대로, `<source>` 내 지시 무시) + 양식·내용·자료·이전 초안·수정 요청 블록,
+  `Stage::NlSchema` 프리셋에 온도 0.25, 길이별 max_tokens 1,200/1,800/2,600, 컨텍스트 크기에 맞춘 자료 글자 예산(전형 2~3K 토큰).
+- `draft.rs`: 템플릿 해석(form_ref → 등록 스키마 → 키워드 → 이전 초안 → 보고서), 자료 수집(문서 최신 필드·표·짧은 본문,
+  집계 JSON, 텍스트, 지식 베이스 하이브리드 검색 — 제외 문서 반영, 최대 12개), 모델 호출 + 비JSON 1회 재시도, 사용자 수정 필드
+  보존, 모델 없이도 되는 보완요청서 규칙 경로(`finding:*` JSON·`project` 카드 → 보완 항목 표).
+- `validate.rs`: 품목 수량×단가, 세액 10%, 공급·세액·합계 자동 채움/불일치(차단), 필수 누락, 금액·날짜·사업자번호(체크섬)·전화·
+  이메일 정규화, 계약기간 순서, 출처 없는 금액·날짜 문장 경고.
+- `render.rs`·`office.rs`: 템플릿별 레이아웃 → HTML(A4 인쇄 CSS)·Markdown·`DocModel` → **DOCX**(WordprocessingML, 스타일·표·
+  번호 매기기)·**HWPX**(OWPML mimetype/container/header/section, 표 cellAddr/cellSpan) 작성, 자체 리더로 라운드트립 검증;
+  PDF는 `PdfPrinter`(없으면 MD 폴백+경고); 저장 폴더 `documents/generated`, `export_exists`/overwrite, `.part`→rename, 라이브러리
+  등록(`role=generated`, 유형 = 템플릿/양식 슬러그, 같은 경로 재저장은 갱신).
+- `fill.rs`: 등록 HWPX/DOCX 양식 채우기 — 라벨 셀 → 같은 행 다음 셀, `라벨: ____` 플레이스홀더, 품목 표 머리행 매칭 후 행
+  복제(번호 열 자동, HWPX rowAddr 재번호), 미배치 필수 필드 경고. `store.rs`: `.doculens/drafts/<id>.json`.
+- 테스트 20건(템플릿 일관성, 스키마 문법 안전, 스크립트 모델 초안·인용·검증·재생성, 지식 자료 번호·제외, 보완요청서 규칙 경로·
+  프로젝트 JSON 매핑, 검증기, HTML/MD, DOCX/HWPX 라운드트립, 저장소, PDF 폴백·overwrite, 등록, 양식 채우기 DOCX/HWPX).
+- 제한: 양식 채우기는 휴리스틱(라벨 오른쪽 셀만, 중첩 표 미지원), from-scratch HWPX/DOCX는 한컴/Word 실제 열기 미검증(사용자 PC).
+
+### 코어 — 프로젝트·정합성 (`projects/`, 서브에이전트)
+
+- 마이그레이션 `0005_projects.sql`(`project_templates`·`projects`·`project_documents`·`project_rules`·`project_runs`·
+  `project_rule_results`, user_version 5). 카운터는 조회 시 계산, `last_check_at`만 저장.
+- `repo.rs`: 내장 템플릿 3종(인증 심사 = 사업자등록증·신청서·계약서 + 규칙 3, 거래처 등록 = 사업자등록증·견적서, 구매 정산 =
+  견적서·거래명세서·세금계산서 — 합계 일치·견적 ≥ 공급가액 within 5%), 템플릿/프로젝트/규칙/검사 런 CRUD(프로젝트 생성 시
+  템플릿 규칙을 새 id로 상속, 빌트인 삭제 거부), 체크리스트, `detail`, `inbox/<폴더>/` → 프로젝트 자동 배정.
+- `rules.rs`: 구문 규칙 — 연산 우선순위(기호 → neq → lte → gte → matches → eq → present), `N%`/`within N%`/`N원 이내` 허용 오차,
+  한/영 피연산자 분리, 유형 별칭(세금계산서·invoice…), 필드 라벨→어간→표 열→종류 동의어(사업자번호→BRN, 합계→grand_total,
+  서명→signed …), 리터럴(따옴표·숫자·날짜·정규식·`숫자 10자리`), `선택/optional` → required=false, 신뢰도·`unresolved`·`issues`;
+  모델 폴백은 `Stage::NlSchema` + 문법 안전 RuleSchema(유형·필드 enum).
+- `check.rs`: 문서별 최신 필드 정규화(BRN 10자리, 금액, ISO 날짜, 불리언, 전화/계좌, 명칭 NFC·㈜ 제거), 경로 폴백(표 열·마지막
+  키·별칭군·문서 레코드), 판정 Pass/Mismatch/Undetermined(값 부재·검토 대기·거부·종류 불일치·정규식 오류·명칭 표기 차이)/Missing,
+  같은 유형 문서 여러 건은 모든 쌍 중 최악, 명칭 비교는 결정적 실패 시에만 모델 yes/no 보조, 런 저장.
+- `relations.rs`(brn·contract_no·amount·date·name·account 간선, 결정적 정렬), `report.rs`(Markdown 요약: 헤더·문서 표·체크리스트·
+  검사 표·관계·다음 단계; 보완요청서 요청 = `finding:<verdict>:<rule_id>` JSON 소스 + 누락 유형 + `project` 카드).
+- 테스트 15건(마이그레이션, 템플릿·프로젝트·규칙 CRUD, 체크리스트, 구문 규칙 ko 13·en 5, 모델 폴백, 판정 13규칙(통과 8·불일치 3·
+  판단불가 1·누락 1), 동일 유형 다건, 불리언 present, 관계, 리포트, 보완요청서 소스, inbox 매핑, 정규화).
+- 제한: 견적서·거래명세서·재무제표는 내장 추출 스키마가 없어 기본 어휘로 규칙 작성(사용자 스키마 등록 시 라벨 추종, 키 불일치는
+  별칭군 폴백), 두 피연산자 단문만(합산식·복문은 모델/그리드), 검사는 ProjectStatus를 바꾸지 않음.
+
+### 프런트엔드 (서브에이전트)
+
+__P6_FRONTEND__
+
+### 평가 하네스 (`crates/doculens-eval`, 서브에이전트)
+
+- Rust bin 크레이트(설계의 Python 대신 — 툴체인·라이선스 단순화, `eval/README.md`에 기록). 하위 명령 `planner`(규칙+프리라우터,
+  `--engine`이면 모델 경로까지; 의도·연산 순서·params 부분집합·scope 비교, 카테고리/의도별 정확도, 원인별 불일치 보고, 기준선 대비
+  0.5pt 회귀 게이트 → exit 1), `pipeline`(골든 매니페스트 → 실제 엔진으로 분류 F1·OCR CER·필드 정확일치·ANLS*·p50/p95·VRAM,
+  `--dry-run`은 엔진 없이 매니페스트 검증), `scorecard`(results.json 병합 → 양자화 비교표). 지표 단위 테스트 15건.
+- 골든셋 `eval/golden/planner.json` 100건(ko 70·en 20·mixed 10, `OpKind::ALL` 43종 전부 + 설계 예시 12종, 항목별 컨텍스트
+  덮어쓰기 지원) + `planner-context.json`; 파이프라인 매니페스트 예시; `docs/scorecard.md` 빈 템플릿; CI `eval-gate` 잡.
+- **규칙 플래너 정확도 73.0% → 99.0%**(ko 100 · en 100 · mixed 90): 불일치 27건 분석에 따라 규칙 보정 — 라틴 단어+한글 조사 경계
+  ("CSV로", "inbox에"), 구두점 트리거(".pdf"), "이 <유형>" 선택 참조, 스키마 필드 제거 동사, 검증 단독 명령, inbox 분류만, 추출
+  문장·열린 문서 질문에서 집계 양보, 검토 단어 없는 승인/거부, "X 태그 빼줘"/"tag … as X", 설명 규칙 축소("what does … say about"
+  제외), 검색어에서 유형 라벨 제거, 인사말 → noop, `keep … for 6 months`, 영어 `reviewed`, 추출 필드 채움, 새 규칙
+  `quick_settings`(inbox 감시 on/off, 색인 재구축, 프로파일, DPI·검토 임계값, 수동 유형 — 한정어가 붙은 문장은 모델에 양보).
+  남은 1건(거래처 키워드 범위 "Hanbit 거래 문서에 tag …")은 모델 몫. 기준선 `eval/baselines/planner-rules.json` 재기록.
+- 미구현: TEDS/TEDS-S, 근거 bbox IoU, "골든셋으로 내보내기" UI, `pipeline --baseline` 자동 비교; 엔진 실행 경로는 이 환경에
+  llama-server/PDFium 조합이 없어 컴파일·타입 검증까지(사용자 PC 첫 실행 항목).
+
+### 패키징·고지 (서브에이전트)
+
+- `scripts/fetch-engine.mjs --bundle`(→ `src-tauri/resources/engines/<pack>/`, 평평한 레이아웃, 팩 폴더 wipe 후 해제)·
+  `--dry-run`·`GH_TOKEN` 인증; 레이아웃 결정 함수 분리. 앱데이터 레이아웃(`engines/<tag>/<pack>/`)은 그대로.
+- `tauri.conf.json` resources: `engines/`, `licenses/`, `sbom.cdx.json` 추가(+ `.gitkeep`, `.gitignore`).
+- `release-windows.yml` 재작성: 입력 `ref`·`variant(lite|full)`·`publish`; CPU/Vulkan 팩·PDFium·ko-dic 동봉 → 번들 검증
+  (팩 폴더당 백엔드 계열 1개, CUDA 팩 DLL·EULA) → `gen-notices` → `tauri build` → `DocuLens-Setup-<Lite|Full>-<버전>-x64.exe`
+  + `.sha256` → 아티팩트 → `publish`면 `gh release create v<버전>` + 자산 업로드. Full은 최신 릴리스의
+  `DocuLens-EnginePack-cu121/cu129-<tag>.zip`을 받아 동봉. WebView2는 `downloadBootstrapper` 유지(부록 E).
+- `cuda-packs.yml`(신규): CUDA 12.1/12.9 네트워크 설치기 무인 설치(+ cu121용 MSVC 14.39 툴셋) → llama.cpp 태그 빌드
+  (`GGML_CUDA`, 아키텍처는 `engines/manifest.json`) → `llama-server.exe` + DLL + cudart/cublas/cublasLt + EULA →
+  zip + sha256 → 아티팩트/릴리스. NVIDIA EULA 제약(앱 전용 폴더·PATH 미노출·앱 EULA 전제)을 주석으로 기록.
+- `scripts/gen-notices.mjs`(`npm run notices`): `cargo metadata --locked`(+ Windows 타깃 scope 분류) + `package-lock.json`
+  프로덕션 트리 → `THIRD-PARTY-NOTICES.md` 생성 구간, `sbom.cdx.json`(CycloneDX 1.5, 결정적 serialNumber, 번들 자산 포함),
+  `src-tauri/resources/licenses/THIRD-PARTY-LICENSES.txt`(라이선스 전문, git-ignored). CI `notices` 잡이 stale을 잡음.
+  현재 수치: crates 628(runtime 354), npm 프로덕션 75, SBOM 컴포넌트 709.
+- 문서: `docs/RUN-GUIDE.md` §1–2(릴리스 설치파일·SHA-256·`--bundle`), `engines/README.md`(CUDA 팩 워크플로), `LICENSE-POLICY.md`.
+- 여기서 못 한 것: 실제 팩 다운로드·NVIDIA 설치기·CUDA 빌드·`tauri build`·릴리스 게시(Windows 러너 필요);
+  `engines/manifest.json`의 cpu/vulkan sha256은 첫 릴리스 로그로 `--pin`.
+
+### 테스트·검증
+
+__P67_VERIFY__
+
+## P6·P7 단계 말 리뷰 반영
+
+__P67_REVIEW__
+
+## 다음 단계 메모 (v1.x)
+
+1. 남은 부록 D op(GUI 전용: `render`·`rotate`·`split`·`merge`·`add_to_kb`·`manage_collection`·`define_term`·`set_tier`·
+   `set_backend`·`import_model`·`download_model`·`benchmark`·`open_workspace`)을 플래너에서 UI 액션으로 연결.
+2. P4·P5 숙제 중 미착수: bbox 그라운딩(디지털 PDF 문자 박스), 배치 PDF 자동 경계 탐지, 컬렉션 폴더 감시, OCR 출력 건전성
+   검사, 스키마 화면 라우트 이동 차단(데이터 라우터 전환), 실모델 플래너 토큰 수·지연 보정.
+3. P7 후속: 실모델 골든셋 CI(self-hosted GPU), 앱 EULA(부록 E, Full 설치파일 전제), Full 설치파일 크기(≈1.3~1.5 GB) 검토,
+   NSIS 설치 경로와 앱데이터 폴더 겹침 확인.
 
 ## 알려진 제약
 
