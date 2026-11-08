@@ -1000,6 +1000,12 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 - 여기서 못 한 것: 실제 팩 다운로드·NVIDIA 설치기·CUDA 빌드·`tauri build`·릴리스 게시(Windows 러너 필요);
   `engines/manifest.json`의 cpu/vulkan sha256은 첫 릴리스 로그로 `--pin`.
 
+- **첫 설치파일 빌드 성공(2026-11-08, Actions run 42471185353, ref `phase/p6-p7` @ fbd360c)**: `DocuLens-Setup-Lite-0.1.0-x64.exe`
+  43.1 MB, SHA-256 `cf7e113f0bdeef399dd971e7dc9d172f45951825d2099182f47bfed6eab2aeb0`, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64`
+  (45.2 MB zip, 2027-02-06 만료, 릴리스 게시 안 함). 동봉 검증 단계 통과(engines/cpu·vulkan, pdfium, ko-dic). 첫 시도는 GitHub
+  릴리스 다운로드 장애(HTTP 504)로 llama.cpp 팩 단계에서 실패 → fetch 스크립트가 REST 자산 엔드포인트(API → 서명된 CDN
+  리디렉션)를 먼저 쓰고 공개 URL로 폴백하도록 바꿔 통과. 이때 받은 공식 팩 해시를 `engines/manifest.json`에 고정(cpu
+  `cc2aad48…`, vulkan `8eec3c8a…`; PDFium은 기존 핀과 일치). 설치파일 내용 7-Zip 목록·필수 항목 검사 단계를 워크플로에 추가.
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
@@ -1013,6 +1019,7 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | Playwright(모의 백엔드) | 34/34 (`generate.spec.ts`·`projects.spec.ts` 추가; 모의 백엔드가 Rust 페이로드 모양만 내므로 E2E가 실제 계약을 검증) |
 | `npm run notices` 결정성 | 두 번 실행 결과 동일 — crates 628(runtime 354)·npm 75·SBOM 컴포넌트 709 |
 | GitHub CI(License·Web·Rust Linux·Windows compile·notices·eval-gate·실엔진) | 커밋 a0fcafb·9308de3에서 실엔진 잡만 실패(위 수정으로 0e200ec에서 7개 잡 모두 통과). 리뷰 반영 커밋 84e5fdd에서는 License gate·Windows compile 잡이 **GitHub 릴리스 자산 다운로드 장애**(cargo-deny-action의 바이너리 tar가 손상 수신 "gzip: invalid magic", PDFium 다운로드 HTTP 504)로 실패 — 코드와 무관. ece44cc: License gate를 `taiki-e/install-action`(체크섬 검증 prebuilt cargo-deny 0.20.2)으로 바꿔 통과, 나머지 6개 잡 통과; Windows 잡은 여전히 504. c505b81: `scripts/lib/fetch-retry.mjs`(5xx·네트워크 오류·잘린 본문 지수 백오프 재시도 3회)를 fetch-pdfium/engine/kodic에 적용하고 Windows 잡에도 PDFium `actions/cache` 추가 — 장애가 이어져 Windows 잡은 재시도 3회 후에도 504. 6975410: Windows 잡의 PDFium 다운로드를 `continue-on-error`(경고 주석)로 바꿔 컴파일·테스트는 항상 수행(PDFium 테스트는 라이브러리 없으면 자체 skip, Linux 잡은 엄격 유지) → **7개 잡 모두 통과**(다운로드도 복구되어 Windows 잡이 PDFium 테스트까지 실제 수행) |
+| 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공(run 42471185353): NSIS 43.1 MB, 동봉 자산 검증 통과 — 위 "패키징·고지" 참조. Full은 CUDA 팩 워크플로가 main에 있어야 실행 가능 |
 
 이 환경에서 못 한 것: Windows 러너 전용(설치파일 빌드·CUDA 팩·릴리스 게시·`tauri build`), 실제 Qwen3.5-4B로 초안 품질·
 규칙 변환 품질·파이프라인 지표, 한컴/Word에서 생성 HWPX/DOCX 열기, OS 토스트·절전 방지 실동작 — 모두 `docs/user-pc-checklist.md`

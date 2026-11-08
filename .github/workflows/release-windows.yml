@@ -176,6 +176,24 @@ jobs:
           [IO.File]::WriteAllText("$PWD/dist-installer/$name.sha256", "$hash *$name`n")
           Write-Host ("{0}  {1}  ({2:N1} MB)" -f $name, $hash, ($src.Length / 1MB))
 
+      # Proves the resources made it into the NSIS archive (tauri.conf.json bundle.resources): the
+      # listing is in the log, and a missing required entry fails the build.
+      - name: List the installer contents (7-Zip) and check the bundled runtime assets
+        shell: pwsh
+        run: |
+          $name = "${{ steps.meta.outputs.installer }}"
+          $sevenZip = (Get-Command 7z -ErrorAction SilentlyContinue)?.Source
+          if (-not $sevenZip) { $sevenZip = "C:\Program Files\7-Zip\7z.exe" }
+          $listing = & $sevenZip l "dist-installer/$name" 2>&1
+          if ($LASTEXITCODE -ne 0) { Write-Host "::warning::7z could not list $name (exit $LASTEXITCODE); skipping the content check"; $listing | Select-Object -Last 5; exit 0 }
+          $text = ($listing | Out-String)
+          $required = @("engines\cpu\llama-server.exe", "engines\vulkan\llama-server.exe", "pdfium\pdfium.dll", "ko-dic\", "THIRD-PARTY-NOTICES.md", "sbom.cdx.json", "licenses\THIRD-PARTY-LICENSES.txt")
+          if ("${{ inputs.variant }}" -eq "full") { $required += @("engines\cu121\llama-server.exe", "engines\cu129\llama-server.exe") }
+          $missing = @($required | Where-Object { $text -notmatch [regex]::Escape($_) })
+          $listing | Where-Object { $_ -match "llama-server\.exe|ggml-[a-z0-9-]*\.dll|pdfium\.dll|ko-dic|NOTICES|sbom|LICENSES|DocuLens\.exe|\d+ files" } | ForEach-Object { Write-Host $_ }
+          if ($missing.Count -gt 0) { Write-Host "::error::bundled assets missing from the installer: $($missing -join ', ')"; exit 1 }
+          Write-Host "installer contents OK: $($required.Count) required entries present"
+
       - uses: actions/upload-artifact@v4
         with:
           name: DocuLens-Setup-${{ steps.meta.outputs.variant }}-${{ steps.meta.outputs.version }}-x64
