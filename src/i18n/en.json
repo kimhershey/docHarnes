@@ -282,7 +282,9 @@
       "folder_named": "Current folder {{folder}}",
       "selection_count": "Selected documents ({{count}})",
       "document": "Current document",
-      "document_named": "Current document: {{name}}"
+      "document_named": "Current document: {{name}}",
+      "project_named": "Project: {{name}}",
+      "project_clear": "Clear the project context"
     },
     "placeholder": "Command or ask in natural language (한국어 / English) · / for slash commands",
     "send": "Send",
@@ -517,7 +519,8 @@
       },
       "impact_draft": "{{count}} document draft(s) (saved on the generate screen)",
       "impact_project": "{{count}} project / rule change(s)",
-      "retention_shorter": "The retention period gets shorter — expired data is deleted by the next purge run."
+      "retention_shorter": "The retention period gets shorter — expired data is deleted by the next purge run.",
+      "rule_description": "Rule: {{description}}"
     },
     "execution": {
       "title": "Running · job #{{id}}",
@@ -563,7 +566,8 @@
       "undo_last_batch": "↶ Undo last batch",
       "moves_caption": "Move log (from → to)",
       "open_project": "Open project",
-      "open_results": "Open check results"
+      "open_results": "Open check results",
+      "rule_saved": "Saved"
     },
     "aggregate": {
       "title": "Aggregate — {{summary}}",
@@ -917,7 +921,7 @@
         "running": "Purging…",
         "started": "Purge job started.",
         "done": "Purge job finished.",
-        "summary": "journal {{journal}} · jobs {{jobs}} · chats {{answers}} · documents {{documents}} · extractions {{extractions}} · logs {{logs}} · temp {{temp}}",
+        "summary": "journal {{journal}} · jobs {{jobs}} · chats {{answers}} · documents {{documents}} · extractions {{extractions}} · logs {{logs}} · temp {{temp}} · cache {{cache}} · trash {{trash}}",
         "items": {
           "journal": "journal",
           "jobs": "job records",
@@ -928,7 +932,11 @@
           "temp": "temporary data",
           "documents": "documents",
           "extractions": "extraction results"
-        }
+        },
+        "skipped": "Skipped: {{items}}",
+        "skipped_disabled": "daily run off",
+        "cancelled": "Cancelled",
+        "next_run_at": "{{date}} (daily at {{hour}}:00)"
       }
     },
     "shortcuts": {
@@ -1132,12 +1140,7 @@
       "nothing_to_redo": "nothing to redo",
       "interrupted": "interrupted by app shutdown (retryable)",
       "workspace_closed": "workspace closed",
-      "drafting_fields": "Drafting fields",
-      "drafting_body": "Drafting body",
-      "validating": "Validating",
-      "drafted": "Draft ready: {{title}}",
-      "purging": "Purging {{item}}",
-      "purged": "{{count}} items purged"
+      "drafting": "Drafting"
     },
     "empty_queued": "No queued jobs.",
     "empty_failed": "No failed jobs.",
@@ -1493,7 +1496,8 @@
     "type_changed_title": "Re-extract with the new type",
     "type_changed": "Type changed. Re-extract with the new type's schema?",
     "reextract": "Re-extract",
-    "ocr_badge": "OCR"
+    "ocr_badge": "OCR",
+    "image_failed": "The page image could not be loaded. A page purged from the cache comes back after a re-render."
   },
   "answer": {
     "sources": "Sources",
@@ -2253,7 +2257,9 @@
       "feedback_placeholder": "e.g. shorter, set the total to 1,200,000 won",
       "excluded_hint": "{{count}} excluded reference(s) are applied on regeneration.",
       "job_failed": "Generation failed: {{message}}",
-      "job_cancelled": "Generation cancelled."
+      "job_cancelled": "Generation cancelled.",
+      "job_interrupted": "{{reason}} You can retry it on the Jobs screen.",
+      "job_result_missing": "The draft result could not be loaded. You can open it from the drafts list."
     },
     "tone": {
       "formal": "Formal",
@@ -2343,14 +2349,15 @@
       "format": "Format",
       "file_name": "File name",
       "register": "Register in the library",
-      "overwrite": "Number the file when the name exists",
+      "overwrite": "Overwrite the existing file",
       "blocking_warning": "{{count}} validation issue(s) need confirmation before saving. You can still save; the document stays 'unreviewed'.",
       "confirm": "Save",
       "saved": "Saved: {{path}}",
       "open_folder": "Open folder",
       "open_library": "Show in library",
-      "exists": "A file with this name exists. Turn on numbering or change the name.",
-      "warning_markdown": "Markdown files are not registered in the library."
+      "exists": "A file with this name already exists. Turn on overwrite or change the file name.",
+      "warning_markdown": "Markdown files are not registered in the library.",
+      "saved_as": "Saved as {{format}}: {{path}}"
     },
     "drafts_list": {
       "title": "Recent drafts",
@@ -2361,7 +2368,8 @@
       "deleted": "Draft deleted.",
       "issues": "{{count}} issue(s)",
       "saved": "Saved: {{path}}",
-      "unsaved": "Unsaved"
+      "unsaved": "Unsaved",
+      "delete_confirm": "Delete the draft '{{title}}'? Saved files are kept."
     },
     "sources_dialog": {
       "title": "Documents to quote",
@@ -2372,7 +2380,9 @@
     },
     "result": {
       "meta": "{{fields}} fields · {{issues}} issues · {{source}}"
-    }
+    },
+    "open_busy_title": "A draft is being generated",
+    "open_busy": "Another draft is being generated on the document generator. If you open this one now, the running job's result stays available on the Jobs screen."
   },
   "projects": {
     "title": "Projects",
@@ -2401,7 +2411,13 @@
       "verdicts": "pass {{pass}} · mismatch {{mismatch}} · undetermined {{undetermined}}",
       "no_check": "Not checked",
       "move_prev": "Move to the previous step",
-      "move_next": "Move to the next step"
+      "move_next": "Move to the next step",
+      "moved": "Moved '{{name}}' to {{status}}.",
+      "move_prev_named": "Move '{{name}}' to the previous step ({{status}})",
+      "move_next_named": "Move '{{name}}' to the next step ({{status}})",
+      "done_confirm_title": "Mark '{{name}}' as done",
+      "done_confirm": "The last check left {{mismatch}} mismatch(es) and {{missing}} missing document(s). Move it to Done anyway?",
+      "done_confirm_unchecked": "The consistency check has not been run yet. Move it to Done anyway?"
     },
     "columns": {
       "name": "Name",
@@ -2524,7 +2540,6 @@
       }
     },
     "results": {
-      "title": "Check results",
       "run": "Run check",
       "running": "Checking…",
       "none": "No check has run yet.",
@@ -2575,7 +2590,10 @@
       "generating": "Drafting…",
       "none": "No mismatch / missing findings. Run the consistency check first.",
       "started": "Drafting the supplement request.",
-      "ready": "The supplement request draft is ready."
+      "ready": "The supplement request draft is ready.",
+      "result_missing": "The supplement request draft could not be loaded. You can open it from the drafts list on the document generator.",
+      "cancelled": "Supplement request generation cancelled.",
+      "interrupted": "{{reason}} You can retry it on the Jobs screen."
     },
     "templates": {
       "title": "Project templates",
@@ -2601,7 +2619,8 @@
       "no_rules": "No rules.",
       "select": "Select a template or create one.",
       "readonly": "Built-in templates cannot be edited. Duplicate one to edit it.",
-      "copy_suffix": "(copy)"
+      "copy_suffix": "(copy)",
+      "incomplete_rules": "Complete {{count}} incomplete rule(s) first."
     }
   }
 }

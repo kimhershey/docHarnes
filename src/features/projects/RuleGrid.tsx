@@ -9,7 +9,7 @@ import { useDocTypes, useSchemas } from "@/lib/queries";
 import { RULE_OPS, type DocTypeInfo, type Rule, type RuleOp, type RuleOperand, type SchemaRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-import { docTypeLabelOf, fieldOptions, isLiteral, operandLabel, ruleSummary, schemaForType, unresolvedOperands } from "./rules";
+import { docTypeLabelOf, fieldOptions, isLiteral, operandLabel, parseTolerance, ruleSummary, schemaForType, unresolvedOperands } from "./rules";
 
 const NONE = "__none__";
 
@@ -114,7 +114,7 @@ export function RuleGrid({ rule, onChange, readOnly = false, unresolvedNames = [
               <label htmlFor={`${testId}-tolerance`} className="text-xs text-fg-muted">
                 {rule.op === "within_pct" ? t("projects.rules.tolerance_pct") : t("projects.rules.tolerance")}
               </label>
-              <Input id={`${testId}-tolerance`} type="number" min={0} step="any" className="h-8 w-40 text-xs" value={rule.tolerance ?? ""} onChange={(e) => change({ tolerance: e.target.value === "" ? null : Number(e.target.value) })} readOnly={readOnly} data-testid={`${testId}-tolerance`} />
+              <Input id={`${testId}-tolerance`} type="number" min={0} step="any" className="h-8 w-40 text-xs" value={rule.tolerance ?? ""} onChange={(e) => change({ tolerance: parseTolerance(e.target.value) })} readOnly={readOnly} data-testid={`${testId}-tolerance`} />
             </>
           )}
         </div>

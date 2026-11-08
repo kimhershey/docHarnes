@@ -24,6 +24,7 @@ import { NewProjectDialog } from "./NewProjectDialog";
 import { RelationsTab } from "./RelationsTab";
 import { ReportTab } from "./ReportTab";
 import { ResultsTab } from "./ResultsTab";
+import { doneMoveWarning } from "./rules";
 import { RulesTab } from "./RulesTab";
 import { SupplementDialog } from "./SupplementDialog";
 
@@ -54,11 +55,13 @@ export function ProjectDetailPage() {
   const handled = useRef<string | null>(null);
   const ko = i18n.language.startsWith("ko");
 
-  // The open project is the assistant's `current_project` (default target of project ops).
+  // The opened project becomes the assistant's `current_project` (default target of project ops) and stays
+  // so after leaving the page ("정합성 검사해" from the assistant screen); only a loaded project counts.
+  const loadedId = detail?.project.id ?? null;
+  const loadedName = detail?.project.name ?? null;
   useEffect(() => {
-    setCurrentProject(id || null);
-    return () => setCurrentProject(null);
-  }, [id, setCurrentProject]);
+    if (loadedId) setCurrentProject(loadedId, loadedName);
+  }, [loadedId, loadedName, setCurrentProject]);
 
   useEffect(() => {
     const param = searchParams.get("tab");
@@ -80,13 +83,22 @@ export function ProjectDetailPage() {
       let result: unknown = job.result;
       if (!isDraftOutcome(result)) result = (await useJobsStore.getState().fetch(job.id))?.result;
       setJobId(null);
-      if (job.state === "done" && isDraftOutcome(result)) {
-        useGenerateStore.getState().openDraft(result.draft);
-        toast(t("projects.supplement.ready"), "ok");
+      if (job.state === "done") {
         invalidateProjects([id]);
-        navigate(SCREEN_ROUTES.generate);
+        if (isDraftOutcome(result)) {
+          useGenerateStore.getState().openDraft(result.draft);
+          toast(t("projects.supplement.ready"), "ok");
+          navigate(SCREEN_ROUTES.generate);
+        } else {
+          // Job book cleared / result not delivered: the draft store still has it.
+          toast(t("projects.supplement.result_missing"), "warn", { label: t("generate.drafts"), onClick: () => navigate(SCREEN_ROUTES.generate) });
+        }
       } else if (job.state === "failed") {
         toast(describeJobError(job, t) ?? t("common.error"), "danger");
+      } else if (job.state === "cancelled") {
+        toast(t("projects.supplement.cancelled"), "warn");
+      } else if (job.state === "interrupted") {
+        toast(t("projects.supplement.interrupted", { reason: t("jobs.error.interrupted") }), "warn");
       }
     })();
   }, [job, id, navigate, toast, t]);
@@ -104,13 +116,26 @@ export function ProjectDetailPage() {
       setChecking(false);
     }
   };
-  const setStatus = async (status: ProjectStatus) => {
+  const applyStatus = async (status: ProjectStatus) => {
     try {
       await api.projectSetStatus(id, status);
       invalidateProjects([id]);
+      toast(t("projects.card.moved", { name: detail?.project.name ?? "", status: t(`projects.status.${status}`) }), "ok");
     } catch (e) {
       toast(describeError(e, t), "danger");
     }
+  };
+  // 완료 with open findings (or without any check) is confirmed first; cancelling keeps the current status.
+  const setStatus = (status: ProjectStatus) => {
+    const p = detail?.project;
+    const warning = p && status === "done" ? doneMoveWarning(p) : null;
+    if (!p || !warning) return void applyStatus(status);
+    setConfirm({
+      title: t("projects.card.done_confirm_title", { name: p.name }),
+      description: warning === "unchecked" ? t("projects.card.done_confirm_unchecked") : t("projects.card.done_confirm", { mismatch: p.last_mismatch, missing: p.missing_count }),
+      confirmLabel: t("projects.status.done"),
+      onConfirm: () => applyStatus(status),
+    });
   };
   const supplement = async (findingIds: string[], output: OutputFormat) => {
     try {
@@ -133,6 +158,7 @@ export function ProjectDetailPage() {
       onConfirm: async () => {
         try {
           await api.projectDelete(id);
+          useProjectsStore.getState().clearCurrentProject(id);
           invalidateProjects();
           toast(t("projects.detail.deleted"), "ok");
           navigate(SCREEN_ROUTES.projects);
@@ -174,7 +200,7 @@ export function ProjectDetailPage() {
           <h1 className="text-base font-semibold" data-testid="project-title">
             {p.name}
           </h1>
-          <Select value={p.status} onValueChange={(v) => void setStatus(v as ProjectStatus)}>
+          <Select value={p.status} onValueChange={(v) => setStatus(v as ProjectStatus)}>
             <SelectTrigger className="h-8 w-36" aria-label={t("projects.detail.status")} data-testid="project-status">
               <SelectValue />
             </SelectTrigger>

@@ -34,14 +34,15 @@ function IssueBadges({ issues, onApply, t }: { issues: DraftIssue[]; onApply: (i
 
 /**
  * Right column of 문서 생성: title, the fields grid (required marks, issue badges with "제안 적용"), item
- * tables, body blocks, the 참고 문서 panel (exclude → regenerate) and the validation issue list.
+ * tables, body blocks, the 참고 문서 panel (exclude → regenerate) and the validation issue list. `disabled`
+ * (a draft job is running) locks every control: the job's result replaces the draft, so edits would be lost.
  */
-export function DraftEditor({ draft, onChange, excluded, onToggleExcluded }: { draft: Draft; onChange: (draft: Draft) => void; excluded: string[]; onToggleExcluded: (docId: string) => void }) {
+export function DraftEditor({ draft, onChange, excluded, onToggleExcluded, disabled = false }: { draft: Draft; onChange: (draft: Draft) => void; excluded: string[]; onToggleExcluded: (docId: string) => void; disabled?: boolean }) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const apply = (issue: DraftIssue) => onChange(applySuggestion(draft, issue));
   return (
-    <div className="flex flex-col gap-4 text-sm" data-testid="generate-editor">
+    <fieldset disabled={disabled} aria-busy={disabled || undefined} className={cn("flex min-w-0 flex-col gap-4 text-sm", disabled && "opacity-70")} data-testid="generate-editor" data-disabled={disabled}>
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="gen-title">{t("generate.editor.doc_title")}</Label>
         <Input id="gen-title" value={draft.title} onChange={(e) => onChange(setTitle(draft, e.target.value))} data-testid="generate-title" />
@@ -236,6 +237,6 @@ export function DraftEditor({ draft, onChange, excluded, onToggleExcluded }: { d
           </ul>
         )}
       </section>
-    </div>
+    </fieldset>
   );
 }

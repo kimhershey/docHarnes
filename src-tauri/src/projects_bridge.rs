@@ -1,7 +1,8 @@
 //! Projects / consistency bridge (P6 §3.15): CRUD on projects, templates and
 //! rules, deterministic consistency checks, relation graph, summary report and
 //! the 보완요청서 draft job. Natural-language rule definition uses the loaded
-//! model only as a fallback (phrase rules first) through the interactive gate.
+//! model only as a fallback (phrase rules first) through the interactive gate —
+//! and not at all while a batch job is inside a page, so dialogs never wait.
 
 use serde::Serialize;
 use serde_json::json;
@@ -128,14 +129,30 @@ fn loaded_model(app: &AppHandle) -> Option<(String, Option<u32>)> {
     Some((m, ctx))
 }
 
+/// The loaded model for a dialog request — unless a batch job is inside a page right now: the
+/// dialog then runs without the model (phrase rules, plain comparisons) instead of waiting for
+/// the page boundary behind the batch.
+fn dialog_model<'a>(
+    app: &AppHandle,
+    state: &'a AppState,
+    pctx: &pipeline_bridge::PipelineContext,
+    what: &str,
+) -> Option<Vlm<'a>> {
+    let (model, ctx) = loaded_model(app)?;
+    if state.gate.status().batch_busy {
+        log::info!("projects: a batch job holds the engine; {what} runs without the model");
+        return None;
+    }
+    Some(Vlm::new(&state.engine, model, pctx.profile, None).with_context(ctx))
+}
+
 pub fn define_rule(app: &AppHandle, id: &str, description: &str) -> UiResult<RuleDraft> {
     if description.trim().is_empty() {
         return Err(UiError::invalid("description_empty"));
     }
     let pctx = pipeline_bridge::context(app)?;
     let state = app.state::<AppState>();
-    let model = loaded_model(app);
-    let vlm = model.as_ref().map(|(m, ctx)| Vlm::new(&state.engine, m.clone(), pctx.profile, None).with_context(*ctx));
+    let vlm = dialog_model(app, &state, &pctx, "define_rule");
     let deps = ProjectDeps { db: pctx.db(), vlm: vlm.as_ref(), language: language(app) };
     let run = || projects::define_rule(&deps, Some(id), None, description);
     let draft = if vlm.is_some() { state.gate.interactive(run) } else { run() };
@@ -164,8 +181,7 @@ pub fn delete_rule(app: &AppHandle, id: &str, rule_id: &str) -> UiResult<bool> {
 pub fn check(app: &AppHandle, id: &str, rule_ids: &[String]) -> UiResult<CheckRun> {
     let pctx = pipeline_bridge::context(app)?;
     let state = app.state::<AppState>();
-    let model = loaded_model(app);
-    let vlm = model.as_ref().map(|(m, ctx)| Vlm::new(&state.engine, m.clone(), pctx.profile, None).with_context(*ctx));
+    let vlm = dialog_model(app, &state, &pctx, "check");
     let deps = ProjectDeps { db: pctx.db(), vlm: vlm.as_ref(), language: language(app) };
     let run = || projects::check(&deps, id, rule_ids);
     let result = if vlm.is_some() { state.gate.interactive(run) } else { run() };

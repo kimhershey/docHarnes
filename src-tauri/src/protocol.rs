@@ -6,14 +6,22 @@
 //!
 //! * `/pages/<doc_id>/<page>.jpg`, `/thumbs/<doc_id>/<page>.jpg`
 //! * `/print/<token>/<relative file>` (token registered by the printer)
+//!
+//! Serving a page / thumbnail touches the folder's `.last_used` marker (the retention LRU
+//! evicts by last use); a page that is gone (evicted) queues a re-render of its document.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use tauri::http::{header, Response, StatusCode};
 use tauri::{AppHandle, Manager, UriSchemeContext};
 
 use doculens_core::documents::DocumentCache;
+use doculens_core::retention;
 
+use crate::docs_bridge;
 use crate::state::AppState;
 
 pub const SCHEME: &str = "doculens";
@@ -43,6 +51,31 @@ fn mime_for(path: &Path) -> &'static str {
         Some("js") => "text/javascript; charset=utf-8",
         Some("pdf") => "application/pdf",
         _ => "application/octet-stream",
+    }
+}
+
+/// True at most once a minute per key (process-wide; stale entries are dropped as the table
+/// grows). Throttles the `.last_used` touches and the re-render requests per document.
+fn once_per_minute(key: &str) -> bool {
+    static SEEN: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+    const WINDOW: Duration = Duration::from_secs(60);
+    let mut seen = SEEN.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner());
+    let now = Instant::now();
+    if seen.get(key).is_some_and(|t| now.duration_since(*t) < WINDOW) {
+        return false;
+    }
+    if seen.len() >= 4096 {
+        seen.retain(|_, t| now.duration_since(*t) < WINDOW);
+    }
+    seen.insert(key.to_string(), now);
+    true
+}
+
+/// Records that a page / thumbnail folder was viewed (`.last_used` marker, at most once a
+/// minute per folder) so the retention LRU evicts by last use rather than by render time.
+fn note_use(dir: &Path) {
+    if once_per_minute(&dir.to_string_lossy()) {
+        retention::touch_last_used(dir);
     }
 }
 
@@ -84,7 +117,19 @@ pub fn handle(ctx: UriSchemeContext<'_, tauri::Wry>, request: tauri::http::Reque
     match parts.as_slice() {
         [kind @ ("pages" | "thumbs"), doc_id, file] => match cache_file(app, kind, doc_id, file) {
             // Page images change when re-rendered; the viewer busts the cache with `?v=<rendered_at>`.
-            Some(p) => serve_file(&p, "private, max-age=3600"),
+            Some(p) => {
+                let response = serve_file(&p, "private, max-age=3600");
+                if response.status() == StatusCode::OK {
+                    if let Some(dir) = p.parent() {
+                        note_use(dir);
+                    }
+                } else if response.status() == StatusCode::NOT_FOUND && once_per_minute(&format!("render:{doc_id}")) {
+                    // Evicted by the retention LRU (or deleted by hand): bring the pages back for
+                    // the next request; this one stays a 404.
+                    docs_bridge::rerender_if_missing(app, doc_id);
+                }
+                response
+            }
             None => respond(StatusCode::BAD_REQUEST, "bad request"),
         },
         ["print", token, rest @ ..] if !rest.is_empty() => {
@@ -163,5 +208,22 @@ mod tests {
         assert_eq!(percent_decode("/a%2"), "/a%2");
         assert_eq!(percent_decode("/a%한글"), "/a%한글");
         assert!(page_url("abc", 3, true, Some("v1")).contains("/thumbs/abc/p0003.jpg?v=v1"));
+    }
+
+    #[test]
+    fn throttle_is_once_per_minute_per_key() {
+        assert!(once_per_minute("protocol-test-a"));
+        assert!(!once_per_minute("protocol-test-a"));
+        assert!(once_per_minute("protocol-test-b"));
+    }
+
+    #[test]
+    fn note_use_touches_the_marker() {
+        let dir = std::env::temp_dir().join(format!("doculens-protocol-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        note_use(&dir);
+        assert!(dir.join(retention::LAST_USED_MARKER).is_file());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

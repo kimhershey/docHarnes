@@ -461,7 +461,7 @@ pub fn to_html(draft: &Draft) -> String {
     let title = draft.title.trim();
     let _ = write!(
         out,
-        "<!doctype html>\n<html lang=\"{}\"><head><meta charset=\"utf-8\">\n<title>{}</title>\n<meta name=\"viewport\" content=\"width=device-width\">\n<style>{CSS}</style></head>\n<body><article class=\"sheet\">\n",
+        "<!doctype html>\n<html lang=\"{}\"><head><meta charset=\"utf-8\">\n<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; style-src 'unsafe-inline'; img-src data:\">\n<title>{}</title>\n<meta name=\"viewport\" content=\"width=device-width\">\n<style>{CSS}</style></head>\n<body><article class=\"sheet\">\n",
         if ko { "ko" } else { "en" },
         escape(if title.is_empty() { "document" } else { title })
     );
@@ -760,6 +760,15 @@ fn part_path(path: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// Whether two paths name the same file: canonical paths when both exist (symlinks, case),
+/// else the lexically normalised paths (a target that does not exist yet).
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a.components().collect::<PathBuf>() == b.components().collect::<PathBuf>(),
+    }
+}
+
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let part = part_path(path);
     std::fs::write(&part, bytes).map_err(|e| {
@@ -833,6 +842,11 @@ fn register(
     let name = documents::nfc(abs.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().as_str());
     let existing = deps.db.with(|c| docs::find_by_rel_path(c, rel))?;
     let id = match existing {
+        // `save` refuses such targets before writing; this only catches a registration that
+        // slipped in between (never turn a user's document into a generated one).
+        Some(doc) if doc.role != DocumentRole::Generated => {
+            return Err(CoreError::Invalid("export_over_document".into()));
+        }
         Some(doc) => {
             deps.db.with(|c| {
                 docs::set_file_info(c, &doc.id, &hash, meta.len(), modified)?;
@@ -979,6 +993,15 @@ pub fn save(deps: &GenerateDeps<'_>, req: &SaveRequest) -> Result<SavedDocument>
 
     let rel = format!("{folder}/{stem}.{}", format.extension());
     let abs = documents::from_rel_path(&deps.paths.root, &rel);
+    // Never on top of the registered form being filled or of a library document that is not
+    // an earlier generated file — whatever `overwrite` says: it only replaces unregistered
+    // files and generated documents.
+    if fill_from.as_ref().is_some_and(|(src, _)| same_file(src, &abs)) {
+        return Err(CoreError::Invalid("export_over_form".into()));
+    }
+    if deps.db.with(|c| docs::find_by_rel_path(c, &rel))?.is_some_and(|d| d.role != DocumentRole::Generated) {
+        return Err(CoreError::Invalid("export_over_document".into()));
+    }
     if abs.exists() && !req.overwrite {
         return Err(CoreError::Invalid("export_exists".into()));
     }

@@ -242,6 +242,15 @@ fn builtin_templates_and_user_template_crud() {
     assert!(listed.iter().all(|t| t.builtin));
     // Listing again does not duplicate.
     assert_eq!(db.with(repo::list_templates).unwrap().len(), 3);
+    // `ensure_builtins` refreshes an untouched built-in from its definition without rewriting
+    // `created_at` (and leaves it refreshable: `updated_at` stays equal to `created_at`).
+    let before = db.with(|c| repo::get_template(c, "tpl_certification_audit")).unwrap().unwrap();
+    db.with(|c| c.execute("UPDATE project_templates SET name_en = 'stale' WHERE id = 'tpl_certification_audit'", []))
+        .unwrap();
+    db.with(repo::ensure_builtins).unwrap();
+    let after = db.with(|c| repo::get_template(c, "tpl_certification_audit")).unwrap().unwrap();
+    assert_eq!((after.created_at, after.updated_at), (before.created_at, before.updated_at));
+    assert_eq!(after.name_en, before.name_en, "refreshed from the built-in definition");
 
     let user = db
         .with(|c| {
@@ -354,7 +363,26 @@ fn project_crud_inherits_template_rules() {
         .unwrap();
     assert_eq!((updated.name.as_str(), updated.status), ("한빛 인증 심사 2026", ProjectStatus::Validating));
     assert_eq!(updated.notes.as_deref(), Some("재심"));
-    assert_eq!(updated.intake_no, None, "update replaces every optional field");
+    assert_eq!(updated.intake_no.as_deref(), Some("2026-0042"), "a `None` field keeps the stored value");
+    assert_eq!(updated.owner.as_deref(), Some("박담당"));
+    let cleared = db
+        .with(|c| {
+            repo::save_project(
+                c,
+                &ProjectInput {
+                    id: Some(p.id.clone()),
+                    name: "한빛 인증 심사 2026".into(),
+                    intake_no: Some("  ".into()),
+                    owner: Some(String::new()),
+                    ..Default::default()
+                },
+            )
+        })
+        .unwrap();
+    assert_eq!((cleared.intake_no, cleared.owner), (None, None), "a blank `Some` clears the field");
+    assert_eq!(cleared.notes.as_deref(), Some("재심"));
+    assert_eq!(cleared.template_id.as_deref(), Some("tpl_certification_audit"), "the template is kept too");
+    assert_eq!(cleared.status, ProjectStatus::Validating);
     db.with(|c| repo::set_status(c, &p.id, ProjectStatus::Done)).unwrap();
     assert_eq!(db.with(|c| repo::get_project(c, &p.id)).unwrap().unwrap().status, ProjectStatus::Done);
 
@@ -885,6 +913,42 @@ fn several_documents_of_one_type_report_the_worst_pair() {
 }
 
 #[test]
+fn same_type_rules_compare_each_document_with_itself() {
+    let db = db();
+    // ti1 is a normal invoice; ti2 is self-billed (supplier = buyer) with smaller amounts.
+    seed_invoice(&db, "ti1", "123-45-67890", "한빛상사", "1,000,000", "1,100,000", false);
+    seed_invoice(&db, "ti2", "220-81-62517", "주식회사 도큐", "500,000", "550,000", false);
+    let p = project(&db, "동일 유형", None);
+    add(&db, &p.id, &["ti1", "ti2"]);
+    // Cross-document pairing would compare ti1's supply total with ti2's smaller grand total.
+    add_rule(
+        &db,
+        &p.id,
+        "공급가액 ≤ 합계",
+        RuleOperand::field("tax_invoice", "supply_total"),
+        RuleOp::Lte,
+        Some(RuleOperand::field("tax_invoice", "grand_total")),
+        None,
+    );
+    add_rule(
+        &db,
+        &p.id,
+        "공급자 ≠ 공급받는자",
+        RuleOperand::field("tax_invoice", "supplier.brn"),
+        RuleOp::Neq,
+        Some(RuleOperand::field("tax_invoice", "buyer.brn")),
+        None,
+    );
+    let run = check(&deps(&db, None), &p.id, &[]).unwrap();
+    assert_eq!(run.results[0].verdict, Verdict::Pass, "{}", run.results[0].message);
+    let self_billed = &run.results[1];
+    assert_eq!(self_billed.verdict, Verdict::Mismatch, "{}", self_billed.message);
+    assert_eq!(self_billed.left.as_ref().unwrap().doc_id.as_deref(), Some("ti2"));
+    assert_eq!(self_billed.right.as_ref().unwrap().doc_id.as_deref(), Some("ti2"), "same document on both sides");
+    assert_eq!((run.pass, run.mismatch), (1, 1));
+}
+
+#[test]
 fn present_on_pending_boolean_is_undetermined_and_false_fails() {
     let db = db();
     seed_application(&db, "ap1", Some(("예", true)));
@@ -1117,8 +1181,16 @@ fn inbox_subfolders_map_to_projects() {
     );
     assert_eq!(assign_inbox_document(&db, "ib4", "inbox/새폴더/d.pdf", false).unwrap(), None);
     assert_eq!(db.with(repo::list_projects).unwrap().len(), 1, "no project created without `create`");
-    assert!(assign_inbox_document(&db, "ib4", "inbox/새폴더/d.pdf", true).unwrap().is_some());
+    // A project already named like the folder is mapped and reused instead of a duplicate.
+    let named = project(&db, "새 폴더", None);
+    assert_eq!(named.inbox_folder, None);
+    assert_eq!(
+        assign_inbox_document(&db, "ib4", "inbox/새폴더/d.pdf", true).unwrap().as_deref(),
+        Some(named.id.as_str())
+    );
     assert_eq!(db.with(repo::list_projects).unwrap().len(), 2);
+    let named = db.with(|c| repo::get_project(c, &named.id)).unwrap().unwrap();
+    assert_eq!((named.inbox_folder.as_deref(), named.document_count), (Some("새폴더"), 1));
     assert_eq!(
         assign_inbox_document(&db, "unknown", "inbox/한빛/z.pdf", true).unwrap(),
         None,

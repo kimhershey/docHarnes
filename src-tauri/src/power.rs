@@ -45,12 +45,9 @@ pub fn install(app: &AppHandle) {
         .ok();
 }
 
-/// Releases the requirement (app exit).
-pub fn release() {
-    if BUSY.swap(false, Ordering::Relaxed) {
-        apply(false);
-    }
-}
+// No explicit release at exit: the `ES_CONTINUOUS` state is per thread, so a call from the
+// main thread could not clear what the watcher thread asserted; the system drops it with the
+// process.
 
 #[cfg(windows)]
 fn apply(busy: bool) {

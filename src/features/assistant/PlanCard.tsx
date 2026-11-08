@@ -10,7 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { RuleGrid } from "@/features/projects/RuleGrid";
 import { retentionShortens } from "@/lib/commands";
 import { api } from "@/lib/ipc";
-import { DEFAULT_NAME_TEMPLATE, FOLDER_TEMPLATES, isRuleDraft, type Op, type OrganizeItem, type OrganizePlan, type Plan, type PlanIssue, type PlanResponse, type StepPreview } from "@/lib/types";
+import { DEFAULT_NAME_TEMPLATE, FOLDER_TEMPLATES, type Op, type OrganizeItem, type OrganizePlan, type Plan, type PlanIssue, type PlanResponse, type StepPreview } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import type { PlanStatus } from "@/stores/assistant";
 import { useSettingsStore, useShortcut } from "@/stores/settings";
@@ -18,7 +18,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 
 import { describeOrganizeError } from "@/features/organize/errors";
 
-import { exportPreview, impactLine, impactOf, onlyReviewedValue, opLabel, organizePreview, requiresConfirmation, sourceLabel, summarizeOp, warningIssues, withOnlyReviewed } from "./describePlan";
+import { exportPreview, impactLine, impactOf, onlyReviewedValue, opLabel, organizePreview, requiresConfirmation, ruleDraftPreview, sourceLabel, summarizeOp, warningIssues, withOnlyReviewed } from "./describePlan";
 import { FILE_OPS } from "./opSpecs";
 import { PlanEditor } from "./PlanEditor";
 
@@ -85,22 +85,28 @@ function StepPreviewView({ step, override, index }: { step: StepPreview | undefi
   if (!step && !override) return null;
   const organise = override ? { items: override.items.filter((i) => i.status === "move" || i.status === "held"), moves: override.moves, held: override.held, unchanged: override.unchanged } : organizePreview(step);
   const exp = exportPreview(step);
-  // `define_rule`: the rule grid is the confirmation (design §3.15); the payload is the parsed RuleDraft.
-  const ruleDraft = step && isRuleDraft(step.payload) ? step.payload : null;
+  // `define_rule`: the rule grid is the confirmation (design §3.15). `exec::preview` sends
+  // `{ description, draft: RuleDraft | null }`; without a parsed draft only the sentence is shown.
+  const rule = ruleDraftPreview(step);
   return (
     <div className="flex flex-col">
       {step?.summary && !organise && !exp && <span className="text-xs text-fg-muted selectable">{step.summary}</span>}
-      {ruleDraft && (
+      {rule?.draft && (
         <div className="mt-1" data-testid={`plan-preview-${index}`}>
-          <RuleGrid rule={ruleDraft.rule} readOnly unresolvedNames={ruleDraft.unresolved} testId={`plan-rule-${index}`} />
-          {ruleDraft.issues.length > 0 && (
+          <RuleGrid rule={rule.draft.rule} readOnly unresolvedNames={rule.draft.unresolved} testId={`plan-rule-${index}`} />
+          {rule.draft.issues.length > 0 && (
             <ul className="mt-1 text-xs text-warn" data-testid="plan-rule-issues">
-              {ruleDraft.issues.map((i, n) => (
+              {rule.draft.issues.map((i, n) => (
                 <li key={n}>⚠ {i}</li>
               ))}
             </ul>
           )}
         </div>
+      )}
+      {rule && !rule.draft && rule.description && (
+        <span className="mt-1 text-xs text-fg-muted selectable" data-testid={`plan-preview-${index}`}>
+          {t("planner.card.rule_description", { description: rule.description })}
+        </span>
       )}
       {organise && (
         <>

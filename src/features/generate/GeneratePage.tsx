@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog, type ConfirmRequest } from "@/components/ui/confirm-dialog";
 import { describeJobError } from "@/features/jobs/describe";
 import { describeError } from "@/lib/errors";
 import { api, revealPath } from "@/lib/ipc";
@@ -50,6 +51,7 @@ export function GeneratePage() {
   const [saved, setSaved] = useState<SavedDocument | null>(null);
   const [draftsOpen, setDraftsOpen] = useState(false);
   const [validating, setValidating] = useState(false);
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const handled = useRef<string | null>(null);
   const putTimer = useRef<number | null>(null);
 
@@ -57,12 +59,11 @@ export function GeneratePage() {
   useEffect(() => {
     useGenerateStore.getState().bind(workspacePath, language);
   }, [workspacePath, language]);
-  useEffect(
-    () => () => {
-      if (putTimer.current) window.clearTimeout(putTimer.current);
-    },
-    [],
-  );
+  const cancelPersist = useCallback(() => {
+    if (putTimer.current) window.clearTimeout(putTimer.current);
+    putTimer.current = null;
+  }, []);
+  useEffect(() => cancelPersist, [cancelPersist]);
 
   // A draft handed over from the assistant / jobs page: announce it once.
   useEffect(() => {
@@ -73,34 +74,47 @@ export function GeneratePage() {
     toast(t("generate.handoff"), "info");
   }, [handoff, draft, toast, t]);
 
-  const running = !!job && !isJobFinished(job);
+  // The job is "running" from the moment `generate_draft` answers until the job book reports a terminal state
+  // (the `jobs://update` for the new job may arrive after the response: `job` is null for a tick).
+  const running = jobId !== null && (!job || !isJobFinished(job));
 
   // Follow the draft job: the finished job's result is a DraftOutcome (fetched with jobs_get, the broadcast omits it).
   useEffect(() => {
     if (!job || !isJobFinished(job) || handled.current === job.id) return;
     handled.current = job.id;
+    // The finished draft replaces the editor's state: drop a pending edit persist of the previous draft.
+    cancelPersist();
     void (async () => {
       let result: unknown = job.result;
       if (!isDraftOutcome(result)) {
         const full = await useJobsStore.getState().fetch(job.id);
         result = full?.result;
       }
-      if (job.state === "done" && isDraftOutcome(result)) {
-        setDraft(result.draft);
-        setSaved(null);
-        setFeedback("");
-        invalidateDrafts();
+      if (job.state === "done") {
+        if (isDraftOutcome(result)) {
+          setDraft(result.draft);
+          setSaved(null);
+          setFeedback("");
+          invalidateDrafts();
+        } else {
+          // Job book cleared / result not delivered: the draft store still has it.
+          toast(t("generate.form.job_result_missing"), "warn", { label: t("generate.drafts"), onClick: () => setDraftsOpen(true) });
+        }
       } else if (job.state === "failed") {
         toast(t("generate.form.job_failed", { message: describeJobError(job, t) ?? "" }), "danger");
       } else if (job.state === "cancelled") {
         toast(t("generate.form.job_cancelled"), "warn");
+      } else if (job.state === "interrupted") {
+        toast(t("generate.form.job_interrupted", { reason: t("jobs.error.interrupted") }), "warn");
       }
       setJobId(null);
     })();
-  }, [job, setDraft, setJobId, toast, t]);
+  }, [job, cancelPersist, setDraft, setJobId, toast, t]);
 
   const start = useCallback(
     async (req: typeof request) => {
+      // An edit persisted after the job finishes would overwrite the regenerated draft (stale `generate_draft_put`).
+      cancelPersist();
       try {
         const { job_id } = await api.generateDraft(req);
         handled.current = null;
@@ -109,7 +123,7 @@ export function GeneratePage() {
         toast(describeError(e, t), "danger");
       }
     },
-    [setJobId, toast, t],
+    [cancelPersist, setJobId, toast, t],
   );
 
   const generate = () => void start({ ...request, previous: null, feedback: null, excluded_sources: [], language });
@@ -122,16 +136,21 @@ export function GeneratePage() {
   };
 
   // Edits are persisted to the draft store a moment after the last keystroke (the saved-draft list shows them).
-  const persist = useCallback((d: Draft) => {
-    if (putTimer.current) window.clearTimeout(putTimer.current);
-    putTimer.current = window.setTimeout(() => {
-      putTimer.current = null;
-      void api
-        .generateDraftPut(d)
-        .then(() => invalidateDrafts())
-        .catch(() => undefined);
-    }, 1200);
-  }, []);
+  // Nothing is persisted while a draft job runs: its result replaces the draft.
+  const persist = useCallback(
+    (d: Draft) => {
+      cancelPersist();
+      putTimer.current = window.setTimeout(() => {
+        putTimer.current = null;
+        if (useGenerateStore.getState().jobId !== null) return;
+        void api
+          .generateDraftPut(d)
+          .then(() => invalidateDrafts())
+          .catch(() => undefined);
+      }, 1200);
+    },
+    [cancelPersist],
+  );
   const changeDraft = (d: Draft) => {
     setDraft(d);
     setSaved(null);
@@ -157,10 +176,7 @@ export function GeneratePage() {
     setSaving(true);
     setSaveError(null);
     // The backend stores the saved draft itself: drop a pending edit persist so it cannot overwrite the saved path.
-    if (putTimer.current) {
-      window.clearTimeout(putTimer.current);
-      putTimer.current = null;
-    }
+    cancelPersist();
     try {
       const res = await api.generateSave(req);
       const next: Draft = { ...req.draft, saved_path: res.rel_path, saved_doc_id: res.doc_id };
@@ -168,12 +184,11 @@ export function GeneratePage() {
       setSaved(res);
       setSaveOpen(false);
       invalidateDrafts();
-      toast(
-        t("generate.save.saved", { path: res.rel_path }),
-        "ok",
-        res.doc_id ? { label: t("generate.save.open_library"), onClick: () => navigate(`/library/${res.doc_id}`) } : { label: t("generate.save.open_folder"), onClick: () => void revealPath(res.absolute) },
-      );
-      for (const w of res.warnings) if (w === "markdown_not_registered") toast(t("generate.save.warning_markdown"), "info");
+      // The format really written can differ from the request (PDF printer unavailable → MD, registered form → its format).
+      const message = res.format !== req.output ? t("generate.save.saved_as", { path: res.rel_path, format: t(`generate.output.${res.format}`) }) : t("generate.save.saved", { path: res.rel_path });
+      toast(message, "ok", res.doc_id ? { label: t("generate.save.open_library"), onClick: () => navigate(`/library/${res.doc_id}`) } : { label: t("generate.save.open_folder"), onClick: () => void revealPath(res.absolute) });
+      // `warnings` are localised sentences from the core (fallbacks, fill / registration problems): shown as they are.
+      for (const w of res.warnings) toast(w, "warn");
     } catch (e) {
       const code = errorCode(e);
       const message = String((e as { message?: unknown }).message ?? "");
@@ -187,6 +202,7 @@ export function GeneratePage() {
   const openSaved = async (d: DraftSummary) => {
     try {
       const full = await api.generateDraftGet(d.id);
+      cancelPersist();
       useGenerateStore.getState().openDraft(full);
       useGenerateStore.getState().consumeHandoff();
       setExcluded(full.request?.excluded_sources ?? []);
@@ -196,18 +212,29 @@ export function GeneratePage() {
       toast(describeError(e, t), "danger");
     }
   };
-  const deleteSaved = async (d: DraftSummary) => {
-    try {
-      await api.generateDraftDelete(d.id);
-      invalidateDrafts();
-      if (draft?.id === d.id) setDraft(null);
-      toast(t("generate.drafts_list.deleted"), "ok");
-    } catch (e) {
-      toast(describeError(e, t), "danger");
-    }
+  const deleteSaved = (d: DraftSummary) => {
+    setConfirm({
+      title: t("generate.drafts_list.delete"),
+      description: t("generate.drafts_list.delete_confirm", { title: d.title }),
+      confirmLabel: t("generate.drafts_list.delete"),
+      danger: true,
+      onConfirm: async () => {
+        try {
+          // A pending edit persist would re-create the draft right after the delete.
+          if (draft?.id === d.id) cancelPersist();
+          await api.generateDraftDelete(d.id);
+          invalidateDrafts();
+          if (draft?.id === d.id) setDraft(null);
+          toast(t("generate.drafts_list.deleted"), "ok");
+        } catch (e) {
+          toast(describeError(e, t), "danger");
+        }
+      },
+    });
   };
 
   const reset = () => {
+    cancelPersist();
     useGenerateStore.getState().reset(language);
     setFeedback("");
     setExcluded([]);
@@ -254,19 +281,21 @@ export function GeneratePage() {
           </div>
         )}
       </div>
-      <div className="grid min-h-0 flex-1 grid-cols-[20rem_minmax(0,1fr)] xl:grid-cols-[20rem_minmax(0,1fr)_26rem]">
+      {/* Three columns from lg; below, the editor takes a second row across the full width instead of being squeezed under the form. */}
+      <div className="grid min-h-0 flex-1 grid-cols-[18rem_minmax(0,1fr)] grid-rows-[minmax(0,3fr)_minmax(0,2fr)] lg:grid-cols-[18rem_minmax(0,1fr)_24rem] lg:grid-rows-1 xl:grid-cols-[20rem_minmax(0,1fr)_26rem]">
         <aside className="min-h-0 overflow-y-auto border-r border-border p-4">
           <RequestForm request={request} onChange={(patch) => setRequest(patch)} onGenerate={generate} job={job} running={running} hasDraft={!!draft} feedback={feedback} onFeedback={setFeedback} onRegenerate={regenerate} excludedCount={excluded.length} onCancel={cancel} />
         </aside>
         <section className="min-h-0 min-w-0" aria-label={t("generate.preview.title")}>
           <DraftPreview draft={draft} />
         </section>
-        <aside className="min-h-0 overflow-y-auto border-l border-border p-4 xl:block" aria-label={t("generate.editor.title")}>
-          {draft ? <DraftEditor draft={draft} onChange={changeDraft} excluded={excluded} onToggleExcluded={(id) => setExcluded((x) => toggleExcluded(x, id))} /> : <p className="text-sm text-fg-subtle">{t("generate.editor.empty")}</p>}
+        <aside className="col-span-2 min-h-0 overflow-y-auto border-t border-border p-4 lg:col-span-1 lg:border-l lg:border-t-0" aria-label={t("generate.editor.title")}>
+          {draft ? <DraftEditor draft={draft} onChange={changeDraft} excluded={excluded} onToggleExcluded={(id) => setExcluded((x) => toggleExcluded(x, id))} disabled={running} /> : <p className="text-sm text-fg-subtle">{t("generate.editor.empty")}</p>}
         </aside>
       </div>
       {draft && <SaveDialog open={saveOpen} onOpenChange={(o) => { setSaveOpen(o); if (!o) setSaveError(null); }} draft={draft} defaultOutput={request.output} busy={saving} error={saveError} onSave={(req) => void save(req)} />}
-      <DraftsDrawer open={draftsOpen} onOpenChange={setDraftsOpen} onOpen={(d) => void openSaved(d)} onDelete={(d) => void deleteSaved(d)} currentId={draft?.id ?? null} />
+      <DraftsDrawer open={draftsOpen} onOpenChange={setDraftsOpen} onOpen={(d) => void openSaved(d)} onDelete={deleteSaved} currentId={draft?.id ?? null} />
+      <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 }

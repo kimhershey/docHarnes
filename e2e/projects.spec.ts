@@ -103,18 +103,68 @@ test.describe("P6 projects", () => {
     await expect(page.getByTestId("generate-table-findings").locator('[data-testid^="generate-row-findings-"]')).toHaveCount(1);
     await expect(page.getByTestId("generate-field-input-project_name")).toHaveValue("한빛상사 거래처 등록");
 
-    // Kanban: the project moved to 보완요청 with the request; the move button takes it to 완료.
+    // Kanban: the project moved to 보완요청 with the request; 완료 with an open mismatch is confirmed first (counts shown).
     await page.getByTestId("nav-projects").click();
     const kanbanCard = page.locator('[data-testid^="project-card-"][data-project-name="한빛상사 거래처 등록"]');
     await expect(kanbanCard).toHaveAttribute("data-project-status", "supplement");
     await expect(page.getByTestId("kanban-supplement")).toContainText("한빛상사 거래처 등록");
     await kanbanCard.getByTestId("project-move-next").click();
+    const confirm = page.getByTestId("confirm-dialog");
+    await expect(confirm).toBeVisible();
+    await expect(confirm).toContainText(tpl(ko.projects.card.done_confirm, { mismatch: 1, missing: 0 }));
+    await page.getByTestId("confirm-cancel").click();
+    await expect(kanbanCard).toHaveAttribute("data-project-status", "supplement");
+    await kanbanCard.getByTestId("project-move-next").click();
+    await page.getByTestId("confirm-ok").click();
     await expect(kanbanCard).toHaveAttribute("data-project-status", "done", { timeout: 10_000 });
     await expect(page.getByTestId("kanban-done")).toContainText("한빛상사 거래처 등록");
+    await expect(page.getByTestId("toaster")).toContainText(tpl(ko.projects.card.moved, { name: "한빛상사 거래처 등록", status: ko.projects.status.done }));
     await expect(kanbanCard.getByTestId("project-verdicts")).toContainText(tpl(ko.projects.card.verdicts, { pass: 3, mismatch: 1, undetermined: 0 }));
-    // List view shows the same project.
+    // The previous step needs no confirmation; the buttons name the project and the step.
+    await expect(kanbanCard.getByTestId("project-move-prev")).toHaveAttribute("aria-label", tpl(ko.projects.card.move_prev_named, { name: "한빛상사 거래처 등록", status: ko.projects.status.supplement }));
+    await kanbanCard.getByTestId("project-move-prev").click();
+    await expect(kanbanCard).toHaveAttribute("data-project-status", "supplement", { timeout: 10_000 });
+    // List view shows the same project; the name is a keyboard-reachable control.
     await page.getByTestId("projects-view-list").click();
     await expect(page.getByTestId("projects-table")).toContainText("2026-001");
+    await page.getByTestId("project-row-open").first().focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("page-project")).toBeVisible();
+
+    // Rules: a rule can be switched off and deleted from the list.
+    await page.getByTestId("project-tab-rules").click();
+    const rules = page.getByTestId("rule-list").locator('[data-testid^="rule-"][data-rule-enabled]');
+    await expect(rules).toHaveCount(4);
+    await rules.first().getByTestId("rule-enabled").click();
+    await expect(rules.first()).toHaveAttribute("data-rule-enabled", "false", { timeout: 10_000 });
+    await rules.last().getByTestId("rule-delete").click();
+    await expect(rules).toHaveCount(3, { timeout: 10_000 });
+    await expect(page.getByTestId("toaster")).toContainText(ko.projects.rules.deleted);
+  });
+
+  test("templates: a built-in is read-only, its copy is editable, an incomplete rule blocks saving", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await page.getByTestId("nav-projects").click();
+    await page.getByTestId("projects-templates").click();
+    const dialog = page.getByTestId("templates-dialog");
+    await expect(dialog).toBeVisible();
+    await dialog.getByTestId("templates-item-builtin-vendor_onboarding").click();
+    await expect(dialog.getByTestId("templates-editor")).toContainText(ko.projects.templates.readonly);
+    await expect(dialog.getByTestId("templates-save")).toBeHidden();
+    await dialog.getByTestId("templates-duplicate").click();
+    await expect(dialog.getByTestId("templates-name")).toHaveValue(`${ko.projects.templates.builtin.vendor_onboarding} ${ko.projects.templates.copy_suffix}`);
+    await expect(dialog.getByTestId("templates-save")).toBeEnabled();
+    // A new, empty rule cannot be saved: the row says why and the save button is off until it is completed or removed.
+    await dialog.getByTestId("templates-add-rule").click();
+    await expect(dialog.getByTestId("templates-rule-incomplete-2")).toHaveText(ko.projects.rules.incomplete);
+    await expect(dialog.getByTestId("templates-incomplete")).toHaveText(tpl(ko.projects.templates.incomplete_rules, { count: 1 }));
+    await expect(dialog.getByTestId("templates-save")).toBeDisabled();
+    await dialog.getByTestId("templates-rule-row-2").getByRole("button", { name: ko.projects.rules.delete }).click();
+    await expect(dialog.getByTestId("templates-incomplete")).toBeHidden();
+    await dialog.getByTestId("templates-save").click();
+    await expect(page.getByTestId("toaster")).toContainText(ko.projects.templates.saved);
+    await expect(dialog.locator('[data-testid^="templates-item-"]')).toHaveCount(4);
   });
 
   test("assistant: '정합성 검사해' runs the check of the open project and links to the results", async ({ page }) => {
@@ -128,18 +178,23 @@ test.describe("P6 projects", () => {
     await page.getByTestId("project-submit").click();
     await expect(page.getByTestId("page-project")).toBeVisible();
 
-    // The open project is the assistant's default target: the plan runs inline and the result card links back.
+    // The opened project stays the assistant's default target after leaving its page: the scope row shows it
+    // as a chip, the plan runs inline and the result card links back.
     await page.getByTestId("nav-assistant").click();
+    await expect(page.getByTestId("assistant-current-project")).toContainText(tpl(ko.assistant.scope.project_named, { name: "인증 심사 A" }));
     await page.getByTestId("assistant-input").fill("정합성 검사해");
     await page.getByTestId("assistant-send").click();
     const result = page.locator('[data-testid="assistant-card-result"]').last();
     await expect(result).toBeVisible({ timeout: 15_000 });
     await expect(result).toContainText(ko.planner.ops.check_consistency);
     await expect(result.getByTestId("result-check")).toContainText(ko.projects.results.verdict.missing);
-    // Nothing is open any more: without a document the project stays the only one → still the target.
     await result.getByTestId("result-open-check").click();
     await expect(page.getByTestId("page-project")).toBeVisible();
     await expect(page.getByTestId("project-verdicts")).toBeVisible();
     await expect(page.getByTestId("verdict-missing")).toContainText("3");
+    // The chip's clear button drops the project context (the validator then asks for a project).
+    await page.getByTestId("nav-assistant").click();
+    await page.getByTestId("assistant-current-project-clear").click();
+    await expect(page.getByTestId("assistant-current-project")).toBeHidden();
   });
 });

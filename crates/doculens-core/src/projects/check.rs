@@ -934,9 +934,17 @@ impl Env<'_> {
                     }
                     r_docs.iter().map(|d| self.resolve_field(d, r_type, r_field)).collect()
                 };
+                // Both operands of one document type (supplier ≠ buyer on a tax invoice): each
+                // document is compared with itself — `left` and `right` come from the same
+                // `docs_of` order, so equal indices are one document. Different types pair every
+                // document of one with every document of the other.
+                let same_type = !right_op.is_literal() && right_op.doc_type.as_deref() == Some(l_type);
                 let mut worst: Option<Outcome> = None;
-                for l_rows in &left {
-                    for r_rows in &right {
+                for (li, l_rows) in left.iter().enumerate() {
+                    for (ri, r_rows) in right.iter().enumerate() {
+                        if same_type && li != ri {
+                            continue;
+                        }
                         // Best over row combinations of this document pair.
                         let mut best: Option<Outcome> = None;
                         for l in l_rows {

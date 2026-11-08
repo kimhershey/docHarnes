@@ -3,6 +3,12 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 /**
+ * A list item: "- ", "* ", "• " or "1. " … "999. ". The ordered marker is limited to three digits so a
+ * Korean date line such as "2026. 11. 8. 검사 결과" is a paragraph, not a numbered list.
+ */
+const LIST_ITEM = /^\s*(?:[-*•]|\d{1,3}\.)\s+/;
+
+/**
  * Minimal Markdown renderer for backend reports (headings, paragraphs, bullet / numbered lists, pipe
  * tables, **bold**, `code`). No HTML pass-through: the text is rendered as React nodes.
  */
@@ -73,11 +79,11 @@ export function Markdown({ text, className }: { text: string; className?: string
       );
       continue;
     }
-    if (/^\s*([-*•]|\d+\.)\s+/.test(line)) {
-      const ordered = /^\s*\d+\./.test(line);
+    if (LIST_ITEM.test(line)) {
+      const ordered = /^\s*\d{1,3}\.\s/.test(line);
       const items: string[] = [];
-      while (i < lines.length && /^\s*([-*•]|\d+\.)\s+/.test(lines[i]!)) {
-        items.push(lines[i]!.replace(/^\s*([-*•]|\d+\.)\s+/, ""));
+      while (i < lines.length && LIST_ITEM.test(lines[i]!)) {
+        items.push(lines[i]!.replace(LIST_ITEM, ""));
         i += 1;
       }
       const Tag = ordered ? "ol" : "ul";
@@ -93,7 +99,7 @@ export function Markdown({ text, className }: { text: string; className?: string
       continue;
     }
     const para: string[] = [];
-    while (i < lines.length && lines[i]!.trim() && !/^(#{1,6}\s|\||\s*([-*•]|\d+\.)\s)/.test(lines[i]!)) {
+    while (i < lines.length && lines[i]!.trim() && !/^(#{1,6}\s|\|)/.test(lines[i]!) && !LIST_ITEM.test(lines[i]!)) {
       para.push(lines[i]!);
       i += 1;
     }

@@ -36,7 +36,20 @@ pub fn draft(app: &AppHandle, mut req: DraftRequest, project_id: Option<String>,
     if req.content.trim().is_empty() && req.previous.is_none() {
         return Err(UiError::invalid("content_empty"));
     }
-    req.content = req.content.trim().chars().take(12_000).collect();
+    // Caps: the body as the validator allows it, sources and feedback as the prompt takes them.
+    req.content = req.content.trim().chars().take(6_000).collect();
+    for s in &mut req.sources {
+        if let generate::SourceRef::Text { text, .. } = s {
+            if text.chars().count() > 20_000 {
+                *text = text.chars().take(20_000).collect();
+            }
+        }
+    }
+    if let Some(f) = req.feedback.as_mut() {
+        if f.chars().count() > 2_000 {
+            *f = f.chars().take(2_000).collect();
+        }
+    }
     let state = app.state::<AppState>();
     let pctx = pipeline_bridge::context(app)?; // a workspace must be open
     let label = draft_label(&req, pctx.db());
@@ -134,7 +147,8 @@ pub fn run_draft(
     let mut payload = serde_json::to_value(&outcome).map_err(|e| (e.to_string(), None))?;
     if let Some(obj) = payload.as_object_mut() {
         obj.insert("project_id".into(), serde_json::json!(project_id));
-        obj.insert("source".into(), serde_json::json!(source));
+        // `source` is the draft's own field (rules | model); the job origin lives under its own key.
+        obj.insert("job_source".into(), serde_json::json!(source));
     }
     Ok((Some(detail), Some(payload)))
 }

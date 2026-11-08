@@ -282,7 +282,9 @@
       "folder_named": "현재 폴더 {{folder}}",
       "selection_count": "선택 문서 {{count}}건",
       "document": "현재 문서",
-      "document_named": "현재 문서: {{name}}"
+      "document_named": "현재 문서: {{name}}",
+      "project_named": "프로젝트: {{name}}",
+      "project_clear": "프로젝트 컨텍스트 해제"
     },
     "placeholder": "자연어로 명령하거나 질문하세요 (한국어 / English) · /로 슬래시 명령",
     "send": "보내기",
@@ -517,7 +519,8 @@
       },
       "impact_draft": "문서 초안 {{count}}건(문서 생성 화면에서 저장)",
       "impact_project": "프로젝트·규칙 변경 {{count}}건",
-      "retention_shorter": "보존 기간이 짧아집니다 — 기간이 지난 데이터는 다음 파기 작업에서 삭제됩니다."
+      "retention_shorter": "보존 기간이 짧아집니다 — 기간이 지난 데이터는 다음 파기 작업에서 삭제됩니다.",
+      "rule_description": "규칙: {{description}}"
     },
     "execution": {
       "title": "실행 중 · 작업 #{{id}}",
@@ -563,7 +566,8 @@
       "undo_last_batch": "↶ 마지막 배치 되돌리기",
       "moves_caption": "파일 이동 내역 (원본 → 대상)",
       "open_project": "프로젝트 열기",
-      "open_results": "검사 결과 열기"
+      "open_results": "검사 결과 열기",
+      "rule_saved": "저장됨"
     },
     "aggregate": {
       "title": "집계 결과 — {{summary}}",
@@ -917,7 +921,7 @@
         "running": "파기 중…",
         "started": "파기 작업을 시작했습니다.",
         "done": "파기 작업이 끝났습니다.",
-        "summary": "저널 {{journal}} · 작업 {{jobs}} · 대화 {{answers}} · 문서 {{documents}} · 추출 {{extractions}} · 로그 {{logs}} · 임시 {{temp}}",
+        "summary": "저널 {{journal}} · 작업 {{jobs}} · 대화 {{answers}} · 문서 {{documents}} · 추출 {{extractions}} · 로그 {{logs}} · 임시 {{temp}} · 캐시 {{cache}} · 휴지통 {{trash}}",
         "items": {
           "journal": "저널",
           "jobs": "작업 기록",
@@ -928,7 +932,11 @@
           "temp": "임시 데이터",
           "documents": "문서",
           "extractions": "추출 결과"
-        }
+        },
+        "skipped": "건너뜀: {{items}}",
+        "skipped_disabled": "매일 실행 꺼짐",
+        "cancelled": "취소됨",
+        "next_run_at": "{{date}} (매일 {{hour}}시)"
       }
     },
     "shortcuts": {
@@ -1132,12 +1140,7 @@
       "nothing_to_redo": "다시 실행할 작업이 없습니다",
       "interrupted": "앱 종료로 중단됨 (재시도 가능)",
       "workspace_closed": "워크스페이스가 닫혀 중단됨",
-      "drafting_fields": "필드 작성 중",
-      "drafting_body": "본문 작성 중",
-      "validating": "검증 중",
-      "drafted": "초안 완료: {{title}}",
-      "purging": "{{item}} 파기 중",
-      "purged": "{{count}}건 파기"
+      "drafting": "초안 작성 중"
     },
     "empty_queued": "대기 중인 작업이 없습니다.",
     "empty_failed": "실패한 작업이 없습니다.",
@@ -1493,7 +1496,8 @@
     "type_changed_title": "새 유형으로 다시 추출",
     "type_changed": "유형을 바꿨습니다. 새 유형의 스키마로 다시 추출할까요?",
     "reextract": "다시 추출",
-    "ocr_badge": "OCR"
+    "ocr_badge": "OCR",
+    "image_failed": "페이지 이미지를 불러오지 못했습니다. 캐시에서 지워진 페이지는 다시 렌더하면 복구됩니다."
   },
   "answer": {
     "sources": "근거",
@@ -2253,7 +2257,9 @@
       "feedback_placeholder": "예: 더 짧게, 금액을 1,200,000원으로",
       "excluded_hint": "제외한 참고 문서 {{count}}건은 재생성에 반영됩니다.",
       "job_failed": "생성 실패: {{message}}",
-      "job_cancelled": "생성이 취소되었습니다."
+      "job_cancelled": "생성이 취소되었습니다.",
+      "job_interrupted": "{{reason}} 작업 화면에서 다시 시도할 수 있습니다.",
+      "job_result_missing": "초안 결과를 불러오지 못했습니다. 초안 목록에서 열 수 있습니다."
     },
     "tone": {
       "formal": "격식체",
@@ -2343,14 +2349,15 @@
       "format": "형식",
       "file_name": "파일 이름",
       "register": "라이브러리 등록",
-      "overwrite": "같은 이름이 있으면 번호를 붙여 저장",
+      "overwrite": "같은 이름의 파일 덮어쓰기",
       "blocking_warning": "저장 전 확인이 필요한 검증 이슈가 {{count}}건 있습니다. 그대로 저장할 수 있지만 문서는 '검토 전' 상태로 남습니다.",
       "confirm": "저장",
       "saved": "저장했습니다: {{path}}",
       "open_folder": "폴더 열기",
       "open_library": "라이브러리에서 보기",
-      "exists": "같은 이름의 파일이 이미 있습니다. '번호를 붙여 저장'을 켜거나 이름을 바꾸세요.",
-      "warning_markdown": "Markdown은 라이브러리에 등록하지 않습니다."
+      "exists": "같은 이름의 파일이 이미 있습니다. 덮어쓰기를 켜거나 파일 이름을 바꾸세요.",
+      "warning_markdown": "Markdown은 라이브러리에 등록하지 않습니다.",
+      "saved_as": "저장했습니다 ({{format}}): {{path}}"
     },
     "drafts_list": {
       "title": "최근 초안",
@@ -2361,7 +2368,8 @@
       "deleted": "초안을 삭제했습니다.",
       "issues": "이슈 {{count}}",
       "saved": "저장됨: {{path}}",
-      "unsaved": "미저장"
+      "unsaved": "미저장",
+      "delete_confirm": "초안 '{{title}}'을(를) 삭제할까요? 저장한 파일은 남습니다."
     },
     "sources_dialog": {
       "title": "인용할 문서 선택",
@@ -2372,7 +2380,9 @@
     },
     "result": {
       "meta": "필드 {{fields}} · 이슈 {{issues}} · {{source}}"
-    }
+    },
+    "open_busy_title": "초안 생성 진행 중",
+    "open_busy": "문서 생성 화면에서 다른 초안이 생성되는 중입니다. 지금 이 초안을 열면 진행 중인 작업의 결과는 작업 화면에서 열 수 있습니다."
   },
   "projects": {
     "title": "프로젝트",
@@ -2401,7 +2411,13 @@
       "verdicts": "통과 {{pass}} · 불일치 {{mismatch}} · 판단불가 {{undetermined}}",
       "no_check": "검사 전",
       "move_prev": "이전 단계로",
-      "move_next": "다음 단계로"
+      "move_next": "다음 단계로",
+      "moved": "'{{name}}'을(를) {{status}} 단계로 이동했습니다.",
+      "move_prev_named": "'{{name}}' 이전 단계({{status}})로",
+      "move_next_named": "'{{name}}' 다음 단계({{status}})로",
+      "done_confirm_title": "'{{name}}' 완료 처리",
+      "done_confirm": "마지막 검사에 불일치 {{mismatch}}건 · 누락 {{missing}}건이 남아 있습니다. 그대로 완료 단계로 이동할까요?",
+      "done_confirm_unchecked": "아직 정합성 검사를 실행하지 않았습니다. 그대로 완료 단계로 이동할까요?"
     },
     "columns": {
       "name": "이름",
@@ -2524,7 +2540,6 @@
       }
     },
     "results": {
-      "title": "검사 결과",
       "run": "검사 실행",
       "running": "검사 중…",
       "none": "아직 검사를 실행하지 않았습니다.",
@@ -2575,7 +2590,10 @@
       "generating": "초안 생성 중…",
       "none": "불일치·누락 항목이 없습니다. 먼저 정합성 검사를 실행하세요.",
       "started": "보완요청서 초안을 생성합니다.",
-      "ready": "보완요청서 초안이 준비되었습니다."
+      "ready": "보완요청서 초안이 준비되었습니다.",
+      "result_missing": "보완요청서 초안을 불러오지 못했습니다. 문서 생성 화면의 초안 목록에서 열 수 있습니다.",
+      "cancelled": "보완요청서 생성이 취소되었습니다.",
+      "interrupted": "{{reason}} 작업 화면에서 다시 시도할 수 있습니다."
     },
     "templates": {
       "title": "프로젝트 템플릿",
@@ -2601,7 +2619,8 @@
       "no_rules": "규칙이 없습니다.",
       "select": "템플릿을 선택하거나 새로 만드세요.",
       "readonly": "내장 템플릿은 수정할 수 없습니다. 복제해서 수정하세요.",
-      "copy_suffix": "(복제)"
+      "copy_suffix": "(복제)",
+      "incomplete_rules": "불완전한 규칙 {{count}}개를 먼저 완성하세요."
     }
   }
 }

@@ -39,7 +39,9 @@ export function NewProjectDialog({ open, onOpenChange, project, onSaved }: { ope
   const submit = async () => {
     setBusy(true);
     try {
-      const input: ProjectInput = { id: project?.id ?? null, name: name.trim(), template_id: template === NONE ? null : template, intake_no: intakeNo.trim() || null, owner: owner.trim() || null, due_date: due || null, inbox_folder: inbox.trim() || null };
+      // Optional fields follow the core contract: "" clears a stored value, an omitted / null field keeps it.
+      // The dialog has no notes field, so notes are left out and survive an edit.
+      const input: ProjectInput = { id: project?.id ?? null, name: name.trim(), template_id: template === NONE ? "" : template, intake_no: intakeNo.trim(), owner: owner.trim(), due_date: due.trim(), inbox_folder: inbox.trim() };
       const saved = project ? await api.projectUpdate(input) : await api.projectCreate(input);
       invalidateProjects(project ? [project.id] : []);
       toast(project ? t("common.saved") : t("projects.dialog.created"), "ok");

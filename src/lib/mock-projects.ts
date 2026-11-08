@@ -17,6 +17,7 @@ import {
   pace,
   submitJob,
   updateJob,
+  workerFailure,
   wsDocs,
   type JobControl,
   type MockDoc,
@@ -267,23 +268,25 @@ function upsertProject(s: PState, input: ProjectInput): Project {
     return t ? t : null;
   };
   let p: Project;
+  // Same contract as core `save_project`: a null / omitted optional field keeps the stored value, a blank one clears it.
+  const merged = (given: string | null | undefined, stored: string | null) => (given == null ? stored : clean(given));
   if (input.id) {
     p = getProject(s, input.id);
     p.name = name;
-    p.template_id = input.template_id === undefined ? p.template_id : input.template_id;
+    p.template_id = merged(input.template_id, p.template_id);
     if (input.status) p.status = input.status;
-    if (input.intake_no !== undefined) p.intake_no = clean(input.intake_no);
-    if (input.owner !== undefined) p.owner = clean(input.owner);
-    if (input.due_date !== undefined) p.due_date = clean(input.due_date);
-    if (input.notes !== undefined) p.notes = clean(input.notes);
-    if (input.inbox_folder !== undefined) p.inbox_folder = clean(input.inbox_folder);
+    p.intake_no = merged(input.intake_no, p.intake_no);
+    p.owner = merged(input.owner, p.owner);
+    p.due_date = merged(input.due_date, p.due_date);
+    p.notes = merged(input.notes, p.notes);
+    p.inbox_folder = merged(input.inbox_folder, p.inbox_folder);
     p.updated_at = now();
   } else {
     if (s.projects.some((x) => compact(x.name) === compact(name))) throw err("invalid", "project_name_taken");
     p = {
       id: newId(),
       name,
-      template_id: input.template_id ?? null,
+      template_id: clean(input.template_id),
       status: input.status ?? "intake",
       intake_no: clean(input.intake_no),
       owner: clean(input.owner),
@@ -956,7 +959,7 @@ export function maintenanceStatus(): MaintenanceStatus {
     if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);
     next = d.toISOString();
   }
-  return { last_run_at: m.last_run_at, next_run_at: next, running: hasActiveJob("maintenance"), last_summary: m.last_summary };
+  return { enabled: !!retention?.purge_enabled, purge_hour_local: retention?.purge_hour_local ?? 3, last_run_at: m.last_run_at, next_run_at: next, running: hasActiveJob("maintenance"), last_summary: m.last_summary };
 }
 
 export function maintenanceRunNow(): string {
@@ -965,25 +968,44 @@ export function maintenanceRunNow(): string {
   return submitJob({ kind: "maintenance" }, "workspace", "low");
 }
 
+/**
+ * The purge job (`maintenance::run`): progress only (no stage words), steps whose policy is "keep forever"
+ * are listed in `skipped`, the finishing detail is the localised summary line the shell writes.
+ */
 export async function maintenanceWorker(job: Job, ctl: JobControl): Promise<WorkerOutcome> {
   const started = now();
   const t0 = performance.now();
   const stages = ["journal", "jobs", "answers", "cache", "trash", "logs", "temp", "documents", "extractions"] as const;
   const purged: MaintenanceSummary["purged"] = { journal: 0, jobs: 0, answers: 0, cache_bytes: 0, trash: 0, logs: 0, temp: 0, documents: 0, extractions: 0 };
   const retention = currentWorkspaceView()?.manifest.retention;
+  const skipped: string[] = [];
+  if (retention && !retention.purge_enabled) skipped.push("disabled");
+  const policyOf: Partial<Record<(typeof stages)[number], number | null | undefined>> = { journal: retention?.journal_days, jobs: retention?.job_logs_days, answers: retention?.chats_days, logs: retention?.app_logs_days, temp: retention?.temp_days, documents: retention?.documents_days, extractions: retention?.extractions_days };
+  let cancelled = false;
   for (const [i, stage] of stages.entries()) {
-    updateJob(job.id, { progress: i / stages.length, detail: `purging ${stage}` });
+    if (ctl.cancelled()) {
+      cancelled = true;
+      break;
+    }
+    updateJob(job.id, { progress: i / stages.length });
     await pace(ctl, 120);
-    if (stage === "jobs" && retention?.job_logs_days !== null && retention?.job_logs_days !== undefined) {
+    if (stage in policyOf && policyOf[stage] == null) {
+      // Rust reports the step by its policy name (`chats` for answers).
+      skipped.push(stage === "answers" ? "chats" : stage);
+      continue;
+    }
+    if (stage === "jobs" && retention?.job_logs_days != null) {
       const cutoff = Date.now() - retention.job_logs_days * 86_400_000;
       purged.jobs = listJobs().filter((j) => j.finished_at && new Date(j.finished_at).getTime() < cutoff).length;
     }
-    if (stage === "cache" && retention) purged.cache_bytes = 0;
   }
-  const summary: MaintenanceSummary = { started_at: started, elapsed_ms: Math.round(performance.now() - t0), purged };
+  const summary: MaintenanceSummary = { started_at: started, elapsed_ms: Math.round(performance.now() - t0), purged, skipped, cancelled };
   saveMaint({ last_run_at: now(), last_summary: summary });
-  const total = Object.values(purged).reduce((a, b) => a + b, 0);
-  return { detail: `purged ${total} items`, result: summary };
+  if (cancelled) throw workerFailure("cancelled", summary);
+  const ko = loadSettings().ui.language !== "en";
+  const mb = Math.round(purged.cache_bytes / (1024 * 1024));
+  const detail = ko ? `저널 ${purged.journal} · 작업 ${purged.jobs} · 대화 ${purged.answers} · 추출 ${purged.extractions} · 문서 ${purged.documents} · 캐시 ${mb} MB` : `journal ${purged.journal} · jobs ${purged.jobs} · chats ${purged.answers} · runs ${purged.extractions} · documents ${purged.documents} · cache ${mb} MB`;
+  return { detail, result: summary };
 }
 
 // ---------------------------------------------------------------------------
@@ -1100,7 +1122,7 @@ export async function mockProjects(cmd: string, a: Record<string, any>): Promise
       return { markdown: report(String(a.id)) };
     case "project_request_supplement": {
       const { req, draft } = supplementRequest(String(a.id), (a.findingIds as string[] | null) ?? [], (a.output as OutputFormat | null) ?? null);
-      return { job_id: submitDraftJob(req, draft) };
+      return { job_id: submitDraftJob(req, draft, { project_id: String(a.id), source: "project" }) };
     }
     case "maintenance_status":
       return maintenanceStatus();

@@ -10,9 +10,10 @@ import { useDocTypes, useDocuments } from "@/lib/queries";
 /** Picks the library documents whose extracted fields a draft quotes (§3.13 "내용 = … 추출 결과 인용"). */
 export function SourcePickerDialog({ open, onOpenChange, selected, onChange }: { open: boolean; onOpenChange: (o: boolean) => void; selected: string[]; onChange: (ids: string[]) => void }) {
   const { t, i18n } = useTranslation();
-  const { data: docs } = useDocuments({ limit: 300, sort: "imported_desc" }, open);
-  const { data: docTypes } = useDocTypes(open);
   const [query, setQuery] = useState("");
+  // The search text goes to the backend (name / title / text match) so the pick is not limited to the first page.
+  const { data: docs } = useDocuments({ limit: 500, sort: "imported_desc", query: query.trim() || null }, open);
+  const { data: docTypes } = useDocTypes(open);
   const [picked, setPicked] = useState<Set<string>>(() => new Set(selected));
   useEffect(() => {
     if (open) {

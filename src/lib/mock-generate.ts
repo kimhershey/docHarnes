@@ -891,16 +891,16 @@ export function saveDraft(req: SaveRequest): SavedDocument {
   const folder = (req.folder ?? "documents/generated").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
   if (!folder || folder.split("/").some((c) => c === "..") || folder.toLowerCase().startsWith(".doculens")) throw err("invalid", "path_outside");
   const base = sanitizeName(req.file_name?.trim() || defaultFileName(draft));
-  let rel = `${folder}/${base}.${req.output}`;
-  const docs = loadDocs().filter((d) => d.workspace === ws && !d.deleted_at);
-  const taken = (p: string) => docs.some((d) => d.rel_path.toLowerCase() === p.toLowerCase()) || wsDrafts().some((d) => d.id !== draft.id && d.saved_path?.toLowerCase() === p.toLowerCase());
-  if (taken(rel)) {
-    if (!req.overwrite) throw err("invalid", "export_exists");
-    let n = 2;
-    while (taken(`${folder}/${base}_${n}.${req.output}`)) n += 1;
-    rel = `${folder}/${base}_${n}.${req.output}`;
-  }
+  const rel = `${folder}/${base}.${req.output}`;
+  const ko = defaultLanguage() !== "en";
+  // `warnings` are localised sentences (`generate::render::save`), shown by the UI as they are.
   const warnings: string[] = [];
+  if (draft.issues.some((i) => i.blocking)) warnings.push(ko ? "검증에서 확인이 필요한 항목이 있는 상태로 저장했습니다 (검토 전)." : "Saved with unresolved validation issues (not yet reviewed).");
+  const docs = loadDocs().filter((d) => d.workspace === ws && !d.deleted_at);
+  const existing = docs.find((d) => d.rel_path.toLowerCase() === rel.toLowerCase()) ?? null;
+  const taken = existing !== null || wsDrafts().some((d) => d.id !== draft.id && d.saved_path?.toLowerCase() === rel.toLowerCase());
+  // Like the core: an existing file is an error unless `overwrite`, which replaces it (same path, same library document).
+  if (taken && !req.overwrite) throw err("invalid", "export_exists");
   const kind = sourceKindOf(req.output);
   let docId: string | null = null;
   if (req.register && kind) {
@@ -909,14 +909,14 @@ export function saveDraft(req: SaveRequest): SavedDocument {
     const doc: MockDoc = {
       workspace: ws,
       pages: [{ page_no: 1, width_px: 1654, height_px: 2339, rotation: 0, text: markdown, is_blank: false, rendered_at: stamp, text_source: "converted" }],
-      id: newId(),
+      id: existing?.id ?? newId(),
       rel_path: rel,
       original_name: `${base}.${req.output}`,
       source_kind: kind,
       content_hash: `generated-${draft.id}-${stamp}`,
       size_bytes: markdown.length * 2,
       file_modified_at: stamp,
-      imported_at: stamp,
+      imported_at: existing?.imported_at ?? stamp,
       updated_at: stamp,
       status: "rendered",
       role: "generated",
@@ -934,7 +934,7 @@ export function saveDraft(req: SaveRequest): SavedDocument {
       error: null,
       import_batch_id: null,
       deleted_at: null,
-      tags: ["생성"],
+      tags: existing ? [...new Set([...existing.tags, "생성"])] : ["생성"],
       doc_type_source: "form",
       classified_at: stamp,
       ocr_at: null,
@@ -946,10 +946,10 @@ export function saveDraft(req: SaveRequest): SavedDocument {
       pipeline_error: null,
     };
     upsertDoc(doc);
-    emit(EVENTS.documentsChanged, { kind: "imported", ids: [doc.id] } satisfies DocumentsChanged);
+    emit(EVENTS.documentsChanged, { kind: existing ? "updated" : "imported", ids: [doc.id] } satisfies DocumentsChanged);
     docId = doc.id;
   } else if (req.register && !kind) {
-    warnings.push("markdown_not_registered");
+    warnings.push(ko ? "Markdown 파일은 라이브러리에 등록되지 않습니다(입력 형식이 아님)." : "Markdown files are not registered in the library (not an input format).");
   }
   draft.saved_path = rel;
   draft.saved_doc_id = docId;
@@ -968,6 +968,9 @@ export interface DraftJobSpec {
   /** A rules-filled draft (보완요청서) that needs no model call. */
   prepared?: Draft | null;
   label: string;
+  /** `JobSpec::Draft { project_id, source }`: the project of a 보완요청서 and where the job came from. */
+  project_id?: string | null;
+  source?: string;
 }
 
 function templateName(req: DraftRequest, ko: boolean): string {
@@ -977,18 +980,21 @@ function templateName(req: DraftRequest, ko: boolean): string {
   return ko ? info.name_ko : info.name_en;
 }
 
-/** Queues the draft job (`generate_draft`); the finished job's `result` is a `DraftOutcome`. */
-export function submitDraftJob(req: DraftRequest, prepared: Draft | null = null): string {
+/** Queues the draft job (`generate_draft`); the finished job's `result` is a `DraftOutcome` (+ `project_id`, `job_source`). */
+export function submitDraftJob(req: DraftRequest, prepared: Draft | null = null, origin: { project_id?: string | null; source?: string } = {}): string {
   const ko = req.language !== "en";
   const label = prepared?.title ?? req.content.replace(/\s+/g, " ").trim().slice(0, 60) ?? "";
-  return submitJob({ kind: "draft", req, prepared, label } satisfies DraftJobSpec, templateName(req, ko), "normal");
+  return submitJob({ kind: "draft", req, prepared, label, project_id: origin.project_id ?? null, source: origin.source ?? "generate" } satisfies DraftJobSpec, templateName(req, ko), "normal");
 }
 
-/** Runs one draft (the executor's `draft_document` step and the draft job share it). */
+/**
+ * Runs one draft (the executor's `draft_document` step and the draft job share it). The stage words are the
+ * shell's (`generate_bridge::run_draft`): "loading model" (model drafts only), then "drafting".
+ */
 export async function draftNow(req: DraftRequest, ctl: JobControl | null, progress: (stage: string, frac: number) => void, prepared: Draft | null = null): Promise<DraftOutcome> {
   const started = performance.now();
   if (prepared) {
-    progress("validating", 0.6);
+    progress("drafting", 0.2);
     await pace(ctl, 200);
     const draft = structuredClone(prepared);
     validateDraft(draft);
@@ -1002,13 +1008,13 @@ export async function draftNow(req: DraftRequest, ctl: JobControl | null, progre
   if (mode === "none") throw err("invalid", "no_model");
   await pace(ctl, 240);
   pl.markVisionLoaded();
-  progress("drafting fields", 0.3);
+  progress("drafting", 0.2);
   const knowledge = req.use_knowledge ? await knowledgeCitations(req.content.slice(0, 60), req.excluded_sources) : [];
   await pace(ctl, 400);
-  progress("drafting body", 0.65);
+  progress("drafting", 0.6);
   await pace(ctl, 400);
   const draft = buildDraft(req, knowledge);
-  progress("validating", 0.9);
+  progress("drafting", 0.9);
   await pace(ctl, 150);
   putDraft(draft);
   const chars = Array.from(req.content).length;
@@ -1025,7 +1031,10 @@ export async function draftWorker(job: Job, spec: DraftJobSpec, ctl: JobControl)
       },
       spec.prepared ?? null,
     );
-    return { detail: `drafted ${outcome.draft.title}`, result: outcome };
+    const d = outcome.draft;
+    // Finishing detail and payload like `run_draft`: localised summary; `source` stays the draft's own origin.
+    const detail = spec.req.language === "en" ? `${d.title} · ${d.fields.length} fields · ${d.issues.length} issues` : `${d.title} · 필드 ${d.fields.length} · 검토 항목 ${d.issues.length}`;
+    return { detail, result: { ...outcome, project_id: spec.project_id ?? null, job_source: spec.source ?? "generate" } satisfies DraftOutcome };
   } catch (e) {
     const message = typeof e === "object" && e !== null && "message" in e ? String((e as { message: unknown }).message) : String(e);
     throw workerFailure(message);

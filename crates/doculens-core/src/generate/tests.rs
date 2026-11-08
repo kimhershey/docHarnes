@@ -1372,6 +1372,7 @@ fn save_fills_registered_office_forms_in_place() {
     let imp = w.import_deps();
     let deps = w.deps(None, Some(&imp));
     let d = form_draft(Some("form-doc"));
+    let form_before = docx::read(&form_abs).unwrap().text();
     // HWPX was requested but the form is DOCX: the form's format wins (with a warning).
     let saved = render::save(
         &deps,
@@ -1393,11 +1394,82 @@ fn save_fills_registered_office_forms_in_place() {
     let doc = w.db.with(|c| docs::get_document(c, &id)).unwrap().unwrap();
     assert_eq!((doc.role, doc.doc_type.as_deref()), (DocumentRole::Generated, Some("quotation")));
     assert_ne!(id, "form-doc", "the form itself is untouched");
-    assert_eq!(docx::read(&form_abs).unwrap().text(), docx::read(&form_abs).unwrap().text());
+    assert_eq!(docx::read(&form_abs).unwrap().text(), form_before, "the form file is unchanged");
     // PDF / Markdown of a form draft use the generic renderer.
     let md =
         render::save(&deps, &SaveRequest { draft: d, output: OutputFormat::Md, register: false, ..Default::default() })
             .unwrap();
     assert!(!md.filled_form);
     assert!(std::fs::read_to_string(&md.absolute).unwrap().contains("| 수신 | ㈜한빛 |"));
+}
+
+#[test]
+fn save_never_overwrites_forms_or_library_documents() {
+    let w = world();
+    let form_rel = "documents/forms/견적서양식.docx";
+    let form_abs = w.paths.root.join(form_rel);
+    std::fs::create_dir_all(form_abs.parent().unwrap()).unwrap();
+    write_docx_form(&form_abs);
+    let work_rel = "documents/generated/보고서.docx";
+    w.db.with(|c| {
+        for (id, rel, name, role) in [
+            ("form-doc", form_rel, "견적서양식.docx", DocumentRole::Form),
+            ("work-doc", work_rel, "보고서.docx", DocumentRole::Work),
+        ] {
+            docs::insert_document(
+                c,
+                &NewDocument {
+                    id: id.into(),
+                    rel_path: rel.into(),
+                    original_name: name.into(),
+                    source_kind: SourceKind::Docx,
+                    content_hash: format!("hash-{id}"),
+                    size_bytes: 10,
+                    file_modified_at: None,
+                    role,
+                    import_batch_id: None,
+                },
+            )?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let imp = w.import_deps();
+    let deps = w.deps(None, Some(&imp));
+    let form_before = docx::read(&form_abs).unwrap().text();
+    // Filling the form onto its own path is refused even with `overwrite`.
+    let err = render::save(
+        &deps,
+        &SaveRequest {
+            draft: form_draft(Some("form-doc")),
+            output: OutputFormat::Docx,
+            file_name: Some("견적서양식".into()),
+            folder: Some("documents/forms".into()),
+            overwrite: true,
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(err, CoreError::Invalid(ref c) if c == "export_over_form"), "{err}");
+    assert_eq!(docx::read(&form_abs).unwrap().text(), form_before);
+    assert!(!form_abs.with_extension("docx.part").exists(), "no leftovers");
+    // A library document (role work) at the target path is refused before the overwrite
+    // question, whether or not its file is on disk.
+    for overwrite in [false, true] {
+        let err = render::save(
+            &deps,
+            &SaveRequest {
+                draft: quotation_draft(),
+                output: OutputFormat::Docx,
+                file_name: Some("보고서".into()),
+                overwrite,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, CoreError::Invalid(ref c) if c == "export_over_document"), "{err}");
+    }
+    assert!(!w.paths.root.join(work_rel).exists());
+    let doc = w.db.with(|c| docs::get_document(c, "work-doc")).unwrap().unwrap();
+    assert_eq!(doc.role, DocumentRole::Work, "the row is untouched");
 }

@@ -237,7 +237,7 @@ pub fn run() {
             // model instances down gracefully.
             let state = app.state::<AppState>();
             let _ = state.engine.stop();
-            power::release();
+            // Sleep prevention (`power`) needs no release: its thread-bound state goes with the process.
         }
     });
 }

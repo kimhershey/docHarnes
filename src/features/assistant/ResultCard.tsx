@@ -5,6 +5,8 @@ import { useNavigate } from "react-router";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog, type ConfirmRequest } from "@/components/ui/confirm-dialog";
+import { useDraftJobRunning } from "@/features/generate/useDraftJobRunning";
 import { AnswerCard } from "@/features/knowledge/AnswerCard";
 import { openCitation } from "@/features/knowledge/AnswersPanel";
 import { RuleSummary } from "@/features/projects/RuleGrid";
@@ -12,7 +14,7 @@ import { verdictVariant } from "@/features/projects/rules";
 import { hitHref } from "@/features/search/SearchPage";
 import { runJournal } from "@/lib/commands";
 import { revealPath } from "@/lib/ipc";
-import { SCREEN_ROUTES, type OrganizeItem, type Plan, type PlanExecution, type PlanResponse, type StepStatus, type UndoReport } from "@/lib/types";
+import { SCREEN_ROUTES, type Draft, type OrganizeItem, type Plan, type PlanExecution, type PlanResponse, type StepStatus, type UndoReport } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useGenerateStore } from "@/stores/generate";
 import { usePipelineStore } from "@/stores/pipeline";
@@ -79,6 +81,8 @@ export function ResultCard({ execution, plan, response, error }: { execution: Pl
   const [showMoves, setShowMoves] = useState(false);
   const [undone, setUndone] = useState<UndoReport | null>(null);
   const [undoing, setUndoing] = useState(false);
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+  const draftJobRunning = useDraftJobRunning();
   const actions = deriveResultActions(execution, plan);
   const outcome = execution.cancelled ? "cancelled" : actions.failed || error ? "failed" : "done";
   const undoBatch = actions.batches[actions.batches.length - 1] ?? null;
@@ -100,17 +104,21 @@ export function ResultCard({ execution, plan, response, error }: { execution: Pl
     if (actions.reviewDocuments.length === 1) usePipelineStore.getState().openReviewForDocument(actions.reviewDocuments[0]!);
     navigate(SCREEN_ROUTES.review);
   };
-  const openDraft = (index: number) => {
-    const d = actions.drafts.find((x) => x.index === index);
-    if (!d) return;
-    useGenerateStore.getState().openDraft(d.draft);
-    navigate(SCREEN_ROUTES.generate);
+  const openDraft = (draft: Draft) => {
+    const open = () => {
+      useGenerateStore.getState().openDraft(draft);
+      navigate(SCREEN_ROUTES.generate);
+    };
+    // A draft job still running on the 문서 생성 screen would lose its hand-over: ask first (its result stays on the jobs page).
+    if (draftJobRunning) setConfirm({ title: t("generate.open_busy_title"), description: t("generate.open_busy"), confirmLabel: t("generate.open_in_generate"), onConfirm: open });
+    else open();
   };
   const projectIdOf = (ref: string | null) => {
     const id = ref ?? context?.current_project ?? null;
     if (!id) return null;
     return context?.projects.find((p) => p.id === id || p.name === id)?.id ?? id;
   };
+  const projectNameOf = (id: string | null) => (id ? (context?.projects.find((p) => p.id === id)?.name ?? id) : t("planner.params.current_project"));
 
   return (
     <div className="flex w-full flex-col gap-2 rounded-lg border border-border bg-bg-elevated p-3 text-sm" role="group" aria-label={t("planner.result.title")} aria-live="polite" data-testid="assistant-card-result" data-result-status={outcome}>
@@ -220,27 +228,39 @@ export function ResultCard({ execution, plan, response, error }: { execution: Pl
           <FilePlus2 className="size-4 text-accent" aria-hidden="true" />
           <span className="font-medium selectable">{d.draft.title}</span>
           <span className="text-fg-muted">{t("generate.result.meta", { fields: d.draft.fields.length, issues: d.draft.issues.length, source: t(`generate.source.${d.draft.model ? "model" : "rules"}`) })}</span>
-          <Button size="sm" variant="secondary" onClick={() => openDraft(d.index)} data-testid="result-open-draft">
+          <Button size="sm" variant="secondary" onClick={() => openDraft(d.draft)} data-testid="result-open-draft">
             {t("generate.open_in_generate")}
           </Button>
         </div>
       ))}
-      {actions.projects.map((p) => (
-        <div key={p.index} className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-bg p-2 text-xs" data-testid="result-project">
-          <Briefcase className="size-4 text-accent" aria-hidden="true" />
-          <span className="font-medium selectable">{p.project.name}</span>
-          <Badge variant="muted">{t(`projects.status.${p.project.status}`)}</Badge>
-          <span className="text-fg-muted">{t("projects.card.documents", { count: p.project.document_count })}</span>
-          <Button size="sm" variant="secondary" onClick={() => navigate(`${SCREEN_ROUTES.projects}/${p.project.id}`)} data-testid="result-open-project">
-            {t("planner.result.open_project")}
-          </Button>
-        </div>
-      ))}
+      {actions.projects.map((p) => {
+        const pid = p.project?.id ?? p.projectId;
+        return (
+          <div key={p.index} className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-bg p-2 text-xs" data-testid="result-project">
+            <Briefcase className="size-4 text-accent" aria-hidden="true" />
+            <span className="font-medium selectable">{p.project?.name ?? projectNameOf(p.projectId)}</span>
+            {p.project && <Badge variant="muted">{t(`projects.status.${p.project.status}`)}</Badge>}
+            {p.project && <span className="text-fg-muted">{t("projects.card.documents", { count: p.project.document_count })}</span>}
+            {pid && (
+              <Button size="sm" variant="secondary" onClick={() => navigate(`${SCREEN_ROUTES.projects}/${pid}`)} data-testid="result-open-project">
+                {t("planner.result.open_project")}
+              </Button>
+            )}
+          </div>
+        );
+      })}
       {actions.ruleDrafts.map((r) => {
         const pid = projectIdOf(r.projectId);
         return (
-          <div key={r.index} className="flex flex-col gap-1 rounded-md border border-border bg-bg p-2 text-xs" data-testid="result-rule">
-            <span className="font-medium selectable">{r.ruleDraft.rule.description}</span>
+          <div key={r.index} className="flex flex-col gap-1 rounded-md border border-border bg-bg p-2 text-xs" data-testid="result-rule" data-rule-saved={r.saved}>
+            <span className="flex flex-wrap items-center gap-2">
+              <span className="font-medium selectable">{r.ruleDraft.rule.description}</span>
+              {r.saved && (
+                <Badge variant="ok" data-testid="result-rule-saved">
+                  {t("planner.result.rule_saved")}
+                </Badge>
+              )}
+            </span>
             <RuleSummary rule={r.ruleDraft.rule} />
             {r.ruleDraft.issues.length > 0 && <span className="text-warn">⚠ {r.ruleDraft.issues.join(" · ")}</span>}
             {pid && (
@@ -263,6 +283,7 @@ export function ResultCard({ execution, plan, response, error }: { execution: Pl
           </Button>
         </div>
       ))}
+      <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 }

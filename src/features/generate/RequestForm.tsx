@@ -50,7 +50,8 @@ export function RequestForm({
   const { data: templates } = useGenerateTemplates();
   const { data: schemas } = useSchemas();
   const sourceIds = documentSourceIds(request.sources);
-  const { data: sourceDocs } = useDocuments({ limit: 300, sort: "imported_desc" }, sourceIds.length > 0);
+  // Names of the quoted documents: the list is only a lookup table, so a generous cap instead of the grid's page size.
+  const { data: sourceDocs } = useDocuments({ limit: 2000, sort: "imported_desc" }, sourceIds.length > 0);
   const [pickerOpen, setPickerOpen] = useState(false);
   const forms = (schemas ?? []).filter((s) => s.source === "form" && s.enabled);
   const picker = formRefToPicker(request.form_ref, templates ?? [], schemas ?? []);

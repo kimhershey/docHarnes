@@ -232,10 +232,13 @@ export function projectTemplateName(ref: string, t: TFunction): string {
   return key ? t(`projects.templates.builtin.${key}`) : ref;
 }
 
-/** Project reference of a plan step: the named project, else the one open in the UI, else "(현재 프로젝트)". */
+/**
+ * Project reference of a plan step: the named project, else the one open in the UI, else "(현재 프로젝트)".
+ * No "only project" fallback: the validator is strict (`project_required`) and the card must not pretend otherwise.
+ */
 export function projectName(ref: string | null | undefined, context: PlanContext | null | undefined, t: TFunction): string {
   const id = ref ?? context?.current_project ?? null;
-  if (!id) return context && context.projects.length === 1 ? (context.projects[0]?.name ?? "") : t("planner.params.current_project");
+  if (!id) return t("planner.params.current_project");
   const p = context?.projects.find((x) => x.id === id || compact(x.name) === compact(id));
   return p ? p.name : ref ?? t("planner.params.current_project");
 }
@@ -372,6 +375,25 @@ export function exportPreview(step: StepPreview | undefined): ExportPreview | nu
   return step.payload as unknown as ExportPreview;
 }
 
+export interface RuleDraftPreview {
+  /** The parsed rule (the grid is the confirmation); null when the phrase rules could not parse the sentence. */
+  draft: RuleDraft | null;
+  description: string | null;
+}
+
+/**
+ * `define_rule` preview payload: `exec::preview` sends `{ description, draft: RuleDraft | null }`; a bare
+ * `RuleDraft` (older shells, the browser mock) is accepted too.
+ */
+export function ruleDraftPreview(step: StepPreview | undefined): RuleDraftPreview | null {
+  if (!step) return null;
+  const payload = step.payload;
+  if (isRuleDraft(payload)) return { draft: payload, description: payload.rule.description || null };
+  if (!isRecord(payload) || !("draft" in payload || typeof payload.description === "string")) return null;
+  const draft = isRuleDraft(payload.draft) ? payload.draft : null;
+  return { draft, description: str(payload.description) ?? draft?.rule.description ?? null };
+}
+
 export interface Impact {
   moves: number;
   deletes: number;
@@ -468,11 +490,15 @@ export interface ResultActions {
   summaries: { index: number; items: { document_id: string; name: string; answer: Answer }[] }[];
   aggregates: { index: number; result: AggregateResult; op: Extract<Op, { op: "aggregate" }> | null }[];
   undos: { index: number; report: UndoReport }[];
-  /** `draft_document` / `request_supplement`: drafts the 문서 생성 screen opens (P6). */
-  drafts: { index: number; draft: Draft }[];
-  /** Project ops: the project each payload refers to (link to `/projects/<id>`). */
-  projects: { index: number; project: Project; detail: ProjectDetail | null }[];
-  ruleDrafts: { index: number; ruleDraft: RuleDraft; projectId: string | null }[];
+  /** `draft_document` / `request_supplement`: drafts the 문서 생성 screen opens (P6); the supplement's project when known. */
+  drafts: { index: number; draft: Draft; projectId: string | null }[];
+  /**
+   * Project ops: the project each payload refers to (link to `/projects/<id>`). `project` is null when the
+   * shell could not load it any more (deleted meanwhile): the card then falls back to the id / context name.
+   */
+  projects: { index: number; projectId: string | null; project: Project | null; detail: ProjectDetail | null }[];
+  /** `define_rule`: the parsed rule, its project and whether the executor saved it (`saved` badge). */
+  ruleDrafts: { index: number; ruleDraft: RuleDraft; projectId: string | null; saved: boolean }[];
   checks: { index: number; run: CheckRun }[];
   batches: string[];
   failed: StepResult | null;
@@ -541,18 +567,34 @@ export function deriveResultActions(execution: PlanExecution, plan: Plan): Resul
         if (isAnswer(payload)) out.answers.push({ index: step.index, answer: payload });
         break;
       case "draft_document":
-      case "request_supplement":
-        if (isDraft(payload)) out.drafts.push({ index: step.index, draft: payload });
+      case "request_supplement": {
+        // `exec.rs` sends the `DraftOutcome` (+ `project_id` for the supplement); a bare `Draft` is accepted too.
+        const draft = isDraft(payload) ? payload : isRecord(payload) && isDraft(payload.draft) ? payload.draft : null;
+        if (draft) out.drafts.push({ index: step.index, draft, projectId: (isRecord(payload) ? str(payload.project_id) : null) ?? (op && op.op === "request_supplement" ? (op.project ?? null) : null) });
         break;
+      }
       case "create_project":
-        if (isProject(payload)) out.projects.push({ index: step.index, project: payload, detail: null });
+        if (isProject(payload)) out.projects.push({ index: step.index, projectId: payload.id, project: payload, detail: null });
         break;
-      case "add_to_project":
-        if (isProjectDetail(payload)) out.projects.push({ index: step.index, project: payload.project, detail: payload });
+      case "add_to_project": {
+        // `exec.rs`: `{ project_id, added, project: Project | null }`; a `ProjectDetail` (browser mock) is accepted too.
+        if (isProjectDetail(payload)) out.projects.push({ index: step.index, projectId: payload.project.id, project: payload.project, detail: payload });
+        else if (isRecord(payload) && ("project_id" in payload || "project" in payload)) {
+          const inner = payload.project;
+          const detail = isProjectDetail(inner) ? inner : null;
+          const project = detail ? detail.project : isProject(inner) ? inner : null;
+          const projectId = str(payload.project_id) ?? project?.id ?? (op && op.op === "add_to_project" ? (op.project ?? null) : null);
+          if (projectId || project) out.projects.push({ index: step.index, projectId, project, detail });
+        }
         break;
-      case "define_rule":
-        if (isRuleDraft(payload)) out.ruleDrafts.push({ index: step.index, ruleDraft: payload, projectId: op && op.op === "define_rule" ? (op.project ?? null) : null });
+      }
+      case "define_rule": {
+        // `exec.rs`: `{ project_id, saved, draft: RuleDraft }`; a bare `RuleDraft` is accepted too.
+        const opProject = op && op.op === "define_rule" ? (op.project ?? null) : null;
+        if (isRuleDraft(payload)) out.ruleDrafts.push({ index: step.index, ruleDraft: payload, projectId: opProject, saved: false });
+        else if (isRecord(payload) && isRuleDraft(payload.draft)) out.ruleDrafts.push({ index: step.index, ruleDraft: payload.draft, projectId: str(payload.project_id) ?? opProject, saved: payload.saved === true });
         break;
+      }
       case "check_consistency":
         if (isCheckRun(payload)) out.checks.push({ index: step.index, run: payload });
         break;

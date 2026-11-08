@@ -10,9 +10,10 @@ import { useDocTypes, useDocuments } from "@/lib/queries";
 /** "라이브러리에서 추가": picks library documents for the project. */
 export function AddDocumentsDialog({ open, onOpenChange, excludeIds, onAdd }: { open: boolean; onOpenChange: (o: boolean) => void; excludeIds: string[]; onAdd: (ids: string[]) => void }) {
   const { t, i18n } = useTranslation();
-  const { data: docs } = useDocuments({ limit: 300, sort: "imported_desc" }, open);
-  const { data: docTypes } = useDocTypes(open);
   const [query, setQuery] = useState("");
+  // The search text goes to the backend (name / title / text match) so the pick is not limited to the first page.
+  const { data: docs } = useDocuments({ limit: 500, sort: "imported_desc", query: query.trim() || null }, open);
+  const { data: docTypes } = useDocTypes(open);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   useEffect(() => {
     if (open) {

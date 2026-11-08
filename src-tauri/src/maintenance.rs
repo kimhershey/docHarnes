@@ -7,7 +7,8 @@
 //! and trims the page / thumbnail cache to its size cap (LRU, oldest-used
 //! first, never anything used in the last week). Every run appends one line to
 //! `.doculens/logs/purge-YYYYMM.jsonl` (the audit trail) and records the last
-//! summary in the workspace database for the settings screen.
+//! completed summary in the workspace database for the settings screen (plus the
+//! time of the last attempt, so a failing run is retried hourly, not every poll).
 
 use std::time::{Duration, SystemTime};
 
@@ -16,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tauri::{AppHandle, Manager};
 
-use doculens_core::documents::{self as docs, import, repo as docs_repo};
+use doculens_core::documents::{self as docs, import, repo as docs_repo, DocumentRole};
 use doculens_core::jobs::{self as core_jobs, JobControl, JobPriority, JobSpec};
 use doculens_core::knowledge::repo as kb_repo;
 use doculens_core::organize::journal;
@@ -28,6 +29,10 @@ use crate::pipeline_bridge;
 use crate::state::{AppState, UiResult};
 
 const KV_LAST_RUN: &str = "maintenance.last_run";
+/// Every attempt (early error, cancelled run, success) as RFC 3339; `tick` schedules no other
+/// run within `RETRY_AFTER` of it, so a run that fails early is not re-queued at every poll.
+const KV_LAST_ATTEMPT: &str = "maintenance.last_attempt";
+const RETRY_AFTER: chrono::Duration = chrono::Duration::minutes(60);
 const SCHEDULER_POLL: Duration = Duration::from_secs(600);
 const STARTUP_DELAY: Duration = Duration::from_secs(120);
 /// Cache entries used within this window are never evicted by the LRU trim.
@@ -84,6 +89,12 @@ fn last_summary(app: &AppHandle) -> Option<MaintenanceSummary> {
     let pctx = pipeline_bridge::context(app).ok()?;
     let raw = pctx.db().kv_get(KV_LAST_RUN).ok().flatten()?;
     serde_json::from_str(&raw).ok()
+}
+
+fn last_attempt(app: &AppHandle) -> Option<DateTime<Utc>> {
+    let pctx = pipeline_bridge::context(app).ok()?;
+    let raw = pctx.db().kv_get(KV_LAST_ATTEMPT).ok().flatten()?;
+    DateTime::parse_from_rfc3339(&raw).ok().map(|d| d.with_timezone(&Utc))
 }
 
 /// Next scheduled run: today at `purge_hour_local` (local time) if still ahead, else tomorrow.
@@ -155,6 +166,9 @@ fn tick(app: &AppHandle) {
     if !policy.purge_enabled {
         return;
     }
+    if last_attempt(app).is_some_and(|t| Utc::now() - t < RETRY_AFTER) {
+        return;
+    }
     let now_local = Local::now();
     let last = last_summary(app).map(|s| s.started_at);
     let ran_today = last.is_some_and(|t| t.with_timezone(&Local).date_naive() == now_local.date_naive());
@@ -187,10 +201,12 @@ fn add(fs: FsPurge, files: &mut u64, bytes: Option<&mut u64>) {
 pub fn run(app: &AppHandle, ctl: &JobControl) -> WorkerResult {
     let started = std::time::Instant::now();
     let pctx = pipeline_bridge::context(app).map_err(|e| (e.message, None))?;
+    let db = pctx.db().clone();
+    // Recorded before anything can fail, so an early error is not retried at the next poll.
+    let _ = db.kv_set(KV_LAST_ATTEMPT, &Utc::now().to_rfc3339());
     let policy = policy(app).map_err(|e| (e.message, None))?;
     let mut summary = MaintenanceSummary::default();
     let paths = pctx.docs.paths.clone();
-    let db = pctx.db().clone();
     if !policy.purge_enabled {
         summary.skipped.push("disabled".into());
         return finish(app, &db, &paths, summary, started);
@@ -280,15 +296,34 @@ pub fn run(app: &AppHandle, ctl: &JobControl) -> WorkerResult {
                 .collect();
             let deps = pctx.docs.deps();
             let mut removed = Vec::new();
+            let mut kept_noted = false;
             for d in expired {
                 if check(&mut summary) {
                     break;
                 }
+                // Registered forms and knowledge documents are reference material, not records
+                // with a retention period.
+                if matches!(d.role, DocumentRole::Form | DocumentRole::Knowledge) {
+                    if !kept_noted {
+                        summary.skipped.push("documents:forms_knowledge_kept".into());
+                        kept_noted = true;
+                    }
+                    continue;
+                }
+                // The file goes first (no recycle bin); the row, cache and extraction mirror follow
+                // only once it is gone, so a file that cannot be deleted keeps its row.
                 let abs = docs::from_rel_path(&paths.root, &d.rel_path);
-                // `keep_file` skips the recycle bin; the cache and the extraction mirror go with the row.
-                if import::delete_document(&deps, &d.id, true).is_ok() {
-                    let _ = std::fs::remove_file(&abs);
-                    removed.push(d.id.clone());
+                match std::fs::remove_file(&abs) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => {
+                        summary.skipped.push(format!("document {}: {e}", d.id));
+                        continue;
+                    }
+                }
+                match import::delete_document(&deps, &d.id, true) {
+                    Ok(_) => removed.push(d.id.clone()),
+                    Err(e) => summary.skipped.push(format!("document {}: {e}", d.id)),
                 }
             }
             summary.purged.documents += removed.len() as u64;
@@ -298,11 +333,15 @@ pub fn run(app: &AppHandle, ctl: &JobControl) -> WorkerResult {
         }
         None => summary.skipped.push("documents".into()),
     }
-    // 8. Page / thumbnail cache size cap (LRU over per-document folders).
+    // 8. Cache size cap: LRU over the per-document folders of pages (8/10 of the cap), thumbnails
+    //    and converted office files (1/10 each), by last use (`.last_used` marker, else render
+    //    time). `cache/tmp` is reserved for pre-masking temporaries (nothing writes it yet) and is
+    //    purged by age in step 5, not trimmed here.
     let cap = (policy.page_cache_max_gb.max(0.5) * 1024.0 * 1024.0 * 1024.0) as u64;
-    let pages = retention::trim_lru_dirs(&paths.page_cache_dir(), cap * 9 / 10, CACHE_MIN_AGE);
+    let pages = retention::trim_lru_dirs(&paths.page_cache_dir(), cap * 8 / 10, CACHE_MIN_AGE);
     let thumbs = retention::trim_lru_dirs(&paths.thumb_cache_dir(), cap / 10, CACHE_MIN_AGE);
-    summary.purged.cache_bytes += pages.bytes + thumbs.bytes;
+    let converted = retention::trim_lru_dirs(&paths.cache_dir().join("converted"), cap / 10, CACHE_MIN_AGE);
+    summary.purged.cache_bytes += pages.bytes + thumbs.bytes + converted.bytes;
     finish(app, &db, &paths, summary, started)
 }
 
@@ -316,7 +355,10 @@ fn finish(
     summary.elapsed_ms = started.elapsed().as_millis() as u64;
     let value = serde_json::to_value(&summary).unwrap_or(json!({}));
     if let Ok(raw) = serde_json::to_string(&summary) {
-        let _ = db.kv_set(KV_LAST_RUN, &raw);
+        // The settings screen shows the last completed run; attempts live under `KV_LAST_ATTEMPT`.
+        if !summary.cancelled {
+            let _ = db.kv_set(KV_LAST_RUN, &raw);
+        }
         // Audit trail (§3.8: 파기 내역을 감사 로그에 남긴다).
         let logs = paths.logs_dir();
         let _ = std::fs::create_dir_all(&logs);

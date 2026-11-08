@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import ko from "../src/i18n/ko.json" with { type: "json" };
-import { createWorkspace, freshApp, tpl } from "./helpers";
+import { createWorkspace, docId, freshApp, importViaLibrary, tpl } from "./helpers";
 
 // P6 문서 생성 (design §3.13) against the browser mock: template → content → draft job → preview →
 // field edit → validator suggestion → validate → save with library registration → saved-draft list,
@@ -30,7 +30,7 @@ test.describe("P6 document generation", () => {
     await expect(page.getByTestId("generate-preview-frame")).toHaveAttribute("data-loaded", "true", { timeout: 10_000 });
     await expect(page.getByTestId("generate-title")).toHaveValue(/견적서/);
     await expect(page.getByTestId("generate-field-input-recipient")).toHaveValue("㈜한빛");
-    await expect(page.getByTestId("generate-row-items-0")).toContainText("");
+    await expect(page.getByTestId("generate-row-items-0")).toBeVisible();
     await expect(page.getByTestId("generate-cell-items-0-item_name")).toHaveValue("노트북");
     await expect(page.getByTestId("generate-cell-items-0-quantity")).toHaveValue("10");
     // The mock model wrote the total with VAT: the validator flags the sum and offers the item sum.
@@ -61,6 +61,16 @@ test.describe("P6 document generation", () => {
     await expect(page.getByTestId("toast-action")).toHaveText(ko.generate.save.open_library);
     await expect(page.getByTestId("generate-saved-library")).toBeVisible();
 
+    // Saving again under the same (default) name is a conflict until "덮어쓰기" is on; the overwrite keeps one file / one document.
+    await page.getByTestId("generate-save").click();
+    await expect(page.getByTestId("generate-save-dialog")).toBeVisible();
+    await page.getByTestId("generate-save-confirm").click();
+    await expect(page.getByTestId("generate-save-error")).toHaveText(ko.generate.save.exists);
+    await page.getByTestId("generate-save-overwrite").click();
+    await page.getByTestId("generate-save-confirm").click();
+    await expect(page.getByTestId("generate-save-dialog")).toBeHidden({ timeout: 10_000 });
+    await expect(page.getByTestId("generate-saved")).not.toContainText("_2");
+
     // The saved-draft list shows the draft with its path.
     await page.getByTestId("generate-drafts-open").click();
     const drafts = page.getByTestId("generate-drafts");
@@ -69,11 +79,48 @@ test.describe("P6 document generation", () => {
     await expect(drafts).toContainText("documents/generated/");
     await page.keyboard.press("Escape");
 
-    // The registered document is in the library as a generated document.
+    // The registered document is in the library as a generated document (the overwrite re-used it: still one card).
     await page.getByTestId("generate-saved-library").click();
     await expect(page.getByTestId("page-viewer")).toBeVisible();
     await page.getByTestId("nav-library").click();
     await expect(page.locator('[data-testid^="doc-card-"]')).toHaveCount(1);
+  });
+
+  test("regeneration: feedback and an excluded quoted document are applied to the next draft", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\세금계산서-2p.pdf"], { autoLevel: "none" });
+    const invoice = await docId(page, "세금계산서-2p.pdf");
+    await openGenerate(page);
+
+    // Quote the imported document: it shows up as a reference of the draft.
+    await page.getByTestId("generate-template").click();
+    await page.getByRole("option", { name: ko.generate.templates.official_letter }).click();
+    await page.getByTestId("generate-content").fill("강남세무서에 세금계산서 발급 내역 확인을 요청하는 협조문");
+    await page.getByTestId("generate-pick-sources").click();
+    await expect(page.getByTestId("generate-sources-dialog")).toBeVisible();
+    await page.getByTestId(`generate-source-${invoice}`).check();
+    await page.getByTestId("generate-sources-done").click();
+    await expect(page.getByTestId("generate-sources").locator("li")).toHaveCount(1);
+    await page.getByTestId("generate-run").click();
+    await expect(page.getByTestId("generate-preview")).toBeVisible({ timeout: 15_000 });
+    const references = page.getByTestId("generate-references").getByTestId("generate-reference");
+    await expect(references).toHaveCount(1);
+    await expect(references.first()).toHaveAttribute("data-excluded", "false");
+    await expect(references.first()).toContainText("세금계산서-2p.pdf");
+
+    // Exclude the reference, give feedback, regenerate: the new draft drops the document and records the instruction.
+    await page.getByTestId("generate-reference-exclude").first().check();
+    await expect(references.first()).toHaveAttribute("data-excluded", "true");
+    await expect(page.getByTestId("generate-regenerate-panel")).toContainText(tpl(ko.generate.form.excluded_hint, { count: 1 }));
+    await page.getByTestId("generate-feedback").fill("더 짧게");
+    await page.getByTestId("generate-regenerate").click();
+    await expect(page.getByTestId("generate-notes")).toContainText("재생성 반영: 더 짧게", { timeout: 15_000 });
+    await expect(references).toHaveCount(0);
+    await expect(page.getByTestId("generate-references")).toContainText(ko.generate.editor.no_references);
+    // The instruction box is cleared for the next round; the editor is usable again.
+    await expect(page.getByTestId("generate-feedback")).toHaveValue("");
+    await expect(page.getByTestId("generate-editor")).toHaveAttribute("data-disabled", "false");
   });
 
   test("assistant: '견적서 만들어줘 …' → plan card → draft job → result card opens the draft here", async ({ page }) => {

@@ -57,6 +57,15 @@ describe("describeJobDetail (P5 persistent runner patterns)", () => {
     expect(describeJobDetail(job({ detail: "cancelled" }), t)).toBe(ko.jobs.state.cancelled);
     expect(describeJobDetail(job({ detail: "loading model" }), t)).toBe(ko.jobs.detail.loading_model);
     expect(describeJobDetail(job({ detail: "something else" }), t)).toBe("something else");
+  });
+
+  it("translates the draft job's stage words and keeps its localised finishing detail", () => {
+    // `generate_bridge::run_draft` emits exactly "loading model" and "drafting".
+    expect(describeJobDetail(job({ kind: "draft", detail: "loading model" }), t)).toBe(ko.jobs.detail.loading_model);
+    expect(describeJobDetail(job({ kind: "draft", detail: "drafting" }), t)).toBe(ko.jobs.detail.drafting);
+    expect(describeJobDetail(job({ kind: "draft", detail: "견적서 · 필드 7 · 검토 항목 1" }), t)).toBe("견적서 · 필드 7 · 검토 항목 1");
+    // The maintenance job reports its summary already localised (no stage words).
+    expect(describeJobDetail(job({ kind: "maintenance", detail: "저널 3 · 작업 12 · 대화 0 · 추출 0 · 문서 0 · 캐시 0 MB" }), t)).toBe("저널 3 · 작업 12 · 대화 0 · 추출 0 · 문서 0 · 캐시 0 MB");
     expect(describeJobDetail(job({ detail: null }), t)).toBeNull();
   });
 });

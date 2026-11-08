@@ -1,5 +1,5 @@
 import { ExternalLink, Play } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 
@@ -33,6 +33,9 @@ export function ResultsTab({ detail, onCheck, checking }: { detail: ProjectDetai
   const navigate = useNavigate();
   const { data: runs } = useProjectRuns(detail.project.id);
   const [selected, setSelected] = useState<string | null>(null);
+  // A new check run replaces a history selection (otherwise the tab keeps showing the older run).
+  const lastRunId = detail.last_run?.id ?? null;
+  useEffect(() => setSelected(null), [lastRunId]);
   const run: CheckRun | null = (selected ? runs?.find((r) => r.id === selected) : null) ?? detail.last_run;
   const open = (e: Evidence) => {
     if (!e.doc_id) return;

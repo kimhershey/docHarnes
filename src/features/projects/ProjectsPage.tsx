@@ -5,6 +5,7 @@ import { useNavigate } from "react-router";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog, type ConfirmRequest } from "@/components/ui/confirm-dialog";
 import { Spinner } from "@/components/ui/spinner";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
@@ -16,7 +17,7 @@ import { useUiStore } from "@/stores/ui";
 import { useWorkspace } from "@/stores/workspace";
 
 import { NewProjectDialog } from "./NewProjectDialog";
-import { nextStatus } from "./rules";
+import { doneMoveWarning, nextStatus } from "./rules";
 import { TemplatesDialog } from "./TemplatesDialog";
 
 function statusVariant(s: ProjectStatus): "ok" | "warn" | "danger" | "muted" | "info" {
@@ -63,10 +64,10 @@ function ProjectCard({ project, onMove, templateName, compact }: { project: Proj
         </span>
       </div>
       <div className="flex items-center gap-1">
-        <Button size="icon-sm" variant="ghost" disabled={!prev} onClick={() => prev && onMove(project, prev)} aria-label={t("projects.card.move_prev")} data-testid="project-move-prev">
+        <Button size="icon-sm" variant="ghost" disabled={!prev} onClick={() => prev && onMove(project, prev)} aria-label={prev ? t("projects.card.move_prev_named", { name: project.name, status: t(`projects.status.${prev}`) }) : t("projects.card.move_prev")} data-testid="project-move-prev">
           <ArrowLeft />
         </Button>
-        <Button size="icon-sm" variant="ghost" disabled={!next} onClick={() => next && onMove(project, next)} aria-label={t("projects.card.move_next")} data-testid="project-move-next">
+        <Button size="icon-sm" variant="ghost" disabled={!next} onClick={() => next && onMove(project, next)} aria-label={next ? t("projects.card.move_next_named", { name: project.name, status: t(`projects.status.${next}`) }) : t("projects.card.move_next")} data-testid="project-move-next">
           <ArrowRight />
         </Button>
         <span className="ml-auto text-[11px] text-fg-subtle">{formatDate(project.updated_at, i18n.language)}</span>
@@ -90,18 +91,31 @@ export function ProjectsPage() {
   const { data: templates } = useProjectTemplates(!!workspace);
   const [newOpen, setNewOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const ko = i18n.language.startsWith("ko");
   const templateName = (id: string | null) => {
     const tpl = templates?.find((x) => x.id === id);
     return tpl ? (ko ? tpl.name_ko : tpl.name_en) : null;
   };
-  const move = async (p: Project, to: ProjectStatus) => {
+  const doMove = async (p: Project, to: ProjectStatus) => {
     try {
       await api.projectSetStatus(p.id, to);
       invalidateProjects([p.id]);
+      toast(t("projects.card.moved", { name: p.name, status: t(`projects.status.${to}`) }), "ok");
     } catch (e) {
       toast(describeError(e, t), "danger");
     }
+  };
+  // 완료 with open findings (or without any check) is confirmed first, with the counts.
+  const move = (p: Project, to: ProjectStatus) => {
+    const warning = to === "done" ? doneMoveWarning(p) : null;
+    if (!warning) return void doMove(p, to);
+    setConfirm({
+      title: t("projects.card.done_confirm_title", { name: p.name }),
+      description: warning === "unchecked" ? t("projects.card.done_confirm_unchecked") : t("projects.card.done_confirm", { mismatch: p.last_mismatch, missing: p.missing_count }),
+      confirmLabel: t("projects.status.done"),
+      onConfirm: () => doMove(p, to),
+    });
   };
   const list = projects ?? [];
   return (
@@ -150,7 +164,7 @@ export function ProjectsPage() {
                   </h2>
                   <ul className="flex flex-col gap-2">
                     {column.map((p) => (
-                      <ProjectCard key={p.id} project={p} onMove={(x, to) => void move(x, to)} templateName={templateName(p.template_id)} compact />
+                      <ProjectCard key={p.id} project={p} onMove={move} templateName={templateName(p.template_id)} compact />
                     ))}
                   </ul>
                 </section>
@@ -173,7 +187,20 @@ export function ProjectsPage() {
             <tbody className="divide-y divide-border">
               {list.map((p) => (
                 <tr key={p.id} className={cn("cursor-pointer hover:bg-bg-sunken")} onClick={() => navigate(`/projects/${p.id}`)} data-testid={`project-row-${p.id}`} data-project-status={p.status}>
-                  <td className="py-2 pr-3 font-medium">{p.name}</td>
+                  <td className="py-2 pr-3 font-medium">
+                    {/* The row click is a mouse shortcut; the name is the keyboard-reachable control. */}
+                    <button
+                      type="button"
+                      className="text-left hover:underline cursor-pointer"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/projects/${p.id}`);
+                      }}
+                      data-testid="project-row-open"
+                    >
+                      {p.name}
+                    </button>
+                  </td>
                   <td className="py-2 pr-3">
                     <Badge variant={statusVariant(p.status)}>{t(`projects.status.${p.status}`)}</Badge>
                   </td>
@@ -197,6 +224,7 @@ export function ProjectsPage() {
       </div>
       <NewProjectDialog open={newOpen} onOpenChange={setNewOpen} onSaved={(p) => navigate(`/projects/${p.id}`)} />
       <TemplatesDialog open={templatesOpen} onOpenChange={setTemplatesOpen} />
+      <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 }

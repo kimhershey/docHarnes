@@ -8,7 +8,7 @@ import en from "@/i18n/en.json";
 import ko from "@/i18n/ko.json";
 import type { DocTypeInfo, FieldDef, Rule, SchemaRecord } from "@/lib/types";
 
-import { fieldOptions, nextStatus, newRule, operandLabel, ruleComplete, ruleSummary, schemaForType, unresolvedOperands } from "./rules";
+import { doneMoveWarning, fieldOptions, nextStatus, newRule, operandLabel, parseTolerance, ruleComplete, ruleSummary, schemaForType, unresolvedOperands } from "./rules";
 
 const instance = i18next.createInstance();
 await instance.init({ lng: "ko", fallbackLng: false, resources: { ko: { translation: ko }, en: { translation: en } }, interpolation: { escapeValue: false } });
@@ -51,7 +51,25 @@ describe("rule helpers", () => {
     expect(ruleComplete({ ...rule, op: "present", right: null })).toBe(true);
     expect(ruleComplete({ ...rule, op: "gte", right: { doc_type: null, field: null, value: " " } })).toBe(false);
     expect(ruleComplete({ ...rule, op: "within_pct", tolerance: null })).toBe(false);
+    expect(ruleComplete({ ...rule, op: "within_pct", tolerance: -5 })).toBe(false);
+    expect(ruleComplete({ ...rule, tolerance: -1 })).toBe(false);
     expect(ruleComplete(newRule())).toBe(false);
+  });
+
+  it("parses the tolerance input as a finite, non-negative number", () => {
+    expect(parseTolerance("")).toBeNull();
+    expect(parseTolerance("  ")).toBeNull();
+    expect(parseTolerance("10")).toBe(10);
+    expect(parseTolerance("0.5")).toBe(0.5);
+    expect(parseTolerance("-3")).toBe(0);
+    expect(parseTolerance("abc")).toBeNull();
+  });
+
+  it("asks before moving an unchecked project or one with open findings to 완료", () => {
+    expect(doneMoveWarning({ last_check_at: null, last_mismatch: 0, missing_count: 0 })).toBe("unchecked");
+    expect(doneMoveWarning({ last_check_at: "2026-11-08T00:00:00Z", last_mismatch: 1, missing_count: 0 })).toBe("findings");
+    expect(doneMoveWarning({ last_check_at: "2026-11-08T00:00:00Z", last_mismatch: 0, missing_count: 2 })).toBe("findings");
+    expect(doneMoveWarning({ last_check_at: "2026-11-08T00:00:00Z", last_mismatch: 0, missing_count: 0 })).toBeNull();
   });
 
   it("flags operands the schemas cannot resolve", () => {

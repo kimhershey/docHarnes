@@ -933,15 +933,7 @@ pub fn delete_document(deps: &ImportDeps<'_>, id: &str, keep_file: bool) -> Resu
             Ok(()) => {}
             Err(e) => {
                 log::info!("os trash unavailable ({e}); using the workspace trash folder");
-                let trash_dir = deps.paths.trash_dir();
-                std::fs::create_dir_all(&trash_dir).map_err(|e| CoreError::io(&trash_dir, e))?;
-                let target = unique_target(
-                    &trash_dir,
-                    &format!("{}_{}", &doc.id[..8.min(doc.id.len())], doc.original_name),
-                    &|_| false,
-                );
-                std::fs::rename(&abs, &target).or_else(|_| copy_or_move(&abs, &target, true))?;
-                moved_to = Some(target);
+                moved_to = Some(move_to_workspace_trash(deps.paths, &doc.id, &doc.original_name, &abs)?);
             }
         }
     }
@@ -949,6 +941,27 @@ pub fn delete_document(deps: &ImportDeps<'_>, id: &str, keep_file: bool) -> Resu
     crate::pipeline::run::remove_mirror(deps.paths, id);
     deps.db.with(|c| repo::delete_document(c, id))?;
     Ok(moved_to)
+}
+
+/// Moves a document file into `.doculens/trash/` (the fallback when the OS trash is
+/// unavailable: USB sticks, network shares). The moved file gets a fresh modification time:
+/// the retention purge deletes trash files older than the journal retention by mtime, so the
+/// age must count from the deletion and not from the last edit of the original.
+pub(crate) fn move_to_workspace_trash(
+    paths: &WorkspacePaths,
+    doc_id: &str,
+    original_name: &str,
+    abs: &Path,
+) -> Result<PathBuf> {
+    let trash_dir = paths.trash_dir();
+    std::fs::create_dir_all(&trash_dir).map_err(|e| CoreError::io(&trash_dir, e))?;
+    let target =
+        unique_target(&trash_dir, &format!("{}_{}", &doc_id[..8.min(doc_id.len())], original_name), &|_| false);
+    std::fs::rename(abs, &target).or_else(|_| copy_or_move(abs, &target, true))?;
+    if let Ok(f) = std::fs::File::options().write(true).open(&target) {
+        let _ = f.set_modified(SystemTime::now());
+    }
+    Ok(target)
 }
 
 #[cfg(test)]
@@ -1086,6 +1099,25 @@ mod tests {
         if let Some(p) = moved {
             assert!(p.starts_with(e.paths.trash_dir()));
         }
+    }
+
+    #[test]
+    fn workspace_trash_files_get_a_fresh_mtime() {
+        let e = env();
+        let file = e.paths.documents_dir().join("old.pdf");
+        write_blank_pdf(&file, 1, &[]).unwrap();
+        let past = SystemTime::now() - Duration::from_secs(400 * 86_400);
+        std::fs::File::options().write(true).open(&file).unwrap().set_modified(past).unwrap();
+        let moved = move_to_workspace_trash(&e.paths, "0123456789abcdef", "old.pdf", &file).unwrap();
+        assert_eq!(moved, e.paths.trash_dir().join("01234567_old.pdf"));
+        assert!(moved.is_file() && !file.exists());
+        let age = std::fs::metadata(&moved).unwrap().modified().unwrap().elapsed().unwrap();
+        assert!(age < Duration::from_secs(60), "the purge counts from the deletion, not the original: {age:?}");
+        // A second file of the same name gets a unique target.
+        write_blank_pdf(&file, 1, &[]).unwrap();
+        let second = move_to_workspace_trash(&e.paths, "0123456789abcdef", "old.pdf", &file).unwrap();
+        assert_ne!(second, moved);
+        assert!(second.is_file());
     }
 
     #[test]

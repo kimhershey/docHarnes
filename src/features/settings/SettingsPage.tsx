@@ -25,6 +25,8 @@ import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
 
+import { maintenanceSkippedText, maintenanceSummaryText } from "./maintenance";
+
 const TABS = ["general", "theme", "workspace", "processing", "knowledge", "privacy", "shortcuts", "about"] as const;
 
 function Row({ label, hint, children, htmlFor }: { label: string; hint?: React.ReactNode; children: React.ReactNode; htmlFor?: string }) {
@@ -658,7 +660,8 @@ function MaintenanceCard() {
       toast(describeError(e, t), "danger");
     }
   };
-  const p = status?.last_summary?.purged;
+  const summary = status?.last_summary ?? null;
+  const skipped = summary ? maintenanceSkippedText(summary, t) : null;
   return (
     <Card data-testid="maintenance-card">
       <CardHeader>
@@ -670,14 +673,22 @@ function MaintenanceCard() {
           <dt className="text-fg-muted">{t("settings.privacy.maintenance.last_run")}</dt>
           <dd data-testid="maintenance-last-run">{status?.last_run_at ? formatDate(status.last_run_at, i18n.language) : t("settings.privacy.maintenance.never")}</dd>
           <dt className="text-fg-muted">{t("settings.privacy.maintenance.next_run")}</dt>
-          <dd data-testid="maintenance-next-run">{status?.next_run_at ? formatDate(status.next_run_at, i18n.language) : t("settings.privacy.maintenance.disabled")}</dd>
+          <dd data-testid="maintenance-next-run">{status?.enabled && status.next_run_at ? t("settings.privacy.maintenance.next_run_at", { date: formatDate(status.next_run_at, i18n.language), hour: status.purge_hour_local }) : t("settings.privacy.maintenance.disabled")}</dd>
         </dl>
-        {p && (
-          <p className="text-xs text-fg-muted" data-testid="maintenance-summary">
-            {t("settings.privacy.maintenance.summary", { journal: p.journal, jobs: p.jobs, answers: p.answers, documents: p.documents, extractions: p.extractions, logs: p.logs, temp: p.temp })}
-          </p>
+        {summary && (
+          <div className="flex flex-col gap-1 text-xs text-fg-muted">
+            <p className="flex flex-wrap items-center gap-2" data-testid="maintenance-summary">
+              <span>{maintenanceSummaryText(summary, t)}</span>
+              {summary.cancelled && (
+                <Badge variant="warn" data-testid="maintenance-cancelled">
+                  {t("settings.privacy.maintenance.cancelled")}
+                </Badge>
+              )}
+            </p>
+            {skipped && <p data-testid="maintenance-skipped">{skipped}</p>}
+          </div>
         )}
-        {!p && <p className="text-xs text-fg-subtle">{t("settings.privacy.purge_log_empty")}</p>}
+        {!summary && <p className="text-xs text-fg-subtle">{t("settings.privacy.purge_log_empty")}</p>}
         <div className="flex items-center gap-2" aria-live="polite">
           <Button size="sm" variant="secondary" onClick={() => void run()} disabled={running} data-testid="maintenance-run">
             <Play />

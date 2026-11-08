@@ -182,8 +182,8 @@ pub fn purge_old_files(dir: &std::path::Path, cutoff: std::time::SystemTime) -> 
 }
 
 /// Size-capped LRU trim over the per-document sub-directories of a cache folder:
-/// while the tree is larger than `max_bytes`, the least recently modified sub-directory
-/// that is older than `min_age` is removed. Returns the removed directories and bytes.
+/// while the tree is larger than `max_bytes`, the least recently used sub-directory (see
+/// `last_used`) that is older than `min_age` is removed. Returns the removed directories and bytes.
 pub fn trim_lru_dirs(dir: &std::path::Path, max_bytes: u64, min_age: std::time::Duration) -> FsPurge {
     let mut out = FsPurge::default();
     let mut total = dir_size(dir);
@@ -199,8 +199,8 @@ pub fn trim_lru_dirs(dir: &std::path::Path, max_bytes: u64, min_age: std::time::
             if !meta.is_dir() {
                 return None;
             }
-            let newest = newest_mtime(&e.path()).or_else(|| modified(&meta))?;
-            Some((newest, e.path(), dir_size(&e.path())))
+            let used = last_used(&e.path()).or_else(|| modified(&meta))?;
+            Some((used, e.path(), dir_size(&e.path())))
         })
         .collect();
     subdirs.sort_by_key(|(m, _, _)| *m);
@@ -220,8 +220,36 @@ pub fn trim_lru_dirs(dir: &std::path::Path, max_bytes: u64, min_age: std::time::
     out
 }
 
-/// Most recent modification time inside a directory tree (what "last used" means for a
-/// page cache that is only written when rendered).
+/// Marker file inside a per-document cache folder whose modification time records when one of
+/// its files was last served to the viewer (the shell's `doculens://` handler touches it).
+pub const LAST_USED_MARKER: &str = ".last_used";
+
+/// Touches the `.last_used` marker of a cache folder (created when missing). Errors are
+/// ignored: without the marker the LRU falls back to the newest file time.
+pub fn touch_last_used(dir: &std::path::Path) {
+    if !dir.is_dir() {
+        return;
+    }
+    let marker = dir.join(LAST_USED_MARKER);
+    match std::fs::File::options().write(true).open(&marker) {
+        Ok(f) => {
+            let _ = f.set_modified(std::time::SystemTime::now());
+        }
+        Err(_) => {
+            let _ = std::fs::write(&marker, b"");
+        }
+    }
+}
+
+/// When a cache folder was last used: the `.last_used` marker when present (viewing), else the
+/// newest file inside (its render time). The marker wins over newer files so a bulk re-render
+/// does not turn the LRU into FIFO.
+fn last_used(dir: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(dir.join(LAST_USED_MARKER)).ok().and_then(|m| modified(&m)).or_else(|| newest_mtime(dir))
+}
+
+/// Most recent modification time inside a directory tree (the render time of a page cache
+/// folder that was never viewed since the marker was introduced).
 fn newest_mtime(dir: &std::path::Path) -> Option<std::time::SystemTime> {
     let mut newest: Option<std::time::SystemTime> = None;
     let rd = std::fs::read_dir(dir).ok()?;
@@ -270,6 +298,38 @@ mod tests {
         assert_eq!((purged.files, purged.bytes), (1, 3));
         assert!(!old.exists(), "empty directory removed");
         assert!(new.join("p1.jpg").exists());
+    }
+
+    fn set_mtime(path: &std::path::Path, t: std::time::SystemTime) {
+        let f = std::fs::File::options().write(true).open(path).unwrap();
+        f.set_modified(t).unwrap();
+    }
+
+    #[test]
+    fn lru_prefers_the_last_used_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let viewed = dir.path().join("viewed"); // rendered long ago, viewed just now
+        let rendered = dir.path().join("rendered"); // rendered just now, last viewed long ago
+        std::fs::create_dir_all(&viewed).unwrap();
+        std::fs::create_dir_all(&rendered).unwrap();
+        std::fs::write(viewed.join("p1.jpg"), vec![0u8; 1000]).unwrap();
+        std::fs::write(rendered.join("p1.jpg"), vec![0u8; 1000]).unwrap();
+        let past = std::time::SystemTime::now() - std::time::Duration::from_secs(10 * 86_400);
+        set_mtime(&viewed.join("p1.jpg"), past);
+        touch_last_used(&viewed);
+        assert!(viewed.join(LAST_USED_MARKER).is_file());
+        touch_last_used(&rendered);
+        set_mtime(&rendered.join(LAST_USED_MARKER), past);
+        touch_last_used(&dir.path().join("missing")); // no folder → no marker, no error
+        assert!(!dir.path().join("missing").exists());
+        let trimmed = trim_lru_dirs(dir.path(), 1_500, std::time::Duration::from_secs(86_400));
+        assert_eq!(trimmed.files, 1);
+        assert!(viewed.exists() && !rendered.exists(), "evicted by last use, not by render time");
+        // Touching again moves the marker forward.
+        set_mtime(&viewed.join(LAST_USED_MARKER), past);
+        touch_last_used(&viewed);
+        let age = std::fs::metadata(viewed.join(LAST_USED_MARKER)).unwrap().modified().unwrap().elapsed().unwrap();
+        assert!(age < std::time::Duration::from_secs(60), "{age:?}");
     }
 
     #[test]

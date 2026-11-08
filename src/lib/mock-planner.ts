@@ -1278,7 +1278,7 @@ function checkSetting(op: Extract<Op, { op: "set_setting" }>, path: string, issu
 }
 
 /** Validates and normalises a plan in place (`validate::validate`). Blocking issues mean the plan must not run. */
-/** `project` reference (id / name / 접수번호) → project id; null falls back to the open project or the only one. */
+/** `project` reference (id / name / 접수번호) → project id; null falls back to the open project (`current_project`). */
 function resolveProjectId(ref: string | null | undefined, ctx: PlanContext): string | null {
   if (ref && ref.trim()) {
     const key = compact(ref);
@@ -1286,7 +1286,8 @@ function resolveProjectId(ref: string | null | undefined, ctx: PlanContext): str
     return p?.id ?? null;
   }
   if (ctx.current_project && ctx.projects.some((x) => x.id === ctx.current_project)) return ctx.current_project;
-  return ctx.projects.length === 1 ? (ctx.projects[0]?.id ?? null) : null;
+  // Like `validate.rs`: no open project means `project_required`, even when only one project exists.
+  return null;
 }
 
 /** The draft request of a `draft_document` step: sources from ids / the selection / the plan scope. */
@@ -2876,11 +2877,13 @@ export function planPreview(plan: Plan, ctx: PlanContext): PlanPreview {
         break;
       }
       case "define_rule": {
+        // `exec::preview`: `{ description, draft: RuleDraft | null }` — the grid is the confirmation.
         try {
           const rd = mp.parseRule(op.description);
-          payload = rd;
+          payload = { description: op.description, draft: rd };
           summary = rd.issues.length > 0 ? (ko ? `규칙 초안 (확인 필요 ${rd.issues.length}건)` : `rule draft (${rd.issues.length} to confirm)`) : ko ? "규칙 초안 (그리드에서 확인)" : "rule draft (confirm in the grid)";
         } catch (e) {
+          payload = { description: op.description, draft: null };
           summary = messageOf(e);
         }
         confirm = true;
@@ -3150,9 +3153,10 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
     }
     // -- P6 ops --
     case "draft_document": {
+      // `exec.rs`: the step payload is the `DraftOutcome`; the step progress stage is "draft".
       const req = draftRequestOf(op, plan, ctx);
-      const outcome = await mg.draftNow(req, ctl, (stage, frac) => progress(stage, Math.round(frac * 100), 100, ""));
-      return { summary: ko ? `초안 '${outcome.draft.title}' 생성 — 문서 생성 화면에서 확인·저장` : `Draft '${outcome.draft.title}' ready — review and save it on the 문서 생성 screen`, payload: outcome.draft };
+      const outcome = await mg.draftNow(req, ctl, (_stage, frac) => progress("draft", Math.round(frac * 100), 100, req.content.slice(0, 40)));
+      return { summary: ko ? `'${outcome.draft.title}' 초안 생성 — 문서 생성 화면에서 확인·저장` : `Drafted '${outcome.draft.title}' — review and save in the document generator`, payload: outcome };
     }
     case "explain": {
       const docIds = op.scope === "document" && ctx.current_document ? [ctx.current_document] : (plan.scope.doc_ids ?? []);
@@ -3179,18 +3183,19 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
       const ids = (op.doc_ids ?? []).length > 0 ? (op.doc_ids ?? []) : idsOf(workingSet(plan, imported));
       if (ids.length === 0) throw err("invalid", "no_documents");
       const detailOf = mp.addDocuments(project.id, ids);
-      return { summary: ko ? `'${detailOf.project.name}'에 문서 ${ids.length}건 추가` : `Added ${ids.length} documents to '${detailOf.project.name}'`, payload: detailOf };
+      // `exec.rs`: `{ project_id, added, project: Project | null }`.
+      return { summary: ko ? `프로젝트에 문서 ${ids.length}건 추가` : `${ids.length} documents added to the project`, payload: { project_id: project.id, added: ids.length, project: detailOf.project } };
     }
     case "define_rule": {
       await pace(ctl, 200);
       const rd = mp.parseRule(op.description);
       const project = mp.resolveProjectRef(op.project, ctx.current_project);
-      const complete = !!rd.rule.left.doc_type && !!rd.rule.left.field && rd.unresolved.length === 0 && (rd.rule.op === "present" || rd.rule.right !== null);
-      if (project && complete) {
-        const saved = mp.saveRule(project.id, rd.rule);
-        return { summary: ko ? `규칙 저장: ${saved.description}` : `Rule saved: ${saved.description}`, payload: rd };
-      }
-      return { summary: ko ? `규칙 초안 — 확인 필요 (${rd.issues[0] ?? "프로젝트 없음"})` : `Rule draft — needs confirmation (${rd.issues[0] ?? "no project"})`, payload: rd };
+      // `exec.rs` saves the rule straight away when it is confident, resolved and issue-free; else the grid confirms it.
+      const complete = !!rd.rule.left.doc_type && !!rd.rule.left.field && rd.unresolved.length === 0 && rd.issues.length === 0 && rd.confidence >= 0.6 && (rd.rule.op === "present" || rd.rule.right !== null);
+      const saved = !!project && complete;
+      if (project && saved) mp.saveRule(project.id, rd.rule);
+      const summary = saved ? (ko ? `규칙 저장: ${rd.rule.description}` : `Rule saved: ${rd.rule.description}`) : ko ? "규칙 초안 — 프로젝트 화면의 규칙 그리드에서 확인하세요" : "Rule draft — confirm it in the project's rule grid";
+      return { summary, payload: { project_id: project?.id ?? null, saved, draft: rd } };
     }
     case "check_consistency": {
       const project = mp.resolveProjectRef(op.project, ctx.current_project);
@@ -3202,8 +3207,9 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
       const project = mp.resolveProjectRef(op.project, ctx.current_project);
       if (!project) throw err("invalid", "project_not_found");
       const { req, draft } = mp.supplementRequest(project.id, op.findings ?? [], op.output ?? null);
-      const outcome = await mg.draftNow(req, ctl, (stage, frac) => progress(stage, Math.round(frac * 100), 100, ""), draft);
-      return { summary: ko ? `보완요청서 초안 '${outcome.draft.title}' — 문서 생성 화면에서 확인·저장` : `Supplement request '${outcome.draft.title}' ready — review and save it on the 문서 생성 screen`, payload: outcome.draft };
+      const outcome = await mg.draftNow(req, ctl, (_stage, frac) => progress("draft", Math.round(frac * 100), 100, ""), draft);
+      // `exec.rs`: the `DraftOutcome` plus the project it belongs to.
+      return { summary: ko ? "보완요청서 초안 생성 — 문서 생성 화면에서 확인·저장" : "Supplement request drafted — review and save in the document generator", payload: { ...outcome, project_id: project.id } };
     }
     default:
       // UI-side ops never reach here (`runsInUi`).

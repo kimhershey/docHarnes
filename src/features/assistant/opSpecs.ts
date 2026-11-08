@@ -270,9 +270,6 @@ export const MODEL_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["classify", "ocr"
 /** Ops whose step payload is a `Draft` the 문서 생성 screen opens. */
 export const DRAFT_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["draft_document", "request_supplement"]);
 
-/** Ops whose payload refers to a project (result cards link to `/projects/<id>`). */
-export const PROJECT_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["create_project", "add_to_project", "define_rule", "check_consistency"]);
-
 /** Journaled file operations that honour `only_reviewed`. */
 export const FILE_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["organize", "rename", "move"]);
 

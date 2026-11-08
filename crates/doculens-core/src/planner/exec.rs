@@ -1089,35 +1089,77 @@ fn run_step(
             })
         }
         Op::DefineRule { project, template, description } => {
+            // Without a project the rule goes to the named template (id or name), resolved up
+            // front: a built-in template takes no rules (`template_builtin`, as `delete_template`).
+            let target_template = match (project.as_deref(), template.as_deref()) {
+                (None, Some(key)) => {
+                    let t = resolve_template(db, key)?.ok_or_else(|| CoreError::NotFound(format!("template {key}")))?;
+                    if t.builtin {
+                        return Err(CoreError::Invalid("template_builtin".into()));
+                    }
+                    Some(t)
+                }
+                _ => None,
+            };
+            let template_key = target_template.as_ref().map(|t| t.id.clone()).or_else(|| template.clone());
             let vlm = match (deps.chat, deps.model.clone()) {
                 (Some(c), Some(m)) => Some(Vlm::new(c, m, deps.profile, deps.cancel).with_context(deps.ctx_size)),
                 _ => None,
             };
             let _lease = vlm.as_ref().map(|_| LeaseGuard::acquire(deps.lease));
             let pdeps = ProjectDeps { db, vlm: vlm.as_ref(), language: deps.language };
-            let draft = projects::define_rule(&pdeps, project.as_deref(), template.as_deref(), description)?;
+            let draft = projects::define_rule(&pdeps, project.as_deref(), template_key.as_deref(), description)?;
+            let confident = draft.confidence >= 0.6 && draft.unresolved.is_empty() && draft.issues.is_empty();
             let mut saved = false;
-            if let Some(pid) = project.as_deref() {
-                if draft.confidence >= 0.6 && draft.unresolved.is_empty() && draft.issues.is_empty() {
+            let mut template_id = None;
+            if confident {
+                if let Some(pid) = project.as_deref() {
                     db.with(|c| projects_repo::save_rule(c, pid, &draft.rule))?;
                     saved = true;
+                } else if let Some(t) = target_template {
+                    let mut rules = t.rules.clone();
+                    rules.push(draft.rule.clone());
+                    db.with(|c| {
+                        projects_repo::save_template(
+                            c,
+                            &TemplateInput {
+                                id: Some(t.id.clone()),
+                                name_ko: t.name_ko.clone(),
+                                name_en: Some(t.name_en.clone()),
+                                description_ko: Some(t.description_ko.clone()),
+                                description_en: Some(t.description_en.clone()),
+                                required_doc_types: t.required_doc_types.clone(),
+                                rules,
+                            },
+                        )
+                    })?;
+                    saved = true;
+                    template_id = Some(t.id);
                 }
             }
-            let summary = match (saved, deps.ko()) {
-                (true, true) => format!("규칙 저장: {}", draft.rule.description),
-                (true, false) => format!("Rule saved: {}", draft.rule.description),
-                (false, true) => "규칙 초안 — 프로젝트 화면의 규칙 그리드에서 확인하세요".to_string(),
-                (false, false) => "Rule draft — confirm it in the project's rule grid".to_string(),
+            let summary = match (saved, template_id.is_some(), deps.ko()) {
+                (true, true, true) => format!("템플릿에 규칙 저장: {}", draft.rule.description),
+                (true, true, false) => format!("Rule saved to the template: {}", draft.rule.description),
+                (true, false, true) => format!("규칙 저장: {}", draft.rule.description),
+                (true, false, false) => format!("Rule saved: {}", draft.rule.description),
+                (false, _, true) => "규칙 초안 — 프로젝트 화면의 규칙 그리드에서 확인하세요".to_string(),
+                (false, _, false) => "Rule draft — confirm it in the project's rule grid".to_string(),
             };
             Ok(StepOutcome {
                 summary,
-                payload: json!({ "project_id": project, "saved": saved, "draft": draft }),
+                payload: json!({ "project_id": project, "template_id": template_id, "saved": saved, "draft": draft }),
                 imported: None,
             })
         }
         Op::CheckConsistency { project, rules } => {
             let pid = project.clone().ok_or_else(|| CoreError::Invalid("project_required".into()))?;
-            let pdeps = ProjectDeps { db, vlm: None, language: deps.language };
+            // The model only judges fuzzy name comparisons; without it they stay undetermined.
+            let vlm = match (deps.chat, deps.model.clone()) {
+                (Some(c), Some(m)) => Some(Vlm::new(c, m, deps.profile, deps.cancel).with_context(deps.ctx_size)),
+                _ => None,
+            };
+            let _lease = vlm.as_ref().map(|_| LeaseGuard::acquire(deps.lease));
+            let pdeps = ProjectDeps { db, vlm: vlm.as_ref(), language: deps.language };
             let run = projects::check(&pdeps, &pid, rules)?;
             let summary = if deps.ko() {
                 format!(
@@ -1139,8 +1181,16 @@ fn run_step(
                 .ok_or_else(|| CoreError::Invalid("no_check_run".into()))?;
             let req =
                 projects::supplement_request(db, &pid, &run, findings, output.unwrap_or_default(), deps.language)?;
+            // Findings as text sources → the rule-based 보완요청서 needs no model (the shell's draft
+            // job decides the same way), so the planner never waits for the engine here.
+            let rule_only = !req.sources.is_empty()
+                && req.sources.iter().all(|s| matches!(s, SourceRef::Text { .. }))
+                && req.form_ref.as_deref().and_then(generate::TemplateKind::parse)
+                    == Some(generate::TemplateKind::SupplementRequest);
             let vlm = match (deps.chat, deps.model.clone()) {
-                (Some(c), Some(m)) => Some(Vlm::new(c, m, deps.profile, deps.cancel).with_context(deps.ctx_size)),
+                (Some(c), Some(m)) if !rule_only => {
+                    Some(Vlm::new(c, m, deps.profile, deps.cancel).with_context(deps.ctx_size))
+                }
                 _ => None,
             };
             let _lease = vlm.as_ref().map(|_| LeaseGuard::acquire(deps.lease));
@@ -1173,6 +1223,19 @@ fn run_step(
         // UI-side ops never reach here (`runs_in_ui`).
         _ => Ok(StepOutcome { summary: String::new(), payload: Value::Null, imported: None }),
     }
+}
+
+/// A project template by id, or by its (compact) Korean / English name as the planner hands it on.
+fn resolve_template(db: &Db, key: &str) -> Result<Option<projects::ProjectTemplate>> {
+    if let Some(t) = db.with(|c| projects_repo::get_template(c, key))? {
+        return Ok(Some(t));
+    }
+    let want = super::compact(key);
+    if want.is_empty() {
+        return Ok(None);
+    }
+    let all = db.with(projects_repo::list_templates)?;
+    Ok(all.into_iter().find(|t| super::compact(&t.name_ko) == want || super::compact(&t.name_en) == want))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1564,15 +1627,20 @@ pub fn preview(
                 json!({ "form_ref": form_ref, "sources": sources, "output": output }),
                 true,
             ),
-            Op::DefineRule { description, .. } => (
-                if ko {
-                    "규칙 JSON으로 변환한 뒤 규칙 그리드에서 확인합니다".into()
-                } else {
-                    "Converted to rule JSON, then confirmed in the rule grid".into()
-                },
-                json!({ "description": description }),
-                true,
-            ),
+            Op::DefineRule { project, template, description } => {
+                // Deterministic preview: the phrase rules only (no model), so the card can show the grid.
+                let pdeps = ProjectDeps { db, vlm: None, language };
+                let draft = projects::define_rule(&pdeps, project.as_deref(), template.as_deref(), description).ok();
+                (
+                    if ko {
+                        "규칙 JSON으로 변환한 뒤 규칙 그리드에서 확인합니다".into()
+                    } else {
+                        "Converted to rule JSON, then confirmed in the rule grid".into()
+                    },
+                    json!({ "description": description, "draft": draft }),
+                    true,
+                )
+            }
             Op::RequestSupplement { output, .. } => (
                 if ko {
                     "마지막 검사의 불일치·누락으로 보완요청서 초안을 만듭니다".into()

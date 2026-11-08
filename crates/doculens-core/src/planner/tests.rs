@@ -1037,6 +1037,70 @@ mod exec_tests {
         assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
         assert_eq!(ex.steps[0].payload["hits"].as_array().map(Vec::len), Some(0));
     }
+
+    #[test]
+    fn define_rule_without_a_project_targets_user_templates_only() {
+        use crate::projects::{repo as projects_repo, TemplateInput};
+        let w = World::new();
+        w.db.with(projects_repo::ensure_builtins).unwrap();
+        let tpl =
+            w.db.with(|c| {
+                projects_repo::save_template(
+                    c,
+                    &TemplateInput {
+                        name_ko: "구매 정산 사본".into(),
+                        required_doc_types: vec!["transaction_statement".into(), "tax_invoice".into()],
+                        ..Default::default()
+                    },
+                )
+            })
+            .unwrap();
+
+        // A confident rule-based draft is appended to the (name-resolved) template's rules.
+        let plan = plan_of(
+            vec![Op::DefineRule {
+                project: None,
+                template: Some("구매 정산 사본".into()),
+                description: "거래명세서 합계 = 세금계산서 합계금액".into(),
+            }],
+            Scope::default(),
+        );
+        let ex = exec::run(&w.deps(None), &plan, &mut |_| {}).unwrap();
+        assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
+        assert_eq!(ex.steps[0].payload["saved"], json!(true), "{:?}", ex.steps[0].payload);
+        assert_eq!(ex.steps[0].payload["template_id"], json!(tpl.id));
+        assert!(ex.steps[0].payload["project_id"].is_null());
+        assert!(ex.steps[0].summary.contains("템플릿에 규칙 저장"), "{}", ex.steps[0].summary);
+        let after = w.db.with(|c| projects_repo::get_template(c, &tpl.id)).unwrap().unwrap();
+        assert_eq!(after.rules.len(), 1, "{after:?}");
+        assert_eq!(after.rules[0].left.doc_type.as_deref(), Some("transaction_statement"), "{after:?}");
+        assert_eq!(w.chat.calls("project_rule"), 0, "a rule the phrase rules resolve never asks the model");
+
+        // Built-in templates take no rules; unknown templates are reported, not drafted.
+        let plan = plan_of(
+            vec![Op::DefineRule {
+                project: None,
+                template: Some("tpl_purchase_settlement".into()),
+                description: "거래명세서 합계 = 세금계산서 합계금액".into(),
+            }],
+            Scope::default(),
+        );
+        let ex = exec::run(&w.deps(None), &plan, &mut |_| {}).unwrap();
+        assert_eq!(ex.steps[0].status, StepStatus::Failed);
+        assert!(ex.steps[0].error.as_deref().unwrap().contains("template_builtin"), "{:?}", ex.steps[0]);
+        let plan = plan_of(
+            vec![Op::DefineRule {
+                project: None,
+                template: Some("없는 템플릿".into()),
+                description: "거래명세서 합계 = 세금계산서 합계금액".into(),
+            }],
+            Scope::default(),
+        );
+        let ex = exec::run(&w.deps(None), &plan, &mut |_| {}).unwrap();
+        assert_eq!(ex.steps[0].status, StepStatus::Failed);
+        assert!(ex.steps[0].error.as_deref().unwrap().contains("없는 템플릿"), "{:?}", ex.steps[0]);
+        assert_eq!(w.db.with(|c| projects_repo::get_template(c, &tpl.id)).unwrap().unwrap().rules.len(), 1);
+    }
 }
 
 #[test]

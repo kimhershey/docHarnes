@@ -292,11 +292,13 @@ pub fn ensure_builtins(conn: &Connection) -> rusqlite::Result<usize> {
                 )?;
                 added += 1;
             }
+            // Untouched by the user: refresh the definition and leave both timestamps alone
+            // (`created_at` is history; `updated_at == created_at` keeps the row refreshable).
             Some((created, updated)) if created == updated => {
                 conn.execute(
                     "UPDATE project_templates SET name_ko = ?2, name_en = ?3, description_ko = ?4, description_en = ?5, \
-                     required_doc_types = ?6, rules = ?7, builtin = 1, created_at = ?8, updated_at = ?8 WHERE id = ?1",
-                    params![t.id, t.name_ko, t.name_en, t.description_ko, t.description_en, types, rules, now],
+                     required_doc_types = ?6, rules = ?7, builtin = 1 WHERE id = ?1",
+                    params![t.id, t.name_ko, t.name_en, t.description_ko, t.description_en, types, rules],
                 )?;
             }
             Some(_) => {}
@@ -597,6 +599,7 @@ fn insert_rules(conn: &Connection, project_id: &str, rules: &[Rule]) -> rusqlite
 
 /// Creates (`id = None`) or updates a project. New projects inherit the template's rules; a
 /// project that changes template while it has no rules yet inherits the new template's rules.
+/// On update an optional field left `None` keeps its stored value and a blank `Some` clears it.
 pub fn save_project(conn: &Connection, input: &ProjectInput) -> rusqlite::Result<Project> {
     let name = documents::nfc(input.name.trim());
     if name.is_empty() {
@@ -613,6 +616,12 @@ pub fn save_project(conn: &Connection, input: &ProjectInput) -> rusqlite::Result
         Some(id) if !id.trim().is_empty() => {
             let before = get_project(conn, id)?.ok_or_else(|| typed("project_not_found"))?;
             let status = input.status.unwrap_or(before.status);
+            // `None` keeps the stored value, `Some("")` (blank) clears it.
+            let merged = |given: &Option<String>, stored: &Option<String>| match given {
+                None => stored.clone(),
+                Some(v) => blank(Some(v.clone())),
+            };
+            let template_id = merged(&input.template_id, &before.template_id);
             conn.execute(
                 "UPDATE projects SET name = ?2, template_id = ?3, status = ?4, intake_no = ?5, owner = ?6, due_date = ?7, \
                  notes = ?8, inbox_folder = ?9, updated_at = ?10 WHERE id = ?1",
@@ -621,11 +630,11 @@ pub fn save_project(conn: &Connection, input: &ProjectInput) -> rusqlite::Result
                     name,
                     template_id,
                     status.as_str(),
-                    blank(input.intake_no.clone()),
-                    blank(input.owner.clone()),
-                    blank(input.due_date.clone()),
-                    blank(input.notes.clone()),
-                    blank(input.inbox_folder.clone()).map(|f| documents::nfc(&f)),
+                    merged(&input.intake_no, &before.intake_no),
+                    merged(&input.owner, &before.owner),
+                    merged(&input.due_date, &before.due_date),
+                    merged(&input.notes, &before.notes),
+                    merged(&input.inbox_folder, &before.inbox_folder).map(|f| documents::nfc(&f)),
                     now
                 ],
             )?;
@@ -998,8 +1007,9 @@ pub fn inbox_folder_of(rel_path: &str) -> Option<String> {
 }
 
 /// Maps a document imported from an inbox subfolder to the project with that
-/// `inbox_folder` (created with the folder name when `create` is set). Returns the project id
-/// when the document is a member afterwards.
+/// `inbox_folder` (when `create` is set: else a project named like the folder is mapped, else
+/// one is created with the folder name). Returns the project id when the document is a member
+/// afterwards.
 pub fn assign_inbox_document(db: &Db, doc_id: &str, rel_path: &str, create: bool) -> Result<Option<String>> {
     let Some(folder) = inbox_folder_of(rel_path) else { return Ok(None) };
     db.with(|c| {
@@ -1012,13 +1022,28 @@ pub fn assign_inbox_document(db: &Db, doc_id: &str, rel_path: &str, create: bool
             .optional()?;
         let project_id = match existing {
             Some(id) => id,
-            None if create => {
-                save_project(
-                    c,
-                    &ProjectInput { name: folder.clone(), inbox_folder: Some(folder.clone()), ..Default::default() },
-                )?
-                .id
-            }
+            // A project already named like the folder (and not mapped to another folder) takes
+            // the mapping instead of a duplicate project.
+            None if create => match project_by_name(c, &folder)?.filter(|p| p.inbox_folder.is_none()) {
+                Some(p) => {
+                    c.execute(
+                        "UPDATE projects SET inbox_folder = ?2, updated_at = ?3 WHERE id = ?1",
+                        params![p.id, folder, ts(&Utc::now())],
+                    )?;
+                    p.id
+                }
+                None => {
+                    save_project(
+                        c,
+                        &ProjectInput {
+                            name: folder.clone(),
+                            inbox_folder: Some(folder.clone()),
+                            ..Default::default()
+                        },
+                    )?
+                    .id
+                }
+            },
             None => return Ok(None),
         };
         add_documents(c, &project_id, &[doc_id.to_string()])?;

@@ -109,7 +109,8 @@ pub struct Project {
     pub last_undetermined: u32,
 }
 
-/// Create / update payload (`id = None` → create).
+/// Create / update payload (`id = None` → create). On update an optional field left `None`
+/// keeps the stored value and `Some("")` (blank) clears it; `name` is always required.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ProjectInput {

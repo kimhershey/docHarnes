@@ -1982,8 +1982,12 @@ export interface DraftOutcome {
   prompt_tokens: number;
   completion_tokens: number;
   elapsed_ms: number;
-  /** `rules` | `model` */
+  /** How the draft was produced: `rules` (no model call) | `model`. */
   source: string;
+  /** Draft job payloads only (`generate_bridge::run_draft`): where the job came from (`generate`, `project`, …). */
+  job_source?: string;
+  /** Draft job / `request_supplement` payloads: the project the draft belongs to. */
+  project_id?: string | null;
 }
 
 export interface SaveRequest {
@@ -2069,6 +2073,7 @@ export interface Project {
   last_undetermined: number;
 }
 
+/** Project create / update payload. On update an optional field that is omitted or `null` keeps its stored value and a blank string clears it. */
 export interface ProjectInput {
   id?: string | null;
   name: string;
@@ -2259,9 +2264,15 @@ export interface MaintenanceSummary {
   started_at: string;
   elapsed_ms: number;
   purged: MaintenancePurged;
+  /** Steps that were skipped: a policy set to "keep forever" (`journal`, `jobs`, …), `disabled`, or `<step>: <error>`. */
+  skipped: string[];
+  cancelled: boolean;
 }
 
 export interface MaintenanceStatus {
+  /** `RetentionPolicy.purge_enabled` of the open workspace. */
+  enabled: boolean;
+  purge_hour_local: number;
   last_run_at: string | null;
   next_run_at: string | null;
   running: boolean;

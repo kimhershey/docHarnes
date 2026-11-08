@@ -28,6 +28,7 @@ import { useUiStore } from "@/stores/ui";
 
 import { FieldsPanel } from "./FieldsPanel";
 import { HistoryPanel } from "./HistoryPanel";
+import { RetryImage } from "./RetryImage";
 import { SplitDialog } from "./SplitMergeDialogs";
 import { statusVariant } from "./status";
 import { TablesPanel } from "./TablesPanel";
@@ -540,7 +541,7 @@ export function DocumentViewer() {
               {t("viewer.loading_pages")}
             </div>
           ) : page?.image_url ? (
-            <img
+            <RetryImage
               key={`${page.page_no}-${page.rendered_at ?? ""}`}
               src={page.image_url}
               alt={t("viewer.page_image_alt", { name: displayName, page: page.page_no })}
@@ -548,6 +549,16 @@ export function DocumentViewer() {
               style={imageStyle}
               draggable={false}
               data-testid="viewer-image"
+              fallback={
+                // The purged page did not come back after the retries: offer the re-render explicitly.
+                <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-fg-muted" data-testid="viewer-image-failed">
+                  <span>{t("viewer.image_failed")}</span>
+                  <Button size="sm" variant="outline" onClick={() => void rerender()}>
+                    <RefreshCw />
+                    {t("viewer.rerender")}
+                  </Button>
+                </div>
+              }
             />
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-fg-muted" data-testid="viewer-no-image">
@@ -682,7 +693,7 @@ function ThumbStrip({ pages, current, onSelect }: { pages: PageView[]; current: 
               aria-label={t("viewer.thumb_label", { page: p.page_no })}
               data-testid={`viewer-thumb-${p.page_no}`}
             >
-              {p.thumb_url ? <img src={p.thumb_url} alt="" className="max-h-24 w-full bg-white object-contain" loading="lazy" draggable={false} /> : <div className="h-20 w-full bg-bg-sunken" />}
+              {p.thumb_url ? <RetryImage src={p.thumb_url} alt="" className="max-h-24 w-full bg-white object-contain" loading="lazy" draggable={false} fallback={<div className="h-20 w-full bg-bg-sunken" />} /> : <div className="h-20 w-full bg-bg-sunken" />}
               <span>{p.page_no}</span>
             </button>
           );

@@ -58,6 +58,26 @@ describe("mock generate", () => {
     expect(mg.toHtml(again)).toContain("<table");
   });
 
+  it("saves like the core: an existing file is export_exists, overwrite replaces it (no numbering), warnings are sentences", () => {
+    const req = { form_ref: "quotation", format_description: null, content: "㈜한빛에 노트북 10대, 대당 1,200,000원 견적서", sources: [], output: "hwpx" as const, tone: "formal" as const, length: "medium" as const, language: "ko" as const, use_knowledge: false, feedback: null, previous: null, excluded_sources: [] };
+    const draft = mg.buildDraft(req);
+    const first = mg.saveDraft({ draft, output: "hwpx", file_name: "견적서", folder: null, register: true, overwrite: false });
+    expect(first.rel_path).toBe("documents/generated/견적서.hwpx");
+    expect(first.doc_id).toBeTruthy();
+    // The draft still has the deliberate sum mismatch (blocking): saved as "검토 전" with the core's sentence.
+    expect(first.warnings).toEqual(["검증에서 확인이 필요한 항목이 있는 상태로 저장했습니다 (검토 전)."]);
+    expect(() => mg.saveDraft({ draft, output: "hwpx", file_name: "견적서", folder: null, register: true, overwrite: false })).toThrow(/export_exists/);
+    const again = mg.saveDraft({ draft, output: "hwpx", file_name: "견적서", folder: null, register: true, overwrite: true });
+    expect(again.rel_path).toBe("documents/generated/견적서.hwpx");
+    expect(again.doc_id).toBe(first.doc_id);
+    const docs = backend.wsDocs().filter((d) => d.rel_path.startsWith("documents/generated/"));
+    expect(docs).toHaveLength(1);
+    // Markdown is written but not registered; the warning is the core's sentence.
+    const md = mg.saveDraft({ draft, output: "md", file_name: "견적서", folder: null, register: true, overwrite: false });
+    expect(md.doc_id).toBeNull();
+    expect(md.warnings).toContain("Markdown 파일은 라이브러리에 등록되지 않습니다(입력 형식이 아님).");
+  });
+
   it("parses natural-language rules against the built-in schemas", () => {
     const eq = mp.parseRule("세금계산서의 공급자 사업자번호는 사업자등록증의 등록번호와 같아야 해");
     expect(eq.rule.left).toEqual({ doc_type: "tax_invoice", field: "supplier.brn", value: null });

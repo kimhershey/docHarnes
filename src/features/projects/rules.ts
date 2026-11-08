@@ -4,7 +4,7 @@
 
 import type { TFunction } from "i18next";
 
-import type { DocTypeInfo, FieldDef, Rule, RuleOp, RuleOperand, SchemaRecord, Verdict } from "@/lib/types";
+import type { DocTypeInfo, FieldDef, Project, Rule, RuleOperand, SchemaRecord, Verdict } from "@/lib/types";
 
 export interface FieldOption {
   path: string;
@@ -58,7 +58,12 @@ export function operandLabel(o: RuleOperand | null | undefined, types: DocTypeIn
   return [type, field].filter(Boolean).join(" · ");
 }
 
-export const OP_SYMBOLS: Record<RuleOp, string> = { eq: "=", neq: "≠", gte: "≥", lte: "≤", within_pct: "≈ ±%", present: "∃", matches: "~" };
+/** Tolerance input → a finite, non-negative number (empty / invalid → null; negatives are clamped to 0). */
+export function parseTolerance(raw: string): number | null {
+  if (raw.trim() === "") return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? Math.max(0, n) : null;
+}
 
 export function ruleSummary(rule: Rule, types: DocTypeInfo[] | undefined, schemas: SchemaRecord[] | undefined, lang: string, t: TFunction): string {
   const left = operandLabel(rule.left, types, schemas, lang);
@@ -75,7 +80,8 @@ export function ruleComplete(rule: Rule): boolean {
   if (rule.op === "present") return true;
   if (!rule.right) return false;
   if (isLiteral(rule.right)) return rule.right.value != null && rule.right.value.trim() !== "";
-  if (rule.op === "within_pct" && (rule.tolerance == null || !Number.isFinite(rule.tolerance))) return false;
+  if (rule.op === "within_pct" && (rule.tolerance == null || !Number.isFinite(rule.tolerance) || rule.tolerance < 0)) return false;
+  if (rule.tolerance != null && (!Number.isFinite(rule.tolerance) || rule.tolerance < 0)) return false;
   return !!rule.right.doc_type && !!rule.right.field;
 }
 
@@ -108,6 +114,16 @@ export function verdictVariant(v: Verdict): "ok" | "warn" | "danger" | "muted" {
 
 export function newRule(description = ""): Rule {
   return { id: crypto.randomUUID().replace(/-/g, ""), description, left: { doc_type: null, field: null, value: null }, op: "eq", right: { doc_type: null, field: null, value: null }, tolerance: null, required: true, enabled: true };
+}
+
+/**
+ * Why moving a project to 완료 needs a confirmation: it was never checked, or the last check left
+ * mismatches / missing documents. Null when the move needs no confirmation.
+ */
+export function doneMoveWarning(project: Pick<Project, "last_check_at" | "last_mismatch" | "missing_count">): "unchecked" | "findings" | null {
+  if (!project.last_check_at) return "unchecked";
+  if (project.last_mismatch > 0 || project.missing_count > 0) return "findings";
+  return null;
 }
 
 /** Kanban column order (§3.15 접수 → 추출 → 검증 → 보완요청 → 완료). */

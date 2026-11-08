@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui";
 
 import { RuleGrid } from "./RuleGrid";
-import { newRule } from "./rules";
+import { newRule, ruleComplete } from "./rules";
 
 function toInput(tpl: ProjectTemplate | null): TemplateInput {
   return tpl ? { id: tpl.id, name_ko: tpl.name_ko, name_en: tpl.name_en, description_ko: tpl.description_ko, description_en: tpl.description_en, required_doc_types: [...tpl.required_doc_types], rules: structuredClone(tpl.rules) } : { id: null, name_ko: "", name_en: "", description_ko: "", description_en: "", required_doc_types: [], rules: [] };
@@ -85,6 +85,8 @@ export function TemplatesDialog({ open, onOpenChange }: { open: boolean; onOpenC
     }
   };
   const setRule = (i: number, r: Rule) => setDraft((d) => (d ? { ...d, rules: d.rules.map((x, n) => (n === i ? r : x)) } : d));
+  // Like the rules tab: an incomplete rule (missing operand, bad tolerance) cannot be saved into the template.
+  const incomplete = draft ? draft.rules.filter((r) => !ruleComplete(r)).length : 0;
   const toggleType = (slug: string) => setDraft((d) => (d ? { ...d, required_doc_types: d.required_doc_types.includes(slug) ? d.required_doc_types.filter((x) => x !== slug) : [...d.required_doc_types, slug] } : d));
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -155,9 +157,14 @@ export function TemplatesDialog({ open, onOpenChange }: { open: boolean; onOpenC
                     <p className="text-xs text-fg-subtle">{t("projects.templates.no_rules")}</p>
                   ) : (
                     draft.rules.map((r, i) => (
-                      <div key={r.id} className="flex items-start gap-2">
-                        <div className="min-w-0 flex-1">
+                      <div key={r.id} className="flex items-start gap-2" data-testid={`templates-rule-row-${i}`} data-rule-complete={ruleComplete(r)}>
+                        <div className="flex min-w-0 flex-1 flex-col gap-1">
                           <RuleGrid rule={r} readOnly={readOnly} onChange={(x) => setRule(i, x)} testId={`templates-rule-${i}`} />
+                          {!readOnly && !ruleComplete(r) && (
+                            <span className="text-xs text-danger" data-testid={`templates-rule-incomplete-${i}`}>
+                              {t("projects.rules.incomplete")}
+                            </span>
+                          )}
                         </div>
                         {!readOnly && (
                           <Button size="icon-sm" variant="ghost" className="text-danger" onClick={() => setDraft({ ...draft, rules: draft.rules.filter((_, n) => n !== i) })} aria-label={t("projects.rules.delete")}>
@@ -170,7 +177,7 @@ export function TemplatesDialog({ open, onOpenChange }: { open: boolean; onOpenC
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   {!readOnly && (
-                    <Button onClick={() => void save()} disabled={busy || !draft.name_ko.trim()} data-testid="templates-save">
+                    <Button onClick={() => void save()} disabled={busy || !draft.name_ko.trim() || incomplete > 0} data-testid="templates-save">
                       {t("projects.templates.save")}
                     </Button>
                   )}
@@ -183,6 +190,11 @@ export function TemplatesDialog({ open, onOpenChange }: { open: boolean; onOpenC
                       <Trash2 />
                       {t("projects.templates.delete")}
                     </Button>
+                  )}
+                  {!readOnly && incomplete > 0 && (
+                    <span className="text-xs text-danger" role="status" data-testid="templates-incomplete">
+                      {t("projects.templates.incomplete_rules", { count: incomplete })}
+                    </span>
                   )}
                 </div>
               </div>

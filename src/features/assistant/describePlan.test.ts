@@ -6,9 +6,9 @@ import { describe, expect, it } from "vitest";
 
 import en from "@/i18n/en.json";
 import ko from "@/i18n/ko.json";
-import type { Plan, PlanContext, PlanExecution, PlanPreview, PlanResponse } from "@/lib/types";
+import type { CheckRun, Draft, DraftOutcome, Plan, PlanContext, PlanExecution, PlanPreview, PlanResponse, Project, ProjectDetail, RuleDraft } from "@/lib/types";
 
-import { deriveResultActions, formatAmount, impactLine, impactOf, isPlanExecution, onlyReviewedValue, opLabel, planKind, requiresConfirmation, summarizeOp, uiContextFor, withOnlyReviewed } from "./describePlan";
+import { deriveResultActions, formatAmount, impactLine, impactOf, isPlanExecution, onlyReviewedValue, opLabel, planKind, projectName, requiresConfirmation, ruleDraftPreview, summarizeOp, uiContextFor, withOnlyReviewed } from "./describePlan";
 import { OP_KINDS, OP_SPECS, UI_OPS } from "./opSpecs";
 
 const instance = i18next.createInstance();
@@ -62,8 +62,11 @@ describe("summarizeOp", () => {
     expect(summarizeOp({ op: "draft_document", form_ref: "quotation", content: "노트북 10대 견적", sources: ["a", "b"], output: "pdf" }, t, ctx)).toBe("양식 견적서 · 노트북 10대 견적 · 인용 문서 2건 · PDF");
     expect(summarizeOp({ op: "create_project", name: "한빛", template: "builtin-vendor_onboarding" }, t, ctx)).toBe("'한빛' · 템플릿 거래처 등록");
     expect(summarizeOp({ op: "add_to_project", project: "p1", doc_ids: ["x"] }, t, ctx)).toBe("인증 심사 A · 문서 1건");
-    // A single project in the context is the default target; otherwise "현재 프로젝트".
-    expect(summarizeOp({ op: "check_consistency" }, t, ctx)).toBe("인증 심사 A · 전체 규칙");
+    // Without a named / open project the row says "현재 프로젝트" — no "only project" fallback: the validator is strict (project_required).
+    expect(summarizeOp({ op: "check_consistency" }, t, ctx)).toBe("현재 프로젝트 · 전체 규칙");
+    expect(summarizeOp({ op: "check_consistency" }, t, { ...ctx, context: { ...context, current_project: "p1" } })).toBe("인증 심사 A · 전체 규칙");
+    expect(projectName(null, { ...context, current_project: "p1" }, t)).toBe("인증 심사 A");
+    expect(projectName("p-unknown", context, t)).toBe("p-unknown");
     expect(summarizeOp({ op: "define_rule", description: "서명 필수" }, t, { ...ctx, context: { ...context, projects: [] } })).toBe("현재 프로젝트 · 서명 필수");
     expect(summarizeOp({ op: "set_retention", item: "chats", days: 30 }, t, ctx)).toBe("대화 기록 · 30일");
     expect(summarizeOp({ op: "set_retention", item: "journal", days: -1 }, t, ctx)).toBe("파일 조작 저널 · 무기한");
@@ -165,5 +168,72 @@ describe("result actions", () => {
   it("formats amounts with thousands separators", () => {
     expect(formatAmount(1234500)).toBe("1,234,500");
     expect(formatAmount(12.345)).toBe("12.3");
+  });
+});
+
+// The P6 ops in the shapes `exec.rs` really sends (review H1), plus the bare shapes the browser mock used to send.
+describe("result actions (P6 payloads)", () => {
+  const draft: Draft = {
+    id: "d1",
+    title: "견적서",
+    template: { kind: "builtin", template: "quotation" },
+    doc_type: "quotation",
+    fields: [{ key: "total", label: "합계", value: "1", kind: "amount", required: true, normalized: null, source: null, user_edited: false }],
+    tables: [],
+    body: [],
+    references: [],
+    issues: [],
+    language: "ko",
+    tone: "formal",
+    length: "medium",
+    created_at: "",
+    updated_at: "",
+    model: "qwen3.5-4b",
+    request: null,
+    notes: [],
+    saved_path: null,
+    saved_doc_id: null,
+  };
+  const outcome: DraftOutcome = { draft, prompt_tokens: 10, completion_tokens: 5, elapsed_ms: 1, source: "model" };
+  const project: Project = { id: "p1", name: "인증 심사 A", template_id: null, status: "intake", intake_no: null, owner: null, due_date: null, notes: null, inbox_folder: null, created_at: "", updated_at: "", document_count: 2, missing_count: 0, last_check_at: null, last_pass: 0, last_mismatch: 0, last_undetermined: 0 };
+  const detail: ProjectDetail = { project, template: null, documents: [], checklist: [], rules: [], last_run: null, relations: { nodes: [], edges: [] } };
+  const ruleDraft: RuleDraft = { rule: { id: "r1", description: "사업자번호 일치", left: { doc_type: "tax_invoice", field: "supplier.brn", value: null }, op: "eq", right: { doc_type: "business_registration", field: "registration_no", value: null }, tolerance: null, required: true, enabled: true }, confidence: 0.9, source: "rules", issues: [], unresolved: [] };
+  const run: CheckRun = { id: "run1", project_id: "p1", started_at: "", finished_at: "", pass: 1, mismatch: 0, undetermined: 0, missing: 0, results: [], missing_doc_types: [] };
+  const step = (index: number, op: PlanExecution["steps"][number]["op"], payload: unknown): PlanExecution["steps"][number] => ({ index, op, status: "done", summary: "", payload, elapsed_ms: 1 });
+  const exec = (steps: PlanExecution["steps"]): PlanExecution => ({ steps, cancelled: false, documents: [], ui_actions: [], batches: [] });
+
+  it("reads the Rust payloads: DraftOutcome, {project_id, saved, draft}, {project_id, added, project}", () => {
+    const p = plan([{ op: "draft_document", content: "x" }, { op: "request_supplement", project: "p1" }, { op: "define_rule", project: "p1", description: "사업자번호 일치" }, { op: "add_to_project", project: "p1" }, { op: "create_project", name: "B" }, { op: "check_consistency", project: "p1" }]);
+    const actions = deriveResultActions(exec([step(0, "draft_document", outcome), step(1, "request_supplement", { ...outcome, project_id: "p1" }), step(2, "define_rule", { project_id: "p1", saved: true, draft: ruleDraft }), step(3, "add_to_project", { project_id: "p1", added: 2, project }), step(4, "create_project", { ...project, id: "p2", name: "B" }), step(5, "check_consistency", run)]), p);
+    expect(actions.drafts.map((d) => [d.index, d.draft.id, d.projectId])).toEqual([
+      [0, "d1", null],
+      [1, "d1", "p1"],
+    ]);
+    expect(actions.ruleDrafts).toEqual([{ index: 2, ruleDraft, projectId: "p1", saved: true }]);
+    expect(actions.projects.map((x) => [x.index, x.projectId, x.project?.name, x.detail])).toEqual([
+      [3, "p1", "인증 심사 A", null],
+      [4, "p2", "B", null],
+    ]);
+    expect(actions.checks).toEqual([{ index: 5, run }]);
+  });
+
+  it("still accepts the bare shapes (Draft, RuleDraft, ProjectDetail) and a deleted project", () => {
+    const p = plan([{ op: "draft_document", content: "x" }, { op: "define_rule", project: "p1", description: "d" }, { op: "add_to_project", project: "p1" }, { op: "add_to_project", project: "p1" }]);
+    const actions = deriveResultActions(exec([step(0, "draft_document", draft), step(1, "define_rule", ruleDraft), step(2, "add_to_project", detail), step(3, "add_to_project", { project_id: "p1", added: 0, project: null })]), p);
+    expect(actions.drafts).toEqual([{ index: 0, draft, projectId: null }]);
+    expect(actions.ruleDrafts).toEqual([{ index: 1, ruleDraft, projectId: "p1", saved: false }]);
+    expect(actions.projects[0]).toEqual({ index: 2, projectId: "p1", project, detail });
+    expect(actions.projects[1]).toEqual({ index: 3, projectId: "p1", project: null, detail: null });
+    // A failed / unrelated payload adds nothing.
+    expect(deriveResultActions(exec([step(0, "define_rule", { description: "x" }), step(1, "draft_document", null)]), p).ruleDrafts).toEqual([]);
+  });
+
+  it("reads the define_rule preview payload ({ description, draft } or a bare RuleDraft)", () => {
+    const preview = (payload: unknown) => ruleDraftPreview({ index: 0, op: "define_rule", summary: "", payload, confirm: true });
+    expect(preview({ description: "사업자번호 일치", draft: ruleDraft })).toEqual({ draft: ruleDraft, description: "사업자번호 일치" });
+    expect(preview({ description: "알 수 없는 문장", draft: null })).toEqual({ draft: null, description: "알 수 없는 문장" });
+    expect(preview(ruleDraft)).toEqual({ draft: ruleDraft, description: "사업자번호 일치" });
+    expect(preview({ items: [] })).toBeNull();
+    expect(ruleDraftPreview(undefined)).toBeNull();
   });
 });
