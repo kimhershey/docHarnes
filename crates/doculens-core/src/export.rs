@@ -1826,6 +1826,47 @@ mod tests {
         assert!(matches!(err, CoreError::Invalid(ref c) if c == "export_exists"), "folder exists: {err}");
     }
 
+    /// Writes one sample of every export format (the seeded receipts / tax invoice) to
+    /// `DOCULENS_EXPORT_OUT` so the deliverables can be opened without the app:
+    /// `DOCULENS_EXPORT_OUT=/some/dir cargo test -p doculens-core --lib -- --ignored gen_export_samples`
+    #[test]
+    #[ignore]
+    fn gen_export_samples() {
+        let out = PathBuf::from(std::env::var_os("DOCULENS_EXPORT_OUT").expect("set DOCULENS_EXPORT_OUT"));
+        std::fs::create_dir_all(&out).unwrap();
+        let w = world();
+        let one = Scope { doc_ids: vec!["r1".into()], ..Default::default() };
+        let samples: Vec<(ExportFormat, ExportTarget, &str, Scope, Vec<ExportInclude>)> = vec![
+            (ExportFormat::Xlsx, ExportTarget::Fields, "exports/sample_fields.xlsx", Scope::default(), vec![]),
+            (
+                ExportFormat::Xlsx,
+                ExportTarget::Fields,
+                "exports/sample_fields_with_status.xlsx",
+                Scope::default(),
+                vec![ExportInclude::Status, ExportInclude::Confidence, ExportInclude::Evidence],
+            ),
+            (ExportFormat::Csv, ExportTarget::Fields, "exports/sample_fields.csv", Scope::default(), vec![]),
+            (ExportFormat::Jsonl, ExportTarget::Fields, "exports/sample_fields.jsonl", Scope::default(), vec![]),
+            (ExportFormat::Md, ExportTarget::Fields, "exports/sample_fields.md", Scope::default(), vec![]),
+            (ExportFormat::Xlsx, ExportTarget::Table, "exports/sample_tables.xlsx", one.clone(), vec![]),
+            (ExportFormat::Md, ExportTarget::Text, "exports/sample_text.md", Scope::default(), vec![]),
+            (ExportFormat::PdfSearchable, ExportTarget::Fields, "exports/sample_searchable.pdf", one, vec![]),
+        ];
+        for (format, target, path, scope, include) in samples {
+            let r = ExportRequest { scope, include, overwrite: true, ..req(format, target, path) };
+            let res = export(&w.db, &w.paths, &r, None).unwrap();
+            let mut files = vec![res.path.clone()];
+            files.extend(res.extra_files.iter().cloned());
+            for rel in files {
+                let src = from_rel_path(&w.paths.root, &rel);
+                if src.is_file() {
+                    std::fs::copy(&src, out.join(Path::new(&rel).file_name().unwrap())).unwrap();
+                }
+            }
+            eprintln!("{} → {} documents, {} rows, skipped {:?}", res.path, res.documents, res.rows, res.skipped);
+        }
+    }
+
     #[test]
     fn helpers() {
         assert_eq!(jpeg_info(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 17, 8, 1, 44, 0, 200, 3]), Some((200, 300, 3)));
