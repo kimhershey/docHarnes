@@ -41,8 +41,10 @@ import {
   type MockDoc,
   type WorkerOutcome,
 } from "./mock-backend";
+import * as mg from "./mock-generate";
 import { mockKnowledge } from "./mock-knowledge";
 import * as pl from "./mock-pipeline";
+import * as mp from "./mock-projects";
 import {
   DEFAULT_NAME_TEMPLATE,
   EVENTS,
@@ -55,7 +57,13 @@ import {
   type AggregateRequest,
   type AggregateResult,
   type Answer,
+  type AnswerRequest,
   type ApplyReport,
+  type DraftRequest,
+  type OutputFormat,
+  type ProjectSummary,
+  type RetentionTarget,
+  type TemplateKind,
   type DateRange,
   type DocTypeInfo,
   type DocTypeSummary,
@@ -202,7 +210,7 @@ function messageOf(e: unknown): string {
 // Plans: op helpers (planner/mod.rs)
 // ---------------------------------------------------------------------------
 
-const UI_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["define_schema", "set_model", "set_profile", "set_theme", "set_language", "set_setting", "open", "job", "engine", "help", "clarify", "noop", "reindex", "set_inbox_watch"]);
+const UI_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["define_schema", "set_model", "set_profile", "set_theme", "set_language", "set_setting", "open", "job", "engine", "help", "clarify", "noop", "reindex", "set_inbox_watch", "register_form", "set_retention"]);
 
 /** Ops the UI / shell performs itself (`OpKind::runs_in_ui`). */
 export function runsInUi(kind: OpKind): boolean {
@@ -220,6 +228,13 @@ export function needsConfirmation(op: Op): boolean {
     case "undo":
     case "redo":
     case "define_schema":
+      return true;
+    // Model-generated documents, rule grids, form field grids and retention changes are shown first (P6).
+    case "draft_document":
+    case "request_supplement":
+    case "define_rule":
+    case "register_form":
+    case "set_retention":
       return true;
     case "job":
       return op.action === "cancel";
@@ -573,6 +588,185 @@ function modelId(t: Text, ctx: PlanContext): string | null {
 }
 
 /** Several settings in one sentence ("다크 테마로 바꾸고 모델을 9B로 올려"). */
+// -- P6 rules: document generation, projects, rules, retention (rules.rs additions) --
+
+const DRAFT_VERBS = ["만들어", "작성", "써줘", "써 줘", "초안", "생성", "뽑아줘", "draft", "write", "create", "make"];
+const DRAFT_TEMPLATES: [string, TemplateKind][] = [
+  ["보완요청서", "supplement_request"],
+  ["견적서", "quotation"],
+  ["견적", "quotation"],
+  ["공문", "official_letter"],
+  ["협조문", "official_letter"],
+  ["안내문", "official_letter"],
+  ["거래명세서", "transaction_statement"],
+  ["명세서", "transaction_statement"],
+  ["계약서", "contract"],
+  ["보고서", "report"],
+  ["정산서", "report"],
+  ["회의록", "minutes"],
+  ["quotation", "quotation"],
+  ["contract", "contract"],
+  ["report", "report"],
+  ["minutes", "minutes"],
+  ["letter", "official_letter"],
+];
+const PROJECT_TEMPLATE_WORDS: [string, string][] = [
+  ["인증심사", "builtin-certification_review"],
+  ["인증", "builtin-certification_review"],
+  ["거래처등록", "builtin-vendor_onboarding"],
+  ["거래처", "builtin-vendor_onboarding"],
+  ["구매정산", "builtin-purchase_settlement"],
+  ["정산", "builtin-purchase_settlement"],
+  ["certification", "builtin-certification_review"],
+  ["vendor", "builtin-vendor_onboarding"],
+  ["settlement", "builtin-purchase_settlement"],
+];
+
+function outputOf(t: Text): OutputFormat | null {
+  if (has(t, ["pdf"])) return "pdf";
+  if (has(t, ["docx", "워드", "word"])) return "docx";
+  if (has(t, ["마크다운", "markdown", ".md"])) return "md";
+  if (has(t, ["hwpx", "한글파일", "한글로"])) return "hwpx";
+  return null;
+}
+
+/** The project a sentence names ("인증 심사 건", a project name or 접수번호), else null (= the one open in the UI). */
+function projectRefOf(t: Text, ctx: PlanContext): string | null {
+  const named = ctx.projects.filter((p) => compact(p.name).length >= 2 && t.compact.includes(compact(p.name))).sort((a, b) => b.name.length - a.name.length)[0];
+  return named?.id ?? null;
+}
+
+/** "견적서 만들어줘 …", "이 계약서 내용으로 계약서 다시 써줘", "경비 보고서 초안 작성" → draft_document (§3.13). */
+function ruleDraftDocument(t: Text, ctx: PlanContext): Plan | null {
+  if (has(t, ["스키마", "프로젝트", "규칙", "schema", "project", "rule", "양식으로등록", "양식등록", "폴더", "folder"])) return null;
+  if (!has(t, DRAFT_VERBS)) return null;
+  const form = ctx.schemas.filter((s) => compact(s.name).length >= 2 && t.compact.includes(compact(s.name))).sort((a, b) => b.name.length - a.name.length)[0] ?? null;
+  const tpl = DRAFT_TEMPLATES.find(([w]) => t.compact.includes(compact(w))) ?? null;
+  if (!form && !tpl && !has(t, ["문서", "document"])) return null;
+  const sources = has(t, SELECTION_WORDS) ? selectionIds(ctx) : [];
+  const op: Op = { op: "draft_document", form_ref: form?.name ?? tpl?.[1] ?? null, content: t.raw.trim(), sources, output: outputOf(t), tone: has(t, ["개조식", "간결"]) ? "concise" : has(t, ["쉽게", "평이"]) ? "plain" : null, length: has(t, ["짧게", "간단히", "한쪽", "short"]) ? "short" : has(t, ["길게", "자세히", "long"]) ? "long" : null };
+  const name = form?.name ?? (tpl ? mg.templateInfo(tpl[1])[t.ko ? "name_ko" : "name_en"] : t.ko ? "문서" : "document");
+  return single(op, 0.86, tr(t.ko, `${name} 초안을 만듭니다 (미리보기 후 저장)`, `Draft a ${name} (preview, then save)`));
+}
+
+/** "인증 심사 프로젝트 만들어", "프로젝트에 추가" (§3.15). */
+function ruleProject(t: Text, ctx: PlanContext): Plan | null {
+  if (!has(t, ["프로젝트", "project", "케이스"])) return null;
+  if (has(t, ["추가", "넣어", "넣기", "포함", "add", "put"])) {
+    const ref = projectRefOf(t, ctx);
+    const ids = selectionIds(ctx);
+    const op: Op = { op: "add_to_project", project: ref, doc_ids: ids };
+    const name = ref ? ctx.projects.find((p) => p.id === ref)?.name : null;
+    return single(op, 0.84, tr(t.ko, `${name ? `'${name}' ` : ""}프로젝트에 문서 ${ids.length}건을 추가합니다`, `Add ${ids.length} documents to the project${name ? ` '${name}'` : ""}`), ids.length > 0 ? { ...emptyScope(), doc_ids: ids } : emptyScope());
+  }
+  if (!has(t, ["만들어", "생성", "새", "추가해", "create", "new", "make"])) return null;
+  const quoted = t.raw.match(/[“"']([^”"']{1,60})[”"']/u)?.[1] ?? null;
+  const before = t.raw.split(/프로젝트|project|케이스/iu)[0]?.replace(/(새로운|새|신규|new)\s*/giu, "").replace(/(이라는|이름의|라는|이름으로|으로|로|이란)\s*$/u, "").trim() ?? "";
+  const tplWord = PROJECT_TEMPLATE_WORDS.find(([w]) => t.compact.includes(compact(w)));
+  const tpl = tplWord ? mp.resolveTemplateRef(tplWord[1]) : null;
+  const name = quoted ?? (before || (tpl ? (t.ko ? tpl.name_ko : tpl.name_en) : "") || tr(t.ko, `새 프로젝트 ${todayIso()}`, `New project ${todayIso()}`));
+  const op: Op = { op: "create_project", name, template: tpl?.id ?? null, doc_types_required: [] };
+  const ids = has(t, SELECTION_WORDS) ? selectionIds(ctx) : [];
+  return single(op, 0.85, tr(t.ko, `프로젝트 '${name}'을(를) 만듭니다${tpl ? ` (템플릿: ${tpl.name_ko})` : ""}`, `Create the project '${name}'${tpl ? ` (template: ${tpl.name_en})` : ""}`), ids.length > 0 ? { ...emptyScope(), doc_ids: ids } : emptyScope());
+}
+
+/** "정합성 검사해", "규칙 검증 실행" → check_consistency. */
+function ruleCheckConsistency(t: Text, ctx: PlanContext): Plan | null {
+  if (!has(t, ["정합성", "일관성", "규칙검사", "규칙검증", "consistency"])) return null;
+  if (!has(t, ["검사", "확인", "검증", "실행", "돌려", "check", "run", "verify"])) return null;
+  const ref = projectRefOf(t, ctx);
+  const name = ref ? ctx.projects.find((p) => p.id === ref)?.name : null;
+  return single({ op: "check_consistency", project: ref, rules: [] }, 0.88, tr(t.ko, `${name ? `'${name}' ` : ""}프로젝트의 정합성 규칙을 실행합니다`, `Run the consistency rules${name ? ` of '${name}'` : ""}`));
+}
+
+/** "보완요청서 만들어" → request_supplement (the findings of the last check). */
+function ruleRequestSupplement(t: Text, ctx: PlanContext): Plan | null {
+  if (!has(t, ["보완요청", "보완 요청", "supplement"])) return null;
+  if (!has(t, DRAFT_VERBS) && !has(t, ["요청해", "보내", "request"])) return null;
+  const ref = projectRefOf(t, ctx);
+  return single({ op: "request_supplement", project: ref, findings: [], output: outputOf(t) }, 0.86, tr(t.ko, "불일치·누락 항목으로 보완요청서 초안을 만듭니다 (미리보기 후 저장)", "Draft a supplement request from the mismatches / missing documents (preview, then save)"));
+}
+
+const RULE_MARKERS = ["같아야", "일치해야", "동일해야", "달라야", "다르게", "필수", "있어야", "이상이어야", "이하여야", "이내여야", "이내로", "오차", "mustequal", "mustmatch", "mustbe", "shouldequal", "shouldmatch", "mustbepresent", "isrequired"];
+
+/** "세금계산서의 공급자 사업자번호는 사업자등록증 번호와 같아야 해" → define_rule (confirmed in the rule grid). */
+function ruleDefineRule(t: Text, ctx: PlanContext): Plan | null {
+  if (!has(t, RULE_MARKERS)) return null;
+  if (has(t, ["추출", "분류", "내보내", "검색", "찾아", "요약", "삭제", "옮겨"])) return null;
+  let parsed: ReturnType<typeof mp.parseRule> | null = null;
+  try {
+    parsed = mp.parseRule(t.raw);
+  } catch {
+    return null;
+  }
+  if (!parsed.rule.left.doc_type && parsed.confidence < 0.5) return null;
+  const ref = projectRefOf(t, ctx);
+  return single({ op: "define_rule", project: ref, template: null, description: t.raw.trim() }, 0.82, tr(t.ko, "문장을 정합성 규칙으로 변환합니다 (규칙 그리드에서 확인 후 저장)", "Convert the sentence into a consistency rule (confirm in the rule grid, then save)"));
+}
+
+const RETENTION_WORDS: [string, RetentionTarget][] = [
+  ["추출", "extractions"],
+  ["필드", "extractions"],
+  ["저널", "journal"],
+  ["되돌리기", "journal"],
+  ["파일조작", "journal"],
+  ["대화", "chats"],
+  ["채팅", "chats"],
+  ["답변", "chats"],
+  ["임시", "temp"],
+  ["마스킹전", "temp"],
+  ["로그", "logs"],
+  ["log", "logs"],
+  ["문서", "documents"],
+  ["원본", "documents"],
+  ["journal", "journal"],
+  ["chat", "chats"],
+  ["temp", "temp"],
+  ["extraction", "extractions"],
+  ["document", "documents"],
+];
+
+/** "대화 기록 30일만 보관", "저널 무기한 보존" → set_retention (shorter periods are confirmed first). */
+function ruleSetRetention(t: Text): Plan | null {
+  if (!has(t, ["보존", "보관", "파기", "retention", "keep", "purge", "retain"])) return null;
+  const item = RETENTION_WORDS.find(([w]) => t.compact.includes(compact(w)))?.[1];
+  if (!item) return null;
+  const forever = has(t, ["무기한", "영구", "forever", "indefinitely", "never"]);
+  const m = t.raw.match(/(\d+)\s*(일|days?|d)/iu);
+  if (!forever && !m) return null;
+  const days = forever ? -1 : Number(m![1]);
+  const label = tr(t.ko, { documents: "원본 문서", extractions: "추출 결과", logs: "로그", journal: "파일 조작 저널", chats: "대화 기록", temp: "임시 데이터" }[item], item);
+  return single({ op: "set_retention", item, days }, 0.85, tr(t.ko, `${label} 보존 기간을 ${days < 0 ? "무기한" : `${days}일`}로 설정합니다`, `Keep ${label} ${days < 0 ? "forever" : `for ${days} days`}`));
+}
+
+/** "이 문서 양식으로 등록" → register_form (the form dialog opens on the document). */
+function ruleRegisterForm(t: Text, ctx: PlanContext): Plan | null {
+  if (!has(t, ["양식으로등록", "양식등록", "양식으로저장", "registerform", "asaform", "registerasform"])) return null;
+  const ids = selectionIds(ctx);
+  const named = t.raw
+    .split(/\s+/)
+    .map((w) => w.replace(/^["'“”‘’]+|["'“”‘’]+$/g, ""))
+    .find((w) => w.includes(".") && w.length > 3);
+  return single({ op: "register_form", doc_ref: named ?? ids[0] ?? null, name: null, doc_type_slug: null }, 0.84, tr(t.ko, "문서를 양식으로 등록합니다 (필드 그리드 확인)", "Register the document as a form (field grid confirmation)"));
+}
+
+/** "이 두 문서 비교해줘" → compare (2–5 selected documents). */
+function ruleCompare(t: Text, ctx: PlanContext): Plan | null {
+  if (!has(t, ["비교", "compare", "차이점", "다른점"])) return null;
+  if (has(t, ["요약", "summar"]) && !has(t, ["비교"])) return null;
+  const ids = selectionIds(ctx);
+  if (ids.length < 2) return clarify(tr(t.ko, "비교할 문서를 라이브러리에서 2~5개 선택한 뒤 다시 말씀해 주세요.", "Select 2–5 documents in the library, then ask again."), 0.5);
+  const aspects = t.raw.match(/(금액|기간|조건|당사자|날짜|amount|period|terms|parties|dates?)/giu) ?? [];
+  return single({ op: "compare", doc_ids: ids.slice(0, 5), aspects: [...new Set(aspects.map((a) => a.toLowerCase()))] }, 0.84, tr(t.ko, `문서 ${Math.min(5, ids.length)}건을 비교합니다`, `Compare ${Math.min(5, ids.length)} documents`), { ...emptyScope(), doc_ids: ids.slice(0, 5) });
+}
+
+/** "이 조항 설명해줘" → explain (grounded explanation of the selection / question, §3.14.2). */
+function ruleExplain(t: Text, ctx: PlanContext): Plan | null {
+  if (!has(t, ["설명해", "설명 해", "풀어서", "explain"])) return null;
+  const onDocument = has(t, SELECTION_WORDS) || ctx.current_document !== null;
+  return single({ op: "explain", selection: null, question: t.raw.trim(), scope: onDocument ? "document" : "kb", allow_general_knowledge: null }, 0.8, tr(t.ko, "지식 베이스·문서 근거로 설명합니다", "Explain with evidence from the knowledge base / documents"), onDocument ? { ...emptyScope(), doc_ids: selectionIds(ctx) } : emptyScope());
+}
+
 function ruleSettingsCombo(t: Text, ctx: PlanContext): Plan | null {
   const ops: Op[] = [];
   for (const clause of splitClauses(t.raw)) {
@@ -955,8 +1149,17 @@ export function rulesPlan(text: string, ctx: PlanContext): Plan | null {
     ruleUndoRedo(t) ??
     ruleJobControl(t) ??
     ruleEngine(t) ??
+    ruleSetRetention(t) ??
     ruleSettingsCombo(t, ctx) ??
     ruleDefineSchema(t, ctx) ??
+    ruleRegisterForm(t, ctx) ??
+    ruleProject(t, ctx) ??
+    ruleCheckConsistency(t, ctx) ??
+    ruleRequestSupplement(t, ctx) ??
+    ruleDefineRule(t, ctx) ??
+    ruleDraftDocument(t, ctx) ??
+    ruleCompare(t, ctx) ??
+    ruleExplain(t, ctx) ??
     ruleExport(t, ctx) ??
     ruleAggregate(t, ctx) ??
     ruleInbox(t, ctx) ??
@@ -1075,6 +1278,37 @@ function checkSetting(op: Extract<Op, { op: "set_setting" }>, path: string, issu
 }
 
 /** Validates and normalises a plan in place (`validate::validate`). Blocking issues mean the plan must not run. */
+/** `project` reference (id / name / 접수번호) → project id; null falls back to the open project or the only one. */
+function resolveProjectId(ref: string | null | undefined, ctx: PlanContext): string | null {
+  if (ref && ref.trim()) {
+    const key = compact(ref);
+    const p: ProjectSummary | undefined = ctx.projects.find((x) => x.id === ref) ?? ctx.projects.find((x) => compact(x.name) === key) ?? ctx.projects.find((x) => compact(x.name).includes(key));
+    return p?.id ?? null;
+  }
+  if (ctx.current_project && ctx.projects.some((x) => x.id === ctx.current_project)) return ctx.current_project;
+  return ctx.projects.length === 1 ? (ctx.projects[0]?.id ?? null) : null;
+}
+
+/** The draft request of a `draft_document` step: sources from ids / the selection / the plan scope. */
+function draftRequestOf(op: Extract<Op, { op: "draft_document" }>, plan: Plan, ctx: PlanContext): DraftRequest {
+  const ids = (op.sources ?? []).length > 0 ? (op.sources ?? []) : (plan.scope.doc_ids ?? []);
+  const known = new Set(wsDocs().map((d) => d.id));
+  return {
+    form_ref: op.form_ref ?? null,
+    format_description: op.format_description ?? null,
+    content: op.content,
+    sources: ids.filter((id) => known.has(id)).map((id) => ({ kind: "document", doc_id: id })),
+    output: op.output ?? "hwpx",
+    tone: op.tone ?? "formal",
+    length: op.length ?? "medium",
+    language: ctx.language,
+    use_knowledge: true,
+    feedback: null,
+    previous: null,
+    excluded_sources: [],
+  };
+}
+
 export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | null): PlanIssue[] {
   const issues: PlanIssue[] = [];
   plan.confidence = Number.isFinite(plan.confidence) ? Math.min(1, Math.max(0, plan.confidence)) : 0;
@@ -1290,6 +1524,68 @@ export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | nul
         op.question = Array.from(op.question.trim()).slice(0, 300).join("");
         if (!op.question) issues.push(issue(at("question"), "question_empty", "clarify needs a question"));
         break;
+      // -- P6 ops --
+      case "draft_document": {
+        op.content = Array.from(op.content.trim()).slice(0, 4000).join("");
+        if (!op.content) issues.push(issue(at("content"), "content_empty", "draft_document needs content"));
+        if (op.form_ref != null && !op.form_ref.trim()) op.form_ref = null;
+        if (op.format_description != null && !op.format_description.trim()) op.format_description = null;
+        const sources: string[] = [];
+        for (const src of op.sources ?? []) {
+          const v = src.trim();
+          if (!v) continue;
+          if (v === "selection") {
+            if (ctx.selected_doc_ids.length > 0) sources.push(...ctx.selected_doc_ids);
+            else issues.push(issue(at("sources"), "selection_empty", "no documents are selected; 'selection' ignored", false));
+          } else sources.push(v);
+        }
+        op.sources = [...new Set(sources)];
+        if (op.output != null && !["hwpx", "docx", "pdf", "md"].includes(op.output)) issues.push(issue(at("output"), "enum_invalid", `unknown output '${String(op.output)}'`));
+        if (op.tone != null && !["formal", "plain", "concise"].includes(op.tone)) issues.push(issue(at("tone"), "enum_invalid", `unknown tone '${String(op.tone)}'`));
+        if (op.length != null && !["short", "medium", "long"].includes(op.length)) issues.push(issue(at("length"), "enum_invalid", `unknown length '${String(op.length)}'`));
+        break;
+      }
+      case "register_form":
+        if (op.doc_ref != null && !op.doc_ref.trim()) op.doc_ref = null;
+        if (op.doc_ref == null && ctx.current_document == null && ctx.selected_doc_ids.length === 0) issues.push(issue(at("doc_ref"), "doc_ref_required", "register_form needs a document (open or select one)"));
+        break;
+      case "explain":
+        if (!(op.selection ?? "").trim() && !(op.question ?? "").trim()) issues.push(issue(at("question"), "question_empty", "explain needs a selection or a question"));
+        if (op.scope != null && !["kb", "collection", "project", "document"].includes(op.scope)) issues.push(issue(at("scope"), "enum_invalid", `unknown scope '${String(op.scope)}'`));
+        break;
+      case "compare":
+        op.doc_ids = [...new Set((op.doc_ids ?? []).map((d) => d.trim()).filter(Boolean))];
+        if (op.doc_ids.length < 2 || op.doc_ids.length > 5) issues.push(issue(at("doc_ids"), "compare_doc_count", "compare needs 2 to 5 documents"));
+        break;
+      case "create_project":
+        op.name = Array.from(op.name.trim()).slice(0, 120).join("");
+        if (!op.name) issues.push(issue(at("name"), "name_required", "create_project needs a name"));
+        if (op.template != null) {
+          const tpl = mp.resolveTemplateRef(op.template);
+          if (tpl) op.template = tpl.id;
+          else issues.push(issue(at("template"), "template_unknown", `unknown project template '${op.template}'; known: ${mp.templates().map((x) => x.name_ko).join(", ")}`));
+        }
+        break;
+      case "add_to_project":
+      case "define_rule":
+      case "check_consistency":
+      case "request_supplement": {
+        if (op.op === "define_rule") {
+          op.description = Array.from(op.description.trim()).slice(0, 1000).join("");
+          if (!op.description) issues.push(issue(at("description"), "description_required", "define_rule needs a description"));
+        }
+        if (op.op === "request_supplement" && op.output != null && !["hwpx", "docx", "pdf", "md"].includes(op.output)) issues.push(issue(at("output"), "enum_invalid", `unknown output '${String(op.output)}'`));
+        const needsProject = !(op.op === "define_rule" && op.template);
+        const resolved = resolveProjectId(op.project, ctx);
+        if (resolved) op.project = resolved;
+        else if (op.project) issues.push(issue(at("project"), "project_unknown", `unknown project '${op.project}'; known: ${ctx.projects.map((x) => x.name).join(", ") || "(none)"}`));
+        else if (needsProject) issues.push(issue(at("project"), "project_required", ctx.projects.length === 0 ? "no project exists yet; create one first" : "which project? open one or name it"));
+        break;
+      }
+      case "set_retention":
+        if (!["documents", "extractions", "logs", "journal", "chats", "temp"].includes(op.item)) issues.push(issue(at("item"), "enum_invalid", `unknown retention item '${String(op.item)}'`));
+        if (!Number.isInteger(op.days) || op.days < -1) issues.push(issue(at("days"), "range", "days must be an integer ≥ -1 (-1 = keep forever, 0 = immediately)"));
+        break;
       default:
         break;
     }
@@ -1349,6 +1645,8 @@ export function buildContext(ui: UiPlanContext = {}): PlanContext {
     current_page: ui.current_page ?? null,
     document_count: docs.length,
     model_ids: listModelIds(),
+    projects: mp.projectSummaries(),
+    current_project: ui.current_project ?? null,
   };
 }
 
@@ -2556,6 +2854,65 @@ export function planPreview(plan: Plan, ctx: PlanContext): PlanPreview {
         summary = ko ? "신규 0개" : "0 new files";
         payload = { new: 0 };
         break;
+      // -- P6 ops --
+      case "draft_document": {
+        const req = draftRequestOf(op, plan, ctx);
+        const template = mg.resolveTemplate(req);
+        const name = template.kind === "form" ? (pl.getSchema(template.schema_id)?.name ?? "form") : mg.templateInfo(template.template)[ko ? "name_ko" : "name_en"];
+        summary = ko ? `${name} · ${req.output.toUpperCase()} · 인용 문서 ${req.sources.length}건 · 미리보기 후 저장` : `${name} · ${req.output.toUpperCase()} · ${req.sources.length} quoted documents · preview, then save`;
+        payload = { template, template_name: name, output: req.output, sources: req.sources.length };
+        confirm = true;
+        break;
+      }
+      case "request_supplement": {
+        const project = op.project ? mp.resolveProjectRef(op.project, ctx.current_project) : mp.resolveProjectRef(null, ctx.current_project);
+        if (!project) summary = tr(ko, "프로젝트를 찾을 수 없습니다", "Project not found");
+        else {
+          const n = project.last_mismatch + project.missing_count;
+          summary = ko ? `${project.name} · 불일치·누락 ${n}건 → 보완요청서 (${(op.output ?? "hwpx").toUpperCase()})` : `${project.name} · ${n} findings → supplement request (${(op.output ?? "hwpx").toUpperCase()})`;
+          payload = { project_id: project.id, project_name: project.name, findings: n, output: op.output ?? "hwpx" };
+        }
+        confirm = true;
+        break;
+      }
+      case "define_rule": {
+        try {
+          const rd = mp.parseRule(op.description);
+          payload = rd;
+          summary = rd.issues.length > 0 ? (ko ? `규칙 초안 (확인 필요 ${rd.issues.length}건)` : `rule draft (${rd.issues.length} to confirm)`) : ko ? "규칙 초안 (그리드에서 확인)" : "rule draft (confirm in the grid)";
+        } catch (e) {
+          summary = messageOf(e);
+        }
+        confirm = true;
+        break;
+      }
+      case "create_project": {
+        const tpl = op.template ? mp.resolveTemplateRef(op.template) : null;
+        summary = ko ? `'${op.name}'${tpl ? ` · 템플릿 ${tpl.name_ko}` : ""}${docs.length > 0 ? ` · 문서 ${docs.length}건` : ""}` : `'${op.name}'${tpl ? ` · template ${tpl.name_en}` : ""}${docs.length > 0 ? ` · ${docs.length} documents` : ""}`;
+        payload = { name: op.name, template: tpl?.id ?? null, documents: docs.length };
+        break;
+      }
+      case "add_to_project": {
+        const project = mp.resolveProjectRef(op.project, ctx.current_project);
+        const n = (op.doc_ids ?? []).length > 0 ? (op.doc_ids ?? []).length : docs.length;
+        summary = project ? (ko ? `${project.name} ← 문서 ${n}건` : `${project.name} ← ${n} documents`) : tr(ko, "프로젝트를 찾을 수 없습니다", "Project not found");
+        payload = { project_id: project?.id ?? null, documents: n };
+        break;
+      }
+      case "check_consistency": {
+        const project = mp.resolveProjectRef(op.project, ctx.current_project);
+        const detailOf = project ? (mp.projectDetail(project.id) ?? null) : null;
+        const n = (op.rules ?? []).length > 0 ? (op.rules ?? []).length : (detailOf?.rules.filter((r) => r.enabled).length ?? 0);
+        summary = project ? (ko ? `${project.name} · 규칙 ${n}개 · 문서 ${project.document_count}건` : `${project.name} · ${n} rules · ${project.document_count} documents`) : tr(ko, "프로젝트를 찾을 수 없습니다", "Project not found");
+        payload = { project_id: project?.id ?? null, rules: n };
+        break;
+      }
+      case "compare":
+        summary = ko ? `문서 ${op.doc_ids.length}건 비교${(op.aspects ?? []).length > 0 ? ` · ${(op.aspects ?? []).join(", ")}` : ""}` : `compare ${op.doc_ids.length} documents${(op.aspects ?? []).length > 0 ? ` · ${(op.aspects ?? []).join(", ")}` : ""}`;
+        break;
+      case "explain":
+        summary = (op.question ?? op.selection ?? "").slice(0, 80);
+        break;
       default:
         confirm = needsConfirmation(op);
         break;
@@ -2791,6 +3148,63 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
       out.batches.push(r.batch_id);
       return { summary: ko ? `${r.restored}건 다시 실행` : `${r.restored} redone`, payload: r };
     }
+    // -- P6 ops --
+    case "draft_document": {
+      const req = draftRequestOf(op, plan, ctx);
+      const outcome = await mg.draftNow(req, ctl, (stage, frac) => progress(stage, Math.round(frac * 100), 100, ""));
+      return { summary: ko ? `초안 '${outcome.draft.title}' 생성 — 문서 생성 화면에서 확인·저장` : `Draft '${outcome.draft.title}' ready — review and save it on the 문서 생성 screen`, payload: outcome.draft };
+    }
+    case "explain": {
+      const docIds = op.scope === "document" && ctx.current_document ? [ctx.current_document] : (plan.scope.doc_ids ?? []);
+      const req: AnswerRequest = { question: (op.question ?? op.selection ?? "").trim(), kind: "explain", selection: op.selection ?? null, document_id: docIds[0] ?? null, scope: docIds.length > 0 ? { documents: docIds } : { latest_only: true }, allow_general: op.allow_general_knowledge ?? false, save: true };
+      const answer = (await mockKnowledge("knowledge_answer", { req, requestId: `plan-${Date.now()}` })) as Answer;
+      return { summary: answer.no_evidence ? tr(ko, "근거 없음", "No evidence") : answer.text.split(/(?<=[.다!?])\s/)[0]?.slice(0, 120) ?? "", payload: answer };
+    }
+    case "compare": {
+      const ids = op.doc_ids;
+      const req: AnswerRequest = { question: (op.aspects ?? []).join(", "), kind: "compare", document_id: ids[0] ?? null, compare_document_id: ids[1] ?? null, scope: { documents: ids }, save: true };
+      const answer = (await mockKnowledge("knowledge_answer", { req, requestId: `plan-${Date.now()}` })) as Answer;
+      return { summary: ko ? `문서 ${ids.length}건 비교` : `Compared ${ids.length} documents`, payload: answer };
+    }
+    case "create_project": {
+      const tpl = op.template ? mp.resolveTemplateRef(op.template) : null;
+      const project = mp.createProject({ name: op.name, template_id: tpl?.id ?? null });
+      const ids = plan.scope.doc_ids ?? [];
+      const payload = ids.length > 0 ? mp.addDocuments(project.id, ids).project : project;
+      return { summary: ko ? `프로젝트 '${payload.name}' 생성${ids.length > 0 ? ` · 문서 ${ids.length}건` : ""}` : `Created project '${payload.name}'${ids.length > 0 ? ` · ${ids.length} documents` : ""}`, payload };
+    }
+    case "add_to_project": {
+      const project = mp.resolveProjectRef(op.project, ctx.current_project);
+      if (!project) throw err("invalid", "project_not_found");
+      const ids = (op.doc_ids ?? []).length > 0 ? (op.doc_ids ?? []) : idsOf(workingSet(plan, imported));
+      if (ids.length === 0) throw err("invalid", "no_documents");
+      const detailOf = mp.addDocuments(project.id, ids);
+      return { summary: ko ? `'${detailOf.project.name}'에 문서 ${ids.length}건 추가` : `Added ${ids.length} documents to '${detailOf.project.name}'`, payload: detailOf };
+    }
+    case "define_rule": {
+      await pace(ctl, 200);
+      const rd = mp.parseRule(op.description);
+      const project = mp.resolveProjectRef(op.project, ctx.current_project);
+      const complete = !!rd.rule.left.doc_type && !!rd.rule.left.field && rd.unresolved.length === 0 && (rd.rule.op === "present" || rd.rule.right !== null);
+      if (project && complete) {
+        const saved = mp.saveRule(project.id, rd.rule);
+        return { summary: ko ? `규칙 저장: ${saved.description}` : `Rule saved: ${saved.description}`, payload: rd };
+      }
+      return { summary: ko ? `규칙 초안 — 확인 필요 (${rd.issues[0] ?? "프로젝트 없음"})` : `Rule draft — needs confirmation (${rd.issues[0] ?? "no project"})`, payload: rd };
+    }
+    case "check_consistency": {
+      const project = mp.resolveProjectRef(op.project, ctx.current_project);
+      if (!project) throw err("invalid", "project_not_found");
+      const run = mp.check(project.id, op.rules ?? []);
+      return { summary: ko ? `${project.name}: 통과 ${run.pass} · 불일치 ${run.mismatch} · 판단불가 ${run.undetermined} · 누락 ${run.missing}` : `${project.name}: pass ${run.pass} · mismatch ${run.mismatch} · undetermined ${run.undetermined} · missing ${run.missing}`, payload: run };
+    }
+    case "request_supplement": {
+      const project = mp.resolveProjectRef(op.project, ctx.current_project);
+      if (!project) throw err("invalid", "project_not_found");
+      const { req, draft } = mp.supplementRequest(project.id, op.findings ?? [], op.output ?? null);
+      const outcome = await mg.draftNow(req, ctl, (stage, frac) => progress(stage, Math.round(frac * 100), 100, ""), draft);
+      return { summary: ko ? `보완요청서 초안 '${outcome.draft.title}' — 문서 생성 화면에서 확인·저장` : `Supplement request '${outcome.draft.title}' ready — review and save it on the 문서 생성 screen`, payload: outcome.draft };
+    }
     default:
       // UI-side ops never reach here (`runsInUi`).
       return { summary: "", payload: null };
@@ -2840,7 +3254,7 @@ export async function runPlan(plan: Plan, ctx: PlanContext, ctl: JobControl | nu
 
 /** Ops that run inline (quick, no model, no files) — `planner_bridge::inline_only`. */
 export function inlineOnly(plan: Plan): boolean {
-  return plan.operations.every((op) => runsInUi(op.op) || ["search", "aggregate", "tag", "set_doc_type", "validate"].includes(op.op) || (op.op === "review" && (op.action === "approve" || op.action === "reject")));
+  return plan.operations.every((op) => runsInUi(op.op) || ["search", "aggregate", "tag", "set_doc_type", "validate", "create_project", "add_to_project", "check_consistency"].includes(op.op) || (op.op === "review" && (op.action === "approve" || op.action === "reject")));
 }
 
 /** Emits change events for what an execution touched (`planner_bridge::after_execution`). */
@@ -2939,6 +3353,10 @@ export async function runJobSpec(job: Job, spec: JobSpec, ctl: JobControl): Prom
       return undoWorker(spec.batch_id, false);
     case "redo":
       return undoWorker(null, true);
+    case "draft":
+      return mg.draftWorker(job, spec, ctl);
+    case "maintenance":
+      return mp.maintenanceWorker(job, ctl);
   }
 }
 

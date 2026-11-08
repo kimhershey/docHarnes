@@ -1,4 +1,4 @@
-import { ExternalLink, FolderOpen, Trash2 } from "lucide-react";
+import { ExternalLink, FolderOpen, Play, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -14,12 +14,13 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { isTauri, openExternal, revealPath } from "@/lib/ipc";
-import { useAppInfo, useRegistry } from "@/lib/queries";
+import { invalidateMaintenance, useAppInfo, useMaintenanceStatus, useRegistry } from "@/lib/queries";
 import { queryClient, queryKeys } from "@/lib/query-client";
-import { LANGUAGES, RETENTION_DAY_ITEMS, THEMES, type AutoProcessingLevel, type ReducedMotion, type RetentionPolicy, AUTO_PROCESSING_LEVELS } from "@/lib/types";
+import { LANGUAGES, RETENTION_DAY_ITEMS, THEMES, isJobFinished, type AutoProcessingLevel, type ReducedMotion, type RetentionPolicy, AUTO_PROCESSING_LEVELS } from "@/lib/types";
 import { describeError } from "@/lib/errors";
 import { cn, formatDate } from "@/lib/utils";
 import { api } from "@/lib/ipc";
+import { useJob } from "@/stores/jobs";
 import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -128,6 +129,12 @@ function GeneralTab() {
         </Row>
         <Row label={t("settings.general.sidebar")}>
           <Switch checked={settings.ui.sidebar_collapsed} onCheckedChange={(v) => void update((s) => void (s.ui.sidebar_collapsed = v))} />
+        </Row>
+        <Row label={t("settings.notifications.job_complete")} hint={t("settings.notifications.job_complete_hint")}>
+          <Switch checked={settings.notifications.job_complete} onCheckedChange={(v) => void update((s) => void (s.notifications.job_complete = v))} aria-label={t("settings.notifications.job_complete")} data-testid="settings-notify-job-complete" />
+        </Row>
+        <Row label={t("settings.notifications.prevent_sleep")} hint={t("settings.notifications.prevent_sleep_hint")}>
+          <Switch checked={settings.notifications.prevent_sleep_during_jobs} onCheckedChange={(v) => void update((s) => void (s.notifications.prevent_sleep_during_jobs = v))} aria-label={t("settings.notifications.prevent_sleep")} data-testid="settings-prevent-sleep" />
         </Row>
       </CardContent>
     </Card>
@@ -611,8 +618,7 @@ function PrivacyTab() {
                   <Switch checked={draft.purge_enabled} onCheckedChange={(v) => setDraft({ ...draft, purge_enabled: v })} />
                 </div>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-fg-subtle">{t("settings.privacy.purge_log_empty")}</span>
+              <div className="flex items-center justify-end">
                 <Button onClick={() => void save()} data-testid="retention-save">
                   {t("common.save")}
                 </Button>
@@ -621,7 +627,65 @@ function PrivacyTab() {
           )}
         </CardContent>
       </Card>
+      {workspace && <MaintenanceCard />}
     </div>
+  );
+}
+
+/** P7 retention job: last / next purge run, the last summary and "지금 파기 실행". */
+function MaintenanceCard() {
+  const { t, i18n } = useTranslation();
+  const toast = useUiStore((s) => s.toast);
+  const { data: status } = useMaintenanceStatus();
+  const [jobId, setJobId] = useState<string | null>(null);
+  const job = useJob(jobId);
+  const running = status?.running || (!!job && !isJobFinished(job));
+  useEffect(() => {
+    if (job && isJobFinished(job)) {
+      setJobId(null);
+      invalidateMaintenance();
+      if (job.state === "done") toast(t("settings.privacy.maintenance.done"), "ok");
+      else if (job.state === "failed") toast(describeError({ code: "internal", message: job.error ?? "" }, t), "danger");
+    }
+  }, [job, toast, t]);
+  const run = async () => {
+    try {
+      const { job_id } = await api.maintenanceRunNow();
+      setJobId(job_id);
+      invalidateMaintenance();
+      toast(t("settings.privacy.maintenance.started"), "info");
+    } catch (e) {
+      toast(describeError(e, t), "danger");
+    }
+  };
+  const p = status?.last_summary?.purged;
+  return (
+    <Card data-testid="maintenance-card">
+      <CardHeader>
+        <CardTitle>{t("settings.privacy.maintenance.title")}</CardTitle>
+        <CardDescription>{t("settings.privacy.maintenance.hint")}</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3 text-sm">
+        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1">
+          <dt className="text-fg-muted">{t("settings.privacy.maintenance.last_run")}</dt>
+          <dd data-testid="maintenance-last-run">{status?.last_run_at ? formatDate(status.last_run_at, i18n.language) : t("settings.privacy.maintenance.never")}</dd>
+          <dt className="text-fg-muted">{t("settings.privacy.maintenance.next_run")}</dt>
+          <dd data-testid="maintenance-next-run">{status?.next_run_at ? formatDate(status.next_run_at, i18n.language) : t("settings.privacy.maintenance.disabled")}</dd>
+        </dl>
+        {p && (
+          <p className="text-xs text-fg-muted" data-testid="maintenance-summary">
+            {t("settings.privacy.maintenance.summary", { journal: p.journal, jobs: p.jobs, answers: p.answers, documents: p.documents, extractions: p.extractions, logs: p.logs, temp: p.temp })}
+          </p>
+        )}
+        {!p && <p className="text-xs text-fg-subtle">{t("settings.privacy.purge_log_empty")}</p>}
+        <div className="flex items-center gap-2" aria-live="polite">
+          <Button size="sm" variant="secondary" onClick={() => void run()} disabled={running} data-testid="maintenance-run">
+            <Play />
+            {running ? t("settings.privacy.maintenance.running") : t("settings.privacy.maintenance.run_now")}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

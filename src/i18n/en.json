@@ -40,8 +40,6 @@
     "loading": "Loading…",
     "error": "Error",
     "warning": "Warning",
-    "planned_in": "Planned for phase {{phase}}",
-    "phase2": "Phase 2 (v1.1)",
     "open_folder": "Open folder",
     "select": "Select",
     "enabled": "Enabled",
@@ -64,7 +62,6 @@
     "collapse": "Collapse sidebar",
     "expand": "Expand sidebar",
     "main": "Main",
-    "phase2_group": "Phase 2",
     "with_pending": "{{label}}, {{count}} pending"
   },
   "topbar": {
@@ -346,7 +343,17 @@
       "redo": "Redo",
       "help": "Help",
       "clarify": "Clarify",
-      "noop": "No-op"
+      "noop": "No-op",
+      "draft_document": "Draft document",
+      "register_form": "Register form",
+      "explain": "Explain",
+      "compare": "Compare",
+      "create_project": "Create project",
+      "add_to_project": "Add to project",
+      "define_rule": "Define rule",
+      "check_consistency": "Consistency check",
+      "request_supplement": "Supplement request",
+      "set_retention": "Set retention"
     },
     "source": {
       "prerouter": "slash",
@@ -425,7 +432,33 @@
       "engine_wake": "wake",
       "undo_last": "last file batch",
       "undo_batch": "batch {{id}}",
-      "cache_limit_gb": "page cache limit (GB)"
+      "cache_limit_gb": "page cache limit (GB)",
+      "form": "form {{name}}",
+      "form_auto": "auto-selected form",
+      "sources": "{{count}} quoted documents",
+      "current_document": "current document",
+      "current_project": "current project",
+      "explain_scope_kb": "knowledge base",
+      "explain_scope_collection": "collection",
+      "explain_scope_project": "project",
+      "explain_scope_document": "document",
+      "allow_general": "general knowledge allowed",
+      "compare_docs": "{{count}} documents",
+      "project_template": "template {{name}}",
+      "required_types": "{{count}} required types",
+      "documents_count": "{{count}} documents",
+      "scope_documents": "documents in scope",
+      "rules_count": "{{count}} rules",
+      "all_rules": "all rules",
+      "findings_count": "{{count}} findings",
+      "all_findings": "every mismatch / missing",
+      "days": "{{count}} days",
+      "retention_documents": "original documents",
+      "retention_extractions": "extraction results",
+      "retention_logs": "logs",
+      "retention_journal": "file-operation journal",
+      "retention_chats": "chat history",
+      "retention_temp": "temporary data"
     },
     "scope": {
       "title": "Scope",
@@ -481,7 +514,10 @@
         "from": "From",
         "to": "To",
         "status": "Status"
-      }
+      },
+      "impact_draft": "{{count}} document draft(s) (saved on the generate screen)",
+      "impact_project": "{{count}} project / rule change(s)",
+      "retention_shorter": "The retention period gets shorter — expired data is deleted by the next purge run."
     },
     "execution": {
       "title": "Running · job #{{id}}",
@@ -525,7 +561,9 @@
         "failed": "failed"
       },
       "undo_last_batch": "↶ Undo last batch",
-      "moves_caption": "Move log (from → to)"
+      "moves_caption": "Move log (from → to)",
+      "open_project": "Open project",
+      "open_results": "Open check results"
     },
     "aggregate": {
       "title": "Aggregate — {{summary}}",
@@ -581,7 +619,9 @@
       "inbox_watch_off": "Inbox watching turned off.",
       "document_not_found": "Document not found: {{ref}}",
       "unknown_screen": "Unknown screen: {{ref}}",
-      "noop": "Nothing to do."
+      "noop": "Nothing to do.",
+      "register_form": "Form registration of '{{name}}' started (confirm the field grid).",
+      "set_retention": "Retention changed: {{item}} = {{period}}"
     }
   },
   "models": {
@@ -865,7 +905,31 @@
       "purge_log": "Show purge history",
       "purge_log_empty": "No purge history yet (P7).",
       "requires_workspace": "Open a workspace to edit retention.",
-      "saved": "Retention policy saved"
+      "saved": "Retention policy saved",
+      "maintenance": {
+        "title": "Purge job",
+        "hint": "Deletes expired journal entries, job records, chats, cache and temporary data every day at the configured hour. It can also run right now.",
+        "last_run": "Last run",
+        "next_run": "Next run",
+        "never": "Never run yet",
+        "disabled": "Daily run off",
+        "run_now": "Purge now",
+        "running": "Purging…",
+        "started": "Purge job started.",
+        "done": "Purge job finished.",
+        "summary": "journal {{journal}} · jobs {{jobs}} · chats {{answers}} · documents {{documents}} · extractions {{extractions}} · logs {{logs}} · temp {{temp}}",
+        "items": {
+          "journal": "journal",
+          "jobs": "job records",
+          "answers": "chats",
+          "cache": "page cache",
+          "trash": "trash",
+          "logs": "logs",
+          "temp": "temporary data",
+          "documents": "documents",
+          "extractions": "extraction results"
+        }
+      }
     },
     "shortcuts": {
       "action": "Action",
@@ -923,83 +987,12 @@
       "chunk_target": "Chunk size (tokens)",
       "min_similarity": "Semantic evidence threshold (cosine similarity)",
       "min_similarity_hint": "Chunks found only by embedding similarity count as evidence above this value (bge-m3 ≈ 0.5)."
-    }
-  },
-  "placeholder": {
-    "title": "Implemented in phase {{phase}}",
-    "features": "What this screen will provide",
-    "phase2_title": "Deferred to phase 2 (v1.1)",
-    "phase2_body": "Phase 1 (v1.0) covers P0–P4 plus the core planner operations. Document generation and project consistency checks follow in phase 2."
-  },
-  "pages": {
-    "library": {
-      "features": [
-        "Folder tree (inbox / documents / exports) and filters (type, date, vendor, status, tags, confidence, duplicates)",
-        "Thumbnail grid / list view with virtual scrolling",
-        "Drag-and-drop → import preview (HWP/HWPX/DOCX conversion badge)",
-        "Bulk actions on selections: classify, OCR, extract, summarize, organize, export, tag, merge, delete",
-        "Aggregation bar (count, sum, average, include-pending toggle)"
-      ]
     },
-    "search": {
-      "features": [
-        "Keyword (morpheme + trigram) / semantic / hybrid search",
-        "Document, page, snippet and score results; click → highlight in the viewer",
-        "Guidance when no embedding model is installed"
-      ]
-    },
-    "review": {
-      "features": [
-        "Queue of low-confidence / failed-validation fields, threshold slider (default 0.8) and random audit sampling",
-        "Keyboard review: Enter approve · E edit · S hold · N next (Enter ignored while composing Korean)",
-        "Image crop preview, bulk approve, re-extract with a stronger model / fine-print profile",
-        "All required fields approved → document status 'reviewed'"
-      ]
-    },
-    "schemas": {
-      "features": [
-        "Form registration: sample document → VLM field discovery → confirm → save type, schema and template",
-        "Six built-in sample forms (tax invoice, receipt, business registration, contract, application, transaction statement)",
-        "Create/edit schemas in natural language, field grid (key / label / type / required / regex)",
-        "Type → schema mapping, version history, schema lint, sample test runs"
-      ]
-    },
-    "knowledge": {
-      "features": [
-        "Ingestion wizard (multi-select folders/files, collection and metadata, progress)",
-        "Collections, document versions (old/new) and glossary",
-        "Structure-aware chunking (articles, clauses, tables) + morpheme/trigram FTS + embeddings (bge-m3) hybrid search",
-        "Question test panel and answer feedback statistics"
-      ]
-    },
-    "organize": {
-      "features": [
-        "File-name and folder template editor ({{year}} {{month}} {{doc_type}} {{vendor}} {{total}} …)",
-        "Preview diff table (dry run), reviewed documents only by default",
-        "Run / undo (journal-based batch history)",
-        "Export wizard: XLSX / CSV / JSONL / Markdown / searchable PDF"
-      ]
-    },
-    "jobs": {
-      "features": [
-        "Queued / running / done / failed tabs with progress, ETA and tokens per second",
-        "Cancel, retry, pause/resume, priorities, per-item error logs",
-        "OS notification on completion, keep-awake, disk/cache estimates, engine metrics"
-      ]
-    },
-    "generate": {
-      "features": [
-        "Pick a form or describe the format in natural language, then describe the content → automatic drafting (Korean by default)",
-        "Knowledge-base evidence panel (citations, include/exclude)",
-        "Save as HWPX / DOCX / PDF / Markdown and register in the library"
-      ]
-    },
-    "projects": {
-      "features": [
-        "Case-level document bundles, required-document checklist, intake status board",
-        "Natural language → consistency rules, result table (pass / mismatch / undetermined with evidence links)",
-        "Supplement-request letters, relationship graph"
-      ]
+    "notifications": {
+      "job_complete": "Notify when jobs complete",
+      "job_complete_hint": "Shows an OS notification when a batch job finishes.",
+      "prevent_sleep": "Prevent sleep during jobs",
+      "prevent_sleep_hint": "Keeps the PC awake while jobs are running."
     }
   },
   "errors": {
@@ -1097,7 +1090,9 @@
       "export": "Export",
       "organize": "Organize",
       "undo": "Undo",
-      "redo": "Redo"
+      "redo": "Redo",
+      "draft": "Document draft",
+      "maintenance": "Retention purge"
     },
     "state": {
       "queued": "Queued",
@@ -1136,7 +1131,13 @@
       "nothing_to_undo": "nothing to undo",
       "nothing_to_redo": "nothing to redo",
       "interrupted": "interrupted by app shutdown (retryable)",
-      "workspace_closed": "workspace closed"
+      "workspace_closed": "workspace closed",
+      "drafting_fields": "Drafting fields",
+      "drafting_body": "Drafting body",
+      "validating": "Validating",
+      "drafted": "Draft ready: {{title}}",
+      "purging": "Purging {{item}}",
+      "purged": "{{count}} items purged"
     },
     "empty_queued": "No queued jobs.",
     "empty_failed": "No failed jobs.",
@@ -1164,7 +1165,11 @@
       "export_exists": "A file with this name already exists (overwrite required).",
       "path_outside": "The output path is outside the workspace.",
       "no_documents": "No matching documents.",
-      "step": "{{op}}: {{message}}"
+      "step": "{{op}}: {{message}}",
+      "content_empty": "There is no content to generate from.",
+      "project_not_found": "Project not found.",
+      "no_check_run": "Run the consistency check first.",
+      "no_findings": "There are no mismatch / missing findings."
     },
     "result_loading": "Loading result…"
   },
@@ -2216,5 +2221,387 @@
     "running": "Aggregating…",
     "scope_selection": "{{count}} selected",
     "scope_type": "type {{type}}"
+  },
+  "generate": {
+    "title": "Generate document",
+    "new": "New",
+    "drafts": "Drafts",
+    "open_in_generate": "Open in Generate",
+    "handoff": "The generated draft is open. Check the preview and save it.",
+    "form": {
+      "title": "Request",
+      "template": "Form / template",
+      "template_auto": "(auto — inferred from the content)",
+      "registered": "Registered form: {{name}}",
+      "format_description": "Layout description",
+      "format_placeholder": "e.g. A4 official letter: recipient, cc, subject, body, attachments",
+      "content": "Content",
+      "content_placeholder": "e.g. Quotation for Hanbit Co.: 10 laptops at 1,200,000 won each, valid 30 days",
+      "sources": "Documents to quote",
+      "sources_hint": "The extracted fields of the chosen documents are quoted with their sources.",
+      "pick_sources": "Pick documents…",
+      "remove_source": "Remove quoted document",
+      "use_knowledge": "Use knowledge-base evidence",
+      "tone": "Tone",
+      "length": "Length",
+      "output": "Output",
+      "generate": "Generate",
+      "generating": "Generating…",
+      "cancel": "Cancel",
+      "regenerate": "Regenerate",
+      "feedback": "Regeneration instructions",
+      "feedback_placeholder": "e.g. shorter, set the total to 1,200,000 won",
+      "excluded_hint": "{{count}} excluded reference(s) are applied on regeneration.",
+      "job_failed": "Generation failed: {{message}}",
+      "job_cancelled": "Generation cancelled."
+    },
+    "tone": {
+      "formal": "Formal",
+      "plain": "Plain",
+      "concise": "Concise"
+    },
+    "length": {
+      "short": "Short",
+      "medium": "Medium",
+      "long": "Long"
+    },
+    "output": {
+      "hwpx": "HWPX",
+      "docx": "DOCX",
+      "pdf": "PDF",
+      "md": "Markdown"
+    },
+    "templates": {
+      "official_letter": "Official letter",
+      "quotation": "Quotation",
+      "transaction_statement": "Transaction statement",
+      "contract": "Contract",
+      "report": "Report",
+      "minutes": "Minutes",
+      "supplement_request": "Supplement request"
+    },
+    "source": {
+      "rules": "rules",
+      "model": "model"
+    },
+    "reference_source": {
+      "document": "document",
+      "knowledge": "knowledge base",
+      "aggregate": "aggregate",
+      "text": "text"
+    },
+    "preview": {
+      "title": "Preview",
+      "empty_title": "No draft yet",
+      "empty_body": "Pick a form and describe the content on the left, then press Generate. Asking the assistant to \"draft a quotation\" opens the result here too.",
+      "unreviewed": "Unreviewed",
+      "validated": "Validated",
+      "issues_badge": "{{count}} validation issue(s)",
+      "loading": "Refreshing preview…",
+      "frame_title": "Document preview"
+    },
+    "editor": {
+      "title": "Edit",
+      "empty": "Once a draft exists, edit its fields, tables and body here.",
+      "doc_title": "Title",
+      "fields": "Fields",
+      "tables": "Tables",
+      "body": "Body",
+      "references": "References",
+      "issues": "Validation",
+      "issues_ok": "No validation issues.",
+      "no_references": "No quoted documents or evidence.",
+      "exclude": "Exclude",
+      "apply_suggestion": "Apply suggestion",
+      "add_row": "Add row",
+      "remove_row": "Remove row",
+      "row": "Row {{index}}",
+      "no_rows": "No rows.",
+      "user_edited": "Edited",
+      "source_badge": "Source",
+      "validate": "Validate",
+      "validated": "Validation re-run ({{count}} issue(s)).",
+      "save": "Save",
+      "heading": "Heading {{level}}",
+      "paragraph": "Paragraph",
+      "list": "List (one item per line)",
+      "table_ref": "Table: {{key}}",
+      "open_source": "Open {{title}}"
+    },
+    "issue_codes": {
+      "required_missing": "Required missing",
+      "sum_mismatch": "Sum mismatch",
+      "brn_invalid": "Invalid BRN",
+      "date_invalid": "Invalid date",
+      "amount_invalid": "Invalid amount",
+      "uncited_claim": "No source",
+      "template_unknown_field": "Unknown field"
+    },
+    "save": {
+      "title": "Save",
+      "hint": "Saves under documents/generated/ in the workspace and registers the file in the library as a generated document.",
+      "format": "Format",
+      "file_name": "File name",
+      "register": "Register in the library",
+      "overwrite": "Number the file when the name exists",
+      "blocking_warning": "{{count}} validation issue(s) need confirmation before saving. You can still save; the document stays 'unreviewed'.",
+      "confirm": "Save",
+      "saved": "Saved: {{path}}",
+      "open_folder": "Open folder",
+      "open_library": "Show in library",
+      "exists": "A file with this name exists. Turn on numbering or change the name.",
+      "warning_markdown": "Markdown files are not registered in the library."
+    },
+    "drafts_list": {
+      "title": "Recent drafts",
+      "hint": "Generated drafts are kept in the workspace. Open one to keep editing, or delete it.",
+      "empty": "No saved drafts.",
+      "open": "Open",
+      "delete": "Delete",
+      "deleted": "Draft deleted.",
+      "issues": "{{count}} issue(s)",
+      "saved": "Saved: {{path}}",
+      "unsaved": "Unsaved"
+    },
+    "sources_dialog": {
+      "title": "Documents to quote",
+      "hint": "Documents with extracted fields are quoted with values and sources.",
+      "search": "Search documents…",
+      "empty": "No documents.",
+      "done": "Done ({{count}})"
+    },
+    "result": {
+      "meta": "{{fields}} fields · {{issues}} issues · {{source}}"
+    }
+  },
+  "projects": {
+    "title": "Projects",
+    "new": "New project",
+    "templates_manage": "Templates",
+    "view": {
+      "label": "View",
+      "list": "List",
+      "kanban": "Kanban"
+    },
+    "empty_title": "No projects yet",
+    "empty_body": "Group documents by case (review, vendor, assignment) and verify them with a required-document checklist and consistency rules.",
+    "status": {
+      "intake": "Intake",
+      "extracting": "Extracting",
+      "validating": "Validating",
+      "supplement": "Supplement",
+      "done": "Done"
+    },
+    "card": {
+      "intake_no": "Intake {{no}}",
+      "owner": "Owner {{owner}}",
+      "due": "Due {{date}}",
+      "documents": "{{count}} documents",
+      "missing": "{{count}} missing",
+      "verdicts": "pass {{pass}} · mismatch {{mismatch}} · undetermined {{undetermined}}",
+      "no_check": "Not checked",
+      "move_prev": "Move to the previous step",
+      "move_next": "Move to the next step"
+    },
+    "columns": {
+      "name": "Name",
+      "status": "Status",
+      "intake_no": "Intake no.",
+      "owner": "Owner",
+      "due": "Due",
+      "documents": "Documents",
+      "last_check": "Last check"
+    },
+    "dialog": {
+      "title": "New project",
+      "edit_title": "Edit project",
+      "name": "Name",
+      "name_placeholder": "e.g. Hanbit vendor onboarding",
+      "template": "Template",
+      "template_none": "(none)",
+      "intake_no": "Intake no.",
+      "owner": "Owner",
+      "due": "Due",
+      "inbox_folder": "inbox subfolder mapping",
+      "inbox_hint": "Documents arriving in inbox/<folder> join this project automatically.",
+      "create": "Create",
+      "save": "Save",
+      "created": "Project created."
+    },
+    "detail": {
+      "back": "Projects",
+      "status": "Status",
+      "template": "Template",
+      "edit": "Edit",
+      "check": "Consistency check",
+      "checking": "Checking…",
+      "checked": "Check finished — pass {{pass}} · mismatch {{mismatch}} · undetermined {{undetermined}} · missing {{missing}}",
+      "supplement": "Supplement request",
+      "delete": "Delete",
+      "delete_confirm": "Delete the project '{{name}}'? The documents stay in the library.",
+      "deleted": "Project deleted.",
+      "not_found": "Project not found."
+    },
+    "tabs": {
+      "documents": "Documents",
+      "rules": "Rules",
+      "results": "Results",
+      "relations": "Relations",
+      "report": "Report"
+    },
+    "documents": {
+      "checklist": "Required documents",
+      "no_checklist": "No template: the checklist is empty. Assign a template to see the required documents.",
+      "missing": "missing",
+      "present": "{{count}}",
+      "extra": "extra",
+      "add": "Add from library",
+      "remove": "Remove from project",
+      "open": "Open",
+      "empty": "The project has no documents yet. Add some from the library.",
+      "columns": {
+        "name": "Document",
+        "type": "Type",
+        "status": "Status",
+        "review": "Review",
+        "added": "Added",
+        "actions": "Actions"
+      },
+      "add_title": "Add documents",
+      "add_hint": "Adds library documents to the project; classified documents count towards the checklist.",
+      "add_done": "Add ({{count}})",
+      "added": "{{count}} document(s) added.",
+      "search": "Search documents…",
+      "none": "No documents to add."
+    },
+    "rules": {
+      "title": "Consistency rules",
+      "nl_label": "Add a rule in natural language",
+      "nl_placeholder": "e.g. the supplier BRN of the tax invoice must equal the registration number of the business registration",
+      "define": "Make rule",
+      "defining": "Converting to a rule…",
+      "manual": "Add manually",
+      "grid_title": "Confirm the rule",
+      "confidence": "confidence {{value}} · {{source}}",
+      "source": {
+        "rules": "phrase rules",
+        "model": "model"
+      },
+      "issues": "needs confirmation",
+      "unresolved": "Unknown names: {{names}}",
+      "save": "Save",
+      "saved": "Rule saved.",
+      "discard": "Discard",
+      "incomplete": "Set both operands.",
+      "empty": "No rules. Add one in natural language or create the project from a template.",
+      "enabled": "Enabled",
+      "delete": "Delete",
+      "deleted": "Rule deleted.",
+      "required": "required",
+      "optional": "optional",
+      "description": "Description",
+      "left": "Left",
+      "op": "Operator",
+      "right": "Right",
+      "right_mode": "Compare with",
+      "right_field": "a field of another document",
+      "right_literal": "a value",
+      "literal_placeholder": "value or regex",
+      "tolerance": "Tolerance",
+      "tolerance_pct": "Tolerance (%)",
+      "type": "Type",
+      "field": "Field",
+      "type_any": "(pick a type)",
+      "field_any": "(pick a field)",
+      "ops": {
+        "eq": "must equal",
+        "neq": "must differ",
+        "gte": "at least",
+        "lte": "at most",
+        "within_pct": "within %",
+        "present": "must be present",
+        "matches": "must match"
+      }
+    },
+    "results": {
+      "title": "Check results",
+      "run": "Run check",
+      "running": "Checking…",
+      "none": "No check has run yet.",
+      "summary": "pass {{pass}} · mismatch {{mismatch}} · undetermined {{undetermined}} · missing {{missing}}",
+      "history": "Run history",
+      "verdict": {
+        "pass": "Pass",
+        "mismatch": "Mismatch",
+        "undetermined": "Undetermined",
+        "missing": "Missing"
+      },
+      "columns": {
+        "rule": "Rule",
+        "verdict": "Verdict",
+        "message": "Message",
+        "evidence": "Evidence"
+      },
+      "missing_types": "Missing documents: {{types}}",
+      "evidence_open": "Open {{name}}",
+      "required": "required"
+    },
+    "relations": {
+      "caption": "Shared entities between documents",
+      "empty": "No shared entities (BRN, amounts, dates, names). Extract the documents and check again.",
+      "kinds": {
+        "brn": "BRN",
+        "contract_no": "contract no.",
+        "amount": "amount",
+        "date": "date",
+        "name": "name",
+        "account": "account"
+      },
+      "open_doc": "Open {{name}}"
+    },
+    "report": {
+      "copy": "Copy Markdown",
+      "copied": "Report copied.",
+      "loading": "Building the report…",
+      "refresh": "Refresh"
+    },
+    "supplement": {
+      "title": "Supplement request",
+      "hint": "Drafts a supplement request from the selected mismatch / missing findings; review and save it on the generate screen.",
+      "findings": "Findings",
+      "select_all": "Select all",
+      "output": "Output",
+      "generate": "Generate",
+      "generating": "Drafting…",
+      "none": "No mismatch / missing findings. Run the consistency check first.",
+      "started": "Drafting the supplement request.",
+      "ready": "The supplement request draft is ready."
+    },
+    "templates": {
+      "title": "Project templates",
+      "hint": "A template is a set of required document types and consistency rules. Built-ins are read-only; duplicate them to edit.",
+      "builtin": {
+        "certification_review": "Certification review",
+        "vendor_onboarding": "Vendor onboarding",
+        "purchase_settlement": "Purchase settlement"
+      },
+      "builtin_badge": "built-in",
+      "new": "New template",
+      "duplicate": "Duplicate",
+      "delete": "Delete",
+      "save": "Save",
+      "saved": "Template saved.",
+      "deleted": "Template deleted.",
+      "name": "Name",
+      "name_en": "Name (English)",
+      "description": "Description",
+      "required_types": "Required document types",
+      "rules": "Rules",
+      "add_rule": "Add rule",
+      "no_rules": "No rules.",
+      "select": "Select a template or create one.",
+      "readonly": "Built-in templates cannot be edited. Duplicate one to edit it.",
+      "copy_suffix": "(copy)"
+    }
   }
 }

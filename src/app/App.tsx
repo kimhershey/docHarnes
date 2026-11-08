@@ -11,6 +11,7 @@ import { LibraryPage } from "@/features/library/LibraryPage";
 import { ModelsPage } from "@/features/models/ModelsPage";
 import { OnboardingWizard } from "@/features/onboarding/OnboardingWizard";
 import { OrganizePage } from "@/features/organize/OrganizePage";
+import { ProjectDetailPage } from "@/features/projects/ProjectDetailPage";
 import { ProjectsPage } from "@/features/projects/ProjectsPage";
 import { ReviewPage } from "@/features/review/ReviewPage";
 import { SchemasPage } from "@/features/schemas/SchemasPage";
@@ -46,6 +47,7 @@ function Gate() {
         <Route path="knowledge" element={<KnowledgePage />} />
         <Route path="generate" element={<GeneratePage />} />
         <Route path="projects" element={<ProjectsPage />} />
+        <Route path="projects/:id" element={<ProjectDetailPage />} />
         <Route path="organize" element={<OrganizePage />} />
         <Route path="jobs" element={<JobsPage />} />
         <Route path="models" element={<ModelsPage />} />

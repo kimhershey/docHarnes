@@ -35,6 +35,8 @@ const CANCELLABLE: Job["kind"][] = [
   "organize",
   "undo",
   "redo",
+  "draft",
+  "maintenance",
 ];
 
 type TabKey = "queued" | "active" | "finished" | "failed";

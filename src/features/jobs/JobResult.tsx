@@ -1,10 +1,12 @@
-import { Check, FolderOpen, X } from "lucide-react";
+import { Check, FilePlus2, FolderOpen, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import { isPlanExecution, isRecord, opLabel } from "@/features/assistant/describePlan";
 import { revealPath } from "@/lib/ipc";
-import type { Job } from "@/lib/types";
+import { SCREEN_ROUTES, isDraftOutcome, isMaintenanceSummary, type Job } from "@/lib/types";
+import { useGenerateStore } from "@/stores/generate";
 
 /** `pipeline::run::ProcessReport` (pipeline jobs, extract / classify / ocr steps). */
 function isProcessReport(v: unknown): v is { processed: unknown[]; failed: unknown[]; classified: number; ocr_pages: number; extracted: number; review_pending?: number } {
@@ -18,8 +20,38 @@ function isProcessReport(v: unknown): v is { processed: unknown[]; failed: unkno
  */
 export function JobResult({ job }: { job: Job }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const result = job.result;
   if (result == null) return null;
+  if (isDraftOutcome(result)) {
+    const d = result.draft;
+    return (
+      <div className="flex flex-wrap items-center gap-2 text-xs" data-testid="job-result-draft">
+        <span className="font-medium selectable">{d.title}</span>
+        <span className="text-fg-muted">{t("generate.result.meta", { fields: d.fields.length, issues: d.issues.length, source: t(`generate.source.${result.source === "rules" ? "rules" : "model"}`) })}</span>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            useGenerateStore.getState().openDraft(d);
+            navigate(SCREEN_ROUTES.generate);
+          }}
+          data-testid="job-open-draft"
+        >
+          <FilePlus2 />
+          {t("generate.open_in_generate")}
+        </Button>
+      </div>
+    );
+  }
+  if (isMaintenanceSummary(result)) {
+    const p = result.purged;
+    return (
+      <span className="text-xs text-fg-muted" data-testid="job-result-maintenance">
+        {t("settings.privacy.maintenance.summary", { journal: p.journal, jobs: p.jobs, answers: p.answers, documents: p.documents, extractions: p.extractions, logs: p.logs, temp: p.temp })}
+      </span>
+    );
+  }
   if (isPlanExecution(result)) {
     return (
       <ol className="flex flex-col gap-0.5 text-xs" data-testid="job-result-steps">

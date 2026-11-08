@@ -60,6 +60,16 @@ export function describeJobDetail(job: Job, t: TFunction): string | null {
   m = d.match(/^merged (\d+)$/);
   if (m) return t("jobs.detail.merge_summary", { count: Number(m[1]) });
   if (d === "loading model") return t("jobs.detail.loading_model");
+  // -- P6 draft job (`generate`) and P7 maintenance job --
+  if (d === "drafting fields") return t("jobs.detail.drafting_fields");
+  if (d === "drafting body") return t("jobs.detail.drafting_body");
+  if (d === "validating") return t("jobs.detail.validating");
+  m = d.match(/^drafted (.+)$/);
+  if (m) return t("jobs.detail.drafted", { title: m[1] });
+  m = d.match(/^purging ([a-z_]+)$/);
+  if (m) return t("jobs.detail.purging", { item: t(`settings.privacy.maintenance.items.${m[1]}`, { defaultValue: m[1] }) });
+  m = d.match(/^purged (\d+) items$/);
+  if (m) return t("jobs.detail.purged", { count: Number(m[1]) });
   // -- persistent runner (P5, `planner_bridge.rs`) --
   m = d.match(/^plan (\d+)\/(\d+) · (.*)$/);
   if (m) return t("jobs.detail.plan_summary", { done: Number(m[1]), total: Number(m[2]), summary: m[3] });
@@ -101,6 +111,10 @@ const ERROR_CODES: Record<string, string> = {
   export_exists: "jobs.error.export_exists",
   path_outside: "jobs.error.path_outside",
   no_documents: "jobs.error.no_documents",
+  content_empty: "jobs.error.content_empty",
+  project_not_found: "jobs.error.project_not_found",
+  no_check_run: "jobs.error.no_check_run",
+  no_findings: "jobs.error.no_findings",
 };
 
 function describeErrorText(raw: string, t: TFunction): string {

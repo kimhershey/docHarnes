@@ -40,6 +40,11 @@ export const GROUP_BY_VALUES = ["month", "vendor", "doc_type", "none"] as const;
 export const EXPORT_FORMAT_VALUES = ["xlsx", "csv", "jsonl", "md", "pdf_searchable"] as const;
 export const DOC_STATUSES = ["new", "rendered", "extracted", "reviewed", "archived"] as const;
 export const SETTING_KEYS = ["render_dpi", "pii_masking", "auto_pipeline", "inbox_watch", "review_threshold", "cache_limit_gb", "journal_days"] as const;
+export const OUTPUT_FORMAT_VALUES = ["hwpx", "docx", "pdf", "md"] as const;
+export const TONE_VALUES = ["formal", "plain", "concise"] as const;
+export const DRAFT_LENGTH_VALUES = ["short", "medium", "long"] as const;
+export const EXPLAIN_SCOPES = ["kb", "collection", "project", "document"] as const;
+export const RETENTION_ITEMS = ["documents", "extractions", "logs", "journal", "chats", "temp"] as const;
 
 const str: ParamType = { kind: "string" };
 const bool: ParamType = { kind: "boolean" };
@@ -173,6 +178,60 @@ const SPECS: OpSpec[] = [
     desc_ko: "내보내기(XLSX/CSV/JSONL/MD/검색가능 PDF)",
     desc_en: "export (XLSX / CSV / JSONL / MD / searchable PDF)",
   },
+  // -- P6 (§3.13 document generation, §3.14 explain / compare, §3.15 projects, §3.8 retention) --
+  {
+    op: "draft_document",
+    params: [
+      p("form_ref", str, false, "등록 양식(이름·유형) 또는 내장 템플릿(quotation, official_letter, contract, report, minutes, transaction_statement)", "registered form (name / type) or a built-in template"),
+      p("format_description", str, false, "형식 자연어 설명", "layout description (natural language)"),
+      p("content", str, true, "문서 내용(자연어)", "what the document should say"),
+      p("sources", list, false, "인용할 문서 id, selection, aggregate", "document ids to quote, selection, aggregate"),
+      p("output", en(OUTPUT_FORMAT_VALUES), false, "출력 형식(기본 hwpx)", "output format (default hwpx)"),
+      p("tone", en(TONE_VALUES), false, "어조", "tone"),
+      p("length", en(DRAFT_LENGTH_VALUES), false, "길이", "length"),
+    ],
+    desc_ko: "문서 초안 생성(미리보기 후 문서 생성 화면에서 저장)",
+    desc_en: "draft a document (previewed, saved on the generate screen)",
+  },
+  {
+    op: "register_form",
+    params: [p("doc_ref", str, false, "문서 id·이름 또는 current", "document id / name or current"), p("name", str, false, "양식 이름", "form name"), p("doc_type_slug", str, false, "유형 슬러그", "type slug")],
+    desc_ko: "문서를 양식으로 등록(필드 그리드 확인)",
+    desc_en: "register a document as a form (field grid confirmation)",
+  },
+  {
+    op: "explain",
+    params: [
+      p("selection", str, false, "설명할 선택 텍스트", "selected text to explain"),
+      p("question", str, false, "질문", "question"),
+      p("scope", en(EXPLAIN_SCOPES), false, "근거 범위", "evidence scope"),
+      p("allow_general_knowledge", bool, false, "근거 없을 때 일반 지식 허용", "allow general knowledge without evidence"),
+    ],
+    desc_ko: "근거 기반 설명",
+    desc_en: "grounded explanation",
+  },
+  { op: "compare", params: [p("doc_ids", list, true, "비교할 문서 id 2~5개", "2–5 document ids"), p("aspects", list, false, "비교 관점(금액, 기간 …)", "aspects (amount, period …)")], desc_ko: "문서 비교 요약", desc_en: "compare documents" },
+  {
+    op: "create_project",
+    params: [p("name", str, true, "프로젝트 이름", "project name"), p("template", str, false, "프로젝트 템플릿", "project template"), p("doc_types_required", list, false, "필수 문서 유형", "required document types")],
+    desc_ko: "프로젝트 만들기",
+    desc_en: "create a project",
+  },
+  { op: "add_to_project", params: [p("project", str, false, "프로젝트(비우면 열린 프로젝트)", "project (default: the open one)"), p("doc_ids", list, false, "문서 id(비우면 범위)", "document ids (default: the scope)")], desc_ko: "프로젝트에 문서 추가", desc_en: "add documents to a project" },
+  {
+    op: "define_rule",
+    params: [p("project", str, false, "프로젝트", "project"), p("template", str, false, "프로젝트 템플릿", "project template"), p("description", str, true, "규칙 설명(자연어)", "rule description (natural language)")],
+    desc_ko: "정합성 규칙 정의(규칙 그리드 확인)",
+    desc_en: "define a consistency rule (rule grid confirmation)",
+  },
+  { op: "check_consistency", params: [p("project", str, false, "프로젝트", "project"), p("rules", list, false, "규칙 id(비우면 전체)", "rule ids (empty = all)")], desc_ko: "정합성 검사 실행", desc_en: "run the consistency check" },
+  {
+    op: "request_supplement",
+    params: [p("project", str, false, "프로젝트", "project"), p("findings", list, false, "지적 사항 id(비우면 불일치·누락 전체)", "finding ids (empty = every mismatch / missing)"), p("output", en(OUTPUT_FORMAT_VALUES), false, "출력 형식", "output format")],
+    desc_ko: "보완요청서 초안 생성(미리보기)",
+    desc_en: "draft a supplement request (preview)",
+  },
+  { op: "set_retention", params: [p("item", en(RETENTION_ITEMS), true, "보존 항목", "retention item"), p("days", int, true, "보존 일수(-1 무기한, 0 즉시)", "days (-1 forever, 0 immediately)")], desc_ko: "보존/파기 기간 설정", desc_en: "set a retention period" },
   { op: "set_model", params: [p("id", str, true, "모델 id", "model id")], desc_ko: "활성 모델 변경", desc_en: "switch the active model" },
   { op: "set_profile", params: [p("profile", en(PROFILES), true, "추론 프로파일", "inference profile")], desc_ko: "추론 프로파일 변경", desc_en: "set the inference profile" },
   { op: "set_theme", params: [p("theme", en(THEMES), true, "테마", "theme")], desc_ko: "테마 변경", desc_en: "set the theme" },
@@ -203,10 +262,16 @@ export const OP_SPECS: Readonly<Record<OpKind, OpSpec>> = Object.fromEntries(SPE
 export const OP_KINDS: readonly OpKind[] = SPECS.map((s) => s.op);
 
 /** Ops the UI / shell performs itself (`OpKind::runs_in_ui`). */
-export const UI_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["define_schema", "set_model", "set_profile", "set_theme", "set_language", "set_setting", "open", "job", "engine", "help", "clarify", "noop", "reindex", "set_inbox_watch"]);
+export const UI_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["define_schema", "set_model", "set_profile", "set_theme", "set_language", "set_setting", "open", "job", "engine", "help", "clarify", "noop", "reindex", "set_inbox_watch", "register_form", "set_retention"]);
 
 /** Ops that need the vision / chat model (`OpKind::needs_model`). */
-export const MODEL_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["classify", "ocr", "extract", "answer", "summarize", "import"]);
+export const MODEL_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["classify", "ocr", "extract", "answer", "summarize", "import", "draft_document", "explain", "compare", "define_rule", "request_supplement"]);
+
+/** Ops whose step payload is a `Draft` the 문서 생성 screen opens. */
+export const DRAFT_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["draft_document", "request_supplement"]);
+
+/** Ops whose payload refers to a project (result cards link to `/projects/<id>`). */
+export const PROJECT_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["create_project", "add_to_project", "define_rule", "check_consistency"]);
 
 /** Journaled file operations that honour `only_reviewed`. */
 export const FILE_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["organize", "rename", "move"]);

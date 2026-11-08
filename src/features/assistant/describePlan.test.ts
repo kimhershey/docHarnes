@@ -28,6 +28,8 @@ const context: PlanContext = {
   current_page: null,
   document_count: 2,
   model_ids: [],
+  projects: [{ id: "p1", name: "인증 심사 A", status: "intake" }],
+  current_project: null,
 };
 
 function plan(ops: Plan["operations"], extra: Partial<Plan> = {}): Plan {
@@ -36,7 +38,7 @@ function plan(ops: Plan["operations"], extra: Partial<Plan> = {}): Plan {
 
 describe("op specs mirror", () => {
   it("covers every op kind with a Korean label", () => {
-    expect(OP_KINDS).toHaveLength(33);
+    expect(OP_KINDS).toHaveLength(43);
     for (const op of OP_KINDS) {
       expect(OP_SPECS[op].op).toBe(op);
       expect(opLabel(op, t)).not.toBe(`planner.ops.${op}`);
@@ -55,6 +57,19 @@ describe("summarizeOp", () => {
     expect(summarizeOp({ op: "move", folder: "documents/{{year}}", only_reviewed: false }, t, ctx)).toBe("documents/{{year}} · 검토 미완료 포함");
     expect(summarizeOp({ op: "export", format: "xlsx", path: "exports/a.xlsx", columns: ["x"], include: ["status"] }, t, ctx)).toBe("XLSX · exports/a.xlsx · 열 1개 · 공통 열: status");
     expect(summarizeOp({ op: "aggregate", fn: "sum", field: "total", group_by: "month" }, t, ctx)).toBe("합계 · total · group_by=month");
+  });
+  it("describes the P6 ops (drafts, projects, rules, retention)", () => {
+    expect(summarizeOp({ op: "draft_document", form_ref: "quotation", content: "노트북 10대 견적", sources: ["a", "b"], output: "pdf" }, t, ctx)).toBe("양식 견적서 · 노트북 10대 견적 · 인용 문서 2건 · PDF");
+    expect(summarizeOp({ op: "create_project", name: "한빛", template: "builtin-vendor_onboarding" }, t, ctx)).toBe("'한빛' · 템플릿 거래처 등록");
+    expect(summarizeOp({ op: "add_to_project", project: "p1", doc_ids: ["x"] }, t, ctx)).toBe("인증 심사 A · 문서 1건");
+    // A single project in the context is the default target; otherwise "현재 프로젝트".
+    expect(summarizeOp({ op: "check_consistency" }, t, ctx)).toBe("인증 심사 A · 전체 규칙");
+    expect(summarizeOp({ op: "define_rule", description: "서명 필수" }, t, { ...ctx, context: { ...context, projects: [] } })).toBe("현재 프로젝트 · 서명 필수");
+    expect(summarizeOp({ op: "set_retention", item: "chats", days: 30 }, t, ctx)).toBe("대화 기록 · 30일");
+    expect(summarizeOp({ op: "set_retention", item: "journal", days: -1 }, t, ctx)).toBe("파일 조작 저널 · 무기한");
+    expect(summarizeOp({ op: "compare", doc_ids: ["a", "b"], aspects: ["금액"] }, t, ctx)).toBe("문서 2건 · 금액");
+    expect(planKind(plan([{ op: "register_form", doc_ref: "current" }]))).toBe("ui");
+    expect(planKind(plan([{ op: "draft_document", content: "x" }]))).toBe("work");
   });
   it("resolves labels for settings, theme, type and screen ops", () => {
     expect(summarizeOp({ op: "set_theme", theme: "dark" }, t, ctx)).toBe("다크");
@@ -111,7 +126,7 @@ describe("impact line", () => {
       requires_confirmation: true,
     };
     const impact = impactOf(p, preview);
-    expect(impact).toEqual({ moves: 27, deletes: 0, exports: 0, documents: 31 });
+    expect(impact).toEqual({ moves: 27, deletes: 0, exports: 0, drafts: 0, projects: 0, documents: 31 });
     expect(impactLine(impact, t)).toBe("부작용: 파일 이동 ≤27건(저널 기록, 되돌리기 가능) · 대상 문서 31건");
     expect(impactLine(impactOf(plan([{ op: "search", query: "q" }]), null), t)).toBe("부작용: 없음 · 대상 문서 0건");
   });

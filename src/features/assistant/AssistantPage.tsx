@@ -26,6 +26,7 @@ import { useDocumentsStore } from "@/stores/documents";
 import { useEngineStore } from "@/stores/engine";
 import { useJobsStore } from "@/stores/jobs";
 import { newRequestId, useKnowledgeStore } from "@/stores/knowledge";
+import { useProjectsStore } from "@/stores/projects";
 import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -71,6 +72,7 @@ export function AssistantPage() {
   const clearStream = useKnowledgeStore((s) => s.clearStream);
   const folder = useDocumentsStore((s) => s.folder);
   const selectedIds = useDocumentsStore((s) => s.selectedIds);
+  const currentProject = useProjectsStore((s) => s.currentProject);
   const { data: collections } = useCollections(!!workspace);
   const { data: pipeline } = usePipelineStatus(!!workspace);
   const messages = useAssistantStore((s) => s.messages);
@@ -269,7 +271,7 @@ export function AssistantPage() {
       return;
     }
     // 2. Planner (rules, then the model behind the engine gate).
-    const context = uiContextFor(scope, folder, selectedIds, lastDocument);
+    const context = uiContextFor(scope, folder, selectedIds, lastDocument, currentProject);
     setPlanning(true);
     let response: PlanResponse;
     try {

@@ -3,6 +3,23 @@
 // backend so the whole UI can be exercised without the desktop runtime.
 
 import type {
+  CheckRun,
+  Draft,
+  DraftRequest,
+  DraftSummary,
+  MaintenanceStatus,
+  OutputFormat,
+  Project,
+  ProjectDetail,
+  ProjectInput,
+  ProjectStatus,
+  ProjectTemplate,
+  Rule,
+  RuleDraft,
+  SaveRequest,
+  SavedDocument,
+  TemplateInfo,
+  TemplateInput,
   AggregateRequest,
   AggregateResult,
   ExecuteResponse,
@@ -287,6 +304,44 @@ export const api = {
   jobsResume: (jobId: string) => invoke<boolean>("jobs_resume", { jobId }),
   jobsRetry: (jobId: string) => invoke<boolean>("jobs_retry", { jobId }),
   jobsPrioritize: (jobId: string) => invoke<boolean>("jobs_prioritize", { jobId }),
+
+  // -- document generation (P6, §3.13) --
+  generateTemplates: () => invoke<TemplateInfo[]>("generate_templates"),
+  /** Starts the `draft` job; the finished job's `result` is a `DraftOutcome`. */
+  generateDraft: (req: DraftRequest) => invoke<{ job_id: string }>("generate_draft", { req }),
+  generatePreview: (draft: Draft) => invoke<{ html: string; markdown: string }>("generate_preview", { draft }),
+  generateValidate: (draft: Draft) => invoke<Draft>("generate_validate", { draft }),
+  generateSave: (req: SaveRequest) => invoke<SavedDocument>("generate_save", { req }),
+  generateDrafts: () => invoke<DraftSummary[]>("generate_drafts"),
+  generateDraftGet: (id: string) => invoke<Draft>("generate_draft_get", { id }),
+  generateDraftPut: (draft: Draft) => invoke<DraftSummary>("generate_draft_put", { draft }),
+  generateDraftDelete: (id: string) => invoke<boolean>("generate_draft_delete", { id }),
+
+  // -- projects (P6, §3.15) --
+  projectsList: () => invoke<Project[]>("projects_list"),
+  projectCreate: (input: ProjectInput) => invoke<Project>("project_create", { input }),
+  projectUpdate: (input: ProjectInput) => invoke<Project>("project_update", { input }),
+  projectDelete: (id: string) => invoke<boolean>("project_delete", { id }),
+  projectGet: (id: string) => invoke<ProjectDetail>("project_get", { id }),
+  projectAddDocuments: (id: string, docIds: string[]) => invoke<ProjectDetail>("project_add_documents", { id, docIds }),
+  projectRemoveDocument: (id: string, docId: string) => invoke<ProjectDetail>("project_remove_document", { id, docId }),
+  projectSetStatus: (id: string, status: ProjectStatus) => invoke<Project>("project_set_status", { id, status }),
+  projectTemplates: () => invoke<ProjectTemplate[]>("project_templates"),
+  projectTemplateSave: (input: TemplateInput) => invoke<ProjectTemplate>("project_template_save", { input }),
+  projectTemplateDelete: (id: string) => invoke<boolean>("project_template_delete", { id }),
+  projectDefineRule: (id: string, description: string) => invoke<RuleDraft>("project_define_rule", { id, description }),
+  projectSaveRule: (id: string, rule: Rule) => invoke<Rule>("project_save_rule", { id, rule }),
+  projectDeleteRule: (id: string, ruleId: string) => invoke<boolean>("project_delete_rule", { id, ruleId }),
+  projectCheck: (id: string, ruleIds: string[] | null = null) => invoke<CheckRun>("project_check", { id, ruleIds }),
+  projectRuns: (id: string) => invoke<CheckRun[]>("project_runs", { id }),
+  projectReport: (id: string) => invoke<{ markdown: string }>("project_report", { id }),
+  /** Starts the `draft` job for the 보완요청서; the finished job's `result` is a `DraftOutcome`. */
+  projectRequestSupplement: (id: string, findingIds: string[] | null = null, output: OutputFormat | null = null) =>
+    invoke<{ job_id: string }>("project_request_supplement", { id, findingIds, output }),
+
+  // -- maintenance (P7 retention job) --
+  maintenanceStatus: () => invoke<MaintenanceStatus>("maintenance_status"),
+  maintenanceRunNow: () => invoke<{ job_id: string }>("maintenance_run_now"),
 };
 
 /** Native multi-file picker for documents (Tauri only). Returns [] when cancelled or unavailable. */

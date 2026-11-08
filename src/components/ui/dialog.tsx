@@ -15,7 +15,7 @@ const DialogOverlay = React.forwardRef<React.ElementRef<typeof DialogPrimitive.O
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 
 const DialogContent = React.forwardRef<React.ElementRef<typeof DialogPrimitive.Content>, React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & { closeLabel?: string }>(
-  ({ className, children, closeLabel = "Close", ...props }, ref) => (
+  ({ className, children, closeLabel = "Close", onEscapeKeyDown, ...props }, ref) => (
     <DialogPortal>
       <DialogOverlay />
       <DialogPrimitive.Content
@@ -24,6 +24,14 @@ const DialogContent = React.forwardRef<React.ElementRef<typeof DialogPrimitive.C
           "fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-lg border border-border bg-bg-elevated p-6 text-fg shadow-[var(--shadow)]",
           className,
         )}
+        onEscapeKeyDown={(e) => {
+          // Esc while a Korean IME composition is open cancels the composition, not the dialog (design §3.7.4).
+          if (e.isComposing || e.keyCode === 229) {
+            e.preventDefault();
+            return;
+          }
+          onEscapeKeyDown?.(e);
+        }}
         {...props}
       >
         {children}

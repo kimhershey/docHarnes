@@ -7,9 +7,16 @@ import type { TFunction } from "i18next";
 
 import {
   FOLDER_TEMPLATES,
+  isCheckRun,
+  isDraft,
+  isProject,
+  isProjectDetail,
+  isRuleDraft,
   type AggregateRequest,
   type AggregateResult,
   type Answer,
+  type CheckRun,
+  type Draft,
   type ExportPreview,
   type ExportResult,
   type Op,
@@ -23,6 +30,9 @@ import {
   type PlanPreview,
   type PlanResponse,
   type PlanSource,
+  type Project,
+  type ProjectDetail,
+  type RuleDraft,
   type Scope,
   type SearchResponse,
   type StepPreview,
@@ -31,7 +41,7 @@ import {
   type UndoReport,
 } from "@/lib/types";
 
-import { FILE_OPS, UI_OPS } from "./opSpecs";
+import { DRAFT_OPS, FILE_OPS, UI_OPS } from "./opSpecs";
 
 type Dict = Record<string, unknown>;
 
@@ -162,6 +172,28 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
         op.include && op.include.length > 0 ? pt("include", { list: op.include.join(", ") }) : null,
         op.target && op.target !== "fields" ? pt(`target_${op.target}`) : null,
       ]);
+    case "draft_document": {
+      const form = op.form_ref ? (TEMPLATE_KEYS.includes(op.form_ref) ? t(`generate.templates.${op.form_ref}`) : op.form_ref) : null;
+      return joinParts([form ? pt("form", { name: form }) : op.format_description ? truncate(op.format_description, 40) : pt("form_auto"), truncate(op.content, 60), op.sources && op.sources.length > 0 ? pt("sources", { count: op.sources.length }) : null, op.output ? op.output.toUpperCase() : null, op.tone ? t(`generate.tone.${op.tone}`) : null, op.length ? t(`generate.length.${op.length}`) : null]);
+    }
+    case "register_form":
+      return joinParts([op.doc_ref && op.doc_ref !== "current" ? op.doc_ref : pt("current_document"), op.name ?? null, op.doc_type_slug ? docTypeName(op.doc_type_slug, ctx.context, lang) : null]);
+    case "explain":
+      return joinParts([truncate(op.selection ?? op.question ?? "", 80), op.scope ? pt(`explain_scope_${op.scope}`) : null, op.allow_general_knowledge ? pt("allow_general") : null]);
+    case "compare":
+      return joinParts([pt("compare_docs", { count: op.doc_ids.length }), op.aspects && op.aspects.length > 0 ? op.aspects.join(", ") : null]);
+    case "create_project":
+      return joinParts([`'${op.name}'`, op.template ? pt("project_template", { name: projectTemplateName(op.template, t) }) : null, op.doc_types_required && op.doc_types_required.length > 0 ? pt("required_types", { count: op.doc_types_required.length }) : null]);
+    case "add_to_project":
+      return joinParts([projectName(op.project, ctx.context, t), op.doc_ids && op.doc_ids.length > 0 ? pt("documents_count", { count: op.doc_ids.length }) : pt("scope_documents")]);
+    case "define_rule":
+      return joinParts([op.template ? pt("project_template", { name: projectTemplateName(op.template, t) }) : projectName(op.project, ctx.context, t), truncate(op.description, 80)]);
+    case "check_consistency":
+      return joinParts([projectName(op.project, ctx.context, t), op.rules && op.rules.length > 0 ? pt("rules_count", { count: op.rules.length }) : pt("all_rules")]);
+    case "request_supplement":
+      return joinParts([projectName(op.project, ctx.context, t), op.findings && op.findings.length > 0 ? pt("findings_count", { count: op.findings.length }) : pt("all_findings"), op.output ? op.output.toUpperCase() : null]);
+    case "set_retention":
+      return joinParts([t(`planner.params.retention_${op.item}`), op.days < 0 ? t("common.forever") : op.days === 0 ? t("settings.privacy.immediate") : pt("days", { count: op.days })]);
     case "set_model":
       return op.id;
     case "set_profile":
@@ -189,6 +221,23 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
     default:
       return "";
   }
+}
+
+const TEMPLATE_KEYS = ["official_letter", "quotation", "transaction_statement", "contract", "report", "minutes", "supplement_request"];
+const PROJECT_TEMPLATE_KEYS: Record<string, string> = { "builtin-certification_review": "certification_review", "builtin-vendor_onboarding": "vendor_onboarding", "builtin-purchase_settlement": "purchase_settlement" };
+
+/** Built-in project templates get their i18n name; user templates are shown by id / name. */
+export function projectTemplateName(ref: string, t: TFunction): string {
+  const key = PROJECT_TEMPLATE_KEYS[ref] ?? (["certification_review", "vendor_onboarding", "purchase_settlement"].includes(ref) ? ref : null);
+  return key ? t(`projects.templates.builtin.${key}`) : ref;
+}
+
+/** Project reference of a plan step: the named project, else the one open in the UI, else "(현재 프로젝트)". */
+export function projectName(ref: string | null | undefined, context: PlanContext | null | undefined, t: TFunction): string {
+  const id = ref ?? context?.current_project ?? null;
+  if (!id) return context && context.projects.length === 1 ? (context.projects[0]?.name ?? "") : t("planner.params.current_project");
+  const p = context?.projects.find((x) => x.id === id || compact(x.name) === compact(id));
+  return p ? p.name : ref ?? t("planner.params.current_project");
 }
 
 const SETTING_LABEL_KEYS: Record<string, string> = {
@@ -287,8 +336,10 @@ export function uiContextFor(
   folder: string | null,
   selectedIds: string[],
   lastDocument: { id: string; page: number | null } | null,
+  currentProject: string | null = null,
 ): UiPlanContext {
   const ctx: UiPlanContext = {};
+  if (currentProject) ctx.current_project = currentProject;
   if (scope === "folder" && folder) ctx.folder = folder;
   if (scope === "selection" && selectedIds.length > 0) ctx.selected_doc_ids = selectedIds;
   if (scope === "document" && lastDocument) ctx.selected_doc_ids = [lastDocument.id];
@@ -325,11 +376,15 @@ export interface Impact {
   moves: number;
   deletes: number;
   exports: number;
+  /** Document drafts opened in 문서 생성 (saved there, not by the plan). */
+  drafts: number;
+  /** Project / rule database writes. */
+  projects: number;
   documents: number;
 }
 
 export function impactOf(plan: Plan, preview: PlanPreview | null): Impact {
-  const impact: Impact = { moves: 0, deletes: 0, exports: 0, documents: preview?.document_count ?? 0 };
+  const impact: Impact = { moves: 0, deletes: 0, exports: 0, drafts: 0, projects: 0, documents: preview?.document_count ?? 0 };
   plan.operations.forEach((op, i) => {
     const step = preview?.steps.find((s) => s.index === i);
     if (FILE_OPS.has(op.op)) {
@@ -339,6 +394,10 @@ export function impactOf(plan: Plan, preview: PlanPreview | null): Impact {
       impact.deletes += step && isRecord(step.payload) ? num(step.payload.documents) : impact.documents;
     } else if (op.op === "export") {
       impact.exports += 1;
+    } else if (DRAFT_OPS.has(op.op)) {
+      impact.drafts += 1;
+    } else if (op.op === "create_project" || op.op === "add_to_project" || op.op === "define_rule") {
+      impact.projects += 1;
     }
   });
   return impact;
@@ -349,6 +408,8 @@ export function impactLine(impact: Impact, t: TFunction): string {
     impact.moves > 0 ? t("planner.card.impact_moves", { count: impact.moves }) : null,
     impact.deletes > 0 ? t("planner.card.impact_delete", { count: impact.deletes }) : null,
     impact.exports > 0 ? t("planner.card.impact_export", { count: impact.exports }) : null,
+    impact.drafts > 0 ? t("planner.card.impact_draft", { count: impact.drafts }) : null,
+    impact.projects > 0 ? t("planner.card.impact_project", { count: impact.projects }) : null,
   ].filter((x): x is string => x !== null);
   return t("planner.card.impact", { effects: effects.length > 0 ? effects.join(" · ") : t("planner.card.impact_none"), count: impact.documents });
 }
@@ -407,6 +468,12 @@ export interface ResultActions {
   summaries: { index: number; items: { document_id: string; name: string; answer: Answer }[] }[];
   aggregates: { index: number; result: AggregateResult; op: Extract<Op, { op: "aggregate" }> | null }[];
   undos: { index: number; report: UndoReport }[];
+  /** `draft_document` / `request_supplement`: drafts the 문서 생성 screen opens (P6). */
+  drafts: { index: number; draft: Draft }[];
+  /** Project ops: the project each payload refers to (link to `/projects/<id>`). */
+  projects: { index: number; project: Project; detail: ProjectDetail | null }[];
+  ruleDrafts: { index: number; ruleDraft: RuleDraft; projectId: string | null }[];
+  checks: { index: number; run: CheckRun }[];
   batches: string[];
   failed: StepResult | null;
 }
@@ -427,6 +494,10 @@ export function deriveResultActions(execution: PlanExecution, plan: Plan): Resul
     summaries: [],
     aggregates: [],
     undos: [],
+    drafts: [],
+    projects: [],
+    ruleDrafts: [],
+    checks: [],
     batches: [...execution.batches],
     failed: execution.steps.find((s) => s.status === "failed") ?? null,
   };
@@ -465,7 +536,25 @@ export function deriveResultActions(execution: PlanExecution, plan: Plan): Resul
         if (isRecord(payload) && Array.isArray(payload.hits)) out.searches.push({ index: step.index, query: op && op.op === "search" ? op.query : "", response: payload as unknown as SearchResponse });
         break;
       case "answer":
+      case "explain":
+      case "compare":
         if (isAnswer(payload)) out.answers.push({ index: step.index, answer: payload });
+        break;
+      case "draft_document":
+      case "request_supplement":
+        if (isDraft(payload)) out.drafts.push({ index: step.index, draft: payload });
+        break;
+      case "create_project":
+        if (isProject(payload)) out.projects.push({ index: step.index, project: payload, detail: null });
+        break;
+      case "add_to_project":
+        if (isProjectDetail(payload)) out.projects.push({ index: step.index, project: payload.project, detail: payload });
+        break;
+      case "define_rule":
+        if (isRuleDraft(payload)) out.ruleDrafts.push({ index: step.index, ruleDraft: payload, projectId: op && op.op === "define_rule" ? (op.project ?? null) : null });
+        break;
+      case "check_consistency":
+        if (isCheckRun(payload)) out.checks.push({ index: step.index, run: payload });
         break;
       case "summarize":
         if (isRecord(payload) && Array.isArray(payload.summaries)) {

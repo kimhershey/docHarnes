@@ -1,4 +1,4 @@
-import { Check, CircleSlash, FolderOpen, ListChecks, MinusCircle, Undo2, X } from "lucide-react";
+import { Briefcase, Check, CircleSlash, FilePlus2, FolderOpen, ListChecks, MinusCircle, Undo2, X } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
@@ -7,11 +7,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AnswerCard } from "@/features/knowledge/AnswerCard";
 import { openCitation } from "@/features/knowledge/AnswersPanel";
+import { RuleSummary } from "@/features/projects/RuleGrid";
+import { verdictVariant } from "@/features/projects/rules";
 import { hitHref } from "@/features/search/SearchPage";
 import { runJournal } from "@/lib/commands";
 import { revealPath } from "@/lib/ipc";
 import { SCREEN_ROUTES, type OrganizeItem, type Plan, type PlanExecution, type PlanResponse, type StepStatus, type UndoReport } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useGenerateStore } from "@/stores/generate";
 import { usePipelineStore } from "@/stores/pipeline";
 
 import { AggregateCard } from "./AggregateCard";
@@ -96,6 +99,17 @@ export function ResultCard({ execution, plan, response, error }: { execution: Pl
   const openReview = () => {
     if (actions.reviewDocuments.length === 1) usePipelineStore.getState().openReviewForDocument(actions.reviewDocuments[0]!);
     navigate(SCREEN_ROUTES.review);
+  };
+  const openDraft = (index: number) => {
+    const d = actions.drafts.find((x) => x.index === index);
+    if (!d) return;
+    useGenerateStore.getState().openDraft(d.draft);
+    navigate(SCREEN_ROUTES.generate);
+  };
+  const projectIdOf = (ref: string | null) => {
+    const id = ref ?? context?.current_project ?? null;
+    if (!id) return null;
+    return context?.projects.find((p) => p.id === id || p.name === id)?.id ?? id;
   };
 
   return (
@@ -200,6 +214,54 @@ export function ResultCard({ execution, plan, response, error }: { execution: Pl
       ))}
       {actions.aggregates.map((a) => (
         <AggregateCard key={a.index} result={a.result} request={a.op ? aggregateRequestFor(a.op, plan.scope, a.result.include_unreviewed) : null} summary={plan.summary ?? execution.steps[a.index]?.summary ?? ""} context={context} />
+      ))}
+      {actions.drafts.map((d) => (
+        <div key={d.index} className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-bg p-2 text-xs" data-testid="result-draft">
+          <FilePlus2 className="size-4 text-accent" aria-hidden="true" />
+          <span className="font-medium selectable">{d.draft.title}</span>
+          <span className="text-fg-muted">{t("generate.result.meta", { fields: d.draft.fields.length, issues: d.draft.issues.length, source: t(`generate.source.${d.draft.model ? "model" : "rules"}`) })}</span>
+          <Button size="sm" variant="secondary" onClick={() => openDraft(d.index)} data-testid="result-open-draft">
+            {t("generate.open_in_generate")}
+          </Button>
+        </div>
+      ))}
+      {actions.projects.map((p) => (
+        <div key={p.index} className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-bg p-2 text-xs" data-testid="result-project">
+          <Briefcase className="size-4 text-accent" aria-hidden="true" />
+          <span className="font-medium selectable">{p.project.name}</span>
+          <Badge variant="muted">{t(`projects.status.${p.project.status}`)}</Badge>
+          <span className="text-fg-muted">{t("projects.card.documents", { count: p.project.document_count })}</span>
+          <Button size="sm" variant="secondary" onClick={() => navigate(`${SCREEN_ROUTES.projects}/${p.project.id}`)} data-testid="result-open-project">
+            {t("planner.result.open_project")}
+          </Button>
+        </div>
+      ))}
+      {actions.ruleDrafts.map((r) => {
+        const pid = projectIdOf(r.projectId);
+        return (
+          <div key={r.index} className="flex flex-col gap-1 rounded-md border border-border bg-bg p-2 text-xs" data-testid="result-rule">
+            <span className="font-medium selectable">{r.ruleDraft.rule.description}</span>
+            <RuleSummary rule={r.ruleDraft.rule} />
+            {r.ruleDraft.issues.length > 0 && <span className="text-warn">⚠ {r.ruleDraft.issues.join(" · ")}</span>}
+            {pid && (
+              <Button size="sm" variant="secondary" className="self-start" onClick={() => navigate(`${SCREEN_ROUTES.projects}/${pid}?tab=rules`)} data-testid="result-open-rules">
+                {t("planner.result.open_project")}
+              </Button>
+            )}
+          </div>
+        );
+      })}
+      {actions.checks.map((c) => (
+        <div key={c.index} className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-bg p-2 text-xs" data-testid="result-check">
+          {(["pass", "mismatch", "undetermined", "missing"] as const).map((v) => (
+            <Badge key={v} variant={verdictVariant(v)}>
+              {t(`projects.results.verdict.${v}`)} {c.run[v]}
+            </Badge>
+          ))}
+          <Button size="sm" variant="secondary" onClick={() => navigate(`${SCREEN_ROUTES.projects}/${c.run.project_id}?tab=results`)} data-testid="result-open-check">
+            {t("planner.result.open_results")}
+          </Button>
+        </div>
       ))}
     </div>
   );
