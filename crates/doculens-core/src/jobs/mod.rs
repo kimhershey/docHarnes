@@ -452,8 +452,15 @@ impl EngineGate {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// A batch job starts using the engine.
-    pub fn batch_begin(&self) {
+    /// A batch job starts using the engine; the returned guard ends the batch when dropped
+    /// (also when the worker panics or returns early).
+    pub fn batch_begin(&self) -> BatchGuard<'_> {
+        self.batch_begin_raw();
+        BatchGuard(self)
+    }
+
+    /// `batch_begin` without the guard (callers that pair it with `batch_end` themselves).
+    pub fn batch_begin_raw(&self) {
         let mut g = self.lock();
         g.batch_busy = true;
         g.busy_since = Some(Instant::now());
@@ -495,23 +502,32 @@ impl EngineGate {
 
     /// Runs an interactive request at the next page boundary.
     pub fn interactive<T>(&self, f: impl FnOnce() -> T) -> T {
+        match self.interactive_cancellable(None, f) {
+            Ok(v) => v,
+            Err(_) => unreachable!("no cancel flag"),
+        }
+    }
+
+    /// `interactive` that gives up with `Cancelled` while still waiting when `cancel` is set.
+    /// The counters are restored by guards, so a panic inside `f` cannot wedge the gate.
+    pub fn interactive_cancellable<T>(&self, cancel: Option<&AtomicBool>, f: impl FnOnce() -> T) -> Result<T> {
         {
             let mut g = self.lock();
             g.waiting += 1;
             self.cv.notify_all();
             while g.batch_busy {
+                if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+                    g.waiting -= 1;
+                    self.cv.notify_all();
+                    return Err(CoreError::Cancelled);
+                }
                 g = self.cv.wait_timeout(g, Duration::from_millis(100)).unwrap_or_else(|e| e.into_inner()).0;
             }
             g.waiting -= 1;
             g.interactive_running += 1;
         }
-        let out = f();
-        {
-            let mut g = self.lock();
-            g.interactive_running = g.interactive_running.saturating_sub(1);
-            self.cv.notify_all();
-        }
-        out
+        let _guard = InteractiveGuard(self);
+        Ok(f())
     }
 
     pub fn status(&self) -> GateStatus {
@@ -522,6 +538,25 @@ impl EngineGate {
             waiting: g.waiting,
             estimated_wait_ms: if g.batch_busy { g.last_page_ms.saturating_sub(elapsed) } else { 0 },
         }
+    }
+}
+
+/// Ends a batch section when dropped.
+pub struct BatchGuard<'a>(&'a EngineGate);
+
+impl Drop for BatchGuard<'_> {
+    fn drop(&mut self) {
+        self.0.batch_end();
+    }
+}
+
+struct InteractiveGuard<'a>(&'a EngineGate);
+
+impl Drop for InteractiveGuard<'_> {
+    fn drop(&mut self) {
+        let mut g = self.0.lock();
+        g.interactive_running = g.interactive_running.saturating_sub(1);
+        self.0.cv.notify_all();
     }
 }
 
@@ -616,16 +651,14 @@ mod tests {
         let c2 = ctl.clone();
         let p2 = pages_done.clone();
         let batch = thread::spawn(move || {
-            g2.batch_begin();
+            let _lease = g2.batch_begin();
             for _ in 0..50 {
                 thread::sleep(Duration::from_millis(5)); // "a page"
                 p2.fetch_add(1, Ordering::SeqCst);
                 if g2.checkpoint(&c2).is_err() {
-                    g2.batch_end();
                     return "cancelled";
                 }
             }
-            g2.batch_end();
             "done"
         });
         // An interactive request gets served while the batch keeps going.
@@ -657,5 +690,26 @@ mod tests {
         // Without a batch, interactive runs immediately.
         assert_eq!(gate.interactive(|| 7), 7);
         assert!(ctl.wait_while_paused().is_err());
+    }
+
+    #[test]
+    fn gate_survives_panics_and_cancels_waiting_requests() {
+        let gate = EngineGate::new();
+        // A panic inside an interactive closure must not leave `interactive_running` behind.
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gate.interactive(|| panic!("boom"))));
+        assert!(r.is_err());
+        let ctl = JobControl::new(Arc::new(AtomicBool::new(false)));
+        let guard = gate.batch_begin();
+        assert!(gate.status().batch_busy);
+        // A checkpoint with no waiters returns at once (the counter was restored by the guard).
+        assert!(gate.checkpoint(&ctl).is_ok());
+        // A dropped batch guard (panic / early return) frees the gate.
+        drop(guard);
+        assert!(!gate.status().batch_busy);
+        // Waiting interactive requests can be cancelled.
+        let _busy = gate.batch_begin();
+        let cancel = AtomicBool::new(true);
+        assert!(matches!(gate.interactive_cancellable(Some(&cancel), || 1), Err(CoreError::Cancelled)));
+        assert_eq!(gate.status().waiting, 0);
     }
 }

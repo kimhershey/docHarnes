@@ -18,6 +18,27 @@ use super::{
     SettingKey, MAX_OPS,
 };
 
+/// Ops that change documents must name their targets: an empty scope would mean the whole
+/// library. Callers skip this when the sentence explicitly said so ("전부", "all documents").
+pub fn scope_required(plan: &Plan) -> Option<PlanIssue> {
+    if !plan.scope.is_empty() {
+        return None;
+    }
+    let needs = plan.operations.iter().any(|op| match op {
+        Op::SetDocType { .. } | Op::Tag { .. } | Op::Delete { .. } | Op::Rename { .. } | Op::Move { .. } => true,
+        Op::Organize { dry_run, .. } => !dry_run.unwrap_or(false),
+        Op::Review { action: ReviewOp::Approve | ReviewOp::Reject | ReviewOp::Correct, .. } => true,
+        _ => false,
+    });
+    needs.then(|| {
+        PlanIssue::error(
+            "scope",
+            "scope_required",
+            "this plan changes documents but names none: select documents or give a folder / type / date range",
+        )
+    })
+}
+
 /// Parses the model's JSON into a plan. Serde errors become a single blocking
 /// issue whose message names the offending field (fed back to the model).
 pub fn parse_plan(raw: &Value) -> Result<Plan, PlanIssue> {
@@ -209,6 +230,12 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
                 *pages = set.into_iter().collect();
             }
             Op::DefineSchema { base, mode, description, name } => {
+                if let Some(d) = description.as_mut() {
+                    *d = d.trim().chars().take(2_000).collect();
+                }
+                if let Some(n) = name.as_mut() {
+                    *n = n.trim().chars().take(120).collect();
+                }
                 if let Some(b) = base.as_deref() {
                     if ctx.schema(b).is_none() && ctx.doc_type(b).is_none() && !ctx.schemas.is_empty() {
                         issues.push(PlanIssue::error(
@@ -356,17 +383,18 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
             Op::Export { format, path, columns, .. } => {
                 if let Some(p) = path.clone() {
                     match workspace_relative(&p) {
-                        Some(mut rel) => {
+                        // Planner exports stay under exports/: a document path would be overwritten otherwise.
+                        Some(mut rel) if rel.starts_with("exports/") => {
                             let ext = format!(".{}", format.extension());
                             if !rel.to_lowercase().ends_with(&ext) {
                                 rel.push_str(&ext);
                             }
                             *path = Some(rel);
                         }
-                        None => issues.push(PlanIssue::error(
+                        _ => issues.push(PlanIssue::error(
                             at("path"),
                             "path_outside",
-                            format!("'{p}' must be a workspace-relative path (exports/…)"),
+                            format!("'{p}' must be a path under exports/"),
                         )),
                     }
                 }
@@ -403,7 +431,7 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
             }
             Op::SetSetting { key, value } => check_setting(*key, value, &at("value"), &mut issues),
             Op::Open { target, reference } => {
-                *reference = reference.trim().to_string();
+                *reference = reference.trim().chars().take(300).collect();
                 match target {
                     OpenTarget::Screen => {
                         if Screen::parse(reference).is_none() {

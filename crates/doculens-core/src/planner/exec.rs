@@ -3,6 +3,7 @@
 //! knowledge, organise, aggregate and export modules. UI-side ops (settings,
 //! navigation, job / engine control) are returned as `ui_actions`.
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
@@ -110,6 +111,33 @@ pub fn plan_kinds(plan: &Plan) -> Vec<OpKind> {
     plan.operations.iter().map(Op::kind).collect()
 }
 
+/// Engine occupancy hook (§3.9 single slot): `begin` before a model-bound step, `end` after it,
+/// so interactive requests only wait during model steps, not during imports / exports.
+pub trait EngineLease {
+    fn begin(&self);
+    fn end(&self);
+}
+
+/// Releases the lease on every exit path (errors, early returns, unwinding).
+struct LeaseGuard<'a>(Option<&'a dyn EngineLease>);
+
+impl<'a> LeaseGuard<'a> {
+    fn acquire(lease: Option<&'a dyn EngineLease>) -> LeaseGuard<'a> {
+        if let Some(l) = lease {
+            l.begin();
+        }
+        LeaseGuard(lease)
+    }
+}
+
+impl Drop for LeaseGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(l) = self.0 {
+            l.end();
+        }
+    }
+}
+
 /// Everything the executor needs; the shell assembles it per job.
 pub struct ExecDeps<'a> {
     pub import: ImportDeps<'a>,
@@ -128,6 +156,8 @@ pub struct ExecDeps<'a> {
     pub cancel: Option<&'a AtomicBool>,
     /// Called between documents / pages: pause, engine gate (`Err` = cancelled).
     pub checkpoint: Option<&'a dyn Fn() -> Result<()>>,
+    /// Engine occupancy around model-bound steps.
+    pub lease: Option<&'a dyn EngineLease>,
 }
 
 impl ExecDeps<'_> {
@@ -177,7 +207,8 @@ pub struct ExecProgress {
 fn working_set(deps: &ExecDeps<'_>, plan: &Plan, imported: Option<&[String]>) -> Result<Vec<DocumentRecord>> {
     let mut docs = deps.db().with(|c| scope::resolve(c, &plan.scope))?;
     if let Some(ids) = imported {
-        docs.retain(|d| ids.contains(&d.id));
+        let keep: HashSet<&str> = ids.iter().map(String::as_str).collect();
+        docs.retain(|d| keep.contains(d.id.as_str()));
     }
     Ok(docs)
 }
@@ -337,7 +368,8 @@ fn run_step(
                     let root = std::path::PathBuf::from(p);
                     let root = if root.is_absolute() { root } else { deps.paths().root.join(root) };
                     let (files, _truncated) = import::collect_paths(std::slice::from_ref(&root), 10_000);
-                    let files = if recursive.unwrap_or(true) {
+                    // Model-produced plans never recurse into an external folder unless asked to.
+                    let files = if recursive.unwrap_or(false) {
                         files
                     } else {
                         files.into_iter().filter(|f| f.parent() == Some(root.as_path())).collect()
@@ -550,6 +582,7 @@ fn run_step(
         }
         Op::Answer { question, cite: _ } => {
             let chat = deps.chat.ok_or_else(|| no_model(deps))?;
+            let _lease = LeaseGuard::acquire(deps.lease);
             let docs_ = if plan.scope.is_empty() { Vec::new() } else { working_set(deps, plan, imported)? };
             let mut req = AnswerRequest::question(question);
             req.scope = SearchScope {
@@ -581,6 +614,7 @@ fn run_step(
         }
         Op::Summarize { target, length } => {
             let chat = deps.chat.ok_or_else(|| no_model(deps))?;
+            let _lease = LeaseGuard::acquire(deps.lease);
             let docs_ = working_set(deps, plan, imported)?;
             if docs_.is_empty() {
                 return Err(CoreError::Invalid("no_documents".into()));
@@ -753,7 +787,7 @@ fn run_step(
             })
         }
         Op::Export { format, path, columns, layout, include, target } => {
-            let req = ExportRequest {
+            let mut req = ExportRequest {
                 format: *format,
                 target: target.unwrap_or(ExportTarget::Fields),
                 path: path.clone(),
@@ -768,6 +802,26 @@ fn run_step(
                 overwrite: true,
                 language: deps.language,
             };
+            // A default (unnamed) target that already exists gets a fresh name instead of being
+            // overwritten: the card only promised an overwrite for an explicit path.
+            if path.is_none() {
+                let preview = export::preview(db, deps.paths(), &req)?;
+                if preview.exists {
+                    let (stem, ext) = match preview.path.rsplit_once('.') {
+                        Some((s, e)) => (s.to_string(), format!(".{e}")),
+                        None => (preview.path.clone(), String::new()),
+                    };
+                    let mut n = 2;
+                    loop {
+                        let candidate = format!("{stem}_{n}{ext}");
+                        if !deps.paths().root.join(&candidate).exists() || n > 999 {
+                            req.path = Some(candidate);
+                            break;
+                        }
+                        n += 1;
+                    }
+                }
+            }
             let res = export::export(db, deps.paths(), &req, deps.cancel)?;
             Ok(StepOutcome {
                 summary: format!("{} → {}", count_label(deps, res.documents as usize), res.path),
@@ -866,6 +920,7 @@ fn pipeline_step(
             imported: None,
         });
     }
+    let _lease = LeaseGuard::acquire(deps.lease);
     let pdeps = PipelineDeps {
         import: ImportDeps {
             db: deps.import.db,
@@ -1175,21 +1230,45 @@ pub fn preview(
                     false,
                 ),
             },
-            Op::Classify { .. }
-            | Op::Ocr { .. }
-            | Op::Validate {}
-            | Op::Summarize { .. }
-            | Op::Tag { .. }
-            | Op::SetDocType { .. } => (count_label_lang(docs_.len(), ko), json!({ "documents": docs_.len() }), false),
-            Op::Import { source, .. } => {
-                let n = match source {
-                    super::ImportFrom::Inbox => import::inbox_plan(db, paths, &ImportOptions::default())
-                        .map(|p| p.importable().count())
-                        .unwrap_or(0),
-                    _ => 0,
-                };
-                (if ko { format!("신규 {n}개") } else { format!("{n} new files") }, json!({ "new": n }), false)
+            Op::Classify { .. } | Op::Ocr { .. } | Op::Validate {} | Op::Summarize { .. } => {
+                (count_label_lang(docs_.len(), ko), json!({ "documents": docs_.len() }), false)
             }
+            // Bulk edits of several documents are confirmed first.
+            Op::Tag { .. }
+            | Op::SetDocType { .. }
+            | Op::Review { action: ReviewOp::Approve | ReviewOp::Reject | ReviewOp::Correct, .. } => {
+                (count_label_lang(docs_.len(), ko), json!({ "documents": docs_.len() }), docs_.len() > 1)
+            }
+            Op::Import { source, path, recursive, .. } => match source {
+                super::ImportFrom::Folder => {
+                    let p = path.clone().unwrap_or_default();
+                    let root = std::path::PathBuf::from(&p);
+                    let root = if root.is_absolute() { root } else { paths.root.join(&root) };
+                    let (files, truncated) = import::collect_paths(std::slice::from_ref(&root), 10_000);
+                    let recurse = recursive.unwrap_or(false);
+                    let n = if recurse {
+                        files.len()
+                    } else {
+                        files.iter().filter(|f| f.parent() == Some(root.as_path())).count()
+                    };
+                    let more = if truncated { "+" } else { "" };
+                    (
+                        if ko {
+                            format!("폴더 {p} · 파일 {n}{more}개를 워크스페이스로 복사")
+                        } else {
+                            format!("folder {p} · {n}{more} files copied into the workspace")
+                        },
+                        json!({ "folder": p, "files": n, "truncated": truncated, "recursive": recurse }),
+                        true,
+                    )
+                }
+                _ => {
+                    let n = import::inbox_plan(db, paths, &ImportOptions::default())
+                        .map(|p| p.importable().count())
+                        .unwrap_or(0);
+                    (if ko { format!("신규 {n}개") } else { format!("{n} new files") }, json!({ "new": n }), false)
+                }
+            },
             _ => (String::new(), Value::Null, op.needs_confirmation()),
         };
         if confirm {

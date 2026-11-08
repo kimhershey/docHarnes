@@ -91,12 +91,12 @@ pub fn jobs_get(app: AppHandle, job_id: String) -> Option<Job> {
     app.state::<AppState>().jobs.get(&job_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn jobs_pause(app: AppHandle, job_id: String) -> bool {
     app.state::<AppState>().jobs.pause(&job_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn jobs_resume(app: AppHandle, job_id: String) -> bool {
     app.state::<AppState>().jobs.resume(&job_id)
 }
@@ -106,7 +106,7 @@ pub fn jobs_retry(app: AppHandle, job_id: String) -> UiResult<bool> {
     app.state::<AppState>().jobs.retry(&job_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn jobs_prioritize(app: AppHandle, job_id: String) -> bool {
     app.state::<AppState>().jobs.prioritize(&job_id)
 }

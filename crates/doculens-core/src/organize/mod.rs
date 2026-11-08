@@ -232,7 +232,7 @@ pub fn plan(db: &Db, paths: &WorkspacePaths, req: &OrganizeRequest) -> Result<Or
         }
         if candidate == from {
             out.unchanged += 1;
-            taken.insert(candidate.clone());
+            taken.insert(candidate.to_lowercase());
             out.items.push(OrganizeItem {
                 doc_id: doc.id.clone(),
                 name: display,
@@ -247,14 +247,15 @@ pub fn plan(db: &Db, paths: &WorkspacePaths, req: &OrganizeRequest) -> Result<Or
         // Collisions inside the batch or on disk → `_2`, `_3` …
         let base_name = name.clone();
         let mut n = 2;
-        while taken.contains(&candidate) || from_rel_path(&paths.root, &candidate).exists() {
+        // Windows paths are case-insensitive: compare lower-cased.
+        while taken.contains(&candidate.to_lowercase()) || from_rel_path(&paths.root, &candidate).exists() {
             candidate = join(&folder, &format!("{base_name}_{n}"), &ext);
             n += 1;
             if n > 10_000 {
                 break;
             }
         }
-        taken.insert(candidate.clone());
+        taken.insert(candidate.to_lowercase());
         if !missing.is_empty() {
             out.needs_review += 1;
         }
@@ -410,14 +411,24 @@ pub fn apply(
                     content_hash: Some(doc.content_hash.clone()),
                     size_bytes: Some(doc.size_bytes),
                 };
-                db.with(|c| {
+                // The file moved; if the bookkeeping fails, move it back so disk and DB agree.
+                match db.with(|c| {
                     docs::set_rel_path(c, &doc.id, &to, &new_name)?;
                     journal::append(c, paths, &batch_id, seq, &entry)
-                })?;
-                seq += 1;
-                item.status = ItemStatus::Done;
-                report.moved += 1;
-                report.documents.push(doc.id.clone());
+                }) {
+                    Ok(_) => {
+                        seq += 1;
+                        item.status = ItemStatus::Done;
+                        report.moved += 1;
+                        report.documents.push(doc.id.clone());
+                    }
+                    Err(e) => {
+                        let _ = move_file(&to_abs, &from_abs);
+                        item.status = ItemStatus::Failed;
+                        item.reason = Some(e.to_string());
+                        report.failed.push((item.doc_id.clone(), e.to_string()));
+                    }
+                }
             }
             Err(e) => {
                 item.status = ItemStatus::Failed;

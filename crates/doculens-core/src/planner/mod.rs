@@ -683,6 +683,8 @@ impl Op {
         match self {
             Op::Organize { dry_run: Some(true), .. } => false,
             Op::Organize { .. } | Op::Rename { .. } | Op::Move { .. } | Op::Delete { .. } => true,
+            // Copying an arbitrary folder into the workspace is shown before it runs.
+            Op::Import { source: ImportFrom::Folder, .. } => true,
             Op::Undo { .. } | Op::Redo {} => true,
             Op::Job { action: JobOp::Cancel, .. } => true,
             Op::Engine { action: EngineOp::Restart } => true,

@@ -96,6 +96,7 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext) -> Re
         return Ok(result);
     }
 
+    let scoped = |plan: Plan| guard_scope(plan, text, ko);
     // 1. deterministic pre-router (settings / navigation / help). Compound sentences
     //    ("다크 테마로 바꾸고 모델을 9B로 올려") go to the rules first so the second clause is kept.
     if is_compound(text) {
@@ -103,7 +104,7 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext) -> Re
             let issues = validate::validate(&mut p, ctx, date.as_ref());
             if !has_errors(&issues) {
                 result.source = PlanSource::Rules;
-                result.plan = p;
+                result.plan = scoped(p);
                 result.issues = issues;
                 return Ok(result);
             }
@@ -124,7 +125,7 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext) -> Re
         let issues = validate::validate(&mut p, ctx, date.as_ref());
         if !has_errors(&issues) {
             result.source = PlanSource::Rules;
-            result.plan = p;
+            result.plan = scoped(p);
             result.issues = issues;
             return Ok(result);
         }
@@ -196,7 +197,7 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext) -> Re
             Ok((plan, issues)) => {
                 result.source = PlanSource::Model;
                 result.issues = issues;
-                result.plan = finalize(plan, ko);
+                result.plan = scoped(finalize(plan, ko));
                 return Ok(result);
             }
             Err(issues) => {
@@ -230,6 +231,24 @@ fn parse_and_validate(
     } else {
         Ok((plan, issues))
     }
+}
+
+/// Document-changing ops without a scope ask which documents are meant, unless the sentence
+/// explicitly targeted the whole library.
+fn guard_scope(plan: Plan, text: &str, ko: bool) -> Plan {
+    if plan.is_clarification() || rules::mentions_all(text) || validate::scope_required(&plan).is_none() {
+        return plan;
+    }
+    let mut c = Plan::clarify(
+        if ko {
+            "어떤 문서를 대상으로 할까요? 라이브러리에서 선택하거나 폴더·유형·날짜를 말씀해 주세요(전체면 '전부'라고 해 주세요)."
+        } else {
+            "Which documents? Select them in the library or name a folder / type / date range (say 'all documents' for the whole library)."
+        },
+        plan.confidence.min(0.5),
+    );
+    c.summary = plan.summary.clone();
+    c
 }
 
 /// Low confidence → clarification first (§3.5).

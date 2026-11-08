@@ -15,13 +15,14 @@ use doculens_core::aggregate::{self, AggregateRequest, AggregateResult};
 use doculens_core::documents::import::{self as doc_import, ImportOptions, ImportSource};
 use doculens_core::documents::repo as docs;
 use doculens_core::export::{self, ExportPreview, ExportRequest};
+use doculens_core::jobs::EngineGate;
 use doculens_core::jobs::{JobControl, JobPriority, JobSpec};
 use doculens_core::knowledge::embed::Embedder;
 use doculens_core::organize::journal::{self, JournalBatch, JournalEntry, UndoReport};
 use doculens_core::organize::{self, OrganizePlan, OrganizeRequest};
 use doculens_core::pipeline::repo as pipeline_repo;
 use doculens_core::pipeline::run::{self as pipeline_run, PipelineDeps};
-use doculens_core::planner::exec::{self, ExecDeps, PlanExecution, PlanPreview};
+use doculens_core::planner::exec::{self, EngineLease, ExecDeps, PlanExecution, PlanPreview};
 use doculens_core::planner::llm::{self, PlannerDeps};
 use doculens_core::planner::{
     self, DocTypeSummary, FieldSummary, Op, OpKind, Plan, PlanContext, PlanResult, SchemaSummary,
@@ -57,6 +58,19 @@ pub struct ExecuteResponse {
     pub job_id: Option<String>,
     /// Set when the plan ran inline.
     pub execution: Option<PlanExecution>,
+}
+
+/// The engine gate as an executor lease: model-bound steps occupy the single slot, imports and
+/// exports in the same plan do not.
+struct GateLease<'a>(&'a EngineGate);
+
+impl EngineLease for GateLease<'_> {
+    fn begin(&self) {
+        self.0.batch_begin_raw();
+    }
+    fn end(&self) {
+        self.0.batch_end();
+    }
 }
 
 /// Builds the planner context from the workspace (types, schemas, folders, tags, models).
@@ -149,7 +163,21 @@ pub fn plan(app: &AppHandle, text: &str, ui: &UiPlanContext) -> UiResult<PlanRes
         None
     } else {
         let pctx = pipeline_bridge::context(app)?;
-        Some(exec::preview(pctx.db(), &pctx.docs.paths, &result.plan, &pctx.settings, ctx.language)?)
+        let preview = exec::preview(pctx.db(), &pctx.docs.paths, &result.plan, &pctx.settings, ctx.language)?;
+        // Pin "undo the last batch" to the batch the card shows, so a batch finishing in the
+        // meantime is not the one reverted.
+        for step in &preview.steps {
+            if step.op == OpKind::Undo {
+                if let (Some(Op::Undo { target }), Some(id)) =
+                    (result.plan.operations.get_mut(step.index), step.payload.get("id").and_then(Value::as_str))
+                {
+                    if target.is_none() {
+                        *target = Some(id.to_string());
+                    }
+                }
+            }
+        }
+        Some(preview)
     };
     Ok(PlanResponse { result, preview, context: ctx })
 }
@@ -181,6 +209,15 @@ pub fn execute(app: &AppHandle, mut plan: Plan, text: &str, ui: &UiPlanContext) 
     }
     if plan.is_clarification() {
         return Err(UiError::invalid("plan_clarify"));
+    }
+    if let Some(issue) = planner::validate::scope_required(&plan) {
+        if !planner::rules::mentions_all(text) {
+            return Err(UiError {
+                code: "plan_invalid".into(),
+                message: issue.message.clone(),
+                detail: serde_json::to_value(vec![issue]).ok(),
+            });
+        }
     }
     if inline_only(&plan) {
         let execution = run_inline(app, &plan, &ctx)?;
@@ -217,6 +254,7 @@ fn run_inline(app: &AppHandle, plan: &Plan, ctx: &PlanContext) -> UiResult<PlanE
         today: ctx.today,
         cancel: None,
         checkpoint: None,
+        lease: None,
     };
     let execution = exec::run(&deps, plan, &mut |_| {})?;
     after_execution(app, &pctx, &execution);
@@ -324,7 +362,7 @@ fn run_pipeline(
         ctx: model_ctx,
     };
     let total = req.document_ids.len() as u32;
-    state.gate.batch_begin();
+    let _lease = state.gate.batch_begin();
     let report = pipeline_run::process(&deps, req, &mut |p| {
         // Page boundary: pause / let interactive requests in (a cancel surfaces through the flag).
         let _ = state.gate.checkpoint(ctl);
@@ -339,7 +377,7 @@ fn run_pipeline(
             Some(progress_detail(job, JobKind::Pipeline, p)),
         );
     });
-    state.gate.batch_end();
+    drop(_lease);
     let report = report.map_err(|e| (e.to_string(), None))?;
     let mut ids = report.processed.clone();
     ids.extend(report.failed.iter().map(|(id, _)| id.clone()));
@@ -389,6 +427,7 @@ fn run_plan(
     let embedder = knowledge_bridge::embedder(app, false).ok().flatten();
     let engine_lane = needs_model;
     let gate = &state.gate;
+    let lease = GateLease(gate);
     let checkpoint = move || -> doculens_core::Result<()> {
         if engine_lane {
             gate.checkpoint(ctl)
@@ -411,10 +450,8 @@ fn run_plan(
         today: context.today,
         cancel: Some(&ctl.cancel),
         checkpoint: Some(&checkpoint),
+        lease: Some(&lease),
     };
-    if engine_lane {
-        state.gate.batch_begin();
-    }
     let steps = plan.operations.len() as u64;
     let result = exec::run(&deps, plan, &mut |p| {
         let frac = if p.steps == 0 {
@@ -430,9 +467,6 @@ fn run_plan(
         };
         state.jobs.progress(&job.id, frac, Some(p.step as u64), Some(steps), Some(detail));
     });
-    if engine_lane {
-        state.gate.batch_end();
-    }
     let execution = result.map_err(|e| (e.to_string(), None))?;
     after_execution(app, pctx, &execution);
     let payload = serde_json::to_value(&execution).ok();

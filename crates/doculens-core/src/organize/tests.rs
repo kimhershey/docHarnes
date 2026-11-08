@@ -280,3 +280,62 @@ fn deletion_to_workspace_trash_is_journaled_and_restorable() {
         assert_eq!(u.skipped[0].1, "os_trash");
     }
 }
+
+#[test]
+fn undo_with_nothing_restorable_keeps_the_batch_and_redo_is_invalidated_by_newer_batches() {
+    let w = World::new();
+    w.doc("a", "inbox/a.pdf", b"aaa", Some("receipt"), Some("A"), Some("2026-10-01"), Some(1.0), ReviewStatus::Done);
+    let req = OrganizeRequest {
+        scope: Scope { folder: Some("inbox".into()), ..Scope::default() },
+        name_template: None,
+        folder_template: Some("documents/{{doc_type}}".into()),
+        only_reviewed: false,
+        language: Language::Ko,
+    };
+    let p = plan(&w.db, &w.paths, &req).unwrap();
+    let r = apply(&w.db, &w.paths, &p, "move", "이동", "test", None, &mut no_progress).unwrap();
+    let batch = r.batch_id.clone().unwrap();
+    // The moved file disappears (removable drive): nothing can be restored, the batch stays undoable.
+    let moved = w.paths.root.join("documents/영수증/a.pdf");
+    std::fs::remove_file(&moved).unwrap();
+    let u = journal::undo_batch(&w.db, &w.paths, &batch).unwrap();
+    assert_eq!((u.restored, u.skipped.len()), (0, 1));
+    assert_eq!(u.skipped[0].1, "missing");
+    assert!(u.batch_id.is_empty());
+    assert!(w.db.with(|c| journal::get_batch(c, &batch)).unwrap().unwrap().undone_at.is_none());
+    assert_eq!(w.db.with(|c| journal::list_batches(c, 10)).unwrap().len(), 1, "no empty undo batch left behind");
+    // The file comes back → the same batch can be undone now.
+    std::fs::write(&moved, b"aaa").unwrap();
+    let u = journal::undo_batch(&w.db, &w.paths, &batch).unwrap();
+    assert_eq!(u.restored, 1);
+    assert_eq!(w.rel_path("a"), "inbox/a.pdf");
+    assert!(w.db.with(journal::last_redoable).unwrap().is_some());
+    // A newer file batch invalidates the redo stack.
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    w.doc("b", "inbox/b.pdf", b"bbb", Some("receipt"), Some("B"), Some("2026-10-02"), Some(2.0), ReviewStatus::Done);
+    let req_b = OrganizeRequest { scope: Scope { doc_ids: vec!["b".into()], ..Scope::default() }, ..req.clone() };
+    let pb = plan(&w.db, &w.paths, &req_b).unwrap();
+    apply(&w.db, &w.paths, &pb, "move", "이동 b", "test", None, &mut no_progress).unwrap();
+    assert!(w.db.with(journal::last_redoable).unwrap().is_none());
+}
+
+#[test]
+fn redo_never_re_deletes_a_restored_document() {
+    let w = World::new();
+    w.doc("a", "inbox/a.pdf", b"aaa", Some("receipt"), None, None, None, ReviewStatus::None);
+    let deps = w.deps();
+    let r = delete_documents(&deps, &["a".into()], "삭제", "test", None).unwrap();
+    let batch = r.batch_id.clone().unwrap();
+    let entries = w.db.with(|c| journal::entries(c, &batch)).unwrap();
+    if entries[0].trash_path.is_none() {
+        return; // OS recycle bin on this machine: nothing to restore in-app
+    }
+    let u = journal::undo_batch(&w.db, &w.paths, &batch).unwrap();
+    assert_eq!(u.restored, 1);
+    assert!(w.paths.root.join("inbox/a.pdf").is_file());
+    // "Redo" of that restore would trash the file again under a live (re-imported) row: refused.
+    let redo = journal::redo_last(&w.db, &w.paths).unwrap().unwrap();
+    assert_eq!(redo.restored, 0);
+    assert_eq!(redo.skipped[0].1, "restore_not_redoable");
+    assert!(w.paths.root.join("inbox/a.pdf").is_file());
+}

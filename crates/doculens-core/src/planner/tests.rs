@@ -11,6 +11,7 @@ use crate::settings::{Language, Profile, Theme};
 
 use super::llm::{self, plan, PlannerDeps};
 use super::prompts;
+use super::rules;
 use super::schema::{self, ParamType, OP_SPECS};
 use super::validate;
 use super::*;
@@ -228,6 +229,80 @@ fn example_commands_plan_without_a_model() {
     c.current_document = None;
     let r = plan(None, "문서 삭제해", &c).unwrap();
     assert!(r.plan.is_clarification(), "{r:?}");
+}
+
+#[test]
+fn rules_do_not_hijack_questions_or_everyday_words() {
+    // Latin triggers are whole words, questions stay questions, nouns are not verbs.
+    let answerish = |text: &str| {
+        let r = planned(text);
+        assert!(
+            matches!(&r.plan.operations[0], Op::Answer { .. } | Op::Search { .. } | Op::Clarify { .. }),
+            "{text} → {:?}",
+            r.plan.operations
+        );
+        r
+    };
+    assert!(
+        matches!(&answerish("find the shareholder agreement").plan.operations[0], Op::Search { query, .. } if query.contains("shareholder"))
+    );
+    answerish("find my resume");
+    answerish("이어서 설명해줘");
+    answerish("엑셀로 된 파일도 가져올 수 있어?");
+    answerish("can I import spreadsheets into the workspace?");
+    answerish("inbox에 뭐가 들어있는지 전부 알려줘");
+    answerish("이 문서 읽어줘");
+    answerish("이 계약서 내용 정리해서 알려줘");
+    answerish("지난달 회의록 정리해서 알려줘");
+    answerish("이 문서 삭제하면 되돌릴 수 있어?");
+    answerish("what percentage of receipts failed validation?");
+    // "remove these documents" is a deletion (with a selection), not a move.
+    let r = planned("remove these documents");
+    assert!(matches!(&r.plan.operations[0], Op::Delete { .. }), "{r:?}");
+    // Tagging without any target asks instead of tagging the whole library.
+    let mut c = ctx();
+    c.current_document = None;
+    let r = plan(None, "태그 중요 추가해", &c).unwrap();
+    assert!(r.plan.is_clarification(), "{r:?}");
+    // "현재 폴더 문서 분류해줘" is not a forced re-run.
+    let r = planned("여기 있는 문서 분류해줘");
+    assert!(matches!(&r.plan.operations[0], Op::Classify { force: None, .. }), "{r:?}");
+    // Whole-library edits need the explicit word; "pause the job" still works.
+    assert!(matches!(&planned("pause the job").plan.operations[0], Op::Job { action: JobOp::Pause, .. }));
+    let r = planned("모든 문서에 태그 2026 추가해");
+    assert!(matches!(&r.plan.operations[0], Op::Tag { .. }), "{r:?}");
+    assert!(rules::mentions_all("모든 문서에 태그 2026 추가해"));
+}
+
+#[test]
+fn validator_requires_scope_confirms_folder_imports_and_keeps_exports_in_exports() {
+    let c = ctx();
+    // Document-changing ops with an empty scope are rejected unless the text says "all".
+    let p = plan_of(json!([{ "op": "set_doc_type", "doc_type": "receipt" }]), json!({}));
+    assert_eq!(validate::scope_required(&p).map(|i| i.code), Some("scope_required".to_string()));
+    let p = plan_of(json!([{ "op": "organize", "dry_run": true }]), json!({}));
+    assert!(validate::scope_required(&p).is_none());
+    let p = plan_of(json!([{ "op": "tag", "add": ["x"] }]), json!({ "doc_ids": ["d1"] }));
+    assert!(validate::scope_required(&p).is_none());
+    // Through the planner: a model plan without a scope becomes a clarification.
+    let chat = StageChat::new();
+    chat.push("plan", json!({ "summary": "x", "intent": "set_doc_type", "scope": {}, "operations": [{ "op": "set_doc_type", "doc_type": "receipt" }], "requires_confirmation": false, "confidence": 0.9 }));
+    let r = plan(Some(&deps(&chat)), "한빛과 거래한 서류들 유형을 영수증으로 설정해", &c).unwrap();
+    assert_eq!(r.source, PlanSource::Model, "{r:?}");
+    assert!(r.plan.is_clarification(), "{r:?}");
+    // Folder imports always get the card; export paths must stay under exports/.
+    let mut p = plan_of(json!([{ "op": "import", "source": "folder", "path": "C:/Users/me/Scans" }]), json!({}));
+    let issues = validate::validate(&mut p, &c, None);
+    assert!(!has_errors(&issues), "{issues:?}");
+    assert!(p.requires_confirmation);
+    let mut p = plan_of(
+        json!([{ "op": "export", "format": "pdf_searchable", "path": "documents/2026/10/계약서.pdf" }]),
+        json!({}),
+    );
+    assert!(validate::validate(&mut p, &c, None).iter().any(|i| i.code == "path_outside" && i.blocking));
+    let mut p = plan_of(json!([{ "op": "export", "format": "csv", "path": "exports/영수증" }]), json!({}));
+    assert!(!has_errors(&validate::validate(&mut p, &c, None)));
+    assert!(matches!(&p.operations[0], Op::Export { path: Some(path), .. } if path == "exports/영수증.csv"));
 }
 
 #[test]
@@ -602,6 +677,7 @@ mod exec_tests {
                 today: NaiveDate::from_ymd_opt(2026, 11, 4).unwrap(),
                 cancel,
                 checkpoint: None,
+                lease: None,
             }
         }
 
@@ -717,6 +793,23 @@ mod exec_tests {
         let export = &ex.steps[5];
         let path = export.payload["path"].as_str().unwrap();
         assert!(w.paths.root.join(path).is_file(), "{path}");
+        // A second unnamed export must not overwrite the first: it gets `_2`.
+        let again = plan_of(
+            vec![Op::Export {
+                format: ExportFormat::Csv,
+                path: None,
+                columns: Vec::new(),
+                layout: None,
+                include: Vec::new(),
+                target: None,
+            }],
+            Scope { folder: Some("inbox".into()), ..Scope::default() },
+        );
+        let ex2 = exec::run(&w.deps(None), &again, &mut |_| {}).unwrap();
+        let path2 = ex2.steps[0].payload["path"].as_str().unwrap();
+        assert_ne!(path, path2);
+        assert!(path2.ends_with("_2.csv"), "{path2}");
+        assert!(w.paths.root.join(path2).is_file());
         assert_eq!(ex.ui_actions, vec![Op::SetTheme { theme: crate::settings::Theme::Dark }]);
         assert_eq!(ex.steps[6].status, StepStatus::Ui);
         // The move happened (the undo step then reverted it), both journaled.

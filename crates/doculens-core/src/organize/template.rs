@@ -118,6 +118,10 @@ pub fn sanitize_component(s: &str) -> String {
             })
             .collect();
     out = out.trim().trim_end_matches(['.', ' ']).to_string();
+    // Hidden / app folders (".doculens") must not be produced by a rendered value.
+    while out.starts_with('.') {
+        out.replace_range(..1, "_");
+    }
     if out.is_empty() {
         out = "_".into();
     }

@@ -29,12 +29,105 @@ struct Text<'a> {
     raw: &'a str,
     lower: String,
     compact: String,
+    /// Lower-case with every run of punctuation / whitespace collapsed to one space and a
+    /// space at both ends, so Latin triggers can be matched on word boundaries.
+    norm: String,
     ko: bool,
 }
 
-impl Text<'_> {
+impl<'a> Text<'a> {
+    fn new(raw: &'a str, ko: bool) -> Text<'a> {
+        let lower = raw.to_lowercase();
+        let mut norm = String::from(" ");
+        let mut prev_space = true;
+        for c in lower.chars() {
+            if c.is_alphanumeric() {
+                norm.push(c);
+                prev_space = false;
+            } else if !prev_space {
+                norm.push(' ');
+                prev_space = true;
+            }
+        }
+        if !norm.ends_with(' ') {
+            norm.push(' ');
+        }
+        let hangul = raw.chars().any(|c| ('\u{AC00}'..='\u{D7A3}').contains(&c));
+        Text { raw, lower, compact: compact(raw), norm, ko: ko || hangul }
+    }
+
+    /// Trigger matching. Korean (and other non-ASCII) triggers are substrings of the compacted
+    /// text; ASCII triggers match whole words (`"move"` does not match `remove`), a trailing `*`
+    /// allows a word prefix (`"classif*"`), and ASCII phrases / long glued tokens match the
+    /// compacted text (`"how much"`, `"includeunreviewed"`).
     fn has(&self, words: &[&str]) -> bool {
-        words.iter().any(|w| self.compact.contains(&compact(w)))
+        words.iter().any(|w| self.has_one(w))
+    }
+
+    fn has_one(&self, w: &str) -> bool {
+        let (key, prefix) = match w.strip_suffix('*') {
+            Some(k) => (k, true),
+            None => (w, false),
+        };
+        if !key.is_ascii() {
+            return self.compact.contains(&compact(key));
+        }
+        let key = key.trim().to_lowercase();
+        if key.is_empty() {
+            return false;
+        }
+        if key.contains(' ') || key.len() >= 9 {
+            return self.compact.contains(&compact(&key));
+        }
+        let needle = format!(" {key}");
+        let mut from = 0;
+        while let Some(pos) = self.norm[from..].find(&needle) {
+            let end = from + pos + needle.len();
+            if prefix || self.norm[end..].starts_with(' ') {
+                return true;
+            }
+            from += pos + 1;
+        }
+        false
+    }
+
+    /// A question about documents (what / how / 알려줘 / …?) rather than a request to act on them;
+    /// polite request forms ("…해 줄래?", "can you …") still count as commands.
+    fn is_question(&self) -> bool {
+        if self.has(&["줄래", "줄수", "해줄", "해줘", "해주", "부탁", "please", "can you", "could you", "would you"])
+        {
+            return false;
+        }
+        self.raw.trim_end().ends_with(['?', '？'])
+            || self.has(&[
+                "알려",
+                "뭐야",
+                "무엇",
+                "어떻게",
+                "어디",
+                "언제",
+                "누구",
+                "왜",
+                "인가요",
+                "있어",
+                "있나",
+                "되나",
+                "가능해",
+                "될까",
+                "무슨",
+                "어느",
+                "explain",
+                "what",
+                "how",
+                "when",
+                "where",
+                "why",
+                "which",
+                "who",
+                "is it",
+                "does",
+                "do i",
+            ])
     }
     fn t<'b>(&self, ko: &'b str, en: &'b str) -> &'b str {
         if self.ko {
@@ -84,18 +177,22 @@ const SELECTION_WORDS: &[&str] = &[
     "선택영역",
     "이페이지",
     "현재페이지",
-    "thisdocument",
-    "thisfile",
-    "thispage",
+    "this document",
+    "this file",
+    "this page",
     "selected",
-    "theselection",
-    "thesedocuments",
-    "currentdocument",
-    "thiscontract",
-    "thisreceipt",
+    "the selection",
+    "these documents",
+    "current document",
+    "this contract",
+    "this receipt",
 ];
-const ALL_WORDS: &[&str] =
-    &["전부", "전체", "모두", "모든", "다 ", "라이브러리전체", "alldocuments", "everything", "all "];
+const ALL_WORDS: &[&str] = &["전부", "전체", "모두", "모든", "라이브러리전체", "all documents", "everything", "all"];
+
+/// Whether the sentence explicitly targets the whole library ("전부", "모든 문서", "all documents").
+pub fn mentions_all(text: &str) -> bool {
+    Text::new(text, true).has(ALL_WORDS)
+}
 
 fn selection_ids(ctx: &PlanContext) -> Vec<String> {
     if !ctx.selected_doc_ids.is_empty() {
@@ -195,7 +292,7 @@ fn scope_of(t: &Text<'_>, ctx: &PlanContext, dt: Option<&DocTypeSummary>, d: Opt
     }
     if t.has(&["inbox", "인박스", "받은함"]) {
         scope.folder = Some("inbox".into());
-    } else if t.has(&["이폴더", "여기있는", "현재폴더", "thisfolder", "currentfolder", "here"]) {
+    } else if t.has(&["이폴더", "여기있는", "현재폴더", "this folder", "current folder", "here"]) {
         scope.folder = ctx.current_folder.clone();
     }
     if let Some(dt) = dt {
@@ -251,7 +348,7 @@ fn undo_redo(t: &Text<'_>) -> Option<Plan> {
             t.t("마지막 파일 작업을 되돌립니다", "Undo the last file batch").into(),
         ));
     }
-    if t.has(&["다시실행", "redo"]) && !t.has(&["추출", "ocr", "분류", "처리", "extract", "classify", "process"])
+    if t.has(&["다시실행", "redo"]) && !t.has(&["추출", "ocr", "분류", "처리", "extract*", "classify", "process*"])
     {
         return Some(mk(
             Op::Redo {},
@@ -265,13 +362,16 @@ fn undo_redo(t: &Text<'_>) -> Option<Plan> {
 
 fn job_control(t: &Text<'_>) -> Option<Plan> {
     let job_word = t.has(&["작업", "job", "배치", "batch", "처리를", "큐"]);
-    let action = if t.has(&["일시정지", "일시중지", "멈춰", "잠깐멈", "pause", "hold"]) {
+    // "pause the job" / "작업 일시정지" — the bare Korean nouns are unambiguous, the English verbs
+    // ("hold", "resume", "continue") are everyday words and need the job word.
+    let action = if t.has(&["일시정지", "일시중지", "잠깐멈"]) || (job_word && t.has(&["멈춰", "pause", "hold"]))
+    {
         JobOp::Pause
-    } else if t.has(&["재개", "계속해", "이어서", "resume", "continue"]) {
+    } else if t.has(&["재개"]) || (job_word && t.has(&["계속해", "이어서", "resume", "continue"])) {
         JobOp::Resume
-    } else if t.has(&["재시도", "다시시도", "retry"]) {
+    } else if t.has(&["재시도", "다시시도"]) || (job_word && t.has(&["retry"])) {
         JobOp::Retry
-    } else if t.has(&["우선", "먼저해", "prioriti", "firstplease", "bumpup"]) {
+    } else if job_word && t.has(&["우선", "먼저해", "prioriti*", "first please", "bump up"]) {
         JobOp::Prioritize
     } else if job_word && t.has(&["취소", "중단", "cancel", "stop", "abort"]) {
         JobOp::Cancel
@@ -285,9 +385,6 @@ fn job_control(t: &Text<'_>) -> Option<Plan> {
     } else {
         return None;
     };
-    if !job_word && !matches!(action, JobOp::Pause | JobOp::Resume) {
-        return None;
-    }
     let what = match action {
         JobOp::Pause => t.t("실행 중인 작업을 일시정지합니다", "Pause the running job"),
         JobOp::Resume => t.t("일시정지한 작업을 재개합니다", "Resume the paused job"),
@@ -343,8 +440,7 @@ fn settings_combo(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     let clauses = split_clauses(t.raw);
     let mut ops = Vec::new();
     for clause in &clauses {
-        let ct = Text { raw: clause, lower: clause.to_lowercase(), compact: compact(clause), ko: t.ko };
-        let _ = &ct.lower;
+        let ct = Text::new(clause, t.ko);
         if let Some(id) = model_id(&ct, ctx) {
             ops.push(Op::SetModel { id });
             continue;
@@ -440,8 +536,15 @@ fn export_format(t: &Text<'_>) -> Option<ExportFormat> {
 
 fn export(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     let format = export_format(t)?;
-    let verb = t.has(&["내보내", "저장", "뽑아", "추출해서", "만들어", "출력", "export", "save", "dump", "write"])
-        || t.has(&["로", "으로", "→", "->", "to", "into", "as"]);
+    if t.is_question() {
+        return None;
+    }
+    // A verb, an arrow ("세금계산서 → 엑셀") or a terse "<유형> 엑셀로" (≤ 4 words).
+    let words = t.raw.split_whitespace().count();
+    let verb = t.has(&["내보내", "저장", "뽑아", "추출해서", "만들어", "출력", "export*", "save", "dump", "write"])
+        || t.raw.contains("→")
+        || t.raw.contains("->")
+        || words <= 4;
     if !verb {
         return None;
     }
@@ -451,7 +554,7 @@ fn export(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     if scope.folder.is_none() && scope.doc_ids.is_empty() && dt.is_none() && d.is_none() && !t.has(ALL_WORDS) {
         scope.folder = ctx.current_folder.clone();
     }
-    let target = if t.has(&["표를", "표만", "테이블", "table"]) {
+    let target = if t.has(&["표를", "표만", "테이블", "table*"]) {
         ExportTarget::Table
     } else if t.has(&["텍스트", "본문", "ocr결과", "text"]) || format == ExportFormat::PdfSearchable {
         ExportTarget::Text
@@ -511,8 +614,8 @@ fn aggregate(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         "total",
         "sum",
         "average",
-        "howmuch",
-        "howmany",
+        "how much",
+        "how many",
         "highest",
         "lowest",
         "largest",
@@ -531,8 +634,8 @@ fn aggregate(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
             "거래처별",
             "유형별",
             "monthly",
-            "byvendor",
-            "bytype",
+            "by vendor",
+            "by type",
             "집계",
             "총합",
             "모든",
@@ -540,7 +643,7 @@ fn aggregate(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
             "전부",
             "전체",
             "across",
-            "all ",
+            "all",
         ])
         || !selection_ids(ctx).is_empty() && t.has(SELECTION_WORDS);
     if !scoped {
@@ -552,7 +655,7 @@ fn aggregate(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         AggregateFn::Max
     } else if t.has(&["최소", "가장작은", "가장싼", "min", "lowest", "smallest"]) {
         AggregateFn::Min
-    } else if t.has(&["건수", "몇건", "몇개", "개수", "count", "howmany", "number of"]) {
+    } else if t.has(&["건수", "몇건", "몇개", "개수", "count", "how many", "number of"]) {
         AggregateFn::Count
     } else {
         AggregateFn::Sum
@@ -573,17 +676,24 @@ fn aggregate(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
             None => None,
         }
     };
-    let group_by = if t.has(&["월별", "달별", "monthly", "bymonth", "permonth"]) {
+    let group_by = if t.has(&["월별", "달별", "monthly", "by month", "per month"]) {
         Some(GroupBy::Month)
-    } else if t.has(&["거래처별", "업체별", "byvendor", "pervendor"]) {
+    } else if t.has(&["거래처별", "업체별", "by vendor", "per vendor"]) {
         Some(GroupBy::Vendor)
-    } else if t.has(&["유형별", "종류별", "bytype", "pertype"]) {
+    } else if t.has(&["유형별", "종류별", "by type", "per type"]) {
         Some(GroupBy::DocType)
     } else {
         None
     };
     let include_unreviewed = t
-        .has(&["검토대기포함", "검토미완료포함", "미검토포함", "대기포함", "includeunreviewed", "includingunreviewed"])
+        .has(&[
+            "검토대기포함",
+            "검토미완료포함",
+            "미검토포함",
+            "대기포함",
+            "include unreviewed",
+            "including unreviewed",
+        ])
         .then_some(true);
     let label = type_label(dt, t.ko, t.t("문서", "documents"));
     let fname = field.as_deref().and_then(|k| schema.and_then(|s| s.fields.iter().find(|f| f.key == k))).map(|f| {
@@ -620,13 +730,10 @@ fn aggregate(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
 }
 
 fn inbox(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
-    if !t.has(&["inbox", "인박스", "받은함", "받은문서"]) {
+    if !t.has(&["inbox", "인박스", "받은함", "받은문서"]) || t.is_question() {
         return None;
     }
-    if !t.has(&[
-        "처리", "가져", "불러", "import", "process", "정리", "분류", "추출", "ocr", "읽어", "등록", "run", "handle",
-        "전부", "모두",
-    ]) {
+    if !t.has(&["처리", "가져", "불러", "import*", "process*", "정리", "분류", "추출", "ocr", "등록"]) {
         return None;
     }
     let dt = doc_type(t, ctx);
@@ -640,10 +747,9 @@ fn inbox(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         recursive: None,
         auto_pipeline: Some(AutoPipeline::None),
     }];
-    let only_classify = t.has(&["분류만", "classifyonly"]);
-    let only_ocr = t.has(&["ocr만", "ocronly"]);
-    let wants_processing =
-        t.has(&["처리", "process", "추출", "extract", "전부", "모두", "ocr", "분류", "classif", "read", "읽어"]);
+    let only_classify = t.has(&["분류만", "classify only"]);
+    let only_ocr = t.has(&["ocr만", "ocr only"]);
+    let wants_processing = t.has(&["처리", "process*", "추출", "extract*", "전부", "모두", "ocr", "분류", "classif*"]);
     if wants_processing || dt.is_some() {
         ops.push(Op::Classify { doc_types: Vec::new(), force: None });
         if !only_classify {
@@ -653,12 +759,23 @@ fn inbox(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
             }
         }
     }
-    let group = if t.has(&["월별", "달별", "monthly", "bymonth"]) {
+    let group = if t.has(&["월별", "달별", "monthly", "by month"]) {
         Some(GroupBy::Month)
-    } else if t.has(&["거래처별", "업체별", "byvendor"]) {
+    } else if t.has(&["거래처별", "업체별", "by vendor"]) {
         Some(GroupBy::Vendor)
-    } else if t.has(&["유형별", "종류별", "bytype", "정리", "폴더로", "옮겨", "이동", "organi", "move", "sort into"])
-    {
+    } else if t.has(&[
+        "유형별",
+        "종류별",
+        "by type",
+        "정리",
+        "폴더로",
+        "옮겨",
+        "이동해",
+        "이동시",
+        "organi*",
+        "move",
+        "sort into",
+    ]) {
         Some(GroupBy::DocType)
     } else {
         None
@@ -694,8 +811,24 @@ fn inbox(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
 }
 
 fn organize(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
-    let rename = t.has(&["이름바꿔", "이름을바꿔", "이름변경", "파일명", "rename", "이름을"]);
-    let organize_word = t.has(&["정리", "organi", "옮겨", "옮기", "이동", "move", "폴더로", "sortinto", "tidy"]);
+    if t.is_question() || t.has(&["알려", "설명", "요약", "summar*", "tell", "explain"]) {
+        return None; // "정리해서 알려줘" asks for a summary, not for file moves
+    }
+    let rename = t.has(&["이름바꿔", "이름을바꿔", "이름변경", "파일명", "rename*", "이름을"]);
+    let organize_word = t.has(&[
+        "정리",
+        "organi*",
+        "옮겨",
+        "옮기",
+        "이동해",
+        "이동시",
+        "이동하",
+        "로이동",
+        "move",
+        "폴더로",
+        "sort into",
+        "tidy",
+    ]);
     if !rename && !organize_word {
         return None;
     }
@@ -708,12 +841,12 @@ fn organize(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     let d = date(t, ctx);
     let scope = scope_of(t, ctx, dt, d.as_ref());
     let only_reviewed =
-        if t.has(&["검토완료", "검토된", "reviewedonly", "onlyreviewed"]) { Some(true) } else { None };
-    let group = if t.has(&["월별", "달별", "monthly", "bymonth"]) {
+        if t.has(&["검토완료", "검토된", "reviewed only", "only reviewed"]) { Some(true) } else { None };
+    let group = if t.has(&["월별", "달별", "monthly", "by month"]) {
         Some(GroupBy::Month)
-    } else if t.has(&["거래처별", "업체별", "byvendor"]) {
+    } else if t.has(&["거래처별", "업체별", "by vendor"]) {
         Some(GroupBy::Vendor)
-    } else if t.has(&["유형별", "종류별", "bytype"]) {
+    } else if t.has(&["유형별", "종류별", "by type"]) {
         Some(GroupBy::DocType)
     } else {
         None
@@ -793,11 +926,11 @@ fn group_word(g: GroupBy, ko: bool) -> &'static str {
 }
 
 fn tag(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
-    if !t.has(&["태그", "tag"]) {
+    if !t.has(&["태그", "tag*"]) || t.is_question() {
         return None;
     }
     let remove = t.has(&["제거", "빼", "삭제", "지워", "remove", "untag", "delete"]);
-    let add = t.has(&["추가", "붙여", "달아", "넣어", "add", "tagas", "tagwith", "apply"]);
+    let add = t.has(&["추가", "붙여", "달아", "넣어", "add", "tag as", "tag with", "apply"]);
     if !remove && !add {
         return None;
     }
@@ -823,6 +956,15 @@ fn tag(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     }
     let dt = doc_type(t, ctx);
     let scope = scope_of(t, ctx, dt, None);
+    if scope.is_empty() && !t.has(ALL_WORDS) {
+        return Some(Plan::clarify(
+            t.t(
+                "어떤 문서에 태그를 적용할까요? 라이브러리에서 선택하거나 유형·날짜를 말씀해 주세요.",
+                "Which documents should be tagged? Select them in the library or name a type / date range.",
+            ),
+            0.5,
+        ));
+    }
     let op = if remove {
         Op::Tag { add: Vec::new(), remove: names.clone() }
     } else {
@@ -838,7 +980,7 @@ fn tag(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
 }
 
 fn delete(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
-    if !t.has(&["삭제", "지워", "지우", "delete", "remove", "trash", "휴지통"]) {
+    if !t.has(&["삭제", "지워", "지우", "delete", "remove", "trash", "휴지통"]) || t.is_question() {
         return None;
     }
     if t.has(&[
@@ -879,16 +1021,19 @@ fn delete(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
 }
 
 fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
-    let classify = t.has(&["분류", "classif", "유형판정", "유형을정"]);
-    let ocr = t.has(&["ocr", "문자인식", "텍스트인식", "글자인식", "텍스트추출", "읽어"]);
-    let extract = t.has(&["추출", "extract", "필드뽑", "값뽑", "kie"]) && !t.has(&["텍스트추출"]);
-    let validate = t.has(&["검증", "validate", "검사해"]);
-    let summarize = t.has(&["요약", "summar"]);
-    let generic = t.has(&["처리", "process", "돌려", "실행해"]) && !classify && !ocr && !extract && !summarize;
+    if t.is_question() {
+        return None;
+    }
+    let classify = t.has(&["분류", "classif*", "유형판정", "유형을정"]);
+    let ocr = t.has(&["ocr", "문자인식", "텍스트인식", "글자인식", "텍스트추출"]);
+    let extract = t.has(&["추출", "extract*", "필드뽑", "값뽑", "kie"]) && !t.has(&["텍스트추출"]);
+    let validate = t.has(&["검증", "validat*", "검사해"]);
+    let summarize = t.has(&["요약", "summar*"]);
+    let generic = t.has(&["처리", "process*", "돌려", "실행해"]) && !classify && !ocr && !extract && !summarize;
     if !(classify || ocr || extract || validate || summarize || generic) {
         return None;
     }
-    let force = t.has(&["다시", "재", "again", "re-", "redo", "force"]);
+    let force = t.has(&["다시", "재처리", "재추출", "재분류", "재실행", "again", "redo", "force"]);
     let dt = doc_type(t, ctx);
     let d = date(t, ctx);
     let mut scope = scope_of(t, ctx, dt, d.as_ref());
@@ -911,7 +1056,7 @@ fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     }
     let mut ops = Vec::new();
     if summarize {
-        let target = if t.has(&["하나로", "합쳐", "묶어", "전체요약", "together", "onesummary", "combined"])
+        let target = if t.has(&["하나로", "합쳐", "묶어", "전체요약", "together", "one summary", "combined"])
         {
             SummarizeTarget::Set
         } else {
@@ -933,12 +1078,12 @@ fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         });
     }
     if ocr || generic {
-        let profile = if t.has(&["잔글씨", "작은글씨", "fineprint", "영역", "region", "잘안읽"]) {
+        let profile = if t.has(&["잔글씨", "작은글씨", "fine print", "영역", "region", "잘안읽"]) {
             Some(OcrProfile::FinePrint)
         } else {
             None
         };
-        let pages = if t.has(&["이페이지", "현재페이지", "선택영역", "thispage", "selection"]) {
+        let pages = if t.has(&["이페이지", "현재페이지", "선택영역", "this page", "selection"]) {
             ctx.current_page.into_iter().collect()
         } else {
             Vec::new()
@@ -969,8 +1114,8 @@ fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
             Op::Summarize { .. } => t.t("요약", "summarise"),
             Op::Classify { .. } => t.t("분류", "classify"),
             Op::Ocr { .. } => "OCR",
-            Op::Extract { .. } => t.t("추출", "extract"),
-            Op::Validate {} => t.t("검증", "validate"),
+            Op::Extract { .. } => t.t("추출", "extract*"),
+            Op::Validate {} => t.t("검증", "validat*"),
             _ => "",
         })
         .collect();
@@ -986,7 +1131,7 @@ fn review(t: &Text<'_>) -> Option<Plan> {
     if !t.has(&["검토", "review"]) {
         return None;
     }
-    let only = if t.has(&["저신뢰", "신뢰도낮", "lowconfidence"]) {
+    let only = if t.has(&["저신뢰", "신뢰도낮", "low confidence"]) {
         Some(ReviewOnly::LowConfidence)
     } else if t.has(&["검증실패", "실패한", "failed"]) {
         Some(ReviewOnly::Failed)
@@ -1023,7 +1168,7 @@ fn review(t: &Text<'_>) -> Option<Plan> {
 }
 
 fn search(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
-    if !t.has(&["찾아", "찾기", "검색", "find", "search", "lookfor", "whereis", "locate"]) {
+    if !t.has(&["찾아", "찾기", "검색", "find", "search", "look for", "where is", "locate"]) {
         return None;
     }
     // "거래처명이 X인 문서" / "find documents from X": strip the frame words.
@@ -1210,23 +1355,23 @@ const COMMAND_MARKERS: &[&str] = &[
     "처리",
     "돌려",
     "저장",
-    "export",
+    "export*",
     "delete",
     "move",
-    "rename",
-    "run ",
+    "rename*",
+    "run",
     "open",
     "show",
     "make",
     "create",
-    "set ",
+    "set",
     "turn",
     "switch",
-    "process",
-    "extract",
+    "process*",
+    "extract*",
     "classify",
-    "organi",
-    "import",
+    "organi*",
+    "import*",
 ];
 
 /// A short topic with no command verb ("xyzzy 플루토늄 원자로", "계약 해지 조건") is a
@@ -1251,12 +1396,7 @@ pub fn plan(text: &str, ctx: &PlanContext) -> Option<Plan> {
     if raw.is_empty() {
         return None;
     }
-    let t = Text {
-        raw,
-        lower: raw.to_lowercase(),
-        compact: compact(raw),
-        ko: ctx.language == Language::Ko || raw.chars().any(|c| ('\u{AC00}'..='\u{D7A3}').contains(&c)),
-    };
+    let t = Text::new(raw, ctx.language == Language::Ko);
     undo_redo(&t)
         .or_else(|| job_control(&t))
         .or_else(|| engine(&t))
@@ -1266,8 +1406,8 @@ pub fn plan(text: &str, ctx: &PlanContext) -> Option<Plan> {
         .or_else(|| aggregate(&t, ctx))
         .or_else(|| inbox(&t, ctx))
         .or_else(|| tag(&t, ctx))
-        .or_else(|| organize(&t, ctx))
         .or_else(|| delete(&t, ctx))
+        .or_else(|| organize(&t, ctx))
         .or_else(|| process(&t, ctx))
         .or_else(|| review(&t))
         .or_else(|| search(&t, ctx))

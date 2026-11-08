@@ -169,9 +169,19 @@ impl JobBook {
         let _ = self.worker.set(worker);
     }
 
+    /// Broadcasts the list without the structured results (those can be large and are served by
+    /// `jobs_list` / `jobs_get`).
     fn emit(&self) {
         if let (Some(app), Ok(jobs)) = (self.app.get(), self.jobs.lock()) {
-            let _ = app.emit(JOBS_EVENT, jobs.clone());
+            let stripped: Vec<Job> = jobs
+                .iter()
+                .cloned()
+                .map(|mut j| {
+                    j.result = None;
+                    j
+                })
+                .collect();
+            let _ = app.emit(JOBS_EVENT, stripped);
         }
     }
 
@@ -491,6 +501,9 @@ impl JobBook {
     }
 
     fn start(&self, app: &AppHandle, id: &str) {
+        if app.state::<AppState>().switching.load(Ordering::SeqCst) {
+            return; // the workspace is closing: the job stays queued in its database
+        }
         let Some(spec) = self.spec(id) else {
             self.set_persistent_state(id, JobState::Failed, Some("spec missing"));
             return;
@@ -518,7 +531,7 @@ impl JobBook {
         if let Some(db) = self.db() {
             let _ = db.with(|c| core_jobs::set_state(c, id, CoreState::Running, None));
         }
-        let job = self.get(id).expect("job just updated");
+        let Some(job) = self.get(id) else { return };
         let app = app.clone();
         let id = id.to_string();
         std::thread::Builder::new()
@@ -707,6 +720,14 @@ impl JobBook {
                     let _ = db.with(|c| core_jobs::set_state(c, id, CoreState::Interrupted, Some("workspace closed")));
                 }
             }
+        }
+        // Let running workers notice the cancel and leave the old database before it closes.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while self.controls.lock().map(|c| !c.is_empty()).unwrap_or(false) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        if self.controls.lock().map(|c| !c.is_empty()).unwrap_or(false) {
+            log::warn!("persistent jobs did not stop within 5 s; they stop at their next checkpoint");
         }
         if let Ok(mut jobs) = self.jobs.lock() {
             jobs.retain(|j| !j.persistent);

@@ -206,6 +206,10 @@ pub fn export(
     if p.exists && !req.overwrite {
         return Err(CoreError::Invalid("export_exists".into()));
     }
+    // Never write over a registered document (an export path pointed at documents/…).
+    if db.with(|c| crate::documents::repo::find_by_rel_path(c, &p.rel))?.is_some() {
+        return Err(CoreError::Invalid("path_is_document".into()));
+    }
     if p.docs.is_empty() {
         return Err(CoreError::Invalid("no_documents".into()));
     }
@@ -376,7 +380,10 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut part = path.as_os_str().to_os_string();
     part.push(".part");
     let part = PathBuf::from(part);
-    std::fs::write(&part, bytes).map_err(|e| CoreError::io(&part, e))?;
+    std::fs::write(&part, bytes).map_err(|e| {
+        let _ = std::fs::remove_file(&part);
+        CoreError::io(&part, e)
+    })?;
     std::fs::rename(&part, path).map_err(|e| {
         let _ = std::fs::remove_file(&part);
         CoreError::io(path, e)
@@ -1697,6 +1704,18 @@ mod tests {
     #[test]
     fn rejects_paths_outside_the_workspace() {
         let w = world();
+        // A registered document's own path is never an export target.
+        let doc = w.db.with(crate::documents::repo::all_documents).unwrap().remove(0);
+        let onto_doc = ExportRequest {
+            format: ExportFormat::PdfSearchable,
+            target: ExportTarget::Text,
+            path: Some(doc.rel_path.clone()),
+            overwrite: true,
+            scope: Scope { doc_ids: vec![doc.id.clone()], ..Scope::default() },
+            ..ExportRequest::default()
+        };
+        let err = export(&w.db, &w.paths, &onto_doc, None).unwrap_err().to_string();
+        assert!(err.contains("path_is_document"), "{err}");
         for bad in [
             "/tmp/x.csv",
             "../x.csv",

@@ -230,12 +230,23 @@ pub fn last_undoable(conn: &Connection) -> rusqlite::Result<Option<JournalBatch>
 
 /// Latest undo batch that `redo` can re-apply.
 pub fn last_redoable(conn: &Connection) -> rusqlite::Result<Option<JournalBatch>> {
-    conn.query_row(
-        &format!("SELECT {BATCH_COLUMNS} FROM journal_batches WHERE kind = 'undo' AND undone_at IS NULL AND entries > 0 ORDER BY created_at DESC, rowid DESC LIMIT 1"),
-        [],
-        row_to_batch,
-    )
-    .optional()
+    let undo = conn
+        .query_row(
+            &format!("SELECT {BATCH_COLUMNS} FROM journal_batches WHERE kind = 'undo' AND undone_at IS NULL AND entries > 0 ORDER BY created_at DESC, rowid DESC LIMIT 1"),
+            [],
+            row_to_batch,
+        )
+        .optional()?;
+    let Some(undo) = undo else { return Ok(None) };
+    // A newer file batch invalidates the redo stack (the usual editor rule).
+    let newer: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM journal_batches WHERE kind != 'undo' AND created_at > ?1 AND entries > 0 LIMIT 1",
+            [ts(&undo.created_at)],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(if newer.is_some() { None } else { Some(undo) })
 }
 
 /// Removes batches (and their entries) older than `days` (retention §3.8 "저널 90일").
@@ -322,7 +333,11 @@ pub fn undo_batch(db: &Db, paths: &WorkspacePaths, batch_id: &str) -> Result<Und
         if e.undone_at.is_some() {
             continue;
         }
+        // Redoing the restore of a deleted file would park it in the trash again while its
+        // re-imported document row stays alive: not reversible from here.
+        let restore_of_deletion = batch.kind == "undo" && e.from_path.starts_with(".doculens/trash/");
         let outcome: std::result::Result<NewEntry, String> = match e.kind {
+            _ if restore_of_deletion => Err("restore_not_redoable".into()),
             EntryKind::Move | EntryKind::Rename => {
                 let Some(to_rel) = e.to_path.as_deref() else { continue };
                 let to_abs = from_rel_path(&paths.root, to_rel);
@@ -415,6 +430,13 @@ pub fn undo_batch(db: &Db, paths: &WorkspacePaths, batch_id: &str) -> Result<Und
                 report.skipped.push((e.to_path.clone().unwrap_or_else(|| e.from_path.clone()), reason));
             }
         }
+    }
+    if report.restored == 0 {
+        // Nothing could be reverted (files missing / changed): the batch stays undoable for a later
+        // attempt and the empty reversal batch is dropped.
+        db.with(|c| c.execute("DELETE FROM journal_batches WHERE id = ?1", [&new_id]))?;
+        report.batch_id = String::new();
+        return Ok(report);
     }
     db.with(|c| {
         c.execute(
