@@ -903,7 +903,9 @@ impl Op {
             | Op::RequestSupplement { .. }
             | Op::DefineRule { .. }
             | Op::RegisterForm { .. }
-            | Op::SetRetention { .. } => true,
+            | Op::SetRetention { .. }
+            // Creates rows (and possibly an ad-hoc template) — shown before it runs.
+            | Op::CreateProject { .. } => true,
             Op::Review { action: ReviewOp::Approve | ReviewOp::Correct | ReviewOp::Reject, .. } => true,
             _ => false,
         }

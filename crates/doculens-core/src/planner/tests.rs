@@ -326,6 +326,73 @@ fn p6_rules_plan_drafts_projects_explanations_and_retention() {
 }
 
 #[test]
+fn p6_rules_ignore_statements_and_questions() {
+    use super::{ProjectSummary, SettingKey};
+    let mut c = ctx();
+    c.projects = vec![
+        ProjectSummary { id: "p-hanbit".into(), name: "한빛 심사".into(), status: "intake".into() },
+        ProjectSummary { id: "p-acme".into(), name: "Acme onboarding".into(), status: "validating".into() },
+    ];
+    c.current_project = Some("p-hanbit".into());
+    let not = |text: &str, bad: &[OpKind]| {
+        let r = plan(None, text, &c).unwrap();
+        let ks = kinds(&r.plan);
+        assert!(!ks.iter().any(|k| bad.contains(k)), "{text} → {ks:?} ({r:?})");
+    };
+    use OpKind::*;
+    // Retention statements / questions never become set_retention (the purge chain starts there).
+    for s in [
+        "문서 3년 보관 의무가 있나요?",
+        "문서 90일 보관했어?",
+        "원본 문서는 5년 보존이 법적 의무야",
+        "추출 결과 30일 지나면 삭제돼?",
+        "채팅 기록은 6개월 보관이 기본이지?",
+        "임시로 저장한 거 지워지면 안 돼, 계속 보관해",
+    ] {
+        not(s, &[SetRetention]);
+    }
+    // Project chatter is not project creation.
+    for s in [
+        "새 프로젝트 매니저가 왔어",
+        "케이스 스터디 자료 만들어줘",
+        "프로젝트 새로 시작하자",
+        "start the project kickoff meeting notes",
+        "create a project plan for Q1",
+    ] {
+        not(s, &[CreateProject]);
+    }
+    // Questions about rules / results do not define rules or re-run checks.
+    for s in [
+        "세금계산서 필수 항목이 뭐야?",
+        "견적서 유효기간은 보통 30일 이내여야 해?",
+        "the contract amount must match the quotation, does it?",
+        "정합성 검사 결과 알려줘",
+        "the supplement request must be sent by Friday",
+    ] {
+        not(s, &[DefineRule, CheckConsistency, RequestSupplement]);
+    }
+    // Settings chatter.
+    not("해상도 300으로 스캔했어", &[SetSetting]);
+    not("인덴스 펀드 다시 알아봐줘", &[Reindex]);
+    not("인덱스 펀드 다시 알아봐줘", &[Reindex]);
+    not("양식 등록은 어디서 해?", &[RegisterForm]);
+    not("양식 등록 화면 열어줘", &[RegisterForm]);
+    // Drafting needs a template or an explicit document request.
+    not("내일 회의 자료 만들어줘", &[DraftDocument]);
+    not("write down the total of last month's receipts", &[DraftDocument]);
+    not("draft folder is empty", &[DraftDocument]);
+    // Still recognised: explicit commands.
+    let r = plan(None, "한빛 심사 프로젝트에 이 문서 추가해줘", &c).unwrap();
+    assert!(matches!(&r.plan.operations[0], Op::AddToProject { project: Some(p), .. } if p == "p-hanbit"), "{r:?}");
+    let r = plan(None, "'한빛 2차 심사' 프로젝트 만들어줘", &c).unwrap();
+    assert!(r.plan.requires_confirmation && matches!(&r.plan.operations[0], Op::CreateProject { .. }), "{r:?}");
+    let r = plan(None, "검색 색인 다시 만들어줘", &c).unwrap();
+    assert!(matches!(&r.plan.operations[0], Op::Reindex { .. }), "{r:?}");
+    let r = plan(None, "DPI를 300으로 바꿔줘", &c).unwrap();
+    assert!(matches!(&r.plan.operations[0], Op::SetSetting { key: SettingKey::RenderDpi, .. }), "{r:?}");
+}
+
+#[test]
 fn rules_do_not_hijack_questions_or_everyday_words() {
     // Latin triggers are whole words, questions stay questions, nouns are not verbs.
     let answerish = |text: &str| {

@@ -1548,16 +1548,12 @@ const TEMPLATE_WORDS: &[(crate::generate::TemplateKind, &str, &str, &[&str])] = 
 fn draft_template(t: &Text<'_>, ctx: &PlanContext) -> Option<(String, String)> {
     // A document type with a registered schema mentioned in the sentence (data source or form).
     let registered = doc_type(t, ctx).filter(|d| ctx.schema_for_type(&d.slug).is_some());
+    // Only the curated keyword table here: the template catalogue's broader keywords ("회의") would
+    // turn everyday sentences ("내일 회의 자료 만들어줘") into drafts.
     let builtin = TEMPLATE_WORDS
         .iter()
         .find(|(_, _, _, words)| t.has(words))
-        .map(|(kind, ko, en, _)| (kind.as_str().to_string(), t.t(ko, en).to_string()))
-        .or_else(|| {
-            crate::generate::templates()
-                .into_iter()
-                .find(|tpl| tpl.keywords.iter().any(|k| t.has(&[k.as_str()])))
-                .map(|tpl| (tpl.kind.as_str().to_string(), if t.ko { tpl.name_ko } else { tpl.name_en }))
-        });
+        .map(|(kind, ko, en, _)| (kind.as_str().to_string(), t.t(ko, en).to_string()));
     match (registered, builtin) {
         // "영수증 집계 결과로 보고서 초안": the type is the data, the template word is the layout —
         // unless the sentence asks for that type's registered form ("휴가신청서 양식으로").
@@ -1576,7 +1572,20 @@ fn draft_template(t: &Text<'_>, ctx: &PlanContext) -> Option<(String, String)> {
                 Some(b)
             }
         }
-        (Some(d), None) => Some((d.slug.clone(), type_label(Some(d), t.ko, &d.slug).to_string())),
+        // A registered type alone ("영수증 합계 써줘") is data, not a layout — unless its form is asked for.
+        (Some(d), None) => {
+            let form_words = [
+                format!("{}양식", d.label_ko),
+                format!("{} 양식", d.label_ko),
+                format!("{}서식", d.label_ko),
+                format!("{} form", d.label_en),
+                format!("{} template", d.label_en),
+            ];
+            form_words
+                .iter()
+                .any(|w| t.has(&[w.as_str()]))
+                .then(|| (d.slug.clone(), type_label(Some(d), t.ko, &d.slug).to_string()))
+        }
         (None, b) => b,
     }
 }
@@ -1591,6 +1600,10 @@ fn draft_document(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         "정리해",
         "이동",
         "폴더로",
+        "폴더",
+        "folder",
+        "is empty",
+        "비어",
         "찾아",
         "검색",
         "엑셀",
@@ -1603,7 +1616,22 @@ fn draft_document(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         return None;
     }
     let template = draft_template(t, ctx);
-    if template.is_none() && !t.has(&["문서", "초안", "document", "draft"]) {
+    if template.is_none()
+        && !t.has(&[
+            "초안",
+            "문서 만들",
+            "문서를 만들",
+            "문서 작성",
+            "문서를 작성",
+            "문서로 만들",
+            "draft a",
+            "draft the",
+            "write a",
+            "compose a",
+            "generate a document",
+            "create a document",
+        ])
+    {
         return None;
     }
     let mut sources: Vec<String> = Vec::new();
@@ -1779,7 +1807,12 @@ fn project_name(t: &Text<'_>) -> Option<String> {
     };
     let mut name = clean(&before);
     if name.is_empty() {
-        name = clean(&after);
+        // "create project Acme renewal": the words after `project` — but "a project plan for Q1" is not a name.
+        let generic =
+            ["for", "about", "with", "on", "of", "plan", "meeting", "notes", "kickoff", "manager", "review", "in"];
+        if after.len() <= 4 && !after.iter().any(|w| generic.contains(&compact(w).as_str())) {
+            name = clean(&after);
+        }
     }
     let name = name.join(" ");
     (!name.is_empty() && name.chars().count() <= 60).then_some(name)
@@ -1798,10 +1831,11 @@ fn project_ref(t: &Text<'_>, ctx: &PlanContext) -> Option<String> {
 }
 
 fn project_ops(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
-    let project_word = t.has(&["프로젝트", "케이스", "project", "case"]);
+    let project_word = t.has(&["프로젝트", "project"]);
     // -- 보완요청서 ---------------------------------------------------------
     if t.has(&["보완요청서", "보완 요청서", "보완요청", "보완 요청", "supplement request", "supplement letter"])
         && !t.is_question()
+        && t.has(DRAFT_VERBS)
     {
         let output = if t.has(&["pdf*"]) {
             Some(OutputFormat::Pdf)
@@ -1835,6 +1869,7 @@ fn project_ops(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         "cross check",
         "reconcile",
     ]) && t.has(&["검사", "검증", "확인", "점검", "돌려", "실행", "check", "run", "verify", "validate"])
+        && !t.is_question()
     {
         let project = project_ref(t, ctx);
         return Some(mk(
@@ -1868,8 +1903,8 @@ fn project_ops(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         || (rule_phrase
             && (project_word || t.has(&["규칙", "rule"]) || !ctx.doc_types.is_empty() && doc_type(t, ctx).is_some()))
     {
-        if t.is_question() && !rule_phrase {
-            return None;
+        if t.is_question() {
+            return None; // "필수 항목이 뭐야?", "… 이내여야 해?" ask about rules, they do not define one
         }
         // The description is the sentence minus the "add a rule" frame.
         let mut description = t.raw.trim().to_string();
@@ -1907,15 +1942,14 @@ fn project_ops(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     }
     // -- 프로젝트에 추가 ---------------------------------------------------------
     if t.has(&[
-        "프로젝트에 추가",
-        "프로젝트에 넣어",
-        "프로젝트로 보내",
-        "프로젝트에 포함",
+        "프로젝트에",
+        "프로젝트로",
+        "into the project",
+        "to the project",
+        "to project",
         "add to",
         "add this",
         "add these",
-        "into the project",
-        "to the project",
     ]) && t.has(&["추가", "넣어", "보내", "포함", "add", "put", "move"])
     {
         let project = project_ref(t, ctx);
@@ -1941,8 +1975,18 @@ fn project_ops(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         ));
     }
     // -- 프로젝트 만들기 ----------------------------------------------------------
-    if t.has(&["만들", "생성", "새 프로젝트", "새프로젝트", "시작", "열어", "create", "new", "start", "open a"])
-        && !t.is_question()
+    // Only explicit creation commands; "새 프로젝트 매니저가 왔어" is a statement.
+    if t.has(&[
+        "만들어",
+        "만들자",
+        "만들고",
+        "만들어서",
+        "생성해",
+        "생성하",
+        "create",
+        "new project",
+        "set up a project",
+    ]) && !t.is_question()
     {
         let Some(name) = project_name(t) else {
             return Some(Plan::clarify(
@@ -2048,8 +2092,69 @@ fn explain_compare(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
 }
 
 fn set_retention(t: &Text<'_>) -> Option<Plan> {
-    if !t.has(&["보관", "보존", "파기", "삭제돼", "지워지", "retention", "keep", "purge", "delete after", "retain*"])
+    if t.is_question()
+        || !t.has(&[
+            "보관",
+            "보존",
+            "파기",
+            "삭제돼",
+            "지워지",
+            "retention",
+            "keep",
+            "purge",
+            "delete after",
+            "retain*",
+        ])
     {
+        return None;
+    }
+    // "5년 보존이 법적 의무야", "6개월 보관이 기본이지" describe rules; only commands change the policy.
+    if t.has(&[
+        "의무",
+        "법적",
+        "법에",
+        "법으로",
+        "규정",
+        "기본이",
+        "해야 한다",
+        "해야한다",
+        "해야 하",
+        "안 돼",
+        "안돼",
+        "안 되",
+        "안되",
+        "요구",
+        "by law",
+        "is the default",
+        "required to",
+        "should be kept",
+        "supposed to",
+    ]) {
+        return None;
+    }
+    if !t.has(&[
+        "보관해",
+        "보존해",
+        "로 설정",
+        "으로 설정",
+        "바꿔",
+        "변경",
+        "해줘",
+        "해 줘",
+        "해주",
+        "만 보관",
+        "만 보존",
+        "무기한",
+        "영구",
+        "즉시",
+        "keep",
+        "retain*",
+        "set",
+        "purge",
+        "delete after",
+        "지워",
+        "파기해",
+    ]) {
         return None;
     }
     let item = if t.has(&["저널", "journal", "되돌리기 기록", "undo history"]) {
@@ -2129,6 +2234,9 @@ fn set_retention(t: &Text<'_>) -> Option<Plan> {
 }
 
 fn register_form(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
+    if t.is_question() || t.has(&["화면", "어디", "메뉴", "screen", "where", "menu"]) {
+        return None;
+    }
     if !t.has(&[
         "양식으로등록",
         "양식등록",
@@ -2198,9 +2306,20 @@ fn quick_settings(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
             ));
         }
     }
-    // re-index
-    if t.has(&["색인", "인덱스", "reindex", "re-index", "index"])
-        && t.has(&["다시", "재", "새로", "rebuild", "refresh", "다시 만들", "재구축", "reindex", "re-index"])
+    // re-index (not "인덱스 펀드 다시 알아봐줘": the search index must be named and rebuilt)
+    if t.has(&["색인", "reindex", "re-index", "search index", "검색 인덱스", "검색인덱스"])
+        && t.has(&[
+            "다시 만들",
+            "다시만들",
+            "재구축",
+            "재생성",
+            "다시 색인",
+            "재색인",
+            "rebuild",
+            "refresh",
+            "reindex",
+            "re-index",
+        ])
     {
         let scope = if t.has(&["벡터", "임베딩", "vector", "embedding"]) {
             Some(super::ReindexScope::Vec)
@@ -2245,9 +2364,25 @@ fn quick_settings(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
             ));
         }
     }
-    // numeric settings: render DPI, review threshold
+    // numeric settings: render DPI, review threshold — commands only ("300으로 스캔했어" is history)
     let number = t.norm.split_whitespace().filter_map(|w| w.trim_end_matches('%').parse::<f64>().ok()).next();
-    if let Some(n) = number {
+    let setting_verb = t.has(&[
+        "로 설정",
+        "으로 설정",
+        "로 바꿔",
+        "으로 바꿔",
+        "바꿔",
+        "변경",
+        "해줘",
+        "해 줘",
+        "로 해",
+        "올려",
+        "내려",
+        "set",
+        "change",
+        "use",
+    ]) && !t.has(&["했어", "했다", "했습니다", "scanned", "did"]);
+    if let (Some(n), true) = (number, setting_verb) {
         if t.has(&["dpi", "해상도", "resolution"]) && [150.0, 200.0, 300.0].contains(&n) {
             return Some(mk(
                 Op::SetSetting { key: SettingKey::RenderDpi, value: serde_json::json!(n as u32) },

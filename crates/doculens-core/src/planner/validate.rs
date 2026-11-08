@@ -550,7 +550,17 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
             }
             Op::Compare { doc_ids, aspects } => {
                 doc_ids.retain(|d| !d.trim().is_empty());
-                doc_ids.dedup();
+                let mut seen = BTreeSet::new();
+                doc_ids.retain(|d| seen.insert(d.clone()));
+                for (j, d) in doc_ids.iter().enumerate() {
+                    if !crate::documents::is_safe_id(d) {
+                        issues.push(PlanIssue::error(
+                            at(&format!("doc_ids[{j}]")),
+                            "doc_id_invalid",
+                            format!("'{d}' is not a document id"),
+                        ));
+                    }
+                }
                 if !(2..=5).contains(&doc_ids.len()) {
                     issues.push(PlanIssue::error(at("doc_ids"), "compare_count", "compare needs 2 to 5 documents"));
                 }
