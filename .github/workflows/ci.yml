@@ -158,9 +158,19 @@ jobs:
         with:
           path: ${{ runner.temp }}\pdfium
           key: pdfium-windows-x64-${{ steps.pdfium.outputs.tag }}
+      # The Windows job is a compile check: when the release download is unavailable (GitHub
+      # answered 504 for over an hour on 2026-11-08) it still compiles and runs the tests, which
+      # skip the PDFium render / import cases when the library is missing; the Linux job keeps
+      # strict PDFium coverage.
       - name: Fetch PDFium (Windows build, sha256 pinned)
+        id: pdfium-fetch
         if: steps.pdfium-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
         run: node scripts/fetch-pdfium.mjs --dest "$env:RUNNER_TEMP\pdfium"
+      - name: Warn when PDFium is unavailable
+        if: steps.pdfium-fetch.outcome == 'failure'
+        shell: bash
+        run: echo "::warning::PDFium download failed; the Windows run compiles and tests without the PDFium render / import tests"
       - name: Resolve the pinned ko-dic dictionary
         id: kodic
         shell: bash
