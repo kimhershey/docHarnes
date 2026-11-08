@@ -40,8 +40,6 @@
     "loading": "불러오는 중…",
     "error": "오류",
     "warning": "주의",
-    "planned_in": "{{phase}} 단계에서 구현",
-    "phase2": "2차(v1.1)",
     "open_folder": "폴더 열기",
     "select": "선택",
     "enabled": "사용",
@@ -64,7 +62,6 @@
     "collapse": "사이드바 접기",
     "expand": "사이드바 펼치기",
     "main": "주요 화면",
-    "phase2_group": "2차 범위",
     "with_pending": "{{label}}, 대기 {{count}}"
   },
   "topbar": {
@@ -285,7 +282,9 @@
       "folder_named": "현재 폴더 {{folder}}",
       "selection_count": "선택 문서 {{count}}건",
       "document": "현재 문서",
-      "document_named": "현재 문서: {{name}}"
+      "document_named": "현재 문서: {{name}}",
+      "project_named": "프로젝트: {{name}}",
+      "project_clear": "프로젝트 컨텍스트 해제"
     },
     "placeholder": "자연어로 명령하거나 질문하세요 (한국어 / English) · /로 슬래시 명령",
     "send": "보내기",
@@ -346,7 +345,17 @@
       "redo": "다시 실행",
       "help": "도움말",
       "clarify": "명확화",
-      "noop": "없음"
+      "noop": "없음",
+      "draft_document": "문서 초안 생성",
+      "register_form": "양식 등록",
+      "explain": "설명",
+      "compare": "비교",
+      "create_project": "프로젝트 만들기",
+      "add_to_project": "프로젝트에 추가",
+      "define_rule": "규칙 정의",
+      "check_consistency": "정합성 검사",
+      "request_supplement": "보완요청서",
+      "set_retention": "보존 기간 설정"
     },
     "source": {
       "prerouter": "슬래시",
@@ -425,7 +434,33 @@
       "engine_wake": "깨우기",
       "undo_last": "마지막 파일 작업",
       "undo_batch": "배치 {{id}}",
-      "cache_limit_gb": "페이지 캐시 상한(GB)"
+      "cache_limit_gb": "페이지 캐시 상한(GB)",
+      "form": "양식 {{name}}",
+      "form_auto": "양식 자동 선택",
+      "sources": "인용 문서 {{count}}건",
+      "current_document": "현재 문서",
+      "current_project": "현재 프로젝트",
+      "explain_scope_kb": "지식 베이스",
+      "explain_scope_collection": "컬렉션",
+      "explain_scope_project": "프로젝트",
+      "explain_scope_document": "문서",
+      "allow_general": "일반 지식 허용",
+      "compare_docs": "문서 {{count}}건",
+      "project_template": "템플릿 {{name}}",
+      "required_types": "필수 유형 {{count}}개",
+      "documents_count": "문서 {{count}}건",
+      "scope_documents": "범위의 문서",
+      "rules_count": "규칙 {{count}}개",
+      "all_rules": "전체 규칙",
+      "findings_count": "지적 사항 {{count}}건",
+      "all_findings": "불일치·누락 전체",
+      "days": "{{count}}일",
+      "retention_documents": "원본 문서",
+      "retention_extractions": "추출 결과",
+      "retention_logs": "로그",
+      "retention_journal": "파일 조작 저널",
+      "retention_chats": "대화 기록",
+      "retention_temp": "임시 데이터"
     },
     "scope": {
       "title": "범위",
@@ -481,7 +516,11 @@
         "from": "원본",
         "to": "대상",
         "status": "상태"
-      }
+      },
+      "impact_draft": "문서 초안 {{count}}건(문서 생성 화면에서 저장)",
+      "impact_project": "프로젝트·규칙 변경 {{count}}건",
+      "retention_shorter": "보존 기간이 짧아집니다 — 기간이 지난 데이터는 다음 파기 작업에서 삭제됩니다.",
+      "rule_description": "규칙: {{description}}"
     },
     "execution": {
       "title": "실행 중 · 작업 #{{id}}",
@@ -525,7 +564,10 @@
         "failed": "실패"
       },
       "undo_last_batch": "↶ 마지막 배치 되돌리기",
-      "moves_caption": "파일 이동 내역 (원본 → 대상)"
+      "moves_caption": "파일 이동 내역 (원본 → 대상)",
+      "open_project": "프로젝트 열기",
+      "open_results": "검사 결과 열기",
+      "rule_saved": "저장됨"
     },
     "aggregate": {
       "title": "집계 결과 — {{summary}}",
@@ -581,7 +623,9 @@
       "inbox_watch_off": "inbox 감시를 껐습니다.",
       "document_not_found": "문서를 찾지 못했습니다: {{ref}}",
       "unknown_screen": "알 수 없는 화면: {{ref}}",
-      "noop": "아무 것도 하지 않았습니다."
+      "noop": "아무 것도 하지 않았습니다.",
+      "register_form": "'{{name}}' 양식 등록을 시작합니다(필드 그리드 확인).",
+      "set_retention": "보존 기간 변경: {{item}} = {{period}}"
     }
   },
   "models": {
@@ -865,7 +909,35 @@
       "purge_log": "파기 내역 보기",
       "purge_log_empty": "아직 파기 내역이 없습니다 (P7).",
       "requires_workspace": "보존 기간은 워크스페이스를 열어야 설정할 수 있습니다.",
-      "saved": "보존 정책을 저장했습니다"
+      "saved": "보존 정책을 저장했습니다",
+      "maintenance": {
+        "title": "파기 작업",
+        "hint": "보존 기간이 지난 저널·작업 기록·대화·캐시·임시 데이터를 매일 지정 시각에 삭제합니다. 지금 바로 실행할 수도 있습니다.",
+        "last_run": "마지막 실행",
+        "next_run": "다음 실행",
+        "never": "아직 실행하지 않음",
+        "disabled": "매일 실행 꺼짐",
+        "run_now": "지금 파기 실행",
+        "running": "파기 중…",
+        "started": "파기 작업을 시작했습니다.",
+        "done": "파기 작업이 끝났습니다.",
+        "summary": "저널 {{journal}} · 작업 {{jobs}} · 대화 {{answers}} · 문서 {{documents}} · 추출 {{extractions}} · 로그 {{logs}} · 임시 {{temp}} · 캐시 {{cache}} · 휴지통 {{trash}}",
+        "items": {
+          "journal": "저널",
+          "jobs": "작업 기록",
+          "answers": "대화",
+          "cache": "페이지 캐시",
+          "trash": "휴지통",
+          "logs": "로그",
+          "temp": "임시 데이터",
+          "documents": "문서",
+          "extractions": "추출 결과"
+        },
+        "skipped": "건너뜀: {{items}}",
+        "skipped_disabled": "매일 실행 꺼짐",
+        "cancelled": "취소됨",
+        "next_run_at": "{{date}} (매일 {{hour}}시)"
+      }
     },
     "shortcuts": {
       "action": "동작",
@@ -923,83 +995,12 @@
       "chunk_target": "청크 크기(토큰)",
       "min_similarity": "의미 검색 근거 임계(코사인 유사도)",
       "min_similarity_hint": "키워드 일치가 없고 임베딩 유사도만 있는 청크는 이 값 이상일 때만 근거로 씁니다(bge-m3 ≈ 0.5)."
-    }
-  },
-  "placeholder": {
-    "title": "{{phase}} 단계에서 구현됩니다",
-    "features": "이 화면에서 제공될 기능",
-    "phase2_title": "2차(v1.1) 범위로 미뤄진 기능입니다",
-    "phase2_body": "1차(v1.0)는 P0~P4와 플래너 핵심 op까지입니다. 문서 자동 생성과 프로젝트 정합성 검증은 2차에서 구현합니다."
-  },
-  "pages": {
-    "library": {
-      "features": [
-        "폴더 트리(inbox / documents / exports)와 필터(유형·날짜·거래처·상태·태그·신뢰도·중복)",
-        "썸네일 그리드 / 리스트 전환, 가상 스크롤",
-        "드래그앤드롭 → 가져오기 미리보기(HWP/HWPX/DOCX 변환 배지)",
-        "다중 선택 일괄 작업: 분류·OCR·추출·요약·정리·내보내기·태그·병합·삭제",
-        "집계 바(건수·합계·평균, 검토 대기 포함 토글)"
-      ]
     },
-    "search": {
-      "features": [
-        "키워드(형태소 + trigram) / 시맨틱 / 하이브리드 검색",
-        "문서·페이지·스니펫·점수 결과, 클릭 → 뷰어 하이라이트",
-        "임베딩 모델 미설치 시 안내"
-      ]
-    },
-    "review": {
-      "features": [
-        "저신뢰·검증 실패 필드 큐, 임계치 슬라이더(기본 0.8)와 무작위 감사 샘플링",
-        "키보드 검토: Enter 승인 · E 수정 · S 보류 · N 다음 (한글 조합 중 Enter 무시)",
-        "이미지 크롭 미리보기, 일괄 승인, 강한 모델/잔글씨 재추출",
-        "필수 필드 전부 승인 → 문서 상태 '검토 완료'"
-      ]
-    },
-    "schemas": {
-      "features": [
-        "양식 등록: 샘플 문서 → VLM 필드 도출 → 확인 → 유형·스키마·템플릿 저장",
-        "내장 샘플 양식 6종(세금계산서·영수증·사업자등록증·계약서·신청서·거래명세서)",
-        "자연어로 스키마 만들기/수정하기, 필드 그리드(key/라벨/타입/필수/정규식)",
-        "유형→스키마 매핑, 버전 이력, 스키마 린트, 샘플 테스트 실행"
-      ]
-    },
-    "knowledge": {
-      "features": [
-        "적재 마법사(폴더·파일 다중 선택, 컬렉션·메타데이터, 진행률)",
-        "컬렉션·문서 버전(신·구판)·용어집 관리",
-        "구조 인지 청킹(조·항·표) + 형태소/trigram FTS + 임베딩(bge-m3) 하이브리드 검색",
-        "질문 테스트 패널과 답변 피드백 통계"
-      ]
-    },
-    "organize": {
-      "features": [
-        "파일명·폴더 템플릿 편집기({{year}} {{month}} {{doc_type}} {{vendor}} {{total}} …)",
-        "미리보기 diff 테이블(dry-run), 검토 완료 문서만 기본",
-        "실행 / 되돌리기(저널 기반 배치 이력)",
-        "내보내기 마법사: XLSX / CSV / JSONL / Markdown / 검색 가능 PDF"
-      ]
-    },
-    "jobs": {
-      "features": [
-        "큐 / 진행 중 / 완료 / 실패 탭, 진행률·ETA·토큰/초",
-        "취소·재시도·일시정지/재개·우선순위, 항목별 오류 로그",
-        "완료 OS 알림, 절전 방지, 디스크·캐시 예상 용량, 엔진 메트릭"
-      ]
-    },
-    "generate": {
-      "features": [
-        "양식 선택 또는 형식 자연어 설명 + 내용 자연어 입력 → 자동 작성(한국어 기본)",
-        "지식 베이스 근거 패널(출처 인용, 제외/추가)",
-        "HWPX / DOCX / PDF / Markdown 저장 + 라이브러리 자동 등록"
-      ]
-    },
-    "projects": {
-      "features": [
-        "케이스 단위 문서 묶음, 필수 문서 체크리스트, 접수 상태 칸반",
-        "자연어 → 정합성 규칙 변환·실행, 결과 표(통과/불일치/판단불가, 근거 링크)",
-        "보완요청서 생성, 관계 그래프"
-      ]
+    "notifications": {
+      "job_complete": "작업 완료 알림",
+      "job_complete_hint": "배치 작업이 끝나면 OS 알림을 표시합니다.",
+      "prevent_sleep": "작업 중 절전 방지",
+      "prevent_sleep_hint": "작업이 진행되는 동안 PC가 절전 모드로 들어가지 않게 합니다."
     }
   },
   "errors": {
@@ -1097,7 +1098,9 @@
       "export": "내보내기",
       "organize": "정리",
       "undo": "되돌리기",
-      "redo": "다시 실행"
+      "redo": "다시 실행",
+      "draft": "문서 초안",
+      "maintenance": "보존 파기"
     },
     "state": {
       "queued": "대기",
@@ -1136,7 +1139,8 @@
       "nothing_to_undo": "되돌릴 작업이 없습니다",
       "nothing_to_redo": "다시 실행할 작업이 없습니다",
       "interrupted": "앱 종료로 중단됨 (재시도 가능)",
-      "workspace_closed": "워크스페이스가 닫혀 중단됨"
+      "workspace_closed": "워크스페이스가 닫혀 중단됨",
+      "drafting": "초안 작성 중"
     },
     "empty_queued": "대기 중인 작업이 없습니다.",
     "empty_failed": "실패한 작업이 없습니다.",
@@ -1164,7 +1168,11 @@
       "export_exists": "같은 이름의 파일이 이미 있습니다 (덮어쓰기 필요).",
       "path_outside": "저장 경로가 워크스페이스 밖입니다.",
       "no_documents": "대상 문서가 없습니다.",
-      "step": "{{op}}: {{message}}"
+      "step": "{{op}}: {{message}}",
+      "content_empty": "생성할 내용이 비어 있습니다.",
+      "project_not_found": "프로젝트를 찾을 수 없습니다.",
+      "no_check_run": "먼저 정합성 검사를 실행하세요.",
+      "no_findings": "불일치·누락 항목이 없습니다."
     },
     "result_loading": "결과 불러오는 중…"
   },
@@ -1488,7 +1496,8 @@
     "type_changed_title": "새 유형으로 다시 추출",
     "type_changed": "유형을 바꿨습니다. 새 유형의 스키마로 다시 추출할까요?",
     "reextract": "다시 추출",
-    "ocr_badge": "OCR"
+    "ocr_badge": "OCR",
+    "image_failed": "페이지 이미지를 불러오지 못했습니다. 캐시에서 지워진 페이지는 다시 렌더하면 복구됩니다."
   },
   "answer": {
     "sources": "근거",
@@ -2216,5 +2225,402 @@
     "running": "집계 중…",
     "scope_selection": "선택 {{count}}건",
     "scope_type": "유형 {{type}}"
+  },
+  "generate": {
+    "title": "문서 생성",
+    "new": "새로 만들기",
+    "drafts": "초안 목록",
+    "open_in_generate": "문서 생성 화면에서 열기",
+    "handoff": "생성된 초안을 열었습니다. 미리보기를 확인하고 저장하세요.",
+    "form": {
+      "title": "요청",
+      "template": "양식 / 템플릿",
+      "template_auto": "(자동 — 내용에서 추론)",
+      "registered": "등록 양식: {{name}}",
+      "format_description": "형식 설명",
+      "format_placeholder": "예: A4 공문 형식, 수신·참조·제목·본문·붙임",
+      "content": "내용",
+      "content_placeholder": "예: ㈜한빛에 노트북 10대, 대당 1,200,000원, 유효기간 30일 견적서",
+      "sources": "인용할 문서",
+      "sources_hint": "선택한 문서의 추출 결과를 값과 출처로 인용합니다.",
+      "pick_sources": "문서 선택…",
+      "remove_source": "인용 문서 제거",
+      "use_knowledge": "지식 베이스 근거 사용",
+      "tone": "어조",
+      "length": "길이",
+      "output": "출력 형식",
+      "generate": "생성",
+      "generating": "생성 중…",
+      "cancel": "취소",
+      "regenerate": "다시 생성",
+      "feedback": "재생성 지시",
+      "feedback_placeholder": "예: 더 짧게, 금액을 1,200,000원으로",
+      "excluded_hint": "제외한 참고 문서 {{count}}건은 재생성에 반영됩니다.",
+      "job_failed": "생성 실패: {{message}}",
+      "job_cancelled": "생성이 취소되었습니다.",
+      "job_interrupted": "{{reason}} 작업 화면에서 다시 시도할 수 있습니다.",
+      "job_result_missing": "초안 결과를 불러오지 못했습니다. 초안 목록에서 열 수 있습니다."
+    },
+    "tone": {
+      "formal": "격식체",
+      "plain": "평이체",
+      "concise": "개조식"
+    },
+    "length": {
+      "short": "짧게",
+      "medium": "보통",
+      "long": "길게"
+    },
+    "output": {
+      "hwpx": "HWPX",
+      "docx": "DOCX",
+      "pdf": "PDF",
+      "md": "Markdown"
+    },
+    "templates": {
+      "official_letter": "공문",
+      "quotation": "견적서",
+      "transaction_statement": "거래명세서",
+      "contract": "계약서",
+      "report": "보고서",
+      "minutes": "회의록",
+      "supplement_request": "보완요청서"
+    },
+    "source": {
+      "rules": "규칙",
+      "model": "모델"
+    },
+    "reference_source": {
+      "document": "문서",
+      "knowledge": "지식 베이스",
+      "aggregate": "집계",
+      "text": "텍스트"
+    },
+    "preview": {
+      "title": "미리보기",
+      "empty_title": "아직 초안이 없습니다",
+      "empty_body": "왼쪽에서 양식과 내용을 입력하고 '생성'을 누르세요. 어시스턴트에 \"견적서 만들어줘\"라고 해도 결과가 여기에 열립니다.",
+      "unreviewed": "검토 전",
+      "validated": "검증 통과",
+      "issues_badge": "검증 이슈 {{count}}건",
+      "loading": "미리보기 갱신 중…",
+      "frame_title": "문서 미리보기"
+    },
+    "editor": {
+      "title": "편집",
+      "empty": "초안이 생성되면 여기에서 필드·표·본문을 편집합니다.",
+      "doc_title": "제목",
+      "fields": "필드",
+      "tables": "표",
+      "body": "본문",
+      "references": "참고 문서",
+      "issues": "검증 결과",
+      "issues_ok": "검증 이슈가 없습니다.",
+      "no_references": "인용한 문서·근거가 없습니다.",
+      "exclude": "제외",
+      "apply_suggestion": "제안 적용",
+      "add_row": "행 추가",
+      "remove_row": "행 삭제",
+      "row": "{{index}}행",
+      "no_rows": "행이 없습니다.",
+      "user_edited": "직접 수정",
+      "source_badge": "출처",
+      "validate": "검증",
+      "validated": "검증을 다시 실행했습니다 (이슈 {{count}}건).",
+      "save": "저장",
+      "heading": "제목 {{level}}",
+      "paragraph": "문단",
+      "list": "목록 (줄마다 한 항목)",
+      "table_ref": "표 삽입: {{key}}",
+      "open_source": "{{title}} 열기"
+    },
+    "issue_codes": {
+      "required_missing": "필수 누락",
+      "sum_mismatch": "합계 불일치",
+      "brn_invalid": "사업자번호 오류",
+      "date_invalid": "날짜 오류",
+      "amount_invalid": "금액 오류",
+      "uncited_claim": "출처 없음",
+      "template_unknown_field": "양식에 없는 필드"
+    },
+    "save": {
+      "title": "저장",
+      "hint": "워크스페이스의 documents/generated/ 아래에 저장하고 라이브러리에 '생성' 문서로 등록합니다.",
+      "format": "형식",
+      "file_name": "파일 이름",
+      "register": "라이브러리 등록",
+      "overwrite": "같은 이름의 파일 덮어쓰기",
+      "blocking_warning": "저장 전 확인이 필요한 검증 이슈가 {{count}}건 있습니다. 그대로 저장할 수 있지만 문서는 '검토 전' 상태로 남습니다.",
+      "confirm": "저장",
+      "saved": "저장했습니다: {{path}}",
+      "open_folder": "폴더 열기",
+      "open_library": "라이브러리에서 보기",
+      "exists": "같은 이름의 파일이 이미 있습니다. 덮어쓰기를 켜거나 파일 이름을 바꾸세요.",
+      "warning_markdown": "Markdown은 라이브러리에 등록하지 않습니다.",
+      "saved_as": "저장했습니다 ({{format}}): {{path}}"
+    },
+    "drafts_list": {
+      "title": "최근 초안",
+      "hint": "생성한 초안은 워크스페이스에 보관됩니다. 열어서 이어서 편집하거나 삭제하세요.",
+      "empty": "저장된 초안이 없습니다.",
+      "open": "열기",
+      "delete": "삭제",
+      "deleted": "초안을 삭제했습니다.",
+      "issues": "이슈 {{count}}",
+      "saved": "저장됨: {{path}}",
+      "unsaved": "미저장",
+      "delete_confirm": "초안 '{{title}}'을(를) 삭제할까요? 저장한 파일은 남습니다."
+    },
+    "sources_dialog": {
+      "title": "인용할 문서 선택",
+      "hint": "추출 결과가 있는 문서를 고르면 값과 출처가 초안에 인용됩니다.",
+      "search": "문서 검색…",
+      "empty": "문서가 없습니다.",
+      "done": "선택 완료 ({{count}})"
+    },
+    "result": {
+      "meta": "필드 {{fields}} · 이슈 {{issues}} · {{source}}"
+    },
+    "open_busy_title": "초안 생성 진행 중",
+    "open_busy": "문서 생성 화면에서 다른 초안이 생성되는 중입니다. 지금 이 초안을 열면 진행 중인 작업의 결과는 작업 화면에서 열 수 있습니다."
+  },
+  "projects": {
+    "title": "프로젝트",
+    "new": "새 프로젝트",
+    "templates_manage": "템플릿 관리",
+    "view": {
+      "label": "보기",
+      "list": "목록",
+      "kanban": "칸반"
+    },
+    "empty_title": "아직 프로젝트가 없습니다",
+    "empty_body": "심사 건·거래처 건·과제 단위로 문서를 묶고, 필수 서류 체크리스트와 정합성 규칙으로 검증합니다.",
+    "status": {
+      "intake": "접수",
+      "extracting": "추출",
+      "validating": "검증",
+      "supplement": "보완요청",
+      "done": "완료"
+    },
+    "card": {
+      "intake_no": "접수번호 {{no}}",
+      "owner": "담당 {{owner}}",
+      "due": "기한 {{date}}",
+      "documents": "문서 {{count}}건",
+      "missing": "누락 {{count}}",
+      "verdicts": "통과 {{pass}} · 불일치 {{mismatch}} · 판단불가 {{undetermined}}",
+      "no_check": "검사 전",
+      "move_prev": "이전 단계로",
+      "move_next": "다음 단계로",
+      "moved": "'{{name}}'을(를) {{status}} 단계로 이동했습니다.",
+      "move_prev_named": "'{{name}}' 이전 단계({{status}})로",
+      "move_next_named": "'{{name}}' 다음 단계({{status}})로",
+      "done_confirm_title": "'{{name}}' 완료 처리",
+      "done_confirm": "마지막 검사에 불일치 {{mismatch}}건 · 누락 {{missing}}건이 남아 있습니다. 그대로 완료 단계로 이동할까요?",
+      "done_confirm_unchecked": "아직 정합성 검사를 실행하지 않았습니다. 그대로 완료 단계로 이동할까요?"
+    },
+    "columns": {
+      "name": "이름",
+      "status": "상태",
+      "intake_no": "접수번호",
+      "owner": "담당",
+      "due": "기한",
+      "documents": "문서",
+      "last_check": "마지막 검사"
+    },
+    "dialog": {
+      "title": "새 프로젝트",
+      "edit_title": "프로젝트 편집",
+      "name": "이름",
+      "name_placeholder": "예: ㈜한빛 거래처 등록",
+      "template": "템플릿",
+      "template_none": "(없음)",
+      "intake_no": "접수번호",
+      "owner": "담당",
+      "due": "기한",
+      "inbox_folder": "inbox 하위 폴더 매핑",
+      "inbox_hint": "inbox/<폴더>에 들어온 문서가 자동으로 이 프로젝트에 들어갑니다.",
+      "create": "만들기",
+      "save": "저장",
+      "created": "프로젝트를 만들었습니다."
+    },
+    "detail": {
+      "back": "프로젝트 목록",
+      "status": "상태",
+      "template": "템플릿",
+      "edit": "편집",
+      "check": "정합성 검사",
+      "checking": "검사 중…",
+      "checked": "검사 완료 — 통과 {{pass}} · 불일치 {{mismatch}} · 판단불가 {{undetermined}} · 누락 {{missing}}",
+      "supplement": "보완요청서",
+      "delete": "삭제",
+      "delete_confirm": "프로젝트 '{{name}}'을(를) 삭제할까요? 문서는 라이브러리에 남습니다.",
+      "deleted": "프로젝트를 삭제했습니다.",
+      "not_found": "프로젝트를 찾을 수 없습니다."
+    },
+    "tabs": {
+      "documents": "문서",
+      "rules": "규칙",
+      "results": "결과",
+      "relations": "관계",
+      "report": "리포트"
+    },
+    "documents": {
+      "checklist": "필수 서류 체크리스트",
+      "no_checklist": "템플릿이 없어 체크리스트가 비어 있습니다. 템플릿을 지정하면 필수 서류가 표시됩니다.",
+      "missing": "누락",
+      "present": "{{count}}건",
+      "extra": "추가",
+      "add": "라이브러리에서 추가",
+      "remove": "프로젝트에서 제외",
+      "open": "열기",
+      "empty": "프로젝트에 문서가 없습니다. 라이브러리에서 추가하세요.",
+      "columns": {
+        "name": "문서",
+        "type": "유형",
+        "status": "상태",
+        "review": "검토",
+        "added": "추가일",
+        "actions": "동작"
+      },
+      "add_title": "문서 추가",
+      "add_hint": "라이브러리의 문서를 프로젝트에 넣습니다. 유형이 분류된 문서는 체크리스트에 반영됩니다.",
+      "add_done": "추가 ({{count}})",
+      "added": "문서 {{count}}건을 추가했습니다.",
+      "search": "문서 검색…",
+      "none": "추가할 문서가 없습니다."
+    },
+    "rules": {
+      "title": "정합성 규칙",
+      "nl_label": "자연어로 규칙 추가",
+      "nl_placeholder": "예: 세금계산서의 공급자 사업자번호는 사업자등록증 등록번호와 같아야 해",
+      "define": "규칙 만들기",
+      "defining": "규칙으로 변환 중…",
+      "manual": "직접 추가",
+      "grid_title": "규칙 확인",
+      "confidence": "신뢰도 {{value}} · {{source}}",
+      "source": {
+        "rules": "문장 규칙",
+        "model": "모델"
+      },
+      "issues": "확인 필요",
+      "unresolved": "알 수 없는 이름: {{names}}",
+      "save": "저장",
+      "saved": "규칙을 저장했습니다.",
+      "discard": "취소",
+      "incomplete": "왼쪽·오른쪽 비교 대상을 모두 지정하세요.",
+      "empty": "규칙이 없습니다. 자연어로 입력하거나 템플릿이 있는 프로젝트를 만드세요.",
+      "enabled": "사용",
+      "delete": "삭제",
+      "deleted": "규칙을 삭제했습니다.",
+      "required": "필수",
+      "optional": "선택",
+      "description": "설명",
+      "left": "왼쪽",
+      "op": "연산",
+      "right": "오른쪽",
+      "right_mode": "비교 대상",
+      "right_field": "다른 문서의 필드",
+      "right_literal": "값",
+      "literal_placeholder": "값 또는 정규식",
+      "tolerance": "허용 오차",
+      "tolerance_pct": "허용 오차(%)",
+      "type": "유형",
+      "field": "필드",
+      "type_any": "(유형 선택)",
+      "field_any": "(필드 선택)",
+      "ops": {
+        "eq": "같아야 함",
+        "neq": "달라야 함",
+        "gte": "이상",
+        "lte": "이하",
+        "within_pct": "오차 이내",
+        "present": "존재해야 함",
+        "matches": "형식 일치"
+      }
+    },
+    "results": {
+      "run": "검사 실행",
+      "running": "검사 중…",
+      "none": "아직 검사를 실행하지 않았습니다.",
+      "summary": "통과 {{pass}} · 불일치 {{mismatch}} · 판단불가 {{undetermined}} · 누락 {{missing}}",
+      "history": "실행 이력",
+      "verdict": {
+        "pass": "통과",
+        "mismatch": "불일치",
+        "undetermined": "판단불가",
+        "missing": "누락"
+      },
+      "columns": {
+        "rule": "규칙",
+        "verdict": "판정",
+        "message": "내용",
+        "evidence": "근거"
+      },
+      "missing_types": "누락 서류: {{types}}",
+      "evidence_open": "{{name}} 열기",
+      "required": "필수"
+    },
+    "relations": {
+      "caption": "문서 간 공통 엔터티",
+      "empty": "공통 엔터티(사업자번호·금액·날짜·명칭)가 없습니다. 문서를 추출한 뒤 다시 확인하세요.",
+      "kinds": {
+        "brn": "사업자번호",
+        "contract_no": "계약번호",
+        "amount": "금액",
+        "date": "날짜",
+        "name": "명칭",
+        "account": "계좌"
+      },
+      "open_doc": "{{name}} 열기"
+    },
+    "report": {
+      "copy": "Markdown 복사",
+      "copied": "리포트를 복사했습니다.",
+      "loading": "리포트 생성 중…",
+      "refresh": "새로 고침"
+    },
+    "supplement": {
+      "title": "보완요청서 생성",
+      "hint": "선택한 불일치·누락 항목으로 보완요청서 초안을 만듭니다. 생성 후 문서 생성 화면에서 검토·저장합니다.",
+      "findings": "항목",
+      "select_all": "모두 선택",
+      "output": "출력 형식",
+      "generate": "생성",
+      "generating": "초안 생성 중…",
+      "none": "불일치·누락 항목이 없습니다. 먼저 정합성 검사를 실행하세요.",
+      "started": "보완요청서 초안을 생성합니다.",
+      "ready": "보완요청서 초안이 준비되었습니다.",
+      "result_missing": "보완요청서 초안을 불러오지 못했습니다. 문서 생성 화면의 초안 목록에서 열 수 있습니다.",
+      "cancelled": "보완요청서 생성이 취소되었습니다.",
+      "interrupted": "{{reason}} 작업 화면에서 다시 시도할 수 있습니다."
+    },
+    "templates": {
+      "title": "프로젝트 템플릿",
+      "hint": "필수 문서 유형과 정합성 규칙 묶음입니다. 내장 템플릿은 읽기 전용이며, 복제해서 수정할 수 있습니다.",
+      "builtin": {
+        "certification_review": "인증 심사",
+        "vendor_onboarding": "거래처 등록",
+        "purchase_settlement": "구매 정산"
+      },
+      "builtin_badge": "내장",
+      "new": "새 템플릿",
+      "duplicate": "복제",
+      "delete": "삭제",
+      "save": "저장",
+      "saved": "템플릿을 저장했습니다.",
+      "deleted": "템플릿을 삭제했습니다.",
+      "name": "이름",
+      "name_en": "이름(영어)",
+      "description": "설명",
+      "required_types": "필수 문서 유형",
+      "rules": "규칙",
+      "add_rule": "규칙 추가",
+      "no_rules": "규칙이 없습니다.",
+      "select": "템플릿을 선택하거나 새로 만드세요.",
+      "readonly": "내장 템플릿은 수정할 수 없습니다. 복제해서 수정하세요.",
+      "copy_suffix": "(복제)",
+      "incomplete_rules": "불완전한 규칙 {{count}}개를 먼저 완성하세요."
+    }
   }
 }

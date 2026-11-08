@@ -19,7 +19,7 @@ use doculens_core::db::Db;
 use doculens_core::documents::convert::PdfPrinter;
 use doculens_core::documents::import::{self, ImportDeps, ImportOptions, ImportPlan, ImportSource};
 use doculens_core::documents::render::{self, RenderOptions, RenderService};
-use doculens_core::documents::{repo, DocumentRecord, SourceKind};
+use doculens_core::documents::{repo, DocumentRecord, DocumentStatus, SourceKind};
 use doculens_core::fswatch::DirWatcher;
 use doculens_core::paths::WorkspacePaths;
 use doculens_core::CoreError;
@@ -394,6 +394,23 @@ pub fn import_job(app: &AppHandle, plan: ImportPlan) -> UiResult<String> {
             if !batch_ids.is_empty() {
                 ctx.emit(app, "batch", batch_ids.clone());
             }
+            // §3.15: `inbox/<folder>/…` joins the project mapped to that folder (created on demand).
+            let mut assigned: Vec<String> = Vec::new();
+            for id in report.imported.iter().chain(report.relinked.iter()) {
+                if let Ok(Some(doc)) = ctx.db.with(|c| repo::get_document(c, id)) {
+                    match doculens_core::projects::assign_inbox_document(&ctx.db, id, &doc.rel_path, true) {
+                        Ok(Some(pid)) => assigned.push(pid),
+                        Ok(None) => {}
+                        Err(e) => log::warn!("inbox project mapping failed for {id}: {e}"),
+                    }
+                }
+            }
+            if !assigned.is_empty() {
+                assigned.sort();
+                assigned.dedup();
+                let _ =
+                    app.emit(crate::projects_bridge::PROJECTS_EVENT, serde_json::json!({ "project_ids": assigned }));
+            }
             if let Ok(mut p) = processed.lock() {
                 p.extend(report.imported.iter().cloned());
                 p.extend(report.relinked.iter().cloned());
@@ -530,10 +547,41 @@ pub fn rescan_job(app: &AppHandle, then_inbox: bool) -> Option<String> {
 
 /// Re-renders documents (new DPI or after a renderer became available).
 pub fn rerender_job(app: &AppHandle, ids: Vec<String>, dpi: Option<u16>) -> UiResult<String> {
+    let subject = format!("{} documents", ids.len());
+    rerender_with_subject(app, ids, dpi, &subject)
+}
+
+/// Re-renders a document whose cached page images are gone (evicted by the retention LRU or
+/// deleted by hand) when the `doculens://` handler is asked for one of them. One job per
+/// document at a time (the job's subject is the document id); documents that were never
+/// rendered (still importing, no renderer, no pages) and unknown ids are left alone.
+pub fn rerender_if_missing(app: &AppHandle, doc_id: &str) {
+    let state = app.state::<AppState>();
+    if state.jobs.is_active(JobKind::DocumentRender, doc_id) {
+        return;
+    }
+    let Ok(ctx) = context(app) else { return };
+    if ctx.render.is_none() {
+        return;
+    }
+    let Ok(Some(doc)) = ctx.db.with(|c| repo::get_document(c, doc_id)) else { return };
+    let rendered_before = matches!(
+        doc.status,
+        DocumentStatus::Rendered | DocumentStatus::Extracted | DocumentStatus::Reviewed | DocumentStatus::Archived
+    );
+    if !rendered_before || doc.page_count == 0 {
+        return;
+    }
+    log::info!("page cache of document {doc_id} is missing; re-rendering");
+    if let Err(e) = rerender_with_subject(app, vec![doc_id.to_string()], None, doc_id) {
+        log::warn!("re-render of {doc_id} could not be queued: {}", e.message);
+    }
+}
+
+fn rerender_with_subject(app: &AppHandle, ids: Vec<String>, dpi: Option<u16>, subject: &str) -> UiResult<String> {
     let state = app.state::<AppState>();
     let ctx = context(app)?;
-    let subject = format!("{} documents", ids.len());
-    let (job, cancel) = state.jobs.create(JobKind::DocumentRender, &subject);
+    let (job, cancel) = state.jobs.create(JobKind::DocumentRender, subject);
     let job_id = job.clone();
     spawn_job_thread(
         "doculens-doc-render",

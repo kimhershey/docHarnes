@@ -154,6 +154,82 @@ export function useTables(documentId: string | undefined) {
   return useQuery({ queryKey: queryKeys.tables(documentId ?? ""), queryFn: () => api.pipelineTables(documentId ?? ""), enabled: !!documentId });
 }
 
+// -- document generation / projects / maintenance (P6, P7) --
+
+export const generateKeys = {
+  all: ["generate"] as const,
+  templates: ["generate", "templates"] as const,
+  drafts: ["generate", "drafts"] as const,
+};
+
+export function useGenerateTemplates(enabled = true) {
+  return useQuery({ queryKey: generateKeys.templates, queryFn: () => api.generateTemplates(), enabled, staleTime: Infinity });
+}
+
+export function useDrafts(enabled = true) {
+  return useQuery({ queryKey: generateKeys.drafts, queryFn: () => api.generateDrafts(), enabled, staleTime: 5_000 });
+}
+
+export function invalidateDrafts(): void {
+  void queryClient.invalidateQueries({ queryKey: generateKeys.drafts });
+}
+
+export const projectKeys = {
+  all: ["projects"] as const,
+  list: ["projects", "list"] as const,
+  detail: (id: string) => ["projects", "detail", id] as const,
+  runs: (id: string) => ["projects", "runs", id] as const,
+  report: (id: string) => ["projects", "report", id] as const,
+  templates: ["projects", "templates"] as const,
+};
+
+export function useProjects(enabled = true) {
+  return useQuery({ queryKey: projectKeys.list, queryFn: () => api.projectsList(), enabled, staleTime: 5_000 });
+}
+
+export function useProject(id: string | null | undefined) {
+  return useQuery({ queryKey: projectKeys.detail(id ?? ""), queryFn: () => api.projectGet(id ?? ""), enabled: !!id, staleTime: 5_000 });
+}
+
+export function useProjectRuns(id: string | null | undefined, enabled = true) {
+  return useQuery({ queryKey: projectKeys.runs(id ?? ""), queryFn: () => api.projectRuns(id ?? ""), enabled: !!id && enabled, staleTime: 5_000 });
+}
+
+export function useProjectReport(id: string | null | undefined, enabled = true) {
+  return useQuery({ queryKey: projectKeys.report(id ?? ""), queryFn: () => api.projectReport(id ?? ""), enabled: !!id && enabled, staleTime: 5_000 });
+}
+
+export function useProjectTemplates(enabled = true) {
+  return useQuery({ queryKey: projectKeys.templates, queryFn: () => api.projectTemplates(), enabled, staleTime: 30_000 });
+}
+
+/** After a project / rule / check change (`projects://changed` or a local mutation). */
+export function invalidateProjects(ids: string[] = []): void {
+  void queryClient.invalidateQueries({ queryKey: projectKeys.list });
+  void queryClient.invalidateQueries({ queryKey: projectKeys.templates });
+  if (ids.length === 0) {
+    void queryClient.invalidateQueries({ queryKey: ["projects", "detail"] });
+    void queryClient.invalidateQueries({ queryKey: ["projects", "runs"] });
+    void queryClient.invalidateQueries({ queryKey: ["projects", "report"] });
+    return;
+  }
+  for (const id of ids) {
+    void queryClient.invalidateQueries({ queryKey: projectKeys.detail(id) });
+    void queryClient.invalidateQueries({ queryKey: projectKeys.runs(id) });
+    void queryClient.invalidateQueries({ queryKey: projectKeys.report(id) });
+  }
+}
+
+export const maintenanceKey = ["maintenance", "status"] as const;
+
+export function useMaintenanceStatus(enabled = true) {
+  return useQuery({ queryKey: maintenanceKey, queryFn: () => api.maintenanceStatus(), enabled, staleTime: 5_000 });
+}
+
+export function invalidateMaintenance(): void {
+  void queryClient.invalidateQueries({ queryKey: maintenanceKey });
+}
+
 // -- journal (P5) --
 
 /** Query keys of the file-operation journal (batch list / entries); `journalKeys.all` invalidates both. */

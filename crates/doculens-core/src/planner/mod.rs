@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::documents::ReviewStatus;
+use crate::generate::{Length, OutputFormat, Tone};
 use crate::knowledge::SearchMode;
 use crate::prerouter::DateRange;
 use crate::settings::{Language, Profile, Theme};
@@ -69,6 +70,16 @@ pub enum OpKind {
     Tag,
     Delete,
     Export,
+    DraftDocument,
+    RegisterForm,
+    Explain,
+    Compare,
+    CreateProject,
+    AddToProject,
+    DefineRule,
+    CheckConsistency,
+    RequestSupplement,
+    SetRetention,
     SetModel,
     SetProfile,
     SetTheme,
@@ -85,7 +96,7 @@ pub enum OpKind {
 }
 
 impl OpKind {
-    pub const ALL: [OpKind; 33] = [
+    pub const ALL: [OpKind; 43] = [
         OpKind::Import,
         OpKind::SetInboxWatch,
         OpKind::Classify,
@@ -106,6 +117,16 @@ impl OpKind {
         OpKind::Tag,
         OpKind::Delete,
         OpKind::Export,
+        OpKind::DraftDocument,
+        OpKind::RegisterForm,
+        OpKind::Explain,
+        OpKind::Compare,
+        OpKind::CreateProject,
+        OpKind::AddToProject,
+        OpKind::DefineRule,
+        OpKind::CheckConsistency,
+        OpKind::RequestSupplement,
+        OpKind::SetRetention,
         OpKind::SetModel,
         OpKind::SetProfile,
         OpKind::SetTheme,
@@ -143,6 +164,16 @@ impl OpKind {
             OpKind::Tag => "tag",
             OpKind::Delete => "delete",
             OpKind::Export => "export",
+            OpKind::DraftDocument => "draft_document",
+            OpKind::RegisterForm => "register_form",
+            OpKind::Explain => "explain",
+            OpKind::Compare => "compare",
+            OpKind::CreateProject => "create_project",
+            OpKind::AddToProject => "add_to_project",
+            OpKind::DefineRule => "define_rule",
+            OpKind::CheckConsistency => "check_consistency",
+            OpKind::RequestSupplement => "request_supplement",
+            OpKind::SetRetention => "set_retention",
             OpKind::SetModel => "set_model",
             OpKind::SetProfile => "set_profile",
             OpKind::SetTheme => "set_theme",
@@ -182,6 +213,8 @@ impl OpKind {
                 | OpKind::Noop
                 | OpKind::Reindex
                 | OpKind::SetInboxWatch
+                | OpKind::RegisterForm
+                | OpKind::SetRetention
         )
     }
 
@@ -189,7 +222,17 @@ impl OpKind {
     pub fn needs_model(self) -> bool {
         matches!(
             self,
-            OpKind::Classify | OpKind::Ocr | OpKind::Extract | OpKind::Answer | OpKind::Summarize | OpKind::Import
+            OpKind::Classify
+                | OpKind::Ocr
+                | OpKind::Extract
+                | OpKind::Answer
+                | OpKind::Summarize
+                | OpKind::Import
+                | OpKind::DraftDocument
+                | OpKind::Explain
+                | OpKind::Compare
+                | OpKind::DefineRule
+                | OpKind::RequestSupplement
         )
     }
 }
@@ -307,6 +350,64 @@ impl GroupBy {
             GroupBy::Vendor => "vendor",
             GroupBy::DocType => "doc_type",
             GroupBy::None => "none",
+        }
+    }
+}
+
+/// `explain.scope` (appendix D): where the evidence comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ExplainScope {
+    #[default]
+    Kb,
+    Collection,
+    Project,
+    Document,
+}
+
+impl ExplainScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExplainScope::Kb => "kb",
+            ExplainScope::Collection => "collection",
+            ExplainScope::Project => "project",
+            ExplainScope::Document => "document",
+        }
+    }
+}
+
+/// `set_retention.item` (appendix D; the page cache is size-capped and is set through
+/// `set_setting cache_limit_gb` instead).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetentionTarget {
+    Documents,
+    Extractions,
+    /// Job logs and app logs together.
+    Logs,
+    Journal,
+    Chats,
+    Temp,
+}
+
+impl RetentionTarget {
+    pub const ALL: [RetentionTarget; 6] = [
+        RetentionTarget::Documents,
+        RetentionTarget::Extractions,
+        RetentionTarget::Logs,
+        RetentionTarget::Journal,
+        RetentionTarget::Chats,
+        RetentionTarget::Temp,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RetentionTarget::Documents => "documents",
+            RetentionTarget::Extractions => "extractions",
+            RetentionTarget::Logs => "logs",
+            RetentionTarget::Journal => "journal",
+            RetentionTarget::Chats => "chats",
+            RetentionTarget::Temp => "temp",
         }
     }
 }
@@ -563,6 +664,96 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target: Option<ExportTarget>,
     },
+    /// §3.13 document generation: the draft is produced by the executor and opened in the
+    /// 문서 생성 screen (saving / registering happens there).
+    DraftDocument {
+        /// Registered form / schema (id, name, doc-type slug) or a built-in template name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        form_ref: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        format_description: Option<String>,
+        content: String,
+        /// Document ids to quote, or `selection` (selected documents) / `aggregate` (last aggregate card).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        sources: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<OutputFormat>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tone: Option<Tone>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        length: Option<Length>,
+    },
+    /// §3.4.0 form registration — runs in the UI (field grid confirmation).
+    RegisterForm {
+        /// Document id or `current`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        doc_ref: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        doc_type_slug: Option<String>,
+    },
+    /// §3.14.2 grounded explanation of a selection / question.
+    Explain {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        selection: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        question: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<ExplainScope>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        allow_general_knowledge: Option<bool>,
+    },
+    /// §3.14.3 comparison summary of 2–5 documents.
+    Compare {
+        doc_ids: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        aspects: Vec<String>,
+    },
+    /// §3.15 projects.
+    CreateProject {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        template: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        doc_types_required: Vec<String>,
+    },
+    AddToProject {
+        /// Project id or name; `None` = the project open in the UI.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
+        /// Defaults to the plan scope.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        doc_ids: Vec<String>,
+    },
+    DefineRule {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        template: Option<String>,
+        description: String,
+    },
+    CheckConsistency {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
+        /// Rule ids; empty = all enabled rules.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        rules: Vec<String>,
+    },
+    RequestSupplement {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
+        /// Finding (rule result) ids; empty = every mismatch / missing finding of the last run.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        findings: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<OutputFormat>,
+    },
+    /// §3.8 retention — runs in the UI (`workspace_set_retention`); `days < 0` = keep forever.
+    SetRetention {
+        item: RetentionTarget,
+        days: i64,
+    },
     SetModel {
         id: String,
     },
@@ -627,6 +818,16 @@ impl Op {
             Op::Tag { .. } => OpKind::Tag,
             Op::Delete { .. } => OpKind::Delete,
             Op::Export { .. } => OpKind::Export,
+            Op::DraftDocument { .. } => OpKind::DraftDocument,
+            Op::RegisterForm { .. } => OpKind::RegisterForm,
+            Op::Explain { .. } => OpKind::Explain,
+            Op::Compare { .. } => OpKind::Compare,
+            Op::CreateProject { .. } => OpKind::CreateProject,
+            Op::AddToProject { .. } => OpKind::AddToProject,
+            Op::DefineRule { .. } => OpKind::DefineRule,
+            Op::CheckConsistency { .. } => OpKind::CheckConsistency,
+            Op::RequestSupplement { .. } => OpKind::RequestSupplement,
+            Op::SetRetention { .. } => OpKind::SetRetention,
             Op::SetModel { .. } => OpKind::SetModel,
             Op::SetProfile { .. } => OpKind::SetProfile,
             Op::SetTheme { .. } => OpKind::SetTheme,
@@ -650,6 +851,14 @@ impl Op {
             Op::Organize { .. } | Op::Rename { .. } | Op::Move { .. } => SideEffect::Files,
             Op::Delete { .. } => SideEffect::Trash,
             Op::Export { .. } => SideEffect::FileCreate,
+            Op::DraftDocument { .. } | Op::RequestSupplement { .. } => SideEffect::FileCreate,
+            Op::RegisterForm { .. }
+            | Op::CreateProject { .. }
+            | Op::AddToProject { .. }
+            | Op::DefineRule { .. }
+            | Op::CheckConsistency { .. } => SideEffect::Database,
+            Op::SetRetention { .. } => SideEffect::Settings,
+            Op::Explain { .. } | Op::Compare { .. } => SideEffect::None,
             Op::Undo { .. } | Op::Redo {} => SideEffect::Files,
             Op::Import { .. } => SideEffect::Database,
             Op::Classify { .. } | Op::SetDocType { .. } | Op::Ocr { .. } | Op::Extract { .. } | Op::Validate {} => {
@@ -689,6 +898,14 @@ impl Op {
             Op::Job { action: JobOp::Cancel, .. } => true,
             Op::Engine { action: EngineOp::Restart } => true,
             Op::DefineSchema { .. } => true,
+            // Model-generated documents, rule grids, form field grids and shorter retention are shown first.
+            Op::DraftDocument { .. }
+            | Op::RequestSupplement { .. }
+            | Op::DefineRule { .. }
+            | Op::RegisterForm { .. }
+            | Op::SetRetention { .. }
+            // Creates rows (and possibly an ad-hoc template) — shown before it runs.
+            | Op::CreateProject { .. } => true,
             Op::Review { action: ReviewOp::Approve | ReviewOp::Correct | ReviewOp::Reject, .. } => true,
             _ => false,
         }
@@ -900,6 +1117,18 @@ pub struct PlanContext {
     pub document_count: u64,
     /// Ids of models the user may switch to (`set_model`).
     pub model_ids: Vec<String>,
+    /// Projects of the workspace (§3.15) — `add_to_project` / `check_consistency` targets.
+    pub projects: Vec<ProjectSummary>,
+    /// Project open in the UI (default target of project ops).
+    pub current_project: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectSummary {
+    pub id: String,
+    pub name: String,
+    /// `intake` | `extracting` | `validating` | `supplement` | `done`.
+    pub status: String,
 }
 
 impl Default for PlanContext {
@@ -917,6 +1146,8 @@ impl Default for PlanContext {
             current_page: None,
             document_count: 0,
             model_ids: Vec::new(),
+            projects: Vec::new(),
+            current_project: None,
         }
     }
 }
@@ -943,6 +1174,17 @@ impl PlanContext {
         self.schemas.iter().find(|s| {
             s.id == reference || compact(&s.name) == key || compact(&s.name_en) == key || compact(&s.doc_type) == key
         })
+    }
+
+    /// Resolves a project by id or name (either exact or compacted); `None` input → the current project.
+    pub fn project(&self, reference: Option<&str>) -> Option<&ProjectSummary> {
+        match reference {
+            None => self.current_project.as_deref().and_then(|id| self.projects.iter().find(|p| p.id == id)),
+            Some(r) => {
+                let key = compact(r);
+                self.projects.iter().find(|p| p.id == r || compact(&p.name) == key)
+            }
+        }
     }
 
     /// Resolves a field of a schema by key or label.

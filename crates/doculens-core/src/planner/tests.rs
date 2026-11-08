@@ -86,6 +86,8 @@ fn ctx() -> PlanContext {
         current_page: Some(1),
         document_count: 42,
         model_ids: vec!["qwen3.5-4b-q6k".into(), "qwen3.5-9b-q4km".into()],
+        projects: Vec::new(),
+        current_project: None,
     }
 }
 
@@ -229,6 +231,165 @@ fn example_commands_plan_without_a_model() {
     c.current_document = None;
     let r = plan(None, "문서 삭제해", &c).unwrap();
     assert!(r.plan.is_clarification(), "{r:?}");
+}
+
+#[test]
+fn p6_rules_plan_drafts_projects_explanations_and_retention() {
+    use super::{ProjectSummary, RetentionTarget};
+    use crate::generate::OutputFormat;
+    let mut c = ctx();
+    c.projects = vec![
+        ProjectSummary { id: "p-hanbit".into(), name: "한빛 심사".into(), status: "intake".into() },
+        ProjectSummary { id: "p-acme".into(), name: "Acme onboarding".into(), status: "validating".into() },
+    ];
+    c.current_project = Some("p-hanbit".into());
+    let planned = |text: &str| plan(None, text, &c).unwrap();
+
+    // Drafting: a built-in template picked from the keyword, the whole sentence as content.
+    let r = planned("등록된 견적서 양식으로 ㈜한빛에 노트북 10대, 대당 1,200,000원, 유효기간 30일 견적서 만들어줘");
+    assert_eq!(kinds(&r.plan), [OpKind::DraftDocument], "{r:?}");
+    assert!(
+        matches!(&r.plan.operations[0], Op::DraftDocument { form_ref, content, .. } if form_ref.as_deref() == Some("quotation") && content.contains("노트북"))
+    );
+    assert!(r.plan.requires_confirmation);
+    assert!(!has_errors(&r.issues), "{:?}", r.issues);
+    // Rewrite the open contract → the selection is a source.
+    let r = planned("이 계약서 내용으로 갑·을 바꿔서 계약서 다시 써줘");
+    assert!(
+        matches!(&r.plan.operations[0], Op::DraftDocument { form_ref, sources, .. } if form_ref.as_deref() == Some("contract") && sources == &["d1a2".to_string()]),
+        "{r:?}"
+    );
+    // A report from the aggregate card, as PDF: aggregate the receipts first, then draft from the totals.
+    let r = planned("지난달 영수증 집계 결과로 경비 보고서 초안 작성해줘 pdf로");
+    assert_eq!(kinds(&r.plan), [OpKind::Aggregate, OpKind::DraftDocument], "{r:?}");
+    assert_eq!(r.plan.scope.filter.doc_type.as_deref(), Some("receipt"));
+    assert_eq!(r.plan.scope.filter.date_from.as_deref(), Some("2026-10-01"));
+    assert!(
+        matches!(&r.plan.operations[1], Op::DraftDocument { form_ref, sources, output: Some(OutputFormat::Pdf), .. } if form_ref.as_deref() == Some("report") && sources.contains(&"aggregate".to_string())),
+        "{r:?}"
+    );
+    // Field labels that contain 작성 do not trigger drafting; organising wins.
+    let r = planned("계약서 작성일자별로 정리해줘");
+    assert!(!matches!(&r.plan.operations[0], Op::DraftDocument { .. }), "{r:?}");
+
+    // Projects.
+    let r = planned("'한빛 2차 심사' 프로젝트 만들어줘");
+    assert!(matches!(&r.plan.operations[0], Op::CreateProject { name, .. } if name == "한빛 2차 심사"), "{r:?}");
+    let r = planned("create project Acme renewal");
+    assert!(matches!(&r.plan.operations[0], Op::CreateProject { name, .. } if name == "Acme renewal"), "{r:?}");
+    let r = planned("선택한 문서를 한빛 심사 프로젝트에 추가해");
+    assert!(matches!(&r.plan.operations[0], Op::AddToProject { project: Some(p), .. } if p == "p-hanbit"), "{r:?}");
+    assert_eq!(r.plan.scope.doc_ids, vec!["d1a2".to_string()]);
+    let r = planned("정합성 검사 돌려줘");
+    assert!(
+        matches!(&r.plan.operations[0], Op::CheckConsistency { project: Some(p), .. } if p == "p-hanbit"),
+        "the open project is filled in: {r:?}"
+    );
+    assert!(!has_errors(&r.issues), "{:?}", r.issues);
+    let r = planned("세금계산서의 공급자 사업자번호는 사업자등록증 번호와 같아야 해");
+    assert!(
+        matches!(&r.plan.operations[0], Op::DefineRule { description, .. } if description.contains("같아야")),
+        "{r:?}"
+    );
+    assert!(r.plan.requires_confirmation);
+    let r = planned("보완요청서 만들어줘");
+    assert!(matches!(&r.plan.operations[0], Op::RequestSupplement { .. }), "{r:?}");
+    // Without an open project the project ops ask for one.
+    let mut c2 = c.clone();
+    c2.current_project = None;
+    let r = plan(None, "정합성 검사 돌려줘", &c2).unwrap();
+    assert!(r.plan.is_clarification() || has_errors(&r.issues), "{r:?}");
+
+    // Explain / compare.
+    let r = planned("이 문장 설명해줘");
+    assert!(matches!(&r.plan.operations[0], Op::Explain { .. }), "{r:?}");
+    let mut c3 = c.clone();
+    c3.selected_doc_ids = vec!["a".into(), "b".into()];
+    let r = plan(None, "선택한 두 문서 비교해줘", &c3).unwrap();
+    assert!(matches!(&r.plan.operations[0], Op::Compare { doc_ids, .. } if doc_ids.len() == 2), "{r:?}");
+    let r = planned("이 두 문서 비교해줘");
+    assert!(r.plan.is_clarification(), "one selected document: {r:?}");
+
+    // Retention and form registration (UI ops).
+    let r = planned("저널은 30일만 보관해");
+    assert!(matches!(&r.plan.operations[0], Op::SetRetention { item: RetentionTarget::Journal, days: 30 }), "{r:?}");
+    let r = planned("keep chat history for 6 months");
+    assert!(matches!(&r.plan.operations[0], Op::SetRetention { item: RetentionTarget::Chats, days: 180 }), "{r:?}");
+    let r = planned("원본 문서는 무기한 보존");
+    assert!(matches!(&r.plan.operations[0], Op::SetRetention { item: RetentionTarget::Documents, days: -1 }));
+    let r = planned("이 문서를 '휴가신청서' 양식으로 등록해");
+    assert!(
+        matches!(&r.plan.operations[0], Op::RegisterForm { doc_ref: Some(d), name: Some(n), .. } if d == "d1a2" && n == "휴가신청서"),
+        "{r:?}"
+    );
+    assert!(OpKind::RegisterForm.runs_in_ui() && OpKind::SetRetention.runs_in_ui());
+}
+
+#[test]
+fn p6_rules_ignore_statements_and_questions() {
+    use super::{ProjectSummary, SettingKey};
+    let mut c = ctx();
+    c.projects = vec![
+        ProjectSummary { id: "p-hanbit".into(), name: "한빛 심사".into(), status: "intake".into() },
+        ProjectSummary { id: "p-acme".into(), name: "Acme onboarding".into(), status: "validating".into() },
+    ];
+    c.current_project = Some("p-hanbit".into());
+    let not = |text: &str, bad: &[OpKind]| {
+        let r = plan(None, text, &c).unwrap();
+        let ks = kinds(&r.plan);
+        assert!(!ks.iter().any(|k| bad.contains(k)), "{text} → {ks:?} ({r:?})");
+    };
+    use OpKind::*;
+    // Retention statements / questions never become set_retention (the purge chain starts there).
+    for s in [
+        "문서 3년 보관 의무가 있나요?",
+        "문서 90일 보관했어?",
+        "원본 문서는 5년 보존이 법적 의무야",
+        "추출 결과 30일 지나면 삭제돼?",
+        "채팅 기록은 6개월 보관이 기본이지?",
+        "임시로 저장한 거 지워지면 안 돼, 계속 보관해",
+    ] {
+        not(s, &[SetRetention]);
+    }
+    // Project chatter is not project creation.
+    for s in [
+        "새 프로젝트 매니저가 왔어",
+        "케이스 스터디 자료 만들어줘",
+        "프로젝트 새로 시작하자",
+        "start the project kickoff meeting notes",
+        "create a project plan for Q1",
+    ] {
+        not(s, &[CreateProject]);
+    }
+    // Questions about rules / results do not define rules or re-run checks.
+    for s in [
+        "세금계산서 필수 항목이 뭐야?",
+        "견적서 유효기간은 보통 30일 이내여야 해?",
+        "the contract amount must match the quotation, does it?",
+        "정합성 검사 결과 알려줘",
+        "the supplement request must be sent by Friday",
+    ] {
+        not(s, &[DefineRule, CheckConsistency, RequestSupplement]);
+    }
+    // Settings chatter.
+    not("해상도 300으로 스캔했어", &[SetSetting]);
+    not("인덴스 펀드 다시 알아봐줘", &[Reindex]);
+    not("인덱스 펀드 다시 알아봐줘", &[Reindex]);
+    not("양식 등록은 어디서 해?", &[RegisterForm]);
+    not("양식 등록 화면 열어줘", &[RegisterForm]);
+    // Drafting needs a template or an explicit document request.
+    not("내일 회의 자료 만들어줘", &[DraftDocument]);
+    not("write down the total of last month's receipts", &[DraftDocument]);
+    not("draft folder is empty", &[DraftDocument]);
+    // Still recognised: explicit commands.
+    let r = plan(None, "한빛 심사 프로젝트에 이 문서 추가해줘", &c).unwrap();
+    assert!(matches!(&r.plan.operations[0], Op::AddToProject { project: Some(p), .. } if p == "p-hanbit"), "{r:?}");
+    let r = plan(None, "'한빛 2차 심사' 프로젝트 만들어줘", &c).unwrap();
+    assert!(r.plan.requires_confirmation && matches!(&r.plan.operations[0], Op::CreateProject { .. }), "{r:?}");
+    let r = plan(None, "검색 색인 다시 만들어줘", &c).unwrap();
+    assert!(matches!(&r.plan.operations[0], Op::Reindex { .. }), "{r:?}");
+    let r = plan(None, "DPI를 300으로 바꿔줘", &c).unwrap();
+    assert!(matches!(&r.plan.operations[0], Op::SetSetting { key: SettingKey::RenderDpi, .. }), "{r:?}");
 }
 
 #[test]
@@ -518,7 +679,10 @@ fn model_path_requeries_once_with_feedback() {
     assert_eq!(prompts::tier_for(&c, text, None, Some(full), None), prompts::Tier::Full);
     assert_eq!(prompts::tier_for(&c, text, None, Some(compact), None), prompts::Tier::Compact);
     assert_eq!(prompts::tier_for(&c, text, None, Some(minimal), None), prompts::Tier::Minimal);
-    assert_eq!(prompts::tier_for(&c, text, None, Some(100), None), prompts::Tier::Minimal);
+    // Below the minimal size the last-resort tier (op names only, no examples) is used.
+    let tiny = prompts::message_tokens(&prompts::messages_for(&c, text, None, prompts::Tier::Tiny, None));
+    assert!(tiny < minimal / 2, "{tiny} {minimal}");
+    assert_eq!(prompts::tier_for(&c, text, None, Some(100), None), prompts::Tier::Tiny);
     assert_eq!(prompts::tier_for(&c, text, None, None, None), prompts::Tier::Full);
     assert!(
         minimal <= prompts::prompt_budget(Some(4096), llm::REPLY_TOKENS).unwrap(),
@@ -872,6 +1036,70 @@ mod exec_tests {
         let ex = exec::run(&deps, &plan, &mut |_| {}).unwrap();
         assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
         assert_eq!(ex.steps[0].payload["hits"].as_array().map(Vec::len), Some(0));
+    }
+
+    #[test]
+    fn define_rule_without_a_project_targets_user_templates_only() {
+        use crate::projects::{repo as projects_repo, TemplateInput};
+        let w = World::new();
+        w.db.with(projects_repo::ensure_builtins).unwrap();
+        let tpl =
+            w.db.with(|c| {
+                projects_repo::save_template(
+                    c,
+                    &TemplateInput {
+                        name_ko: "구매 정산 사본".into(),
+                        required_doc_types: vec!["transaction_statement".into(), "tax_invoice".into()],
+                        ..Default::default()
+                    },
+                )
+            })
+            .unwrap();
+
+        // A confident rule-based draft is appended to the (name-resolved) template's rules.
+        let plan = plan_of(
+            vec![Op::DefineRule {
+                project: None,
+                template: Some("구매 정산 사본".into()),
+                description: "거래명세서 합계 = 세금계산서 합계금액".into(),
+            }],
+            Scope::default(),
+        );
+        let ex = exec::run(&w.deps(None), &plan, &mut |_| {}).unwrap();
+        assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
+        assert_eq!(ex.steps[0].payload["saved"], json!(true), "{:?}", ex.steps[0].payload);
+        assert_eq!(ex.steps[0].payload["template_id"], json!(tpl.id));
+        assert!(ex.steps[0].payload["project_id"].is_null());
+        assert!(ex.steps[0].summary.contains("템플릿에 규칙 저장"), "{}", ex.steps[0].summary);
+        let after = w.db.with(|c| projects_repo::get_template(c, &tpl.id)).unwrap().unwrap();
+        assert_eq!(after.rules.len(), 1, "{after:?}");
+        assert_eq!(after.rules[0].left.doc_type.as_deref(), Some("transaction_statement"), "{after:?}");
+        assert_eq!(w.chat.calls("project_rule"), 0, "a rule the phrase rules resolve never asks the model");
+
+        // Built-in templates take no rules; unknown templates are reported, not drafted.
+        let plan = plan_of(
+            vec![Op::DefineRule {
+                project: None,
+                template: Some("tpl_purchase_settlement".into()),
+                description: "거래명세서 합계 = 세금계산서 합계금액".into(),
+            }],
+            Scope::default(),
+        );
+        let ex = exec::run(&w.deps(None), &plan, &mut |_| {}).unwrap();
+        assert_eq!(ex.steps[0].status, StepStatus::Failed);
+        assert!(ex.steps[0].error.as_deref().unwrap().contains("template_builtin"), "{:?}", ex.steps[0]);
+        let plan = plan_of(
+            vec![Op::DefineRule {
+                project: None,
+                template: Some("없는 템플릿".into()),
+                description: "거래명세서 합계 = 세금계산서 합계금액".into(),
+            }],
+            Scope::default(),
+        );
+        let ex = exec::run(&w.deps(None), &plan, &mut |_| {}).unwrap();
+        assert_eq!(ex.steps[0].status, StepStatus::Failed);
+        assert!(ex.steps[0].error.as_deref().unwrap().contains("없는 템플릿"), "{:?}", ex.steps[0]);
+        assert_eq!(w.db.with(|c| projects_repo::get_template(c, &tpl.id)).unwrap().unwrap().rules.len(), 1);
     }
 }
 

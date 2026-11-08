@@ -837,6 +837,11 @@ pub fn delete_answer(conn: &Connection, id: i64) -> rusqlite::Result<bool> {
     Ok(conn.execute("DELETE FROM answers WHERE id = ?1", [id])? > 0)
 }
 
+/// Deletes saved conversations older than `cutoff` (retention purge, §3.8 "대화 기록").
+pub fn purge_answers_before(conn: &Connection, cutoff: &chrono::DateTime<chrono::Utc>) -> rusqlite::Result<usize> {
+    conn.execute("DELETE FROM answers WHERE created_at < ?1", [cutoff.to_rfc3339()])
+}
+
 // ---------------------------------------------------------------------------
 // Status
 // ---------------------------------------------------------------------------

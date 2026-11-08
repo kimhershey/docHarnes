@@ -11,7 +11,8 @@ rust-version.workspace = true
 [lib]
 # The `_lib` suffix keeps the lib name distinct from the bin name on Windows.
 name = "doculens_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Desktop-only app: the mobile `staticlib` / `cdylib` outputs are not built (≈1.8 GB of artifacts per build).
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -22,6 +23,8 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-log = "2"
+# OS toast when a long job finishes (design §3.9; MIT OR Apache-2.0).
+tauri-plugin-notification = "2"
 serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
@@ -37,3 +40,5 @@ webkit2gtk = "2.0"
 # WebView2 `PrintToPdf` for converted documents (same versions wry uses).
 webview2-com = "0.39"
 windows-core = "0.62"
+# Sleep prevention during batches (`SetThreadExecutionState`, design §3.9).
+windows-sys.workspace = true

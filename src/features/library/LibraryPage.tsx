@@ -39,6 +39,7 @@ import { useWorkspace } from "@/stores/workspace";
 
 import { AggregateBar } from "./AggregateBar";
 import { ImportDocumentsDialog } from "./ImportDocumentsDialog";
+import { RetryImage } from "./RetryImage";
 import { MergeDialog } from "./SplitMergeDialogs";
 import { statusVariant } from "./status";
 import { useDocumentDrop } from "./useDocumentDrop";
@@ -55,14 +56,14 @@ function KindIcon({ kind, className }: { kind: SourceKind; className?: string })
 }
 
 function Thumb({ doc, className }: { doc: DocumentView; className?: string }) {
-  if (!doc.thumb_url) {
-    return (
-      <div className={cn("flex items-center justify-center bg-bg-sunken text-fg-subtle", className)}>
-        <KindIcon kind={doc.source_kind} className="size-8" />
-      </div>
-    );
-  }
-  return <img src={doc.thumb_url} alt="" loading="lazy" className={cn("bg-white object-contain", className)} draggable={false} />;
+  const placeholder = (
+    <div className={cn("flex items-center justify-center bg-bg-sunken text-fg-subtle", className)}>
+      <KindIcon kind={doc.source_kind} className="size-8" />
+    </div>
+  );
+  if (!doc.thumb_url) return placeholder;
+  // A thumbnail purged from the page cache is re-rendered on request: retry before falling back to the icon.
+  return <RetryImage src={doc.thumb_url} alt="" loading="lazy" className={cn("bg-white object-contain", className)} draggable={false} fallback={placeholder} />;
 }
 
 export function LibraryPage() {

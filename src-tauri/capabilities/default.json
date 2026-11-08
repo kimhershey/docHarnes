@@ -12,6 +12,7 @@
     "opener:allow-reveal-item-in-dir",
     "dialog:default",
     "dialog:allow-open",
-    "log:default"
+    "log:default",
+    "notification:default"
   ]
 }

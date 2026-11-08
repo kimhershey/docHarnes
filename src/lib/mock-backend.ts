@@ -67,6 +67,7 @@ import type {
   WorkspaceView,
 } from "./types";
 import { defaultImportOptions, EVENTS } from "./types";
+import type { DraftJobSpec } from "./mock-generate";
 
 const SETTINGS_KEY = "doculens.mock.settings";
 const WORKSPACES_KEY = "doculens.mock.workspaces";
@@ -225,6 +226,11 @@ let current: MockWorkspace | null = null;
 let startupResolved = false;
 
 /** Path of the open mock workspace (null when none). */
+/** The open workspace as the UI sees it (`workspace_current`), for mocks that need its manifest. */
+export function currentWorkspaceView(): WorkspaceView | null {
+  return current ? view(current) : null;
+}
+
 export function currentWorkspacePath(): string | null {
   return current?.path ?? null;
 }
@@ -628,11 +634,13 @@ export type JobSpec =
   | { kind: "export"; req: ExportRequest }
   | { kind: "organize"; plan: OrganizePlan; label: string; source: string; batch_kind: string }
   | { kind: "undo"; batch_id: string | null }
-  | { kind: "redo" };
+  | { kind: "redo" }
+  | DraftJobSpec
+  | { kind: "maintenance" };
 
 export type JobLane = "engine" | "io";
 
-const MODEL_OPS: ReadonlySet<string> = new Set(["classify", "ocr", "extract", "answer", "summarize", "import"]);
+const MODEL_OPS: ReadonlySet<string> = new Set(["classify", "ocr", "extract", "answer", "summarize", "import", "draft_document", "explain", "compare", "define_rule", "request_supplement"]);
 
 /** Ops that need the vision / chat model (`OpKind::needs_model`). */
 export function planNeedsModel(plan: Plan): boolean {
@@ -641,7 +649,7 @@ export function planNeedsModel(plan: Plan): boolean {
 
 /** Engine-lane jobs run one at a time; I/O jobs may overlap with them (`JobSpec::lane`). */
 export function specLane(spec: JobSpec): JobLane {
-  if (spec.kind === "pipeline" || (spec.kind === "plan" && planNeedsModel(spec.plan))) return "engine";
+  if (spec.kind === "pipeline" || (spec.kind === "plan" && planNeedsModel(spec.plan)) || (spec.kind === "draft" && !spec.prepared)) return "engine";
   return "io";
 }
 
@@ -850,7 +858,7 @@ export function submitJob(spec: JobSpec, subject: string, priority: JobPriority 
     persistent: true,
     attempts: 0,
     result: undefined,
-    label: spec.kind === "plan" ? spec.text : spec.kind === "organize" ? spec.label : null,
+    label: spec.kind === "plan" ? spec.text : spec.kind === "organize" || spec.kind === "draft" ? spec.label : null,
   };
   specs.set(job.id, spec);
   pushJob(job);
@@ -2452,6 +2460,43 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       const pl = await import("./mock-planner");
       return r(await pl.mockPlanner(cmd, a));
     }
+    case "generate_templates":
+    case "generate_draft":
+    case "generate_preview":
+    case "generate_validate":
+    case "generate_save":
+    case "generate_drafts":
+    case "generate_draft_get":
+    case "generate_draft_put":
+    case "generate_draft_delete": {
+      if (!current) throw err("no_workspace", "no workspace is open");
+      const mg = await import("./mock-generate");
+      return r(await mg.mockGenerate(cmd, a));
+    }
+    case "projects_list":
+    case "project_create":
+    case "project_update":
+    case "project_delete":
+    case "project_get":
+    case "project_add_documents":
+    case "project_remove_document":
+    case "project_set_status":
+    case "project_templates":
+    case "project_template_save":
+    case "project_template_delete":
+    case "project_define_rule":
+    case "project_save_rule":
+    case "project_delete_rule":
+    case "project_check":
+    case "project_runs":
+    case "project_report":
+    case "project_request_supplement":
+    case "maintenance_status":
+    case "maintenance_run_now": {
+      if (!current) throw err("no_workspace", "no workspace is open");
+      const mp = await import("./mock-projects");
+      return r(await mp.mockProjects(cmd, a));
+    }
     case "prerouter_route":
       return r(mockRoute(String(a.text)));
     case "prerouter_resolve_date":
@@ -2476,6 +2521,9 @@ export function resetMock(): void {
   localStorage.removeItem("doculens.mock.exports");
   localStorage.removeItem("doculens.mock.planner_model");
   localStorage.removeItem("doculens.mock.os_trash");
+  localStorage.removeItem("doculens.mock.drafts");
+  localStorage.removeItem("doculens.mock.projects");
+  localStorage.removeItem("doculens.mock.maintenance");
   importPlans.clear();
   current = null;
   startupResolved = false;

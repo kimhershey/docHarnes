@@ -132,9 +132,14 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run licenses:check
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      # cargo-deny as a prebuilt, checksum-verified binary (the Docker-based cargo-deny-action
+      # downloads its binary unauthenticated at image build time and hit "gzip: invalid magic"
+      # on two consecutive runs); pinned to the version verified locally.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
         with:
-          command: check licenses bans sources
+          tool: cargo-deny@0.20.2
+      - run: cargo deny check licenses bans sources
 
   windows-check:
     name: Windows compile check
@@ -143,8 +148,29 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Resolve the pinned PDFium build
+        id: pdfium
+        shell: bash
+        run: echo "tag=$(node -p "require('./engines/pdfium.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Cache PDFium
+        id: pdfium-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\pdfium
+          key: pdfium-windows-x64-${{ steps.pdfium.outputs.tag }}
+      # The Windows job is a compile check: when the release download is unavailable (GitHub
+      # answered 504 for over an hour on 2026-11-08) it still compiles and runs the tests, which
+      # skip the PDFium render / import cases when the library is missing; the Linux job keeps
+      # strict PDFium coverage.
       - name: Fetch PDFium (Windows build, sha256 pinned)
+        id: pdfium-fetch
+        if: steps.pdfium-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
         run: node scripts/fetch-pdfium.mjs --dest "$env:RUNNER_TEMP\pdfium"
+      - name: Warn when PDFium is unavailable
+        if: steps.pdfium-fetch.outcome == 'failure'
+        shell: bash
+        run: echo "::warning::PDFium download failed; the Windows run compiles and tests without the PDFium render / import tests"
       - name: Resolve the pinned ko-dic dictionary
         id: kodic
         shell: bash
@@ -163,3 +189,39 @@ jobs:
         env:
           DOCULENS_PDFIUM: ${{ runner.temp }}\pdfium\pdfium.dll
           DOCULENS_KODIC: ${{ runner.temp }}\kodic
+
+  notices:
+    name: Third-party notices / SBOM up to date
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+      - run: npm ci
+      - name: Regenerate THIRD-PARTY-NOTICES.md, sbom.cdx.json and the license texts
+        run: node scripts/gen-notices.mjs
+      - name: Fail when the committed notices / SBOM are stale (run `npm run notices` and commit)
+        run: git diff --exit-code -- THIRD-PARTY-NOTICES.md sbom.cdx.json
+      - name: License texts were generated
+        run: test -s src-tauri/resources/licenses/THIRD-PARTY-LICENSES.txt
+
+  eval-gate:
+    name: Planner golden set (eval harness, 0.5 pt regression gate)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Golden set vs baseline (fails when accuracy drops by more than 0.5 pt)
+        run: cargo run -p doculens-eval -- planner --golden eval/golden/planner.json --baseline eval/baselines/planner-rules.json --out eval/out/planner-rules.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: planner-eval-results
+          path: eval/out/planner-rules.json

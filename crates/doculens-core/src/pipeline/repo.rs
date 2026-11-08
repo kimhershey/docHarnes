@@ -632,6 +632,24 @@ pub fn run_result(conn: &Connection, id: &str) -> rusqlite::Result<Option<Value>
 }
 
 /// Runs left `running` by a crash → `failed` (startup housekeeping).
+/// Deletes extraction runs (and their fields, by cascade) that finished before `cutoff`
+/// and are not a document's latest run (retention purge, §3.8 "추출 결과"). Returns the
+/// deleted run ids so the caller can remove the `extractions/<doc>/<run>/` mirrors.
+pub fn purge_runs_before(conn: &Connection, cutoff: &chrono::DateTime<Utc>) -> rusqlite::Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT r.id, r.document_id FROM extraction_runs r
+         LEFT JOIN documents d ON d.last_run_id = r.id
+         WHERE d.id IS NULL AND r.status != 'running' AND COALESCE(r.finished_at, r.started_at) < ?1",
+    )?;
+    let ids: Vec<(String, String)> = stmt
+        .query_map([ts(cutoff)], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<Result<_, _>>()?;
+    for (id, _) in &ids {
+        conn.execute("DELETE FROM extraction_runs WHERE id = ?1", [id])?;
+    }
+    Ok(ids)
+}
+
 pub fn fail_stale_runs(conn: &Connection) -> rusqlite::Result<usize> {
     conn.execute(
         "UPDATE extraction_runs SET status = 'failed', error = 'interrupted', finished_at = ?1 WHERE status = 'running'",

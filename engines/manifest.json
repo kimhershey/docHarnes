@@ -1,5 +1,5 @@
 {
-  "$comment": "Pinned llama.cpp release for the official packs (design §3.2: ≥ b11747). sha256 values are null until recorded with `node scripts/fetch-engine.mjs --pin` on a machine with GitHub access.",
+  "$comment": "Pinned llama.cpp release for the official packs (design §3.2: ≥ b11747). sha256 values are null until recorded with `node scripts/fetch-engine.mjs --pin` on a machine with GitHub access. cu121 / cu129 are self-built by .github/workflows/cuda-packs.yml (CUDA network installer URL, silent-install subpackage ids, MSVC host toolset, SASS archs and the redistributable runtime DLLs are read from here).",
   "schema_version": 1,
   "tag": "b12066",
   "min_build": 11747,
@@ -8,7 +8,29 @@
     "cpu": { "match": ["bin-win-cpu-x64"], "exclude": ["openvino", "vulkan", "cuda"], "sha256": null },
     "vulkan": { "match": ["bin-win-vulkan-x64"], "sha256": null },
     "linux": { "match": ["bin-ubuntu-x64"], "exclude": ["openvino", "vulkan", "cuda"], "sha256": null, "pack": "cpu" },
-    "cu121": { "self_built": true, "toolkit": "12.1", "archs": "61;70;75;80;86;89;90" },
-    "cu129": { "self_built": true, "toolkit": "12.9", "archs": "75;80;86;89;90;120" }
+    "cu121": {
+      "self_built": true,
+      "toolkit": "12.1",
+      "toolkit_version": "12.1.1",
+      "toolkit_installer_url": "https://developer.download.nvidia.com/compute/cuda/12.1.1/network_installers/cuda_12.1.1_windows_network.exe",
+      "toolkit_subpackages": ["nvcc_12.1", "cudart_12.1", "cublas_12.1", "cublas_dev_12.1", "thrust_12.1", "visual_studio_integration_12.1"],
+      "msvc_toolset": "14.39",
+      "msvc_component": "Microsoft.VisualStudio.Component.VC.14.39.17.9.x86.x64",
+      "archs": "61;70;75;80;86;89;90",
+      "runtime_dlls": ["cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll"],
+      "asset": "DocuLens-EnginePack-cu121-<tag>.zip"
+    },
+    "cu129": {
+      "self_built": true,
+      "toolkit": "12.9",
+      "toolkit_version": "12.9.1",
+      "toolkit_installer_url": "https://developer.download.nvidia.com/compute/cuda/12.9.1/network_installers/cuda_12.9.1_windows_network.exe",
+      "toolkit_subpackages": ["nvcc_12.9", "cudart_12.9", "cublas_12.9", "cublas_dev_12.9", "thrust_12.9", "visual_studio_integration_12.9"],
+      "msvc_toolset": null,
+      "msvc_component": null,
+      "archs": "75;80;86;89;90;120",
+      "runtime_dlls": ["cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll"],
+      "asset": "DocuLens-EnginePack-cu129-<tag>.zip"
+    }
   }
 }

@@ -25,8 +25,9 @@ use doculens_core::pipeline::run::{self as pipeline_run, PipelineDeps};
 use doculens_core::planner::exec::{self, EngineLease, ExecDeps, PlanExecution, PlanPreview};
 use doculens_core::planner::llm::{self, PlannerDeps};
 use doculens_core::planner::{
-    self, DocTypeSummary, FieldSummary, Op, OpKind, Plan, PlanContext, PlanResult, SchemaSummary,
+    self, DocTypeSummary, FieldSummary, Op, OpKind, Plan, PlanContext, PlanResult, ProjectSummary, SchemaSummary,
 };
+use doculens_core::projects::repo as projects_repo;
 use doculens_core::CoreError;
 
 use crate::docs_bridge;
@@ -43,6 +44,8 @@ pub struct UiPlanContext {
     pub selected_doc_ids: Vec<String>,
     pub current_document: Option<String>,
     pub current_page: Option<u32>,
+    /// Project open on the projects screen (default target of project ops, §3.15).
+    pub current_project: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -78,13 +81,18 @@ pub fn build_context(app: &AppHandle, ui: &UiPlanContext) -> UiResult<PlanContex
     let state = app.state::<AppState>();
     let ctx = pipeline_bridge::context(app)?;
     let settings = state.settings_snapshot()?;
-    let (types, schemas, stats, tags) = ctx.db().with_read(|c| {
+    let (types, schemas, stats, tags, projects) = ctx.db().with_read(|c| {
         let types = pipeline_repo::doc_types(c)?;
         let schemas = pipeline_repo::list_schemas(c)?;
         let stats = docs::stats(c)?;
         let tags = docs::list_tags(c)?;
-        Ok((types, schemas, stats, tags))
+        let projects = projects_repo::list_projects(c)?;
+        Ok((types, schemas, stats, tags, projects))
     })?;
+    let projects = projects
+        .iter()
+        .map(|p| ProjectSummary { id: p.id.clone(), name: p.name.clone(), status: p.status.as_str().to_string() })
+        .collect();
     let doc_types = types
         .iter()
         .map(|t| DocTypeSummary { slug: t.slug.clone(), label_ko: t.label_ko.clone(), label_en: t.label_en.clone() })
@@ -130,6 +138,8 @@ pub fn build_context(app: &AppHandle, ui: &UiPlanContext) -> UiResult<PlanContex
         current_page: ui.current_page,
         document_count: stats.total,
         model_ids,
+        projects,
+        current_project: ui.current_project.clone(),
     })
 }
 
@@ -320,6 +330,10 @@ fn run_spec(app: &AppHandle, job: &Job, spec: &JobSpec, ctl: &JobControl) -> Wor
         }
         JobSpec::Undo { batch_id } => run_undo(app, batch_id.as_deref(), false, &pctx),
         JobSpec::Redo => run_undo(app, None, true, &pctx),
+        JobSpec::Draft { req, project_id, source } => {
+            crate::generate_bridge::run_draft(app, job, req, project_id.as_deref(), source, ctl, &pctx)
+        }
+        JobSpec::Maintenance => crate::maintenance::run(app, ctl),
     };
     if state.workspace_generation.load(Ordering::SeqCst) == generation && !state.switching.load(Ordering::SeqCst) {
         knowledge_bridge::auto_index(app);

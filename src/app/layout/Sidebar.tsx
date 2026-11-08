@@ -35,15 +35,12 @@ const MAIN: { screen: Screen; icon: typeof Home }[] = [
   { screen: "review", icon: ClipboardCheck },
   { screen: "schemas", icon: Puzzle },
   { screen: "knowledge", icon: BookOpen },
+  { screen: "generate", icon: FilePlus2 },
+  { screen: "projects", icon: Briefcase },
   { screen: "organize", icon: FolderTree },
   { screen: "jobs", icon: ListTodo },
   { screen: "models", icon: Brain },
   { screen: "settings", icon: Settings },
-];
-
-const PHASE2: { screen: Screen; icon: typeof Home }[] = [
-  { screen: "generate", icon: FilePlus2 },
-  { screen: "projects", icon: Briefcase },
 ];
 
 function Item({ screen, icon: Icon, collapsed, badge, ariaLabel }: { screen: Screen; icon: typeof Home; collapsed: boolean; badge?: string; ariaLabel?: string }) {
@@ -112,14 +109,6 @@ export function Sidebar() {
                 badge={it.screen === "review" && reviewFields > 0 ? String(reviewFields) : undefined}
                 ariaLabel={it.screen === "review" && reviewFields > 0 ? t("nav.with_pending", { label: t("nav.review"), count: reviewFields }) : undefined}
               />
-            </li>
-          ))}
-        </ul>
-        {!collapsed && <p className="mt-4 px-2.5 text-[11px] font-semibold uppercase tracking-wide text-fg-subtle">{t("nav.phase2_group")}</p>}
-        <ul className="mt-1 flex flex-col gap-0.5">
-          {PHASE2.map((it) => (
-            <li key={it.screen}>
-              <Item {...it} collapsed={collapsed} badge="v1.1" />
             </li>
           ))}
         </ul>

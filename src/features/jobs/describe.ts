@@ -30,6 +30,8 @@ export function describeJobPriority(priority: JobPriority | undefined, t: TFunct
 /** Stage word of a plan / pipeline progress line: pipeline levels, planner ops, else verbatim. */
 export function describeStage(stage: string, t: TFunction): string {
   if (stage === "classify" || stage === "ocr" || stage === "extract") return t(`pipeline.levels.${stage}`);
+  // `exec.rs` reports the model call of a `draft_document` step as the "draft" stage.
+  if (stage === "draft") return t("jobs.detail.drafting");
   return t(`planner.ops.${stage}`, { defaultValue: stage });
 }
 
@@ -60,6 +62,9 @@ export function describeJobDetail(job: Job, t: TFunction): string | null {
   m = d.match(/^merged (\d+)$/);
   if (m) return t("jobs.detail.merge_summary", { count: Number(m[1]) });
   if (d === "loading model") return t("jobs.detail.loading_model");
+  // -- P6 draft job (`generate_bridge::run_draft`): "loading model" above, then "drafting"; the finishing
+  // detail ("<title> · 필드 n · 검토 항목 m") and the P7 maintenance summary are already localised.
+  if (d === "drafting") return t("jobs.detail.drafting");
   // -- persistent runner (P5, `planner_bridge.rs`) --
   m = d.match(/^plan (\d+)\/(\d+) · (.*)$/);
   if (m) return t("jobs.detail.plan_summary", { done: Number(m[1]), total: Number(m[2]), summary: m[3] });
@@ -101,6 +106,10 @@ const ERROR_CODES: Record<string, string> = {
   export_exists: "jobs.error.export_exists",
   path_outside: "jobs.error.path_outside",
   no_documents: "jobs.error.no_documents",
+  content_empty: "jobs.error.content_empty",
+  project_not_found: "jobs.error.project_not_found",
+  no_check_run: "jobs.error.no_check_run",
+  no_findings: "jobs.error.no_findings",
 };
 
 function describeErrorText(raw: string, t: TFunction): string {

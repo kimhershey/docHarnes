@@ -115,6 +115,11 @@ impl WorkspacePaths {
     pub fn jobs_dir(&self) -> PathBuf {
         self.app_dir().join("jobs")
     }
+    /// Saved document-generation drafts (`drafts/<id>.json`, §3.13); created lazily
+    /// by `generate::store`, so it is not part of `all_dirs()`.
+    pub fn drafts_dir(&self) -> PathBuf {
+        self.app_dir().join("drafts")
+    }
     pub fn logs_dir(&self) -> PathBuf {
         self.app_dir().join("logs")
     }

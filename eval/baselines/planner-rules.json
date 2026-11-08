@@ -1,0 +1,3289 @@
+{
+  "schema_version": 1,
+  "kind": "planner",
+  "generated_at": "2026-11-08T07:22:57Z",
+  "golden": "eval/golden/planner.json",
+  "golden_count": 100,
+  "context": "eval/golden/planner-context.json",
+  "today": "2026-11-08",
+  "mode": "rules",
+  "total": 100,
+  "correct": 99,
+  "accuracy": 0.99,
+  "by_category": {
+    "en": {
+      "total": 20,
+      "correct": 20,
+      "accuracy": 1.0
+    },
+    "ko": {
+      "total": 70,
+      "correct": 70,
+      "accuracy": 1.0
+    },
+    "mixed": {
+      "total": 10,
+      "correct": 9,
+      "accuracy": 0.9
+    }
+  },
+  "by_intent": {
+    "add_to_project": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "aggregate": {
+      "total": 9,
+      "correct": 9,
+      "accuracy": 1.0
+    },
+    "answer": {
+      "total": 4,
+      "correct": 4,
+      "accuracy": 1.0
+    },
+    "check_consistency": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "clarify": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "classify": {
+      "total": 2,
+      "correct": 2,
+      "accuracy": 1.0
+    },
+    "compare": {
+      "total": 2,
+      "correct": 2,
+      "accuracy": 1.0
+    },
+    "create_project": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "define_rule": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "define_schema": {
+      "total": 3,
+      "correct": 3,
+      "accuracy": 1.0
+    },
+    "delete": {
+      "total": 2,
+      "correct": 2,
+      "accuracy": 1.0
+    },
+    "draft_document": {
+      "total": 2,
+      "correct": 2,
+      "accuracy": 1.0
+    },
+    "engine": {
+      "total": 2,
+      "correct": 2,
+      "accuracy": 1.0
+    },
+    "explain": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "export": {
+      "total": 6,
+      "correct": 6,
+      "accuracy": 1.0
+    },
+    "extract": {
+      "total": 4,
+      "correct": 4,
+      "accuracy": 1.0
+    },
+    "help": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "import": {
+      "total": 5,
+      "correct": 5,
+      "accuracy": 1.0
+    },
+    "job": {
+      "total": 3,
+      "correct": 3,
+      "accuracy": 1.0
+    },
+    "move": {
+      "total": 3,
+      "correct": 3,
+      "accuracy": 1.0
+    },
+    "noop": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "ocr": {
+      "total": 4,
+      "correct": 4,
+      "accuracy": 1.0
+    },
+    "open": {
+      "total": 5,
+      "correct": 5,
+      "accuracy": 1.0
+    },
+    "organize": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "redo": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "register_form": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "reindex": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "rename": {
+      "total": 2,
+      "correct": 2,
+      "accuracy": 1.0
+    },
+    "request_supplement": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "review": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "search": {
+      "total": 4,
+      "correct": 4,
+      "accuracy": 1.0
+    },
+    "set_doc_type": {
+      "total": 2,
+      "correct": 2,
+      "accuracy": 1.0
+    },
+    "set_inbox_watch": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "set_language": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "set_model": {
+      "total": 2,
+      "correct": 2,
+      "accuracy": 1.0
+    },
+    "set_profile": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "set_retention": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "set_setting": {
+      "total": 2,
+      "correct": 2,
+      "accuracy": 1.0
+    },
+    "set_theme": {
+      "total": 4,
+      "correct": 4,
+      "accuracy": 1.0
+    },
+    "summarize": {
+      "total": 4,
+      "correct": 4,
+      "accuracy": 1.0
+    },
+    "tag": {
+      "total": 4,
+      "correct": 3,
+      "accuracy": 0.75
+    },
+    "undo": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "validate": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    }
+  },
+  "by_source": {
+    "prerouter": 9,
+    "rules": 91
+  },
+  "by_cause": {
+    "rule_clarified": 1
+  },
+  "items": [
+    {
+      "id": "ko-01",
+      "category": "ko",
+      "text": "inbox 폴더의 영수증을 전부 처리하고 월별 폴더로 정리해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "import",
+      "ops": [
+        "import",
+        "classify",
+        "ocr",
+        "extract",
+        "move"
+      ],
+      "summary": "inbox의 영수증을(를) 가져와 분류·OCR·추출한 뒤 월별 폴더로 이동합니다",
+      "confidence": 0.88,
+      "latency_ms": 0.666071,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "auto_pipeline": "none",
+          "op": "import",
+          "source": "inbox"
+        },
+        {
+          "op": "classify"
+        },
+        {
+          "op": "ocr"
+        },
+        {
+          "op": "extract",
+          "schema_ref": "s-receipt"
+        },
+        {
+          "folder": "documents/{{year}}/{{month}}/{{doc_type}}",
+          "group_by": "month",
+          "op": "move"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "doc_type": "receipt"
+        },
+        "folder": "inbox"
+      }
+    },
+    {
+      "id": "ko-02",
+      "category": "ko",
+      "text": "세금계산서에서 공급가액·세액·합계만 뽑아서 엑셀로",
+      "correct": true,
+      "source": "rules",
+      "intent": "extract",
+      "ops": [
+        "extract",
+        "export"
+      ],
+      "summary": "세금계산서에서 3개 필드를 추출해 XLSX(으)로 내보냅니다",
+      "confidence": 0.88,
+      "latency_ms": 0.682975,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "fields": [
+            "supply_total",
+            "tax_total",
+            "grand_total"
+          ],
+          "op": "extract",
+          "schema_ref": "s-tax"
+        },
+        {
+          "columns": [
+            "supply_total",
+            "tax_total",
+            "grand_total"
+          ],
+          "format": "xlsx",
+          "op": "export",
+          "target": "fields"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "doc_type": "tax_invoice"
+        }
+      }
+    },
+    {
+      "id": "ko-03",
+      "category": "ko",
+      "text": "지난달 영수증 합계 얼마야?",
+      "correct": true,
+      "source": "rules",
+      "intent": "aggregate",
+      "ops": [
+        "aggregate"
+      ],
+      "summary": "2026-10-01 ~ 2026-10-31 영수증의 합계 합계",
+      "confidence": 0.9,
+      "latency_ms": 0.540777,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "field": "total",
+          "fn": "sum",
+          "op": "aggregate"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "date_from": "2026-10-01",
+          "date_to": "2026-10-31",
+          "doc_type": "receipt"
+        }
+      }
+    },
+    {
+      "id": "ko-04",
+      "category": "ko",
+      "text": "거래처명이 ㈜한빛인 문서 찾아줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "search",
+      "ops": [
+        "search"
+      ],
+      "summary": "'㈜한빛'을(를) 검색합니다",
+      "confidence": 0.85,
+      "latency_ms": 0.6292760000000001,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "search",
+          "query": "㈜한빛"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-05",
+      "category": "ko",
+      "text": "이 계약서의 계약기간과 위약금 조항 알려줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "answer",
+      "ops": [
+        "answer"
+      ],
+      "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
+      "confidence": 0.8,
+      "latency_ms": 0.399812,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "cite": true,
+          "op": "answer",
+          "question": "이 계약서의 계약기간과 위약금 조항 알려줘"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-06",
+      "category": "ko",
+      "text": "사업자등록증 스키마에 '사업자단위과세' 필드 추가해",
+      "correct": true,
+      "source": "rules",
+      "intent": "define_schema",
+      "ops": [
+        "define_schema"
+      ],
+      "summary": "사업자등록증 스키마를 수정합니다(스키마 화면에서 확인)",
+      "confidence": 0.85,
+      "latency_ms": 0.363852,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "base": "사업자등록증",
+          "description": "사업자등록증 스키마에 '사업자단위과세' 필드 추가해",
+          "mode": "modify",
+          "op": "define_schema"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-07",
+      "category": "ko",
+      "text": "다크 테마로 바꾸고 모델을 9B로 올려",
+      "correct": true,
+      "source": "rules",
+      "intent": "set_theme",
+      "ops": [
+        "set_theme",
+        "set_model"
+      ],
+      "summary": "테마를 dark(으)로, 모델을 qwen3.5-9b-q4km(으)로",
+      "confidence": 0.9,
+      "latency_ms": 0.17843,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "set_theme",
+          "theme": "dark"
+        },
+        {
+          "id": "qwen3.5-9b-q4km",
+          "op": "set_model"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-08",
+      "category": "ko",
+      "text": "선택 영역 다시 OCR 해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "ocr",
+      "ops": [
+        "ocr"
+      ],
+      "summary": "선택 문서을(를) OCR합니다(다시 실행)",
+      "confidence": 0.87,
+      "latency_ms": 0.387744,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "force": true,
+          "op": "ocr",
+          "pages": [
+            1
+          ],
+          "profile": "fine_print"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-09",
+      "category": "ko",
+      "text": "방금 이름 바꾼 거 되돌려",
+      "correct": true,
+      "source": "rules",
+      "intent": "undo",
+      "ops": [
+        "undo"
+      ],
+      "summary": "마지막 파일 작업을 되돌립니다",
+      "confidence": 0.95,
+      "latency_ms": 0.055436,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "undo"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-10",
+      "category": "ko",
+      "text": "작업 일시정지",
+      "correct": true,
+      "source": "rules",
+      "intent": "job",
+      "ops": [
+        "job"
+      ],
+      "summary": "실행 중인 작업을 일시정지합니다",
+      "confidence": 0.92,
+      "latency_ms": 0.069384,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "action": "pause",
+          "id": "last",
+          "op": "job"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-11",
+      "category": "ko",
+      "text": "세금계산서 → 엑셀",
+      "correct": true,
+      "source": "rules",
+      "intent": "export",
+      "ops": [
+        "export"
+      ],
+      "summary": "세금계산서을(를) XLSX(으)로 내보냅니다",
+      "confidence": 0.88,
+      "latency_ms": 0.528258,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "format": "xlsx",
+          "op": "export",
+          "target": "fields"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "doc_type": "tax_invoice"
+        }
+      }
+    },
+    {
+      "id": "ko-12",
+      "category": "ko",
+      "text": "inbox 처리",
+      "correct": true,
+      "source": "rules",
+      "intent": "import",
+      "ops": [
+        "import",
+        "classify",
+        "ocr",
+        "extract"
+      ],
+      "summary": "inbox의 문서을(를) 가져와 분류·OCR·추출한 뒤 마칩니다",
+      "confidence": 0.88,
+      "latency_ms": 0.362371,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "auto_pipeline": "none",
+          "op": "import",
+          "source": "inbox"
+        },
+        {
+          "op": "classify"
+        },
+        {
+          "op": "ocr"
+        },
+        {
+          "op": "extract"
+        }
+      ],
+      "scope": {
+        "filter": {},
+        "folder": "inbox"
+      }
+    },
+    {
+      "id": "ko-13",
+      "category": "ko",
+      "text": "inbox에 있는 파일 가져오기만 해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "import",
+      "ops": [
+        "import"
+      ],
+      "summary": "inbox의 문서을(를) 가져와 등록하고 마칩니다",
+      "confidence": 0.88,
+      "latency_ms": 0.345624,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "auto_pipeline": "none",
+          "op": "import",
+          "source": "inbox"
+        }
+      ],
+      "scope": {
+        "filter": {},
+        "folder": "inbox"
+      }
+    },
+    {
+      "id": "ko-14",
+      "category": "ko",
+      "text": "inbox 감시 꺼줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "set_inbox_watch",
+      "ops": [
+        "set_inbox_watch"
+      ],
+      "summary": "inbox 감시를 끕니다",
+      "confidence": 0.9,
+      "latency_ms": 0.20444800000000002,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "enabled": false,
+          "op": "set_inbox_watch"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-15",
+      "category": "ko",
+      "text": "이 문서를 양식으로 등록해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "register_form",
+      "ops": [
+        "register_form"
+      ],
+      "summary": "열린 문서를 양식으로 등록합니다(필드 그리드 확인)",
+      "confidence": 0.85,
+      "latency_ms": 0.145841,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "doc_ref": "d1a2",
+          "op": "register_form"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-16",
+      "category": "ko",
+      "text": "여기 있는 문서 분류해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "classify",
+      "ops": [
+        "classify"
+      ],
+      "summary": "문서을(를) 분류합니다",
+      "confidence": 0.87,
+      "latency_ms": 0.41745299999999996,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "classify"
+        }
+      ],
+      "scope": {
+        "filter": {},
+        "folder": "inbox"
+      }
+    },
+    {
+      "id": "ko-17",
+      "category": "ko",
+      "text": "선택한 문서 유형을 견적서로 바꿔",
+      "correct": true,
+      "source": "rules",
+      "intent": "set_doc_type",
+      "ops": [
+        "set_doc_type"
+      ],
+      "summary": "문서 유형을 견적서(으)로 설정합니다",
+      "confidence": 0.87,
+      "latency_ms": 0.265778,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "doc_type": "quotation",
+          "op": "set_doc_type"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-18",
+      "category": "ko",
+      "text": "이 문서 OCR 다시 돌려",
+      "correct": true,
+      "source": "rules",
+      "intent": "ocr",
+      "ops": [
+        "ocr"
+      ],
+      "summary": "선택 문서을(를) OCR합니다(다시 실행)",
+      "confidence": 0.87,
+      "latency_ms": 0.517735,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "force": true,
+          "op": "ocr"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-19",
+      "category": "ko",
+      "text": "고마워, 수고했어",
+      "correct": true,
+      "source": "rules",
+      "intent": "noop",
+      "ops": [
+        "noop"
+      ],
+      "summary": "별도 작업 없음",
+      "confidence": 0.9,
+      "latency_ms": 0.5219779999999999,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "noop"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-20",
+      "category": "ko",
+      "text": "견적서 양식으로 새 스키마 만들어줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "define_schema",
+      "ops": [
+        "define_schema"
+      ],
+      "summary": "새 추출 스키마를 만듭니다(스키마 화면에서 확인)",
+      "confidence": 0.85,
+      "latency_ms": 0.283228,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "description": "견적서 양식으로 새 스키마 만들어줘",
+          "mode": "create",
+          "op": "define_schema"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-21",
+      "category": "ko",
+      "text": "영수증 스키마에서 승인번호 필드 빼줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "define_schema",
+      "ops": [
+        "define_schema"
+      ],
+      "summary": "영수증 스키마를 수정합니다(스키마 화면에서 확인)",
+      "confidence": 0.85,
+      "latency_ms": 0.305411,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "base": "영수증",
+          "description": "영수증 스키마에서 승인번호 필드 빼줘",
+          "mode": "modify",
+          "op": "define_schema"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-22",
+      "category": "ko",
+      "text": "선택 문서에서 필드 다시 추출해",
+      "correct": true,
+      "source": "rules",
+      "intent": "extract",
+      "ops": [
+        "extract"
+      ],
+      "summary": "선택 문서을(를) 추출합니다(다시 실행)",
+      "confidence": 0.87,
+      "latency_ms": 0.567788,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "force": true,
+          "op": "extract"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-23",
+      "category": "ko",
+      "text": "이번 달 세금계산서 추출하고 검증해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "extract",
+      "ops": [
+        "extract",
+        "validate"
+      ],
+      "summary": "세금계산서을(를) 추출·검증합니다",
+      "confidence": 0.87,
+      "latency_ms": 0.515913,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "extract",
+          "schema_ref": "s-tax"
+        },
+        {
+          "op": "validate"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "date_from": "2026-11-01",
+          "date_to": "2026-11-30",
+          "doc_type": "tax_invoice"
+        }
+      }
+    },
+    {
+      "id": "ko-24",
+      "category": "ko",
+      "text": "선택 문서 검증 규칙 다시 돌려",
+      "correct": true,
+      "source": "rules",
+      "intent": "validate",
+      "ops": [
+        "validate"
+      ],
+      "summary": "선택 문서을(를) 검증합니다(다시 실행)",
+      "confidence": 0.87,
+      "latency_ms": 0.5406099999999999,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "validate"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-25",
+      "category": "ko",
+      "text": "세금계산서에서 국세청 승인번호랑 합계금액 추출해",
+      "correct": true,
+      "source": "rules",
+      "intent": "extract",
+      "ops": [
+        "extract"
+      ],
+      "summary": "세금계산서을(를) 추출합니다",
+      "confidence": 0.87,
+      "latency_ms": 0.6859270000000001,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "fields": [
+            "nts_approval_no",
+            "grand_total"
+          ],
+          "op": "extract",
+          "schema_ref": "s-tax"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "doc_type": "tax_invoice"
+        }
+      }
+    },
+    {
+      "id": "ko-26",
+      "category": "ko",
+      "text": "저신뢰 필드 전부 승인해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "review",
+      "ops": [
+        "review"
+      ],
+      "summary": "검토 대기 필드를 일괄 승인합니다",
+      "confidence": 0.85,
+      "latency_ms": 0.408169,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "action": "approve",
+          "only": "low_confidence",
+          "op": "review"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-27",
+      "category": "ko",
+      "text": "검토 큐 열어줘",
+      "correct": true,
+      "source": "prerouter",
+      "intent": "open",
+      "ops": [
+        "open"
+      ],
+      "summary": "화면을 엽니다",
+      "confidence": 0.9,
+      "latency_ms": 0.08178600000000001,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "open",
+          "ref": "review",
+          "target": "screen"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-28",
+      "category": "ko",
+      "text": "세금계산서 공급자 사업자번호는 사업자등록증 번호와 같아야 한다는 규칙 추가해",
+      "correct": true,
+      "source": "rules",
+      "intent": "define_rule",
+      "ops": [
+        "define_rule"
+      ],
+      "summary": "정합성 규칙을 만들어 규칙 그리드에서 확인합니다",
+      "confidence": 0.8,
+      "latency_ms": 0.476163,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "description": "세금계산서 공급자 사업자번호는 사업자등록증 번호와 같아야 한다는 해",
+          "op": "define_rule",
+          "project": "p-hanbit"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-29",
+      "category": "ko",
+      "text": "색인 다시 만들어줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "reindex",
+      "ops": [
+        "reindex"
+      ],
+      "summary": "검색 색인을 다시 만듭니다",
+      "confidence": 0.88,
+      "latency_ms": 0.154282,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "reindex",
+          "scope": "all"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-30",
+      "category": "ko",
+      "text": "선택한 두 계약서 비교해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "compare",
+      "ops": [
+        "compare"
+      ],
+      "summary": "선택한 문서를 비교 요약합니다",
+      "confidence": 0.85,
+      "latency_ms": 0.35273,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "doc_ids": [
+            "d1a2",
+            "d7f3"
+          ],
+          "op": "compare"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2",
+          "d7f3"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-31",
+      "category": "ko",
+      "text": "'위약금' 들어간 계약서 찾아줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "search",
+      "ops": [
+        "search"
+      ],
+      "summary": "'위약금'을(를) 검색합니다",
+      "confidence": 0.85,
+      "latency_ms": 0.672241,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "search",
+          "query": "위약금"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "doc_type": "contract"
+        }
+      }
+    },
+    {
+      "id": "ko-32",
+      "category": "ko",
+      "text": "이 영수증 합계 금액이 얼마야?",
+      "correct": true,
+      "source": "rules",
+      "intent": "answer",
+      "ops": [
+        "answer"
+      ],
+      "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
+      "confidence": 0.8,
+      "latency_ms": 0.305502,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "cite": true,
+          "op": "answer",
+          "question": "이 영수증 합계 금액이 얼마야?"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-33",
+      "category": "ko",
+      "text": "부가세 신고 기한이 언제야?",
+      "correct": true,
+      "source": "rules",
+      "intent": "answer",
+      "ops": [
+        "answer"
+      ],
+      "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
+      "confidence": 0.8,
+      "latency_ms": 0.35123899999999997,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "cite": true,
+          "op": "answer",
+          "question": "부가세 신고 기한이 언제야?"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-34",
+      "category": "ko",
+      "text": "이 문서 한 줄로 요약해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "선택 문서을(를) 요약합니다",
+      "confidence": 0.87,
+      "latency_ms": 0.350306,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "length": "short",
+          "op": "summarize",
+          "target": "each_doc"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-35",
+      "category": "ko",
+      "text": "선택한 계약서들 하나로 묶어서 자세히 요약",
+      "correct": true,
+      "source": "rules",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "선택 문서을(를) 요약합니다",
+      "confidence": 0.87,
+      "latency_ms": 0.5461590000000001,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "length": "long",
+          "op": "summarize",
+          "target": "set"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {
+          "doc_type": "contract"
+        }
+      }
+    },
+    {
+      "id": "ko-36",
+      "category": "ko",
+      "text": "올해 세금계산서 세액 합계",
+      "correct": true,
+      "source": "rules",
+      "intent": "aggregate",
+      "ops": [
+        "aggregate"
+      ],
+      "summary": "2026-01-01 ~ 2026-12-31 세금계산서의 세액 합계 합계",
+      "confidence": 0.9,
+      "latency_ms": 0.629969,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "field": "tax_total",
+          "fn": "sum",
+          "op": "aggregate"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "date_from": "2026-01-01",
+          "date_to": "2026-12-31",
+          "doc_type": "tax_invoice"
+        }
+      }
+    },
+    {
+      "id": "ko-37",
+      "category": "ko",
+      "text": "영수증 월별 건수 알려줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "aggregate",
+      "ops": [
+        "aggregate"
+      ],
+      "summary": "영수증의 건수",
+      "confidence": 0.9,
+      "latency_ms": 0.451877,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "fn": "count",
+          "group_by": "month",
+          "op": "aggregate"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "doc_type": "receipt"
+        }
+      }
+    },
+    {
+      "id": "ko-38",
+      "category": "ko",
+      "text": "거래처별 영수증 평균 금액",
+      "correct": true,
+      "source": "rules",
+      "intent": "aggregate",
+      "ops": [
+        "aggregate"
+      ],
+      "summary": "영수증의 합계 평균",
+      "confidence": 0.9,
+      "latency_ms": 0.533841,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "field": "total",
+          "fn": "avg",
+          "group_by": "vendor",
+          "op": "aggregate"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "doc_type": "receipt"
+        }
+      }
+    },
+    {
+      "id": "ko-39",
+      "category": "ko",
+      "text": "작년 세금계산서 중 가장 큰 합계금액은?",
+      "correct": true,
+      "source": "rules",
+      "intent": "aggregate",
+      "ops": [
+        "aggregate"
+      ],
+      "summary": "2025-01-01 ~ 2025-12-31 세금계산서의 합계금액 최대값",
+      "confidence": 0.9,
+      "latency_ms": 0.506699,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "field": "grand_total",
+          "fn": "max",
+          "op": "aggregate"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "date_from": "2025-01-01",
+          "date_to": "2025-12-31",
+          "doc_type": "tax_invoice"
+        }
+      }
+    },
+    {
+      "id": "ko-40",
+      "category": "ko",
+      "text": "검토 대기 포함해서 이번 달 영수증 합계",
+      "correct": true,
+      "source": "rules",
+      "intent": "aggregate",
+      "ops": [
+        "aggregate"
+      ],
+      "summary": "2026-11-01 ~ 2026-11-30 영수증의 합계 합계",
+      "confidence": 0.9,
+      "latency_ms": 0.5671619999999999,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "field": "total",
+          "fn": "sum",
+          "include_unreviewed": true,
+          "op": "aggregate"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "date_from": "2026-11-01",
+          "date_to": "2026-11-30",
+          "doc_type": "receipt"
+        }
+      }
+    },
+    {
+      "id": "ko-41",
+      "category": "ko",
+      "text": "영수증 이름을 템플릿대로 바꾸고 유형별 폴더로 정리해",
+      "correct": true,
+      "source": "rules",
+      "intent": "organize",
+      "ops": [
+        "organize"
+      ],
+      "summary": "영수증의 이름을 바꾸고 유형별 폴더로 정리합니다",
+      "confidence": 0.86,
+      "latency_ms": 0.658821,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "folder_template": "documents/{{doc_type}}",
+          "group_by": "doc_type",
+          "op": "organize",
+          "template": "{{year}}-{{month}}-{{day}}_{{doc_type}}_{{vendor}}_{{total}}"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "doc_type": "receipt"
+        }
+      }
+    },
+    {
+      "id": "ko-42",
+      "category": "ko",
+      "text": "검토 완료된 영수증 파일명 바꿔줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "rename",
+      "ops": [
+        "rename"
+      ],
+      "summary": "영수증의 파일명을 템플릿에 맞춰 바꿉니다",
+      "confidence": 0.86,
+      "latency_ms": 0.651745,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "only_reviewed": true,
+          "op": "rename",
+          "template": "{{year}}-{{month}}-{{day}}_{{doc_type}}_{{vendor}}_{{total}}"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "doc_type": "receipt"
+        }
+      }
+    },
+    {
+      "id": "ko-43",
+      "category": "ko",
+      "text": "이 폴더 문서들 거래처별 폴더로 옮겨",
+      "correct": true,
+      "source": "rules",
+      "intent": "move",
+      "ops": [
+        "move"
+      ],
+      "summary": "문서을(를) 거래처별 폴더로 이동합니다",
+      "confidence": 0.86,
+      "latency_ms": 0.5895619999999999,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "folder": "documents/{{vendor}}/{{doc_type}}",
+          "group_by": "vendor",
+          "op": "move"
+        }
+      ],
+      "scope": {
+        "filter": {},
+        "folder": "inbox"
+      }
+    },
+    {
+      "id": "ko-44",
+      "category": "ko",
+      "text": "선택한 문서를 보관 폴더로 옮겨",
+      "correct": true,
+      "source": "rules",
+      "intent": "move",
+      "ops": [
+        "move"
+      ],
+      "summary": "문서을(를) documents/보관/ 로 이동합니다",
+      "confidence": 0.86,
+      "latency_ms": 0.546548,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "folder": "documents/보관",
+          "op": "move"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-45",
+      "category": "ko",
+      "text": "선택 문서에 태그 경비, 10월 추가해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "tag",
+      "ops": [
+        "tag"
+      ],
+      "summary": "태그 경비, 10월을(를) 추가합니다",
+      "confidence": 0.85,
+      "latency_ms": 0.39039199999999996,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "add": [
+            "경비",
+            "10월"
+          ],
+          "op": "tag"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {
+          "date_from": "2026-10-01",
+          "date_to": "2026-10-31"
+        }
+      }
+    },
+    {
+      "id": "ko-46",
+      "category": "ko",
+      "text": "이 문서에서 중요 태그 빼줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "tag",
+      "ops": [
+        "tag"
+      ],
+      "summary": "태그 중요을(를) 제거합니다",
+      "confidence": 0.85,
+      "latency_ms": 0.450589,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "tag",
+          "remove": [
+            "중요"
+          ]
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-47",
+      "category": "ko",
+      "text": "작년 계약서 전부 삭제",
+      "correct": true,
+      "source": "rules",
+      "intent": "delete",
+      "ops": [
+        "delete"
+      ],
+      "summary": "계약서을(를) 휴지통으로 보냅니다",
+      "confidence": 0.85,
+      "latency_ms": 0.473601,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "delete",
+          "to_trash": true
+        }
+      ],
+      "scope": {
+        "filter": {
+          "date_from": "2025-01-01",
+          "date_to": "2025-12-31",
+          "doc_type": "contract"
+        }
+      }
+    },
+    {
+      "id": "ko-48",
+      "category": "ko",
+      "text": "선택한 문서를 한빛 납품 프로젝트에 추가해",
+      "correct": true,
+      "source": "rules",
+      "intent": "add_to_project",
+      "ops": [
+        "add_to_project"
+      ],
+      "summary": "선택한 문서를 프로젝트에 추가합니다",
+      "confidence": 0.82,
+      "latency_ms": 0.390864,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "add_to_project",
+          "project": "p-hanbit"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-49",
+      "category": "ko",
+      "text": "지난달 영수증 CSV로 내보내줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "export",
+      "ops": [
+        "export"
+      ],
+      "summary": "영수증을(를) CSV(으)로 내보냅니다",
+      "confidence": 0.88,
+      "latency_ms": 0.48123000000000005,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "format": "csv",
+          "op": "export",
+          "target": "fields"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "date_from": "2026-10-01",
+          "date_to": "2026-10-31",
+          "doc_type": "receipt"
+        }
+      }
+    },
+    {
+      "id": "ko-50",
+      "category": "ko",
+      "text": "이 계약서를 검색 가능한 PDF로 저장해",
+      "correct": true,
+      "source": "rules",
+      "intent": "export",
+      "ops": [
+        "export"
+      ],
+      "summary": "계약서을(를) PDF_SEARCHABLE(으)로 내보냅니다",
+      "confidence": 0.88,
+      "latency_ms": 0.457551,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "format": "pdf_searchable",
+          "op": "export",
+          "target": "text"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {
+          "doc_type": "contract"
+        }
+      }
+    },
+    {
+      "id": "ko-51",
+      "category": "ko",
+      "text": "세금계산서 표만 엑셀로 뽑아줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "export",
+      "ops": [
+        "export"
+      ],
+      "summary": "세금계산서을(를) XLSX(으)로 내보냅니다",
+      "confidence": 0.88,
+      "latency_ms": 0.5120250000000001,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "format": "xlsx",
+          "op": "export",
+          "target": "table"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "doc_type": "tax_invoice"
+        }
+      }
+    },
+    {
+      "id": "ko-52",
+      "category": "ko",
+      "text": "견적서 양식으로 한빛에 보낼 견적서 초안 작성해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "draft_document",
+      "ops": [
+        "draft_document"
+      ],
+      "summary": "견적서 초안을 만들어 문서 생성 화면에서 보여 줍니다",
+      "confidence": 0.82,
+      "latency_ms": 0.423072,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "content": "견적서 양식으로 한빛에 보낼 견적서 초안 작성해줘",
+          "form_ref": "quotation",
+          "op": "draft_document"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-53",
+      "category": "ko",
+      "text": "모델을 4B로 바꿔",
+      "correct": true,
+      "source": "rules",
+      "intent": "set_model",
+      "ops": [
+        "set_model"
+      ],
+      "summary": "모델을 qwen3.5-4b-q6k(으)로",
+      "confidence": 0.9,
+      "latency_ms": 0.125845,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "id": "qwen3.5-4b-q6k",
+          "op": "set_model"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-54",
+      "category": "ko",
+      "text": "정확도 우선 프로파일로 바꿔줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "set_profile",
+      "ops": [
+        "set_profile"
+      ],
+      "summary": "프로파일을 accuracy(으)로",
+      "confidence": 0.88,
+      "latency_ms": 0.17186200000000001,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "set_profile",
+          "profile": "accuracy"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-55",
+      "category": "ko",
+      "text": "이 조항이 무슨 뜻인지 설명해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "explain",
+      "ops": [
+        "explain"
+      ],
+      "summary": "지식 베이스 근거로 설명합니다",
+      "confidence": 0.8,
+      "latency_ms": 0.45336600000000005,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "explain",
+          "question": "이 조항이 무슨 뜻인지 설명해줘"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-56",
+      "category": "ko",
+      "text": "고대비 테마 켜줘",
+      "correct": true,
+      "source": "prerouter",
+      "intent": "set_theme",
+      "ops": [
+        "set_theme"
+      ],
+      "summary": "테마를 high-contrast(으)로 바꿉니다",
+      "confidence": 0.9,
+      "latency_ms": 0.037693,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "set_theme",
+          "theme": "high-contrast"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-57",
+      "category": "ko",
+      "text": "UI를 영어로 바꿔줘",
+      "correct": true,
+      "source": "prerouter",
+      "intent": "set_language",
+      "ops": [
+        "set_language"
+      ],
+      "summary": "UI 언어를 en(으)로 바꿉니다",
+      "confidence": 0.9,
+      "latency_ms": 0.034471,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "lang": "en",
+          "op": "set_language"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-58",
+      "category": "ko",
+      "text": "렌더링 DPI를 300으로 설정해",
+      "correct": true,
+      "source": "rules",
+      "intent": "set_setting",
+      "ops": [
+        "set_setting"
+      ],
+      "summary": "렌더 DPI를 300로",
+      "confidence": 0.88,
+      "latency_ms": 0.17405900000000002,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "key": "render_dpi",
+          "op": "set_setting",
+          "value": 300
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-59",
+      "category": "ko",
+      "text": "대화 기록은 180일만 보관해",
+      "correct": true,
+      "source": "rules",
+      "intent": "set_retention",
+      "ops": [
+        "set_retention"
+      ],
+      "summary": "대화 기록 보존 기간을 180일로 설정합니다",
+      "confidence": 0.85,
+      "latency_ms": 0.101924,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "days": 180,
+          "item": "chats",
+          "op": "set_retention"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-60",
+      "category": "ko",
+      "text": "2026 감사 대응 프로젝트 만들어줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "create_project",
+      "ops": [
+        "create_project"
+      ],
+      "summary": "'2026 감사 대응' 프로젝트를 만듭니다",
+      "confidence": 0.82,
+      "latency_ms": 0.382285,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "name": "2026 감사 대응",
+          "op": "create_project"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "date_from": "2026-01-01",
+          "date_to": "2026-12-31"
+        }
+      }
+    },
+    {
+      "id": "ko-61",
+      "category": "ko",
+      "text": "설정 열어줘",
+      "correct": true,
+      "source": "prerouter",
+      "intent": "open",
+      "ops": [
+        "open"
+      ],
+      "summary": "화면을 엽니다",
+      "confidence": 0.9,
+      "latency_ms": 0.06556100000000001,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "open",
+          "ref": "settings",
+          "target": "screen"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-62",
+      "category": "ko",
+      "text": "계약서_2026.pdf 열어줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "open",
+      "ops": [
+        "open"
+      ],
+      "summary": "계약서_2026.pdf 문서를 엽니다",
+      "confidence": 0.85,
+      "latency_ms": 0.543149,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "open",
+          "ref": "계약서_2026.pdf",
+          "target": "document"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-63",
+      "category": "ko",
+      "text": "작업 목록 보여줘",
+      "correct": true,
+      "source": "prerouter",
+      "intent": "open",
+      "ops": [
+        "open"
+      ],
+      "summary": "화면을 엽니다",
+      "confidence": 0.9,
+      "latency_ms": 0.051073,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "open",
+          "ref": "jobs",
+          "target": "screen"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-64",
+      "category": "ko",
+      "text": "실패한 작업 재시도해",
+      "correct": true,
+      "source": "rules",
+      "intent": "job",
+      "ops": [
+        "job"
+      ],
+      "summary": "실패한 작업을 재시도합니다",
+      "confidence": 0.92,
+      "latency_ms": 0.07046300000000001,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "action": "retry",
+          "id": "last",
+          "op": "job"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-65",
+      "category": "ko",
+      "text": "한빛 납품 프로젝트 정합성 검사 돌려",
+      "correct": true,
+      "source": "rules",
+      "intent": "check_consistency",
+      "ops": [
+        "check_consistency"
+      ],
+      "summary": "프로젝트 문서 간 정합성 규칙을 실행합니다",
+      "confidence": 0.85,
+      "latency_ms": 0.23666299999999998,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "check_consistency",
+          "project": "p-hanbit"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-66",
+      "category": "ko",
+      "text": "엔진 재시작해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "engine",
+      "ops": [
+        "engine"
+      ],
+      "summary": "엔진을 제어합니다",
+      "confidence": 0.9,
+      "latency_ms": 0.10161300000000001,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "action": "restart",
+          "op": "engine"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-67",
+      "category": "ko",
+      "text": "불일치 항목으로 보완요청서 만들어줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "request_supplement",
+      "ops": [
+        "request_supplement"
+      ],
+      "summary": "불일치·누락 항목으로 보완요청서 초안을 만듭니다",
+      "confidence": 0.85,
+      "latency_ms": 0.256874,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "request_supplement",
+          "project": "p-hanbit"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-68",
+      "category": "ko",
+      "text": "되돌린 거 다시 실행해",
+      "correct": true,
+      "source": "rules",
+      "intent": "redo",
+      "ops": [
+        "redo"
+      ],
+      "summary": "되돌린 작업을 다시 실행합니다",
+      "confidence": 0.95,
+      "latency_ms": 0.079285,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "redo"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-69",
+      "category": "ko",
+      "text": "도움말",
+      "correct": true,
+      "source": "prerouter",
+      "intent": "help",
+      "ops": [
+        "help"
+      ],
+      "summary": "도움말",
+      "confidence": 0.9,
+      "latency_ms": 0.019372,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "help"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-70",
+      "category": "ko",
+      "text": "삭제해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "clarify",
+      "ops": [
+        "clarify"
+      ],
+      "summary": "어떤 문서를 삭제할까요? 라이브러리에서 선택하거나 유형·날짜를 말씀해 주세요.",
+      "confidence": 0.5,
+      "latency_ms": 0.34306000000000003,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "clarify",
+          "question": "어떤 문서를 삭제할까요? 라이브러리에서 선택하거나 유형·날짜를 말씀해 주세요."
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "en-01",
+      "category": "en",
+      "text": "find documents from Hanbit",
+      "correct": true,
+      "source": "rules",
+      "intent": "search",
+      "ops": [
+        "search"
+      ],
+      "summary": "'Hanbit'을(를) 검색합니다",
+      "confidence": 0.85,
+      "latency_ms": 0.639474,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "search",
+          "query": "Hanbit"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "en-02",
+      "category": "en",
+      "text": "pause the job",
+      "correct": true,
+      "source": "rules",
+      "intent": "job",
+      "ops": [
+        "job"
+      ],
+      "summary": "실행 중인 작업을 일시정지합니다",
+      "confidence": 0.92,
+      "latency_ms": 0.059885,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "action": "pause",
+          "id": "last",
+          "op": "job"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "en-03",
+      "category": "en",
+      "text": "process everything in the inbox",
+      "correct": true,
+      "source": "rules",
+      "intent": "import",
+      "ops": [
+        "import",
+        "classify",
+        "ocr",
+        "extract"
+      ],
+      "summary": "inbox의 문서을(를) 가져와 분류·OCR·추출한 뒤 마칩니다",
+      "confidence": 0.88,
+      "latency_ms": 0.450455,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "auto_pipeline": "none",
+          "op": "import",
+          "source": "inbox"
+        },
+        {
+          "op": "classify"
+        },
+        {
+          "op": "ocr"
+        },
+        {
+          "op": "extract"
+        }
+      ],
+      "scope": {
+        "filter": {},
+        "folder": "inbox"
+      }
+    },
+    {
+      "id": "en-04",
+      "category": "en",
+      "text": "export last month's receipts to Excel",
+      "correct": true,
+      "source": "rules",
+      "intent": "export",
+      "ops": [
+        "export"
+      ],
+      "summary": "영수증을(를) XLSX(으)로 내보냅니다",
+      "confidence": 0.88,
+      "latency_ms": 0.5986049999999999,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "format": "xlsx",
+          "op": "export",
+          "target": "fields"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "date_from": "2026-10-01",
+          "date_to": "2026-10-31",
+          "doc_type": "receipt"
+        }
+      }
+    },
+    {
+      "id": "en-05",
+      "category": "en",
+      "text": "how many tax invoices did we get this year?",
+      "correct": true,
+      "source": "rules",
+      "intent": "aggregate",
+      "ops": [
+        "aggregate"
+      ],
+      "summary": "2026-01-01 ~ 2026-12-31 세금계산서의 건수",
+      "confidence": 0.9,
+      "latency_ms": 0.529805,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "fn": "count",
+          "op": "aggregate"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "date_from": "2026-01-01",
+          "date_to": "2026-12-31",
+          "doc_type": "tax_invoice"
+        }
+      }
+    },
+    {
+      "id": "en-06",
+      "category": "en",
+      "text": "total of last month's receipts",
+      "correct": true,
+      "source": "rules",
+      "intent": "aggregate",
+      "ops": [
+        "aggregate"
+      ],
+      "summary": "2026-10-01 ~ 2026-10-31 영수증의 합계 합계",
+      "confidence": 0.9,
+      "latency_ms": 0.853,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "field": "total",
+          "fn": "sum",
+          "op": "aggregate"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "date_from": "2026-10-01",
+          "date_to": "2026-10-31",
+          "doc_type": "receipt"
+        }
+      }
+    },
+    {
+      "id": "en-07",
+      "category": "en",
+      "text": "summarize this document briefly",
+      "correct": true,
+      "source": "rules",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "선택 문서을(를) 요약합니다",
+      "confidence": 0.87,
+      "latency_ms": 0.551791,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "length": "short",
+          "op": "summarize",
+          "target": "each_doc"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "en-08",
+      "category": "en",
+      "text": "what does this contract say about termination?",
+      "correct": true,
+      "source": "rules",
+      "intent": "answer",
+      "ops": [
+        "answer"
+      ],
+      "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
+      "confidence": 0.8,
+      "latency_ms": 0.396063,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "cite": true,
+          "op": "answer",
+          "question": "what does this contract say about termination?"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "en-09",
+      "category": "en",
+      "text": "re-OCR this page with the fine print profile",
+      "correct": true,
+      "source": "rules",
+      "intent": "ocr",
+      "ops": [
+        "ocr"
+      ],
+      "summary": "선택 문서을(를) OCR합니다",
+      "confidence": 0.87,
+      "latency_ms": 0.49843800000000005,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "force": true,
+          "op": "ocr",
+          "pages": [
+            1
+          ],
+          "profile": "fine_print"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "en-10",
+      "category": "en",
+      "text": "move the selected documents into monthly folders",
+      "correct": true,
+      "source": "rules",
+      "intent": "move",
+      "ops": [
+        "move"
+      ],
+      "summary": "문서을(를) 월별 폴더로 이동합니다",
+      "confidence": 0.86,
+      "latency_ms": 0.5911160000000001,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "folder": "documents/{{year}}/{{month}}/{{doc_type}}",
+          "group_by": "month",
+          "op": "move"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "en-11",
+      "category": "en",
+      "text": "rename reviewed receipts using the template",
+      "correct": true,
+      "source": "rules",
+      "intent": "rename",
+      "ops": [
+        "rename"
+      ],
+      "summary": "영수증의 파일명을 템플릿에 맞춰 바꿉니다",
+      "confidence": 0.86,
+      "latency_ms": 0.5471280000000001,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "only_reviewed": true,
+          "op": "rename",
+          "template": "{{year}}-{{month}}-{{day}}_{{doc_type}}_{{vendor}}_{{total}}"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "doc_type": "receipt"
+        }
+      }
+    },
+    {
+      "id": "en-12",
+      "category": "en",
+      "text": "tag these documents as urgent",
+      "correct": true,
+      "source": "rules",
+      "intent": "tag",
+      "ops": [
+        "tag"
+      ],
+      "summary": "태그 urgent을(를) 추가합니다",
+      "confidence": 0.85,
+      "latency_ms": 0.474239,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "add": [
+            "urgent"
+          ],
+          "op": "tag"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "en-13",
+      "category": "en",
+      "text": "delete last year's quotations",
+      "correct": true,
+      "source": "rules",
+      "intent": "delete",
+      "ops": [
+        "delete"
+      ],
+      "summary": "견적서을(를) 휴지통으로 보냅니다",
+      "confidence": 0.85,
+      "latency_ms": 0.508296,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "delete",
+          "to_trash": true
+        }
+      ],
+      "scope": {
+        "filter": {
+          "date_from": "2025-01-01",
+          "date_to": "2025-12-31",
+          "doc_type": "quotation"
+        }
+      }
+    },
+    {
+      "id": "en-14",
+      "category": "en",
+      "text": "switch to the light theme",
+      "correct": true,
+      "source": "prerouter",
+      "intent": "set_theme",
+      "ops": [
+        "set_theme"
+      ],
+      "summary": "테마를 light(으)로 바꿉니다",
+      "confidence": 0.9,
+      "latency_ms": 0.039710999999999996,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "set_theme",
+          "theme": "light"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "en-15",
+      "category": "en",
+      "text": "open the review queue",
+      "correct": true,
+      "source": "prerouter",
+      "intent": "open",
+      "ops": [
+        "open"
+      ],
+      "summary": "화면을 엽니다",
+      "confidence": 0.9,
+      "latency_ms": 0.063536,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "open",
+          "ref": "review",
+          "target": "screen"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "en-16",
+      "category": "en",
+      "text": "restart the engine",
+      "correct": true,
+      "source": "rules",
+      "intent": "engine",
+      "ops": [
+        "engine"
+      ],
+      "summary": "엔진을 제어합니다",
+      "confidence": 0.9,
+      "latency_ms": 0.104212,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "action": "restart",
+          "op": "engine"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "en-17",
+      "category": "en",
+      "text": "draft an official letter to Hanbit about the overdue invoice",
+      "correct": true,
+      "source": "rules",
+      "intent": "draft_document",
+      "ops": [
+        "draft_document"
+      ],
+      "summary": "공문 초안을 만들어 문서 생성 화면에서 보여 줍니다",
+      "confidence": 0.82,
+      "latency_ms": 0.502719,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "content": "draft an official letter to Hanbit about the overdue invoice",
+          "form_ref": "official_letter",
+          "op": "draft_document"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "en-18",
+      "category": "en",
+      "text": "set the review threshold to 90%",
+      "correct": true,
+      "source": "rules",
+      "intent": "set_setting",
+      "ops": [
+        "set_setting"
+      ],
+      "summary": "검토 임계값을 0.9로",
+      "confidence": 0.85,
+      "latency_ms": 0.19015100000000001,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "key": "review_threshold",
+          "op": "set_setting",
+          "value": 0.9
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "en-19",
+      "category": "en",
+      "text": "classify the documents in this folder",
+      "correct": true,
+      "source": "rules",
+      "intent": "classify",
+      "ops": [
+        "classify"
+      ],
+      "summary": "문서을(를) 분류합니다",
+      "confidence": 0.87,
+      "latency_ms": 0.566507,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "classify"
+        }
+      ],
+      "scope": {
+        "filter": {},
+        "folder": "inbox"
+      }
+    },
+    {
+      "id": "en-20",
+      "category": "en",
+      "text": "mark this document as a business registration",
+      "correct": true,
+      "source": "rules",
+      "intent": "set_doc_type",
+      "ops": [
+        "set_doc_type"
+      ],
+      "summary": "문서 유형을 사업자등록증(으)로 설정합니다",
+      "confidence": 0.87,
+      "latency_ms": 0.24558700000000003,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "doc_type": "business_registration",
+          "op": "set_doc_type"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "mx-01",
+      "category": "mixed",
+      "text": "inbox 폴더 receipt만 분류해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "import",
+      "ops": [
+        "import",
+        "classify"
+      ],
+      "summary": "inbox의 영수증을(를) 가져와 분류·OCR·추출한 뒤 마칩니다",
+      "confidence": 0.88,
+      "latency_ms": 0.366052,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "auto_pipeline": "none",
+          "op": "import",
+          "source": "inbox"
+        },
+        {
+          "op": "classify"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "doc_type": "receipt"
+        },
+        "folder": "inbox"
+      }
+    },
+    {
+      "id": "mx-02",
+      "category": "mixed",
+      "text": "tax invoice 전부 excel로 export 해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "export",
+      "ops": [
+        "export"
+      ],
+      "summary": "세금계산서을(를) XLSX(으)로 내보냅니다",
+      "confidence": 0.88,
+      "latency_ms": 0.365223,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "format": "xlsx",
+          "op": "export",
+          "target": "fields"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "doc_type": "tax_invoice"
+        }
+      }
+    },
+    {
+      "id": "mx-03",
+      "category": "mixed",
+      "text": "이 contract 요약 short로",
+      "correct": true,
+      "source": "rules",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "선택 문서을(를) 요약합니다",
+      "confidence": 0.87,
+      "latency_ms": 0.513975,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "length": "short",
+          "op": "summarize",
+          "target": "each_doc"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {
+          "doc_type": "contract"
+        }
+      }
+    },
+    {
+      "id": "mx-04",
+      "category": "mixed",
+      "text": "last month 영수증 total 얼마?",
+      "correct": true,
+      "source": "rules",
+      "intent": "aggregate",
+      "ops": [
+        "aggregate"
+      ],
+      "summary": "2026-10-01 ~ 2026-10-31 영수증의 합계 합계",
+      "confidence": 0.9,
+      "latency_ms": 0.512988,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "field": "total",
+          "fn": "sum",
+          "op": "aggregate"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "date_from": "2026-10-01",
+          "date_to": "2026-10-31",
+          "doc_type": "receipt"
+        }
+      }
+    },
+    {
+      "id": "mx-05",
+      "category": "mixed",
+      "text": "OCR profile을 fine print로 해서 이 페이지 다시",
+      "correct": true,
+      "source": "rules",
+      "intent": "ocr",
+      "ops": [
+        "ocr"
+      ],
+      "summary": "선택 문서을(를) OCR합니다(다시 실행)",
+      "confidence": 0.87,
+      "latency_ms": 0.536425,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "force": true,
+          "op": "ocr",
+          "pages": [
+            1
+          ],
+          "profile": "fine_print"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "mx-06",
+      "category": "mixed",
+      "text": "theme dark로 바꿔줘",
+      "correct": true,
+      "source": "prerouter",
+      "intent": "set_theme",
+      "ops": [
+        "set_theme"
+      ],
+      "summary": "테마를 dark(으)로 바꿉니다",
+      "confidence": 0.9,
+      "latency_ms": 0.037369,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "set_theme",
+          "theme": "dark"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "mx-07",
+      "category": "mixed",
+      "text": "model을 9B로 switch",
+      "correct": true,
+      "source": "rules",
+      "intent": "set_model",
+      "ops": [
+        "set_model"
+      ],
+      "summary": "모델을 qwen3.5-9b-q4km(으)로",
+      "confidence": 0.9,
+      "latency_ms": 0.146512,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "id": "qwen3.5-9b-q4km",
+          "op": "set_model"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "mx-08",
+      "category": "mixed",
+      "text": "search for 위약금",
+      "correct": true,
+      "source": "rules",
+      "intent": "search",
+      "ops": [
+        "search"
+      ],
+      "summary": "'위약금'을(를) 검색합니다",
+      "confidence": 0.85,
+      "latency_ms": 0.657309,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "search",
+          "query": "위약금"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "mx-09",
+      "category": "mixed",
+      "text": "선택한 contract 두 개 compare 해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "compare",
+      "ops": [
+        "compare"
+      ],
+      "summary": "선택한 문서를 비교 요약합니다",
+      "confidence": 0.85,
+      "latency_ms": 0.374348,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "doc_ids": [
+            "d1a2",
+            "d7f3"
+          ],
+          "op": "compare"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2",
+          "d7f3"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "mx-10",
+      "category": "mixed",
+      "text": "Hanbit 거래 문서에 tag '거래처A' 추가",
+      "correct": false,
+      "cause": "rule_clarified",
+      "source": "rules",
+      "intent": "clarify",
+      "ops": [
+        "clarify"
+      ],
+      "summary": "어떤 문서에 태그를 적용할까요? 라이브러리에서 선택하거나 유형·날짜를 말씀해 주세요.",
+      "confidence": 0.5,
+      "latency_ms": 0.522701,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [
+        {
+          "kind": "intent",
+          "expected": "tag",
+          "produced": "clarify"
+        },
+        {
+          "kind": "ops",
+          "expected": [
+            "tag"
+          ],
+          "produced": [
+            "clarify"
+          ]
+        }
+      ],
+      "operations": [
+        {
+          "op": "clarify",
+          "question": "어떤 문서에 태그를 적용할까요? 라이브러리에서 선택하거나 유형·날짜를 말씀해 주세요."
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    }
+  ]
+}

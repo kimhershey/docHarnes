@@ -1,5 +1,24 @@
 name: Windows installer (manual)
 
+# Builds the NSIS installer (design §3.12) on a GitHub-hosted Windows runner and, with publish=true, attaches it to
+# the GitHub Release v<version> (src-tauri/tauri.conf.json version; the release is created when it does not exist).
+#
+#   lite  = app + llama-server CPU & Vulkan packs (official llama.cpp release zips) + PDFium + ko-dic.
+#           Models (3–8 GB) are never bundled: the user downloads or drops them in from the model manager.
+#   full  = lite + the self-built CUDA packs cu121 / cu129, downloaded from the Release assets that
+#           .github/workflows/cuda-packs.yml publishes (DocuLens-EnginePack-<pack>-<tag>.zip).
+#
+# Bundled layout inside the installer (Tauri resource dir = install dir): engines/<pack>/llama-server.exe, pdfium/,
+# ko-dic/, THIRD-PARTY-NOTICES.md, sbom.cdx.json, licenses/THIRD-PARTY-LICENSES.txt.
+#
+# WebView2 stays in `downloadBootstrapper` mode (src-tauri/tauri.conf.json `webviewInstallMode`): the offline /
+# fixed-runtime installers are Microsoft-proprietary redistributables whose EULA conditions (unmodified
+# redistribution, notice text, user consent for a silent install) are not covered yet — design appendix E.
+# Windows 10 1803+ / 11 ship the runtime as an OS component, so the bootstrapper usually has nothing to download.
+#
+# The installer is not code-signed: SmartScreen shows "Windows protected your PC" on first run. The .sha256 file next
+# to the installer lets users verify the download (`certutil -hashfile <exe> SHA256`).
+
 on:
   workflow_dispatch:
     inputs:
@@ -7,11 +26,26 @@ on:
         description: "Git ref to build"
         required: false
         default: "main"
+      variant:
+        description: "Installer variant (lite = CPU/Vulkan packs, full = + CUDA packs from the Release assets)"
+        type: choice
+        options: [lite, full]
+        default: lite
+      publish:
+        description: "Upload the installer, its SHA-256, THIRD-PARTY-NOTICES.md and sbom.cdx.json to Release v<version>"
+        type: boolean
+        default: false
 
 jobs:
   build:
-    name: Build NSIS installer (Lite)
+    name: Build NSIS installer (${{ inputs.variant }})
     runs-on: windows-latest
+    timeout-minutes: 180
+    permissions:
+      contents: write
+    env:
+      # Authenticates scripts/fetch-engine.mjs (GitHub API rate limit) and `gh release …`.
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,10 +57,143 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: npm ci
+
+      - name: Resolve version, engine tag and installer name
+        id: meta
+        shell: pwsh
+        run: |
+          $version = node -p "require('./src-tauri/tauri.conf.json').version"
+          $tag = node -p "require('./engines/manifest.json').tag"
+          $variant = (Get-Culture).TextInfo.ToTitleCase("${{ inputs.variant }}")
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "engine_tag=$tag" >> $env:GITHUB_OUTPUT
+          "variant=$variant" >> $env:GITHUB_OUTPUT
+          "installer=DocuLens-Setup-$variant-$version-x64.exe" >> $env:GITHUB_OUTPUT
+          Write-Host "DocuLens $version, llama.cpp $tag, variant $variant"
+
+      # --- bundled runtime assets → src-tauri/resources/ (git-ignored, picked up by tauri.conf.json bundle.resources)
+      - name: Fetch llama-server packs (cpu, vulkan) → src-tauri/resources/engines/<pack>/
+        run: node scripts/fetch-engine.mjs --bundle --packs cpu,vulkan
+      - name: Show the fetched pack hashes (pin them in engines/manifest.json with `--pin` once)
+        shell: pwsh
+        run: Get-ChildItem src-tauri/resources/engines/*/pack.json | ForEach-Object { Write-Host "--- $($_.Directory.Name)"; Get-Content $_.FullName }
+      - name: Fetch PDFium → src-tauri/resources/pdfium/
+        run: node scripts/fetch-pdfium.mjs --bundle
+      - name: Cache the built ko-dic dictionary
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/resources/ko-dic
+          key: kodic-bundle-windows-${{ hashFiles('engines/kodic.json', 'crates/doculens-kodic/**', 'scripts/fetch-kodic.mjs') }}
+      - name: Build ko-dic → src-tauri/resources/ko-dic/ (no-op when the cache holds this version)
+        run: node scripts/fetch-kodic.mjs --bundle
+
+      - name: Download the CUDA packs from the GitHub Release (full variant)
+        if: inputs.variant == 'full'
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.meta.outputs.engine_tag }}"
+          $repo = $env:GITHUB_REPOSITORY
+          $packs = Join-Path $env:RUNNER_TEMP "packs"
+          New-Item -ItemType Directory -Force $packs | Out-Null
+          # Prefer the release this build publishes to; fall back to the latest release.
+          $release = "v${{ steps.meta.outputs.version }}"
+          gh release view $release --repo $repo --json tagName 2>$null | Out-Null
+          if ($LASTEXITCODE -ne 0) { Write-Host "::notice::release $release does not exist yet; looking for the CUDA packs on the latest release"; $release = $null }
+          foreach ($pack in "cu121", "cu129") {
+            $asset = "DocuLens-EnginePack-$pack-$tag.zip"
+            $ghArgs = @("release", "download")
+            if ($release) { $ghArgs += $release }
+            $ghArgs += @("--repo", $repo, "--pattern", $asset, "--pattern", "$asset.sha256", "--dir", $packs)
+            & gh @ghArgs
+            $zip = Join-Path $packs $asset
+            if (-not (Test-Path $zip)) {
+              $where = if ($release) { $release } else { "the latest release" }
+              Write-Host "::error::$asset is not attached to $where. Run the 'CUDA engine packs (manual)' workflow with pack=$pack and publish=true first (engines/README.md, 'Building the CUDA packs')."
+              exit 1
+            }
+            if (Test-Path "$zip.sha256") {
+              $expected = ((Get-Content "$zip.sha256" -Raw).Trim() -split '\s+')[0].ToLower()
+              $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+              if ($expected -ne $actual) { Write-Host "::error::$asset SHA-256 mismatch: expected $expected, got $actual"; exit 1 }
+              Write-Host "$asset sha256 $actual (verified)"
+            } else {
+              Write-Host "::warning::$asset.sha256 is missing — the pack was not verified"
+            }
+            $dest = "src-tauri/resources/engines/$pack"
+            if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
+            New-Item -ItemType Directory -Force $dest | Out-Null
+            Expand-Archive -Path $zip -DestinationPath $dest -Force
+            if (-not (Test-Path "$dest/llama-server.exe")) { Write-Host "::error::$asset does not contain llama-server.exe at its root"; exit 1 }
+          }
+          exit 0
+
+      - name: Verify the bundled runtime assets (one backend family per pack folder)
+        shell: pwsh
+        run: |
+          $root = "src-tauri/resources"
+          $required = @("$root/pdfium/pdfium.dll", "$root/pdfium/LICENSE", "$root/ko-dic/dict.words", "$root/ko-dic/LICENSE-mecab-ko-dic.txt",
+                        "$root/engines/cpu/llama-server.exe", "$root/engines/vulkan/llama-server.exe")
+          if ("${{ inputs.variant }}" -eq "full") { $required += @("$root/engines/cu121/llama-server.exe", "$root/engines/cu129/llama-server.exe") }
+          $missing = $required | Where-Object { -not (Test-Path $_) }
+          if ($missing) { $missing | ForEach-Object { Write-Host "::error::missing bundled asset: $_" }; exit 1 }
+          # ggml loads every ggml-*.dll next to llama-server, so a pack folder must hold exactly one GPU backend family
+          # (engines/README.md). ggml-cpu-*.dll variants, ggml-base.dll and ggml-rpc.dll are expected in every pack.
+          foreach ($dir in Get-ChildItem "$root/engines" -Directory) {
+            $families = Get-ChildItem $dir.FullName -Filter "ggml-*.dll" |
+              Where-Object { $_.Name -match '^ggml-(cuda|vulkan|opencl|openvino|hip|sycl|musa|cann|blas|webgpu)' } |
+              ForEach-Object { $_.Name -replace '^ggml-', '' -replace '\.dll$', '' } | Sort-Object -Unique
+            $expected = switch -Regex ($dir.Name) { '^cpu$' { $null } '^vulkan$' { 'vulkan' } '^cu\d+' { 'cuda' } default { Write-Host "::error::unexpected pack folder $($dir.Name)"; exit 1 } }
+            $count = (Get-ChildItem $dir.FullName -File | Measure-Object).Count
+            Write-Host ("{0}: {1} files, GPU backend: {2}" -f $dir.Name, $count, $(if ($families) { $families -join ', ' } else { 'none (cpu)' }))
+            if (@($families).Count -gt 1) { Write-Host "::error::$($dir.Name) mixes backend families: $($families -join ', ')"; exit 1 }
+            if ($expected -and ($families -notcontains $expected)) { Write-Host "::error::$($dir.Name) has no ggml-$expected.dll"; exit 1 }
+            if (-not $expected -and $families) { Write-Host "::error::the cpu pack contains $($families -join ', ')"; exit 1 }
+            if ($expected -eq 'cuda') {
+              foreach ($dll in 'cudart64_12.dll', 'cublas64_12.dll', 'cublasLt64_12.dll', 'NVIDIA-CUDA-EULA.txt') {
+                if (-not (Test-Path (Join-Path $dir.FullName $dll))) { Write-Host "::error::$($dir.Name) lacks $dll"; exit 1 }
+              }
+            }
+          }
+          $all = Get-ChildItem $root -Recurse -File | Measure-Object -Property Length -Sum
+          Write-Host ("bundled resources: {0:N0} files, {1:N1} MB" -f $all.Count, ($all.Sum / 1MB))
+
+      - name: Generate THIRD-PARTY-NOTICES / SBOM / license texts (bundled by tauri.conf.json)
+        run: node scripts/gen-notices.mjs
       - run: npm run build
       - run: npx tauri build --target x86_64-pc-windows-msvc
+
+      - name: Name the installer and write its SHA-256
+        shell: pwsh
+        run: |
+          $src = Get-ChildItem "target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe" | Select-Object -First 1
+          if (-not $src) { Write-Host "::error::NSIS installer not found under target/x86_64-pc-windows-msvc/release/bundle/nsis"; exit 1 }
+          New-Item -ItemType Directory -Force dist-installer | Out-Null
+          $name = "${{ steps.meta.outputs.installer }}"
+          Copy-Item $src.FullName "dist-installer/$name"
+          $hash = (Get-FileHash "dist-installer/$name" -Algorithm SHA256).Hash.ToLower()
+          [IO.File]::WriteAllText("$PWD/dist-installer/$name.sha256", "$hash *$name`n")
+          Write-Host ("{0}  {1}  ({2:N1} MB)" -f $name, $hash, ($src.Length / 1MB))
+
       - uses: actions/upload-artifact@v4
         with:
-          name: DocuLens-Setup-Lite
-          path: |
-            target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+          name: DocuLens-Setup-${{ steps.meta.outputs.variant }}-${{ steps.meta.outputs.version }}-x64
+          path: dist-installer/*
+          if-no-files-found: error
+
+      - name: Publish to GitHub Release v${{ steps.meta.outputs.version }}
+        if: inputs.publish
+        shell: pwsh
+        run: |
+          $version = "${{ steps.meta.outputs.version }}"
+          $tag = "v$version"
+          $repo = $env:GITHUB_REPOSITORY
+          gh release view $tag --repo $repo --json tagName 2>$null | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            $sha = (git rev-parse HEAD).Trim()
+            Write-Host "creating release $tag at $sha"
+            gh release create $tag --repo $repo --target $sha --title "DocuLens $version" --generate-notes
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+          $name = "${{ steps.meta.outputs.installer }}"
+          gh release upload $tag --repo $repo --clobber "dist-installer/$name" "dist-installer/$name.sha256" THIRD-PARTY-NOTICES.md sbom.cdx.json
+          exit $LASTEXITCODE

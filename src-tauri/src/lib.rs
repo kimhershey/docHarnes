@@ -3,11 +3,16 @@
 mod commands;
 mod docs_bridge;
 mod engine_bridge;
+mod generate_bridge;
 mod jobs;
 mod knowledge_bridge;
+mod maintenance;
+mod notify;
 mod pipeline_bridge;
 mod planner_bridge;
+mod power;
 mod printer;
+mod projects_bridge;
 mod protocol;
 mod state;
 
@@ -24,6 +29,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(log::LevelFilter::Info)
@@ -39,6 +45,8 @@ pub fn run() {
             let _ = state.app.set(handle.clone());
             state.jobs.attach(handle.clone());
             planner_bridge::install_worker(&handle);
+            power::install(&handle);
+            maintenance::install_scheduler(&handle);
             // Apply the persisted theme to the native window (title bar) before the
             // first paint; the webview applies the same theme via `data-theme`.
             let theme = state.settings.lock().map(|s| s.ui.theme).unwrap_or_default();
@@ -189,6 +197,35 @@ pub fn run() {
             commands::planner::jobs_resume,
             commands::planner::jobs_retry,
             commands::planner::jobs_prioritize,
+            commands::generate::generate_templates,
+            commands::generate::generate_draft,
+            commands::generate::generate_preview,
+            commands::generate::generate_validate,
+            commands::generate::generate_save,
+            commands::generate::generate_drafts,
+            commands::generate::generate_draft_get,
+            commands::generate::generate_draft_put,
+            commands::generate::generate_draft_delete,
+            commands::projects::projects_list,
+            commands::projects::project_create,
+            commands::projects::project_update,
+            commands::projects::project_delete,
+            commands::projects::project_get,
+            commands::projects::project_add_documents,
+            commands::projects::project_remove_document,
+            commands::projects::project_set_status,
+            commands::projects::project_templates,
+            commands::projects::project_template_save,
+            commands::projects::project_template_delete,
+            commands::projects::project_define_rule,
+            commands::projects::project_save_rule,
+            commands::projects::project_delete_rule,
+            commands::projects::project_check,
+            commands::projects::project_runs,
+            commands::projects::project_report,
+            commands::projects::project_request_supplement,
+            commands::projects::maintenance_status,
+            commands::projects::maintenance_run_now,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -200,6 +237,7 @@ pub fn run() {
             // model instances down gracefully.
             let state = app.state::<AppState>();
             let _ = state.engine.stop();
+            // Sleep prevention (`power`) needs no release: its thread-bound state goes with the process.
         }
     });
 }

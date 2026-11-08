@@ -245,10 +245,12 @@ impl Vlm<'_> {
             Some(v) => Ok((v, reply)),
             None => {
                 if reply.truncated {
+                    // The prompt count lets callers tell "the model rambled" from "the slot was full".
                     Err(CoreError::engine(format!(
-                        "{} reply was cut off ({} tokens)",
+                        "{} reply was cut off ({} tokens; prompt {} tokens)",
                         stage.as_str(),
-                        reply.usage.completion
+                        reply.usage.completion,
+                        reply.usage.prompt
                     )))
                 } else {
                     Err(CoreError::engine(format!(

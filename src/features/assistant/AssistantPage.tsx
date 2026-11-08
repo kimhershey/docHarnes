@@ -1,4 +1,4 @@
-import { AlertCircle, Bot, HelpCircle, Send, Sparkles, User } from "lucide-react";
+import { AlertCircle, Bot, Briefcase, HelpCircle, Send, Sparkles, User, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
@@ -26,6 +26,7 @@ import { useDocumentsStore } from "@/stores/documents";
 import { useEngineStore } from "@/stores/engine";
 import { useJobsStore } from "@/stores/jobs";
 import { newRequestId, useKnowledgeStore } from "@/stores/knowledge";
+import { useProjectsStore } from "@/stores/projects";
 import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
@@ -71,6 +72,8 @@ export function AssistantPage() {
   const clearStream = useKnowledgeStore((s) => s.clearStream);
   const folder = useDocumentsStore((s) => s.folder);
   const selectedIds = useDocumentsStore((s) => s.selectedIds);
+  const currentProject = useProjectsStore((s) => s.currentProject);
+  const currentProjectName = useProjectsStore((s) => s.currentProjectName);
   const { data: collections } = useCollections(!!workspace);
   const { data: pipeline } = usePipelineStatus(!!workspace);
   const messages = useAssistantStore((s) => s.messages);
@@ -269,7 +272,7 @@ export function AssistantPage() {
       return;
     }
     // 2. Planner (rules, then the model behind the engine gate).
-    const context = uiContextFor(scope, folder, selectedIds, lastDocument);
+    const context = uiContextFor(scope, folder, selectedIds, lastDocument, currentProject);
     setPlanning(true);
     let response: PlanResponse;
     try {
@@ -404,6 +407,15 @@ export function AssistantPage() {
             <Switch checked={followUp} onCheckedChange={setFollowUp} aria-label={t("answer.follow_up")} data-testid="assistant-follow-up" />
             {t("answer.follow_up")}
           </label>
+          {currentProject && (
+            <span className="flex items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-accent" data-testid="assistant-current-project" data-project-id={currentProject}>
+              <Briefcase className="size-3.5" aria-hidden="true" />
+              <span className="max-w-48 truncate">{t("assistant.scope.project_named", { name: currentProjectName ?? currentProject })}</span>
+              <button type="button" className="cursor-pointer rounded-full hover:bg-accent hover:text-accent-fg" onClick={() => useProjectsStore.getState().clearCurrentProject()} aria-label={t("assistant.scope.project_clear")} data-testid="assistant-current-project-clear">
+                <X className="size-3" aria-hidden="true" />
+              </button>
+            </span>
+          )}
           <span>{t("assistant.scope.label")}:</span>
           <Select value={scope} onValueChange={setScope}>
             <SelectTrigger className="h-8 w-52" aria-label={t("assistant.scope.label")} data-testid="assistant-scope">

@@ -2,9 +2,11 @@
 //! `doculens-core`; this layer only adapts state and error types.
 
 pub mod documents;
+pub mod generate;
 pub mod knowledge;
 pub mod pipeline;
 pub mod planner;
+pub mod projects;
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

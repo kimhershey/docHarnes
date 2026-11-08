@@ -171,15 +171,24 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext) -> Re
         result.attempts = attempt;
         let fb = feedback.as_ref().map(|(p, i)| (p.as_str(), i.as_slice()));
         let (messages, tier) = prompts::messages(ctx, text, date.as_ref(), budget, fb);
-        let (value, reply) = match vlm.call_json(Stage::Plan, &messages, "plan", &plan_schema, None) {
+        let (value, reply) = match vlm.call_json(Stage::Plan, &messages, "plan", &plan_schema, Some(REPLY_TOKENS)) {
             Ok(v) => v,
             Err(CoreError::Cancelled) => return Err(CoreError::Cancelled),
-            Err(e) if is_context_overflow(&e) && tier > prompts::Tier::Minimal && shrinks < 2 => {
-                // The server's tokenizer counted more than our estimate: retry one tier smaller.
+            Err(e) if is_context_overflow(&e) && tier > prompts::Tier::Tiny && shrinks < 3 => {
+                // (a cut-off after a long reply is the model rambling, not a full slot — see `is_context_overflow`)
+                // The server's tokenizer counted more than our estimate: retry one tier smaller. When the
+                // server reported its counts, scale our estimate to them so the next tier really fits.
                 shrinks += 1;
                 attempt -= 1;
                 let used = prompts::message_tokens(&messages);
-                budget = Some(budget.unwrap_or(used).min(used).saturating_sub(used / 4).max(256));
+                let calibrated = reported_counts(&e).and_then(|(prompt, completion)| {
+                    let slot = prompt + completion;
+                    let ratio = prompt as f32 / used.max(1) as f32; // server tokens per estimated token
+                    let room = slot.checked_sub(REPLY_TOKENS + 128)?;
+                    Some(((room as f32 / ratio.max(0.5)) as u32).max(128))
+                });
+                let fallback = budget.unwrap_or(used).min(used).saturating_sub(used / 4).max(256);
+                budget = Some(calibrated.map(|c| c.min(fallback)).unwrap_or(fallback));
                 log::info!("planner: prompt exceeded the context at tier {tier:?}; retrying smaller ({})", e);
                 continue;
             }
@@ -214,9 +223,27 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext) -> Re
 }
 
 /// llama-server rejects prompts longer than the slot context with HTTP 400
-/// "request (N tokens) exceeds the available context size".
+/// "request (N tokens) exceeds the available context size"; some builds instead clamp the
+/// reply to the tokens left in the slot, which surfaces as a reply "cut off" after a few
+/// dozen tokens. Both mean the prompt was too big for the context: retry one tier smaller.
 fn is_context_overflow(e: &CoreError) -> bool {
-    matches!(e, CoreError::Engine(m) if m.contains("exceeds the available context"))
+    match e {
+        CoreError::Engine(m) if m.contains("exceeds the available context") => true,
+        // A reply clamped after a few dozen tokens means the slot was full; a reply cut at the
+        // reply budget means the model rambled (grammar-constrained garbage from tiny / broken models).
+        CoreError::Engine(m) if m.contains("was cut off") => {
+            reported_counts(e).map(|(_, completion)| completion < REPLY_TOKENS / 2).unwrap_or(true)
+        }
+        _ => false,
+    }
+}
+
+/// `(prompt tokens, completion tokens)` from a cut-off error ("… cut off (93 tokens; prompt 4003 tokens)").
+fn reported_counts(e: &CoreError) -> Option<(u32, u32)> {
+    let CoreError::Engine(m) = e else { return None };
+    let completion = m.split("cut off (").nth(1)?.split(' ').next()?.parse().ok()?;
+    let prompt = m.split("prompt ").nth(1)?.split(' ').next()?.parse().ok()?;
+    Some((prompt, completion))
 }
 
 fn parse_and_validate(

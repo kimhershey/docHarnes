@@ -1,10 +1,16 @@
-import { Check, FolderOpen, X } from "lucide-react";
+import { Check, FilePlus2, FolderOpen, X } from "lucide-react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog, type ConfirmRequest } from "@/components/ui/confirm-dialog";
 import { isPlanExecution, isRecord, opLabel } from "@/features/assistant/describePlan";
+import { useDraftJobRunning } from "@/features/generate/useDraftJobRunning";
+import { maintenanceSummaryText } from "@/features/settings/maintenance";
 import { revealPath } from "@/lib/ipc";
-import type { Job } from "@/lib/types";
+import { SCREEN_ROUTES, isDraftOutcome, isMaintenanceSummary, type Draft, type Job } from "@/lib/types";
+import { useGenerateStore } from "@/stores/generate";
 
 /** `pipeline::run::ProcessReport` (pipeline jobs, extract / classify / ocr steps). */
 function isProcessReport(v: unknown): v is { processed: unknown[]; failed: unknown[]; classified: number; ocr_pages: number; extracted: number; review_pending?: number } {
@@ -18,8 +24,42 @@ function isProcessReport(v: unknown): v is { processed: unknown[]; failed: unkno
  */
 export function JobResult({ job }: { job: Job }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+  const draftJobRunning = useDraftJobRunning();
   const result = job.result;
   if (result == null) return null;
+  if (isDraftOutcome(result)) {
+    const d = result.draft;
+    const open = (draft: Draft) => {
+      const go = () => {
+        useGenerateStore.getState().openDraft(draft);
+        navigate(SCREEN_ROUTES.generate);
+      };
+      // The 문서 생성 screen is still following another draft job: opening this one would drop its hand-over.
+      if (draftJobRunning && useGenerateStore.getState().jobId !== job.id) setConfirm({ title: t("generate.open_busy_title"), description: t("generate.open_busy"), confirmLabel: t("generate.open_in_generate"), onConfirm: go });
+      else go();
+    };
+    return (
+      <div className="flex flex-wrap items-center gap-2 text-xs" data-testid="job-result-draft">
+        <span className="font-medium selectable">{d.title}</span>
+        {/* "규칙 / 모델" is the draft's own origin (`draft.model`), not the job's (`job_source`). */}
+        <span className="text-fg-muted">{t("generate.result.meta", { fields: d.fields.length, issues: d.issues.length, source: t(`generate.source.${d.model ? "model" : "rules"}`) })}</span>
+        <Button size="sm" variant="ghost" onClick={() => open(d)} data-testid="job-open-draft">
+          <FilePlus2 />
+          {t("generate.open_in_generate")}
+        </Button>
+        <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
+      </div>
+    );
+  }
+  if (isMaintenanceSummary(result)) {
+    return (
+      <span className="text-xs text-fg-muted" data-testid="job-result-maintenance">
+        {maintenanceSummaryText(result, t)}
+      </span>
+    );
+  }
   if (isPlanExecution(result)) {
     return (
       <ol className="flex flex-col gap-0.5 text-xs" data-testid="job-result-steps">

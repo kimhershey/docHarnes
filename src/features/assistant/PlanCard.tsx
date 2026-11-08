@@ -7,15 +7,18 @@ import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
+import { RuleGrid } from "@/features/projects/RuleGrid";
+import { retentionShortens } from "@/lib/commands";
 import { api } from "@/lib/ipc";
 import { DEFAULT_NAME_TEMPLATE, FOLDER_TEMPLATES, type Op, type OrganizeItem, type OrganizePlan, type Plan, type PlanIssue, type PlanResponse, type StepPreview } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import type { PlanStatus } from "@/stores/assistant";
 import { useSettingsStore, useShortcut } from "@/stores/settings";
+import { useWorkspaceStore } from "@/stores/workspace";
 
 import { describeOrganizeError } from "@/features/organize/errors";
 
-import { exportPreview, impactLine, impactOf, onlyReviewedValue, opLabel, organizePreview, requiresConfirmation, sourceLabel, summarizeOp, warningIssues, withOnlyReviewed } from "./describePlan";
+import { exportPreview, impactLine, impactOf, onlyReviewedValue, opLabel, organizePreview, requiresConfirmation, ruleDraftPreview, sourceLabel, summarizeOp, warningIssues, withOnlyReviewed } from "./describePlan";
 import { FILE_OPS } from "./opSpecs";
 import { PlanEditor } from "./PlanEditor";
 
@@ -82,9 +85,29 @@ function StepPreviewView({ step, override, index }: { step: StepPreview | undefi
   if (!step && !override) return null;
   const organise = override ? { items: override.items.filter((i) => i.status === "move" || i.status === "held"), moves: override.moves, held: override.held, unchanged: override.unchanged } : organizePreview(step);
   const exp = exportPreview(step);
+  // `define_rule`: the rule grid is the confirmation (design §3.15). `exec::preview` sends
+  // `{ description, draft: RuleDraft | null }`; without a parsed draft only the sentence is shown.
+  const rule = ruleDraftPreview(step);
   return (
     <div className="flex flex-col">
       {step?.summary && !organise && !exp && <span className="text-xs text-fg-muted selectable">{step.summary}</span>}
+      {rule?.draft && (
+        <div className="mt-1" data-testid={`plan-preview-${index}`}>
+          <RuleGrid rule={rule.draft.rule} readOnly unresolvedNames={rule.draft.unresolved} testId={`plan-rule-${index}`} />
+          {rule.draft.issues.length > 0 && (
+            <ul className="mt-1 text-xs text-warn" data-testid="plan-rule-issues">
+              {rule.draft.issues.map((i, n) => (
+                <li key={n}>⚠ {i}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+      {rule && !rule.draft && rule.description && (
+        <span className="mt-1 text-xs text-fg-muted selectable" data-testid={`plan-preview-${index}`}>
+          {t("planner.card.rule_description", { description: rule.description })}
+        </span>
+      )}
       {organise && (
         <>
           <span className="text-xs text-fg-muted">{t("planner.card.organize_summary", { moves: organise.moves, held: organise.held, unchanged: organise.unchanged })}</span>
@@ -137,6 +160,7 @@ export function PlanCard({
   const executeChord = useShortcut("execute_plan") || "Ctrl+Enter";
   const closeChord = useShortcut("close") || "Escape";
   const reviewedDefault = useSettingsStore((s) => s.settings?.processing.organize_reviewed_only ?? true);
+  const retention = useWorkspaceStore((s) => s.current?.manifest.retention ?? null);
   const [overrides, setOverrides] = useState<Record<number, OrganizePlan>>({});
   const [previewError, setPreviewError] = useState<string | null>(null);
   const { result, preview, context } = response;
@@ -219,6 +243,12 @@ export function PlanCard({
                   {step?.confirm && <AlertTriangle className="size-3.5 text-warn" role="img" aria-label={t("planner.card.needs_confirmation")} />}
                   {params && <span className="truncate text-fg-muted selectable">{params}</span>}
                 </div>
+                {op.op === "set_retention" && retention && retentionShortens(retention, op.item, op.days) && (
+                  <span className="text-xs text-warn" data-testid={`plan-retention-shorter-${i}`}>
+                    <AlertTriangle className="mr-1 inline size-3" aria-hidden="true" />
+                    {t("planner.card.retention_shorter")}
+                  </span>
+                )}
                 <StepPreviewView step={step} override={overrides[i]} index={i} />
               </div>
             </li>

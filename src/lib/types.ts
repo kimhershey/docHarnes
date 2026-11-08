@@ -540,7 +540,9 @@ export type JobKind =
   | "export"
   | "organize"
   | "undo"
-  | "redo";
+  | "redo"
+  | "draft"
+  | "maintenance";
 export type JobState = "queued" | "running" | "paused" | "done" | "failed" | "cancelled" | "interrupted";
 export type JobPriority = "low" | "normal" | "high" | "interactive";
 
@@ -681,6 +683,7 @@ export const EVENTS = {
   knowledgeChanged: "knowledge://changed",
   knowledgeAnswer: "knowledge://answer",
   pipelineChanged: "pipeline://changed",
+  projectsChanged: "projects://changed",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -1415,6 +1418,16 @@ export type OpKind =
   | "tag"
   | "delete"
   | "export"
+  | "draft_document"
+  | "register_form"
+  | "explain"
+  | "compare"
+  | "create_project"
+  | "add_to_project"
+  | "define_rule"
+  | "check_consistency"
+  | "request_supplement"
+  | "set_retention"
   | "set_model"
   | "set_profile"
   | "set_theme"
@@ -1442,6 +1455,11 @@ export type ReviewOnly = "low_confidence" | "failed" | "all";
 export type JobOp = "show" | "cancel" | "retry" | "pause" | "resume" | "prioritize";
 export type EngineOp = "restart" | "sleep" | "wake";
 export type OpenTarget = "document" | "page" | "folder" | "screen";
+/** `explain.scope` (appendix D). */
+export type ExplainScope = "kb" | "collection" | "project" | "document";
+/** `set_retention.item` (appendix D; the page cache is size-capped → `set_setting cache_limit_gb`). */
+export type RetentionTarget = "documents" | "extractions" | "logs" | "journal" | "chats" | "temp";
+export const RETENTION_TARGETS: RetentionTarget[] = ["documents", "extractions", "logs", "journal", "chats", "temp"];
 
 /** One plan step (appendix D parameters; optional ones may be absent or null). */
 export type Op =
@@ -1465,6 +1483,16 @@ export type Op =
   | { op: "tag"; add?: string[]; remove?: string[] }
   | { op: "delete"; to_trash?: boolean | null }
   | { op: "export"; format: ExportFormat; path?: string | null; columns?: string[]; layout?: ExportLayout | null; include?: ExportInclude[]; target?: ExportTarget | null }
+  | { op: "draft_document"; form_ref?: string | null; format_description?: string | null; content: string; sources?: string[]; output?: OutputFormat | null; tone?: Tone | null; length?: DraftLength | null }
+  | { op: "register_form"; doc_ref?: string | null; name?: string | null; doc_type_slug?: string | null }
+  | { op: "explain"; selection?: string | null; question?: string | null; scope?: ExplainScope | null; allow_general_knowledge?: boolean | null }
+  | { op: "compare"; doc_ids: string[]; aspects?: string[] }
+  | { op: "create_project"; name: string; template?: string | null; doc_types_required?: string[] }
+  | { op: "add_to_project"; project?: string | null; doc_ids?: string[] }
+  | { op: "define_rule"; project?: string | null; template?: string | null; description: string }
+  | { op: "check_consistency"; project?: string | null; rules?: string[] }
+  | { op: "request_supplement"; project?: string | null; findings?: string[]; output?: OutputFormat | null }
+  | { op: "set_retention"; item: RetentionTarget; days: number }
   | { op: "set_model"; id: string }
   | { op: "set_profile"; profile: Profile }
   | { op: "set_theme"; theme: Theme }
@@ -1564,6 +1592,16 @@ export interface PlanContext {
   current_page: number | null;
   document_count: number;
   model_ids: string[];
+  /** Projects of the workspace (§3.15) — `add_to_project` / `check_consistency` targets. */
+  projects: ProjectSummary[];
+  /** Project open in the UI (default target of project ops). */
+  current_project: string | null;
+}
+
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  status: ProjectStatus;
 }
 
 /** What the UI is showing when a command is sent (default scope). */
@@ -1572,6 +1610,8 @@ export interface UiPlanContext {
   selected_doc_ids?: string[];
   current_document?: string | null;
   current_page?: number | null;
+  /** Project open on the projects screen (default target of project ops). */
+  current_project?: string | null;
 }
 
 export interface StepPreview {
@@ -1821,4 +1861,424 @@ export interface ExportResult {
   overwritten: boolean;
   skipped: [string, string][];
   extra_files: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Document generation (P6) — mirrors crates/doculens-core/src/generate/mod.rs
+// ---------------------------------------------------------------------------
+
+export type OutputFormat = "hwpx" | "docx" | "pdf" | "md";
+export const OUTPUT_FORMATS: OutputFormat[] = ["hwpx", "docx", "pdf", "md"];
+export type Tone = "formal" | "plain" | "concise";
+export const TONES: Tone[] = ["formal", "plain", "concise"];
+/** `generate::Length` (named apart from the summarise length). */
+export type DraftLength = "short" | "medium" | "long";
+export const DRAFT_LENGTHS: DraftLength[] = ["short", "medium", "long"];
+export type TemplateKind = "official_letter" | "quotation" | "transaction_statement" | "contract" | "report" | "minutes" | "supplement_request";
+export const TEMPLATE_KINDS: TemplateKind[] = ["official_letter", "quotation", "transaction_statement", "contract", "report", "minutes", "supplement_request"];
+
+export type TemplateRef = { kind: "builtin"; template: TemplateKind } | { kind: "form"; schema_id: string; doc_id?: string | null };
+
+export type SourceRef =
+  | { kind: "document"; doc_id: string }
+  | { kind: "aggregate"; result: unknown }
+  | { kind: "knowledge"; query: string }
+  | { kind: "text"; title?: string | null; text: string };
+
+export interface DraftRequest {
+  form_ref: string | null;
+  format_description: string | null;
+  content: string;
+  sources: SourceRef[];
+  output: OutputFormat;
+  tone: Tone;
+  length: DraftLength;
+  language: Language;
+  use_knowledge: boolean;
+  feedback: string | null;
+  previous: Draft | null;
+  excluded_sources: string[];
+}
+
+export function defaultDraftRequest(language: Language = "ko"): DraftRequest {
+  return { form_ref: null, format_description: null, content: "", sources: [], output: "hwpx", tone: "formal", length: "medium", language, use_knowledge: true, feedback: null, previous: null, excluded_sources: [] };
+}
+
+export interface DraftCitation {
+  doc_id: string | null;
+  title: string;
+  page: number | null;
+  chunk_id: number | null;
+  /** document | knowledge | aggregate | text */
+  source: string;
+  excerpt: string | null;
+}
+
+export interface DraftField {
+  key: string;
+  label: string;
+  /** `FieldKind` as a string (`string`, `amount`, `date`, `brn`, …). */
+  kind: string;
+  required: boolean;
+  value: string;
+  normalized: string | null;
+  source: DraftCitation | null;
+  user_edited: boolean;
+}
+
+export interface DraftColumn {
+  key: string;
+  label: string;
+  kind: string;
+}
+
+export interface DraftTable {
+  key: string;
+  label: string;
+  columns: DraftColumn[];
+  rows: string[][];
+}
+
+export type DraftBlock =
+  | { kind: "heading"; level: number; text: string }
+  | { kind: "paragraph"; text: string; source?: DraftCitation | null }
+  | { kind: "list"; items: string[]; ordered: boolean }
+  | { kind: "table_ref"; key: string };
+
+export interface DraftIssue {
+  /** `fields.total`, `tables.items[2].amount`, `body[3]` … */
+  path: string;
+  /** `required_missing`, `sum_mismatch`, `brn_invalid`, `date_invalid`, `amount_invalid`, `uncited_claim`, `template_unknown_field` … */
+  code: string;
+  message: string;
+  blocking: boolean;
+  suggestion?: string | null;
+}
+
+export interface Draft {
+  id: string;
+  title: string;
+  template: TemplateRef;
+  doc_type: string | null;
+  fields: DraftField[];
+  tables: DraftTable[];
+  body: DraftBlock[];
+  references: DraftCitation[];
+  issues: DraftIssue[];
+  language: Language;
+  tone: Tone;
+  length: DraftLength;
+  created_at: string;
+  updated_at: string;
+  model: string | null;
+  request: DraftRequest | null;
+  notes: string[];
+  saved_path: string | null;
+  saved_doc_id: string | null;
+}
+
+export interface DraftOutcome {
+  draft: Draft;
+  prompt_tokens: number;
+  completion_tokens: number;
+  elapsed_ms: number;
+  /** How the draft was produced: `rules` (no model call) | `model`. */
+  source: string;
+  /** Draft job payloads only (`generate_bridge::run_draft`): where the job came from (`generate`, `project`, …). */
+  job_source?: string;
+  /** Draft job / `request_supplement` payloads: the project the draft belongs to. */
+  project_id?: string | null;
+}
+
+export interface SaveRequest {
+  draft: Draft;
+  output: OutputFormat;
+  file_name: string | null;
+  folder: string | null;
+  register: boolean;
+  overwrite: boolean;
+}
+
+export interface SavedDocument {
+  rel_path: string;
+  absolute: string;
+  format: OutputFormat;
+  doc_id: string | null;
+  filled_form: boolean;
+  warnings: string[];
+}
+
+export interface TemplateField {
+  key: string;
+  label_ko: string;
+  label_en: string;
+  kind: string;
+  required: boolean;
+  columns?: DraftColumn[];
+}
+
+export interface TemplateInfo {
+  kind: TemplateKind;
+  name_ko: string;
+  name_en: string;
+  description_ko: string;
+  description_en: string;
+  fields: TemplateField[];
+  sections_ko: string[];
+  sections_en: string[];
+  keywords: string[];
+}
+
+export interface DraftSummary {
+  id: string;
+  title: string;
+  template: TemplateRef;
+  updated_at: string;
+  issues: number;
+  saved_path: string | null;
+}
+
+export function isDraft(v: unknown): v is Draft {
+  return typeof v === "object" && v !== null && Array.isArray((v as Draft).fields) && Array.isArray((v as Draft).body) && Array.isArray((v as Draft).issues) && typeof (v as Draft).title === "string" && typeof (v as Draft).template === "object";
+}
+
+export function isDraftOutcome(v: unknown): v is DraftOutcome {
+  return typeof v === "object" && v !== null && isDraft((v as DraftOutcome).draft) && typeof (v as DraftOutcome).source === "string";
+}
+
+// ---------------------------------------------------------------------------
+// Projects (P6) — mirrors crates/doculens-core/src/projects/mod.rs
+// ---------------------------------------------------------------------------
+
+export type ProjectStatus = "intake" | "extracting" | "validating" | "supplement" | "done";
+export const PROJECT_STATUSES: ProjectStatus[] = ["intake", "extracting", "validating", "supplement", "done"];
+
+export interface Project {
+  id: string;
+  name: string;
+  template_id: string | null;
+  status: ProjectStatus;
+  intake_no: string | null;
+  owner: string | null;
+  due_date: string | null;
+  notes: string | null;
+  inbox_folder: string | null;
+  created_at: string;
+  updated_at: string;
+  document_count: number;
+  missing_count: number;
+  last_check_at: string | null;
+  last_pass: number;
+  last_mismatch: number;
+  last_undetermined: number;
+}
+
+/** Project create / update payload. On update an optional field that is omitted or `null` keeps its stored value and a blank string clears it. */
+export interface ProjectInput {
+  id?: string | null;
+  name: string;
+  template_id?: string | null;
+  status?: ProjectStatus | null;
+  intake_no?: string | null;
+  owner?: string | null;
+  due_date?: string | null;
+  notes?: string | null;
+  inbox_folder?: string | null;
+}
+
+export type RuleOp = "eq" | "neq" | "gte" | "lte" | "within_pct" | "present" | "matches";
+export const RULE_OPS: RuleOp[] = ["eq", "neq", "gte", "lte", "within_pct", "present", "matches"];
+
+export interface RuleOperand {
+  doc_type: string | null;
+  field: string | null;
+  value: string | null;
+}
+
+export interface Rule {
+  id: string;
+  description: string;
+  left: RuleOperand;
+  op: RuleOp;
+  right: RuleOperand | null;
+  tolerance: number | null;
+  required: boolean;
+  enabled: boolean;
+}
+
+export interface RuleDraft {
+  rule: Rule;
+  confidence: number;
+  /** `rules` | `model` */
+  source: string;
+  issues: string[];
+  unresolved: string[];
+}
+
+export interface ProjectTemplate {
+  id: string;
+  name_ko: string;
+  name_en: string;
+  description_ko: string;
+  description_en: string;
+  required_doc_types: string[];
+  rules: Rule[];
+  builtin: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TemplateInput {
+  id?: string | null;
+  name_ko: string;
+  name_en?: string | null;
+  description_ko?: string | null;
+  description_en?: string | null;
+  required_doc_types: string[];
+  rules: Rule[];
+}
+
+export type Verdict = "pass" | "mismatch" | "undetermined" | "missing";
+export const VERDICTS: Verdict[] = ["pass", "mismatch", "undetermined", "missing"];
+
+export interface Evidence {
+  doc_id: string | null;
+  doc_name: string | null;
+  doc_type: string | null;
+  field: string | null;
+  label: string | null;
+  value: string | null;
+  normalized: string | null;
+  page: number | null;
+  status: string | null;
+}
+
+export interface RuleResult {
+  id: string;
+  run_id: string;
+  rule_id: string;
+  description: string;
+  verdict: Verdict;
+  required: boolean;
+  left: Evidence | null;
+  right: Evidence | null;
+  message: string;
+  checked_at: string;
+}
+
+export interface CheckRun {
+  id: string;
+  project_id: string;
+  started_at: string;
+  finished_at: string;
+  pass: number;
+  mismatch: number;
+  undetermined: number;
+  missing: number;
+  results: RuleResult[];
+  missing_doc_types: string[];
+}
+
+export interface ChecklistItem {
+  doc_type: string;
+  label_ko: string;
+  label_en: string;
+  required: boolean;
+  doc_ids: string[];
+  missing: boolean;
+}
+
+export interface RelationNode {
+  doc_id: string;
+  label: string;
+  doc_type: string | null;
+}
+
+export interface RelationEdge {
+  from: string;
+  to: string;
+  /** brn | contract_no | amount | date | name | account */
+  kind: string;
+  value: string;
+  from_field: string | null;
+  to_field: string | null;
+}
+
+export interface RelationGraph {
+  nodes: RelationNode[];
+  edges: RelationEdge[];
+}
+
+export interface ProjectDocument {
+  document: DocumentRecord;
+  added_at: string;
+}
+
+export interface ProjectDetail {
+  project: Project;
+  template: ProjectTemplate | null;
+  documents: ProjectDocument[];
+  checklist: ChecklistItem[];
+  rules: Rule[];
+  last_run: CheckRun | null;
+  relations: RelationGraph;
+}
+
+export interface ProjectsChanged {
+  project_ids: string[];
+}
+
+export function isProject(v: unknown): v is Project {
+  return typeof v === "object" && v !== null && typeof (v as Project).id === "string" && typeof (v as Project).name === "string" && typeof (v as Project).status === "string" && typeof (v as Project).document_count === "number";
+}
+
+export function isProjectDetail(v: unknown): v is ProjectDetail {
+  return typeof v === "object" && v !== null && isProject((v as ProjectDetail).project) && Array.isArray((v as ProjectDetail).documents) && Array.isArray((v as ProjectDetail).checklist);
+}
+
+export function isRuleDraft(v: unknown): v is RuleDraft {
+  return typeof v === "object" && v !== null && typeof (v as RuleDraft).rule === "object" && (v as RuleDraft).rule !== null && typeof (v as RuleDraft).rule.op === "string" && Array.isArray((v as RuleDraft).issues);
+}
+
+export function isCheckRun(v: unknown): v is CheckRun {
+  return typeof v === "object" && v !== null && typeof (v as CheckRun).project_id === "string" && Array.isArray((v as CheckRun).results) && typeof (v as CheckRun).pass === "number";
+}
+
+// ---------------------------------------------------------------------------
+// Maintenance (P7 retention job) — `maintenance_status` / `maintenance_run_now`
+// ---------------------------------------------------------------------------
+
+export interface MaintenancePurged {
+  journal: number;
+  jobs: number;
+  answers: number;
+  cache_bytes: number;
+  trash: number;
+  logs: number;
+  temp: number;
+  documents: number;
+  extractions: number;
+}
+
+export interface MaintenanceSummary {
+  started_at: string;
+  elapsed_ms: number;
+  purged: MaintenancePurged;
+  /** Steps that were skipped: a policy set to "keep forever" (`journal`, `jobs`, …), `disabled`, or `<step>: <error>`. */
+  skipped: string[];
+  cancelled: boolean;
+}
+
+export interface MaintenanceStatus {
+  /** `RetentionPolicy.purge_enabled` of the open workspace. */
+  enabled: boolean;
+  purge_hour_local: number;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  running: boolean;
+  last_summary: MaintenanceSummary | null;
+}
+
+export function isMaintenanceSummary(v: unknown): v is MaintenanceSummary {
+  return typeof v === "object" && v !== null && typeof (v as MaintenanceSummary).started_at === "string" && typeof (v as MaintenanceSummary).purged === "object" && (v as MaintenanceSummary).purged !== null;
 }

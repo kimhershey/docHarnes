@@ -49,6 +49,11 @@ pub const PROFILES: &[&str] = &["accuracy", "balanced", "speed", "fine_print"];
 pub const GROUP_BY: &[&str] = &["month", "vendor", "doc_type", "none"];
 pub const EXPORT_FORMATS: &[&str] = &["xlsx", "csv", "jsonl", "md", "pdf_searchable"];
 pub const DOC_STATUSES: &[&str] = &["new", "rendered", "extracted", "reviewed", "archived"];
+pub const DRAFT_OUTPUTS: &[&str] = &["hwpx", "docx", "pdf", "md"];
+pub const TONES: &[&str] = &["formal", "plain", "concise"];
+pub const LENGTHS: &[&str] = &["short", "medium", "long"];
+pub const EXPLAIN_SCOPES: &[&str] = &["kb", "collection", "project", "document"];
+pub const RETENTION_ITEMS: &[&str] = &["documents", "extractions", "logs", "journal", "chats", "temp"];
 pub const SETTING_KEYS: &[&str] = &[
     "render_dpi",
     "pii_masking",
@@ -238,6 +243,107 @@ pub const OP_SPECS: &[OpSpec] = &[
         ],
         desc_ko: "내보내기(XLSX/CSV/JSONL/MD/검색가능 PDF)",
         desc_en: "export (XLSX / CSV / JSONL / MD / searchable PDF)",
+    },
+    OpSpec {
+        kind: OpKind::DraftDocument,
+        params: &[
+            p("form_ref", ParamType::Str, false, "등록 양식 이름/유형 또는 내장 템플릿(official_letter|quotation|transaction_statement|contract|report|minutes|supplement_request)", "registered form (name / type) or built-in template name"),
+            p("format_description", ParamType::Str, false, "형식을 자연어로 설명(양식이 없을 때)", "layout described in words (no form)"),
+            p("content", ParamType::Str, true, "문서에 담을 내용(자연어)", "what the document should say"),
+            p("sources", ParamType::StrList, false, "인용할 문서 id, 또는 selection(선택 문서)·aggregate(집계 결과)", "document ids to quote, or selection / aggregate"),
+            p("output", ParamType::Enum(DRAFT_OUTPUTS), false, "저장 형식(기본 hwpx)", "output format (default hwpx)"),
+            p("tone", ParamType::Enum(TONES), false, "어조", "tone"),
+            p("length", ParamType::Enum(LENGTHS), false, "분량", "length"),
+        ],
+        desc_ko: "양식·템플릿으로 문서 초안 생성(미리보기 후 저장)",
+        desc_en: "draft a document from a form / template (preview, then save)",
+    },
+    OpSpec {
+        kind: OpKind::RegisterForm,
+        params: &[
+            p("doc_ref", ParamType::Str, false, "양식 문서 id 또는 current(열린 문서)", "form document id or current"),
+            p("name", ParamType::Str, false, "양식 이름", "form name"),
+            p("doc_type_slug", ParamType::Str, false, "새 문서 유형 슬러그(선택)", "new document-type slug (optional)"),
+        ],
+        desc_ko: "열린/지정 문서를 양식으로 등록(필드 도출 → 확인)",
+        desc_en: "register the open / given document as a form (field grid confirmation)",
+    },
+    OpSpec {
+        kind: OpKind::Explain,
+        params: &[
+            p("selection", ParamType::Str, false, "설명할 문장·용어(선택 텍스트)", "text to explain (selection)"),
+            p("question", ParamType::Str, false, "질문 형태일 때", "question form"),
+            p("scope", ParamType::Enum(EXPLAIN_SCOPES), false, "근거 범위(기본 kb)", "evidence scope (default kb)"),
+            p("allow_general_knowledge", ParamType::Bool, false, "근거 없을 때 일반 지식 허용(기본 false)", "allow general knowledge when no evidence"),
+        ],
+        desc_ko: "지식 베이스 근거로 선택 문장·용어 설명",
+        desc_en: "explain a selection / term with knowledge-base evidence",
+    },
+    OpSpec {
+        kind: OpKind::Compare,
+        params: &[
+            p("doc_ids", ParamType::StrList, true, "비교할 문서 id 2~5개", "2–5 document ids"),
+            p("aspects", ParamType::StrList, false, "비교 관점(금액·기간·조항 …)", "aspects to compare"),
+        ],
+        desc_ko: "문서 2~5건 비교 요약",
+        desc_en: "compare 2–5 documents",
+    },
+    OpSpec {
+        kind: OpKind::CreateProject,
+        params: &[
+            p("name", ParamType::Str, true, "프로젝트 이름", "project name"),
+            p("template", ParamType::Str, false, "프로젝트 템플릿 이름/ID", "project template name / id"),
+            p("doc_types_required", ParamType::StrList, false, "필수 문서 유형 슬러그", "required document-type slugs"),
+        ],
+        desc_ko: "프로젝트(케이스) 만들기",
+        desc_en: "create a project (case)",
+    },
+    OpSpec {
+        kind: OpKind::AddToProject,
+        params: &[
+            p("project", ParamType::Str, false, "프로젝트 이름/ID(기본: 열린 프로젝트)", "project name / id (default: open project)"),
+            p("doc_ids", ParamType::StrList, false, "추가할 문서 id(기본: 범위의 문서)", "document ids (default: documents in scope)"),
+        ],
+        desc_ko: "문서를 프로젝트에 추가",
+        desc_en: "add documents to a project",
+    },
+    OpSpec {
+        kind: OpKind::DefineRule,
+        params: &[
+            p("project", ParamType::Str, false, "프로젝트 이름/ID", "project name / id"),
+            p("template", ParamType::Str, false, "또는 템플릿 이름/ID", "or template name / id"),
+            p("description", ParamType::Str, true, "규칙을 자연어로(예: 세금계산서 공급자 사업자번호 = 사업자등록증 번호)", "rule in words"),
+        ],
+        desc_ko: "정합성 규칙 정의(규칙 그리드 확인)",
+        desc_en: "define a consistency rule (grid confirmation)",
+    },
+    OpSpec {
+        kind: OpKind::CheckConsistency,
+        params: &[
+            p("project", ParamType::Str, false, "프로젝트 이름/ID(기본: 열린 프로젝트)", "project name / id (default: open project)"),
+            p("rules", ParamType::StrList, false, "규칙 id(비우면 전체)", "rule ids (empty = all)"),
+        ],
+        desc_ko: "프로젝트 문서 간 정합성 검사",
+        desc_en: "run the project's consistency rules",
+    },
+    OpSpec {
+        kind: OpKind::RequestSupplement,
+        params: &[
+            p("project", ParamType::Str, false, "프로젝트 이름/ID(기본: 열린 프로젝트)", "project name / id (default: open project)"),
+            p("findings", ParamType::StrList, false, "포함할 결과 id(비우면 불일치·누락 전체)", "finding ids (empty = every mismatch / missing)"),
+            p("output", ParamType::Enum(DRAFT_OUTPUTS), false, "저장 형식(기본 hwpx)", "output format"),
+        ],
+        desc_ko: "불일치·누락으로 보완요청서 초안 생성",
+        desc_en: "draft a supplement request from the findings",
+    },
+    OpSpec {
+        kind: OpKind::SetRetention,
+        params: &[
+            p("item", ParamType::Enum(RETENTION_ITEMS), true, "보존 항목", "retention item"),
+            p("days", ParamType::Int, true, "보존 일수(-1 = 무기한, 0 = 즉시 파기)", "days to keep (-1 = forever, 0 = immediately)"),
+        ],
+        desc_ko: "보존/파기 기간 설정",
+        desc_en: "set a retention period",
     },
     OpSpec {
         kind: OpKind::SetModel,

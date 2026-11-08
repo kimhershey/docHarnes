@@ -55,7 +55,10 @@ Elasticsearch, GPL TEDS implementations, axe-core (dev only).
   `LICENSE` + `licenses/` (18 notices) next to the library — ship them unchanged.
 - HWP 5.0 parsing uses `hwp` (Apache-2.0); keep its notice ("한글과컴퓨터의 한/글
   문서 파일(.hwp) 공개 문서를 참고") in `THIRD-PARTY-NOTICES.md`.
-- Generated notices: `THIRD-PARTY-NOTICES.md` (phase P7 automates the full list).
+- Generated notices: `npm run notices` (`scripts/gen-notices.mjs`) regenerates the inventory
+  section of `THIRD-PARTY-NOTICES.md`, `sbom.cdx.json` (CycloneDX 1.5) and, at build time, the
+  bundled license texts `licenses/THIRD-PARTY-LICENSES.txt`; the CI job `notices` fails when the
+  committed files are stale.
 
 ## UI code reuse
 

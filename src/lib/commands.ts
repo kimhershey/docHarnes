@@ -8,7 +8,7 @@ import type { NavigateFunction } from "react-router";
 
 import { describeError } from "./errors";
 import { api } from "./ipc";
-import { SCREEN_ROUTES, isJobFinished, type AutoProcessingLevel, type DocumentView, type Op, type PreRouteResult, type Screen, type UndoReport } from "./types";
+import { SCREEN_ROUTES, isJobFinished, type AutoProcessingLevel, type DocumentView, type Op, type PreRouteResult, type RetentionPolicy, type RetentionTarget, type Screen, type UndoReport } from "./types";
 import { errorCode, errorMessage } from "./utils";
 import { useDocumentsStore } from "@/stores/documents";
 import { useEngineStore } from "@/stores/engine";
@@ -326,6 +326,24 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
       await settings.update((d) => void (d.processing.inbox_watch = op.enabled));
       return done(t(op.enabled ? "planner.ui.inbox_watch_on" : "planner.ui.inbox_watch_off"));
     }
+    case "register_form": {
+      // §3.4.0 form registration: the schema screen's dialog derives the fields and confirms them in the grid.
+      const ref = (op.doc_ref ?? "").trim();
+      const doc = ref && ref !== "current" ? await resolveDocument(ref) : ui.lastDocument ? await resolveDocument(ui.lastDocument.id) : (useDocumentsStore.getState().selectedIds[0] ? await resolveDocument(useDocumentsStore.getState().selectedIds[0]!) : null);
+      if (!doc) throw new Error(t("planner.ui.document_not_found", { ref: ref || t("planner.params.current_document") }));
+      const params = new URLSearchParams({ register: doc.id });
+      if (op.name) params.set("name", op.name);
+      navigate(`${SCREEN_ROUTES.schemas}?${params.toString()}`);
+      return done(t("planner.ui.register_form", { name: doc.original_name }), "info");
+    }
+    case "set_retention": {
+      const ws = useWorkspaceStore.getState();
+      if (!ws.current) throw new Error("no_workspace");
+      const next = applyRetention(ws.current.manifest.retention, op.item, op.days);
+      await ws.setRetention(next);
+      const period = op.days < 0 ? t("common.forever") : op.days === 0 ? t("settings.privacy.immediate") : t("planner.params.days", { count: op.days });
+      return done(t("planner.ui.set_retention", { item: t(`planner.params.retention_${op.item}`), period }));
+    }
     case "noop":
       return { summary: t("planner.ui.noop") };
     case "clarify":
@@ -334,6 +352,44 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
       // Core ops never reach here (the executor runs them); nothing to do in the UI.
       return { summary: "" };
   }
+}
+
+/** `set_retention` → the retention policy fields of the item (`logs` covers job and app logs); days < 0 = forever. */
+export function applyRetention(policy: RetentionPolicy, item: RetentionTarget, days: number): RetentionPolicy {
+  const value = days < 0 ? null : Math.max(0, Math.round(days));
+  const next: RetentionPolicy = { ...policy };
+  switch (item) {
+    case "documents":
+      next.documents_days = value;
+      break;
+    case "extractions":
+      next.extractions_days = value;
+      break;
+    case "logs":
+      next.job_logs_days = value;
+      next.app_logs_days = value;
+      break;
+    case "journal":
+      next.journal_days = value;
+      break;
+    case "chats":
+      next.chats_days = value;
+      break;
+    case "temp":
+      next.temp_days = value;
+      break;
+  }
+  return next;
+}
+
+/** True when the new period is shorter than the current one (null = forever); shorter periods are confirmed first. */
+export function retentionShortens(policy: RetentionPolicy, item: RetentionTarget, days: number): boolean {
+  const keys: (keyof RetentionPolicy)[] = item === "documents" ? ["documents_days"] : item === "extractions" ? ["extractions_days"] : item === "logs" ? ["job_logs_days", "app_logs_days"] : item === "journal" ? ["journal_days"] : item === "chats" ? ["chats_days"] : ["temp_days"];
+  if (days < 0) return false;
+  return keys.some((k) => {
+    const cur = policy[k];
+    return cur === null || (typeof cur === "number" && days < cur);
+  });
 }
 
 const SETTING_LABELS: Record<string, string> = {
