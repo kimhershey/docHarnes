@@ -485,7 +485,7 @@ impl EngineGate {
                 if !ctl.is_paused() && g.waiting == 0 && g.interactive_running == 0 {
                     break;
                 }
-                g = self.cv.wait_timeout(g, Duration::from_millis(100)).unwrap_or_else(|e| e.into_inner()).0;
+                g = self.cv.wait_timeout(g, Duration::from_millis(50)).unwrap_or_else(|e| e.into_inner()).0;
             }
             g.batch_busy = true;
             g.busy_since = Some(Instant::now());
@@ -629,22 +629,25 @@ mod tests {
             "done"
         });
         // An interactive request gets served while the batch keeps going.
-        while pages_done.load(Ordering::SeqCst) < 2 {
-            thread::sleep(Duration::from_millis(2));
-        }
+        let wait_until = |pred: &dyn Fn() -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !pred() {
+                assert!(Instant::now() < deadline, "timed out waiting for the batch");
+                thread::sleep(Duration::from_millis(2));
+            }
+        };
+        wait_until(&|| pages_done.load(Ordering::SeqCst) >= 2);
         let served_at = gate.interactive(|| pages_done.load(Ordering::SeqCst));
         assert!((1..50).contains(&served_at), "served at page {served_at}");
         assert!(gate.status().waiting == 0);
-        // Pause stops the batch at the next boundary; resume continues it.
+        // Pause stops the batch at the next boundary (it parks inside `checkpoint`); resume continues it.
         ctl.pause();
-        thread::sleep(Duration::from_millis(40));
+        wait_until(&|| !gate.status().batch_busy);
         let at_pause = pages_done.load(Ordering::SeqCst);
-        thread::sleep(Duration::from_millis(40));
+        thread::sleep(Duration::from_millis(60));
         assert_eq!(pages_done.load(Ordering::SeqCst), at_pause, "no pages while paused");
-        assert!(!gate.status().batch_busy);
         ctl.resume();
-        thread::sleep(Duration::from_millis(40));
-        assert!(pages_done.load(Ordering::SeqCst) > at_pause);
+        wait_until(&|| pages_done.load(Ordering::SeqCst) > at_pause);
         // Cancel while paused ends the job.
         ctl.pause();
         thread::sleep(Duration::from_millis(20));
