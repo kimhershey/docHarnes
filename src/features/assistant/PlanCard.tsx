@@ -10,13 +10,16 @@ import { Switch } from "@/components/ui/switch";
 import { api } from "@/lib/ipc";
 import { DEFAULT_NAME_TEMPLATE, FOLDER_TEMPLATES, type Op, type OrganizeItem, type OrganizePlan, type Plan, type PlanIssue, type PlanResponse, type StepPreview } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import type { PlanStatus } from "@/stores/assistant";
 import { useSettingsStore, useShortcut } from "@/stores/settings";
+
+import { describeOrganizeError } from "@/features/organize/errors";
 
 import { exportPreview, impactLine, impactOf, onlyReviewedValue, opLabel, organizePreview, requiresConfirmation, sourceLabel, summarizeOp, warningIssues, withOnlyReviewed } from "./describePlan";
 import { FILE_OPS } from "./opSpecs";
 import { PlanEditor } from "./PlanEditor";
 
-export type PlanStatus = "pending" | "executing" | "done" | "cancelled";
+export type { PlanStatus };
 
 const PREVIEW_ROWS = 3;
 
@@ -37,6 +40,14 @@ export function OrganizeDiff({ items, index }: { items: OrganizeItem[]; index: n
         )}
       </div>
       <table className="w-full">
+        <caption className="sr-only">{t("planner.card.preview_caption")}</caption>
+        <thead className="sr-only">
+          <tr>
+            <th scope="col">{t("planner.card.columns.from")}</th>
+            <th scope="col" aria-hidden="true" />
+            <th scope="col">{t("planner.card.columns.to")}</th>
+          </tr>
+        </thead>
         <tbody>
           {shown.map((item) => (
             <tr key={`${item.doc_id}-${item.from}`} className="align-top" data-testid="plan-preview-row" data-item-status={item.status}>
@@ -127,6 +138,7 @@ export function PlanCard({
   const closeChord = useShortcut("close") || "Escape";
   const reviewedDefault = useSettingsStore((s) => s.settings?.processing.organize_reviewed_only ?? true);
   const [overrides, setOverrides] = useState<Record<number, OrganizePlan>>({});
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const { result, preview, context } = response;
   const confirm = requiresConfirmation(response);
   const onlyReviewed = onlyReviewedValue(plan, reviewedDefault);
@@ -134,10 +146,14 @@ export function PlanCard({
   const impact = impactOf(plan, preview);
   const pending = status === "pending";
 
-  /** Re-previews the file operations with the toggled `only_reviewed` (best effort; the executor re-plans anyway). */
+  /**
+   * Re-previews the file operations with the toggled `only_reviewed` (the executor re-plans anyway);
+   * a failed re-preview (`template_variable`, `path_outside` …) is shown next to the switch.
+   */
   const toggleOnlyReviewed = (value: boolean) => {
     const next = withOnlyReviewed(plan, value);
     onChange(next);
+    setPreviewError(null);
     next.operations.forEach((op, index) => {
       if (!FILE_OPS.has(op.op)) return;
       const o = op as Extract<Op, { op: "organize" | "rename" | "move" }>;
@@ -151,7 +167,7 @@ export function PlanCard({
       void api
         .organizePlan(req)
         .then((p) => setOverrides((prev) => ({ ...prev, [index]: p })))
-        .catch(() => undefined);
+        .catch((e: unknown) => setPreviewError(describeOrganizeError(e, t)));
     });
   };
 
@@ -200,7 +216,7 @@ export function PlanCard({
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="tabular-nums text-fg-subtle">{i + 1}</span>
                   <span className="font-medium">{opLabel(op.op, t)}</span>
-                  {step?.confirm && <AlertTriangle className="size-3.5 text-warn" aria-label={t("planner.card.needs_confirmation")} />}
+                  {step?.confirm && <AlertTriangle className="size-3.5 text-warn" role="img" aria-label={t("planner.card.needs_confirmation")} />}
                   {params && <span className="truncate text-fg-muted selectable">{params}</span>}
                 </div>
                 <StepPreviewView step={step} override={overrides[i]} index={i} />
@@ -213,10 +229,17 @@ export function PlanCard({
         {impactLine(impact, t)}
       </p>
       {onlyReviewed !== null && (
-        <label className="flex items-center gap-2 text-xs">
-          <Switch checked={onlyReviewed} disabled={!pending} onCheckedChange={toggleOnlyReviewed} aria-label={t("planner.card.only_reviewed")} data-testid="plan-only-reviewed" />
-          {t("planner.card.only_reviewed")}
-        </label>
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <label className="flex items-center gap-2">
+            <Switch checked={onlyReviewed} disabled={!pending} onCheckedChange={toggleOnlyReviewed} aria-label={t("planner.card.only_reviewed")} data-testid="plan-only-reviewed" />
+            {t("planner.card.only_reviewed")}
+          </label>
+          {previewError && (
+            <span className="text-danger" role="alert" data-testid="plan-only-reviewed-error">
+              {t("planner.card.preview_error", { message: previewError })}
+            </span>
+          )}
+        </div>
       )}
       {warnings.length > 0 && (
         <ul className="flex flex-col gap-0.5 text-xs text-fg-muted" aria-label={t("planner.card.warnings")} data-testid="plan-warnings">

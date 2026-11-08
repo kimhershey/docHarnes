@@ -132,6 +132,18 @@ export function OrganizeTab({ selectedIds, selectionRequest }: { selectedIds: st
   };
 
   const request = (): OrganizeRequest => ({ scope: toScope(scope, selectedIds), name_template: effectiveName, folder_template: effectiveFolder, only_reviewed: onlyReviewed, language });
+  // The dry-run is replayed as-is by the executor, so a plan only stays valid for the inputs it was built
+  // from: any change (templates, keep switches, scope, only_reviewed) discards it and its outcome.
+  const reqKey = JSON.stringify(request());
+  const planKey = useRef<string | null>(null);
+  const running = !!job && !isJobFinished(job);
+  const stale = !!plan && planKey.current !== reqKey;
+  useEffect(() => {
+    if (!stale || running) return;
+    setPlan(null);
+    setOutcome(null);
+    planKey.current = null;
+  }, [stale, running]);
 
   const preview = async () => {
     setBusy(true);
@@ -139,8 +151,11 @@ export function OrganizeTab({ selectedIds, selectionRequest }: { selectedIds: st
     setTemplateError(null);
     setOutcome(null);
     setJobId(null);
+    const req = request();
+    const key = JSON.stringify(req);
     try {
-      const p = await api.organizePlan(request());
+      const p = await api.organizePlan(req);
+      planKey.current = key;
       setPlan(p);
       setShowAll(false);
     } catch (e) {
@@ -217,8 +232,7 @@ export function OrganizeTab({ selectedIds, selectionRequest }: { selectedIds: st
 
   const rows = outcome && outcome.items.length > 0 ? outcome.items : (plan?.items ?? []);
   const visibleRows = showAll ? rows : rows.slice(0, ROW_LIMIT);
-  const running = !!job && !isJobFinished(job);
-  const canRun = !!plan && plan.moves > 0 && !running && !busy && (!outcome || batchUndone);
+  const canRun = !!plan && !stale && plan.moves > 0 && !running && !busy && (!outcome || batchUndone);
   const reasonText = (reason: string | null | undefined) => (reason ? (i18n.exists(`organize.reason.${reason}`) ? t(`organize.reason.${reason}`) : reason) : null);
 
   return (

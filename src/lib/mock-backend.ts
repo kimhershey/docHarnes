@@ -234,7 +234,7 @@ export function isCancelled(jobId: string): boolean {
   return cancelled.has(jobId);
 }
 
-export function err(code: string, message: string, detail?: Record<string, unknown>): UiError {
+export function err(code: string, message: string, detail?: unknown): UiError {
   return { code, message, detail };
 }
 
@@ -686,6 +686,25 @@ const specs = new Map<string, JobSpec>();
 const controls = new Map<string, JobControl>();
 let gateWaiting = 0;
 
+/**
+ * `jobs://update` carries the job list without `result` (Rust review M8: the structured outcome is
+ * large and the event fires on every progress tick); `jobs_list` / `jobs_get` return it.
+ */
+function broadcastJobs(): void {
+  emit(
+    EVENTS.jobsUpdate,
+    jobs.map((j) => {
+      const { result: _result, ...rest } = j;
+      return rest;
+    }),
+  );
+}
+
+/** `jobs_list` / `jobs_get` shape: `result` present (null when the job has none), like serde's `Option<Value>`. */
+export function withResult(job: Job): Job {
+  return { ...job, result: job.result ?? null };
+}
+
 function pushJob(job: Job): void {
   const list = jobs.filter((j) => j.id !== job.id);
   list.push(job);
@@ -722,7 +741,7 @@ export function createJob(kind: JobKind, subject: string): Job {
     label: null,
   };
   pushJob(job);
-  emit(EVENTS.jobsUpdate, jobs);
+  broadcastJobs();
   return job;
 }
 
@@ -752,7 +771,7 @@ export function updateJob(id: string, patch: Partial<Job>): void {
     return { ...j, ...patch, state, updated_at: new Date().toISOString() };
   });
   if (persistent) persistJobs();
-  emit(EVENTS.jobsUpdate, jobs);
+  broadcastJobs();
 }
 
 export function finishJob(id: string, result: { ok: true; detail?: string } | { ok: false; error: string }): void {
@@ -836,7 +855,7 @@ export function submitJob(spec: JobSpec, subject: string, priority: JobPriority 
   specs.set(job.id, spec);
   pushJob(job);
   persistJobs();
-  emit(EVENTS.jobsUpdate, jobs);
+  broadcastJobs();
   schedule();
   return job.id;
 }
@@ -973,7 +992,7 @@ export function prioritizeJob(id: string): boolean {
   const at = rest.findIndex((x) => x.persistent && x.state === "queued");
   jobs = at < 0 ? [...rest, me] : [...rest.slice(0, at), me, ...rest.slice(at)];
   persistJobs();
-  emit(EVENTS.jobsUpdate, jobs);
+  broadcastJobs();
   schedule();
   return true;
 }
@@ -996,7 +1015,7 @@ export function cancelJob(id: string): boolean {
 export function clearFinishedJobs(): void {
   jobs = jobs.filter((j) => !isFinishedState(j.state));
   persistJobs();
-  emit(EVENTS.jobsUpdate, jobs);
+  broadcastJobs();
 }
 
 export function persistentQueued(): number {
@@ -1022,7 +1041,7 @@ function restoreJobs(): void {
     pushJob(job);
   }
   persistJobs();
-  emit(EVENTS.jobsUpdate, jobs);
+  broadcastJobs();
   schedule();
 }
 
@@ -1042,7 +1061,7 @@ function detachJobs(): void {
   }
   jobs = jobs.filter((j) => !j.persistent);
   specs.clear();
-  emit(EVENTS.jobsUpdate, jobs);
+  broadcastJobs();
 }
 
 /** Engine gate (§3.9): a batch is "inside a page" while an engine-lane job runs. */
@@ -2324,7 +2343,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "presets_preview":
       return r(presetsText());
     case "jobs_list":
-      return r(jobs);
+      return r(jobs.map(withResult));
     case "jobs_cancel":
       return r(cancelJob(String(a.jobId)));
     case "jobs_clear_finished":

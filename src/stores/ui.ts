@@ -2,11 +2,18 @@ import { create } from "zustand";
 
 export type ToastKind = "info" | "ok" | "warn" | "danger";
 
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface Toast {
   id: number;
   kind: ToastKind;
   message: string;
   createdAt: number;
+  /** Optional button rendered after the message (e.g. "폴더 열기"); dismisses the toast when used. */
+  action?: ToastAction;
 }
 
 interface UiState {
@@ -16,7 +23,7 @@ interface UiState {
   closePalette: () => void;
   togglePalette: () => void;
   toasts: Toast[];
-  toast: (message: string, kind?: ToastKind) => void;
+  toast: (message: string, kind?: ToastKind, action?: ToastAction) => void;
   dismissToast: (id: number) => void;
   /** Text handed to the assistant from the command bar / palette. */
   pendingAssistantInput: string | null;
@@ -42,10 +49,11 @@ export const useUiStore = create<UiState>((set, get) => ({
   closePalette: () => set({ paletteOpen: false, paletteQuery: "" }),
   togglePalette: () => (get().paletteOpen ? get().closePalette() : get().openPalette()),
   toasts: [],
-  toast: (message, kind = "info") => {
+  toast: (message, kind = "info", action) => {
     const id = toastSeq++;
-    set((s) => ({ toasts: [...s.toasts.slice(-4), { id, kind, message, createdAt: Date.now() }] }));
-    window.setTimeout(() => get().dismissToast(id), kind === "danger" ? 8000 : 4000);
+    set((s) => ({ toasts: [...s.toasts.slice(-4), { id, kind, message, createdAt: Date.now(), action }] }));
+    // A toast with an action stays a little longer so the button can be reached.
+    window.setTimeout(() => get().dismissToast(id), kind === "danger" || action ? 8000 : 4000);
   },
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   pendingAssistantInput: null,
@@ -59,6 +67,6 @@ export const useUiStore = create<UiState>((set, get) => ({
   setLastDocument: (doc) => set({ lastDocument: doc }),
 }));
 
-export function toast(message: string, kind: ToastKind = "info"): void {
-  useUiStore.getState().toast(message, kind);
+export function toast(message: string, kind: ToastKind = "info", action?: ToastAction): void {
+  useUiStore.getState().toast(message, kind, action);
 }

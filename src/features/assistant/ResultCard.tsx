@@ -35,6 +35,15 @@ function MovesTable({ items }: { items: OrganizeItem[] }) {
   const { t } = useTranslation();
   return (
     <table className="w-full text-xs" data-testid="result-moves">
+      <caption className="sr-only">{t("planner.result.moves_caption")}</caption>
+      <thead className="sr-only">
+        <tr>
+          <th scope="col">{t("planner.card.columns.from")}</th>
+          <th scope="col" aria-hidden="true" />
+          <th scope="col">{t("planner.card.columns.to")}</th>
+          <th scope="col">{t("planner.card.columns.status")}</th>
+        </tr>
+      </thead>
       <tbody>
         {items.map((item, i) => (
           <tr key={`${item.doc_id}-${i}`} className="border-t border-border align-top" data-item-status={item.status}>
@@ -90,7 +99,7 @@ export function ResultCard({ execution, plan, response, error }: { execution: Pl
   };
 
   return (
-    <div className="flex w-full flex-col gap-2 rounded-lg border border-border bg-bg-elevated p-3 text-sm" role="group" aria-label={t("planner.result.title")} data-testid="assistant-card-result" data-result-status={outcome}>
+    <div className="flex w-full flex-col gap-2 rounded-lg border border-border bg-bg-elevated p-3 text-sm" role="group" aria-label={t("planner.result.title")} aria-live="polite" data-testid="assistant-card-result" data-result-status={outcome}>
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant={outcome === "done" ? "ok" : outcome === "failed" ? "danger" : "muted"}>{t(`planner.result.${outcome}`)}</Badge>
         <span className="text-xs text-fg-subtle">{t("planner.result.title")}</span>
@@ -137,7 +146,7 @@ export function ResultCard({ execution, plan, response, error }: { execution: Pl
           {undoBatch && (
             <Button size="sm" variant="outline" disabled={undoing || undone !== null} onClick={() => void undo()} data-testid="result-undo">
               <Undo2 />
-              {undone ? t("planner.result.undone", { restored: undone.restored, skipped: undone.skipped.length }) : t("planner.result.undo")}
+              {undone ? t("planner.result.undone", { restored: undone.restored, skipped: undone.skipped.length }) : actions.batches.length > 1 ? t("planner.result.undo_last_batch") : t("planner.result.undo")}
             </Button>
           )}
           {actions.exports.map((e) => (

@@ -1,6 +1,7 @@
 import type { TFunction } from "i18next";
 
-import type { Job, JobPriority } from "@/lib/types";
+import { OP_KINDS } from "@/features/assistant/opSpecs";
+import type { Job, JobPriority, OpKind } from "@/lib/types";
 
 /**
  * The shell reports job subjects / details as compact English strings
@@ -86,4 +87,44 @@ export function describeJobDetail(job: Job, t: TFunction): string | null {
   }
   if (d === "done") return t("jobs.state.done");
   return d;
+}
+
+/** Stable error codes the shell / workers put into `Job.error`, with their `jobs.error.*` keys. */
+const ERROR_CODES: Record<string, string> = {
+  engine_not_running: "jobs.error.engine_not_running",
+  model_not_loaded: "jobs.error.model_not_loaded",
+  "workspace closed": "jobs.error.workspace_closed",
+  workspace_closed: "jobs.error.workspace_closed",
+  interrupted: "jobs.error.interrupted",
+  cancelled: "jobs.error.cancelled",
+  no_model: "jobs.error.no_model",
+  export_exists: "jobs.error.export_exists",
+  path_outside: "jobs.error.path_outside",
+  no_documents: "jobs.error.no_documents",
+};
+
+function describeErrorText(raw: string, t: TFunction): string {
+  const text = raw.trim();
+  if (!text) return text;
+  const key = ERROR_CODES[text];
+  if (key) return t(key);
+  let m = text.match(/^schema_not_found(?::\s*(.*))?$/);
+  if (m) return t("jobs.error.schema_not_found", { name: m[1]?.trim() || "?" });
+  // Plan workers report "<op>: <reason>" (`planner_bridge.rs`): translate the op and recurse on the reason.
+  m = text.match(/^([a-z_]+):\s*(.*)$/s);
+  if (m && (OP_KINDS as readonly string[]).includes(m[1]!)) return t("jobs.error.step", { op: t(`planner.ops.${m[1] as OpKind}`), message: describeErrorText(m[2]!, t) || t("jobs.state.failed") });
+  // A known code somewhere inside a longer message ("export: export_exists", "…: engine_not_running").
+  for (const [code, k] of Object.entries(ERROR_CODES)) if (code.length > 6 && text.includes(code)) return t(k);
+  return text;
+}
+
+/**
+ * Localised `Job.error` (review L1): the stable codes of the shell / workers
+ * (`engine_not_running`, `workspace closed`, `schema_not_found: …`,
+ * `export_exists` …) through `jobs.error.*`; anything else verbatim. Null
+ * when the job has no error.
+ */
+export function describeJobError(job: Pick<Job, "error">, t: TFunction): string | null {
+  if (!job.error) return null;
+  return describeErrorText(job.error, t);
 }

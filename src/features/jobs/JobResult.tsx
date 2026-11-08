@@ -6,6 +6,11 @@ import { isPlanExecution, isRecord, opLabel } from "@/features/assistant/describ
 import { revealPath } from "@/lib/ipc";
 import type { Job } from "@/lib/types";
 
+/** `pipeline::run::ProcessReport` (pipeline jobs, extract / classify / ocr steps). */
+function isProcessReport(v: unknown): v is { processed: unknown[]; failed: unknown[]; classified: number; ocr_pages: number; extracted: number; review_pending?: number } {
+  return isRecord(v) && Array.isArray(v.processed) && Array.isArray(v.failed) && typeof v.classified === "number" && typeof v.ocr_pages === "number" && typeof v.extracted === "number";
+}
+
 /**
  * Structured outcome of a finished persistent job (`Job.result`): plan steps,
  * export path with "폴더 열기", organise / undo counts; other shapes list
@@ -46,6 +51,13 @@ export function JobResult({ job }: { job: Job }) {
     return (
       <span className="text-xs text-fg-muted" data-testid="job-result-organize">
         {t("jobs.detail.organize_summary", { moved: result.moved, failed: Array.isArray(result.failed) ? result.failed.length : 0, skipped: typeof result.skipped === "number" ? result.skipped : 0 })}
+      </span>
+    );
+  }
+  if (isProcessReport(result)) {
+    return (
+      <span className="text-xs text-fg-muted" data-testid="job-result-process">
+        {t("jobs.detail.process_summary", { processed: result.processed.length, classified: result.classified, ocr: result.ocr_pages, extracted: result.extracted, review: typeof result.review_pending === "number" ? result.review_pending : 0, failed: result.failed.length })}
       </span>
     );
   }

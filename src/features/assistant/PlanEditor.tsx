@@ -7,7 +7,10 @@ import { Switch } from "@/components/ui/switch";
 import type { Op, Plan, PlanContext, Scope } from "@/lib/types";
 
 import { docTypeName, opLabel, replaceOp, withScope } from "./describePlan";
+import { coerceInteger, coerceIntList, coerceNumber } from "./numeric";
 import { OP_SPECS, paramDesc, type ParamSpec } from "./opSpecs";
+
+export { coerceInteger, coerceIntList, coerceNumber };
 
 const ANY = "__any__";
 
@@ -38,6 +41,8 @@ function enumLabel(param: ParamSpec, value: string, t: (k: string, o?: Record<st
       return t(`planner.fn.${value}`);
     case "mode":
       return ["hybrid", "keyword", "semantic"].includes(value) ? t(`search.mode.${value}`) : value;
+    case "include":
+      return ["evidence", "confidence", "status"].includes(value) ? t(`export.columns.${value}`) : value;
     default:
       return value;
   }
@@ -87,7 +92,7 @@ function ParamField({ index, param, value, onChange }: { index: number; param: P
     case "enum_list": {
       const selected = Array.isArray(value) ? (value as string[]) : [];
       control = (
-        <div className="flex flex-wrap gap-3" role="group" aria-label={label} data-testid={testId}>
+        <div className="flex flex-wrap gap-3" role="group" aria-labelledby={`${id}-label`} data-testid={testId}>
           {type.values.map((v) => (
             <label key={v} className="flex items-center gap-1 text-xs">
               <input
@@ -98,7 +103,7 @@ function ParamField({ index, param, value, onChange }: { index: number; param: P
                   onChange(next.length > 0 ? next : undefined);
                 }}
               />
-              {v}
+              {enumLabel(param, v, t)}
             </label>
           ))}
         </div>
@@ -107,14 +112,19 @@ function ParamField({ index, param, value, onChange }: { index: number; param: P
     }
     case "integer":
     case "number":
+      // Rust `u32` fields (top_k, pages): fractions are truncated, NaN / negatives rejected (review M4).
       control = (
         <Input
           id={id}
           type="number"
           step={type.kind === "integer" ? 1 : "any"}
+          min={type.kind === "integer" ? 0 : undefined}
           className="h-8"
           value={typeof value === "number" ? String(value) : ""}
-          onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))}
+          onChange={(e) => {
+            const v = type.kind === "integer" ? coerceInteger(e.target.value) : coerceNumber(e.target.value);
+            if (v !== null) onChange(v);
+          }}
           aria-label={label}
           data-testid={testId}
         />
@@ -132,9 +142,9 @@ function ParamField({ index, param, value, onChange }: { index: number; param: P
           value={Array.isArray(value) ? value.join(", ") : ""}
           placeholder={t("planner.editor.list_hint")}
           onChange={(e) => {
+            if (type.kind === "int_list") return onChange(coerceIntList(e.target.value));
             const items = parseList(e.target.value);
-            if (items.length === 0) return onChange(undefined);
-            onChange(type.kind === "int_list" ? items.map(Number).filter((n) => Number.isFinite(n)) : items);
+            onChange(items.length > 0 ? items : undefined);
           }}
           aria-label={label}
           data-testid={testId}
@@ -149,12 +159,14 @@ function ParamField({ index, param, value, onChange }: { index: number; param: P
       control = <Input id={id} className="h-8" value={typeof value === "string" ? value : ""} onChange={(e) => onChange(e.target.value === "" ? (param.required ? "" : undefined) : e.target.value)} aria-label={label} data-testid={testId} />;
       break;
   }
+  // An enum list is a group of checkboxes, not a single control: label it by id instead of `htmlFor`.
+  const LabelTag = type.kind === "enum_list" ? "span" : "label";
   return (
     <div className="grid grid-cols-[minmax(8rem,14rem)_1fr] items-center gap-2 text-xs">
-      <label htmlFor={id} className="text-fg-muted">
+      <LabelTag id={`${id}-label`} htmlFor={type.kind === "enum_list" ? undefined : id} className="text-fg-muted">
         {label}
         {param.required && <span className="text-danger"> *</span>}
-      </label>
+      </LabelTag>
       {control}
     </div>
   );

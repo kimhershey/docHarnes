@@ -283,7 +283,9 @@
       "knowledge": "지식 베이스",
       "collection": "컬렉션: {{name}}",
       "folder_named": "현재 폴더 {{folder}}",
-      "selection_count": "선택 문서 {{count}}건"
+      "selection_count": "선택 문서 {{count}}건",
+      "document": "현재 문서",
+      "document_named": "현재 문서: {{name}}"
     },
     "placeholder": "자연어로 명령하거나 질문하세요 (한국어 / English) · /로 슬래시 명령",
     "send": "보내기",
@@ -472,7 +474,14 @@
       "executing": "실행 준비 중…",
       "executed": "실행됨",
       "cancelled": "취소됨",
-      "invalid": "플랜을 실행할 수 없습니다. 수정 후 다시 시도하세요."
+      "invalid": "플랜을 실행할 수 없습니다. 수정 후 다시 시도하세요.",
+      "preview_error": "미리보기 갱신 실패: {{message}}",
+      "preview_caption": "정리 미리보기 (원본 → 대상)",
+      "columns": {
+        "from": "원본",
+        "to": "대상",
+        "status": "상태"
+      }
     },
     "execution": {
       "title": "실행 중 · 작업 #{{id}}",
@@ -484,7 +493,8 @@
       "cancel": "취소",
       "open_jobs": "Jobs 열기",
       "gate_notice": "대화형 요청은 다음 페이지 경계에서 처리됩니다(≈{{seconds}}초)",
-      "job_missing": "작업 정보를 찾을 수 없습니다."
+      "job_missing": "작업 정보를 찾을 수 없습니다.",
+      "job_removed": "작업 목록에서 제거됨"
     },
     "result": {
       "title": "결과",
@@ -513,7 +523,9 @@
         "missing": "파일 없음",
         "done": "완료",
         "failed": "실패"
-      }
+      },
+      "undo_last_batch": "↶ 마지막 배치 되돌리기",
+      "moves_caption": "파일 이동 내역 (원본 → 대상)"
     },
     "aggregate": {
       "title": "집계 결과 — {{summary}}",
@@ -1044,7 +1056,8 @@
       "no_fields": "선택한 필드가 없습니다.",
       "no_split_boundary": "문서 안의 분할 지점(2쪽 이상)을 선택하세요.",
       "merge_two": "병합하려면 문서를 2개 이상 선택하세요.",
-      "table_not_found": "표를 찾을 수 없습니다."
+      "table_not_found": "표를 찾을 수 없습니다.",
+      "plan_clarify": "플랜이 명확화 질문입니다 — 먼저 답해 주세요"
     }
   },
   "startup": {
@@ -1139,7 +1152,21 @@
       "normal": "보통",
       "high": "높음",
       "interactive": "대화형"
-    }
+    },
+    "error": {
+      "engine_not_running": "엔진이 실행 중이 아닙니다.",
+      "model_not_loaded": "모델이 로드되지 않았습니다.",
+      "workspace_closed": "워크스페이스가 닫혀 중단되었습니다.",
+      "interrupted": "앱 종료로 중단되었습니다 (재시도 가능).",
+      "cancelled": "취소되었습니다.",
+      "no_model": "로드된 비전 모델이 없습니다. 모델 화면에서 모델을 로드하세요.",
+      "schema_not_found": "스키마를 찾을 수 없습니다: {{name}}",
+      "export_exists": "같은 이름의 파일이 이미 있습니다 (덮어쓰기 필요).",
+      "path_outside": "저장 경로가 워크스페이스 밖입니다.",
+      "no_documents": "대상 문서가 없습니다.",
+      "step": "{{op}}: {{message}}"
+    },
+    "result_loading": "결과 불러오는 중…"
   },
   "library": {
     "title": "문서 라이브러리",
@@ -2114,7 +2141,8 @@
       "evidence": "근거",
       "confidence": "신뢰도",
       "status": "상태",
-      "selected": "{{selected}} / {{total}}개 선택"
+      "selected": "{{selected}} / {{total}}개 선택",
+      "none_selected": "내보낼 열을 하나 이상 선택하세요."
     },
     "layout": {
       "title": "레이아웃",
@@ -2148,7 +2176,9 @@
       "path_outside": "저장 경로는 워크스페이스 안이어야 합니다(.doculens 폴더 제외).",
       "no_documents": "내보낼 문서가 없습니다."
     },
-    "table_xlsx": "XLSX 저장(문서의 모든 표)"
+    "table_xlsx": "XLSX 저장(문서의 모든 표)",
+    "table_xlsx_exists": "같은 이름의 파일이 이미 있습니다. 내보내기 탭에서 경로를 바꾸거나 덮어쓰기를 선택하세요.",
+    "table_xlsx_done": "표 XLSX 저장 완료: {{path}}"
   },
   "aggregate": {
     "title": "집계",

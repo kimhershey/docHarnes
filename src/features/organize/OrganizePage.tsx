@@ -5,20 +5,22 @@ import { useSearchParams } from "react-router";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { subscribe } from "@/lib/ipc";
 import { invalidateJournal } from "@/lib/queries";
-import { EVENTS, type PipelineChanged } from "@/lib/types";
+import { EVENTS, type ExportTarget, type PipelineChanged } from "@/lib/types";
 import { useDocumentsStore } from "@/stores/documents";
 
-import { ExportTab } from "./ExportTab";
+import { ExportTab, type ExportPreset } from "./ExportTab";
 import { HistoryTab } from "./HistoryTab";
 import { OrganizeTab } from "./OrganizeTab";
 
 type TabId = "organize" | "export" | "history";
 const TABS: TabId[] = ["organize", "export", "history"];
+const EXPORT_TARGETS: ExportTarget[] = ["fields", "table", "text"];
 
 /**
  * 정리 / 내보내기 (design §3.7): organise (templates + dry-run diff + journaled apply), the export
  * wizard and the batch history. `/organize?tab=export&selection=1` from the library bulk bar picks
- * the tab and scopes the request to the library selection (`useDocumentsStore.selectedIds`).
+ * the tab and scopes the request to the library selection (`useDocumentsStore.selectedIds`);
+ * `&target=table` (viewer "표 → XLSX") presets the export target.
  */
 export function OrganizePage() {
   const { t } = useTranslation();
@@ -27,16 +29,20 @@ export function OrganizePage() {
   const [tab, setTab] = useState<TabId>("organize");
   /** Bumped by `?selection=1` so the tabs switch their scope to the library selection. */
   const [selectionRequest, setSelectionRequest] = useState(0);
+  const [exportPreset, setExportPreset] = useState<ExportPreset | null>(null);
 
   useEffect(() => {
     const tabParam = searchParams.get("tab");
     const selection = searchParams.get("selection");
-    if (tabParam === null && selection === null) return;
+    const target = searchParams.get("target");
+    if (tabParam === null && selection === null && target === null) return;
     if (tabParam && (TABS as string[]).includes(tabParam)) setTab(tabParam as TabId);
     if (selection === "1") setSelectionRequest((n) => n + 1);
+    if (target && (EXPORT_TARGETS as string[]).includes(target)) setExportPreset((p) => ({ target: target as ExportTarget, nonce: (p?.nonce ?? 0) + 1 }));
     const next = new URLSearchParams(searchParams);
     next.delete("tab");
     next.delete("selection");
+    next.delete("target");
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
 
@@ -72,7 +78,7 @@ export function OrganizePage() {
           <OrganizeTab selectedIds={selectedIds} selectionRequest={selectionRequest} />
         </TabsContent>
         <TabsContent value="export" forceMount className="data-[state=inactive]:hidden">
-          <ExportTab selectedIds={selectedIds} selectionRequest={selectionRequest} />
+          <ExportTab selectedIds={selectedIds} selectionRequest={selectionRequest} active={tab === "export"} preset={exportPreset} />
         </TabsContent>
         <TabsContent value="history" forceMount className="data-[state=inactive]:hidden">
           <HistoryTab />

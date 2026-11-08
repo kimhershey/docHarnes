@@ -21,12 +21,14 @@ async function send(page: Page, text: string) {
   await page.getByTestId("assistant-send").click();
 }
 
-/** Runs 표준 처리 on the (already imported) receipt from the library bulk bar. */
+/** Runs 표준 처리 on the (already imported) receipt from the library bulk bar; the selection is cleared again. */
 async function processReceipt(page: Page) {
-  await page.getByTestId(`doc-select-${await docId(page, "영수증-1p.jpg")}`).check();
+  const select = page.getByTestId(`doc-select-${await docId(page, "영수증-1p.jpg")}`);
+  await select.check();
   await page.getByTestId("library-process").click();
   await page.getByTestId("library-process-standard").click();
   await expect(card(page, "영수증-1p.jpg")).toHaveAttribute("data-doc-status", "extracted", { timeout: 15_000 });
+  await select.uncheck();
 }
 
 /** Approves every flagged field of the receipt in the review queue so the file operations may move it. */
@@ -53,17 +55,33 @@ test.describe("P5 planner", () => {
     await importViaLibrary(page, ["D:\\scan\\영수증-1p.jpg", "D:\\scan\\세금계산서-2p.pdf"], { autoLevel: "none" });
     await processReceipt(page);
 
+    // The viewer's document stays the assistant's "현재 문서" after leaving the viewer (review H1).
+    await card(page, "영수증-1p.jpg").locator('[data-testid^="doc-open-"]').click();
+    await expect(page.getByTestId("page-viewer")).toBeVisible();
     await openAssistant(page);
+    await expect(page.getByTestId("assistant-current-document")).toContainText(tpl(ko.assistant.scope.document_named, { name: "영수증-1p.jpg" }));
+    await page.getByTestId("assistant-scope").click();
+    await expect(page.getByTestId("assistant-scope-document")).toContainText("영수증-1p.jpg");
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("assistant-scope-document")).toBeHidden();
+
     await send(page, "지난달 영수증 합계");
     const aggregate = assistantCard(page, "aggregate").last();
     await expect(aggregate).toBeVisible({ timeout: 15_000 });
     await expect(aggregate).toContainText(ko.planner.aggregate.basis.doc_date);
-    await expect(aggregate.getByTestId("aggregate-value")).toBeVisible();
+    const value = aggregate.getByTestId("aggregate-value");
+    await expect(value).toBeVisible();
+    // The receipt's total is review pending: excluded from the headline until "검토 대기 포함" is on.
+    const before = (await value.textContent()) ?? "";
+    expect(before).not.toBe("");
+    await expect(aggregate.getByTestId("aggregate-split")).toContainText("대기 1건");
     const toggle = aggregate.getByTestId("aggregate-include-unreviewed");
     await expect(toggle).toBeVisible();
     await expect(toggle).toHaveAttribute("aria-checked", "false");
     await toggle.click();
     await expect(aggregate).toHaveAttribute("data-include-unreviewed", "true", { timeout: 10_000 });
+    await expect(value).not.toHaveText(before);
+    await expect(value).toContainText("12,500");
     await aggregate.getByTestId("aggregate-toggle-documents").click();
     await expect(aggregate.getByTestId("aggregate-documents")).toBeVisible();
   });
@@ -123,6 +141,25 @@ test.describe("P5 planner", () => {
     const row = plan.locator('[data-testid="plan-preview-row"][data-item-status="move"]').first();
     await expect(row).toBeVisible();
     await expect(row).toContainText("영수증-1p.jpg");
+    // Esc inside the composer belongs to the text field: the card stays pending (review M5).
+    await page.getByTestId("assistant-input").focus();
+    await page.keyboard.press("Escape");
+    await expect(plan).toHaveAttribute("data-plan-status", "pending");
+    // Inline edit into an invalid plan: the executor rejects it with the issue list (plan_invalid), path included.
+    await plan.getByTestId("plan-edit").click();
+    const folderField = plan.getByTestId("plan-editor-param-0-folder");
+    await expect(folderField).toHaveValue("documents/{{year}}/{{month}}/{{doc_type}}");
+    await folderField.fill("../x");
+    await plan.getByTestId("plan-execute").click();
+    const errors = plan.getByTestId("plan-errors");
+    await expect(errors).toBeVisible({ timeout: 10_000 });
+    await expect(errors).toContainText(ko.planner.card.invalid);
+    await expect(errors).toContainText("operations[0].folder");
+    await expect(plan).toHaveAttribute("data-plan-status", "pending");
+    // Fixing the field clears the errors; the corrected plan runs.
+    await folderField.fill("documents/{{year}}/{{month}}/{{doc_type}}");
+    await expect(errors).toBeHidden();
+    await plan.getByTestId("plan-edit").click();
     await page.keyboard.press("Control+Enter");
     await expect(plan).toHaveAttribute("data-plan-status", "done", { timeout: 15_000 });
     const result = assistantCard(page, "result").last();
@@ -153,6 +190,17 @@ test.describe("P5 planner", () => {
     await expect(clarify.getByTestId("clarify-question")).not.toBeEmpty();
     // The composer keeps the sentence for a rephrase.
     await expect(page.getByTestId("assistant-input")).toHaveValue("보라색 코끼리를 춤추게 해줘");
+
+    // A file operation waits for approval; Esc outside a text field cancels the active card.
+    await send(page, "영수증 월별 폴더로 옮겨");
+    const plan = assistantCard(page, "plan").last();
+    await expect(plan).toBeVisible({ timeout: 15_000 });
+    await expect(plan).toHaveAttribute("data-plan-status", "pending");
+    await page.getByTestId("assistant-messages").click();
+    await page.keyboard.press("Escape");
+    await expect(plan).toHaveAttribute("data-plan-status", "cancelled");
+    await expect(plan).toContainText(ko.planner.card.cancelled);
+    await expect(plan.getByTestId("plan-execute")).toBeHidden();
 
     // Ctrl+Z outside a text field: nothing journaled yet → "되돌릴 작업이 없습니다".
     await page.getByTestId("assistant-messages").click();

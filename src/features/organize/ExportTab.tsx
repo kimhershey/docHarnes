@@ -59,7 +59,7 @@ function columnOptions(schema: SchemaRecord | undefined, lang: string): ColumnOp
   return out;
 }
 
-function asExportResult(v: unknown): ExportResult | null {
+export function asExportResult(v: unknown): ExportResult | null {
   if (!v || typeof v !== "object") return null;
   const r = v as Partial<ExportResult>;
   if (typeof r.path !== "string") return null;
@@ -77,8 +77,18 @@ function asExportResult(v: unknown): ExportResult | null {
   };
 }
 
-/** 내보내기 wizard: target → format → scope → columns → layout → path, live preview, export job. */
-export function ExportTab({ selectedIds, selectionRequest }: { selectedIds: string[]; selectionRequest: number }) {
+export interface ExportPreset {
+  target: ExportTarget;
+  /** Bumped per request so the same target applies again. */
+  nonce: number;
+}
+
+/**
+ * 내보내기 wizard: target → format → scope → columns → layout → path, live preview, export job.
+ * `active` tells whether the tab is visible (the debounced preview only runs then); `preset`
+ * carries a target chosen elsewhere (`/organize?tab=export&target=table` from the viewer).
+ */
+export function ExportTab({ selectedIds, selectionRequest, active = true, preset = null }: { selectedIds: string[]; selectionRequest: number; active?: boolean; preset?: ExportPreset | null }) {
   const { t, i18n } = useTranslation();
   const toast = useUiStore((s) => s.toast);
   const workspace = useWorkspace();
@@ -114,6 +124,9 @@ export function ExportTab({ selectedIds, selectionRequest }: { selectedIds: stri
   useEffect(() => {
     if (scope.mode === "selection" && selectedIds.length === 0) setScope((s) => ({ ...s, mode: "all" }));
   }, [scope.mode, selectedIds.length]);
+  useEffect(() => {
+    if (preset) setTarget(preset.target);
+  }, [preset]);
 
   // A searchable PDF always carries the page text.
   const effectiveTarget: ExportTarget = format === "pdf_searchable" ? "text" : target;
@@ -140,8 +153,10 @@ export function ExportTab({ selectedIds, selectionRequest }: { selectedIds: stri
   );
   const reqKey = JSON.stringify(request);
 
-  // Live preview (path, exists, documents, columns, sheets), debounced; stale answers are dropped.
+  // Live preview (path, exists, documents, columns, sheets), debounced; stale answers are dropped. The tab
+  // stays mounted behind the others (`forceMount`), so the preview only runs while it is visible.
   useEffect(() => {
+    if (!active) return;
     const seq = ++previewSeq.current;
     const req = JSON.parse(reqKey) as ExportRequest;
     setPreviewBusy(true);
@@ -170,7 +185,7 @@ export function ExportTab({ selectedIds, selectionRequest }: { selectedIds: stri
       })();
     }, 300);
     return () => clearTimeout(h);
-  }, [reqKey, nonce, t]);
+  }, [reqKey, nonce, active, t]);
 
   const run = async () => {
     setRunError(null);
@@ -252,7 +267,9 @@ export function ExportTab({ selectedIds, selectionRequest }: { selectedIds: stri
   };
   const toggleInclude = (k: ExportInclude, on: boolean) => setInclude((cur) => (on ? [...new Set([...cur, k])] : cur.filter((x) => x !== k)));
   const running = !!job && !isJobFinished(job);
-  const canRun = !!preview && !previewBusy && !running && preview.documents > 0 && !pathError;
+  // `columns: []` means "every scalar field" to the exporter (export.rs), so an emptied selection blocks 실행.
+  const noColumns = effectiveTarget === "fields" && options.length > 0 && columns !== null && columns.length === 0;
+  const canRun = !!preview && !previewBusy && !running && preview.documents > 0 && !pathError && !noColumns;
   const selectedColumns = columns ?? options.map((o) => o.path);
 
   return (
@@ -347,6 +364,11 @@ export function ExportTab({ selectedIds, selectionRequest }: { selectedIds: stri
                       </label>
                     ))}
                   </div>
+                  {noColumns && (
+                    <p className="text-xs text-danger" role="alert" data-testid="export-columns-none">
+                      {t("export.columns.none_selected")}
+                    </p>
+                  )}
                 </>
               )}
               <div className="flex flex-wrap items-center gap-4 text-sm">

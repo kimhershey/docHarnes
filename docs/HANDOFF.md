@@ -745,11 +745,11 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 
 | 항목 | 결과 |
 |---|---|
-| `cargo test --workspace` | 202 통과(2 ignored) — P5 모듈 35건: 플래너 8(예시 명령 12종+α, 스펙↔serde, 검증기, 모델 경로 재질의·단계·축소 재시도, 실행기 2), 정리/저널 7(템플릿·diff·충돌·보류·적용·되돌리기/다시 실행·삭제 복원), 작업 2(저장소·우선순위·게이트), 집계 7, 내보내기 11 |
+| `cargo test --workspace` | 205 통과(2 ignored) — P5 모듈 38건: 플래너 10(예시 명령 12종+α, 규칙 오탐 14문장, 스펙↔serde, 검증기·범위 필수, 모델 경로 재질의·단계·축소 재시도, 실행기 2), 정리/저널 9(템플릿·diff·충돌·보류·적용·되돌리기/다시 실행·삭제 복원·복구 0건·redo 무효화), 작업 3(저장소·우선순위·게이트·패닉/취소), 집계 7, 내보내기 11 |
 | `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --check` | 통과 |
 | `cargo deny check licenses bans sources` | 통과(rust_xlsxwriter·csv·pdf-writer 추가) |
 | 실엔진(`tests/real_engine.rs`, 초소형 모델) | 채팅·KIE·**플래너 문법** 통과(아래) |
-| `npm run typecheck`, `npm test` | 통과 — vitest 9파일 51건(플랜 설명·템플릿·집계 헬퍼·i18n 패리티 포함) |
+| `npm run typecheck`, `npm test` | 통과 — vitest 12파일 66건(플랜 설명·템플릿·집계·작업 설명·숫자 강제·어시스턴트 스토어·i18n 패리티) |
 | `npm run e2e` | 28건 통과 — 신규 `planner.spec.ts` 4건(집계 카드, 내보내기 플랜→실행→결과, 정리 diff→Ctrl+Enter→되돌리기, 슬래시/명확화/Esc/Ctrl+Z), `organize.spec.ts` 3건(보류→월별 이동→이력 되돌리기, CSV 내보내기, 집계 바·정리 바로가기); P3 지식 Q&A spec은 플래너 경유로 유지 |
 | `npm run licenses:check` | 통과 |
 
@@ -819,7 +819,31 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 필요), 요약 `set` 모드(묶음 요약) 미구현, 작업 결과 payload 상한(집계 500건·정리 항목 전체), 플래너 모델 로드가 명령 바 호출
 안에서 동기 실행(진행 표시만), `jobs.rs` 셸 러너 단위 테스트 부재, 집계/내보내기 N+1 질의.
 
-__FRONTEND_REVIEW__
+**프런트엔드 — 반영**
+
+- 계약 변경 대응: `jobs://update`에서 빠진 `result`를 스토어가 id별로 캐시·병합하고(`useJobsStore.fetch`/`useJobResultLoaded`), 완료
+  전이 시 한 번 `jobs_list`를 새로고침; 실행 카드·작업 화면·정리/내보내기 탭이 결과를 `jobs_get`으로 읽음(로딩 표시).
+- "이 문서" 범위 복구: 뷰어가 `lastDocument`를 언마운트 때 지우지 않고(워크스페이스 전환 때만), 어시스턴트 범위 선택기에 "현재 문서:
+  <이름>" 옵션 + 빈 상태 힌트; `uiContextFor`에 `document` 범위.
+- 정리 탭: 입력(템플릿·범위·검토 완료만)이 바뀌면 미리보기 플랜을 무효화(요청 키 비교) — 오래된 diff를 실행하지 않음.
+- 모의 백엔드 `plan_invalid.detail`을 Rust처럼 `PlanIssue[]`로; E2E에 잘못된 편집(폴더 `../x`) → `plan-errors` 표시 → 수정 후 실행 흐름 추가.
+- 내보내기 탭: 열 0개면 실행 차단 + 안내; 보이지 않는 탭에서는 미리보기 디바운스 중단(`active`).
+- 실행 카드: 스토어에 없는 작업은 `jobs_get`/새로고침으로 복구, 사라진 작업은 "작업 목록에서 제거됨", 결과는 완료 후 로드,
+  `onFinished` 1회 보장.
+- 플랜 편집기 숫자 강제(`numeric.ts`: 정수 trunc·0 이상·NaN 거부), Esc는 입력 중(컴포저·편집기)엔 카드를 취소하지 않음.
+- 뷰어 표 XLSX: 미리보기 후 같은 이름이 있으면 내보내기 탭으로 안내, 언어 전달, 작업 추적 후 "폴더 열기" 토스트(토스트 액션 추가).
+- 어시스턴트 대화를 `stores/assistant.ts`(워크스페이스별)로 옮겨 화면 이동에도 유지; 작업 기반 플랜의 `ui_actions`는 job id별로
+  추적해 완료 관찰 시 정확히 한 번 실행(`claimUiActions`), 워크스페이스 전환 시 초기화.
+- 백엔드 오류 문자열 번역(`describeJobError`: engine_not_running·model_not_loaded·workspace closed·interrupted·schema_not_found·
+  export_exists·path_outside·no_documents·단계별 실패), 작업 결과의 파이프라인 요약 번역, `plan_clarify` 사유 추가.
+- 접근성: 미리보기 diff·이동 표에 `<caption>`/`<th>`, 아이콘 `role="img"`, 결과 카드 `aria-live`, 실행 카드 라이브 텍스트에 일시정지,
+  여러 배치면 "마지막 배치 되돌리기" 라벨, 열거 라벨 번역.
+- 테스트: Esc 취소/비취소, 집계 헤드라인·분리 값 변화, 잘못된 편집, 현재 문서 힌트(E2E); `describe.test.ts`·`numeric.test.ts`·
+  `assistant.test.ts`(vitest 66건).
+
+**프런트엔드 — 보류**: 플랜·실행·작업 행의 ETA/tok/s(백엔드 수치 없음), 집계 카드 "월별 보기" 재집계·"엑셀로 내보내기" 버튼,
+결과 카드의 추출 결과 인용 칩, 명확화 카드 선택지 버튼, 어시스턴트 세션 목록(§3.7.6), 모델 경로에서 다중 op 플랜을 보여 주는 모의
+(현재 미해석 문장 → 검색 플랜).
 
 ## P6 착수 메모
 

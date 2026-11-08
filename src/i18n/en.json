@@ -283,7 +283,9 @@
       "knowledge": "Knowledge base",
       "collection": "Collection: {{name}}",
       "folder_named": "Current folder {{folder}}",
-      "selection_count": "Selected documents ({{count}})"
+      "selection_count": "Selected documents ({{count}})",
+      "document": "Current document",
+      "document_named": "Current document: {{name}}"
     },
     "placeholder": "Command or ask in natural language (한국어 / English) · / for slash commands",
     "send": "Send",
@@ -472,7 +474,14 @@
       "executing": "Starting…",
       "executed": "Executed",
       "cancelled": "Cancelled",
-      "invalid": "The plan cannot run. Edit it and try again."
+      "invalid": "The plan cannot run. Edit it and try again.",
+      "preview_error": "Preview update failed: {{message}}",
+      "preview_caption": "Organise preview (from → to)",
+      "columns": {
+        "from": "From",
+        "to": "To",
+        "status": "Status"
+      }
     },
     "execution": {
       "title": "Running · job #{{id}}",
@@ -484,7 +493,8 @@
       "cancel": "Cancel",
       "open_jobs": "Open Jobs",
       "gate_notice": "Interactive requests are handled at the next page boundary (≈{{seconds}}s)",
-      "job_missing": "The job is no longer in the job book."
+      "job_missing": "The job is no longer in the job book.",
+      "job_removed": "Removed from the job list"
     },
     "result": {
       "title": "Result",
@@ -513,7 +523,9 @@
         "missing": "missing file",
         "done": "done",
         "failed": "failed"
-      }
+      },
+      "undo_last_batch": "↶ Undo last batch",
+      "moves_caption": "Move log (from → to)"
     },
     "aggregate": {
       "title": "Aggregate — {{summary}}",
@@ -1044,7 +1056,8 @@
       "no_fields": "No fields selected.",
       "no_split_boundary": "Pick a split page inside the document (page 2 or later).",
       "merge_two": "Select at least two documents to merge.",
-      "table_not_found": "Table not found."
+      "table_not_found": "Table not found.",
+      "plan_clarify": "The plan is a clarification question — answer it first."
     }
   },
   "startup": {
@@ -1139,7 +1152,21 @@
       "normal": "Normal",
       "high": "High",
       "interactive": "Interactive"
-    }
+    },
+    "error": {
+      "engine_not_running": "The engine is not running.",
+      "model_not_loaded": "The model is not loaded.",
+      "workspace_closed": "Interrupted: the workspace was closed.",
+      "interrupted": "Interrupted by app shutdown (retryable).",
+      "cancelled": "Cancelled.",
+      "no_model": "No vision model is loaded. Load one on the Models screen.",
+      "schema_not_found": "Schema not found: {{name}}",
+      "export_exists": "A file with this name already exists (overwrite required).",
+      "path_outside": "The output path is outside the workspace.",
+      "no_documents": "No matching documents.",
+      "step": "{{op}}: {{message}}"
+    },
+    "result_loading": "Loading result…"
   },
   "library": {
     "title": "Document library",
@@ -2114,7 +2141,8 @@
       "evidence": "Evidence",
       "confidence": "Confidence",
       "status": "Status",
-      "selected": "{{selected}} / {{total}} selected"
+      "selected": "{{selected}} / {{total}} selected",
+      "none_selected": "Select at least one column to export."
     },
     "layout": {
       "title": "Layout",
@@ -2148,7 +2176,9 @@
       "path_outside": "The save path must stay inside the workspace (outside the .doculens folder).",
       "no_documents": "No documents to export."
     },
-    "table_xlsx": "Save as XLSX (all tables of the document)"
+    "table_xlsx": "Save as XLSX (all tables of the document)",
+    "table_xlsx_exists": "A file with this name already exists. Change the path or choose overwrite on the Export tab.",
+    "table_xlsx_done": "Table XLSX saved: {{path}}"
   },
   "aggregate": {
     "title": "Aggregate",

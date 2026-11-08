@@ -4,6 +4,9 @@ import { subscribe } from "@/lib/ipc";
 import { queryClient, queryKeys } from "@/lib/query-client";
 import { EVENTS, type DocumentsChanged } from "@/lib/types";
 
+import { resetAssistant } from "./assistant";
+import { useUiStore } from "./ui";
+
 /** Library UI state that survives navigation (view mode, filters, selection). */
 interface DocumentsState {
   initialized: boolean;
@@ -49,8 +52,13 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
   setSelectedIds: (ids) => set({ selectedIds: ids }),
 }));
 
-/** Call after a workspace switch: library queries belong to the old folder. */
+/**
+ * Call after a workspace switch: library queries, the selection, the viewer's last document
+ * (the assistant's "이 문서" scope) and the assistant conversation belong to the old folder.
+ */
 export function resetDocumentQueries(): void {
   useDocumentsStore.setState({ folder: null, query: "", selectedIds: [] });
+  useUiStore.getState().setLastDocument(null);
+  resetAssistant();
   void queryClient.invalidateQueries({ queryKey: queryKeys.documents });
 }

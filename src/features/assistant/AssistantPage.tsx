@@ -3,51 +3,39 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 
+import { isEditable } from "@/app/hooks/useGlobalShortcuts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
+import { describeJobError } from "@/features/jobs/describe";
 import { AnswerCard } from "@/features/knowledge/AnswerCard";
 import { openCitation } from "@/features/knowledge/AnswersPanel";
 import { scopeFor } from "@/features/search/SearchPage";
 import { describePreRoute, executePreRoute, executeUiOps } from "@/lib/commands";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
-import { useCollections, usePipelineStatus } from "@/lib/queries";
+import { useCollections, useDocument, usePipelineStatus } from "@/lib/queries";
 import { isComposing, matchesChord } from "@/lib/shortcuts";
-import { SCREEN_ROUTES, type Answer, type AnswerRequest, type Job, type Plan, type PlanExecution, type PlanIssue, type PlanResponse, type PreRouteResult, type UiPlanContext } from "@/lib/types";
+import { SCREEN_ROUTES, isJobFinished, type AnswerRequest, type Job, type Plan, type PlanExecution, type PlanIssue, type PlanResponse, type PreRouteResult, type UiPlanContext } from "@/lib/types";
 import { errorCode, isMac } from "@/lib/utils";
+import { useAssistantStore, type Message, type NewMessage, type PlanMessage } from "@/stores/assistant";
 import { useDocumentsStore } from "@/stores/documents";
 import { useEngineStore } from "@/stores/engine";
+import { useJobsStore } from "@/stores/jobs";
 import { newRequestId, useKnowledgeStore } from "@/stores/knowledge";
 import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
 
 import { ClarifyCard } from "./ClarifyCard";
-import { clarificationQuestion, planKind, requiresConfirmation, sourceLabel, uiContextFor } from "./describePlan";
+import { clarificationQuestion, isPlanExecution, planKind, requiresConfirmation, sourceLabel, uiContextFor } from "./describePlan";
 import { ExecutionCard } from "./ExecutionCard";
-import { PlanCard, type PlanStatus } from "./PlanCard";
+import { UI_OPS } from "./opSpecs";
+import { PlanCard } from "./PlanCard";
 import { ResultCard } from "./ResultCard";
-
-type Message =
-  | { id: number; role: "user"; text: string }
-  | { id: number; role: "assistant"; kind: "executed"; text: string; source: string; confidence: number }
-  | { id: number; role: "assistant"; kind: "answer"; requestId: string; request: AnswerRequest; answer: Answer | null; error: unknown; pending: boolean }
-  | { id: number; role: "assistant"; kind: "help" }
-  | { id: number; role: "assistant"; kind: "plan"; text: string; response: PlanResponse; plan: Plan; context: UiPlanContext; status: PlanStatus; errors: PlanIssue[] | null; editing: boolean }
-  | { id: number; role: "assistant"; kind: "execution"; text: string; response: PlanResponse; plan: Plan; jobId: string }
-  | { id: number; role: "assistant"; kind: "result"; text: string; response: PlanResponse; plan: Plan; execution: PlanExecution }
-  | { id: number; role: "assistant"; kind: "clarify"; text: string; response: PlanResponse }
-  | { id: number; role: "assistant"; kind: "error"; text: string };
-
-type PlanMessage = Extract<Message, { kind: "plan" }>;
-type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
-type NewMessage = DistributiveOmit<Message, "id">;
-
-let seq = 1;
 
 /** Question-like text (used only when the planner is unavailable: such input still goes to the knowledge base). */
 export function looksLikeQuestion(text: string): boolean {
@@ -64,7 +52,10 @@ function hasOpenLayer(): boolean {
  * pre-router; everything else goes to the natural-language planner (§3.5).
  * Questions stream a grounded answer, UI ops run at once, work plans show the
  * plan card (confirmation, preview, inline editing) and then the execution /
- * result cards of the job that replays them.
+ * result cards of the job that replays them. The conversation lives in
+ * `useAssistantStore` (per workspace) so it survives a visit to Jobs, and the
+ * `ui_actions` of job-backed plans run exactly once when the finished job is
+ * observed here.
  */
 export function AssistantPage() {
   const { t, i18n } = useTranslation();
@@ -82,7 +73,13 @@ export function AssistantPage() {
   const selectedIds = useDocumentsStore((s) => s.selectedIds);
   const { data: collections } = useCollections(!!workspace);
   const { data: pipeline } = usePipelineStatus(!!workspace);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const messages = useAssistantStore((s) => s.messages);
+  const pendingUiActions = useAssistantStore((s) => s.pendingUiActions);
+  const jobs = useJobsStore((s) => s.jobs);
+  // The last viewed document is offered as a scope only while no library selection exists (the
+  // rules give an explicit selection precedence anyway).
+  const documentScope = lastDocument !== null && selectedIds.length === 0;
+  const { data: lastDoc } = useDocument(documentScope ? lastDocument.id : undefined);
   const [text, setText] = useState("");
   const [scope, setScope] = useState<string>("all");
   const [followUp, setFollowUp] = useState(false);
@@ -92,42 +89,52 @@ export function AssistantPage() {
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const consumed = useRef<string | null>(null);
-  const messagesRef = useRef<Message[]>([]);
-  messagesRef.current = messages;
+  const observing = useRef(new Set<string>());
   const examples = t("assistant.examples", { returnObjects: true }) as string[];
 
-  const push = (m: NewMessage) => {
-    const id = seq++;
-    setMessages((prev) => [...prev, { ...m, id } as Message]);
-    return id;
-  };
-  const patch = (id: number, f: (m: Message) => Message) => setMessages((prev) => prev.map((m) => (m.id === id ? f(m) : m)));
+  // The conversation is keyed by the workspace path (a switch also clears it through `resetDocumentQueries`).
+  const workspacePath = workspace?.path ?? null;
+  useEffect(() => {
+    useAssistantStore.getState().bind(workspacePath);
+  }, [workspacePath]);
+
+  const push = (m: NewMessage) => useAssistantStore.getState().push(m);
+  const patch = (id: number, f: (m: Message) => Message) => useAssistantStore.getState().patch(id, f);
   const patchPlan = (id: number, f: (m: PlanMessage) => PlanMessage) => patch(id, (m) => (m.role === "assistant" && m.kind === "plan" ? f(m) : m));
+  const currentMessages = () => useAssistantStore.getState().messages;
 
   const anyPending = messages.some((m) => m.role === "assistant" && m.kind === "answer" && m.pending);
   const busy = anyPending || planning;
   const activePlan = [...messages].reverse().find((m): m is PlanMessage => m.role === "assistant" && m.kind === "plan" && m.status === "pending") ?? null;
 
-  // A scope that no longer applies (selection cleared, folder left) falls back to the whole library.
+  // A scope that no longer applies (selection cleared, folder left, document superseded by a selection) falls back.
   useEffect(() => {
     if ((scope === "selection" && selectedIds.length === 0) || (scope === "folder" && !folder)) setScope("all");
-  }, [scope, selectedIds.length, folder]);
+    else if (scope === "document" && !documentScope) setScope(selectedIds.length > 0 ? "selection" : "all");
+  }, [scope, selectedIds.length, folder, documentScope]);
 
   const focusInput = (value?: string) => {
     if (value !== undefined) setText(value);
     window.setTimeout(() => inputRef.current?.focus(), 0);
   };
 
+  /** Knowledge scope of the selector: the "document" scope asks about the last viewed document only. */
+  const knowledgeScope = () => {
+    const s = scopeFor(scope, knowledge?.latest_only ?? true);
+    if (scope === "document" && lastDocument) s.documents = [lastDocument.id];
+    return s;
+  };
+
   const askKnowledge = async (question: string, extra: Partial<AnswerRequest> = {}) => {
     // Only an explicit follow-up keeps the previous evidence; otherwise every question is retrieved afresh
     // so unrelated questions can still end in "no evidence".
     const previous = followUp
-      ? [...messagesRef.current].reverse().find((m): m is Extract<Message, { kind: "answer" }> => m.role === "assistant" && m.kind === "answer" && !!m.answer && !m.answer.no_evidence)
+      ? [...currentMessages()].reverse().find((m): m is Extract<Message, { kind: "answer" }> => m.role === "assistant" && m.kind === "answer" && !!m.answer && !m.answer.no_evidence)
       : undefined;
     const request: AnswerRequest = {
       question,
       kind: "answer",
-      scope: scopeFor(scope, knowledge?.latest_only ?? true),
+      scope: knowledgeScope(),
       allow_general: knowledge?.allow_general_knowledge ?? false,
       top_k: knowledge?.top_k ?? 8,
       context_tokens: knowledge?.context_tokens ?? 6000,
@@ -170,6 +177,11 @@ export function AssistantPage() {
       const res = await api.plannerExecute(m.plan, m.text, m.context);
       patchPlan(id, (x) => ({ ...x, status: "done", editing: false }));
       if (res.job_id) {
+        // The job's `ui_actions` run when its finished state is observed here (once, even after navigating away).
+        useAssistantStore.getState().trackJob(
+          res.job_id,
+          m.plan.operations.filter((o) => UI_OPS.has(o.op)),
+        );
         push({ role: "assistant", kind: "execution", text: m.text, response: m.response, plan: m.plan, jobId: res.job_id });
       } else if (res.execution) {
         push({ role: "assistant", kind: "result", text: m.text, response: m.response, plan: m.plan, execution: res.execution });
@@ -193,7 +205,7 @@ export function AssistantPage() {
 
   /** Executes the plan card `id` as it currently is (edited plan included). */
   const execute = async (id: number) => {
-    const m = messagesRef.current.find((x): x is PlanMessage => x.id === id && x.role === "assistant" && x.kind === "plan");
+    const m = currentMessages().find((x): x is PlanMessage => x.id === id && x.role === "assistant" && x.kind === "plan");
     if (m) await runPlan(m);
   };
 
@@ -213,7 +225,7 @@ export function AssistantPage() {
       case "answer": {
         const op = plan.operations.find((o) => o.op === "answer");
         const question = op && op.op === "answer" ? op.question : textValue;
-        const base = scopeFor(scope, knowledge?.latest_only ?? true);
+        const base = knowledgeScope();
         if (plan.scope.doc_ids && plan.scope.doc_ids.length > 0) base.documents = plan.scope.doc_ids;
         if (plan.scope.folder) base.folder = plan.scope.folder;
         await askKnowledge(question, { scope: base });
@@ -229,10 +241,10 @@ export function AssistantPage() {
       default:
         break;
     }
-    // The card is pushed before the state flushes, so an immediate execution works from the message itself.
-    const message: PlanMessage = { id: seq++, role: "assistant", kind: "plan", text: textValue, response, plan, context, status: "pending", errors: null, editing: false };
-    setMessages((prev) => [...prev, message]);
-    if (!requiresConfirmation(response)) await runPlan(message);
+    const card: NewMessage = { role: "assistant", kind: "plan", text: textValue, response, plan, context, status: "pending", errors: null, editing: false };
+    const id = push(card);
+    // An immediate execution works from the message itself (the store is updated synchronously).
+    if (!requiresConfirmation(response)) await runPlan({ ...card, id } as PlanMessage);
   };
 
   const send = async (value: string) => {
@@ -289,7 +301,8 @@ export function AssistantPage() {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [messages, streams]);
 
-  // Ctrl+Enter approves / Esc cancels the active plan card (settings.shortcuts; IME-safe).
+  // Ctrl+Enter approves / Esc cancels the active plan card (settings.shortcuts; IME-safe). Esc inside a text
+  // field (the composer, a plan editor input) is left to that field (review M5).
   useEffect(() => {
     if (!activePlan) return;
     const executeChord = shortcuts?.execute_plan || "Ctrl+Enter";
@@ -302,7 +315,7 @@ export function AssistantPage() {
         e.preventDefault();
         void execute(id);
       } else if (matchesChord(e, closeChord, mac)) {
-        if (hasOpenLayer() || useUiStore.getState().paletteOpen) return;
+        if (isEditable(e.target) || hasOpenLayer() || useUiStore.getState().paletteOpen) return;
         e.preventDefault();
         cancelPlan(id);
       }
@@ -311,6 +324,30 @@ export function AssistantPage() {
     return () => window.removeEventListener("keydown", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePlan?.id, shortcuts?.execute_plan, shortcuts?.close]);
+
+  // Owed `ui_actions` of job-backed plans: run once when the finished job is observed (on mount and on
+  // every job update), whether or not the execution card was mounted when the job finished.
+  useEffect(() => {
+    for (const jobId of Object.keys(pendingUiActions)) {
+      if (observing.current.has(jobId)) continue;
+      const live = jobs.find((j) => j.id === jobId);
+      if (live && !isJobFinished(live)) continue;
+      observing.current.add(jobId);
+      void (async () => {
+        try {
+          const store = useJobsStore.getState();
+          const job = live ?? (await store.fetch(jobId));
+          if (job && !isJobFinished(job)) return; // not in the list yet but still running: observed later
+          const full = job && !isPlanExecution(job.result) ? await store.fetch(jobId) : job;
+          const execution = full && isPlanExecution(full.result) ? full.result : null;
+          const ops = useAssistantStore.getState().claimUiActions(jobId, execution ? execution.ui_actions : []);
+          if (ops && ops.length > 0) await runUiActions(ops);
+        } finally {
+          observing.current.delete(jobId);
+        }
+      })();
+    }
+  }, [pendingUiActions, jobs, runUiActions]);
 
   const feedback = async (messageId: number, id: number, value: number | null) => {
     try {
@@ -340,20 +377,26 @@ export function AssistantPage() {
 
   const onJobFinished = useCallback(
     (execution: PlanExecution | null, job: Job) => {
-      if (execution) void runUiActions(execution.ui_actions);
-      else if (job.state === "failed" && job.error) useUiStore.getState().toast(job.error, "danger");
+      if (execution) {
+        const ops = useAssistantStore.getState().claimUiActions(job.id, execution.ui_actions);
+        if (ops) void runUiActions(ops);
+      } else if (job.state === "failed") {
+        const message = describeJobError(job, t);
+        if (message) useUiStore.getState().toast(message, "danger");
+      }
     },
-    [runUiActions],
+    [runUiActions, t],
   );
 
   const gate = pipeline?.gate;
   const gateSeconds = gate ? Math.ceil((gate.estimated_wait_ms ?? 0) / 1000) : 0;
+  const lastDocName = lastDoc?.original_name ?? null;
 
   return (
     <div className="flex h-full flex-col" data-testid="page-assistant">
       <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2">
         <h1 className="text-base font-semibold">{t("assistant.title")}</h1>
-        <Button variant="ghost" size="sm" onClick={() => setMessages([])}>
+        <Button variant="ghost" size="sm" onClick={() => useAssistantStore.getState().clear()}>
           {t("assistant.new_chat")}
         </Button>
         <div className="ml-auto flex items-center gap-3 text-xs text-fg-muted">
@@ -374,6 +417,11 @@ export function AssistantPage() {
               <SelectItem value="selection" disabled={selectedIds.length === 0} data-testid="assistant-scope-selection">
                 {t("assistant.scope.selection_count", { count: selectedIds.length })}
               </SelectItem>
+              {documentScope && (
+                <SelectItem value="document" data-testid="assistant-scope-document">
+                  {lastDocName ? t("assistant.scope.document_named", { name: lastDocName }) : t("assistant.scope.document")}
+                </SelectItem>
+              )}
               <SelectItem value="knowledge">{t("assistant.scope.knowledge")}</SelectItem>
               {(collections ?? []).map((c) => (
                 <SelectItem key={c.id} value={`col:${c.id}`}>
@@ -391,6 +439,11 @@ export function AssistantPage() {
             <Sparkles className="size-8 text-accent" aria-hidden="true" />
             <p>{t("assistant.empty")}</p>
             <p className="text-xs">{t("assistant.qa_hint")}</p>
+            {documentScope && lastDocName && scope !== "document" && (
+              <p className="text-xs" data-testid="assistant-current-document">
+                {t("assistant.scope.document_named", { name: lastDocName })}
+              </p>
+            )}
           </div>
         )}
         <div className="mx-auto flex max-w-3xl flex-col gap-3">

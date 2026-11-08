@@ -275,8 +275,13 @@ export function warningIssues(issues: PlanIssue[]): PlanIssue[] {
 // UI context (default scope of a command)
 // ---------------------------------------------------------------------------
 
-export type AssistantScope = "all" | "folder" | "selection" | "knowledge" | `col:${string}`;
+export type AssistantScope = "all" | "folder" | "selection" | "document" | "knowledge" | `col:${string}`;
 
+/**
+ * The UI context sent with a command: the chosen scope (folder / selection / the last viewed
+ * document) plus the viewer's current document and page, which the rules use as the "이 문서 /
+ * 이 쪽" fallback when the sentence names no scope.
+ */
 export function uiContextFor(
   scope: string,
   folder: string | null,
@@ -286,6 +291,7 @@ export function uiContextFor(
   const ctx: UiPlanContext = {};
   if (scope === "folder" && folder) ctx.folder = folder;
   if (scope === "selection" && selectedIds.length > 0) ctx.selected_doc_ids = selectedIds;
+  if (scope === "document" && lastDocument) ctx.selected_doc_ids = [lastDocument.id];
   if (lastDocument) {
     ctx.current_document = lastDocument.id;
     if (lastDocument.page != null) ctx.current_page = lastDocument.page;

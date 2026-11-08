@@ -10,10 +10,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { describeError } from "@/lib/errors";
 import { isJobFinished, type Job } from "@/lib/types";
 import { formatBytes, formatDate } from "@/lib/utils";
-import { useJobsStore } from "@/stores/jobs";
+import { useJobResultLoaded, useJobsStore } from "@/stores/jobs";
 import { useUiStore } from "@/stores/ui";
 
-import { describeJobDetail, describeJobPriority, describeJobSubject } from "./describe";
+import { describeJobDetail, describeJobError, describeJobPriority, describeJobSubject } from "./describe";
 import { JobResult } from "./JobResult";
 
 /** Engine start cannot be interrupted (P1); every other kind unloads / discards partial files on cancel. */
@@ -90,7 +90,10 @@ function JobRow({ job, onAction }: { job: Job; onAction: (action: Action, id: st
   const finished = isJobFinished(job);
   const subject = describeJobSubject(job, t);
   const detail = describeJobDetail(job, t);
+  const error = describeJobError(job, t);
   const persistent = job.persistent === true;
+  // `jobs://update` omits `result`; the store fetches it once the job finishes.
+  const resultLoaded = useJobResultLoaded(job.id);
   const priority = job.priority ?? "normal";
   const canCancel = !finished && (persistent || CANCELLABLE.includes(job.kind));
   const canPause = persistent && (job.state === "running" || job.state === "queued");
@@ -167,8 +170,17 @@ function JobRow({ job, onAction }: { job: Job; onAction: (action: Action, id: st
             {detail}
           </span>
         )}
-        {job.error && <span className="text-danger selectable">{job.error}</span>}
+        {error && (
+          <span className="text-danger selectable" data-testid="job-error">
+            {error}
+          </span>
+        )}
       </div>
+      {finished && persistent && !resultLoaded && job.result == null && (
+        <span className="text-xs text-fg-subtle" role="status" data-testid="job-result-loading">
+          {t("jobs.result_loading")}
+        </span>
+      )}
       {finished && job.result != null && (
         <details className="text-xs" data-testid="job-result">
           <summary className="cursor-pointer text-fg-muted">{t("jobs.result")}</summary>

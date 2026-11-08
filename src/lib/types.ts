@@ -646,7 +646,8 @@ export interface AppInfo {
 export interface UiError {
   code: string;
   message: string;
-  detail?: Record<string, unknown>;
+  /** Structured detail: an object (template vars, pids …) or an array (`plan_invalid` → `PlanIssue[]`). */
+  detail?: unknown;
 }
 
 export function isUiError(e: unknown): e is UiError {

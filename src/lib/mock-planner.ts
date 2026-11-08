@@ -14,6 +14,7 @@ import {
   err,
   gateInteractive,
   getJob,
+  withResult,
   isoLocal,
   listModelIds,
   loadDocs,
@@ -2971,12 +2972,12 @@ export async function mockPlanner(cmd: string, a: Record<string, any>): Promise<
     }
     case "planner_execute": {
       const args = (a.args ?? {}) as { plan?: Plan; text?: string; context?: UiPlanContext | null };
-      if (!args.plan) throw err("plan_invalid", "the plan is missing", { issues: [] });
+      if (!args.plan) throw err("plan_invalid", "the plan is missing", [] satisfies PlanIssue[]);
       const plan = structuredClone(args.plan);
       const text = args.text ?? "";
       const ctx = buildContext(args.context ?? {});
       const issues = validatePlan(plan, ctx, resolveRelativeDate(text, new Date(`${ctx.today}T12:00:00`)));
-      if (hasErrors(issues)) throw err("plan_invalid", issues.find((i) => i.blocking)?.message ?? "", { issues });
+      if (hasErrors(issues)) throw err("plan_invalid", issues.find((i) => i.blocking)?.message ?? "", issues);
       if (isClarification(plan)) throw err("invalid", "plan_clarify");
       if (inlineOnly(plan)) {
         const execution = await runPlan(plan, ctx, null, () => undefined);
@@ -3013,8 +3014,10 @@ export async function mockPlanner(cmd: string, a: Record<string, any>): Promise<
       if (preview.exists && !req.overwrite) throw err("invalid", "export_exists");
       return submitJob({ kind: "export", req }, preview.path, "high");
     }
-    case "jobs_get":
-      return getJob(String(a.jobId));
+    case "jobs_get": {
+      const job = getJob(String(a.jobId));
+      return job ? withResult(job) : null;
+    }
     case "jobs_pause":
       return pauseJob(String(a.jobId));
     case "jobs_resume":

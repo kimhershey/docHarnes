@@ -16,7 +16,8 @@ const NAV_ACTIONS: Record<string, keyof typeof SCREEN_ROUTES> = {
   go_settings: "settings",
 };
 
-function isEditable(target: EventTarget | null): boolean {
+/** True when the key event comes from a text field (input, textarea, select or contenteditable). */
+export function isEditable(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
 }
