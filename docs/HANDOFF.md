@@ -1036,6 +1036,10 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   CI web 잡 + 설치파일 워크플로)가 복사본에서 표시 블록을 원복한 결과가 설치된 `@tauri-apps/cli` 네이티브 바이너리에 그대로
   들어 있는지 확인해 CLI 업그레이드 시 재동기화를 강제한다. 워크플로에 2 GiB 크기 가드(GitHub 릴리스 자산 한계), 목록 필터에
   cuBLAS/cudart/EULA, 아티팩트 무압축 업로드 추가. 팩 자체 축소(cu121 `-Xfatbin=-compress-all`, 도구 DLL 제거)는 v1.x 메모.
+- **Lite Release 게시(2026-11-09, 16c224f = 14577a6 + 문서; run 42561958088, `publish=true` — 사용자 지시)**: Release `v0.1.0`에
+  `DocuLens-Setup-Lite-0.1.0-x64.exe` 50,116,430 B(47.8 MB), SHA-256 `d665687ad4fa1139766cff6a7cf9682fd5a4106a3123459bb40d12ed35ab993c`,
+  `.sha256`, `THIRD-PARTY-NOTICES.md`, `sbom.cdx.json` 업로드(CUDA 팩 2종과 함께 자산 8개). 같은 소스의 아티팩트 빌드(아래)와 해시가
+  다른 것은 NSIS 빌드 타임스탬프 때문(내용 동일). Full 설치파일은 아직 Release에 없음(아티팩트만).
 - **Lite 재빌드(2026-11-09, 14577a6 — 드래그 앤 드롭·XLSX/PPTX/텍스트·내용 감지·뷰어 텍스트 직접 편집 반영; run 42560517332)**:
   `DocuLens-Setup-Lite-0.1.0-x64.exe` 50,117,790 B(47.8 MB), SHA-256 `5a178421b7091355f85fbed7e25e5d7e7660fd48d3799ab438c3a9efa9da1a30`,
   159개 파일·필수 7개 통과, `tauri build` 10분, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64`(id 13650165163, 2027-02-07 만료). 사용자

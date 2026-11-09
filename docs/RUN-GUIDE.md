@@ -41,7 +41,8 @@ DocuLens를 **실제 Windows PC에서 설치·실행·빌드·검증**하는 절
 
 ### 1.1 배포 설치파일 설치 (방식 D)
 
-1. GitHub Releases의 `v<버전>`에서 `DocuLens-Setup-Lite-<버전>-x64.exe`(또는 `-Full-`)와 같은 이름의 `.sha256` 파일을 받습니다.
+1. GitHub Releases의 `v<버전>`에서 `DocuLens-Setup-Lite-<버전>-x64.exe`(또는 `-Full-`)와 같은 이름의 `.sha256` 파일을 받습니다
+   (현재 https://github.com/kimhershey/docHarnes/releases/tag/v0.1.0 에 Lite 0.1.0과 CUDA 엔진 팩이 있고, Full은 아직 Actions 아티팩트만).
    - 아직 릴리스에 올리지 않은 빌드(`publish=false`)는 Actions의 해당 실행 페이지 하단 **Artifacts**에서
      `DocuLens-Setup-<Lite|Full>-<버전>-x64` zip으로 받습니다(GitHub 로그인 필요, 90일 보관). zip 안에 설치파일과 `.sha256`이 있습니다.
    - **Lite**: 앱 + llama-server CPU·Vulkan 팩(`engines\cpu`, `engines\vulkan`) + PDFium(`pdfium\`) + ko-dic(`ko-dic\`)
