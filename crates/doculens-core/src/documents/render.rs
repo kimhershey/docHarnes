@@ -24,6 +24,7 @@ use pdfium_render::prelude::*;
 
 use crate::error::{CoreError, Result};
 
+use super::layout::CharBox;
 use super::{DocumentCache, NewPage};
 
 pub const DEFAULT_DPI: u16 = 200;
@@ -354,6 +355,33 @@ fn render_one(
     })
 }
 
+/// Character boxes of one PDF page (points, origin bottom-left) with the page size, for the word
+/// layout of the viewer (`documents::layout::from_chars`). Loose glyph boxes give contiguous
+/// selection boxes; the tight box is the fallback.
+pub fn pdf_page_chars(svc: &RenderService, pdf: &Path, page_no: u32) -> Result<(f32, f32, Vec<CharBox>)> {
+    let pdf = pdf.to_path_buf();
+    svc.run(move |p| {
+        let doc = p.load_pdf_from_file(&pdf, None).map_err(|e| pdfium_err("open", e))?;
+        let page =
+            doc.pages().get(page_no.max(1).saturating_sub(1) as PdfPageIndex).map_err(|e| pdfium_err("page", e))?;
+        let (w, h) = (page.width().value, page.height().value);
+        let text = page.text().map_err(|e| pdfium_err("text", e))?;
+        let mut out = Vec::with_capacity(text.len().max(0) as usize);
+        for c in text.chars().iter() {
+            let Some(ch) = c.unicode_char() else { continue };
+            let Ok(rect) = c.loose_bounds().or_else(|_| c.tight_bounds()) else { continue };
+            out.push(CharBox {
+                ch,
+                left: rect.left().value,
+                right: rect.right().value,
+                bottom: rect.bottom().value,
+                top: rect.top().value,
+            });
+        }
+        Ok((w, h, out))
+    })
+}
+
 /// Re-renders a single PDF page (viewer rotation / DPI change).
 pub fn render_pdf_page(
     svc: &RenderService,
@@ -523,6 +551,16 @@ mod tests {
         assert_eq!(pages[0].is_blank, Some(false));
         assert_eq!(pages[1].is_blank, Some(true));
         assert!(cache.page_file(11).is_file() && cache.thumb_file(11).is_file());
+        // Character boxes feed the viewer's word layout: "Hello DocuLens" at 12 pt from (56, 780).
+        let (w_pt, h_pt, chars) = pdf_page_chars(svc, &pdf, 1).unwrap();
+        assert!((w_pt - 595.28).abs() < 0.1 && (h_pt - 841.89).abs() < 0.1);
+        let glyphs: String = chars.iter().map(|c| c.ch).filter(|c| !c.is_whitespace()).collect();
+        assert_eq!(glyphs, "HelloDocuLens");
+        let first = chars.iter().find(|c| c.ch == 'H').unwrap();
+        assert!((first.left - 56.0).abs() < 1.0 && first.bottom < 780.0 && first.top > 780.0, "{first:?}");
+        let layout = super::super::layout::from_chars(&chars, w_pt, h_pt, 0);
+        assert_eq!(layout.words.iter().map(|w| w.t.as_str()).collect::<Vec<_>>(), ["Hello", "DocuLens"]);
+        assert!(layout.words[0].y < 0.1 && layout.words[0].x > 0.09 && layout.words[0].x < 0.1);
         // Rotate one page: dimensions swap, others untouched.
         let p3 = render_pdf_page(svc, &pdf, &cache, &opts, 3, 90).unwrap();
         assert_eq!((p3.width_px, p3.height_px), (842, 595));

@@ -18,6 +18,7 @@ use crate::paths::WorkspacePaths;
 use crate::version::WORKSPACE_DIR_NAME;
 
 use super::convert::{self, PdfPrinter};
+use super::layout::{self, PageLayout};
 use super::render::{self, RenderOptions, RenderService};
 use super::{
     from_rel_path, new_id, nfc, repo, to_rel_path, DocumentCache, DocumentRecord, DocumentRole, DocumentStatus,
@@ -890,11 +891,128 @@ pub fn rotate_page(deps: &ImportDeps<'_>, doc: &DocumentRecord, page_no: u32, ro
             render::render_pdf_page(svc, &pdf, &cache, &opts, page_no, rotation)?
         }
     };
+    // The stored word layout turns with the image (fractions of the rotated page).
+    let previous = deps.db.with(|c| repo::get_page(c, &doc.id, page_no))?.map(|p| p.rotation).unwrap_or(0);
+    let delta = (rotation + 360 - previous) % 360;
+    let turned = deps
+        .db
+        .with(|c| repo::page_layout_json(c, &doc.id, page_no))?
+        .and_then(|json| PageLayout::from_json(&json))
+        .map(|mut l| {
+            l.rotate(delta);
+            l.to_json()
+        });
     deps.db.with(|c| {
         repo::set_page_rotation(c, &doc.id, page_no, rotation)?;
+        if let Some(json) = &turned {
+            repo::set_page_layout(c, &doc.id, page_no, Some(json))?;
+        }
         repo::update_page_render(c, &doc.id, page_no, page.width_px, page.height_px, page.dpi)
     })?;
     Ok(page)
+}
+
+/// Long edge of the page image used for the estimated layout (speed; fractions do not change).
+const LAYOUT_ESTIMATE_LONG_EDGE: u32 = 1400;
+
+/// The word layout of a page for the viewer's on-image text selection: the stored one, or else
+/// computed (PDF text layer → character boxes; OCR / manual text → estimated from the page image)
+/// and cached in `pages.layout`. `None` when the page has no text or no image to lay it on.
+pub fn ensure_layout(deps: &ImportDeps<'_>, doc: &DocumentRecord, page_no: u32) -> Result<Option<PageLayout>> {
+    let Some(page) = deps.db.with(|c| repo::get_page(c, &doc.id, page_no))? else {
+        return Ok(None);
+    };
+    if let Some(stored) =
+        deps.db.with(|c| repo::page_layout_json(c, &doc.id, page_no))?.and_then(|j| PageLayout::from_json(&j))
+    {
+        return Ok(Some(stored));
+    }
+    let Some(text) = page.text.as_deref().filter(|t| !t.trim().is_empty()) else {
+        return Ok(None);
+    };
+    if page.width_px == 0 || page.height_px == 0 {
+        return Ok(None);
+    }
+    let cache = DocumentCache::for_document(deps.paths, &doc.id);
+    let mut found: Option<PageLayout> = None;
+    let own_layer = matches!(page.text_source.as_deref(), Some("layer") | Some("converted"));
+    if own_layer && doc.source_kind != SourceKind::Image {
+        if let Some(svc) = deps.render {
+            let pdf =
+                if doc.source_kind == SourceKind::Pdf { doc.absolute_path(deps.paths) } else { cache.converted_pdf() };
+            if pdf.is_file() {
+                match render::pdf_page_chars(svc, &pdf, page_no) {
+                    Ok((w, h, chars)) => {
+                        let l = layout::from_chars(&chars, w, h, page.rotation);
+                        if !l.words.is_empty() {
+                            found = Some(l);
+                        }
+                    }
+                    Err(e) => log::warn!("text layer of {} page {page_no}: {e}", doc.id),
+                }
+            }
+        }
+    }
+    if found.is_none() {
+        let image = cache.page_file(page_no);
+        if !image.is_file() {
+            return Ok(None);
+        }
+        let img = render::decode_image(&image)?;
+        let gray = render::fit_long_edge(&img, LAYOUT_ESTIMATE_LONG_EDGE).to_luma8();
+        found = Some(layout::estimate(&gray, text));
+    }
+    let Some(layout) = found else { return Ok(None) };
+    deps.db.with(|c| repo::set_page_layout(c, &doc.id, page_no, Some(&layout.to_json())))?;
+    Ok(Some(layout))
+}
+
+/// Replaces the words `start..end` of a page's layout with `replacement` (viewer edit on the page
+/// image): the page text is rewritten in place (`text_source = 'manual'`) and the layout stored.
+pub fn edit_words(
+    deps: &ImportDeps<'_>,
+    doc: &DocumentRecord,
+    page_no: u32,
+    start: usize,
+    end: usize,
+    replacement: &str,
+) -> Result<PageLayout> {
+    let mut layout = ensure_layout(deps, doc, page_no)?
+        .ok_or_else(|| CoreError::NotFound(format!("text layer of page {page_no}")))?;
+    if start >= end || end > layout.words.len() {
+        return Err(CoreError::Invalid(format!("word range {start}..{end} (page has {} words)", layout.words.len())));
+    }
+    let text = deps.db.with(|c| repo::get_page(c, &doc.id, page_no))?.and_then(|p| p.text).unwrap_or_default();
+    let new_text = layout::apply_edit(&mut layout, &text, start, end, replacement);
+    deps.db.with(|c| repo::set_page_text_and_layout(c, &doc.id, page_no, &new_text, &layout.to_json()))?;
+    Ok(layout)
+}
+
+/// Adds text the recogniser missed: `new_text` is laid over `bbox` (fractions of the page image) and
+/// inserted into the page text in reading order.
+pub fn add_words(
+    deps: &ImportDeps<'_>,
+    doc: &DocumentRecord,
+    page_no: u32,
+    bbox: (f32, f32, f32, f32),
+    new_text: &str,
+) -> Result<PageLayout> {
+    if new_text.trim().is_empty() {
+        return Err(CoreError::Invalid("empty text".into()));
+    }
+    if !(bbox.2 > 0.0 && bbox.3 > 0.0) || [bbox.0, bbox.1, bbox.2, bbox.3].iter().any(|v| !v.is_finite()) {
+        return Err(CoreError::Invalid("invalid box".into()));
+    }
+    let page = deps
+        .db
+        .with(|c| repo::get_page(c, &doc.id, page_no))?
+        .ok_or_else(|| CoreError::NotFound(format!("page {page_no}")))?;
+    let mut layout =
+        ensure_layout(deps, doc, page_no)?.unwrap_or_else(|| PageLayout::empty(layout::LayoutSource::Estimated));
+    let text = page.text.unwrap_or_default();
+    let new_text = layout::add_words(&mut layout, &text, bbox, new_text);
+    deps.db.with(|c| repo::set_page_text_and_layout(c, &doc.id, page_no, &new_text, &layout.to_json()))?;
+    Ok(layout)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -1106,6 +1224,53 @@ mod tests {
         let d = e._dir.path().join("usb");
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn page_layout_is_computed_edited_and_rotated() {
+        let Some(svc) = pdfium() else {
+            eprintln!("layout test: skipped (set DOCULENS_PDFIUM)");
+            return;
+        };
+        let e = env();
+        let ext = external_dir(&e);
+        write_blank_pdf(&ext.join("memo.pdf"), 1, &["Hello DocuLens memo".into()]).unwrap();
+        let d = deps(&e, Some(svc));
+        let plan =
+            plan(&e.db, &e.paths, &[ext.join("memo.pdf")], &ImportOptions::default(), ImportSource::Drop).unwrap();
+        let report = run(&d, &plan, None, &mut |_| {}, &mut |_, _| {}).unwrap();
+        let id = report.imported[0].clone();
+        let doc = e.db.with(|c| repo::get_document(c, &id)).unwrap().unwrap();
+        // Computed from PDFium character boxes and cached.
+        let layout = ensure_layout(&d, &doc, 1).unwrap().unwrap();
+        assert_eq!(layout.source, layout::LayoutSource::Layer);
+        assert_eq!(layout.words.iter().map(|w| w.t.as_str()).collect::<Vec<_>>(), ["Hello", "DocuLens", "memo"]);
+        assert!(e.db.with(|c| repo::page_layout_json(c, &id, 1)).unwrap().is_some());
+        // An edit rewrites the page text in place and marks it manual.
+        let edited = edit_words(&d, &doc, 1, 1, 2, "World").unwrap();
+        assert_eq!(edited.words[1].t, "World");
+        assert!(edited.words[1].edited);
+        let page = e.db.with(|c| repo::get_page(c, &id, 1)).unwrap().unwrap();
+        assert_eq!(page.text.as_deref(), Some("Hello World memo"));
+        assert_eq!(page.text_source.as_deref(), Some("manual"));
+        assert!(matches!(edit_words(&d, &doc, 1, 2, 9, "x"), Err(CoreError::Invalid(_))));
+        // Rotation turns the stored boxes with the image.
+        let before = ensure_layout(&d, &doc, 1).unwrap().unwrap();
+        rotate_page(&d, &doc, 1, 90).unwrap();
+        let after = ensure_layout(&d, &doc, 1).unwrap().unwrap();
+        assert_eq!(after.words[0].t, "Hello");
+        assert!((after.words[0].w - before.words[0].h).abs() < 1e-5);
+        assert!(after.words[0].x > 0.8, "{:?}", after.words[0]);
+        // Added text lands in the page text too.
+        let added = add_words(&d, &doc, 1, (0.1, 0.5, 0.3, 0.03), "추가 메모").unwrap();
+        assert!(added.words.iter().any(|w| w.t == "추가" && w.edited));
+        let page = e.db.with(|c| repo::get_page(c, &id, 1)).unwrap().unwrap();
+        assert!(page.text.as_deref().unwrap().contains("추가 메모"));
+        // A re-render keeps the manual text and its layout.
+        process_document(&d, &doc, true, None, None, &mut |_| {}).unwrap();
+        let page = e.db.with(|c| repo::get_page(c, &id, 1)).unwrap().unwrap();
+        assert_eq!(page.text_source.as_deref(), Some("manual"));
+        assert!(e.db.with(|c| repo::page_layout_json(c, &id, 1)).unwrap().is_some());
     }
 
     #[test]

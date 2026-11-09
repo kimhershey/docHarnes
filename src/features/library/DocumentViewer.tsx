@@ -15,9 +15,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AddToCollectionDialog } from "@/features/knowledge/AddToCollectionDialog";
 import { confidenceGlyph, confidenceTone, DEFAULT_REVIEW_THRESHOLD, docTypeLabel, formatConfidence } from "@/features/pipeline/labels";
 import { ProcessMenu } from "@/features/pipeline/ProcessMenu";
+import { Snippet } from "@/features/search/SearchPage";
 import { describeError } from "@/lib/errors";
 import { api, revealPath } from "@/lib/ipc";
-import { useDocTypes, useDocument, useDocumentChunks, useDocumentCollections, useDocumentPages, usePipelineStatus } from "@/lib/queries";
+import { useDocTypes, useDocument, useDocumentChunks, useDocumentCollections, useDocumentPages, useFields, usePipelineStatus } from "@/lib/queries";
 import { queryClient, queryKeys } from "@/lib/query-client";
 import { formatChord, isComposing, matchesChord } from "@/lib/shortcuts";
 import type { Citation, DocumentView, PageView } from "@/lib/types";
@@ -25,18 +26,19 @@ import { cn, formatBytes, formatDate, isMac } from "@/lib/utils";
 import { useShortcut } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 
-import { FieldsPanel } from "./FieldsPanel";
 import { HistoryPanel } from "./HistoryPanel";
-import { PageTextPanel, selectionOffsets } from "./PageTextPanel";
+import { PageTextLayer } from "./PageTextLayer";
 import { RetryImage } from "./RetryImage";
 import { SplitDialog } from "./SplitMergeDialogs";
 import { statusVariant } from "./status";
-import { TablesPanel } from "./TablesPanel";
+import { isContiguous, matchWords, selectionText as layerSelectionText } from "./textLayer";
 import { VersionDialog } from "./VersionDialog";
 import { ViewerKnowledgePanel } from "./ViewerKnowledgePanel";
 
 const NONE = "__none__";
 const THUMB_H = 128;
+/** Right-pane tabs (user decision 2026-11-09: only AI 검색 and 이력; text, fields and tables left the viewer). */
+const TABS = ["qa", "history"] as const;
 
 /** Keys the viewer owns; everything else (tabs, selects, buttons, inputs) keeps its own keyboard behaviour. */
 function isViewerKeyTarget(target: EventTarget | null): boolean {
@@ -47,9 +49,10 @@ function isViewerKeyTarget(target: EventTarget | null): boolean {
 }
 
 /**
- * Document viewer (design §3.7.6, P2 subset): page image with zoom, thumbnail
- * strip, rotation save, tags / type / title editing and the text-layer tab.
- * Fields / tables / Q&A / history tabs arrive with P3–P4.
+ * Document viewer (design §3.7.6): page image with zoom, thumbnail strip, rotation save, tags /
+ * type / title editing, the text layer drawn over the image (select words by dragging, correct them in
+ * place, assign them to a field, explain them) and a right pane with the AI 검색 (Q&A / summary) and
+ * 이력 tabs.
  */
 export function DocumentViewer() {
   const { id } = useParams<{ id: string }>();
@@ -70,11 +73,13 @@ export function DocumentViewer() {
   const chunkParam = searchParams.get("chunk");
   const { data: docChunks } = useDocumentChunks(chunkParam ? id : undefined);
   const explainChord = useShortcut("explain_selection");
-  const [tab, setTab] = useState<string>("text");
+  const [tab, setTab] = useState<string>("qa");
   const [explainSelection, setExplainSelection] = useState<string | null>(null);
-  const [selectionText, setSelectionText] = useState("");
-  // Enter / F2 on a text selection opens the in-place editor with that range selected (§3.7 직접 수정).
-  const [editRequest, setEditRequest] = useState<{ offsets: [number, number] | null; seq: number } | null>(null);
+  // Words selected on the page image (indices into the page layout) and the Enter / F2 edit request.
+  const [selected, setSelected] = useState<number[]>([]);
+  const [editSeq, setEditSeq] = useState(0);
+  // Text selected in the plain-text fallback of pages without an image.
+  const [nativeSelection, setNativeSelection] = useState("");
   const [versionOpen, setVersionOpen] = useState(false);
   const [addToKb, setAddToKb] = useState(false);
   const [splitOpen, setSplitOpen] = useState(false);
@@ -92,7 +97,8 @@ export function DocumentViewer() {
     setTagInput("");
     setTitleDraft(null);
     setExplainSelection(null);
-    setSelectionText("");
+    setSelected([]);
+    setNativeSelection("");
     rootRef.current?.focus();
   }, [id]);
 
@@ -109,22 +115,9 @@ export function DocumentViewer() {
   useEffect(() => {
     const n = Number(pageParam);
     if (pageParam && Number.isFinite(n) && n >= 1) setPageNo(n);
-    if (tabParam && ["text", "fields", "tables", "qa", "history"].includes(tabParam)) setTab(tabParam);
-    else if (searchParams.get("q") || searchParams.get("chunk")) setTab("text");
-  }, [pageParam, tabParam, id, searchParams]);
+    if (tabParam && (TABS as readonly string[]).includes(tabParam)) setTab(tabParam);
+  }, [pageParam, tabParam, id]);
 
-  // Evidence click in the fields tab: jump to the page and highlight the quoted text.
-  const goToEvidence = (page: number, needle?: string) => {
-    setPageNo(page);
-    if (needle) {
-      const next = new URLSearchParams(searchParams);
-      next.set("q", needle.slice(0, 80));
-      next.delete("chunk");
-      next.delete("tab");
-      setSearchParams(next, { replace: true });
-      setTab("text");
-    }
-  };
   const extractNow = async () => {
     if (!doc) return;
     try {
@@ -148,7 +141,7 @@ export function DocumentViewer() {
     const anchor = selection?.anchorNode ?? null;
     const inside = !!anchor && !!textRef.current && textRef.current.contains(anchor);
     const sel = inside ? (selection?.toString().trim() ?? "") : "";
-    setSelectionText(sel.length >= 2 ? sel : "");
+    setNativeSelection(sel.length >= 2 ? sel : "");
   }, []);
   useEffect(() => {
     document.addEventListener("selectionchange", captureSelection);
@@ -170,11 +163,24 @@ export function DocumentViewer() {
 
   const total = pages?.length ?? 0;
   const page: PageView | undefined = pages?.find((p) => p.page_no === pageNo) ?? pages?.[0];
-  const { data: text, isLoading: textLoading } = useQuery({
+  // Pages without an image (no renderer) fall back to the plain text; everything else draws the
+  // text layer over the image.
+  const { data: text } = useQuery({
     queryKey: queryKeys.documentPageText(id ?? "", page?.page_no ?? 0),
     queryFn: () => api.documentsPageText(id ?? "", page?.page_no ?? 0),
-    enabled: !!id && !!page,
+    enabled: !!id && !!page && !page.image_url,
   });
+  const { data: layout } = useQuery({
+    queryKey: queryKeys.documentPageLayout(id ?? "", page?.page_no ?? 0),
+    queryFn: () => api.documentsPageLayout(id ?? "", page?.page_no ?? 0),
+    enabled: !!id && !!page && !!page.image_url,
+  });
+  const { data: fields } = useFields(id);
+  const selectionText = page?.image_url ? layerSelectionText(layout, selected) : nativeSelection;
+  // Selection and editor reset with the page (the layout of another page has other indices).
+  useEffect(() => {
+    setSelected([]);
+  }, [page?.page_no, id]);
 
   const citedChunk = useMemo(() => (chunkParam ? docChunks?.find((c) => String(c.id) === chunkParam) : undefined), [chunkParam, docChunks]);
   const highlightNeedles = useMemo(() => {
@@ -212,6 +218,7 @@ export function DocumentViewer() {
     }
     return out.sort((a, b) => a[0] - b[0]);
   }, [text, highlightNeedles]);
+  const hits = useMemo(() => matchWords(layout, highlightNeedles), [layout, highlightNeedles]);
 
 
   useEffect(() => {
@@ -226,21 +233,31 @@ export function DocumentViewer() {
   const go = useCallback((delta: number) => setPageNo((p) => Math.min(Math.max(1, p + delta), Math.max(1, total))), [total]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if ((e.key === "Enter" || e.key === "F2") && tab === "text" && !e.ctrlKey && !e.metaKey && !e.altKey && isViewerKeyTarget(e.target)) {
-      const offsets = textRef.current ? selectionOffsets(textRef.current) : null;
-      if (offsets || e.key === "F2") {
+    // Enter / F2 edit the words selected on the image; Escape drops the selection; Ctrl+C copies it.
+    if ((e.key === "Enter" || e.key === "F2") && selected.length > 0 && !e.ctrlKey && !e.metaKey && !e.altKey && isViewerKeyTarget(e.target)) {
+      if (isContiguous(selected)) {
         e.preventDefault();
-        setEditRequest((r) => ({ offsets, seq: (r?.seq ?? 0) + 1 }));
-        return;
+        setEditSeq((n) => n + 1);
       }
+      return;
+    }
+    if (e.key === "Escape" && selected.length > 0 && isViewerKeyTarget(e.target)) {
+      e.preventDefault();
+      setSelected([]);
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === "c" || e.key === "C") && selected.length > 0 && isViewerKeyTarget(e.target) && !window.getSelection()?.toString()) {
+      e.preventDefault();
+      void navigator.clipboard.writeText(selectionText).then(
+        () => toast(t("viewer.layer.copied"), "ok"),
+        (err: unknown) => toast(describeError(err, t), "danger"),
+      );
+      return;
     }
     if (matchesChord(e.nativeEvent, explainChord, isMac())) {
-      const selection = window.getSelection();
-      const anchor = selection?.anchorNode ?? null;
-      const sel = anchor && textRef.current?.contains(anchor) ? (selection?.toString().trim() ?? "") : selectionText;
-      if (sel.length >= 2) {
+      if (selectionText.trim().length >= 1) {
         e.preventDefault();
-        explain(sel);
+        explain(selectionText);
       }
       return;
     }
@@ -266,6 +283,8 @@ export function DocumentViewer() {
       queryClient.setQueryData<PageView[]>(queryKeys.documentPages(id, false), (old) =>
         old ? old.map((p) => (p.page_no === updated.page_no ? { ...updated, text: undefined } : p)) : old,
       );
+      // The word boxes turned with the image.
+      void queryClient.invalidateQueries({ queryKey: queryKeys.documentPageLayout(id, page.page_no) });
       toast(t("viewer.rotated"), "ok");
     } catch (e) {
       toast(describeError(e, t), "danger");
@@ -544,76 +563,88 @@ export function DocumentViewer() {
       <div className="flex min-h-0 flex-1">
         <ThumbStrip pages={pages ?? []} current={pageNo} onSelect={setPageNo} />
 
-        <div ref={scrollRef} className="min-w-0 flex-1 overflow-auto bg-bg-sunken p-4" data-testid="viewer-canvas">
-          {pagesLoading && !pages ? (
-            <div className="flex h-full items-center justify-center gap-2 text-sm text-fg-muted" role="status">
-              <Spinner />
-              {t("viewer.loading_pages")}
-            </div>
-          ) : page?.image_url ? (
-            <RetryImage
-              key={`${page.page_no}-${page.rendered_at ?? ""}`}
-              src={page.image_url}
-              alt={t("viewer.page_image_alt", { name: displayName, page: page.page_no })}
-              className="mx-auto block bg-white shadow"
-              style={imageStyle}
-              draggable={false}
-              data-testid="viewer-image"
-              fallback={
-                // The purged page did not come back after the retries: offer the re-render explicitly.
-                <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-fg-muted" data-testid="viewer-image-failed">
-                  <span>{t("viewer.image_failed")}</span>
-                  <Button size="sm" variant="outline" onClick={() => void rerender()}>
-                    <RefreshCw />
-                    {t("viewer.rerender")}
-                  </Button>
-                </div>
-              }
-            />
-          ) : (
-            <div className="flex h-full items-center justify-center text-sm text-fg-muted" data-testid="viewer-no-image">
-              {total === 0 ? t("viewer.no_pages") : t("viewer.no_image")}
-            </div>
-          )}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-3 py-1 text-xs text-fg-muted" data-testid="viewer-layer-bar">
+            {page?.text_source && (
+              <Badge variant={page.text_source === "manual" ? "info" : "outline"} data-testid="viewer-text-source">
+                {t(`viewer.text_edit.source.${page.text_source}`, { defaultValue: page.text_source })}
+              </Badge>
+            )}
+            {layout?.source === "estimated" && (
+              <Badge variant="muted" title={t("viewer.layer.estimated_title")} data-testid="viewer-layer-estimated">
+                {t("viewer.layer.estimated")}
+              </Badge>
+            )}
+            <span className="truncate">{page?.image_url && !page.has_text && !layout?.words.length ? t("viewer.layer.no_text") : t("viewer.layer.hint")}</span>
+            {highlightQuery && (
+              <span className="ml-auto flex items-center gap-1 rounded-md bg-warn-soft px-2 py-0.5 text-fg" data-testid="viewer-highlight">
+                <span className="max-w-60 truncate">{t("viewer.highlight", { q: highlightQuery })}</span>
+                <Button size="sm" variant="ghost" className="h-5 px-1.5 text-xs" onClick={clearHighlight}>
+                  {t("viewer.clear_highlight")}
+                </Button>
+              </span>
+            )}
+          </div>
+          <div ref={scrollRef} className="min-h-0 min-w-0 flex-1 overflow-auto bg-bg-sunken p-4" data-testid="viewer-canvas">
+            {pagesLoading && !pages ? (
+              <div className="flex h-full items-center justify-center gap-2 text-sm text-fg-muted" role="status">
+                <Spinner />
+                {t("viewer.loading_pages")}
+              </div>
+            ) : page?.image_url ? (
+              <div className="relative mx-auto" style={imageStyle} data-testid="viewer-page-stage">
+                <RetryImage
+                  key={`${page.page_no}-${page.rendered_at ?? ""}`}
+                  src={page.image_url}
+                  alt={t("viewer.page_image_alt", { name: displayName, page: page.page_no })}
+                  className="block w-full bg-white shadow"
+                  draggable={false}
+                  data-testid="viewer-image"
+                  fallback={
+                    // The purged page did not come back after the retries: offer the re-render explicitly.
+                    <div className="flex h-64 flex-col items-center justify-center gap-2 text-sm text-fg-muted" data-testid="viewer-image-failed">
+                      <span>{t("viewer.image_failed")}</span>
+                      <Button size="sm" variant="outline" onClick={() => void rerender()}>
+                        <RefreshCw />
+                        {t("viewer.rerender")}
+                      </Button>
+                    </div>
+                  }
+                />
+                <PageTextLayer
+                  doc={doc}
+                  page={page}
+                  layout={layout}
+                  hits={hits}
+                  selected={selected}
+                  onSelect={setSelected}
+                  fields={fields ?? []}
+                  onExplain={(sel) => explain(sel)}
+                  editSeq={editSeq}
+                />
+              </div>
+            ) : page && text ? (
+              // No page image (no renderer): the text itself, selectable, with the search highlights.
+              <pre ref={textRef} className="mx-auto max-w-3xl whitespace-pre-wrap break-words rounded-md bg-bg p-4 font-sans text-sm shadow selectable" data-testid="viewer-text">
+                {highlights.length > 0 ? <Snippet text={text} highlights={highlights} /> : text}
+              </pre>
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-fg-muted" data-testid="viewer-no-image">
+                {total === 0 ? t("viewer.no_pages") : t("viewer.no_image")}
+              </div>
+            )}
+          </div>
         </div>
 
         <aside className="flex w-80 shrink-0 flex-col border-l border-border">
           <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col">
             <TabsList className="m-2">
-              {(["text", "fields", "tables", "qa", "history"] as const).map((tab) => (
+              {TABS.map((tab) => (
                 <TabsTrigger key={tab} value={tab} data-testid={`viewer-tab-${tab}`}>
                   {t(`viewer.tabs.${tab}`)}
                 </TabsTrigger>
               ))}
             </TabsList>
-            <TabsContent value="text" className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-              {highlightQuery && (
-                <div className="mb-2 flex items-center gap-2 rounded-md bg-warn-soft px-2 py-1 text-xs" data-testid="viewer-highlight">
-                  <span className="truncate">{t("viewer.highlight", { q: highlightQuery })}</span>
-                  <Button size="sm" variant="ghost" className="ml-auto h-6 px-2" onClick={clearHighlight}>
-                    {t("viewer.clear_highlight")}
-                  </Button>
-                </div>
-              )}
-              <PageTextPanel
-                doc={doc}
-                page={page}
-                text={text}
-                loading={textLoading}
-                highlights={highlights}
-                textRef={textRef}
-                selectionText={selectionText}
-                onExplain={(sel) => explain(sel)}
-                editRequest={editRequest}
-                onEditRequestHandled={() => setEditRequest(null)}
-              />
-            </TabsContent>
-            <TabsContent value="fields" className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-              <FieldsPanel key={doc.id} doc={doc} onGoToPage={goToEvidence} onStartExtract={() => void extractNow()} />
-            </TabsContent>
-            <TabsContent value="tables" className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-              <TablesPanel key={doc.id} doc={doc} onGoToPage={setPageNo} />
-            </TabsContent>
             <TabsContent value="qa" forceMount className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 data-[state=inactive]:hidden">
               <ViewerKnowledgePanel doc={doc} explainSelection={explainSelection} onExplained={() => setExplainSelection(null)} onCitation={onCitation} />
             </TabsContent>

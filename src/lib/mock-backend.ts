@@ -28,6 +28,7 @@ import type {
   ImportSource,
   LibraryStats,
   OrganizePlan,
+  PageLayout,
   PageView,
   PdfiumInfo,
   Plan,
@@ -66,6 +67,7 @@ import type {
   WorkspaceManifest,
   WorkspaceView,
 } from "./types";
+import { addWords as addLayoutWords, applyEdit as applyLayoutEdit, synthLayout } from "./mock-layout";
 import { defaultImportOptions, EVENTS, type ImportReport } from "./types";
 import type { DraftJobSpec } from "./mock-generate";
 
@@ -1626,6 +1628,8 @@ export interface MockPage {
   ocr_at?: string | null;
   page_doc_type?: string | null;
   classified_at?: string | null;
+  /** Word layout after an on-image edit (synthesised from the text until then). */
+  layout?: PageLayout | null;
 }
 
 export interface MockDoc extends DocumentRecord {
@@ -1706,6 +1710,12 @@ function svgPage(title: string, pageNo: number, w: number, h: number, thumb: boo
   const safe = title.replace(/[<>&"]/g, "");
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><rect width="100%" height="100%" fill="#ffffff"/><rect x="2" y="2" width="${w - 4}" height="${h - 4}" fill="none" stroke="#d0d5dc"/><text x="${Math.round(w * 0.1)}" y="${Math.round(h * 0.12)}" font-family="sans-serif" font-size="${fs}" fill="#333">${safe} — p.${pageNo}</text>${body}</svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+/** The synthetic word layout of a mock page (PDF / converted text → "layer", OCR / manual → "estimated"). */
+function mockLayout(d: MockDoc, p: MockPage): PageLayout {
+  const source = p.text_source ?? (d.converted ? "converted" : "layer");
+  return synthLayout(p.text, source === "layer" || source === "converted" ? "layer" : "estimated");
 }
 
 export function docView(d: MockDoc): DocumentView {
@@ -2020,12 +2030,57 @@ function mockDocuments(cmd: string, a: Record<string, any>): unknown { // eslint
       const text = String(a.text ?? "").trimEnd();
       p.text = text.trim() ? text : null;
       p.text_source = "manual";
+      p.layout = null;
       d.has_text_layer = d.pages.some((x) => !!x.text);
       d.updated_at = new Date().toISOString();
       upsertDoc(d);
       emit(EVENTS.documentsChanged, { kind: "updated", ids: [d.id] } satisfies DocumentsChanged);
       void import("./mock-knowledge").then((kb) => kb.autoIndex());
       return true;
+    }
+    case "documents_page_layout": {
+      const d = wsDocs().find((x) => x.id === a.id);
+      const p = d?.pages.find((x) => x.page_no === Number(a.pageNo));
+      if (!d || !p || !p.text || p.width_px === 0) return null;
+      return p.layout ?? mockLayout(d, p);
+    }
+    case "documents_edit_page_words": {
+      const d = wsDocs().find((x) => x.id === a.id);
+      const p = d?.pages.find((x) => x.page_no === Number(a.pageNo));
+      if (!d || !p) throw err("not_found", String(a.id));
+      if (!p.text) throw err("not_found", "text layer");
+      const layout = p.layout ?? mockLayout(d, p);
+      const start = Number(a.start);
+      const end = Number(a.end);
+      if (!(start >= 0 && start < end && end <= layout.words.length)) throw err("invalid", `word range ${start}..${end}`);
+      const text = applyLayoutEdit(layout, p.text, start, end, String(a.text ?? ""));
+      p.text = text.trim() ? text.trimEnd() : null;
+      p.text_source = "manual";
+      p.layout = layout;
+      d.has_text_layer = d.pages.some((x) => !!x.text);
+      d.updated_at = new Date().toISOString();
+      upsertDoc(d);
+      emit(EVENTS.documentsChanged, { kind: "updated", ids: [d.id] } satisfies DocumentsChanged);
+      void import("./mock-knowledge").then((kb) => kb.autoIndex());
+      return layout;
+    }
+    case "documents_add_page_words": {
+      const d = wsDocs().find((x) => x.id === a.id);
+      const p = d?.pages.find((x) => x.page_no === Number(a.pageNo));
+      if (!d || !p) throw err("not_found", String(a.id));
+      const words = String(a.text ?? "");
+      if (!words.trim()) throw err("invalid", "empty text");
+      const layout = p.layout ?? (p.text ? mockLayout(d, p) : { version: 1, source: "estimated" as const, words: [] });
+      const text = addLayoutWords(layout, p.text ?? "", a.bbox as [number, number, number, number], words);
+      p.text = text.trimEnd();
+      p.text_source = "manual";
+      p.layout = layout;
+      d.has_text_layer = true;
+      d.updated_at = new Date().toISOString();
+      upsertDoc(d);
+      emit(EVENTS.documentsChanged, { kind: "updated", ids: [d.id] } satisfies DocumentsChanged);
+      void import("./mock-knowledge").then((kb) => kb.autoIndex());
+      return layout;
     }
     case "documents_import_plan": {
       const args = a.args as { paths: string[]; options: ImportOptions; source: ImportSource };
@@ -2402,6 +2457,9 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "documents_pages":
     case "documents_page_text":
     case "documents_set_page_text":
+    case "documents_page_layout":
+    case "documents_edit_page_words":
+    case "documents_add_page_words":
     case "documents_import_plan":
     case "documents_import_run":
     case "documents_rescan":

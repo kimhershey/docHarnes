@@ -354,7 +354,7 @@
   하이라이트 스니펫), 키워드 전용/LIKE 폴백 안내, 열기(뷰어 `?page&q&chunk`)·이 결과로 질문.
 - 어시스턴트: 프리라우터 미매칭 입력은 지식 베이스 Q&A(범위 선택, 후속 질문은 직전 근거 유지), `AnswerCard`(문장별 출처 칩 →
   뷰어 쪽 이동, 근거 없음 배너 + "일반 지식으로 답하기", 상충 단락, 피드백·복사), 스트리밍 표시.
-- 뷰어: 지식 배지(컬렉션), "지식 베이스에 추가"·"버전"·"설명(Ctrl+E)" 버튼, 텍스트 탭 검색어 하이라이트(`?q=`), Q&A 탭
+- 뷰어: 지식 배지(컬렉션), "지식 베이스에 추가"·"버전"·"설명(Ctrl+E)" 버튼, 검색어 하이라이트(`?q=`; 2026-11-09부터 이미지 위 글자 레이어의 `<mark>`), Q&A 탭(→ "AI 검색")
   (이 문서/전체 범위 질문, 설명, 요약 모드 3종, 문서별 답변 기록). 라이브러리: 일괄 "지식 베이스에 추가", 지식 역할 배지.
 - 설정 > 지식 베이스 탭. 작업 화면: `knowledge_index`/`knowledge_embed` 종류·요약 번역. 오류 사유 번역 8종.
 - 모의 백엔드 `mock-knowledge.ts`(문단 청킹, 부분 문자열 검색, 스트리밍 정답 생성, 색인/임베딩 작업 시뮬레이션,
@@ -1131,8 +1131,49 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 - **모의 백엔드** 동일 동작(저장 → 이벤트 → 자동 색인). i18n `viewer.text_edit.*`, `viewer.text_empty` 문구 갱신.
 - **검증**: Rust `manual_page_text_survives_rerender_and_clears`, `manual_text_is_kept_unless_ocr_is_forced`; Playwright
   `documents.spec` "viewer text can be corrected in place"(드래그 선택 → Enter → 범위 선택 확인 → 치환 → Ctrl+Enter → 출처 배지 →
-  검색 반영), `pipeline.spec` "a text selection becomes a field value". 설계 §3.7의 "직접 수정"으로 기록. 페이지 이미지 위 글자 선택
-  (문자 박스 그라운딩)은 v1.x 숙제 그대로 — 현재는 텍스트 탭에서 선택·수정.
+  검색 반영), `pipeline.spec` "a text selection becomes a field value". 설계 §3.7의 "직접 수정"으로 기록. → 같은 날 아래
+  "페이지 이미지 위 글자 레이어"로 대체(텍스트 탭 자체가 사라짐).
+
+### 페이지 이미지 위 글자 레이어 + 우측 패널 단순화 (2026-11-09, 사용자 요청 "이미지에서 글자로 인식된 부분을 드래그해 수정, 오른쪽은 AI 검색·이력만")
+
+- **설계 편차(사용자 결정)**: §3.7.2 뷰어의 우측 탭 [텍스트][필드][표][Q&A][이력] 중 텍스트·필드·표 탭을 없애고 **[AI 검색](Q&A 탭
+  개명)·[이력]** 만 남겼다. 필드 검토는 검토 큐 화면(Ctrl+?)·"필드 값으로"(이미지 선택)·이력 탭(복원)으로, 표 복사/CSV는 내보내기
+  (`export target=table`)로 대신한다. `FieldsPanel`·`TablesPanel`·`PageTextPanel` 삭제, `viewer.fields.*`는 이력·검토 큐가 쓰는 3키만 유지.
+- **코어 `documents/layout.rs`** (`PageLayout { version, source: layer|estimated, words: [{t,x,y,w,h,line,edited}] }`, 좌표는 회전 적용
+  후 페이지 이미지의 0~1 비율): (a) **디지털 PDF·변환본** — PDFium 문자 박스(`render::pdf_page_chars`, loose → tight 폴백)를 공백·수평
+  점프(0.5h)·수직 이동(0.5h)으로 단어로 묶고 줄을 나눈 뒤 저장 회전(90/180/270)을 비율 변환으로 적용; (b) **스캔·사진(OCR)·수동
+  전체 교체 텍스트** — 문자 좌표가 없으므로 페이지 JPEG(긴 변 1400px)의 행 잉크 프로파일로 줄 띠를 찾고(간격 ≤h/400 병합, 높이
+  <h/300 제거) 텍스트 줄 수에 맞춰 병합/분할한 뒤 각 줄의 단어를 띠의 잉크 범위에 표시 폭(한글 1·라틴 0.55) 비례로 배치
+  (`source=estimated`, 뷰어 배지 "위치 추정"); OCR 마크업(`<table>`·`<br>`·`<stamp>`)은 `text_lines`가 줄/셀로 환원. (c) **편집**
+  `apply_edit(start..end, 치환문)` — 레이아웃 단어를 페이지 텍스트에서 **순서대로 찾아**(같은 단어 반복 시 올바른 n번째) 단어 수가 같으면
+  제자리 치환(표 태그 등 사이 마크업 보존), 다르면 구간 치환(삭제는 인접 공백 흡수), 찾지 못하면 레이아웃 텍스트로 재생성; 새 단어는
+  `edited=true`로 기존 박스를 상속(수 다르면 합집합 박스에 비례 배치). `add_words(bbox, 글)` — 빈 영역에 그린 박스에 새 단어를
+  읽기 순서 위치(줄 중심 비교)로 삽입하고 텍스트에도 같은 자리에 넣음. `PageLayout::rotate(delta)`.
+- **DB** 마이그레이션 0006 `pages.layout TEXT`(JSON; 계산 캐시 + 편집 영속). `replace_pages`는 manual/ocr 텍스트와 함께 layout 유지,
+  `set_page_text`(전체 교체)·`set_page_ocr`·`reset_pipeline_state`(ocr)는 NULL로 초기화, `rotate_page`는 저장된 레이아웃을 함께 회전.
+  `repo::page_layout_json / set_page_layout / set_page_text_and_layout`.
+- **오케스트레이션 `import::ensure_layout`**(저장본 → PDF면 문자 박스 → 없거나 비면 이미지 추정 → 캐시), `edit_words`, `add_words`;
+  셸 명령 `documents_page_layout`, `documents_edit_page_words(start,end,text)`, `documents_add_page_words(bbox,text)` (저장 →
+  `documents://changed` + `auto_index`). `SCHEMA_VERSION = 6`.
+- **UI** `features/library/PageTextLayer.tsx`(이미지 위 절대 배치 레이어; 단어 span은 투명 글자 + 선택/강조/수정됨 스타일, 구분용
+  텍스트 노드로 `textContent`가 "단어 단어\n…"로 읽힘), `textLayer.ts`(선택 텍스트·연속성·히트 테스트(가장 가까운 줄/단어)·사각형
+  교차·검색어→단어 강조). 상호작용: 단어 클릭/Shift+클릭/드래그(읽기 순서 범위) 또는 빈 곳 드래그(사각형 교차); 떠 있는 툴바(선택
+  문구 · 텍스트 수정 · 필드 값으로 ▾ · 설명 · 복사 · 닫기); Enter/F2 → 선택 박스 위 인라인 입력(Enter 저장·Esc 취소), 더블클릭 =
+  단어 바로 편집; Esc 선택 해제, Ctrl+C 복사; 빈 곳에 그린 사각형 → "글자 추가" 입력. 검색어(`?q=`)·인용(`?chunk=`) 강조는 단어
+  `<mark>`로, 배너·출처 배지·"위치 추정" 배지는 캔버스 위 줄(`viewer-layer-bar`). 이미지가 없는 쪽(렌더러 없음)은 본문 텍스트를
+  캔버스에 그대로 표시(`viewer-text`). 회전 저장 뒤 레이아웃 쿼리 무효화. `DocumentViewer` 탭 `TABS = ["qa","history"]`, 기본 탭 AI 검색,
+  `?tab=` 은 두 값만 허용(프로젝트 결과 탭의 `tab=fields` 링크 제거).
+- **모의 백엔드** `mock-layout.ts`(Rust와 같은 규칙의 TS 트윈: 모의 페이지 SVG의 회색 줄 위에 줄 배치, `applyEdit`/`addWords`),
+  `documents_page_layout / edit_page_words / add_page_words`. i18n `viewer.tabs.qa` "AI 검색", `viewer.layer.*` 추가, 텍스트·필드·표
+  탭 문구 제거(파리티 유지).
+- **검증**: Rust `documents::layout` 8건(문자→단어/줄/회전, 공백 없는 수평 점프 분리, OCR 마크업 줄 환원, 잉크 띠 추정(줄 수
+  병합/분할·빈 이미지), 제자리/구간/삭제 치환·n번째 반복·표 태그 보존·오래된 레이아웃 폴백·추가 삽입 순서·JSON 왕복),
+  `render::pdf_renders_pages_text_and_thumbnails`(실 PDFium 문자 박스 → "Hello"/"DocuLens"), `import::page_layout_is_computed_edited_and_rotated`
+  (계산·캐시 → 편집 → manual → 회전 → 추가 → 다시 렌더 보존), `projects` 마이그레이션 테스트 6으로 갱신; vitest `text-layer.test.ts` 8건;
+  Playwright `documents.spec`(클릭/드래그 선택 → Enter → 입력값 확인 → 치환 → 수정됨 3단어 → 출처 배지 → Esc → 빈 곳 드래그 "글자 추가"
+  → 검색 반영), `pipeline.spec`(OCR 쪽 "위치 추정" 배지, 검토는 큐에서 → 이력 탭 확인; 이미지 선택 → 필드 값으로 → 이력에 "스타벅스
+  역삼점 → 역삼점"), `knowledge.spec`(검색/인용 강조는 레이어 `<mark>`, 설명은 이미지 선택으로). 실 PDF/스캔에서의 박스 정확도는 사용자 PC
+  체크리스트 "페이지 이미지 위 글자 레이어".
 
 ### 테스트·검증
 

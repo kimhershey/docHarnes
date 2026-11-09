@@ -1367,13 +1367,9 @@
     "delete": "Delete (trash)",
     "delete_confirm": "Delete '{{name}}'? The file moves to the trash.",
     "tabs": {
-      "text": "Text",
-      "fields": "Fields",
-      "tables": "Tables",
-      "qa": "Q&A",
+      "qa": "AI search",
       "history": "History"
     },
-    "text_empty": "This page has no text yet. Run OCR with 'Process' or type it with 'Type text'.",
     "no_image": "No page image. Click Re-render to create it.",
     "no_pages": "No rendered pages.",
     "converted_badge": "converted",
@@ -1387,10 +1383,6 @@
     "thumbnails": "Pages",
     "rotated": "Rotation saved. Re-process if OCR results exist.",
     "deleted": "Document deleted.",
-    "placeholder_fields": "The extracted-field grid arrives in P4 (pipeline).",
-    "placeholder_tables": "The tables tab (XLSX/CSV/clipboard) arrives in P4.",
-    "placeholder_qa": "Document Q&A arrives in P3 (knowledge base).",
-    "placeholder_history": "Run history and field snapshots arrive in P4.",
     "info": {
       "path": "Path",
       "size": "Size",
@@ -1448,44 +1440,6 @@
       "saved": "Version saved."
     },
     "explain_with_chord": "Explain ({{chord}})",
-    "fields": {
-      "run": "Run #{{n}}",
-      "schema": "Schema",
-      "none": "No extraction yet. Start one with 'Process'.",
-      "extract": "Extract now",
-      "approve": "Approve",
-      "correct": "Correct",
-      "hold": "Hold",
-      "next": "Next",
-      "reject": "Reject",
-      "revalidate": "Re-run validation",
-      "revalidated": "Validation re-run.",
-      "evidence": "Evidence",
-      "confidence": "Confidence",
-      "change_schema": "Change schema",
-      "schema_auto": "Automatic (type mapping)",
-      "pending": "{{count}} awaiting review",
-      "approve_all": "Approve all",
-      "table_row": "{{table}} row {{row}}",
-      "edit_placeholder": "New value",
-      "empty_value": "(none)",
-      "page_link": "p.{{page}}",
-      "schema_changed": "Schema changed. Re-extract to apply it.",
-      "precise": "precise",
-      "run_select": "Select run",
-      "open_queue": "Open in review queue",
-      "more": "More actions"
-    },
-    "tables": {
-      "none": "No tables found in the text. HTML tables and Markdown tables from OCR appear here.",
-      "copy": "Copy to clipboard",
-      "csv": "Save CSV",
-      "copied": "Table copied.",
-      "saved": "CSV saved.",
-      "page": "Page {{page}} · table {{index}}",
-      "rows": "{{count}} rows",
-      "rows_one": "{{count}} row"
-    },
     "history": {
       "runs": "Extraction runs",
       "changes": "Field changes",
@@ -1517,24 +1471,36 @@
     "image_failed": "The page image could not be loaded. A page purged from the cache comes back after a re-render.",
     "text_edit": {
       "edit": "Edit text",
-      "type_in": "Type text",
-      "hint": "Drag to select text, then press Enter (or 'Edit') to correct it in place.",
-      "editing_hint": "Saving updates search, questions and extraction at once. Ctrl+Enter saves · Esc cancels",
+      "hint": "Drag over the words on the image to select them, then press Enter (or 'Edit text') to correct them in place.",
       "selection": "Selected: “{{text}}”",
       "set_field": "Set as field value",
       "set_field_none": "No extracted fields",
       "field_set": "'{{label}}' now holds the selected text",
       "saved": "Saved the text of page {{page}}",
       "unchanged": "Nothing changed",
-      "source_label": "Source",
       "source": {
         "layer": "Text layer",
         "converted": "Converted",
         "ocr": "OCR",
         "manual": "Edited"
-      },
-      "manual_badge": "Edited",
-      "placeholder": "Type the text of this page"
+      }
+    },
+    "layer": {
+      "aria": "Page text layer",
+      "hint": "Drag over the words on the image to select them, then press Enter (or 'Edit text') to correct them in place. Drag on an empty area to add text.",
+      "no_text": "No text was recognised on this page. Run OCR with 'Process', or drag on an empty area to type the text.",
+      "estimated": "Estimated positions",
+      "estimated_title": "Scans and photos carry no character coordinates, so the line positions were estimated from the image. Selecting and editing work the same.",
+      "copy": "Copy",
+      "copied": "Copied the selected text.",
+      "add_text": "Add text",
+      "add_placeholder": "Type the text at this spot",
+      "edit_hint": "Enter saves · Esc cancels"
+    },
+    "fields": {
+      "run": "Run #{{n}}",
+      "empty_value": "(none)",
+      "table_row": "{{table}} row {{row}}"
     }
   },
   "answer": {

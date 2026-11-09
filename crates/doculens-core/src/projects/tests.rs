@@ -182,8 +182,9 @@ fn certification_world(db: &Db) -> Project {
 #[test]
 fn migration_adds_project_tables() {
     let db = db();
-    assert_eq!(SCHEMA_VERSION, 5);
-    assert_eq!(db.user_version().unwrap(), 5);
+    // Schema 5 added the project tables; schema 6 (page layout) only adds a column to `pages`.
+    assert_eq!(SCHEMA_VERSION, 6);
+    assert_eq!(db.user_version().unwrap(), 6);
     let tables: Vec<String> = db
         .with(|c| {
             let mut s = c.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")?;

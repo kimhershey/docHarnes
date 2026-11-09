@@ -39,7 +39,7 @@ export function ResultsTab({ detail, onCheck, checking }: { detail: ProjectDetai
   const run: CheckRun | null = (selected ? runs?.find((r) => r.id === selected) : null) ?? detail.last_run;
   const open = (e: Evidence) => {
     if (!e.doc_id) return;
-    navigate(`/library/${e.doc_id}${e.page ? `?page=${e.page}&tab=fields` : "?tab=fields"}`);
+    navigate(`/library/${e.doc_id}${e.page ? `?page=${e.page}` : ""}`);
   };
   return (
     <div className="flex flex-col gap-3" data-testid="project-results">

@@ -7,6 +7,7 @@
 pub mod convert;
 pub mod fixtures;
 pub mod import;
+pub mod layout;
 pub mod render;
 pub mod repo;
 pub mod sniff;

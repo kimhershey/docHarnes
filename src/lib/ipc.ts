@@ -87,6 +87,7 @@ import type {
   LogLine,
   ModelIndex,
   ModelInstanceStatus,
+  PageLayout,
   PageView,
   PdfiumInfo,
   PreRouteResult,
@@ -209,6 +210,11 @@ export const api = {
   documentsPageText: (id: string, pageNo: number) => invoke<string | null>("documents_page_text", { id, pageNo }),
   /** Manual correction of a page's text (viewer text tab); the knowledge index follows. */
   documentsSetPageText: (id: string, pageNo: number, text: string) => invoke<boolean>("documents_set_page_text", { id, pageNo, text }),
+  documentsPageLayout: (id: string, pageNo: number) => invoke<PageLayout | null>("documents_page_layout", { id, pageNo }),
+  documentsEditPageWords: (id: string, pageNo: number, start: number, end: number, text: string) =>
+    invoke<PageLayout>("documents_edit_page_words", { id, pageNo, start, end, text }),
+  documentsAddPageWords: (id: string, pageNo: number, bbox: [number, number, number, number], text: string) =>
+    invoke<PageLayout>("documents_add_page_words", { id, pageNo, bbox, text }),
   documentsImportPlan: (paths: string[], options: ImportOptions, source: ImportSource = "drop") =>
     invoke<DocumentImportPlan>("documents_import_plan", { args: { paths, options, source } }),
   documentsImportRun: (token: string | null, paths: string[], options: ImportOptions, source: ImportSource = "drop") =>

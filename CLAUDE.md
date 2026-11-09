@@ -55,7 +55,8 @@ user PC: `docs/RUN-GUIDE.md`.
   `gguf` (header parser, hashes), `modelstore` (drop-in folders, import, download), `fswatch` (debounced watcher),
   `engine/` (locate, devices, presets, client, process, manager, fake_router),
   `db/` (rusqlite + embedded migrations), `documents/` (repo, import plan/run/rescan with content-based
-  classification (`sniff`: magic bytes / zip & CFB entries → `import::classify`), render via PDFium,
+  classification (`sniff`: magic bytes / zip & CFB entries → `import::classify`), render via PDFium, `layout` (word boxes of the
+  page text: PDFium char boxes or ink-band estimate for OCR pages; on-image edits rewrite `pages.text`),
   `convert/` HWPX·DOCX·HWP·XLSX·PPTX·text (txt/md/csv/html…) → model → HTML → PDF through a `PdfPrinter`, fixtures),
   `knowledge/` (tokenize: lindera ko-dic / simple analyzer, chunker: structure-aware chunking, repo, index,
   embed: sqlite-vec + `Embedder`, search: hybrid RRF, answer: grounded answers / explain / summarize / compare),
@@ -105,7 +106,7 @@ user PC: `docs/RUN-GUIDE.md`.
   `chunks` + FTS5 `chunks_fts`/`chunks_fts_tri`, sqlite-vec `chunks_vec`, `collections`, `doc_versions`, `glossary`,
   `answers`; pipeline tables `schemas`, `schema_versions`, `extraction_runs`, `fields`, `field_history`; P5 tables
   `journal_batches`, `ops_journal`, `jobs`; P6 tables `projects`, `project_templates`, `project_documents`,
-  `project_rules`, `project_runs`, `project_rule_results`), drafts `.doculens/drafts/<id>.json`, page cache
+  `project_rules`, `project_runs`, `project_rule_results`; `pages.layout` word-box JSON (0006)), drafts `.doculens/drafts/<id>.json`, page cache
   `.doculens/cache/{pages,thumbs,converted}/<doc_id>/`, extraction mirror `.doculens/extractions/<doc_id>/<run_id>/`;
   DB rows store workspace-relative paths only. OCR text lives in `pages.text` (`text_source = ocr`) so the knowledge
   indexer re-chunks it.

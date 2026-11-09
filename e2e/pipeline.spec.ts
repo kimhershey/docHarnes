@@ -4,8 +4,8 @@ import ko from "../src/i18n/ko.json" with { type: "json" };
 import { card, createWorkspace, docId, freshApp, importViaLibrary, tplPattern } from "./helpers";
 
 // P4 acceptance (design §4.1): bulk processing (classify → OCR → extract) →
-// review flags on the card and in the viewer's Fields tab → keyboard review
-// queue → document promoted to "reviewed"; schemas (NL creation, form
+// review flags on the card and in the viewer → keyboard review queue →
+// document promoted to "reviewed"; schemas (NL creation, form
 // registration, type mapping) and the processing settings — against the
 // browser mock backend. Real VLM calls, validators and the mirror are covered
 // by the Rust tests.
@@ -43,38 +43,41 @@ test.describe("P4 pipeline", () => {
     await expect(job).toContainText(ko.jobs.kind.pipeline);
     await expect(job.getByTestId("job-detail")).toContainText(tplPattern(ko.jobs.detail.process_summary, { processed: 2, classified: 2, extracted: 2, failed: 0 }));
 
-    // Viewer: Fields tab lists extracted values with confidence glyphs; OCR text is in the text tab.
+    // Viewer: the OCR text sits on the page image (estimated positions for a photo); the right pane
+    // only has AI 검색 and 이력 — the review itself happens in the queue.
     await page.getByTestId("nav-library").click();
     await card(page, "영수증-1p.jpg").getByTestId(/doc-open-/).click();
     await expect(page.getByTestId("page-viewer")).toBeVisible();
     await expect(page.getByTestId("viewer-status")).toHaveText(ko.documents.status.extracted);
     await expect(page.getByTestId("viewer-review-badge")).toHaveText(ko.viewer.review_badge.pending);
-    await expect(page.getByTestId("viewer-text")).toContainText("스타벅스 역삼점");
-    await page.getByTestId("viewer-tab-fields").click();
-    await expect(page.getByTestId("fields-panel")).toBeVisible();
-    const storeName = page.getByTestId("field-store_name");
-    await expect(storeName.getByTestId("field-value")).toHaveText("스타벅스 역삼점");
-    await expect(storeName.getByTestId("field-confidence")).toContainText("✔");
-    const approval = page.getByTestId("field-approval_no");
-    await expect(approval).toHaveAttribute("data-field-review", "pending");
-    await expect(approval.getByTestId("field-confidence")).toContainText("▲");
-    await expect(page.getByTestId("field-items[0].amount").getByTestId("field-value")).toHaveText("9,000");
+    await expect(page.getByTestId("viewer-text-layer")).toContainText("스타벅스 역삼점");
+    await expect(page.getByTestId("viewer-text-layer")).toContainText("아메리카노");
+    await expect(page.getByTestId("viewer-layer-estimated")).toBeVisible();
+    await expect(page.getByTestId("viewer-tab-fields")).toHaveCount(0);
 
-    // Correct the approval number inline, approve the rest → reviewed.
-    await approval.getByTestId("field-correct").click();
-    await approval.getByTestId("field-edit-input").fill("87654321");
-    await approval.getByTestId("field-edit-save").click();
-    await expect(approval.getByTestId("field-value")).toHaveText("87654321");
-    await expect(approval.getByTestId("field-status")).toHaveText(ko.pipeline.field_status.corrected);
-    await page.getByTestId("fields-approve-all").click();
+    // Review queue: correct the approval number, approve the rest of the receipt → reviewed.
+    await page.getByTestId("nav-review").click();
+    await expect(page.getByTestId("page-review")).toBeVisible();
+    const receiptItems = page.locator('[data-testid^="review-item-"]').filter({ hasText: "영수증-1p.jpg" });
+    await receiptItems.filter({ hasText: "승인번호" }).first().click();
+    await expect(page.getByTestId("review-current-title")).toContainText("승인번호");
+    await page.getByTestId("review-edit").click();
+    await page.getByTestId("review-edit-input").fill("87654321");
+    await page.getByTestId("review-edit-save").click();
+    await expect(page.getByTestId("review-edit-dialog")).toHaveCount(0);
+    await receiptItems.first().click();
+    await page.getByTestId("review-approve-doc").click();
+    await expect(receiptItems).toHaveCount(0);
+
+    // Back in the viewer the document is reviewed and the 이력 tab records the correction.
+    await page.getByTestId("nav-library").click();
+    await card(page, "영수증-1p.jpg").getByTestId(/doc-open-/).click();
     await expect(page.getByTestId("viewer-status")).toHaveText(ko.documents.status.reviewed);
     await expect(page.getByTestId("viewer-review-badge")).toHaveText(ko.viewer.review_badge.done);
-
-    // History tab records the correction; Tables tab parsed the OCR table.
     await page.getByTestId("viewer-tab-history").click();
-    await expect(page.getByTestId("history-change").filter({ hasText: "approval_no" }).first()).toContainText(ko.pipeline.field_status.corrected);
-    await page.getByTestId("viewer-tab-tables").click();
-    await expect(page.getByTestId("table-card").first()).toContainText("아메리카노");
+    const change = page.getByTestId("history-change").filter({ hasText: "approval_no" }).first();
+    await expect(change).toContainText(ko.pipeline.field_status.corrected);
+    await expect(change).toContainText("87654321");
   });
 
   test("review queue: keyboard approval, editing and the reason filter", async ({ page }) => {
@@ -193,36 +196,22 @@ test.describe("P4 pipeline", () => {
     await expect(page.getByTestId("settings-precise-mode")).toBeVisible();
   });
 
-  test("a text selection in the viewer becomes a field value with one click", async ({ page }) => {
+  test("a word selected on the page image becomes a field value with one click", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
     await processReceipt(page);
     await card(page, "영수증-1p.jpg").getByTestId(/doc-open-/).click();
-    const text = page.getByTestId("viewer-text");
-    await expect(text).toContainText("스타벅스 역삼점");
-    await text.evaluate((el) => {
-      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-      let node: Text | null = null;
-      while ((node = walker.nextNode() as Text | null)) {
-        const i = node.data.indexOf("역삼점");
-        if (i >= 0) {
-          const range = document.createRange();
-          range.setStart(node, i);
-          range.setEnd(node, i + 3);
-          const sel = window.getSelection()!;
-          sel.removeAllRanges();
-          sel.addRange(range);
-          break;
-        }
-      }
-    });
+    const layer = page.getByTestId("viewer-text-layer");
+    await expect(layer).toContainText("스타벅스 역삼점");
+    await layer.locator("[data-word-index]", { hasText: "역삼점" }).first().click();
     await expect(page.getByTestId("viewer-selection-toolbar")).toContainText("역삼점");
     await page.getByTestId("viewer-selection-field").click();
     // The menu lists each field with its current value: pick the store name by its value.
     await page.getByRole("menuitem").filter({ hasText: "스타벅스 역삼점" }).click();
-    await page.getByTestId("viewer-tab-fields").click();
-    const storeName = page.getByTestId("field-store_name");
-    await expect(storeName.getByTestId("field-value")).toHaveText("역삼점");
-    await expect(storeName.getByTestId("field-status")).toHaveText(ko.pipeline.field_status.corrected);
+    // The 이력 tab shows the correction (old → new value).
+    await page.getByTestId("viewer-tab-history").click();
+    const change = page.getByTestId("history-change").filter({ hasText: "store_name" }).first();
+    await expect(change).toContainText(ko.pipeline.field_status.corrected);
+    await expect(change).toContainText("스타벅스 역삼점 → 역삼점");
   });
 });
