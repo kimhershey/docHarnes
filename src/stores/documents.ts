@@ -5,6 +5,7 @@ import { queryClient, queryKeys } from "@/lib/query-client";
 import { EVENTS, type DocumentsChanged } from "@/lib/types";
 
 import { resetAssistant } from "./assistant";
+import { resetAttachments } from "./attachments";
 import { resetGenerate } from "./generate";
 import { resetProjects } from "./projects";
 import { useUiStore } from "./ui";
@@ -62,6 +63,7 @@ export function resetDocumentQueries(): void {
   useDocumentsStore.setState({ folder: null, query: "", selectedIds: [] });
   useUiStore.getState().setLastDocument(null);
   resetAssistant();
+  resetAttachments();
   resetGenerate();
   resetProjects();
   void queryClient.invalidateQueries({ queryKey: queryKeys.documents });

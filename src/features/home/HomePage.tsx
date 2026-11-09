@@ -8,11 +8,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { executePreRoute } from "@/lib/commands";
+import { docsFromIds, DropHint, importDroppedFiles, useDocumentDropTarget, type DragDoc } from "@/lib/dnd";
 import { api } from "@/lib/ipc";
 import { useAssessment, useDocumentStats, useDocuments, usePipelineStatus } from "@/lib/queries";
 import { isComposing } from "@/lib/shortcuts";
 import { SCREEN_ROUTES } from "@/lib/types";
 import { formatMiB } from "@/lib/utils";
+import { useAttachmentsStore } from "@/stores/attachments";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspace } from "@/stores/workspace";
 
@@ -27,6 +29,19 @@ export function HomePage() {
   const setPending = useUiStore((s) => s.setPendingAssistantInput);
   const [text, setText] = useState("");
   const examples = t("home.examples", { returnObjects: true }) as string[];
+  // Documents / files dropped on the command card are attached in the assistant (same as its own drop target).
+  const attachAndGo = (docs: DragDoc[]) => {
+    if (docs.length === 0) return;
+    useAttachmentsStore.getState().attach(docs);
+    useUiStore.getState().toast(t("assistant.attachments.added", { count: docs.length }), "ok");
+    if (text.trim()) setPending(text.trim());
+    navigate(SCREEN_ROUTES.assistant);
+  };
+  const drop = useDocumentDropTarget({
+    disabled: !workspace,
+    onDocuments: attachAndGo,
+    onFiles: (paths) => void importDroppedFiles(paths, {}, t).then(docsFromIds).then(attachAndGo),
+  });
 
   const submit = async (value = text) => {
     const v = value.trim();
@@ -50,7 +65,10 @@ export function HomePage() {
         <p className="text-sm text-fg-muted selectable">{workspace ? t("home.welcome_sub", { path: workspace.path }) : t("home.no_workspace")}</p>
       </div>
 
-      <Card>
+      <Card className="relative" {...drop.props} data-testid="home-command-card">
+        <DropHint active={drop.isActive} over={drop.isOver} testId="home-drop-hint">
+          {t("home.command_drop")}
+        </DropHint>
         <CardHeader>
           <CardTitle>{t("home.command_title")}</CardTitle>
           <CardDescription>{t("home.command_hint")}</CardDescription>

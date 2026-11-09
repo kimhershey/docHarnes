@@ -1,4 +1,4 @@
-import { AlertCircle, Bot, Briefcase, HelpCircle, Send, Sparkles, User, X } from "lucide-react";
+import { AlertCircle, Bot, Briefcase, HelpCircle, Paperclip, Send, Sparkles, User, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
@@ -15,6 +15,7 @@ import { AnswerCard } from "@/features/knowledge/AnswerCard";
 import { openCitation } from "@/features/knowledge/AnswersPanel";
 import { scopeFor } from "@/features/search/SearchPage";
 import { describePreRoute, executePreRoute, executeUiOps } from "@/lib/commands";
+import { docsFromIds, DropHint, importDroppedFiles, useDocumentDropTarget, type DragDoc } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
 import { useCollections, useDocument, usePipelineStatus } from "@/lib/queries";
@@ -22,6 +23,7 @@ import { isComposing, matchesChord } from "@/lib/shortcuts";
 import { SCREEN_ROUTES, isJobFinished, type AnswerRequest, type Job, type Plan, type PlanExecution, type PlanIssue, type PlanResponse, type PreRouteResult, type UiPlanContext } from "@/lib/types";
 import { errorCode, isMac } from "@/lib/utils";
 import { useAssistantStore, type Message, type NewMessage, type PlanMessage } from "@/stores/assistant";
+import { useAttachmentsStore } from "@/stores/attachments";
 import { useDocumentsStore } from "@/stores/documents";
 import { useEngineStore } from "@/stores/engine";
 import { useJobsStore } from "@/stores/jobs";
@@ -85,6 +87,21 @@ export function AssistantPage() {
   const { data: lastDoc } = useDocument(documentScope ? lastDocument.id : undefined);
   const [text, setText] = useState("");
   const [scope, setScope] = useState<string>("all");
+  // Documents dropped on the assistant (or a sidebar entry): the "첨부 문서" scope of questions and commands.
+  const attached = useAttachmentsStore((s) => s.attached);
+  const attachedIds = attached.map((d) => d.id);
+  const attachDocs = (docs: DragDoc[]) => {
+    useAttachmentsStore.getState().attach(docs);
+    useUiStore.getState().toast(t("assistant.attachments.added", { count: docs.length }), "ok");
+  };
+  const drop = useDocumentDropTarget({
+    disabled: !workspace,
+    onDocuments: attachDocs,
+    onFiles: (paths) =>
+      void importDroppedFiles(paths, {}, t)
+        .then(docsFromIds)
+        .then((docs) => docs.length > 0 && attachDocs(docs)),
+  });
   const [followUp, setFollowUp] = useState(false);
   const [cancelling, setCancelling] = useState<string | null>(null);
   const [planning, setPlanning] = useState(false);
@@ -112,21 +129,33 @@ export function AssistantPage() {
 
   // A scope that no longer applies (selection cleared, folder left, document superseded by a selection) falls back.
   useEffect(() => {
-    if ((scope === "selection" && selectedIds.length === 0) || (scope === "folder" && !folder)) setScope("all");
+    if ((scope === "selection" && selectedIds.length === 0) || (scope === "folder" && !folder) || (scope === "attached" && attached.length === 0)) setScope("all");
     else if (scope === "document" && !documentScope) setScope(selectedIds.length > 0 ? "selection" : "all");
-  }, [scope, selectedIds.length, folder, documentScope]);
+  }, [scope, selectedIds.length, folder, documentScope, attached.length]);
+  // Attaching documents selects them as the scope (the user can still pick another one).
+  const attachedCount = attached.length;
+  useEffect(() => {
+    if (attachedCount > 0) setScope("attached");
+  }, [attachedCount]);
 
   const focusInput = (value?: string) => {
     if (value !== undefined) setText(value);
     window.setTimeout(() => inputRef.current?.focus(), 0);
   };
 
-  /** Knowledge scope of the selector: the "document" scope asks about the last viewed document only. */
+  /** Knowledge scope of the selector: the "document" / "attached" scopes ask about those documents only. */
   const knowledgeScope = () => {
     const s = scopeFor(scope, knowledge?.latest_only ?? true);
     if (scope === "document" && lastDocument) s.documents = [lastDocument.id];
+    if (scope === "attached" && attachedIds.length > 0) {
+      s.documents = attachedIds;
+      s.latest_only = false;
+    }
     return s;
   };
+  /** Planner context: attached documents stand in for the library selection. */
+  const planContext = () =>
+    scope === "attached" ? uiContextFor("selection", folder, attachedIds, lastDocument, currentProject) : uiContextFor(scope, folder, selectedIds, lastDocument, currentProject);
 
   const askKnowledge = async (question: string, extra: Partial<AnswerRequest> = {}) => {
     // Only an explicit follow-up keeps the previous evidence; otherwise every question is retrieved afresh
@@ -254,7 +283,7 @@ export function AssistantPage() {
     const v = value.trim();
     if (!v || busy) return;
     setText("");
-    push({ role: "user", text: v });
+    push({ role: "user", text: v, attachments: scope === "attached" && attached.length > 0 ? attached.map((d) => ({ id: d.id, name: d.name })) : undefined });
     // 1. Pre-router: slash / settings commands run at once (no model, no plan card).
     let route: PreRouteResult | null = null;
     try {
@@ -272,7 +301,7 @@ export function AssistantPage() {
       return;
     }
     // 2. Planner (rules, then the model behind the engine gate).
-    const context = uiContextFor(scope, folder, selectedIds, lastDocument, currentProject);
+    const context = planContext();
     setPlanning(true);
     let response: PlanResponse;
     try {
@@ -396,7 +425,10 @@ export function AssistantPage() {
   const lastDocName = lastDoc?.original_name ?? null;
 
   return (
-    <div className="flex h-full flex-col" data-testid="page-assistant">
+    <div className="relative flex h-full flex-col" data-testid="page-assistant" {...drop.props}>
+      <DropHint active={drop.isActive} over={drop.isOver} testId="assistant-drop-hint">
+        {t("assistant.attachments.drop")}
+      </DropHint>
       <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2">
         <h1 className="text-base font-semibold">{t("assistant.title")}</h1>
         <Button variant="ghost" size="sm" onClick={() => useAssistantStore.getState().clear()}>
@@ -429,6 +461,11 @@ export function AssistantPage() {
               <SelectItem value="selection" disabled={selectedIds.length === 0} data-testid="assistant-scope-selection">
                 {t("assistant.scope.selection_count", { count: selectedIds.length })}
               </SelectItem>
+              {attached.length > 0 && (
+                <SelectItem value="attached" data-testid="assistant-scope-attached">
+                  {t("assistant.scope.attached", { count: attached.length })}
+                </SelectItem>
+              )}
               {documentScope && (
                 <SelectItem value="document" data-testid="assistant-scope-document">
                   {lastDocName ? t("assistant.scope.document_named", { name: lastDocName }) : t("assistant.scope.document")}
@@ -451,6 +488,7 @@ export function AssistantPage() {
             <Sparkles className="size-8 text-accent" aria-hidden="true" />
             <p>{t("assistant.empty")}</p>
             <p className="text-xs">{t("assistant.qa_hint")}</p>
+            <p className="text-xs">{t("assistant.attachments.hint")}</p>
             {documentScope && lastDocName && scope !== "document" && (
               <p className="text-xs" data-testid="assistant-current-document">
                 {t("assistant.scope.document_named", { name: lastDocName })}
@@ -462,7 +500,19 @@ export function AssistantPage() {
           {messages.map((m) =>
             m.role === "user" ? (
               <div key={m.id} className="flex items-start gap-2 self-end">
-                <div className="rounded-lg bg-accent px-3 py-2 text-sm text-accent-fg selectable">{m.text}</div>
+                <div className="rounded-lg bg-accent px-3 py-2 text-sm text-accent-fg selectable">
+                  {m.text}
+                  {m.attachments && m.attachments.length > 0 && (
+                    <div className="mt-1 flex flex-wrap items-center gap-1 text-xs opacity-90" data-testid="assistant-message-attachments">
+                      <Paperclip className="size-3" aria-hidden="true" />
+                      {m.attachments.map((a) => (
+                        <span key={a.id} className="max-w-40 truncate rounded-full bg-bg/20 px-1.5">
+                          {a.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <User className="mt-2 size-4 text-fg-muted" aria-hidden="true" />
               </div>
             ) : (
@@ -555,6 +605,25 @@ export function AssistantPage() {
 
       <div className="border-t border-border p-3">
         <div className="mx-auto flex max-w-3xl flex-col gap-2">
+          {attached.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 text-xs" data-testid="assistant-attachments">
+              <Paperclip className="size-3.5 text-fg-muted" aria-hidden="true" />
+              <span className="text-fg-muted">{t("assistant.attachments.count", { count: attached.length })}</span>
+              {attached.map((d) => (
+                <span key={d.id} className="flex items-center gap-1 rounded-full bg-bg-sunken px-2 py-0.5" data-testid={`assistant-attachment-${d.id}`}>
+                  <button type="button" className="max-w-40 truncate hover:underline cursor-pointer" onClick={() => navigate(`/library/${d.id}`)} title={d.name}>
+                    {d.name}
+                  </button>
+                  <button type="button" className="text-fg-muted hover:text-fg cursor-pointer" onClick={() => useAttachmentsStore.getState().detach(d.id)} aria-label={t("assistant.attachments.remove", { name: d.name })} data-testid={`assistant-attachment-remove-${d.id}`}>
+                    <X className="size-3" aria-hidden="true" />
+                  </button>
+                </span>
+              ))}
+              <button type="button" className="text-fg-muted underline hover:text-fg cursor-pointer" onClick={() => useAttachmentsStore.getState().clearAttached()} data-testid="assistant-attachments-clear">
+                {t("assistant.attachments.clear")}
+              </button>
+            </div>
+          )}
           <div className="flex flex-wrap gap-2">
             {examples.map((ex) => (
               <button key={ex} type="button" className="rounded-full border border-border bg-bg px-3 py-1 text-xs text-fg-muted hover:border-accent hover:text-fg cursor-pointer" onClick={() => void send(ex)} data-testid="assistant-example">

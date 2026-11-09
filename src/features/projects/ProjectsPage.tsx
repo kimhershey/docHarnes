@@ -1,5 +1,5 @@
 import { ArrowLeft, ArrowRight, Briefcase, LayoutGrid, List, Plus, Settings2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 
@@ -7,16 +7,19 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog, type ConfirmRequest } from "@/components/ui/confirm-dialog";
 import { Spinner } from "@/components/ui/spinner";
+import { DropHint, importDroppedFiles, useDocumentDropTarget, type DragDoc } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
 import { invalidateProjects, useProjects, useProjectTemplates } from "@/lib/queries";
 import { PROJECT_STATUSES, type Project, type ProjectStatus } from "@/lib/types";
 import { cn, formatDate } from "@/lib/utils";
+import { useAttachmentsStore } from "@/stores/attachments";
 import { useProjectsStore } from "@/stores/projects";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspace } from "@/stores/workspace";
 
 import { NewProjectDialog } from "./NewProjectDialog";
+import { PickProjectDialog } from "./PickProjectDialog";
 import { doneMoveWarning, nextStatus } from "./rules";
 import { TemplatesDialog } from "./TemplatesDialog";
 
@@ -33,13 +36,19 @@ function statusVariant(s: ProjectStatus): "ok" | "warn" | "danger" | "muted" | "
   }
 }
 
-function ProjectCard({ project, onMove, templateName, compact }: { project: Project; onMove: (p: Project, to: ProjectStatus) => void; templateName: string | null; compact: boolean }) {
+type DropHandlers = { onDropDocs: (p: Project, docs: DragDoc[]) => void; onDropFiles: (p: Project, paths: string[]) => void };
+
+function ProjectCard({ project, onMove, templateName, compact, onDropDocs, onDropFiles }: { project: Project; onMove: (p: Project, to: ProjectStatus) => void; templateName: string | null; compact: boolean } & DropHandlers) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const prev = nextStatus(project.status, -1);
   const next = nextStatus(project.status, 1);
+  const drop = useDocumentDropTarget({ onDocuments: (docs) => onDropDocs(project, docs), onFiles: (paths) => onDropFiles(project, paths) });
   return (
-    <li className="flex flex-col gap-1.5 rounded-lg border border-border bg-bg-elevated p-3 text-sm" data-testid={`project-card-${project.id}`} data-project-status={project.status} data-project-name={project.name}>
+    <li className={cn("relative flex flex-col gap-1.5 rounded-lg border border-border bg-bg-elevated p-3 text-sm", drop.isOver && "border-accent")} data-testid={`project-card-${project.id}`} data-project-status={project.status} data-project-name={project.name} {...drop.props}>
+      <DropHint active={drop.isActive} over={drop.isOver} className="text-[11px]" testId={`project-card-drop-${project.id}`}>
+        {t("projects.card.drop_add", { name: project.name })}
+      </DropHint>
       <div className="flex items-start gap-2">
         <button type="button" className="min-w-0 flex-1 text-left font-medium hover:underline cursor-pointer" onClick={() => navigate(`/projects/${project.id}`)} data-testid="project-open">
           {project.name}
@@ -73,6 +82,45 @@ function ProjectCard({ project, onMove, templateName, compact }: { project: Proj
         <span className="ml-auto text-[11px] text-fg-subtle">{formatDate(project.updated_at, i18n.language)}</span>
       </div>
     </li>
+  );
+}
+
+function ProjectRow({ p, onDropDocs, onDropFiles }: { p: Project } & DropHandlers) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const drop = useDocumentDropTarget({ onDocuments: (docs) => onDropDocs(p, docs), onFiles: (paths) => onDropFiles(p, paths) });
+  return (
+    <tr key={p.id} className={cn("cursor-pointer hover:bg-bg-sunken", drop.isActive && "outline-dashed outline-1 outline-offset-[-1px] outline-border", drop.isOver && "bg-accent-soft outline-accent")} {...drop.props} onClick={() => navigate(`/projects/${p.id}`)} data-testid={`project-row-${p.id}`} data-project-status={p.status}>
+                  <td className="py-2 pr-3 font-medium">
+                    {/* The row click is a mouse shortcut; the name is the keyboard-reachable control. */}
+                    <button
+                      type="button"
+                      className="text-left hover:underline cursor-pointer"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/projects/${p.id}`);
+                      }}
+                      data-testid="project-row-open"
+                    >
+                      {p.name}
+                    </button>
+                  </td>
+                  <td className="py-2 pr-3">
+                    <Badge variant={statusVariant(p.status)}>{t(`projects.status.${p.status}`)}</Badge>
+                  </td>
+                  <td className="py-2 pr-3 text-fg-muted">{p.intake_no ?? "—"}</td>
+                  <td className="py-2 pr-3 text-fg-muted">{p.owner ?? "—"}</td>
+                  <td className="py-2 pr-3 text-fg-muted">{p.due_date ?? "—"}</td>
+                  <td className="py-2 pr-3">
+                    {p.document_count}
+                    {p.missing_count > 0 && (
+                      <Badge variant="danger" className="ml-2">
+                        {t("projects.card.missing", { count: p.missing_count })}
+                      </Badge>
+                    )}
+                  </td>
+                  <td className="py-2 pr-3 text-fg-muted">{p.last_check_at ? t("projects.card.verdicts", { pass: p.last_pass, mismatch: p.last_mismatch, undetermined: p.last_undetermined }) : t("projects.card.no_check")}</td>
+    </tr>
   );
 }
 
@@ -118,6 +166,44 @@ export function ProjectsPage() {
     });
   };
   const list = projects ?? [];
+  // Drops on a card / row: documents join the project, files are imported into it.
+  const addDocsTo = async (p: Project, ids: string[]) => {
+    if (ids.length === 0) return;
+    try {
+      await api.projectAddDocuments(p.id, ids);
+      invalidateProjects([p.id]);
+      toast(t("projects.documents.added", { count: ids.length }), "ok");
+    } catch (e) {
+      toast(describeError(e, t), "danger");
+    }
+  };
+  const onDropDocs = (p: Project, docs: DragDoc[]) => void addDocsTo(p, docs.map((d) => d.id));
+  const onDropFiles = (p: Project, paths: string[]) =>
+    void importDroppedFiles(paths, { projectId: p.id }, t).then((ids) => {
+      invalidateProjects([p.id]);
+      if (ids.length > 0) toast(t("projects.documents.added", { count: ids.length }), "ok");
+    });
+  // Documents / files dropped on the sidebar's 프로젝트 entry wait for a project pick.
+  const pendingDocs = useAttachmentsStore((s) => s.pendingProjectDocs);
+  const pendingPaths = useAttachmentsStore((s) => s.pendingProjectPaths);
+  const [pick, setPick] = useState<{ mode: "docs"; docs: DragDoc[] } | { mode: "files"; paths: string[] } | null>(null);
+  useEffect(() => {
+    if (!workspace) return;
+    if (pendingDocs) {
+      useAttachmentsStore.getState().setPending({ pendingProjectDocs: null });
+      setPick({ mode: "docs", docs: pendingDocs });
+    } else if (pendingPaths) {
+      useAttachmentsStore.getState().setPending({ pendingProjectPaths: null });
+      setPick({ mode: "files", paths: pendingPaths });
+    }
+  }, [pendingDocs, pendingPaths, workspace]);
+  const onPick = (projectId: string) => {
+    const p = list.find((x) => x.id === projectId);
+    if (!p || !pick) return;
+    if (pick.mode === "docs") onDropDocs(p, pick.docs);
+    else onDropFiles(p, pick.paths);
+    setPick(null);
+  };
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="page-projects">
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2">
@@ -164,7 +250,7 @@ export function ProjectsPage() {
                   </h2>
                   <ul className="flex flex-col gap-2">
                     {column.map((p) => (
-                      <ProjectCard key={p.id} project={p} onMove={move} templateName={templateName(p.template_id)} compact />
+                      <ProjectCard key={p.id} project={p} onMove={move} templateName={templateName(p.template_id)} compact onDropDocs={onDropDocs} onDropFiles={onDropFiles} />
                     ))}
                   </ul>
                 </section>
@@ -186,43 +272,14 @@ export function ProjectsPage() {
             </thead>
             <tbody className="divide-y divide-border">
               {list.map((p) => (
-                <tr key={p.id} className={cn("cursor-pointer hover:bg-bg-sunken")} onClick={() => navigate(`/projects/${p.id}`)} data-testid={`project-row-${p.id}`} data-project-status={p.status}>
-                  <td className="py-2 pr-3 font-medium">
-                    {/* The row click is a mouse shortcut; the name is the keyboard-reachable control. */}
-                    <button
-                      type="button"
-                      className="text-left hover:underline cursor-pointer"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        navigate(`/projects/${p.id}`);
-                      }}
-                      data-testid="project-row-open"
-                    >
-                      {p.name}
-                    </button>
-                  </td>
-                  <td className="py-2 pr-3">
-                    <Badge variant={statusVariant(p.status)}>{t(`projects.status.${p.status}`)}</Badge>
-                  </td>
-                  <td className="py-2 pr-3 text-fg-muted">{p.intake_no ?? "—"}</td>
-                  <td className="py-2 pr-3 text-fg-muted">{p.owner ?? "—"}</td>
-                  <td className="py-2 pr-3 text-fg-muted">{p.due_date ?? "—"}</td>
-                  <td className="py-2 pr-3">
-                    {p.document_count}
-                    {p.missing_count > 0 && (
-                      <Badge variant="danger" className="ml-2">
-                        {t("projects.card.missing", { count: p.missing_count })}
-                      </Badge>
-                    )}
-                  </td>
-                  <td className="py-2 pr-3 text-fg-muted">{p.last_check_at ? t("projects.card.verdicts", { pass: p.last_pass, mismatch: p.last_mismatch, undetermined: p.last_undetermined }) : t("projects.card.no_check")}</td>
-                </tr>
+                <ProjectRow key={p.id} p={p} onDropDocs={onDropDocs} onDropFiles={onDropFiles} />
               ))}
             </tbody>
           </table>
         )}
       </div>
       <NewProjectDialog open={newOpen} onOpenChange={setNewOpen} onSaved={(p) => navigate(`/projects/${p.id}`)} />
+      <PickProjectDialog open={pick !== null} onOpenChange={(o) => !o && setPick(null)} projects={list} count={pick ? (pick.mode === "docs" ? pick.docs.length : pick.paths.length) : 0} mode={pick?.mode ?? "docs"} onPick={onPick} onCreate={() => setNewOpen(true)} />
       <TemplatesDialog open={templatesOpen} onOpenChange={setTemplatesOpen} />
       <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
     </div>

@@ -28,15 +28,28 @@ DocuLens를 **실제 Windows PC에서 설치·실행·빌드·검증**하는 절
   워크플로가 먼저 릴리스에 올려 둔 `DocuLens-EnginePack-cu121-<태그>.zip`·`cu129`를 내려받아 넣습니다(`engines/README.md`).
 - Linux 실행은 개발·CI 전용입니다(배포 범위 외). 필요한 패키지는 `CLAUDE.md`의 "Linux build deps".
 
+### 1.0 끌어다 놓기 요약
+
+- **파일을 끌어다 놓기**: 탐색기의 PDF·이미지·HWPX·DOCX·HWP 파일을 앱 어디에나 놓으면 가져오기 대화상자가 열리고, 특정 자리에 놓으면
+  그 자리에 맞게 가져온 뒤 추가됩니다 — 어시스턴트(질문 범위로 첨부), 지식 컬렉션(그 컬렉션의 지식 문서로), 프로젝트 카드·문서 탭(그
+  프로젝트로), 문서 생성의 원본 상자, 양식 등록·병합 대화상자, 왼쪽 메뉴(해당 화면의 "추가" 수행).
+- **라이브러리 문서를 끌기**: 카드나 행을 누른 채 움직이면 드래그가 시작됩니다(선택된 문서를 끌면 선택 전체). 끌고 있는 동안 왼쪽 메뉴
+  위에 잠시 머물면 그 화면으로 바뀌므로, 예를 들어 라이브러리 → 프로젝트 메뉴에 머문 뒤 → 특정 프로젝트 카드에 놓을 수 있습니다.
+  Esc로 취소합니다.
+- 어시스턴트에 첨부한 문서는 범위 선택기의 "첨부 문서 N개"가 되어 이후 질문·명령이 그 문서들만 다루며, 칩의 ×나 "첨부 모두 지우기"로
+  해제합니다.
+
 ### 1.1 배포 설치파일 설치 (방식 D)
 
 1. GitHub Releases의 `v<버전>`에서 `DocuLens-Setup-Lite-<버전>-x64.exe`(또는 `-Full-`)와 같은 이름의 `.sha256` 파일을 받습니다.
    - 아직 릴리스에 올리지 않은 빌드(`publish=false`)는 Actions의 해당 실행 페이지 하단 **Artifacts**에서
      `DocuLens-Setup-<Lite|Full>-<버전>-x64` zip으로 받습니다(GitHub 로그인 필요, 90일 보관). zip 안에 설치파일과 `.sha256`이 있습니다.
    - **Lite**: 앱 + llama-server CPU·Vulkan 팩(`engines\cpu`, `engines\vulkan`) + PDFium(`pdfium\`) + ko-dic(`ko-dic\`)
-     + 고지 파일(`THIRD-PARTY-NOTICES.md`, `sbom.cdx.json`, `licenses\THIRD-PARTY-LICENSES.txt`). 약 45 MB(0.1.0 Lite 빌드 43 MB,
+     + 고지 파일(`THIRD-PARTY-NOTICES.md`, `sbom.cdx.json`, `licenses\THIRD-PARTY-LICENSES.txt`). 약 48 MB(0.1.0 Lite 빌드 47.6 MB,
        압축 전 303 MB · 159개 파일).
-   - **Full**: Lite + CUDA 팩 `engines\cu121`(드라이버 CUDA 12.1~12.7) · `engines\cu129`(12.8+, RTX 50 포함). NVIDIA GPU가 없으면 Lite로 충분합니다.
+   - **Full**: Lite + CUDA 팩 `engines\cu121`(드라이버 CUDA 12.1~12.7) · `engines\cu129`(12.8+, RTX 50 포함). 약 1.1 GB(0.1.0 Full
+     빌드 1,156 MB, 압축 전 3.1 GB · 219개 파일 — 설치 공간 3.5 GB 이상). NVIDIA GPU가 없으면 Lite로 충분하고, Lite에 CUDA 팩만 나중에
+     추가하려면 §2의 "CUDA 팩" 행을 따릅니다.
    - **모델(GGUF)은 어느 쪽에도 들어 있지 않습니다.** 첫 실행 뒤 모델 관리자에서 준비합니다(§2.3, §3).
 2. SHA-256을 확인합니다(명령 프롬프트 또는 PowerShell).
    ```

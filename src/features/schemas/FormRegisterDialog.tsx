@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { DropHint, importDroppedFiles, useDocumentDropTarget } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
 import { useDocuments } from "@/lib/queries";
@@ -24,6 +25,17 @@ export function FormRegisterDialog({ open, onOpenChange, documentId, onDraft }: 
   const [docId, setDocId] = useState<string>("");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  // A document dropped on the dialog is the form sample; a file is imported first.
+  const drop = useDocumentDropTarget({
+    disabled: !open || busy,
+    onDocuments: (docs) => {
+      if (docs[0]) setDocId(docs[0].id);
+    },
+    onFiles: (paths) =>
+      void importDroppedFiles(paths, {}, t).then((ids) => {
+        if (ids[0]) setDocId(ids[0]);
+      }),
+  });
   // Sequence of the model request this dialog is waiting for. Closing or
   // cancelling bumps it, so a result that arrives afterwards is dropped
   // instead of replacing whatever the user has opened in the editor meanwhile.
@@ -64,10 +76,15 @@ export function FormRegisterDialog({ open, onOpenChange, documentId, onDraft }: 
   };
   return (
     <Dialog open={open} onOpenChange={(o) => (o ? onOpenChange(true) : close())}>
-      <DialogContent closeLabel={t("common.close")} data-testid="form-register-dialog">
+      <DialogContent closeLabel={t("common.close")} data-testid="form-register-dialog" className="relative" {...drop.props}>
+        <DropHint active={drop.isActive} over={drop.isOver} testId="form-register-drop-hint">
+          {t("schemas.form.drop_hint")}
+        </DropHint>
         <DialogHeader>
           <DialogTitle>{t("schemas.form.title")}</DialogTitle>
-          <DialogDescription>{t("schemas.form.hint")}</DialogDescription>
+          <DialogDescription>
+            {t("schemas.form.hint")} {t("schemas.form.drop_hint")}
+          </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
           <div>

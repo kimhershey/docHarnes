@@ -11,13 +11,14 @@ import { api, revealPath } from "@/lib/ipc";
 import { invalidateDrafts } from "@/lib/queries";
 import { isJobFinished, isDraftOutcome, type Draft, type DraftSummary, type Language, type SaveRequest, type SavedDocument } from "@/lib/types";
 import { errorCode } from "@/lib/utils";
+import { useAttachmentsStore } from "@/stores/attachments";
 import { useGenerateStore } from "@/stores/generate";
 import { useJob, useJobsStore } from "@/stores/jobs";
 import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
 
-import { regenerationRequest, toggleExcluded } from "./draft";
+import { documentSourceIds, regenerationRequest, toggleExcluded, withDocumentSources } from "./draft";
 import { DraftEditor } from "./DraftEditor";
 import { DraftPreview } from "./DraftPreview";
 import { DraftsDrawer } from "./DraftsDrawer";
@@ -59,6 +60,15 @@ export function GeneratePage() {
   useEffect(() => {
     useGenerateStore.getState().bind(workspacePath, language);
   }, [workspacePath, language]);
+  // Documents dropped on the sidebar's 문서 생성 entry become sources once the store is bound.
+  const pendingSources = useAttachmentsStore((s) => s.pendingGenerateSources);
+  useEffect(() => {
+    if (!pendingSources || !workspacePath) return;
+    useAttachmentsStore.getState().setPending({ pendingGenerateSources: null });
+    const ids = pendingSources.map((d) => d.id);
+    useGenerateStore.getState().setRequest((req) => ({ ...req, sources: withDocumentSources(req.sources, [...new Set([...documentSourceIds(req.sources), ...ids])]) }));
+    toast(t("generate.form.sources_added", { count: ids.length }), "ok");
+  }, [pendingSources, workspacePath, toast, t]);
   const cancelPersist = useCallback(() => {
     if (putTimer.current) window.clearTimeout(putTimer.current);
     putTimer.current = null;

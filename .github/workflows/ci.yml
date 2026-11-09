@@ -65,6 +65,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - run: npm run nsis:check
       - run: npm test
       - run: npm run build
       - run: npx playwright install --with-deps chromium

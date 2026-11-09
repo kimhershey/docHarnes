@@ -10,6 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
+import { DropHint, useDocumentDropTarget } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
 import { api, pickDocumentFiles, pickFolder } from "@/lib/ipc";
 import { useCollections } from "@/lib/queries";
@@ -19,7 +20,7 @@ import { useUiStore } from "@/stores/ui";
 const NEW = "__new__";
 
 /** Ingest wizard (design §3.14.1): files/folders → collection + options → preview → background import + indexing. */
-export function IngestWizard({ open, onOpenChange, collectionId }: { open: boolean; onOpenChange: (open: boolean) => void; collectionId: string | null }) {
+export function IngestWizard({ open, onOpenChange, collectionId, initialPaths = null }: { open: boolean; onOpenChange: (open: boolean) => void; collectionId: string | null; initialPaths?: string[] | null }) {
   const { t } = useTranslation();
   const toast = useUiStore((s) => s.toast);
   const { data: collections } = useCollections(open);
@@ -38,13 +39,13 @@ export function IngestWizard({ open, onOpenChange, collectionId }: { open: boole
     setStep(0);
     setPlan(null);
     setError(null);
-    setPathsText("");
+    setPathsText(initialPaths && initialPaths.length > 0 ? initialPaths.join("\n") : "");
     setRender(true);
     setMove(false);
     setChoice(collectionId ?? (collections && collections.length > 0 ? (collections[0]?.id ?? NEW) : NEW));
     setNewName("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, collectionId]);
+  }, [open, collectionId, initialPaths]);
 
   const paths = pathsText.split(/\r?\n/).map((p) => p.trim()).filter(Boolean);
   const options = (): ImportOptions => ({ ...defaultImportOptions(), role: "knowledge", render, move_files: move, collection_id: choice === NEW ? null : choice });
@@ -88,6 +89,13 @@ export function IngestWizard({ open, onOpenChange, collectionId }: { open: boole
     if (picked.length === 0) return;
     setPathsText((prev) => [...prev.split(/\r?\n/).filter((l) => l.trim()), ...picked].join("\n"));
   };
+  // Files dropped on the first step are added to the list; dropped library documents re-register by path
+  // (the preview then marks them "already registered" and the start adds them to the collection).
+  const drop = useDocumentDropTarget({
+    disabled: !open || step !== 0,
+    onFiles: addPicked,
+    onDocuments: (docs) => addPicked(docs.map((d) => d.absolute_path).filter((p): p is string => !!p)),
+  });
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -104,8 +112,13 @@ export function IngestWizard({ open, onOpenChange, collectionId }: { open: boole
           ))}
         </ol>
         {step === 0 && (
-          <div className="flex flex-col gap-2">
-            <p className="text-xs text-fg-muted">{t("knowledge.wizard.paths_hint")}</p>
+          <div className="relative flex flex-col gap-2" {...drop.props} data-testid="ingest-drop">
+            <DropHint active={drop.isActive} over={drop.isOver} testId="ingest-drop-hint">
+              {t("dnd.drop_here")}
+            </DropHint>
+            <p className="text-xs text-fg-muted">
+              {t("knowledge.wizard.paths_hint")} {t("knowledge.wizard.drop_hint")}
+            </p>
             <Textarea rows={6} value={pathsText} onChange={(e) => setPathsText(e.target.value)} className="font-mono text-xs" aria-label={t("knowledge.wizard.step_files")} data-testid="ingest-paths" />
             <div className="flex gap-2">
               <Button size="sm" variant="outline" onClick={() => void pickDocumentFiles(t("knowledge.wizard.pick_files"), t("import_docs.filter_name")).then(addPicked)}>

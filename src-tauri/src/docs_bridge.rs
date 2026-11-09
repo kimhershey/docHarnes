@@ -405,12 +405,19 @@ pub fn import_job(app: &AppHandle, plan: ImportPlan) -> UiResult<String> {
                     }
                 }
             }
+            // Files dropped onto a project (`ImportOptions.project_id`) joined it inside the import.
+            if let Some(pid) = plan.options.project_id.as_deref() {
+                assigned.push(pid.to_string());
+            }
             if !assigned.is_empty() {
                 assigned.sort();
                 assigned.dedup();
                 let _ =
                     app.emit(crate::projects_bridge::PROJECTS_EVENT, serde_json::json!({ "project_ids": assigned }));
             }
+            // The report (batch id, imported / relinked ids) is the job's structured result: a drop target
+            // that started this import attaches the new documents once the job finishes.
+            state.jobs.set_result(&job_id, serde_json::to_value(&report).ok());
             if let Ok(mut p) = processed.lock() {
                 p.extend(report.imported.iter().cloned());
                 p.extend(report.relinked.iter().cloned());

@@ -267,7 +267,8 @@
     "no_workspace": "Open a workspace first.",
     "recent_open": "Open library",
     "review_link": "Open the review queue",
-    "review_fields": "{{count}} field(s) awaiting review"
+    "review_fields": "{{count}} field(s) awaiting review",
+    "command_drop": "Drop documents or files to attach them in the assistant"
   },
   "assistant": {
     "title": "Assistant",
@@ -284,7 +285,8 @@
       "document": "Current document",
       "document_named": "Current document: {{name}}",
       "project_named": "Project: {{name}}",
-      "project_clear": "Clear the project context"
+      "project_clear": "Clear the project context",
+      "attached": "Attached documents ({{count}})"
     },
     "placeholder": "Command or ask in natural language (한국어 / English) · / for slash commands",
     "send": "Send",
@@ -309,7 +311,16 @@
       "/open models"
     ],
     "qa_hint": "Ask a question and the assistant answers from the knowledge base with per-sentence sources.",
-    "planning": "Interpreting…"
+    "planning": "Interpreting…",
+    "attachments": {
+      "label": "Attached documents",
+      "count": "{{count}} attached document(s)",
+      "clear": "Clear attachments",
+      "remove": "Remove attachment: {{name}}",
+      "hint": "Drag library documents or drop files here: they become the scope of your questions and commands",
+      "drop": "Drop documents or files to attach",
+      "added": "Attached {{count}} document(s)"
+    }
   },
   "planner": {
     "ops": {
@@ -1251,7 +1262,8 @@
     "review_open": "Open in the review queue: {{name}}",
     "process_started": "Processing started.",
     "organize_selected": "Organise…",
-    "export_selected": "Export…"
+    "export_selected": "Export…",
+    "drag_hint": "Drag cards onto the assistant, knowledge, projects or generate screens, or onto the left menu"
   },
   "documents": {
     "status": {
@@ -1651,7 +1663,10 @@
       "deleted": "Collection deleted.",
       "open_doc": "Open document",
       "docs_count_one": "{{count}} doc",
-      "chunks_count_one": "{{count}} chunk"
+      "chunks_count_one": "{{count}} chunk",
+      "drop_hint": "Drop documents or files to add them to this collection",
+      "drop_add": "Add to {{name}}",
+      "pending_title": "Add the {{count}} dropped document(s) to a collection"
     },
     "wizard": {
       "title": "Knowledge ingest wizard",
@@ -1674,7 +1689,8 @@
       "summary": "new {{new}} · relink {{relink}} · duplicates {{dup}} · registered {{registered}} · unsupported {{unsupported}}",
       "nothing": "No new files to ingest (already registered documents are only added to the collection).",
       "role_hint": "Ingested documents get the 'knowledge' role and serve as evidence for search and answers.",
-      "steps_label": "Steps"
+      "steps_label": "Steps",
+      "drop_hint": "You can also drop files or folders here"
     },
     "versions": {
       "title": "Document versions",
@@ -1808,7 +1824,10 @@
       "hint": "Combines the {{count}} selected documents, in library order, into one PDF. The originals stay.",
       "name": "File name (optional)",
       "run": "Merge",
-      "started": "Merge job started."
+      "started": "Merge job started.",
+      "drop_hint": "Drop documents to add them to the merge list",
+      "remove": "Remove from the list",
+      "order_hint": "Merged top to bottom"
     }
   },
   "schemas": {
@@ -1929,7 +1948,8 @@
       "deriving": "Looking for fields in the form…",
       "confirm": "Check and edit the derived fields, then register.",
       "register": "Register form",
-      "no_docs": "The library is empty. Import the form document first."
+      "no_docs": "The library is empty. Import the form document first.",
+      "drop_hint": "Drop a document to use it as the form sample"
     },
     "reclassify": {
       "banner": "New type '{{name}}' added. Re-classify the {{count}} document(s) typed 'other'?",
@@ -2259,7 +2279,9 @@
       "job_failed": "Generation failed: {{message}}",
       "job_cancelled": "Generation cancelled.",
       "job_interrupted": "{{reason}} You can retry it on the Jobs screen.",
-      "job_result_missing": "The draft result could not be loaded. You can open it from the drafts list."
+      "job_result_missing": "The draft result could not be loaded. You can open it from the drafts list.",
+      "drop_hint": "Drop documents or files to add them as sources",
+      "sources_added": "Added {{count}} source(s)"
     },
     "tone": {
       "formal": "Formal",
@@ -2417,7 +2439,8 @@
       "move_next_named": "Move '{{name}}' to the next step ({{status}})",
       "done_confirm_title": "Mark '{{name}}' as done",
       "done_confirm": "The last check left {{mismatch}} mismatch(es) and {{missing}} missing document(s). Move it to Done anyway?",
-      "done_confirm_unchecked": "The consistency check has not been run yet. Move it to Done anyway?"
+      "done_confirm_unchecked": "The consistency check has not been run yet. Move it to Done anyway?",
+      "drop_add": "Add to {{name}}"
     },
     "columns": {
       "name": "Name",
@@ -2488,7 +2511,8 @@
       "add_done": "Add ({{count}})",
       "added": "{{count}} document(s) added.",
       "search": "Search documents…",
-      "none": "No documents to add."
+      "none": "No documents to add.",
+      "drop_hint": "Drag library documents or files here to add them"
     },
     "rules": {
       "title": "Consistency rules",
@@ -2621,6 +2645,25 @@
       "readonly": "Built-in templates cannot be edited. Duplicate one to edit it.",
       "copy_suffix": "(copy)",
       "incomplete_rules": "Complete {{count}} incomplete rule(s) first."
+    },
+    "pick": {
+      "title": "Choose a project",
+      "hint": "Pick the project that receives the {{count}} dropped document(s).",
+      "hint_files": "Pick the project that receives the {{count}} dropped file(s).",
+      "none": "No projects yet. Create one first.",
+      "add": "Add"
     }
+  },
+  "dnd": {
+    "ghost_many": "{{count}} documents",
+    "drop_here": "Drop here to add",
+    "drop_docs_or_files": "Drag documents or files here",
+    "importing": "Importing {{count}} file(s)…",
+    "imported": "Added {{count}} document(s)",
+    "nothing": "Nothing to add (unsupported type or already present)",
+    "import_failed": "Import failed: {{error}}",
+    "partial_failed": "{{count}} file(s) could not be imported",
+    "nav_drop": "Drop on {{screen}}",
+    "nav_hint": "While dragging, rest on a menu entry to switch to that screen"
   }
 }

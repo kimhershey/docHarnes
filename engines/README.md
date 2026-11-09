@@ -83,6 +83,16 @@ installer build (`release-windows.yml`, `variant=full`) downloads exactly these
 assets and bundles them as `engines/cu121/` and `engines/cu129/`. A user PC can
 also unzip an asset into `%LOCALAPPDATA%\DocuLens\engines\<tag>\<pack>\`.
 
+Installer size: the Full bundle is ~3.1 GB uncompressed (cu121 pack 1,875 MB —
+`ggml-cuda.dll` 1,233 MB + cuBLAS 607 MB; cu129 pack 1,017 MB — cuBLAS 735 MB +
+`ggml-cuda.dll` 247 MB, built with `-compress-mode=size`, which llama.cpp turns
+on for CUDA ≥ 12.8). NSIS keeps a `/SOLID` data block uncompressed behind 32-bit
+offsets, so Tauri's stock template overflowed the 2 GiB limit (`Internal compiler
+error #12345`); `src-tauri/nsis/installer.nsi` — Tauri's template with per-file
+compression, kept in sync by `npm run nsis:check` — is used instead, and the
+limit then applies to the compressed installer (Full 0.1.0: 1,156 MB for 3.1 GB of
+resources, 219 files).
+
 | pack | toolkit | host compiler | archs |
 |---|---|---|---|
 | `cu121` | CUDA 12.1.1 network installer | MSVC 14.39 (VS 2022 17.9 toolset, installed on the runner — nvcc 12.1 rejects newer `cl`; `allow_unsupported_compiler=true` passes `-allow-unsupported-compiler` instead) | `61;70;75;80;86;89;90` (Pascal … Hopper incl. Turing SASS) |

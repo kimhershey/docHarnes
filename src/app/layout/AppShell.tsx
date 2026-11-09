@@ -2,6 +2,7 @@ import { Outlet } from "react-router";
 
 import { Toaster } from "@/components/ui/toaster";
 import { WorkspaceDialog } from "@/features/workspace/WorkspaceDialog";
+import { DndLayer } from "@/lib/dnd";
 
 import { useGlobalShortcuts } from "../hooks/useGlobalShortcuts";
 import { CommandPalette } from "./CommandPalette";
@@ -26,6 +27,7 @@ export function AppShell() {
       <CommandPalette />
       <WorkspaceDialog />
       <Toaster />
+      <DndLayer />
     </div>
   );
 }

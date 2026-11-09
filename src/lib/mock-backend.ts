@@ -66,7 +66,7 @@ import type {
   WorkspaceManifest,
   WorkspaceView,
 } from "./types";
-import { defaultImportOptions, EVENTS } from "./types";
+import { defaultImportOptions, EVENTS, type ImportReport } from "./types";
 import type { DraftJobSpec } from "./mock-generate";
 
 const SETTINGS_KEY = "doculens.mock.settings";
@@ -782,7 +782,7 @@ export function updateJob(id: string, patch: Partial<Job>): void {
   broadcastJobs();
 }
 
-export function finishJob(id: string, result: { ok: true; detail?: string } | { ok: false; error: string }): void {
+export function finishJob(id: string, result: { ok: true; detail?: string; result?: unknown } | { ok: false; error: string; result?: unknown }): void {
   const wasCancelled = cancelled.has(id);
   cancelled.delete(id);
   updateJob(id, {
@@ -791,6 +791,7 @@ export function finishJob(id: string, result: { ok: true; detail?: string } | { 
     detail: result.ok ? (result.detail ?? null) : undefined,
     error: result.ok || wasCancelled ? null : result.error,
     finished_at: new Date().toISOString(),
+    ...(result.result !== undefined ? { result: result.result } : {}),
   });
 }
 
@@ -1883,6 +1884,8 @@ export function upsertDoc(doc: MockDoc): void {
 
 async function runDocumentImport(plan: DocumentImportPlan): Promise<string> {
   const importable = plan.items.filter((i) => i.status.kind === "new" || i.status.kind === "relink");
+  // Documents the batch merely re-encountered still join the batch's collection / project (as in Rust).
+  const reencountered = plan.items.flatMap((i) => (i.status.kind === "already_registered" ? [i.status.id] : i.status.kind === "duplicate" ? [i.status.of] : []));
   if (importable.length === 0) throw err("invalid", "nothing to import");
   const subject = plan.source === "inbox" ? "inbox" : `${importable.length} files`;
   const job = createJob("document_import", subject);
@@ -1957,13 +1960,22 @@ async function runDocumentImport(plan: DocumentImportPlan): Promise<string> {
       done += 1;
     }
     if (ids.length > 0) emit(EVENTS.documentsChanged, { kind: "batch", ids } satisfies DocumentsChanged);
-    if (cancelled.has(job.id)) finishJob(job.id, { ok: false, error: "cancelled" });
-    else finishJob(job.id, { ok: true, detail: `imported ${ids.length} / skipped ${plan.duplicate_count + plan.unsupported_count}` });
+    const wasCancelled = cancelled.has(job.id);
+    const touched = [...ids, ...reencountered];
     const kb = await import("./mock-knowledge");
-    if (plan.options.collection_id) {
-      const touched = [...ids, ...plan.items.flatMap((i) => (i.status.kind === "already_registered" ? [i.status.id] : i.status.kind === "duplicate" ? [i.status.of] : []))];
-      kb.attachToCollection(plan.options.collection_id, touched, plan.options.role);
+    if (plan.options.collection_id) kb.attachToCollection(plan.options.collection_id, touched, plan.options.role);
+    if (plan.options.project_id) {
+      const pj = await import("./mock-projects");
+      try {
+        pj.addDocuments(plan.options.project_id, touched);
+      } catch {
+        /* project deleted meanwhile */
+      }
     }
+    // The report mirrors Rust's `ImportReport` (the job's structured result; drop targets read the ids).
+    const report: ImportReport = { batch_id: job.id, imported: ids, relinked: [], failed: [], skipped: plan.duplicate_count + plan.unsupported_count, cancelled: wasCancelled };
+    if (wasCancelled) finishJob(job.id, { ok: false, error: "cancelled", result: report });
+    else finishJob(job.id, { ok: true, detail: `imported ${ids.length} / skipped ${plan.duplicate_count + plan.unsupported_count}`, result: report });
     kb.autoIndex();
     const pl = await import("./mock-pipeline");
     pl.autoProcess(ids, plan.options.auto_level ?? null, plan.source);

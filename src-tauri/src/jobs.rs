@@ -327,6 +327,12 @@ impl JobBook {
         }
     }
 
+    /// Attaches a structured outcome to a (lightweight) job before it finishes; `jobs_get` /
+    /// `jobs_list` deliver it, the `jobs://update` broadcast omits it.
+    pub fn set_result(&self, id: &str, result: Option<Value>) {
+        self.update(id, |j| j.result = result);
+    }
+
     pub fn finish(&self, id: &str, result: Result<Option<String>, String>) {
         let cancelled = self.cancel_flag(id).map(|f| f.load(Ordering::Relaxed)).unwrap_or(false);
         self.update(id, |j| {

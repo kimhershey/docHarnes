@@ -80,6 +80,10 @@ pub struct ImportOptions {
     /// (new, relinked, already registered and duplicates alike).
     #[serde(default)]
     pub collection_id: Option<String>,
+    /// Project (§3.15) that receives every document of this batch (new, relinked,
+    /// already registered and duplicates alike) — files dropped onto a project.
+    #[serde(default)]
+    pub project_id: Option<String>,
     /// Pipeline level to run after the import (`None` = the settings default
     /// for the source: drop/folder → `processing.auto_level`, inbox →
     /// `processing.inbox_auto_level`).
@@ -96,6 +100,7 @@ impl Default for ImportOptions {
             role: DocumentRole::Work,
             dpi: None,
             collection_id: None,
+            project_id: None,
             auto_level: None,
         }
     }
@@ -466,8 +471,14 @@ pub fn run(
             return Err(CoreError::Invalid("collection_not_found".into()));
         }
     }
-    // Documents this batch merely re-encountered still join the collection.
-    if plan.options.collection_id.is_some() {
+    // Same for the target project.
+    if let Some(pid) = plan.options.project_id.as_deref() {
+        if deps.db.with(|c| crate::projects::repo::get_project(c, pid))?.is_none() {
+            return Err(CoreError::Invalid("project_not_found".into()));
+        }
+    }
+    // Documents this batch merely re-encountered still join the collection / project.
+    if plan.options.collection_id.is_some() || plan.options.project_id.is_some() {
         for item in &plan.items {
             let existing = match &item.status {
                 ImportItemStatus::AlreadyRegistered { id } => Some(id.clone()),
@@ -639,13 +650,18 @@ fn register(
     Ok((id, false))
 }
 
-/// Adds a document to the batch's knowledge collection (and gives it the
-/// batch role when that is not the default) — no-op without `collection_id`.
+/// Adds a document to the batch's targets: the knowledge collection (giving it
+/// the batch role when that is not the default) and / or the project — no-op
+/// without `collection_id` / `project_id`.
 fn attach_to_collection(conn: &rusqlite::Connection, options: &ImportOptions, id: &str) -> rusqlite::Result<()> {
-    let Some(cid) = options.collection_id.as_deref() else { return Ok(()) };
-    crate::knowledge::repo::add_docs_to_collection(conn, cid, std::slice::from_ref(&id.to_string()))?;
-    if options.role != DocumentRole::Work {
-        repo::set_role(conn, id, options.role)?;
+    if let Some(cid) = options.collection_id.as_deref() {
+        crate::knowledge::repo::add_docs_to_collection(conn, cid, std::slice::from_ref(&id.to_string()))?;
+        if options.role != DocumentRole::Work {
+            repo::set_role(conn, id, options.role)?;
+        }
+    }
+    if let Some(pid) = options.project_id.as_deref() {
+        crate::projects::repo::add_documents(conn, pid, std::slice::from_ref(&id.to_string()))?;
     }
     Ok(())
 }
@@ -1099,6 +1115,47 @@ mod tests {
         if let Some(p) = moved {
             assert!(p.starts_with(e.paths.trash_dir()));
         }
+    }
+
+    #[test]
+    fn run_attaches_the_batch_to_a_project_and_rejects_unknown_projects() {
+        let e = env();
+        let ext = external_dir(&e);
+        RgbImage::from_pixel(120, 80, Rgb([200, 200, 200])).save(ext.join("scan.jpg")).unwrap();
+        let input = crate::projects::ProjectInput {
+            id: None,
+            name: "드롭 프로젝트".into(),
+            template_id: None,
+            status: None,
+            intake_no: None,
+            owner: None,
+            due_date: None,
+            notes: None,
+            inbox_folder: None,
+        };
+        let project = e.db.with(|c| crate::projects::repo::save_project(c, &input)).unwrap();
+        let options = ImportOptions { project_id: Some(project.id.clone()), ..ImportOptions::default() };
+        let d = deps(&e, None);
+        // Files dropped on a project: the new document joins it inside the import run.
+        let p1 = plan(&e.db, &e.paths, std::slice::from_ref(&ext), &options, ImportSource::Drop).unwrap();
+        let report = run(&d, &p1, None, &mut |_| {}, &mut |_, _| {}).unwrap();
+        assert_eq!(report.imported.len(), 1, "{:?}", report.failed);
+        let members = e.db.with(|c| crate::projects::repo::documents_of(c, &project.id)).unwrap();
+        assert_eq!(members.iter().map(|m| m.document.id.clone()).collect::<Vec<_>>(), report.imported);
+        // The same file again is a duplicate: nothing is imported, the membership stays (idempotent).
+        let p2 = plan(&e.db, &e.paths, std::slice::from_ref(&ext), &options, ImportSource::Drop).unwrap();
+        assert_eq!(p2.new_count, 0);
+        assert_eq!(p2.duplicate_count, 1);
+        let report2 = run(&d, &p2, None, &mut |_| {}, &mut |_, _| {}).unwrap();
+        assert!(report2.imported.is_empty());
+        assert_eq!(e.db.with(|c| crate::projects::repo::documents_of(c, &project.id)).unwrap().len(), 1);
+        // An unknown project is refused before anything is copied.
+        RgbImage::from_pixel(60, 40, Rgb([1, 1, 1])).save(ext.join("other.jpg")).unwrap();
+        let bogus = ImportOptions { project_id: Some("nope".into()), ..ImportOptions::default() };
+        let p3 = plan(&e.db, &e.paths, std::slice::from_ref(&ext), &bogus, ImportSource::Drop).unwrap();
+        let err = run(&d, &p3, None, &mut |_| {}, &mut |_, _| {}).unwrap_err();
+        assert!(matches!(err, CoreError::Invalid(ref m) if m == "project_not_found"), "{err:?}");
+        assert!(!e.paths.documents_dir().join("other.jpg").exists());
     }
 
     #[test]

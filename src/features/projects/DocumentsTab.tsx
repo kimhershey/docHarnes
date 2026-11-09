@@ -6,6 +6,7 @@ import { useNavigate } from "react-router";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { docTypeLabel } from "@/features/pipeline/labels";
+import { DropHint, importDroppedFiles, useDocumentDropTarget } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
 import { invalidateProjects, useDocTypes } from "@/lib/queries";
@@ -32,6 +33,15 @@ export function DocumentsTab({ detail }: { detail: ProjectDetail }) {
       toast(describeError(e, t), "danger");
     }
   };
+  // Library documents dropped here join the project; files are imported into it first.
+  const drop = useDocumentDropTarget({
+    onDocuments: (docs) => void add(docs.map((d) => d.id)),
+    onFiles: (paths) =>
+      void importDroppedFiles(paths, { projectId: id }, t).then((ids) => {
+        invalidateProjects([id]);
+        if (ids.length > 0) toast(t("projects.documents.added", { count: ids.length }), "ok");
+      }),
+  });
   const remove = async (docId: string) => {
     try {
       await api.projectRemoveDocument(id, docId);
@@ -61,7 +71,10 @@ export function DocumentsTab({ detail }: { detail: ProjectDetail }) {
           </ul>
         )}
       </section>
-      <section aria-labelledby="docs-title" className="flex flex-col gap-2">
+      <section aria-labelledby="docs-title" className="relative flex flex-col gap-2" {...drop.props} data-testid="project-documents-drop">
+        <DropHint active={drop.isActive} over={drop.isOver} testId="project-documents-drop-hint">
+          {t("projects.documents.drop_hint")}
+        </DropHint>
         <div className="flex items-center justify-between">
           <h3 id="docs-title" className="text-sm font-semibold">
             {t("projects.tabs.documents")} ({detail.documents.length})
@@ -72,7 +85,9 @@ export function DocumentsTab({ detail }: { detail: ProjectDetail }) {
           </Button>
         </div>
         {detail.documents.length === 0 ? (
-          <p className="text-sm text-fg-muted">{t("projects.documents.empty")}</p>
+          <p className="text-sm text-fg-muted">
+            {t("projects.documents.empty")} {t("projects.documents.drop_hint")}
+          </p>
         ) : (
           <table className="w-full text-sm" data-testid="project-documents-table">
             <thead className="text-left text-xs uppercase tracking-wide text-fg-subtle">

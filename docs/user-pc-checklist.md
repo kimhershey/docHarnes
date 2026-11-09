@@ -152,13 +152,29 @@
 - [ ] inbox 하위 폴더: `inbox\한빛심사\`에 파일을 넣으면 "한빛심사" 프로젝트가 생기고 문서가 들어가는가(`projects://changed`)
 - [ ] 관계 그래프 탭: 사업자번호·금액·날짜가 같은 문서 사이에 간선이 그려지고 클릭 시 뷰어로 이동하는가
 
+## 끌어다 놓기 (2026-11-09 추가)
+
+- [ ] 탐색기에서 PDF를 라이브러리 빈 곳에 놓으면 가져오기 대화상자가 열리고, **지식 > 컬렉션의 항목 위에 놓으면** 그 컬렉션에 지식 문서로
+      들어가는가(드롭 위치 판정: Tauri가 주는 물리 좌표를 DPI 배율로 나눠 요소를 찾음 — 125 %·150 % 배율 모니터에서 안내 상자가 포인터
+      아래 요소에 정확히 뜨는지)
+- [ ] 라이브러리 카드를 누른 채 움직이면 고스트("파일명" 또는 "문서 N개")가 따라오고, 왼쪽 메뉴 "어시스턴트"에 놓으면 첨부 칩이 생기며,
+      질문 시 범위가 "첨부 문서 N개"로 적용되는가(답변 출처가 첨부 문서로 한정)
+- [ ] 끌고 있는 동안 메뉴 "프로젝트" 위에 0.7 초 머물면 화면이 바뀌고, 이어서 프로젝트 카드에 놓으면 문서가 추가되는가; 드롭 직후 카드의
+      클릭(열기)이 함께 실행되지 않는가
+- [ ] 파일을 프로젝트 카드·문서 생성 원본 상자·양식 등록·병합 대화상자에 놓았을 때 가져오기 토스트 → 완료 후 해당 자리에 추가되는가
+      (중복 파일은 기존 문서가 연결됨)
+- [ ] WebView2에서 텍스트 입력란 안을 누르고 끌 때는 드래그가 시작되지 않고 텍스트 선택이 되는가; Esc로 드래그가 취소되는가
+
 ## P7 품질·배포 (이번 단계, v1.1)
 
 - [ ] Actions "Windows installer (manual)"(variant=lite)로 받은 `DocuLens-Setup-Lite-<버전>-x64.exe`가 오프라인 PC에 설치되고
       (`certutil -hashfile … SHA256` 일치, SmartScreen "추가 정보 → 실행"), 설치 직후 모델만 넣으면 엔진·PDF·ko-dic이 동봉본으로
       동작하는가(모델 관리자 엔진 카드 출처 "bundled"); 제거(uninstall)가 `%LOCALAPPDATA%\DocuLens` 앱데이터를 남기는가
-- [ ] "CUDA engine packs (manual)" 워크플로가 cu121/cu129 zip을 만들고, variant=full 설치파일이 CUDA 팩을 동봉해 NVIDIA PC에서
-      `cu121`로 동작하는가(엔진 로그 `CUDA0`); 첫 실행 로그의 pack.json 해시를 `engines/manifest.json`에 `--pin`으로 기록
+- [ ] Full 설치파일(`DocuLens-Setup-Full-<버전>-x64.exe`, 1.1 GB; CUDA 팩 cu121·cu129 동봉은 CI 내용 검사로 확인됨)이 NVIDIA PC에서
+      드라이버 CUDA 버전에 맞는 팩으로 동작하는가 — 엔진 카드 백엔드 `cu129`(드라이버 12.8+) 또는 `cu121`(12.1~12.7), 엔진 로그
+      `CUDA0`, 엔진 카드 버전 `b12066`(팩 `--version`은 `0.8.0-dev (build 12066, …)`); 설치 폴더가 약 3.1 GB로 풀리는가
+- [ ] Lite 설치 상태에서 Release의 `DocuLens-EnginePack-cu129-b12066.zip`(또는 cu121)을 `%LOCALAPPDATA%\DocuLens\engines\b12066\cu129\`에
+      풀어 넣고 앱을 재시작하면 백엔드가 Vulkan → CUDA로 바뀌는가(앱데이터 팩이 동봉 팩보다 우선)
 - [ ] 평가 하네스: `cargo run -p doculens-eval -- pipeline --manifest <골든셋> --engine <llama-server> --models-dir … --model qwen3.5-4b-q5km`
       으로 실제 모델의 분류 F1·필드 정확일치·ANLS*·CER·p50/p95·VRAM이 `scorecard.md`에 나오는가; Q4_K_M/Q5_K_M/Q6_K를 `scorecard`
       서브커맨드로 합쳐 `docs/scorecard.md`를 채우기

@@ -830,7 +830,19 @@ export interface ImportOptions {
   dpi: number | null;
   /** Knowledge collection that receives the whole batch (ingest wizard). */
   collection_id?: string | null;
+  /** Project that receives the whole batch (files dropped onto a project). */
+  project_id?: string | null;
   auto_level?: AutoProcessingLevel | null;
+}
+
+/** Structured result of a finished `document_import` job (`Job.result`). */
+export interface ImportReport {
+  batch_id: string;
+  imported: string[];
+  relinked: string[];
+  failed: [string, string][];
+  skipped: number;
+  cancelled: boolean;
 }
 
 export type ImportItemStatus =
