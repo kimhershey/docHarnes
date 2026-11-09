@@ -433,7 +433,31 @@ pub fn delete_template(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
 // ---------------------------------------------------------------------------
 
 const PROJECT_COLUMNS: &str = "id, name, template_id, status, intake_no, owner, due_date, notes, inbox_folder, \
-created_at, updated_at, last_check_at";
+created_at, updated_at, last_check_at, keywords";
+
+/// Normalises a keyword list: trimmed, NFC, non-empty, no duplicates (case-insensitive), ≤ 32.
+pub fn normalize_keywords(keywords: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for k in keywords {
+        let k = documents::nfc(k.trim());
+        if k.is_empty() || out.iter().any(|x| x.to_lowercase() == k.to_lowercase()) {
+            continue;
+        }
+        out.push(k);
+        if out.len() >= 32 {
+            break;
+        }
+    }
+    out
+}
+
+fn keywords_json(keywords: &[String]) -> String {
+    serde_json::to_string(&normalize_keywords(keywords)).unwrap_or_else(|_| "[]".into())
+}
+
+fn parse_keywords(json: Option<String>) -> Vec<String> {
+    json.and_then(|j| serde_json::from_str::<Vec<String>>(&j).ok()).unwrap_or_default()
+}
 
 fn row_to_project(r: &Row<'_>) -> rusqlite::Result<Project> {
     let status: String = r.get(3)?;
@@ -447,6 +471,7 @@ fn row_to_project(r: &Row<'_>) -> rusqlite::Result<Project> {
         due_date: r.get(6)?,
         notes: r.get(7)?,
         inbox_folder: r.get(8)?,
+        keywords: parse_keywords(r.get(12)?),
         created_at: parse_ts(r.get(9)?).unwrap_or_else(Utc::now),
         updated_at: parse_ts(r.get(10)?).unwrap_or_else(Utc::now),
         document_count: 0,
@@ -622,9 +647,10 @@ pub fn save_project(conn: &Connection, input: &ProjectInput) -> rusqlite::Result
                 Some(v) => blank(Some(v.clone())),
             };
             let template_id = merged(&input.template_id, &before.template_id);
+            let keywords = keywords_json(input.keywords.as_deref().unwrap_or(&before.keywords));
             conn.execute(
                 "UPDATE projects SET name = ?2, template_id = ?3, status = ?4, intake_no = ?5, owner = ?6, due_date = ?7, \
-                 notes = ?8, inbox_folder = ?9, updated_at = ?10 WHERE id = ?1",
+                 notes = ?8, inbox_folder = ?9, updated_at = ?10, keywords = ?11 WHERE id = ?1",
                 params![
                     id,
                     name,
@@ -635,7 +661,8 @@ pub fn save_project(conn: &Connection, input: &ProjectInput) -> rusqlite::Result
                     merged(&input.due_date, &before.due_date),
                     merged(&input.notes, &before.notes),
                     merged(&input.inbox_folder, &before.inbox_folder).map(|f| documents::nfc(&f)),
-                    now
+                    now,
+                    keywords
                 ],
             )?;
             if template_id.is_some() && template_id != before.template_id && rules_of(conn, id)?.is_empty() {
@@ -649,7 +676,7 @@ pub fn save_project(conn: &Connection, input: &ProjectInput) -> rusqlite::Result
             let id = documents::new_id();
             conn.execute(
                 "INSERT INTO projects (id, name, template_id, status, intake_no, owner, due_date, notes, inbox_folder, \
-                 created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+                 created_at, updated_at, keywords) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11)",
                 params![
                     id,
                     name,
@@ -660,7 +687,8 @@ pub fn save_project(conn: &Connection, input: &ProjectInput) -> rusqlite::Result
                     blank(input.due_date.clone()),
                     blank(input.notes.clone()),
                     blank(input.inbox_folder.clone()).map(|f| documents::nfc(&f)),
-                    now
+                    now,
+                    keywords_json(input.keywords.as_deref().unwrap_or(&[]))
                 ],
             )?;
             if let Some(t) = template_of(conn, template_id.as_deref())? {
@@ -758,6 +786,29 @@ pub fn projects_of_document(conn: &Connection, doc_id: &str) -> rusqlite::Result
     for id in ids {
         if let Some(p) = get_project(conn, &id)? {
             out.push(p);
+        }
+    }
+    Ok(out)
+}
+
+/// Documents (not deleted) that belong to no project, newest import first.
+pub fn unassigned_document_ids(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    let mut st = conn.prepare_cached(
+        "SELECT id FROM documents WHERE deleted_at IS NULL AND id NOT IN (SELECT document_id FROM project_documents) \
+         ORDER BY imported_at DESC, id",
+    )?;
+    let ids: Vec<String> = st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(ids)
+}
+
+/// Project ids per document for the given documents.
+pub fn memberships(conn: &Connection, doc_ids: &[String]) -> rusqlite::Result<BTreeMap<String, Vec<String>>> {
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut st = conn.prepare_cached("SELECT project_id FROM project_documents WHERE document_id = ?1")?;
+    for id in doc_ids {
+        let projects: Vec<String> = st.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        if !projects.is_empty() {
+            out.insert(id.clone(), projects);
         }
     }
     Ok(out)

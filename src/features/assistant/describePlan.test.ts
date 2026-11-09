@@ -196,7 +196,7 @@ describe("result actions (P6 payloads)", () => {
     saved_doc_id: null,
   };
   const outcome: DraftOutcome = { draft, prompt_tokens: 10, completion_tokens: 5, elapsed_ms: 1, source: "model" };
-  const project: Project = { id: "p1", name: "인증 심사 A", template_id: null, status: "intake", intake_no: null, owner: null, due_date: null, notes: null, inbox_folder: null, created_at: "", updated_at: "", document_count: 2, missing_count: 0, last_check_at: null, last_pass: 0, last_mismatch: 0, last_undetermined: 0 };
+  const project: Project = { id: "p1", name: "인증 심사 A", template_id: null, status: "intake", intake_no: null, owner: null, due_date: null, notes: null, inbox_folder: null, keywords: [], created_at: "", updated_at: "", document_count: 2, missing_count: 0, last_check_at: null, last_pass: 0, last_mismatch: 0, last_undetermined: 0 };
   const detail: ProjectDetail = { project, template: null, documents: [], checklist: [], rules: [], last_run: null, relations: { nodes: [], edges: [] } };
   const ruleDraft: RuleDraft = { rule: { id: "r1", description: "사업자번호 일치", left: { doc_type: "tax_invoice", field: "supplier.brn", value: null }, op: "eq", right: { doc_type: "business_registration", field: "registration_no", value: null }, tolerance: null, required: true, enabled: true }, confidence: 0.9, source: "rules", issues: [], unresolved: [] };
   const run: CheckRun = { id: "run1", project_id: "p1", started_at: "", finished_at: "", pass: 1, mismatch: 0, undetermined: 0, missing: 0, results: [], missing_doc_types: [] };

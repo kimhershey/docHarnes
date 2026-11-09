@@ -25,6 +25,7 @@ export function NewProjectDialog({ open, onOpenChange, project, onSaved }: { ope
   const [owner, setOwner] = useState("");
   const [due, setDue] = useState("");
   const [inbox, setInbox] = useState("");
+  const [keywords, setKeywords] = useState("");
   const [busy, setBusy] = useState(false);
   const ko = i18n.language.startsWith("ko");
   useEffect(() => {
@@ -35,13 +36,26 @@ export function NewProjectDialog({ open, onOpenChange, project, onSaved }: { ope
     setOwner(project?.owner ?? "");
     setDue(project?.due_date ?? "");
     setInbox(project?.inbox_folder ?? "");
+    setKeywords((project?.keywords ?? []).join(", "));
   }, [open, project]);
   const submit = async () => {
     setBusy(true);
     try {
       // Optional fields follow the core contract: "" clears a stored value, an omitted / null field keeps it.
       // The dialog has no notes field, so notes are left out and survive an edit.
-      const input: ProjectInput = { id: project?.id ?? null, name: name.trim(), template_id: template === NONE ? "" : template, intake_no: intakeNo.trim(), owner: owner.trim(), due_date: due.trim(), inbox_folder: inbox.trim() };
+      const input: ProjectInput = {
+        id: project?.id ?? null,
+        name: name.trim(),
+        template_id: template === NONE ? "" : template,
+        intake_no: intakeNo.trim(),
+        owner: owner.trim(),
+        due_date: due.trim(),
+        inbox_folder: inbox.trim(),
+        keywords: keywords
+          .split(/[,\n;]+/)
+          .map((k) => k.trim())
+          .filter(Boolean),
+      };
       const saved = project ? await api.projectUpdate(input) : await api.projectCreate(input);
       invalidateProjects(project ? [project.id] : []);
       toast(project ? t("common.saved") : t("projects.dialog.created"), "ok");
@@ -110,6 +124,11 @@ export function NewProjectDialog({ open, onOpenChange, project, onSaved }: { ope
               <Input id="project-inbox" value={inbox} onChange={(e) => setInbox(e.target.value)} data-testid="project-inbox" />
             </div>
             <p className="text-xs text-fg-subtle">{t("projects.dialog.inbox_hint")}</p>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="project-keywords">{t("projects.dialog.keywords")}</Label>
+            <Input id="project-keywords" value={keywords} onChange={(e) => setKeywords(e.target.value)} placeholder={t("projects.dialog.keywords_placeholder")} data-testid="project-keywords" />
+            <p className="text-xs text-fg-subtle">{t("projects.dialog.keywords_hint")}</p>
           </div>
           <DialogFooter>
             <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>

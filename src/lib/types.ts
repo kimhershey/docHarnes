@@ -2123,6 +2123,8 @@ export interface Project {
   due_date: string | null;
   notes: string | null;
   inbox_folder: string | null;
+  /** Classification keywords (자동 분류), matched against document titles / names / text. */
+  keywords: string[];
   created_at: string;
   updated_at: string;
   document_count: number;
@@ -2144,6 +2146,51 @@ export interface ProjectInput {
   due_date?: string | null;
   notes?: string | null;
   inbox_folder?: string | null;
+  /** Omitted / null keeps the stored keywords, an empty list clears them. */
+  keywords?: string[] | null;
+}
+
+// -- 자동 분류 (projects::classify) --
+export interface ClassifyRequest {
+  /** Documents to classify; empty = every document that belongs to no project yet. */
+  doc_ids?: string[];
+  project_ids?: string[];
+  use_model?: boolean;
+  include_assigned?: boolean;
+}
+export type SuggestionSource = "none" | "rules" | "model";
+export interface ClassifyCandidate {
+  project_id: string;
+  project_name: string;
+  score: number;
+  reasons: string[];
+}
+export interface ClassifySuggestion {
+  doc_id: string;
+  title: string;
+  doc_type: string | null;
+  project_id: string | null;
+  project_name: string | null;
+  confidence: number;
+  reasons: string[];
+  source: SuggestionSource;
+  alternatives: ClassifyCandidate[];
+  already_in: string[];
+}
+export interface ClassifyResult {
+  suggestions: ClassifySuggestion[];
+  suggested: number;
+  undecided: number;
+  model_calls: number;
+  notes: string[];
+}
+export interface ClassifyAssignment {
+  doc_id: string;
+  project_id: string;
+}
+export interface ClassifyApplyResult {
+  added: number;
+  project_ids: string[];
 }
 
 export type RuleOp = "eq" | "neq" | "gte" | "lte" | "within_pct" | "present" | "matches";

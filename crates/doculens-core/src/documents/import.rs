@@ -1436,6 +1436,7 @@ mod tests {
             owner: None,
             due_date: None,
             notes: None,
+            keywords: None,
             inbox_folder: None,
         };
         let project = e.db.with(|c| crate::projects::repo::save_project(c, &input)).unwrap();

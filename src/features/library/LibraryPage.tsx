@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { BookOpen, FileOutput, FileSpreadsheet, FileText, FolderInput, FolderOpen, FolderTree, Image as ImageIcon, LayoutGrid, List, Merge, Presentation, RefreshCw, Trash2, Upload } from "lucide-react";
+import { BookOpen, Briefcase, FileOutput, FileSpreadsheet, FileText, FolderInput, FolderOpen, FolderTree, Image as ImageIcon, LayoutGrid, List, Merge, Presentation, RefreshCw, Trash2, Upload } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router";
@@ -439,6 +439,10 @@ export function LibraryPage() {
               <Button size="sm" variant="ghost" onClick={() => setAddToKb(true)} data-testid="library-add-to-kb">
                 <BookOpen />
                 {t("library.actions.add_to_kb")}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => navigate(`/projects?classify=${selectedVisible.join(",")}`)} data-testid="library-classify">
+                <Briefcase />
+                {t("library.actions.classify")}
               </Button>
               <Button size="sm" variant="ghost" className="text-danger" onClick={deleteSelected} data-testid="library-delete">
                 <Trash2 />

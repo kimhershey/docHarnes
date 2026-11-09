@@ -1229,7 +1229,8 @@
       "open_doc": "Open document",
       "add_to_kb": "Add to knowledge base",
       "register_form": "Register as form",
-      "merge": "Merge"
+      "merge": "Merge",
+      "classify": "Classify into projects"
     },
     "columns": {
       "name": "Name",
@@ -2467,7 +2468,10 @@
       "inbox_hint": "Documents arriving in inbox/<folder> join this project automatically.",
       "create": "Create",
       "save": "Save",
-      "created": "Project created."
+      "created": "Project created.",
+      "keywords": "Classification keywords",
+      "keywords_placeholder": "e.g. Hanbit, new office, 2026-001 (comma-separated)",
+      "keywords_hint": "Auto-classification looks for these in document titles, file names, vendors and text."
     },
     "detail": {
       "back": "Projects",
@@ -2654,6 +2658,37 @@
       "hint_files": "Pick the project that receives the {{count}} dropped file(s).",
       "none": "No projects yet. Create one first.",
       "add": "Add"
+    },
+    "classify": {
+      "button": "Auto-classify",
+      "button_hint": "Suggests a project for documents that belong to none, from their title and content.",
+      "title": "Classify documents into projects",
+      "hint": "Each document's title, file name, vendor and text are compared with every project's name, keywords, intake number and documents. Review or change the suggestions; nothing is assigned until you apply.",
+      "scope_selected": "{{count}} selected documents",
+      "scope_unassigned": "All documents without a project",
+      "use_model": "Refine with the model",
+      "model_hint": "Documents the rule scores cannot decide (up to 20) are put to the loaded model.",
+      "model_unavailable": "No model is loaded; rule scores only.",
+      "run": "Preview",
+      "rerun": "Classify again",
+      "no_projects": "No projects yet. Create one and give it keywords first.",
+      "summary": "{{total}} documents: {{suggested}} suggested · {{undecided}} undecided",
+      "model_calls": "{{count}} model calls",
+      "empty": "Nothing to classify (every document already belongs to a project).",
+      "columns": {
+        "document": "Document",
+        "project": "Suggested project",
+        "confidence": "Confidence",
+        "reasons": "Reasons"
+      },
+      "untyped": "untyped",
+      "already_in": "already in {{names}}",
+      "leave_out": "Leave out",
+      "undecided": "undecided",
+      "by_model": "model's choice",
+      "alternatives": "Other candidates: {{names}}",
+      "apply": "Apply ({{count}})",
+      "applied": "Assigned {{count}} documents to {{projects}} projects."
     }
   },
   "dnd": {

@@ -142,6 +142,62 @@ test.describe("P6 projects", () => {
     await expect(page.getByTestId("toaster")).toContainText(ko.projects.rules.deleted);
   });
 
+  test("auto-classify: keywords and names suggest projects, the user adjusts the preview, apply assigns", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\세금계산서-2p.pdf", "D:\\scan\\사업자등록증-1p.pdf", "D:\\scan\\영수증-1p.jpg"], { autoLevel: "none" });
+    const invoice = await docId(page, "세금계산서-2p.pdf");
+    const registration = await docId(page, "사업자등록증-1p.pdf");
+    const receipt = await docId(page, "영수증-1p.jpg");
+    // Two projects: one with a keyword that matches the invoice's file name, one unrelated.
+    await page.getByTestId("nav-projects").click();
+    await page.getByTestId("projects-new").click();
+    await page.getByTestId("project-name").fill("한빛상사 거래처 등록");
+    await page.getByTestId("project-keywords").fill("세금계산서, 한빛");
+    await page.getByTestId("project-submit").click();
+    await expect(page.getByTestId("page-project")).toBeVisible();
+    await page.getByTestId("project-back").click();
+    await page.getByTestId("projects-new").click();
+    await page.getByTestId("project-name").fill("신사옥 공사");
+    await page.getByTestId("project-submit").click();
+    await expect(page.getByTestId("page-project")).toBeVisible();
+    await page.getByTestId("project-back").click();
+    const hanbit = page.locator('[data-testid^="project-card-"][data-project-name="한빛상사 거래처 등록"]');
+    await expect(hanbit).toBeVisible();
+    const hanbitId = (await hanbit.getAttribute("data-testid"))!.replace("project-card-", "");
+
+    // From the library: the selection goes to the projects screen with the dialog open on those documents.
+    await page.getByTestId("nav-library").click();
+    for (const id of [invoice, registration, receipt]) await page.getByTestId(`doc-select-${id}`).check();
+    await page.getByTestId("library-classify").click();
+    const dialog = page.getByTestId("classify-dialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByTestId("classify-scope")).toContainText("3");
+    await dialog.getByTestId("classify-run").click();
+    await expect(dialog.getByTestId("classify-summary")).toContainText(tpl(ko.projects.classify.summary, { total: 3, suggested: 1, undecided: 2 }));
+    // The invoice is suggested for 한빛상사 (keyword in the file name); the others stay undecided.
+    await expect(dialog.getByTestId(`classify-row-${invoice}`)).toHaveAttribute("data-suggested", hanbitId);
+    await expect(dialog.getByTestId(`classify-row-${invoice}`)).toHaveAttribute("data-source", "rules");
+    await expect(dialog.getByTestId(`classify-confidence-${invoice}`)).toContainText("%");
+    await expect(dialog.getByTestId(`classify-row-${registration}`)).toHaveAttribute("data-suggested", "");
+    await expect(dialog.getByTestId(`classify-confidence-${receipt}`)).toHaveText(ko.projects.classify.undecided);
+    // The user puts the registration into 한빛상사 by hand and leaves the receipt out: two assignments.
+    await dialog.getByTestId(`classify-project-${registration}`).click();
+    await page.getByTestId(`classify-project-${registration}-${hanbitId}`).click();
+    await expect(dialog.getByTestId("classify-apply")).toHaveText(tpl(ko.projects.classify.apply, { count: 2 }));
+    await dialog.getByTestId("classify-apply").click();
+    await expect(dialog).toBeHidden();
+    await expect(hanbit.getByText(tpl(ko.projects.card.documents, { count: 2 }))).toBeVisible();
+
+    // From the projects screen: only the unassigned receipt is left; nothing matches it.
+    await page.getByTestId("projects-classify").click();
+    await expect(page.getByTestId("classify-scope")).toHaveText(ko.projects.classify.scope_unassigned);
+    await page.getByTestId("classify-run").click();
+    await expect(page.getByTestId("classify-summary")).toContainText(tpl(ko.projects.classify.summary, { total: 1, suggested: 0, undecided: 1 }));
+    await expect(page.getByTestId(`classify-row-${receipt}`)).toBeVisible();
+    await expect(page.getByTestId("classify-apply")).toBeDisabled();
+  });
+
   test("templates: a built-in is read-only, its copy is editable, an incomplete rule blocks saving", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);

@@ -110,6 +110,24 @@ pub fn project_request_supplement(
 
 // -- retention purge (P7) ------------------------------------------------------
 
+/// 자동 분류 preview: suggested project per document (nothing is written).
+#[tauri::command(async)]
+pub fn project_classify_preview(
+    app: AppHandle,
+    req: doculens_core::projects::classify::ClassifyRequest,
+) -> UiResult<doculens_core::projects::classify::ClassifyResult> {
+    projects_bridge::classify_preview(&app, req)
+}
+
+/// 자동 분류 apply: the accepted document → project rows.
+#[tauri::command(async)]
+pub fn project_classify_apply(
+    app: AppHandle,
+    assignments: Vec<doculens_core::projects::classify::Assignment>,
+) -> UiResult<doculens_core::projects::classify::ApplyResult> {
+    projects_bridge::classify_apply(&app, assignments)
+}
+
 #[tauri::command(async)]
 pub fn maintenance_status(app: AppHandle) -> UiResult<MaintenanceStatus> {
     maintenance::status(&app)

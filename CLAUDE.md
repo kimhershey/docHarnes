@@ -79,7 +79,8 @@ user PC: `docs/RUN-GUIDE.md`.
   draft + rule-based 보완요청서, reverse validation, HTML / MD / DOCX / HWPX / PDF writers, registered-form filling,
   drafts store under `.doculens/drafts/`), `projects/` (P6 §3.15: projects / templates / rules repo, NL → rule JSON,
   deterministic consistency check with evidence, relation graph, Markdown report, 보완요청서 request builder, inbox
-  subfolder → project mapping), `retention` (policy + purge / LRU file helpers used by the daily maintenance job).
+  subfolder → project mapping, `classify`: title / content → project suggestions (rule scores + optional grammar-bound model
+  pass, preview → apply; `projects.keywords`, migration 0007)), `retention` (policy + purge / LRU file helpers used by the daily maintenance job).
 - `crates/doculens-kodic/` — bin that compiles the mecab-ko-dic sources into lindera's dictionary format
   (driven by `scripts/fetch-kodic.mjs`; descriptors in `assets/`).
 - `crates/doculens-eval/` — P7 evaluation harness bin (`planner` golden-set accuracy + regression gate, `pipeline`
@@ -112,7 +113,7 @@ user PC: `docs/RUN-GUIDE.md`.
   `chunks` + FTS5 `chunks_fts`/`chunks_fts_tri`, sqlite-vec `chunks_vec`, `collections`, `doc_versions`, `glossary`,
   `answers`; pipeline tables `schemas`, `schema_versions`, `extraction_runs`, `fields`, `field_history`; P5 tables
   `journal_batches`, `ops_journal`, `jobs`; P6 tables `projects`, `project_templates`, `project_documents`,
-  `project_rules`, `project_runs`, `project_rule_results`; `pages.layout` word-box JSON (0006)), drafts `.doculens/drafts/<id>.json`, page cache
+  `project_rules`, `project_runs`, `project_rule_results`; `pages.layout` word-box JSON (0006); `projects.keywords` (0007)), drafts `.doculens/drafts/<id>.json`, page cache
   `.doculens/cache/{pages,thumbs,converted}/<doc_id>/`, extraction mirror `.doculens/extractions/<doc_id>/<run_id>/`;
   DB rows store workspace-relative paths only. OCR text lives in `pages.text` (`text_source = ocr`) so the knowledge
   indexer re-chunks it.

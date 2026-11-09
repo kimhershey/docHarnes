@@ -1186,7 +1186,7 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   역삼점 → 역삼점"), `knowledge.spec`(검색/인용 강조는 레이어 `<mark>`, 설명은 이미지 선택으로). 실 PDF/스캔에서의 박스 정확도는 사용자 PC
   체크리스트 "페이지 이미지 위 글자 레이어".
 
-### 사용자 PC 보고 수정 2차 (2026-11-09; 5건 중 1~4번)
+### 사용자 PC 보고 수정 2차 (2026-11-09; 5건 모두)
 
 - **1. 양식 화면 양식 등록·드롭** (보고: "양식 등록과 드래그 앤 드롭이 작동하지 않음"): 양식 화면 본문에는 드롭 대상이 없어
   스프링 로딩으로 화면이 바뀐 뒤 떨어뜨린 카드나 탐색기 파일이 아무 데도 닿지 않았다(사이드바 메뉴 항목과 열린 대화상자만 받음).
@@ -1246,6 +1246,24 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   `planner::tests::context_block_lists_the_last_conversation_turns`, vitest `conversation.test.ts` 4건(턴 추출·상한·명확화,
   `looksLikeFollowUp`), Playwright `knowledge.spec` "assistant remembers the conversation"(후속 질문 유지 → 새 대화 후 근거 없음).
 
+- **5. 문서를 제목·내용으로 프로젝트별 분류** (요청: "라이브러리·지식 베이스에 추가된 문서들을 제목/내용을 기반으로 프로젝트별
+  분류"): 새 모듈 `projects/classify.rs` — 프로젝트마다 **이름 단어·분류 키워드(새 컬럼 `projects.keywords`, 마이그레이션 0007)·
+  접수번호·inbox 폴더·보유 문서의 거래처/제목 단어·템플릿의 미보유 필수 유형**을 문서의 **제목·파일명·경로·거래처·본문 앞 4,000자**와
+  대조해 점수를 매긴다(폴더 일치 4 · 접수번호 3/본문 2.5 · 키워드 2/본문 1.2 · 이름 단어 1.5/0.8 · 같은 거래처 2 · 거래처가 이름에 1.5 ·
+  비슷한 제목 0.5 · 미보유 필수 유형 0.7; 신뢰도 = 점수/(점수+2), 2위가 1위의 60% 이상이면 ×0.6; 0.45 이상이면 제안, 아니면
+  미결정 + 가장 가까운 후보 표시). **모델 보완**(`use_model`)은 불러온 모델이 있을 때 미결정·애매(0.65 미만) 문서를 최대 20건까지
+  후보 프로젝트 id enum 문법(`project_classify`)으로 묻고 0.5 이상이면 반영(출처 `model`). 아무것도 자동 배정하지 않는다:
+  `classify`(미리보기) → 사용자가 행별 프로젝트를 바꾸거나 제외 → `apply_classification`(한 트랜잭션, 중복 무시). 대상은 명시한
+  문서 id, 아니면 프로젝트 미배정 문서 전체(`include_assigned`로 전체). 셸 `project_classify_preview`/`project_classify_apply`
+  (모델 패스는 define_rule처럼 `dialog_model` + 인터랙티브 게이트). 프런트: 프로젝트 화면 "자동 분류" 버튼과 라이브러리 선택 바
+  "프로젝트로 분류"(`/projects?classify=<ids>`) → `ClassifyDialog`(범위 배지, "모델로 보완" 스위치(불러온 모델 있을 때만), 미리보기
+  표: 문서·제안 프로젝트(바꾸기/배정 안 함)·신뢰도·근거·다른 후보, 적용(N)); 새 프로젝트/편집 대화상자에 **분류 키워드** 입력(쉼표 구분).
+  모의 백엔드가 같은 점수 규칙을 구현해 E2E가 계약을 검증한다. 어시스턴트 op는 추가하지 않았다(라이브러리·프로젝트 화면에서 실행;
+  필요하면 `classify_documents` op로 확장 가능).
+- **검증(5번)**: `projects::tests` 3건(키워드 정규화·부분 갱신, 점수 규칙(접수번호·키워드·이름·같은 거래처·미보유 필수 유형)·
+  이미 속한 프로젝트·적용·재실행, 스크립트 모델로 미결정 문서 결정·"none"), Playwright `projects.spec` "auto-classify"(라이브러리 선택 →
+  대화상자 → 제안/미결정 → 수동 지정 → 적용 → 카드 문서 수; 프로젝트 화면에서 미배정만 다시).
+
 ### 사용자 PC 보고 수정 3차 (2026-11-09; 표 내부 글자 인식 · 수정 표시)
 
 - **6. 표 내부 글자 인식** (보고: "문서 라이브러리에서 표 내부의 글자가 정상적으로 인식되지 않음"): 원인 두 가지. (a) PDF 텍스트
@@ -1284,6 +1302,7 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | GitHub CI(License·Web·Rust Linux·Windows compile·notices·eval-gate·실엔진) | 커밋 a0fcafb·9308de3에서 실엔진 잡만 실패(위 수정으로 0e200ec에서 7개 잡 모두 통과). 리뷰 반영 커밋 84e5fdd에서는 License gate·Windows compile 잡이 **GitHub 릴리스 자산 다운로드 장애**(cargo-deny-action의 바이너리 tar가 손상 수신 "gzip: invalid magic", PDFium 다운로드 HTTP 504)로 실패 — 코드와 무관. ece44cc: License gate를 `taiki-e/install-action`(체크섬 검증 prebuilt cargo-deny 0.20.2)으로 바꿔 통과, 나머지 6개 잡 통과; Windows 잡은 여전히 504. c505b81: `scripts/lib/fetch-retry.mjs`(5xx·네트워크 오류·잘린 본문 지수 백오프 재시도 3회)를 fetch-pdfium/engine/kodic에 적용하고 Windows 잡에도 PDFium `actions/cache` 추가 — 장애가 이어져 Windows 잡은 재시도 3회 후에도 504. 6975410: Windows 잡의 PDFium 다운로드를 `continue-on-error`(경고 주석)로 바꿔 컴파일·테스트는 항상 수행(PDFium 테스트는 라이브러리 없으면 자체 skip, Linux 잡은 엄격 유지) → **7개 잡 모두 통과**(다운로드도 복구되어 Windows 잡이 PDFium 테스트까지 실제 수행) |
 | 2026-11-09 추가 기능(드래그 앤 드롭 · XLSX/PPTX/텍스트 · 내용 감지 · 뷰어 텍스트 직접 편집) | `cargo test --workspace` 코어 257(3 ignored)·셸 3·평가 15 통과, `cargo deny` 통과(`encoding_rs` 추가), clippy·fmt 통과, vitest 22파일 131건, Playwright 41/41(`dnd.spec.ts` 5, 뷰어 편집 2 포함; 전체 실행 1회에서 검토 큐 테스트가 1번 실패했으나 단독 3회·재실행 전체 통과 → 플레이크), CI: 4fe082d·314e503·c848d81은 Markdown 등록 테스트 1건으로 Rust 잡 실패 → 14577a6에서 7개 잡 통과 |
 | 2026-11-09 사용자 PC 보고 수정 2차 1~3번 (ffb8618·705808b·c78c27b) | `cargo test --workspace` 코어 282(3 ignored)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과(calamine·cfb 추가); vitest 23파일 139건; Playwright 43건(`dnd.spec` 2건 추가; 검토 큐 테스트의 목록 로드 전 count 경합을 대기 조건으로 고침); CI 7개 잡 |
+| 2026-11-09 사용자 PC 보고 수정 2차 4·5번 + 3차 6·7번 (9ca340d·6014ab9·다음 커밋) | `cargo test --workspace` 코어 294(4 ignored; `documents::layout` 15·`knowledge::answer` 7·`projects` 18 포함)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과(새 의존성 없음, 고지·SBOM 변경 없음); vitest 25파일 147건(`conversation.test.ts` 4·`textLayer.test.ts` 4 추가); Playwright 45건(`knowledge.spec` 세션 기억·`projects.spec` 자동 분류 추가, `documents.spec` 수정 글자 색 단언); `npm run build`·`licenses:check` 통과 |
 | 2026-11-09 이미지 위 글자 레이어 · 우측 패널 AI 검색/이력 (488af39·9e56dd6) | `cargo test --workspace` 코어 266(3 ignored; `documents::layout` 9·`render` 실 PDFium 문자 박스·`import` 레이아웃 왕복 추가)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과; vitest 23파일 139건(`text-layer.test.ts` 8 추가); Playwright 41/41(`documents`·`knowledge`·`pipeline` 스펙을 레이어·검토 큐 기준으로 재작성); CI 7개 잡 두 커밋 모두 성공 |
 | 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 3회(run 42471185353·42475854955 solid 43 MB, 42547230697 파일별 압축 47.6 MB; 159 파일 검사 통과) · 1~3번 반영 Lite 빌드 성공(run 42577030466, 검증된 커밋 a461405 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.5 MB; Release 게시는 권한 분류기 거부로 publish=false) · **Full 0.1.0 빌드 성공(run 42547228170): 1.1 GB, 219 파일, CUDA 팩 cu121·cu129 동봉 검사 통과** · CUDA 팩 빌드 성공(cu121 run 42533483890 · cu129 run 42533486332 → Release v0.1.0) — 위 "패키징·고지" 참조 |
 
