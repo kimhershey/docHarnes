@@ -2404,7 +2404,7 @@
       "open_folder": "Open folder",
       "open_library": "Show in library",
       "exists": "A file with this name already exists. Turn on overwrite or change the file name.",
-      "warning_markdown": "Markdown files are not registered in the library.",
+      "warning_markdown": "Markdown (.md) is registered in the library as a generated document too (text format) and is searchable.",
       "saved_as": "Saved as {{format}}: {{path}}"
     },
     "drafts_list": {

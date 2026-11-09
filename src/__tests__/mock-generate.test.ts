@@ -72,10 +72,14 @@ describe("mock generate", () => {
     expect(again.doc_id).toBe(first.doc_id);
     const docs = backend.wsDocs().filter((d) => d.rel_path.startsWith("documents/generated/"));
     expect(docs).toHaveLength(1);
-    // Markdown is written but not registered; the warning is the core's sentence.
+    // Markdown is an input format too (text family): the file registers as a generated text document.
     const md = mg.saveDraft({ draft, output: "md", file_name: "견적서", folder: null, register: true, overwrite: false });
-    expect(md.doc_id).toBeNull();
-    expect(md.warnings).toContain("Markdown 파일은 라이브러리에 등록되지 않습니다(입력 형식이 아님).");
+    expect(md.doc_id).toBeTruthy();
+    expect(md.warnings.some((w) => w.includes("Markdown"))).toBe(false);
+    const mdDoc = backend.wsDocs().find((d) => d.id === md.doc_id)!;
+    expect(mdDoc.source_kind).toBe("text");
+    expect(mdDoc.role).toBe("generated");
+    expect(backend.wsDocs().filter((d) => d.rel_path.startsWith("documents/generated/"))).toHaveLength(2);
   });
 
   it("parses natural-language rules against the built-in schemas", () => {

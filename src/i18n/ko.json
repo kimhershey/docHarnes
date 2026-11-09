@@ -2404,7 +2404,7 @@
       "open_folder": "폴더 열기",
       "open_library": "라이브러리에서 보기",
       "exists": "같은 이름의 파일이 이미 있습니다. 덮어쓰기를 켜거나 파일 이름을 바꾸세요.",
-      "warning_markdown": "Markdown은 라이브러리에 등록하지 않습니다.",
+      "warning_markdown": "Markdown(.md)도 '생성' 문서로 라이브러리에 등록되어 검색·질문에 쓰입니다(텍스트 형식).",
       "saved_as": "저장했습니다 ({{format}}): {{path}}"
     },
     "drafts_list": {

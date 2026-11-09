@@ -1100,6 +1100,9 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   | 알 수 없는 이진 파일 | 미지원 | 동일. **보류한 안**: "원본만 보관"(페이지 없는 첨부 문서, 이름 검색만) — 상태·UI 추가가 필요해 v1.x 후보로 기록 |
   재스캔(inbox)도 같은 분류를 써서 확장자 없는 파일을 집어낸다. 미지원 사유 문자열(`documents.unsupported.*`)에 `archive`·`executable`·
   `encrypted` 추가, `office_legacy`·`unsupported_extension` 문구 갱신, `text` 제거.
+- **부수 효과**: 문서 생성의 Markdown 저장도 이제 라이브러리에 '생성' 문서로 등록된다(텍스트 리더로 변환·검색). 처음 커밋(4fe082d)은
+  이를 가정한 기존 테스트 `save_registers_generated_documents_in_the_library`를 깨뜨려 CI Rust 잡이 실패했고(로컬에서 `documents::`
+  테스트만 돌린 탓), 테스트·경고 문구·모의 백엔드를 새 동작에 맞춰 고쳤다.
 - **프런트엔드**: `SourceKind`에 `xlsx`/`pptx`/`text`, 종류 배지·아이콘(스프레드시트·프레젠테이션), 파일 선택 필터 확장, 미리보기의 분류 메모
   (`ImportItem.note`), 모의 백엔드 `kindOf`/사유/쪽수. 샘플 세트(`gen_fixtures`)에 `sample-ledger.xlsx`·`sample-plan.pptx`·`sample-notes.md`·
   CP949 `sample-ledger.csv` 추가(8개).
