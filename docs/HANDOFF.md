@@ -1210,6 +1210,23 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 - **검증**: `documents::convert::pptx` 4건(상속·색·자르기·그룹·z-order 7도형), `html` 2건(슬라이드 HTML·페이지 크기·색 주입 차단),
   `convert` 1건(스텁 프린터 가로 용지 960×540 pt 3쪽), 전체 `cargo test --workspace` 코어 273·셸 3·평가 15·통합 1, clippy·fmt,
   `dnd.spec` 7/7.
+- **3. xls 등 미지원 형식** (보고: "xls 등 unknown 데이터타입 로드 불가"): `SourceKind`에 **Xls·Doc·Ppt·Rtf·Hml** 5종을 더했다
+  (확장자 xls/xlsb/ods · doc/dot · ppt/pps/pot · rtf · hml/hwpml; 내용 감지는 CFB 스트림 이름(WordDocument / Workbook·Book /
+  PowerPoint Document)·`{\rtf`·`<HWPML`·zip `xl/workbook.bin`). 리더: `convert/xls.rs` — calamine 0.38(MIT, `dates`)로
+  시트 → 표(숨김 시트 생략, 날짜·기간·숫자 서식, 병합 제목 → 제목), 픽스처 `tests/fixtures/legacy/sample.xls`(xlwt로 만든 BIFF8,
+  한글 시트 2장); `convert/doc.rs` — cfb 0.7(MIT, hwp 크레이트와 같은 버전)로 `WordDocument` FIB → `0Table/1Table` 피스 테이블
+  (Unicode·8비트 cp949/cp1252) → 본문 ccpText → `\r` 문단·`0x07` 셀/행 → 표·`0x0C` 쪽 나눔·`0x0B` 줄바꿈·필드 코드 제거
+  (`0x13/0x14/0x15`), Word 6/95는 fcMin..fcMac 폴백; 생성기 `write_sample_doc`로 자체 일관성 테스트; `convert/ppt.rs` —
+  `PowerPoint Document` 레코드 트리에서 Slide 컨테이너의 TextHeaderAtom/TextCharsAtom/TextBytesAtom만 읽고(마스터·노트·핸드아웃 제외,
+  증분 저장 중복 슬라이드 제거) 제목 유형은 머리글; `convert/rtf.rs` — 그룹/제어어 토크나이저(`\ucN`·`\uN?`·`\'hh`+`\ansicpg`,
+  무시 목적지 목록, `\fldinst` 제거·`\fldrslt` 유지, `\cell`/`\row` → 표); `convert/hml.rs` — HWPML `BODY/SECTION/P/TEXT/CHAR`,
+  `TABLE/ROW/CELL(ColSpan·RowSpan·Header)`, SECDEF/PAGEDEF 페이지 크기(HWPUNIT), 구역 → 쪽 나눔, UTF-8/UTF-16 입력. `classify`는
+  확장자 종류가 있고 내용이 "텍스트 같음"(약한 신호)이면 확장자를 믿도록 바꿔 XML 기반 HML이 Text로 밀리지 않게 했다;
+  `office_legacy` 사유는 그 밖의 OLE 컨테이너(VSD·PUB·MSG…)에만 남는다. 프런트: 종류 라벨 5종(ko/en), 라이브러리 필터 `SOURCE_KINDS`
+  13종(xlsx·pptx·text도 이제 필터에 보임), 아이콘(xls=스프레드시트, ppt=프레젠테이션), 파일 선택 필터 확장자, 미지원 문구 갱신,
+  모의 백엔드 종류 판정. 구형 형식은 텍스트·표만 변환되고(그림·도형 위치 생략) 변환 메모에 적힌다. HEIC·ODT/ODP는 여전히 미지원.
+- **검증**: `convert::xls` 1(실 BIFF8 픽스처)·`doc` 3·`ppt` 2·`rtf` 2·`hml` 1건, `sniff`/`classify`/`kinds_from_extension` 갱신,
+  `cargo deny` 통과(calamine·cfb MIT), 전체 Rust·vitest·Playwright는 아래 표.
 
 ### 테스트·검증
 

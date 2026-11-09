@@ -34,10 +34,20 @@ pub enum SourceKind {
     Pptx,
     /// Plain-text family (`.txt` `.md` `.csv` `.tsv` `.log` `.json` `.xml` `.html`).
     Text,
+    /// Legacy / other spreadsheet workbooks read by calamine (`.xls` BIFF, `.xlsb`, `.ods`).
+    Xls,
+    /// Word 97–2003 binary document (`.doc`): text, tables, page breaks.
+    Doc,
+    /// PowerPoint 97–2003 binary deck (`.ppt` / `.pps`): slide text.
+    Ppt,
+    /// Rich Text Format (`.rtf`).
+    Rtf,
+    /// HWPML — Hancom's XML form of HWP (`.hml` / `.hwpml`).
+    Hml,
 }
 
 impl SourceKind {
-    pub const ALL: [SourceKind; 8] = [
+    pub const ALL: [SourceKind; 13] = [
         SourceKind::Pdf,
         SourceKind::Image,
         SourceKind::Hwpx,
@@ -46,6 +56,11 @@ impl SourceKind {
         SourceKind::Xlsx,
         SourceKind::Pptx,
         SourceKind::Text,
+        SourceKind::Xls,
+        SourceKind::Doc,
+        SourceKind::Ppt,
+        SourceKind::Rtf,
+        SourceKind::Hml,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -58,6 +73,11 @@ impl SourceKind {
             SourceKind::Xlsx => "xlsx",
             SourceKind::Pptx => "pptx",
             SourceKind::Text => "text",
+            SourceKind::Xls => "xls",
+            SourceKind::Doc => "doc",
+            SourceKind::Ppt => "ppt",
+            SourceKind::Rtf => "rtf",
+            SourceKind::Hml => "hml",
         }
     }
 
@@ -80,6 +100,11 @@ impl SourceKind {
             "txt" | "md" | "markdown" | "csv" | "tsv" | "log" | "json" | "xml" | "html" | "htm" => {
                 Some(SourceKind::Text)
             }
+            "xls" | "xlsb" | "ods" => Some(SourceKind::Xls),
+            "doc" | "dot" => Some(SourceKind::Doc),
+            "ppt" | "pps" | "pot" => Some(SourceKind::Ppt),
+            "rtf" => Some(SourceKind::Rtf),
+            "hml" | "hwpml" => Some(SourceKind::Hml),
             _ => None,
         }
     }
@@ -94,6 +119,11 @@ impl SourceKind {
                 | SourceKind::Xlsx
                 | SourceKind::Pptx
                 | SourceKind::Text
+                | SourceKind::Xls
+                | SourceKind::Doc
+                | SourceKind::Ppt
+                | SourceKind::Rtf
+                | SourceKind::Hml
         )
     }
 }

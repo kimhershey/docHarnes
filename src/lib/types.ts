@@ -691,8 +691,8 @@ export const EVENTS = {
 // src-tauri/src/commands/documents.rs
 // ---------------------------------------------------------------------------
 
-export type SourceKind = "pdf" | "image" | "hwpx" | "docx" | "hwp" | "xlsx" | "pptx" | "text";
-export const SOURCE_KINDS: SourceKind[] = ["pdf", "image", "hwpx", "docx", "hwp"];
+export type SourceKind = "pdf" | "image" | "hwpx" | "docx" | "hwp" | "xlsx" | "pptx" | "text" | "xls" | "doc" | "ppt" | "rtf" | "hml";
+export const SOURCE_KINDS: SourceKind[] = ["pdf", "image", "hwpx", "docx", "hwp", "xlsx", "pptx", "text", "xls", "doc", "ppt", "rtf", "hml"];
 export type DocumentStatus =
   | "importing"
   | "new"

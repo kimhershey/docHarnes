@@ -64,6 +64,9 @@ fn sniff_zip(path: &Path) -> Sniff {
     if has("xl/") {
         return Sniff::Kind(SourceKind::Xlsx);
     }
+    if names.iter().any(|n| n.eq_ignore_ascii_case("xl/workbook.bin")) {
+        return Sniff::Kind(SourceKind::Xls);
+    }
     if has("ppt/") {
         return Sniff::Kind(SourceKind::Pptx);
     }
@@ -92,11 +95,17 @@ fn sniff_cfb(head: &[u8]) -> Sniff {
     {
         return Sniff::Kind(SourceKind::Hwp);
     }
-    if contains(head, &utf16le("WordDocument"))
-        || contains(head, &utf16le("Workbook"))
-        || contains(head, &utf16le("Book"))
-        || contains(head, &utf16le("PowerPoint Document"))
-    {
+    if contains(head, &utf16le("WordDocument")) {
+        return Sniff::Kind(SourceKind::Doc);
+    }
+    if contains(head, &utf16le("PowerPoint Document")) {
+        return Sniff::Kind(SourceKind::Ppt);
+    }
+    if contains(head, &utf16le("Workbook")) || contains(head, &utf16le("Book")) {
+        return Sniff::Kind(SourceKind::Xls);
+    }
+    // Other OLE containers (Visio, Publisher, Outlook messages, …).
+    if contains(head, &utf16le("Root Entry")) {
         return Sniff::Unsupported("office_legacy");
     }
     Sniff::Unknown
@@ -143,7 +152,7 @@ pub fn sniff(path: &Path) -> Sniff {
         return Sniff::Unsupported("executable");
     }
     if head.starts_with(b"{\\rtf") {
-        return Sniff::Unsupported("office_legacy");
+        return Sniff::Kind(SourceKind::Rtf);
     }
     if head.starts_with(b"Rar!") || head.starts_with(&[0x1F, 0x8B]) || head.starts_with(b"7z\xBC\xAF") {
         return Sniff::Unsupported("archive");
@@ -162,6 +171,9 @@ pub fn sniff(path: &Path) -> Sniff {
         let start: String = text.trim_start().chars().take(64).collect::<String>().to_lowercase();
         if start.starts_with("<!doctype html") || start.contains("<html") {
             return Sniff::Html;
+        }
+        if text.contains("<HWPML") {
+            return Sniff::Kind(SourceKind::Hml);
         }
         return Sniff::Kind(SourceKind::Text);
     }
@@ -210,7 +222,17 @@ mod tests {
             v
         };
         std::fs::write(p("old.doc"), cfb(&["Root Entry", "WordDocument"])).unwrap();
-        assert_eq!(sniff(&p("old.doc")), Sniff::Unsupported("office_legacy"));
+        assert_eq!(sniff(&p("old.doc")), Sniff::Kind(SourceKind::Doc));
+        std::fs::write(p("old.xls"), cfb(&["Root Entry", "Workbook"])).unwrap();
+        assert_eq!(sniff(&p("old.xls")), Sniff::Kind(SourceKind::Xls));
+        std::fs::write(p("old.ppt"), cfb(&["Root Entry", "PowerPoint Document"])).unwrap();
+        assert_eq!(sniff(&p("old.ppt")), Sniff::Kind(SourceKind::Ppt));
+        std::fs::write(p("drawing.vsd"), cfb(&["Root Entry", "VisioDocument"])).unwrap();
+        assert_eq!(sniff(&p("drawing.vsd")), Sniff::Unsupported("office_legacy"));
+        std::fs::write(p("note.rtf"), b"{\\rtf1\\ansi hello}").unwrap();
+        assert_eq!(sniff(&p("note.rtf")), Sniff::Kind(SourceKind::Rtf));
+        std::fs::write(p("form.hml"), "<?xml version=\"1.0\"?><HWPML Version=\"2.8\"><BODY/></HWPML>").unwrap();
+        assert_eq!(sniff(&p("form.hml")), Sniff::Kind(SourceKind::Hml));
         std::fs::write(p("locked.docx"), cfb(&["EncryptedPackage"])).unwrap();
         assert_eq!(sniff(&p("locked.docx")), Sniff::Unsupported("encrypted"));
         std::fs::write(p("doc.hwp"), cfb(&["FileHeader", "HwpSummaryInformation", "BodyText"])).unwrap();

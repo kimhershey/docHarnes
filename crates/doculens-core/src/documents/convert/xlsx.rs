@@ -158,7 +158,7 @@ fn format_serial(v: f64, kind: NumKind, date1904: bool) -> Option<String> {
 }
 
 /// Plain number text: drops a trailing ".0", keeps everything else as stored.
-fn number_text(v: &str) -> String {
+pub(crate) fn number_text(v: &str) -> String {
     let t = v.trim();
     if let Ok(f) = t.parse::<f64>() {
         if f.fract() == 0.0 && f.abs() < 1e15 && !t.contains('E') && !t.contains('e') {

@@ -14,13 +14,18 @@
 //! Text is extracted straight from the model, so converted documents are
 //! searchable without OCR even when printing fails.
 
+pub mod doc;
 pub mod docx;
+pub mod hml;
 pub mod html;
 pub mod hwp;
 pub mod hwpx;
 pub mod model;
+pub mod ppt;
 pub mod pptx;
+pub mod rtf;
 pub mod text;
+pub mod xls;
 pub mod xlsx;
 pub mod xml;
 
@@ -157,6 +162,11 @@ pub fn read_document(path: &Path, kind: SourceKind) -> Result<DocModel> {
         SourceKind::Xlsx => xlsx::read(path),
         SourceKind::Pptx => pptx::read(path),
         SourceKind::Text => text::read(path),
+        SourceKind::Xls => xls::read(path),
+        SourceKind::Doc => doc::read(path),
+        SourceKind::Ppt => ppt::read(path),
+        SourceKind::Rtf => rtf::read(path),
+        SourceKind::Hml => hml::read(path),
         SourceKind::Pdf | SourceKind::Image => {
             Err(CoreError::Unsupported(format!("{} is not an office document", kind.as_str())))
         }

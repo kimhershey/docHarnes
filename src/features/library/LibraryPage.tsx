@@ -55,8 +55,8 @@ type TFn = (k: string, o?: Record<string, unknown>) => string;
 
 function KindIcon({ kind, className }: { kind: SourceKind; className?: string }) {
   if (kind === "image") return <ImageIcon className={className} aria-hidden="true" />;
-  if (kind === "xlsx") return <FileSpreadsheet className={className} aria-hidden="true" />;
-  if (kind === "pptx") return <Presentation className={className} aria-hidden="true" />;
+  if (kind === "xlsx" || kind === "xls") return <FileSpreadsheet className={className} aria-hidden="true" />;
+  if (kind === "pptx" || kind === "ppt") return <Presentation className={className} aria-hidden="true" />;
   return <FileText className={className} aria-hidden="true" />;
 }
 
