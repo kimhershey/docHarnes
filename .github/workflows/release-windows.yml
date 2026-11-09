@@ -175,6 +175,12 @@ jobs:
       - name: Seed the NSIS toolset
         continue-on-error: true
         run: node scripts/fetch-nsis.mjs
+      # src-tauri/nsis/installer.nsi is Tauri's template with per-file instead of /SOLID compression
+      # (NSIS keeps a solid data block uncompressed behind 32-bit offsets, so the ~3.1 GB Full bundle
+      # overflowed its 2 GiB limit); the check fails when the installed CLI embeds a different template.
+      - name: Check the NSIS template copy against the installed Tauri CLI
+        run: npm run nsis:check
+
       - name: Build the app and the NSIS installer (retries the bundling step on a download failure)
         shell: pwsh
         run: |
@@ -196,7 +202,10 @@ jobs:
           Copy-Item $src.FullName "dist-installer/$name"
           $hash = (Get-FileHash "dist-installer/$name" -Algorithm SHA256).Hash.ToLower()
           [IO.File]::WriteAllText("$PWD/dist-installer/$name.sha256", "$hash *$name`n")
-          Write-Host ("{0}  {1}  ({2:N1} MB)" -f $name, $hash, ($src.Length / 1MB))
+          Write-Host ("{0}  {1}  ({2:N1} MB, {3:N0} bytes)" -f $name, $hash, ($src.Length / 1MB), $src.Length)
+          # GitHub Release assets are limited to 2 GiB; NSIS itself stops at a 2 GiB data block.
+          if ($src.Length -ge 2GB) { Write-Host "::error::$name is $($src.Length) bytes — over the 2 GiB GitHub Release asset limit"; exit 1 }
+          if ($src.Length -ge 1.9GB) { Write-Host "::warning::$name is $($src.Length) bytes — close to the 2 GiB GitHub Release asset limit" }
 
       # Proves the resources made it into the NSIS archive (tauri.conf.json bundle.resources): the
       # listing is in the log, and a missing required entry fails the build.
@@ -214,7 +223,7 @@ jobs:
           $missing = @($required | Where-Object { $text -notmatch [regex]::Escape($_) })
           # llama-server.exe is a small launcher since llama.cpp split the server into llama-server-impl.dll;
           # print the whole family so the log shows the complete pack.
-          $listing | Where-Object { $_ -match "llama[a-z-]*\.(exe|dll)|mtmd[a-z-]*\.dll|ggml[a-z0-9-]*\.dll|pdfium\.dll|ko-dic|NOTICES|sbom|LICENSES|DocuLens\.exe|\d+ files" } | ForEach-Object { Write-Host $_ }
+          $listing | Where-Object { $_ -match "llama[a-z-]*\.(exe|dll)|mtmd[a-z-]*\.dll|ggml[a-z0-9-]*\.dll|cublas[A-Za-z0-9_]*\.dll|cudart[0-9_]*\.dll|EULA|pdfium\.dll|ko-dic|NOTICES|sbom|LICENSES|DocuLens\.exe|\d+ files" } | ForEach-Object { Write-Host $_ }
           if ($missing.Count -gt 0) { Write-Host "::error::bundled assets missing from the installer: $($missing -join ', ')"; exit 1 }
           Write-Host "installer contents OK: $($required.Count) required entries present"
 
@@ -223,6 +232,7 @@ jobs:
           name: DocuLens-Setup-${{ steps.meta.outputs.variant }}-${{ steps.meta.outputs.version }}-x64
           path: dist-installer/*
           if-no-files-found: error
+          compression-level: 0 # the installer is already LZMA-compressed (Full ≈ 1.6 GB)
 
       - name: Publish to GitHub Release v${{ steps.meta.outputs.version }}
         if: inputs.publish
