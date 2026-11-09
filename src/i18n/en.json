@@ -1281,17 +1281,22 @@
       "image": "Image",
       "hwpx": "HWPX",
       "docx": "DOCX",
-      "hwp": "HWP"
+      "hwp": "HWP",
+      "xlsx": "XLSX",
+      "pptx": "PPTX",
+      "text": "Text"
     },
     "unsupported": {
       "heic": "Convert HEIC/HEIF to JPG first",
-      "office_legacy": "Unsupported office format (save as PDF first)",
-      "text": "Text files are not imported as documents",
+      "office_legacy": "Unsupported Office format (DOC / XLS / PPT / HML / RTF: save as DOCX / XLSX / PPTX / PDF first)",
       "no_extension": "No file extension",
-      "unsupported_extension": "Unsupported format",
+      "unsupported_extension": "Unsupported format (PDF, images, HWP/HWPX, DOCX, XLSX, PPTX and text files are imported)",
       "empty": "Empty file",
       "too_large": "File too large (over 2 GB)",
-      "unreadable": "Unreadable file"
+      "unreadable": "Unreadable file",
+      "archive": "Archives are not imported: extract the documents first",
+      "executable": "Executables are not imported",
+      "encrypted": "Password-protected document (remove the password first)"
     },
     "doc_types": {
       "tax_invoice": "Tax invoice",

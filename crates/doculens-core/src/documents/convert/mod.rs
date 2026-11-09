@@ -4,6 +4,10 @@
 //!   by small purpose-built readers on `zip` + `quick-xml` — paragraphs, runs,
 //!   headings, tables with merged cells, images and page breaks.
 //! * HWP 5.0 (binary CFB) is read through the `hwp` crate (Apache-2.0).
+//! * XLSX (SpreadsheetML: sheets → tables) and PPTX (PresentationML: slides →
+//!   headings, text, tables, pictures) use the same `zip` + `quick-xml` readers.
+//! * The plain-text family (txt / md / csv / tsv / log / json / xml / html) is
+//!   decoded (UTF-8 / UTF-16 BOM / CP949) and shaped into paragraphs and tables.
 //! * The HTML bundle is printed to PDF by a [`PdfPrinter`] the shell provides
 //!   (the platform webview); the core only knows the trait.
 //!
@@ -15,6 +19,9 @@ pub mod html;
 pub mod hwp;
 pub mod hwpx;
 pub mod model;
+pub mod pptx;
+pub mod text;
+pub mod xlsx;
 pub mod xml;
 
 use std::path::{Path, PathBuf};
@@ -109,6 +116,9 @@ pub fn read_document(path: &Path, kind: SourceKind) -> Result<DocModel> {
         SourceKind::Hwpx => hwpx::read(path),
         SourceKind::Docx => docx::read(path),
         SourceKind::Hwp => hwp::read(path),
+        SourceKind::Xlsx => xlsx::read(path),
+        SourceKind::Pptx => pptx::read(path),
+        SourceKind::Text => text::read(path),
         SourceKind::Pdf | SourceKind::Image => {
             Err(CoreError::Unsupported(format!("{} is not an office document", kind.as_str())))
         }

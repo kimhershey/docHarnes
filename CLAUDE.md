@@ -54,8 +54,9 @@ user PC: `docs/RUN-GUIDE.md`.
 - `crates/doculens-core/` — settings, workspace, hw/tier, memory, registry, retention, prerouter,
   `gguf` (header parser, hashes), `modelstore` (drop-in folders, import, download), `fswatch` (debounced watcher),
   `engine/` (locate, devices, presets, client, process, manager, fake_router),
-  `db/` (rusqlite + embedded migrations), `documents/` (repo, import plan/run/rescan, render via PDFium,
-  `convert/` HWPX·DOCX·HWP → model → HTML → PDF through a `PdfPrinter`, fixtures),
+  `db/` (rusqlite + embedded migrations), `documents/` (repo, import plan/run/rescan with content-based
+  classification (`sniff`: magic bytes / zip & CFB entries → `import::classify`), render via PDFium,
+  `convert/` HWPX·DOCX·HWP·XLSX·PPTX·text (txt/md/csv/html…) → model → HTML → PDF through a `PdfPrinter`, fixtures),
   `knowledge/` (tokenize: lindera ko-dic / simple analyzer, chunker: structure-aware chunking, repo, index,
   embed: sqlite-vec + `Embedder`, search: hybrid RRF, answer: grounded answers / explain / summarize / compare),
   `pipeline/` (schema: built-in sample forms + grammar-safe JSON schema + lint, prompts, vlm: retrying caller, image,

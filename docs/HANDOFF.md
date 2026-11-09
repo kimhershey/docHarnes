@@ -1072,6 +1072,41 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   카드에 드롭, 문서 생성 원본, 브라우저 파일 드롭 → 컬렉션 가져오기), Rust `run_attaches_the_batch_to_a_project_and_rejects_unknown_projects`.
   Tauri 네이티브 좌표 판정·WebView2 동작은 사용자 PC(체크리스트).
 
+### 입력 형식 확장·알 수 없는 형식 처리 (2026-11-09, 사용자 요청 "xlsx·pptx 처리 추가, unknown 데이터 타입 처리 방안 검토")
+
+- **XLSX** `convert/xlsx.rs`: 시트(보이는 것만) → 제목(시트 이름) + 표. 공유/인라인 문자열(리치 런 포함), 숫자(셀 서식의 내장·사용자
+  정의 번호 형식으로 날짜·시각 판별 → `YYYY-MM-DD`, `HH:MM`), 불리언, 오류값, 수식의 캐시 값, 병합 셀(`mergeCells` → rowspan/colspan),
+  열 너비(문자 단위 → mm), 1904 날짜 체계. 시트당 5,000행·64열 상한(초과 시 메모), 숨김 시트는 메모만. 첫 행이 단독 셀이면 문서 제목.
+- **PPTX** `convert/pptx.rs`: `sldIdLst` 순서로 슬라이드 → 제목 자리표시자(제목 1, 부제목 2) 먼저, 나머지 도형은 읽기 순서(위→아래,
+  왼→오른; 그룹 도형 평탄화)로 텍스트 상자(글머리 기호 상속: 본문 자리표시자는 기본 불릿, `buNone`/`buAutoNum` 반영, 서식 b/i/u/sz,
+  `a:br`), 표(`gridSpan`/`rowSpan`, `hMerge`/`vMerge` 연속 셀 제거, `firstRow` 머리글), 그림(`blip` → 슬라이드 rels → `ppt/media`,
+  슬라이드 간 중복 1회 저장), 슬라이드 번호·날짜·바닥글 자리표시자 제외, 발표자 노트(기울임, "발표자 노트" 소제목). 차트·SmartArt·OLE는
+  메모. 슬라이드 크기 → `page_mm`(16:9 = 339×191 mm; 프린터는 A4 세로 고정이라 표/그림은 폭에 맞춤). 제목 없는 슬라이드는 "슬라이드 N".
+- **텍스트 계열** `convert/text.rs`(새 `SourceKind::Text`): 디코딩 BOM(UTF-8/UTF-16) → UTF-8 → CP949(`encoding_rs`, Apache/MIT) → 손실
+  UTF-8 순. CSV/TSV → 표(RFC 4180 따옴표·개행, 구분자 추정 `,`/`;`/탭, 첫 행 머리글), Markdown → 제목·목록·표·코드 블록·링크 라벨,
+  HTML → `<title>`·h1~h6·문단·목록·표 셀(탭), `<script>`/`<style>` 제거·엔티티 복원, JSON/XML/LOG → 120줄 단위 문단, 그 외 → 빈 줄
+  기준 문단(첫 줄이 제목). 16 MB 상한(초과 메모). `.txt`라도 HTML로 시작하면 HTML로 읽음.
+- **알 수 없는 형식 처리 방안(검토 결과 → 구현)** `documents/sniff.rs` + `import::classify`:
+  | 상황 | 이전 | 지금 |
+  |---|---|---|
+  | 확장자만 보고 판정 | `from_path` 전용 | **내용 우선**: `%PDF`, PNG/JPEG/GIF/BMP/WebP/TIFF 시그니처, zip 컨테이너는 항목 접두(`word/`→DOCX, `xl/`→XLSX, `ppt/`→PPTX, `mimetype`/`Contents/`→HWPX), CFB는 스트림 이름(`HwpSummaryInformation`/`BodyText`→HWP, `WordDocument`/`Workbook`/`PowerPoint Document`→`office_legacy`, `EncryptedPackage`→`encrypted`), `MZ`/ELF→`executable`, RTF→`office_legacy`, RAR/GZ/7z→`archive`, 그 밖에 NUL 없이 97 % 이상 출력 가능 문자로 디코딩되면 텍스트 |
+  | 확장자와 내용 불일치(.pdf인 HTML, .zip인 HWPX, .docx인 구형 DOC) | PDFium 오류 또는 미지원 | 내용 기준 형식으로 가져오고 미리보기에 메모 "확장자(.pdf)와 내용이 달라 텍스트(으)로 처리"; 읽을 수 없는 컨테이너는 정확한 사유 |
+  | 확장자 없음/모르는 확장자 | `no_extension`/`unsupported_extension` | 내용이 인식되면 가져오기(메모), 아니면 기존 사유 |
+  | 텍스트 파일 | 미지원("텍스트 파일은 문서로 가져오지 않습니다") | 지원(위 텍스트 계열) |
+  | XLSX/PPTX | `office_legacy`로 거부 | 지원 |
+  | DOC/XLS/PPT/HML/RTF | `office_legacy` | 동일(허용 라이선스의 Rust 파서가 없음 → 사용자 PC에서 DOCX/XLSX/PPTX/PDF로 저장 안내) |
+  | HEIC/HEIF | `heic` | 동일(디코더 특허·의존성 → JPG 변환 안내) |
+  | 암호 문서 | PDFium/zip 오류로 실패 | CFB `EncryptedPackage`는 `encrypted` 사유로 사전 거부(암호 PDF는 PDFium 오류 유지 — 사유 세분화는 후속) |
+  | 알 수 없는 이진 파일 | 미지원 | 동일. **보류한 안**: "원본만 보관"(페이지 없는 첨부 문서, 이름 검색만) — 상태·UI 추가가 필요해 v1.x 후보로 기록 |
+  재스캔(inbox)도 같은 분류를 써서 확장자 없는 파일을 집어낸다. 미지원 사유 문자열(`documents.unsupported.*`)에 `archive`·`executable`·
+  `encrypted` 추가, `office_legacy`·`unsupported_extension` 문구 갱신, `text` 제거.
+- **프런트엔드**: `SourceKind`에 `xlsx`/`pptx`/`text`, 종류 배지·아이콘(스프레드시트·프레젠테이션), 파일 선택 필터 확장, 미리보기의 분류 메모
+  (`ImportItem.note`), 모의 백엔드 `kindOf`/사유/쪽수. 샘플 세트(`gen_fixtures`)에 `sample-ledger.xlsx`·`sample-plan.pptx`·`sample-notes.md`·
+  CP949 `sample-ledger.csv` 추가(8개).
+- **검증**: Rust 단위 테스트 — xlsx(참조·서식·생성 통합문서 읽기), pptx(생성 덱: 제목 순서·읽기 순서·불릿 상속·표 병합·그림·노트·슬라이드
+  크기), text(디코딩 3종·CSV 따옴표·마크다운 구조·CP949 CSV·HTML/TXT), sniff(시그니처·컨테이너·CFB 변형·텍스트·잡음), `SourceKind`
+  확장자 테스트; 실제 Excel/PowerPoint 산출물·CP949 메모장 파일은 사용자 PC(체크리스트 "입력 형식 확장").
+
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
@@ -1085,6 +1120,7 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | Playwright(모의 백엔드) | 34/34 (`generate.spec.ts`·`projects.spec.ts` 추가; 모의 백엔드가 Rust 페이로드 모양만 내므로 E2E가 실제 계약을 검증) |
 | `npm run notices` 결정성 | 두 번 실행 결과 동일 — crates 628(runtime 354)·npm 75·SBOM 컴포넌트 709 |
 | GitHub CI(License·Web·Rust Linux·Windows compile·notices·eval-gate·실엔진) | 커밋 a0fcafb·9308de3에서 실엔진 잡만 실패(위 수정으로 0e200ec에서 7개 잡 모두 통과). 리뷰 반영 커밋 84e5fdd에서는 License gate·Windows compile 잡이 **GitHub 릴리스 자산 다운로드 장애**(cargo-deny-action의 바이너리 tar가 손상 수신 "gzip: invalid magic", PDFium 다운로드 HTTP 504)로 실패 — 코드와 무관. ece44cc: License gate를 `taiki-e/install-action`(체크섬 검증 prebuilt cargo-deny 0.20.2)으로 바꿔 통과, 나머지 6개 잡 통과; Windows 잡은 여전히 504. c505b81: `scripts/lib/fetch-retry.mjs`(5xx·네트워크 오류·잘린 본문 지수 백오프 재시도 3회)를 fetch-pdfium/engine/kodic에 적용하고 Windows 잡에도 PDFium `actions/cache` 추가 — 장애가 이어져 Windows 잡은 재시도 3회 후에도 504. 6975410: Windows 잡의 PDFium 다운로드를 `continue-on-error`(경고 주석)로 바꿔 컴파일·테스트는 항상 수행(PDFium 테스트는 라이브러리 없으면 자체 skip, Linux 잡은 엄격 유지) → **7개 잡 모두 통과**(다운로드도 복구되어 Windows 잡이 PDFium 테스트까지 실제 수행) |
+| 2026-11-09 추가 기능(드래그 앤 드롭 · XLSX/PPTX/텍스트 · 내용 감지) | 코어 `documents::` 테스트 36 통과(xlsx 3 · pptx 1 · text 4 · sniff 1 · import 8 · fixtures 1 · 기존), `cargo deny` 통과(`encoding_rs` 추가), vitest 22파일 131건(dnd 스토어 7 포함), Playwright 39/39(`dnd.spec.ts` 5 포함), typecheck 통과 |
 | 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 3회(run 42471185353·42475854955 solid 43 MB, 42547230697 파일별 압축 47.6 MB; 159 파일 검사 통과) · **Full 0.1.0 빌드 성공(run 42547228170): 1.1 GB, 219 파일, CUDA 팩 cu121·cu129 동봉 검사 통과** · CUDA 팩 빌드 성공(cu121 run 42533483890 · cu129 run 42533486332 → Release v0.1.0) — 위 "패키징·고지" 참조 |
 
 이 환경에서 못 한 것: 설치파일의 릴리스 게시(권한 정책; 설치파일·CUDA 팩 빌드는 Windows 러너에서 완료), 실제 Qwen3.5-4B로 초안 품질·

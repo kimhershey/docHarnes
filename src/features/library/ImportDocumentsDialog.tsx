@@ -291,6 +291,11 @@ export function ImportDocumentsDialog({
                       {item.name}
                     </span>
                     {item.kind && <Badge variant="outline">{t(`documents.kind.${item.kind}`)}</Badge>}
+                    {item.note && (
+                      <span className="text-xs text-fg-muted" title={item.note} data-testid="doc-import-note">
+                        {item.note}
+                      </span>
+                    )}
                     {item.status.kind === "unsupported" && (
                       <span className="text-xs text-fg-muted">{t(`documents.unsupported.${item.status.reason.split(":")[0]}`, { defaultValue: item.status.reason })}</span>
                     )}

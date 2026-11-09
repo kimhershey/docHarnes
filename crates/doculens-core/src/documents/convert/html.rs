@@ -39,6 +39,8 @@ h1 { font-size: 18pt; } h2 { font-size: 15pt; } h3 { font-size: 13pt; } h4, h5, 
 table { border-collapse: collapse; margin: 0.4em 0 0.8em; width: 100%; table-layout: fixed; page-break-inside: auto; }
 tr { page-break-inside: avoid; }
 td, th { border: 0.5pt solid #444; padding: 2pt 4pt; vertical-align: top; font-size: 9.5pt; }
+table.wide td, table.wide th { font-size: 7pt; padding: 1pt 2pt; }
+table.wider td, table.wider th { font-size: 5.5pt; padding: 0.5pt 1pt; }
 th { background: #f0f0f0; font-weight: 600; }
 td p, th p { margin: 0; }
 img.doc-image { max-width: 100%; height: auto; display: block; margin: 0.5em auto; page-break-inside: avoid; }
@@ -125,7 +127,15 @@ fn cell_html(c: &Cell, out: &mut String) {
 }
 
 fn table_html(t: &Table, out: &mut String) {
-    out.push_str("<table>");
+    // Spreadsheets: many columns shrink the type so the sheet still fits an A4 page.
+    let cols = t.rows.iter().map(|r| r.iter().map(|c| c.col_span.max(1) as usize).sum::<usize>()).max().unwrap_or(0);
+    out.push_str(if cols > 16 {
+        "<table class=\"wider\">"
+    } else if cols > 8 {
+        "<table class=\"wide\">"
+    } else {
+        "<table>"
+    });
     if !t.col_widths_mm.is_empty() {
         let total: f32 = t.col_widths_mm.iter().sum();
         if total > 0.0 {

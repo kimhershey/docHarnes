@@ -691,7 +691,7 @@ export const EVENTS = {
 // src-tauri/src/commands/documents.rs
 // ---------------------------------------------------------------------------
 
-export type SourceKind = "pdf" | "image" | "hwpx" | "docx" | "hwp";
+export type SourceKind = "pdf" | "image" | "hwpx" | "docx" | "hwp" | "xlsx" | "pptx" | "text";
 export const SOURCE_KINDS: SourceKind[] = ["pdf", "image", "hwpx", "docx", "hwp"];
 export type DocumentStatus =
   | "importing"
@@ -862,6 +862,8 @@ export interface ImportItem {
   inside_workspace: boolean;
   rel_path: string | null;
   content_hash: string | null;
+  /** Classification remark (the content, not the extension, decided the kind). */
+  note?: string | null;
   status: ImportItemStatus;
 }
 

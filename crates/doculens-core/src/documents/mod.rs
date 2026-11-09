@@ -9,6 +9,7 @@ pub mod fixtures;
 pub mod import;
 pub mod render;
 pub mod repo;
+pub mod sniff;
 
 use std::path::{Path, PathBuf};
 
@@ -26,11 +27,25 @@ pub enum SourceKind {
     Hwpx,
     Docx,
     Hwp,
+    /// SpreadsheetML workbook (`.xlsx` / `.xlsm`): sheets → tables.
+    Xlsx,
+    /// PresentationML deck (`.pptx` / `.ppsx`): slides → headings, text, tables, pictures.
+    Pptx,
+    /// Plain-text family (`.txt` `.md` `.csv` `.tsv` `.log` `.json` `.xml` `.html`).
+    Text,
 }
 
 impl SourceKind {
-    pub const ALL: [SourceKind; 5] =
-        [SourceKind::Pdf, SourceKind::Image, SourceKind::Hwpx, SourceKind::Docx, SourceKind::Hwp];
+    pub const ALL: [SourceKind; 8] = [
+        SourceKind::Pdf,
+        SourceKind::Image,
+        SourceKind::Hwpx,
+        SourceKind::Docx,
+        SourceKind::Hwp,
+        SourceKind::Xlsx,
+        SourceKind::Pptx,
+        SourceKind::Text,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -39,6 +54,9 @@ impl SourceKind {
             SourceKind::Hwpx => "hwpx",
             SourceKind::Docx => "docx",
             SourceKind::Hwp => "hwp",
+            SourceKind::Xlsx => "xlsx",
+            SourceKind::Pptx => "pptx",
+            SourceKind::Text => "text",
         }
     }
 
@@ -56,13 +74,26 @@ impl SourceKind {
             "hwpx" => Some(SourceKind::Hwpx),
             "docx" => Some(SourceKind::Docx),
             "hwp" => Some(SourceKind::Hwp),
+            "xlsx" | "xlsm" => Some(SourceKind::Xlsx),
+            "pptx" | "ppsx" => Some(SourceKind::Pptx),
+            "txt" | "md" | "markdown" | "csv" | "tsv" | "log" | "json" | "xml" | "html" | "htm" => {
+                Some(SourceKind::Text)
+            }
             _ => None,
         }
     }
 
-    /// Office formats are converted to PDF first (design §3.4).
+    /// Office / text formats are converted to PDF first (design §3.4).
     pub fn needs_conversion(self) -> bool {
-        matches!(self, SourceKind::Hwpx | SourceKind::Docx | SourceKind::Hwp)
+        matches!(
+            self,
+            SourceKind::Hwpx
+                | SourceKind::Docx
+                | SourceKind::Hwp
+                | SourceKind::Xlsx
+                | SourceKind::Pptx
+                | SourceKind::Text
+        )
     }
 }
 
@@ -448,6 +479,12 @@ mod tests {
         assert_eq!(SourceKind::from_path(Path::new("a.PDF")), Some(SourceKind::Pdf));
         assert_eq!(SourceKind::from_path(Path::new("a.jpeg")), Some(SourceKind::Image));
         assert_eq!(SourceKind::from_path(Path::new("a.hwpx")), Some(SourceKind::Hwpx));
+        assert_eq!(SourceKind::from_path(Path::new("ledger.XLSX")), Some(SourceKind::Xlsx));
+        assert_eq!(SourceKind::from_path(Path::new("deck.pptx")), Some(SourceKind::Pptx));
+        assert_eq!(SourceKind::from_path(Path::new("notes.md")), Some(SourceKind::Text));
+        assert_eq!(SourceKind::from_path(Path::new("data.csv")), Some(SourceKind::Text));
+        assert!(SourceKind::Xlsx.needs_conversion() && SourceKind::Text.needs_conversion());
+        assert_eq!(SourceKind::parse("pptx"), Some(SourceKind::Pptx));
         assert_eq!(SourceKind::from_path(Path::new("a.heic")), None);
         assert!(SourceKind::Docx.needs_conversion());
         assert!(!SourceKind::Pdf.needs_conversion());

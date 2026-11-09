@@ -1668,14 +1668,18 @@ function kindOf(name: string): SourceKind | null {
   if (ext === "hwpx") return "hwpx";
   if (ext === "docx") return "docx";
   if (ext === "hwp") return "hwp";
+  if (["xlsx", "xlsm"].includes(ext)) return "xlsx";
+  if (["pptx", "ppsx"].includes(ext)) return "pptx";
+  if (["txt", "md", "markdown", "csv", "tsv", "log", "json", "xml", "html", "htm"].includes(ext)) return "text";
   return null;
 }
 
 function unsupportedReason(name: string): string {
   const ext = name.toLowerCase().split(".").pop() ?? "";
   if (["heic", "heif"].includes(ext)) return "heic";
-  if (["doc", "xls", "ppt", "pptx", "xlsx", "hml"].includes(ext)) return "office_legacy";
-  if (["txt", "md", "csv", "json", "xml", "html", "htm"].includes(ext)) return "text";
+  if (["doc", "xls", "ppt", "hwpml", "hml", "rtf"].includes(ext)) return "office_legacy";
+  if (["zip", "7z", "rar", "gz"].includes(ext)) return "archive";
+  if (["exe", "dll", "msi"].includes(ext)) return "executable";
   if (!name.includes(".")) return "no_extension";
   return "unsupported_extension";
 }
@@ -1684,8 +1688,9 @@ function unsupportedReason(name: string): string {
 function pageCountFor(name: string, kind: SourceKind): number {
   const m = name.match(/(\d+)p\./i);
   if (m) return Math.max(1, Math.min(500, Number(m[1])));
-  if (kind === "image") return 1;
+  if (kind === "image" || kind === "text") return 1;
   if (kind === "pdf") return 3;
+  if (kind === "pptx") return 4;
   return 2;
 }
 
