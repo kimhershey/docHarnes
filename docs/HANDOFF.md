@@ -1228,6 +1228,29 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 - **검증**: `convert::xls` 1(실 BIFF8 픽스처)·`doc` 3·`ppt` 2·`rtf` 2·`hml` 1건, `sniff`/`classify`/`kinds_from_extension` 갱신,
   `cargo deny` 통과(calamine·cfb MIT), 전체 Rust·vitest·Playwright는 아래 표.
 
+### 사용자 PC 보고 수정 3차 (2026-11-09; 표 내부 글자 인식 · 수정 표시)
+
+- **6. 표 내부 글자 인식** (보고: "문서 라이브러리에서 표 내부의 글자가 정상적으로 인식되지 않음"): 원인 두 가지. (a) PDF 텍스트
+  레이어(디지털 PDF·변환본)의 `layout::from_chars`가 줄 번호를 PDF 글자 순서대로 매겼는데 표는 **셀 단위**로 글자가 나오므로
+  (번/호/품목/수/량…) 한 행이 여러 줄로 쪼개지고(LibreOffice로 만든 표 PDF 덤프에서 머리행이 6줄) 줄바꿈된 셀의 조각이 서로 다른
+  줄 번호를 받았다 → 드래그 선택 텍스트가 줄바꿈으로 조각나고 셀 여러 개를 고르면 '텍스트 수정'이 비활성(비연속). 이제 **세그먼트
+  (한 기준선·단어 간격 이내의 연속 런) → 위아래로 쌓인 세그먼트 체인(줄바꿈된 셀: ≤4줄, 옆에 0.6em 이상 떨어진 이웃이 있고 마지막
+  줄이 오른쪽으로 이어지지 않을 때만) → 세로 범위가 겹치는 세그먼트를 같은 행**으로 묶는다(`assign_rows`). 단어 순서(= `pages.text`
+  순서)는 그대로이고 `line`만 시각적 행이 된다. 제목+문단, 양쪽 정렬의 넓은 간격, 2단 문서는 종전처럼 줄마다 행. 저장된 v1 레이아웃은
+  로드 시 박스로 행을 다시 매겨 v2로 올려 저장(수정 표시 유지). (b) OCR/사진의 위치 추정(`estimate`)은 표 **괘선**(세로선이 모든 행을
+  잇는 잉크) 때문에 표 전체가 한 밴드가 되고 행의 단어를 표 전체 폭에 비례 배치해 셀과 어긋났다 → 긴 가로/세로 잉크 런(폭의 1/10·
+  높이의 1/20 이상)을 지운 뒤 밴드를 찾고, `<td>` 셀 경계를 보존(`line_cells`)해 밴드 안의 잉크 덩어리 수와 맞으면 **셀별로 배치**.
+  표 PDF를 렌더한 이미지로 측정: 단어 중심이 실제 박스 안에 든 비율 63% → 89%, 평균 중심 거리 0.019 → 0.005(페이지 비율). 진단 덤프:
+  `DOCULENS_PDFIUM=… DOCULENS_LAYOUT_DUMP=<pdf> [DOCULENS_LAYOUT_DUMP_TEXT=<ocr 텍스트> DOCULENS_LAYOUT_DUMP_OUT=<png>]
+  cargo test -p doculens-core --lib -- --ignored dump_layout --nocapture`(문자 박스·행·추정 대 실제 비교·주석 이미지).
+- **7. 수정 후 다시 렌더해도 미반영** (보고: "수정한 뒤 다시 렌더링 해도 변경사항이 적용되지 않음"): 코어는 고친 텍스트·레이아웃을
+  `text_source=manual`로 저장하고 다시 렌더(`replace_pages`)·회전 저장·재처리(강제 아님)에서 유지함을 코드·테스트로 재확인 — 데이터는
+  바뀌어 있었다. 문제는 **표시**: 고친 단어가 투명 글자 + 점선 밑줄뿐이어서 이미지의 원래 글자가 그대로 보였고 다시 렌더해도 이미지는
+  당연히 그대로라 "적용되지 않음"으로 보였다. 이제 `edited` 단어는 **흰 바탕에 파란 글자로 이미지 위에 그려서**(박스 높이·폭에 맞춘
+  글꼴 크기 `fitFontSize`) 수정이 페이지에서 바로 보인다(툴팁: 원본 이미지는 바뀌지 않음). 레이어 안내문·체크리스트 갱신.
+- **검증**: `documents::layout` 15건(표 행·제목/문단·양쪽 정렬·2단·v1 업그레이드·셀 분리·괘선 제거·셀 배치), `textLayer.test.ts`
+  4건, `documents.spec`에 수정 글자 색 단언; 전체 결과는 아래 표.
+
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
@@ -1244,7 +1267,7 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | 2026-11-09 추가 기능(드래그 앤 드롭 · XLSX/PPTX/텍스트 · 내용 감지 · 뷰어 텍스트 직접 편집) | `cargo test --workspace` 코어 257(3 ignored)·셸 3·평가 15 통과, `cargo deny` 통과(`encoding_rs` 추가), clippy·fmt 통과, vitest 22파일 131건, Playwright 41/41(`dnd.spec.ts` 5, 뷰어 편집 2 포함; 전체 실행 1회에서 검토 큐 테스트가 1번 실패했으나 단독 3회·재실행 전체 통과 → 플레이크), CI: 4fe082d·314e503·c848d81은 Markdown 등록 테스트 1건으로 Rust 잡 실패 → 14577a6에서 7개 잡 통과 |
 | 2026-11-09 사용자 PC 보고 수정 2차 1~3번 (ffb8618·705808b·c78c27b) | `cargo test --workspace` 코어 282(3 ignored)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과(calamine·cfb 추가); vitest 23파일 139건; Playwright 43건(`dnd.spec` 2건 추가; 검토 큐 테스트의 목록 로드 전 count 경합을 대기 조건으로 고침); CI 7개 잡 |
 | 2026-11-09 이미지 위 글자 레이어 · 우측 패널 AI 검색/이력 (488af39·9e56dd6) | `cargo test --workspace` 코어 266(3 ignored; `documents::layout` 9·`render` 실 PDFium 문자 박스·`import` 레이아웃 왕복 추가)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과; vitest 23파일 139건(`text-layer.test.ts` 8 추가); Playwright 41/41(`documents`·`knowledge`·`pipeline` 스펙을 레이어·검토 큐 기준으로 재작성); CI 7개 잡 두 커밋 모두 성공 |
-| 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 3회(run 42471185353·42475854955 solid 43 MB, 42547230697 파일별 압축 47.6 MB; 159 파일 검사 통과) · **Full 0.1.0 빌드 성공(run 42547228170): 1.1 GB, 219 파일, CUDA 팩 cu121·cu129 동봉 검사 통과** · CUDA 팩 빌드 성공(cu121 run 42533483890 · cu129 run 42533486332 → Release v0.1.0) — 위 "패키징·고지" 참조 |
+| 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 3회(run 42471185353·42475854955 solid 43 MB, 42547230697 파일별 압축 47.6 MB; 159 파일 검사 통과) · 1~3번 반영 Lite 빌드 성공(run 42577030466, 검증된 커밋 a461405 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.5 MB; Release 게시는 권한 분류기 거부로 publish=false) · **Full 0.1.0 빌드 성공(run 42547228170): 1.1 GB, 219 파일, CUDA 팩 cu121·cu129 동봉 검사 통과** · CUDA 팩 빌드 성공(cu121 run 42533483890 · cu129 run 42533486332 → Release v0.1.0) — 위 "패키징·고지" 참조 |
 
 이 환경에서 못 한 것: 설치파일의 릴리스 게시(권한 정책; 설치파일·CUDA 팩 빌드는 Windows 러너에서 완료), 실제 Qwen3.5-4B로 초안 품질·
 규칙 변환 품질·파이프라인 지표, 한컴/Word에서 생성 HWPX/DOCX 열기, OS 토스트·절전 방지 실동작 — 모두 `docs/user-pc-checklist.md`

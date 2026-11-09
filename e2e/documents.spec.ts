@@ -215,6 +215,9 @@ test.describe("P2 documents", () => {
     await page.keyboard.press("Enter");
     await expect(layer).toContainText("첫째 쪽의 본문 레이어입니다.");
     await expect(layer.locator("[data-edited]")).toHaveCount(3);
+    // Corrected words are drawn visibly (blue on white) over the old glyphs; recognised ones stay transparent.
+    await expect(layer.locator("[data-edited]").first()).toHaveCSS("color", "rgb(11, 106, 138)");
+    await expect(layer.locator("[data-word-index]:not([data-edited])").first()).toHaveCSS("color", "rgba(0, 0, 0, 0)");
     await expect(page.getByTestId("viewer-text-source")).toHaveText(ko.viewer.text_edit.source.manual);
     // Escape drops a selection; a drag on empty space offers to add text the recogniser missed.
     await word("합계").click();

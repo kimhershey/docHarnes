@@ -12,13 +12,13 @@ import type { DocumentView, FieldRecord, PageLayout, PageView } from "@/lib/type
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui";
 
-import { bbox, isContiguous, range, selectionText, wordAt, wordsInRect } from "./textLayer";
+import { bbox, fitFontSize, isContiguous, range, selectionText, wordAt, wordsInRect } from "./textLayer";
 
 type Rect = [number, number, number, number];
 
 /** Pointer movement (px) before a press on empty space becomes a rubber-band selection. */
 const DRAG_PX = 4;
-const EMPTY_LAYOUT: PageLayout = { version: 1, source: "estimated", words: [] };
+const EMPTY_LAYOUT: PageLayout = { version: 2, source: "estimated", words: [] };
 
 /**
  * The text layer drawn over the page image (design §3.7 "직접 수정", 2026-11-09): every recognised word
@@ -261,6 +261,9 @@ export function PageTextLayer({
     const isSelected = selected.includes(i);
     const isHit = hits.has(i);
     const Box = isHit ? "mark" : "span";
+    // Recognised words are transparent (the image shows the glyphs); a corrected word is drawn
+    // visibly over the old glyphs so the change is seen on the page (the image itself never changes).
+    const visible = w.edited === true;
     wordNodes.push(
       <Box
         key={i}
@@ -268,13 +271,15 @@ export function PageTextLayer({
         data-selected={isSelected || undefined}
         data-edited={w.edited || undefined}
         className={cn(
-          "absolute overflow-hidden whitespace-nowrap rounded-[2px] leading-none text-transparent",
-          isHit && "bg-warn-soft/80 ring-1 ring-warn/60",
-          isSelected && "bg-accent/35 ring-1 ring-accent",
-          !isSelected && !isHit && "hover:bg-accent/15",
-          w.edited && "border-b border-dashed border-info",
+          "absolute overflow-hidden whitespace-nowrap rounded-[2px] leading-none",
+          visible ? "flex items-center text-[#0b6a8a]" : "text-transparent",
+          isHit ? "bg-warn-soft/80 ring-1 ring-warn/60" : isSelected ? "bg-accent/35 ring-1 ring-accent" : visible ? "bg-white ring-1 ring-[#0b6a8a]/40" : "hover:bg-accent/15",
         )}
-        style={{ ...px([w.x, w.y, w.w, w.h]), fontSize: Math.max(6, w.h * size.h * 0.78) }}
+        style={{
+          ...px([w.x, w.y, w.w, w.h]),
+          fontSize: visible ? fitFontSize(w.t, w.w * size.w, w.h * size.h) : Math.max(6, w.h * size.h * 0.78),
+        }}
+        title={visible ? t("viewer.text_edit.edited_title") : undefined}
       >
         {w.t}
       </Box>,

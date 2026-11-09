@@ -132,3 +132,32 @@ export function matchWords(layout: PageLayout | null | undefined, needles: strin
   }
   return hits;
 }
+
+/** Display width of a word in "units" (CJK ≈ 1, Latin / digits ≈ 0.55) — the Rust `layout::units`. */
+export function displayUnits(text: string): number {
+  let n = 0;
+  for (const ch of text) {
+    const c = ch.codePointAt(0) ?? 0;
+    const wide =
+      (c >= 0xac00 && c <= 0xd7a3) ||
+      (c >= 0x1100 && c <= 0x11ff) ||
+      (c >= 0x3130 && c <= 0x318f) ||
+      (c >= 0x4e00 && c <= 0x9fff) ||
+      (c >= 0x3400 && c <= 0x4dbf) ||
+      (c >= 0x3000 && c <= 0x303f) ||
+      (c >= 0xff00 && c <= 0xffef) ||
+      (c >= 0x3040 && c <= 0x30ff);
+    n += wide ? 1 : 0.55;
+  }
+  return Math.max(0.55, n);
+}
+
+/**
+ * Font size (px) that fits `text` into a `w × h` px box: set by the height, shrunk until the text
+ * also fits the width (a corrected word drawn visibly over the page image), never below 6 px.
+ */
+export function fitFontSize(text: string, w: number, h: number): number {
+  const byHeight = h * 0.78;
+  const byWidth = w / displayUnits(text);
+  return Math.max(6, Math.min(byHeight, byWidth));
+}

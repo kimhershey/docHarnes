@@ -1488,11 +1488,12 @@
         "converted": "Converted",
         "ocr": "OCR",
         "manual": "Edited"
-      }
+      },
+      "edited_title": "Corrected by hand — the page image itself is unchanged; this text is what search, questions and extraction use."
     },
     "layer": {
       "aria": "Page text layer",
-      "hint": "Drag over the words on the image to select them, then press Enter (or 'Edit text') to correct them in place. Drag on an empty area to add text.",
+      "hint": "Drag over the words on the image to select them, then press Enter (or 'Edit text') to correct them in place. Corrected words are drawn in blue on white over the image (the image itself does not change). Drag over an empty area to add text.",
       "no_text": "No text was recognised on this page. Run OCR with 'Process', or drag on an empty area to type the text.",
       "estimated": "Estimated positions",
       "estimated_title": "Scans and photos carry no character coordinates, so the line positions were estimated from the image. Selecting and editing work the same.",
