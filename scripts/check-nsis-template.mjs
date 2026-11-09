@@ -26,8 +26,8 @@ if (configured !== "nsis/installer.nsi") {
 }
 
 // 2. Reconstruct the upstream template from the copy: drop the DocuLens header, restore the /SOLID line.
-const copy = fs.readFileSync(templatePath, "utf8");
-if (copy.includes("\r")) fail("installer.nsi must use LF line endings");
+// Line endings are normalised: a Windows checkout may have converted the file to CRLF.
+const copy = fs.readFileSync(templatePath, "utf8").replace(/\r\n/g, "\n");
 const headerEnd = "; DocuLens-HEADER-END\n";
 const headerAt = copy.indexOf(headerEnd);
 if (headerAt < 0) fail("installer.nsi lacks the '; DocuLens-HEADER-END' marker");
@@ -52,19 +52,25 @@ const binaries = fs
   });
 if (binaries.length === 0) fail("no @tauri-apps/cli-<platform> native binary found under node_modules (run npm ci)");
 
-// 4. The reconstructed template must appear verbatim, exactly once, in every installed binary.
-const needle = Buffer.from(upstream, "utf8");
+// 4. The reconstructed template must appear verbatim, exactly once, in every installed binary
+//    (with LF or CRLF line endings — the CLI release builds may check the source out either way).
+const variants = [
+  ["LF", Buffer.from(upstream, "utf8")],
+  ["CRLF", Buffer.from(upstream.replace(/\n/g, "\r\n"), "utf8")],
+];
 for (const bin of binaries) {
   const data = fs.readFileSync(bin);
-  const first = data.indexOf(needle);
-  const second = first < 0 ? -1 : data.indexOf(needle, first + 1);
-  if (first < 0 || second >= 0) {
+  const hit = variants.find(([, needle]) => {
+    const first = data.indexOf(needle);
+    return first >= 0 && data.indexOf(needle, first + 1) < 0;
+  });
+  if (!hit) {
     fail(
-      `${path.relative(root, bin)} (@tauri-apps/cli ${cliVersion}) embeds a different NSIS template ` +
-        `(found ${first < 0 ? 0 : 2}+ matches). Re-sync src-tauri/nsis/installer.nsi from ` +
+      `${path.relative(root, bin)} (@tauri-apps/cli ${cliVersion}) embeds a different NSIS template. ` +
+        `Re-sync src-tauri/nsis/installer.nsi from ` +
         `https://github.com/tauri-apps/tauri/blob/@tauri-apps/cli-v${cliVersion}/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi ` +
         `and re-apply the marked DocuLens blocks.`,
     );
   }
-  console.log(`ok: ${path.relative(root, bin)} embeds the template behind src-tauri/nsis/installer.nsi (@tauri-apps/cli ${cliVersion}, ${needle.length} bytes)`);
+  console.log(`ok: ${path.relative(root, bin)} embeds the template behind src-tauri/nsis/installer.nsi (@tauri-apps/cli ${cliVersion}, ${hit[1].length} bytes, ${hit[0]} line endings)`);
 }

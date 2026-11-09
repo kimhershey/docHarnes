@@ -1,0 +1,2 @@
+# The NSIS template copy is compared byte-for-byte with the one embedded in the Tauri CLI; keep it LF.
+src-tauri/nsis/installer.nsi text eol=lf
