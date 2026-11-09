@@ -113,6 +113,7 @@ impl Vlm<'_> {
             top_k: Some(p.top_k),
             chat_template_kwargs: Some(prompts::template_kwargs()),
             seed: Some(seed),
+            cache_prompt: Some(true),
             ..Default::default()
         };
         if let Some((name, s)) = schema {

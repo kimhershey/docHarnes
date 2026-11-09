@@ -324,6 +324,14 @@
     "memory": {
       "turns": "Memory: {{count}} turns",
       "hint": "The last turns of this conversation (up to 8) and what the screen shows (open document, selection, folder, project) travel with every question and command. 'New chat' clears them."
+    },
+    "cancelled_pending": "Cancelled the pending question / plan.",
+    "source_control": "control",
+    "routing": {
+      "label": "Interpretation",
+      "model_first": "Model",
+      "rules_first": "Rules (legacy)",
+      "hint": "Model: only slash commands and reply / cancel are handled by rules, everything else by the model (default). Rules (legacy): phrase rules first, the model only when they fail."
     }
   },
   "planner": {
@@ -535,7 +543,9 @@
       "impact_draft": "{{count}} document draft(s) (saved on the generate screen)",
       "impact_project": "{{count}} project / rule change(s)",
       "retention_shorter": "The retention period gets shorter — expired data is deleted by the next purge run.",
-      "rule_description": "Rule: {{description}}"
+      "rule_description": "Rule: {{description}}",
+      "ask_back": "Reply",
+      "ask_back_placeholder": "Ask about this plan or say what to change"
     },
     "execution": {
       "title": "Running · job #{{id}}",
@@ -614,11 +624,16 @@
     "clarify": {
       "title": "Clarification",
       "fallback": "What would you like to do? Please be a little more specific.",
-      "no_model": "No planner model is loaded, so only the phrase rules were used. Load the model to understand more commands.",
+      "no_model": "The planner model is not loaded, so the sentence cannot be interpreted. Load a model or switch the interpretation above to 'rules'.",
       "load_model": "Load model ({{model}})",
       "open_models": "Open model manager",
       "loading": "Loading the model…",
-      "retry_hint": "Answer the question or rephrase the command."
+      "retry_hint": "Reply and Cancel act at once; every other sentence is read by the model.",
+      "ask_back": "Reply",
+      "reply_placeholder": "Answer the question or ask back",
+      "cancel": "Cancel",
+      "answered": "Replied",
+      "cancelled": "Cancelled"
     },
     "ui": {
       "set_setting": "Setting changed: {{key}} = {{value}}",

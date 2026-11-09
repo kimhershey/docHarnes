@@ -1662,6 +1662,9 @@ export interface ProjectSummary {
   status: ProjectStatus;
 }
 
+/** How the assistant interprets free text: the model reads every sentence (default) or the legacy phrase rules go first. */
+export type PlanMode = "model_first" | "rules_first";
+
 /** What the UI is showing when a command is sent (default scope). */
 export interface UiPlanContext {
   folder?: string | null;
@@ -1672,6 +1675,8 @@ export interface UiPlanContext {
   current_project?: string | null;
   /** Earlier turns of the assistant conversation (oldest first). */
   history?: ConversationTurn[];
+  /** Interpretation mode (omitted = model first). */
+  routing?: PlanMode | null;
 }
 
 export interface StepPreview {

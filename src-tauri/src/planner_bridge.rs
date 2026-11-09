@@ -26,7 +26,8 @@ use doculens_core::pipeline::run::{self as pipeline_run, PipelineDeps};
 use doculens_core::planner::exec::{self, EngineLease, ExecDeps, PlanExecution, PlanPreview};
 use doculens_core::planner::llm::{self, PlannerDeps};
 use doculens_core::planner::{
-    self, DocTypeSummary, FieldSummary, Op, OpKind, Plan, PlanContext, PlanResult, ProjectSummary, SchemaSummary,
+    self, DocTypeSummary, FieldSummary, Op, OpKind, Plan, PlanContext, PlanMode, PlanResult, ProjectSummary,
+    SchemaSummary,
 };
 use doculens_core::projects::repo as projects_repo;
 use doculens_core::CoreError;
@@ -49,6 +50,8 @@ pub struct UiPlanContext {
     pub current_project: Option<String>,
     /// Earlier turns of the assistant conversation (oldest first).
     pub history: Vec<ConversationTurn>,
+    /// Interpretation mode (default: the model reads every sentence; `rules_first` is the legacy path).
+    pub routing: Option<PlanMode>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -147,30 +150,48 @@ pub fn build_context(app: &AppHandle, ui: &UiPlanContext) -> UiResult<PlanContex
     })
 }
 
-/// Plans a command. The model is only loaded when the pre-router and the
-/// rules could not interpret the text; model calls go through the engine
-/// gate so a running batch yields at its next page boundary.
-pub fn plan(app: &AppHandle, text: &str, ui: &UiPlanContext) -> UiResult<PlanResponse> {
+/// Plans a command through the model (loading it on demand) behind the engine gate, so a running
+/// batch yields at its next page boundary. `None` when no model can be had.
+fn plan_with_model(
+    app: &AppHandle,
+    text: &str,
+    ctx: &PlanContext,
+    mode: PlanMode,
+) -> UiResult<Option<planner::PlanResult>> {
     let state = app.state::<AppState>();
+    let model = match pipeline_bridge::vision_model(app, true, None) {
+        Ok(model) => model,
+        Err(e) => {
+            log::info!("planner: model unavailable ({})", e.message);
+            return Ok(None);
+        }
+    };
+    let settings = state.settings_snapshot()?;
+    let ctx_size = state.engine.status().model(&model).and_then(|m| m.ctx);
+    let deps = PlannerDeps { chat: &state.engine, model, profile: settings.models.profile, ctx_size, cancel: None };
+    Ok(Some(state.gate.interactive(|| llm::plan(Some(&deps), text, ctx, mode))?))
+}
+
+/// Plans a command. Model-first (the default since 2026-11-09): slash commands are routed
+/// deterministically, every other sentence goes to the model, and without a model the result is a
+/// clarification that asks for one. Rules-first (legacy): the pre-router and the phrase rules
+/// answer first and the model is loaded only when they cannot interpret the text.
+pub fn plan(app: &AppHandle, text: &str, ui: &UiPlanContext) -> UiResult<PlanResponse> {
     let ctx = build_context(app, ui)?;
-    let mut result = llm::plan(None, text, &ctx)?;
-    if result.source == planner::PlanSource::None && result.issues.iter().any(|i| i.code == "no_model") {
-        match pipeline_bridge::vision_model(app, true, None) {
-            Ok(model) => {
-                let settings = state.settings_snapshot()?;
-                let ctx_size = state.engine.status().model(&model).and_then(|m| m.ctx);
-                let deps = PlannerDeps {
-                    chat: &state.engine,
-                    model,
-                    profile: settings.models.profile,
-                    ctx_size,
-                    cancel: None,
-                };
-                result = state.gate.interactive(|| llm::plan(Some(&deps), text, &ctx))?;
-            }
-            Err(e) => {
-                log::info!("planner: model unavailable ({}); rules-only result kept", e.message);
-            }
+    let mode = ui.routing.unwrap_or_default();
+    let mut result = match mode {
+        PlanMode::ModelFirst if !text.trim_start().starts_with('/') => match plan_with_model(app, text, &ctx, mode)? {
+            Some(r) => r,
+            None => llm::plan(None, text, &ctx, mode)?, // → `no_model` clarification
+        },
+        _ => llm::plan(None, text, &ctx, mode)?,
+    };
+    if mode == PlanMode::RulesFirst
+        && result.source == planner::PlanSource::None
+        && result.issues.iter().any(|i| i.code == "no_model")
+    {
+        if let Some(r) = plan_with_model(app, text, &ctx, mode)? {
+            result = r;
         }
     }
     let preview = if result.plan.is_clarification() {

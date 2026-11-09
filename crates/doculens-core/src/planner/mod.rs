@@ -1097,6 +1097,19 @@ pub struct SchemaSummary {
     pub fields: Vec<FieldSummary>,
 }
 
+/// How the assistant interprets free text (user decision 2026-11-09): the model reads every
+/// sentence — only slash commands and the cancel / ask-back controls stay deterministic. The
+/// phrase rules remain for the evaluation harness and as an explicit legacy mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanMode {
+    /// Slash commands → pre-router; everything else → the model (no model → clarification).
+    #[default]
+    ModelFirst,
+    /// Pre-router and phrase rules first, the model only when they cannot interpret the text.
+    RulesFirst,
+}
+
 /// Workspace facts the planner grounds its plans in (built by the shell).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

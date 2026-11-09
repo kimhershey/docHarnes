@@ -648,6 +648,7 @@ fn chat_request(model: &str, system: &str, user: &str, max_tokens: u32) -> ChatR
     req.top_p = Some(0.9);
     req.top_k = Some(20);
     req.chat_template_kwargs = Some(json!({ "enable_thinking": false }));
+    req.cache_prompt = Some(true);
     req
 }
 

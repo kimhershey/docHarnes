@@ -70,7 +70,8 @@ user PC: `docs/RUN-GUIDE.md`.
   classify, ocr, extract, validate: normalisers / BRN checksum / sum rules / PII masking / confidence, run: orchestrator +
   `extractions/` mirror, review, forms: form registration + NL schemas, split: lopdf split / merge, repo),
   `planner/` (mod: typed ops / scope / plan (appendix D v1.0 subset), schema: op spec table + PlanSchema grammar, rules:
-  deterministic phrase rules, prompts: tiered planner prompt, llm: pre-router → rules → model with one re-query, validate,
+  deterministic phrase rules (legacy `RulesFirst` mode + eval), prompts: tiered planner prompt, llm: `PlanMode::ModelFirst`
+  (default; slash → pre-router, everything else → model with one re-query; no model → clarification) / `RulesFirst`, validate,
   scope: scope → documents, exec: deterministic executor + previews), `organize/` (template: file-name / folder templates,
   mod: dry-run diff + apply, journal: `ops_journal` + `journal/ops-YYYYMM.jsonl`, LIFO undo / redo), `aggregate` (sum /
   count / avg / min / max with the reviewed / unreviewed split), `export` (XLSX / CSV / JSONL / MD / searchable PDF),

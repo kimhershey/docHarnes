@@ -1,9 +1,10 @@
-import { AlertTriangle, CheckSquare, Pencil, Play, RotateCcw, X } from "lucide-react";
+import { AlertTriangle, CheckSquare, CornerDownLeft, Pencil, Play, RotateCcw, X } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
@@ -143,6 +144,7 @@ export function PlanCard({
   onCancel,
   onRephrase,
   onToggleEdit,
+  onAskBack,
 }: {
   response: PlanResponse;
   plan: Plan;
@@ -155,8 +157,11 @@ export function PlanCard({
   onCancel: () => void;
   onRephrase: () => void;
   onToggleEdit: () => void;
+  /** 되묻기: the user's reply to this plan goes back to the model with the plan as context. */
+  onAskBack?: (reply: string) => void;
 }) {
   const { t, i18n } = useTranslation();
+  const [reply, setReply] = useState("");
   const executeChord = useShortcut("execute_plan") || "Ctrl+Enter";
   const closeChord = useShortcut("close") || "Escape";
   const reviewedDefault = useSettingsStore((s) => s.settings?.processing.organize_reviewed_only ?? true);
@@ -314,6 +319,24 @@ export function PlanCard({
             <Kbd chord={closeChord} />
           </Button>
         </div>
+      )}
+      {pending && onAskBack && (
+        <form
+          className="flex flex-wrap items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const r = reply.trim();
+            if (!r) return;
+            onAskBack(r);
+            setReply("");
+          }}
+        >
+          <Input value={reply} onChange={(e) => setReply(e.target.value)} placeholder={t("planner.card.ask_back_placeholder")} aria-label={t("planner.card.ask_back")} className="h-8 min-w-56 flex-1" data-testid="plan-ask-back-input" />
+          <Button type="submit" size="sm" variant="outline" disabled={!reply.trim()} data-testid="plan-ask-back">
+            <CornerDownLeft />
+            {t("planner.card.ask_back")}
+          </Button>
+        </form>
       )}
     </div>
   );

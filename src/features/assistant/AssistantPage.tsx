@@ -17,13 +17,14 @@ import { scopeFor } from "@/features/search/SearchPage";
 import { describePreRoute, executePreRoute, executeUiOps } from "@/lib/commands";
 import { docsFromIds, DropHint, importDroppedFiles, useDocumentDropTarget, type DragDoc } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
+import { askBackText, isCancelCommand, isSlashCommand, loadRouting, saveRouting } from "@/lib/assistant-control";
 import { looksLikeFollowUp } from "@/lib/follow-up";
 import { api } from "@/lib/ipc";
 import { useCollections, useDocument, usePipelineStatus } from "@/lib/queries";
 import { isComposing, matchesChord } from "@/lib/shortcuts";
-import { SCREEN_ROUTES, isJobFinished, type AnswerRequest, type Job, type Plan, type PlanExecution, type PlanIssue, type PlanResponse, type PreRouteResult, type UiPlanContext } from "@/lib/types";
+import { SCREEN_ROUTES, isJobFinished, type AnswerRequest, type Job, type Plan, type PlanExecution, type PlanIssue, type PlanResponse, type PlanMode, type PreRouteResult, type UiPlanContext } from "@/lib/types";
 import { errorCode, isMac } from "@/lib/utils";
-import { useAssistantStore, type Message, type NewMessage, type PlanMessage } from "@/stores/assistant";
+import { useAssistantStore, type ClarifyStatus, type Message, type NewMessage, type PlanMessage } from "@/stores/assistant";
 import { useAttachmentsStore } from "@/stores/attachments";
 import { useDocumentsStore } from "@/stores/documents";
 import { useEngineStore } from "@/stores/engine";
@@ -105,6 +106,12 @@ export function AssistantPage() {
         .then((docs) => docs.length > 0 && attachDocs(docs)),
   });
   const [followUp, setFollowUp] = useState(false);
+  // How free text is interpreted: the model reads every sentence (default); "rules_first" is the legacy path.
+  const [routing, setRoutingState] = useState<PlanMode>(() => loadRouting());
+  const setRouting = (mode: PlanMode) => {
+    setRoutingState(mode);
+    saveRouting(mode);
+  };
   const [cancelling, setCancelling] = useState<string | null>(null);
   const [planning, setPlanning] = useState(false);
   const [loadingModel, setLoadingModel] = useState(false);
@@ -130,6 +137,7 @@ export function AssistantPage() {
   const memoryTurns = useMemo(() => conversationTurns(messages).length, [messages]);
   const busy = anyPending || planning;
   const activePlan = [...messages].reverse().find((m): m is PlanMessage => m.role === "assistant" && m.kind === "plan" && m.status === "pending") ?? null;
+  const pendingClarify = [...messages].reverse().find((m): m is Extract<Message, { kind: "clarify" }> => m.role === "assistant" && m.kind === "clarify" && m.status === "pending") ?? null;
 
   // A scope that no longer applies (selection cleared, folder left, document superseded by a selection) falls back.
   useEffect(() => {
@@ -251,13 +259,51 @@ export function AssistantPage() {
   };
 
   const cancelPlan = (id: number) => patchPlan(id, (x) => ({ ...x, status: "cancelled", editing: false }));
+  const patchClarify = (id: number, status: ClarifyStatus) => patch(id, (m) => (m.role === "assistant" && m.kind === "clarify" ? { ...m, status } : m));
+  const cancelClarify = (id: number) => patchClarify(id, "cancelled");
+  /** 취소 (button or a bare "취소" typed): drops the pending question / plan without any inference. */
+  const cancelPending = (): boolean => {
+    let cancelled = false;
+    if (activePlan) {
+      cancelPlan(activePlan.id);
+      cancelled = true;
+    }
+    if (pendingClarify) {
+      cancelClarify(pendingClarify.id);
+      cancelled = true;
+    }
+    return cancelled;
+  };
+  /**
+   * 되묻기: the user's reply to the assistant's question (or to a proposed plan) goes back to the
+   * model together with the original command and the question — routed by rule, never guessed.
+   */
+  const askBack = async (messageId: number, original: string, question: string, reply: string) => {
+    if (busy) return;
+    patchClarify(messageId, "answered");
+    patchPlan(messageId, (x) => ({ ...x, status: "cancelled", editing: false }));
+    push({ role: "user", text: reply });
+    const composed = askBackText(original, question, reply, i18n.language.startsWith("ko"));
+    const context: UiPlanContext = { ...planContext(), history: conversationTurns(currentMessages()), routing };
+    setPlanning(true);
+    let response: PlanResponse;
+    try {
+      response = await api.plannerPlan(composed, context);
+    } catch (e) {
+      setPlanning(false);
+      push({ role: "assistant", kind: "error", text: describeError(e, t) });
+      return;
+    }
+    setPlanning(false);
+    await handlePlan(original, response, context);
+  };
 
   /** Routes a planner response to the matching card / action. */
   const handlePlan = async (textValue: string, response: PlanResponse, context: UiPlanContext) => {
     const plan = response.result.plan;
     switch (planKind(plan)) {
       case "clarify":
-        push({ role: "assistant", kind: "clarify", text: textValue, response });
+        push({ role: "assistant", kind: "clarify", text: textValue, response, status: "pending" });
         focusInput(textValue);
         return;
       case "help":
@@ -293,24 +339,33 @@ export function AssistantPage() {
     if (!v || busy) return;
     setText("");
     push({ role: "user", text: v, attachments: scope === "attached" && attached.length > 0 ? attached.map((d) => ({ id: d.id, name: d.name })) : undefined });
-    // 1. Pre-router: slash / settings commands run at once (no model, no plan card).
-    let route: PreRouteResult | null = null;
-    try {
-      route = await api.prerouterRoute(v);
-    } catch {
-      route = null;
-    }
-    if (route?.matched && route.op === "help") {
-      push({ role: "assistant", kind: "help" });
+    // 1. Rules first, and only these (user decision 2026-11-09): a bare 취소 while a question or plan
+    //    is pending drops it, and slash commands run at once — neither waits for the model.
+    if (isCancelCommand(v) && (activePlan || pendingClarify)) {
+      cancelPending();
+      push({ role: "assistant", kind: "executed", text: t("assistant.cancelled_pending"), source: t("assistant.source_control"), confidence: 1 });
       return;
     }
-    if (route?.matched) {
-      const outcome = await executePreRoute(route, navigate, t);
-      push({ role: "assistant", kind: "executed", text: outcome.summary || describePreRoute(route, t), source: route.source === "slash" ? t("assistant.source_slash") : t("assistant.source_phrase"), confidence: route.confidence });
-      return;
+    if (isSlashCommand(v)) {
+      let route: PreRouteResult | null = null;
+      try {
+        route = await api.prerouterRoute(v);
+      } catch {
+        route = null;
+      }
+      if (route?.matched && route.op === "help") {
+        push({ role: "assistant", kind: "help" });
+        return;
+      }
+      if (route?.matched) {
+        const outcome = await executePreRoute(route, navigate, t);
+        push({ role: "assistant", kind: "executed", text: outcome.summary || describePreRoute(route, t), source: t("assistant.source_slash"), confidence: route.confidence });
+        return;
+      }
     }
-    // 2. Planner (rules, then the model behind the engine gate), with the conversation so far.
-    const context: UiPlanContext = { ...planContext(), history: conversationTurns(currentMessages()) };
+    // 2. Everything else is the model's to interpret (the phrase rules only in the legacy "rules_first" mode),
+    //    with the conversation so far.
+    const context: UiPlanContext = { ...planContext(), history: conversationTurns(currentMessages()), routing };
     setPlanning(true);
     let response: PlanResponse;
     try {
@@ -345,6 +400,19 @@ export function AssistantPage() {
   // Ctrl+Enter approves / Esc cancels the active plan card (settings.shortcuts; IME-safe). Esc inside a text
   // field (the composer, a plan editor input) is left to that field (review M5).
   useEffect(() => {
+    if (!activePlan && pendingClarify) {
+      const closeChord = shortcuts?.close || "Escape";
+      const mac = isMac();
+      const id = pendingClarify.id;
+      const handler = (e: KeyboardEvent) => {
+        if (isComposing(e) || e.defaultPrevented || !matchesChord(e, closeChord, mac)) return;
+        if (isEditable(e.target) || hasOpenLayer() || useUiStore.getState().paletteOpen) return;
+        e.preventDefault();
+        cancelClarify(id);
+      };
+      window.addEventListener("keydown", handler);
+      return () => window.removeEventListener("keydown", handler);
+    }
     if (!activePlan) return;
     const executeChord = shortcuts?.execute_plan || "Ctrl+Enter";
     const closeChord = shortcuts?.close || "Escape";
@@ -364,7 +432,7 @@ export function AssistantPage() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePlan?.id, shortcuts?.execute_plan, shortcuts?.close]);
+  }, [activePlan?.id, pendingClarify?.id, shortcuts?.execute_plan, shortcuts?.close]);
 
   // Owed `ui_actions` of job-backed plans: run once when the finished job is observed (on mount and on
   // every job update), whether or not the execution card was mounted when the job finished.
@@ -444,6 +512,18 @@ export function AssistantPage() {
           {t("assistant.new_chat")}
         </Button>
         <div className="ml-auto flex items-center gap-3 text-xs text-fg-muted">
+          <label className="flex items-center gap-1" title={t("assistant.routing.hint")}>
+            {t("assistant.routing.label")}
+            <Select value={routing} onValueChange={(v) => setRouting(v as PlanMode)}>
+              <SelectTrigger className="h-7 w-32" aria-label={t("assistant.routing.label")} data-testid="assistant-routing">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="model_first">{t("assistant.routing.model_first")}</SelectItem>
+                <SelectItem value="rules_first">{t("assistant.routing.rules_first")}</SelectItem>
+              </SelectContent>
+            </Select>
+          </label>
           <span className="rounded-full bg-bg-muted px-2 py-0.5" title={t("assistant.memory.hint")} data-testid="assistant-memory" data-turns={memoryTurns}>
             {t("assistant.memory.turns", { count: memoryTurns })}
           </span>
@@ -557,6 +637,7 @@ export function AssistantPage() {
                     onCancel={() => cancelPlan(m.id)}
                     onRephrase={() => focusInput(m.text)}
                     onToggleEdit={() => patchPlan(m.id, (x) => ({ ...x, editing: !x.editing }))}
+                    onAskBack={(reply) => void askBack(m.id, m.text, m.plan.summary ?? m.text, reply)}
                   />
                 )}
                 {m.kind === "execution" && <ExecutionCard jobId={m.jobId} plan={m.plan} response={m.response} onFinished={onJobFinished} />}
@@ -565,11 +646,14 @@ export function AssistantPage() {
                   <ClarifyCard
                     question={clarificationQuestion(m.response.result.plan) || t("planner.clarify.fallback")}
                     confidence={m.response.result.plan.confidence}
+                    status={m.status}
                     noModel={m.response.result.source === "none" && m.response.result.issues.some((i) => i.code === "no_model")}
                     modelId={visionModel}
                     loading={loadingModel}
                     onLoadModel={() => void loadModel()}
                     onRephrase={() => focusInput(m.text)}
+                    onAskBack={(reply) => void askBack(m.id, m.text, clarificationQuestion(m.response.result.plan) || t("planner.clarify.fallback"), reply)}
+                    onCancel={() => cancelClarify(m.id)}
                   />
                 )}
                 {(m.kind === "executed" || m.kind === "help" || m.kind === "error") && (

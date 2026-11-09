@@ -175,6 +175,51 @@ test.describe("P5 planner", () => {
     await expect(undo).toBeDisabled();
   });
 
+  test("되묻기 replies with the question's context; 취소 (button or typed) drops pending cards by rule", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openAssistant(page);
+    await expect(page.getByTestId("assistant-routing")).toContainText(ko.assistant.routing.model_first);
+
+    // A sentence the (mock) model cannot read → a clarification card waiting for a reply.
+    await send(page, "보라색 코끼리를 춤추게 해줘");
+    const clarify = assistantCard(page, "clarify").last();
+    await expect(clarify).toBeVisible({ timeout: 15_000 });
+    await expect(clarify).toHaveAttribute("data-clarify-status", "pending");
+    // 되묻기: the reply becomes the user's turn, the card is marked answered and the composed command
+    // (original + question + reply) is interpreted again — here as an aggregate.
+    await clarify.getByTestId("clarify-reply").fill("지난달 영수증 합계 말이야");
+    await clarify.getByTestId("clarify-ask-back").click();
+    await expect(clarify).toHaveAttribute("data-clarify-status", "answered");
+    await expect(page.getByTestId("assistant-messages")).toContainText("지난달 영수증 합계 말이야");
+    await expect(assistantCard(page, "aggregate").last()).toBeVisible({ timeout: 15_000 });
+
+    // 취소 button on a fresh clarification.
+    await send(page, "보라색 코끼리를 춤추게 해줘");
+    const second = assistantCard(page, "clarify").last();
+    await expect(second).toHaveAttribute("data-clarify-status", "pending", { timeout: 15_000 });
+    await second.getByTestId("clarify-cancel").click();
+    await expect(second).toHaveAttribute("data-clarify-status", "cancelled");
+
+    // A typed bare "취소" drops a pending plan at once (rule, no model) and says so.
+    await send(page, "영수증 월별 폴더로 옮겨");
+    const plan = assistantCard(page, "plan").last();
+    await expect(plan).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    await send(page, "취소");
+    await expect(plan).toHaveAttribute("data-plan-status", "cancelled");
+    await expect(assistantCard(page, "executed").last()).toContainText(ko.assistant.cancelled_pending);
+
+    // 되묻기 on a plan card: the reply re-plans with the plan as context; the old card is closed.
+    await send(page, "영수증 월별 폴더로 옮겨");
+    const plan2 = assistantCard(page, "plan").last();
+    await expect(plan2).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    await plan2.getByTestId("plan-ask-back-input").fill("검토 안 된 것도 같이 옮겨");
+    await plan2.getByTestId("plan-ask-back").click();
+    await expect(plan2).toHaveAttribute("data-plan-status", "cancelled");
+    await expect(page.locator('[data-testid="assistant-card-plan"]')).toHaveCount(3, { timeout: 15_000 });
+    await expect(assistantCard(page, "plan").last()).toHaveAttribute("data-plan-status", "pending");
+  });
+
   test("slash commands still run at once; an unknown sentence asks for clarification; Esc / Ctrl+Z", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
