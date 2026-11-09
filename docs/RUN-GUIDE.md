@@ -13,7 +13,7 @@ DocuLens를 **실제 Windows PC에서 설치·실행·빌드·검증**하는 절
 |---|---|---|---|
 | A. 데스크톱 개발 실행 | `npm run tauri dev` | Windows 10/11, Node 22, Rust stable(MSVC), VS Build Tools C++, WebView2 | 실제 엔진·모델·파일 처리까지 전 기능 |
 | B. 브라우저 미리보기 | `npm run dev` → http://localhost:1420 | Node 22만 | 화면 흐름 확인(모의 백엔드 — 실제 파일·모델 처리 없음) |
-| C. 설치파일 빌드 | `npm run tauri build` → `target\release\bundle\nsis\DocuLens_0.1.0_x64-setup.exe` | A와 동일(첫 빌드 때 NSIS를 자동으로 받음) | 다른 PC에 설치(사용자 단위 설치, 관리자 권한 불필요) |
+| C. 설치파일 빌드 | `npm run tauri build` → `target\release\bundle\nsis\DocuLens_0.2.0_x64-setup.exe` | A와 동일(첫 빌드 때 NSIS를 자동으로 받음) | 다른 PC에 설치(사용자 단위 설치, 관리자 권한 불필요) |
 | D. 배포 설치파일 설치 | GitHub Releases → `DocuLens-Setup-Lite-<버전>-x64.exe` 다운로드 → 실행 | Windows 10 1803+/11 x64만(개발 도구 불필요) | **사용자 PC 권장 경로** — §1.1. 엔진 팩·PDFium·ko-dic 동봉, 모델만 앱에서 준비 |
 
 - 첫 `tauri dev`/`tauri build`는 Rust 의존성 전체를 컴파일하므로 수 분~십여 분 걸립니다. 이후에는 증분 빌드입니다.
@@ -54,7 +54,7 @@ DocuLens를 **실제 Windows PC에서 설치·실행·빌드·검증**하는 절
    - **모델(GGUF)은 어느 쪽에도 들어 있지 않습니다.** 첫 실행 뒤 모델 관리자에서 준비합니다(§2.3, §3).
 2. SHA-256을 확인합니다(명령 프롬프트 또는 PowerShell).
    ```
-   certutil -hashfile DocuLens-Setup-Lite-0.1.0-x64.exe SHA256
+   certutil -hashfile DocuLens-Setup-Lite-0.2.0-x64.exe SHA256
    ```
    출력된 해시가 `.sha256` 파일의 값(공백 앞 64자)과 같아야 합니다(대소문자 무관). 다르면 실행하지 말고 다시 받으세요.
 3. 실행합니다. 설치파일은 **코드 서명이 없어** SmartScreen이 "Windows의 PC 보호" 창을 띄웁니다 → **추가 정보 → 실행**.
