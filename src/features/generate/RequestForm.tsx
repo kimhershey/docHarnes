@@ -10,8 +10,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { describeJobDetail } from "@/features/jobs/describe";
+import { DropHint, importDroppedFiles, useDocumentDropTarget } from "@/lib/dnd";
 import { useDocuments, useGenerateTemplates, useSchemas } from "@/lib/queries";
 import { DRAFT_LENGTHS, OUTPUT_FORMATS, TONES, type DraftLength, type DraftRequest, type Job, type OutputFormat, type Tone } from "@/lib/types";
+import { useUiStore } from "@/stores/ui";
 
 import { documentSourceIds, formRefToPicker, pickerToFormRef, withDocumentSources } from "./draft";
 import { SourcePickerDialog } from "./SourcePickerDialog";
@@ -53,6 +55,18 @@ export function RequestForm({
   // Names of the quoted documents: the list is only a lookup table, so a generous cap instead of the grid's page size.
   const { data: sourceDocs } = useDocuments({ limit: 2000, sort: "imported_desc" }, sourceIds.length > 0);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Documents / files dropped on the sources box are quoted by the draft.
+  const addSources = (ids: string[]) => {
+    const next = [...sourceIds, ...ids.filter((id) => !sourceIds.includes(id))];
+    if (next.length === sourceIds.length) return;
+    onChange({ sources: withDocumentSources(request.sources, next) });
+    useUiStore.getState().toast(t("generate.form.sources_added", { count: next.length - sourceIds.length }), "ok");
+  };
+  const drop = useDocumentDropTarget({
+    disabled: running,
+    onDocuments: (docs) => addSources(docs.map((d) => d.id)),
+    onFiles: (paths) => void importDroppedFiles(paths, {}, t).then(addSources),
+  });
   const forms = (schemas ?? []).filter((s) => s.source === "form" && s.enabled);
   const picker = formRefToPicker(request.form_ref, templates ?? [], schemas ?? []);
   const ko = i18n.language.startsWith("ko");
@@ -93,7 +107,10 @@ export function RequestForm({
         </Label>
         <Textarea id="gen-content" rows={5} value={request.content} onChange={(e) => onChange({ content: e.target.value })} placeholder={t("generate.form.content_placeholder")} lang={i18n.language} data-testid="generate-content" />
       </div>
-      <div className="flex flex-col gap-1.5">
+      <div className="relative flex flex-col gap-1.5" {...drop.props} data-testid="generate-sources-drop">
+        <DropHint active={drop.isActive} over={drop.isOver} testId="generate-drop-hint">
+          {t("generate.form.drop_hint")}
+        </DropHint>
         <div className="flex items-center justify-between">
           <Label>{t("generate.form.sources")}</Label>
           <Button size="sm" variant="outline" onClick={() => setPickerOpen(true)} data-testid="generate-pick-sources">

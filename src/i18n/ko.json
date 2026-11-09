@@ -267,7 +267,8 @@
     "no_workspace": "워크스페이스를 먼저 열어주세요.",
     "recent_open": "라이브러리 열기",
     "review_link": "검토 큐 열기",
-    "review_fields": "검토 대기 필드 {{count}}개"
+    "review_fields": "검토 대기 필드 {{count}}개",
+    "command_drop": "문서나 파일을 놓으면 어시스턴트에 첨부됩니다"
   },
   "assistant": {
     "title": "어시스턴트",
@@ -284,7 +285,8 @@
       "document": "현재 문서",
       "document_named": "현재 문서: {{name}}",
       "project_named": "프로젝트: {{name}}",
-      "project_clear": "프로젝트 컨텍스트 해제"
+      "project_clear": "프로젝트 컨텍스트 해제",
+      "attached": "첨부 문서 {{count}}개"
     },
     "placeholder": "자연어로 명령하거나 질문하세요 (한국어 / English) · /로 슬래시 명령",
     "send": "보내기",
@@ -309,7 +311,16 @@
       "/열기 모델"
     ],
     "qa_hint": "질문하면 지식 베이스에서 근거를 찾아 문장별 출처와 함께 답합니다.",
-    "planning": "해석 중…"
+    "planning": "해석 중…",
+    "attachments": {
+      "label": "첨부 문서",
+      "count": "첨부 문서 {{count}}개",
+      "clear": "첨부 모두 지우기",
+      "remove": "첨부 제거: {{name}}",
+      "hint": "라이브러리 문서를 끌어오거나 파일을 놓으면 질문과 명령의 범위가 됩니다",
+      "drop": "문서나 파일을 놓아 첨부",
+      "added": "{{count}}개 문서를 첨부했습니다"
+    }
   },
   "planner": {
     "ops": {
@@ -1251,7 +1262,8 @@
     "review_open": "검토 큐에서 보기: {{name}}",
     "process_started": "처리 작업을 시작했습니다.",
     "organize_selected": "정리…",
-    "export_selected": "내보내기…"
+    "export_selected": "내보내기…",
+    "drag_hint": "카드를 끌어 어시스턴트·지식·프로젝트·문서 생성 화면이나 왼쪽 메뉴에 놓을 수 있습니다"
   },
   "documents": {
     "status": {
@@ -1651,7 +1663,10 @@
       "deleted": "컬렉션을 삭제했습니다.",
       "open_doc": "문서 열기",
       "docs_count_one": "문서 {{count}}",
-      "chunks_count_one": "청크 {{count}}"
+      "chunks_count_one": "청크 {{count}}",
+      "drop_hint": "문서나 파일을 놓으면 이 컬렉션에 추가됩니다",
+      "drop_add": "{{name}}에 추가",
+      "pending_title": "놓은 문서 {{count}}개를 컬렉션에 추가"
     },
     "wizard": {
       "title": "지식 적재 마법사",
@@ -1674,7 +1689,8 @@
       "summary": "신규 {{new}} · 다시 연결 {{relink}} · 중복 {{dup}} · 이미 등록 {{registered}} · 미지원 {{unsupported}}",
       "nothing": "적재할 새 파일이 없습니다(이미 등록된 문서는 컬렉션에만 추가됩니다).",
       "role_hint": "적재한 문서는 '지식' 역할로 표시되고 검색·답변의 근거로 사용됩니다.",
-      "steps_label": "단계"
+      "steps_label": "단계",
+      "drop_hint": "파일이나 폴더를 여기에 끌어다 놓아도 됩니다"
     },
     "versions": {
       "title": "문서 버전",
@@ -1808,7 +1824,10 @@
       "hint": "선택한 {{count}}개 문서를 라이브러리 순서대로 하나의 PDF로 합칩니다. 원본은 그대로 둡니다.",
       "name": "파일 이름(선택)",
       "run": "병합",
-      "started": "병합 작업을 시작했습니다."
+      "started": "병합 작업을 시작했습니다.",
+      "drop_hint": "문서를 끌어다 놓아 병합 목록에 추가",
+      "remove": "목록에서 제거",
+      "order_hint": "위에서 아래 순서로 합쳐집니다"
     }
   },
   "schemas": {
@@ -1929,7 +1948,8 @@
       "deriving": "양식에서 필드를 찾는 중…",
       "confirm": "도출된 필드를 확인·수정한 뒤 등록하세요.",
       "register": "양식 등록",
-      "no_docs": "라이브러리에 문서가 없습니다. 먼저 양식 문서를 가져오세요."
+      "no_docs": "라이브러리에 문서가 없습니다. 먼저 양식 문서를 가져오세요.",
+      "drop_hint": "문서를 끌어다 놓아 양식 샘플로 선택"
     },
     "reclassify": {
       "banner": "새 유형 '{{name}}'이(가) 추가되었습니다. '기타'로 분류된 문서 {{count}}건을 다시 분류할까요?",
@@ -2259,7 +2279,9 @@
       "job_failed": "생성 실패: {{message}}",
       "job_cancelled": "생성이 취소되었습니다.",
       "job_interrupted": "{{reason}} 작업 화면에서 다시 시도할 수 있습니다.",
-      "job_result_missing": "초안 결과를 불러오지 못했습니다. 초안 목록에서 열 수 있습니다."
+      "job_result_missing": "초안 결과를 불러오지 못했습니다. 초안 목록에서 열 수 있습니다.",
+      "drop_hint": "문서나 파일을 놓으면 원본에 추가됩니다",
+      "sources_added": "원본 {{count}}개를 추가했습니다"
     },
     "tone": {
       "formal": "격식체",
@@ -2417,7 +2439,8 @@
       "move_next_named": "'{{name}}' 다음 단계({{status}})로",
       "done_confirm_title": "'{{name}}' 완료 처리",
       "done_confirm": "마지막 검사에 불일치 {{mismatch}}건 · 누락 {{missing}}건이 남아 있습니다. 그대로 완료 단계로 이동할까요?",
-      "done_confirm_unchecked": "아직 정합성 검사를 실행하지 않았습니다. 그대로 완료 단계로 이동할까요?"
+      "done_confirm_unchecked": "아직 정합성 검사를 실행하지 않았습니다. 그대로 완료 단계로 이동할까요?",
+      "drop_add": "{{name}}에 추가"
     },
     "columns": {
       "name": "이름",
@@ -2488,7 +2511,8 @@
       "add_done": "추가 ({{count}})",
       "added": "문서 {{count}}건을 추가했습니다.",
       "search": "문서 검색…",
-      "none": "추가할 문서가 없습니다."
+      "none": "추가할 문서가 없습니다.",
+      "drop_hint": "라이브러리 문서나 파일을 끌어다 놓아 추가"
     },
     "rules": {
       "title": "정합성 규칙",
@@ -2621,6 +2645,25 @@
       "readonly": "내장 템플릿은 수정할 수 없습니다. 복제해서 수정하세요.",
       "copy_suffix": "(복제)",
       "incomplete_rules": "불완전한 규칙 {{count}}개를 먼저 완성하세요."
+    },
+    "pick": {
+      "title": "프로젝트 선택",
+      "hint": "놓은 문서 {{count}}개를 추가할 프로젝트를 고르세요.",
+      "hint_files": "놓은 파일 {{count}}개를 가져와 추가할 프로젝트를 고르세요.",
+      "none": "프로젝트가 없습니다. 먼저 새 프로젝트를 만드세요.",
+      "add": "추가"
     }
+  },
+  "dnd": {
+    "ghost_many": "문서 {{count}}개",
+    "drop_here": "여기에 놓아 추가",
+    "drop_docs_or_files": "문서나 파일을 끌어다 놓으세요",
+    "importing": "{{count}}개 파일을 가져오는 중…",
+    "imported": "{{count}}개 문서를 추가했습니다",
+    "nothing": "추가할 수 있는 파일이 없습니다 (지원하지 않는 형식이거나 이미 들어 있습니다)",
+    "import_failed": "가져오기 실패: {{error}}",
+    "partial_failed": "{{count}}개 파일은 가져오지 못했습니다",
+    "nav_drop": "{{screen}}에 놓기",
+    "nav_hint": "끌고 있는 동안 메뉴 위에 잠시 머물면 그 화면으로 이동합니다"
   }
 }

@@ -1,11 +1,14 @@
+import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { DropHint, importDroppedFiles, useDocumentDropTarget } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
+import { useDocuments } from "@/lib/queries";
 import type { DocumentView, PageView } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui";
@@ -88,13 +91,25 @@ export function MergeDialog({ open, onOpenChange, ids, onDone }: { open: boolean
   const toast = useUiStore((s) => s.toast);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  // The merge order starts as the library selection; dropped documents / files append to it.
+  const [list, setList] = useState<string[]>(ids);
   useEffect(() => {
-    if (open) setName("");
-  }, [open]);
+    if (open) {
+      setName("");
+      setList(ids);
+    }
+  }, [open, ids]);
+  const { data: docs } = useDocuments({ limit: 2000, sort: "imported_desc" }, open);
+  const addIds = (more: string[]) => setList((l) => [...l, ...more.filter((id) => !l.includes(id))]);
+  const drop = useDocumentDropTarget({
+    disabled: !open || busy,
+    onDocuments: (dropped) => addIds(dropped.map((d) => d.id)),
+    onFiles: (paths) => void importDroppedFiles(paths, {}, t).then(addIds),
+  });
   const run = async () => {
     setBusy(true);
     try {
-      await api.pipelineMerge(ids, name.trim() || null);
+      await api.pipelineMerge(list, name.trim() || null);
       toast(t("pipeline.merge.started"), "info");
       onOpenChange(false);
       onDone?.();
@@ -106,17 +121,36 @@ export function MergeDialog({ open, onOpenChange, ids, onDone }: { open: boolean
   };
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md" closeLabel={t("common.close")} data-testid="merge-dialog">
+      <DialogContent className="relative max-w-md" closeLabel={t("common.close")} data-testid="merge-dialog" {...drop.props}>
+        <DropHint active={drop.isActive} over={drop.isOver} testId="merge-drop-hint">
+          {t("pipeline.merge.drop_hint")}
+        </DropHint>
         <DialogHeader>
           <DialogTitle>{t("pipeline.merge.title")}</DialogTitle>
-          <DialogDescription>{t("pipeline.merge.hint", { count: ids.length })}</DialogDescription>
+          <DialogDescription>
+            {t("pipeline.merge.hint", { count: list.length })} {t("pipeline.merge.order_hint")} {t("pipeline.merge.drop_hint")}
+          </DialogDescription>
         </DialogHeader>
+        <ol className="max-h-56 divide-y divide-border overflow-y-auto rounded-md border border-border text-sm" data-testid="merge-list">
+          {list.map((id, i) => {
+            const d = docs?.find((x) => x.id === id);
+            return (
+              <li key={id} className="flex items-center gap-2 px-3 py-1.5" data-testid={`merge-item-${id}`}>
+                <span className="w-5 text-xs tabular-nums text-fg-subtle">{i + 1}</span>
+                <span className="min-w-0 flex-1 truncate">{d?.title ?? d?.original_name ?? id.slice(0, 8)}</span>
+                <Button size="icon-sm" variant="ghost" onClick={() => setList((l) => l.filter((x) => x !== id))} aria-label={t("pipeline.merge.remove")} data-testid={`merge-remove-${id}`}>
+                  <X />
+                </Button>
+              </li>
+            );
+          })}
+        </ol>
         <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("pipeline.merge.name")} aria-label={t("pipeline.merge.name")} data-testid="merge-name" />
         <DialogFooter>
           <Button variant="secondary" onClick={() => onOpenChange(false)}>
             {t("common.cancel")}
           </Button>
-          <Button onClick={() => void run()} disabled={busy || ids.length < 2} data-testid="merge-run">
+          <Button onClick={() => void run()} disabled={busy || list.length < 2} data-testid="merge-run">
             {t("pipeline.merge.run")}
           </Button>
         </DialogFooter>

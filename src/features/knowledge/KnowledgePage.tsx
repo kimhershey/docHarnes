@@ -1,5 +1,5 @@
 import { BookOpen, Database, RefreshCw, Upload } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
@@ -14,9 +14,11 @@ import { useKnowledgeStatus } from "@/lib/queries";
 import { queryClient, queryKeys } from "@/lib/query-client";
 import type { KnowledgeStatus } from "@/lib/types";
 import { useUiStore } from "@/stores/ui";
+import { useAttachmentsStore } from "@/stores/attachments";
 import { useWorkspaceStore } from "@/stores/workspace";
 
 import { AnswersPanel } from "./AnswersPanel";
+import { AddToCollectionDialog } from "./AddToCollectionDialog";
 import { CollectionsPanel } from "./CollectionsPanel";
 import { GlossaryPanel } from "./GlossaryPanel";
 import { IngestWizard } from "./IngestWizard";
@@ -201,8 +203,23 @@ export function KnowledgePage() {
   const { t } = useTranslation();
   const workspace = useWorkspaceStore((s) => s.current);
   const { data: status, error } = useKnowledgeStatus(!!workspace);
-  const [wizard, setWizard] = useState<{ open: boolean; collectionId: string | null }>({ open: false, collectionId: null });
+  const [wizard, setWizard] = useState<{ open: boolean; collectionId: string | null; paths?: string[] | null }>({ open: false, collectionId: null });
   const [tab, setTab] = useState<(typeof TABS)[number]>("overview");
+  // Hand-offs from a drop on the sidebar's 지식 entry: documents → collection picker, files → ingest wizard.
+  const pendingDocs = useAttachmentsStore((s) => s.pendingKnowledgeDocs);
+  const pendingPaths = useAttachmentsStore((s) => s.pendingKnowledgePaths);
+  const [addDocs, setAddDocs] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (!pendingDocs || !workspace) return;
+    useAttachmentsStore.getState().setPending({ pendingKnowledgeDocs: null });
+    setTab("collections");
+    setAddDocs(pendingDocs.map((d) => d.id));
+  }, [pendingDocs, workspace]);
+  useEffect(() => {
+    if (!pendingPaths || !workspace) return;
+    useAttachmentsStore.getState().setPending({ pendingKnowledgePaths: null });
+    setWizard({ open: true, collectionId: null, paths: pendingPaths });
+  }, [pendingPaths, workspace]);
 
   return (
     <div className="flex h-full flex-col" data-testid="page-knowledge">
@@ -247,7 +264,8 @@ export function KnowledgePage() {
           </TabsContent>
         </div>
       </Tabs>
-      <IngestWizard open={wizard.open} collectionId={wizard.collectionId} onOpenChange={(open) => setWizard((w) => ({ ...w, open }))} />
+      <IngestWizard open={wizard.open} collectionId={wizard.collectionId} initialPaths={wizard.paths ?? null} onOpenChange={(open) => setWizard((w) => ({ ...w, open, paths: open ? w.paths : null }))} />
+      <AddToCollectionDialog open={addDocs !== null} onOpenChange={(o) => !o && setAddDocs(null)} docIds={addDocs ?? []} />
     </div>
   );
 }

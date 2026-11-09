@@ -18,6 +18,7 @@ import { useDocTypes, useDocuments, useSchemaVersions, useSchemas } from "@/lib/
 import { queryClient, queryKeys } from "@/lib/query-client";
 import { draftFromSchema, newFieldDef, type SchemaDraft, type SchemaRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useAttachmentsStore } from "@/stores/attachments";
 import { useUiStore } from "@/stores/ui";
 
 import { FormRegisterDialog } from "./FormRegisterDialog";
@@ -86,6 +87,14 @@ export function SchemasPage() {
   const [nlBase, setNlBase] = useState<SchemaRecord | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [formDoc, setFormDoc] = useState<string | null>(null);
+  // A document dropped on the sidebar's 스키마 entry registers as a form.
+  const pendingFormDoc = useAttachmentsStore((s) => s.pendingFormDoc);
+  useEffect(() => {
+    if (!pendingFormDoc) return;
+    useAttachmentsStore.getState().setPending({ pendingFormDoc: null });
+    setFormDoc(pendingFormDoc.id);
+    setFormOpen(true);
+  }, [pendingFormDoc]);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const [testDoc, setTestDoc] = useState("");
   const [newType, setNewType] = useState<NewType | null>(null);

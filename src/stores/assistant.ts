@@ -6,7 +6,7 @@ import type { Answer, AnswerRequest, Op, Plan, PlanExecution, PlanIssue, PlanRes
 export type PlanStatus = "pending" | "executing" | "done" | "cancelled";
 
 export type Message =
-  | { id: number; role: "user"; text: string }
+  | { id: number; role: "user"; text: string; attachments?: { id: string; name: string }[] }
   | { id: number; role: "assistant"; kind: "executed"; text: string; source: string; confidence: number }
   | { id: number; role: "assistant"; kind: "answer"; requestId: string; request: AnswerRequest; answer: Answer | null; error: unknown; pending: boolean }
   | { id: number; role: "assistant"; kind: "help" }

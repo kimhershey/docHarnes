@@ -1,0 +1,129 @@
+import { expect, test, type Locator, type Page } from "@playwright/test";
+
+import ko from "../src/i18n/ko.json" with { type: "json" };
+import { card, createWorkspace, freshApp, importViaLibrary, tpl } from "./helpers";
+
+// Drag-and-drop of library documents (pointer-based in-app drags) and browser file drops onto the
+// screens that add documents (design §3.4 끌어다 놓기, v1.1 follow-up).
+
+/** Presses on `source`, moves past the drag threshold, hovers `target` for `hoverMs` and releases. */
+async function dragTo(page: Page, source: Locator, target: Locator, hoverMs = 0): Promise<void> {
+  const s = (await source.boundingBox())!;
+  const t = (await target.boundingBox())!;
+  await page.mouse.move(s.x + s.width / 2, s.y + s.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(s.x + s.width / 2 + 24, s.y + s.height / 2 + 24, { steps: 4 });
+  await expect(page.getByTestId("dnd-ghost")).toBeVisible();
+  await page.mouse.move(t.x + t.width / 2, t.y + t.height / 2, { steps: 10 });
+  if (hoverMs > 0) await page.waitForTimeout(hoverMs);
+  await page.mouse.up();
+}
+
+/** Browser-preview file drop: a `drop` with `dataTransfer.files` dispatched at the target's centre. */
+async function dropFiles(page: Page, target: Locator, names: string[]): Promise<void> {
+  const box = (await target.boundingBox())!;
+  await target.evaluate(
+    (el, { names, x, y }) => {
+      const dt = new DataTransfer();
+      for (const n of names) dt.items.add(new File(["%PDF-1.4"], n, { type: "application/pdf" }));
+      for (const type of ["dragover", "drop"]) {
+        el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, dataTransfer: dt }));
+      }
+    },
+    { names, x: box.x + box.width / 2, y: box.y + box.height / 2 },
+  );
+}
+
+async function libraryWithDocs(page: Page, paths: string[]): Promise<string[]> {
+  await freshApp(page);
+  await createWorkspace(page);
+  await importViaLibrary(page, paths, { autoLevel: "none" });
+  const ids: string[] = [];
+  for (const p of paths) {
+    const id = (await card(page, p.split(/[\\/]/).pop()!).getAttribute("data-testid"))!.replace("doc-card-", "");
+    ids.push(id);
+  }
+  return ids;
+}
+
+test.describe("document drag and drop", () => {
+  test("a card dropped on the assistant menu entry becomes an attachment (scope) and can be removed", async ({ page }) => {
+    const [id] = await libraryWithDocs(page, ["C:\\scan\\견적서_한빛.pdf"]);
+    await dragTo(page, page.getByTestId(`doc-card-${id}`), page.getByTestId("nav-assistant"));
+    await expect(page.getByTestId("page-assistant")).toBeVisible();
+    await expect(page.getByTestId("assistant-attachments")).toContainText("견적서_한빛.pdf");
+    await expect(page.getByTestId("assistant-scope")).toContainText(tpl(ko.assistant.scope.attached, { count: 1 }));
+    // The user message records the attachments.
+    await page.getByTestId("assistant-input").fill("/테마 다크");
+    await page.getByTestId("assistant-send").click();
+    await expect(page.getByTestId("assistant-message-attachments")).toContainText("견적서_한빛.pdf");
+    await page.getByTestId(`assistant-attachment-remove-${id}`).click();
+    await expect(page.getByTestId("assistant-attachments")).toHaveCount(0);
+    await expect(page.getByTestId("assistant-scope")).toContainText(ko.assistant.scope.all);
+  });
+
+  test("dragging a selected card carries the whole selection", async ({ page }) => {
+    const ids = await libraryWithDocs(page, ["C:\\scan\\a.pdf", "C:\\scan\\b.pdf"]);
+    for (const id of ids) await page.getByTestId(`doc-select-${id}`).check();
+    const s = (await page.getByTestId(`doc-card-${ids[0]}`).boundingBox())!;
+    await page.mouse.move(s.x + s.width / 2, s.y + s.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(s.x + s.width / 2 + 30, s.y + s.height / 2 + 30, { steps: 4 });
+    await expect(page.getByTestId("dnd-ghost")).toContainText(tpl(ko.dnd.ghost_many, { count: 2 }));
+    const nav = (await page.getByTestId("nav-assistant").boundingBox())!;
+    await page.mouse.move(nav.x + nav.width / 2, nav.y + nav.height / 2, { steps: 10 });
+    await page.mouse.up();
+    await expect(page.getByTestId("assistant-attachments")).toContainText(tpl(ko.assistant.attachments.count, { count: 2 }));
+  });
+
+  test("resting on the 프로젝트 entry switches screens (spring-loading) so the card can be dropped on a project", async ({ page }) => {
+    const [id] = await libraryWithDocs(page, ["C:\\scan\\계약서.pdf"]);
+    await page.getByTestId("nav-projects").click();
+    await page.getByTestId("projects-new").click();
+    await page.getByTestId("project-name").fill("드롭 프로젝트");
+    await page.getByTestId("project-submit").click();
+    await expect(page.getByTestId("project-title")).toContainText("드롭 프로젝트");
+    await page.getByTestId("project-back").click();
+    await page.getByTestId("nav-library").click();
+    const cardEl = page.getByTestId(`doc-card-${id}`);
+    const s = (await cardEl.boundingBox())!;
+    await page.mouse.move(s.x + s.width / 2, s.y + s.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(s.x + s.width / 2 + 24, s.y + s.height / 2 + 24, { steps: 4 });
+    const nav = (await page.getByTestId("nav-projects").boundingBox())!;
+    await page.mouse.move(nav.x + nav.width / 2, nav.y + nav.height / 2, { steps: 10 });
+    await expect(page.getByTestId("page-projects")).toBeVisible({ timeout: 5_000 });
+    const target = page.locator('[data-testid^="project-card-"]').first();
+    const tb = (await target.boundingBox())!;
+    await page.mouse.move(tb.x + tb.width / 2, tb.y + tb.height / 2, { steps: 10 });
+    await page.mouse.up();
+    await expect(target).toContainText(tpl(ko.projects.card.documents, { count: 1 }));
+    await target.getByTestId("project-open").click();
+    await expect(page.getByTestId(`project-doc-${id}`)).toBeVisible();
+  });
+
+  test("a card dropped on the 문서 생성 entry is quoted as a draft source", async ({ page }) => {
+    const [id] = await libraryWithDocs(page, ["C:\\scan\\세금계산서.pdf"]);
+    await dragTo(page, page.getByTestId(`doc-card-${id}`), page.getByTestId("nav-generate"));
+    await expect(page.getByTestId("page-generate")).toBeVisible();
+    await expect(page.getByTestId("generate-sources")).toContainText("세금계산서.pdf");
+  });
+
+  test("files dropped on a collection are imported as knowledge documents of that collection", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await page.getByTestId("nav-knowledge").click();
+    await page.getByTestId("knowledge-tab-collections").click();
+    await page.getByTestId("collection-new").click();
+    await page.getByTestId("collection-name").fill("규정");
+    await page.getByTestId("collection-save").click();
+    const item = page.getByTestId("collection-item").filter({ hasText: "규정" });
+    await expect(item).toBeVisible();
+    await dropFiles(page, item, ["C:\\docs\\취업규칙.pdf"]);
+    await expect(item).toContainText(tpl(ko.knowledge.collections.docs_count, { count: 1 }), { timeout: 20_000 });
+    await item.click();
+    await expect(page.getByTestId("collection-doc")).toContainText("취업규칙.pdf");
+    await page.getByTestId("nav-library").click();
+    await expect(card(page, "취업규칙.pdf")).toBeVisible();
+  });
+});

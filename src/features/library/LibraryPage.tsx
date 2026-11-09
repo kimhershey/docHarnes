@@ -15,6 +15,7 @@ import { AddToCollectionDialog } from "@/features/knowledge/AddToCollectionDialo
 import { docTypeLabel } from "@/features/pipeline/labels";
 import { PipelineStatusChip } from "@/features/pipeline/PipelineStatusChip";
 import { ProcessMenu } from "@/features/pipeline/ProcessMenu";
+import { startDocumentDrag, type DragDoc } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
 import { useDocTypes, useDocumentStats, useDocuments, usePdfiumInfo } from "@/lib/queries";
@@ -31,6 +32,7 @@ import {
   type SourceKind,
 } from "@/lib/types";
 import { cn, formatBytes, formatDate } from "@/lib/utils";
+import { useAttachmentsStore } from "@/stores/attachments";
 import { useDocumentsStore } from "@/stores/documents";
 import { usePipelineStore } from "@/stores/pipeline";
 import { useSettingsStore } from "@/stores/settings";
@@ -148,6 +150,13 @@ export function LibraryPage() {
   }, []);
   const onDrop = useCallback((paths: string[]) => openImport(paths, "drop"), [openImport]);
   const dragOver = useDocumentDrop(!!workspace, onDrop);
+  // Files dropped on the sidebar's 라이브러리 entry arrive here once the screen is up.
+  const pendingPaths = useAttachmentsStore((s) => s.pendingLibraryPaths);
+  useEffect(() => {
+    if (!pendingPaths || !workspace) return;
+    useAttachmentsStore.getState().setPending({ pendingLibraryPaths: null });
+    openImport(pendingPaths, "drop");
+  }, [pendingPaths, workspace, openImport]);
 
   // `/library?import=1` (the home quick action) opens the import dialog once and drops the flag from the URL.
   const importParam = searchParams.get("import");
@@ -169,6 +178,11 @@ export function LibraryPage() {
     if (!docs) return;
     setSelectedIds(selectedVisible);
   }, [docs, selectedVisible, setSelectedIds]);
+  // Drag payload of a card / row: the whole selection when the document is part of it, else the document alone.
+  const dragDocs = useCallback(
+    (doc: DocumentView): DragDoc[] => (selected.has(doc.id) ? selectedDocs : [doc]).map((d) => ({ id: d.id, name: d.title ?? d.original_name, absolute_path: d.absolute_path })),
+    [selected, selectedDocs],
+  );
   const allSelected = list.length > 0 && selectedVisible.length === list.length;
   const someSelected = selectedVisible.length > 0 && !allSelected;
   const toggle = (id: string) =>
@@ -483,9 +497,9 @@ export function LibraryPage() {
         {docs && list.length > 0 && (
           <div className={cn("flex min-h-0 flex-1 flex-col transition-opacity", isPlaceholderData && "opacity-60")} aria-busy={isPlaceholderData}>
             {view === "grid" ? (
-              <GridView docs={list} selected={selected} onToggle={toggle} onOpen={open} onOpenReview={openReview} typeLabel={typeLabel} />
+              <GridView docs={list} selected={selected} onToggle={toggle} onOpen={open} onOpenReview={openReview} typeLabel={typeLabel} dragDocs={dragDocs} />
             ) : (
-              <ListView docs={list} selected={selected} onToggle={toggle} onOpen={open} onOpenReview={openReview} typeLabel={typeLabel} locale={i18n.language} />
+              <ListView docs={list} selected={selected} onToggle={toggle} onOpen={open} onOpenReview={openReview} typeLabel={typeLabel} locale={i18n.language} dragDocs={dragDocs} />
             )}
           </div>
         )}
@@ -552,7 +566,7 @@ function ReviewBadge({ doc, onOpen, t }: { doc: DocumentView; onOpen: (id: strin
   );
 }
 
-function GridView({ docs, selected, onToggle, onOpen, onOpenReview, typeLabel }: { docs: DocumentView[]; selected: Set<string>; onToggle: (id: string) => void; onOpen: (id: string) => void; onOpenReview: (id: string) => void; typeLabel: (slug: string) => string }) {
+function GridView({ docs, selected, onToggle, onOpen, onOpenReview, typeLabel, dragDocs }: { docs: DocumentView[]; selected: Set<string>; dragDocs: (doc: DocumentView) => DragDoc[]; onToggle: (id: string) => void; onOpen: (id: string) => void; onOpenReview: (id: string) => void; typeLabel: (slug: string) => string }) {
   const { t } = useTranslation();
   const parentRef = useRef<HTMLDivElement | null>(null);
   const cols = useColumns(parentRef, CARD_W);
@@ -564,7 +578,7 @@ function GridView({ docs, selected, onToggle, onOpen, onOpenReview, typeLabel }:
         {virtualizer.getVirtualItems().map((row) => (
           <div key={row.key} className="absolute left-0 flex w-full gap-4 px-2" style={{ transform: `translateY(${row.start}px)`, height: row.size }}>
             {docs.slice(row.index * cols, row.index * cols + cols).map((doc) => (
-              <DocCard key={doc.id} doc={doc} selected={selected.has(doc.id)} onToggle={() => onToggle(doc.id)} onOpen={() => onOpen(doc.id)} onOpenReview={onOpenReview} t={t} typeLabel={typeLabel} />
+              <DocCard key={doc.id} doc={doc} selected={selected.has(doc.id)} onToggle={() => onToggle(doc.id)} onOpen={() => onOpen(doc.id)} onOpenReview={onOpenReview} t={t} typeLabel={typeLabel} dragDocs={dragDocs} />
             ))}
           </div>
         ))}
@@ -573,7 +587,7 @@ function GridView({ docs, selected, onToggle, onOpen, onOpenReview, typeLabel }:
   );
 }
 
-function DocCard({ doc, selected, onToggle, onOpen, onOpenReview, t, typeLabel }: { doc: DocumentView; selected: boolean; onToggle: () => void; onOpen: () => void; onOpenReview: (id: string) => void; t: TFn; typeLabel: (slug: string) => string }) {
+function DocCard({ doc, selected, onToggle, onOpen, onOpenReview, t, typeLabel, dragDocs }: { doc: DocumentView; selected: boolean; dragDocs: (doc: DocumentView) => DragDoc[]; onToggle: () => void; onOpen: () => void; onOpenReview: (id: string) => void; t: TFn; typeLabel: (slug: string) => string }) {
   return (
     <div
       role="listitem"
@@ -582,6 +596,8 @@ function DocCard({ doc, selected, onToggle, onOpen, onOpenReview, t, typeLabel }
       data-testid={`doc-card-${doc.id}`}
       data-doc-name={doc.original_name}
       data-doc-status={doc.status}
+      data-dnd-source="document"
+      onPointerDown={(e) => startDocumentDrag(e, () => dragDocs(doc))}
     >
       <input
         type="checkbox"
@@ -628,7 +644,7 @@ function DocCard({ doc, selected, onToggle, onOpen, onOpenReview, t, typeLabel }
 
 const LIST_COLS = "grid-cols-[28px_minmax(0,2fr)_80px_60px_100px_110px_90px_150px_90px]";
 
-function ListView({ docs, selected, onToggle, onOpen, onOpenReview, typeLabel, locale }: { docs: DocumentView[]; selected: Set<string>; onToggle: (id: string) => void; onOpen: (id: string) => void; onOpenReview: (id: string) => void; typeLabel: (slug: string) => string; locale: string }) {
+function ListView({ docs, selected, onToggle, onOpen, onOpenReview, typeLabel, locale, dragDocs }: { docs: DocumentView[]; selected: Set<string>; dragDocs: (doc: DocumentView) => DragDoc[]; onToggle: (id: string) => void; onOpen: (id: string) => void; onOpenReview: (id: string) => void; typeLabel: (slug: string) => string; locale: string }) {
   const { t } = useTranslation();
   const parentRef = useRef<HTMLDivElement | null>(null);
   const virtualizer = useVirtualizer({ count: docs.length, getScrollElement: () => parentRef.current, estimateSize: () => ROW_H, overscan: 10, scrollMargin: ROW_H });
@@ -666,6 +682,8 @@ function ListView({ docs, selected, onToggle, onOpen, onOpenReview, typeLabel, l
               data-testid={`doc-row-${doc.id}`}
               data-doc-name={doc.original_name}
               data-doc-status={doc.status}
+              data-dnd-source="document"
+              onPointerDown={(e) => startDocumentDrag(e, () => dragDocs(doc))}
             >
               <span role="gridcell">
                 <input type="checkbox" checked={selected.has(doc.id)} onChange={() => onToggle(doc.id)} aria-label={`${t("common.select")}: ${doc.original_name}`} />

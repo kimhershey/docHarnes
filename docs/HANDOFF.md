@@ -1045,6 +1045,33 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   solid 43.0 MB 대비 +4.6 MB), SHA-256 `29501b8fdd4b19da7a73403e7346b25519d7f21acc57801ea91a323aa5874960`, 159개 파일·필수 7개
   통과, 아티팩트 id 13643799614. 둘 다 `publish=false`(이 세션의 권한 정책이 릴리스 게시를 막음) — Release 게시는 사용자가
   `publish=true`로 실행. 사용자 PC 검증(설치·엔진 카드 백엔드 cu129/cu121·`CUDA0` 로그)은 체크리스트 P7.
+### 드래그 앤 드롭 (2026-11-09, 사용자 요청 "문서를 추가하는 모든 기능에 드래그 앤 드롭")
+
+- **공통 인프라 `src/lib/dnd/`**: `store.ts`(zustand 상태 + 드롭 대상 레지스트리: 요소에 `data-doc-drop="<id>"`, 포인터 위치를
+  `elementFromPoint`로 판정, 중첩 대상은 안쪽부터 페이로드 종류(`documents`/`files`)를 받는 대상으로 폴백, 스프링 로드 타이머),
+  `useDragSource.ts`(`startDocumentDrag`: 포인터 6 px 이동 후 드래그 시작 — HTML5 DnD가 아니라 포인터 이벤트. Tauri의
+  `dragDropEnabled`(네이티브 파일 드롭에 필요)가 Windows에서 HTML5 드래그를 막기 때문), `useDropTarget.ts`(`useDocumentDropTarget`:
+  `onDocuments`/`onFiles`/`onHover`), `DndLayer.tsx`(앱 셸에 1개: 창 단위 pointermove/up, 드래그 뒤 클릭 1회 삼킴, Tauri
+  `onDragDropEvent`의 물리 좌표를 `devicePixelRatio`로 나눠 판정, 브라우저 폴백은 HTML5 `dragover`/`drop`의 파일 이름, 드래그 고스트),
+  `importAttach.ts`(`importDroppedFiles`: 계획 → 이미 있는 문서 id 수집 → 가져오기 잡 → `waitForJob` → 잡 결과 `ImportReport`의
+  imported/relinked id 반환; 새 문서가 없으면 호출자가 기존 id를 직접 연결), `DropHint.tsx`(점선 안내 오버레이).
+- **드래그 소스**: 라이브러리 카드·행(선택에 포함된 문서를 끌면 선택 전체, 아니면 그 문서; `absolute_path` 동봉).
+- **드롭 대상**: 어시스턴트(페이지 전체 → 첨부 문서 칩, 범위 "첨부 문서 N개", 질문은 `scope.documents`, 플래너는 `selected_doc_ids`,
+  사용자 메시지에 첨부 이름 기록; 스토어 `stores/attachments.ts`), 홈 명령 카드(첨부 후 어시스턴트로), 지식 컬렉션 항목·선택 컬렉션
+  문서 목록(문서 → `knowledge_collection_add`, 파일 → role knowledge + `collection_id`로 가져오기), 적재 마법사 1단계(파일 경로 추가,
+  라이브러리 문서는 경로로 재등록 → "이미 등록됨" → 컬렉션에만 추가), 프로젝트 문서 탭·칸반 카드·목록 행(문서 →
+  `project_add_documents`, 파일 → `ImportOptions.project_id`로 가져오기), 문서 생성 원본 상자(원본 추가), 양식 등록 대화상자(샘플
+  문서 선택), 병합 대화상자(순서 목록에 추가·제거). **사이드바 메뉴**는 각 화면의 "추가"를 대신 수행(어시스턴트/홈 → 첨부, 라이브러리
+  → 가져오기 대화상자, 지식 → 컬렉션 선택 대화상자/적재 마법사, 프로젝트 → 현재 프로젝트에 추가 또는 프로젝트 선택 대화상자
+  `PickProjectDialog`, 문서 생성 → 원본, 스키마 → 양식 등록)하고, 끌고 있는 동안 700 ms 머물면 그 화면으로 전환(스프링 로드)해 화면 간
+  드롭을 가능하게 한다.
+- **백엔드**: `ImportOptions.project_id`(컬렉션처럼 배치 전체 — 신규·재연결·이미 등록·중복 — 를 프로젝트에 연결, 없는 프로젝트는
+  `project_not_found`), 가져오기 잡의 `result`에 `ImportReport`(`JobBook::set_result`), 프로젝트 이벤트 발행. 모의 백엔드 동일.
+- **검증**: `src/lib/dnd/store.test.ts` 7건(레지스트리·중첩 폴백·드래그 디스패치·스프링 로드 타이머·네이티브 드롭 폴백), Playwright
+  `e2e/dnd.spec.ts` 5건(카드 → 어시스턴트 메뉴 첨부·제거·메시지 기록, 다중 선택 고스트 "문서 2개", 스프링 로드로 프로젝트 화면 전환 후
+  카드에 드롭, 문서 생성 원본, 브라우저 파일 드롭 → 컬렉션 가져오기), Rust `run_attaches_the_batch_to_a_project_and_rejects_unknown_projects`.
+  Tauri 네이티브 좌표 판정·WebView2 동작은 사용자 PC(체크리스트).
+
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
