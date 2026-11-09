@@ -383,21 +383,36 @@ pub fn derive(
             }
             None => None,
         };
+        let from_text = |note: Option<String>| -> Result<SchemaDraft> {
+            if text.trim().is_empty() {
+                return Err(CoreError::Invalid("no_model".into()));
+            }
+            let tables: Vec<ExtractedTable> = pages
+                .iter()
+                .flat_map(|p| super::ocr::parse_tables(p.text.as_deref().unwrap_or(""), p.page_no))
+                .collect();
+            let mut d = derive_from_text(&text, &tables, Some(&fallback_name));
+            d.note = note;
+            Ok(d)
+        };
         match vlm {
-            Some(v) => derive_with_vlm(
+            Some(v) => match derive_with_vlm(
                 v,
                 img.as_ref().map(|i| i.url.as_str()),
                 Some(text.as_str()).filter(|t| !t.trim().is_empty()),
                 Some(&fallback_name),
-            )?,
-            None if !text.trim().is_empty() => {
-                let tables: Vec<ExtractedTable> = pages
-                    .iter()
-                    .flat_map(|p| super::ocr::parse_tables(p.text.as_deref().unwrap_or(""), p.page_no))
-                    .collect();
-                derive_from_text(&text, &tables, Some(&fallback_name))
-            }
-            None => return Err(CoreError::Invalid("no_model".into())),
+            ) {
+                Ok(d) => d,
+                // A model failure (cut-off reply, output-parser 500, engine hiccup) must not leave the
+                // user without a draft (user report 2026-11-09 "양식 등록이 되지 않음"): the text / table
+                // heuristics stand in and the note says why, so the editor can still be confirmed.
+                Err(e) if !text.trim().is_empty() => {
+                    log::warn!("form field discovery with the model failed, using the text heuristics: {e}");
+                    from_text(Some(format!("모델 응답 실패로 텍스트 규칙으로 도출했습니다: {e}")))?
+                }
+                Err(e) => return Err(e),
+            },
+            None => from_text(None)?,
         }
     };
     draft.source = SchemaSource::Form;
@@ -496,6 +511,7 @@ mod tests {
             images: vec![],
             notes: vec![],
             page_mm: None,
+            slides: vec![],
         };
         let d = derive_from_model(&model, None);
         assert_eq!(d.name, "견 적 서");
