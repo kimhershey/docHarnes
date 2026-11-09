@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import ko from "../src/i18n/ko.json" with { type: "json" };
+
 import { createWorkspace, freshApp, openImportPreview } from "./helpers";
 
 // P2 acceptance (design §4.1): import (preview with duplicates / unsupported
@@ -209,7 +211,13 @@ test.describe("P2 documents", () => {
     await page.keyboard.press("Enter");
     const input = page.getByTestId("viewer-text-input");
     await expect(input).toBeVisible();
-    expect(await input.evaluate((el) => [(el as HTMLTextAreaElement).selectionStart, (el as HTMLTextAreaElement).selectionEnd])).toEqual([0, 2]);
+    // The editor pre-selects exactly the dragged characters, wherever they sit in the page text.
+    const [start, end, at] = await input.evaluate((el) => {
+      const ta = el as HTMLTextAreaElement;
+      return [ta.selectionStart, ta.selectionEnd, ta.value.indexOf("1쪽")];
+    });
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect([start, end]).toEqual([at, at + 2]);
     await page.keyboard.type("첫째 쪽");
     await page.keyboard.press("Control+Enter");
     await expect(text).toContainText("첫째 쪽의 텍스트");
