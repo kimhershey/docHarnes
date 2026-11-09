@@ -1036,6 +1036,10 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   CI web 잡 + 설치파일 워크플로)가 복사본에서 표시 블록을 원복한 결과가 설치된 `@tauri-apps/cli` 네이티브 바이너리에 그대로
   들어 있는지 확인해 CLI 업그레이드 시 재동기화를 강제한다. 워크플로에 2 GiB 크기 가드(GitHub 릴리스 자산 한계), 목록 필터에
   cuBLAS/cudart/EULA, 아티팩트 무압축 업로드 추가. 팩 자체 축소(cu121 `-Xfatbin=-compress-all`, 도구 DLL 제거)는 v1.x 메모.
+- **Lite 재빌드(2026-11-09, 14577a6 — 드래그 앤 드롭·XLSX/PPTX/텍스트·내용 감지·뷰어 텍스트 직접 편집 반영; run 42560517332)**:
+  `DocuLens-Setup-Lite-0.1.0-x64.exe` 50,117,790 B(47.8 MB), SHA-256 `5a178421b7091355f85fbed7e25e5d7e7660fd48d3799ab438c3a9efa9da1a30`,
+  159개 파일·필수 7개 통과, `tauri build` 10분, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64`(id 13650165163, 2027-02-07 만료). 사용자
+  지시로 Lite만 다시 빌드(Full은 76a3b0d 빌드 그대로 — 새 기능을 Full로도 쓰려면 variant=full 재실행).
 - **Full·Lite 설치파일 빌드 성공(2026-11-09, 76a3b0d; Full run 42547228170, Lite run 42547230697)**: 템플릿 검사는 처음에 Windows
   체크아웃의 CRLF 때문에 실패(73a96d1) → 줄바꿈 정규화 + `.gitattributes`(`eol=lf`)로 고쳐 통과(Windows CLI 바이너리에도 LF로
   내장). Full: `DocuLens-Setup-Full-0.1.0-x64.exe` 1,156,143,051 B(1.1 GB — 압축 전 3.1 GB; 파일별 LZMA가 예상 1.6 GB보다 잘 줄임),
@@ -1139,7 +1143,7 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | Playwright(모의 백엔드) | 34/34 (`generate.spec.ts`·`projects.spec.ts` 추가; 모의 백엔드가 Rust 페이로드 모양만 내므로 E2E가 실제 계약을 검증) |
 | `npm run notices` 결정성 | 두 번 실행 결과 동일 — crates 628(runtime 354)·npm 75·SBOM 컴포넌트 709 |
 | GitHub CI(License·Web·Rust Linux·Windows compile·notices·eval-gate·실엔진) | 커밋 a0fcafb·9308de3에서 실엔진 잡만 실패(위 수정으로 0e200ec에서 7개 잡 모두 통과). 리뷰 반영 커밋 84e5fdd에서는 License gate·Windows compile 잡이 **GitHub 릴리스 자산 다운로드 장애**(cargo-deny-action의 바이너리 tar가 손상 수신 "gzip: invalid magic", PDFium 다운로드 HTTP 504)로 실패 — 코드와 무관. ece44cc: License gate를 `taiki-e/install-action`(체크섬 검증 prebuilt cargo-deny 0.20.2)으로 바꿔 통과, 나머지 6개 잡 통과; Windows 잡은 여전히 504. c505b81: `scripts/lib/fetch-retry.mjs`(5xx·네트워크 오류·잘린 본문 지수 백오프 재시도 3회)를 fetch-pdfium/engine/kodic에 적용하고 Windows 잡에도 PDFium `actions/cache` 추가 — 장애가 이어져 Windows 잡은 재시도 3회 후에도 504. 6975410: Windows 잡의 PDFium 다운로드를 `continue-on-error`(경고 주석)로 바꿔 컴파일·테스트는 항상 수행(PDFium 테스트는 라이브러리 없으면 자체 skip, Linux 잡은 엄격 유지) → **7개 잡 모두 통과**(다운로드도 복구되어 Windows 잡이 PDFium 테스트까지 실제 수행) |
-| 2026-11-09 추가 기능(드래그 앤 드롭 · XLSX/PPTX/텍스트 · 내용 감지) | 코어 `documents::` 테스트 36 통과(xlsx 3 · pptx 1 · text 4 · sniff 1 · import 8 · fixtures 1 · 기존), `cargo deny` 통과(`encoding_rs` 추가), vitest 22파일 131건(dnd 스토어 7 포함), Playwright 39/39(`dnd.spec.ts` 5 포함), typecheck 통과 |
+| 2026-11-09 추가 기능(드래그 앤 드롭 · XLSX/PPTX/텍스트 · 내용 감지 · 뷰어 텍스트 직접 편집) | `cargo test --workspace` 코어 257(3 ignored)·셸 3·평가 15 통과, `cargo deny` 통과(`encoding_rs` 추가), clippy·fmt 통과, vitest 22파일 131건, Playwright 41/41(`dnd.spec.ts` 5, 뷰어 편집 2 포함; 전체 실행 1회에서 검토 큐 테스트가 1번 실패했으나 단독 3회·재실행 전체 통과 → 플레이크), CI: 4fe082d·314e503·c848d81은 Markdown 등록 테스트 1건으로 Rust 잡 실패 → 14577a6에서 7개 잡 통과 |
 | 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 3회(run 42471185353·42475854955 solid 43 MB, 42547230697 파일별 압축 47.6 MB; 159 파일 검사 통과) · **Full 0.1.0 빌드 성공(run 42547228170): 1.1 GB, 219 파일, CUDA 팩 cu121·cu129 동봉 검사 통과** · CUDA 팩 빌드 성공(cu121 run 42533483890 · cu129 run 42533486332 → Release v0.1.0) — 위 "패키징·고지" 참조 |
 
 이 환경에서 못 한 것: 설치파일의 릴리스 게시(권한 정책; 설치파일·CUDA 팩 빌드는 Windows 러너에서 완료), 실제 Qwen3.5-4B로 초안 품질·
