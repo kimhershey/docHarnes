@@ -259,6 +259,8 @@
 
 ## P7 품질·배포 (이번 단계, v1.1)
 
+- [ ] GitHub Release v0.2.0의 `DocuLens-Setup-Lite-0.2.0-x64.exe`·`-Full-`가 `.sha256`과 일치하고(`certutil -hashfile … SHA256`), 설치 후
+      설정 > 정보의 버전이 0.2.0이며 0.1.0 워크스페이스를 열면 스키마 마이그레이션(0007 키워드) 뒤 문서·프로젝트가 그대로인가
 - [ ] Actions "Windows installer (manual)"(variant=lite)로 받은 `DocuLens-Setup-Lite-<버전>-x64.exe`가 오프라인 PC에 설치되고
       (`certutil -hashfile … SHA256` 일치, SmartScreen "추가 정보 → 실행"), 설치 직후 모델만 넣으면 엔진·PDF·ko-dic이 동봉본으로
       동작하는가(모델 관리자 엔진 카드 출처 "bundled"); 제거(uninstall)가 `%LOCALAPPDATA%\DocuLens` 앱데이터를 남기는가

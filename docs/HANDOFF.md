@@ -27,7 +27,7 @@
 | P4 파이프라인 | **완료 (`phase/p4-pipeline`, PR #7 열림 — 사용자 생성; `phase/p3-knowledge` 위에 쌓음, 단계 말 리뷰 반영 완료)** | 아래 "P4 산출물" 참조. 분류·OCR·KIE 호출기, 내장 양식 7종 + 양식 등록 + NL 스키마, 검증기·신뢰도, 검토 큐, 추출 미러, 분할/병합 |
 | P5 자연어·작업 | **완료 (`main`에 병합, PR #8)** | 아래 "P5 산출물" 참조. 플래너(PlanSchema·규칙·검증기·실행기), 확인 카드, 영속 Job 러너, 정리/저널/되돌리기, 집계, 내보내기 5종 |
 | P6 문서 생성·프로젝트 정합성 (v1.1) | **완료 (`main`에 병합, PR #9 — 2026-11-08 10:18, P7과 한 세션에서 진행 — 사용자 결정)** | 아래 "P6·P7 산출물" 참조. §3.13 문서 생성(템플릿·양식 채우기·HWPX/DOCX/PDF/MD), §3.15 프로젝트·규칙·정합성 검사·보완요청서·관계 그래프, 플래너 op 10종 추가 |
-| P7 품질·배포 (v1.1) | **완료 (`main`에 병합, PR #9; 후속으로 `phase/p6-p7`에서 CUDA 팩 cu121/cu129 빌드·Release 게시, Lite·Full 설치파일 빌드 검증 완료)** | 평가 하네스(`doculens-eval`)·플래너 골든셋 100건·회귀 게이트, NSIS Lite/Full 릴리스 워크플로·CUDA 팩 워크플로, NOTICES/SBOM 자동화, 보존/파기 일일 작업, 완료 알림, 절전 방지 |
+| P7 품질·배포 (v1.1) | **완료 (`main`에 병합, PR #9; 후속으로 `phase/p6-p7`에서 CUDA 팩 cu121/cu129 빌드·Release 게시, Lite·Full 설치파일 빌드 검증 완료, v0.2.0 Release에 Lite·Full 설치파일 게시 완료)** | 평가 하네스(`doculens-eval`)·플래너 골든셋 100건·회귀 게이트, NSIS Lite/Full 릴리스 워크플로·CUDA 팩 워크플로, NOTICES/SBOM 자동화, 보존/파기 일일 작업, 완료 알림, 절전 방지 |
 
 ## P1 산출물
 
@@ -1314,6 +1314,21 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   모델로, 슬래시는 프리라우터, 모델 없음 → no_model 명확화, RulesFirst는 규칙), `prerouter::tests::bare_cancel_words_are_recognised`,
   Playwright `planner.spec` "되묻기 replies with the question's context; 취소 (button or typed) …" 추가, 기존 어시스턴트 E2E 전부 통과.
 
+### 0.2.0 릴리스 (2026-11-09; 사용자 요청 "0.2.0 릴리즈 만들어줘")
+
+- **버전**: `package.json`/`package-lock.json`, `src-tauri/tauri.conf.json`(설치파일 이름과 Release 태그의 출처), Cargo 워크스페이스 버전·
+  `Cargo.lock`, SBOM 루트 컴포넌트, 모의 백엔드 앱 버전, RUN-GUIDE 예시 파일명을 0.2.0으로(3d55db8). 고지 파일은 변경 없음.
+- **순서**: 3d55db8 CI 7개 잡 통과 확인 → Full(publish=true) 먼저 디스패치 → Full이 "CUDA 팩 내려받기" 단계를 지난 뒤 Lite(publish=true).
+  Full은 CUDA 팩을 `v<버전>` 릴리스에서 찾고 없으면 **최신 릴리스**로 내려가므로(v0.1.0, 같은 엔진 태그 b12066), Lite가 먼저 v0.2.0을
+  만들어 버리면 Full의 팩 다운로드가 실패한다. 다음 릴리스에서도 Full → Lite 순서를 지키거나 CUDA 팩 워크플로를 새 버전으로 먼저 돌릴 것.
+- **결과**: Release `v0.2.0`(워크플로가 `--generate-notes`로 생성 — PR이 없어 본문은 비교 링크 한 줄) — Full 1,156,786,994 B ·
+  Lite 50,579,259 B · `.sha256` 2 · 고지 · SBOM. CUDA 팩 zip은 v0.1.0 자산 그대로(복사 안 함).
+- **릴리스 노트**: 한국어 노트는 `docs/releases/v0.2.0.md`. 이 세션은 릴리스를 만들거나 고칠 수 없고(REST PATCH → HTTP 403 "not permitted
+  for this session type"), 본문을 바꾸는 새 워크플로 "Release notes (manual)"의 디스패치도 권한 분류기가 거부했다. **본문 적용은 사용자
+  작업**: Actions → "Release notes (manual)" → tag `v0.2.0`(또는 릴리스 편집 화면에 파일 내용 붙여넣기). 설치파일·CUDA 팩 워크플로는
+  앞으로 릴리스를 *만들* 때 `docs/releases/<tag>.md`가 있으면 그 파일을 쓰고 없으면 `--generate-notes`로 돌아간다.
+- **권한**: 이전 세션에서 거부됐던 `publish=true` 디스패치(설치파일 워크플로)는 이번에는 통과했다(사용자가 릴리스를 명시적으로 요청).
+
 ### UI 배율 대응 — 고정 px 상자 제거 (2026-11-09; 사용자 보고 "UI 배율이 높아질 때 글자 잘림", A안 결정)
 
 - **증상·원인**: 설정 > 일반 > UI 배율(90~150 %, Ctrl+Shift+=/−)은 루트 글꼴 크기(rem)만 키운다. Tailwind 유틸리티는 rem이라 함께
@@ -1358,7 +1373,7 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | 2026-11-09 어시스턴트 모델 우선 해석 + 되묻기·취소 (3467ad4) | `cargo test --workspace` 코어 296(4 ignored; `planner` 15·`prerouter` 8 포함)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과; vitest 25파일 147건; Playwright 46건(`planner.spec` 되묻기·취소 1건 추가); `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(3467ad4 푸시 이벤트) |
 | 2026-11-09 UI 배율 대응 A안(고정 px 상자 제거) | 프런트 전용 변경(Rust·고지·SBOM 변경 없음): `npm run typecheck`·`npm run build`·`licenses:check` 통과, vitest 25파일 147건, Playwright 49건(`scale.spec` 3건 추가; 1280×800 기본 뷰포트에서 150 % 검사); 모의 백엔드 15화면 × 4조건 자동 점검에서 실제 잘림 0; CI 7개 잡 모두 성공(be0b82d 푸시 이벤트, run 42601541022) |
 | 2026-11-09 이미지 위 글자 레이어 · 우측 패널 AI 검색/이력 (488af39·9e56dd6) | `cargo test --workspace` 코어 266(3 ignored; `documents::layout` 9·`render` 실 PDFium 문자 박스·`import` 레이아웃 왕복 추가)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과; vitest 23파일 139건(`text-layer.test.ts` 8 추가); Playwright 41/41(`documents`·`knowledge`·`pipeline` 스펙을 레이어·검토 큐 기준으로 재작성); CI 7개 잡 두 커밋 모두 성공 |
-| 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 3회(run 42471185353·42475854955 solid 43 MB, 42547230697 파일별 압축 47.6 MB; 159 파일 검사 통과) · 1~3번 반영 Lite 빌드 성공(run 42577030466, 검증된 커밋 a461405 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.5 MB; Release 게시는 권한 분류기 거부로 publish=false) · **1~8번(어시스턴트 모델 우선·되묻기·취소 포함) 반영 Lite 빌드 성공(run 42592935148, 검증된 커밋 3467ad4 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.6 MB, 2027-02-07까지 보관; publish=false — Release 게시는 사용자 작업)** · **Full 0.1.0 빌드 성공(run 42547228170): 1.1 GB, 219 파일, CUDA 팩 cu121·cu129 동봉 검사 통과** · CUDA 팩 빌드 성공(cu121 run 42533483890 · cu129 run 42533486332 → Release v0.1.0) — 위 "패키징·고지" 참조 |
+| 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 3회(run 42471185353·42475854955 solid 43 MB, 42547230697 파일별 압축 47.6 MB; 159 파일 검사 통과) · 1~3번 반영 Lite 빌드 성공(run 42577030466, 검증된 커밋 a461405 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.5 MB; Release 게시는 권한 분류기 거부로 publish=false) · **1~8번(어시스턴트 모델 우선·되묻기·취소 포함) 반영 Lite 빌드 성공(run 42592935148, 검증된 커밋 3467ad4 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.6 MB, 2027-02-07까지 보관; publish=false — Release 게시는 사용자 작업)** · **0.2.0 릴리스(2026-11-09, https://github.com/kimhershey/docHarnes/releases/tag/v0.2.0)**: 검증된 커밋 3d55db8 고정, publish=true — Full run 42613728278(`DocuLens-Setup-Full-0.2.0-x64.exe` 1,156,786,994 B) → Lite run 42613985631(`DocuLens-Setup-Lite-0.2.0-x64.exe` 50,579,259 B); 자산 6개(설치파일 2종 + `.sha256` 2 + `THIRD-PARTY-NOTICES.md` + `sbom.cdx.json`); 이번에는 publish 디스패치가 거부되지 않음 · **Full 0.1.0 빌드 성공(run 42547228170): 1.1 GB, 219 파일, CUDA 팩 cu121·cu129 동봉 검사 통과** · CUDA 팩 빌드 성공(cu121 run 42533483890 · cu129 run 42533486332 → Release v0.1.0) — 위 "패키징·고지" 참조 |
 
 이 환경에서 못 한 것: 설치파일의 릴리스 게시(권한 정책; 설치파일·CUDA 팩 빌드는 Windows 러너에서 완료), 실제 Qwen3.5-4B로 초안 품질·
 규칙 변환 품질·파이프라인 지표, 한컴/Word에서 생성 HWPX/DOCX 열기, OS 토스트·절전 방지 실동작 — 모두 `docs/user-pc-checklist.md`

@@ -1,0 +1,53 @@
+name: Release notes (manual)
+
+# Replaces the body of an existing GitHub Release with docs/releases/<tag>.md (the Korean notes kept in the
+# repository). The installer and CUDA-pack workflows already use that file when they *create* a release; this
+# one is for a release that was created before the file existed, or after the notes were edited. Editing a
+# release needs the workflow token — the Claude Code cloud session that prepares a release is not allowed
+# to create, edit or delete releases through the API (HTTP 403), so it dispatches this instead.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag whose body is replaced with docs/releases/<tag>.md (e.g. v0.2.0)"
+        required: true
+        type: string
+      ref:
+        description: "Git ref that holds the notes file (default: the branch this workflow runs from)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  notes:
+    name: Apply docs/releases/<tag>.md to the release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Edit the release body
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          file="docs/releases/$TAG.md"
+          if [ ! -f "$file" ]; then echo "::error::$file not found on this ref"; exit 1; fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body > old-body.md
+          {
+            # The release title already carries the version: drop a leading "# …" heading.
+            sed '1{/^# /d;}' "$file"
+            # Keep GitHub's compare link when the release was created with --generate-notes.
+            if grep -q '^\*\*Full Changelog\*\*' old-body.md; then
+              echo; echo '---'; echo
+              grep -m1 '^\*\*Full Changelog\*\*' old-body.md
+            fi
+          } > body.md
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file body.md
+          echo "release $TAG body: $(wc -c < body.md) bytes from $file"

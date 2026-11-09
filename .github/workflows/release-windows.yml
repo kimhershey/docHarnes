@@ -245,7 +245,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             $sha = (git rev-parse HEAD).Trim()
             Write-Host "creating release $tag at $sha"
-            gh release create $tag --repo $repo --target $sha --title "DocuLens $version" --generate-notes
+            $notes = "docs/releases/$tag.md"
+            if (Test-Path $notes) { gh release create $tag --repo $repo --target $sha --title "DocuLens $version" --notes-file $notes }
+            else { gh release create $tag --repo $repo --target $sha --title "DocuLens $version" --generate-notes }
             if ($LASTEXITCODE -ne 0) { exit 1 }
           }
           $name = "${{ steps.meta.outputs.installer }}"
