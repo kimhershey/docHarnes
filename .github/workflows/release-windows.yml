@@ -46,6 +46,8 @@ jobs:
     env:
       # Authenticates scripts/fetch-engine.mjs (GitHub API rate limit) and `gh release …`.
       GH_TOKEN: ${{ github.token }}
+      # Release downloads: more retries than the default 4 (scripts/lib/fetch-retry.mjs).
+      DOCULENS_FETCH_ATTEMPTS: "6"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -160,7 +162,29 @@ jobs:
       - name: Generate THIRD-PARTY-NOTICES / SBOM / license texts (bundled by tauri.conf.json)
         run: node scripts/gen-notices.mjs
       - run: npm run build
-      - run: npx tauri build --target x86_64-pc-windows-msvc
+      # tauri-bundler downloads the NSIS toolset (tauri-apps/binary-releases) into %LOCALAPPDATA%\tauri on first
+      # use; cache it so a GitHub release-download outage (HTTP 504 seen on 2026-11-08) cannot fail the bundling step.
+      - name: Cache the Tauri bundler tools (NSIS)
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\tauri
+          key: tauri-tools-windows-${{ hashFiles('package-lock.json') }}
+          restore-keys: tauri-tools-windows-
+      # Best effort: pre-seed the toolset with the retrying, API-first downloader (scripts/fetch-nsis.mjs);
+      # tauri-bundler keeps verifying it and downloads itself when the seed is absent or wrong.
+      - name: Seed the NSIS toolset
+        continue-on-error: true
+        run: node scripts/fetch-nsis.mjs
+      - name: Build the app and the NSIS installer (retries the bundling step on a download failure)
+        shell: pwsh
+        run: |
+          $attempts = 3
+          for ($i = 1; $i -le $attempts; $i++) {
+            npx tauri build --target x86_64-pc-windows-msvc
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            if ($i -lt $attempts) { Write-Host "::warning::tauri build failed (attempt $i of $attempts); retrying in 60 s"; Start-Sleep -Seconds 60 }
+          }
+          exit 1
 
       - name: Name the installer and write its SHA-256
         shell: pwsh
@@ -173,6 +197,26 @@ jobs:
           $hash = (Get-FileHash "dist-installer/$name" -Algorithm SHA256).Hash.ToLower()
           [IO.File]::WriteAllText("$PWD/dist-installer/$name.sha256", "$hash *$name`n")
           Write-Host ("{0}  {1}  ({2:N1} MB)" -f $name, $hash, ($src.Length / 1MB))
+
+      # Proves the resources made it into the NSIS archive (tauri.conf.json bundle.resources): the
+      # listing is in the log, and a missing required entry fails the build.
+      - name: List the installer contents (7-Zip) and check the bundled runtime assets
+        shell: pwsh
+        run: |
+          $name = "${{ steps.meta.outputs.installer }}"
+          $sevenZip = (Get-Command 7z -ErrorAction SilentlyContinue)?.Source
+          if (-not $sevenZip) { $sevenZip = "C:\Program Files\7-Zip\7z.exe" }
+          $listing = & $sevenZip l "dist-installer/$name" 2>&1
+          if ($LASTEXITCODE -ne 0) { Write-Host "::warning::7z could not list $name (exit $LASTEXITCODE); skipping the content check"; $listing | Select-Object -Last 5; exit 0 }
+          $text = ($listing | Out-String)
+          $required = @("engines\cpu\llama-server.exe", "engines\vulkan\llama-server.exe", "pdfium\pdfium.dll", "ko-dic\", "THIRD-PARTY-NOTICES.md", "sbom.cdx.json", "licenses\THIRD-PARTY-LICENSES.txt")
+          if ("${{ inputs.variant }}" -eq "full") { $required += @("engines\cu121\llama-server.exe", "engines\cu129\llama-server.exe") }
+          $missing = @($required | Where-Object { $text -notmatch [regex]::Escape($_) })
+          # llama-server.exe is a small launcher since llama.cpp split the server into llama-server-impl.dll;
+          # print the whole family so the log shows the complete pack.
+          $listing | Where-Object { $_ -match "llama[a-z-]*\.(exe|dll)|mtmd[a-z-]*\.dll|ggml[a-z0-9-]*\.dll|pdfium\.dll|ko-dic|NOTICES|sbom|LICENSES|DocuLens\.exe|\d+ files" } | ForEach-Object { Write-Host $_ }
+          if ($missing.Count -gt 0) { Write-Host "::error::bundled assets missing from the installer: $($missing -join ', ')"; exit 1 }
+          Write-Host "installer contents OK: $($required.Count) required entries present"
 
       - uses: actions/upload-artifact@v4
         with:

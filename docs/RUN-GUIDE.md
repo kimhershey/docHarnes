@@ -31,8 +31,11 @@ DocuLens를 **실제 Windows PC에서 설치·실행·빌드·검증**하는 절
 ### 1.1 배포 설치파일 설치 (방식 D)
 
 1. GitHub Releases의 `v<버전>`에서 `DocuLens-Setup-Lite-<버전>-x64.exe`(또는 `-Full-`)와 같은 이름의 `.sha256` 파일을 받습니다.
+   - 아직 릴리스에 올리지 않은 빌드(`publish=false`)는 Actions의 해당 실행 페이지 하단 **Artifacts**에서
+     `DocuLens-Setup-<Lite|Full>-<버전>-x64` zip으로 받습니다(GitHub 로그인 필요, 90일 보관). zip 안에 설치파일과 `.sha256`이 있습니다.
    - **Lite**: 앱 + llama-server CPU·Vulkan 팩(`engines\cpu`, `engines\vulkan`) + PDFium(`pdfium\`) + ko-dic(`ko-dic\`)
-     + 고지 파일(`THIRD-PARTY-NOTICES.md`, `sbom.cdx.json`, `licenses\THIRD-PARTY-LICENSES.txt`). 약 200 MB.
+     + 고지 파일(`THIRD-PARTY-NOTICES.md`, `sbom.cdx.json`, `licenses\THIRD-PARTY-LICENSES.txt`). 약 45 MB(0.1.0 Lite 빌드 43 MB,
+       압축 전 303 MB · 159개 파일).
    - **Full**: Lite + CUDA 팩 `engines\cu121`(드라이버 CUDA 12.1~12.7) · `engines\cu129`(12.8+, RTX 50 포함). NVIDIA GPU가 없으면 Lite로 충분합니다.
    - **모델(GGUF)은 어느 쪽에도 들어 있지 않습니다.** 첫 실행 뒤 모델 관리자에서 준비합니다(§2.3, §3).
 2. SHA-256을 확인합니다(명령 프롬프트 또는 PowerShell).
@@ -69,7 +72,7 @@ npm install
 | 자산 | 받는 방법 | 설치 위치 | 없을 때 |
 |---|---|---|---|
 | **llama-server 엔진 팩** | `node scripts/fetch-engine.mjs --tag b12066 --packs cpu,vulkan --pin` (설치파일 동봉용은 `--bundle`) | `%LOCALAPPDATA%\DocuLens\engines\b12066\cpu\`, `...\vulkan\` (`--bundle`: `src-tauri\resources\engines\<팩>\`) | 엔진 카드에 "실행 파일을 찾지 못했습니다" → 분류·OCR·추출·답변 불가 |
-| **CUDA 팩**(NVIDIA, 선택) | Full 설치파일, 또는 GitHub Release 자산 `DocuLens-EnginePack-cu121-b12066.zip`(워크플로 "CUDA engine packs (manual)")을 풀어 넣기, 또는 `engines/README.md`대로 자체 빌드 | `...\engines\b12066\cu121\` (`cu129`) | Vulkan/CPU 팩으로 동작(느림) |
+| **CUDA 팩**(NVIDIA, 선택) | Full 설치파일, 또는 GitHub Release `v0.1.0` 자산 `DocuLens-EnginePack-cu121-b12066.zip`·`DocuLens-EnginePack-cu129-b12066.zip`(워크플로 "CUDA engine packs (manual)"이 빌드, 각 `.sha256` 동봉)을 풀어 넣기, 또는 `engines/README.md`대로 자체 빌드 | `...\engines\b12066\cu121\` (`cu129`) | Vulkan/CPU 팩으로 동작(느림) |
 | **PDFium**(PDF 렌더·텍스트 레이어) | `node scripts/fetch-pdfium.mjs` | `%LOCALAPPDATA%\DocuLens\pdfium\pdfium.dll` | PDF 가져오기·렌더 불가, 라이브러리 상단 "PDFium 없음" 경고 |
 | **ko-dic**(한국어 형태소 사전, 선택) | `node scripts/fetch-kodic.mjs` (Rust 필요, 약 82 MB, 수 분) | `%LOCALAPPDATA%\DocuLens\tokenizers\ko-dic\` | 간이 분석기로 동작(검색 재현율이 낮음) |
 | **VLM 모델**(GGUF + mmproj) | §2.3 | `<워크스페이스>\.doculens\models\<폴더>\` | 가져오기·검색·정리·내보내기만 가능 |

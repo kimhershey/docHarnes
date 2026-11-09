@@ -20,7 +20,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { downloadBuffer, fetchWithRetry } from "./lib/fetch-retry.mjs";
+import { downloadGithubAsset, fetchWithRetry, githubHeaders as sharedHeaders } from "./lib/fetch-retry.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifestPath = path.join(ROOT, "engines", "manifest.json");
@@ -62,10 +62,7 @@ function parseArgs(argv) {
 }
 
 function githubHeaders(extra = {}) {
-  const headers = { "User-Agent": "DocuLens-fetch-engine", ...extra };
-  const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
-  if (token) headers.Authorization = `Bearer ${token}`;
-  return headers;
+  return sharedHeaders(extra, "DocuLens-fetch-engine");
 }
 
 async function githubJson(url) {
@@ -74,9 +71,10 @@ async function githubJson(url) {
   return res.json();
 }
 
-async function download(url, file) {
-  // Release assets redirect to a CDN host; the token is only for api.github.com.
-  const buf = await downloadBuffer(url, { headers: { "User-Agent": "DocuLens-fetch-engine" } });
+async function download(asset, file) {
+  // REST asset endpoint first (token only for api.github.com, the CDN redirect is pre-signed),
+  // then the public release URL.
+  const buf = await downloadGithubAsset({ apiUrl: asset.url, browserUrl: asset.browser_download_url, userAgent: "DocuLens-fetch-engine" });
   writeFileSync(file, buf);
   return createHash("sha256").update(buf).digest("hex");
 }
@@ -142,7 +140,7 @@ async function main() {
     }
     const tmp = path.join(tmpdir(), asset.name);
     console.log(`downloading ${asset.name} (${(asset.size / 1048576).toFixed(1)} MiB)…`);
-    const sha = await download(asset.browser_download_url, tmp);
+    const sha = await download(asset, tmp);
     console.log(`  sha256 ${sha}`);
     if (entry.sha256 && entry.sha256 !== sha) {
       console.error(`  MISMATCH: manifest pins ${entry.sha256}`);

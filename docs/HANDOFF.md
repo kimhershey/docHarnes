@@ -24,8 +24,8 @@
 | P3 지식 베이스 | **완료 (`main`에 병합, PR #4; 리뷰 반영 3커밋은 `phase/p3-knowledge` 후속 PR 대기)** | 아래 "P3 산출물" 참조. 청킹, ko-dic FTS5 + trigram + LIKE, bge-m3 + sqlite-vec, 하이브리드 검색, 근거 기반 Q&A·설명·요약·비교 |
 | P4 파이프라인 | **완료 (`phase/p4-pipeline`, PR #7 열림 — 사용자 생성; `phase/p3-knowledge` 위에 쌓음, 단계 말 리뷰 반영 완료)** | 아래 "P4 산출물" 참조. 분류·OCR·KIE 호출기, 내장 양식 7종 + 양식 등록 + NL 스키마, 검증기·신뢰도, 검토 큐, 추출 미러, 분할/병합 |
 | P5 자연어·작업 | **완료 (`main`에 병합, PR #8)** | 아래 "P5 산출물" 참조. 플래너(PlanSchema·규칙·검증기·실행기), 확인 카드, 영속 Job 러너, 정리/저널/되돌리기, 집계, 내보내기 5종 |
-| P6 문서 생성·프로젝트 정합성 (v1.1) | **완료 (`phase/p6-p7`, P7과 한 세션에서 진행 — 사용자 결정 2026-11-08)** | 아래 "P6·P7 산출물" 참조. §3.13 문서 생성(템플릿·양식 채우기·HWPX/DOCX/PDF/MD), §3.15 프로젝트·규칙·정합성 검사·보완요청서·관계 그래프, 플래너 op 10종 추가 |
-| P7 품질·배포 (v1.1) | **완료 (`phase/p6-p7`)** | 평가 하네스(`doculens-eval`)·플래너 골든셋 100건·회귀 게이트, NSIS Lite/Full 릴리스 워크플로·CUDA 팩 워크플로, NOTICES/SBOM 자동화, 보존/파기 일일 작업, 완료 알림, 절전 방지 |
+| P6 문서 생성·프로젝트 정합성 (v1.1) | **완료 (`main`에 병합, PR #9 — 2026-11-08 10:18, P7과 한 세션에서 진행 — 사용자 결정)** | 아래 "P6·P7 산출물" 참조. §3.13 문서 생성(템플릿·양식 채우기·HWPX/DOCX/PDF/MD), §3.15 프로젝트·규칙·정합성 검사·보완요청서·관계 그래프, 플래너 op 10종 추가 |
+| P7 품질·배포 (v1.1) | **완료 (`main`에 병합, PR #9; 설치파일 빌드 보강·CUDA 팩/Full 빌드 후속은 `phase/p6-p7` 이어서 진행)** | 평가 하네스(`doculens-eval`)·플래너 골든셋 100건·회귀 게이트, NSIS Lite/Full 릴리스 워크플로·CUDA 팩 워크플로, NOTICES/SBOM 자동화, 보존/파기 일일 작업, 완료 알림, 절전 방지 |
 
 ## P1 산출물
 
@@ -1000,6 +1000,32 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 - 여기서 못 한 것: 실제 팩 다운로드·NVIDIA 설치기·CUDA 빌드·`tauri build`·릴리스 게시(Windows 러너 필요);
   `engines/manifest.json`의 cpu/vulkan sha256은 첫 릴리스 로그로 `--pin`.
 
+- **첫 설치파일 빌드 성공(2026-11-08, Actions run 42471185353, ref `phase/p6-p7` @ fbd360c)**: `DocuLens-Setup-Lite-0.1.0-x64.exe`
+  43.1 MB, SHA-256 `cf7e113f0bdeef399dd971e7dc9d172f45951825d2099182f47bfed6eab2aeb0`, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64`
+  (45.2 MB zip, 2027-02-06 만료, 릴리스 게시 안 함). 동봉 검증 단계 통과(engines/cpu·vulkan, pdfium, ko-dic). 첫 시도는 GitHub
+  릴리스 다운로드 장애(HTTP 504)로 llama.cpp 팩 단계에서 실패 → fetch 스크립트가 REST 자산 엔드포인트(API → 서명된 CDN
+  리디렉션)를 먼저 쓰고 공개 URL로 폴백하도록 바꿔 통과. 이때 받은 공식 팩 해시를 `engines/manifest.json`에 고정(cpu
+  `cc2aad48…`, vulkan `8eec3c8a…`; PDFium은 기존 핀과 일치). 설치파일 내용 7-Zip 목록·필수 항목 검사 단계를 워크플로에 추가.
+- **검증 빌드(run 42475854955, 5adb585)**: 같은 장애로 3·4번째 빌드가 `tauri build`의 NSIS 도구 다운로드(단일 요청, 재시도 없음)에서
+  504로 실패 → `scripts/fetch-nsis.mjs`가 NSIS 3.13 + nsis_tauri_utils 0.5.3을 API 우선 경로로 받아 SHA-1 검증 후
+  `%LOCALAPPDATA%\tauri\NSIS`에 배치하고(설치된 CLI가 그 플러그인 버전을 참조할 때만), 워크플로는 NSIS 캐시 + `tauri build` 3회
+  재시도. 결과 `DocuLens-Setup-Lite-0.1.0-x64.exe` 43.0 MB, SHA-256 `1f16c170810da8f01969b7d3a0adbbe64e072fd238950a843a3efda34d884b17`,
+  7-Zip 목록 159개 파일·303 MB(압축 전): `engines\cpu`·`engines\vulkan`(ggml-base, ggml-cpu-* 14종, ggml-rpc, ggml-vulkan 42 MB,
+  llama-server.exe), `pdfium\pdfium.dll` 7.6 MB + 라이선스 18종, `ko-dic\` 사전 85 MB, 고지 파일·SBOM·라이선스 원문. 고정한 팩
+  해시와 일치. 참고: 최근 llama.cpp 빌드의 `llama-server.exe`는 9.7 KB 런처이고 서버 본체는 별도 라이브러리다(로컬 참조 빌드는
+  `libllama-server-impl.so` + `libllama.so` + `libmtmd.so`); 목록 필터가 ggml DLL과 런처만 찍어 나머지 DLL은 다음 빌드부터 출력된다.
+  공식 zip의 다른 도구 실행파일(llama-cli 등)도 팩 폴더에 그대로 들어가므로 설치파일을 더 줄이려면 `llama-server*` + DLL만 남기는
+  정리가 가능하다(v1.x 메모).
+- **CUDA 팩 빌드 성공(2026-11-09, Actions "CUDA engine packs (manual)", ref `phase/p6-p7`)**: 첫 cu129 빌드(run 42494546661,
+  16047af)는 성공해 Release `v0.1.0`을 만들었지만 `--version`이 `build 1`(얕은 클론 — llama.cpp가 `git rev-list --count HEAD`로
+  빌드 번호를 만듦)이었고, cu121(run 42494544606)은 툴킷 폴더에 EULA 텍스트가 없어 조립 단계에서 실패. fb0f03f에서 전체 이력
+  클론(`--single-branch --branch <tag>`), EULA 재귀 탐색(`EULA|License|LICENSE`, 실패 시 루트 목록 출력), 매니페스트에
+  `documentation_<ver>` 서브패키지 추가, `engine::locate::parse_version_output`이 llama.cpp 0.8 형식
+  `version: 0.8.0-dev (build 12066, commit …)`을 읽도록(`build ≤ 1` = 알 수 없음) 고친 뒤 재빌드 두 건 모두 성공
+  (cu121 run 42533483890 약 65분, cu129 run 42533486332 약 116분; `--version` → `build 12066`; EULA는 `v12.1\EULA.txt`·
+  `v12.9\LICENSE`). Release `v0.1.0` 자산: `DocuLens-EnginePack-cu121-b12066.zip` 944,112,865 B SHA-256 `4a15af86…`,
+  `DocuLens-EnginePack-cu129-b12066.zip` 812,703,965 B SHA-256 `3116d674…`(각 `.sha256` 동봉; 첫 cu129 팩은 `--clobber`로 덮어씀).
+  Full 설치파일 빌드는 이 `.sha256`로 팩을 검증해 동봉한다(매니페스트 고정은 후속 — `cu121`/`cu129` 항목에 sha256 필드 없음).
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
@@ -1013,6 +1039,7 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | Playwright(모의 백엔드) | 34/34 (`generate.spec.ts`·`projects.spec.ts` 추가; 모의 백엔드가 Rust 페이로드 모양만 내므로 E2E가 실제 계약을 검증) |
 | `npm run notices` 결정성 | 두 번 실행 결과 동일 — crates 628(runtime 354)·npm 75·SBOM 컴포넌트 709 |
 | GitHub CI(License·Web·Rust Linux·Windows compile·notices·eval-gate·실엔진) | 커밋 a0fcafb·9308de3에서 실엔진 잡만 실패(위 수정으로 0e200ec에서 7개 잡 모두 통과). 리뷰 반영 커밋 84e5fdd에서는 License gate·Windows compile 잡이 **GitHub 릴리스 자산 다운로드 장애**(cargo-deny-action의 바이너리 tar가 손상 수신 "gzip: invalid magic", PDFium 다운로드 HTTP 504)로 실패 — 코드와 무관. ece44cc: License gate를 `taiki-e/install-action`(체크섬 검증 prebuilt cargo-deny 0.20.2)으로 바꿔 통과, 나머지 6개 잡 통과; Windows 잡은 여전히 504. c505b81: `scripts/lib/fetch-retry.mjs`(5xx·네트워크 오류·잘린 본문 지수 백오프 재시도 3회)를 fetch-pdfium/engine/kodic에 적용하고 Windows 잡에도 PDFium `actions/cache` 추가 — 장애가 이어져 Windows 잡은 재시도 3회 후에도 504. 6975410: Windows 잡의 PDFium 다운로드를 `continue-on-error`(경고 주석)로 바꿔 컴파일·테스트는 항상 수행(PDFium 테스트는 라이브러리 없으면 자체 skip, Linux 잡은 엄격 유지) → **7개 잡 모두 통과**(다운로드도 복구되어 Windows 잡이 PDFium 테스트까지 실제 수행) |
+| 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 2회(run 42471185353·42475854955): NSIS 43 MB, 설치파일 내용 검사(159 파일) 통과 — 위 "패키징·고지" 참조. Full은 CUDA 팩 워크플로가 main에 있어야 실행 가능 |
 
 이 환경에서 못 한 것: Windows 러너 전용(설치파일 빌드·CUDA 팩·릴리스 게시·`tauri build`), 실제 Qwen3.5-4B로 초안 품질·
 규칙 변환 품질·파이프라인 지표, 한컴/Word에서 생성 HWPX/DOCX 열기, OS 토스트·절전 방지 실동작 — 모두 `docs/user-pc-checklist.md`
@@ -1092,8 +1119,8 @@ P6·P7 항목.
 ## 알려진 제약
 
 - HF 차단으로 `models/registry.json`의 크기·SHA-256 미고정(`verified: false`); 다운로드 검증은
-  핀이 생기면 자동 적용. `engines/manifest.json`의 자산 해시도 미고정.
-- GPU 없음: CUDA/Vulkan 팩, 실모델 VRAM 실측, `--list-devices` GPU 출력은 사용자 PC
+  핀이 생기면 자동 적용. `engines/manifest.json`의 cpu·vulkan 자산 해시는 첫 설치파일 빌드 로그로 고정(2026-11-08), `linux`만 미고정.
+- GPU 없음: CUDA 팩은 CI에서 빌드했지만 실행 검증(`--list-devices`, `CUDA0` 로그)·Vulkan 팩·실모델 VRAM 실측은 사용자 PC
   (`docs/user-pc-checklist.md` P1 항목).
 - Linux 빌드는 CI 전용(배포 범위 외). Windows 실창 E2E(tauri-driver)는 사용자 PC.
 - 모의 백엔드의 프리라우터는 Rust 구현의 부분 집합(브라우저 데모 용도).

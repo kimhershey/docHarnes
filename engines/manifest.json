@@ -5,19 +5,59 @@
   "min_build": 11747,
   "release_url": "https://github.com/ggml-org/llama.cpp/releases/tag/b12066",
   "assets": {
-    "cpu": { "match": ["bin-win-cpu-x64"], "exclude": ["openvino", "vulkan", "cuda"], "sha256": null },
-    "vulkan": { "match": ["bin-win-vulkan-x64"], "sha256": null },
-    "linux": { "match": ["bin-ubuntu-x64"], "exclude": ["openvino", "vulkan", "cuda"], "sha256": null, "pack": "cpu" },
+    "cpu": {
+      "match": [
+        "bin-win-cpu-x64"
+      ],
+      "exclude": [
+        "openvino",
+        "vulkan",
+        "cuda"
+      ],
+      "sha256": "cc2aad487f973e02c99a14719481bf1babc1a4eab3876915fc7b88133df314e8",
+      "asset": "llama-b12066-bin-win-cpu-x64.zip"
+    },
+    "vulkan": {
+      "match": [
+        "bin-win-vulkan-x64"
+      ],
+      "sha256": "8eec3c8aa2494c4b196550ff9884a7cc601458c15e6b18b5ba2fa618d43afc54",
+      "asset": "llama-b12066-bin-win-vulkan-x64.zip"
+    },
+    "linux": {
+      "match": [
+        "bin-ubuntu-x64"
+      ],
+      "exclude": [
+        "openvino",
+        "vulkan",
+        "cuda"
+      ],
+      "sha256": null,
+      "pack": "cpu"
+    },
     "cu121": {
       "self_built": true,
       "toolkit": "12.1",
       "toolkit_version": "12.1.1",
       "toolkit_installer_url": "https://developer.download.nvidia.com/compute/cuda/12.1.1/network_installers/cuda_12.1.1_windows_network.exe",
-      "toolkit_subpackages": ["nvcc_12.1", "cudart_12.1", "cublas_12.1", "cublas_dev_12.1", "thrust_12.1", "visual_studio_integration_12.1"],
+      "toolkit_subpackages": [
+        "nvcc_12.1",
+        "cudart_12.1",
+        "cublas_12.1",
+        "cublas_dev_12.1",
+        "thrust_12.1",
+        "visual_studio_integration_12.1",
+        "documentation_12.1"
+      ],
       "msvc_toolset": "14.39",
       "msvc_component": "Microsoft.VisualStudio.Component.VC.14.39.17.9.x86.x64",
       "archs": "61;70;75;80;86;89;90",
-      "runtime_dlls": ["cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll"],
+      "runtime_dlls": [
+        "cudart64_12.dll",
+        "cublas64_12.dll",
+        "cublasLt64_12.dll"
+      ],
       "asset": "DocuLens-EnginePack-cu121-<tag>.zip"
     },
     "cu129": {
@@ -25,11 +65,23 @@
       "toolkit": "12.9",
       "toolkit_version": "12.9.1",
       "toolkit_installer_url": "https://developer.download.nvidia.com/compute/cuda/12.9.1/network_installers/cuda_12.9.1_windows_network.exe",
-      "toolkit_subpackages": ["nvcc_12.9", "cudart_12.9", "cublas_12.9", "cublas_dev_12.9", "thrust_12.9", "visual_studio_integration_12.9"],
+      "toolkit_subpackages": [
+        "nvcc_12.9",
+        "cudart_12.9",
+        "cublas_12.9",
+        "cublas_dev_12.9",
+        "thrust_12.9",
+        "visual_studio_integration_12.9",
+        "documentation_12.9"
+      ],
       "msvc_toolset": null,
       "msvc_component": null,
       "archs": "75;80;86;89;90;120",
-      "runtime_dlls": ["cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll"],
+      "runtime_dlls": [
+        "cudart64_12.dll",
+        "cublas64_12.dll",
+        "cublasLt64_12.dll"
+      ],
       "asset": "DocuLens-EnginePack-cu129-<tag>.zip"
     }
   }
