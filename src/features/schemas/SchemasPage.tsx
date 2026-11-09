@@ -51,12 +51,12 @@ const SchemaRow = memo(function SchemaRow({ s, selected, onSelect, ko, t }: { s:
       <span className="flex items-center gap-1">
         <span className="truncate font-medium">{ko ? s.name : (s.name_en ?? s.name)}</span>
         {s.is_default && (
-          <Badge variant="ok" className="text-[10px]">
+          <Badge variant="ok" className="text-[0.625rem]">
             {t("schemas.default")}
           </Badge>
         )}
         {!s.enabled && (
-          <Badge variant="muted" className="text-[10px]">
+          <Badge variant="muted" className="text-[0.625rem]">
             {t("schemas.list.disabled")}
           </Badge>
         )}

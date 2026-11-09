@@ -52,11 +52,11 @@ function MovesTable({ items }: { items: OrganizeItem[] }) {
       <tbody>
         {items.map((item, i) => (
           <tr key={`${item.doc_id}-${i}`} className="border-t border-border align-top" data-item-status={item.status}>
-            <td className="truncate py-0.5 pr-2 font-mono text-[11px] selectable" title={item.from}>
+            <td className="truncate py-0.5 pr-2 font-mono text-[0.6875rem] selectable" title={item.from}>
               {item.from}
             </td>
             <td className="py-0.5 pr-2 text-fg-subtle">→</td>
-            <td className="truncate py-0.5 pr-2 font-mono text-[11px] selectable" title={item.to ?? ""}>
+            <td className="truncate py-0.5 pr-2 font-mono text-[0.6875rem] selectable" title={item.to ?? ""}>
               {item.to ?? "—"}
             </td>
             <td className="py-0.5">

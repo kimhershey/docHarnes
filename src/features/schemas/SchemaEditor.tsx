@@ -234,7 +234,7 @@ function FieldRow({ field, index, count, nested, onChange, onRemove, onMove }: {
 
   return (
     <div className="rounded-md border border-border bg-bg p-2" data-testid={nested ? "schema-column" : "schema-field"} data-field-key={field.key}>
-      <div className="grid grid-cols-[1fr_1fr_1fr_120px_auto] items-end gap-2">
+      <div className="grid grid-cols-[1fr_1fr_1fr_7.5rem_auto] items-end gap-2">
         <div>
           <Label className="text-xs">{t("schemas.editor.key")}</Label>
           <Input

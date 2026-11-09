@@ -82,7 +82,7 @@ function CollectionItem({ c, selected, onSelect, onDropDocs, onDropFiles, t }: {
   const drop = useDocumentDropTarget({ onDocuments: (docs) => onDropDocs(c, docs), onFiles: (paths) => onDropFiles(c, paths) });
   return (
     <li className="relative" {...drop.props}>
-      <DropHint active={drop.isActive} over={drop.isOver} className="text-[11px]" testId={`collection-drop-${c.id}`}>
+      <DropHint active={drop.isActive} over={drop.isOver} className="text-[0.6875rem]" testId={`collection-drop-${c.id}`}>
         {t("knowledge.collections.drop_add", { name: c.name })}
       </DropHint>
       <button

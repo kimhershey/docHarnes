@@ -441,7 +441,7 @@ export function ModelsPage() {
                     <td className="py-2 pr-3">
                       <div className="flex flex-wrap gap-1">
                         {m.requirements.tiers.map((tier) => (
-                          <Badge key={tier} variant="outline" className="text-[10px]">
+                          <Badge key={tier} variant="outline" className="text-[0.625rem]">
                             {t(`hw.tier.${tier}`)}
                           </Badge>
                         ))}

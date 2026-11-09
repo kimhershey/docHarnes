@@ -103,7 +103,7 @@ export function ResultsTab({ detail, onCheck, checking }: { detail: ProjectDetai
                 <tr key={r.id} className="align-top" data-testid={`result-${r.rule_id}`} data-verdict={r.verdict}>
                   <td className="py-2 pr-3">
                     <div className="font-medium">{r.description}</div>
-                    {r.required && <span className="text-[11px] text-fg-subtle">{t("projects.results.required")}</span>}
+                    {r.required && <span className="text-[0.6875rem] text-fg-subtle">{t("projects.results.required")}</span>}
                   </td>
                   <td className="py-2 pr-3">
                     <Badge variant={verdictVariant(r.verdict)}>{t(`projects.results.verdict.${r.verdict}`)}</Badge>

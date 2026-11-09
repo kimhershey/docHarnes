@@ -80,7 +80,7 @@ export function StatusBar() {
   const gate = gateNotice(pipeline?.gate, t);
 
   return (
-    <footer className="flex h-7 shrink-0 items-center gap-4 border-t border-border bg-bg-elevated px-3 text-xs text-fg-muted" data-testid="statusbar">
+    <footer className="flex min-h-7 shrink-0 flex-wrap items-center gap-x-4 border-t border-border bg-bg-elevated px-3 text-xs text-fg-muted [&>*]:whitespace-nowrap" data-testid="statusbar">
       <Link to={SCREEN_ROUTES.models} className="flex items-center gap-1.5 hover:text-fg" data-testid="statusbar-engine">
         <span className={`size-2 rounded-full ${ind.color}`} aria-hidden="true" />
         {t("statusbar.engine")}: {t(`statusbar.${ind.key}`)}

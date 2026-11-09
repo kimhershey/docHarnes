@@ -18,7 +18,7 @@ Input.displayName = "Input";
 const Textarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttributes<HTMLTextAreaElement>>(({ className, ...props }, ref) => (
   <textarea
     className={cn(
-      "flex min-h-[60px] w-full rounded-md border border-border bg-bg-elevated px-3 py-2 text-sm text-fg placeholder:text-fg-subtle focus-visible:border-accent disabled:cursor-not-allowed disabled:opacity-50",
+      "flex min-h-[3.75rem] w-full rounded-md border border-border bg-bg-elevated px-3 py-2 text-sm text-fg placeholder:text-fg-subtle focus-visible:border-accent disabled:cursor-not-allowed disabled:opacity-50",
       className,
     )}
     ref={ref}

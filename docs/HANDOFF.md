@@ -1314,6 +1314,31 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   모델로, 슬래시는 프리라우터, 모델 없음 → no_model 명확화, RulesFirst는 규칙), `prerouter::tests::bare_cancel_words_are_recognised`,
   Playwright `planner.spec` "되묻기 replies with the question's context; 취소 (button or typed) …" 추가, 기존 어시스턴트 E2E 전부 통과.
 
+### UI 배율 대응 — 고정 px 상자 제거 (2026-11-09; 사용자 보고 "UI 배율이 높아질 때 글자 잘림", A안 결정)
+
+- **증상·원인**: 설정 > 일반 > UI 배율(90~150 %, Ctrl+Shift+=/−)은 루트 글꼴 크기(rem)만 키운다. Tailwind 유틸리티는 rem이라 함께
+  커지지만 네 곳이 CSS px로 상자 크기를 고정해 두어(라이브러리 카드 200×268, 목록 행 44 px + px 열 너비, 검토 큐 행 추정 72 px,
+  뷰어 썸네일 행 128 px) 150 %에서는 썸네일(11 rem)만으로 카드가 차서 제목·쪽수·배지가 잘렸다. Windows 디스플레이 배율은 원인이
+  아니다(WebView2는 px와 rem을 같은 비율로 키움). 100 %에서도 배지가 두 줄인 카드(견적서.hwpx)는 제목이 이미 잘리고 있었다.
+- **점검**: 모의 백엔드로 15개 화면 × (1280×800 100 %/150 %, 960×600 150 %, 1920×1080 150 %)를 Playwright 스크립트로 자동 점검
+  (overflow 숨김 + 넘침, 고정 높이 넘침, 문서 가로·세로 스크롤). 깨지는 곳은 라이브러리 카드·목록, 뷰어 썸네일, 라이브러리 필터
+  줄(가로 스크롤), 최소 창의 상단바 Ctrl+K 세로 줄바꿈·상태바 두 줄 잘림뿐이었고 나머지 11개 화면은 줄바꿈만 늘었다.
+- **결정(A안)**: 전면 반응형 전환 대신 "글자만 안 잘리게" — px 고정값을 rem·측정 기반으로 바꾼다. 사이드바 자동 접힘·툴바 메뉴
+  접기·우측 패널 쌓기 같은 반응형 전환(B안)은 보류(최소 창 960 px의 데스크톱 앱이라 필요한 조건이 "최소 창 + 125 % 이상"뿐).
+- **수정**: `src/app/hooks/useRootFontSize.ts`(`useRootFontSize` = 16 px × 배율, `remPx`) — px로 계산해야 하는 코드(가상 스크롤 추정치,
+  열 개수)가 rem에서 px를 구한다. 라이브러리 카드 폭 12.5 rem·높이 자동(행을 `measureElement`로 측정, 배지가 두 줄이면 카드가 자람;
+  배율이 바뀌면 `virtualizer.measure()`), 목록 열을 rem 트랙으로 + 행 `measureElement`(최소 2.75 rem, 머리행 2.75 rem) + 폭이 모자라면
+  목록 안에서만 가로 스크롤(`min-w-[58rem]`, 컨테이너 `overflow-auto`), 필터 컨트롤 줄 `flex-wrap`(화면 전체가 가로 스크롤되던 것),
+  그리드·목록 `min-h-40`(선택 바·집계 바가 세로 공간을 다 먹어도 0이 되지 않고 메인 영역이 스크롤됨); 검토 큐 행 추정 4.5 rem(측정은
+  기존); 뷰어 썸네일은 래퍼(`pb-2`가 간격)를 측정 + 추정 8.75 rem; 상단바 `kbd` nowrap; 상태바 `min-h-7 flex-wrap` + 항목 nowrap(좁으면
+  두 줄로 늘고 잘리지 않음); `text-[10px]`/`[11px]` 25곳 → `text-[0.625rem]`/`[0.6875rem]`, `min-h-[60px]`·`grid-cols-[…120px…]`·
+  `max-w-[420px]`·`w-[640px]` → rem. 남은 px는 텍스트 레이어 박스의 `rounded-[2px]`·`text-[0px]`와 포인터 임계값뿐.
+- **남는 제약(의도)**: 150 %에 1280 px 폭 창이면 라이브러리 필터가 2~3줄로 줄바꿈되고 목록은 가로 스크롤이 생긴다. 최소 창(960×600)에
+  150 %면 상단바 항목이 가로로 넘쳐 화면이 가로 스크롤된다(유효 폭 640 px급) — B안 범위. 150 %는 1600 px 이상 폭에서 쓰는 편이 낫다.
+- **검증**: Playwright `scale.spec.ts` 3건 추가 — 150 %(슬라이더 End)에서 카드(제목·쪽수·배지 상자 안, 행 겹침 없음)·목록 행·썸네일
+  1/2쪽·검토 큐 행·상단바·상태바 잘림 없음, 100 %에서 배지 두 줄 카드의 제목·쪽수 표시, 슬라이더 최대 150 %. 자동 점검 재실행에서
+  실제 잘림 0(남은 항목은 sr-only와 모의 텍스트 레이어 박스뿐, 960×600 150 %의 가로 넘침만 그대로).
+
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
@@ -1331,6 +1356,7 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | 2026-11-09 사용자 PC 보고 수정 2차 1~3번 (ffb8618·705808b·c78c27b) | `cargo test --workspace` 코어 282(3 ignored)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과(calamine·cfb 추가); vitest 23파일 139건; Playwright 43건(`dnd.spec` 2건 추가; 검토 큐 테스트의 목록 로드 전 count 경합을 대기 조건으로 고침); CI 7개 잡 |
 | 2026-11-09 사용자 PC 보고 수정 2차 4·5번 + 3차 6·7번 (9ca340d·6014ab9·b04660d) | `cargo test --workspace` 코어 294(4 ignored; `documents::layout` 15·`knowledge::answer` 7·`projects` 18 포함)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과(새 의존성 없음, 고지·SBOM 변경 없음); vitest 25파일 147건(`conversation.test.ts` 4·`textLayer.test.ts` 4 추가); Playwright 45건(`knowledge.spec` 세션 기억·`projects.spec` 자동 분류 추가, `documents.spec` 수정 글자 색 단언); `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(b04660d 푸시 이벤트; 9ca340d·6014ab9도 성공) |
 | 2026-11-09 어시스턴트 모델 우선 해석 + 되묻기·취소 (3467ad4) | `cargo test --workspace` 코어 296(4 ignored; `planner` 15·`prerouter` 8 포함)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과; vitest 25파일 147건; Playwright 46건(`planner.spec` 되묻기·취소 1건 추가); `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(3467ad4 푸시 이벤트) |
+| 2026-11-09 UI 배율 대응 A안(고정 px 상자 제거) | 프런트 전용 변경(Rust·고지·SBOM 변경 없음): `npm run typecheck`·`npm run build`·`licenses:check` 통과, vitest 25파일 147건, Playwright 49건(`scale.spec` 3건 추가; 1280×800 기본 뷰포트에서 150 % 검사); 모의 백엔드 15화면 × 4조건 자동 점검에서 실제 잘림 0. CI는 푸시 후 확인 |
 | 2026-11-09 이미지 위 글자 레이어 · 우측 패널 AI 검색/이력 (488af39·9e56dd6) | `cargo test --workspace` 코어 266(3 ignored; `documents::layout` 9·`render` 실 PDFium 문자 박스·`import` 레이아웃 왕복 추가)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과; vitest 23파일 139건(`text-layer.test.ts` 8 추가); Playwright 41/41(`documents`·`knowledge`·`pipeline` 스펙을 레이어·검토 큐 기준으로 재작성); CI 7개 잡 두 커밋 모두 성공 |
 | 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 3회(run 42471185353·42475854955 solid 43 MB, 42547230697 파일별 압축 47.6 MB; 159 파일 검사 통과) · 1~3번 반영 Lite 빌드 성공(run 42577030466, 검증된 커밋 a461405 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.5 MB; Release 게시는 권한 분류기 거부로 publish=false) · **1~8번(어시스턴트 모델 우선·되묻기·취소 포함) 반영 Lite 빌드 성공(run 42592935148, 검증된 커밋 3467ad4 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.6 MB, 2027-02-07까지 보관; publish=false — Release 게시는 사용자 작업)** · **Full 0.1.0 빌드 성공(run 42547228170): 1.1 GB, 219 파일, CUDA 팩 cu121·cu129 동봉 검사 통과** · CUDA 팩 빌드 성공(cu121 run 42533483890 · cu129 run 42533486332 → Release v0.1.0) — 위 "패키징·고지" 참조 |
 

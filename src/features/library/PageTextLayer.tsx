@@ -309,7 +309,7 @@ export function PageTextLayer({
       {selBox && !editing && !adding && (
         <div
           data-layer-ui
-          className="absolute z-20 flex max-w-[420px] items-center gap-1 rounded-md border border-border bg-bg-elevated px-1.5 py-1 text-xs text-fg shadow-[var(--shadow)]"
+          className="absolute z-20 flex max-w-[26.25rem] items-center gap-1 rounded-md border border-border bg-bg-elevated px-1.5 py-1 text-xs text-fg shadow-[var(--shadow)]"
           style={toolbarStyle(selBox)}
           data-testid="viewer-selection-toolbar"
           onPointerDown={(e) => e.stopPropagation()}

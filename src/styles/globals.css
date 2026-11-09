@@ -219,6 +219,7 @@ html[data-reduced-motion="on"] *::after {
 kbd {
   font-family: var(--font-sans);
   font-size: 0.75rem;
+  white-space: nowrap;
   padding: 0.05rem 0.35rem;
   border: 1px solid var(--border-strong);
   border-bottom-width: 2px;

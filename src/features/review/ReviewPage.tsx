@@ -5,6 +5,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 
+import { remPx, useRootFontSize } from "@/app/hooks/useRootFontSize";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -26,7 +27,8 @@ import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 
 /** Estimated row height (three text lines + padding); mounted rows are measured. */
-const ROW_H = 72;
+/** Queue row estimate in rem (three text lines + padding) until the rendered rows are measured; rem so it follows the UI 배율. */
+const ROW_EST_REM = 4.5;
 /** Prefix of every review-queue query (all filters). */
 const REVIEW_QUEUE_KEY = ["pipeline", "review"] as const;
 
@@ -82,7 +84,7 @@ const ReviewRow = memo(function ReviewRow({ item, index, selected, start, thresh
     >
       <span className="flex items-center gap-1">
         <span className="truncate font-medium">{fieldTitle(item, t, lang)}</span>
-        <Badge variant={reasonVariant(item.review_reason)} className="ml-auto text-[10px]">
+        <Badge variant={reasonVariant(item.review_reason)} className="ml-auto text-[0.625rem]">
           {item.review_reason ? t(`pipeline.reason.${item.review_reason}`) : ""}
         </Badge>
       </span>
@@ -142,11 +144,12 @@ export function ReviewPage() {
   /** Colour / glyph cut-off: the threshold the backend flagged with; the slider value until the status refetches. */
   const toneThreshold = status?.review_threshold ?? threshold;
   const currentTitle = current ? fieldTitle(current, t, lang) : "";
+  const rootPx = useRootFontSize();
 
   const virtualizer = useVirtualizer<HTMLDivElement, HTMLLIElement>({
     count: list.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => ROW_H,
+    estimateSize: () => remPx(ROW_EST_REM, rootPx),
     overscan: 16,
     // Always render the current option, even when scrolled out of view, so roving focus never sits on an unmounted row.
     rangeExtractor: (range: Range) => {
@@ -339,7 +342,7 @@ export function ReviewPage() {
             <span>{t("review.threshold", { value: threshold.toFixed(2) })}</span>
             <Slider min={0.5} max={1} step={0.05} value={[threshold]} onValueCommit={([v]) => void commitThreshold(v ?? DEFAULT_REVIEW_THRESHOLD)} className="w-32" aria-label={t("settings.processing.review_threshold")} data-testid="review-threshold" />
           </div>
-          <p className="max-w-64 text-[11px] leading-tight text-fg-muted" data-testid="review-threshold-hint">
+          <p className="max-w-64 text-[0.6875rem] leading-tight text-fg-muted" data-testid="review-threshold-hint">
             {t("review.threshold_hint")}
           </p>
         </div>
@@ -402,7 +405,7 @@ export function ReviewPage() {
                   </Button>
                 </span>
               </div>
-              <div className="grid gap-3 md:grid-cols-[1fr_320px]">
+              <div className="grid gap-3 md:grid-cols-[1fr_20rem]">
                 <div className="min-h-64 overflow-auto rounded-md border border-border bg-bg-sunken p-2" data-testid="review-preview">
                   {current.page_image_url ? <img src={current.page_image_url} alt={t("review.page", { page: current.page ?? 1 })} className="mx-auto max-h-[60vh] bg-white shadow" draggable={false} /> : <p className="text-sm text-fg-muted">{t("review.no_image")}</p>}
                 </div>

@@ -154,7 +154,7 @@ export function ClassifyDialog({ open, onOpenChange, docIds, projects }: { open:
                           <Badge variant={confidenceVariant(s)} data-testid={`classify-confidence-${s.doc_id}`}>
                             {s.project_id === null ? t("projects.classify.undecided") : pct(s.confidence)}
                           </Badge>
-                          {s.source === "model" && <div className="mt-1 text-[11px] text-fg-subtle">{t("projects.classify.by_model")}</div>}
+                          {s.source === "model" && <div className="mt-1 text-[0.6875rem] text-fg-subtle">{t("projects.classify.by_model")}</div>}
                         </td>
                         <td className="px-3 py-2 align-top text-xs text-fg-muted">
                           {s.reasons.join(" · ")}

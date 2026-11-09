@@ -53,7 +53,7 @@ function SentenceView({ sentence, sources, onCitation }: { sentence: AnswerSente
             <button
               key={`${i}-${n}`}
               type="button"
-              className="mx-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-accent-soft px-1.5 align-text-bottom text-[11px] font-medium text-accent hover:bg-accent hover:text-accent-fg cursor-pointer"
+              className="mx-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-accent-soft px-1.5 align-text-bottom text-[0.6875rem] font-medium text-accent hover:bg-accent hover:text-accent-fg cursor-pointer"
               title={label}
               aria-label={t("answer.citation_aria", { index: n, label })}
               onClick={() => onCitation?.(c)}

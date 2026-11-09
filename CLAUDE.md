@@ -101,7 +101,7 @@ user PC: `docs/RUN-GUIDE.md`.
   resume / retry / prioritise, restored per workspace)), `tauri.conf.json`, capabilities, `nsis/installer.nsi`
   (Tauri's NSIS template with per-file instead of /SOLID compression — the Full installer exceeds NSIS' 2 GiB solid
   data block; verified against the installed CLI by `npm run nsis:check`).
-- `src/` — React app: `app/` (layout, providers, hooks), `features/<screen>/`, `components/ui/`, `lib/` (ipc, types, theme, shortcuts, mock backend,
+- `src/` — React app: `app/` (layout, providers, hooks — `useRootFontSize`: rem → px for virtualiser estimates and column counts so the UI 배율 scales every box; layout sizes are rem or measured, never fixed px), `features/<screen>/`, `components/ui/`, `lib/` (ipc, types, theme, shortcuts, mock backend,
   `dnd/`: pointer-based document drags + native / browser file drops with one drop-target registry, `DndLayer` in the app shell, sidebar
   spring-loading, `importDroppedFiles` import-then-attach), `stores/` (incl. `attachments.ts`: assistant attachments + nav-drop hand-offs), `i18n/`, `styles/`.
 - `models/registry.json`, `engines/` (llama.cpp manifest, `pdfium.json`, `kodic.json`, placement docs), `docs/`,

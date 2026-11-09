@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 
+import { remPx, useRootFontSize } from "@/app/hooks/useRootFontSize";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog, type ConfirmRequest } from "@/components/ui/confirm-dialog";
@@ -36,7 +37,8 @@ import { VersionDialog } from "./VersionDialog";
 import { ViewerKnowledgePanel } from "./ViewerKnowledgePanel";
 
 const NONE = "__none__";
-const THUMB_H = 128;
+/** Thumbnail row estimate in rem (image ≤ 6 rem + page number + padding + gap) until the rendered rows are measured; rem so it follows the UI 배율. */
+const THUMB_EST_REM = 8.75;
 /** Right-pane tabs (user decision 2026-11-09: only AI 검색 and 이력; text, fields and tables left the viewer). */
 const TABS = ["qa", "history"] as const;
 
@@ -669,7 +671,7 @@ export function DocumentViewer() {
             <dd>
               {doc.has_text_layer ? t("viewer.info.yes") : t("viewer.info.no")}
               {page?.text_source === "ocr" && (
-                <Badge variant="info" className="ml-1 text-[10px]" data-testid="viewer-ocr-badge">
+                <Badge variant="info" className="ml-1 text-[0.625rem]" data-testid="viewer-ocr-badge">
                   {t("viewer.ocr_badge")}
                 </Badge>
               )}
@@ -715,7 +717,11 @@ export function DocumentViewer() {
 function ThumbStrip({ pages, current, onSelect }: { pages: PageView[]; current: number; onSelect: (page: number) => void }) {
   const { t } = useTranslation();
   const parentRef = useRef<HTMLDivElement | null>(null);
-  const virtualizer = useVirtualizer({ count: pages.length, getScrollElement: () => parentRef.current, estimateSize: () => THUMB_H, overscan: 6 });
+  const rootPx = useRootFontSize();
+  const virtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({ count: pages.length, getScrollElement: () => parentRef.current, estimateSize: () => remPx(THUMB_EST_REM, rootPx), overscan: 6 });
+  useEffect(() => {
+    virtualizer.measure();
+  }, [rootPx, virtualizer]);
   useEffect(() => {
     if (pages.length > 0) virtualizer.scrollToIndex(Math.max(0, current - 1), { align: "auto" });
   }, [current, pages.length, virtualizer]);
@@ -724,20 +730,21 @@ function ThumbStrip({ pages, current, onSelect }: { pages: PageView[]; current: 
       <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
         {virtualizer.getVirtualItems().map((row) => {
           const p = pages[row.index]!;
+          // The wrapper is what the virtualiser measures (its bottom padding is the gap), so a thumbnail row grows with the UI 배율.
           return (
-            <button
-              key={p.page_no}
-              type="button"
-              onClick={() => onSelect(p.page_no)}
-              className={cn("absolute left-0 flex w-full flex-col items-center gap-1 rounded-md border p-1 text-xs", p.page_no === current ? "border-accent bg-accent-soft" : "border-transparent hover:bg-bg-sunken")}
-              style={{ transform: `translateY(${row.start}px)`, height: row.size - 8 }}
-              aria-current={p.page_no === current ? "page" : undefined}
-              aria-label={t("viewer.thumb_label", { page: p.page_no })}
-              data-testid={`viewer-thumb-${p.page_no}`}
-            >
-              {p.thumb_url ? <RetryImage src={p.thumb_url} alt="" className="max-h-24 w-full bg-white object-contain" loading="lazy" draggable={false} fallback={<div className="h-20 w-full bg-bg-sunken" />} /> : <div className="h-20 w-full bg-bg-sunken" />}
-              <span>{p.page_no}</span>
-            </button>
+            <div key={p.page_no} ref={virtualizer.measureElement} data-index={row.index} className="absolute left-0 w-full pb-2" style={{ transform: `translateY(${row.start}px)` }}>
+              <button
+                type="button"
+                onClick={() => onSelect(p.page_no)}
+                className={cn("flex w-full flex-col items-center gap-1 rounded-md border p-1 text-xs", p.page_no === current ? "border-accent bg-accent-soft" : "border-transparent hover:bg-bg-sunken")}
+                aria-current={p.page_no === current ? "page" : undefined}
+                aria-label={t("viewer.thumb_label", { page: p.page_no })}
+                data-testid={`viewer-thumb-${p.page_no}`}
+              >
+                {p.thumb_url ? <RetryImage src={p.thumb_url} alt="" className="max-h-24 w-full bg-white object-contain" loading="lazy" draggable={false} fallback={<div className="h-20 w-full bg-bg-sunken" />} /> : <div className="h-20 w-full bg-bg-sunken" />}
+                <span>{p.page_no}</span>
+              </button>
+            </div>
           );
         })}
       </div>

@@ -21,7 +21,7 @@ function IssueBadges({ issues, onApply, t }: { issues: DraftIssue[]; onApply: (i
             {t(`generate.issue_codes.${i.code}`, { defaultValue: i.code })}
           </Badge>
           {i.suggestion != null && (
-            <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={() => onApply(i)} data-testid="generate-apply-suggestion">
+            <Button size="sm" variant="outline" className="h-6 px-2 text-[0.6875rem]" onClick={() => onApply(i)} data-testid="generate-apply-suggestion">
               <Wand2 />
               {t("generate.editor.apply_suggestion")} ({i.suggestion})
             </Button>
@@ -68,10 +68,10 @@ export function DraftEditor({ draft, onChange, excluded, onToggleExcluded, disab
                       </span>
                     )}
                   </Label>
-                  <span className="text-[10px] text-fg-subtle">{fieldKindLabel(f.kind, i18n.language)}</span>
+                  <span className="text-[0.625rem] text-fg-subtle">{fieldKindLabel(f.kind, i18n.language)}</span>
                   {f.user_edited && <Badge variant="info">{t("generate.editor.user_edited")}</Badge>}
                   {f.source && (
-                    <button type="button" className="text-[10px] text-accent hover:underline cursor-pointer" onClick={() => f.source?.doc_id && navigate(`/library/${f.source.doc_id}${f.source.page ? `?page=${f.source.page}` : ""}`)} title={f.source.title} data-testid="generate-field-source">
+                    <button type="button" className="text-[0.625rem] text-accent hover:underline cursor-pointer" onClick={() => f.source?.doc_id && navigate(`/library/${f.source.doc_id}${f.source.page ? `?page=${f.source.page}` : ""}`)} title={f.source.title} data-testid="generate-field-source">
                       {t("generate.editor.source_badge")}
                     </button>
                   )}
@@ -155,7 +155,7 @@ export function DraftEditor({ draft, onChange, excluded, onToggleExcluded, disab
           const label = b.kind === "heading" ? t("generate.editor.heading", { level: b.level }) : b.kind === "list" ? t("generate.editor.list") : t("generate.editor.paragraph");
           return (
             <div key={i} className="flex flex-col gap-1" data-testid={`generate-block-${i}`}>
-              <div className="flex items-center gap-2 text-[11px] text-fg-subtle">
+              <div className="flex items-center gap-2 text-[0.6875rem] text-fg-subtle">
                 <span>{label}</span>
                 {b.kind === "paragraph" && b.source && (
                   <button type="button" className="text-accent hover:underline cursor-pointer" onClick={() => b.source?.doc_id && navigate(`/library/${b.source.doc_id}${b.source.page ? `?page=${b.source.page}` : ""}`)} title={b.source.title}>
@@ -186,7 +186,7 @@ export function DraftEditor({ draft, onChange, excluded, onToggleExcluded, disab
                     <div className="flex items-center gap-1 font-medium">
                       <span className="truncate">{r.title}</span>
                       {r.page && <span className="text-fg-subtle">p.{r.page}</span>}
-                      <Badge variant="muted" className="text-[10px]">
+                      <Badge variant="muted" className="text-[0.625rem]">
                         {t(`generate.reference_source.${r.source}`, { defaultValue: r.source })}
                       </Badge>
                     </div>
@@ -198,7 +198,7 @@ export function DraftEditor({ draft, onChange, excluded, onToggleExcluded, disab
                     </Button>
                   )}
                   {r.doc_id && (
-                    <label className="flex items-center gap-1 text-[11px] text-fg-muted">
+                    <label className="flex items-center gap-1 text-[0.6875rem] text-fg-muted">
                       <input type="checkbox" checked={isExcluded} onChange={() => onToggleExcluded(r.doc_id!)} data-testid="generate-reference-exclude" />
                       {t("generate.editor.exclude")}
                     </label>
