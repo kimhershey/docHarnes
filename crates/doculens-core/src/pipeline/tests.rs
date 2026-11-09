@@ -284,6 +284,32 @@ fn scanned_receipt_runs_end_to_end() {
 }
 
 #[test]
+fn manual_text_is_kept_unless_ocr_is_forced() {
+    let w = World::new();
+    w.add_doc("m1", "memo.pdf", SourceKind::Pdf, &[None]);
+    w.db.with(|c| docs::set_page_text(c, "m1", 1, "손으로 고친 영수증 텍스트")).unwrap();
+    w.chat.push("classify", classify_reply("receipt", 0));
+    let deps = w.deps(None);
+    let req = ProcessRequest { document_ids: vec!["m1".into()], level: PipelineLevel::Ocr, ..Default::default() };
+    let report = run::process(&deps, &req, &mut |_| {}).unwrap();
+    assert_eq!(report.ocr_pages, 0, "manual text is not overwritten: {report:?}");
+    let page = &w.pages("m1")[0];
+    assert_eq!(page.text.as_deref(), Some("손으로 고친 영수증 텍스트"));
+    assert_eq!(page.text_source.as_deref(), Some("manual"));
+    // A forced re-run replaces it with OCR output.
+    w.chat.push_ocr(RECEIPT_OCR);
+    let forced = ProcessRequest {
+        document_ids: vec!["m1".into()],
+        level: PipelineLevel::Ocr,
+        force: true,
+        ..Default::default()
+    };
+    let report = run::process(&deps, &forced, &mut |_| {}).unwrap();
+    assert_eq!(report.ocr_pages, 1, "{report:?}");
+    assert_eq!(w.pages("m1")[0].text_source.as_deref(), Some("ocr"));
+}
+
+#[test]
 fn digital_pdf_skips_ocr_and_extracts_from_text() {
     let w = World::new();
     let text = "세금계산서 (과세) 작성일자 2026.03.02\n공급자 상호 한빛상사\n사업자등록번호 220-81-62517\n공급받는자 DocuLens\n공급가액 1,000,000 세액 100,000 합계 1,100,000";

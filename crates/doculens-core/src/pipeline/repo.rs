@@ -411,8 +411,8 @@ pub fn set_page_ocr(
     let now = ts(&Utc::now());
     let text = text.map(str::trim).filter(|t| !t.is_empty());
     conn.execute(
-        "UPDATE pages SET text = ?3, has_text = ?4, text_source = 'ocr', ocr_at = ?5, ocr_profile = ?6, ocr_model = ?7 \
-         WHERE document_id = ?1 AND page_no = ?2",
+        "UPDATE pages SET text = ?3, has_text = ?4, text_source = 'ocr', ocr_at = ?5, ocr_profile = ?6, ocr_model = ?7, \
+         layout = NULL WHERE document_id = ?1 AND page_no = ?2",
         params![doc_id, page_no as i64, text, text.is_some() as i64, now, profile, model],
     )?;
     conn.execute(

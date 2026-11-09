@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { BookOpen, FileOutput, FileText, FolderInput, FolderOpen, FolderTree, Image as ImageIcon, LayoutGrid, List, Merge, RefreshCw, Trash2, Upload } from "lucide-react";
+import { BookOpen, FileOutput, FileSpreadsheet, FileText, FolderInput, FolderOpen, FolderTree, Image as ImageIcon, LayoutGrid, List, Merge, Presentation, RefreshCw, Trash2, Upload } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router";
@@ -54,7 +54,10 @@ const SORTS: DocumentSort[] = ["imported_desc", "imported_asc", "name_asc", "nam
 type TFn = (k: string, o?: Record<string, unknown>) => string;
 
 function KindIcon({ kind, className }: { kind: SourceKind; className?: string }) {
-  return kind === "image" ? <ImageIcon className={className} aria-hidden="true" /> : <FileText className={className} aria-hidden="true" />;
+  if (kind === "image") return <ImageIcon className={className} aria-hidden="true" />;
+  if (kind === "xlsx") return <FileSpreadsheet className={className} aria-hidden="true" />;
+  if (kind === "pptx") return <Presentation className={className} aria-hidden="true" />;
+  return <FileText className={className} aria-hidden="true" />;
 }
 
 function Thumb({ doc, className }: { doc: DocumentView; className?: string }) {

@@ -13,6 +13,8 @@
   그 외 §4.0 "다음" 항목.
 - 작업 방식: 단계별 새 세션 + 데모 체크포인트, GitHub 커밋/푸시, 빌드 로그
   축약·모듈 단위 컴파일 검증, 리뷰 서브에이전트는 단계 말에만.
+- 설치파일 빌드(Actions "Windows installer (manual)")는 **요청된 작업이 모두 끝나고 전체 검증(Rust 테스트·clippy·vitest·
+  Playwright·푸시한 커밋의 CI)에 FAILED가 없음을 확인한 뒤에만** 실행한다(사용자 결정 2026-11-09). 작업 도중 빌드 금지.
 
 ## 단계 현황
 
@@ -354,7 +356,7 @@
   하이라이트 스니펫), 키워드 전용/LIKE 폴백 안내, 열기(뷰어 `?page&q&chunk`)·이 결과로 질문.
 - 어시스턴트: 프리라우터 미매칭 입력은 지식 베이스 Q&A(범위 선택, 후속 질문은 직전 근거 유지), `AnswerCard`(문장별 출처 칩 →
   뷰어 쪽 이동, 근거 없음 배너 + "일반 지식으로 답하기", 상충 단락, 피드백·복사), 스트리밍 표시.
-- 뷰어: 지식 배지(컬렉션), "지식 베이스에 추가"·"버전"·"설명(Ctrl+E)" 버튼, 텍스트 탭 검색어 하이라이트(`?q=`), Q&A 탭
+- 뷰어: 지식 배지(컬렉션), "지식 베이스에 추가"·"버전"·"설명(Ctrl+E)" 버튼, 검색어 하이라이트(`?q=`; 2026-11-09부터 이미지 위 글자 레이어의 `<mark>`), Q&A 탭(→ "AI 검색")
   (이 문서/전체 범위 질문, 설명, 요약 모드 3종, 문서별 답변 기록). 라이브러리: 일괄 "지식 베이스에 추가", 지식 역할 배지.
 - 설정 > 지식 베이스 탭. 작업 화면: `knowledge_index`/`knowledge_embed` 종류·요약 번역. 오류 사유 번역 8종.
 - 모의 백엔드 `mock-knowledge.ts`(문단 청킹, 부분 문자열 검색, 스트리밍 정답 생성, 색인/임베딩 작업 시뮬레이션,
@@ -1036,6 +1038,21 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   CI web 잡 + 설치파일 워크플로)가 복사본에서 표시 블록을 원복한 결과가 설치된 `@tauri-apps/cli` 네이티브 바이너리에 그대로
   들어 있는지 확인해 CLI 업그레이드 시 재동기화를 강제한다. 워크플로에 2 GiB 크기 가드(GitHub 릴리스 자산 한계), 목록 필터에
   cuBLAS/cudart/EULA, 아티팩트 무압축 업로드 추가. 팩 자체 축소(cu121 `-Xfatbin=-compress-all`, 도구 DLL 제거)는 v1.x 메모.
+- **Lite 재빌드(2026-11-09, 9e56dd6 — 이미지 위 글자 레이어·우측 패널 AI 검색/이력 반영; run 42567728857, 아티팩트만)**:
+  `DocuLens-Setup-Lite-0.1.0-x64.exe` 50,171,425 B(47.8 MB), SHA-256 `346cf36cb15e75b2455570149020a0048cc0d7c42a20292e66acbe12ed097d93`,
+  7-Zip 목록 159개 파일·필수 7개 통과, 워크플로 12분 37초, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64`(id 13651909906, 2027-02-07 만료).
+  전체 검증(Rust 285건·vitest 139·Playwright 41, 두 커밋의 CI 7개 잡) 통과 후 실행. `publish=true` 게시는 이 세션의 권한 분류기가
+  막아(공개 표면 생성) 실행하지 못했으므로 **Release v0.1.0의 Lite는 아직 16c224f 빌드** — 사용자가 `variant=lite`·`publish=true`로
+  워크플로를 실행하거나 다음 세션에서 게시를 지시해야 함. 같은 소스(488af39)로 먼저 시작한 run 42567337239는 PDF `/Rotate`·MediaBox
+  오프셋 수정(9e56dd6)을 넣기 위해 취소.
+- **Lite Release 게시(2026-11-09, 16c224f = 14577a6 + 문서; run 42561958088, `publish=true` — 사용자 지시)**: Release `v0.1.0`에
+  `DocuLens-Setup-Lite-0.1.0-x64.exe` 50,116,430 B(47.8 MB), SHA-256 `d665687ad4fa1139766cff6a7cf9682fd5a4106a3123459bb40d12ed35ab993c`,
+  `.sha256`, `THIRD-PARTY-NOTICES.md`, `sbom.cdx.json` 업로드(CUDA 팩 2종과 함께 자산 8개). 같은 소스의 아티팩트 빌드(아래)와 해시가
+  다른 것은 NSIS 빌드 타임스탬프 때문(내용 동일). Full 설치파일은 아직 Release에 없음(아티팩트만).
+- **Lite 재빌드(2026-11-09, 14577a6 — 드래그 앤 드롭·XLSX/PPTX/텍스트·내용 감지·뷰어 텍스트 직접 편집 반영; run 42560517332)**:
+  `DocuLens-Setup-Lite-0.1.0-x64.exe` 50,117,790 B(47.8 MB), SHA-256 `5a178421b7091355f85fbed7e25e5d7e7660fd48d3799ab438c3a9efa9da1a30`,
+  159개 파일·필수 7개 통과, `tauri build` 10분, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64`(id 13650165163, 2027-02-07 만료). 사용자
+  지시로 Lite만 다시 빌드(Full은 76a3b0d 빌드 그대로 — 새 기능을 Full로도 쓰려면 variant=full 재실행).
 - **Full·Lite 설치파일 빌드 성공(2026-11-09, 76a3b0d; Full run 42547228170, Lite run 42547230697)**: 템플릿 검사는 처음에 Windows
   체크아웃의 CRLF 때문에 실패(73a96d1) → 줄바꿈 정규화 + `.gitattributes`(`eol=lf`)로 고쳐 통과(Windows CLI 바이너리에도 LF로
   내장). Full: `DocuLens-Setup-Full-0.1.0-x64.exe` 1,156,143,051 B(1.1 GB — 압축 전 3.1 GB; 파일별 LZMA가 예상 1.6 GB보다 잘 줄임),
@@ -1072,6 +1089,103 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   카드에 드롭, 문서 생성 원본, 브라우저 파일 드롭 → 컬렉션 가져오기), Rust `run_attaches_the_batch_to_a_project_and_rejects_unknown_projects`.
   Tauri 네이티브 좌표 판정·WebView2 동작은 사용자 PC(체크리스트).
 
+### 입력 형식 확장·알 수 없는 형식 처리 (2026-11-09, 사용자 요청 "xlsx·pptx 처리 추가, unknown 데이터 타입 처리 방안 검토")
+
+- **XLSX** `convert/xlsx.rs`: 시트(보이는 것만) → 제목(시트 이름) + 표. 공유/인라인 문자열(리치 런 포함), 숫자(셀 서식의 내장·사용자
+  정의 번호 형식으로 날짜·시각 판별 → `YYYY-MM-DD`, `HH:MM`), 불리언, 오류값, 수식의 캐시 값, 병합 셀(`mergeCells` → rowspan/colspan),
+  열 너비(문자 단위 → mm), 1904 날짜 체계. 시트당 5,000행·64열 상한(초과 시 메모), 숨김 시트는 메모만. 첫 행이 단독 셀이면 문서 제목.
+- **PPTX** `convert/pptx.rs`: `sldIdLst` 순서로 슬라이드 → 제목 자리표시자(제목 1, 부제목 2) 먼저, 나머지 도형은 읽기 순서(위→아래,
+  왼→오른; 그룹 도형 평탄화)로 텍스트 상자(글머리 기호 상속: 본문 자리표시자는 기본 불릿, `buNone`/`buAutoNum` 반영, 서식 b/i/u/sz,
+  `a:br`), 표(`gridSpan`/`rowSpan`, `hMerge`/`vMerge` 연속 셀 제거, `firstRow` 머리글), 그림(`blip` → 슬라이드 rels → `ppt/media`,
+  슬라이드 간 중복 1회 저장), 슬라이드 번호·날짜·바닥글 자리표시자 제외, 발표자 노트(기울임, "발표자 노트" 소제목). 차트·SmartArt·OLE는
+  메모. 슬라이드 크기 → `page_mm`(16:9 = 339×191 mm; 프린터는 A4 세로 고정이라 표/그림은 폭에 맞춤). 제목 없는 슬라이드는 "슬라이드 N".
+- **텍스트 계열** `convert/text.rs`(새 `SourceKind::Text`): 디코딩 BOM(UTF-8/UTF-16) → UTF-8 → CP949(`encoding_rs`, Apache/MIT) → 손실
+  UTF-8 순. CSV/TSV → 표(RFC 4180 따옴표·개행, 구분자 추정 `,`/`;`/탭, 첫 행 머리글), Markdown → 제목·목록·표·코드 블록·링크 라벨,
+  HTML → `<title>`·h1~h6·문단·목록·표 셀(탭), `<script>`/`<style>` 제거·엔티티 복원, JSON/XML/LOG → 120줄 단위 문단, 그 외 → 빈 줄
+  기준 문단(첫 줄이 제목). 16 MB 상한(초과 메모). `.txt`라도 HTML로 시작하면 HTML로 읽음.
+- **알 수 없는 형식 처리 방안(검토 결과 → 구현)** `documents/sniff.rs` + `import::classify`:
+  | 상황 | 이전 | 지금 |
+  |---|---|---|
+  | 확장자만 보고 판정 | `from_path` 전용 | **내용 우선**: `%PDF`, PNG/JPEG/GIF/BMP/WebP/TIFF 시그니처, zip 컨테이너는 항목 접두(`word/`→DOCX, `xl/`→XLSX, `ppt/`→PPTX, `mimetype`/`Contents/`→HWPX), CFB는 스트림 이름(`HwpSummaryInformation`/`BodyText`→HWP, `WordDocument`/`Workbook`/`PowerPoint Document`→`office_legacy`, `EncryptedPackage`→`encrypted`), `MZ`/ELF→`executable`, RTF→`office_legacy`, RAR/GZ/7z→`archive`, 그 밖에 NUL 없이 97 % 이상 출력 가능 문자로 디코딩되면 텍스트 |
+  | 확장자와 내용 불일치(.pdf인 HTML, .zip인 HWPX, .docx인 구형 DOC) | PDFium 오류 또는 미지원 | 내용 기준 형식으로 가져오고 미리보기에 메모 "확장자(.pdf)와 내용이 달라 텍스트(으)로 처리"; 읽을 수 없는 컨테이너는 정확한 사유 |
+  | 확장자 없음/모르는 확장자 | `no_extension`/`unsupported_extension` | 내용이 인식되면 가져오기(메모), 아니면 기존 사유 |
+  | 텍스트 파일 | 미지원("텍스트 파일은 문서로 가져오지 않습니다") | 지원(위 텍스트 계열) |
+  | XLSX/PPTX | `office_legacy`로 거부 | 지원 |
+  | DOC/XLS/PPT/HML/RTF | `office_legacy` | 동일(허용 라이선스의 Rust 파서가 없음 → 사용자 PC에서 DOCX/XLSX/PPTX/PDF로 저장 안내) |
+  | HEIC/HEIF | `heic` | 동일(디코더 특허·의존성 → JPG 변환 안내) |
+  | 암호 문서 | PDFium/zip 오류로 실패 | CFB `EncryptedPackage`는 `encrypted` 사유로 사전 거부(암호 PDF는 PDFium 오류 유지 — 사유 세분화는 후속) |
+  | 알 수 없는 이진 파일 | 미지원 | 동일. **보류한 안**: "원본만 보관"(페이지 없는 첨부 문서, 이름 검색만) — 상태·UI 추가가 필요해 v1.x 후보로 기록 |
+  재스캔(inbox)도 같은 분류를 써서 확장자 없는 파일을 집어낸다. 미지원 사유 문자열(`documents.unsupported.*`)에 `archive`·`executable`·
+  `encrypted` 추가, `office_legacy`·`unsupported_extension` 문구 갱신, `text` 제거.
+- **부수 효과**: 문서 생성의 Markdown 저장도 이제 라이브러리에 '생성' 문서로 등록된다(텍스트 리더로 변환·검색). 처음 커밋(4fe082d)은
+  이를 가정한 기존 테스트 `save_registers_generated_documents_in_the_library`를 깨뜨려 CI Rust 잡이 실패했고(로컬에서 `documents::`
+  테스트만 돌린 탓), 테스트·경고 문구·모의 백엔드를 새 동작에 맞춰 고쳤다.
+- **프런트엔드**: `SourceKind`에 `xlsx`/`pptx`/`text`, 종류 배지·아이콘(스프레드시트·프레젠테이션), 파일 선택 필터 확장, 미리보기의 분류 메모
+  (`ImportItem.note`), 모의 백엔드 `kindOf`/사유/쪽수. 샘플 세트(`gen_fixtures`)에 `sample-ledger.xlsx`·`sample-plan.pptx`·`sample-notes.md`·
+  CP949 `sample-ledger.csv` 추가(8개).
+- **검증**: Rust 단위 테스트 — xlsx(참조·서식·생성 통합문서 읽기), pptx(생성 덱: 제목 순서·읽기 순서·불릿 상속·표 병합·그림·노트·슬라이드
+  크기), text(디코딩 3종·CSV 따옴표·마크다운 구조·CP949 CSV·HTML/TXT), sniff(시그니처·컨테이너·CFB 변형·텍스트·잡음), `SourceKind`
+  확장자 테스트; 실제 Excel/PowerPoint 산출물·CP949 메모장 파일은 사용자 PC(체크리스트 "입력 형식 확장").
+
+### 뷰어 텍스트 직접 편집 (2026-11-09, 사용자 요청 "문서 내용 수정이 너무 어려움 — 글자를 드래그해 바로 수정")
+
+- **UI** `features/library/PageTextPanel.tsx`(뷰어 텍스트 탭 분리): 출처 배지(텍스트 레이어/변환/OCR/직접 수정) + '수정'('텍스트 입력')
+  버튼, 글자를 드래그하면 고정 선택 툴바(선택 문구 · **수정** · **필드 값으로 ▾**(문서의 추출 필드 목록, 현재 값 표시 →
+  `pipeline_review_apply correct`) · **설명**(기존 Ctrl+Shift+E 경로)). 편집 모드는 textarea에 쪽 전체 텍스트를 넣고 드래그한 범위를
+  `selectionOffsets`(Range → 문자 오프셋; `<mark>` 강조와 무관)로 그대로 선택해 두므로 바로 타이핑하면 그 글자만 바뀐다. 뷰어 키:
+  선택 상태에서 Enter/F2 → 편집, Ctrl+Enter 저장, Esc 취소(IME 조합 중 무시).
+- **저장 경로** `documents_set_page_text` → `repo::set_page_text`(`pages.text`, `text_source = 'manual'`, 빈 텍스트면 지움,
+  `documents.updated_at`·`has_text_layer` 갱신) → `documents://changed` + `knowledge_bridge::auto_index`(텍스트 해시가 바뀌어 재청킹).
+  보호: `replace_pages`(다시 렌더)는 manual 텍스트를 새 레이어보다 우선 보존, OCR 단계는 `ocr`처럼 `force`일 때만 덮어씀.
+- **모의 백엔드** 동일 동작(저장 → 이벤트 → 자동 색인). i18n `viewer.text_edit.*`, `viewer.text_empty` 문구 갱신.
+- **검증**: Rust `manual_page_text_survives_rerender_and_clears`, `manual_text_is_kept_unless_ocr_is_forced`; Playwright
+  `documents.spec` "viewer text can be corrected in place"(드래그 선택 → Enter → 범위 선택 확인 → 치환 → Ctrl+Enter → 출처 배지 →
+  검색 반영), `pipeline.spec` "a text selection becomes a field value". 설계 §3.7의 "직접 수정"으로 기록. → 같은 날 아래
+  "페이지 이미지 위 글자 레이어"로 대체(텍스트 탭 자체가 사라짐).
+
+### 페이지 이미지 위 글자 레이어 + 우측 패널 단순화 (2026-11-09, 사용자 요청 "이미지에서 글자로 인식된 부분을 드래그해 수정, 오른쪽은 AI 검색·이력만")
+
+- **설계 편차(사용자 결정)**: §3.7.2 뷰어의 우측 탭 [텍스트][필드][표][Q&A][이력] 중 텍스트·필드·표 탭을 없애고 **[AI 검색](Q&A 탭
+  개명)·[이력]** 만 남겼다. 필드 검토는 검토 큐 화면(Ctrl+?)·"필드 값으로"(이미지 선택)·이력 탭(복원)으로, 표 복사/CSV는 내보내기
+  (`export target=table`)로 대신한다. `FieldsPanel`·`TablesPanel`·`PageTextPanel` 삭제, `viewer.fields.*`는 이력·검토 큐가 쓰는 3키만 유지.
+- **코어 `documents/layout.rs`** (`PageLayout { version, source: layer|estimated, words: [{t,x,y,w,h,line,edited}] }`, 좌표는 회전 적용
+  후 페이지 이미지의 0~1 비율): (a) **디지털 PDF·변환본** — PDFium 문자 박스(`render::pdf_page_chars`, loose → tight 폴백)를 공백·수평
+  점프(0.5h)·수직 이동(0.5h)으로 단어로 묶고 줄을 나눈 뒤 회전을 비율 변환으로 적용 — PDFium 문자 박스는 회전 전 콘텐츠 좌표라
+  표시 상자(CropBox∩MediaBox, 없으면 MediaBox; 원점 오프셋 포함)로 정규화하고 페이지 고유 `/Rotate` + 사용자 저장 회전을 합산
+  (`render::PageChars { page_box, rotation, chars }`); (b) **스캔·사진(OCR)·수동
+  전체 교체 텍스트** — 문자 좌표가 없으므로 페이지 JPEG(긴 변 1400px)의 행 잉크 프로파일로 줄 띠를 찾고(간격 ≤h/400 병합, 높이
+  <h/300 제거) 텍스트 줄 수에 맞춰 병합/분할한 뒤 각 줄의 단어를 띠의 잉크 범위에 표시 폭(한글 1·라틴 0.55) 비례로 배치
+  (`source=estimated`, 뷰어 배지 "위치 추정"); OCR 마크업(`<table>`·`<br>`·`<stamp>`)은 `text_lines`가 줄/셀로 환원. (c) **편집**
+  `apply_edit(start..end, 치환문)` — 레이아웃 단어를 페이지 텍스트에서 **순서대로 찾아**(같은 단어 반복 시 올바른 n번째) 단어 수가 같으면
+  제자리 치환(표 태그 등 사이 마크업 보존), 다르면 구간 치환(삭제는 인접 공백 흡수), 찾지 못하면 레이아웃 텍스트로 재생성; 새 단어는
+  `edited=true`로 기존 박스를 상속(수 다르면 합집합 박스에 비례 배치). `add_words(bbox, 글)` — 빈 영역에 그린 박스에 새 단어를
+  읽기 순서 위치(줄 중심 비교)로 삽입하고 텍스트에도 같은 자리에 넣음. `PageLayout::rotate(delta)`.
+- **DB** 마이그레이션 0006 `pages.layout TEXT`(JSON; 계산 캐시 + 편집 영속). `replace_pages`는 manual/ocr 텍스트와 함께 layout 유지,
+  `set_page_text`(전체 교체)·`set_page_ocr`·`reset_pipeline_state`(ocr)는 NULL로 초기화, `rotate_page`는 저장된 레이아웃을 함께 회전.
+  `repo::page_layout_json / set_page_layout / set_page_text_and_layout`.
+- **오케스트레이션 `import::ensure_layout`**(저장본 → PDF면 문자 박스 → 없거나 비면 이미지 추정 → 캐시), `edit_words`, `add_words`;
+  셸 명령 `documents_page_layout`, `documents_edit_page_words(start,end,text)`, `documents_add_page_words(bbox,text)` (저장 →
+  `documents://changed` + `auto_index`). `SCHEMA_VERSION = 6`.
+- **UI** `features/library/PageTextLayer.tsx`(이미지 위 절대 배치 레이어; 단어 span은 투명 글자 + 선택/강조/수정됨 스타일, 구분용
+  텍스트 노드로 `textContent`가 "단어 단어\n…"로 읽힘), `textLayer.ts`(선택 텍스트·연속성·히트 테스트(가장 가까운 줄/단어)·사각형
+  교차·검색어→단어 강조). 상호작용: 단어 클릭/Shift+클릭/드래그(읽기 순서 범위) 또는 빈 곳 드래그(사각형 교차); 떠 있는 툴바(선택
+  문구 · 텍스트 수정 · 필드 값으로 ▾ · 설명 · 복사 · 닫기); Enter/F2 → 선택 박스 위 인라인 입력(Enter 저장·Esc 취소), 더블클릭 =
+  단어 바로 편집; Esc 선택 해제, Ctrl+C 복사; 빈 곳에 그린 사각형 → "글자 추가" 입력. 검색어(`?q=`)·인용(`?chunk=`) 강조는 단어
+  `<mark>`로, 배너·출처 배지·"위치 추정" 배지는 캔버스 위 줄(`viewer-layer-bar`). 이미지가 없는 쪽(렌더러 없음)은 본문 텍스트를
+  캔버스에 그대로 표시(`viewer-text`). 회전 저장 뒤 레이아웃 쿼리 무효화. `DocumentViewer` 탭 `TABS = ["qa","history"]`, 기본 탭 AI 검색,
+  `?tab=` 은 두 값만 허용(프로젝트 결과 탭의 `tab=fields` 링크 제거).
+- **모의 백엔드** `mock-layout.ts`(Rust와 같은 규칙의 TS 트윈: 모의 페이지 SVG의 회색 줄 위에 줄 배치, `applyEdit`/`addWords`),
+  `documents_page_layout / edit_page_words / add_page_words`. i18n `viewer.tabs.qa` "AI 검색", `viewer.layer.*` 추가, 텍스트·필드·표
+  탭 문구 제거(파리티 유지).
+- **검증**: Rust `documents::layout` 8건(문자→단어/줄/회전, 공백 없는 수평 점프 분리, OCR 마크업 줄 환원, 잉크 띠 추정(줄 수
+  병합/분할·빈 이미지), 제자리/구간/삭제 치환·n번째 반복·표 태그 보존·오래된 레이아웃 폴백·추가 삽입 순서·JSON 왕복),
+  `render::pdf_renders_pages_text_and_thumbnails`(실 PDFium 문자 박스 → "Hello"/"DocuLens"), `import::page_layout_is_computed_edited_and_rotated`
+  (계산·캐시 → 편집 → manual → 회전 → 추가 → 다시 렌더 보존), `projects` 마이그레이션 테스트 6으로 갱신; vitest `text-layer.test.ts` 8건;
+  Playwright `documents.spec`(클릭/드래그 선택 → Enter → 입력값 확인 → 치환 → 수정됨 3단어 → 출처 배지 → Esc → 빈 곳 드래그 "글자 추가"
+  → 검색 반영), `pipeline.spec`(OCR 쪽 "위치 추정" 배지, 검토는 큐에서 → 이력 탭 확인; 이미지 선택 → 필드 값으로 → 이력에 "스타벅스
+  역삼점 → 역삼점"), `knowledge.spec`(검색/인용 강조는 레이어 `<mark>`, 설명은 이미지 선택으로). 실 PDF/스캔에서의 박스 정확도는 사용자 PC
+  체크리스트 "페이지 이미지 위 글자 레이어".
+
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
@@ -1085,6 +1199,8 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | Playwright(모의 백엔드) | 34/34 (`generate.spec.ts`·`projects.spec.ts` 추가; 모의 백엔드가 Rust 페이로드 모양만 내므로 E2E가 실제 계약을 검증) |
 | `npm run notices` 결정성 | 두 번 실행 결과 동일 — crates 628(runtime 354)·npm 75·SBOM 컴포넌트 709 |
 | GitHub CI(License·Web·Rust Linux·Windows compile·notices·eval-gate·실엔진) | 커밋 a0fcafb·9308de3에서 실엔진 잡만 실패(위 수정으로 0e200ec에서 7개 잡 모두 통과). 리뷰 반영 커밋 84e5fdd에서는 License gate·Windows compile 잡이 **GitHub 릴리스 자산 다운로드 장애**(cargo-deny-action의 바이너리 tar가 손상 수신 "gzip: invalid magic", PDFium 다운로드 HTTP 504)로 실패 — 코드와 무관. ece44cc: License gate를 `taiki-e/install-action`(체크섬 검증 prebuilt cargo-deny 0.20.2)으로 바꿔 통과, 나머지 6개 잡 통과; Windows 잡은 여전히 504. c505b81: `scripts/lib/fetch-retry.mjs`(5xx·네트워크 오류·잘린 본문 지수 백오프 재시도 3회)를 fetch-pdfium/engine/kodic에 적용하고 Windows 잡에도 PDFium `actions/cache` 추가 — 장애가 이어져 Windows 잡은 재시도 3회 후에도 504. 6975410: Windows 잡의 PDFium 다운로드를 `continue-on-error`(경고 주석)로 바꿔 컴파일·테스트는 항상 수행(PDFium 테스트는 라이브러리 없으면 자체 skip, Linux 잡은 엄격 유지) → **7개 잡 모두 통과**(다운로드도 복구되어 Windows 잡이 PDFium 테스트까지 실제 수행) |
+| 2026-11-09 추가 기능(드래그 앤 드롭 · XLSX/PPTX/텍스트 · 내용 감지 · 뷰어 텍스트 직접 편집) | `cargo test --workspace` 코어 257(3 ignored)·셸 3·평가 15 통과, `cargo deny` 통과(`encoding_rs` 추가), clippy·fmt 통과, vitest 22파일 131건, Playwright 41/41(`dnd.spec.ts` 5, 뷰어 편집 2 포함; 전체 실행 1회에서 검토 큐 테스트가 1번 실패했으나 단독 3회·재실행 전체 통과 → 플레이크), CI: 4fe082d·314e503·c848d81은 Markdown 등록 테스트 1건으로 Rust 잡 실패 → 14577a6에서 7개 잡 통과 |
+| 2026-11-09 이미지 위 글자 레이어 · 우측 패널 AI 검색/이력 (488af39·9e56dd6) | `cargo test --workspace` 코어 266(3 ignored; `documents::layout` 9·`render` 실 PDFium 문자 박스·`import` 레이아웃 왕복 추가)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과; vitest 23파일 139건(`text-layer.test.ts` 8 추가); Playwright 41/41(`documents`·`knowledge`·`pipeline` 스펙을 레이어·검토 큐 기준으로 재작성); CI 7개 잡 두 커밋 모두 성공 |
 | 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 3회(run 42471185353·42475854955 solid 43 MB, 42547230697 파일별 압축 47.6 MB; 159 파일 검사 통과) · **Full 0.1.0 빌드 성공(run 42547228170): 1.1 GB, 219 파일, CUDA 팩 cu121·cu129 동봉 검사 통과** · CUDA 팩 빌드 성공(cu121 run 42533483890 · cu129 run 42533486332 → Release v0.1.0) — 위 "패키징·고지" 참조 |
 
 이 환경에서 못 한 것: 설치파일의 릴리스 게시(권한 정책; 설치파일·CUDA 팩 빌드는 Windows 러너에서 완료), 실제 Qwen3.5-4B로 초안 품질·

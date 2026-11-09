@@ -18,6 +18,7 @@ use crate::paths::WorkspacePaths;
 use crate::version::WORKSPACE_DIR_NAME;
 
 use super::convert::{self, PdfPrinter};
+use super::layout::{self, PageLayout};
 use super::render::{self, RenderOptions, RenderService};
 use super::{
     from_rel_path, new_id, nfc, repo, to_rel_path, DocumentCache, DocumentRecord, DocumentRole, DocumentStatus,
@@ -151,6 +152,9 @@ pub struct ImportItem {
     /// Target workspace-relative path (existing for in-place files).
     pub rel_path: Option<String>,
     pub content_hash: Option<String>,
+    /// Classification remark shown in the preview (e.g. the content decided the kind, not the extension).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
     pub status: ImportItemStatus,
 }
 
@@ -254,25 +258,95 @@ fn recently_modified(meta: &std::fs::Metadata, within: Duration) -> bool {
     meta.modified().ok().and_then(|m| SystemTime::now().duration_since(m).ok()).is_some_and(|age| age < within)
 }
 
-/// Reason a file cannot be imported (`None` = supported).
-pub fn unsupported_reason(path: &Path, meta: &std::fs::Metadata) -> Option<String> {
-    let ext = path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).unwrap_or_default();
-    if SourceKind::from_path(path).is_none() {
-        return Some(match ext.as_str() {
-            "heic" | "heif" => "heic".to_string(),
-            "doc" | "xls" | "ppt" | "pptx" | "xlsx" | "hwpml" | "hml" => "office_legacy".to_string(),
-            "txt" | "md" | "csv" | "json" | "xml" | "html" | "htm" => "text".to_string(),
-            "" => "no_extension".to_string(),
-            _ => "unsupported_extension".to_string(),
-        });
-    }
+/// How a file is imported: the kind (when supported), the `documents.unsupported.*` reason
+/// otherwise, and a remark for the preview when the content, not the extension, decided.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Classified {
+    pub kind: Option<SourceKind>,
+    pub reason: Option<String>,
+    pub note: Option<String>,
+}
+
+/// Extensions of formats we know about but cannot read (legacy binary Office, HWPML, RTF).
+fn is_legacy_office_ext(ext: &str) -> bool {
+    matches!(ext, "doc" | "xls" | "ppt" | "hwpml" | "hml" | "rtf")
+}
+
+/// Classifies a file by size, extension and content (`sniff`): the content wins when it is
+/// recognised, the extension when the content is not; known-unreadable containers are refused
+/// with a precise reason.
+pub fn classify(path: &Path, meta: &std::fs::Metadata) -> Classified {
     if meta.len() == 0 {
-        return Some("empty".to_string());
+        return Classified { reason: Some("empty".into()), ..Default::default() };
     }
     if meta.len() > MAX_FILE_BYTES {
-        return Some("too_large".to_string());
+        return Classified { reason: Some("too_large".into()), ..Default::default() };
     }
-    None
+    let ext = path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).unwrap_or_default();
+    let by_ext = SourceKind::from_path(path);
+    let sniffed = super::sniff::sniff(path);
+    use super::sniff::Sniff;
+    let mismatch = |s: SourceKind| Classified {
+        kind: Some(s),
+        note: Some(format!("확장자(.{ext})와 내용이 달라 {}(으)로 처리", kind_label(s))),
+        ..Default::default()
+    };
+    let by_content = |s: SourceKind| Classified {
+        kind: Some(s),
+        note: Some(if ext.is_empty() {
+            format!("확장자 없음: 내용 기준으로 {} 처리", kind_label(s))
+        } else {
+            format!("알 수 없는 확장자(.{ext}): 내용 기준으로 {} 처리", kind_label(s))
+        }),
+        ..Default::default()
+    };
+    let by_extension_only = || Classified {
+        reason: Some(match ext.as_str() {
+            "heic" | "heif" => "heic".to_string(),
+            "" => "no_extension".to_string(),
+            _ => "unsupported_extension".to_string(),
+        }),
+        ..Default::default()
+    };
+    match (by_ext, sniffed) {
+        (Some(k), Sniff::Kind(s)) if s == k => Classified { kind: Some(k), ..Default::default() },
+        (Some(SourceKind::Text), Sniff::Html) => Classified { kind: Some(SourceKind::Text), ..Default::default() },
+        (Some(_), Sniff::Html) => mismatch(SourceKind::Text),
+        (Some(_), Sniff::Kind(s)) => mismatch(s),
+        (Some(_), Sniff::Unsupported(r)) => Classified { reason: Some(r.to_string()), ..Default::default() },
+        (Some(k), Sniff::Unknown) => Classified { kind: Some(k), ..Default::default() },
+        (None, _) if is_legacy_office_ext(&ext) => {
+            Classified { reason: Some("office_legacy".into()), ..Default::default() }
+        }
+        (None, _) if matches!(ext.as_str(), "heic" | "heif") => {
+            Classified { reason: Some("heic".into()), ..Default::default() }
+        }
+        (None, Sniff::Html) => by_content(SourceKind::Text),
+        // Printable bytes alone only promote files without an extension (a dropped folder's `.ini` /
+        // `.py` must not turn into documents).
+        (None, Sniff::Kind(SourceKind::Text)) if !ext.is_empty() => by_extension_only(),
+        (None, Sniff::Kind(s)) => by_content(s),
+        (None, Sniff::Unsupported(r)) => Classified { reason: Some(r.to_string()), ..Default::default() },
+        (None, Sniff::Unknown) => by_extension_only(),
+    }
+}
+
+fn kind_label(kind: SourceKind) -> &'static str {
+    match kind {
+        SourceKind::Pdf => "PDF",
+        SourceKind::Image => "이미지",
+        SourceKind::Hwpx => "HWPX",
+        SourceKind::Docx => "DOCX",
+        SourceKind::Hwp => "HWP",
+        SourceKind::Xlsx => "XLSX",
+        SourceKind::Pptx => "PPTX",
+        SourceKind::Text => "텍스트",
+    }
+}
+
+/// Reason a file cannot be imported (`None` = supported).
+pub fn unsupported_reason(path: &Path, meta: &std::fs::Metadata) -> Option<String> {
+    classify(path, meta).reason
 }
 
 /// Builds the import preview. Hashes every supported file (BLAKE3, ~1 GB/s)
@@ -301,6 +375,7 @@ pub fn plan(
                     inside_workspace: false,
                     rel_path: None,
                     content_hash: None,
+                    note: None,
                     status: ImportItemStatus::Unsupported { reason: "unreadable".into() },
                 });
                 continue;
@@ -309,7 +384,8 @@ pub fn plan(
         let canon = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
         let rel_existing = to_rel_path(&root, &canon);
         let inside = rel_existing.is_some();
-        let kind = SourceKind::from_path(&path);
+        let classified = classify(&path, &meta);
+        let kind = classified.kind;
         let mut item = ImportItem {
             path: path.clone(),
             name: name.clone(),
@@ -318,9 +394,10 @@ pub fn plan(
             inside_workspace: inside,
             rel_path: rel_existing.clone(),
             content_hash: None,
+            note: classified.note,
             status: ImportItemStatus::New,
         };
-        if let Some(reason) = unsupported_reason(&path, &meta) {
+        if let Some(reason) = classified.reason {
             item.status = ImportItemStatus::Unsupported { reason };
             plan.items.push(item);
             continue;
@@ -726,7 +803,12 @@ fn process_inner(
     let render_src: Option<PathBuf> = match doc.source_kind {
         SourceKind::Pdf => Some(abs.clone()),
         SourceKind::Image => None,
-        SourceKind::Hwpx | SourceKind::Docx | SourceKind::Hwp => {
+        SourceKind::Hwpx
+        | SourceKind::Docx
+        | SourceKind::Hwp
+        | SourceKind::Xlsx
+        | SourceKind::Pptx
+        | SourceKind::Text => {
             let conv = convert::convert(&abs, doc.source_kind, &cache.converted_dir, deps.printer)?;
             converted = true;
             let mut notes = conv.model.notes.clone();
@@ -809,11 +891,128 @@ pub fn rotate_page(deps: &ImportDeps<'_>, doc: &DocumentRecord, page_no: u32, ro
             render::render_pdf_page(svc, &pdf, &cache, &opts, page_no, rotation)?
         }
     };
+    // The stored word layout turns with the image (fractions of the rotated page).
+    let previous = deps.db.with(|c| repo::get_page(c, &doc.id, page_no))?.map(|p| p.rotation).unwrap_or(0);
+    let delta = (rotation + 360 - previous) % 360;
+    let turned = deps
+        .db
+        .with(|c| repo::page_layout_json(c, &doc.id, page_no))?
+        .and_then(|json| PageLayout::from_json(&json))
+        .map(|mut l| {
+            l.rotate(delta);
+            l.to_json()
+        });
     deps.db.with(|c| {
         repo::set_page_rotation(c, &doc.id, page_no, rotation)?;
+        if let Some(json) = &turned {
+            repo::set_page_layout(c, &doc.id, page_no, Some(json))?;
+        }
         repo::update_page_render(c, &doc.id, page_no, page.width_px, page.height_px, page.dpi)
     })?;
     Ok(page)
+}
+
+/// Long edge of the page image used for the estimated layout (speed; fractions do not change).
+const LAYOUT_ESTIMATE_LONG_EDGE: u32 = 1400;
+
+/// The word layout of a page for the viewer's on-image text selection: the stored one, or else
+/// computed (PDF text layer → character boxes; OCR / manual text → estimated from the page image)
+/// and cached in `pages.layout`. `None` when the page has no text or no image to lay it on.
+pub fn ensure_layout(deps: &ImportDeps<'_>, doc: &DocumentRecord, page_no: u32) -> Result<Option<PageLayout>> {
+    let Some(page) = deps.db.with(|c| repo::get_page(c, &doc.id, page_no))? else {
+        return Ok(None);
+    };
+    if let Some(stored) =
+        deps.db.with(|c| repo::page_layout_json(c, &doc.id, page_no))?.and_then(|j| PageLayout::from_json(&j))
+    {
+        return Ok(Some(stored));
+    }
+    let Some(text) = page.text.as_deref().filter(|t| !t.trim().is_empty()) else {
+        return Ok(None);
+    };
+    if page.width_px == 0 || page.height_px == 0 {
+        return Ok(None);
+    }
+    let cache = DocumentCache::for_document(deps.paths, &doc.id);
+    let mut found: Option<PageLayout> = None;
+    let own_layer = matches!(page.text_source.as_deref(), Some("layer") | Some("converted"));
+    if own_layer && doc.source_kind != SourceKind::Image {
+        if let Some(svc) = deps.render {
+            let pdf =
+                if doc.source_kind == SourceKind::Pdf { doc.absolute_path(deps.paths) } else { cache.converted_pdf() };
+            if pdf.is_file() {
+                match render::pdf_page_chars(svc, &pdf, page_no) {
+                    Ok(render::PageChars { page_box, rotation, chars }) => {
+                        let l = layout::from_chars(&chars, page_box, (rotation + page.rotation) % 360);
+                        if !l.words.is_empty() {
+                            found = Some(l);
+                        }
+                    }
+                    Err(e) => log::warn!("text layer of {} page {page_no}: {e}", doc.id),
+                }
+            }
+        }
+    }
+    if found.is_none() {
+        let image = cache.page_file(page_no);
+        if !image.is_file() {
+            return Ok(None);
+        }
+        let img = render::decode_image(&image)?;
+        let gray = render::fit_long_edge(&img, LAYOUT_ESTIMATE_LONG_EDGE).to_luma8();
+        found = Some(layout::estimate(&gray, text));
+    }
+    let Some(layout) = found else { return Ok(None) };
+    deps.db.with(|c| repo::set_page_layout(c, &doc.id, page_no, Some(&layout.to_json())))?;
+    Ok(Some(layout))
+}
+
+/// Replaces the words `start..end` of a page's layout with `replacement` (viewer edit on the page
+/// image): the page text is rewritten in place (`text_source = 'manual'`) and the layout stored.
+pub fn edit_words(
+    deps: &ImportDeps<'_>,
+    doc: &DocumentRecord,
+    page_no: u32,
+    start: usize,
+    end: usize,
+    replacement: &str,
+) -> Result<PageLayout> {
+    let mut layout = ensure_layout(deps, doc, page_no)?
+        .ok_or_else(|| CoreError::NotFound(format!("text layer of page {page_no}")))?;
+    if start >= end || end > layout.words.len() {
+        return Err(CoreError::Invalid(format!("word range {start}..{end} (page has {} words)", layout.words.len())));
+    }
+    let text = deps.db.with(|c| repo::get_page(c, &doc.id, page_no))?.and_then(|p| p.text).unwrap_or_default();
+    let new_text = layout::apply_edit(&mut layout, &text, start, end, replacement);
+    deps.db.with(|c| repo::set_page_text_and_layout(c, &doc.id, page_no, &new_text, &layout.to_json()))?;
+    Ok(layout)
+}
+
+/// Adds text the recogniser missed: `new_text` is laid over `bbox` (fractions of the page image) and
+/// inserted into the page text in reading order.
+pub fn add_words(
+    deps: &ImportDeps<'_>,
+    doc: &DocumentRecord,
+    page_no: u32,
+    bbox: (f32, f32, f32, f32),
+    new_text: &str,
+) -> Result<PageLayout> {
+    if new_text.trim().is_empty() {
+        return Err(CoreError::Invalid("empty text".into()));
+    }
+    if !(bbox.2 > 0.0 && bbox.3 > 0.0) || [bbox.0, bbox.1, bbox.2, bbox.3].iter().any(|v| !v.is_finite()) {
+        return Err(CoreError::Invalid("invalid box".into()));
+    }
+    let page = deps
+        .db
+        .with(|c| repo::get_page(c, &doc.id, page_no))?
+        .ok_or_else(|| CoreError::NotFound(format!("page {page_no}")))?;
+    let mut layout =
+        ensure_layout(deps, doc, page_no)?.unwrap_or_else(|| PageLayout::empty(layout::LayoutSource::Estimated));
+    let text = page.text.unwrap_or_default();
+    let new_text = layout::add_words(&mut layout, &text, bbox, new_text);
+    deps.db.with(|c| repo::set_page_text_and_layout(c, &doc.id, page_no, &new_text, &layout.to_json()))?;
+    Ok(layout)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -929,7 +1128,7 @@ pub fn inbox_plan(db: &Db, paths: &WorkspacePaths, options: &ImportOptions) -> R
             }
             None => false,
         };
-        if !registered && SourceKind::from_path(&f).is_some() {
+        if !registered && std::fs::metadata(&f).map(|m| classify(&f, &m).kind.is_some()).unwrap_or(false) {
             candidates.push(f);
         }
     }
@@ -1028,6 +1227,53 @@ mod tests {
     }
 
     #[test]
+    fn page_layout_is_computed_edited_and_rotated() {
+        let Some(svc) = pdfium() else {
+            eprintln!("layout test: skipped (set DOCULENS_PDFIUM)");
+            return;
+        };
+        let e = env();
+        let ext = external_dir(&e);
+        write_blank_pdf(&ext.join("memo.pdf"), 1, &["Hello DocuLens memo".into()]).unwrap();
+        let d = deps(&e, Some(svc));
+        let plan =
+            plan(&e.db, &e.paths, &[ext.join("memo.pdf")], &ImportOptions::default(), ImportSource::Drop).unwrap();
+        let report = run(&d, &plan, None, &mut |_| {}, &mut |_, _| {}).unwrap();
+        let id = report.imported[0].clone();
+        let doc = e.db.with(|c| repo::get_document(c, &id)).unwrap().unwrap();
+        // Computed from PDFium character boxes and cached.
+        let layout = ensure_layout(&d, &doc, 1).unwrap().unwrap();
+        assert_eq!(layout.source, layout::LayoutSource::Layer);
+        assert_eq!(layout.words.iter().map(|w| w.t.as_str()).collect::<Vec<_>>(), ["Hello", "DocuLens", "memo"]);
+        assert!(e.db.with(|c| repo::page_layout_json(c, &id, 1)).unwrap().is_some());
+        // An edit rewrites the page text in place and marks it manual.
+        let edited = edit_words(&d, &doc, 1, 1, 2, "World").unwrap();
+        assert_eq!(edited.words[1].t, "World");
+        assert!(edited.words[1].edited);
+        let page = e.db.with(|c| repo::get_page(c, &id, 1)).unwrap().unwrap();
+        assert_eq!(page.text.as_deref(), Some("Hello World memo"));
+        assert_eq!(page.text_source.as_deref(), Some("manual"));
+        assert!(matches!(edit_words(&d, &doc, 1, 2, 9, "x"), Err(CoreError::Invalid(_))));
+        // Rotation turns the stored boxes with the image.
+        let before = ensure_layout(&d, &doc, 1).unwrap().unwrap();
+        rotate_page(&d, &doc, 1, 90).unwrap();
+        let after = ensure_layout(&d, &doc, 1).unwrap().unwrap();
+        assert_eq!(after.words[0].t, "Hello");
+        assert!((after.words[0].w - before.words[0].h).abs() < 1e-5);
+        assert!(after.words[0].x > 0.8, "{:?}", after.words[0]);
+        // Added text lands in the page text too.
+        let added = add_words(&d, &doc, 1, (0.1, 0.5, 0.3, 0.03), "추가 메모").unwrap();
+        assert!(added.words.iter().any(|w| w.t == "추가" && w.edited));
+        let page = e.db.with(|c| repo::get_page(c, &id, 1)).unwrap().unwrap();
+        assert!(page.text.as_deref().unwrap().contains("추가 메모"));
+        // A re-render keeps the manual text and its layout.
+        process_document(&d, &doc, true, None, None, &mut |_| {}).unwrap();
+        let page = e.db.with(|c| repo::get_page(c, &id, 1)).unwrap().unwrap();
+        assert_eq!(page.text_source.as_deref(), Some("manual"));
+        assert!(e.db.with(|c| repo::page_layout_json(c, &id, 1)).unwrap().is_some());
+    }
+
+    #[test]
     fn plan_classifies_files_and_duplicates() {
         let e = env();
         let ext = external_dir(&e);
@@ -1055,15 +1301,57 @@ mod tests {
         assert!(matches!(by_name("a_copy.pdf").status, ImportItemStatus::DuplicateInBatch { .. }));
         assert_eq!(by_name("photo.heic").status, ImportItemStatus::Unsupported { reason: "heic".into() });
         assert_eq!(by_name("empty.pdf").status, ImportItemStatus::Unsupported { reason: "empty".into() });
-        assert_eq!(by_name("notes.txt").status, ImportItemStatus::Unsupported { reason: "text".into() });
+        // Text files are documents now; a `.heic` with the same bytes is still refused by its extension.
+        assert_eq!(by_name("notes.txt").status, ImportItemStatus::New);
+        assert_eq!(by_name("notes.txt").kind, Some(SourceKind::Text));
         assert_eq!(by_name("scan.png").status, ImportItemStatus::New);
         assert!(plan.items.iter().all(|i| i.name != "x.pdf"), "hidden folders are skipped");
         let inside = by_name("in.pdf");
         assert!(inside.inside_workspace);
         assert_eq!(inside.rel_path.as_deref(), Some("inbox/in.pdf"));
-        assert_eq!(plan.new_count, 3);
+        assert_eq!(plan.new_count, 4);
         assert_eq!(plan.duplicate_count, 1);
-        assert_eq!(plan.unsupported_count, 3);
+        assert_eq!(plan.unsupported_count, 2);
+    }
+
+    #[test]
+    fn classify_lets_the_content_decide() {
+        let e = env();
+        let ext = external_dir(&e);
+        let meta = |p: &Path| std::fs::metadata(p).unwrap();
+        // HTML page saved as .pdf → text, with a remark.
+        let fake_pdf = ext.join("invoice.pdf");
+        std::fs::write(&fake_pdf, "<!DOCTYPE html><html><body>영수증</body></html>").unwrap();
+        let c = classify(&fake_pdf, &meta(&fake_pdf));
+        assert_eq!(c.kind, Some(SourceKind::Text));
+        assert!(c.note.as_deref().unwrap_or("").contains(".pdf"), "{c:?}");
+        // DOCX renamed .zip → DOCX; a plain zip → archive.
+        let renamed = ext.join("contract.zip");
+        crate::documents::convert::docx::write_sample_docx(&renamed, 1, TINY_PNG).unwrap();
+        let c = classify(&renamed, &meta(&renamed));
+        assert_eq!((c.kind, c.reason), (Some(SourceKind::Docx), None));
+        // No extension: PDF by content.
+        let bare = ext.join("scan");
+        write_blank_pdf(&bare, 1, &[]).unwrap();
+        let c = classify(&bare, &meta(&bare));
+        assert_eq!(c.kind, Some(SourceKind::Pdf));
+        assert!(c.note.as_deref().unwrap_or("").contains("확장자 없음"));
+        // Unknown extension with printable bytes stays out (folder drops must not import configs).
+        let ini = ext.join("settings.ini");
+        std::fs::write(&ini, "[core]\nkey=value\n").unwrap();
+        let c = classify(&ini, &meta(&ini));
+        assert_eq!(c.reason.as_deref(), Some("unsupported_extension"));
+        // Legacy Office by extension, even when the bytes look like text.
+        let hml = ext.join("old.hml");
+        std::fs::write(&hml, "<?xml version=\"1.0\"?><HWPML/>").unwrap();
+        assert_eq!(classify(&hml, &meta(&hml)).reason.as_deref(), Some("office_legacy"));
+        // Encrypted OOXML (CFB with EncryptedPackage) under a .docx name.
+        let locked = ext.join("locked.docx");
+        let mut cfb = vec![0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+        cfb.resize(512, 0);
+        cfb.extend("EncryptedPackage".encode_utf16().flat_map(|u| u.to_le_bytes()));
+        std::fs::write(&locked, cfb).unwrap();
+        assert_eq!(classify(&locked, &meta(&locked)).reason.as_deref(), Some("encrypted"));
     }
 
     #[test]

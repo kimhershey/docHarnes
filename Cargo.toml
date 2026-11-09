@@ -16,6 +16,7 @@ thiserror = "2"
 anyhow = "1"
 log = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde", "std"] }
+encoding_rs = "0.8"
 uuid = { version = "1", features = ["v4", "serde"] }
 dirs = "6"
 sysinfo = { version = "0.37", default-features = false, features = ["system"] }

@@ -63,7 +63,7 @@ test.describe("P3 knowledge base", () => {
     await hits.first().getByTestId("search-hit-title").click();
     await expect(page.getByTestId("page-viewer")).toBeVisible();
     await expect(page.getByTestId("viewer-highlight")).toContainText("텍스트 레이어");
-    await expect(page.getByTestId("viewer-text").locator("mark").first()).toBeVisible();
+    await expect(page.getByTestId("viewer-text-layer").locator("mark").first()).toBeVisible();
 
     // Scoped to the collection, a query that matches nothing reports no results.
     await page.getByTestId("nav-search").click();
@@ -107,7 +107,7 @@ test.describe("P3 knowledge base", () => {
     await card.getByTestId("citation-chip").first().click();
     await expect(page.getByTestId("page-viewer")).toBeVisible();
     await expect(page).toHaveURL(/page=1/);
-    await expect(page.getByTestId("viewer-text").locator("mark").first()).toBeVisible();
+    await expect(page.getByTestId("viewer-text-layer").locator("mark").first()).toBeVisible();
 
     // The answer log keeps the three answers, with the feedback.
     await page.getByTestId("nav-knowledge").click();
@@ -134,16 +134,10 @@ test.describe("P3 knowledge base", () => {
     await page.getByTestId("viewer-summary-run").click();
     await expect(page.getByTestId("viewer-qa").locator('[data-testid="answer-card"][data-answer-state="done"]')).toHaveCount(2, { timeout: 15_000 });
 
-    // Explain a text selection (Ctrl+E / toolbar button).
-    await page.getByTestId("viewer-tab-text").click();
-    await page.getByTestId("viewer-text").evaluate((el) => {
-      const range = document.createRange();
-      range.selectNodeContents(el);
-      const sel = window.getSelection();
-      sel?.removeAllRanges();
-      sel?.addRange(range);
-      el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-    });
+    // Explain words selected on the page image (Ctrl+E / toolbar button).
+    await expect(page.getByTestId("viewer-explain")).toBeDisabled();
+    await page.getByTestId("viewer-text-layer").locator("[data-word-index]").first().click();
+    await expect(page.getByTestId("viewer-selection-toolbar")).toBeVisible();
     await page.getByTestId("viewer-explain").click();
     const explain = page.getByTestId("viewer-qa").getByTestId("answer-card").first();
     await expect(explain).toHaveAttribute("data-answer-state", "done", { timeout: 15_000 });

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
 use doculens_core::documents::import::{self, ImportOptions, ImportPlan, ImportSource};
+use doculens_core::documents::layout::PageLayout;
 use doculens_core::documents::{repo, DocumentFilter, DocumentRecord, LibraryStats, PageRecord};
 use doculens_core::paths::normalize_user_path;
 use doculens_core::CoreError;
@@ -82,6 +83,65 @@ pub fn documents_page_text(app: AppHandle, id: String, page_no: u32) -> UiResult
     let ctx = docs_bridge::context(&app)?;
     let page = ctx.db.with(|c| repo::get_page(c, &id, page_no))?;
     Ok(page.and_then(|p| p.text))
+}
+
+/// Saves a manual correction of a page's text (viewer text tab). The knowledge indexer picks the
+/// document up again (its text hash changed) and the library refreshes through `documents://changed`.
+#[tauri::command(async)]
+pub fn documents_set_page_text(app: AppHandle, id: String, page_no: u32, text: String) -> UiResult<bool> {
+    let ctx = docs_bridge::context(&app)?;
+    let ok = ctx.db.with(|c| repo::set_page_text(c, &id, page_no, &text))?;
+    if ok {
+        docs_bridge::emit_changed(&app, "updated", vec![id]);
+        crate::knowledge_bridge::auto_index(&app);
+    }
+    Ok(ok)
+}
+
+/// The word layout of a page for the on-image text selection (computed and cached on first use;
+/// `None` when the page has no text or no image yet).
+#[tauri::command(async)]
+pub fn documents_page_layout(app: AppHandle, id: String, page_no: u32) -> UiResult<Option<PageLayout>> {
+    let ctx = docs_bridge::context(&app)?;
+    let doc = docs_bridge::document(&app, &id)?;
+    Ok(import::ensure_layout(&ctx.deps(), &doc, page_no)?)
+}
+
+/// Replaces the words `start..end` of a page's layout with `text` (drag-select on the page image →
+/// 수정). Empty text deletes the words. The page text is rewritten in place (`text_source = manual`),
+/// the knowledge indexer picks the document up again and the library refreshes.
+#[tauri::command(async)]
+pub fn documents_edit_page_words(
+    app: AppHandle,
+    id: String,
+    page_no: u32,
+    start: usize,
+    end: usize,
+    text: String,
+) -> UiResult<PageLayout> {
+    let ctx = docs_bridge::context(&app)?;
+    let doc = docs_bridge::document(&app, &id)?;
+    let layout = import::edit_words(&ctx.deps(), &doc, page_no, start, end, &text)?;
+    docs_bridge::emit_changed(&app, "updated", vec![id]);
+    crate::knowledge_bridge::auto_index(&app);
+    Ok(layout)
+}
+
+/// Adds text the recogniser missed over a box drawn on the page image (fractions `[x, y, w, h]`).
+#[tauri::command(async)]
+pub fn documents_add_page_words(
+    app: AppHandle,
+    id: String,
+    page_no: u32,
+    bbox: [f32; 4],
+    text: String,
+) -> UiResult<PageLayout> {
+    let ctx = docs_bridge::context(&app)?;
+    let doc = docs_bridge::document(&app, &id)?;
+    let layout = import::add_words(&ctx.deps(), &doc, page_no, (bbox[0], bbox[1], bbox[2], bbox[3]), &text)?;
+    docs_bridge::emit_changed(&app, "updated", vec![id]);
+    crate::knowledge_bridge::auto_index(&app);
+    Ok(layout)
 }
 
 #[derive(Debug, Clone, Deserialize)]

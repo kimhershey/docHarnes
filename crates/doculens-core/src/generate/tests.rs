@@ -1095,10 +1095,17 @@ fn save_registers_generated_documents_in_the_library() {
     }
     let stored = store::load(&w.paths, &d.id).unwrap();
     assert!(stored.saved_doc_id.is_some());
-    // Markdown is written but not registered (not an input format).
+    // Markdown is an input format too (text family, 2026-11-09): the file is registered as a generated
+    // document and converted through the text reader, so its content is searchable.
     let md =
         render::save(&deps, &SaveRequest { draft: d.clone(), output: OutputFormat::Md, ..Default::default() }).unwrap();
-    assert!(md.doc_id.is_none() && md.warnings.iter().any(|w| w.contains("Markdown")));
+    let md_id = md.doc_id.clone().expect("markdown registered");
+    assert!(!md.warnings.iter().any(|w| w.contains("Markdown")), "{:?}", md.warnings);
+    let md_doc = w.db.with(|c| docs::get_document(c, &md_id)).unwrap().unwrap();
+    assert_eq!(md_doc.source_kind, crate::documents::SourceKind::Text);
+    assert_eq!(md_doc.role, crate::documents::DocumentRole::Generated);
+    let md_pages = w.db.with(|c| docs::list_pages(c, &md_id, true)).unwrap();
+    assert!(md_pages.first().and_then(|p| p.text.as_deref()).unwrap_or("").contains("노트북"), "{md_pages:?}");
 }
 
 // ---------------------------------------------------------------------------

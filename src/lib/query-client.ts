@@ -19,6 +19,7 @@ export const queryKeys = {
   document: (id: string) => ["documents", "doc", id] as const,
   documentPages: (id: string, withText: boolean) => ["documents", "pages", id, withText] as const,
   documentPageText: (id: string, pageNo: number) => ["documents", "text", id, pageNo] as const,
+  documentPageLayout: (id: string, pageNo: number) => ["documents", "layout", id, pageNo] as const,
   pdfium: ["pdfium"] as const,
   knowledge: ["knowledge"] as const,
   knowledgeStatus: ["knowledge", "status"] as const,

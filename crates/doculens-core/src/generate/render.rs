@@ -829,10 +829,13 @@ fn register(
 ) -> Result<Option<String>> {
     let ko = deps.ko();
     let Some(kind) = SourceKind::from_path(abs) else {
+        // Every output format is an input format now (Markdown through the text reader); this only
+        // guards an unexpected extension.
+        let ext = abs.extension().and_then(|e| e.to_str()).unwrap_or("");
         warnings.push(tr(
             ko,
-            "Markdown 파일은 라이브러리에 등록되지 않습니다(입력 형식이 아님).",
-            "Markdown files are not registered in the library (not an input format).",
+            &format!("{ext} 파일은 라이브러리에 등록되지 않습니다(입력 형식이 아님)."),
+            &format!("{ext} files are not registered in the library (not an input format)."),
         ));
         return Ok(None);
     };

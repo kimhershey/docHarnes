@@ -234,7 +234,8 @@ fn process_document(
         if !wanted || page.is_blank == Some(true) || page.width_px == 0 {
             continue;
         }
-        let is_ocr = page.text_source.as_deref() == Some("ocr");
+        // OCR output and manual corrections are only replaced by a forced re-run.
+        let is_ocr = matches!(page.text_source.as_deref(), Some("ocr") | Some("manual"));
         let do_ocr = if is_ocr {
             req.force
         } else if has_text(page) {

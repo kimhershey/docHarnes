@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import ko from "../src/i18n/ko.json" with { type: "json" };
+
 import { createWorkspace, freshApp, openImportPreview } from "./helpers";
 
 // P2 acceptance (design §4.1): import (preview with duplicates / unsupported
@@ -86,7 +88,7 @@ test.describe("P2 documents", () => {
     await expect(page.getByTestId("page-viewer")).toBeVisible();
     await expect(page.getByTestId("viewer-page")).toHaveText("1 / 12");
     await expect(page.getByTestId("viewer-image")).toBeVisible();
-    await expect(page.getByTestId("viewer-text")).toContainText("1쪽의 텍스트");
+    await expect(page.getByTestId("viewer-text-layer")).toContainText("1쪽의 텍스트");
     await page.getByTestId("viewer-next").click();
     await expect(page.getByTestId("viewer-page")).toHaveText("2 / 12");
     await page.getByTestId("viewer-canvas").click();
@@ -96,11 +98,14 @@ test.describe("P2 documents", () => {
     await expect(page.getByTestId("viewer-zoom")).toHaveText("125%");
     await page.keyboard.press("0");
     await expect(page.getByTestId("viewer-zoom")).toHaveText("맞춤");
-    // Arrow keys inside the tab list move between tabs without flipping the page.
-    await page.getByTestId("viewer-tab-text").focus();
+    // Arrow keys inside the tab list move between tabs without flipping the page; the right pane
+    // only has AI 검색 and 이력 (user decision 2026-11-09).
+    await expect(page.getByTestId("viewer-tab-text")).toHaveCount(0);
+    await expect(page.getByTestId("viewer-tab-fields")).toHaveCount(0);
+    await page.getByTestId("viewer-tab-qa").focus();
     await page.keyboard.press("ArrowRight");
     await expect(page.getByTestId("viewer-page")).toHaveText("3 / 12");
-    await expect(page.getByTestId("viewer-tab-fields")).toHaveAttribute("data-state", "active");
+    await expect(page.getByTestId("viewer-tab-history")).toHaveAttribute("data-state", "active");
     // The strip is virtualised: scroll it to the end so the last thumbnail is mounted.
     await page.getByTestId("viewer-thumbs").evaluate((el) => {
       el.scrollTop = el.scrollHeight;
@@ -173,5 +178,67 @@ test.describe("P2 documents", () => {
     await page.getByTestId("library-import-existing").click();
     await expect(page.getByTestId("doc-import-paths")).toHaveValue("C:\\Work\\Docs");
     await expect(page.getByTestId("doc-import-error").or(page.getByTestId("doc-import-plan"))).toBeVisible();
+  });
+
+  test("words on the page image can be corrected in place: click / drag-select, Enter, type, Enter", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await page.getByTestId("nav-library").click();
+    await openImportPreview(page, ["D:\\scan\\메모-1p.pdf"]);
+    await page.getByTestId("doc-import-run").click();
+    const card = page.locator('[data-testid^="doc-card-"][data-doc-name="메모-1p.pdf"]');
+    await expect(card).toHaveAttribute("data-doc-status", "rendered", { timeout: 15_000 });
+    await card.locator('[data-testid^="doc-open-"]').click();
+    const layer = page.getByTestId("viewer-text-layer");
+    await expect(layer).toContainText("1쪽의 텍스트");
+    await expect(layer).toHaveAttribute("data-layer-source", "layer");
+    // A click selects one word on the image and the floating toolbar names it.
+    const word = (text: string) => layer.locator("[data-word-index]", { hasText: text }).first();
+    await word("1쪽의").click();
+    await expect(page.getByTestId("viewer-selection-toolbar")).toContainText("1쪽의");
+    // Dragging from one word to another extends the selection in reading order.
+    const from = (await word("1쪽의").boundingBox())!;
+    const to = (await word("텍스트").boundingBox())!;
+    await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 6 });
+    await page.mouse.up();
+    await expect(page.getByTestId("viewer-selection-toolbar")).toContainText("1쪽의 텍스트");
+    await expect(layer.locator("[data-selected]")).toHaveCount(2);
+    // Enter opens the inline editor pre-filled with the selected words; Enter saves the replacement.
+    await page.getByTestId("page-viewer").focus();
+    await page.keyboard.press("Enter");
+    const input = page.getByTestId("viewer-text-input");
+    await expect(input).toBeVisible();
+    await expect(input).toHaveValue("1쪽의 텍스트");
+    await input.fill("첫째 쪽의 본문");
+    await page.keyboard.press("Enter");
+    await expect(layer).toContainText("첫째 쪽의 본문 레이어입니다.");
+    await expect(layer.locator("[data-edited]")).toHaveCount(3);
+    await expect(page.getByTestId("viewer-text-source")).toHaveText(ko.viewer.text_edit.source.manual);
+    // Escape drops a selection; a drag on empty space offers to add text the recogniser missed.
+    await word("합계").click();
+    await page.getByTestId("page-viewer").focus();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("viewer-selection-toolbar")).toHaveCount(0);
+    // The foot of the page is below the fold: scroll the canvas down before drawing the box there.
+    await page.getByTestId("viewer-canvas").evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    const box = (await layer.boundingBox())!;
+    await page.mouse.move(box.x + box.width * 0.15, box.y + box.height * 0.95);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.55, box.y + box.height * 0.975, { steps: 6 });
+    await page.mouse.up();
+    const add = page.getByTestId("viewer-text-add-input");
+    await expect(add).toBeVisible();
+    await add.fill("담당자 확인");
+    await page.keyboard.press("Enter");
+    await expect(layer).toContainText("담당자 확인");
+    // The corrections are searchable right away (the mock re-indexes on save).
+    await page.getByTestId("nav-search").click();
+    await page.getByTestId("search-input").fill("첫째 쪽");
+    await page.getByTestId("search-run").click();
+    await expect(page.getByTestId("search-hit").first()).toContainText("메모-1p.pdf", { timeout: 15_000 });
   });
 });

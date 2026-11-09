@@ -1281,17 +1281,22 @@
       "image": "이미지",
       "hwpx": "HWPX",
       "docx": "DOCX",
-      "hwp": "HWP"
+      "hwp": "HWP",
+      "xlsx": "XLSX",
+      "pptx": "PPTX",
+      "text": "텍스트"
     },
     "unsupported": {
       "heic": "HEIC/HEIF는 JPG로 변환 후 가져오세요",
-      "office_legacy": "지원하지 않는 오피스 형식(PDF로 저장 후 가져오기)",
-      "text": "텍스트 파일은 문서로 가져오지 않습니다",
+      "office_legacy": "지원하지 않는 오피스 형식(DOC·XLS·PPT·HML·RTF: DOCX/XLSX/PPTX/PDF로 저장 후 가져오기)",
       "no_extension": "확장자가 없습니다",
-      "unsupported_extension": "지원하지 않는 형식",
+      "unsupported_extension": "지원하지 않는 형식(PDF·이미지·HWP/HWPX·DOCX·XLSX·PPTX·텍스트 파일만 가져옵니다)",
       "empty": "빈 파일",
       "too_large": "파일이 너무 큽니다(2 GB 초과)",
-      "unreadable": "읽을 수 없는 파일"
+      "unreadable": "읽을 수 없는 파일",
+      "archive": "압축 파일은 풀어서 문서만 가져오세요",
+      "executable": "실행 파일은 가져오지 않습니다",
+      "encrypted": "암호로 보호된 문서(암호를 해제한 뒤 가져오기)"
     },
     "doc_types": {
       "tax_invoice": "세금계산서",
@@ -1362,13 +1367,9 @@
     "delete": "삭제(휴지통)",
     "delete_confirm": "'{{name}}' 문서를 삭제할까요? 파일은 휴지통으로 이동합니다.",
     "tabs": {
-      "text": "텍스트",
-      "fields": "필드",
-      "tables": "표",
-      "qa": "Q&A",
+      "qa": "AI 검색",
       "history": "이력"
     },
-    "text_empty": "이 쪽에는 텍스트가 없습니다. '처리'로 OCR을 실행하면 여기에 표시됩니다.",
     "no_image": "페이지 이미지가 없습니다. 다시 렌더를 눌러 생성하세요.",
     "no_pages": "렌더된 페이지가 없습니다.",
     "converted_badge": "변환본",
@@ -1382,10 +1383,6 @@
     "thumbnails": "페이지",
     "rotated": "회전을 저장했습니다. OCR 결과가 있으면 다시 처리를 권장합니다.",
     "deleted": "문서를 삭제했습니다.",
-    "placeholder_fields": "추출 필드 그리드는 P4(파이프라인)에서 제공됩니다.",
-    "placeholder_tables": "표 탭(XLSX/CSV/클립보드)은 P4에서 제공됩니다.",
-    "placeholder_qa": "문서 Q&A는 P3(지식 베이스)에서 제공됩니다.",
-    "placeholder_history": "실행 이력·필드 스냅샷은 P4에서 제공됩니다.",
     "info": {
       "path": "경로",
       "size": "크기",
@@ -1443,44 +1440,6 @@
       "saved": "버전 정보를 저장했습니다."
     },
     "explain_with_chord": "설명 ({{chord}})",
-    "fields": {
-      "run": "실행 #{{n}}",
-      "schema": "스키마",
-      "none": "아직 추출 결과가 없습니다. '처리'로 추출을 시작하세요.",
-      "extract": "지금 추출",
-      "approve": "승인",
-      "correct": "수정",
-      "hold": "보류",
-      "next": "다음",
-      "reject": "거부",
-      "revalidate": "검증 다시 실행",
-      "revalidated": "검증을 다시 실행했습니다.",
-      "evidence": "근거",
-      "confidence": "신뢰도",
-      "change_schema": "스키마 변경",
-      "schema_auto": "자동(유형 매핑)",
-      "pending": "검토 대기 {{count}}",
-      "approve_all": "모두 승인",
-      "table_row": "{{table}} {{row}}행",
-      "edit_placeholder": "새 값",
-      "empty_value": "(없음)",
-      "page_link": "{{page}}쪽",
-      "schema_changed": "스키마를 바꿨습니다. 다시 추출하면 반영됩니다.",
-      "precise": "정밀",
-      "run_select": "실행 선택",
-      "open_queue": "검토 큐에서 보기",
-      "more": "더 보기"
-    },
-    "tables": {
-      "none": "텍스트에서 찾은 표가 없습니다. OCR 결과의 HTML 표와 마크다운 표를 표시합니다.",
-      "copy": "클립보드 복사",
-      "csv": "CSV 저장",
-      "copied": "표를 복사했습니다.",
-      "saved": "CSV를 저장했습니다.",
-      "page": "{{page}}쪽 · 표 {{index}}",
-      "rows": "{{count}}행",
-      "rows_one": "{{count}}행"
-    },
     "history": {
       "runs": "추출 실행",
       "changes": "필드 변경",
@@ -1509,7 +1468,40 @@
     "type_changed": "유형을 바꿨습니다. 새 유형의 스키마로 다시 추출할까요?",
     "reextract": "다시 추출",
     "ocr_badge": "OCR",
-    "image_failed": "페이지 이미지를 불러오지 못했습니다. 캐시에서 지워진 페이지는 다시 렌더하면 복구됩니다."
+    "image_failed": "페이지 이미지를 불러오지 못했습니다. 캐시에서 지워진 페이지는 다시 렌더하면 복구됩니다.",
+    "text_edit": {
+      "edit": "텍스트 수정",
+      "hint": "이미지 위의 글자를 드래그해 선택한 뒤 Enter(또는 '텍스트 수정')를 누르면 그 자리에서 바로 고칠 수 있습니다.",
+      "selection": "선택: “{{text}}”",
+      "set_field": "필드 값으로",
+      "set_field_none": "추출된 필드가 없습니다",
+      "field_set": "'{{label}}' 값을 선택한 글자로 바꿨습니다",
+      "saved": "{{page}}쪽 텍스트를 저장했습니다",
+      "unchanged": "바뀐 내용이 없습니다",
+      "source": {
+        "layer": "텍스트 레이어",
+        "converted": "변환",
+        "ocr": "OCR",
+        "manual": "직접 수정"
+      }
+    },
+    "layer": {
+      "aria": "페이지 글자 레이어",
+      "hint": "이미지 위의 글자를 드래그해 선택한 뒤 Enter(또는 '텍스트 수정')로 그 자리에서 고칠 수 있습니다. 빈 곳을 드래그하면 글자를 추가합니다.",
+      "no_text": "이 쪽에는 인식된 글자가 없습니다. '처리'로 OCR을 실행하거나, 빈 곳을 드래그해 글자를 직접 입력하세요.",
+      "estimated": "위치 추정",
+      "estimated_title": "스캔·사진은 글자 좌표가 없어 줄 위치를 이미지에서 추정했습니다. 선택·수정은 똑같이 동작합니다.",
+      "copy": "복사",
+      "copied": "선택한 글자를 복사했습니다.",
+      "add_text": "글자 추가",
+      "add_placeholder": "이 자리의 글자를 입력",
+      "edit_hint": "Enter 저장 · Esc 취소"
+    },
+    "fields": {
+      "run": "실행 #{{n}}",
+      "empty_value": "(없음)",
+      "table_row": "{{table}} {{row}}행"
+    }
   },
   "answer": {
     "sources": "근거",
@@ -2378,7 +2370,7 @@
       "open_folder": "폴더 열기",
       "open_library": "라이브러리에서 보기",
       "exists": "같은 이름의 파일이 이미 있습니다. 덮어쓰기를 켜거나 파일 이름을 바꾸세요.",
-      "warning_markdown": "Markdown은 라이브러리에 등록하지 않습니다.",
+      "warning_markdown": "Markdown(.md)도 '생성' 문서로 라이브러리에 등록되어 검색·질문에 쓰입니다(텍스트 형식).",
       "saved_as": "저장했습니다 ({{format}}): {{path}}"
     },
     "drafts_list": {

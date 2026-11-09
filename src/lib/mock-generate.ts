@@ -878,6 +878,9 @@ function sourceKindOf(format: OutputFormat): SourceKind | null {
       return "docx";
     case "pdf":
       return "pdf";
+    case "md":
+      // Markdown is an input format too (text family): generated drafts register like the core.
+      return "text";
     default:
       return null;
   }

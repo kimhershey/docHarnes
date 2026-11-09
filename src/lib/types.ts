@@ -691,7 +691,7 @@ export const EVENTS = {
 // src-tauri/src/commands/documents.rs
 // ---------------------------------------------------------------------------
 
-export type SourceKind = "pdf" | "image" | "hwpx" | "docx" | "hwp";
+export type SourceKind = "pdf" | "image" | "hwpx" | "docx" | "hwp" | "xlsx" | "pptx" | "text";
 export const SOURCE_KINDS: SourceKind[] = ["pdf", "image", "hwpx", "docx", "hwp"];
 export type DocumentStatus =
   | "importing"
@@ -790,6 +790,28 @@ export interface PageView extends PageRecord {
   thumb_url: string | null;
 }
 
+/** How the word boxes of a page layout were obtained (`documents::layout`). */
+export type LayoutSource = "layer" | "estimated";
+
+/** One word of a page's text layer; `x`/`y`/`w`/`h` are fractions of the page image. */
+export interface PageWord {
+  t: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Reading-order line index (0-based). */
+  line: number;
+  edited?: boolean;
+}
+
+/** Positioned text layer of a page: selection and correction happen on the page image. */
+export interface PageLayout {
+  version: number;
+  source: LayoutSource;
+  words: PageWord[];
+}
+
 export interface DocumentFilter {
   statuses?: DocumentStatus[];
   kinds?: SourceKind[];
@@ -862,6 +884,8 @@ export interface ImportItem {
   inside_workspace: boolean;
   rel_path: string | null;
   content_hash: string | null;
+  /** Classification remark (the content, not the extension, decided the kind). */
+  note?: string | null;
   status: ImportItemStatus;
 }
 

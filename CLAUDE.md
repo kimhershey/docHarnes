@@ -26,6 +26,9 @@ user PC: `docs/RUN-GUIDE.md`.
 3. Spawn review subagents only at the end of a phase.
 4. v1.0 scope = P0–P4 + core planner ops; document generation and project
    consistency checks (P6) and quality / packaging (P7) are v1.1.
+5. Installer builds (Actions "Windows installer (manual)") are dispatched only after every task of the
+   request is finished and the full verification (`cargo test --workspace`, clippy, vitest, Playwright,
+   CI on the pushed commit) reports no FAILED — never mid-work (user decision 2026-11-09).
 
 ## Commands
 - Rust: `cargo test --workspace` (lib + `tests/engine_process.rs`), `cargo check -p doculens`,
@@ -54,8 +57,10 @@ user PC: `docs/RUN-GUIDE.md`.
 - `crates/doculens-core/` — settings, workspace, hw/tier, memory, registry, retention, prerouter,
   `gguf` (header parser, hashes), `modelstore` (drop-in folders, import, download), `fswatch` (debounced watcher),
   `engine/` (locate, devices, presets, client, process, manager, fake_router),
-  `db/` (rusqlite + embedded migrations), `documents/` (repo, import plan/run/rescan, render via PDFium,
-  `convert/` HWPX·DOCX·HWP → model → HTML → PDF through a `PdfPrinter`, fixtures),
+  `db/` (rusqlite + embedded migrations), `documents/` (repo, import plan/run/rescan with content-based
+  classification (`sniff`: magic bytes / zip & CFB entries → `import::classify`), render via PDFium, `layout` (word boxes of the
+  page text: PDFium char boxes or ink-band estimate for OCR pages; on-image edits rewrite `pages.text`),
+  `convert/` HWPX·DOCX·HWP·XLSX·PPTX·text (txt/md/csv/html…) → model → HTML → PDF through a `PdfPrinter`, fixtures),
   `knowledge/` (tokenize: lindera ko-dic / simple analyzer, chunker: structure-aware chunking, repo, index,
   embed: sqlite-vec + `Embedder`, search: hybrid RRF, answer: grounded answers / explain / summarize / compare),
   `pipeline/` (schema: built-in sample forms + grammar-safe JSON schema + lint, prompts, vlm: retrying caller, image,
@@ -104,7 +109,7 @@ user PC: `docs/RUN-GUIDE.md`.
   `chunks` + FTS5 `chunks_fts`/`chunks_fts_tri`, sqlite-vec `chunks_vec`, `collections`, `doc_versions`, `glossary`,
   `answers`; pipeline tables `schemas`, `schema_versions`, `extraction_runs`, `fields`, `field_history`; P5 tables
   `journal_batches`, `ops_journal`, `jobs`; P6 tables `projects`, `project_templates`, `project_documents`,
-  `project_rules`, `project_runs`, `project_rule_results`), drafts `.doculens/drafts/<id>.json`, page cache
+  `project_rules`, `project_runs`, `project_rule_results`; `pages.layout` word-box JSON (0006)), drafts `.doculens/drafts/<id>.json`, page cache
   `.doculens/cache/{pages,thumbs,converted}/<doc_id>/`, extraction mirror `.doculens/extractions/<doc_id>/<run_id>/`;
   DB rows store workspace-relative paths only. OCR text lives in `pages.text` (`text_source = ocr`) so the knowledge
   indexer re-chunks it.
