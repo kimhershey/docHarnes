@@ -115,6 +115,7 @@ pub fn run() {
             commands::documents::documents_get,
             commands::documents::documents_pages,
             commands::documents::documents_page_text,
+            commands::documents::documents_set_page_text,
             commands::documents::documents_import_plan,
             commands::documents::documents_import_run,
             commands::documents::documents_rescan,

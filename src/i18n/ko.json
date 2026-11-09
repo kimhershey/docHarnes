@@ -1373,7 +1373,7 @@
       "qa": "Q&A",
       "history": "이력"
     },
-    "text_empty": "이 쪽에는 텍스트가 없습니다. '처리'로 OCR을 실행하면 여기에 표시됩니다.",
+    "text_empty": "이 쪽에는 텍스트가 없습니다. '처리'로 OCR을 실행하거나 '텍스트 입력'으로 직접 적을 수 있습니다.",
     "no_image": "페이지 이미지가 없습니다. 다시 렌더를 눌러 생성하세요.",
     "no_pages": "렌더된 페이지가 없습니다.",
     "converted_badge": "변환본",
@@ -1514,7 +1514,28 @@
     "type_changed": "유형을 바꿨습니다. 새 유형의 스키마로 다시 추출할까요?",
     "reextract": "다시 추출",
     "ocr_badge": "OCR",
-    "image_failed": "페이지 이미지를 불러오지 못했습니다. 캐시에서 지워진 페이지는 다시 렌더하면 복구됩니다."
+    "image_failed": "페이지 이미지를 불러오지 못했습니다. 캐시에서 지워진 페이지는 다시 렌더하면 복구됩니다.",
+    "text_edit": {
+      "edit": "텍스트 수정",
+      "type_in": "텍스트 입력",
+      "hint": "글자를 드래그해 선택한 뒤 Enter(또는 '수정')를 누르면 그 자리에서 바로 고칠 수 있습니다.",
+      "editing_hint": "저장하면 검색·질문·추출에 바로 반영됩니다. Ctrl+Enter 저장 · Esc 취소",
+      "selection": "선택: “{{text}}”",
+      "set_field": "필드 값으로",
+      "set_field_none": "추출된 필드가 없습니다",
+      "field_set": "'{{label}}' 값을 선택한 글자로 바꿨습니다",
+      "saved": "{{page}}쪽 텍스트를 저장했습니다",
+      "unchanged": "바뀐 내용이 없습니다",
+      "source_label": "출처",
+      "source": {
+        "layer": "텍스트 레이어",
+        "converted": "변환",
+        "ocr": "OCR",
+        "manual": "직접 수정"
+      },
+      "manual_badge": "수정됨",
+      "placeholder": "이 쪽의 텍스트를 입력하세요"
+    }
   },
   "answer": {
     "sources": "근거",

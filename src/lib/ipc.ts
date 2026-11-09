@@ -207,6 +207,8 @@ export const api = {
   documentsGet: (id: string) => invoke<DocumentView>("documents_get", { id }),
   documentsPages: (id: string, withText = false) => invoke<PageView[]>("documents_pages", { id, withText }),
   documentsPageText: (id: string, pageNo: number) => invoke<string | null>("documents_page_text", { id, pageNo }),
+  /** Manual correction of a page's text (viewer text tab); the knowledge index follows. */
+  documentsSetPageText: (id: string, pageNo: number, text: string) => invoke<boolean>("documents_set_page_text", { id, pageNo, text }),
   documentsImportPlan: (paths: string[], options: ImportOptions, source: ImportSource = "drop") =>
     invoke<DocumentImportPlan>("documents_import_plan", { args: { paths, options, source } }),
   documentsImportRun: (token: string | null, paths: string[], options: ImportOptions, source: ImportSource = "drop") =>

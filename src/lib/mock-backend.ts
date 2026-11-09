@@ -2013,6 +2013,20 @@ function mockDocuments(cmd: string, a: Record<string, any>): unknown { // eslint
       const d = wsDocs().find((x) => x.id === a.id);
       return d?.pages.find((p) => p.page_no === Number(a.pageNo))?.text ?? null;
     }
+    case "documents_set_page_text": {
+      const d = wsDocs().find((x) => x.id === a.id);
+      const p = d?.pages.find((x) => x.page_no === Number(a.pageNo));
+      if (!d || !p) return false;
+      const text = String(a.text ?? "").trimEnd();
+      p.text = text.trim() ? text : null;
+      p.text_source = "manual";
+      d.has_text_layer = d.pages.some((x) => !!x.text);
+      d.updated_at = new Date().toISOString();
+      upsertDoc(d);
+      emit(EVENTS.documentsChanged, { kind: "updated", ids: [d.id] } satisfies DocumentsChanged);
+      void import("./mock-knowledge").then((kb) => kb.autoIndex());
+      return true;
+    }
     case "documents_import_plan": {
       const args = a.args as { paths: string[]; options: ImportOptions; source: ImportSource };
       if (!args.paths?.length) throw err("invalid", "no files");
@@ -2387,6 +2401,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "documents_get":
     case "documents_pages":
     case "documents_page_text":
+    case "documents_set_page_text":
     case "documents_import_plan":
     case "documents_import_run":
     case "documents_rescan":

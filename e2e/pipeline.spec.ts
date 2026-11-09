@@ -192,4 +192,37 @@ test.describe("P4 pipeline", () => {
     await expect(page.getByTestId("settings-inbox-auto-level")).toBeVisible();
     await expect(page.getByTestId("settings-precise-mode")).toBeVisible();
   });
+
+  test("a text selection in the viewer becomes a field value with one click", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await processReceipt(page);
+    await card(page, "영수증-1p.jpg").getByTestId(/doc-open-/).click();
+    const text = page.getByTestId("viewer-text");
+    await expect(text).toContainText("스타벅스 역삼점");
+    await text.evaluate((el) => {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let node: Text | null = null;
+      while ((node = walker.nextNode() as Text | null)) {
+        const i = node.data.indexOf("역삼점");
+        if (i >= 0) {
+          const range = document.createRange();
+          range.setStart(node, i);
+          range.setEnd(node, i + 3);
+          const sel = window.getSelection()!;
+          sel.removeAllRanges();
+          sel.addRange(range);
+          break;
+        }
+      }
+    });
+    await expect(page.getByTestId("viewer-selection-toolbar")).toContainText("역삼점");
+    await page.getByTestId("viewer-selection-field").click();
+    // The menu lists each field with its current value: pick the store name by its value.
+    await page.getByRole("menuitem").filter({ hasText: "스타벅스 역삼점" }).click();
+    await page.getByTestId("viewer-tab-fields").click();
+    const storeName = page.getByTestId("field-store_name");
+    await expect(storeName.getByTestId("field-value")).toHaveText("역삼점");
+    await expect(storeName.getByTestId("field-status")).toHaveText(ko.pipeline.field_status.corrected);
+  });
 });

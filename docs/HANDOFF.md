@@ -1107,6 +1107,22 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   크기), text(디코딩 3종·CSV 따옴표·마크다운 구조·CP949 CSV·HTML/TXT), sniff(시그니처·컨테이너·CFB 변형·텍스트·잡음), `SourceKind`
   확장자 테스트; 실제 Excel/PowerPoint 산출물·CP949 메모장 파일은 사용자 PC(체크리스트 "입력 형식 확장").
 
+### 뷰어 텍스트 직접 편집 (2026-11-09, 사용자 요청 "문서 내용 수정이 너무 어려움 — 글자를 드래그해 바로 수정")
+
+- **UI** `features/library/PageTextPanel.tsx`(뷰어 텍스트 탭 분리): 출처 배지(텍스트 레이어/변환/OCR/직접 수정) + '수정'('텍스트 입력')
+  버튼, 글자를 드래그하면 고정 선택 툴바(선택 문구 · **수정** · **필드 값으로 ▾**(문서의 추출 필드 목록, 현재 값 표시 →
+  `pipeline_review_apply correct`) · **설명**(기존 Ctrl+Shift+E 경로)). 편집 모드는 textarea에 쪽 전체 텍스트를 넣고 드래그한 범위를
+  `selectionOffsets`(Range → 문자 오프셋; `<mark>` 강조와 무관)로 그대로 선택해 두므로 바로 타이핑하면 그 글자만 바뀐다. 뷰어 키:
+  선택 상태에서 Enter/F2 → 편집, Ctrl+Enter 저장, Esc 취소(IME 조합 중 무시).
+- **저장 경로** `documents_set_page_text` → `repo::set_page_text`(`pages.text`, `text_source = 'manual'`, 빈 텍스트면 지움,
+  `documents.updated_at`·`has_text_layer` 갱신) → `documents://changed` + `knowledge_bridge::auto_index`(텍스트 해시가 바뀌어 재청킹).
+  보호: `replace_pages`(다시 렌더)는 manual 텍스트를 새 레이어보다 우선 보존, OCR 단계는 `ocr`처럼 `force`일 때만 덮어씀.
+- **모의 백엔드** 동일 동작(저장 → 이벤트 → 자동 색인). i18n `viewer.text_edit.*`, `viewer.text_empty` 문구 갱신.
+- **검증**: Rust `manual_page_text_survives_rerender_and_clears`, `manual_text_is_kept_unless_ocr_is_forced`; Playwright
+  `documents.spec` "viewer text can be corrected in place"(드래그 선택 → Enter → 범위 선택 확인 → 치환 → Ctrl+Enter → 출처 배지 →
+  검색 반영), `pipeline.spec` "a text selection becomes a field value". 설계 §3.7의 "직접 수정"으로 기록. 페이지 이미지 위 글자 선택
+  (문자 박스 그라운딩)은 v1.x 숙제 그대로 — 현재는 텍스트 탭에서 선택·수정.
+
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |

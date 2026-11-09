@@ -272,13 +272,13 @@ pub fn replace_pages(
     converted: bool,
     conversion_note: Option<&str>,
 ) -> rusqlite::Result<()> {
-    // OCR results and classifications survive a re-render (the pixels did not change);
-    // a page that now carries its own text layer drops the OCR copy.
+    // OCR results, manual corrections and classifications survive a re-render (the pixels did not
+    // change); a page that now carries its own text layer drops the OCR copy but keeps a manual one.
     let mut kept: BTreeMap<u32, OcrColumns> = BTreeMap::new();
     {
         let mut old = conn.prepare_cached(
-            "SELECT page_no, text, ocr_at, ocr_profile, ocr_model, classified_at, page_doc_type, page_language, page_rotation \
-             FROM pages WHERE document_id = ?1 AND (text_source = 'ocr' OR classified_at IS NOT NULL)",
+            "SELECT page_no, text, ocr_at, ocr_profile, ocr_model, classified_at, page_doc_type, page_language, page_rotation, \
+             text_source FROM pages WHERE document_id = ?1 AND (text_source IN ('ocr', 'manual') OR classified_at IS NOT NULL)",
         )?;
         let rows = old.query_map([id], |r| {
             Ok((
@@ -292,6 +292,7 @@ pub fn replace_pages(
                     page_doc_type: r.get(6)?,
                     page_language: r.get(7)?,
                     page_rotation: r.get(8)?,
+                    text_source: r.get(9)?,
                 },
             ))
         })?;
@@ -311,16 +312,26 @@ pub fn replace_pages(
     for p in pages {
         let own = p.text.as_deref().map(str::trim).filter(|t| !t.is_empty());
         let old = kept.get(&p.page_no);
-        let ocr = old.filter(|_| own.is_none()).and_then(|c| c.text.as_deref()).filter(|t| !t.trim().is_empty());
-        let text = own.or(ocr);
-        let text_source = if own.is_some() {
+        let manual = old
+            .filter(|c| c.text_source.as_deref() == Some("manual"))
+            .and_then(|c| c.text.as_deref())
+            .filter(|t| !t.trim().is_empty());
+        let ocr = old
+            .filter(|c| c.text_source.as_deref() == Some("ocr"))
+            .filter(|_| own.is_none())
+            .and_then(|c| c.text.as_deref())
+            .filter(|t| !t.trim().is_empty());
+        let text = manual.or(own).or(ocr);
+        let text_source = if manual.is_some() {
+            Some("manual")
+        } else if own.is_some() {
             Some(if converted { "converted" } else { "layer" })
         } else if ocr.is_some() {
             Some("ocr")
         } else {
             None
         };
-        has_text |= own.is_some();
+        has_text |= own.is_some() || manual.is_some();
         stmt.execute(params![
             id,
             p.page_no as i64,
@@ -360,7 +371,7 @@ pub fn replace_pages(
     Ok(())
 }
 
-/// OCR / classification columns carried over a re-render.
+/// OCR / manual-text / classification columns carried over a re-render.
 struct OcrColumns {
     text: Option<String>,
     ocr_at: Option<String>,
@@ -370,6 +381,7 @@ struct OcrColumns {
     page_doc_type: Option<String>,
     page_language: Option<String>,
     page_rotation: Option<i64>,
+    text_source: Option<String>,
 }
 
 pub fn list_pages(conn: &Connection, id: &str, with_text: bool) -> rusqlite::Result<Vec<PageRecord>> {
@@ -407,6 +419,29 @@ pub fn list_pages(conn: &Connection, id: &str, with_text: bool) -> rusqlite::Res
 
 pub fn get_page(conn: &Connection, id: &str, page_no: u32) -> rusqlite::Result<Option<PageRecord>> {
     Ok(list_pages(conn, id, true)?.into_iter().find(|p| p.page_no == page_no))
+}
+
+/// Stores a manual correction of a page's text (`text_source = 'manual'`, design §3.7 "직접 수정"):
+/// it survives re-renders and the OCR stage (only a forced re-OCR replaces it) and bumps the
+/// document so the knowledge indexer re-chunks it. An empty text clears the page's text.
+/// Returns false when the page does not exist.
+pub fn set_page_text(conn: &Connection, id: &str, page_no: u32, text: &str) -> rusqlite::Result<bool> {
+    let now = ts(&Utc::now());
+    let value = (!text.trim().is_empty()).then_some(text.trim_end());
+    let n = conn.execute(
+        "UPDATE pages SET text = ?3, has_text = ?4, text_source = 'manual' WHERE document_id = ?1 AND page_no = ?2",
+        params![id, page_no as i64, value, value.is_some() as i64],
+    )?;
+    if n == 0 {
+        return Ok(false);
+    }
+    conn.execute(
+        "UPDATE documents SET updated_at = ?2, \
+         has_text_layer = CASE WHEN ?3 THEN 1 ELSE (SELECT COUNT(*) > 0 FROM pages WHERE document_id = ?1 AND has_text = 1) END \
+         WHERE id = ?1",
+        params![id, now, value.is_some()],
+    )?;
+    Ok(true)
 }
 
 pub fn set_page_rotation(conn: &Connection, id: &str, page_no: u32, rotation: u16) -> rusqlite::Result<()> {
@@ -688,6 +723,46 @@ mod tests {
         assert!(!db.with(|c| delete_document(c, "a")).unwrap());
         let tags = db.with(list_tags).unwrap();
         assert_eq!(tags.iter().find(|(n, _)| n == "출장").map(|(_, n)| *n), Some(0));
+    }
+
+    #[test]
+    fn manual_page_text_survives_rerender_and_clears() {
+        let db = Db::open_in_memory().unwrap();
+        let page = |no: u32, text: Option<&str>| NewPage {
+            page_no: no,
+            width_px: 100,
+            height_px: 200,
+            text: text.map(str::to_string),
+            ..Default::default()
+        };
+        db.with(|c| {
+            insert_document(c, &new_doc("a", "documents/a.pdf", "h1"))?;
+            replace_pages(c, "a", &[page(1, None), page(2, Some("layer text"))], Some(200), false, None)
+        })
+        .unwrap();
+        assert!(!db.with(|c| get_document(c, "a")).unwrap().unwrap().has_text_layer || true);
+        // Correct page 1 (image-only) by hand.
+        assert!(db.with(|c| set_page_text(c, "a", 1, "수동 입력 텍스트  \n")).unwrap());
+        assert!(!db.with(|c| set_page_text(c, "a", 9, "x")).unwrap(), "unknown page");
+        let pages = db.with(|c| list_pages(c, "a", true)).unwrap();
+        assert_eq!(pages[0].text.as_deref(), Some("수동 입력 텍스트"));
+        assert_eq!(pages[0].text_source.as_deref(), Some("manual"));
+        assert!(pages[0].has_text);
+        assert!(db.with(|c| get_document(c, "a")).unwrap().unwrap().has_text_layer);
+        // A re-render keeps the manual text (even for a page that now has a layer) and the layer elsewhere.
+        db.with(|c| {
+            replace_pages(c, "a", &[page(1, Some("fresh layer")), page(2, Some("layer text"))], Some(300), false, None)
+        })
+        .unwrap();
+        let pages = db.with(|c| list_pages(c, "a", true)).unwrap();
+        assert_eq!(pages[0].text.as_deref(), Some("수동 입력 텍스트"));
+        assert_eq!(pages[0].text_source.as_deref(), Some("manual"));
+        assert_eq!(pages[1].text_source.as_deref(), Some("layer"));
+        // Clearing the text leaves the page without text; the document flag follows the other pages.
+        assert!(db.with(|c| set_page_text(c, "a", 1, "   ")).unwrap());
+        let pages = db.with(|c| list_pages(c, "a", true)).unwrap();
+        assert!(pages[0].text.is_none() && !pages[0].has_text);
+        assert!(db.with(|c| get_document(c, "a")).unwrap().unwrap().has_text_layer, "page 2 still has text");
     }
 
     #[test]

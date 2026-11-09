@@ -275,7 +275,7 @@ pub struct PageRecord {
     pub is_blank: Option<bool>,
     pub rendered_at: Option<DateTime<Utc>>,
     // -- pipeline (P4) --
-    /// `layer` (PDF text layer), `converted` (office reader), `ocr` (VLM).
+    /// `layer` (PDF text layer), `converted` (office reader), `ocr` (VLM), `manual` (edited in the viewer).
     pub text_source: Option<String>,
     pub ocr_at: Option<DateTime<Utc>>,
     pub ocr_profile: Option<String>,

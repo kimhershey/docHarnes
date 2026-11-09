@@ -1373,7 +1373,7 @@
       "qa": "Q&A",
       "history": "History"
     },
-    "text_empty": "This page has no text yet. Run 'Process' to OCR it.",
+    "text_empty": "This page has no text yet. Run OCR with 'Process' or type it with 'Type text'.",
     "no_image": "No page image. Click Re-render to create it.",
     "no_pages": "No rendered pages.",
     "converted_badge": "converted",
@@ -1514,7 +1514,28 @@
     "type_changed": "Type changed. Re-extract with the new type's schema?",
     "reextract": "Re-extract",
     "ocr_badge": "OCR",
-    "image_failed": "The page image could not be loaded. A page purged from the cache comes back after a re-render."
+    "image_failed": "The page image could not be loaded. A page purged from the cache comes back after a re-render.",
+    "text_edit": {
+      "edit": "Edit text",
+      "type_in": "Type text",
+      "hint": "Drag to select text, then press Enter (or 'Edit') to correct it in place.",
+      "editing_hint": "Saving updates search, questions and extraction at once. Ctrl+Enter saves · Esc cancels",
+      "selection": "Selected: “{{text}}”",
+      "set_field": "Set as field value",
+      "set_field_none": "No extracted fields",
+      "field_set": "'{{label}}' now holds the selected text",
+      "saved": "Saved the text of page {{page}}",
+      "unchanged": "Nothing changed",
+      "source_label": "Source",
+      "source": {
+        "layer": "Text layer",
+        "converted": "Converted",
+        "ocr": "OCR",
+        "manual": "Edited"
+      },
+      "manual_badge": "Edited",
+      "placeholder": "Type the text of this page"
+    }
   },
   "answer": {
     "sources": "Sources",

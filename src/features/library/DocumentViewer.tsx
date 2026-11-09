@@ -15,7 +15,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AddToCollectionDialog } from "@/features/knowledge/AddToCollectionDialog";
 import { confidenceGlyph, confidenceTone, DEFAULT_REVIEW_THRESHOLD, docTypeLabel, formatConfidence } from "@/features/pipeline/labels";
 import { ProcessMenu } from "@/features/pipeline/ProcessMenu";
-import { Snippet } from "@/features/search/SearchPage";
 import { describeError } from "@/lib/errors";
 import { api, revealPath } from "@/lib/ipc";
 import { useDocTypes, useDocument, useDocumentChunks, useDocumentCollections, useDocumentPages, usePipelineStatus } from "@/lib/queries";
@@ -28,6 +27,7 @@ import { useUiStore } from "@/stores/ui";
 
 import { FieldsPanel } from "./FieldsPanel";
 import { HistoryPanel } from "./HistoryPanel";
+import { PageTextPanel, selectionOffsets } from "./PageTextPanel";
 import { RetryImage } from "./RetryImage";
 import { SplitDialog } from "./SplitMergeDialogs";
 import { statusVariant } from "./status";
@@ -73,6 +73,8 @@ export function DocumentViewer() {
   const [tab, setTab] = useState<string>("text");
   const [explainSelection, setExplainSelection] = useState<string | null>(null);
   const [selectionText, setSelectionText] = useState("");
+  // Enter / F2 on a text selection opens the in-place editor with that range selected (§3.7 직접 수정).
+  const [editRequest, setEditRequest] = useState<{ offsets: [number, number] | null; seq: number } | null>(null);
   const [versionOpen, setVersionOpen] = useState(false);
   const [addToKb, setAddToKb] = useState(false);
   const [splitOpen, setSplitOpen] = useState(false);
@@ -224,6 +226,14 @@ export function DocumentViewer() {
   const go = useCallback((delta: number) => setPageNo((p) => Math.min(Math.max(1, p + delta), Math.max(1, total))), [total]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    if ((e.key === "Enter" || e.key === "F2") && tab === "text" && !e.ctrlKey && !e.metaKey && !e.altKey && isViewerKeyTarget(e.target)) {
+      const offsets = textRef.current ? selectionOffsets(textRef.current) : null;
+      if (offsets || e.key === "F2") {
+        e.preventDefault();
+        setEditRequest((r) => ({ offsets, seq: (r?.seq ?? 0) + 1 }));
+        return;
+      }
+    }
     if (matchesChord(e.nativeEvent, explainChord, isMac())) {
       const selection = window.getSelection();
       const anchor = selection?.anchorNode ?? null;
@@ -585,17 +595,18 @@ export function DocumentViewer() {
                   </Button>
                 </div>
               )}
-              {textLoading ? (
-                <Spinner />
-              ) : text ? (
-                <pre ref={textRef} className="whitespace-pre-wrap break-words font-sans text-sm selectable" data-testid="viewer-text">
-                  {highlights.length > 0 ? <Snippet text={text} highlights={highlights} /> : text}
-                </pre>
-              ) : (
-                <p className="text-sm text-fg-muted" data-testid="viewer-text-empty">
-                  {t("viewer.text_empty")}
-                </p>
-              )}
+              <PageTextPanel
+                doc={doc}
+                page={page}
+                text={text}
+                loading={textLoading}
+                highlights={highlights}
+                textRef={textRef}
+                selectionText={selectionText}
+                onExplain={(sel) => explain(sel)}
+                editRequest={editRequest}
+                onEditRequestHandled={() => setEditRequest(null)}
+              />
             </TabsContent>
             <TabsContent value="fields" className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
               <FieldsPanel key={doc.id} doc={doc} onGoToPage={goToEvidence} onStartExtract={() => void extractNow()} />

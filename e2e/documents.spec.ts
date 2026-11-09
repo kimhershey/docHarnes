@@ -174,4 +174,50 @@ test.describe("P2 documents", () => {
     await expect(page.getByTestId("doc-import-paths")).toHaveValue("C:\\Work\\Docs");
     await expect(page.getByTestId("doc-import-error").or(page.getByTestId("doc-import-plan"))).toBeVisible();
   });
+
+  test("viewer text can be corrected in place: drag-select, Enter, type, Ctrl+Enter", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await page.getByTestId("nav-library").click();
+    await openImportPreview(page, ["D:\\scan\\메모-1p.pdf"]);
+    await page.getByTestId("doc-import-run").click();
+    const card = page.locator('[data-testid^="doc-card-"][data-doc-name="메모-1p.pdf"]');
+    await expect(card).toHaveAttribute("data-doc-status", "rendered", { timeout: 15_000 });
+    await card.locator('[data-testid^="doc-open-"]').click();
+    const text = page.getByTestId("viewer-text");
+    await expect(text).toContainText("1쪽의 텍스트");
+    // Select "1쪽" by dragging over the characters (a DOM range over the first text node).
+    await text.evaluate((el) => {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let node: Text | null = null;
+      while ((node = walker.nextNode() as Text | null)) {
+        const i = node.data.indexOf("1쪽");
+        if (i >= 0) {
+          const range = document.createRange();
+          range.setStart(node, i);
+          range.setEnd(node, i + 2);
+          const sel = window.getSelection()!;
+          sel.removeAllRanges();
+          sel.addRange(range);
+          break;
+        }
+      }
+    });
+    await expect(page.getByTestId("viewer-selection-toolbar")).toContainText("1쪽");
+    // Enter opens the editor with exactly that range selected; typing replaces it.
+    await page.getByTestId("page-viewer").focus();
+    await page.keyboard.press("Enter");
+    const input = page.getByTestId("viewer-text-input");
+    await expect(input).toBeVisible();
+    expect(await input.evaluate((el) => [(el as HTMLTextAreaElement).selectionStart, (el as HTMLTextAreaElement).selectionEnd])).toEqual([0, 2]);
+    await page.keyboard.type("첫째 쪽");
+    await page.keyboard.press("Control+Enter");
+    await expect(text).toContainText("첫째 쪽의 텍스트");
+    await expect(page.getByTestId("viewer-text-source")).toHaveText(ko.viewer.text_edit.source.manual);
+    // The correction is searchable right away (the mock re-indexes on save).
+    await page.getByTestId("nav-search").click();
+    await page.getByTestId("search-input").fill("첫째 쪽");
+    await page.getByTestId("search-run").click();
+    await expect(page.getByTestId("search-hit").first()).toContainText("메모-1p.pdf", { timeout: 15_000 });
+  });
 });
