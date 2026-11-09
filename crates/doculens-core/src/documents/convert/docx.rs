@@ -144,6 +144,7 @@ fn run_blocks(ctx: &mut Ctx<'_>, r: &Element, para: &mut Paragraph, pending: &mu
         underline,
         size_pt,
         line_break,
+        color: None,
     };
     for child in r.elements() {
         match child.name.as_str() {
@@ -222,7 +223,7 @@ fn paragraph(ctx: &mut Ctx<'_>, p: &Element, out: &mut Vec<Block>) {
                 .unwrap_or(ListKind::Bullet)
         })
         .or_else(|| ctx.styles.list_styles.get(style_id).copied());
-    let mut para = Paragraph { heading, align, list, runs: Vec::new() };
+    let mut para = Paragraph { heading, align, list, runs: Vec::new(), level: 0 };
     let mut pending = Vec::new();
     collect_runs(ctx, p, &mut para, &mut pending);
     if !para.runs.is_empty() || pending.is_empty() {

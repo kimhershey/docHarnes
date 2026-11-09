@@ -626,7 +626,7 @@ fn run(text: &str, bold: bool) -> Run {
 }
 
 fn para(runs: Vec<Run>, heading: Option<u8>, align: Align, list: Option<ListKind>) -> Block {
-    Block::Paragraph(Paragraph { runs, heading, align, list })
+    Block::Paragraph(Paragraph { runs, heading, align, list, level: 0 })
 }
 
 fn cell(text: &str, header: bool, col_span: u16) -> Cell {
@@ -965,7 +965,7 @@ pub fn save(deps: &GenerateDeps<'_>, req: &SaveRequest) -> Result<SavedDocument>
                 let html = dir.join("index.html");
                 std::fs::write(&html, to_html(&draft)).map_err(|e| CoreError::io(&html, e))?;
                 let pdf = dir.join("document.pdf");
-                let printed = match printer.print_to_pdf(&html, &pdf) {
+                let printed = match printer.print_to_pdf(&html, &pdf, crate::documents::convert::PageSize::A4) {
                     Ok(()) => std::fs::read(&pdf).ok().filter(|b| !b.is_empty()),
                     Err(e) => {
                         warnings.push(if ko {

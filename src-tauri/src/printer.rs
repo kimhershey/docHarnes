@@ -12,7 +12,7 @@ use std::time::Duration;
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
-use doculens_core::documents::convert::PdfPrinter;
+use doculens_core::documents::convert::{PageSize, PdfPrinter};
 use doculens_core::{CoreError, Result};
 
 use crate::state::AppState;
@@ -38,7 +38,7 @@ fn print_url(token: &str) -> tauri::Url {
 }
 
 impl PdfPrinter for WebviewPdfPrinter {
-    fn print_to_pdf(&self, html: &Path, pdf: &Path) -> Result<()> {
+    fn print_to_pdf(&self, html: &Path, pdf: &Path, page: PageSize) -> Result<()> {
         let _guard = self.serial.lock().map_err(|_| CoreError::Convert("printer lock poisoned".into()))?;
         let dir = html.parent().ok_or_else(|| CoreError::Convert("html bundle has no parent".into()))?.to_path_buf();
         if let Some(parent) = pdf.parent() {
@@ -52,7 +52,7 @@ impl PdfPrinter for WebviewPdfPrinter {
             .lock()
             .map_err(|_| CoreError::Convert("print registry poisoned".into()))?
             .insert(token.clone(), dir);
-        let result = run_print(&self.app, &token, pdf);
+        let result = run_print(&self.app, &token, pdf, page);
         if let Ok(mut m) = state.print_bundles.lock() {
             m.remove(&token);
         }
@@ -70,7 +70,7 @@ impl PdfPrinter for WebviewPdfPrinter {
     }
 }
 
-fn run_print(app: &AppHandle, token: &str, pdf: &Path) -> Result<()> {
+fn run_print(app: &AppHandle, token: &str, pdf: &Path, page: PageSize) -> Result<()> {
     let (tx, rx) = mpsc::channel::<std::result::Result<(), String>>();
     let label = format!("print-{token}");
     let pdf_path = pdf.to_path_buf();
@@ -93,7 +93,7 @@ fn run_print(app: &AppHandle, token: &str, pdf: &Path) -> Result<()> {
             let w = window.clone();
             let deferred = window.app_handle().run_on_main_thread(move || {
                 let tx3 = tx.clone();
-                if let Err(e) = w.with_webview(move |webview| platform::print(webview, &pdf_path, tx)) {
+                if let Err(e) = w.with_webview(move |webview| platform::print(webview, &pdf_path, page, tx)) {
                     let _ = tx3.send(Err(format!("with_webview: {e}")));
                 }
             });
@@ -127,6 +127,8 @@ mod platform {
     use std::path::Path;
     use std::sync::mpsc::Sender;
 
+    use doculens_core::documents::convert::PageSize;
+
     use webkit2gtk::{PrintOperation, PrintOperationExt};
 
     thread_local! {
@@ -134,7 +136,7 @@ mod platform {
         static ACTIVE: RefCell<Vec<PrintOperation>> = const { RefCell::new(Vec::new()) };
     }
 
-    pub fn print(webview: tauri::webview::PlatformWebview, pdf: &Path, tx: Sender<Result<(), String>>) {
+    pub fn print(webview: tauri::webview::PlatformWebview, pdf: &Path, page: PageSize, tx: Sender<Result<(), String>>) {
         let wv = webview.inner();
         let op = PrintOperation::new(&wv);
         let settings = gtk::PrintSettings::new();
@@ -144,10 +146,23 @@ mod platform {
             .unwrap_or_else(|_| format!("file://{}", pdf.display()));
         settings.set(gtk::PRINT_SETTINGS_OUTPUT_URI.as_str(), Some(&uri));
         settings.set_printer("Print to File");
-        settings.set_paper_size(&gtk::PaperSize::new(Some(gtk::PAPER_NAME_A4.as_str())));
+        // GTK paper sizes are portrait; a wider-than-tall sheet (slides) is the portrait sheet turned.
+        let (short, long) = (page.width_mm.min(page.height_mm) as f64, page.width_mm.max(page.height_mm) as f64);
+        let paper = gtk::PaperSize::new_custom("doculens-page", "DocuLens page", short, long, gtk::Unit::Mm);
+        settings.set_paper_size(&paper);
+        settings.set_orientation(if page.landscape() {
+            gtk::PageOrientation::Landscape
+        } else {
+            gtk::PageOrientation::Portrait
+        });
         op.set_print_settings(&settings);
         let setup = gtk::PageSetup::new();
-        setup.set_paper_size(&gtk::PaperSize::new(Some(gtk::PAPER_NAME_A4.as_str())));
+        setup.set_paper_size(&paper);
+        setup.set_orientation(if page.landscape() {
+            gtk::PageOrientation::Landscape
+        } else {
+            gtk::PageOrientation::Portrait
+        });
         for setter in [
             gtk::PageSetup::set_top_margin,
             gtk::PageSetup::set_bottom_margin,
@@ -176,11 +191,15 @@ mod platform {
     use std::path::Path;
     use std::sync::mpsc::Sender;
 
-    use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2Environment6, ICoreWebView2_7};
+    use doculens_core::documents::convert::PageSize;
+
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2Environment6, ICoreWebView2_7, COREWEBVIEW2_PRINT_ORIENTATION_LANDSCAPE,
+    };
     use webview2_com::PrintToPdfCompletedHandler;
     use windows_core::{Interface, HSTRING, PCWSTR};
 
-    pub fn print(webview: tauri::webview::PlatformWebview, pdf: &Path, tx: Sender<Result<(), String>>) {
+    pub fn print(webview: tauri::webview::PlatformWebview, pdf: &Path, page: PageSize, tx: Sender<Result<(), String>>) {
         let result = (|| -> Result<(), String> {
             let controller = webview.controller();
             // A hidden window pauses rendering; printing still needs a live view.
@@ -194,9 +213,16 @@ mod platform {
             };
             if let Some(s) = &settings {
                 unsafe {
-                    // A4 in inches; margins come from the document's CSS `@page`.
-                    let _ = s.SetPageWidth(8.27);
-                    let _ = s.SetPageHeight(11.69);
+                    // Chromium takes the sheet in portrait terms and turns it for landscape, so a slide
+                    // deck (wider than tall) is the short × long sheet with the landscape flag; margins
+                    // come from the document's CSS `@page`.
+                    let (short, long) =
+                        (page.width_mm.min(page.height_mm) as f64, page.width_mm.max(page.height_mm) as f64);
+                    let _ = s.SetPageWidth(short / 25.4);
+                    let _ = s.SetPageHeight(long / 25.4);
+                    if page.landscape() {
+                        let _ = s.SetOrientation(COREWEBVIEW2_PRINT_ORIENTATION_LANDSCAPE);
+                    }
                     let _ = s.SetMarginTop(0.0);
                     let _ = s.SetMarginBottom(0.0);
                     let _ = s.SetMarginLeft(0.0);
@@ -230,7 +256,14 @@ mod platform {
     use std::path::Path;
     use std::sync::mpsc::Sender;
 
-    pub fn print(_webview: tauri::webview::PlatformWebview, _pdf: &Path, tx: Sender<Result<(), String>>) {
+    use doculens_core::documents::convert::PageSize;
+
+    pub fn print(
+        _webview: tauri::webview::PlatformWebview,
+        _pdf: &Path,
+        _page: PageSize,
+        tx: Sender<Result<(), String>>,
+    ) {
         let _ = tx.send(Err("printing is not supported on this platform".into()));
     }
 }

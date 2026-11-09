@@ -1186,6 +1186,31 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   역삼점 → 역삼점"), `knowledge.spec`(검색/인용 강조는 레이어 `<mark>`, 설명은 이미지 선택으로). 실 PDF/스캔에서의 박스 정확도는 사용자 PC
   체크리스트 "페이지 이미지 위 글자 레이어".
 
+### 사용자 PC 보고 수정 2차 (2026-11-09; 5건 중 1·2번)
+
+- **1. 양식 화면 양식 등록·드롭** (보고: "양식 등록과 드래그 앤 드롭이 작동하지 않음"): 양식 화면 본문에는 드롭 대상이 없어
+  스프링 로딩으로 화면이 바뀐 뒤 떨어뜨린 카드나 탐색기 파일이 아무 데도 닿지 않았다(사이드바 메뉴 항목과 열린 대화상자만 받음).
+  `SchemasPage` 전체를 문서·파일 드롭 대상으로(`schemas-drop-hint`): 문서 → 그 문서로 "양식 등록" 대화상자 열기, 파일 → 가져온 뒤
+  열기(대화상자가 열려 있으면 비활성). 필드 도출은 실엔진(tiny Qwen3.5, llama-server b12066 CPU 빌드)으로 `form_fields`·`nl_schema`
+  메타스키마, 문서 초안 스키마, 프로젝트 규칙 스키마 문법이 모두 서버에 수용됨을 확인(`tests/real_engine.rs` 확장) — 문법 거부는
+  원인이 아니었음. 남는 실패 유형(응답 잘림·출력 파서 500·엔진 오류)에 대비해 `forms::derive`가 텍스트가 있으면 **텍스트·표 규칙
+  도출로 폴백**하고 초안 메모에 사유를 남기도록 바꿈(모델 없이도 초안은 항상 나온다). Playwright `dnd.spec` 2건 추가(스프링 로딩 →
+  화면 본문 드롭 → 대화상자에 문서 선택; 파일 드롭 → 가져오기 → 등록 제안).
+- **2. PPTX 변환 이미지 깨짐·비율** (보고: "PPT 로드 시 이미지 깨짐 + 가로세로 비율 안 맞음"): 슬라이드를 A4 세로 흐름 레이아웃으로
+  찍고 그림은 폭만 지정하던 것이 원인. `DocModel::slides`(슬라이드별 절대 좌표 도형: 텍스트 상자(anchor·inset·autofit 비율·기본
+  크기/색)·그림·표·선·자리표시(차트/SmartArt/OLE/EMF))를 추가하고 `pptx.rs`를 다시 썼다 — 레이아웃/마스터에서 자리표시자 좌표·기본
+  글자 크기·색 상속(idx 우선), 테마 색(`schemeClr` + lumMod/lumOff/tint/shade, 마스터 clrMap·슬라이드 override), 그룹 변환
+  (chOff/chExt 비례), 회전·반전, `srcRect` 자르기와 TIFF/BMP를 image 크레이트로 PNG 재인코딩, 배경색(slide→layout→master).
+  HTML은 `@page { size: <슬라이드 크기> }` + `<section class="slide">` 1장=1쪽(노트가 있으면 노트 쪽 추가); 흐름 문서도 이제
+  `page_mm`(DOCX/HWPX 페이지 설정)을 `@page`에 쓴다. `PdfPrinter::print_to_pdf(html, pdf, PageSize)`로 바뀌어 WebView2는
+  짧은 변×긴 변 + `COREWEBVIEW2_PRINT_ORIENTATION_LANDSCAPE`, WebKitGTK는 사용자 지정 용지 + Landscape로 찍는다(Chromium은
+  용지를 세로 기준으로 받고 가로 플래그로 돌림). 스텁 프린터도 용지 크기를 따르므로(`write_blank_pdf_sized`) PDFium 렌더 비율이
+  테스트에서 확인된다. 읽기 순서 텍스트(`blocks`)는 그대로라 검색·양식 도출·텍스트 폴백은 영향 없음. `Run.color`·`Paragraph.level`
+  필드 추가(다른 리더는 None/0).
+- **검증**: `documents::convert::pptx` 4건(상속·색·자르기·그룹·z-order 7도형), `html` 2건(슬라이드 HTML·페이지 크기·색 주입 차단),
+  `convert` 1건(스텁 프린터 가로 용지 960×540 pt 3쪽), 전체 `cargo test --workspace` 코어 273·셸 3·평가 15·통합 1, clippy·fmt,
+  `dnd.spec` 7/7.
+
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
