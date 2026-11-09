@@ -180,6 +180,7 @@ fn text_runs(t: &Element, pr: &CharPr, out: &mut Vec<Run>) {
                 underline: pr.underline,
                 size_pt: pr.size_pt,
                 line_break,
+                color: None,
             });
         }
     };
@@ -225,7 +226,7 @@ fn paragraph_blocks(ctx: &mut Ctx<'_>, p: &Element, out: &mut Vec<Block>) {
         out.push(Block::PageBreak);
     }
     let pr = para_props(ctx, p);
-    let mut para = Paragraph { heading: pr.heading, align: pr.align, list: pr.list, runs: Vec::new() };
+    let mut para = Paragraph { heading: pr.heading, align: pr.align, list: pr.list, runs: Vec::new(), level: 0 };
     let mut pending: Vec<Block> = Vec::new();
     for run in p.children_named("run") {
         let cpr = run_props(ctx, run);

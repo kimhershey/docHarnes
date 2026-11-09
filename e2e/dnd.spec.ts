@@ -109,6 +109,34 @@ test.describe("document drag and drop", () => {
     await expect(page.getByTestId("generate-sources")).toContainText("세금계산서.pdf");
   });
 
+  test("a card dropped on the 양식 screen itself (after spring-loading) opens 양식 등록 on that document", async ({ page }) => {
+    const [id] = await libraryWithDocs(page, ["C:\\scan\\신청서.pdf"]);
+    const cardEl = page.getByTestId(`doc-card-${id}`);
+    const s = (await cardEl.boundingBox())!;
+    await page.mouse.move(s.x + s.width / 2, s.y + s.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(s.x + s.width / 2 + 24, s.y + s.height / 2 + 24, { steps: 4 });
+    const nav = (await page.getByTestId("nav-schemas").boundingBox())!;
+    await page.mouse.move(nav.x + nav.width / 2, nav.y + nav.height / 2, { steps: 10 });
+    await expect(page.getByTestId("page-schemas")).toBeVisible({ timeout: 5_000 });
+    // The drop lands on the screen body, not on the menu entry (user report 2026-11-09).
+    const body = (await page.getByTestId("schemas-list").boundingBox())!;
+    await page.mouse.move(body.x + body.width / 2, body.y + body.height / 2, { steps: 10 });
+    await expect(page.getByTestId("schemas-drop-hint")).toHaveAttribute("data-over", "true");
+    await page.mouse.up();
+    await expect(page.getByTestId("form-register-dialog")).toBeVisible();
+    await expect(page.getByTestId("form-register-doc")).toContainText("신청서.pdf");
+  });
+
+  test("a file dropped on the 양식 screen is imported and offered for registration", async ({ page }) => {
+    await libraryWithDocs(page, ["C:\\scan\\계약서.pdf"]);
+    await page.getByTestId("nav-schemas").click();
+    await expect(page.getByTestId("page-schemas")).toBeVisible();
+    await dropFiles(page, page.getByTestId("schemas-list"), ["휴가신청서.pdf"]);
+    await expect(page.getByTestId("form-register-dialog")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("form-register-doc")).toContainText("휴가신청서.pdf", { timeout: 15_000 });
+  });
+
   test("files dropped on a collection are imported as knowledge documents of that collection", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);

@@ -1284,13 +1284,18 @@
       "hwp": "HWP",
       "xlsx": "XLSX",
       "pptx": "PPTX",
-      "text": "텍스트"
+      "text": "텍스트",
+      "xls": "XLS",
+      "doc": "DOC",
+      "ppt": "PPT",
+      "rtf": "RTF",
+      "hml": "HML"
     },
     "unsupported": {
       "heic": "HEIC/HEIF는 JPG로 변환 후 가져오세요",
-      "office_legacy": "지원하지 않는 오피스 형식(DOC·XLS·PPT·HML·RTF: DOCX/XLSX/PPTX/PDF로 저장 후 가져오기)",
+      "office_legacy": "지원하지 않는 오피스 바이너리 형식(VSD·PUB·MSG 등: PDF로 저장 후 가져오기)",
       "no_extension": "확장자가 없습니다",
-      "unsupported_extension": "지원하지 않는 형식(PDF·이미지·HWP/HWPX·DOCX·XLSX·PPTX·텍스트 파일만 가져옵니다)",
+      "unsupported_extension": "지원하지 않는 형식(PDF·이미지·HWP/HWPX/HML·DOC/DOCX·XLS/XLSX·PPT/PPTX·RTF·텍스트 파일만 가져옵니다)",
       "empty": "빈 파일",
       "too_large": "파일이 너무 큽니다(2 GB 초과)",
       "unreadable": "읽을 수 없는 파일",

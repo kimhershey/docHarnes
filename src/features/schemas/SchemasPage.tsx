@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
+import { DropHint, importDroppedFiles, useDocumentDropTarget } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
 import { useDocTypes, useDocuments, useSchemaVersions, useSchemas } from "@/lib/queries";
@@ -166,6 +167,26 @@ export function SchemasPage() {
       setNlOpen(true);
     });
   const openForm = () => guardDirty(() => setFormOpen(true));
+  // The whole screen takes drops (user report 2026-11-09: a card carried here by spring-loading, or a
+  // file from Explorer, landed on nothing): a document opens "양식 등록" on it, a file is imported first.
+  const registerDropped = useCallback(
+    (id: string) =>
+      guardDirty(() => {
+        setFormDoc(id);
+        setFormOpen(true);
+      }),
+    [guardDirty],
+  );
+  const pageDrop = useDocumentDropTarget({
+    disabled: formOpen || nlOpen,
+    onDocuments: (dropped) => {
+      if (dropped[0]) registerDropped(dropped[0].id);
+    },
+    onFiles: (paths) =>
+      void importDroppedFiles(paths, {}, t).then((ids) => {
+        if (ids[0]) registerDropped(ids[0]);
+      }),
+  });
 
   const save = async () => {
     if (!draft) return;
@@ -253,7 +274,10 @@ export function SchemasPage() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col" data-testid="page-schemas">
+    <div className="relative flex h-full min-h-0 flex-col" data-testid="page-schemas" {...pageDrop.props}>
+      <DropHint active={pageDrop.isActive} over={pageDrop.isOver} className="z-20 m-2" testId="schemas-drop-hint">
+        {t("schemas.form.drop_hint")}
+      </DropHint>
       <header className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
         <div className="mr-auto">
           <h1 className="text-lg font-semibold">{t("schemas.title")}</h1>

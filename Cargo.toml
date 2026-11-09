@@ -32,6 +32,8 @@ rusqlite = { version = "0.41", features = ["bundled"] }
 pdfium-render = { version = "0.9", default-features = false, features = ["pdfium_latest", "image_latest", "thread_safe"] }
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 quick-xml = "0.42"
+calamine = { version = "0.38", default-features = false, features = ["dates"] }   # MIT — XLS (BIFF) / XLSB workbooks
+cfb = "0.7"                                                                       # MIT — CFB containers (DOC / PPT), same version as the hwp crate
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff", "webp", "bmp", "gif"] }
 trash = "5"
 hwp = "0.2"

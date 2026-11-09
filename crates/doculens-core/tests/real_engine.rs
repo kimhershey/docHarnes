@@ -277,6 +277,88 @@ fn real_llama_server_load_chat_switch() {
         }
     }
 
+    // Every other grammar the app sends through the real server: the form / NL-schema metaschema
+    // (양식 등록·NL 스키마, user report 2026-11-09 "양식 등록이 되지 않음"), the document-draft schema
+    // (§3.13) and the project-rule schema (§3.15). Random weights produce junk inside the grammar, so
+    // only acceptance (no 400 on the schema) and the constrained JSON shape are checked.
+    if ready[0].has_vision {
+        let vlm = Vlm::new(&m, first.clone(), Profile::Speed, None);
+        let page = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(96, 128, image::Rgb([250, 250, 250])));
+        let img = pipeline::image::prepare_image(&page, 64).expect("page image");
+        let t = Instant::now();
+        match pipeline::forms::derive_with_vlm(
+            &vlm,
+            Some(&img.url),
+            Some("휴가신청서\n성명:____ 부서:____ 기간: 년 월 일 ~ 년 월 일"),
+            Some("휴가신청서"),
+        ) {
+            Ok(d) => eprintln!(
+                "form_fields → {} fields, doc_type {} in {} ms",
+                d.definition.fields.len(),
+                d.doc_type,
+                t.elapsed().as_millis()
+            ),
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("does not match the expected")
+                        || msg.contains("was cut off")
+                        || msg.contains("not valid JSON")
+                        || msg.contains("truncated"),
+                    "form_fields grammar / transport error: {msg}"
+                );
+                eprintln!("form_fields → model artefact (random weights): {msg}");
+            }
+        }
+        match pipeline::forms::nl_schema(&vlm, "발주서. 발주번호, 거래처, 납기일자, 합계금액, 품목", None)
+        {
+            Ok(d) => eprintln!("nl_schema → {} fields, doc_type {}", d.definition.fields.len(), d.doc_type),
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("does not match the expected")
+                        || msg.contains("was cut off")
+                        || msg.contains("not valid JSON")
+                        || msg.contains("truncated"),
+                    "nl_schema grammar / transport error: {msg}"
+                );
+                eprintln!("nl_schema → model artefact (random weights): {msg}");
+            }
+        }
+        let draft_schema =
+            doculens_core::generate::schema::json_schema(&doculens_core::generate::templates::TemplateSpec::builtin(
+                doculens_core::generate::TemplateKind::Quotation,
+            ));
+        let g = m
+            .chat(
+                &ChatRequest::text(&first, "견적서 초안")
+                    .max_tokens(24)
+                    .json_schema(doculens_core::generate::schema::SCHEMA_NAME, draft_schema),
+            )
+            .unwrap_or_else(|e| dump(&m, "generate draft grammar", &e));
+        assert!(g.content.trim_start().starts_with('{'), "draft grammar did not constrain the output: {}", g.content);
+        let rules_ctx = doculens_core::projects::rules::RuleContext {
+            types: vec![doculens_core::projects::rules::TypeInfo {
+                slug: "tax_invoice".into(),
+                label_ko: "세금계산서".into(),
+                label_en: "Tax invoice".into(),
+                fields: doculens_core::projects::rules::fallback_fields("tax_invoice"),
+                in_scope: true,
+                registered: false,
+            }],
+        };
+        let rule_schema = doculens_core::projects::rules::rule_schema(&rules_ctx);
+        let r = m
+            .chat(
+                &ChatRequest::text(&first, "합계금액은 2,000,000 이상")
+                    .max_tokens(24)
+                    .json_schema("project_rule", rule_schema),
+            )
+            .unwrap_or_else(|e| dump(&m, "project rule grammar", &e));
+        assert!(r.content.trim_start().starts_with('{'), "rule grammar did not constrain the output: {}", r.content);
+        eprintln!("draft / rule grammars accepted");
+    }
+
     // Hot swap when a second model exists.
     if let Some(second) = ready.get(1) {
         let t2 = Instant::now();

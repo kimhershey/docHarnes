@@ -268,10 +268,6 @@ pub struct Classified {
 }
 
 /// Extensions of formats we know about but cannot read (legacy binary Office, HWPML, RTF).
-fn is_legacy_office_ext(ext: &str) -> bool {
-    matches!(ext, "doc" | "xls" | "ppt" | "hwpml" | "hml" | "rtf")
-}
-
 /// Classifies a file by size, extension and content (`sniff`): the content wins when it is
 /// recognised, the extension when the content is not; known-unreadable containers are refused
 /// with a precise reason.
@@ -312,12 +308,11 @@ pub fn classify(path: &Path, meta: &std::fs::Metadata) -> Classified {
         (Some(k), Sniff::Kind(s)) if s == k => Classified { kind: Some(k), ..Default::default() },
         (Some(SourceKind::Text), Sniff::Html) => Classified { kind: Some(SourceKind::Text), ..Default::default() },
         (Some(_), Sniff::Html) => mismatch(SourceKind::Text),
+        // Printable bytes are a weak signal: XML-based formats (HWPML) keep their extension's kind.
+        (Some(k), Sniff::Kind(SourceKind::Text)) => Classified { kind: Some(k), ..Default::default() },
         (Some(_), Sniff::Kind(s)) => mismatch(s),
         (Some(_), Sniff::Unsupported(r)) => Classified { reason: Some(r.to_string()), ..Default::default() },
         (Some(k), Sniff::Unknown) => Classified { kind: Some(k), ..Default::default() },
-        (None, _) if is_legacy_office_ext(&ext) => {
-            Classified { reason: Some("office_legacy".into()), ..Default::default() }
-        }
         (None, _) if matches!(ext.as_str(), "heic" | "heif") => {
             Classified { reason: Some("heic".into()), ..Default::default() }
         }
@@ -340,6 +335,11 @@ fn kind_label(kind: SourceKind) -> &'static str {
         SourceKind::Hwp => "HWP",
         SourceKind::Xlsx => "XLSX",
         SourceKind::Pptx => "PPTX",
+        SourceKind::Xls => "XLS",
+        SourceKind::Doc => "DOC",
+        SourceKind::Ppt => "PPT",
+        SourceKind::Rtf => "RTF",
+        SourceKind::Hml => "HML",
         SourceKind::Text => "텍스트",
     }
 }
@@ -808,7 +808,12 @@ fn process_inner(
         | SourceKind::Hwp
         | SourceKind::Xlsx
         | SourceKind::Pptx
-        | SourceKind::Text => {
+        | SourceKind::Text
+        | SourceKind::Xls
+        | SourceKind::Doc
+        | SourceKind::Ppt
+        | SourceKind::Rtf
+        | SourceKind::Hml => {
             let conv = convert::convert(&abs, doc.source_kind, &cache.converted_dir, deps.printer)?;
             converted = true;
             let mut notes = conv.model.notes.clone();
@@ -1341,10 +1346,17 @@ mod tests {
         std::fs::write(&ini, "[core]\nkey=value\n").unwrap();
         let c = classify(&ini, &meta(&ini));
         assert_eq!(c.reason.as_deref(), Some("unsupported_extension"));
-        // Legacy Office by extension, even when the bytes look like text.
+        // HWPML is read now (XML text with the HWPML root); other OLE containers stay out.
         let hml = ext.join("old.hml");
         std::fs::write(&hml, "<?xml version=\"1.0\"?><HWPML/>").unwrap();
-        assert_eq!(classify(&hml, &meta(&hml)).reason.as_deref(), Some("office_legacy"));
+        assert_eq!(classify(&hml, &meta(&hml)).kind, Some(SourceKind::Hml));
+        let vsd = ext.join("flow.vsd");
+        let mut ole = vec![0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+        ole.resize(512, 0);
+        ole.extend("Root Entry".encode_utf16().flat_map(|u| u.to_le_bytes()));
+        ole.extend("VisioDocument".encode_utf16().flat_map(|u| u.to_le_bytes()));
+        std::fs::write(&vsd, &ole).unwrap();
+        assert_eq!(classify(&vsd, &meta(&vsd)).reason.as_deref(), Some("office_legacy"));
         // Encrypted OOXML (CFB with EncryptedPackage) under a .docx name.
         let locked = ext.join("locked.docx");
         let mut cfb = vec![0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];

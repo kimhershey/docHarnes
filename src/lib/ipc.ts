@@ -361,7 +361,7 @@ export async function pickDocumentFiles(title: string, filterName: string, defau
     multiple: true,
     title,
     defaultPath,
-    filters: [{ name: filterName, extensions: ["pdf", "png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp", "gif", "hwpx", "docx", "hwp", "xlsx", "xlsm", "pptx", "ppsx", "txt", "md", "csv", "tsv", "log", "json", "xml", "html", "htm"] }],
+    filters: [{ name: filterName, extensions: ["pdf", "png", "jpg", "jpeg", "tif", "tiff", "webp", "bmp", "gif", "hwpx", "docx", "hwp", "xlsx", "xlsm", "pptx", "ppsx", "txt", "md", "csv", "tsv", "log", "json", "xml", "html", "htm", "xls", "xlsb", "ods", "doc", "ppt", "pps", "rtf", "hml"] }],
   });
   if (Array.isArray(result)) return result;
   return typeof result === "string" ? [result] : [];

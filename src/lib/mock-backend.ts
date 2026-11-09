@@ -1675,13 +1675,18 @@ function kindOf(name: string): SourceKind | null {
   if (["xlsx", "xlsm"].includes(ext)) return "xlsx";
   if (["pptx", "ppsx"].includes(ext)) return "pptx";
   if (["txt", "md", "markdown", "csv", "tsv", "log", "json", "xml", "html", "htm"].includes(ext)) return "text";
+  if (["xls", "xlsb", "ods"].includes(ext)) return "xls";
+  if (["doc", "dot"].includes(ext)) return "doc";
+  if (["ppt", "pps", "pot"].includes(ext)) return "ppt";
+  if (ext === "rtf") return "rtf";
+  if (["hml", "hwpml"].includes(ext)) return "hml";
   return null;
 }
 
 function unsupportedReason(name: string): string {
   const ext = name.toLowerCase().split(".").pop() ?? "";
   if (["heic", "heif"].includes(ext)) return "heic";
-  if (["doc", "xls", "ppt", "hwpml", "hml", "rtf"].includes(ext)) return "office_legacy";
+  if (["vsd", "pub", "msg", "mdb"].includes(ext)) return "office_legacy";
   if (["zip", "7z", "rar", "gz"].includes(ext)) return "archive";
   if (["exe", "dll", "msi"].includes(ext)) return "executable";
   if (!name.includes(".")) return "no_extension";

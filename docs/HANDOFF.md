@@ -1186,6 +1186,48 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   역삼점 → 역삼점"), `knowledge.spec`(검색/인용 강조는 레이어 `<mark>`, 설명은 이미지 선택으로). 실 PDF/스캔에서의 박스 정확도는 사용자 PC
   체크리스트 "페이지 이미지 위 글자 레이어".
 
+### 사용자 PC 보고 수정 2차 (2026-11-09; 5건 중 1·2번)
+
+- **1. 양식 화면 양식 등록·드롭** (보고: "양식 등록과 드래그 앤 드롭이 작동하지 않음"): 양식 화면 본문에는 드롭 대상이 없어
+  스프링 로딩으로 화면이 바뀐 뒤 떨어뜨린 카드나 탐색기 파일이 아무 데도 닿지 않았다(사이드바 메뉴 항목과 열린 대화상자만 받음).
+  `SchemasPage` 전체를 문서·파일 드롭 대상으로(`schemas-drop-hint`): 문서 → 그 문서로 "양식 등록" 대화상자 열기, 파일 → 가져온 뒤
+  열기(대화상자가 열려 있으면 비활성). 필드 도출은 실엔진(tiny Qwen3.5, llama-server b12066 CPU 빌드)으로 `form_fields`·`nl_schema`
+  메타스키마, 문서 초안 스키마, 프로젝트 규칙 스키마 문법이 모두 서버에 수용됨을 확인(`tests/real_engine.rs` 확장) — 문법 거부는
+  원인이 아니었음. 남는 실패 유형(응답 잘림·출력 파서 500·엔진 오류)에 대비해 `forms::derive`가 텍스트가 있으면 **텍스트·표 규칙
+  도출로 폴백**하고 초안 메모에 사유를 남기도록 바꿈(모델 없이도 초안은 항상 나온다). Playwright `dnd.spec` 2건 추가(스프링 로딩 →
+  화면 본문 드롭 → 대화상자에 문서 선택; 파일 드롭 → 가져오기 → 등록 제안).
+- **2. PPTX 변환 이미지 깨짐·비율** (보고: "PPT 로드 시 이미지 깨짐 + 가로세로 비율 안 맞음"): 슬라이드를 A4 세로 흐름 레이아웃으로
+  찍고 그림은 폭만 지정하던 것이 원인. `DocModel::slides`(슬라이드별 절대 좌표 도형: 텍스트 상자(anchor·inset·autofit 비율·기본
+  크기/색)·그림·표·선·자리표시(차트/SmartArt/OLE/EMF))를 추가하고 `pptx.rs`를 다시 썼다 — 레이아웃/마스터에서 자리표시자 좌표·기본
+  글자 크기·색 상속(idx 우선), 테마 색(`schemeClr` + lumMod/lumOff/tint/shade, 마스터 clrMap·슬라이드 override), 그룹 변환
+  (chOff/chExt 비례), 회전·반전, `srcRect` 자르기와 TIFF/BMP를 image 크레이트로 PNG 재인코딩, 배경색(slide→layout→master).
+  HTML은 `@page { size: <슬라이드 크기> }` + `<section class="slide">` 1장=1쪽(노트가 있으면 노트 쪽 추가); 흐름 문서도 이제
+  `page_mm`(DOCX/HWPX 페이지 설정)을 `@page`에 쓴다. `PdfPrinter::print_to_pdf(html, pdf, PageSize)`로 바뀌어 WebView2는
+  짧은 변×긴 변 + `COREWEBVIEW2_PRINT_ORIENTATION_LANDSCAPE`, WebKitGTK는 사용자 지정 용지 + Landscape로 찍는다(Chromium은
+  용지를 세로 기준으로 받고 가로 플래그로 돌림). 스텁 프린터도 용지 크기를 따르므로(`write_blank_pdf_sized`) PDFium 렌더 비율이
+  테스트에서 확인된다. 읽기 순서 텍스트(`blocks`)는 그대로라 검색·양식 도출·텍스트 폴백은 영향 없음. `Run.color`·`Paragraph.level`
+  필드 추가(다른 리더는 None/0).
+- **검증**: `documents::convert::pptx` 4건(상속·색·자르기·그룹·z-order 7도형), `html` 2건(슬라이드 HTML·페이지 크기·색 주입 차단),
+  `convert` 1건(스텁 프린터 가로 용지 960×540 pt 3쪽), 전체 `cargo test --workspace` 코어 273·셸 3·평가 15·통합 1, clippy·fmt,
+  `dnd.spec` 7/7.
+- **3. xls 등 미지원 형식** (보고: "xls 등 unknown 데이터타입 로드 불가"): `SourceKind`에 **Xls·Doc·Ppt·Rtf·Hml** 5종을 더했다
+  (확장자 xls/xlsb/ods · doc/dot · ppt/pps/pot · rtf · hml/hwpml; 내용 감지는 CFB 스트림 이름(WordDocument / Workbook·Book /
+  PowerPoint Document)·`{\rtf`·`<HWPML`·zip `xl/workbook.bin`). 리더: `convert/xls.rs` — calamine 0.38(MIT, `dates`)로
+  시트 → 표(숨김 시트 생략, 날짜·기간·숫자 서식, 병합 제목 → 제목), 픽스처 `tests/fixtures/legacy/sample.xls`(xlwt로 만든 BIFF8,
+  한글 시트 2장); `convert/doc.rs` — cfb 0.7(MIT, hwp 크레이트와 같은 버전)로 `WordDocument` FIB → `0Table/1Table` 피스 테이블
+  (Unicode·8비트 cp949/cp1252) → 본문 ccpText → `\r` 문단·`0x07` 셀/행 → 표·`0x0C` 쪽 나눔·`0x0B` 줄바꿈·필드 코드 제거
+  (`0x13/0x14/0x15`), Word 6/95는 fcMin..fcMac 폴백; 생성기 `write_sample_doc`로 자체 일관성 테스트; `convert/ppt.rs` —
+  `PowerPoint Document` 레코드 트리에서 Slide 컨테이너의 TextHeaderAtom/TextCharsAtom/TextBytesAtom만 읽고(마스터·노트·핸드아웃 제외,
+  증분 저장 중복 슬라이드 제거) 제목 유형은 머리글; `convert/rtf.rs` — 그룹/제어어 토크나이저(`\ucN`·`\uN?`·`\'hh`+`\ansicpg`,
+  무시 목적지 목록, `\fldinst` 제거·`\fldrslt` 유지, `\cell`/`\row` → 표); `convert/hml.rs` — HWPML `BODY/SECTION/P/TEXT/CHAR`,
+  `TABLE/ROW/CELL(ColSpan·RowSpan·Header)`, SECDEF/PAGEDEF 페이지 크기(HWPUNIT), 구역 → 쪽 나눔, UTF-8/UTF-16 입력. `classify`는
+  확장자 종류가 있고 내용이 "텍스트 같음"(약한 신호)이면 확장자를 믿도록 바꿔 XML 기반 HML이 Text로 밀리지 않게 했다;
+  `office_legacy` 사유는 그 밖의 OLE 컨테이너(VSD·PUB·MSG…)에만 남는다. 프런트: 종류 라벨 5종(ko/en), 라이브러리 필터 `SOURCE_KINDS`
+  13종(xlsx·pptx·text도 이제 필터에 보임), 아이콘(xls=스프레드시트, ppt=프레젠테이션), 파일 선택 필터 확장자, 미지원 문구 갱신,
+  모의 백엔드 종류 판정. 구형 형식은 텍스트·표만 변환되고(그림·도형 위치 생략) 변환 메모에 적힌다. HEIC·ODT/ODP는 여전히 미지원.
+- **검증**: `convert::xls` 1(실 BIFF8 픽스처)·`doc` 3·`ppt` 2·`rtf` 2·`hml` 1건, `sniff`/`classify`/`kinds_from_extension` 갱신,
+  `cargo deny` 통과(calamine·cfb MIT), 전체 Rust·vitest·Playwright는 아래 표.
+
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
@@ -1200,6 +1242,7 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | `npm run notices` 결정성 | 두 번 실행 결과 동일 — crates 628(runtime 354)·npm 75·SBOM 컴포넌트 709 |
 | GitHub CI(License·Web·Rust Linux·Windows compile·notices·eval-gate·실엔진) | 커밋 a0fcafb·9308de3에서 실엔진 잡만 실패(위 수정으로 0e200ec에서 7개 잡 모두 통과). 리뷰 반영 커밋 84e5fdd에서는 License gate·Windows compile 잡이 **GitHub 릴리스 자산 다운로드 장애**(cargo-deny-action의 바이너리 tar가 손상 수신 "gzip: invalid magic", PDFium 다운로드 HTTP 504)로 실패 — 코드와 무관. ece44cc: License gate를 `taiki-e/install-action`(체크섬 검증 prebuilt cargo-deny 0.20.2)으로 바꿔 통과, 나머지 6개 잡 통과; Windows 잡은 여전히 504. c505b81: `scripts/lib/fetch-retry.mjs`(5xx·네트워크 오류·잘린 본문 지수 백오프 재시도 3회)를 fetch-pdfium/engine/kodic에 적용하고 Windows 잡에도 PDFium `actions/cache` 추가 — 장애가 이어져 Windows 잡은 재시도 3회 후에도 504. 6975410: Windows 잡의 PDFium 다운로드를 `continue-on-error`(경고 주석)로 바꿔 컴파일·테스트는 항상 수행(PDFium 테스트는 라이브러리 없으면 자체 skip, Linux 잡은 엄격 유지) → **7개 잡 모두 통과**(다운로드도 복구되어 Windows 잡이 PDFium 테스트까지 실제 수행) |
 | 2026-11-09 추가 기능(드래그 앤 드롭 · XLSX/PPTX/텍스트 · 내용 감지 · 뷰어 텍스트 직접 편집) | `cargo test --workspace` 코어 257(3 ignored)·셸 3·평가 15 통과, `cargo deny` 통과(`encoding_rs` 추가), clippy·fmt 통과, vitest 22파일 131건, Playwright 41/41(`dnd.spec.ts` 5, 뷰어 편집 2 포함; 전체 실행 1회에서 검토 큐 테스트가 1번 실패했으나 단독 3회·재실행 전체 통과 → 플레이크), CI: 4fe082d·314e503·c848d81은 Markdown 등록 테스트 1건으로 Rust 잡 실패 → 14577a6에서 7개 잡 통과 |
+| 2026-11-09 사용자 PC 보고 수정 2차 1~3번 (ffb8618·705808b·c78c27b) | `cargo test --workspace` 코어 282(3 ignored)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과(calamine·cfb 추가); vitest 23파일 139건; Playwright 43건(`dnd.spec` 2건 추가; 검토 큐 테스트의 목록 로드 전 count 경합을 대기 조건으로 고침); CI 7개 잡 |
 | 2026-11-09 이미지 위 글자 레이어 · 우측 패널 AI 검색/이력 (488af39·9e56dd6) | `cargo test --workspace` 코어 266(3 ignored; `documents::layout` 9·`render` 실 PDFium 문자 박스·`import` 레이아웃 왕복 추가)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과; vitest 23파일 139건(`text-layer.test.ts` 8 추가); Playwright 41/41(`documents`·`knowledge`·`pipeline` 스펙을 레이어·검토 큐 기준으로 재작성); CI 7개 잡 두 커밋 모두 성공 |
 | 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 3회(run 42471185353·42475854955 solid 43 MB, 42547230697 파일별 압축 47.6 MB; 159 파일 검사 통과) · **Full 0.1.0 빌드 성공(run 42547228170): 1.1 GB, 219 파일, CUDA 팩 cu121·cu129 동봉 검사 통과** · CUDA 팩 빌드 성공(cu121 run 42533483890 · cu129 run 42533486332 → Release v0.1.0) — 위 "패키징·고지" 참조 |
 

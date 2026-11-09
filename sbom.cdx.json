@@ -1,7 +1,7 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
-  "serialNumber": "urn:uuid:19dc01e4-c2b2-8442-afcb-6208bac376e9",
+  "serialNumber": "urn:uuid:34777047-176f-87aa-b063-91989f1c005d",
   "version": 1,
   "metadata": {
     "tools": {
@@ -749,6 +749,35 @@
         {
           "name": "doculens:scope",
           "value": "other target"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/atoi_simd@0.18.1",
+      "name": "atoi_simd",
+      "version": "0.18.1",
+      "scope": "required",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "purl": "pkg:cargo/atoi_simd@0.18.1",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RoDmitry/atoi_simd"
+        }
+      ],
+      "properties": [
+        {
+          "name": "doculens:ecosystem",
+          "value": "cargo"
+        },
+        {
+          "name": "doculens:scope",
+          "value": "runtime"
         }
       ]
     },
@@ -1566,6 +1595,35 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/calamine@0.38.0",
+      "name": "calamine",
+      "version": "0.38.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "purl": "pkg:cargo/calamine@0.38.0",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/tafia/calamine"
+        }
+      ],
+      "properties": [
+        {
+          "name": "doculens:ecosystem",
+          "value": "cargo"
+        },
+        {
+          "name": "doculens:scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/camino@1.2.6",
       "name": "camino",
       "version": "1.2.6",
@@ -2015,6 +2073,35 @@
         {
           "type": "vcs",
           "url": "https://github.com/RustCrypto/traits"
+        }
+      ],
+      "properties": [
+        {
+          "name": "doculens:ecosystem",
+          "value": "cargo"
+        },
+        {
+          "name": "doculens:scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/codepage@0.1.3",
+      "name": "codepage",
+      "version": "0.1.3",
+      "scope": "required",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "purl": "pkg:cargo/codepage@0.1.3",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/hsivonen/codepage"
         }
       ],
       "properties": [
@@ -3156,6 +3243,35 @@
         {
           "name": "doculens:scope",
           "value": "other target"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/debug_unsafe@0.1.4",
+      "name": "debug_unsafe",
+      "version": "0.1.4",
+      "scope": "required",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "purl": "pkg:cargo/debug_unsafe@0.1.4",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RoDmitry/debug_unsafe"
+        }
+      ],
+      "properties": [
+        {
+          "name": "doculens:ecosystem",
+          "value": "cargo"
+        },
+        {
+          "name": "doculens:scope",
+          "value": "runtime"
         }
       ]
     },
@@ -4306,6 +4422,35 @@
         {
           "type": "vcs",
           "url": "https://github.com/sfackler/fallible-streaming-iterator"
+        }
+      ],
+      "properties": [
+        {
+          "name": "doculens:ecosystem",
+          "value": "cargo"
+        },
+        {
+          "name": "doculens:scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/fast-float2@0.2.4",
+      "name": "fast-float2",
+      "version": "0.2.4",
+      "scope": "required",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "purl": "pkg:cargo/fast-float2@0.2.4",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/Alexhuszagh/fast-float-rust"
         }
       ],
       "properties": [
@@ -11779,7 +11924,7 @@
         },
         {
           "name": "doculens:scope",
-          "value": "build"
+          "value": "build (proc-macro)"
         }
       ]
     },

@@ -88,6 +88,8 @@ test.describe("P4 pipeline", () => {
     await page.getByTestId("nav-review").click();
     await expect(page.getByTestId("page-review")).toBeVisible();
     const items = page.locator('[data-testid^="review-item-"]');
+    // The queue query resolves after the page mounts: wait for the rows before counting them.
+    await expect(items.first()).toBeVisible();
     const initial = await items.count();
     expect(initial).toBeGreaterThanOrEqual(2);
     await expect(page.getByTestId("review-current-confidence")).toBeVisible();

@@ -1284,13 +1284,18 @@
       "hwp": "HWP",
       "xlsx": "XLSX",
       "pptx": "PPTX",
-      "text": "Text"
+      "text": "Text",
+      "xls": "XLS",
+      "doc": "DOC",
+      "ppt": "PPT",
+      "rtf": "RTF",
+      "hml": "HML"
     },
     "unsupported": {
       "heic": "Convert HEIC/HEIF to JPG first",
-      "office_legacy": "Unsupported Office format (DOC / XLS / PPT / HML / RTF: save as DOCX / XLSX / PPTX / PDF first)",
+      "office_legacy": "Unsupported Office binary format (VSD, PUB, MSG, …: save as PDF and import)",
       "no_extension": "No file extension",
-      "unsupported_extension": "Unsupported format (PDF, images, HWP/HWPX, DOCX, XLSX, PPTX and text files are imported)",
+      "unsupported_extension": "Unsupported format (only PDF, images, HWP/HWPX/HML, DOC/DOCX, XLS/XLSX, PPT/PPTX, RTF and text files are imported)",
       "empty": "Empty file",
       "too_large": "File too large (over 2 GB)",
       "unreadable": "Unreadable file",

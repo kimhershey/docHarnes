@@ -99,7 +99,7 @@ fn paragraph_blocks(ctx: &mut Ctx<'_>, p: &HParagraph, out: &mut Vec<Block>) {
             }
         }
     }
-    let mut para = Paragraph { heading, align, list, runs: Vec::new() };
+    let mut para = Paragraph { heading, align, list, runs: Vec::new(), level: 0 };
     let mut pending: Vec<Block> = Vec::new();
 
     // Char shapes change at `start_position` (in 16-bit units; controls are 8 units).
@@ -114,7 +114,7 @@ fn paragraph_blocks(ctx: &mut Ctx<'_>, p: &HParagraph, out: &mut Vec<Block>) {
             return;
         }
         let (bold, italic, underline, size_pt) = char_props(ctx, shape);
-        para.runs.push(Run { text: std::mem::take(text), bold, italic, underline, size_pt, line_break });
+        para.runs.push(Run { text: std::mem::take(text), bold, italic, underline, size_pt, line_break, color: None });
     };
     for ch in &p.char_list.chars {
         while let Some(next) = shapes.peek() {

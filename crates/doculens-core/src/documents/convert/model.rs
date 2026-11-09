@@ -16,6 +16,77 @@ pub struct DocModel {
     pub notes: Vec<String>,
     /// Page size in millimetres when the source declares one.
     pub page_mm: Option<(f32, f32)>,
+    /// Slide decks (PPTX): one page per slide with absolutely positioned shapes. `blocks` still
+    /// holds the reading-order text of the same slides (search, field discovery, text fallback).
+    #[serde(default)]
+    pub slides: Vec<Slide>,
+}
+
+/// Vertical anchoring of the text inside a slide shape (`a:bodyPr anchor`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VAnchor {
+    #[default]
+    Top,
+    Middle,
+    Bottom,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ShapeKind {
+    Text {
+        paragraphs: Vec<Paragraph>,
+        anchor: VAnchor,
+        /// `normAutofit fontScale` (1.0 = none).
+        font_scale: f32,
+        /// Text insets in millimetres: left, top, right, bottom.
+        insets_mm: [f32; 4],
+        /// Default size of runs without an explicit size (placeholder level), points.
+        default_pt: f32,
+        /// Default text colour of the shape (master text style), CSS.
+        default_color: Option<String>,
+    },
+    Picture {
+        id: String,
+    },
+    Table(Table),
+    /// Content the converter cannot draw (chart, SmartArt, OLE, vector image): a labelled frame.
+    Placeholder {
+        label: String,
+    },
+    /// Straight connector drawn along the box (horizontal when wide, vertical when tall).
+    Line,
+}
+
+/// A positioned shape of a slide; coordinates in millimetres from the slide's top-left corner.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Shape {
+    pub x_mm: f32,
+    pub y_mm: f32,
+    pub w_mm: f32,
+    pub h_mm: f32,
+    pub rotation_deg: f32,
+    pub flip_h: bool,
+    pub flip_v: bool,
+    /// CSS colour (`#rrggbb`) of a solid fill.
+    pub fill: Option<String>,
+    /// Outline colour and width in points.
+    pub line: Option<(String, f32)>,
+    /// Preset geometry hint (`ellipse`, `roundRect`, …); `None` = rectangle.
+    pub geometry: Option<String>,
+    pub kind: ShapeKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct Slide {
+    pub width_mm: f32,
+    pub height_mm: f32,
+    /// Solid background colour when the slide / layout / master declares one.
+    pub background: Option<String>,
+    /// Z-order (document order): later shapes draw over earlier ones.
+    pub shapes: Vec<Shape>,
+    pub notes: Vec<Paragraph>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -44,6 +115,9 @@ pub struct Paragraph {
     pub align: Align,
     /// Ordered/unordered list item.
     pub list: Option<ListKind>,
+    /// Indent level (slide bullets: `a:pPr lvl`), 0 = top level.
+    #[serde(default)]
+    pub level: u8,
 }
 
 impl Paragraph {
@@ -91,6 +165,9 @@ pub struct Run {
     pub size_pt: Option<f32>,
     /// Hard line break *after* this run.
     pub line_break: bool,
+    /// CSS text colour (`#rrggbb`) when the source sets one (slides).
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
