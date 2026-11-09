@@ -1648,6 +1648,7 @@ export function buildContext(ui: UiPlanContext = {}): PlanContext {
     model_ids: listModelIds(),
     projects: mp.projectSummaries(),
     current_project: ui.current_project ?? null,
+    history: [...(ui.history ?? [])],
   };
 }
 

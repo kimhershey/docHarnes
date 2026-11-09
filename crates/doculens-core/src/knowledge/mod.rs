@@ -406,6 +406,55 @@ fn default_context_tokens() -> u32 {
     6_000
 }
 
+/// Who said an earlier turn of the assistant conversation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnRole {
+    User,
+    Assistant,
+}
+
+/// One earlier turn of the assistant conversation. Sent with follow-up questions and commands so
+/// the model can resolve references ("그 문서", "아까 금액") — context only, never evidence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConversationTurn {
+    pub role: TurnRole,
+    pub text: String,
+}
+
+impl ConversationTurn {
+    pub fn user(text: &str) -> ConversationTurn {
+        ConversationTurn { role: TurnRole::User, text: text.to_string() }
+    }
+
+    pub fn assistant(text: &str) -> ConversationTurn {
+        ConversationTurn { role: TurnRole::Assistant, text: text.to_string() }
+    }
+}
+
+/// What the user is looking at while asking (titles resolved by the shell): the open document,
+/// the library selection / folder, the open project and the latest imports.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SessionState {
+    pub current_document: Option<String>,
+    pub current_page: Option<u32>,
+    pub selected_documents: Vec<String>,
+    pub folder: Option<String>,
+    pub project: Option<String>,
+    pub recent_documents: Vec<String>,
+}
+
+impl SessionState {
+    pub fn is_empty(&self) -> bool {
+        self.current_document.is_none()
+            && self.selected_documents.is_empty()
+            && self.folder.is_none()
+            && self.project.is_none()
+            && self.recent_documents.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AnswerRequest {
     pub question: String,
@@ -442,6 +491,12 @@ pub struct AnswerRequest {
     /// Cosine-similarity floor for vector-only evidence (None = built-in default).
     #[serde(default)]
     pub min_similarity: Option<f32>,
+    /// Earlier turns of the conversation, oldest first (the question itself is not included).
+    #[serde(default)]
+    pub history: Vec<ConversationTurn>,
+    /// What the UI is showing (resolved by the shell from the ids the UI sends).
+    #[serde(default)]
+    pub session: Option<SessionState>,
 }
 
 impl AnswerRequest {
@@ -461,6 +516,8 @@ impl AnswerRequest {
             keep_chunks: Vec::new(),
             save: true,
             min_similarity: None,
+            history: Vec::new(),
+            session: None,
         }
     }
 }

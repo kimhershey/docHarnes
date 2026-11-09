@@ -117,6 +117,35 @@ test.describe("P3 knowledge base", () => {
     await expect(page.getByTestId("knowledge-answers").getByTestId("answer-helpful").last()).toHaveAttribute("aria-pressed", "true");
   });
 
+  test("assistant remembers the conversation: a follow-up keeps the evidence, 새 대화 forgets it", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서.hwpx"]);
+    await page.getByTestId("nav-assistant").click();
+    const memory = page.getByTestId("assistant-memory");
+    await expect(memory).toHaveAttribute("data-turns", "0");
+    await page.getByTestId("assistant-input").fill("합계 금액은?");
+    await page.getByTestId("assistant-send").click();
+    const first = page.locator('[data-testid="assistant-card-answer"] [data-testid="answer-card"]').first();
+    await expect(first).toHaveAttribute("data-answer-state", "done", { timeout: 15_000 });
+    await expect(memory).toHaveAttribute("data-turns", "2");
+    // "그건 …" points back at the previous answer: on its own the question matches nothing, with the
+    // conversation it keeps the evidence and is answered.
+    await page.getByTestId("assistant-input").fill("그건 누가 작성했어?");
+    await page.getByTestId("assistant-send").click();
+    const second = page.locator('[data-testid="assistant-card-answer"] [data-testid="answer-card"]').nth(1);
+    await expect(second).toHaveAttribute("data-answer-state", "done", { timeout: 15_000 });
+    await expect(second.getByTestId("citation-chip").first()).toBeVisible();
+    await expect(memory).toHaveAttribute("data-turns", "4");
+    // 새 대화 clears the memory: the same follow-up now has nothing to refer to.
+    await page.getByRole("button", { name: ko.assistant.new_chat }).click();
+    await expect(memory).toHaveAttribute("data-turns", "0");
+    await page.getByTestId("assistant-input").fill("그건 누가 작성했어?");
+    await page.getByTestId("assistant-send").click();
+    const third = page.locator('[data-testid="assistant-card-answer"] [data-testid="answer-card"]').last();
+    await expect(third).toHaveAttribute("data-answer-state", "no_evidence", { timeout: 15_000 });
+  });
+
   test("viewer Q&A, explain, summary, version and glossary and knowledge settings", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);

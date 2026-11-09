@@ -1092,6 +1092,23 @@ export type AnswerKind = "answer" | "explain" | "summary" | "compare";
 export type SummaryMode = "one_line" | "key_points" | "one_page";
 export type AnswerLanguage = "auto" | "ko" | "en";
 
+/** One earlier turn of the assistant conversation (context for follow-ups, never evidence). */
+export type TurnRole = "user" | "assistant";
+export interface ConversationTurn {
+  role: TurnRole;
+  text: string;
+}
+
+/** What the user is looking at while asking (names resolved by the shell from the ids the UI sends). */
+export interface SessionState {
+  current_document?: string | null;
+  current_page?: number | null;
+  selected_documents?: string[];
+  folder?: string | null;
+  project?: string | null;
+  recent_documents?: string[];
+}
+
 export interface AnswerRequest {
   question: string;
   kind?: AnswerKind;
@@ -1107,6 +1124,9 @@ export interface AnswerRequest {
   keep_chunks?: number[];
   save?: boolean;
   min_similarity?: number | null;
+  /** Earlier turns, oldest first (the question itself is not included). */
+  history?: ConversationTurn[];
+  session?: SessionState | null;
 }
 
 export interface Citation {
@@ -1632,6 +1652,8 @@ export interface PlanContext {
   projects: ProjectSummary[];
   /** Project open in the UI (default target of project ops). */
   current_project: string | null;
+  /** Earlier turns of the assistant conversation (oldest first). */
+  history: ConversationTurn[];
 }
 
 export interface ProjectSummary {
@@ -1648,6 +1670,8 @@ export interface UiPlanContext {
   current_page?: number | null;
   /** Project open on the projects screen (default target of project ops). */
   current_project?: string | null;
+  /** Earlier turns of the assistant conversation (oldest first). */
+  history?: ConversationTurn[];
 }
 
 export interface StepPreview {

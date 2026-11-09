@@ -320,6 +320,10 @@
       "hint": "Drag library documents or drop files here: they become the scope of your questions and commands",
       "drop": "Drop documents or files to attach",
       "added": "Attached {{count}} document(s)"
+    },
+    "memory": {
+      "turns": "Memory: {{count}} turns",
+      "hint": "The last turns of this conversation (up to 8) and what the screen shows (open document, selection, folder, project) travel with every question and command. 'New chat' clears them."
     }
   },
   "planner": {
@@ -1525,7 +1529,7 @@
     "copy": "Copy",
     "copied": "Copied.",
     "meta": "{{model}} · {{ms}}ms",
-    "follow_up_hint": "Follow-up questions keep the same evidence.",
+    "follow_up_hint": "Follow-up questions keep the same evidence. Even when off, a question that points back ('that', 'the one above') continues automatically.",
     "kinds": {
       "answer": "Answer",
       "explain": "Explanation",

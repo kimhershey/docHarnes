@@ -350,6 +350,30 @@ pub fn context_block(ctx: &PlanContext, text: &str, compact: bool) -> String {
     if !ctx.model_ids.is_empty() {
         s.push_str(&format!("{}: {}\n", if ko { "모델" } else { "models" }, ctx.model_ids.join(", ")));
     }
+    if !ctx.history.is_empty() {
+        // The last turns, shortened: "그것도 엑셀로" needs to know what "그것" was.
+        s.push_str(if ko {
+            "이전 대화(참고용, 명령은 <command>만):\n"
+        } else {
+            "earlier turns (context only; the command is <command>):\n"
+        });
+        let skip = ctx.history.len().saturating_sub(4);
+        for t in ctx.history.iter().skip(skip) {
+            let who = match (t.role, ko) {
+                (crate::knowledge::TurnRole::User, true) => "사용자",
+                (crate::knowledge::TurnRole::Assistant, true) => "어시스턴트",
+                (crate::knowledge::TurnRole::User, false) => "user",
+                (crate::knowledge::TurnRole::Assistant, false) => "assistant",
+            };
+            let text: String = t.text.split_whitespace().collect::<Vec<_>>().join(" ");
+            let text: String = if text.chars().count() > 160 {
+                text.chars().take(159).chain(std::iter::once('…')).collect()
+            } else {
+                text
+            };
+            s.push_str(&format!("- {who}: {text}\n"));
+        }
+    }
     s
 }
 

@@ -11,6 +11,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use doculens_core::db::Db;
+use doculens_core::documents::{repo as docs_repo, DocumentFilter, DocumentRecord, DocumentSort};
 use doculens_core::engine::RouterClient;
 use doculens_core::knowledge::answer::{self, AnswerDeps};
 use doculens_core::knowledge::chunker::ChunkOptions;
@@ -18,13 +19,15 @@ use doculens_core::knowledge::embed::{self, Embedder, RouterEmbedder};
 use doculens_core::knowledge::index::{self, IndexDeps};
 use doculens_core::knowledge::search::SearchDeps;
 use doculens_core::knowledge::tokenize::{Analyzer, KODIC_DIR_NAME};
-use doculens_core::knowledge::{Answer, AnswerKind, AnswerRequest};
+use doculens_core::knowledge::{Answer, AnswerKind, AnswerRequest, SessionState};
+use doculens_core::projects::repo as projects_repo;
 use doculens_core::registry::ModelRole;
 use doculens_core::settings::KnowledgeSettings;
 
 use crate::docs_bridge::{self, spawn_job_thread, AfterJob};
 use crate::engine_bridge;
 use crate::jobs::JobKind;
+use crate::planner_bridge::UiPlanContext;
 use crate::state::{AppState, UiError, UiResult};
 
 pub const EV_KNOWLEDGE_CHANGED: &str = "knowledge://changed";
@@ -388,7 +391,36 @@ pub fn on_workspace_changed(app: &AppHandle) {
 
 /// Runs an answer / explanation / summary / comparison, streaming deltas as
 /// `knowledge://answer` events tagged with `request_id`.
-pub fn answer(app: &AppHandle, req: AnswerRequest, request_id: String) -> UiResult<Answer> {
+/// What the UI is showing, with names instead of ids for the model: the open document, the
+/// library selection, the folder, the open project and the latest imports.
+fn session_state(ctx: &KnowledgeContext, ui: &UiPlanContext) -> UiResult<SessionState> {
+    fn title(d: &DocumentRecord) -> String {
+        d.title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| d.original_name.clone())
+    }
+    let state = ctx.db.with_read(|c| {
+        let mut s = SessionState { folder: ui.folder.clone(), current_page: ui.current_page, ..Default::default() };
+        if let Some(id) = &ui.current_document {
+            s.current_document = docs_repo::get_document(c, id)?.map(|d| title(&d));
+        }
+        for id in ui.selected_doc_ids.iter().take(5) {
+            if let Some(d) = docs_repo::get_document(c, id)? {
+                s.selected_documents.push(title(&d));
+            }
+        }
+        if let Some(pid) = &ui.current_project {
+            s.project = projects_repo::get_project(c, pid)?.map(|p| p.name);
+        }
+        let recent = docs_repo::list_documents(
+            c,
+            &DocumentFilter { sort: DocumentSort::ImportedDesc, limit: Some(3), ..Default::default() },
+        )?;
+        s.recent_documents = recent.iter().map(title).collect();
+        Ok(s)
+    })?;
+    Ok(state)
+}
+
+pub fn answer(app: &AppHandle, req: AnswerRequest, request_id: String, ui: Option<UiPlanContext>) -> UiResult<Answer> {
     let ctx = context(app)?;
     let state = app.state::<AppState>();
     let model = chat_model(app)?;
@@ -396,6 +428,14 @@ pub fn answer(app: &AppHandle, req: AnswerRequest, request_id: String) -> UiResu
     let mut req = req;
     if req.min_similarity.is_none() {
         req.min_similarity = Some(ctx.settings.min_vector_similarity);
+    }
+    if req.session.is_none() {
+        if let Some(ui) = ui.as_ref() {
+            match session_state(&ctx, ui) {
+                Ok(s) => req.session = Some(s),
+                Err(e) => log::warn!("session context for the answer: {}", e.message),
+            }
+        }
     }
     if let Ok(mut r) = state.answer_running.lock() {
         r.insert(request_id.clone());
