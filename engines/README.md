@@ -90,7 +90,8 @@ on for CUDA ≥ 12.8). NSIS keeps a `/SOLID` data block uncompressed behind 32-b
 offsets, so Tauri's stock template overflowed the 2 GiB limit (`Internal compiler
 error #12345`); `src-tauri/nsis/installer.nsi` — Tauri's template with per-file
 compression, kept in sync by `npm run nsis:check` — is used instead, and the
-limit then applies to the compressed installer (Full ≈ 1.6 GB).
+limit then applies to the compressed installer (Full 0.1.0: 1,156 MB for 3.1 GB of
+resources, 219 files).
 
 | pack | toolkit | host compiler | archs |
 |---|---|---|---|

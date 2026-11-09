@@ -20,7 +20,7 @@ ManifestDPIAwareness PerMonitorV2
   ; Per-file (non-solid) compression. With /SOLID, makensis keeps the *uncompressed* data block
   ; behind 32-bit offsets (2 GiB limit): the Full installer bundles ~3.1 GB of CUDA packs and failed
   ; with "Internal compiler error #12345: error mmapping file ... is out of range". Without /SOLID
-  ; the limit applies to the compressed data block (~1.6 GB for Full). This is the only change;
+  ; the limit applies to the compressed data block (1.1 GB for Full 0.1.0). This is the only change;
   ; `npm run nsis:check` verifies that the rest matches the template embedded in @tauri-apps/cli.
   SetCompressor "{{compression}}"
   ; DocuLens-END

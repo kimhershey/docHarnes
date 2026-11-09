@@ -232,7 +232,7 @@ jobs:
           name: DocuLens-Setup-${{ steps.meta.outputs.variant }}-${{ steps.meta.outputs.version }}-x64
           path: dist-installer/*
           if-no-files-found: error
-          compression-level: 0 # the installer is already LZMA-compressed (Full ≈ 1.6 GB)
+          compression-level: 0 # the installer is already LZMA-compressed (Full ≈ 1.1 GB)
 
       - name: Publish to GitHub Release v${{ steps.meta.outputs.version }}
         if: inputs.publish

@@ -25,7 +25,7 @@
 | P4 파이프라인 | **완료 (`phase/p4-pipeline`, PR #7 열림 — 사용자 생성; `phase/p3-knowledge` 위에 쌓음, 단계 말 리뷰 반영 완료)** | 아래 "P4 산출물" 참조. 분류·OCR·KIE 호출기, 내장 양식 7종 + 양식 등록 + NL 스키마, 검증기·신뢰도, 검토 큐, 추출 미러, 분할/병합 |
 | P5 자연어·작업 | **완료 (`main`에 병합, PR #8)** | 아래 "P5 산출물" 참조. 플래너(PlanSchema·규칙·검증기·실행기), 확인 카드, 영속 Job 러너, 정리/저널/되돌리기, 집계, 내보내기 5종 |
 | P6 문서 생성·프로젝트 정합성 (v1.1) | **완료 (`main`에 병합, PR #9 — 2026-11-08 10:18, P7과 한 세션에서 진행 — 사용자 결정)** | 아래 "P6·P7 산출물" 참조. §3.13 문서 생성(템플릿·양식 채우기·HWPX/DOCX/PDF/MD), §3.15 프로젝트·규칙·정합성 검사·보완요청서·관계 그래프, 플래너 op 10종 추가 |
-| P7 품질·배포 (v1.1) | **완료 (`main`에 병합, PR #9; 설치파일 빌드 보강·CUDA 팩/Full 빌드 후속은 `phase/p6-p7` 이어서 진행)** | 평가 하네스(`doculens-eval`)·플래너 골든셋 100건·회귀 게이트, NSIS Lite/Full 릴리스 워크플로·CUDA 팩 워크플로, NOTICES/SBOM 자동화, 보존/파기 일일 작업, 완료 알림, 절전 방지 |
+| P7 품질·배포 (v1.1) | **완료 (`main`에 병합, PR #9; 후속으로 `phase/p6-p7`에서 CUDA 팩 cu121/cu129 빌드·Release 게시, Lite·Full 설치파일 빌드 검증 완료)** | 평가 하네스(`doculens-eval`)·플래너 골든셋 100건·회귀 게이트, NSIS Lite/Full 릴리스 워크플로·CUDA 팩 워크플로, NOTICES/SBOM 자동화, 보존/파기 일일 작업, 완료 알림, 절전 방지 |
 
 ## P1 산출물
 
@@ -1036,6 +1036,15 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   CI web 잡 + 설치파일 워크플로)가 복사본에서 표시 블록을 원복한 결과가 설치된 `@tauri-apps/cli` 네이티브 바이너리에 그대로
   들어 있는지 확인해 CLI 업그레이드 시 재동기화를 강제한다. 워크플로에 2 GiB 크기 가드(GitHub 릴리스 자산 한계), 목록 필터에
   cuBLAS/cudart/EULA, 아티팩트 무압축 업로드 추가. 팩 자체 축소(cu121 `-Xfatbin=-compress-all`, 도구 DLL 제거)는 v1.x 메모.
+- **Full·Lite 설치파일 빌드 성공(2026-11-09, 76a3b0d; Full run 42547228170, Lite run 42547230697)**: 템플릿 검사는 처음에 Windows
+  체크아웃의 CRLF 때문에 실패(73a96d1) → 줄바꿈 정규화 + `.gitattributes`(`eol=lf`)로 고쳐 통과(Windows CLI 바이너리에도 LF로
+  내장). Full: `DocuLens-Setup-Full-0.1.0-x64.exe` 1,156,143,051 B(1.1 GB — 압축 전 3.1 GB; 파일별 LZMA가 예상 1.6 GB보다 잘 줄임),
+  SHA-256 `4c8229246bba54e18a78180b9eb145f78183bf28bab0902ca778a05ab76c8de9`, 7-Zip 목록 219개 파일, 필수 항목 9개 통과
+  (`engines\cu121`·`cu129`에 llama-server·ggml-cuda·cublas·cublasLt·cudart·NVIDIA-CUDA-EULA 확인), `tauri build` 24분(Rust 5분 +
+  NSIS 압축 약 18분), 아티팩트 `DocuLens-Setup-Full-0.1.0-x64`(id 13644687803, 2027-02-07 만료). Lite: 47.6 MB(49,949,072 B,
+  solid 43.0 MB 대비 +4.6 MB), SHA-256 `29501b8fdd4b19da7a73403e7346b25519d7f21acc57801ea91a323aa5874960`, 159개 파일·필수 7개
+  통과, 아티팩트 id 13643799614. 둘 다 `publish=false`(이 세션의 권한 정책이 릴리스 게시를 막음) — Release 게시는 사용자가
+  `publish=true`로 실행. 사용자 PC 검증(설치·엔진 카드 백엔드 cu129/cu121·`CUDA0` 로그)은 체크리스트 P7.
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
@@ -1049,9 +1058,9 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | Playwright(모의 백엔드) | 34/34 (`generate.spec.ts`·`projects.spec.ts` 추가; 모의 백엔드가 Rust 페이로드 모양만 내므로 E2E가 실제 계약을 검증) |
 | `npm run notices` 결정성 | 두 번 실행 결과 동일 — crates 628(runtime 354)·npm 75·SBOM 컴포넌트 709 |
 | GitHub CI(License·Web·Rust Linux·Windows compile·notices·eval-gate·실엔진) | 커밋 a0fcafb·9308de3에서 실엔진 잡만 실패(위 수정으로 0e200ec에서 7개 잡 모두 통과). 리뷰 반영 커밋 84e5fdd에서는 License gate·Windows compile 잡이 **GitHub 릴리스 자산 다운로드 장애**(cargo-deny-action의 바이너리 tar가 손상 수신 "gzip: invalid magic", PDFium 다운로드 HTTP 504)로 실패 — 코드와 무관. ece44cc: License gate를 `taiki-e/install-action`(체크섬 검증 prebuilt cargo-deny 0.20.2)으로 바꿔 통과, 나머지 6개 잡 통과; Windows 잡은 여전히 504. c505b81: `scripts/lib/fetch-retry.mjs`(5xx·네트워크 오류·잘린 본문 지수 백오프 재시도 3회)를 fetch-pdfium/engine/kodic에 적용하고 Windows 잡에도 PDFium `actions/cache` 추가 — 장애가 이어져 Windows 잡은 재시도 3회 후에도 504. 6975410: Windows 잡의 PDFium 다운로드를 `continue-on-error`(경고 주석)로 바꿔 컴파일·테스트는 항상 수행(PDFium 테스트는 라이브러리 없으면 자체 skip, Linux 잡은 엄격 유지) → **7개 잡 모두 통과**(다운로드도 복구되어 Windows 잡이 PDFium 테스트까지 실제 수행) |
-| 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 2회(run 42471185353·42475854955): NSIS 43 MB, 설치파일 내용 검사(159 파일) 통과 — 위 "패키징·고지" 참조. Full은 CUDA 팩 워크플로가 main에 있어야 실행 가능 |
+| 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 3회(run 42471185353·42475854955 solid 43 MB, 42547230697 파일별 압축 47.6 MB; 159 파일 검사 통과) · **Full 0.1.0 빌드 성공(run 42547228170): 1.1 GB, 219 파일, CUDA 팩 cu121·cu129 동봉 검사 통과** · CUDA 팩 빌드 성공(cu121 run 42533483890 · cu129 run 42533486332 → Release v0.1.0) — 위 "패키징·고지" 참조 |
 
-이 환경에서 못 한 것: Windows 러너 전용(설치파일 빌드·CUDA 팩·릴리스 게시·`tauri build`), 실제 Qwen3.5-4B로 초안 품질·
+이 환경에서 못 한 것: 설치파일의 릴리스 게시(권한 정책; 설치파일·CUDA 팩 빌드는 Windows 러너에서 완료), 실제 Qwen3.5-4B로 초안 품질·
 규칙 변환 품질·파이프라인 지표, 한컴/Word에서 생성 HWPX/DOCX 열기, OS 토스트·절전 방지 실동작 — 모두 `docs/user-pc-checklist.md`
 P6·P7 항목.
 
@@ -1123,7 +1132,8 @@ P6·P7 항목.
    `set_backend`·`import_model`·`download_model`·`benchmark`·`open_workspace`)을 플래너에서 UI 액션으로 연결.
 2. P4·P5 숙제 중 미착수: bbox 그라운딩(디지털 PDF 문자 박스), 배치 PDF 자동 경계 탐지, 컬렉션 폴더 감시, OCR 출력 건전성
    검사, 스키마 화면 라우트 이동 차단(데이터 라우터 전환), 실모델 플래너 토큰 수·지연 보정.
-3. P7 후속: 실모델 골든셋 CI(self-hosted GPU), 앱 EULA(부록 E, Full 설치파일 전제), Full 설치파일 크기(≈1.3~1.5 GB) 검토,
+3. P7 후속: 실모델 골든셋 CI(self-hosted GPU), 앱 EULA(부록 E, Full 설치파일 전제), Full 설치파일 축소(실측 1.1 GB / 설치 3.1 GB;
+   cu121 `-Xfatbin=-compress-all`, 팩의 도구 DLL·실행파일 제거, CUDA 팩 해시의 매니페스트 고정), Release 게시(`publish=true`),
    NSIS 설치 경로와 앱데이터 폴더 겹침 확인.
 
 ## 알려진 제약
