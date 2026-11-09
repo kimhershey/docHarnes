@@ -1186,7 +1186,7 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   역삼점 → 역삼점"), `knowledge.spec`(검색/인용 강조는 레이어 `<mark>`, 설명은 이미지 선택으로). 실 PDF/스캔에서의 박스 정확도는 사용자 PC
   체크리스트 "페이지 이미지 위 글자 레이어".
 
-### 사용자 PC 보고 수정 2차 (2026-11-09; 5건 중 1~4번)
+### 사용자 PC 보고 수정 2차 (2026-11-09; 5건 모두)
 
 - **1. 양식 화면 양식 등록·드롭** (보고: "양식 등록과 드래그 앤 드롭이 작동하지 않음"): 양식 화면 본문에는 드롭 대상이 없어
   스프링 로딩으로 화면이 바뀐 뒤 떨어뜨린 카드나 탐색기 파일이 아무 데도 닿지 않았다(사이드바 메뉴 항목과 열린 대화상자만 받음).
@@ -1246,6 +1246,24 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   `planner::tests::context_block_lists_the_last_conversation_turns`, vitest `conversation.test.ts` 4건(턴 추출·상한·명확화,
   `looksLikeFollowUp`), Playwright `knowledge.spec` "assistant remembers the conversation"(후속 질문 유지 → 새 대화 후 근거 없음).
 
+- **5. 문서를 제목·내용으로 프로젝트별 분류** (요청: "라이브러리·지식 베이스에 추가된 문서들을 제목/내용을 기반으로 프로젝트별
+  분류"): 새 모듈 `projects/classify.rs` — 프로젝트마다 **이름 단어·분류 키워드(새 컬럼 `projects.keywords`, 마이그레이션 0007)·
+  접수번호·inbox 폴더·보유 문서의 거래처/제목 단어·템플릿의 미보유 필수 유형**을 문서의 **제목·파일명·경로·거래처·본문 앞 4,000자**와
+  대조해 점수를 매긴다(폴더 일치 4 · 접수번호 3/본문 2.5 · 키워드 2/본문 1.2 · 이름 단어 1.5/0.8 · 같은 거래처 2 · 거래처가 이름에 1.5 ·
+  비슷한 제목 0.5 · 미보유 필수 유형 0.7; 신뢰도 = 점수/(점수+2), 2위가 1위의 60% 이상이면 ×0.6; 0.45 이상이면 제안, 아니면
+  미결정 + 가장 가까운 후보 표시). **모델 보완**(`use_model`)은 불러온 모델이 있을 때 미결정·애매(0.65 미만) 문서를 최대 20건까지
+  후보 프로젝트 id enum 문법(`project_classify`)으로 묻고 0.5 이상이면 반영(출처 `model`). 아무것도 자동 배정하지 않는다:
+  `classify`(미리보기) → 사용자가 행별 프로젝트를 바꾸거나 제외 → `apply_classification`(한 트랜잭션, 중복 무시). 대상은 명시한
+  문서 id, 아니면 프로젝트 미배정 문서 전체(`include_assigned`로 전체). 셸 `project_classify_preview`/`project_classify_apply`
+  (모델 패스는 define_rule처럼 `dialog_model` + 인터랙티브 게이트). 프런트: 프로젝트 화면 "자동 분류" 버튼과 라이브러리 선택 바
+  "프로젝트로 분류"(`/projects?classify=<ids>`) → `ClassifyDialog`(범위 배지, "모델로 보완" 스위치(불러온 모델 있을 때만), 미리보기
+  표: 문서·제안 프로젝트(바꾸기/배정 안 함)·신뢰도·근거·다른 후보, 적용(N)); 새 프로젝트/편집 대화상자에 **분류 키워드** 입력(쉼표 구분).
+  모의 백엔드가 같은 점수 규칙을 구현해 E2E가 계약을 검증한다. 어시스턴트 op는 추가하지 않았다(라이브러리·프로젝트 화면에서 실행;
+  필요하면 `classify_documents` op로 확장 가능).
+- **검증(5번)**: `projects::tests` 3건(키워드 정규화·부분 갱신, 점수 규칙(접수번호·키워드·이름·같은 거래처·미보유 필수 유형)·
+  이미 속한 프로젝트·적용·재실행, 스크립트 모델로 미결정 문서 결정·"none"), Playwright `projects.spec` "auto-classify"(라이브러리 선택 →
+  대화상자 → 제안/미결정 → 수동 지정 → 적용 → 카드 문서 수; 프로젝트 화면에서 미배정만 다시).
+
 ### 사용자 PC 보고 수정 3차 (2026-11-09; 표 내부 글자 인식 · 수정 표시)
 
 - **6. 표 내부 글자 인식** (보고: "문서 라이브러리에서 표 내부의 글자가 정상적으로 인식되지 않음"): 원인 두 가지. (a) PDF 텍스트
@@ -1269,6 +1287,33 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 - **검증**: `documents::layout` 15건(표 행·제목/문단·양쪽 정렬·2단·v1 업그레이드·셀 분리·괘선 제거·셀 배치), `textLayer.test.ts`
   4건, `documents.spec`에 수정 글자 색 단언; 전체 결과는 아래 표.
 
+### 어시스턴트 해석 방식 변경 — 모델 우선 + 되묻기·취소 (2026-11-09; 사용자 결정)
+
+- **배경**: 어시스턴트가 "질문을 제대로 이해하지 못한다"는 보고. 원인은 **규칙 우선** 라우팅이었다. 문장 규칙 24종이 단어 포함 여부로 먼저
+  해석하고 모델은 어떤 규칙도 맞지 않을 때만 호출됐으므로, 질문 안의 명령 단어("합계", "찾아")가 집계·검색 카드를 만들고 규칙이
+  틀려도 모델이 바로잡을 기회가 없었다.
+- **결정**: 슬래시(`/`) 명령과 **되묻기·취소** 두 가지만 추론 없이 규칙으로 최우선 처리하고, 나머지 입력은 **무조건 모델 추론**으로 해석한다.
+- **코어**: `planner::PlanMode { ModelFirst(기본), RulesFirst }`. `llm::plan(deps, text, ctx, mode)` — ModelFirst는 `/`로 시작하는
+  문장만 프리라우터로 보내고 나머지는 모델(검증 + 재질의 1회)로 간다. 모델이 없으면 "플래너 모델이 로드되지 않아 해석할 수 없습니다 …"
+  명확화(`no_model`)를 내고 **키워드 추측을 하지 않는다**. RulesFirst는 종전 경로(프리라우터 → 규칙 → 모델)로 평가 하네스와 선택 모드에만
+  쓰인다. `prerouter::is_cancel`(취소·그만·됐어·cancel·stop… 단독 어구). 모든 모델 요청에 `cache_prompt: true`를 명시해 시스템
+  프롬프트·op 표·예시 접두부의 KV 캐시를 재사용한다(두 번째 호출부터 새 문장과 답만 처리).
+- **셸**: `UiPlanContext.routing`(기본 model_first). ModelFirst면 모델을 필요 시 로드해 인터랙티브 게이트로 호출하고, 모델을 얻지 못하면
+  `no_model` 명확화를 돌려준다. RulesFirst는 종전처럼 규칙 결과가 없을 때만 모델.
+- **프런트**: 입력 순서 = ① 대기 중인 질문·플랜이 있을 때 단독 "취소"(`isCancelCommand`) → 즉시 취소 카드, ② `/` 명령 → 프리라우터 실행,
+  ③ 나머지 → 모델(대화 이력·화면·routing 포함). 문장형 프리라우터(“다크 테마로 바꿔”)는 더 이상 쓰지 않고 모델이 UI op로 처리한다.
+  명확화 카드에 **답변 입력란 + 되묻기 + 취소** 버튼(`clarify-reply`/`clarify-ask-back`/`clarify-cancel`, 상태 배지 답변함/취소됨,
+  Esc로 취소). 되묻기는 원문 + 어시스턴트 질문 + 답변을 묶어(`askBackText`) 모델에 다시 보내고 답변은 사용자 턴으로 남는다. 플랜
+  카드에도 되묻기 입력란(`plan-ask-back`): 답하면 그 카드는 닫히고 재해석 카드가 뒤따른다. 상단 "해석: 모델 / 규칙(구형)" 선택
+  (`assistant-routing`, localStorage 보존)은 CPU 전용 PC용 탈출구다. 모의 백엔드는 모델 우선 흐름을 흉내 낸다(문장 규칙 파서의 해석을
+  모델 출처로 표시, 못 읽으면 명확화, 되묻기 합성문은 답변을 읽음; `doculens.mock.planner_model = "off"`로 모델 없음 상황).
+- **지연·한계**: GPU는 명령당 1~3초. CPU 전용은 프롬프트 캐시가 있어도 명령당 10초 안팎이라 "규칙(구형)"으로 바꾸는 편이 낫다.
+  실제 Qwen3.5-4B의 모델 경로 정확도는 이 환경에서 측정할 수 없고(가중치 없음) 사용자 PC에서 `doculens-eval planner --engine …`로
+  측정해야 한다. CI의 플래너 골든셋 게이트는 규칙 경로(`RulesFirst`)를 계속 검사한다.
+- **검증**: `planner::tests::model_first_mode_sends_every_sentence_but_slash_commands_to_the_model`(스크립트 모델: 규칙이 잡을 문장도
+  모델로, 슬래시는 프리라우터, 모델 없음 → no_model 명확화, RulesFirst는 규칙), `prerouter::tests::bare_cancel_words_are_recognised`,
+  Playwright `planner.spec` "되묻기 replies with the question's context; 취소 (button or typed) …" 추가, 기존 어시스턴트 E2E 전부 통과.
+
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
@@ -1284,6 +1329,8 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | GitHub CI(License·Web·Rust Linux·Windows compile·notices·eval-gate·실엔진) | 커밋 a0fcafb·9308de3에서 실엔진 잡만 실패(위 수정으로 0e200ec에서 7개 잡 모두 통과). 리뷰 반영 커밋 84e5fdd에서는 License gate·Windows compile 잡이 **GitHub 릴리스 자산 다운로드 장애**(cargo-deny-action의 바이너리 tar가 손상 수신 "gzip: invalid magic", PDFium 다운로드 HTTP 504)로 실패 — 코드와 무관. ece44cc: License gate를 `taiki-e/install-action`(체크섬 검증 prebuilt cargo-deny 0.20.2)으로 바꿔 통과, 나머지 6개 잡 통과; Windows 잡은 여전히 504. c505b81: `scripts/lib/fetch-retry.mjs`(5xx·네트워크 오류·잘린 본문 지수 백오프 재시도 3회)를 fetch-pdfium/engine/kodic에 적용하고 Windows 잡에도 PDFium `actions/cache` 추가 — 장애가 이어져 Windows 잡은 재시도 3회 후에도 504. 6975410: Windows 잡의 PDFium 다운로드를 `continue-on-error`(경고 주석)로 바꿔 컴파일·테스트는 항상 수행(PDFium 테스트는 라이브러리 없으면 자체 skip, Linux 잡은 엄격 유지) → **7개 잡 모두 통과**(다운로드도 복구되어 Windows 잡이 PDFium 테스트까지 실제 수행) |
 | 2026-11-09 추가 기능(드래그 앤 드롭 · XLSX/PPTX/텍스트 · 내용 감지 · 뷰어 텍스트 직접 편집) | `cargo test --workspace` 코어 257(3 ignored)·셸 3·평가 15 통과, `cargo deny` 통과(`encoding_rs` 추가), clippy·fmt 통과, vitest 22파일 131건, Playwright 41/41(`dnd.spec.ts` 5, 뷰어 편집 2 포함; 전체 실행 1회에서 검토 큐 테스트가 1번 실패했으나 단독 3회·재실행 전체 통과 → 플레이크), CI: 4fe082d·314e503·c848d81은 Markdown 등록 테스트 1건으로 Rust 잡 실패 → 14577a6에서 7개 잡 통과 |
 | 2026-11-09 사용자 PC 보고 수정 2차 1~3번 (ffb8618·705808b·c78c27b) | `cargo test --workspace` 코어 282(3 ignored)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과(calamine·cfb 추가); vitest 23파일 139건; Playwright 43건(`dnd.spec` 2건 추가; 검토 큐 테스트의 목록 로드 전 count 경합을 대기 조건으로 고침); CI 7개 잡 |
+| 2026-11-09 사용자 PC 보고 수정 2차 4·5번 + 3차 6·7번 (9ca340d·6014ab9·b04660d) | `cargo test --workspace` 코어 294(4 ignored; `documents::layout` 15·`knowledge::answer` 7·`projects` 18 포함)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과(새 의존성 없음, 고지·SBOM 변경 없음); vitest 25파일 147건(`conversation.test.ts` 4·`textLayer.test.ts` 4 추가); Playwright 45건(`knowledge.spec` 세션 기억·`projects.spec` 자동 분류 추가, `documents.spec` 수정 글자 색 단언); `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(b04660d 푸시 이벤트; 9ca340d·6014ab9도 성공) |
+| 2026-11-09 어시스턴트 모델 우선 해석 + 되묻기·취소 (3467ad4) | `cargo test --workspace` 코어 296(4 ignored; `planner` 15·`prerouter` 8 포함)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과; vitest 25파일 147건; Playwright 46건(`planner.spec` 되묻기·취소 1건 추가); `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(3467ad4 푸시 이벤트) |
 | 2026-11-09 이미지 위 글자 레이어 · 우측 패널 AI 검색/이력 (488af39·9e56dd6) | `cargo test --workspace` 코어 266(3 ignored; `documents::layout` 9·`render` 실 PDFium 문자 박스·`import` 레이아웃 왕복 추가)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과; vitest 23파일 139건(`text-layer.test.ts` 8 추가); Playwright 41/41(`documents`·`knowledge`·`pipeline` 스펙을 레이어·검토 큐 기준으로 재작성); CI 7개 잡 두 커밋 모두 성공 |
 | 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 3회(run 42471185353·42475854955 solid 43 MB, 42547230697 파일별 압축 47.6 MB; 159 파일 검사 통과) · 1~3번 반영 Lite 빌드 성공(run 42577030466, 검증된 커밋 a461405 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.5 MB; Release 게시는 권한 분류기 거부로 publish=false) · **Full 0.1.0 빌드 성공(run 42547228170): 1.1 GB, 219 파일, CUDA 팩 cu121·cu129 동봉 검사 통과** · CUDA 팩 빌드 성공(cu121 run 42533483890 · cu129 run 42533486332 → Release v0.1.0) — 위 "패키징·고지" 참조 |
 

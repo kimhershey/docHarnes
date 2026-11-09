@@ -29,6 +29,12 @@ import {
   EVENTS,
   type CheckRun,
   type ChecklistItem,
+  type ClassifyApplyResult,
+  type ClassifyAssignment,
+  type ClassifyCandidate,
+  type ClassifyRequest,
+  type ClassifyResult,
+  type ClassifySuggestion,
   type Draft,
   type DraftRequest,
   type Evidence,
@@ -259,6 +265,17 @@ export function projectSummaries(): ProjectSummary[] {
   return load().projects.map((p) => ({ id: p.id, name: p.name, status: p.status }));
 }
 
+function normalizeKeywords(keywords: string[]): string[] {
+  const out: string[] = [];
+  for (const k of keywords) {
+    const t = k.trim().normalize("NFC");
+    if (!t || out.some((x) => x.toLowerCase() === t.toLowerCase())) continue;
+    out.push(t);
+    if (out.length >= 32) break;
+  }
+  return out;
+}
+
 function upsertProject(s: PState, input: ProjectInput): Project {
   const name = (input.name ?? "").trim();
   if (!name) throw err("invalid", "project_name_empty");
@@ -280,6 +297,7 @@ function upsertProject(s: PState, input: ProjectInput): Project {
     p.due_date = merged(input.due_date, p.due_date);
     p.notes = merged(input.notes, p.notes);
     p.inbox_folder = merged(input.inbox_folder, p.inbox_folder);
+    if (input.keywords != null) p.keywords = normalizeKeywords(input.keywords);
     p.updated_at = now();
   } else {
     if (s.projects.some((x) => compact(x.name) === compact(name))) throw err("invalid", "project_name_taken");
@@ -293,6 +311,7 @@ function upsertProject(s: PState, input: ProjectInput): Project {
       due_date: clean(input.due_date),
       notes: clean(input.notes),
       inbox_folder: clean(input.inbox_folder),
+      keywords: normalizeKeywords(input.keywords ?? []),
       created_at: now(),
       updated_at: now(),
       document_count: 0,
@@ -1009,6 +1028,171 @@ export async function maintenanceWorker(job: Job, ctl: JobControl): Promise<Work
 }
 
 // ---------------------------------------------------------------------------
+// 자동 분류 (projects::classify) — the same deterministic scoring as the core
+// ---------------------------------------------------------------------------
+
+const GENERIC = new Set(["프로젝트", "등록", "심사", "정산", "계약", "공사", "사업", "건", "관련", "업무", "신규", "처리", "문서", "서류", "거래처", "구매", "project", "case", "new", "docs", "documents", "vendor", "onboarding"]);
+const STOP = new Set(["문서", "파일", "사본", "최종", "수정", "스캔", "scan", "copy", "final", "pdf", "page", "쪽", "년", "월", "일", "및", "the", "and", "of", "untitled"]);
+
+function words(text: string): string[] {
+  return text
+    .split(/[^\p{L}\p{N}]+/u)
+    .map((w) => w.toLowerCase())
+    .filter((w) => [...w].length >= 2 && !STOP.has(w));
+}
+
+function scoreDoc(s: PState, doc: MockDoc, p: Project, isKo: boolean): { score: number; reasons: string[] } {
+  const members = docsOf(s, p.id);
+  const vendors = new Set(members.map((d) => compact(d.vendor ?? "")).filter((v) => [...v].length >= 2));
+  const titleWords = new Set(members.flatMap((d) => words(d.title ?? d.original_name)).filter((w) => !GENERIC.has(w)));
+  const present = new Set(members.map((d) => d.doc_type).filter((t): t is string => !!t));
+  const missing = (templateOf(s, p.template_id)?.required_doc_types ?? []).filter((t) => !present.has(t));
+  const nameTokens = words(p.name).filter((w) => !GENERIC.has(w));
+  const keywords = p.keywords.map((k) => k.trim().toLowerCase()).filter(Boolean);
+  const title = doc.title?.trim() || doc.original_name;
+  const head = `${title} ${doc.original_name} ${doc.rel_path} ${doc.vendor ?? ""}`.toLowerCase();
+  const text = doc.pages
+    .map((pg) => pg.text ?? "")
+    .join("\n")
+    .slice(0, 4000)
+    .toLowerCase();
+  const vendor = compact(doc.vendor ?? "");
+  let score = 0;
+  const reasons: string[] = [];
+  const t = (a: string, b: string) => (isKo ? a : b);
+  const folder = doc.rel_path.match(/^inbox\/([^/]+)\//)?.[1];
+  if (p.inbox_folder && folder && compact(p.inbox_folder) === compact(folder)) {
+    score += 4;
+    reasons.push(`${t("폴더", "folder")} inbox/${folder}`);
+  }
+  const intake = compact(p.intake_no ?? "");
+  if ([...intake].length >= 3) {
+    if (compact(head).includes(intake)) {
+      score += 3;
+      reasons.push(`${t("접수번호", "intake no.")} ${p.intake_no}`);
+    } else if (compact(text).includes(intake)) {
+      score += 2.5;
+      reasons.push(`${t("본문에 접수번호", "intake no. in the text")} ${p.intake_no}`);
+    }
+  }
+  let hits = 0;
+  for (const k of keywords) {
+    if (head.includes(k)) {
+      score += 2;
+      reasons.push(`${t("키워드", "keyword")} '${k}'`);
+      hits += 1;
+    } else if (text.includes(k)) {
+      score += 1.2;
+      reasons.push(`${t("본문에 키워드", "keyword in the text")} '${k}'`);
+      hits += 1;
+    }
+    if (hits >= 3) break;
+  }
+  hits = 0;
+  for (const w of nameTokens) {
+    if (keywords.includes(w)) continue;
+    if (head.includes(w)) {
+      score += 1.5;
+      reasons.push(`${t("프로젝트 이름의", "project name word")} '${w}'`);
+      hits += 1;
+    } else if (text.includes(w)) {
+      score += 0.8;
+      reasons.push(`${t("본문에 프로젝트 이름의", "project name word in the text")} '${w}'`);
+      hits += 1;
+    }
+    if (hits >= 3) break;
+  }
+  if ([...vendor].length >= 2) {
+    if (vendors.has(vendor)) {
+      score += 2;
+      reasons.push(t("프로젝트 문서와 같은 거래처", "same vendor as the project's documents"));
+    } else if (compact(p.name).includes(vendor) || nameTokens.some((w) => vendor.includes(compact(w)))) {
+      score += 1.5;
+      reasons.push(t("거래처가 프로젝트 이름에 있음", "vendor named in the project"));
+    }
+  }
+  let shared = 0;
+  for (const w of words(head).filter((x) => !GENERIC.has(x))) {
+    if (!titleWords.has(w) || keywords.includes(w) || nameTokens.includes(w)) continue;
+    score += 0.5;
+    reasons.push(`${t("비슷한 제목", "similar title")} '${w}'`);
+    shared += 1;
+    if (shared >= 2) break;
+  }
+  if (doc.doc_type && missing.includes(doc.doc_type)) {
+    score += 0.7;
+    reasons.push(t("체크리스트에 없는 필수 서류", "required document type still missing"));
+  }
+  return { score, reasons };
+}
+
+export function classifySuggest(req: ClassifyRequest): ClassifyResult {
+  const s = load();
+  const isKo = ko();
+  const projects = req.project_ids?.length ? s.projects.filter((p) => req.project_ids!.includes(p.id)) : s.projects;
+  const all = wsDocs();
+  const assigned = new Set(s.members.map((m) => m.doc_id));
+  const docs = req.doc_ids?.length ? all.filter((d) => req.doc_ids!.includes(d.id)) : req.include_assigned ? all : all.filter((d) => !assigned.has(d.id)).sort((a, b) => b.imported_at.localeCompare(a.imported_at));
+  const result: ClassifyResult = { suggestions: [], suggested: 0, undecided: 0, model_calls: 0, notes: [] };
+  if (projects.length === 0) result.notes.push(isKo ? "프로젝트가 없습니다. 먼저 프로젝트를 만드세요." : "No projects yet: create one first.");
+  if (req.use_model) result.notes.push(isKo ? "모델이 없어 규칙 점수만 사용했습니다." : "No model: rule scores only.");
+  for (const d of docs) {
+    const candidates: ClassifyCandidate[] = projects
+      .map((p) => {
+        const { score, reasons } = scoreDoc(s, d, p, isKo);
+        return { project_id: p.id, project_name: p.name, score, reasons };
+      })
+      .filter((c) => c.score > 0)
+      .sort((a, b) => b.score - a.score);
+    const best = candidates[0]?.score ?? 0;
+    const second = candidates[1]?.score ?? 0;
+    let confidence = best > 0 ? best / (best + 2) : 0;
+    if (best > 0 && second >= 0.6 * best) confidence *= 0.6;
+    confidence = Math.min(0.98, confidence);
+    const suggestion: ClassifySuggestion = {
+      doc_id: d.id,
+      title: d.title?.trim() || d.original_name,
+      doc_type: d.doc_type,
+      project_id: null,
+      project_name: null,
+      confidence,
+      reasons: [],
+      source: "none",
+      alternatives: [],
+      already_in: s.members.filter((m) => m.doc_id === d.id).map((m) => s.projects.find((p) => p.id === m.project_id)?.name ?? "").filter(Boolean),
+    };
+    if (confidence >= 0.45) {
+      const chosen = candidates.shift()!;
+      suggestion.project_id = chosen.project_id;
+      suggestion.project_name = chosen.project_name;
+      suggestion.reasons = chosen.reasons;
+      suggestion.source = "rules";
+    } else if (candidates[0]) {
+      suggestion.reasons.push(`${isKo ? "신호가 약함 — 가장 가까운 프로젝트:" : "weak signals — closest project:"} ${candidates[0].project_name} (${candidates[0].score.toFixed(1)})`);
+    } else {
+      suggestion.reasons.push(isKo ? "일치하는 신호 없음" : "no matching signal");
+    }
+    suggestion.alternatives = candidates.slice(0, 3);
+    result.suggestions.push(suggestion);
+  }
+  result.suggested = result.suggestions.filter((x) => x.project_id).length;
+  result.undecided = result.suggestions.length - result.suggested;
+  return result;
+}
+
+export function classifyApply(assignments: ClassifyAssignment[]): ClassifyApplyResult {
+  const byProject = new Map<string, string[]>();
+  for (const a of assignments) byProject.set(a.project_id, [...(byProject.get(a.project_id) ?? []), a.doc_id]);
+  let added = 0;
+  for (const [pid, ids] of byProject) {
+    const before = load().members.filter((m) => m.project_id === pid).length;
+    addDocuments(pid, ids);
+    added += load().members.filter((m) => m.project_id === pid).length - before;
+  }
+  return { added, project_ids: [...byProject.keys()] };
+}
+
+// ---------------------------------------------------------------------------
 // Commands (src-tauri/src/commands/projects.rs)
 // ---------------------------------------------------------------------------
 
@@ -1124,6 +1308,10 @@ export async function mockProjects(cmd: string, a: Record<string, any>): Promise
       const { req, draft } = supplementRequest(String(a.id), (a.findingIds as string[] | null) ?? [], (a.output as OutputFormat | null) ?? null);
       return { job_id: submitDraftJob(req, draft, { project_id: String(a.id), source: "project" }) };
     }
+    case "project_classify_preview":
+      return classifySuggest((a.req ?? {}) as ClassifyRequest);
+    case "project_classify_apply":
+      return classifyApply((a.assignments ?? []) as ClassifyAssignment[]);
     case "maintenance_status":
       return maintenanceStatus();
     case "maintenance_run_now":

@@ -13,8 +13,8 @@ use crate::settings::{Language, Profile};
 
 use super::rules::is_compound;
 use super::{
-    has_errors, prompts, rules, schema, validate, Op, OpenTarget, Plan, PlanContext, PlanIssue, PlanResult, PlanSource,
-    MIN_CONFIDENCE,
+    has_errors, prompts, rules, schema, validate, Op, OpenTarget, Plan, PlanContext, PlanIssue, PlanMode, PlanResult,
+    PlanSource, MIN_CONFIDENCE,
 };
 
 /// Model access for the planner (`None` in `plan` = rules only).
@@ -76,7 +76,7 @@ fn prerouted(text: &str, ctx: &PlanContext) -> Option<Plan> {
 
 /// Plans one command. Never fails on model trouble: the result carries a
 /// clarification plan and the issue instead (cancellation propagates).
-pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext) -> Result<PlanResult> {
+pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode: PlanMode) -> Result<PlanResult> {
     let text = text.trim();
     let ko = ctx.language == Language::Ko;
     let date = prerouter::resolve_relative_date(text, ctx.today);
@@ -97,9 +97,44 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext) -> Re
     }
 
     let scoped = |plan: Plan| guard_scope(plan, text, ko);
-    // 1. deterministic pre-router (settings / navigation / help). Compound sentences
-    //    ("다크 테마로 바꾸고 모델을 9B로 올려") go to the rules first so the second clause is kept.
-    if is_compound(text) {
+    if mode == PlanMode::ModelFirst {
+        // Slash commands stay deterministic; every other sentence is the model's to read.
+        if text.starts_with('/') {
+            if let Some(mut p) = prerouted(text, ctx) {
+                let issues = validate::validate(&mut p, ctx, date.as_ref());
+                if !has_errors(&issues) {
+                    result.source = PlanSource::Prerouter;
+                    result.plan = p;
+                    result.issues = issues;
+                    return Ok(result);
+                }
+            }
+        }
+    } else {
+        // 1. deterministic pre-router (settings / navigation / help). Compound sentences
+        //    ("다크 테마로 바꾸고 모델을 9B로 올려") go to the rules first so the second clause is kept.
+        if is_compound(text) {
+            if let Some(mut p) = rules::plan(text, ctx) {
+                let issues = validate::validate(&mut p, ctx, date.as_ref());
+                if !has_errors(&issues) {
+                    result.source = PlanSource::Rules;
+                    result.plan = scoped(p);
+                    result.issues = issues;
+                    return Ok(result);
+                }
+            }
+        }
+        if let Some(mut p) = prerouted(text, ctx) {
+            let issues = validate::validate(&mut p, ctx, date.as_ref());
+            if !has_errors(&issues) {
+                result.source = PlanSource::Prerouter;
+                result.plan = p;
+                result.issues = issues;
+                return Ok(result);
+            }
+        }
+
+        // 2. phrase rules
         if let Some(mut p) = rules::plan(text, ctx) {
             let issues = validate::validate(&mut p, ctx, date.as_ref());
             if !has_errors(&issues) {
@@ -108,52 +143,40 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext) -> Re
                 result.issues = issues;
                 return Ok(result);
             }
+            // A rule that produced an invalid plan (e.g. unknown field) still beats a model guess:
+            // ask the user with the first error.
+            if let Some(first) = issues.iter().find(|i| i.blocking) {
+                result.source = PlanSource::Rules;
+                result.plan = Plan::clarify(
+                    if ko {
+                        format!("{} — {}", first.message, "어떻게 할까요?")
+                    } else {
+                        format!("{} — what should I do?", first.message)
+                    },
+                    0.5,
+                );
+                result.issues = issues;
+                return Ok(result);
+            }
         }
     }
-    if let Some(mut p) = prerouted(text, ctx) {
-        let issues = validate::validate(&mut p, ctx, date.as_ref());
-        if !has_errors(&issues) {
-            result.source = PlanSource::Prerouter;
-            result.plan = p;
-            result.issues = issues;
-            return Ok(result);
-        }
-    }
-
-    // 2. phrase rules
-    if let Some(mut p) = rules::plan(text, ctx) {
-        let issues = validate::validate(&mut p, ctx, date.as_ref());
-        if !has_errors(&issues) {
-            result.source = PlanSource::Rules;
-            result.plan = scoped(p);
-            result.issues = issues;
-            return Ok(result);
-        }
-        // A rule that produced an invalid plan (e.g. unknown field) still beats a model guess:
-        // ask the user with the first error.
-        if let Some(first) = issues.iter().find(|i| i.blocking) {
-            result.source = PlanSource::Rules;
-            result.plan = Plan::clarify(
-                if ko {
-                    format!("{} — {}", first.message, "어떻게 할까요?")
-                } else {
-                    format!("{} — what should I do?", first.message)
-                },
-                0.5,
-            );
-            result.issues = issues;
-            return Ok(result);
-        }
-    }
-
     // 3. the model
     let Some(deps) = deps else {
         result.issues.push(PlanIssue::error("", "no_model", "the planner model is not available"));
         result.plan = Plan::clarify(
-            if ko {
-                "규칙으로 해석할 수 없는 명령이고 모델이 로드되지 않아 플랜을 만들 수 없습니다. 모델을 로드하거나 명령을 바꿔 주세요."
-            } else {
-                "The command needs the planner model, which is not loaded. Load a model or rephrase."
+            match (mode, ko) {
+                (PlanMode::ModelFirst, true) => {
+                    "플래너 모델이 로드되지 않아 해석할 수 없습니다. 모델을 로드하거나 해석 방식을 '규칙'으로 바꿔 주세요."
+                }
+                (PlanMode::ModelFirst, false) => {
+                    "The planner model is not loaded, so the sentence cannot be interpreted. Load a model or switch the interpretation to 'rules'."
+                }
+                (PlanMode::RulesFirst, true) => {
+                    "규칙으로 해석할 수 없는 명령이고 모델이 로드되지 않아 플랜을 만들 수 없습니다. 모델을 로드하거나 명령을 바꿔 주세요."
+                }
+                (PlanMode::RulesFirst, false) => {
+                    "The command needs the planner model, which is not loaded. Load a model or rephrase."
+                }
             },
             0.0,
         );

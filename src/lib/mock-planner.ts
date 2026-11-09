@@ -93,6 +93,7 @@ import {
   type PlanContext,
   type PlanExecution,
   type PlanIssue,
+  type PlanMode,
   type PlanPreview,
   type PlanResponse,
   type PlanResult,
@@ -1702,11 +1703,16 @@ export function plannerModelEnabled(): boolean {
   return flag(PLANNER_MODEL_KEY, "on");
 }
 
+/** Tests switch the simulated planner model off with `doculens.mock.planner_model = "off"`. */
+export function plannerModelDisabled(): boolean {
+  return flag(PLANNER_MODEL_KEY, "off");
+}
+
 /**
  * Plans one command: pre-router → phrase rules → (simulated) model (`llm::plan`). Never throws
  * on model trouble: without a model the result carries a clarification plan and a `no_model` issue.
  */
-export function planText(text: string, ctx: PlanContext, opts: { model?: boolean } = {}): PlanResult {
+export function planText(text: string, ctx: PlanContext, opts: { model?: boolean; routing?: PlanMode | null } = {}): PlanResult {
   const t = text.trim();
   const ko = ctx.language === "ko";
   const date = resolveRelativeDate(t, new Date(`${ctx.today}T12:00:00`));
@@ -1731,6 +1737,42 @@ export function planText(text: string, ctx: PlanContext, opts: { model?: boolean
     result.issues = issues;
     return true;
   };
+  // Model first (the default since 2026-11-09): slash commands → pre-router, everything else → the
+  // (simulated) model. The mock has no model: the phrase parser's reading stands in for the model's,
+  // labelled "model"; sentences it cannot read get the model guess below.
+  if ((opts.routing ?? "model_first") === "model_first") {
+    if (t.startsWith("/")) {
+      const pre = prerouted(t, ctx);
+      if (pre && accept(pre.plan, "prerouter")) return result;
+    }
+    // The mock's model is available unless a test switches it off explicitly.
+    if (opts.model === false || (opts.model == null && plannerModelDisabled())) {
+      result.issues.push(issue("", "no_model", "the planner model is not available"));
+      result.plan = clarify(ko ? "플래너 모델이 로드되지 않아 해석할 수 없습니다. 모델을 로드하거나 해석 방식을 '규칙'으로 바꿔 주세요." : "The planner model is not loaded, so the sentence cannot be interpreted. Load a model or switch the interpretation to 'rules'.", 0);
+      return result;
+    }
+    result.model = PLANNER_MODEL;
+    result.attempts = 1;
+    result.prompt_tokens = 1800 + Array.from(t).length;
+    result.completion_tokens = 60;
+    // A 되묻기 reply arrives as "original + [어시스턴트 질문] … + [사용자 답변] …": a model reads the reply as the
+    // answer to its question; the parser standing in for it must not read the question's own words.
+    const askBack = t.match(/^([\s\S]*?)\n\n\[(?:어시스턴트 질문|Assistant question)\] [\s\S]*?\n\[(?:사용자 답변|User reply)\] ([\s\S]*)$/);
+    const understood = askBack ? (rulesPlan(`${askBack[1]!.trim()} ${askBack[2]!.trim()}`.trim(), ctx) ?? rulesPlan(askBack[2]!.trim(), ctx)) : rulesPlan(t, ctx);
+    if (understood && accept(understood, "model")) return result;
+    result.source = "model";
+    if (understood) {
+      // Read, but the plan does not validate: the model asks with the first problem.
+      const issues = validatePlan(structuredClone(understood), ctx, date);
+      const first = issues.find((i) => i.blocking);
+      result.issues = issues;
+      result.plan = clarify(first ? (ko ? `${first.message} — 어떻게 할까요?` : `${first.message} — what should I do?`) : clarificationText(ko, ko ? "불명확" : "unclear"), 0.5);
+      return result;
+    }
+    // Nothing recognisable: a real model asks instead of guessing.
+    result.plan = clarify(clarificationText(ko, ko ? "의도를 파악하지 못함" : "intent unclear"), 0.2);
+    return result;
+  }
   // 1. compound sentences go to the rules first so the second clause is kept
   if (isCompound(t)) {
     const p = rulesPlan(t, ctx);
@@ -3388,8 +3430,9 @@ export async function mockPlanner(cmd: string, a: Record<string, any>): Promise<
     case "planner_plan": {
       const text = String(a.text ?? "");
       if (!text.trim()) throw err("invalid", "text_empty");
-      const ctx = buildContext((a.context as UiPlanContext | null) ?? {});
-      const result = planText(text, ctx);
+      const ui = (a.context as UiPlanContext | null) ?? {};
+      const ctx = buildContext(ui);
+      const result = planText(text, ctx, { routing: ui.routing ?? null });
       // Model calls go through the engine gate: a running batch yields at its next page boundary.
       if (result.source === "model") await gateInteractive(() => sleep(tick(400)));
       const preview = isClarification(result.plan) ? null : planPreview(result.plan, ctx);

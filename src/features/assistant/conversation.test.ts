@@ -42,7 +42,7 @@ describe("conversationTurns", () => {
     const response = { result: { plan: { intent: "clarify", scope: {}, operations: [{ op: "clarify", question: "어떤 폴더인가요?" }], requires_confirmation: false, confidence: 0, summary: "" } } } as unknown as PlanResponse;
     const messages: Message[] = [
       { id: 1, role: "user", text: "정리해줘" },
-      { id: 2, role: "assistant", kind: "clarify", text: "정리해줘", response },
+      { id: 2, role: "assistant", kind: "clarify", text: "정리해줘", response, status: "pending" },
     ];
     expect(conversationTurns(messages)).toEqual([
       { role: "user", text: "정리해줘" },

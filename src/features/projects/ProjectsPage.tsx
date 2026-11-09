@@ -1,7 +1,7 @@
-import { ArrowLeft, ArrowRight, Briefcase, LayoutGrid, List, Plus, Settings2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, Briefcase, LayoutGrid, List, Plus, Settings2, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ import { useProjectsStore } from "@/stores/projects";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspace } from "@/stores/workspace";
 
+import { ClassifyDialog } from "./ClassifyDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { PickProjectDialog } from "./PickProjectDialog";
 import { doneMoveWarning, nextStatus } from "./rules";
@@ -140,6 +141,17 @@ export function ProjectsPage() {
   const [newOpen, setNewOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+  // 자동 분류: opened from the header (unassigned documents) or from the library with `?classify=<ids>`.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [classify, setClassify] = useState<{ open: boolean; docIds: string[] }>({ open: false, docIds: [] });
+  const classifyParam = searchParams.get("classify");
+  useEffect(() => {
+    if (classifyParam === null || !workspace) return;
+    setClassify({ open: true, docIds: classifyParam.split(",").filter(Boolean) });
+    const next = new URLSearchParams(searchParams);
+    next.delete("classify");
+    setSearchParams(next, { replace: true });
+  }, [classifyParam, searchParams, setSearchParams, workspace]);
   const ko = i18n.language.startsWith("ko");
   const templateName = (id: string | null) => {
     const tpl = templates?.find((x) => x.id === id);
@@ -216,6 +228,10 @@ export function ProjectsPage() {
           <Settings2 />
           {t("projects.templates_manage")}
         </Button>
+        <Button size="sm" variant="outline" onClick={() => setClassify({ open: true, docIds: [] })} disabled={list.length === 0} title={t("projects.classify.button_hint")} data-testid="projects-classify">
+          <Sparkles />
+          {t("projects.classify.button")}
+        </Button>
         <div className="ml-auto flex items-center gap-1" role="group" aria-label={t("projects.view.label")}>
           <Button size="icon-sm" variant={view === "kanban" ? "secondary" : "ghost"} aria-pressed={view === "kanban"} onClick={() => setView("kanban")} aria-label={t("projects.view.kanban")} data-testid="projects-view-kanban">
             <LayoutGrid />
@@ -281,6 +297,7 @@ export function ProjectsPage() {
       <NewProjectDialog open={newOpen} onOpenChange={setNewOpen} onSaved={(p) => navigate(`/projects/${p.id}`)} />
       <PickProjectDialog open={pick !== null} onOpenChange={(o) => !o && setPick(null)} projects={list} count={pick ? (pick.mode === "docs" ? pick.docs.length : pick.paths.length) : 0} mode={pick?.mode ?? "docs"} onPick={onPick} onCreate={() => setNewOpen(true)} />
       <TemplatesDialog open={templatesOpen} onOpenChange={setTemplatesOpen} />
+      <ClassifyDialog open={classify.open} onOpenChange={(o) => setClassify((c) => ({ ...c, open: o }))} docIds={classify.docIds} projects={list} />
       <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
     </div>
   );

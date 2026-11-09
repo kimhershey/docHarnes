@@ -242,9 +242,13 @@ fn real_llama_server_load_chat_switch() {
             ..Default::default()
         };
         let t = Instant::now();
-        let planned =
-            doculens_core::planner::llm::plan(Some(&pdeps), "한빛과 거래한 계약 중 작년 것만 골라서 보여줘", &pctx)
-                .expect("planner call");
+        let planned = doculens_core::planner::llm::plan(
+            Some(&pdeps),
+            "한빛과 거래한 계약 중 작년 것만 골라서 보여줘",
+            &pctx,
+            doculens_core::planner::PlanMode::ModelFirst,
+        )
+        .expect("planner call");
         eprintln!(
             "planner → source={:?} attempts={} intent={:?} issues={:?} raw={:?} in {} ms",
             planned.source,

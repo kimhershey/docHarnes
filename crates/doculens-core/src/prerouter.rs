@@ -623,6 +623,44 @@ fn bare_month_day(compact: &str) -> Option<(u32, Option<u32>)> {
 /// Examples: 오늘, 어제, 이번 주, 지난주, 이번 달, 지난달, 올해, 작년, 최근 7일,
 /// 2026년 10월, 10월 5일, 2026-10-05, today, yesterday, this/last week|month|year,
 /// last 30 days. Never panics on absurd inputs (counts are clamped).
+/// A bare cancel ("취소", "그만", "됐어", "cancel", "stop", "never mind"): while the assistant waits
+/// for an answer to its question or for a plan's approval, this is handled before anything else
+/// and never reaches the model (user decision 2026-11-09).
+pub fn is_cancel(text: &str) -> bool {
+    let compact: String = text.chars().filter(|c| c.is_alphanumeric()).flat_map(|c| c.to_lowercase()).collect();
+    matches!(
+        compact.as_str(),
+        "취소"
+            | "취소해"
+            | "취소해줘"
+            | "취소요"
+            | "그만"
+            | "그만해"
+            | "그만둬"
+            | "그만할래"
+            | "됐어"
+            | "됐어요"
+            | "됐다"
+            | "아니"
+            | "아니야"
+            | "아니요"
+            | "아냐"
+            | "하지마"
+            | "하지마요"
+            | "중단"
+            | "중단해"
+            | "멈춰"
+            | "cancel"
+            | "stop"
+            | "nevermind"
+            | "nvm"
+            | "forgetit"
+            | "no"
+            | "nope"
+            | "abort"
+    )
+}
+
 pub fn resolve_relative_date(text: &str, today: NaiveDate) -> Option<DateRange> {
     let lower = text.trim().to_lowercase();
     let compact: String = lower.chars().filter(|c| !c.is_whitespace()).collect();
@@ -886,5 +924,15 @@ mod tests {
             resolve_relative_date("최근 0주", today).unwrap().from,
             today.checked_sub_days(Days::new(6)).unwrap()
         );
+    }
+
+    #[test]
+    fn bare_cancel_words_are_recognised() {
+        for t in ["취소", " 취소해 줘 ", "그만", "됐어요", "아니요.", "cancel", "Stop!", "never mind"] {
+            assert!(is_cancel(t), "{t}");
+        }
+        for t in ["작업 취소해", "취소된 계약서 찾아", "stop the batch", "", "그만큼 큰 금액"] {
+            assert!(!is_cancel(t), "{t}");
+        }
     }
 }

@@ -9,6 +9,10 @@ import type {
   DraftSummary,
   MaintenanceStatus,
   OutputFormat,
+  ClassifyApplyResult,
+  ClassifyAssignment,
+  ClassifyRequest,
+  ClassifyResult,
   Project,
   ProjectDetail,
   ProjectInput,
@@ -346,6 +350,8 @@ export const api = {
   /** Starts the `draft` job for the 보완요청서; the finished job's `result` is a `DraftOutcome`. */
   projectRequestSupplement: (id: string, findingIds: string[] | null = null, output: OutputFormat | null = null) =>
     invoke<{ job_id: string }>("project_request_supplement", { id, findingIds, output }),
+  projectClassifyPreview: (req: ClassifyRequest) => invoke<ClassifyResult>("project_classify_preview", { req }),
+  projectClassifyApply: (assignments: ClassifyAssignment[]) => invoke<ClassifyApplyResult>("project_classify_apply", { assignments }),
 
   // -- maintenance (P7 retention job) --
   maintenanceStatus: () => invoke<MaintenanceStatus>("maintenance_status"),

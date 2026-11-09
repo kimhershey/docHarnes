@@ -24,6 +24,7 @@ use crate::pipeline::vlm::Vlm;
 use crate::settings::Language;
 
 pub mod check;
+pub mod classify;
 pub mod relations;
 pub mod repo;
 pub mod report;
@@ -97,6 +98,9 @@ pub struct Project {
     pub notes: Option<String>,
     /// `inbox/<folder>` auto-mapping source when the project was created from an inbox subfolder.
     pub inbox_folder: Option<String>,
+    /// Classification keywords (자동 분류): matched against document titles / names / text.
+    #[serde(default)]
+    pub keywords: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub document_count: u32,
@@ -123,6 +127,8 @@ pub struct ProjectInput {
     pub due_date: Option<String>,
     pub notes: Option<String>,
     pub inbox_folder: Option<String>,
+    /// `None` keeps the stored keywords, `Some(vec![])` clears them.
+    pub keywords: Option<Vec<String>>,
 }
 
 /// A project template: required document types + rule set (built-ins + user-defined).
@@ -453,6 +459,17 @@ pub fn supplement_request(
     language: Language,
 ) -> Result<DraftRequest> {
     report::supplement_request(db, project_id, run, finding_ids, output, language)
+}
+
+/// Suggests projects for library / knowledge-base documents by title and content (§3.15 자동 분류);
+/// nothing is written until [`apply_classification`].
+pub fn classify(deps: &ProjectDeps<'_>, req: &classify::ClassifyRequest) -> Result<classify::ClassifyResult> {
+    classify::suggest(deps, req)
+}
+
+/// Writes the accepted document → project assignments.
+pub fn apply_classification(db: &Db, assignments: &[classify::Assignment]) -> Result<classify::ApplyResult> {
+    classify::apply(db, assignments)
 }
 
 /// `inbox/<folder>/file` → the project mapped to that inbox subfolder (created on demand

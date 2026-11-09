@@ -70,7 +70,8 @@ user PC: `docs/RUN-GUIDE.md`.
   classify, ocr, extract, validate: normalisers / BRN checksum / sum rules / PII masking / confidence, run: orchestrator +
   `extractions/` mirror, review, forms: form registration + NL schemas, split: lopdf split / merge, repo),
   `planner/` (mod: typed ops / scope / plan (appendix D v1.0 subset), schema: op spec table + PlanSchema grammar, rules:
-  deterministic phrase rules, prompts: tiered planner prompt, llm: pre-router → rules → model with one re-query, validate,
+  deterministic phrase rules (legacy `RulesFirst` mode + eval), prompts: tiered planner prompt, llm: `PlanMode::ModelFirst`
+  (default; slash → pre-router, everything else → model with one re-query; no model → clarification) / `RulesFirst`, validate,
   scope: scope → documents, exec: deterministic executor + previews), `organize/` (template: file-name / folder templates,
   mod: dry-run diff + apply, journal: `ops_journal` + `journal/ops-YYYYMM.jsonl`, LIFO undo / redo), `aggregate` (sum /
   count / avg / min / max with the reviewed / unreviewed split), `export` (XLSX / CSV / JSONL / MD / searchable PDF),
@@ -79,7 +80,8 @@ user PC: `docs/RUN-GUIDE.md`.
   draft + rule-based 보완요청서, reverse validation, HTML / MD / DOCX / HWPX / PDF writers, registered-form filling,
   drafts store under `.doculens/drafts/`), `projects/` (P6 §3.15: projects / templates / rules repo, NL → rule JSON,
   deterministic consistency check with evidence, relation graph, Markdown report, 보완요청서 request builder, inbox
-  subfolder → project mapping), `retention` (policy + purge / LRU file helpers used by the daily maintenance job).
+  subfolder → project mapping, `classify`: title / content → project suggestions (rule scores + optional grammar-bound model
+  pass, preview → apply; `projects.keywords`, migration 0007)), `retention` (policy + purge / LRU file helpers used by the daily maintenance job).
 - `crates/doculens-kodic/` — bin that compiles the mecab-ko-dic sources into lindera's dictionary format
   (driven by `scripts/fetch-kodic.mjs`; descriptors in `assets/`).
 - `crates/doculens-eval/` — P7 evaluation harness bin (`planner` golden-set accuracy + regression gate, `pipeline`
@@ -112,7 +114,7 @@ user PC: `docs/RUN-GUIDE.md`.
   `chunks` + FTS5 `chunks_fts`/`chunks_fts_tri`, sqlite-vec `chunks_vec`, `collections`, `doc_versions`, `glossary`,
   `answers`; pipeline tables `schemas`, `schema_versions`, `extraction_runs`, `fields`, `field_history`; P5 tables
   `journal_batches`, `ops_journal`, `jobs`; P6 tables `projects`, `project_templates`, `project_documents`,
-  `project_rules`, `project_runs`, `project_rule_results`; `pages.layout` word-box JSON (0006)), drafts `.doculens/drafts/<id>.json`, page cache
+  `project_rules`, `project_runs`, `project_rule_results`; `pages.layout` word-box JSON (0006); `projects.keywords` (0007)), drafts `.doculens/drafts/<id>.json`, page cache
   `.doculens/cache/{pages,thumbs,converted}/<doc_id>/`, extraction mirror `.doculens/extractions/<doc_id>/<run_id>/`;
   DB rows store workspace-relative paths only. OCR text lives in `pages.text` (`text_source = ocr`) so the knowledge
   indexer re-chunks it.

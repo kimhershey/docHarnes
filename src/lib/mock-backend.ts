@@ -2586,6 +2586,8 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "project_runs":
     case "project_report":
     case "project_request_supplement":
+    case "project_classify_preview":
+    case "project_classify_apply":
     case "maintenance_status":
     case "maintenance_run_now": {
       if (!current) throw err("no_workspace", "no workspace is open");

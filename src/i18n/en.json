@@ -324,6 +324,14 @@
     "memory": {
       "turns": "Memory: {{count}} turns",
       "hint": "The last turns of this conversation (up to 8) and what the screen shows (open document, selection, folder, project) travel with every question and command. 'New chat' clears them."
+    },
+    "cancelled_pending": "Cancelled the pending question / plan.",
+    "source_control": "control",
+    "routing": {
+      "label": "Interpretation",
+      "model_first": "Model",
+      "rules_first": "Rules (legacy)",
+      "hint": "Model: only slash commands and reply / cancel are handled by rules, everything else by the model (default). Rules (legacy): phrase rules first, the model only when they fail."
     }
   },
   "planner": {
@@ -535,7 +543,9 @@
       "impact_draft": "{{count}} document draft(s) (saved on the generate screen)",
       "impact_project": "{{count}} project / rule change(s)",
       "retention_shorter": "The retention period gets shorter — expired data is deleted by the next purge run.",
-      "rule_description": "Rule: {{description}}"
+      "rule_description": "Rule: {{description}}",
+      "ask_back": "Reply",
+      "ask_back_placeholder": "Ask about this plan or say what to change"
     },
     "execution": {
       "title": "Running · job #{{id}}",
@@ -614,11 +624,16 @@
     "clarify": {
       "title": "Clarification",
       "fallback": "What would you like to do? Please be a little more specific.",
-      "no_model": "No planner model is loaded, so only the phrase rules were used. Load the model to understand more commands.",
+      "no_model": "The planner model is not loaded, so the sentence cannot be interpreted. Load a model or switch the interpretation above to 'rules'.",
       "load_model": "Load model ({{model}})",
       "open_models": "Open model manager",
       "loading": "Loading the model…",
-      "retry_hint": "Answer the question or rephrase the command."
+      "retry_hint": "Reply and Cancel act at once; every other sentence is read by the model.",
+      "ask_back": "Reply",
+      "reply_placeholder": "Answer the question or ask back",
+      "cancel": "Cancel",
+      "answered": "Replied",
+      "cancelled": "Cancelled"
     },
     "ui": {
       "set_setting": "Setting changed: {{key}} = {{value}}",
@@ -1229,7 +1244,8 @@
       "open_doc": "Open document",
       "add_to_kb": "Add to knowledge base",
       "register_form": "Register as form",
-      "merge": "Merge"
+      "merge": "Merge",
+      "classify": "Classify into projects"
     },
     "columns": {
       "name": "Name",
@@ -2467,7 +2483,10 @@
       "inbox_hint": "Documents arriving in inbox/<folder> join this project automatically.",
       "create": "Create",
       "save": "Save",
-      "created": "Project created."
+      "created": "Project created.",
+      "keywords": "Classification keywords",
+      "keywords_placeholder": "e.g. Hanbit, new office, 2026-001 (comma-separated)",
+      "keywords_hint": "Auto-classification looks for these in document titles, file names, vendors and text."
     },
     "detail": {
       "back": "Projects",
@@ -2654,6 +2673,37 @@
       "hint_files": "Pick the project that receives the {{count}} dropped file(s).",
       "none": "No projects yet. Create one first.",
       "add": "Add"
+    },
+    "classify": {
+      "button": "Auto-classify",
+      "button_hint": "Suggests a project for documents that belong to none, from their title and content.",
+      "title": "Classify documents into projects",
+      "hint": "Each document's title, file name, vendor and text are compared with every project's name, keywords, intake number and documents. Review or change the suggestions; nothing is assigned until you apply.",
+      "scope_selected": "{{count}} selected documents",
+      "scope_unassigned": "All documents without a project",
+      "use_model": "Refine with the model",
+      "model_hint": "Documents the rule scores cannot decide (up to 20) are put to the loaded model.",
+      "model_unavailable": "No model is loaded; rule scores only.",
+      "run": "Preview",
+      "rerun": "Classify again",
+      "no_projects": "No projects yet. Create one and give it keywords first.",
+      "summary": "{{total}} documents: {{suggested}} suggested · {{undecided}} undecided",
+      "model_calls": "{{count}} model calls",
+      "empty": "Nothing to classify (every document already belongs to a project).",
+      "columns": {
+        "document": "Document",
+        "project": "Suggested project",
+        "confidence": "Confidence",
+        "reasons": "Reasons"
+      },
+      "untyped": "untyped",
+      "already_in": "already in {{names}}",
+      "leave_out": "Leave out",
+      "undecided": "undecided",
+      "by_model": "model's choice",
+      "alternatives": "Other candidates: {{names}}",
+      "apply": "Apply ({{count}})",
+      "applied": "Assigned {{count}} documents to {{projects}} projects."
     }
   },
   "dnd": {

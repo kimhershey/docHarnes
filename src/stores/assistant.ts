@@ -4,6 +4,8 @@ import type { Answer, AnswerRequest, Op, Plan, PlanExecution, PlanIssue, PlanRes
 
 /** Plan card lifecycle (design §3.7.6). */
 export type PlanStatus = "pending" | "executing" | "done" | "cancelled";
+/** Clarification card lifecycle: waiting for the user's reply, replied to (되묻기), or cancelled. */
+export type ClarifyStatus = "pending" | "answered" | "cancelled";
 
 export type Message =
   | { id: number; role: "user"; text: string; attachments?: { id: string; name: string }[] }
@@ -13,7 +15,7 @@ export type Message =
   | { id: number; role: "assistant"; kind: "plan"; text: string; response: PlanResponse; plan: Plan; context: UiPlanContext; status: PlanStatus; errors: PlanIssue[] | null; editing: boolean }
   | { id: number; role: "assistant"; kind: "execution"; text: string; response: PlanResponse; plan: Plan; jobId: string }
   | { id: number; role: "assistant"; kind: "result"; text: string; response: PlanResponse; plan: Plan; execution: PlanExecution }
-  | { id: number; role: "assistant"; kind: "clarify"; text: string; response: PlanResponse }
+  | { id: number; role: "assistant"; kind: "clarify"; text: string; response: PlanResponse; status: ClarifyStatus }
   | { id: number; role: "assistant"; kind: "error"; text: string };
 
 export type PlanMessage = Extract<Message, { kind: "plan" }>;

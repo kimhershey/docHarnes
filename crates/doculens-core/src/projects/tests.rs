@@ -183,8 +183,8 @@ fn certification_world(db: &Db) -> Project {
 fn migration_adds_project_tables() {
     let db = db();
     // Schema 5 added the project tables; schema 6 (page layout) only adds a column to `pages`.
-    assert_eq!(SCHEMA_VERSION, 6);
-    assert_eq!(db.user_version().unwrap(), 6);
+    assert_eq!(SCHEMA_VERSION, 7);
+    assert_eq!(db.user_version().unwrap(), 7);
     let tables: Vec<String> = db
         .with(|c| {
             let mut s = c.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")?;
@@ -1214,4 +1214,190 @@ fn normalisation_helpers() {
     assert_eq!(normalize(FieldKind::Boolean, "서명 있음", None), Some(Norm::Text("서명있음".into())));
     assert_eq!(normalize(FieldKind::String, "  ", None), None);
     assert_eq!(Norm::Digits("1234567890".into()).display(), "123-45-67890");
+}
+
+// ---------------------------------------------------------------------------
+// Classification (자동 분류)
+// ---------------------------------------------------------------------------
+
+fn seed_titled(db: &Db, id: &str, name: &str, doc_type: &str, vendor: &str, text: &str) {
+    seed(
+        db,
+        &Seed {
+            id,
+            name,
+            doc_type,
+            vendor,
+            doc_date: "2026-04-01",
+            total: 0.0,
+            pending: false,
+            fields: &[],
+            pages: &[Some(text)],
+        },
+    );
+}
+
+fn project_with(db: &Db, name: &str, intake_no: Option<&str>, keywords: &[&str], template: Option<&str>) -> Project {
+    db.with(|c| {
+        repo::save_project(
+            c,
+            &ProjectInput {
+                name: name.into(),
+                intake_no: intake_no.map(Into::into),
+                keywords: Some(keywords.iter().map(|k| k.to_string()).collect()),
+                template_id: template.map(Into::into),
+                ..Default::default()
+            },
+        )
+    })
+    .unwrap()
+}
+
+#[test]
+fn keywords_are_stored_normalised_and_kept_on_partial_updates() {
+    let db = db();
+    let p = project_with(&db, "신사옥 공사", None, &[" 한빛 ", "한빛", "삼일건설", ""], None);
+    assert_eq!(p.keywords, ["한빛", "삼일건설"]);
+    // A partial update without keywords keeps them; an empty list clears them.
+    let same = db
+        .with(|c| {
+            repo::save_project(
+                c,
+                &ProjectInput { id: Some(p.id.clone()), name: "신사옥 공사".into(), ..Default::default() },
+            )
+        })
+        .unwrap();
+    assert_eq!(same.keywords, ["한빛", "삼일건설"]);
+    let cleared = db
+        .with(|c| {
+            repo::save_project(
+                c,
+                &ProjectInput {
+                    id: Some(p.id.clone()),
+                    name: "신사옥 공사".into(),
+                    keywords: Some(Vec::new()),
+                    ..Default::default()
+                },
+            )
+        })
+        .unwrap();
+    assert!(cleared.keywords.is_empty());
+}
+
+#[test]
+fn classification_scores_titles_vendors_intake_numbers_and_text() {
+    use super::classify::{Assignment, ClassifyRequest, SuggestionSource};
+    let db = db();
+    let hanbit =
+        project_with(&db, "한빛상사 거래처 등록", Some("2026-001"), &["한빛"], Some("tpl_vendor_registration"));
+    let daesung = project_with(&db, "대성상사 구매 정산", None, &["대성", "모니터"], None);
+    let site = project_with(&db, "신사옥 공사", None, &[], None);
+    // A document already in 신사옥 공사 from 삼일건설 teaches the project its vendor.
+    seed_titled(&db, "s0", "견적서_삼일건설.pdf", "contract", "삼일건설", "신사옥 외장 공사 견적");
+    db.with(|c| repo::add_documents(c, &site.id, &["s0".into()])).unwrap();
+    seed_titled(
+        &db,
+        "d1",
+        "tax_invoice_0401.pdf",
+        "tax_invoice",
+        "㈜한빛무역",
+        "세금계산서 공급자 ㈜한빛무역 접수번호 2026-001 노트북 10대",
+    );
+    seed_titled(&db, "d2", "영수증_0402.jpg", "receipt", "대성상사", "모니터 27인치 QHD 2대 구매");
+    seed_titled(&db, "d3", "영수증_카페.jpg", "receipt", "스타벅스 역삼점", "아메리카노 2잔");
+    seed_titled(&db, "d4", "거래명세서_0405.pdf", "receipt", "삼일건설", "철근 납품");
+    seed_titled(
+        &db,
+        "d5",
+        "사업자등록증_한빛.pdf",
+        "business_registration",
+        "㈜한빛무역",
+        "사업자등록증 상호 ㈜한빛무역",
+    );
+
+    let deps = deps(&db, None);
+    let result = classify(&deps, &ClassifyRequest::default()).unwrap();
+    assert_eq!(result.suggestions.len(), 5, "s0 is already assigned: {result:?}");
+    let by_id = |id: &str| result.suggestions.iter().find(|s| s.doc_id == id).unwrap();
+    let d1 = by_id("d1");
+    assert_eq!(d1.project_id.as_deref(), Some(hanbit.id.as_str()), "{d1:?}");
+    assert_eq!(d1.source, SuggestionSource::Rules);
+    assert!(d1.confidence > 0.6, "{d1:?}");
+    assert!(
+        d1.reasons.iter().any(|r| r.contains("접수번호")) && d1.reasons.iter().any(|r| r.contains("'한빛'")),
+        "{:?}",
+        d1.reasons
+    );
+    let d5 = by_id("d5");
+    assert_eq!(d5.project_id.as_deref(), Some(hanbit.id.as_str()), "{d5:?}");
+    assert!(
+        d5.reasons.iter().any(|r| r.contains("필수 서류")),
+        "the template still lacks a registration: {:?}",
+        d5.reasons
+    );
+    let d2 = by_id("d2");
+    assert_eq!(d2.project_id.as_deref(), Some(daesung.id.as_str()), "{d2:?}");
+    assert!(d2.reasons.iter().any(|r| r.contains("'모니터'")), "{:?}", d2.reasons);
+    let d3 = by_id("d3");
+    assert!(d3.project_id.is_none() && d3.source == SuggestionSource::None, "{d3:?}");
+    assert!(d3.reasons[0].contains("일치하는 신호 없음"), "{:?}", d3.reasons);
+    let d4 = by_id("d4");
+    assert_eq!(d4.project_id.as_deref(), Some(site.id.as_str()), "same vendor as a member: {d4:?}");
+    assert!(d4.reasons.iter().any(|r| r.contains("같은 거래처")), "{:?}", d4.reasons);
+    assert_eq!((result.suggested, result.undecided), (4, 1));
+
+    // Explicit ids include assigned documents and name the projects they are in.
+    let again = classify(&deps, &ClassifyRequest { doc_ids: vec!["s0".into()], ..Default::default() }).unwrap();
+    assert_eq!(again.suggestions[0].already_in, std::slice::from_ref(&site.name));
+
+    // Apply two rows; the rest stays unassigned and comes back on the next run.
+    let applied = apply_classification(
+        &db,
+        &[
+            Assignment { doc_id: "d1".into(), project_id: hanbit.id.clone() },
+            Assignment { doc_id: "d2".into(), project_id: daesung.id.clone() },
+            Assignment { doc_id: "d1".into(), project_id: hanbit.id.clone() }, // duplicate is ignored
+        ],
+    )
+    .unwrap();
+    assert_eq!(applied.added, 2);
+    assert_eq!(applied.project_ids.len(), 2);
+    let rest = classify(&deps, &ClassifyRequest::default()).unwrap();
+    let ids: Vec<&str> = rest.suggestions.iter().map(|s| s.doc_id.as_str()).collect();
+    assert_eq!(ids, ["d5", "d4", "d3"], "newest first");
+    let checklist = db.with(|c| repo::checklist(c, &hanbit.id, Language::Ko)).unwrap();
+    assert!(checklist.iter().any(|i| i.doc_type == "business_registration" && i.missing), "d5 was not applied");
+}
+
+#[test]
+fn the_model_decides_undecided_documents_when_asked() {
+    use super::classify::{ClassifyRequest, SuggestionSource};
+    let db = db();
+    let cafe = project_with(&db, "복리후생 정산", None, &[], None);
+    let _other = project_with(&db, "신사옥 공사", None, &[], None);
+    seed_titled(&db, "d3", "영수증_카페.jpg", "receipt", "스타벅스 역삼점", "아메리카노 2잔 팀 회식");
+    // Without a model the request is answered by the scores alone, with a note.
+    let plain = classify(&deps(&db, None), &ClassifyRequest { use_model: true, ..Default::default() }).unwrap();
+    assert!(plain.suggestions[0].project_id.is_none());
+    assert!(plain.notes.iter().any(|n| n.contains("모델이 없어")), "{:?}", plain.notes);
+    // With a scripted model the undecided row is decided by it.
+    let chat = StageChat::new();
+    chat.push(
+        "project_classify",
+        json!({ "project": cafe.id, "confidence": 0.82, "reason": "팀 회식 영수증은 복리후생 정산" }),
+    );
+    let vlm = Vlm::new(&chat, "scripted".into(), Profile::Balanced, None);
+    let result = classify(&deps(&db, Some(&vlm)), &ClassifyRequest { use_model: true, ..Default::default() }).unwrap();
+    let s = &result.suggestions[0];
+    assert_eq!(s.project_id.as_deref(), Some(cafe.id.as_str()), "{s:?}");
+    assert_eq!(s.source, SuggestionSource::Model);
+    assert!(s.confidence >= 0.7 && s.reasons.iter().any(|r| r.starts_with("모델:")), "{s:?}");
+    assert_eq!((result.model_calls, chat.calls("project_classify")), (1, 1));
+    let prompt = chat.requests.lock().unwrap()[0].messages[1]["content"].as_str().unwrap().to_string();
+    assert!(prompt.contains("복리후생 정산") && prompt.contains("아메리카노") && prompt.contains("<doc>"), "{prompt}");
+    // "none" leaves the row undecided but counts the call.
+    chat.push("project_classify", json!({ "project": "none", "confidence": 0.9, "reason": "해당 없음" }));
+    let none = classify(&deps(&db, Some(&vlm)), &ClassifyRequest { use_model: true, ..Default::default() }).unwrap();
+    assert!(none.suggestions[0].project_id.is_none());
+    assert!(none.suggestions[0].reasons.iter().any(|r| r.contains("해당 프로젝트 없음")));
 }

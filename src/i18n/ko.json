@@ -324,6 +324,14 @@
     "memory": {
       "turns": "기억 {{count}}턴",
       "hint": "최근 대화(최대 8턴)와 현재 화면(열린 문서·선택·폴더·프로젝트)을 질문·명령과 함께 보냅니다. '새 대화'로 지웁니다."
+    },
+    "cancelled_pending": "대기 중인 질문·플랜을 취소했습니다.",
+    "source_control": "제어",
+    "routing": {
+      "label": "해석",
+      "model_first": "모델",
+      "rules_first": "규칙(구형)",
+      "hint": "모델: 슬래시 명령과 되묻기·취소만 규칙으로 처리하고 나머지는 모델이 해석합니다(기본). 규칙(구형): 문장 규칙이 먼저 해석하고 못 풀 때만 모델."
     }
   },
   "planner": {
@@ -535,7 +543,9 @@
       "impact_draft": "문서 초안 {{count}}건(문서 생성 화면에서 저장)",
       "impact_project": "프로젝트·규칙 변경 {{count}}건",
       "retention_shorter": "보존 기간이 짧아집니다 — 기간이 지난 데이터는 다음 파기 작업에서 삭제됩니다.",
-      "rule_description": "규칙: {{description}}"
+      "rule_description": "규칙: {{description}}",
+      "ask_back": "되묻기",
+      "ask_back_placeholder": "이 플랜에 대해 묻거나 고칠 점을 적으세요"
     },
     "execution": {
       "title": "실행 중 · 작업 #{{id}}",
@@ -614,11 +624,16 @@
     "clarify": {
       "title": "명확화",
       "fallback": "무엇을 할까요? 명령을 조금 더 구체적으로 말해 주세요.",
-      "no_model": "플래너 모델이 로드되지 않아 문장 규칙으로만 해석했습니다. 모델을 로드하면 더 많은 명령을 이해합니다.",
+      "no_model": "플래너 모델이 로드되지 않아 해석할 수 없습니다. 모델을 로드하거나 상단의 해석 방식을 '규칙'으로 바꾸세요.",
       "load_model": "모델 로드 ({{model}})",
       "open_models": "모델 관리자 열기",
       "loading": "모델을 로드하는 중…",
-      "retry_hint": "질문에 답하거나 명령을 다시 입력하세요."
+      "retry_hint": "되묻기와 취소는 즉시 처리되고, 그 밖의 문장은 모델이 해석합니다.",
+      "ask_back": "되묻기",
+      "reply_placeholder": "질문에 답하거나 되물어 보세요",
+      "cancel": "취소",
+      "answered": "답변함",
+      "cancelled": "취소됨"
     },
     "ui": {
       "set_setting": "설정 변경: {{key}} = {{value}}",
@@ -1229,7 +1244,8 @@
       "open_doc": "문서 열기",
       "add_to_kb": "지식 베이스에 추가",
       "register_form": "양식으로 등록",
-      "merge": "병합"
+      "merge": "병합",
+      "classify": "프로젝트로 분류"
     },
     "columns": {
       "name": "이름",
@@ -2467,7 +2483,10 @@
       "inbox_hint": "inbox/<폴더>에 들어온 문서가 자동으로 이 프로젝트에 들어갑니다.",
       "create": "만들기",
       "save": "저장",
-      "created": "프로젝트를 만들었습니다."
+      "created": "프로젝트를 만들었습니다.",
+      "keywords": "분류 키워드",
+      "keywords_placeholder": "예: 한빛, 신사옥, 2026-001 (쉼표로 구분)",
+      "keywords_hint": "자동 분류가 문서의 제목·파일명·거래처·본문에서 찾는 말입니다."
     },
     "detail": {
       "back": "프로젝트 목록",
@@ -2654,6 +2673,37 @@
       "hint_files": "놓은 파일 {{count}}개를 가져와 추가할 프로젝트를 고르세요.",
       "none": "프로젝트가 없습니다. 먼저 새 프로젝트를 만드세요.",
       "add": "추가"
+    },
+    "classify": {
+      "button": "자동 분류",
+      "button_hint": "프로젝트에 속하지 않은 문서를 제목·내용으로 프로젝트에 배정할지 제안합니다.",
+      "title": "문서 자동 분류",
+      "hint": "문서의 제목·파일명·거래처·본문을 각 프로젝트의 이름·키워드·접수번호·보유 문서와 비교해 프로젝트를 제안합니다. 제안을 확인하거나 바꾼 뒤 적용할 때만 배정됩니다.",
+      "scope_selected": "선택 문서 {{count}}개",
+      "scope_unassigned": "프로젝트 미배정 문서 전체",
+      "use_model": "모델로 보완",
+      "model_hint": "규칙 점수로 정하지 못한 문서(최대 20건)를 불러온 모델에게 묻습니다.",
+      "model_unavailable": "불러온 모델이 없어 규칙 점수만 사용합니다.",
+      "run": "분류 미리보기",
+      "rerun": "다시 분류",
+      "no_projects": "프로젝트가 없습니다. 먼저 새 프로젝트를 만들고 키워드를 적어 두세요.",
+      "summary": "문서 {{total}}건 중 제안 {{suggested}}건 · 미결정 {{undecided}}건",
+      "model_calls": "모델 호출 {{count}}회",
+      "empty": "분류할 문서가 없습니다(모두 이미 프로젝트에 속해 있습니다).",
+      "columns": {
+        "document": "문서",
+        "project": "제안 프로젝트",
+        "confidence": "신뢰도",
+        "reasons": "근거"
+      },
+      "untyped": "유형 미분류",
+      "already_in": "이미 {{names}}에 속함",
+      "leave_out": "배정 안 함",
+      "undecided": "미결정",
+      "by_model": "모델 판단",
+      "alternatives": "다른 후보: {{names}}",
+      "apply": "적용 ({{count}})",
+      "applied": "문서 {{count}}건을 프로젝트 {{projects}}개에 배정했습니다."
     }
   },
   "dnd": {

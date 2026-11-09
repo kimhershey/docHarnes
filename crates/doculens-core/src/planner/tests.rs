@@ -14,6 +14,7 @@ use super::prompts;
 use super::rules;
 use super::schema::{self, ParamType, OP_SPECS};
 use super::validate;
+use super::PlanMode;
 use super::*;
 
 fn field(key: &str, ko: &str, en: &str, kind: &str) -> FieldSummary {
@@ -97,7 +98,7 @@ fn kinds(p: &Plan) -> Vec<OpKind> {
 }
 
 fn planned(text: &str) -> PlanResult {
-    plan(None, text, &ctx()).unwrap()
+    plan(None, text, &ctx(), PlanMode::RulesFirst).unwrap()
 }
 
 #[test]
@@ -230,7 +231,7 @@ fn example_commands_plan_without_a_model() {
     // a deletion without any scope asks first
     let mut c = ctx();
     c.current_document = None;
-    let r = plan(None, "문서 삭제해", &c).unwrap();
+    let r = plan(None, "문서 삭제해", &c, PlanMode::RulesFirst).unwrap();
     assert!(r.plan.is_clarification(), "{r:?}");
 }
 
@@ -244,7 +245,7 @@ fn p6_rules_plan_drafts_projects_explanations_and_retention() {
         ProjectSummary { id: "p-acme".into(), name: "Acme onboarding".into(), status: "validating".into() },
     ];
     c.current_project = Some("p-hanbit".into());
-    let planned = |text: &str| plan(None, text, &c).unwrap();
+    let planned = |text: &str| plan(None, text, &c, PlanMode::RulesFirst).unwrap();
 
     // Drafting: a built-in template picked from the keyword, the whole sentence as content.
     let r = planned("등록된 견적서 양식으로 ㈜한빛에 노트북 10대, 대당 1,200,000원, 유효기간 30일 견적서 만들어줘");
@@ -298,7 +299,7 @@ fn p6_rules_plan_drafts_projects_explanations_and_retention() {
     // Without an open project the project ops ask for one.
     let mut c2 = c.clone();
     c2.current_project = None;
-    let r = plan(None, "정합성 검사 돌려줘", &c2).unwrap();
+    let r = plan(None, "정합성 검사 돌려줘", &c2, PlanMode::RulesFirst).unwrap();
     assert!(r.plan.is_clarification() || has_errors(&r.issues), "{r:?}");
 
     // Explain / compare.
@@ -306,7 +307,7 @@ fn p6_rules_plan_drafts_projects_explanations_and_retention() {
     assert!(matches!(&r.plan.operations[0], Op::Explain { .. }), "{r:?}");
     let mut c3 = c.clone();
     c3.selected_doc_ids = vec!["a".into(), "b".into()];
-    let r = plan(None, "선택한 두 문서 비교해줘", &c3).unwrap();
+    let r = plan(None, "선택한 두 문서 비교해줘", &c3, PlanMode::RulesFirst).unwrap();
     assert!(matches!(&r.plan.operations[0], Op::Compare { doc_ids, .. } if doc_ids.len() == 2), "{r:?}");
     let r = planned("이 두 문서 비교해줘");
     assert!(r.plan.is_clarification(), "one selected document: {r:?}");
@@ -336,7 +337,7 @@ fn p6_rules_ignore_statements_and_questions() {
     ];
     c.current_project = Some("p-hanbit".into());
     let not = |text: &str, bad: &[OpKind]| {
-        let r = plan(None, text, &c).unwrap();
+        let r = plan(None, text, &c, PlanMode::RulesFirst).unwrap();
         let ks = kinds(&r.plan);
         assert!(!ks.iter().any(|k| bad.contains(k)), "{text} → {ks:?} ({r:?})");
     };
@@ -383,13 +384,13 @@ fn p6_rules_ignore_statements_and_questions() {
     not("write down the total of last month's receipts", &[DraftDocument]);
     not("draft folder is empty", &[DraftDocument]);
     // Still recognised: explicit commands.
-    let r = plan(None, "한빛 심사 프로젝트에 이 문서 추가해줘", &c).unwrap();
+    let r = plan(None, "한빛 심사 프로젝트에 이 문서 추가해줘", &c, PlanMode::RulesFirst).unwrap();
     assert!(matches!(&r.plan.operations[0], Op::AddToProject { project: Some(p), .. } if p == "p-hanbit"), "{r:?}");
-    let r = plan(None, "'한빛 2차 심사' 프로젝트 만들어줘", &c).unwrap();
+    let r = plan(None, "'한빛 2차 심사' 프로젝트 만들어줘", &c, PlanMode::RulesFirst).unwrap();
     assert!(r.plan.requires_confirmation && matches!(&r.plan.operations[0], Op::CreateProject { .. }), "{r:?}");
-    let r = plan(None, "검색 색인 다시 만들어줘", &c).unwrap();
+    let r = plan(None, "검색 색인 다시 만들어줘", &c, PlanMode::RulesFirst).unwrap();
     assert!(matches!(&r.plan.operations[0], Op::Reindex { .. }), "{r:?}");
-    let r = plan(None, "DPI를 300으로 바꿔줘", &c).unwrap();
+    let r = plan(None, "DPI를 300으로 바꿔줘", &c, PlanMode::RulesFirst).unwrap();
     assert!(matches!(&r.plan.operations[0], Op::SetSetting { key: SettingKey::RenderDpi, .. }), "{r:?}");
 }
 
@@ -424,7 +425,7 @@ fn rules_do_not_hijack_questions_or_everyday_words() {
     // Tagging without any target asks instead of tagging the whole library.
     let mut c = ctx();
     c.current_document = None;
-    let r = plan(None, "태그 중요 추가해", &c).unwrap();
+    let r = plan(None, "태그 중요 추가해", &c, PlanMode::RulesFirst).unwrap();
     assert!(r.plan.is_clarification(), "{r:?}");
     // "현재 폴더 문서 분류해줘" is not a forced re-run.
     let r = planned("여기 있는 문서 분류해줘");
@@ -449,7 +450,8 @@ fn validator_requires_scope_confirms_folder_imports_and_keeps_exports_in_exports
     // Through the planner: a model plan without a scope becomes a clarification.
     let chat = StageChat::new();
     chat.push("plan", json!({ "summary": "x", "intent": "set_doc_type", "scope": {}, "operations": [{ "op": "set_doc_type", "doc_type": "receipt" }], "requires_confirmation": false, "confidence": 0.9 }));
-    let r = plan(Some(&deps(&chat)), "한빛과 거래한 서류들 유형을 영수증으로 설정해", &c).unwrap();
+    let r =
+        plan(Some(&deps(&chat)), "한빛과 거래한 서류들 유형을 영수증으로 설정해", &c, PlanMode::RulesFirst).unwrap();
     assert_eq!(r.source, PlanSource::Model, "{r:?}");
     assert!(r.plan.is_clarification(), "{r:?}");
     // Folder imports always get the card; export paths must stay under exports/.
@@ -628,7 +630,7 @@ fn model_path_requeries_once_with_feedback() {
     // 1st reply: an unknown parameter → rejected → re-query with the error; 2nd reply: valid.
     chat.push("plan", json!({ "summary": "x", "intent": "search", "scope": {}, "operations": [{ "op": "search", "query": "한빛", "limit": 5 }], "requires_confirmation": false, "confidence": 0.8 }));
     chat.push("plan", json!({ "summary": "한빛 계약 검색", "intent": "search", "scope": { "filter": { "doc_type": "contract" } }, "operations": [{ "op": "search", "query": "한빛" }], "requires_confirmation": false, "confidence": 0.8 }));
-    let r = plan(Some(&deps(&chat)), text, &ctx()).unwrap();
+    let r = plan(Some(&deps(&chat)), text, &ctx(), PlanMode::RulesFirst).unwrap();
     assert_eq!(r.source, PlanSource::Model);
     assert_eq!(r.attempts, 2);
     assert!(matches!(&r.plan.operations[0], Op::Search { query, .. } if query == "한빛"));
@@ -649,7 +651,7 @@ fn model_path_requeries_once_with_feedback() {
     let chat = StageChat::new();
     chat.push("plan", json!({ "summary": "x", "intent": "search", "scope": {}, "operations": [], "requires_confirmation": false, "confidence": 0.8 }));
     chat.push("plan", json!({ "summary": "x", "intent": "search", "scope": {}, "operations": [{ "op": "bogus" }], "requires_confirmation": false, "confidence": 0.8 }));
-    let r = plan(Some(&deps(&chat)), text, &ctx()).unwrap();
+    let r = plan(Some(&deps(&chat)), text, &ctx(), PlanMode::RulesFirst).unwrap();
     assert!(r.plan.is_clarification());
     assert_eq!(r.attempts, 2);
     assert!(has_errors(&r.issues));
@@ -657,14 +659,14 @@ fn model_path_requeries_once_with_feedback() {
     // low confidence → clarification with the model's question
     let chat = StageChat::new();
     chat.push("plan", json!({ "summary": "?", "intent": "search", "scope": {}, "operations": [{ "op": "search", "query": "한빛" }], "requires_confirmation": false, "confidence": 0.4, "clarification_question": "어느 거래처요?" }));
-    let r = plan(Some(&deps(&chat)), text, &ctx()).unwrap();
+    let r = plan(Some(&deps(&chat)), text, &ctx(), PlanMode::RulesFirst).unwrap();
     assert!(r.plan.is_clarification());
     assert_eq!(r.plan.clarification_question.as_deref(), Some("어느 거래처요?"));
 
     // model failure → clarification + model_error issue (no Err)
     let chat = StageChat::new();
     *chat.fail_with.lock().unwrap() = Some("HTTP 500".into());
-    let r = plan(Some(&deps(&chat)), text, &ctx()).unwrap();
+    let r = plan(Some(&deps(&chat)), text, &ctx(), PlanMode::RulesFirst).unwrap();
     assert!(r.plan.is_clarification());
     assert_eq!(r.issues[0].code, "model_error");
 
@@ -698,7 +700,7 @@ fn model_path_requeries_once_with_feedback() {
     chat.push("plan", json!({ "summary": "x", "intent": "search", "scope": {}, "operations": [{ "op": "search", "query": "한빛" }], "requires_confirmation": false, "confidence": 0.9 }));
     let mut d = deps(&chat);
     d.ctx_size = Some(4096);
-    let _ = plan(Some(&d), text, &c).unwrap();
+    let _ = plan(Some(&d), text, &c, PlanMode::RulesFirst).unwrap();
     {
         // 4K never gets the full prompt; the exact tier depends on the estimate.
         let reqs = chat.requests.lock().unwrap();
@@ -722,7 +724,7 @@ fn model_path_requeries_once_with_feedback() {
     chat.push("plan", json!({ "summary": "x", "intent": "search", "scope": {}, "operations": [{ "op": "search", "query": "한빛" }], "requires_confirmation": false, "confidence": 0.9 }));
     let mut d = deps(&chat);
     d.ctx_size = Some(16_384);
-    let r = plan(Some(&d), "영수증 중 한빛 것만 골라서 보여줘", &ctx()).unwrap();
+    let r = plan(Some(&d), "영수증 중 한빛 것만 골라서 보여줘", &ctx(), PlanMode::RulesFirst).unwrap();
     assert_eq!(r.source, PlanSource::Model, "{r:?}");
     assert_eq!(r.attempts, 1);
     let reqs = chat.requests.lock().unwrap();
@@ -1133,4 +1135,32 @@ fn context_block_lists_the_last_conversation_turns() {
         "{block}"
     );
     assert!(!super::prompts::context_block(&ctx(), "", false).contains("이전 대화"));
+}
+
+#[test]
+fn model_first_mode_sends_every_sentence_but_slash_commands_to_the_model() {
+    let c = ctx();
+    // A sentence the phrase rules would catch goes to the model instead.
+    let chat = StageChat::new();
+    chat.push(
+        "plan",
+        json!({ "summary": "테마 변경", "intent": "set_theme", "scope": {}, "operations": [{ "op": "set_theme", "theme": "dark" }], "requires_confirmation": false, "confidence": 0.9 }),
+    );
+    let r = plan(Some(&deps(&chat)), "다크 테마로 바꿔줘", &c, PlanMode::ModelFirst).unwrap();
+    assert_eq!(r.source, PlanSource::Model, "{r:?}");
+    assert_eq!(chat.calls("plan"), 1);
+    assert!(matches!(r.plan.operations[0], Op::SetTheme { theme: Theme::Dark }));
+    // Slash commands never reach the model.
+    let r = plan(Some(&deps(&chat)), "/테마 라이트", &c, PlanMode::ModelFirst).unwrap();
+    assert_eq!(r.source, PlanSource::Prerouter);
+    assert_eq!(chat.calls("plan"), 1);
+    // Without a model the result is a clarification that asks for one — no keyword guess.
+    let r = plan(None, "지난달 영수증 합계", &c, PlanMode::ModelFirst).unwrap();
+    assert_eq!(r.source, PlanSource::None);
+    assert!(r.plan.is_clarification());
+    assert!(r.issues.iter().any(|i| i.code == "no_model"));
+    assert!(r.plan.clarification_question.as_deref().unwrap_or("").contains("모델"));
+    // The legacy mode still answers the same sentence by rule.
+    let r = plan(None, "지난달 영수증 합계", &c, PlanMode::RulesFirst).unwrap();
+    assert_eq!(r.source, PlanSource::Rules);
 }

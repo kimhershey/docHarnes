@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use doculens_core::planner::llm::{plan, PlannerDeps};
-use doculens_core::planner::{PlanContext, PlanResult, PlanSource};
+use doculens_core::planner::{PlanContext, PlanMode, PlanResult, PlanSource};
 use doculens_core::settings::Profile;
 
 use crate::cli::Args;
@@ -182,7 +182,12 @@ fn evaluate(items: &[GoldenItem], ctx: &PlanContext, deps: Option<&PlannerDeps<'
             }
         };
         let t = Instant::now();
-        let r = match plan(deps, &item.text, &item_ctx) {
+        let r = match plan(
+            deps,
+            &item.text,
+            &item_ctx,
+            if deps.is_some() { PlanMode::ModelFirst } else { PlanMode::RulesFirst },
+        ) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("{}: 플래너 오류 {e}", item.id);

@@ -163,6 +163,10 @@ pub struct ChatRequest {
     pub chat_template_kwargs: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seed: Option<u64>,
+    /// Reuse the KV cache of the common prompt prefix (system prompt, op table, few-shots) across
+    /// requests; the planner and answer prompts share most of their tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_prompt: Option<bool>,
 }
 
 impl ChatRequest {
