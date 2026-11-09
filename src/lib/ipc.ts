@@ -249,7 +249,7 @@ export const api = {
   knowledgeResetEmbeddings: () => invoke<void>("knowledge_reset_embeddings"),
   knowledgeSearch: (req: SearchRequest) => invoke<SearchResponse>("knowledge_search", { req }),
   knowledgeChunks: (documentId: string) => invoke<Chunk[]>("knowledge_chunks", { documentId }),
-  knowledgeAnswer: (req: AnswerRequest, requestId: string) => invoke<Answer>("knowledge_answer", { req, requestId }),
+  knowledgeAnswer: (req: AnswerRequest, requestId: string, ui?: UiPlanContext) => invoke<Answer>("knowledge_answer", { req, requestId, ui }),
   knowledgeAnswerCancel: (requestId: string) => invoke<boolean>("knowledge_answer_cancel", { requestId }),
   knowledgeAnswers: (kind: AnswerKind | null = null, documentId: string | null = null, limit = 50) =>
     invoke<SavedAnswer[]>("knowledge_answers", { kind, documentId, limit }),

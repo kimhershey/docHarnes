@@ -1,5 +1,5 @@
 import { AlertCircle, Bot, Briefcase, HelpCircle, Paperclip, Send, Sparkles, User, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 
@@ -17,6 +17,7 @@ import { scopeFor } from "@/features/search/SearchPage";
 import { describePreRoute, executePreRoute, executeUiOps } from "@/lib/commands";
 import { docsFromIds, DropHint, importDroppedFiles, useDocumentDropTarget, type DragDoc } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
+import { looksLikeFollowUp } from "@/lib/follow-up";
 import { api } from "@/lib/ipc";
 import { useCollections, useDocument, usePipelineStatus } from "@/lib/queries";
 import { isComposing, matchesChord } from "@/lib/shortcuts";
@@ -34,6 +35,7 @@ import { useUiStore } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
 
 import { ClarifyCard } from "./ClarifyCard";
+import { conversationTurns } from "./conversation";
 import { clarificationQuestion, isPlanExecution, planKind, requiresConfirmation, sourceLabel, uiContextFor } from "./describePlan";
 import { ExecutionCard } from "./ExecutionCard";
 import { UI_OPS } from "./opSpecs";
@@ -124,6 +126,8 @@ export function AssistantPage() {
   const currentMessages = () => useAssistantStore.getState().messages;
 
   const anyPending = messages.some((m) => m.role === "assistant" && m.kind === "answer" && m.pending);
+  // How much of the conversation the next question / command will carry.
+  const memoryTurns = useMemo(() => conversationTurns(messages).length, [messages]);
   const busy = anyPending || planning;
   const activePlan = [...messages].reverse().find((m): m is PlanMessage => m.role === "assistant" && m.kind === "plan" && m.status === "pending") ?? null;
 
@@ -158,11 +162,14 @@ export function AssistantPage() {
     scope === "attached" ? uiContextFor("selection", folder, attachedIds, lastDocument, currentProject) : uiContextFor(scope, folder, selectedIds, lastDocument, currentProject);
 
   const askKnowledge = async (question: string, extra: Partial<AnswerRequest> = {}) => {
-    // Only an explicit follow-up keeps the previous evidence; otherwise every question is retrieved afresh
-    // so unrelated questions can still end in "no evidence".
-    const previous = followUp
-      ? [...currentMessages()].reverse().find((m): m is Extract<Message, { kind: "answer" }> => m.role === "assistant" && m.kind === "answer" && !!m.answer && !m.answer.no_evidence)
-      : undefined;
+    // The conversation so far travels with every question (the model resolves "그 문서", "아까 금액");
+    // the previous evidence is kept for an explicit follow-up or a question that leans on the
+    // conversation, so an unrelated question is still retrieved afresh and can end in "no evidence".
+    const history = conversationTurns(currentMessages());
+    const previous =
+      followUp || (history.length > 0 && looksLikeFollowUp(question))
+        ? [...currentMessages()].reverse().find((m): m is Extract<Message, { kind: "answer" }> => m.role === "assistant" && m.kind === "answer" && !!m.answer && !m.answer.no_evidence)
+        : undefined;
     const request: AnswerRequest = {
       question,
       kind: "answer",
@@ -171,13 +178,15 @@ export function AssistantPage() {
       top_k: knowledge?.top_k ?? 8,
       context_tokens: knowledge?.context_tokens ?? 6000,
       keep_chunks: previous ? previous.answer!.sources.slice(0, 4).map((s) => s.chunk_id) : [],
+      history,
       ...extra,
     };
     const requestId = newRequestId();
     useKnowledgeStore.getState().beginStream(requestId);
     const id = push({ role: "assistant", kind: "answer", requestId, request, answer: null, error: null, pending: true });
     try {
-      const answer = await api.knowledgeAnswer(request, requestId);
+      // What the screen shows (open document, selection, folder, project) goes along as the session context.
+      const answer = await api.knowledgeAnswer(request, requestId, planContext());
       patch(id, (m) => (m.role === "assistant" && m.kind === "answer" ? { ...m, answer, pending: false } : m));
     } catch (e) {
       patch(id, (m) => (m.role === "assistant" && m.kind === "answer" ? { ...m, error: e, pending: false } : m));
@@ -300,8 +309,8 @@ export function AssistantPage() {
       push({ role: "assistant", kind: "executed", text: outcome.summary || describePreRoute(route, t), source: route.source === "slash" ? t("assistant.source_slash") : t("assistant.source_phrase"), confidence: route.confidence });
       return;
     }
-    // 2. Planner (rules, then the model behind the engine gate).
-    const context = planContext();
+    // 2. Planner (rules, then the model behind the engine gate), with the conversation so far.
+    const context: UiPlanContext = { ...planContext(), history: conversationTurns(currentMessages()) };
     setPlanning(true);
     let response: PlanResponse;
     try {
@@ -435,6 +444,9 @@ export function AssistantPage() {
           {t("assistant.new_chat")}
         </Button>
         <div className="ml-auto flex items-center gap-3 text-xs text-fg-muted">
+          <span className="rounded-full bg-bg-muted px-2 py-0.5" title={t("assistant.memory.hint")} data-testid="assistant-memory" data-turns={memoryTurns}>
+            {t("assistant.memory.turns", { count: memoryTurns })}
+          </span>
           <label className="flex items-center gap-1" title={t("answer.follow_up_hint")}>
             <Switch checked={followUp} onCheckedChange={setFollowUp} aria-label={t("answer.follow_up")} data-testid="assistant-follow-up" />
             {t("answer.follow_up")}

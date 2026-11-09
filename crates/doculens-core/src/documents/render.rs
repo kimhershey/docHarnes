@@ -634,3 +634,104 @@ mod tests {
         ));
     }
 }
+
+/// Diagnostic (ignored): dumps the character boxes, the word layout and — when an OCR-like text is
+/// given — the estimated layout of a PDF page next to the true one, with an annotated image.
+/// `DOCULENS_LAYOUT_DUMP=<pdf> [DOCULENS_LAYOUT_DUMP_TEXT=<ocr text file>] [DOCULENS_LAYOUT_DUMP_OUT=<png>]`
+#[cfg(test)]
+mod layout_dump {
+    use super::*;
+    use crate::documents::layout;
+    use crate::paths::WorkspacePaths;
+
+    #[test]
+    #[ignore]
+    fn dump_layout() {
+        let Some(pdf) = std::env::var_os("DOCULENS_LAYOUT_DUMP").map(PathBuf::from) else { return };
+        let lib = locate_pdfium(&default_pdfium_candidates()).expect("pdfium");
+        let svc = RenderService::global(&lib).unwrap();
+        let PageChars { page_box, rotation, chars } = pdf_page_chars(svc, &pdf, 1).unwrap();
+        println!("page box {page_box:?} rotation {rotation} chars {}", chars.len());
+        let degenerate = chars.iter().filter(|c| !(c.right > c.left && c.top > c.bottom)).count();
+        println!("degenerate boxes: {degenerate}");
+        for c in chars.iter().take(60) {
+            println!("  {:?} l={:.1} r={:.1} b={:.1} t={:.1}", c.ch, c.left, c.right, c.bottom, c.top);
+        }
+        let truth = layout::from_chars(&chars, page_box, rotation);
+        let mut line = u32::MAX;
+        for w in &truth.words {
+            if w.line != line {
+                line = w.line;
+                print!("\nline {line:>2} y={:.3} h={:.3}:", w.y, w.h);
+            }
+            print!(" [{} x={:.3} w={:.3}]", w.t, w.x, w.w);
+        }
+        println!();
+        let Some(text_path) = std::env::var_os("DOCULENS_LAYOUT_DUMP_TEXT").map(PathBuf::from) else { return };
+        let text = std::fs::read_to_string(text_path).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let ws = WorkspacePaths::new(dir.path().join("ws"));
+        let cache = DocumentCache::for_document(&ws, "dump");
+        let opts = RenderOptions { dpi: 150, ..Default::default() };
+        render_pdf(svc, &pdf, &cache, &opts, &HashMap::new(), None, &mut |_, _| {}).unwrap();
+        let img = decode_image(&cache.page_file(1)).unwrap();
+        let gray = fit_long_edge(&img, 1400).to_luma8();
+        let est = layout::estimate(&gray, &text);
+        println!("estimated words {} (truth {})", est.words.len(), truth.words.len());
+        // Match words in order by text and measure how many estimated centres fall into the true box.
+        let mut ti = 0usize;
+        let mut hits = 0usize;
+        let mut matched = 0usize;
+        let mut dist = 0.0f32;
+        let mut rgb = img.to_rgb8();
+        let (iw, ih) = (rgb.width() as f32, rgb.height() as f32);
+        let mut rect = |x: f32, y: f32, w: f32, h: f32, col: [u8; 3]| {
+            let (x0, y0) = ((x * iw) as u32, (y * ih) as u32);
+            let x1 = (((x + w) * iw) as u32).min(rgb.width() - 1);
+            let y1 = (((y + h) * ih) as u32).min(rgb.height() - 1);
+            for xx in x0..=x1 {
+                rgb.put_pixel(xx, y0, image::Rgb(col));
+                rgb.put_pixel(xx, y1, image::Rgb(col));
+            }
+            for yy in y0..=y1 {
+                rgb.put_pixel(x0, yy, image::Rgb(col));
+                rgb.put_pixel(x1, yy, image::Rgb(col));
+            }
+        };
+        for w in &truth.words {
+            rect(w.x, w.y, w.w, w.h, [0, 170, 0]);
+        }
+        for e in &est.words {
+            rect(e.x, e.y, e.w, e.h, [220, 0, 0]);
+            if let Some(off) = truth.words[ti.min(truth.words.len())..].iter().position(|t| t.t == e.t) {
+                if off <= 6 {
+                    let t = &truth.words[ti + off];
+                    ti += off + 1;
+                    matched += 1;
+                    let (cx, cy) = (e.x + e.w / 2.0, e.y + e.h / 2.0);
+                    let hit = cx >= t.x && cx <= t.x + t.w && cy >= t.y && cy <= t.y + t.h;
+                    hits += hit as usize;
+                    dist += ((cx - (t.x + t.w / 2.0)).powi(2) + (cy - (t.y + t.h / 2.0)).powi(2)).sqrt();
+                    if !hit {
+                        println!(
+                            "  miss {:<14} est ({:.3},{:.3}) true ({:.3},{:.3})",
+                            e.t,
+                            cx,
+                            cy,
+                            t.x + t.w / 2.0,
+                            t.y + t.h / 2.0
+                        );
+                    }
+                }
+            }
+        }
+        println!(
+            "matched {matched}: centre inside true box {hits} ({:.0}%), mean centre distance {:.4}",
+            100.0 * hits as f32 / matched.max(1) as f32,
+            dist / matched.max(1) as f32
+        );
+        if let Some(out) = std::env::var_os("DOCULENS_LAYOUT_DUMP_OUT") {
+            rgb.save(out).unwrap();
+        }
+    }
+}

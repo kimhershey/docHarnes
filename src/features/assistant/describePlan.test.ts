@@ -30,6 +30,7 @@ const context: PlanContext = {
   model_ids: [],
   projects: [{ id: "p1", name: "인증 심사 A", status: "intake" }],
   current_project: null,
+  history: [],
 };
 
 function plan(ops: Plan["operations"], extra: Partial<Plan> = {}): Plan {

@@ -18,6 +18,7 @@ use doculens_core::export::{self, ExportPreview, ExportRequest};
 use doculens_core::jobs::EngineGate;
 use doculens_core::jobs::{JobControl, JobPriority, JobSpec};
 use doculens_core::knowledge::embed::Embedder;
+use doculens_core::knowledge::ConversationTurn;
 use doculens_core::organize::journal::{self, JournalBatch, JournalEntry, UndoReport};
 use doculens_core::organize::{self, OrganizePlan, OrganizeRequest};
 use doculens_core::pipeline::repo as pipeline_repo;
@@ -46,6 +47,8 @@ pub struct UiPlanContext {
     pub current_page: Option<u32>,
     /// Project open on the projects screen (default target of project ops, §3.15).
     pub current_project: Option<String>,
+    /// Earlier turns of the assistant conversation (oldest first).
+    pub history: Vec<ConversationTurn>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -140,6 +143,7 @@ pub fn build_context(app: &AppHandle, ui: &UiPlanContext) -> UiResult<PlanContex
         model_ids,
         projects,
         current_project: ui.current_project.clone(),
+        history: ui.history.clone(),
     })
 }
 

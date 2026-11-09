@@ -79,7 +79,7 @@ export function synthLayout(text: string | null | undefined, source: LayoutSourc
     const len = 0.5 + ((i * 7) % 5) / 10; // the bar length pattern of `svgPage`
     words.push(...placeWords(line.split(" "), 0.1, 0.8 * len, y, pitch * 0.7, i, false));
   });
-  return { version: 1, source, words };
+  return { version: 2, source, words };
 }
 
 /** Byte-free (UTF-16 index) spans of every word in `text`, found in order; `null` when absent. */

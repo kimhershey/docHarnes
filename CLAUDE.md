@@ -59,11 +59,13 @@ user PC: `docs/RUN-GUIDE.md`.
   `engine/` (locate, devices, presets, client, process, manager, fake_router),
   `db/` (rusqlite + embedded migrations), `documents/` (repo, import plan/run/rescan with content-based
   classification (`sniff`: magic bytes / zip & CFB entries → `import::classify`), render via PDFium, `layout` (word boxes of the
-  page text: PDFium char boxes or ink-band estimate for OCR pages; on-image edits rewrite `pages.text`),
+  page text: PDFium char boxes grouped into visual rows (wrapped table cells), or a rulings-free ink-band / cell-cluster estimate
+  for OCR pages; v1 layouts get their rows relabelled on load; on-image edits rewrite `pages.text`),
   `convert/` HWPX·DOCX·HWP·XLSX·PPTX·text (txt/md/csv/html…) + legacy XLS/XLSB/ODS (calamine)·DOC·PPT (cfb)·RTF·HML → model
   (flow blocks + positioned `slides` for PPTX) → HTML → PDF through a `PdfPrinter` (page size from the source), fixtures),
   `knowledge/` (tokenize: lindera ko-dic / simple analyzer, chunker: structure-aware chunking, repo, index,
-  embed: sqlite-vec + `Embedder`, search: hybrid RRF, answer: grounded answers / explain / summarize / compare),
+  embed: sqlite-vec + `Embedder`, search: hybrid RRF, answer: grounded answers / explain / summarize / compare with the conversation history +
+  screen session as context blocks and follow-up detection),
   `pipeline/` (schema: built-in sample forms + grammar-safe JSON schema + lint, prompts, vlm: retrying caller, image,
   classify, ocr, extract, validate: normalisers / BRN checksum / sum rules / PII masking / confidence, run: orchestrator +
   `extractions/` mirror, review, forms: form registration + NL schemas, split: lopdf split / merge, repo),

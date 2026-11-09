@@ -31,7 +31,7 @@ use serde_json::Value;
 
 use crate::documents::ReviewStatus;
 use crate::generate::{Length, OutputFormat, Tone};
-use crate::knowledge::SearchMode;
+use crate::knowledge::{ConversationTurn, SearchMode};
 use crate::prerouter::DateRange;
 use crate::settings::{Language, Profile, Theme};
 
@@ -1121,6 +1121,10 @@ pub struct PlanContext {
     pub projects: Vec<ProjectSummary>,
     /// Project open in the UI (default target of project ops).
     pub current_project: Option<String>,
+    /// Earlier turns of the assistant conversation (oldest first), for commands that refer back
+    /// ("그것도 엑셀로", "같은 폴더로").
+    #[serde(default)]
+    pub history: Vec<ConversationTurn>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1148,6 +1152,7 @@ impl Default for PlanContext {
             model_ids: Vec::new(),
             projects: Vec::new(),
             current_project: None,
+            history: Vec::new(),
         }
     }
 }

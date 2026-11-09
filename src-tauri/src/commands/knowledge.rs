@@ -199,10 +199,17 @@ pub fn knowledge_chunks(app: AppHandle, document_id: String) -> UiResult<Vec<Chu
     Ok(ctx.db.with_read(|c| repo::list_chunks(c, &document_id))?)
 }
 
+/// Grounded answer; `ui` (what the screen shows) becomes the request's session context — the
+/// open document, selection, folder and project by name — unless the request carries one already.
 #[tauri::command(async)]
-pub fn knowledge_answer(app: AppHandle, req: AnswerRequest, request_id: Option<String>) -> UiResult<Answer> {
+pub fn knowledge_answer(
+    app: AppHandle,
+    req: AnswerRequest,
+    request_id: Option<String>,
+    ui: Option<crate::planner_bridge::UiPlanContext>,
+) -> UiResult<Answer> {
     let request_id = request_id.unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
-    knowledge_bridge::answer(&app, req, request_id)
+    knowledge_bridge::answer(&app, req, request_id, ui)
 }
 
 #[tauri::command(async)]

@@ -927,10 +927,15 @@ pub fn ensure_layout(deps: &ImportDeps<'_>, doc: &DocumentRecord, page_no: u32) 
     let Some(page) = deps.db.with(|c| repo::get_page(c, &doc.id, page_no))? else {
         return Ok(None);
     };
-    if let Some(stored) =
-        deps.db.with(|c| repo::page_layout_json(c, &doc.id, page_no))?.and_then(|j| PageLayout::from_json(&j))
-    {
-        return Ok(Some(stored));
+    if let Some(json) = deps.db.with(|c| repo::page_layout_json(c, &doc.id, page_no))? {
+        if let Some(stored) = PageLayout::from_json(&json) {
+            // A layout upgraded on load (older line numbering) is written back once.
+            let upgraded = stored.to_json();
+            if upgraded != json {
+                deps.db.with(|c| repo::set_page_layout(c, &doc.id, page_no, Some(&upgraded)))?;
+            }
+            return Ok(Some(stored));
+        }
     }
     let Some(text) = page.text.as_deref().filter(|t| !t.trim().is_empty()) else {
         return Ok(None);

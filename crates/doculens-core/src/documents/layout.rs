@@ -12,10 +12,14 @@
 //! Coordinates are fractions (0..1) of the rendered page image *after* the stored rotation, so one
 //! layout serves every zoom level and DPI.
 
-use image::GrayImage;
+use image::{GrayImage, Luma};
 use serde::{Deserialize, Serialize};
 
-pub const LAYOUT_VERSION: u8 = 1;
+pub const LAYOUT_VERSION: u8 = 2;
+
+/// Version 1 layouts numbered lines in PDF text order (table rows came out as many lines); their
+/// rows are re-derived from the boxes on load.
+const LAYOUT_VERSION_SEQUENTIAL_LINES: u8 = 1;
 
 /// How the word boxes were obtained.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,8 +97,35 @@ impl PageLayout {
         serde_json::to_string(self).unwrap_or_else(|_| "{}".into())
     }
 
+    /// Parses a stored layout; a version-1 layout gets its visual rows re-derived (see [`assign_rows`]).
     pub fn from_json(json: &str) -> Option<PageLayout> {
-        serde_json::from_str::<PageLayout>(json).ok().filter(|l| l.version == LAYOUT_VERSION)
+        let mut layout = serde_json::from_str::<PageLayout>(json).ok()?;
+        if layout.version == LAYOUT_VERSION_SEQUENTIAL_LINES {
+            layout.relabel_rows();
+            layout.version = LAYOUT_VERSION;
+        }
+        (layout.version == LAYOUT_VERSION).then_some(layout)
+    }
+
+    /// Re-derives the `line` of every word from the boxes (fractions, top-left origin) with the
+    /// row grouping of [`from_chars`]; the word order is kept. The boxes are scaled to a nominal
+    /// 1000-unit page so the half-point floor of the run geometry does not matter.
+    pub fn relabel_rows(&mut self) {
+        const SCALE: f32 = 1000.0;
+        let runs: Vec<Run> = self
+            .words
+            .iter()
+            .map(|w| Run {
+                text: w.t.clone(),
+                left: w.x * SCALE,
+                right: (w.x + w.w) * SCALE,
+                bottom: (1.0 - (w.y + w.h)) * SCALE,
+                top: (1.0 - w.y) * SCALE,
+            })
+            .collect();
+        for (w, line) in self.words.iter_mut().zip(assign_rows(&runs)) {
+            w.line = line;
+        }
     }
 
     /// The page text implied by the layout: words of a line joined by spaces, lines by newlines.
@@ -187,6 +218,7 @@ fn finish_box(x: f32, y: f32, w: f32, h: f32) -> (f32, f32, f32, f32) {
 // PDF text layer → words
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone)]
 struct Run {
     text: String,
     left: f32,
@@ -195,9 +227,180 @@ struct Run {
     top: f32,
 }
 
+impl Run {
+    fn geo(&self) -> (f32, f32, f32, f32) {
+        (self.left, self.right, self.bottom, self.top)
+    }
+
+    fn height(&self) -> f32 {
+        (self.top - self.bottom).max(0.5)
+    }
+
+    fn centre(&self) -> f32 {
+        (self.bottom + self.top) / 2.0
+    }
+}
+
+/// Vertical overlap of two boxes given as `(left, right, bottom, top)`.
+fn v_overlap(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> f32 {
+    (a.3.min(b.3) - a.2.max(b.2)).max(0.0)
+}
+
+/// `b` continues `a` on the next line of the same narrow column (a table cell wrapped onto two
+/// lines): directly below it, within about a line, with overlapping horizontal extents.
+fn stacked_below(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool {
+    let h = (a.3 - a.2).max(b.3 - b.2).max(0.5);
+    (b.2 + b.3) < (a.2 + a.3)
+        && b.3 <= a.2 + 0.5 * h
+        && b.3 >= a.2 - 1.2 * h
+        && b.0 < a.1 - 0.1 * h
+        && b.1 > a.0 + 0.1 * h
+}
+
+/// Consecutive runs on one baseline within a word gap of each other (the words of one cell line,
+/// or a stretch of a paragraph line).
+#[derive(Debug, Clone, Copy)]
+struct Segment {
+    first: usize,
+    last: usize, // inclusive
+    left: f32,
+    right: f32,
+    bottom: f32,
+    top: f32,
+}
+
+impl Segment {
+    fn geo(&self) -> (f32, f32, f32, f32) {
+        (self.left, self.right, self.bottom, self.top)
+    }
+
+    fn height(&self) -> f32 {
+        (self.top - self.bottom).max(0.5)
+    }
+}
+
+/// Longest wrapped cell the row grouping accepts; taller stacks are paragraphs / columns.
+const MAX_CELL_LINES: usize = 4;
+
+/// Visual rows of the runs, in run order. PDF text comes cell by cell, so a table row whose cells
+/// wrap onto two or three lines arrives as "번 / 호 / 품목 / 수 / 량 …". Runs are first grouped into
+/// segments (one baseline, word gaps); a chain of segments stacked below each other is one *cell*
+/// when a neighbour sits beside the chain at a cell gap's distance (≥ 0.6 em, sharing its vertical
+/// span), the chain is short and its last line does not simply continue to the right (which makes
+/// it a paragraph line). Every segment that overlaps the row's vertical extent joins the row.
+fn assign_rows(runs: &[Run]) -> Vec<u32> {
+    let n = runs.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    // 1. Segments.
+    let mut segs: Vec<Segment> = Vec::new();
+    for (i, r) in runs.iter().enumerate() {
+        let joined = segs.last_mut().filter(|s| {
+            let prev = &runs[s.last];
+            let h = prev.height().min(r.height());
+            v_overlap(prev.geo(), r.geo()) >= 0.5 * h
+                && r.left >= prev.left
+                && r.left - prev.right <= 1.0 * prev.height().max(r.height())
+        });
+        match joined {
+            Some(s) => {
+                s.last = i;
+                s.left = s.left.min(r.left);
+                s.right = s.right.max(r.right);
+                s.bottom = s.bottom.min(r.bottom);
+                s.top = s.top.max(r.top);
+            }
+            None => {
+                segs.push(Segment { first: i, last: i, left: r.left, right: r.right, bottom: r.bottom, top: r.top })
+            }
+        }
+    }
+    let m = segs.len();
+    // 2. Chains of consecutive segments stacked below each other; `chain[s]` is the chain's first segment.
+    let mut chain = vec![usize::MAX; m];
+    for s in 1..m {
+        if stacked_below(segs[s - 1].geo(), segs[s].geo()) {
+            if chain[s - 1] == usize::MAX {
+                chain[s - 1] = s - 1;
+            }
+            chain[s] = chain[s - 1];
+        }
+    }
+    // 3. Which chains are wrapped cells.
+    let mut is_cell = vec![false; m];
+    let mut span = vec![(0.0f32, 0.0f32); m]; // (bottom, top) of a chain, at its head
+    let mut head = 0;
+    while head < m {
+        if chain[head] != head {
+            head += 1;
+            continue;
+        }
+        let members: Vec<usize> = (head..m).take_while(|&s| chain[s] == head).collect();
+        let bottom = members.iter().map(|&s| segs[s].bottom).fold(f32::MAX, f32::min);
+        let top = members.iter().map(|&s| segs[s].top).fold(f32::MIN, f32::max);
+        let left = members.iter().map(|&s| segs[s].left).fold(f32::MAX, f32::min);
+        let right = members.iter().map(|&s| segs[s].right).fold(f32::MIN, f32::max);
+        let h = members.iter().map(|&s| segs[s].height()).fold(0.5, f32::max);
+        span[head] = (bottom, top);
+        let last = segs[*members.last().unwrap_or(&head)];
+        // The run after the chain continuing the last line to the right makes it a paragraph line.
+        let continues = runs.get(last.last + 1).is_some_and(|r| v_overlap(r.geo(), last.geo()) >= 0.6 * h);
+        // The nearest runs on either side that share the chain's vertical span: a cell border
+        // (padding + rule) keeps them at least 0.6 em away, a word space does not.
+        let mut nearest_right = f32::MAX;
+        let mut nearest_left = f32::MAX;
+        let (first_run, last_run) = (segs[head].first, last.last);
+        for (j, r) in runs.iter().enumerate() {
+            if (first_run..=last_run).contains(&j) || r.centre() <= bottom - 0.25 * h || r.centre() >= top + 0.25 * h {
+                continue;
+            }
+            if r.left >= right {
+                nearest_right = nearest_right.min(r.left - right);
+            } else if r.right <= left {
+                nearest_left = nearest_left.min(left - r.right);
+            }
+        }
+        let has_neighbour = nearest_right < f32::MAX || nearest_left < f32::MAX;
+        is_cell[head] = members.len() <= MAX_CELL_LINES
+            && !continues
+            && has_neighbour
+            && nearest_right >= 0.6 * h
+            && nearest_left >= 0.6 * h;
+        head += members.len();
+    }
+    // 4. Rows: a segment joins the current row when it continues a wrapped cell or overlaps the
+    //    row's vertical extent (a cell's whole span for the first line of a wrapped cell); otherwise
+    //    it starts the next row.
+    let mut rows = vec![0u32; n];
+    let mut row = 0u32;
+    let (mut row_bottom, mut row_top) = (segs[0].bottom, segs[0].top);
+    for (s, seg) in segs.iter().enumerate() {
+        if s > 0 {
+            let in_cell = chain[s] != usize::MAX && is_cell[chain[s]];
+            let fragment = in_cell && chain[s] != s;
+            let (bottom, top) = if in_cell && chain[s] == s { span[s] } else { (seg.bottom, seg.top) };
+            let overlap = (top.min(row_top) - bottom.max(row_bottom)).max(0.0);
+            if fragment || overlap >= 0.45 * seg.height() {
+                row_bottom = row_bottom.min(seg.bottom);
+                row_top = row_top.max(seg.top);
+            } else {
+                row += 1;
+                row_bottom = seg.bottom;
+                row_top = seg.top;
+            }
+        }
+        for r in rows.iter_mut().take(seg.last + 1).skip(seg.first) {
+            *r = row;
+        }
+    }
+    rows
+}
+
 /// Builds the layout of a PDF page from its character boxes (content space, see [`PageBox`]).
 /// `rotation` is the total clockwise rotation of the rendered image relative to that space: the page's
-/// intrinsic `/Rotate` plus the user's stored rotation.
+/// intrinsic `/Rotate` plus the user's stored rotation. Words keep the PDF text order (the order of
+/// `pages.text`); their `line` is the visual row (see [`assign_rows`]).
 pub fn from_chars(chars: &[CharBox], page_box: PageBox, rotation: u16) -> PageLayout {
     let mut layout = PageLayout::empty(LayoutSource::Layer);
     let (width_pt, height_pt) = (page_box.width, page_box.height);
@@ -248,30 +451,9 @@ pub fn from_chars(chars: &[CharBox], page_box: PageBox, rotation: u16) -> PageLa
     if let Some(r) = cur.take() {
         runs.push(r);
     }
-    // 2. Lines: a run starts a new line when its vertical centre leaves the current line or it jumps
-    //    back to the left.
-    let mut line = 0u32;
-    let mut line_centre = f32::NAN;
-    let mut line_h = 0.0f32;
-    let mut last_right = f32::MIN;
-    for (i, r) in runs.iter().enumerate() {
-        let centre = (r.bottom + r.top) / 2.0;
-        let h = (r.top - r.bottom).max(0.5);
-        if i > 0 {
-            let tol = 0.5 * line_h.max(h);
-            if (centre - line_centre).abs() > tol || r.left < last_right - h {
-                line += 1;
-                line_centre = centre;
-                line_h = h;
-            } else {
-                line_h = line_h.max(h);
-            }
-        } else {
-            line_centre = centre;
-            line_h = h;
-        }
-        last_right = r.right;
-        // 3. Fractions of the unrotated page box (top-left origin), then the rotation.
+    // 2. Visual rows, then 3. fractions of the unrotated page box (top-left origin) and the rotation.
+    let rows = assign_rows(&runs);
+    for (r, line) in runs.iter().zip(rows) {
         let fx = (r.left - page_box.left) / width_pt;
         let fw = (r.right - r.left) / width_pt;
         let fy = 1.0 - (r.top - page_box.bottom) / height_pt;
@@ -319,9 +501,14 @@ fn place_words(words: &[&str], x0: f32, width: f32, y: f32, h: f32, line: u32, e
     out
 }
 
-/// The visible text lines of a page text: OCR markup (`<table>`, `<br>`, `<stamp>` …) is reduced to
-/// line breaks / cell separators and entities are decoded.
-pub fn text_lines(text: &str) -> Vec<String> {
+/// Cell separator emitted for `</td>` / `</th>` while the markup is reduced.
+const CELL_SEP: char = '\u{1f}';
+
+/// The visible text lines of a page text as cells: a table row keeps its cell boundaries (every
+/// `<td>` / `<th>`), any other line is a single cell. OCR markup (`<table>`, `<br>`, `<stamp>` …)
+/// is reduced to line breaks / cell separators and entities are decoded; empty cells and lines are
+/// dropped.
+pub fn line_cells(text: &str) -> Vec<Vec<String>> {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(start) = rest.find('<') {
@@ -345,7 +532,7 @@ pub fn text_lines(text: &str) -> Vec<String> {
             | "h6" => {
                 out.push('\n');
             }
-            "td" | "th" if closing => out.push(' '),
+            "td" | "th" if closing => out.push(CELL_SEP),
             _ => {}
         }
         rest = &after[end + 1..];
@@ -358,7 +545,21 @@ pub fn text_lines(text: &str) -> Vec<String> {
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&#39;", "'");
-    decoded.split('\n').map(|l| l.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|l| !l.is_empty()).collect()
+    decoded
+        .split('\n')
+        .map(|l| {
+            l.split(CELL_SEP)
+                .map(|c| c.split_whitespace().collect::<Vec<_>>().join(" "))
+                .filter(|c| !c.is_empty())
+                .collect::<Vec<String>>()
+        })
+        .filter(|cells| !cells.is_empty())
+        .collect()
+}
+
+/// The visible text lines of a page text (cells of a table row joined by spaces); see [`line_cells`].
+pub fn text_lines(text: &str) -> Vec<String> {
+    line_cells(text).into_iter().map(|cells| cells.join(" ")).collect()
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -432,18 +633,96 @@ fn band_extent(img: &GrayImage, band: Band) -> Option<(u32, u32)> {
     }
 }
 
-/// Estimates word boxes for `text` on the page image `img` (grey, any size): ink bands become
-/// text lines, matched by count to the text lines, and the words of each line are spread over the
-/// band's ink extent proportionally to their display width.
+/// The image without table rulings and other long straight strokes: horizontal ink runs longer
+/// than a tenth of the width and vertical runs longer than a twentieth of the height are
+/// whitened, so the rows of a ruled table separate into their own ink bands and the cell borders
+/// do not stretch a band's extent.
+fn without_rulings(img: &GrayImage) -> GrayImage {
+    let (w, h) = img.dimensions();
+    let mut out = img.clone();
+    if w == 0 || h == 0 {
+        return out;
+    }
+    let min_h_run = ((w as f32) * 0.1).max(40.0) as u32;
+    let min_v_run = ((h as f32) * 0.05).max(40.0) as u32;
+    let ink = |x: u32, y: u32| img.get_pixel(x, y).0[0] < INK_LUMA;
+    for y in 0..h {
+        let mut x = 0;
+        while x < w {
+            if !ink(x, y) {
+                x += 1;
+                continue;
+            }
+            let start = x;
+            while x < w && ink(x, y) {
+                x += 1;
+            }
+            if x - start >= min_h_run {
+                for xx in start..x {
+                    out.put_pixel(xx, y, Luma([255]));
+                }
+            }
+        }
+    }
+    for x in 0..w {
+        let mut y = 0;
+        while y < h {
+            if !ink(x, y) {
+                y += 1;
+                continue;
+            }
+            let start = y;
+            while y < h && ink(x, y) {
+                y += 1;
+            }
+            if y - start >= min_v_run {
+                for yy in start..y {
+                    out.put_pixel(x, yy, Luma([255]));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Column clusters of ink inside `band` (`[start, end)` in pixels): runs of inked columns, with
+/// gaps of at most `min_gap` columns bridged (the spaces between the words of one cell).
+fn band_clusters(img: &GrayImage, band: Band, min_gap: u32) -> Vec<(u32, u32)> {
+    let w = img.width();
+    let inked = |x: u32| (band.top..band.bottom).any(|y| img.get_pixel(x, y).0[0] < INK_LUMA);
+    let mut clusters: Vec<(u32, u32)> = Vec::new();
+    let mut x = 0;
+    while x < w {
+        if !inked(x) {
+            x += 1;
+            continue;
+        }
+        let start = x;
+        while x < w && inked(x) {
+            x += 1;
+        }
+        match clusters.last_mut() {
+            Some(last) if start - last.1 <= min_gap => last.1 = x,
+            _ => clusters.push((start, x)),
+        }
+    }
+    clusters
+}
+
+/// Estimates word boxes for `text` on the page image `img` (grey, any size): ink bands (rulings
+/// removed) become text lines, matched by count to the text lines; the words of a line are spread
+/// over the band's ink extent proportionally to their display width — or, for a table row whose
+/// cells match the band's ink clusters, each cell over its own cluster.
 pub fn estimate(img: &GrayImage, text: &str) -> PageLayout {
     let mut layout = PageLayout::empty(LayoutSource::Estimated);
-    let lines = text_lines(text);
+    let lines = line_cells(text);
     if lines.is_empty() {
         return layout;
     }
     let (w, h) = img.dimensions();
     let n = lines.len();
-    let mut bands = if w > 0 && h > 0 { ink_bands(img) } else { Vec::new() };
+    let clean = if w > 0 && h > 0 { Some(without_rulings(img)) } else { None };
+    let mut bands = clean.as_ref().map(ink_bands).unwrap_or_default();
     let (w, h) = (w.max(1) as f32, h.max(1) as f32);
     if bands.is_empty() {
         // Blank-looking page (or no image): evenly spaced lines over the text area.
@@ -483,14 +762,43 @@ pub fn estimate(img: &GrayImage, text: &str) -> PageLayout {
         bands[i] = Band { top: b.top, bottom: mid };
         bands.insert(i + 1, Band { top: mid, bottom: b.bottom });
     }
-    for (i, (band, line)) in bands.iter().zip(lines.iter()).enumerate() {
-        let (x0, x1) = match band_extent(img, *band) {
-            Some((a, b)) if img.width() > 0 => (a as f32 / w, b as f32 / w),
-            _ => (0.08, 0.92),
-        };
-        let words: Vec<&str> = line.split_whitespace().collect();
+    for (i, (band, cells)) in bands.iter().zip(lines.iter()).enumerate() {
         let y = band.top as f32 / h;
         let bh = band.height().max(1) as f32 / h;
+        if cells.len() >= 2 {
+            if let Some(img) = clean.as_ref() {
+                // Cells over the band's ink clusters when the counts agree (extra clusters are the
+                // wide gaps inside a cell: bridge the narrowest ones first).
+                let min_gap = ((band.height() as f32) * 0.8).max(4.0) as u32;
+                let mut clusters = band_clusters(img, *band, min_gap);
+                while clusters.len() > cells.len() {
+                    let mut best = 0;
+                    let mut best_gap = u32::MAX;
+                    for j in 0..clusters.len() - 1 {
+                        let gap = clusters[j + 1].0.saturating_sub(clusters[j].1);
+                        if gap < best_gap {
+                            best_gap = gap;
+                            best = j;
+                        }
+                    }
+                    let next = clusters.remove(best + 1);
+                    clusters[best].1 = next.1;
+                }
+                if clusters.len() == cells.len() {
+                    for (cell, (a, b)) in cells.iter().zip(&clusters) {
+                        let words: Vec<&str> = cell.split_whitespace().collect();
+                        let (x0, x1) = (*a as f32 / w, *b as f32 / w);
+                        layout.words.extend(place_words(&words, x0, x1 - x0, y, bh, i as u32, false));
+                    }
+                    continue;
+                }
+            }
+        }
+        let (x0, x1) = match clean.as_ref().and_then(|img| band_extent(img, *band)) {
+            Some((a, b)) => (a as f32 / w, b as f32 / w),
+            None => (0.08, 0.92),
+        };
+        let words: Vec<&str> = cells.iter().flat_map(|c| c.split_whitespace()).collect();
         layout.words.extend(place_words(&words, x0, x1 - x0, y, bh, i as u32, false));
     }
     layout
@@ -641,7 +949,6 @@ pub fn add_words(layout: &mut PageLayout, text: &str, bbox: (f32, f32, f32, f32)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::Luma;
 
     fn chars(s: &str, x0: f32, baseline: f32, size: f32) -> Vec<CharBox> {
         // Monospaced 0.5 em glyphs on one line.
@@ -709,16 +1016,23 @@ mod tests {
         assert_eq!(lines, ["# 스타벅스 역삼점", "품명 수량", "아메리카노 2", "합계 12,500", "인"]);
     }
 
+    /// Text-like ink: 5 px strokes with 1 px gaps (no long straight runs, unlike a ruling).
+    fn strokes(img: &mut GrayImage, x0: u32, x1: u32, y0: u32, y1: u32) {
+        for y in y0..y1 {
+            for x in x0..x1 {
+                if (x - x0) % 6 != 5 {
+                    img.put_pixel(x, y, Luma([0]));
+                }
+            }
+        }
+    }
+
     #[test]
     fn estimate_lays_text_lines_onto_ink_bands() {
         // 400 × 600 white page with three dark bands of text-like rows.
         let mut img = GrayImage::from_pixel(400, 600, Luma([255]));
         for &(top, bottom, x0, x1) in &[(100u32, 112u32, 40u32, 300u32), (140, 152, 40, 200), (300, 312, 60, 360)] {
-            for y in top..bottom {
-                for x in x0..x1 {
-                    img.put_pixel(x, y, Luma([0]));
-                }
-            }
+            strokes(&mut img, x0, x1, top, bottom);
         }
         let layout = estimate(&img, "첫째 줄입니다\n둘째\n셋째 줄 끝");
         assert_eq!(layout.source, LayoutSource::Estimated);
@@ -747,16 +1061,8 @@ mod tests {
     fn sample() -> (PageLayout, String) {
         let text = "메모 1쪽의 텍스트 레이어입니다.\n합계 12,500원 합계".to_string();
         let mut img = GrayImage::from_pixel(200, 100, Luma([255]));
-        for y in 20..30 {
-            for x in 10..190 {
-                img.put_pixel(x, y, Luma([0]));
-            }
-        }
-        for y in 60..70 {
-            for x in 10..150 {
-                img.put_pixel(x, y, Luma([0]));
-            }
-        }
+        strokes(&mut img, 10, 190, 20, 30);
+        strokes(&mut img, 10, 150, 60, 70);
         (estimate(&img, &text), text)
     }
 
@@ -827,5 +1133,212 @@ mod tests {
         assert_eq!(add_words(&mut layout, &t2, (0.0, 0.0, 0.1, 0.1), "   "), t2);
         let json = layout.to_json();
         assert_eq!(PageLayout::from_json(&json).as_ref(), Some(&layout));
+    }
+
+    /// Characters of one cell line: `text` at `(x0, baseline)`, 11 pt glyphs (CJK 11 pt wide,
+    /// Latin / digits 6 pt), mirroring the character boxes PDFium reports for a printed table.
+    fn cell(text: &str, x0: f32, baseline: f32) -> Vec<CharBox> {
+        let mut x = x0;
+        text.chars()
+            .map(|ch| {
+                let w = if ch.is_ascii() { 6.0 } else { 11.0 };
+                let c = CharBox { ch, left: x, right: x + w, bottom: baseline - 3.0, top: baseline + 11.0 };
+                x += w;
+                c
+            })
+            .collect()
+    }
+
+    #[test]
+    fn wrapped_table_cells_in_pdf_order_share_a_row() {
+        // Header row (cells wrapped onto two lines sit on baselines 695 / 680, single-line cells are
+        // centred on 688): PDF order is cell by cell. Then a body row at 640.
+        let mut c = Vec::new();
+        c.extend(cell("번", 70.0, 695.0));
+        c.extend(cell("호", 70.0, 680.0));
+        c.extend(cell("품목", 110.0, 688.0));
+        c.extend(cell("규격", 200.0, 688.0));
+        c.extend(cell("수", 290.0, 695.0));
+        c.extend(cell("량", 290.0, 680.0));
+        c.extend(cell("단가", 330.0, 688.0));
+        c.extend(cell("1", 70.0, 640.0));
+        c.extend(cell("노트북", 110.0, 640.0));
+        c.extend(cell("1,200,0", 330.0, 647.0));
+        c.extend(cell("00", 330.0, 632.0));
+        // A row whose wrapped cell holds two words on its first line and whose number wraps too.
+        c.extend(cell("3", 70.0, 590.0));
+        c.extend(cell("무선 키보드", 110.0, 597.0));
+        c.extend(cell("세트", 110.0, 582.0));
+        c.extend(cell("한글 배열", 200.0, 590.0));
+        c.extend(cell("4", 290.0, 597.0));
+        c.extend(cell("0", 290.0, 582.0));
+        c.extend(cell("45,000", 330.0, 590.0));
+        let layout = from_chars(&c, PageBox::new(595.0, 842.0), 0);
+        let words: Vec<&str> = layout.words.iter().map(|w| w.t.as_str()).collect();
+        assert_eq!(
+            words,
+            [
+                "번",
+                "호",
+                "품목",
+                "규격",
+                "수",
+                "량",
+                "단가",
+                "1",
+                "노트북",
+                "1,200,0",
+                "00",
+                "3",
+                "무선",
+                "키보드",
+                "세트",
+                "한글",
+                "배열",
+                "4",
+                "0",
+                "45,000"
+            ]
+        );
+        assert_eq!(
+            layout.words.iter().map(|w| w.line).collect::<Vec<_>>(),
+            [0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+        );
+        assert_eq!(
+            layout.text(),
+            "번 호 품목 규격 수 량 단가\n1 노트북 1,200,0 00\n3 무선 키보드 세트 한글 배열 4 0 45,000"
+        );
+        // The boxes keep their own positions: "호" sits below "번".
+        assert!(layout.words[1].y > layout.words[0].y + layout.words[0].h * 0.8);
+    }
+
+    #[test]
+    fn a_heading_over_its_paragraph_stays_a_line_of_its_own() {
+        // "제목" directly above "본문 시작 …" (same left edge, next line) is not a wrapped cell: the
+        // next run is only a word space away, not a cell gap.
+        let mut c = cell("제목", 56.0, 780.0);
+        c.extend(cell("본문 시작 문장", 56.0, 764.0));
+        let layout = from_chars(&c, PageBox::new(595.0, 842.0), 0);
+        assert_eq!(layout.words.iter().map(|w| w.line).collect::<Vec<_>>(), [0, 1, 1, 1]);
+        assert_eq!(layout.text(), "제목\n본문 시작 문장");
+        // Justified text leaves wide gaps: the line still continues to the right, so no cell.
+        let mut c = cell("제목", 56.0, 780.0);
+        c.extend(cell("본문", 56.0, 764.0));
+        c.extend(cell("이어지는", 120.0, 764.0));
+        c.extend(cell("글", 220.0, 764.0));
+        let layout = from_chars(&c, PageBox::new(595.0, 842.0), 0);
+        assert_eq!(layout.words.iter().map(|w| w.line).collect::<Vec<_>>(), [0, 1, 1, 1]);
+        // A two-column page: the long stacks of each column are paragraph lines, each its own row.
+        let mut c = Vec::new();
+        for i in 0..6 {
+            c.extend(cell("왼쪽 단의 글", 56.0, 780.0 - 16.0 * i as f32));
+        }
+        for i in 0..6 {
+            c.extend(cell("오른쪽 단의 글", 320.0, 780.0 - 16.0 * i as f32));
+        }
+        let layout = from_chars(&c, PageBox::new(595.0, 842.0), 0);
+        let lines: Vec<u32> = layout.words.iter().map(|w| w.line).collect();
+        assert_eq!(lines[..18], [0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5]);
+        assert_eq!(lines[18..21], [6, 6, 6]);
+    }
+
+    #[test]
+    fn stored_version_1_layouts_get_their_rows_re_derived() {
+        let mut c = Vec::new();
+        c.extend(cell("번", 70.0, 695.0));
+        c.extend(cell("호", 70.0, 680.0));
+        c.extend(cell("품목", 110.0, 688.0));
+        c.extend(cell("1", 70.0, 640.0));
+        let mut v1 = from_chars(&c, PageBox::new(595.0, 842.0), 0);
+        // As the sequential numbering stored it: every baseline change was a new line.
+        for (w, line) in v1.words.iter_mut().zip([0u32, 1, 2, 3]) {
+            w.line = line;
+        }
+        v1.version = 1;
+        let upgraded = PageLayout::from_json(&v1.to_json()).unwrap();
+        assert_eq!(upgraded.version, LAYOUT_VERSION);
+        assert_eq!(upgraded.words.iter().map(|w| w.line).collect::<Vec<_>>(), [0, 0, 0, 1]);
+        assert_eq!(upgraded.words.iter().map(|w| w.t.as_str()).collect::<Vec<_>>(), ["번", "호", "품목", "1"]);
+        // Unknown versions are rejected.
+        v1.version = 9;
+        assert!(PageLayout::from_json(&v1.to_json()).is_none());
+    }
+
+    #[test]
+    fn line_cells_keep_table_cells_apart() {
+        let cells = line_cells("제목\n<table><tr><th>품명</th><th>수량</th><th></th></tr><tr><td>아메리카노 라지</td><td>2</td></tr></table>");
+        assert_eq!(
+            cells,
+            [vec!["제목".to_string()], vec!["품명".into(), "수량".into()], vec!["아메리카노 라지".into(), "2".into()]]
+        );
+    }
+
+    /// A ruled table: three rows × three columns with 1 px borders, text-like blobs in the cells.
+    fn ruled_table() -> GrayImage {
+        let mut img = GrayImage::from_pixel(600, 400, Luma([255]));
+        let fill = |img: &mut GrayImage, x0: u32, x1: u32, y0: u32, y1: u32| {
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    img.put_pixel(x, y, Luma([0]));
+                }
+            }
+        };
+        // Title line (text-like strokes).
+        strokes(&mut img, 60, 300, 30, 42);
+        // Borders: vertical rules through every row, horizontal rules between rows.
+        for &x in &[50u32, 220, 400, 550] {
+            fill(&mut img, x, x + 1, 95, 246);
+        }
+        for &y in &[95u32, 145, 195, 245] {
+            fill(&mut img, 50, 551, y, y + 1);
+        }
+        // Cell text blobs (12 px high, centred in 50 px rows).
+        let rows = [114u32, 164, 214];
+        let cols: [(u32, u32); 3] = [(60, 120), (230, 330), (410, 500)];
+        for &y in &rows {
+            for &(a, b) in &cols {
+                strokes(&mut img, a, b, y, y + 12);
+            }
+        }
+        img
+    }
+
+    #[test]
+    fn estimate_puts_table_cells_over_their_own_ink() {
+        let img = ruled_table();
+        let text = "제목 줄\n<table><tr><td>가 나</td><td>다라</td><td>마</td></tr>\
+                    <tr><td>1</td><td>둘 셋</td><td>넷</td></tr><tr><td>합계</td><td>12,500</td><td>원</td></tr></table>";
+        let layout = estimate(&img, text);
+        let words: Vec<&str> = layout.words.iter().map(|w| w.t.as_str()).collect();
+        assert_eq!(words, ["제목", "줄", "가", "나", "다라", "마", "1", "둘", "셋", "넷", "합계", "12,500", "원"]);
+        // The rulings did not glue the rows together: four lines, each on its own band.
+        assert_eq!(layout.words.iter().map(|w| w.line).collect::<Vec<_>>(), [0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3]);
+        let within = |w: &Word, a: u32, b: u32| {
+            let cx = (w.x + w.w / 2.0) * 600.0;
+            cx >= a as f32 && cx <= b as f32
+        };
+        // Cells over their own ink clusters (the words of a cell share its cluster).
+        assert!(within(&layout.words[2], 60, 120) && within(&layout.words[3], 60, 120), "{:?}", &layout.words[2..4]);
+        assert!(within(&layout.words[4], 230, 330), "{:?}", layout.words[4]);
+        assert!(within(&layout.words[5], 410, 500), "{:?}", layout.words[5]);
+        assert!(within(&layout.words[11], 230, 330) && within(&layout.words[12], 410, 500));
+        // Rows land on their bands (the second row's blobs start at y = 164).
+        let row2 = &layout.words[6];
+        assert!((row2.y * 400.0 - 164.0).abs() <= 2.0, "{row2:?}");
+        // The title line still spans its own ink extent.
+        assert!((layout.words[0].x * 600.0 - 60.0).abs() < 3.0);
+    }
+
+    #[test]
+    fn rulings_are_removed_but_glyph_strokes_stay() {
+        let img = ruled_table();
+        let clean = without_rulings(&img);
+        assert_eq!(clean.get_pixel(50, 150).0[0], 255, "vertical rule");
+        assert_eq!(clean.get_pixel(300, 145).0[0], 255, "horizontal rule");
+        assert_eq!(clean.get_pixel(70, 120).0[0], 0, "cell text");
+        assert_eq!(clean.get_pixel(100, 35).0[0], 0, "title strokes");
+        // Bands of the cleaned image: the title and the three rows (the rulings glued the rows before).
+        assert_eq!(ink_bands(&clean).len(), 4);
+        assert_eq!(ink_bands(&img).len(), 2);
     }
 }

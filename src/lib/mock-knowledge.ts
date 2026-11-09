@@ -3,6 +3,7 @@
 // and simulated index / embedding jobs. Keeps its state per workspace in
 // localStorage so Playwright can drive the whole UI without the desktop runtime.
 
+import { looksLikeFollowUp } from "./follow-up";
 import {
   createJob,
   currentWorkspacePath,
@@ -541,7 +542,10 @@ async function answer(req: AnswerRequest, requestId: string): Promise<Answer> {
     base.text = lines.join("\n");
     base.question = req.question.trim() || (ko ? (kind === "compare" ? "두 문서 비교" : "문서 요약") : kind === "compare" ? "Compare documents" : "Document summary");
   } else {
-    const query = kind === "explain" ? `${req.selection ?? ""} ${req.question}`.trim() : req.question;
+    // Like the core: a follow-up ("그건 누가 작성했어?") is retrieved together with the previous question.
+    const previous = [...(req.history ?? [])].reverse().find((t) => t.role === "user")?.text;
+    const query =
+      kind === "explain" ? `${req.selection ?? ""} ${req.question}`.trim() : previous && looksLikeFollowUp(req.question) ? `${req.question} ${previous}` : req.question;
     const scope: SearchScope = { ...(req.scope ?? {}) };
     if (kind === "explain" && req.document_id && scope.documents?.length && !scope.documents.includes(req.document_id)) scope.documents = [...scope.documents, req.document_id];
     const kept = (req.keep_chunks ?? []).length

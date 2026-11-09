@@ -88,6 +88,7 @@ fn ctx() -> PlanContext {
         model_ids: vec!["qwen3.5-4b-q6k".into(), "qwen3.5-9b-q4km".into()],
         projects: Vec::new(),
         current_project: None,
+        history: Vec::new(),
     }
 }
 
@@ -1119,4 +1120,17 @@ fn print_prompt_sizes() {
             chars - ascii
         );
     }
+}
+
+#[test]
+fn context_block_lists_the_last_conversation_turns() {
+    let mut c = ctx();
+    c.history = (0..6).map(|i| crate::knowledge::ConversationTurn::user(&format!("명령 {i}"))).collect();
+    let block = super::prompts::context_block(&c, "", false);
+    assert!(block.contains("이전 대화"), "{block}");
+    assert!(
+        !block.contains("명령 1\n") && block.contains("- 사용자: 명령 2") && block.contains("- 사용자: 명령 5"),
+        "{block}"
+    );
+    assert!(!super::prompts::context_block(&ctx(), "", false).contains("이전 대화"));
 }
