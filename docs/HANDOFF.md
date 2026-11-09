@@ -1026,6 +1026,16 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   `v12.9\LICENSE`). Release `v0.1.0` 자산: `DocuLens-EnginePack-cu121-b12066.zip` 944,112,865 B SHA-256 `4a15af86…`,
   `DocuLens-EnginePack-cu129-b12066.zip` 812,703,965 B SHA-256 `3116d674…`(각 `.sha256` 동봉; 첫 cu129 팩은 `--clobber`로 덮어씀).
   Full 설치파일 빌드는 이 `.sha256`로 팩을 검증해 동봉한다(매니페스트 고정은 후속 — `cu121`/`cu129` 항목에 sha256 필드 없음).
+- **Full 설치파일 1차 빌드 실패 → NSIS 압축 방식 변경(2026-11-09, run 42543620988 @ fb0f03f)**: CUDA 팩 다운로드·SHA-256 검증·번들
+  검사(207 파일, 3,142.6 MB — cu121 팩 1,875 MB: `ggml-cuda.dll` 1,233 MB + cuBLAS 607 MB; cu129 팩 1,017 MB: cuBLAS 735 MB +
+  `ggml-cuda.dll` 247 MB, llama.cpp가 CUDA ≥ 12.8에서 켜는 `-compress-mode=size` 덕)까지 통과했지만 makensis가 세 번 모두
+  `Internal compiler error #12345: error mmapping file (2065039454, 33554432) is out of range`로 실패. 원인은 Tauri 2.12.4 NSIS
+  템플릿의 `SetCompressor /SOLID`: solid 모드에서는 데이터 블록을 압축 전 상태로 32비트 오프셋에 두므로 2 GiB를 넘을 수 없다.
+  해결: 템플릿을 `src-tauri/nsis/installer.nsi`로 복사해 `/SOLID`만 뺀 파일별 LZMA 압축(한계가 압축 후 크기에 적용, Full ≈ 1.6 GB
+  예상)으로 바꾸고 `tauri.conf.json` `bundle.windows.nsis.template`로 지정. `scripts/check-nsis-template.mjs`(`npm run nsis:check`,
+  CI web 잡 + 설치파일 워크플로)가 복사본에서 표시 블록을 원복한 결과가 설치된 `@tauri-apps/cli` 네이티브 바이너리에 그대로
+  들어 있는지 확인해 CLI 업그레이드 시 재동기화를 강제한다. 워크플로에 2 GiB 크기 가드(GitHub 릴리스 자산 한계), 목록 필터에
+  cuBLAS/cudart/EULA, 아티팩트 무압축 업로드 추가. 팩 자체 축소(cu121 `-Xfatbin=-compress-all`, 도구 DLL 제거)는 v1.x 메모.
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |

@@ -43,7 +43,8 @@ user PC: `docs/RUN-GUIDE.md`.
 - Notices / SBOM: `npm run notices` regenerates `THIRD-PARTY-NOTICES.md`, `sbom.cdx.json` and the bundled license texts;
   CI fails when the committed files are stale.
 - Web: `npm run typecheck`, `npm test` (vitest), `npm run build`,
-  `PW_CHROMIUM_PATH=/opt/pw-browsers/chromium npm run e2e` (browser mode, mock backend).
+  `PW_CHROMIUM_PATH=/opt/pw-browsers/chromium npm run e2e` (browser mode, mock backend),
+  `npm run nsis:check` (the NSIS template copy `src-tauri/nsis/installer.nsi` must match the installed Tauri CLI).
 - Desktop (Windows / Linux with webkit2gtk): `npm run tauri dev`, `npm run tauri build`. Installers: GitHub Actions
   "Windows installer (manual)" (`lite` / `full`, optional Release publish) and "CUDA engine packs (manual)"; bundled
   runtime assets come from `scripts/fetch-*.mjs --bundle`.
@@ -87,7 +88,9 @@ user PC: `docs/RUN-GUIDE.md`.
   toast), `src/power.rs` (sleep prevention while engine jobs run),
   `src/protocol.rs` (`doculens://` page images / print bundles), `src/printer.rs`
   (WebView2 / WebKitGTK print-to-PDF), `src/jobs.rs` (job book + persistent runner: priority queue, lanes, pause /
-  resume / retry / prioritise, restored per workspace)), `tauri.conf.json`, capabilities.
+  resume / retry / prioritise, restored per workspace)), `tauri.conf.json`, capabilities, `nsis/installer.nsi`
+  (Tauri's NSIS template with per-file instead of /SOLID compression — the Full installer exceeds NSIS' 2 GiB solid
+  data block; verified against the installed CLI by `npm run nsis:check`).
 - `src/` — React app: `app/` (layout, providers, hooks), `features/<screen>/`, `components/ui/`, `lib/` (ipc, types, theme, shortcuts, mock backend), `stores/`, `i18n/`, `styles/`.
 - `models/registry.json`, `engines/` (llama.cpp manifest, `pdfium.json`, `kodic.json`, placement docs), `docs/`,
   `scripts/` (`fetch-engine.mjs`, `fetch-pdfium.mjs`, `fetch-kodic.mjs`, `gen-tiny-qwen35.py`), `e2e/`,
