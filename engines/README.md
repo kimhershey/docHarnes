@@ -22,7 +22,9 @@ src-tauri/resources/engines/<pack>/                                 (where `--bu
 Pinned tag and minimum build: `engines/manifest.json` (`b12066`, minimum
 `b11747` — router presets, `/models` API and the Qwen3.5 fixes the app relies
 on). The app refuses to start an engine whose `--version` reports an older
-build number; locally built binaries without tags report `0` and are accepted.
+build number; locally built binaries without tags report `0` (or `build 1` from
+a shallow clone, in the `version: 0.8.0 (build N, commit …)` format) and are
+accepted as "unknown build".
 
 ## Resolution order (`doculens_core::engine::locate`)
 
@@ -86,10 +88,27 @@ also unzip an asset into `%LOCALAPPDATA%\DocuLens\engines\<tag>\<pack>\`.
 | `cu121` | CUDA 12.1.1 network installer | MSVC 14.39 (VS 2022 17.9 toolset, installed on the runner — nvcc 12.1 rejects newer `cl`; `allow_unsupported_compiler=true` passes `-allow-unsupported-compiler` instead) | `61;70;75;80;86;89;90` (Pascal … Hopper incl. Turing SASS) |
 | `cu129` | CUDA 12.9.1 network installer | default VS 2022 toolset | `75;80;86;89;90;120` (adds Blackwell) |
 
+Published packs (GitHub Release `v0.1.0`, built on 2026-11-09 from tag `b12066`;
+`llama-server.exe --version` → `version: 0.8.0-dev (build 12066, commit 713319e28)`):
+
+| asset | size | SHA-256 |
+|---|---|---|
+| `DocuLens-EnginePack-cu121-b12066.zip` | 944,112,865 bytes (900 MiB) | `4a15af86d9db8dd6fc8eff5d721dc759ec26b20faa4833667c01c81f01d084ad` |
+| `DocuLens-EnginePack-cu129-b12066.zip` | 812,703,965 bytes (775 MiB) | `3116d67428128f682078d7b86387304211fa81a740e2f2fc584713c1d5229cce` |
+
+Notes from those builds: the workflow clones the full history of the tag
+(`--single-branch --branch <tag>`, no `--depth 1`) because llama.cpp derives the
+build number from `git rev-list --count HEAD` — a shallow clone reports
+`build 1`, which the app treats as an unknown version. The NVIDIA EULA text is
+taken from the toolkit installation (`documentation_<ver>` subpackage:
+`v12.1\EULA.txt`, `v12.9\LICENSE`). The cuBLAS runtime (`cublasLt64_12.dll`,
+`cublas64_12.dll`) makes up most of each pack.
+
 Building by hand on a Windows PC with the toolkit installed is the same
-sequence: `git clone --depth 1 --branch b12066 https://github.com/ggml-org/llama.cpp`,
-the `cmake` lines above (from a "x64 Native Tools" prompt), then copy the files
-listed above into `%LOCALAPPDATA%\DocuLens\engines\b12066\cu121\`.
+sequence: `git clone --single-branch --branch b12066 https://github.com/ggml-org/llama.cpp`
+(full history, see above), the `cmake` lines above (from a "x64 Native Tools"
+prompt), then copy the files listed above into
+`%LOCALAPPDATA%\DocuLens\engines\b12066\cu121\`.
 
 **NVIDIA CUDA EULA** (design appendix E): only the Attachment-A runtime
 libraries (cudart, cublas, cublasLt) are redistributed, they stay inside the

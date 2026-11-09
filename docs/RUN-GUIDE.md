@@ -72,7 +72,7 @@ npm install
 | 자산 | 받는 방법 | 설치 위치 | 없을 때 |
 |---|---|---|---|
 | **llama-server 엔진 팩** | `node scripts/fetch-engine.mjs --tag b12066 --packs cpu,vulkan --pin` (설치파일 동봉용은 `--bundle`) | `%LOCALAPPDATA%\DocuLens\engines\b12066\cpu\`, `...\vulkan\` (`--bundle`: `src-tauri\resources\engines\<팩>\`) | 엔진 카드에 "실행 파일을 찾지 못했습니다" → 분류·OCR·추출·답변 불가 |
-| **CUDA 팩**(NVIDIA, 선택) | Full 설치파일, 또는 GitHub Release 자산 `DocuLens-EnginePack-cu121-b12066.zip`(워크플로 "CUDA engine packs (manual)")을 풀어 넣기, 또는 `engines/README.md`대로 자체 빌드 | `...\engines\b12066\cu121\` (`cu129`) | Vulkan/CPU 팩으로 동작(느림) |
+| **CUDA 팩**(NVIDIA, 선택) | Full 설치파일, 또는 GitHub Release `v0.1.0` 자산 `DocuLens-EnginePack-cu121-b12066.zip`·`DocuLens-EnginePack-cu129-b12066.zip`(워크플로 "CUDA engine packs (manual)"이 빌드, 각 `.sha256` 동봉)을 풀어 넣기, 또는 `engines/README.md`대로 자체 빌드 | `...\engines\b12066\cu121\` (`cu129`) | Vulkan/CPU 팩으로 동작(느림) |
 | **PDFium**(PDF 렌더·텍스트 레이어) | `node scripts/fetch-pdfium.mjs` | `%LOCALAPPDATA%\DocuLens\pdfium\pdfium.dll` | PDF 가져오기·렌더 불가, 라이브러리 상단 "PDFium 없음" 경고 |
 | **ko-dic**(한국어 형태소 사전, 선택) | `node scripts/fetch-kodic.mjs` (Rust 필요, 약 82 MB, 수 분) | `%LOCALAPPDATA%\DocuLens\tokenizers\ko-dic\` | 간이 분석기로 동작(검색 재현율이 낮음) |
 | **VLM 모델**(GGUF + mmproj) | §2.3 | `<워크스페이스>\.doculens\models\<폴더>\` | 가져오기·검색·정리·내보내기만 가능 |

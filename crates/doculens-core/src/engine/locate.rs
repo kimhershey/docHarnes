@@ -289,6 +289,13 @@ mod tests {
             ),
             Some(("b12066".into(), 12066))
         );
+        // Exact output of the CUDA packs built by `cuda-packs.yml` (full-history clone of tag b12066).
+        assert_eq!(
+            parse_version_output(
+                "version: 0.8.0-dev (build 12066, commit 713319e28)\nbuilt with MSVC 19.44.35207.1 for Windows AMD64"
+            ),
+            Some(("b12066".to_string(), 12066))
+        );
         assert_eq!(parse_version_output("version: 0.8.0-dev (build 1, commit 713319e)"), None);
         assert_eq!(parse_version_output("version: 0.8.0-dev (build 0, commit unknown)"), None);
     }

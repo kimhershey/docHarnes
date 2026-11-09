@@ -1016,6 +1016,16 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   `libllama-server-impl.so` + `libllama.so` + `libmtmd.so`); 목록 필터가 ggml DLL과 런처만 찍어 나머지 DLL은 다음 빌드부터 출력된다.
   공식 zip의 다른 도구 실행파일(llama-cli 등)도 팩 폴더에 그대로 들어가므로 설치파일을 더 줄이려면 `llama-server*` + DLL만 남기는
   정리가 가능하다(v1.x 메모).
+- **CUDA 팩 빌드 성공(2026-11-09, Actions "CUDA engine packs (manual)", ref `phase/p6-p7`)**: 첫 cu129 빌드(run 42494546661,
+  16047af)는 성공해 Release `v0.1.0`을 만들었지만 `--version`이 `build 1`(얕은 클론 — llama.cpp가 `git rev-list --count HEAD`로
+  빌드 번호를 만듦)이었고, cu121(run 42494544606)은 툴킷 폴더에 EULA 텍스트가 없어 조립 단계에서 실패. fb0f03f에서 전체 이력
+  클론(`--single-branch --branch <tag>`), EULA 재귀 탐색(`EULA|License|LICENSE`, 실패 시 루트 목록 출력), 매니페스트에
+  `documentation_<ver>` 서브패키지 추가, `engine::locate::parse_version_output`이 llama.cpp 0.8 형식
+  `version: 0.8.0-dev (build 12066, commit …)`을 읽도록(`build ≤ 1` = 알 수 없음) 고친 뒤 재빌드 두 건 모두 성공
+  (cu121 run 42533483890 약 65분, cu129 run 42533486332 약 116분; `--version` → `build 12066`; EULA는 `v12.1\EULA.txt`·
+  `v12.9\LICENSE`). Release `v0.1.0` 자산: `DocuLens-EnginePack-cu121-b12066.zip` 944,112,865 B SHA-256 `4a15af86…`,
+  `DocuLens-EnginePack-cu129-b12066.zip` 812,703,965 B SHA-256 `3116d674…`(각 `.sha256` 동봉; 첫 cu129 팩은 `--clobber`로 덮어씀).
+  Full 설치파일 빌드는 이 `.sha256`로 팩을 검증해 동봉한다(매니페스트 고정은 후속 — `cu121`/`cu129` 항목에 sha256 필드 없음).
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
@@ -1109,8 +1119,8 @@ P6·P7 항목.
 ## 알려진 제약
 
 - HF 차단으로 `models/registry.json`의 크기·SHA-256 미고정(`verified: false`); 다운로드 검증은
-  핀이 생기면 자동 적용. `engines/manifest.json`의 자산 해시도 미고정.
-- GPU 없음: CUDA/Vulkan 팩, 실모델 VRAM 실측, `--list-devices` GPU 출력은 사용자 PC
+  핀이 생기면 자동 적용. `engines/manifest.json`의 cpu·vulkan 자산 해시는 첫 설치파일 빌드 로그로 고정(2026-11-08), `linux`만 미고정.
+- GPU 없음: CUDA 팩은 CI에서 빌드했지만 실행 검증(`--list-devices`, `CUDA0` 로그)·Vulkan 팩·실모델 VRAM 실측은 사용자 PC
   (`docs/user-pc-checklist.md` P1 항목).
 - Linux 빌드는 CI 전용(배포 범위 외). Windows 실창 E2E(tauri-driver)는 사용자 PC.
 - 모의 백엔드의 프리라우터는 Rust 구현의 부분 집합(브라우저 데모 용도).
