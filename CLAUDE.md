@@ -26,6 +26,9 @@ user PC: `docs/RUN-GUIDE.md`.
 3. Spawn review subagents only at the end of a phase.
 4. v1.0 scope = P0–P4 + core planner ops; document generation and project
    consistency checks (P6) and quality / packaging (P7) are v1.1.
+5. Installer builds (Actions "Windows installer (manual)") are dispatched only after every task of the
+   request is finished and the full verification (`cargo test --workspace`, clippy, vitest, Playwright,
+   CI on the pushed commit) reports no FAILED — never mid-work (user decision 2026-11-09).
 
 ## Commands
 - Rust: `cargo test --workspace` (lib + `tests/engine_process.rs`), `cargo check -p doculens`,
