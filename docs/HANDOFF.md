@@ -1141,7 +1141,9 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   (`export target=table`)로 대신한다. `FieldsPanel`·`TablesPanel`·`PageTextPanel` 삭제, `viewer.fields.*`는 이력·검토 큐가 쓰는 3키만 유지.
 - **코어 `documents/layout.rs`** (`PageLayout { version, source: layer|estimated, words: [{t,x,y,w,h,line,edited}] }`, 좌표는 회전 적용
   후 페이지 이미지의 0~1 비율): (a) **디지털 PDF·변환본** — PDFium 문자 박스(`render::pdf_page_chars`, loose → tight 폴백)를 공백·수평
-  점프(0.5h)·수직 이동(0.5h)으로 단어로 묶고 줄을 나눈 뒤 저장 회전(90/180/270)을 비율 변환으로 적용; (b) **스캔·사진(OCR)·수동
+  점프(0.5h)·수직 이동(0.5h)으로 단어로 묶고 줄을 나눈 뒤 회전을 비율 변환으로 적용 — PDFium 문자 박스는 회전 전 콘텐츠 좌표라
+  표시 상자(CropBox∩MediaBox, 없으면 MediaBox; 원점 오프셋 포함)로 정규화하고 페이지 고유 `/Rotate` + 사용자 저장 회전을 합산
+  (`render::PageChars { page_box, rotation, chars }`); (b) **스캔·사진(OCR)·수동
   전체 교체 텍스트** — 문자 좌표가 없으므로 페이지 JPEG(긴 변 1400px)의 행 잉크 프로파일로 줄 띠를 찾고(간격 ≤h/400 병합, 높이
   <h/300 제거) 텍스트 줄 수에 맞춰 병합/분할한 뒤 각 줄의 단어를 띠의 잉크 범위에 표시 폭(한글 1·라틴 0.55) 비례로 배치
   (`source=estimated`, 뷰어 배지 "위치 추정"); OCR 마크업(`<table>`·`<br>`·`<stamp>`)은 `text_lines`가 줄/셀로 환원. (c) **편집**

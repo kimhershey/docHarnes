@@ -24,7 +24,7 @@ use pdfium_render::prelude::*;
 
 use crate::error::{CoreError, Result};
 
-use super::layout::CharBox;
+use super::layout::{CharBox, PageBox};
 use super::{DocumentCache, NewPage};
 
 pub const DEFAULT_DPI: u16 = 200;
@@ -355,22 +355,77 @@ fn render_one(
     })
 }
 
-/// Character boxes of one PDF page (points, origin bottom-left) with the page size, for the word
-/// layout of the viewer (`documents::layout::from_chars`). Loose glyph boxes give contiguous
-/// selection boxes; the tight box is the fallback.
-pub fn pdf_page_chars(svc: &RenderService, pdf: &Path, page_no: u32) -> Result<(f32, f32, Vec<CharBox>)> {
+/// Character boxes of one PDF page for the word layout of the viewer (`documents::layout::from_chars`).
+pub struct PageChars {
+    /// The rendered page box in content space (CropBox ∩ MediaBox, else MediaBox): PDFium reports
+    /// character boxes in that unrotated space, while `PdfPage::width()` / `height()` already follow
+    /// the page's intrinsic `/Rotate`.
+    pub page_box: PageBox,
+    /// Intrinsic `/Rotate` of the page (degrees clockwise) — the render applies it before the user rotation.
+    pub rotation: u16,
+    pub chars: Vec<CharBox>,
+}
+
+fn boundary_box(page: &PdfPage<'_>) -> PageBox {
+    let media = page.boundaries().media().ok().map(|b| b.bounds);
+    let crop = page.boundaries().crop().ok().map(|b| b.bounds);
+    let rect_of = |r: PdfRect| {
+        let (l, r_, b, t) = (r.left().value, r.right().value, r.bottom().value, r.top().value);
+        PageBox { left: l.min(r_), bottom: b.min(t), width: (r_ - l).abs(), height: (t - b).abs() }
+    };
+    let media = media.map(rect_of);
+    let crop = crop.map(rect_of);
+    // The displayed area is the crop box clipped to the media box (PDFium: m_BBox), the media box when
+    // that intersection is empty or no crop box is set.
+    let chosen = match (media, crop) {
+        (Some(m), Some(c)) => {
+            let l = m.left.max(c.left);
+            let b = m.bottom.max(c.bottom);
+            let r = (m.left + m.width).min(c.left + c.width);
+            let t = (m.bottom + m.height).min(c.bottom + c.height);
+            if r > l && t > b {
+                Some(PageBox { left: l, bottom: b, width: r - l, height: t - b })
+            } else {
+                Some(m)
+            }
+        }
+        (Some(m), None) => Some(m),
+        (None, Some(c)) => Some(c),
+        (None, None) => None,
+    };
+    chosen.filter(|b| b.width > 0.0 && b.height > 0.0).unwrap_or_else(|| {
+        // No boxes readable: fall back to the reported size (unswapped for a rotated page).
+        let (w, h) = (page.width().value, page.height().value);
+        let rotated =
+            matches!(page.rotation(), Ok(PdfPageRenderRotation::Degrees90 | PdfPageRenderRotation::Degrees270));
+        if rotated {
+            PageBox { left: 0.0, bottom: 0.0, width: h, height: w }
+        } else {
+            PageBox { left: 0.0, bottom: 0.0, width: w, height: h }
+        }
+    })
+}
+
+/// Loose glyph boxes give contiguous selection boxes; the tight box is the fallback.
+pub fn pdf_page_chars(svc: &RenderService, pdf: &Path, page_no: u32) -> Result<PageChars> {
     let pdf = pdf.to_path_buf();
     svc.run(move |p| {
         let doc = p.load_pdf_from_file(&pdf, None).map_err(|e| pdfium_err("open", e))?;
         let page =
             doc.pages().get(page_no.max(1).saturating_sub(1) as PdfPageIndex).map_err(|e| pdfium_err("page", e))?;
-        let (w, h) = (page.width().value, page.height().value);
+        let page_box = boundary_box(&page);
+        let rotation = match page.rotation() {
+            Ok(PdfPageRenderRotation::Degrees90) => 90,
+            Ok(PdfPageRenderRotation::Degrees180) => 180,
+            Ok(PdfPageRenderRotation::Degrees270) => 270,
+            _ => 0,
+        };
         let text = page.text().map_err(|e| pdfium_err("text", e))?;
-        let mut out = Vec::with_capacity(text.len().max(0) as usize);
+        let mut chars = Vec::with_capacity(text.len().max(0) as usize);
         for c in text.chars().iter() {
             let Some(ch) = c.unicode_char() else { continue };
             let Ok(rect) = c.loose_bounds().or_else(|_| c.tight_bounds()) else { continue };
-            out.push(CharBox {
+            chars.push(CharBox {
                 ch,
                 left: rect.left().value,
                 right: rect.right().value,
@@ -378,7 +433,7 @@ pub fn pdf_page_chars(svc: &RenderService, pdf: &Path, page_no: u32) -> Result<(
                 top: rect.top().value,
             });
         }
-        Ok((w, h, out))
+        Ok(PageChars { page_box, rotation, chars })
     })
 }
 
@@ -552,13 +607,15 @@ mod tests {
         assert_eq!(pages[1].is_blank, Some(true));
         assert!(cache.page_file(11).is_file() && cache.thumb_file(11).is_file());
         // Character boxes feed the viewer's word layout: "Hello DocuLens" at 12 pt from (56, 780).
-        let (w_pt, h_pt, chars) = pdf_page_chars(svc, &pdf, 1).unwrap();
-        assert!((w_pt - 595.28).abs() < 0.1 && (h_pt - 841.89).abs() < 0.1);
+        let PageChars { page_box, rotation, chars } = pdf_page_chars(svc, &pdf, 1).unwrap();
+        assert_eq!(rotation, 0);
+        assert!((page_box.width - 595.28).abs() < 0.1 && (page_box.height - 841.89).abs() < 0.1, "{page_box:?}");
+        assert_eq!((page_box.left, page_box.bottom), (0.0, 0.0));
         let glyphs: String = chars.iter().map(|c| c.ch).filter(|c| !c.is_whitespace()).collect();
         assert_eq!(glyphs, "HelloDocuLens");
         let first = chars.iter().find(|c| c.ch == 'H').unwrap();
         assert!((first.left - 56.0).abs() < 1.0 && first.bottom < 780.0 && first.top > 780.0, "{first:?}");
-        let layout = super::super::layout::from_chars(&chars, w_pt, h_pt, 0);
+        let layout = super::super::layout::from_chars(&chars, page_box, 0);
         assert_eq!(layout.words.iter().map(|w| w.t.as_str()).collect::<Vec<_>>(), ["Hello", "DocuLens"]);
         assert!(layout.words[0].y < 0.1 && layout.words[0].x > 0.09 && layout.words[0].x < 0.1);
         // Rotate one page: dimensions swap, others untouched.

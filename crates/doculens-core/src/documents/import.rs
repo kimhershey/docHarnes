@@ -942,8 +942,8 @@ pub fn ensure_layout(deps: &ImportDeps<'_>, doc: &DocumentRecord, page_no: u32) 
                 if doc.source_kind == SourceKind::Pdf { doc.absolute_path(deps.paths) } else { cache.converted_pdf() };
             if pdf.is_file() {
                 match render::pdf_page_chars(svc, &pdf, page_no) {
-                    Ok((w, h, chars)) => {
-                        let l = layout::from_chars(&chars, w, h, page.rotation);
+                    Ok(render::PageChars { page_box, rotation, chars }) => {
+                        let l = layout::from_chars(&chars, page_box, (rotation + page.rotation) % 360);
                         if !l.words.is_empty() {
                             found = Some(l);
                         }

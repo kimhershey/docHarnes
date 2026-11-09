@@ -62,6 +62,23 @@ pub struct CharBox {
     pub top: f32,
 }
 
+/// The displayed page box in PDF content space (points, origin bottom-left): character boxes are
+/// normalised against it, so pages whose MediaBox does not start at (0, 0) or that carry an
+/// intrinsic `/Rotate` still land on the rendered image.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PageBox {
+    pub left: f32,
+    pub bottom: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl PageBox {
+    pub fn new(width: f32, height: f32) -> PageBox {
+        PageBox { left: 0.0, bottom: 0.0, width, height }
+    }
+}
+
 /// Smallest box a word may have (fractions): keeps tiny glyphs clickable.
 const MIN_SIZE: f32 = 0.002;
 /// Pixel luma below which a pixel counts as ink (same threshold as blank-page detection).
@@ -178,10 +195,12 @@ struct Run {
     top: f32,
 }
 
-/// Builds the layout of a PDF page from its character boxes. `rotation` is the stored page rotation
-/// (the image the boxes must land on is rotated clockwise by it).
-pub fn from_chars(chars: &[CharBox], width_pt: f32, height_pt: f32, rotation: u16) -> PageLayout {
+/// Builds the layout of a PDF page from its character boxes (content space, see [`PageBox`]).
+/// `rotation` is the total clockwise rotation of the rendered image relative to that space: the page's
+/// intrinsic `/Rotate` plus the user's stored rotation.
+pub fn from_chars(chars: &[CharBox], page_box: PageBox, rotation: u16) -> PageLayout {
     let mut layout = PageLayout::empty(LayoutSource::Layer);
+    let (width_pt, height_pt) = (page_box.width, page_box.height);
     if !(width_pt > 0.0 && height_pt > 0.0) {
         return layout;
     }
@@ -252,10 +271,10 @@ pub fn from_chars(chars: &[CharBox], width_pt: f32, height_pt: f32, rotation: u1
             line_h = h;
         }
         last_right = r.right;
-        // 3. Fractions of the unrotated page (top-left origin), then the stored rotation.
-        let fx = r.left / width_pt;
+        // 3. Fractions of the unrotated page box (top-left origin), then the rotation.
+        let fx = (r.left - page_box.left) / width_pt;
         let fw = (r.right - r.left) / width_pt;
-        let fy = 1.0 - r.top / height_pt;
+        let fy = 1.0 - (r.top - page_box.bottom) / height_pt;
         let fh = (r.top - r.bottom) / height_pt;
         let (x, y, w, h) = rotate_box(fx, fy, fw, fh, rotation);
         let (x, y, w, h) = finish_box(x, y, w, h);
@@ -645,7 +664,7 @@ mod tests {
     fn chars_become_words_and_lines_with_rotation() {
         let mut c = chars("Hello World", 56.0, 780.0, 12.0);
         c.extend(chars("Second line", 56.0, 760.0, 12.0));
-        let layout = from_chars(&c, 595.0, 842.0, 0);
+        let layout = from_chars(&c, PageBox::new(595.0, 842.0), 0);
         let words: Vec<&str> = layout.words.iter().map(|w| w.t.as_str()).collect();
         assert_eq!(words, ["Hello", "World", "Second", "line"]);
         assert_eq!(layout.words.iter().map(|w| w.line).collect::<Vec<_>>(), [0, 0, 1, 1]);
@@ -655,7 +674,7 @@ mod tests {
         assert!((hello.w - 30.0 / 595.0).abs() < 1e-4);
         assert_eq!(layout.text(), "Hello World\nSecond line");
         // Rotation 90° clockwise: the top-left word lands at the top-right.
-        let rotated = from_chars(&c, 595.0, 842.0, 90);
+        let rotated = from_chars(&c, PageBox::new(595.0, 842.0), 90);
         let r = &rotated.words[0];
         assert!(r.x > 0.9 && r.y < 0.15, "{r:?}");
         assert!((r.w - hello.h).abs() < 1e-5 && (r.h - hello.w).abs() < 1e-5);
@@ -669,9 +688,19 @@ mod tests {
     fn a_horizontal_jump_without_a_space_splits_words() {
         let mut c = chars("AB", 10.0, 100.0, 10.0);
         c.extend(chars("CD", 60.0, 100.0, 10.0));
-        let layout = from_chars(&c, 200.0, 200.0, 0);
+        let layout = from_chars(&c, PageBox::new(200.0, 200.0), 0);
         assert_eq!(layout.words.iter().map(|w| w.t.as_str()).collect::<Vec<_>>(), ["AB", "CD"]);
         assert_eq!(layout.words[1].line, 0);
+    }
+
+    #[test]
+    fn an_offset_page_box_is_normalised() {
+        // MediaBox [100 50 695 892]: the same glyph positions shifted by the box origin.
+        let c = chars("Hi", 156.0, 830.0, 12.0);
+        let layout = from_chars(&c, PageBox { left: 100.0, bottom: 50.0, width: 595.0, height: 842.0 }, 0);
+        let w = &layout.words[0];
+        assert!((w.x - 56.0 / 595.0).abs() < 1e-4, "{w:?}");
+        assert!((w.y - (1.0 - 789.6 / 842.0)).abs() < 1e-4, "{w:?}");
     }
 
     #[test]
