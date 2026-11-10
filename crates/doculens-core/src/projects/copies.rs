@@ -271,7 +271,7 @@ pub fn remove_document(db: &Db, paths: &WorkspacePaths, project_id: &str, doc_id
         remove_file(&from_rel_path(&paths.root, &copy.rel_path));
         db.with(|c| delete_row(c, doc_id, project_id))?;
     }
-    Ok(db.with(|c| repo::remove_document(c, project_id, doc_id))?)
+    db.with(|c| repo::remove_document(c, project_id, doc_id))
 }
 
 /// Deletes every copy file of a project (before the project row goes).

@@ -102,9 +102,11 @@ fn project_group_words_and_project_scope() {
         ProjectSummary { id: "p-acme".into(), name: "Acme onboarding".into(), status: "done".into() },
     ];
     let planned = |text: &str| plan(None, text, &c, PlanMode::RulesFirst).unwrap();
-    let grouped_by_project = |r: &PlanResult| match &r.plan.operations[0] {
-        Op::Organize { group_by: Some(GroupBy::Project), .. } | Op::Move { group_by: Some(GroupBy::Project), .. } => true,
-        _ => false,
+    let grouped_by_project = |r: &PlanResult| {
+        matches!(
+            &r.plan.operations[0],
+            Op::Organize { group_by: Some(GroupBy::Project), .. } | Op::Move { group_by: Some(GroupBy::Project), .. }
+        )
     };
     let r = planned("전체 문서를 프로젝트별로 정리해줘");
     assert!(grouped_by_project(&r), "{r:?}");

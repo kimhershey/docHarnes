@@ -166,12 +166,12 @@ test.describe("P5 organise / export", () => {
     await expect(page.getByTestId(`organize-row-${invoice}`)).toContainText("documents/미상/");
     await expect(page.getByTestId(`organize-row-${receipt}`)).toContainText("documents/한빛 포털 구축/견적서/");
 
-    // Run → the estimate lands under the project folder and the move is journaled.
+    // Run → the estimate lands under the project folder; the move is journaled and can be undone.
     await page.getByTestId("organize-run").click();
     await page.getByTestId("organize-confirm").click();
     await expect(page.getByTestId("organize-result")).toContainText(tplPattern(ko.organize.done, { failed: 0 }), { timeout: 15_000 });
-    await page.getByTestId("nav-library").click();
-    await expect(card(page, "견적서-1p.jpg")).toBeVisible();
+    await expect(page.getByTestId("organize-undo")).toBeVisible();
+    await expect(page.getByTestId(`organize-row-${receipt}`)).toContainText("documents/한빛 포털 구축/견적서/");
   });
 
   test("library: the aggregate bar sums the selection and the bulk-bar shortcut carries it to 정리", async ({ page }) => {

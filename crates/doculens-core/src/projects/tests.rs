@@ -187,8 +187,8 @@ fn certification_world(db: &Db) -> Project {
 fn migration_adds_project_tables() {
     let db = db();
     // Schema 5 added the project tables; 0008 (0.3.0) turned the status into dates and added `document_copies`.
-    assert!(SCHEMA_VERSION >= 8, "{SCHEMA_VERSION}");
-    assert_eq!(db.user_version().unwrap(), SCHEMA_VERSION);
+    let version = db.user_version().unwrap();
+    assert!(version >= 8 && version == SCHEMA_VERSION, "{version} / {SCHEMA_VERSION}");
     let columns: Vec<String> = db
         .with(|c| {
             let mut s = c.prepare("SELECT name FROM pragma_table_info('projects') ORDER BY cid")?;

@@ -164,8 +164,8 @@ test.describe("P6 projects", () => {
   test("shared document: the second project keeps a tracked copy under its folder, dropped with the membership", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
-    await importViaLibrary(page, ["D:\\scan\\요구사항정의서-v1.2.pdf"], { autoLevel: "none" });
-    const srs = await docId(page, "요구사항정의서-v1.2.pdf");
+    // Processed documents: the copy folder renders `{{doc_type}}` from the classified type.
+    const { srs } = await importTrio(page);
 
     // Project A owns the original: no copy row.
     await page.getByTestId("nav-projects").click();

@@ -717,7 +717,7 @@ fn fields_grids(p: &Prepared, req: &ExportRequest) -> (Vec<Grid>, Grid) {
                     None => groups.push((key, vec![doc])),
                 }
             }
-            groups.sort_by(|a, b| a.0.is_empty().cmp(&b.0.is_empty()));
+            groups.sort_by_key(|a| a.0.is_empty());
         }
         ExportLayout::Single => groups.push((String::new(), p.docs.iter().collect())),
     }

@@ -2650,7 +2650,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "project_get":
     case "project_add_documents":
     case "project_remove_document":
-    case "project_set_status":
+    case "project_sync_copies":
     case "project_templates":
     case "project_template_save":
     case "project_template_delete":
