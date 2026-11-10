@@ -650,7 +650,7 @@ fn summaries_fit_the_model_context_and_split_when_the_server_still_refuses() {
     let a = summarize(&deps, &summary_request(), &mut |_| true).unwrap();
     assert!(!a.text.is_empty());
     let sizes = strict.sizes();
-    assert!(sizes[0] > full - 1 && sizes.len() >= 2 && *sizes.last().unwrap() <= full - 1, "{sizes:?}");
+    assert!(sizes[0] >= full && sizes.len() >= 2 && *sizes.last().unwrap() < full, "{sizes:?}");
     let chunks = w.db.with(|c| repo::list_chunks(c, "big")).unwrap();
     assert_eq!(a.sources.len(), chunks.len(), "every chunk still reaches the summary");
 }
@@ -675,7 +675,7 @@ fn an_answer_prompt_the_server_refuses_is_retried_with_fewer_sources() {
         AnswerDeps { search: w.search_deps(None), chat: &strict, model: None, cancelled: None, context_size: None };
     let a = answer(&deps, &req, &mut |_| true).unwrap();
     let sizes = strict.sizes();
-    assert!(sizes.len() >= 2 && sizes[0] > full - 1 && *sizes.last().unwrap() <= full - 1, "{sizes:?}");
+    assert!(sizes.len() >= 2 && sizes[0] >= full && *sizes.last().unwrap() < full, "{sizes:?}");
     assert!(!a.sources.is_empty() && a.sources.len() < full_answer.sources.len(), "{}", a.sources.len());
     assert!(!a.no_evidence);
 }
