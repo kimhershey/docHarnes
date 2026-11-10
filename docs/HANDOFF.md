@@ -1619,6 +1619,39 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 - **남은 것 / 사용자 PC**: 계획 §9 = 체크리스트 "0.4.0" 절(다운로드 저장소 파일 이름, VRAM 실측 → `min_free_vram_mib`·적응형 경계, 한국어 골든셋 측정, EmbeddingGemma 2
   재임베딩·유사도 임계, SHA-256 고정, 0.3.0 Qwen 드롭인 호환). E2B/E4B의 PLE 표가 GPU에 올라가지 않는다는 가정은 `print_info`/실측으로 확인.
 
+### 0.5.0 — 프로젝트 중심 통합(A안) + GUI 정리 + 사이드바 용어 (2026-11-10; 사용자 지시 "A 실행, 위에 검토했던 GUI 검토는 제안내용대로 정리. 그리고, 사이드 바의 메뉴들을 AIDP 및 오피스에이전트의 용어들을 참조하여 사람이 사용하는 SW 용어로 변경."; 계획 `docs/plan/v0.5.0.md`; 코어·셸 직접 + 프런트 포크 에이전트 2)
+
+- **배경**: 2026-11-10 검토 2건(GUI에서 불필요한 요소 — AIDP·오피스에이전트 참고; 지식 저장소와 프로젝트 역할 통합)에서 사용자가 **A안**(프로젝트 = 업무 문서 + 참고 자료,
+  프로젝트 밖 참고 문서는 공통 참고 자료)과 GUI 정리 제안, 메뉴 용어 변경을 택했다. 계획 §0~§5가 결정 사항이다.
+- **데이터**: 마이그레이션 `0010_reference_groups.sql` — `collections.kind TEXT NOT NULL DEFAULT 'reference'`(`reference` | `project`), `collections.project_id TEXT REFERENCES projects(id)
+  ON DELETE CASCADE` + 인덱스, `SCHEMA_VERSION = 10`. 기존 컬렉션은 모두 `reference`·`project_id NULL` = 공통 참고 자료의 묶음(데이터 이동 없음). `watch_folder` 열은 남기고
+  읽기·쓰기를 모두 뺐다(`Collection`·`CollectionInput`에서 제거).
+- **코어** (`crates/doculens-core`):
+  - `knowledge/mod.rs`: `CollectionKind`, `Collection.kind`/`project_id`(+`is_common()`), `CollectionInput.project_id`(생성 때만 의미), `SearchScope.project_id` + `SearchScope::project(id)`,
+    `is_unrestricted`에 포함.
+  - `knowledge/repo.rs`: `COLLECTION_COLS`에 kind/project_id; `save_collection`은 생성 시 `project_id` → kind `project`, 갱신은 저장된 kind·project 유지;
+    `reference_group_of_project` / `project_reference_group(conn, project_id, project_name)`(없으면 생성, 이름 = 프로젝트 이름, 겹치면 " (2)" 식 번호; 모르는 프로젝트는
+    `project_not_found`) / `sync_reference_group_name` / `delete_reference_groups_of_project` / `common_reference_doc_ids`(활성·프로젝트 없음) / `project_work_doc_ids` /
+    `project_reference_doc_ids`. **`scope_doc_ids`**: `project_id`가 있으면 허용 집합 = 업무 문서(`project_documents`) ∪ 프로젝트 묶음 문서 ∪ 활성 공통 묶음 문서;
+    `documents`가 함께 오면 그 문서들이 업무 문서를 대신한다(선택·첨부 문서로 물어도 참고 자료는 함께 봄 — 플래너 실행기의 working set도 이 경로); `collections`·`roles`·`folder`는
+    종전대로 교집합; 프로젝트 자신의 문서는 구판·비활성 묶음 제외 규칙에서 면제; 모르는 프로젝트는 빈 집합(플래너 범위와 같음).
+  - `projects/repo.rs`: `delete_project`가 참고 자료 묶음을 먼저 지움(FK CASCADE와 별개로 명시), `save_project` 갱신에서 이름이 바뀌면 묶음 이름 동기화.
+  - `planner`: `Op::AddToProject { as_reference: bool }`(serde 기본 false, 스펙 표·문법에 `as_reference` Bool 추가, 설명 "문서를 프로젝트에 넣기(업무 문서 또는 참고 자료)");
+    실행기는 `as_reference`면 묶음 보장 → `add_docs_to_collection` → `set_role(knowledge)`(트랜잭션), 아니면 종전 `copies::add_documents`; 요약 "프로젝트 참고 자료에 문서 n건 추가".
+    규칙: "참고 자료로/참고로/지침으로/규정으로/기준으로/as reference/guideline" → `as_reference`; 삭제 규칙의 보호어에 "참고 자료·묶음" 추가. `ExplainScope::Collection` →
+    `Reference`(직렬화 `reference`, 옛 `collection`은 alias로 역직렬화; `EXPLAIN_SCOPES` 갱신). 실행기의 `Search`·`Answer`·`Explain`(문서 범위 제외)이 `plan.scope.filter.project_id`를
+    `SearchScope.project_id`로 넘겨 플랜의 프로젝트 범위도 합집합 규칙을 쓴다.
+  - `generate`: `DraftRequest.project_id`(serde 기본 없음) — `use_knowledge`·`SourceRef::Knowledge`·절별 추가 검색이 `SearchScope::project(id)`로 돈다(`KnowledgeLookup` 묶음 인자).
+  - 테스트: `knowledge::tests::project_scope_unions_work_documents_and_reference_material`(묶음 생성·단일성·이름 충돌 번호·`save_collection(project_id)`·합집합·문서 대체·역할 교집합·
+    구판/비활성 면제·모르는 프로젝트·이름 동기화·삭제 연쇄·옛 컬렉션 = 공통), `planner::tests`에 "참고 자료로 넣어줘"·영어 "as reference material" 케이스.
+- **셸** (`src-tauri`): `project_add_documents(id, doc_ids, as_reference?)`(참고 자료면 묶음 보장 + 추가 + 역할 knowledge, `knowledge://changed collections`·`documents://changed updated`
+  발행), 신규 `project_reference_group(id) -> Collection`(없으면 생성), `project_delete`가 묶음 삭제를 발행, `project_update` 뒤 `collections` 변경 발행. `knowledge_search`·
+  `knowledge_answer`는 `SearchScope.project_id`를 그대로 받는다(명령 서명 변경 없음). 기존 `knowledge_collection_add {id: 묶음, set_role: true}`로 참고 자료 묶음에 넣어도 같다.
+- **프런트**(포크 F1·F2; 아래 "프런트" 단락은 통합 뒤 갱신): 사이드바 7개(`library`·`assistant`·`review`·`projects`·`generate`·`jobs`·`settings`; `nav.*` i18n), 홈·검색·스키마·
+  지식 베이스·정리/내보내기·모델 관리자 화면은 메뉴에서 빼고 문서함 띠·어시스턴트 "근거만 찾기"·설정 탭(AI 모델·양식·추출 항목·참고 자료)·작업 현황 "정리 이력" 탭으로 흡수;
+  프로젝트 목록 맨 위 "공통 참고 자료", 상세 5탭, "프로젝트에 넣기" 대화상자; 모의 백엔드에 `project_reference_group`·`kind`/`project_id`·`as_reference`.
+- **문서**: `docs/plan/v0.5.0.md`, `docs/releases/v0.5.0.md`, 설계 §3.7.2 머리말·§3.14·§3.15 머리말, RUN-GUIDE(메뉴 이름·첫 실행 흐름), 체크리스트 "0.5.0" 절, README·CLAUDE.md.
+
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
@@ -1713,6 +1746,8 @@ P6·P7 항목.
 
 ## 다음 단계 메모 (v1.x)
 
+000. **0.5.0 프로젝트 중심 통합(2026-11-10)**: `docs/plan/v0.5.0.md` — 위 "0.5.0" 절대로 구현. 남은 것은 체크리스트 "0.5.0" 절(사용자 PC 확인)과 플래너 `open` op의 옛 화면
+   이름(`models`·`knowledge`·`search`·`schemas`·`organize`·`home`)이 새 위치(설정 탭·문서함·어시스턴트)로 열리는지의 확인.
 00. **0.4.0 모델 교체(2026-11-10)**: `docs/plan/v0.4.0.md` — 위 "0.4.0" 절대로 구현·검증 완료. 남은 것은 계획 §9(사용자 PC 실측·골든셋·SHA-256 고정)와
    체크리스트 "0.4.0" 절.
 0. **0.3.0 계획(사용자 요청 6건, 2026-11-10)**: `docs/plan/v0.3.0.md` — 생성 템플릿·추출 내장 양식을 SW 개발 문서로, 문서 N개로

@@ -567,8 +567,10 @@ fn run_step(
                 req.mode = *m;
             }
             req.limit = top_k.unwrap_or(20).clamp(1, 200);
+            // A project scope also sees the project's reference material (0.5.0 plan A).
             req.scope = SearchScope {
                 documents: ids(&docs_),
+                project_id: plan.scope.filter.project_id.clone(),
                 latest_only: deps.knowledge.latest_only,
                 ..SearchScope::default()
             };
@@ -592,6 +594,7 @@ fn run_step(
             req.retrieve = knowledge.unwrap_or(true);
             req.scope = SearchScope {
                 documents: ids(&docs_),
+                project_id: plan.scope.filter.project_id.clone(),
                 latest_only: deps.knowledge.latest_only,
                 ..SearchScope::default()
             };
@@ -978,6 +981,7 @@ fn run_step(
                     if !plan.scope.is_empty() {
                         req.scope.documents = ids(&working_set(deps, plan, imported)?);
                     }
+                    req.scope.project_id = plan.scope.filter.project_id.clone();
                 }
             }
             req.scope.latest_only = deps.knowledge.latest_only;

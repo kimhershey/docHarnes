@@ -64,7 +64,9 @@ user PC: `docs/RUN-GUIDE.md`.
   for OCR pages; v1 layouts get their rows relabelled on load; on-image edits rewrite `pages.text`),
   `convert/` HWPX·DOCX·HWP·XLSX·PPTX·text (txt/md/csv/html…) + legacy XLS/XLSB/ODS (calamine)·DOC·PPT (cfb)·RTF·HML → model
   (flow blocks + positioned `slides` for PPTX) → HTML → PDF through a `PdfPrinter` (page size from the source), fixtures),
-  `knowledge/` (tokenize: lindera ko-dic / simple analyzer, chunker: structure-aware chunking, repo, index,
+  `knowledge/` (0.5.0 plan A: collections are reference groups — `kind` `reference` (공통 참고 자료, no project) | `project` (one per project,
+  `project_id`; `repo::project_reference_group`), `SearchScope.project_id` = work docs ∪ project group ∪ active common groups, explicit `documents`
+  stand in for the work docs; tokenize: lindera ko-dic / simple analyzer, chunker: structure-aware chunking, repo, index,
   embed: sqlite-vec + `Embedder`, search: hybrid RRF, answer: grounded answers / explain / summarize / compare with the conversation history +
   screen session as context blocks, follow-up detection, an evidence budget capped by the loaded model's context with shrink-and-retry
   on the server's context-overflow 400, and `retrieve = false` text-only answers for pasted text),
