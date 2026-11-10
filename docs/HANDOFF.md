@@ -1555,6 +1555,17 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   `cargo test -p doculens-core --lib -- documents:: knowledge:: db::` 111 통과; Playwright `documents.spec` 5/5(수정 → Ctrl+Z → Ctrl+Shift+Z →
   이력 탭 2건 → "이 수정 되돌리기"). 통합 검증 수치는 아래 표.
 
+
+### 0.3.0 릴리스 (2026-11-10; 사용자 지시 "최종 종료 후에는 0.3.0 으로 릴리즈 생성 및 LITE 만 빌드해서 배포")
+
+- 버전 0.3.0: `Cargo.toml`(workspace, 4개 크레이트 상속)·`Cargo.lock`, `package.json`·`package-lock.json`(`npm version`), `src-tauri/tauri.conf.json`,
+  모의 `app_info`/`settings` 버전 문자열, `npm run notices`(SBOM 버전), RUN-GUIDE의 설치파일 이름·릴리스 링크(v0.3.0 Lite · Full은 v0.2.0 · CUDA 팩은
+  v0.1.0), 체크리스트 릴리스 항목.
+- 릴리스 노트 `docs/releases/v0.3.0.md`(한국어; 설치파일 표는 Lite만, CUDA 팩·Full 없음 안내, 0.2.0 작업 공간 자동 마이그레이션 0008·0009).
+  `release-windows.yml`이 `v0.3.0` 생성 때 이 파일을 `--notes-file`로 씀(0.2.0 릴리스 때 추가한 경로).
+- 배포: Actions "Windows installer (manual)" `variant=lite`, `publish=true`, `ref=<검증된 커밋>` 1회만(Full·CUDA 팩 빌드 없음 — Full은 v0.2.0에서
+  그대로 받음). 실행·자산 크기는 아래 표.
+
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
