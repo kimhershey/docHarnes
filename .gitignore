@@ -64,3 +64,6 @@ src-tauri/resources/licenses/*
 # Evaluation harness: locally generated fixtures / outputs (eval/README.md)
 /eval/fixtures/
 /eval/out/
+
+# Playwright output of parallel agents (PW_OUT_DIR=test-results-<name>)
+test-results-*/
