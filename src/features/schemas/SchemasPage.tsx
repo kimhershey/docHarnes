@@ -479,11 +479,15 @@ export function SchemasPage() {
               </div>
               {draft.source === "form" && !draft.id && <p className="rounded-md bg-info-soft px-3 py-1.5 text-xs">{t("schemas.form.confirm")}</p>}
               {discovery && (
-                <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-bg-sunken px-3 py-1.5 text-xs" data-testid="schema-discovery-summary">
+                <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-md border border-border bg-bg-sunken px-3 py-1.5 text-xs" data-testid="schema-discovery-summary">
                   <span>{t("schemas.form.discovery_summary", { docs: discovery.documents.filter((d) => d.source !== "failed").length, fields: discovery.merged_fields, dropped: discovery.dropped_fields })}</span>
                   {discovery.documents.map((d) => (
-                    <Badge key={d.doc_id} variant={d.source === "failed" ? "danger" : "outline"} title={d.note ?? undefined} data-testid={`schema-discovery-doc-${d.doc_id}`}>
-                      {d.title} · {t(`schemas.form.source_${d.source}`, { defaultValue: d.source })} {d.field_count}
+                    // A long file name truncates inside the badge (the full name and note are in the tooltip) instead of pushing it past the box.
+                    <Badge key={d.doc_id} variant={d.source === "failed" ? "danger" : "outline"} className="min-w-0" title={[d.title, d.note].filter(Boolean).join(" — ")} data-testid={`schema-discovery-doc-${d.doc_id}`}>
+                      <span className="min-w-0 truncate">{d.title}</span>
+                      <span className="shrink-0">
+                        · {t(`schemas.form.source_${d.source}`, { defaultValue: d.source })} {d.field_count}
+                      </span>
                     </Badge>
                   ))}
                 </div>

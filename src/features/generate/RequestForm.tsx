@@ -138,7 +138,9 @@ export function RequestForm({
               const doc = sourceDocs?.find((d) => d.id === id);
               return (
                 <li key={id} className="flex items-center gap-1 rounded-full bg-bg-sunken px-2 py-0.5 text-xs">
-                  <span className="max-w-40 truncate">{doc?.title ?? doc?.original_name ?? id.slice(0, 8)}</span>
+                  <span className="max-w-40 truncate" title={doc?.original_name}>
+                    {doc?.title ?? doc?.original_name ?? id.slice(0, 8)}
+                  </span>
                   <button type="button" className="text-fg-muted hover:text-fg cursor-pointer" onClick={() => onChange({ sources: withDocumentSources(request.sources, sourceIds.filter((x) => x !== id)) })} aria-label={t("generate.form.remove_source")}>
                     <X className="size-3" />
                   </button>
