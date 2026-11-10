@@ -2387,7 +2387,19 @@ pub fn preview(
             | Op::Review { action: ReviewOp::Approve | ReviewOp::Reject | ReviewOp::Correct, .. } => {
                 (count_label_lang(docs_.len(), ko), json!({ "documents": docs_.len() }), docs_.len() > 1)
             }
-            Op::Import { source, path, recursive, .. } => match source {
+            Op::Import { source, path, paths: file_paths, recursive, .. } => match source {
+                super::ImportFrom::Files => {
+                    let existing = file_paths.iter().filter(|p| std::path::Path::new(p).is_file()).count();
+                    (
+                        if ko {
+                            format!("파일 {}개 가져오기(찾은 파일 {existing}개)", file_paths.len())
+                        } else {
+                            format!("Import {} files ({existing} found)", file_paths.len())
+                        },
+                        json!({ "paths": file_paths, "existing": existing }),
+                        true,
+                    )
+                }
                 super::ImportFrom::Folder => {
                     let p = path.clone().unwrap_or_default();
                     let root = std::path::PathBuf::from(&p);
@@ -2487,6 +2499,157 @@ pub fn preview(
                 json!({ "doc_ref": doc_ref, "name": name, "doc_ids": doc_ids }),
                 true,
             ),
+            // -- 0.6.0 confirmation previews -----------------------------------------------------
+            Op::Split { boundaries, every } => {
+                let bounds = docs_
+                    .first()
+                    .and_then(|d| split_boundaries(d.page_count, boundaries, *every).ok())
+                    .unwrap_or_default();
+                (
+                    if ko {
+                        format!(
+                            "{}개 문서로 나눕니다(쪽 {})",
+                            bounds.len() + 1,
+                            bounds.iter().map(|b| b.to_string()).collect::<Vec<_>>().join(", ")
+                        )
+                    } else {
+                        format!(
+                            "Split into {} documents (at pages {})",
+                            bounds.len() + 1,
+                            bounds.iter().map(|b| b.to_string()).collect::<Vec<_>>().join(", ")
+                        )
+                    },
+                    json!({ "documents": docs_.len(), "boundaries": bounds, "parts": bounds.len() + 1 }),
+                    true,
+                )
+            }
+            Op::Merge { name } => (
+                if ko {
+                    format!(
+                        "{} → PDF 1개{}",
+                        count_label_lang(docs_.len(), ko),
+                        name.as_deref().map(|n| format!(" '{n}'")).unwrap_or_default()
+                    )
+                } else {
+                    format!(
+                        "{} → one PDF{}",
+                        count_label_lang(docs_.len(), ko),
+                        name.as_deref().map(|n| format!(" '{n}'")).unwrap_or_default()
+                    )
+                },
+                json!({ "documents": docs_.len(), "name": name }),
+                true,
+            ),
+            Op::EditText { find, replace, pages } => {
+                let mut matches = 0usize;
+                let mut touched = 0usize;
+                for d in &docs_ {
+                    let rows = db.with(|c| docs::list_pages(c, &d.id, true)).unwrap_or_default();
+                    for p in rows.iter().filter(|p| pages.is_empty() || pages.contains(&p.page_no)) {
+                        let n = p.text.as_deref().map(|t| t.matches(find.as_str()).count()).unwrap_or(0);
+                        if n > 0 {
+                            matches += n;
+                            touched += 1;
+                        }
+                    }
+                }
+                (
+                    if ko {
+                        format!("'{find}' {matches}곳({touched}쪽) → '{replace}'")
+                    } else {
+                        format!("{matches} matches of '{find}' on {touched} pages → '{replace}'")
+                    },
+                    json!({ "documents": docs_.len(), "matches": matches, "pages": touched }),
+                    true,
+                )
+            }
+            Op::DeleteProject { project } => {
+                let (name, members) = project
+                    .as_deref()
+                    .and_then(|pid| {
+                        db.with(|c| projects_repo::get_project(c, pid))
+                            .ok()
+                            .flatten()
+                            .map(|p| (p.name, p.document_count))
+                    })
+                    .unwrap_or_default();
+                (
+                    if ko {
+                        format!("프로젝트 '{name}' 삭제 — 문서 {members}건은 문서함에 남음")
+                    } else {
+                        format!("Delete project '{name}' — its {members} documents stay in the library")
+                    },
+                    json!({ "project_id": project, "name": name, "documents": members }),
+                    true,
+                )
+            }
+            Op::ManageReference { action: ReferenceAction::Delete, group, project, .. } => {
+                let col = resolve_group(db, group.as_deref(), project.as_deref()).ok().flatten();
+                let (name, n) = col.map(|c| (c.name, c.doc_count)).unwrap_or_default();
+                (
+                    if ko {
+                        format!("참고 자료 묶음 '{name}' 삭제 — 문서 {n}건은 남음")
+                    } else {
+                        format!("Delete reference group '{name}' — its {n} documents stay")
+                    },
+                    json!({ "group": name, "documents": n }),
+                    true,
+                )
+            }
+            Op::ManageTemplate { action: TemplateAction::Delete, template, name, .. } => {
+                let key = template.clone().or_else(|| name.clone()).unwrap_or_default();
+                let t = resolve_template(db, &key).ok().flatten();
+                (
+                    match (&t, ko) {
+                        (Some(t), true) => format!("템플릿 '{}' 삭제", t.name_ko),
+                        (Some(t), false) => format!("Delete template '{}'", t.name_en),
+                        (None, true) => format!("템플릿 '{key}'을(를) 찾을 수 없음"),
+                        (None, false) => format!("Template '{key}' not found"),
+                    },
+                    json!({ "template": t.as_ref().map(|t| t.id.clone()), "builtin": t.as_ref().map(|t| t.builtin) }),
+                    true,
+                )
+            }
+            Op::ManageSchema { action: SchemaAction::Delete, schema, .. } => {
+                let rec = resolve_schema(db, schema).ok().flatten();
+                (
+                    match (&rec, ko) {
+                        (Some(r), true) => format!("양식 '{}' 삭제(사용 {}회)", r.name, r.use_count),
+                        (Some(r), false) => format!("Delete schema '{}' (used {} times)", r.name, r.use_count),
+                        (None, true) => format!("양식 '{schema}'을(를) 찾을 수 없음"),
+                        (None, false) => format!("Schema '{schema}' not found"),
+                    },
+                    json!({ "schema": rec.as_ref().map(|r| r.id.clone()), "builtin": rec.as_ref().map(|r| r.builtin_key.is_some()) }),
+                    true,
+                )
+            }
+            Op::ClassifyProjects { apply, use_model } => {
+                // Deterministic suggestions (no model) so the card shows what would be assigned.
+                let pdeps = ProjectDeps { db, vlm: None, language };
+                let req = ClassifyRequest {
+                    doc_ids: ids(&docs_),
+                    project_ids: Vec::new(),
+                    use_model: false,
+                    include_assigned: false,
+                };
+                let result = classify::suggest(&pdeps, &req).ok();
+                let (suggested, undecided) = result.as_ref().map(|r| (r.suggested, r.undecided)).unwrap_or_default();
+                (
+                    if ko {
+                        format!(
+                            "프로젝트 제안 {suggested}건 · 미정 {undecided}건{}",
+                            if apply.unwrap_or(false) { " → 바로 배정" } else { "" }
+                        )
+                    } else {
+                        format!(
+                            "{suggested} suggestions, {undecided} undecided{}",
+                            if apply.unwrap_or(false) { " → assigned" } else { "" }
+                        )
+                    },
+                    json!({ "suggested": suggested, "undecided": undecided, "apply": apply, "use_model": use_model, "suggestions": result.map(|r| r.suggestions) }),
+                    apply.unwrap_or(false),
+                )
+            }
             _ => (String::new(), Value::Null, op.needs_confirmation()),
         };
         if confirm {

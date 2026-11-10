@@ -1276,6 +1276,213 @@ mod exec_tests {
         );
     }
 
+    /// 0.6.0: the new core ops run against the workspace — rotate (relative), title, role,
+    /// text replacement, reference groups, glossary, editions, project edits / membership /
+    /// deletion, templates, schema management and project suggestions.
+    #[test]
+    fn agent_ops_run_against_the_workspace() {
+        use crate::knowledge::repo as knowledge_repo;
+        use crate::projects::{repo as projects_repo, ProjectInput};
+        let w = World::new();
+        w.add_image("d1", "inbox/a.jpg");
+        w.add_image("d2", "inbox/b.jpg");
+        w.db.with(|c| docs::set_page_text(c, "d1", 1, "㈜한빛 공급계약 ㈜한빛")).unwrap();
+        let run1 = |op: Op, scope: Scope| -> serde_json::Value {
+            let plan = plan_of(vec![op], scope);
+            let ex = exec::run(&w.deps(None), &plan, &mut |_| {}).unwrap();
+            assert!(matches!(ex.steps[0].status, StepStatus::Done), "{:?}", ex.steps[0]);
+            ex.steps[0].payload.clone()
+        };
+        let sel = |ids: &[&str]| Scope { doc_ids: ids.iter().map(|s| s.to_string()).collect(), ..Scope::default() };
+        // rotate adds to the page's rotation
+        let p = run1(Op::Rotate { degrees: 90, pages: Vec::new() }, sel(&["d1"]));
+        assert_eq!(p["pages"], 1);
+        assert_eq!(w.db.with(|c| docs::get_page(c, "d1", 1)).unwrap().unwrap().rotation, 90);
+        run1(Op::Rotate { degrees: 90, pages: vec![1] }, sel(&["d1"]));
+        assert_eq!(w.db.with(|c| docs::get_page(c, "d1", 1)).unwrap().unwrap().rotation, 180);
+        // title / role
+        run1(Op::SetTitle { title: "2026 공급계약".into() }, sel(&["d1"]));
+        assert_eq!(w.doc("d1").title.as_deref(), Some("2026 공급계약"));
+        run1(Op::SetRole { role: RoleParam::Knowledge }, sel(&["d1", "d2"]));
+        assert_eq!(w.doc("d2").role, DocumentRole::Knowledge);
+        // find / replace with history
+        let p =
+            run1(Op::EditText { find: "㈜한빛".into(), replace: "(주)한빛".into(), pages: Vec::new() }, sel(&["d1"]));
+        assert_eq!(p["replaced"], 2);
+        let text = w.db.with(|c| docs::page_text_state(c, "d1", 1)).unwrap().unwrap().text.unwrap();
+        assert!(text.contains("(주)한빛") && !text.contains('㈜'), "{text}");
+        // reference group: create → add (role) → rename → delete
+        run1(
+            Op::ManageReference {
+                action: ReferenceAction::Create,
+                group: None,
+                name: Some("사규".into()),
+                project: None,
+            },
+            Scope::default(),
+        );
+        let p = run1(
+            Op::ManageReference {
+                action: ReferenceAction::Add, group: Some("사규".into()), name: None, project: None
+            },
+            sel(&["d1"]),
+        );
+        assert_eq!(p["group"]["doc_count"], 1);
+        run1(
+            Op::ManageReference {
+                action: ReferenceAction::Rename,
+                group: Some("사규".into()),
+                name: Some("회사 규정".into()),
+                project: None,
+            },
+            Scope::default(),
+        );
+        assert_eq!(w.db.with(knowledge_repo::list_collections).unwrap()[0].name, "회사 규정");
+        run1(
+            Op::ManageReference {
+                action: ReferenceAction::Delete,
+                group: Some("회사 규정".into()),
+                name: None,
+                project: None,
+            },
+            Scope::default(),
+        );
+        assert!(w.db.with(knowledge_repo::list_collections).unwrap().is_empty());
+        // glossary
+        run1(
+            Op::DefineTerm {
+                action: TermAction::Save,
+                term: "MM".into(),
+                definition: Some("맨먼스".into()),
+                synonyms: Vec::new(),
+            },
+            Scope::default(),
+        );
+        assert_eq!(w.db.with(knowledge_repo::list_glossary).unwrap()[0].definition.as_deref(), Some("맨먼스"));
+        run1(
+            Op::DefineTerm { action: TermAction::Delete, term: "mm".into(), definition: None, synonyms: Vec::new() },
+            Scope::default(),
+        );
+        assert!(w.db.with(knowledge_repo::list_glossary).unwrap().is_empty());
+        // editions
+        run1(
+            Op::SetVersion {
+                group_key: Some("공급계약".into()),
+                label: Some("2024".into()),
+                effective_date: None,
+                latest: Some(false),
+                clear: None,
+            },
+            sel(&["d1"]),
+        );
+        let groups = w.db.with(knowledge_repo::list_version_groups).unwrap();
+        assert_eq!(groups[0].documents[0].version_label.as_deref(), Some("2024"));
+        run1(
+            Op::SetVersion { group_key: None, label: None, effective_date: None, latest: None, clear: Some(true) },
+            sel(&["d1"]),
+        );
+        assert!(w.db.with(knowledge_repo::list_version_groups).unwrap().is_empty());
+        // projects: membership, update, removal, suggestions, deletion
+        let project = w
+            .db
+            .with(|c| projects_repo::save_project(c, &ProjectInput { name: "한빛 납품".into(), ..Default::default() }))
+            .unwrap();
+        run1(
+            Op::AddToProject {
+                project: Some(project.id.clone()),
+                doc_ids: vec!["d1".into(), "d2".into()],
+                as_reference: false,
+            },
+            Scope::default(),
+        );
+        let p = run1(
+            Op::UpdateProject {
+                project: Some(project.id.clone()),
+                name: Some("한빛 2차".into()),
+                template: None,
+                start_date: None,
+                end_date: Some("2026-12-31".into()),
+                owner: Some("김담당".into()),
+                intake_no: None,
+                notes: None,
+                keywords: None,
+                inbox_folder: None,
+            },
+            Scope::default(),
+        );
+        assert_eq!(p["project"]["name"], "한빛 2차");
+        assert_eq!(p["project"]["end_date"], "2026-12-31");
+        assert_eq!(p["project"]["owner"], "김담당");
+        let p = run1(
+            Op::RemoveFromProject { project: Some(project.id.clone()), doc_ids: vec!["d2".into()] },
+            Scope::default(),
+        );
+        assert_eq!(p["removed"], 1);
+        assert_eq!(w.db.with(|c| projects_repo::documents_of(c, &project.id)).unwrap().len(), 1);
+        let p = run1(Op::ClassifyProjects { apply: Some(false), use_model: Some(false) }, Scope::default());
+        assert!(p["suggested"].is_number() && p["applied"] == 0, "{p}");
+        // templates (user-defined only)
+        run1(
+            Op::ManageTemplate {
+                action: TemplateAction::Save,
+                template: None,
+                name: Some("유지보수 2차".into()),
+                doc_types_required: vec!["estimate".into()],
+                description: None,
+            },
+            Scope::default(),
+        );
+        let t =
+            w.db.with(projects_repo::list_templates)
+                .unwrap()
+                .into_iter()
+                .find(|t| t.name_ko == "유지보수 2차")
+                .unwrap();
+        assert_eq!(t.required_doc_types, vec!["estimate".to_string()]);
+        run1(
+            Op::ManageTemplate {
+                action: TemplateAction::Delete,
+                template: Some("유지보수 2차".into()),
+                name: None,
+                doc_types_required: Vec::new(),
+                description: None,
+            },
+            Scope::default(),
+        );
+        assert!(!w.db.with(projects_repo::list_templates).unwrap().iter().any(|t| t.name_ko == "유지보수 2차"));
+        // schemas: toggle a built-in, refuse to delete it
+        let p = run1(
+            Op::ManageSchema { action: SchemaAction::Disable, schema: "estimate".into(), name: None },
+            Scope::default(),
+        );
+        assert_eq!(p["schema"]["enabled"], false);
+        run1(
+            Op::ManageSchema { action: SchemaAction::Enable, schema: "estimate".into(), name: None },
+            Scope::default(),
+        );
+        let plan = plan_of(
+            vec![Op::ManageSchema { action: SchemaAction::Delete, schema: "estimate".into(), name: None }],
+            Scope::default(),
+        );
+        let ex = exec::run(&w.deps(None), &plan, &mut |_| {}).unwrap();
+        assert!(matches!(ex.steps[0].status, StepStatus::Failed), "{:?}", ex.steps[0]);
+        assert!(ex.steps[0].error.as_deref().unwrap_or_default().contains("schema_builtin"), "{:?}", ex.steps[0].error);
+        // delete the project (documents stay)
+        let p = run1(Op::DeleteProject { project: Some(project.id.clone()) }, Scope::default());
+        assert_eq!(p["deleted"], true);
+        assert!(w.db.with(|c| projects_repo::get_project(c, &project.id)).unwrap().is_none());
+        assert_eq!(w.doc("d1").id, "d1");
+        // previews of the confirmed ops carry their counts
+        w.db.with(|c| docs::set_page_text(c, "d2", 1, "㈜한빛")).unwrap();
+        let plan = plan_of(
+            vec![Op::EditText { find: "㈜한빛".into(), replace: "x".into(), pages: Vec::new() }],
+            sel(&["d1", "d2"]),
+        );
+        let preview = exec::preview(&w.db, &w.paths, &plan, &ProcessingSettings::default(), Language::Ko).unwrap();
+        assert_eq!(preview.steps[0].payload["matches"], 1, "{:?}", preview.steps[0]);
+        assert!(preview.steps[0].confirm);
+    }
+
     fn plan_of(ops: Vec<Op>, scope: Scope) -> Plan {
         let mut p = Plan {
             intent: ops[0].kind(),

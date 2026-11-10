@@ -1686,6 +1686,36 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   `DocuLens-Setup-Lite-0.5.0-x64` 50,824,823 B(2027-02-08까지 보관). 게시(`publish=true`, 같은 `ref=3a2a26f`)는 사용자 확인 뒤(계획 §4 5); 그 뒤 `release/0.5.0` →
   `main` PR 병합.
 
+### 0.6.0 — AI 어시스턴트가 소프트웨어 기능 전부 수행 (2026-11-10; 사용자 지시 "설정 내용 변경이나 파일 추가, 변경 등의 소프트웨어 수행 기능을 AI 에이전트가 모두 수행할 수 있도록 … 0.6.0 으로 실행하자. 완료 후에 0.6.0 릴리즈도 만들어"; 계획 `docs/plan/v0.6.0.md`; 코어·셸 직접 + 프런트 포크 에이전트 1; 브랜치 `release/0.6.0` — `release/0.5.0` 끝에서 분기)
+
+- **op 43 → 62** (`planner/mod.rs` `OpKind`·`Op`, `schema.rs` `OP_SPECS`): 신규 `rotate`·`rerender`·`split`·`merge`·`set_title`·`edit_text`·`set_role`·`manage_reference`·`define_term`·`set_version`·
+  `update_project`·`delete_project`·`remove_from_project`·`manage_template`·`classify_projects`·`manage_schema`(코어 실행) + `manage_model`·`workspace`·`maintenance`(UI 액션, `runs_in_ui`);
+  확장 `import.paths`(source=files, 확인 카드), `set_setting.key: String`(카탈로그 경로), `engine.start/stop`. 파라미터 열거 `RoleParam`·`ReferenceAction`·`TermAction`·`TemplateAction`·
+  `SchemaAction`·`ModelAction`·`WorkspaceAction`·`MaintenanceAction`. 부작용·확인 분류: split/merge/edit_text/delete_project/묶음·템플릿·양식 삭제/classify apply/모델 download·delete/
+  engine stop/workspace close·forget/purge_now/`settings_catalog::needs_confirmation`(engine_binary·db_encryption) 확인.
+- **설정 카탈로그** `planner/settings_catalog.rs`: 46키(`ui.*`·`models.*`·`processing.*`·`cache.*`·`privacy.*`·`notifications.*`·`knowledge.*`·`generation.*` + `journal_days`) + 옛 6키 별칭,
+  `ValueType`(Bool·Int 범위·IntChoice·Float(percent)·Enum·Str)·`coerce`("켜/꺼"·"90%"·한국어 열거명·`classify`→`classify_only`)·`find`(별칭·대소문자). `SETTING_KEYS`는 문법용 리터럴
+  (테스트가 카탈로그와 일치 확인). 검증기 `check_setting`이 키를 정규 경로로 바꾸고 값을 형변환한다.
+- **실행기** (`exec.rs`): 각 op의 실행 + 페이로드(프런트 계약: rotate `{documents,pages,degrees}` — 상대 회전, split `{document_id,created}`, merge `{document_id,sources}`,
+  edit_text `{documents,replaced}`(이력 기록·`set_page_text`), manage_reference `{action,group,documents}`(add는 역할 knowledge), define_term `{action,term}`, set_version
+  `{documents,group_key,latest}`, update_project `{project}`, delete_project `{project_id,deleted}`, remove_from_project `{project_id,removed}`, manage_template `{action,template}`,
+  classify_projects `{suggested,applied,suggestions}`, manage_schema `{action,schema}`); 헬퍼 `non_empty`·`one_document`·`split_boundaries`·`resolve_group`·`resolve_schema`.
+  미리보기(`preview`)에 확인 op의 수치(파일 수, 분할 쪽, 병합 수, 글자 일치 수, 프로젝트 문서 수, 묶음 문서 수, 템플릿/양식 존재, 분류 제안 수).
+- **2단계 플래닝** (`prompts.rs`·`llm.rs`·`schema.rs`): `OpFamily` 8계열(ask·documents·reference·projects·forms·compose·output·system; `open`·`help`·`clarify`·`noop` 공통),
+  1단계 `family_messages`(계열 목록·한 줄 설명·압축 컨텍스트·예시 4, 문법 `family_schema` = families 1~2, `ROUTE_TOKENS 48`, 스키마 이름 `families`) → 2단계 `messages_kinds`/
+  `plan_schema_for`(계열 op 표·few-shot 필터·문법 제한). 라우팅 실패·빈 응답은 종전 1단계로, 라우팅 호출 자체가 컨텍스트 초과면 서버 보고 수치로 예산 보정(`request_and_slot`),
+  계열 문법으로 2회 실패하면 전체 op로 1회 더(`widened`, `attempts` 3). `PlanResult.families`. 프롬프트 크기: 계열 호출 ≈ 전체 티어의 1/4 미만(테스트).
+- **규칙** (`rules.rs` `agent_ops`, 엔진 뒤·보존 앞): maintenance·workspace·manage_model(티어/백엔드/받기/가져오기/삭제/검증/벤치마크/로드)·schema_admin·reference(묶음 만들기/이름/삭제/
+  사용/넣기/빼기·용어·판)·project_admin(템플릿·자동 분류·삭제·빼기·이름/기간/담당/접수번호/키워드)·document_edit(역할·회전·다시 렌더·분할·병합·제목·글자 바꾸기)·generic_setting
+  (불리언 18종·숫자 10종 + 토큰 상한); 헬퍼 `numbers`·`quoted_all`·`unquoted`(따옴표 안 이름은 규칙어 아님)·`absolute_date`·`path_in`·`on_off`. `engine`에 start/stop, 삭제 보호어에
+  프로젝트·템플릿·양식·워크스페이스, 프리라우터는 "엔진 켜줘"를 화면 열기로 보지 않음. "돌려줘"는 90/180/270이나 방향어가 있을 때만 회전("정합성 검사 돌려줘"는 그대로).
+- **골든셋** 125건(+25: ko-71~90·en-21~25; ko-58·en-18의 기대 키는 카탈로그 경로로) 99.2%, 기준선 재생성.
+- **프런트**(포크): `types.ts`(Op 유니언·OpFamily·action 유니언·`PlanResult.families`), `settingsCatalog.ts`(46키·형변환·경로 setter), `opSpecs.ts`·`describePlan.ts`(+`agentStepDetail`)·
+  `ResultCard.tsx`(`result-agent-detail`·문서/프로젝트 열기), `commands.ts`(범용 set_setting·manage_model·engine start/stop·workspace·maintenance), `mock-planner.ts`(규칙 19·검증·미리보기·
+  실행), i18n(ops 19·params 59·ui 24·result.detail 18·settings 46), `e2e/agent.spec.ts` 6건. Playwright 60/60(포크 실행).
+- **문서**: `docs/plan/v0.6.0.md`, `docs/releases/v0.6.0.md`, RUN-GUIDE §4 명령, 체크리스트 "0.6.0", 설계 §3.5 플랜 스키마 머리말, CLAUDE.md.
+- **빌드·배포**: 아래 검증 표와 릴리스 기록.
+
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
@@ -1708,6 +1738,7 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | 2026-11-10 0.3.0 1차 — 내장 양식 SW 개발 문서화 (b561120 + 후속 커밋) | `cargo test --workspace` 코어 303(4 ignored; `pipeline::schema` 13 보임/6 숨김 검사·`planner` 18·`projects` 18)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(SW 문구 31건·문맥 재작성, 기준선 재생성, 미달은 이전과 같은 mx-10 1건); vitest 25파일 147건(`mock-generate.test` 규칙 파서·프로젝트 템플릿 SW화, `template.test` 예시 견적서); Playwright 전체 실행 50건 중 48 통과 → 정리 예시 문서·어시스턴트 테스트 템플릿(유지보수) 수정 뒤 `organize`·`projects` 스펙 7/7 재실행 통과; `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(93fb59b 푸시 이벤트, run 42761926963) |
 | 2026-11-10 0.3.0 2~6차 통합 — 생성 템플릿 SW화(1번) · 토큰 예산/절별 생성(4번) · 프로젝트 단계·프로젝트별 정리·추적 사본(5+6번) · 문서 N개 스키마 도출(2번) · 글자 수정 이력(7번) | `cargo test --workspace` 코어 317(4 ignored; `generate` 토큰 예산·분할 2건, `projects`·`organize`·`export`·`aggregate`·`planner` 프로젝트 8건, `pipeline` 스키마 도출 3건, `documents::import` 이력 1건 포함)·셸 3·평가 15·통합 1, clippy(-D warnings)·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(기준선 +0.0 pt, 미달은 mx-10 1건); `npm run typecheck`·`npm run build`·`licenses:check` 통과, vitest 26파일 150건, Playwright 53/53(`generate` 4·`projects` 6·`organize` 4·`pipeline` 2·`dnd`·`documents` 5 재작성 포함); 병렬 에이전트 3개가 같은 트리에서 작업해 중간 WIP 스냅샷 3건(1c885b4·97acb87·d742501, `[skip ci]`)을 거쳤고 통합 커밋에서 CI 실행 — CI 7개 잡 모두 성공(d166b5b 푸시 이벤트, run 42771458691) |
 | 2026-11-10 0.3.0 릴리스 (772782f + 문서 77e8b69) | 버전 범프·고지/SBOM 재생성 뒤 `cargo test --workspace`·clippy·fmt·`cargo deny`·vitest·`npm run build`·`licenses:check`·`nsis:check` 통과; CI 7개 잡 성공(run 42771724261); Lite 설치파일 빌드 run 42772557097 성공, Release v0.3.0 게시(Lite 48.4 MiB + sha256 + SBOM + 고지) |
+| 2026-11-10 0.6.0 에이전트 전기능 (브랜치 `release/0.6.0`; WIP 34af57f·ee718ff → 통합 커밋은 릴리스 기록 참고) | `DOCULENS_PDFIUM=… cargo test --workspace --no-fail-fast` 코어 333(4 ignored; `settings_catalog` 2건, `planner::tests` 규칙 커버리지·2단계 라우팅·`exec_tests::agent_ops_run_against_the_workspace` 포함)·셸 3·평가 15·통합 1, clippy(-D warnings)·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 125건 99.2%(기준선 재생성); `npm run typecheck`·`npm run build`·`licenses:check`·`nsis:check` 통과, vitest 26파일 147건, Playwright(아래 릴리스 기록) |
 | 2026-11-10 0.5.0 프로젝트 중심 통합 (브랜치 `release/0.5.0`; WIP 94b6803·2661bf5·fcf34d7·bc806be → 통합 커밋은 CI 기록 참고) | `DOCULENS_PDFIUM=… cargo test --workspace --no-fail-fast` 코어 328(4 ignored; `db` 스키마 9→11 마이그레이션 1건, `knowledge::tests` 프로젝트 범위 1건, `planner` 참고 자료 문구·범위 프로젝트·`exec_tests` add_to_project 3건 포함)·셸 3·평가 15·통합 1, clippy(-D warnings)·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(+0.0 pt); `npm run typecheck`·`npm run build`·`licenses:check`·`nsis:check` 통과, vitest 26파일 147건(`aggregate.test` 삭제, `mock-reference.test` 3건 추가), Playwright 54/54(`reference.spec` 5건 + 재작성 스펙; 포크별 실행 44/44·10/10 뒤 통합 전체 1회); CI run 42795675001(3a2a26f) 7개 잡 성공; Lite 설치파일 빌드 run 42797299609 성공(아티팩트 50,824,823 B, publish=false) |
 | 2026-11-10 0.4.0 모델 교체 (WIP 7b939ab·d973eb1·483daae → 통합 커밋은 CI 기록 참고) | `DOCULENS_PDFIUM=… cargo test --workspace --no-fail-fast` 코어 324(4 ignored; `registry`·`modelstore`·`gguf`·`memory`·`engine::presets`·`pipeline::image` Gemma 4 테스트, `knowledge` 접두어 1건, `planner` "4B" 1건 포함)·셸 3·평가 15·통합 1, clippy(-D warnings)·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(기준선 재생성 +0.0 pt, 미달은 mx-10 1건); 실제 엔진 테스트(로컬 b12066 CPU 빌드 + `tiny-gemma4`): 1 passed(137 s; 로드 2.5 s, 채팅·스트리밍 8 델타·json_schema `{"ok": true}`·이미지 채팅(프롬프트 557 토큰)·분류 JSON·KIE 접두·플래너(모델 오류 허용 경로)·양식/NL 스키마(잘림 허용)·초안·규칙 문법 수락; 모델 섹션 `image-min-tokens 512 / image-max-tokens 1024 / ubatch-size 1024`); `npm run typecheck`·`npm run build`·`licenses:check`·`nsis:check` 통과, vitest 26파일 150건, Playwright 53/53; 병렬 에이전트 2개(프런트·문서 / 임베딩·플래너·평가); CI 7개 잡 모두 성공(d238dc4 푸시 이벤트, run 42781321912 — 실제 llama-server 잡은 tiny-gemma4 픽스처); Lite 설치파일 빌드 run 42782108585 성공(`ref=d238dc4`, `publish=false` — 아티팩트 `DocuLens-Setup-Lite-0.4.0-x64` 50,798,147 B, 2027-02-08까지 보관; 이후 사용자 지시로 run 42784292140 `publish=true` → Release v0.4.0 게시, Lite 50,802,945 B) |
 | 2026-11-09 이미지 위 글자 레이어 · 우측 패널 AI 검색/이력 (488af39·9e56dd6) | `cargo test --workspace` 코어 266(3 ignored; `documents::layout` 9·`render` 실 PDFium 문자 박스·`import` 레이아웃 왕복 추가)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과; vitest 23파일 139건(`text-layer.test.ts` 8 추가); Playwright 41/41(`documents`·`knowledge`·`pipeline` 스펙을 레이어·검토 큐 기준으로 재작성); CI 7개 잡 두 커밋 모두 성공 |
@@ -1781,6 +1812,8 @@ P6·P7 항목.
 
 ## 다음 단계 메모 (v1.x)
 
+0000. **0.6.0 에이전트 전기능(2026-11-10)**: `docs/plan/v0.6.0.md` — 위 "0.6.0" 절대로 구현·게시. 남은 것은 체크리스트 "0.6.0" 절(실모델로 계열 선택 정확도·지연 확인)과
+   §5의 범위 밖 항목(초안 편집·휴지통 복원).
 000. **0.5.0 프로젝트 중심 통합(2026-11-10)**: `docs/plan/v0.5.0.md` — 위 "0.5.0" 절대로 구현. 남은 것은 체크리스트 "0.5.0" 절(사용자 PC 확인)과 플래너 `open` op의 옛 화면
    이름(`models`·`knowledge`·`search`·`schemas`·`organize`·`home`)이 새 위치(설정 탭·문서함·어시스턴트)로 열리는지의 확인.
 00. **0.4.0 모델 교체(2026-11-10)**: `docs/plan/v0.4.0.md` — 위 "0.4.0" 절대로 구현·검증 완료. 남은 것은 계획 §9(사용자 PC 실측·골든셋·SHA-256 고정)와

@@ -2671,8 +2671,6 @@ fn quick_settings(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     None
 }
 
-/// Tries the rules in order; `None` leaves the command to the model.
-
 // ---------------------------------------------------------------------------
 // 0.6.0: every GUI function as a command (plan §4 phrases)
 // ---------------------------------------------------------------------------
@@ -3730,6 +3728,7 @@ fn agent_ops(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         .or_else(|| generic_setting_rule(t))
 }
 
+/// Tries the rules in order; `None` leaves the command to the model.
 pub fn plan(text: &str, ctx: &PlanContext) -> Option<Plan> {
     let raw = text.trim();
     if raw.is_empty() {

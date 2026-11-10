@@ -84,7 +84,8 @@ user PC: `docs/RUN-GUIDE.md`.
   architecture — Gemma 4 48 px/token ≤ 1,120, Qwen drop-ins 32 px/token — picked from the model's registry arch by the shell),
   classify, ocr, extract, validate: normalisers / BRN checksum / sum rules / PII masking / confidence, run: orchestrator +
   `extractions/` mirror, review, forms: form registration + NL schemas, split: lopdf split / merge, repo),
-  `planner/` (mod: typed ops / scope / plan (appendix D v1.0 subset), schema: op spec table + PlanSchema grammar, rules:
+  `planner/` (0.6.0: 62 ops — every GUI function; `OpFamily` 8 families for the two-stage model path (family call → family op table /
+  grammar, `plan_schema_for`), `settings_catalog` (46 `set_setting` keys = settings paths + legacy aliases, coercion); mod: typed ops / scope / plan (appendix D v1.0 subset), schema: op spec table + PlanSchema grammar, rules:
   deterministic phrase rules (legacy `RulesFirst` mode + eval), prompts: tiered planner prompt, llm: `PlanMode::ModelFirst`
   (default; slash → pre-router, everything else → model with one re-query; no model → clarification) / `RulesFirst`, validate,
   scope: scope → documents, exec: deterministic executor + previews, guard: a model plan that summarises the library for a sentence

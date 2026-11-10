@@ -464,6 +464,12 @@ flowchart LR
   J --> R[결과 카드 + 인용(문서:페이지:영역)]
 ```
 
+> **0.6.0(2026-11-10, 사용자 결정 "AI 에이전트가 소프트웨어 기능 전부 수행", 계획 `docs/plan/v0.6.0.md`)**: 아래 요지의 GUI 전용 op들은 모두 플래너 op가 되었다
+> (`rotate`·`rerender`·`split`·`merge`·`set_title`·`edit_text`·`set_role`·`manage_reference`·`define_term`·`set_version`·`update_project`·`delete_project`·`remove_from_project`·
+> `manage_template`·`classify_projects`·`manage_schema`·`manage_model`·`workspace`·`maintenance`; `add_to_kb`/`manage_collection` → `manage_reference`, `set_tier`/`set_backend`/
+> `import_model`/`download_model`/`benchmark` → `manage_model`, `open_workspace` → `workspace`). `set_setting.key`는 설정 카탈로그 경로(46개)이고, 모델 호출은 계열 선택 → 계열 op 표의
+> 2단계다. 실제 op 표는 `crates/doculens-core/src/planner/schema.rs`(`OP_SPECS`)가 단일 진실 원천이다.
+
 **플랜 JSON 스키마(요지)**: `intent ∈ {import, set_inbox_watch, render, rotate, split, merge, classify, set_doc_type, ocr, define_schema, register_form, extract, validate, review, reindex, search, answer, explain, aggregate, summarize, compare, draft_document, add_to_kb, manage_collection, define_term, create_project, add_to_project, define_rule, check_consistency, request_supplement, organize, rename, move, tag, delete, export, set_model, set_tier, set_profile, set_backend, import_model, download_model, benchmark, set_theme, set_language, set_setting, set_retention, open, open_workspace, job, engine, undo, redo, help, clarify, noop}`, `scope{folder, doc_ids, filter{doc_type, date_from, date_to, keyword, vendor, status, tags[], min_confidence, review_status}}`, `operations[]`(각 op는 const 타입 + 파라미터, 부록 D), `requires_confirmation`, `confidence`, `clarification_question`. 부록 D의 파라미터 스키마가 검증기의 단일 진실 원천이며, 스키마에 없는 파라미터는 거부된다. 날짜 기준 필드는 `doc_date`(문서 날짜) 기본, 없으면 가져온 날짜 — 결과 카드에 "기준: 문서 날짜" 표기.
 
 **예시 명령 → 플랜**
