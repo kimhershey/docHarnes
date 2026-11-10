@@ -392,6 +392,11 @@ fn open_target(lower: &str) -> Option<Screen> {
     if !OPEN_VERBS.iter().any(|v| lower.contains(v)) {
         return None;
     }
+    // "엔진 켜줘" / "engine on" controls the AI engine (planner `engine` op), it does not open a screen.
+    if (lower.contains("엔진") || lower.contains("engine")) && !lower.contains("화면") && !lower.contains("screen")
+    {
+        return None;
+    }
     let mut candidate = lower.to_string();
     let mut verbs: Vec<&str> = OPEN_VERBS.to_vec();
     verbs.sort_by_key(|v| std::cmp::Reverse(v.len()));

@@ -39,7 +39,7 @@ function plan(ops: Plan["operations"], extra: Partial<Plan> = {}): Plan {
 
 describe("op specs mirror", () => {
   it("covers every op kind with a Korean label", () => {
-    expect(OP_KINDS).toHaveLength(43);
+    expect(OP_KINDS).toHaveLength(62);
     for (const op of OP_KINDS) {
       expect(OP_SPECS[op].op).toBe(op);
       expect(opLabel(op, t)).not.toBe(`planner.ops.${op}`);

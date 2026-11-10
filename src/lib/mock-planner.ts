@@ -19,6 +19,7 @@ import {
   listModelIds,
   loadDocs,
   loadSettings,
+  mockInvoke,
   mockRoute,
   pace,
   pauseJob,
@@ -112,6 +113,8 @@ import {
 } from "./types";
 import { carriedText } from "./carried-text";
 import { docTypeAliases } from "./doc-type-aliases";
+import { coerceSettingValue, resolveSettingKey, settingSpec } from "./settingsCatalog";
+import { isJobFinished, type Collection, type GlossaryEntry, type ClassifyResult, type ClassifyApplyResult, type ProjectTemplate } from "./types";
 
 /** File-operation journal (`{ batches, entries }`, batches tagged with their workspace). */
 const JOURNAL_KEY = "doculens.mock.journal";
@@ -213,7 +216,7 @@ function messageOf(e: unknown): string {
 // Plans: op helpers (planner/mod.rs)
 // ---------------------------------------------------------------------------
 
-const UI_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["define_schema", "set_model", "set_profile", "set_theme", "set_language", "set_setting", "open", "job", "engine", "help", "clarify", "noop", "reindex", "set_inbox_watch", "register_form", "set_retention"]);
+const UI_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["define_schema", "set_model", "set_profile", "set_theme", "set_language", "set_setting", "open", "job", "engine", "help", "clarify", "noop", "reindex", "set_inbox_watch", "register_form", "set_retention", "manage_model", "workspace", "maintenance"]);
 
 /** Ops the UI / shell performs itself (`OpKind::runs_in_ui`). */
 export function runsInUi(kind: OpKind): boolean {
@@ -242,9 +245,33 @@ export function needsConfirmation(op: Op): boolean {
     case "job":
       return op.action === "cancel";
     case "engine":
-      return op.action === "restart";
+      return op.action === "restart" || op.action === "stop";
     case "review":
       return op.action === "approve" || op.action === "correct" || op.action === "reject";
+    // 0.6.0 (plan §1): new files, text edits, deletions, network and workspace changes are shown first.
+    case "import":
+      return op.source === "folder" || op.source === "files";
+    case "split":
+    case "merge":
+    case "edit_text":
+    case "delete_project":
+      return true;
+    case "manage_reference":
+      return op.action === "delete";
+    case "manage_template":
+      return op.action === "delete";
+    case "classify_projects":
+      return op.apply === true;
+    case "manage_schema":
+      return op.action === "delete";
+    case "manage_model":
+      return op.action === "download" || op.action === "delete";
+    case "workspace":
+      return op.action === "close" || op.action === "forget";
+    case "maintenance":
+      return op.action === "purge_now";
+    case "set_setting":
+      return settingSpec(op.key)?.confirm === true;
     default:
       return false;
   }
@@ -582,12 +609,436 @@ function ruleJobControl(t: Text): Plan | null {
 
 function ruleEngine(t: Text): Plan | null {
   if (!has(t, ["엔진", "engine", "llama"])) return null;
-  let action: "restart" | "sleep" | "wake";
+  let action: "start" | "stop" | "restart" | "sleep" | "wake";
   if (has(t, ["재시작", "다시시작", "restart", "reboot"])) action = "restart";
   else if (has(t, ["슬립", "재워", "sleep", "잠재"])) action = "sleep";
   else if (has(t, ["깨워", "wake"])) action = "wake";
+  else if (has(t, ["꺼", "끄", "정지", "중지", "종료", "stop", "shutdown", "shut down", "turnoff"])) action = "stop";
+  else if (has(t, ["켜", "시작", "기동", "start", "turnon", "launch"])) action = "start";
   else return null;
-  return single({ op: "engine", action }, 0.9, tr(t.ko, "엔진을 제어합니다", "Control the engine"));
+  return single({ op: "engine", action }, 0.9, tr(t.ko, { start: "AI 엔진을 시작합니다", stop: "AI 엔진을 정지합니다", restart: "AI 엔진을 재시작합니다", sleep: "모델을 내려 엔진을 재웁니다", wake: "엔진을 깨웁니다" }[action], { start: "Start the AI engine", stop: "Stop the AI engine", restart: "Restart the AI engine", sleep: "Unload the models", wake: "Wake the engine" }[action]));
+}
+
+// -- 0.6.0 rules (plan §4): every screen action as a command --------------------------
+
+function quotedOf(raw: string): string | null {
+  return raw.match(/[“"']([^”"']{1,120})[”"']/u)?.[1]?.trim() ?? null;
+}
+
+function firstNumber(raw: string): number | null {
+  const m = raw.replace(/,/g, "").match(/(\d+(?:\.\d+)?)/);
+  return m ? Number(m[1]) : null;
+}
+
+function pathOf(raw: string): string | null {
+  return raw.match(/([A-Za-z]:\\[^\s"'“”]+|\\\\[^\s"'“”]+|\/(?:[^\s"'“”]+))/u)?.[1] ?? null;
+}
+
+function docScope(t: Text, ctx: PlanContext): Scope {
+  const ids = has(t, SELECTION_WORDS) || ctx.selected_doc_ids.length > 0 ? selectionIds(ctx) : ctx.current_document ? [ctx.current_document] : [];
+  return ids.length > 0 ? { ...emptyScope(), doc_ids: ids } : emptyScope();
+}
+
+/** "이 문서 90도 돌려줘", "rotate the selected pages 180 degrees". */
+function ruleRotate(t: Text, ctx: PlanContext): Plan | null {
+  if (has(t, ["되돌", "revert", "undo"])) return null;
+  if (!has(t, ["회전", "돌려", "rotate", "turn"])) return null;
+  const n = firstNumber(t.raw);
+  const degrees = n === 180 || n === 270 ? n : n === -90 || has(t, ["반시계", "왼쪽", "counter", "left"]) ? 270 : 90;
+  if (n != null && ![90, 180, 270, -90].includes(n)) return null;
+  const scope = docScope(t, ctx);
+  if (!scope.doc_ids?.length) return clarify(tr(t.ko, "어떤 문서를 회전할까요? 문서를 열거나 선택해 주세요.", "Which document should be rotated? Open or select one."), 0.5);
+  const pages = ctx.current_page != null && has(t, ["이페이지", "이쪽", "현재페이지", "thispage"]) ? [ctx.current_page] : [];
+  return single({ op: "rotate", degrees, pages }, 0.9, tr(t.ko, `${pages.length > 0 ? `${pages[0]}쪽을` : "문서를"} ${degrees}도 회전합니다 (원본 불변)`, `Rotate ${pages.length > 0 ? `page ${pages[0]}` : "the document"} by ${degrees}° (originals untouched)`), scope);
+}
+
+/** "선택한 문서 300 DPI로 다시 렌더", "re-render at 200 dpi". */
+function ruleRerender(t: Text, ctx: PlanContext): Plan | null {
+  if (!has(t, ["다시렌더", "재렌더", "렌더다시", "rerender", "re-render", "renderagain"])) return null;
+  const dpi = t.compact.includes("dpi") ? firstNumber(t.raw) : null;
+  const scope = has(t, ALL_WORDS) ? emptyScope() : docScope(t, ctx);
+  return single({ op: "rerender", dpi: dpi ?? null }, 0.88, tr(t.ko, `페이지 이미지를 다시 만듭니다${dpi ? ` (${dpi} DPI)` : ""}`, `Re-render the page images${dpi ? ` at ${dpi} DPI` : ""}`), scope);
+}
+
+/** "3쪽부터 나눠줘", "5쪽마다 분할", "split every 4 pages". */
+function ruleSplit(t: Text, ctx: PlanContext): Plan | null {
+  if (!has(t, ["나눠", "나누", "분할", "split"])) return null;
+  if (!has(t, ["쪽", "페이지", "page", "문서", "document"])) return null;
+  const every = t.raw.match(/(\d+)\s*(?:쪽|페이지|pages?)\s*(?:마다|씩|every)/u)?.[1] ?? t.raw.match(/every\s+(\d+)\s*pages?/iu)?.[1] ?? null;
+  const starts = [...t.raw.matchAll(/(\d+)\s*(?:쪽|페이지|page)\s*(?:부터|에서|at|from)?/giu)].map((m) => Number(m[1])).filter((n) => n >= 2);
+  const scope = docScope(t, ctx);
+  if (!scope.doc_ids?.length) return clarify(tr(t.ko, "어떤 문서를 나눌까요? 문서를 열거나 선택해 주세요.", "Which document should be split? Open or select one."), 0.5);
+  const op: Op = every ? { op: "split", boundaries: [], every: Number(every) } : { op: "split", boundaries: [...new Set(starts)].sort((a, b) => a - b), every: null };
+  if (!every && (op.op !== "split" || op.boundaries!.length === 0)) return clarify(tr(t.ko, "몇 쪽에서 나눌까요? 예: '3쪽부터 나눠줘' 또는 '5쪽마다 분할'", "At which page? e.g. 'split at page 3' or 'every 5 pages'"), 0.5);
+  return single(op, 0.88, tr(t.ko, every ? `${every}쪽마다 새 문서로 나눕니다` : `${starts.join(", ")}쪽부터 새 문서로 나눕니다`, every ? `Split every ${every} pages` : `Split at page ${starts.join(", ")}`), scope);
+}
+
+/** "선택한 문서 하나로 합쳐 '계약 묶음'", "merge the selected documents". */
+function ruleMerge(t: Text, ctx: PlanContext): Plan | null {
+  if (!has(t, ["합쳐", "합치", "병합", "하나로", "merge", "combine"])) return null;
+  if (has(t, ["셀", "cell", "표를", "프로젝트", "project"])) return null;
+  const ids = selectionIds(ctx);
+  if (ids.length < 2) return clarify(tr(t.ko, "합칠 문서를 2개 이상 선택해 주세요.", "Select two or more documents to merge."), 0.5);
+  const name = quotedOf(t.raw);
+  return single({ op: "merge", name }, 0.88, tr(t.ko, `문서 ${ids.length}건을 하나의 PDF로 합칩니다${name ? ` ('${name}')` : ""}`, `Merge ${ids.length} documents into one PDF${name ? ` ('${name}')` : ""}`), { ...emptyScope(), doc_ids: ids });
+}
+
+/** "제목을 '2026 공급계약'으로", "set the title to 'Supply contract'". */
+function ruleSetTitle(t: Text, ctx: PlanContext): Plan | null {
+  if (!has(t, ["제목", "title"])) return null;
+  if (has(t, ["프로젝트", "project", "묶음", "group", "템플릿", "template", "양식", "schema"])) return null;
+  const title = quotedOf(t.raw);
+  if (!title) return null;
+  const scope = docScope(t, ctx);
+  if (!scope.doc_ids?.length) return clarify(tr(t.ko, "어떤 문서의 제목을 바꿀까요? 문서를 열거나 선택해 주세요.", "Which document's title? Open or select one."), 0.5);
+  return single({ op: "set_title", title }, 0.9, tr(t.ko, `제목을 '${title}'(으)로 바꿉니다`, `Set the title to '${title}'`), scope);
+}
+
+/** "'㈜한빛'을 '(주)한빛'으로 바꿔줘", "replace 'A' with 'B'". */
+function ruleEditText(t: Text, ctx: PlanContext): Plan | null {
+  if (has(t, ["제목", "title", "프로젝트", "project", "이름을", "rename", "폴더", "folder", "태그", "tag", "묶음", "용어", "glossary", "모델", "model", "테마", "theme", "언어", "language", "설정", "setting"])) return null;
+  const pair = [...t.raw.matchAll(/[“"']([^”"']{1,80})[”"']/gu)].map((m) => m[1]!);
+  if (pair.length < 2) return null;
+  if (!has(t, ["바꿔", "바꾸", "고쳐", "수정", "치환", "replace", "change", "correct"])) return null;
+  const scope = docScope(t, ctx);
+  if (!scope.doc_ids?.length) return clarify(tr(t.ko, "어떤 문서의 글자를 바꿀까요? 문서를 열거나 선택해 주세요.", "In which document? Open or select one."), 0.5);
+  return single({ op: "edit_text", find: pair[0]!, replace: pair[1]!, pages: [] }, 0.86, tr(t.ko, `'${pair[0]}'을(를) '${pair[1]}'(으)로 바꿉니다 (쪽 글자, 이력 저장)`, `Replace '${pair[0]}' with '${pair[1]}' in the page text (history kept)`), scope);
+}
+
+/** "이 문서를 참고 자료로 표시", "mark the selected documents as work documents". */
+function ruleSetRole(t: Text, ctx: PlanContext): Plan | null {
+  if (!has(t, ["표시", "mark", "역할", "role", "로지정", "로 지정", "분류해", "treat"])) return null;
+  if (has(t, ["묶음", "group", "프로젝트에", "project"])) return null;
+  const role: "work" | "knowledge" | "form" | null = has(t, ["참고자료", "참고문서", "지식문서", "reference", "knowledge"]) ? "knowledge" : has(t, ["업무문서", "업무 문서", "workdocument", "work document"]) ? "work" : has(t, ["양식으로", "양식 으로", "asaform", "as form"]) ? "form" : null;
+  if (!role) return null;
+  const scope = docScope(t, ctx);
+  if (!scope.doc_ids?.length) return clarify(tr(t.ko, "어떤 문서의 역할을 바꿀까요? 문서를 열거나 선택해 주세요.", "Which documents? Open or select them."), 0.5);
+  const label = { work: tr(t.ko, "업무 문서", "work document"), knowledge: tr(t.ko, "참고 자료", "reference material"), form: tr(t.ko, "양식", "form") }[role];
+  return single({ op: "set_role", role }, 0.88, tr(t.ko, `문서 ${scope.doc_ids.length}건을 ${label}(으)로 표시합니다`, `Mark ${scope.doc_ids.length} documents as ${label}`), scope);
+}
+
+/** "'사규' 참고 자료 묶음 만들어", "선택 문서를 사규 묶음에 넣어", "보류 묶음 사용 안 함", "delete the reference group 'Policies'". */
+function ruleReference(t: Text, ctx: PlanContext): Plan | null {
+  if (!has(t, ["묶음", "참고자료그룹", "referencegroup", "reference group", "collection"])) return null;
+  const quoted = quotedOf(t.raw);
+  const before = t.raw.split(/묶음|reference group|collection/iu)[0] ?? "";
+  const nameFromText = before.replace(/(참고\s*자료|새|신규|new|the|reference|이라는|라는|이름의|이름으로|으로|로|에|을|를|the)\s*/giu, "").trim().replace(/[“"']/g, "").split(/\s+/).filter(Boolean).slice(-2).join(" ") || null;
+  const nameOf = () => quoted ?? nameFromText;
+  const projectRef = has(t, ["프로젝트", "project"]) ? projectRefOf(t, ctx) : null;
+  const ids = selectionIds(ctx);
+  let op: Op;
+  let what: string;
+  if (has(t, ["만들어", "만들", "생성", "새묶음", "새 묶음", "create", "new"])) {
+    const name = nameOf();
+    if (!name) return clarify(tr(t.ko, "묶음 이름을 알려 주세요. 예: '사규' 참고 자료 묶음 만들어", "What should the group be called? e.g. create the reference group 'Policies'"), 0.5);
+    op = { op: "manage_reference", action: "create", group: null, name, project: projectRef };
+    what = tr(t.ko, `참고 자료 묶음 '${name}'을(를) 만듭니다`, `Create the reference group '${name}'`);
+  } else if (has(t, ["이름을", "이름바꿔", "rename"])) {
+    const pair = [...t.raw.matchAll(/[“"']([^”"']{1,80})[”"']/gu)].map((m) => m[1]!);
+    const group = pair[0] ?? nameFromText;
+    const name = pair[1] ?? pair[0] ?? null;
+    if (!group || !name) return clarify(tr(t.ko, "어느 묶음을 어떤 이름으로 바꿀까요? 예: '사규' 묶음 이름을 '사내 규정'으로", "Which group and which new name? e.g. rename the group 'Policies' to 'Company rules'"), 0.5);
+    op = { op: "manage_reference", action: "rename", group, name, project: projectRef };
+    what = tr(t.ko, `묶음 '${group}'의 이름을 '${name}'(으)로 바꿉니다`, `Rename the group '${group}' to '${name}'`);
+  } else if (has(t, ["삭제", "지워", "지우", "delete", "remove the group"])) {
+    const group = nameOf();
+    if (!group) return clarify(tr(t.ko, "어느 묶음을 지울까요?", "Which group should be deleted?"), 0.5);
+    op = { op: "manage_reference", action: "delete", group, name: null, project: projectRef };
+    what = tr(t.ko, `묶음 '${group}'을(를) 삭제합니다 (문서는 남음)`, `Delete the group '${group}' (documents stay)`);
+  } else if (has(t, ["사용안함", "사용 안", "비활성", "꺼", "끄", "disable", "deactivate", "turn off"])) {
+    const group = nameOf();
+    if (!group) return clarify(tr(t.ko, "어느 묶음을 사용 안 함으로 둘까요?", "Which group should be disabled?"), 0.5);
+    op = { op: "manage_reference", action: "disable", group, name: null, project: projectRef };
+    what = tr(t.ko, `묶음 '${group}'을(를) 근거에서 제외합니다`, `Disable the group '${group}'`);
+  } else if (has(t, ["사용함", "활성", "켜", "enable", "activate", "turn on"])) {
+    const group = nameOf();
+    if (!group) return clarify(tr(t.ko, "어느 묶음을 사용할까요?", "Which group should be enabled?"), 0.5);
+    op = { op: "manage_reference", action: "enable", group, name: null, project: projectRef };
+    what = tr(t.ko, `묶음 '${group}'을(를) 다시 사용합니다`, `Enable the group '${group}'`);
+  } else if (has(t, ["빼", "제거", "remove"])) {
+    const group = nameOf();
+    if (!group && !projectRef) return clarify(tr(t.ko, "어느 묶음에서 뺄까요?", "From which group?"), 0.5);
+    if (ids.length === 0) return clarify(tr(t.ko, "뺄 문서를 선택해 주세요.", "Select the documents to remove."), 0.5);
+    op = { op: "manage_reference", action: "remove", group, name: null, project: projectRef };
+    what = tr(t.ko, `문서 ${ids.length}건을 묶음에서 뺍니다`, `Remove ${ids.length} documents from the group`);
+    return single(op, 0.86, what, { ...emptyScope(), doc_ids: ids });
+  } else if (has(t, ["넣어", "추가", "담아", "add", "put"])) {
+    const group = nameOf();
+    if (!group && !projectRef) return clarify(tr(t.ko, "어느 묶음에 넣을까요?", "Into which group?"), 0.5);
+    if (ids.length === 0) return clarify(tr(t.ko, "넣을 문서를 선택해 주세요.", "Select the documents to add."), 0.5);
+    op = { op: "manage_reference", action: "add", group, name: null, project: projectRef };
+    what = tr(t.ko, `문서 ${ids.length}건을 참고 자료 묶음에 넣습니다 (역할: 참고 자료)`, `Add ${ids.length} documents to the reference group`);
+    return single(op, 0.86, what, { ...emptyScope(), doc_ids: ids });
+  } else return null;
+  return single(op, 0.86, what);
+}
+
+/** "용어 'MM'은 '맨먼스'로 등록", "용어 'MM' 삭제", "add the glossary term 'SLA' meaning 'service level agreement'". */
+function ruleDefineTerm(t: Text): Plan | null {
+  if (!has(t, ["용어", "glossary", "term "])) return null;
+  const pair = [...t.raw.matchAll(/[“"']([^”"']{1,80})[”"']/gu)].map((m) => m[1]!);
+  const term = pair[0] ?? null;
+  if (!term) return null;
+  if (has(t, ["삭제", "지워", "지우", "delete", "remove"])) return single({ op: "define_term", action: "delete", term, definition: null, synonyms: [] }, 0.9, tr(t.ko, `용어 '${term}'을(를) 용어집에서 지웁니다`, `Delete the term '${term}'`));
+  if (!has(t, ["등록", "저장", "추가", "정의", "뜻", "의미", "register", "save", "add", "define", "meaning"])) return null;
+  const definition = pair[1] ?? null;
+  const synonyms = pair.slice(2);
+  return single({ op: "define_term", action: "save", term, definition, synonyms }, 0.9, tr(t.ko, `용어 '${term}'${definition ? ` = '${definition}'` : ""}을(를) 용어집에 저장합니다`, `Save the term '${term}'${definition ? ` = '${definition}'` : ""}`));
+}
+
+/** "이 문서를 2024년판으로 표시", "이 문서는 구판이야", "mark this as the latest edition of '출장비 규정'". */
+function ruleSetVersion(t: Text, ctx: PlanContext): Plan | null {
+  if (!has(t, ["년판", "판으로", "구판", "신판", "최신본", "개정판", "버전으로", "edition", "version"])) return null;
+  if (has(t, ["앱", "app", "모델", "model", "엔진", "engine"])) return null;
+  const scope = docScope(t, ctx);
+  if (!scope.doc_ids?.length) return clarify(tr(t.ko, "어떤 문서의 판본을 표시할까요? 문서를 열거나 선택해 주세요.", "Which document? Open or select one."), 0.5);
+  if (has(t, ["판본지워", "판본 지워", "판본해제", "clear the version", "not a version"])) return single({ op: "set_version", clear: true }, 0.86, tr(t.ko, "판본 표시를 지웁니다", "Clear the version mark"), scope);
+  const label = t.raw.match(/(\d{4}\s*년\s*판|\d{4}년\s*개정판|v?\d+(?:\.\d+)*\s*판)/u)?.[1]?.replace(/\s+/g, "") ?? null;
+  const latest = has(t, ["구판", "옛판", "old", "superseded", "previous"]) ? false : true;
+  const groupKey = quotedOf(t.raw);
+  return single({ op: "set_version", group_key: groupKey, label, effective_date: null, latest, clear: false }, 0.84, tr(t.ko, `${label ?? (latest ? "최신본" : "구판")}으로 표시합니다${groupKey ? ` ('${groupKey}' 판본군)` : ""}`, `Mark as ${label ?? (latest ? "the latest edition" : "an older edition")}${groupKey ? ` of '${groupKey}'` : ""}`), scope);
+}
+
+/** "한빛 심사 프로젝트 이름을 '한빛 2차'로", "한빛 심사 프로젝트 종료일 12월 31일", "담당을 김민수로". */
+function ruleUpdateProject(t: Text, ctx: PlanContext): Plan | null {
+  if (!has(t, ["프로젝트", "project"])) return null;
+  if (has(t, ["만들어", "생성", "create", "삭제", "지워", "delete", "추가", "넣어", "add", "빼", "remove", "분류", "classify", "템플릿", "template"])) return null;
+  const ref = projectRefOf(t, ctx) ?? ctx.current_project ?? null;
+  const quoted = quotedOf(t.raw);
+  const fields: Partial<Extract<Op, { op: "update_project" }>> = {};
+  if (has(t, ["이름을", "이름은", "이름바꿔", "rename", "name to"]) && quoted) fields.name = quoted;
+  const dateOfWord = (words: string[]): string | null => {
+    if (!has(t, words)) return null;
+    const m = t.raw.match(/(\d{4})[-./년]\s*(\d{1,2})[-./월]\s*(\d{1,2})일?/u) ?? t.raw.match(/(\d{1,2})월\s*(\d{1,2})일/u);
+    if (!m) return null;
+    const y = m.length === 4 ? m[1]! : String(new Date(`${ctx.today}T12:00:00`).getFullYear());
+    const mo = (m.length === 4 ? m[2] : m[1])!.padStart(2, "0");
+    const d = (m.length === 4 ? m[3] : m[2])!.padStart(2, "0");
+    return `${y}-${mo}-${d}`;
+  };
+  const end = dateOfWord(["종료일", "마감", "끝나는", "end date", "deadline", "due"]);
+  const start = dateOfWord(["시작일", "착수", "start date", "starts"]);
+  if (end) fields.end_date = end;
+  if (start) fields.start_date = start;
+  if (has(t, ["담당", "owner", "pm을", "pm은"])) {
+    const owner = quoted ?? t.raw.match(/담당(?:자)?(?:을|은|는|를)?\s*([가-힣A-Za-z]{2,10})(?:으로|로|에게|\s|$)/u)?.[1] ?? null;
+    if (owner && !fields.name) fields.owner = owner;
+  }
+  if (has(t, ["접수번호", "intake"])) {
+    const no = t.raw.match(/(\d{4}-\d{2,4})/u)?.[1] ?? quoted;
+    if (no) fields.intake_no = no;
+  }
+  if (has(t, ["키워드", "keyword"])) {
+    const kws = [...t.raw.matchAll(/[“"']([^”"']{1,40})[”"']/gu)].map((m) => m[1]!);
+    if (kws.length > 0) fields.keywords = kws;
+  }
+  if (Object.keys(fields).length === 0) return null;
+  const name = ref ? ctx.projects.find((p) => p.id === ref)?.name : null;
+  const desc = Object.entries(fields).map(([k, v]) => `${k}=${Array.isArray(v) ? v.join("/") : String(v)}`).join(", ");
+  return single({ op: "update_project", project: ref, ...fields }, 0.86, tr(t.ko, `${name ? `'${name}' ` : ""}프로젝트를 수정합니다 (${desc})`, `Update the project${name ? ` '${name}'` : ""} (${desc})`));
+}
+
+/** "한빛 심사 프로젝트 삭제", "delete the project 'Acme'". */
+function ruleDeleteProject(t: Text, ctx: PlanContext): Plan | null {
+  if (!has(t, ["프로젝트", "project"])) return null;
+  if (!has(t, ["삭제", "지워", "지우", "없애", "delete", "remove the project"])) return null;
+  if (has(t, ["에서", "from the project", "문서를", "묶음", "템플릿", "template", "규칙", "rule"])) return null;
+  const ref = projectRefOf(t, ctx) ?? ctx.current_project ?? null;
+  const name = ref ? ctx.projects.find((p) => p.id === ref)?.name : null;
+  return single({ op: "delete_project", project: ref }, 0.88, tr(t.ko, `${name ? `'${name}' ` : ""}프로젝트를 삭제합니다 (문서는 문서함에 남음)`, `Delete the project${name ? ` '${name}'` : ""} (documents stay)`));
+}
+
+/** "선택 문서를 프로젝트에서 빼줘", "remove the selected documents from the project". */
+function ruleRemoveFromProject(t: Text, ctx: PlanContext): Plan | null {
+  if (!has(t, ["프로젝트에서", "from the project", "from project"])) return null;
+  if (!has(t, ["빼", "제외", "제거", "remove", "take out"])) return null;
+  const ref = projectRefOf(t, ctx) ?? ctx.current_project ?? null;
+  const ids = selectionIds(ctx);
+  if (ids.length === 0) return clarify(tr(t.ko, "프로젝트에서 뺄 문서를 선택해 주세요.", "Select the documents to remove from the project."), 0.5);
+  return single({ op: "remove_from_project", project: ref, doc_ids: ids }, 0.88, tr(t.ko, `문서 ${ids.length}건을 프로젝트에서 뺍니다`, `Remove ${ids.length} documents from the project`), { ...emptyScope(), doc_ids: ids });
+}
+
+/** "'유지보수 2' 프로젝트 템플릿 삭제", "프로젝트 템플릿 '감리' 만들어 (요구사항 정의서, 테스트 결과서 필수)". */
+function ruleManageTemplate(t: Text, ctx: PlanContext): Plan | null {
+  if (!has(t, ["프로젝트템플릿", "프로젝트 템플릿", "project template"])) return null;
+  const quoted = quotedOf(t.raw);
+  if (has(t, ["삭제", "지워", "delete", "remove"])) {
+    const tpl = quoted ? mp.resolveTemplateRef(quoted) : (mp.templates().find((x) => t.compact.includes(compact(x.name_ko)) && !x.builtin) ?? null);
+    if (!tpl && !quoted) return clarify(tr(t.ko, "어느 프로젝트 템플릿을 지울까요?", "Which project template?"), 0.5);
+    return single({ op: "manage_template", action: "delete", template: tpl?.id ?? quoted, name: null, doc_types_required: [], description: null }, 0.88, tr(t.ko, `프로젝트 템플릿 '${tpl?.name_ko ?? quoted}'을(를) 삭제합니다`, `Delete the project template '${tpl?.name_en ?? quoted}'`));
+  }
+  if (!has(t, ["만들어", "생성", "저장", "추가", "create", "save", "add", "new"])) return null;
+  if (!quoted) return clarify(tr(t.ko, "템플릿 이름을 알려 주세요. 예: 프로젝트 템플릿 '감리' 만들어", "What should the template be called?"), 0.5);
+  const required = ctx.doc_types.filter((d) => t.compact.includes(compact(d.label_ko)) || t.compact.includes(compact(d.label_en))).map((d) => d.slug);
+  return single({ op: "manage_template", action: "save", template: null, name: quoted, doc_types_required: required, description: null }, 0.86, tr(t.ko, `프로젝트 템플릿 '${quoted}'을(를) 만듭니다${required.length > 0 ? ` (필수 문서 ${required.length}종)` : ""}`, `Create the project template '${quoted}'${required.length > 0 ? ` (${required.length} required types)` : ""}`));
+}
+
+/** "미배정 문서 프로젝트로 자동 분류", "선택 문서를 프로젝트로 분류해서 적용". */
+function ruleClassifyProjects(t: Text, ctx: PlanContext): Plan | null {
+  if (!has(t, ["자동분류", "자동 분류", "프로젝트로분류", "프로젝트로 분류", "프로젝트별로분류", "classify into projects", "autoclassify", "auto-classify", "assign to projects"])) return null;
+  const ids = has(t, SELECTION_WORDS) ? selectionIds(ctx) : [];
+  const apply = has(t, ["적용", "바로", "배정해", "assign", "apply"]);
+  return single({ op: "classify_projects", apply, use_model: has(t, ["모델", "model", "ai"]) }, 0.86, tr(t.ko, `${ids.length > 0 ? `문서 ${ids.length}건` : "미배정 문서"}을 프로젝트로 자동 분류합니다${apply ? " (바로 적용)" : " (미리보기)"}`, `Classify ${ids.length > 0 ? `${ids.length} documents` : "unassigned documents"} into projects${apply ? " (apply)" : " (preview)"}`), ids.length > 0 ? { ...emptyScope(), doc_ids: ids } : emptyScope());
+}
+
+/** "견적서 양식 기본으로", "요구사항 정의서 양식 끄기", "'휴가신청서' 양식 삭제", "rename the form 'X' to 'Y'". */
+function ruleManageSchema(t: Text, ctx: PlanContext): Plan | null {
+  if (!has(t, ["양식", "스키마", "추출항목", "추출 항목", "schema", "form"])) return null;
+  if (has(t, ["등록", "register", "필드", "field", "만들어", "create", "채워", "fill", "작성", "draft"])) return null;
+  const quoted = quotedOf(t.raw);
+  const schema = (quoted ? ctxSchema(ctx, quoted) : null) ?? ctx.schemas.filter((s) => compact(s.name).length >= 2 && t.compact.includes(compact(s.name))).sort((a, b) => b.name.length - a.name.length)[0] ?? (ctxDocType(ctx, t.raw) ? schemaForType(ctx, ctxDocType(ctx, t.raw)!.slug) : null);
+  let action: "enable" | "disable" | "set_default" | "delete" | "rename";
+  if (has(t, ["기본으로", "기본값으로", "기본양식", "default"])) action = "set_default";
+  else if (has(t, ["끄", "꺼", "비활성", "숨겨", "숨기", "disable", "hide", "turn off"])) action = "disable";
+  else if (has(t, ["켜", "활성", "다시보이", "enable", "show again", "turn on"])) action = "enable";
+  else if (has(t, ["삭제", "지워", "지우", "delete", "remove"])) action = "delete";
+  else if (has(t, ["이름을", "이름바꿔", "rename"])) action = "rename";
+  else return null;
+  if (!schema) return clarify(tr(t.ko, "어느 양식을 말씀하시나요? 설정 > 양식·추출 항목의 이름으로 말씀해 주세요.", "Which form / schema? Use its name from 설정 > 양식·추출 항목."), 0.5);
+  const pair = [...t.raw.matchAll(/[“"']([^”"']{1,80})[”"']/gu)].map((m) => m[1]!);
+  const name = action === "rename" ? (pair[1] ?? (pair[0] && compact(pair[0]) !== compact(schema.name) ? pair[0] : null)) : null;
+  if (action === "rename" && !name) return clarify(tr(t.ko, "새 이름을 따옴표로 알려 주세요.", "Give the new name in quotes."), 0.5);
+  const label = { enable: tr(t.ko, "켭니다", "enable"), disable: tr(t.ko, "끕니다(숨김)", "disable"), set_default: tr(t.ko, "유형의 기본으로 둡니다", "make the default"), delete: tr(t.ko, "삭제합니다", "delete"), rename: tr(t.ko, `이름을 '${name}'(으)로 바꿉니다`, `rename to '${name}'`) }[action];
+  return single({ op: "manage_schema", action, schema: schema.id, name }, 0.88, tr(t.ko, `양식 '${schema.name}'을(를) ${label}`, `${label[0]!.toUpperCase()}${label.slice(1)} the form '${schema.name}'`));
+}
+
+const TIER_WORDS: [string[], "auto" | "cpu_only" | "vram_6gb" | "vram_8gb" | "vram_12gb" | "vram_16gb" | "vram_24gb_plus"][] = [
+  [["자동", "auto"], "auto"],
+  [["cpu", "씨피유"], "cpu_only"],
+  [["6gb", "6기가"], "vram_6gb"],
+  [["8gb", "8기가"], "vram_8gb"],
+  [["12gb", "12기가"], "vram_12gb"],
+  [["16gb", "16기가"], "vram_16gb"],
+  [["24gb", "24기가"], "vram_24gb_plus"],
+];
+
+/** "12B 모델 받아줘", "모델 폴더 D:\\models\\x 가져와", "티어를 8GB로", "백엔드 Vulkan으로", "모델 테스트". */
+function ruleManageModel(t: Text, ctx: PlanContext): Plan | null {
+  if (has(t, ["티어", "tier"])) {
+    const hit = TIER_WORDS.find(([w]) => w.some((x) => t.compact.includes(x)));
+    if (!hit) return clarify(tr(t.ko, "어느 티어로 둘까요? 자동 / CPU / 6·8·12·16·24 GB", "Which tier? auto / CPU / 6·8·12·16·24 GB"), 0.5);
+    return single({ op: "manage_model", action: "set_tier", id: null, tier: hit[1], backend: null, path: null }, 0.9, tr(t.ko, `모델 티어를 ${hit[1] === "auto" ? "자동" : hit[1]}(으)로 둡니다`, `Set the model tier to ${hit[1]}`));
+  }
+  if (has(t, ["백엔드", "backend"])) {
+    const backend = (["cuda", "vulkan", "cpu", "auto"] as const).find((b) => t.compact.includes(b)) ?? (has(t, ["자동"]) ? "auto" : null);
+    if (!backend) return clarify(tr(t.ko, "어느 백엔드로 둘까요? auto / CUDA / Vulkan / CPU", "Which backend? auto / CUDA / Vulkan / CPU"), 0.5);
+    return single({ op: "manage_model", action: "set_backend", id: null, tier: null, backend, path: null }, 0.9, tr(t.ko, `엔진 백엔드를 ${backend}(으)로 둡니다 (엔진 재시작)`, `Set the engine backend to ${backend} (restarts the engine)`));
+  }
+  if (!has(t, ["모델", "model", "gguf"])) return null;
+  const id = modelId(t, ctx);
+  if (has(t, ["받아", "다운로드", "내려받", "download", "fetch"])) {
+    if (!id) return clarify(tr(t.ko, "어느 모델을 받을까요? 예: 12B 모델 받아줘", "Which model? e.g. download the 12B model"), 0.5);
+    return single({ op: "manage_model", action: "download", id, tier: null, backend: null, path: null }, 0.9, tr(t.ko, `모델 ${id}을(를) 내려받습니다 (네트워크)`, `Download the model ${id} (network)`));
+  }
+  const path = pathOf(t.raw);
+  if (has(t, ["가져와", "가져오", "불러와", "등록", "import", "install"]) && path) return single({ op: "manage_model", action: "import", id: null, tier: null, backend: null, path }, 0.9, tr(t.ko, `${path}의 GGUF를 모델 폴더로 가져옵니다`, `Import the GGUF at ${path}`));
+  if (has(t, ["삭제", "지워", "지우", "delete", "remove"])) {
+    if (!id) return clarify(tr(t.ko, "어느 모델을 지울까요?", "Which model should be deleted?"), 0.5);
+    return single({ op: "manage_model", action: "delete", id, tier: null, backend: null, path: null }, 0.88, tr(t.ko, `모델 ${id}의 파일을 삭제합니다`, `Delete the files of ${id}`));
+  }
+  if (has(t, ["검증", "해시", "verify", "checksum", "hash"])) {
+    if (!id) return clarify(tr(t.ko, "어느 모델을 검증할까요?", "Which model should be verified?"), 0.5);
+    return single({ op: "manage_model", action: "verify", id, tier: null, backend: null, path: null }, 0.88, tr(t.ko, `모델 ${id}의 SHA-256을 검증합니다`, `Verify the SHA-256 of ${id}`));
+  }
+  if (has(t, ["테스트", "벤치", "시험", "benchmark", "test"])) return single({ op: "manage_model", action: "benchmark", id, tier: null, backend: null, path: null }, 0.88, tr(t.ko, "모델 테스트(한국어 응답·tok/s)를 실행합니다", "Run the model test (Korean reply, tok/s)"));
+  if (has(t, ["언로드", "내려", "unload"])) return single({ op: "manage_model", action: "unload", id, tier: null, backend: null, path: null }, 0.88, tr(t.ko, "모델을 메모리에서 내립니다", "Unload the model"));
+  if (has(t, ["로드", "올려", "불러", "load"]) && id) return single({ op: "manage_model", action: "load", id, tier: null, backend: null, path: null }, 0.88, tr(t.ko, `모델 ${id}을(를) 로드합니다`, `Load the model ${id}`));
+  return null;
+}
+
+/** "워크스페이스 D:\\Work 열어", "새 워크스페이스 D:\\W2 만들어", "워크스페이스 닫아", "목록에서 제거". */
+function ruleWorkspace(t: Text): Plan | null {
+  if (!has(t, ["워크스페이스", "작업공간", "작업 공간", "workspace"])) return null;
+  const path = pathOf(t.raw);
+  if (has(t, ["닫아", "닫기", "close"])) return single({ op: "workspace", action: "close", path: null }, 0.9, tr(t.ko, "워크스페이스를 닫습니다", "Close the workspace"));
+  if (has(t, ["목록에서", "잊어", "forget", "remove from the list"])) {
+    return single({ op: "workspace", action: "forget", path }, 0.88, tr(t.ko, `워크스페이스${path ? ` ${path}` : ""}를 최근 목록에서 제거합니다`, `Forget the workspace${path ? ` ${path}` : ""}`));
+  }
+  if (has(t, ["만들어", "생성", "새", "create", "new"])) {
+    if (!path) return clarify(tr(t.ko, "어느 폴더에 만들까요? 예: 새 워크스페이스 D:\\Work 만들어", "Which folder? e.g. create a workspace at D:\\Work"), 0.5);
+    return single({ op: "workspace", action: "create", path }, 0.9, tr(t.ko, `${path}에 워크스페이스를 만듭니다`, `Create a workspace at ${path}`));
+  }
+  if (has(t, ["열어", "열기", "전환", "바꿔", "open", "switch"])) {
+    if (!path) return clarify(tr(t.ko, "어느 폴더를 열까요? 예: 워크스페이스 D:\\Work 열어", "Which folder? e.g. open the workspace D:\\Work"), 0.5);
+    return single({ op: "workspace", action: "open", path }, 0.9, tr(t.ko, `워크스페이스 ${path}을(를) 엽니다`, `Open the workspace ${path}`));
+  }
+  return null;
+}
+
+/** "지금 파기 실행", "끝난 작업 지워", "문서함 다시 검사", "inbox 검사". */
+function ruleMaintenance(t: Text): Plan | null {
+  if (has(t, ["파기", "purge"]) && has(t, ["실행", "돌려", "지금", "run", "now"])) return single({ op: "maintenance", action: "purge_now" }, 0.9, tr(t.ko, "보존 기간이 지난 항목을 지금 파기합니다", "Run the retention purge now"));
+  if (has(t, ["끝난작업", "끝난 작업", "완료된작업", "완료된 작업", "완료작업", "finishedjobs", "finished jobs", "completed jobs"]) && has(t, ["지워", "삭제", "정리", "치워", "clear", "remove", "delete"])) return single({ op: "maintenance", action: "clear_finished_jobs" }, 0.9, tr(t.ko, "끝난 작업을 목록에서 지웁니다", "Clear the finished jobs"));
+  if (has(t, ["다시검사", "다시 검사", "재검사", "재스캔", "rescan"]) && has(t, ["문서함", "라이브러리", "폴더", "library", "folder", "workspace", "워크스페이스"])) return single({ op: "maintenance", action: "rescan" }, 0.9, tr(t.ko, "문서함 폴더를 다시 검사합니다", "Rescan the library folders"));
+  if (has(t, ["inbox검사", "inbox 검사", "인박스검사", "받은함검사", "inbox스캔", "inbox 스캔", "scan the inbox", "scan inbox", "check the inbox"])) return single({ op: "maintenance", action: "inbox_scan" }, 0.9, tr(t.ko, "inbox 폴더를 지금 검사합니다", "Scan the inbox now"));
+  return null;
+}
+
+const CATALOG_PHRASES: [string[], string][] = [
+  [["ui배율", "ui 배율", "화면배율", "화면 배율", "uiscale", "ui scale", "배율을"], "ui.scale_percent"],
+  [["검토임계", "검토 임계", "reviewthreshold", "review threshold"], "processing.review_threshold"],
+  [["렌더dpi", "렌더 dpi", "renderdpi", "render dpi", "기본dpi", "dpi를"], "processing.render_dpi"],
+  [["자동임베딩", "자동 임베딩", "autoembed", "auto embed", "임베딩자동", "임베딩 자동"], "knowledge.auto_embed"],
+  [["자동색인", "자동 색인", "autoindex", "auto index"], "knowledge.auto_index"],
+  [["마스킹", "masking"], "privacy.pii_masking"],
+  [["절전방지", "절전 방지", "preventsleep", "prevent sleep"], "notifications.prevent_sleep_during_jobs"],
+  [["완료알림", "완료 알림", "작업알림", "작업 알림", "notification"], "notifications.job_complete"],
+  [["온라인다운로드", "온라인 다운로드", "onlinedownload", "online download"], "models.allow_online_download"],
+  [["최신본만", "latest only", "latestonly"], "knowledge.latest_only"],
+  [["일반지식", "일반 지식", "generalknowledge", "general knowledge"], "knowledge.allow_general_knowledge"],
+  [["애니메이션", "animation", "motion"], "ui.reduced_motion"],
+  [["사이드바", "sidebar"], "ui.sidebar_collapsed"],
+  [["캐시상한", "캐시 상한", "캐시한도", "cachelimit", "cache limit", "pagecache", "page cache"], "cache.page_cache_max_gb"],
+  [["근거청크", "근거 청크", "topk", "top k"], "knowledge.top_k"],
+  [["근거토큰", "근거 토큰", "contexttokens", "context tokens"], "knowledge.context_tokens"],
+  [["정밀모드", "정밀 모드", "precisemode", "precise mode"], "processing.precise_mode"],
+  [["엔진자동시작", "엔진 자동 시작", "autostart", "auto start"], "models.auto_start_engine"],
+  [["예열", "warmup", "warm up"], "models.warmup_after_load"],
+  [["검토완료문서만", "검토 완료 문서만", "reviewedonly", "reviewed only"], "processing.organize_reviewed_only"],
+  [["디지털pdf", "디지털 pdf", "텍스트레이어", "텍스트 레이어"], "processing.ocr_digital_pdf"],
+  [["추출쪽수", "추출 쪽수", "추출에보내는", "kiepages", "kie pages"], "processing.kie_max_pages"],
+  [["썸네일", "thumbnail"], "cache.keep_thumbnails"],
+  [["gpu토큰", "gpu 토큰", "gputokens", "gpu tokens"], "generation.max_tokens_gpu"],
+  [["cpu토큰", "cpu 토큰", "cputokens", "cpu tokens"], "generation.max_tokens_cpu"],
+  [["inbox자동처리", "inbox 자동 처리", "inbox auto"], "processing.inbox_auto_level"],
+  [["자동처리", "자동 처리", "autopipeline", "auto pipeline", "auto processing"], "processing.auto_level"],
+];
+
+/** Settings of the catalog by their spoken names: "UI 배율 125%로", "검토 임계값 0.9", "자동 임베딩 꺼줘", "애니메이션 줄이기 켜". */
+function ruleCatalogSetting(t: Text): Plan | null {
+  const hit = CATALOG_PHRASES.find(([w]) => w.some((x) => t.compact.includes(compact(x))));
+  if (!hit) return null;
+  const key = hit[1];
+  const spec = settingSpec(key);
+  if (!spec) return null;
+  let value: string | number | boolean | null = null;
+  if (spec.type.kind === "boolean") {
+    if (has(t, ["꺼", "끄", "해제", "off", "disable", "사용안함", "사용 안", "stop", "안함"])) value = false;
+    else if (has(t, ["켜", "활성", "on", "enable", "사용", "allow", "허용", "줄이기", "줄여"])) value = true;
+    else return null;
+  } else if (spec.type.kind === "enum") {
+    const words = [...spec.type.values, ...Object.keys(spec.type.aliases ?? {})];
+    const found = words.find((w) => t.compact.includes(compact(w)));
+    if (found) value = found;
+    else if (key === "ui.reduced_motion") value = has(t, ["꺼", "끄", "off", "안줄", "않"]) ? "off" : has(t, ["시스템", "system"]) ? "system" : "on";
+    else if (key.endsWith("auto_level")) value = has(t, ["꺼", "끄", "안함", "none", "off"]) ? "none" : has(t, ["추출", "전체", "full", "extract"]) ? "full" : has(t, ["ocr"]) ? "classify_and_ocr" : has(t, ["분류", "classify"]) ? "classify_only" : null;
+    if (value === null) return null;
+  } else if (spec.type.kind === "string") {
+    value = quotedOf(t.raw);
+    if (value === null) return null;
+  } else {
+    const n = firstNumber(t.raw.replace(/dpi/i, ""));
+    if (n === null) return null;
+    value = n;
+  }
+  if (!has(t, ["로", "으로", "설정", "바꿔", "변경", "set", "to ", "켜", "꺼", "끄", "활성", "허용", "해제", "사용", "줄이기", "줄여", "%", "dpi", "개로", "건으로"])) return null;
+  let shown: string | number | boolean | null;
+  try {
+    shown = coerceSettingValue(spec, value);
+  } catch {
+    return null;
+  }
+  return single({ op: "set_setting", key, value: value as string | number | boolean }, 0.88, tr(t.ko, `설정 ${key} → ${String(shown)}`, `Set ${key} → ${String(shown)}`));
 }
 
 function modelId(t: Text, ctx: PlanContext): string | null {
@@ -1218,10 +1669,22 @@ export function rulesPlan(text: string, ctx: PlanContext): Plan | null {
     ruleUndoRedo(t) ??
     ruleJobControl(t) ??
     ruleEngine(t) ??
+    ruleMaintenance(t) ??
+    ruleWorkspace(t) ??
     ruleSetRetention(t) ??
+    ruleCatalogSetting(t) ??
+    ruleManageModel(t, ctx) ??
     ruleSettingsCombo(t, ctx) ??
+    ruleManageSchema(t, ctx) ??
     ruleDefineSchema(t, ctx) ??
     ruleRegisterForm(t, ctx) ??
+    ruleReference(t, ctx) ??
+    ruleDefineTerm(t) ??
+    ruleManageTemplate(t, ctx) ??
+    ruleClassifyProjects(t, ctx) ??
+    ruleDeleteProject(t, ctx) ??
+    ruleRemoveFromProject(t, ctx) ??
+    ruleUpdateProject(t, ctx) ??
     ruleProject(t, ctx) ??
     ruleCheckConsistency(t, ctx) ??
     ruleRequestSupplement(t, ctx) ??
@@ -1232,6 +1695,14 @@ export function rulesPlan(text: string, ctx: PlanContext): Plan | null {
     ruleExport(t, ctx) ??
     ruleAggregate(t, ctx) ??
     ruleInbox(t, ctx) ??
+    ruleRotate(t, ctx) ??
+    ruleRerender(t, ctx) ??
+    ruleSplit(t, ctx) ??
+    ruleMerge(t, ctx) ??
+    ruleSetTitle(t, ctx) ??
+    ruleSetVersion(t, ctx) ??
+    ruleSetRole(t, ctx) ??
+    ruleEditText(t, ctx) ??
     ruleTag(t, ctx) ??
     ruleOrganize(t, ctx) ??
     ruleDelete(t, ctx) ??
@@ -1302,6 +1773,27 @@ function checkFolderTemplate(t: string, path: string, issues: PlanIssue[]): void
     .map((tok) => (tok.kind === "lit" ? tok.text : "x"))
     .join("");
   if (workspaceRelative(skeleton) === null) issues.push(issue(path, "path_outside", `'${t}' must be a workspace-relative folder (documents/…)`));
+}
+
+/** 0.6.0: a catalog path (legacy aliases resolve to one) coerced by the catalog's type; `journal_days` keeps the old check. */
+function checkSettingCatalog(op: Extract<Op, { op: "set_setting" }>, path: string, issues: PlanIssue[]): void {
+  if (op.key === "journal_days") {
+    checkSetting(op, path, issues);
+    return;
+  }
+  const key = resolveSettingKey(op.key);
+  const spec = settingSpec(key);
+  if (!spec) {
+    issues.push(issue(path.replace(/value$/, "key"), "setting_unknown", `unknown setting '${op.key}'`));
+    return;
+  }
+  op.key = key;
+  try {
+    const v = coerceSettingValue(spec, op.value);
+    if (v !== null) op.value = v;
+  } catch (e) {
+    issues.push(issue(path, "setting_value", messageOf(e)));
+  }
 }
 
 function checkSetting(op: Extract<Op, { op: "set_setting" }>, path: string, issues: PlanIssue[]): void {
@@ -1433,7 +1925,8 @@ export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | nul
     const at = (field: string) => `operations[${i}].${field}`;
     switch (op.op) {
       case "import":
-        if (op.source === "files") issues.push(issue(at("source"), "import_files_gui", "file selection needs the import dialog; use source=inbox or folder"));
+        op.paths = [...new Set((op.paths ?? []).map((x) => x.trim()).filter(Boolean))];
+        if (op.source === "files" && op.paths.length === 0) issues.push(issue(at("paths"), "import_files_paths", "source=files needs paths (dropped or typed absolute paths)"));
         if (op.source === "folder" && !(op.path ?? "").trim()) issues.push(issue(at("path"), "path_required", "source=folder needs a path"));
         if (op.path != null) op.path = Array.from(op.path.trim()).slice(0, 1000).join("");
         break;
@@ -1566,7 +2059,7 @@ export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | nul
         }
         break;
       case "set_setting":
-        checkSetting(op, at("value"), issues);
+        checkSettingCatalog(op, at("value"), issues);
         break;
       case "open":
         op.ref = op.ref.trim();
@@ -1655,6 +2148,139 @@ export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | nul
       case "set_retention":
         if (!["documents", "extractions", "logs", "journal", "chats", "temp"].includes(op.item)) issues.push(issue(at("item"), "enum_invalid", `unknown retention item '${String(op.item)}'`));
         if (!Number.isInteger(op.days) || op.days < -1) issues.push(issue(at("days"), "range", "days must be an integer ≥ -1 (-1 = keep forever, 0 = immediately)"));
+        break;
+      // -- 0.6.0 (plan §1) --
+      case "rotate":
+        if (![90, 180, 270].includes(Number(op.degrees))) issues.push(issue(at("degrees"), "enum_invalid", "degrees must be 90, 180 or 270"));
+        op.pages = [...new Set((op.pages ?? []).filter((n) => n >= 1 && n <= 5000))].sort((a, b) => a - b);
+        break;
+      case "rerender":
+        if (op.dpi != null && !(op.dpi >= 72 && op.dpi <= 600)) issues.push(issue(at("dpi"), "range", "dpi must be between 72 and 600"));
+        break;
+      case "split":
+        op.boundaries = [...new Set((op.boundaries ?? []).filter((n) => Number.isInteger(n) && n >= 2))].sort((a, b) => a - b);
+        if (op.every != null && !(Number.isInteger(op.every) && op.every >= 1)) issues.push(issue(at("every"), "range", "every must be a positive page count"));
+        if (op.boundaries.length === 0 && op.every == null) issues.push(issue(at("boundaries"), "split_boundaries_required", "split needs boundaries (page numbers ≥ 2) or every"));
+        if ((plan.scope.doc_ids ?? []).length !== 1) issues.push(issue("scope.doc_ids", "single_document_required", "split works on exactly one document (open or select it)"));
+        break;
+      case "merge":
+        if (op.name != null && !op.name.trim()) op.name = null;
+        if ((plan.scope.doc_ids ?? []).length < 2 || (plan.scope.doc_ids ?? []).length > 20) issues.push(issue("scope.doc_ids", "merge_doc_count", "merge needs 2 to 20 selected documents"));
+        break;
+      case "set_title":
+        op.title = Array.from(op.title.trim()).slice(0, 200).join("");
+        if (!op.title) issues.push(issue(at("title"), "title_required", "set_title needs a title"));
+        if (scopeIsEmpty(plan.scope)) issues.push(issue("scope", "scope_required", "set_title needs a document (open or select it)"));
+        break;
+      case "edit_text":
+        if (!op.find) issues.push(issue(at("find"), "find_required", "edit_text needs the text to find"));
+        op.pages = [...new Set((op.pages ?? []).filter((n) => n >= 1))].sort((a, b) => a - b);
+        if (scopeIsEmpty(plan.scope)) issues.push(issue("scope", "scope_required", "edit_text needs documents (open or select them)"));
+        break;
+      case "set_role":
+        if (!["work", "knowledge", "form"].includes(op.role)) issues.push(issue(at("role"), "enum_invalid", `unknown role '${String(op.role)}'`));
+        if (scopeIsEmpty(plan.scope)) issues.push(issue("scope", "scope_required", "set_role needs documents (open or select them)"));
+        break;
+      case "manage_reference": {
+        if (!["create", "rename", "delete", "enable", "disable", "add", "remove"].includes(op.action)) issues.push(issue(at("action"), "enum_invalid", `unknown action '${String(op.action)}'`));
+        if (op.name != null && !op.name.trim()) op.name = null;
+        if (op.group != null && !op.group.trim()) op.group = null;
+        if (op.project) {
+          const resolved = resolveProjectId(op.project, ctx);
+          if (resolved) op.project = resolved;
+          else issues.push(issue(at("project"), "project_unknown", `unknown project '${op.project}'`));
+        }
+        if ((op.action === "create" || op.action === "rename") && !op.name) issues.push(issue(at("name"), "name_required", `${op.action} needs a name`));
+        if (op.action !== "create" && !op.group && !op.project) issues.push(issue(at("group"), "group_required", "which reference group? name it or name its project"));
+        if ((op.action === "add" || op.action === "remove") && scopeIsEmpty(plan.scope)) issues.push(issue("scope", "scope_required", "select the documents to add / remove"));
+        break;
+      }
+      case "define_term":
+        op.term = Array.from(op.term.trim()).slice(0, 120).join("");
+        if (!op.term) issues.push(issue(at("term"), "term_required", "define_term needs a term"));
+        op.synonyms = [...new Set((op.synonyms ?? []).map((x) => x.trim()).filter(Boolean))];
+        break;
+      case "set_version":
+        if (op.effective_date != null && !isoDate(op.effective_date)) issues.push(issue(at("effective_date"), "date_format", `'${op.effective_date}' is not an ISO-8601 date`));
+        if (!op.clear && !op.group_key && !op.label && op.latest == null) issues.push(issue(at("group_key"), "version_required", "set_version needs a group_key, a label, latest or clear"));
+        if (scopeIsEmpty(plan.scope)) issues.push(issue("scope", "scope_required", "set_version needs a document (open or select it)"));
+        break;
+      case "update_project": {
+        const resolved = resolveProjectId(op.project, ctx);
+        if (resolved) op.project = resolved;
+        else if (op.project) issues.push(issue(at("project"), "project_unknown", `unknown project '${op.project}'`));
+        else issues.push(issue(at("project"), "project_required", ctx.projects.length === 0 ? "no project exists yet" : "which project? open one or name it"));
+        for (const d of ["start_date", "end_date"] as const) if (op[d] != null && !isoDate(op[d]!)) issues.push(issue(at(d), "date_format", `'${op[d]}' is not an ISO-8601 date`));
+        if (op.template != null) {
+          const tpl = mp.resolveTemplateRef(op.template);
+          if (tpl) op.template = tpl.id;
+          else issues.push(issue(at("template"), "template_unknown", `unknown project template '${op.template}'`));
+        }
+        if ([op.name, op.template, op.start_date, op.end_date, op.owner, op.intake_no, op.notes, op.inbox_folder].every((v) => v == null || v === "") && !(op.keywords && op.keywords.length > 0)) issues.push(issue(at("name"), "nothing_to_update", "update_project needs at least one field"));
+        break;
+      }
+      case "delete_project":
+      case "remove_from_project": {
+        const resolved = resolveProjectId(op.project, ctx);
+        if (resolved) op.project = resolved;
+        else if (op.project) issues.push(issue(at("project"), "project_unknown", `unknown project '${op.project}'`));
+        else issues.push(issue(at("project"), "project_required", ctx.projects.length === 0 ? "no project exists yet" : "which project? open one or name it"));
+        if (op.op === "remove_from_project") {
+          op.doc_ids = [...new Set((op.doc_ids ?? []).map((d) => d.trim()).filter(Boolean))];
+          if (op.doc_ids.length === 0 && scopeIsEmpty(plan.scope)) issues.push(issue(at("doc_ids"), "scope_required", "remove_from_project needs documents"));
+        }
+        break;
+      }
+      case "manage_template": {
+        if (!["save", "delete"].includes(op.action)) issues.push(issue(at("action"), "enum_invalid", `unknown action '${String(op.action)}'`));
+        if (op.template != null) {
+          const tpl = mp.resolveTemplateRef(op.template);
+          if (tpl) {
+            op.template = tpl.id;
+            if (tpl.builtin) issues.push(issue(at("template"), "template_builtin", "built-in templates cannot be changed; copy one first"));
+          } else issues.push(issue(at("template"), "template_unknown", `unknown project template '${op.template}'`));
+        }
+        if (op.action === "delete" && !op.template) issues.push(issue(at("template"), "template_required", "which template?"));
+        if (op.action === "save" && !op.template && !(op.name ?? "").trim()) issues.push(issue(at("name"), "name_required", "a new template needs a name"));
+        op.doc_types_required = [...new Set((op.doc_types_required ?? []).map((x) => ctxDocType(ctx, x)?.slug ?? x.trim()).filter(Boolean))];
+        break;
+      }
+      case "classify_projects":
+        if (ctx.projects.length === 0) issues.push(issue(at("apply"), "no_projects", "no project exists yet; create one first"));
+        break;
+      case "manage_schema": {
+        if (!["enable", "disable", "set_default", "delete", "rename"].includes(op.action)) issues.push(issue(at("action"), "enum_invalid", `unknown action '${String(op.action)}'`));
+        const sc = ctxSchema(ctx, op.schema) ?? (pl.getSchema(op.schema) ? ctx.schemas.find((x) => x.id === op.schema) ?? null : null);
+        if (sc) op.schema = sc.id;
+        else issues.push(issue(at("schema"), "schema_unknown", `unknown schema '${op.schema}'; known: ${knownSchemas(ctx)}`));
+        if (op.action === "rename" && !(op.name ?? "").trim()) issues.push(issue(at("name"), "name_required", "rename needs the new name"));
+        break;
+      }
+      case "manage_model": {
+        if (!["set_tier", "set_backend", "import", "download", "delete", "verify", "benchmark", "load", "unload"].includes(op.action)) issues.push(issue(at("action"), "enum_invalid", `unknown action '${String(op.action)}'`));
+        if (op.action === "set_tier" && !op.tier) issues.push(issue(at("tier"), "tier_required", "set_tier needs a tier"));
+        if (op.action === "set_backend" && !op.backend) issues.push(issue(at("backend"), "backend_required", "set_backend needs a backend"));
+        if (op.action === "import" && !(op.path ?? "").trim()) issues.push(issue(at("path"), "path_required", "import needs a file / folder path"));
+        if (["download", "delete", "verify", "load"].includes(op.action)) {
+          if (!(op.id ?? "").trim()) issues.push(issue(at("id"), "model_id_required", `${op.action} needs a model id`));
+          else if (op.action === "download" || op.action === "load") {
+            const key = compact(op.id!);
+            const m = ctx.model_ids.find((x) => x === op.id) ?? ctx.model_ids.find((x) => compact(x) === key) ?? ctx.model_ids.find((x) => compact(x).includes(key));
+            if (m) op.id = m;
+            else issues.push(issue(at("id"), "model_unknown", `unknown model '${op.id}'; available: ${ctx.model_ids.join(", ")}`));
+          }
+        }
+        break;
+      }
+      case "workspace":
+        if (!["open", "create", "close", "forget"].includes(op.action)) issues.push(issue(at("action"), "enum_invalid", `unknown action '${String(op.action)}'`));
+        if ((op.action === "open" || op.action === "create") && !(op.path ?? "").trim()) issues.push(issue(at("path"), "path_required", `${op.action} needs a folder path`));
+        break;
+      case "maintenance":
+        if (!["purge_now", "clear_finished_jobs", "rescan", "inbox_scan"].includes(op.action)) issues.push(issue(at("action"), "enum_invalid", `unknown action '${String(op.action)}'`));
+        break;
+      case "engine":
+        if (!["start", "stop", "restart", "sleep", "wake"].includes(op.action)) issues.push(issue(at("action"), "enum_invalid", `unknown action '${String(op.action)}'`));
         break;
       default:
         break;
@@ -3083,6 +3709,93 @@ export function planPreview(plan: Plan, ctx: PlanContext): PlanPreview {
       case "explain":
         summary = (op.question ?? op.selection ?? "").slice(0, 80);
         break;
+      // -- 0.6.0 ops --
+      case "rotate":
+        summary = ko ? `${countLabel(docs.length, ko)} · ${op.degrees}°` : `${countLabel(docs.length, ko)} · ${op.degrees}°`;
+        payload = { documents: docs.length, degrees: op.degrees };
+        break;
+      case "rerender":
+        summary = ko ? `${countLabel(docs.length, ko)} 다시 렌더${op.dpi ? ` (${op.dpi} DPI)` : ""}` : `Re-render ${countLabel(docs.length, ko)}${op.dpi ? ` at ${op.dpi} DPI` : ""}`;
+        payload = { documents: docs.length, dpi: op.dpi ?? null };
+        break;
+      case "split": {
+        const d = docs[0];
+        const parts = d ? (op.every ? Math.ceil(d.page_count / op.every) : (op.boundaries ?? []).filter((b) => b <= d.page_count).length + 1) : 0;
+        summary = d ? (ko ? `${d.original_name} (${d.page_count}쪽) → 문서 ${parts}개` : `${d.original_name} (${d.page_count} pages) → ${parts} documents`) : tr(ko, "문서를 찾을 수 없습니다", "Document not found");
+        payload = { document_id: d?.id ?? null, parts };
+        confirm = true;
+        break;
+      }
+      case "merge":
+        summary = ko ? `문서 ${docs.length}건 → 1개 PDF${op.name ? ` ('${op.name}')` : ""}` : `${docs.length} documents → one PDF${op.name ? ` ('${op.name}')` : ""}`;
+        payload = { documents: docs.length, name: op.name ?? null };
+        confirm = true;
+        break;
+      case "set_title":
+        summary = `${countLabel(docs.length, ko)} → '${op.title}'`;
+        payload = { documents: docs.length };
+        break;
+      case "edit_text": {
+        let matches = 0;
+        for (const d of docs) for (const pg of d.pages) if (pg.text && (op.pages!.length === 0 || op.pages!.includes(pg.page_no))) matches += pg.text.split(op.find).length - 1;
+        summary = ko ? `'${op.find}' → '${op.replace}' · 일치 ${matches}곳 (${countLabel(docs.length, ko)})` : `'${op.find}' → '${op.replace}' · ${matches} matches (${countLabel(docs.length, ko)})`;
+        payload = { documents: docs.length, matches };
+        confirm = true;
+        break;
+      }
+      case "set_role":
+        summary = `${countLabel(docs.length, ko)} → ${op.role}`;
+        payload = { documents: docs.length, role: op.role };
+        break;
+      case "manage_reference":
+        summary = ko ? `${op.action} · ${op.name ?? op.group ?? (op.project ? "프로젝트 묶음" : "")}${op.action === "add" || op.action === "remove" ? ` · ${countLabel(docs.length, ko)}` : ""}` : `${op.action} · ${op.name ?? op.group ?? (op.project ? "project group" : "")}${op.action === "add" || op.action === "remove" ? ` · ${countLabel(docs.length, ko)}` : ""}`;
+        payload = { action: op.action, documents: docs.length };
+        confirm = op.action === "delete";
+        break;
+      case "define_term":
+        summary = `${op.action} · '${op.term}'${op.definition ? ` = ${op.definition}` : ""}`;
+        break;
+      case "set_version":
+        summary = op.clear ? tr(ko, "판본 표시 지우기", "clear the version") : `${op.group_key ?? ""} ${op.label ?? ""} ${op.latest === false ? tr(ko, "(구판)", "(older)") : tr(ko, "(최신본)", "(latest)")}`.trim();
+        payload = { documents: docs.length };
+        break;
+      case "update_project": {
+        const project = mp.resolveProjectRef(op.project, ctx.current_project);
+        summary = project ? `${project.name}${op.name ? ` → '${op.name}'` : ""}` : tr(ko, "프로젝트를 찾을 수 없습니다", "Project not found");
+        payload = { project_id: project?.id ?? null };
+        break;
+      }
+      case "delete_project": {
+        const project = mp.resolveProjectRef(op.project, ctx.current_project);
+        summary = project ? (ko ? `'${project.name}' 삭제 · 문서 ${project.document_count}건은 문서함에 남음` : `Delete '${project.name}' · its ${project.document_count} documents stay`) : tr(ko, "프로젝트를 찾을 수 없습니다", "Project not found");
+        payload = { project_id: project?.id ?? null, documents: project?.document_count ?? 0 };
+        confirm = true;
+        break;
+      }
+      case "remove_from_project": {
+        const project = mp.resolveProjectRef(op.project, ctx.current_project);
+        const n = (op.doc_ids ?? []).length > 0 ? (op.doc_ids ?? []).length : docs.length;
+        summary = project ? (ko ? `${project.name}에서 문서 ${n}건 빼기` : `Remove ${n} documents from ${project.name}`) : tr(ko, "프로젝트를 찾을 수 없습니다", "Project not found");
+        payload = { project_id: project?.id ?? null, documents: n };
+        break;
+      }
+      case "manage_template": {
+        const tpl = op.template ? mp.resolveTemplateRef(op.template) : null;
+        summary = `${op.action} · ${tpl ? (ko ? tpl.name_ko : tpl.name_en) : (op.name ?? "")}`;
+        confirm = op.action === "delete";
+        break;
+      }
+      case "classify_projects":
+        summary = ko ? `${docs.length > 0 ? `문서 ${docs.length}건` : "미배정 문서"} → ${op.apply ? "배정" : "제안 미리보기"}` : `${docs.length > 0 ? `${docs.length} documents` : "unassigned documents"} → ${op.apply ? "assign" : "preview"}`;
+        payload = { documents: docs.length, apply: !!op.apply };
+        confirm = op.apply === true;
+        break;
+      case "manage_schema": {
+        const sc = pl.getSchema(op.schema);
+        summary = `${op.action} · ${sc?.name ?? op.schema}${op.name ? ` → '${op.name}'` : ""}`;
+        confirm = op.action === "delete";
+        break;
+      }
       default:
         confirm = needsConfirmation(op);
         break;
@@ -3171,7 +3884,17 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
   const settings = loadSettings();
   switch (op.op) {
     case "import": {
-      if (op.source === "files") throw err("invalid", "import_files_gui");
+      if (op.source === "files") {
+        // 0.6.0: dropped / typed absolute paths go through the regular import (the mock registers the names).
+        const paths = op.paths ?? [];
+        if (paths.length === 0) throw err("invalid", "import_files_paths");
+        const before = new Set(wsDocs().map((d) => d.id));
+        const jobId = (await mockInvoke<string>("documents_import_run", { args: { token: null, paths, options: { destination: "documents", move_files: false, auto_level: op.auto_pipeline === "full" ? "full" : op.auto_pipeline === "classify" ? "classify_only" : "none" }, source: "drop" } })) as string;
+        await waitForJob(jobId);
+        const imported = wsDocs().filter((d) => !before.has(d.id)).map((d) => d.id);
+        out.documents.push(...imported);
+        return { summary: ko ? `가져오기 ${imported.length}건` : `Imported ${imported.length}`, payload: { imported, relinked: [], failed: [], skipped: paths.length - imported.length }, imported };
+      }
       if (op.source === "folder" && !(op.path ?? "").trim()) throw err("invalid", "path_required");
       // The browser mock has no unregistered inbox files; documents already registered from the inbox stay in scope.
       await pace(ctl, 120);
@@ -3384,9 +4107,248 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
       // `exec.rs`: the `DraftOutcome` plus the project it belongs to.
       return { summary: ko ? "보완요청서 초안 생성 — 문서 생성 화면에서 확인·저장" : "Supplement request drafted — review and save in the document generator", payload: { ...outcome, project_id: project.id } };
     }
+    // -- 0.6.0 ops (plan §1; payload shapes shared with exec.rs) --
+    case "rotate": {
+      const docs = workingSet(plan, imported);
+      if (docs.length === 0) throw err("invalid", "no_documents");
+      let pages = 0;
+      for (const d of docs) {
+        for (const pg of d.pages) {
+          if (op.pages && op.pages.length > 0 && !op.pages.includes(pg.page_no)) continue;
+          const next = (pg.rotation + op.degrees) % 360;
+          if ((next / 90) % 2 !== (pg.rotation / 90) % 2) [pg.width_px, pg.height_px] = [pg.height_px, pg.width_px];
+          pg.rotation = next;
+          pg.rendered_at = now();
+          pages += 1;
+        }
+        d.updated_at = now();
+        upsertDoc(d);
+        out.documents.push(d.id);
+      }
+      return { summary: ko ? `${countLabel(docs.length, ko)} · ${pages}쪽 ${op.degrees}° 회전` : `Rotated ${pages} pages of ${countLabel(docs.length, ko)} by ${op.degrees}°`, payload: { documents: idsOf(docs), pages, degrees: op.degrees } };
+    }
+    case "rerender": {
+      const docs = workingSet(plan, imported);
+      if (docs.length === 0) throw err("invalid", "no_documents");
+      const dpi = op.dpi ?? settings.processing.render_dpi;
+      for (const [i, d] of docs.entries()) {
+        if (ctl) await ctl.checkpoint();
+        progress("render", i, docs.length, d.original_name);
+        await pace(ctl, 40);
+        d.render_dpi = dpi;
+        for (const pg of d.pages) pg.rendered_at = now();
+        d.updated_at = now();
+        upsertDoc(d);
+        out.documents.push(d.id);
+      }
+      return { summary: ko ? `${countLabel(docs.length, ko)} 다시 렌더 (${dpi} DPI)` : `Re-rendered ${countLabel(docs.length, ko)} at ${dpi} DPI`, payload: { documents: idsOf(docs), dpi } };
+    }
+    case "split": {
+      const docs = workingSet(plan, imported);
+      const d = docs[0];
+      if (!d || docs.length !== 1) throw err("invalid", "single_document_required");
+      const boundaries = op.every ? Array.from({ length: Math.max(0, Math.ceil(d.page_count / op.every) - 1) }, (_, i) => (i + 1) * op.every! + 1) : (op.boundaries ?? []);
+      const before = new Set(wsDocs().map((x) => x.id));
+      const jobId = (await pl.mockPipeline("pipeline_split", { documentId: d.id, boundaries })) as string;
+      await waitForJob(jobId);
+      const created = wsDocs().filter((x) => !before.has(x.id)).map((x) => x.id);
+      out.documents.push(d.id, ...created);
+      return { summary: ko ? `${d.original_name} → 문서 ${created.length}개` : `${d.original_name} → ${created.length} documents`, payload: { document_id: d.id, created } };
+    }
+    case "merge": {
+      const docs = workingSet(plan, imported);
+      if (docs.length < 2) throw err("invalid", "merge_doc_count");
+      const before = new Set(wsDocs().map((x) => x.id));
+      const jobId = (await pl.mockPipeline("pipeline_merge", { ids: idsOf(docs), name: op.name ?? null })) as string;
+      await waitForJob(jobId);
+      const merged = wsDocs().find((x) => !before.has(x.id)) ?? null;
+      if (merged) out.documents.push(merged.id);
+      return { summary: ko ? `문서 ${docs.length}건 → ${merged?.original_name ?? "1개"}` : `${docs.length} documents → ${merged?.original_name ?? "one"}`, payload: { document_id: merged?.id ?? null, sources: idsOf(docs) } };
+    }
+    case "set_title": {
+      const docs = workingSet(plan, imported);
+      if (docs.length === 0) throw err("invalid", "no_documents");
+      for (const d of docs) {
+        d.title = op.title;
+        d.updated_at = now();
+        upsertDoc(d);
+        out.documents.push(d.id);
+      }
+      return { summary: ko ? `제목 → '${op.title}' (${countLabel(docs.length, ko)})` : `Title → '${op.title}' (${countLabel(docs.length, ko)})`, payload: { documents: idsOf(docs), title: op.title } };
+    }
+    case "edit_text": {
+      const docs = workingSet(plan, imported);
+      if (docs.length === 0) throw err("invalid", "no_documents");
+      let replaced = 0;
+      for (const d of docs) {
+        let touched = false;
+        for (const pg of d.pages) {
+          if (!pg.text || (op.pages && op.pages.length > 0 && !op.pages.includes(pg.page_no))) continue;
+          const n = pg.text.split(op.find).length - 1;
+          if (n === 0) continue;
+          pg.text = pg.text.split(op.find).join(op.replace);
+          pg.text_source = "manual";
+          replaced += n;
+          touched = true;
+        }
+        if (touched) {
+          d.updated_at = now();
+          upsertDoc(d);
+          out.documents.push(d.id);
+        }
+      }
+      return { summary: ko ? `'${op.find}' → '${op.replace}' ${replaced}곳 수정` : `Replaced ${replaced} occurrences of '${op.find}'`, payload: { documents: idsOf(docs), replaced } };
+    }
+    case "set_role": {
+      const docs = workingSet(plan, imported);
+      if (docs.length === 0) throw err("invalid", "no_documents");
+      await mockKnowledge("knowledge_set_role", { ids: idsOf(docs), role: op.role });
+      out.documents.push(...idsOf(docs));
+      return { summary: ko ? `${countLabel(docs.length, ko)} 역할 → ${op.role}` : `${countLabel(docs.length, ko)} → role ${op.role}`, payload: { documents: idsOf(docs), role: op.role } };
+    }
+    case "manage_reference": {
+      const project = op.project ? mp.resolveProjectRef(op.project, ctx.current_project) : null;
+      if (op.project && !project) throw err("invalid", "project_not_found");
+      const groups = (await mockKnowledge("knowledge_collections", {})) as Collection[];
+      const key = op.group ? compact(op.group) : "";
+      let group: Collection | null = project ? projectReferenceGroup(project.id, project.name) : key ? (groups.find((g) => g.id === op.group) ?? groups.find((g) => g.project_id == null && compact(g.name) === key) ?? groups.find((g) => g.project_id == null && compact(g.name).includes(key)) ?? null) : null;
+      const docs = op.action === "add" || op.action === "remove" ? workingSet(plan, imported) : [];
+      switch (op.action) {
+        case "create":
+          group = (await mockKnowledge("knowledge_collection_save", { input: { id: null, name: op.name ?? op.group ?? "", active: true, project_id: project?.id ?? null } })) as Collection;
+          break;
+        case "rename":
+          if (!group) throw err("invalid", "collection_not_found");
+          group = (await mockKnowledge("knowledge_collection_save", { input: { id: group.id, name: op.name ?? group.name, description: group.description, color: group.color, active: group.active } })) as Collection;
+          break;
+        case "delete":
+          if (!group) throw err("invalid", "collection_not_found");
+          await mockKnowledge("knowledge_collection_delete", { id: group.id });
+          break;
+        case "enable":
+        case "disable":
+          if (!group) throw err("invalid", "collection_not_found");
+          group = (await mockKnowledge("knowledge_collection_save", { input: { id: group.id, name: group.name, description: group.description, color: group.color, active: op.action === "enable" } })) as Collection;
+          break;
+        case "add":
+          if (!group) throw err("invalid", "collection_not_found");
+          if (docs.length === 0) throw err("invalid", "no_documents");
+          await mockKnowledge("knowledge_collection_add", { args: { id: group.id, doc_ids: idsOf(docs), set_role: true } });
+          out.documents.push(...idsOf(docs));
+          break;
+        case "remove":
+          if (!group) throw err("invalid", "collection_not_found");
+          if (docs.length === 0) throw err("invalid", "no_documents");
+          await mockKnowledge("knowledge_collection_remove", { args: { id: group.id, doc_ids: idsOf(docs) } });
+          out.documents.push(...idsOf(docs));
+          break;
+      }
+      const label = { create: tr(ko, "묶음 생성", "group created"), rename: tr(ko, "이름 변경", "renamed"), delete: tr(ko, "묶음 삭제", "group deleted"), enable: tr(ko, "사용", "enabled"), disable: tr(ko, "사용 안 함", "disabled"), add: tr(ko, `문서 ${docs.length}건 추가`, `${docs.length} documents added`), remove: tr(ko, `문서 ${docs.length}건 제외`, `${docs.length} documents removed`) }[op.action];
+      return { summary: `${group?.name ?? op.group ?? ""} · ${label}`, payload: { action: op.action, group: op.action === "delete" ? null : group, documents: idsOf(docs) } };
+    }
+    case "define_term": {
+      const entries = (await mockKnowledge("knowledge_glossary", {})) as GlossaryEntry[];
+      const existing = entries.find((e) => compact(e.term) === compact(op.term)) ?? null;
+      if (op.action === "delete") {
+        if (!existing) throw err("invalid", "glossary_term_not_found");
+        await mockKnowledge("knowledge_glossary_delete", { id: existing.id });
+        return { summary: ko ? `용어 '${op.term}' 삭제` : `Deleted the term '${op.term}'`, payload: { action: "delete", term: op.term } };
+      }
+      const saved = (await mockKnowledge("knowledge_glossary_save", { input: { id: existing?.id ?? null, term: op.term, definition: op.definition ?? existing?.definition ?? null, synonyms: op.synonyms && op.synonyms.length > 0 ? op.synonyms : (existing?.synonyms ?? []) } })) as GlossaryEntry;
+      return { summary: ko ? `용어 '${saved.term}' 저장` : `Saved the term '${saved.term}'`, payload: { action: "save", term: saved.term, entry: saved } };
+    }
+    case "set_version": {
+      const docs = workingSet(plan, imported);
+      if (docs.length === 0) throw err("invalid", "no_documents");
+      if (op.clear) {
+        for (const d of docs) await mockKnowledge("knowledge_version_clear", { documentId: d.id });
+        return { summary: ko ? `${countLabel(docs.length, ko)} 판본 표시 해제` : `Cleared the version of ${countLabel(docs.length, ko)}`, payload: { documents: idsOf(docs), group_key: null, latest: null, cleared: true } };
+      }
+      const groupKey = op.group_key ?? docs[0]!.title ?? docs[0]!.original_name.replace(/\.[^.]+$/, "");
+      for (const d of docs) await mockKnowledge("knowledge_version_set", { input: { document_id: d.id, group_key: groupKey, version_label: op.label ?? null, effective_date: op.effective_date ?? null, is_latest: op.latest ?? true } });
+      return { summary: ko ? `'${groupKey}' ${op.label ?? ""} ${op.latest === false ? "구판" : "최신본"}으로 표시` : `Marked as ${op.label ?? ""} ${op.latest === false ? "an older" : "the latest"} edition of '${groupKey}'`, payload: { documents: idsOf(docs), group_key: groupKey, latest: op.latest ?? true } };
+    }
+    case "update_project": {
+      const project = mp.resolveProjectRef(op.project, ctx.current_project);
+      if (!project) throw err("invalid", "project_not_found");
+      const updated = await mp.mockProjects("project_update", { input: { id: project.id, name: op.name ?? project.name, template_id: op.template ?? undefined, start_date: op.start_date ?? undefined, end_date: op.end_date ?? undefined, owner: op.owner ?? undefined, intake_no: op.intake_no ?? undefined, notes: op.notes ?? undefined, inbox_folder: op.inbox_folder ?? undefined, keywords: op.keywords && op.keywords.length > 0 ? op.keywords : undefined } });
+      return { summary: ko ? `프로젝트 '${(updated as { name: string }).name}' 수정` : `Updated the project '${(updated as { name: string }).name}'`, payload: { project: updated } };
+    }
+    case "delete_project": {
+      const project = mp.resolveProjectRef(op.project, ctx.current_project);
+      if (!project) throw err("invalid", "project_not_found");
+      const deleted = (await mp.mockProjects("project_delete", { id: project.id })) as boolean;
+      return { summary: ko ? `프로젝트 '${project.name}' 삭제 (문서는 문서함에 남음)` : `Deleted the project '${project.name}' (documents stay)`, payload: { project_id: project.id, deleted } };
+    }
+    case "remove_from_project": {
+      const project = mp.resolveProjectRef(op.project, ctx.current_project);
+      if (!project) throw err("invalid", "project_not_found");
+      const ids = (op.doc_ids ?? []).length > 0 ? (op.doc_ids ?? []) : idsOf(workingSet(plan, imported));
+      if (ids.length === 0) throw err("invalid", "no_documents");
+      let removed = 0;
+      for (const id of ids) {
+        await mp.mockProjects("project_remove_document", { id: project.id, docId: id });
+        removed += 1;
+      }
+      out.documents.push(...ids);
+      return { summary: ko ? `프로젝트에서 문서 ${removed}건 제외` : `Removed ${removed} documents from the project`, payload: { project_id: project.id, removed } };
+    }
+    case "manage_template": {
+      const existing = op.template ? mp.resolveTemplateRef(op.template) : null;
+      if (op.action === "delete") {
+        if (!existing) throw err("invalid", "template_not_found");
+        const removed = (await mp.mockProjects("project_template_delete", { id: existing.id })) as boolean;
+        return { summary: ko ? `프로젝트 템플릿 '${existing.name_ko}' 삭제` : `Deleted the project template '${existing.name_en}'`, payload: { action: "delete", template: existing, deleted: removed } };
+      }
+      const saved = (await mp.mockProjects("project_template_save", { input: { id: existing?.id ?? null, name_ko: op.name ?? existing?.name_ko ?? "", name_en: existing?.name_en ?? op.name ?? null, description_ko: op.description ?? existing?.description_ko ?? null, required_doc_types: op.doc_types_required && op.doc_types_required.length > 0 ? op.doc_types_required : (existing?.required_doc_types ?? []), rules: existing?.rules ?? [] } })) as ProjectTemplate;
+      return { summary: ko ? `프로젝트 템플릿 '${saved.name_ko}' 저장` : `Saved the project template '${saved.name_en}'`, payload: { action: "save", template: saved } };
+    }
+    case "classify_projects": {
+      const docs = scopeIsEmpty(plan.scope) ? [] : workingSet(plan, imported);
+      const result = (await mp.mockProjects("project_classify_preview", { req: { doc_ids: idsOf(docs), project_ids: [], use_model: !!op.use_model } })) as ClassifyResult;
+      if (!op.apply) return { summary: ko ? `제안 ${result.suggested}건 · 미정 ${result.undecided}건 (프로젝트 화면에서 적용)` : `${result.suggested} suggestions · ${result.undecided} undecided (apply on the projects screen)`, payload: { suggested: result.suggested, applied: null, suggestions: result.suggestions } };
+      const assignments = result.suggestions.filter((x) => x.project_id).map((x) => ({ doc_id: x.doc_id, project_id: x.project_id! }));
+      const applied = (await mp.mockProjects("project_classify_apply", { assignments })) as ClassifyApplyResult;
+      out.documents.push(...assignments.map((x) => x.doc_id));
+      return { summary: ko ? `문서 ${applied.added}건을 프로젝트에 배정` : `Assigned ${applied.added} documents to projects`, payload: { suggested: result.suggested, applied: applied.added, suggestions: result.suggestions } };
+    }
+    case "manage_schema": {
+      const sc = pl.getSchema(op.schema);
+      if (!sc) throw err("invalid", "schema_not_found");
+      let schema: SchemaRecord | null = sc;
+      switch (op.action) {
+        case "enable":
+        case "disable":
+          await pl.mockPipeline("pipeline_schema_set_enabled", { id: sc.id, enabled: op.action === "enable" });
+          schema = pl.getSchema(sc.id);
+          break;
+        case "set_default":
+          await pl.mockPipeline("pipeline_schema_set_default", { id: sc.id });
+          schema = pl.getSchema(sc.id);
+          break;
+        case "delete":
+          await pl.mockPipeline("pipeline_schema_delete", { id: sc.id });
+          schema = null;
+          break;
+        case "rename":
+          schema = (await pl.mockPipeline("pipeline_schema_save", { draft: { id: sc.id, name: op.name ?? sc.name, name_en: sc.name_en, doc_type: sc.doc_type, source: sc.source, description_ko: sc.description_ko, description_en: sc.description_en, definition: sc.definition, form_document_id: sc.form_document_id, note: null } })) as SchemaRecord;
+          break;
+      }
+      const label = { enable: tr(ko, "켬", "enabled"), disable: tr(ko, "끔", "disabled"), set_default: tr(ko, "기본으로", "default"), delete: tr(ko, "삭제", "deleted"), rename: tr(ko, `이름 → '${op.name}'`, `renamed to '${op.name}'`) }[op.action];
+      return { summary: `${sc.name} · ${label}`, payload: { action: op.action, schema } };
+    }
     default:
       // UI-side ops never reach here (`runsInUi`).
       return { summary: "", payload: null };
+  }
+}
+
+/** Waits for a mock job (split / merge / import) to finish so the step can report what it created. */
+async function waitForJob(id: string): Promise<void> {
+  for (let i = 0; i < 400; i++) {
+    const j = getJob(id);
+    if (!j || isJobFinished(j)) return;
+    await sleep(25);
   }
 }
 
@@ -3433,7 +4395,7 @@ export async function runPlan(plan: Plan, ctx: PlanContext, ctl: JobControl | nu
 
 /** Ops that run inline (quick, no model, no files) — `planner_bridge::inline_only`. */
 export function inlineOnly(plan: Plan): boolean {
-  return plan.operations.every((op) => runsInUi(op.op) || ["search", "aggregate", "tag", "set_doc_type", "validate", "create_project", "add_to_project", "check_consistency"].includes(op.op) || (op.op === "review" && (op.action === "approve" || op.action === "reject")));
+  return plan.operations.every((op) => runsInUi(op.op) || ["search", "aggregate", "tag", "set_doc_type", "validate", "create_project", "add_to_project", "check_consistency", "rotate", "rerender", "split", "merge", "set_title", "edit_text", "set_role", "manage_reference", "define_term", "set_version", "update_project", "delete_project", "remove_from_project", "manage_template", "classify_projects", "manage_schema"].includes(op.op) || (op.op === "review" && (op.action === "approve" || op.action === "reject")));
 }
 
 /** Emits change events for what an execution touched (`planner_bridge::after_execution`). */

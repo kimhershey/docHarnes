@@ -54,15 +54,18 @@ pub const TONES: &[&str] = &["formal", "plain", "concise"];
 pub const LENGTHS: &[&str] = &["short", "medium", "long"];
 pub const EXPLAIN_SCOPES: &[&str] = &["kb", "reference", "project", "document"];
 pub const RETENTION_ITEMS: &[&str] = &["documents", "extractions", "logs", "journal", "chats", "temp"];
-pub const SETTING_KEYS: &[&str] = &[
-    "render_dpi",
-    "pii_masking",
-    "auto_pipeline",
-    "inbox_watch",
-    "review_threshold",
-    "cache_limit_gb",
-    "journal_days",
-];
+/// `set_setting.key`: the settings catalog paths + the 0.1–0.5 short keys (`planner::settings_catalog`).
+pub use super::settings_catalog::SETTING_KEYS;
+pub const ROLES: &[&str] = &["work", "knowledge", "form"];
+pub const REFERENCE_ACTIONS: &[&str] = &["create", "rename", "delete", "enable", "disable", "add", "remove"];
+pub const SAVE_DELETE: &[&str] = &["save", "delete"];
+pub const SCHEMA_ACTIONS: &[&str] = &["enable", "disable", "set_default", "delete", "rename"];
+pub const MODEL_ACTIONS: &[&str] =
+    &["set_tier", "set_backend", "import", "download", "delete", "verify", "benchmark", "load", "unload"];
+pub const MODEL_TIERS: &[&str] =
+    &["auto", "cpu_only", "vram_6gb", "vram_8gb", "vram_12gb", "vram_16gb", "vram_24gb_plus"];
+pub const WORKSPACE_ACTIONS: &[&str] = &["open", "create", "close", "forget"];
+pub const MAINTENANCE_ACTIONS: &[&str] = &["purge_now", "clear_finished_jobs", "rescan", "inbox_scan"];
 
 pub const OP_SPECS: &[OpSpec] = &[
     OpSpec {
@@ -70,6 +73,7 @@ pub const OP_SPECS: &[OpSpec] = &[
         params: &[
             p("source", ParamType::Enum(&["inbox", "folder", "files"]), false, "가져올 곳(기본 inbox)", "where from (default inbox)"),
             p("path", ParamType::Str, false, "폴더 경로(source=folder)", "folder path (source=folder)"),
+            p("paths", ParamType::StrList, false, "파일 경로들(source=files; 적거나 끌어다 놓은 파일)", "file paths (source=files; typed or dropped)"),
             p("recursive", ParamType::Bool, false, "하위 폴더 포함", "include subfolders"),
             p("auto_pipeline", ParamType::Enum(&["none", "classify", "full"]), false, "가져온 뒤 자동 처리 수준", "processing after import"),
         ],
@@ -403,9 +407,9 @@ pub const OP_SPECS: &[OpSpec] = &[
     },
     OpSpec {
         kind: OpKind::Engine,
-        params: &[p("action", ParamType::Enum(&["restart", "sleep", "wake"]), true, "엔진 제어", "engine control")],
-        desc_ko: "엔진 재시작/슬립/깨우기",
-        desc_en: "engine restart / sleep / wake",
+        params: &[p("action", ParamType::Enum(&["restart", "sleep", "wake", "start", "stop"]), true, "AI 엔진 제어", "engine control")],
+        desc_ko: "AI 엔진 시작/정지/재시작/슬립/깨우기",
+        desc_en: "engine start / stop / restart / sleep / wake",
     },
     OpSpec {
         kind: OpKind::Undo,
@@ -422,7 +426,202 @@ pub const OP_SPECS: &[OpSpec] = &[
         desc_en: "ask a clarification question (alone, when the command is ambiguous)",
     },
     OpSpec { kind: OpKind::Noop, params: &[], desc_ko: "아무 것도 하지 않음", desc_en: "do nothing" },
+    // -- 0.6.0: every GUI function as an op (plan §1) ------------------------------------------
+    OpSpec {
+        kind: OpKind::Rotate,
+        params: &[
+            p("degrees", ParamType::Int, true, "회전 각도(90·180·270)", "degrees (90, 180 or 270)"),
+            p("pages", ParamType::IntList, false, "쪽 번호(비우면 전체)", "page numbers (empty = all)"),
+        ],
+        desc_ko: "범위 문서의 쪽 이미지 회전(원본 불변)",
+        desc_en: "rotate the page images of the documents in scope",
+    },
+    OpSpec {
+        kind: OpKind::Rerender,
+        params: &[p("dpi", ParamType::Int, false, "렌더 DPI(72~600)", "render DPI (72–600)")],
+        desc_ko: "범위 문서 다시 렌더",
+        desc_en: "re-render the documents in scope",
+    },
+    OpSpec {
+        kind: OpKind::Split,
+        params: &[
+            p("boundaries", ParamType::IntList, false, "새 문서가 시작하는 쪽 번호(2 이상)", "pages that start a new document (≥ 2)"),
+            p("every", ParamType::Int, false, "n쪽마다 나누기", "split every n pages"),
+        ],
+        desc_ko: "문서 1개를 여러 PDF 문서로 분할",
+        desc_en: "split one document into several PDF documents",
+    },
+    OpSpec {
+        kind: OpKind::Merge,
+        params: &[p("name", ParamType::Str, false, "새 문서 이름", "name of the merged document")],
+        desc_ko: "범위 문서(2~20개)를 PDF 하나로 병합",
+        desc_en: "merge the documents in scope (2–20) into one PDF",
+    },
+    OpSpec {
+        kind: OpKind::SetTitle,
+        params: &[p("title", ParamType::Str, true, "새 제목", "new title")],
+        desc_ko: "문서 제목 바꾸기(문서 1개)",
+        desc_en: "set the title of the one document in scope",
+    },
+    OpSpec {
+        kind: OpKind::EditText,
+        params: &[
+            p("find", ParamType::Str, true, "찾을 글자", "text to find"),
+            p("replace", ParamType::Str, true, "바꿀 글자", "replacement"),
+            p("pages", ParamType::IntList, false, "쪽 번호(비우면 전체)", "page numbers (empty = all)"),
+        ],
+        desc_ko: "범위 문서의 쪽 글자 찾아 바꾸기(이력에 기록)",
+        desc_en: "find / replace in the page text of the documents in scope",
+    },
+    OpSpec {
+        kind: OpKind::SetRole,
+        params: &[p("role", ParamType::Enum(ROLES), true, "업무 문서 / 참고 자료 / 양식", "work / knowledge (reference) / form")],
+        desc_ko: "문서 역할 표시(업무 문서·참고 자료·양식)",
+        desc_en: "mark documents as work documents, reference material or forms",
+    },
+    OpSpec {
+        kind: OpKind::ManageReference,
+        params: &[
+            p("action", ParamType::Enum(REFERENCE_ACTIONS), true, "만들기·이름 변경·삭제·사용·사용 안 함·문서 추가·문서 제외", "create / rename / delete / enable / disable / add / remove"),
+            p("group", ParamType::Str, false, "묶음 이름 또는 ID(공통 참고 자료)", "group name or id (common reference material)"),
+            p("name", ParamType::Str, false, "새 이름(create·rename)", "new name (create / rename)"),
+            p("project", ParamType::Str, false, "프로젝트 이름/ID(그 프로젝트의 참고 자료 묶음)", "project name / id (its reference group)"),
+        ],
+        desc_ko: "참고 자료 묶음 관리; add/remove는 범위 문서(add는 참고 자료로 표시)",
+        desc_en: "manage reference groups; add / remove take the documents in scope",
+    },
+    OpSpec {
+        kind: OpKind::DefineTerm,
+        params: &[
+            p("action", ParamType::Enum(SAVE_DELETE), false, "저장(기본)/삭제", "save (default) / delete"),
+            p("term", ParamType::Str, true, "용어", "term"),
+            p("definition", ParamType::Str, false, "뜻", "definition"),
+            p("synonyms", ParamType::StrList, false, "동의어", "synonyms"),
+        ],
+        desc_ko: "용어집 등록/삭제(검색 질의 확장에 쓰임)",
+        desc_en: "save / delete a glossary term (used for query expansion)",
+    },
+    OpSpec {
+        kind: OpKind::SetVersion,
+        params: &[
+            p("group_key", ParamType::Str, false, "같은 제목(판) 묶음 키", "title group key"),
+            p("label", ParamType::Str, false, "판 라벨(예: 2024)", "edition label"),
+            p("effective_date", ParamType::Str, false, "시행일 YYYY-MM-DD", "effective date YYYY-MM-DD"),
+            p("latest", ParamType::Bool, false, "최신본 여부(기본 true)", "latest edition (default true)"),
+            p("clear", ParamType::Bool, false, "버전 표시 해제", "clear the version mark"),
+        ],
+        desc_ko: "범위 문서를 어떤 제목의 판(신·구판)으로 표시",
+        desc_en: "mark the documents in scope as editions of a title",
+    },
+    OpSpec {
+        kind: OpKind::UpdateProject,
+        params: &[
+            p("project", ParamType::Str, false, "프로젝트 이름/ID(기본: 열린 프로젝트)", "project name / id (default: open project)"),
+            p("name", ParamType::Str, false, "새 이름", "new name"),
+            p("template", ParamType::Str, false, "템플릿 이름/ID(빈 문자열 = 해제)", "template name / id (empty = none)"),
+            p("start_date", ParamType::Str, false, "시작일 YYYY-MM-DD(빈 문자열 = 지움)", "start date (empty clears)"),
+            p("end_date", ParamType::Str, false, "종료일 YYYY-MM-DD(빈 문자열 = 지움)", "end date (empty clears)"),
+            p("owner", ParamType::Str, false, "담당자", "owner"),
+            p("intake_no", ParamType::Str, false, "접수번호", "intake number"),
+            p("notes", ParamType::Str, false, "메모", "notes"),
+            p("keywords", ParamType::StrList, false, "분류 키워드", "classification keywords"),
+            p("inbox_folder", ParamType::Str, false, "inbox 하위 폴더", "inbox subfolder"),
+        ],
+        desc_ko: "프로젝트 정보 수정(이름·템플릿·기간·담당·메모·키워드)",
+        desc_en: "update a project (name, template, dates, owner, notes, keywords)",
+    },
+    OpSpec {
+        kind: OpKind::DeleteProject,
+        params: &[p("project", ParamType::Str, false, "프로젝트 이름/ID(기본: 열린 프로젝트)", "project name / id (default: open project)")],
+        desc_ko: "프로젝트 삭제(문서는 문서함에 남음)",
+        desc_en: "delete a project (documents stay in the library)",
+    },
+    OpSpec {
+        kind: OpKind::RemoveFromProject,
+        params: &[
+            p("project", ParamType::Str, false, "프로젝트 이름/ID(기본: 열린 프로젝트)", "project name / id (default: open project)"),
+            p("doc_ids", ParamType::StrList, false, "뺄 문서 id(기본: 범위의 문서)", "document ids (default: documents in scope)"),
+        ],
+        desc_ko: "문서를 프로젝트에서 빼기",
+        desc_en: "remove documents from a project",
+    },
+    OpSpec {
+        kind: OpKind::ManageTemplate,
+        params: &[
+            p("action", ParamType::Enum(SAVE_DELETE), false, "저장(기본)/삭제", "save (default) / delete"),
+            p("template", ParamType::Str, false, "기존 템플릿 이름/ID", "existing template name / id"),
+            p("name", ParamType::Str, false, "(새) 이름", "(new) name"),
+            p("doc_types_required", ParamType::StrList, false, "필수 문서 유형 슬러그", "required document-type slugs"),
+            p("description", ParamType::Str, false, "설명", "description"),
+        ],
+        desc_ko: "프로젝트 템플릿 저장/삭제(내장 템플릿 제외)",
+        desc_en: "save / delete a project template (built-ins excluded)",
+    },
+    OpSpec {
+        kind: OpKind::ClassifyProjects,
+        params: &[
+            p("apply", ParamType::Bool, false, "제안을 바로 배정(기본 false = 제안만)", "assign the suggestions (default false = suggest only)"),
+            p("use_model", ParamType::Bool, false, "규칙이 못 정한 문서를 모델에 묻기", "ask the model about undecided documents"),
+        ],
+        desc_ko: "범위 문서(비우면 미배정 전체)를 프로젝트로 자동 분류",
+        desc_en: "auto-classify the documents in scope (empty = all unassigned) into projects",
+    },
+    OpSpec {
+        kind: OpKind::ManageSchema,
+        params: &[
+            p("action", ParamType::Enum(SCHEMA_ACTIONS), true, "사용·사용 안 함·기본값·삭제·이름 변경", "enable / disable / set_default / delete / rename"),
+            p("schema", ParamType::Str, true, "양식(추출 항목) 이름·ID·유형", "schema name / id / type"),
+            p("name", ParamType::Str, false, "새 이름(rename)", "new name (rename)"),
+        ],
+        desc_ko: "양식·추출 항목 관리",
+        desc_en: "manage extraction schemas (forms)",
+    },
+    OpSpec {
+        kind: OpKind::ManageModel,
+        params: &[
+            p("action", ParamType::Enum(MODEL_ACTIONS), true, "티어·백엔드·가져오기·다운로드·삭제·해시 검증·벤치마크·로드·언로드", "set_tier / set_backend / import / download / delete / verify / benchmark / load / unload"),
+            p("id", ParamType::Str, false, "모델 ID", "model id"),
+            p("tier", ParamType::Enum(MODEL_TIERS), false, "티어(set_tier)", "tier (set_tier)"),
+            p("backend", ParamType::Enum(super::settings_catalog::BACKENDS), false, "백엔드(set_backend)", "backend (set_backend)"),
+            p("path", ParamType::Str, false, "모델 폴더/GGUF 경로(import)", "model folder / GGUF path (import)"),
+        ],
+        desc_ko: "AI 모델 관리(설정 > AI 모델)",
+        desc_en: "manage AI models (settings > AI models)",
+    },
+    OpSpec {
+        kind: OpKind::Workspace,
+        params: &[
+            p("action", ParamType::Enum(WORKSPACE_ACTIONS), true, "열기·만들기·닫기·목록에서 지우기", "open / create / close / forget"),
+            p("path", ParamType::Str, false, "워크스페이스 폴더 경로", "workspace folder path"),
+        ],
+        desc_ko: "워크스페이스 열기/만들기/닫기",
+        desc_en: "open / create / close a workspace",
+    },
+    OpSpec {
+        kind: OpKind::Maintenance,
+        params: &[p("action", ParamType::Enum(MAINTENANCE_ACTIONS), true, "지금 파기·끝난 작업 지우기·다시 검사·inbox 검사", "purge now / clear finished jobs / rescan / inbox scan")],
+        desc_ko: "유지보수 실행(보존 파기·작업 정리·다시 검사)",
+        desc_en: "maintenance (retention purge, clear finished jobs, rescan)",
+    },
 ];
+
+/// Specs of the given op kinds in `OP_SPECS` order (two-stage planning: one family's ops).
+pub fn op_specs_for(kinds: &[OpKind]) -> Vec<&'static OpSpec> {
+    OP_SPECS.iter().filter(|s| kinds.contains(&s.kind)).collect()
+}
+
+/// The family-selection reply of the two-stage planner: one or two families.
+pub fn family_schema() -> Value {
+    let families: Vec<Value> = super::OpFamily::ALL.iter().map(|f| Value::String(f.as_str().into())).collect();
+    json!({
+        "type": "object",
+        "properties": {
+            "families": { "type": "array", "items": { "enum": families }, "minItems": 1, "maxItems": 2 }
+        },
+        "required": ["families"],
+        "additionalProperties": false
+    })
+}
 
 pub fn spec(kind: OpKind) -> &'static OpSpec {
     OP_SPECS.iter().find(|s| s.kind == kind).expect("every op kind has a spec")
@@ -488,8 +687,13 @@ pub fn scope_schema() -> Value {
 /// The PlanSchema (§3.5) for `response_format`. `summary` comes first so the
 /// model states its interpretation before committing to operations.
 pub fn plan_schema() -> Value {
-    let intents: Vec<Value> = OpKind::ALL.iter().map(|k| Value::String(k.as_str().into())).collect();
-    let ops: Vec<Value> = OP_SPECS.iter().map(op_schema).collect();
+    plan_schema_for(&OpKind::ALL)
+}
+
+/// The PlanSchema restricted to `kinds` (the chosen families' ops; 0.6.0 two-stage planning).
+pub fn plan_schema_for(kinds: &[OpKind]) -> Value {
+    let intents: Vec<Value> = kinds.iter().map(|k| Value::String(k.as_str().into())).collect();
+    let ops: Vec<Value> = op_specs_for(kinds).into_iter().map(op_schema).collect();
     json!({
         "type": "object",
         "properties": {
@@ -523,8 +727,12 @@ fn type_label(ty: ParamType) -> String {
 
 /// The smallest op table: names with their required parameters (minimal prompts).
 pub fn op_names() -> String {
+    op_names_for(&OpKind::ALL)
+}
+
+pub fn op_names_for(kinds: &[OpKind]) -> String {
     let mut out = String::new();
-    for s in OP_SPECS {
+    for s in op_specs_for(kinds) {
         let req: Vec<String> =
             s.params.iter().filter(|p| p.required).map(|p| format!("{}:{}", p.name, type_label(p.ty))).collect();
         let opt: Vec<&str> = s.params.iter().filter(|p| !p.required).map(|p| p.name).collect();
@@ -541,8 +749,12 @@ pub fn op_names() -> String {
 /// Tool description table for the planner prompt (one line per op).
 /// `compact` drops the parameter descriptions (small-context presets).
 pub fn op_table(ko: bool, compact: bool) -> String {
+    op_table_for(&OpKind::ALL, ko, compact)
+}
+
+pub fn op_table_for(kinds: &[OpKind], ko: bool, compact: bool) -> String {
     let mut out = String::new();
-    for s in OP_SPECS {
+    for s in op_specs_for(kinds) {
         let params: Vec<String> = s
             .params
             .iter()

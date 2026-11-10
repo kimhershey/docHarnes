@@ -14,8 +14,8 @@ use crate::organize::template;
 use crate::prerouter::{DateRange, Screen};
 
 use super::{
-    compact, AggregateFn, ExportFormat, ImportFrom, Op, OpKind, OpenTarget, Plan, PlanContext, PlanIssue, ReviewOp,
-    SettingKey, MAX_OPS,
+    compact, settings_catalog, AggregateFn, ExportFormat, ImportFrom, ModelAction, Op, OpKind, OpenTarget, Plan,
+    PlanContext, PlanIssue, ReferenceAction, ReviewOp, SchemaAction, TemplateAction, MAX_OPS,
 };
 
 /// Ops that change documents must name their targets: an empty scope would mean the whole
@@ -28,6 +28,17 @@ pub fn scope_required(plan: &Plan) -> Option<PlanIssue> {
         Op::SetDocType { .. } | Op::Tag { .. } | Op::Delete { .. } | Op::Rename { .. } | Op::Move { .. } => true,
         Op::Organize { dry_run, .. } => !dry_run.unwrap_or(false),
         Op::Review { action: ReviewOp::Approve | ReviewOp::Reject | ReviewOp::Correct, .. } => true,
+        // 0.6.0: the document-changing ops name their targets too.
+        Op::Rotate { .. }
+        | Op::Rerender { .. }
+        | Op::Split { .. }
+        | Op::Merge { .. }
+        | Op::SetTitle { .. }
+        | Op::EditText { .. }
+        | Op::SetRole { .. }
+        | Op::SetVersion { .. } => true,
+        Op::ManageReference { action: ReferenceAction::Add | ReferenceAction::Remove, .. } => true,
+        Op::RemoveFromProject { doc_ids, .. } => doc_ids.is_empty(),
         _ => false,
     });
     needs.then(|| {
@@ -216,12 +227,17 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
     for (i, op) in plan.operations.iter_mut().enumerate() {
         let at = |field: &str| format!("operations[{i}].{field}");
         match op {
-            Op::Import { source, path, .. } => {
-                if *source == ImportFrom::Files {
+            Op::Import { source, path, paths, .. } => {
+                for p in paths.iter_mut() {
+                    *p = p.trim().chars().take(1_000).collect();
+                }
+                paths.retain(|p| !p.is_empty());
+                paths.truncate(200);
+                if *source == ImportFrom::Files && paths.is_empty() {
                     issues.push(PlanIssue::error(
-                        at("source"),
-                        "import_files_gui",
-                        "file selection needs the import dialog; use source=inbox or folder",
+                        at("paths"),
+                        "paths_required",
+                        "import from files needs the file paths (type them or drop the files); otherwise use source=inbox or folder",
                     ));
                 }
                 if *source == ImportFrom::Folder && path.as_deref().map(str::trim).unwrap_or("").is_empty() {
@@ -460,7 +476,7 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
                     }
                 }
             }
-            Op::SetSetting { key, value } => check_setting(*key, value, &at("value"), &mut issues),
+            Op::SetSetting { key, value } => check_setting(key, value, &at("key"), &at("value"), &mut issues),
             Op::Open { target, reference } => {
                 *reference = reference.trim().chars().take(300).collect();
                 match target {
@@ -694,6 +710,296 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
                     issues.push(PlanIssue::error(at("days"), "days_range", "retention must be at most 36,500 days"));
                 }
             }
+            // -- 0.6.0 -----------------------------------------------------------------------
+            Op::Rotate { degrees, pages } => {
+                *degrees %= 360;
+                if *degrees == 0 || *degrees % 90 != 0 {
+                    issues.push(PlanIssue::error(at("degrees"), "degrees_invalid", "rotate needs 90, 180 or 270"));
+                }
+                pages.retain(|p| *p >= 1);
+                pages.sort_unstable();
+                pages.dedup();
+            }
+            Op::Rerender { dpi } => {
+                if let Some(d) = dpi {
+                    if !(72..=600).contains(d) {
+                        issues.push(PlanIssue::error(at("dpi"), "dpi_range", "dpi must be between 72 and 600"));
+                    }
+                }
+            }
+            Op::Split { boundaries, every } => {
+                boundaries.retain(|b| *b >= 2);
+                boundaries.sort_unstable();
+                boundaries.dedup();
+                if let Some(n) = every {
+                    if *n == 0 {
+                        *every = None;
+                    }
+                }
+                if boundaries.is_empty() && every.is_none() {
+                    issues.push(PlanIssue::error(
+                        at("boundaries"),
+                        "boundaries_required",
+                        "split needs the pages that start a new document (boundaries) or a page count (every)",
+                    ));
+                }
+            }
+            Op::Merge { name } => trim_opt(name, 200),
+            Op::SetTitle { title } => {
+                *title = title.trim().chars().take(300).collect();
+                if title.is_empty() {
+                    issues.push(PlanIssue::error(at("title"), "title_empty", "set_title needs a title"));
+                }
+            }
+            Op::EditText { find, replace, pages } => {
+                *find = find.chars().take(500).collect();
+                *replace = replace.chars().take(2_000).collect();
+                if find.trim().is_empty() {
+                    issues.push(PlanIssue::error(at("find"), "find_empty", "edit_text needs the text to find"));
+                }
+                pages.retain(|p| *p >= 1);
+                pages.sort_unstable();
+                pages.dedup();
+            }
+            Op::SetRole { .. } => {}
+            Op::ManageReference { action, group, name, project } => {
+                trim_opt(group, 200);
+                trim_opt(name, 200);
+                if project.is_some() {
+                    check_project(project, ctx, &at("project"), &mut issues);
+                } else if group.is_none() && matches!(action, ReferenceAction::Add | ReferenceAction::Remove) {
+                    // No group named: the open project's group (plan A), else ask.
+                    match ctx.scope_project.clone().or_else(|| ctx.current_project.clone()) {
+                        Some(p) => *project = Some(p),
+                        None => issues.push(PlanIssue::error(
+                            at("group"),
+                            "group_required",
+                            "name the reference group (or open a project)",
+                        )),
+                    }
+                }
+                match action {
+                    ReferenceAction::Create if name.is_none() && group.is_none() => {
+                        issues.push(PlanIssue::error(at("name"), "name_required", "create needs the group's name"))
+                    }
+                    ReferenceAction::Rename if name.is_none() => {
+                        issues.push(PlanIssue::error(at("name"), "name_required", "rename needs the new name"))
+                    }
+                    ReferenceAction::Rename
+                    | ReferenceAction::Delete
+                    | ReferenceAction::Enable
+                    | ReferenceAction::Disable
+                        if group.is_none() && project.is_none() =>
+                    {
+                        issues.push(PlanIssue::error(at("group"), "group_required", "name the reference group"))
+                    }
+                    _ => {}
+                }
+            }
+            Op::DefineTerm { term, definition, synonyms, .. } => {
+                *term = term.trim().chars().take(120).collect();
+                if term.is_empty() {
+                    issues.push(PlanIssue::error(at("term"), "term_empty", "define_term needs the term"));
+                }
+                trim_opt(definition, 2_000);
+                for s in synonyms.iter_mut() {
+                    *s = s.trim().chars().take(120).collect();
+                }
+                synonyms.retain(|s| !s.is_empty());
+                synonyms.truncate(20);
+            }
+            Op::SetVersion { group_key, label, effective_date, .. } => {
+                trim_opt(group_key, 200);
+                trim_opt(label, 60);
+                if let Some(d) = effective_date.as_mut() {
+                    *d = d.trim().to_string();
+                    if d.is_empty() {
+                        *effective_date = None;
+                    } else if chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").is_err() {
+                        issues.push(PlanIssue::error(
+                            at("effective_date"),
+                            "date_invalid",
+                            "effective_date must be YYYY-MM-DD",
+                        ));
+                    }
+                }
+            }
+            Op::UpdateProject {
+                project,
+                name,
+                template,
+                start_date,
+                end_date,
+                owner,
+                intake_no,
+                notes,
+                keywords,
+                inbox_folder,
+            } => {
+                check_project(project, ctx, &at("project"), &mut issues);
+                trim_opt(name, 120);
+                trim_opt(template, 120);
+                trim_opt(owner, 120);
+                trim_opt(intake_no, 120);
+                trim_opt(notes, 4_000);
+                trim_opt(inbox_folder, 300);
+                for (label, d) in [("start_date", &mut *start_date), ("end_date", &mut *end_date)] {
+                    if let Some(v) = d.as_mut() {
+                        *v = v.trim().to_string();
+                        if !v.is_empty() && chrono::NaiveDate::parse_from_str(v, "%Y-%m-%d").is_err() {
+                            issues.push(PlanIssue::error(
+                                at(label),
+                                "date_invalid",
+                                format!("{label} must be YYYY-MM-DD (empty clears)"),
+                            ));
+                        }
+                    }
+                }
+                if let Some(k) = keywords.as_mut() {
+                    for s in k.iter_mut() {
+                        *s = s.trim().chars().take(80).collect();
+                    }
+                    k.retain(|s| !s.is_empty());
+                    k.truncate(50);
+                }
+                let changes = name.is_some()
+                    || template.is_some()
+                    || start_date.is_some()
+                    || end_date.is_some()
+                    || owner.is_some()
+                    || intake_no.is_some()
+                    || notes.is_some()
+                    || keywords.is_some()
+                    || inbox_folder.is_some();
+                if !changes {
+                    issues.push(PlanIssue::error(
+                        at("name"),
+                        "nothing_to_change",
+                        "update_project needs at least one field to change",
+                    ));
+                }
+            }
+            Op::DeleteProject { project } => check_project(project, ctx, &at("project"), &mut issues),
+            Op::RemoveFromProject { project, doc_ids } => {
+                check_project(project, ctx, &at("project"), &mut issues);
+                doc_ids.retain(|d| !d.trim().is_empty());
+            }
+            Op::ManageTemplate { action, template, name, doc_types_required, description } => {
+                trim_opt(template, 120);
+                trim_opt(name, 120);
+                trim_opt(description, 2_000);
+                let mut resolved = Vec::new();
+                for t in doc_types_required.iter() {
+                    match ctx.doc_type(t) {
+                        Some(d) => resolved.push(d.slug.clone()),
+                        None if ctx.doc_types.is_empty() => resolved.push(t.clone()),
+                        None => issues.push(PlanIssue::warn(
+                            at("doc_types_required"),
+                            "doc_type_unknown",
+                            format!("unknown type '{t}' ignored"),
+                        )),
+                    }
+                }
+                *doc_types_required = resolved;
+                if template.is_none() && name.is_none() {
+                    issues.push(PlanIssue::error(
+                        at("name"),
+                        "name_required",
+                        "manage_template needs the template's name",
+                    ));
+                }
+                if *action == TemplateAction::Save && template.is_none() && doc_types_required.is_empty() {
+                    issues.push(PlanIssue::warn(
+                        at("doc_types_required"),
+                        "template_empty",
+                        "the new template lists no required document types",
+                    ));
+                }
+            }
+            Op::ClassifyProjects { .. } => {}
+            Op::ManageSchema { action, schema, name } => {
+                *schema = schema.trim().chars().take(120).collect();
+                if schema.is_empty() {
+                    issues.push(PlanIssue::error(
+                        at("schema"),
+                        "schema_required",
+                        "manage_schema needs the schema (name, id or type)",
+                    ));
+                }
+                trim_opt(name, 120);
+                if *action == SchemaAction::Rename && name.is_none() {
+                    issues.push(PlanIssue::error(at("name"), "name_required", "rename needs the new name"));
+                }
+            }
+            Op::ManageModel { action, id, tier, backend, path } => {
+                trim_opt(id, 120);
+                trim_opt(tier, 40);
+                trim_opt(backend, 40);
+                trim_opt(path, 1_000);
+                match action {
+                    ModelAction::SetTier => match tier.as_deref() {
+                        Some(t) if t == "auto" || settings_catalog::TIERS.contains(&t) => {}
+                        _ => issues.push(PlanIssue::error(
+                            at("tier"),
+                            "tier_invalid",
+                            format!("tier must be auto or one of {}", settings_catalog::TIERS.join(", ")),
+                        )),
+                    },
+                    ModelAction::SetBackend => match backend.as_deref() {
+                        Some(b) if settings_catalog::BACKENDS.contains(&b) => {}
+                        _ => issues.push(PlanIssue::error(
+                            at("backend"),
+                            "backend_invalid",
+                            format!("backend must be one of {}", settings_catalog::BACKENDS.join(", ")),
+                        )),
+                    },
+                    ModelAction::Import => {
+                        if path.is_none() {
+                            issues.push(PlanIssue::error(
+                                at("path"),
+                                "path_required",
+                                "import needs the model folder or GGUF path",
+                            ));
+                        }
+                    }
+                    ModelAction::Download
+                    | ModelAction::Delete
+                    | ModelAction::Verify
+                    | ModelAction::Load
+                    | ModelAction::Unload => {
+                        if let Some(m) = id.as_deref() {
+                            if !ctx.model_ids.is_empty()
+                                && !ctx.model_ids.iter().any(|k| k == m)
+                                && *action == ModelAction::Download
+                            {
+                                issues.push(PlanIssue::warn(
+                                    at("id"),
+                                    "model_unknown",
+                                    format!("'{m}' is not in the registry; known: {}", ctx.model_ids.join(", ")),
+                                ));
+                            }
+                        } else {
+                            issues.push(PlanIssue::error(at("id"), "model_id_required", "name the model (id)"));
+                        }
+                    }
+                    ModelAction::Benchmark => {}
+                }
+            }
+            Op::Workspace { action, path } => {
+                trim_opt(path, 1_000);
+                if matches!(
+                    action,
+                    super::WorkspaceAction::Open | super::WorkspaceAction::Create | super::WorkspaceAction::Forget
+                ) && path.is_none()
+                {
+                    issues.push(PlanIssue::error(
+                        at("path"),
+                        "path_required",
+                        "workspace open / create / forget needs the folder path",
+                    ));
+                }
+            }
+            Op::Maintenance { .. } => {}
             Op::SetInboxWatch { .. }
             | Op::Validate {}
             | Op::Reindex { .. }
@@ -796,46 +1102,32 @@ fn check_folder_template(t: &str, path: &str, issues: &mut Vec<PlanIssue>) {
     }
 }
 
-fn check_setting(key: SettingKey, value: &mut Value, path: &str, issues: &mut Vec<PlanIssue>) {
-    let bad = |issues: &mut Vec<PlanIssue>, msg: &str| issues.push(PlanIssue::error(path, "setting_value", msg));
-    match key {
-        SettingKey::RenderDpi => match value.as_f64().or_else(|| value.as_str().and_then(|s| s.trim().parse().ok())) {
-            Some(n) if [150.0, 200.0, 300.0].contains(&n) => *value = Value::from(n as u64),
-            _ => bad(issues, "render_dpi must be 150, 200 or 300"),
-        },
-        SettingKey::PiiMasking | SettingKey::InboxWatch => match value {
-            Value::Bool(_) => {}
-            Value::String(s) if ["true", "on", "켜기", "yes"].contains(&s.trim().to_lowercase().as_str()) => {
-                *value = Value::Bool(true)
-            }
-            Value::String(s) if ["false", "off", "끄기", "no"].contains(&s.trim().to_lowercase().as_str()) => {
-                *value = Value::Bool(false)
-            }
-            _ => bad(issues, "value must be true or false"),
-        },
-        SettingKey::AutoPipeline => match value.as_str().map(str::trim) {
-            Some("none" | "classify_only" | "classify_and_ocr" | "full") => {}
-            Some("classify") => *value = Value::from("classify_only"),
-            Some("ocr") => *value = Value::from("classify_and_ocr"),
-            _ => bad(issues, "auto_pipeline must be none, classify_only, classify_and_ocr or full"),
-        },
-        SettingKey::ReviewThreshold => {
-            match value.as_f64().or_else(|| value.as_str().and_then(|s| s.trim().trim_end_matches('%').parse().ok())) {
-                Some(n) if (0.0..=1.0).contains(&n) => *value = Value::from(n),
-                Some(n) if (1.0..=100.0).contains(&n) => *value = Value::from(n / 100.0),
-                _ => bad(issues, "review_threshold must be between 0 and 1"),
+/// `set_setting`: the key must be a catalog path (0.1–0.5 short keys are mapped), the value is
+/// coerced to the key's type (booleans from "켜/끄", percentages, Korean enum names).
+fn check_setting(key: &mut String, value: &mut Value, key_path: &str, value_path: &str, issues: &mut Vec<PlanIssue>) {
+    match settings_catalog::find(key) {
+        Some((canonical, spec)) => {
+            *key = canonical.to_string();
+            if let Err(msg) = settings_catalog::coerce(spec, value) {
+                issues.push(PlanIssue::error(value_path, "setting_value", msg));
             }
         }
-        SettingKey::CacheLimitGb => match value.as_f64().or_else(|| value.as_str().and_then(|s| s.trim().parse().ok()))
-        {
-            Some(n) if (0.5..=1000.0).contains(&n) => *value = Value::from(n),
-            _ => bad(issues, "cache_limit_gb must be between 0.5 and 1000"),
-        },
-        SettingKey::JournalDays => {
-            match value.as_f64().or_else(|| value.as_str().and_then(|s| s.trim().parse().ok())) {
-                Some(n) if (0.0..=36_500.0).contains(&n) => *value = Value::from(n as u64),
-                _ => bad(issues, "journal_days must be between 0 and 36500"),
-            }
+        None => issues.push(PlanIssue::error(
+            key_path,
+            "setting_unknown",
+            format!(
+                "unknown setting '{key}'; keys: {}",
+                settings_catalog::SETTINGS.iter().map(|s| s.key).collect::<Vec<_>>().join(", ")
+            ),
+        )),
+    }
+}
+
+fn trim_opt(v: &mut Option<String>, max: usize) {
+    if let Some(s) = v.as_mut() {
+        *s = s.trim().chars().take(max).collect();
+        if s.is_empty() {
+            *v = None;
         }
     }
 }

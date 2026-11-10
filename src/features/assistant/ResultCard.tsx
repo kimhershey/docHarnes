@@ -14,13 +14,13 @@ import { verdictVariant } from "@/features/projects/rules";
 import { hitHref } from "./evidence";
 import { runJournal } from "@/lib/commands";
 import { revealPath } from "@/lib/ipc";
-import { SCREEN_ROUTES, type Draft, type OrganizeItem, type Plan, type PlanExecution, type PlanResponse, type StepStatus, type UndoReport } from "@/lib/types";
+import { SCREEN_ROUTES, type Draft, type OpKind, type OrganizeItem, type Plan, type PlanExecution, type PlanResponse, type StepStatus, type UndoReport } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useGenerateStore } from "@/stores/generate";
 import { usePipelineStore } from "@/stores/pipeline";
 
 import { AggregateCard } from "./AggregateCard";
-import { aggregateRequestFor, deriveResultActions, opLabel } from "./describePlan";
+import { agentStepDetail, aggregateRequestFor, deriveResultActions, opLabel } from "./describePlan";
 
 function StatusIcon({ status }: { status: StepStatus }) {
   switch (status) {
@@ -67,6 +67,29 @@ function MovesTable({ items }: { items: OrganizeItem[] }) {
         ))}
       </tbody>
     </table>
+  );
+}
+
+/** 0.6.0 agent steps (rotate, split, merge, reference groups, projects …): one detail line + an open button. */
+function AgentStepLine({ op, payload }: { op: OpKind; payload: unknown }) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const detail = agentStepDetail(op, payload, t);
+  if (!detail) return null;
+  return (
+    <span className="flex flex-wrap items-center gap-2 text-xs text-fg-muted" data-testid="result-agent-detail">
+      <span className="selectable">{detail.text}</span>
+      {detail.openDocument && (
+        <Button size="sm" variant="ghost" onClick={() => navigate(`${SCREEN_ROUTES.library}/${detail.openDocument}`)} data-testid="result-open-document">
+          {t("planner.result.open_document")}
+        </Button>
+      )}
+      {detail.openProject && (
+        <Button size="sm" variant="ghost" onClick={() => navigate(`${SCREEN_ROUTES.projects}/${detail.openProject}`)} data-testid="result-open-project-detail">
+          {t("planner.result.open_project")}
+        </Button>
+      )}
+    </span>
   );
 }
 
@@ -143,6 +166,7 @@ export function ResultCard({ execution, plan, response, error }: { execution: Pl
                   {t("planner.result.step_failed", { error: step.error })}
                 </span>
               )}
+              {step.status === "done" && <AgentStepLine op={step.op} payload={step.payload} />}
             </div>
           </li>
         ))}

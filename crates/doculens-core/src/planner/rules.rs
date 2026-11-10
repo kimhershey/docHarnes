@@ -6,11 +6,14 @@
 use crate::generate::{Length, OutputFormat, Tone};
 use crate::prerouter::{self, DateRange, PreRoutedOp};
 use crate::settings::{Language, Profile};
+use chrono::{Datelike, NaiveDate};
+use serde_json::Value;
 
 use super::{
-    compact, AggregateFn, AutoPipeline, DocTypeSummary, EngineOp, ExplainScope, ExportFormat, ExportTarget,
-    FieldSummary, GroupBy, ImportFrom, JobOp, OcrProfile, Op, OpKind, OpenTarget, Plan, PlanContext, RetentionTarget,
-    ReviewOnly, ReviewOp, SchemaMode, SchemaSummary, Scope, SettingKey, SummarizeTarget, SummaryLength,
+    compact, settings_catalog, AggregateFn, AutoPipeline, DocTypeSummary, EngineOp, ExplainScope, ExportFormat,
+    ExportTarget, FieldSummary, GroupBy, ImportFrom, JobOp, MaintenanceAction, ModelAction, OcrProfile, Op, OpKind,
+    OpenTarget, Plan, PlanContext, ReferenceAction, RetentionTarget, ReviewOnly, ReviewOp, RoleParam, SchemaAction,
+    SchemaMode, SchemaSummary, Scope, SummarizeTarget, SummaryLength, TemplateAction, TermAction, WorkspaceAction,
 };
 
 /// Default folder templates per grouping (design §3.7 정리 화면).
@@ -464,6 +467,14 @@ fn engine(t: &Text<'_>) -> Option<Plan> {
         EngineOp::Sleep
     } else if t.has(&["깨워", "wake"]) {
         EngineOp::Wake
+    } else if t.has(&["꺼", "끄", "정지", "중지", "종료", "내려", "stop", "shut down", "turn off", "off"])
+        && !t.has(&["감시", "watch*", "알림"])
+    {
+        EngineOp::Stop
+    } else if t.has(&["켜", "시작", "올려", "start", "turn on", "launch"])
+        && !t.has(&["감시", "watch*", "자동 시작", "자동시작", "auto"])
+    {
+        EngineOp::Start
     } else {
         return None;
     };
@@ -829,6 +840,7 @@ fn inbox(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     let mut ops = vec![Op::Import {
         source: ImportFrom::Inbox,
         path: None,
+        paths: Vec::new(),
         recursive: None,
         auto_pipeline: Some(AutoPipeline::None),
     }];
@@ -1131,6 +1143,13 @@ fn delete(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         "model",
         "용어",
         "glossary",
+        "프로젝트",
+        "project",
+        "템플릿",
+        "template",
+        "양식",
+        "워크스페이스",
+        "workspace",
     ]) {
         return None;
     }
@@ -2565,7 +2584,7 @@ fn quick_settings(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     if let (Some(n), true) = (number, setting_verb) {
         if t.has(&["dpi", "해상도", "resolution"]) && [150.0, 200.0, 300.0].contains(&n) {
             return Some(mk(
-                Op::SetSetting { key: SettingKey::RenderDpi, value: serde_json::json!(n as u32) },
+                Op::SetSetting { key: "processing.render_dpi".into(), value: serde_json::json!(n as u32) },
                 Scope::default(),
                 0.88,
                 t.t(&format!("렌더 DPI를 {n}로"), &format!("Render DPI → {n}")).to_string(),
@@ -2574,7 +2593,7 @@ fn quick_settings(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         if t.has(&["임계", "threshold", "기준값", "신뢰도 기준", "confidence threshold"]) {
             let v = if n > 1.0 { n / 100.0 } else { n };
             return Some(mk(
-                Op::SetSetting { key: SettingKey::ReviewThreshold, value: serde_json::json!(v) },
+                Op::SetSetting { key: "processing.review_threshold".into(), value: serde_json::json!(v) },
                 Scope::default(),
                 0.85,
                 t.t(&format!("검토 임계값을 {v}로"), &format!("Review threshold → {v}")).to_string(),
@@ -2652,6 +2671,1063 @@ fn quick_settings(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     None
 }
 
+// ---------------------------------------------------------------------------
+// 0.6.0: every GUI function as a command (plan §4 phrases)
+// ---------------------------------------------------------------------------
+
+/// Numbers in the sentence (digits with an optional decimal part; "90도", "125%", "3쪽" → 90, 125, 3).
+fn numbers(raw: &str) -> Vec<f64> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for c in raw.chars().chain(std::iter::once(' ')) {
+        if c.is_ascii_digit() || (c == '.' && !cur.is_empty() && !cur.contains('.')) {
+            cur.push(c);
+        } else {
+            let n = cur.trim_end_matches('.');
+            if let Ok(v) = n.parse::<f64>() {
+                if !n.is_empty() {
+                    out.push(v);
+                }
+            }
+            cur.clear();
+        }
+    }
+    out
+}
+
+/// Every quoted segment in order ("…", '…', “…”, 「…」).
+fn quoted_all(raw: &str) -> Vec<String> {
+    let chars: Vec<char> = raw.chars().collect();
+    let opens = ['"', '\'', '“', '‘', '「', '『'];
+    let closes = ['"', '\'', '”', '’', '」', '』'];
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if opens.contains(&chars[i]) {
+            if let Some(off) = chars[i + 1..].iter().position(|c| closes.contains(c)) {
+                let inner: String = chars[i + 1..i + 1 + off].iter().collect();
+                if !inner.trim().is_empty() {
+                    out.push(inner.trim().to_string());
+                }
+                i += off + 2;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// The sentence without its quoted segments (names in quotes must not trigger rules).
+fn unquoted(raw: &str) -> String {
+    let chars: Vec<char> = raw.chars().collect();
+    let opens = ['"', '\'', '“', '‘', '「', '『'];
+    let closes = ['"', '\'', '”', '’', '」', '』'];
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if opens.contains(&chars[i]) {
+            if let Some(off) = chars[i + 1..].iter().position(|c| closes.contains(c)) {
+                out.push(' ');
+                i += off + 2;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// An absolute date in the sentence: `YYYY-MM-DD`, `YYYY.MM.DD`, `YYYY년 M월 D일` or `M월 D일` (this year).
+fn absolute_date(raw: &str, today: NaiveDate) -> Option<String> {
+    let nums = numbers(raw);
+    let compact_raw = compact(raw);
+    // ISO / dotted: three numbers where the first looks like a year.
+    for w in raw.split_whitespace() {
+        let w = w.trim_matches(|c: char| !c.is_ascii_digit());
+        let parts: Vec<&str> = w.split(['-', '.', '/']).collect();
+        if parts.len() == 3 {
+            if let (Ok(y), Ok(m), Ok(d)) = (parts[0].parse::<i32>(), parts[1].parse::<u32>(), parts[2].parse::<u32>()) {
+                if (1990..=2100).contains(&y) {
+                    return NaiveDate::from_ymd_opt(y, m, d).map(|d| d.format("%Y-%m-%d").to_string());
+                }
+            }
+        }
+    }
+    if compact_raw.contains('월') && compact_raw.contains('일') {
+        // "2026년 12월 31일" / "12월 31일"
+        let year_pos = nums.iter().position(|n| (1990.0..=2100.0).contains(n));
+        let (y, rest): (i32, &[f64]) = match year_pos {
+            Some(i) => (nums[i] as i32, &nums[i + 1..]),
+            None => (today.year(), &nums[..]),
+        };
+        if rest.len() >= 2 {
+            return NaiveDate::from_ymd_opt(y, rest[0] as u32, rest[1] as u32)
+                .map(|d| d.format("%Y-%m-%d").to_string());
+        }
+    }
+    None
+}
+
+const ON_WORDS: &[&str] = &["켜", "사용으로", "사용하", "허용", "활성", "on", "enable", "turn on", "allow"];
+const OFF_WORDS: &[&str] =
+    &["꺼", "끄", "끔", "해제", "금지", "비활성", "사용 안", "사용안", "off", "disable", "turn off"];
+
+fn on_off(t: &Text<'_>) -> Option<bool> {
+    if t.has(OFF_WORDS) {
+        Some(false)
+    } else if t.has(ON_WORDS) {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+/// Maintenance: 지금 파기 · 끝난 작업 지우기 · 다시 검사 · inbox 검사.
+fn maintenance_rule(t: &Text<'_>) -> Option<Plan> {
+    if t.is_question() {
+        return None;
+    }
+    let action = if t.has(&["파기", "purge"]) && t.has(&["지금", "바로", "실행", "now", "run"]) {
+        MaintenanceAction::PurgeNow
+    } else if t.has(&["끝난 작업", "완료된 작업", "완료 작업", "finished jobs", "completed jobs"])
+        && t.has(&["지워", "지우", "삭제", "정리", "clear", "remove"])
+    {
+        MaintenanceAction::ClearFinishedJobs
+    } else if t.has(&["다시 검사", "재검사", "다시검사", "rescan", "re-scan"])
+        && !t.has(&["정합성", "consistency", "규칙"])
+    {
+        MaintenanceAction::Rescan
+    } else if t.has(&["inbox", "인박스", "받은함"])
+        && t.has(&["검사", "스캔", "scan", "확인해"])
+        && !t.has(&["감시", "watch*"])
+    {
+        MaintenanceAction::InboxScan
+    } else {
+        return None;
+    };
+    let summary = match action {
+        MaintenanceAction::PurgeNow => {
+            t.t("보존 기간이 지난 항목을 지금 파기합니다", "Run the retention purge now").to_string()
+        }
+        MaintenanceAction::ClearFinishedJobs => {
+            t.t("끝난 작업을 목록에서 지웁니다", "Clear the finished jobs").to_string()
+        }
+        MaintenanceAction::Rescan => {
+            t.t("워크스페이스 파일을 다시 검사합니다", "Rescan the workspace files").to_string()
+        }
+        MaintenanceAction::InboxScan => t.t("inbox를 지금 검사합니다", "Scan the inbox now").to_string(),
+    };
+    Some(mk(Op::Maintenance { action }, Scope::default(), 0.88, summary))
+}
+
+/// Workspace: 열기 · 만들기 · 닫기 · 목록에서 지우기 (a path when the sentence carries one).
+fn workspace_rule(t: &Text<'_>) -> Option<Plan> {
+    if !t.has(&["워크스페이스", "작업 공간", "작업공간", "workspace"]) || t.is_question() {
+        return None;
+    }
+    let path = path_in(t.raw);
+    let action = if t.has(&["닫아", "닫기", "close"]) {
+        WorkspaceAction::Close
+    } else if t.has(&["목록에서", "잊어", "forget", "remove from the list"]) {
+        WorkspaceAction::Forget
+    } else if t.has(&["만들어", "만들", "생성", "새 ", "create", "new"]) {
+        WorkspaceAction::Create
+    } else if t.has(&["열어", "열기", "전환", "바꿔", "open", "switch"]) {
+        WorkspaceAction::Open
+    } else {
+        return None;
+    };
+    if path.is_none() && action != WorkspaceAction::Close {
+        return Some(Plan::clarify(
+            t.t("어느 폴더의 워크스페이스인가요? 경로를 알려주세요.", "Which folder? Give the workspace path."),
+            0.5,
+        ));
+    }
+    let summary = match action {
+        WorkspaceAction::Open => t.t("워크스페이스를 엽니다", "Open the workspace").to_string(),
+        WorkspaceAction::Create => t.t("새 워크스페이스를 만듭니다", "Create a workspace").to_string(),
+        WorkspaceAction::Close => t.t("워크스페이스를 닫습니다", "Close the workspace").to_string(),
+        WorkspaceAction::Forget => t.t("최근 목록에서 워크스페이스를 지웁니다", "Forget the workspace").to_string(),
+    };
+    Some(mk(Op::Workspace { action, path }, Scope::default(), 0.86, summary))
+}
+
+/// A file-system path in the sentence (`D:\…`, `/…`, `~/…`, `C:/…`), trailing particle stripped.
+fn path_in(raw: &str) -> Option<String> {
+    for w in raw.split_whitespace() {
+        let w = w.trim_matches(|c: char| ['"', '\'', '“', '”', ',', '.'].contains(&c));
+        let looks = (w.len() >= 3 && w.as_bytes()[1] == b':' && (w.as_bytes()[2] == b'\\' || w.as_bytes()[2] == b'/'))
+            || w.starts_with("\\\\")
+            || w.starts_with('/')
+            || w.starts_with("~/");
+        if looks {
+            let mut p = w.to_string();
+            for particle in ["으로", "에서", "에는", "을", "를", "은", "는", "로", "에", "의"] {
+                if let Some(s) = p.strip_suffix(particle) {
+                    if s.chars().last().is_some_and(|c| c.is_ascii()) {
+                        p = s.to_string();
+                        break;
+                    }
+                }
+            }
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// AI models: 받기(download) · 가져오기(import) · 삭제 · 해시 검증 · 벤치마크 · 로드/언로드 · 티어 · 백엔드.
+fn manage_model_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
+    if t.is_question() {
+        return None;
+    }
+    let model_word = t.has(&["모델", "model", "gguf"]);
+    let tier = if t.has(&["티어", "tier"]) {
+        if t.has(&["자동", "auto"]) {
+            Some("auto")
+        } else if t.has(&["cpu"]) {
+            Some("cpu_only")
+        } else if t.has(&["24"]) {
+            Some("vram_24gb_plus")
+        } else if t.has(&["16"]) {
+            Some("vram_16gb")
+        } else if t.has(&["12"]) {
+            Some("vram_12gb")
+        } else if t.has(&["8"]) {
+            Some("vram_8gb")
+        } else if t.has(&["6"]) {
+            Some("vram_6gb")
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some(tier) = tier {
+        return Some(mk(
+            Op::ManageModel {
+                action: ModelAction::SetTier,
+                id: None,
+                tier: Some(tier.into()),
+                backend: None,
+                path: None,
+            },
+            Scope::default(),
+            0.86,
+            t.t(&format!("모델 티어를 {tier}(으)로"), &format!("Model tier → {tier}")).to_string(),
+        ));
+    }
+    if t.has(&["백엔드", "backend"]) {
+        let backend =
+            ["cuda", "vulkan", "cpu", "auto"].into_iter().find(|b| t.has(&[b]) || (*b == "auto" && t.has(&["자동"])));
+        if let Some(b) = backend {
+            return Some(mk(
+                Op::ManageModel {
+                    action: ModelAction::SetBackend,
+                    id: None,
+                    tier: None,
+                    backend: Some(b.into()),
+                    path: None,
+                },
+                Scope::default(),
+                0.86,
+                t.t(&format!("엔진 백엔드를 {b}(으)로"), &format!("Engine backend → {b}")).to_string(),
+            ));
+        }
+    }
+    if !model_word {
+        return None;
+    }
+    let id = model_id(t, ctx);
+    let action = if t.has(&["받아", "다운로드", "내려받", "download"]) {
+        ModelAction::Download
+    } else if t.has(&["가져와", "가져오", "불러와", "import"]) && path_in(t.raw).is_some() {
+        ModelAction::Import
+    } else if t.has(&["삭제", "지워", "지우", "delete", "remove"]) {
+        ModelAction::Delete
+    } else if t.has(&["해시", "검증", "hash", "verify"]) {
+        ModelAction::Verify
+    } else if t.has(&["벤치마크", "속도 측정", "테스트해", "benchmark", "test the model"]) {
+        ModelAction::Benchmark
+    } else if t.has(&["언로드", "내려", "unload"]) && !t.has(&["내려받"]) {
+        ModelAction::Unload
+    } else if t.has(&["로드해", "로드 해", "메모리에 올려", "load"]) && !t.has(&["다운로드", "download"])
+    {
+        ModelAction::Load
+    } else {
+        return None;
+    };
+    if action == ModelAction::Import {
+        return Some(mk(
+            Op::ManageModel { action, id: None, tier: None, backend: None, path: path_in(t.raw) },
+            Scope::default(),
+            0.86,
+            t.t("모델을 가져옵니다", "Import the model").into(),
+        ));
+    }
+    let Some(id) = id else {
+        return Some(Plan::clarify(t.t("어느 모델인가요? 모델 ID를 알려주세요.", "Which model? Give its id."), 0.5));
+    };
+    let summary = match action {
+        ModelAction::Download => {
+            t.t(&format!("모델 {id}을(를) 내려받습니다"), &format!("Download model {id}")).to_string()
+        }
+        ModelAction::Delete => t.t(&format!("모델 {id}을(를) 삭제합니다"), &format!("Delete model {id}")).to_string(),
+        ModelAction::Verify => {
+            t.t(&format!("모델 {id}의 해시를 검증합니다"), &format!("Verify model {id}")).to_string()
+        }
+        ModelAction::Benchmark => {
+            t.t(&format!("모델 {id}을(를) 테스트합니다"), &format!("Benchmark model {id}")).to_string()
+        }
+        ModelAction::Load => t.t(&format!("모델 {id}을(를) 로드합니다"), &format!("Load model {id}")).to_string(),
+        _ => t.t(&format!("모델 {id}을(를) 내립니다"), &format!("Unload model {id}")).to_string(),
+    };
+    Some(mk(
+        Op::ManageModel { action, id: Some(id), tier: None, backend: None, path: None },
+        Scope::default(),
+        0.86,
+        summary.to_string(),
+    ))
+}
+
+/// Generic settings by phrase → catalog key (booleans from 켜/꺼, numbers from the sentence).
+fn generic_setting_rule(t: &Text<'_>) -> Option<Plan> {
+    if t.is_question() || t.has(&["했어", "했다", "했습니다"]) {
+        return None;
+    }
+    const BOOLS: &[(&[&str], &str)] = &[
+        (&["자동 임베딩", "자동임베딩", "auto embed"], "knowledge.auto_embed"),
+        (&["자동 색인", "자동색인", "auto index"], "knowledge.auto_index"),
+        (&["절전 방지", "절전방지", "prevent sleep"], "notifications.prevent_sleep_during_jobs"),
+        (
+            &["완료 알림", "작업 알림", "알림을", "알림 ", "job notification", "notifications"],
+            "notifications.job_complete",
+        ),
+        (&["최신본만", "latest only", "latest editions"], "knowledge.latest_only"),
+        (&["일반 지식", "일반지식", "general knowledge"], "knowledge.allow_general_knowledge"),
+        (&["마스킹", "masking"], "privacy.pii_masking"),
+        (&["썸네일 보관", "썸네일", "thumbnails"], "cache.keep_thumbnails"),
+        (&["온라인 다운로드", "online download"], "models.allow_online_download"),
+        (&["엔진 자동 시작", "자동 시작", "auto start", "auto-start"], "models.auto_start_engine"),
+        (&["워밍업", "warm up", "warmup"], "models.warmup_after_load"),
+        (&["정밀 모드", "정밀모드", "precise mode"], "processing.precise_mode"),
+        (&["디지털 pdf", "digital pdf"], "processing.ocr_digital_pdf"),
+        (&["검토 완료만 정리", "검토 완료 문서만", "reviewed only"], "processing.organize_reviewed_only"),
+        (&["빽빽한 표", "dense table", "dense re-ocr"], "processing.dense_reocr"),
+        (&["사이드바 접", "sidebar collapsed", "collapse the sidebar"], "ui.sidebar_collapsed"),
+        (&["움직임 줄이", "reduced motion"], "ui.reduced_motion"),
+        (&["비전 인코더", "vision encoder", "vision on cpu"], "models.vision_on_cpu"),
+    ];
+    const NUMBERS: &[(&[&str], &str)] = &[
+        (&["ui 배율", "배율", "화면 배율", "ui scale", "scale"], "ui.scale_percent"),
+        (&["캐시 상한", "캐시 한도", "페이지 캐시", "cache limit", "page cache"], "cache.page_cache_max_gb"),
+        (&["근거 개수", "top-k", "top k", "topk"], "knowledge.top_k"),
+        (&["컨텍스트 토큰", "근거 토큰", "context tokens"], "knowledge.context_tokens"),
+        (&["청크", "chunk"], "knowledge.chunk_target_tokens"),
+        (&["유사도", "similarity"], "knowledge.min_vector_similarity"),
+        (&["감사 표본", "audit sample"], "processing.audit_sample_percent"),
+        (&["최대 쪽수", "추출 쪽수", "page limit", "max pages"], "processing.kie_max_pages"),
+        (&["절전 대기", "sleep after", "idle"], "models.sleep_idle_seconds"),
+        (&["상주 모델", "resident models"], "models.resident_models_max"),
+    ];
+    for (words, key) in BOOLS {
+        if t.has(words) {
+            if *key == "ui.reduced_motion" {
+                let v = match on_off(t) {
+                    Some(true) => "on",
+                    Some(false) => "off",
+                    None => return None,
+                };
+                return Some(setting_plan(t, key, serde_json::json!(v)));
+            }
+            if let Some(b) = on_off(t) {
+                return Some(setting_plan(t, key, serde_json::json!(b)));
+            }
+        }
+    }
+    let setting_verb =
+        t.has(&["로", "으로", "바꿔", "변경", "설정", "해줘", "해 줘", "올려", "내려", "set", "change", "to", "use"]);
+    if setting_verb {
+        for (words, key) in NUMBERS {
+            if t.has(words) {
+                let n = numbers(t.raw).into_iter().find(|n| *n > 0.0)?;
+                if *key == "generation.max_tokens_gpu" {
+                    continue;
+                }
+                return Some(setting_plan(t, key, serde_json::json!(n)));
+            }
+        }
+        if t.has(&["토큰 상한", "토큰 예산", "token cap", "token budget"]) {
+            let n = numbers(t.raw).into_iter().find(|n| *n >= 256.0)?;
+            let key = if t.has(&["cpu"]) { "generation.max_tokens_cpu" } else { "generation.max_tokens_gpu" };
+            return Some(setting_plan(t, key, serde_json::json!(n)));
+        }
+    }
+    None
+}
+
+fn setting_plan(t: &Text<'_>, key: &str, value: Value) -> Plan {
+    let label = settings_catalog::find(key).map(|(_, s)| if t.ko { s.label_ko } else { s.label_en }).unwrap_or(key);
+    mk(
+        Op::SetSetting { key: key.to_string(), value: value.clone() },
+        Scope::default(),
+        0.86,
+        t.t(&format!("{label} → {value}"), &format!("{label} → {value}")).to_string(),
+    )
+}
+
+/// Documents: 회전 · 다시 렌더 · 분할 · 병합 · 제목 · 글자 바꾸기 · 역할 표시.
+fn document_edit_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
+    if t.is_question() {
+        return None;
+    }
+    let scoped = |t: &Text<'_>, ctx: &PlanContext| -> Scope {
+        let mut scope = scope_of(t, ctx, None, None);
+        if scope.is_empty() && !t.has(ALL_WORDS) {
+            scope.doc_ids = selection_ids(ctx);
+        }
+        scope
+    };
+    // 역할: "참고 자료로 표시", "업무 문서로 바꿔", "양식으로 표시" (not "양식으로 등록" = register_form).
+    if t.has(&["로 표시", "로 바꿔", "로 지정", "mark as", "mark this", "mark these"]) && !t.has(&["등록", "register"])
+    {
+        let role = if t.has(&["참고 자료", "참고자료", "지식 문서", "reference"]) {
+            Some(RoleParam::Knowledge)
+        } else if t.has(&["업무 문서", "업무문서", "work document"]) {
+            Some(RoleParam::Work)
+        } else if t.has(&["양식", "서식", "form"]) && !t.has(&["유형", "type"]) {
+            Some(RoleParam::Form)
+        } else {
+            None
+        };
+        if let Some(role) = role {
+            let scope = scoped(t, ctx);
+            if scope.is_empty() {
+                return Some(Plan::clarify(
+                    t.t("어떤 문서를 표시할까요? 문서를 선택해 주세요.", "Which documents? Select them first."),
+                    0.5,
+                ));
+            }
+            let label = match role {
+                RoleParam::Knowledge => t.t("참고 자료", "reference material").to_string(),
+                RoleParam::Work => t.t("업무 문서", "work documents").to_string(),
+                RoleParam::Form => t.t("양식", "forms").to_string(),
+            };
+            return Some(mk(
+                Op::SetRole { role },
+                scope,
+                0.85,
+                t.t(&format!("{label}(으)로 표시합니다"), &format!("Mark as {label}")).to_string(),
+            ));
+        }
+    }
+    // 회전
+    let turn_words = t.has(&["회전", "rotate"])
+        || (t.has(&["돌려", "돌리"])
+            && (numbers(t.raw).iter().any(|n| [90.0, 180.0, 270.0].contains(n))
+                || t.has(&["시계", "방향", "거꾸로", "옆으로", "뒤집", "degrees"])));
+    if turn_words && !t.has(&["되돌려", "undo", "검사", "ocr", "추출", "처리", "작업"]) {
+        let degrees = numbers(t.raw)
+            .into_iter()
+            .map(|n| n as u16)
+            .find(|n| [90, 180, 270].contains(n))
+            .unwrap_or(if t.has(&["반대", "왼쪽", "counter", "left"]) { 270 } else { 90 });
+        let scope = scoped(t, ctx);
+        if scope.is_empty() {
+            return Some(Plan::clarify(
+                t.t(
+                    "어떤 문서를 돌릴까요? 문서를 열거나 선택해 주세요.",
+                    "Which document should be rotated? Open or select one.",
+                ),
+                0.5,
+            ));
+        }
+        let pages: Vec<u32> = if t.has(&["쪽", "페이지", "page"]) && !t.has(&["전체", "모든", "all pages"]) {
+            numbers(t.raw)
+                .into_iter()
+                .filter(|n| *n >= 1.0 && *n < 10_000.0 && ![90.0, 180.0, 270.0].contains(n))
+                .map(|n| n as u32)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        return Some(mk(
+            Op::Rotate { degrees, pages },
+            scope,
+            0.86,
+            t.t(&format!("{degrees}° 회전합니다"), &format!("Rotate by {degrees}°")).to_string(),
+        ));
+    }
+    // 다시 렌더
+    if t.has(&["다시 렌더", "다시렌더", "재렌더", "리렌더", "re-render", "rerender", "render again"]) {
+        let dpi = numbers(t.raw).into_iter().find(|n| (72.0..=600.0).contains(n)).map(|n| n as u16);
+        let scope = scoped(t, ctx);
+        if scope.is_empty() {
+            return Some(Plan::clarify(
+                t.t("어떤 문서를 다시 렌더할까요? 문서를 선택해 주세요.", "Which documents should be re-rendered?"),
+                0.5,
+            ));
+        }
+        return Some(mk(Op::Rerender { dpi }, scope, 0.86, t.t("다시 렌더합니다", "Re-render").into()));
+    }
+    // 분할: "3쪽부터 나눠" (boundary), "5쪽마다 분할" (every)
+    if t.has(&["나눠", "나누", "분할", "쪼개", "split"])
+        && t.has(&["쪽", "페이지", "page"])
+        && !t.has(&["화면", "screen", "pane"])
+    {
+        let nums: Vec<u32> =
+            numbers(t.raw).into_iter().filter(|n| *n >= 1.0 && *n < 10_000.0).map(|n| n as u32).collect();
+        let (boundaries, every) = if t.has(&["마다", "every", "each"]) {
+            (Vec::new(), nums.first().copied())
+        } else {
+            (nums.iter().copied().filter(|n| *n >= 2).collect(), None)
+        };
+        let scope = scoped(t, ctx);
+        if scope.is_empty() {
+            return Some(Plan::clarify(
+                t.t(
+                    "어떤 문서를 나눌까요? 문서를 열거나 선택해 주세요.",
+                    "Which document should be split? Open or select one.",
+                ),
+                0.5,
+            ));
+        }
+        if boundaries.is_empty() && every.is_none() {
+            return Some(Plan::clarify(
+                t.t(
+                    "몇 쪽에서 나눌까요? (예: 3쪽부터, 5쪽마다)",
+                    "Where should it be split? (e.g. from page 3, every 5 pages)",
+                ),
+                0.5,
+            ));
+        }
+        return Some(mk(
+            Op::Split { boundaries, every },
+            scope,
+            0.84,
+            t.t("문서를 나눕니다", "Split the document").into(),
+        ));
+    }
+    // 병합
+    let plain_text = unquoted(t.raw);
+    let plain = Text::new(&plain_text, t.ko);
+    if plain.has(&["합쳐", "합치", "병합", "하나로", "merge", "combine"])
+        && !plain.has(&["셀", "cell", "프로젝트", "project", "묶음", "collection"])
+        && !plain.has(&["요약", "summar*", "정리", "집계", "합계", "total", "비교", "compare"])
+    {
+        let name = quoted(t.raw);
+        let scope = scoped(t, ctx);
+        if scope.is_empty() {
+            return Some(Plan::clarify(
+                t.t(
+                    "어떤 문서들을 합칠까요? 문서 2개 이상을 선택해 주세요.",
+                    "Which documents should be merged? Select two or more.",
+                ),
+                0.5,
+            ));
+        }
+        return Some(mk(Op::Merge { name }, scope, 0.84, t.t("문서를 하나로 합칩니다", "Merge the documents").into()));
+    }
+    // 제목: "제목을 '…'(으)로"
+    if t.has(&["제목", "title"])
+        && t.has(&["로", "으로", "바꿔", "변경", "set", "rename", "to"])
+        && !t.has(&["프로젝트", "project", "묶음", "양식", "schema"])
+    {
+        if let Some(title) = quoted(t.raw) {
+            let scope = scoped(t, ctx);
+            if scope.is_empty() {
+                return Some(Plan::clarify(
+                    t.t("어떤 문서의 제목인가요? 문서를 열거나 선택해 주세요.", "Which document? Open or select one."),
+                    0.5,
+                ));
+            }
+            return Some(mk(
+                Op::SetTitle { title: title.clone() },
+                scope,
+                0.86,
+                t.t(&format!("제목을 '{title}'(으)로"), &format!("Title → '{title}'")).to_string(),
+            ));
+        }
+    }
+    // 글자 바꾸기: 두 개의 따옴표 + 바꿔/replace
+    if t.has(&["바꿔", "바꾸", "교체", "치환", "replace"])
+        && !t.has(&["모델", "model", "테마", "theme", "언어", "유형", "제목", "이름"])
+    {
+        let q = quoted_all(t.raw);
+        if q.len() >= 2 {
+            let scope = scoped(t, ctx);
+            if scope.is_empty() {
+                return Some(Plan::clarify(
+                    t.t(
+                        "어떤 문서의 글자를 바꿀까요? 문서를 열거나 선택해 주세요.",
+                        "In which documents? Open or select them.",
+                    ),
+                    0.5,
+                ));
+            }
+            let pages: Vec<u32> = if t.has(&["쪽", "페이지", "page"]) {
+                numbers(t.raw).into_iter().filter(|n| *n >= 1.0 && *n < 10_000.0).map(|n| n as u32).collect()
+            } else {
+                Vec::new()
+            };
+            return Some(mk(
+                Op::EditText { find: q[0].clone(), replace: q[1].clone(), pages },
+                scope,
+                0.84,
+                t.t(&format!("'{}' → '{}'(으)로 바꿉니다", q[0], q[1]), &format!("Replace '{}' with '{}'", q[0], q[1]))
+                    .to_string(),
+            ));
+        }
+    }
+    None
+}
+
+/// Reference material: 묶음 만들기·이름·삭제·사용·문서 넣기/빼기, 용어집, 판(버전) 표시.
+fn reference_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
+    if t.is_question() {
+        return None;
+    }
+    // 용어집: "용어 'MM'은 '맨먼스'로 등록", "용어 'MM' 삭제"
+    if t.has(&["용어", "glossary", "term "])
+        && t.has(&["등록", "추가", "저장", "정의", "삭제", "지워", "save", "add", "define", "delete", "remove"])
+    {
+        let q = quoted_all(t.raw);
+        let Some(term) = q.first().cloned() else {
+            return Some(Plan::clarify(
+                t.t("어떤 용어인가요? 따옴표로 알려주세요.", "Which term? Put it in quotes."),
+                0.5,
+            ));
+        };
+        let action = if t.has(&["삭제", "지워", "지우", "delete", "remove"]) {
+            TermAction::Delete
+        } else {
+            TermAction::Save
+        };
+        let definition = q.get(1).cloned();
+        let synonyms: Vec<String> = q.iter().skip(2).cloned().collect();
+        let summary = match action {
+            TermAction::Save => t.t(&format!("용어 '{term}' 등록"), &format!("Save term '{term}'")).to_string(),
+            TermAction::Delete => t.t(&format!("용어 '{term}' 삭제"), &format!("Delete term '{term}'")).to_string(),
+        };
+        return Some(mk(
+            Op::DefineTerm { action, term, definition, synonyms },
+            Scope::default(),
+            0.86,
+            summary.to_string(),
+        ));
+    }
+    // 판(버전): "2024년판으로 표시", "구판으로 표시", "최신본으로", "버전 표시 해제"
+    if t.has(&["판으로", "판 으로", "구판", "신판", "최신본", "버전", "version", "edition"])
+        && t.has(&["표시", "지정", "해제", "mark", "clear", "set"])
+    {
+        let mut scope = scope_of(t, ctx, None, None);
+        if scope.is_empty() && !t.has(ALL_WORDS) {
+            scope.doc_ids = selection_ids(ctx);
+        }
+        if scope.is_empty() {
+            return Some(Plan::clarify(
+                t.t("어떤 문서의 판인가요? 문서를 열거나 선택해 주세요.", "Which document? Open or select one."),
+                0.5,
+            ));
+        }
+        if t.has(&["해제", "clear", "remove"]) {
+            return Some(mk(
+                Op::SetVersion { group_key: None, label: None, effective_date: None, latest: None, clear: Some(true) },
+                scope,
+                0.84,
+                t.t("판 표시를 해제합니다", "Clear the edition mark").into(),
+            ));
+        }
+        let label = quoted(t.raw).or_else(|| {
+            numbers(t.raw).into_iter().find(|n| (1990.0..=2100.0).contains(n)).map(|y| format!("{}", y as i32))
+        });
+        let latest = if t.has(&["구판", "옛", "이전", "superseded", "old"]) { Some(false) } else { Some(true) };
+        return Some(mk(
+            Op::SetVersion {
+                group_key: quoted_all(t.raw).get(1).cloned(),
+                label: label.clone(),
+                effective_date: absolute_date(t.raw, ctx.today),
+                latest,
+                clear: None,
+            },
+            scope,
+            0.82,
+            t.t(
+                &format!(
+                    "{}{}으로 표시합니다",
+                    label.as_deref().map(|l| format!("'{l}' ")).unwrap_or_default(),
+                    if latest == Some(false) { "구판" } else { "최신본" }
+                ),
+                &format!(
+                    "Mark as {} edition{}",
+                    if latest == Some(false) { "a superseded" } else { "the latest" },
+                    label.as_deref().map(|l| format!(" '{l}'")).unwrap_or_default()
+                ),
+            )
+            .to_string(),
+        ));
+    }
+    // 참고 자료 묶음 (a quoted name such as '계약 묶음' is not the group word)
+    let plain_text = unquoted(t.raw);
+    let plain = Text::new(&plain_text, t.ko);
+    let group_word = plain.has(&["묶음", "컬렉션", "참고 자료 그룹", "reference group", "collection"]);
+    if !group_word {
+        return None;
+    }
+    let name = quoted(t.raw);
+    let group_ref = name.clone().or_else(|| {
+        // "사규 묶음" → the word before 묶음
+        let words: Vec<&str> = t.raw.split_whitespace().collect();
+        let idx = words.iter().position(|w| compact(w).starts_with("묶음") || compact(w).starts_with("컬렉션"))?;
+        if idx == 0 {
+            return None;
+        }
+        let w = words[idx - 1].trim_matches(|c: char| !c.is_alphanumeric());
+        let stop = [
+            "참고",
+            "자료",
+            "참고자료",
+            "새",
+            "이",
+            "그",
+            "해당",
+            "선택한",
+            "선택",
+            "문서를",
+            "문서",
+            "the",
+            "a",
+            "this",
+            "new",
+        ];
+        (!w.is_empty() && !stop.contains(&compact(w).as_str())).then(|| w.to_string())
+    });
+    let project = t.has(&["프로젝트", "project"]).then(|| project_ref(t, ctx)).flatten();
+    if t.has(&["만들어", "만들", "생성", "새 ", "create", "new"]) && !t.has(&["넣어", "추가", "add"]) {
+        let Some(n) = name.clone().or(group_ref.clone()) else {
+            return Some(Plan::clarify(t.t("묶음 이름을 알려주세요.", "What should the group be called?"), 0.5));
+        };
+        return Some(mk(
+            Op::ManageReference { action: ReferenceAction::Create, group: None, name: Some(n.clone()), project: None },
+            Scope::default(),
+            0.86,
+            t.t(&format!("참고 자료 묶음 '{n}'을(를) 만듭니다"), &format!("Create reference group '{n}'")).to_string(),
+        ));
+    }
+    let action = if t.has(&["삭제", "지워", "지우", "delete", "remove the group"]) && !t.has(&["에서", "from"])
+    {
+        ReferenceAction::Delete
+    } else if t.has(&["이름을", "이름 ", "rename"]) {
+        ReferenceAction::Rename
+    } else if t.has(&["사용 안", "사용안", "끄", "꺼", "비활성", "disable", "off"]) {
+        ReferenceAction::Disable
+    } else if t.has(&["사용으로", "사용해", "켜", "활성", "enable", "on"]) && !t.has(&["넣어", "추가", "add"])
+    {
+        ReferenceAction::Enable
+    } else if t.has(&["에서", "빼", "제외", "remove from", "take out"]) {
+        ReferenceAction::Remove
+    } else if t.has(&["넣어", "추가", "담아", "add", "put"]) {
+        ReferenceAction::Add
+    } else {
+        return None;
+    };
+    if group_ref.is_none() && project.is_none() && !matches!(action, ReferenceAction::Add | ReferenceAction::Remove) {
+        return Some(Plan::clarify(t.t("어느 묶음인가요? 묶음 이름을 알려주세요.", "Which group? Name it."), 0.5));
+    }
+    let (new_name, group) = if action == ReferenceAction::Rename {
+        let q = quoted_all(t.raw);
+        (q.last().cloned(), q.first().filter(|_| q.len() >= 2).cloned().or(group_ref.clone()))
+    } else {
+        (None, group_ref.clone())
+    };
+    let scope = if matches!(action, ReferenceAction::Add | ReferenceAction::Remove) {
+        let mut s = scope_of(t, ctx, None, None);
+        s.filter.project_id = None;
+        if s.is_empty() && !t.has(ALL_WORDS) {
+            s.doc_ids = selection_ids(ctx);
+        }
+        if s.is_empty() {
+            return Some(Plan::clarify(
+                t.t("어떤 문서를 넣을까요? 문서를 선택해 주세요.", "Which documents? Select them first."),
+                0.5,
+            ));
+        }
+        s
+    } else {
+        Scope::default()
+    };
+    let gname =
+        group.clone().unwrap_or_else(|| t.t("프로젝트 참고 자료", "the project's reference material").to_string());
+    let summary = match action {
+        ReferenceAction::Delete => t
+            .t(
+                &format!("'{gname}' 묶음을 삭제합니다(문서는 남음)"),
+                &format!("Delete group '{gname}' (documents kept)"),
+            )
+            .to_string(),
+        ReferenceAction::Rename => {
+            t.t(&format!("'{gname}' 묶음 이름을 바꿉니다"), &format!("Rename group '{gname}'")).to_string()
+        }
+        ReferenceAction::Disable => {
+            t.t(&format!("'{gname}' 묶음을 사용 안 함으로"), &format!("Disable group '{gname}'")).to_string()
+        }
+        ReferenceAction::Enable => {
+            t.t(&format!("'{gname}' 묶음을 사용으로"), &format!("Enable group '{gname}'")).to_string()
+        }
+        ReferenceAction::Remove => t
+            .t(&format!("'{gname}' 묶음에서 문서를 뺍니다"), &format!("Remove the documents from '{gname}'"))
+            .to_string(),
+        _ => t
+            .t(
+                &format!("'{gname}' 묶음에 문서를 넣습니다(참고 자료로 표시)"),
+                &format!("Add the documents to '{gname}'"),
+            )
+            .to_string(),
+    };
+    Some(mk(Op::ManageReference { action, group, name: new_name, project }, scope, 0.84, summary))
+}
+
+/// Projects: 이름 변경 · 기간/담당 수정 · 삭제 · 문서 빼기 · 자동 분류 · 템플릿.
+fn project_admin_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
+    if t.is_question() {
+        return None;
+    }
+    // 템플릿 (프로젝트 템플릿)
+    if t.has(&["템플릿", "template"]) && !t.has(&["문서 작성", "초안", "draft", "생성 템플릿"]) {
+        let q = quoted_all(t.raw);
+        let name = q.first().cloned();
+        if t.has(&["삭제", "지워", "지우", "delete", "remove"]) {
+            let Some(n) = name else {
+                return Some(Plan::clarify(
+                    t.t("어느 템플릿인가요? 이름을 따옴표로 알려주세요.", "Which template? Quote its name."),
+                    0.5,
+                ));
+            };
+            return Some(mk(
+                Op::ManageTemplate {
+                    action: TemplateAction::Delete,
+                    template: Some(n.clone()),
+                    name: None,
+                    doc_types_required: Vec::new(),
+                    description: None,
+                },
+                Scope::default(),
+                0.84,
+                t.t(&format!("템플릿 '{n}' 삭제"), &format!("Delete template '{n}'")).to_string(),
+            ));
+        }
+        if t.has(&["만들어", "만들", "생성", "저장", "create", "new", "save"]) {
+            let Some(n) = name else {
+                return Some(Plan::clarify(
+                    t.t("새 템플릿의 이름을 따옴표로 알려주세요.", "Quote the new template's name."),
+                    0.5,
+                ));
+            };
+            let types: Vec<String> = ctx
+                .doc_types
+                .iter()
+                .filter(|d| t.has(&[d.label_ko.as_str()]) || t.has(&[d.label_en.as_str()]))
+                .map(|d| d.slug.clone())
+                .collect();
+            return Some(mk(
+                Op::ManageTemplate {
+                    action: TemplateAction::Save,
+                    template: None,
+                    name: Some(n.clone()),
+                    doc_types_required: types,
+                    description: None,
+                },
+                Scope::default(),
+                0.82,
+                t.t(&format!("템플릿 '{n}' 저장"), &format!("Save template '{n}'")).to_string(),
+            ));
+        }
+    }
+    if !t.has(&["프로젝트", "project"]) {
+        return None;
+    }
+    let project = project_ref(t, ctx);
+    // 자동 분류
+    if t.has(&["자동 분류", "자동분류", "자동으로 분류", "classify into projects", "auto-classify", "auto classify"])
+    {
+        let mut scope = scope_of(t, ctx, None, None);
+        scope.filter.project_id = None;
+        if scope.is_empty() && !t.has(&["미배정", "전체", "모두", "unassigned", "all"]) {
+            scope.doc_ids = selection_ids(ctx);
+        }
+        let apply = t.has(&["적용", "배정해", "바로", "apply", "assign"]);
+        return Some(mk(
+            Op::ClassifyProjects { apply: Some(apply), use_model: Some(t.has(&["모델", "model"])) },
+            scope,
+            0.84,
+            t.t(
+                if apply {
+                    "문서를 프로젝트로 자동 분류해 배정합니다"
+                } else {
+                    "문서를 프로젝트로 자동 분류합니다(제안)"
+                },
+                if apply {
+                    "Auto-classify into projects and assign"
+                } else {
+                    "Auto-classify into projects (suggestions)"
+                },
+            )
+            .into(),
+        ));
+    }
+    // 삭제
+    if t.has(&["삭제", "지워", "지우", "없애", "delete", "remove the project"])
+        && !t.has(&["에서", "from", "문서를", "documents"])
+    {
+        return Some(mk(
+            Op::DeleteProject { project },
+            Scope::default(),
+            0.84,
+            t.t("프로젝트를 삭제합니다(문서는 문서함에 남음)", "Delete the project (documents stay in the library)")
+                .into(),
+        ));
+    }
+    // 프로젝트에서 빼기
+    if t.has(&["에서", "from"]) && t.has(&["빼", "제외", "꺼내", "remove", "take out"]) {
+        let mut scope = scope_of(t, ctx, None, None);
+        scope.filter.project_id = None;
+        if scope.is_empty() && !t.has(ALL_WORDS) {
+            scope.doc_ids = selection_ids(ctx);
+        }
+        if scope.is_empty() {
+            return Some(Plan::clarify(
+                t.t("어떤 문서를 뺄까요? 문서를 선택해 주세요.", "Which documents? Select them first."),
+                0.5,
+            ));
+        }
+        return Some(mk(
+            Op::RemoveFromProject { project, doc_ids: Vec::new() },
+            scope,
+            0.84,
+            t.t("문서를 프로젝트에서 뺍니다", "Remove the documents from the project").into(),
+        ));
+    }
+    // 수정: 이름 / 종료일 / 시작일 / 담당자 / 접수번호 / 키워드
+    let q = quoted_all(t.raw);
+    let date = absolute_date(t.raw, ctx.today);
+    let mut op = Op::UpdateProject {
+        project: project.clone(),
+        name: None,
+        template: None,
+        start_date: None,
+        end_date: None,
+        owner: None,
+        intake_no: None,
+        notes: None,
+        keywords: None,
+        inbox_folder: None,
+    };
+    let mut changed = false;
+    if let Op::UpdateProject { name, start_date, end_date, owner, intake_no, keywords, .. } = &mut op {
+        if t.has(&["이름을", "이름 ", "rename", "name to"]) {
+            if let Some(n) = q.last().cloned() {
+                *name = Some(n);
+                changed = true;
+            }
+        }
+        if t.has(&["종료일", "마감", "끝나는", "end date", "deadline", "due"]) {
+            if let Some(d) = date.clone() {
+                *end_date = Some(d);
+                changed = true;
+            }
+        } else if t.has(&["시작일", "시작 날짜", "start date", "starts"]) {
+            if let Some(d) = date.clone() {
+                *start_date = Some(d);
+                changed = true;
+            }
+        }
+        if t.has(&["담당자", "담당을", "owner", "assign to"]) {
+            if let Some(o) = q.first().cloned() {
+                *owner = Some(o);
+                changed = true;
+            }
+        }
+        if t.has(&["접수번호", "접수 번호", "intake no", "intake number"]) {
+            if let Some(n) = q.first().cloned().or_else(|| numbers(t.raw).first().map(|n| format!("{}", *n as i64))) {
+                *intake_no = Some(n);
+                changed = true;
+            }
+        }
+        if t.has(&["키워드", "keyword"]) && !q.is_empty() {
+            *keywords = Some(q.clone());
+            changed = true;
+        }
+    }
+    if changed {
+        return Some(mk(op, Scope::default(), 0.84, t.t("프로젝트 정보를 수정합니다", "Update the project").into()));
+    }
+    None
+}
+
+/// Extraction schemas (양식·추출 항목): 기본값 · 사용/사용 안 함 · 삭제 · 이름 변경.
+fn schema_admin_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
+    if t.is_question() || !t.has(&["양식", "스키마", "추출 항목", "schema", "form"]) {
+        return None;
+    }
+    if t.has(&["등록", "register", "필드", "field", "항목 추가", "항목을 추가", "만들어", "create", "정의"])
+    {
+        return None; // register_form / define_schema territory
+    }
+    let action = if t.has(&["기본으로", "기본값", "기본 양식", "default"]) {
+        SchemaAction::SetDefault
+    } else if t.has(&["끄기", "꺼", "끄", "사용 안", "사용안", "숨겨", "비활성", "disable", "turn off", "hide"])
+    {
+        SchemaAction::Disable
+    } else if t.has(&["켜", "사용으로", "사용해", "보이게", "활성", "enable", "turn on", "show"]) {
+        SchemaAction::Enable
+    } else if t.has(&["삭제", "지워", "지우", "delete", "remove"]) {
+        SchemaAction::Delete
+    } else if t.has(&["이름을", "이름 ", "rename"]) {
+        SchemaAction::Rename
+    } else {
+        return None;
+    };
+    let q = quoted_all(t.raw);
+    let schema = doc_type(t, ctx)
+        .and_then(|d| ctx.schema_for_type(&d.slug).map(|s| s.name.clone()).or(Some(d.slug.clone())))
+        .or_else(|| q.first().cloned());
+    let Some(schema) = schema else {
+        return Some(Plan::clarify(
+            t.t("어느 양식인가요? 이름이나 문서 유형을 알려주세요.", "Which schema? Name it or its document type."),
+            0.5,
+        ));
+    };
+    let name = if action == SchemaAction::Rename { q.last().cloned() } else { None };
+    let summary = match action {
+        SchemaAction::SetDefault => {
+            t.t(&format!("'{schema}'을(를) 기본 양식으로"), &format!("Make '{schema}' the default schema")).to_string()
+        }
+        SchemaAction::Disable => {
+            t.t(&format!("'{schema}' 양식 사용 안 함"), &format!("Disable schema '{schema}'")).to_string()
+        }
+        SchemaAction::Enable => t.t(&format!("'{schema}' 양식 사용"), &format!("Enable schema '{schema}'")).to_string(),
+        SchemaAction::Delete => t.t(&format!("'{schema}' 양식 삭제"), &format!("Delete schema '{schema}'")).to_string(),
+        SchemaAction::Rename => {
+            t.t(&format!("'{schema}' 양식 이름 변경"), &format!("Rename schema '{schema}'")).to_string()
+        }
+    };
+    Some(mk(Op::ManageSchema { action, schema, name }, Scope::default(), 0.84, summary))
+}
+
+/// The 0.6.0 rules, tried before the older ones so their specific nouns win.
+fn agent_ops(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
+    maintenance_rule(t)
+        .or_else(|| workspace_rule(t))
+        .or_else(|| manage_model_rule(t, ctx))
+        .or_else(|| schema_admin_rule(t, ctx))
+        .or_else(|| reference_rule(t, ctx))
+        .or_else(|| project_admin_rule(t, ctx))
+        .or_else(|| document_edit_rule(t, ctx))
+        .or_else(|| generic_setting_rule(t))
+}
+
 /// Tries the rules in order; `None` leaves the command to the model.
 pub fn plan(text: &str, ctx: &PlanContext) -> Option<Plan> {
     let raw = text.trim();
@@ -2662,6 +3738,7 @@ pub fn plan(text: &str, ctx: &PlanContext) -> Option<Plan> {
     undo_redo(&t)
         .or_else(|| job_control(&t))
         .or_else(|| engine(&t))
+        .or_else(|| agent_ops(&t, ctx))
         .or_else(|| set_retention(&t))
         .or_else(|| settings_combo(&t, ctx))
         .or_else(|| quick_settings(&t, ctx))
