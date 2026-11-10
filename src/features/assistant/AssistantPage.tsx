@@ -192,7 +192,7 @@ export function AssistantPage() {
   const planContext = (): UiPlanContext => {
     const ctx = uiContextFor(scope === "selection" ? "selection" : "all", folder, selectionIds, lastDocument, currentProject);
     // The project scope travels as `project_id` next to `current_project` (the default target of project ops).
-    if (scope === "project" && currentProject) (ctx as UiPlanContext & { project_id?: string }).project_id = currentProject;
+    if (scope === "project" && currentProject) ctx.project_id = currentProject;
     return ctx;
   };
 

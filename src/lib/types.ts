@@ -1595,7 +1595,8 @@ export type JobOp = "show" | "cancel" | "retry" | "pause" | "resume" | "prioriti
 export type EngineOp = "restart" | "sleep" | "wake";
 export type OpenTarget = "document" | "page" | "folder" | "screen";
 /** `explain.scope` (appendix D). */
-export type ExplainScope = "kb" | "collection" | "project" | "document";
+/** `reference` = the 공통 참고 자료 (0.5.0; `collection` was its pre-0.5.0 name and still deserialises in Rust). */
+export type ExplainScope = "kb" | "reference" | "project" | "document";
 /** `set_retention.item` (appendix D; the page cache is size-capped → `set_setting cache_limit_gb`). */
 export type RetentionTarget = "documents" | "extractions" | "logs" | "journal" | "chats" | "temp";
 export const RETENTION_TARGETS: RetentionTarget[] = ["documents", "extractions", "logs", "journal", "chats", "temp"];
@@ -1759,6 +1760,8 @@ export interface UiPlanContext {
   current_page?: number | null;
   /** Project open on the projects screen (default target of project ops). */
   current_project?: string | null;
+  /** Project the assistant's "현재 프로젝트" scope names (0.5.0): default scope of commands, evidence scope of questions. */
+  project_id?: string | null;
   /** Earlier turns of the assistant conversation (oldest first). */
   history?: ConversationTurn[];
   /** Interpretation mode (omitted = model first). */

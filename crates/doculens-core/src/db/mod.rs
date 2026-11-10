@@ -25,10 +25,11 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (8, include_str!("schema/0008_project_dates.sql")),
     (9, include_str!("schema/0009_page_text_history.sql")),
     (10, include_str!("schema/0010_reference_groups.sql")),
+    (11, include_str!("schema/0011_collections_rebuild.sql")),
 ];
 
 /// Schema version the current build expects.
-pub const SCHEMA_VERSION: u32 = 10;
+pub const SCHEMA_VERSION: u32 = 11;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -165,6 +166,28 @@ impl Db {
         Self::init(conn, PathBuf::from(":memory:"), JournalMode::Delete)
     }
 
+    /// In-memory database migrated only up to `version` (tests seed an older schema and then
+    /// run `finish_migration`).
+    #[cfg(test)]
+    pub(crate) fn open_in_memory_at(version: u32) -> Result<Db> {
+        register_extensions();
+        let conn = Connection::open_in_memory()?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        let db = Db {
+            conn: Mutex::new(conn),
+            reader: None,
+            path: PathBuf::from(":memory:"),
+            journal_mode: JournalMode::Delete,
+        };
+        db.migrate_up_to(version)?;
+        Ok(db)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn finish_migration(&self) -> Result<()> {
+        self.migrate()
+    }
+
     fn init(conn: Connection, path: PathBuf, journal_mode: JournalMode) -> Result<Db> {
         conn.busy_timeout(Duration::from_secs(5))?;
         if path != Path::new(":memory:") {
@@ -224,6 +247,11 @@ impl Db {
     }
 
     fn migrate(&self) -> Result<()> {
+        self.migrate_up_to(SCHEMA_VERSION)
+    }
+
+    /// Applies the migrations up to `target` (tests stop at an older schema to seed it).
+    fn migrate_up_to(&self, target: u32) -> Result<()> {
         let mut conn = self.lock()?;
         let current: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         let current = current.max(0) as u32;
@@ -233,7 +261,7 @@ impl Db {
             )));
         }
         for (version, sql) in MIGRATIONS {
-            if *version <= current {
+            if *version <= current || *version > target {
                 continue;
             }
             let tx = conn.transaction()?;
@@ -316,6 +344,61 @@ mod tests {
         for t in ["documents", "pages", "tags", "document_tags", "import_batches", "kv"] {
             assert!(tables.iter().any(|n| n == t), "missing table {t}: {tables:?}");
         }
+    }
+
+    /// 0.5.0: a 0.4.0 workspace (schema 9) keeps its collections and memberships through the
+    /// column additions (10) and the table rebuild (11); cascades still work and a project's
+    /// group may share a common group's name afterwards.
+    #[test]
+    fn migrates_collections_from_schema_9_without_losing_memberships() {
+        let db = Db::open_in_memory_at(9).unwrap();
+        assert_eq!(db.user_version().unwrap(), 9);
+        db.with(|c| {
+            c.execute_batch(
+                "INSERT INTO documents (id, rel_path, original_name, source_kind, content_hash, size_bytes, role, status, imported_at, updated_at) \
+                   VALUES ('d1', 'documents/a.pdf', 'a.pdf', 'pdf', 'h1', 1, 'knowledge', 'ready', '2026-11-10T00:00:00Z', '2026-11-10T00:00:00Z'); \
+                 INSERT INTO collections (id, name, description, color, active, watch_folder, created_at, updated_at) \
+                   VALUES ('c1', '사규', NULL, NULL, 1, NULL, '2026-11-10T00:00:00Z', '2026-11-10T00:00:00Z'); \
+                 INSERT INTO collection_docs (collection_id, document_id, added_at) VALUES ('c1', 'd1', '2026-11-10T00:00:00Z'); \
+                 INSERT INTO projects (id, name, created_at, updated_at) VALUES ('p1', '사규', '2026-11-10T00:00:00Z', '2026-11-10T00:00:00Z');",
+            )
+        })
+        .unwrap();
+        db.finish_migration().unwrap();
+        assert_eq!(db.user_version().unwrap(), SCHEMA_VERSION);
+        let (kind, project, members): (String, Option<String>, i64) = db
+            .with(|c| {
+                c.query_row(
+                    "SELECT kind, project_id, (SELECT COUNT(*) FROM collection_docs WHERE collection_id = 'c1') FROM collections WHERE id = 'c1'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+            })
+            .unwrap();
+        assert_eq!((kind.as_str(), project, members), ("reference", None, 1));
+        // The old table-wide UNIQUE(name) is gone: the project's group may carry the same name.
+        db.with(|c| {
+            c.execute(
+                "INSERT INTO collections (id, name, active, kind, project_id, created_at, updated_at) VALUES ('c2', '사규', 1, 'project', 'p1', 'x', 'x')",
+                [],
+            )
+        })
+        .unwrap();
+        // Cascades survive the rebuild: deleting the project drops its group, deleting a group its memberships.
+        db.with(|c| c.execute("DELETE FROM projects WHERE id = 'p1'", [])).unwrap();
+        let groups: i64 = db.with(|c| c.query_row("SELECT COUNT(*) FROM collections", [], |r| r.get(0))).unwrap();
+        assert_eq!(groups, 1);
+        db.with(|c| c.execute("DELETE FROM collections WHERE id = 'c1'", [])).unwrap();
+        let members: i64 = db.with(|c| c.query_row("SELECT COUNT(*) FROM collection_docs", [], |r| r.get(0))).unwrap();
+        assert_eq!(members, 0);
+        let fk: Vec<String> = db
+            .with(|c| {
+                let mut s = c.prepare("PRAGMA foreign_key_check")?;
+                let rows = s.query_map([], |r| r.get::<_, String>(0))?;
+                rows.collect()
+            })
+            .unwrap();
+        assert!(fk.is_empty(), "{fk:?}");
     }
 
     #[test]

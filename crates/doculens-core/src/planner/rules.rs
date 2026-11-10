@@ -352,6 +352,11 @@ fn scope_of(t: &Text<'_>, ctx: &PlanContext, dt: Option<&DocTypeSummary>, d: Opt
         scope.filter.doc_type = Some(dt.slug.clone());
     }
     apply_date(&mut scope, d);
+    // The assistant's "현재 프로젝트" scope (0.5.0) is the default when the sentence names no
+    // documents, folder or project of its own (filters such as a type / date intersect with it).
+    if scope.filter.project_id.is_none() && scope.doc_ids.is_empty() && scope.folder.is_none() {
+        scope.filter.project_id = ctx.scope_project.clone().filter(|p| !p.trim().is_empty());
+    }
     scope
 }
 

@@ -163,22 +163,23 @@ test.describe("document drag and drop", () => {
     await expect(page.getByTestId("form-register-doc")).toContainText("휴가신청서.pdf", { timeout: 15_000 });
   });
 
-  test("files dropped on a collection are imported as knowledge documents of that collection", async ({ page }) => {
+  test("files dropped on a common reference group are imported as 참고 자료 of that group", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
-    // The knowledge screen left the sidebar (plan §1) but keeps its route; F2 owns its 0.5.0 shape (공통 참고 자료).
-    await page.goto("/#/knowledge");
-    await page.getByTestId("knowledge-tab-collections").click();
-    await page.getByTestId("collection-new").click();
-    await page.getByTestId("collection-name").fill("규정");
-    await page.getByTestId("collection-save").click();
-    const item = page.getByTestId("collection-item").filter({ hasText: "규정" });
+    // 공통 참고 자료 (plan §2) is the pinned card at the top of 프로젝트; a file dropped on one of its groups is imported into it.
+    await page.getByTestId("nav-projects").click();
+    await page.getByTestId("projects-common-reference-open").click();
+    await expect(page.getByTestId("page-common-reference")).toBeVisible();
+    await page.getByTestId("reference-group-new").click();
+    await page.getByTestId("reference-name").fill("규정");
+    await page.getByTestId("reference-name-save").click();
+    const item = page.getByTestId("reference-group-item").filter({ hasText: "규정" });
     await expect(item).toBeVisible();
     await dropFiles(page, item, ["C:\\docs\\취업규칙.pdf"]);
-    await expect(item).toContainText(tpl(ko.knowledge.collections.docs_count, { count: 1 }), { timeout: 20_000 });
-    await item.click();
-    await expect(page.getByTestId("collection-doc")).toContainText("취업규칙.pdf");
+    await expect(item).toContainText(tpl(ko.projects.reference.docs_count, { count: 1 }), { timeout: 20_000 });
     await page.getByTestId("nav-library").click();
-    await expect(card(page, "취업규칙.pdf")).toBeVisible();
+    const imported = card(page, "취업규칙.pdf");
+    await expect(imported).toBeVisible();
+    await expect(imported.locator('[data-testid^="doc-role-"]')).toHaveText(ko.library.role_knowledge);
   });
 });

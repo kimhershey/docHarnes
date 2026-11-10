@@ -102,7 +102,11 @@ describe("mock reference material (0.5.0)", () => {
   it("scope: project_id = work documents ∪ the project's group ∪ the active common groups (documents replace the work set)", async () => {
     const ids = await importDocs(["A-업무.pdf", "B-참고.pdf", "C-공통.pdf", "D-비활성.pdf", "E-무관.pdf"]);
     await indexAll();
-    const [A, B, C, D, E] = ["A-업무.pdf", "B-참고.pdf", "C-공통.pdf", "D-비활성.pdf", "E-무관.pdf"].map((n) => ids[n]!);
+    const A = ids["A-업무.pdf"]!;
+    const B = ids["B-참고.pdf"]!;
+    const C = ids["C-공통.pdf"]!;
+    const D = ids["D-비활성.pdf"]!;
+    const E = ids["E-무관.pdf"]!;
     const p = await backend.mockInvoke<{ id: string }>("project_create", { input: { name: "한빛 포털" } });
     await backend.mockInvoke("project_add_documents", { id: p.id, docIds: [A] });
     const group = await backend.mockInvoke<Collection>("project_reference_group", { id: p.id });

@@ -133,7 +133,8 @@ user PC: `docs/RUN-GUIDE.md`.
   `chunks` + FTS5 `chunks_fts`/`chunks_fts_tri`, sqlite-vec `chunks_vec`, `collections`, `doc_versions`, `glossary`,
   `answers`; pipeline tables `schemas`, `schema_versions`, `extraction_runs`, `fields`, `field_history`; P5 tables
   `journal_batches`, `ops_journal`, `jobs`; P6 tables `projects`, `project_templates`, `project_documents`,
-  `project_rules`, `project_runs`, `project_rule_results`; `pages.layout` word-box JSON (0006); `projects.keywords` (0007)), drafts `.doculens/drafts/<id>.json`, page cache
+  `project_rules`, `project_runs`, `project_rule_results`; `pages.layout` word-box JSON (0006); `projects.keywords` (0007);
+  `collections.kind` / `collections.project_id` (0010) and the `collections` rebuild without a table-wide UNIQUE(name) (0011, schema 11)), drafts `.doculens/drafts/<id>.json`, page cache
   `.doculens/cache/{pages,thumbs,converted}/<doc_id>/`, extraction mirror `.doculens/extractions/<doc_id>/<run_id>/`;
   DB rows store workspace-relative paths only. OCR text lives in `pages.text` (`text_source = ocr`) so the knowledge
   indexer re-chunks it.

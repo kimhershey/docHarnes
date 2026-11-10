@@ -1621,7 +1621,7 @@ export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | nul
         break;
       case "explain":
         if (!(op.selection ?? "").trim() && !(op.question ?? "").trim()) issues.push(issue(at("question"), "question_empty", "explain needs a selection or a question"));
-        if (op.scope != null && !["kb", "collection", "project", "document"].includes(op.scope)) issues.push(issue(at("scope"), "enum_invalid", `unknown scope '${String(op.scope)}'`));
+        if (op.scope != null && !["kb", "reference", "collection", "project", "document"].includes(op.scope)) issues.push(issue(at("scope"), "enum_invalid", `unknown scope '${String(op.scope)}'`));
         break;
       case "compare":
         op.doc_ids = [...new Set((op.doc_ids ?? []).map((d) => d.trim()).filter(Boolean))];
