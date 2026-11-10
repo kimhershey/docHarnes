@@ -3,7 +3,28 @@ import type { TFunction } from "i18next";
 import type { DocTypeInfo, FieldRecord, FieldStatus, ReviewReason } from "@/lib/types";
 
 /** Built-in doc type slugs that have their own i18n labels. */
-const BUILTIN_TYPES = ["tax_invoice", "invoice_exempt", "receipt", "business_registration", "contract", "application_form", "general", "other"];
+const BUILTIN_TYPES = [
+  "rfp",
+  "proposal",
+  "sow",
+  "srs",
+  "dev_contract",
+  "wbs",
+  "progress_report",
+  "meeting_minutes",
+  "test_report",
+  "change_request",
+  "acceptance",
+  "estimate",
+  "tax_invoice",
+  "invoice_exempt",
+  "receipt",
+  "business_registration",
+  "contract",
+  "application_form",
+  "general",
+  "other",
+];
 
 /** Label of a document type slug: i18n for the built-in types, the schema's name otherwise. */
 export function docTypeLabel(slug: string | null | undefined, types: DocTypeInfo[] | undefined, t: TFunction, lang: string): string {

@@ -178,11 +178,279 @@ interface BuiltinDef {
   desc_en: string;
   fields: FieldDef[];
   rules: string[];
+  /** 0.1 business form: defined for old documents, seeded disabled (mirror of `Builtin.hidden`). */
+  hidden?: boolean;
 }
+
+const SW_PARTY = (ko: string, en: string): FieldDef[] => [
+  f("name", `${ko} 명칭`, `${en} name`, "string", { required: true }),
+  f("brn", `${ko} 사업자등록번호`, `${en} business reg. no.`, "brn"),
+  f("representative", "대표자", "Representative"),
+  f("contact_person", "담당자", "Contact person"),
+  f("phone", "연락처", "Phone", "phone"),
+  f("email", "이메일", "Email", "email"),
+];
+const REQUIREMENTS = (): FieldDef =>
+  f("requirements", "요구사항", "Requirements", "table", {
+    fields: [f("id", "ID", "ID"), f("name", "요구사항명", "Name"), f("description", "상세 설명", "Description"), f("category", "구분", "Category", "enum", { options: ["기능", "비기능", "보안", "성능", "인터페이스", "데이터"] }), f("priority", "우선순위", "Priority", "enum", { options: ["상", "중", "하"] }), f("acceptance", "수용 기준", "Acceptance criteria")],
+  });
+const DELIVERABLES = (result: boolean): FieldDef =>
+  f("deliverables", "산출물", "Deliverables", "table", {
+    fields: [f("name", "산출물", "Deliverable"), f("version", "버전", "Version"), f("due_date", "납기", "Due date", "date"), ...(result ? [f("result", "검수 결과", "Result", "enum", { options: ["적합", "부적합", "조건부"] })] : []), f("note", "비고", "Note")],
+  });
+const SCHEDULE = (): FieldDef => f("schedule", "일정", "Schedule", "table", { fields: [f("phase", "단계", "Phase"), f("start_date", "시작", "Start", "date"), f("end_date", "종료", "End", "date"), f("note", "비고", "Note")] });
+const STAFFING = (): FieldDef[] => [
+  f("role", "역할·품목", "Role / item"),
+  f("grade", "등급", "Grade", "enum", { options: ["특급", "고급", "중급", "초급", "기타"] }),
+  f("months", "투입 MM", "Person-months", "amount"),
+  f("unit_price", "단가", "Unit price", "amount"),
+  f("supply_amount", "공급가액", "Supply amount", "amount"),
+  f("note", "비고", "Note"),
+];
 
 const BUILTIN: BuiltinDef[] = [
   {
+    key: "rfp",
+    name_ko: "제안요청서(RFP)",
+    name_en: "Request for proposal (RFP)",
+    desc_ko: "발주기관이 공고하는 소프트웨어 개발 제안요청서.",
+    desc_en: "A software-development RFP.",
+    fields: [
+      f("project_name", "사업명", "Project name", "string", { required: true }),
+      f("issuer", "발주기관", "Issuer", "group", { fields: SW_PARTY("발주기관", "Issuer") }),
+      f("issue_date", "공고일", "Issue date", "date", { required: true }),
+      f("budget", "사업 예산", "Budget", "amount"),
+      f("period_start", "사업 기간 시작", "Period start", "date"),
+      f("period_end", "사업 기간 종료", "Period end", "date"),
+      f("submission_deadline", "제출 마감", "Submission deadline", "date"),
+      f("summary", "사업 개요", "Overview"),
+      REQUIREMENTS(),
+      DELIVERABLES(false),
+      SCHEDULE(),
+    ],
+    rules: ["period_start_before_end"],
+  },
+  {
+    key: "proposal",
+    name_ko: "제안서",
+    name_en: "Proposal",
+    desc_ko: "RFP에 대한 제안서 — 제안사·제안 금액·기간·투입 인력.",
+    desc_en: "A proposal answering an RFP.",
+    fields: [
+      f("project_name", "사업명", "Project name", "string", { required: true }),
+      f("proposer", "제안사", "Proposer", "group", { fields: SW_PARTY("제안사", "Proposer") }),
+      f("client_name", "발주기관", "Client"),
+      f("issue_date", "제출일", "Submission date", "date"),
+      f("price", "제안 금액", "Proposed price", "amount", { required: true }),
+      f("period_start", "수행 기간 시작", "Period start", "date"),
+      f("period_end", "수행 기간 종료", "Period end", "date"),
+      f("team", "투입 인력", "Team", "table", { fields: [f("role", "역할", "Role"), f("name", "성명", "Name"), f("grade", "등급", "Grade", "enum", { options: ["특급", "고급", "중급", "초급", "기타"] }), f("months", "투입 MM", "Person-months", "amount")] }),
+      SCHEDULE(),
+      DELIVERABLES(false),
+    ],
+    rules: ["period_start_before_end"],
+  },
+  {
+    key: "sow",
+    name_ko: "과업지시서",
+    name_en: "Statement of work",
+    desc_ko: "과업지시서 — 발주자·수행자, 과업 범위, 산출물, 단계별 납기·대금.",
+    desc_en: "Statement of work.",
+    fields: [
+      f("project_name", "과업명", "Project name", "string", { required: true }),
+      f("client", "발주자", "Client", "group", { fields: SW_PARTY("발주자", "Client") }),
+      f("contractor", "수행자", "Contractor", "group", { fields: SW_PARTY("수행자", "Contractor") }),
+      f("issue_date", "작성일", "Issue date", "date"),
+      f("period_start", "과업 기간 시작", "Period start", "date"),
+      f("period_end", "과업 기간 종료", "Period end", "date"),
+      f("amount", "과업 금액", "Amount", "amount"),
+      f("scope", "과업 범위", "Scope"),
+      DELIVERABLES(false),
+      f("milestones", "단계별 납기·대금", "Milestones", "table", { fields: [f("phase", "단계", "Phase"), f("due_date", "납기", "Due date", "date"), f("ratio", "대금 비율(%)", "Payment ratio (%)", "amount"), f("amount", "금액", "Amount", "amount")] }),
+    ],
+    rules: ["period_start_before_end"],
+  },
+  {
+    key: "srs",
+    name_ko: "요구사항 정의서",
+    name_en: "Software requirements specification",
+    desc_ko: "요구사항 정의서(SRS).",
+    desc_en: "Requirements specification.",
+    fields: [
+      f("project_name", "사업명", "Project name", "string", { required: true }),
+      f("version", "버전", "Version"),
+      f("issue_date", "작성일", "Issue date", "date"),
+      f("author", "작성자", "Author"),
+      f("approver", "승인자", "Approver"),
+      f("summary", "시스템 개요", "System overview"),
+      REQUIREMENTS(),
+    ],
+    rules: [],
+  },
+  {
+    key: "dev_contract",
+    name_ko: "소프트웨어 개발 계약서",
+    name_en: "Software development contract",
+    desc_ko: "소프트웨어 개발(외주·용역) 계약서.",
+    desc_en: "Software development / outsourcing contract.",
+    fields: [
+      f("title", "계약명", "Title", "string", { required: true }),
+      f("client", "발주자(갑)", "Client (party A)", "group", { fields: SW_PARTY("발주자", "Client") }),
+      f("contractor", "수행사(을)", "Contractor (party B)", "group", { fields: SW_PARTY("수행사", "Contractor") }),
+      f("contract_date", "계약일", "Contract date", "date"),
+      f("period_start", "계약기간 시작", "Period start", "date"),
+      f("period_end", "계약기간 종료", "Period end", "date"),
+      f("amount", "계약금액", "Contract amount", "amount", { required: true }),
+      f("payment_terms", "지급 조건", "Payment terms"),
+      f("payments", "대금 지급 단계", "Payment milestones", "table", { fields: [f("phase", "단계", "Phase"), f("ratio", "비율(%)", "Ratio (%)", "amount"), f("amount", "금액", "Amount", "amount"), f("due_date", "지급 시기", "Due date", "date")] }),
+      f("warranty_months", "하자보수 기간(개월)", "Warranty (months)", "integer"),
+      f("ip_owner", "지식재산권 귀속", "IP owner", "enum", { options: ["발주자", "수행사", "공동"] }),
+      f("confidentiality", "비밀유지 조항", "Confidentiality clause", "boolean"),
+      f("signed", "서명/날인 여부", "Signed / sealed", "boolean"),
+    ],
+    rules: ["period_start_before_end"],
+  },
+  {
+    key: "wbs",
+    name_ko: "WBS·일정표",
+    name_en: "WBS / schedule",
+    desc_ko: "작업 분류 체계와 일정표.",
+    desc_en: "Work breakdown structure and schedule.",
+    fields: [
+      f("project_name", "사업명", "Project name", "string", { required: true }),
+      f("version", "버전", "Version"),
+      f("issue_date", "작성일", "Issue date", "date"),
+      f("period_start", "전체 시작", "Period start", "date"),
+      f("period_end", "전체 종료", "Period end", "date"),
+      f("tasks", "작업", "Tasks", "table", { fields: [f("id", "WBS 번호", "WBS id"), f("task", "작업", "Task"), f("owner", "담당", "Owner"), f("start_date", "시작", "Start", "date"), f("end_date", "종료", "End", "date"), f("progress", "진척률(%)", "Progress (%)", "amount"), f("deliverable", "산출물", "Deliverable")] }),
+      f("milestones", "마일스톤", "Milestones", "table", { fields: [f("name", "마일스톤", "Milestone"), f("date", "일자", "Date", "date")] }),
+    ],
+    rules: ["period_start_before_end", "percent_range"],
+  },
+  {
+    key: "progress_report",
+    name_ko: "진척 보고서",
+    name_en: "Progress report",
+    desc_ko: "주간·월간·단계 진척 보고서.",
+    desc_en: "Weekly / monthly / phase progress report.",
+    fields: [
+      f("project_name", "사업명", "Project name", "string", { required: true }),
+      f("report_type", "보고 구분", "Report type", "enum", { options: ["주간", "월간", "단계", "기타"] }),
+      f("period_start", "보고 기간 시작", "Period start", "date"),
+      f("period_end", "보고 기간 종료", "Period end", "date"),
+      f("report_date", "보고일", "Report date", "date", { required: true }),
+      f("author", "작성자", "Author"),
+      f("progress_percent", "전체 진척률(%)", "Overall progress (%)", "amount"),
+      f("plan_percent", "계획 진척률(%)", "Planned progress (%)", "amount"),
+      f("summary", "주요 실적", "Summary"),
+      f("issues", "이슈·리스크", "Issues / risks", "table", { fields: [f("issue", "이슈", "Issue"), f("impact", "영향도", "Impact", "enum", { options: ["상", "중", "하"] }), f("action", "조치", "Action"), f("owner", "담당", "Owner"), f("due_date", "기한", "Due date", "date")] }),
+      f("next_plan", "차기 계획", "Next plan"),
+    ],
+    rules: ["period_start_before_end", "percent_range"],
+  },
+  {
+    key: "meeting_minutes",
+    name_ko: "회의록",
+    name_en: "Meeting minutes",
+    desc_ko: "회의록 — 일시·참석자·안건·결정 사항·실행 항목.",
+    desc_en: "Meeting minutes.",
+    fields: [
+      f("title", "회의명", "Title", "string", { required: true }),
+      f("project_name", "사업명", "Project name"),
+      f("meeting_date", "일시", "Date", "date", { required: true }),
+      f("location", "장소", "Location"),
+      f("author", "작성자", "Author"),
+      f("attendees", "참석자", "Attendees", "table", { fields: [f("name", "성명", "Name"), f("organization", "소속", "Organization"), f("role", "역할", "Role")] }),
+      f("agenda", "안건", "Agenda"),
+      f("decisions", "결정 사항", "Decisions", "table", { fields: [f("item", "항목", "Item"), f("detail", "내용", "Detail")] }),
+      f("action_items", "실행 항목", "Action items", "table", { fields: [f("item", "항목", "Item"), f("owner", "담당", "Owner"), f("due_date", "기한", "Due date", "date")] }),
+      f("next_meeting", "차기 회의", "Next meeting", "date"),
+    ],
+    rules: [],
+  },
+  {
+    key: "test_report",
+    name_ko: "테스트 결과서",
+    name_en: "Test report",
+    desc_ko: "테스트 결과서 — 케이스 집계·케이스별 결과·결함.",
+    desc_en: "Test report.",
+    fields: [
+      f("project_name", "사업명", "Project name", "string", { required: true }),
+      f("version", "대상 버전", "Version under test"),
+      f("test_date", "테스트 일자", "Test date", "date", { required: true }),
+      f("tester", "테스터", "Tester"),
+      f("test_type", "테스트 구분", "Test type", "enum", { options: ["단위", "통합", "시스템", "인수", "성능", "보안"] }),
+      f("total_cases", "총 케이스", "Total cases", "integer"),
+      f("passed", "통과", "Passed", "integer"),
+      f("failed", "실패", "Failed", "integer"),
+      f("blocked", "보류", "Blocked", "integer"),
+      f("pass_rate", "통과율(%)", "Pass rate (%)", "amount"),
+      f("cases", "케이스", "Cases", "table", { fields: [f("id", "ID", "ID"), f("scenario", "시나리오", "Scenario"), f("expected", "기대 결과", "Expected"), f("result", "결과", "Result", "enum", { options: ["통과", "실패", "보류"] }), f("defect_id", "결함 ID", "Defect id")] }),
+    ],
+    rules: ["test_counts_sum", "percent_range"],
+  },
+  {
+    key: "change_request",
+    name_ko: "변경요청서",
+    name_en: "Change request",
+    desc_ko: "변경요청서(CR).",
+    desc_en: "Change request.",
+    fields: [
+      f("cr_no", "CR 번호", "CR no.", "string", { required: true }),
+      f("project_name", "사업명", "Project name"),
+      f("request_date", "요청일", "Request date", "date", { required: true }),
+      f("requester", "요청자", "Requester"),
+      f("title", "변경 제목", "Title"),
+      f("description", "변경 내용", "Description"),
+      f("reason", "변경 사유", "Reason"),
+      f("impact_cost", "비용 영향", "Cost impact", "amount"),
+      f("priority", "우선순위", "Priority", "enum", { options: ["긴급", "높음", "보통", "낮음"] }),
+      f("status", "승인 상태", "Status", "enum", { options: ["요청", "검토", "승인", "반려", "완료"] }),
+      f("approver", "승인자", "Approver"),
+    ],
+    rules: [],
+  },
+  {
+    key: "acceptance",
+    name_ko: "검수확인서",
+    name_en: "Acceptance certificate",
+    desc_ko: "검수확인서·완료보고서.",
+    desc_en: "Acceptance certificate / completion report.",
+    fields: [
+      f("project_name", "사업명", "Project name", "string", { required: true }),
+      f("client", "발주자", "Client", "group", { fields: SW_PARTY("발주자", "Client") }),
+      f("contractor", "수행사", "Contractor", "group", { fields: SW_PARTY("수행사", "Contractor") }),
+      f("acceptance_date", "검수일", "Acceptance date", "date", { required: true }),
+      DELIVERABLES(true),
+      f("amount", "검수 금액", "Amount", "amount"),
+      f("result", "최종 판정", "Verdict", "enum", { options: ["합격", "조건부 합격", "불합격"] }),
+      f("signed", "서명/날인 여부", "Signed / sealed", "boolean"),
+    ],
+    rules: [],
+  },
+  {
+    key: "estimate",
+    name_ko: "견적서",
+    name_en: "Estimate",
+    desc_ko: "소프트웨어 개발 견적서(인력·MM 기준).",
+    desc_en: "Software development estimate (person-month based).",
+    fields: [
+      f("project_name", "사업명", "Project name"),
+      f("issue_date", "견적일", "Issue date", "date", { required: true }),
+      f("supplier", "공급자", "Supplier", "group", { fields: PARTY("공급자", "Supplier", true) }),
+      f("recipient", "수신", "Recipient"),
+      f("valid_until", "유효기간", "Valid until", "date"),
+      f("items", "견적 내역", "Items", "table", { fields: STAFFING() }),
+      f("supply_total", "공급가액 합계", "Supply total", "amount", { required: true }),
+      f("tax_total", "세액 합계", "Tax total", "amount"),
+      f("grand_total", "합계금액", "Grand total", "amount", { required: true }),
+      f("note", "비고", "Note"),
+    ],
+    rules: ["supply_plus_tax_equals_total", "items_sum_equals_supply", "tax_is_ten_percent"],
+  },
+  {
     key: "tax_invoice",
+    hidden: true,
     name_ko: "세금계산서",
     name_en: "Tax invoice",
     desc_ko: "과세·영세율 세금계산서(전자·종이). 면세 거래는 '계산서'를 사용.",
@@ -203,6 +471,7 @@ const BUILTIN: BuiltinDef[] = [
   },
   {
     key: "invoice_exempt",
+    hidden: true,
     name_ko: "계산서(면세)",
     name_en: "Invoice (tax-exempt)",
     desc_ko: "면세 거래의 계산서 — 세액 항목이 없음.",
@@ -219,6 +488,7 @@ const BUILTIN: BuiltinDef[] = [
   },
   {
     key: "receipt",
+    hidden: true,
     name_ko: "영수증",
     name_en: "Receipt",
     desc_ko: "카드·현금 영수증, 간이영수증.",
@@ -244,6 +514,7 @@ const BUILTIN: BuiltinDef[] = [
   },
   {
     key: "business_registration",
+    hidden: true,
     name_ko: "사업자등록증",
     name_en: "Business registration",
     desc_ko: "일반·간이·면세·법인 사업자등록증.",
@@ -265,6 +536,7 @@ const BUILTIN: BuiltinDef[] = [
   },
   {
     key: "contract",
+    hidden: true,
     name_ko: "계약서",
     name_en: "Contract",
     desc_ko: "공급·용역·임대 등 계약서.",
@@ -283,6 +555,7 @@ const BUILTIN: BuiltinDef[] = [
   },
   {
     key: "application_form",
+    hidden: true,
     name_ko: "신청서",
     name_en: "Application form",
     desc_ko: "각종 신청서·접수 서식.",
@@ -324,8 +597,8 @@ function seedBuiltins(s: PState): boolean {
       definition: { fields: b.fields, rules: b.rules },
       form_document_id: null,
       builtin_key: b.key,
-      enabled: true,
-      is_default: !taken,
+      enabled: !b.hidden,
+      is_default: !taken && !b.hidden,
       use_count: 0,
       created_at: now(),
       updated_at: now(),
@@ -488,20 +761,50 @@ function normalizeValue(kind: FieldKind, v: string): { normalized: string | null
 function classifyName(name: string, s: PState): string {
   const n = name.toLowerCase();
   const has = (t: string) => s.schemas.some((x) => x.doc_type === t && x.enabled);
-  if (/(영수증|receipt)/.test(n)) return "receipt";
-  if (/(세금계산서|tax|invoice)/.test(n)) return "tax_invoice";
-  if (/(계산서)/.test(n)) return "invoice_exempt";
-  if (/(계약|contract|agreement)/.test(n)) return "contract";
-  if (/(사업자|registration)/.test(n)) return "business_registration";
-  if (/(신청|application)/.test(n)) return "application_form";
-  if (/(견적|quot)/.test(n) && has("quotation")) return "quotation";
-  if (/(발주|purchase)/.test(n) && has("purchase_order")) return "purchase_order";
+  // The software-development set (0.3.0 defaults) first, then types that are only there when enabled.
+  const rules: [RegExp, string][] = [
+    [/(제안요청|rfp)/, "rfp"],
+    [/(제안서|proposal)/, "proposal"],
+    [/(과업|sow)/, "sow"],
+    [/(요구사항|srs|requirement)/, "srs"],
+    [/(견적|estimate|quot)/, "estimate"],
+    [/(계약|contract|agreement)/, "dev_contract"],
+    [/(wbs|일정)/, "wbs"],
+    [/(진척|주간|월간|progress)/, "progress_report"],
+    [/(회의록|minutes)/, "meeting_minutes"],
+    [/(테스트|시험|test)/, "test_report"],
+    [/(변경요청|change)/, "change_request"],
+    [/(검수|완료보고|acceptance)/, "acceptance"],
+    [/(영수증|receipt)/, "receipt"],
+    [/(세금계산서|tax|invoice)/, "tax_invoice"],
+    [/(계산서)/, "invoice_exempt"],
+    [/(사업자|registration)/, "business_registration"],
+    [/(신청|application)/, "application_form"],
+    [/(발주|purchase)/, "purchase_order"],
+  ];
+  for (const [re, type] of rules) if (re.test(n) && has(type)) return type;
   return "other";
 }
 
 function ocrText(doc: MockDoc, type: string, pageNo: number): string {
   const head = `${doc.original_name} ${pageNo}쪽 (OCR)`;
   switch (type) {
+    case "estimate":
+      return `${head}\n견적서\n공급자 ㈜한빛소프트 220-81-62517 대표 김한빛\n수신 DocuLens 견적일 2026-10-14 유효기간 2026-11-13\n<table><tr><th>역할·품목</th><th>등급</th><th>투입 MM</th><th>단가</th><th>공급가액</th></tr><tr><td>백엔드 개발</td><td>고급</td><td>3.0</td><td>2,500,000</td><td>7,500,000</td></tr><tr><td>프런트 개발</td><td>중급</td><td>2.0</td><td>1,931,818</td><td>3,863,636</td></tr></table>\n공급가액 합계 11,363,636 세액 1,136,364 합계금액 12,500,000`;
+    case "dev_contract":
+      return `${head}\n소프트웨어 개발 용역 계약서\n갑: DocuLens\n을: ㈜한빛소프트 (대표 김한빛, 220-81-62517)\n계약일 2026-01-15 계약기간 2026-02-01 ~ 2027-01-31\n계약금액 12,000,000원 (부가세 별도)\n지급 조건: 착수금 30% 중도금 40% 잔금 30%\n하자보수 12개월, 지식재산권은 발주자에게 귀속\n(서명) (날인)`;
+    case "meeting_minutes":
+      return `${head}\n주간 회의록 — 한빛 포털 구축\n일시 2026-10-14 10:00 장소 회의실 A 작성자 이정우\n참석: 김한빛(㈜한빛소프트 PM), 박서연(DocuLens PL)\n안건: 요구사항 변경 검토, 일정 점검\n결정 사항: 로그인 2단계 인증은 2차로 이월\n실행 항목: 테스트 계획서 보완 — 박서연 — 2026-10-21`;
+    case "test_report":
+      return `${head}\n테스트 결과서 — 한빛 포털 구축 v1.2\n테스트 일자 2026-10-20 테스터 박서연 구분 통합\n총 케이스 50 통과 46 실패 3 보류 1 통과율 92%\n<table><tr><th>ID</th><th>시나리오</th><th>결과</th></tr><tr><td>TC-014</td><td>로그인 실패 5회 잠금</td><td>실패</td></tr></table>`;
+    case "srs":
+      return `${head}\n요구사항 정의서 — 한빛 포털 구축 v1.2\n작성일 2026-09-01 작성자 박서연 승인자 김한빛\n<table><tr><th>ID</th><th>요구사항명</th><th>구분</th><th>우선순위</th></tr><tr><td>SFR-001</td><td>로그인</td><td>기능</td><td>상</td></tr><tr><td>SFR-002</td><td>권한 관리</td><td>기능</td><td>중</td></tr></table>`;
+    case "wbs":
+      return `${head}\nWBS·일정표 — 한빛 포털 구축 v1.2\n전체 기간 2026-02-01 ~ 2027-01-31\n<table><tr><th>WBS 번호</th><th>작업</th><th>담당</th><th>진척률(%)</th></tr><tr><td>1.1</td><td>요구사항 분석</td><td>박서연</td><td>100</td></tr><tr><td>2.1</td><td>설계</td><td>이정우</td><td>60</td></tr></table>`;
+    case "rfp":
+      return `${head}\n제안요청서 — 한빛 포털 구축\n발주기관 DocuLens 공고일 2026-08-01 제출 마감 2026-08-31\n사업 예산 250,000,000원 사업 기간 2026-02-01 ~ 2027-01-31`;
+    case "proposal":
+      return `${head}\n제안서 — 한빛 포털 구축\n제안사 ㈜한빛소프트 제출일 2026-08-25 제안 금액 240,000,000원`;
     case "receipt":
       return `${head}\n# 스타벅스 역삼점\n사업자등록번호 220-81-62517\n2026-10-14 12:31\n<table><tr><th>품명</th><th>수량</th><th>단가</th><th>금액</th></tr><tr><td>아메리카노</td><td>2</td><td>4,500</td><td>9,000</td></tr><tr><td>쿠키</td><td>1</td><td>3,500</td><td>3,500</td></tr></table>\n공급가액 11,364\n부가세 1,136\n합계 12,500\n카드 승인 12345678`;
     case "tax_invoice":
@@ -526,6 +829,106 @@ const sv = (v: string, c: number): TplScalar => ({ v, c });
 
 function template(type: string, doc: MockDoc): Tpl {
   switch (type) {
+    case "estimate":
+      return {
+        issue_date: sv("2026-10-14", 92),
+        "supplier.brn": sv("220-81-62517", 95),
+        "supplier.name": sv("㈜한빛소프트", 96),
+        "supplier.representative": sv("김한빛", 85),
+        recipient: sv("DocuLens", 68),
+        valid_until: sv("2026-11-13", 52),
+        items: [
+          { role: "백엔드 개발", grade: "고급", months: "3.0", unit_price: "2,500,000", supply_amount: "7,500,000" },
+          { role: "프런트 개발", grade: "중급", months: "2.0", unit_price: "1,931,818", supply_amount: "3,863,636" },
+        ],
+        supply_total: sv("11,363,636", 88),
+        tax_total: sv("1,136,364", 72),
+        grand_total: sv("12,500,000", 94),
+      };
+    case "dev_contract":
+      return {
+        title: sv("소프트웨어 개발 용역 계약서", 95),
+        "client.name": sv("DocuLens", 90),
+        "contractor.name": sv("㈜한빛소프트", 94),
+        "contractor.brn": sv("220-81-62517", 95),
+        "contractor.representative": sv("김한빛", 85),
+        contract_date: sv("2026-01-15", 90),
+        period_start: sv("2026-02-01", 88),
+        period_end: sv("2027-01-31", 88),
+        amount: sv("12,000,000", 86),
+        payment_terms: sv("착수금 30% 중도금 40% 잔금 30%", 70),
+        warranty_months: sv("12", 55),
+        ip_owner: sv("발주자", 80),
+        signed: sv("true", 80),
+      };
+    case "meeting_minutes":
+      return {
+        title: sv("주간 회의록", 92),
+        project_name: sv("한빛 포털 구축", 90),
+        meeting_date: sv("2026-10-14", 93),
+        location: sv("회의실 A", 80),
+        author: sv("이정우", 84),
+        attendees: [
+          { name: "김한빛", organization: "㈜한빛소프트", role: "PM" },
+          { name: "박서연", organization: "DocuLens", role: "PL" },
+        ],
+        agenda: sv("요구사항 변경 검토, 일정 점검", 78),
+        action_items: [{ item: "테스트 계획서 보완", owner: "박서연", due_date: "2026-10-21" }],
+      };
+    case "test_report":
+      return {
+        project_name: sv("한빛 포털 구축", 92),
+        version: sv("1.2", 90),
+        test_date: sv("2026-10-20", 93),
+        tester: sv("박서연", 86),
+        test_type: sv("통합", 84),
+        total_cases: sv("50", 90),
+        passed: sv("46", 90),
+        failed: sv("3", 88),
+        blocked: sv("1", 70),
+        pass_rate: sv("92", 86),
+        cases: [{ id: "TC-014", scenario: "로그인 실패 5회 잠금", expected: "계정 잠금", result: "실패", defect_id: "DF-031" }],
+      };
+    case "srs":
+      return {
+        project_name: sv("한빛 포털 구축", 93),
+        version: sv("1.2", 90),
+        issue_date: sv("2026-09-01", 90),
+        author: sv("박서연", 86),
+        approver: sv("김한빛", 82),
+        requirements: [
+          { id: "SFR-001", name: "로그인", description: "ID/비밀번호 로그인", category: "기능", priority: "상", acceptance: "정상 로그인 3초 이내" },
+          { id: "SFR-002", name: "권한 관리", description: "역할별 메뉴 권한", category: "기능", priority: "중", acceptance: "권한 없는 메뉴 숨김" },
+        ],
+      };
+    case "wbs":
+      return {
+        project_name: sv("한빛 포털 구축", 93),
+        version: sv("1.2", 88),
+        period_start: sv("2026-02-01", 90),
+        period_end: sv("2027-01-31", 90),
+        tasks: [
+          { id: "1.1", task: "요구사항 분석", owner: "박서연", start_date: "2026-02-01", end_date: "2026-03-15", progress: "100", deliverable: "요구사항 정의서" },
+          { id: "2.1", task: "설계", owner: "이정우", start_date: "2026-03-16", end_date: "2026-05-31", progress: "60", deliverable: "설계서" },
+        ],
+      };
+    case "rfp":
+      return {
+        project_name: sv("한빛 포털 구축", 93),
+        "issuer.name": sv("DocuLens", 90),
+        issue_date: sv("2026-08-01", 92),
+        budget: sv("250,000,000", 90),
+        period_start: sv("2026-02-01", 86),
+        period_end: sv("2027-01-31", 86),
+        submission_deadline: sv("2026-08-31", 88),
+      };
+    case "proposal":
+      return {
+        project_name: sv("한빛 포털 구축", 93),
+        "proposer.name": sv("㈜한빛소프트", 94),
+        issue_date: sv("2026-08-25", 90),
+        price: sv("240,000,000", 92),
+      };
     case "receipt":
       return {
         store_name: sv("스타벅스 역삼점", 96),
@@ -869,9 +1272,9 @@ export async function runProcess(req: ProcessRequest, ctl: JobControl | null, pr
           doc.confidence = run.confidence;
           doc.schema_id = doc.schema_id ?? null;
           const v = (p: string) => fields.find((x) => x.path === p)?.value ?? null;
-          doc.vendor = v("supplier.name") ?? v("store_name") ?? v("company_name") ?? doc.vendor;
-          doc.doc_date = fields.find((x) => ["issue_date", "datetime", "contract_date", "application_date", "date"].includes(x.path))?.normalized ?? doc.doc_date;
-          const total = fields.find((x) => ["grand_total", "total", "amount"].includes(x.path))?.normalized;
+          doc.vendor = v("contractor.name") ?? v("proposer.name") ?? v("supplier.name") ?? v("issuer.name") ?? v("client.name") ?? v("store_name") ?? v("company_name") ?? doc.vendor;
+          doc.doc_date = fields.find((x) => ["issue_date", "datetime", "contract_date", "meeting_date", "report_date", "test_date", "acceptance_date", "request_date", "application_date", "date"].includes(x.path))?.normalized ?? doc.doc_date;
+          const total = fields.find((x) => ["grand_total", "total", "amount", "price", "budget", "impact_cost"].includes(x.path))?.normalized;
           doc.total_amount = total ? Number(total) : doc.total_amount;
           doc.status = run.review_count > 0 ? "extracted" : "reviewed";
           doc.review_status = run.review_count > 0 ? "pending" : "none";
@@ -1137,7 +1540,7 @@ function versionsOf(id: string): SchemaVersion[] {
   return loadVersions()[id] ?? [];
 }
 
-const SLUGS: Record<string, string> = { 견적서: "quotation", 발주서: "purchase_order", 거래명세서: "transaction_statement", 공문: "official_letter", 보고서: "report", 회의록: "minutes", 청구서: "bill", 휴가신청서: "leave_request", 출장신청서: "trip_request", 계약서: "contract", 신청서: "application_form", 영수증: "receipt", 세금계산서: "tax_invoice" };
+const SLUGS: Record<string, string> = { 제안요청서: "rfp", 제안서: "proposal", 과업지시서: "sow", 과업내용서: "sow", 요구사항정의서: "srs", 요구사항명세서: "srs", 개발계약서: "dev_contract", 용역계약서: "dev_contract", WBS: "wbs", 일정표: "wbs", 진척보고서: "progress_report", 주간보고서: "progress_report", 월간보고서: "progress_report", 테스트결과서: "test_report", 시험결과서: "test_report", 변경요청서: "change_request", 검수확인서: "acceptance", 검수조서: "acceptance", 완료보고서: "acceptance", 견적서: "estimate", 발주서: "purchase_order", 거래명세서: "transaction_statement", 공문: "official_letter", 보고서: "report", 회의록: "meeting_minutes", 청구서: "bill", 휴가신청서: "leave_request", 출장신청서: "trip_request", 계약서: "dev_contract", 신청서: "application_form", 영수증: "receipt", 세금계산서: "tax_invoice" };
 
 export function slugForName(name: string): string {
   const n = name.replace(/\(.*?\)|\s/g, "");
@@ -1153,7 +1556,7 @@ function deriveForm(doc: MockDoc, name: string | null): SchemaDraft {
   const formName = name?.trim() || doc.title || doc.original_name.replace(/\.[^.]+$/, "");
   const slug = slugForName(formName);
   let fields: FieldDef[];
-  if (slug === "quotation") {
+  if (slug === "estimate" || slug === "quotation") {
     fields = [
       f("recipient", "수신", "Recipient"),
       f("date", "견적일자", "Date", "date"),

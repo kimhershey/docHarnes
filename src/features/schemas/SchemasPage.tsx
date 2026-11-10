@@ -47,6 +47,7 @@ const SchemaRow = memo(function SchemaRow({ s, selected, onSelect, ko, t }: { s:
       aria-current={selected ? "true" : undefined}
       data-testid={`schema-row-${s.id}`}
       data-schema-doc-type={s.doc_type}
+      data-schema-enabled={s.enabled ? "true" : "false"}
     >
       <span className="flex items-center gap-1">
         <span className="truncate font-medium">{ko ? s.name : (s.name_en ?? s.name)}</span>
@@ -107,6 +108,9 @@ export function SchemasPage() {
   const selected = useMemo(() => schemas?.find((s) => s.id === selectedId) ?? null, [schemas, selectedId]);
   const user = useMemo(() => (schemas ?? []).filter((s) => s.source !== "builtin"), [schemas]);
   const builtin = useMemo(() => (schemas ?? []).filter((s) => s.source === "builtin"), [schemas]);
+  // Built-ins that are switched off (the 0.1 business forms since 0.3.0) stay out of the way behind a disclosure.
+  const builtinShown = useMemo(() => builtin.filter((s) => s.enabled), [builtin]);
+  const builtinHidden = useMemo(() => builtin.filter((s) => !s.enabled), [builtin]);
 
   // `?register=<doc id>` from the library's "양식으로 등록" opens the form dialog on that document.
   const registerDoc = params.get("register");
@@ -316,9 +320,17 @@ export function SchemasPage() {
           </div>
           <div>
             <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-fg-subtle">{t("schemas.list.builtin")}</h2>
-            {builtin.map((s) => (
+            {builtinShown.map((s) => (
               <SchemaRow key={s.id} s={s} selected={selectedId === s.id} onSelect={select} ko={ko} t={t} />
             ))}
+            {builtinHidden.length > 0 && (
+              <details className="mt-1" data-testid="schemas-hidden-builtins">
+                <summary className="cursor-pointer px-2 py-1 text-xs text-fg-muted hover:text-fg">{t("schemas.list.hidden", { count: builtinHidden.length })}</summary>
+                {builtinHidden.map((s) => (
+                  <SchemaRow key={s.id} s={s} selected={selectedId === s.id} onSelect={select} ko={ko} t={t} />
+                ))}
+              </details>
+            )}
           </div>
           <Card>
             <CardHeader className="p-3">

@@ -83,43 +83,44 @@ describe("mock generate", () => {
   });
 
   it("parses natural-language rules against the built-in schemas", () => {
-    const eq = mp.parseRule("세금계산서의 공급자 사업자번호는 사업자등록증의 등록번호와 같아야 해");
-    expect(eq.rule.left).toEqual({ doc_type: "tax_invoice", field: "supplier.brn", value: null });
+    const eq = mp.parseRule("개발 계약서의 계약금액은 제안서의 제안 금액과 같아야 해");
+    expect(eq.rule.left).toEqual({ doc_type: "dev_contract", field: "amount", value: null });
     expect(eq.rule.op).toBe("eq");
-    expect(eq.rule.right).toEqual({ doc_type: "business_registration", field: "registration_no", value: null });
+    expect(eq.rule.right).toEqual({ doc_type: "proposal", field: "price", value: null });
     expect(eq.unresolved).toEqual([]);
     expect(eq.confidence).toBeGreaterThan(0.8);
 
-    const gte = mp.parseRule("세금계산서의 합계금액은 2,000,000 이상이어야 해");
+    const gte = mp.parseRule("테스트 결과서의 통과율은 95 이상이어야 해");
     expect(gte.rule.op).toBe("gte");
-    expect(gte.rule.left.field).toBe("grand_total");
-    expect(gte.rule.right?.value).toBe("2000000");
+    expect(gte.rule.left).toEqual({ doc_type: "test_report", field: "pass_rate", value: null });
+    expect(gte.rule.right?.value).toBe("95");
 
-    const present = mp.parseRule("신청서 서명 필수");
+    const present = mp.parseRule("개발 계약서 서명 필수");
     expect(present.rule.op).toBe("present");
-    expect(present.rule.left).toEqual({ doc_type: "application_form", field: "signed", value: null });
+    expect(present.rule.left).toEqual({ doc_type: "dev_contract", field: "signed", value: null });
 
-    const pct = mp.parseRule("세금계산서의 합계금액은 계약서의 계약금액과 10% 이내여야 해");
+    const pct = mp.parseRule("과업지시서의 과업 금액은 개발 계약서의 계약금액과 10% 이내여야 해");
     expect(pct.rule.op).toBe("within_pct");
     expect(pct.rule.tolerance).toBe(10);
-    expect(pct.rule.right).toEqual({ doc_type: "contract", field: "amount", value: null });
+    expect(pct.rule.left).toEqual({ doc_type: "sow", field: "amount", value: null });
+    expect(pct.rule.right).toEqual({ doc_type: "dev_contract", field: "amount", value: null });
 
-    const unknown = mp.parseRule("세금계산서의 우주선 번호는 사업자등록증의 등록번호와 같아야 해");
+    const unknown = mp.parseRule("개발 계약서의 우주선 번호는 제안서의 제안 금액과 같아야 해");
     expect(unknown.unresolved).toContain("우주선 번호");
     expect(unknown.issues.length).toBeGreaterThan(0);
   });
 
   it("runs the project commands end to end: create → rules → check → report", async () => {
-    const tpl = (await backend.mockInvoke<{ id: string }[]>("project_templates")).find((t) => t.id === "builtin-vendor_onboarding")!;
-    const project = await backend.mockInvoke<{ id: string; status: string }>("project_create", { input: { name: "한빛 거래처", template_id: tpl.id } });
+    const tpl = (await backend.mockInvoke<{ id: string }[]>("project_templates")).find((t) => t.id === "builtin-internal_dev")!;
+    const project = await backend.mockInvoke<{ id: string; status: string }>("project_create", { input: { name: "한빛 포털", template_id: tpl.id } });
     const detail = await backend.mockInvoke<{ rules: unknown[]; checklist: { missing: boolean }[] }>("project_get", { id: project.id });
-    expect(detail.rules).toHaveLength(2);
+    expect(detail.rules).toHaveLength(3);
     expect(detail.checklist.every((c) => c.missing)).toBe(true);
     const run = await backend.mockInvoke<{ missing: number; pass: number; results: { verdict: string }[] }>("project_check", { id: project.id, ruleIds: null });
-    expect(run.missing).toBe(2);
+    expect(run.missing).toBe(3);
     expect(run.results.every((r) => r.verdict === "missing")).toBe(true);
     const report = await backend.mockInvoke<{ markdown: string }>("project_report", { id: project.id });
-    expect(report.markdown).toContain("# 프로젝트 리포트 — 한빛 거래처");
+    expect(report.markdown).toContain("# 프로젝트 리포트 — 한빛 포털");
     await expect(backend.mockInvoke("project_request_supplement", { id: project.id, findingIds: null, output: null })).resolves.toMatchObject({ job_id: expect.any(String) });
     const status = await backend.mockInvoke<{ running: boolean; last_run_at: string | null }>("maintenance_status");
     expect(status.last_run_at).toBeNull();

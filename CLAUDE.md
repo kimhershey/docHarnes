@@ -67,7 +67,10 @@ user PC: `docs/RUN-GUIDE.md`.
   embed: sqlite-vec + `Embedder`, search: hybrid RRF, answer: grounded answers / explain / summarize / compare with the conversation history +
   screen session as context blocks, follow-up detection, an evidence budget capped by the loaded model's context with shrink-and-retry
   on the server's context-overflow 400, and `retrieve = false` text-only answers for pasted text),
-  `pipeline/` (schema: built-in sample forms + grammar-safe JSON schema + lint, prompts, vlm: retrying caller, image,
+  `pipeline/` (schema: built-in sample forms — 13 software-development forms (rfp, proposal, sow, srs, dev_contract, wbs,
+  progress_report, meeting_minutes, test_report, change_request, acceptance, estimate, general) + the 6 pre-0.3 business forms kept
+  as hidden rows (`enabled = 0`; a user switch or `repo::enable_legacy_builtins` brings one back), shared `doc_type_aliases` for the
+  planner / projects / mocks + grammar-safe JSON schema + lint, prompts, vlm: retrying caller, image,
   classify, ocr, extract, validate: normalisers / BRN checksum / sum rules / PII masking / confidence, run: orchestrator +
   `extractions/` mirror, review, forms: form registration + NL schemas, split: lopdf split / merge, repo),
   `planner/` (mod: typed ops / scope / plan (appendix D v1.0 subset), schema: op spec table + PlanSchema grammar, rules:

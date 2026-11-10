@@ -1325,6 +1325,18 @@
       "encrypted": "Password-protected document (remove the password first)"
     },
     "doc_types": {
+      "rfp": "Request for proposal (RFP)",
+      "proposal": "Proposal",
+      "sow": "Statement of work",
+      "srs": "Requirements specification",
+      "dev_contract": "Software development contract",
+      "wbs": "WBS / schedule",
+      "progress_report": "Progress report",
+      "meeting_minutes": "Meeting minutes",
+      "test_report": "Test report",
+      "change_request": "Change request",
+      "acceptance": "Acceptance certificate",
+      "estimate": "Estimate",
       "tax_invoice": "Tax invoice",
       "invoice_exempt": "Invoice (exempt)",
       "receipt": "Receipt",
@@ -1858,7 +1870,8 @@
       "user": "Registered forms · user schemas",
       "builtin": "Built-in sample forms",
       "empty": "No registered forms yet. Start with 'Register form' or 'Create from description'.",
-      "disabled": "Disabled"
+      "disabled": "Disabled",
+      "hidden": "{{count}} hidden built-in forms — the tax invoice, receipt and other 0.2 forms. Switch one on to use it again."
     },
     "new": "New schema",
     "nl_create": "Create from description",
@@ -2046,7 +2059,7 @@
       "variables": "Insert variable",
       "insert": "Insert {{label}}",
       "example": "Example",
-      "example_doc": "Sample document: receipt · 스타벅스 역삼점 · 2026-10-14 · 12,500 · scan_0008.jpg (inbox/)",
+      "example_doc": "Sample document: estimate · ㈜한빛소프트 · 2026-10-14 · 12,500,000 · scan_0008.jpg (inbox/)",
       "reset": "Reset to default"
     },
     "variables": {
@@ -2647,6 +2660,9 @@
       "title": "Project templates",
       "hint": "A template is a set of required document types and consistency rules. Built-ins are read-only; duplicate them to edit.",
       "builtin": {
+        "outsourcing": "Outsourced development",
+        "maintenance": "Maintenance",
+        "internal_dev": "In-house development",
         "certification_review": "Certification review",
         "vendor_onboarding": "Vendor onboarding",
         "purchase_settlement": "Purchase settlement"

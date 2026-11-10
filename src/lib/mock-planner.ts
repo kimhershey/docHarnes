@@ -111,6 +111,7 @@ import {
   type UndoResponse,
 } from "./types";
 import { carriedText } from "./carried-text";
+import { docTypeAliases } from "./doc-type-aliases";
 
 /** File-operation journal (`{ batches, entries }`, batches tagged with their workspace). */
 const JOURNAL_KEY = "doculens.mock.journal";
@@ -448,7 +449,7 @@ function splitClauses(text: string): string[] {
   return parts;
 }
 
-const SELECTION_WORDS = ["이문서", "이계약서", "이영수증", "이파일", "선택문서", "선택한", "선택된", "현재문서", "열린문서", "지금문서", "선택영역", "이페이지", "현재페이지", "thisdocument", "thisfile", "thispage", "selected", "theselection", "thesedocuments", "currentdocument", "thiscontract", "thisreceipt"];
+const SELECTION_WORDS = ["이문서", "이계약서", "이영수증", "이견적서", "이보고서", "이파일", "선택문서", "선택한", "선택된", "현재문서", "열린문서", "지금문서", "선택영역", "이페이지", "현재페이지", "thisdocument", "thisfile", "thispage", "selected", "theselection", "thesedocuments", "currentdocument", "thiscontract", "thisreceipt"];
 const ALL_WORDS = ["전부", "전체", "모두", "모든", "다 ", "라이브러리전체", "alldocuments", "everything", "all "];
 
 function selectionIds(ctx: PlanContext): string[] {
@@ -460,7 +461,7 @@ function selectionIds(ctx: PlanContext): string[] {
 function docTypeOf(t: Text, ctx: PlanContext): DocTypeSummary | null {
   let best: { d: DocTypeSummary; len: number } | null = null;
   for (const d of ctx.doc_types) {
-    for (const label of [d.label_ko, d.label_en, d.slug]) {
+    for (const label of [d.label_ko, d.label_en, d.slug, ...docTypeAliases(d.slug)]) {
       const key = compact(label);
       const len = Array.from(key).length;
       if (len >= 2 && t.compact.includes(key) && (best === null || len > best.len)) best = { d, len };
@@ -507,7 +508,12 @@ function fieldsMentioned(t: Text, schema: SchemaSummary): FieldSummary[] {
 
 function totalField(schema: SchemaSummary): FieldSummary | null {
   const amounts = schema.fields.filter((f) => f.kind === "amount");
-  return amounts.find((f) => f.key.includes("total") || f.label_ko.includes("합계") || f.label_ko.includes("총액")) ?? amounts[0] ?? null;
+  // Mirrors planner/rules.rs: a well-known key first (the SW schemas list 공급가액 합계 before 합계금액).
+  for (const key of ["grand_total", "total", "total_amount", "amount", "price", "budget"]) {
+    const named = amounts.find((f) => f.key === key);
+    if (named) return named;
+  }
+  return amounts.find((f) => f.label_ko.includes("합계금액") || f.label_ko.includes("총액")) ?? amounts.find((f) => f.key.includes("total") || f.label_ko.includes("합계")) ?? amounts[0] ?? null;
 }
 
 function dateOf(t: Text, ctx: PlanContext): DateRange | null {
@@ -945,7 +951,7 @@ function ruleOrganize(t: Text, ctx: PlanContext): Plan | null {
   const rename = has(t, ["이름바꿔", "이름을바꿔", "이름변경", "파일명", "rename", "이름을"]);
   const organizeWord = has(t, ["정리", "organi", "옮겨", "옮기", "이동", "move", "폴더로", "sortinto", "tidy"]);
   if (!rename && !organizeWord) return null;
-  if (has(t, ["작업", "job", "스키마", "schema", "태그", "tag"]) && !has(t, ["문서", "파일", "document", "file", "영수증", "receipt"])) return null;
+  if (has(t, ["작업", "job", "스키마", "schema", "태그", "tag"]) && !has(t, ["견적서", "계약서", "회의록", "보고서", "estimate", "contract", "문서", "파일", "document", "file", "영수증", "receipt"])) return null;
   const dt = docTypeOf(t, ctx);
   const d = dateOf(t, ctx);
   const scope = scopeOf(t, ctx, dt, d);

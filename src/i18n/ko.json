@@ -1325,6 +1325,18 @@
       "encrypted": "암호로 보호된 문서(암호를 해제한 뒤 가져오기)"
     },
     "doc_types": {
+      "rfp": "제안요청서(RFP)",
+      "proposal": "제안서",
+      "sow": "과업지시서",
+      "srs": "요구사항 정의서",
+      "dev_contract": "소프트웨어 개발 계약서",
+      "wbs": "WBS·일정표",
+      "progress_report": "진척 보고서",
+      "meeting_minutes": "회의록",
+      "test_report": "테스트 결과서",
+      "change_request": "변경요청서",
+      "acceptance": "검수확인서",
+      "estimate": "견적서",
       "tax_invoice": "세금계산서",
       "invoice_exempt": "계산서",
       "receipt": "영수증",
@@ -1858,7 +1870,8 @@
       "user": "등록 양식·사용자 스키마",
       "builtin": "내장 샘플 양식",
       "empty": "아직 등록한 양식이 없습니다. '양식 등록'이나 '자연어로 만들기'로 시작하세요.",
-      "disabled": "사용 안 함"
+      "disabled": "사용 안 함",
+      "hidden": "숨긴 기본 양식 {{count}}개 — 0.2 이전의 세금계산서·영수증 등. 켜면 다시 분류·추출에 쓰입니다."
     },
     "new": "새 스키마",
     "nl_create": "자연어로 만들기",
@@ -2046,7 +2059,7 @@
       "variables": "변수 삽입",
       "insert": "{{label}} 삽입",
       "example": "예시",
-      "example_doc": "예시 문서: 영수증 · 스타벅스 역삼점 · 2026-10-14 · 12,500원 · scan_0008.jpg (inbox/)",
+      "example_doc": "예시 문서: 견적서 · ㈜한빛소프트 · 2026-10-14 · 12,500,000원 · scan_0008.jpg (inbox/)",
       "reset": "기본값으로"
     },
     "variables": {
@@ -2647,6 +2660,9 @@
       "title": "프로젝트 템플릿",
       "hint": "필수 문서 유형과 정합성 규칙 묶음입니다. 내장 템플릿은 읽기 전용이며, 복제해서 수정할 수 있습니다.",
       "builtin": {
+        "outsourcing": "외주 개발 사업",
+        "maintenance": "유지보수",
+        "internal_dev": "내부 개발",
         "certification_review": "인증 심사",
         "vendor_onboarding": "거래처 등록",
         "purchase_settlement": "구매 정산"

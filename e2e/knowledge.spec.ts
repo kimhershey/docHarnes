@@ -99,7 +99,7 @@ test.describe("P3 knowledge base", () => {
     await expect(third.getByTestId("answer-general-badge")).toHaveText(t_general_badge);
 
     // Work items are not answered as questions: the planner (P5) replies with a plan / clarification card.
-    await page.getByTestId("assistant-input").fill("지난달 영수증 정리해줘");
+    await page.getByTestId("assistant-input").fill("지난달 견적서 정리해줘");
     await page.getByTestId("assistant-send").click();
     await expect(page.locator('[data-testid="assistant-card-plan"], [data-testid="assistant-card-clarify"], [data-testid="assistant-card-result"], [data-testid="assistant-card-execution"]').last()).toBeVisible({ timeout: 15_000 });
 
@@ -149,7 +149,7 @@ test.describe("P3 knowledge base", () => {
   test("viewer Q&A, explain, summary, version and glossary and knowledge settings", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
-    await importViaLibrary(page, ["D:\\scan\\영수증-3p.pdf"]);
+    await importViaLibrary(page, ["D:\\scan\\견적서-3p.pdf"]);
     await page.locator('[data-testid^="doc-open-"]').first().click();
     await expect(page.getByTestId("page-viewer")).toBeVisible();
 
@@ -174,7 +174,7 @@ test.describe("P3 knowledge base", () => {
 
     // Version registration.
     await page.getByTestId("viewer-version").click();
-    await page.getByTestId("version-group").fill("영수증 모음");
+    await page.getByTestId("version-group").fill("견적서 모음");
     await page.getByTestId("version-label").fill("2024");
     await page.getByTestId("version-save").click();
     await expect(page.getByTestId("version-dialog")).toBeHidden();
@@ -187,7 +187,7 @@ test.describe("P3 knowledge base", () => {
 
     await page.getByTestId("nav-knowledge").click();
     await page.getByTestId("knowledge-tab-versions").click();
-    await expect(page.locator('[data-testid="version-group"][data-group="영수증 모음"]')).toBeVisible();
+    await expect(page.locator('[data-testid="version-group"][data-group="견적서 모음"]')).toBeVisible();
     await expect(page.locator('[data-testid="version-doc"][data-latest="true"]')).toHaveCount(1);
 
     await page.getByTestId("knowledge-tab-glossary").click();

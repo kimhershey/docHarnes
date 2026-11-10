@@ -53,14 +53,14 @@ test.describe("UI 배율", () => {
   test("150 %: library cards, list rows, viewer thumbnails, review rows and the bars keep their text inside", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
-    await importViaLibrary(page, ["D:\\scan\\영수증-1p.jpg", "D:\\scan\\세금계산서-2p.pdf", "D:\\scan\\견적서.hwpx"], { autoLevel: "none" });
-    const invoiceId = await docId(page, "세금계산서-2p.pdf");
-    for (const name of ["영수증-1p.jpg", "세금계산서-2p.pdf"]) {
+    await importViaLibrary(page, ["D:\\scan\\견적서-1p.jpg", "D:\\scan\\개발계약서-2p.pdf", "D:\\scan\\견적서.hwpx"], { autoLevel: "none" });
+    const invoiceId = await docId(page, "개발계약서-2p.pdf");
+    for (const name of ["견적서-1p.jpg", "개발계약서-2p.pdf"]) {
       await page.getByTestId(`doc-select-${await docId(page, name)}`).check();
     }
     await page.getByTestId("library-process").click();
     await page.getByTestId("library-process-standard").click();
-    await expect(card(page, "영수증-1p.jpg")).toHaveAttribute("data-doc-status", "extracted", { timeout: 15_000 });
+    await expect(card(page, "견적서-1p.jpg")).toHaveAttribute("data-doc-status", "extracted", { timeout: 15_000 });
     await page.getByTestId("library-clear-selection").click();
 
     await setScale(page, 150);
@@ -112,7 +112,7 @@ test.describe("UI 배율", () => {
   test("100 %: a card whose badges wrap to a second row still shows its title and meta line", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
-    // Default auto-processing adds the doc-type badge: HWPX · 렌더됨 · 변환본 · 기타 is two badge rows on a 12.5 rem card.
+    // Default auto-processing adds the doc-type badge: HWPX · 렌더됨 · 변환본 · 견적서 is two badge rows on a 12.5 rem card.
     await importViaLibrary(page, ["D:\\scan\\견적서.hwpx"]);
     const c = card(page, "견적서.hwpx");
     await expect(c.getByTestId(/doc-type-/)).toBeVisible({ timeout: 15_000 });
