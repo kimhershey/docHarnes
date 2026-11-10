@@ -14,12 +14,13 @@ use serde_json::{json, Value};
 use crate::aggregate::{self, AggregateRequest};
 use crate::db::Db;
 use crate::documents::import::{self, ImportDeps, ImportOptions};
-use crate::documents::{repo as docs, DocumentRecord};
+use crate::documents::{repo as docs, DocumentRecord, DocumentRole};
 use crate::error::{CoreError, Result};
 use crate::export::{self, ExportRequest};
 use crate::generate::{self, DraftRequest, GenerateDeps, SourceRef};
 use crate::knowledge::answer::{self, AnswerDeps, ChatBackend};
 use crate::knowledge::embed::Embedder;
+use crate::knowledge::repo as knowledge_repo;
 use crate::knowledge::search::{self, SearchDeps};
 use crate::knowledge::tokenize::Analyzer;
 use crate::knowledge::{AnswerKind, AnswerRequest, SearchRequest, SearchScope, SummaryMode};
@@ -566,8 +567,10 @@ fn run_step(
                 req.mode = *m;
             }
             req.limit = top_k.unwrap_or(20).clamp(1, 200);
+            // A project scope also sees the project's reference material (0.5.0 plan A).
             req.scope = SearchScope {
                 documents: ids(&docs_),
+                project_id: plan.scope.filter.project_id.clone(),
                 latest_only: deps.knowledge.latest_only,
                 ..SearchScope::default()
             };
@@ -591,6 +594,7 @@ fn run_step(
             req.retrieve = knowledge.unwrap_or(true);
             req.scope = SearchScope {
                 documents: ids(&docs_),
+                project_id: plan.scope.filter.project_id.clone(),
                 latest_only: deps.knowledge.latest_only,
                 ..SearchScope::default()
             };
@@ -977,6 +981,7 @@ fn run_step(
                     if !plan.scope.is_empty() {
                         req.scope.documents = ids(&working_set(deps, plan, imported)?);
                     }
+                    req.scope.project_id = plan.scope.filter.project_id.clone();
                 }
             }
             req.scope.latest_only = deps.knowledge.latest_only;
@@ -1087,22 +1092,36 @@ fn run_step(
             };
             Ok(StepOutcome { summary, payload: serde_json::to_value(&project).unwrap_or(Value::Null), imported: None })
         }
-        Op::AddToProject { project, doc_ids } => {
+        Op::AddToProject { project, doc_ids, as_reference } => {
             let pid = project.clone().ok_or_else(|| CoreError::Invalid("project_required".into()))?;
             let target = if doc_ids.is_empty() { ids(&working_set(deps, plan, imported)?) } else { doc_ids.clone() };
             if target.is_empty() {
                 return Err(CoreError::Invalid("no_documents".into()));
             }
-            let added = crate::projects::copies::add_documents(db, deps.paths(), &pid, &target, deps.language)?;
+            let added = if *as_reference {
+                // Reference material (0.5.0 plan A): the project's reference group + role `knowledge`.
+                db.with_tx(|tx| {
+                    let name = projects_repo::get_project(tx, &pid)?.map(|p| p.name).unwrap_or_default();
+                    let group = knowledge_repo::project_reference_group(tx, &pid, &name)?;
+                    let n = knowledge_repo::add_docs_to_collection(tx, &group.id, &target)?;
+                    for d in &target {
+                        docs::set_role(tx, d, DocumentRole::Knowledge)?;
+                    }
+                    Ok(n)
+                })?
+            } else {
+                crate::projects::copies::add_documents(db, deps.paths(), &pid, &target, deps.language)?
+            };
             out.documents.extend(target.iter().cloned());
             let detail = db.with(|c| projects_repo::get_project(c, &pid))?;
             Ok(StepOutcome {
-                summary: if deps.ko() {
-                    format!("프로젝트에 문서 {added}건 추가")
-                } else {
-                    format!("{added} documents added to the project")
+                summary: match (deps.ko(), *as_reference) {
+                    (true, true) => format!("프로젝트 참고 자료에 문서 {added}건 추가"),
+                    (true, false) => format!("프로젝트에 문서 {added}건 추가"),
+                    (false, true) => format!("{added} documents added to the project's reference material"),
+                    (false, false) => format!("{added} documents added to the project"),
                 },
-                payload: json!({ "project_id": pid, "added": added, "project": detail }),
+                payload: json!({ "project_id": pid, "added": added, "as_reference": as_reference, "project": detail }),
                 imported: None,
             })
         }

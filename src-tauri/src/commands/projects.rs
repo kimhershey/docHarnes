@@ -3,6 +3,7 @@
 use tauri::AppHandle;
 
 use doculens_core::generate::OutputFormat;
+use doculens_core::knowledge::Collection;
 use doculens_core::projects::copies::SyncReport;
 use doculens_core::projects::{
     CheckRun, Project, ProjectDetail, ProjectInput, ProjectTemplate, Rule, RuleDraft, TemplateInput,
@@ -38,9 +39,22 @@ pub fn project_get(app: AppHandle, id: String) -> UiResult<ProjectDetail> {
     projects_bridge::get(&app, &id)
 }
 
+/// `as_reference` (0.5.0): put the documents in the project's reference group instead of its
+/// work documents.
 #[tauri::command(async)]
-pub fn project_add_documents(app: AppHandle, id: String, doc_ids: Vec<String>) -> UiResult<ProjectDetail> {
-    projects_bridge::add_documents(&app, &id, &doc_ids)
+pub fn project_add_documents(
+    app: AppHandle,
+    id: String,
+    doc_ids: Vec<String>,
+    as_reference: Option<bool>,
+) -> UiResult<ProjectDetail> {
+    projects_bridge::add_documents(&app, &id, &doc_ids, as_reference.unwrap_or(false))
+}
+
+/// The project's reference group (참고 자료 묶음), created on first use.
+#[tauri::command(async)]
+pub fn project_reference_group(app: AppHandle, id: String) -> UiResult<Collection> {
+    projects_bridge::reference_group(&app, &id)
 }
 
 #[tauri::command(async)]

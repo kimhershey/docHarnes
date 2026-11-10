@@ -52,7 +52,7 @@ pub const DOC_STATUSES: &[&str] = &["new", "rendered", "extracted", "reviewed", 
 pub const DRAFT_OUTPUTS: &[&str] = &["hwpx", "docx", "pdf", "md"];
 pub const TONES: &[&str] = &["formal", "plain", "concise"];
 pub const LENGTHS: &[&str] = &["short", "medium", "long"];
-pub const EXPLAIN_SCOPES: &[&str] = &["kb", "collection", "project", "document"];
+pub const EXPLAIN_SCOPES: &[&str] = &["kb", "reference", "project", "document"];
 pub const RETENTION_ITEMS: &[&str] = &["documents", "extractions", "logs", "journal", "chats", "temp"];
 pub const SETTING_KEYS: &[&str] = &[
     "render_dpi",
@@ -307,9 +307,10 @@ pub const OP_SPECS: &[OpSpec] = &[
         params: &[
             p("project", ParamType::Str, false, "프로젝트 이름/ID(기본: 열린 프로젝트)", "project name / id (default: open project)"),
             p("doc_ids", ParamType::StrList, false, "추가할 문서 id(기본: 범위의 문서)", "document ids (default: documents in scope)"),
+            p("as_reference", ParamType::Bool, false, "참고 자료(지침·규정·기준)로 넣기(기본 false = 업무 문서)", "add as reference material (guidelines / regulations; default false = work documents)"),
         ],
-        desc_ko: "문서를 프로젝트에 추가",
-        desc_en: "add documents to a project",
+        desc_ko: "문서를 프로젝트에 넣기(업무 문서 또는 참고 자료)",
+        desc_en: "put documents in a project (work documents or reference material)",
     },
     OpSpec {
         kind: OpKind::DefineRule,

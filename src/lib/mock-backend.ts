@@ -294,8 +294,8 @@ function openWorkspace(path: string, create: boolean, name: string | null, local
       manifest: {
         workspace_id: crypto.randomUUID(),
         schema_version: 1,
-        app_version: "0.3.0",
-        last_opened_app_version: "0.3.0",
+        app_version: "0.4.0",
+        last_opened_app_version: "0.4.0",
         name: name?.trim() || basename(p),
         created_at: new Date().toISOString(),
         last_opened_at: null,
@@ -435,6 +435,11 @@ interface MockModel {
   health: ModelHealth;
 }
 
+/** Embedding architectures (bge-m3-style BERT drop-ins and EmbeddingGemma 2). */
+function isEmbeddingArch(arch: string): boolean {
+  return arch === "bert" || arch === "xlm-roberta" || arch === "nomic-bert" || arch.includes("embedding");
+}
+
 function loadModels(): MockModel[] {
   return read<MockModel[]>(MODELS_KEY, []);
 }
@@ -465,16 +470,16 @@ function scannedFile(folder: string, name: string, size: number, sha: string | n
       source_url: null,
       source_repo: null,
       has_chat_template: !mmproj,
-      block_count: mmproj ? null : 32,
-      context_length: mmproj ? null : 262144,
+      block_count: mmproj ? null : 42,
+      context_length: mmproj ? null : 131072,
       embedding_length: null,
       head_count: null,
-      head_count_kv: mmproj ? null : 4,
-      key_length: mmproj ? null : 256,
-      full_attention_interval: mmproj ? null : 4,
+      head_count_kv: mmproj ? null : 2,
+      key_length: mmproj ? null : 512,
+      full_attention_interval: null,
       split_count: null,
       split_no: null,
-      projector_type: mmproj ? "qwen3vl_merger" : null,
+      projector_type: mmproj ? "gemma4v" : null,
       has_vision_encoder: mmproj ? true : null,
       has_audio_encoder: null,
       tensor_count: mmproj ? 400 : 500,
@@ -510,7 +515,7 @@ function discovered(): DiscoveredModel[] {
       quantization: m.quant,
       has_chat_template: true,
       has_vision: !!m.mmproj,
-      role: m.arch === "bert" ? "embedding" : m.mmproj ? "vlm" : "llm",
+      role: isEmbeddingArch(m.arch) ? "embedding" : m.mmproj ? "vlm" : "llm",
       total_bytes: m.files.reduce((a, f) => a + f.size, 0),
       health: m.health,
       warnings: m.registry_id && !m.hashed ? ["models.warn.unverified_hash"] : [],
@@ -532,19 +537,19 @@ function userAddedEntries(): ModelEntry[] {
     .map((m) => ({
       id: m.id,
       family: m.arch,
-      role: m.arch === "bert" ? "embedding" : m.mmproj ? "vlm" : "llm",
+      role: isEmbeddingArch(m.arch) ? "embedding" : m.mmproj ? "vlm" : "llm",
       display: m.display,
       license: "apache-2.0",
       license_url: null,
       source_repo: null,
       arch: m.arch,
       modalities: m.mmproj ? ["text", "image"] : ["text"],
-      ctx_max: 262144,
+      ctx_max: 131072,
       files: m.files.map((f) => ({ name: f.name, sha256: f.sha256, size: f.size, hf: null })),
       requirements: { min_free_vram_mib: Math.round(m.files.reduce((a, f) => a + f.size, 0) / 1048576) + 1536, min_ram_mib: 8192, tiers: ["vram_8gb", "vram_12gb", "vram_16gb", "vram_24gb_plus"] },
       defaults: { ctx: 32768, kv: "q8_0" },
       capabilities: { json_schema: true },
-      prompt_profile: "qwen3.5-doc-v1",
+      prompt_profile: "gemma4-doc-v1",
       verified: m.hashed,
       user_added: true,
     }));
@@ -1280,7 +1285,7 @@ function importPlan(paths: string[], mode: ImportMode, folderName: string | null
   let autoPaired = false;
   if (weights.length === 1 && !files.some((f) => f.is_mmproj)) {
     const base = weights[0]!.source.slice(0, -basename(weights[0]!.source).length);
-    files.push({ source: `${base}mmproj-F16.gguf`, dest_name: "mmproj-F16.gguf", size: 660_000_000, meta: null, is_mmproj: true });
+    files.push({ source: `${base}mmproj-F16.gguf`, dest_name: "mmproj-F16.gguf", size: 990_000_000, meta: null, is_mmproj: true });
     autoPaired = true;
   }
   const stem = weights[0]!.dest_name.replace(/\.gguf$/i, "");
@@ -1294,7 +1299,7 @@ function importPlan(paths: string[], mode: ImportMode, folderName: string | null
     total_bytes: files.reduce((a, f) => a + f.size, 0),
     mode,
     auto_paired_mmproj: autoPaired,
-    architecture: "qwen35",
+    architecture: "gemma4",
     quantization: /q6_k/i.test(stem) ? "Q6_K" : /q5_k_m/i.test(stem) ? "Q5_K_M" : /q4_k_m/i.test(stem) ? "Q4_K_M" : "F16",
     has_vision: files.some((f) => f.is_mmproj),
     warnings: [],
@@ -1327,7 +1332,7 @@ function importRun(plan: ImportPlan): string {
       display: match?.display ?? `${plan.folder_name} (${plan.quantization ?? "?"})`,
       files: plan.files.map((f) => ({ name: f.dest_name, size: f.size, sha256: null })),
       mmproj: plan.files.find((f) => f.is_mmproj)?.dest_name ?? null,
-      arch: plan.architecture ?? "qwen35",
+      arch: plan.architecture ?? "gemma4",
       quant: plan.quantization,
       registry_id: match?.id ?? null,
       hashed: false,
@@ -2270,7 +2275,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "app_info":
       return r({
         name: "DocuLens",
-        version: "0.3.0",
+        version: "0.4.0",
         settings_path: "(browser) localStorage:doculens.mock.settings",
         app_data_dir: "(browser)",
         engines_dir: "(browser)/engines",

@@ -369,6 +369,124 @@ fn scopes_versions_and_collections() {
     assert_eq!(groups[0].documents[0].document_id, "reg2");
 }
 
+/// 0.5.0 plan A: a project scope = its work documents ∪ its reference group ∪ the active groups
+/// of the 공통 참고 자료; the group is created on first use, follows a rename and goes with the
+/// project.
+#[test]
+fn project_scope_unions_work_documents_and_reference_material() {
+    use crate::projects::{repo as projects, ProjectInput};
+    let w = World::new();
+    let sorted = |set: HashSet<String>| {
+        let mut v: Vec<String> = set.into_iter().collect();
+        v.sort_unstable();
+        v
+    };
+    // Work document: the contract. Reference material: the security guideline. Common groups:
+    // the 2024 regulation (active) and the expense guide (inactive); the English agreement is
+    // in no group.
+    let project =
+        w.db.with(|c| projects::save_project(c, &ProjectInput { name: "한빛 납품".into(), ..Default::default() }))
+            .unwrap();
+    w.db.with(|c| projects::add_documents(c, &project.id, &["con".into()])).unwrap();
+    let group = w.db.with(|c| repo::project_reference_group(c, &project.id, &project.name)).unwrap();
+    assert_eq!(
+        (group.kind, group.project_id.as_deref(), group.name.as_str(), group.active),
+        (CollectionKind::Project, Some(project.id.as_str()), "한빛 납품", true)
+    );
+    assert_eq!(w.db.with(|c| repo::project_reference_group(c, &project.id, "x")).unwrap().id, group.id, "once");
+    assert_eq!(
+        w.db.with(|c| repo::reference_group_of_project(c, &project.id)).unwrap().map(|g| g.id),
+        Some(group.id.clone())
+    );
+    assert!(w
+        .db
+        .with(|c| repo::project_reference_group(c, "nope", "x"))
+        .unwrap_err()
+        .to_string()
+        .contains("project_not_found"));
+    w.db.with(|c| repo::add_docs_to_collection(c, &group.id, &["sec".into()])).unwrap();
+    let common =
+        w.db.with(|c| {
+            repo::save_collection(
+                c,
+                &CollectionInput { name: "사규".into(), active: true, ..CollectionInput::default() },
+            )
+        })
+        .unwrap();
+    assert!(common.is_common() && common.kind == CollectionKind::Reference);
+    w.db.with(|c| repo::add_docs_to_collection(c, &common.id, &["reg2".into()])).unwrap();
+    let off =
+        w.db.with(|c| {
+            repo::save_collection(
+                c,
+                &CollectionInput { name: "보류".into(), active: false, ..CollectionInput::default() },
+            )
+        })
+        .unwrap();
+    w.db.with(|c| repo::add_docs_to_collection(c, &off.id, &["exp".into()])).unwrap();
+    // A group saved with a project id is that project's group; the same name elsewhere gets a suffix.
+    let p2 =
+        w.db.with(|c| projects::save_project(c, &ProjectInput { name: "사규".into(), ..Default::default() })).unwrap();
+    let g2 = w.db.with(|c| repo::project_reference_group(c, &p2.id, &p2.name)).unwrap();
+    assert_eq!((g2.name.as_str(), g2.kind), ("사규 (2)", CollectionKind::Project));
+    let via_input =
+        w.db.with(|c| {
+            repo::save_collection(
+                c,
+                &CollectionInput {
+                    name: "임시".into(), project_id: Some(p2.id.clone()), ..CollectionInput::default()
+                },
+            )
+        })
+        .unwrap();
+    assert_eq!((via_input.kind, via_input.project_id.as_deref()), (CollectionKind::Project, Some(p2.id.as_str())));
+    assert!(w.db.with(|c| repo::delete_collection(c, &via_input.id)).unwrap());
+
+    let allowed = w.db.with(|c| repo::scope_doc_ids(c, &SearchScope::project(&project.id))).unwrap().unwrap();
+    assert_eq!(sorted(allowed), vec!["con", "reg2", "sec"]);
+    let mut req = SearchRequest::new("계약금액");
+    req.scope = SearchScope::project(&project.id);
+    let hits = search(&w.search_deps(None), &req).unwrap().hits;
+    assert!(
+        !hits.is_empty() && hits.iter().all(|h| ["con", "reg2", "sec"].contains(&h.document_id.as_str())),
+        "{:?}",
+        hits.iter().map(|h| &h.document_id).collect::<Vec<_>>()
+    );
+    let mut req = SearchRequest::new("late penalty per day of delay");
+    req.scope = SearchScope::project(&project.id);
+    assert!(search(&w.search_deps(None), &req).unwrap().hits.iter().all(|h| h.document_id != "en"));
+    // Explicit documents stand in for the work documents; the reference material stays.
+    let mut scope = SearchScope::project(&project.id);
+    scope.documents = vec!["en".into()];
+    let allowed = w.db.with(|c| repo::scope_doc_ids(c, &scope)).unwrap().unwrap();
+    assert_eq!(sorted(allowed), vec!["en", "reg2", "sec"]);
+    // The other filters still intersect.
+    let mut scope = SearchScope::project(&project.id);
+    scope.roles = vec![DocumentRole::Work];
+    assert_eq!(sorted(w.db.with(|c| repo::scope_doc_ids(c, &scope)).unwrap().unwrap()), vec!["con"]);
+    // The project's own material is wanted even when superseded (reg1) or in an inactive group (exp).
+    w.db.with(|c| repo::add_docs_to_collection(c, &group.id, &["reg1".into(), "exp".into()])).unwrap();
+    let allowed = w.db.with(|c| repo::scope_doc_ids(c, &SearchScope::project(&project.id))).unwrap().unwrap();
+    assert_eq!(sorted(allowed), vec!["con", "exp", "reg1", "reg2", "sec"]);
+    assert!(w.db.with(|c| repo::scope_doc_ids(c, &SearchScope::project("nope"))).unwrap().unwrap().is_empty());
+    assert!(!SearchScope::project(&project.id).is_unrestricted());
+    // The group follows a rename and goes with the project; the documents stay.
+    w.db.with(|c| {
+        projects::save_project(
+            c,
+            &ProjectInput { id: Some(project.id.clone()), name: "한빛 납품 2차".into(), ..Default::default() },
+        )
+    })
+    .unwrap();
+    assert_eq!(w.db.with(|c| repo::get_collection(c, &group.id)).unwrap().unwrap().name, "한빛 납품 2차");
+    assert!(w.db.with(|c| projects::delete_project(c, &project.id)).unwrap());
+    assert!(w.db.with(|c| repo::get_collection(c, &group.id)).unwrap().is_none());
+    assert!(w.db.with(|c| docs::get_document(c, "sec")).unwrap().is_some());
+    let cols = w.db.with(repo::list_collections).unwrap();
+    assert_eq!(cols.iter().filter(|c| c.is_common()).count(), 2);
+    assert_eq!(cols.iter().filter(|c| c.project_id.as_deref() == Some(p2.id.as_str())).count(), 1);
+}
+
 #[test]
 fn embeddings_vector_search_and_model_changes() {
     let w = World::new();
@@ -924,6 +1042,63 @@ fn importing_into_a_deleted_collection_is_a_typed_error_and_feedback_is_validate
         .unwrap_err();
     assert!(err.to_string().contains("glossary_term_taken"), "{err}");
     assert!(w.db.with(|c| repo::collection_exists(c, &col.id)).unwrap());
+}
+
+#[test]
+fn embedding_prefixes_are_applied_to_documents_and_queries() {
+    // Records every input the engine would see; vectors come from the hash embedder.
+    struct Recording {
+        inner: HashEmbedder,
+        prefixes: embed::EmbedPrefixes,
+        inputs: std::sync::Mutex<Vec<String>>,
+    }
+    impl Embedder for Recording {
+        fn model_id(&self) -> &str {
+            "embed-gemma2-test"
+        }
+        fn embed(&self, inputs: &[String]) -> crate::error::Result<Vec<Vec<f32>>> {
+            self.inputs.lock().unwrap().extend(inputs.iter().cloned());
+            self.inner.embed(inputs)
+        }
+        fn prefixes(&self) -> embed::EmbedPrefixes {
+            self.prefixes.clone()
+        }
+    }
+    let prefixes = embed::EmbedPrefixes::from_defaults(&serde_json::json!({
+        "pooling": "mean",
+        "query_prefix": "task: search result | query: ",
+        "document_prefix": "title: none | text: "
+    }));
+    assert_eq!(prefixes.query, "task: search result | query: ");
+    assert_eq!(
+        embed::EmbedPrefixes::from_defaults(&serde_json::json!({ "pooling": "cls" })),
+        embed::EmbedPrefixes::default()
+    );
+    let w = World::new();
+    let rec = Recording { inner: HashEmbedder::new(16), prefixes: prefixes.clone(), inputs: Default::default() };
+    let report = embed::embed_pending(&w.db, &rec, 8, None, &mut |_, _| {}).unwrap();
+    assert!(report.embedded > 0 && report.failed == 0, "{report:?}");
+    {
+        let seen = rec.inputs.lock().unwrap();
+        assert_eq!(seen.len() as u64, report.embedded);
+        assert!(seen.iter().all(|s| s.starts_with("title: none | text: ")), "{:?}", seen.first());
+        // The cap applies to the text, the prefix comes on top of it.
+        assert!(seen.iter().all(|s| s.chars().count() <= embed::MAX_EMBED_CHARS + prefixes.document.chars().count()));
+        // The stored chunk text itself carries no prefix.
+        let chunk = w.db.with(|c| repo::list_chunks(c, "con")).unwrap()[0].clone();
+        assert!(!chunk.text.starts_with("title:"));
+    }
+    rec.inputs.lock().unwrap().clear();
+    let long_query: String = "지체상금 ".repeat(600);
+    let q = embed::embed_query(&rec, &long_query).unwrap();
+    assert_eq!(q.len(), 16);
+    let seen = rec.inputs.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].starts_with("task: search result | query: 지체상금"));
+    assert_eq!(seen[0].chars().count(), embed::MAX_EMBED_CHARS + prefixes.query.chars().count());
+    // A prefix-free embedder (bge-style) is unchanged.
+    let plain = HashEmbedder::new(8);
+    assert_eq!(plain.prefixes(), embed::EmbedPrefixes::default());
 }
 
 #[test]

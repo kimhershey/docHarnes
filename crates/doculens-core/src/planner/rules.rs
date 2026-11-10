@@ -477,11 +477,20 @@ fn model_id(t: &Text<'_>, ctx: &PlanContext) -> Option<String> {
             return Some(id.clone());
         }
         for part in id.split(['-', '_', '.']).map(compact).filter(|p| p.len() >= 2) {
-            if part.chars().any(|c| c.is_ascii_digit())
-                && t.compact.contains(&part)
-                && best.is_none_or(|(_, l)| part.len() > l)
-            {
-                best = Some((id, part.len()));
+            if !part.chars().any(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            // Gemma's effective sizes ("e4b") are also written as plain "4B".
+            let plain = part
+                .strip_prefix('e')
+                .filter(|rest| {
+                    rest.ends_with('b') && rest.len() >= 2 && rest[..rest.len() - 1].chars().all(|c| c.is_ascii_digit())
+                })
+                .map(str::to_string);
+            for cand in std::iter::once(part.clone()).chain(plain) {
+                if t.compact.contains(&cand) && best.is_none_or(|(_, l)| cand.len() > l) {
+                    best = Some((id, cand.len()));
+                }
             }
         }
     }
@@ -1110,6 +1119,9 @@ fn delete(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         "job",
         "컬렉션",
         "collection",
+        "참고 자료",
+        "참고자료",
+        "묶음",
         "모델",
         "model",
         "용어",
@@ -2105,11 +2117,31 @@ fn project_ops(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
                 0.5,
             ));
         }
+        // "참고 자료로 / 지침으로 넣어줘" → the project's reference group (0.5.0 plan A).
+        let as_reference = t.has(&[
+            "참고 자료",
+            "참고자료",
+            "참고로",
+            "지침으로",
+            "규정으로",
+            "기준으로",
+            "reference",
+            "guideline",
+            "as a regulation",
+        ]);
         return Some(mk(
-            Op::AddToProject { project, doc_ids: Vec::new() },
+            Op::AddToProject { project, doc_ids: Vec::new(), as_reference },
             scope,
             0.82,
-            t.t("선택한 문서를 프로젝트에 추가합니다", "Add the documents to the project").to_string(),
+            if as_reference {
+                t.t(
+                    "선택한 문서를 프로젝트 참고 자료에 넣습니다",
+                    "Add the documents to the project's reference material",
+                )
+                .to_string()
+            } else {
+                t.t("선택한 문서를 프로젝트에 추가합니다", "Add the documents to the project").to_string()
+            },
         ));
     }
     // -- 프로젝트 만들기 ----------------------------------------------------------

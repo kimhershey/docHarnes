@@ -121,7 +121,7 @@ const EXPORTS_KEY = "doculens.mock.exports";
 const PLANNER_MODEL_KEY = "doculens.mock.planner_model";
 /** `1` = deletions go to the OS recycle bin (journal entries without `trash_path`, undo skips them with `os_trash`). */
 const OS_TRASH_KEY = "doculens.mock.os_trash";
-const PLANNER_MODEL = "qwen3.5-4b-q6k";
+const PLANNER_MODEL = "gemma4-e4b-q5km";
 /** Hard cap on operations per plan (§3.5 validator). */
 const MAX_OPS = 12;
 /** Plans below this confidence ask a clarification question instead of running (§3.5). */

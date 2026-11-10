@@ -1,6 +1,9 @@
-//! Chunk embeddings (bge-m3 Q8 through llama-server `/v1/embeddings`, CPU)
-//! stored in a sqlite-vec `vec0` table keyed by chunk id. The table is created
-//! once the dimension is known and rebuilt when the embedding model changes.
+//! Chunk embeddings (EmbeddingGemma 2 Q8_0, 768-d, through llama-server
+//! `/v1/embeddings`, CPU) stored in a sqlite-vec `vec0` table keyed by chunk id.
+//! The table is created once the dimension is known and rebuilt when the
+//! embedding model changes. Models that expect task prefixes (EmbeddingGemma:
+//! `task: search result | query: ` / `title: none | text: `) get them through
+//! [`EmbedPrefixes`]; the stored text stays prefix-free.
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,15 +23,44 @@ pub const KV_EMBEDDING_DIM: &str = "knowledge.embedding_dim";
 pub const MAX_EMBED_CHARS: usize = 2_000;
 pub const DEFAULT_BATCH: usize = 16;
 
+/// Text prefixes an embedding model expects in front of queries and documents
+/// (registry `defaults.query_prefix` / `defaults.document_prefix`). Empty for
+/// BERT-style models; EmbeddingGemma 2 uses `task: search result | query: ` and
+/// `title: none | text: `. Applied after the length cap so the prefix is never cut.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmbedPrefixes {
+    pub query: String,
+    pub document: String,
+}
+
+impl EmbedPrefixes {
+    /// Reads `query_prefix` / `document_prefix` from a registry `defaults` object.
+    pub fn from_defaults(defaults: &serde_json::Value) -> EmbedPrefixes {
+        let s = |k: &str| defaults.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        EmbedPrefixes { query: s("query_prefix"), document: s("document_prefix") }
+    }
+}
+
 pub trait Embedder: Send + Sync {
     fn model_id(&self) -> &str;
     fn embed(&self, inputs: &[String]) -> Result<Vec<Vec<f32>>>;
+    /// Prefixes prepended to query / document texts (none by default).
+    fn prefixes(&self) -> EmbedPrefixes {
+        EmbedPrefixes::default()
+    }
 }
 
 /// `/v1/embeddings` on the running llama-server router.
 pub struct RouterEmbedder {
     pub client: RouterClient,
     pub model: String,
+    pub prefixes: EmbedPrefixes,
+}
+
+impl RouterEmbedder {
+    pub fn new(client: RouterClient, model: String, prefixes: EmbedPrefixes) -> RouterEmbedder {
+        RouterEmbedder { client, model, prefixes }
+    }
 }
 
 impl Embedder for RouterEmbedder {
@@ -37,6 +69,9 @@ impl Embedder for RouterEmbedder {
     }
     fn embed(&self, inputs: &[String]) -> Result<Vec<Vec<f32>>> {
         self.client.embeddings(&self.model, inputs)
+    }
+    fn prefixes(&self) -> EmbedPrefixes {
+        self.prefixes.clone()
     }
 }
 
@@ -173,6 +208,7 @@ pub fn embed_pending(
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<EmbedReport> {
     let batch = batch.clamp(1, 128);
+    let prefixes = embedder.prefixes();
     // A different model (or a lost table) invalidates every stored vector.
     let stale = db.with(|c| {
         let stored = kv_get(c, KV_EMBEDDING_MODEL)?;
@@ -207,7 +243,8 @@ pub fn embed_pending(
             break;
         }
         last_id = rows.last().map(|r| r.0).unwrap_or(last_id);
-        let inputs: Vec<String> = rows.iter().map(|(_, h, t, _)| embed_input(h.as_deref(), t)).collect();
+        let inputs: Vec<String> =
+            rows.iter().map(|(_, h, t, _)| format!("{}{}", prefixes.document, embed_input(h.as_deref(), t))).collect();
         let vectors = match embedder.embed(&inputs) {
             Ok(v) => {
                 consecutive_failures = 0;
@@ -272,7 +309,8 @@ pub fn embed_pending(
 }
 
 pub fn embed_query(embedder: &dyn Embedder, text: &str) -> Result<Vec<f32>> {
-    let input: String = text.chars().take(MAX_EMBED_CHARS).collect();
+    let truncated: String = text.chars().take(MAX_EMBED_CHARS).collect();
+    let input = format!("{}{}", embedder.prefixes().query, truncated);
     let mut v = embedder
         .embed(&[input])?
         .into_iter()

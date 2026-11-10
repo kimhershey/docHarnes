@@ -29,8 +29,12 @@ pub const HASH_CACHE_FILE: &str = ".doculens-hashes.json";
 pub const COPY_SETTLE_SECONDS: u64 = 5;
 
 /// `general.architecture` → prompt profile for architectures the pipeline
-/// knows how to drive. Anything else is registered as "unsupported".
-pub const SUPPORTED_ARCHS: [(&str, &str); 12] = [
+/// knows how to drive. The registry ships Gemma 4 / EmbeddingGemma 2 (0.4.0); the
+/// Qwen and BERT-family rows keep 0.1–0.3 drop-in folders usable as user-added
+/// models. Anything else is registered as "unsupported".
+pub const SUPPORTED_ARCHS: [(&str, &str); 14] = [
+    ("gemma4", "gemma4-doc-v1"),
+    ("gemma-embedding2", "embedding"),
     ("qwen35", "qwen3.5-doc-v1"),
     ("qwen35moe", "qwen3.5-doc-v1"),
     ("qwen3vl", "qwen3-vl-doc-v1"),
@@ -710,8 +714,10 @@ pub fn entry_from_discovered(d: &DiscoveredModel) -> ModelEntry {
         if d.role == ModelRole::Embedding {
             0
         } else {
-            // weights + mmproj + ~1.5 GiB for KV/compute at a modest context
-            d.total_bytes / MIB + 1_536
+            // GPU-resident weights (Gemma 4 keeps its per-layer embedding table on the host)
+            // + mmproj + ~1.5 GiB for KV/compute at a modest context
+            let host = meta.map(|m| m.host_resident_bytes).unwrap_or(0);
+            d.total_bytes.saturating_sub(host) / MIB + 1_536
         }
     });
     let mut files: Vec<ModelFile> = d
@@ -745,9 +751,16 @@ pub fn entry_from_discovered(d: &DiscoveredModel) -> ModelEntry {
     });
     if d.role == ModelRole::Embedding {
         defaults = serde_json::json!({ "ctx": ctx_max.min(2048), "kv": "f16", "embeddings": true, "pooling": "cls", "n_gpu_layers": 0 });
+        if arch.starts_with("gemma-embedding") {
+            // EmbeddingGemma: mean pooling and the retrieval prompts of the model card.
+            defaults["pooling"] = serde_json::json!("mean");
+            defaults["query_prefix"] = serde_json::json!("task: search result | query: ");
+            defaults["document_prefix"] = serde_json::json!("title: none | text: ");
+        }
     } else if d.has_vision {
-        defaults["image_min_tokens"] = serde_json::json!(1024);
-        defaults["image_max_tokens"] = serde_json::json!(2048);
+        let geom = crate::pipeline::image::VisionGeometry::for_arch(&arch);
+        defaults["image_min_tokens"] = serde_json::json!(geom.default_min_tokens);
+        defaults["image_max_tokens"] = serde_json::json!(geom.max_tokens.min(2048));
     }
     if let Some(serde_json::Value::Object(extra)) = mj.map(|j| &j.defaults) {
         if let serde_json::Value::Object(base) = &mut defaults {
@@ -1349,12 +1362,12 @@ pub fn system_time_secs(t: SystemTime) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gguf::{synthetic_qwen35_metadata, write_minimal_gguf, GgufValue};
+    use crate::gguf::{synthetic_gemma4_metadata, synthetic_qwen35_metadata, write_minimal_gguf, GgufValue};
 
     fn mmproj_meta() -> Vec<(&'static str, GgufValue)> {
         vec![
             ("general.architecture", GgufValue::String("clip".into())),
-            ("clip.projector_type", GgufValue::String("qwen3vl_merger".into())),
+            ("clip.projector_type", GgufValue::String("gemma4v".into())),
             ("clip.has_vision_encoder", GgufValue::Bool(true)),
         ]
     }
@@ -1364,8 +1377,8 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         write_minimal_gguf(
             &dir.join(weights),
-            &synthetic_qwen35_metadata("Qwen3.5 4B", 18, true),
-            &[("blk.0.ssm_a", &[32], 0)],
+            &synthetic_gemma4_metadata("Gemma 4 E4B", 18, true),
+            &[("blk.0.attn_q.weight", &[32, 32], 1), ("per_layer_token_embd.weight", &[64, 32], 8)],
         )
         .unwrap();
         if with_mmproj {
@@ -1388,12 +1401,12 @@ mod tests {
     fn scan_matches_registry_by_name_and_reports_health() {
         let tmp = tempfile::tempdir().unwrap();
         let models = tmp.path().join("models");
-        make_folder(&models, "my-qwen", "Qwen3.5-4B-Q6_K.gguf", true);
+        make_folder(&models, "my-gemma", "gemma-4-E4B-it-Q6_K.gguf", true);
         let reg = Registry::builtin();
         let found = scan_models_dir(&models, &reg, ScanOptions::default());
         assert_eq!(found.len(), 1);
         let d = &found[0];
-        assert_eq!(d.id, "qwen3.5-4b-q6k");
+        assert_eq!(d.id, "gemma4-e4b-q6k");
         assert_eq!(d.registry_match.as_ref().unwrap().by, MatchBy::Name);
         assert_eq!(d.registry_match.as_ref().unwrap().verified, None);
         assert!(d.health.is_ready(), "{:?}", d.health);
@@ -1402,12 +1415,12 @@ mod tests {
         assert!(d.warnings.contains(&"models.warn.unverified_hash".to_string()));
         assert!(d.warnings.contains(&"models.warn.no_license_file".to_string()));
 
-        let st = install_state(&models, reg.get("qwen3.5-4b-q6k").unwrap(), &found);
+        let st = install_state(&models, reg.get("gemma4-e4b-q6k").unwrap(), &found);
         assert!(st.installed);
-        assert_eq!(st.folder, Some(models.join("my-qwen")));
-        let st2 = install_state(&models, reg.get("qwen3.5-4b-q4km").unwrap(), &found);
+        assert_eq!(st.folder, Some(models.join("my-gemma")));
+        let st2 = install_state(&models, reg.get("gemma4-e4b-q4km").unwrap(), &found);
         assert!(!st2.installed);
-        assert_eq!(st2.folder, Some(models.join("qwen3.5-4b-q4km")));
+        assert_eq!(st2.folder, Some(models.join("gemma4-e4b-q4km")));
         assert_eq!(st2.missing_files.len(), 2);
     }
 
@@ -1454,9 +1467,33 @@ mod tests {
         assert_eq!(st.folder, Some(models.join("custom one")));
         assert!(e.user_added);
         assert_eq!(e.defaults["ctx"], 4096);
+        // a Qwen3.5 drop-in (0.1–0.3 download) stays usable as a user-added model
         assert_eq!(e.prompt_profile.as_deref(), Some("qwen3.5-doc-v1"));
         assert_eq!(e.modalities, vec!["text".to_string()]);
         assert!(merged.lint().is_empty(), "{:?}", merged.lint());
+    }
+
+    #[test]
+    fn gemma4_drop_in_gets_its_vision_geometry_and_host_table_discount() {
+        let tmp = tempfile::tempdir().unwrap();
+        let models = tmp.path().join("models");
+        let dir = make_folder(&models, "g4-custom", "my-gemma4-Q4_K_M.gguf", true);
+        fs::write(dir.join("LICENSE"), "Apache-2.0").unwrap();
+        let reg = Registry::builtin();
+        let found = scan_models_dir(&models, &reg, ScanOptions::default());
+        let d = found.iter().find(|d| d.folder_name == "g4-custom").unwrap();
+        assert!(d.registry_match.is_none());
+        assert!(d.health.is_ready(), "{:?}", d.health);
+        let e = entry_from_discovered(d);
+        assert_eq!(e.arch, "gemma4");
+        assert_eq!(e.prompt_profile.as_deref(), Some("gemma4-doc-v1"));
+        assert_eq!(e.defaults["image_min_tokens"], 512);
+        assert_eq!(e.defaults["image_max_tokens"], 1120);
+        assert!(e.modalities.iter().any(|m| m == "image"));
+        // the per-layer embedding table (64 × 32 Q8_0 = 2,176 bytes) is not counted against VRAM
+        let host: u64 = d.primary_meta().map(|m| m.host_resident_bytes).unwrap();
+        assert_eq!(host, 64 * 32 / 32 * 34);
+        assert_eq!(e.requirements.min_free_vram_mib, (d.total_bytes - host) / MIB + 1_536);
     }
 
     #[test]
@@ -1498,7 +1535,7 @@ mod tests {
     fn hashing_updates_cache_and_hash_match_verifies() {
         let tmp = tempfile::tempdir().unwrap();
         let models = tmp.path().join("models");
-        make_folder(&models, "q", "Qwen3.5-4B-Q4_K_M.gguf", true);
+        make_folder(&models, "q", "gemma-4-E4B-it-Q4_K_M.gguf", true);
         let mut reg = Registry::builtin();
         let found = scan_models_dir(&models, &reg, ScanOptions::default());
         let mut calls = 0;
@@ -1510,8 +1547,8 @@ mod tests {
         assert_eq!(hashes.len(), 2);
         assert!(models.join(HASH_CACHE_FILE).is_file());
         // pin the weights hash in the registry → second scan verifies by hash
-        let sha = hashes.iter().find(|(n, _)| n == "Qwen3.5-4B-Q4_K_M.gguf").unwrap().1.sha256.clone();
-        let m = reg.models.iter_mut().find(|m| m.id == "qwen3.5-4b-q4km").unwrap();
+        let sha = hashes.iter().find(|(n, _)| n == "gemma-4-E4B-it-Q4_K_M.gguf").unwrap().1.sha256.clone();
+        let m = reg.models.iter_mut().find(|m| m.id == "gemma4-e4b-q4km").unwrap();
         m.files[0].sha256 = Some(sha);
         let found = scan_models_dir(&models, &reg, ScanOptions::default());
         assert!(found[0].hashed);
@@ -1519,7 +1556,7 @@ mod tests {
         assert_eq!(rm.by, MatchBy::Hash);
         assert_eq!(rm.verified, Some(true));
         // a wrong pin → mismatch → invalid
-        let m = reg.models.iter_mut().find(|m| m.id == "qwen3.5-4b-q4km").unwrap();
+        let m = reg.models.iter_mut().find(|m| m.id == "gemma4-e4b-q4km").unwrap();
         m.files[0].sha256 = Some("00".repeat(32));
         let found = scan_models_dir(&models, &reg, ScanOptions::default());
         assert_eq!(found[0].registry_match.as_ref().unwrap().verified, Some(false));
@@ -1533,18 +1570,18 @@ mod tests {
         let src = tmp.path().join("usb");
         fs::create_dir_all(&src).unwrap();
         write_minimal_gguf(
-            &src.join("Qwen3.5-4B-Q6_K.gguf"),
-            &synthetic_qwen35_metadata("Qwen3.5 4B", 18, true),
+            &src.join("gemma-4-E4B-it-Q6_K.gguf"),
+            &synthetic_gemma4_metadata("Gemma 4 E4B", 18, true),
             &[("a", &[4096], 0)],
         )
         .unwrap();
         write_minimal_gguf(&src.join("mmproj-F16.gguf"), &mmproj_meta(), &[("v", &[64], 1)]).unwrap();
         fs::write(src.join("LICENSE"), "apache").unwrap();
         let models = tmp.path().join("models");
-        let plan = plan_import(&models, &[src.join("Qwen3.5-4B-Q6_K.gguf")], ImportMode::Copy, None).unwrap();
+        let plan = plan_import(&models, &[src.join("gemma-4-E4B-it-Q6_K.gguf")], ImportMode::Copy, None).unwrap();
         assert!(plan.auto_paired_mmproj);
         assert_eq!(plan.files.len(), 2);
-        assert_eq!(plan.folder_name, "qwen3.5-4b-q6_k");
+        assert_eq!(plan.folder_name, "gemma-4-e4b-it-q6_k");
         assert_eq!(plan.license_files.len(), 1);
         assert!(!plan.already_present);
         let mut reports = 0;
@@ -1553,18 +1590,18 @@ mod tests {
             true
         })
         .unwrap();
-        assert!(folder.join("Qwen3.5-4B-Q6_K.gguf").is_file());
+        assert!(folder.join("gemma-4-E4B-it-Q6_K.gguf").is_file());
         assert!(folder.join("mmproj-F16.gguf").is_file());
         assert!(folder.join("LICENSE").is_file());
         assert!(reports >= 2);
-        let plan2 = plan_import(&models, &[src.join("Qwen3.5-4B-Q6_K.gguf")], ImportMode::Copy, None).unwrap();
+        let plan2 = plan_import(&models, &[src.join("gemma-4-E4B-it-Q6_K.gguf")], ImportMode::Copy, None).unwrap();
         assert!(plan2.already_present);
         // mmproj alone is rejected, non-gguf is rejected
         assert!(plan_import(&models, &[src.join("mmproj-F16.gguf")], ImportMode::Copy, None).is_err());
         assert!(plan_import(&models, &[src.join("LICENSE")], ImportMode::Copy, None).is_err());
         // cancel removes the partial file
         let src2 = src.join("Other-Q4_K_M.gguf");
-        write_minimal_gguf(&src2, &synthetic_qwen35_metadata("Other", 15, true), &[("a", &[4096], 0)]).unwrap();
+        write_minimal_gguf(&src2, &synthetic_gemma4_metadata("Other", 15, true), &[("a", &[4096], 0)]).unwrap();
         let plan3 = plan_import(&models, std::slice::from_ref(&src2), ImportMode::Copy, Some("other")).unwrap();
         let err = run_import(&plan3, &mut |_| false).unwrap_err();
         assert_eq!(err.code(), "cancelled");
@@ -1580,33 +1617,33 @@ mod tests {
     fn hash_match_ignores_shared_mmproj_pins() {
         let tmp = tempfile::tempdir().unwrap();
         let models = tmp.path().join("models");
-        make_folder(&models, "six", "Qwen3.5-4B-Q6_K.gguf", true);
+        make_folder(&models, "six", "gemma-4-E4B-it-Q6_K.gguf", true);
         let mut reg = Registry::builtin();
         let found = scan_models_dir(&models, &reg, ScanOptions::default());
         let hashes = hash_model(&models, &found[0], &mut |_, _, _| true).unwrap();
-        let weights_sha = hashes.iter().find(|(n, _)| n == "Qwen3.5-4B-Q6_K.gguf").unwrap().1.sha256.clone();
+        let weights_sha = hashes.iter().find(|(n, _)| n == "gemma-4-E4B-it-Q6_K.gguf").unwrap().1.sha256.clone();
         let mmproj_sha = hashes.iter().find(|(n, _)| n == "mmproj-F16.gguf").unwrap().1.sha256.clone();
-        // Pin the (shared) mmproj on every 4B entry and the weights only on q6k.
-        for m in reg.models.iter_mut().filter(|m| m.id.starts_with("qwen3.5-4b")) {
+        // Pin the (shared) mmproj on every E4B entry and the weights only on q6k.
+        for m in reg.models.iter_mut().filter(|m| m.id.starts_with("gemma4-e4b")) {
             for f in m.files.iter_mut().filter(|f| f.is_mmproj()) {
                 f.sha256 = Some(mmproj_sha.clone());
             }
         }
-        reg.models.iter_mut().find(|m| m.id == "qwen3.5-4b-q6k").unwrap().files[0].sha256 = Some(weights_sha);
+        reg.models.iter_mut().find(|m| m.id == "gemma4-e4b-q6k").unwrap().files[0].sha256 = Some(weights_sha);
         let found = scan_models_dir(&models, &reg, ScanOptions::default());
         let rm = found[0].registry_match.as_ref().unwrap();
-        assert_eq!(rm.id, "qwen3.5-4b-q6k");
+        assert_eq!(rm.id, "gemma4-e4b-q6k");
         assert_eq!(rm.by, MatchBy::Hash);
         assert_eq!(rm.verified, Some(true));
         assert!(found[0].health.is_ready());
         // A differing mmproj pin alone never invalidates a name match.
-        for m in reg.models.iter_mut().filter(|m| m.id == "qwen3.5-4b-q6k") {
+        for m in reg.models.iter_mut().filter(|m| m.id == "gemma4-e4b-q6k") {
             m.files[0].sha256 = None;
             m.files[1].sha256 = Some("ff".repeat(32));
         }
         let found = scan_models_dir(&models, &reg, ScanOptions::default());
         let rm = found[0].registry_match.as_ref().unwrap();
-        assert_eq!((rm.id.as_str(), rm.by, rm.verified), ("qwen3.5-4b-q6k", MatchBy::Name, None));
+        assert_eq!((rm.id.as_str(), rm.by, rm.verified), ("gemma4-e4b-q6k", MatchBy::Name, None));
         assert!(found[0].health.is_ready());
     }
 

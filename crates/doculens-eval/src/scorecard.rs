@@ -215,28 +215,28 @@ mod tests {
 
     #[test]
     fn detects_quantisation_labels() {
-        assert_eq!(quant_from_name("qwen3.5-4b-q6k").as_deref(), Some("Q6_K"));
-        assert_eq!(quant_from_name("Qwen3.5-4B-Q4_K_M.gguf").as_deref(), Some("Q4_K_M"));
-        assert_eq!(quant_from_name("qwen3.5-9b-q4km").as_deref(), Some("Q4_K_M"));
+        assert_eq!(quant_from_name("gemma4-e4b-q6k").as_deref(), Some("Q6_K"));
+        assert_eq!(quant_from_name("gemma-4-E4B-it-Q4_K_M.gguf").as_deref(), Some("Q4_K_M"));
+        assert_eq!(quant_from_name("gemma4-12b-q4km").as_deref(), Some("Q4_K_M"));
         assert_eq!(quant_from_name("mmproj-F16").as_deref(), Some("F16"));
-        assert_eq!(quant_from_name("tiny-qwen35"), None);
+        assert_eq!(quant_from_name("tiny-gemma4"), None);
     }
 
     #[test]
     fn renders_rows_from_both_result_kinds() {
         let pipeline = json!({
-            "kind": "pipeline", "model": "qwen3.5-4b-q4km", "generated_at": "2026-11-08T00:00:00Z",
+            "kind": "pipeline", "model": "gemma4-e4b-q4km", "generated_at": "2026-11-08T00:00:00Z",
             "engine": { "backend": "cu121", "build_number": 12066, "devices": [{ "description": "NVIDIA GeForce RTX 4060", "total_mib": 8188 }], "vram_used_mib": 4300 },
             "metrics": { "classification": { "macro_f1": 0.9, "accuracy": 0.95 }, "fields": { "exact_match_rate": 0.88, "anls_star_mean": 0.91 },
                          "ocr": { "mean_cer": 0.032 }, "latency": { "p50_ms": 4210.0, "p95_ms": 9800.0 }, "vram": { "peak_used_mib": 5900 } }
         });
-        let planner = json!({ "kind": "planner", "accuracy": 0.75, "engine": { "model": "qwen3.5-4b-q6k" }, "generated_at": "x" });
+        let planner = json!({ "kind": "planner", "accuracy": 0.75, "engine": { "model": "gemma4-e4b-q6k" }, "generated_at": "x" });
         let rows = vec![row_of(Path::new("a.json"), &pipeline), row_of(Path::new("b.json"), &planner)];
         assert_eq!(rows[0].quant, "Q4_K_M");
         assert_eq!(rows[0].engine, "cu121 b12066");
-        assert_eq!(rows[1].model, "qwen3.5-4b-q6k");
+        assert_eq!(rows[1].model, "gemma4-e4b-q6k");
         let md = render(&rows, "테스트");
-        assert!(md.contains("| qwen3.5-4b-q4km | Q4_K_M | cu121 b12066 | NVIDIA GeForce RTX 4060 (8188 MiB) | 0.900 | 95.0% | 88.0% | 0.910 | 3.2% | 4210 ms | 9800 ms | 5900 MiB | – |"), "{md}");
-        assert!(md.contains("| qwen3.5-4b-q6k | Q6_K | – | – | – | – | – | – | – | – | – | – | 75.0% |"), "{md}");
+        assert!(md.contains("| gemma4-e4b-q4km | Q4_K_M | cu121 b12066 | NVIDIA GeForce RTX 4060 (8188 MiB) | 0.900 | 95.0% | 88.0% | 0.910 | 3.2% | 4210 ms | 9800 ms | 5900 MiB | – |"), "{md}");
+        assert!(md.contains("| gemma4-e4b-q6k | Q6_K | – | – | – | – | – | – | – | – | – | – | 75.0% |"), "{md}");
     }
 }

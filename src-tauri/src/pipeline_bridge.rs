@@ -12,6 +12,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use doculens_core::db::Db;
 use doculens_core::documents::import::ImportSource;
 use doculens_core::jobs::{JobPriority, JobSpec};
+use doculens_core::pipeline::image::VisionGeometry;
 use doculens_core::pipeline::schema::SchemaDraft;
 use doculens_core::pipeline::split as splitter;
 use doculens_core::pipeline::vlm::Vlm;
@@ -90,6 +91,12 @@ pub fn vision_model_info(app: &AppHandle) -> VisionModelInfo {
 /// Context size the router reports for a loaded model (prompt budgeting).
 fn model_context(state: &AppState, model: &str) -> Option<u32> {
     state.engine.status().model(model).and_then(|m| m.ctx)
+}
+
+/// Vision-encoder geometry of a model (page render budgets): from its registry /
+/// drop-in architecture, the shipped family when unknown.
+pub fn vision_geometry(state: &AppState, model: &str) -> VisionGeometry {
+    state.merged_registry().get(model).map(|e| VisionGeometry::for_arch(&e.arch)).unwrap_or_default()
 }
 
 /// Resolves the vision model. With `load`, starts the engine / loads the
@@ -272,7 +279,8 @@ pub fn form_derive(app: &AppHandle, doc_id: &str, name: Option<&str>) -> UiResul
     let model = vision_model(app, false, None).ok();
     let vlm = model.map(|m| {
         let c = model_context(&state, &m);
-        Vlm::new(&state.engine, m, ctx.profile, None).with_context(c)
+        let g = vision_geometry(&state, &m);
+        Vlm::new(&state.engine, m, ctx.profile, None).with_context(c).with_geometry(g)
     });
     state.gate.interactive(|| Ok(forms::derive(&ctx.docs.deps(), vlm.as_ref(), &doc, name)?))
 }
@@ -334,9 +342,11 @@ pub fn run_schema_discovery(
             Err(e) => log::warn!("schema discovery without the vision model ({}): text heuristics only", e.message),
         }
     }
-    let vlm = model
-        .as_ref()
-        .map(|m| Vlm::new(&state.engine, m.clone(), pctx.profile, Some(&ctl.cancel)).with_context(ctx_size));
+    let vlm = model.as_ref().map(|m| {
+        Vlm::new(&state.engine, m.clone(), pctx.profile, Some(&ctl.cancel))
+            .with_context(ctx_size)
+            .with_geometry(vision_geometry(&state, m))
+    });
     let deps = pctx.docs.deps();
     let total = documents.len() as u64;
     let lease = state.gate.batch_begin();
@@ -375,7 +385,8 @@ pub fn nl_schema(app: &AppHandle, description: &str, base_id: Option<&str>) -> U
     let state = app.state::<AppState>();
     let model = vision_model(app, true, None)?;
     let c = model_context(&state, &model);
-    let vlm = Vlm::new(&state.engine, model, ctx.profile, None).with_context(c);
+    let g = vision_geometry(&state, &model);
+    let vlm = Vlm::new(&state.engine, model, ctx.profile, None).with_context(c).with_geometry(g);
     state.gate.interactive(|| Ok(forms::nl_schema(&vlm, description, base.as_ref())?))
 }
 

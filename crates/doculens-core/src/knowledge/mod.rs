@@ -34,6 +34,34 @@ fn default_true() -> bool {
 // Collections / versions / glossary
 // ---------------------------------------------------------------------------
 
+/// What a collection is (0.5.0 plan A): a group of the workspace-wide 공통 참고 자료
+/// (`Reference`, no project) or the single reference group of one project (`Project`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CollectionKind {
+    #[default]
+    Reference,
+    Project,
+}
+
+impl CollectionKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CollectionKind::Reference => "reference",
+            CollectionKind::Project => "project",
+        }
+    }
+    pub fn parse(s: &str) -> CollectionKind {
+        if s == "project" {
+            CollectionKind::Project
+        } else {
+            CollectionKind::Reference
+        }
+    }
+}
+
+/// A reference-material group ("참고 자료 묶음"; the pre-0.5.0 "collection"). Groups without a
+/// project make up the 공통 참고 자료; a project's own group carries its `project_id`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Collection {
     pub id: String,
@@ -41,14 +69,27 @@ pub struct Collection {
     pub description: Option<String>,
     pub color: Option<String>,
     pub active: bool,
-    pub watch_folder: Option<String>,
+    #[serde(default)]
+    pub kind: CollectionKind,
+    /// The project this group belongs to (`kind = Project`); `None` = 공통 참고 자료.
+    #[serde(default)]
+    pub project_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub doc_count: u64,
     pub chunk_count: u64,
 }
 
-/// Create / update payload for a collection (`id` = None creates).
+impl Collection {
+    /// A group of the 공통 참고 자료 (not tied to a project).
+    pub fn is_common(&self) -> bool {
+        self.project_id.is_none()
+    }
+}
+
+/// Create / update payload for a collection (`id` = None creates). `project_id` only matters on
+/// creation (a group never moves between a project and the 공통 참고 자료); prefer
+/// `repo::project_reference_group` for a project's group.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct CollectionInput {
     #[serde(default)]
@@ -61,7 +102,7 @@ pub struct CollectionInput {
     #[serde(default = "default_true")]
     pub active: bool,
     #[serde(default)]
-    pub watch_folder: Option<String>,
+    pub project_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -191,12 +232,19 @@ pub enum SearchMode {
 
 /// Which documents a search / answer may draw from. Empty vectors mean "no
 /// restriction"; `latest_only` hides superseded editions (`doc_versions`).
+///
+/// `project_id` (0.5.0 plan A) allows the project's work documents ∪ its reference group ∪ the
+/// active groups of the 공통 참고 자료; with `documents` set as well, those documents stand in for
+/// the work documents (a selection asked about inside the project still sees its reference
+/// material). `collections`, `roles` and `folder` intersect as usual.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchScope {
     #[serde(default)]
     pub collections: Vec<String>,
     #[serde(default)]
     pub documents: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
     #[serde(default)]
     pub roles: Vec<DocumentRole>,
     #[serde(default)]
@@ -213,6 +261,7 @@ impl Default for SearchScope {
         SearchScope {
             collections: Vec::new(),
             documents: Vec::new(),
+            project_id: None,
             roles: Vec::new(),
             folder: None,
             latest_only: true,
@@ -223,10 +272,18 @@ impl Default for SearchScope {
 
 impl SearchScope {
     pub fn is_unrestricted(&self) -> bool {
-        self.collections.is_empty() && self.documents.is_empty() && self.roles.is_empty() && self.folder.is_none()
+        self.collections.is_empty()
+            && self.documents.is_empty()
+            && self.project_id.is_none()
+            && self.roles.is_empty()
+            && self.folder.is_none()
     }
     pub fn documents(ids: &[String]) -> SearchScope {
         SearchScope { documents: ids.to_vec(), ..SearchScope::default() }
+    }
+    /// A project's work documents + its reference group + the 공통 참고 자료.
+    pub fn project(id: &str) -> SearchScope {
+        SearchScope { project_id: Some(id.to_string()), ..SearchScope::default() }
     }
     pub fn knowledge() -> SearchScope {
         SearchScope { roles: vec![DocumentRole::Knowledge], ..SearchScope::default() }

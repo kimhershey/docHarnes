@@ -20,8 +20,9 @@ src-tauri/resources/engines/<pack>/                                 (where `--bu
 | `cu129` | self-built with the CUDA 12.9 toolkit (sm_120 Blackwell) | Full installer |
 
 Pinned tag and minimum build: `engines/manifest.json` (`b12066`, minimum
-`b11747` — router presets, `/models` API and the Qwen3.5 fixes the app relies
-on). The app refuses to start an engine whose `--version` reports an older
+`b11747` — router presets, `/models` API and the vision-preprocessing fixes the
+app relies on; the 0.4.0 models need the `gemma4` / `gemma-embedding2`
+architectures and the `gemma4v` projector, all present in `b12066`). The app refuses to start an engine whose `--version` reports an older
 build number; locally built binaries without tags report `0` (or `build 1` from
 a shallow clone, in the `version: 0.8.0 (build N, commit …)` format) and are
 accepted as "unknown build".
@@ -141,8 +142,8 @@ packs and the engine-reported devices (free VRAM is what the tier table uses).
 **One backend family per pack directory.** ggml loads every `ggml-*.dll` /
 `libggml-*.so` found next to `llama-server`, so never unpack two release
 archives (e.g. CPU + OpenVINO, or CPU + Vulkan) into the same folder: the extra
-backend registers a device, takes over the graph and — for Qwen3.5's hybrid
-layers — fails with "Compute error". This is exactly what a too-loose download
+backend registers a device, takes over the graph and — for hybrid or
+sliding-window attention layers — fails with "Compute error". This is exactly what a too-loose download
 pattern did in CI.
 
 ## PDFium (PDF 렌더러)

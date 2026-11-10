@@ -15,7 +15,7 @@ use doculens_core::documents::{repo as docs_repo, DocumentFilter, DocumentRecord
 use doculens_core::engine::RouterClient;
 use doculens_core::knowledge::answer::{self, AnswerDeps};
 use doculens_core::knowledge::chunker::ChunkOptions;
-use doculens_core::knowledge::embed::{self, Embedder, RouterEmbedder};
+use doculens_core::knowledge::embed::{self, EmbedPrefixes, Embedder, RouterEmbedder};
 use doculens_core::knowledge::index::{self, IndexDeps};
 use doculens_core::knowledge::search::SearchDeps;
 use doculens_core::knowledge::tokenize::{Analyzer, KODIC_DIR_NAME};
@@ -146,13 +146,18 @@ pub struct EmbeddingModelInfo {
 pub fn embedding_model(app: &AppHandle) -> EmbeddingModelInfo {
     let state = app.state::<AppState>();
     let settings = state.settings_snapshot().ok();
+    let discovered = state.model_index().discovered;
+    // A configured id that neither the registry nor the drop-in scan knows (e.g. the
+    // 0.3.0 default `embed-bge-m3-q8` after the 0.4.0 registry change) is ignored and
+    // the registry default is used instead.
+    let known = |id: &str| state.registry.get(id).is_some() || discovered.iter().any(|d| d.id == id);
     let model = settings
         .as_ref()
         .and_then(|s| s.knowledge.embedding_model.clone())
+        .filter(|id| known(id))
         .or_else(|| state.registry.default_embedding.clone());
     let Some(model) = model else { return EmbeddingModelInfo::default() };
-    let installed =
-        state.models.lock().map(|m| m.discovered.iter().any(|d| d.id == model && d.health.is_ready())).unwrap_or(false);
+    let installed = discovered.iter().any(|d| d.id == model && d.health.is_ready());
     let status = state.engine.status();
     let loaded = status.model(&model).is_some_and(|m| m.is_usable());
     EmbeddingModelInfo { model: Some(model), installed, engine_running: status.is_running(), loaded }
@@ -181,12 +186,16 @@ pub fn embedder(app: &AppHandle, load: bool) -> UiResult<Option<RouterEmbedder>>
         state.engine.load_model(&model, MODEL_LOAD_TIMEOUT, false)?;
     }
     let client: RouterClient = state.engine.client()?;
-    Ok(Some(RouterEmbedder { client, model }))
+    // Task prefixes the model expects (registry `defaults`; drop-ins may carry them in model.json).
+    let prefixes =
+        state.merged_registry().get(&model).map(|e| EmbedPrefixes::from_defaults(&e.defaults)).unwrap_or_default();
+    Ok(Some(RouterEmbedder::new(client, model, prefixes)))
 }
 
 /// The chat (VLM) model answers are generated with: the engine's active model
-/// unless that is the embedding model (loading bge-m3 makes it "active"), then
-/// the configured / assessed model, then any loaded non-embedding model.
+/// unless that is the embedding model (loading the embedding model makes it
+/// "active"), then the configured / assessed model, then any loaded
+/// non-embedding model.
 pub fn chat_model(app: &AppHandle) -> UiResult<String> {
     let state = app.state::<AppState>();
     let is_embedding = |id: &str| {

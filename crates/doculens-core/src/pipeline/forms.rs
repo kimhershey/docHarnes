@@ -858,7 +858,7 @@ pub fn discover_document(
                         return Err(CoreError::Cancelled);
                     }
                     on_page(i as u32 + 1, total);
-                    let img = image::prepare(&cache.page_file(p.page_no), 2_048)?;
+                    let img = image::prepare(&cache.page_file(p.page_no), v.geometry, 2_048)?;
                     match derive_with_vlm(
                         v,
                         Some(&img.url),

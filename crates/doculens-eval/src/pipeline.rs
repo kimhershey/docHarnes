@@ -1083,7 +1083,7 @@ mod tests {
             manifest_name: None,
             strict_keys: false,
             document_count: 2,
-            model: Some("qwen".into()),
+            model: Some("gemma4".into()),
             quantization: None,
             engine: None,
             profile: None,

@@ -220,12 +220,12 @@ pub fn few_shots(ko: bool) -> Vec<(String, Value)> {
             }),
         ),
         (
-            "switch to dark mode and use the 9B model (models: qwen3.5-4b-q6k, qwen3.5-9b-q4km)".to_string(),
+            "switch to dark mode and use the 12B model (models: gemma4-e4b-q5km, gemma4-12b-q4km)".to_string(),
             json!({
-                "summary": "Dark theme, then switch the active model to qwen3.5-9b-q4km",
+                "summary": "Dark theme, then switch the active model to gemma4-12b-q4km",
                 "intent": "set_theme",
                 "scope": {},
-                "operations": [{ "op": "set_theme", "theme": "dark" }, { "op": "set_model", "id": "qwen3.5-9b-q4km" }],
+                "operations": [{ "op": "set_theme", "theme": "dark" }, { "op": "set_model", "id": "gemma4-12b-q4km" }],
                 "requires_confirmation": false,
                 "confidence": 0.9
             }),
@@ -234,7 +234,7 @@ pub fn few_shots(ko: bool) -> Vec<(String, Value)> {
     out
 }
 
-/// Rough token count of a prompt for Qwen-style tokenizers: ASCII (JSON-heavy)
+/// Rough token count of a prompt for the chat models' tokenizers: ASCII (JSON-heavy)
 /// ≈ 3.5 chars / token, Hangul / CJK ≈ 1 token per character (conservative on
 /// purpose; a server that still counts more triggers the smaller-tier retry).
 pub fn approx_tokens(text: &str) -> u32 {

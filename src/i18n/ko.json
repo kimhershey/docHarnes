@@ -1004,7 +1004,7 @@
       "app_data": "앱 데이터 폴더",
       "runtime": "런타임",
       "licenses": "오픈소스 고지",
-      "licenses_hint": "소스 공개 의무가 없는 라이선스(Apache-2.0 / MIT / BSD / ISC / OFL 등)만 사용합니다. 모델 가중치는 Apache-2.0(Qwen3.5) 및 MIT(bge-m3)입니다.",
+      "licenses_hint": "소스 공개 의무가 없는 라이선스(Apache-2.0 / MIT / BSD / ISC / OFL 등)만 사용합니다. 모델 가중치는 모두 Apache-2.0(Gemma 4, EmbeddingGemma 2)입니다.",
       "notices": "THIRD-PARTY-NOTICES 보기",
       "design_doc": "설계 문서",
       "font": "글꼴: Pretendard Variable (OFL-1.1, 원본 파일 동봉)"
@@ -1026,7 +1026,7 @@
       "top_k": "근거 청크 수",
       "chunk_target": "청크 크기(토큰)",
       "min_similarity": "의미 검색 근거 임계(코사인 유사도)",
-      "min_similarity_hint": "키워드 일치가 없고 임베딩 유사도만 있는 청크는 이 값 이상일 때만 근거로 씁니다(bge-m3 ≈ 0.5)."
+      "min_similarity_hint": "키워드 일치가 없고 임베딩 유사도만 있는 청크는 이 값 이상일 때만 근거로 씁니다(EmbeddingGemma 2 기준 0.5 — 사용자 PC에서 조정)."
     },
     "generation": {
       "title": "문서 생성",
@@ -1624,7 +1624,7 @@
     "empty_hint": "형태소(조사 분리)·부분 문자열·의미 검색을 함께 사용합니다. 2자 검색어도 됩니다.",
     "keyword_only": "임베딩 모델이 로드되지 않아 키워드 검색 결과입니다.",
     "like_fallback": "색인에 없는 짧은 검색어라 본문 부분 일치로 찾았습니다.",
-    "semantic_unavailable": "의미 검색을 쓰려면 임베딩 모델(bge-m3)을 설치하고 로드하세요.",
+    "semantic_unavailable": "의미 검색을 쓰려면 임베딩 모델(EmbeddingGemma 2)을 설치하고 로드하세요.",
     "latest_only": "최신본만",
     "terms": "분석 토큰",
     "expanded": "확장(용어집)",

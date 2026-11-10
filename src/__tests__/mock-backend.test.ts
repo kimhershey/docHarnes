@@ -44,11 +44,11 @@ describe("mock backend", () => {
   it("assesses the mock GPU into the 8 GB tier with the Q6_K model", async () => {
     const a = await mock.mockInvoke<{ tier: { tier: string }; recommended_model: { id: string } }>("hw_assess");
     expect(a.tier.tier).toBe("vram_8gb");
-    expect(a.recommended_model.id).toBe("qwen3.5-4b-q6k");
+    expect(a.recommended_model.id).toBe("gemma4-e4b-q6k");
     await mock.mockInvoke("settings_set_tier_mode", { mode: "manual", manualTier: "cpu_only" });
     const b = await mock.mockInvoke<{ tier: { tier: string; basis: string }; recommended_model: { id: string } }>("hw_assess");
     expect(b.tier).toMatchObject({ tier: "cpu_only", basis: "manual_override" });
-    expect(b.recommended_model.id).toBe("qwen3.5-2b-q8");
+    expect(b.recommended_model.id).toBe("gemma4-e2b-q4km");
   });
 
   it("pre-routes slash commands and phrases like the Rust router", () => {

@@ -255,6 +255,10 @@ pub struct DraftRequest {
     /// `prompts::SPLIT_THRESHOLD_TOKENS` (or 35 % of the context) are produced section by section.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    /// Knowledge searches (`use_knowledge`, `SourceRef::Knowledge`) stay inside this project's
+    /// work documents + reference material + the 공통 참고 자료 (0.5.0 plan A); `None` = everything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
 }
 
 impl Default for DraftRequest {
@@ -273,6 +277,7 @@ impl Default for DraftRequest {
             previous: None,
             excluded_sources: Vec::new(),
             max_tokens: None,
+            project_id: None,
         }
     }
 }

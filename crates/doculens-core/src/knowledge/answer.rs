@@ -102,8 +102,9 @@ impl AnswerDeps<'_> {
     }
 }
 
-/// Default cosine-similarity floor for vector-only evidence (bge-m3 scores unrelated
-/// Korean text around 0.3–0.45); overridable per request / settings.
+/// Default cosine-similarity floor for vector-only evidence (dense embedders score
+/// unrelated Korean text around 0.3–0.45; the shipped model is EmbeddingGemma 2);
+/// overridable per request / settings.
 pub const MIN_VECTOR_SIMILARITY: f32 = 0.5;
 const MAX_ANSWER_TOKENS: u32 = 1_200;
 const MAX_SUMMARY_TOKENS: u32 = 1_500;
@@ -657,8 +658,8 @@ fn has_context(req: &AnswerRequest) -> bool {
 }
 
 /// Prompt-side cost of a text. The chunker's estimate runs about a quarter low on OCR'd business
-/// Korean under the Qwen3.5 tokenizer (a 24K budget once produced a 28K request), so budgeting adds
-/// that margin plus the per-source scaffolding.
+/// Korean under the models' SentencePiece-style tokenizers (a 24K budget once produced a 28K
+/// request), so budgeting adds that margin plus the per-source scaffolding.
 fn prompt_cost(text: &str) -> u32 {
     super::chunker::estimate_tokens(text) * 13 / 10 + 12
 }

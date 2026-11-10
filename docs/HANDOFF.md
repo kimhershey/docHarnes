@@ -1569,6 +1569,89 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   GitHub Release `v0.3.0`(https://github.com/kimhershey/docHarnes/releases/tag/v0.3.0, draft·prerelease 아님) 자산 4개:
   `DocuLens-Setup-Lite-0.3.0-x64.exe` 50,802,102 B(48.4 MiB) · `.sha256` · `sbom.cdx.json` · `THIRD-PARTY-NOTICES.md`.
 
+### 0.4.0 — 중국계 LLM 제외, Gemma 4 + EmbeddingGemma 2 탑재 (2026-11-10; 사용자 지시 "0.4.0 버전을 준비. 모든 중국계 LLM 을 제외하고, 새로운 8GB 이내 LLM 모델을 준비하여 소프트웨어에 탑재. 기존과 같은 방식으로 모델과 임베딩을 다운로드하도록 변경."; 계획 `docs/plan/v0.4.0.md`; 병렬 에이전트 2 + 직접)
+
+- **선정**: 웹 조사(2026-11-10)와 고정된 llama.cpp b12066(2026-11-03) 소스 확인으로 **Gemma 4 E2B / E4B / 12B**(Google DeepMind, Apache-2.0, 2026-04·06)와
+  **EmbeddingGemma 2**(Google, Apache-2.0, 2026-10, 768차원, ggml-org 공식 GGUF Q8_0 310 MB)를 골랐다. b12066은 `gemma4`·`gemma-embedding2` 아키텍처,
+  `gemma4v`(E 계열)·`gemma4uv`(12B unified) 프로젝터, Gemma 4 전용 채팅 파서(PEG)와 `--reasoning off`를 이미 포함 → 엔진 팩·CUDA 팩 재빌드 없음.
+  후보·탈락 사유(Pixtral·Ministral·Granite·Phi-4-mm·SmolVLM·LFM2.5-VL·HyperCLOVA X SEED·Kanana·EXAONE·A.X; multilingual-e5·arctic-embed·nomic)는 계획 §1.
+  "8 GB 이내"는 파일 1개 ≤ 8 GB로 해석(12B는 Q4_K_M 7.12 GB만, Q5_K_M 8.41 GB·26B/31B 제외).
+- **레지스트리** `models/registry.json`(7종, 모두 `sha256: null`·`verified: false` — 기존과 같이 HF 접근 가능한 PC에서 고정): `gemma4-e2b-q4km`(3.11 GB, CPU·6·8 GB)
+  · `gemma4-e2b-q8`(5.05 GB) · `gemma4-e4b-q4km`(4.98) / `q5km`(5.48) / `q6k`(7.07) · `gemma4-12b-q4km`(7.12 GB, mmproj 175 MB) · `embed-gemma2-q8`(309,855,456 B);
+  mmproj-F16 986/990 MB(unsloth 저장소). `tier_defaults`: cpu_only → E2B Q4_K_M, vram_6gb → E2B Q8_0, vram_8gb → `auto:gemma4-e4b`(≥ 7,100 MiB Q6_K / ≥ 6,000 Q5_K_M / Q4_K_M),
+  12·16·24 GB+ → 12B Q4_K_M. `min_free_vram_mib`는 "파일 − PLE 표 추정 + mmproj + KV(SWA) + 512 MiB + 1 GiB"의 추정값(체크리스트에서 실측 조정).
+  VLM 기본값 `image_min_tokens 512 / image_max_tokens 1120 / top_k 64 / top_p 0.95 / thinking false`, 임베딩 `pooling mean` + `query_prefix`/`document_prefix`.
+  다운로드·드롭인·USB 복사·"필요 파일 목록 내보내기"는 그대로(레지스트리 주도).
+- **코어** (`crates/doculens-core`):
+  - `modelstore.rs` `SUPPORTED_ARCHS`에 `gemma4`(프로필 `gemma4-doc-v1`)·`gemma-embedding2`(embedding) 추가; Qwen·BERT 계열 행은 **0.1~0.3 드롭인 호환으로 유지**
+    (레지스트리·추천·다운로드에서만 제외). 드롭인 기본값은 아키텍처별 비전 기하(`image_min/max_tokens`)와 EmbeddingGemma 접두어를 따르고, VRAM 요구치는
+    호스트 상주 PLE 표를 뺀다.
+  - `pipeline/image.rs` `VisionGeometry { px_per_token, max_tokens, default_min_tokens }`(Gemma 4 48 px·1,120·512 / Qwen 32 px·4,096·1,024; `for_arch`/`for_profile`);
+    `Vlm.geometry`(+`with_geometry`), `run.rs`·`forms.rs`·`extract.rs`의 페이지 이미지가 모델 기하로 축소되고 단계 예산은 인코더 상한으로 클램프
+    (잔글씨 3,072 → 1,120). 셸 `pipeline_bridge::vision_geometry`(병합 레지스트리의 `arch`)를 pipeline·generate·projects 브리지가 전달.
+  - `engine/presets.rs`: `image-min-tokens`를 전역 `[*]`에서 **모델 섹션**으로(기본값 또는 기하 하한, 상한 이하로 클램프), `image-max-tokens`는 기하 상한으로 클램프;
+    Gemma 4 중 E2B/E4B(hidden 1,536/2,560)가 아닌 모델(12B unified, CI 픽스처)은 이미지 토큰을 **비인과(non-causal) 어텐션**으로 디코드하므로 이미지 한 장이
+    micro-batch에 들어가도록 `ubatch-size = ⌈max_tokens/64⌉·64`(1,152)·`batch-size 2,048`을 모델 섹션에 추가(없으면 서버가 `image_max_tokens`를 n_ubatch로 조용히
+    깎거나 `n_ubatch >= n_tokens` 단언으로 죽음 — 픽스처로 재현·확인). `--reasoning off --reasoning-budget 0`·`enable_thinking: false`는 유지(Gemma 4 템플릿도 수용).
+  - `gguf.rs`/`memory.rs`: `ModelMeta`에 `sliding_window`·`swa_pattern`·`shared_kv_layers`·`head_count_kv_layers`·`key_length_swa`·`host_resident_bytes`
+    (`per_layer_token_embd.weight`), `ModelArch.swa: Option<SwaLayout>`로 Gemma 3/4 KV 추정(전역층 × ctx + SWA층 × min(ctx, window); 공유 KV층 제외),
+    `LoadPlan.host_bytes`로 GPU 추정에서 PLE 표 제외; 상수 `GEMMA4_E4B/E2B/12B`, `synthetic_gemma4_metadata`. E4B 32K q8_0 KV ≈ 138 MiB(Qwen3.5-4B 512 MiB).
+  - `knowledge/embed.rs`: `EmbedPrefixes`(`defaults.query_prefix`/`document_prefix`) — 문서는 길이 캡 뒤 접두어, 질의도 동일; 저장 텍스트는 접두어 없음.
+    셸 `knowledge_bridge`: 레지스트리에도 드롭인에도 없는 설정 id(0.3.0의 `embed-bge-m3-q8`)는 무시하고 `default_embedding`으로; `engine_bridge::assess`도
+    사라진 `active_model` id를 티어 추천으로 대체(설정값은 그대로 둠). 차원 1024 → 768은 기존 `ensure_vec_table`이 재생성.
+  - `planner`: 예시·테스트·골든셋(ko-07·ko-53·mx-07, `planner-context.json`) 모델 id를 Gemma 4로, `rules::model_id`가 "4B"를 `e4b` 부분에도 매칭; 기준선 재생성(99/100, +0.0 pt).
+- **프런트·모의·E2E**: 모의 백엔드(`gemma4v`·`gemma4-doc-v1`·`gemma4`·임베딩 아키텍처 판정 `isEmbeddingArch`)·지식 모의(`embed-gemma2-q8`, 768)·파이프라인/생성/플래너 모의 id,
+  가져오기 자리표시자, i18n 3키(ko/en), `engine.spec`(`gemma-4-E4B-it-Q5_K_M.gguf` → 폴더 id `gemma-4-e4b-it-q5_k_m`, 레지스트리 `gemma4-e4b-q5km`)·`smoke.spec`.
+- **CI 픽스처**: `scripts/gen-tiny-gemma4.py`(torch 불필요: `gguf`(PyPI)·`tokenizers`·`numpy`로 텍스트 모델(4층 SWA 3 + 전역 1, n_embd 64, p-RoPE 주파수 텐서,
+  `gemma4` BPE 토크나이저·공식 제어 토큰·Gemma 4 채팅 템플릿)과 GEMMA4V mmproj(ViT 2층·패치 16·3×3 풀링·위치 표 2×128)를 직접 씀) →
+  `tests/fixtures/tiny-gemma4/`(556 KB + 122 KB); `tiny-qwen35`·`gen-tiny-qwen35.py` 삭제, CI 잡 "Real llama-server (CPU) + tiny Gemma 4 fixture".
+  로컬 b12066 CPU 빌드로 확인한 것: 공백은 ▁로 이스케이프, 텍스트·스트리밍·이미지 채팅, `response_format: json_schema`는 Gemma 4 파서가 ```` ```json ```` 펜스를
+  문법에 넣고 응답에서 벗김(어휘에 백틱이 없으면 문법 스택이 비는 오류 → 어휘에 추가), 제어 토큰 출력행을 0으로 둬 무작위 모델이 `<channel|>`만 뱉지 않게 함,
+  비인과 이미지 디코드의 micro-batch 요구(위 presets).
+- **문서**: `docs/plan/v0.4.0.md`(후보·근거·레지스트리·영향·순서·확인 항목), `docs/releases/v0.4.0.md`, `docs/LICENSE-POLICY.md`(Gemma 4·EmbeddingGemma 2 허용, Gemma ≤ 3·1세대
+  EmbeddingGemma 금지 유지, "중국계 모델 제외" 원칙), 설계 §2.3/2.5/2.6 대체 안내 + §2.8, 부록 B 안내, RUN-GUIDE(모델 표·권장·설치파일 0.4.0), 체크리스트 "0.4.0 — 모델 교체",
+  README·CLAUDE.md·engines/README·eval/README.
+- **버전 0.4.0**: `Cargo.toml`·`Cargo.lock`·`package.json`/`package-lock.json`·`src-tauri/tauri.conf.json`·모의 버전 문자열·`npm run notices`(고지·SBOM).
+- **빌드·배포**: CI run 42781321912(7개 잡 성공) → "Windows installer (manual)" run 42782108585(`variant=lite`, `publish=false`, `ref=d238dc4`) 아티팩트로 먼저 빌드.
+  사용자 지시("우선 릴리즈 실행. 검증은 내가 할게.")로 run 42784292140(`publish=true`, `ref=d238dc4`) → **GitHub Release `v0.4.0` 게시**
+  (https://github.com/kimhershey/docHarnes/releases/tag/v0.4.0; `DocuLens-Setup-Lite-0.4.0-x64.exe` 50,802,945 B · `.sha256` · `sbom.cdx.json` · `THIRD-PARTY-NOTICES.md`;
+  릴리스 노트 `docs/releases/v0.4.0.md`). 모델 품질·VRAM 검증은 사용자 PC에서(체크리스트 "0.4.0" 절).
+- **남은 것 / 사용자 PC**: 계획 §9 = 체크리스트 "0.4.0" 절(다운로드 저장소 파일 이름, VRAM 실측 → `min_free_vram_mib`·적응형 경계, 한국어 골든셋 측정, EmbeddingGemma 2
+  재임베딩·유사도 임계, SHA-256 고정, 0.3.0 Qwen 드롭인 호환). E2B/E4B의 PLE 표가 GPU에 올라가지 않는다는 가정은 `print_info`/실측으로 확인.
+
+### 0.5.0 — 프로젝트 중심 통합(A안) + GUI 정리 + 사이드바 용어 (2026-11-10; 사용자 지시 "A 실행, 위에 검토했던 GUI 검토는 제안내용대로 정리. 그리고, 사이드 바의 메뉴들을 AIDP 및 오피스에이전트의 용어들을 참조하여 사람이 사용하는 SW 용어로 변경."; 계획 `docs/plan/v0.5.0.md`; 코어·셸 직접 + 프런트 포크 에이전트 2)
+
+- **배경**: 2026-11-10 검토 2건(GUI에서 불필요한 요소 — AIDP·오피스에이전트 참고; 지식 저장소와 프로젝트 역할 통합)에서 사용자가 **A안**(프로젝트 = 업무 문서 + 참고 자료,
+  프로젝트 밖 참고 문서는 공통 참고 자료)과 GUI 정리 제안, 메뉴 용어 변경을 택했다. 계획 §0~§5가 결정 사항이다.
+- **데이터**: 마이그레이션 `0010_reference_groups.sql` — `collections.kind TEXT NOT NULL DEFAULT 'reference'`(`reference` | `project`), `collections.project_id TEXT REFERENCES projects(id)
+  ON DELETE CASCADE` + 인덱스, `SCHEMA_VERSION = 10`. 기존 컬렉션은 모두 `reference`·`project_id NULL` = 공통 참고 자료의 묶음(데이터 이동 없음). `watch_folder` 열은 남기고
+  읽기·쓰기를 모두 뺐다(`Collection`·`CollectionInput`에서 제거).
+- **코어** (`crates/doculens-core`):
+  - `knowledge/mod.rs`: `CollectionKind`, `Collection.kind`/`project_id`(+`is_common()`), `CollectionInput.project_id`(생성 때만 의미), `SearchScope.project_id` + `SearchScope::project(id)`,
+    `is_unrestricted`에 포함.
+  - `knowledge/repo.rs`: `COLLECTION_COLS`에 kind/project_id; `save_collection`은 생성 시 `project_id` → kind `project`, 갱신은 저장된 kind·project 유지;
+    `reference_group_of_project` / `project_reference_group(conn, project_id, project_name)`(없으면 생성, 이름 = 프로젝트 이름, 겹치면 " (2)" 식 번호; 모르는 프로젝트는
+    `project_not_found`) / `sync_reference_group_name` / `delete_reference_groups_of_project` / `common_reference_doc_ids`(활성·프로젝트 없음) / `project_work_doc_ids` /
+    `project_reference_doc_ids`. **`scope_doc_ids`**: `project_id`가 있으면 허용 집합 = 업무 문서(`project_documents`) ∪ 프로젝트 묶음 문서 ∪ 활성 공통 묶음 문서;
+    `documents`가 함께 오면 그 문서들이 업무 문서를 대신한다(선택·첨부 문서로 물어도 참고 자료는 함께 봄 — 플래너 실행기의 working set도 이 경로); `collections`·`roles`·`folder`는
+    종전대로 교집합; 프로젝트 자신의 문서는 구판·비활성 묶음 제외 규칙에서 면제; 모르는 프로젝트는 빈 집합(플래너 범위와 같음).
+  - `projects/repo.rs`: `delete_project`가 참고 자료 묶음을 먼저 지움(FK CASCADE와 별개로 명시), `save_project` 갱신에서 이름이 바뀌면 묶음 이름 동기화.
+  - `planner`: `Op::AddToProject { as_reference: bool }`(serde 기본 false, 스펙 표·문법에 `as_reference` Bool 추가, 설명 "문서를 프로젝트에 넣기(업무 문서 또는 참고 자료)");
+    실행기는 `as_reference`면 묶음 보장 → `add_docs_to_collection` → `set_role(knowledge)`(트랜잭션), 아니면 종전 `copies::add_documents`; 요약 "프로젝트 참고 자료에 문서 n건 추가".
+    규칙: "참고 자료로/참고로/지침으로/규정으로/기준으로/as reference/guideline" → `as_reference`; 삭제 규칙의 보호어에 "참고 자료·묶음" 추가. `ExplainScope::Collection` →
+    `Reference`(직렬화 `reference`, 옛 `collection`은 alias로 역직렬화; `EXPLAIN_SCOPES` 갱신). 실행기의 `Search`·`Answer`·`Explain`(문서 범위 제외)이 `plan.scope.filter.project_id`를
+    `SearchScope.project_id`로 넘겨 플랜의 프로젝트 범위도 합집합 규칙을 쓴다.
+  - `generate`: `DraftRequest.project_id`(serde 기본 없음) — `use_knowledge`·`SourceRef::Knowledge`·절별 추가 검색이 `SearchScope::project(id)`로 돈다(`KnowledgeLookup` 묶음 인자).
+  - 테스트: `knowledge::tests::project_scope_unions_work_documents_and_reference_material`(묶음 생성·단일성·이름 충돌 번호·`save_collection(project_id)`·합집합·문서 대체·역할 교집합·
+    구판/비활성 면제·모르는 프로젝트·이름 동기화·삭제 연쇄·옛 컬렉션 = 공통), `planner::tests`에 "참고 자료로 넣어줘"·영어 "as reference material" 케이스.
+- **셸** (`src-tauri`): `project_add_documents(id, doc_ids, as_reference?)`(참고 자료면 묶음 보장 + 추가 + 역할 knowledge, `knowledge://changed collections`·`documents://changed updated`
+  발행), 신규 `project_reference_group(id) -> Collection`(없으면 생성), `project_delete`가 묶음 삭제를 발행, `project_update` 뒤 `collections` 변경 발행. `knowledge_search`·
+  `knowledge_answer`는 `SearchScope.project_id`를 그대로 받는다(명령 서명 변경 없음). 기존 `knowledge_collection_add {id: 묶음, set_role: true}`로 참고 자료 묶음에 넣어도 같다.
+- **프런트**(포크 F1·F2; 아래 "프런트" 단락은 통합 뒤 갱신): 사이드바 7개(`library`·`assistant`·`review`·`projects`·`generate`·`jobs`·`settings`; `nav.*` i18n), 홈·검색·스키마·
+  지식 베이스·정리/내보내기·모델 관리자 화면은 메뉴에서 빼고 문서함 띠·어시스턴트 "근거만 찾기"·설정 탭(AI 모델·양식·추출 항목·참고 자료)·작업 현황 "정리 이력" 탭으로 흡수;
+  프로젝트 목록 맨 위 "공통 참고 자료", 상세 5탭, "프로젝트에 넣기" 대화상자; 모의 백엔드에 `project_reference_group`·`kind`/`project_id`·`as_reference`.
+- **문서**: `docs/plan/v0.5.0.md`, `docs/releases/v0.5.0.md`, 설계 §3.7.2 머리말·§3.14·§3.15 머리말, RUN-GUIDE(메뉴 이름·첫 실행 흐름), 체크리스트 "0.5.0" 절, README·CLAUDE.md.
+
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
@@ -1591,6 +1674,7 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | 2026-11-10 0.3.0 1차 — 내장 양식 SW 개발 문서화 (b561120 + 후속 커밋) | `cargo test --workspace` 코어 303(4 ignored; `pipeline::schema` 13 보임/6 숨김 검사·`planner` 18·`projects` 18)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(SW 문구 31건·문맥 재작성, 기준선 재생성, 미달은 이전과 같은 mx-10 1건); vitest 25파일 147건(`mock-generate.test` 규칙 파서·프로젝트 템플릿 SW화, `template.test` 예시 견적서); Playwright 전체 실행 50건 중 48 통과 → 정리 예시 문서·어시스턴트 테스트 템플릿(유지보수) 수정 뒤 `organize`·`projects` 스펙 7/7 재실행 통과; `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(93fb59b 푸시 이벤트, run 42761926963) |
 | 2026-11-10 0.3.0 2~6차 통합 — 생성 템플릿 SW화(1번) · 토큰 예산/절별 생성(4번) · 프로젝트 단계·프로젝트별 정리·추적 사본(5+6번) · 문서 N개 스키마 도출(2번) · 글자 수정 이력(7번) | `cargo test --workspace` 코어 317(4 ignored; `generate` 토큰 예산·분할 2건, `projects`·`organize`·`export`·`aggregate`·`planner` 프로젝트 8건, `pipeline` 스키마 도출 3건, `documents::import` 이력 1건 포함)·셸 3·평가 15·통합 1, clippy(-D warnings)·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(기준선 +0.0 pt, 미달은 mx-10 1건); `npm run typecheck`·`npm run build`·`licenses:check` 통과, vitest 26파일 150건, Playwright 53/53(`generate` 4·`projects` 6·`organize` 4·`pipeline` 2·`dnd`·`documents` 5 재작성 포함); 병렬 에이전트 3개가 같은 트리에서 작업해 중간 WIP 스냅샷 3건(1c885b4·97acb87·d742501, `[skip ci]`)을 거쳤고 통합 커밋에서 CI 실행 — CI 7개 잡 모두 성공(d166b5b 푸시 이벤트, run 42771458691) |
 | 2026-11-10 0.3.0 릴리스 (772782f + 문서 77e8b69) | 버전 범프·고지/SBOM 재생성 뒤 `cargo test --workspace`·clippy·fmt·`cargo deny`·vitest·`npm run build`·`licenses:check`·`nsis:check` 통과; CI 7개 잡 성공(run 42771724261); Lite 설치파일 빌드 run 42772557097 성공, Release v0.3.0 게시(Lite 48.4 MiB + sha256 + SBOM + 고지) |
+| 2026-11-10 0.4.0 모델 교체 (WIP 7b939ab·d973eb1·483daae → 통합 커밋은 CI 기록 참고) | `DOCULENS_PDFIUM=… cargo test --workspace --no-fail-fast` 코어 324(4 ignored; `registry`·`modelstore`·`gguf`·`memory`·`engine::presets`·`pipeline::image` Gemma 4 테스트, `knowledge` 접두어 1건, `planner` "4B" 1건 포함)·셸 3·평가 15·통합 1, clippy(-D warnings)·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(기준선 재생성 +0.0 pt, 미달은 mx-10 1건); 실제 엔진 테스트(로컬 b12066 CPU 빌드 + `tiny-gemma4`): 1 passed(137 s; 로드 2.5 s, 채팅·스트리밍 8 델타·json_schema `{"ok": true}`·이미지 채팅(프롬프트 557 토큰)·분류 JSON·KIE 접두·플래너(모델 오류 허용 경로)·양식/NL 스키마(잘림 허용)·초안·규칙 문법 수락; 모델 섹션 `image-min-tokens 512 / image-max-tokens 1024 / ubatch-size 1024`); `npm run typecheck`·`npm run build`·`licenses:check`·`nsis:check` 통과, vitest 26파일 150건, Playwright 53/53; 병렬 에이전트 2개(프런트·문서 / 임베딩·플래너·평가); CI 7개 잡 모두 성공(d238dc4 푸시 이벤트, run 42781321912 — 실제 llama-server 잡은 tiny-gemma4 픽스처); Lite 설치파일 빌드 run 42782108585 성공(`ref=d238dc4`, `publish=false` — 아티팩트 `DocuLens-Setup-Lite-0.4.0-x64` 50,798,147 B, 2027-02-08까지 보관; 이후 사용자 지시로 run 42784292140 `publish=true` → Release v0.4.0 게시, Lite 50,802,945 B) |
 | 2026-11-09 이미지 위 글자 레이어 · 우측 패널 AI 검색/이력 (488af39·9e56dd6) | `cargo test --workspace` 코어 266(3 ignored; `documents::layout` 9·`render` 실 PDFium 문자 박스·`import` 레이아웃 왕복 추가)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과; vitest 23파일 139건(`text-layer.test.ts` 8 추가); Playwright 41/41(`documents`·`knowledge`·`pipeline` 스펙을 레이어·검토 큐 기준으로 재작성); CI 7개 잡 두 커밋 모두 성공 |
 | 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 3회(run 42471185353·42475854955 solid 43 MB, 42547230697 파일별 압축 47.6 MB; 159 파일 검사 통과) · 1~3번 반영 Lite 빌드 성공(run 42577030466, 검증된 커밋 a461405 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.5 MB; Release 게시는 권한 분류기 거부로 publish=false) · **1~8번(어시스턴트 모델 우선·되묻기·취소 포함) 반영 Lite 빌드 성공(run 42592935148, 검증된 커밋 3467ad4 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.6 MB, 2027-02-07까지 보관; publish=false — Release 게시는 사용자 작업)** · **0.2.0 릴리스(2026-11-09, https://github.com/kimhershey/docHarnes/releases/tag/v0.2.0)**: 검증된 커밋 3d55db8 고정, publish=true — Full run 42613728278(`DocuLens-Setup-Full-0.2.0-x64.exe` 1,156,786,994 B) → Lite run 42613985631(`DocuLens-Setup-Lite-0.2.0-x64.exe` 50,579,259 B); 자산 6개(설치파일 2종 + `.sha256` 2 + `THIRD-PARTY-NOTICES.md` + `sbom.cdx.json`); 이번에는 publish 디스패치가 거부되지 않음 · **4차 수정 반영 Lite 빌드 성공(2026-11-10, run 42753243021, 검증된 커밋 c5a8aa2 고정, 아티팩트 `DocuLens-Setup-Lite-0.2.0-x64` 50,593,409 B, 2027-02-08까지 보관; publish=false — 버전은 아직 0.2.0, 릴리스 v0.2.0의 설치파일은 3d55db8 빌드 그대로)** · **Full 0.1.0 빌드 성공(run 42547228170): 1.1 GB, 219 파일, CUDA 팩 cu121·cu129 동봉 검사 통과** · CUDA 팩 빌드 성공(cu121 run 42533483890 · cu129 run 42533486332 → Release v0.1.0) — 위 "패키징·고지" 참조 |
 
@@ -1662,6 +1746,10 @@ P6·P7 항목.
 
 ## 다음 단계 메모 (v1.x)
 
+000. **0.5.0 프로젝트 중심 통합(2026-11-10)**: `docs/plan/v0.5.0.md` — 위 "0.5.0" 절대로 구현. 남은 것은 체크리스트 "0.5.0" 절(사용자 PC 확인)과 플래너 `open` op의 옛 화면
+   이름(`models`·`knowledge`·`search`·`schemas`·`organize`·`home`)이 새 위치(설정 탭·문서함·어시스턴트)로 열리는지의 확인.
+00. **0.4.0 모델 교체(2026-11-10)**: `docs/plan/v0.4.0.md` — 위 "0.4.0" 절대로 구현·검증 완료. 남은 것은 계획 §9(사용자 PC 실측·골든셋·SHA-256 고정)와
+   체크리스트 "0.4.0" 절.
 0. **0.3.0 계획(사용자 요청 6건, 2026-11-10)**: `docs/plan/v0.3.0.md` — 생성 템플릿·추출 내장 양식을 SW 개발 문서로, 문서 N개로
    스키마 자동 저장, 생성 토큰 예산(절별 분할 생성), 프로젝트 상태를 시작·종료일 기준으로, 정리·내보내기의 프로젝트(설정)별 분류.
    항목별 현재 구현·변경·영향 파일·사용자 결정(§9, 2026-11-10 답변 반영: 옛 양식 숨김, 저장은 편집 후 버튼 + 이름 중복 검사, 토큰 상한

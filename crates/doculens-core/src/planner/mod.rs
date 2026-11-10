@@ -364,7 +364,9 @@ impl GroupBy {
 pub enum ExplainScope {
     #[default]
     Kb,
-    Collection,
+    /// The 공통 참고 자료 (pre-0.5.0 `collection`; the old name still deserialises).
+    #[serde(alias = "collection")]
+    Reference,
     Project,
     Document,
 }
@@ -373,7 +375,7 @@ impl ExplainScope {
     pub fn as_str(self) -> &'static str {
         match self {
             ExplainScope::Kb => "kb",
-            ExplainScope::Collection => "collection",
+            ExplainScope::Reference => "reference",
             ExplainScope::Project => "project",
             ExplainScope::Document => "document",
         }
@@ -743,6 +745,10 @@ pub enum Op {
         /// Defaults to the plan scope.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         doc_ids: Vec<String>,
+        /// Put the documents in the project's reference group (참고 자료, role `knowledge`)
+        /// instead of its work documents (0.5.0 plan A).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        as_reference: bool,
     },
     DefineRule {
         #[serde(default, skip_serializing_if = "Option::is_none")]

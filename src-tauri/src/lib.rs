@@ -223,6 +223,7 @@ pub fn run() {
             commands::projects::project_delete,
             commands::projects::project_get,
             commands::projects::project_add_documents,
+            commands::projects::project_reference_group,
             commands::projects::project_remove_document,
             commands::projects::project_sync_copies,
             commands::projects::project_templates,

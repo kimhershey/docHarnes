@@ -144,7 +144,7 @@
     {
       "id": "ko-07",
       "category": "ko",
-      "text": "다크 테마로 바꾸고 모델을 9B로 올려",
+      "text": "다크 테마로 바꾸고 모델을 12B로 올려",
       "expected": {
         "intent": "set_theme",
         "ops": [
@@ -156,7 +156,7 @@
             "theme": "dark"
           },
           {
-            "id": "qwen3.5-9b-q4km"
+            "id": "gemma4-12b-q4km"
           }
         ]
       },
@@ -1031,7 +1031,7 @@
     {
       "id": "ko-53",
       "category": "ko",
-      "text": "모델을 4B로 바꿔",
+      "text": "모델을 E4B로 바꿔",
       "expected": {
         "intent": "set_model",
         "ops": [
@@ -1039,7 +1039,7 @@
         ],
         "params": [
           {
-            "id": "qwen3.5-4b-q6k"
+            "id": "gemma4-e4b-q5km"
           }
         ]
       }
@@ -1806,7 +1806,7 @@
     {
       "id": "mx-07",
       "category": "mixed",
-      "text": "model을 9B로 switch",
+      "text": "model을 12B로 switch",
       "expected": {
         "intent": "set_model",
         "ops": [
@@ -1814,7 +1814,7 @@
         ],
         "params": [
           {
-            "id": "qwen3.5-9b-q4km"
+            "id": "gemma4-12b-q4km"
           }
         ]
       }

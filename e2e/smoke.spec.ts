@@ -105,12 +105,12 @@ test.describe("P0 shell", () => {
     await freshShell(page);
     await onboard(page);
     await page.getByTestId("nav-models").click();
-    await expect(page.getByTestId("registry-table")).toContainText("Qwen3.5-4B");
+    await expect(page.getByTestId("registry-table")).toContainText("Gemma 4 E4B");
     await page.getByTestId("tier-mode").click();
     await page.getByRole("option", { name: "수동 고정" }).click();
     await page.getByTestId("manual-tier").click();
     await page.getByRole("option", { name: "CPU 전용" }).click();
     await expect(page.getByTestId("tier-badge")).toHaveText("CPU 전용");
-    await expect(page.getByTestId("model-badge")).toContainText("Qwen3.5-2B");
+    await expect(page.getByTestId("model-badge")).toContainText("Gemma 4 E2B");
   });
 });
