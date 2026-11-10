@@ -344,7 +344,8 @@ export const api = {
   projectUpdate: (input: ProjectInput) => invoke<Project>("project_update", { input }),
   projectDelete: (id: string) => invoke<boolean>("project_delete", { id }),
   projectGet: (id: string) => invoke<ProjectDetail>("project_get", { id }),
-  projectAddDocuments: (id: string, docIds: string[]) => invoke<ProjectDetail>("project_add_documents", { id, docIds }),
+  /** `asReference` (0.5.0 plan §2): into the project's reference group (role 참고 자료) instead of its 업무 문서. */
+  projectAddDocuments: (id: string, docIds: string[], asReference = false) => invoke<ProjectDetail>("project_add_documents", { id, docIds, asReference }),
   projectRemoveDocument: (id: string, docId: string) => invoke<ProjectDetail>("project_remove_document", { id, docId }),
   projectSyncCopies: (id: string) => invoke<ProjectCopySyncReport>("project_sync_copies", { id }),
   projectTemplates: () => invoke<ProjectTemplate[]>("project_templates"),

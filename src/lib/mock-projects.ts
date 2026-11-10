@@ -24,7 +24,7 @@ import {
   type WorkerOutcome,
 } from "./mock-backend";
 import { buildSupplementDraft, submitDraftJob } from "./mock-generate";
-import { deleteProjectReferenceGroup, projectReferenceGroup, renameProjectReferenceGroup } from "./mock-knowledge";
+import { attachToCollection, deleteProjectReferenceGroup, projectReferenceGroup, renameProjectReferenceGroup } from "./mock-knowledge";
 import * as pl from "./mock-pipeline";
 import {
   DEFAULT_PROJECT_FOLDER,
@@ -490,6 +490,23 @@ export function addDocuments(projectId: string, docIds: string[]): ProjectDetail
   refresh(s, p);
   save(s);
   changed([p.id]);
+  return detail(s, p);
+}
+
+/** `project_add_documents` with `as_reference` (0.5.0 plan §2): into the project's reference group + the 참고 자료 role. */
+export function addReferenceDocuments(projectId: string, docIds: string[]): ProjectDetail {
+  const s = load();
+  const p = refresh(s, getProject(s, projectId));
+  const known = new Set(wsDocs().map((d) => d.id));
+  const ids = docIds.filter((id) => known.has(id));
+  if (ids.length > 0) {
+    const group = projectReferenceGroup(p.id, p.name);
+    attachToCollection(group.id, ids, "knowledge");
+    p.updated_at = now();
+    refresh(s, p);
+    save(s);
+    changed([p.id]);
+  }
   return detail(s, p);
 }
 
@@ -1362,7 +1379,7 @@ export async function mockProjects(cmd: string, a: Record<string, any>): Promise
     case "project_get":
       return detail(s, getProject(s, String(a.id)));
     case "project_add_documents":
-      return addDocuments(String(a.id), (a.docIds as string[]) ?? []);
+      return a.asReference ? addReferenceDocuments(String(a.id), (a.docIds as string[]) ?? []) : addDocuments(String(a.id), (a.docIds as string[]) ?? []);
     case "project_remove_document": {
       const p = getProject(s, String(a.id));
       s.members = s.members.filter((m) => !(m.project_id === p.id && m.doc_id === a.docId));

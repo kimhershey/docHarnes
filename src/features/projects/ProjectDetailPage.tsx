@@ -13,6 +13,7 @@ import { describeJobError } from "@/features/jobs/describe";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
 import { invalidateProjects, useProject } from "@/lib/queries";
+import { useProjectReferenceDocs } from "@/features/knowledge/reference";
 import { COMMON_REFERENCE_ID, SCREEN_ROUTES, isDraftOutcome, isJobFinished, type OutputFormat } from "@/lib/types";
 import { useGenerateStore } from "@/stores/generate";
 import { useJob, useJobsStore } from "@/stores/jobs";
@@ -24,17 +25,17 @@ import { DocumentsTab } from "./DocumentsTab";
 import { NewProjectDialog, todayIso } from "./NewProjectDialog";
 import { PhaseBadges } from "./ProjectsPage";
 import { ProjectSettingsTab } from "./ProjectSettingsTab";
-import { ReferenceTab } from "./ReferenceTab";
 import { ResultsTab } from "./ResultsTab";
 import { RulesTab } from "./RulesTab";
 import { SupplementDialog } from "./SupplementDialog";
 
-type TabId = "documents" | "reference" | "rules" | "results" | "settings";
-const TABS: TabId[] = ["documents", "reference", "rules", "results", "settings"];
-/** 0.4 links (`?tab=relations|report`) land on the merged 결과 tab. */
+type TabId = "documents" | "rules" | "results" | "settings";
+const TABS: TabId[] = ["documents", "rules", "results", "settings"];
+/** 0.4 links (`?tab=relations|report`) land on the merged 결과 tab; 0.5 links (`?tab=reference`) on the unified 문서 tab (0.7.0). */
 function tabOf(param: string | null): TabId | null {
   if (!param) return null;
   if (param === "relations" || param === "report") return "results";
+  if (param === "reference") return "documents";
   return (TABS as string[]).includes(param) ? (param as TabId) : null;
 }
 
@@ -47,7 +48,7 @@ export function ProjectDetailPage() {
 
 /**
  * One project (design §3.15, 0.3.0 plan §5, 0.5.0 plan §2): header with the computed phase (시작·종료일 editors,
- * 기한 경과 badge) and the tabs 문서 (checklist + 업무 문서) · 참고 자료 (the project's reference group) · 규칙 ·
+ * 기한 경과 badge) and the tabs 문서 (checklist + 업무 문서 and 참고 자료 in one list, 0.7.0 plan §1.1) · 규칙 ·
  * 결과 (check results with evidence links, relation graph, report) · 설정 (정리·내보내기); "보완요청서" starts a
  * draft job and opens the result on the 문서 작성 screen.
  */
@@ -58,6 +59,7 @@ function ProjectView({ id }: { id: string }) {
   const toast = useUiStore((s) => s.toast);
   const setCurrentProject = useProjectsStore((s) => s.setCurrentProject);
   const { data: detail, isLoading, error } = useProject(id);
+  const { docs: refDocs } = useProjectReferenceDocs(id);
   const [tab, setTab] = useState<TabId>(tabOf(searchParams.get("tab")) ?? "documents");
   const [checking, setChecking] = useState(false);
   const [supplementOpen, setSupplementOpen] = useState(false);
@@ -250,7 +252,9 @@ function ProjectView({ id }: { id: string }) {
               {t("projects.detail.template")}: {ko ? detail.template.name_ko : detail.template.name_en}
             </span>
           )}
-          <Badge variant="outline">{t("projects.card.documents", { count: p.document_count })}</Badge>
+          <Badge variant="outline" data-testid="project-doc-counts">
+            {t("projects.detail.doc_counts", { work: p.document_count, reference: refDocs?.length ?? 0 })}
+          </Badge>
           {p.missing_count > 0 && <Badge variant="danger">{t("projects.card.missing", { count: p.missing_count })}</Badge>}
           {generating && (
             <span className="flex items-center gap-1" role="status" aria-live="polite">
@@ -271,9 +275,6 @@ function ProjectView({ id }: { id: string }) {
           </TabsList>
           <TabsContent value="documents">
             <DocumentsTab detail={detail} />
-          </TabsContent>
-          <TabsContent value="reference">
-            <ReferenceTab detail={detail} />
           </TabsContent>
           <TabsContent value="rules">
             <RulesTab detail={detail} />

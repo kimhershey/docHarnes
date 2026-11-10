@@ -109,8 +109,11 @@ describe("mock reference material (0.5.0)", () => {
     const E = ids["E-무관.pdf"]!;
     const p = await backend.mockInvoke<{ id: string }>("project_create", { input: { name: "한빛 포털" } });
     await backend.mockInvoke("project_add_documents", { id: p.id, docIds: [A] });
+    // 0.7.0 plan §1.1: `asReference` puts the document in the project's group (created on demand) with the 참고 자료 role.
+    const asRef = await backend.mockInvoke<{ documents: { document: { id: string } }[] }>("project_add_documents", { id: p.id, docIds: [B], asReference: true });
+    expect(asRef.documents.map((d) => d.document.id)).toEqual([A]);
     const group = await backend.mockInvoke<Collection>("project_reference_group", { id: p.id });
-    await backend.mockInvoke("knowledge_collection_add", { args: { id: group.id, doc_ids: [B], set_role: true } });
+    expect(await backend.mockInvoke<DocumentView[]>("knowledge_collection_docs", { id: group.id })).toMatchObject([{ id: B, role: "knowledge" }]);
     const common = await backend.mockInvoke<Collection>("knowledge_collection_save", { input: { name: "사내 규정" } });
     await backend.mockInvoke("knowledge_collection_add", { args: { id: common.id, doc_ids: [C], set_role: true } });
     const off = await backend.mockInvoke<Collection>("knowledge_collection_save", { input: { name: "구 규정", active: false } });
