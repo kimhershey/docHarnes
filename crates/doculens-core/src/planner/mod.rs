@@ -20,6 +20,7 @@ pub mod llm;
 pub mod prompts;
 pub mod rules;
 pub mod schema;
+pub mod settings_catalog;
 pub mod scope;
 pub mod validate;
 
@@ -94,10 +95,30 @@ pub enum OpKind {
     Help,
     Clarify,
     Noop,
+    // -- 0.6.0: every GUI function as an op ------------------------------------------
+    Rotate,
+    Rerender,
+    Split,
+    Merge,
+    SetTitle,
+    EditText,
+    SetRole,
+    ManageReference,
+    DefineTerm,
+    SetVersion,
+    UpdateProject,
+    DeleteProject,
+    RemoveFromProject,
+    ManageTemplate,
+    ClassifyProjects,
+    ManageSchema,
+    ManageModel,
+    Workspace,
+    Maintenance,
 }
 
 impl OpKind {
-    pub const ALL: [OpKind; 43] = [
+    pub const ALL: [OpKind; 62] = [
         OpKind::Import,
         OpKind::SetInboxWatch,
         OpKind::Classify,
@@ -141,6 +162,25 @@ impl OpKind {
         OpKind::Help,
         OpKind::Clarify,
         OpKind::Noop,
+        OpKind::Rotate,
+        OpKind::Rerender,
+        OpKind::Split,
+        OpKind::Merge,
+        OpKind::SetTitle,
+        OpKind::EditText,
+        OpKind::SetRole,
+        OpKind::ManageReference,
+        OpKind::DefineTerm,
+        OpKind::SetVersion,
+        OpKind::UpdateProject,
+        OpKind::DeleteProject,
+        OpKind::RemoveFromProject,
+        OpKind::ManageTemplate,
+        OpKind::ClassifyProjects,
+        OpKind::ManageSchema,
+        OpKind::ManageModel,
+        OpKind::Workspace,
+        OpKind::Maintenance,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -188,6 +228,85 @@ impl OpKind {
             OpKind::Help => "help",
             OpKind::Clarify => "clarify",
             OpKind::Noop => "noop",
+            OpKind::Rotate => "rotate",
+            OpKind::Rerender => "rerender",
+            OpKind::Split => "split",
+            OpKind::Merge => "merge",
+            OpKind::SetTitle => "set_title",
+            OpKind::EditText => "edit_text",
+            OpKind::SetRole => "set_role",
+            OpKind::ManageReference => "manage_reference",
+            OpKind::DefineTerm => "define_term",
+            OpKind::SetVersion => "set_version",
+            OpKind::UpdateProject => "update_project",
+            OpKind::DeleteProject => "delete_project",
+            OpKind::RemoveFromProject => "remove_from_project",
+            OpKind::ManageTemplate => "manage_template",
+            OpKind::ClassifyProjects => "classify_projects",
+            OpKind::ManageSchema => "manage_schema",
+            OpKind::ManageModel => "manage_model",
+            OpKind::Workspace => "workspace",
+            OpKind::Maintenance => "maintenance",
+        }
+    }
+
+    /// The op family of the two-stage planner (0.6.0 plan §2); `Open`, `Help`, `Clarify` and
+    /// `Noop` are shared by every family (`OpFamily::ops` adds them).
+    pub fn family(self) -> OpFamily {
+        match self {
+            OpKind::Search | OpKind::Answer | OpKind::Summarize | OpKind::Explain | OpKind::Compare => OpFamily::Ask,
+            OpKind::Import
+            | OpKind::Classify
+            | OpKind::SetDocType
+            | OpKind::Ocr
+            | OpKind::Extract
+            | OpKind::Validate
+            | OpKind::Review
+            | OpKind::Tag
+            | OpKind::Rename
+            | OpKind::Move
+            | OpKind::Organize
+            | OpKind::Delete
+            | OpKind::Rotate
+            | OpKind::Rerender
+            | OpKind::Split
+            | OpKind::Merge
+            | OpKind::SetTitle
+            | OpKind::EditText => OpFamily::Documents,
+            OpKind::ManageReference | OpKind::DefineTerm | OpKind::SetVersion | OpKind::Reindex | OpKind::SetRole => {
+                OpFamily::Reference
+            }
+            OpKind::CreateProject
+            | OpKind::UpdateProject
+            | OpKind::DeleteProject
+            | OpKind::AddToProject
+            | OpKind::RemoveFromProject
+            | OpKind::ManageTemplate
+            | OpKind::ClassifyProjects
+            | OpKind::DefineRule
+            | OpKind::CheckConsistency
+            | OpKind::RequestSupplement => OpFamily::Projects,
+            OpKind::DefineSchema | OpKind::RegisterForm | OpKind::ManageSchema => OpFamily::Forms,
+            OpKind::DraftDocument => OpFamily::Compose,
+            OpKind::Aggregate | OpKind::Export => OpFamily::Output,
+            OpKind::SetSetting
+            | OpKind::SetTheme
+            | OpKind::SetLanguage
+            | OpKind::SetModel
+            | OpKind::SetProfile
+            | OpKind::SetRetention
+            | OpKind::SetInboxWatch
+            | OpKind::ManageModel
+            | OpKind::Engine
+            | OpKind::Workspace
+            | OpKind::Maintenance
+            | OpKind::Job
+            | OpKind::Undo
+            | OpKind::Redo
+            | OpKind::Open
+            | OpKind::Help
+            | OpKind::Clarify
+            | OpKind::Noop => OpFamily::System,
         }
     }
 
@@ -216,6 +335,9 @@ impl OpKind {
                 | OpKind::SetInboxWatch
                 | OpKind::RegisterForm
                 | OpKind::SetRetention
+                | OpKind::ManageModel
+                | OpKind::Workspace
+                | OpKind::Maintenance
         )
     }
 
@@ -481,19 +603,6 @@ pub enum ExportTarget {
     Text,
 }
 
-/// Settings the planner may change (`set_setting.key`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SettingKey {
-    RenderDpi,
-    PiiMasking,
-    AutoPipeline,
-    InboxWatch,
-    ReviewThreshold,
-    CacheLimitGb,
-    JournalDays,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OpenTarget {
@@ -520,6 +629,185 @@ pub enum EngineOp {
     Restart,
     Sleep,
     Wake,
+    Start,
+    Stop,
+}
+
+// -- 0.6.0 parameter enums -------------------------------------------------------------
+
+/// `set_role.role` (the `generated` role is set by the app, never by a command).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoleParam {
+    Work,
+    Knowledge,
+    Form,
+}
+
+impl RoleParam {
+    pub fn as_role(self) -> crate::documents::DocumentRole {
+        match self {
+            RoleParam::Work => crate::documents::DocumentRole::Work,
+            RoleParam::Knowledge => crate::documents::DocumentRole::Knowledge,
+            RoleParam::Form => crate::documents::DocumentRole::Form,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferenceAction {
+    Create,
+    Rename,
+    Delete,
+    Enable,
+    Disable,
+    Add,
+    Remove,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TermAction {
+    #[default]
+    Save,
+    Delete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TemplateAction {
+    #[default]
+    Save,
+    Delete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SchemaAction {
+    Enable,
+    Disable,
+    SetDefault,
+    Delete,
+    Rename,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelAction {
+    SetTier,
+    SetBackend,
+    Import,
+    Download,
+    Delete,
+    Verify,
+    Benchmark,
+    Load,
+    Unload,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceAction {
+    Open,
+    Create,
+    Close,
+    Forget,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceAction {
+    PurgeNow,
+    ClearFinishedJobs,
+    Rescan,
+    InboxScan,
+}
+
+/// Op families of the two-stage planner (0.6.0 plan §2): the first model call picks one or two
+/// families, the second plans with that family's op table only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpFamily {
+    Ask,
+    Documents,
+    Reference,
+    Projects,
+    Forms,
+    Compose,
+    Output,
+    System,
+}
+
+impl OpFamily {
+    pub const ALL: [OpFamily; 8] = [
+        OpFamily::Ask,
+        OpFamily::Documents,
+        OpFamily::Reference,
+        OpFamily::Projects,
+        OpFamily::Forms,
+        OpFamily::Compose,
+        OpFamily::Output,
+        OpFamily::System,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OpFamily::Ask => "ask",
+            OpFamily::Documents => "documents",
+            OpFamily::Reference => "reference",
+            OpFamily::Projects => "projects",
+            OpFamily::Forms => "forms",
+            OpFamily::Compose => "compose",
+            OpFamily::Output => "output",
+            OpFamily::System => "system",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<OpFamily> {
+        OpFamily::ALL.into_iter().find(|f| f.as_str() == s)
+    }
+
+    /// One-line description for the family-selection prompt.
+    pub fn describe(self, ko: bool) -> &'static str {
+        match (self, ko) {
+            (OpFamily::Ask, true) => "질문·검색·요약·설명·비교(문서나 참고 자료의 내용을 묻는 말)",
+            (OpFamily::Ask, false) => "questions, search, summaries, explanations, comparisons (asking about content)",
+            (OpFamily::Documents, true) => "문서 가져오기·분류·OCR·추출·검증·검토·태그·이름/폴더 정리·삭제·회전·다시 렌더·분할·병합·제목·글자 수정",
+            (OpFamily::Documents, false) => "import, classify, OCR, extract, validate, review, tag, organise/rename/move, delete, rotate, re-render, split, merge, title, text edits",
+            (OpFamily::Reference, true) => "참고 자료 묶음·용어집·문서 버전·역할(업무/참고/양식)·색인",
+            (OpFamily::Reference, false) => "reference groups, glossary, document versions, roles, indexing",
+            (OpFamily::Projects, true) => "프로젝트 만들기·수정·삭제, 문서 넣기/빼기, 템플릿, 자동 분류, 정합성 규칙·검사, 보완요청서",
+            (OpFamily::Projects, false) => "create / update / delete projects, membership, templates, auto-classification, rules and checks, supplement requests",
+            (OpFamily::Forms, true) => "양식 등록·추출 항목(스키마) 정의·수정·기본값·끄기·삭제",
+            (OpFamily::Forms, false) => "form registration, extraction schemas (define, modify, default, enable, delete)",
+            (OpFamily::Compose, true) => "문서 초안 작성(견적서·보고서·계약서 등 생성)",
+            (OpFamily::Compose, false) => "drafting documents (quotes, reports, contracts …)",
+            (OpFamily::Output, true) => "집계(합계·건수·평균)와 내보내기(엑셀·CSV·JSONL·MD·PDF)",
+            (OpFamily::Output, false) => "aggregates (sum / count / average) and exports (xlsx / csv / jsonl / md / pdf)",
+            (OpFamily::System, true) => "설정·테마·언어·모델·엔진·워크스페이스·보존·작업 제어·되돌리기·화면 열기·도움말",
+            (OpFamily::System, false) => "settings, theme, language, models, engine, workspace, retention, job control, undo, navigation, help",
+        }
+    }
+
+    /// Ops of the family plus the shared ones (`open`, `help`, `clarify`, `noop`), in `ALL` order.
+    pub fn ops(self) -> Vec<OpKind> {
+        OpKind::ALL
+            .into_iter()
+            .filter(|k| k.family() == self || matches!(k, OpKind::Open | OpKind::Help | OpKind::Clarify | OpKind::Noop))
+            .collect()
+    }
+
+    /// Union of several families' ops (deduplicated, `ALL` order).
+    pub fn ops_of(families: &[OpFamily]) -> Vec<OpKind> {
+        OpKind::ALL
+            .into_iter()
+            .filter(|k| {
+                families.iter().any(|f| k.family() == *f)
+                    || matches!(k, OpKind::Open | OpKind::Help | OpKind::Clarify | OpKind::Noop)
+            })
+            .collect()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -536,6 +824,9 @@ pub enum Op {
         source: ImportFrom,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<String>,
+        /// Files to import when `source = files` (absolute paths the user typed or dropped; 0.6.0).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        paths: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         recursive: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -790,8 +1081,10 @@ pub enum Op {
     SetLanguage {
         lang: Language,
     },
+    /// `key` is a settings-catalog path (`processing.render_dpi`; `planner::settings_catalog`),
+    /// the 0.1–0.5 short keys (`render_dpi` …) still deserialise and are mapped by the validator.
     SetSetting {
-        key: SettingKey,
+        key: String,
         value: Value,
     },
     Open {
@@ -817,6 +1110,150 @@ pub enum Op {
         question: String,
     },
     Noop {},
+    // -- 0.6.0: every GUI function as an op ------------------------------------------
+    /// Rotate the page images of the documents in scope (the originals never change).
+    Rotate {
+        degrees: u16,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pages: Vec<u32>,
+    },
+    Rerender {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dpi: Option<u16>,
+    },
+    /// Split the one document in scope: `boundaries` = pages that start a new document, or `every`.
+    Split {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        boundaries: Vec<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        every: Option<u32>,
+    },
+    Merge {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    SetTitle {
+        title: String,
+    },
+    /// Find / replace in the page text of the documents in scope (recorded in the text history).
+    EditText {
+        find: String,
+        replace: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pages: Vec<u32>,
+    },
+    SetRole {
+        role: RoleParam,
+    },
+    /// Reference groups (참고 자료 묶음): the common ones by `group` (name / id), a project's by `project`.
+    ManageReference {
+        action: ReferenceAction,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
+    },
+    DefineTerm {
+        #[serde(default)]
+        action: TermAction,
+        term: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        definition: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        synonyms: Vec<String>,
+    },
+    /// Mark the documents in scope as editions of one title (`clear` removes the mark).
+    SetVersion {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group_key: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effective_date: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        latest: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        clear: Option<bool>,
+    },
+    UpdateProject {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        template: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_date: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        end_date: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        intake_no: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        notes: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        keywords: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        inbox_folder: Option<String>,
+    },
+    DeleteProject {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
+    },
+    RemoveFromProject {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        doc_ids: Vec<String>,
+    },
+    ManageTemplate {
+        #[serde(default)]
+        action: TemplateAction,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        template: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        doc_types_required: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+    /// Suggest projects for the documents in scope (empty scope = every unassigned document);
+    /// `apply` assigns the confident suggestions.
+    ClassifyProjects {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        apply: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        use_model: Option<bool>,
+    },
+    ManageSchema {
+        action: SchemaAction,
+        schema: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    ManageModel {
+        action: ModelAction,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tier: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        backend: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
+    Workspace {
+        action: WorkspaceAction,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
+    Maintenance {
+        action: MaintenanceAction,
+    },
 }
 
 impl Op {
@@ -865,6 +1302,25 @@ impl Op {
             Op::Help {} => OpKind::Help,
             Op::Clarify { .. } => OpKind::Clarify,
             Op::Noop {} => OpKind::Noop,
+            Op::Rotate { .. } => OpKind::Rotate,
+            Op::Rerender { .. } => OpKind::Rerender,
+            Op::Split { .. } => OpKind::Split,
+            Op::Merge { .. } => OpKind::Merge,
+            Op::SetTitle { .. } => OpKind::SetTitle,
+            Op::EditText { .. } => OpKind::EditText,
+            Op::SetRole { .. } => OpKind::SetRole,
+            Op::ManageReference { .. } => OpKind::ManageReference,
+            Op::DefineTerm { .. } => OpKind::DefineTerm,
+            Op::SetVersion { .. } => OpKind::SetVersion,
+            Op::UpdateProject { .. } => OpKind::UpdateProject,
+            Op::DeleteProject { .. } => OpKind::DeleteProject,
+            Op::RemoveFromProject { .. } => OpKind::RemoveFromProject,
+            Op::ManageTemplate { .. } => OpKind::ManageTemplate,
+            Op::ClassifyProjects { .. } => OpKind::ClassifyProjects,
+            Op::ManageSchema { .. } => OpKind::ManageSchema,
+            Op::ManageModel { .. } => OpKind::ManageModel,
+            Op::Workspace { .. } => OpKind::Workspace,
+            Op::Maintenance { .. } => OpKind::Maintenance,
         }
     }
 
@@ -906,6 +1362,23 @@ impl Op {
             | Op::Help {}
             | Op::Clarify { .. }
             | Op::Noop {} => SideEffect::None,
+            // 0.6.0
+            Op::Rotate { .. } | Op::Rerender { .. } | Op::SetTitle { .. } | Op::EditText { .. } | Op::SetRole { .. } => {
+                SideEffect::Database
+            }
+            Op::Split { .. } | Op::Merge { .. } => SideEffect::FileCreate,
+            Op::ManageReference { .. } | Op::DefineTerm { .. } | Op::SetVersion { .. } => SideEffect::Database,
+            Op::UpdateProject { .. } | Op::ManageTemplate { .. } | Op::ManageSchema { .. } => SideEffect::Database,
+            Op::DeleteProject { .. } | Op::RemoveFromProject { .. } => SideEffect::Files,
+            Op::ClassifyProjects { apply: Some(true), .. } => SideEffect::Database,
+            Op::ClassifyProjects { .. } => SideEffect::None,
+            Op::ManageModel { action: ModelAction::Delete | ModelAction::Import | ModelAction::Download, .. } => {
+                SideEffect::Files
+            }
+            Op::ManageModel { .. } => SideEffect::Settings,
+            Op::Workspace { .. } => SideEffect::Control,
+            Op::Maintenance { action: MaintenanceAction::PurgeNow, .. } => SideEffect::Trash,
+            Op::Maintenance { .. } => SideEffect::Control,
         }
     }
 
@@ -931,6 +1404,19 @@ impl Op {
             // Creates rows (and possibly an ad-hoc template) — shown before it runs.
             | Op::CreateProject { .. } => true,
             Op::Review { action: ReviewOp::Approve | ReviewOp::Correct | ReviewOp::Reject, .. } => true,
+            // 0.6.0: files are written, rows deleted, the network used or the engine stopped.
+            Op::Import { source: ImportFrom::Files, .. } => true,
+            Op::Split { .. } | Op::Merge { .. } | Op::EditText { .. } => true,
+            Op::ManageReference { action: ReferenceAction::Delete, .. } => true,
+            Op::DeleteProject { .. } => true,
+            Op::ManageTemplate { action: TemplateAction::Delete, .. } => true,
+            Op::ClassifyProjects { apply: Some(true), .. } => true,
+            Op::ManageSchema { action: SchemaAction::Delete, .. } => true,
+            Op::SetSetting { key, .. } => settings_catalog::needs_confirmation(key),
+            Op::ManageModel { action: ModelAction::Download | ModelAction::Delete, .. } => true,
+            Op::Engine { action: EngineOp::Stop } => true,
+            Op::Workspace { action: WorkspaceAction::Close | WorkspaceAction::Forget, .. } => true,
+            Op::Maintenance { action: MaintenanceAction::PurgeNow } => true,
             _ => false,
         }
     }
@@ -1311,4 +1797,7 @@ pub struct PlanResult {
     /// Raw model output of the last attempt (diagnostics).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw: Option<String>,
+    /// Op families the first model call chose (0.6.0 two-stage planning; empty = single stage).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub families: Vec<OpFamily>,
 }

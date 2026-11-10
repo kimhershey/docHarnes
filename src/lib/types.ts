@@ -1579,7 +1579,31 @@ export type OpKind =
   | "redo"
   | "help"
   | "clarify"
-  | "noop";
+  | "noop"
+  // 0.6.0 (plan §1): every screen action as a planner op.
+  | "rotate"
+  | "rerender"
+  | "split"
+  | "merge"
+  | "set_title"
+  | "edit_text"
+  | "set_role"
+  | "manage_reference"
+  | "define_term"
+  | "set_version"
+  | "update_project"
+  | "delete_project"
+  | "remove_from_project"
+  | "manage_template"
+  | "classify_projects"
+  | "manage_schema"
+  | "manage_model"
+  | "workspace"
+  | "maintenance";
+
+/** Op families of the two-stage planner (0.6.0 plan §2): stage 1 picks one or two, stage 2 plans with their ops. */
+export type OpFamily = "ask" | "documents" | "reference" | "projects" | "forms" | "compose" | "output" | "system";
+export const OP_FAMILIES: OpFamily[] = ["ask", "documents", "reference", "projects", "forms", "compose", "output", "system"];
 
 export type AggregateFn = "sum" | "count" | "avg" | "min" | "max";
 export type GroupBy = "month" | "vendor" | "doc_type" | "project" | "none";
@@ -1588,11 +1612,24 @@ export const EXPORT_FORMATS: ExportFormat[] = ["xlsx", "csv", "jsonl", "md", "pd
 export type ExportLayout = "sheet_per_type" | "sheet_per_project" | "single";
 export type ExportInclude = "evidence" | "confidence" | "status";
 export type ExportTarget = "fields" | "table" | "text";
-export type SettingKey = "render_dpi" | "pii_masking" | "auto_pipeline" | "inbox_watch" | "review_threshold" | "cache_limit_gb" | "journal_days";
+/** The pre-0.6.0 `set_setting` keys; still accepted as aliases of their catalog paths (`src/lib/settingsCatalog.ts`). */
+export type LegacySettingKey = "render_dpi" | "pii_masking" | "auto_pipeline" | "inbox_watch" | "review_threshold" | "cache_limit_gb" | "journal_days";
+/** `set_setting.key` (0.6.0): a settings-catalog path such as `processing.render_dpi`, or a legacy alias. */
+export type SettingKey = string;
 export type ReviewOp = "show" | "approve" | "reject" | "correct";
 export type ReviewOnly = "low_confidence" | "failed" | "all";
 export type JobOp = "show" | "cancel" | "retry" | "pause" | "resume" | "prioritize";
-export type EngineOp = "restart" | "sleep" | "wake";
+export type EngineOp = "start" | "stop" | "restart" | "sleep" | "wake";
+/** 0.6.0 management ops (plan §1). */
+export type ReferenceAction = "create" | "rename" | "delete" | "enable" | "disable" | "add" | "remove";
+export type TermAction = "save" | "delete";
+export type TemplateAction = "save" | "delete";
+export type SchemaAction = "enable" | "disable" | "set_default" | "delete" | "rename";
+export type ModelAction = "set_tier" | "set_backend" | "import" | "download" | "delete" | "verify" | "benchmark" | "load" | "unload";
+export type ModelTierChoice = Tier | "auto";
+export type WorkspaceAction = "open" | "create" | "close" | "forget";
+export type MaintenanceAction = "purge_now" | "clear_finished_jobs" | "rescan" | "inbox_scan";
+export type RoleChoice = "work" | "knowledge" | "form";
 export type OpenTarget = "document" | "page" | "folder" | "screen";
 /** `explain.scope` (appendix D). */
 /** `reference` = the 공통 참고 자료 (0.5.0; `collection` was its pre-0.5.0 name and still deserialises in Rust). */
@@ -1603,7 +1640,7 @@ export const RETENTION_TARGETS: RetentionTarget[] = ["documents", "extractions",
 
 /** One plan step (appendix D parameters; optional ones may be absent or null). */
 export type Op =
-  | { op: "import"; source?: "inbox" | "folder" | "files"; path?: string | null; recursive?: boolean | null; auto_pipeline?: "none" | "classify" | "full" | null }
+  | { op: "import"; source?: "inbox" | "folder" | "files"; path?: string | null; paths?: string[]; recursive?: boolean | null; auto_pipeline?: "none" | "classify" | "full" | null }
   | { op: "set_inbox_watch"; enabled: boolean }
   | { op: "classify"; doc_types?: string[]; force?: boolean | null }
   | { op: "set_doc_type"; doc_type: string }
@@ -1645,7 +1682,31 @@ export type Op =
   | { op: "redo" }
   | { op: "help" }
   | { op: "clarify"; question: string }
-  | { op: "noop" };
+  | { op: "noop" }
+  // 0.6.0 (plan §1.1 documents)
+  | { op: "rotate"; degrees: number; pages?: number[] }
+  | { op: "rerender"; dpi?: number | null }
+  | { op: "split"; boundaries?: number[]; every?: number | null }
+  | { op: "merge"; name?: string | null }
+  | { op: "set_title"; title: string }
+  | { op: "edit_text"; find: string; replace: string; pages?: number[] }
+  | { op: "set_role"; role: RoleChoice }
+  // §1.2 reference material
+  | { op: "manage_reference"; action: ReferenceAction; group?: string | null; name?: string | null; project?: string | null }
+  | { op: "define_term"; action: TermAction; term: string; definition?: string | null; synonyms?: string[] }
+  | { op: "set_version"; group_key?: string | null; label?: string | null; effective_date?: string | null; latest?: boolean | null; clear?: boolean | null }
+  // §1.3 projects
+  | { op: "update_project"; project?: string | null; name?: string | null; template?: string | null; start_date?: string | null; end_date?: string | null; owner?: string | null; intake_no?: string | null; notes?: string | null; keywords?: string[]; inbox_folder?: string | null }
+  | { op: "delete_project"; project?: string | null }
+  | { op: "remove_from_project"; project?: string | null; doc_ids?: string[] }
+  | { op: "manage_template"; action: TemplateAction; template?: string | null; name?: string | null; doc_types_required?: string[]; description?: string | null }
+  | { op: "classify_projects"; apply?: boolean | null; use_model?: boolean | null }
+  // §1.4 forms
+  | { op: "manage_schema"; action: SchemaAction; schema: string; name?: string | null }
+  // §1.5 system (UI actions)
+  | { op: "manage_model"; action: ModelAction; id?: string | null; tier?: ModelTierChoice | null; backend?: BackendPreference | null; path?: string | null }
+  | { op: "workspace"; action: WorkspaceAction; path?: string | null }
+  | { op: "maintenance"; action: MaintenanceAction };
 
 export interface ScopeFilter {
   doc_type?: string | null;
@@ -1698,6 +1759,8 @@ export interface PlanResult {
   prompt_tokens: number;
   completion_tokens: number;
   raw?: string | null;
+  /** Op families the two-stage planner routed to (0.6.0 plan §2; absent on rule / pre-router plans). */
+  families?: OpFamily[] | null;
 }
 
 export interface DocTypeSummary {
