@@ -166,11 +166,7 @@ fn real_llama_server_load_chat_switch() {
             serde_json::from_str(j.content.trim()).expect("constrained output must be valid JSON");
         assert!(parsed.get("ok").is_some());
     } else {
-        assert!(
-            json_shape(&j.content),
-            "constrained output does not start a JSON object: {}",
-            j.content
-        );
+        assert!(json_shape(&j.content), "constrained output does not start a JSON object: {}", j.content);
     }
 
     if ready[0].has_vision {
@@ -283,11 +279,7 @@ fn real_llama_server_load_chat_switch() {
             planned.issues
         );
         if !output_parser_500 && !rambling {
-            assert!(
-                planned.raw.as_deref().is_some_and(json_shape),
-                "plan output not constrained: {:?}",
-                planned.raw
-            );
+            assert!(planned.raw.as_deref().is_some_and(json_shape), "plan output not constrained: {:?}", planned.raw);
         }
     }
 
