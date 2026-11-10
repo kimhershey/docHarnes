@@ -168,16 +168,18 @@ fn fi(path: &str, ko: &str, en: &str, kind: FieldKind) -> FieldInfo {
 pub fn fallback_fields(slug: &str) -> Vec<FieldInfo> {
     use FieldKind::*;
     match slug {
-        "quotation" | "transaction_statement" | "purchase_order" | "tax_invoice" | "invoice_exempt" => vec![
-            fi("issue_date", "작성일자", "Issue date", Date),
-            fi("supplier.brn", "공급자 사업자등록번호", "Supplier business reg. no.", Brn),
-            fi("supplier.name", "공급자 상호", "Supplier name", String),
-            fi("buyer.brn", "공급받는자 사업자등록번호", "Buyer business reg. no.", Brn),
-            fi("buyer.name", "공급받는자 상호", "Buyer name", String),
-            fi("supply_total", "공급가액 합계", "Supply total", Amount),
-            fi("tax_total", "세액 합계", "Tax total", Amount),
-            fi("grand_total", "합계금액", "Grand total", Amount),
-        ],
+        "quotation" | "transaction_statement" | "purchase_order" | "tax_invoice" | "invoice_exempt" | "estimate" => {
+            vec![
+                fi("issue_date", "작성일자", "Issue date", Date),
+                fi("supplier.brn", "공급자 사업자등록번호", "Supplier business reg. no.", Brn),
+                fi("supplier.name", "공급자 상호", "Supplier name", String),
+                fi("buyer.brn", "공급받는자 사업자등록번호", "Buyer business reg. no.", Brn),
+                fi("buyer.name", "공급받는자 상호", "Buyer name", String),
+                fi("supply_total", "공급가액 합계", "Supply total", Amount),
+                fi("tax_total", "세액 합계", "Tax total", Amount),
+                fi("grand_total", "합계금액", "Grand total", Amount),
+            ]
+        }
         "financial_statement" => vec![
             fi("period_end", "기준일", "Period end", Date),
             fi("total_assets", "자산총계", "Total assets", Amount),
@@ -829,6 +831,32 @@ fn split_english(before: &str, after: &str) -> (String, Option<String>) {
 /// Extra names a document type is called by (besides its registered labels).
 fn type_aliases(slug: &str) -> &'static [&'static str] {
     match slug {
+        "rfp" => &["제안요청서", "제안 요청서", "rfp", "request for proposal"],
+        "proposal" => &["제안서", "proposal"],
+        "sow" => &["과업지시서", "과업 지시서", "과업내용서", "sow", "statement of work"],
+        "srs" => &["요구사항정의서", "요구사항 정의서", "요구사항명세서", "요구사항", "srs", "requirements"],
+        "dev_contract" => &["개발계약서", "개발 계약서", "용역계약서", "계약서", "계약", "contract", "agreement"],
+        "wbs" => &["wbs", "일정표", "작업분류체계", "schedule"],
+        "progress_report" => &[
+            "진척보고서",
+            "진척 보고서",
+            "주간보고서",
+            "주간 보고",
+            "월간보고서",
+            "월간 보고",
+            "진도보고",
+            "progress report",
+            "weekly report",
+        ],
+        "meeting_minutes" => &["회의록", "회의 록", "minutes", "meeting minutes"],
+        "test_report" => {
+            &["테스트결과서", "테스트 결과서", "시험결과서", "테스트 보고서", "test report", "test results"]
+        }
+        "change_request" => &["변경요청서", "변경 요청서", "변경요청", "change request", "cr"],
+        "acceptance" => {
+            &["검수확인서", "검수 확인서", "검수조서", "완료보고서", "검수", "acceptance", "acceptance certificate"]
+        }
+        "estimate" => &["견적서", "견적", "estimate", "quotation", "quote"],
         "tax_invoice" => &["세금계산서", "세금 계산서", "tax invoice", "invoice"],
         "invoice_exempt" => &["계산서", "면세계산서", "exempt invoice"],
         "business_registration" => {

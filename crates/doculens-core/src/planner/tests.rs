@@ -801,6 +801,7 @@ mod exec_tests {
             }
             let db = Db::open_in_memory().unwrap();
             db.with(pipeline_repo::ensure_builtins).unwrap();
+            db.with(pipeline_repo::enable_legacy_builtins).unwrap();
             World { db, paths, _dir: dir, chat: StageChat::new(), analyzer: Analyzer::simple() }
         }
 
@@ -1073,6 +1074,8 @@ mod exec_tests {
         use crate::projects::{repo as projects_repo, TemplateInput};
         let w = World::new();
         w.db.with(projects_repo::ensure_builtins).unwrap();
+        // The rule below is written against the legacy 구매 정산 template.
+        w.db.with(|c| projects_repo::ensure_templates(c, &projects_repo::legacy_templates())).unwrap();
         let tpl =
             w.db.with(|c| {
                 projects_repo::save_template(

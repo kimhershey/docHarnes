@@ -41,7 +41,29 @@ pub fn slug_for_name(name: &str) -> String {
         }
     }
     const TABLE: &[(&str, &str)] = &[
-        ("견적서", "quotation"),
+        ("제안요청서", "rfp"),
+        ("제안서", "proposal"),
+        ("과업지시서", "sow"),
+        ("과업내용서", "sow"),
+        ("요구사항정의서", "srs"),
+        ("요구사항명세서", "srs"),
+        ("요구사항정의", "srs"),
+        ("개발계약서", "dev_contract"),
+        ("용역계약서", "dev_contract"),
+        ("WBS", "wbs"),
+        ("일정표", "wbs"),
+        ("진척보고서", "progress_report"),
+        ("주간보고서", "progress_report"),
+        ("월간보고서", "progress_report"),
+        ("진도보고서", "progress_report"),
+        ("테스트결과서", "test_report"),
+        ("시험결과서", "test_report"),
+        ("테스트보고서", "test_report"),
+        ("변경요청서", "change_request"),
+        ("검수확인서", "acceptance"),
+        ("검수조서", "acceptance"),
+        ("완료보고서", "acceptance"),
+        ("견적서", "estimate"),
         ("발주서", "purchase_order"),
         ("주문서", "order_form"),
         ("거래명세서", "transaction_statement"),
@@ -56,9 +78,9 @@ pub fn slug_for_name(name: &str) -> String {
         ("출장보고서", "trip_report"),
         ("공문", "official_letter"),
         ("보고서", "report"),
-        ("회의록", "minutes"),
+        ("회의록", "meeting_minutes"),
         ("이력서", "resume"),
-        ("계약서", "contract"),
+        ("계약서", "dev_contract"),
         ("신청서", "application_form"),
         ("영수증", "receipt"),
         ("세금계산서", "tax_invoice"),
@@ -515,7 +537,7 @@ mod tests {
         };
         let d = derive_from_model(&model, None);
         assert_eq!(d.name, "견 적 서");
-        assert_eq!(d.doc_type, "quotation");
+        assert_eq!(d.doc_type, "estimate", "견적서 is the software estimate form since 0.3.0");
         let keys: Vec<&str> = d.definition.fields.iter().map(|f| f.key.as_str()).collect();
         assert_eq!(
             keys,

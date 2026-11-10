@@ -48,11 +48,36 @@ struct Entity {
     field: String,
 }
 
-const NUMBER_KEYS: [&str; 5] = ["contract_no", "contract_number", "serial_no", "document_no", "doc_no"];
-const TOTAL_KEYS: [&str; 6] = ["grand_total", "total", "total_amount", "amount", "contract_amount", "sum_total"];
-const DATE_KEYS: [&str; 6] = ["issue_date", "doc_date", "contract_date", "datetime", "application_date", "date"];
-const NAME_PATHS: [&str; 7] =
-    ["supplier.name", "buyer.name", "company_name", "store_name", "vendor", "name", "applicant.name"];
+const NUMBER_KEYS: [&str; 6] = ["contract_no", "contract_number", "serial_no", "document_no", "doc_no", "cr_no"];
+const TOTAL_KEYS: [&str; 8] =
+    ["grand_total", "total", "total_amount", "amount", "contract_amount", "sum_total", "price", "budget"];
+const DATE_KEYS: [&str; 11] = [
+    "issue_date",
+    "doc_date",
+    "contract_date",
+    "meeting_date",
+    "report_date",
+    "test_date",
+    "acceptance_date",
+    "request_date",
+    "datetime",
+    "application_date",
+    "date",
+];
+const NAME_PATHS: [&str; 12] = [
+    "contractor.name",
+    "client.name",
+    "proposer.name",
+    "issuer.name",
+    "supplier.name",
+    "buyer.name",
+    "company_name",
+    "store_name",
+    "vendor",
+    "name",
+    "applicant.name",
+    "project_name",
+];
 
 fn push(out: &mut Vec<Entity>, kind: &'static str, value: String, field: &str) {
     if value.is_empty() || out.iter().any(|e| e.kind == kind && e.value == value) {

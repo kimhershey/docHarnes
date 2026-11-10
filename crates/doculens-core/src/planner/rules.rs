@@ -870,7 +870,20 @@ fn organize(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         return None;
     }
     if t.has(&["작업", "job", "스키마", "schema", "태그", "tag"])
-        && !t.has(&["문서", "파일", "document", "file", "영수증", "receipt"])
+        && !t.has(&[
+            "문서",
+            "파일",
+            "document",
+            "file",
+            "영수증",
+            "receipt",
+            "견적서",
+            "계약서",
+            "회의록",
+            "보고서",
+            "estimate",
+            "contract",
+        ])
     {
         return None;
     }

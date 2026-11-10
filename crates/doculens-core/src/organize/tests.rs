@@ -29,6 +29,7 @@ impl World {
         }
         let db = Db::open_in_memory().unwrap();
         db.with(pipeline_repo::ensure_builtins).unwrap();
+        db.with(pipeline_repo::enable_legacy_builtins).unwrap();
         World { db, paths, _dir: dir }
     }
 
