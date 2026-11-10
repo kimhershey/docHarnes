@@ -1576,6 +1576,7 @@ export type OpKind =
   | "delete"
   | "export"
   | "draft_document"
+  | "revise_draft"
   | "register_form"
   | "explain"
   | "compare"
@@ -1679,6 +1680,8 @@ export type Op =
   | { op: "delete"; to_trash?: boolean | null }
   | { op: "export"; format: ExportFormat; path?: string | null; columns?: string[]; layout?: ExportLayout | null; include?: ExportInclude[]; target?: ExportTarget | null }
   | { op: "draft_document"; form_ref?: string | null; format_description?: string | null; content: string; sources?: string[]; output?: OutputFormat | null; tone?: Tone | null; length?: DraftLength | null }
+  /** 0.7.0: revise the open draft (`draft_id` null = `UiPlanContext.draft_id`) — a section, a new section after one (`section` null = at the end) or the whole draft. */
+  | { op: "revise_draft"; draft_id?: string | null; scope: "section" | "insert_after" | "whole"; section?: number | null; heading?: string | null; instruction: string }
   | { op: "register_form"; doc_ref?: string | null; name?: string | null; doc_type_slug?: string | null; doc_ids?: string[] }
   | { op: "explain"; selection?: string | null; question?: string | null; scope?: ExplainScope | null; allow_general_knowledge?: boolean | null }
   | { op: "compare"; doc_ids: string[]; aspects?: string[] }
@@ -1821,6 +1824,8 @@ export interface PlanContext {
   current_project: string | null;
   /** Earlier turns of the assistant conversation (oldest first). */
   history: ConversationTurn[];
+  /** Draft open on the 문서 작성 screen (0.7.0; default target of `revise_draft`). */
+  draft_id?: string | null;
 }
 
 export interface ProjectSummary {
@@ -1847,6 +1852,8 @@ export interface UiPlanContext {
   history?: ConversationTurn[];
   /** Interpretation mode (omitted = model first). */
   routing?: PlanMode | null;
+  /** Draft open on the 문서 작성 screen (0.7.0): the default target of `revise_draft`. */
+  draft_id?: string | null;
 }
 
 export interface StepPreview {
@@ -2160,7 +2167,19 @@ export interface DraftRequest {
   excluded_sources: string[];
   /** Reply token budget (0.3.0): absent / null → the length preset; above ~3,000 the draft is produced section by section. */
   max_tokens?: number | null;
+  /**
+   * 0.7.0 초안 어시스턴트: revise `previous` instead of regenerating it — one section, a new section after one, or the
+   * whole draft — following `feedback` (the instruction). Absent / null = the ordinary draft / regeneration.
+   */
+  revise?: ReviseScope | null;
 }
+
+/**
+ * Scope of a draft revision (plan 0.7.0 §1.5). Sections are the runs of `body` split at heading blocks of level ≤ 2
+ * (`sectionsOf`); ordinals are 1-based; a leading run without such a heading is section 1; a body without headings is
+ * one section.
+ */
+export type ReviseScope = { scope: "section"; section: number } | { scope: "insert_after"; section: number | null; heading?: string | null } | { scope: "whole" };
 
 /** Token budget presets of the 문서 생성 screen (the last one is a whole RFP / SOW). */
 export const TOKEN_BUDGET_PRESETS = [2600, 6000, 12000, 24000] as const;
@@ -2176,7 +2195,7 @@ export interface BudgetInfo {
 }
 
 export function defaultDraftRequest(language: Language = "ko"): DraftRequest {
-  return { form_ref: null, format_description: null, content: "", sources: [], output: "hwpx", tone: "formal", length: "medium", language, use_knowledge: true, feedback: null, previous: null, excluded_sources: [], max_tokens: null };
+  return { form_ref: null, format_description: null, content: "", sources: [], output: "hwpx", tone: "formal", length: "medium", language, use_knowledge: true, feedback: null, previous: null, excluded_sources: [], max_tokens: null, revise: null };
 }
 
 export interface DraftCitation {

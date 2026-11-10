@@ -22,6 +22,7 @@ import {
   type MockDoc,
   type WorkerOutcome,
 } from "./mock-backend";
+import { sectionsOf } from "./draft-sections";
 import * as pl from "./mock-pipeline";
 import {
   EVENTS,
@@ -1039,6 +1040,60 @@ export function buildDraft(req: DraftRequest, knowledge: DraftCitation[] = []): 
   return draft;
 }
 
+/**
+ * 0.7.0 초안 어시스턴트 (`generate::revise`): `req.revise` names a section to rewrite, a place for a new
+ * section or the whole draft; `req.previous` is the draft, `req.feedback` the instruction. Deterministic
+ * like `buildDraft`: a rewritten section keeps its heading and tables and gets paragraphs that quote the
+ * instruction; a new section is a level-2 heading plus one paragraph; the whole-draft scope is the
+ * ordinary regeneration. The validator re-runs, so the positional `body[i]` issues are fresh.
+ */
+export function reviseDraft(req: DraftRequest): Draft {
+  const previous = req.previous;
+  const scope = req.revise;
+  if (!previous || !scope) throw err("invalid", "previous_required");
+  const ko = req.language !== "en";
+  const instruction = (req.feedback ?? "").trim();
+  if (scope.scope === "whole") {
+    const base: DraftRequest = { ...req, content: req.content.trim() || previous.request?.content || previous.title, revise: null };
+    return buildDraft(base, []);
+  }
+  const draft = structuredClone(previous);
+  const sections = sectionsOf(draft.body);
+  const ending = draft.tone === "concise" ? "함." : "합니다.";
+  const quote = instruction ? (ko ? ` (지시 반영: ${instruction})` : ` (applied: ${instruction})`) : "";
+  let note: string;
+  const target = scope.scope === "section" ? (sections.find((s) => s.ordinal === scope.section) ?? null) : null;
+  if (scope.scope === "section" && target) {
+    const heading = target.heading;
+    const subject = heading ?? draft.title;
+    const blocks: DraftBlock[] = [];
+    if (heading !== null) blocks.push(draft.body[target.start]!);
+    blocks.push({ kind: "paragraph", text: ko ? `${subject}에 대한 내용을 지시에 따라 다시 정리${ending}${quote}` : `${subject}, rewritten as instructed${quote}.`, source: null });
+    if (/자세히|구체적|detail|길게|longer|expand/iu.test(instruction)) {
+      blocks.push({ kind: "paragraph", text: ko ? `세부 사항: 배경과 범위, 일정, 기대 효과를 항목별로 설명${ending}` : "Details: background and scope, schedule and the expected outcome.", source: null });
+      blocks.push({ kind: "list", items: ko ? ["배경·범위", "일정", "기대 효과"] : ["Background and scope", "Schedule", "Expected outcome"], ordered: false });
+    }
+    // Tables placed in the section stay where they were.
+    for (const b of draft.body.slice(target.start, target.end)) if (b.kind === "table_ref") blocks.push(b);
+    draft.body.splice(target.start, target.end - target.start, ...blocks);
+    note = ko ? `AI 수정(${target.ordinal}절 '${heading ?? "제목 없음"}'): ${instruction}` : `AI revision (section ${target.ordinal} '${heading ?? "untitled"}'): ${instruction}`;
+  } else {
+    // A new section after the named one (or at the end); a `section` scope without that section appends too.
+    const afterOrdinal = scope.scope === "insert_after" ? scope.section : scope.section;
+    const after = afterOrdinal == null ? null : (sections.find((s) => s.ordinal === afterOrdinal) ?? null);
+    const at = after ? after.end : draft.body.length;
+    const heading = (scope.scope === "insert_after" ? (scope.heading ?? "") : "").trim() || (ko ? "새 절" : "New section");
+    draft.body.splice(at, 0, { kind: "heading", level: 2, text: heading }, { kind: "paragraph", text: ko ? `${heading}: ${instruction || "내용을 정리"}${instruction ? "" : ending}${instruction ? `에 따라 작성${ending}` : ""}` : `${heading}: ${instruction || "content"}${instruction ? ", written as instructed." : "."}`, source: null });
+    note = ko ? `AI 수정(새 절 '${heading}'${after ? ` — ${after.ordinal}절 뒤` : " — 끝"}): ${instruction}` : `AI revision (new section '${heading}'${after ? ` after section ${after.ordinal}` : " at the end"}): ${instruction}`;
+  }
+  draft.notes = [...draft.notes, note];
+  draft.model = GENERATOR_MODEL;
+  draft.request = { ...req, previous: null, revise: null, feedback: null };
+  draft.updated_at = now();
+  validateDraft(draft);
+  return draft;
+}
+
 function sumOfColumn(table: DraftTable, keys: string[]): number | null {
   const idx = table.columns.findIndex((c) => keys.includes(c.key));
   if (idx < 0) return null;
@@ -1257,9 +1312,14 @@ export function listDrafts(): DraftSummary[] {
 }
 
 export function getDraft(id: string): Draft {
-  const d = wsDrafts().find((x) => x.id === id);
+  const d = findDraft(id);
   if (!d) throw err("not_found", "draft_not_found");
   return d;
+}
+
+/** The stored draft or null (plan previews of `revise_draft`). */
+export function findDraft(id: string): Draft | null {
+  return wsDrafts().find((x) => x.id === id) ?? null;
 }
 
 export function deleteDraft(id: string): boolean {
@@ -1420,13 +1480,24 @@ export async function draftNow(req: DraftRequest, ctl: JobControl | null, progre
     putDraft(draft);
     return { draft, prompt_tokens: 0, completion_tokens: 0, elapsed_ms: Math.round(performance.now() - started), source: "rules" };
   }
-  if (!req.content.trim()) throw err("invalid", "content_empty");
+  if (!req.content.trim() && !req.previous) throw err("invalid", "content_empty");
   progress("loading model", 0.05);
   const mode = pl.visionAvailability();
   if (mode === "engine_off") throw err("engine_not_running", "engine_not_running");
   if (mode === "none") throw err("invalid", "no_model");
   await pace(ctl, 240);
   pl.markVisionLoaded();
+  // 0.7.0 초안 어시스턴트: one model call on the section (or the whole draft), progress stage "revising".
+  if (req.revise && req.previous) {
+    progress("revising", 0.3);
+    await pace(ctl, 500);
+    const draft = reviseDraft(req);
+    progress("revising", 0.95);
+    await pace(ctl, 150);
+    putDraft(draft);
+    const chars = Array.from(req.feedback ?? "").length;
+    return { draft, prompt_tokens: 1800 + chars, completion_tokens: 120 + chars, elapsed_ms: Math.round(performance.now() - started), source: "model", sections: 1 };
+  }
   progress("drafting", 0.2);
   const knowledge = req.use_knowledge ? await knowledgeCitations(req.content.slice(0, 60), req.excluded_sources) : [];
   await pace(ctl, 400);
@@ -1488,7 +1559,10 @@ export async function mockGenerate(cmd: string, a: Record<string, any>): Promise
       return { ctx: 8192, gpu: true, cap: 32768, split_threshold: SPLIT_THRESHOLD_TOKENS } satisfies BudgetInfo;
     case "generate_draft": {
       const req = a.req as DraftRequest | undefined;
-      if (!req || !req.content?.trim()) throw err("invalid", "content_empty");
+      // Like `generate_bridge::draft`: an empty content is fine when a previous draft is revised / regenerated.
+      if (!req || (!req.content?.trim() && !req.previous)) throw err("invalid", "content_empty");
+      if (req.revise && !req.previous) throw err("invalid", "previous_required");
+      if (req.revise && !(req.feedback ?? "").trim()) throw err("invalid", "instruction_empty");
       return { job_id: submitDraftJob({ ...req, language: req.language ?? defaultLanguage() }) };
     }
     case "generate_preview": {

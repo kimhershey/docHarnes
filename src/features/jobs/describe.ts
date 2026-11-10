@@ -67,6 +67,8 @@ export function describeJobDetail(job: Job, t: TFunction): string | null {
   if (d === "drafting" || d === "finishing") return t("jobs.detail.drafting");
   // Split draft (0.3.0): "outline", then "section i/n".
   if (d === "outline") return t("jobs.detail.draft_outline");
+  // 0.7.0 초안 어시스턴트: one section / new section / whole-draft revision.
+  if (d === "revising") return t("jobs.detail.draft_revising");
   m = d.match(/^section (\d+)\/(\d+)$/);
   if (m) return t("jobs.detail.draft_section", { index: Number(m[1]), total: Number(m[2]) });
   // -- 0.3.0 §2 schema discovery (`pipeline_bridge::run_schema_discovery`): per-document / per-page progress, then the merge.

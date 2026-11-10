@@ -4,7 +4,9 @@
 
 import type { TFunction } from "i18next";
 
-import type { Draft, DraftBlock, DraftIssue, DraftRequest, SchemaRecord, SourceRef, TemplateInfo, TemplateRef } from "@/lib/types";
+import type { Draft, DraftBlock, DraftIssue, DraftRequest, ReviseScope, SchemaRecord, SourceRef, TemplateInfo, TemplateRef } from "@/lib/types";
+
+export { isSectionHeading, reviseScopeLabel, sectionAt, sectionsOf, type DraftSection } from "@/lib/draft-sections";
 
 export function setTitle(draft: Draft, title: string): Draft {
   return { ...draft, title };
@@ -32,6 +34,100 @@ export function removeRow(draft: Draft, tableKey: string, row: number): Draft {
 
 export function setBlock(draft: Draft, index: number, block: DraftBlock): Draft {
   return { ...draft, body: draft.body.map((b, i) => (i === index ? block : b)) };
+}
+
+// -- body blocks: add / remove / move (0.7.0 plan §1.2) ------------------------------------------------
+// The validator's `body[i]` issue paths are positional, so every structural edit re-indexes them: an issue
+// of a removed block is dropped, the others follow their block.
+
+export type NewBlockKind = "paragraph" | "heading" | "list";
+
+export function newBlock(kind: NewBlockKind, level = 2): DraftBlock {
+  switch (kind) {
+    case "heading":
+      return { kind: "heading", level, text: "" };
+    case "list":
+      return { kind: "list", items: [], ordered: false };
+    default:
+      return { kind: "paragraph", text: "", source: null };
+  }
+}
+
+/** Re-maps `body[i]` issue paths through `f` (null drops the issue); other paths are kept. */
+function remapBodyIssues(issues: DraftIssue[], f: (index: number) => number | null): DraftIssue[] {
+  const out: DraftIssue[] = [];
+  for (const issue of issues) {
+    const target = parseIssuePath(issue.path);
+    if (target.kind !== "body") {
+      out.push(issue);
+      continue;
+    }
+    const next = f(target.index);
+    if (next === null) continue;
+    out.push(next === target.index ? issue : { ...issue, path: `body[${next}]` });
+  }
+  return out;
+}
+
+/** Inserts `block` so that it becomes `body[at]` (`at` = body length appends). */
+export function insertBlock(draft: Draft, at: number, block: DraftBlock): Draft {
+  const index = Math.max(0, Math.min(draft.body.length, at));
+  const body = [...draft.body.slice(0, index), block, ...draft.body.slice(index)];
+  return { ...draft, body, issues: remapBodyIssues(draft.issues, (i) => (i >= index ? i + 1 : i)) };
+}
+
+export function removeBlock(draft: Draft, at: number): Draft {
+  if (at < 0 || at >= draft.body.length) return draft;
+  const body = draft.body.filter((_, i) => i !== at);
+  return { ...draft, body, issues: remapBodyIssues(draft.issues, (i) => (i === at ? null : i > at ? i - 1 : i)) };
+}
+
+/** Moves `body[from]` to position `to` (the other blocks keep their order). */
+export function moveBlock(draft: Draft, from: number, to: number): Draft {
+  const n = draft.body.length;
+  if (from < 0 || from >= n || to < 0 || to >= n || from === to) return draft;
+  const body = [...draft.body];
+  const [moved] = body.splice(from, 1);
+  body.splice(to, 0, moved!);
+  const remap = (i: number): number => {
+    if (i === from) return to;
+    if (from < to) return i > from && i <= to ? i - 1 : i;
+    return i >= to && i < from ? i + 1 : i;
+  };
+  return { ...draft, body, issues: remapBodyIssues(draft.issues, remap) };
+}
+
+/** Heading level of a heading block (2 = section heading, 3 = sub-heading); other blocks are returned as they are. */
+export function setBlockLevel(draft: Draft, at: number, level: number): Draft {
+  const b = draft.body[at];
+  if (!b || b.kind !== "heading") return draft;
+  return setBlock(draft, at, { ...b, level: Math.max(1, Math.min(4, level)) });
+}
+
+/** The revision request of the 초안 어시스턴트 (plan §1.5): the current draft as `previous`, the instruction as `feedback`. */
+export function reviseRequest(base: DraftRequest, draft: Draft, instruction: string, scope: ReviseScope, excluded: string[]): DraftRequest {
+  return { ...base, previous: draft, feedback: instruction.trim(), excluded_sources: excluded, revise: scope };
+}
+
+/** `"whole"` / `"section:3"` / `"insert_after:3"` / `"insert_after:end"` — the scope select's values. */
+export function reviseScopeToPicker(scope: ReviseScope): string {
+  switch (scope.scope) {
+    case "whole":
+      return "whole";
+    case "section":
+      return `section:${scope.section}`;
+    case "insert_after":
+      return scope.section == null ? "insert_after:end" : `insert_after:${scope.section}`;
+  }
+}
+
+export function pickerToReviseScope(value: string, heading: string | null = null): ReviseScope {
+  if (value.startsWith("section:")) return { scope: "section", section: Math.max(1, Number(value.slice(8)) || 1) };
+  if (value.startsWith("insert_after:")) {
+    const rest = value.slice(13);
+    return { scope: "insert_after", section: rest === "end" ? null : Math.max(1, Number(rest) || 1), heading: heading?.trim() || null };
+  }
+  return { scope: "whole" };
 }
 
 /** Text form of a block for a textarea: list items one per line. */

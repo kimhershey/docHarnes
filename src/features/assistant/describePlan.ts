@@ -177,6 +177,10 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
       const form = op.form_ref ? (TEMPLATE_KEYS.includes(op.form_ref) ? t(`generate.templates.${op.form_ref}`) : op.form_ref) : null;
       return joinParts([form ? pt("form", { name: form }) : op.format_description ? truncate(op.format_description, 40) : pt("form_auto"), truncate(op.content, 60), op.sources && op.sources.length > 0 ? pt("sources", { count: op.sources.length }) : null, op.output ? op.output.toUpperCase() : null, op.tone ? t(`generate.tone.${op.tone}`) : null, op.length ? t(`generate.length.${op.length}`) : null]);
     }
+    case "revise_draft": {
+      const scope = op.scope === "whole" ? pt("revise_whole") : op.scope === "section" ? pt("revise_section", { index: op.section ?? 1 }) : op.section == null ? pt("revise_append") : pt("revise_insert_after", { index: op.section });
+      return joinParts([scope, op.heading ? `'${truncate(op.heading, 30)}'` : null, truncate(op.instruction, 60)]);
+    }
     case "register_form":
       return joinParts([op.doc_ids && op.doc_ids.length >= 2 ? pt("sample_docs", { count: op.doc_ids.length }) : op.doc_ref && op.doc_ref !== "current" ? op.doc_ref : pt("current_document"), op.name ?? null, op.doc_type_slug ? docTypeName(op.doc_type_slug, ctx.context, lang) : null]);
     case "explain":
@@ -680,6 +684,7 @@ export function deriveResultActions(execution: PlanExecution, plan: Plan): Resul
         if (isAnswer(payload)) out.answers.push({ index: step.index, answer: payload });
         break;
       case "draft_document":
+      case "revise_draft":
       case "request_supplement": {
         // `exec.rs` sends the `DraftOutcome` (+ `project_id` for the supplement); a bare `Draft` is accepted too.
         const draft = isDraft(payload) ? payload : isRecord(payload) && isDraft(payload.draft) ? payload.draft : null;

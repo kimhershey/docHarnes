@@ -28,6 +28,7 @@ import { selectMessages, useAssistantStore, type ClarifyStatus, type Message, ty
 import { useAttachmentsStore } from "@/stores/attachments";
 import { useDocumentsStore } from "@/stores/documents";
 import { useEngineStore } from "@/stores/engine";
+import { useGenerateStore } from "@/stores/generate";
 import { useJobsStore } from "@/stores/jobs";
 import { newRequestId, useKnowledgeStore } from "@/stores/knowledge";
 import { useProjectsStore } from "@/stores/projects";
@@ -201,6 +202,8 @@ export function AssistantPage() {
     const ctx = uiContextFor(scope === "selection" ? "selection" : "all", folder, selectionIds, lastDocument, currentProject);
     // The project scope travels as `project_id` next to `current_project` (the default target of project ops).
     if (scope === "project" && currentProject) ctx.project_id = currentProject;
+    // 0.7.0: the draft open on the 문서 작성 screen is the default target of `revise_draft`.
+    ctx.draft_id = useGenerateStore.getState().draft?.id ?? null;
     return ctx;
   };
 
