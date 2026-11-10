@@ -30,12 +30,14 @@ user PC: `docs/RUN-GUIDE.md`.
    request is finished and the full verification (`cargo test --workspace`, clippy, vitest, Playwright,
    CI on the pushed commit) reports no FAILED — never mid-work (user decision 2026-11-09).
 6. **One version per branch** (user decision 2026-11-10): every piece of work starts by bumping the version
-   (new features / structural changes → minor, fixes → patch; `Cargo.toml`, `package.json` + lock,
-   `src-tauri/tauri.conf.json`, the mock backend's version strings, `npm run notices`) and creating
-   `release/<major.minor.patch>` from `main` (never a bare `v0.5.0` — that is the release tag's name).
-   Work, WIP snapshots and the installer build happen on that branch; the user merges it into `main`
-   (pull request) and the publish run creates the `v<version>` tag. The old `phase/*` branches are history
-   (`phase/p6-p7` carried 0.1.0–0.4.0 and the start of 0.5.0).
+   (new features / structural changes → minor, fixes → patch; `Cargo.toml` **and `Cargo.lock`** (`cargo update -w --offline`
+   or any cargo build — the notices job runs `cargo metadata --locked`), `package.json` + lock, `src-tauri/tauri.conf.json`,
+   the mock backend's version strings, `npm run notices`) and creating `release/<major.minor.patch>` from `main` (never a
+   bare `v0.5.0` — that is the release tag's name). The bump commit is the branch's first mergeable state: push it
+   without `[skip ci]` and check its CI (the 0.6.0 bump e6a2e4f skipped CI with a stale `Cargo.lock` / SBOM, was merged
+   as PR #20 and broke `main`'s notices job). Work, WIP snapshots and the installer build happen on that branch; the user
+   merges it into `main` (pull request) and the publish run creates the `v<version>` tag. The old `phase/*` branches are
+   history (`phase/p6-p7` carried 0.1.0–0.4.0 and the start of 0.5.0).
 
 ## Commands
 - Rust: `cargo test --workspace` (lib + `tests/engine_process.rs`), `cargo check -p doculens`,

@@ -16,9 +16,12 @@
 - 설치파일 빌드(Actions "Windows installer (manual)")는 **요청된 작업이 모두 끝나고 전체 검증(Rust 테스트·clippy·vitest·
   Playwright·푸시한 커밋의 CI)에 FAILED가 없음을 확인한 뒤에만** 실행한다(사용자 결정 2026-11-09). 작업 도중 빌드 금지.
 - **버전별 브랜치**(사용자 결정 2026-11-10 "앞으로는 마이너와 패치 버전을 올려서 브랜치를 생성하고 작업하자"): 작업을 시작할 때 버전을 올리고
-  (새 기능·구조 변경 = 마이너, 수정 = 패치; `Cargo.toml`·`package.json`/lock·`src-tauri/tauri.conf.json`·모의 백엔드 버전 문자열·`npm run notices`)
+  (새 기능·구조 변경 = 마이너, 수정 = 패치; `Cargo.toml`과 **`Cargo.lock`**(`cargo update -w --offline` 또는 아무 cargo 빌드 — 고지 잡은
+  `cargo metadata --locked`로 돈다)·`package.json`/lock·`src-tauri/tauri.conf.json`·모의 백엔드 버전 문자열·`npm run notices`)
   `main`에서 `release/<major.minor.patch>` 브랜치를 만들어 그 위에서 작업·WIP 푸시·설치파일 빌드를 한다(`v0.5.0` 같은 이름은 릴리스 태그와 겹치므로
-  쓰지 않음). 끝나면 사용자가 PR로 `main`에 병합하고 게시 실행이 `v<버전>` 태그를 만든다. 첫 적용: `release/0.5.0`(`main` 4c2a7ca = PR #18까지 병합된
+  쓰지 않음). **버전 범프 커밋은 그 브랜치의 첫 병합 가능 상태**이므로 `[skip ci]` 없이 푸시해 CI를 확인한다(0.6.0의 범프 e6a2e4f는 `Cargo.lock`·SBOM이
+  옛 버전인 채 CI를 건너뛰었고, 사용자가 PR #20으로 병합해 `main`의 고지/SBOM 잡이 깨졌다 — 통합 커밋 2efc181 이후 다시 병합하면 해소).
+  끝나면 사용자가 PR로 `main`에 병합하고 게시 실행이 `v<버전>` 태그를 만든다. 첫 적용: `release/0.5.0`(`main` 4c2a7ca = PR #18까지 병합된
   `phase/p6-p7`에서 분기; `phase/*` 브랜치는 0.1.0~0.4.0과 0.5.0 초반의 기록으로만 남김).
 
 ## 단계 현황
