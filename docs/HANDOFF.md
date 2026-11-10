@@ -1442,6 +1442,43 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 - **문서**: RUN-GUIDE 8번·v1.1 예시, 설계 §3.13 템플릿 목록·NL 예시, 체크리스트, 계획 §1 진행, CLAUDE.md 레이아웃.
 
 
+### 0.3.0 3차 — 프로젝트 상태를 시작·종료일로, 프로젝트별 정리·내보내기와 추적 사본 (2026-11-10; 계획 §5·§6, 결정 5 "종료일 지난 미완은 기한 경과 배지, 종료일 없으면 진행중"·결정 6 "여러 프로젝트 문서는 양쪽에 사본"; 병렬 에이전트)
+
+- **코어 `projects/`**: 수동 상태(`ProjectStatus`) 제거. `ProjectPhase { Planned, Active, Done }`은 `phase_for(start, end, created, today)`로
+  읽을 때 계산(시작 전 진행예정, 종료일 지나면 완료, 그 외·종료일 없음은 진행중). `Project.overdue`(기한 경과)는 단계가 아니라 배지 —
+  완료이면서 종료일이 있고 필수 서류 누락·최근 불일치가 남았거나 검사한 적이 없을 때. `ProjectInput.start_date/end_date`(새 프로젝트는
+  화면에서 오늘이 기본 시작), `repo::set_dates`, "완료 처리"는 종료일 = 오늘, "다시 열기"는 종료일 비움. `ProjectSettings`(JSON,
+  `projects.settings`): folder_template·name_template·group_by·export_format·export_layout·export_path·copies(기본 true), 기본 폴더
+  `DEFAULT_PROJECT_FOLDER = documents/{{project}}/{{doc_type}}`. 리포트·보완요청서 요청 JSON에 phase/overdue/start/end.
+- **마이그레이션 0008** `0008_project_dates.sql`: `projects.start_date/end_date/settings` 추가, 시작 ← created_at, 종료 ← done이면
+  updated_at 아니면 due_date, `status` 열 DROP COLUMN(SQLite ≥ 3.35; `due_date` 열은 남지만 쓰지 않음), `document_copies` 테이블.
+- **추적 사본 `projects/copies.rs`**: 레코드 하나 + `document_copies(document_id, project_id, rel_path UNIQUE, content_hash, size_bytes,
+  state synced|modified|missing)`. 문서가 두 번째 이상 프로젝트에 들어갈 때만 그 프로젝트의 폴더 템플릿으로 물리 사본을 쓴다(첫 프로젝트는
+  원본이 사본; 같은 이름이면 `_2`). `add_documents`·`remove_document`·`remove_project_copies`·`remove_all_for_document`,
+  `sync_document`(원본 변경 → 재작성, 이동·개명 → 따라감, 밖에서 고친 사본은 `modified` 표시만), `sync_project`(강제 재작성 = "다시 동기화"),
+  `rescan`(파일 없는 사본 복구, 모듈을 거치지 않은 소속 — 자동 분류·inbox 매핑·프로젝트로 가져오기 — 의 빠진 사본 생성; `import::rescan`
+  끝에서 호출). 가져오기 계획은 사본 경로를 `Duplicate`로 돌려 재등록을 막고, 문서 삭제·프로젝트 삭제는 사본을 먼저 지운다.
+  정리 `apply`는 이동한 문서의 사본을 동기화한다. 셸 `project_sync_copies`(구 `project_set_status` 자리).
+- **정리·내보내기·집계**: 템플릿 변수 `{{project}} {{project_code}} {{project_phase}} {{project_start}} {{project_end}} {{project_owner}}`
+  (범위의 프로젝트, 없으면 문서의 첫 프로젝트; 없으면 미상 + needs_review), `GroupBy::Project` 폴더 프리셋 "프로젝트별",
+  `ScopeFilter.project_id`(scope → 소속 문서). 내보내기: 프로젝트가 있는 문서가 있거나 `ExportLayout::SheetPerProject`면 "프로젝트" 열,
+  프로젝트별 시트·CSV 파일(`<파일>_<프로젝트>.csv`, "프로젝트 없음"은 마지막), JSONL `project`, 프로젝트 범위 기본 경로
+  `exports/<날짜>_<프로젝트>.<ext>`. 집계 `group_by = project`.
+- **플래너**: `GroupBy::Project`("프로젝트별"·"by project" — 프로젝트 참조가 아님), 이름이 든 "○○ 프로젝트 문서 …"는 `scope.filter.project_id`,
+  `create_project { start_date, end_date }`(YYYY-MM-DD 검증), 스키마 enum·설명 갱신; `ProjectSummary.status`에는 phase 문자열(평가 문맥의
+  프로젝트 status "intake" → "active" 한 줄만 변경, 골든셋·기준선은 그대로 99/100). 규칙 문구는 `planner/tests.rs::project_group_words_and_project_scope`.
+- **프런트**: 칸반 3열(진행예정·진행중·완료, 이동 버튼 없음) + 카드 `data-project-phase/overdue`, 상세 헤더 단계·기한 경과 배지와
+  시작·종료 날짜 입력(즉시 저장)·완료 처리·다시 열기, 새 프로젝트 대화상자 시작·종료일, 문서 탭 경로 열 + 사본 배지(사본/원본과 다름/사본 없음)
+  + "다시 동기화", 새 탭 "정리·내보내기"(`ProjectSettingsTab`: 폴더·파일명 템플릿, 사본 보관, 내보내기 형식·레이아웃·경로, "이 프로젝트 정리"·
+  "이 프로젝트 내보내기" → `/organize?project=<id>`), 정리·내보내기 범위에 "프로젝트" 모드 + "프로젝트 설정 사용" 스위치. 모의
+  백엔드(`mock-projects.ts` 단계·날짜·설정·가상 사본, `mock-planner.ts` 프로젝트 범위·그룹·변수·시트)·i18n ko/en 동기.
+- **E2E**: `projects.spec` 단계 흐름(종료일 과거 → 완료 + 기한 경과, 다시 열기, 시작일 미래 → 진행예정)과 공유 문서 사본(두 번째 프로젝트의
+  `archive/{{project}}/{{doc_type}}` 사본 → 다시 동기화 → 소속 해제로 소멸 → 재추가), `organize.spec` "이 프로젝트 정리"(프로젝트 범위·설정 채움·
+  `{{project}}`·`{{project_code}}`·`{{project_phase}}`·프로젝트별 프리셋·미상·실행).
+- **남은 것**: 템플릿 단위 정리 설정 상속 없음(프로젝트별만), 분류·inbox 매핑으로 들어온 소속의 사본은 재검사/다시 동기화 때 생성, 사본 이름 변경
+  추적 시 유형 라벨은 한국어 고정, 외부 변경은 재검사·다시 동기화 시점에만 감지(fswatch 연동 없음), `due_date` 열 잔존, 내보내기 탭의
+  프로젝트 설정 채움은 E2E 미포함(Rust 테스트만), 모의 백엔드의 사본은 가상(파일 없음).
+
 ### 0.3.0 4차 — 양식 등록을 문서 1~N개의 자동 스키마 도출로 (2026-11-10; 계획 §2, 결정 3 "편집 후 저장 버튼 · 이름 중복은 팝업 · 같은 이름이면 저장 비활성"; 병렬 에이전트)
 
 - **코어 `pipeline/forms.rs`**: `discover(deps, vlm, docs, hint, cancel, progress)` — 샘플 문서마다 `discover_document`(오피스 형식은 표 구조,
@@ -1538,6 +1575,7 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | 2026-11-09 UI 배율 대응 A안(고정 px 상자 제거) | 프런트 전용 변경(Rust·고지·SBOM 변경 없음): `npm run typecheck`·`npm run build`·`licenses:check` 통과, vitest 25파일 147건, Playwright 49건(`scale.spec` 3건 추가; 1280×800 기본 뷰포트에서 150 % 검사); 모의 백엔드 15화면 × 4조건 자동 점검에서 실제 잘림 0; CI 7개 잡 모두 성공(be0b82d 푸시 이벤트, run 42601541022) |
 | 2026-11-10 요약 컨텍스트 초과 · 불필요한 RAG (4차, e7bf331·c5a8aa2) | `cargo test --workspace` 코어 303(4 ignored; `knowledge::tests` 3건·`planner::guard` 3건·`planner::tests` 1건 추가)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과, 새 의존성 없음; vitest 25파일 147건; Playwright 50건(`planner.spec` 붙여 넣은 글 1건 추가); `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(c5a8aa2 푸시 이벤트, run 42749113495) |
 | 2026-11-10 0.3.0 1차 — 내장 양식 SW 개발 문서화 (b561120 + 후속 커밋) | `cargo test --workspace` 코어 303(4 ignored; `pipeline::schema` 13 보임/6 숨김 검사·`planner` 18·`projects` 18)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(SW 문구 31건·문맥 재작성, 기준선 재생성, 미달은 이전과 같은 mx-10 1건); vitest 25파일 147건(`mock-generate.test` 규칙 파서·프로젝트 템플릿 SW화, `template.test` 예시 견적서); Playwright 전체 실행 50건 중 48 통과 → 정리 예시 문서·어시스턴트 테스트 템플릿(유지보수) 수정 뒤 `organize`·`projects` 스펙 7/7 재실행 통과; `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(93fb59b 푸시 이벤트, run 42761926963) |
+| 2026-11-10 0.3.0 2~6차 통합 — 생성 템플릿 SW화(1번) · 토큰 예산/절별 생성(4번) · 프로젝트 단계·프로젝트별 정리·추적 사본(5+6번) · 문서 N개 스키마 도출(2번) · 글자 수정 이력(7번) | `cargo test --workspace` 코어 317(4 ignored; `generate` 토큰 예산·분할 2건, `projects`·`organize`·`export`·`aggregate`·`planner` 프로젝트 8건, `pipeline` 스키마 도출 3건, `documents::import` 이력 1건 포함)·셸 3·평가 15·통합 1, clippy(-D warnings)·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(기준선 +0.0 pt, 미달은 mx-10 1건); `npm run typecheck`·`npm run build`·`licenses:check` 통과, vitest 26파일 150건, Playwright 53/53(`generate` 4·`projects` 6·`organize` 4·`pipeline` 2·`dnd`·`documents` 5 재작성 포함); 병렬 에이전트 3개가 같은 트리에서 작업해 중간 WIP 스냅샷 3건(1c885b4·97acb87·d742501, `[skip ci]`)을 거쳤고 통합 커밋에서 CI 실행 — CI: 아래 기록 |
 | 2026-11-09 이미지 위 글자 레이어 · 우측 패널 AI 검색/이력 (488af39·9e56dd6) | `cargo test --workspace` 코어 266(3 ignored; `documents::layout` 9·`render` 실 PDFium 문자 박스·`import` 레이아웃 왕복 추가)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과; vitest 23파일 139건(`text-layer.test.ts` 8 추가); Playwright 41/41(`documents`·`knowledge`·`pipeline` 스펙을 레이어·검토 큐 기준으로 재작성); CI 7개 잡 두 커밋 모두 성공 |
 | 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 3회(run 42471185353·42475854955 solid 43 MB, 42547230697 파일별 압축 47.6 MB; 159 파일 검사 통과) · 1~3번 반영 Lite 빌드 성공(run 42577030466, 검증된 커밋 a461405 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.5 MB; Release 게시는 권한 분류기 거부로 publish=false) · **1~8번(어시스턴트 모델 우선·되묻기·취소 포함) 반영 Lite 빌드 성공(run 42592935148, 검증된 커밋 3467ad4 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.6 MB, 2027-02-07까지 보관; publish=false — Release 게시는 사용자 작업)** · **0.2.0 릴리스(2026-11-09, https://github.com/kimhershey/docHarnes/releases/tag/v0.2.0)**: 검증된 커밋 3d55db8 고정, publish=true — Full run 42613728278(`DocuLens-Setup-Full-0.2.0-x64.exe` 1,156,786,994 B) → Lite run 42613985631(`DocuLens-Setup-Lite-0.2.0-x64.exe` 50,579,259 B); 자산 6개(설치파일 2종 + `.sha256` 2 + `THIRD-PARTY-NOTICES.md` + `sbom.cdx.json`); 이번에는 publish 디스패치가 거부되지 않음 · **4차 수정 반영 Lite 빌드 성공(2026-11-10, run 42753243021, 검증된 커밋 c5a8aa2 고정, 아티팩트 `DocuLens-Setup-Lite-0.2.0-x64` 50,593,409 B, 2027-02-08까지 보관; publish=false — 버전은 아직 0.2.0, 릴리스 v0.2.0의 설치파일은 3d55db8 빌드 그대로)** · **Full 0.1.0 빌드 성공(run 42547228170): 1.1 GB, 219 파일, CUDA 팩 cu121·cu129 동봉 검사 통과** · CUDA 팩 빌드 성공(cu121 run 42533483890 · cu129 run 42533486332 → Release v0.1.0) — 위 "패키징·고지" 참조 |
 
@@ -1614,8 +1652,8 @@ P6·P7 항목.
    항목별 현재 구현·변경·영향 파일·사용자 결정(§9, 2026-11-10 답변 반영: 옛 양식 숨김, 저장은 편집 후 버튼 + 이름 중복 검사, 토큰 상한
    GPU 32K/CPU 8K, 기한 경과 배지, 여러 프로젝트 문서는 추적되는 사본)·순서(3 → 1 → 5+6 → 2 → 4 → 7, 약 16.5 작업일). §10: 뷰어
    수정은 앱 내부 데이터만 바꾸고 원본은 불변 — 되돌리기는 파일 저널 전용이라 글자 수정 이력·되돌리기를 7번으로 추가(우선은 그대로 둠).
-   **진행**: 3번(추출 내장 양식 SW 문서화) 2026-11-10 완료 — 위 "0.3.0 1차" 절. 다음은 1번(생성 템플릿) → 5+6 → 2 → 4 → 7, 끝나면
-   0.3.0 릴리스 노트(`docs/releases/v0.3.0.md`) + Lite 설치파일만 `publish=true`로 게시(사용자 지시).
+   **진행**: 3·1·5+6·2·4·7번 모두 2026-11-10 완료(위 "0.3.0 1차~6차" 절; 1·4번은 직접, 2·5+6·7번은 병렬 에이전트 — 사용자 허용). 남은 것은
+   0.3.0 릴리스(버전 범프·`docs/releases/v0.3.0.md`·Lite 설치파일만 `publish=true` 게시, 사용자 지시)와 각 절의 "남은 것"·체크리스트 항목.
 1. 남은 부록 D op(GUI 전용: `render`·`rotate`·`split`·`merge`·`add_to_kb`·`manage_collection`·`define_term`·`set_tier`·
    `set_backend`·`import_model`·`download_model`·`benchmark`·`open_workspace`)을 플래너에서 UI 액션으로 연결.
 2. P4·P5 숙제 중 미착수: bbox 그라운딩(디지털 PDF 문자 박스), 배치 PDF 자동 경계 탐지, 컬렉션 폴더 감시, OCR 출력 건전성
