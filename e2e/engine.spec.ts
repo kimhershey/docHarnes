@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { createWorkspace, freshApp } from "./helpers";
+import { createWorkspace, freshApp, openModelsAdvanced } from "./helpers";
 
 // P1 acceptance (design §4.1): engine lifecycle, model import / download /
 // load and the job list, driven against the browser mock backend (the real
@@ -15,7 +15,7 @@ test.describe("P1 engine & models", () => {
     await expect(page.getByTestId("app-shell")).toBeVisible();
 
     // Engine auto-start → running, but no model → status bar "no model".
-    await page.getByTestId("nav-models").click();
+    await openModelsAdvanced(page);
     await expect(page.getByTestId("engine-state")).toHaveText("실행 중", { timeout: 10_000 });
     await expect(page.getByTestId("statusbar-engine")).toContainText("모델 없음");
     await expect(page.getByTestId("discovered-empty")).toBeVisible();
@@ -36,7 +36,7 @@ test.describe("P1 engine & models", () => {
     await page.getByTestId("load-gemma4-e4b-q5km").click();
     await expect(page.getByTestId("instance-gemma4-e4b-q5km")).toHaveText("로드됨", { timeout: 15_000 });
     await expect(page.getByTestId("statusbar-engine")).toContainText("준비");
-    await expect(page.getByTestId("statusbar-vram")).toContainText("VRAM 사용");
+    await expect(page.getByTestId("statusbar-model")).toContainText("gemma4-e4b-q5km");
     await expect(page.getByTestId("engine-loaded")).toContainText("gemma4-e4b-q5km");
 
     // Chat test dialog returns a response.
@@ -57,7 +57,7 @@ test.describe("P1 engine & models", () => {
     await freshApp(page);
     await createWorkspace(page, undefined, { finish: false });
     await page.getByTestId("onboarding-finish").click();
-    await page.getByTestId("nav-models").click();
+    await openModelsAdvanced(page);
     await expect(page.getByTestId("engine-state")).toHaveText("실행 중", { timeout: 10_000 });
 
     await page.getByTestId("download-gemma4-e4b-q4km").click();
@@ -91,8 +91,8 @@ test.describe("P1 engine & models", () => {
     await page.getByTestId("settings-tab-general").click();
     await page.getByTestId("language-select").click();
     await page.getByRole("option", { name: "English" }).click();
-    await page.getByTestId("nav-models").click();
+    await openModelsAdvanced(page);
     await expect(page.getByTestId("engine-card")).toContainText("Engine (llama-server)");
-    await expect(page.getByTestId("statusbar-engine")).toContainText("Engine:");
+    await expect(page.getByTestId("statusbar-engine")).toContainText("AI engine:");
   });
 });

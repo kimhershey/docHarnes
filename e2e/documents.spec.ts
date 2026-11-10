@@ -69,10 +69,9 @@ test.describe("P2 documents", () => {
     await page.getByRole("option", { name: "전체" }).click();
     await expect(page.locator('[data-testid^="doc-row-"]')).toHaveCount(3);
 
-    // Home shows the recent documents and counts.
-    await page.getByTestId("nav-home").click();
-    await expect(page.getByTestId("home-recent")).toContainText("견적서.hwpx");
-    await expect(page.getByTestId("home-stat-processing")).toHaveText("3");
+    // The 문서함 "오늘 할 일" strip shows the recent documents and the counts (the former home screen).
+    await expect(page.getByTestId("library-today-recent")).toContainText("견적서.hwpx");
+    await expect(page.getByTestId("library-today-stat-processing")).toHaveText(tpl(ko.library.today.processing, { count: 3 }));
   });
 
   test("viewer: pages, thumbnails, keyboard, rotation, tags, type and delete", async ({ page }) => {
@@ -155,7 +154,9 @@ test.describe("P2 documents", () => {
     await page.getByTestId("library-filter-kind").click();
     await page.getByRole("option", { name: "전체" }).click();
     await page.getByLabel("모두 선택").check();
-    await page.getByTestId("library-rerender").click();
+    // 다시 렌더 lives in the right-click menu (plan §3): on a selected card it covers the whole selection.
+    await page.locator('[data-testid^="doc-card-"]').first().click({ button: "right" });
+    await page.getByTestId("library-context-rerender").click();
     await page.getByTestId("nav-jobs").click();
     // Fast mock mode finishes the render job almost immediately.
     await page.getByTestId("jobs-tab-finished").click();
@@ -166,8 +167,13 @@ test.describe("P2 documents", () => {
     await expect(page.getByTestId("confirm-dialog")).toContainText("2개");
     await page.getByTestId("confirm-ok").click();
     await expect(page.getByTestId("library-empty")).toBeVisible();
-    await page.getByTestId("library-inbox-watch").click();
-    await expect(page.getByTestId("library-inbox-watch")).toHaveAttribute("data-state", "unchecked");
+    // The inbox watch switch is in the right-click menu of the empty space (and in 설정 > 처리).
+    await page.getByTestId("library-empty").click({ button: "right" });
+    await expect(page.getByTestId("library-context-inbox-watch")).toHaveAttribute("data-checked", "true");
+    await page.getByTestId("library-context-inbox-watch").click();
+    await page.getByTestId("library-empty").click({ button: "right" });
+    await expect(page.getByTestId("library-context-inbox-watch")).toHaveAttribute("data-checked", "false");
+    await page.keyboard.press("Escape");
   });
 
   test("missing PDF renderer shows the banner; the folder import opens the preview", async ({ page }) => {
@@ -263,10 +269,11 @@ test.describe("P2 documents", () => {
     await expect(layer).toContainText("첫째 쪽의 본문 레이어입니다.");
     await expect(edits.first()).toHaveAttribute("data-undone", "true");
     await expect(edits.first().getByTestId("history-text-revert")).toHaveCount(0);
-    // The corrections are searchable right away (the mock re-indexes on save).
-    await page.getByTestId("nav-search").click();
-    await page.getByTestId("search-input").fill("첫째 쪽");
-    await page.getByTestId("search-run").click();
-    await expect(page.getByTestId("search-hit").first()).toContainText("메모-1p.pdf", { timeout: 15_000 });
+    // The corrections are searchable right away (the mock re-indexes on save): "근거만 찾기" in the assistant.
+    await page.getByTestId("nav-assistant").click();
+    await page.getByTestId("assistant-evidence-only").click();
+    await page.getByTestId("assistant-input").fill("첫째 쪽");
+    await page.getByTestId("assistant-send").click();
+    await expect(page.getByTestId("evidence-hit").first()).toContainText("메모-1p.pdf", { timeout: 15_000 });
   });
 });

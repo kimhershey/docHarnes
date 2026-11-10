@@ -3,10 +3,11 @@ import { expect, test, type Page } from "@playwright/test";
 import ko from "../src/i18n/ko.json" with { type: "json" };
 import { card, createWorkspace, docId, freshApp, importViaLibrary, tpl } from "./helpers";
 
-// P6 프로젝트 (design §3.15) against the browser mock: project from a template → documents from
-// the library (checklist) → natural-language rules confirmed in the grid → deterministic check with
-// verdict chips and evidence → 보완요청서 draft job handed to 문서 생성 → kanban move, plus the assistant's
-// `check_consistency` plan. Real rule parsing / checking is covered by the Rust tests.
+// P6 프로젝트 (design §3.15, 0.5.0 plan §2) against the browser mock: project from a template → 업무 문서
+// from the library (checklist) → natural-language rules confirmed in the grid → deterministic check with
+// verdict chips, evidence, the relation graph and the report on the one 결과 tab → 보완요청서 draft job handed
+// to 문서 작성 → kanban move, plus the assistant's `check_consistency` plan. Real rule parsing / checking is
+// covered by the Rust tests; the 참고 자료 tab and "프로젝트에 넣기" live in reference.spec.ts.
 
 /** Imports and extracts the 내부 개발 trio: requirements specification, WBS and test report. */
 async function importTrio(page: Page): Promise<{ srs: string; wbs: string; test: string }> {
@@ -90,13 +91,13 @@ test.describe("P6 projects", () => {
     await expect(page.getByTestId("project-results-table").getByTestId("result-evidence").first()).toBeVisible();
     await expect(page.getByTestId("toaster")).toContainText(tpl(ko.projects.detail.checked, { pass: 4, mismatch: 1, undetermined: 0, missing: 0 }));
 
-    // Relations: the shared project name links the documents.
-    await page.getByTestId("project-tab-relations").click();
+    // 0.5.0: the 결과 tab also holds the relation graph (the shared project name links the documents) and the
+    // report behind its button; the detail has the five tabs 문서 · 참고 자료 · 규칙 · 결과 · 설정.
     await expect(page.getByTestId("project-relations").locator('[data-testid="relation-edge"][data-kind="name"]').first()).toBeVisible();
-
-    // Report tab renders the Markdown summary.
-    await page.getByTestId("project-tab-report").click();
+    await page.getByTestId("project-report-toggle").click();
     await expect(page.getByTestId("project-report-body")).toContainText("한빛 포털 구축", { timeout: 10_000 });
+    await expect(page.locator('[data-testid^="project-tab-"]')).toHaveCount(5);
+    await expect(page.getByTestId("project-tab-reference")).toBeVisible();
 
     // 보완요청서: the mismatch is pre-selected; the draft job ends on the 문서 생성 screen.
     await page.getByTestId("project-supplement").click();
@@ -244,13 +245,12 @@ test.describe("P6 projects", () => {
     await expect(hanbit).toBeVisible();
     const hanbitId = (await hanbit.getAttribute("data-testid"))!.replace("project-card-", "");
 
-    // From the library: the selection goes to the projects screen with the dialog open on those documents.
-    await page.getByTestId("nav-library").click();
-    for (const id of [invoice, registration, receipt]) await page.getByTestId(`doc-select-${id}`).check();
-    await page.getByTestId("library-classify").click();
+    // From the projects screen: every document without a project is previewed (a selection goes through
+    // "프로젝트에 넣기" instead — reference.spec.ts).
+    await page.getByTestId("projects-classify").click();
     const dialog = page.getByTestId("classify-dialog");
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByTestId("classify-scope")).toContainText("3");
+    await expect(dialog.getByTestId("classify-scope")).toHaveText(ko.projects.classify.scope_unassigned);
     await dialog.getByTestId("classify-run").click();
     await expect(dialog.getByTestId("classify-summary")).toContainText(tpl(ko.projects.classify.summary, { total: 3, suggested: 1, undecided: 2 }));
     // The invoice is suggested for 한빛상사 (keyword in the file name); the others stay undecided.
@@ -267,9 +267,8 @@ test.describe("P6 projects", () => {
     await expect(dialog).toBeHidden();
     await expect(hanbit.getByText(tpl(ko.projects.card.documents, { count: 2 }))).toBeVisible();
 
-    // From the projects screen: only the unassigned receipt is left; nothing matches it.
+    // Second pass: only the unassigned receipt is left; nothing matches it.
     await page.getByTestId("projects-classify").click();
-    await expect(page.getByTestId("classify-scope")).toHaveText(ko.projects.classify.scope_unassigned);
     await page.getByTestId("classify-run").click();
     await expect(page.getByTestId("classify-summary")).toContainText(tpl(ko.projects.classify.summary, { total: 1, suggested: 0, undecided: 1 }));
     await expect(page.getByTestId(`classify-row-${receipt}`)).toBeVisible();

@@ -27,6 +27,7 @@ import {
   type Citation,
   type Collection,
   type CollectionInput,
+  type CollectionKind,
   type DocumentRole,
   type DocumentsChanged,
   type GlossaryEntry,
@@ -74,7 +75,56 @@ function loadAll(): Record<string, KbState> {
 
 function load(): KbState {
   const ws = currentWorkspacePath() ?? "";
-  return loadAll()[ws] ?? empty();
+  const s = loadAll()[ws] ?? empty();
+  // 0.4 state: every collection becomes a common reference group (migration 0010 default).
+  for (const c of s.collections as (Collection & { watch_folder?: unknown })[]) {
+    if (!c.kind) c.kind = "reference";
+    if (c.project_id === undefined) c.project_id = null;
+    delete c.watch_folder;
+  }
+  return s;
+}
+
+/** Project membership (work documents) without a static import cycle at module evaluation time. */
+import * as mp from "./mock-projects";
+
+/** The one `project` group of a project, created on first use (`project_reference_group`). */
+export function projectReferenceGroup(projectId: string, name: string): Collection {
+  const s = load();
+  let c = s.collections.find((x) => x.kind === "project" && x.project_id === projectId);
+  if (!c) {
+    c = newCollection(s, name.trim() || projectId, "project", projectId);
+    s.collections.push(c);
+    save(s);
+    changed("collections", [c.id]);
+  }
+  return collectionView(s, c);
+}
+
+/** `project_update` renamed the project: its reference group follows. */
+export function renameProjectReferenceGroup(projectId: string, name: string): void {
+  const s = load();
+  const c = s.collections.find((x) => x.kind === "project" && x.project_id === projectId);
+  if (!c || c.name === name) return;
+  c.name = name;
+  c.updated_at = now();
+  save(s);
+  changed("collections", [c.id]);
+}
+
+/** `project_delete`: the project's reference group goes with it (its documents stay in the library). */
+export function deleteProjectReferenceGroup(projectId: string): void {
+  const s = load();
+  const groups = s.collections.filter((x) => x.kind === "project" && x.project_id === projectId);
+  if (groups.length === 0) return;
+  s.collections = s.collections.filter((x) => !groups.includes(x));
+  for (const g of groups) delete s.collectionDocs[g.id];
+  save(s);
+  changed("collections", groups.map((g) => g.id));
+}
+
+function newCollection(s: KbState, name: string, kind: CollectionKind, projectId: string | null): Collection {
+  return { id: `col-${nextId(s)}`, name, description: null, color: null, active: true, kind, project_id: projectId, created_at: now(), updated_at: now(), doc_count: 0, chunk_count: 0 };
 }
 
 function save(state: KbState): void {
@@ -293,13 +343,34 @@ function hitFromChunk(c: Chunk, d: MockDoc | undefined, channels: SearchHit["cha
   };
 }
 
+/**
+ * The documents a project scope allows (core `scope_doc_ids`, 0.5.0 plan §2): the project's work documents
+ * (or the explicitly listed `documents`) ∪ the project's reference group ∪ the active common reference groups.
+ */
+function projectScopeDocs(s: KbState, projectId: string, documents: string[] | undefined): { allowed: Set<string>; work: Set<string> } {
+  const work = new Set(documents?.length ? documents : mp.projectDocIds(projectId));
+  const allowed = new Set(work);
+  for (const c of s.collections) {
+    const own = c.kind === "project" && c.project_id === projectId;
+    const common = c.kind === "reference" && c.active;
+    if (!own && !common) continue;
+    for (const id of s.collectionDocs[c.id] ?? []) allowed.add(id);
+  }
+  return { allowed, work };
+}
+
 function allowedDocs(s: KbState, scope: SearchScope | undefined): Set<string> | null {
   if (!scope) return null;
   let allowed: Set<string> | null = null;
   const intersect = (set: Set<string>) => {
     allowed = allowed ? new Set([...allowed].filter((x) => set.has(x))) : set;
   };
-  if (scope.documents?.length) intersect(new Set(scope.documents));
+  let work = new Set<string>();
+  if (scope.project_id) {
+    const p = projectScopeDocs(s, scope.project_id, scope.documents);
+    work = p.work;
+    intersect(p.allowed);
+  } else if (scope.documents?.length) intersect(new Set(scope.documents));
   if (scope.collections?.length) intersect(new Set(scope.collections.flatMap((c) => s.collectionDocs[c] ?? [])));
   if (scope.roles?.length) intersect(new Set(wsDocs().filter((d) => scope.roles?.includes(d.role)).map((d) => d.id)));
   if (scope.folder) intersect(new Set(wsDocs().filter((d) => d.rel_path.startsWith(`${scope.folder}/`)).map((d) => d.id)));
@@ -310,6 +381,8 @@ function allowedDocs(s: KbState, scope: SearchScope | undefined): Set<string> | 
     for (const [cid, ids] of Object.entries(s.collectionDocs)) {
       if (!inactive.has(cid)) continue;
       for (const id of ids) {
+        // A project's own work document stays in scope whatever groups it sits in.
+        if (work.has(id)) continue;
         const inActive = Object.entries(s.collectionDocs).some(([c2, ids2]) => !inactive.has(c2) && ids2.includes(id));
         if (!inActive) excluded.add(id);
       }
@@ -574,7 +647,7 @@ async function answer(req: AnswerRequest, requestId: string): Promise<Answer> {
     if (top.length === 0) {
       base.no_evidence = true;
       if (!req.allow_general) {
-        base.text = ko ? "지식 베이스에 근거가 없습니다." : "No evidence was found in the knowledge base.";
+        base.text = ko ? "참고 자료에 근거가 없습니다." : "No evidence was found in the reference material.";
         base.sentences = [{ text: base.text, citations: [] }];
         base.elapsed_ms = Math.round(performance.now() - started);
         if (req.save !== false) base.id = saveAnswer(s, base);
@@ -629,7 +702,7 @@ function status(): KnowledgeStatus {
     embedding_model: s.embeddedModel,
     embedding_dim: s.embeddedModel ? 768 : null,
     tokenizer: { kind: "ko-dic", path: "C:\\Users\\me\\AppData\\Local\\DocuLens\\tokenizers\\ko-dic", version: "mecab-ko-dic-2.1.1-20180720" },
-    collections: s.collections.length,
+    collections: s.collections.filter((c) => c.kind === "reference").length,
     glossary_terms: s.glossary.length,
     answers: s.answers.length,
     answers_helpful: s.answers.filter((a) => a.feedback === 1).length,
@@ -651,17 +724,18 @@ export async function mockKnowledge(cmd: string, a: Record<string, any>): Promis
       const input = a.input as CollectionInput;
       const name = input.name.trim();
       if (!name) throw err("invalid", "collection_name_empty");
-      if (s.collections.some((c) => c.name.toLowerCase() === name.toLowerCase() && c.id !== input.id)) throw err("invalid", "collection_name_taken");
       let c = input.id ? s.collections.find((x) => x.id === input.id) : undefined;
+      // A project's group is named after the project; names are unique among the common reference groups.
+      const kind: CollectionKind = c ? c.kind : input.project_id ? "project" : "reference";
+      if (kind === "reference" && s.collections.some((x) => x.kind === "reference" && x.name.toLowerCase() === name.toLowerCase() && x.id !== input.id)) throw err("invalid", "collection_name_taken");
       if (!c) {
-        c = { id: `col-${nextId(s)}`, name, description: null, color: null, active: true, watch_folder: null, created_at: now(), updated_at: now(), doc_count: 0, chunk_count: 0 };
+        c = newCollection(s, name, kind, kind === "project" ? (input.project_id ?? null) : null);
         s.collections.push(c);
       }
       c.name = name;
       c.description = input.description ?? null;
       c.color = input.color ?? null;
       c.active = input.active ?? true;
-      c.watch_folder = input.watch_folder ?? null;
       c.updated_at = now();
       save(s);
       changed("collections", [c.id]);

@@ -1,32 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
 
-import { PipelineStatusChip } from "@/features/pipeline/PipelineStatusChip";
-import { api, isTauri } from "@/lib/ipc";
+import { settingsTabPath } from "@/features/settings/tabs";
+import { api } from "@/lib/ipc";
 import { useAssessment, useModelIndex } from "@/lib/queries";
 import { queryKeys } from "@/lib/query-client";
 import { SCREEN_ROUTES } from "@/lib/types";
-import { formatBytes, formatMiB } from "@/lib/utils";
 import { useEngineStore } from "@/stores/engine";
 import { useActiveJobs } from "@/stores/jobs";
 import { useWorkspace } from "@/stores/workspace";
-
-function useOnline(): boolean {
-  const [online, setOnline] = useState(typeof navigator === "undefined" ? false : navigator.onLine);
-  useEffect(() => {
-    const on = () => setOnline(true);
-    const off = () => setOnline(false);
-    window.addEventListener("online", on);
-    window.addEventListener("offline", off);
-    return () => {
-      window.removeEventListener("online", on);
-      window.removeEventListener("offline", off);
-    };
-  }, []);
-  return online;
-}
 
 /** Engine dot + label per design §3.7.1: ● 준비 / 로딩 / 모델 없음 / 오프라인. */
 export function engineIndicator(
@@ -55,9 +38,12 @@ export function gateNotice(gate: { batch_busy: boolean; estimated_wait_ms: numbe
   return seconds > 0 ? t("statusbar.gate_busy", { seconds }) : t("statusbar.gate_busy_short");
 }
 
+/**
+ * Status bar (0.5.0 plan §3): the AI engine's state with the model it serves (→ 설정 > AI 모델) and the
+ * job badge (→ 작업 현황), plus the batch-gate notice while a batch holds the engine.
+ */
 export function StatusBar() {
   const { t } = useTranslation();
-  const online = useOnline();
   const workspace = useWorkspace();
   const { data: assessment } = useAssessment();
   const { data: index } = useModelIndex();
@@ -70,9 +56,7 @@ export function StatusBar() {
   const installed = (assessment?.active_model_installed?.installed ?? false) || (index?.discovered.some((d) => d.health.kind === "ready") ?? false);
   const ind = engineIndicator(status, installed);
   const loaded = status?.models.find((m) => m.status === "loaded" || m.status === "sleeping") ?? null;
-  const total = assessment?.tier.total_vram_mib;
-  const vram = loaded?.memory_effective_bytes != null ? `${formatBytes(loaded.memory_effective_bytes, 1)} / ${formatMiB(total)}` : assessment?.tier.free_vram_mib != null ? `${formatMiB(assessment.tier.free_vram_mib)} / ${formatMiB(total)}` : "—";
-  const modelLabel = loaded ? loaded.id : (assessment?.active_model?.display ?? t("topbar.no_model"));
+  const modelLabel = loaded ? loaded.id : (assessment?.active_model_installed?.installed ? assessment.active_model?.display : null) ?? null;
   const running = jobs.filter((j) => j.state === "running").length;
   const paused = jobs.filter((j) => j.state === "paused").length;
   const queued = jobs.length - running - paused;
@@ -81,16 +65,17 @@ export function StatusBar() {
 
   return (
     <footer className="flex min-h-7 shrink-0 flex-wrap items-center gap-x-4 border-t border-border bg-bg-elevated px-3 text-xs text-fg-muted [&>*]:whitespace-nowrap" data-testid="statusbar">
-      <Link to={SCREEN_ROUTES.models} className="flex items-center gap-1.5 hover:text-fg" data-testid="statusbar-engine">
-        <span className={`size-2 rounded-full ${ind.color}`} aria-hidden="true" />
-        {t("statusbar.engine")}: {t(`statusbar.${ind.key}`)}
+      <Link to={settingsTabPath("models")} className="flex min-w-0 items-center gap-1.5 hover:text-fg" data-testid="statusbar-engine">
+        <span className={`size-2 shrink-0 rounded-full ${ind.color}`} aria-hidden="true" />
+        <span>
+          {t("statusbar.engine")}: {t(`statusbar.${ind.key}`)}
+        </span>
+        {modelLabel && (
+          <span className="truncate text-fg-subtle" data-testid="statusbar-model">
+            · {modelLabel}
+          </span>
+        )}
       </Link>
-      <span data-testid="statusbar-vram">
-        {loaded?.memory_effective_bytes != null ? t("statusbar.vram_used") : t("statusbar.vram")} {vram}
-      </span>
-      <span className="truncate" data-testid="statusbar-model">
-        {t("statusbar.model")}: {modelLabel}
-      </span>
       <Link to={SCREEN_ROUTES.jobs} className="hover:text-fg" title={queueTooltip} aria-label={`${t("statusbar.queue", { count: jobs.length })} — ${queueTooltip}`} data-testid="statusbar-jobs" data-paused={paused}>
         {t("statusbar.queue", { count: jobs.length })}
         {paused > 0 && <span className="ml-1 text-warn">({t("jobs.state.paused")} {paused})</span>}
@@ -100,9 +85,6 @@ export function StatusBar() {
           {gate}
         </span>
       )}
-      <PipelineStatusChip className="hidden md:inline-flex" />
-      <span className="ml-auto">{online ? t("statusbar.network_online") : t("statusbar.network_offline")}</span>
-      {!isTauri && <span className="rounded bg-warn-soft px-1.5 text-warn">{t("statusbar.preview")}</span>}
     </footer>
   );
 }

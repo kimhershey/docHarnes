@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import ko from "../src/i18n/ko.json" with { type: "json" };
-import { card, createWorkspace, freshApp, importViaLibrary, tpl } from "./helpers";
+import { card, createWorkspace, freshApp, importViaLibrary, openSettingsTab, tpl } from "./helpers";
 
 // Drag-and-drop of library documents (pointer-based in-app drags) and browser file drops onto the
 // screens that add documents (design §3.4 끌어다 놓기, v1.1 follow-up).
@@ -16,6 +16,25 @@ async function dragTo(page: Page, source: Locator, target: Locator, hoverMs = 0)
   await expect(page.getByTestId("dnd-ghost")).toBeVisible();
   await page.mouse.move(t.x + t.width / 2, t.y + t.height / 2, { steps: 10 });
   if (hoverMs > 0) await page.waitForTimeout(hoverMs);
+  await page.mouse.up();
+}
+
+/**
+ * Drags `source` onto the assistant: since 0.5.0 (plan §3) the menu entry only spring-loads the screen,
+ * the page itself (its message list) takes the drop.
+ */
+async function dragToAssistant(page: Page, source: Locator): Promise<void> {
+  const s = (await source.boundingBox())!;
+  await page.mouse.move(s.x + s.width / 2, s.y + s.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(s.x + s.width / 2 + 24, s.y + s.height / 2 + 24, { steps: 4 });
+  await expect(page.getByTestId("dnd-ghost")).toBeVisible();
+  const nav = (await page.getByTestId("nav-assistant").boundingBox())!;
+  await page.mouse.move(nav.x + nav.width / 2, nav.y + nav.height / 2, { steps: 10 });
+  await expect(page.getByTestId("page-assistant")).toBeVisible({ timeout: 5_000 });
+  const body = (await page.getByTestId("assistant-messages").boundingBox())!;
+  await page.mouse.move(body.x + body.width / 2, body.y + body.height / 2, { steps: 10 });
+  await expect(page.getByTestId("assistant-drop-hint")).toHaveAttribute("data-over", "true");
   await page.mouse.up();
 }
 
@@ -47,9 +66,9 @@ async function libraryWithDocs(page: Page, paths: string[]): Promise<string[]> {
 }
 
 test.describe("document drag and drop", () => {
-  test("a card dropped on the assistant menu entry becomes an attachment (scope) and can be removed", async ({ page }) => {
+  test("a card carried to the assistant (spring-loading on its menu entry) becomes an attachment (scope) and can be removed", async ({ page }) => {
     const [id] = await libraryWithDocs(page, ["C:\\scan\\견적서_한빛.pdf"]);
-    await dragTo(page, page.getByTestId(`doc-card-${id}`), page.getByTestId("nav-assistant"));
+    await dragToAssistant(page, page.getByTestId(`doc-card-${id}`));
     await expect(page.getByTestId("page-assistant")).toBeVisible();
     await expect(page.getByTestId("assistant-attachments")).toContainText("견적서_한빛.pdf");
     await expect(page.getByTestId("assistant-scope")).toContainText(tpl(ko.assistant.scope.attached, { count: 1 }));
@@ -72,6 +91,9 @@ test.describe("document drag and drop", () => {
     await expect(page.getByTestId("dnd-ghost")).toContainText(tpl(ko.dnd.ghost_many, { count: 2 }));
     const nav = (await page.getByTestId("nav-assistant").boundingBox())!;
     await page.mouse.move(nav.x + nav.width / 2, nav.y + nav.height / 2, { steps: 10 });
+    await expect(page.getByTestId("page-assistant")).toBeVisible({ timeout: 5_000 });
+    const body = (await page.getByTestId("assistant-messages").boundingBox())!;
+    await page.mouse.move(body.x + body.width / 2, body.y + body.height / 2, { steps: 10 });
     await page.mouse.up();
     await expect(page.getByTestId("assistant-attachments")).toContainText(tpl(ko.assistant.attachments.count, { count: 2 }));
   });
@@ -109,14 +131,18 @@ test.describe("document drag and drop", () => {
     await expect(page.getByTestId("generate-sources")).toContainText("개발계약서.pdf");
   });
 
-  test("a card dropped on the 양식 screen itself (after spring-loading) opens 양식 등록 on that document", async ({ page }) => {
+  test("a card dropped on 설정 > 양식·추출 항목 itself (after spring-loading) opens 양식 등록 on that document", async ({ page }) => {
     const [id] = await libraryWithDocs(page, ["C:\\scan\\신청서.pdf"]);
+    // 설정 remembers its last tab: visit 양식·추출 항목 once so spring-loading the 설정 entry lands there.
+    await openSettingsTab(page, "schemas");
+    await page.getByTestId("nav-library").click();
     const cardEl = page.getByTestId(`doc-card-${id}`);
+    await expect(cardEl).toBeVisible();
     const s = (await cardEl.boundingBox())!;
     await page.mouse.move(s.x + s.width / 2, s.y + s.height / 2);
     await page.mouse.down();
     await page.mouse.move(s.x + s.width / 2 + 24, s.y + s.height / 2 + 24, { steps: 4 });
-    const nav = (await page.getByTestId("nav-schemas").boundingBox())!;
+    const nav = (await page.getByTestId("nav-settings").boundingBox())!;
     await page.mouse.move(nav.x + nav.width / 2, nav.y + nav.height / 2, { steps: 10 });
     await expect(page.getByTestId("page-schemas")).toBeVisible({ timeout: 5_000 });
     // The drop lands on the screen body, not on the menu entry (user report 2026-11-09).
@@ -128,9 +154,9 @@ test.describe("document drag and drop", () => {
     await expect(page.getByTestId("form-register-doc")).toContainText("신청서.pdf");
   });
 
-  test("a file dropped on the 양식 screen is imported and offered for registration", async ({ page }) => {
+  test("a file dropped on 설정 > 양식·추출 항목 is imported and offered for registration", async ({ page }) => {
     await libraryWithDocs(page, ["C:\\scan\\계약서.pdf"]);
-    await page.getByTestId("nav-schemas").click();
+    await openSettingsTab(page, "schemas");
     await expect(page.getByTestId("page-schemas")).toBeVisible();
     await dropFiles(page, page.getByTestId("schemas-list"), ["휴가신청서.pdf"]);
     await expect(page.getByTestId("form-register-dialog")).toBeVisible({ timeout: 15_000 });
@@ -140,7 +166,8 @@ test.describe("document drag and drop", () => {
   test("files dropped on a collection are imported as knowledge documents of that collection", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
-    await page.getByTestId("nav-knowledge").click();
+    // The knowledge screen left the sidebar (plan §1) but keeps its route; F2 owns its 0.5.0 shape (공통 참고 자료).
+    await page.goto("/#/knowledge");
     await page.getByTestId("knowledge-tab-collections").click();
     await page.getByTestId("collection-new").click();
     await page.getByTestId("collection-name").fill("규정");

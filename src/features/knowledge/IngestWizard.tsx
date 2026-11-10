@@ -19,11 +19,18 @@ import { useUiStore } from "@/stores/ui";
 
 const NEW = "__new__";
 
-/** Ingest wizard (design §3.14.1): files/folders → collection + options → preview → background import + indexing. */
-export function IngestWizard({ open, onOpenChange, collectionId, initialPaths = null }: { open: boolean; onOpenChange: (open: boolean) => void; collectionId: string | null; initialPaths?: string[] | null }) {
+/**
+ * "파일에서 가져오기" (design §3.14.1, 0.5.0 plan §2): files / folders → reference group + options → preview →
+ * background import + indexing. `lockCollection` pins the group (a project's own reference group); otherwise the
+ * common reference groups are offered, plus "새 묶음 만들기".
+ */
+export function IngestWizard({ open, onOpenChange, collectionId, initialPaths = null, lockCollection = false }: { open: boolean; onOpenChange: (open: boolean) => void; collectionId: string | null; initialPaths?: string[] | null; lockCollection?: boolean }) {
   const { t } = useTranslation();
   const toast = useUiStore((s) => s.toast);
-  const { data: collections } = useCollections(open);
+  const { data: allCollections } = useCollections(open);
+  const locked = lockCollection && !!collectionId;
+  const collections = allCollections?.filter((c) => c.kind === "reference" || (locked && c.id === collectionId));
+  const lockedGroup = locked ? allCollections?.find((c) => c.id === collectionId) : undefined;
   const [step, setStep] = useState(0);
   const [pathsText, setPathsText] = useState("");
   const [choice, setChoice] = useState<string>(NEW);
@@ -135,21 +142,32 @@ export function IngestWizard({ open, onOpenChange, collectionId, initialPaths = 
         {step === 1 && (
           <div className="flex flex-col gap-3">
             <div className="flex flex-col gap-1">
-              <Label htmlFor="ingest-collection">{t("knowledge.wizard.collection_label")}</Label>
-              <Select value={choice} onValueChange={setChoice}>
-                <SelectTrigger id="ingest-collection" aria-label={t("knowledge.wizard.collection_label")} data-testid="ingest-collection">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {(collections ?? []).map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name}
-                    </SelectItem>
-                  ))}
-                  <SelectItem value={NEW}>{t("knowledge.collections.create_inline")}</SelectItem>
-                </SelectContent>
-              </Select>
-              {choice === NEW && <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder={t("knowledge.wizard.new_collection_name")} data-testid="ingest-new-collection" />}
+              {locked ? (
+                <>
+                  <Label>{t("knowledge.wizard.locked_label")}</Label>
+                  <p className="rounded-md border border-border bg-bg-sunken px-3 py-2 text-sm" data-testid="ingest-collection-locked">
+                    {lockedGroup?.name ?? collectionId}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <Label htmlFor="ingest-collection">{t("knowledge.wizard.collection_label")}</Label>
+                  <Select value={choice} onValueChange={setChoice}>
+                    <SelectTrigger id="ingest-collection" aria-label={t("knowledge.wizard.collection_label")} data-testid="ingest-collection">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(collections ?? []).map((c) => (
+                        <SelectItem key={c.id} value={c.id}>
+                          {c.name}
+                        </SelectItem>
+                      ))}
+                      <SelectItem value={NEW}>{t("knowledge.collections.create_inline")}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {choice === NEW && <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder={t("knowledge.wizard.new_collection_name")} data-testid="ingest-new-collection" />}
+                </>
+              )}
             </div>
             <label className="flex items-center gap-2 text-sm">
               <Switch checked={render} onCheckedChange={setRender} />

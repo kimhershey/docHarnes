@@ -28,9 +28,9 @@ function copyVariant(state: CopyState): "ok" | "warn" | "danger" | "muted" {
 }
 
 /**
- * 문서 tab: required-type checklist (missing marks) + the project's document table with each document's
+ * 문서 tab: required-type checklist (missing marks) + the project's 업무 문서 table with each document's
  * path in this project (the original, or the tracked copy of a document shared with another project —
- * plan §6, decision 6) + add / remove / resync.
+ * plan §6, decision 6) + add (문서함에서 고르기) / remove / resync. 참고 자료 live on their own tab (0.5.0).
  */
 export function DocumentsTab({ detail }: { detail: ProjectDetail }) {
   const { t, i18n } = useTranslation();
@@ -106,7 +106,7 @@ export function DocumentsTab({ detail }: { detail: ProjectDetail }) {
         </DropHint>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 id="docs-title" className="text-sm font-semibold">
-            {t("projects.tabs.documents")} ({detail.documents.length})
+            {t("projects.documents.title")} ({detail.documents.length})
           </h3>
           <div className="flex items-center gap-2">
             {hasCopies && (

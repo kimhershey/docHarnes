@@ -361,6 +361,8 @@ export const api = {
     invoke<{ job_id: string }>("project_request_supplement", { id, findingIds, output }),
   projectClassifyPreview: (req: ClassifyRequest) => invoke<ClassifyResult>("project_classify_preview", { req }),
   projectClassifyApply: (assignments: ClassifyAssignment[]) => invoke<ClassifyApplyResult>("project_classify_apply", { assignments }),
+  /** The project's reference group (0.5.0 plan §2), created on first use. */
+  projectReferenceGroup: (id: string) => invoke<Collection>("project_reference_group", { id }),
 
   // -- maintenance (P7 retention job) --
   maintenanceStatus: () => invoke<MaintenanceStatus>("maintenance_status"),

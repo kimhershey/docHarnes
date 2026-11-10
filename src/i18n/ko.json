@@ -46,18 +46,18 @@
     "disabled": "사용 안 함"
   },
   "nav": {
-    "home": "홈",
-    "library": "문서 라이브러리",
-    "search": "검색",
-    "assistant": "어시스턴트",
-    "review": "검토 큐",
-    "schemas": "추출 스키마 / 양식",
-    "knowledge": "지식 베이스",
-    "generate": "문서 생성",
+    "home": "처음 화면",
+    "library": "문서함",
+    "search": "근거만 찾기",
+    "assistant": "AI 어시스턴트",
+    "review": "검토함",
+    "schemas": "양식·추출 항목",
+    "knowledge": "참고 자료",
+    "generate": "문서 작성",
     "projects": "프로젝트",
-    "organize": "정리 / 내보내기",
-    "jobs": "작업",
-    "models": "모델 관리자",
+    "organize": "정리 · 내보내기",
+    "jobs": "작업 현황",
+    "models": "AI 모델",
     "settings": "설정",
     "collapse": "사이드바 접기",
     "expand": "사이드바 펼치기",
@@ -79,15 +79,9 @@
     "tier": "티어"
   },
   "statusbar": {
-    "engine": "엔진",
-    "engine_not_started": "엔진 미연결 (P1)",
+    "engine": "AI 엔진",
     "engine_no_model": "모델 없음",
-    "vram": "VRAM",
-    "queue": "큐 {{count}}건",
-    "model": "모델",
-    "network_offline": "네트워크 없음 (오프라인)",
-    "network_online": "온라인",
-    "preview": "미리보기",
+    "queue": "작업 {{count}}건",
     "engine_stopped": "엔진 중지",
     "engine_starting": "시작 중",
     "engine_restarting": "재기동 중",
@@ -95,7 +89,6 @@
     "engine_ready": "준비",
     "engine_idle": "대기 (모델 미로드)",
     "engine_degraded": "엔진 오류",
-    "vram_used": "VRAM 사용",
     "engine_stopping": "중지 중",
     "gate_busy": "배치 작업 중 — 약 {{seconds}}초 후 응답",
     "gate_busy_short": "배치 작업 중",
@@ -137,8 +130,8 @@
     "open_workspace": "다른 워크스페이스 열기",
     "undo_done": "{{restored}}건 되돌림 (불가 {{skipped}}건)",
     "redo_done": "{{restored}}건 다시 실행 (불가 {{skipped}}건)",
-    "undo_started": "되돌리기 작업을 시작했습니다 (작업 화면에서 확인).",
-    "redo_started": "다시 실행 작업을 시작했습니다 (작업 화면에서 확인).",
+    "undo_started": "되돌리기 작업을 시작했습니다 (작업 현황에서 확인).",
+    "redo_started": "다시 실행 작업을 시작했습니다 (작업 현황에서 확인).",
     "nothing_to_undo": "되돌릴 작업이 없습니다.",
     "nothing_to_redo": "다시 실행할 작업이 없습니다."
   },
@@ -172,7 +165,7 @@
       "import_existing": "발견한 파일 지금 가져오기"
     },
     "hardware": {
-      "intro": "감지된 하드웨어로 티어를 산정하고 권장 모델을 고릅니다. 모델 관리자에서 언제든 수동으로 바꿀 수 있습니다.",
+      "intro": "감지된 하드웨어로 티어를 산정하고 권장 모델을 고릅니다. AI 모델 설정에서 언제든 수동으로 바꿀 수 있습니다.",
       "gpu": "GPU",
       "no_gpu": "GPU를 감지하지 못했습니다 (CPU 전용 티어)",
       "vram": "VRAM (가용 / 전체)",
@@ -193,7 +186,7 @@
       "import": "USB·폴더에서 가져오기",
       "import_desc": "다른 PC에서 받은 GGUF + mmproj 파일을 워크스페이스의 모델 폴더에 넣으면 자동으로 등록됩니다(드롭인 폴더).",
       "later": "나중에",
-      "later_desc": "모델 없이 시작합니다. 모델 관리자에서 언제든 준비할 수 있습니다.",
+      "later_desc": "모델 없이 시작합니다. AI 모델 설정에서 언제든 준비할 수 있습니다.",
       "required_files": "필요 파일 목록 내보내기",
       "required_files_hint": "파일명·크기·SHA-256·URL을 텍스트로 복사해 다른 PC에서 내려받으세요.",
       "models_dir": "모델 폴더",
@@ -234,53 +227,14 @@
     "cores": "{{physical}}코어 / {{logical}}스레드",
     "probed_at": "감지 시각"
   },
-  "home": {
-    "welcome": "{{name}}",
-    "welcome_sub": "워크스페이스: {{path}}",
-    "stats": {
-      "new": "신규",
-      "processing": "처리 중",
-      "review": "검토 대기",
-      "done": "완료"
-    },
-    "stats_hint": "검토 대기·완료는 파이프라인 결과입니다. 검토 큐에서 저신뢰 필드를 확인하세요.",
-    "engine_card": "하드웨어 · 엔진",
-    "command_title": "자연어로 명령하세요",
-    "command_hint": "테마·언어·화면 이동은 즉시 실행되고, 문서 작업 명령은 어시스턴트(P5 플래너)로 전달됩니다.",
-    "command_placeholder": "예: inbox 처리해줘 / 지난달 영수증 합계 / 다크 모드로 바꿔",
-    "examples": [
-      "inbox 처리",
-      "지난달 영수증 합계",
-      "세금계산서 → 엑셀",
-      "다크 모드로 바꿔",
-      "설정 열어줘"
-    ],
-    "quick": {
-      "title": "빠른 작업",
-      "import": "문서 가져오기",
-      "models": "모델 준비",
-      "settings": "설정",
-      "assistant": "어시스턴트 열기"
-    },
-    "recent_docs": "최근 문서",
-    "recent_empty": "아직 문서가 없습니다. 라이브러리에서 가져오거나 inbox/ 폴더에 넣으세요.",
-    "no_workspace": "워크스페이스를 먼저 열어주세요.",
-    "recent_open": "라이브러리 열기",
-    "review_link": "검토 큐 열기",
-    "review_fields": "검토 대기 필드 {{count}}개",
-    "command_drop": "문서나 파일을 놓으면 어시스턴트에 첨부됩니다"
-  },
   "assistant": {
-    "title": "어시스턴트",
+    "title": "AI 어시스턴트",
     "new_chat": "새 대화",
     "scope": {
       "label": "범위",
       "all": "전체",
-      "folder": "현재 폴더",
+      "project": "현재 프로젝트",
       "selection": "선택 문서",
-      "knowledge": "지식 베이스",
-      "collection": "컬렉션: {{name}}",
-      "folder_named": "현재 폴더 {{folder}}",
       "selection_count": "선택 문서 {{count}}건",
       "document": "현재 문서",
       "document_named": "현재 문서: {{name}}",
@@ -288,11 +242,15 @@
       "project_clear": "프로젝트 컨텍스트 해제",
       "attached": "첨부 문서 {{count}}개"
     },
+    "evidence": {
+      "toggle": "근거만 찾기",
+      "hint": "모델을 부르지 않고 문서에서 일치하는 근거(문단)만 찾아 보여줍니다. 범위 선택이 그대로 적용됩니다."
+    },
     "placeholder": "자연어로 명령하거나 질문하세요 (한국어 / English) · /로 슬래시 명령",
     "send": "보내기",
     "empty": "무엇을 도와드릴까요? 예시를 눌러 시작해 보세요.",
     "help_title": "도움말",
-    "help_body": "자연어로 명령하면 플랜 카드(단계 · 영향 범위 · 미리보기)를 만들고 승인 후 실행합니다. 예: inbox 처리, 지난달 영수증 합계, 세금계산서 → 엑셀, 영수증 월별 폴더로 옮겨, 선택 문서 요약, 방금 이름 바꾼 거 되돌려. 바로 실행되는 명령: /테마 다크|라이트|시스템|고대비, /언어 한국어|영어, /열기 <화면>, /작업 일시정지, /되돌리기. 질문하면 지식 베이스에서 근거를 찾아 문장별 출처와 함께 답합니다. Ctrl+Enter 승인 · Esc 취소 · Ctrl+Z 되돌리기.",
+    "help_body": "자연어로 명령하면 플랜 카드(단계 · 영향 범위 · 미리보기)를 만들고 승인 후 실행합니다. 예: inbox 처리, 지난달 영수증 합계, 세금계산서 → 엑셀, 영수증 월별 폴더로 옮겨, 선택 문서 요약, 방금 이름 바꾼 거 되돌려. 바로 실행되는 명령: /테마 다크|라이트|시스템|고대비, /언어 한국어|영어, /열기 <화면>, /작업 일시정지, /되돌리기. 질문하면 참고 자료에서 근거를 찾아 문장별 출처와 함께 답합니다. Ctrl+Enter 승인 · Esc 취소 · Ctrl+Z 되돌리기.",
     "executed": "실행했습니다",
     "date_resolved": "날짜 범위 해석: {{from}} ~ {{to}} ({{label}})",
     "source_slash": "슬래시 명령",
@@ -310,14 +268,14 @@
       "영어로 바꿔줘",
       "/열기 모델"
     ],
-    "qa_hint": "질문하면 지식 베이스에서 근거를 찾아 문장별 출처와 함께 답합니다.",
+    "qa_hint": "질문하면 참고 자료에서 근거를 찾아 문장별 출처와 함께 답합니다.",
     "planning": "해석 중…",
     "attachments": {
       "label": "첨부 문서",
       "count": "첨부 문서 {{count}}개",
       "clear": "첨부 모두 지우기",
       "remove": "첨부 제거: {{name}}",
-      "hint": "라이브러리 문서를 끌어오거나 파일을 놓으면 질문과 명령의 범위가 됩니다",
+      "hint": "문서함 문서를 끌어오거나 파일을 놓으면 질문과 명령의 범위가 됩니다",
       "drop": "문서나 파일을 놓아 첨부",
       "added": "{{count}}개 문서를 첨부했습니다"
     },
@@ -414,7 +372,7 @@
       "schema_auto": "자동(유형별 스키마)",
       "fields": "필드 {{count}}개",
       "all_fields": "전체 필드",
-      "review_show": "검토 큐 보기",
+      "review_show": "검토함 보기",
       "review_approve": "일괄 승인",
       "review_reject": "일괄 거부",
       "review_correct": "수정",
@@ -464,8 +422,8 @@
       "sources": "인용 문서 {{count}}건",
       "current_document": "현재 문서",
       "current_project": "현재 프로젝트",
-      "explain_scope_kb": "지식 베이스",
-      "explain_scope_collection": "컬렉션",
+      "explain_scope_kb": "참고 자료",
+      "explain_scope_collection": "참고 자료 묶음",
       "explain_scope_project": "프로젝트",
       "explain_scope_document": "문서",
       "allow_general": "일반 지식 허용",
@@ -542,7 +500,7 @@
         "to": "대상",
         "status": "상태"
       },
-      "impact_draft": "문서 초안 {{count}}건(문서 생성 화면에서 저장)",
+      "impact_draft": "문서 초안 {{count}}건(문서 작성 화면에서 저장)",
       "impact_project": "프로젝트·규칙 변경 {{count}}건",
       "retention_shorter": "보존 기간이 짧아집니다 — 기간이 지난 데이터는 다음 파기 작업에서 삭제됩니다.",
       "rule_description": "규칙: {{description}}",
@@ -577,7 +535,7 @@
         "ui": "UI에서 처리",
         "cancelled": "취소됨"
       },
-      "open_review": "검토 큐 열기({{count}})",
+      "open_review": "검토함 열기({{count}})",
       "moves": "이동 내역",
       "undo": "↶ 되돌리기",
       "undone": "{{restored}}건 되돌림 (불가 {{skipped}}건)",
@@ -628,7 +586,7 @@
       "fallback": "무엇을 할까요? 명령을 조금 더 구체적으로 말해 주세요.",
       "no_model": "플래너 모델이 로드되지 않아 해석할 수 없습니다. 모델을 로드하거나 상단의 해석 방식을 '규칙'으로 바꾸세요.",
       "load_model": "모델 로드 ({{model}})",
-      "open_models": "모델 관리자 열기",
+      "open_models": "AI 모델 설정 열기",
       "loading": "모델을 로드하는 중…",
       "retry_hint": "되묻기와 취소는 즉시 처리되고, 그 밖의 문장은 모델이 해석합니다.",
       "ask_back": "되묻기",
@@ -661,7 +619,7 @@
     }
   },
   "models": {
-    "title": "모델 관리자",
+    "title": "AI 모델 설정",
     "hardware": "하드웨어 감지",
     "tier": "티어",
     "tier_mode": "티어 산정",
@@ -670,6 +628,11 @@
     "active_model": "활성 모델",
     "active_auto": "자동 (티어 권장 모델)",
     "recommended": "권장",
+    "recommended_card": "추천 모델",
+    "recommended_hint": "이 PC에 맞는 모델이 자동으로 선택됩니다. 받기 또는 불러오기만 하면 됩니다.",
+    "primary_hint": "문서를 읽는 AI 모델입니다. 드롭인 폴더의 모델은 자동으로 감지됩니다.",
+    "advanced": "고급",
+    "advanced_hint": "엔진 상세 · 하드웨어 · 수동 티어 · 발견된 모델 · 레지스트리",
     "registry": "모델 레지스트리",
     "columns": {
       "model": "모델",
@@ -705,7 +668,7 @@
       "already": "같은 파일이 이미 대상 폴더에 있습니다.",
       "plan": "검증",
       "run": "가져오기 실행",
-      "started": "가져오기를 시작했습니다. 작업 화면에서 진행률을 확인하세요."
+      "started": "가져오기를 시작했습니다. 작업 현황에서 진행률을 확인하세요."
     },
     "activate": "활성화",
     "p1_hint": "P1 단계에서 제공",
@@ -738,7 +701,7 @@
     "user_added": "사용자 추가",
     "download_hint": "Hugging Face에서 받아 SHA-256으로 검증합니다.",
     "download_disabled": "설정에서 온라인 다운로드가 꺼져 있습니다.",
-    "download_started": "다운로드를 시작했습니다. 작업 화면에서 진행률을 확인하세요.",
+    "download_started": "다운로드를 시작했습니다. 작업 현황에서 진행률을 확인하세요.",
     "hash_started": "해시 계산을 시작했습니다.",
     "load_started": "모델 로드를 시작했습니다.",
     "delete_confirm": "'{{folder}}' 폴더와 그 안의 모델 파일을 삭제할까요? 되돌릴 수 없습니다.",
@@ -849,15 +812,16 @@
     "title": "설정",
     "tabs": {
       "general": "일반",
-      "theme": "테마",
       "workspace": "워크스페이스",
       "processing": "처리",
-      "privacy": "프라이버시 · 보존",
-      "shortcuts": "단축키",
-      "about": "정보",
-      "knowledge": "지식 베이스"
+      "models": "AI 모델",
+      "schemas": "양식·추출 항목",
+      "reference": "참고 자료",
+      "privacy": "프라이버시 · 보존"
     },
     "general": {
+      "advanced": "고급",
+      "advanced_hint": "AI 어시스턴트의 해석 방식처럼 평소에는 바꿀 일이 없는 설정입니다.",
       "language": "언어",
       "language_hint": "UI와 명령 모두 한국어가 기본이며 영어도 사용할 수 있습니다.",
       "scale": "UI 배율",
@@ -899,13 +863,13 @@
       },
       "render_dpi": "기본 렌더 DPI",
       "review_threshold": "검토 임계치",
-      "review_threshold_hint": "이 신뢰도 미만 필드는 검토 큐로 보냅니다.",
+      "review_threshold_hint": "이 신뢰도 미만 필드는 검토함으로 보냅니다.",
       "review_threshold_scope": "새로 추출하는 문서와 필드 탭의 '검증 다시 실행'에 적용됩니다. 이미 추출된 문서의 검토 표시는 그대로입니다.",
       "audit_sample": "고신뢰 필드 무작위 감사 비율",
       "organize_reviewed_only": "검토 완료 문서만 정리/이동",
       "inbox_watch": "inbox 폴더 감시",
       "cache": "페이지 캐시 상한",
-      "hint": "가져온 문서를 어디까지 자동 처리할지, 검토 큐 기준과 추출 옵션을 정합니다.",
+      "hint": "가져온 문서를 어디까지 자동 처리할지, 검토함 기준과 추출 옵션을 정합니다.",
       "inbox_auto_level": "inbox 감시 자동 처리",
       "ocr_digital_pdf": "텍스트 레이어가 있어도 OCR 실행",
       "ocr_digital_pdf_hint": "기본은 디지털 PDF의 텍스트 레이어를 그대로 사용합니다(§3.4 하이브리드).",
@@ -915,7 +879,11 @@
       "precise_hint": "두 번째 샘플(T=0.3)과 값이 다르면 신뢰도를 낮춥니다. 시간 ×1.5~2.",
       "dense_reocr": "밀집 페이지 잔글씨 재OCR",
       "dense_reocr_hint": "표 셀이 {{cells}}개 이상인 페이지는 잔글씨 예산으로 한 번 더 OCR합니다.",
-      "dense_cells": "밀집 페이지 기준 표 셀 수"
+      "dense_cells": "밀집 페이지 기준 표 셀 수",
+      "maintenance": "문서함 점검",
+      "maintenance_hint": "문서함 폴더를 다시 검사하거나 모든 문서의 페이지 이미지를 다시 만듭니다. 문서함의 우클릭 메뉴에서도 할 수 있습니다.",
+      "rerender_all": "모든 문서 다시 렌더",
+      "rerender_all_confirm": "문서 {{count}}개의 페이지 이미지를 다시 만듭니다. 시간이 걸릴 수 있습니다. 계속할까요?"
     },
     "privacy": {
       "pii_masking": "고유식별정보 마스킹 저장",
@@ -972,6 +940,7 @@
       }
     },
     "shortcuts": {
+      "title": "단축키",
       "action": "동작",
       "keys": "키",
       "hint": "단축키 편집은 다음 단계에서 제공됩니다. 한글 입력 조합 중에는 Enter가 무시됩니다.",
@@ -992,13 +961,14 @@
         "zoom_reset": "원래 크기",
         "ui_scale_up": "UI 배율 키우기",
         "ui_scale_down": "UI 배율 줄이기",
-        "go_home": "홈으로",
-        "go_library": "라이브러리로",
+        "go_home": "처음 화면(문서함)으로",
+        "go_library": "문서함으로",
         "go_assistant": "어시스턴트로",
         "go_settings": "설정으로"
       }
     },
     "about": {
+      "title": "정보",
       "version": "버전",
       "settings_path": "설정 파일",
       "app_data": "앱 데이터 폴더",
@@ -1010,8 +980,8 @@
       "font": "글꼴: Pretendard Variable (OFL-1.1, 원본 파일 동봉)"
     },
     "knowledge": {
-      "title": "지식 베이스",
-      "hint": "청킹·색인·임베딩과 근거 기반 답변의 기본값입니다.",
+      "title": "참고 자료 (고급)",
+      "hint": "청킹·색인·임베딩과 근거 기반 답변의 기본값입니다. 묶음과 문서는 프로젝트 화면의 공통 참고 자료에서 다룹니다.",
       "auto_index": "가져온 문서 자동 색인",
       "auto_index_hint": "가져오기·재검사·재렌더 후 변경된 문서를 자동으로 청킹합니다.",
       "auto_embed": "임베딩 자동 생성",
@@ -1029,8 +999,8 @@
       "min_similarity_hint": "키워드 일치가 없고 임베딩 유사도만 있는 청크는 이 값 이상일 때만 근거로 씁니다(EmbeddingGemma 2 기준 0.5 — 사용자 PC에서 조정)."
     },
     "generation": {
-      "title": "문서 생성",
-      "hint": "문서 생성의 응답 토큰 상한입니다. 상한을 넘는 요청은 상한으로 줄어들고, 약 3,000 토큰을 넘는 예산은 개요 → 절별로 나눠 생성합니다.",
+      "title": "문서 작성",
+      "hint": "문서 작성의 응답 토큰 상한입니다. 상한을 넘는 요청은 상한으로 줄어들고, 약 3,000 토큰을 넘는 예산은 개요 → 절별로 나눠 생성합니다.",
       "max_tokens_gpu": "GPU(CUDA·Vulkan) 토큰 상한",
       "max_tokens_gpu_hint": "기본 32,768 · 최대 65,536",
       "max_tokens_cpu": "CPU 전용 토큰 상한",
@@ -1070,8 +1040,8 @@
       "no_files": "파일을 선택하거나 경로를 입력하세요.",
       "no_documents": "선택한 문서가 없습니다.",
       "rotation": "회전 각도는 90도 단위여야 합니다.",
-      "collection_name_taken": "같은 이름의 컬렉션이 이미 있습니다.",
-      "collection_name_empty": "컬렉션 이름을 입력하세요.",
+      "collection_name_taken": "같은 이름의 참고 자료 묶음이 이미 있습니다.",
+      "collection_name_empty": "참고 자료 묶음 이름을 입력하세요.",
       "glossary_term_empty": "용어를 입력하세요.",
       "version_group_empty": "버전 그룹 이름을 입력하세요.",
       "no_active_model": "엔진에 로드된 모델이 없습니다. 모델 화면에서 모델을 로드한 뒤 다시 시도하세요.",
@@ -1079,7 +1049,7 @@
       "no_text": "텍스트가 없는 문서입니다. '처리 ▸ 분류 + OCR'로 OCR을 실행한 뒤 다시 시도하세요.",
       "document_id_required": "문서를 먼저 선택하세요.",
       "glossary_term_taken": "같은 용어가 이미 있습니다.",
-      "collection_not_found": "컬렉션을 찾을 수 없습니다(삭제되었을 수 있습니다).",
+      "collection_not_found": "참고 자료 묶음을 찾을 수 없습니다(삭제되었을 수 있습니다).",
       "document_not_found": "문서를 찾을 수 없습니다.",
       "feedback_invalid": "피드백 값이 올바르지 않습니다.",
       "schema_name_duplicate": "같은 이름의 스키마가 이미 있습니다. 다른 이름을 입력하세요.",
@@ -1110,13 +1080,14 @@
     "settings_partial": "설정 파일의 일부 항목({{sections}})이 잘못되어 해당 항목만 기본값으로 되돌렸습니다."
   },
   "jobs": {
-    "title": "작업",
+    "title": "작업 현황",
     "clear_finished": "완료 항목 지우기",
     "tabs": {
       "queued": "대기",
       "active": "진행 중",
       "finished": "완료",
-      "failed": "실패"
+      "failed": "실패",
+      "history": "정리 이력"
     },
     "empty": "진행 중인 작업이 없습니다.",
     "empty_finished": "완료된 작업이 없습니다.",
@@ -1128,7 +1099,7 @@
       "model_download": "모델 다운로드",
       "model_hash": "해시 검증",
       "document_import": "문서 가져오기",
-      "document_rescan": "라이브러리 검사",
+      "document_rescan": "문서함 검사",
       "document_render": "페이지 렌더",
       "knowledge_index": "지식 색인",
       "knowledge_embed": "임베딩 생성",
@@ -1157,7 +1128,7 @@
       "files": "파일 {{count}}개",
       "documents": "문서 {{count}}개",
       "inbox": "inbox 폴더",
-      "library": "라이브러리",
+      "library": "문서함",
       "engine": "엔진",
       "entries": "항목 {{count}}개"
     },
@@ -1225,12 +1196,12 @@
     "result_loading": "결과 불러오는 중…"
   },
   "library": {
-    "title": "문서 라이브러리",
+    "title": "문서함",
     "import": "가져오기",
     "inbox_watch": "inbox 감시",
     "inbox_watch_hint": "inbox/ 폴더에 넣은 파일을 자동으로 가져옵니다.",
     "rescan": "다시 검사",
-    "rescan_started": "라이브러리를 다시 검사합니다.",
+    "rescan_started": "문서함을 다시 검사합니다.",
     "search_placeholder": "파일명·제목 검색",
     "view_grid": "그리드",
     "view_list": "리스트",
@@ -1260,10 +1231,9 @@
       "select_all": "모두 선택",
       "delete_title": "문서 삭제",
       "open_doc": "문서 열기",
-      "add_to_kb": "지식 베이스에 추가",
+      "put_in_project": "프로젝트에 넣기",
       "register_form": "선택 문서로 양식 만들기",
-      "merge": "병합",
-      "classify": "프로젝트로 분류"
+      "merge": "병합"
     },
     "columns": {
       "name": "이름",
@@ -1289,19 +1259,36 @@
       "name_desc": "이름 역순",
       "size_desc": "큰 파일 순"
     },
-    "rescan_running": "라이브러리 검사가 이미 진행 중입니다.",
+    "rescan_running": "문서함 검사가 이미 진행 중입니다.",
     "list_label": "문서 목록",
     "grid_label": "문서 카드",
     "import_existing_hint": "워크스페이스 폴더 전체를 검사해 미리보기를 엽니다(.doculens 제외).",
-    "role_knowledge": "지식",
+    "role_knowledge": "참고 자료",
+    "role_work": "업무 문서",
     "kb_added": "{{count}}개 문서를 '{{name}}'에 추가했습니다.",
     "kb_added_one": "{{count}}개 문서를 '{{name}}'에 추가했습니다.",
     "review_pending": "검토 대기",
-    "review_open": "검토 큐에서 보기: {{name}}",
+    "review_open": "검토함에서 보기: {{name}}",
     "process_started": "처리 작업을 시작했습니다.",
     "organize_selected": "정리…",
     "export_selected": "내보내기…",
-    "drag_hint": "카드를 끌어 어시스턴트·지식·프로젝트·문서 생성 화면이나 왼쪽 메뉴에 놓을 수 있습니다"
+    "drag_hint": "카드를 끌어 AI 어시스턴트·프로젝트·문서 작성 화면이나 왼쪽 메뉴(문서함·프로젝트·문서 작성)에 놓을 수 있습니다",
+    "context_menu": "문서함 메뉴",
+    "today": {
+      "title": "오늘 할 일",
+      "workspace": "워크스페이스: {{path}}",
+      "no_workspace": "워크스페이스를 먼저 열어주세요.",
+      "inbox": "받은 문서함 {{count}}건",
+      "new": "신규 {{count}}",
+      "processing": "처리 중 {{count}}",
+      "review": "검토 대기 {{count}}",
+      "done": "완료 {{count}}",
+      "review_fields": "검토 대기 항목 {{count}}개 → 검토함",
+      "engine": "AI 엔진",
+      "engine_open": "설정 > AI 모델 열기",
+      "recent": "최근 문서",
+      "recent_empty": "아직 문서가 없습니다. 가져오기를 누르거나 inbox/ 폴더에 넣으세요."
+    }
   },
   "documents": {
     "status": {
@@ -1395,7 +1382,7 @@
     },
     "truncated": "파일이 너무 많아 처음 5,000개만 표시합니다.",
     "nothing": "가져올 새 파일이 없습니다.",
-    "started": "가져오기 작업을 시작했습니다. 작업 화면에서 진행률을 볼 수 있습니다.",
+    "started": "가져오기 작업을 시작했습니다. 작업 현황에서 진행률을 볼 수 있습니다.",
     "no_paths": "파일을 선택하거나 경로를 입력하세요.",
     "filter_name": "문서 파일",
     "previewing": "파일을 검사하는 중…",
@@ -1408,7 +1395,7 @@
     "eta_short": "예상 소요 1분 미만 (모델 로드 제외)"
   },
   "viewer": {
-    "back": "라이브러리",
+    "back": "문서함",
     "page": "{{page}} / {{total}}",
     "prev": "이전 쪽",
     "next": "다음 쪽",
@@ -1458,7 +1445,7 @@
     "thumb_label": "{{page}}쪽으로 이동",
     "toolbar": "문서 도구",
     "kb_badge": "지식",
-    "add_to_kb": "지식 베이스에 추가",
+    "add_to_kb": "참고 자료에 추가",
     "explain": "설명",
     "explain_shortcut": "Ctrl+E",
     "highlight": "검색어 강조: {{q}}",
@@ -1470,7 +1457,7 @@
       "history": "이 문서의 답변",
       "none": "아직 질문이 없습니다.",
       "scope_doc": "이 문서",
-      "scope_kb": "지식 베이스 전체"
+      "scope_kb": "참고 자료 전체"
     },
     "summary": {
       "title": "요약",
@@ -1526,7 +1513,7 @@
     },
     "confidence_badge": "신뢰도 {{value}}",
     "type_changed_title": "새 유형으로 다시 추출",
-    "type_changed": "유형을 바꿨습니다. 새 유형의 스키마로 다시 추출할까요?",
+    "type_changed": "유형을 바꿨습니다. 새 유형의 추출 항목으로 다시 추출할까요?",
     "reextract": "다시 추출",
     "ocr_badge": "OCR",
     "image_failed": "페이지 이미지를 불러오지 못했습니다. 캐시에서 지워진 페이지는 다시 렌더하면 복구됩니다.",
@@ -1573,7 +1560,7 @@
   },
   "answer": {
     "sources": "근거",
-    "no_evidence": "지식 베이스에 근거가 없습니다.",
+    "no_evidence": "참고 자료에 근거가 없습니다.",
     "ask_general": "일반 지식으로 답하기",
     "general_badge": "일반 지식",
     "conflicts": "상충",
@@ -1604,20 +1591,15 @@
     "text_only_hint": "보내 주신 글만으로 답했습니다. 문서를 찾거나 인용하지 않았습니다."
   },
   "search": {
-    "title": "검색",
-    "placeholder": "검색어 (예: 출장비 한도, 123-45-67890)",
-    "run": "검색",
+    "title": "근거",
+    "placeholder": "찾을 말 (예: 출장비 한도, 123-45-67890) · 모델을 부르지 않고 일치하는 문단만 찾습니다",
+    "run": "찾기",
+    "searching": "근거를 찾는 중…",
     "mode": {
       "label": "방식",
       "hybrid": "하이브리드",
       "keyword": "키워드",
       "semantic": "의미"
-    },
-    "scope": {
-      "label": "범위",
-      "all": "전체 문서",
-      "knowledge": "지식 베이스",
-      "collection": "컬렉션: {{name}}"
     },
     "results": "{{count}}건 · {{ms}}ms",
     "no_results": "검색 결과가 없습니다.",
@@ -1639,16 +1621,8 @@
     "results_one": "{{count}}건 · {{ms}}ms"
   },
   "knowledge": {
-    "title": "지식 베이스",
-    "subtitle": "규정·지침·과거 문서를 적재하고 근거 기반으로 답합니다.",
-    "tabs": {
-      "overview": "개요",
-      "collections": "컬렉션",
-      "versions": "버전",
-      "glossary": "용어집",
-      "test": "질문 테스트",
-      "answers": "답변 기록"
-    },
+    "title": "참고 자료",
+    "subtitle": "규정·지침·과거 문서를 묶음으로 넣어 두면 질문·검색·문서 작성의 근거로 씁니다.",
     "status": {
       "title": "색인 상태",
       "documents": "문서",
@@ -1658,8 +1632,8 @@
       "failed": "실패",
       "chunks": "청크",
       "embedded": "임베딩됨",
-      "knowledge_docs": "지식 문서",
-      "collections": "컬렉션",
+      "knowledge_docs": "참고 자료",
+      "collections": "참고 자료 묶음",
       "glossary_terms": "용어",
       "answers": "답변",
       "helpful": "도움됨",
@@ -1679,7 +1653,7 @@
     "embedding": {
       "label": "임베딩 모델",
       "none": "레지스트리에 임베딩 모델이 없습니다.",
-      "not_installed": "임베딩 모델({{model}})이 설치되지 않아 키워드 검색만 사용합니다. 모델 화면에서 설치하세요.",
+      "not_installed": "임베딩 모델({{model}})이 설치되지 않아 키워드 검색만 사용합니다. 설정 > AI 모델에서 설치하세요.",
       "not_loaded": "임베딩 모델({{model}})이 설치되어 있습니다. 실행하면 엔진에 로드하고 청크를 임베딩합니다.",
       "ready": "임베딩 모델({{model}}) 사용 가능",
       "progress": "{{embedded}} / {{total}} 청크 임베딩됨",
@@ -1689,7 +1663,7 @@
       "reset_done": "임베딩을 초기화했습니다."
     },
     "actions": {
-      "ingest": "적재 마법사",
+      "ingest": "파일에서 가져오기",
       "index": "색인 갱신",
       "reindex": "전체 재색인",
       "index_started": "색인을 시작했습니다.",
@@ -1699,60 +1673,33 @@
       "reindex_confirm": "모든 문서를 다시 청킹·색인할까요? 기존 임베딩은 지워지고 다시 계산됩니다."
     },
     "collections": {
-      "title": "컬렉션",
-      "new": "새 컬렉션",
-      "edit": "편집",
-      "name": "이름",
-      "description": "설명",
-      "active": "활성",
-      "inactive": "비활성",
-      "docs_count": "문서 {{count}}",
-      "chunks_count": "청크 {{count}}",
-      "empty": "컬렉션이 없습니다. 적재 마법사로 규정·지침을 넣어 보세요.",
-      "delete": "삭제",
-      "delete_confirm": "컬렉션 '{{name}}'을(를) 삭제할까요? 문서는 라이브러리에 남습니다.",
-      "save": "저장",
-      "cancel": "취소",
-      "docs_title": "컬렉션 문서",
-      "remove_doc": "제거",
-      "no_docs": "이 컬렉션에 문서가 없습니다.",
-      "select": "컬렉션 선택",
-      "add_title": "지식 베이스에 추가",
-      "add_hint": "선택한 {{count}}개 문서를 컬렉션에 추가하고 지식 문서로 표시합니다.",
-      "create_inline": "새 컬렉션 만들기",
-      "name_placeholder": "예: 사내 규정",
-      "saved": "컬렉션을 저장했습니다.",
-      "deleted": "컬렉션을 삭제했습니다.",
-      "open_doc": "문서 열기",
-      "docs_count_one": "문서 {{count}}",
-      "chunks_count_one": "청크 {{count}}",
-      "drop_hint": "문서나 파일을 놓으면 이 컬렉션에 추가됩니다",
-      "drop_add": "{{name}}에 추가",
-      "pending_title": "놓은 문서 {{count}}개를 컬렉션에 추가"
+      "create_inline": "새 묶음 만들기",
+      "docs_count": "문서 {{count}}"
     },
     "wizard": {
-      "title": "지식 적재 마법사",
+      "title": "참고 자료 가져오기",
       "step_files": "1. 파일·폴더",
-      "step_collection": "2. 컬렉션·옵션",
+      "step_collection": "2. 묶음·옵션",
       "step_preview": "3. 미리보기",
       "paths_hint": "파일이나 폴더 경로를 한 줄에 하나씩 입력하거나 선택기를 사용하세요. 폴더는 하위 폴더까지 포함합니다.",
       "pick_files": "파일 선택",
       "pick_folder": "폴더 선택",
       "next": "다음",
       "back": "이전",
-      "start": "적재 시작",
-      "started": "적재를 시작했습니다. 가져오기 → 청킹 → 색인이 백그라운드에서 진행됩니다.",
-      "collection_label": "컬렉션",
-      "new_collection_name": "새 컬렉션 이름",
+      "start": "가져오기 시작",
+      "started": "가져오기를 시작했습니다. 가져오기 → 청킹 → 색인이 백그라운드에서 진행됩니다.",
+      "collection_label": "묶음",
+      "new_collection_name": "새 묶음 이름",
       "render_label": "페이지 렌더(썸네일·뷰어)",
       "move_label": "원본 파일을 워크스페이스로 이동",
       "preview": "미리보기",
       "previewing": "파일을 확인하는 중…",
       "summary": "신규 {{new}} · 다시 연결 {{relink}} · 중복 {{dup}} · 이미 등록 {{registered}} · 미지원 {{unsupported}}",
-      "nothing": "적재할 새 파일이 없습니다(이미 등록된 문서는 컬렉션에만 추가됩니다).",
-      "role_hint": "적재한 문서는 '지식' 역할로 표시되고 검색·답변의 근거로 사용됩니다.",
+      "nothing": "가져올 새 파일이 없습니다(이미 등록된 문서는 묶음에만 추가됩니다).",
+      "role_hint": "가져온 문서는 '참고 자료' 역할로 표시되고 질문·검색·문서 작성의 근거로 사용됩니다.",
       "steps_label": "단계",
-      "drop_hint": "파일이나 폴더를 여기에 끌어다 놓아도 됩니다"
+      "drop_hint": "파일이나 폴더를 여기에 끌어다 놓아도 됩니다",
+      "locked_label": "넣을 묶음"
     },
     "versions": {
       "title": "문서 버전",
@@ -1795,6 +1742,18 @@
       "title": "답변 기록",
       "empty": "저장된 답변이 없습니다.",
       "stats": "도움됨 {{helpful}} · 틀림 {{wrong}}"
+    },
+    "advanced": {
+      "title": "참고 자료(고급)",
+      "hint": "색인·임베딩 상태와 문서 버전·용어집·질문 테스트·답변 기록입니다. 묶음과 문서는 프로젝트 화면의 공통 참고 자료와 각 프로젝트의 참고 자료 탭에서 관리합니다.",
+      "open_common": "공통 참고 자료 열기",
+      "index": "색인 상태",
+      "embedding": "임베딩",
+      "tokenizer": "형태소 분석기",
+      "versions": "문서 버전",
+      "glossary": "용어집",
+      "test": "질문 테스트",
+      "answers": "답변 기록"
     }
   },
   "pipeline": {
@@ -1817,9 +1776,9 @@
       "engine_off": "엔진이 꺼져 있어 자동 처리를 건너뛰었습니다. 엔진을 시작하거나 설정에서 엔진 자동 시작을 켜세요.",
       "model_ready": "비전 모델 {{model}} 준비됨",
       "model_not_loaded": "비전 모델 {{model}}이(가) 로드되지 않았습니다. 처리 시작 시 자동으로 로드합니다.",
-      "model_none": "비전 모델이 없습니다. 모델 관리자에서 모델을 설치하세요.",
+      "model_none": "비전 모델이 없습니다. AI 모델 설정에서 모델을 설치하세요.",
       "confirm_title": "기존 추출 결과 대체",
-      "confirm_body": "이미 추출된 문서 {{count}}건의 결과를 새 실행으로 대체합니다. 이전 실행의 승인·수정 내역은 이력 탭에 남지만, 필드 탭과 검토 큐는 새 결과 기준으로 바뀝니다.",
+      "confirm_body": "이미 추출된 문서 {{count}}건의 결과를 새 실행으로 대체합니다. 이전 실행의 승인·수정 내역은 이력 탭에 남지만, 필드 탭과 검토함은 새 결과 기준으로 바뀝니다.",
       "confirm_ok": "새로 추출"
     },
     "status": {
@@ -1883,7 +1842,7 @@
     },
     "merge": {
       "title": "문서 병합",
-      "hint": "선택한 {{count}}개 문서를 라이브러리 순서대로 하나의 PDF로 합칩니다. 원본은 그대로 둡니다.",
+      "hint": "선택한 {{count}}개 문서를 문서함 순서대로 하나의 PDF로 합칩니다. 원본은 그대로 둡니다.",
       "name": "파일 이름(선택)",
       "run": "병합",
       "started": "병합 작업을 시작했습니다.",
@@ -1893,16 +1852,16 @@
     }
   },
   "schemas": {
-    "title": "추출 스키마 / 양식",
+    "title": "양식·추출 항목",
     "subtitle": "등록한 양식과 내장 샘플 양식이 문서 유형과 추출 필드를 정의합니다.",
     "list": {
-      "user": "등록 양식·사용자 스키마",
+      "user": "등록 양식·사용자 추출 항목",
       "builtin": "내장 샘플 양식",
       "empty": "아직 등록한 양식이 없습니다. '양식 등록'이나 '자연어로 만들기'로 시작하세요.",
       "disabled": "사용 안 함",
       "hidden": "숨긴 기본 양식 {{count}}개 — 0.2 이전의 세금계산서·영수증 등. 켜면 다시 분류·추출에 쓰입니다."
     },
-    "new": "새 스키마",
+    "new": "새 추출 항목",
     "nl_create": "자연어로 만들기",
     "nl_modify": "자연어로 수정",
     "register_form": "양식 등록",
@@ -1919,6 +1878,7 @@
     "uses": "사용 {{count}}회",
     "pending_hint": "모델 결과를 기다리는 중입니다. 취소하면 도착하는 결과는 무시됩니다.",
     "editor": {
+      "helpers": "편집기 도구:",
       "name": "이름(한국어)",
       "name_en": "이름(영어)",
       "doc_type": "유형 슬러그",
@@ -1941,30 +1901,30 @@
       "up": "위로",
       "down": "아래로",
       "save": "저장",
-      "saved": "스키마를 저장했습니다.",
-      "registered": "양식을 등록했습니다. 분류 유형과 추출 스키마에 반영됩니다.",
+      "saved": "추출 항목을 저장했습니다.",
+      "registered": "양식을 등록했습니다. 분류 유형과 추출 항목에 반영됩니다.",
       "lint_ok": "문법 검사 통과(GBNF 변환 가능)",
       "lint_errors": "오류 {{count}}건",
       "lint_warnings": "경고 {{count}}건",
       "delete": "삭제",
-      "delete_confirm": "스키마 '{{name}}'을(를) 삭제할까요? 이미 추출된 결과는 남습니다.",
-      "deleted": "스키마를 삭제했습니다.",
+      "delete_confirm": "추출 항목 '{{name}}'을(를) 삭제할까요? 이미 추출된 결과는 남습니다.",
+      "deleted": "추출 항목을 삭제했습니다.",
       "versions": "변경 이력",
       "no_versions": "이전 버전이 없습니다.",
       "restore_version": "이 버전 불러오기",
       "note": "변경 메모(선택)",
       "duplicate": "복제",
       "test": "샘플 문서로 테스트",
-      "test_hint": "이 스키마로 선택한 문서를 추출합니다(채움률은 뷰어 필드 탭에서 확인).",
+      "test_hint": "이 추출 항목으로 선택한 문서를 추출합니다(채움률은 뷰어 필드 탭에서 확인).",
       "test_started": "테스트 추출을 시작했습니다.",
       "test_pick": "문서 선택",
       "open_form_doc": "양식 문서 열기",
-      "new_draft": "새 스키마(미저장)",
+      "new_draft": "새 추출 항목(미저장)",
       "unsaved": "저장되지 않은 변경이 있습니다.",
       "discard": "버리기",
       "discard_confirm": "저장되지 않은 변경이 있습니다. 버리고 계속할까요?",
       "duplicate_name": "{{name}} (복제)",
-      "name_taken": "같은 이름의 스키마가 이미 있습니다. 다른 이름을 입력하세요."
+      "name_taken": "같은 이름의 추출 항목이 이미 있습니다. 다른 이름을 입력하세요."
     },
     "lint": {
       "fields_empty": "필드가 최소 1개 필요합니다.",
@@ -1985,15 +1945,15 @@
       "rule_unknown": "알 수 없는 규칙 '{{detail}}'은(는) 무시됩니다."
     },
     "mapping": {
-      "title": "유형 → 스키마 매핑",
-      "hint": "분류 프롬프트의 유형 enum은 사용 중인 스키마의 유형 슬러그로 구성됩니다. 등록 양식이 내장 샘플보다 우선합니다.",
+      "title": "유형 → 추출 항목 매핑",
+      "hint": "분류 프롬프트의 유형 enum은 사용 중인 추출 항목의 유형 슬러그로 구성됩니다. 등록 양식이 내장 샘플보다 우선합니다.",
       "type": "유형",
       "schema": "기본 스키마",
       "builtin": "내장",
       "user": "사용자"
     },
     "nl": {
-      "title": "자연어로 스키마 만들기",
+      "title": "자연어로 추출 항목 만들기",
       "modify_title": "'{{name}}' 자연어로 수정",
       "description": "설명",
       "placeholder": "예: 견적서. 거래처, 견적일자, 품목(품명·수량·단가·금액), 합계금액, 유효기간",
@@ -2003,16 +1963,16 @@
     },
     "form": {
       "title": "양식 등록",
-      "hint": "샘플 문서(빈 양식 또는 작성 예시)에서 입력 항목을 찾아 스키마와 문서 유형을 만듭니다. HWPX/DOCX는 표 구조에서, PDF/이미지는 비전 모델로 도출합니다.",
+      "hint": "샘플 문서(빈 양식 또는 작성 예시)에서 입력 항목을 찾아 추출 항목과 문서 유형을 만듭니다. HWPX/DOCX는 표 구조에서, PDF/이미지는 비전 모델로 도출합니다.",
       "document": "양식 문서",
-      "pick": "라이브러리에서 선택",
+      "pick": "문서함에서 선택",
       "name": "양식 이름",
       "name_hint": "비우면 문서 제목/파일명을 사용합니다.",
       "derive": "필드 도출",
       "deriving": "양식에서 필드를 찾는 중…",
       "confirm": "도출된 필드를 확인·수정한 뒤 등록하세요.",
       "register": "양식 등록",
-      "no_docs": "라이브러리에 문서가 없습니다. 먼저 양식 문서를 가져오세요.",
+      "no_docs": "문서함에 문서가 없습니다. 먼저 양식 문서를 가져오세요.",
       "drop_hint": "문서를 끌어다 놓아 양식 샘플로 선택",
       "documents_hint": "샘플 문서를 하나 이상 고르세요. 여러 개를 고르면 문서마다 필드를 찾아 하나로 병합합니다(절반 이상에 나타난 항목 채택, 모두에 있으면 필수).",
       "selected_count": "선택 {{count}}개",
@@ -2020,15 +1980,15 @@
       "cancel_job": "도출 취소",
       "job_failed": "필드 도출에 실패했습니다: {{message}}",
       "job_cancelled": "필드 도출을 취소했습니다.",
-      "job_result_missing": "도출 결과를 받지 못했습니다. 작업 화면에서 다시 열어 주세요.",
+      "job_result_missing": "도출 결과를 받지 못했습니다. 작업 현황에서 다시 열어 주세요.",
       "discovery_summary": "문서 {{docs}}개에서 필드 {{fields}}개를 병합했습니다(제외 {{dropped}}). 확인·수정한 뒤 등록하세요.",
       "source_structure": "표 구조",
       "source_model": "모델",
       "source_text": "텍스트 규칙",
       "source_failed": "실패",
       "open_in_editor": "편집기에서 열기",
-      "name_taken_title": "같은 이름의 스키마가 있습니다",
-      "name_taken_body": "'{{name}}'은(는) 이미 쓰는 이름입니다. 다른 이름으로 바꾸면 별도 스키마로 저장됩니다. 그대로 두면 저장할 수 없습니다.",
+      "name_taken_title": "같은 이름의 추출 항목이 있습니다",
+      "name_taken_body": "'{{name}}'은(는) 이미 쓰는 이름입니다. 다른 이름으로 바꾸면 별도 추출 항목으로 저장됩니다. 그대로 두면 저장할 수 없습니다.",
       "name_taken_apply": "이름 변경",
       "name_taken_keep": "그대로 두기"
     },
@@ -2039,7 +1999,7 @@
     }
   },
   "review": {
-    "title": "검토 큐",
+    "title": "검토함",
     "subtitle": "저신뢰·검증 실패·필수 누락 필드를 키보드로 빠르게 승인·수정합니다.",
     "filters": {
       "doc_type": "유형",
@@ -2082,16 +2042,17 @@
     "announce": "현재 항목 {{title}} ({{index}}/{{total}})"
   },
   "organize": {
+    "title": "정리 · 내보내기",
+    "back": "문서함으로",
     "tabs": {
       "organize": "정리",
-      "export": "내보내기",
-      "history": "이력"
+      "export": "내보내기"
     },
     "scope": {
       "title": "문서 범위",
       "mode": "범위",
       "all": "전체 문서",
-      "selection": "라이브러리 선택 {{count}}건",
+      "selection": "문서함 선택 {{count}}건",
       "folder": "폴더: {{folder}}",
       "root_folder": "(워크스페이스 루트)",
       "doc_type": "유형",
@@ -2239,7 +2200,7 @@
       "text": "본문 텍스트"
     },
     "target_hint": {
-      "fields": "추출된 필드 값(유형별 스키마 열)",
+      "fields": "추출된 필드 값(유형별 추출 항목 열)",
       "table": "OCR·텍스트 레이어에서 찾은 표",
       "text": "페이지 텍스트"
     },
@@ -2256,7 +2217,7 @@
     "only_reviewed": "검토 완료 문서만",
     "columns": {
       "title": "열",
-      "hint": "유형을 고르면 그 스키마의 필드를 선택할 수 있습니다. 선택하지 않으면 모든 필드를 내보냅니다.",
+      "hint": "유형을 고르면 그 추출 항목의 필드를 선택할 수 있습니다. 선택하지 않으면 모든 필드를 내보냅니다.",
       "all": "모두 선택",
       "none": "모두 해제",
       "common": "공통 열",
@@ -2303,48 +2264,11 @@
     "table_xlsx_exists": "같은 이름의 파일이 이미 있습니다. 내보내기 탭에서 경로를 바꾸거나 덮어쓰기를 선택하세요.",
     "table_xlsx_done": "표 XLSX 저장 완료: {{path}}"
   },
-  "aggregate": {
-    "title": "집계",
-    "field": "필드",
-    "fn_label": "함수",
-    "count": "건수",
-    "fn": {
-      "sum": "합계",
-      "count": "건수",
-      "avg": "평균",
-      "min": "최소",
-      "max": "최대"
-    },
-    "include_unreviewed": "검토 대기 포함",
-    "run": "집계",
-    "monthly": "월별",
-    "collapse": "집계 바 접기",
-    "expand": "집계 바 펼치기",
-    "count_value": "{{count}}건",
-    "reviewed": "검토 완료 {{count}}건 {{value}}",
-    "pending": "대기 {{count}}건 {{value}}",
-    "pending_excluded": "대기 {{count}}건 {{value}} 제외",
-    "reviewed_count": "검토 완료 {{count}}건",
-    "pending_count": "대기 {{count}}건",
-    "pending_count_excluded": "대기 {{count}}건 제외",
-    "missing": "값 없음 {{count}}건",
-    "group": "{{key}}: {{value}} ({{count}}건)",
-    "no_groups": "그룹이 없습니다.",
-    "empty": "집계할 문서가 없습니다.",
-    "basis": {
-      "doc_date": "문서 날짜 기준",
-      "imported_at": "가져온 날짜 기준",
-      "mixed": "문서 날짜(없으면 가져온 날짜) 기준"
-    },
-    "running": "집계 중…",
-    "scope_selection": "선택 {{count}}건",
-    "scope_type": "유형 {{type}}"
-  },
   "generate": {
-    "title": "문서 생성",
+    "title": "문서 작성",
     "new": "새로 만들기",
     "drafts": "초안 목록",
-    "open_in_generate": "문서 생성 화면에서 열기",
+    "open_in_generate": "문서 작성 화면에서 열기",
     "handoff": "생성된 초안을 열었습니다. 미리보기를 확인하고 저장하세요.",
     "form": {
       "title": "요청",
@@ -2359,7 +2283,7 @@
       "sources_hint": "선택한 문서의 추출 결과를 값과 출처로 인용합니다.",
       "pick_sources": "문서 선택…",
       "remove_source": "인용 문서 제거",
-      "use_knowledge": "지식 베이스 근거 사용",
+      "use_knowledge": "참고 자료 근거 사용",
       "tone": "어조",
       "length": "길이",
       "output": "출력 형식",
@@ -2372,7 +2296,7 @@
       "excluded_hint": "제외한 참고 문서 {{count}}건은 재생성에 반영됩니다.",
       "job_failed": "생성 실패: {{message}}",
       "job_cancelled": "생성이 취소되었습니다.",
-      "job_interrupted": "{{reason}} 작업 화면에서 다시 시도할 수 있습니다.",
+      "job_interrupted": "{{reason}} 작업 현황에서 다시 시도할 수 있습니다.",
       "job_result_missing": "초안 결과를 불러오지 못했습니다. 초안 목록에서 열 수 있습니다.",
       "drop_hint": "문서나 파일을 놓으면 원본에 추가됩니다",
       "sources_added": "원본 {{count}}개를 추가했습니다",
@@ -2435,7 +2359,7 @@
     },
     "reference_source": {
       "document": "문서",
-      "knowledge": "지식 베이스",
+      "knowledge": "참고 자료",
       "aggregate": "집계",
       "text": "텍스트"
     },
@@ -2488,18 +2412,18 @@
     },
     "save": {
       "title": "저장",
-      "hint": "워크스페이스의 documents/generated/ 아래에 저장하고 라이브러리에 '생성' 문서로 등록합니다.",
+      "hint": "워크스페이스의 documents/generated/ 아래에 저장하고 문서함에 '생성' 문서로 등록합니다.",
       "format": "형식",
       "file_name": "파일 이름",
-      "register": "라이브러리 등록",
+      "register": "문서함 등록",
       "overwrite": "같은 이름의 파일 덮어쓰기",
       "blocking_warning": "저장 전 확인이 필요한 검증 이슈가 {{count}}건 있습니다. 그대로 저장할 수 있지만 문서는 '검토 전' 상태로 남습니다.",
       "confirm": "저장",
       "saved": "저장했습니다: {{path}}",
       "open_folder": "폴더 열기",
-      "open_library": "라이브러리에서 보기",
+      "open_library": "문서함에서 보기",
       "exists": "같은 이름의 파일이 이미 있습니다. 덮어쓰기를 켜거나 파일 이름을 바꾸세요.",
-      "warning_markdown": "Markdown(.md)도 '생성' 문서로 라이브러리에 등록되어 검색·질문에 쓰입니다(텍스트 형식).",
+      "warning_markdown": "Markdown(.md)도 '생성' 문서로 문서함에 등록되어 검색·질문에 쓰입니다(텍스트 형식).",
       "saved_as": "저장했습니다 ({{format}}): {{path}}"
     },
     "drafts_list": {
@@ -2525,7 +2449,7 @@
       "meta": "필드 {{fields}} · 이슈 {{issues}} · {{source}}"
     },
     "open_busy_title": "초안 생성 진행 중",
-    "open_busy": "문서 생성 화면에서 다른 초안이 생성되는 중입니다. 지금 이 초안을 열면 진행 중인 작업의 결과는 작업 화면에서 열 수 있습니다."
+    "open_busy": "문서 작성 화면에서 다른 초안이 생성되는 중입니다. 지금 이 초안을 열면 진행 중인 작업의 결과는 작업 현황에서 열 수 있습니다."
   },
   "projects": {
     "title": "프로젝트",
@@ -2537,7 +2461,7 @@
       "kanban": "칸반"
     },
     "empty_title": "아직 프로젝트가 없습니다",
-    "empty_body": "심사 건·거래처 건·과제 단위로 문서를 묶고, 필수 서류 체크리스트와 정합성 규칙으로 검증합니다.",
+    "empty_body": "심사 건·거래처 건·과제 단위로 업무 문서와 참고 자료를 묶고, 필수 서류 체크리스트와 정합성 규칙으로 검증합니다.",
     "card": {
       "intake_no": "접수번호 {{no}}",
       "owner": "담당 {{owner}}",
@@ -2592,7 +2516,7 @@
       "checked": "검사 완료 — 통과 {{pass}} · 불일치 {{mismatch}} · 판단불가 {{undetermined}} · 누락 {{missing}}",
       "supplement": "보완요청서",
       "delete": "삭제",
-      "delete_confirm": "프로젝트 '{{name}}'을(를) 삭제할까요? 문서는 라이브러리에 남습니다.",
+      "delete_confirm": "프로젝트 '{{name}}'을(를) 삭제할까요? 참고 자료 묶음도 함께 지워지고, 문서는 문서함에 남습니다.",
       "deleted": "프로젝트를 삭제했습니다.",
       "not_found": "프로젝트를 찾을 수 없습니다.",
       "phase": "상태",
@@ -2606,11 +2530,10 @@
     },
     "tabs": {
       "documents": "문서",
+      "reference": "참고 자료",
       "rules": "규칙",
       "results": "결과",
-      "relations": "관계",
-      "report": "리포트",
-      "settings": "정리·내보내기"
+      "settings": "설정"
     },
     "documents": {
       "checklist": "필수 서류 체크리스트",
@@ -2618,10 +2541,10 @@
       "missing": "누락",
       "present": "{{count}}건",
       "extra": "추가",
-      "add": "라이브러리에서 추가",
+      "add": "문서함에서 고르기",
       "remove": "프로젝트에서 제외",
       "open": "열기",
-      "empty": "프로젝트에 문서가 없습니다. 라이브러리에서 추가하세요.",
+      "empty": "업무 문서가 없습니다. 문서함에서 고르거나 파일을 끌어다 놓으세요.",
       "columns": {
         "name": "문서",
         "type": "유형",
@@ -2631,13 +2554,13 @@
         "actions": "동작",
         "path": "경로"
       },
-      "add_title": "문서 추가",
-      "add_hint": "라이브러리의 문서를 프로젝트에 넣습니다. 유형이 분류된 문서는 체크리스트에 반영됩니다.",
+      "add_title": "업무 문서 추가",
+      "add_hint": "문서함의 문서를 이 프로젝트의 업무 문서로 넣습니다. 유형이 분류된 문서는 체크리스트에 반영됩니다.",
       "add_done": "추가 ({{count}})",
       "added": "문서 {{count}}건을 추가했습니다.",
       "search": "문서 검색…",
       "none": "추가할 문서가 없습니다.",
-      "drop_hint": "라이브러리 문서나 파일을 끌어다 놓아 추가",
+      "drop_hint": "문서함 문서나 파일을 끌어다 놓아 업무 문서로 추가",
       "copy": {
         "original": "원본",
         "synced": "사본",
@@ -2646,7 +2569,8 @@
         "resync": "다시 동기화",
         "resync_hint": "원본 파일로 이 프로젝트의 사본을 다시 씁니다.",
         "resynced": "사본을 다시 동기화했습니다 (다시 씀 {{rewritten}} · 이름 변경 {{renamed}} · 생성 {{created}})."
-      }
+      },
+      "title": "업무 문서"
     },
     "rules": {
       "title": "정합성 규칙",
@@ -2717,7 +2641,11 @@
       },
       "missing_types": "누락 서류: {{types}}",
       "evidence_open": "{{name}} 열기",
-      "required": "필수"
+      "required": "필수",
+      "relations_title": "관계 그래프",
+      "report_title": "리포트",
+      "report_show": "리포트 보기",
+      "report_hide": "리포트 닫기"
     },
     "relations": {
       "caption": "문서 간 공통 엔터티",
@@ -2783,13 +2711,6 @@
       "copy_suffix": "(복제)",
       "incomplete_rules": "불완전한 규칙 {{count}}개를 먼저 완성하세요."
     },
-    "pick": {
-      "title": "프로젝트 선택",
-      "hint": "놓은 문서 {{count}}개를 추가할 프로젝트를 고르세요.",
-      "hint_files": "놓은 파일 {{count}}개를 가져와 추가할 프로젝트를 고르세요.",
-      "none": "프로젝트가 없습니다. 먼저 새 프로젝트를 만드세요.",
-      "add": "추가"
-    },
     "classify": {
       "button": "자동 분류",
       "button_hint": "프로젝트에 속하지 않은 문서를 제목·내용으로 프로젝트에 배정할지 제안합니다.",
@@ -2846,6 +2767,83 @@
       "saved": "프로젝트 설정을 저장했습니다.",
       "organize_now": "이 프로젝트 정리",
       "export_now": "이 프로젝트 내보내기"
+    },
+    "common": {
+      "title": "공통 참고 자료",
+      "hint": "모든 프로젝트의 질문·검색·문서 작성에 함께 쓰이는 규정·지침·과거 문서입니다. 묶음별로 켜고 끌 수 있습니다.",
+      "groups": "묶음 {{count}} · 사용 {{active}}",
+      "open": "열기",
+      "advanced": "고급 설정"
+    },
+    "reference": {
+      "title": "참고 자료",
+      "hint": "이 프로젝트의 질문·검색·문서 작성에 근거로 쓰이는 규정·지침·과거 문서입니다. 공통 참고 자료도 함께 사용됩니다.",
+      "groups": "묶음",
+      "new_group": "새 묶음",
+      "rename": "이름 변경",
+      "rename_title": "묶음 이름 변경",
+      "name": "이름",
+      "name_placeholder": "예: 사내 규정",
+      "save": "저장",
+      "active": "사용",
+      "inactive": "사용 안 함",
+      "delete": "묶음 삭제",
+      "delete_confirm": "묶음 '{{name}}'을(를) 삭제할까요? 문서는 문서함에 남습니다.",
+      "saved": "묶음을 저장했습니다.",
+      "deleted": "묶음을 삭제했습니다.",
+      "no_groups": "아직 묶음이 없습니다. 새 묶음을 만들거나 파일을 가져오세요.",
+      "select_group": "왼쪽에서 묶음을 고르세요.",
+      "docs_title": "문서",
+      "docs_count": "문서 {{count}}건",
+      "add": "문서함에서 고르기",
+      "add_title": "참고 자료 추가",
+      "add_hint": "문서함의 문서를 참고 자료로 넣습니다. 넣은 문서는 '참고 자료' 역할로 표시됩니다.",
+      "ingest": "파일에서 가져오기",
+      "remove": "제거",
+      "open_doc": "열기",
+      "empty": "참고 자료가 없습니다.",
+      "drop_hint": "문서함 문서나 파일을 끌어다 놓아 참고 자료로 추가",
+      "drop_add": "{{name}}에 추가",
+      "added": "참고 자료 {{count}}건을 넣었습니다.",
+      "removed": "참고 자료에서 제거했습니다.",
+      "group_loading": "참고 자료 묶음을 준비하는 중…",
+      "columns": {
+        "name": "문서",
+        "type": "유형",
+        "pages": "쪽",
+        "status": "상태",
+        "actions": "동작"
+      }
+    },
+    "put": {
+      "title": "프로젝트에 넣기",
+      "hint": "문서 {{count}}건을 넣을 곳과 종류를 고르세요.",
+      "target": "넣을 곳",
+      "target_project": "프로젝트",
+      "target_common": "공통 참고 자료",
+      "common_hint": "프로젝트와 무관하게 모든 질문·검색에 쓰이는 참고 자료 묶음에 넣습니다.",
+      "search": "프로젝트 검색…",
+      "no_projects": "프로젝트가 없습니다. '새 프로젝트…'로 만들거나 공통 참고 자료에 넣으세요.",
+      "no_match": "일치하는 프로젝트가 없습니다.",
+      "new_project": "새 프로젝트…",
+      "new_project_name": "새 프로젝트 이름",
+      "create": "만들기",
+      "created": "프로젝트 '{{name}}'을(를) 만들었습니다.",
+      "kind": "종류",
+      "kind_work": "업무 문서",
+      "kind_work_hint": "체크리스트·정합성 검사·정리의 대상",
+      "kind_reference": "참고 자료",
+      "kind_reference_hint": "질문·검색·문서 작성의 근거",
+      "kind_reference_only": "공통 참고 자료에는 참고 자료로만 넣습니다.",
+      "group": "묶음",
+      "new_group": "새 묶음…",
+      "new_group_name": "새 묶음 이름",
+      "suggest": "자동 분류 제안",
+      "suggested_none": "제안할 프로젝트를 찾지 못했습니다. 직접 고르세요.",
+      "confirm": "넣기",
+      "done_work": "'{{name}}' 프로젝트에 업무 문서 {{count}}건을 넣었습니다.",
+      "done_reference": "'{{name}}' 참고 자료에 {{count}}건을 넣었습니다.",
+      "open_target": "열기"
     }
   },
   "dnd": {

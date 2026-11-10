@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { createWorkspace, freshApp } from "./helpers";
+import { createWorkspace, freshApp, openModelsAdvanced } from "./helpers";
 
 // P0 acceptance (design §4.1): "empty screens work together with theme and
 // language switching", plus settings persistence and the NL pre-router.
@@ -10,11 +10,12 @@ const freshShell = (page: Page) => freshApp(page, {}, { fast: false });
 const onboard = (page: Page, path?: string) => createWorkspace(page, path, { expectTier: "8 GB" });
 
 test.describe("P0 shell", () => {
-  test("onboarding → home, Korean by default", async ({ page }) => {
+  test("onboarding → 문서함, Korean by default", async ({ page }) => {
     await freshShell(page);
     await expect(page.locator("html")).toHaveAttribute("lang", "ko");
     await onboard(page);
-    await expect(page.getByTestId("page-home")).toBeVisible();
+    await expect(page.getByTestId("page-library")).toBeVisible();
+    await expect(page.getByTestId("library-today")).toBeVisible();
     await expect(page.getByTestId("nav-settings")).toHaveText("설정");
     await expect(page.getByTestId("workspace-switcher")).toContainText("Docs");
   });
@@ -55,12 +56,25 @@ test.describe("P0 shell", () => {
   test("every route renders and the command palette navigates", async ({ page }) => {
     await freshShell(page);
     await onboard(page);
-    for (const screen of ["library", "search", "assistant", "review", "schemas", "knowledge", "organize", "jobs", "models", "settings", "generate", "projects"]) {
+    // The seven screens of 0.5.0 (plan §1), in sidebar order.
+    for (const screen of ["library", "assistant", "review", "projects", "generate", "jobs", "settings"]) {
       await page.getByTestId(`nav-${screen}`).click();
       await expect(page.getByTestId(`page-${screen}`)).toBeVisible();
     }
+    // The screens folded into the settings keep their routes; the search route opens the assistant in "근거만 찾기" mode.
+    for (const screen of ["models", "schemas"]) {
+      await expect(page.getByTestId(`nav-${screen}`)).toHaveCount(0);
+      await page.goto(`/#/${screen}`);
+      await expect(page.getByTestId("page-settings")).toBeVisible();
+      await expect(page.getByTestId(`settings-tab-${screen}`)).toHaveAttribute("data-state", "active");
+    }
+    await page.goto("/#/search");
+    await expect(page.getByTestId("page-assistant")).toBeVisible();
+    await expect(page.getByTestId("assistant-evidence-only")).toHaveAttribute("data-state", "checked");
     await page.keyboard.press("Control+K");
     await expect(page.getByTestId("command-palette")).toBeVisible();
+    await expect(page.getByTestId("palette-nav-library")).toBeVisible();
+    await expect(page.getByTestId("palette-nav-models")).toHaveCount(0);
     await page.getByTestId("palette-input").fill("/테마 다크");
     await expect(page.getByTestId("palette-run")).toContainText("다크");
     await page.getByTestId("palette-run").click();
@@ -70,12 +84,15 @@ test.describe("P0 shell", () => {
   test("natural-language commands: settings ops run, work items go to the assistant", async ({ page }) => {
     await freshShell(page);
     await onboard(page);
-    await page.getByTestId("home-command").fill("설정 열어줘");
-    await page.getByTestId("home-command-send").click();
+    // The command bar replaces the home screen's command card (plan §1).
+    await page.getByTestId("command-bar").click();
+    await page.getByTestId("palette-input").fill("설정 열어줘");
+    await page.getByTestId("palette-run").click();
     await expect(page.getByTestId("page-settings")).toBeVisible();
-    await page.getByTestId("nav-home").click();
-    await page.getByTestId("home-command").fill("지난달 견적서 합계");
-    await page.getByTestId("home-command-send").click();
+    await page.getByTestId("nav-library").click();
+    await page.getByTestId("command-bar").click();
+    await page.getByTestId("palette-input").fill("지난달 견적서 합계");
+    await page.getByTestId("palette-send").click();
     await expect(page.getByTestId("page-assistant")).toBeVisible();
     // Work items go to the planner (P5): the assistant answers with a plan / result / aggregate card.
     await expect(page.locator('[data-testid^="assistant-card-"]').first()).toBeVisible({ timeout: 15_000 });
@@ -101,10 +118,10 @@ test.describe("P0 shell", () => {
     await expect(page.getByTestId("retention-chats_days")).toHaveValue("30");
   });
 
-  test("model manager lists the registry and switches tier manually", async ({ page }) => {
+  test("설정 > AI 모델 lists the registry (behind 고급) and switches tier manually", async ({ page }) => {
     await freshShell(page);
     await onboard(page);
-    await page.getByTestId("nav-models").click();
+    await openModelsAdvanced(page);
     await expect(page.getByTestId("registry-table")).toContainText("Gemma 4 E4B");
     await page.getByTestId("tier-mode").click();
     await page.getByRole("option", { name: "수동 고정" }).click();

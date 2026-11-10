@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { BookOpen, Briefcase, FileOutput, FileSpreadsheet, FileText, FolderInput, FolderOpen, FolderTree, Image as ImageIcon, LayoutGrid, List, Merge, Presentation, RefreshCw, Trash2, Upload } from "lucide-react";
+import { Briefcase, FileOutput, FileSpreadsheet, FileText, FolderInput, FolderOpen, FolderTree, Image as ImageIcon, LayoutGrid, List, Merge, Presentation, Trash2, Upload } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router";
@@ -11,11 +11,11 @@ import { ConfirmDialog, type ConfirmRequest } from "@/components/ui/confirm-dial
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
-import { Switch } from "@/components/ui/switch";
-import { AddToCollectionDialog } from "@/features/knowledge/AddToCollectionDialog";
 import { docTypeLabel } from "@/features/pipeline/labels";
 import { PipelineStatusChip } from "@/features/pipeline/PipelineStatusChip";
 import { ProcessMenu } from "@/features/pipeline/ProcessMenu";
+import { PutInProjectDialog } from "@/features/projects/PutInProjectDialog";
+import { settingsTabPath } from "@/features/settings/tabs";
 import { startDocumentDrag, type DragDoc } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
@@ -40,11 +40,12 @@ import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspace } from "@/stores/workspace";
 
-import { AggregateBar } from "./AggregateBar";
 import { ImportDocumentsDialog } from "./ImportDocumentsDialog";
+import { LibraryContextMenu, type LibraryContextRequest } from "./LibraryContextMenu";
 import { RetryImage } from "./RetryImage";
 import { MergeDialog } from "./SplitMergeDialogs";
 import { statusVariant } from "./status";
+import { TodayStrip } from "./TodayStrip";
 import { useDocumentDrop } from "./useDocumentDrop";
 
 /** Card / row geometry in rem: it follows the UI 배율 together with the text it holds (the former px sizes clipped titles and badges from 125 % up). */
@@ -101,12 +102,13 @@ export function LibraryPage() {
   const [sort, setSort] = useState<DocumentSort>("imported_desc");
   // Starts from the shared selection so coming back from 정리 / 내보내기 keeps the picked documents.
   const [selected, setSelected] = useState<Set<string>>(() => new Set(useDocumentsStore.getState().selectedIds));
-  const [aggregateOpen, setAggregateOpen] = useState(true);
   const [importOpen, setImportOpen] = useState(false);
   const [importPaths, setImportPaths] = useState<string[] | undefined>(undefined);
   const [importSource, setImportSource] = useState<ImportSource>("drop");
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
-  const [addToKb, setAddToKb] = useState(false);
+  const [putInProject, setPutInProject] = useState(false);
+  /** Right-click menu (다시 렌더 · 다시 검사 · inbox 감시): on a card / row or the empty space. */
+  const [contextMenu, setContextMenu] = useState<LibraryContextRequest | null>(null);
   const [debounced, setDebounced] = useState(query);
   const headingRef = useRef<HTMLHeadingElement | null>(null);
 
@@ -164,7 +166,7 @@ export function LibraryPage() {
     openImport(pendingPaths, "drop");
   }, [pendingPaths, workspace, openImport]);
 
-  // `/library?import=1` (the home quick action) opens the import dialog once and drops the flag from the URL.
+  // `/library?import=1` (the assistant / palette "가져오기") opens the import dialog once and drops the flag from the URL.
   const importParam = searchParams.get("import");
   useEffect(() => {
     if (importParam !== "1") return;
@@ -220,8 +222,9 @@ export function LibraryPage() {
     });
   };
 
-  const rerenderSelected = async () => {
-    const ids = selectedVisible;
+  /** Re-renders the right-clicked document, or the selection when it is part of it (none → the whole selection). */
+  const rerender = async (docId: string | null) => {
+    const ids = docId && !selected.has(docId) ? [docId] : selectedVisible.length > 0 ? selectedVisible : docId ? [docId] : [];
     if (ids.length === 0) return;
     try {
       await api.documentsRerender(ids, null);
@@ -229,6 +232,20 @@ export function LibraryPage() {
     } catch (e) {
       toast(describeError(e, t), "danger");
     }
+  };
+
+  const onContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!workspace) return;
+    const target = e.target as HTMLElement;
+    if (target.closest("input, textarea, select, [role=dialog], [role=menu], [role=listbox]")) return;
+    e.preventDefault();
+    const docId = target.closest<HTMLElement>("[data-doc-id]")?.dataset.docId ?? null;
+    const next = { x: e.clientX, y: e.clientY, docId };
+    // A second right-click while the menu is open re-anchors it at the new point.
+    if (contextMenu) {
+      setContextMenu(null);
+      window.requestAnimationFrame(() => setContextMenu(next));
+    } else setContextMenu(next);
   };
 
   const rescan = async () => {
@@ -287,7 +304,7 @@ export function LibraryPage() {
         ))}
       </nav>
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col" onContextMenu={onContextMenu} data-testid="library-main">
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2">
           <h1 ref={headingRef} tabIndex={-1} className="mr-2 text-lg font-semibold outline-none">
             {t("library.title")}
@@ -296,17 +313,15 @@ export function LibraryPage() {
             <FolderInput />
             {t("library.import")}
           </Button>
-          <Button size="sm" variant="secondary" onClick={() => void rescan()} data-testid="library-rescan">
-            <RefreshCw />
-            {t("library.rescan")}
+          {/* 정리 · 내보내기 open their screen scoped to the selection when there is one (plan §3). */}
+          <Button size="sm" variant="secondary" onClick={() => navigate(selectedVisible.length > 0 ? "/organize?selection=1" : "/organize")} data-testid="library-organize">
+            <FolderTree />
+            {t("library.organize_selected")}
           </Button>
-          <label className="flex items-center gap-2 text-sm">
-            <Switch checked={inboxWatch} onCheckedChange={(v) => void setInbox(v)} aria-describedby="inbox-watch-hint" data-testid="library-inbox-watch" />
-            {t("library.inbox_watch")}
-            <span id="inbox-watch-hint" className="sr-only">
-              {t("library.inbox_watch_hint")}
-            </span>
-          </label>
+          <Button size="sm" variant="secondary" onClick={() => navigate(selectedVisible.length > 0 ? "/organize?tab=export&selection=1" : "/organize?tab=export")} data-testid="library-export">
+            <FileOutput />
+            {t("library.export_selected")}
+          </Button>
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <Input
               value={query}
@@ -389,9 +404,7 @@ export function LibraryPage() {
           </div>
         </div>
 
-        {(docType !== "all" || selectedVisible.length > 0) && (
-          <AggregateBar docType={docType === "all" ? null : docType} selectedDocs={selectedDocs} typeLabel={typeLabel} open={aggregateOpen} onOpenChange={setAggregateOpen} />
-        )}
+        <TodayStrip />
 
         {pdfium && !pdfium.library && (
           <p className="border-b border-border bg-warn-soft px-4 py-1.5 text-xs text-warn" role="status" data-testid="library-pdfium-missing">
@@ -415,15 +428,11 @@ export function LibraryPage() {
               <span className="mx-1">·</span>
               <span data-testid="library-selected">{t("library.selected", { count: selectedVisible.length })}</span>
               <ProcessMenu ids={selectedVisible} docs={selectedDocs} variant="ghost" testId="library-process" />
-              <Button size="sm" variant="ghost" onClick={() => navigate("/organize?selection=1")} data-testid="library-organize">
-                <FolderTree />
-                {t("library.organize_selected")}
+              <Button size="sm" variant="ghost" onClick={() => setPutInProject(true)} data-testid="library-put-in-project">
+                <Briefcase />
+                {t("library.actions.put_in_project")}
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => navigate("/organize?tab=export&selection=1")} data-testid="library-export">
-                <FileOutput />
-                {t("library.export_selected")}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => navigate(`/schemas?register=${selectedVisible.join(",")}`)} data-testid="library-register-form">
+              <Button size="sm" variant="ghost" onClick={() => navigate(settingsTabPath("schemas", { register: selectedVisible.join(",") }))} data-testid="library-register-form">
                 <Upload />
                 {t("library.actions.register_form")}
               </Button>
@@ -433,18 +442,6 @@ export function LibraryPage() {
                   {t("library.actions.merge")}
                 </Button>
               )}
-              <Button size="sm" variant="ghost" onClick={() => void rerenderSelected()} data-testid="library-rerender">
-                <RefreshCw />
-                {t("library.actions.rerender")}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setAddToKb(true)} data-testid="library-add-to-kb">
-                <BookOpen />
-                {t("library.actions.add_to_kb")}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => navigate(`/projects?classify=${selectedVisible.join(",")}`)} data-testid="library-classify">
-                <Briefcase />
-                {t("library.actions.classify")}
-              </Button>
               <Button size="sm" variant="ghost" className="text-danger" onClick={deleteSelected} data-testid="library-delete">
                 <Trash2 />
                 {t("library.actions.delete")}
@@ -515,8 +512,18 @@ export function LibraryPage() {
 
       <ImportDocumentsDialog open={importOpen} onOpenChange={setImportOpen} initialPaths={importPaths} source={importSource} />
       <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
-      <AddToCollectionDialog open={addToKb} onOpenChange={setAddToKb} docIds={selectedVisible} onDone={() => setSelected(new Set())} />
+      <PutInProjectDialog open={putInProject} onOpenChange={setPutInProject} docIds={selectedVisible} onDone={() => setSelected(new Set())} />
       <MergeDialog open={mergeOpen} onOpenChange={setMergeOpen} ids={selectedVisible} onDone={() => setSelected(new Set())} />
+      <LibraryContextMenu
+        request={contextMenu}
+        onClose={() => setContextMenu(null)}
+        inboxWatch={inboxWatch}
+        canRerender={contextMenu?.docId != null || selectedVisible.length > 0}
+        onOpen={open}
+        onRerender={(id) => void rerender(id)}
+        onRescan={() => void rescan()}
+        onToggleInbox={() => void setInbox(!inboxWatch)}
+      />
     </div>
   );
 }
@@ -608,6 +615,7 @@ function DocCard({ doc, selected, onToggle, onOpen, onOpenReview, t, typeLabel, 
       className={cn("group relative flex flex-col overflow-hidden rounded-lg border border-border bg-bg-elevated text-left transition-colors hover:border-accent", selected && "border-accent ring-2 ring-accent/40")}
       style={{ width: `${CARD_W_REM}rem` }}
       data-testid={`doc-card-${doc.id}`}
+      data-doc-id={doc.id}
       data-doc-name={doc.original_name}
       data-doc-status={doc.status}
       data-dnd-source="document"
@@ -704,6 +712,7 @@ function ListView({ docs, selected, onToggle, onOpen, onOpenReview, typeLabel, l
               className={cn("absolute left-0 grid w-full items-center gap-2 border-b border-border px-3 py-1 text-sm hover:bg-bg-sunken", LIST_COLS, selected.has(doc.id) && "bg-accent-soft")}
               style={{ transform: `translateY(${row.start - virtualizer.options.scrollMargin}px)`, minHeight: rowPx }}
               data-testid={`doc-row-${doc.id}`}
+              data-doc-id={doc.id}
               data-doc-name={doc.original_name}
               data-doc-status={doc.status}
               data-dnd-source="document"

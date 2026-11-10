@@ -24,6 +24,7 @@ import {
   type WorkerOutcome,
 } from "./mock-backend";
 import { buildSupplementDraft, submitDraftJob } from "./mock-generate";
+import { deleteProjectReferenceGroup, projectReferenceGroup, renameProjectReferenceGroup } from "./mock-knowledge";
 import * as pl from "./mock-pipeline";
 import {
   DEFAULT_PROJECT_FOLDER,
@@ -305,6 +306,11 @@ export function projectVarsFor(docId: string, projectId: string | null, s: PStat
   const first = s.members.filter((m) => m.doc_id === docId).sort((a, b) => a.added_at.localeCompare(b.added_at))[0];
   const p = first ? s.projects.find((x) => x.id === first.project_id) : undefined;
   return p ? varsOf(refresh(s, p), isKo) : null;
+}
+
+/** Ids of the project's work documents (`project_documents`); the knowledge mock's project scope reads them. */
+export function projectDocIds(projectId: string, s: PState = load()): string[] {
+  return s.members.filter((m) => m.project_id === projectId).map((m) => m.doc_id);
 }
 
 export function isMember(projectId: string, docId: string, s: PState = load()): boolean {
@@ -1331,6 +1337,7 @@ export async function mockProjects(cmd: string, a: Record<string, any>): Promise
       if (!input.id) throw err("invalid", "project_not_found");
       const p = upsertProject(s, input);
       save(s);
+      renameProjectReferenceGroup(p.id, p.name);
       changed([p.id]);
       return { ...p };
     }
@@ -1343,8 +1350,14 @@ export async function mockProjects(cmd: string, a: Record<string, any>): Promise
       s.rules = s.rules.filter((r) => r.project_id !== id);
       s.runs = s.runs.filter((r) => r.project_id !== id);
       save(s);
+      // The project's reference group goes with it; its documents stay in the library (plan §2).
+      deleteProjectReferenceGroup(id);
       changed([id]);
       return s.projects.length < before;
+    }
+    case "project_reference_group": {
+      const p = getProject(s, String(a.id));
+      return projectReferenceGroup(p.id, p.name);
     }
     case "project_get":
       return detail(s, getProject(s, String(a.id)));

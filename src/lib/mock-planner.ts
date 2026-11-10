@@ -42,7 +42,7 @@ import {
   type WorkerOutcome,
 } from "./mock-backend";
 import * as mg from "./mock-generate";
-import { mockKnowledge } from "./mock-knowledge";
+import { mockKnowledge, projectReferenceGroup } from "./mock-knowledge";
 import * as pl from "./mock-pipeline";
 import * as mp from "./mock-projects";
 import {
@@ -712,9 +712,12 @@ function ruleProject(t: Text, ctx: PlanContext): Plan | null {
   if (has(t, ["추가", "넣어", "넣기", "포함", "add", "put"])) {
     const ref = projectRefOf(t, ctx);
     const ids = selectionIds(ctx);
-    const op: Op = { op: "add_to_project", project: ref, doc_ids: ids };
+    // "참고 자료로 / 지침으로 넣어줘" → the project's reference group instead of its work documents (0.5.0 plan §2).
+    const asReference = has(t, ["참고자료", "참고문서", "지침으로", "규정으로", "참고로", "reference", "guideline"]);
+    const op: Op = { op: "add_to_project", project: ref, doc_ids: ids, as_reference: asReference };
     const name = ref ? ctx.projects.find((p) => p.id === ref)?.name : null;
-    return single(op, 0.84, tr(t.ko, `${name ? `'${name}' ` : ""}프로젝트에 문서 ${ids.length}건을 추가합니다`, `Add ${ids.length} documents to the project${name ? ` '${name}'` : ""}`), ids.length > 0 ? { ...emptyScope(), doc_ids: ids } : emptyScope());
+    const what = asReference ? tr(t.ko, "참고 자료", "reference material") : tr(t.ko, "문서", "documents");
+    return single(op, 0.84, tr(t.ko, `${name ? `'${name}' ` : ""}프로젝트에 ${what} ${ids.length}건을 추가합니다`, `Add ${ids.length} ${what} to the project${name ? ` '${name}'` : ""}`), ids.length > 0 ? { ...emptyScope(), doc_ids: ids } : emptyScope());
   }
   if (!has(t, ["만들어", "생성", "새", "추가해", "create", "new", "make"])) return null;
   const quoted = t.raw.match(/[“"']([^”"']{1,60})[”"']/u)?.[1] ?? null;
@@ -3061,8 +3064,9 @@ export function planPreview(plan: Plan, ctx: PlanContext): PlanPreview {
       case "add_to_project": {
         const project = mp.resolveProjectRef(op.project, ctx.current_project);
         const n = (op.doc_ids ?? []).length > 0 ? (op.doc_ids ?? []).length : docs.length;
-        summary = project ? (ko ? `${project.name} ← 문서 ${n}건` : `${project.name} ← ${n} documents`) : tr(ko, "프로젝트를 찾을 수 없습니다", "Project not found");
-        payload = { project_id: project?.id ?? null, documents: n };
+        const what = op.as_reference ? tr(ko, "참고 자료", "reference material") : tr(ko, "문서", "documents");
+        summary = project ? (ko ? `${project.name} ← ${what} ${n}건` : `${project.name} ← ${n} ${what}`) : tr(ko, "프로젝트를 찾을 수 없습니다", "Project not found");
+        payload = { project_id: project?.id ?? null, documents: n, as_reference: !!op.as_reference };
         break;
       }
       case "check_consistency": {
@@ -3345,9 +3349,15 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
       if (!project) throw err("invalid", "project_not_found");
       const ids = (op.doc_ids ?? []).length > 0 ? (op.doc_ids ?? []) : idsOf(workingSet(plan, imported));
       if (ids.length === 0) throw err("invalid", "no_documents");
+      if (op.as_reference) {
+        // 0.5.0 plan §2: the project's reference group (created on demand) + the 참고 자료 role.
+        const group = projectReferenceGroup(project.id, project.name);
+        const added = (await mockKnowledge("knowledge_collection_add", { args: { id: group.id, doc_ids: ids, set_role: true } })) as number;
+        return { summary: ko ? `프로젝트 참고 자료에 문서 ${ids.length}건 추가` : `${ids.length} documents added to the project's reference material`, payload: { project_id: project.id, added, project: mp.projectDetail(project.id)?.project ?? project, as_reference: true } };
+      }
       const detailOf = mp.addDocuments(project.id, ids);
       // `exec.rs`: `{ project_id, added, project: Project | null }`.
-      return { summary: ko ? `프로젝트에 문서 ${ids.length}건 추가` : `${ids.length} documents added to the project`, payload: { project_id: project.id, added: ids.length, project: detailOf.project } };
+      return { summary: ko ? `프로젝트에 문서 ${ids.length}건 추가` : `${ids.length} documents added to the project`, payload: { project_id: project.id, added: ids.length, project: detailOf.project, as_reference: false } };
     }
     case "define_rule": {
       await pace(ctl, 200);

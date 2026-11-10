@@ -16,7 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AddToCollectionDialog } from "@/features/knowledge/AddToCollectionDialog";
 import { confidenceGlyph, confidenceTone, DEFAULT_REVIEW_THRESHOLD, docTypeLabel, formatConfidence } from "@/features/pipeline/labels";
 import { ProcessMenu } from "@/features/pipeline/ProcessMenu";
-import { Snippet } from "@/features/search/SearchPage";
+import { Snippet } from "@/features/assistant/evidence";
 import { describeError } from "@/lib/errors";
 import { api, revealPath } from "@/lib/ipc";
 import { useDocTypes, useDocument, useDocumentChunks, useDocumentCollections, useDocumentPages, useDocumentTextHistory, useFields, usePipelineStatus } from "@/lib/queries";

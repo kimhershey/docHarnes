@@ -1,7 +1,7 @@
 import { AlertCircle, Bot, Briefcase, HelpCircle, Paperclip, Send, Sparkles, User, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 
 import { isEditable } from "@/app/hooks/useGlobalShortcuts";
 import { Badge } from "@/components/ui/badge";
@@ -13,16 +13,16 @@ import { Switch } from "@/components/ui/switch";
 import { describeJobError } from "@/features/jobs/describe";
 import { AnswerCard } from "@/features/knowledge/AnswerCard";
 import { openCitation } from "@/features/knowledge/AnswersPanel";
-import { scopeFor } from "@/features/search/SearchPage";
+import { settingsTabPath } from "@/features/settings/tabs";
 import { describePreRoute, executePreRoute, executeUiOps } from "@/lib/commands";
 import { docsFromIds, DropHint, importDroppedFiles, useDocumentDropTarget, type DragDoc } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
-import { askBackText, isCancelCommand, isSlashCommand, loadRouting, saveRouting } from "@/lib/assistant-control";
+import { askBackText, isCancelCommand, isSlashCommand, loadRouting } from "@/lib/assistant-control";
 import { looksLikeFollowUp } from "@/lib/follow-up";
 import { api } from "@/lib/ipc";
-import { useCollections, useDocument, usePipelineStatus } from "@/lib/queries";
+import { useDocument, useKnowledgeStatus, usePipelineStatus } from "@/lib/queries";
 import { isComposing, matchesChord } from "@/lib/shortcuts";
-import { SCREEN_ROUTES, isJobFinished, type AnswerRequest, type Job, type Plan, type PlanExecution, type PlanIssue, type PlanResponse, type PlanMode, type PreRouteResult, type UiPlanContext } from "@/lib/types";
+import { isJobFinished, type AnswerRequest, type Job, type Plan, type PlanExecution, type PlanIssue, type PlanResponse, type PreRouteResult, type SearchMode, type SearchScope, type UiPlanContext } from "@/lib/types";
 import { errorCode, isMac } from "@/lib/utils";
 import { useAssistantStore, type ClarifyStatus, type Message, type NewMessage, type PlanMessage } from "@/stores/assistant";
 import { useAttachmentsStore } from "@/stores/attachments";
@@ -38,6 +38,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { ClarifyCard } from "./ClarifyCard";
 import { conversationTurns } from "./conversation";
 import { clarificationQuestion, isPlanExecution, planKind, requiresConfirmation, sourceLabel, uiContextFor } from "./describePlan";
+import { EvidenceCard } from "./evidence";
 import { ExecutionCard } from "./ExecutionCard";
 import { UI_OPS } from "./opSpecs";
 import { PlanCard } from "./PlanCard";
@@ -53,6 +54,10 @@ function hasOpenLayer(): boolean {
   return document.querySelector('[role="dialog"], [role="listbox"], [role="menu"], [cmdk-dialog]') !== null;
 }
 
+/** The three scopes of 0.5.0 (plan §0): everything, the current project, or the selected / attached / open documents. */
+type ScopeValue = "all" | "project" | "selection";
+const SEARCH_MODES: SearchMode[] = ["hybrid", "keyword", "semantic"];
+
 /**
  * Assistant (design §3.7.6): slash / phrase commands run through the
  * pre-router; everything else goes to the natural-language planner (§3.5).
@@ -61,11 +66,13 @@ function hasOpenLayer(): boolean {
  * result cards of the job that replays them. The conversation lives in
  * `useAssistantStore` (per workspace) so it survives a visit to Jobs, and the
  * `ui_actions` of job-backed plans run exactly once when the finished job is
- * observed here.
+ * observed here. "근거만 찾기" (0.5.0, the former search screen) lists the hits of a
+ * knowledge search instead of asking the model.
  */
 export function AssistantPage() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const pending = useUiStore((s) => s.pendingAssistantInput);
   const setPending = useUiStore((s) => s.setPendingAssistantInput);
   const lastDocument = useUiStore((s) => s.lastDocument);
@@ -79,7 +86,7 @@ export function AssistantPage() {
   const selectedIds = useDocumentsStore((s) => s.selectedIds);
   const currentProject = useProjectsStore((s) => s.currentProject);
   const currentProjectName = useProjectsStore((s) => s.currentProjectName);
-  const { data: collections } = useCollections(!!workspace);
+  const { data: knowledgeStatus } = useKnowledgeStatus(!!workspace);
   const { data: pipeline } = usePipelineStatus(!!workspace);
   const messages = useAssistantStore((s) => s.messages);
   const pendingUiActions = useAssistantStore((s) => s.pendingUiActions);
@@ -89,10 +96,27 @@ export function AssistantPage() {
   const documentScope = lastDocument !== null && selectedIds.length === 0;
   const { data: lastDoc } = useDocument(documentScope ? lastDocument.id : undefined);
   const [text, setText] = useState("");
-  const [scope, setScope] = useState<string>("all");
-  // Documents dropped on the assistant (or a sidebar entry): the "첨부 문서" scope of questions and commands.
+  const [scope, setScope] = useState<ScopeValue>("all");
+  // Documents dropped on the assistant (or carried here by spring-loading): the "첨부 문서" selection of questions and commands.
   const attached = useAttachmentsStore((s) => s.attached);
   const attachedIds = attached.map((d) => d.id);
+  // The "selection" scope, by precedence: attachments, the library selection, the document the viewer showed last.
+  const selectionKind: "attached" | "selection" | "document" | null = attached.length > 0 ? "attached" : selectedIds.length > 0 ? "selection" : documentScope ? "document" : null;
+  const selectionIds = selectionKind === "attached" ? attachedIds : selectionKind === "selection" ? selectedIds : selectionKind === "document" && lastDocument ? [lastDocument.id] : [];
+  // "근거만 찾기": the knowledge search alone (hybrid / keyword / semantic), no model call.
+  const [evidenceOnly, setEvidenceOnly] = useState(false);
+  const searchMode = useKnowledgeStore((s) => s.searchMode);
+  const setSearchMode = (mode: SearchMode) => useKnowledgeStore.getState().setSearch({ searchMode: mode });
+  const embeddingReady = !!knowledgeStatus?.embedding.loaded;
+  // `/assistant?evidence=1` (the former /search route, the viewer's "AI 검색") starts in that mode.
+  const evidenceParam = searchParams.get("evidence");
+  useEffect(() => {
+    if (evidenceParam !== "1") return;
+    setEvidenceOnly(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete("evidence");
+    setSearchParams(next, { replace: true });
+  }, [evidenceParam, searchParams, setSearchParams]);
   const attachDocs = (docs: DragDoc[]) => {
     useAttachmentsStore.getState().attach(docs);
     useUiStore.getState().toast(t("assistant.attachments.added", { count: docs.length }), "ok");
@@ -106,12 +130,6 @@ export function AssistantPage() {
         .then((docs) => docs.length > 0 && attachDocs(docs)),
   });
   const [followUp, setFollowUp] = useState(false);
-  // How free text is interpreted: the model reads every sentence (default); "rules_first" is the legacy path.
-  const [routing, setRoutingState] = useState<PlanMode>(() => loadRouting());
-  const setRouting = (mode: PlanMode) => {
-    setRoutingState(mode);
-    saveRouting(mode);
-  };
   const [cancelling, setCancelling] = useState<string | null>(null);
   const [planning, setPlanning] = useState(false);
   const [loadingModel, setLoadingModel] = useState(false);
@@ -139,35 +157,56 @@ export function AssistantPage() {
   const activePlan = [...messages].reverse().find((m): m is PlanMessage => m.role === "assistant" && m.kind === "plan" && m.status === "pending") ?? null;
   const pendingClarify = [...messages].reverse().find((m): m is Extract<Message, { kind: "clarify" }> => m.role === "assistant" && m.kind === "clarify" && m.status === "pending") ?? null;
 
-  // A scope that no longer applies (selection cleared, folder left, document superseded by a selection) falls back.
+  // A scope that no longer applies (selection cleared, project context dropped) falls back to 전체.
   useEffect(() => {
-    if ((scope === "selection" && selectedIds.length === 0) || (scope === "folder" && !folder) || (scope === "attached" && attached.length === 0)) setScope("all");
-    else if (scope === "document" && !documentScope) setScope(selectedIds.length > 0 ? "selection" : "all");
-  }, [scope, selectedIds.length, folder, documentScope, attached.length]);
-  // Attaching documents selects them as the scope (the user can still pick another one).
+    if ((scope === "selection" && selectionKind === null) || (scope === "project" && !currentProject)) setScope("all");
+  }, [scope, selectionKind, currentProject]);
+  // Attaching documents selects them as the scope; an opened project becomes the scope (the chip is the scope, plan §1).
   const attachedCount = attached.length;
   useEffect(() => {
-    if (attachedCount > 0) setScope("attached");
+    if (attachedCount > 0) setScope("selection");
   }, [attachedCount]);
+  useEffect(() => {
+    if (currentProject) setScope((s) => (s === "all" ? "project" : s));
+  }, [currentProject]);
 
   const focusInput = (value?: string) => {
     if (value !== undefined) setText(value);
     window.setTimeout(() => inputRef.current?.focus(), 0);
   };
 
-  /** Knowledge scope of the selector: the "document" / "attached" scopes ask about those documents only. */
-  const knowledgeScope = () => {
-    const s = scopeFor(scope, knowledge?.latest_only ?? true);
-    if (scope === "document" && lastDocument) s.documents = [lastDocument.id];
-    if (scope === "attached" && attachedIds.length > 0) {
-      s.documents = attachedIds;
-      s.latest_only = false;
+  /**
+   * Knowledge scope of the selector: 현재 프로젝트 = the project's work documents ∪ its reference group ∪ the
+   * common reference material (`project_id`, plan §2); 선택 문서 asks about those documents only.
+   */
+  const knowledgeScope = (): SearchScope => {
+    const s: SearchScope = { latest_only: knowledge?.latest_only ?? true };
+    if (scope === "project" && currentProject) s.project_id = currentProject;
+    if (scope === "selection" && selectionIds.length > 0) {
+      s.documents = selectionIds;
+      if (selectionKind === "attached") s.latest_only = false;
     }
     return s;
   };
-  /** Planner context: attached documents stand in for the library selection. */
-  const planContext = () =>
-    scope === "attached" ? uiContextFor("selection", folder, attachedIds, lastDocument, currentProject) : uiContextFor(scope, folder, selectedIds, lastDocument, currentProject);
+  /** Planner context: the selection (attachments / library selection / open document) and the project scope. */
+  const planContext = (): UiPlanContext => {
+    const ctx = uiContextFor(scope === "selection" ? "selection" : "all", folder, selectionIds, lastDocument, currentProject);
+    // The project scope travels as `project_id` next to `current_project` (the default target of project ops).
+    if (scope === "project" && currentProject) (ctx as UiPlanContext & { project_id?: string }).project_id = currentProject;
+    return ctx;
+  };
+
+  /** "근거만 찾기": lists the hits of a knowledge search for `query` (no model call). */
+  const findEvidence = async (query: string) => {
+    const mode = searchMode;
+    const id = push({ role: "assistant", kind: "evidence", query, mode, response: null, error: null, pending: true });
+    try {
+      const response = await api.knowledgeSearch({ query, mode, scope: knowledgeScope(), limit: 30 });
+      patch(id, (m) => (m.role === "assistant" && m.kind === "evidence" ? { ...m, response, pending: false } : m));
+    } catch (e) {
+      patch(id, (m) => (m.role === "assistant" && m.kind === "evidence" ? { ...m, error: e, pending: false } : m));
+    }
+  };
 
   const askKnowledge = async (question: string, extra: Partial<AnswerRequest> = {}) => {
     // The conversation so far travels with every question (the model resolves "그 문서", "아까 금액");
@@ -284,7 +323,7 @@ export function AssistantPage() {
     patchPlan(messageId, (x) => ({ ...x, status: "cancelled", editing: false }));
     push({ role: "user", text: reply });
     const composed = askBackText(original, question, reply, i18n.language.startsWith("ko"));
-    const context: UiPlanContext = { ...planContext(), history: conversationTurns(currentMessages()), routing };
+    const context: UiPlanContext = { ...planContext(), history: conversationTurns(currentMessages()), routing: loadRouting() };
     setPlanning(true);
     let response: PlanResponse;
     try {
@@ -340,7 +379,12 @@ export function AssistantPage() {
     const v = value.trim();
     if (!v || busy) return;
     setText("");
-    push({ role: "user", text: v, attachments: scope === "attached" && attached.length > 0 ? attached.map((d) => ({ id: d.id, name: d.name })) : undefined });
+    push({ role: "user", text: v, attachments: scope === "selection" && selectionKind === "attached" ? attached.map((d) => ({ id: d.id, name: d.name })) : undefined });
+    // 0. "근거만 찾기": every sentence is a search (slash commands still run).
+    if (evidenceOnly && !isSlashCommand(v)) {
+      await findEvidence(v);
+      return;
+    }
     // 1. Rules first, and only these (user decision 2026-11-09): a bare 취소 while a question or plan
     //    is pending drops it, and slash commands run at once — neither waits for the model.
     if (isCancelCommand(v) && (activePlan || pendingClarify)) {
@@ -365,9 +409,9 @@ export function AssistantPage() {
         return;
       }
     }
-    // 2. Everything else is the model's to interpret (the phrase rules only in the legacy "rules_first" mode),
-    //    with the conversation so far.
-    const context: UiPlanContext = { ...planContext(), history: conversationTurns(currentMessages()), routing };
+    // 2. Everything else is the model's to interpret (the phrase rules only in the legacy "rules_first" mode,
+    //    설정 > 일반 > 고급), with the conversation so far.
+    const context: UiPlanContext = { ...planContext(), history: conversationTurns(currentMessages()), routing: loadRouting() };
     setPlanning(true);
     let response: PlanResponse;
     try {
@@ -472,7 +516,7 @@ export function AssistantPage() {
   const visionModel = pipeline?.model.model ?? null;
   const loadModel = async () => {
     if (!visionModel) {
-      navigate(SCREEN_ROUTES.models);
+      navigate(settingsTabPath("models"));
       return;
     }
     setLoadingModel(true);
@@ -513,19 +557,25 @@ export function AssistantPage() {
         <Button variant="ghost" size="sm" onClick={() => useAssistantStore.getState().clear()}>
           {t("assistant.new_chat")}
         </Button>
-        <div className="ml-auto flex items-center gap-3 text-xs text-fg-muted">
-          <label className="flex items-center gap-1" title={t("assistant.routing.hint")}>
-            {t("assistant.routing.label")}
-            <Select value={routing} onValueChange={(v) => setRouting(v as PlanMode)}>
-              <SelectTrigger className="h-7 w-32" aria-label={t("assistant.routing.label")} data-testid="assistant-routing">
+        <div className="ml-auto flex flex-wrap items-center gap-3 text-xs text-fg-muted">
+          <label className="flex items-center gap-1" title={t("assistant.evidence.hint")}>
+            <Switch checked={evidenceOnly} onCheckedChange={setEvidenceOnly} aria-label={t("assistant.evidence.toggle")} data-testid="assistant-evidence-only" />
+            {t("assistant.evidence.toggle")}
+          </label>
+          {evidenceOnly && (
+            <Select value={searchMode} onValueChange={(v) => setSearchMode(v as SearchMode)}>
+              <SelectTrigger className="h-7 w-28" aria-label={t("search.mode.label")} data-testid="assistant-evidence-mode">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="model_first">{t("assistant.routing.model_first")}</SelectItem>
-                <SelectItem value="rules_first">{t("assistant.routing.rules_first")}</SelectItem>
+                {SEARCH_MODES.map((m) => (
+                  <SelectItem key={m} value={m}>
+                    {t(`search.mode.${m}`)}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
-          </label>
+          )}
           <span className="rounded-full bg-bg-muted px-2 py-0.5" title={t("assistant.memory.hint")} data-testid="assistant-memory" data-turns={memoryTurns}>
             {t("assistant.memory.turns", { count: memoryTurns })}
           </span>
@@ -543,34 +593,25 @@ export function AssistantPage() {
             </span>
           )}
           <span>{t("assistant.scope.label")}:</span>
-          <Select value={scope} onValueChange={setScope}>
+          <Select value={scope} onValueChange={(v) => setScope(v as ScopeValue)}>
             <SelectTrigger className="h-8 w-52" aria-label={t("assistant.scope.label")} data-testid="assistant-scope">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">{t("assistant.scope.all")}</SelectItem>
-              <SelectItem value="folder" disabled={!folder} data-testid="assistant-scope-folder">
-                {folder ? t("assistant.scope.folder_named", { folder }) : t("assistant.scope.folder")}
+              <SelectItem value="project" disabled={!currentProject} data-testid="assistant-scope-project">
+                {currentProject ? t("assistant.scope.project_named", { name: currentProjectName ?? currentProject }) : t("assistant.scope.project")}
               </SelectItem>
-              <SelectItem value="selection" disabled={selectedIds.length === 0} data-testid="assistant-scope-selection">
-                {t("assistant.scope.selection_count", { count: selectedIds.length })}
+              {/* One "selection" entry whose label (and test id) says what it holds: attachments, the library selection or the open document. */}
+              <SelectItem value="selection" disabled={selectionKind === null} data-testid={`assistant-scope-${selectionKind ?? "selection"}`}>
+                {selectionKind === "attached"
+                  ? t("assistant.scope.attached", { count: attached.length })
+                  : selectionKind === "document"
+                    ? lastDocName
+                      ? t("assistant.scope.document_named", { name: lastDocName })
+                      : t("assistant.scope.document")
+                    : t("assistant.scope.selection_count", { count: selectedIds.length })}
               </SelectItem>
-              {attached.length > 0 && (
-                <SelectItem value="attached" data-testid="assistant-scope-attached">
-                  {t("assistant.scope.attached", { count: attached.length })}
-                </SelectItem>
-              )}
-              {documentScope && (
-                <SelectItem value="document" data-testid="assistant-scope-document">
-                  {lastDocName ? t("assistant.scope.document_named", { name: lastDocName }) : t("assistant.scope.document")}
-                </SelectItem>
-              )}
-              <SelectItem value="knowledge">{t("assistant.scope.knowledge")}</SelectItem>
-              {(collections ?? []).map((c) => (
-                <SelectItem key={c.id} value={`col:${c.id}`}>
-                  {t("assistant.scope.collection", { name: c.name })}
-                </SelectItem>
-              ))}
             </SelectContent>
           </Select>
         </div>
@@ -583,7 +624,7 @@ export function AssistantPage() {
             <p>{t("assistant.empty")}</p>
             <p className="text-xs">{t("assistant.qa_hint")}</p>
             <p className="text-xs">{t("assistant.attachments.hint")}</p>
-            {documentScope && lastDocName && scope !== "document" && (
+            {selectionKind === "document" && lastDocName && scope !== "selection" && (
               <p className="text-xs" data-testid="assistant-current-document">
                 {t("assistant.scope.document_named", { name: lastDocName })}
               </p>
@@ -640,6 +681,20 @@ export function AssistantPage() {
                     onRephrase={() => focusInput(m.text)}
                     onToggleEdit={() => patchPlan(m.id, (x) => ({ ...x, editing: !x.editing }))}
                     onAskBack={(reply) => void askBack(m.id, m.text, m.plan.summary ?? m.text, reply)}
+                  />
+                )}
+                {m.kind === "evidence" && (
+                  <EvidenceCard
+                    query={m.query}
+                    mode={m.mode}
+                    response={m.response}
+                    error={m.error}
+                    pending={m.pending}
+                    embeddingReady={embeddingReady}
+                    onAsk={(q) => {
+                      setEvidenceOnly(false);
+                      void send(q);
+                    }}
                   />
                 )}
                 {m.kind === "execution" && <ExecutionCard jobId={m.jobId} plan={m.plan} response={m.response} onFinished={onJobFinished} />}
@@ -740,8 +795,8 @@ export function AssistantPage() {
               ref={inputRef}
               value={text}
               onChange={(e) => setText(e.target.value)}
-              placeholder={t("assistant.placeholder")}
-              aria-label={t("assistant.placeholder")}
+              placeholder={evidenceOnly ? t("search.placeholder") : t("assistant.placeholder")}
+              aria-label={evidenceOnly ? t("search.placeholder") : t("assistant.placeholder")}
               rows={2}
               className="resize-none"
               lang={i18n.language}

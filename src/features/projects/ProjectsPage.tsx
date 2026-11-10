@@ -1,4 +1,4 @@
-import { AlertTriangle, Briefcase, LayoutGrid, List, Plus, Settings2, Sparkles } from "lucide-react";
+import { AlertTriangle, BookOpen, Briefcase, ChevronRight, LayoutGrid, List, Plus, Settings2, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router";
@@ -6,11 +6,12 @@ import { useNavigate, useSearchParams } from "react-router";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { useReferenceGroups } from "@/features/knowledge/reference";
 import { DropHint, importDroppedFiles, useDocumentDropTarget, type DragDoc } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
 import { invalidateProjects, useProjects, useProjectTemplates } from "@/lib/queries";
-import { PROJECT_PHASES, type Project, type ProjectPhase } from "@/lib/types";
+import { COMMON_REFERENCE_ID, PROJECT_PHASES, SCREEN_ROUTES, type Project, type ProjectPhase } from "@/lib/types";
 import { cn, formatDate } from "@/lib/utils";
 import { useAttachmentsStore } from "@/stores/attachments";
 import { useProjectsStore } from "@/stores/projects";
@@ -19,7 +20,7 @@ import { useWorkspace } from "@/stores/workspace";
 
 import { ClassifyDialog } from "./ClassifyDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
-import { PickProjectDialog } from "./PickProjectDialog";
+import { PutInProjectDialog, type PutTarget } from "./PutInProjectDialog";
 import { TemplatesDialog } from "./TemplatesDialog";
 
 export function phaseVariant(p: ProjectPhase): "ok" | "warn" | "danger" | "muted" | "info" {
@@ -150,6 +151,58 @@ function ProjectRow({ p, onDropDocs, onDropFiles }: { p: Project } & DropHandler
   );
 }
 
+/**
+ * The pinned 공통 참고 자료 entry on top of the list (0.5.0 plan §2): opens `/projects/common`; documents / files
+ * dropped on it go through "프로젝트에 넣기" with the common reference material preselected.
+ */
+function CommonReferenceCard({ onDropDocs, onDropFiles }: { onDropDocs: (docs: DragDoc[]) => void; onDropFiles: (paths: string[]) => void }) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const { groups } = useReferenceGroups();
+  const drop = useDocumentDropTarget({ onDocuments: onDropDocs, onFiles: onDropFiles });
+  const docs = (groups ?? []).reduce((n, g) => n + g.doc_count, 0);
+  const active = (groups ?? []).filter((g) => g.active).length;
+  const open = () => navigate(`${SCREEN_ROUTES.projects}/${COMMON_REFERENCE_ID}`);
+  return (
+    <div
+      role="link"
+      tabIndex={0}
+      className={cn("relative mb-4 flex cursor-pointer flex-wrap items-center gap-3 rounded-lg border border-border bg-bg-elevated px-4 py-3 hover:border-accent", drop.isOver && "border-accent")}
+      onClick={open}
+      onKeyDown={(e) => e.key === "Enter" && open()}
+      {...drop.props}
+      data-testid="projects-common-reference"
+      data-groups={groups?.length ?? 0}
+      data-documents={docs}
+    >
+      <DropHint active={drop.isActive} over={drop.isOver} className="text-[0.6875rem]" testId="projects-common-reference-drop">
+        {t("projects.reference.drop_add", { name: t("projects.common.title") })}
+      </DropHint>
+      <BookOpen className="size-5 shrink-0 text-accent" aria-hidden="true" />
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-semibold">{t("projects.common.title")}</div>
+        <div className="text-xs text-fg-muted">{t("projects.common.hint")}</div>
+      </div>
+      <span className="flex flex-wrap items-center gap-1.5 text-xs" data-testid="projects-common-reference-stats">
+        <Badge variant="outline">{t("projects.common.groups", { count: groups?.length ?? 0, active })}</Badge>
+        <Badge variant="outline">{t("projects.card.documents", { count: docs })}</Badge>
+      </span>
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={(e) => {
+          e.stopPropagation();
+          open();
+        }}
+        data-testid="projects-common-reference-open"
+      >
+        {t("projects.common.open")}
+        <ChevronRight />
+      </Button>
+    </div>
+  );
+}
+
 /** Kanban order inside a column: nearest end date first, open-ended last (completed: latest end first). */
 function byDates(phase: ProjectPhase) {
   return (a: Project, b: Project) => {
@@ -161,9 +214,10 @@ function byDates(phase: ProjectPhase) {
 }
 
 /**
- * 프로젝트 (design §3.15, 0.3.0 plan §5): list / kanban of the workspace's cases by their computed phase
- * (진행예정 → 진행중 → 완료 from the start / end dates, 기한 경과 badge), the "새 프로젝트" dialog and the
- * templates manager.
+ * 프로젝트 (design §3.15, 0.3.0 plan §5, 0.5.0 plan §2): the pinned 공통 참고 자료 entry, then the list / kanban of
+ * the workspace's cases by their computed phase (진행예정 → 진행중 → 완료 from the start / end dates, 기한 경과
+ * badge), the "새 프로젝트" dialog, the templates manager and "프로젝트에 넣기" for documents handed over from
+ * the library / a sidebar drop (`?put=<ids>`, `?classify=<ids>` runs the suggestion first).
  */
 export function ProjectsPage() {
   const { t, i18n } = useTranslation();
@@ -176,17 +230,22 @@ export function ProjectsPage() {
   const { data: templates } = useProjectTemplates(!!workspace);
   const [newOpen, setNewOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
-  // 자동 분류: opened from the header (unassigned documents) or from the library with `?classify=<ids>`.
-  const [searchParams, setSearchParams] = useSearchParams();
+  // 자동 분류 from the header = the batch preview over every unassigned document.
   const [classify, setClassify] = useState<{ open: boolean; docIds: string[] }>({ open: false, docIds: [] });
+  // "프로젝트에 넣기": library hand-offs arrive as `?put=<ids>` / `?classify=<ids>` (the latter runs the suggestion).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [put, setPut] = useState<{ open: boolean; docIds: string[]; target: PutTarget; suggest: boolean }>({ open: false, docIds: [], target: "project", suggest: false });
+  const putParam = searchParams.get("put");
   const classifyParam = searchParams.get("classify");
   useEffect(() => {
-    if (classifyParam === null || !workspace) return;
-    setClassify({ open: true, docIds: classifyParam.split(",").filter(Boolean) });
+    if ((putParam === null && classifyParam === null) || !workspace) return;
+    const ids = (putParam ?? classifyParam ?? "").split(",").filter(Boolean);
+    if (ids.length > 0) setPut({ open: true, docIds: ids, target: "project", suggest: classifyParam !== null });
     const next = new URLSearchParams(searchParams);
+    next.delete("put");
     next.delete("classify");
     setSearchParams(next, { replace: true });
-  }, [classifyParam, searchParams, setSearchParams, workspace]);
+  }, [putParam, classifyParam, searchParams, setSearchParams, workspace]);
   const ko = i18n.language.startsWith("ko");
   const templateName = (id: string | null) => {
     const tpl = templates?.find((x) => x.id === id);
@@ -210,27 +269,26 @@ export function ProjectsPage() {
       invalidateProjects([p.id]);
       if (ids.length > 0) toast(t("projects.documents.added", { count: ids.length }), "ok");
     });
-  // Documents / files dropped on the sidebar's 프로젝트 entry wait for a project pick.
+  // Documents / files dropped on the sidebar's 프로젝트 entry (or on the 공통 참고 자료 card) go through the dialog;
+  // files are imported first, then put like documents.
+  const openPut = (ids: string[], target: PutTarget) => ids.length > 0 && setPut({ open: true, docIds: ids, target, suggest: false });
+  const putFiles = (paths: string[], target: PutTarget) => void importDroppedFiles(paths, {}, t).then((ids) => openPut(ids, target));
   const pendingDocs = useAttachmentsStore((s) => s.pendingProjectDocs);
   const pendingPaths = useAttachmentsStore((s) => s.pendingProjectPaths);
-  const [pick, setPick] = useState<{ mode: "docs"; docs: DragDoc[] } | { mode: "files"; paths: string[] } | null>(null);
   useEffect(() => {
     if (!workspace) return;
     if (pendingDocs) {
       useAttachmentsStore.getState().setPending({ pendingProjectDocs: null });
-      setPick({ mode: "docs", docs: pendingDocs });
+      openPut(
+        pendingDocs.map((d) => d.id),
+        "project",
+      );
     } else if (pendingPaths) {
       useAttachmentsStore.getState().setPending({ pendingProjectPaths: null });
-      setPick({ mode: "files", paths: pendingPaths });
+      putFiles(pendingPaths, "project");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingDocs, pendingPaths, workspace]);
-  const onPick = (projectId: string) => {
-    const p = list.find((x) => x.id === projectId);
-    if (!p || !pick) return;
-    if (pick.mode === "docs") onDropDocs(p, pick.docs);
-    else onDropFiles(p, pick.paths);
-    setPick(null);
-  };
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="page-projects">
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2">
@@ -257,10 +315,11 @@ export function ProjectsPage() {
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-4">
+        <CommonReferenceCard onDropDocs={(docs) => openPut(docs.map((d) => d.id), "common")} onDropFiles={(paths) => putFiles(paths, "common")} />
         {isLoading ? (
           <Spinner />
         ) : list.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-fg-muted" data-testid="projects-empty">
+          <div className="flex min-h-64 flex-col items-center justify-center gap-3 text-center text-fg-muted" data-testid="projects-empty">
             <Briefcase className="size-8 text-accent" aria-hidden="true" />
             <p className="font-medium text-fg">{t("projects.empty_title")}</p>
             <p className="max-w-md text-sm">{t("projects.empty_body")}</p>
@@ -311,7 +370,7 @@ export function ProjectsPage() {
         )}
       </div>
       <NewProjectDialog open={newOpen} onOpenChange={setNewOpen} onSaved={(p) => navigate(`/projects/${p.id}`)} />
-      <PickProjectDialog open={pick !== null} onOpenChange={(o) => !o && setPick(null)} projects={list} count={pick ? (pick.mode === "docs" ? pick.docs.length : pick.paths.length) : 0} mode={pick?.mode ?? "docs"} onPick={onPick} onCreate={() => setNewOpen(true)} />
+      <PutInProjectDialog open={put.open} onOpenChange={(o) => setPut((s) => ({ ...s, open: o }))} docIds={put.docIds} defaultTarget={put.target} autoSuggest={put.suggest} />
       <TemplatesDialog open={templatesOpen} onOpenChange={setTemplatesOpen} />
       <ClassifyDialog open={classify.open} onOpenChange={(o) => setClassify((c) => ({ ...c, open: o }))} docIds={classify.docIds} projects={list} />
     </div>

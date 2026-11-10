@@ -7,8 +7,11 @@ import { Input } from "@/components/ui/input";
 import { docTypeLabel } from "@/features/pipeline/labels";
 import { useDocTypes, useDocuments } from "@/lib/queries";
 
-/** "라이브러리에서 추가": picks library documents for the project. */
-export function AddDocumentsDialog({ open, onOpenChange, excludeIds, onAdd }: { open: boolean; onOpenChange: (o: boolean) => void; excludeIds: string[]; onAdd: (ids: string[]) => void }) {
+/**
+ * "문서함에서 고르기": picks library documents for a project (업무 문서, the default texts / `project-add-*` ids) or
+ * for a reference group (the caller passes its own title, hint and test-id prefix).
+ */
+export function AddDocumentsDialog({ open, onOpenChange, excludeIds, onAdd, title, hint, testIdPrefix = "project-add" }: { open: boolean; onOpenChange: (o: boolean) => void; excludeIds: string[]; onAdd: (ids: string[]) => void; title?: string; hint?: string; testIdPrefix?: string }) {
   const { t, i18n } = useTranslation();
   const [query, setQuery] = useState("");
   // The search text goes to the backend (name / title / text match) so the pick is not limited to the first page.
@@ -32,14 +35,15 @@ export function AddDocumentsDialog({ open, onOpenChange, excludeIds, onAdd }: { 
       else next.add(id);
       return next;
     });
+  const p = testIdPrefix;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl" closeLabel={t("common.close")} data-testid="project-add-dialog">
+      <DialogContent className="max-w-2xl" closeLabel={t("common.close")} data-testid={`${p}-dialog`}>
         <DialogHeader>
-          <DialogTitle>{t("projects.documents.add_title")}</DialogTitle>
-          <DialogDescription>{t("projects.documents.add_hint")}</DialogDescription>
+          <DialogTitle>{title ?? t("projects.documents.add_title")}</DialogTitle>
+          <DialogDescription>{hint ?? t("projects.documents.add_hint")}</DialogDescription>
         </DialogHeader>
-        <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("projects.documents.search")} aria-label={t("projects.documents.search")} data-testid="project-add-search" />
+        <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("projects.documents.search")} aria-label={t("projects.documents.search")} data-testid={`${p}-search`} />
         <div className="max-h-80 overflow-y-auto rounded-md border border-border">
           {list.length === 0 ? (
             <p className="p-3 text-sm text-fg-muted">{t("projects.documents.none")}</p>
@@ -48,7 +52,7 @@ export function AddDocumentsDialog({ open, onOpenChange, excludeIds, onAdd }: { 
               {list.map((d) => (
                 <li key={d.id}>
                   <label className="flex cursor-pointer items-center gap-3 px-3 py-2 hover:bg-bg-sunken">
-                    <input type="checkbox" checked={picked.has(d.id)} onChange={() => toggle(d.id)} data-testid={`project-add-doc-${d.id}`} />
+                    <input type="checkbox" checked={picked.has(d.id)} onChange={() => toggle(d.id)} data-testid={`${p}-doc-${d.id}`} />
                     <span className="min-w-0 flex-1 truncate">{d.title ?? d.original_name}</span>
                     <span className="text-xs text-fg-subtle">{docTypeLabel(d.doc_type, docTypes, t, i18n.language)}</span>
                   </label>
@@ -67,7 +71,7 @@ export function AddDocumentsDialog({ open, onOpenChange, excludeIds, onAdd }: { 
               onAdd([...picked]);
               onOpenChange(false);
             }}
-            data-testid="project-add-done"
+            data-testid={`${p}-done`}
           >
             {t("projects.documents.add_done", { count: picked.size })}
           </Button>

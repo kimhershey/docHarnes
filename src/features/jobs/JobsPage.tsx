@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { HistoryTab } from "@/features/organize/HistoryTab";
 import { describeError } from "@/lib/errors";
 import { isJobFinished, type Job } from "@/lib/types";
 import { formatBytes, formatDate } from "@/lib/utils";
@@ -240,6 +241,9 @@ export function JobsPage() {
                   {t(`jobs.tabs.${key}`)} ({byTab[key].length})
                 </TabsTrigger>
               ))}
+              <TabsTrigger value="history" data-testid="jobs-tab-history">
+                {t("jobs.tabs.history")}
+              </TabsTrigger>
             </TabsList>
             {tabs.map(({ key, empty }) => (
               <TabsContent key={key} value={key}>
@@ -254,6 +258,10 @@ export function JobsPage() {
                 )}
               </TabsContent>
             ))}
+            {/* 정리 이력 (plan §1): the file-batch journal with undo / redo, moved here from the organise screen. */}
+            <TabsContent value="history">
+              <HistoryTab />
+            </TabsContent>
           </Tabs>
         </CardContent>
       </Card>
