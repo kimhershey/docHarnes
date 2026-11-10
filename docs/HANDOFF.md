@@ -1725,6 +1725,46 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   올라간 커밋이라 `main`의 run 42801573165는 고지/SBOM 잡만 실패(`cargo metadata --locked`가 잠금 파일 갱신 거부; 나머지 6개 잡 성공). 2efc181에 갱신된 잠금 파일·SBOM이 있으므로
   `release/0.6.0`을 다시 `main`에 병합하면 해소된다(위 "버전별 브랜치" 규칙에 재발 방지 추가).
 
+### 0.7.0 — 7건 일괄 (2026-11-10; 사용자 지시 7개 항목; 계획 `docs/plan/v0.7.0.md`; 코어·셸 직접 + 프런트 포크 에이전트 3(워크트리); 브랜치 `release/0.7.0` — `release/0.6.0` 끝(0491812)에서 분기, 범프 커밋 d7c1f3e는 `Cargo.lock`·SBOM 포함 CI 7개 잡 통과)
+
+- **조사**: 탐색 에이전트 5개(프로젝트 탭 / 문서 작성 / 양식 등록 / 어시스턴트 대화 / 긴 이름)로 현황·원인을 모아 계획 §0에 표로 정리. 결정: 프로젝트 통합은 **UI 통합(A안)**(저장 구조·검색 범위 그대로),
+  초안 수정은 `DraftRequest.revise` 경로 + op `revise_draft`, 대화는 **DB 저장 세션**(보존 기간 연동).
+- **(4) 양식 등록 불능 — 원인·수정(4429e57)**: `FormRegisterDialog`·병합 대화상자가 `DialogContent className="relative"`를 넘겨 tailwind-merge가 `fixed`를 지움 → 대화상자가 화면 아래
+  1~1.5 화면 밖에 그려져 배경만 어두워짐(Playwright는 `toBeVisible`·자동 스크롤 클릭이라 못 잡음). `relative` 제거 + 작업이 `queued`면 "다른 엔진 작업이 끝나면 시작" 안내
+  (`form-register-pending-hint`, `schemas.form.waiting_hint`). 재발 방지: `DialogContent`에 위치 클래스를 넘기지 않음; E2E `toBeInViewport()`(포크 B).
+- **(5) 초안 어시스턴트 — 코어** (`generate/mod.rs`·`draft.rs`·`prompts.rs`·`schema.rs`): `DraftRequest.revise: Option<ReviseScope>`(`section{section}` / `insert_after{section?,heading?}` / `whole`; serde
+  default라 옛 요청 호환), `Section`·`sections_of()`(수준 ≤ 2 heading에서 자른 구간; 제목 없는 앞부분은 1절, 제목 없으면 본문 전체가 1절), `draft()`가 `Whole`이 아닌 범위를 `revise()`로 분기:
+  확정 사실(제목·필드) + 자료 + `[앞 내용 요약]`/`[현재 절 본문]`/`[뒤 내용 요약]` + `[수정 요청]`을 담은 `prompts::revise_user`(`RevisePrompt`) 한 호출(스키마 이름 `draft_revise`, 모양은
+  `section_schema`), `parse_body` → 구간 교체/삽입(새 절 제목: 지정값 → 모델 첫 heading → "새 절"; 모델 소제목은 수준 3), 참고 출처 병합, `request`는 `previous`·`feedback`·`revise` 없이 저장,
+  메모 "AI 수정(n절 '제목'): 지시", `validate()` 재실행(이슈 재색인), `DraftOutcome.sections = 1`. `Whole`은 종전 재생성이되 분할 생성의 모든 절 호출에 `SectionRevision{feedback,
+  previous_section}`(제목이 같은 이전 절 본문)을 전달(종전엔 머리 호출만). 예산은 `reply_budget`을 600~3,000 토큰으로 클램프. 셸 `generate_bridge::draft`가 `revise`면 `previous`·지시 필수 검사,
+  작업 라벨 "<초안 제목> · AI 수정", 진행 단계 `revising`. 테스트 `generate::tests::revise_edits_one_section_in_place_and_split_regeneration_carries_the_instruction`(절 교체·제목 있는 삽입·끝 삽입·오류·
+  전체 재생성의 지시 전달).
+- **(5) 플래너 op `revise_draft`**(compose 계열, op 62 → 63): `{draft_id?, scope: section|insert_after|whole, section?, heading?, instruction}`; `PlanContext.draft_id`(셸 `UiPlanContext.draft_id` =
+  문서 작성 화면에 열린 초안)로 `draft_id`를 채우고 없으면 `draft_required`; 실행기는 저장 초안을 읽어 `previous`+`feedback`+`revise`로 `generate::draft` → 저장 → 페이로드 `DraftOutcome`
+  (결과 카드가 `draft_document`처럼 문서 작성 화면으로 넘김). 규칙 `revise_draft_rule`(`draft_document` 앞): "3절 다시 써줘"·"2절을 더 자세히"(절 서수 `section_ordinal`), "결론 절 추가해줘"·
+  "2절 뒤에 '위험 관리' 절 추가"(`new_section_heading`: 따옴표 → 절 앞 단어 → 영어 "add a X section"), "초안 전체 격식체로"(whole), "이 절 다시 써줘" → 되묻기; "절차·절반" 등은 `has_section_word`가
+  걸러냄. few-shot 1건, 골든셋 125 → 129(ko-91~93·en-26, 항목 `context.draft_id`) 99.2%(기준선 재생성). 테스트 `planner::tests::revise_draft_rules_target_the_open_draft`.
+- **(6) 채팅 세션 — 코어·셸**: 마이그레이션 `0012_chat_sessions.sql`(`chat_sessions` id·title·title_auto·created/updated, `chat_messages` session_id·seq·payload(JSON 그대로)·created_at,
+  CASCADE; `SCHEMA_VERSION = 12`), `knowledge/chat.rs`(`list_sessions`·`get_session`·`create_session`·`rename_session`(빈 제목 = 자동 제목 복원)·`delete_session`·`list_messages`·`put_message`
+  (upsert, `updated_at`, 첫 사용자 메시지 40자로 자동 제목)·`truncate_messages`·`purge_sessions_before`; 테스트 1건), 명령 `chat_sessions_list`·`chat_session_create`·`chat_session_rename`(빈 제목 거부)·
+  `chat_session_delete`·`chat_messages_list`·`chat_message_put`(2 MB 상한)·`chat_messages_truncate`, 유지보수 작업 3단계("대화 기록" `chats_days`)가 오래된 세션도 지움.
+- **(1)(7)(4-E2E) 포크 B**(병합 ab369f1): `ProjectDetailPage` 탭 4개(`reference` → `documents` 리다이렉트, 헤더 `project-doc-counts` "업무 n · 참고 m"), `DocumentsTab` 재작성(행 `project-doc-${id}`
+  `data-kind`/`data-both`, 구분 전환 `project-doc-kind`, 필터 `project-docs-filter-*`, `project-reference-ingest`(묶음 고정 마법사), 무효화 projects+reference+documents), `AddDocumentsDialog` 구분 라디오
+  `${prefix}-kind-{work|reference}`, `PutInProjectDialog` → `?tab=documents`, `reference.ts` `useProjectReferenceDocs`, IPC `projectAddDocuments(id, docIds, asReference)`, 모의 `addReferenceDocuments`,
+  `ReferenceTab.tsx` 삭제, i18n(`projects.tabs.reference` 삭제, `projects.documents.*`·`projects.detail.doc_counts`); 긴 이름: `dialog.tsx` `grid-cols-[minmax(0,1fr)]`, `badge.tsx` `max-w-full`,
+  `SchemasPage` 도출 요약 배지·`FormRegisterDialog` 행·`ImportDocumentsDialog`/`IngestWizard` 배지(보간 `of_rel_path`/`old_rel_path` 버그 포함)·`RequestForm`/`SourcePickerDialog` `title`·`ResultsTab` 근거
+  버튼 `max-w-[16rem]`; E2E `scale.spec` `expectInsideHorizontally` + 70자 이름 양식 등록(150 %·90 %, `toBeInViewport`), `pipeline.spec`·`dnd.spec` `toBeInViewport`, `projects.spec` 탭 4개,
+  `reference.spec` 통합 탭·구분 전환·필터. 포크 검증: typecheck, vitest 147, build, Playwright 30/30(projects·reference·scale·pipeline·dnd·organize).
+- **(6) 포크 C**(병합 0026c15): `stores/assistant.ts` 재구성(`sessions`·`activeId`·`messagesBySession`·`hydrate`·세션 포착 `push(sid,m)`/`patch(sid,id,f)`·`newSession`(빈 세션 재사용)·`select`(지연 로드)·
+  `rename`·`remove`, 메시지 `createdAt`, 복원 보정(대기 답변 → `chat_interrupted` 오류, 실행 중 플랜 → 대기), 저장은 push 즉시·patch 300 ms 디바운스, 활성 세션 id는 워크스페이스별 localStorage),
+  `attachments.ts` 세션별 첨부(`switchSession`·`dropSession`), `SessionList.tsx`(레일 `assistant-sessions`, `assistant-new-chat`, 행 `assistant-session-${id}`, 메뉴 이름 바꾸기 인라인 입력·삭제 확인,
+  `md` 미만 `assistant-session-picker`), `AssistantPage` 요청 경로 전부 세션 포착·세션별 `planningSession`·헤더 "새 대화" = `assistant-new-chat-header`, IPC 래퍼 6개, `mock-chat.ts`(워크스페이스별
+  localStorage), i18n `assistant.sessions.*`·`errors.chat_interrupted`, `assistant.test.ts` 9건, `e2e/assistant.spec.ts` 2건. 포크 검증: typecheck, vitest 152, build, Playwright 전체 62/62.
+- **(2)(3)(5-UI) 포크 A**: (병합 후 기록)
+- **문서**: `docs/plan/v0.7.0.md`, `docs/releases/v0.7.0.md`, RUN-GUIDE(§1.0·§3 6~9·§4 0.7.0 명령), 체크리스트 "0.7.0", CLAUDE.md(planner 63·knowledge chat·generate revise·schema 12), 설계 §3.5 0.7.0 메모.
+- **검증·배포**: 아래 검증 표(통합 후 전체 실행)와 릴리스 기록.
+
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
@@ -1747,6 +1787,7 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | 2026-11-10 0.3.0 1차 — 내장 양식 SW 개발 문서화 (b561120 + 후속 커밋) | `cargo test --workspace` 코어 303(4 ignored; `pipeline::schema` 13 보임/6 숨김 검사·`planner` 18·`projects` 18)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(SW 문구 31건·문맥 재작성, 기준선 재생성, 미달은 이전과 같은 mx-10 1건); vitest 25파일 147건(`mock-generate.test` 규칙 파서·프로젝트 템플릿 SW화, `template.test` 예시 견적서); Playwright 전체 실행 50건 중 48 통과 → 정리 예시 문서·어시스턴트 테스트 템플릿(유지보수) 수정 뒤 `organize`·`projects` 스펙 7/7 재실행 통과; `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(93fb59b 푸시 이벤트, run 42761926963) |
 | 2026-11-10 0.3.0 2~6차 통합 — 생성 템플릿 SW화(1번) · 토큰 예산/절별 생성(4번) · 프로젝트 단계·프로젝트별 정리·추적 사본(5+6번) · 문서 N개 스키마 도출(2번) · 글자 수정 이력(7번) | `cargo test --workspace` 코어 317(4 ignored; `generate` 토큰 예산·분할 2건, `projects`·`organize`·`export`·`aggregate`·`planner` 프로젝트 8건, `pipeline` 스키마 도출 3건, `documents::import` 이력 1건 포함)·셸 3·평가 15·통합 1, clippy(-D warnings)·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(기준선 +0.0 pt, 미달은 mx-10 1건); `npm run typecheck`·`npm run build`·`licenses:check` 통과, vitest 26파일 150건, Playwright 53/53(`generate` 4·`projects` 6·`organize` 4·`pipeline` 2·`dnd`·`documents` 5 재작성 포함); 병렬 에이전트 3개가 같은 트리에서 작업해 중간 WIP 스냅샷 3건(1c885b4·97acb87·d742501, `[skip ci]`)을 거쳤고 통합 커밋에서 CI 실행 — CI 7개 잡 모두 성공(d166b5b 푸시 이벤트, run 42771458691) |
 | 2026-11-10 0.3.0 릴리스 (772782f + 문서 77e8b69) | 버전 범프·고지/SBOM 재생성 뒤 `cargo test --workspace`·clippy·fmt·`cargo deny`·vitest·`npm run build`·`licenses:check`·`nsis:check` 통과; CI 7개 잡 성공(run 42771724261); Lite 설치파일 빌드 run 42772557097 성공, Release v0.3.0 게시(Lite 48.4 MiB + sha256 + SBOM + 고지) |
+| 2026-11-10 0.7.0 7건 일괄 (브랜치 `release/0.7.0`; 범프 d7c1f3e CI 통과, WIP be4e798·0c8c8ad·4bf1298, 포크 병합 ab369f1·0026c15 → 통합은 릴리스 기록 참고) | 코어: `DOCULENS_PDFIUM=… cargo test --workspace --no-fail-fast` 코어 336(4 ignored; `knowledge::chat` 1건, `generate::tests` revise 1건, `planner::tests` revise_draft 규칙 1건, `db` 0012 포함)·셸 3·평가 15·통합 1, clippy(-D warnings)·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 129건 99.2%(+0.0 pt, 기준선 재생성). 웹·CI·빌드: (통합 후 기록) |
 | 2026-11-10 0.6.0 에이전트 전기능 (브랜치 `release/0.6.0`; WIP 34af57f·ee718ff → 통합 커밋은 릴리스 기록 참고) | `DOCULENS_PDFIUM=… cargo test --workspace --no-fail-fast` 코어 333(4 ignored; `settings_catalog` 2건, `planner::tests` 규칙 커버리지·2단계 라우팅·`exec_tests::agent_ops_run_against_the_workspace` 포함)·셸 3·평가 15·통합 1, clippy(-D warnings)·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 125건 99.2%(기준선 재생성); `npm run typecheck`·`npm run build`·`licenses:check`·`nsis:check` 통과, vitest 26파일 147건, Playwright 60/60(`agent.spec` 6건 포함, 통합 전체 1회 2.7분); CI run 42808591342(2efc181) 7개 잡 성공; Lite 빌드·게시 run 42810685950 → Release v0.6.0(51,010,802 B) |
 | 2026-11-10 0.5.0 프로젝트 중심 통합 (브랜치 `release/0.5.0`; WIP 94b6803·2661bf5·fcf34d7·bc806be → 통합 커밋은 CI 기록 참고) | `DOCULENS_PDFIUM=… cargo test --workspace --no-fail-fast` 코어 328(4 ignored; `db` 스키마 9→11 마이그레이션 1건, `knowledge::tests` 프로젝트 범위 1건, `planner` 참고 자료 문구·범위 프로젝트·`exec_tests` add_to_project 3건 포함)·셸 3·평가 15·통합 1, clippy(-D warnings)·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(+0.0 pt); `npm run typecheck`·`npm run build`·`licenses:check`·`nsis:check` 통과, vitest 26파일 147건(`aggregate.test` 삭제, `mock-reference.test` 3건 추가), Playwright 54/54(`reference.spec` 5건 + 재작성 스펙; 포크별 실행 44/44·10/10 뒤 통합 전체 1회); CI run 42795675001(3a2a26f) 7개 잡 성공; Lite 설치파일 빌드 run 42797299609 성공(아티팩트 50,824,823 B, publish=false) |
 | 2026-11-10 0.4.0 모델 교체 (WIP 7b939ab·d973eb1·483daae → 통합 커밋은 CI 기록 참고) | `DOCULENS_PDFIUM=… cargo test --workspace --no-fail-fast` 코어 324(4 ignored; `registry`·`modelstore`·`gguf`·`memory`·`engine::presets`·`pipeline::image` Gemma 4 테스트, `knowledge` 접두어 1건, `planner` "4B" 1건 포함)·셸 3·평가 15·통합 1, clippy(-D warnings)·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(기준선 재생성 +0.0 pt, 미달은 mx-10 1건); 실제 엔진 테스트(로컬 b12066 CPU 빌드 + `tiny-gemma4`): 1 passed(137 s; 로드 2.5 s, 채팅·스트리밍 8 델타·json_schema `{"ok": true}`·이미지 채팅(프롬프트 557 토큰)·분류 JSON·KIE 접두·플래너(모델 오류 허용 경로)·양식/NL 스키마(잘림 허용)·초안·규칙 문법 수락; 모델 섹션 `image-min-tokens 512 / image-max-tokens 1024 / ubatch-size 1024`); `npm run typecheck`·`npm run build`·`licenses:check`·`nsis:check` 통과, vitest 26파일 150건, Playwright 53/53; 병렬 에이전트 2개(프런트·문서 / 임베딩·플래너·평가); CI 7개 잡 모두 성공(d238dc4 푸시 이벤트, run 42781321912 — 실제 llama-server 잡은 tiny-gemma4 픽스처); Lite 설치파일 빌드 run 42782108585 성공(`ref=d238dc4`, `publish=false` — 아티팩트 `DocuLens-Setup-Lite-0.4.0-x64` 50,798,147 B, 2027-02-08까지 보관; 이후 사용자 지시로 run 42784292140 `publish=true` → Release v0.4.0 게시, Lite 50,802,945 B) |
@@ -1821,6 +1862,8 @@ P6·P7 항목.
 
 ## 다음 단계 메모 (v1.x)
 
+00000. **0.7.0 7건 일괄(2026-11-10)**: `docs/plan/v0.7.0.md` — 위 "0.7.0" 절대로 구현 중/완료(릴리스 기록 참고). 남은 것은 체크리스트 "0.7.0" 절(실모델로 절 수정 품질·세션 저장·보존 파기 확인)과
+   계획 §4의 범위 밖 항목(프로젝트 저장 구조 통합, 초안 어시스턴트 다중 턴, 세션 검색·내보내기).
 0000. **0.6.0 에이전트 전기능(2026-11-10)**: `docs/plan/v0.6.0.md` — 위 "0.6.0" 절대로 구현·게시(Release v0.6.0, 2efc181). 남은 것은 `release/0.6.0` → `main` 재병합(사용자 PR), 체크리스트 "0.6.0" 절(실모델로 계열 선택 정확도·지연 확인)과
    §5의 범위 밖 항목(초안 편집·휴지통 복원).
 000. **0.5.0 프로젝트 중심 통합(2026-11-10)**: `docs/plan/v0.5.0.md` — 위 "0.5.0" 절대로 구현. 남은 것은 체크리스트 "0.5.0" 절(사용자 PC 확인)과 플래너 `open` op의 옛 화면

@@ -269,6 +269,9 @@ pub fn chat_session_create(app: AppHandle, title: Option<String>) -> UiResult<ch
 
 #[tauri::command(async)]
 pub fn chat_session_rename(app: AppHandle, id: String, title: String) -> UiResult<bool> {
+    if title.trim().is_empty() {
+        return Err(UiError::invalid("title_empty"));
+    }
     let ctx = knowledge_bridge::context(&app)?;
     Ok(ctx.db.with(|c| chat::rename_session(c, &id, &title))?)
 }
