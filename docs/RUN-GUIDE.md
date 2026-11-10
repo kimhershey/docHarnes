@@ -42,9 +42,9 @@ DocuLens를 **실제 Windows PC에서 설치·실행·빌드·검증**하는 절
 ### 1.1 배포 설치파일 설치 (방식 D)
 
 1. GitHub Releases의 `v<버전>`에서 `DocuLens-Setup-Lite-<버전>-x64.exe`(또는 `-Full-`)와 같은 이름의 `.sha256` 파일을 받습니다
-   (최신 판은 https://github.com/kimhershey/docHarnes/releases/latest — 0.5.0은 Lite 설치파일과 `.sha256`·고지·SBOM만 배포(0.4.0은 v0.4.0 태그),
+   (최신 판은 https://github.com/kimhershey/docHarnes/releases/latest — 0.6.0은 Lite 설치파일과 `.sha256`·고지·SBOM만 배포(0.4.0은 v0.4.0 태그; 0.5.0은 릴리스 없이 0.6.0에 포함),
    Full 설치파일은 https://github.com/kimhershey/docHarnes/releases/tag/v0.2.0 , CUDA 엔진 팩 zip은
-   https://github.com/kimhershey/docHarnes/releases/tag/v0.1.0 자산에 있습니다 — 엔진 태그 b12066이 같아 그대로 씁니다. 변경 내용은 `docs/releases/v0.5.0.md`).
+   https://github.com/kimhershey/docHarnes/releases/tag/v0.1.0 자산에 있습니다 — 엔진 태그 b12066이 같아 그대로 씁니다. 변경 내용은 `docs/releases/v0.6.0.md`).
    - 아직 릴리스에 올리지 않은 빌드(`publish=false`)는 Actions의 해당 실행 페이지 하단 **Artifacts**에서
      `DocuLens-Setup-<Lite|Full>-<버전>-x64` zip으로 받습니다(GitHub 로그인 필요, 90일 보관). zip 안에 설치파일과 `.sha256`이 있습니다.
    - **Lite**: 앱 + llama-server CPU·Vulkan 팩(`engines\cpu`, `engines\vulkan`) + PDFium(`pdfium\`) + ko-dic(`ko-dic\`)
@@ -56,7 +56,7 @@ DocuLens를 **실제 Windows PC에서 설치·실행·빌드·검증**하는 절
    - **모델(GGUF)은 어느 쪽에도 들어 있지 않습니다.** 첫 실행 뒤 설정 > AI 모델(0.4.0까지는 모델 관리자 메뉴)에서 준비합니다(§2.3, §3).
 2. SHA-256을 확인합니다(명령 프롬프트 또는 PowerShell).
    ```
-   certutil -hashfile DocuLens-Setup-Lite-0.5.0-x64.exe SHA256
+   certutil -hashfile DocuLens-Setup-Lite-0.6.0-x64.exe SHA256
    ```
    출력된 해시가 `.sha256` 파일의 값(공백 앞 64자)과 같아야 합니다(대소문자 무관). 다르면 실행하지 말고 다시 받으세요.
 3. 실행합니다. 설치파일은 **코드 서명이 없어** SmartScreen이 "Windows의 PC 보호" 창을 띄웁니다 → **추가 정보 → 실행**.
