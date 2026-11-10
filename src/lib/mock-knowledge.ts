@@ -42,6 +42,7 @@ import {
   type VersionInfo,
   type VersionInput,
 } from "./types";
+import { carriedText } from "./carried-text";
 
 const KEY = "doculens.mock.knowledge";
 const EMBEDDING_FLAG = "doculens.mock.embedding"; // "1" = bge-m3 installed + loaded
@@ -526,6 +527,21 @@ async function answer(req: AnswerRequest, requestId: string): Promise<Answer> {
     created_at: now(),
     feedback: null,
   };
+  if (req.retrieve === false) {
+    // Text-only request: the pasted text is the material — nothing is looked up or cited (the "model" tidies it).
+    const body = carriedText(req.question) ?? req.question;
+    base.text = body
+      .replace(/\s+/g, " ")
+      .replace(/\s*([.。])\s*/g, "$1 ")
+      .trim();
+    if (!(await stream(requestId, base.text))) throw err("cancelled", "cancelled");
+    base.sentences = parseSentences(base.text, 0);
+    base.prompt_tokens = 300 + base.text.length;
+    base.completion_tokens = Math.ceil(base.text.length / 2);
+    base.elapsed_ms = Math.round(performance.now() - started);
+    if (req.save !== false) base.id = saveAnswer(load(), base);
+    return base;
+  }
   if (kind === "summary" || kind === "compare") {
     const ids = kind === "compare" ? [req.document_id, req.compare_document_id].filter((x): x is string => !!x) : [req.document_id].filter((x): x is string => !!x);
     const chunks = ids.flatMap((id) => s.chunks[id] ?? []);

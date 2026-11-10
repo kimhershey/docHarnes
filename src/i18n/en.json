@@ -483,7 +483,8 @@
       "retention_logs": "logs",
       "retention_journal": "file-operation journal",
       "retention_chats": "chat history",
-      "retention_temp": "temporary data"
+      "retention_temp": "temporary data",
+      "knowledge_text_only": "without retrieval"
     },
     "scope": {
       "title": "Scope",
@@ -1557,7 +1558,9 @@
     "stop": "Stop",
     "cancelled": "Answer generation stopped.",
     "follow_up": "Follow-up (keep previous evidence)",
-    "citation_aria": "Source {{index}}: {{label}}"
+    "citation_aria": "Source {{index}}: {{label}}",
+    "text_only": "Answered without retrieval",
+    "text_only_hint": "Answered from the text you sent; no documents were looked up or cited."
   },
   "search": {
     "title": "Search",

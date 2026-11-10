@@ -5,6 +5,7 @@
 //! The model is reached through [`ChatBackend`] (the engine manager in the
 //! app, a scripted backend in tests).
 
+use std::collections::VecDeque;
 use std::time::Instant;
 
 use serde_json::json;
@@ -14,6 +15,7 @@ use super::{
     repo, Answer, AnswerKind, AnswerLanguage, AnswerRequest, AnswerSentence, Citation, ConversationTurn, SearchChannel,
     SearchHit, SearchMode, SearchRequest, SearchScope, SummaryMode, TurnRole,
 };
+use crate::engine::client::context_overflow;
 use crate::engine::{ChatRequest, ChatResponse, EngineManager};
 use crate::error::{CoreError, Result};
 
@@ -89,6 +91,9 @@ pub struct AnswerDeps<'a> {
     pub model: Option<String>,
     /// Polled between model calls and during streamed partial summaries.
     pub cancelled: Option<&'a dyn Fn() -> bool>,
+    /// Context window of the loaded model in tokens (llama-server `n_ctx`) when the caller knows it:
+    /// evidence budgets are capped so the prompt fits. `None` trusts `AnswerRequest::context_tokens`.
+    pub context_size: Option<u32>,
 }
 
 impl AnswerDeps<'_> {
@@ -107,6 +112,11 @@ const EXCERPT_CHARS: usize = 160;
 const MAX_QUESTION_CHARS: usize = 4_000;
 pub const TOP_K_RANGE: std::ops::RangeInclusive<u32> = 1..=32;
 pub const CONTEXT_TOKENS_RANGE: std::ops::RangeInclusive<u32> = 1_000..=24_000;
+/// Tokens the prompt takes beyond the evidence: system rules, block labels, the request line and the
+/// server's own margin.
+const PROMPT_SCAFFOLD_TOKENS: u32 = 700;
+/// Smallest evidence budget worth asking with (a chunk or two).
+const MIN_EVIDENCE_TOKENS: u32 = 400;
 
 /// Earlier turns kept for the model (the most recent ones) and the length of each.
 const MAX_HISTORY_TURNS: usize = 8;
@@ -448,12 +458,13 @@ pub fn retrieve(deps: &AnswerDeps<'_>, req: &AnswerRequest) -> Result<Vec<(Searc
             }
         }
     }
+    let budget = evidence_budget(deps, req, MAX_ANSWER_TOKENS, detect_lang(req));
     let mut out = Vec::new();
     let mut used = 0u32;
     for h in hits {
         let text = super::index::indexed_text(h.heading_path.as_deref(), &h.text);
-        let cost = super::chunker::estimate_tokens(&text) + 12;
-        if !out.is_empty() && (used + cost > req.context_tokens || out.len() as u32 >= req.top_k.max(1)) {
+        let cost = prompt_cost(&text);
+        if !out.is_empty() && (used + cost > budget || out.len() as u32 >= req.top_k.max(1)) {
             break;
         }
         used += cost;
@@ -592,7 +603,7 @@ fn numbered(intro: &str, rules: &[&str]) -> String {
     s
 }
 
-fn user_prompt(req: &AnswerRequest, sources: &str, lang: Lang) -> String {
+fn user_prompt(req: &AnswerRequest, sources: Option<&str>, lang: Lang) -> String {
     let question = match req.kind {
         AnswerKind::Explain => {
             let sel = req.selection.as_deref().unwrap_or("").trim();
@@ -630,9 +641,12 @@ fn user_prompt(req: &AnswerRequest, sources: &str, lang: Lang) -> String {
         out.push_str(&s);
         out.push('\n');
     }
-    out.push_str(&match lang {
-        Lang::Ko => format!("[질문]\n{question}\n\n[근거]\n{sources}"),
-        Lang::En => format!("[Question]\n{question}\n\n[Sources]\n{sources}"),
+    out.push_str(&match (lang, sources) {
+        (Lang::Ko, Some(sources)) => format!("[질문]\n{question}\n\n[근거]\n{sources}"),
+        (Lang::En, Some(sources)) => format!("[Question]\n{question}\n\n[Sources]\n{sources}"),
+        // Text-only request: the user's text is the material; there is nothing to quote.
+        (Lang::Ko, None) => format!("[요청]\n{question}"),
+        (Lang::En, None) => format!("[Request]\n{question}"),
     });
     out
 }
@@ -640,6 +654,65 @@ fn user_prompt(req: &AnswerRequest, sources: &str, lang: Lang) -> String {
 /// Whether the request carries conversation / screen context for the prompt.
 fn has_context(req: &AnswerRequest) -> bool {
     !req.history.is_empty() || req.session.as_ref().is_some_and(|s| !s.is_empty())
+}
+
+/// Prompt-side cost of a text. The chunker's estimate runs about a quarter low on OCR'd business
+/// Korean under the Qwen3.5 tokenizer (a 24K budget once produced a 28K request), so budgeting adds
+/// that margin plus the per-source scaffolding.
+fn prompt_cost(text: &str) -> u32 {
+    super::chunker::estimate_tokens(text) * 13 / 10 + 12
+}
+
+/// Evidence budget that also fits the loaded model: the configured `context_tokens`, capped by the
+/// model's context minus the reply, the prompt scaffolding and the question / selection / history /
+/// screen blocks that travel with the request.
+fn evidence_budget(deps: &AnswerDeps<'_>, req: &AnswerRequest, reply_tokens: u32, lang: Lang) -> u32 {
+    let mut budget = req.context_tokens;
+    if let Some(ctx) = deps.context_size {
+        let mut fixed = PROMPT_SCAFFOLD_TOKENS + reply_tokens + prompt_cost(&req.question);
+        if let Some(sel) = req.selection.as_deref() {
+            fixed += prompt_cost(sel);
+        }
+        if let Some(h) = history_block(req, lang) {
+            fixed += prompt_cost(&h);
+        }
+        if let Some(s) = session_block(req, lang) {
+            fixed += prompt_cost(&s);
+        }
+        budget = budget.min(ctx.saturating_sub(fixed));
+    }
+    budget.max(MIN_EVIDENCE_TOKENS)
+}
+
+/// System prompt for a request that brings its own text (다듬기 · 교정 · 번역 · 정리): nothing is looked
+/// up or quoted, and the model must not add facts beyond the given text.
+fn text_only_prompt(lang: Lang, with_context: bool) -> String {
+    match lang {
+        Lang::Ko => {
+            let mut rules = vec![
+                "사용자가 보낸 글만을 재료로 요청(다듬기·교정·번역·요약·정리)을 수행합니다. 문서를 찾거나 인용하지 않습니다.",
+                "글에 없는 사실·수치·이름을 덧붙이지 않고 뜻을 바꾸지 않습니다.",
+                "요청이 형식을 정하면(개조식, 표, 존댓말 등) 그 형식을 따르고, 결과만 출력합니다(설명·머리말 없음).",
+                "글의 언어로 답하되 번역 요청은 요청한 언어로 답합니다.",
+            ];
+            if with_context {
+                rules.push("[이전 대화]와 [현재 화면]은 '이 글', '아까 문장' 같은 지시어가 무엇을 가리키는지 푸는 데만 씁니다.");
+            }
+            numbered("당신은 DocuLens 문서 어시스턴트입니다. 반드시 다음 규칙을 지키세요.", &rules)
+        }
+        Lang::En => {
+            let mut rules = vec![
+                "Work only on the text the user sent (polish, proofread, translate, summarise, tidy). Do not look documents up or quote them.",
+                "Add no facts, figures or names that are not in the text and keep its meaning.",
+                "Follow any format the request sets (bullets, table, register) and output the result only, with no preamble.",
+                "Answer in the language of the text, or in the requested language for a translation.",
+            ];
+            if with_context {
+                rules.push("Use [Conversation] and [Current screen] only to resolve what 'this text' or 'the sentence above' refers to.");
+            }
+            numbered("You are the DocuLens document assistant. Follow these rules strictly.", &rules)
+        }
+    }
 }
 
 fn chat_request(model: &str, system: &str, user: &str, max_tokens: u32) -> ChatRequest {
@@ -830,10 +903,11 @@ pub fn answer(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn FnM
     let req = &clamp_request(req);
     let lang = detect_lang(req);
     let ko = lang == Lang::Ko;
-    let evidence = retrieve(deps, req)?;
-    let sources: Vec<Citation> =
+    // `retrieve = false`: the user sent the text to work on (다듬기 · 번역 · 교정); nothing is looked up.
+    let mut evidence = if req.retrieve { retrieve(deps, req)? } else { Vec::new() };
+    let mut sources: Vec<Citation> =
         evidence.iter().enumerate().map(|(i, (h, _))| citation_from_hit(i as u32 + 1, h)).collect();
-    let texts: Vec<String> = evidence.iter().map(|(_, t)| t.clone()).collect();
+    let mut texts: Vec<String> = evidence.iter().map(|(_, t)| t.clone()).collect();
     let mut out = Answer {
         kind: req.kind,
         question: if req.kind == AnswerKind::Explain && req.question.trim().is_empty() {
@@ -845,7 +919,7 @@ pub fn answer(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn FnM
         document_id: req.document_id.clone(),
         ..Answer::default()
     };
-    if sources.is_empty() {
+    if sources.is_empty() && req.retrieve {
         out.no_evidence = true;
         if !req.allow_general {
             out.text = no_evidence_text(ko).to_string();
@@ -863,10 +937,30 @@ pub fn answer(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn FnM
     if deps.is_cancelled() {
         return Err(CoreError::Cancelled);
     }
-    let system = system_prompt(lang, out.used_general_knowledge, req.kind, has_context(req));
-    let user = user_prompt(req, &source_block(&sources, &texts, ko), lang);
-    let creq = chat_request(&model, &system, &user, MAX_ANSWER_TOKENS);
-    let resp = deps.chat.chat_stream(&creq, on_delta)?;
+    let system = if req.retrieve {
+        system_prompt(lang, out.used_general_knowledge, req.kind, has_context(req))
+    } else {
+        text_only_prompt(lang, has_context(req))
+    };
+    // A prompt the server cannot fit (HTTP 400 "exceeds the available context size") is retried with
+    // half the evidence until it fits or a single source is left.
+    let resp = loop {
+        let block = if req.retrieve { Some(source_block(&sources, &texts, ko)) } else { None };
+        let user = user_prompt(req, block.as_deref(), lang);
+        let creq = chat_request(&model, &system, &user, MAX_ANSWER_TOKENS);
+        match deps.chat.chat_stream(&creq, on_delta) {
+            Ok(r) => break r,
+            Err(e) if context_overflow(&e) && evidence.len() > 1 => {
+                let keep = evidence.len() / 2;
+                evidence.truncate(keep);
+                sources.truncate(keep);
+                texts.truncate(keep);
+                out.sources = sources.clone();
+                log::info!("answer: prompt exceeded the context; retrying with {keep} sources");
+            }
+            Err(e) => return Err(e),
+        }
+    };
     out.text = resp.content.trim().to_string();
     let (sentences, conflicts) = parse_answer(&out.text, sources.len() as u32);
     out.sentences = sentences;
@@ -929,13 +1023,14 @@ pub fn summarize(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn 
         .collect();
     let texts: Vec<String> =
         rows.iter().map(|r| super::index::indexed_text(r.chunk.heading_path.as_deref(), &r.chunk.text)).collect();
-    // Groups within the context budget.
+    // Groups within the context budget (the loaded model's context when known).
+    let budget = evidence_budget(deps, req, MAX_SUMMARY_TOKENS, lang);
     let mut groups: Vec<(usize, usize)> = Vec::new();
     let mut start = 0;
     let mut used = 0u32;
     for (i, t) in texts.iter().enumerate() {
-        let cost = super::chunker::estimate_tokens(t) + 12;
-        if i > start && used + cost > req.context_tokens {
+        let cost = prompt_cost(t);
+        if i > start && used + cost > budget {
             groups.push((start, i));
             start = i;
             used = 0;
@@ -948,14 +1043,20 @@ pub fn summarize(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn 
     let mut partials: Vec<String> = Vec::new();
     let mut prompt_tokens = 0;
     let mut completion_tokens = 0;
-    let multi = groups.len() > 1;
-    for (gi, (a, b)) in groups.iter().enumerate() {
-        let block = source_block(&sources[*a..*b], &texts[*a..*b], ko);
+    // A group the server still cannot fit (its tokenizer counts more than the estimate) is split in
+    // half and retried; a single chunk that does not fit loses its tail.
+    let mut queue: VecDeque<(usize, usize)> = groups.into_iter().collect();
+    let mut texts = texts;
+    while let Some((a, b)) = queue.pop_front() {
+        let part = partials.len() + 1;
+        let total = part + queue.len();
+        let multi = total > 1;
+        let block = source_block(&sources[a..b], &texts[a..b], ko);
         let ask = if multi {
             if ko {
-                format!("이 문서는 {}부분으로 나뉘어 있고 지금은 {}번째 부분입니다. 이 부분의 핵심 내용을 빠짐없이 개조식으로 정리하세요. 각 항목 끝에 근거 번호를 붙이세요.", groups.len(), gi + 1)
+                format!("이 문서는 {total}부분으로 나뉘어 있고 지금은 {part}번째 부분입니다. 이 부분의 핵심 내용을 빠짐없이 개조식으로 정리하세요. 각 항목 끝에 근거 번호를 붙이세요.")
             } else {
-                format!("This document comes in {} parts; this is part {}. List every key point of this part as bullets with source numbers.", groups.len(), gi + 1)
+                format!("This document comes in {total} parts; this is part {part}. List every key point of this part as bullets with source numbers.")
             }
         } else {
             instruction.to_string()
@@ -970,10 +1071,28 @@ pub fn summarize(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn 
         }
         let creq = chat_request(&model, &system, &user, MAX_SUMMARY_TOKENS);
         let mut sink = |d: &str| if multi { !deps.is_cancelled() } else { on_delta(d) };
-        let resp = deps.chat.chat_stream(&creq, &mut sink)?;
-        prompt_tokens += resp.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0);
-        completion_tokens += resp.usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0);
-        partials.push(resp.content.trim().to_string());
+        match deps.chat.chat_stream(&creq, &mut sink) {
+            Ok(resp) => {
+                prompt_tokens += resp.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0);
+                completion_tokens += resp.usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0);
+                partials.push(resp.content.trim().to_string());
+            }
+            Err(e) if context_overflow(&e) => {
+                if b - a > 1 {
+                    let mid = (a + b) / 2;
+                    queue.push_front((mid, b));
+                    queue.push_front((a, mid));
+                } else if texts[a].chars().count() > 400 {
+                    let keep = texts[a].chars().count() / 2;
+                    texts[a] = texts[a].chars().take(keep).collect();
+                    queue.push_front((a, b));
+                } else {
+                    return Err(e);
+                }
+                log::info!("summary: prompt exceeded the context; splitting sources {}..{}", a + 1, b);
+            }
+            Err(e) => return Err(e),
+        }
     }
     // Hierarchical reduce: merge partials in groups that fit the budget until one remains.
     let mut level = 0;
@@ -992,8 +1111,8 @@ pub fn summarize(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn 
             if deps.is_cancelled() {
                 return Err(CoreError::Cancelled);
             }
-            let joined = group.join("\n\n");
-            group.clear();
+            let parts = std::mem::take(group);
+            let joined = parts.join("\n\n");
             let user = if ko {
                 format!("[부분 요약]\n{joined}\n\n[요청]\n위 부분 요약들을 합쳐 {instruction} 근거 번호 [n]은 그대로 유지하세요.")
             } else {
@@ -1001,16 +1120,26 @@ pub fn summarize(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn 
             };
             let creq = chat_request(&model, &system, &user, MAX_SUMMARY_TOKENS);
             let mut sink = |d: &str| if last { on_delta(d) } else { !deps.is_cancelled() };
-            let resp = deps.chat.chat_stream(&creq, &mut sink)?;
-            prompt_tokens += resp.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0);
-            completion_tokens += resp.usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0);
-            merged.push(resp.content.trim().to_string());
+            match deps.chat.chat_stream(&creq, &mut sink) {
+                Ok(resp) => {
+                    prompt_tokens += resp.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0);
+                    completion_tokens += resp.usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0);
+                    merged.push(resp.content.trim().to_string());
+                }
+                Err(e) if context_overflow(&e) => {
+                    // The merge did not fit: keep the partials for the next level instead (each one is a
+                    // model reply, so a level with smaller groups converges).
+                    log::info!("summary: merge prompt exceeded the context; deferring {} partials", parts.len());
+                    merged.extend(parts);
+                }
+                Err(e) => return Err(e),
+            }
             Ok(())
         };
         let n = partials.len();
         for (i, p) in partials.iter().enumerate() {
-            let cost = super::chunker::estimate_tokens(p) + 8;
-            if !group.is_empty() && used + cost > req.context_tokens {
+            let cost = prompt_cost(p);
+            if !group.is_empty() && used + cost > budget {
                 flush(&mut group, &mut merged, false)?;
                 used = 0;
             }
@@ -1128,14 +1257,25 @@ pub fn compare(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn Fn
             if focus.is_empty() { String::new() } else { format!(" (focus: {focus})") }
         )
     };
-    let block = source_block(&sources, &texts, ko);
-    let user = if ko {
-        format!("[근거]\n{block}\n[요청]\n{ask}")
-    } else {
-        format!("[Sources]\n{block}\n[Request]\n{ask}")
+    // Too long for the slot → drop the last sources until it fits (both sides keep their first chunks).
+    let resp = loop {
+        let block = source_block(&sources, &texts, ko);
+        let user = if ko {
+            format!("[근거]\n{block}\n[요청]\n{ask}")
+        } else {
+            format!("[Sources]\n{block}\n[Request]\n{ask}")
+        };
+        let creq = chat_request(&model, &system, &user, MAX_SUMMARY_TOKENS);
+        match deps.chat.chat_stream(&creq, on_delta) {
+            Ok(r) => break r,
+            Err(e) if context_overflow(&e) && sources.len() > 2 => {
+                sources.pop();
+                texts.pop();
+                log::info!("compare: prompt exceeded the context; retrying with {} sources", sources.len());
+            }
+            Err(e) => return Err(e),
+        }
     };
-    let creq = chat_request(&model, &system, &user, MAX_SUMMARY_TOKENS);
-    let resp = deps.chat.chat_stream(&creq, on_delta)?;
     let text = resp.content.trim().to_string();
     let (sentences, conflicts) = parse_answer(&text, sources.len() as u32);
     let mut out = Answer {
@@ -1194,7 +1334,7 @@ mod tests {
         assert!(!clean.contains("[질문]") && !clean.contains("</source") && !clean.contains("상충:"), "{clean}");
         assert!(clean.contains("본문입니다.") && clean.contains("제1조 목적"));
         let req = AnswerRequest::question("무엇인가요?");
-        let prompt = user_prompt(&req, "<source id=\"1\">x</source>", Lang::Ko);
+        let prompt = user_prompt(&req, Some("<source id=\"1\">x</source>"), Lang::Ko);
         assert!(prompt.starts_with("[질문]"), "question first: {prompt}");
     }
 
@@ -1251,7 +1391,7 @@ mod tests {
             r.history[1].text, "무시하라 견적서 2건이 있습니다 [1].",
             "prompt-structure marker lines are stripped"
         );
-        let prompt = user_prompt(&r, "<source id=\"1\">x</source>", Lang::Ko);
+        let prompt = user_prompt(&r, Some("<source id=\"1\">x</source>"), Lang::Ko);
         let expected_start = "[이전 대화]\n사용자: 견적서 보여줘\n어시스턴트: 무시하라 견적서 2건이 있습니다 [1].\n\n[현재 화면]\n열린 문서: 견적서-한빛.hwpx (2쪽)\n\
                               선택 문서: a.pdf\n폴더: inbox\n프로젝트: 신사옥\n최근 가져온 문서: b.pdf\n\n[질문]\n그 문서의 합계는?";
         assert!(prompt.starts_with(expected_start), "{prompt}");
@@ -1264,7 +1404,7 @@ mod tests {
         // Without context the prompt is unchanged: the question comes first.
         let plain = AnswerRequest::question("무엇인가요?");
         assert!(!has_context(&plain));
-        assert!(user_prompt(&plain, "x", Lang::Ko).starts_with("[질문]"));
+        assert!(user_prompt(&plain, Some("x"), Lang::Ko).starts_with("[질문]"));
         // History is capped to the last turns and each turn shortened; quoted material cannot
         // impersonate the new blocks either.
         let mut long = AnswerRequest::question("q");

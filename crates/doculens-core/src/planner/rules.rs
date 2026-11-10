@@ -1396,7 +1396,7 @@ fn answer(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         scope.doc_ids = selection_ids(ctx);
     }
     Some(mk(
-        Op::Answer { question: t.raw.trim().to_string(), cite: Some(true) },
+        Op::Answer { question: t.raw.trim().to_string(), cite: Some(true), knowledge: None },
         scope,
         0.8,
         t.t("지식 베이스·문서에서 근거를 찾아 답합니다", "Answer with evidence from the knowledge base / documents")
@@ -1480,7 +1480,7 @@ fn topic(t: &Text<'_>) -> Option<Plan> {
         return Some(mk(Op::Noop {}, Scope::default(), 0.9, t.t("별도 작업 없음", "Nothing to do").into()));
     }
     Some(mk(
-        Op::Answer { question: t.raw.trim().to_string(), cite: Some(true) },
+        Op::Answer { question: t.raw.trim().to_string(), cite: Some(true), knowledge: None },
         Scope::default(),
         0.7,
         t.t("지식 베이스·문서에서 근거를 찾아 답합니다", "Answer with evidence from the knowledge base / documents")

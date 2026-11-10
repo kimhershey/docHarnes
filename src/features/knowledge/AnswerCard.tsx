@@ -116,6 +116,11 @@ export function AnswerCard({
               {t("answer.general_badge")}
             </Badge>
           )}
+          {!answer.no_evidence && !answer.used_general_knowledge && answer.sources.length === 0 && (
+            <Badge variant="outline" data-testid="answer-text-only" title={t("answer.text_only_hint")}>
+              {t("answer.text_only")}
+            </Badge>
+          )}
           {answer.model && "elapsed_ms" in answer && <span>{t("answer.meta", { model: answer.model, ms: answer.elapsed_ms })}</span>}
           {!compact && answer.question && <span className="truncate">· {answer.question}</span>}
         </div>

@@ -488,6 +488,10 @@ pub struct AnswerRequest {
     /// Persist the answer in `answers` (default true).
     #[serde(default = "default_true")]
     pub save: bool,
+    /// Look evidence up in the knowledge base (default). `false` for a request that brings its own text
+    /// (다듬기 · 교정 · 번역 · 정리): the model works on that text alone and cites nothing.
+    #[serde(default = "default_true")]
+    pub retrieve: bool,
     /// Cosine-similarity floor for vector-only evidence (None = built-in default).
     #[serde(default)]
     pub min_similarity: Option<f32>,
@@ -515,6 +519,7 @@ impl AnswerRequest {
             summary_mode: SummaryMode::KeyPoints,
             keep_chunks: Vec::new(),
             save: true,
+            retrieve: true,
             min_similarity: None,
             history: Vec::new(),
             session: None,

@@ -1329,6 +1329,31 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   앞으로 릴리스를 *만들* 때 `docs/releases/<tag>.md`가 있으면 그 파일을 쓰고 없으면 `--generate-notes`로 돌아간다.
 - **권한**: 이전 세션에서 거부됐던 `publish=true` 디스패치(설치파일 워크플로)는 이번에는 통과했다(사용자가 릴리스를 명시적으로 요청).
 
+### 사용자 PC 보고 수정 4차 (2026-11-10; 요약 컨텍스트 초과 400 · 불필요한 RAG 호출)
+
+- **보고**: "제공된 문장을 다듬어 정리" 요청이 **요약(문서별, 55건)** 플랜으로 해석돼 실행됐고, 실행 중 `HTTP 400: request (28107 tokens)
+  exceeds the available context size (16384 tokens)`로 실패. 두 가지 결함이 겹친 사례.
+- **원인 1 — 근거 예산이 모델 컨텍스트와 무관**: 지식 응답(질문·설명·요약·비교)의 근거 예산은 설정 `knowledge.context_tokens`(1,000~24,000,
+  기본 6,000)만 따랐고 로드된 모델의 n_ctx(16K)는 보지 않았다. 게다가 청커의 토큰 추정(한글 0.75 토큰/자)이 OCR 업무 문서에서 서버
+  토크나이저보다 약 25 % 낮아 설정 24K가 실제 28K가 됐고, 400 응답에 재시도가 없었다.
+- **수정 1**: `AnswerDeps.context_size`(셸이 `engine.status().model(..).ctx`를 넣음 — `knowledge_bridge::answer`, `planner::exec`의 answer·
+  summarize·explain·compare) → `evidence_budget` = min(설정, ctx − 응답 예산(1,200/1,500) − 스캐폴딩 700 − 질문·선택·이전 대화·현재 화면
+  블록 비용), 프롬프트 비용은 추정 × 1.3 + 12. 서버가 그래도 거부하면(`engine::client::context_overflow`, 추출기와 공용) answer는 근거를
+  절반씩 줄여, summarize는 그룹을 반으로 나누고(단일 청크는 뒷부분 절단) 병합 단계는 부분 요약을 다음 단계로 미뤄, compare는 마지막
+  근거를 빼며 재시도한다. 테스트: `LimitedChat`(토큰 상한을 넘는 프롬프트를 400으로 거부하는 더블)로 10쪽 규정 요약이 2.6K 슬롯에서
+  모두 슬롯 이하 요청으로 쪼개지고, 컨텍스트를 모를 때 거부당한 그룹이 분할돼 모든 청크가 요약에 닿는 것, 질문이 근거를 줄여 성공하는 것.
+- **원인 2 — 붙여 넣은 글을 라이브러리 작업으로 해석**: 플래너 프롬프트에 "사용자가 글을 함께 보내며 다듬기·교정·번역을 요청"하는 경우의
+  규칙이 없어 모델이 `summarize(each_doc)` + 빈 scope(= 전체 문서)를 냈다. summarize는 라이브러리 문서용이라 문서마다 검색·요약이 돈다.
+- **수정 2**: `Op::Answer.knowledge: Option<bool>`(false = 검색 없이 보낸 글만으로 답), 플래너 규칙 7 확장 + few-shot("다음 문장을 다듬어
+  정리해줘: …" → answer, knowledge=false), `AnswerRequest.retrieve`(false → 검색·인용 없음, 전용 시스템 프롬프트 "보낸 글만 재료로, 사실
+  추가 금지"). **`planner::guard::prefer_text_only_answer`**: 모델이 낸 플랜이 폴더·내용 필터 없는 지식 op(summarize/answer/explain/compare/
+  search)뿐이고 문장이 본문을 담고 있으면(다듬기 동사 + 콜론/줄바꿈/따옴표 + 60자 이상, 또는 본문 뒤 지시문) answer{knowledge:false}로
+  재지정하고 경고 `text_only_answer`를 카드에 남긴다. 날짜만 채워진 필터(본문 속 "12월말"을 날짜 해석기가 채움)는 명시 범위로 보지 않는다.
+  모델 우선 원칙은 그대로이며 이 규칙은 모델 결과에 대한 사후 안전장치다. 프런트: `handlePlan`이 `retrieve=false`로 `knowledge_answer`를
+  부르고 답변 카드에 "검색 없이 답변" 배지(`answer-text-only`), 플랜 설명에 "문서 검색 없이". 모의 백엔드도 같은 흐름(`carried-text.ts`).
+- **남은 것**: 55건 문서별 요약 같은 대량 작업은 플랜 카드의 "대상 문서 n건"을 보고 승인하는 현재 흐름 그대로다(명확화로 바꾸지 않음).
+  실제 Qwen3.5-4B가 규칙 7을 얼마나 따르는지는 사용자 PC에서 확인(안전장치가 받쳐 줌).
+
 ### UI 배율 대응 — 고정 px 상자 제거 (2026-11-09; 사용자 보고 "UI 배율이 높아질 때 글자 잘림", A안 결정)
 
 - **증상·원인**: 설정 > 일반 > UI 배율(90~150 %, Ctrl+Shift+=/−)은 루트 글꼴 크기(rem)만 키운다. Tailwind 유틸리티는 rem이라 함께
@@ -1372,6 +1397,7 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | 2026-11-09 사용자 PC 보고 수정 2차 4·5번 + 3차 6·7번 (9ca340d·6014ab9·b04660d) | `cargo test --workspace` 코어 294(4 ignored; `documents::layout` 15·`knowledge::answer` 7·`projects` 18 포함)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과(새 의존성 없음, 고지·SBOM 변경 없음); vitest 25파일 147건(`conversation.test.ts` 4·`textLayer.test.ts` 4 추가); Playwright 45건(`knowledge.spec` 세션 기억·`projects.spec` 자동 분류 추가, `documents.spec` 수정 글자 색 단언); `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(b04660d 푸시 이벤트; 9ca340d·6014ab9도 성공) |
 | 2026-11-09 어시스턴트 모델 우선 해석 + 되묻기·취소 (3467ad4) | `cargo test --workspace` 코어 296(4 ignored; `planner` 15·`prerouter` 8 포함)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과; vitest 25파일 147건; Playwright 46건(`planner.spec` 되묻기·취소 1건 추가); `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(3467ad4 푸시 이벤트) |
 | 2026-11-09 UI 배율 대응 A안(고정 px 상자 제거) | 프런트 전용 변경(Rust·고지·SBOM 변경 없음): `npm run typecheck`·`npm run build`·`licenses:check` 통과, vitest 25파일 147건, Playwright 49건(`scale.spec` 3건 추가; 1280×800 기본 뷰포트에서 150 % 검사); 모의 백엔드 15화면 × 4조건 자동 점검에서 실제 잘림 0; CI 7개 잡 모두 성공(be0b82d 푸시 이벤트, run 42601541022) |
+| 2026-11-10 요약 컨텍스트 초과 · 불필요한 RAG (4차) | `cargo test --workspace`(코어 `knowledge::tests` 3건·`planner::guard` 3건·`planner::tests` 1건 추가), clippy·fmt·`cargo deny` 통과, 새 의존성 없음; vitest 25파일 147건; Playwright 50건(`planner.spec` 붙여 넣은 글 1건 추가); `npm run build`·`licenses:check` 통과. CI는 푸시 후 확인 |
 | 2026-11-09 이미지 위 글자 레이어 · 우측 패널 AI 검색/이력 (488af39·9e56dd6) | `cargo test --workspace` 코어 266(3 ignored; `documents::layout` 9·`render` 실 PDFium 문자 박스·`import` 레이아웃 왕복 추가)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과; vitest 23파일 139건(`text-layer.test.ts` 8 추가); Playwright 41/41(`documents`·`knowledge`·`pipeline` 스펙을 레이어·검토 큐 기준으로 재작성); CI 7개 잡 두 커밋 모두 성공 |
 | 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 3회(run 42471185353·42475854955 solid 43 MB, 42547230697 파일별 압축 47.6 MB; 159 파일 검사 통과) · 1~3번 반영 Lite 빌드 성공(run 42577030466, 검증된 커밋 a461405 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.5 MB; Release 게시는 권한 분류기 거부로 publish=false) · **1~8번(어시스턴트 모델 우선·되묻기·취소 포함) 반영 Lite 빌드 성공(run 42592935148, 검증된 커밋 3467ad4 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.6 MB, 2027-02-07까지 보관; publish=false — Release 게시는 사용자 작업)** · **0.2.0 릴리스(2026-11-09, https://github.com/kimhershey/docHarnes/releases/tag/v0.2.0)**: 검증된 커밋 3d55db8 고정, publish=true — Full run 42613728278(`DocuLens-Setup-Full-0.2.0-x64.exe` 1,156,786,994 B) → Lite run 42613985631(`DocuLens-Setup-Lite-0.2.0-x64.exe` 50,579,259 B); 자산 6개(설치파일 2종 + `.sha256` 2 + `THIRD-PARTY-NOTICES.md` + `sbom.cdx.json`); 이번에는 publish 디스패치가 거부되지 않음 · **Full 0.1.0 빌드 성공(run 42547228170): 1.1 GB, 219 파일, CUDA 팩 cu121·cu129 동봉 검사 통과** · CUDA 팩 빌드 성공(cu121 run 42533483890 · cu129 run 42533486332 → Release v0.1.0) — 위 "패키징·고지" 참조 |
 

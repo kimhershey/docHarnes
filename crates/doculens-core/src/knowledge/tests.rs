@@ -3,6 +3,9 @@
 //! Korean golden set (recall@10, top-1 clause accuracy). Runs with the
 //! built-in analyzer; with `DOCULENS_KODIC` set it uses ko-dic.
 
+use super::answer::ChatBackend;
+use crate::engine::{ChatRequest, ChatResponse};
+use crate::error::{CoreError, Result};
 use std::collections::HashSet;
 
 use super::answer::{answer, compare, summarize, AnswerDeps, ScriptedChat};
@@ -430,7 +433,8 @@ fn grounded_answers_cite_sources_and_handle_no_evidence() {
                 .into(),
         model: "qwen-test".into(),
     };
-    let deps = AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None };
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None, context_size: None };
     let mut streamed = String::new();
     let a = answer(&deps, &AnswerRequest::question("출장비는 무엇으로 구성되나요?"), &mut |d| {
         streamed.push_str(d);
@@ -458,7 +462,8 @@ fn grounded_answers_cite_sources_and_handle_no_evidence() {
 
     // No evidence: nonsense query → canned text, no model call.
     let silent = ScriptedChat { reply: "SHOULD NOT BE CALLED".into(), model: "m".into() };
-    let deps = AnswerDeps { search: w.search_deps(None), chat: &silent, model: None, cancelled: None };
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &silent, model: None, cancelled: None, context_size: None };
     let a = answer(&deps, &AnswerRequest::question("플루토늄 원자로 냉각수 xyzzy"), &mut |_| true).unwrap();
     assert!(a.no_evidence && a.sources.is_empty());
     assert_eq!(a.text, super::answer::no_evidence_text(true));
@@ -475,7 +480,8 @@ fn grounded_answers_cite_sources_and_handle_no_evidence() {
     let chat = ScriptedChat {
         reply: "지체상금은 납품 지연 시 부과되는 금액입니다[1].".into(), model: "m".into()
     };
-    let deps = AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None };
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None, context_size: None };
     let mut req = AnswerRequest::question("");
     req.kind = AnswerKind::Explain;
     req.selection = Some("지체일수 1일당 계약금액의 0.1%".into());
@@ -504,7 +510,8 @@ fn grounded_answers_cite_sources_and_handle_no_evidence() {
             unreachable!()
         }
     }
-    let deps = AnswerDeps { search: w.search_deps(None), chat: &NoModel, model: None, cancelled: None };
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &NoModel, model: None, cancelled: None, context_size: None };
     let err = answer(&deps, &AnswerRequest::question("출장비"), &mut |_| true).unwrap_err();
     assert!(err.to_string().contains("no_active_model"), "{err}");
 }
@@ -516,7 +523,8 @@ fn summaries_map_reduce_and_comparisons() {
         reply: "- 출장비는 교통비·숙박비·일비로 구성된다[1].\n- 숙박비 한도는 150,000원이다[2].".into(),
         model: "m".into(),
     };
-    let deps = AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None };
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None, context_size: None };
     let mut req = AnswerRequest::question("");
     req.kind = AnswerKind::Summary;
     req.document_id = Some("reg2".into());
@@ -541,6 +549,158 @@ fn summaries_map_reduce_and_comparisons() {
     assert_eq!(a.kind, AnswerKind::Compare);
     let docs_cited: HashSet<&str> = a.sources.iter().map(|s| s.document_id.as_str()).collect();
     assert!(docs_cited.contains("reg2") && docs_cited.contains("reg1"), "{docs_cited:?}");
+}
+
+/// Replies like `ScriptedChat` but refuses prompts above `limit` estimated tokens the way llama-server
+/// does (HTTP 400 "exceeds the available context size"), recording every attempt's size.
+struct LimitedChat {
+    limit: u32,
+    reply: String,
+    sizes: std::sync::Mutex<Vec<u32>>,
+}
+
+impl LimitedChat {
+    fn new(limit: u32, reply: &str) -> LimitedChat {
+        LimitedChat { limit, reply: reply.into(), sizes: std::sync::Mutex::new(Vec::new()) }
+    }
+    fn sizes(&self) -> Vec<u32> {
+        self.sizes.lock().unwrap().clone()
+    }
+}
+
+impl ChatBackend for LimitedChat {
+    fn model_id(&self) -> Option<String> {
+        Some("limited".into())
+    }
+    fn chat_stream(&self, req: &ChatRequest, on_delta: &mut dyn FnMut(&str) -> bool) -> Result<ChatResponse> {
+        let size: u32 = req
+            .messages
+            .iter()
+            .map(|m| crate::planner::prompts::approx_tokens(m["content"].as_str().unwrap_or("")))
+            .sum();
+        self.sizes.lock().unwrap().push(size);
+        if size > self.limit {
+            return Err(CoreError::engine(format!(
+                "/v1/chat/completions: HTTP 400: request ({size} tokens) exceeds the available context size ({} tokens), try increasing it",
+                self.limit
+            )));
+        }
+        on_delta(&self.reply);
+        Ok(ChatResponse { content: self.reply.clone(), ..ChatResponse::default() })
+    }
+    fn complete(&self, req: &ChatRequest) -> Result<ChatResponse> {
+        self.chat_stream(req, &mut |_| true)
+    }
+}
+
+/// A ten-page regulation (the fixture's regulations are a few hundred tokens each, too short for the
+/// context-budget tests): every page carries the regulation plus its own appendix line.
+fn add_long_regulation(w: &World) {
+    let pages: Vec<String> = (1..=10)
+        .map(|i| format!("{REGULATION_V2}\n\n부록 {i}. 제{i}장 보칙 — 본 장은 {i}번째 개정 사항을 담는다."))
+        .collect();
+    let refs: Vec<&str> = pages.iter().map(String::as_str).collect();
+    add_doc(&w.db, "big", "출장비규정_전문.pdf", DocumentRole::Knowledge, &refs);
+    let report = index_pending(&w.index_deps(), None, false, None, &mut |_| {}).unwrap();
+    assert_eq!(report.indexed.len(), 1, "{report:?}");
+}
+
+fn summary_request() -> AnswerRequest {
+    let mut req = AnswerRequest::question("");
+    req.kind = AnswerKind::Summary;
+    req.document_id = Some("big".into());
+    req.context_tokens = 24_000; // the setting is far above any real slot
+    req
+}
+
+#[test]
+fn summaries_fit_the_model_context_and_split_when_the_server_still_refuses() {
+    let w = World::new();
+    add_long_regulation(&w);
+    // Reference: no limit, context unknown → the whole document in as few groups as the setting allows.
+    let free = LimitedChat::new(u32::MAX, "- 핵심 [1]");
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &free, model: None, cancelled: None, context_size: None };
+    summarize(&deps, &summary_request(), &mut |_| true).unwrap();
+    let full = *free.sizes().iter().max().unwrap();
+    let free_calls = free.sizes().len();
+
+    // 1) A known (small) model context caps the evidence budget: more, smaller requests, each below the slot.
+    let slot = 2_600;
+    assert!(full > slot, "the long document must not fit a 2.6K slot in one group: {full}");
+    let capped = LimitedChat::new(slot, "- 핵심 [1]");
+    let deps = AnswerDeps {
+        search: w.search_deps(None),
+        chat: &capped,
+        model: None,
+        cancelled: None,
+        context_size: Some(slot),
+    };
+    let a = summarize(&deps, &summary_request(), &mut |_| true).unwrap();
+    assert!(!a.text.is_empty());
+    let sizes = capped.sizes();
+    assert!(sizes.iter().all(|s| *s <= slot), "every request fits the slot: {sizes:?} (slot {slot})");
+    assert!(sizes.len() > free_calls, "{} vs {free_calls}", sizes.len());
+
+    // 2) Context unknown and the server refuses the first group anyway (its tokenizer counts more than
+    //    the estimate): the group is split and retried instead of failing the whole summary.
+    let strict = LimitedChat::new(full - 1, "- 핵심 [1]");
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &strict, model: None, cancelled: None, context_size: None };
+    let a = summarize(&deps, &summary_request(), &mut |_| true).unwrap();
+    assert!(!a.text.is_empty());
+    let sizes = strict.sizes();
+    assert!(sizes[0] > full - 1 && sizes.len() >= 2 && *sizes.last().unwrap() <= full - 1, "{sizes:?}");
+    let chunks = w.db.with(|c| repo::list_chunks(c, "big")).unwrap();
+    assert_eq!(a.sources.len(), chunks.len(), "every chunk still reaches the summary");
+}
+
+#[test]
+fn an_answer_prompt_the_server_refuses_is_retried_with_fewer_sources() {
+    let w = World::new();
+    add_long_regulation(&w);
+    let question = "출장비는 무엇으로 구성되나요?";
+    let free = LimitedChat::new(u32::MAX, "출장비는 교통비·숙박비·일비로 구성됩니다[1].");
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &free, model: None, cancelled: None, context_size: None };
+    let mut req = AnswerRequest::question(question);
+    req.top_k = 8;
+    req.context_tokens = 24_000;
+    let full_answer = answer(&deps, &req, &mut |_| true).unwrap();
+    assert!(full_answer.sources.len() >= 2, "the fixture must yield several sources: {:?}", full_answer.sources.len());
+    let full = free.sizes()[0];
+
+    let strict = LimitedChat::new(full - 1, "출장비는 교통비·숙박비·일비로 구성됩니다[1].");
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &strict, model: None, cancelled: None, context_size: None };
+    let a = answer(&deps, &req, &mut |_| true).unwrap();
+    let sizes = strict.sizes();
+    assert!(sizes.len() >= 2 && sizes[0] > full - 1 && *sizes.last().unwrap() <= full - 1, "{sizes:?}");
+    assert!(!a.sources.is_empty() && a.sources.len() < full_answer.sources.len(), "{}", a.sources.len());
+    assert!(!a.no_evidence);
+}
+
+#[test]
+fn a_text_only_request_skips_retrieval_and_cites_nothing() {
+    let w = World::new();
+    let chat = ScriptedChat {
+        reply: "금번 과업은 당사가 수행하며, 기한은 12월 말까지입니다.".into(),
+        model: "m".into(),
+    };
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None, context_size: None };
+    let mut req = AnswerRequest::question(
+        "다음 문장을 다듬어줘: 금번 과업은 당사가 수행하며 기한은 12월말까지로 함. 출장비 규정은 참고만.",
+    );
+    req.retrieve = false;
+    let a = answer(&deps, &req, &mut |_| true).unwrap();
+    assert!(a.sources.is_empty() && !a.no_evidence && !a.used_general_knowledge, "{a:?}");
+    assert_eq!(a.text, chat.reply);
+    assert_eq!(a.sentences.len(), 1);
+    // The same sentence with retrieval on would have looked the regulations up (출장비) or reported no evidence.
+    req.retrieve = true;
+    let b = answer(&deps, &req, &mut |_| true).unwrap();
+    assert!(!b.sources.is_empty() || b.no_evidence);
 }
 
 #[test]
@@ -681,7 +841,8 @@ fn scoped_search_takes_the_top_n_inside_the_scope() {
 fn explain_from_a_superseded_edition_still_cites_that_document() {
     let w = World::new();
     let chat = ScriptedChat { reply: "구판의 한도는 120,000원입니다[1].".into(), model: "m".into() };
-    let deps = AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None };
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None, context_size: None };
     let mut req = AnswerRequest::question("");
     req.kind = AnswerKind::Explain;
     req.selection = Some("숙박비는 1박당 120,000원을 한도로 한다".into());

@@ -483,7 +483,8 @@
       "retention_logs": "로그",
       "retention_journal": "파일 조작 저널",
       "retention_chats": "대화 기록",
-      "retention_temp": "임시 데이터"
+      "retention_temp": "임시 데이터",
+      "knowledge_text_only": "문서 검색 없이"
     },
     "scope": {
       "title": "범위",
@@ -1557,7 +1558,9 @@
     "stop": "중지",
     "cancelled": "답변 생성을 중지했습니다.",
     "follow_up": "후속 질문(이전 근거 유지)",
-    "citation_aria": "근거 {{index}}: {{label}}"
+    "citation_aria": "근거 {{index}}: {{label}}",
+    "text_only": "검색 없이 답변",
+    "text_only_hint": "보내 주신 글만으로 답했습니다. 문서를 찾거나 인용하지 않았습니다."
   },
   "search": {
     "title": "검색",

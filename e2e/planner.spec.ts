@@ -220,6 +220,22 @@ test.describe("P5 planner", () => {
     await expect(assistantCard(page, "plan").last()).toHaveAttribute("data-plan-status", "pending");
   });
 
+  test("a pasted text with 다듬어줘 is answered from the text itself: no plan card, no retrieval", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openAssistant(page);
+    const body = "금번 과업은 당사가 수행하며 기한은 12월말까지로 하고 산출물은 설계서와 소스코드로 함. 검수는 발주처가 납품 후 2주 내에 완료하는 것으로 한다.";
+    await send(page, `다음 문장을 다듬어 정리해줘: ${body}`);
+    const card = page.locator('[data-testid="assistant-card-answer"] [data-testid="answer-card"]').last();
+    await expect(card).toBeVisible();
+    await expect(card).toHaveAttribute("data-answer-state", "done", { timeout: 15_000 });
+    await expect(card.getByTestId("answer-text-only")).toBeVisible();
+    await expect(card.getByTestId("answer-no-evidence")).toHaveCount(0);
+    await expect(card).toContainText("금번 과업은 당사가 수행하며");
+    // No library op ran: no plan card and no execution card.
+    await expect(page.locator('[data-testid="assistant-card-plan"]')).toHaveCount(0);
+  });
+
   test("slash commands still run at once; an unknown sentence asks for clarification; Esc / Ctrl+Z", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);

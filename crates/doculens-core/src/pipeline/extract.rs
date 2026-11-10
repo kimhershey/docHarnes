@@ -29,7 +29,7 @@ pub struct PageInput<'a> {
 /// exceeds the available context size (M tokens)"); small presets (CPU, 4K) hit this
 /// with a dense page text next to the image and the schema summary.
 pub fn context_overflow(e: &CoreError) -> bool {
-    matches!(e, CoreError::Engine(m) if m.contains("exceeds the available context size"))
+    crate::engine::client::context_overflow(e)
 }
 
 /// Extracts one page. `temperature` overrides the preset (precision-mode second sample).

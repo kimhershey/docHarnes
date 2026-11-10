@@ -624,6 +624,33 @@ fn deps(chat: &StageChat) -> PlannerDeps<'_> {
 }
 
 #[test]
+fn model_first_answers_a_pasted_text_from_the_text_itself_not_the_library() {
+    let body = "금번 과업은 당사가 수행하며 기한은 12월말까지로 하고 산출물은 설계서와 소스코드로 함. 검수는 발주처가 납품 후 2주 내에 완료하는 것으로 한다.";
+    let text = format!("다음 문장을 다듬어 정리해줘: {body}");
+    let chat = StageChat::new();
+    // What happened on the user's PC: the model read it as a library-wide per-document summary.
+    chat.push("plan", json!({ "summary": "제공된 문장을 다듬어 정리합니다", "intent": "summarize", "scope": {}, "operations": [{ "op": "summarize", "target": "each_doc" }], "requires_confirmation": false, "confidence": 0.95 }));
+    let r = plan(Some(&deps(&chat)), &text, &ctx(), PlanMode::ModelFirst).unwrap();
+    assert_eq!(r.source, PlanSource::Model);
+    assert!(
+        matches!(&r.plan.operations[0], Op::Answer { knowledge: Some(false), question, .. } if question == &text),
+        "{:?}",
+        r.plan
+    );
+    assert_eq!(r.plan.intent, OpKind::Answer);
+    assert!(!r.plan.requires_confirmation);
+    assert!(r.issues.iter().any(|i| i.code == "text_only_answer" && !i.blocking), "{:?}", r.issues);
+    // The model that reads it right needs no correction, and the planner prompt teaches it the rule.
+    let chat = StageChat::new();
+    chat.push("plan", json!({ "summary": "문장을 다듬습니다", "intent": "answer", "scope": {}, "operations": [{ "op": "answer", "question": text, "cite": false, "knowledge": false }], "requires_confirmation": false, "confidence": 0.9 }));
+    let r = plan(Some(&deps(&chat)), &text, &ctx(), PlanMode::ModelFirst).unwrap();
+    assert!(matches!(&r.plan.operations[0], Op::Answer { knowledge: Some(false), .. }));
+    assert!(!r.issues.iter().any(|i| i.code == "text_only_answer"));
+    let msgs = prompts::messages_for(&ctx(), &text, None, prompts::Tier::Full, None);
+    assert!(msgs[0]["content"].as_str().unwrap().contains("knowledge=false"));
+}
+
+#[test]
 fn model_path_requeries_once_with_feedback() {
     let text = "한빛과 거래한 계약 중 작년 것만 골라서 보여줘";
     let chat = StageChat::new();

@@ -226,8 +226,12 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
         result.raw = Some(reply.content.clone());
         let parsed = parse_and_validate(&value, ctx, date.as_ref());
         match parsed {
-            Ok((plan, issues)) => {
+            Ok((mut plan, mut issues)) => {
                 result.source = PlanSource::Model;
+                // A sentence that carries its own text is answered from that text, not from the library.
+                if let Some(note) = super::guard::prefer_text_only_answer(text, &mut plan, ko) {
+                    issues.push(note);
+                }
                 result.issues = issues;
                 result.plan = scoped(finalize(plan, ko));
                 return Ok(result);

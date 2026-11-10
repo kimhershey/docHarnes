@@ -110,6 +110,7 @@ import {
   type UndoReport,
   type UndoResponse,
 } from "./types";
+import { carriedText } from "./carried-text";
 
 /** File-operation journal (`{ batches, entries }`, batches tagged with their workspace). */
 const JOURNAL_KEY = "doculens.mock.journal";
@@ -1132,6 +1133,12 @@ function ruleAnswer(t: Text, ctx: PlanContext): Plan | null {
   return single({ op: "answer", question: t.raw.trim(), cite: true }, 0.8, tr(t.ko, "지식 베이스·문서에서 근거를 찾아 답합니다", "Answer with evidence from the knowledge base / documents"), scope);
 }
 
+/** A sentence that carries its own text is answered from that text, never looked up (model-first reading). */
+function textOnlyAnswer(t: string, ko: boolean): Plan | null {
+  if (!carriedText(t)) return null;
+  return single({ op: "answer", question: t.trim(), cite: false, knowledge: false }, 0.9, ko ? "보내 주신 글을 문서 검색 없이 요청대로 다듬습니다" : "Works on the text you sent, without looking documents up");
+}
+
 const COMMAND_MARKERS = ["해줘", "해주세요", "하세요", "해라", "하자", "시켜", "바꿔", "바꾸", "옮겨", "지워", "삭제", "정리", "추출", "분류", "내보내", "변환", "만들어", "실행", "열어", "보여", "찾아", "검색", "이동", "설정", "켜줘", "꺼줘", "처리", "돌려", "저장", "export", "delete", "move", "rename", "run ", "open", "show", "make", "create", "set ", "turn", "switch", "process", "extract", "classify", "organi", "import"];
 
 /** A short topic with no command verb is a knowledge-base lookup (mirrors `rules::topic`). */
@@ -1758,6 +1765,8 @@ export function planText(text: string, ctx: PlanContext, opts: { model?: boolean
     // A 되묻기 reply arrives as "original + [어시스턴트 질문] … + [사용자 답변] …": a model reads the reply as the
     // answer to its question; the parser standing in for it must not read the question's own words.
     const askBack = t.match(/^([\s\S]*?)\n\n\[(?:어시스턴트 질문|Assistant question)\] [\s\S]*?\n\[(?:사용자 답변|User reply)\] ([\s\S]*)$/);
+    const own = askBack ? null : textOnlyAnswer(t, ko);
+    if (own && accept(own, "model")) return result;
     const understood = askBack ? (rulesPlan(`${askBack[1]!.trim()} ${askBack[2]!.trim()}`.trim(), ctx) ?? rulesPlan(askBack[2]!.trim(), ctx)) : rulesPlan(t, ctx);
     if (understood && accept(understood, "model")) return result;
     result.source = "model";

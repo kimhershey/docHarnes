@@ -161,6 +161,7 @@ pub const OP_SPECS: &[OpSpec] = &[
         params: &[
             p("question", ParamType::Str, true, "질문", "question"),
             p("cite", ParamType::Bool, false, "출처 인용(기본 true)", "cite sources (default true)"),
+            p("knowledge", ParamType::Bool, false, "지식 베이스 검색(기본 true; 사용자가 보낸 글만 다듬을 때 false)", "search the knowledge base (default true; false to work on the user's own text)"),
         ],
         desc_ko: "근거 기반 질의응답(지식 베이스·문서)",
         desc_en: "grounded question answering",
