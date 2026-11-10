@@ -2585,6 +2585,16 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       const kb = await import("./mock-knowledge");
       return r(await kb.mockKnowledge(cmd, a));
     }
+    case "chat_sessions_list":
+    case "chat_session_create":
+    case "chat_session_rename":
+    case "chat_session_delete":
+    case "chat_messages_list":
+    case "chat_message_put": {
+      if (!current) throw err("no_workspace", "no workspace is open");
+      const chat = await import("./mock-chat");
+      return r(await chat.mockChat(cmd, a));
+    }
     case "pipeline_status":
     case "pipeline_process":
     case "pipeline_doc_types":

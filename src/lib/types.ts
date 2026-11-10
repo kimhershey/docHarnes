@@ -1153,6 +1153,24 @@ export interface ConversationTurn {
   text: string;
 }
 
+/** One assistant chat session (0.7.0 §1.6): stored in the workspace DB, listed by `updated_at` desc. */
+export interface ChatSessionSummary {
+  id: string;
+  title: string;
+  /** The title is derived from the first user message until the user renames the session. */
+  title_auto: boolean;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+}
+
+/** A stored chat message: the UI's message JSON as it was put (`seq` = the message id within the session). */
+export interface ChatMessageRow {
+  seq: number;
+  payload: unknown;
+  created_at: string;
+}
+
 /** What the user is looking at while asking (names resolved by the shell from the ids the UI sends). */
 export interface SessionState {
   current_document?: string | null;

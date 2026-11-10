@@ -230,6 +230,17 @@
   "assistant": {
     "title": "AI 어시스턴트",
     "new_chat": "새 대화",
+    "sessions": {
+      "title": "채팅",
+      "new": "새 채팅",
+      "rename": "이름 바꾸기",
+      "delete": "삭제",
+      "delete_confirm": "'{{title}}' 채팅과 그 대화를 삭제할까요? 되돌릴 수 없습니다.",
+      "untitled": "새 채팅",
+      "empty": "채팅이 없습니다.",
+      "messages": "메시지 {{count}}개",
+      "menu": "{{title}} 메뉴"
+    },
     "scope": {
       "label": "범위",
       "all": "전체",
@@ -281,7 +292,7 @@
     },
     "memory": {
       "turns": "기억 {{count}}턴",
-      "hint": "최근 대화(최대 8턴)와 현재 화면(열린 문서·선택·폴더·프로젝트)을 질문·명령과 함께 보냅니다. '새 대화'로 지웁니다."
+      "hint": "최근 대화(최대 8턴)와 현재 화면(열린 문서·선택·폴더·프로젝트)을 질문·명령과 함께 보냅니다. 채팅은 워크스페이스에 저장되며 '새 채팅'으로 새로 시작합니다."
     },
     "cancelled_pending": "대기 중인 질문·플랜을 취소했습니다.",
     "source_control": "제어",
@@ -1186,6 +1197,7 @@
   },
   "errors": {
     "io": "파일 입출력 오류: {{message}}",
+    "chat_interrupted": "앱이 닫혀 답변이 중단되었습니다. 다시 질문해 주세요.",
     "json": "설정 파일 형식 오류: {{message}}",
     "workspace_locked": "다른 인스턴스가 워크스페이스를 사용 중입니다 (pid {{pid}}, {{host}}).",
     "invalid_workspace": "워크스페이스로 사용할 수 없는 경로입니다: {{message}}",
