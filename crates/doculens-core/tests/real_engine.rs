@@ -30,6 +30,15 @@ const TINY_PNG: &[u8] = &[
     0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
 ];
 
+/// Grammar-constrained replies start a JSON object. The Gemma 4 chat parser wraps the schema in a
+/// ```json fence and strips it again; a reply cut off inside that prefix (tiny token budgets on a
+/// random model) still counts as constrained.
+fn json_shape(content: &str) -> bool {
+    let t = content.trim_start();
+    let body = t.strip_prefix("```json").or_else(|| t.strip_prefix("```")).unwrap_or(t).trim_start();
+    body.starts_with('{') || "```json".starts_with(t.trim_end())
+}
+
 #[test]
 fn real_llama_server_load_chat_switch() {
     let (Some(bin), Some(models_dir)) =
@@ -158,7 +167,7 @@ fn real_llama_server_load_chat_switch() {
         assert!(parsed.get("ok").is_some());
     } else {
         assert!(
-            j.content.trim_start().starts_with('{'),
+            json_shape(&j.content),
             "constrained output does not start a JSON object: {}",
             j.content
         );
@@ -205,7 +214,7 @@ fn real_llama_server_load_chat_switch() {
             let class = pipeline::classify::parse_class(&parsed, &["receipt".to_string()]);
             assert!(["receipt", "other"].contains(&class.doc_type.as_str()));
         } else {
-            assert!(reply.content.trim_start().starts_with('{'), "not a JSON prefix: {}", reply.content);
+            assert!(json_shape(&reply.content), "not a JSON prefix: {}", reply.content);
         }
         // The KIE grammar of a built-in schema is accepted by the server (no 400 on the schema).
         let receipt = pipeline::schema::builtins().into_iter().find(|b| b.key == "receipt").unwrap();
@@ -220,7 +229,7 @@ fn real_llama_server_load_chat_switch() {
         .json_schema("kie_receipt", kie_schema);
         let k = m.chat(&kie).unwrap_or_else(|e| dump(&m, "pipeline kie grammar", &e));
         eprintln!("pipeline kie → {:?} finish={:?}", k.content, k.finish_reason);
-        assert!(k.content.trim_start().starts_with('{'), "KIE grammar did not constrain the output: {}", k.content);
+        assert!(json_shape(&k.content), "KIE grammar did not constrain the output: {}", k.content);
         assert!(k.reasoning.is_none(), "thinking leaked despite enable_thinking=false");
 
         // P5 planner path: the PlanSchema grammar (anyOf over every op object) is accepted by
@@ -275,7 +284,7 @@ fn real_llama_server_load_chat_switch() {
         );
         if !output_parser_500 && !rambling {
             assert!(
-                planned.raw.as_deref().is_some_and(|r| r.trim_start().starts_with('{')),
+                planned.raw.as_deref().is_some_and(json_shape),
                 "plan output not constrained: {:?}",
                 planned.raw
             );
@@ -338,11 +347,11 @@ fn real_llama_server_load_chat_switch() {
         let g = m
             .chat(
                 &ChatRequest::text(&first, "견적서 초안")
-                    .max_tokens(24)
+                    .max_tokens(48)
                     .json_schema(doculens_core::generate::schema::SCHEMA_NAME, draft_schema),
             )
             .unwrap_or_else(|e| dump(&m, "generate draft grammar", &e));
-        assert!(g.content.trim_start().starts_with('{'), "draft grammar did not constrain the output: {}", g.content);
+        assert!(json_shape(&g.content), "draft grammar did not constrain the output: {}", g.content);
         let rules_ctx = doculens_core::projects::rules::RuleContext {
             types: vec![doculens_core::projects::rules::TypeInfo {
                 slug: "tax_invoice".into(),
@@ -357,11 +366,11 @@ fn real_llama_server_load_chat_switch() {
         let r = m
             .chat(
                 &ChatRequest::text(&first, "합계금액은 2,000,000 이상")
-                    .max_tokens(24)
+                    .max_tokens(48)
                     .json_schema("project_rule", rule_schema),
             )
             .unwrap_or_else(|e| dump(&m, "project rule grammar", &e));
-        assert!(r.content.trim_start().starts_with('{'), "rule grammar did not constrain the output: {}", r.content);
+        assert!(json_shape(&r.content), "rule grammar did not constrain the output: {}", r.content);
         eprintln!("draft / rule grammars accepted");
     }
 
