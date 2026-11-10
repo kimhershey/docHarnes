@@ -13,7 +13,7 @@
 //! Contract (types and function signatures) is fixed here; the submodules hold
 //! the implementation. Storage: migration `0005_projects.sql`.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::db::Db;
@@ -21,10 +21,12 @@ use crate::documents::DocumentRecord;
 use crate::error::Result;
 use crate::generate::{DraftRequest, OutputFormat};
 use crate::pipeline::vlm::Vlm;
+use crate::planner::{ExportFormat, ExportLayout, GroupBy};
 use crate::settings::Language;
 
 pub mod check;
 pub mod classify;
+pub mod copies;
 pub mod relations;
 pub mod repo;
 pub mod report;
@@ -32,55 +34,148 @@ pub mod rules;
 #[cfg(test)]
 mod tests;
 
-/// Intake board columns (§3.15 접수 상태 보드).
+/// Phase of a project, computed from its dates (0.3.0 plan §5; never stored): before the start
+/// → 진행예정, after the end → 완료, otherwise 진행중. A missing start counts from the creation day,
+/// a missing end keeps the project 진행중 (user decision 2026-11-10).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum ProjectStatus {
+pub enum ProjectPhase {
+    Planned,
     #[default]
-    Intake,
-    Extracting,
-    Validating,
-    Supplement,
+    Active,
     Done,
 }
 
-impl ProjectStatus {
-    pub const ALL: [ProjectStatus; 5] = [
-        ProjectStatus::Intake,
-        ProjectStatus::Extracting,
-        ProjectStatus::Validating,
-        ProjectStatus::Supplement,
-        ProjectStatus::Done,
-    ];
+impl ProjectPhase {
+    pub const ALL: [ProjectPhase; 3] = [ProjectPhase::Planned, ProjectPhase::Active, ProjectPhase::Done];
 
     pub fn as_str(self) -> &'static str {
         match self {
-            ProjectStatus::Intake => "intake",
-            ProjectStatus::Extracting => "extracting",
-            ProjectStatus::Validating => "validating",
-            ProjectStatus::Supplement => "supplement",
-            ProjectStatus::Done => "done",
+            ProjectPhase::Planned => "planned",
+            ProjectPhase::Active => "active",
+            ProjectPhase::Done => "done",
         }
     }
 
-    pub fn parse(s: &str) -> Option<ProjectStatus> {
-        ProjectStatus::ALL.into_iter().find(|k| k.as_str() == s.trim())
+    pub fn parse(s: &str) -> Option<ProjectPhase> {
+        ProjectPhase::ALL.into_iter().find(|k| k.as_str() == s.trim())
     }
 
     pub fn label(self, ko: bool) -> &'static str {
         match (self, ko) {
-            (ProjectStatus::Intake, true) => "접수",
-            (ProjectStatus::Extracting, true) => "추출",
-            (ProjectStatus::Validating, true) => "검증",
-            (ProjectStatus::Supplement, true) => "보완요청",
-            (ProjectStatus::Done, true) => "완료",
-            (ProjectStatus::Intake, false) => "Intake",
-            (ProjectStatus::Extracting, false) => "Extracting",
-            (ProjectStatus::Validating, false) => "Validating",
-            (ProjectStatus::Supplement, false) => "Supplement",
-            (ProjectStatus::Done, false) => "Done",
+            (ProjectPhase::Planned, true) => "진행예정",
+            (ProjectPhase::Active, true) => "진행중",
+            (ProjectPhase::Done, true) => "완료",
+            (ProjectPhase::Planned, false) => "Planned",
+            (ProjectPhase::Active, false) => "Active",
+            (ProjectPhase::Done, false) => "Done",
         }
     }
+}
+
+/// Parses an ISO date (`YYYY-MM-DD`, longer timestamps are cut to the date).
+pub fn parse_date(s: &str) -> Option<NaiveDate> {
+    let s = s.trim();
+    let head = s.get(..10).unwrap_or(s);
+    NaiveDate::parse_from_str(head, "%Y-%m-%d").ok()
+}
+
+/// The phase for `today` (see [`ProjectPhase`]).
+pub fn phase_for(
+    start: Option<NaiveDate>,
+    end: Option<NaiveDate>,
+    created: NaiveDate,
+    today: NaiveDate,
+) -> ProjectPhase {
+    let start = start.unwrap_or(created);
+    if today < start {
+        ProjectPhase::Planned
+    } else if end.is_some_and(|e| e < today) {
+        ProjectPhase::Done
+    } else {
+        ProjectPhase::Active
+    }
+}
+
+/// Per-project organise / export settings (plan §6), JSON in `projects.settings`. Every field is
+/// optional: the organise and export screens fall back to the global defaults.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProjectSettings {
+    /// Folder template used by "이 프로젝트 정리" and for the copies of shared documents
+    /// (default [`DEFAULT_PROJECT_FOLDER`]).
+    pub folder_template: Option<String>,
+    /// File-name template (default: the global `organize::NAME_TEMPLATE`).
+    pub name_template: Option<String>,
+    pub group_by: Option<GroupBy>,
+    pub export_format: Option<ExportFormat>,
+    pub export_layout: Option<ExportLayout>,
+    /// Workspace-relative export path template (default `exports/<date>_<project>.<ext>`).
+    pub export_path: Option<String>,
+    /// Keep a physical copy of a document that also belongs to another project (decision 6).
+    pub copies: bool,
+}
+
+impl Default for ProjectSettings {
+    fn default() -> Self {
+        Self {
+            folder_template: None,
+            name_template: None,
+            group_by: None,
+            export_format: None,
+            export_layout: None,
+            export_path: None,
+            copies: true,
+        }
+    }
+}
+
+/// Folder of a project's documents when the project has no template of its own.
+pub const DEFAULT_PROJECT_FOLDER: &str = "documents/{{project}}/{{doc_type}}";
+
+impl ProjectSettings {
+    pub fn folder_template(&self) -> &str {
+        self.folder_template.as_deref().map(str::trim).filter(|t| !t.is_empty()).unwrap_or(DEFAULT_PROJECT_FOLDER)
+    }
+}
+
+/// State of a tracked copy (`document_copies.state`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CopyState {
+    #[default]
+    Synced,
+    /// The copy was edited outside DocuLens (hash differs from the one written).
+    Modified,
+    /// The copy file is gone.
+    Missing,
+}
+
+impl CopyState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CopyState::Synced => "synced",
+            CopyState::Modified => "modified",
+            CopyState::Missing => "missing",
+        }
+    }
+    pub fn parse(s: &str) -> Option<CopyState> {
+        [CopyState::Synced, CopyState::Modified, CopyState::Missing].into_iter().find(|k| k.as_str() == s.trim())
+    }
+}
+
+/// A physical copy of a document in the folder of one of its further projects (decision 6).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DocumentCopy {
+    pub document_id: String,
+    pub project_id: String,
+    /// Workspace-relative path of the copy.
+    pub rel_path: String,
+    pub content_hash: String,
+    pub size_bytes: u64,
+    pub state: CopyState,
+    pub created_at: DateTime<Utc>,
+    pub synced_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -88,13 +183,21 @@ pub struct Project {
     pub id: String,
     pub name: String,
     pub template_id: Option<String>,
-    pub status: ProjectStatus,
     /// 접수번호.
     pub intake_no: Option<String>,
     /// 담당.
     pub owner: Option<String>,
-    /// 기한 (ISO date).
-    pub due_date: Option<String>,
+    /// 시작일 (ISO date; `None` = the creation day).
+    pub start_date: Option<String>,
+    /// 종료일 (ISO date; `None` = open-ended).
+    pub end_date: Option<String>,
+    /// Computed from the dates for today (plan §5).
+    pub phase: ProjectPhase,
+    /// 기한 경과: the end date has passed but the project is incomplete (required documents
+    /// missing, mismatches in the last check, or never checked) — a badge, not a phase.
+    pub overdue: bool,
+    #[serde(default)]
+    pub settings: ProjectSettings,
     pub notes: Option<String>,
     /// `inbox/<folder>` auto-mapping source when the project was created from an inbox subfolder.
     pub inbox_folder: Option<String>,
@@ -121,12 +224,15 @@ pub struct ProjectInput {
     pub id: Option<String>,
     pub name: String,
     pub template_id: Option<String>,
-    pub status: Option<ProjectStatus>,
     pub intake_no: Option<String>,
     pub owner: Option<String>,
-    pub due_date: Option<String>,
+    /// ISO dates; on update `None` keeps, `Some("")` clears.
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
     pub notes: Option<String>,
     pub inbox_folder: Option<String>,
+    /// `None` keeps the stored settings.
+    pub settings: Option<ProjectSettings>,
     /// `None` keeps the stored keywords, `Some(vec![])` clears them.
     pub keywords: Option<Vec<String>>,
 }
@@ -378,6 +484,10 @@ pub struct RelationGraph {
 pub struct ProjectDocument {
     pub document: DocumentRecord,
     pub added_at: DateTime<Utc>,
+    /// The tracked copy in this project's folder when the document also belongs to an earlier
+    /// project (decision 6); `None` = the original file is the project's copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy: Option<DocumentCopy>,
 }
 
 /// Everything the project screen shows for one project.

@@ -9,8 +9,9 @@ import { isPlanExecution, isRecord, opLabel } from "@/features/assistant/describ
 import { useDraftJobRunning } from "@/features/generate/useDraftJobRunning";
 import { maintenanceSummaryText } from "@/features/settings/maintenance";
 import { revealPath } from "@/lib/ipc";
-import { SCREEN_ROUTES, isDraftOutcome, isMaintenanceSummary, type Draft, type Job } from "@/lib/types";
+import { SCREEN_ROUTES, isDraftOutcome, isMaintenanceSummary, isSchemaDiscoveryOutcome, type Draft, type Job } from "@/lib/types";
 import { useGenerateStore } from "@/stores/generate";
+import { useSchemasStore } from "@/stores/schemas";
 
 /** `pipeline::run::ProcessReport` (pipeline jobs, extract / classify / ocr steps). */
 function isProcessReport(v: unknown): v is { processed: unknown[]; failed: unknown[]; classified: number; ocr_pages: number; extracted: number; review_pending?: number } {
@@ -50,6 +51,27 @@ export function JobResult({ job }: { job: Job }) {
           {t("generate.open_in_generate")}
         </Button>
         <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
+      </div>
+    );
+  }
+  if (isSchemaDiscoveryOutcome(result)) {
+    // 0.3.0 §2: the merged draft is not saved by the job; the editor opens it for review.
+    return (
+      <div className="flex flex-wrap items-center gap-2 text-xs" data-testid="job-result-schema">
+        <span className="font-medium selectable">{result.draft.name}</span>
+        <span className="text-fg-muted">{t("schemas.form.discovery_summary", { docs: result.documents.filter((d) => d.source !== "failed").length, fields: result.merged_fields, dropped: result.dropped_fields })}</span>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            useSchemasStore.getState().openDiscovery(result);
+            navigate(SCREEN_ROUTES.schemas);
+          }}
+          data-testid="job-open-schema"
+        >
+          <FilePlus2 />
+          {t("schemas.form.open_in_editor")}
+        </Button>
       </div>
     );
   }

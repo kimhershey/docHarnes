@@ -132,6 +132,13 @@ pub enum JobSpec {
     },
     /// §3.8 daily retention purge (journal, jobs, conversations, cache LRU, trash, logs, temp).
     Maintenance,
+    /// 0.3.0 §2 form registration: field discovery over 1..N sample documents, merged into one
+    /// unsaved schema draft the editor opens (saved only by the user).
+    SchemaDiscovery {
+        doc_ids: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name_hint: Option<String>,
+    },
 }
 
 impl JobSpec {
@@ -145,6 +152,7 @@ impl JobSpec {
             JobSpec::Redo => "redo",
             JobSpec::Draft { .. } => "draft",
             JobSpec::Maintenance => "maintenance",
+            JobSpec::SchemaDiscovery { .. } => "schema_discovery",
         }
     }
 
@@ -156,6 +164,8 @@ impl JobSpec {
             JobSpec::Plan { plan, .. } if plan.needs_model() => Lane::Engine,
             // Drafts call the model (the rule-based 보완요청서 path finishes quickly anyway).
             JobSpec::Draft { .. } => Lane::Engine,
+            // Scanned / PDF forms go through the vision model page by page.
+            JobSpec::SchemaDiscovery { .. } => Lane::Engine,
             _ => Lane::Io,
         }
     }

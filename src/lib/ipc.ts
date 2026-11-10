@@ -16,12 +16,13 @@ import type {
   Project,
   ProjectDetail,
   ProjectInput,
-  ProjectStatus,
+  ProjectCopySyncReport,
   ProjectTemplate,
   Rule,
   RuleDraft,
   SaveRequest,
   SavedDocument,
+  BudgetInfo,
   TemplateInfo,
   TemplateInput,
   AggregateRequest,
@@ -102,7 +103,7 @@ import type {
   Tier,
   TierMode,
   WorkspaceInspection,
-  WorkspaceView,
+  WorkspaceView, PageTextHistory, PageTextRevert
 } from "./types";
 
 export const isTauri: boolean = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -219,6 +220,10 @@ export const api = {
     invoke<PageLayout>("documents_edit_page_words", { id, pageNo, start, end, text }),
   documentsAddPageWords: (id: string, pageNo: number, bbox: [number, number, number, number], text: string) =>
     invoke<PageLayout>("documents_add_page_words", { id, pageNo, bbox, text }),
+  documentsPageTextHistory: (id: string, pageNo: number | null) => invoke<PageTextHistory>("documents_page_text_history", { id, pageNo }),
+  documentsUndoPageText: (id: string, pageNo: number) => invoke<PageTextRevert | null>("documents_undo_page_text", { id, pageNo }),
+  documentsRedoPageText: (id: string, pageNo: number) => invoke<PageTextRevert | null>("documents_redo_page_text", { id, pageNo }),
+  documentsRevertPageText: (id: string, historyId: number) => invoke<PageTextRevert>("documents_revert_page_text", { id, historyId }),
   documentsImportPlan: (paths: string[], options: ImportOptions, source: ImportSource = "drop") =>
     invoke<DocumentImportPlan>("documents_import_plan", { args: { paths, options, source } }),
   documentsImportRun: (token: string | null, paths: string[], options: ImportOptions, source: ImportSource = "drop") =>
@@ -282,6 +287,9 @@ export const api = {
   pipelineSchemaFromNl: (description: string, baseId: string | null = null) => invoke<SchemaDraft>("pipeline_schema_from_nl", { description, baseId }),
   pipelineFormDerive: (documentId: string, name: string | null = null) => invoke<SchemaDraft>("pipeline_form_derive", { documentId, name }),
   pipelineFormRegister: (draft: SchemaDraft) => invoke<SchemaRecord>("pipeline_form_register", { draft }),
+  /** 0.3.0 §2: field discovery over 1..N sample documents as a job (its result is a `SchemaDiscoveryOutcome`). */
+  pipelineSchemaDiscover: (documentIds: string[], name: string | null = null) => invoke<string>("pipeline_schema_discover", { documentIds, name }),
+  pipelineSchemaNameExists: (name: string, excludingId: string | null = null) => invoke<boolean>("pipeline_schema_name_exists", { name, excludingId }),
   pipelineDocumentSchema: (documentId: string, schemaId: string | null) => invoke<void>("pipeline_document_schema", { documentId, schemaId }),
   pipelineRuns: (documentId: string) => invoke<ExtractionRun[]>("pipeline_runs", { documentId }),
   pipelineFields: (documentId: string, runId: string | null = null) => invoke<FieldRecord[]>("pipeline_fields", { documentId, runId }),
@@ -319,6 +327,7 @@ export const api = {
 
   // -- document generation (P6, §3.13) --
   generateTemplates: () => invoke<TemplateInfo[]>("generate_templates"),
+  generateBudgetInfo: () => invoke<BudgetInfo>("generate_budget_info"),
   /** Starts the `draft` job; the finished job's `result` is a `DraftOutcome`. */
   generateDraft: (req: DraftRequest) => invoke<{ job_id: string }>("generate_draft", { req }),
   generatePreview: (draft: Draft) => invoke<{ html: string; markdown: string }>("generate_preview", { draft }),
@@ -337,7 +346,7 @@ export const api = {
   projectGet: (id: string) => invoke<ProjectDetail>("project_get", { id }),
   projectAddDocuments: (id: string, docIds: string[]) => invoke<ProjectDetail>("project_add_documents", { id, docIds }),
   projectRemoveDocument: (id: string, docId: string) => invoke<ProjectDetail>("project_remove_document", { id, docId }),
-  projectSetStatus: (id: string, status: ProjectStatus) => invoke<Project>("project_set_status", { id, status }),
+  projectSyncCopies: (id: string) => invoke<ProjectCopySyncReport>("project_sync_copies", { id }),
   projectTemplates: () => invoke<ProjectTemplate[]>("project_templates"),
   projectTemplateSave: (input: TemplateInput) => invoke<ProjectTemplate>("project_template_save", { input }),
   projectTemplateDelete: (id: string) => invoke<boolean>("project_template_delete", { id }),

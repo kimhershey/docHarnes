@@ -4,7 +4,7 @@
 
 import type { TFunction } from "i18next";
 
-import type { DocTypeInfo, FieldDef, Project, Rule, RuleOperand, SchemaRecord, Verdict } from "@/lib/types";
+import type { DocTypeInfo, FieldDef, Rule, RuleOperand, SchemaRecord, Verdict } from "@/lib/types";
 
 export interface FieldOption {
   path: string;
@@ -114,23 +114,4 @@ export function verdictVariant(v: Verdict): "ok" | "warn" | "danger" | "muted" {
 
 export function newRule(description = ""): Rule {
   return { id: crypto.randomUUID().replace(/-/g, ""), description, left: { doc_type: null, field: null, value: null }, op: "eq", right: { doc_type: null, field: null, value: null }, tolerance: null, required: true, enabled: true };
-}
-
-/**
- * Why moving a project to 완료 needs a confirmation: it was never checked, or the last check left
- * mismatches / missing documents. Null when the move needs no confirmation.
- */
-export function doneMoveWarning(project: Pick<Project, "last_check_at" | "last_mismatch" | "missing_count">): "unchecked" | "findings" | null {
-  if (!project.last_check_at) return "unchecked";
-  if (project.last_mismatch > 0 || project.missing_count > 0) return "findings";
-  return null;
-}
-
-/** Kanban column order (§3.15 접수 → 추출 → 검증 → 보완요청 → 완료). */
-export const STATUS_ORDER = ["intake", "extracting", "validating", "supplement", "done"] as const;
-
-export function nextStatus(status: (typeof STATUS_ORDER)[number], direction: 1 | -1): (typeof STATUS_ORDER)[number] | null {
-  const i = STATUS_ORDER.indexOf(status);
-  const n = i + direction;
-  return n >= 0 && n < STATUS_ORDER.length ? STATUS_ORDER[n]! : null;
 }

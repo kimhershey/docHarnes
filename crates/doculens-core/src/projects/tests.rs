@@ -146,7 +146,8 @@ fn project(db: &Db, name: &str, template: Option<&str>) -> Project {
                 template_id: template.map(str::to_string),
                 intake_no: Some("2026-0042".into()),
                 owner: Some("박담당".into()),
-                due_date: Some("2026-11-30".into()),
+                start_date: Some("2026-01-01".into()),
+                end_date: Some("2099-12-31".into()),
                 ..Default::default()
             },
         )
@@ -185,9 +186,20 @@ fn certification_world(db: &Db) -> Project {
 #[test]
 fn migration_adds_project_tables() {
     let db = db();
-    // Schema 5 added the project tables; schema 6 (page layout) only adds a column to `pages`.
-    assert_eq!(SCHEMA_VERSION, 7);
-    assert_eq!(db.user_version().unwrap(), 7);
+    // Schema 5 added the project tables; 0008 (0.3.0) turned the status into dates and added `document_copies`.
+    assert!(SCHEMA_VERSION >= 8, "{SCHEMA_VERSION}");
+    assert_eq!(db.user_version().unwrap(), SCHEMA_VERSION);
+    let columns: Vec<String> = db
+        .with(|c| {
+            let mut s = c.prepare("SELECT name FROM pragma_table_info('projects') ORDER BY cid")?;
+            let rows = s.query_map([], |r| r.get::<_, String>(0))?;
+            rows.collect()
+        })
+        .unwrap();
+    for col in ["start_date", "end_date", "settings"] {
+        assert!(columns.iter().any(|n| n == col), "missing column {col}: {columns:?}");
+    }
+    assert!(!columns.iter().any(|n| n == "status"), "the manual status column is gone: {columns:?}");
     let tables: Vec<String> = db
         .with(|c| {
             let mut s = c.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")?;
@@ -195,9 +207,15 @@ fn migration_adds_project_tables() {
             rows.collect()
         })
         .unwrap();
-    for t in
-        ["projects", "project_templates", "project_documents", "project_rules", "project_runs", "project_rule_results"]
-    {
+    for t in [
+        "projects",
+        "project_templates",
+        "project_documents",
+        "project_rules",
+        "project_runs",
+        "project_rule_results",
+        "document_copies",
+    ] {
         assert!(tables.iter().any(|n| n == t), "missing table {t}: {tables:?}");
     }
 }
@@ -348,7 +366,9 @@ fn project_crud_inherits_template_rules() {
     let db = db();
     let p = project(&db, "  한빛 인증  심사 ", Some("tpl_certification_audit"));
     assert_eq!(p.name, "한빛 인증  심사", "trimmed, inner spacing kept");
-    assert_eq!(p.status, ProjectStatus::Intake);
+    assert_eq!((p.phase, p.overdue), (ProjectPhase::Active, false), "between the dates → 진행중");
+    assert_eq!((p.start_date.as_deref(), p.end_date.as_deref()), (Some("2026-01-01"), Some("2099-12-31")));
+    assert_eq!(p.settings, ProjectSettings::default());
     assert_eq!((p.document_count, p.missing_count), (0, 3));
     assert!(p.last_check_at.is_none());
     let rules = db.with(|c| repo::rules_of(c, &p.id)).unwrap();
@@ -375,14 +395,20 @@ fn project_crud_inherits_template_rules() {
                     id: Some(p.id.clone()),
                     name: "한빛 인증 심사 2026".into(),
                     template_id: Some("tpl_certification_audit".into()),
-                    status: Some(ProjectStatus::Validating),
                     notes: Some("재심".into()),
+                    settings: Some(ProjectSettings {
+                        folder_template: Some("documents/{{project}}".into()),
+                        copies: false,
+                        ..Default::default()
+                    }),
                     ..Default::default()
                 },
             )
         })
         .unwrap();
-    assert_eq!((updated.name.as_str(), updated.status), ("한빛 인증 심사 2026", ProjectStatus::Validating));
+    assert_eq!(updated.name.as_str(), "한빛 인증 심사 2026");
+    assert_eq!(updated.settings.folder_template.as_deref(), Some("documents/{{project}}"));
+    assert!(!updated.settings.copies);
     assert_eq!(updated.notes.as_deref(), Some("재심"));
     assert_eq!(updated.intake_no.as_deref(), Some("2026-0042"), "a `None` field keeps the stored value");
     assert_eq!(updated.owner.as_deref(), Some("박담당"));
@@ -403,9 +429,26 @@ fn project_crud_inherits_template_rules() {
     assert_eq!((cleared.intake_no, cleared.owner), (None, None), "a blank `Some` clears the field");
     assert_eq!(cleared.notes.as_deref(), Some("재심"));
     assert_eq!(cleared.template_id.as_deref(), Some("tpl_certification_audit"), "the template is kept too");
-    assert_eq!(cleared.status, ProjectStatus::Validating);
-    db.with(|c| repo::set_status(c, &p.id, ProjectStatus::Done)).unwrap();
-    assert_eq!(db.with(|c| repo::get_project(c, &p.id)).unwrap().unwrap().status, ProjectStatus::Done);
+    assert!(!cleared.settings.copies, "settings survive a save without them");
+    // The dates drive the phase: a passed end date completes the project, a blank end re-opens it.
+    let yesterday = (chrono::Local::now().date_naive() - chrono::Duration::days(1)).to_string();
+    db.with(|c| repo::set_dates(c, &p.id, None, Some(Some(&yesterday)))).unwrap();
+    let done = db.with(|c| repo::get_project(c, &p.id)).unwrap().unwrap();
+    assert_eq!((done.phase, done.overdue), (ProjectPhase::Done, true), "unchecked with missing documents → 기한 경과");
+    let reopened = db
+        .with(|c| {
+            repo::save_project(
+                c,
+                &ProjectInput {
+                    id: Some(p.id.clone()),
+                    name: done.name.clone(),
+                    end_date: Some(String::new()),
+                    ..Default::default()
+                },
+            )
+        })
+        .unwrap();
+    assert_eq!((reopened.phase, reopened.end_date), (ProjectPhase::Active, None), "no end date → 진행중");
 
     // Rule CRUD.
     let r = add_rule(
@@ -1059,7 +1102,8 @@ fn report_markdown_lists_documents_checklist_and_verdicts() {
     check(&deps(&db, None), &p.id, &[]).unwrap();
     let md = report(&db, &p.id, Language::Ko).unwrap();
     assert!(md.starts_with("# 한빛 인증 심사\n"));
-    assert!(md.contains("접수번호: 2026-0042") && md.contains("담당: 박담당") && md.contains("기한: 2026-11-30"));
+    assert!(md.contains("상태: 진행중") && md.contains("접수번호: 2026-0042") && md.contains("담당: 박담당"), "{md}");
+    assert!(md.contains("시작: 2026-01-01") && md.contains("종료: 2099-12-31"), "{md}");
     assert!(md.contains("| 세금계산서 | ti1_tax_invoice.pdf | 2026-09-30 | 검토 대기 |"), "{md}");
     assert!(md.contains("| 계약금액 = 세금계산서 합계금액 | 불일치 |"), "{md}");
     assert!(md.contains("| 통과 |") && md.contains("| 누락 (") || md.contains("| 누락 |"), "{md}");
@@ -1420,4 +1464,245 @@ fn the_model_decides_undecided_documents_when_asked() {
     let none = classify(&deps(&db, Some(&vlm)), &ClassifyRequest { use_model: true, ..Default::default() }).unwrap();
     assert!(none.suggestions[0].project_id.is_none());
     assert!(none.suggestions[0].reasons.iter().any(|r| r.contains("해당 프로젝트 없음")));
+}
+
+// -- 0.3.0 item 5: phases from the dates ------------------------------------------------------
+
+#[test]
+fn phase_follows_the_start_and_end_dates() {
+    let d = |s: &str| parse_date(s).unwrap();
+    let today = d("2026-11-10");
+    // Before the start → 진행예정; between → 진행중; after the end → 완료.
+    assert_eq!(phase_for(Some(today + chrono::Duration::days(1)), None, today, today), ProjectPhase::Planned);
+    assert_eq!(phase_for(Some(today), None, today, today), ProjectPhase::Active);
+    assert_eq!(phase_for(Some(d("2026-01-01")), Some(d("2026-12-31")), today, today), ProjectPhase::Active);
+    assert_eq!(phase_for(Some(d("2026-01-01")), Some(today), today, today), ProjectPhase::Active, "the end day counts");
+    assert_eq!(phase_for(Some(d("2026-01-01")), Some(d("2026-11-09")), today, today), ProjectPhase::Done);
+    // Without a start the creation day is the start; without an end the project never completes.
+    assert_eq!(phase_for(None, None, d("2026-12-01"), today), ProjectPhase::Planned);
+    assert_eq!(phase_for(None, None, d("2026-10-01"), today), ProjectPhase::Active);
+    assert_eq!(phase_for(None, Some(d("2026-10-01")), d("2026-09-01"), today), ProjectPhase::Done);
+    assert_eq!(ProjectPhase::parse("done"), Some(ProjectPhase::Done));
+    assert_eq!(
+        (ProjectPhase::Planned.as_str(), ProjectPhase::Active.label(true), ProjectPhase::Done.label(false)),
+        ("planned", "진행중", "Done")
+    );
+    assert!(parse_date("nope").is_none() && parse_date(" 2026-01-05 ").is_some());
+    assert_eq!(parse_date("2026-01-05T09:00:00Z"), parse_date("2026-01-05"), "a timestamp keeps its day");
+}
+
+#[test]
+fn overdue_badge_needs_a_passed_end_date_and_open_findings() {
+    let db = db();
+    let yesterday = (chrono::Local::now().date_naive() - chrono::Duration::days(1)).to_string();
+    let p = db
+        .with(|c| {
+            repo::save_project(
+                c,
+                &ProjectInput {
+                    name: "완료 프로젝트".into(),
+                    start_date: Some("2026-01-01".into()),
+                    end_date: Some(yesterday.clone()),
+                    ..Default::default()
+                },
+            )
+        })
+        .unwrap();
+    // No template (nothing missing) but never checked → 기한 경과.
+    assert_eq!((p.phase, p.overdue, p.missing_count), (ProjectPhase::Done, true, 0));
+    let run = check(&deps(&db, None), &p.id, &[]).unwrap();
+    assert_eq!(run.mismatch, 0);
+    let checked = db.with(|c| repo::get_project(c, &p.id)).unwrap().unwrap();
+    assert_eq!((checked.phase, checked.overdue), (ProjectPhase::Done, false), "checked, nothing open → plain 완료");
+    // A missing required document re-raises the badge; an open end date never shows it.
+    let with_template = project(&db, "미완 프로젝트", Some("tpl_certification_audit"));
+    db.with(|c| repo::set_dates(c, &with_template.id, None, Some(Some(&yesterday)))).unwrap();
+    let late = db.with(|c| repo::get_project(c, &with_template.id)).unwrap().unwrap();
+    assert!(late.phase == ProjectPhase::Done && late.overdue && late.missing_count == 3);
+    db.with(|c| repo::set_dates(c, &with_template.id, None, Some(None))).unwrap();
+    let open = db.with(|c| repo::get_project(c, &with_template.id)).unwrap().unwrap();
+    assert_eq!((open.phase, open.overdue), (ProjectPhase::Active, false));
+    // Summaries carry the phase for the planner context.
+    let summaries = db.with(repo::list_projects).unwrap();
+    assert!(summaries.iter().all(|p| ProjectPhase::parse(p.phase.as_str()).is_some()));
+}
+
+// -- 0.3.0 item 6: tracked copies of documents shared by several projects -------------------
+
+struct CopyWorld {
+    db: Db,
+    paths: crate::paths::WorkspacePaths,
+    _dir: tempfile::TempDir,
+}
+
+impl CopyWorld {
+    fn new() -> CopyWorld {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = crate::paths::WorkspacePaths::new(dir.path());
+        for d in paths.all_dirs() {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        CopyWorld { db: db(), paths, _dir: dir }
+    }
+
+    /// Registers a real file at `rel` with the given bytes and document type.
+    fn doc(&self, id: &str, rel: &str, bytes: &[u8], doc_type: &str) {
+        let abs = self.paths.root.join(rel);
+        std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        std::fs::write(&abs, bytes).unwrap();
+        let hash = crate::documents::import::blake3_file(&abs).unwrap();
+        self.db
+            .with(|c| {
+                docs::insert_document(
+                    c,
+                    &NewDocument {
+                        id: id.into(),
+                        rel_path: rel.into(),
+                        original_name: rel.rsplit('/').next().unwrap().to_string(),
+                        source_kind: SourceKind::Pdf,
+                        content_hash: hash,
+                        size_bytes: bytes.len() as u64,
+                        file_modified_at: None,
+                        role: DocumentRole::Work,
+                        import_batch_id: None,
+                    },
+                )?;
+                docs::set_doc_type(c, id, Some(doc_type), Some("manual"))
+            })
+            .unwrap();
+    }
+
+    fn project(&self, name: &str, settings: Option<ProjectSettings>) -> Project {
+        self.db
+            .with(|c| {
+                repo::save_project(
+                    c,
+                    &ProjectInput {
+                        name: name.into(),
+                        intake_no: Some("2026-001".into()),
+                        settings,
+                        ..Default::default()
+                    },
+                )
+            })
+            .unwrap()
+    }
+
+    fn add(&self, project_id: &str, ids: &[&str]) -> u32 {
+        let ids: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
+        copies::add_documents(&self.db, &self.paths, project_id, &ids, Language::Ko).unwrap()
+    }
+
+    fn copies_of(&self, project_id: &str) -> Vec<DocumentCopy> {
+        self.db.with(|c| copies::list_for_project(c, project_id)).unwrap()
+    }
+
+    fn exists(&self, rel: &str) -> bool {
+        self.paths.root.join(rel).is_file()
+    }
+}
+
+#[test]
+fn second_membership_writes_a_tracked_copy_that_follows_the_original() {
+    let w = CopyWorld::new();
+    w.doc("d1", "documents/계약서.pdf", b"contract v1", "contract");
+    let a = w.project("A 사업", None);
+    let b = w.project("B 사업", None);
+    // The first project keeps the original as its copy; the second gets a file under its folder.
+    assert_eq!(w.add(&a.id, &["d1"]), 1);
+    assert!(w.copies_of(&a.id).is_empty());
+    assert_eq!(w.add(&b.id, &["d1"]), 1);
+    let copy = w.copies_of(&b.id).remove(0);
+    assert_eq!(copy.rel_path, "documents/B 사업/계약서/계약서.pdf", "{copy:?}");
+    assert_eq!((copy.state, copy.size_bytes), (CopyState::Synced, 11));
+    assert!(w.exists(&copy.rel_path));
+    assert!(w.db.with(|c| copies::is_copy_path(c, &copy.rel_path)).unwrap());
+    assert_eq!(w.db.with(|c| copies::find_by_rel_path(c, &copy.rel_path)).unwrap().unwrap().document_id, "d1");
+    // The project view shows the copy on the shared document only.
+    let docs_b = w.db.with(|c| repo::documents_of(c, &b.id)).unwrap();
+    assert_eq!(docs_b[0].copy.as_ref().map(|c| c.rel_path.as_str()), Some("documents/B 사업/계약서/계약서.pdf"));
+    assert!(w.db.with(|c| repo::documents_of(c, &a.id)).unwrap()[0].copy.is_none());
+    // Adding again is a no-op; a copy is never written twice.
+    assert_eq!(w.add(&b.id, &["d1"]), 0);
+    assert_eq!(w.copies_of(&b.id).len(), 1);
+
+    // The original changes → the copy is rewritten.
+    std::fs::write(w.paths.root.join("documents/계약서.pdf"), b"contract v2!").unwrap();
+    let r = copies::sync_document(&w.db, &w.paths, "d1", false).unwrap();
+    assert_eq!(r, copies::SyncReport { rewritten: 1, ..Default::default() }, "{r:?}");
+    assert_eq!(std::fs::read(w.paths.root.join(&copy.rel_path)).unwrap(), b"contract v2!");
+    assert_eq!(w.copies_of(&b.id)[0].size_bytes, 12);
+
+    // The original moves → the copy follows (same folder template, the file name is kept).
+    w.db.with(|c| docs::set_rel_path(c, "d1", "documents/2026/계약서_v2.pdf", "계약서_v2.pdf")).unwrap();
+    std::fs::create_dir_all(w.paths.root.join("documents/2026")).unwrap();
+    std::fs::rename(w.paths.root.join("documents/계약서.pdf"), w.paths.root.join("documents/2026/계약서_v2.pdf"))
+        .unwrap();
+    let r = copies::sync_document(&w.db, &w.paths, "d1", false).unwrap();
+    assert_eq!(r.renamed, 1, "{r:?}");
+    let moved = w.copies_of(&b.id).remove(0);
+    assert_eq!(moved.rel_path, "documents/B 사업/계약서/계약서_v2.pdf");
+    assert!(w.exists(&moved.rel_path) && !w.exists(&copy.rel_path));
+
+    // An externally edited copy is flagged, not overwritten — until the project is re-synced.
+    std::fs::write(w.paths.root.join(&moved.rel_path), b"edited by hand").unwrap();
+    let r = copies::sync_document(&w.db, &w.paths, "d1", false).unwrap();
+    assert_eq!(r.modified, 1, "{r:?}");
+    assert_eq!(w.copies_of(&b.id)[0].state, CopyState::Modified);
+    assert_eq!(std::fs::read(w.paths.root.join(&moved.rel_path)).unwrap(), b"edited by hand");
+    let r = copies::sync_project(&w.db, &w.paths, &b.id).unwrap();
+    assert_eq!(r.rewritten, 1, "{r:?}");
+    assert_eq!(w.copies_of(&b.id)[0].state, CopyState::Synced);
+    assert_eq!(std::fs::read(w.paths.root.join(&moved.rel_path)).unwrap(), b"contract v2!");
+
+    // A deleted copy file comes back on rescan.
+    std::fs::remove_file(w.paths.root.join(&moved.rel_path)).unwrap();
+    let r = copies::rescan(&w.db, &w.paths).unwrap();
+    assert_eq!(r.missing, 1, "{r:?}");
+    assert!(w.exists(&moved.rel_path));
+
+    // Leaving the project removes the copy; the original is untouched.
+    assert!(copies::remove_document(&w.db, &w.paths, &b.id, "d1").unwrap());
+    assert!(w.copies_of(&b.id).is_empty() && !w.exists(&moved.rel_path));
+    assert!(w.exists("documents/2026/계약서_v2.pdf"));
+    assert_eq!(w.db.with(|c| repo::get_project(c, &b.id)).unwrap().unwrap().document_count, 0);
+}
+
+#[test]
+fn copies_respect_the_project_settings_and_are_cleaned_up_with_their_owners() {
+    let w = CopyWorld::new();
+    w.doc("d1", "documents/견적서.pdf", b"quote", "quotation");
+    w.doc("d2", "documents/계약서.pdf", b"contract", "contract");
+    let a = w.project("A 사업", None);
+    let folder = Some("archive/{{project_code}}_{{project}}".into());
+    let b = w.project("B 사업", Some(ProjectSettings { folder_template: folder, ..Default::default() }));
+    let no_copies = w.project("C 사업", Some(ProjectSettings { copies: false, ..Default::default() }));
+    w.add(&a.id, &["d1", "d2"]);
+    // The project's own folder template places the copy; a project without copies keeps the membership only.
+    w.add(&b.id, &["d1", "d2"]);
+    let mut rels: Vec<String> = w.copies_of(&b.id).into_iter().map(|c| c.rel_path).collect();
+    rels.sort();
+    assert_eq!(
+        rels,
+        vec!["archive/2026-001_B 사업/견적서.pdf".to_string(), "archive/2026-001_B 사업/계약서.pdf".into()]
+    );
+    assert_eq!(w.add(&no_copies.id, &["d1"]), 1);
+    assert!(w.copies_of(&no_copies.id).is_empty());
+    // A membership added behind the module's back (classification, inbox mapping) gets its copy on rescan.
+    let d = w.project("D 사업", None);
+    assert_eq!(w.db.with(|c| repo::add_documents(c, &d.id, &["d2".to_string()])).unwrap(), 1);
+    assert!(w.copies_of(&d.id).is_empty());
+    let r = copies::rescan(&w.db, &w.paths).unwrap();
+    assert_eq!(r.created, 1, "{r:?}");
+    assert_eq!(w.copies_of(&d.id)[0].rel_path, "documents/D 사업/계약서/계약서.pdf");
+    // Deleting a project removes its copies; deleting the document removes every copy.
+    assert_eq!(copies::remove_project_copies(&w.db, &w.paths, &b.id).unwrap(), 2);
+    assert!(!w.exists("archive/2026-001_B 사업/견적서.pdf") && w.copies_of(&b.id).is_empty());
+    assert_eq!(copies::remove_all_for_document(&w.db, &w.paths, "d2").unwrap(), 1);
+    assert!(!w.exists("documents/D 사업/계약서/계약서.pdf"));
+    assert!(w.db.with(copies::all).unwrap().is_empty());
+    // The settings JSON round-trips through the project row.
+    let stored = w.db.with(|c| repo::get_project(c, &no_copies.id)).unwrap().unwrap();
+    assert!(!stored.settings.copies && stored.settings.folder_template.is_none());
+    assert_eq!(stored.settings.folder_template(), DEFAULT_PROJECT_FOLDER);
 }

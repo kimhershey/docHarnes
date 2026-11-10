@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, FolderOpen, GitBranch, Maximize2, MessageSquareText, RefreshCw, RotateCcw, RotateCw, Scissors, Trash2, X, ZoomIn, ZoomOut } from "lucide-react";
+import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, FolderOpen, GitBranch, Maximize2, MessageSquareText, Redo2, RefreshCw, RotateCcw, RotateCw, Scissors, Trash2, Undo2, X, ZoomIn, ZoomOut } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams, useSearchParams } from "react-router";
@@ -19,10 +19,10 @@ import { ProcessMenu } from "@/features/pipeline/ProcessMenu";
 import { Snippet } from "@/features/search/SearchPage";
 import { describeError } from "@/lib/errors";
 import { api, revealPath } from "@/lib/ipc";
-import { useDocTypes, useDocument, useDocumentChunks, useDocumentCollections, useDocumentPages, useFields, usePipelineStatus } from "@/lib/queries";
+import { useDocTypes, useDocument, useDocumentChunks, useDocumentCollections, useDocumentPages, useDocumentTextHistory, useFields, usePipelineStatus } from "@/lib/queries";
 import { queryClient, queryKeys } from "@/lib/query-client";
 import { formatChord, isComposing, matchesChord } from "@/lib/shortcuts";
-import type { Citation, DocumentView, PageView } from "@/lib/types";
+import type { Citation, DocumentView, PageTextRevert, PageView } from "@/lib/types";
 import { cn, formatBytes, formatDate, isMac } from "@/lib/utils";
 import { useShortcut } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
@@ -75,6 +75,8 @@ export function DocumentViewer() {
   const chunkParam = searchParams.get("chunk");
   const { data: docChunks } = useDocumentChunks(chunkParam ? id : undefined);
   const explainChord = useShortcut("explain_selection");
+  const undoChord = useShortcut("undo");
+  const redoChord = useShortcut("redo");
   const [tab, setTab] = useState<string>("qa");
   const [explainSelection, setExplainSelection] = useState<string | null>(null);
   // Words selected on the page image (indices into the page layout) and the Enter / F2 edit request.
@@ -178,6 +180,10 @@ export function DocumentViewer() {
     enabled: !!id && !!page && !!page.image_url,
   });
   const { data: fields } = useFields(id);
+  // Corrections of the current page (0.3.0 item 7): the count in the layer bar and the undo / redo state
+  // that scopes Ctrl+Z to the page while it has something to take back.
+  const { data: textHistory } = useDocumentTextHistory(id, page?.page_no ?? null);
+  const textEditCount = useMemo(() => (textHistory?.entries ?? []).filter((e) => !e.undone && e.page_no === page?.page_no).length, [textHistory, page?.page_no]);
   const selectionText = page?.image_url ? layerSelectionText(layout, selected) : nativeSelection;
   // Selection and editor reset with the page (the layout of another page has other indices).
   useEffect(() => {
@@ -235,6 +241,23 @@ export function DocumentViewer() {
   const go = useCallback((delta: number) => setPageNo((p) => Math.min(Math.max(1, p + delta), Math.max(1, total))), [total]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    // Ctrl+Z / Ctrl+Shift+Z (or the configured undo / redo chords) take back / re-apply the page's text
+    // corrections while it has any; otherwise the keys fall through to the global file-journal undo.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && isViewerKeyTarget(e.target) && !isComposing(e.nativeEvent)) {
+      const native = e.nativeEvent;
+      const redoCombo = matchesChord(native, redoChord, isMac()) || (native.shiftKey && native.key.toLowerCase() === "z");
+      const undoCombo = !redoCombo && matchesChord(native, undoChord, isMac());
+      if (undoCombo && textHistory?.can_undo) {
+        e.preventDefault();
+        void undoText();
+        return;
+      }
+      if (redoCombo && textHistory?.can_redo) {
+        e.preventDefault();
+        void redoText();
+        return;
+      }
+    }
     // Enter / F2 edit the words selected on the image; Escape drops the selection; Ctrl+C copies it.
     if ((e.key === "Enter" || e.key === "F2") && selected.length > 0 && !e.ctrlKey && !e.metaKey && !e.altKey && isViewerKeyTarget(e.target)) {
       if (isContiguous(selected)) {
@@ -288,6 +311,43 @@ export function DocumentViewer() {
       // The word boxes turned with the image.
       void queryClient.invalidateQueries({ queryKey: queryKeys.documentPageLayout(id, page.page_no) });
       toast(t("viewer.rotated"), "ok");
+    } catch (e) {
+      toast(describeError(e, t), "danger");
+    }
+  };
+
+  // Undo / redo of the page's text corrections: the command returns the page as it is now, so the layout
+  // and the history are written through; the text and page lists refetch.
+  const applyTextRevert = (r: PageTextRevert) => {
+    if (!id) return;
+    queryClient.setQueryData(queryKeys.documentPageLayout(id, r.page_no), r.layout);
+    queryClient.setQueryData(queryKeys.documentTextHistory(id, r.page_no), r.history);
+    void queryClient.invalidateQueries({ queryKey: queryKeys.documentTextHistory(id, null) });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.documentPageText(id, r.page_no) });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.documentPages(id, false) });
+    setSelected([]);
+  };
+  const undoText = async () => {
+    if (!id || !page) return;
+    try {
+      const r = await api.documentsUndoPageText(id, page.page_no);
+      if (!r) {
+        toast(t("viewer.text_edit.nothing_to_undo"), "info");
+        return;
+      }
+      applyTextRevert(r);
+      toast(t("viewer.text_edit.undone"), "ok");
+    } catch (e) {
+      toast(describeError(e, t), "danger");
+    }
+  };
+  const redoText = async () => {
+    if (!id || !page) return;
+    try {
+      const r = await api.documentsRedoPageText(id, page.page_no);
+      if (!r) return;
+      applyTextRevert(r);
+      toast(t("viewer.text_edit.redone"), "ok");
     } catch (e) {
       toast(describeError(e, t), "danger");
     }
@@ -576,6 +636,19 @@ export function DocumentViewer() {
               <Badge variant="muted" title={t("viewer.layer.estimated_title")} data-testid="viewer-layer-estimated">
                 {t("viewer.layer.estimated")}
               </Badge>
+            )}
+            {(textEditCount > 0 || textHistory?.can_redo) && (
+              <span className="flex items-center gap-0.5" data-testid="viewer-text-edits">
+                <Badge variant="outline" data-testid="viewer-text-edits-count">
+                  {t("viewer.text_edit.count", { count: textEditCount })}
+                </Badge>
+                <Button size="icon-sm" variant="ghost" className="h-5 w-5" disabled={!textHistory?.can_undo} onClick={() => void undoText()} aria-label={t("viewer.text_edit.undo")} title={t("viewer.text_edit.undo")} data-testid="viewer-text-undo">
+                  <Undo2 />
+                </Button>
+                <Button size="icon-sm" variant="ghost" className="h-5 w-5" disabled={!textHistory?.can_redo} onClick={() => void redoText()} aria-label={t("viewer.text_edit.redo")} title={t("viewer.text_edit.redo")} data-testid="viewer-text-redo">
+                  <Redo2 />
+                </Button>
+              </span>
             )}
             <span className="truncate">{page?.image_url && !page.has_text && !layout?.words.length ? t("viewer.layer.no_text") : t("viewer.layer.hint")}</span>
             {highlightQuery && (

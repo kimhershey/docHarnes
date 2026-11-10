@@ -11,9 +11,10 @@ use tauri::{AppHandle, Emitter, Manager};
 use doculens_core::generate::OutputFormat;
 use doculens_core::pipeline::vlm::Vlm;
 use doculens_core::projects::classify::{ApplyResult, Assignment, ClassifyRequest, ClassifyResult};
+use doculens_core::projects::copies::SyncReport;
 use doculens_core::projects::{
-    self, repo, CheckRun, Project, ProjectDeps, ProjectDetail, ProjectInput, ProjectStatus, ProjectTemplate, Rule,
-    RuleDraft, TemplateInput,
+    self, repo, CheckRun, Project, ProjectDeps, ProjectDetail, ProjectInput, ProjectTemplate, Rule, RuleDraft,
+    TemplateInput,
 };
 
 use crate::state::{AppState, UiError, UiResult};
@@ -62,6 +63,8 @@ pub fn update(app: &AppHandle, input: ProjectInput) -> UiResult<Project> {
 
 pub fn delete(app: &AppHandle, id: &str) -> UiResult<bool> {
     let pctx = pipeline_bridge::context(app)?;
+    // The project's tracked copies (files in its folder) go with it; the originals stay.
+    projects::copies::remove_project_copies(pctx.db(), &pctx.docs.paths, id)?;
     let ok = pctx.db().with(|c| repo::delete_project(c, id))?;
     if ok {
         emit(app, vec![id.to_string()]);
@@ -76,27 +79,25 @@ pub fn get(app: &AppHandle, id: &str) -> UiResult<ProjectDetail> {
 
 pub fn add_documents(app: &AppHandle, id: &str, doc_ids: &[String]) -> UiResult<ProjectDetail> {
     let pctx = pipeline_bridge::context(app)?;
-    pctx.db().with(|c| repo::add_documents(c, id, doc_ids))?;
+    // A document that already belongs to another project gets a tracked copy in this one (plan §6).
+    projects::copies::add_documents(pctx.db(), &pctx.docs.paths, id, doc_ids, language(app))?;
     emit(app, vec![id.to_string()]);
     get(app, id)
 }
 
 pub fn remove_document(app: &AppHandle, id: &str, doc_id: &str) -> UiResult<ProjectDetail> {
     let pctx = pipeline_bridge::context(app)?;
-    pctx.db().with(|c| repo::remove_document(c, id, doc_id))?;
+    projects::copies::remove_document(pctx.db(), &pctx.docs.paths, id, doc_id)?;
     emit(app, vec![id.to_string()]);
     get(app, id)
 }
 
-pub fn set_status(app: &AppHandle, id: &str, status: ProjectStatus) -> UiResult<Project> {
+/// "다시 동기화": rewrites the project's copies from their originals (externally edited copies too).
+pub fn sync_copies(app: &AppHandle, id: &str) -> UiResult<SyncReport> {
     let pctx = pipeline_bridge::context(app)?;
-    let project = pctx.db().with(|c| {
-        repo::set_status(c, id, status)?;
-        repo::get_project(c, id)
-    })?;
-    let project = project.ok_or_else(|| UiError::from(doculens_core::CoreError::NotFound(id.to_string())))?;
+    let report = projects::copies::sync_project(pctx.db(), &pctx.docs.paths, id)?;
     emit(app, vec![id.to_string()]);
-    Ok(project)
+    Ok(report)
 }
 
 pub fn templates(app: &AppHandle) -> UiResult<Vec<ProjectTemplate>> {

@@ -42,6 +42,205 @@ pub fn max_tokens(length: Length) -> u32 {
     }
 }
 
+// -- Token budgets and the outline → sections flow (0.3.0 item 4) --------------------------------
+
+/// Budgets above this (or above 35 % of the context) are produced section by section.
+pub const SPLIT_THRESHOLD_TOKENS: u32 = 3_000;
+pub const MIN_SECTION_TOKENS: u32 = 600;
+pub const MAX_SECTION_TOKENS: u32 = 3_000;
+/// Outline call budget (title + up to 12 section entries).
+pub const OUTLINE_TOKENS: u32 = 700;
+/// Fields and tables of a split draft come with the first section; this much is added to its budget.
+pub const HEAD_EXTRA_TOKENS: u32 = 600;
+/// Tail of the previous sections shown to the next section call.
+pub const PREVIOUS_SUMMARY_CHARS: usize = 600;
+/// Hard ceiling of a request budget (the settings cap the active backend lower).
+pub const MAX_REQUEST_TOKENS: u32 = 65_536;
+
+/// The reply budget of a request: its explicit token budget, else the length preset.
+pub fn reply_budget(req: &DraftRequest) -> u32 {
+    req.max_tokens.filter(|m| *m > 0).unwrap_or_else(|| max_tokens(req.length)).clamp(200, MAX_REQUEST_TOKENS)
+}
+
+/// Whether a budget needs the sectioned flow: more than the threshold, or more than a third of the context.
+pub fn split_needed(budget: u32, ctx: Option<u32>) -> bool {
+    budget > SPLIT_THRESHOLD_TOKENS || ctx.is_some_and(|c| budget > c / 100 * 35)
+}
+
+/// Token budget of one section from its outline weight (clamped to 600–3,000).
+pub fn section_budget(total: u32, weight: u32, weights_sum: u32) -> u32 {
+    let share = (u64::from(total) * u64::from(weight.max(1)) / u64::from(weights_sum.max(1))) as u32;
+    share.clamp(MIN_SECTION_TOKENS, MAX_SECTION_TOKENS)
+}
+
+/// A planned section of a split draft (template section or outline entry).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SectionPlan {
+    pub heading: String,
+    /// Relative share of the budget (1–10).
+    pub weight: u32,
+    /// What the section should cover (from the outline call; empty for template sections).
+    pub notes: String,
+}
+
+/// The outline used when neither the template nor the model gives one.
+pub fn fallback_outline(ko: bool) -> Vec<SectionPlan> {
+    let names: [&str; 5] = if ko {
+        ["개요", "배경 및 현황", "주요 내용", "일정 및 계획", "결론"]
+    } else {
+        ["Overview", "Background and status", "Main points", "Schedule and plan", "Conclusion"]
+    };
+    names.iter().map(|n| SectionPlan { heading: n.to_string(), weight: 1, notes: String::new() }).collect()
+}
+
+/// Shared head of the split-flow messages: the request line, the template and the content.
+fn request_head(spec: &TemplateSpec, req: &DraftRequest, ko: bool, out: &mut String) {
+    out.push_str(&format!(
+        "{}: {} / {}: {}\n\n",
+        if ko { "언어" } else { "Language" },
+        match req.language {
+            crate::settings::Language::Ko => "한국어",
+            crate::settings::Language::En => "English",
+        },
+        if ko { "어조" } else { "Tone" },
+        tone_label(req.tone, ko)
+    ));
+    template_block(spec, ko, out);
+    if let Some(desc) = req.format_description.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+        out.push_str(if ko { "형식 설명: " } else { "Layout description: " });
+        out.push_str(&truncate(desc, 600));
+        out.push('\n');
+    }
+    out.push_str(if ko { "\n[내용]\n" } else { "\n[Content]\n" });
+    let content = req.content.trim();
+    if content.is_empty() {
+        out.push_str(if ko {
+            "(별도 내용 없음 — 자료만으로 작성)"
+        } else {
+            "(no content given — draft from the sources)"
+        });
+    } else {
+        out.push_str(&truncate(content, MAX_CONTENT_CHARS));
+    }
+    out.push('\n');
+}
+
+/// User message of the outline call (templates without a fixed section list).
+pub fn outline_user(
+    spec: &TemplateSpec,
+    req: &DraftRequest,
+    sources: &[SourceBlock<'_>],
+    budget: usize,
+    total_tokens: u32,
+    ko: bool,
+) -> String {
+    let mut out = String::with_capacity(2_048);
+    out.push_str(if ko {
+        "아래 양식과 내용으로 쓸 긴 문서의 개요(절 구성)를 JSON으로 작성하세요.\n"
+    } else {
+        "Write the outline (section plan) of a long document for the template and content below, as JSON.\n"
+    });
+    request_head(spec, req, ko, &mut out);
+    sources_block(sources, budget, ko, &mut out);
+    out.push_str(&if ko {
+        format!(
+            "\n[출력 규칙]\n- title: 문서 제목.\n- sections: 4~{} 개의 절(heading = 절 제목, weight = 분량 비중 1~10, notes = 그 절에 담을 내용 한 줄).\n\
+             - 전체 분량은 약 {total_tokens} 토큰입니다. 생각 과정 없이 JSON만 출력합니다.",
+            MAX_OUTLINE_SECTIONS_HINT
+        )
+    } else {
+        format!(
+            "\n[Output rules]\n- title: the document title.\n- sections: 4–{} entries (heading, weight 1–10 = share of the length, notes = one line on what it covers).\n\
+             - The whole document is about {total_tokens} tokens. Output JSON only.",
+            MAX_OUTLINE_SECTIONS_HINT
+        )
+    });
+    out
+}
+
+const MAX_OUTLINE_SECTIONS_HINT: usize = 12;
+
+/// Appended to the head call of a split draft: fields and tables as usual, body = the first section only.
+pub fn split_head_note(first: &SectionPlan, total: usize, tokens: u32, ko: bool) -> String {
+    if ko {
+        format!(
+            "\n\n[분할 생성]\n이 문서는 {total}개 절로 나눠 작성합니다. 지금은 fields·tables를 모두 채우고, body에는 1번째 절 \"{}\"의 \
+             제목(heading)과 본문(약 {tokens} 토큰)만 쓰세요. 나머지 절은 이어서 요청합니다.{}",
+            first.heading,
+            if first.notes.is_empty() { String::new() } else { format!(" 1절 지침: {}", first.notes) }
+        )
+    } else {
+        format!(
+            "\n\n[Split generation]\nThis document is written in {total} sections. Fill every field and table now, but write only \
+             section 1 \"{}\" in `body` (its heading plus about {tokens} tokens of text); the other sections follow in later requests.{}",
+            first.heading,
+            if first.notes.is_empty() { String::new() } else { format!(" Section 1 notes: {}", first.notes) }
+        )
+    }
+}
+
+/// User message of one section call of a split draft.
+#[allow(clippy::too_many_arguments)]
+pub fn section_user(
+    spec: &TemplateSpec,
+    req: &DraftRequest,
+    sources: &[SourceBlock<'_>],
+    budget: usize,
+    plan: &SectionPlan,
+    index: usize,
+    total: usize,
+    tokens: u32,
+    facts: &[(String, String)],
+    previous: &str,
+    ko: bool,
+) -> String {
+    let mut out = String::with_capacity(4_096);
+    out.push_str(&if ko {
+        format!("문서의 {index}/{total}번째 절 \"{}\"의 본문만 JSON으로 작성하세요.\n", plan.heading)
+    } else {
+        format!("Write only the body of section {index}/{total} \"{}\" of the document, as JSON.\n", plan.heading)
+    });
+    request_head(spec, req, ko, &mut out);
+    if !facts.is_empty() {
+        out.push_str(if ko {
+            "\n[확정 정보] (앞서 채운 값 — 그대로 쓰고 바꾸지 마세요)\n"
+        } else {
+            "\n[Settled facts] (already filled — use as is)\n"
+        });
+        for (k, v) in facts.iter().take(12) {
+            out.push_str(&format!("- {k}: {}\n", truncate(v, 120)));
+        }
+    }
+    sources_block(sources, budget, ko, &mut out);
+    if !previous.trim().is_empty() {
+        out.push_str(if ko { "\n[앞 절 요약]\n" } else { "\n[Previous sections]\n" });
+        out.push_str(previous.trim());
+        out.push('\n');
+    }
+    let paragraphs = (tokens / 450).clamp(1, 8);
+    out.push_str(&if ko {
+        format!(
+            "\n[출력 규칙]\n- blocks: 이 절의 paragraph·list(필요하면 소제목 heading)만, 약 {tokens} 토큰(문단 {paragraphs}개 안팎), 최대 24개 블록.\n\
+             - 절 제목 \"{}\"은 쓰지 마세요(자동으로 붙습니다). 앞 절과 겹치는 내용은 피하고, 자료에서 가져온 문장은 source_index를 적습니다.\n\
+             - 금액·날짜·이름은 [확정 정보]·[자료]·[내용]에 있는 것만 쓰고, 없는 값은 지어내지 않습니다.{}\n\
+             - 생각 과정 없이 JSON만 출력합니다.",
+            plan.heading,
+            if plan.notes.is_empty() { String::new() } else { format!("\n- 이 절의 지침: {}", plan.notes) }
+        )
+    } else {
+        format!(
+            "\n[Output rules]\n- blocks: only this section's paragraph / list blocks (sub-headings when needed), about {tokens} tokens \
+             ({paragraphs} paragraphs), at most 24 blocks.\n\
+             - Do not repeat the section title \"{}\" (it is added automatically); avoid repeating earlier sections; cite sources with source_index.\n\
+             - Amounts, dates and names come only from the settled facts, the sources and the content; never invent values.{}\n\
+             - Output JSON only.",
+            plan.heading,
+            if plan.notes.is_empty() { String::new() } else { format!("\n- Notes for this section: {}", plan.notes) }
+        )
+    });
+    out
+}
+
 /// Characters of source text that fit next to the fixed prompt and the reply in a
 /// context of `ctx` tokens (Korean ≈ 1 token per character); `None` = unknown.
 pub fn source_budget(ctx: Option<u32>, reply_tokens: u32) -> usize {
@@ -65,7 +264,8 @@ pub struct SourceBlock<'a> {
 
 pub fn system(ko: bool) -> String {
     if ko {
-        "당신은 DocuLens의 문서 작성 보조입니다. 한국어 비즈니스 문서(공문·견적서·거래명세서·계약서·보고서·회의록·보완요청서)의 \
+        "당신은 DocuLens의 문서 작성 보조입니다. 소프트웨어 개발 사업 문서(제안요청서·제안서·과업지시서·요구사항 정의서·개발 계약서·\
+         WBS·진척 보고서·회의록·테스트 결과서·변경요청서·검수확인서·견적서·보완요청서)의 \
          초안을 요청된 양식에 맞춰 JSON으로만 작성합니다. 규칙:\n\
          1. 금액·날짜·이름·상호·사업자등록번호·수량 같은 사실은 [자료]와 [내용]에 있는 것만 사용합니다. 자료에 없는 값은 지어내지 말고 \
          빈 문자열(\"\")로 두세요.\n\
@@ -76,8 +276,9 @@ pub fn system(ko: bool) -> String {
          6. 생각 과정이나 설명 없이 JSON만 출력합니다."
             .to_string()
     } else {
-        "You are the DocuLens drafting assistant. You write drafts of Korean / English business documents \
-         (official letters, quotations, transaction statements, contracts, reports, minutes, supplement requests) \
+        "You are the DocuLens drafting assistant. You write drafts of Korean / English software-project documents \
+         (RFPs, proposals, statements of work, requirements specifications, development contracts, WBS, progress \
+         reports, meeting minutes, test reports, change requests, acceptance certificates, estimates, supplement requests) \
          for the requested template, as JSON only. Rules:\n\
          1. Facts such as amounts, dates, names, company names, business registration numbers and quantities come only \
          from the [Sources] and the [Content]. Never invent a value; leave unknown values as an empty string (\"\").\n\

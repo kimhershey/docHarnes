@@ -184,12 +184,12 @@ pub fn few_shots(ko: bool) -> Vec<(String, Value)> {
             }),
         ),
         (
-            "등록된 견적서 양식으로 ㈜한빛에 노트북 10대, 대당 1,200,000원, 유효기간 30일 견적서 만들어줘".to_string(),
+            "DocuLens에 보낼 백엔드 개발 고급 3MM, 단가 2,500,000원, 유효기간 30일 견적서 만들어줘".to_string(),
             json!({
-                "summary": "견적서 템플릿으로 ㈜한빛 노트북 10대 견적 초안을 만들어 문서 생성 화면에서 확인",
+                "summary": "견적서 템플릿으로 DocuLens 백엔드 개발 3MM 견적 초안을 만들어 문서 생성 화면에서 확인",
                 "intent": "draft_document",
                 "scope": {},
-                "operations": [{ "op": "draft_document", "form_ref": "quotation", "content": "㈜한빛에 노트북 10대, 대당 1,200,000원, 유효기간 30일 견적서", "output": "hwpx" }],
+                "operations": [{ "op": "draft_document", "form_ref": "estimate", "content": "DocuLens에 보낼 백엔드 개발 고급 3MM, 단가 2,500,000원, 유효기간 30일 견적서", "output": "hwpx" }],
                 "requires_confirmation": true,
                 "confidence": 0.88
             }),

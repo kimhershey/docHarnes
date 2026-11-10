@@ -152,7 +152,7 @@ test.describe("P4 pipeline", () => {
   test("schemas: natural-language creation, form registration from the library and the type mapping", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
-    await importViaLibrary(page, ["D:\\forms\\견적서 양식.hwpx"], { autoLevel: "none" });
+    await importViaLibrary(page, ["D:\\forms\\견적서 양식.hwpx", "D:\\scan\\견적서-1p.jpg"], { autoLevel: "none" });
 
     // Built-in samples are listed; NL creation opens a draft in the editor.
     await page.getByTestId("nav-schemas").click();
@@ -183,22 +183,43 @@ test.describe("P4 pipeline", () => {
     await expect(page.getByTestId("schema-lint")).toContainText("snake_case");
     await page.locator('[data-testid="schema-field"]').last().getByTestId("schema-field-remove").click();
 
-    // Form registration from the library: derive → confirm → the document becomes a form.
+    // Form registration from the library (0.3.0 §2): two samples → one discovery job → the merged draft opens
+    // unsaved. The blank HWPX form contributes 8 printed labels, the filled scan 9 (사업명·공급자 상호 instead of
+    // 비고): the union is 10 fields, the 7 common ones required.
     await page.getByTestId("nav-library").click();
-    await page.getByTestId(`doc-select-${await docId(page, "견적서 양식.hwpx")}`).check();
+    for (const name of ["견적서 양식.hwpx", "견적서-1p.jpg"]) await page.getByTestId(`doc-select-${await docId(page, name)}`).check();
     await page.getByTestId("library-register-form").click();
     await expect(page.getByTestId("form-register-dialog")).toBeVisible();
+    await expect(page.getByTestId("form-register-doc")).toContainText("견적서 양식.hwpx");
+    await expect(page.getByTestId("form-register-doc")).toContainText("견적서-1p.jpg");
     await page.getByTestId("form-register-name").fill("견적서");
     await page.getByTestId("form-register-derive").click();
-    await expect(page.getByTestId("schema-editor")).toBeVisible();
-    // 견적서 is a software type now: the registered form joins the built-in estimate schema as a second schema of the type.
+    await expect(page.getByTestId("schema-editor")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("schema-discovery-summary")).toContainText(tplPattern(ko.schemas.form.discovery_summary, { docs: 2, fields: 10, dropped: 0 }));
+    await expect(page.locator('[data-testid="schema-field"]')).toHaveCount(10);
+    // 견적서 is a software type: the form joins the built-in estimate schema as a second schema of the type.
     await expect(page.getByTestId("schema-doc-type")).toHaveValue("estimate");
-    await expect(page.getByTestId("schema-field").first()).toBeVisible();
+    // The built-in sample is already called 견적서: the popup proposes "견적서 (2)" (decision 2026-11-10).
+    const nameTaken = page.getByTestId("schema-name-taken");
+    await expect(nameTaken).toBeVisible();
+    await expect(nameTaken.getByTestId("schema-name-taken-input")).toHaveValue("견적서 (2)");
+    await nameTaken.getByTestId("schema-name-taken-apply").click();
+    await expect(page.getByTestId("schema-name")).toHaveValue("견적서 (2)");
+    await expect(page.getByTestId("schema-save")).toBeEnabled();
+    // Typing the taken name back disables saving with an explanation; a free name re-enables it.
+    await page.getByTestId("schema-name").fill("견적서");
+    await expect(page.getByTestId("schema-name-error")).toHaveText(ko.schemas.editor.name_taken);
+    await expect(page.getByTestId("schema-save")).toBeDisabled();
+    await page.getByTestId("schema-name").fill("견적서 (2)");
+    await expect(page.getByTestId("schema-name-error")).toHaveCount(0);
+    await expect(page.getByTestId("schema-save")).toBeEnabled();
     await page.getByTestId("schema-save").click();
     await expect(page.locator('[data-schema-doc-type="estimate"]')).toHaveCount(2);
     await expect(page.getByTestId("schemas-reclassify-banner")).toHaveCount(0);
+    // Both samples are forms of the type now.
     await page.getByTestId("nav-library").click();
     await expect(card(page, "견적서 양식.hwpx")).toContainText("견적서");
+    await expect(card(page, "견적서-1p.jpg")).toContainText("견적서");
 
     // Settings: the processing tab exposes the new pipeline options.
     await page.getByTestId("nav-settings").click();

@@ -146,6 +146,25 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
             f.date_to = Some(d.to.to_string());
         }
     }
+    // Project scope (plan §6): a name from the model becomes the id; an unknown project is an error.
+    if let Some(p) = f.project_id.as_deref().map(str::trim) {
+        if p.is_empty() {
+            f.project_id = None;
+        } else {
+            match ctx.project(Some(p)) {
+                Some(known) => f.project_id = Some(known.id.clone()),
+                None if ctx.projects.is_empty() => {}
+                None => issues.push(PlanIssue::error(
+                    "scope.filter.project_id",
+                    "project_unknown",
+                    format!(
+                        "unknown project '{p}'; known: {}",
+                        ctx.projects.iter().map(|x| x.name.as_str()).collect::<Vec<_>>().join(", ")
+                    ),
+                )),
+            }
+        }
+    }
     if let Some(st) = f.status.as_deref() {
         if DocumentStatus::parse(st).is_none() {
             issues.push(PlanIssue::error("scope.filter.status", "status_unknown", format!("unknown status '{st}'")));
@@ -494,7 +513,7 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
                             && !ctx.schemas.is_empty()
                             && ctx.schema(x).is_none()
                             && crate::generate::TemplateKind::parse(x).is_none()
-                            && !crate::generate::templates().iter().any(|t| {
+                            && !crate::generate::templates_all().iter().any(|t| {
                                 compact(&t.name_ko) == compact(x)
                                     || compact(&t.name_en) == compact(x)
                                     || t.keywords.iter().any(|k| compact(k) == compact(x))
@@ -521,7 +540,7 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
                     }
                 }
             }
-            Op::RegisterForm { doc_ref, name, doc_type_slug } => {
+            Op::RegisterForm { doc_ref, name, doc_type_slug, doc_ids } => {
                 for v in [doc_ref, name, doc_type_slug] {
                     if let Some(x) = v.as_mut() {
                         *x = x.trim().chars().take(200).collect();
@@ -530,6 +549,14 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
                         }
                     }
                 }
+                let mut seen: Vec<String> = Vec::new();
+                for d in doc_ids.iter() {
+                    let d: String = d.trim().chars().take(200).collect();
+                    if !d.is_empty() && !seen.contains(&d) {
+                        seen.push(d);
+                    }
+                }
+                *doc_ids = seen;
             }
             Op::Explain { selection, question, .. } => {
                 for v in [&mut *selection, &mut *question] {
@@ -567,7 +594,21 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
                 aspects.retain(|a| !a.trim().is_empty());
                 aspects.truncate(10);
             }
-            Op::CreateProject { name, template, doc_types_required } => {
+            Op::CreateProject { name, template, doc_types_required, start_date, end_date } => {
+                for (label, d) in [("start_date", start_date), ("end_date", end_date)] {
+                    if let Some(v) = d.as_mut() {
+                        *v = v.trim().to_string();
+                        if v.is_empty() {
+                            *d = None;
+                        } else if crate::projects::parse_date(v).is_none() {
+                            issues.push(PlanIssue::error(
+                                at(label),
+                                "date_format",
+                                format!("'{v}' is not a date (YYYY-MM-DD)"),
+                            ));
+                        }
+                    }
+                }
                 *name = name.trim().chars().take(120).collect();
                 if name.is_empty() {
                     issues.push(PlanIssue::error(at("name"), "name_empty", "create_project needs a name"));

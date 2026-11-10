@@ -96,18 +96,25 @@ pub fn render(d: &ProjectDetail, language: Language) -> String {
     let mut s = String::new();
     s.push_str(&format!("# {}\n\n", p.name));
     let template = d.template.as_ref().map(|t| if ko { t.name_ko.clone() } else { t.name_en.clone() });
+    let phase = if p.overdue {
+        format!("{} ({})", p.phase.label(ko), tr(ko, "기한 경과", "overdue"))
+    } else {
+        p.phase.label(ko).to_string()
+    };
     s.push_str(&format!(
-        "- {}: {} · {}: {} · {}: {} · {}: {} · {}: {}\n",
+        "- {}: {} · {}: {} · {}: {} · {}: {} · {}: {} · {}: {}\n",
         tr(ko, "상태", "Status"),
-        p.status.label(ko),
+        phase,
         tr(ko, "템플릿", "Template"),
         dash(template.as_deref()),
         tr(ko, "접수번호", "Intake no."),
         dash(p.intake_no.as_deref()),
         tr(ko, "담당", "Owner"),
         dash(p.owner.as_deref()),
-        tr(ko, "기한", "Due"),
-        dash(p.due_date.as_deref()),
+        tr(ko, "시작", "Start"),
+        dash(p.start_date.as_deref()),
+        tr(ko, "종료", "End"),
+        dash(p.end_date.as_deref()),
     ));
     s.push_str(&format!(
         "- {}: {} · {}: {} · {}: {}\n",
@@ -504,11 +511,13 @@ pub fn supplement_request(
         text: json!({
             "id": project.id,
             "name": project.name,
-            "status": project.status.as_str(),
-            "status_label": project.status.label(ko),
+            "phase": project.phase.as_str(),
+            "phase_label": project.phase.label(ko),
+            "overdue": project.overdue,
             "intake_no": project.intake_no,
             "owner": project.owner,
-            "due_date": project.due_date,
+            "start_date": project.start_date,
+            "end_date": project.end_date,
             "template": template.as_ref().map(|t| if ko { t.name_ko.clone() } else { t.name_en.clone() }),
             "document_count": documents.len(),
             "documents": docs,
@@ -525,9 +534,9 @@ pub fn supplement_request(
         .map(|n| tr(ko, &format!("(접수번호 {n}) "), &format!("(intake no. {n}) ")).to_string())
         .unwrap_or_default();
     let due = project
-        .due_date
+        .end_date
         .as_deref()
-        .map(|d| tr(ko, &format!(" 보완 기한: {d}."), &format!(" Due: {d}.")).to_string())
+        .map(|d| tr(ko, &format!(" 프로젝트 종료: {d}."), &format!(" Project end: {d}.")).to_string())
         .unwrap_or_default();
     let owner = project
         .owner
@@ -547,7 +556,6 @@ pub fn supplement_request(
     };
     Ok(DraftRequest {
         form_ref: Some("supplement_request".into()),
-        format_description: None,
         content,
         sources,
         output,
@@ -555,8 +563,6 @@ pub fn supplement_request(
         length: Length::Medium,
         language,
         use_knowledge: false,
-        feedback: None,
-        previous: None,
-        excluded_sources: Vec::new(),
+        ..Default::default()
     })
 }

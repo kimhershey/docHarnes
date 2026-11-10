@@ -146,6 +146,8 @@ export interface TemplateDocument {
   tags: string[];
   /** Current workspace-relative folder (used when the folder template is off). */
   rel_dir: string;
+  /** The document's project (`{{project*}}` variables); absent = 미상. */
+  project?: TemplateProject;
 }
 
 /** Sample document behind the live example (the mock's software-development estimate). */
@@ -159,7 +161,19 @@ export const EXAMPLE_DOCUMENT: TemplateDocument = {
   total_amount: 12500000,
   tags: ["외주"],
   rel_dir: "inbox",
+  project: { name: "한빛 포털 구축", code: "2026-001", phase: "진행중", start: "2026-02-01", end: "2027-01-31", owner: "박서연" },
 };
+
+/** Project values behind `{{project*}}` (the document's first project or the project being organised). */
+export interface TemplateProject {
+  name: string;
+  code: string | null;
+  /** Phase label in the UI language. */
+  phase: string;
+  start: string | null;
+  end: string | null;
+  owner: string | null;
+}
 
 export interface RenderOptions {
   /** Label of a document type slug (i18n); falls back to the slug. */
@@ -197,6 +211,18 @@ export function documentVariable(doc: TemplateDocument, name: string, opts: Rend
       return doc.tags.length ? doc.tags.join("-") : null;
     case "seq":
       return opts.seq === undefined ? null : String(opts.seq).padStart(2, "0");
+    case "project":
+      return doc.project?.name ?? null;
+    case "project_code":
+      return doc.project?.code ?? null;
+    case "project_phase":
+      return doc.project?.phase ?? null;
+    case "project_start":
+      return doc.project?.start ?? null;
+    case "project_end":
+      return doc.project?.end ?? null;
+    case "project_owner":
+      return doc.project?.owner ?? null;
     default:
       return null;
   }

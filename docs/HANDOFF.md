@@ -1415,6 +1415,60 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 - 사용자 결정대로 구형 양식·템플릿은 삭제하지 않고 숨겼다. 기존 작업 공간은 `BUILTIN_VERSION` 갱신으로 열 때 자동 전환된다
   (사용자 편집 구형 양식은 유지).
 
+
+### 0.3.0 2차 — 문서 생성 내장 템플릿을 SW 개발 문서로 (2026-11-10; 계획 §1, 결정 1·2 "목록 그대로, 구형은 숨김")
+
+- **코어 `generate/mod.rs`**: `TemplateKind` 19종 — SW 12종(rfp·proposal·sow·srs·dev_contract·wbs·progress_report·meeting_minutes·
+  test_report·change_request·acceptance·estimate) + supplement_request + 숨긴 구형 6종(official_letter·quotation·transaction_statement·
+  contract·report·minutes; `hidden()`, `visible()`). 생성 slug = 추출 doc_type slug(테스트가 `pipeline::schema::builtin(slug)`로 확인).
+  `templates.rs`: `list()`(보이는 13) / `list_all()`(19) / `get()`은 숨김 포함; `match_keywords()`는 보이는 템플릿만, `match_keywords_any()`는
+  명시 형식 참조용("A4 공문 형식" → 공문); 필드 키는 추출 스키마와 동일(`project_name`·`amount`·`supplier.name`·견적 `items[]`
+  역할·등급·투입 MM·단가·공급가액); 절 목록은 계획 §1 표. 견적서는 인력·MM 기준으로 재정의해 포함(구형 품목 견적서는 숨김) —
+  어시스턴트·RUN-GUIDE의 견적서 예시와 추출 `estimate` 어휘를 유지하기 위한 결정.
+- **흐름·렌더·검증**: `resolve_spec`은 명시 `form_ref`면 숨긴 템플릿도 이름·키워드로 찾고, 내용 문장은 보이는 템플릿만 보며, 못 찾으면
+  종전처럼 `report`(숨김이지만 범용 레이아웃)로 떨어진다. 렌더의 갑·을 인터리브·서명 블록을 개발 계약서(client/contractor)·검수확인서에도
+  적용, 견적서는 표 우선·공급자 서명. 검증은 `months`(투입 MM) 열을 수량으로 인정(MM×단가=공급가액, 합계·세액 자동 채움, 메시지에 열 이름).
+  시스템 프롬프트의 문서 목록 갱신.
+- **플래너**: `TEMPLATE_WORDS`를 SW 13종 우선으로(진척·테스트·완료 보고서가 범용 보고서보다 먼저), 공문·보고서는 자기 단어로만 도달;
+  `aggregate_first`는 "문장의 유형 ≠ 선택된 템플릿"일 때로("지난달 견적서 집계 결과로 보고서 초안"); few-shot 견적서 예시를 estimate로;
+  `planner::validate`는 `templates_all()`로 숨긴 이름도 경고 없이 통과.
+- **프런트**: `TemplateKind`·`TEMPLATE_KINDS`(보이는 13)·`HIDDEN_TEMPLATE_KINDS`, i18n `generate.templates.*` 12종 추가(구형 키 유지),
+  `describePlan` 템플릿·프로젝트 템플릿 키, 모의 플래너 `DRAFT_TEMPLATES`(구체 → 범용 순)·`PROJECT_TEMPLATE_WORDS`(외주·유지보수·내부 개발),
+  모의 생성기: SW 13종 + 구형 6종(`ALL_TEMPLATES`, 명시 참조만), 긴 키워드 우선 매칭, 인력 라인 파서("백엔드개발 고급 3MM 단가
+  2,500,000원"), 합계 실수 시뮬레이션(세액 분리 양식은 합계에 세액 누락 → 검증기가 8,250,000 제안), 새 절 문장.
+- **테스트**: `generate::tests`(13/19·slug=doc_type·키워드·숨김 참조·견적서 열), `planner::tests`(estimate·dev_contract), vitest
+  `mock-generate.test`(견적서·숨김 참조·진척 보고서 매칭), E2E `generate.spec`(견적서 흐름·진척 보고서 재생성·어시스턴트 견적서).
+  `playwright.config.ts`는 `PW_PORT`·`PW_OUT_DIR`로 여러 실행을 나란히 돌릴 수 있게 함(병렬 에이전트용).
+- **문서**: RUN-GUIDE 8번·v1.1 예시, 설계 §3.13 템플릿 목록·NL 예시, 체크리스트, 계획 §1 진행, CLAUDE.md 레이아웃.
+
+
+### 0.3.0 5차 — 문서 생성 토큰 예산 + 개요→절별 분할 생성 (2026-11-10; 계획 §4, 결정 4 "GPU 상향·CPU 제한")
+
+- **코어 `generate/`**: `DraftRequest.max_tokens: Option<u32>`(없으면 길이 프리셋 1,200/1,800/2,600), `prompts::reply_budget`·`split_needed`
+  (예산 > 3,000 토큰 또는 컨텍스트의 35 %)·`section_budget`(전체 × 비중, 600~3,000). `draft()`는 작은 예산이면 종전 단일 호출, 크면
+  `draft_split`: ① 절 계획 — 템플릿 절 목록이 있으면 그대로(비중 1), 없으면 `draft_outline` 문법(제목·절 4~12개·비중·지침, 700 토큰)으로
+  모델이 정하고 실패 시 범용 5절; ② 머리 호출 — 종전 `draft_document` 문법으로 필드·표 전부 + 1절 본문만(절 예산 + 600); ③ 절마다
+  `draft_section` 문법(blocks ≤ 24)으로 호출하되 [확정 정보](제목·채워진 필드 ≤ 12)·[앞 절 요약](직전 본문 꼬리 600자)·절 지침·절별 지식
+  재검색(절 제목 질의, ≤ 3건, 번호는 공용 자료 뒤에 이어짐)을 넣음; 모델이 쓴 소제목은 level 3, 절 제목(level 2)은 조립기가 보장; ④ 사용량
+  합산, 역방향 검증 1회, 메모 "토큰 예산 N로 n개 절을 나눠 생성했습니다". 취소(플래그·`Cancelled`)는 절 사이에서 멈추고 생성된 절을 보존
+  (메모 "취소되어 n/m절까지만 생성했습니다"), JSON 실패 절은 제목만 남기고 메모. `GenerateDeps.progress`(0.25~0.95, "outline" / "section i/n"
+  / "finishing"), `DraftOutcome.sections`. `schema.rs`에 outline·section 문법(문법 안전 검사 포함), `parse_body`·`call_json_with_retry` 분리.
+- **설정 `GenerationSettings`**: `max_tokens_gpu` 32,768(1,200~65,536)·`max_tokens_cpu` 8,192(1,200~12,288), `cap(gpu)`; `AppSettings.generation`.
+- **셸**: `generate_bridge::draft`가 요청 예산을 활성 백엔드 상한으로 자르고(`budget_info`: 모델 컨텍스트·GPU 여부·상한·분할 임계),
+  `run_draft`가 절 진행률을 작업 책에 넘기며(`detail` "section 3/8"), 취소된 분할 초안도 저장 뒤 취소 보고(초안 목록에서 열림). 명령
+  `generate_budget_info`.
+- **프런트**: 생성 화면 "토큰 예산" 컨트롤(`generate-token-budget-select`: 길이 설정에 따름 / 2,600 / 6,000 / 12,000 / 24,000 문서 한 통 /
+  직접 입력 `generate-token-budget-input`), 모델 컨텍스트·상한 표시, 힌트(한 번에 / 절별 + 예상 시간: GPU 25 tok/s·CPU 6 tok/s 가정),
+  CPU 전용 경고(≥ 6,000); 설정 > 처리에 "문서 생성" 카드(GPU·CPU 상한, `settings-generation`); 작업 상세 "n/m절 작성 중"·"개요 작성 중";
+  `types.ts`(`max_tokens?`, `TOKEN_BUDGET_PRESETS`, `LENGTH_TOKENS`, `BudgetInfo`, `GenerationSettings`), `useGenerateBudgetInfo`. 모의
+  백엔드: 예산 > 3,000이면 절별 진행률·모든 절 생성(≥ 12,000은 절당 문단 추가)·메모, `generate_budget_info`(8K 컨텍스트·GPU·상한 32,768).
+- **테스트**: `generate::tests` 2건(예산 도우미·문법 안전; 진척 보고서 5절 분할 — 제목 순서·소제목 level 3·사용량 합산·진행률·절 프롬프트의
+  확정 정보/앞 절 요약·예산 배분 1,600(+600) — 3절 요청 시 취소 → 2절 보존 — 작은 예산은 단일 호출), vitest(모의 생성기), E2E
+  `generate.spec` "토큰 예산: 문서 한 통 → 8절".
+- **보류**: 실시간 스트리밍 미리보기(`generate://delta`, 계획의 2차 선택), 생성 중 컨텍스트 32K 재기동(분할이 더 안정적이라 두지 않음),
+  tok/s 실측 기반 예상 시간(현재 상수).
+- **문서**: RUN-GUIDE 8번 토큰 예산 문단, 체크리스트(GPU·CPU), 계획 §4 진행.
+
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
@@ -1434,7 +1488,7 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | 2026-11-09 어시스턴트 모델 우선 해석 + 되묻기·취소 (3467ad4) | `cargo test --workspace` 코어 296(4 ignored; `planner` 15·`prerouter` 8 포함)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과; vitest 25파일 147건; Playwright 46건(`planner.spec` 되묻기·취소 1건 추가); `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(3467ad4 푸시 이벤트) |
 | 2026-11-09 UI 배율 대응 A안(고정 px 상자 제거) | 프런트 전용 변경(Rust·고지·SBOM 변경 없음): `npm run typecheck`·`npm run build`·`licenses:check` 통과, vitest 25파일 147건, Playwright 49건(`scale.spec` 3건 추가; 1280×800 기본 뷰포트에서 150 % 검사); 모의 백엔드 15화면 × 4조건 자동 점검에서 실제 잘림 0; CI 7개 잡 모두 성공(be0b82d 푸시 이벤트, run 42601541022) |
 | 2026-11-10 요약 컨텍스트 초과 · 불필요한 RAG (4차, e7bf331·c5a8aa2) | `cargo test --workspace` 코어 303(4 ignored; `knowledge::tests` 3건·`planner::guard` 3건·`planner::tests` 1건 추가)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과, 새 의존성 없음; vitest 25파일 147건; Playwright 50건(`planner.spec` 붙여 넣은 글 1건 추가); `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(c5a8aa2 푸시 이벤트, run 42749113495) |
-| 2026-11-10 0.3.0 1차 — 내장 양식 SW 개발 문서화 (b561120 + 후속 커밋) | `cargo test --workspace` 코어 303(4 ignored; `pipeline::schema` 13 보임/6 숨김 검사·`planner` 18·`projects` 18)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(SW 문구 31건·문맥 재작성, 기준선 재생성, 미달은 이전과 같은 mx-10 1건); vitest 25파일 147건(`mock-generate.test` 규칙 파서·프로젝트 템플릿 SW화, `template.test` 예시 견적서); Playwright 전체 실행 50건 중 48 통과 → 정리 예시 문서·어시스턴트 테스트 템플릿(유지보수) 수정 뒤 `organize`·`projects` 스펙 7/7 재실행 통과; `npm run build`·`licenses:check` 통과; CI: 아래 기록 |
+| 2026-11-10 0.3.0 1차 — 내장 양식 SW 개발 문서화 (b561120 + 후속 커밋) | `cargo test --workspace` 코어 303(4 ignored; `pipeline::schema` 13 보임/6 숨김 검사·`planner` 18·`projects` 18)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(SW 문구 31건·문맥 재작성, 기준선 재생성, 미달은 이전과 같은 mx-10 1건); vitest 25파일 147건(`mock-generate.test` 규칙 파서·프로젝트 템플릿 SW화, `template.test` 예시 견적서); Playwright 전체 실행 50건 중 48 통과 → 정리 예시 문서·어시스턴트 테스트 템플릿(유지보수) 수정 뒤 `organize`·`projects` 스펙 7/7 재실행 통과; `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(93fb59b 푸시 이벤트, run 42761926963) |
 | 2026-11-09 이미지 위 글자 레이어 · 우측 패널 AI 검색/이력 (488af39·9e56dd6) | `cargo test --workspace` 코어 266(3 ignored; `documents::layout` 9·`render` 실 PDFium 문자 박스·`import` 레이아웃 왕복 추가)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과; vitest 23파일 139건(`text-layer.test.ts` 8 추가); Playwright 41/41(`documents`·`knowledge`·`pipeline` 스펙을 레이어·검토 큐 기준으로 재작성); CI 7개 잡 두 커밋 모두 성공 |
 | 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 3회(run 42471185353·42475854955 solid 43 MB, 42547230697 파일별 압축 47.6 MB; 159 파일 검사 통과) · 1~3번 반영 Lite 빌드 성공(run 42577030466, 검증된 커밋 a461405 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.5 MB; Release 게시는 권한 분류기 거부로 publish=false) · **1~8번(어시스턴트 모델 우선·되묻기·취소 포함) 반영 Lite 빌드 성공(run 42592935148, 검증된 커밋 3467ad4 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.6 MB, 2027-02-07까지 보관; publish=false — Release 게시는 사용자 작업)** · **0.2.0 릴리스(2026-11-09, https://github.com/kimhershey/docHarnes/releases/tag/v0.2.0)**: 검증된 커밋 3d55db8 고정, publish=true — Full run 42613728278(`DocuLens-Setup-Full-0.2.0-x64.exe` 1,156,786,994 B) → Lite run 42613985631(`DocuLens-Setup-Lite-0.2.0-x64.exe` 50,579,259 B); 자산 6개(설치파일 2종 + `.sha256` 2 + `THIRD-PARTY-NOTICES.md` + `sbom.cdx.json`); 이번에는 publish 디스패치가 거부되지 않음 · **4차 수정 반영 Lite 빌드 성공(2026-11-10, run 42753243021, 검증된 커밋 c5a8aa2 고정, 아티팩트 `DocuLens-Setup-Lite-0.2.0-x64` 50,593,409 B, 2027-02-08까지 보관; publish=false — 버전은 아직 0.2.0, 릴리스 v0.2.0의 설치파일은 3d55db8 빌드 그대로)** · **Full 0.1.0 빌드 성공(run 42547228170): 1.1 GB, 219 파일, CUDA 팩 cu121·cu129 동봉 검사 통과** · CUDA 팩 빌드 성공(cu121 run 42533483890 · cu129 run 42533486332 → Release v0.1.0) — 위 "패키징·고지" 참조 |
 

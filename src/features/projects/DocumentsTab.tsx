@@ -1,4 +1,4 @@
-import { Check, ExternalLink, Plus, X } from "lucide-react";
+import { Check, ExternalLink, Plus, RefreshCw, X } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
@@ -10,19 +10,35 @@ import { DropHint, importDroppedFiles, useDocumentDropTarget } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
 import { invalidateProjects, useDocTypes } from "@/lib/queries";
-import type { ProjectDetail } from "@/lib/types";
+import type { CopyState, ProjectDetail } from "@/lib/types";
 import { cn, formatDate } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui";
 
 import { AddDocumentsDialog } from "./AddDocumentsDialog";
 
-/** 문서 tab: required-type checklist (missing marks) + the project's document table + add / remove. */
+function copyVariant(state: CopyState): "ok" | "warn" | "danger" | "muted" {
+  switch (state) {
+    case "synced":
+      return "muted";
+    case "modified":
+      return "warn";
+    case "missing":
+      return "danger";
+  }
+}
+
+/**
+ * 문서 tab: required-type checklist (missing marks) + the project's document table with each document's
+ * path in this project (the original, or the tracked copy of a document shared with another project —
+ * plan §6, decision 6) + add / remove / resync.
+ */
 export function DocumentsTab({ detail }: { detail: ProjectDetail }) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const toast = useUiStore((s) => s.toast);
   const { data: docTypes } = useDocTypes();
   const [addOpen, setAddOpen] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const id = detail.project.id;
   const add = async (ids: string[]) => {
     try {
@@ -50,6 +66,19 @@ export function DocumentsTab({ detail }: { detail: ProjectDetail }) {
       toast(describeError(e, t), "danger");
     }
   };
+  const resync = async () => {
+    setSyncing(true);
+    try {
+      const r = await api.projectSyncCopies(id);
+      invalidateProjects([id]);
+      toast(t("projects.documents.copy.resynced", { rewritten: r.rewritten + r.missing, renamed: r.renamed, created: r.created }), "ok");
+    } catch (e) {
+      toast(describeError(e, t), "danger");
+    } finally {
+      setSyncing(false);
+    }
+  };
+  const hasCopies = detail.documents.some((d) => d.copy);
   return (
     <div className="flex flex-col gap-4" data-testid="project-documents">
       <section aria-labelledby="checklist-title" className="flex flex-col gap-2">
@@ -75,14 +104,22 @@ export function DocumentsTab({ detail }: { detail: ProjectDetail }) {
         <DropHint active={drop.isActive} over={drop.isOver} testId="project-documents-drop-hint">
           {t("projects.documents.drop_hint")}
         </DropHint>
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 id="docs-title" className="text-sm font-semibold">
             {t("projects.tabs.documents")} ({detail.documents.length})
           </h3>
-          <Button size="sm" onClick={() => setAddOpen(true)} data-testid="project-add-documents">
-            <Plus />
-            {t("projects.documents.add")}
-          </Button>
+          <div className="flex items-center gap-2">
+            {hasCopies && (
+              <Button size="sm" variant="outline" onClick={() => void resync()} disabled={syncing} title={t("projects.documents.copy.resync_hint")} data-testid="project-resync-copies">
+                <RefreshCw className={cn(syncing && "animate-spin")} />
+                {t("projects.documents.copy.resync")}
+              </Button>
+            )}
+            <Button size="sm" onClick={() => setAddOpen(true)} data-testid="project-add-documents">
+              <Plus />
+              {t("projects.documents.add")}
+            </Button>
+          </div>
         </div>
         {detail.documents.length === 0 ? (
           <p className="text-sm text-fg-muted">
@@ -94,6 +131,7 @@ export function DocumentsTab({ detail }: { detail: ProjectDetail }) {
               <tr>
                 <th className="py-2 pr-3">{t("projects.documents.columns.name")}</th>
                 <th className="py-2 pr-3">{t("projects.documents.columns.type")}</th>
+                <th className="py-2 pr-3">{t("projects.documents.columns.path")}</th>
                 <th className="py-2 pr-3">{t("projects.documents.columns.status")}</th>
                 <th className="py-2 pr-3">{t("projects.documents.columns.review")}</th>
                 <th className="py-2 pr-3">{t("projects.documents.columns.added")}</th>
@@ -103,10 +141,22 @@ export function DocumentsTab({ detail }: { detail: ProjectDetail }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {detail.documents.map(({ document: d, added_at }) => (
-                <tr key={d.id} data-testid={`project-doc-${d.id}`}>
+              {detail.documents.map(({ document: d, added_at, copy }) => (
+                <tr key={d.id} data-testid={`project-doc-${d.id}`} data-copy-state={copy?.state ?? "original"}>
                   <td className="py-2 pr-3 font-medium">{d.title ?? d.original_name}</td>
                   <td className="py-2 pr-3 text-fg-muted">{docTypeLabel(d.doc_type, docTypes, t, i18n.language)}</td>
+                  <td className="py-2 pr-3 text-xs text-fg-muted">
+                    <span className="flex flex-wrap items-center gap-1">
+                      <code className="selectable break-all" data-testid="project-doc-path">
+                        {copy ? copy.rel_path : d.rel_path}
+                      </code>
+                      {copy && (
+                        <Badge variant={copyVariant(copy.state)} data-testid="project-doc-copy" data-state={copy.state}>
+                          {t(`projects.documents.copy.${copy.state}`)}
+                        </Badge>
+                      )}
+                    </span>
+                  </td>
                   <td className="py-2 pr-3 text-fg-muted">{t(`documents.status.${d.status}`)}</td>
                   <td className="py-2 pr-3 text-fg-muted">{d.review_status === "pending" ? t("library.review_pending") : d.review_status === "done" ? t("documents.status.reviewed") : "—"}</td>
                   <td className="py-2 pr-3 text-xs text-fg-subtle">{formatDate(added_at, i18n.language)}</td>

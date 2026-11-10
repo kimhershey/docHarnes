@@ -155,7 +155,7 @@ pub fn preview(db: &Db, paths: &WorkspacePaths, req: &ExportRequest) -> Result<E
         (format, ExportTarget::Fields) => {
             let (grids, items) = fields_grids(&p, req);
             let all: Vec<&Doc> = p.docs.iter().collect();
-            let columns = fields_header(&union_columns(&all, &p.schemas, req), req);
+            let columns = fields_header(&union_columns(&all, &p.schemas, req), req, &p);
             let sheets = if format == ExportFormat::Xlsx {
                 sheet_names(grids.iter().chain(std::iter::once(&items)).map(|g| g.name.as_str()))
             } else {
@@ -265,14 +265,31 @@ struct Prepared {
     schemas: BTreeMap<String, SchemaRecord>,
     /// Searchable PDFs of several documents go to a folder.
     folder: bool,
+    /// Project name per document (the scope's project, else the document's first project) —
+    /// the "프로젝트" column and the per-project layout (plan §6).
+    projects: BTreeMap<String, String>,
+}
+
+impl Prepared {
+    /// The project column appears when any document in scope has a project or the layout asks for it.
+    fn project_column(&self, req: &ExportRequest) -> bool {
+        req.layout == ExportLayout::SheetPerProject || !self.projects.is_empty()
+    }
+    fn project_of(&self, doc: &Doc) -> Option<&str> {
+        self.projects.get(&doc.rec.id).map(String::as_str)
+    }
 }
 
 fn prepare(db: &Db, paths: &WorkspacePaths, req: &ExportRequest) -> Result<Prepared> {
     let want_fields = req.format != ExportFormat::PdfSearchable && req.target == ExportTarget::Fields;
-    let (docs, skipped, schemas) = db.with(|c| {
+    let (docs, skipped, schemas, projects, scope_project) = db.with(|c| {
         let mut docs = Vec::new();
         let mut skipped = Vec::new();
         let mut schemas: BTreeMap<String, SchemaRecord> = BTreeMap::new();
+        let scope_project = match req.scope.filter.project_id.as_deref() {
+            Some(pid) => crate::projects::repo::get_project(c, pid)?.map(|p| p.name),
+            None => None,
+        };
         for rec in resolve(c, &req.scope)? {
             if req.only_reviewed && rec.review_status == ReviewStatus::Pending {
                 skipped.push((rec.id.clone(), "review_pending".to_string()));
@@ -289,9 +306,13 @@ fn prepare(db: &Db, paths: &WorkspacePaths, req: &ExportRequest) -> Result<Prepa
             let date = basis_date(&rec).0;
             docs.push(Doc { rec, date, fields });
         }
-        Ok((docs, skipped, schemas))
+        let ids: Vec<String> = docs.iter().map(|d| d.rec.id.clone()).collect();
+        let projects: BTreeMap<String, String> =
+            crate::organize::project_vars(c, &req.scope, &ids)?.into_iter().map(|(k, v)| (k, v.name)).collect();
+        Ok((docs, skipped, schemas, projects, scope_project))
     })?;
-    let label = scope_type_label(req, &docs, &schemas);
+    // A project scope names the file after the project (`exports/<date>_<project>.<ext>`).
+    let label = scope_project.or_else(|| scope_type_label(req, &docs, &schemas));
     let mut rel = match req.path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
         Some(p) => normalize_rel_path(p)?,
         None => default_path(req.format, req.target, label.as_deref(), chrono::Local::now().date_naive()),
@@ -303,7 +324,7 @@ fn prepare(db: &Db, paths: &WorkspacePaths, req: &ExportRequest) -> Result<Prepa
     }
     let absolute = from_rel_path(&paths.root, &rel);
     let exists = absolute.exists();
-    Ok(Prepared { rel, absolute, exists, docs, skipped, schemas, folder })
+    Ok(Prepared { rel, absolute, exists, docs, skipped, schemas, folder, projects })
 }
 
 /// Label for the default file name: the scope's type, or the one type every
@@ -569,23 +590,23 @@ fn union_columns(docs: &[&Doc], schemas: &BTreeMap<String, SchemaRecord>, req: &
     out
 }
 
-fn common_header(req: &ExportRequest) -> Vec<String> {
+fn common_header(req: &ExportRequest, p: &Prepared) -> Vec<String> {
     let ko = req.ko();
-    let mut h = vec![
-        tr(ko, "파일", "File").to_string(),
-        tr(ko, "유형", "Type").to_string(),
-        tr(ko, "날짜", "Date").to_string(),
-        tr(ko, "검토 상태", "Review").to_string(),
-    ];
+    let mut h = vec![tr(ko, "파일", "File").to_string(), tr(ko, "유형", "Type").to_string()];
+    if p.project_column(req) {
+        h.push(tr(ko, "프로젝트", "Project").to_string());
+    }
+    h.push(tr(ko, "날짜", "Date").to_string());
+    h.push(tr(ko, "검토 상태", "Review").to_string());
     if req.includes(ExportInclude::Confidence) {
         h.push(tr(ko, "신뢰도", "Confidence").to_string());
     }
     h
 }
 
-fn fields_header(cols: &[Column], req: &ExportRequest) -> Vec<String> {
+fn fields_header(cols: &[Column], req: &ExportRequest, p: &Prepared) -> Vec<String> {
     let ko = req.ko();
-    let mut h = common_header(req);
+    let mut h = common_header(req, p);
     for c in cols {
         let label = c.label(ko);
         h.push(label.to_string());
@@ -602,21 +623,21 @@ fn fields_header(cols: &[Column], req: &ExportRequest) -> Vec<String> {
     h
 }
 
-fn common_cells(doc: &Doc, type_label: &str, req: &ExportRequest) -> Vec<Cell> {
-    let mut row = vec![
-        Cell::Text(doc.rec.rel_path.clone()),
-        Cell::Text(type_label.to_string()),
-        Cell::from_opt(doc.date.as_deref()),
-        Cell::Text(review_text(&doc.rec, req.ko()).to_string()),
-    ];
+fn common_cells(doc: &Doc, type_label: &str, req: &ExportRequest, p: &Prepared) -> Vec<Cell> {
+    let mut row = vec![Cell::Text(doc.rec.rel_path.clone()), Cell::Text(type_label.to_string())];
+    if p.project_column(req) {
+        row.push(Cell::from_opt(p.project_of(doc)));
+    }
+    row.push(Cell::from_opt(doc.date.as_deref()));
+    row.push(Cell::Text(review_text(&doc.rec, req.ko()).to_string()));
     if req.includes(ExportInclude::Confidence) {
         row.push(doc.rec.confidence.map_or(Cell::Empty, Cell::Number));
     }
     row
 }
 
-fn fields_row(doc: &Doc, type_label: &str, cols: &[Column], req: &ExportRequest) -> Vec<Cell> {
-    let mut row = common_cells(doc, type_label, req);
+fn fields_row(doc: &Doc, type_label: &str, cols: &[Column], req: &ExportRequest, p: &Prepared) -> Vec<Cell> {
+    let mut row = common_cells(doc, type_label, req, p);
     for c in cols {
         let f = doc.fields.iter().find(|f| f.row.is_none() && f.path == c.path);
         row.push(f.map_or(Cell::Empty, value_cell));
@@ -687,18 +708,31 @@ fn fields_grids(p: &Prepared, req: &ExportRequest) -> (Vec<Grid>, Grid) {
                 }
             }
         }
+        // One sheet per project; documents outside every project share a last sheet.
+        ExportLayout::SheetPerProject => {
+            for doc in &p.docs {
+                let key = p.project_of(doc).unwrap_or_default().to_string();
+                match groups.iter_mut().find(|(s, _)| *s == key) {
+                    Some((_, docs)) => docs.push(doc),
+                    None => groups.push((key, vec![doc])),
+                }
+            }
+            groups.sort_by(|a, b| a.0.is_empty().cmp(&b.0.is_empty()));
+        }
         ExportLayout::Single => groups.push((String::new(), p.docs.iter().collect())),
     }
     let grids = groups
         .into_iter()
-        .map(|(_, docs)| {
+        .map(|(key, docs)| {
             let name = match req.layout {
                 ExportLayout::SheetPerType => type_label(docs[0], &p.schemas, ko),
+                ExportLayout::SheetPerProject if key.is_empty() => tr(ko, "프로젝트 없음", "No project").to_string(),
+                ExportLayout::SheetPerProject => key,
                 ExportLayout::Single => tr(ko, "필드", "Fields").to_string(),
             };
             let cols = union_columns(&docs, &p.schemas, req);
-            let header = fields_header(&cols, req);
-            let rows = docs.iter().map(|d| fields_row(d, &type_label(d, &p.schemas, ko), &cols, req)).collect();
+            let header = fields_header(&cols, req, p);
+            let rows = docs.iter().map(|d| fields_row(d, &type_label(d, &p.schemas, ko), &cols, req, p)).collect();
             Grid { name, header, rows }
         })
         .collect();
@@ -722,10 +756,18 @@ fn render_fields(req: &ExportRequest, p: &Prepared) -> Result<Rendered> {
         ExportFormat::Csv => {
             let all: Vec<&Doc> = p.docs.iter().collect();
             let cols = union_columns(&all, &p.schemas, req);
-            let header = fields_header(&cols, req);
+            let header = fields_header(&cols, req, p);
             let rows: Vec<Vec<Cell>> =
-                p.docs.iter().map(|d| fields_row(d, &type_label(d, &p.schemas, req.ko()), &cols, req)).collect();
+                p.docs.iter().map(|d| fields_row(d, &type_label(d, &p.schemas, req.ko()), &cols, req, p)).collect();
             files.push((p.rel.clone(), csv_bytes(&header, &rows, true)?));
+            // Per-project layout: one more CSV per project folder next to the combined file.
+            if req.layout == ExportLayout::SheetPerProject && grids.len() > 1 {
+                let stem = strip_extension(&p.rel);
+                for g in &grids {
+                    let rel = format!("{stem}_{}.csv", sanitize_component(&g.name));
+                    files.push((rel, csv_bytes(&g.header, &g.rows, true)?));
+                }
+            }
             if !items.rows.is_empty() {
                 let rel = format!("{}_items.csv", strip_extension(&p.rel));
                 files.push((rel, csv_bytes(&items.header, &items.rows, true)?));
@@ -787,6 +829,7 @@ fn jsonl_fields(p: &Prepared, req: &ExportRequest) -> Vec<u8> {
             "id": doc.rec.id,
             "file": doc.rec.rel_path,
             "doc_type": doc.rec.doc_type,
+            "project": p.project_of(doc),
             "date": doc.date,
             "review_status": doc.rec.review_status.as_str(),
             "confidence": doc.rec.confidence,
@@ -1529,6 +1572,84 @@ mod tests {
         assert_eq!(pv.sheets, res.sheets);
         assert!(pv.columns.starts_with(&["File".to_string(), "Type".into(), "Date".into(), "Review".into()]));
         assert!(pv.columns.contains(&"Grand total".to_string()) && pv.columns.contains(&"Total".to_string()));
+    }
+
+    #[test]
+    fn sheet_per_project_layout_and_project_scope() {
+        use crate::projects::{repo as projects_repo, ProjectInput};
+        let w = world();
+        let p = w
+            .db
+            .with(|c| projects_repo::save_project(c, &ProjectInput { name: "한빛 납품".into(), ..Default::default() }))
+            .unwrap();
+        w.db.with(|c| projects_repo::add_documents(c, &p.id, &["r1".to_string(), "t1".to_string()])).unwrap();
+        let req = ExportRequest {
+            layout: ExportLayout::SheetPerProject,
+            path: Some("exports/by-project.xlsx".into()),
+            ..Default::default()
+        };
+        let pv = preview(&w.db, &w.paths, &req).unwrap();
+        assert_eq!(pv.sheets, vec!["한빛 납품".to_string(), "프로젝트 없음".into(), "품목".into()], "{pv:?}");
+        assert!(
+            pv.columns.starts_with(&["파일".to_string(), "유형".into(), "프로젝트".into(), "날짜".into()]),
+            "{pv:?}"
+        );
+        let res = export(&w.db, &w.paths, &req, None).unwrap();
+        assert_eq!(res.sheets, pv.sheets);
+        assert_eq!((res.documents, res.rows), (3, 3 + 5));
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&res.absolute).unwrap()).unwrap();
+        let mut strings = String::new();
+        zip.by_name("xl/sharedStrings.xml").unwrap().read_to_string(&mut strings).unwrap();
+        assert!(strings.contains("한빛 납품") && strings.contains("프로젝트"), "{strings}");
+
+        // CSV: one file per project next to the main one; JSONL rows carry the project.
+        let csv = ExportRequest {
+            format: ExportFormat::Csv,
+            layout: ExportLayout::SheetPerProject,
+            path: Some("exports/by-project.csv".into()),
+            ..Default::default()
+        };
+        let res = export(&w.db, &w.paths, &csv, None).unwrap();
+        assert_eq!(
+            res.extra_files,
+            vec![
+                "exports/by-project_한빛 납품.csv".to_string(),
+                "exports/by-project_프로젝트 없음.csv".into(),
+                "exports/by-project_items.csv".into()
+            ],
+            "{res:?}"
+        );
+        let main = read(&w, "exports/by-project.csv");
+        let header = main.lines().next().unwrap().trim_start_matches('\u{feff}');
+        assert!(header.starts_with("파일,유형,프로젝트,날짜,검토 상태"), "{main}");
+        assert!(main.contains("documents/a_receipt1.pdf,영수증,한빛 납품,"), "{main}");
+        assert!(main.contains("documents/b_receipt2.pdf,영수증,,"), "no project → empty cell: {main}");
+        let only = read(&w, "exports/by-project_한빛 납품.csv");
+        assert_eq!(only.lines().count(), 3, "header + r1 + t1: {only}");
+        let jsonl = ExportRequest {
+            format: ExportFormat::Jsonl,
+            path: Some("exports/by-project.jsonl".into()),
+            ..Default::default()
+        };
+        export(&w.db, &w.paths, &jsonl, None).unwrap();
+        let rows: Vec<serde_json::Value> =
+            read(&w, "exports/by-project.jsonl").lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let r1 = rows.iter().find(|r| r["id"] == "r1").unwrap();
+        assert_eq!(r1["project"], "한빛 납품", "{r1}");
+        assert!(rows.iter().find(|r| r["id"] == "r2").unwrap()["project"].is_null());
+
+        // A project scope exports its members only and is filed under the project's name.
+        let scoped = ExportRequest {
+            scope: Scope {
+                filter: ScopeFilter { project_id: Some(p.id.clone()), ..Default::default() },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let pv = preview(&w.db, &w.paths, &scoped).unwrap();
+        assert!(pv.path.ends_with("_한빛 납품.xlsx"), "{}", pv.path);
+        assert_eq!(pv.documents, 2);
+        assert_eq!(pv.sheets, vec!["영수증".to_string(), "세금계산서".into(), "품목".into()]);
     }
 
     #[test]

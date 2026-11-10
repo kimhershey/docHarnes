@@ -26,27 +26,38 @@ describe("mock generate", () => {
     await workspace();
   });
 
-  it("drafts a quotation from the sentence with a sum mismatch the validator can fix", () => {
-    expect(mg.listTemplates().map((t) => t.kind)).toContain("quotation");
-    const req = { form_ref: "quotation", format_description: null, content: "㈜한빛에 노트북 10대, 대당 1,200,000원, 유효기간 30일 견적서 만들어줘", sources: [], output: "hwpx" as const, tone: "formal" as const, length: "medium" as const, language: "ko" as const, use_knowledge: false, feedback: null, previous: null, excluded_sources: [] };
+  it("drafts a software estimate from the sentence with a sum mismatch the validator can fix", () => {
+    // The picker offers the 12 software templates + 보완요청서; the generic 0.1 set is hidden but still resolvable by slug.
+    const kinds = mg.listTemplates().map((t) => t.kind);
+    expect(kinds).toEqual(["rfp", "proposal", "sow", "srs", "dev_contract", "wbs", "progress_report", "meeting_minutes", "test_report", "change_request", "acceptance", "estimate", "supplement_request"]);
+    expect(mg.templateInfo("quotation").kind).toBe("quotation");
+    const req = { form_ref: "estimate", format_description: null, content: "DocuLens에 백엔드개발 고급 3MM 단가 2,500,000원, 유효기간 30일 견적서 만들어줘", sources: [], output: "hwpx" as const, tone: "formal" as const, length: "medium" as const, language: "ko" as const, use_knowledge: false, feedback: null, previous: null, excluded_sources: [], max_tokens: null };
     const draft = mg.buildDraft(req);
-    expect(draft.template).toEqual({ kind: "builtin", template: "quotation" });
-    expect(draft.fields.find((f) => f.key === "recipient")?.value).toBe("㈜한빛");
+    expect(draft.template).toEqual({ kind: "builtin", template: "estimate" });
+    expect(draft.doc_type).toBe("estimate");
+    expect(draft.fields.find((f) => f.key === "recipient")?.value).toBe("DocuLens");
     const items = draft.tables.find((t) => t.key === "items")!;
-    expect(items.rows).toEqual([["노트북", "", "10", "1,200,000", "12,000,000"]]);
-    const mismatch = draft.issues.find((i) => i.code === "sum_mismatch" && i.path === "fields.total");
-    expect(mismatch?.suggestion).toBe("12,000,000");
-    expect(draft.fields.find((f) => f.key === "total")?.value).toBe("13,200,000");
+    expect(items.rows).toEqual([["백엔드개발", "고급", "3", "2,500,000", "7,500,000", ""]]);
+    expect(draft.fields.find((f) => f.key === "supply_total")?.value).toBe("7,500,000");
+    expect(draft.fields.find((f) => f.key === "tax_total")?.value).toBe("750,000");
+    // The simulated model forgot the VAT in the grand total: the validator offers 공급가액 + 세액.
+    const mismatch = draft.issues.find((i) => i.code === "sum_mismatch" && i.path === "fields.grand_total");
+    expect(mismatch?.suggestion).toBe("8,250,000");
+    expect(draft.fields.find((f) => f.key === "grand_total")?.value).toBe("7,500,000");
     // Applying the suggestion and validating again clears the issue.
-    const total = draft.fields.find((f) => f.key === "total")!;
+    const total = draft.fields.find((f) => f.key === "grand_total")!;
     total.value = mismatch!.suggestion!;
     mg.validateDraft(draft);
     expect(draft.issues.filter((i) => i.code === "sum_mismatch")).toEqual([]);
-    expect(total.normalized).toBe("12000000");
+    expect(total.normalized).toBe("8250000");
+    // Free text picks the software templates only; an explicit reference may still name a hidden one.
+    expect(mg.resolveTemplate({ ...req, form_ref: null, content: "10월 진척 보고서 써줘" })).toEqual({ kind: "builtin", template: "progress_report" });
+    expect(mg.resolveTemplate({ ...req, form_ref: null, content: "협조 공문 써줘" })).toEqual({ kind: "builtin", template: "report" });
+    expect(mg.resolveTemplate({ ...req, form_ref: "A4 공문 형식", content: "x" })).toEqual({ kind: "builtin", template: "official_letter" });
   });
 
   it("keeps user edits across regeneration and flags required fields", () => {
-    const req = { form_ref: "official_letter", format_description: null, content: "협조문 작성", sources: [], output: "docx" as const, tone: "plain" as const, length: "short" as const, language: "ko" as const, use_knowledge: false, feedback: null, previous: null, excluded_sources: [] };
+    const req = { form_ref: "official_letter", format_description: null, content: "협조문 작성", sources: [], output: "docx" as const, tone: "plain" as const, length: "short" as const, language: "ko" as const, use_knowledge: false, feedback: null, previous: null, excluded_sources: [], max_tokens: null };
     const first = mg.buildDraft(req);
     expect(first.issues.some((i) => i.code === "required_missing" && i.path === "fields.recipient")).toBe(true);
     const edited = { ...first, fields: first.fields.map((f) => (f.key === "recipient" ? { ...f, value: "강남세무서장", user_edited: true } : f)) };
@@ -59,7 +70,7 @@ describe("mock generate", () => {
   });
 
   it("saves like the core: an existing file is export_exists, overwrite replaces it (no numbering), warnings are sentences", () => {
-    const req = { form_ref: "quotation", format_description: null, content: "㈜한빛에 노트북 10대, 대당 1,200,000원 견적서", sources: [], output: "hwpx" as const, tone: "formal" as const, length: "medium" as const, language: "ko" as const, use_knowledge: false, feedback: null, previous: null, excluded_sources: [] };
+    const req = { form_ref: "estimate", format_description: null, content: "DocuLens에 백엔드개발 고급 3MM 단가 2,500,000원 견적서", sources: [], output: "hwpx" as const, tone: "formal" as const, length: "medium" as const, language: "ko" as const, use_knowledge: false, feedback: null, previous: null, excluded_sources: [], max_tokens: null };
     const draft = mg.buildDraft(req);
     const first = mg.saveDraft({ draft, output: "hwpx", file_name: "견적서", folder: null, register: true, overwrite: false });
     expect(first.rel_path).toBe("documents/generated/견적서.hwpx");

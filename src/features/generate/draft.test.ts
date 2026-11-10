@@ -91,7 +91,7 @@ describe("draft edits", () => {
 
   it("builds the regeneration request with previous, feedback and exclusions", () => {
     const d = draft();
-    const req = regenerationRequest({ form_ref: "quotation", format_description: null, content: "c", sources: [], output: "hwpx", tone: "formal", length: "medium", language: "ko", use_knowledge: true, feedback: null, previous: null, excluded_sources: [] }, d, "  더 짧게 ", ["doc1"]);
+    const req = regenerationRequest({ form_ref: "quotation", format_description: null, content: "c", sources: [], output: "hwpx", tone: "formal", length: "medium", language: "ko", use_knowledge: true, feedback: null, previous: null, excluded_sources: [], max_tokens: null }, d, "  더 짧게 ", ["doc1"]);
     expect(req.previous).toBe(d);
     expect(req.feedback).toBe("더 짧게");
     expect(req.excluded_sources).toEqual(["doc1"]);

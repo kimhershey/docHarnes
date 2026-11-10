@@ -11,6 +11,7 @@ import { useDocumentsStore } from "@/stores/documents";
 import { ExportTab, type ExportPreset } from "./ExportTab";
 import { HistoryTab } from "./HistoryTab";
 import { OrganizeTab } from "./OrganizeTab";
+import type { ProjectRequest } from "./scope";
 
 type TabId = "organize" | "export" | "history";
 const TABS: TabId[] = ["organize", "export", "history"];
@@ -30,19 +31,24 @@ export function OrganizePage() {
   /** Bumped by `?selection=1` so the tabs switch their scope to the library selection. */
   const [selectionRequest, setSelectionRequest] = useState(0);
   const [exportPreset, setExportPreset] = useState<ExportPreset | null>(null);
+  /** `?project=<id>` ("이 프로젝트 정리 / 내보내기"): scope both tabs to that project with its settings. */
+  const [projectRequest, setProjectRequest] = useState<ProjectRequest | null>(null);
 
   useEffect(() => {
     const tabParam = searchParams.get("tab");
     const selection = searchParams.get("selection");
     const target = searchParams.get("target");
-    if (tabParam === null && selection === null && target === null) return;
+    const project = searchParams.get("project");
+    if (tabParam === null && selection === null && target === null && project === null) return;
     if (tabParam && (TABS as string[]).includes(tabParam)) setTab(tabParam as TabId);
     if (selection === "1") setSelectionRequest((n) => n + 1);
     if (target && (EXPORT_TARGETS as string[]).includes(target)) setExportPreset((p) => ({ target: target as ExportTarget, nonce: (p?.nonce ?? 0) + 1 }));
+    if (project) setProjectRequest((p) => ({ id: project, nonce: (p?.nonce ?? 0) + 1 }));
     const next = new URLSearchParams(searchParams);
     next.delete("tab");
     next.delete("selection");
     next.delete("target");
+    next.delete("project");
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
 
@@ -75,10 +81,10 @@ export function OrganizePage() {
         </TabsList>
         {/* The panels stay mounted so a built plan / export preview survives a look at the history. */}
         <TabsContent value="organize" forceMount className="data-[state=inactive]:hidden">
-          <OrganizeTab selectedIds={selectedIds} selectionRequest={selectionRequest} />
+          <OrganizeTab selectedIds={selectedIds} selectionRequest={selectionRequest} projectRequest={projectRequest} />
         </TabsContent>
         <TabsContent value="export" forceMount className="data-[state=inactive]:hidden">
-          <ExportTab selectedIds={selectedIds} selectionRequest={selectionRequest} active={tab === "export"} preset={exportPreset} />
+          <ExportTab selectedIds={selectedIds} selectionRequest={selectionRequest} active={tab === "export"} preset={exportPreset} projectRequest={projectRequest} />
         </TabsContent>
         <TabsContent value="history" forceMount className="data-[state=inactive]:hidden">
           <HistoryTab />

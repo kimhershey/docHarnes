@@ -47,6 +47,8 @@ import {
   type TemplateInfo,
   type TemplateKind,
   type TemplateRef,
+  LENGTH_TOKENS,
+  type BudgetInfo,
 } from "./types";
 
 /** Saved drafts (`.doculens/drafts/<id>.json`): `{ [workspace]: Draft[] }`. */
@@ -119,8 +121,335 @@ function tf(key: string, label_ko: string, label_en: string, kind = "string", re
 const col = (key: string, label: string, kind = "string"): DraftColumn => ({ key, label, kind });
 
 const ITEM_COLUMNS: DraftColumn[] = [col("item_name", "품명"), col("spec", "규격"), col("quantity", "수량", "integer"), col("unit_price", "단가", "amount"), col("amount", "금액", "amount")];
+/** 역할·등급·투입 MM·단가·공급가액·비고 — the pipeline's `estimate.items[]` columns (templates.rs `staffing_columns`). */
+const STAFFING_COLUMNS: DraftColumn[] = [col("role", "역할·품목"), col("grade", "등급"), col("months", "투입 MM", "amount"), col("unit_price", "단가", "amount"), col("supply_amount", "공급가액", "amount"), col("note", "비고")];
+const REQUIREMENT_COLUMNS = (full: boolean): DraftColumn[] => [col("id", "ID"), col("name", "요구사항명"), col("description", "상세 설명"), col("category", "구분"), col("priority", "우선순위"), ...(full ? [col("source", "출처"), col("acceptance", "수용 기준")] : [])];
+const DELIVERABLE_COLUMNS = (withResult: boolean): DraftColumn[] => [col("name", "산출물"), col("version", "버전"), col("due_date", "납기", "date"), ...(withResult ? [col("result", "검수 결과")] : []), col("note", "비고")];
+const SCHEDULE_COLUMNS: DraftColumn[] = [col("phase", "단계"), col("start_date", "시작", "date"), col("end_date", "종료", "date"), col("note", "비고")];
 
+/** Party block of the software templates (templates.rs `sw_party`): name, registration no., representative, contact, phone. */
+function swParty(prefix: string, ko: string, en: string, nameRequired: boolean): TemplateField[] {
+  return [
+    tf(`${prefix}.name`, `${ko} 명칭`, `${en} name`, "string", nameRequired),
+    tf(`${prefix}.brn`, `${ko} 사업자등록번호`, `${en} business reg. no.`, "brn"),
+    tf(`${prefix}.representative`, `${ko} 대표자`, `${en} representative`),
+    tf(`${prefix}.contact_person`, `${ko} 담당자`, `${en} contact person`),
+    tf(`${prefix}.phone`, `${ko} 연락처`, `${en} phone`, "phone"),
+  ];
+}
+/** Contract / estimate party block (templates.rs `party`): 상호·사업자등록번호·대표자·주소·전화. */
+function party(prefix: string, ko: string, en: string, nameRequired: boolean): TemplateField[] {
+  return [
+    tf(`${prefix}.name`, `${ko} 상호`, `${en} name`, "string", nameRequired),
+    tf(`${prefix}.brn`, `${ko} 사업자등록번호`, `${en} business reg. no.`, "brn"),
+    tf(`${prefix}.representative`, `${ko} 대표자`, `${en} representative`),
+    tf(`${prefix}.address`, `${ko} 주소`, `${en} address`),
+    tf(`${prefix}.phone`, `${ko} 전화`, `${en} phone`, "phone"),
+  ];
+}
+
+/** The software-development templates (0.3.0) + 보완요청서, in UI order; slugs equal the pipeline's document types. */
 const TEMPLATES: TemplateInfo[] = [
+  {
+    kind: "rfp",
+    name_ko: "제안요청서(RFP)",
+    name_en: "Request for proposal (RFP)",
+    description_ko: "발주기관의 소프트웨어 개발 제안요청서 — 사업 개요·예산·기간·요구사항·산출물·일정·평가 기준.",
+    description_en: "RFP for software development: overview, budget, period, requirements, deliverables, schedule, evaluation.",
+    fields: [
+      tf("project_name", "사업명", "Project name", "string", true),
+      ...swParty("issuer", "발주기관", "Issuer", true),
+      tf("issue_date", "공고일", "Issue date", "date", true),
+      tf("budget", "사업 예산", "Budget", "amount"),
+      tf("period_start", "사업 기간 시작", "Period start", "date"),
+      tf("period_end", "사업 기간 종료", "Period end", "date"),
+      tf("submission_deadline", "제출 마감", "Submission deadline", "date"),
+      tf("summary", "사업 개요", "Overview"),
+      tf("requirements", "요구사항", "Requirements", "table", true, REQUIREMENT_COLUMNS(false)),
+      tf("deliverables", "산출물", "Deliverables", "table", false, DELIVERABLE_COLUMNS(false)),
+      tf("schedule", "일정", "Schedule", "table", false, SCHEDULE_COLUMNS),
+      tf("evaluation", "평가 기준", "Evaluation criteria", "table", false, [col("item", "항목"), col("points", "배점", "amount")]),
+    ],
+    sections_ko: ["사업 개요", "추진 배경 및 목적", "사업 범위", "요구사항", "산출물", "추진 일정", "제안서 작성 및 평가 기준", "계약 조건"],
+    sections_en: ["Overview", "Background and objectives", "Scope", "Requirements", "Deliverables", "Schedule", "Proposal and evaluation criteria", "Contract terms"],
+    keywords: ["제안요청서", "제안 요청서", "rfp", "request for proposal"],
+  },
+  {
+    kind: "proposal",
+    name_ko: "제안서",
+    name_en: "Proposal",
+    description_ko: "RFP에 대한 제안서 — 제안사·제안 금액·수행 기간·접근 방법·투입 인력·일정·산출물.",
+    description_en: "Proposal: proposer, price, period, approach, staffing, schedule and deliverables.",
+    fields: [
+      tf("project_name", "사업명", "Project name", "string", true),
+      ...swParty("proposer", "제안사", "Proposer", true),
+      tf("client_name", "발주기관", "Client"),
+      tf("issue_date", "제출일", "Submission date", "date", true),
+      tf("price", "제안 금액", "Proposed price", "amount", true),
+      tf("period_start", "수행 기간 시작", "Period start", "date"),
+      tf("period_end", "수행 기간 종료", "Period end", "date"),
+      tf("duration_months", "수행 기간(개월)", "Duration (months)", "integer"),
+      tf("approach", "수행 방법론 요약", "Approach"),
+      tf("team", "투입 인력", "Team", "table", false, [col("role", "역할"), col("name", "성명"), col("grade", "등급"), col("months", "투입 MM", "amount")]),
+      tf("schedule", "일정", "Schedule", "table", false, SCHEDULE_COLUMNS),
+      tf("deliverables", "산출물", "Deliverables", "table", false, DELIVERABLE_COLUMNS(false)),
+    ],
+    sections_ko: ["제안 개요", "사업 이해 및 접근 방법", "수행 범위 및 방법론", "투입 인력", "추진 일정", "품질·보안 관리", "제안 가격"],
+    sections_en: ["Overview", "Understanding and approach", "Scope and methodology", "Staffing", "Schedule", "Quality and security", "Price"],
+    keywords: ["제안서", "proposal"],
+  },
+  {
+    kind: "sow",
+    name_ko: "과업지시서",
+    name_en: "Statement of work",
+    description_ko: "과업지시서(과업내용서) — 발주자·수행자, 과업 범위, 세부 과업, 산출물, 검수 기준, 단계별 납기·대금.",
+    description_en: "Statement of work: parties, scope, tasks, deliverables, acceptance criteria, milestones and payments.",
+    fields: [
+      tf("project_name", "과업명", "Project name", "string", true),
+      ...swParty("client", "발주자", "Client", true),
+      ...swParty("contractor", "수행자", "Contractor", false),
+      tf("issue_date", "작성일", "Issue date", "date", true),
+      tf("period_start", "과업 기간 시작", "Period start", "date"),
+      tf("period_end", "과업 기간 종료", "Period end", "date"),
+      tf("amount", "과업 금액", "Amount", "amount"),
+      tf("scope", "과업 범위", "Scope"),
+      tf("acceptance_criteria", "검수 기준", "Acceptance criteria"),
+      tf("tasks", "세부 과업", "Tasks", "table", true, [col("id", "번호"), col("task", "과업"), col("description", "내용"), col("deliverable", "산출물")]),
+      tf("deliverables", "산출물", "Deliverables", "table", false, DELIVERABLE_COLUMNS(false)),
+      tf("milestones", "단계별 납기·대금", "Milestones", "table", false, [col("phase", "단계"), col("due_date", "납기", "date"), col("ratio", "대금 비율(%)", "amount"), col("amount", "금액", "amount")]),
+    ],
+    sections_ko: ["과업 개요", "과업 범위", "세부 과업", "산출물 및 납품", "검수 기준", "일정 및 대금", "기타 조건"],
+    sections_en: ["Overview", "Scope", "Tasks", "Deliverables", "Acceptance criteria", "Schedule and payment", "Other terms"],
+    keywords: ["과업지시서", "과업 지시서", "과업내용서", "sow", "statement of work"],
+  },
+  {
+    kind: "srs",
+    name_ko: "요구사항 정의서",
+    name_en: "Requirements specification",
+    description_ko: "요구사항 정의서(SRS) — 버전·작성자·승인자, 기능·비기능·인터페이스 요구사항 표, 제약·가정, 수용 기준.",
+    description_en: "Software requirements specification: version, author, approver, requirements table, constraints, acceptance.",
+    fields: [
+      tf("project_name", "사업명", "Project name", "string", true),
+      tf("version", "버전", "Version", "string", true),
+      tf("issue_date", "작성일", "Issue date", "date", true),
+      tf("author", "작성자", "Author"),
+      tf("approver", "승인자", "Approver"),
+      tf("summary", "시스템 개요", "System overview"),
+      tf("requirements", "요구사항", "Requirements", "table", true, REQUIREMENT_COLUMNS(true)),
+    ],
+    sections_ko: ["개요", "시스템 범위", "기능 요구사항", "비기능 요구사항", "인터페이스 요구사항", "제약 사항 및 가정", "수용 기준"],
+    sections_en: ["Overview", "System scope", "Functional requirements", "Non-functional requirements", "Interface requirements", "Constraints and assumptions", "Acceptance criteria"],
+    keywords: ["요구사항 정의서", "요구사항정의서", "요구사항 명세서", "요구사항명세서", "srs", "requirements specification", "requirements"],
+  },
+  {
+    kind: "dev_contract",
+    name_ko: "소프트웨어 개발 계약서",
+    name_en: "Software development contract",
+    description_ko: "소프트웨어 개발(외주·용역) 계약서 — 갑·을, 계약일·기간·금액, 대금 지급 단계, 지식재산권·하자보수·비밀유지·검수 조항.",
+    description_en: "Software development contract: parties, date, period, amount, payment milestones, IP, warranty, confidentiality, acceptance.",
+    fields: [
+      tf("title", "계약명", "Title", "string", true),
+      tf("contract_date", "계약일", "Contract date", "date", true),
+      ...party("client", "발주자(갑)", "Client (party A)", true),
+      ...party("contractor", "수행사(을)", "Contractor (party B)", true),
+      tf("period_start", "계약기간 시작", "Period start", "date"),
+      tf("period_end", "계약기간 종료", "Period end", "date"),
+      tf("amount", "계약금액", "Contract amount", "amount", true),
+      tf("vat_included", "부가세 포함 여부", "VAT included", "boolean"),
+      tf("payment_terms", "지급 조건", "Payment terms"),
+      tf("warranty_months", "하자보수 기간(개월)", "Warranty (months)", "integer"),
+      tf("ip_owner", "지식재산권 귀속", "IP owner"),
+      tf("confidentiality", "비밀유지 조항", "Confidentiality clause", "boolean"),
+      tf("payments", "대금 지급 단계", "Payment milestones", "table", false, [col("phase", "단계"), col("ratio", "비율(%)", "amount"), col("amount", "금액", "amount"), col("due_date", "지급 시기", "date")]),
+    ],
+    sections_ko: ["제1조 (목적)", "제2조 (과업의 범위)", "제3조 (계약기간)", "제4조 (계약금액 및 대금 지급)", "제5조 (산출물 및 검수)", "제6조 (지식재산권)", "제7조 (하자보수)", "제8조 (비밀유지)", "제9조 (계약의 변경 및 해지)", "제10조 (분쟁 해결)"],
+    sections_en: ["Article 1 (Purpose)", "Article 2 (Scope of work)", "Article 3 (Term)", "Article 4 (Contract amount and payment)", "Article 5 (Deliverables and acceptance)", "Article 6 (Intellectual property)", "Article 7 (Warranty)", "Article 8 (Confidentiality)", "Article 9 (Changes and termination)", "Article 10 (Disputes)"],
+    keywords: ["개발 계약서", "개발계약서", "용역 계약서", "용역계약서", "계약서", "계약", "contract", "agreement"],
+  },
+  {
+    kind: "wbs",
+    name_ko: "WBS·일정표",
+    name_en: "WBS / schedule",
+    description_ko: "작업 분류 체계와 일정표 — 작업별 담당·시작·종료·진척률·산출물, 마일스톤.",
+    description_en: "Work breakdown structure and schedule: tasks with owner, dates, progress and deliverable; milestones.",
+    fields: [
+      tf("project_name", "사업명", "Project name", "string", true),
+      tf("version", "버전", "Version"),
+      tf("issue_date", "작성일", "Issue date", "date", true),
+      tf("period_start", "전체 시작", "Period start", "date"),
+      tf("period_end", "전체 종료", "Period end", "date"),
+      tf("tasks", "작업", "Tasks", "table", true, [col("id", "WBS 번호"), col("task", "작업"), col("owner", "담당"), col("start_date", "시작", "date"), col("end_date", "종료", "date"), col("progress", "진척률(%)", "amount"), col("deliverable", "산출물")]),
+      tf("milestones", "마일스톤", "Milestones", "table", false, [col("name", "마일스톤"), col("date", "일자", "date")]),
+    ],
+    sections_ko: ["개요", "작업 분류 체계", "마일스톤"],
+    sections_en: ["Overview", "Work breakdown", "Milestones"],
+    keywords: ["wbs", "일정표", "작업분류체계", "작업 분류 체계", "work breakdown"],
+  },
+  {
+    kind: "progress_report",
+    name_ko: "진척 보고서",
+    name_en: "Progress report",
+    description_ko: "주간·월간·단계 진척 보고서 — 보고 기간, 전체·계획 진척률, 작업별 실적, 이슈·리스크, 차기 계획.",
+    description_en: "Weekly / monthly progress report: period, overall vs planned progress, task results, issues, next plan.",
+    fields: [
+      tf("project_name", "사업명", "Project name", "string", true),
+      tf("report_type", "보고 구분", "Report type"),
+      tf("period_start", "보고 기간 시작", "Period start", "date"),
+      tf("period_end", "보고 기간 종료", "Period end", "date"),
+      tf("report_date", "보고일", "Report date", "date", true),
+      tf("author", "작성자", "Author"),
+      tf("progress_percent", "전체 진척률(%)", "Overall progress (%)", "amount"),
+      tf("plan_percent", "계획 진척률(%)", "Planned progress (%)", "amount"),
+      tf("summary", "주요 실적", "Summary"),
+      tf("next_plan", "차기 계획", "Next plan"),
+      tf("tasks", "작업별 실적", "Task results", "table", false, [col("task", "작업"), col("owner", "담당"), col("planned", "계획"), col("actual", "실적"), col("progress", "진척률(%)", "amount")]),
+      tf("issues", "이슈·리스크", "Issues / risks", "table", false, [col("issue", "이슈"), col("impact", "영향도"), col("action", "조치"), col("owner", "담당"), col("due_date", "기한", "date")]),
+    ],
+    sections_ko: ["보고 개요", "금주 실적", "차주 계획", "이슈 및 리스크", "지원 요청 사항"],
+    sections_en: ["Overview", "Results this period", "Plan for next period", "Issues and risks", "Support needed"],
+    keywords: ["진척 보고서", "진척보고서", "진척 보고", "주간 보고서", "주간보고서", "주간 보고", "월간 보고서", "월간보고서", "월간 보고", "진도 보고", "progress report", "weekly report", "status report"],
+  },
+  {
+    kind: "meeting_minutes",
+    name_ko: "회의록",
+    name_en: "Meeting minutes",
+    description_ko: "회의록 — 일시·장소·참석자 표, 안건·논의 내용, 결정 사항 표, 실행 항목(담당·기한), 차기 회의.",
+    description_en: "Meeting minutes: date, place, attendees, agenda, discussion, decisions, action items, next meeting.",
+    fields: [
+      tf("title", "회의명", "Title", "string", true),
+      tf("project_name", "사업명", "Project name"),
+      tf("meeting_date", "일시", "Date", "date", true),
+      tf("location", "장소", "Location"),
+      tf("author", "작성자", "Author"),
+      tf("next_meeting", "차기 회의", "Next meeting", "date"),
+      tf("attendees", "참석자", "Attendees", "table", true, [col("name", "성명"), col("organization", "소속"), col("role", "역할")]),
+      tf("decisions", "결정 사항", "Decisions", "table", false, [col("item", "항목"), col("detail", "내용")]),
+      tf("action_items", "실행 항목", "Action items", "table", false, [col("item", "항목"), col("owner", "담당"), col("due_date", "기한", "date")]),
+    ],
+    sections_ko: ["안건", "논의 내용", "결정 사항", "실행 항목"],
+    sections_en: ["Agenda", "Discussion", "Decisions", "Action items"],
+    keywords: ["회의록", "회의 록", "meeting minutes", "minutes"],
+  },
+  {
+    kind: "test_report",
+    name_ko: "테스트 결과서",
+    name_en: "Test report",
+    description_ko: "테스트 결과서 — 대상 버전·일자·구분·환경, 케이스 집계(총·통과·실패·보류·통과율), 케이스별 결과, 결함 목록.",
+    description_en: "Test report: version, date, type, environment, case totals and pass rate, case results, defect list.",
+    fields: [
+      tf("project_name", "사업명", "Project name", "string", true),
+      tf("version", "대상 버전", "Version under test"),
+      tf("test_date", "테스트 일자", "Test date", "date", true),
+      tf("tester", "테스터", "Tester"),
+      tf("test_type", "테스트 구분", "Test type"),
+      tf("environment", "테스트 환경", "Environment"),
+      tf("total_cases", "총 케이스", "Total cases", "integer"),
+      tf("passed", "통과", "Passed", "integer"),
+      tf("failed", "실패", "Failed", "integer"),
+      tf("blocked", "보류", "Blocked", "integer"),
+      tf("pass_rate", "통과율(%)", "Pass rate (%)", "amount"),
+      tf("cases", "케이스", "Cases", "table", true, [col("id", "ID"), col("scenario", "시나리오"), col("expected", "기대 결과"), col("result", "결과"), col("defect_id", "결함 ID")]),
+      tf("defects", "결함", "Defects", "table", false, [col("id", "결함 ID"), col("severity", "심각도"), col("description", "내용"), col("status", "상태")]),
+    ],
+    sections_ko: ["테스트 개요", "테스트 범위 및 환경", "결과 요약", "결함 목록", "결론 및 권고"],
+    sections_en: ["Overview", "Scope and environment", "Summary of results", "Defects", "Conclusion"],
+    keywords: ["테스트 결과서", "테스트결과서", "시험 결과서", "시험결과서", "테스트 보고서", "test report", "test results"],
+  },
+  {
+    kind: "change_request",
+    name_ko: "변경요청서",
+    name_en: "Change request",
+    description_ko: "변경요청서(CR) — 번호·요청자·일자, 변경 내용·사유, 일정·비용 영향, 우선순위, 승인 상태·승인자.",
+    description_en: "Change request: number, requester, date, change and reason, schedule / cost impact, priority, approval.",
+    fields: [
+      tf("cr_no", "CR 번호", "CR no.", "string", true),
+      tf("project_name", "사업명", "Project name"),
+      tf("request_date", "요청일", "Request date", "date", true),
+      tf("requester", "요청자", "Requester"),
+      tf("title", "변경 제목", "Title", "string", true),
+      tf("description", "변경 내용", "Description"),
+      tf("reason", "변경 사유", "Reason"),
+      tf("impact_schedule", "일정 영향", "Schedule impact"),
+      tf("impact_cost", "비용 영향", "Cost impact", "amount"),
+      tf("priority", "우선순위", "Priority"),
+      tf("status", "승인 상태", "Status"),
+      tf("approver", "승인자", "Approver"),
+      tf("approval_date", "승인일", "Approval date", "date"),
+    ],
+    sections_ko: ["변경 개요", "변경 사유", "영향 분석", "승인"],
+    sections_en: ["Change overview", "Reason", "Impact analysis", "Approval"],
+    keywords: ["변경요청서", "변경 요청서", "변경요청", "change request"],
+  },
+  {
+    kind: "acceptance",
+    name_ko: "검수확인서",
+    name_en: "Acceptance certificate",
+    description_ko: "검수확인서·완료보고서 — 발주자·수행사, 검수일, 산출물별 검수 결과, 검수 금액, 최종 판정, 확인.",
+    description_en: "Acceptance certificate: parties, acceptance date, per-deliverable results, amount, verdict, confirmation.",
+    fields: [
+      tf("project_name", "사업명", "Project name", "string", true),
+      ...swParty("client", "발주자", "Client", true),
+      ...swParty("contractor", "수행사", "Contractor", true),
+      tf("acceptance_date", "검수일", "Acceptance date", "date", true),
+      tf("period_start", "사업 기간 시작", "Period start", "date"),
+      tf("period_end", "사업 기간 종료", "Period end", "date"),
+      tf("amount", "검수 금액", "Amount", "amount"),
+      tf("result", "최종 판정", "Verdict"),
+      tf("conditions", "조건·특이사항", "Conditions / remarks"),
+      tf("deliverables", "산출물", "Deliverables", "table", true, DELIVERABLE_COLUMNS(true)),
+    ],
+    sections_ko: ["사업 개요", "산출물 검수 결과", "특이사항", "확인"],
+    sections_en: ["Overview", "Deliverable inspection", "Remarks", "Confirmation"],
+    keywords: ["검수확인서", "검수 확인서", "검수조서", "완료보고서", "완료 보고서", "검수", "acceptance certificate", "acceptance"],
+  },
+  {
+    kind: "estimate",
+    name_ko: "견적서",
+    name_en: "Estimate",
+    description_ko: "소프트웨어 개발 견적서(인력·MM 기준) — 공급자·수신·유효기간, 역할별 등급·투입 MM·단가·공급가액, 합계·세액.",
+    description_en: "Software development estimate (person-month based): supplier, recipient, validity, per-role staffing lines, totals.",
+    fields: [
+      tf("document_no", "견적번호", "Estimate no."),
+      tf("issue_date", "견적일", "Issue date", "date", true),
+      tf("project_name", "사업명", "Project name"),
+      tf("recipient", "수신", "Recipient", "string", true),
+      tf("valid_until", "유효기간", "Valid until", "date"),
+      ...party("supplier", "공급자", "Supplier", true),
+      tf("contact_person", "담당자", "Contact person"),
+      tf("supply_total", "공급가액 합계", "Supply total", "amount"),
+      tf("tax_total", "세액 합계", "Tax total", "amount"),
+      tf("grand_total", "합계금액", "Grand total", "amount", true),
+      tf("payment_terms", "결제조건", "Payment terms"),
+      tf("note", "비고", "Note"),
+      tf("items", "견적 내역", "Items", "table", true, STAFFING_COLUMNS),
+    ],
+    sections_ko: ["견적 조건", "비고"],
+    sections_en: ["Terms", "Notes"],
+    keywords: ["견적서", "견적", "estimate", "quotation", "quote"],
+  },
+  {
+    kind: "supplement_request",
+    name_ko: "보완요청서",
+    name_en: "Supplement request",
+    description_ko: "정합성 검사의 불일치·누락 항목을 근거와 함께 보완 요청하는 문서(§3.15).",
+    description_en: "Requests corrections for the mismatches / missing documents of a consistency check (§3.15).",
+    fields: [
+      tf("date", "요청일", "Date", "date", true),
+      tf("recipient", "수신", "Recipient", "string", true),
+      tf("project_name", "건명", "Case", "string", true),
+      tf("intake_no", "접수번호", "Intake no."),
+      tf("due_date", "보완 기한", "Due date", "date"),
+      tf("sender", "발신", "Sender", "string", true),
+      tf("findings", "보완 항목", "Findings", "table", true, [col("no", "번호", "integer"), col("item", "항목"), col("finding", "지적 사항"), col("evidence", "근거"), col("action", "조치")]),
+    ],
+    sections_ko: ["보완 요청 사유", "보완 방법"],
+    sections_en: ["Reason", "How to supplement"],
+    keywords: ["보완요청", "보완 요청서", "보완요청서", "supplement", "supplement request"],
+  },
+];
+
+/** The generic templates of 0.1 (hidden since 0.3.0): not listed, not keyword-matched from free text; explicit refs and old drafts still work. */
+const LEGACY_TEMPLATES: TemplateInfo[] = [
   {
     kind: "official_letter",
     name_ko: "공문",
@@ -205,33 +534,34 @@ const TEMPLATES: TemplateInfo[] = [
     sections_en: ["Agenda", "Discussion", "Decisions", "Actions"],
     keywords: ["회의록", "회의", "minutes", "meeting"],
   },
-  {
-    kind: "supplement_request",
-    name_ko: "보완요청서",
-    name_en: "Supplement request",
-    description_ko: "정합성 검사의 불일치·누락 항목을 근거와 함께 보완 요청하는 문서(§3.15).",
-    description_en: "Requests corrections for the mismatches / missing documents of a consistency check (§3.15).",
-    fields: [
-      tf("date", "요청일", "Date", "date", true),
-      tf("recipient", "수신", "Recipient", "string", true),
-      tf("project_name", "건명", "Case", "string", true),
-      tf("intake_no", "접수번호", "Intake no."),
-      tf("due_date", "보완 기한", "Due date", "date"),
-      tf("sender", "발신", "Sender", "string", true),
-      tf("findings", "보완 항목", "Findings", "table", true, [col("no", "번호", "integer"), col("item", "항목"), col("finding", "지적 사항"), col("evidence", "근거"), col("action", "조치")]),
-    ],
-    sections_ko: ["보완 요청 사유", "보완 방법"],
-    sections_en: ["Reason", "How to supplement"],
-    keywords: ["보완요청", "보완 요청서", "보완요청서", "supplement", "supplement request"],
-  },
 ];
+const ALL_TEMPLATES: TemplateInfo[] = [...TEMPLATES, ...LEGACY_TEMPLATES];
 
 export function listTemplates(): TemplateInfo[] {
   return TEMPLATES;
 }
 
+/** Budgets above this are drafted section by section (generate/prompts.rs). */
+const SPLIT_THRESHOLD_TOKENS = 3000;
+/** Reply token budget of a request (explicit, else the length preset). */
+function replyBudget(req: DraftRequest): number {
+  return req.max_tokens && req.max_tokens > 0 ? req.max_tokens : LENGTH_TOKENS[req.length];
+}
+
 export function templateInfo(kind: TemplateKind): TemplateInfo {
-  return TEMPLATES.find((t) => t.kind === kind) ?? TEMPLATES[4]!;
+  return ALL_TEMPLATES.find((t) => t.kind === kind) ?? ALL_TEMPLATES.find((t) => t.kind === "report")!;
+}
+
+/** Template whose keyword occurs in the compacted text; the longest keyword wins ("개발 계약서" over "계약서"). */
+function matchKeywords(text: string, pool: TemplateInfo[]): TemplateKind | null {
+  let best: { len: number; kind: TemplateKind } | null = null;
+  for (const t of pool) {
+    for (const k of t.keywords) {
+      const kc = compact(k);
+      if (kc && text.includes(kc) && (!best || kc.length > best.len)) best = { len: kc.length, kind: t.kind };
+    }
+  }
+  return best?.kind ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -243,15 +573,19 @@ export function resolveTemplate(req: DraftRequest): TemplateRef {
   const ref = (req.form_ref ?? "").trim();
   if (ref) {
     const key = compact(ref);
-    const builtin = TEMPLATES.find((t) => t.kind === ref || compact(t.name_ko) === key || compact(t.name_en) === key);
+    const builtin = ALL_TEMPLATES.find((t) => t.kind === ref || compact(t.name_ko) === key || compact(t.name_en) === key) ?? null;
     const schema = pl.listSchemas().find((s) => s.id === ref || compact(s.name) === key || compact(s.name_en ?? "") === key || compact(s.doc_type) === key);
     // A registered form wins over a built-in template of the same name (the user registered it on purpose).
     if (schema && schema.source === "form") return { kind: "form", schema_id: schema.id, doc_id: schema.form_document_id };
     if (builtin) return { kind: "builtin", template: builtin.kind };
     if (schema) return { kind: "form", schema_id: schema.id, doc_id: schema.form_document_id };
+    // "A4 공문 형식": an explicit format reference may still name a hidden generic template.
+    const byKeyword = matchKeywords(key, ALL_TEMPLATES);
+    if (byKeyword) return { kind: "builtin", template: byKeyword };
   }
   const text = compact(`${req.format_description ?? ""} ${req.content}`);
-  for (const t of TEMPLATES) if (t.keywords.some((k) => text.includes(compact(k)))) return { kind: "builtin", template: t.kind };
+  const matched = matchKeywords(text, TEMPLATES);
+  if (matched) return { kind: "builtin", template: matched };
   return { kind: "builtin", template: "report" };
 }
 
@@ -280,10 +614,12 @@ function layoutFields(template: TemplateRef): { fields: TemplateField[]; section
 
 interface ContentHints {
   recipient: string | null;
-  items: { name: string; quantity: number; unitPrice: number | null }[];
+  items: { name: string; grade: string | null; quantity: number; unitPrice: number | null }[];
   amount: number | null;
   validityDays: number | null;
   title: string | null;
+  /** "한빛 포털 구축 사업" — the project / business name a software document is about. */
+  projectName: string | null;
 }
 
 const RECIPIENT_RE = /((?:\(주\)|㈜|주식회사\s*)?[가-힣A-Za-z0-9·&]+(?:\(주\))?)\s*(?:에게|에|앞|측|귀하|귀중)(?=[\s,.]|$)/u;
@@ -293,12 +629,13 @@ export function contentHints(content: string): ContentHints {
   const text = content.replace(/\s+/g, " ").trim();
   const recipient = text.match(RECIPIENT_RE)?.[1]?.replace(/^(에|에게)$/, "") ?? null;
   const items: ContentHints["items"] = [];
-  const itemRe = /([가-힣A-Za-z][가-힣A-Za-z0-9·\-]*)\s*(\d+)\s*(대|개|EA|ea|set|세트|건|식|권|박스|box)/gu;
+  // Goods ("노트북 10대") or staffing lines of a software estimate ("백엔드개발 고급 3MM").
+  const itemRe = /([가-힣A-Za-z][가-힣A-Za-z0-9·\-]*)\s*(?:(특급|고급|중급|초급)\s*)?(\d+(?:\.\d+)?)\s*(대|개|EA|ea|set|세트|건|식|권|박스|box|MM|mm|M\/M|인월|명)(?![가-힣A-Za-z])/gu;
   let m: RegExpExecArray | null;
   while ((m = itemRe.exec(text))) {
     const name = m[1]!;
     if (/^(유효기간|기한|합계|총|대당|개당|단가)$/.test(name)) continue;
-    items.push({ name, quantity: Number(m[2]), unitPrice: null });
+    items.push({ name, grade: m[2] ?? null, quantity: Number(m[3]), unitPrice: null });
   }
   const unit = text.match(/(?:대당|개당|단가|unit price)\s*([\d,]+)\s*원?/iu);
   const unitPrice = unit ? parseAmount(unit[1]) : null;
@@ -307,7 +644,8 @@ export function contentHints(content: string): ContentHints {
   const amount = amountMatch ? parseAmount(amountMatch[1]) : null;
   const validity = text.match(/유효(?:기간)?\s*(\d+)\s*일/u);
   const quoted = text.match(/[“"']([^”"']{2,60})[”"']/u);
-  return { recipient, items, amount, validityDays: validity ? Number(validity[1]) : null, title: quoted?.[1] ?? null };
+  const project = text.match(/((?:[가-힣A-Za-z0-9·]+\s){0,3}[가-힣A-Za-z0-9·]*(?:구축|고도화|사업|프로젝트|시스템))(?![가-힣])/u)?.[1]?.trim() ?? null;
+  return { recipient, items, amount, validityDays: validity ? Number(validity[1]) : null, title: quoted?.[1] ?? null, projectName: project && Array.from(project).length >= 4 ? project : null };
 }
 
 function addDays(iso: string, days: number): string {
@@ -363,7 +701,28 @@ function sentenceFor(section: string, content: string, ko: boolean, tone: DraftR
     case "결론 및 제언":
       return `위 내용을 바탕으로 ${subject}을(를) 계획대로 진행할 것을 제언${ending}`;
     case "견적 조건":
-      return `본 견적은 부가가치세 별도이며, 납품 조건과 유효기간은 상기와 같${ending === "임." ? "음." : "습니다."}`;
+      return `본 견적은 부가가치세 별도이며, 투입 인력·기간과 유효기간은 상기와 같${ending === "임." ? "음." : "습니다."}`;
+    case "사업 개요":
+    case "과업 개요":
+    case "제안 개요":
+    case "보고 개요":
+    case "테스트 개요":
+    case "변경 개요":
+      return `본 문서는 ${subject}에 관한 ${section}를 정리한 것${ending === "임." ? "임." : "입니다."}${cite}`;
+    case "실행 항목":
+      return `담당자별 실행 항목과 기한은 아래 표와 같${ending === "임." ? "음." : "습니다."}`;
+    case "비고":
+      return `특이 사항 없${ending === "임." ? "음." : "습니다."}`;
+    case "결론 및 권고":
+      return `테스트 결과를 바탕으로 잔여 결함을 수정한 뒤 배포할 것을 권고${ending}`;
+    case "승인":
+      return `위 변경 요청을 검토한 결과 승인${ending}`;
+    case "확인":
+      return `상기 산출물을 검수하였음을 확인${ending}`;
+    case "제3조 (계약기간)":
+      return `계약기간은 상기 시작일부터 종료일까지로 ${ending === "임." ? "함." : "합니다."}`;
+    case "제4조 (계약금액 및 대금 지급)":
+      return `계약금액은 상기 금액으로 하며 대금 지급 단계에 따라 지급${ending}`;
     case "안건":
       return `${subject}`;
     case "논의 내용":
@@ -431,7 +790,7 @@ export function buildDraft(req: DraftRequest, knowledge: DraftCitation[] = []): 
   const title =
     keepEdited(previous, "title")?.value ??
     hints.title ??
-    (template.kind === "builtin" && template.template === "quotation" && hints.recipient ? `${hints.recipient} ${layout.name}` : null) ??
+    (template.kind === "builtin" && (template.template === "quotation" || template.template === "estimate") && hints.recipient ? `${hints.recipient} ${layout.name}` : null) ??
     (req.content.length <= 40 ? req.content.replace(/\s*(만들어|작성|써)[^ ]*$/u, "").trim() || layout.name : `${layout.name} — ${today()}`);
 
   // -- tables first (totals are derived from the item rows), then the scalar fields --------
@@ -451,8 +810,12 @@ export function buildDraft(req: DraftRequest, knowledge: DraftCitation[] = []): 
               case "item_name":
               case "item":
               case "name":
+              case "role":
                 return it.name;
+              case "grade":
+                return it.grade ?? "";
               case "quantity":
+              case "months":
                 return String(it.quantity);
               case "unit_price":
                 return it.unitPrice !== null ? formatAmount(it.unitPrice) : "";
@@ -487,8 +850,40 @@ export function buildDraft(req: DraftRequest, knowledge: DraftCitation[] = []): 
         break;
       case "supplier":
       case "sender":
-        value = factValue(["supplier.name"]) ?? (ko ? "DocuLens" : "DocuLens");
-        if (factValue(["supplier.name"]) && firstFact) source = firstFact.citation;
+      case "supplier.name":
+      case "contractor.name":
+      case "proposer.name":
+        value = factValue(["supplier.name", "contractor.name", "proposer.name"]) ?? (ko ? "DocuLens" : "DocuLens");
+        if (factValue(["supplier.name", "contractor.name", "proposer.name"]) && firstFact) source = firstFact.citation;
+        break;
+      case "supplier.brn":
+      case "contractor.brn":
+      case "proposer.brn":
+        value = factValue(["supplier.brn", "contractor.brn", "proposer.brn", "registration_no", "brn"]) ?? "";
+        if (value && firstFact) source = firstFact.citation;
+        break;
+      case "client.name":
+      case "client_name":
+      case "issuer.name":
+        value = hints.recipient ?? factValue(["client.name", "issuer.name", "buyer.name"]) ?? (f.key === "issuer.name" ? "DocuLens" : "");
+        if (!hints.recipient && value && firstFact && factValue(["client.name", "issuer.name", "buyer.name"])) source = firstFact.citation;
+        break;
+      case "version":
+        value = factValue(["version"]) ?? "1.0";
+        break;
+      case "cr_no":
+        value = `CR-${today().replace(/-/g, "")}-01`;
+        break;
+      case "report_type":
+        value = ko ? "주간" : "Weekly";
+        break;
+      case "requester":
+      case "tester":
+      case "approver":
+        value = ko ? "담당자" : "Owner";
+        break;
+      case "location":
+        value = ko ? "회의실 A" : "Room A";
         break;
       case "supplier_brn":
         value = factValue(["supplier.brn", "registration_no", "brn"]) ?? "";
@@ -505,6 +900,12 @@ export function buildDraft(req: DraftRequest, knowledge: DraftCitation[] = []): 
         break;
       case "date":
       case "contract_date":
+      case "issue_date":
+      case "report_date":
+      case "test_date":
+      case "acceptance_date":
+      case "request_date":
+      case "meeting_date":
         value = today();
         break;
       case "valid_until":
@@ -520,18 +921,26 @@ export function buildDraft(req: DraftRequest, knowledge: DraftCitation[] = []): 
         value = factValue(["period_end"]) ?? addDays(today(), 365);
         break;
       case "title":
-      case "project_name":
         value = title;
+        break;
+      case "project_name":
+        value = hints.projectName ?? factValue(["project_name"]) ?? title;
         break;
       case "total":
       case "amount":
+      case "price":
+      case "budget":
       case "grand_total": {
         const items = tables.find((t) => t.key === "items");
         const sum = items ? sumOfColumn(items, ["amount", "supply_amount"]) : null;
         if (feedbackAmount) value = formatAmount(parseAmount(feedbackAmount[1]) ?? 0);
-        else if (sum !== null && sum > 0) value = formatAmount(Math.round(sum * 1.1)); // the model adds VAT to the total — the validator points the mismatch out
-        else if (hints.amount !== null) value = formatAmount(hints.amount);
-        else value = factValue(["grand_total", "total", "amount"]) ?? "";
+        else if (sum !== null && sum > 0) {
+          // The simulated model slips on the total: with separate 공급가액/세액 fields it forgets the VAT,
+          // otherwise it adds VAT to a VAT-exclusive total — the validator points either mismatch out.
+          const separateTax = layout.fields.some((x) => x.key === "tax_total");
+          value = formatAmount(separateTax ? sum : Math.round(sum * 1.1));
+        } else if (hints.amount !== null) value = formatAmount(hints.amount);
+        else value = factValue(["grand_total", "total", "amount", "price", "budget"]) ?? "";
         break;
       }
       case "supply_total": {
@@ -543,7 +952,9 @@ export function buildDraft(req: DraftRequest, knowledge: DraftCitation[] = []): 
       case "tax_total": {
         const items = tables.find((t) => t.key === "items");
         const sum = items ? sumOfColumn(items, ["tax", "tax_amount"]) : null;
-        value = sum !== null && sum > 0 ? formatAmount(sum) : (factValue(["tax_total"]) ?? "");
+        const supply = items ? sumOfColumn(items, ["amount", "supply_amount"]) : null;
+        // No tax column (staffing lines): 10 % of the supply sum, as the core's validator fills it.
+        value = sum !== null && sum > 0 ? formatAmount(sum) : supply !== null && supply > 0 ? formatAmount(Math.round(supply * 0.1)) : (factValue(["tax_total"]) ?? "");
         break;
       }
       case "payment_terms":
@@ -583,14 +994,18 @@ export function buildDraft(req: DraftRequest, knowledge: DraftCitation[] = []): 
   }
   // Items table in the body for templates that have one, otherwise plain sections.
   const body: DraftBlock[] = [];
-  const sectionCount = length === "short" ? Math.min(2, layout.sections.length) : layout.sections.length;
+  // A large token budget (0.3.0) is produced section by section: every template section, more text per section.
+  const budget = replyBudget(req);
+  const split = budget > SPLIT_THRESHOLD_TOKENS;
+  const sectionCount = split ? layout.sections.length : length === "short" ? Math.min(2, layout.sections.length) : layout.sections.length;
   const sections = layout.sections.slice(0, sectionCount);
   const mainTable = tables.find((t) => t.rows.length > 0);
   for (const [i, section] of sections.entries()) {
     body.push({ kind: "heading", level: 2, text: section });
     const cite = i === 0 && refs.length > 0 ? refs[0]! : null;
     body.push({ kind: "paragraph", text: sentenceFor(section, req.content, ko, tone, cite), source: cite });
-    if (length === "long" && i === 0) body.push({ kind: "list", items: ko ? ["요청 배경 및 목적", "주요 내용", "기대 효과"] : ["Background", "Main points", "Expected outcome"], ordered: false });
+    if ((length === "long" || split) && i === 0) body.push({ kind: "list", items: ko ? ["요청 배경 및 목적", "주요 내용", "기대 효과"] : ["Background", "Main points", "Expected outcome"], ordered: false });
+    if (split && budget >= 12000) body.push({ kind: "paragraph", text: ko ? `${section}의 세부 사항은 관련 자료와 협의 결과를 반영해 정리${tone === "concise" ? "함." : "합니다."}` : `${section}: details follow the sources and the agreed scope.`, source: null });
     if (i === 0 && mainTable) body.push({ kind: "table_ref", key: mainTable.key });
   }
   for (const f of facts) {
@@ -619,6 +1034,7 @@ export function buildDraft(req: DraftRequest, knowledge: DraftCitation[] = []): 
     saved_doc_id: previous?.saved_doc_id ?? null,
   };
   if (feedback) draft.notes.push(ko ? `재생성 반영: ${feedback}` : `Regenerated with: ${feedback}`);
+  if (split) draft.notes.push(ko ? `토큰 예산 ${budget.toLocaleString("ko-KR")}로 ${sections.length}개 절을 나눠 생성했습니다.` : `Generated in ${sections.length} sections with a budget of ${budget.toLocaleString("en-US")} tokens.`);
   validateDraft(draft);
   return draft;
 }
@@ -679,7 +1095,7 @@ export function validateDraft(draft: Draft): void {
   }
   // Table row amounts and the sum rules (quantity × unit price = amount; Σ amount = total).
   for (const table of draft.tables) {
-    const qi = table.columns.findIndex((c) => c.key === "quantity");
+    const qi = table.columns.findIndex((c) => c.key === "quantity" || c.key === "months");
     const ui = table.columns.findIndex((c) => c.key === "unit_price");
     const ai = table.columns.findIndex((c) => ["amount", "supply_amount"].includes(c.key));
     table.rows.forEach((row, ri) => {
@@ -1014,14 +1430,25 @@ export async function draftNow(req: DraftRequest, ctl: JobControl | null, progre
   progress("drafting", 0.2);
   const knowledge = req.use_knowledge ? await knowledgeCitations(req.content.slice(0, 60), req.excluded_sources) : [];
   await pace(ctl, 400);
-  progress("drafting", 0.6);
-  await pace(ctl, 400);
+  // Split drafts (budget above the threshold) report section progress like `generate::draft_split`.
+  const split = replyBudget(req) > SPLIT_THRESHOLD_TOKENS;
+  let sections = 1;
+  if (split) {
+    sections = Math.max(2, layoutFields(resolveTemplate(req)).sections.length || 5);
+    for (let i = 1; i <= sections; i += 1) {
+      progress(`section ${i}/${sections}`, 0.25 + (0.7 * (i - 1)) / sections);
+      await pace(ctl, 200);
+    }
+  } else {
+    progress("drafting", 0.6);
+    await pace(ctl, 400);
+  }
   const draft = buildDraft(req, knowledge);
-  progress("drafting", 0.9);
+  progress(split ? "finishing" : "drafting", 0.95);
   await pace(ctl, 150);
   putDraft(draft);
   const chars = Array.from(req.content).length;
-  return { draft, prompt_tokens: 2400 + chars, completion_tokens: 350 + draft.body.length * 40, elapsed_ms: Math.round(performance.now() - started), source: "model" };
+  return { draft, prompt_tokens: (2400 + chars) * sections, completion_tokens: 350 + draft.body.length * 40, elapsed_ms: Math.round(performance.now() - started), source: "model", sections };
 }
 
 export async function draftWorker(job: Job, spec: DraftJobSpec, ctl: JobControl): Promise<WorkerOutcome> {
@@ -1056,6 +1483,9 @@ export async function mockGenerate(cmd: string, a: Record<string, any>): Promise
   switch (cmd) {
     case "generate_templates":
       return listTemplates();
+    case "generate_budget_info":
+      // The mock engine is a GPU build with an 8K context; the cap follows the default settings.
+      return { ctx: 8192, gpu: true, cap: 32768, split_threshold: SPLIT_THRESHOLD_TOKENS } satisfies BudgetInfo;
     case "generate_draft": {
       const req = a.req as DraftRequest | undefined;
       if (!req || !req.content?.trim()) throw err("invalid", "content_empty");

@@ -14,7 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { schemaForType } from "@/features/library/aggregate";
 import { fieldLabel } from "@/features/pipeline/labels";
 import { api, revealPath } from "@/lib/ipc";
-import { useSchemas } from "@/lib/queries";
+import { useProjects, useSchemas } from "@/lib/queries";
 import {
   EXPORT_FORMATS,
   SCALAR_FIELD_KINDS,
@@ -34,12 +34,12 @@ import { useWorkspace } from "@/stores/workspace";
 
 import { describeExportError, knownCode } from "./errors";
 import { ScopeSection } from "./ScopeSection";
-import { defaultScope, toScope, type ScopeState } from "./scope";
+import { defaultScope, toScope, type ProjectRequest, type ScopeState } from "./scope";
 import { useJob } from "./useJob";
 
 const TARGETS: ExportTarget[] = ["fields", "table", "text"];
 const INCLUDES: ExportInclude[] = ["evidence", "confidence", "status"];
-const LAYOUTS: ExportLayout[] = ["sheet_per_type", "single"];
+const LAYOUTS: ExportLayout[] = ["sheet_per_type", "sheet_per_project", "single"];
 
 interface ColumnOption {
   path: string;
@@ -88,11 +88,12 @@ export interface ExportPreset {
  * `active` tells whether the tab is visible (the debounced preview only runs then); `preset`
  * carries a target chosen elsewhere (`/organize?tab=export&target=table` from the viewer).
  */
-export function ExportTab({ selectedIds, selectionRequest, active = true, preset = null }: { selectedIds: string[]; selectionRequest: number; active?: boolean; preset?: ExportPreset | null }) {
+export function ExportTab({ selectedIds, selectionRequest, active = true, preset = null, projectRequest = null }: { selectedIds: string[]; selectionRequest: number; active?: boolean; preset?: ExportPreset | null; projectRequest?: ProjectRequest | null }) {
   const { t, i18n } = useTranslation();
   const toast = useUiStore((s) => s.toast);
   const workspace = useWorkspace();
   const { data: schemas } = useSchemas();
+  const { data: projects } = useProjects();
   const [scope, setScope] = useState<ScopeState>(() => defaultScope(selectedIds.length > 0));
   const [target, setTarget] = useState<ExportTarget>("fields");
   const [format, setFormat] = useState<ExportFormat>("xlsx");
@@ -127,6 +128,19 @@ export function ExportTab({ selectedIds, selectionRequest, active = true, preset
   useEffect(() => {
     if (preset) setTarget(preset.target);
   }, [preset]);
+  // "/organize?tab=export&project=<id>": the project's documents with its export defaults (plan §6).
+  useEffect(() => {
+    if (!projectRequest) return;
+    setScope((s) => ({ ...s, mode: "project", projectId: projectRequest.id }));
+    const settings = projects?.find((p) => p.id === projectRequest.id)?.settings;
+    if (settings?.export_format) setFormat(settings.export_format);
+    if (settings?.export_layout) setLayout(settings.export_layout);
+    if (settings?.export_path) {
+      pathDirty.current = true;
+      setPath(settings.export_path);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectRequest]);
 
   // A searchable PDF always carries the page text.
   const effectiveTarget: ExportTarget = format === "pdf_searchable" ? "text" : target;

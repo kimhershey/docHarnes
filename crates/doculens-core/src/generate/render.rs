@@ -162,14 +162,27 @@ fn builtin_kind(draft: &Draft) -> Option<TemplateKind> {
     }
 }
 
+/// The two parties of a contract-like template (갑 / 을), as field-key prefixes.
+fn party_prefixes(kind: Option<TemplateKind>) -> Option<(&'static str, &'static str)> {
+    match kind {
+        Some(TemplateKind::Contract) => Some(("party_a", "party_b")),
+        Some(TemplateKind::DevContract | TemplateKind::Sow | TemplateKind::Acceptance) => {
+            Some(("client", "contractor"))
+        }
+        _ => None,
+    }
+}
+
 /// Field order for the grid: template order for built-ins (갑/을 interleaved for
-/// contracts), draft order for forms.
+/// contracts, 발주자/수행사 for the software templates), draft order for forms.
 fn ordered_fields(draft: &Draft, kind: Option<TemplateKind>) -> Vec<&DraftField> {
     let mut fields: Vec<&DraftField> = draft.fields.iter().collect();
-    if kind == Some(TemplateKind::Contract) {
-        let a: Vec<&DraftField> = fields.iter().copied().filter(|f| f.key.starts_with("party_a.")).collect();
-        let b: Vec<&DraftField> = fields.iter().copied().filter(|f| f.key.starts_with("party_b.")).collect();
-        let mut out: Vec<&DraftField> = fields.iter().copied().filter(|f| !f.key.starts_with("party_")).collect();
+    if let Some((pa, pb)) = party_prefixes(kind) {
+        let (pa, pb) = (format!("{pa}."), format!("{pb}."));
+        let a: Vec<&DraftField> = fields.iter().copied().filter(|f| f.key.starts_with(&pa)).collect();
+        let b: Vec<&DraftField> = fields.iter().copied().filter(|f| f.key.starts_with(&pb)).collect();
+        let mut out: Vec<&DraftField> =
+            fields.iter().copied().filter(|f| !f.key.starts_with(&pa) && !f.key.starts_with(&pb)).collect();
         let mut pairs = Vec::new();
         for (i, fa) in a.iter().enumerate() {
             pairs.push(*fa);
@@ -252,8 +265,8 @@ fn plan(draft: &Draft) -> Plan<'_> {
     }
 
     // 4. Tables of item-centric templates / forms come before the body.
-    let tables_first =
-        kind.is_none() || matches!(kind, Some(TemplateKind::Quotation | TemplateKind::TransactionStatement));
+    let tables_first = kind.is_none()
+        || matches!(kind, Some(TemplateKind::Quotation | TemplateKind::TransactionStatement | TemplateKind::Estimate));
     let referenced: HashSet<&str> = draft
         .body
         .iter()
@@ -345,10 +358,9 @@ fn plan(draft: &Draft) -> Plan<'_> {
                 signature.push(contact.join(" · "));
             }
         }
-        Some(TemplateKind::Contract) => {
-            for (p, l) in
-                [("party_a", if ko { "갑" } else { "Party A" }), ("party_b", if ko { "을" } else { "Party B" })]
-            {
+        Some(TemplateKind::Contract | TemplateKind::DevContract | TemplateKind::Acceptance) => {
+            let (pa, pb) = party_prefixes(kind).unwrap_or(("party_a", "party_b"));
+            for (p, l) in [(pa, if ko { "갑" } else { "Party A" }), (pb, if ko { "을" } else { "Party B" })] {
                 let name = value_of(&format!("{p}.name"));
                 let rep = value_of(&format!("{p}.representative"));
                 if name.is_some() || rep.is_some() {
@@ -361,7 +373,7 @@ fn plan(draft: &Draft) -> Plan<'_> {
                 }
             }
         }
-        Some(TemplateKind::Quotation) => {
+        Some(TemplateKind::Quotation | TemplateKind::Estimate) => {
             if let Some(v) = value_of("supplier.name") {
                 signature.push(if ko { format!("{v} (인)") } else { format!("{v} (seal)") });
             }

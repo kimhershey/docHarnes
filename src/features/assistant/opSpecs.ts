@@ -195,7 +195,7 @@ const SPECS: OpSpec[] = [
   },
   {
     op: "register_form",
-    params: [p("doc_ref", str, false, "문서 id·이름 또는 current", "document id / name or current"), p("name", str, false, "양식 이름", "form name"), p("doc_type_slug", str, false, "유형 슬러그", "type slug")],
+    params: [p("doc_ref", str, false, "문서 id·이름 또는 current", "document id / name or current"), p("name", str, false, "양식 이름", "form name"), p("doc_type_slug", str, false, "유형 슬러그", "type slug"), p("doc_ids", list, false, "샘플 문서 id 여러 개(필드 병합)", "several sample document ids (merged fields)")],
     desc_ko: "문서를 양식으로 등록(필드 그리드 확인)",
     desc_en: "register a document as a form (field grid confirmation)",
   },

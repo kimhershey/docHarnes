@@ -277,6 +277,92 @@ pub fn form_derive(app: &AppHandle, doc_id: &str, name: Option<&str>) -> UiResul
     state.gate.interactive(|| Ok(forms::derive(&ctx.docs.deps(), vlm.as_ref(), &doc, name)?))
 }
 
+/// Queues a 0.3.0 §2 field discovery over the sample documents (one unsaved draft for the
+/// editor); returns the job id. Office forms need no model; scanned / PDF samples load it.
+pub fn schema_discovery_job(app: &AppHandle, doc_ids: Vec<String>, name_hint: Option<String>) -> UiResult<String> {
+    let state = app.state::<AppState>();
+    let mut ids: Vec<String> = Vec::new();
+    for id in doc_ids {
+        let id = id.trim().to_string();
+        if !id.is_empty() && !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    if ids.is_empty() {
+        return Err(UiError::invalid("no documents"));
+    }
+    let _ctx = context(app)?; // a workspace must be open
+    let hint = name_hint.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let subject = hint.clone().unwrap_or_else(|| format!("{} documents", ids.len()));
+    state.jobs.submit(JobSpec::SchemaDiscovery { doc_ids: ids, name_hint: hint }, &subject, JobPriority::High)
+}
+
+/// Worker for `JobSpec::SchemaDiscovery`: loads the vision model when a scanned / PDF sample needs
+/// it (a failed load falls back to the text heuristics), reads each sample page by page and merges
+/// the drafts (`forms::discover`). The payload is the `DiscoveryOutcome` the editor opens.
+pub fn run_schema_discovery(
+    app: &AppHandle,
+    job: &crate::jobs::Job,
+    doc_ids: &[String],
+    name_hint: Option<&str>,
+    ctl: &doculens_core::jobs::JobControl,
+    pctx: &PipelineContext,
+) -> crate::jobs::WorkerResult {
+    let state = app.state::<AppState>();
+    let mut documents = Vec::new();
+    for id in doc_ids {
+        match pctx.db().with(|c| doculens_core::documents::repo::get_document(c, id)) {
+            Ok(Some(d)) => documents.push(d),
+            Ok(None) => log::warn!("schema discovery: document {id} not found"),
+            Err(e) => return Err((e.to_string(), None)),
+        }
+    }
+    if documents.is_empty() {
+        return Err(("document_not_found".into(), None));
+    }
+    let needs_model = documents.iter().any(|d| !forms::structural_kind(d.source_kind));
+    let mut model: Option<String> = None;
+    let mut ctx_size = None;
+    if needs_model {
+        state.jobs.progress(&job.id, None, None, None, Some("loading model".into()));
+        match vision_model(app, true, Some(&ctl.cancel)) {
+            Ok(m) => {
+                ctx_size = model_context(&state, &m);
+                model = Some(m);
+            }
+            Err(_) if ctl.cancelled() => return Err(("cancelled".into(), None)),
+            Err(e) => log::warn!("schema discovery without the vision model ({}): text heuristics only", e.message),
+        }
+    }
+    let vlm = model
+        .as_ref()
+        .map(|m| Vlm::new(&state.engine, m.clone(), pctx.profile, Some(&ctl.cancel)).with_context(ctx_size));
+    let deps = pctx.docs.deps();
+    let total = documents.len() as u64;
+    let lease = state.gate.batch_begin();
+    let outcome = forms::discover(&deps, vlm.as_ref(), &documents, name_hint, Some(&ctl.cancel), &mut |p| {
+        // Document / page boundary: pause, let interactive requests in (a cancel surfaces through the flag).
+        let _ = state.gate.checkpoint(ctl);
+        let page_part = p.page.map(|(d, t)| if t == 0 { 0.0 } else { d as f32 / t as f32 }).unwrap_or(0.0);
+        let frac = ((p.index as f32 + page_part * 0.9) / p.total.max(1) as f32).min(1.0);
+        let detail = match p.page {
+            Some((d, t)) => format!("{} · discover ({d}/{t})", p.title),
+            None => format!("{} · discover", p.title),
+        };
+        state.jobs.progress(&job.id, Some(frac), Some(p.index as u64), Some(total), Some(detail));
+    });
+    drop(lease);
+    let outcome = match outcome {
+        Ok(o) => o,
+        Err(doculens_core::CoreError::Cancelled) => return Err(("cancelled".into(), None)),
+        Err(e) => return Err((e.to_string(), None)),
+    };
+    let read = outcome.documents.iter().filter(|d| d.source != "failed").count();
+    let detail = format!("merged {} fields from {} documents", outcome.merged_fields, read);
+    let payload = serde_json::to_value(&outcome).map_err(|e| (e.to_string(), None))?;
+    Ok((Some(detail), Some(payload)))
+}
+
 /// Creates or modifies a schema from a description (loads the model if needed).
 pub fn nl_schema(app: &AppHandle, description: &str, base_id: Option<&str>) -> UiResult<SchemaDraft> {
     let ctx = context(app)?;

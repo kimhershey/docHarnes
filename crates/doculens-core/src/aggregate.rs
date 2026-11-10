@@ -223,10 +223,17 @@ pub fn aggregate(db: &Db, req: &AggregateRequest) -> Result<AggregateResult> {
     // A plain document count covers every document: the card's "영수증 37건" is
     // 검토 완료 33 + 대기 4 (the two classes stay reported separately).
     let include_unreviewed = req.include_unreviewed || count_only;
-    let (docs, schemas, fields) = db.with(|c| {
+    let (docs, schemas, fields, projects) = db.with(|c| {
         let docs = resolve(c, &req.scope)?;
         let mut schemas: BTreeMap<String, Option<SchemaRecord>> = BTreeMap::new();
         let mut fields: BTreeMap<String, Vec<FieldRecord>> = BTreeMap::new();
+        // Project names for `group_by = project` (the scope's project, else the first project).
+        let projects: BTreeMap<String, String> = if req.group_by == GroupBy::Project {
+            let ids: Vec<String> = docs.iter().map(|d| d.id.clone()).collect();
+            crate::organize::project_vars(c, &req.scope, &ids)?.into_iter().map(|(k, v)| (k, v.name)).collect()
+        } else {
+            BTreeMap::new()
+        };
         if !count_only {
             for d in &docs {
                 if let Some(dt) = &d.doc_type {
@@ -239,7 +246,7 @@ pub fn aggregate(db: &Db, req: &AggregateRequest) -> Result<AggregateResult> {
                 }
             }
         }
-        Ok((docs, schemas, fields))
+        Ok((docs, schemas, fields, projects))
     })?;
 
     let mut entries: Vec<Entry> = Vec::with_capacity(docs.len());
@@ -273,7 +280,7 @@ pub fn aggregate(db: &Db, req: &AggregateRequest) -> Result<AggregateResult> {
                 None => (None, None, doc_pending),
             }
         };
-        let group = group_key(req.group_by, doc, date.as_deref());
+        let group = group_key(req.group_by, doc, date.as_deref(), projects.get(&doc.id).map(String::as_str));
         match value {
             Some(v) => {
                 total.add(v, unreviewed, include_unreviewed);
@@ -343,10 +350,11 @@ pub fn aggregate(db: &Db, req: &AggregateRequest) -> Result<AggregateResult> {
     })
 }
 
-fn group_key(group_by: GroupBy, doc: &DocumentRecord, date: Option<&str>) -> Option<String> {
+fn group_key(group_by: GroupBy, doc: &DocumentRecord, date: Option<&str>, project: Option<&str>) -> Option<String> {
     let unknown = || UNKNOWN.to_string();
     match group_by {
         GroupBy::None => None,
+        GroupBy::Project => Some(project.map(str::to_string).unwrap_or_else(unknown)),
         GroupBy::Month => Some(date.and_then(|d| d.get(..7)).map(str::to_string).unwrap_or_else(unknown)),
         GroupBy::Vendor => {
             Some(doc.vendor.as_deref().map(str::trim).filter(|v| !v.is_empty()).map_or_else(unknown, str::to_string))
@@ -689,6 +697,35 @@ pub(crate) mod tests {
         db.with(|c| c.execute("UPDATE documents SET vendor = NULL WHERE id = 't1'", [])).unwrap();
         let by_vendor = aggregate(&db, &AggregateRequest { group_by: GroupBy::Vendor, ..Default::default() }).unwrap();
         assert!(by_vendor.groups.iter().any(|g| g.key == UNKNOWN && g.count == 1));
+    }
+
+    #[test]
+    fn groups_by_project() {
+        use crate::projects::{repo as projects_repo, ProjectInput};
+        let db = db();
+        let p = db
+            .with(|c| projects_repo::save_project(c, &ProjectInput { name: "한빛 납품".into(), ..Default::default() }))
+            .unwrap();
+        db.with(|c| projects_repo::add_documents(c, &p.id, &["r1".to_string(), "t1".to_string()])).unwrap();
+        let req = AggregateRequest { func: AggregateFn::Count, group_by: GroupBy::Project, ..Default::default() };
+        let r = aggregate(&db, &req).unwrap();
+        let keys: Vec<(&str, u64)> = r.groups.iter().map(|g| (g.key.as_str(), g.count)).collect();
+        assert_eq!(keys, vec![(UNKNOWN, 1), ("한빛 납품", 2)], "{r:?}");
+        // The scope's project is the group of every member (a document in several projects counts there).
+        let other = db
+            .with(|c| projects_repo::save_project(c, &ProjectInput { name: "둘째".into(), ..Default::default() }))
+            .unwrap();
+        db.with(|c| projects_repo::add_documents(c, &other.id, &["r1".to_string()])).unwrap();
+        let scoped = AggregateRequest {
+            scope: Scope {
+                filter: ScopeFilter { project_id: Some(other.id.clone()), ..Default::default() },
+                ..Default::default()
+            },
+            ..req
+        };
+        let r = aggregate(&db, &scoped).unwrap();
+        let keys: Vec<(&str, u64)> = r.groups.iter().map(|g| (g.key.as_str(), g.count)).collect();
+        assert_eq!(keys, vec![("둘째", 1)], "{r:?}");
     }
 
     #[test]

@@ -319,6 +319,10 @@ pub struct SchemaDraft {
     pub definition: SchemaDef,
     pub form_document_id: Option<String>,
     pub note: Option<String>,
+    /// Further sample documents of a multi-document discovery (0.3.0 §2); `register` marks
+    /// them as forms of the type like `form_document_id`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sample_document_ids: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -766,6 +770,7 @@ pub fn draft_from_metaschema(v: &Value, source: SchemaSource) -> SchemaDraft {
         definition: SchemaDef { fields, rules: Vec::new() },
         form_document_id: None,
         note: None,
+        sample_document_ids: Vec::new(),
     }
 }
 

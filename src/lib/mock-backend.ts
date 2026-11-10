@@ -68,6 +68,7 @@ import type {
   WorkspaceView,
 } from "./types";
 import { addWords as addLayoutWords, applyEdit as applyLayoutEdit, synthLayout } from "./mock-layout";
+import { historyView as textHistoryView, moveTarget as textMoveTarget, recordEdit as recordTextEdit, recordMove as recordTextMove, revertTargets as textRevertTargets, type MockTextHistoryRow, type MockTextState } from "./mock-text-history";
 import { defaultImportOptions, EVENTS, type ImportReport } from "./types";
 import type { DraftJobSpec } from "./mock-generate";
 
@@ -165,6 +166,7 @@ export function defaultSettings(): AppSettings {
     privacy: { pii_masking: true, db_encryption: false },
     notifications: { job_complete: true, prevent_sleep_during_jobs: false },
     knowledge: { auto_index: true, auto_embed: true, embedding_model: null, latest_only: true, allow_general_knowledge: false, context_tokens: 6000, top_k: 8, chunk_target_tokens: 500, min_vector_similarity: 0.5 },
+    generation: { max_tokens_gpu: 32768, max_tokens_cpu: 8192 },
     shortcuts: defaultShortcuts(),
     window: { width: 1280, height: 800, maximized: false, x: null, y: null },
   };
@@ -200,6 +202,7 @@ export function loadSettings(): AppSettings {
     privacy: { ...d.privacy, ...(stored.privacy ?? {}) },
     notifications: { ...d.notifications, ...(stored.notifications ?? {}) },
     knowledge: { ...d.knowledge, ...(stored.knowledge ?? {}) },
+    generation: { ...d.generation, ...(stored.generation ?? {}) },
     shortcuts: { ...d.shortcuts, ...(stored.shortcuts ?? {}) },
     window: { ...d.window, ...(stored.window ?? {}) },
   };
@@ -638,7 +641,8 @@ export type JobSpec =
   | { kind: "undo"; batch_id: string | null }
   | { kind: "redo" }
   | DraftJobSpec
-  | { kind: "maintenance" };
+  | { kind: "maintenance" }
+  | { kind: "schema_discovery"; doc_ids: string[]; name_hint: string | null };
 
 export type JobLane = "engine" | "io";
 
@@ -651,7 +655,7 @@ export function planNeedsModel(plan: Plan): boolean {
 
 /** Engine-lane jobs run one at a time; I/O jobs may overlap with them (`JobSpec::lane`). */
 export function specLane(spec: JobSpec): JobLane {
-  if (spec.kind === "pipeline" || (spec.kind === "plan" && planNeedsModel(spec.plan)) || (spec.kind === "draft" && !spec.prepared)) return "engine";
+  if (spec.kind === "pipeline" || (spec.kind === "plan" && planNeedsModel(spec.plan)) || (spec.kind === "draft" && !spec.prepared) || spec.kind === "schema_discovery") return "engine";
   return "io";
 }
 
@@ -861,7 +865,7 @@ export function submitJob(spec: JobSpec, subject: string, priority: JobPriority 
     persistent: true,
     attempts: 0,
     result: undefined,
-    label: spec.kind === "plan" ? spec.text : spec.kind === "organize" || spec.kind === "draft" ? spec.label : null,
+    label: spec.kind === "plan" ? spec.text : spec.kind === "organize" || spec.kind === "draft" ? spec.label : spec.kind === "schema_discovery" ? spec.name_hint : null,
   };
   specs.set(job.id, spec);
   pushJob(job);
@@ -1635,6 +1639,8 @@ export interface MockPage {
 export interface MockDoc extends DocumentRecord {
   workspace: string;
   pages: MockPage[];
+  /** Page text corrections with their undo bookkeeping (documents/import.rs `page_text_history`). */
+  text_history?: MockTextHistoryRow[];
 }
 
 /** Pipeline columns added in P4 (older stored documents get the defaults). */
@@ -1718,13 +1724,33 @@ function svgPage(title: string, pageNo: number, w: number, h: number, thumb: boo
 }
 
 /** The synthetic word layout of a mock page (PDF / converted text → "layer", OCR / manual → "estimated"). */
+/** Text, layout and source of a page as the edit history records them. */
+function pageTextState(d: MockDoc, p: MockPage): MockTextState {
+  // The layout is edited in place by the word edits: the history keeps its own copy.
+  return { text: p.text, layout: p.layout ? structuredClone(p.layout) : null, source: p.text_source ?? (p.text ? (d.converted ? "converted" : "layer") : null) };
+}
+
+/** Puts a page back into a recorded state (undo / redo / revert). */
+function applyPageTextState(d: MockDoc, p: MockPage, state: MockTextState): void {
+  p.text = state.text;
+  p.layout = state.layout ? structuredClone(state.layout) : null;
+  p.text_source = state.source;
+  d.has_text_layer = d.pages.some((x) => !!x.text);
+  d.updated_at = new Date().toISOString();
+}
+
+function pageTextRevert(d: MockDoc, p: MockPage) {
+  return { page_no: p.page_no, text: p.text, text_source: p.text_source ?? (p.text ? (d.converted ? "converted" : "layer") : null), layout: p.layout ?? (p.text && p.width_px > 0 ? mockLayout(d, p) : null), history: textHistoryView(d.text_history ?? [], p.page_no) };
+}
+
 function mockLayout(d: MockDoc, p: MockPage): PageLayout {
   const source = p.text_source ?? (d.converted ? "converted" : "layer");
   return synthLayout(p.text, source === "layer" || source === "converted" ? "layer" : "estimated");
 }
 
 export function docView(d: MockDoc): DocumentView {
-  const { workspace, pages, ...record } = d;
+  const { workspace, pages, text_history, ...record } = d;
+  void text_history;
   const first = pages[0];
   const s = sep(workspace);
   return {
@@ -2032,12 +2058,14 @@ function mockDocuments(cmd: string, a: Record<string, any>): unknown { // eslint
       const d = wsDocs().find((x) => x.id === a.id);
       const p = d?.pages.find((x) => x.page_no === Number(a.pageNo));
       if (!d || !p) return false;
+      const before = pageTextState(d, p);
       const text = String(a.text ?? "").trimEnd();
       p.text = text.trim() ? text : null;
       p.text_source = "manual";
       p.layout = null;
       d.has_text_layer = d.pages.some((x) => !!x.text);
       d.updated_at = new Date().toISOString();
+      d.text_history = recordTextEdit(d.text_history ?? [], p.page_no, "manual", before, pageTextState(d, p));
       upsertDoc(d);
       emit(EVENTS.documentsChanged, { kind: "updated", ids: [d.id] } satisfies DocumentsChanged);
       void import("./mock-knowledge").then((kb) => kb.autoIndex());
@@ -2058,12 +2086,14 @@ function mockDocuments(cmd: string, a: Record<string, any>): unknown { // eslint
       const start = Number(a.start);
       const end = Number(a.end);
       if (!(start >= 0 && start < end && end <= layout.words.length)) throw err("invalid", `word range ${start}..${end}`);
+      const before = pageTextState(d, p);
       const text = applyLayoutEdit(layout, p.text, start, end, String(a.text ?? ""));
       p.text = text.trim() ? text.trimEnd() : null;
       p.text_source = "manual";
       p.layout = layout;
       d.has_text_layer = d.pages.some((x) => !!x.text);
       d.updated_at = new Date().toISOString();
+      d.text_history = recordTextEdit(d.text_history ?? [], p.page_no, "layer", before, pageTextState(d, p));
       upsertDoc(d);
       emit(EVENTS.documentsChanged, { kind: "updated", ids: [d.id] } satisfies DocumentsChanged);
       void import("./mock-knowledge").then((kb) => kb.autoIndex());
@@ -2076,16 +2106,54 @@ function mockDocuments(cmd: string, a: Record<string, any>): unknown { // eslint
       const words = String(a.text ?? "");
       if (!words.trim()) throw err("invalid", "empty text");
       const layout = p.layout ?? (p.text ? mockLayout(d, p) : { version: 1, source: "estimated" as const, words: [] });
+      const before = pageTextState(d, p);
       const text = addLayoutWords(layout, p.text ?? "", a.bbox as [number, number, number, number], words);
       p.text = text.trimEnd();
       p.text_source = "manual";
       p.layout = layout;
       d.has_text_layer = true;
       d.updated_at = new Date().toISOString();
+      d.text_history = recordTextEdit(d.text_history ?? [], p.page_no, "add", before, pageTextState(d, p));
       upsertDoc(d);
       emit(EVENTS.documentsChanged, { kind: "updated", ids: [d.id] } satisfies DocumentsChanged);
       void import("./mock-knowledge").then((kb) => kb.autoIndex());
       return layout;
+    }
+    case "documents_page_text_history": {
+      const d = wsDocs().find((x) => x.id === a.id);
+      if (!d) throw err("not_found", String(a.id));
+      return textHistoryView(d.text_history ?? [], a.pageNo === null || a.pageNo === undefined ? null : Number(a.pageNo));
+    }
+    case "documents_undo_page_text":
+    case "documents_redo_page_text": {
+      const d = wsDocs().find((x) => x.id === a.id);
+      const p = d?.pages.find((x) => x.page_no === Number(a.pageNo));
+      if (!d || !p) throw err("not_found", String(a.id));
+      const rows = d.text_history ?? [];
+      const redo = cmd === "documents_redo_page_text";
+      const target = textMoveTarget(rows, p.page_no, redo);
+      if (!target) return null;
+      applyPageTextState(d, p, recordTextMove(rows, target, redo, pageTextState(d, p)));
+      d.text_history = rows;
+      upsertDoc(d);
+      emit(EVENTS.documentsChanged, { kind: "updated", ids: [d.id] } satisfies DocumentsChanged);
+      void import("./mock-knowledge").then((kb) => kb.autoIndex());
+      return pageTextRevert(d, p);
+    }
+    case "documents_revert_page_text": {
+      const d = wsDocs().find((x) => x.id === a.id);
+      if (!d) throw err("not_found", String(a.id));
+      const rows = d.text_history ?? [];
+      const found = textRevertTargets(rows, Number(a.historyId));
+      if ("error" in found) throw err(found.error === "not_found" ? "not_found" : "invalid", `text edit ${a.historyId}`);
+      const p = d.pages.find((x) => x.page_no === found.pageNo);
+      if (!p) throw err("not_found", `page ${found.pageNo}`);
+      for (const target of found.targets) applyPageTextState(d, p, recordTextMove(rows, target, false, pageTextState(d, p)));
+      d.text_history = rows;
+      upsertDoc(d);
+      emit(EVENTS.documentsChanged, { kind: "updated", ids: [d.id] } satisfies DocumentsChanged);
+      void import("./mock-knowledge").then((kb) => kb.autoIndex());
+      return pageTextRevert(d, p);
     }
     case "documents_import_plan": {
       const args = a.args as { paths: string[]; options: ImportOptions; source: ImportSource };
@@ -2465,6 +2533,10 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "documents_page_layout":
     case "documents_edit_page_words":
     case "documents_add_page_words":
+    case "documents_page_text_history":
+    case "documents_undo_page_text":
+    case "documents_redo_page_text":
+    case "documents_revert_page_text":
     case "documents_import_plan":
     case "documents_import_run":
     case "documents_rescan":
@@ -2522,6 +2594,8 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "pipeline_schema_from_nl":
     case "pipeline_form_derive":
     case "pipeline_form_register":
+    case "pipeline_schema_discover":
+    case "pipeline_schema_name_exists":
     case "pipeline_document_schema":
     case "pipeline_runs":
     case "pipeline_fields":
@@ -2556,6 +2630,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       return r(await pl.mockPlanner(cmd, a));
     }
     case "generate_templates":
+    case "generate_budget_info":
     case "generate_draft":
     case "generate_preview":
     case "generate_validate":

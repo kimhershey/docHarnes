@@ -224,6 +224,9 @@ pub fn run(app: &AppHandle, ctl: &JobControl) -> WorkerResult {
     match policy.effective_days(RetentionItem::Journal) {
         Some(days) => {
             summary.purged.journal += db.with(|c| journal::purge(c, days)).unwrap_or(0) as u64;
+            // The page text edit history (viewer Ctrl+Z) is undo history too.
+            summary.purged.journal +=
+                db.with(|c| docs_repo::purge_page_text_history_before(c, &cutoff_utc(days))).unwrap_or(0) as u64;
             add(retention::purge_old_files(&paths.trash_dir(), cutoff(days)), &mut summary.purged.trash, None);
         }
         None => summary.skipped.push("journal".into()),

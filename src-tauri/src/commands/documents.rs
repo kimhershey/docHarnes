@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
-use doculens_core::documents::import::{self, ImportOptions, ImportPlan, ImportSource};
+use doculens_core::documents::import::{
+    self, ImportOptions, ImportPlan, ImportSource, PageTextHistory, PageTextRevert,
+};
 use doculens_core::documents::layout::PageLayout;
 use doculens_core::documents::{repo, DocumentFilter, DocumentRecord, LibraryStats, PageRecord};
 use doculens_core::paths::normalize_user_path;
@@ -90,12 +92,55 @@ pub fn documents_page_text(app: AppHandle, id: String, page_no: u32) -> UiResult
 #[tauri::command(async)]
 pub fn documents_set_page_text(app: AppHandle, id: String, page_no: u32, text: String) -> UiResult<bool> {
     let ctx = docs_bridge::context(&app)?;
-    let ok = ctx.db.with(|c| repo::set_page_text(c, &id, page_no, &text))?;
+    let ok = import::set_page_text(&ctx.db, &id, page_no, &text)?;
     if ok {
         docs_bridge::emit_changed(&app, "updated", vec![id]);
         crate::knowledge_bridge::auto_index(&app);
     }
     Ok(ok)
+}
+
+/// The corrections of a page (`page_no`) or of the whole document (`None`), newest first, with whether
+/// the page can undo / redo (0.3.0 item 7).
+#[tauri::command(async)]
+pub fn documents_page_text_history(app: AppHandle, id: String, page_no: Option<u32>) -> UiResult<PageTextHistory> {
+    let ctx = docs_bridge::context(&app)?;
+    Ok(import::page_text_history(&ctx.db, &id, page_no)?)
+}
+
+fn after_text_revert(app: &AppHandle, id: &str, r: Option<PageTextRevert>) -> Option<PageTextRevert> {
+    if r.is_some() {
+        docs_bridge::emit_changed(app, "updated", vec![id.to_string()]);
+        crate::knowledge_bridge::auto_index(app);
+    }
+    r
+}
+
+/// Ctrl+Z in the viewer: takes back the newest correction of the page (`None` when there is nothing to undo).
+#[tauri::command(async)]
+pub fn documents_undo_page_text(app: AppHandle, id: String, page_no: u32) -> UiResult<Option<PageTextRevert>> {
+    let ctx = docs_bridge::context(&app)?;
+    let doc = docs_bridge::document(&app, &id)?;
+    let r = import::undo_page_text(&ctx.deps(), &doc, page_no)?;
+    Ok(after_text_revert(&app, &id, r))
+}
+
+/// Ctrl+Shift+Z / Ctrl+Y in the viewer: re-applies the oldest undone correction of the page.
+#[tauri::command(async)]
+pub fn documents_redo_page_text(app: AppHandle, id: String, page_no: u32) -> UiResult<Option<PageTextRevert>> {
+    let ctx = docs_bridge::context(&app)?;
+    let doc = docs_bridge::document(&app, &id)?;
+    let r = import::redo_page_text(&ctx.deps(), &doc, page_no)?;
+    Ok(after_text_revert(&app, &id, r))
+}
+
+/// 이력 tab "이 수정 되돌리기": undoes the correction and every later one of its page.
+#[tauri::command(async)]
+pub fn documents_revert_page_text(app: AppHandle, id: String, history_id: i64) -> UiResult<PageTextRevert> {
+    let ctx = docs_bridge::context(&app)?;
+    let doc = docs_bridge::document(&app, &id)?;
+    let r = import::revert_page_text_to(&ctx.deps(), &doc, history_id)?;
+    Ok(after_text_revert(&app, &id, Some(r)).expect("revert result"))
 }
 
 /// The word layout of a page for the on-image text selection (computed and cached on first use;

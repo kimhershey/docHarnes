@@ -1,14 +1,35 @@
 //! File-name / folder templates (design §3.7 정리/내보내기): `{{year}}`,
 //! `{{month}}`, `{{day}}`, `{{doc_type}}`, `{{vendor}}`, `{{total}}`,
 //! `{{title}}`, `{{original_name}}`, `{{tags}}`, `{{seq}}` (+ `{{name}}`, the
-//! original stem, and `{{ext}}`). Unknown values render as `미상` and flag the
+//! original stem, and `{{ext}}`) and, since 0.3.0, the document's project
+//! (`{{project}}`, `{{project_code}}`, `{{project_phase}}`, `{{project_start}}`,
+//! `{{project_end}}`, `{{project_owner}}`). Unknown values render as `미상` and flag the
 //! document for review; rendered components are NFC, free of Windows-forbidden
 //! characters and reserved names, and the whole path stays ≤ 240 characters.
 
 use unicode_normalization::UnicodeNormalization;
 
-pub const VARIABLES: &[&str] =
-    &["year", "month", "day", "doc_type", "vendor", "total", "title", "original_name", "name", "tags", "seq", "ext"];
+pub const VARIABLES: &[&str] = &[
+    "year",
+    "month",
+    "day",
+    "doc_type",
+    "vendor",
+    "total",
+    "title",
+    "original_name",
+    "name",
+    "tags",
+    "seq",
+    "ext",
+    // 0.3.0 plan §6: the document's project (its first project, or the project being organised).
+    "project",
+    "project_code",
+    "project_phase",
+    "project_start",
+    "project_end",
+    "project_owner",
+];
 
 /// Placeholder for a missing value (design: "null은 `미상` + 검토 필요 표시").
 pub const UNKNOWN: &str = "미상";

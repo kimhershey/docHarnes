@@ -196,10 +196,57 @@ pub fn doc_types(conn: &Connection) -> rusqlite::Result<Vec<DocTypeInfo>> {
 }
 
 /// Saves a draft: inserts a new schema or stores a new version of an existing one.
+/// Schema names compared without case, spaces and punctuation ("견적서 (2)" ≠ "견적서", "견적서 " = "견적서").
+pub fn compact_name(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_whitespace() && !matches!(c, '·' | ',' | '.' | ':' | '：' | '/' | '-' | '_' | '*' | '※'))
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+/// `true` when a schema other than `excluding` already carries this name (0.3.0 §2: the editor
+/// disables saving and proposes "<name> (2)"; `save_schema` refuses as the second safety net).
+pub fn name_exists(conn: &Connection, name: &str, excluding: Option<&str>) -> rusqlite::Result<bool> {
+    let want = compact_name(name);
+    if want.is_empty() {
+        return Ok(false);
+    }
+    let mut stmt = conn.prepare("SELECT id, name FROM schemas")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    for row in rows {
+        let (id, n) = row?;
+        if excluding == Some(id.as_str()) {
+            continue;
+        }
+        if compact_name(&n) == want {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Smallest "<name> (k)" (k ≥ 2) that no schema carries yet.
+pub fn free_name(conn: &Connection, name: &str, excluding: Option<&str>) -> rusqlite::Result<String> {
+    let base = name.trim();
+    if !name_exists(conn, base, excluding)? {
+        return Ok(base.to_string());
+    }
+    for k in 2..100 {
+        let candidate = format!("{base} ({k})");
+        if !name_exists(conn, &candidate, excluding)? {
+            return Ok(candidate);
+        }
+    }
+    Ok(format!("{base} ({})", chrono::Utc::now().timestamp()))
+}
+
 pub fn save_schema(conn: &Connection, draft: &SchemaDraft) -> rusqlite::Result<SchemaRecord> {
     let name = draft.name.trim();
     if name.is_empty() {
         return Err(typed("schema_name_empty"));
+    }
+    if name_exists(conn, name, draft.id.as_deref())? {
+        return Err(typed("schema_name_duplicate"));
     }
     let doc_type = draft.doc_type.trim();
     if !schema::is_key(doc_type) {

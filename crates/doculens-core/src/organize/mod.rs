@@ -9,7 +9,7 @@
 pub mod journal;
 pub mod template;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -30,13 +30,76 @@ use template::{date_parts, format_total, sanitize_component, sanitize_folder};
 /// Default file-name template (`2026-10-14_영수증_스타벅스_12,500.jpg`).
 pub const NAME_TEMPLATE: &str = "{{year}}-{{month}}-{{day}}_{{doc_type}}_{{vendor}}_{{total}}";
 
-/// Default folder template per grouping (design §3.7 정리 화면).
+/// Default folder template per grouping (design §3.7 정리 화면; `Project` = plan §6).
 pub fn folder_template(group: GroupBy) -> &'static str {
     match group {
         GroupBy::Month => "documents/{{year}}/{{month}}/{{doc_type}}",
         GroupBy::Vendor => "documents/{{vendor}}/{{doc_type}}",
+        GroupBy::Project => crate::projects::DEFAULT_PROJECT_FOLDER,
         GroupBy::DocType | GroupBy::None => "documents/{{doc_type}}",
     }
+}
+
+/// Project values behind the `{{project*}}` template variables.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProjectVars {
+    pub name: String,
+    /// 접수번호 (`{{project_code}}`).
+    pub code: Option<String>,
+    pub phase: &'static str,
+    pub start: Option<String>,
+    pub end: Option<String>,
+    pub owner: Option<String>,
+}
+
+impl From<&crate::projects::Project> for ProjectVars {
+    fn from(p: &crate::projects::Project) -> Self {
+        ProjectVars {
+            name: p.name.clone(),
+            code: p.intake_no.clone().filter(|c| !c.trim().is_empty()),
+            phase: p.phase.as_str(),
+            start: p.start_date.clone(),
+            end: p.end_date.clone(),
+            owner: p.owner.clone().filter(|o| !o.trim().is_empty()),
+        }
+    }
+}
+
+/// The project each document is filed under for the template variables: the scope's project
+/// when the request names one, else the document's first (oldest membership) project.
+pub(crate) fn project_vars(
+    conn: &rusqlite::Connection,
+    scope: &Scope,
+    doc_ids: &[String],
+) -> rusqlite::Result<HashMap<String, ProjectVars>> {
+    let mut out = HashMap::new();
+    if let Some(pid) = scope.filter.project_id.as_deref() {
+        if let Some(p) = crate::projects::repo::get_project(conn, pid)? {
+            let vars = ProjectVars::from(&p);
+            for id in doc_ids {
+                out.insert(id.clone(), vars.clone());
+            }
+        }
+        return Ok(out);
+    }
+    let memberships = crate::projects::repo::all_memberships(conn)?;
+    let wanted: HashSet<&str> = doc_ids.iter().map(String::as_str).collect();
+    let mut projects: HashMap<String, ProjectVars> = HashMap::new();
+    for (doc_id, project_id) in memberships {
+        if !wanted.contains(doc_id.as_str()) || out.contains_key(&doc_id) {
+            continue;
+        }
+        if !projects.contains_key(&project_id) {
+            match crate::projects::repo::get_project(conn, &project_id)? {
+                Some(p) => projects.insert(project_id.clone(), ProjectVars::from(&p)),
+                None => continue,
+            };
+        }
+        if let Some(v) = projects.get(&project_id) {
+            out.insert(doc_id, v.clone());
+        }
+    }
+    Ok(out)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -108,13 +171,13 @@ pub struct OrganizePlan {
     pub only_reviewed: bool,
 }
 
-struct TypeLabels {
-    ko: Vec<(String, String)>,
-    en: Vec<(String, String)>,
+pub(crate) struct TypeLabels {
+    pub(crate) ko: Vec<(String, String)>,
+    pub(crate) en: Vec<(String, String)>,
 }
 
 impl TypeLabels {
-    fn label(&self, slug: &str, lang: Language) -> Option<String> {
+    pub(crate) fn label(&self, slug: &str, lang: Language) -> Option<String> {
         let list = if lang == Language::Ko { &self.ko } else { &self.en };
         list.iter().find(|(s, _)| s == slug).map(|(_, l)| l.clone())
     }
@@ -143,14 +206,16 @@ pub fn plan(db: &Db, paths: &WorkspacePaths, req: &OrganizeRequest) -> Result<Or
             return Err(CoreError::Invalid(format!("template_variable: {}", unknown.join(", "))));
         }
     }
-    let (documents, labels) = db.with(|c| {
+    let (documents, labels, projects) = db.with(|c| {
         let docs = scope::resolve(c, &req.scope)?;
         let types = pipeline_repo::doc_types(c)?;
         let labels = TypeLabels {
             ko: types.iter().map(|t| (t.slug.clone(), t.label_ko.clone())).collect(),
             en: types.iter().map(|t| (t.slug.clone(), t.label_en.clone())).collect(),
         };
-        Ok((docs, labels))
+        let ids: Vec<String> = docs.iter().map(|d| d.id.clone()).collect();
+        let projects = project_vars(c, &req.scope, &ids)?;
+        Ok((docs, labels, projects))
     })?;
     let mut out = OrganizePlan {
         name_template: req.name_template.clone(),
@@ -196,11 +261,13 @@ pub fn plan(db: &Db, paths: &WorkspacePaths, req: &OrganizeRequest) -> Result<Or
         let ext = if disk_ext.is_empty() { ext } else { disk_ext };
         let stem = if disk_stem.is_empty() { stem } else { disk_stem };
         let mut missing = Vec::new();
+        let project = projects.get(&doc.id);
         // Folder first (it must not use {{seq}}), then the running number inside that folder.
         let folder = match req.folder_template.as_deref() {
             Some(t) => {
-                let (rendered, miss) =
-                    template::render(t, &|v| variable(doc, &labels, req.language, v, &stem, &ext, None));
+                let (rendered, miss) = template::render(t, &|v| {
+                    document_variable(doc, &labels, req.language, v, &stem, &ext, None, project)
+                });
                 missing.extend(miss);
                 sanitize_folder(&rendered)
             }
@@ -213,8 +280,9 @@ pub fn plan(db: &Db, paths: &WorkspacePaths, req: &OrganizeRequest) -> Result<Or
         };
         let name = match req.name_template.as_deref() {
             Some(t) => {
-                let (rendered, miss) =
-                    template::render(t, &|v| variable(doc, &labels, req.language, v, &stem, &ext, Some(seq)));
+                let (rendered, miss) = template::render(t, &|v| {
+                    document_variable(doc, &labels, req.language, v, &stem, &ext, Some(seq), project)
+                });
                 missing.extend(miss);
                 sanitize_component(&rendered)
             }
@@ -282,7 +350,9 @@ fn join(folder: &str, name: &str, ext: &str) -> String {
     }
 }
 
-fn variable(
+/// Value of one template variable for a document (`None` = unknown → `미상`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn document_variable(
     doc: &DocumentRecord,
     labels: &TypeLabels,
     lang: Language,
@@ -290,10 +360,19 @@ fn variable(
     stem: &str,
     ext: &str,
     seq: Option<u32>,
+    project: Option<&ProjectVars>,
 ) -> Option<String> {
     let (date, _) = scope::basis_date(doc);
     let parts = date.as_deref().and_then(date_parts);
     match var {
+        "project" => project.map(|p| p.name.clone()),
+        "project_code" => project.and_then(|p| p.code.clone()),
+        "project_phase" => project.map(|p| {
+            crate::projects::ProjectPhase::parse(p.phase).unwrap_or_default().label(lang == Language::Ko).to_string()
+        }),
+        "project_start" => project.and_then(|p| p.start.clone()),
+        "project_end" => project.and_then(|p| p.end.clone()),
+        "project_owner" => project.and_then(|p| p.owner.clone()),
         "year" => parts.as_ref().map(|p| p.0.clone()),
         "month" => parts.as_ref().map(|p| p.1.clone()),
         "day" => parts.as_ref().map(|p| p.2.clone()).filter(|d| !d.is_empty()),
@@ -421,6 +500,10 @@ pub fn apply(
                         item.status = ItemStatus::Done;
                         report.moved += 1;
                         report.documents.push(doc.id.clone());
+                        // The copies in other project folders follow the renamed / moved original.
+                        if let Err(e) = crate::projects::copies::sync_document(db, paths, &doc.id, false) {
+                            log::warn!("copy sync after organise failed for {}: {e}", doc.id);
+                        }
                     }
                     Err(e) => {
                         let _ = move_file(&to_abs, &from_abs);

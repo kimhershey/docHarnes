@@ -11,8 +11,8 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { describeJobDetail } from "@/features/jobs/describe";
 import { DropHint, importDroppedFiles, useDocumentDropTarget } from "@/lib/dnd";
-import { useDocuments, useGenerateTemplates, useSchemas } from "@/lib/queries";
-import { DRAFT_LENGTHS, OUTPUT_FORMATS, TONES, type DraftLength, type DraftRequest, type Job, type OutputFormat, type Tone } from "@/lib/types";
+import { useDocuments, useGenerateBudgetInfo, useGenerateTemplates, useSchemas } from "@/lib/queries";
+import { DRAFT_LENGTHS, LENGTH_TOKENS, OUTPUT_FORMATS, TOKEN_BUDGET_PRESETS, TONES, type DraftLength, type DraftRequest, type Job, type OutputFormat, type Tone } from "@/lib/types";
 import { useUiStore } from "@/stores/ui";
 
 import { documentSourceIds, formRefToPicker, pickerToFormRef, withDocumentSources } from "./draft";
@@ -72,6 +72,18 @@ export function RequestForm({
   const ko = i18n.language.startsWith("ko");
   const detail = job ? describeJobDetail(job, t) : null;
   const canGenerate = request.content.trim().length > 0 && !running;
+  // Token budget (0.3.0): the length preset or an explicit number, capped by the active backend's limit.
+  const { data: budgetInfo } = useGenerateBudgetInfo();
+  const cap = budgetInfo?.cap ?? 32_768;
+  const splitThreshold = budgetInfo?.split_threshold ?? 3_000;
+  const presetTokens = LENGTH_TOKENS[request.length];
+  const effectiveTokens = Math.min(request.max_tokens ?? presetTokens, cap);
+  const fmt = (n: number) => n.toLocaleString(ko ? "ko-KR" : "en-US");
+  const tokPerSec = budgetInfo && !budgetInfo.gpu ? 6 : 25;
+  const minutes = Math.max(1, Math.round(effectiveTokens / tokPerSec / 60));
+  const budgetPicker = request.max_tokens == null ? "auto" : String(request.max_tokens);
+  const budgetIsPreset = request.max_tokens == null || (TOKEN_BUDGET_PRESETS as readonly number[]).includes(request.max_tokens);
+  const setBudget = (value: number | null) => onChange({ max_tokens: value === null ? null : Math.min(cap, Math.max(200, Math.round(value))) });
 
   return (
     <div className="flex flex-col gap-3" data-testid="generate-form">
@@ -186,6 +198,50 @@ export function RequestForm({
             </SelectContent>
           </Select>
         </div>
+      </div>
+      <div className="flex flex-col gap-1.5" data-testid="generate-token-budget">
+        <div className="flex items-center justify-between gap-2">
+          <Label htmlFor="gen-budget">{t("generate.form.token_budget")}</Label>
+          <span className="text-xs text-fg-subtle">{budgetInfo?.ctx ? t("generate.form.budget_info", { ctx: fmt(budgetInfo.ctx), cap: fmt(cap) }) : t("generate.form.budget_info_cap", { cap: fmt(cap) })}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <Select value={budgetPicker} onValueChange={(v) => setBudget(v === "auto" ? null : Number(v))}>
+            <SelectTrigger id="gen-budget" className="h-8 flex-1" aria-label={t("generate.form.token_budget")} data-testid="generate-token-budget-select">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="auto" data-testid="generate-token-budget-auto">
+                {t("generate.form.token_presets.auto", { tokens: fmt(presetTokens) })}
+              </SelectItem>
+              {TOKEN_BUDGET_PRESETS.filter((n) => n <= cap).map((n) => (
+                <SelectItem key={n} value={String(n)} data-testid={`generate-token-budget-${n}`}>
+                  {t(`generate.form.token_presets.p${n}`, { tokens: fmt(n) })}
+                </SelectItem>
+              ))}
+              {!budgetIsPreset && request.max_tokens != null && <SelectItem value={String(request.max_tokens)}>{t("generate.form.token_presets.custom", { tokens: fmt(request.max_tokens) })}</SelectItem>}
+            </SelectContent>
+          </Select>
+          <Input
+            type="number"
+            className="h-8 w-28 text-right tabular-nums"
+            min={200}
+            max={cap}
+            step={100}
+            value={request.max_tokens ?? ""}
+            placeholder={String(presetTokens)}
+            onChange={(e) => setBudget(e.target.value === "" ? null : Number(e.target.value))}
+            aria-label={t("generate.form.token_budget_custom")}
+            data-testid="generate-token-budget-input"
+          />
+        </div>
+        <p className="text-xs text-fg-subtle" data-testid="generate-token-budget-hint">
+          {effectiveTokens > splitThreshold ? t("generate.form.budget_split", { tokens: fmt(effectiveTokens), minutes }) : t("generate.form.budget_single", { tokens: fmt(effectiveTokens), minutes })}
+        </p>
+        {budgetInfo && !budgetInfo.gpu && effectiveTokens >= 6_000 && (
+          <p className="text-xs text-warn" data-testid="generate-token-budget-warning">
+            {t("generate.form.cpu_warning", { cap: fmt(cap) })}
+          </p>
+        )}
       </div>
       <div className="flex items-center gap-2">
         <Button onClick={onGenerate} disabled={!canGenerate} data-testid="generate-run">

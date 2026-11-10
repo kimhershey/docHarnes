@@ -57,6 +57,8 @@ pub enum JobKind {
     Draft,
     /// Daily retention purge (P7 §3.8).
     Maintenance,
+    /// Form field discovery over sample documents (0.3.0 §2).
+    SchemaDiscovery,
 }
 
 impl JobKind {
@@ -69,6 +71,7 @@ impl JobKind {
             "redo" => JobKind::Redo,
             "draft" => JobKind::Draft,
             "maintenance" => JobKind::Maintenance,
+            "schema_discovery" => JobKind::SchemaDiscovery,
             _ => JobKind::Pipeline,
         }
     }

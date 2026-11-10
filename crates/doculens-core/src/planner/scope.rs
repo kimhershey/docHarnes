@@ -36,6 +36,13 @@ pub fn resolve(conn: &Connection, scope: &Scope) -> rusqlite::Result<Vec<Documen
     if !scope.doc_ids.is_empty() {
         docs.retain(|d| scope.doc_ids.contains(&d.id));
     }
+    // Project scope (plan §6): the project's members only (an unknown project → nothing).
+    if let Some(pid) = f.project_id.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        let mut st = conn.prepare_cached("SELECT document_id FROM project_documents WHERE project_id = ?1")?;
+        let members: std::collections::HashSet<String> =
+            st.query_map([pid], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
+        docs.retain(|d| members.contains(&d.id));
+    }
     if let Some((from, to)) = f.date_range() {
         docs.retain(|d| {
             basis_date(d)

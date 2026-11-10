@@ -31,6 +31,7 @@ import {
 import {
   EVENTS,
   type AutoProcessingLevel,
+  type DocDiscovery,
   type DocTypeInfo,
   type DocumentsChanged,
   type ExtractedTable,
@@ -52,6 +53,7 @@ import {
   type ReviewItem,
   type ReviewReason,
   type SchemaDef,
+  type SchemaDiscoveryOutcome,
   type SchemaDraft,
   type SchemaRecord,
   type SchemaSource,
@@ -1467,9 +1469,33 @@ function docTypes(s: PState): DocTypeInfo[] {
   return out.sort((a, b) => Number(a.builtin) - Number(b.builtin) || b.use_count - a.use_count);
 }
 
+/** Schema names compared without case, spaces and punctuation ("견적서 (2)" ≠ "견적서"). */
+export function compactName(s: string): string {
+  return s.toLowerCase().replace(/[\s·,.:：/\-_*※]/g, "");
+}
+
+/** `repo::name_exists`: another schema already carries this name (the editor disables saving; `saveSchema` refuses). */
+export function nameExists(name: string, excludingId: string | null = null, s: PState = load()): boolean {
+  const want = compactName(name);
+  if (!want) return false;
+  return s.schemas.some((x) => x.id !== excludingId && compactName(x.name) === want);
+}
+
+/** `repo::free_name`: the smallest "<name> (k)" nobody uses yet. */
+export function freeName(name: string, excludingId: string | null = null): string {
+  const base = name.trim();
+  if (!nameExists(base, excludingId)) return base;
+  for (let k = 2; k < 100; k += 1) {
+    const candidate = `${base} (${k})`;
+    if (!nameExists(candidate, excludingId)) return candidate;
+  }
+  return `${base} (${Date.now()})`;
+}
+
 function saveSchema(s: PState, draft: SchemaDraft): SchemaRecord {
   const name = draft.name.trim();
   if (!name) throw err("invalid", "schema_name_empty");
+  if (nameExists(name, draft.id ?? null, s)) throw err("invalid", "schema_name_duplicate");
   if (!isKey(draft.doc_type.trim())) throw err("invalid", "schema_doc_type_invalid");
   if (lint(draft.definition).some((i) => i.level === "error")) throw err("invalid", "schema_invalid");
   if (draft.id) {
@@ -1552,9 +1578,18 @@ export function slugForName(name: string): string {
   return `form_${h.toString(16).slice(0, 6)}`;
 }
 
+const STRUCTURAL_KINDS: ReadonlySet<string> = new Set(["hwpx", "docx", "hwp"]);
+
+/**
+ * Fields one sample document yields (`forms::discover_document`). A blank form (name or office format)
+ * gives the printed labels; a filled sample read by the model also names the project and the supplier
+ * and lacks the free "비고" line — so two samples of one form merge into a union with the common
+ * fields marked required.
+ */
 function deriveForm(doc: MockDoc, name: string | null): SchemaDraft {
   const formName = name?.trim() || doc.title || doc.original_name.replace(/\.[^.]+$/, "");
   const slug = slugForName(formName);
+  const filled = !/양식|서식|form|template/i.test(doc.original_name) && !STRUCTURAL_KINDS.has(doc.source_kind);
   let fields: FieldDef[];
   if (slug === "estimate" || slug === "quotation") {
     fields = [
@@ -1567,6 +1602,7 @@ function deriveForm(doc: MockDoc, name: string | null): SchemaDraft {
       f("valid_until", "유효기간", "Valid until", "date"),
       f("note", "비고", "Note"),
     ];
+    if (filled) fields = [f("project_name", "사업명", "Project name"), ...fields.filter((x) => x.key !== "note"), f("supplier_name", "공급자 상호", "Supplier")];
   } else if (slug === "leave_request" || slug === "application_form") {
     fields = [f("name", "성명", "Name", "string", { required: true }), f("department", "부서", "Department"), f("period", "휴가기간", "Period", "date"), f("reason", "사유", "Reason"), f("signed", "서명 여부", "Signed", "boolean")];
   } else {
@@ -1622,6 +1658,210 @@ function nlSchema(s: PState, description: string, baseId: string | null): Schema
     form_document_id: base?.form_document_id ?? null,
     note: base ? `NL: ${d.slice(0, 60)}` : null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Multi-document discovery (0.3.0 §2) — mirrors forms::merge_drafts / discover
+// ---------------------------------------------------------------------------
+
+const MAX_MERGED_OPTIONS = 12;
+const MAX_MERGED_COLUMNS = 20;
+
+/** A field's identity across samples: the canonical key of its label, else its key (tables apart). */
+function fieldNorm(fd: FieldDef): string {
+  const base = fd.label_ko.trim() ? keyFromLabel(fd.label_ko, fd.key) : fd.key;
+  return fd.kind === "table" ? `${base}/table` : base;
+}
+
+const kindRank = (k: FieldKind): number => (k === "string" ? 0 : k === "table" || k === "group" ? 2 : 1);
+
+function topVote<K>(votes: Map<K, number>, rank?: (k: K) => number): K | null {
+  let best: K | null = null;
+  let bestN = -1;
+  for (const [k, n] of votes) {
+    if (n > bestN || (n === bestN && rank && best !== null && rank(k) > rank(best))) {
+      best = k;
+      bestN = n;
+    }
+  }
+  return best;
+}
+
+interface FieldAcc {
+  norm: string;
+  first: [number, number];
+  docs: number;
+  keys: Map<string, number>;
+  labels: Map<string, number>;
+  labelEn: string;
+  kinds: Map<FieldKind, number>;
+  required: number;
+  options: string[];
+  columns: { norm: string; first: number; votes: number; def: FieldDef }[];
+  example: string | null;
+  description: string | null;
+  regex: string | null;
+  mask: boolean;
+}
+
+/** `forms::infer_rules`: deterministic cross-field rules the merged keys support (known rule ids only). */
+export function inferRules(def: SchemaDef): string[] {
+  const has = (k: string) => def.fields.some((x) => x.key === k);
+  const tableAmount = def.fields.some((x) => x.kind === "table" && x.fields.some((c) => c.key === "supply_amount" || c.key === "amount"));
+  const percent = def.fields.some((x) => x.key.endsWith("_percent") || x.key.endsWith("_rate") || x.fields.some((c) => c.key === "progress"));
+  const rules: string[] = [];
+  if (has("supply_total") && has("tax_total") && (has("grand_total") || has("total"))) rules.push("supply_plus_tax_equals_total", "tax_is_ten_percent");
+  if (tableAmount && has("supply_total")) rules.push("items_sum_equals_supply");
+  else if (tableAmount && (has("grand_total") || has("total"))) rules.push("items_sum_equals_total");
+  if (has("period_start") && has("period_end")) rules.push("period_start_before_end");
+  if (percent) rules.push("percent_range");
+  if (has("total_cases") && has("passed") && has("failed")) rules.push("test_counts_sum");
+  return rules;
+}
+
+/**
+ * `forms::merge_drafts`: fields matched by canonical key, kept when at least `minDocs` samples carry
+ * them, ordered by frequency then first appearance; labels / kinds by majority (a typed kind beats
+ * `string` on a tie), enum options and table columns by union; required = on every sample.
+ */
+export function mergeDrafts(drafts: SchemaDraft[], hint: string | null, minDocs: number): { draft: SchemaDraft; adopted: number; dropped: number } {
+  const n = drafts.length;
+  const min = Math.min(Math.max(minDocs, 1), Math.max(n, 1));
+  const accs: FieldAcc[] = [];
+  drafts.forEach((d, di) => {
+    const seen = new Set<string>();
+    d.definition.fields.forEach((fd, fi) => {
+      let norm = fieldNorm(fd);
+      const base = norm;
+      for (let k = 2; seen.has(norm); k += 1) norm = `${base}#${k}`;
+      seen.add(norm);
+      let acc = accs.find((a) => a.norm === norm);
+      if (!acc) {
+        acc = { norm, first: [di, fi], docs: 0, keys: new Map(), labels: new Map(), labelEn: "", kinds: new Map(), required: 0, options: [], columns: [], example: null, description: null, regex: null, mask: false };
+        accs.push(acc);
+      }
+      acc.docs += 1;
+      if (fd.key.trim()) acc.keys.set(fd.key, (acc.keys.get(fd.key) ?? 0) + 1);
+      if (fd.label_ko.trim()) acc.labels.set(fd.label_ko.trim(), (acc.labels.get(fd.label_ko.trim()) ?? 0) + 1);
+      if (!acc.labelEn && fd.label_en.trim()) acc.labelEn = fd.label_en.trim();
+      acc.kinds.set(fd.kind, (acc.kinds.get(fd.kind) ?? 0) + 1);
+      if (fd.required) acc.required += 1;
+      for (const o of fd.options) if (!acc.options.includes(o) && acc.options.length < MAX_MERGED_OPTIONS) acc.options.push(o);
+      fd.fields.forEach((c, ci) => {
+        const cn = fieldNorm(c);
+        const cur = acc!.columns.find((x) => x.norm === cn);
+        if (cur) cur.votes += 1;
+        else acc!.columns.push({ norm: cn, first: ci, votes: 1, def: structuredClone(c) });
+      });
+      acc.example ??= fd.example?.trim() ? fd.example : null;
+      acc.description ??= fd.description?.trim() ? fd.description : null;
+      acc.regex ??= fd.regex_hint?.trim() ? fd.regex_hint : null;
+      acc.mask ||= fd.mask;
+    });
+  });
+  const adopted = accs.filter((a) => a.docs >= min).sort((a, b) => b.docs - a.docs || a.first[0] - b.first[0] || a.first[1] - b.first[1]);
+  const keys: string[] = [];
+  const fields: FieldDef[] = adopted.map((a) => {
+    let base = topVote(a.keys) ?? a.norm.replace("/table", "");
+    if (!isKey(base)) base = keyFromLabel(base, "field");
+    let key = base;
+    for (let k = 2; keys.includes(key) || ["value", "evidence", "confidence"].includes(key); k += 1) key = `${base}_${k}`;
+    keys.push(key);
+    const label_ko = topVote(a.labels) ?? key;
+    const kind = topVote(a.kinds, kindRank) ?? "string";
+    const fd = f(key, label_ko, a.labelEn || key.replace(/_/g, " "), kind, { required: n >= 2 ? a.docs === n : a.required > 0, example: a.example, description: a.description, regex_hint: a.regex, mask: a.mask });
+    if (kind === "enum") fd.options = [...a.options];
+    if (kind === "table") {
+      const colKeys: string[] = [];
+      fd.fields = a.columns
+        .sort((x, y) => y.votes - x.votes || x.first - y.first)
+        .slice(0, MAX_MERGED_COLUMNS)
+        .map((c) => {
+          const col = { ...c.def, fields: [] };
+          const b = col.key;
+          for (let k = 2; colKeys.includes(col.key); k += 1) col.key = `${b}_${k}`;
+          colKeys.push(col.key);
+          return col;
+        });
+    }
+    return fd;
+  });
+  const names = new Map<string, number>();
+  const types = new Map<string, number>();
+  for (const d of drafts) {
+    if (d.name.trim()) names.set(d.name.trim(), (names.get(d.name.trim()) ?? 0) + 1);
+    if (d.doc_type.trim()) types.set(d.doc_type.trim(), (types.get(d.doc_type.trim()) ?? 0) + 1);
+  }
+  const name = hint?.trim() || topVote(names) || "양식";
+  let doc_type = slugForName(name);
+  if (doc_type.startsWith("form_")) {
+    const majority = topVote(types);
+    if (majority && isKey(majority) && !majority.startsWith("form_")) doc_type = majority;
+  }
+  const samples: string[] = [];
+  for (const d of drafts) for (const id of [d.form_document_id, ...(d.sample_document_ids ?? [])]) if (id && !samples.includes(id)) samples.push(id);
+  const definition: SchemaDef = { fields, rules: [] };
+  definition.rules = inferRules(definition);
+  const draft: SchemaDraft = {
+    id: null,
+    name,
+    name_en: drafts.find((d) => d.name_en?.trim())?.name_en ?? null,
+    doc_type,
+    source: "form",
+    description_ko: drafts.find((d) => d.description_ko?.trim())?.description_ko ?? null,
+    description_en: drafts.find((d) => d.description_en?.trim())?.description_en ?? null,
+    definition,
+    form_document_id: samples[0] ?? null,
+    note: null,
+    sample_document_ids: samples.slice(1),
+  };
+  return { draft, adopted: adopted.length, dropped: accs.length - adopted.length };
+}
+
+/** `pipeline_schema_discover`: queues the engine-lane discovery job over the sample documents. */
+function discoverJob(ids: string[], name: string | null): string {
+  const docIds = ids.map((x) => x.trim()).filter((x, i, all) => x && all.indexOf(x) === i);
+  if (docIds.length === 0) throw err("invalid", "no documents");
+  const hint = name?.trim() || null;
+  const id = submitJob({ kind: "schema_discovery", doc_ids: docIds, name_hint: hint }, hint ?? `${docIds.length} documents`, "high");
+  changed("status");
+  return id;
+}
+
+/** Worker of the `schema_discovery` job (`pipeline_bridge::run_schema_discovery`). */
+export async function schemaDiscoveryWorker(job: Job, spec: { kind: "schema_discovery"; doc_ids: string[]; name_hint: string | null }, ctl: JobControl): Promise<WorkerOutcome> {
+  const docs = spec.doc_ids.map((id) => wsDocs().find((d) => d.id === id)).filter((d): d is MockDoc => !!d);
+  if (docs.length === 0) throw workerFailure("document_not_found");
+  const needsModel = docs.some((d) => !STRUCTURAL_KINDS.has(d.source_kind));
+  let modelNote: string | null = null;
+  if (needsModel) {
+    const mode = visionMode();
+    if (mode === "not_loaded") {
+      updateJob(job.id, { detail: "loading model" });
+      await pace(ctl, 240);
+      markVisionLoaded();
+    } else if (mode !== "ready") {
+      // The shell falls back to the text heuristics when the model cannot be loaded.
+      modelNote = "모델 없이 텍스트 규칙으로 도출했습니다.";
+    }
+  }
+  const drafts: SchemaDraft[] = [];
+  const documents: DocDiscovery[] = [];
+  for (const [i, doc] of docs.entries()) {
+    const title = doc.title ?? doc.original_name;
+    updateJob(job.id, { progress: i / docs.length, bytes_done: i, bytes_total: docs.length, detail: `${title} · discover` });
+    await pace(ctl, 200);
+    const d = deriveForm(doc, spec.name_hint);
+    const structural = STRUCTURAL_KINDS.has(doc.source_kind);
+    if (!structural && modelNote) d.note = modelNote;
+    drafts.push(d);
+    documents.push({ doc_id: doc.id, title, source: structural ? "structure" : modelNote ? "text" : "model", pages_used: structural ? [] : [1], field_count: d.definition.fields.length, note: d.note });
+  }
+  const { draft, adopted, dropped } = mergeDrafts(drafts, spec.name_hint, Math.ceil(drafts.length / 2));
+  const notes = documents.filter((x) => x.note).map((x) => `${x.title}: ${x.note}`);
+  draft.note = notes.length > 0 ? notes.join(" / ") : null;
+  const outcome: SchemaDiscoveryOutcome = { kind: "schema_discovery", draft, documents, merged_fields: adopted, dropped_fields: dropped };
+  return { detail: `merged ${adopted} fields from ${documents.length} documents`, result: outcome };
 }
 
 // ---------------------------------------------------------------------------
@@ -1864,21 +2104,28 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
       const draft = { ...(a.draft as SchemaDraft), source: "form" as SchemaSource };
       if (!isKey(draft.doc_type)) draft.doc_type = slugForName(draft.name);
       const saved = saveSchema(s, draft);
-      if (draft.form_document_id) {
-        const doc = loadDocs().find((d) => d.id === draft.form_document_id);
-        if (doc) {
-          doc.role = "form";
-          doc.doc_type = saved.doc_type;
-          doc.doc_type_source = "form";
-          doc.updated_at = now();
-          upsertDoc(doc);
-          docsChanged([doc.id]);
-        }
+      // Every sample document becomes a form of the type (one draft, 1..N samples since 0.3.0).
+      const sampleIds = [draft.form_document_id, ...(draft.sample_document_ids ?? [])].filter((id, i, all): id is string => !!id && all.indexOf(id) === i);
+      const marked: string[] = [];
+      for (const id of sampleIds) {
+        const doc = loadDocs().find((d) => d.id === id);
+        if (!doc) continue;
+        doc.role = "form";
+        doc.doc_type = saved.doc_type;
+        doc.doc_type_source = "form";
+        doc.updated_at = now();
+        upsertDoc(doc);
+        marked.push(doc.id);
       }
+      if (marked.length > 0) docsChanged(marked);
       save(s);
       changed("schemas", [saved.id]);
       return saved;
     }
+    case "pipeline_schema_discover":
+      return discoverJob((a.documentIds as string[] | undefined) ?? [], (a.name as string | null) ?? null);
+    case "pipeline_schema_name_exists":
+      return nameExists(String(a.name ?? ""), (a.excludingId as string | null) ?? null, s);
     case "pipeline_document_schema": {
       const doc = wsDocs().find((d) => d.id === a.documentId);
       if (!doc) throw err("invalid", "document_not_found");

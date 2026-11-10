@@ -340,3 +340,100 @@ fn redo_never_re_deletes_a_restored_document() {
     assert_eq!(redo.skipped[0].1, "restore_not_redoable");
     assert!(w.paths.root.join("inbox/a.pdf").is_file());
 }
+
+#[test]
+fn project_variables_and_project_scope() {
+    use crate::projects::{copies, repo as projects_repo, ProjectInput, ProjectSettings, DEFAULT_PROJECT_FOLDER};
+    let w = World::new();
+    w.doc(
+        "a",
+        "inbox/IMG_2031.jpg",
+        b"aaa",
+        Some("receipt"),
+        Some("스타벅스"),
+        Some("2026-10-14"),
+        Some(12500.0),
+        ReviewStatus::Done,
+    );
+    w.doc(
+        "b",
+        "inbox/scan_0007.pdf",
+        b"bbb",
+        Some("receipt"),
+        Some("GS25"),
+        Some("2026-10-02"),
+        Some(8900.0),
+        ReviewStatus::Done,
+    );
+    let p =
+        w.db.with(|c| {
+            projects_repo::save_project(
+                c,
+                &ProjectInput {
+                    name: "한빛 포털 구축".into(),
+                    intake_no: Some("2026-001".into()),
+                    owner: Some("박서연".into()),
+                    start_date: Some("2026-01-01".into()),
+                    end_date: Some("2099-12-31".into()),
+                    settings: Some(ProjectSettings {
+                        folder_template: Some("archive/{{project}}/{{year}}".into()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+        })
+        .unwrap();
+    copies::add_documents(&w.db, &w.paths, &p.id, &["a".to_string()], Language::Ko).unwrap();
+    assert_eq!(folder_template(GroupBy::Project), DEFAULT_PROJECT_FOLDER);
+
+    // Every `{{project*}}` variable renders from the document's project; a document without one is 미상.
+    let req = OrganizeRequest {
+        scope: Scope { folder: Some("inbox".into()), ..Scope::default() },
+        name_template: Some(
+            "{{project_code}}_{{project_phase}}_{{project_start}}_{{project_end}}_{{project_owner}}_{{title}}".into(),
+        ),
+        folder_template: Some(folder_template(GroupBy::Project).into()),
+        only_reviewed: false,
+        language: Language::Ko,
+    };
+    let plan1 = plan(&w.db, &w.paths, &req).unwrap();
+    let by_id = |p: &OrganizePlan, id: &str| p.items.iter().find(|i| i.doc_id == id).unwrap().clone();
+    assert_eq!(
+        by_id(&plan1, "a").to.as_deref(),
+        Some("documents/한빛 포털 구축/영수증/2026-001_진행중_2026-01-01_2099-12-31_박서연_IMG_2031.jpg")
+    );
+    let b = by_id(&plan1, "b");
+    assert_eq!(b.to.as_deref(), Some("documents/미상/영수증/미상_미상_미상_미상_미상_scan_0007.pdf"));
+    assert!(b.missing.contains(&"project".to_string()) && b.missing.contains(&"project_owner".to_string()), "{b:?}");
+    assert_eq!(plan1.needs_review, 1);
+
+    // A project scope narrows the documents to the members; the English phase label follows the language.
+    let scoped = OrganizeRequest {
+        scope: Scope {
+            filter: ScopeFilter { project_id: Some(p.id.clone()), ..Default::default() },
+            ..Scope::default()
+        },
+        name_template: Some("{{project_phase}}_{{title}}".into()),
+        folder_template: Some("{{project}}".into()),
+        only_reviewed: false,
+        language: Language::En,
+    };
+    let plan2 = plan(&w.db, &w.paths, &scoped).unwrap();
+    assert_eq!(plan2.items.iter().map(|i| i.doc_id.as_str()).collect::<Vec<_>>(), vec!["a"]);
+    assert_eq!(by_id(&plan2, "a").to.as_deref(), Some("한빛 포털 구축/Active_IMG_2031.jpg"));
+
+    // Applying a move keeps the project's copy of a shared document in sync (it follows the rename).
+    let other =
+        w.db.with(|c| projects_repo::save_project(c, &ProjectInput { name: "두번째".into(), ..Default::default() }))
+            .unwrap();
+    copies::add_documents(&w.db, &w.paths, &other.id, &["a".to_string()], Language::Ko).unwrap();
+    let before = w.db.with(|c| copies::list_for_project(c, &other.id)).unwrap().remove(0);
+    assert_eq!(before.rel_path, "documents/두번째/영수증/IMG_2031.jpg");
+    let applied = apply(&w.db, &w.paths, &plan2, "organize", "프로젝트 정리", "test", None, &mut no_progress).unwrap();
+    assert_eq!((applied.moved, applied.failed.len()), (1, 0), "{applied:?}");
+    let after = w.db.with(|c| copies::list_for_project(c, &other.id)).unwrap().remove(0);
+    assert_eq!(after.rel_path, "documents/두번째/영수증/Active_IMG_2031.jpg", "{after:?}");
+    assert!(w.paths.root.join(&after.rel_path).is_file() && !w.paths.root.join(&before.rel_path).is_file());
+    assert!(w.paths.root.join("한빛 포털 구축/Active_IMG_2031.jpg").is_file());
+}

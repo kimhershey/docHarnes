@@ -6,6 +6,7 @@
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use serde_json::{json, Value};
@@ -67,6 +68,7 @@ impl World {
             import,
             cancel: None,
             language: Language::Ko,
+            progress: None,
         }
     }
 
@@ -277,7 +279,7 @@ fn model_reply() -> Value {
             {"key": "grand_total", "value": "", "source_index": null}
         ],
         "tables": [
-            {"key": "items", "rows": [["노트북", "15형", "2", "1,200,000", "2,000,000", "200,000", ""]]}
+            {"key": "items", "rows": [["노트북 임대", "", "2", "1,200,000", "2,000,000", ""]]}
         ],
         "body": [
             {"kind": "heading", "text": "견적 조건", "items": [], "source_index": null},
@@ -295,8 +297,17 @@ fn model_reply() -> Value {
 
 #[test]
 fn templates_are_consistent_and_render() {
-    let all = templates::list();
-    assert_eq!(all.len(), 7);
+    // 12 software templates + 보완요청서 are offered; the 6 generic ones of 0.1 stay hidden but defined.
+    let visible = templates::list();
+    assert_eq!(visible.len(), 13);
+    assert!(visible.iter().all(|t| !t.kind.hidden()));
+    assert_eq!(TemplateKind::visible().count(), 13);
+    let all = templates::list_all();
+    assert_eq!(all.len(), 19);
+    // Generation slugs equal the pipeline's document types for the software set.
+    for k in TemplateKind::visible().filter(|k| *k != TemplateKind::SupplementRequest) {
+        assert!(crate::pipeline::schema::builtin(k.as_str()).is_some(), "{k:?} has no pipeline schema");
+    }
     for t in &all {
         let mut keys: Vec<&str> = t.fields.iter().map(|f| f.key.as_str()).collect();
         let n = keys.len();
@@ -328,17 +339,23 @@ fn templates_are_consistent_and_render() {
         assert!(html.contains(&t.name_ko), "{:?}", t.kind);
         assert!(render::to_markdown(&d).starts_with("# "));
     }
-    // Pipeline-compatible keys on the money templates.
-    let q = templates::get(TemplateKind::Quotation);
+    // Pipeline-compatible keys on the money template (the estimate's staffing columns).
+    let q = templates::get(TemplateKind::Estimate);
     for k in ["issue_date", "supplier.name", "supplier.brn", "supply_total", "tax_total", "grand_total", "items"] {
-        assert!(q.field(k).is_some(), "quotation lacks {k}");
+        assert!(q.field(k).is_some(), "estimate lacks {k}");
     }
     let cols: Vec<&str> = q.field("items").unwrap().columns.iter().map(|c| c.key.as_str()).collect();
-    assert_eq!(cols, ["item_name", "spec", "quantity", "unit_price", "supply_amount", "tax_amount", "note"]);
+    assert_eq!(cols, ["role", "grade", "months", "unit_price", "supply_amount", "note"]);
     assert_eq!(templates::match_keywords("보완요청서를 보고서 형식으로"), Some(TemplateKind::SupplementRequest));
-    assert_eq!(templates::match_keywords("㈜한빛에 노트북 10대 견적서 만들어줘"), Some(TemplateKind::Quotation));
-    assert_eq!(templates::match_keywords("Draft the meeting minutes"), Some(TemplateKind::Minutes));
+    assert_eq!(templates::match_keywords("㈜한빛에 노트북 10대 견적서 만들어줘"), Some(TemplateKind::Estimate));
+    assert_eq!(templates::match_keywords("Draft the meeting minutes"), Some(TemplateKind::MeetingMinutes));
+    assert_eq!(templates::match_keywords("개발 계약서 초안"), Some(TemplateKind::DevContract));
+    assert_eq!(templates::match_keywords("10월 진척 보고서"), Some(TemplateKind::ProgressReport));
     assert_eq!(templates::match_keywords("아무 내용"), None);
+    // Hidden generic templates: not matched from free text, still reachable by an explicit reference.
+    assert_eq!(templates::match_keywords("A4 공문 형식"), None);
+    assert_eq!(templates::match_keywords_any("A4 공문 형식"), Some(TemplateKind::OfficialLetter));
+    assert!(templates::get(TemplateKind::Quotation).kind.hidden());
     // A pipeline schema becomes a spec with group paths and table columns.
     let tax = crate::pipeline::schema::builtins().into_iter().find(|b| b.key == "tax_invoice").unwrap();
     let rec = crate::pipeline::schema::SchemaRecord {
@@ -400,7 +417,8 @@ fn resolve_template_prefers_registered_forms_then_keywords() {
             prepo::save_schema(
                 c,
                 &SchemaDraft {
-                    name: "견적서".into(),
+                    // Named apart from the built-in 견적서 sample: the schema name guard (0.3.0 §2) refuses duplicates.
+                    name: "한빛 견적서".into(),
                     doc_type: "quotation".into(),
                     source: SchemaSource::Form,
                     definition: SchemaDef::new(
@@ -422,7 +440,7 @@ fn resolve_template_prefers_registered_forms_then_keywords() {
         ..Default::default()
     };
     assert_eq!(
-        super::resolve_template(&w.db, &req(Some("견적서"), "")).unwrap(),
+        super::resolve_template(&w.db, &req(Some("한빛 견적서"), "")).unwrap(),
         TemplateRef::Form { schema_id: rec.id.clone(), doc_id: Some("form-doc".into()) }
     );
     assert_eq!(
@@ -440,7 +458,7 @@ fn resolve_template_prefers_registered_forms_then_keywords() {
     );
     assert_eq!(
         super::resolve_template(&w.db, &req(None, "지난주 회의 내용으로 회의록 작성")).unwrap(),
-        TemplateRef::Builtin { template: TemplateKind::Minutes }
+        TemplateRef::Builtin { template: TemplateKind::MeetingMinutes }
     );
     assert_eq!(
         super::resolve_template(&w.db, &req(None, "뭔가 써줘")).unwrap(),
@@ -454,7 +472,7 @@ fn resolve_template_prefers_registered_forms_then_keywords() {
     // Unknown form_ref falls through to the content keywords.
     assert_eq!(
         super::resolve_template(&w.db, &req(Some("이상한양식"), "계약서 초안")).unwrap(),
-        TemplateRef::Builtin { template: TemplateKind::Contract }
+        TemplateRef::Builtin { template: TemplateKind::DevContract }
     );
 }
 
@@ -491,8 +509,8 @@ fn draft_from_scripted_model_cites_sources_and_validates() {
     assert_eq!(out.source, "model");
     assert_eq!((out.prompt_tokens, out.completion_tokens), (100, 20));
     let d = &out.draft;
-    assert_eq!(d.template, TemplateRef::Builtin { template: TemplateKind::Quotation });
-    assert_eq!(d.doc_type.as_deref(), Some("quotation"));
+    assert_eq!(d.template, TemplateRef::Builtin { template: TemplateKind::Estimate });
+    assert_eq!(d.doc_type.as_deref(), Some("estimate"));
     assert_eq!(d.title, "노트북 공급 견적서");
     // The prompt carried the template fields and the numbered sources.
     let prompt = chat.prompt(0);
@@ -506,7 +524,7 @@ fn draft_from_scripted_model_cites_sources_and_validates() {
         "draft_document"
     );
     // Fields: every template key is present; citations resolved from source_index.
-    assert_eq!(d.fields.len(), TemplateSpec::builtin(TemplateKind::Quotation).scalars().count());
+    assert_eq!(d.fields.len(), TemplateSpec::builtin(TemplateKind::Estimate).scalars().count());
     let brn = d.field("supplier.brn").unwrap();
     assert_eq!(brn.normalized.as_deref(), Some("220-81-62517"));
     assert_eq!(
@@ -1480,4 +1498,142 @@ fn save_never_overwrites_forms_or_library_documents() {
     assert!(!w.paths.root.join(work_rel).exists());
     let doc = w.db.with(|c| docs::get_document(c, "work-doc")).unwrap().unwrap();
     assert_eq!(doc.role, DocumentRole::Work, "the row is untouched");
+}
+
+// ---------------------------------------------------------------------------
+// Token budgets and the outline → sections flow (0.3.0 item 4)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn token_budget_helpers_and_split_decision() {
+    let req = DraftRequest { length: super::Length::Medium, ..Default::default() };
+    assert_eq!(super::prompts::reply_budget(&req), 1_800);
+    let req = DraftRequest { max_tokens: Some(24_000), ..Default::default() };
+    assert_eq!(super::prompts::reply_budget(&req), 24_000);
+    assert!(!super::prompts::split_needed(2_600, Some(8_192)));
+    assert!(super::prompts::split_needed(3_001, None));
+    assert!(super::prompts::split_needed(3_000, Some(8_192)), "more than 35 % of an 8K context");
+    assert_eq!(super::prompts::section_budget(24_000, 1, 8), 3_000);
+    assert_eq!(super::prompts::section_budget(6_000, 1, 8), 750);
+    assert_eq!(super::prompts::section_budget(2_000, 1, 8), 600);
+    assert!(schema::is_grammar_safe(&schema::outline_schema()));
+    assert!(schema::is_grammar_safe(&schema::section_schema()));
+    assert_eq!(super::prompts::fallback_outline(true).len(), 5);
+}
+
+#[test]
+fn a_large_budget_drafts_section_by_section_and_keeps_sections_on_cancel() {
+    let w = world();
+    // 진척 보고서 has five template sections: one head call (fields + section 1) and four section calls.
+    let head = json!({
+        "title": "10월 진척 보고서",
+        "fields": [
+            {"key": "project_name", "value": "한빛 포털 구축", "source_index": null},
+            {"key": "report_date", "value": "2026-11-08", "source_index": null}
+        ],
+        "tables": [],
+        "body": [
+            {"kind": "heading", "text": "보고 개요", "items": [], "source_index": null},
+            {"kind": "paragraph", "text": "10월 진척 현황을 보고합니다.", "items": [], "source_index": null}
+        ],
+        "notes": []
+    });
+    let section = |text: &str| {
+        json!({ "blocks": [
+            {"kind": "paragraph", "text": text, "items": [], "source_index": null},
+            {"kind": "heading", "text": "세부", "items": [], "source_index": null},
+            {"kind": "list", "text": "", "items": ["항목 1", "항목 2"], "source_index": null}
+        ] })
+        .to_string()
+    };
+    let replies = || {
+        vec![
+            head.to_string(),
+            section("금주 실적입니다."),
+            section("차주 계획입니다."),
+            section("이슈입니다."),
+            section("지원 요청입니다."),
+        ]
+    };
+    let chat = SeqChat::new(replies());
+    let vlm = Vlm::new(&chat, "scripted".into(), Profile::Balanced, None);
+    let progress: Mutex<Vec<(f32, String)>> = Mutex::new(Vec::new());
+    let cb = |f: f32, d: &str| progress.lock().unwrap().push((f, d.to_string()));
+    let mut deps = w.deps(Some(&vlm), None);
+    deps.progress = Some(&cb);
+    let req = DraftRequest {
+        form_ref: Some("progress_report".into()),
+        content: "한빛 포털 구축 10월 진척 보고서".into(),
+        max_tokens: Some(8_000),
+        use_knowledge: false,
+        ..Default::default()
+    };
+    let out = draft::draft(&deps, &req).unwrap();
+    assert_eq!(out.sections, 5);
+    let d = &out.draft;
+    let headings: Vec<&str> = d
+        .body
+        .iter()
+        .filter_map(|b| match b {
+            DraftBlock::Heading { level: 2, text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(headings, ["보고 개요", "금주 실적", "차주 계획", "이슈 및 리스크", "지원 요청 사항"]);
+    // The model's own headings inside a section become sub-headings.
+    assert!(d.body.iter().any(|b| matches!(b, DraftBlock::Heading { level: 3, text } if text == "세부")));
+    assert_eq!(d.field("project_name").unwrap().value, "한빛 포털 구축");
+    assert_eq!((out.prompt_tokens, out.completion_tokens), (500, 100), "usage summed over five calls");
+    assert!(d.notes.iter().any(|n| n.contains("5개 절")), "{:?}", d.notes);
+    let details: Vec<String> = progress.lock().unwrap().iter().map(|(_, d)| d.clone()).collect();
+    assert!(details.iter().any(|x| x == "section 1/5") && details.iter().any(|x| x == "section 5/5"), "{details:?}");
+    assert_eq!(details.last().map(String::as_str), Some("finishing"));
+    // Section prompts carry the settled facts and the tail of the previous text; budgets split 8,000 over 5.
+    let p2 = chat.prompt(1);
+    assert!(
+        p2.contains("[확정 정보]")
+            && p2.contains("한빛 포털 구축")
+            && p2.contains("[앞 절 요약]")
+            && p2.contains("2/5번째 절"),
+        "{p2}"
+    );
+    assert!(
+        chat.requests.lock().unwrap()[1].response_format.as_ref().unwrap()["json_schema"]["name"] == "draft_section"
+    );
+    let budgets: Vec<Option<u32>> = chat.requests.lock().unwrap().iter().map(|r| r.max_tokens).collect();
+    assert_eq!(budgets[0], Some(1_600 + super::prompts::HEAD_EXTRA_TOKENS));
+    assert!(budgets[1..].iter().all(|b| *b == Some(1_600)), "{budgets:?}");
+
+    // Cancellation while the third section is requested keeps the two sections written so far.
+    let chat2 = SeqChat::new(replies());
+    let cancel = AtomicBool::new(false);
+    let vlm2 = Vlm::new(&chat2, "scripted".into(), Profile::Balanced, Some(&cancel));
+    let cb2 = |_f: f32, d: &str| {
+        if d == "section 3/5" {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    };
+    let mut deps2 = w.deps(Some(&vlm2), None);
+    deps2.progress = Some(&cb2);
+    let out2 = draft::draft(&deps2, &req).unwrap();
+    assert_eq!(out2.sections, 2);
+    assert!(out2.draft.notes.iter().any(|n| n.contains("2/5절까지만")), "{:?}", out2.draft.notes);
+    assert_eq!(out2.draft.body.iter().filter(|b| matches!(b, DraftBlock::Heading { level: 2, .. })).count(), 2);
+
+    // A small budget keeps the one-shot path.
+    let chat3 = SeqChat::json(model_reply());
+    let vlm3 = Vlm::new(&chat3, "scripted".into(), Profile::Balanced, None);
+    let deps3 = w.deps(Some(&vlm3), None);
+    let out3 = draft::draft(
+        &deps3,
+        &DraftRequest {
+            content: "노트북 견적서".into(),
+            max_tokens: Some(2_000),
+            use_knowledge: false,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(out3.sections, 1);
+    assert_eq!(chat3.requests.lock().unwrap()[0].max_tokens, Some(2_000));
 }

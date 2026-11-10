@@ -26,6 +26,8 @@ import {
 import { buildSupplementDraft, submitDraftJob } from "./mock-generate";
 import * as pl from "./mock-pipeline";
 import {
+  DEFAULT_PROJECT_FOLDER,
+  DEFAULT_PROJECT_SETTINGS,
   EVENTS,
   type CheckRun,
   type ChecklistItem,
@@ -37,6 +39,7 @@ import {
   type ClassifySuggestion,
   type Draft,
   type DraftRequest,
+  type DocumentCopy,
   type Evidence,
   type FieldRecord,
   type Job,
@@ -46,7 +49,7 @@ import {
   type Project,
   type ProjectDetail,
   type ProjectInput,
-  type ProjectStatus,
+  type ProjectPhase,
   type ProjectSummary,
   type ProjectTemplate,
   type ProjectsChanged,
@@ -73,6 +76,14 @@ interface PState {
   rules: { project_id: string; rule: Rule }[];
   runs: CheckRun[];
   templates: ProjectTemplate[];
+  /** Tracked copies of documents shared with another project (projects::copies; virtual in the mock). */
+  copies: DocumentCopy[];
+}
+
+/** Today as a local ISO date (phase computation, default start). */
+function todayIso(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 function now(): string {
@@ -101,7 +112,21 @@ function loadAll(): Record<string, PState> {
 
 function load(): PState {
   const ws = currentWorkspacePath() ?? "(none)";
-  return loadAll()[ws] ?? { projects: [], members: [], rules: [], runs: [], templates: [] };
+  const s = loadAll()[ws] ?? { projects: [], members: [], rules: [], runs: [], templates: [], copies: [] };
+  if (!s.copies) s.copies = [];
+  // Projects stored by 0.2 builds: the manual status becomes dates (migration 0008).
+  for (const p of s.projects as (Project & { status?: string; due_date?: string | null })[]) {
+    if (p.phase === undefined) {
+      p.start_date = p.start_date ?? p.created_at.slice(0, 10);
+      p.end_date = p.end_date ?? (p.status === "done" ? p.updated_at.slice(0, 10) : (p.due_date ?? null));
+      p.settings = p.settings ?? { ...DEFAULT_PROJECT_SETTINGS };
+      p.phase = "active";
+      p.overdue = false;
+      delete p.status;
+      delete p.due_date;
+    }
+  }
+  return s;
 }
 
 function save(s: PState): void {
@@ -231,6 +256,14 @@ function checklist(s: PState, p: Project): ChecklistItem[] {
 }
 
 /** Recomputes the counters the list / kanban cards show. */
+/** `projects::phase_for`: before the start → planned, after the end → done, else active. */
+export function phaseFor(start: string | null, end: string | null, created: string, today = todayIso()): ProjectPhase {
+  const from = start ?? created.slice(0, 10);
+  if (today < from) return "planned";
+  if (end && end < today) return "done";
+  return "active";
+}
+
 function refresh(s: PState, p: Project): Project {
   const docs = docsOf(s, p.id);
   p.document_count = docs.length;
@@ -240,7 +273,82 @@ function refresh(s: PState, p: Project): Project {
   p.last_pass = last?.pass ?? 0;
   p.last_mismatch = last?.mismatch ?? 0;
   p.last_undetermined = last?.undetermined ?? 0;
+  p.settings = { ...DEFAULT_PROJECT_SETTINGS, ...(p.settings ?? {}) };
+  p.phase = phaseFor(p.start_date, p.end_date, p.created_at);
+  // 기한 경과 (decision 5): the end date passed but the case is incomplete.
+  p.overdue = p.phase === "done" && !!p.end_date && (p.missing_count > 0 || p.last_mismatch > 0 || p.last_check_at === null);
   return p;
+}
+
+/** Values behind the `{{project*}}` template variables (mock twin of `organize::ProjectVars`). */
+export interface ProjectVars {
+  name: string;
+  code: string | null;
+  phase: string;
+  start: string | null;
+  end: string | null;
+  owner: string | null;
+}
+
+function varsOf(p: Project, isKo: boolean): ProjectVars {
+  const labels: Record<ProjectPhase, [string, string]> = { planned: ["진행예정", "Planned"], active: ["진행중", "Active"], done: ["완료", "Done"] };
+  return { name: p.name, code: p.intake_no, phase: labels[p.phase][isKo ? 0 : 1], start: p.start_date, end: p.end_date, owner: p.owner };
+}
+
+/** The project a document is filed under: `projectId` when given (a project scope), else its first project. */
+export function projectVarsFor(docId: string, projectId: string | null, s: PState = load()): ProjectVars | null {
+  const isKo = ko();
+  if (projectId) {
+    const p = s.projects.find((x) => x.id === projectId);
+    return p ? varsOf(refresh(s, p), isKo) : null;
+  }
+  const first = s.members.filter((m) => m.doc_id === docId).sort((a, b) => a.added_at.localeCompare(b.added_at))[0];
+  const p = first ? s.projects.find((x) => x.id === first.project_id) : undefined;
+  return p ? varsOf(refresh(s, p), isKo) : null;
+}
+
+export function isMember(projectId: string, docId: string, s: PState = load()): boolean {
+  return s.members.some((m) => m.project_id === projectId && m.doc_id === docId);
+}
+
+/** Target path of a document's copy in a project (mock twin of `copies::target_path`). */
+function copyTarget(s: PState, p: Project, doc: MockDoc): string {
+  const isKo = ko();
+  const vars = varsOf(p, isKo);
+  const file = doc.rel_path.split("/").pop() ?? doc.rel_path;
+  const date = (doc.doc_date && doc.doc_date.length >= 10 ? doc.doc_date : doc.imported_at).slice(0, 10);
+  const [year, month, day] = date.split("-");
+  const typeLabel = doc.doc_type ? (isKo ? docTypeLabel(doc.doc_type).ko : docTypeLabel(doc.doc_type).en) : null;
+  const value = (v: string): string | null => {
+    switch (v) {
+      case "project": return vars.name;
+      case "project_code": return vars.code;
+      case "project_phase": return vars.phase;
+      case "project_start": return vars.start;
+      case "project_end": return vars.end;
+      case "project_owner": return vars.owner;
+      case "doc_type": return typeLabel;
+      case "vendor": return doc.vendor;
+      case "year": return year ?? null;
+      case "month": return month ?? null;
+      case "day": return day ?? null;
+      default: return null;
+    }
+  };
+  const template = (p.settings.folder_template ?? "").trim() || DEFAULT_PROJECT_FOLDER;
+  const folder = template
+    .replace(/\{\{\s*([a-z_]+)\s*\}\}/g, (_m, v: string) => (value(v) ?? "미상").replace(/[<>:"/\\|?*]/g, "_"))
+    .split("/")
+    .map((c) => c.trim())
+    .filter((c) => c && c !== "." && c !== "..")
+    .join("/");
+  const taken = (rel: string) => rel === doc.rel_path || wsDocs().some((d) => d.rel_path === rel) || s.copies.some((c) => c.rel_path === rel && !(c.document_id === doc.id && c.project_id === p.id));
+  let candidate = `${folder}/${file}`;
+  const dot = file.lastIndexOf(".");
+  const stem = dot > 0 ? file.slice(0, dot) : file;
+  const ext = dot > 0 ? file.slice(dot) : "";
+  for (let n = 2; taken(candidate) && n < 10_000; n += 1) candidate = `${folder}/${stem}_${n}${ext}`;
+  return candidate;
 }
 
 function lastRun(s: PState, projectId: string): CheckRun | null {
@@ -267,7 +375,8 @@ export function resolveProjectRef(ref: string | null | undefined, current: strin
 }
 
 export function projectSummaries(): ProjectSummary[] {
-  return load().projects.map((p) => ({ id: p.id, name: p.name, status: p.status }));
+  const s = load();
+  return s.projects.map((p) => ({ id: p.id, name: p.name, status: refresh(s, p).phase }));
 }
 
 function normalizeKeywords(keywords: string[]): string[] {
@@ -296,10 +405,11 @@ function upsertProject(s: PState, input: ProjectInput): Project {
     p = getProject(s, input.id);
     p.name = name;
     p.template_id = merged(input.template_id, p.template_id);
-    if (input.status) p.status = input.status;
     p.intake_no = merged(input.intake_no, p.intake_no);
     p.owner = merged(input.owner, p.owner);
-    p.due_date = merged(input.due_date, p.due_date);
+    p.start_date = merged(input.start_date, p.start_date);
+    p.end_date = merged(input.end_date, p.end_date);
+    if (input.settings) p.settings = { ...DEFAULT_PROJECT_SETTINGS, ...input.settings };
     p.notes = merged(input.notes, p.notes);
     p.inbox_folder = merged(input.inbox_folder, p.inbox_folder);
     if (input.keywords != null) p.keywords = normalizeKeywords(input.keywords);
@@ -310,10 +420,13 @@ function upsertProject(s: PState, input: ProjectInput): Project {
       id: newId(),
       name,
       template_id: clean(input.template_id),
-      status: input.status ?? "intake",
       intake_no: clean(input.intake_no),
       owner: clean(input.owner),
-      due_date: clean(input.due_date),
+      start_date: clean(input.start_date),
+      end_date: clean(input.end_date),
+      phase: "active",
+      overdue: false,
+      settings: { ...DEFAULT_PROJECT_SETTINGS, ...(input.settings ?? {}) },
       notes: clean(input.notes),
       inbox_folder: clean(input.inbox_folder),
       keywords: normalizeKeywords(input.keywords ?? []),
@@ -352,12 +465,20 @@ export function createProject(input: ProjectInput): Project {
 
 export function addDocuments(projectId: string, docIds: string[]): ProjectDetail {
   const s = load();
-  const p = getProject(s, projectId);
-  const known = new Set(wsDocs().map((d) => d.id));
+  const p = refresh(s, getProject(s, projectId));
+  const docs = wsDocs();
+  const known = new Set(docs.map((d) => d.id));
   for (const id of docIds) {
     if (!known.has(id)) continue;
     if (s.members.some((m) => m.project_id === projectId && m.doc_id === id)) continue;
+    // A document that already belongs to another project gets a tracked copy here (decision 6).
+    const shared = s.members.some((m) => m.doc_id === id && m.project_id !== projectId);
     s.members.push({ project_id: projectId, doc_id: id, added_at: now() });
+    const doc = docs.find((d) => d.id === id);
+    if (shared && p.settings.copies && doc) {
+      const stamp = now();
+      s.copies.push({ document_id: id, project_id: projectId, rel_path: copyTarget(s, p, doc), content_hash: doc.content_hash, size_bytes: doc.size_bytes, state: "synced", created_at: stamp, synced_at: stamp });
+    }
   }
   p.updated_at = now();
   refresh(s, p);
@@ -375,7 +496,7 @@ function detail(s: PState, p: Project): ProjectDetail {
     template: templateOf(s, p.template_id),
     documents: docs.map((d) => {
       const { workspace: _ws, pages: _pages, ...record } = d;
-      return { document: record, added_at: added.get(d.id) ?? d.imported_at };
+      return { document: record, added_at: added.get(d.id) ?? d.imported_at, copy: s.copies.find((c) => c.project_id === p.id && c.document_id === d.id) ?? null };
     }),
     checklist: checklist(s, p),
     rules: s.rules.filter((r) => r.project_id === p.id).map((r) => r.rule),
@@ -799,7 +920,6 @@ export function check(projectId: string, ruleIds: string[]): CheckRun {
   s.runs.push(run);
   if (s.runs.length > 200) s.runs = s.runs.slice(-200);
   p.updated_at = now();
-  if (p.status === "intake" || p.status === "extracting") p.status = "validating";
   refresh(s, p);
   save(s);
   changed([p.id]);
@@ -870,13 +990,14 @@ export function report(projectId: string): string {
   const p = getProject(s, projectId);
   const d = detail(s, p);
   const isKo = ko();
-  const status = isKo ? { intake: "접수", extracting: "추출", validating: "검증", supplement: "보완요청", done: "완료" }[p.status] : p.status;
+  const phase = `${varsOf(p, isKo).phase}${p.overdue ? (isKo ? " (기한 경과)" : " (overdue)") : ""}`;
   const out: string[] = [`# ${isKo ? "프로젝트 리포트" : "Project report"} — ${p.name}`, ""];
   out.push(`| ${isKo ? "항목" : "Item"} | ${isKo ? "값" : "Value"} |`, "| --- | --- |");
-  out.push(`| ${isKo ? "상태" : "Status"} | ${status} |`);
+  out.push(`| ${isKo ? "상태" : "Status"} | ${phase} |`);
   if (p.intake_no) out.push(`| ${isKo ? "접수번호" : "Intake no."} | ${p.intake_no} |`);
   if (p.owner) out.push(`| ${isKo ? "담당" : "Owner"} | ${p.owner} |`);
-  if (p.due_date) out.push(`| ${isKo ? "기한" : "Due"} | ${p.due_date} |`);
+  if (p.start_date) out.push(`| ${isKo ? "시작" : "Start"} | ${p.start_date} |`);
+  if (p.end_date) out.push(`| ${isKo ? "종료" : "End"} | ${p.end_date} |`);
   out.push(`| ${isKo ? "문서 수" : "Documents"} | ${d.documents.length} |`);
   if (d.template) out.push(`| ${isKo ? "템플릿" : "Template"} | ${isKo ? d.template.name_ko : d.template.name_en} |`);
   out.push("", `## ${isKo ? "문서 체크리스트" : "Document checklist"}`, "");
@@ -937,12 +1058,6 @@ export function supplementRequest(projectId: string, findingIds: string[], outpu
     })),
     missingDocTypes: missingTypes.map((slug) => (isKo ? docTypeLabel(slug).ko : docTypeLabel(slug).en)),
   });
-  if (p.status !== "done") {
-    p.status = "supplement";
-    p.updated_at = now();
-    save(s);
-    changed([p.id]);
-  }
   return d;
 }
 
@@ -1224,6 +1339,7 @@ export async function mockProjects(cmd: string, a: Record<string, any>): Promise
       const before = s.projects.length;
       s.projects = s.projects.filter((p) => p.id !== id);
       s.members = s.members.filter((m) => m.project_id !== id);
+      s.copies = s.copies.filter((c) => c.project_id !== id);
       s.rules = s.rules.filter((r) => r.project_id !== id);
       s.runs = s.runs.filter((r) => r.project_id !== id);
       save(s);
@@ -1237,22 +1353,24 @@ export async function mockProjects(cmd: string, a: Record<string, any>): Promise
     case "project_remove_document": {
       const p = getProject(s, String(a.id));
       s.members = s.members.filter((m) => !(m.project_id === p.id && m.doc_id === a.docId));
+      s.copies = s.copies.filter((c) => !(c.project_id === p.id && c.document_id === a.docId));
       p.updated_at = now();
       refresh(s, p);
       save(s);
       changed([p.id]);
       return detail(s, p);
     }
-    case "project_set_status": {
+    case "project_sync_copies": {
       const p = getProject(s, String(a.id));
-      const status = a.status as ProjectStatus;
-      if (!["intake", "extracting", "validating", "supplement", "done"].includes(status)) throw err("invalid", "status_invalid");
-      p.status = status;
-      p.updated_at = now();
-      refresh(s, p);
+      let rewritten = 0;
+      for (const c of s.copies.filter((c) => c.project_id === p.id)) {
+        if (c.state !== "synced") rewritten += 1;
+        c.state = "synced";
+        c.synced_at = now();
+      }
       save(s);
       changed([p.id]);
-      return { ...p };
+      return { renamed: 0, rewritten, created: 0, modified: 0, missing: 0, removed: 0 };
     }
     case "project_templates":
       return templates(s);

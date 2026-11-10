@@ -405,6 +405,47 @@ impl KnowledgeSettings {
 }
 
 // ---------------------------------------------------------------------------
+// Document generation (0.3.0 item 4)
+// ---------------------------------------------------------------------------
+
+/// Reply-token caps of the 문서 생성 screen by engine backend (user decision 2026-11-10: GPU raised,
+/// CPU limited). A request's `max_tokens` is clamped to the active backend's cap; budgets above
+/// `generate::prompts::SPLIT_THRESHOLD_TOKENS` run the outline → sections flow.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GenerationSettings {
+    /// Cap when llama-server runs on CUDA / Vulkan.
+    pub max_tokens_gpu: u32,
+    /// Cap on a CPU-only engine (a "문서 한 통" takes hours there).
+    pub max_tokens_cpu: u32,
+}
+
+pub const GENERATION_GPU_CAP_MAX: u32 = 65_536;
+pub const GENERATION_CPU_CAP_MAX: u32 = 12_288;
+
+impl Default for GenerationSettings {
+    fn default() -> Self {
+        Self { max_tokens_gpu: 32_768, max_tokens_cpu: 8_192 }
+    }
+}
+
+impl GenerationSettings {
+    pub fn normalize(&mut self) {
+        self.max_tokens_gpu = self.max_tokens_gpu.clamp(1_200, GENERATION_GPU_CAP_MAX);
+        self.max_tokens_cpu = self.max_tokens_cpu.clamp(1_200, GENERATION_CPU_CAP_MAX);
+    }
+
+    /// The cap that applies to the running engine.
+    pub fn cap(&self, gpu: bool) -> u32 {
+        if gpu {
+            self.max_tokens_gpu
+        } else {
+            self.max_tokens_cpu
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Root
 // ---------------------------------------------------------------------------
 
@@ -423,6 +464,7 @@ pub struct AppSettings {
     pub privacy: PrivacySettings,
     pub notifications: NotificationSettings,
     pub knowledge: KnowledgeSettings,
+    pub generation: GenerationSettings,
     /// Action id → key chord (e.g. `"command_palette": "Ctrl+K"`).
     pub shortcuts: BTreeMap<String, String>,
     pub window: WindowState,
@@ -441,6 +483,7 @@ impl Default for AppSettings {
             privacy: PrivacySettings::default(),
             notifications: NotificationSettings::default(),
             knowledge: KnowledgeSettings::default(),
+            generation: GenerationSettings::default(),
             shortcuts: default_shortcuts(),
             window: WindowState::default(),
         }
@@ -590,6 +633,7 @@ impl AppSettings {
     /// Clamps numeric ranges, fills missing shortcuts, de-duplicates workspaces.
     pub fn normalize(&mut self) {
         self.knowledge.normalize();
+        self.generation.normalize();
         self.ui.scale_percent = self.ui.scale_percent.clamp(UI_SCALE_MIN, UI_SCALE_MAX);
         self.processing.render_dpi = self.processing.render_dpi.clamp(72, 600);
         self.processing.review_threshold = self.processing.review_threshold.clamp(0.0, 1.0);
