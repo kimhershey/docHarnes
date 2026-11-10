@@ -190,6 +190,8 @@ test.describe("P4 pipeline", () => {
     for (const name of ["견적서 양식.hwpx", "견적서-1p.jpg"]) await page.getByTestId(`doc-select-${await docId(page, name)}`).check();
     await page.getByTestId("library-register-form").click();
     await expect(page.getByTestId("form-register-dialog")).toBeVisible();
+    // 0.7.0 item 4: the dialog used to render one screen below the window (its `fixed` was merged away) — `toBeVisible` cannot tell.
+    await expect(page.getByTestId("form-register-dialog")).toBeInViewport();
     await expect(page.getByTestId("form-register-doc")).toContainText("견적서 양식.hwpx");
     await expect(page.getByTestId("form-register-doc")).toContainText("견적서-1p.jpg");
     await page.getByTestId("form-register-name").fill("견적서");
