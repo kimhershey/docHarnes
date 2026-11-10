@@ -637,7 +637,7 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
                     }
                 }
             }
-            Op::AddToProject { project, doc_ids } => {
+            Op::AddToProject { project, doc_ids, .. } => {
                 check_project(project, ctx, &at("project"), &mut issues);
                 doc_ids.retain(|d| !d.trim().is_empty());
                 if doc_ids.is_empty() && plan_scope_empty {

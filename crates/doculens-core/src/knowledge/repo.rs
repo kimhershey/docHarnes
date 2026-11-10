@@ -9,8 +9,8 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
 
 use super::{
     Answer, AnswerKind, AnswerSentence, Chunk, ChunkDraft, ChunkKind, Citation, Collection, CollectionInput,
-    GlossaryEntry, GlossaryInput, IndexStatus, SavedAnswer, SearchScope, VersionGroup, VersionInfo, VersionInput,
-    INDEX_VERSION,
+    CollectionKind, GlossaryEntry, GlossaryInput, IndexStatus, SavedAnswer, SearchScope, VersionGroup, VersionInfo,
+    VersionInput, INDEX_VERSION,
 };
 use crate::documents::{new_id, DocumentRecord, DocumentRole};
 
@@ -70,7 +70,7 @@ pub fn document_exists(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
 // Collections
 // ---------------------------------------------------------------------------
 
-const COLLECTION_COLS: &str = "c.id, c.name, c.description, c.color, c.active, c.watch_folder, c.created_at, c.updated_at, \
+const COLLECTION_COLS: &str = "c.id, c.name, c.description, c.color, c.active, c.kind, c.project_id, c.created_at, c.updated_at, \
     (SELECT COUNT(*) FROM collection_docs cd WHERE cd.collection_id = c.id), \
     (SELECT COALESCE(SUM(d.chunk_count), 0) FROM collection_docs cd JOIN documents d ON d.id = cd.document_id WHERE cd.collection_id = c.id)";
 
@@ -81,11 +81,12 @@ fn collection_from_row(r: &Row<'_>) -> rusqlite::Result<Collection> {
         description: r.get(2)?,
         color: r.get(3)?,
         active: r.get::<_, i64>(4)? != 0,
-        watch_folder: r.get(5)?,
-        created_at: parse_ts(r.get(6)?).unwrap_or_else(Utc::now),
-        updated_at: parse_ts(r.get(7)?).unwrap_or_else(Utc::now),
-        doc_count: r.get::<_, i64>(8)?.max(0) as u64,
-        chunk_count: r.get::<_, i64>(9)?.max(0) as u64,
+        kind: CollectionKind::parse(&r.get::<_, String>(5)?),
+        project_id: r.get(6)?,
+        created_at: parse_ts(r.get(7)?).unwrap_or_else(Utc::now),
+        updated_at: parse_ts(r.get(8)?).unwrap_or_else(Utc::now),
+        doc_count: r.get::<_, i64>(9)?.max(0) as u64,
+        chunk_count: r.get::<_, i64>(10)?.max(0) as u64,
     })
 }
 
@@ -101,7 +102,9 @@ pub fn get_collection(conn: &Connection, id: &str) -> rusqlite::Result<Option<Co
         .optional()
 }
 
-/// Inserts (no id) or updates a collection. Names are unique.
+/// Inserts (no id) or updates a collection. Names are unique. A new group with `project_id`
+/// becomes that project's reference group (kind `project`); on update the kind and project are
+/// kept as stored.
 pub fn save_collection(conn: &Connection, input: &CollectionInput) -> rusqlite::Result<Collection> {
     let name = input.name.trim();
     if name.is_empty() {
@@ -122,16 +125,19 @@ pub fn save_collection(conn: &Connection, input: &CollectionInput) -> rusqlite::
                 return Err(typed("collection_not_found"));
             }
             conn.execute(
-                "UPDATE collections SET name = ?2, description = ?3, color = ?4, active = ?5, watch_folder = ?6, updated_at = ?7 WHERE id = ?1",
-                params![id, name, input.description, input.color, input.active as i64, input.watch_folder, now],
+                "UPDATE collections SET name = ?2, description = ?3, color = ?4, active = ?5, updated_at = ?6 WHERE id = ?1",
+                params![id, name, input.description, input.color, input.active as i64, now],
             )?;
             id.clone()
         }
         None => {
             let id = new_id();
+            let project_id = input.project_id.as_deref().map(str::trim).filter(|p| !p.is_empty());
+            let kind = if project_id.is_some() { CollectionKind::Project } else { CollectionKind::Reference };
             conn.execute(
-                "INSERT INTO collections (id, name, description, color, active, watch_folder, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
-                params![id, name, input.description, input.color, input.active as i64, input.watch_folder, now],
+                "INSERT INTO collections (id, name, description, color, active, kind, project_id, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+                params![id, name, input.description, input.color, input.active as i64, kind.as_str(), project_id, now],
             )?;
             id
         }
@@ -141,6 +147,109 @@ pub fn save_collection(conn: &Connection, input: &CollectionInput) -> rusqlite::
 
 pub fn delete_collection(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
     Ok(conn.execute("DELETE FROM collections WHERE id = ?1", [id])? > 0)
+}
+
+/// The reference group of a project, if it has one.
+pub fn reference_group_of_project(conn: &Connection, project_id: &str) -> rusqlite::Result<Option<Collection>> {
+    conn.query_row(
+        &format!("SELECT {COLLECTION_COLS} FROM collections c WHERE c.project_id = ?1 ORDER BY c.created_at LIMIT 1"),
+        [project_id],
+        collection_from_row,
+    )
+    .optional()
+}
+
+/// A name for a project's reference group that no other collection uses (case-insensitive).
+fn free_group_name(conn: &Connection, wanted: &str, own_id: Option<&str>) -> rusqlite::Result<String> {
+    let base = wanted.trim();
+    let base = if base.is_empty() { "참고 자료" } else { base };
+    for n in 0u32..100 {
+        let candidate = if n == 0 { base.to_string() } else { format!("{base} ({})", n + 1) };
+        let taken: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM collections WHERE name = ?1 COLLATE NOCASE AND id <> COALESCE(?2, '')",
+            params![candidate, own_id],
+            |r| r.get(0),
+        )?;
+        if taken == 0 {
+            return Ok(candidate);
+        }
+    }
+    Ok(format!("{base} {}", new_id()))
+}
+
+/// The reference group of a project (0.5.0 plan A), created on first use and named after the
+/// project (`project_name`; a later rename follows through `sync_reference_group_name`).
+pub fn project_reference_group(
+    conn: &Connection,
+    project_id: &str,
+    project_name: &str,
+) -> rusqlite::Result<Collection> {
+    if let Some(group) = reference_group_of_project(conn, project_id)? {
+        return Ok(group);
+    }
+    let exists: i64 = conn.query_row("SELECT COUNT(*) FROM projects WHERE id = ?1", [project_id], |r| r.get(0))?;
+    if exists == 0 {
+        return Err(typed("project_not_found"));
+    }
+    let name = free_group_name(conn, project_name, None)?;
+    let id = new_id();
+    let now = now();
+    conn.execute(
+        "INSERT INTO collections (id, name, description, color, active, kind, project_id, created_at, updated_at) \
+         VALUES (?1, ?2, NULL, NULL, 1, 'project', ?3, ?4, ?4)",
+        params![id, name, project_id, now],
+    )?;
+    get_collection(conn, &id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
+}
+
+/// Renames a project's reference group after the project (no-op without a group or when the
+/// name is already in use elsewhere beyond the numbered fallback).
+pub fn sync_reference_group_name(conn: &Connection, project_id: &str, project_name: &str) -> rusqlite::Result<()> {
+    let Some(group) = reference_group_of_project(conn, project_id)? else {
+        return Ok(());
+    };
+    let name = free_group_name(conn, project_name, Some(&group.id))?;
+    if name != group.name {
+        conn.execute(
+            "UPDATE collections SET name = ?2, updated_at = ?3 WHERE id = ?1",
+            params![group.id, name, now()],
+        )?;
+    }
+    Ok(())
+}
+
+/// Removes the reference group(s) of a project (the documents stay in the library).
+pub fn delete_reference_groups_of_project(conn: &Connection, project_id: &str) -> rusqlite::Result<u32> {
+    Ok(conn.execute("DELETE FROM collections WHERE project_id = ?1", [project_id])? as u32)
+}
+
+/// Documents of the active groups of the 공통 참고 자료 (collections without a project).
+pub fn common_reference_doc_ids(conn: &Connection) -> rusqlite::Result<HashSet<String>> {
+    let mut st = conn.prepare(
+        "SELECT DISTINCT cd.document_id FROM collection_docs cd JOIN collections c ON c.id = cd.collection_id \
+         WHERE c.project_id IS NULL AND c.active = 1",
+    )?;
+    let out = st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(out)
+}
+
+/// Work documents of a project (`project_documents`, existing documents only).
+pub fn project_work_doc_ids(conn: &Connection, project_id: &str) -> rusqlite::Result<HashSet<String>> {
+    let mut st = conn.prepare(
+        "SELECT pd.document_id FROM project_documents pd JOIN documents d ON d.id = pd.document_id \
+         WHERE pd.project_id = ?1 AND d.deleted_at IS NULL",
+    )?;
+    let out = st.query_map([project_id], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(out)
+}
+
+/// Documents of a project's reference group (empty without a group).
+pub fn project_reference_doc_ids(conn: &Connection, project_id: &str) -> rusqlite::Result<HashSet<String>> {
+    let mut st = conn.prepare(
+        "SELECT cd.document_id FROM collection_docs cd JOIN collections c ON c.id = cd.collection_id WHERE c.project_id = ?1",
+    )?;
+    let out = st.query_map([project_id], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(out)
 }
 
 pub fn collection_doc_ids(conn: &Connection, id: &str) -> rusqlite::Result<Vec<String>> {
@@ -667,6 +776,10 @@ pub fn like_search(
 }
 
 /// Resolves a scope to the set of allowed document ids (`None` = no restriction).
+///
+/// A project scope (0.5.0 plan A) allows the project's work documents ∪ its reference group ∪ the
+/// active groups of the 공통 참고 자료; explicit `documents` stand in for the work documents. The
+/// project's own documents are wanted even when superseded or in an inactive group.
 pub fn scope_doc_ids(conn: &Connection, scope: &SearchScope) -> rusqlite::Result<Option<HashSet<String>>> {
     let mut restricted = false;
     let mut allowed: Option<HashSet<String>> = None;
@@ -674,7 +787,26 @@ pub fn scope_doc_ids(conn: &Connection, scope: &SearchScope) -> rusqlite::Result
         Some(a) => a.retain(|x| set.contains(x)),
         None => *allowed = Some(set),
     };
-    if !scope.documents.is_empty() {
+    // Documents the project itself holds (work + its reference group): exempt from the exclusions.
+    let mut project_own: HashSet<String> = HashSet::new();
+    if let Some(pid) = scope.project_id.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        restricted = true;
+        let known: i64 = conn.query_row("SELECT COUNT(*) FROM projects WHERE id = ?1", [pid], |r| r.get(0))?;
+        if known == 0 {
+            return Ok(Some(HashSet::new())); // an unknown project allows nothing (as the planner scope)
+        }
+        let reference = project_reference_doc_ids(conn, pid)?;
+        let work: HashSet<String> = if scope.documents.is_empty() {
+            project_work_doc_ids(conn, pid)?
+        } else {
+            scope.documents.iter().cloned().collect()
+        };
+        project_own.extend(work.iter().cloned());
+        project_own.extend(reference.iter().cloned());
+        let mut set = project_own.clone();
+        set.extend(common_reference_doc_ids(conn)?);
+        intersect(&mut allowed, set);
+    } else if !scope.documents.is_empty() {
         restricted = true;
         intersect(&mut allowed, scope.documents.iter().cloned().collect());
     }
@@ -721,8 +853,12 @@ pub fn scope_doc_ids(conn: &Connection, scope: &SearchScope) -> rusqlite::Result
         )?;
         excluded.extend(st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?);
     }
-    // Documents named explicitly are wanted even when superseded or in an inactive collection.
+    // Documents named explicitly (and a project's own) are wanted even when superseded or in an
+    // inactive collection.
     for d in &scope.documents {
+        excluded.remove(d);
+    }
+    for d in &project_own {
         excluded.remove(d);
     }
     if excluded.is_empty() {

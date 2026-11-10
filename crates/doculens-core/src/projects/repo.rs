@@ -867,6 +867,9 @@ pub fn save_project(conn: &Connection, input: &ProjectInput) -> rusqlite::Result
                     insert_rules(conn, id, &t.rules)?;
                 }
             }
+            if name != before.name {
+                crate::knowledge::repo::sync_reference_group_name(conn, id, &name)?;
+            }
             id.clone()
         }
         _ => {
@@ -907,7 +910,10 @@ fn template_of(conn: &Connection, id: Option<&str>) -> rusqlite::Result<Option<P
 }
 
 /// Deletes a project with its membership, rules and runs (documents stay in the library).
+/// Deletes a project with its memberships, rules, runs and its reference group (0.5.0); the
+/// documents stay in the library.
 pub fn delete_project(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
+    crate::knowledge::repo::delete_reference_groups_of_project(conn, id)?;
     Ok(conn.execute("DELETE FROM projects WHERE id = ?1", [id])? > 0)
 }
 

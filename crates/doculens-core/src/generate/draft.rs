@@ -309,16 +309,32 @@ fn text_source(title: Option<&str>, text: &str, ko: bool) -> Source {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn knowledge_sources(
-    deps: &GenerateDeps<'_>,
-    query: &str,
+/// Where a draft's knowledge searches look: the request's project (plan A) or everything.
+fn knowledge_scope(req: &DraftRequest) -> SearchScope {
+    match req.project_id.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) => SearchScope::project(p),
+        None => SearchScope::default(),
+    }
+}
+
+/// One knowledge lookup for a draft: where to look, what for, how many hits, and whether the
+/// user asked for it explicitly (`SourceRef::Knowledge`) or it backs the content.
+struct KnowledgeLookup<'a> {
+    scope: &'a SearchScope,
+    query: &'a str,
     limit: usize,
     explicit: bool,
+}
+
+fn knowledge_sources(
+    deps: &GenerateDeps<'_>,
+    lookup: KnowledgeLookup<'_>,
     excluded: &HashSet<&str>,
     seen: &mut HashSet<i64>,
     out: &mut Vec<Source>,
     notes: &mut Vec<String>,
 ) -> Result<()> {
+    let KnowledgeLookup { scope, query, limit, explicit } = lookup;
     let ko = deps.ko();
     let Some(kdeps): Option<&SearchDeps<'_>> = deps.knowledge.as_ref() else {
         let n = tr(
@@ -338,7 +354,7 @@ fn knowledge_sources(
     let req = SearchRequest {
         query: q.to_string(),
         mode: SearchMode::Hybrid,
-        scope: SearchScope::default(),
+        scope: scope.clone(),
         limit: (limit * 3) as u32,
         expand_glossary: true,
         per_document: 2,
@@ -387,6 +403,7 @@ fn knowledge_sources(
 /// Collects the numbered sources of a request (documents, aggregates, text, knowledge).
 pub fn gather_sources(deps: &GenerateDeps<'_>, req: &DraftRequest, notes: &mut Vec<String>) -> Result<Vec<Source>> {
     let ko = deps.ko();
+    let scope = knowledge_scope(req);
     let excluded: HashSet<&str> = req.excluded_sources.iter().map(String::as_str).collect();
     let mut seen: HashSet<i64> = HashSet::new();
     let mut out: Vec<Source> = Vec::new();
@@ -410,13 +427,15 @@ pub fn gather_sources(deps: &GenerateDeps<'_>, req: &DraftRequest, notes: &mut V
                 }
             }
             SourceRef::Knowledge { query } => {
-                knowledge_sources(deps, query, KNOWLEDGE_HITS_EXPLICIT, true, &excluded, &mut seen, &mut out, notes)?
+                let lookup = KnowledgeLookup { scope: &scope, query, limit: KNOWLEDGE_HITS_EXPLICIT, explicit: true };
+                knowledge_sources(deps, lookup, &excluded, &mut seen, &mut out, notes)?
             }
         }
     }
     if req.use_knowledge && !req.content.trim().is_empty() {
         let q = truncate(req.content.trim(), 300);
-        knowledge_sources(deps, &q, KNOWLEDGE_HITS_CONTENT, false, &excluded, &mut seen, &mut out, notes)?;
+        let lookup = KnowledgeLookup { scope: &scope, query: &q, limit: KNOWLEDGE_HITS_CONTENT, explicit: false };
+        knowledge_sources(deps, lookup, &excluded, &mut seen, &mut out, notes)?;
     }
     out.truncate(MAX_SOURCES);
     Ok(out)
@@ -1270,7 +1289,9 @@ fn draft_split(
         if req.use_knowledge && deps.knowledge.is_some() {
             let mut seen: HashSet<i64> = HashSet::new();
             let mut scratch = Vec::new();
-            let _ = knowledge_sources(deps, &plan.heading, 3, false, &excluded, &mut seen, &mut extra, &mut scratch);
+            let scope = knowledge_scope(req);
+            let lookup = KnowledgeLookup { scope: &scope, query: &plan.heading, limit: 3, explicit: false };
+            let _ = knowledge_sources(deps, lookup, &excluded, &mut seen, &mut extra, &mut scratch);
             extra.truncate(3);
         }
         let combined: Vec<&Source> = sources.iter().chain(extra.iter()).collect();

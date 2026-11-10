@@ -24,10 +24,11 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (7, include_str!("schema/0007_project_keywords.sql")),
     (8, include_str!("schema/0008_project_dates.sql")),
     (9, include_str!("schema/0009_page_text_history.sql")),
+    (10, include_str!("schema/0010_reference_groups.sql")),
 ];
 
 /// Schema version the current build expects.
-pub const SCHEMA_VERSION: u32 = 9;
+pub const SCHEMA_VERSION: u32 = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]

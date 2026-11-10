@@ -331,8 +331,19 @@ fn p6_rules_plan_drafts_projects_explanations_and_retention() {
     let r = planned("create project Acme renewal");
     assert!(matches!(&r.plan.operations[0], Op::CreateProject { name, .. } if name == "Acme renewal"), "{r:?}");
     let r = planned("선택한 문서를 한빛 심사 프로젝트에 추가해");
-    assert!(matches!(&r.plan.operations[0], Op::AddToProject { project: Some(p), .. } if p == "p-hanbit"), "{r:?}");
+    assert!(
+        matches!(&r.plan.operations[0], Op::AddToProject { project: Some(p), as_reference: false, .. } if p == "p-hanbit"),
+        "{r:?}"
+    );
     assert_eq!(r.plan.scope.doc_ids, vec!["d1a2".to_string()]);
+    // 0.5.0: "참고 자료로 / 지침으로 넣어줘" → the project's reference group.
+    let r = planned("선택한 문서를 한빛 심사 프로젝트에 참고 자료로 넣어줘");
+    assert!(
+        matches!(&r.plan.operations[0], Op::AddToProject { project: Some(p), as_reference: true, .. } if p == "p-hanbit"),
+        "{r:?}"
+    );
+    let r = planned("add these to the 한빛 심사 project as reference material");
+    assert!(matches!(&r.plan.operations[0], Op::AddToProject { as_reference: true, .. }), "{r:?}");
     let r = planned("정합성 검사 돌려줘");
     assert!(
         matches!(&r.plan.operations[0], Op::CheckConsistency { project: Some(p), .. } if p == "p-hanbit"),

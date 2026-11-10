@@ -8,7 +8,9 @@ use serde::Serialize;
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager};
 
+use doculens_core::documents::{repo as docs, DocumentRole};
 use doculens_core::generate::OutputFormat;
+use doculens_core::knowledge::{repo as knowledge_repo, Collection};
 use doculens_core::pipeline::vlm::Vlm;
 use doculens_core::projects::classify::{ApplyResult, Assignment, ClassifyRequest, ClassifyResult};
 use doculens_core::projects::copies::SyncReport;
@@ -18,7 +20,7 @@ use doculens_core::projects::{
 };
 
 use crate::state::{AppState, UiError, UiResult};
-use crate::{generate_bridge, pipeline_bridge};
+use crate::{docs_bridge, generate_bridge, knowledge_bridge, pipeline_bridge};
 
 pub const PROJECTS_EVENT: &str = "projects://changed";
 
@@ -58,6 +60,8 @@ pub fn update(app: &AppHandle, input: ProjectInput) -> UiResult<Project> {
     let pctx = pipeline_bridge::context(app)?;
     let project = pctx.db().with(|c| repo::save_project(c, &input))?;
     emit(app, vec![project.id.clone()]);
+    // A rename renames the project's reference group (0.5.0).
+    knowledge_bridge::emit_changed(app, "collections", Vec::new());
     Ok(project)
 }
 
@@ -65,11 +69,30 @@ pub fn delete(app: &AppHandle, id: &str) -> UiResult<bool> {
     let pctx = pipeline_bridge::context(app)?;
     // The project's tracked copies (files in its folder) go with it; the originals stay.
     projects::copies::remove_project_copies(pctx.db(), &pctx.docs.paths, id)?;
+    let group = pctx.db().with(|c| knowledge_repo::reference_group_of_project(c, id))?;
     let ok = pctx.db().with(|c| repo::delete_project(c, id))?;
     if ok {
         emit(app, vec![id.to_string()]);
+        if let Some(g) = group {
+            knowledge_bridge::emit_changed(app, "collections", vec![g.id]); // its reference group went with it
+        }
     }
     Ok(ok)
+}
+
+/// The project's reference group (참고 자료 묶음; 0.5.0 plan A), created on first use.
+pub fn reference_group(app: &AppHandle, id: &str) -> UiResult<Collection> {
+    let pctx = pipeline_bridge::context(app)?;
+    let (group, created) = pctx.db().with(|c| {
+        let existing = knowledge_repo::reference_group_of_project(c, id)?;
+        let name = repo::get_project(c, id)?.map(|p| p.name).unwrap_or_default();
+        let group = knowledge_repo::project_reference_group(c, id, &name)?;
+        Ok((group, existing.is_none()))
+    })?;
+    if created {
+        knowledge_bridge::emit_changed(app, "collections", vec![group.id.clone()]);
+    }
+    Ok(group)
 }
 
 pub fn get(app: &AppHandle, id: &str) -> UiResult<ProjectDetail> {
@@ -77,10 +100,26 @@ pub fn get(app: &AppHandle, id: &str) -> UiResult<ProjectDetail> {
     projects::detail(pctx.db(), id, language(app)).map_err(UiError::from)
 }
 
-pub fn add_documents(app: &AppHandle, id: &str, doc_ids: &[String]) -> UiResult<ProjectDetail> {
+/// Puts documents in a project: as work documents (tracked copies, plan §6) or — `as_reference` —
+/// in its reference group with role `knowledge` (0.5.0 plan A).
+pub fn add_documents(app: &AppHandle, id: &str, doc_ids: &[String], as_reference: bool) -> UiResult<ProjectDetail> {
     let pctx = pipeline_bridge::context(app)?;
-    // A document that already belongs to another project gets a tracked copy in this one (plan §6).
-    projects::copies::add_documents(pctx.db(), &pctx.docs.paths, id, doc_ids, language(app))?;
+    if as_reference {
+        let group_id = pctx.db().with_tx(|tx| {
+            let name = repo::get_project(tx, id)?.map(|p| p.name).unwrap_or_default();
+            let group = knowledge_repo::project_reference_group(tx, id, &name)?;
+            knowledge_repo::add_docs_to_collection(tx, &group.id, doc_ids)?;
+            for d in doc_ids {
+                docs::set_role(tx, d, DocumentRole::Knowledge)?;
+            }
+            Ok(group.id)
+        })?;
+        knowledge_bridge::emit_changed(app, "collections", vec![group_id]);
+        docs_bridge::emit_changed(app, "updated", doc_ids.to_vec());
+    } else {
+        // A document that already belongs to another project gets a tracked copy in this one (plan §6).
+        projects::copies::add_documents(pctx.db(), &pctx.docs.paths, id, doc_ids, language(app))?;
+    }
     emit(app, vec![id.to_string()]);
     get(app, id)
 }
