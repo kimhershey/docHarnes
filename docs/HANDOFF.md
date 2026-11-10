@@ -1442,6 +1442,33 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 - **문서**: RUN-GUIDE 8번·v1.1 예시, 설계 §3.13 템플릿 목록·NL 예시, 체크리스트, 계획 §1 진행, CLAUDE.md 레이아웃.
 
 
+### 0.3.0 4차 — 양식 등록을 문서 1~N개의 자동 스키마 도출로 (2026-11-10; 계획 §2, 결정 3 "편집 후 저장 버튼 · 이름 중복은 팝업 · 같은 이름이면 저장 비활성"; 병렬 에이전트)
+
+- **코어 `pipeline/forms.rs`**: `discover(deps, vlm, docs, hint, cancel, progress)` — 샘플 문서마다 `discover_document`(오피스 형식은 표 구조,
+  스캔·PDF는 모델이 첫 쪽 + 표가 있는 쪽 최대 3장을 쪽마다 읽어 병합, 모델이 없거나 실패하면 텍스트 규칙으로 대체하고 메모에 남김)로 초안을
+  만들고 `merge_drafts`로 하나로 합친다: 라벨의 표준 키(`key_from_label`)로 필드를 맞추고 ⌈n/2⌉개 이상의 샘플에 나온 필드만 채택, 빈도 → 첫
+  등장 순 정렬, 라벨·종류는 다수결(동률이면 string보다 구체적인 종류), enum 선택지·표 열은 합집합(≤ 12·≤ 20), `required`는 모든 샘플에 있을
+  때만, 이름은 힌트 → 다수결, 슬러그는 `slug_for_name`. `infer_rules`는 합계·세액·기간·퍼센트·테스트 건수 규칙을 `KNOWN_RULES` 안에서만 붙인다.
+  결과 `DiscoveryOutcome { kind: "schema_discovery", draft, documents[], merged_fields, dropped_fields }`는 저장되지 않고 편집기로 간다. 실패한
+  샘플은 다른 샘플이 성공했으면 `source: "failed"`로 보고만 한다. `SchemaDraft.sample_document_ids`, `register`가 샘플 문서 전부를 `role=form`·
+  `doc_type=slug`로 표시.
+- **이름 중복 안전장치 `pipeline/repo.rs`**: `name_exists(name, excluding)`(대소문자·공백·구두점 무시), `free_name`("이름 (2)"…), `save_schema`는
+  중복이면 `schema_name_duplicate`로 거부(내장 샘플 이름 포함 — 사용자 양식 "견적서"는 "견적서 (2)"가 된다).
+- **작업화**: `JobSpec::SchemaDiscovery { doc_ids, name_hint }`(엔진 레인) → 셸 `pipeline_bridge::schema_discovery_job` / `run_schema_discovery`
+  (스캔 샘플이 있을 때만 비전 모델 자동 로드, 실패 시 텍스트 규칙; `batch_begin`/`checkpoint`; 진행 "<제목> · discover (p/q)"), 명령
+  `pipeline_schema_discover`·`pipeline_schema_name_exists`, `JobKind::SchemaDiscovery`.
+- **플래너**: `register_form` op에 `doc_ids[]`(규칙은 선택 문서 전체를 넣음, 미리보기 "문서 n개에서 필드를 도출·병합…"), UI 실행은
+  `/schemas?register=id1,id2&name=`.
+- **프런트**: 양식 등록 대화상자가 체크 목록(문서 여러 개·드롭·파일 가져오기)·이름 힌트·작업 진행 카드(진행률·취소)로 바뀌고 결과 초안을 편집기에
+  "저장되지 않은 변경"으로 연다. 편집기 위에 도출 요약(`schema-discovery-summary`: 문서별 출처(표 구조/모델/텍스트 규칙/실패)·필드 수). 이름
+  입력마다 중복 검사(250 ms) → 중복이면 저장 버튼 비활성 + 입력란 아래 오류, 새 초안의 이름이 이미 있으면 팝업이 "이름 (2)"를 제안
+  (`schema-name-taken`). 작업 화면 결과 카드 "편집기에서 열기"(`useSchemasStore` 핸드오버). 라이브러리 일괄 바 "선택 문서로 양식 만들기"(문서 1개
+  이상). 모의 백엔드가 같은 병합·중복 규칙을 흉내(`mergeDrafts`·`inferRules`·`schemaDiscoveryWorker`). 옛 단일 문서 명령 `pipeline_form_derive`는
+  남겨 두되 UI는 쓰지 않음.
+- **검증(에이전트 환경)**: 코어 단위 테스트 3건 추가(`forms::tests` 병합·규칙 2, `pipeline::tests::schema_discovery_merges_samples_and_the_name_guard_refuses_duplicates`),
+  vitest `mock-schema-discovery.test.ts` 4건, Playwright `pipeline.spec` 양식 등록 구간 재작성(샘플 2개 → 작업 → 병합 10필드 → "견적서 (2)" 팝업
+  → 저장 → 두 카드 모두 견적서)·`dnd.spec` 그대로 — 통합 검증 수치는 아래 표.
+
 ### 0.3.0 5차 — 문서 생성 토큰 예산 + 개요→절별 분할 생성 (2026-11-10; 계획 §4, 결정 4 "GPU 상향·CPU 제한")
 
 - **코어 `generate/`**: `DraftRequest.max_tokens: Option<u32>`(없으면 길이 프리셋 1,200/1,800/2,600), `prompts::reply_budget`·`split_needed`
@@ -1468,6 +1495,28 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 - **보류**: 실시간 스트리밍 미리보기(`generate://delta`, 계획의 2차 선택), 생성 중 컨텍스트 32K 재기동(분할이 더 안정적이라 두지 않음),
   tok/s 실측 기반 예상 시간(현재 상수).
 - **문서**: RUN-GUIDE 8번 토큰 예산 문단, 체크리스트(GPU·CPU), 계획 §4 진행.
+
+
+### 0.3.0 6차 — 뷰어 글자 수정 이력 + Ctrl+Z 범위 분리 (2026-11-10; 계획 §10 7번, 사용자 보고 "되돌리기가 동작하지 않음"; 병렬 에이전트)
+
+- **DB 마이그레이션 0009** `page_text_history`(document_id·page_no, `kind` edit|revert|redo, `source` layer|add|manual, `target_id`, 이전/이후
+  텍스트·레이아웃 JSON·출처, `edited_at`; 문서 삭제 시 CASCADE, `SCHEMA_VERSION = 9`). 쪽마다 최근 50건 유지, 유지보수 작업이 저널 보존 기간으로
+  함께 삭제(`purge_page_text_history_before`, 집계는 "저널"에 포함).
+- **코어 `documents/import.rs`**: `edit_words`·`add_words`·새 `set_page_text`가 수정 전후 상태(텍스트·레이아웃·출처)를 기록. `undo_page_text`
+  (가장 최근 적용 수정 되돌림)·`redo_page_text`(가장 오래된 되돌린 수정 재적용)·`revert_page_text_to`(이력 항목과 그 뒤 수정을 모두 되돌림)·
+  `page_text_history`(쪽/문서 단위, 바뀐 단어 요약 before → after, `can_undo`/`can_redo`). 되돌리면 `text_source`도 원래 값(layer/ocr)으로 복귀,
+  되돌린 뒤 새 수정은 재실행 분기 삭제(편집기 규칙). 원본 파일 불변. 적용된 수정은 항상 접두 구간이라 되돌리기 = 최신 적용 수정, 다시 실행 = 가장
+  오래된 되돌린 수정.
+- **셸 명령** `documents_page_text_history`, `documents_undo_page_text`, `documents_redo_page_text`, `documents_revert_page_text`
+  (`documents://changed` + 지식 재색인); `documents_set_page_text`도 이력 기록.
+- **UI**: 뷰어에서 Ctrl+Z는 **현재 쪽에 되돌릴 글자 수정이 있으면 그것을**, 없으면 종전처럼 파일 저널을 되돌림(Ctrl+Shift+Z·설정의 다시 실행
+  단축키 = 재적용; 전역 단축키 훅은 화면이 처리한 키(`defaultPrevented`)를 건너뜀). 레이어 바에 "수정 n건" 배지 + 되돌리기/다시 실행 버튼
+  (`viewer-text-edits-count`·`viewer-text-undo`·`viewer-text-redo`), 이력 탭에 "글자 수정" 목록(쪽 · 전 → 후 · 출처 · 시각, 되돌려짐 배지,
+  "이 수정 되돌리기" `history-text-revert`). 토스트 "글자 수정을 되돌렸습니다 / 다시 적용했습니다". 모의 백엔드 `mock-text-history.ts`(같은 규칙의
+  TS 트윈) + `MockDoc.text_history`.
+- **검증(에이전트 환경)**: Rust `documents::import` 1건 추가(기록·되돌리기·재실행·출처 복귀·분기 삭제·revert_to·상한 50·전체 목록·purge) —
+  `cargo test -p doculens-core --lib -- documents:: knowledge:: db::` 111 통과; Playwright `documents.spec` 5/5(수정 → Ctrl+Z → Ctrl+Shift+Z →
+  이력 탭 2건 → "이 수정 되돌리기"). 통합 검증 수치는 아래 표.
 
 ### 테스트·검증
 

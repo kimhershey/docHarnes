@@ -108,27 +108,41 @@ test.describe("P6 projects", () => {
     await expect(page.getByTestId("generate-table-findings").locator('[data-testid^="generate-row-findings-"]')).toHaveCount(1);
     await expect(page.getByTestId("generate-field-input-project_name")).toHaveValue("한빛 포털 구축");
 
-    // Kanban: the project moved to 보완요청 with the request; 완료 with an open mismatch is confirmed first (counts shown).
+    // Phases (0.3.0 §5): no manual status — the dates decide. Started today → 진행중, no badge.
     await page.getByTestId("nav-projects").click();
     const kanbanCard = page.locator('[data-testid^="project-card-"][data-project-name="한빛 포털 구축"]');
-    await expect(kanbanCard).toHaveAttribute("data-project-status", "supplement");
-    await expect(page.getByTestId("kanban-supplement")).toContainText("한빛 포털 구축");
-    await kanbanCard.getByTestId("project-move-next").click();
-    const confirm = page.getByTestId("confirm-dialog");
-    await expect(confirm).toBeVisible();
-    await expect(confirm).toContainText(tpl(ko.projects.card.done_confirm, { mismatch: 1, missing: 0 }));
-    await page.getByTestId("confirm-cancel").click();
-    await expect(kanbanCard).toHaveAttribute("data-project-status", "supplement");
-    await kanbanCard.getByTestId("project-move-next").click();
-    await page.getByTestId("confirm-ok").click();
-    await expect(kanbanCard).toHaveAttribute("data-project-status", "done", { timeout: 10_000 });
-    await expect(page.getByTestId("kanban-done")).toContainText("한빛 포털 구축");
-    await expect(page.getByTestId("toaster")).toContainText(tpl(ko.projects.card.moved, { name: "한빛 포털 구축", status: ko.projects.status.done }));
+    await expect(kanbanCard).toHaveAttribute("data-project-phase", "active");
+    await expect(kanbanCard).toHaveAttribute("data-project-overdue", "false");
+    await expect(page.getByTestId("kanban-active")).toContainText("한빛 포털 구축");
     await expect(kanbanCard.getByTestId("project-verdicts")).toContainText(tpl(ko.projects.card.verdicts, { pass: 4, mismatch: 1, undetermined: 0 }));
-    // The previous step needs no confirmation; the buttons name the project and the step.
-    await expect(kanbanCard.getByTestId("project-move-prev")).toHaveAttribute("aria-label", tpl(ko.projects.card.move_prev_named, { name: "한빛 포털 구축", status: ko.projects.status.supplement }));
-    await kanbanCard.getByTestId("project-move-prev").click();
-    await expect(kanbanCard).toHaveAttribute("data-project-status", "supplement", { timeout: 10_000 });
+    await expect(kanbanCard.getByTestId("project-end-date")).toHaveText(ko.projects.card.open_ended);
+    // An end date in the past completes the project; the open mismatch raises the 기한 경과 badge.
+    await kanbanCard.getByTestId("project-open").click();
+    await expect(page.getByTestId("page-project")).toBeVisible();
+    await expect(page.getByTestId("page-project").getByTestId("project-phase")).toHaveAttribute("data-phase", "active");
+    await expect(page.getByTestId("page-project").getByTestId("project-overdue")).toHaveCount(0);
+    await page.getByTestId("project-end").fill("2026-01-31");
+    await expect(page.getByTestId("toaster")).toContainText(ko.projects.detail.dates_saved);
+    await expect(page.getByTestId("page-project")).toHaveAttribute("data-project-phase", "done", { timeout: 10_000 });
+    await expect(page.getByTestId("page-project").getByTestId("project-phase")).toHaveText(ko.projects.phase.done);
+    await expect(page.getByTestId("page-project").getByTestId("project-overdue")).toHaveText(ko.projects.badge.overdue);
+    await page.getByTestId("project-back").click();
+    await expect(kanbanCard).toHaveAttribute("data-project-phase", "done");
+    await expect(kanbanCard).toHaveAttribute("data-project-overdue", "true");
+    await expect(page.getByTestId("kanban-done")).toContainText("한빛 포털 구축");
+    await expect(kanbanCard.getByTestId("project-end-date")).toHaveText(tpl(ko.projects.card.end, { date: "2026-01-31" }));
+    // 다시 열기 clears the end date → 진행중 again, badge gone; a future start → 진행예정.
+    await kanbanCard.getByTestId("project-open").click();
+    await page.getByTestId("project-reopen").click();
+    await expect(page.getByTestId("page-project")).toHaveAttribute("data-project-phase", "active", { timeout: 10_000 });
+    await expect(page.getByTestId("page-project").getByTestId("project-overdue")).toHaveCount(0);
+    await expect(page.getByTestId("project-end")).toHaveValue("");
+    await page.getByTestId("project-start").fill("2099-01-01");
+    await expect(page.getByTestId("page-project")).toHaveAttribute("data-project-phase", "planned", { timeout: 10_000 });
+    await page.getByTestId("project-start").fill("2026-01-01");
+    await expect(page.getByTestId("page-project")).toHaveAttribute("data-project-phase", "active", { timeout: 10_000 });
+    await page.getByTestId("project-back").click();
+    await expect(page.getByTestId("kanban-active")).toContainText("한빛 포털 구축");
     // List view shows the same project; the name is a keyboard-reachable control.
     await page.getByTestId("projects-view-list").click();
     await expect(page.getByTestId("projects-table")).toContainText("2026-001");
@@ -145,6 +159,65 @@ test.describe("P6 projects", () => {
     await rules.last().getByTestId("rule-delete").click();
     await expect(rules).toHaveCount(4, { timeout: 10_000 });
     await expect(page.getByTestId("toaster")).toContainText(ko.projects.rules.deleted);
+  });
+
+  test("shared document: the second project keeps a tracked copy under its folder, dropped with the membership", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\요구사항정의서-v1.2.pdf"], { autoLevel: "none" });
+    const srs = await docId(page, "요구사항정의서-v1.2.pdf");
+
+    // Project A owns the original: no copy row.
+    await page.getByTestId("nav-projects").click();
+    await page.getByTestId("projects-new").click();
+    await page.getByTestId("project-name").fill("A 사업");
+    await page.getByTestId("project-submit").click();
+    await expect(page.getByTestId("page-project")).toBeVisible();
+    await page.getByTestId("project-add-documents").click();
+    await page.getByTestId(`project-add-doc-${srs}`).check();
+    await page.getByTestId("project-add-done").click();
+    const rowA = page.getByTestId(`project-doc-${srs}`);
+    await expect(rowA).toHaveAttribute("data-copy-state", "original");
+    await expect(rowA.getByTestId("project-doc-path")).toHaveText(/요구사항정의서-v1\.2\.pdf$/);
+    await expect(rowA.getByTestId("project-doc-copy")).toHaveCount(0);
+    await page.getByTestId("project-back").click();
+
+    // Project B with its own folder template (정리·내보내기 tab): the same document gets a copy there.
+    await page.getByTestId("projects-new").click();
+    await page.getByTestId("project-name").fill("B 사업");
+    await page.getByTestId("project-submit").click();
+    await expect(page.getByTestId("page-project")).toBeVisible();
+    await page.getByTestId("project-tab-settings").click();
+    await expect(page.getByTestId("project-settings-folder")).toHaveAttribute("placeholder", "documents/{{project}}/{{doc_type}}");
+    await expect(page.getByTestId("project-settings-copies")).toHaveAttribute("aria-checked", "true");
+    await page.getByTestId("project-settings-folder").fill("archive/{{project}}/{{doc_type}}");
+    await page.getByTestId("project-settings-save").click();
+    await expect(page.getByTestId("toaster")).toContainText(ko.projects.settings.saved);
+    await page.getByTestId("project-tab-documents").click();
+    await page.getByTestId("project-add-documents").click();
+    await page.getByTestId(`project-add-doc-${srs}`).check();
+    await page.getByTestId("project-add-done").click();
+    const rowB = page.getByTestId(`project-doc-${srs}`);
+    await expect(rowB).toHaveAttribute("data-copy-state", "synced");
+    await expect(rowB.getByTestId("project-doc-copy")).toHaveText(ko.projects.documents.copy.synced);
+    await expect(rowB.getByTestId("project-doc-path")).toHaveText(`archive/B 사업/${ko.documents.doc_types.srs}/요구사항정의서-v1.2.pdf`);
+    // 다시 동기화 reports what it did; removing the membership drops the copy and the original stays in A.
+    await page.getByTestId("project-resync-copies").click();
+    await expect(page.getByTestId("toaster")).toContainText(tpl(ko.projects.documents.copy.resynced, { rewritten: 0, renamed: 0, created: 0 }));
+    await rowB.getByTestId("project-doc-remove").click();
+    await expect(rowB).toHaveCount(0, { timeout: 10_000 });
+    await page.getByTestId("project-back").click();
+    const cardA = page.locator('[data-testid^="project-card-"][data-project-name="A 사업"]');
+    await expect(cardA.getByText(tpl(ko.projects.card.documents, { count: 1 }))).toBeVisible();
+    await cardA.getByTestId("project-open").click();
+    await expect(page.getByTestId(`project-doc-${srs}`)).toHaveAttribute("data-copy-state", "original");
+    // Adding it to B again recreates the copy (the original is unchanged).
+    await page.getByTestId("project-back").click();
+    await page.locator('[data-testid^="project-card-"][data-project-name="B 사업"]').getByTestId("project-open").click();
+    await page.getByTestId("project-add-documents").click();
+    await page.getByTestId(`project-add-doc-${srs}`).check();
+    await page.getByTestId("project-add-done").click();
+    await expect(page.getByTestId(`project-doc-${srs}`)).toHaveAttribute("data-copy-state", "synced");
   });
 
   test("auto-classify: keywords and names suggest projects, the user adjusts the preview, apply assigns", async ({ page }) => {

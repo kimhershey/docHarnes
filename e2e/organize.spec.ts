@@ -120,6 +120,60 @@ test.describe("P5 organise / export", () => {
     await expect(page.getByTestId("export-path")).toHaveValue(/^exports\/\d{4}-\d{2}-\d{2}_/);
   });
 
+  test("organise by project: '이 프로젝트 정리' scopes the screen to the project and fills the {{project}} templates", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    const { receipt, invoice } = await importAndProcessReceipt(page);
+
+    // A project holding the estimate; its 정리·내보내기 tab opens the organise screen scoped to it.
+    await page.getByTestId("nav-projects").click();
+    await page.getByTestId("projects-new").click();
+    await page.getByTestId("project-name").fill("한빛 포털 구축");
+    await page.getByTestId("project-intake").fill("2026-001");
+    await page.getByTestId("project-submit").click();
+    await expect(page.getByTestId("page-project")).toBeVisible();
+    await page.getByTestId("project-add-documents").click();
+    await page.getByTestId(`project-add-doc-${receipt}`).check();
+    await page.getByTestId("project-add-done").click();
+    await expect(page.getByTestId(`project-doc-${receipt}`)).toBeVisible();
+    await page.getByTestId("project-tab-settings").click();
+    await page.getByTestId("project-organize-now").click();
+    await expect(page.getByTestId("page-organize")).toBeVisible();
+    await expect(page.getByTestId("organize-scope-mode")).toContainText(tpl(ko.organize.scope.project, { name: "한빛 포털 구축" }));
+    await expect(page.getByTestId("organize-project-settings")).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByTestId("organize-folder-template")).toHaveValue("documents/{{project}}/{{doc_type}}");
+    await expect(page.getByTestId("organize-example")).toContainText("documents/한빛 포털 구축/견적서/");
+
+    // Preview: only the member moves, under the project folder; the contract outside the project is not listed.
+    await page.getByTestId("organize-only-reviewed").click();
+    await page.getByTestId("organize-name-template").fill("{{project_code}}_{{project_phase}}_{{title}}");
+    await page.getByTestId("organize-preview").click();
+    await expect(page.getByTestId("organize-preview-table")).toBeVisible();
+    const row = page.getByTestId(`organize-row-${receipt}`);
+    await expect(row).toHaveAttribute("data-row-status", "move");
+    await expect(row).toContainText(`documents/한빛 포털 구축/견적서/2026-001_${ko.projects.phase.active}_`);
+    await expect(page.getByTestId(`organize-row-${invoice}`)).toHaveCount(0);
+    await expect(page.getByTestId("organize-summary")).toContainText(tpl(ko.organize.summary, { moves: 1, held: 0, unchanged: 0, needs_review: 0 }));
+
+    // The 프로젝트별 preset is offered for any scope; back on the whole library the contract has no project → 미상.
+    await page.getByTestId("organize-project-settings").click();
+    await page.getByTestId("organize-scope-mode").click();
+    await page.getByRole("option", { name: ko.organize.scope.all }).click();
+    await page.getByTestId("organize-folder-preset").click();
+    await page.getByRole("option", { name: ko.organize.folder.presets.project }).click();
+    await expect(page.getByTestId("organize-folder-template")).toHaveValue("documents/{{project}}/{{doc_type}}");
+    await page.getByTestId("organize-preview").click();
+    await expect(page.getByTestId(`organize-row-${invoice}`)).toContainText("documents/미상/");
+    await expect(page.getByTestId(`organize-row-${receipt}`)).toContainText("documents/한빛 포털 구축/견적서/");
+
+    // Run → the estimate lands under the project folder and the move is journaled.
+    await page.getByTestId("organize-run").click();
+    await page.getByTestId("organize-confirm").click();
+    await expect(page.getByTestId("organize-result")).toContainText(tplPattern(ko.organize.done, { failed: 0 }), { timeout: 15_000 });
+    await page.getByTestId("nav-library").click();
+    await expect(card(page, "견적서-1p.jpg")).toBeVisible();
+  });
+
   test("library: the aggregate bar sums the selection and the bulk-bar shortcut carries it to 정리", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
