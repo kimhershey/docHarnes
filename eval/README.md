@@ -58,10 +58,10 @@ cargo run -p doculens-eval -- planner --golden eval/golden/planner.json \
 #### 골든 항목 형식과 판정 규칙
 
 ```json
-{ "id": "ko-03", "category": "ko", "text": "지난달 영수증 합계 얼마야?",
+{ "id": "ko-03", "category": "ko", "text": "지난달 견적서 합계 얼마야?",
   "expected": { "intent": "aggregate", "ops": ["aggregate"],
-                "params": [ { "fn": "sum", "field": "total" } ],
-                "scope":  { "filter": { "doc_type": "receipt", "date_from": "2026-10-01", "date_to": "2026-10-31" } } },
+                "params": [ { "fn": "sum", "field": "grand_total" } ],
+                "scope":  { "filter": { "doc_type": "estimate", "date_from": "2026-10-01", "date_to": "2026-10-31" } } },
   "note": "설계 예시 3" }
 ```
 
@@ -72,7 +72,7 @@ cargo run -p doculens-eval -- planner --golden eval/golden/planner.json \
 - 항목에 `"context": { … }`를 주면 그 항목만 공용 컨텍스트의 **최상위 키를 덮어써서** 실행합니다(예: 비교 명령에
   `{"selected_doc_ids": ["d1a2", "d7f3"]}` — 선택이 없는 컨텍스트에서는 "2건 이상 선택하세요" 되묻기가 정답이므로).
 - 기대값은 **규칙 출력이 아니라 사람이 기대하는 플랜**입니다. 그래서 규칙 경로의 정확도는 100%가 아니며, 불일치 목록이 규칙
-  개선 작업 목록이 됩니다. 일부 항목은 의도적으로 경계 사례입니다(`ko-32` 열린 영수증에 대한 질문은 집계가 아니라 답변,
+  개선 작업 목록이 됩니다. 일부 항목은 의도적으로 경계 사례입니다(`ko-32` 열린 견적서에 대한 질문은 집계가 아니라 답변,
   `ko-19` 잡담은 `noop`, `ko-70` 대상 없는 삭제는 `clarify`).
 - **원인 분류**(결과 JSON `cause`, 보고서 묶음): `no_rule` 규칙 없음(모델 필요) · `rule_clarified` 규칙이 되묻기로 후퇴 ·
   `over_interpretation` 과잉 해석(되묻기·무시가 정답) · `wrong_ops` 의도·연산 오판 · `params` 파라미터 누락·오류 ·

@@ -146,7 +146,7 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
     case "search":
       return joinParts([`'${op.query}'`, op.mode ? t(`search.mode.${op.mode}`) : null, op.top_k ? pt("top_k", { count: op.top_k }) : null]);
     case "answer":
-      return truncate(op.question, 80);
+      return joinParts([truncate(op.question, 80), op.knowledge === false ? pt("knowledge_text_only") : null]);
     case "summarize":
       return joinParts([op.target ? pt(op.target) : null, op.length ? pt(op.length) : null]);
     case "aggregate":

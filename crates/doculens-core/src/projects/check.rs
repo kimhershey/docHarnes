@@ -253,12 +253,24 @@ fn name_like(key: &str) -> bool {
 /// tax-invoice vocabulary still matches a user schema).
 fn aliases(key: &str) -> &'static [&'static str] {
     const GROUPS: &[&[&str]] = &[
-        &["grand_total", "total", "total_amount", "amount", "contract_amount", "sum_total"],
+        &["grand_total", "total", "total_amount", "amount", "contract_amount", "sum_total", "price", "budget"],
         &["supply_total", "supply_amount"],
         &["tax_total", "tax_amount", "vat"],
         &["registration_no", "brn", "business_number", "business_no"],
         &["company_name", "name", "store_name", "vendor", "company"],
-        &["issue_date", "date", "doc_date", "datetime", "contract_date", "application_date"],
+        &[
+            "issue_date",
+            "date",
+            "doc_date",
+            "datetime",
+            "contract_date",
+            "application_date",
+            "meeting_date",
+            "report_date",
+            "test_date",
+            "acceptance_date",
+            "request_date",
+        ],
         &["signed", "signature", "seal"],
     ];
     GROUPS.iter().find(|g| g.contains(&key)).copied().unwrap_or(&[])

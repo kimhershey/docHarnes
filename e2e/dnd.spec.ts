@@ -103,10 +103,10 @@ test.describe("document drag and drop", () => {
   });
 
   test("a card dropped on the 문서 생성 entry is quoted as a draft source", async ({ page }) => {
-    const [id] = await libraryWithDocs(page, ["C:\\scan\\세금계산서.pdf"]);
+    const [id] = await libraryWithDocs(page, ["C:\\scan\\개발계약서.pdf"]);
     await dragTo(page, page.getByTestId(`doc-card-${id}`), page.getByTestId("nav-generate"));
     await expect(page.getByTestId("page-generate")).toBeVisible();
-    await expect(page.getByTestId("generate-sources")).toContainText("세금계산서.pdf");
+    await expect(page.getByTestId("generate-sources")).toContainText("개발계약서.pdf");
   });
 
   test("a card dropped on the 양식 screen itself (after spring-loading) opens 양식 등록 on that document", async ({ page }) => {

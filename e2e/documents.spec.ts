@@ -18,8 +18,8 @@ test.describe("P2 documents", () => {
     await page.getByTestId("nav-library").click();
     await expect(page.getByTestId("library-empty")).toBeVisible();
 
-    // The same receipt in two folders = same content (mock hashes by name) → in-batch duplicate.
-    await openImportPreview(page, ["D:\\scan\\영수증-3p.pdf", "D:\\scan\\견적서.hwpx", "D:\\scan\\photo.heic", "D:\\backup\\영수증-3p.pdf", "D:\\scan\\IMG_0001.jpg"]);
+    // The same minutes in two folders = same content (mock hashes by name) → in-batch duplicate.
+    await openImportPreview(page, ["D:\\scan\\회의록-3p.pdf", "D:\\scan\\견적서.hwpx", "D:\\scan\\photo.heic", "D:\\backup\\회의록-3p.pdf", "D:\\scan\\IMG_0001.jpg"]);
     await expect(page.getByTestId("doc-import-item")).toHaveCount(5);
     await expect(item(page, "unsupported")).toHaveCount(1);
     await expect(item(page, "duplicate_in_batch")).toHaveCount(1);
@@ -29,7 +29,7 @@ test.describe("P2 documents", () => {
     await page.getByTestId("doc-import-run").click();
 
     // Cards appear while importing and settle to "rendered" with page counts.
-    const receipt = page.locator('[data-testid^="doc-card-"][data-doc-name="영수증-3p.pdf"]');
+    const receipt = page.locator('[data-testid^="doc-card-"][data-doc-name="회의록-3p.pdf"]');
     await expect(receipt).toBeVisible({ timeout: 10_000 });
     await expect(receipt).toHaveAttribute("data-doc-status", "rendered", { timeout: 15_000 });
     await expect(receipt).toContainText("3쪽");
@@ -47,7 +47,7 @@ test.describe("P2 documents", () => {
 
     // Re-importing the same file is a duplicate of the registered copy and nothing can run.
     await page.getByTestId("nav-library").click();
-    await openImportPreview(page, ["D:\\scan\\영수증-3p.pdf", "C:\\Work\\Docs\\documents\\견적서.hwpx"]);
+    await openImportPreview(page, ["D:\\scan\\회의록-3p.pdf", "C:\\Work\\Docs\\documents\\견적서.hwpx"]);
     await expect(item(page, "duplicate")).toHaveCount(1);
     await expect(item(page, "already_registered")).toHaveCount(1);
     await expect(page.getByTestId("doc-import-run")).toBeDisabled();

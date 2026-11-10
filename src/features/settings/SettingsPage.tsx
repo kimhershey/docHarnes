@@ -112,7 +112,7 @@ function GeneralTab() {
           </Select>
         </Row>
         <Row label={t("settings.general.scale")} hint={t("settings.general.scale_hint")}>
-          <Slider min={90} max={150} step={10} value={[scale]} onValueChange={([v]) => setLocalScale(v ?? 100)} onValueCommit={([v]) => void setScale(v ?? 100)} className="w-56" aria-label={t("settings.general.scale")} />
+          <Slider min={90} max={150} step={10} value={[scale]} onValueChange={([v]) => setLocalScale(v ?? 100)} onValueCommit={([v]) => void setScale(v ?? 100)} className="w-56" aria-label={t("settings.general.scale")} data-testid="scale-slider" />
           <span className="w-12 text-sm tabular-nums" data-testid="scale-value">
             {scale}%
           </span>

@@ -443,11 +443,14 @@ pub fn answer(app: &AppHandle, req: AnswerRequest, request_id: String, ui: Optio
     let rid = request_id.clone();
     let app_c = app.clone();
     let cancelled = move || app_c.state::<AppState>().answer_cancels.lock().map(|c| c.contains(&rid)).unwrap_or(false);
+    // The loaded model's context caps the evidence budget so the prompt always fits the slot.
+    let context_size = state.engine.status().model(&model).and_then(|m| m.ctx);
     let deps = AnswerDeps {
         search: ctx.search_deps(embedder.as_ref().map(|e| e as &dyn Embedder)),
         chat: &state.engine,
         model: Some(model),
         cancelled: Some(&cancelled),
+        context_size,
     };
     let rid = request_id.clone();
     let app2 = app.clone();

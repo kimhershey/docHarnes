@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 /// Bumped when a built-in sample form changes; stored rows are refreshed on open.
-pub const BUILTIN_VERSION: u32 = 1;
+pub const BUILTIN_VERSION: u32 = 2;
 /// Hard cap on fields per schema (prompt size / grammar size).
 pub const MAX_FIELDS: usize = 80;
 pub const MAX_COLUMNS: usize = 20;
@@ -200,6 +200,10 @@ pub const RULE_RECEIPT_TOTAL: &str = "receipt_parts_equal_total";
 pub const RULE_ITEMS_SUM_TOTAL: &str = "items_sum_equals_total";
 pub const RULE_PERIOD_ORDER: &str = "period_start_before_end";
 pub const RULE_EXEMPT_TOTAL: &str = "exempt_total_equals_supply";
+/// Percentages (`*_percent`, `*_rate`, table column `progress`) lie within 0–100.
+pub const RULE_PERCENT_RANGE: &str = "percent_range";
+/// Test result counts add up: total_cases = passed + failed + blocked.
+pub const RULE_TEST_COUNTS: &str = "test_counts_sum";
 
 /// The editable part of a schema (`schemas.definition` JSON).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -872,7 +876,9 @@ pub fn lint(def: &SchemaDef) -> Vec<LintIssue> {
     out
 }
 
-pub const KNOWN_RULES: [&str; 8] = [
+pub const KNOWN_RULES: [&str; 10] = [
+    RULE_PERCENT_RANGE,
+    RULE_TEST_COUNTS,
     RULE_SUPPLY_TAX_TOTAL,
     RULE_ITEMS_SUM_SUPPLY,
     RULE_TAX_RATE,
@@ -948,6 +954,10 @@ pub struct Builtin {
     pub description_ko: &'static str,
     pub description_en: &'static str,
     pub def: SchemaDef,
+    /// Kept for workspaces that classified documents with it, but not offered: inserted (or
+    /// switched) to `enabled = 0`, left out of the classifier enum and of `builtin_doc_types`.
+    /// The 0.3.0 default set is software-development paperwork; the 0.1 business forms are hidden.
+    pub hidden: bool,
 }
 
 fn party(prefix_ko: &str, prefix_en: &str, with_email: bool) -> Vec<FieldDef> {
@@ -997,11 +1007,494 @@ fn payment_group() -> FieldDef {
     ])
 }
 
+/// A party of a software project (발주자 · 수행사 · 제안사 · 발주기관).
+fn sw_party(prefix_ko: &str, prefix_en: &str) -> Vec<FieldDef> {
+    use FieldKind::*;
+    vec![
+        FieldDef::new("name", &format!("{prefix_ko} 명칭"), &format!("{prefix_en} name"), String).required(),
+        FieldDef::new("brn", &format!("{prefix_ko} 사업자등록번호"), &format!("{prefix_en} business reg. no."), Brn),
+        FieldDef::new("representative", "대표자", "Representative", String),
+        FieldDef::new("contact_person", "담당자", "Contact person", String),
+        FieldDef::new("phone", "연락처", "Phone", Phone),
+        FieldDef::new("email", "이메일", "Email", Email),
+    ]
+}
+
+fn requirements_table() -> FieldDef {
+    use FieldKind::*;
+    FieldDef::new("requirements", "요구사항", "Requirements", Table).with(vec![
+        FieldDef::new("id", "ID", "ID", String).example("SFR-001"),
+        FieldDef::new("name", "요구사항명", "Name", String),
+        FieldDef::new("description", "상세 설명", "Description", String),
+        FieldDef::new("category", "구분", "Category", Enum).options(&[
+            "기능",
+            "비기능",
+            "보안",
+            "성능",
+            "인터페이스",
+            "데이터",
+        ]),
+        FieldDef::new("priority", "우선순위", "Priority", Enum).options(&["상", "중", "하"]),
+        FieldDef::new("source", "출처", "Source", String),
+        FieldDef::new("acceptance", "수용 기준", "Acceptance criteria", String),
+    ])
+}
+
+fn deliverables_table(with_result: bool) -> FieldDef {
+    use FieldKind::*;
+    let mut cols = vec![
+        FieldDef::new("name", "산출물", "Deliverable", String),
+        FieldDef::new("version", "버전", "Version", String),
+        FieldDef::new("due_date", "납기", "Due date", Date),
+    ];
+    if with_result {
+        cols.push(FieldDef::new("result", "검수 결과", "Result", Enum).options(&["적합", "부적합", "조건부"]));
+    }
+    cols.push(FieldDef::new("note", "비고", "Note", String));
+    FieldDef::new("deliverables", "산출물", "Deliverables", Table).with(cols)
+}
+
+fn schedule_table() -> FieldDef {
+    use FieldKind::*;
+    FieldDef::new("schedule", "일정", "Schedule", Table).with(vec![
+        FieldDef::new("phase", "단계", "Phase", String),
+        FieldDef::new("start_date", "시작", "Start", Date),
+        FieldDef::new("end_date", "종료", "End", Date),
+        FieldDef::new("note", "비고", "Note", String),
+    ])
+}
+
+fn staffing_items() -> Vec<FieldDef> {
+    use FieldKind::*;
+    vec![
+        FieldDef::new("role", "역할·품목", "Role / item", String).example("백엔드 개발"),
+        FieldDef::new("grade", "등급", "Grade", Enum).options(&["특급", "고급", "중급", "초급", "기타"]),
+        FieldDef::new("months", "투입 MM", "Person-months", Amount).example("3.0"),
+        FieldDef::new("unit_price", "단가", "Unit price", Amount),
+        FieldDef::new("supply_amount", "공급가액", "Supply amount", Amount),
+        FieldDef::new("note", "비고", "Note", String),
+    ]
+}
+
+/// The software-development document set (0.3.0 defaults) followed by the hidden 0.1 business forms.
 pub fn builtins() -> Vec<Builtin> {
+    let mut out = software_builtins();
+    out.extend(legacy_builtins());
+    out
+}
+
+fn software_builtins() -> Vec<Builtin> {
+    use FieldKind::*;
+    vec![
+        Builtin {
+            key: "rfp",
+            hidden: false,
+            doc_type: "rfp",
+            name_ko: "제안요청서(RFP)",
+            name_en: "Request for proposal (RFP)",
+            description_ko: "발주기관이 공고하는 소프트웨어 개발 제안요청서 — 사업 개요·예산·기간·요구사항·산출물·일정·제출 마감.",
+            description_en: "A software-development RFP: overview, budget, period, requirements, deliverables, schedule and the submission deadline.",
+            def: SchemaDef::new(
+                vec![
+                    FieldDef::new("project_name", "사업명", "Project name", String).required(),
+                    FieldDef::new("issuer", "발주기관", "Issuer", Group).with(sw_party("발주기관", "Issuer")),
+                    FieldDef::new("issue_date", "공고일", "Issue date", Date).required(),
+                    FieldDef::new("budget", "사업 예산", "Budget", Amount).example("250,000,000"),
+                    FieldDef::new("period_start", "사업 기간 시작", "Period start", Date),
+                    FieldDef::new("period_end", "사업 기간 종료", "Period end", Date),
+                    FieldDef::new("submission_deadline", "제출 마감", "Submission deadline", Date),
+                    FieldDef::new("summary", "사업 개요", "Overview", String).describe("추진 배경·목적·범위 요약"),
+                    requirements_table(),
+                    deliverables_table(false),
+                    schedule_table(),
+                    FieldDef::new("evaluation", "평가 기준", "Evaluation criteria", Table).with(vec![
+                        FieldDef::new("item", "항목", "Item", String),
+                        FieldDef::new("points", "배점", "Points", Amount),
+                    ]),
+                ],
+                &[RULE_PERIOD_ORDER],
+            ),
+        },
+        Builtin {
+            key: "proposal",
+            hidden: false,
+            doc_type: "proposal",
+            name_ko: "제안서",
+            name_en: "Proposal",
+            description_ko: "RFP에 대한 제안서 — 제안사·제안 금액·기간·투입 인력·일정·산출물.",
+            description_en: "A proposal answering an RFP: proposer, price, period, staffing, schedule and deliverables.",
+            def: SchemaDef::new(
+                vec![
+                    FieldDef::new("project_name", "사업명", "Project name", String).required(),
+                    FieldDef::new("proposer", "제안사", "Proposer", Group).with(sw_party("제안사", "Proposer")),
+                    FieldDef::new("client_name", "발주기관", "Client", String),
+                    FieldDef::new("issue_date", "제출일", "Submission date", Date),
+                    FieldDef::new("price", "제안 금액", "Proposed price", Amount).required().example("240,000,000"),
+                    FieldDef::new("period_start", "수행 기간 시작", "Period start", Date),
+                    FieldDef::new("period_end", "수행 기간 종료", "Period end", Date),
+                    FieldDef::new("duration_months", "수행 기간(개월)", "Duration (months)", Integer),
+                    FieldDef::new("approach", "수행 방법론 요약", "Approach", String),
+                    FieldDef::new("team", "투입 인력", "Team", Table).with(vec![
+                        FieldDef::new("role", "역할", "Role", String),
+                        FieldDef::new("name", "성명", "Name", String),
+                        FieldDef::new("grade", "등급", "Grade", Enum).options(&["특급", "고급", "중급", "초급", "기타"]),
+                        FieldDef::new("months", "투입 MM", "Person-months", Amount),
+                    ]),
+                    schedule_table(),
+                    deliverables_table(false),
+                ],
+                &[RULE_PERIOD_ORDER],
+            ),
+        },
+        Builtin {
+            key: "sow",
+            hidden: false,
+            doc_type: "sow",
+            name_ko: "과업지시서",
+            name_en: "Statement of work",
+            description_ko: "과업지시서(과업내용서) — 발주자·수행자, 과업 범위, 산출물, 검수 기준, 단계별 납기·대금.",
+            description_en: "Statement of work: client and contractor, scope, deliverables, acceptance criteria and milestone payments.",
+            def: SchemaDef::new(
+                vec![
+                    FieldDef::new("project_name", "과업명", "Project name", String).required(),
+                    FieldDef::new("client", "발주자", "Client", Group).with(sw_party("발주자", "Client")),
+                    FieldDef::new("contractor", "수행자", "Contractor", Group).with(sw_party("수행자", "Contractor")),
+                    FieldDef::new("issue_date", "작성일", "Issue date", Date),
+                    FieldDef::new("period_start", "과업 기간 시작", "Period start", Date),
+                    FieldDef::new("period_end", "과업 기간 종료", "Period end", Date),
+                    FieldDef::new("amount", "과업 금액", "Amount", Amount),
+                    FieldDef::new("scope", "과업 범위", "Scope", String),
+                    FieldDef::new("acceptance_criteria", "검수 기준", "Acceptance criteria", String),
+                    FieldDef::new("tasks", "세부 과업", "Tasks", Table).with(vec![
+                        FieldDef::new("id", "번호", "No.", String),
+                        FieldDef::new("task", "과업", "Task", String),
+                        FieldDef::new("description", "내용", "Description", String),
+                        FieldDef::new("deliverable", "산출물", "Deliverable", String),
+                    ]),
+                    deliverables_table(false),
+                    FieldDef::new("milestones", "단계별 납기·대금", "Milestones", Table).with(vec![
+                        FieldDef::new("phase", "단계", "Phase", String),
+                        FieldDef::new("due_date", "납기", "Due date", Date),
+                        FieldDef::new("ratio", "대금 비율(%)", "Payment ratio (%)", Amount),
+                        FieldDef::new("amount", "금액", "Amount", Amount),
+                    ]),
+                ],
+                &[RULE_PERIOD_ORDER],
+            ),
+        },
+        Builtin {
+            key: "srs",
+            hidden: false,
+            doc_type: "srs",
+            name_ko: "요구사항 정의서",
+            name_en: "Software requirements specification",
+            description_ko: "요구사항 정의서(SRS) — 버전·작성자·승인자와 요구사항 표(ID·구분·우선순위·수용 기준).",
+            description_en: "Requirements specification: version, author, approver and the requirements table.",
+            def: SchemaDef::new(
+                vec![
+                    FieldDef::new("project_name", "사업명", "Project name", String).required(),
+                    FieldDef::new("version", "버전", "Version", String).example("1.2"),
+                    FieldDef::new("issue_date", "작성일", "Issue date", Date),
+                    FieldDef::new("author", "작성자", "Author", String),
+                    FieldDef::new("approver", "승인자", "Approver", String),
+                    FieldDef::new("summary", "시스템 개요", "System overview", String),
+                    requirements_table(),
+                ],
+                &[],
+            ),
+        },
+        Builtin {
+            key: "dev_contract",
+            hidden: false,
+            doc_type: "dev_contract",
+            name_ko: "소프트웨어 개발 계약서",
+            name_en: "Software development contract",
+            description_ko: "소프트웨어 개발(외주·용역) 계약서 — 갑·을, 계약일·기간·금액, 대금 지급 단계, 지식재산권·하자보수·비밀유지, 서명.",
+            description_en: "Software development / outsourcing contract: parties, date, period, amount, payment milestones, IP, warranty, confidentiality, signatures.",
+            def: SchemaDef::new(
+                vec![
+                    FieldDef::new("title", "계약명", "Title", String).required(),
+                    FieldDef::new("client", "발주자(갑)", "Client (party A)", Group).with(sw_party("발주자", "Client")),
+                    FieldDef::new("contractor", "수행사(을)", "Contractor (party B)", Group).with(sw_party("수행사", "Contractor")),
+                    FieldDef::new("contract_date", "계약일", "Contract date", Date),
+                    FieldDef::new("period_start", "계약기간 시작", "Period start", Date),
+                    FieldDef::new("period_end", "계약기간 종료", "Period end", Date),
+                    FieldDef::new("amount", "계약금액", "Contract amount", Amount).required().example("240,000,000"),
+                    FieldDef::new("vat_included", "부가세 포함 여부", "VAT included", Boolean),
+                    FieldDef::new("payment_terms", "지급 조건", "Payment terms", String),
+                    FieldDef::new("payments", "대금 지급 단계", "Payment milestones", Table).with(vec![
+                        FieldDef::new("phase", "단계", "Phase", String).example("착수금"),
+                        FieldDef::new("ratio", "비율(%)", "Ratio (%)", Amount),
+                        FieldDef::new("amount", "금액", "Amount", Amount),
+                        FieldDef::new("due_date", "지급 시기", "Due date", Date),
+                    ]),
+                    FieldDef::new("warranty_months", "하자보수 기간(개월)", "Warranty (months)", Integer),
+                    FieldDef::new("ip_owner", "지식재산권 귀속", "IP owner", Enum).options(&["발주자", "수행사", "공동"]),
+                    FieldDef::new("confidentiality", "비밀유지 조항", "Confidentiality clause", Boolean),
+                    FieldDef::new("key_clauses", "주요 조항 요약", "Key clauses", Table).with(vec![
+                        FieldDef::new("clause", "조항", "Clause", String),
+                        FieldDef::new("summary", "요약", "Summary", String),
+                    ]),
+                    FieldDef::new("signed", "서명/날인 여부", "Signed / sealed", Boolean),
+                ],
+                &[RULE_PERIOD_ORDER],
+            ),
+        },
+        Builtin {
+            key: "wbs",
+            hidden: false,
+            doc_type: "wbs",
+            name_ko: "WBS·일정표",
+            name_en: "WBS / schedule",
+            description_ko: "작업 분류 체계와 일정표 — 작업별 담당·시작·종료·진척률·산출물, 마일스톤.",
+            description_en: "Work breakdown structure and schedule: tasks with owner, dates, progress and deliverable; milestones.",
+            def: SchemaDef::new(
+                vec![
+                    FieldDef::new("project_name", "사업명", "Project name", String).required(),
+                    FieldDef::new("version", "버전", "Version", String),
+                    FieldDef::new("issue_date", "작성일", "Issue date", Date),
+                    FieldDef::new("period_start", "전체 시작", "Period start", Date),
+                    FieldDef::new("period_end", "전체 종료", "Period end", Date),
+                    FieldDef::new("tasks", "작업", "Tasks", Table).with(vec![
+                        FieldDef::new("id", "WBS 번호", "WBS id", String).example("1.2.3"),
+                        FieldDef::new("task", "작업", "Task", String),
+                        FieldDef::new("owner", "담당", "Owner", String),
+                        FieldDef::new("start_date", "시작", "Start", Date),
+                        FieldDef::new("end_date", "종료", "End", Date),
+                        FieldDef::new("progress", "진척률(%)", "Progress (%)", Amount),
+                        FieldDef::new("deliverable", "산출물", "Deliverable", String),
+                    ]),
+                    FieldDef::new("milestones", "마일스톤", "Milestones", Table).with(vec![
+                        FieldDef::new("name", "마일스톤", "Milestone", String),
+                        FieldDef::new("date", "일자", "Date", Date),
+                    ]),
+                ],
+                &[RULE_PERIOD_ORDER, RULE_PERCENT_RANGE],
+            ),
+        },
+        Builtin {
+            key: "progress_report",
+            hidden: false,
+            doc_type: "progress_report",
+            name_ko: "진척 보고서",
+            name_en: "Progress report",
+            description_ko: "주간·월간·단계 진척 보고서 — 보고 기간, 전체 진척률(계획 대비), 작업별 실적, 이슈·리스크, 차기 계획.",
+            description_en: "Weekly / monthly / phase progress report: period, overall vs planned progress, task results, issues and the next plan.",
+            def: SchemaDef::new(
+                vec![
+                    FieldDef::new("project_name", "사업명", "Project name", String).required(),
+                    FieldDef::new("report_type", "보고 구분", "Report type", Enum).options(&["주간", "월간", "단계", "기타"]),
+                    FieldDef::new("period_start", "보고 기간 시작", "Period start", Date),
+                    FieldDef::new("period_end", "보고 기간 종료", "Period end", Date),
+                    FieldDef::new("report_date", "보고일", "Report date", Date).required(),
+                    FieldDef::new("author", "작성자", "Author", String),
+                    FieldDef::new("progress_percent", "전체 진척률(%)", "Overall progress (%)", Amount).example("62"),
+                    FieldDef::new("plan_percent", "계획 진척률(%)", "Planned progress (%)", Amount),
+                    FieldDef::new("summary", "주요 실적", "Summary", String),
+                    FieldDef::new("tasks", "작업별 실적", "Task results", Table).with(vec![
+                        FieldDef::new("task", "작업", "Task", String),
+                        FieldDef::new("owner", "담당", "Owner", String),
+                        FieldDef::new("planned", "계획", "Planned", String),
+                        FieldDef::new("actual", "실적", "Actual", String),
+                        FieldDef::new("progress", "진척률(%)", "Progress (%)", Amount),
+                    ]),
+                    FieldDef::new("issues", "이슈·리스크", "Issues / risks", Table).with(vec![
+                        FieldDef::new("issue", "이슈", "Issue", String),
+                        FieldDef::new("impact", "영향도", "Impact", Enum).options(&["상", "중", "하"]),
+                        FieldDef::new("action", "조치", "Action", String),
+                        FieldDef::new("owner", "담당", "Owner", String),
+                        FieldDef::new("due_date", "기한", "Due date", Date),
+                    ]),
+                    FieldDef::new("next_plan", "차기 계획", "Next plan", String),
+                ],
+                &[RULE_PERIOD_ORDER, RULE_PERCENT_RANGE],
+            ),
+        },
+        Builtin {
+            key: "meeting_minutes",
+            hidden: false,
+            doc_type: "meeting_minutes",
+            name_ko: "회의록",
+            name_en: "Meeting minutes",
+            description_ko: "회의록 — 일시·장소·참석자, 안건, 결정 사항, 실행 항목(담당·기한), 차기 회의.",
+            description_en: "Meeting minutes: date, place, attendees, agenda, decisions, action items with owners and due dates, next meeting.",
+            def: SchemaDef::new(
+                vec![
+                    FieldDef::new("title", "회의명", "Title", String).required(),
+                    FieldDef::new("project_name", "사업명", "Project name", String),
+                    FieldDef::new("meeting_date", "일시", "Date", Date).required(),
+                    FieldDef::new("location", "장소", "Location", String),
+                    FieldDef::new("author", "작성자", "Author", String),
+                    FieldDef::new("attendees", "참석자", "Attendees", Table).with(vec![
+                        FieldDef::new("name", "성명", "Name", String),
+                        FieldDef::new("organization", "소속", "Organization", String),
+                        FieldDef::new("role", "역할", "Role", String),
+                    ]),
+                    FieldDef::new("agenda", "안건", "Agenda", String),
+                    FieldDef::new("decisions", "결정 사항", "Decisions", Table).with(vec![
+                        FieldDef::new("item", "항목", "Item", String),
+                        FieldDef::new("detail", "내용", "Detail", String),
+                    ]),
+                    FieldDef::new("action_items", "실행 항목", "Action items", Table).with(vec![
+                        FieldDef::new("item", "항목", "Item", String),
+                        FieldDef::new("owner", "담당", "Owner", String),
+                        FieldDef::new("due_date", "기한", "Due date", Date),
+                    ]),
+                    FieldDef::new("next_meeting", "차기 회의", "Next meeting", Date),
+                ],
+                &[],
+            ),
+        },
+        Builtin {
+            key: "test_report",
+            hidden: false,
+            doc_type: "test_report",
+            name_ko: "테스트 결과서",
+            name_en: "Test report",
+            description_ko: "테스트 결과서 — 대상 버전·일자·구분·환경, 케이스 집계(총·통과·실패·보류·통과율), 케이스별 결과, 결함 목록.",
+            description_en: "Test report: version, date, type, environment, case counts (total / passed / failed / blocked / pass rate), per-case results and defects.",
+            def: SchemaDef::new(
+                vec![
+                    FieldDef::new("project_name", "사업명", "Project name", String).required(),
+                    FieldDef::new("version", "대상 버전", "Version under test", String),
+                    FieldDef::new("test_date", "테스트 일자", "Test date", Date).required(),
+                    FieldDef::new("tester", "테스터", "Tester", String),
+                    FieldDef::new("test_type", "테스트 구분", "Test type", Enum).options(&["단위", "통합", "시스템", "인수", "성능", "보안"]),
+                    FieldDef::new("environment", "테스트 환경", "Environment", String),
+                    FieldDef::new("total_cases", "총 케이스", "Total cases", Integer),
+                    FieldDef::new("passed", "통과", "Passed", Integer),
+                    FieldDef::new("failed", "실패", "Failed", Integer),
+                    FieldDef::new("blocked", "보류", "Blocked", Integer),
+                    FieldDef::new("pass_rate", "통과율(%)", "Pass rate (%)", Amount),
+                    FieldDef::new("cases", "케이스", "Cases", Table).with(vec![
+                        FieldDef::new("id", "ID", "ID", String).example("TC-014"),
+                        FieldDef::new("scenario", "시나리오", "Scenario", String),
+                        FieldDef::new("expected", "기대 결과", "Expected", String),
+                        FieldDef::new("result", "결과", "Result", Enum).options(&["통과", "실패", "보류"]),
+                        FieldDef::new("defect_id", "결함 ID", "Defect id", String),
+                    ]),
+                    FieldDef::new("defects", "결함", "Defects", Table).with(vec![
+                        FieldDef::new("id", "결함 ID", "Defect id", String),
+                        FieldDef::new("severity", "심각도", "Severity", Enum).options(&["치명", "높음", "보통", "낮음"]),
+                        FieldDef::new("description", "내용", "Description", String),
+                        FieldDef::new("status", "상태", "Status", Enum).options(&["열림", "수정중", "해결", "종료"]),
+                    ]),
+                ],
+                &[RULE_TEST_COUNTS, RULE_PERCENT_RANGE],
+            ),
+        },
+        Builtin {
+            key: "change_request",
+            hidden: false,
+            doc_type: "change_request",
+            name_ko: "변경요청서",
+            name_en: "Change request",
+            description_ko: "변경요청서(CR) — 번호·요청자·일자, 변경 내용·사유, 일정·비용 영향, 우선순위, 승인 상태·승인자.",
+            description_en: "Change request: number, requester, date, change and reason, schedule / cost impact, priority, approval status and approver.",
+            def: SchemaDef::new(
+                vec![
+                    FieldDef::new("cr_no", "CR 번호", "CR no.", String).required().example("CR-2026-014"),
+                    FieldDef::new("project_name", "사업명", "Project name", String),
+                    FieldDef::new("request_date", "요청일", "Request date", Date).required(),
+                    FieldDef::new("requester", "요청자", "Requester", String),
+                    FieldDef::new("title", "변경 제목", "Title", String),
+                    FieldDef::new("description", "변경 내용", "Description", String),
+                    FieldDef::new("reason", "변경 사유", "Reason", String),
+                    FieldDef::new("impact_schedule", "일정 영향", "Schedule impact", String),
+                    FieldDef::new("impact_cost", "비용 영향", "Cost impact", Amount),
+                    FieldDef::new("priority", "우선순위", "Priority", Enum).options(&["긴급", "높음", "보통", "낮음"]),
+                    FieldDef::new("status", "승인 상태", "Status", Enum).options(&["요청", "검토", "승인", "반려", "완료"]),
+                    FieldDef::new("approver", "승인자", "Approver", String),
+                    FieldDef::new("approval_date", "승인일", "Approval date", Date),
+                ],
+                &[],
+            ),
+        },
+        Builtin {
+            key: "acceptance",
+            hidden: false,
+            doc_type: "acceptance",
+            name_ko: "검수확인서",
+            name_en: "Acceptance certificate",
+            description_ko: "검수확인서·완료보고서 — 발주자·수행사, 검수일, 산출물별 검수 결과, 검수 금액, 최종 판정, 서명.",
+            description_en: "Acceptance certificate / completion report: client and contractor, acceptance date, per-deliverable results, amount, verdict, signatures.",
+            def: SchemaDef::new(
+                vec![
+                    FieldDef::new("project_name", "사업명", "Project name", String).required(),
+                    FieldDef::new("client", "발주자", "Client", Group).with(sw_party("발주자", "Client")),
+                    FieldDef::new("contractor", "수행사", "Contractor", Group).with(sw_party("수행사", "Contractor")),
+                    FieldDef::new("acceptance_date", "검수일", "Acceptance date", Date).required(),
+                    FieldDef::new("period_start", "사업 기간 시작", "Period start", Date),
+                    FieldDef::new("period_end", "사업 기간 종료", "Period end", Date),
+                    deliverables_table(true),
+                    FieldDef::new("amount", "검수 금액", "Amount", Amount),
+                    FieldDef::new("result", "최종 판정", "Verdict", Enum).options(&["합격", "조건부 합격", "불합격"]),
+                    FieldDef::new("conditions", "조건·특이사항", "Conditions / remarks", String),
+                    FieldDef::new("signed", "서명/날인 여부", "Signed / sealed", Boolean),
+                ],
+                &[RULE_PERIOD_ORDER],
+            ),
+        },
+        Builtin {
+            key: "estimate",
+            hidden: false,
+            doc_type: "estimate",
+            name_ko: "견적서",
+            name_en: "Estimate",
+            description_ko: "소프트웨어 개발 견적서(인력·MM 기준) — 공급자, 수신, 유효기간, 역할별 등급·MM·단가·공급가액, 합계·세액.",
+            description_en: "Software development estimate (staffing / person-month based): supplier, recipient, validity, per-role grade, MM, unit price and amounts, totals.",
+            def: SchemaDef::new(
+                vec![
+                    FieldDef::new("project_name", "사업명", "Project name", String),
+                    FieldDef::new("issue_date", "견적일", "Issue date", Date).required(),
+                    FieldDef::new("supplier", "공급자", "Supplier", Group).with(party("공급자", "Supplier", true)),
+                    FieldDef::new("recipient", "수신", "Recipient", String),
+                    FieldDef::new("valid_until", "유효기간", "Valid until", Date),
+                    FieldDef::new("items", "견적 내역", "Items", Table).with(staffing_items()),
+                    FieldDef::new("supply_total", "공급가액 합계", "Supply total", Amount).required(),
+                    FieldDef::new("tax_total", "세액 합계", "Tax total", Amount),
+                    FieldDef::new("grand_total", "합계금액", "Grand total", Amount).required().example("132,000,000"),
+                    FieldDef::new("note", "비고", "Note", String),
+                ],
+                &[RULE_SUPPLY_TAX_TOTAL, RULE_ITEMS_SUM_SUPPLY, RULE_TAX_RATE],
+            ),
+        },
+        Builtin {
+            key: "general",
+            hidden: false,
+            doc_type: "general",
+            name_ko: "일반(표/차트)",
+            name_en: "General (table / chart)",
+            description_ko: "유형이 없는 문서 — 제목과 핵심 수치, 표는 텍스트 탭의 HTML 표로 보관.",
+            description_en: "Untyped documents — title and key figures; tables stay in the OCR text.",
+            def: SchemaDef::new(
+                vec![
+                    FieldDef::new("title", "제목", "Title", String),
+                    FieldDef::new("date", "날짜", "Date", Date),
+                    FieldDef::new("key_figures", "핵심 수치", "Key figures", Table).with(vec![
+                        FieldDef::new("label", "항목", "Label", String),
+                        FieldDef::new("value", "값", "Value", String),
+                        FieldDef::new("unit", "단위", "Unit", String),
+                    ]),
+                    FieldDef::new("chart_series", "차트 데이터", "Chart series", Table).with(vec![
+                        FieldDef::new("series", "시리즈", "Series", String),
+                        FieldDef::new("value", "값", "Value", String),
+                    ]),
+                ],
+                &[],
+            ),
+        },
+    ]
+}
+
+/// The 0.1 business forms (세금계산서 · 계산서 · 영수증 · 사업자등록증 · 계약서 · 신청서): still defined so
+/// that documents already classified with them keep their fields and labels, but hidden by default.
+pub fn legacy_builtins() -> Vec<Builtin> {
     use FieldKind::*;
     vec![
         Builtin {
             key: "tax_invoice",
+            hidden: true,
             doc_type: "tax_invoice",
             name_ko: "세금계산서",
             name_en: "Tax invoice",
@@ -1035,6 +1528,7 @@ pub fn builtins() -> Vec<Builtin> {
         },
         Builtin {
             key: "invoice_exempt",
+            hidden: true,
             doc_type: "invoice_exempt",
             name_ko: "계산서(면세)",
             name_en: "Invoice (tax-exempt)",
@@ -1060,6 +1554,7 @@ pub fn builtins() -> Vec<Builtin> {
         },
         Builtin {
             key: "receipt",
+            hidden: true,
             doc_type: "receipt",
             name_ko: "영수증",
             name_en: "Receipt",
@@ -1103,6 +1598,7 @@ pub fn builtins() -> Vec<Builtin> {
         },
         Builtin {
             key: "business_registration",
+            hidden: true,
             doc_type: "business_registration",
             name_ko: "사업자등록증",
             name_en: "Business registration",
@@ -1135,6 +1631,7 @@ pub fn builtins() -> Vec<Builtin> {
         },
         Builtin {
             key: "contract",
+            hidden: true,
             doc_type: "contract",
             name_ko: "계약서",
             name_en: "Contract",
@@ -1166,6 +1663,7 @@ pub fn builtins() -> Vec<Builtin> {
         },
         Builtin {
             key: "application_form",
+            hidden: true,
             doc_type: "application_form",
             name_ko: "신청서",
             name_en: "Application form",
@@ -1194,36 +1692,63 @@ pub fn builtins() -> Vec<Builtin> {
                 &[],
             ),
         },
-        Builtin {
-            key: "general",
-            doc_type: "general",
-            name_ko: "일반(표/차트)",
-            name_en: "General (table / chart)",
-            description_ko: "유형이 없는 문서 — 제목과 핵심 수치, 표는 텍스트 탭의 HTML 표로 보관.",
-            description_en: "Untyped documents — title and key figures; tables stay in the OCR text.",
-            def: SchemaDef::new(
-                vec![
-                    FieldDef::new("title", "제목", "Title", String),
-                    FieldDef::new("date", "날짜", "Date", Date),
-                    FieldDef::new("key_figures", "핵심 수치", "Key figures", Table).with(vec![
-                        FieldDef::new("label", "항목", "Label", String),
-                        FieldDef::new("value", "값", "Value", String),
-                        FieldDef::new("unit", "단위", "Unit", String),
-                    ]),
-                    FieldDef::new("chart_series", "차트 데이터", "Chart series", Table).with(vec![
-                        FieldDef::new("series", "시리즈", "Series", String),
-                        FieldDef::new("value", "값", "Value", String),
-                    ]),
-                ],
-                &[],
-            ),
-        },
     ]
 }
 
-/// Slugs of the bundled sample forms (classifier enum when nothing else is registered).
+/// Extra names a document type goes by in commands and rules ("계약서" → dev_contract). Shared by the
+/// planner's type matcher and the project rule parser; the registered labels still win.
+pub fn doc_type_aliases(slug: &str) -> &'static [&'static str] {
+    match slug {
+        "rfp" => &["제안요청서", "제안 요청서", "rfp", "request for proposal"],
+        "proposal" => &["제안서", "proposal"],
+        "sow" => &["과업지시서", "과업 지시서", "과업내용서", "sow", "statement of work"],
+        "srs" => &["요구사항정의서", "요구사항 정의서", "요구사항명세서", "요구사항", "srs", "requirements"],
+        "dev_contract" => &["개발계약서", "개발 계약서", "용역계약서", "계약서", "계약", "contract", "agreement"],
+        "wbs" => &["wbs", "일정표", "작업분류체계", "schedule"],
+        "progress_report" => &[
+            "진척보고서",
+            "진척 보고서",
+            "주간보고서",
+            "주간 보고",
+            "월간보고서",
+            "월간 보고",
+            "진도보고",
+            "progress report",
+            "weekly report",
+        ],
+        "meeting_minutes" => &["회의록", "회의 록", "minutes", "meeting minutes"],
+        "test_report" => {
+            &["테스트결과서", "테스트 결과서", "시험결과서", "테스트 보고서", "test report", "test results"]
+        }
+        "change_request" => &["변경요청서", "변경 요청서", "변경요청", "change request", "cr"],
+        "acceptance" => {
+            &["검수확인서", "검수 확인서", "검수조서", "완료보고서", "검수", "acceptance", "acceptance certificate"]
+        }
+        "estimate" => &["견적서", "견적", "estimate", "quotation", "quote"],
+        "tax_invoice" => &["세금계산서", "세금 계산서", "tax invoice", "invoice"],
+        "invoice_exempt" => &["계산서", "면세계산서", "exempt invoice"],
+        "business_registration" => {
+            &["사업자등록증", "사업자 등록증", "등록증", "business registration", "registration certificate"]
+        }
+        "contract" => &["계약서", "계약", "contract", "agreement"],
+        "application_form" => &["신청서", "신청", "application", "application form"],
+        "quotation" => &["견적서", "견적", "quotation", "quote", "estimate"],
+        "transaction_statement" => &["거래명세서", "거래명세표", "명세서", "transaction statement", "statement"],
+        "receipt" => &["영수증", "receipt"],
+        "financial_statement" => &["재무제표", "financial statement", "financials"],
+        "purchase_order" => &["발주서", "purchase order"],
+        _ => &[],
+    }
+}
+
+/// One bundled sample form by key (software set or hidden legacy).
+pub fn builtin(key: &str) -> Option<Builtin> {
+    builtins().into_iter().find(|b| b.key == key)
+}
+
+/// Slugs of the offered sample forms (classifier enum when nothing else is registered); hidden legacy forms excluded.
 pub fn builtin_doc_types() -> Vec<&'static str> {
-    builtins().into_iter().map(|b| b.doc_type).collect()
+    builtins().into_iter().filter(|b| !b.hidden).map(|b| b.doc_type).collect()
 }
 
 #[cfg(test)]
@@ -1251,9 +1776,17 @@ mod tests {
             assert_eq!(v["properties"]["value"]["type"], json!(["string", "null"]));
             assert!(!prompt_summary(&b.def, true).is_empty());
         }
-        assert_eq!(builtins().len(), 7);
+        assert_eq!(builtins().iter().filter(|b| !b.hidden).count(), 13);
+        assert_eq!(builtins().iter().filter(|b| b.hidden).count(), 6, "the 0.1 business forms stay defined, hidden");
         let dts = builtin_doc_types();
-        assert!(dts.contains(&"tax_invoice") && dts.contains(&"invoice_exempt") && dts.contains(&"general"));
+        assert!(dts.contains(&"rfp") && dts.contains(&"estimate") && dts.contains(&"general"), "{dts:?}");
+        assert!(!dts.contains(&"tax_invoice") && !dts.contains(&"receipt"), "hidden forms are not offered: {dts:?}");
+        let keys: Vec<&str> = builtins().iter().map(|b| b.key).collect();
+        let mut unique = keys.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), keys.len(), "keys are unique");
+        assert!(builtin("tax_invoice").is_some_and(|b| b.hidden) && builtin("wbs").is_some_and(|b| !b.hidden));
     }
 
     #[test]

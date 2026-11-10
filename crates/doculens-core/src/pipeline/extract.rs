@@ -29,7 +29,7 @@ pub struct PageInput<'a> {
 /// exceeds the available context size (M tokens)"); small presets (CPU, 4K) hit this
 /// with a dense page text next to the image and the schema summary.
 pub fn context_overflow(e: &CoreError) -> bool {
-    matches!(e, CoreError::Engine(m) if m.contains("exceeds the available context size"))
+    crate::engine::client::context_overflow(e)
 }
 
 /// Extracts one page. `temperature` overrides the preset (precision-mode second sample).
@@ -513,10 +513,34 @@ pub fn build_fields(
         with_value.iter().map(|f| f.confidence).fold(None, |m: Option<f64>, c| Some(m.map_or(c, |x| x.min(c))));
     let review_count = fields.iter().filter(|f| f.review_reason.is_some()).count() as u32;
     let text_of = |paths: &[&str]| paths.iter().find_map(|p| values.text(p).map(str::to_string));
-    let vendor = text_of(&["supplier.name", "store_name", "company_name", "name"])
-        .or_else(|| values.tables.get("parties").and_then(|r| r.first()).and_then(|r| r.get("name")).cloned());
-    let doc_date = text_of(&["issue_date", "datetime", "contract_date", "application_date", "date", "opening_date"]);
-    let total_amount = ["grand_total", "total", "amount", "supply_total"].iter().find_map(|p| values.amount(p));
+    // The counterparty of the software set (수행사 · 제안사 · 발주기관) or of the legacy forms.
+    let vendor = text_of(&[
+        "contractor.name",
+        "proposer.name",
+        "supplier.name",
+        "issuer.name",
+        "client.name",
+        "store_name",
+        "company_name",
+        "name",
+    ])
+    .or_else(|| values.tables.get("parties").and_then(|r| r.first()).and_then(|r| r.get("name")).cloned());
+    let doc_date = text_of(&[
+        "issue_date",
+        "contract_date",
+        "meeting_date",
+        "report_date",
+        "test_date",
+        "acceptance_date",
+        "request_date",
+        "datetime",
+        "application_date",
+        "date",
+        "opening_date",
+    ]);
+    let total_amount = ["grand_total", "total", "amount", "price", "budget", "impact_cost", "supply_total"]
+        .iter()
+        .find_map(|p| values.amount(p));
     Built { fields, values, min_confidence, review_count, vendor, doc_date, total_amount }
 }
 

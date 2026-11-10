@@ -27,7 +27,7 @@
 | P4 파이프라인 | **완료 (`phase/p4-pipeline`, PR #7 열림 — 사용자 생성; `phase/p3-knowledge` 위에 쌓음, 단계 말 리뷰 반영 완료)** | 아래 "P4 산출물" 참조. 분류·OCR·KIE 호출기, 내장 양식 7종 + 양식 등록 + NL 스키마, 검증기·신뢰도, 검토 큐, 추출 미러, 분할/병합 |
 | P5 자연어·작업 | **완료 (`main`에 병합, PR #8)** | 아래 "P5 산출물" 참조. 플래너(PlanSchema·규칙·검증기·실행기), 확인 카드, 영속 Job 러너, 정리/저널/되돌리기, 집계, 내보내기 5종 |
 | P6 문서 생성·프로젝트 정합성 (v1.1) | **완료 (`main`에 병합, PR #9 — 2026-11-08 10:18, P7과 한 세션에서 진행 — 사용자 결정)** | 아래 "P6·P7 산출물" 참조. §3.13 문서 생성(템플릿·양식 채우기·HWPX/DOCX/PDF/MD), §3.15 프로젝트·규칙·정합성 검사·보완요청서·관계 그래프, 플래너 op 10종 추가 |
-| P7 품질·배포 (v1.1) | **완료 (`main`에 병합, PR #9; 후속으로 `phase/p6-p7`에서 CUDA 팩 cu121/cu129 빌드·Release 게시, Lite·Full 설치파일 빌드 검증 완료)** | 평가 하네스(`doculens-eval`)·플래너 골든셋 100건·회귀 게이트, NSIS Lite/Full 릴리스 워크플로·CUDA 팩 워크플로, NOTICES/SBOM 자동화, 보존/파기 일일 작업, 완료 알림, 절전 방지 |
+| P7 품질·배포 (v1.1) | **완료 (`main`에 병합, PR #9; 후속으로 `phase/p6-p7`에서 CUDA 팩 cu121/cu129 빌드·Release 게시, Lite·Full 설치파일 빌드 검증 완료, v0.2.0 Release에 Lite·Full 설치파일 게시 완료)** | 평가 하네스(`doculens-eval`)·플래너 골든셋 100건·회귀 게이트, NSIS Lite/Full 릴리스 워크플로·CUDA 팩 워크플로, NOTICES/SBOM 자동화, 보존/파기 일일 작업, 완료 알림, 절전 방지 |
 
 ## P1 산출물
 
@@ -1314,6 +1314,107 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   모델로, 슬래시는 프리라우터, 모델 없음 → no_model 명확화, RulesFirst는 규칙), `prerouter::tests::bare_cancel_words_are_recognised`,
   Playwright `planner.spec` "되묻기 replies with the question's context; 취소 (button or typed) …" 추가, 기존 어시스턴트 E2E 전부 통과.
 
+### 0.2.0 릴리스 (2026-11-09; 사용자 요청 "0.2.0 릴리즈 만들어줘")
+
+- **버전**: `package.json`/`package-lock.json`, `src-tauri/tauri.conf.json`(설치파일 이름과 Release 태그의 출처), Cargo 워크스페이스 버전·
+  `Cargo.lock`, SBOM 루트 컴포넌트, 모의 백엔드 앱 버전, RUN-GUIDE 예시 파일명을 0.2.0으로(3d55db8). 고지 파일은 변경 없음.
+- **순서**: 3d55db8 CI 7개 잡 통과 확인 → Full(publish=true) 먼저 디스패치 → Full이 "CUDA 팩 내려받기" 단계를 지난 뒤 Lite(publish=true).
+  Full은 CUDA 팩을 `v<버전>` 릴리스에서 찾고 없으면 **최신 릴리스**로 내려가므로(v0.1.0, 같은 엔진 태그 b12066), Lite가 먼저 v0.2.0을
+  만들어 버리면 Full의 팩 다운로드가 실패한다. 다음 릴리스에서도 Full → Lite 순서를 지키거나 CUDA 팩 워크플로를 새 버전으로 먼저 돌릴 것.
+- **결과**: Release `v0.2.0`(워크플로가 `--generate-notes`로 생성 — PR이 없어 본문은 비교 링크 한 줄) — Full 1,156,786,994 B ·
+  Lite 50,579,259 B · `.sha256` 2 · 고지 · SBOM. CUDA 팩 zip은 v0.1.0 자산 그대로(복사 안 함).
+- **릴리스 노트**: 한국어 노트는 `docs/releases/v0.2.0.md`. 이 세션은 릴리스를 만들거나 고칠 수 없고(REST PATCH → HTTP 403 "not permitted
+  for this session type"), 본문을 바꾸는 새 워크플로 "Release notes (manual)"의 디스패치도 권한 분류기가 거부했다. **본문 적용은 사용자
+  작업**: Actions → "Release notes (manual)" → tag `v0.2.0`(또는 릴리스 편집 화면에 파일 내용 붙여넣기). 설치파일·CUDA 팩 워크플로는
+  앞으로 릴리스를 *만들* 때 `docs/releases/<tag>.md`가 있으면 그 파일을 쓰고 없으면 `--generate-notes`로 돌아간다.
+- **권한**: 이전 세션에서 거부됐던 `publish=true` 디스패치(설치파일 워크플로)는 이번에는 통과했다(사용자가 릴리스를 명시적으로 요청).
+
+### 사용자 PC 보고 수정 4차 (2026-11-10; 요약 컨텍스트 초과 400 · 불필요한 RAG 호출)
+
+- **보고**: "제공된 문장을 다듬어 정리" 요청이 **요약(문서별, 55건)** 플랜으로 해석돼 실행됐고, 실행 중 `HTTP 400: request (28107 tokens)
+  exceeds the available context size (16384 tokens)`로 실패. 두 가지 결함이 겹친 사례.
+- **원인 1 — 근거 예산이 모델 컨텍스트와 무관**: 지식 응답(질문·설명·요약·비교)의 근거 예산은 설정 `knowledge.context_tokens`(1,000~24,000,
+  기본 6,000)만 따랐고 로드된 모델의 n_ctx(16K)는 보지 않았다. 게다가 청커의 토큰 추정(한글 0.75 토큰/자)이 OCR 업무 문서에서 서버
+  토크나이저보다 약 25 % 낮아 설정 24K가 실제 28K가 됐고, 400 응답에 재시도가 없었다.
+- **수정 1**: `AnswerDeps.context_size`(셸이 `engine.status().model(..).ctx`를 넣음 — `knowledge_bridge::answer`, `planner::exec`의 answer·
+  summarize·explain·compare) → `evidence_budget` = min(설정, ctx − 응답 예산(1,200/1,500) − 스캐폴딩 700 − 질문·선택·이전 대화·현재 화면
+  블록 비용), 프롬프트 비용은 추정 × 1.3 + 12. 서버가 그래도 거부하면(`engine::client::context_overflow`, 추출기와 공용) answer는 근거를
+  절반씩 줄여, summarize는 그룹을 반으로 나누고(단일 청크는 뒷부분 절단) 병합 단계는 부분 요약을 다음 단계로 미뤄, compare는 마지막
+  근거를 빼며 재시도한다. 테스트: `LimitedChat`(토큰 상한을 넘는 프롬프트를 400으로 거부하는 더블)로 10쪽 규정 요약이 2.6K 슬롯에서
+  모두 슬롯 이하 요청으로 쪼개지고, 컨텍스트를 모를 때 거부당한 그룹이 분할돼 모든 청크가 요약에 닿는 것, 질문이 근거를 줄여 성공하는 것.
+- **원인 2 — 붙여 넣은 글을 라이브러리 작업으로 해석**: 플래너 프롬프트에 "사용자가 글을 함께 보내며 다듬기·교정·번역을 요청"하는 경우의
+  규칙이 없어 모델이 `summarize(each_doc)` + 빈 scope(= 전체 문서)를 냈다. summarize는 라이브러리 문서용이라 문서마다 검색·요약이 돈다.
+- **수정 2**: `Op::Answer.knowledge: Option<bool>`(false = 검색 없이 보낸 글만으로 답), 플래너 규칙 7 확장 + few-shot("다음 문장을 다듬어
+  정리해줘: …" → answer, knowledge=false), `AnswerRequest.retrieve`(false → 검색·인용 없음, 전용 시스템 프롬프트 "보낸 글만 재료로, 사실
+  추가 금지"). **`planner::guard::prefer_text_only_answer`**: 모델이 낸 플랜이 폴더·내용 필터 없는 지식 op(summarize/answer/explain/compare/
+  search)뿐이고 문장이 본문을 담고 있으면(다듬기 동사 + 콜론/줄바꿈/따옴표 + 60자 이상, 또는 본문 뒤 지시문) answer{knowledge:false}로
+  재지정하고 경고 `text_only_answer`를 카드에 남긴다. 날짜만 채워진 필터(본문 속 "12월말"을 날짜 해석기가 채움)는 명시 범위로 보지 않는다.
+  모델 우선 원칙은 그대로이며 이 규칙은 모델 결과에 대한 사후 안전장치다. 프런트: `handlePlan`이 `retrieve=false`로 `knowledge_answer`를
+  부르고 답변 카드에 "검색 없이 답변" 배지(`answer-text-only`), 플랜 설명에 "문서 검색 없이". 모의 백엔드도 같은 흐름(`carried-text.ts`).
+- **남은 것**: 55건 문서별 요약 같은 대량 작업은 플랜 카드의 "대상 문서 n건"을 보고 승인하는 현재 흐름 그대로다(명확화로 바꾸지 않음).
+  실제 Qwen3.5-4B가 규칙 7을 얼마나 따르는지는 사용자 PC에서 확인(안전장치가 받쳐 줌).
+
+### UI 배율 대응 — 고정 px 상자 제거 (2026-11-09; 사용자 보고 "UI 배율이 높아질 때 글자 잘림", A안 결정)
+
+- **증상·원인**: 설정 > 일반 > UI 배율(90~150 %, Ctrl+Shift+=/−)은 루트 글꼴 크기(rem)만 키운다. Tailwind 유틸리티는 rem이라 함께
+  커지지만 네 곳이 CSS px로 상자 크기를 고정해 두어(라이브러리 카드 200×268, 목록 행 44 px + px 열 너비, 검토 큐 행 추정 72 px,
+  뷰어 썸네일 행 128 px) 150 %에서는 썸네일(11 rem)만으로 카드가 차서 제목·쪽수·배지가 잘렸다. Windows 디스플레이 배율은 원인이
+  아니다(WebView2는 px와 rem을 같은 비율로 키움). 100 %에서도 배지가 두 줄인 카드(견적서.hwpx)는 제목이 이미 잘리고 있었다.
+- **점검**: 모의 백엔드로 15개 화면 × (1280×800 100 %/150 %, 960×600 150 %, 1920×1080 150 %)를 Playwright 스크립트로 자동 점검
+  (overflow 숨김 + 넘침, 고정 높이 넘침, 문서 가로·세로 스크롤). 깨지는 곳은 라이브러리 카드·목록, 뷰어 썸네일, 라이브러리 필터
+  줄(가로 스크롤), 최소 창의 상단바 Ctrl+K 세로 줄바꿈·상태바 두 줄 잘림뿐이었고 나머지 11개 화면은 줄바꿈만 늘었다.
+- **결정(A안)**: 전면 반응형 전환 대신 "글자만 안 잘리게" — px 고정값을 rem·측정 기반으로 바꾼다. 사이드바 자동 접힘·툴바 메뉴
+  접기·우측 패널 쌓기 같은 반응형 전환(B안)은 보류(최소 창 960 px의 데스크톱 앱이라 필요한 조건이 "최소 창 + 125 % 이상"뿐).
+- **수정**: `src/app/hooks/useRootFontSize.ts`(`useRootFontSize` = 16 px × 배율, `remPx`) — px로 계산해야 하는 코드(가상 스크롤 추정치,
+  열 개수)가 rem에서 px를 구한다. 라이브러리 카드 폭 12.5 rem·높이 자동(행을 `measureElement`로 측정, 배지가 두 줄이면 카드가 자람;
+  배율이 바뀌면 `virtualizer.measure()`), 목록 열을 rem 트랙으로 + 행 `measureElement`(최소 2.75 rem, 머리행 2.75 rem) + 폭이 모자라면
+  목록 안에서만 가로 스크롤(`min-w-[58rem]`, 컨테이너 `overflow-auto`), 필터 컨트롤 줄 `flex-wrap`(화면 전체가 가로 스크롤되던 것),
+  그리드·목록 `min-h-40`(선택 바·집계 바가 세로 공간을 다 먹어도 0이 되지 않고 메인 영역이 스크롤됨); 검토 큐 행 추정 4.5 rem(측정은
+  기존); 뷰어 썸네일은 래퍼(`pb-2`가 간격)를 측정 + 추정 8.75 rem; 상단바 `kbd` nowrap; 상태바 `min-h-7 flex-wrap` + 항목 nowrap(좁으면
+  두 줄로 늘고 잘리지 않음); `text-[10px]`/`[11px]` 25곳 → `text-[0.625rem]`/`[0.6875rem]`, `min-h-[60px]`·`grid-cols-[…120px…]`·
+  `max-w-[420px]`·`w-[640px]` → rem. 남은 px는 텍스트 레이어 박스의 `rounded-[2px]`·`text-[0px]`와 포인터 임계값뿐.
+- **남는 제약(의도)**: 150 %에 1280 px 폭 창이면 라이브러리 필터가 2~3줄로 줄바꿈되고 목록은 가로 스크롤이 생긴다. 최소 창(960×600)에
+  150 %면 상단바 항목이 가로로 넘쳐 화면이 가로 스크롤된다(유효 폭 640 px급) — B안 범위. 150 %는 1600 px 이상 폭에서 쓰는 편이 낫다.
+- **검증**: Playwright `scale.spec.ts` 3건 추가 — 150 %(슬라이더 End)에서 카드(제목·쪽수·배지 상자 안, 행 겹침 없음)·목록 행·썸네일
+  1/2쪽·검토 큐 행·상단바·상태바 잘림 없음, 100 %에서 배지 두 줄 카드의 제목·쪽수 표시, 슬라이더 최대 150 %. 자동 점검 재실행에서
+  실제 잘림 0(남은 항목은 sr-only와 모의 텍스트 레이어 박스뿐, 960×600 150 %의 가로 넘침만 그대로).
+
+
+### 0.3.0 1차 — 추출 스키마 내장 양식을 SW 개발 문서로 (2026-11-10; 사용자 지시 "순차적으로 실행", 계획 `docs/plan/v0.3.0.md` §3, 결정 1·2 "구형은 숨김")
+
+- **코어 `pipeline/schema.rs`**: `software_builtins()` 13종 — rfp(제안요청서)·proposal·sow(과업지시서)·srs(요구사항 정의서)·
+  dev_contract(소프트웨어 개발 계약서)·wbs·progress_report·meeting_minutes·test_report·change_request·acceptance(검수확인서)·
+  estimate(견적서, 인력·MM 기준)·general — 와 `legacy_builtins()` 6종(세금계산서·계산서·영수증·사업자등록증·계약서·신청서, `hidden: true`)을
+  `builtins()`가 합친다. `builtin_doc_types()`는 보이는 유형만, `builtin(key)`, `BUILTIN_VERSION = 2`. 유형 별칭표
+  `doc_type_aliases(slug)` 하나를 플래너 `doc_type()`·프로젝트 `type_aliases`·모의 `src/lib/doc-type-aliases.ts`가 함께 쓴다.
+  검증 규칙 2종 추가: `percent_range`(`*_percent`·`*_rate`·표 열 `progress` 0~100), `test_counts_sum`(총 케이스 = 통과+실패+보류).
+- **저장·승격**: `repo::ensure_builtins`가 숨긴 양식을 `enabled = 0`으로 넣고, 버전 갱신 때 사용자가 편집하지 않은 구형 행을
+  `enabled = 0, is_default = 0`으로 바꾼다(편집한 행은 그대로). `enable_legacy_builtins(conn)`은 테스트·탈출구. `extract.rs` 승격 열:
+  거래처 ← contractor/proposer/supplier/issuer/client.name…, 문서 날짜 ← contract/meeting/report/test/acceptance/request_date,
+  합계 ← price/budget/impact_cost; `aggregate::default_total`·`projects/relations.rs` 키·`projects/check.rs` 별칭·`forms.rs`
+  슬러그 표(회의록→meeting_minutes, 계약서→dev_contract, 견적서→estimate)도 같은 기준.
+- **프로젝트 템플릿** `builtin_templates()` 3종 — 외주 개발 사업(필수 8종, 규칙 6: 계약금액 = 제안 금액, ≤ 사업 예산, 과업 금액 ±5 %,
+  계약서·검수확인서 서명, 테스트 총 케이스), 유지보수(3종, 규칙 3), 내부 개발(3종, 규칙 3) — 와 `legacy_templates()`(DB에 넣지 않음;
+  테스트만 `ensure_templates(conn, &legacy_templates())`).
+- **플래너 규칙(`rules.rs`)**: 별칭으로 유형 인식, `total_field` 우선순위(grand_total → total → amount → price → budget → 합계금액·총액
+  라벨 → 아무 total), `fields_mentioned`는 유형 이름 안의 잘린 라벨("계약명"→"계약" ⊂ "개발 계약서")을 필드로 세지 않음, 검색어에서
+  별칭도 제거("'위약금' 들어간 계약서" → 위약금), "이 견적서 / this contract"는 열린 문서 참조(집계가 아니라 답변·요약, `doc_ids`),
+  최대·최소 트리거에 "가장 큰/작은/비싼/싼". 모델 프롬프트의 few-shot은 4차에서 이미 SW 문서로 바꿨다.
+- **골든셋**: `eval/golden/planner.json` 31건을 SW 문구로(영수증 → 견적서, 세금계산서 → 견적서·개발 계약서, 사업자등록증 → 요구사항
+  정의서·테스트 결과서, quotation → estimate), `planner-context.json` 유형 13종·스키마 3종(estimate·dev_contract·srs),
+  `eval/baselines/planner-rules.json` 재생성 — 99/100(미달은 이전과 같은 mx-10 규칙 되묻기 1건).
+- **프런트**: 모의 백엔드(`mock-pipeline.ts` SW 12종 정의·파일명 분류 규칙·OCR 텍스트·추출 템플릿·승격 열, 구형은 `hidden`;
+  `mock-projects.ts` 템플릿 3종, NL 규칙 파서가 별칭을 쓰고 2글자 별칭("계약"·"견적")은 다른 글자에 붙어 있으면 무시, 조사는 뒤에 공백·쉼표가
+  올 때만 떼어냄("과업 금액"·"이름" 보존); `mock-planner.ts` 별칭·`totalField`), `doc-type-aliases.ts`, i18n `documents.doc_types`
+  12종 추가·`projects.templates.builtin` 3종·`schemas.list.hidden`, `labels.ts`. 양식 화면: 꺼진 내장 양식은 "숨긴 기본 양식 N개"
+  접기(`schemas-hidden-builtins`) 안에, 행마다 `data-schema-enabled`.
+- **E2E**: 9개 스펙을 SW 샘플 문서(견적서-1p.jpg·개발계약서-2p.pdf·요구사항정의서-v1.2.pdf·WBS-한빛포털.xlsx·테스트결과서-1.2.pdf·
+  회의록-3p.pdf)로 재작성. 프로젝트 스펙은 내부 개발 템플릿(규칙 3 + 자연어 2 → 통과 4·불일치 1, 관계 kind `name`), 양식 등록
+  스펙은 견적서 양식이 내장 견적서와 같은 유형(`estimate`)의 두 번째 스키마가 되는 흐름(재분류 배너 없음).
+- **문서**: RUN-GUIDE 예시 명령·템플릿 이름, user-pc-checklist "0.3.0 1차" 절, README 첫 문단, CLAUDE.md 레이아웃, 계획 §3 진행 표시.
+- 사용자 결정대로 구형 양식·템플릿은 삭제하지 않고 숨겼다. 기존 작업 공간은 `BUILTIN_VERSION` 갱신으로 열 때 자동 전환된다
+  (사용자 편집 구형 양식은 유지).
+
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
@@ -1331,8 +1432,11 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | 2026-11-09 사용자 PC 보고 수정 2차 1~3번 (ffb8618·705808b·c78c27b) | `cargo test --workspace` 코어 282(3 ignored)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과(calamine·cfb 추가); vitest 23파일 139건; Playwright 43건(`dnd.spec` 2건 추가; 검토 큐 테스트의 목록 로드 전 count 경합을 대기 조건으로 고침); CI 7개 잡 |
 | 2026-11-09 사용자 PC 보고 수정 2차 4·5번 + 3차 6·7번 (9ca340d·6014ab9·b04660d) | `cargo test --workspace` 코어 294(4 ignored; `documents::layout` 15·`knowledge::answer` 7·`projects` 18 포함)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과(새 의존성 없음, 고지·SBOM 변경 없음); vitest 25파일 147건(`conversation.test.ts` 4·`textLayer.test.ts` 4 추가); Playwright 45건(`knowledge.spec` 세션 기억·`projects.spec` 자동 분류 추가, `documents.spec` 수정 글자 색 단언); `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(b04660d 푸시 이벤트; 9ca340d·6014ab9도 성공) |
 | 2026-11-09 어시스턴트 모델 우선 해석 + 되묻기·취소 (3467ad4) | `cargo test --workspace` 코어 296(4 ignored; `planner` 15·`prerouter` 8 포함)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과; vitest 25파일 147건; Playwright 46건(`planner.spec` 되묻기·취소 1건 추가); `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(3467ad4 푸시 이벤트) |
+| 2026-11-09 UI 배율 대응 A안(고정 px 상자 제거) | 프런트 전용 변경(Rust·고지·SBOM 변경 없음): `npm run typecheck`·`npm run build`·`licenses:check` 통과, vitest 25파일 147건, Playwright 49건(`scale.spec` 3건 추가; 1280×800 기본 뷰포트에서 150 % 검사); 모의 백엔드 15화면 × 4조건 자동 점검에서 실제 잘림 0; CI 7개 잡 모두 성공(be0b82d 푸시 이벤트, run 42601541022) |
+| 2026-11-10 요약 컨텍스트 초과 · 불필요한 RAG (4차, e7bf331·c5a8aa2) | `cargo test --workspace` 코어 303(4 ignored; `knowledge::tests` 3건·`planner::guard` 3건·`planner::tests` 1건 추가)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과, 새 의존성 없음; vitest 25파일 147건; Playwright 50건(`planner.spec` 붙여 넣은 글 1건 추가); `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(c5a8aa2 푸시 이벤트, run 42749113495) |
+| 2026-11-10 0.3.0 1차 — 내장 양식 SW 개발 문서화 (b561120 + 후속 커밋) | `cargo test --workspace` 코어 303(4 ignored; `pipeline::schema` 13 보임/6 숨김 검사·`planner` 18·`projects` 18)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(SW 문구 31건·문맥 재작성, 기준선 재생성, 미달은 이전과 같은 mx-10 1건); vitest 25파일 147건(`mock-generate.test` 규칙 파서·프로젝트 템플릿 SW화, `template.test` 예시 견적서); Playwright 전체 실행 50건 중 48 통과 → 정리 예시 문서·어시스턴트 테스트 템플릿(유지보수) 수정 뒤 `organize`·`projects` 스펙 7/7 재실행 통과; `npm run build`·`licenses:check` 통과; CI: 아래 기록 |
 | 2026-11-09 이미지 위 글자 레이어 · 우측 패널 AI 검색/이력 (488af39·9e56dd6) | `cargo test --workspace` 코어 266(3 ignored; `documents::layout` 9·`render` 실 PDFium 문자 박스·`import` 레이아웃 왕복 추가)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과; vitest 23파일 139건(`text-layer.test.ts` 8 추가); Playwright 41/41(`documents`·`knowledge`·`pipeline` 스펙을 레이어·검토 큐 기준으로 재작성); CI 7개 잡 두 커밋 모두 성공 |
-| 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 3회(run 42471185353·42475854955 solid 43 MB, 42547230697 파일별 압축 47.6 MB; 159 파일 검사 통과) · 1~3번 반영 Lite 빌드 성공(run 42577030466, 검증된 커밋 a461405 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.5 MB; Release 게시는 권한 분류기 거부로 publish=false) · **Full 0.1.0 빌드 성공(run 42547228170): 1.1 GB, 219 파일, CUDA 팩 cu121·cu129 동봉 검사 통과** · CUDA 팩 빌드 성공(cu121 run 42533483890 · cu129 run 42533486332 → Release v0.1.0) — 위 "패키징·고지" 참조 |
+| 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 3회(run 42471185353·42475854955 solid 43 MB, 42547230697 파일별 압축 47.6 MB; 159 파일 검사 통과) · 1~3번 반영 Lite 빌드 성공(run 42577030466, 검증된 커밋 a461405 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.5 MB; Release 게시는 권한 분류기 거부로 publish=false) · **1~8번(어시스턴트 모델 우선·되묻기·취소 포함) 반영 Lite 빌드 성공(run 42592935148, 검증된 커밋 3467ad4 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.6 MB, 2027-02-07까지 보관; publish=false — Release 게시는 사용자 작업)** · **0.2.0 릴리스(2026-11-09, https://github.com/kimhershey/docHarnes/releases/tag/v0.2.0)**: 검증된 커밋 3d55db8 고정, publish=true — Full run 42613728278(`DocuLens-Setup-Full-0.2.0-x64.exe` 1,156,786,994 B) → Lite run 42613985631(`DocuLens-Setup-Lite-0.2.0-x64.exe` 50,579,259 B); 자산 6개(설치파일 2종 + `.sha256` 2 + `THIRD-PARTY-NOTICES.md` + `sbom.cdx.json`); 이번에는 publish 디스패치가 거부되지 않음 · **4차 수정 반영 Lite 빌드 성공(2026-11-10, run 42753243021, 검증된 커밋 c5a8aa2 고정, 아티팩트 `DocuLens-Setup-Lite-0.2.0-x64` 50,593,409 B, 2027-02-08까지 보관; publish=false — 버전은 아직 0.2.0, 릴리스 v0.2.0의 설치파일은 3d55db8 빌드 그대로)** · **Full 0.1.0 빌드 성공(run 42547228170): 1.1 GB, 219 파일, CUDA 팩 cu121·cu129 동봉 검사 통과** · CUDA 팩 빌드 성공(cu121 run 42533483890 · cu129 run 42533486332 → Release v0.1.0) — 위 "패키징·고지" 참조 |
 
 이 환경에서 못 한 것: 설치파일의 릴리스 게시(권한 정책; 설치파일·CUDA 팩 빌드는 Windows 러너에서 완료), 실제 Qwen3.5-4B로 초안 품질·
 규칙 변환 품질·파이프라인 지표, 한컴/Word에서 생성 HWPX/DOCX 열기, OS 토스트·절전 방지 실동작 — 모두 `docs/user-pc-checklist.md`
@@ -1402,6 +1506,13 @@ P6·P7 항목.
 
 ## 다음 단계 메모 (v1.x)
 
+0. **0.3.0 계획(사용자 요청 6건, 2026-11-10)**: `docs/plan/v0.3.0.md` — 생성 템플릿·추출 내장 양식을 SW 개발 문서로, 문서 N개로
+   스키마 자동 저장, 생성 토큰 예산(절별 분할 생성), 프로젝트 상태를 시작·종료일 기준으로, 정리·내보내기의 프로젝트(설정)별 분류.
+   항목별 현재 구현·변경·영향 파일·사용자 결정(§9, 2026-11-10 답변 반영: 옛 양식 숨김, 저장은 편집 후 버튼 + 이름 중복 검사, 토큰 상한
+   GPU 32K/CPU 8K, 기한 경과 배지, 여러 프로젝트 문서는 추적되는 사본)·순서(3 → 1 → 5+6 → 2 → 4 → 7, 약 16.5 작업일). §10: 뷰어
+   수정은 앱 내부 데이터만 바꾸고 원본은 불변 — 되돌리기는 파일 저널 전용이라 글자 수정 이력·되돌리기를 7번으로 추가(우선은 그대로 둠).
+   **진행**: 3번(추출 내장 양식 SW 문서화) 2026-11-10 완료 — 위 "0.3.0 1차" 절. 다음은 1번(생성 템플릿) → 5+6 → 2 → 4 → 7, 끝나면
+   0.3.0 릴리스 노트(`docs/releases/v0.3.0.md`) + Lite 설치파일만 `publish=true`로 게시(사용자 지시).
 1. 남은 부록 D op(GUI 전용: `render`·`rotate`·`split`·`merge`·`add_to_kb`·`manage_collection`·`define_term`·`set_tier`·
    `set_backend`·`import_model`·`download_model`·`benchmark`·`open_workspace`)을 플래너에서 UI 액션으로 연결.
 2. P4·P5 숙제 중 미착수: bbox 그라운딩(디지털 PDF 문자 박스), 배치 PDF 자동 경계 탐지, 컬렉션 폴더 감시, OCR 출력 건전성

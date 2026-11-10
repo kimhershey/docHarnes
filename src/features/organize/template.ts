@@ -148,16 +148,16 @@ export interface TemplateDocument {
   rel_dir: string;
 }
 
-/** Sample document behind the live example (a Starbucks receipt, like the mock's). */
+/** Sample document behind the live example (the mock's software-development estimate). */
 export const EXAMPLE_DOCUMENT: TemplateDocument = {
   original_name: "scan_0008.jpg",
   title: null,
-  doc_type: "receipt",
-  vendor: "스타벅스 역삼점",
+  doc_type: "estimate",
+  vendor: "㈜한빛소프트",
   doc_date: "2026-10-14",
   imported_at: "2026-10-15T09:00:00Z",
-  total_amount: 12500,
-  tags: ["경비"],
+  total_amount: 12500000,
+  tags: ["외주"],
   rel_dir: "inbox",
 };
 

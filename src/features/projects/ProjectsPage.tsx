@@ -47,7 +47,7 @@ function ProjectCard({ project, onMove, templateName, compact, onDropDocs, onDro
   const drop = useDocumentDropTarget({ onDocuments: (docs) => onDropDocs(project, docs), onFiles: (paths) => onDropFiles(project, paths) });
   return (
     <li className={cn("relative flex flex-col gap-1.5 rounded-lg border border-border bg-bg-elevated p-3 text-sm", drop.isOver && "border-accent")} data-testid={`project-card-${project.id}`} data-project-status={project.status} data-project-name={project.name} {...drop.props}>
-      <DropHint active={drop.isActive} over={drop.isOver} className="text-[11px]" testId={`project-card-drop-${project.id}`}>
+      <DropHint active={drop.isActive} over={drop.isOver} className="text-[0.6875rem]" testId={`project-card-drop-${project.id}`}>
         {t("projects.card.drop_add", { name: project.name })}
       </DropHint>
       <div className="flex items-start gap-2">
@@ -80,7 +80,7 @@ function ProjectCard({ project, onMove, templateName, compact, onDropDocs, onDro
         <Button size="icon-sm" variant="ghost" disabled={!next} onClick={() => next && onMove(project, next)} aria-label={next ? t("projects.card.move_next_named", { name: project.name, status: t(`projects.status.${next}`) }) : t("projects.card.move_next")} data-testid="project-move-next">
           <ArrowRight />
         </Button>
-        <span className="ml-auto text-[11px] text-fg-subtle">{formatDate(project.updated_at, i18n.language)}</span>
+        <span className="ml-auto text-[0.6875rem] text-fg-subtle">{formatDate(project.updated_at, i18n.language)}</span>
       </div>
     </li>
   );

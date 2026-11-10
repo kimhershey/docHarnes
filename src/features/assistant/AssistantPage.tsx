@@ -315,7 +315,9 @@ export function AssistantPage() {
         const base = knowledgeScope();
         if (plan.scope.doc_ids && plan.scope.doc_ids.length > 0) base.documents = plan.scope.doc_ids;
         if (plan.scope.folder) base.folder = plan.scope.folder;
-        await askKnowledge(question, { scope: base });
+        // knowledge=false: the sentence carries the text to work on — answer from it, look nothing up.
+        const retrieve = !(op && op.op === "answer" && op.knowledge === false);
+        await askKnowledge(question, { scope: base, retrieve });
         return;
       }
       case "ui":

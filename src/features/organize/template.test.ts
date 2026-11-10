@@ -7,7 +7,7 @@ import { EXAMPLE_DOCUMENT, dateParts, formatTotal, insertAtCursor, parseTemplate
 // Mirrors the Rust unit tests in crates/doculens-core/src/organize/template.rs so the live example
 // in the organise screen agrees with the backend's plan.
 
-const typeLabel = (slug: string) => ({ receipt: "영수증", tax_invoice: "세금계산서" })[slug] ?? null;
+const typeLabel = (slug: string) => ({ estimate: "견적서", dev_contract: "소프트웨어 개발 계약서", receipt: "영수증" })[slug] ?? null;
 
 describe("template parsing", () => {
   it("splits literals and variables and reports unknown names", () => {
@@ -52,9 +52,9 @@ describe("path sanitising", () => {
 });
 
 describe("live example", () => {
-  it("renders the default templates for the sample receipt", () => {
+  it("renders the default templates for the sample estimate", () => {
     const r = renderTargetPath(DEFAULT_NAME_TEMPLATE, FOLDER_TEMPLATES.month, EXAMPLE_DOCUMENT, { typeLabel });
-    expect(r.path).toBe("documents/2026/10/영수증/2026-10-14_영수증_스타벅스 역삼점_12,500.jpg");
+    expect(r.path).toBe("documents/2026/10/견적서/2026-10-14_견적서_㈜한빛소프트_12,500,000.jpg");
     expect(r.missing).toEqual([]);
   });
 
@@ -70,7 +70,7 @@ describe("live example", () => {
 
   it("falls back to the import date and the original stem for title, and caps the path length", () => {
     const doc = { ...EXAMPLE_DOCUMENT, doc_date: null, title: null };
-    expect(renderTargetPath("{{year}}-{{month}}-{{day}}_{{title}}_{{tags}}.{{ext}}", "documents", doc, { typeLabel }).path).toBe("documents/2026-10-15_scan_0008_경비.jpg.jpg");
+    expect(renderTargetPath("{{year}}-{{month}}-{{day}}_{{title}}_{{tags}}.{{ext}}", "documents", doc, { typeLabel }).path).toBe("documents/2026-10-15_scan_0008_외주.jpg.jpg");
     const long = renderTargetPath("{{vendor}}".repeat(40), "documents/{{year}}", EXAMPLE_DOCUMENT, { typeLabel });
     expect([...long.path].length).toBeLessThanOrEqual(240);
     expect(long.path.startsWith("documents/2026/")).toBe(true);

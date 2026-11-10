@@ -1123,6 +1123,8 @@ export interface AnswerRequest {
   summary_mode?: SummaryMode;
   keep_chunks?: number[];
   save?: boolean;
+  /** Look evidence up (default true). false for a request that brings its own text (다듬기 · 교정 · 번역): nothing is retrieved or cited. */
+  retrieve?: boolean;
   min_similarity?: number | null;
   /** Earlier turns, oldest first (the question itself is not included). */
   history?: ConversationTurn[];
@@ -1530,7 +1532,7 @@ export type Op =
   | { op: "review"; action: ReviewOp; field?: string | null; value?: string | null; only?: ReviewOnly | null }
   | { op: "reindex"; scope?: "fts" | "vec" | "all" | null }
   | { op: "search"; query: string; mode?: SearchMode | null; top_k?: number | null }
-  | { op: "answer"; question: string; cite?: boolean | null }
+  | { op: "answer"; question: string; cite?: boolean | null; knowledge?: boolean | null }
   | { op: "summarize"; target?: "each_doc" | "set" | null; length?: "short" | "long" | null }
   | { op: "aggregate"; fn: AggregateFn; field?: string | null; group_by?: GroupBy | null; include_unreviewed?: boolean | null }
   | { op: "organize"; template?: string | null; folder_template?: string | null; group_by?: GroupBy | null; only_reviewed?: boolean | null; dry_run?: boolean | null }

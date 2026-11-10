@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import ko from "../src/i18n/ko.json" with { type: "json" };
-import { card, createWorkspace, docId, freshApp, importViaLibrary, tplPattern } from "./helpers";
+import { card, createWorkspace, docId, freshApp, importViaLibrary, tpl, tplPattern } from "./helpers";
 
 // P4 acceptance (design §4.1): bulk processing (classify → OCR → extract) →
 // review flags on the card and in the viewer → keyboard review queue →
@@ -10,31 +10,31 @@ import { card, createWorkspace, docId, freshApp, importViaLibrary, tplPattern } 
 // browser mock backend. Real VLM calls, validators and the mirror are covered
 // by the Rust tests.
 
-/** Imports the receipt without auto-processing, then runs 표준 처리 on it from the library bulk bar. */
-async function processReceipt(page: Parameters<typeof freshApp>[0]) {
-  await importViaLibrary(page, ["D:\\scan\\영수증-1p.jpg"], { autoLevel: "none" });
-  await page.getByTestId(`doc-select-${await docId(page, "영수증-1p.jpg")}`).check();
+/** Imports the estimate without auto-processing, then runs 표준 처리 on it from the library bulk bar. */
+async function processEstimate(page: Parameters<typeof freshApp>[0]) {
+  await importViaLibrary(page, ["D:\\scan\\견적서-1p.jpg"], { autoLevel: "none" });
+  await page.getByTestId(`doc-select-${await docId(page, "견적서-1p.jpg")}`).check();
   await page.getByTestId("library-process").click();
   await page.getByTestId("library-process-standard").click();
-  await expect(card(page, "영수증-1p.jpg")).toHaveAttribute("data-doc-status", "extracted", { timeout: 15_000 });
+  await expect(card(page, "견적서-1p.jpg")).toHaveAttribute("data-doc-status", "extracted", { timeout: 15_000 });
 }
 
 test.describe("P4 pipeline", () => {
   test("bulk processing extracts fields, flags low-confidence values and the viewer review promotes the document", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
-    await importViaLibrary(page, ["D:\\scan\\영수증-1p.jpg", "D:\\scan\\세금계산서-2p.pdf"], { autoLevel: "none" });
+    await importViaLibrary(page, ["D:\\scan\\견적서-1p.jpg", "D:\\scan\\개발계약서-2p.pdf"], { autoLevel: "none" });
 
     // Select both cards → 처리 ▾ → 표준 처리.
-    for (const name of ["영수증-1p.jpg", "세금계산서-2p.pdf"]) {
+    for (const name of ["견적서-1p.jpg", "개발계약서-2p.pdf"]) {
       await page.getByTestId(`doc-select-${await docId(page, name)}`).check();
     }
     await page.getByTestId("library-process").click();
     await page.getByTestId("library-process-standard").click();
-    await expect(card(page, "영수증-1p.jpg")).toHaveAttribute("data-doc-status", "extracted", { timeout: 15_000 });
-    await expect(card(page, "영수증-1p.jpg")).toContainText(ko.documents.doc_types.receipt);
-    await expect(card(page, "영수증-1p.jpg").getByTestId(/doc-review-/)).toHaveText(ko.library.review_pending);
-    await expect(card(page, "세금계산서-2p.pdf")).toContainText(ko.documents.doc_types.tax_invoice);
+    await expect(card(page, "견적서-1p.jpg")).toHaveAttribute("data-doc-status", "extracted", { timeout: 15_000 });
+    await expect(card(page, "견적서-1p.jpg")).toContainText(ko.documents.doc_types.estimate);
+    await expect(card(page, "견적서-1p.jpg").getByTestId(/doc-review-/)).toHaveText(ko.library.review_pending);
+    await expect(card(page, "개발계약서-2p.pdf")).toContainText(ko.documents.doc_types.dev_contract);
 
     // Jobs page shows the Korean summary of the pipeline job.
     await page.getByTestId("nav-jobs").click();
@@ -46,23 +46,23 @@ test.describe("P4 pipeline", () => {
     // Viewer: the OCR text sits on the page image (estimated positions for a photo); the right pane
     // only has AI 검색 and 이력 — the review itself happens in the queue.
     await page.getByTestId("nav-library").click();
-    await card(page, "영수증-1p.jpg").getByTestId(/doc-open-/).click();
+    await card(page, "견적서-1p.jpg").getByTestId(/doc-open-/).click();
     await expect(page.getByTestId("page-viewer")).toBeVisible();
     await expect(page.getByTestId("viewer-status")).toHaveText(ko.documents.status.extracted);
     await expect(page.getByTestId("viewer-review-badge")).toHaveText(ko.viewer.review_badge.pending);
-    await expect(page.getByTestId("viewer-text-layer")).toContainText("스타벅스 역삼점");
-    await expect(page.getByTestId("viewer-text-layer")).toContainText("아메리카노");
+    await expect(page.getByTestId("viewer-text-layer")).toContainText("㈜한빛소프트");
+    await expect(page.getByTestId("viewer-text-layer")).toContainText("백엔드 개발");
     await expect(page.getByTestId("viewer-layer-estimated")).toBeVisible();
     await expect(page.getByTestId("viewer-tab-fields")).toHaveCount(0);
 
-    // Review queue: correct the approval number, approve the rest of the receipt → reviewed.
+    // Review queue: correct the validity date, approve the rest of the estimate → reviewed.
     await page.getByTestId("nav-review").click();
     await expect(page.getByTestId("page-review")).toBeVisible();
-    const receiptItems = page.locator('[data-testid^="review-item-"]').filter({ hasText: "영수증-1p.jpg" });
-    await receiptItems.filter({ hasText: "승인번호" }).first().click();
-    await expect(page.getByTestId("review-current-title")).toContainText("승인번호");
+    const receiptItems = page.locator('[data-testid^="review-item-"]').filter({ hasText: "견적서-1p.jpg" });
+    await receiptItems.filter({ hasText: "유효기간" }).first().click();
+    await expect(page.getByTestId("review-current-title")).toContainText("유효기간");
     await page.getByTestId("review-edit").click();
-    await page.getByTestId("review-edit-input").fill("87654321");
+    await page.getByTestId("review-edit-input").fill("2026-12-31");
     await page.getByTestId("review-edit-save").click();
     await expect(page.getByTestId("review-edit-dialog")).toHaveCount(0);
     await receiptItems.first().click();
@@ -71,19 +71,19 @@ test.describe("P4 pipeline", () => {
 
     // Back in the viewer the document is reviewed and the 이력 tab records the correction.
     await page.getByTestId("nav-library").click();
-    await card(page, "영수증-1p.jpg").getByTestId(/doc-open-/).click();
+    await card(page, "견적서-1p.jpg").getByTestId(/doc-open-/).click();
     await expect(page.getByTestId("viewer-status")).toHaveText(ko.documents.status.reviewed);
     await expect(page.getByTestId("viewer-review-badge")).toHaveText(ko.viewer.review_badge.done);
     await page.getByTestId("viewer-tab-history").click();
-    const change = page.getByTestId("history-change").filter({ hasText: "approval_no" }).first();
+    const change = page.getByTestId("history-change").filter({ hasText: "valid_until" }).first();
     await expect(change).toContainText(ko.pipeline.field_status.corrected);
-    await expect(change).toContainText("87654321");
+    await expect(change).toContainText("2026-12-31");
   });
 
   test("review queue: keyboard approval, editing and the reason filter", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
-    await processReceipt(page);
+    await processEstimate(page);
 
     await page.getByTestId("nav-review").click();
     await expect(page.getByTestId("page-review")).toBeVisible();
@@ -114,13 +114,13 @@ test.describe("P4 pipeline", () => {
     await page.getByTestId("review-approve-doc").click();
     await expect(page.getByTestId("review-empty")).toBeVisible();
     await page.getByTestId("nav-library").click();
-    await expect(card(page, "영수증-1p.jpg")).toHaveAttribute("data-doc-status", "reviewed");
+    await expect(card(page, "견적서-1p.jpg")).toHaveAttribute("data-doc-status", "reviewed");
   });
 
   test("review edit dialog: Enter during a Korean IME composition neither saves nor approves", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
-    await processReceipt(page);
+    await processEstimate(page);
 
     await page.getByTestId("nav-review").click();
     await expect(page.getByTestId("page-review")).toBeVisible();
@@ -157,7 +157,15 @@ test.describe("P4 pipeline", () => {
     // Built-in samples are listed; NL creation opens a draft in the editor.
     await page.getByTestId("nav-schemas").click();
     await expect(page.getByTestId("page-schemas")).toBeVisible();
-    await expect(page.locator('[data-testid^="schema-row-builtin-"]')).toHaveCount(7);
+    // 13 software forms are listed; the 6 business forms of 0.1 stay hidden (disabled) behind a disclosure.
+    await expect(page.locator('[data-testid^="schema-row-builtin-"]:visible')).toHaveCount(13);
+    await expect(page.locator('[data-testid="schema-row-builtin-estimate"]')).toHaveAttribute("data-schema-enabled", "true");
+    const hiddenBuiltins = page.getByTestId("schemas-hidden-builtins");
+    await expect(hiddenBuiltins).toContainText(tpl(ko.schemas.list.hidden, { count: 6 }));
+    await hiddenBuiltins.locator("summary").click();
+    await expect(page.locator('[data-testid="schema-row-builtin-tax_invoice"]')).toBeVisible();
+    await expect(page.locator('[data-testid="schema-row-builtin-tax_invoice"]')).toHaveAttribute("data-schema-enabled", "false");
+    await expect(page.locator('[data-testid^="schema-row-builtin-"]')).toHaveCount(19);
     await page.getByTestId("schemas-nl-create").click();
     await page.getByTestId("nl-schema-text").fill("발주서. 발주번호, 거래처, 납기일자, 합계금액, 품목");
     await page.getByTestId("nl-schema-generate").click();
@@ -183,11 +191,12 @@ test.describe("P4 pipeline", () => {
     await page.getByTestId("form-register-name").fill("견적서");
     await page.getByTestId("form-register-derive").click();
     await expect(page.getByTestId("schema-editor")).toBeVisible();
-    await expect(page.getByTestId("schema-doc-type")).toHaveValue("quotation");
+    // 견적서 is a software type now: the registered form joins the built-in estimate schema as a second schema of the type.
+    await expect(page.getByTestId("schema-doc-type")).toHaveValue("estimate");
     await expect(page.getByTestId("schema-field").first()).toBeVisible();
     await page.getByTestId("schema-save").click();
-    await expect(page.locator('[data-schema-doc-type="quotation"]')).toHaveCount(1);
-    await expect(page.getByTestId("schemas-reclassify-banner")).toBeVisible();
+    await expect(page.locator('[data-schema-doc-type="estimate"]')).toHaveCount(2);
+    await expect(page.getByTestId("schemas-reclassify-banner")).toHaveCount(0);
     await page.getByTestId("nav-library").click();
     await expect(card(page, "견적서 양식.hwpx")).toContainText("견적서");
 
@@ -201,19 +210,19 @@ test.describe("P4 pipeline", () => {
   test("a word selected on the page image becomes a field value with one click", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
-    await processReceipt(page);
-    await card(page, "영수증-1p.jpg").getByTestId(/doc-open-/).click();
+    await processEstimate(page);
+    await card(page, "견적서-1p.jpg").getByTestId(/doc-open-/).click();
     const layer = page.getByTestId("viewer-text-layer");
-    await expect(layer).toContainText("스타벅스 역삼점");
-    await layer.locator("[data-word-index]", { hasText: "역삼점" }).first().click();
-    await expect(page.getByTestId("viewer-selection-toolbar")).toContainText("역삼점");
+    await expect(layer).toContainText("㈜한빛소프트");
+    await layer.locator("[data-word-index]", { hasText: "㈜한빛소프트" }).first().click();
+    await expect(page.getByTestId("viewer-selection-toolbar")).toContainText("㈜한빛소프트");
     await page.getByTestId("viewer-selection-field").click();
-    // The menu lists each field with its current value: pick the store name by its value.
-    await page.getByRole("menuitem").filter({ hasText: "스타벅스 역삼점" }).click();
+    // The menu lists each field with its current value: pick the recipient by its value.
+    await page.getByRole("menuitem").filter({ hasText: "DocuLens" }).click();
     // The 이력 tab shows the correction (old → new value).
     await page.getByTestId("viewer-tab-history").click();
-    const change = page.getByTestId("history-change").filter({ hasText: "store_name" }).first();
+    const change = page.getByTestId("history-change").filter({ hasText: "recipient" }).first();
     await expect(change).toContainText(ko.pipeline.field_status.corrected);
-    await expect(change).toContainText("스타벅스 역삼점 → 역삼점");
+    await expect(change).toContainText("DocuLens → ㈜한빛소프트");
   });
 });

@@ -21,6 +21,9 @@ use super::*;
 fn db() -> Db {
     let db = Db::open_in_memory().unwrap();
     db.with(pipeline_repo::ensure_builtins).unwrap();
+    // The fixtures below are 0.1 business documents and templates (hidden / unseeded by default).
+    db.with(pipeline_repo::enable_legacy_builtins).unwrap();
+    db.with(|c| repo::ensure_templates(c, &repo::legacy_templates())).unwrap();
     db
 }
 
@@ -201,25 +204,28 @@ fn migration_adds_project_tables() {
 
 #[test]
 fn builtin_templates_and_user_template_crud() {
-    let db = db();
+    // A fresh workspace: the software set only (the legacy templates are not seeded).
+    let db = Db::open_in_memory().unwrap();
+    db.with(pipeline_repo::ensure_builtins).unwrap();
     let pure = builtin_templates();
     assert_eq!(pure.len(), 3);
     assert!(pure.iter().all(|t| t.builtin && !t.rules.is_empty() && !t.required_doc_types.is_empty()));
-    let audit = pure.iter().find(|t| t.id == "tpl_certification_audit").unwrap();
-    assert_eq!(audit.required_doc_types, vec!["business_registration", "application_form", "contract"]);
-    let signed = audit.rules.iter().find(|r| r.op == RuleOp::Present).unwrap();
-    assert_eq!(signed.left, RuleOperand::field("application_form", "signed"));
-    let settlement = pure.iter().find(|t| t.id == "tpl_purchase_settlement").unwrap();
-    assert!(settlement.rules.iter().any(|r| r.op == RuleOp::WithinPct && r.tolerance == Some(5.0)));
-    // Every built-in rule refers to a field the resolution context knows.
-    let ctx = db.with(|c| rules::context(c, None, Some("tpl_purchase_settlement"))).unwrap();
+    let outsourcing = pure.iter().find(|t| t.id == "tpl_outsourcing").unwrap();
+    assert_eq!(
+        outsourcing.required_doc_types,
+        vec!["rfp", "proposal", "dev_contract", "sow", "srs", "wbs", "test_report", "acceptance"]
+    );
+    let signed = outsourcing.rules.iter().find(|r| r.op == RuleOp::Present).unwrap();
+    assert_eq!(signed.left, RuleOperand::field("dev_contract", "signed"));
+    assert!(outsourcing.rules.iter().any(|r| r.op == RuleOp::WithinPct && r.tolerance == Some(5.0)));
+    assert!(outsourcing
+        .rules
+        .iter()
+        .any(|r| r.op == RuleOp::Lte && r.right == Some(RuleOperand::field("rfp", "budget"))));
+    // Every built-in rule refers to a field the resolution context knows (the software schemas).
     for t in &pure {
+        let ctx = db.with(|c| rules::context(c, None, Some(&t.id))).unwrap();
         for r in &t.rules {
-            let ctx = if t.id == "tpl_purchase_settlement" {
-                ctx.clone()
-            } else {
-                db.with(|c| rules::context(c, None, Some(&t.id))).unwrap()
-            };
             let l = &r.left;
             assert!(
                 ctx.field(l.doc_type.as_deref().unwrap(), l.field.as_deref().unwrap()).is_some(),
@@ -237,19 +243,33 @@ fn builtin_templates_and_user_template_crud() {
             }
         }
     }
+    // The legacy templates still resolve against the (re-enabled) legacy schemas.
+    db.with(pipeline_repo::enable_legacy_builtins).unwrap();
+    db.with(|c| repo::ensure_templates(c, &repo::legacy_templates())).unwrap();
+    for t in repo::legacy_templates() {
+        let ctx = db.with(|c| rules::context(c, None, Some(&t.id))).unwrap();
+        for r in &t.rules {
+            let l = &r.left;
+            assert!(
+                ctx.field(l.doc_type.as_deref().unwrap(), l.field.as_deref().unwrap()).is_some(),
+                "{} {:?}",
+                t.id,
+                l
+            );
+        }
+    }
 
     let listed = db.with(repo::list_templates).unwrap();
-    assert_eq!(listed.len(), 3);
+    assert_eq!(listed.len(), 6, "3 software + 3 legacy seeded above");
     assert!(listed.iter().all(|t| t.builtin));
     // Listing again does not duplicate.
-    assert_eq!(db.with(repo::list_templates).unwrap().len(), 3);
+    assert_eq!(db.with(repo::list_templates).unwrap().len(), 6);
     // `ensure_builtins` refreshes an untouched built-in from its definition without rewriting
     // `created_at` (and leaves it refreshable: `updated_at` stays equal to `created_at`).
-    let before = db.with(|c| repo::get_template(c, "tpl_certification_audit")).unwrap().unwrap();
-    db.with(|c| c.execute("UPDATE project_templates SET name_en = 'stale' WHERE id = 'tpl_certification_audit'", []))
-        .unwrap();
+    let before = db.with(|c| repo::get_template(c, "tpl_outsourcing")).unwrap().unwrap();
+    db.with(|c| c.execute("UPDATE project_templates SET name_en = 'stale' WHERE id = 'tpl_outsourcing'", [])).unwrap();
     db.with(repo::ensure_builtins).unwrap();
-    let after = db.with(|c| repo::get_template(c, "tpl_certification_audit")).unwrap().unwrap();
+    let after = db.with(|c| repo::get_template(c, "tpl_outsourcing")).unwrap().unwrap();
     assert_eq!((after.created_at, after.updated_at), (before.created_at, before.updated_at));
     assert_eq!(after.name_en, before.name_en, "refreshed from the built-in definition");
 
@@ -276,7 +296,7 @@ fn builtin_templates_and_user_template_crud() {
     assert_eq!(user.name_en, "임대 계약 검토", "name_en falls back to the Korean name");
     assert_eq!(user.required_doc_types, vec!["contract", "business_registration"], "deduplicated");
     assert!(!user.rules[0].id.is_empty(), "rule ids are filled in");
-    assert_eq!(db.with(repo::list_templates).unwrap().len(), 4);
+    assert_eq!(db.with(repo::list_templates).unwrap().len(), 7);
 
     let updated = db
         .with(|c| {
@@ -294,11 +314,11 @@ fn builtin_templates_and_user_template_crud() {
     assert_eq!((updated.name_ko.as_str(), updated.name_en.as_str()), ("임대 계약", "Lease"));
     assert!(updated.rules.is_empty());
 
-    let err = db.with(|c| repo::delete_template(c, "tpl_certification_audit")).unwrap_err();
+    let err = db.with(|c| repo::delete_template(c, "tpl_outsourcing")).unwrap_err();
     assert!(err.to_string().contains("template_builtin"), "{err}");
     assert!(db.with(|c| repo::delete_template(c, &user.id)).unwrap());
     assert!(!db.with(|c| repo::delete_template(c, &user.id)).unwrap());
-    assert_eq!(db.with(repo::list_templates).unwrap().len(), 3);
+    assert_eq!(db.with(repo::list_templates).unwrap().len(), 6);
 
     // Editing a built-in keeps the edit across `ensure_builtins`.
     let edited = db
@@ -306,9 +326,9 @@ fn builtin_templates_and_user_template_crud() {
             repo::save_template(
                 c,
                 &TemplateInput {
-                    id: Some("tpl_vendor_registration".into()),
-                    name_ko: "거래처 등록(수정)".into(),
-                    required_doc_types: vec!["business_registration".into()],
+                    id: Some("tpl_maintenance".into()),
+                    name_ko: "유지보수(수정)".into(),
+                    required_doc_types: vec!["dev_contract".into()],
                     ..Default::default()
                 },
             )
@@ -316,8 +336,8 @@ fn builtin_templates_and_user_template_crud() {
         .unwrap();
     assert!(edited.builtin);
     db.with(repo::ensure_builtins).unwrap();
-    let again = db.with(|c| repo::get_template(c, "tpl_vendor_registration")).unwrap().unwrap();
-    assert_eq!(again.name_ko, "거래처 등록(수정)");
+    let again = db.with(|c| repo::get_template(c, "tpl_maintenance")).unwrap().unwrap();
+    assert_eq!(again.name_ko, "유지보수(수정)");
     let empty =
         db.with(|c| repo::save_template(c, &TemplateInput { name_ko: "  ".into(), ..Default::default() })).unwrap_err();
     assert!(empty.to_string().contains("template_name_empty"));
@@ -333,7 +353,7 @@ fn project_crud_inherits_template_rules() {
     assert!(p.last_check_at.is_none());
     let rules = db.with(|c| repo::rules_of(c, &p.id)).unwrap();
     assert_eq!(rules.len(), 3);
-    let template = builtin_templates().into_iter().find(|t| t.id == "tpl_certification_audit").unwrap();
+    let template = repo::legacy_templates().into_iter().find(|t| t.id == "tpl_certification_audit").unwrap();
     assert!(rules
         .iter()
         .zip(&template.rules)

@@ -15,6 +15,7 @@
 //! document generation / project ops stay for v1.1.
 
 pub mod exec;
+pub mod guard;
 pub mod llm;
 pub mod prompts;
 pub mod rules;
@@ -597,6 +598,10 @@ pub enum Op {
         question: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cite: Option<bool>,
+        /// `false`: the user supplied the text to work on (다듬기 · 교정 · 번역 · 정리) — answer from that
+        /// text alone, without looking documents up.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        knowledge: Option<bool>,
     },
     Summarize {
         #[serde(default, skip_serializing_if = "Option::is_none")]

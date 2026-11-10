@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router";
 
+import { remPx, useRootFontSize } from "@/app/hooks/useRootFontSize";
 import { Badge, badgeVariants } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog, type ConfirmRequest } from "@/components/ui/confirm-dialog";
@@ -46,9 +47,11 @@ import { MergeDialog } from "./SplitMergeDialogs";
 import { statusVariant } from "./status";
 import { useDocumentDrop } from "./useDocumentDrop";
 
-const CARD_W = 200;
-const CARD_H = 268;
-const ROW_H = 44;
+/** Card / row geometry in rem: it follows the UI 배율 together with the text it holds (the former px sizes clipped titles and badges from 125 % up). */
+const CARD_W_REM = 12.5;
+/** Row estimate until the virtualiser has measured the rendered cards (thumbnail 11 rem + title, meta and one badge row). */
+const CARD_EST_REM = 18;
+const LIST_ROW_REM = 2.75;
 const SORTS: DocumentSort[] = ["imported_desc", "imported_asc", "name_asc", "name_desc", "size_desc"];
 
 type TFn = (k: string, o?: Record<string, unknown>) => string;
@@ -304,7 +307,7 @@ export function LibraryPage() {
               {t("library.inbox_watch_hint")}
             </span>
           </label>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex flex-wrap items-center gap-2">
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -448,7 +451,7 @@ export function LibraryPage() {
                 <Trash2 />
                 {t("library.actions.delete")}
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+              <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())} data-testid="library-clear-selection">
                 {t("library.actions.clear_selection")}
               </Button>
             </>
@@ -536,20 +539,21 @@ function FolderItem({ label, count, active, onClick, testId }: { label: string; 
   );
 }
 
-function useColumns(ref: React.RefObject<HTMLDivElement | null>, itemWidth: number): number {
+/** Cards per row. `gap` is the 1 rem between cards (half the grid's horizontal padding) in px at the current UI 배율. */
+function useColumns(ref: React.RefObject<HTMLDivElement | null>, itemWidth: number, gap: number): number {
   const [cols, setCols] = useState(() => {
     const w = typeof window === "undefined" ? 1280 : window.innerWidth - 300;
-    return Math.max(1, Math.floor((w - 16) / (itemWidth + 16)));
+    return Math.max(1, Math.floor((w - gap) / (itemWidth + gap)));
   });
   useEffect(() => {
     const el = ref.current;
     if (!el) return undefined;
-    const update = () => setCols(Math.max(1, Math.floor((el.clientWidth - 16) / (itemWidth + 16))));
+    const update = () => setCols(Math.max(1, Math.floor((el.clientWidth - gap) / (itemWidth + gap))));
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [ref, itemWidth]);
+  }, [ref, itemWidth, gap]);
   return cols;
 }
 
@@ -576,14 +580,19 @@ function ReviewBadge({ doc, onOpen, t }: { doc: DocumentView; onOpen: (id: strin
 function GridView({ docs, selected, onToggle, onOpen, onOpenReview, typeLabel, dragDocs }: { docs: DocumentView[]; selected: Set<string>; dragDocs: (doc: DocumentView) => DragDoc[]; onToggle: (id: string) => void; onOpen: (id: string) => void; onOpenReview: (id: string) => void; typeLabel: (slug: string) => string }) {
   const { t } = useTranslation();
   const parentRef = useRef<HTMLDivElement | null>(null);
-  const cols = useColumns(parentRef, CARD_W);
+  const rootPx = useRootFontSize();
+  const cols = useColumns(parentRef, remPx(CARD_W_REM, rootPx), rootPx);
   const rows = Math.ceil(docs.length / cols);
-  const virtualizer = useVirtualizer({ count: rows, getScrollElement: () => parentRef.current, estimateSize: () => CARD_H + 16, overscan: 3 });
+  // Rows are measured after render (`measureElement`): a card grows with its title and badge rows instead of clipping them.
+  const virtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({ count: rows, getScrollElement: () => parentRef.current, estimateSize: () => remPx(CARD_EST_REM, rootPx), overscan: 3 });
+  useEffect(() => {
+    virtualizer.measure();
+  }, [rootPx, virtualizer]);
   return (
-    <div ref={parentRef} className="min-h-0 flex-1 overflow-y-auto p-2" role="list" aria-label={t("library.grid_label")} data-testid="library-grid">
+    <div ref={parentRef} className="min-h-40 flex-1 overflow-y-auto p-2" role="list" aria-label={t("library.grid_label")} data-testid="library-grid">
       <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
         {virtualizer.getVirtualItems().map((row) => (
-          <div key={row.key} className="absolute left-0 flex w-full gap-4 px-2" style={{ transform: `translateY(${row.start}px)`, height: row.size }}>
+          <div key={row.key} ref={virtualizer.measureElement} data-index={row.index} className="absolute left-0 flex w-full gap-4 px-2 pb-4" style={{ transform: `translateY(${row.start}px)` }}>
             {docs.slice(row.index * cols, row.index * cols + cols).map((doc) => (
               <DocCard key={doc.id} doc={doc} selected={selected.has(doc.id)} onToggle={() => onToggle(doc.id)} onOpen={() => onOpen(doc.id)} onOpenReview={onOpenReview} t={t} typeLabel={typeLabel} dragDocs={dragDocs} />
             ))}
@@ -599,7 +608,7 @@ function DocCard({ doc, selected, onToggle, onOpen, onOpenReview, t, typeLabel, 
     <div
       role="listitem"
       className={cn("group relative flex flex-col overflow-hidden rounded-lg border border-border bg-bg-elevated text-left transition-colors hover:border-accent", selected && "border-accent ring-2 ring-accent/40")}
-      style={{ width: CARD_W, height: CARD_H }}
+      style={{ width: `${CARD_W_REM}rem` }}
       data-testid={`doc-card-${doc.id}`}
       data-doc-name={doc.original_name}
       data-doc-status={doc.status}
@@ -616,8 +625,8 @@ function DocCard({ doc, selected, onToggle, onOpen, onOpenReview, t, typeLabel, 
         data-testid={`doc-select-${doc.id}`}
       />
       <button type="button" className="flex min-h-0 flex-1 flex-col text-left" onClick={onOpen} aria-label={`${t("library.actions.open_doc")}: ${doc.title ?? doc.original_name}`} data-testid={`doc-open-${doc.id}`}>
-        <Thumb doc={doc} className="h-44 w-full border-b border-border" />
-        <div className="flex min-h-0 flex-1 flex-col gap-0.5 p-2 pb-1">
+        <Thumb doc={doc} className="h-44 w-full shrink-0 border-b border-border" />
+        <div className="flex flex-col gap-0.5 p-2 pb-1">
           <span className="truncate text-sm font-medium" title={doc.original_name}>
             {doc.title ?? doc.original_name}
           </span>
@@ -649,12 +658,20 @@ function DocCard({ doc, selected, onToggle, onOpen, onOpenReview, t, typeLabel, 
   );
 }
 
-const LIST_COLS = "grid-cols-[28px_minmax(0,2fr)_80px_60px_100px_110px_90px_150px_90px]";
+/** Column tracks in rem so they grow with the UI 배율 like the cell text (px tracks wrapped the date and size cells from 125 % up). */
+const LIST_COLS = "grid-cols-[1.75rem_minmax(0,2fr)_5rem_3.75rem_6.25rem_6.875rem_5.625rem_9.375rem_5.625rem]";
+/** Fixed tracks + gaps + padding come to ~50 rem; below that the name column would vanish, so the list scrolls sideways instead. */
+const LIST_MIN_W = "min-w-[58rem]";
 
 function ListView({ docs, selected, onToggle, onOpen, onOpenReview, typeLabel, locale, dragDocs }: { docs: DocumentView[]; selected: Set<string>; dragDocs: (doc: DocumentView) => DragDoc[]; onToggle: (id: string) => void; onOpen: (id: string) => void; onOpenReview: (id: string) => void; typeLabel: (slug: string) => string; locale: string }) {
   const { t } = useTranslation();
   const parentRef = useRef<HTMLDivElement | null>(null);
-  const virtualizer = useVirtualizer({ count: docs.length, getScrollElement: () => parentRef.current, estimateSize: () => ROW_H, overscan: 10, scrollMargin: ROW_H });
+  const rootPx = useRootFontSize();
+  const rowPx = remPx(LIST_ROW_REM, rootPx);
+  const virtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({ count: docs.length, getScrollElement: () => parentRef.current, estimateSize: () => rowPx, overscan: 10, scrollMargin: rowPx });
+  useEffect(() => {
+    virtualizer.measure();
+  }, [rootPx, virtualizer]);
   const headers = [
     t("library.columns.name"),
     t("library.columns.kind"),
@@ -666,8 +683,8 @@ function ListView({ docs, selected, onToggle, onOpen, onOpenReview, typeLabel, l
     t("library.columns.size"),
   ];
   return (
-    <div ref={parentRef} className="min-h-0 flex-1 overflow-y-auto" role="grid" aria-label={t("library.list_label")} aria-rowcount={docs.length + 1} data-testid="library-list">
-      <div role="row" className={cn("sticky top-0 z-10 grid gap-2 border-b border-border bg-bg px-3 py-1.5 text-xs font-medium text-fg-muted", LIST_COLS)} style={{ height: ROW_H }}>
+    <div ref={parentRef} className="min-h-40 flex-1 overflow-auto" role="grid" aria-label={t("library.list_label")} aria-rowcount={docs.length + 1} data-testid="library-list">
+      <div role="row" className={cn("sticky top-0 z-10 grid items-center gap-2 border-b border-border bg-bg px-3 text-xs font-medium text-fg-muted", LIST_COLS, LIST_MIN_W)} style={{ height: rowPx }}>
         <span role="columnheader" aria-label={t("common.select")} />
         {headers.map((h) => (
           <span key={h} role="columnheader">
@@ -675,17 +692,19 @@ function ListView({ docs, selected, onToggle, onOpen, onOpenReview, typeLabel, l
           </span>
         ))}
       </div>
-      <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+      <div className={LIST_MIN_W} style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
         {virtualizer.getVirtualItems().map((row) => {
           const doc = docs[row.index]!;
           return (
             <div
               key={doc.id}
+              ref={virtualizer.measureElement}
+              data-index={row.index}
               role="row"
               aria-rowindex={row.index + 2}
               aria-selected={selected.has(doc.id)}
-              className={cn("absolute left-0 grid w-full items-center gap-2 border-b border-border px-3 text-sm hover:bg-bg-sunken", LIST_COLS, selected.has(doc.id) && "bg-accent-soft")}
-              style={{ transform: `translateY(${row.start - virtualizer.options.scrollMargin}px)`, height: row.size }}
+              className={cn("absolute left-0 grid w-full items-center gap-2 border-b border-border px-3 py-1 text-sm hover:bg-bg-sunken", LIST_COLS, selected.has(doc.id) && "bg-accent-soft")}
+              style={{ transform: `translateY(${row.start - virtualizer.options.scrollMargin}px)`, minHeight: rowPx }}
               data-testid={`doc-row-${doc.id}`}
               data-doc-name={doc.original_name}
               data-doc-status={doc.status}

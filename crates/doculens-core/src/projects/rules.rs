@@ -168,16 +168,18 @@ fn fi(path: &str, ko: &str, en: &str, kind: FieldKind) -> FieldInfo {
 pub fn fallback_fields(slug: &str) -> Vec<FieldInfo> {
     use FieldKind::*;
     match slug {
-        "quotation" | "transaction_statement" | "purchase_order" | "tax_invoice" | "invoice_exempt" => vec![
-            fi("issue_date", "작성일자", "Issue date", Date),
-            fi("supplier.brn", "공급자 사업자등록번호", "Supplier business reg. no.", Brn),
-            fi("supplier.name", "공급자 상호", "Supplier name", String),
-            fi("buyer.brn", "공급받는자 사업자등록번호", "Buyer business reg. no.", Brn),
-            fi("buyer.name", "공급받는자 상호", "Buyer name", String),
-            fi("supply_total", "공급가액 합계", "Supply total", Amount),
-            fi("tax_total", "세액 합계", "Tax total", Amount),
-            fi("grand_total", "합계금액", "Grand total", Amount),
-        ],
+        "quotation" | "transaction_statement" | "purchase_order" | "tax_invoice" | "invoice_exempt" | "estimate" => {
+            vec![
+                fi("issue_date", "작성일자", "Issue date", Date),
+                fi("supplier.brn", "공급자 사업자등록번호", "Supplier business reg. no.", Brn),
+                fi("supplier.name", "공급자 상호", "Supplier name", String),
+                fi("buyer.brn", "공급받는자 사업자등록번호", "Buyer business reg. no.", Brn),
+                fi("buyer.name", "공급받는자 상호", "Buyer name", String),
+                fi("supply_total", "공급가액 합계", "Supply total", Amount),
+                fi("tax_total", "세액 합계", "Tax total", Amount),
+                fi("grand_total", "합계금액", "Grand total", Amount),
+            ]
+        }
         "financial_statement" => vec![
             fi("period_end", "기준일", "Period end", Date),
             fi("total_assets", "자산총계", "Total assets", Amount),
@@ -828,21 +830,7 @@ fn split_english(before: &str, after: &str) -> (String, Option<String>) {
 
 /// Extra names a document type is called by (besides its registered labels).
 fn type_aliases(slug: &str) -> &'static [&'static str] {
-    match slug {
-        "tax_invoice" => &["세금계산서", "세금 계산서", "tax invoice", "invoice"],
-        "invoice_exempt" => &["계산서", "면세계산서", "exempt invoice"],
-        "business_registration" => {
-            &["사업자등록증", "사업자 등록증", "등록증", "business registration", "registration certificate"]
-        }
-        "contract" => &["계약서", "계약", "contract", "agreement"],
-        "application_form" => &["신청서", "신청", "application", "application form"],
-        "quotation" => &["견적서", "견적", "quotation", "quote", "estimate"],
-        "transaction_statement" => &["거래명세서", "거래명세표", "명세서", "transaction statement", "statement"],
-        "receipt" => &["영수증", "receipt"],
-        "financial_statement" => &["재무제표", "financial statement", "financials"],
-        "purchase_order" => &["발주서", "purchase order"],
-        _ => &[],
-    }
+    crate::pipeline::schema::doc_type_aliases(slug)
 }
 
 /// Longest type name mentioned in `text` (compact containment), with its position.

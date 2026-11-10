@@ -195,6 +195,12 @@ pub fn user_message(text: &str) -> Value {
 }
 
 /// User message with an image (data URL or http URL) and a text part.
+/// llama-server refuses a prompt longer than the slot's context with HTTP 400 "request (N tokens)
+/// exceeds the available context size (M tokens)". Callers shrink the prompt and retry.
+pub fn context_overflow(e: &CoreError) -> bool {
+    matches!(e, CoreError::Engine(m) if m.contains("exceeds the available context size"))
+}
+
 pub fn user_message_with_image(text: &str, image_url: &str) -> Value {
     serde_json::json!({
         "role": "user",

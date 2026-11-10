@@ -89,14 +89,14 @@ test.describe("P6 document generation", () => {
   test("regeneration: feedback and an excluded quoted document are applied to the next draft", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
-    await importViaLibrary(page, ["D:\\scan\\세금계산서-2p.pdf"], { autoLevel: "none" });
-    const invoice = await docId(page, "세금계산서-2p.pdf");
+    await importViaLibrary(page, ["D:\\scan\\개발계약서-2p.pdf"], { autoLevel: "none" });
+    const invoice = await docId(page, "개발계약서-2p.pdf");
     await openGenerate(page);
 
     // Quote the imported document: it shows up as a reference of the draft.
     await page.getByTestId("generate-template").click();
     await page.getByRole("option", { name: ko.generate.templates.official_letter }).click();
-    await page.getByTestId("generate-content").fill("강남세무서에 세금계산서 발급 내역 확인을 요청하는 협조문");
+    await page.getByTestId("generate-content").fill("㈜한빛소프트에 개발 계약 이행 현황 확인을 요청하는 협조문");
     await page.getByTestId("generate-pick-sources").click();
     await expect(page.getByTestId("generate-sources-dialog")).toBeVisible();
     await page.getByTestId(`generate-source-${invoice}`).check();
@@ -107,7 +107,7 @@ test.describe("P6 document generation", () => {
     const references = page.getByTestId("generate-references").getByTestId("generate-reference");
     await expect(references).toHaveCount(1);
     await expect(references.first()).toHaveAttribute("data-excluded", "false");
-    await expect(references.first()).toContainText("세금계산서-2p.pdf");
+    await expect(references.first()).toContainText("개발계약서-2p.pdf");
 
     // Exclude the reference, give feedback, regenerate: the new draft drops the document and records the instruction.
     await page.getByTestId("generate-reference-exclude").first().check();

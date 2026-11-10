@@ -46,6 +46,8 @@ impl World {
         }
         let db = Db::open_in_memory().unwrap();
         db.with(repo::ensure_builtins).unwrap();
+        // The 0.1 business forms the fixtures exercise are hidden by default; the tests still cover them.
+        db.with(repo::enable_legacy_builtins).unwrap();
         // No random audit sampling in tests (deterministic review queues).
         let settings = ProcessingSettings { audit_sample_percent: 0, ..ProcessingSettings::default() };
         World { db, paths, _dir: dir, chat: StageChat::new(), settings }
@@ -524,11 +526,11 @@ fn review_actions_history_and_promotion() {
 fn schema_crud_defaults_versions_and_doc_types() {
     let w = World::new();
     let all = w.db.with(repo::list_schemas).unwrap();
-    assert_eq!(all.len(), 7);
+    assert_eq!(all.len(), 19, "13 software forms + 6 hidden legacy forms");
     assert!(all.iter().all(|s| s.source == SchemaSource::Builtin && s.is_default && s.enabled));
     assert_eq!(w.db.with(repo::ensure_builtins).unwrap(), 0, "idempotent");
     let types = w.db.with(repo::doc_types).unwrap();
-    assert_eq!(types.len(), 7);
+    assert_eq!(types.len(), 19, "legacy forms re-enabled by the fixture");
     assert!(types.iter().all(|t| t.builtin));
 
     // A user schema for a new type becomes its default; a user schema for an existing type beats the sample.
@@ -642,14 +644,14 @@ fn forms_register_from_structure_and_from_the_model() {
     let draft = forms::derive(&deps, None, &w.doc("f1"), Some("견적서")).unwrap();
     assert_eq!(draft.source, SchemaSource::Form);
     assert_eq!(draft.form_document_id.as_deref(), Some("f1"));
-    assert_eq!(draft.doc_type, "quotation");
+    assert_eq!(draft.doc_type, "estimate");
     assert!(!draft.definition.fields.is_empty());
     let saved = forms::register(&w.db, &draft).unwrap();
     assert_eq!(saved.source, SchemaSource::Form);
     let doc = w.doc("f1");
     assert_eq!(doc.role, DocumentRole::Form);
-    assert_eq!((doc.doc_type.as_deref(), doc.doc_type_source.as_deref()), (Some("quotation"), Some("form")));
-    assert!(w.db.with(repo::doc_types).unwrap().iter().any(|t| t.slug == "quotation" && !t.builtin));
+    assert_eq!((doc.doc_type.as_deref(), doc.doc_type_source.as_deref()), (Some("estimate"), Some("form")));
+    assert!(w.db.with(repo::doc_types).unwrap().iter().any(|t| t.slug == "estimate" && !t.builtin));
 
     // Image form through the scripted VLM.
     w.add_doc("f2", "application.jpg", SourceKind::Image, &[None]);

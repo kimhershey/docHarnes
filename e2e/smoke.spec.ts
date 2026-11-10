@@ -74,7 +74,7 @@ test.describe("P0 shell", () => {
     await page.getByTestId("home-command-send").click();
     await expect(page.getByTestId("page-settings")).toBeVisible();
     await page.getByTestId("nav-home").click();
-    await page.getByTestId("home-command").fill("지난달 영수증 합계");
+    await page.getByTestId("home-command").fill("지난달 견적서 합계");
     await page.getByTestId("home-command-send").click();
     await expect(page.getByTestId("page-assistant")).toBeVisible();
     // Work items go to the planner (P5): the assistant answers with a plan / result / aggregate card.

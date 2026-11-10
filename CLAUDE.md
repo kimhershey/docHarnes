@@ -65,14 +65,19 @@ user PC: `docs/RUN-GUIDE.md`.
   (flow blocks + positioned `slides` for PPTX) → HTML → PDF through a `PdfPrinter` (page size from the source), fixtures),
   `knowledge/` (tokenize: lindera ko-dic / simple analyzer, chunker: structure-aware chunking, repo, index,
   embed: sqlite-vec + `Embedder`, search: hybrid RRF, answer: grounded answers / explain / summarize / compare with the conversation history +
-  screen session as context blocks and follow-up detection),
-  `pipeline/` (schema: built-in sample forms + grammar-safe JSON schema + lint, prompts, vlm: retrying caller, image,
+  screen session as context blocks, follow-up detection, an evidence budget capped by the loaded model's context with shrink-and-retry
+  on the server's context-overflow 400, and `retrieve = false` text-only answers for pasted text),
+  `pipeline/` (schema: built-in sample forms — 13 software-development forms (rfp, proposal, sow, srs, dev_contract, wbs,
+  progress_report, meeting_minutes, test_report, change_request, acceptance, estimate, general) + the 6 pre-0.3 business forms kept
+  as hidden rows (`enabled = 0`; a user switch or `repo::enable_legacy_builtins` brings one back), shared `doc_type_aliases` for the
+  planner / projects / mocks + grammar-safe JSON schema + lint, prompts, vlm: retrying caller, image,
   classify, ocr, extract, validate: normalisers / BRN checksum / sum rules / PII masking / confidence, run: orchestrator +
   `extractions/` mirror, review, forms: form registration + NL schemas, split: lopdf split / merge, repo),
   `planner/` (mod: typed ops / scope / plan (appendix D v1.0 subset), schema: op spec table + PlanSchema grammar, rules:
   deterministic phrase rules (legacy `RulesFirst` mode + eval), prompts: tiered planner prompt, llm: `PlanMode::ModelFirst`
   (default; slash → pre-router, everything else → model with one re-query; no model → clarification) / `RulesFirst`, validate,
-  scope: scope → documents, exec: deterministic executor + previews), `organize/` (template: file-name / folder templates,
+  scope: scope → documents, exec: deterministic executor + previews, guard: a model plan that summarises the library for a sentence
+  carrying its own text is re-targeted to a text-only `answer{knowledge:false}`), `organize/` (template: file-name / folder templates,
   mod: dry-run diff + apply, journal: `ops_journal` + `journal/ops-YYYYMM.jsonl`, LIFO undo / redo), `aggregate` (sum /
   count / avg / min / max with the reviewed / unreviewed split), `export` (XLSX / CSV / JSONL / MD / searchable PDF),
   `jobs/` (persistent job rows + specs incl. `Draft` / `Maintenance`, priorities / lanes, `JobControl` pause / cancel,
@@ -101,7 +106,7 @@ user PC: `docs/RUN-GUIDE.md`.
   resume / retry / prioritise, restored per workspace)), `tauri.conf.json`, capabilities, `nsis/installer.nsi`
   (Tauri's NSIS template with per-file instead of /SOLID compression — the Full installer exceeds NSIS' 2 GiB solid
   data block; verified against the installed CLI by `npm run nsis:check`).
-- `src/` — React app: `app/` (layout, providers, hooks), `features/<screen>/`, `components/ui/`, `lib/` (ipc, types, theme, shortcuts, mock backend,
+- `src/` — React app: `app/` (layout, providers, hooks — `useRootFontSize`: rem → px for virtualiser estimates and column counts so the UI 배율 scales every box; layout sizes are rem or measured, never fixed px), `features/<screen>/`, `components/ui/`, `lib/` (ipc, types, theme, shortcuts, mock backend,
   `dnd/`: pointer-based document drags + native / browser file drops with one drop-target registry, `DndLayer` in the app shell, sidebar
   spring-loading, `importDroppedFiles` import-then-attach), `stores/` (incl. `attachments.ts`: assistant attachments + nav-drop hand-offs), `i18n/`, `styles/`.
 - `models/registry.json`, `engines/` (llama.cpp manifest, `pdfium.json`, `kodic.json`, placement docs), `docs/`,

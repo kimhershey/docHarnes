@@ -110,6 +110,8 @@ import {
   type UndoReport,
   type UndoResponse,
 } from "./types";
+import { carriedText } from "./carried-text";
+import { docTypeAliases } from "./doc-type-aliases";
 
 /** File-operation journal (`{ batches, entries }`, batches tagged with their workspace). */
 const JOURNAL_KEY = "doculens.mock.journal";
@@ -447,7 +449,7 @@ function splitClauses(text: string): string[] {
   return parts;
 }
 
-const SELECTION_WORDS = ["이문서", "이계약서", "이영수증", "이파일", "선택문서", "선택한", "선택된", "현재문서", "열린문서", "지금문서", "선택영역", "이페이지", "현재페이지", "thisdocument", "thisfile", "thispage", "selected", "theselection", "thesedocuments", "currentdocument", "thiscontract", "thisreceipt"];
+const SELECTION_WORDS = ["이문서", "이계약서", "이영수증", "이견적서", "이보고서", "이파일", "선택문서", "선택한", "선택된", "현재문서", "열린문서", "지금문서", "선택영역", "이페이지", "현재페이지", "thisdocument", "thisfile", "thispage", "selected", "theselection", "thesedocuments", "currentdocument", "thiscontract", "thisreceipt"];
 const ALL_WORDS = ["전부", "전체", "모두", "모든", "다 ", "라이브러리전체", "alldocuments", "everything", "all "];
 
 function selectionIds(ctx: PlanContext): string[] {
@@ -459,7 +461,7 @@ function selectionIds(ctx: PlanContext): string[] {
 function docTypeOf(t: Text, ctx: PlanContext): DocTypeSummary | null {
   let best: { d: DocTypeSummary; len: number } | null = null;
   for (const d of ctx.doc_types) {
-    for (const label of [d.label_ko, d.label_en, d.slug]) {
+    for (const label of [d.label_ko, d.label_en, d.slug, ...docTypeAliases(d.slug)]) {
       const key = compact(label);
       const len = Array.from(key).length;
       if (len >= 2 && t.compact.includes(key) && (best === null || len > best.len)) best = { d, len };
@@ -506,7 +508,12 @@ function fieldsMentioned(t: Text, schema: SchemaSummary): FieldSummary[] {
 
 function totalField(schema: SchemaSummary): FieldSummary | null {
   const amounts = schema.fields.filter((f) => f.kind === "amount");
-  return amounts.find((f) => f.key.includes("total") || f.label_ko.includes("합계") || f.label_ko.includes("총액")) ?? amounts[0] ?? null;
+  // Mirrors planner/rules.rs: a well-known key first (the SW schemas list 공급가액 합계 before 합계금액).
+  for (const key of ["grand_total", "total", "total_amount", "amount", "price", "budget"]) {
+    const named = amounts.find((f) => f.key === key);
+    if (named) return named;
+  }
+  return amounts.find((f) => f.label_ko.includes("합계금액") || f.label_ko.includes("총액")) ?? amounts.find((f) => f.key.includes("total") || f.label_ko.includes("합계")) ?? amounts[0] ?? null;
 }
 
 function dateOf(t: Text, ctx: PlanContext): DateRange | null {
@@ -944,7 +951,7 @@ function ruleOrganize(t: Text, ctx: PlanContext): Plan | null {
   const rename = has(t, ["이름바꿔", "이름을바꿔", "이름변경", "파일명", "rename", "이름을"]);
   const organizeWord = has(t, ["정리", "organi", "옮겨", "옮기", "이동", "move", "폴더로", "sortinto", "tidy"]);
   if (!rename && !organizeWord) return null;
-  if (has(t, ["작업", "job", "스키마", "schema", "태그", "tag"]) && !has(t, ["문서", "파일", "document", "file", "영수증", "receipt"])) return null;
+  if (has(t, ["작업", "job", "스키마", "schema", "태그", "tag"]) && !has(t, ["견적서", "계약서", "회의록", "보고서", "estimate", "contract", "문서", "파일", "document", "file", "영수증", "receipt"])) return null;
   const dt = docTypeOf(t, ctx);
   const d = dateOf(t, ctx);
   const scope = scopeOf(t, ctx, dt, d);
@@ -1130,6 +1137,12 @@ function ruleAnswer(t: Text, ctx: PlanContext): Plan | null {
   const scope = emptyScope();
   if (has(t, SELECTION_WORDS)) scope.doc_ids = selectionIds(ctx);
   return single({ op: "answer", question: t.raw.trim(), cite: true }, 0.8, tr(t.ko, "지식 베이스·문서에서 근거를 찾아 답합니다", "Answer with evidence from the knowledge base / documents"), scope);
+}
+
+/** A sentence that carries its own text is answered from that text, never looked up (model-first reading). */
+function textOnlyAnswer(t: string, ko: boolean): Plan | null {
+  if (!carriedText(t)) return null;
+  return single({ op: "answer", question: t.trim(), cite: false, knowledge: false }, 0.9, ko ? "보내 주신 글을 문서 검색 없이 요청대로 다듬습니다" : "Works on the text you sent, without looking documents up");
 }
 
 const COMMAND_MARKERS = ["해줘", "해주세요", "하세요", "해라", "하자", "시켜", "바꿔", "바꾸", "옮겨", "지워", "삭제", "정리", "추출", "분류", "내보내", "변환", "만들어", "실행", "열어", "보여", "찾아", "검색", "이동", "설정", "켜줘", "꺼줘", "처리", "돌려", "저장", "export", "delete", "move", "rename", "run ", "open", "show", "make", "create", "set ", "turn", "switch", "process", "extract", "classify", "organi", "import"];
@@ -1758,6 +1771,8 @@ export function planText(text: string, ctx: PlanContext, opts: { model?: boolean
     // A 되묻기 reply arrives as "original + [어시스턴트 질문] … + [사용자 답변] …": a model reads the reply as the
     // answer to its question; the parser standing in for it must not read the question's own words.
     const askBack = t.match(/^([\s\S]*?)\n\n\[(?:어시스턴트 질문|Assistant question)\] [\s\S]*?\n\[(?:사용자 답변|User reply)\] ([\s\S]*)$/);
+    const own = askBack ? null : textOnlyAnswer(t, ko);
+    if (own && accept(own, "model")) return result;
     const understood = askBack ? (rulesPlan(`${askBack[1]!.trim()} ${askBack[2]!.trim()}`.trim(), ctx) ?? rulesPlan(askBack[2]!.trim(), ctx)) : rulesPlan(t, ctx);
     if (understood && accept(understood, "model")) return result;
     result.source = "model";

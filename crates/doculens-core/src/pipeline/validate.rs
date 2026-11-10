@@ -516,6 +516,44 @@ pub fn document_rules(def: &SchemaDef, values: &Values) -> Vec<(String, Validati
                     }
                 }
             }
+            schema::RULE_PERCENT_RANGE => {
+                // Scalars named *_percent / *_rate and the `progress` column of tables are percentages.
+                let mut paths: Vec<(String, f64)> = values
+                    .scalars
+                    .keys()
+                    .filter(|k| k.ends_with("_percent") || k.ends_with("_rate"))
+                    .filter_map(|k| values.amount(k).map(|v| (k.clone(), v)))
+                    .collect();
+                for (table, rows) in &values.tables {
+                    for (i, row) in rows.iter().enumerate() {
+                        if let Some(v) = row.get("progress").and_then(|v| v.trim().parse::<f64>().ok()) {
+                            paths.push((format!("{table}[{i}].progress"), v));
+                        }
+                    }
+                }
+                for (path, v) in paths {
+                    if (0.0..=100.0).contains(&v) {
+                        out.push((path, issue(rule, "ok", "0~100%")));
+                    } else {
+                        out.push((path, issue(rule, "fail", format!("{v}% is outside 0~100 / 백분율 범위 밖"))));
+                    }
+                }
+            }
+            schema::RULE_TEST_COUNTS => {
+                if let Some(total) = values.amount("total_cases") {
+                    let parts = values.amount("passed").unwrap_or(0.0)
+                        + values.amount("failed").unwrap_or(0.0)
+                        + values.amount("blocked").unwrap_or(0.0);
+                    if close(parts, total, 0.5) {
+                        out.push(("total_cases".into(), issue(rule, "ok", "통과 + 실패 + 보류 = 총 케이스")));
+                    } else {
+                        out.push((
+                            "total_cases".into(),
+                            issue(rule, "fail", format!("통과+실패+보류 {parts} ≠ 총 케이스 {total} / counts ≠ total")),
+                        ));
+                    }
+                }
+            }
             schema::RULE_EXEMPT_TOTAL => {
                 if let (Some(s), Some(g)) = (values.amount("supply_total"), values.amount("grand_total")) {
                     if close(s, g, 1.0) {
@@ -760,7 +798,7 @@ mod tests {
 
     #[test]
     fn cross_field_rules_detect_mismatches() {
-        let def = &schema::builtins()[0].def; // tax invoice
+        let def = &schema::builtin("tax_invoice").unwrap().def;
         let ok = values_from(
             &[
                 ("supply_total".into(), Some("1000000".into())),
@@ -787,7 +825,7 @@ mod tests {
         let r = document_rules(def, &bad);
         let fails: Vec<&str> = r.iter().filter(|(_, i)| i.level == "fail").map(|(p, _)| p.as_str()).collect();
         assert!(fails.contains(&"grand_total") && fails.contains(&"tax_total"), "{r:?}");
-        let receipt = &schema::builtins()[2].def;
+        let receipt = &schema::builtin("receipt").unwrap().def;
         let v = values_from(
             &[
                 ("supply_amount".into(), Some("10000".into())),
@@ -799,7 +837,7 @@ mod tests {
         let r = document_rules(receipt, &v);
         assert!(r.iter().any(|(p, i)| p == "total" && i.level == "fail"));
         assert!(r.iter().any(|(p, i)| p == "total" && i.rule == schema::RULE_ITEMS_SUM_TOTAL && i.level == "ok"));
-        let contract = &schema::builtins()[4].def;
+        let contract = &schema::builtin("contract").unwrap().def;
         let v = values_from(
             &[("period_start".into(), Some("2026-12-01".into())), ("period_end".into(), Some("2026-01-01".into()))],
             &[],

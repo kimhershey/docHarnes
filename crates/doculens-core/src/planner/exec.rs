@@ -583,11 +583,12 @@ fn run_step(
                 imported: None,
             })
         }
-        Op::Answer { question, cite: _ } => {
+        Op::Answer { question, cite: _, knowledge } => {
             let chat = deps.chat.ok_or_else(|| no_model(deps))?;
             let _lease = LeaseGuard::acquire(deps.lease);
             let docs_ = if plan.scope.is_empty() { Vec::new() } else { working_set(deps, plan, imported)? };
             let mut req = AnswerRequest::question(question);
+            req.retrieve = knowledge.unwrap_or(true);
             req.scope = SearchScope {
                 documents: ids(&docs_),
                 latest_only: deps.knowledge.latest_only,
@@ -603,6 +604,7 @@ fn run_step(
                 chat,
                 model: deps.model.clone(),
                 cancelled: Some(&cancelled),
+                context_size: deps.ctx_size,
             };
             let ans = answer::answer(&adeps, &req, &mut |_| !deps.cancelled())?;
             Ok(StepOutcome {
@@ -637,6 +639,7 @@ fn run_step(
                 chat,
                 model: deps.model.clone(),
                 cancelled: Some(&cancelled),
+                context_size: deps.ctx_size,
             };
             let mut summaries = Vec::new();
             for (i, d) in selected.iter().enumerate() {
@@ -986,6 +989,7 @@ fn run_step(
                 chat,
                 model: deps.model.clone(),
                 cancelled: Some(&cancelled),
+                context_size: deps.ctx_size,
             };
             let ans = answer::answer(&adeps, &req, &mut |_| !deps.cancelled())?;
             Ok(StepOutcome {
@@ -1014,6 +1018,7 @@ fn run_step(
                 chat,
                 model: deps.model.clone(),
                 cancelled: Some(&cancelled),
+                context_size: deps.ctx_size,
             };
             let ans = answer::compare(&adeps, &req, &mut |_| !deps.cancelled())?;
             Ok(StepOutcome {

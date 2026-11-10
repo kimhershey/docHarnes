@@ -63,8 +63,9 @@ fn row_to_schema(r: &Row<'_>) -> rusqlite::Result<SchemaRecord> {
     })
 }
 
-/// Inserts the bundled sample forms that are missing (and refreshes unmodified
-/// ones when `BUILTIN_VERSION` moved). Called when a workspace opens.
+/// Inserts the bundled sample forms that are missing (hidden legacy forms as `enabled = 0`) and, when
+/// `BUILTIN_VERSION` moved, refreshes the unmodified ones — hiding a legacy form the user never edited.
+/// Called when a workspace opens.
 pub fn ensure_builtins(conn: &Connection) -> rusqlite::Result<usize> {
     let now = ts(&Utc::now());
     let mut added = 0;
@@ -86,7 +87,7 @@ pub fn ensure_builtins(conn: &Connection) -> rusqlite::Result<usize> {
                 conn.execute(
                     "INSERT INTO schemas (id, name, name_en, doc_type, source, version, description_ko, description_en, \
                      definition, form_document_id, builtin_key, enabled, is_default, use_count, created_at, updated_at) \
-                     VALUES (?1, ?2, ?3, ?4, 'builtin', ?5, ?6, ?7, ?8, NULL, ?9, 1, ?10, 0, ?11, ?11)",
+                     VALUES (?1, ?2, ?3, ?4, 'builtin', ?5, ?6, ?7, ?8, NULL, ?9, ?12, ?10, 0, ?11, ?11)",
                     params![
                         format!("builtin-{}", b.key),
                         b.name_ko,
@@ -99,6 +100,7 @@ pub fn ensure_builtins(conn: &Connection) -> rusqlite::Result<usize> {
                         b.key,
                         (taken == 0) as i64,
                         now,
+                        (!b.hidden) as i64,
                     ],
                 )?;
                 added += 1;
@@ -112,12 +114,29 @@ pub fn ensure_builtins(conn: &Connection) -> rusqlite::Result<usize> {
                         "UPDATE schemas SET definition = ?2, version = ?3, updated_at = ?4 WHERE id = ?1",
                         params![id, def, schema::BUILTIN_VERSION as i64, now],
                     )?;
+                    if b.hidden {
+                        // A legacy form the user never touched disappears from the offered set (re-enable it
+                        // from the schema list to bring it back).
+                        conn.execute("UPDATE schemas SET enabled = 0, is_default = 0 WHERE id = ?1", [&id])?;
+                    }
                 }
             }
             Some(_) => {}
         }
     }
     Ok(added)
+}
+
+/// Re-enables the hidden legacy sample forms (tests and the "옛 양식 보이기" escape hatch).
+pub fn enable_legacy_builtins(conn: &Connection) -> rusqlite::Result<usize> {
+    let mut n = 0;
+    for b in schema::legacy_builtins() {
+        n += conn.execute(
+            "UPDATE schemas SET enabled = 1, is_default = CASE WHEN (SELECT COUNT(*) FROM schemas s2 WHERE s2.doc_type = schemas.doc_type AND s2.is_default = 1 AND s2.id != schemas.id) = 0 THEN 1 ELSE is_default END WHERE builtin_key = ?1",
+            [b.key],
+        )?;
+    }
+    Ok(n)
 }
 
 pub fn list_schemas(conn: &Connection) -> rusqlite::Result<Vec<SchemaRecord>> {

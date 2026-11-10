@@ -52,6 +52,18 @@ fn blank(s: Option<String>) -> Option<String> {
 /// schema with that slug is registered (the registered schema's names win once it exists).
 pub fn known_type_label(slug: &str) -> Option<(&'static str, &'static str)> {
     const TABLE: &[(&str, &str, &str)] = &[
+        ("rfp", "제안요청서(RFP)", "Request for proposal (RFP)"),
+        ("proposal", "제안서", "Proposal"),
+        ("sow", "과업지시서", "Statement of work"),
+        ("srs", "요구사항 정의서", "Software requirements specification"),
+        ("dev_contract", "소프트웨어 개발 계약서", "Software development contract"),
+        ("wbs", "WBS·일정표", "WBS / schedule"),
+        ("progress_report", "진척 보고서", "Progress report"),
+        ("meeting_minutes", "회의록", "Meeting minutes"),
+        ("test_report", "테스트 결과서", "Test report"),
+        ("change_request", "변경요청서", "Change request"),
+        ("acceptance", "검수확인서", "Acceptance certificate"),
+        ("estimate", "견적서", "Estimate"),
         ("tax_invoice", "세금계산서", "Tax invoice"),
         ("invoice_exempt", "계산서(면세)", "Invoice (tax-exempt)"),
         ("receipt", "영수증", "Receipt"),
@@ -125,10 +137,158 @@ fn template(
     }
 }
 
-/// The bundled templates: 인증 심사 · 거래처 등록 · 구매 정산. Field keys follow the
-/// built-in extraction schemas (`pipeline::schema::builtins`); 견적서 / 거래명세서 use the
-/// same `supplier.*` / `*_total` vocabulary and resolve through key aliases at check time.
+/// The bundled templates (0.3.0): 외주 개발 사업 · 유지보수 · 내부 개발. Field keys follow the
+/// software-development extraction schemas (`pipeline::schema::builtins`).
 pub fn builtin_templates() -> Vec<ProjectTemplate> {
+    use RuleOperand as O;
+    vec![
+        template(
+            "tpl_outsourcing",
+            ("외주 개발 사업", "Outsourced development"),
+            (
+                "제안요청서·제안서·개발 계약서·과업지시서·요구사항 정의서·WBS·테스트 결과서·검수확인서. 계약금액이 제안 금액과 같고 예산을 넘지 않는지, 과업 금액이 계약금액과 5% 이내인지, 계약서·검수확인서가 서명됐는지 검사합니다.",
+                "RFP, proposal, development contract, statement of work, requirements, WBS, test report and acceptance certificate. Checks that the contract amount equals the proposed price and stays within the budget, that the SOW amount is within 5% of the contract, and that the contract and the acceptance certificate are signed.",
+            ),
+            &["rfp", "proposal", "dev_contract", "sow", "srs", "wbs", "test_report", "acceptance"],
+            vec![
+                rule(
+                    "tpl_outsourcing.contract_eq_proposal",
+                    "개발 계약서 계약금액 = 제안서 제안 금액",
+                    O::field("dev_contract", "amount"),
+                    RuleOp::Eq,
+                    Some(O::field("proposal", "price")),
+                    None,
+                    true,
+                ),
+                rule(
+                    "tpl_outsourcing.contract_within_budget",
+                    "개발 계약서 계약금액 ≤ 제안요청서 사업 예산",
+                    O::field("dev_contract", "amount"),
+                    RuleOp::Lte,
+                    Some(O::field("rfp", "budget")),
+                    None,
+                    false,
+                ),
+                rule(
+                    "tpl_outsourcing.sow_within_5pct",
+                    "과업지시서 과업 금액과 계약금액 차이 5% 이내",
+                    O::field("sow", "amount"),
+                    RuleOp::WithinPct,
+                    Some(O::field("dev_contract", "amount")),
+                    Some(5.0),
+                    false,
+                ),
+                rule(
+                    "tpl_outsourcing.contract_signed",
+                    "개발 계약서 서명 필수",
+                    O::field("dev_contract", "signed"),
+                    RuleOp::Present,
+                    None,
+                    None,
+                    true,
+                ),
+                rule(
+                    "tpl_outsourcing.acceptance_signed",
+                    "검수확인서 서명 필수",
+                    O::field("acceptance", "signed"),
+                    RuleOp::Present,
+                    None,
+                    None,
+                    true,
+                ),
+                rule(
+                    "tpl_outsourcing.test_total_present",
+                    "테스트 결과서 총 케이스 수 필수",
+                    O::field("test_report", "total_cases"),
+                    RuleOp::Present,
+                    None,
+                    None,
+                    false,
+                ),
+            ],
+        ),
+        template(
+            "tpl_maintenance",
+            ("유지보수", "Maintenance"),
+            (
+                "개발 계약서·변경요청서·진척 보고서. 계약서 서명, 변경요청서의 승인 상태, 진척 보고서의 전체 진척률이 있는지 검사합니다.",
+                "Development contract, change requests and progress reports. Checks the contract signature, the approval status of each change request and the overall progress figure of each report.",
+            ),
+            &["dev_contract", "change_request", "progress_report"],
+            vec![
+                rule(
+                    "tpl_maintenance.contract_signed",
+                    "개발 계약서 서명 필수",
+                    O::field("dev_contract", "signed"),
+                    RuleOp::Present,
+                    None,
+                    None,
+                    true,
+                ),
+                rule(
+                    "tpl_maintenance.cr_status",
+                    "변경요청서 승인 상태 필수",
+                    O::field("change_request", "status"),
+                    RuleOp::Present,
+                    None,
+                    None,
+                    true,
+                ),
+                rule(
+                    "tpl_maintenance.progress_present",
+                    "진척 보고서 전체 진척률 필수",
+                    O::field("progress_report", "progress_percent"),
+                    RuleOp::Present,
+                    None,
+                    None,
+                    false,
+                ),
+            ],
+        ),
+        template(
+            "tpl_internal_dev",
+            ("내부 개발", "In-house development"),
+            (
+                "요구사항 정의서·WBS·테스트 결과서. 요구사항 정의서 버전, WBS와 요구사항 정의서의 사업명 일치, 테스트 통과율이 있는지 검사합니다.",
+                "Requirements specification, WBS and test report. Checks the requirements version, that the WBS and the requirements name the same project, and that the test report carries a pass rate.",
+            ),
+            &["srs", "wbs", "test_report"],
+            vec![
+                rule(
+                    "tpl_internal_dev.srs_version",
+                    "요구사항 정의서 버전 필수",
+                    O::field("srs", "version"),
+                    RuleOp::Present,
+                    None,
+                    None,
+                    true,
+                ),
+                rule(
+                    "tpl_internal_dev.wbs_project",
+                    "WBS 사업명 = 요구사항 정의서 사업명",
+                    O::field("wbs", "project_name"),
+                    RuleOp::Eq,
+                    Some(O::field("srs", "project_name")),
+                    None,
+                    false,
+                ),
+                rule(
+                    "tpl_internal_dev.pass_rate",
+                    "테스트 결과서 통과율 필수",
+                    O::field("test_report", "pass_rate"),
+                    RuleOp::Present,
+                    None,
+                    None,
+                    false,
+                ),
+            ],
+        ),
+    ]
+}
+
+/// The 0.1 business templates (인증 심사 · 거래처 등록 · 구매 정산): not seeded any more, kept for
+/// workspaces and tests that still hold projects made from them.
+pub fn legacy_templates() -> Vec<ProjectTemplate> {
     use RuleOperand as O;
     vec![
         template(
@@ -273,9 +433,14 @@ fn row_to_template(r: &Row<'_>) -> rusqlite::Result<ProjectTemplate> {
 /// Inserts the built-in templates that are missing and refreshes the ones the user never
 /// edited (`updated_at == created_at`). Called when a workspace opens / templates are listed.
 pub fn ensure_builtins(conn: &Connection) -> rusqlite::Result<usize> {
+    ensure_templates(conn, &builtin_templates())
+}
+
+/// `ensure_builtins` for an explicit set (the legacy templates, tests).
+pub fn ensure_templates(conn: &Connection, templates: &[ProjectTemplate]) -> rusqlite::Result<usize> {
     let now = ts(&Utc::now());
     let mut added = 0;
-    for t in builtin_templates() {
+    for t in templates {
         let existing: Option<(String, String)> = conn
             .query_row("SELECT created_at, updated_at FROM project_templates WHERE id = ?1", [&t.id], |r| {
                 Ok((r.get(0)?, r.get(1)?))

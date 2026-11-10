@@ -65,7 +65,7 @@ export function CommandPalette() {
       open={open}
       onOpenChange={(o) => (o ? undefined : close())}
       label={t("topbar.command")}
-      className="fixed left-1/2 top-24 z-50 w-[640px] max-w-[calc(100vw-2rem)] -translate-x-1/2 overflow-hidden rounded-lg border border-border bg-bg-elevated text-fg shadow-[var(--shadow)]"
+      className="fixed left-1/2 top-24 z-50 w-[40rem] max-w-[calc(100vw-2rem)] -translate-x-1/2 overflow-hidden rounded-lg border border-border bg-bg-elevated text-fg shadow-[var(--shadow)]"
       overlayClassName="fixed inset-0 z-40 bg-black/40"
       shouldFilter={true}
       onKeyDownCapture={(e) => {

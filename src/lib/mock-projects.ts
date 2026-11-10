@@ -62,6 +62,7 @@ import {
   type TemplateInput,
   type Verdict,
 } from "./types";
+import { docTypeAliases } from "./doc-type-aliases";
 
 const KEY = "doculens.mock.projects";
 const MAINT_KEY = "doculens.mock.maintenance";
@@ -127,46 +128,50 @@ const EPOCH = "2026-01-01T00:00:00Z";
 
 const BUILTIN_TEMPLATES: ProjectTemplate[] = [
   {
-    id: "builtin-certification_review",
-    name_ko: "인증 심사",
-    name_en: "Certification review",
-    description_ko: "사업자등록증·신청서·계약서가 필요하며 신청인과 대표자, 서명 여부를 확인합니다.",
-    description_en: "Business registration, application form and contract; checks applicant vs representative and signatures.",
-    required_doc_types: ["business_registration", "application_form", "contract"],
+    id: "builtin-outsourcing",
+    name_ko: "외주 개발 사업",
+    name_en: "Outsourced development",
+    description_ko: "제안요청서·제안서·개발 계약서·과업지시서·요구사항 정의서·WBS·테스트 결과서·검수확인서. 계약금액이 제안 금액과 같고 예산을 넘지 않는지, 계약서·검수확인서가 서명됐는지 검사합니다.",
+    description_en: "RFP, proposal, development contract, SOW, requirements, WBS, test report and acceptance certificate; checks amounts against the proposal and the budget and the signatures.",
+    required_doc_types: ["rfp", "proposal", "dev_contract", "sow", "srs", "wbs", "test_report", "acceptance"],
     rules: [
-      rule("신청서의 신청인 성명은 사업자등록증의 대표자와 같아야 한다", fieldRef("application_form", "applicant.name"), "eq", fieldRef("business_registration", "representative")),
-      rule("신청서 서명 필수", fieldRef("application_form", "signed"), "present", null),
-      rule("계약서의 계약금액은 비어 있으면 안 된다", fieldRef("contract", "amount"), "present", null, null, false),
+      rule("개발 계약서의 계약금액은 제안서의 제안 금액과 같아야 한다", fieldRef("dev_contract", "amount"), "eq", fieldRef("proposal", "price")),
+      rule("개발 계약서의 계약금액은 제안요청서의 사업 예산 이하여야 한다", fieldRef("dev_contract", "amount"), "lte", fieldRef("rfp", "budget"), null, false),
+      rule("과업지시서의 과업 금액은 계약금액과 5% 이내여야 한다", fieldRef("sow", "amount"), "within_pct", fieldRef("dev_contract", "amount"), 5, false),
+      rule("개발 계약서 서명 필수", fieldRef("dev_contract", "signed"), "present", null),
+      rule("검수확인서 서명 필수", fieldRef("acceptance", "signed"), "present", null),
     ],
     builtin: true,
     created_at: EPOCH,
     updated_at: EPOCH,
   },
   {
-    id: "builtin-vendor_onboarding",
-    name_ko: "거래처 등록",
-    name_en: "Vendor onboarding",
-    description_ko: "사업자등록증과 세금계산서의 사업자번호·상호가 일치하는지 확인합니다.",
-    description_en: "Business registration vs tax invoice: registration number and company name must match.",
-    required_doc_types: ["business_registration", "tax_invoice"],
+    id: "builtin-maintenance",
+    name_ko: "유지보수",
+    name_en: "Maintenance",
+    description_ko: "개발 계약서·변경요청서·진척 보고서. 계약서 서명, 변경요청서의 승인 상태, 진척 보고서의 전체 진척률이 있는지 검사합니다.",
+    description_en: "Development contract, change requests and progress reports; checks the signature, the approval status and the progress figure.",
+    required_doc_types: ["dev_contract", "change_request", "progress_report"],
     rules: [
-      rule("세금계산서의 공급자 사업자등록번호는 사업자등록증의 등록번호와 같아야 한다", fieldRef("tax_invoice", "supplier.brn"), "eq", fieldRef("business_registration", "registration_no")),
-      rule("세금계산서의 공급자 상호는 사업자등록증의 상호와 같아야 한다", fieldRef("tax_invoice", "supplier.name"), "eq", fieldRef("business_registration", "company_name")),
+      rule("개발 계약서 서명 필수", fieldRef("dev_contract", "signed"), "present", null),
+      rule("변경요청서 승인 상태 필수", fieldRef("change_request", "status"), "present", null),
+      rule("진척 보고서 전체 진척률 필수", fieldRef("progress_report", "progress_percent"), "present", null, null, false),
     ],
     builtin: true,
     created_at: EPOCH,
     updated_at: EPOCH,
   },
   {
-    id: "builtin-purchase_settlement",
-    name_ko: "구매 정산",
-    name_en: "Purchase settlement",
-    description_ko: "계약서·세금계산서·영수증으로 계약금액과 청구 금액의 차이를 확인합니다.",
-    description_en: "Contract, tax invoice and receipt: the invoiced total must stay within 10% of the contract amount.",
-    required_doc_types: ["contract", "tax_invoice", "receipt"],
+    id: "builtin-internal_dev",
+    name_ko: "내부 개발",
+    name_en: "In-house development",
+    description_ko: "요구사항 정의서·WBS·테스트 결과서. 요구사항 정의서 버전, WBS와 요구사항 정의서의 사업명 일치, 테스트 통과율이 있는지 검사합니다.",
+    description_en: "Requirements specification, WBS and test report; checks the requirements version, matching project names and the pass rate.",
+    required_doc_types: ["srs", "wbs", "test_report"],
     rules: [
-      rule("세금계산서의 합계금액은 계약서의 계약금액과 10% 이내여야 한다", fieldRef("tax_invoice", "grand_total"), "within_pct", fieldRef("contract", "amount"), 10),
-      rule("세금계산서의 합계금액 필수", fieldRef("tax_invoice", "grand_total"), "present", null),
+      rule("요구사항 정의서 버전 필수", fieldRef("srs", "version"), "present", null),
+      rule("WBS의 사업명은 요구사항 정의서의 사업명과 같아야 한다", fieldRef("wbs", "project_name"), "eq", fieldRef("srs", "project_name"), null, false),
+      rule("테스트 결과서 통과율 필수", fieldRef("test_report", "pass_rate"), "present", null, null, false),
     ],
     builtin: true,
     created_at: EPOCH,
@@ -427,7 +432,7 @@ function typeInfos(): TypeInfo[] {
   for (const s of schemas) byType.set(s.doc_type, [...(byType.get(s.doc_type) ?? []), s]);
   for (const [slug, list] of byType) {
     const l = docTypeLabel(slug);
-    const labels = [slug, l.ko, l.en, ...list.flatMap((s) => [s.name, s.name_en ?? ""])].filter(Boolean);
+    const labels = [slug, l.ko, l.en, ...docTypeAliases(slug), ...list.flatMap((s) => [s.name, s.name_en ?? ""])].filter(Boolean);
     const fields: FieldPath[] = [];
     for (const s of list) {
       for (const f of s.definition.fields) {
@@ -495,8 +500,10 @@ function findTypeMentions(text: string, types: TypeInfo[]): Mention[] {
       for (;;) {
         const at = text.indexOf(label, from);
         if (at < 0) break;
-        if (!mentions.some((m) => at < m.end && at + label.length > m.start)) mentions.push({ type, start: at, end: at + label.length });
         from = at + label.length;
+        // A short alias glued to more letters is part of another word ("계약" in "계약금액", "견적" in "견적일").
+        if (Array.from(label).length <= 2 && /^[\p{L}\p{N}]/u.test(text.slice(from))) continue;
+        if (!mentions.some((m) => at < m.end && at + label.length > m.start)) mentions.push({ type, start: at, end: at + label.length });
       }
     }
   }
@@ -507,7 +514,8 @@ function findTypeMentions(text: string, types: TypeInfo[]): Mention[] {
   return out;
 }
 
-const PARTICLE = /^(의|에서|에|이|가|은|는|을|를|와|과|랑|이랑|하고|도|,|\s)+/u;
+// A particle only when a space or comma follows it: "과업지시서의 과업 금액" keeps the 과 of 과업, "…의 이름" keeps 이름.
+const PARTICLE = /^(?:(?:의|에서|에|이|가|은|는|을|를|와|과|랑|이랑|하고|도)(?=[\s,])|,|\s)+/u;
 /** Where a field phrase ends: a particle at a word boundary, `=`, or a comparison keyword after a space. */
 const FIELD_END = /(?:(?:이|가|은|는|을|를|와|과|랑|이랑|하고|도)(?=[\s,]|$)|\s*=|\s+(?:같|일치|동일|달라|다르|필수|있어|존재|비어|이상|이하|이내|오차|형식|패턴|match|equal|must|should|differ|present|required|within|at\s+least|at\s+most)|,|$)/u;
 
@@ -802,7 +810,7 @@ export function check(projectId: string, ruleIds: string[]): CheckRun {
 // Relations (projects/relations.rs)
 // ---------------------------------------------------------------------------
 
-const NAME_KEYS = new Set(["name", "company_name", "store_name", "representative", "title", "recipient", "supplier", "buyer"]);
+const NAME_KEYS = new Set(["name", "company_name", "store_name", "representative", "title", "recipient", "project_name", "supplier", "buyer"]);
 
 function relations(s: PState, p: Project): RelationGraph {
   const docs = docsOf(s, p.id);
@@ -911,7 +919,7 @@ export function supplementRequest(projectId: string, findingIds: string[], outpu
   const missingTypes = findingIds.length === 0 ? run.missing_doc_types : [];
   if (findings.length === 0 && missingTypes.length === 0) throw err("invalid", "no_findings");
   const docs = docsOf(s, p.id);
-  const party = docs.flatMap((d) => pl.latestFields(d.id)).find((f) => ["supplier.name", "company_name", "store_name", "applicant.name"].includes(f.path) && f.value)?.value ?? null;
+  const party = docs.flatMap((d) => pl.latestFields(d.id)).find((f) => ["contractor.name", "proposer.name", "supplier.name", "company_name", "store_name", "applicant.name"].includes(f.path) && f.value)?.value ?? null;
   const d = buildSupplementDraft({
     projectId: p.id,
     projectName: p.name,

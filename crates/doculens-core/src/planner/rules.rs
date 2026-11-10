@@ -217,7 +217,10 @@ fn selection_ids(ctx: &PlanContext) -> Vec<String> {
 fn doc_type<'a>(t: &Text<'_>, ctx: &'a PlanContext) -> Option<&'a DocTypeSummary> {
     let mut best: Option<(&DocTypeSummary, usize)> = None;
     for d in &ctx.doc_types {
-        for label in [d.label_ko.as_str(), d.label_en.as_str(), d.slug.as_str()] {
+        let aliases = crate::pipeline::schema::doc_type_aliases(&d.slug);
+        for label in
+            [d.label_ko.as_str(), d.label_en.as_str(), d.slug.as_str()].into_iter().chain(aliases.iter().copied())
+        {
             let key = compact(label);
             if key.chars().count() >= 2 && t.compact.contains(&key) {
                 let len = key.chars().count();
@@ -233,6 +236,13 @@ fn doc_type<'a>(t: &Text<'_>, ctx: &'a PlanContext) -> Option<&'a DocTypeSummary
 /// Fields of a schema mentioned in the text, in order of appearance.
 fn fields_mentioned<'a>(t: &Text<'_>, schema: &'a SchemaSummary) -> Vec<&'a FieldSummary> {
     let mut found: Vec<(usize, usize, &FieldSummary)> = Vec::new();
+    // Names of the schema's own document type: a trimmed label that is part of one of them
+    // ("계약명" → "계약" inside "개발 계약서") names the document, not a field.
+    let type_names: Vec<String> = [schema.name.as_str(), schema.name_en.as_str(), schema.doc_type.as_str()]
+        .into_iter()
+        .chain(crate::pipeline::schema::doc_type_aliases(&schema.doc_type).iter().copied())
+        .map(compact)
+        .collect();
     for f in &schema.fields {
         // The label without a trailing generic word still identifies the field:
         // "공급가액 합계" ← "공급가액", "세액 합계" ← "세액", "합계금액" ← "합계".
@@ -241,6 +251,7 @@ fn fields_mentioned<'a>(t: &Text<'_>, schema: &'a SchemaSummary) -> Vec<&'a Fiel
             .find_map(|g| f.label_ko.trim_end().strip_suffix(g))
             .map(str::trim)
             .filter(|s| s.chars().count() >= 2)
+            .filter(|s| !type_names.iter().any(|n| n.contains(compact(s).as_str())))
             .unwrap_or("");
         let mut best: Option<(usize, usize)> = None;
         for label in [f.label_ko.as_str(), f.label_en.as_str(), f.key.as_str(), trimmed] {
@@ -276,9 +287,13 @@ fn fields_mentioned<'a>(t: &Text<'_>, schema: &'a SchemaSummary) -> Vec<&'a Fiel
 
 fn total_field(schema: &SchemaSummary) -> Option<&FieldSummary> {
     let amounts: Vec<&FieldSummary> = schema.fields.iter().filter(|f| f.kind == "amount").collect();
-    amounts
+    // The document's headline amount: a well-known key first (the SW schemas list 공급가액 합계 before
+    // 합계금액), then a 합계금액 / 총액 label, then any total, then the first amount.
+    ["grand_total", "total", "total_amount", "amount", "price", "budget"]
         .iter()
-        .find(|f| f.key.contains("total") || f.label_ko.contains("합계") || f.label_ko.contains("총액"))
+        .find_map(|k| amounts.iter().find(|f| f.key == *k))
+        .or_else(|| amounts.iter().find(|f| f.label_ko.contains("합계금액") || f.label_ko.contains("총액")))
+        .or_else(|| amounts.iter().find(|f| f.key.contains("total") || f.label_ko.contains("합계")))
         .or_else(|| amounts.first())
         .copied()
 }
@@ -302,19 +317,23 @@ fn refers_to_open_doc(t: &Text<'_>, ctx: &PlanContext) -> bool {
         return false;
     }
     ctx.doc_types.iter().any(|d| {
-        [d.label_ko.as_str(), d.label_en.as_str(), d.slug.as_str()].iter().any(|l| {
-            let k = compact(l);
-            k.chars().count() >= 2
-                && (t.compact.contains(&format!("이{k}"))
-                    || t.compact.contains(&format!("this{k}"))
-                    || t.compact.contains(&format!("현재{k}")))
-        })
+        let aliases = crate::pipeline::schema::doc_type_aliases(&d.slug);
+        [d.label_ko.as_str(), d.label_en.as_str(), d.slug.as_str()].into_iter().chain(aliases.iter().copied()).any(
+            |l| {
+                let k = compact(l);
+                k.chars().count() >= 2
+                    && (t.compact.contains(&format!("이{k}"))
+                        || t.compact.contains(&format!("this{k}"))
+                        || t.compact.contains(&format!("현재{k}")))
+            },
+        )
     })
 }
 
 fn scope_of(t: &Text<'_>, ctx: &PlanContext, dt: Option<&DocTypeSummary>, d: Option<&DateRange>) -> Scope {
     let mut scope = Scope::default();
-    if t.has(SELECTION_WORDS) || refers_to_open_doc(t, ctx) {
+    let open_doc_by_type = refers_to_open_doc(t, ctx);
+    if t.has(SELECTION_WORDS) || open_doc_by_type {
         scope.doc_ids = selection_ids(ctx);
     }
     if t.has(&["inbox", "인박스", "받은함"]) {
@@ -322,7 +341,8 @@ fn scope_of(t: &Text<'_>, ctx: &PlanContext, dt: Option<&DocTypeSummary>, d: Opt
     } else if t.has(&["이폴더", "여기있는", "현재폴더", "this folder", "current folder", "here"]) {
         scope.folder = ctx.current_folder.clone();
     }
-    if let Some(dt) = dt {
+    // "이 계약서 요약" names the open document by its type; the type is not a library-wide filter then.
+    if let Some(dt) = dt.filter(|_| scope.doc_ids.is_empty() || !open_doc_by_type) {
         scope.filter.doc_type = Some(dt.slug.clone());
     }
     apply_date(&mut scope, d);
@@ -651,12 +671,18 @@ fn aggregate(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         "lowest",
         "largest",
         "smallest",
+        "가장큰",
+        "가장비싼",
+        "가장작은",
+        "가장싼",
     ];
     if !t.has(TRIGGERS) {
         return None;
     }
-    // "합계금액 추출해" asks for a field; "이 영수증 합계 금액이 얼마야?" asks about the open document.
-    if t.has(&["추출", "뽑아", "extract*"]) || (t.has(SELECTION_WORDS) && t.is_question()) {
+    // "합계금액 추출해" asks for a field; "이 견적서 합계 금액이 얼마야?" asks about the open document.
+    if t.has(&["추출", "뽑아", "extract*"])
+        || ((t.has(SELECTION_WORDS) || refers_to_open_doc(t, ctx)) && t.is_question())
+    {
         return None;
     }
     // "합계 금액은?" on its own is a question about a document, not a library-wide total:
@@ -870,7 +896,20 @@ fn organize(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         return None;
     }
     if t.has(&["작업", "job", "스키마", "schema", "태그", "tag"])
-        && !t.has(&["문서", "파일", "document", "file", "영수증", "receipt"])
+        && !t.has(&[
+            "문서",
+            "파일",
+            "document",
+            "file",
+            "영수증",
+            "receipt",
+            "견적서",
+            "계약서",
+            "회의록",
+            "보고서",
+            "estimate",
+            "contract",
+        ])
     {
         return None;
     }
@@ -1308,7 +1347,8 @@ fn search(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     let mut q = q.trim().trim_end_matches(['?', '？', '.']).trim().to_string();
     // The type label moved into the scope filter ("'위약금' 들어간 계약서" → query 위약금, type contract).
     if let Some(d) = doc_type(t, ctx) {
-        for label in [d.label_ko.as_str(), d.label_en.as_str()] {
+        let aliases = crate::pipeline::schema::doc_type_aliases(&d.slug);
+        for label in [d.label_ko.as_str(), d.label_en.as_str()].into_iter().chain(aliases.iter().copied()) {
             if label.chars().count() >= 2 {
                 let stripped: String = q
                     .split_whitespace()
@@ -1392,11 +1432,11 @@ fn answer(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         return None;
     }
     let mut scope = Scope::default();
-    if t.has(SELECTION_WORDS) {
+    if t.has(SELECTION_WORDS) || refers_to_open_doc(t, ctx) {
         scope.doc_ids = selection_ids(ctx);
     }
     Some(mk(
-        Op::Answer { question: t.raw.trim().to_string(), cite: Some(true) },
+        Op::Answer { question: t.raw.trim().to_string(), cite: Some(true), knowledge: None },
         scope,
         0.8,
         t.t("지식 베이스·문서에서 근거를 찾아 답합니다", "Answer with evidence from the knowledge base / documents")
@@ -1480,7 +1520,7 @@ fn topic(t: &Text<'_>) -> Option<Plan> {
         return Some(mk(Op::Noop {}, Scope::default(), 0.9, t.t("별도 작업 없음", "Nothing to do").into()));
     }
     Some(mk(
-        Op::Answer { question: t.raw.trim().to_string(), cite: Some(true) },
+        Op::Answer { question: t.raw.trim().to_string(), cite: Some(true), knowledge: None },
         Scope::default(),
         0.7,
         t.t("지식 베이스·문서에서 근거를 찾아 답합니다", "Answer with evidence from the knowledge base / documents")

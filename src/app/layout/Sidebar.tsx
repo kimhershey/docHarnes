@@ -191,7 +191,7 @@ function Item({ screen, icon: Icon, collapsed, badge, ariaLabel, dropEnabled }: 
       <Icon className="size-4 shrink-0" aria-hidden="true" />
       {!collapsed && <span className="flex-1 truncate">{label}</span>}
       {!collapsed && badge && (
-        <Badge variant="muted" className="text-[10px]">
+        <Badge variant="muted" className="text-[0.625rem]">
           {badge}
         </Badge>
       )}

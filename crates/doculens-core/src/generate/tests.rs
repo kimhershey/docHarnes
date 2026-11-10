@@ -52,6 +52,7 @@ fn world() -> World {
     }
     let db = Db::open_in_memory().unwrap();
     db.with(prepo::ensure_builtins).unwrap();
+    db.with(prepo::enable_legacy_builtins).unwrap();
     World { db, paths, _dir: dir }
 }
 

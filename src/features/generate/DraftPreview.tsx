@@ -69,7 +69,7 @@ export function DraftPreview({ draft }: { draft: Draft | null }) {
         <iframe title={t("generate.preview.frame_title")} sandbox="" srcDoc={html} className="h-full w-full rounded-md border border-border bg-white" data-testid="generate-preview-frame" data-loaded={html ? "true" : "false"} />
       </div>
       {draft.notes.length > 0 && (
-        <ul className="border-t border-border px-3 py-1.5 text-[11px] text-fg-subtle" data-testid="generate-notes">
+        <ul className="border-t border-border px-3 py-1.5 text-[0.6875rem] text-fg-subtle" data-testid="generate-notes">
           {draft.notes.map((n, i) => (
             <li key={i}>{n}</li>
           ))}

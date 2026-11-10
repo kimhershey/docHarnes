@@ -11,15 +11,15 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // — against the browser mock backend. Real file moves, the journal and the writers are covered by
 // the Rust tests.
 
-/** Imports the receipt + tax invoice without auto-processing and runs 표준 처리 on the receipt. */
+/** Imports the estimate + development contract without auto-processing and runs 표준 처리 on the estimate. */
 async function importAndProcessReceipt(page: Page): Promise<{ receipt: string; invoice: string }> {
-  await importViaLibrary(page, ["D:\\scan\\영수증-1p.jpg", "D:\\scan\\세금계산서-2p.pdf"], { autoLevel: "none" });
-  const receipt = await docId(page, "영수증-1p.jpg");
-  const invoice = await docId(page, "세금계산서-2p.pdf");
+  await importViaLibrary(page, ["D:\\scan\\견적서-1p.jpg", "D:\\scan\\개발계약서-2p.pdf"], { autoLevel: "none" });
+  const receipt = await docId(page, "견적서-1p.jpg");
+  const invoice = await docId(page, "개발계약서-2p.pdf");
   await page.getByTestId(`doc-select-${receipt}`).check();
   await page.getByTestId("library-process").click();
   await page.getByTestId("library-process-standard").click();
-  await expect(card(page, "영수증-1p.jpg")).toHaveAttribute("data-doc-status", "extracted", { timeout: 15_000 });
+  await expect(card(page, "견적서-1p.jpg")).toHaveAttribute("data-doc-status", "extracted", { timeout: 15_000 });
   await page.getByTestId(`doc-select-${receipt}`).uncheck();
   return { receipt, invoice };
 }
@@ -36,7 +36,7 @@ test.describe("P5 organise / export", () => {
     await expect(page.getByTestId("organize-folder-template")).toHaveValue("documents/{{year}}/{{month}}/{{doc_type}}");
     await expect(page.getByTestId("organize-name-template")).toHaveValue("{{year}}-{{month}}-{{day}}_{{doc_type}}_{{vendor}}_{{total}}");
     await expect(page.getByTestId("organize-only-reviewed")).toHaveAttribute("aria-checked", "true");
-    await expect(page.getByTestId("organize-example")).toHaveText("documents/2026/10/영수증/2026-10-14_영수증_스타벅스 역삼점_12,500.jpg");
+    await expect(page.getByTestId("organize-example")).toHaveText("documents/2026/10/견적서/2026-10-14_견적서_㈜한빛소프트_12,500,000.jpg");
     // A variable chip inserts at the caret and an unknown variable is flagged locally.
     await page.getByTestId("organize-name-template").fill("{{bogus}}");
     await expect(page.getByTestId("organize-name-template-error")).toContainText("bogus");
@@ -56,12 +56,12 @@ test.describe("P5 organise / export", () => {
     await expect(invoiceRow).toContainText("미상");
     await expect(page.getByTestId("organize-summary")).toContainText(tpl(ko.organize.summary, { moves: 1, held: 1, unchanged: 0, needs_review: 1 }));
 
-    // Reviewed-only off → the receipt moves under documents/<year>/<month>/영수증/.
+    // Reviewed-only off → the estimate moves under documents/<year>/<month>/견적서/.
     await page.getByTestId("organize-only-reviewed").click();
     await page.getByTestId("organize-preview").click();
     await expect(receiptRow).toHaveAttribute("data-row-status", "move");
-    await expect(receiptRow).toContainText("documents/2026/10/영수증/");
-    await expect(receiptRow).toContainText("스타벅스");
+    await expect(receiptRow).toContainText("documents/2026/10/견적서/");
+    await expect(receiptRow).toContainText("한빛소프트");
 
     // Run → confirm → job → result with undo.
     await page.getByTestId("organize-run").click();

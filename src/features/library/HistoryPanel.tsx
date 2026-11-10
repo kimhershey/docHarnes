@@ -38,7 +38,7 @@ export function HistoryPanel({ doc }: { doc: DocumentView }) {
               <li key={r.id} className="rounded-md border border-border px-2 py-1" data-testid="history-run" data-run-status={r.status}>
                 <div className="flex items-center gap-1">
                   <span className="font-medium">{t("viewer.fields.run", { n: runs.length - i })}</span>
-                  <Badge variant={r.status === "done" ? "ok" : r.status === "failed" ? "danger" : "muted"} className="text-[10px]">
+                  <Badge variant={r.status === "done" ? "ok" : r.status === "failed" ? "danger" : "muted"} className="text-[0.625rem]">
                     {t(`viewer.history.status.${r.status}`)}
                   </Badge>
                   <span className="ml-auto text-fg-subtle">{formatDate(r.started_at, i18n.language)}</span>
