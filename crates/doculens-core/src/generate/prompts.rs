@@ -180,7 +180,6 @@ pub fn split_head_note(first: &SectionPlan, total: usize, tokens: u32, ko: bool)
 }
 
 /// User message of one section call of a split draft.
-#[allow(clippy::too_many_arguments)]
 /// Revision context of a section call: the instruction of a whole-draft regeneration and the
 /// section's text in the previous draft (0.7.0 `ReviseScope::Whole`).
 #[derive(Debug, Clone, Copy, Default)]
@@ -325,6 +324,7 @@ pub fn revise_user(
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn section_user(
     spec: &TemplateSpec,
     req: &DraftRequest,

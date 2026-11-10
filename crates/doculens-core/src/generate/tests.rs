@@ -1648,13 +1648,15 @@ fn revise_edits_one_section_in_place_and_split_regeneration_carries_the_instruct
     let w = world();
     let h = |t: &str| DraftBlock::Heading { level: 2, text: t.into() };
     let p = |t: &str| DraftBlock::Paragraph { text: t.into(), source: None };
-    let mut previous = Draft::default();
-    previous.id = "dr-1".into();
-    previous.title = "10월 진척 보고서".into();
-    previous.template = TemplateRef::Builtin { template: TemplateKind::ProgressReport };
-    previous.doc_type = Some("progress_report".into());
-    previous.language = Language::Ko;
-    previous.body = vec![h("보고 개요"), p("10월 진척 현황"), h("금주 실적"), p("실적 A"), h("차주 계획"), p("계획 B")];
+    let previous = Draft {
+        id: "dr-1".into(),
+        title: "10월 진척 보고서".into(),
+        template: TemplateRef::Builtin { template: TemplateKind::ProgressReport },
+        doc_type: Some("progress_report".into()),
+        language: Language::Ko,
+        body: vec![h("보고 개요"), p("10월 진척 현황"), h("금주 실적"), p("실적 A"), h("차주 계획"), p("계획 B")],
+        ..Default::default()
+    };
     let blocks = |items: Vec<Value>| json!({ "blocks": items }).to_string();
     let para = |t: &str| json!({"kind": "paragraph", "text": t, "items": [], "source_index": null});
 
