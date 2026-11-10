@@ -13,7 +13,7 @@ DocuLens를 **실제 Windows PC에서 설치·실행·빌드·검증**하는 절
 |---|---|---|---|
 | A. 데스크톱 개발 실행 | `npm run tauri dev` | Windows 10/11, Node 22, Rust stable(MSVC), VS Build Tools C++, WebView2 | 실제 엔진·모델·파일 처리까지 전 기능 |
 | B. 브라우저 미리보기 | `npm run dev` → http://localhost:1420 | Node 22만 | 화면 흐름 확인(모의 백엔드 — 실제 파일·모델 처리 없음) |
-| C. 설치파일 빌드 | `npm run tauri build` → `target\release\bundle\nsis\DocuLens_0.3.0_x64-setup.exe` | A와 동일(첫 빌드 때 NSIS를 자동으로 받음) | 다른 PC에 설치(사용자 단위 설치, 관리자 권한 불필요) |
+| C. 설치파일 빌드 | `npm run tauri build` → `target\release\bundle\nsis\DocuLens_0.4.0_x64-setup.exe` | A와 동일(첫 빌드 때 NSIS를 자동으로 받음) | 다른 PC에 설치(사용자 단위 설치, 관리자 권한 불필요) |
 | D. 배포 설치파일 설치 | GitHub Releases → `DocuLens-Setup-Lite-<버전>-x64.exe` 다운로드 → 실행 | Windows 10 1803+/11 x64만(개발 도구 불필요) | **사용자 PC 권장 경로** — §1.1. 엔진 팩·PDFium·ko-dic 동봉, 모델만 앱에서 준비 |
 
 - 첫 `tauri dev`/`tauri build`는 Rust 의존성 전체를 컴파일하므로 수 분~십여 분 걸립니다. 이후에는 증분 빌드입니다.
@@ -42,9 +42,9 @@ DocuLens를 **실제 Windows PC에서 설치·실행·빌드·검증**하는 절
 ### 1.1 배포 설치파일 설치 (방식 D)
 
 1. GitHub Releases의 `v<버전>`에서 `DocuLens-Setup-Lite-<버전>-x64.exe`(또는 `-Full-`)와 같은 이름의 `.sha256` 파일을 받습니다
-   (현재 https://github.com/kimhershey/docHarnes/releases/tag/v0.3.0 에 Lite 0.3.0 설치파일과 `.sha256`·고지·SBOM이 있고(이 판은 Lite만 배포),
+   (현재 https://github.com/kimhershey/docHarnes/releases/tag/v0.4.0 에 Lite 0.4.0 설치파일과 `.sha256`·고지·SBOM이 있고(이 판은 Lite만 배포),
    Full 설치파일은 https://github.com/kimhershey/docHarnes/releases/tag/v0.2.0 , CUDA 엔진 팩 zip은
-   https://github.com/kimhershey/docHarnes/releases/tag/v0.1.0 자산에 있습니다 — 엔진 태그 b12066이 같아 그대로 씁니다. 변경 내용은 `docs/releases/v0.3.0.md`).
+   https://github.com/kimhershey/docHarnes/releases/tag/v0.1.0 자산에 있습니다 — 엔진 태그 b12066이 같아 그대로 씁니다. 변경 내용은 `docs/releases/v0.4.0.md`).
    - 아직 릴리스에 올리지 않은 빌드(`publish=false`)는 Actions의 해당 실행 페이지 하단 **Artifacts**에서
      `DocuLens-Setup-<Lite|Full>-<버전>-x64` zip으로 받습니다(GitHub 로그인 필요, 90일 보관). zip 안에 설치파일과 `.sha256`이 있습니다.
    - **Lite**: 앱 + llama-server CPU·Vulkan 팩(`engines\cpu`, `engines\vulkan`) + PDFium(`pdfium\`) + ko-dic(`ko-dic\`)
@@ -56,7 +56,7 @@ DocuLens를 **실제 Windows PC에서 설치·실행·빌드·검증**하는 절
    - **모델(GGUF)은 어느 쪽에도 들어 있지 않습니다.** 첫 실행 뒤 모델 관리자에서 준비합니다(§2.3, §3).
 2. SHA-256을 확인합니다(명령 프롬프트 또는 PowerShell).
    ```
-   certutil -hashfile DocuLens-Setup-Lite-0.3.0-x64.exe SHA256
+   certutil -hashfile DocuLens-Setup-Lite-0.4.0-x64.exe SHA256
    ```
    출력된 해시가 `.sha256` 파일의 값(공백 앞 64자)과 같아야 합니다(대소문자 무관). 다르면 실행하지 말고 다시 받으세요.
 3. 실행합니다. 설치파일은 **코드 서명이 없어** SmartScreen이 "Windows의 PC 보호" 창을 띄웁니다 → **추가 정보 → 실행**.
@@ -104,17 +104,20 @@ npm install
 
 ### 2.3 모델 준비
 
-`models/registry.json`의 항목(모두 Apache-2.0):
+`models/registry.json`의 항목(0.4.0부터 **Gemma 4 + EmbeddingGemma 2**, 모두 Apache-2.0; 중국계 모델은 사용자 결정으로 제외 — `docs/plan/v0.4.0.md`):
 
-| id | 표시 이름 | 대상 티어 | 파일 |
+| id | 표시 이름 | 대상 티어 | 파일(Hugging Face 저장소) |
 |---|---|---|---|
-| `qwen3.5-4b-q5km` | Qwen3.5-4B (Q5_K_M, 균형) | 8 GB | `Qwen3.5-4B-Q5_K_M.gguf` + `mmproj-F16.gguf` |
-| `qwen3.5-4b-q6k` | Qwen3.5-4B (Q6_K, 정확도) | 8·12 GB | `Qwen3.5-4B-Q6_K.gguf` + `mmproj-F16.gguf` |
-| `qwen3.5-4b-q4km` | Qwen3.5-4B (Q4_K_M, 저여유) | 6·8 GB | `Qwen3.5-4B-Q4_K_M.gguf` + `mmproj-F16.gguf` |
-| `qwen3.5-2b-q8` | Qwen3.5-2B (Q8_0, CPU) | CPU 전용 | `Qwen3.5-2B-Q8_0.gguf` + `mmproj-F16.gguf` |
-| `qwen3.5-9b-q5km` / `q6k`, `qwen3.5-27b-q4km` | 상위 티어 | 12·16·24 GB+ | — |
-| `qwen3-vl-4b-q4km` | Qwen3-VL-4B (대체 모델) | 8·12 GB | — |
-| `embed-bge-m3-q8` | BGE-M3 (임베딩, CPU) | 전 티어 | `bge-m3-Q8_0.gguf` — 지식 베이스 의미 검색용(선택) |
+| `gemma4-e4b-q5km` | Gemma 4 E4B (Q5_K_M, 균형) | 8·12 GB | `gemma-4-E4B-it-Q5_K_M.gguf` + `mmproj-F16.gguf` (unsloth/gemma-4-E4B-it-GGUF) |
+| `gemma4-e4b-q6k` | Gemma 4 E4B (Q6_K, 정확도) | 8·12·16 GB | `gemma-4-E4B-it-Q6_K.gguf` + `mmproj-F16.gguf` |
+| `gemma4-e4b-q4km` | Gemma 4 E4B (Q4_K_M, 저여유) | 8·12 GB | `gemma-4-E4B-it-Q4_K_M.gguf` + `mmproj-F16.gguf` |
+| `gemma4-e2b-q4km` | Gemma 4 E2B (Q4_K_M, CPU·저여유) | CPU·6·8 GB | `gemma-4-E2B-it-Q4_K_M.gguf` + `mmproj-F16.gguf` (unsloth/gemma-4-E2B-it-GGUF) |
+| `gemma4-e2b-q8` | Gemma 4 E2B (Q8_0, CPU 정확도·6 GB) | CPU·6·8 GB | `gemma-4-E2B-it-Q8_0.gguf` + `mmproj-F16.gguf` |
+| `gemma4-12b-q4km` | Gemma 4 12B (Q4_K_M, 12 GB+) | 12·16·24 GB+ | `gemma-4-12b-it-Q4_K_M.gguf` + `mmproj-F16.gguf` (unsloth/gemma-4-12b-it-GGUF) |
+| `embed-gemma2-q8` | EmbeddingGemma 2 (Q8_0, 임베딩 · CPU) | 전 티어 | `embeddinggemma-2-Q8_0.gguf` (ggml-org/embeddinggemma-2-GGUF) — 지식 베이스 의미 검색용(선택) |
+
+모든 파일이 8 GB 이하이고 크기·해시는 미고정(`verified: false`)입니다. 0.3.0에서 받아 둔 Qwen 폴더는 "사용자 추가 모델"로 계속
+인식되어 쓸 수 있지만 추천·다운로드 목록에는 나오지 않습니다.
 
 넣는 방법은 셋 중 하나입니다.
 
@@ -125,7 +128,8 @@ npm install
    `models.allow_online_download`로 끌 수 있음, 기본 켜짐 — 화면에는 토글이 없음). 현재 레지스트리는 크기·해시가 미고정(`verified: false`)이므로 처음 받은 뒤 "해시 검증"으로 얻은 값을
    `models/registry.json`에 고정해 주세요.
 
-8 GB GPU면 `qwen3.5-4b-q5km`(32K 컨텍스트) 또는 `q6k`, GPU가 없으면 `qwen3.5-2b-q8`(8K)을 권장합니다.
+8 GB GPU면 `gemma4-e4b-q5km`(32K 컨텍스트) 또는 여유 VRAM 7.1 GiB 이상이면 `gemma4-e4b-q6k`, 6 GB GPU면 `gemma4-e2b-q8`, GPU가 없으면
+`gemma4-e2b-q4km`(8K)을 권장합니다 — 티어 자동 선택(`auto:gemma4-e4b` 적응형 규칙)도 같은 기준입니다.
 
 ## 3. 첫 실행 흐름
 
@@ -155,7 +159,7 @@ npm install
    문서마다 필드를 찾아 하나의 스키마로 병합하고(오피스 양식은 표 구조, 스캔·PDF는 모델, 모델이 없으면 텍스트 규칙), 결과는 저장되지 않은 초안으로
    편집기에 열립니다 — 확인·수정 후 저장 버튼으로만 등록되며, 같은 이름의 스키마가 있으면 "이름 (2)"를 제안하고 바꾸기 전에는 저장할 수 없습니다.
 6. **지식 베이스** — 적재 마법사(파일·폴더 → 컬렉션 → 미리보기)로 규정·지침을 넣으면 가져오기 → 청킹 → 색인이 이어지고,
-   bge-m3가 설치돼 있으면 임베딩도 백그라운드로 돕니다. 어시스턴트 질문은 문장별 출처 칩과 함께 답하고, 근거가 없으면
+   EmbeddingGemma 2(`embed-gemma2-q8`)가 설치돼 있으면 임베딩도 백그라운드로 돕니다. 어시스턴트 질문은 문장별 출처 칩과 함께 답하고, 근거가 없으면
    "근거 없음" 배너가 뜹니다.
 7. **어시스턴트**(Ctrl+3) — 자연어 명령 → 플랜 카드(출처: 문장 규칙 또는 모델, 영향 미리보기) → Ctrl+Enter 승인 / Esc 취소 →
    실행 카드(진행률·일시정지·취소) → 결과 카드(되돌리기·폴더 열기). 정리 / 내보내기 화면과 작업 화면은 같은 작업 큐를 씁니다.
@@ -259,7 +263,7 @@ px 고정이라 125 % 이상에서 글자가 잘렸음). 150 %에서는 1280 px 
 | `npm run typecheck` / `npm test` / `npm run build` | TS 타입·vitest·프로덕션 빌드 | 통과 / 12파일 66건 / 통과 |
 | `npm run licenses:check` | npm 라이선스 게이트 | 모두 허용 |
 | `npm run e2e` | Playwright(브라우저, 모의 백엔드) | 28/28 |
-| `DOCULENS_LLAMA_SERVER=<llama-server> DOCULENS_TEST_MODELS_DIR=$PWD/crates/doculens-core/tests/fixtures cargo test -p doculens-core --test real_engine -- --nocapture` | 실제 llama-server + 초소형 Qwen3.5 픽스처(채팅·KIE·플래너 문법) | 통과 |
+| `DOCULENS_LLAMA_SERVER=<llama-server> DOCULENS_TEST_MODELS_DIR=$PWD/crates/doculens-core/tests/fixtures cargo test -p doculens-core --test real_engine -- --nocapture` | 실제 llama-server + 초소형 Gemma 4 픽스처(채팅·이미지·KIE·플래너 문법) | 통과 |
 | `DOCULENS_FIXTURE_OUT=<dir> cargo test -p doculens-core --lib -- --ignored gen_fixtures` | 샘플 입력 문서 생성 | — |
 | `DOCULENS_EXPORT_OUT=<dir> cargo test -p doculens-core --lib -- --ignored gen_export_samples` | 내보내기 5종 샘플 파일 생성(XLSX·CSV·JSONL·MD·검색 가능 PDF) | 9개 파일 |
 | `cargo run -p doculens-eval -- planner --golden eval/golden/planner.json --baseline eval/baselines/planner-rules.json` | 플래너 골든셋 100건 정확도 + 회귀 게이트(0.5pt) | CI 게이트 |
@@ -295,12 +299,12 @@ GitHub Actions `CI`(푸시·PR)가 위 항목을 License gate / Web / Real llama
 
 1. **환경** — 창이 뜨고 온보딩 → 홈이 동작하는가, `settings.json`·워크스페이스 폴더 생성, 테마 4종·한/영 전환, 한글 IME 조합 중
    Enter 미전송, UI 배율 (P0 항목).
-2. **엔진·모델** — 팩 설치와 SHA-256 고정(`--pin`), 엔진 카드의 버전·백엔드·장치 조회(VRAM), 실제 Qwen3.5-4B 드롭인 → "준비됨" →
+2. **엔진·모델** — 팩 설치와 SHA-256 고정(`--pin`), 엔진 카드의 버전·백엔드·장치 조회(VRAM), 실제 Gemma 4 E4B 드롭인 → "준비됨" →
    로드 → 상태바 VRAM 사용량, 모델 테스트의 한국어 응답과 tok/s(RTX 4060 기대 50~80), 강제 종료 후 재기동(1회)·자식 프로세스
-   잔존 없음, `<think>` 미출력 (P1).
+   잔존 없음, `<|channel>thought` 생각 채널 미출력 (P1).
 3. **문서** — 100쪽 이상 스캔 PDF 가져오기 → 썸네일 → 뷰어 속도(200 DPI 쪽당 ≈1초), 실제 HWPX/DOCX/HWP 변환본, EXIF 회전 JPG,
    inbox 자동 등록, 삭제 → 휴지통 (P2).
-4. **지식 베이스** — ko-dic 표시, bge-m3 임베딩, 규정 적재 → 조항 경로, 한국어 검색(조사·2자·복합명사·숫자), 출처 칩 → 쪽 이동,
+4. **지식 베이스** — ko-dic 표시, EmbeddingGemma 2 임베딩, 규정 적재 → 조항 경로, 한국어 검색(조사·2자·복합명사·숫자), 출처 칩 → 쪽 이동,
    근거 없음 배너, 설명·요약 (P3).
 5. **파이프라인** — 표준 처리 끝까지(쪽당 30~50초 GPU 기대), 분류·OCR 마스킹·KIE 합계 검증, 검토 큐 키, 양식 등록, NL 스키마,
    inbox 전체 자동 처리, 분할/병합, 출력 파서 500 여부, 8K 프리셋에서 긴 쪽 처리 (P4).

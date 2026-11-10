@@ -927,6 +927,63 @@ fn importing_into_a_deleted_collection_is_a_typed_error_and_feedback_is_validate
 }
 
 #[test]
+fn embedding_prefixes_are_applied_to_documents_and_queries() {
+    // Records every input the engine would see; vectors come from the hash embedder.
+    struct Recording {
+        inner: HashEmbedder,
+        prefixes: embed::EmbedPrefixes,
+        inputs: std::sync::Mutex<Vec<String>>,
+    }
+    impl Embedder for Recording {
+        fn model_id(&self) -> &str {
+            "embed-gemma2-test"
+        }
+        fn embed(&self, inputs: &[String]) -> crate::error::Result<Vec<Vec<f32>>> {
+            self.inputs.lock().unwrap().extend(inputs.iter().cloned());
+            self.inner.embed(inputs)
+        }
+        fn prefixes(&self) -> embed::EmbedPrefixes {
+            self.prefixes.clone()
+        }
+    }
+    let prefixes = embed::EmbedPrefixes::from_defaults(&serde_json::json!({
+        "pooling": "mean",
+        "query_prefix": "task: search result | query: ",
+        "document_prefix": "title: none | text: "
+    }));
+    assert_eq!(prefixes.query, "task: search result | query: ");
+    assert_eq!(
+        embed::EmbedPrefixes::from_defaults(&serde_json::json!({ "pooling": "cls" })),
+        embed::EmbedPrefixes::default()
+    );
+    let w = World::new();
+    let rec = Recording { inner: HashEmbedder::new(16), prefixes: prefixes.clone(), inputs: Default::default() };
+    let report = embed::embed_pending(&w.db, &rec, 8, None, &mut |_, _| {}).unwrap();
+    assert!(report.embedded > 0 && report.failed == 0, "{report:?}");
+    {
+        let seen = rec.inputs.lock().unwrap();
+        assert_eq!(seen.len() as u64, report.embedded);
+        assert!(seen.iter().all(|s| s.starts_with("title: none | text: ")), "{:?}", seen.first());
+        // The cap applies to the text, the prefix comes on top of it.
+        assert!(seen.iter().all(|s| s.chars().count() <= embed::MAX_EMBED_CHARS + prefixes.document.chars().count()));
+        // The stored chunk text itself carries no prefix.
+        let chunk = w.db.with(|c| repo::list_chunks(c, "con")).unwrap()[0].clone();
+        assert!(!chunk.text.starts_with("title:"));
+    }
+    rec.inputs.lock().unwrap().clear();
+    let long_query: String = "지체상금 ".repeat(600);
+    let q = embed::embed_query(&rec, &long_query).unwrap();
+    assert_eq!(q.len(), 16);
+    let seen = rec.inputs.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].starts_with("task: search result | query: 지체상금"));
+    assert_eq!(seen[0].chars().count(), embed::MAX_EMBED_CHARS + prefixes.query.chars().count());
+    // A prefix-free embedder (bge-style) is unchanged.
+    let plain = HashEmbedder::new(8);
+    assert_eq!(plain.prefixes(), embed::EmbedPrefixes::default());
+}
+
+#[test]
 fn embedding_aborts_after_consecutive_failures_and_skips_replaced_chunks() {
     struct FlakySync {
         fail_after: usize,

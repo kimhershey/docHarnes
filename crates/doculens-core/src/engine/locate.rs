@@ -14,7 +14,8 @@ use crate::settings::BackendPreference;
 pub const ENGINE_ENV: &str = "DOCULENS_LLAMA_SERVER";
 /// Backend name (`cpu`, `vulkan`, `cu121`, `cu129`) of the binary from [`ENGINE_ENV`].
 pub const ENGINE_BACKEND_ENV: &str = "DOCULENS_LLAMA_SERVER_BACKEND";
-/// Oldest llama.cpp build the app supports (router presets, Qwen3.5 fixes).
+/// Oldest llama.cpp build the app supports (router presets, `--reasoning`, the mtmd
+/// vision fixes; Gemma 4 / EmbeddingGemma 2 need the pinned b12066 or newer).
 pub const MIN_ENGINE_BUILD: u32 = 11_747;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -91,7 +91,8 @@ pub fn params(stage: Stage, profile: Profile) -> StageParams {
     }
 }
 
-/// Requests sent to a Qwen3.5 chat template with thinking disabled (§3.4).
+/// Requests sent with thinking disabled (§3.4): the Gemma 4 template (and Qwen drop-ins) honour
+/// `enable_thinking`; the presets add `--reasoning off --reasoning-budget 0` as the server-side switch.
 pub fn template_kwargs() -> Value {
     json!({ "enable_thinking": false })
 }

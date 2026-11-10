@@ -301,8 +301,8 @@
   "current_page": 1,
   "document_count": 42,
   "model_ids": [
-    "qwen3.5-4b-q6k",
-    "qwen3.5-9b-q4km"
+    "gemma4-e4b-q5km",
+    "gemma4-12b-q4km"
   ],
   "projects": [
     {

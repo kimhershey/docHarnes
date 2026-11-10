@@ -41,8 +41,8 @@ cargo run -p doculens-eval -- planner --golden eval/golden/planner.json \
 
 # 제품 경로 전체(규칙 → 모델 1회 재질의)까지: 실제 llama-server + 드롭인 모델 폴더
 cargo run -p doculens-eval -- planner --golden eval/golden/planner.json \
-    --engine <llama-server 경로> --models-dir <.doculens/models> --model qwen3.5-4b-q4km \
-    [--backend cpu|vulkan|cu121|cu129] [--profile balanced] --out eval/out/planner-qwen3.5-4b-q4km.json
+    --engine <llama-server 경로> --models-dir <.doculens/models> --model gemma4-e4b-q5km \
+    [--backend cpu|vulkan|cu121|cu129] [--profile balanced] --out eval/out/planner-gemma4-e4b-q5km.json
 ```
 
 - 모든 골든 명령을 `doculens_core::planner::llm::plan(None, text, &ctx)`로 돌립니다(프리라우터 → 문장 규칙; 모델이 없으면
@@ -97,8 +97,8 @@ CI(`.github/workflows/ci.yml`의 `eval-gate`)는 규칙 경로를 `eval/baseline
 cargo run -p doculens-eval -- pipeline --manifest eval/golden/pipeline-manifest.example.json --out eval/out/pipe-dry --dry-run
 
 # 실제 실행: 평가용 워크스페이스를 만들고 가져오기 → 분류 → OCR → 추출 → 채점
-cargo run -p doculens-eval -- pipeline --manifest <골든 매니페스트.json> --out eval/out/qwen3.5-4b-q4km \
-    --engine <llama-server> --models-dir <.doculens/models> --model qwen3.5-4b-q4km \
+cargo run -p doculens-eval -- pipeline --manifest <골든 매니페스트.json> --out eval/out/gemma4-e4b-q5km \
+    --engine <llama-server> --models-dir <.doculens/models> --model gemma4-e4b-q5km \
     [--pdfium <libpdfium.so|pdfium.dll|폴더>] [--backend cu121] [--profile accuracy] [--precise] [--limit 5] [--verbose]
 ```
 
@@ -176,4 +176,4 @@ cargo run -p doculens-eval -- scorecard \
 - TEDS/TEDS-S(표 구조 유사도)와 근거 bbox IoU≥0.5 비율(§3.11) — 표 추출 결과(`ExtractedTable`)와 필드 `bbox`를 쓰는 지표 추가.
 - "골든셋으로 내보내기"(검토 큐 → 매니페스트) UI/커맨드.
 - 파이프라인 지표의 기준선 비교(`pipeline --baseline`) — 지금은 스코어카드 표에서 수동 비교.
-- 실제 Qwen3.5-4B GGUF와 사용자 골든셋으로 측정한 값은 사용자 PC에서 채웁니다(`docs/scorecard.md`).
+- 실제 Gemma 4 E4B GGUF와 사용자 골든셋으로 측정한 값은 사용자 PC에서 채웁니다(`docs/scorecard.md`).

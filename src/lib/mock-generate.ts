@@ -53,7 +53,7 @@ import {
 
 /** Saved drafts (`.doculens/drafts/<id>.json`): `{ [workspace]: Draft[] }`. */
 const DRAFTS_KEY = "doculens.mock.drafts";
-const GENERATOR_MODEL = "qwen3.5-4b-q6k";
+const GENERATOR_MODEL = "gemma4-e4b-q5km";
 
 // ---------------------------------------------------------------------------
 // Helpers

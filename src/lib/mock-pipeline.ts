@@ -69,7 +69,7 @@ const KEY = "doculens.mock.pipeline";
  */
 const VISION_KEY = "doculens.mock.vision";
 type VisionMode = "ready" | "not_loaded" | "none" | "engine_off";
-const VISION_MODEL = "qwen3.5-4b-q6k";
+const VISION_MODEL = "gemma4-e4b-q5km";
 
 function visionMode(): VisionMode {
   try {
@@ -1245,7 +1245,7 @@ export async function runProcess(req: ProcessRequest, ctl: JobControl | null, pr
             schema_id: schema.id,
             schema_version: schema.version,
             doc_type: doc.doc_type,
-            model: "qwen3.5-4b-q6k (mock)",
+            model: "gemma4-e4b-q5km (mock)",
             prompt_version: "p4.1",
             profile: req.profile ?? settings.models.profile,
             precise: req.precise ?? settings.processing.precise_mode,

@@ -1,211 +1,196 @@
 {
-  "$comment": "DocuLens model registry (design §3.3.4 / §2.6). All model weights are Apache-2.0. Entries with verified=false carry sizes/hashes that still have to be pinned on a machine with huggingface.co access (Appendix B). File sizes are approximate until pinned.",
+  "$comment": "DocuLens model registry (design §3.3.4 / §2.6; 0.4.0 ladder = Gemma 4 + EmbeddingGemma 2, all weights Apache-2.0, no Chinese-origin models by user decision 2026-11-10, every file ≤ 8 GB). Entries with verified=false carry sizes/hashes that still have to be pinned on a machine with huggingface.co access (Appendix B). File sizes are the Hugging Face listing values (decimal GB) and approximate until pinned.",
   "schema_version": 1,
   "models": [
     {
-      "id": "qwen3.5-2b-q8",
-      "family": "qwen3.5",
+      "id": "gemma4-e2b-q4km",
+      "family": "gemma4",
       "role": "vlm",
-      "display": "Qwen3.5-2B (Q8_0, CPU)",
+      "display": "Gemma 4 E2B (Q4_K_M, CPU·저여유)",
       "license": "Apache-2.0",
-      "license_url": "https://huggingface.co/Qwen/Qwen3.5-2B",
-      "source_repo": "unsloth/Qwen3.5-2B-GGUF",
-      "arch": "qwen35",
+      "license_url": "https://huggingface.co/google/gemma-4-E2B-it",
+      "source_repo": "unsloth/gemma-4-E2B-it-GGUF",
+      "arch": "gemma4",
       "modalities": ["text", "image"],
-      "ctx_max": 262144,
+      "ctx_max": 131072,
       "files": [
-        { "name": "Qwen3.5-2B-Q8_0.gguf", "sha256": null, "size": 2300000000, "hf": "unsloth/Qwen3.5-2B-GGUF" },
-        { "name": "mmproj-F16.gguf", "sha256": null, "size": 500000000, "hf": "unsloth/Qwen3.5-2B-GGUF" }
+        { "name": "gemma-4-E2B-it-Q4_K_M.gguf", "sha256": null, "size": 3110000000, "hf": "unsloth/gemma-4-E2B-it-GGUF" },
+        { "name": "mmproj-F16.gguf", "sha256": null, "size": 986000000, "hf": "unsloth/gemma-4-E2B-it-GGUF" }
       ],
-      "requirements": { "min_free_vram_mib": 0, "min_ram_mib": 8192, "tiers": ["cpu_only"] },
-      "defaults": { "ctx": 8192, "kv": "q8_0", "image_min_tokens": 1024, "image_max_tokens": 1440, "temperature": 0.1, "top_p": 0.9, "top_k": 20, "thinking": false },
+      "requirements": { "min_free_vram_mib": 4200, "min_ram_mib": 8192, "tiers": ["cpu_only", "vram_6gb", "vram_8gb"] },
+      "defaults": {
+        "ctx": 8192, "kv": "q8_0", "image_min_tokens": 512, "image_max_tokens": 1120,
+        "temperature": 0.1, "top_p": 0.95, "top_k": 64, "thinking": false
+      },
       "capabilities": { "json_schema": true, "tools": true },
-      "prompt_profile": "qwen3.5-doc-v1",
+      "prompt_profile": "gemma4-doc-v1",
       "verified": false
     },
     {
-      "id": "qwen3.5-4b-q4km",
-      "family": "qwen3.5",
+      "id": "gemma4-e2b-q8",
+      "family": "gemma4",
       "role": "vlm",
-      "display": "Qwen3.5-4B (Q4_K_M, 6 GB / 저여유)",
+      "display": "Gemma 4 E2B (Q8_0, CPU 정확도·6 GB)",
       "license": "Apache-2.0",
-      "license_url": "https://huggingface.co/Qwen/Qwen3.5-4B",
-      "source_repo": "unsloth/Qwen3.5-4B-GGUF",
-      "arch": "qwen35",
+      "license_url": "https://huggingface.co/google/gemma-4-E2B-it",
+      "source_repo": "unsloth/gemma-4-E2B-it-GGUF",
+      "arch": "gemma4",
       "modalities": ["text", "image"],
-      "ctx_max": 262144,
+      "ctx_max": 131072,
       "files": [
-        { "name": "Qwen3.5-4B-Q4_K_M.gguf", "sha256": null, "size": 2700000000, "hf": "unsloth/Qwen3.5-4B-GGUF" },
-        { "name": "mmproj-F16.gguf", "sha256": null, "size": 660000000, "hf": "unsloth/Qwen3.5-4B-GGUF" }
+        { "name": "gemma-4-E2B-it-Q8_0.gguf", "sha256": null, "size": 5050000000, "hf": "unsloth/gemma-4-E2B-it-GGUF" },
+        { "name": "mmproj-F16.gguf", "sha256": null, "size": 986000000, "hf": "unsloth/gemma-4-E2B-it-GGUF" }
       ],
-      "requirements": { "min_free_vram_mib": 4600, "min_ram_mib": 8192, "tiers": ["vram_6gb", "vram_8gb"] },
-      "defaults": { "ctx": 16384, "kv": "q8_0", "image_min_tokens": 1024, "image_max_tokens": 2048, "temperature": 0.1, "top_p": 0.9, "top_k": 20, "thinking": false },
-      "capabilities": { "json_schema": true, "tools": true, "mtp_sidecar": "optional" },
-      "prompt_profile": "qwen3.5-doc-v1",
-      "verified": false
-    },
-    {
-      "id": "qwen3.5-4b-q5km",
-      "family": "qwen3.5",
-      "role": "vlm",
-      "display": "Qwen3.5-4B (Q5_K_M, 균형)",
-      "license": "Apache-2.0",
-      "license_url": "https://huggingface.co/Qwen/Qwen3.5-4B",
-      "source_repo": "unsloth/Qwen3.5-4B-GGUF",
-      "arch": "qwen35",
-      "modalities": ["text", "image"],
-      "ctx_max": 262144,
-      "files": [
-        { "name": "Qwen3.5-4B-Q5_K_M.gguf", "sha256": null, "size": 3100000000, "hf": "unsloth/Qwen3.5-4B-GGUF" },
-        { "name": "mmproj-F16.gguf", "sha256": null, "size": 660000000, "hf": "unsloth/Qwen3.5-4B-GGUF" }
-      ],
-      "requirements": { "min_free_vram_mib": 5939, "min_ram_mib": 8192, "tiers": ["vram_8gb"] },
-      "defaults": { "ctx": 32768, "kv": "q8_0", "image_min_tokens": 1024, "image_max_tokens": 2200, "temperature": 0.1, "top_p": 0.9, "top_k": 20, "thinking": false },
-      "capabilities": { "json_schema": true, "tools": true, "mtp_sidecar": "optional" },
-      "prompt_profile": "qwen3.5-doc-v1",
-      "verified": false
-    },
-    {
-      "id": "qwen3.5-4b-q6k",
-      "family": "qwen3.5",
-      "role": "vlm",
-      "display": "Qwen3.5-4B (Q6_K, 정확도)",
-      "license": "Apache-2.0",
-      "license_url": "https://huggingface.co/Qwen/Qwen3.5-4B",
-      "source_repo": "unsloth/Qwen3.5-4B-GGUF",
-      "arch": "qwen35",
-      "modalities": ["text", "image"],
-      "ctx_max": 262144,
-      "files": [
-        { "name": "Qwen3.5-4B-Q6_K.gguf", "sha256": null, "size": 3400000000, "hf": "unsloth/Qwen3.5-4B-GGUF" },
-        { "name": "mmproj-F16.gguf", "sha256": null, "size": 660000000, "hf": "unsloth/Qwen3.5-4B-GGUF" }
-      ],
-      "requirements": { "min_free_vram_mib": 6656, "min_ram_mib": 8192, "tiers": ["vram_8gb", "vram_12gb"] },
-      "defaults": { "ctx": 32768, "kv": "q8_0", "image_min_tokens": 1024, "image_max_tokens": 2200, "temperature": 0.1, "top_p": 0.9, "top_k": 20, "thinking": false },
-      "capabilities": { "json_schema": true, "tools": true, "mtp_sidecar": "optional" },
-      "prompt_profile": "qwen3.5-doc-v1",
-      "verified": false
-    },
-    {
-      "id": "qwen3.5-9b-q5km",
-      "family": "qwen3.5",
-      "role": "vlm",
-      "display": "Qwen3.5-9B (Q5_K_M, 12 GB)",
-      "license": "Apache-2.0",
-      "license_url": "https://huggingface.co/Qwen/Qwen3.5-9B",
-      "source_repo": "unsloth/Qwen3.5-9B-GGUF",
-      "arch": "qwen35",
-      "modalities": ["text", "image"],
-      "ctx_max": 262144,
-      "files": [
-        { "name": "Qwen3.5-9B-Q5_K_M.gguf", "sha256": null, "size": 6700000000, "hf": "unsloth/Qwen3.5-9B-GGUF" },
-        { "name": "mmproj-F16.gguf", "sha256": null, "size": 900000000, "hf": "unsloth/Qwen3.5-9B-GGUF" }
-      ],
-      "requirements": { "min_free_vram_mib": 10240, "min_ram_mib": 16384, "tiers": ["vram_12gb"] },
-      "defaults": { "ctx": 32768, "kv": "q8_0", "image_min_tokens": 1024, "image_max_tokens": 2200, "temperature": 0.1, "top_p": 0.9, "top_k": 20, "thinking": false },
-      "capabilities": { "json_schema": true, "tools": true, "mtp_sidecar": "optional" },
-      "prompt_profile": "qwen3.5-doc-v1",
-      "verified": false
-    },
-    {
-      "id": "qwen3.5-9b-q6k",
-      "family": "qwen3.5",
-      "role": "vlm",
-      "display": "Qwen3.5-9B (Q6_K, 16 GB)",
-      "license": "Apache-2.0",
-      "license_url": "https://huggingface.co/Qwen/Qwen3.5-9B",
-      "source_repo": "unsloth/Qwen3.5-9B-GGUF",
-      "arch": "qwen35",
-      "modalities": ["text", "image"],
-      "ctx_max": 262144,
-      "files": [
-        { "name": "Qwen3.5-9B-Q6_K.gguf", "sha256": null, "size": 7700000000, "hf": "unsloth/Qwen3.5-9B-GGUF" },
-        { "name": "mmproj-F16.gguf", "sha256": null, "size": 900000000, "hf": "unsloth/Qwen3.5-9B-GGUF" }
-      ],
-      "requirements": { "min_free_vram_mib": 13824, "min_ram_mib": 16384, "tiers": ["vram_16gb"] },
-      "defaults": { "ctx": 32768, "kv": "q8_0", "image_min_tokens": 1024, "image_max_tokens": 2200, "temperature": 0.1, "top_p": 0.9, "top_k": 20, "thinking": false },
-      "capabilities": { "json_schema": true, "tools": true, "mtp_sidecar": "optional" },
-      "prompt_profile": "qwen3.5-doc-v1",
-      "verified": false
-    },
-    {
-      "id": "qwen3.5-27b-q4km",
-      "family": "qwen3.5",
-      "role": "vlm",
-      "display": "Qwen3.5-27B (Q4_K_M, 24 GB+)",
-      "license": "Apache-2.0",
-      "license_url": "https://huggingface.co/Qwen/Qwen3.5-27B",
-      "source_repo": "unsloth/Qwen3.5-27B-GGUF",
-      "arch": "qwen35",
-      "modalities": ["text", "image"],
-      "ctx_max": 262144,
-      "files": [
-        { "name": "Qwen3.5-27B-Q4_K_M.gguf", "sha256": null, "size": 16500000000, "hf": "unsloth/Qwen3.5-27B-GGUF" },
-        { "name": "mmproj-F16.gguf", "sha256": null, "size": 1200000000, "hf": "unsloth/Qwen3.5-27B-GGUF" }
-      ],
-      "requirements": { "min_free_vram_mib": 20480, "min_ram_mib": 32768, "tiers": ["vram_24gb_plus"] },
-      "defaults": { "ctx": 32768, "kv": "q8_0", "image_min_tokens": 1024, "image_max_tokens": 2200, "temperature": 0.1, "top_p": 0.9, "top_k": 20, "thinking": false },
-      "capabilities": { "json_schema": true, "tools": true, "mtp_sidecar": "optional" },
-      "prompt_profile": "qwen3.5-doc-v1",
-      "verified": false
-    },
-    {
-      "id": "qwen3-vl-4b-q4km",
-      "family": "qwen3-vl",
-      "role": "vlm",
-      "display": "Qwen3-VL-4B-Instruct (Q4_K_M, 대체 모델)",
-      "license": "Apache-2.0",
-      "license_url": "https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct",
-      "source_repo": "Qwen/Qwen3-VL-4B-Instruct-GGUF",
-      "arch": "qwen3vl",
-      "modalities": ["text", "image"],
-      "ctx_max": 262144,
-      "files": [
-        { "name": "Qwen3-VL-4B-Instruct-Q4_K_M.gguf", "sha256": null, "size": 2500000000, "hf": "Qwen/Qwen3-VL-4B-Instruct-GGUF" },
-        { "name": "mmproj-Qwen3-VL-4B-Instruct-F16.gguf", "sha256": null, "size": 850000000, "hf": "Qwen/Qwen3-VL-4B-Instruct-GGUF" }
-      ],
-      "requirements": { "min_free_vram_mib": 5500, "min_ram_mib": 8192, "tiers": ["vram_8gb", "vram_12gb"] },
-      "defaults": { "ctx": 8192, "kv": "q8_0", "image_min_tokens": 1024, "image_max_tokens": 2048, "temperature": 0.1, "top_p": 0.9, "top_k": 20, "thinking": false },
+      "requirements": { "min_free_vram_mib": 4900, "min_ram_mib": 12288, "tiers": ["cpu_only", "vram_6gb", "vram_8gb"] },
+      "defaults": {
+        "ctx": 16384, "kv": "q8_0", "image_min_tokens": 512, "image_max_tokens": 1120,
+        "temperature": 0.1, "top_p": 0.95, "top_k": 64, "thinking": false
+      },
       "capabilities": { "json_schema": true, "tools": true },
-      "prompt_profile": "qwen3-vl-doc-v1",
+      "prompt_profile": "gemma4-doc-v1",
       "verified": false
     },
     {
-      "id": "embed-bge-m3-q8",
-      "family": "bge-m3",
+      "id": "gemma4-e4b-q4km",
+      "family": "gemma4",
+      "role": "vlm",
+      "display": "Gemma 4 E4B (Q4_K_M, 저여유)",
+      "license": "Apache-2.0",
+      "license_url": "https://huggingface.co/google/gemma-4-E4B-it",
+      "source_repo": "unsloth/gemma-4-E4B-it-GGUF",
+      "arch": "gemma4",
+      "modalities": ["text", "image"],
+      "ctx_max": 131072,
+      "files": [
+        { "name": "gemma-4-E4B-it-Q4_K_M.gguf", "sha256": null, "size": 4980000000, "hf": "unsloth/gemma-4-E4B-it-GGUF" },
+        { "name": "mmproj-F16.gguf", "sha256": null, "size": 990000000, "hf": "unsloth/gemma-4-E4B-it-GGUF" }
+      ],
+      "requirements": { "min_free_vram_mib": 5800, "min_ram_mib": 8192, "tiers": ["vram_8gb", "vram_12gb"] },
+      "defaults": {
+        "ctx": 32768, "kv": "q8_0", "image_min_tokens": 512, "image_max_tokens": 1120,
+        "temperature": 0.1, "top_p": 0.95, "top_k": 64, "thinking": false
+      },
+      "capabilities": { "json_schema": true, "tools": true },
+      "prompt_profile": "gemma4-doc-v1",
+      "verified": false
+    },
+    {
+      "id": "gemma4-e4b-q5km",
+      "family": "gemma4",
+      "role": "vlm",
+      "display": "Gemma 4 E4B (Q5_K_M, 균형)",
+      "license": "Apache-2.0",
+      "license_url": "https://huggingface.co/google/gemma-4-E4B-it",
+      "source_repo": "unsloth/gemma-4-E4B-it-GGUF",
+      "arch": "gemma4",
+      "modalities": ["text", "image"],
+      "ctx_max": 131072,
+      "files": [
+        { "name": "gemma-4-E4B-it-Q5_K_M.gguf", "sha256": null, "size": 5480000000, "hf": "unsloth/gemma-4-E4B-it-GGUF" },
+        { "name": "mmproj-F16.gguf", "sha256": null, "size": 990000000, "hf": "unsloth/gemma-4-E4B-it-GGUF" }
+      ],
+      "requirements": { "min_free_vram_mib": 6000, "min_ram_mib": 8192, "tiers": ["vram_8gb", "vram_12gb"] },
+      "defaults": {
+        "ctx": 32768, "kv": "q8_0", "image_min_tokens": 512, "image_max_tokens": 1120,
+        "temperature": 0.1, "top_p": 0.95, "top_k": 64, "thinking": false
+      },
+      "capabilities": { "json_schema": true, "tools": true },
+      "prompt_profile": "gemma4-doc-v1",
+      "verified": false
+    },
+    {
+      "id": "gemma4-e4b-q6k",
+      "family": "gemma4",
+      "role": "vlm",
+      "display": "Gemma 4 E4B (Q6_K, 정확도)",
+      "license": "Apache-2.0",
+      "license_url": "https://huggingface.co/google/gemma-4-E4B-it",
+      "source_repo": "unsloth/gemma-4-E4B-it-GGUF",
+      "arch": "gemma4",
+      "modalities": ["text", "image"],
+      "ctx_max": 131072,
+      "files": [
+        { "name": "gemma-4-E4B-it-Q6_K.gguf", "sha256": null, "size": 7070000000, "hf": "unsloth/gemma-4-E4B-it-GGUF" },
+        { "name": "mmproj-F16.gguf", "sha256": null, "size": 990000000, "hf": "unsloth/gemma-4-E4B-it-GGUF" }
+      ],
+      "requirements": { "min_free_vram_mib": 7100, "min_ram_mib": 8192, "tiers": ["vram_8gb", "vram_12gb", "vram_16gb"] },
+      "defaults": {
+        "ctx": 32768, "kv": "q8_0", "image_min_tokens": 512, "image_max_tokens": 1120,
+        "temperature": 0.1, "top_p": 0.95, "top_k": 64, "thinking": false
+      },
+      "capabilities": { "json_schema": true, "tools": true },
+      "prompt_profile": "gemma4-doc-v1",
+      "verified": false
+    },
+    {
+      "id": "gemma4-12b-q4km",
+      "family": "gemma4",
+      "role": "vlm",
+      "display": "Gemma 4 12B (Q4_K_M, 12 GB+)",
+      "license": "Apache-2.0",
+      "license_url": "https://huggingface.co/google/gemma-4-12B-it",
+      "source_repo": "unsloth/gemma-4-12b-it-GGUF",
+      "arch": "gemma4",
+      "modalities": ["text", "image"],
+      "ctx_max": 262144,
+      "files": [
+        { "name": "gemma-4-12b-it-Q4_K_M.gguf", "sha256": null, "size": 7120000000, "hf": "unsloth/gemma-4-12b-it-GGUF" },
+        { "name": "mmproj-F16.gguf", "sha256": null, "size": 175000000, "hf": "unsloth/gemma-4-12b-it-GGUF" }
+      ],
+      "requirements": { "min_free_vram_mib": 8850, "min_ram_mib": 16384, "tiers": ["vram_12gb", "vram_16gb", "vram_24gb_plus"] },
+      "defaults": {
+        "ctx": 32768, "kv": "q8_0", "image_min_tokens": 512, "image_max_tokens": 1120,
+        "temperature": 0.1, "top_p": 0.95, "top_k": 64, "thinking": false
+      },
+      "capabilities": { "json_schema": true, "tools": true },
+      "prompt_profile": "gemma4-doc-v1",
+      "verified": false
+    },
+    {
+      "id": "embed-gemma2-q8",
+      "family": "embeddinggemma-2",
       "role": "embedding",
-      "display": "BGE-M3 (Q8_0, 임베딩 · CPU)",
-      "license": "MIT",
-      "license_url": "https://huggingface.co/BAAI/bge-m3",
-      "source_repo": "BAAI/bge-m3",
-      "arch": "bert",
+      "display": "EmbeddingGemma 2 (Q8_0, 임베딩 · CPU)",
+      "license": "Apache-2.0",
+      "license_url": "https://huggingface.co/google/embeddinggemma-2",
+      "source_repo": "ggml-org/embeddinggemma-2-GGUF",
+      "arch": "gemma-embedding2",
       "modalities": ["text"],
       "ctx_max": 8192,
       "files": [
-        { "name": "bge-m3-Q8_0.gguf", "sha256": null, "size": 610000000, "hf": null }
+        { "name": "embeddinggemma-2-Q8_0.gguf", "sha256": null, "size": 309855456, "hf": "ggml-org/embeddinggemma-2-GGUF" }
       ],
-      "requirements": { "min_free_vram_mib": 0, "min_ram_mib": 4096, "tiers": ["cpu_only", "vram_6gb", "vram_8gb", "vram_12gb", "vram_16gb", "vram_24gb_plus"] },
-      "defaults": { "ctx": 2048, "kv": "f16", "embeddings": true, "pooling": "cls", "n_gpu_layers": 0 },
+      "requirements": {
+        "min_free_vram_mib": 0,
+        "min_ram_mib": 4096,
+        "tiers": ["cpu_only", "vram_6gb", "vram_8gb", "vram_12gb", "vram_16gb", "vram_24gb_plus"]
+      },
+      "defaults": {
+        "ctx": 2048, "kv": "f16", "embeddings": true, "pooling": "mean", "n_gpu_layers": 0,
+        "embedding_dim": 768,
+        "query_prefix": "task: search result | query: ",
+        "document_prefix": "title: none | text: "
+      },
       "capabilities": { "embeddings": true },
       "prompt_profile": null,
       "verified": false
     }
   ],
   "tier_defaults": {
-    "cpu_only": "qwen3.5-2b-q8",
-    "vram_6gb": "qwen3.5-4b-q4km",
-    "vram_8gb": "auto:qwen3.5-4b",
-    "vram_12gb": "qwen3.5-9b-q5km",
-    "vram_16gb": "qwen3.5-9b-q6k",
-    "vram_24gb_plus": "qwen3.5-27b-q4km"
+    "cpu_only": "gemma4-e2b-q4km",
+    "vram_6gb": "gemma4-e2b-q8",
+    "vram_8gb": "auto:gemma4-e4b",
+    "vram_12gb": "gemma4-12b-q4km",
+    "vram_16gb": "gemma4-12b-q4km",
+    "vram_24gb_plus": "gemma4-12b-q4km"
   },
   "adaptive": {
-    "qwen3.5-4b": [
-      { "min_free_vram_mib": 6656, "model": "qwen3.5-4b-q6k" },
-      { "min_free_vram_mib": 5939, "model": "qwen3.5-4b-q5km" },
-      { "min_free_vram_mib": 0, "model": "qwen3.5-4b-q4km" }
+    "gemma4-e4b": [
+      { "min_free_vram_mib": 7100, "model": "gemma4-e4b-q6k" },
+      { "min_free_vram_mib": 6000, "model": "gemma4-e4b-q5km" },
+      { "min_free_vram_mib": 0, "model": "gemma4-e4b-q4km" }
     ]
   },
-  "default_embedding": "embed-bge-m3-q8",
-  "fallback_family": "qwen3-vl"
+  "default_embedding": "embed-gemma2-q8",
+  "fallback_family": "gemma4"
 }

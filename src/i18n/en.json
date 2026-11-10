@@ -1004,7 +1004,7 @@
       "app_data": "App data folder",
       "runtime": "Runtime",
       "licenses": "Open-source notices",
-      "licenses_hint": "Only licenses without a source-disclosure obligation are used (Apache-2.0 / MIT / BSD / ISC / OFL …). Model weights are Apache-2.0 (Qwen3.5) and MIT (bge-m3).",
+      "licenses_hint": "Only licenses without a source-disclosure obligation are used (Apache-2.0 / MIT / BSD / ISC / OFL …). All model weights are Apache-2.0 (Gemma 4, EmbeddingGemma 2).",
       "notices": "Open THIRD-PARTY-NOTICES",
       "design_doc": "Design document",
       "font": "Font: Pretendard Variable (OFL-1.1, unmodified file bundled)"
@@ -1026,7 +1026,7 @@
       "top_k": "Evidence chunks",
       "chunk_target": "Chunk size (tokens)",
       "min_similarity": "Semantic evidence threshold (cosine similarity)",
-      "min_similarity_hint": "Chunks found only by embedding similarity count as evidence above this value (bge-m3 ≈ 0.5)."
+      "min_similarity_hint": "Chunks found only by embedding similarity count as evidence above this value (0.5 for EmbeddingGemma 2 — tune on your PC)."
     },
     "generation": {
       "title": "Document generation",
@@ -1624,7 +1624,7 @@
     "empty_hint": "Morpheme (particle-aware), substring and semantic search are combined. Two-character queries work too.",
     "keyword_only": "The embedding model is not loaded, so these are keyword results.",
     "like_fallback": "Short query not in the indexes — matched by substring in the text.",
-    "semantic_unavailable": "Install and load the embedding model (bge-m3) for semantic search.",
+    "semantic_unavailable": "Install and load the embedding model (EmbeddingGemma 2) for semantic search.",
     "latest_only": "Latest only",
     "terms": "Terms",
     "expanded": "Expanded (glossary)",

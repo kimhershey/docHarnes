@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{CoreError, Result};
 use crate::hw::{Backend, Tier};
 use crate::modelstore::DiscoveredModel;
+use crate::pipeline::image::VisionGeometry;
 use crate::registry::{ModelEntry, ModelRole, Registry};
 use crate::settings::{ModelSettings, Profile};
 
@@ -178,7 +179,15 @@ fn model_options(entry: Option<&ModelEntry>, d: &DiscoveredModel, ctx: &PresetCo
 
     push(&mut opts, "ctx-size", context_for(&defaults, ctx_max, ctx.profile, ctx.backend).to_string());
     if d.has_vision {
-        push(&mut opts, "image-max-tokens", image_max_tokens_for(&defaults, ctx.profile, ctx.backend).to_string());
+        // The encoder geometry bounds both ends: Gemma 4 takes 70–1,120 tokens per image, Qwen
+        // drop-ins need the 1,024-token grounding floor (§3.4).
+        let arch = entry.map(|e| e.arch.as_str()).or(d.architecture.as_deref()).unwrap_or("");
+        let geom = VisionGeometry::for_arch(arch);
+        let max_tokens = image_max_tokens_for(&defaults, ctx.profile, ctx.backend).min(u64::from(geom.max_tokens));
+        let min_tokens =
+            num(&defaults, "image_min_tokens").unwrap_or(u64::from(geom.default_min_tokens)).min(max_tokens);
+        push(&mut opts, "image-min-tokens", min_tokens.to_string());
+        push(&mut opts, "image-max-tokens", max_tokens.to_string());
     }
     let two_slots =
         ctx.backend != Backend::Cpu && matches!(ctx.tier, Tier::Vram12gb | Tier::Vram16gb | Tier::Vram24gbPlus);
@@ -234,7 +243,6 @@ pub fn global_options(ctx: &PresetContext) -> Vec<(String, String)> {
         ("n-gpu-layers".into(), if ctx.backend == Backend::Cpu { "0".into() } else { "all".into() }),
         ("batch-size".into(), "2048".into()),
         ("ubatch-size".into(), "512".into()),
-        ("image-min-tokens".into(), "1024".into()),
         ("jinja".into(), "true".into()),
         ("metrics".into(), "true".into()),
     ];
@@ -291,15 +299,15 @@ pub fn build_presets(registry: &Registry, discovered: &[DiscoveredModel], ctx: &
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gguf::{synthetic_qwen35_metadata, write_minimal_gguf, GgufValue};
+    use crate::gguf::{synthetic_gemma4_metadata, write_minimal_gguf, GgufValue};
     use crate::modelstore::{scan_models_dir, ScanOptions};
 
     fn fixture(dir: &Path) -> Vec<DiscoveredModel> {
-        let q = dir.join("qwen");
+        let q = dir.join("gemma");
         std::fs::create_dir_all(&q).unwrap();
         write_minimal_gguf(
-            &q.join("Qwen3.5-4B-Q6_K.gguf"),
-            &synthetic_qwen35_metadata("Qwen3.5 4B", 18, true),
+            &q.join("gemma-4-E4B-it-Q6_K.gguf"),
+            &synthetic_gemma4_metadata("Gemma 4 E4B", 18, true),
             &[("a", &[8], 0)],
         )
         .unwrap();
@@ -307,6 +315,7 @@ mod tests {
             &q.join("mmproj-F16.gguf"),
             &[
                 ("general.architecture", GgufValue::String("clip".into())),
+                ("clip.projector_type", GgufValue::String("gemma4v".into())),
                 ("clip.has_vision_encoder", GgufValue::Bool(true)),
             ],
             &[("v", &[8], 1)],
@@ -314,9 +323,9 @@ mod tests {
         .unwrap();
         let e = dir.join("embed");
         std::fs::create_dir_all(&e).unwrap();
-        let mut bert = synthetic_qwen35_metadata("bge-m3", 7, false);
-        bert[0] = ("general.architecture", GgufValue::String("bert".into()));
-        write_minimal_gguf(&e.join("bge-m3-Q8_0.gguf"), &bert, &[("a", &[8], 0)]).unwrap();
+        let mut emb = synthetic_gemma4_metadata("EmbeddingGemma 2", 7, false);
+        emb[0] = ("general.architecture", GgufValue::String("gemma-embedding2".into()));
+        write_minimal_gguf(&e.join("embeddinggemma-2-Q8_0.gguf"), &emb, &[("a", &[8], 0)]).unwrap();
         let old = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
         for d in [&q, &e] {
             for f in std::fs::read_dir(d).unwrap().flatten() {
@@ -337,7 +346,7 @@ mod tests {
             tier: Tier::Vram8gb,
             profile: Profile::Accuracy,
             settings: &settings,
-            active_model: Some("qwen3.5-4b-q6k"),
+            active_model: Some("gemma4-e4b-q6k"),
             debug: false,
         };
         let b = build_presets(&Registry::builtin(), &found, &ctx);
@@ -345,13 +354,15 @@ mod tests {
         let ini = b.file.to_ini();
         assert!(ini.starts_with("version = 1\n"));
         assert!(ini.contains("[*]\nflash-attn = on\n"));
+        assert!(!ini.contains("[*]\nflash-attn = on\n") || !ini.split("[gemma4").next().unwrap().contains("image-min-tokens"), "the image floor is per model, not global");
         assert!(ini.contains("slots = false"));
-        assert!(ini.contains("[qwen3.5-4b-q6k]\n"));
-        assert!(ini.contains(&format!("model = {}\n", tmp.path().join("qwen").join("Qwen3.5-4B-Q6_K.gguf").display())));
+        assert!(ini.contains("[gemma4-e4b-q6k]\n"));
+        assert!(ini.contains(&format!("model = {}\n", tmp.path().join("gemma").join("gemma-4-E4B-it-Q6_K.gguf").display())));
         assert!(ini.contains("mmproj = "));
-        assert!(ini.contains("load-on-startup = true\nctx-size = 32768\nimage-max-tokens = 2200\nparallel = 1\ntemp = 0.1\ntop-k = 20\ntop-p = 0.9\nreasoning = off\nreasoning-budget = 0\n"));
-        assert!(ini.contains("[embed-bge-m3-q8]\n"));
-        assert!(ini.contains("embeddings = true\npooling = cls\nctx-size = 2048\n"));
+        // accuracy profile asks for 2,200 image tokens; Gemma 4's encoder caps at 1,120 and floors at 512
+        assert!(ini.contains("load-on-startup = true\nctx-size = 32768\nimage-min-tokens = 512\nimage-max-tokens = 1120\nparallel = 1\ntemp = 0.1\ntop-k = 64\ntop-p = 0.95\nreasoning = off\nreasoning-budget = 0\n"), "{ini}");
+        assert!(ini.contains("[embed-gemma2-q8]\n"));
+        assert!(ini.contains("embeddings = true\npooling = mean\nctx-size = 2048\n"));
         assert_eq!(b.mmproj_sizes.len(), 1);
         // 12 GB → two slots; speed profile → 8K ctx, 1440 image tokens; vulkan caps image tokens
         let ctx = PresetContext {
@@ -363,7 +374,7 @@ mod tests {
             debug: true,
         };
         let ini = build_presets(&Registry::builtin(), &found, &ctx).file.to_ini();
-        assert!(ini.contains("ctx-size = 8192\nimage-max-tokens = 1440\nparallel = 2\nkv-unified = true\n"));
+        assert!(ini.contains("ctx-size = 8192\nimage-min-tokens = 512\nimage-max-tokens = 1120\nparallel = 2\nkv-unified = true\n"), "{ini}");
         assert!(ini.contains("load-on-startup = false"));
         assert!(!ini.contains("slots = false"));
         // cpu backend → no GPU layers anywhere
@@ -377,8 +388,18 @@ mod tests {
         };
         let ini = build_presets(&Registry::builtin(), &found, &ctx).file.to_ini();
         assert!(ini.contains("n-gpu-layers = 0\nbatch-size"));
-        assert!(ini.contains("image-max-tokens = 1024\n"));
+        assert!(ini.contains("image-min-tokens = 512\nimage-max-tokens = 1024\n"), "{ini}");
         assert!(ini.contains("flash-attn = auto"));
+    }
+
+    #[test]
+    fn qwen_drop_in_keeps_its_grounding_floor_and_wider_ceiling() {
+        let defaults = serde_json::json!({ "image_max_tokens": 2048 });
+        // the shared helper is geometry-agnostic; model_options clamps with the arch
+        assert_eq!(image_max_tokens_for(&defaults, Profile::Accuracy, Backend::Cu129), 2_200);
+        assert_eq!(image_max_tokens_for(&defaults, Profile::FinePrint, Backend::Cu129), 3_072);
+        assert_eq!(VisionGeometry::for_arch("qwen35").default_min_tokens, 1_024);
+        assert_eq!(VisionGeometry::for_arch("gemma4").max_tokens, 1_120);
     }
 
     #[test]
@@ -386,7 +407,7 @@ mod tests {
         assert!(ini_value_ok("C:\\Work\\Docs\\.doculens\\models\\q\\x.gguf"));
         assert!(!ini_value_ok("C:\\Work\\#docs\\x.gguf"));
         assert!(!ini_value_ok("a;b"));
-        assert!(ini_section_ok("qwen3.5-4b-q6k"));
+        assert!(ini_section_ok("gemma4-e4b-q6k"));
         assert!(!ini_section_ok("a]b"));
         assert_eq!(trim_float(0.1), "0.1");
         assert_eq!(trim_float(1.0), "1");

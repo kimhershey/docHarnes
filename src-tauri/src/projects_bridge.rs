@@ -145,7 +145,8 @@ fn dialog_model<'a>(
         log::info!("projects: a batch job holds the engine; {what} runs without the model");
         return None;
     }
-    Some(Vlm::new(&state.engine, model, pctx.profile, None).with_context(ctx))
+    let geometry = pipeline_bridge::vision_geometry(state, &model);
+    Some(Vlm::new(&state.engine, model, pctx.profile, None).with_context(ctx).with_geometry(geometry))
 }
 
 pub fn define_rule(app: &AppHandle, id: &str, description: &str) -> UiResult<RuleDraft> {

@@ -96,7 +96,7 @@ export function ImportDialog({ open, onOpenChange, onStarted }: { open: boolean;
               id="import-paths"
               className="min-h-20 w-full rounded-md border border-border bg-bg p-2 font-mono text-xs"
               value={pathsText}
-              placeholder={"D:\\models\\Qwen3.5-4B-Q6_K.gguf\nD:\\models\\mmproj-F16.gguf"}
+              placeholder={"D:\\models\\gemma-4-E4B-it-Q5_K_M.gguf\nD:\\models\\mmproj-F16.gguf"}
               onChange={(e) => {
                 setPathsText(e.target.value);
                 reset();

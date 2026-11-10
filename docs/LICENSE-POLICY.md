@@ -12,6 +12,11 @@ ISC, Zlib, Unicode-3.0 / Unicode-DFS-2016, CC0-1.0, Unlicense, BSL-1.0 (Boost),
 OFL-1.1 (fonts; Reserved Font Name rules apply), FTL / IJG (via PDFium),
 CDLA-Permissive-2.0 (datasets), Python-2.0 / PSF-2.0 (eval tooling).
 
+Model weights (0.4.0): **Gemma 4** (E2B / E4B / 12B) and **EmbeddingGemma 2** are
+Apache-2.0 — Google dropped the custom Gemma Terms with Gemma 4 (April 2026) and
+EmbeddingGemma 2 (October 2026). Gemma ≤ 3 and the first-generation EmbeddingGemma
+still carry the Gemma Terms and stay denied.
+
 **MPL-2.0: only unmodified** (design decision 10). The file-level copyleft is
 never triggered as long as the MPL files are shipped as received. Never patch
 or vendor-modify an MPL dependency (currently: `lightningcss` through Tailwind;
@@ -36,19 +41,27 @@ SSPL, BUSL/BSL-1.1, MS-RL, EUPL, CC-BY-NC, "community"/"research" licenses
 (Qwen Research License, Gemma Terms ≤3, Llama Community License, Lobe Chat …),
 `LicenseRef-*` / unknown.
 
+Origin rule (user decision 2026-11-10): weights from Chinese developers (Qwen /
+Qwen3-VL, bge-m3, GLM, InternVL, MiniCPM, DeepSeek, PaddleOCR, Hunyuan …) are
+excluded from `models/registry.json` regardless of their license. A folder a user
+drops in is still recognised by architecture, but the app never recommends,
+downloads or ships them.
+
 Concrete avoid-list: see design Appendix C (`docs/design/doculens-design-v1.1.md`):
 PyMuPDF, poppler, PySide6/PyQt, Slint, Nuitka, WiX, Electron (bundled FFmpeg),
 opencv-python wheels, docling-eval, kiwi-rs, KoNLPy/soynlp, Label Studio
 installation, dots.ocr/mocr, MinerU, Marker/Surya/Chandra weights,
 Nanonets-OCR2, HunyuanOCR, Kanana/HyperCLOVA/VARCO/EXAONE, Gemma ≤3, jina v2+,
-EmbeddingGemma, Open WebUI/Lobe Chat code, Redis ≥7.4/MinIO/Grafana/Loki/
+EmbeddingGemma (1st generation), Qwen / bge-m3 and other Chinese-origin weights
+(origin rule), Open WebUI/Lobe Chat code, Redis ≥7.4/MinIO/Grafana/Loki/
 Elasticsearch, GPL TEDS implementations, axe-core (dev only).
 
 ## Gates
 
 - Rust: `cargo deny check licenses` (`deny.toml`), CI job `license`.
 - npm: `npm run licenses:check` (`scripts/check-licenses.mjs`).
-- Models: `models/registry.json` `license` field; LICENSE/NOTICE files are
+- Models: `models/registry.json` `license` field (every entry Apache-2.0 since 0.4.0:
+  Gemma 4 + EmbeddingGemma 2) and the origin rule above; LICENSE/NOTICE files are
   copied next to imported weights.
 - PDFium: `engines/pdfium.json` pins the bblanchon/pdfium-binaries build;
   `scripts/fetch-pdfium.mjs` verifies the SHA-256 and copies the archive's

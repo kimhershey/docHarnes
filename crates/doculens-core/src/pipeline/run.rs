@@ -129,7 +129,7 @@ pub fn process(
 }
 
 /// Cached page image fitted to a token budget (`None` when the page has no render).
-fn page_image(cache: &DocumentCache, page: &PageRecord, tokens: u32) -> Result<Option<PreparedImage>> {
+fn page_image(cache: &DocumentCache, page: &PageRecord, vlm: &Vlm<'_>, tokens: u32) -> Result<Option<PreparedImage>> {
     if page.width_px == 0 || page.height_px == 0 {
         return Ok(None);
     }
@@ -137,7 +137,7 @@ fn page_image(cache: &DocumentCache, page: &PageRecord, tokens: u32) -> Result<O
     if !path.is_file() {
         return Ok(None);
     }
-    image::prepare(&path, tokens).map(Some)
+    image::prepare(&path, vlm.geometry, tokens).map(Some)
 }
 
 fn has_text(p: &PageRecord) -> bool {
@@ -176,7 +176,7 @@ fn process_document(
                 return Err(CoreError::Cancelled);
             }
             progress("classify", Some((idx as u32 + 1, n as u32)));
-            let img = page_image(&cache, &pages[idx], CLASSIFY_IMAGE_TOKENS)?;
+            let img = page_image(&cache, &pages[idx], vlm, CLASSIFY_IMAGE_TOKENS)?;
             let text = pages[idx].text.clone();
             let (mut class, reply) =
                 classify::classify_page(vlm, doc_types, img.as_ref().map(|i| i.url.as_str()), text.as_deref())?;
@@ -191,7 +191,7 @@ fn process_document(
                         pages[idx].width_px = np.width_px;
                         pages[idx].height_px = np.height_px;
                         pages[idx].rendered_at = Some(chrono::Utc::now());
-                        let img2 = page_image(&cache, &pages[idx], CLASSIFY_IMAGE_TOKENS)?;
+                        let img2 = page_image(&cache, &pages[idx], vlm, CLASSIFY_IMAGE_TOKENS)?;
                         let (c2, r2) = classify::classify_page(
                             vlm,
                             doc_types,
@@ -250,7 +250,7 @@ fn process_document(
             return Err(CoreError::Cancelled);
         }
         progress("ocr", Some((idx as u32 + 1, n as u32)));
-        let Some(img) = page_image(&cache, page, ocr_tokens)? else { continue };
+        let Some(img) = page_image(&cache, page, vlm, ocr_tokens)? else { continue };
         let (mut text, reply) = ocr::ocr_page(vlm, &img.url, None)?;
         usage.add(reply.usage);
         let mut profile_used = vlm.profile;
@@ -258,9 +258,11 @@ fn process_document(
             if let Some(t) = &text {
                 if ocr::table_cells(t) >= deps.settings.dense_cells as usize {
                     // Dense page (§3.4 밀집 영역): a second pass at the fine-print budget.
-                    let fine =
-                        Vlm::new(vlm.chat, vlm.model.clone(), Profile::FinePrint, vlm.cancel).with_context(vlm.ctx);
-                    if let Some(img2) = page_image(&cache, page, fine.params(Stage::Ocr).image_tokens.unwrap_or(3_072))?
+                    let fine = Vlm::new(vlm.chat, vlm.model.clone(), Profile::FinePrint, vlm.cancel)
+                        .with_context(vlm.ctx)
+                        .with_geometry(vlm.geometry);
+                    if let Some(img2) =
+                        page_image(&cache, page, &fine, fine.params(Stage::Ocr).image_tokens.unwrap_or(3_072))?
                     {
                         match ocr::ocr_page(&fine, &img2.url, None) {
                             Ok((t2, r2)) => {
@@ -472,7 +474,7 @@ fn extract_document(
             return Err(CoreError::Cancelled);
         }
         progress("extract", Some((i as u32 + 1, total)));
-        let img = page_image(&cache, page, tokens)?;
+        let img = page_image(&cache, page, vlm, tokens)?;
         let input = PageInput {
             page_no: page.page_no,
             page_count: pages.len() as u32,

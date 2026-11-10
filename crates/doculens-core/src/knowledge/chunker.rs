@@ -38,8 +38,8 @@ pub struct PageText<'a> {
     pub text: &'a str,
 }
 
-/// Rough token count for Korean/English mixed text (conservative: Qwen/bge
-/// tokenizers need ~0.6–0.8 tokens per Hangul syllable).
+/// Rough token count for Korean/English mixed text (conservative: the chat and
+/// embedding models' tokenizers need ~0.6–0.8 tokens per Hangul syllable).
 pub fn estimate_tokens(text: &str) -> u32 {
     let (mut hangul, mut cjk, mut latin_words, mut digits, mut other) = (0f32, 0f32, 0f32, 0f32, 0f32);
     let mut in_latin = false;

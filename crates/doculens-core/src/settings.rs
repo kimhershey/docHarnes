@@ -359,7 +359,9 @@ pub struct KnowledgeSettings {
     pub auto_index: bool,
     /// Embed new chunks in the background whenever the embedding model is installed.
     pub auto_embed: bool,
-    /// Embedding model id (None = the registry's `default_embedding`).
+    /// Embedding model id (None = the registry's `default_embedding`). An id the
+    /// registry / drop-in scan no longer knows (e.g. a model removed in 0.4.0) is
+    /// ignored by the shell, which then uses the default.
     pub embedding_model: Option<String>,
     /// Hide superseded document editions from search and answers.
     pub latest_only: bool,
@@ -371,7 +373,8 @@ pub struct KnowledgeSettings {
     pub top_k: u32,
     /// Target chunk size in tokens (400–800 per design).
     pub chunk_target_tokens: u32,
-    /// Vector-only hits below this cosine similarity are not evidence (bge-m3 ≈ 0.5).
+    /// Vector-only hits below this cosine similarity are not evidence (≈ 0.5 for the
+    /// shipped embedding model, EmbeddingGemma 2; re-check on the user's PC after a model change).
     pub min_vector_similarity: f32,
 }
 

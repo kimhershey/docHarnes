@@ -49,6 +49,7 @@ pub fn extract_page(
         Vlm::new(vlm.chat, vlm.model.clone(), vlm.profile, vlm.cancel)
             .with_sampling(Some(t), Some(11))
             .with_context(vlm.ctx)
+            .with_geometry(vlm.geometry)
     });
     let caller = sampled.as_ref().unwrap_or(vlm);
     // Proactive budget: the prompt without text (instructions + schema summary) and the image

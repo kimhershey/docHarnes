@@ -1033,6 +1033,7 @@ pub fn draft(deps: &GenerateDeps<'_>, req: &DraftRequest) -> Result<DraftOutcome
         temperature: Some(vlm.temperature.unwrap_or(prompts::TEMPERATURE)),
         seed: vlm.seed,
         ctx: vlm.ctx,
+        geometry: vlm.geometry,
     };
     if prompts::split_needed(reply_tokens, vlm.ctx) {
         return draft_split(deps, &model, &spec, req, &sources, reply_tokens, notes, started);
@@ -1106,6 +1107,7 @@ fn call_json_with_retry(
                 temperature: model.temperature.map(|t| (t + 0.1).min(0.5)),
                 seed: Some(model.seed.unwrap_or(7) + 1),
                 ctx: model.ctx,
+                geometry: model.geometry,
             };
             let messages = vec![system.clone(), user_message(&format!("{user_text}{}", prompts::retry_reminder(ko)))];
             retry.call_json(Stage::NlSchema, &messages, name, schema_v, Some(budget * 3 / 2))

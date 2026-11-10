@@ -79,7 +79,7 @@ jobs:
           path: playwright-report
 
   engine-real:
-    name: Real llama-server (CPU) + tiny Qwen3.5 fixture
+    name: Real llama-server (CPU) + tiny Gemma 4 fixture
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

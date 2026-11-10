@@ -513,6 +513,18 @@ pub struct ModelMeta {
     pub head_count_kv: Option<u32>,
     pub key_length: Option<u32>,
     pub full_attention_interval: Option<u32>,
+    /// Gemma 3/4 sliding window (`attention.sliding_window`) and the per-layer pattern
+    /// (`attention.sliding_window_pattern`, true = sliding-window layer).
+    pub sliding_window: Option<u32>,
+    pub swa_pattern: Option<Vec<bool>>,
+    /// Gemma 4: trailing layers that reuse another layer's KV (`attention.shared_kv_layers`).
+    pub shared_kv_layers: Option<u32>,
+    /// Per-layer `attention.head_count_kv` when the GGUF stores an array (Gemma 4: sliding vs global).
+    pub head_count_kv_layers: Option<Vec<u32>>,
+    pub key_length_swa: Option<u32>,
+    /// Bytes of tensors llama.cpp keeps on the host instead of VRAM (Gemma 4 per-layer
+    /// embedding table, read lazily from the file).
+    pub host_resident_bytes: u64,
     pub split_count: Option<u16>,
     pub split_no: Option<u16>,
     pub projector_type: Option<String>,
@@ -536,17 +548,42 @@ impl ModelMeta {
     /// Hyper-parameters for the VRAM estimate (`memory::estimate`).
     pub fn arch_params(&self) -> Option<ModelArch> {
         let n_layer = self.block_count?;
-        let n_head_kv = self.head_count_kv.or(self.head_count)?;
         let head_dim = match (self.key_length, self.embedding_length, self.head_count) {
             (Some(k), _, _) => k,
             (None, Some(e), Some(h)) if h > 0 => e / h,
             _ => return None,
+        };
+        // KV heads of the first layer of a kind (sliding / global) when the GGUF stores a per-layer array.
+        let kv_heads_for = |sliding: bool| -> Option<u32> {
+            let pattern = self.swa_pattern.as_ref()?;
+            let heads = self.head_count_kv_layers.as_ref()?;
+            pattern.iter().zip(heads).find(|(s, _)| **s == sliding).map(|(_, h)| *h)
+        };
+        let swa = match (self.sliding_window, &self.swa_pattern) {
+            (Some(window), Some(pattern)) if pattern.iter().any(|b| *b) && pattern.iter().any(|b| !*b) => {
+                let own = (n_layer.saturating_sub(self.shared_kv_layers.unwrap_or(0)) as usize).min(pattern.len());
+                let n_swa_layers = pattern[..own].iter().filter(|b| **b).count() as u32;
+                Some(crate::memory::SwaLayout {
+                    window,
+                    n_swa_layers,
+                    n_global_layers: own as u32 - n_swa_layers,
+                    n_head_kv_swa: kv_heads_for(true).or(self.head_count_kv).or(self.head_count)?,
+                    head_dim_swa: self.key_length_swa.unwrap_or(head_dim),
+                })
+            }
+            _ => None,
+        };
+        let n_head_kv = if swa.is_some() {
+            kv_heads_for(false).or(self.head_count_kv).or(self.head_count)?
+        } else {
+            self.head_count_kv.or(self.head_count)?
         };
         Some(ModelArch {
             n_layer,
             full_attention_interval: self.full_attention_interval.unwrap_or(1).max(1),
             n_head_kv,
             head_dim,
+            swa,
         })
     }
 }
@@ -563,8 +600,12 @@ pub fn summarize(h: &GgufHeader) -> ModelMeta {
     let mut gdn: BTreeMap<String, std::collections::BTreeSet<&'static str>> = BTreeMap::new();
     let mut gdn_low: std::collections::BTreeSet<String> = Default::default();
     let mut data_bytes = 0u64;
+    let mut host_resident_bytes = 0u64;
     for t in &h.tensors {
         *tensor_types.entry(t.type_name().to_string()).or_default() += 1;
+        if t.name == "per_layer_token_embd.weight" {
+            host_resident_bytes = host_resident_bytes.saturating_add(tensor_bytes(t));
+        }
         if let Some(suffix) = gdn_suffix(&t.name) {
             gdn.entry(suffix.to_string()).or_default().insert(t.type_name());
             if !is_high_precision_type(t.ggml_type) {
@@ -596,6 +637,20 @@ pub fn summarize(h: &GgufHeader) -> ModelMeta {
         head_count_kv: h.arch_u32("attention.head_count_kv"),
         key_length: h.arch_u32("attention.key_length"),
         full_attention_interval: h.arch_u32("full_attention_interval"),
+        sliding_window: h.arch_u32("attention.sliding_window"),
+        swa_pattern: h
+            .arch_key("attention.sliding_window_pattern")
+            .and_then(GgufValue::as_array)
+            .map(|a| a.iter().filter_map(GgufValue::as_bool).collect::<Vec<bool>>())
+            .filter(|v| !v.is_empty()),
+        shared_kv_layers: h.arch_u32("attention.shared_kv_layers"),
+        head_count_kv_layers: h
+            .arch_key("attention.head_count_kv")
+            .and_then(GgufValue::as_array)
+            .map(|a| a.iter().filter_map(GgufValue::as_u32).collect::<Vec<u32>>())
+            .filter(|v| !v.is_empty()),
+        key_length_swa: h.arch_u32("attention.key_length_swa"),
+        host_resident_bytes,
         split_count: h.get_u32("split.count").and_then(|v| u16::try_from(v).ok()),
         split_no: h.get_u32("split.no").and_then(|v| u16::try_from(v).ok()),
         projector_type: h.get_str("clip.projector_type").map(str::to_string),
@@ -844,7 +899,43 @@ pub fn write_minimal_gguf(path: &Path, metadata: &[(&str, GgufValue)], tensors: 
     Ok(())
 }
 
-/// Metadata for a synthetic Qwen3.5-style text model (tests / fixtures).
+/// Metadata for a synthetic Gemma 4 E4B-style text model (tests / fixtures): 42 layers in the
+/// 5:1 sliding/global pattern, the last 18 sharing KV, 2 / 1 KV heads × 256 / 512.
+pub fn synthetic_gemma4_metadata(
+    name: &str,
+    file_type: u32,
+    with_chat_template: bool,
+) -> Vec<(&'static str, GgufValue)> {
+    let pattern: Vec<GgufValue> = (0..42).map(|i| GgufValue::Bool(i % 6 != 5)).collect();
+    let kv_heads: Vec<GgufValue> = (0..42).map(|i| GgufValue::U32(if i % 6 != 5 { 2 } else { 1 })).collect();
+    let mut m = vec![
+        ("general.architecture", GgufValue::String("gemma4".into())),
+        ("general.name", GgufValue::String(name.to_string())),
+        ("general.file_type", GgufValue::U32(file_type)),
+        ("general.license", GgufValue::String("apache-2.0".into())),
+        ("general.license.link", GgufValue::String("https://huggingface.co/google/gemma-4-E4B-it".into())),
+        ("gemma4.block_count", GgufValue::U32(42)),
+        ("gemma4.context_length", GgufValue::U32(131_072)),
+        ("gemma4.embedding_length", GgufValue::U32(2560)),
+        ("gemma4.attention.head_count", GgufValue::U32(8)),
+        ("gemma4.attention.head_count_kv", GgufValue::Array(kv_heads)),
+        ("gemma4.attention.key_length", GgufValue::U32(512)),
+        ("gemma4.attention.key_length_swa", GgufValue::U32(256)),
+        ("gemma4.attention.sliding_window", GgufValue::U32(512)),
+        ("gemma4.attention.sliding_window_pattern", GgufValue::Array(pattern)),
+        ("gemma4.attention.shared_kv_layers", GgufValue::U32(18)),
+        ("gemma4.embedding_length_per_layer_input", GgufValue::U32(256)),
+    ];
+    if with_chat_template {
+        m.push((
+            "tokenizer.chat_template",
+            GgufValue::String("{% for m in messages %}{{ m.content }}{% endfor %}".into()),
+        ));
+    }
+    m
+}
+
+/// Metadata for a synthetic Qwen3.5-style text model (drop-in compatibility tests).
 pub fn synthetic_qwen35_metadata(
     name: &str,
     file_type: u32,
@@ -879,6 +970,31 @@ mod tests {
 
     fn tmp() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()
+    }
+
+    #[test]
+    fn gemma4_summary_reads_the_sliding_window_layout_and_host_table() {
+        let dir = tmp();
+        let p = dir.path().join("g.gguf");
+        let meta = synthetic_gemma4_metadata("Gemma 4 E4B test", 15, true);
+        // vocab 262144 × (256 × 42) per-layer table at Q8_0 (type 8: 34 bytes per 32 elements) stays on the host
+        let tensors: Vec<(&str, &[u64], u32)> = vec![
+            ("token_embd.weight", &[2560, 1000], 12),
+            ("per_layer_token_embd.weight", &[10752, 1000], 8),
+            ("blk.0.attn_q.weight", &[2560, 2048], 12),
+            ("output_norm.weight", &[2560], 0),
+        ];
+        write_minimal_gguf(&p, &meta, &tensors).unwrap();
+        let s = inspect(&p).unwrap();
+        assert_eq!(s.architecture, "gemma4");
+        assert_eq!(s.sliding_window, Some(512));
+        assert_eq!(s.shared_kv_layers, Some(18));
+        assert_eq!(s.swa_pattern.as_ref().map(|p| p.iter().filter(|b| **b).count()), Some(35));
+        assert_eq!(s.key_length_swa, Some(256));
+        assert_eq!(s.host_resident_bytes, 10752 * 1000 / 32 * 34);
+        let a = s.arch_params().unwrap();
+        assert_eq!(a, ModelArch::GEMMA4_E4B);
+        assert!(!s.is_hybrid());
     }
 
     #[test]

@@ -189,7 +189,7 @@ describe("result actions (P6 payloads)", () => {
     length: "medium",
     created_at: "",
     updated_at: "",
-    model: "qwen3.5-4b",
+    model: "gemma4-e4b-q5km",
     request: null,
     notes: [],
     saved_path: null,

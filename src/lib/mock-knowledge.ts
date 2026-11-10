@@ -45,7 +45,7 @@ import {
 import { carriedText } from "./carried-text";
 
 const KEY = "doculens.mock.knowledge";
-const EMBEDDING_FLAG = "doculens.mock.embedding"; // "1" = bge-m3 installed + loaded
+const EMBEDDING_FLAG = "doculens.mock.embedding"; // "1" = EmbeddingGemma 2 installed + loaded
 
 interface KbState {
   collections: Collection[];
@@ -104,9 +104,9 @@ function embeddingInstalled(): boolean {
 function embeddingModelId(): string {
   try {
     const settings = JSON.parse(localStorage.getItem("doculens.mock.settings") ?? "{}") as { knowledge?: { embedding_model?: string | null } };
-    return settings.knowledge?.embedding_model || "embed-bge-m3-q8";
+    return settings.knowledge?.embedding_model || "embed-gemma2-q8";
   } catch {
-    return "embed-bge-m3-q8";
+    return "embed-gemma2-q8";
   }
 }
 
@@ -519,7 +519,7 @@ async function answer(req: AnswerRequest, requestId: string): Promise<Answer> {
     no_evidence: false,
     used_general_knowledge: false,
     conflicts: null,
-    model: "qwen3.5-4b-q4km (mock)",
+    model: "gemma4-e4b-q5km (mock)",
     elapsed_ms: 0,
     prompt_tokens: 0,
     completion_tokens: 0,
@@ -627,7 +627,7 @@ function status(): KnowledgeStatus {
     chunks_total: chunks.length,
     chunks_embedded: chunks.filter((c) => c.embedded).length,
     embedding_model: s.embeddedModel,
-    embedding_dim: s.embeddedModel ? 1024 : null,
+    embedding_dim: s.embeddedModel ? 768 : null,
     tokenizer: { kind: "ko-dic", path: "C:\\Users\\me\\AppData\\Local\\DocuLens\\tokenizers\\ko-dic", version: "mecab-ko-dic-2.1.1-20180720" },
     collections: s.collections.length,
     glossary_terms: s.glossary.length,

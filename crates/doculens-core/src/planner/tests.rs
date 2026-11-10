@@ -86,7 +86,7 @@ fn ctx() -> PlanContext {
         current_document: Some("d1a2".into()),
         current_page: Some(1),
         document_count: 42,
-        model_ids: vec!["qwen3.5-4b-q6k".into(), "qwen3.5-9b-q4km".into()],
+        model_ids: vec!["gemma4-e4b-q5km".into(), "gemma4-12b-q4km".into()],
         projects: Vec::new(),
         current_project: None,
         history: Vec::new(),
@@ -198,10 +198,10 @@ fn example_commands_plan_without_a_model() {
     assert!(r.plan.requires_confirmation);
 
     // 6. two settings in one sentence
-    let r = planned("다크 테마로 바꾸고 모델을 9B로 올려");
+    let r = planned("다크 테마로 바꾸고 모델을 12B로 올려");
     assert_eq!(kinds(&r.plan), [OpKind::SetTheme, OpKind::SetModel], "{r:?}");
     assert!(matches!(&r.plan.operations[0], Op::SetTheme { theme: Theme::Dark }));
-    assert!(matches!(&r.plan.operations[1], Op::SetModel { id } if id == "qwen3.5-9b-q4km"));
+    assert!(matches!(&r.plan.operations[1], Op::SetModel { id } if id == "gemma4-12b-q4km"));
 
     // 7. relative date + total → aggregate with the resolved range
     let r = planned("지난달 영수증 합계 얼마야?");

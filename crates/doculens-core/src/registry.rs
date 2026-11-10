@@ -247,32 +247,39 @@ mod tests {
     fn builtin_registry_parses_and_lints_clean() {
         let r = Registry::builtin();
         assert_eq!(r.schema_version, 1);
-        assert!(r.models.len() >= 8);
+        assert!(r.models.len() >= 7);
         assert!(r.lint().is_empty(), "{:?}", r.lint());
-        assert!(r.get("qwen3.5-4b-q6k").unwrap().has_vision());
-        assert_eq!(r.get("embed-bge-m3-q8").unwrap().role, ModelRole::Embedding);
+        assert!(r.get("gemma4-e4b-q6k").unwrap().has_vision());
+        assert_eq!(r.get("embed-gemma2-q8").unwrap().role, ModelRole::Embedding);
+        // 0.4.0: no Chinese-origin models, every file ≤ 8 GB, Apache-2.0 only (user decision 2026-11-10)
+        for m in &r.models {
+            assert!(!m.id.contains("qwen") && !m.id.contains("bge"), "{}", m.id);
+            assert_eq!(m.license, "Apache-2.0", "{}", m.id);
+            assert!(m.files.iter().all(|f| f.size <= 8_000_000_000), "{}", m.id);
+        }
     }
 
     #[test]
     fn adaptive_rule_for_8gb_tier() {
         let r = Registry::builtin();
-        assert_eq!(r.default_model_for(Tier::Vram8gb, Some(7_126)).unwrap().id, "qwen3.5-4b-q6k");
-        assert_eq!(r.default_model_for(Tier::Vram8gb, Some(6_200)).unwrap().id, "qwen3.5-4b-q5km");
-        assert_eq!(r.default_model_for(Tier::Vram8gb, Some(5_700)).unwrap().id, "qwen3.5-4b-q4km");
-        assert_eq!(r.default_model_for(Tier::Vram8gb, None).unwrap().id, "qwen3.5-4b-q4km");
-        assert_eq!(r.default_model_for(Tier::CpuOnly, None).unwrap().id, "qwen3.5-2b-q8");
-        assert_eq!(r.default_model_for(Tier::Vram24gbPlus, Some(23_000)).unwrap().id, "qwen3.5-27b-q4km");
-        assert_eq!(r.resolve("qwen3-vl-4b-q4km", None).unwrap().family, "qwen3-vl");
+        assert_eq!(r.default_model_for(Tier::Vram8gb, Some(7_126)).unwrap().id, "gemma4-e4b-q6k");
+        assert_eq!(r.default_model_for(Tier::Vram8gb, Some(6_200)).unwrap().id, "gemma4-e4b-q5km");
+        assert_eq!(r.default_model_for(Tier::Vram8gb, Some(5_700)).unwrap().id, "gemma4-e4b-q4km");
+        assert_eq!(r.default_model_for(Tier::Vram8gb, None).unwrap().id, "gemma4-e4b-q4km");
+        assert_eq!(r.default_model_for(Tier::CpuOnly, None).unwrap().id, "gemma4-e2b-q4km");
+        assert_eq!(r.default_model_for(Tier::Vram6gb, Some(5_000)).unwrap().id, "gemma4-e2b-q8");
+        assert_eq!(r.default_model_for(Tier::Vram24gbPlus, Some(23_000)).unwrap().id, "gemma4-12b-q4km");
+        assert_eq!(r.resolve("embed-gemma2-q8", None).unwrap().family, "embeddinggemma-2");
         assert!(r.resolve("auto:nope", None).is_none());
     }
 
     #[test]
     fn required_files_text_lists_every_file() {
         let r = Registry::builtin();
-        let m = r.get("qwen3.5-4b-q6k").unwrap();
-        let t = required_files_text(m, Path::new("C:\\Work\\.doculens\\models\\qwen3.5-4b-q6k"));
-        assert!(t.contains("Qwen3.5-4B-Q6_K.gguf"));
+        let m = r.get("gemma4-e4b-q6k").unwrap();
+        let t = required_files_text(m, Path::new("C:\\Work\\.doculens\\models\\gemma4-e4b-q6k"));
+        assert!(t.contains("gemma-4-E4B-it-Q6_K.gguf"));
         assert!(t.contains("mmproj-F16.gguf"));
-        assert!(t.contains("https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-F16.gguf"));
+        assert!(t.contains("https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/mmproj-F16.gguf"));
     }
 }

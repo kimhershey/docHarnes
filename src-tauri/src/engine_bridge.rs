@@ -163,7 +163,10 @@ pub fn assess(state: &AppState) -> UiResult<Assessment> {
     let active = if settings.models.active_model == "auto" {
         recommended.clone()
     } else {
-        registry.get(&settings.models.active_model).cloned()
+        // An id that is neither built in nor a drop-in any more (0.3.0 Qwen entries after the 0.4.0
+        // registry swap, a removed folder) falls back to the tier recommendation; the setting itself
+        // is left alone so the explicit choice returns with its folder.
+        registry.get(&settings.models.active_model).cloned().or_else(|| recommended.clone())
     };
     let index = state.model_index();
     let installed = match (&active, state.workspace_models_dir()) {

@@ -654,8 +654,8 @@ mod tests {
     fn preset_sections_and_url_decode() {
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().join("p.ini");
-        std::fs::write(&p, "version = 1\n[*]\nx = 1\n[qwen3.5-4b-q6k]\nmodel = /a\n[embed]\nmodel = /b\n").unwrap();
-        assert_eq!(models_from_preset(&p), vec!["qwen3.5-4b-q6k".to_string(), "embed".to_string()]);
+        std::fs::write(&p, "version = 1\n[*]\nx = 1\n[gemma4-e4b-q6k]\nmodel = /a\n[embed]\nmodel = /b\n").unwrap();
+        assert_eq!(models_from_preset(&p), vec!["gemma4-e4b-q6k".to_string(), "embed".to_string()]);
         assert_eq!(url_decode("a%2Fb+c"), "a/b c");
         assert_eq!(url_decode("plain"), "plain");
     }

@@ -113,6 +113,8 @@
 | OCR 전용: PaddleOCR-VL-1.6 (0.9B, 프로젝트 Apache-2.0; 가중치 카드·GGUF 저장소 HF 미확인, 한국어 111개 언어, llama.cpp `paddleocr` 프로젝터 존재), GLM-OCR (0.9B, 가중치 MIT; llama.cpp 프로젝터 확인 필요), MonkeyOCRv2 (Apache-2.0, 한국어 MDPBench-KO 88.7; **vLLM 전용, llama.cpp 불가**) | 허용 | PaddleOCR-VL 여유 / GLM-OCR 확인 필요 / MonkeyOCRv2 불가 | OmniDocBench v1.6: 96.34 / 95.22 / 91.80 | 강함 | 단일 모델 불가(지시 수행 X) → **선택 애드온** |
 
 ### 2.3 최종 선정: **Qwen3.5-4B** — 근거
+
+> (0.1~0.3 선정 기록. **0.4.0부터는 §2.8의 Gemma 4 사다리가 이 절을 대체한다** — 사용자 결정 2026-11-10 "중국계 LLM 제외".)
 1. **8 GB에서 진짜 여유**: 하이브리드 구조(32층 중 **8층만 full attention**, 나머지 24층은 Gated DeltaNet 선형어텐션)라 KV 캐시가 토큰당 **32 KiB(F16)/17 KiB(q8_0)** — Qwen3-VL/InternVL 계열(144 KiB)의 1/4.5. 32K 컨텍스트가 1.0 GiB(q8_0이면 0.53 GiB)라서 **다중 페이지 컨텍스트**가 8 GB에서 성립. GDN 상태는 시퀀스당 ≈50 MiB 고정. (32 KiB/토큰은 9B 실측 로그와 4B 공개 로그(동일 4 KV 헤드 × 256, interval 4)로 확인 — 부록 B-2에서 로컬 재확인)
 2. **문서 성능이 4B급 최상위권**이면서 차트 추론(CharXiv 70.8)·장문 QA(MMLongBench-Doc 54.2)는 Qwen3-VL-4B-**Thinking**(50.3/44.4; Instruct 수치 미공개)보다 확연히 우수. 도구 호출은 BFCL-V4 50.3(카드 수치, 미확인; Qwen3-4B는 v3 수치만 있어 직접 비교 불가) — 어느 쪽이든 4B급은 자유 에이전트 루프에 부족하므로 §3.5의 닫힌 플랜 구조로 보완.
 3. **한국어**: 한글 전사 충실도(FaithC4 WER 6.46%)가 공개 비교군 중 olmOCR-2(4.03%) 다음이며 PaddleOCR-VL-1.5(20.55%)·DeepSeek-OCR-2(35%)보다 월등(FaithC4 수치는 검색 추출치·한국어 열 매핑 미확인 — 부록 B-10 골든셋으로 대체 검증). 한국어 KIE 공개 벤치는 없음 → 자체 골든셋 필수(§3.11).
@@ -135,6 +137,8 @@
 **8 GB 티어 적응형 양자화 프로파일**: UI 기동 후(WebView2 GPU 프로세스 사용분 포함) 실제 free VRAM 측정 → ≥6.5 GiB면 Q6_K, 5.8~6.5 GiB면 Q5_K_M, 그 미만이면 Q4_K_M(노트북·디스플레이 공유 GPU). 컨텍스트 기본 32K, KV q8_0, 이미지 토큰 OCR 1,024~2,200 / 분류 1,024(`image-min-tokens`는 모델 로드 시 고정되는 하한이라 분류도 1,024 이상으로 통일) / "잔글씨" 프로파일 2,560~3,072. MTP 사이드카 사용 시 +0.3~0.5 GiB(기본 비활성).
 
 ### 2.5 대체 모델: Qwen3-VL-4B-Instruct — 전환 조건
+
+> (0.1~0.3 선정 기록. **0.4.0부터는 §2.8의 Gemma 4 사다리가 이 절을 대체한다** — 사용자 결정 2026-11-10 "중국계 LLM 제외".)
 - 자체 골든셋(세금계산서/영수증/사업자등록증/계약서)에서 동일 프롬프트·thinking off·temperature 0 조건으로 Qwen3-VL-4B가 Qwen3.5-4B 이상일 때.
 - 대상 GPU에서 GDN 커널 문제(Turing 첫 요청 JIT 지연 #29513, HIP/iGPU 회귀, Vulkan 성능)가 재현될 때.
 - 같은 페이지에 여러 질문을 연속으로 하는 대화형 QA가 핵심일 때(llama.cpp #26994: Qwen3.5는 이미지 prefix 재사용이 아직 안 되어 질문마다 재인코딩).
@@ -142,6 +146,8 @@
 레지스트리에 두 모델을 모두 등록하고 **모델 관리자에서 한 번의 클릭으로 전환**.
 
 ### 2.6 하드웨어 티어별 모델 사다리 (전부 Apache-2.0)
+
+> (0.1~0.3 선정 기록. **0.4.0부터는 §2.8의 Gemma 4 사다리가 이 절을 대체한다** — 사용자 결정 2026-11-10 "중국계 LLM 제외".)
 
 | 티어 (엔진 `--list-devices`가 보고한 free VRAM, 감산 없음) | 기본 모델 / 양자화 | 컨텍스트 | 비고 |
 |---|---|---|---|
@@ -175,6 +181,50 @@
 | 이미지 토큰·전처리에 따른 정확도 급락(Ollama #17218: 8 GB RTX 3070 Laptop에서 81.4→64.2%; 원인 미확정 — #30736 이전 빌드의 전처리 버그 가능성이 크고 토큰 하한만으로는 설명되지 않음) | #30736 이후 빌드 + `--image-min-tokens 1024` + OCR 1.2~2.1 MP 렌더 + 잔글씨 프로파일, 부록 B-5 재검증 |
 | 라이선스 원문(HF LICENSE) 미열람 | 구현 전 HF에서 LICENSE/NOTICE 확보·보관(9B GGUF 메타데이터 apache-2.0은 확인됨), GGUF SHA-256 고정, SBOM 기록 |
 | 고해상도 페이지에서 비전 인코더 OOM(8 GB Vulkan #21750: 9B/8B급 2,600+ 토큰에서 크래시) | 4B 기본 + `image-max-tokens` 상한(CUDA 2,200, Vulkan 1,440), 잔글씨 프로파일은 영역 크롭으로 대체 |
+
+### 2.8 0.4.0 모델 교체 (2026-11-10; 사용자 결정 "모든 중국계 LLM 제외, 8 GB 이내 모델 탑재", 계획 `docs/plan/v0.4.0.md`)
+
+Qwen3.5·Qwen3-VL(Alibaba)과 bge-m3(BAAI)를 레지스트리에서 모두 빼고 **Gemma 4**(Google DeepMind, Apache-2.0, 2026-04)와
+**EmbeddingGemma 2**(Google, Apache-2.0, 2026-10)로 바꿨다. 다운로드·드롭인·USB 복사 방식(§3.3.4)은 그대로이고 레지스트리 항목만 바뀐다.
+"8 GB 이내"는 모델 파일 1개 ≤ 8 GB로 해석해 12B는 Q4_K_M(7.12 GB)까지, 26B-A4B/31B는 제외했다.
+
+**선정 근거**
+1. 라이선스: Gemma 4부터 Apache-2.0(Gemma ≤ 3의 Gemma Terms는 §2.1 기준으로 탈락이었음). EmbeddingGemma 2도 Apache-2.0.
+2. 엔진: 고정된 llama.cpp b12066(2026-11-03)이 `gemma4`·`gemma-embedding2` 아키텍처, `gemma4v`(E 계열)·`gemma4uv`(12B unified) 프로젝터,
+   Gemma 4 전용 채팅 파서와 `--reasoning off`를 포함 → 엔진 팩 재빌드 없음.
+3. 사다리: E2B(3.1~5.1 GB) → E4B(5.0~7.1 GB) → 12B Q4_K_M(7.1 GB)로 CPU~24 GB+를 한 패밀리로 덮음(같은 템플릿·프롬프트).
+4. 메모리: 슬라이딩 윈도우(512/1024) 층 5:1 + 마지막 N층 KV 공유로 32K 컨텍스트 KV가 수백 MB; E2B/E4B의 층별 임베딩(PLE) 표(≈1.3~2.5 GB)는
+   llama.cpp가 호스트에서 지연 읽기(`TENSOR_READ_LAZY`)하므로 GPU 상주분은 파일보다 작음.
+5. 품질: Google 공식 보고에서 동급 최상위; 한국어 OCR·KIE는 공개 수치가 없어 사용자 골든셋(§3.11, `doculens-eval pipeline`)으로 검증.
+
+**0.4.0 티어 사다리**
+
+| 티어(free VRAM) | 기본 모델 | 파일 | VRAM 요구(추정) | 컨텍스트 |
+|---|---|---|---|---|
+| `cpu_only` | `gemma4-e2b-q4km` | 3.11 GB + mmproj 986 MB | — | 8K |
+| `vram_6gb` (3.5~5.5 GiB) | `gemma4-e2b-q8` | 5.05 GB + 986 MB | ≥ 4,900 MiB | 16K |
+| `vram_8gb` (5.5~9.5) | `auto:gemma4-e4b` — ≥ 7,100 MiB Q6_K / ≥ 6,000 Q5_K_M / 그 외 Q4_K_M | 4.98 / 5.48 / 7.07 GB + 990 MB | 5,800 / 6,000 / 7,100 MiB | 32K |
+| `vram_12gb` · `vram_16gb` · `vram_24gb_plus` | `gemma4-12b-q4km` | 7.12 GB + 175 MB | ≥ 8,850 MiB | 32K |
+| 임베딩(전 티어, CPU) | `embed-gemma2-q8` | 310 MB | — | 2K(입력), 768차원, mean 풀링, 접두어 `task: search result \| query: ` / `title: none \| text: ` |
+
+VLM 공통 기본값: KV q8_0, 이미지 토큰 512~**1,120**(Gemma 4 비전 상한; 패치 16 × 풀링 3 = 48 px/토큰), temperature 0.1, top_p 0.95, top_k 64, thinking off.
+VRAM 요구치는 "GPU 상주 가중치(파일 − PLE 표) + mmproj + KV(SWA 반영) + 연산 512 MiB + 여유 1 GiB"로 추정했고 사용자 PC 실측 후 조정한다(부록 B).
+
+**리스크와 완화**
+
+| 리스크 | 완화 |
+|---|---|
+| 한국어 문서 OCR·KIE 품질 미검증 | 평가 하네스로 사용자 골든셋 측정 → 양자화·티어 조정, 필요 시 Pixtral/Granite 등 재검토 |
+| 이미지 토큰 상한 1,120(Qwen 2,200~3,072보다 낮음) | 48 px/토큰 기하로 페이지를 2.58 MP까지 렌더(Qwen 1,500 토큰 = 1.5 MP보다 높은 실질 해상도); 잔글씨 프로파일은 1,120 고정 |
+| JSON 응답이 ```` ```json ```` 펜스로 강제됨(Gemma 4 채팅 파서가 문법에 넣음) | llama-server가 `content`에서 펜스를 벗겨 주므로 파이프라인 변경 없음; CI의 초소형 Gemma 4 픽스처(`scripts/gen-tiny-gemma4.py`)로 확인 |
+| PLE·KV 추정 오차 | `min_free_vram_mib`·적응형 경계를 실측으로 조정; 적응형 규칙이 free VRAM으로 자동 하향 |
+| 다운로드 저장소(unsloth·ggml-org) 파일 변동, SHA-256 미고정 | 종전과 같이 `sha256: null` → HF 접근 가능한 PC에서 고정 |
+| 기존 사용자의 Qwen 드롭인·설정 | 아키텍처 지원은 유지(사용자 추가 모델로 인식), 사라진 모델 id 설정은 기본값으로 정리 |
+
+제외한 후보와 이유: Pixtral 12B(구형·한국어 열세), Ministral 3(공식 mmproj 미확인), Mistral Small 24B(8 GB 초과), Granite Vision·SmolVLM2(영어 중심),
+Phi-4-multimodal(mtmd 프로젝터 없음), LFM2.5-VL(매출 제한 라이선스), HyperCLOVA X SEED Vision·Kanana-V·EXAONE·A.X(라이선스·변환기); 임베딩은
+multilingual-e5-large(입력 512 토큰·공식 GGUF 없음), snowflake-arctic-embed-l-v2.0(공식 GGUF 없음), nomic-embed-text-v2-moe(차원·언어 수 비슷하나 Gemma 4와
+토크나이저 공유 없음)를 대안으로 남겼다.
 
 ---
 
@@ -816,6 +866,9 @@ doculens/
 - 선행 설계: Docling https://github.com/docling-project/docling ; olmOCR 파이프라인 https://github.com/allenai/olmocr/blob/main/olmocr/pipeline.py ; PaddleOCR-VL https://github.com/PaddlePaddle/PaddleOCR ; Presidio KR 인식기 https://github.com/microsoft/presidio
 
 ## 부록 B. 사용자 PC에서 검증할 항목(HF 차단·실측 불가로 미확정)
+> **0.4.0(2026-11-10)**: 아래 1·2·4·10·13·14번의 Qwen3.5 / bge-m3 항목은 §2.8의 Gemma 4(E2B/E4B/12B) / EmbeddingGemma 2로 대체되었다. 0.4.0에서 확인할
+> 항목은 `docs/plan/v0.4.0.md` §9와 `docs/user-pc-checklist.md` "0.4.0 — 모델 교체" 절에 있다(Gemma 4 LICENSE 원문·GGUF SHA-256 고정, `print_info`의
+> sliding_window/shared_kv_layers, PLE 표 호스트 상주 확인, 한국어 골든셋 측정, EmbeddingGemma 2 유사도 임계값).
 1. `Qwen/Qwen3.5-4B` 모델 카드의 LICENSE/NOTICE 원문 확보(Apache-2.0 확인; 0.8B/2B/9B/27B도 사이즈별 개별 확인 — Qwen2.5 세대는 3B만 Qwen Research License였던 전례) 및 사용 GGUF 저장소(unsloth 등)의 라이선스·SHA-256 고정; GGUF 텐서 타입 덤프로 GDN 민감 텐서(`linear_attn.in_proj_a/b`, ssm_alpha/beta)가 Q8_0/F16으로 유지됐는지 확인.
 2. llama-server 첫 로드 `print_info`: n_layer 32, n_head_kv 4, head_dim 256, full_attention_interval 4 → KV 32 KiB/토큰(공개 로그로 1차 확인됨 — 로컬 재확인); mmproj 크기(F16 ≈0.65 GB, ViT 24층×1024) 확인.
 3. 실측 VRAM: Q4_K_M/Q5_K_M/Q6_K × ctx 16K/32K × A4 1페이지(1240×1754) on RTX 4060/3070 (Windows, 디스플레이 공유 포함).

@@ -33,7 +33,7 @@ function draft(): Draft {
     length: "medium",
     created_at: "2026-11-08T00:00:00Z",
     updated_at: "2026-11-08T00:00:00Z",
-    model: "qwen",
+    model: "gemma4",
     request: null,
     notes: [],
     saved_path: null,

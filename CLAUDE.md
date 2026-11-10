@@ -3,7 +3,7 @@
 ## What this is
 Offline, Windows-only desktop client (Tauri 2 + React/TypeScript UI, Rust core)
 that processes Korean/English business documents with a local VLM
-(Qwen3.5-4B via llama-server). Design: `docs/design/doculens-design-v1.1.md`
+(Gemma 4 E2B/E4B/12B via llama-server; embedding EmbeddingGemma 2 — no Chinese-origin models since 0.4.0, user decision 2026-11-10). Design: `docs/design/doculens-design-v1.1.md`
 (Korean, authoritative). Status and next steps: `docs/HANDOFF.md`. How to install / run / build / verify on a
 user PC: `docs/RUN-GUIDE.md`.
 
@@ -54,7 +54,8 @@ user PC: `docs/RUN-GUIDE.md`.
 - Linux build deps: `libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev`.
 
 ## Layout
-- `crates/doculens-core/` — settings, workspace, hw/tier, memory, registry, retention, prerouter,
+- `crates/doculens-core/` — settings, workspace, hw/tier, memory (KV estimate: Qwen GDN hybrids + Gemma sliding-window /
+  shared-KV layouts, host-resident per-layer embedding tables), registry (0.4.0: Gemma 4 E2B/E4B/12B + EmbeddingGemma 2 only), retention, prerouter,
   `gguf` (header parser, hashes), `modelstore` (drop-in folders, import, download), `fswatch` (debounced watcher),
   `engine/` (locate, devices, presets, client, process, manager, fake_router),
   `db/` (rusqlite + embedded migrations), `documents/` (repo, import plan/run/rescan with content-based
@@ -70,7 +71,8 @@ user PC: `docs/RUN-GUIDE.md`.
   `pipeline/` (schema: built-in sample forms — 13 software-development forms (rfp, proposal, sow, srs, dev_contract, wbs,
   progress_report, meeting_minutes, test_report, change_request, acceptance, estimate, general) + the 6 pre-0.3 business forms kept
   as hidden rows (`enabled = 0`; a user switch or `repo::enable_legacy_builtins` brings one back), shared `doc_type_aliases` for the
-  planner / projects / mocks + grammar-safe JSON schema + lint, prompts, vlm: retrying caller, image,
+  planner / projects / mocks + grammar-safe JSON schema + lint, prompts, vlm: retrying caller, image (`VisionGeometry` per
+  architecture — Gemma 4 48 px/token ≤ 1,120, Qwen drop-ins 32 px/token — picked from the model's registry arch by the shell),
   classify, ocr, extract, validate: normalisers / BRN checksum / sum rules / PII masking / confidence, run: orchestrator +
   `extractions/` mirror, review, forms: form registration + NL schemas, split: lopdf split / merge, repo),
   `planner/` (mod: typed ops / scope / plan (appendix D v1.0 subset), schema: op spec table + PlanSchema grammar, rules:
@@ -113,7 +115,7 @@ user PC: `docs/RUN-GUIDE.md`.
   `dnd/`: pointer-based document drags + native / browser file drops with one drop-target registry, `DndLayer` in the app shell, sidebar
   spring-loading, `importDroppedFiles` import-then-attach), `stores/` (incl. `attachments.ts`: assistant attachments + nav-drop hand-offs), `i18n/`, `styles/`.
 - `models/registry.json`, `engines/` (llama.cpp manifest, `pdfium.json`, `kodic.json`, placement docs), `docs/`,
-  `scripts/` (`fetch-engine.mjs`, `fetch-pdfium.mjs`, `fetch-kodic.mjs`, `gen-tiny-qwen35.py`), `e2e/`,
+  `scripts/` (`fetch-engine.mjs`, `fetch-pdfium.mjs`, `fetch-kodic.mjs`, `gen-tiny-gemma4.py`), `e2e/`,
   `.github/workflows/`.
 - Events from Rust to the webview: `engine://status|log|model`, `models://changed`, `jobs://update`,
   `documents://changed`, `knowledge://changed`, `knowledge://answer` (streamed answer deltas), `pipeline://changed`,
