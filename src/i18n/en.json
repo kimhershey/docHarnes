@@ -2702,11 +2702,11 @@
       "complete": "Mark complete",
       "complete_hint": "Sets the end date to today.",
       "reopen": "Reopen",
-      "reopen_hint": "Clears the end date (active again)."
+      "reopen_hint": "Clears the end date (active again).",
+      "doc_counts": "Work {{work}} · reference {{reference}}"
     },
     "tabs": {
       "documents": "Documents",
-      "reference": "Reference material",
       "rules": "Rules",
       "results": "Results",
       "settings": "Settings"
@@ -2720,7 +2720,7 @@
       "add": "Pick from Documents",
       "remove": "Remove from project",
       "open": "Open",
-      "empty": "No work documents yet. Pick some from Documents or drop files here.",
+      "empty": "No documents yet. Pick some from Documents or drop files here.",
       "columns": {
         "name": "Document",
         "type": "Type",
@@ -2728,10 +2728,11 @@
         "review": "Review",
         "added": "Added",
         "actions": "Actions",
-        "path": "Path"
+        "path": "Path",
+        "kind": "Kind"
       },
-      "add_title": "Add work documents",
-      "add_hint": "Adds documents from Documents as this project's work documents; classified documents count towards the checklist.",
+      "add_title": "Add documents",
+      "add_hint": "Adds documents from Documents to this project. Choose the kind — classified work documents count towards the checklist.",
       "add_done": "Add ({{count}})",
       "added": "{{count}} document(s) added.",
       "search": "Search documents…",
@@ -2746,7 +2747,18 @@
         "resync_hint": "Rewrites this project's copies from the originals.",
         "resynced": "Copies resynced (rewritten {{rewritten}} · renamed {{renamed}} · created {{created}})."
       },
-      "title": "Work documents"
+      "title": "Documents",
+      "hint": "Work documents are what the checklist, consistency checks and organising act on; reference material grounds questions, search and drafting (the common reference material is used too). The kind button moves a document between the two.",
+      "filter_all": "All {{count}}",
+      "filter_work": "Work {{count}}",
+      "filter_reference": "Reference {{count}}",
+      "kind": "Kind",
+      "kind_switch_hint": "Make it {{kind}}",
+      "kind_changed": "'{{name}}' is now {{kind}}.",
+      "both": "both",
+      "both_hint": "A work document that is also in the reference group. Removing it drops both.",
+      "removed": "Removed from the project.",
+      "ingest_hint": "Imports files as this project's reference material."
     },
     "rules": {
       "title": "Consistency rules",

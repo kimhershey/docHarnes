@@ -165,7 +165,7 @@ export function PutInProjectDialog({
           await addToReferenceGroup(group.id, docIds);
           result = { target, kind, projectId: project.id, groupId: group.id, count: docIds.length };
           message = t("projects.put.done_reference", { name: project.name, count: docIds.length });
-          openTo = `${SCREEN_ROUTES.projects}/${project.id}?tab=reference`;
+          openTo = `${SCREEN_ROUTES.projects}/${project.id}?tab=documents`;
         }
         invalidateProjects([project.id]);
       } else {

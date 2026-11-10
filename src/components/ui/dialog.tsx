@@ -21,7 +21,7 @@ const DialogContent = React.forwardRef<React.ElementRef<typeof DialogPrimitive.C
       <DialogPrimitive.Content
         ref={ref}
         className={cn(
-          "fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-lg border border-border bg-bg-elevated p-6 text-fg shadow-[var(--shadow)]",
+          "fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg grid-cols-[minmax(0,1fr)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-lg border border-border bg-bg-elevated p-6 text-fg shadow-[var(--shadow)]",
           className,
         )}
         onEscapeKeyDown={(e) => {

@@ -191,7 +191,19 @@ export function IngestWizard({ open, onOpenChange, collectionId, initialPaths = 
                   <span className="min-w-0 flex-1 truncate" title={it.path}>
                     {it.name}
                   </span>
-                  <Badge variant={it.status.kind === "new" || it.status.kind === "relink" ? "ok" : it.status.kind === "unsupported" ? "danger" : "muted"}>{t(`import_docs.item_status.${it.status.kind}`, it.status as unknown as Record<string, unknown>)}</Badge>
+                  {/* The status badge truncates (duplicate / relink name another path — the tooltip has it) instead of widening the row. */}
+                  <Badge
+                    variant={it.status.kind === "new" || it.status.kind === "relink" ? "ok" : it.status.kind === "unsupported" ? "danger" : "muted"}
+                    className="max-w-[min(50%,16rem)] shrink-0"
+                    title={it.status.kind === "duplicate" ? it.status.of_rel_path : it.status.kind === "relink" ? it.status.old_rel_path : undefined}
+                  >
+                    <span className="min-w-0 truncate">
+                      {t(`import_docs.item_status.${it.status.kind}`, {
+                        of: it.status.kind === "duplicate" ? it.status.of_rel_path : it.status.kind === "duplicate_in_batch" ? it.status.of : undefined,
+                        old: it.status.kind === "relink" ? it.status.old_rel_path : undefined,
+                      })}
+                    </span>
+                  </Badge>
                 </li>
               ))}
             </ul>

@@ -4,9 +4,9 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/lib/ipc";
-import { useCollections } from "@/lib/queries";
+import { useCollectionDocs, useCollections } from "@/lib/queries";
 import { queryClient, queryKeys } from "@/lib/query-client";
-import type { Collection } from "@/lib/types";
+import type { Collection, DocumentView } from "@/lib/types";
 
 export const referenceGroupKey = (projectId: string) => ["knowledge", "reference-group", projectId] as const;
 
@@ -19,6 +19,16 @@ export function useReferenceGroups(enabled = true): { groups: Collection[] | und
 /** The project's own reference group; the backend creates it on the first call. */
 export function useProjectReferenceGroup(projectId: string | null | undefined, enabled = true) {
   return useQuery({ queryKey: referenceGroupKey(projectId ?? ""), queryFn: () => api.projectReferenceGroup(projectId ?? ""), enabled: !!projectId && enabled, staleTime: 30_000 });
+}
+
+/**
+ * The project's reference group and its documents in one hook (0.7.0 plan §1.1: the unified 문서 tab and the
+ * detail header count both). The group is created on the first call, as before; the documents load once it exists.
+ */
+export function useProjectReferenceDocs(projectId: string | null | undefined, enabled = true): { group: Collection | null; docs: DocumentView[] | undefined; isLoading: boolean; error: unknown } {
+  const groupQ = useProjectReferenceGroup(projectId, enabled);
+  const docsQ = useCollectionDocs(groupQ.data?.id ?? null);
+  return { group: groupQ.data ?? null, docs: docsQ.data, isLoading: groupQ.isLoading || (!!groupQ.data && docsQ.isLoading && !docsQ.data), error: groupQ.error ?? docsQ.error ?? null };
 }
 
 /** After a group / membership change made locally (the `knowledge://changed` event covers the rest). */

@@ -7,7 +7,7 @@ import { card, createWorkspace, docId, freshApp, importViaLibrary, tpl } from ".
 // from the library (checklist) → natural-language rules confirmed in the grid → deterministic check with
 // verdict chips, evidence, the relation graph and the report on the one 결과 tab → 보완요청서 draft job handed
 // to 문서 작성 → kanban move, plus the assistant's `check_consistency` plan. Real rule parsing / checking is
-// covered by the Rust tests; the 참고 자료 tab and "프로젝트에 넣기" live in reference.spec.ts.
+// covered by the Rust tests; the unified 문서 tab's 참고 자료 side and "프로젝트에 넣기" live in reference.spec.ts.
 
 /** Imports and extracts the 내부 개발 trio: requirements specification, WBS and test report. */
 async function importTrio(page: Page): Promise<{ srs: string; wbs: string; test: string }> {
@@ -92,12 +92,12 @@ test.describe("P6 projects", () => {
     await expect(page.getByTestId("toaster")).toContainText(tpl(ko.projects.detail.checked, { pass: 4, mismatch: 1, undetermined: 0, missing: 0 }));
 
     // 0.5.0: the 결과 tab also holds the relation graph (the shared project name links the documents) and the
-    // report behind its button; the detail has the five tabs 문서 · 참고 자료 · 규칙 · 결과 · 설정.
+    // report behind its button; 0.7.0: the detail has the four tabs 문서 (업무 문서 + 참고 자료) · 규칙 · 결과 · 설정.
     await expect(page.getByTestId("project-relations").locator('[data-testid="relation-edge"][data-kind="name"]').first()).toBeVisible();
     await page.getByTestId("project-report-toggle").click();
     await expect(page.getByTestId("project-report-body")).toContainText("한빛 포털 구축", { timeout: 10_000 });
-    await expect(page.locator('[data-testid^="project-tab-"]')).toHaveCount(5);
-    await expect(page.getByTestId("project-tab-reference")).toBeVisible();
+    await expect(page.locator('[data-testid^="project-tab-"]')).toHaveCount(4);
+    await expect(page.getByTestId("project-tab-reference")).toHaveCount(0);
 
     // 보완요청서: the mismatch is pre-selected; the draft job ends on the 문서 생성 screen.
     await page.getByTestId("project-supplement").click();

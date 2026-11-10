@@ -3,7 +3,8 @@ import { cva, type VariantProps } from "class-variance-authority";
 
 import { cn } from "@/lib/utils";
 
-const badgeVariants = cva("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap", {
+// `max-w-full`: a badge never grows past its box; a long name inside it goes in a `min-w-0 truncate` span (0.7.0 plan §1.7).
+const badgeVariants = cva("inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap", {
   variants: {
     variant: {
       default: "border-transparent bg-accent-soft text-fg",
