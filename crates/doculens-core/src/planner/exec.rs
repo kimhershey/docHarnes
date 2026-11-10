@@ -24,19 +24,24 @@ use crate::knowledge::repo as knowledge_repo;
 use crate::knowledge::search::{self, SearchDeps};
 use crate::knowledge::tokenize::Analyzer;
 use crate::knowledge::{AnswerKind, AnswerRequest, SearchRequest, SearchScope, SummaryMode};
+use crate::knowledge::{Collection, CollectionInput, GlossaryInput, VersionInput};
 use crate::organize::{self, journal, OrganizeRequest};
 use crate::paths::WorkspacePaths;
 use crate::pipeline::repo::{self as pipeline_repo, ReviewFilter};
 use crate::pipeline::review::{self, ReviewAction};
 use crate::pipeline::run::{self as pipeline_run, PipelineDeps};
+use crate::pipeline::schema::SchemaDraft;
+use crate::pipeline::split;
 use crate::pipeline::vlm::Vlm;
 use crate::pipeline::{PipelineLevel, ProcessRequest, ReviewReason, SchemaChoice};
+use crate::projects::classify::{self, Assignment, ClassifyRequest};
 use crate::projects::{self, repo as projects_repo, ProjectDeps, ProjectInput, TemplateInput};
 use crate::settings::{KnowledgeSettings, Language, ProcessingSettings, Profile};
 
 use super::{
     compact, scope, AggregateFn, ExplainScope, ExportLayout, ExportTarget, GroupBy, OcrProfile, Op, OpKind, Plan,
-    ReviewOnly, ReviewOp, Scope, SummarizeTarget, SummaryLength,
+    ReferenceAction, ReviewOnly, ReviewOp, SchemaAction, Scope, SummarizeTarget, SummaryLength, TemplateAction,
+    TermAction,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -378,7 +383,7 @@ fn run_step(
 ) -> Result<StepOutcome> {
     let db = deps.db();
     match op {
-        Op::Import { source, path, recursive, auto_pipeline: _ } => {
+        Op::Import { source, path, paths, recursive, auto_pipeline: _ } => {
             let mut options =
                 ImportOptions { destination: import::ImportDestination::Inbox, ..ImportOptions::default() };
             if deps.settings.render_dpi > 0 {
@@ -400,7 +405,25 @@ fn run_step(
                     };
                     import::plan(db, deps.paths(), &files, &options, import::ImportSource::Folder)?
                 }
-                super::ImportFrom::Files => return Err(CoreError::Invalid("import_files_gui".into())),
+                super::ImportFrom::Files => {
+                    // 0.6.0: files the user typed or dropped (absolute paths; relative ones are workspace-relative).
+                    if paths.is_empty() {
+                        return Err(CoreError::Invalid("paths_required".into()));
+                    }
+                    options.destination = import::ImportDestination::Documents;
+                    let files: Vec<std::path::PathBuf> = paths
+                        .iter()
+                        .map(|p| {
+                            let pb = std::path::PathBuf::from(p.trim());
+                            if pb.is_absolute() {
+                                pb
+                            } else {
+                                deps.paths().root.join(pb)
+                            }
+                        })
+                        .collect();
+                    import::plan(db, deps.paths(), &files, &options, import::ImportSource::Drop)?
+                }
             };
             let total = plan_.importable().count();
             let mut touched = Vec::new();
@@ -1278,9 +1301,735 @@ fn run_step(
                 imported: None,
             })
         }
+        // -- 0.6.0: every GUI function as an op ----------------------------------------------
+        Op::Rotate { degrees, pages } => {
+            let docs_ = non_empty(working_set(deps, plan, imported)?)?;
+            let mut rotated = 0u32;
+            for d in &docs_ {
+                deps.checkpoint()?;
+                // A relative turn: the new rotation is the page's current one plus `degrees`.
+                let rows = db.with(|c| docs::list_pages(c, &d.id, false))?;
+                for p in rows.iter().filter(|p| pages.is_empty() || pages.contains(&p.page_no)) {
+                    import::rotate_page(&deps.import, d, p.page_no, (p.rotation + degrees) % 360)?;
+                    rotated += 1;
+                }
+                out.documents.push(d.id.clone());
+            }
+            Ok(StepOutcome {
+                summary: if deps.ko() {
+                    format!("{} {degrees}° 회전({rotated}쪽)", count_label(deps, docs_.len()))
+                } else {
+                    format!("Rotated {} by {degrees}° ({rotated} pages)", count_label(deps, docs_.len()))
+                },
+                payload: json!({ "documents": ids(&docs_), "pages": rotated, "degrees": degrees }),
+                imported: None,
+            })
+        }
+        Op::Rerender { dpi } => {
+            let docs_ = non_empty(working_set(deps, plan, imported)?)?;
+            let total = docs_.len() as u32;
+            for (i, d) in docs_.iter().enumerate() {
+                deps.checkpoint()?;
+                progress("render", i as u32, total, &d.original_name);
+                import::process_document(&deps.import, d, true, *dpi, deps.cancel, &mut |_| {})?;
+                out.documents.push(d.id.clone());
+            }
+            Ok(StepOutcome {
+                summary: if deps.ko() {
+                    format!(
+                        "{} 다시 렌더{}",
+                        count_label(deps, docs_.len()),
+                        dpi.map(|d| format!(" ({d} DPI)")).unwrap_or_default()
+                    )
+                } else {
+                    format!(
+                        "Re-rendered {}{}",
+                        count_label(deps, docs_.len()),
+                        dpi.map(|d| format!(" at {d} DPI")).unwrap_or_default()
+                    )
+                },
+                payload: json!({ "documents": ids(&docs_), "dpi": dpi }),
+                imported: None,
+            })
+        }
+        Op::Split { boundaries, every } => {
+            let doc = one_document(working_set(deps, plan, imported)?, "split_needs_one_document")?;
+            let bounds = split_boundaries(doc.page_count, boundaries, *every)?;
+            let created = split::split_document(&deps.import, &doc, &bounds, deps.cancel)?;
+            out.documents.extend(created.iter().cloned());
+            Ok(StepOutcome {
+                summary: if deps.ko() {
+                    format!("'{}'을(를) {}개 문서로 분할", doc.original_name, created.len())
+                } else {
+                    format!("Split '{}' into {} documents", doc.original_name, created.len())
+                },
+                payload: json!({ "document_id": doc.id, "created": created, "boundaries": bounds }),
+                imported: None,
+            })
+        }
+        Op::Merge { name } => {
+            let docs_ = working_set(deps, plan, imported)?;
+            if docs_.len() < 2 || docs_.len() > 20 {
+                return Err(CoreError::Invalid("merge_needs_2_to_20_documents".into()));
+            }
+            let id = split::merge_documents(&deps.import, &docs_, name.as_deref(), deps.cancel)?;
+            out.documents.push(id.clone());
+            Ok(StepOutcome {
+                summary: if deps.ko() {
+                    format!("{} 하나로 병합", count_label(deps, docs_.len()))
+                } else {
+                    format!("Merged {} into one document", count_label(deps, docs_.len()))
+                },
+                payload: json!({ "document_id": id, "sources": ids(&docs_) }),
+                imported: None,
+            })
+        }
+        Op::SetTitle { title } => {
+            let doc = one_document(working_set(deps, plan, imported)?, "set_title_needs_one_document")?;
+            db.with(|c| docs::set_title(c, &doc.id, Some(title.trim())))?;
+            out.documents.push(doc.id.clone());
+            Ok(StepOutcome {
+                summary: if deps.ko() {
+                    format!("제목을 '{}'(으)로", title.trim())
+                } else {
+                    format!("Title set to '{}'", title.trim())
+                },
+                payload: json!({ "documents": [doc.id], "title": title.trim() }),
+                imported: None,
+            })
+        }
+        Op::EditText { find, replace, pages } => {
+            let docs_ = non_empty(working_set(deps, plan, imported)?)?;
+            let (mut replaced, mut touched) = (0usize, 0usize);
+            for d in &docs_ {
+                deps.checkpoint()?;
+                let rows = db.with(|c| docs::list_pages(c, &d.id, true))?;
+                for p in rows.iter().filter(|p| pages.is_empty() || pages.contains(&p.page_no)) {
+                    let Some(text) = p.text.as_deref() else { continue };
+                    let n = text.matches(find.as_str()).count();
+                    if n == 0 {
+                        continue;
+                    }
+                    if import::set_page_text(db, &d.id, p.page_no, &text.replace(find.as_str(), replace))? {
+                        replaced += n;
+                        touched += 1;
+                    }
+                }
+                out.documents.push(d.id.clone());
+            }
+            Ok(StepOutcome {
+                summary: if deps.ko() {
+                    format!("'{find}' → '{replace}' {replaced}곳 바꿈({touched}쪽)")
+                } else {
+                    format!("Replaced '{find}' with '{replace}' {replaced} times ({touched} pages)")
+                },
+                payload: json!({ "documents": ids(&docs_), "replaced": replaced, "pages": touched }),
+                imported: None,
+            })
+        }
+        Op::SetRole { role } => {
+            let docs_ = non_empty(working_set(deps, plan, imported)?)?;
+            let target = role.as_role();
+            db.with_tx(|tx| {
+                for d in &docs_ {
+                    docs::set_role(tx, &d.id, target)?;
+                }
+                Ok(())
+            })?;
+            out.documents.extend(ids(&docs_));
+            Ok(StepOutcome {
+                summary: if deps.ko() {
+                    format!("{} 역할: {}", count_label(deps, docs_.len()), role_label(target, true))
+                } else {
+                    format!("{} marked as {}", count_label(deps, docs_.len()), role_label(target, false))
+                },
+                payload: json!({ "documents": ids(&docs_), "role": target }),
+                imported: None,
+            })
+        }
+        Op::ManageReference { action, group, name, project } => {
+            let ko = deps.ko();
+            match action {
+                ReferenceAction::Create => {
+                    let n = name
+                        .clone()
+                        .or_else(|| group.clone())
+                        .ok_or_else(|| CoreError::Invalid("name_required".into()))?;
+                    let col = db.with(|c| {
+                        knowledge_repo::save_collection(
+                            c,
+                            &CollectionInput { name: n.clone(), active: true, ..CollectionInput::default() },
+                        )
+                    })?;
+                    Ok(StepOutcome {
+                        summary: if ko {
+                            format!("참고 자료 묶음 '{}' 만듦", col.name)
+                        } else {
+                            format!("Reference group '{}' created", col.name)
+                        },
+                        payload: json!({ "action": action, "group": col, "documents": [] }),
+                        imported: None,
+                    })
+                }
+                ReferenceAction::Rename
+                | ReferenceAction::Enable
+                | ReferenceAction::Disable
+                | ReferenceAction::Delete => {
+                    let col = resolve_group(db, group.as_deref(), project.as_deref())?.ok_or_else(|| {
+                        CoreError::NotFound(if ko { "참고 자료 묶음".into() } else { "reference group".into() })
+                    })?;
+                    let (col, summary) = match action {
+                        ReferenceAction::Delete => {
+                            db.with(|c| knowledge_repo::delete_collection(c, &col.id))?;
+                            let s = if ko {
+                                format!("참고 자료 묶음 '{}' 삭제(문서는 남음)", col.name)
+                            } else {
+                                format!("Reference group '{}' deleted (documents kept)", col.name)
+                            };
+                            (None, s)
+                        }
+                        _ => {
+                            let new_name = if *action == ReferenceAction::Rename {
+                                name.clone().ok_or_else(|| CoreError::Invalid("name_required".into()))?
+                            } else {
+                                col.name.clone()
+                            };
+                            let active = match action {
+                                ReferenceAction::Enable => true,
+                                ReferenceAction::Disable => false,
+                                _ => col.active,
+                            };
+                            let saved = db.with(|c| {
+                                knowledge_repo::save_collection(
+                                    c,
+                                    &CollectionInput {
+                                        id: Some(col.id.clone()),
+                                        name: new_name,
+                                        description: col.description.clone(),
+                                        color: col.color.clone(),
+                                        active,
+                                        project_id: None,
+                                    },
+                                )
+                            })?;
+                            let s = match action {
+                                ReferenceAction::Rename => {
+                                    if ko {
+                                        format!("묶음 이름을 '{}'(으)로", saved.name)
+                                    } else {
+                                        format!("Group renamed to '{}'", saved.name)
+                                    }
+                                }
+                                ReferenceAction::Enable => {
+                                    if ko {
+                                        format!("'{}' 묶음 사용", saved.name)
+                                    } else {
+                                        format!("Group '{}' enabled", saved.name)
+                                    }
+                                }
+                                _ => {
+                                    if ko {
+                                        format!("'{}' 묶음 사용 안 함", saved.name)
+                                    } else {
+                                        format!("Group '{}' disabled", saved.name)
+                                    }
+                                }
+                            };
+                            (Some(saved), s)
+                        }
+                    };
+                    Ok(StepOutcome {
+                        summary,
+                        payload: json!({ "action": action, "group": col, "documents": [] }),
+                        imported: None,
+                    })
+                }
+                ReferenceAction::Add | ReferenceAction::Remove => {
+                    let docs_ = non_empty(working_set(deps, plan, imported)?)?;
+                    let col = resolve_group(db, group.as_deref(), project.as_deref())?.ok_or_else(|| {
+                        CoreError::NotFound(if ko { "참고 자료 묶음".into() } else { "reference group".into() })
+                    })?;
+                    let doc_ids = ids(&docs_);
+                    let n = db.with_tx(|tx| {
+                        if *action == ReferenceAction::Add {
+                            let n = knowledge_repo::add_docs_to_collection(tx, &col.id, &doc_ids)?;
+                            for d in &doc_ids {
+                                docs::set_role(tx, d, DocumentRole::Knowledge)?;
+                            }
+                            Ok(n)
+                        } else {
+                            knowledge_repo::remove_docs_from_collection(tx, &col.id, &doc_ids)
+                        }
+                    })?;
+                    out.documents.extend(doc_ids.iter().cloned());
+                    let group_now = db.with(|c| knowledge_repo::get_collection(c, &col.id))?;
+                    Ok(StepOutcome {
+                        summary: match (ko, action) {
+                            (true, ReferenceAction::Add) => {
+                                format!("'{}' 묶음에 문서 {n}건 추가(참고 자료로 표시)", col.name)
+                            }
+                            (true, _) => format!("'{}' 묶음에서 문서 {n}건 제외", col.name),
+                            (false, ReferenceAction::Add) => {
+                                format!("{n} documents added to group '{}' (marked as reference material)", col.name)
+                            }
+                            (false, _) => format!("{n} documents removed from group '{}'", col.name),
+                        },
+                        payload: json!({ "action": action, "group": group_now, "documents": doc_ids }),
+                        imported: None,
+                    })
+                }
+            }
+        }
+        Op::DefineTerm { action, term, definition, synonyms } => {
+            let want = compact(term);
+            let existing = db.with(knowledge_repo::list_glossary)?.into_iter().find(|g| compact(&g.term) == want);
+            match action {
+                TermAction::Save => {
+                    let input = GlossaryInput {
+                        id: existing.as_ref().map(|g| g.id),
+                        term: term.trim().to_string(),
+                        definition: definition.clone().or_else(|| existing.as_ref().and_then(|g| g.definition.clone())),
+                        synonyms: if synonyms.is_empty() {
+                            existing.as_ref().map(|g| g.synonyms.clone()).unwrap_or_default()
+                        } else {
+                            synonyms.clone()
+                        },
+                    };
+                    let entry = db.with(|c| knowledge_repo::save_glossary(c, &input))?;
+                    Ok(StepOutcome {
+                        summary: if deps.ko() {
+                            format!("용어 '{}' 등록", entry.term)
+                        } else {
+                            format!("Term '{}' saved", entry.term)
+                        },
+                        payload: json!({ "action": action, "term": entry }),
+                        imported: None,
+                    })
+                }
+                TermAction::Delete => {
+                    let g = existing.ok_or_else(|| CoreError::NotFound(format!("term {term}")))?;
+                    db.with(|c| knowledge_repo::delete_glossary(c, g.id))?;
+                    Ok(StepOutcome {
+                        summary: if deps.ko() {
+                            format!("용어 '{}' 삭제", g.term)
+                        } else {
+                            format!("Term '{}' deleted", g.term)
+                        },
+                        payload: json!({ "action": action, "term": g }),
+                        imported: None,
+                    })
+                }
+            }
+        }
+        Op::SetVersion { group_key, label, effective_date, latest, clear } => {
+            let docs_ = non_empty(working_set(deps, plan, imported)?)?;
+            if clear.unwrap_or(false) {
+                db.with(|c| {
+                    for d in &docs_ {
+                        knowledge_repo::clear_version(c, &d.id)?;
+                    }
+                    Ok(())
+                })?;
+                out.documents.extend(ids(&docs_));
+                return Ok(StepOutcome {
+                    summary: if deps.ko() {
+                        format!("{} 버전 표시 해제", count_label(deps, docs_.len()))
+                    } else {
+                        format!("Version mark cleared on {}", count_label(deps, docs_.len()))
+                    },
+                    payload: json!({ "documents": ids(&docs_), "cleared": true }),
+                    imported: None,
+                });
+            }
+            let key = group_key
+                .clone()
+                .filter(|k| !k.trim().is_empty())
+                .or_else(|| docs_.first().and_then(|d| d.title.clone()))
+                .ok_or_else(|| CoreError::Invalid("group_key_required".into()))?;
+            db.with(|c| {
+                for d in &docs_ {
+                    knowledge_repo::set_version(
+                        c,
+                        &VersionInput {
+                            document_id: d.id.clone(),
+                            group_key: key.clone(),
+                            version_label: label.clone(),
+                            effective_date: effective_date.clone(),
+                            is_latest: latest.unwrap_or(true),
+                            note: None,
+                        },
+                    )?;
+                }
+                Ok(())
+            })?;
+            out.documents.extend(ids(&docs_));
+            Ok(StepOutcome {
+                summary: if deps.ko() {
+                    format!(
+                        "'{key}' 판으로 표시{}{}",
+                        label.as_deref().map(|l| format!(" · {l}")).unwrap_or_default(),
+                        if latest.unwrap_or(true) { "(최신본)" } else { "(구판)" }
+                    )
+                } else {
+                    format!(
+                        "Marked as an edition of '{key}'{}{}",
+                        label.as_deref().map(|l| format!(" · {l}")).unwrap_or_default(),
+                        if latest.unwrap_or(true) { " (latest)" } else { " (superseded)" }
+                    )
+                },
+                payload: json!({ "documents": ids(&docs_), "group_key": key, "latest": latest.unwrap_or(true) }),
+                imported: None,
+            })
+        }
+        Op::UpdateProject {
+            project,
+            name,
+            template,
+            start_date,
+            end_date,
+            owner,
+            intake_no,
+            notes,
+            keywords,
+            inbox_folder,
+        } => {
+            let pid = project.clone().ok_or_else(|| CoreError::Invalid("project_required".into()))?;
+            let before = db
+                .with(|c| projects_repo::get_project(c, &pid))?
+                .ok_or_else(|| CoreError::NotFound(format!("project {pid}")))?;
+            let template_id = match template.as_deref().map(str::trim) {
+                None => None,
+                Some("") => Some(String::new()),
+                Some(t) => {
+                    Some(resolve_template(db, t)?.ok_or_else(|| CoreError::NotFound(format!("template {t}")))?.id)
+                }
+            };
+            let input = ProjectInput {
+                id: Some(pid.clone()),
+                name: name.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| before.name.clone()),
+                template_id,
+                intake_no: intake_no.clone(),
+                owner: owner.clone(),
+                start_date: start_date.clone(),
+                end_date: end_date.clone(),
+                notes: notes.clone(),
+                inbox_folder: inbox_folder.clone(),
+                settings: None,
+                keywords: keywords.clone(),
+            };
+            let saved = db.with(|c| projects_repo::save_project(c, &input))?;
+            Ok(StepOutcome {
+                summary: if deps.ko() {
+                    format!("프로젝트 '{}' 수정", saved.name)
+                } else {
+                    format!("Project '{}' updated", saved.name)
+                },
+                payload: json!({ "project": saved }),
+                imported: None,
+            })
+        }
+        Op::DeleteProject { project } => {
+            let pid = project.clone().ok_or_else(|| CoreError::Invalid("project_required".into()))?;
+            let before = db
+                .with(|c| projects_repo::get_project(c, &pid))?
+                .ok_or_else(|| CoreError::NotFound(format!("project {pid}")))?;
+            projects::copies::remove_project_copies(db, deps.paths(), &pid)?;
+            let deleted = db.with(|c| projects_repo::delete_project(c, &pid))?;
+            Ok(StepOutcome {
+                summary: if deps.ko() {
+                    format!("프로젝트 '{}' 삭제(문서는 문서함에 남음)", before.name)
+                } else {
+                    format!("Project '{}' deleted (documents stay in the library)", before.name)
+                },
+                payload: json!({ "project_id": pid, "deleted": deleted, "name": before.name }),
+                imported: None,
+            })
+        }
+        Op::RemoveFromProject { project, doc_ids } => {
+            let pid = project.clone().ok_or_else(|| CoreError::Invalid("project_required".into()))?;
+            let target = if doc_ids.is_empty() { ids(&working_set(deps, plan, imported)?) } else { doc_ids.clone() };
+            if target.is_empty() {
+                return Err(CoreError::Invalid("no_documents".into()));
+            }
+            let mut removed = 0u32;
+            for d in &target {
+                if projects::copies::remove_document(db, deps.paths(), &pid, d)? {
+                    removed += 1;
+                }
+            }
+            out.documents.extend(target.iter().cloned());
+            Ok(StepOutcome {
+                summary: if deps.ko() {
+                    format!("프로젝트에서 문서 {removed}건 제외")
+                } else {
+                    format!("{removed} documents removed from the project")
+                },
+                payload: json!({ "project_id": pid, "removed": removed, "documents": target }),
+                imported: None,
+            })
+        }
+        Op::ManageTemplate { action, template, name, doc_types_required, description } => {
+            let key = template
+                .clone()
+                .or_else(|| name.clone())
+                .ok_or_else(|| CoreError::Invalid("template_required".into()))?;
+            let existing = resolve_template(db, &key)?;
+            match action {
+                TemplateAction::Delete => {
+                    let t = existing.ok_or_else(|| CoreError::NotFound(format!("template {key}")))?;
+                    let ok = db.with(|c| projects_repo::delete_template(c, &t.id))?;
+                    Ok(StepOutcome {
+                        summary: if deps.ko() {
+                            format!("템플릿 '{}' 삭제", t.name_ko)
+                        } else {
+                            format!("Template '{}' deleted", t.name_en)
+                        },
+                        payload: json!({ "action": action, "template": t, "deleted": ok }),
+                        imported: None,
+                    })
+                }
+                TemplateAction::Save => {
+                    if existing.as_ref().is_some_and(|t| t.builtin) {
+                        return Err(CoreError::Invalid("template_builtin".into()));
+                    }
+                    let input = TemplateInput {
+                        id: existing.as_ref().map(|t| t.id.clone()),
+                        name_ko: name.clone().unwrap_or(key.clone()),
+                        name_en: existing.as_ref().map(|t| t.name_en.clone()),
+                        description_ko: description
+                            .clone()
+                            .or_else(|| existing.as_ref().map(|t| t.description_ko.clone())),
+                        description_en: existing.as_ref().map(|t| t.description_en.clone()),
+                        required_doc_types: if doc_types_required.is_empty() {
+                            existing.as_ref().map(|t| t.required_doc_types.clone()).unwrap_or_default()
+                        } else {
+                            doc_types_required.clone()
+                        },
+                        rules: existing.as_ref().map(|t| t.rules.clone()).unwrap_or_default(),
+                    };
+                    let t = db.with(|c| projects_repo::save_template(c, &input))?;
+                    Ok(StepOutcome {
+                        summary: if deps.ko() {
+                            format!("템플릿 '{}' 저장", t.name_ko)
+                        } else {
+                            format!("Template '{}' saved", t.name_en)
+                        },
+                        payload: json!({ "action": action, "template": t }),
+                        imported: None,
+                    })
+                }
+            }
+        }
+        Op::ClassifyProjects { apply, use_model } => {
+            let docs_ = if plan.scope.is_empty() { Vec::new() } else { working_set(deps, plan, imported)? };
+            let use_model = use_model.unwrap_or(false) && deps.chat.is_some() && deps.model.is_some();
+            let vlm = match (use_model, deps.chat, deps.model.clone()) {
+                (true, Some(c), Some(m)) => Some(Vlm::new(c, m, deps.profile, deps.cancel).with_context(deps.ctx_size)),
+                _ => None,
+            };
+            let _lease = vlm.as_ref().map(|_| LeaseGuard::acquire(deps.lease));
+            let pdeps = ProjectDeps { db, vlm: vlm.as_ref(), language: deps.language };
+            let req =
+                ClassifyRequest { doc_ids: ids(&docs_), project_ids: Vec::new(), use_model, include_assigned: false };
+            let result = classify::suggest(&pdeps, &req)?;
+            let assignments: Vec<Assignment> = result
+                .suggestions
+                .iter()
+                .filter_map(|s| s.project_id.clone().map(|p| Assignment { doc_id: s.doc_id.clone(), project_id: p }))
+                .collect();
+            let applied = if apply.unwrap_or(false) && !assignments.is_empty() {
+                let r = classify::apply(db, &assignments)?;
+                out.documents.extend(assignments.iter().map(|a| a.doc_id.clone()));
+                Some(r)
+            } else {
+                None
+            };
+            Ok(StepOutcome {
+                summary: match (deps.ko(), applied.is_some()) {
+                    (true, true) => format!(
+                        "문서 {}건을 프로젝트에 배정(제안 {}건, 미정 {}건)",
+                        assignments.len(),
+                        result.suggested,
+                        result.undecided
+                    ),
+                    (true, false) => {
+                        format!("프로젝트 제안 {}건, 미정 {}건 — 적용하려면 '적용'", result.suggested, result.undecided)
+                    }
+                    (false, true) => format!(
+                        "{} documents assigned ({} suggested, {} undecided)",
+                        assignments.len(),
+                        result.suggested,
+                        result.undecided
+                    ),
+                    (false, false) => format!(
+                        "{} suggestions, {} undecided — say 'apply' to assign",
+                        result.suggested, result.undecided
+                    ),
+                },
+                payload: json!({ "suggested": result.suggested, "undecided": result.undecided, "applied": applied.as_ref().map(|_| assignments.len()).unwrap_or(0), "suggestions": result.suggestions, "apply_result": applied }),
+                imported: None,
+            })
+        }
+        Op::ManageSchema { action, schema, name } => {
+            let rec = resolve_schema(db, schema)?.ok_or_else(|| CoreError::NotFound(format!("schema {schema}")))?;
+            let ko = deps.ko();
+            let (summary, after) = match action {
+                SchemaAction::Enable | SchemaAction::Disable => {
+                    let on = *action == SchemaAction::Enable;
+                    db.with(|c| pipeline_repo::set_schema_enabled(c, &rec.id, on))?;
+                    (
+                        if ko {
+                            format!("양식 '{}' {}", rec.name, if on { "사용" } else { "사용 안 함" })
+                        } else {
+                            format!("Schema '{}' {}", rec.name, if on { "enabled" } else { "disabled" })
+                        },
+                        db.with(|c| pipeline_repo::get_schema(c, &rec.id))?,
+                    )
+                }
+                SchemaAction::SetDefault => {
+                    db.with_tx(|tx| pipeline_repo::set_default_schema(tx, &rec.id))?;
+                    (
+                        if ko {
+                            format!("'{}'을(를) {} 유형의 기본 양식으로", rec.name, rec.doc_type)
+                        } else {
+                            format!("'{}' is now the default schema of {}", rec.name, rec.doc_type)
+                        },
+                        db.with(|c| pipeline_repo::get_schema(c, &rec.id))?,
+                    )
+                }
+                SchemaAction::Delete => {
+                    db.with_tx(|tx| pipeline_repo::delete_schema(tx, &rec.id))?;
+                    (
+                        if ko {
+                            format!("양식 '{}' 삭제", rec.name)
+                        } else {
+                            format!("Schema '{}' deleted", rec.name)
+                        },
+                        None,
+                    )
+                }
+                SchemaAction::Rename => {
+                    let new_name = name
+                        .clone()
+                        .map(|n| n.trim().to_string())
+                        .filter(|n| !n.is_empty())
+                        .ok_or_else(|| CoreError::Invalid("name_required".into()))?;
+                    let draft = SchemaDraft {
+                        id: Some(rec.id.clone()),
+                        name: new_name.clone(),
+                        name_en: rec.name_en.clone(),
+                        doc_type: rec.doc_type.clone(),
+                        source: rec.source,
+                        description_ko: rec.description_ko.clone(),
+                        description_en: rec.description_en.clone(),
+                        definition: rec.definition.clone(),
+                        form_document_id: rec.form_document_id.clone(),
+                        note: Some(if ko { "이름 변경".into() } else { "renamed".into() }),
+                        sample_document_ids: Vec::new(),
+                    };
+                    let saved = db.with_tx(|tx| pipeline_repo::save_schema(tx, &draft))?;
+                    (
+                        if ko {
+                            format!("양식 이름을 '{}'(으)로", saved.name)
+                        } else {
+                            format!("Schema renamed to '{}'", saved.name)
+                        },
+                        Some(saved),
+                    )
+                }
+            };
+            Ok(StepOutcome {
+                summary,
+                payload: json!({ "action": action, "schema": after, "schema_id": rec.id }),
+                imported: None,
+            })
+        }
         // UI-side ops never reach here (`runs_in_ui`).
         _ => Ok(StepOutcome { summary: String::new(), payload: Value::Null, imported: None }),
     }
+}
+
+fn non_empty(docs_: Vec<DocumentRecord>) -> Result<Vec<DocumentRecord>> {
+    if docs_.is_empty() {
+        return Err(CoreError::Invalid("no_documents".into()));
+    }
+    Ok(docs_)
+}
+
+/// Exactly one document in scope (`code` names the op's need otherwise).
+fn one_document(docs_: Vec<DocumentRecord>, code: &str) -> Result<DocumentRecord> {
+    match docs_.len() {
+        0 => Err(CoreError::Invalid("no_documents".into())),
+        1 => Ok(docs_.into_iter().next().expect("one")),
+        _ => Err(CoreError::Invalid(code.into())),
+    }
+}
+
+/// Pages that start a new document for `split`: the explicit boundaries, or every `every` pages.
+fn split_boundaries(page_count: u32, boundaries: &[u32], every: Option<u32>) -> Result<Vec<u32>> {
+    let pages = page_count.max(1);
+    let mut bounds: Vec<u32> = boundaries.to_vec();
+    if bounds.is_empty() {
+        if let Some(n) = every.filter(|n| *n >= 1) {
+            let mut p = n + 1;
+            while p <= pages {
+                bounds.push(p);
+                p += n;
+            }
+        }
+    }
+    bounds.retain(|b| *b >= 2 && *b <= pages);
+    bounds.sort_unstable();
+    bounds.dedup();
+    if bounds.is_empty() {
+        return Err(CoreError::Invalid("boundaries_required".into()));
+    }
+    Ok(bounds)
+}
+
+fn role_label(role: DocumentRole, ko: bool) -> &'static str {
+    match (role, ko) {
+        (DocumentRole::Knowledge, true) => "참고 자료",
+        (DocumentRole::Knowledge, false) => "reference material",
+        (DocumentRole::Form, true) => "양식",
+        (DocumentRole::Form, false) => "form",
+        (DocumentRole::Generated, true) => "생성 문서",
+        (DocumentRole::Generated, false) => "generated",
+        (_, true) => "업무 문서",
+        (_, false) => "work document",
+    }
+}
+
+/// A reference group: a project's own (`project`), else a common group by id or name (`group`).
+fn resolve_group(db: &Db, group: Option<&str>, project: Option<&str>) -> Result<Option<Collection>> {
+    if let Some(pid) = project.map(str::trim).filter(|p| !p.is_empty()) {
+        let name = db.with(|c| projects_repo::get_project(c, pid))?.map(|p| p.name).unwrap_or_default();
+        return Ok(Some(db.with(|c| knowledge_repo::project_reference_group(c, pid, &name))?));
+    }
+    let Some(g) = group.map(str::trim).filter(|g| !g.is_empty()) else { return Ok(None) };
+    if let Some(col) = db.with(|c| knowledge_repo::get_collection(c, g))? {
+        return Ok(Some(col));
+    }
+    let want = compact(g);
+    Ok(db.with(knowledge_repo::list_collections)?.into_iter().find(|c| c.is_common() && compact(&c.name) == want))
+}
+
+/// A schema by id, name (ko / en) or document-type slug (its default schema).
+fn resolve_schema(db: &Db, key: &str) -> Result<Option<crate::pipeline::schema::SchemaRecord>> {
+    if let Some(s) = db.with(|c| pipeline_repo::get_schema(c, key))? {
+        return Ok(Some(s));
+    }
+    let want = compact(key);
+    if want.is_empty() {
+        return Ok(None);
+    }
+    let all = db.with(pipeline_repo::list_schemas)?;
+    Ok(all
+        .iter()
+        .find(|s| compact(&s.name) == want || s.name_en.as_deref().is_some_and(|n| compact(n) == want))
+        .or_else(|| all.iter().find(|s| compact(&s.doc_type) == want && s.is_default))
+        .or_else(|| all.iter().find(|s| compact(&s.doc_type) == want))
+        .cloned())
 }
 
 /// A project template by id, or by its (compact) Korean / English name as the planner hands it on.

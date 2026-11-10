@@ -8,13 +8,13 @@ use crate::error::{CoreError, Result};
 use crate::knowledge::answer::ChatBackend;
 use crate::pipeline::prompts::Stage;
 use crate::pipeline::vlm::Vlm;
-use crate::prerouter::{self, PreRoutedOp};
+use crate::prerouter::{self, DateRange, PreRoutedOp};
 use crate::settings::{Language, Profile};
 
 use super::rules::is_compound;
 use super::{
-    has_errors, prompts, rules, schema, validate, Op, OpenTarget, Plan, PlanContext, PlanIssue, PlanMode, PlanResult,
-    PlanSource, MIN_CONFIDENCE,
+    has_errors, prompts, rules, schema, validate, Op, OpFamily, OpKind, OpenTarget, Plan, PlanContext, PlanIssue,
+    PlanMode, PlanResult, PlanSource, MIN_CONFIDENCE,
 };
 
 /// Model access for the planner (`None` in `plan` = rules only).
@@ -29,6 +29,8 @@ pub struct PlannerDeps<'a> {
 
 /// Reply budget of a plan call (`Stage::Plan` preset).
 pub const REPLY_TOKENS: u32 = 1_024;
+/// Reply budget of the family-routing call (`{"families": [..]}`).
+pub const ROUTE_TOKENS: u32 = 48;
 
 fn clarification_text(ko: bool, reason: &str) -> String {
     if ko {
@@ -91,6 +93,7 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
         prompt_tokens: 0,
         completion_tokens: 0,
         raw: None,
+        families: Vec::new(),
     };
     if text.is_empty() {
         return Ok(result);
@@ -184,16 +187,52 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
     };
     result.model = Some(deps.model.clone());
     let vlm = Vlm::new(deps.chat, deps.model.clone(), deps.profile, deps.cancel).with_context(deps.ctx_size);
-    let plan_schema = schema::plan_schema();
-    let mut budget = prompts::prompt_budget(deps.ctx_size, REPLY_TOKENS);
+    // 0.6.0 two-stage planning: a short call picks the op families, the plan call then carries
+    // that family's op table and grammar only. Routing that fails (or an unknown reply) falls
+    // back to the single-stage prompt with every op.
+    let mut kinds: Option<Vec<OpKind>> = None;
+    let mut route_budget: Option<u32> = None;
+    match route_families(&vlm, ctx, text, date.as_ref()) {
+        Ok((families, (p, c))) => {
+            result.prompt_tokens += p;
+            result.completion_tokens += c;
+            if !families.is_empty() {
+                kinds = Some(OpFamily::ops_of(&families));
+                result.families = families;
+            }
+        }
+        Err(CoreError::Cancelled) => return Err(CoreError::Cancelled),
+        Err(e) => {
+            // Even the short routing prompt did not fit: size the plan prompt to the slot the
+            // server reported (scaled by how far its count was from our estimate).
+            if is_context_overflow(&e) {
+                let used = prompts::message_tokens(&prompts::family_messages(ctx, text, date.as_ref())).max(1);
+                route_budget = request_and_slot(&e).map(|(request, slot)| {
+                    let ratio = (request as f32 / used as f32).max(0.5);
+                    let room = slot.saturating_sub(REPLY_TOKENS + 128);
+                    ((room as f32 / ratio) as u32).max(128)
+                });
+            }
+            log::info!("planner: family routing unavailable ({e}); single-stage prompt");
+        }
+    }
+    let mut plan_schema = match &kinds {
+        Some(k) => schema::plan_schema_for(k),
+        None => schema::plan_schema(),
+    };
+    let mut budget = match (prompts::prompt_budget(deps.ctx_size, REPLY_TOKENS), route_budget) {
+        (Some(b), Some(r)) => Some(b.min(r)),
+        (b, r) => b.or(r),
+    };
     let mut feedback: Option<(String, Vec<PlanIssue>)> = None;
     let mut attempt = 0u32;
     let mut shrinks = 0u32;
+    let mut widened = false;
     while attempt < 2 {
         attempt += 1;
-        result.attempts = attempt;
+        result.attempts += 1;
         let fb = feedback.as_ref().map(|(p, i)| (p.as_str(), i.as_slice()));
-        let (messages, tier) = prompts::messages(ctx, text, date.as_ref(), budget, fb);
+        let (messages, tier) = prompts::messages_kinds(ctx, text, date.as_ref(), budget, fb, kinds.as_deref());
         let (value, reply) = match vlm.call_json(Stage::Plan, &messages, "plan", &plan_schema, Some(REPLY_TOKENS)) {
             Ok(v) => v,
             Err(CoreError::Cancelled) => return Err(CoreError::Cancelled),
@@ -241,12 +280,43 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
                 feedback = Some((reply.content, issues));
             }
         }
+        // A family's grammar may have been the wrong one: one more try with every op.
+        if attempt >= 2 && kinds.is_some() && !widened {
+            widened = true;
+            kinds = None;
+            plan_schema = schema::plan_schema();
+            feedback = None;
+            attempt = 1;
+        }
     }
     // Two rejected attempts → clarification with the first error.
     let first = result.issues.iter().find(|i| i.blocking).map(|i| i.message.clone()).unwrap_or_default();
     result.source = PlanSource::Model;
     result.plan = Plan::clarify(clarification_text(ko, &first), 0.0);
     Ok(result)
+}
+
+/// Stage 1 of the two-stage planner: the op families of the command (deduplicated, at most two)
+/// with the call's token usage.
+fn route_families(
+    vlm: &Vlm<'_>,
+    ctx: &PlanContext,
+    text: &str,
+    date: Option<&DateRange>,
+) -> Result<(Vec<OpFamily>, (u64, u64))> {
+    let messages = prompts::family_messages(ctx, text, date);
+    let (value, reply) =
+        vlm.call_json(Stage::Plan, &messages, "families", &schema::family_schema(), Some(ROUTE_TOKENS))?;
+    let mut families: Vec<OpFamily> = value
+        .get("families")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str().and_then(OpFamily::parse))
+        .collect();
+    families.dedup();
+    families.truncate(2);
+    Ok((families, (reply.usage.prompt, reply.usage.completion)))
 }
 
 /// llama-server rejects prompts longer than the slot context with HTTP 400
@@ -263,6 +333,15 @@ fn is_context_overflow(e: &CoreError) -> bool {
         }
         _ => false,
     }
+}
+
+/// `(request tokens, slot tokens)` from llama-server's HTTP 400
+/// ("request (5736 tokens) exceeds the available context size (4096 tokens)").
+fn request_and_slot(e: &CoreError) -> Option<(u32, u32)> {
+    let CoreError::Engine(m) = e else { return None };
+    let request = m.split("request (").nth(1)?.split(' ').next()?.parse().ok()?;
+    let slot = m.split("context size (").nth(1)?.split(' ').next()?.parse().ok()?;
+    Some((request, slot))
 }
 
 /// `(prompt tokens, completion tokens)` from a cut-off error ("… cut off (93 tokens; prompt 4003 tokens)").

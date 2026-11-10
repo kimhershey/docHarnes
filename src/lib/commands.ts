@@ -8,7 +8,9 @@ import type { NavigateFunction } from "react-router";
 
 import { describeError } from "./errors";
 import { api } from "./ipc";
-import { SCREEN_ROUTES, isJobFinished, type AutoProcessingLevel, type DocumentView, type Op, type PreRouteResult, type RetentionPolicy, type RetentionTarget, type Screen, type UndoReport } from "./types";
+import { queryClient, queryKeys } from "./query-client";
+import { coerceSettingValue, resolveSettingKey, setSettingByPath, settingSpec } from "./settingsCatalog";
+import { SCREEN_ROUTES, isJobFinished, type BackendPreference, type DocumentView, type Language, type Op, type PreRouteResult, type RetentionPolicy, type RetentionTarget, type Screen, type Theme, type Tier, type UndoReport } from "./types";
 import { errorCode, errorMessage } from "./utils";
 import { useDocumentsStore } from "@/stores/documents";
 import { useEngineStore } from "@/stores/engine";
@@ -106,14 +108,6 @@ export async function resolveDocument(ref: string): Promise<DocumentView | null>
   return exact ?? docs.find((d) => key(d.original_name).includes(k) || key(d.title ?? "").includes(k)) ?? docs[0] ?? null;
 }
 
-function toBool(v: unknown): boolean {
-  if (typeof v === "boolean") return v;
-  if (typeof v === "number") return v !== 0;
-  const s = String(v).trim().toLowerCase();
-  if (["true", "1", "on", "yes", "y", "켜", "켬", "켜기", "사용", "enable", "enabled"].includes(s)) return true;
-  if (["false", "0", "off", "no", "n", "꺼", "끔", "끄기", "사용안함", "disable", "disabled"].includes(s)) return false;
-  throw new Error(`invalid boolean: ${String(v)}`);
-}
 
 function toNumber(v: unknown): number {
   const n = typeof v === "number" ? v : Number(String(v).replace(/[^0-9.-]/g, ""));
@@ -121,22 +115,6 @@ function toNumber(v: unknown): number {
   return n;
 }
 
-function toAutoLevel(v: unknown): AutoProcessingLevel {
-  const s = String(v).trim().toLowerCase();
-  const map: Record<string, AutoProcessingLevel> = {
-    none: "none",
-    off: "none",
-    classify: "classify_only",
-    classify_only: "classify_only",
-    ocr: "classify_and_ocr",
-    classify_and_ocr: "classify_and_ocr",
-    full: "full",
-    extract: "full",
-  };
-  const level = map[s];
-  if (!level) throw new Error(`invalid auto level: ${String(v)}`);
-  return level;
-}
 
 /**
  * Performs one UI-side op of a plan (or of an execution's `ui_actions`).
@@ -158,60 +136,48 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
     case "help":
       return executePreRoute({ matched: true, source: "phrase", confidence: 1, normalized_text: "", op: "help" }, navigate, t);
     case "set_setting": {
-      const value = op.value;
-      let shown: string | number | boolean = value;
-      switch (op.key) {
-        case "render_dpi": {
-          const n = Math.round(toNumber(value));
-          shown = n;
-          await settings.update((d) => void (d.processing.render_dpi = n));
-          break;
-        }
-        case "pii_masking": {
-          const b = toBool(value);
-          shown = b;
-          await settings.update((d) => void (d.privacy.pii_masking = b));
-          break;
-        }
-        case "auto_pipeline": {
-          const level = toAutoLevel(value);
-          shown = t(`settings.processing.auto_levels.${level}`);
-          await settings.update((d) => void (d.processing.auto_level = level));
-          break;
-        }
-        case "inbox_watch": {
-          const b = toBool(value);
-          shown = b;
-          await api.documentsSetInboxWatch(b);
-          await settings.update((d) => void (d.processing.inbox_watch = b));
-          break;
-        }
-        case "review_threshold": {
-          let n = toNumber(value);
-          if (n > 1) n /= 100;
-          n = Math.min(1, Math.max(0, n));
-          shown = n;
-          await settings.update((d) => void (d.processing.review_threshold = n));
-          break;
-        }
-        case "cache_limit_gb": {
-          const n = toNumber(value);
-          shown = n;
-          await settings.update((d) => void (d.cache.page_cache_max_gb = n));
-          break;
-        }
-        case "journal_days": {
-          const ws = useWorkspaceStore.getState();
-          if (!ws.current) throw new Error("no_workspace");
-          const n = Math.max(0, Math.round(toNumber(value)));
-          shown = n;
-          await ws.setRetention({ ...ws.current.manifest.retention, journal_days: n === 0 ? null : n });
-          break;
-        }
-        default:
-          throw new Error(`unknown setting: ${String(op.key)}`);
+      // 0.6.0: `key` is a settings-catalog path (legacy aliases resolve to one); `journal_days` is a retention period.
+      if (op.key === "journal_days") {
+        const ws = useWorkspaceStore.getState();
+        if (!ws.current) throw new Error("no_workspace");
+        const n = Math.max(0, Math.round(toNumber(op.value)));
+        await ws.setRetention({ ...ws.current.manifest.retention, journal_days: n === 0 ? null : n });
+        return done(t("planner.ui.set_setting", { key: t(SETTING_LABELS.journal_days!), value: String(n) }));
       }
-      return done(t("planner.ui.set_setting", { key: t(SETTING_LABELS[op.key] ?? "common.unknown"), value: String(shown) }));
+      const path = resolveSettingKey(op.key);
+      const spec = settingSpec(path);
+      if (!spec) throw new Error(t("planner.ui.unknown_setting", { key: op.key }));
+      const value = coerceSettingValue(spec, op.value);
+      const shown = settingValueLabel(path, value, t);
+      switch (path) {
+        case "ui.theme":
+          await settings.setTheme(value as Theme);
+          break;
+        case "ui.language":
+          await settings.setLanguage(value as Language);
+          break;
+        case "ui.scale_percent":
+          await settings.setScale(value as number);
+          break;
+        case "models.tier_mode":
+          await settings.setTierMode(value as "auto" | "manual", value === "manual" ? (settings.settings?.models.manual_tier ?? "vram_8gb") : null);
+          break;
+        case "models.manual_tier":
+          await settings.setTierMode("manual", value as Tier);
+          break;
+        case "models.active_model":
+          await settings.setActiveModel(String(value));
+          await useEngineStore.getState().loadModel(String(value));
+          break;
+        case "processing.inbox_watch":
+          await api.documentsSetInboxWatch(value as boolean);
+          await settings.update((d) => setSettingByPath(d, path, value));
+          break;
+        default:
+          await settings.update((d) => setSettingByPath(d, path, value));
+          break;
+      }
+      return done(t("planner.ui.set_setting", { key: t(spec.label), value: shown }));
     }
     case "set_model": {
       await settings.setActiveModel(op.id);
@@ -298,6 +264,12 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
     case "engine": {
       const engine = useEngineStore.getState();
       switch (op.action) {
+        case "start":
+          await engine.start();
+          return done(t("planner.ui.engine_start"), "info");
+        case "stop":
+          await engine.stop();
+          return done(t("planner.ui.engine_stop"), "info");
         case "restart":
           await engine.restart();
           return done(t("planner.ui.engine_restart"), "info");
@@ -347,6 +319,122 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
       const period = op.days < 0 ? t("common.forever") : op.days === 0 ? t("settings.privacy.immediate") : t("planner.params.days", { count: op.days });
       return done(t("planner.ui.set_retention", { item: t(`planner.params.retention_${op.item}`), period }));
     }
+    // -- 0.6.0 (plan §1.5) --
+    case "manage_model": {
+      const engine = useEngineStore.getState();
+      const invalidateModels = () => {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.registry });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.modelIndex });
+        void queryClient.invalidateQueries({ queryKey: queryKeys.assessment });
+      };
+      switch (op.action) {
+        case "set_tier": {
+          const tier = op.tier ?? "auto";
+          if (tier === "auto") await settings.setTierMode("auto", null);
+          else await settings.setTierMode("manual", tier);
+          invalidateModels();
+          return done(t("planner.ui.model_set_tier", { tier: tier === "auto" ? t("models.tier_auto") : t(`hw.tier.${tier}`) }));
+        }
+        case "set_backend": {
+          const backend: BackendPreference = op.backend ?? "auto";
+          await settings.update((d) => void (d.models.backend = backend));
+          const state = engine.status?.state.kind ?? "stopped";
+          if (state === "running" || state === "degraded") await engine.restart();
+          return done(t("planner.ui.model_set_backend", { backend: t(`models.backends.${backend}`) }), "info");
+        }
+        case "import": {
+          const path = (op.path ?? "").trim();
+          if (!path) throw new Error(t("planner.ui.path_required"));
+          const jobId = await api.modelsImportRun([path], "copy", null);
+          invalidateModels();
+          return done(t("planner.ui.model_import", { path, job: jobId.slice(0, 8) }), "info");
+        }
+        case "download": {
+          const id = (op.id ?? "").trim();
+          if (!id) throw new Error(t("planner.ui.model_id_required"));
+          const jobId = await api.modelsDownload(id);
+          return done(t("planner.ui.model_download", { id, job: jobId.slice(0, 8) }), "info");
+        }
+        case "delete": {
+          const folder = await resolveModelFolder(op.id ?? "");
+          if (!folder) throw new Error(t("planner.ui.model_not_installed", { id: op.id ?? "" }));
+          await api.modelsDelete(folder);
+          invalidateModels();
+          return done(t("planner.ui.model_delete", { id: op.id ?? "" }));
+        }
+        case "verify": {
+          const folder = await resolveModelFolder(op.id ?? "");
+          if (!folder) throw new Error(t("planner.ui.model_not_installed", { id: op.id ?? "" }));
+          const jobId = await api.modelsHash(folder);
+          return done(t("planner.ui.model_verify", { id: op.id ?? "", job: jobId.slice(0, 8) }), "info");
+        }
+        case "benchmark": {
+          const res = await api.engineChatTest(op.id ?? null, null);
+          return done(t("planner.ui.model_benchmark", { model: res.model, tps: (res.tokens_per_second ?? 0).toFixed(1), ms: res.elapsed_ms }), "info");
+        }
+        case "load": {
+          const id = (op.id ?? "").trim();
+          if (!id) throw new Error(t("planner.ui.model_id_required"));
+          await engine.loadModel(id);
+          return done(t("planner.ui.model_load", { id }), "info");
+        }
+        case "unload": {
+          const loaded = engine.status?.models.filter((m) => m.status === "loaded" || m.status === "sleeping") ?? [];
+          const targets = op.id ? loaded.filter((m) => m.id === op.id) : loaded;
+          for (const m of targets) await engine.unloadModel(m.id);
+          return done(t("planner.ui.model_unload", { count: targets.length }), "info");
+        }
+      }
+      return { summary: "" };
+    }
+    case "workspace": {
+      const ws = useWorkspaceStore.getState();
+      switch (op.action) {
+        case "open": {
+          const path = (op.path ?? "").trim();
+          if (!path) throw new Error(t("planner.ui.path_required"));
+          const view = await ws.open(path);
+          navigate(SCREEN_ROUTES.library);
+          return done(t("planner.ui.workspace_open", { name: view.manifest.name || path }));
+        }
+        case "create": {
+          const path = (op.path ?? "").trim();
+          if (!path) throw new Error(t("planner.ui.path_required"));
+          const view = await ws.create(path, null, null);
+          navigate(SCREEN_ROUTES.library);
+          return done(t("planner.ui.workspace_create", { name: view.manifest.name || path }));
+        }
+        case "close":
+          await ws.close();
+          return done(t("planner.ui.workspace_close"), "info");
+        case "forget": {
+          const path = (op.path ?? ws.current?.path ?? "").trim();
+          if (!path) throw new Error(t("planner.ui.path_required"));
+          await ws.forget(path);
+          return done(t("planner.ui.workspace_forget", { path }), "info");
+        }
+      }
+      return { summary: "" };
+    }
+    case "maintenance": {
+      switch (op.action) {
+        case "purge_now": {
+          const res = await api.maintenanceRunNow();
+          return done(t("planner.ui.maintenance_purge", { job: res.job_id.slice(0, 8) }), "info");
+        }
+        case "clear_finished_jobs":
+          await useJobsStore.getState().clearFinished();
+          return done(t("planner.ui.maintenance_clear_jobs"));
+        case "rescan": {
+          const jobId = await api.documentsRescan();
+          return done(jobId ? t("planner.ui.maintenance_rescan") : t("planner.ui.maintenance_rescan_busy"), "info");
+        }
+        case "inbox_scan":
+          await api.documentsInboxScan();
+          return done(t("planner.ui.maintenance_inbox_scan"), "info");
+      }
+      return { summary: "" };
+    }
     case "noop":
       return { summary: t("planner.ui.noop") };
     case "clarify":
@@ -355,6 +443,42 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
       // Core ops never reach here (the executor runs them); nothing to do in the UI.
       return { summary: "" };
   }
+}
+
+/** Human form of a coerced setting value (enum labels, booleans, numbers). */
+function settingValueLabel(path: string, value: string | number | boolean | null, t: TFunction): string {
+  if (value === null) return t("planner.params.default_value");
+  if (typeof value === "boolean") return t(value ? "planner.params.on" : "planner.params.off");
+  switch (path) {
+    case "ui.theme":
+      return t(`theme.${value}`);
+    case "ui.language":
+      return t(`language.${value}`);
+    case "processing.auto_level":
+    case "processing.inbox_auto_level":
+      return t(`settings.processing.auto_levels.${value}`);
+    case "models.profile":
+      return t(`models.profiles.${value}`);
+    case "models.backend":
+      return t(`models.backends.${value}`);
+    case "models.manual_tier":
+      return t(`hw.tier.${value}`);
+    case "models.tier_mode":
+      return value === "auto" ? t("models.tier_auto") : t("models.tier_manual");
+    case "ui.scale_percent":
+      return `${value}%`;
+    default:
+      return String(value);
+  }
+}
+
+/** Installed folder of a model id (`manage_model delete / verify`), from the discovered index. */
+async function resolveModelFolder(id: string): Promise<string | null> {
+  const key = id.trim().toLowerCase();
+  if (!key) return null;
+  const index = await api.modelsList();
+  const hit = index.discovered.find((m) => m.id.toLowerCase() === key) ?? index.discovered.find((m) => m.folder_name.toLowerCase() === key || m.id.toLowerCase().includes(key));
+  return hit?.folder ?? null;
 }
 
 /** `set_retention` → the retention policy fields of the item (`logs` covers job and app logs); days < 0 = forever. */

@@ -12,11 +12,18 @@ use super::schema::{LANGS, PROFILES, THEMES};
 pub enum ValueType {
     Bool,
     /// Integer within `min..=max`.
-    Int { min: i64, max: i64 },
+    Int {
+        min: i64,
+        max: i64,
+    },
     /// One of a few integers (`render_dpi`).
     IntChoice(&'static [i64]),
     /// Number within `min..=max`; `percent` also accepts "90%" / 90 for a 0..1 field.
-    Float { min: f64, max: f64, percent: bool },
+    Float {
+        min: f64,
+        max: f64,
+        percent: bool,
+    },
     Enum(&'static [&'static str]),
     /// Free text (model ids, paths); `none` / empty clears an optional field.
     Str,
@@ -60,7 +67,12 @@ pub const SETTINGS: &[SettingSpec] = &[
     s("models.profile", ValueType::Enum(PROFILES), "추론 프로파일", "inference profile"),
     s("models.backend", ValueType::Enum(BACKENDS), "엔진 백엔드", "engine backend"),
     s("models.resident_models_max", ValueType::Int { min: 1, max: 4 }, "동시 상주 모델 수", "resident models"),
-    s("models.sleep_idle_seconds", ValueType::Int { min: 0, max: 86_400 }, "엔진 절전 대기(초)", "engine sleep after (s)"),
+    s(
+        "models.sleep_idle_seconds",
+        ValueType::Int { min: 0, max: 86_400 },
+        "엔진 절전 대기(초)",
+        "engine sleep after (s)",
+    ),
     s("models.allow_online_download", ValueType::Bool, "온라인 다운로드 허용", "allow online downloads"),
     s("models.auto_start_engine", ValueType::Bool, "엔진 자동 시작", "start the engine automatically"),
     s("models.warmup_after_load", ValueType::Bool, "로드 후 워밍업", "warm up after load"),
@@ -70,17 +82,37 @@ pub const SETTINGS: &[SettingSpec] = &[
     s("processing.auto_level", ValueType::Enum(AUTO_LEVELS), "가져온 뒤 자동 처리 수준", "processing after import"),
     s("processing.inbox_auto_level", ValueType::Enum(AUTO_LEVELS), "inbox 자동 처리 수준", "inbox processing level"),
     s("processing.render_dpi", ValueType::IntChoice(&[150, 200, 300]), "렌더 DPI", "render DPI"),
-    s("processing.review_threshold", ValueType::Float { min: 0.0, max: 1.0, percent: true }, "검토 임계값", "review threshold"),
+    s(
+        "processing.review_threshold",
+        ValueType::Float { min: 0.0, max: 1.0, percent: true },
+        "검토 임계값",
+        "review threshold",
+    ),
     s("processing.audit_sample_percent", ValueType::Int { min: 0, max: 100 }, "감사 표본(%)", "audit sample (%)"),
-    s("processing.organize_reviewed_only", ValueType::Bool, "검토 완료 문서만 정리", "organise reviewed documents only"),
+    s(
+        "processing.organize_reviewed_only",
+        ValueType::Bool,
+        "검토 완료 문서만 정리",
+        "organise reviewed documents only",
+    ),
     s("processing.inbox_watch", ValueType::Bool, "inbox 감시", "inbox watching"),
     s("processing.ocr_digital_pdf", ValueType::Bool, "디지털 PDF도 OCR", "OCR digital PDFs too"),
     s("processing.kie_max_pages", ValueType::Int { min: 1, max: 50 }, "추출 최대 쪽수", "extraction page limit"),
     s("processing.precise_mode", ValueType::Bool, "정밀 모드", "precise mode"),
     s("processing.dense_reocr", ValueType::Bool, "빽빽한 표 재OCR", "re-OCR dense tables"),
-    s("processing.dense_cells", ValueType::Int { min: 0, max: 10_000 }, "빽빽한 표 기준 셀 수", "dense-table cell threshold"),
+    s(
+        "processing.dense_cells",
+        ValueType::Int { min: 0, max: 10_000 },
+        "빽빽한 표 기준 셀 수",
+        "dense-table cell threshold",
+    ),
     // cache
-    s("cache.page_cache_max_gb", ValueType::Float { min: 0.5, max: 1000.0, percent: false }, "페이지 캐시 상한(GB)", "page cache limit (GB)"),
+    s(
+        "cache.page_cache_max_gb",
+        ValueType::Float { min: 0.5, max: 1000.0, percent: false },
+        "페이지 캐시 상한(GB)",
+        "page cache limit (GB)",
+    ),
     s("cache.keep_thumbnails", ValueType::Bool, "썸네일 보관", "keep thumbnails"),
     // privacy
     s("privacy.pii_masking", ValueType::Bool, "개인정보 마스킹", "PII masking"),
@@ -94,13 +126,38 @@ pub const SETTINGS: &[SettingSpec] = &[
     s("knowledge.embedding_model", ValueType::Str, "임베딩 모델", "embedding model"),
     s("knowledge.latest_only", ValueType::Bool, "최신본만 사용", "latest editions only"),
     s("knowledge.allow_general_knowledge", ValueType::Bool, "근거 없을 때 일반 지식 허용", "allow general knowledge"),
-    s("knowledge.context_tokens", ValueType::Int { min: 512, max: 131_072 }, "근거 컨텍스트 토큰", "evidence context tokens"),
+    s(
+        "knowledge.context_tokens",
+        ValueType::Int { min: 512, max: 131_072 },
+        "근거 컨텍스트 토큰",
+        "evidence context tokens",
+    ),
     s("knowledge.top_k", ValueType::Int { min: 1, max: 50 }, "근거 개수(top-k)", "evidence hits (top-k)"),
-    s("knowledge.chunk_target_tokens", ValueType::Int { min: 100, max: 4_000 }, "청크 목표 토큰", "chunk target tokens"),
-    s("knowledge.min_vector_similarity", ValueType::Float { min: 0.0, max: 1.0, percent: true }, "최소 벡터 유사도", "minimum vector similarity"),
+    s(
+        "knowledge.chunk_target_tokens",
+        ValueType::Int { min: 100, max: 4_000 },
+        "청크 목표 토큰",
+        "chunk target tokens",
+    ),
+    s(
+        "knowledge.min_vector_similarity",
+        ValueType::Float { min: 0.0, max: 1.0, percent: true },
+        "최소 벡터 유사도",
+        "minimum vector similarity",
+    ),
     // generation
-    s("generation.max_tokens_gpu", ValueType::Int { min: 256, max: 65_536 }, "문서 작성 토큰 상한(GPU)", "drafting token cap (GPU)"),
-    s("generation.max_tokens_cpu", ValueType::Int { min: 256, max: 12_288 }, "문서 작성 토큰 상한(CPU)", "drafting token cap (CPU)"),
+    s(
+        "generation.max_tokens_gpu",
+        ValueType::Int { min: 256, max: 65_536 },
+        "문서 작성 토큰 상한(GPU)",
+        "drafting token cap (GPU)",
+    ),
+    s(
+        "generation.max_tokens_cpu",
+        ValueType::Int { min: 256, max: 12_288 },
+        "문서 작성 토큰 상한(CPU)",
+        "drafting token cap (CPU)",
+    ),
     // retention (workspace manifest, applied by the UI like `set_retention`)
     s("journal_days", ValueType::Int { min: 0, max: 36_500 }, "저널 보관 일수", "journal retention (days)"),
 ];
@@ -186,8 +243,12 @@ pub fn needs_confirmation(key: &str) -> bool {
 
 fn truthy(s: &str) -> Option<bool> {
     match s.trim().to_lowercase().as_str() {
-        "true" | "on" | "yes" | "1" | "켜기" | "켜" | "켬" | "사용" | "허용" | "enable" | "enabled" => Some(true),
-        "false" | "off" | "no" | "0" | "끄기" | "꺼" | "끔" | "해제" | "금지" | "disable" | "disabled" => Some(false),
+        "true" | "on" | "yes" | "1" | "켜기" | "켜" | "켬" | "사용" | "허용" | "enable" | "enabled" => {
+            Some(true)
+        }
+        "false" | "off" | "no" | "0" | "끄기" | "꺼" | "끔" | "해제" | "금지" | "disable" | "disabled" => {
+            Some(false)
+        }
         _ => None,
     }
 }
@@ -248,7 +309,7 @@ pub fn coerce(spec: &SettingSpec, value: &mut Value) -> std::result::Result<(), 
             _ => Err(format!("{} must be between {min} and {max}", spec.key)),
         },
         ValueType::Enum(values) => {
-            let raw = match value {
+            let raw = match &*value {
                 Value::String(s) => s.trim().to_lowercase().replace([' ', '-'], "_"),
                 Value::Bool(b) => b.to_string(),
                 other => other.to_string(),
@@ -270,7 +331,9 @@ pub fn coerce(spec: &SettingSpec, value: &mut Value) -> std::result::Result<(), 
                 ("processing.auto_level" | "processing.inbox_auto_level", "classify") => "classify_only".to_string(),
                 ("processing.auto_level" | "processing.inbox_auto_level", "ocr") => "classify_and_ocr".to_string(),
                 ("processing.auto_level" | "processing.inbox_auto_level", "전체" | "모두") => "full".to_string(),
-                ("processing.auto_level" | "processing.inbox_auto_level", "없음" | "안함" | "off") => "none".to_string(),
+                ("processing.auto_level" | "processing.inbox_auto_level", "없음" | "안함" | "off") => {
+                    "none".to_string()
+                }
                 _ => raw.clone(),
             };
             if values.contains(&mapped.as_str()) {
@@ -281,7 +344,7 @@ pub fn coerce(spec: &SettingSpec, value: &mut Value) -> std::result::Result<(), 
             }
         }
         ValueType::Str => {
-            let text = match value {
+            let text = match &*value {
                 Value::String(s) => s.trim().to_string(),
                 Value::Null => String::new(),
                 other => other.to_string(),
@@ -289,7 +352,8 @@ pub fn coerce(spec: &SettingSpec, value: &mut Value) -> std::result::Result<(), 
             if text.chars().count() > 500 {
                 return Err(format!("{} is too long", spec.key));
             }
-            *value = if text.is_empty() || text.eq_ignore_ascii_case("none") { Value::Null } else { Value::String(text) };
+            *value =
+                if text.is_empty() || text.eq_ignore_ascii_case("none") { Value::Null } else { Value::String(text) };
             Ok(())
         }
     }

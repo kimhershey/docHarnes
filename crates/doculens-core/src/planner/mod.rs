@@ -20,8 +20,8 @@ pub mod llm;
 pub mod prompts;
 pub mod rules;
 pub mod schema;
-pub mod settings_catalog;
 pub mod scope;
+pub mod settings_catalog;
 pub mod validate;
 
 #[cfg(test)]
@@ -1363,9 +1363,11 @@ impl Op {
             | Op::Clarify { .. }
             | Op::Noop {} => SideEffect::None,
             // 0.6.0
-            Op::Rotate { .. } | Op::Rerender { .. } | Op::SetTitle { .. } | Op::EditText { .. } | Op::SetRole { .. } => {
-                SideEffect::Database
-            }
+            Op::Rotate { .. }
+            | Op::Rerender { .. }
+            | Op::SetTitle { .. }
+            | Op::EditText { .. }
+            | Op::SetRole { .. } => SideEffect::Database,
             Op::Split { .. } | Op::Merge { .. } => SideEffect::FileCreate,
             Op::ManageReference { .. } | Op::DefineTerm { .. } | Op::SetVersion { .. } => SideEffect::Database,
             Op::UpdateProject { .. } | Op::ManageTemplate { .. } | Op::ManageSchema { .. } => SideEffect::Database,

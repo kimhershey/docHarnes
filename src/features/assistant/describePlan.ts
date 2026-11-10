@@ -5,6 +5,7 @@
 
 import type { TFunction } from "i18next";
 
+import { settingSpec } from "@/lib/settingsCatalog";
 import {
   FOLDER_TEMPLATES,
   isCheckRun,
@@ -218,6 +219,47 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
       return "";
     case "clarify":
       return op.question;
+    // -- 0.6.0 (plan §1) --
+    case "rotate":
+      return joinParts([pt("degrees", { value: op.degrees }), op.pages && op.pages.length > 0 ? pt("pages", { count: op.pages.length }) : pt("all_pages")]);
+    case "rerender":
+      return op.dpi ? `${op.dpi} DPI` : pt("default_dpi");
+    case "split":
+      return op.every ? pt("split_every", { count: op.every }) : op.boundaries && op.boundaries.length > 0 ? pt("split_at", { pages: op.boundaries.join(", ") }) : pt("split_auto");
+    case "merge":
+      return op.name ? `'${op.name}'` : pt("merge_default_name");
+    case "set_title":
+      return `'${truncate(op.title, 60)}'`;
+    case "edit_text":
+      return joinParts([`'${truncate(op.find, 30)}' → '${truncate(op.replace, 30)}'`, op.pages && op.pages.length > 0 ? pt("pages", { count: op.pages.length }) : null]);
+    case "set_role":
+      return pt(`role_${op.role}`);
+    case "manage_reference":
+      return joinParts([pt(`reference_${op.action}`), op.group ?? (op.project ? pt("project_group", { name: projectName(op.project, ctx.context, t) }) : null), op.name ? `→ '${op.name}'` : null]);
+    case "define_term":
+      return joinParts([pt(`term_${op.action}`), `'${op.term}'`, op.definition ? truncate(op.definition, 40) : null, op.synonyms && op.synonyms.length > 0 ? pt("synonyms", { count: op.synonyms.length }) : null]);
+    case "set_version":
+      return op.clear ? pt("version_clear") : joinParts([op.group_key ? `'${op.group_key}'` : null, op.label ?? null, op.effective_date ?? null, op.latest === false ? pt("version_old") : op.latest ? pt("version_latest") : null]);
+    case "update_project": {
+      const fields = [op.name ? pt("new_name", { name: op.name }) : null, op.start_date ? `${pt("start_date")} ${op.start_date}` : null, op.end_date ? `${pt("end_date")} ${op.end_date}` : null, op.owner ? `${pt("owner")} ${op.owner}` : null, op.intake_no ? `${pt("intake_no")} ${op.intake_no}` : null, op.keywords && op.keywords.length > 0 ? pt("keywords", { count: op.keywords.length }) : null, op.template ? pt("project_template", { name: projectTemplateName(op.template, t) }) : null, op.inbox_folder ? `inbox/${op.inbox_folder}` : null, op.notes ? truncate(op.notes, 40) : null];
+      return joinParts([projectName(op.project, ctx.context, t), ...fields]);
+    }
+    case "delete_project":
+      return projectName(op.project, ctx.context, t);
+    case "remove_from_project":
+      return joinParts([projectName(op.project, ctx.context, t), op.doc_ids && op.doc_ids.length > 0 ? pt("documents_count", { count: op.doc_ids.length }) : pt("scope_documents")]);
+    case "manage_template":
+      return joinParts([pt(`template_${op.action}`), op.template ? projectTemplateName(op.template, t) : op.name ? `'${op.name}'` : null, op.doc_types_required && op.doc_types_required.length > 0 ? pt("required_types", { count: op.doc_types_required.length }) : null]);
+    case "classify_projects":
+      return joinParts([op.apply ? pt("classify_apply") : pt("classify_preview"), op.use_model ? pt("with_model") : null]);
+    case "manage_schema":
+      return joinParts([pt(`schema_${op.action}`), schemaName(op.schema, ctx.context, lang) ?? op.schema, op.name ? `→ '${op.name}'` : null]);
+    case "manage_model":
+      return joinParts([pt(`model_${op.action}`), op.id ?? null, op.tier ? (op.tier === "auto" ? t("models.tier_auto") : t(`hw.tier.${op.tier}`)) : null, op.backend ? t(`models.backends.${op.backend}`) : null, op.path ?? null]);
+    case "workspace":
+      return joinParts([pt(`workspace_${op.action}`), op.path ?? null]);
+    case "maintenance":
+      return pt(`maintenance_${op.action}`);
     default:
       return "";
   }
@@ -260,15 +302,79 @@ const SETTING_LABEL_KEYS: Record<string, string> = {
   journal_days: "settings.privacy.items.journal_days",
 };
 
+/** Label of a `set_setting` key: the catalog label (0.6.0) or the legacy alias' label. */
 export function settingLabel(key: string, t: TFunction): string {
   const k = SETTING_LABEL_KEYS[key];
-  return k ? t(k) : key;
+  if (k) return t(k);
+  const spec = settingSpec(key);
+  return spec ? t(spec.label) : key;
 }
 
 const SCREEN_KEYS = ["home", "library", "search", "assistant", "review", "schemas", "knowledge", "generate", "projects", "organize", "jobs", "models", "settings"];
 
 export function screenLabel(ref: string, t: TFunction): string {
   return SCREEN_KEYS.includes(ref) ? t(`nav.${ref}`) : ref;
+}
+
+/** Compact detail line of a 0.6.0 agent step from its executor payload (plan §1 payload shapes). */
+export interface AgentStepDetail {
+  text: string;
+  /** Document to open (merged / first split part). */
+  openDocument?: string | null;
+  /** Project to open. */
+  openProject?: string | null;
+}
+
+export function agentStepDetail(op: OpKind, payload: unknown, t: TFunction): AgentStepDetail | null {
+  if (!isRecord(payload)) return null;
+  const docs = Array.isArray(payload.documents) ? payload.documents.length : null;
+  const dt = (key: string, vars?: Record<string, unknown>) => t(`planner.result.detail.${key}`, vars);
+  switch (op) {
+    case "rotate":
+      return { text: dt("rotate", { documents: docs ?? 0, degrees: num(payload.degrees) }) };
+    case "rerender":
+      return { text: dt("rerender", { documents: docs ?? 0 }) };
+    case "split": {
+      const created = Array.isArray(payload.created) ? (payload.created as unknown[]).map(String) : [];
+      return { text: dt("split", { count: created.length }), openDocument: created[0] ?? null };
+    }
+    case "merge":
+      return { text: dt("merge", { count: Array.isArray(payload.sources) ? payload.sources.length : 0 }), openDocument: str(payload.document_id) };
+    case "set_title":
+      return { text: dt("set_title", { documents: docs ?? 0 }) };
+    case "edit_text":
+      return { text: dt("edit_text", { replaced: num(payload.replaced), documents: docs ?? 0 }) };
+    case "set_role":
+      return { text: dt("set_role", { documents: docs ?? 0, role: str(payload.role) ? t(`planner.params.role_${String(payload.role)}`) : "" }) };
+    case "manage_reference": {
+      const group = isRecord(payload.group) ? str(payload.group.name) : null;
+      return { text: dt("manage_reference", { action: t(`planner.params.reference_${String(payload.action ?? "")}`), group: group ?? "", documents: docs ?? 0 }) };
+    }
+    case "define_term":
+      return { text: dt("define_term", { action: t(`planner.params.term_${String(payload.action ?? "save")}`), term: str(payload.term) ?? "" }) };
+    case "set_version":
+      return { text: dt("set_version", { documents: docs ?? 0, group: str(payload.group_key) ?? "" }) };
+    case "update_project": {
+      const project = isRecord(payload.project) ? payload.project : null;
+      return { text: dt("update_project", { name: project ? (str(project.name) ?? "") : "" }), openProject: project ? str(project.id) : null };
+    }
+    case "delete_project":
+      return { text: dt(payload.deleted === false ? "delete_project_missing" : "delete_project") };
+    case "remove_from_project":
+      return { text: dt("remove_from_project", { removed: num(payload.removed) }), openProject: str(payload.project_id) };
+    case "manage_template": {
+      const tpl = isRecord(payload.template) ? payload.template : null;
+      return { text: dt("manage_template", { action: t(`planner.params.template_${String(payload.action ?? "save")}`), name: tpl ? (str(tpl.name_ko) ?? "") : "" }) };
+    }
+    case "classify_projects":
+      return { text: dt(payload.applied != null ? "classify_applied" : "classify_preview", { suggested: num(payload.suggested), applied: num(payload.applied) }) };
+    case "manage_schema": {
+      const schema = isRecord(payload.schema) ? payload.schema : null;
+      return { text: dt("manage_schema", { action: t(`planner.params.schema_${String(payload.action ?? "")}`), name: schema ? (str(schema.name) ?? "") : "" }) };
+    }
+    default:
+      return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

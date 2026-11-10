@@ -397,7 +397,7 @@ fn p6_rules_plan_drafts_projects_explanations_and_retention() {
 
 #[test]
 fn p6_rules_ignore_statements_and_questions() {
-    use super::{ProjectSummary, SettingKey};
+    use super::ProjectSummary;
     let mut c = ctx();
     c.projects = vec![
         ProjectSummary { id: "p-hanbit".into(), name: "한빛 심사".into(), status: "intake".into() },
@@ -459,7 +459,7 @@ fn p6_rules_ignore_statements_and_questions() {
     let r = plan(None, "검색 색인 다시 만들어줘", &c, PlanMode::RulesFirst).unwrap();
     assert!(matches!(&r.plan.operations[0], Op::Reindex { .. }), "{r:?}");
     let r = plan(None, "DPI를 300으로 바꿔줘", &c, PlanMode::RulesFirst).unwrap();
-    assert!(matches!(&r.plan.operations[0], Op::SetSetting { key: SettingKey::RenderDpi, .. }), "{r:?}");
+    assert!(matches!(&r.plan.operations[0], Op::SetSetting { key, .. } if key == "processing.render_dpi"), "{r:?}");
 }
 
 #[test]
@@ -609,6 +609,212 @@ fn plan_of(ops: Value, scope: Value) -> Plan {
         "summary": "s", "intent": "search", "scope": scope, "operations": ops, "requires_confirmation": false, "confidence": 0.9
     }))
     .unwrap()
+}
+
+/// 0.6.0: every GUI function has a phrase rule (plan §4); the sentences of the plan parse to
+/// the right op without a model.
+#[test]
+fn agent_rules_cover_every_gui_function() {
+    let mut c = ctx();
+    c.projects = vec![ProjectSummary { id: "p-hanbit".into(), name: "한빛 심사".into(), status: "active".into() }];
+    c.selected_doc_ids = vec!["d1a2".into(), "d2b3".into()];
+    let planned = |text: &str| plan(None, text, &c, PlanMode::RulesFirst).unwrap();
+    let op = |text: &str| planned(text).plan.operations[0].clone();
+    // documents
+    assert!(
+        matches!(op("이 문서 90도 돌려줘"), Op::Rotate { degrees: 90, .. }),
+        "{:?}",
+        planned("이 문서 90도 돌려줘").plan
+    );
+    assert!(
+        matches!(op("선택한 문서 180도 회전"), Op::Rotate { degrees: 180, .. }),
+        "{:?}",
+        planned("선택한 문서 180도 회전").plan
+    );
+    assert!(
+        matches!(op("선택한 문서 300 DPI로 다시 렌더"), Op::Rerender { dpi: Some(300) }),
+        "{:?}",
+        planned("선택한 문서 300 DPI로 다시 렌더").plan
+    );
+    assert!(
+        matches!(op("이 문서 3쪽부터 나눠줘"), Op::Split { boundaries, every: None } if boundaries == vec![3]),
+        "{:?}",
+        planned("이 문서 3쪽부터 나눠줘").plan
+    );
+    assert!(
+        matches!(op("이 문서 5쪽마다 분할"), Op::Split { every: Some(5), .. }),
+        "{:?}",
+        planned("이 문서 5쪽마다 분할").plan
+    );
+    assert!(
+        matches!(op("선택한 문서 하나로 합쳐서 '계약 묶음'"), Op::Merge { name: Some(n) } if n == "계약 묶음"),
+        "{:?}",
+        planned("선택한 문서 하나로 합쳐서 '계약 묶음'").plan
+    );
+    assert!(
+        matches!(op("제목을 '2026 공급계약'으로 바꿔"), Op::SetTitle { title } if title == "2026 공급계약"),
+        "{:?}",
+        planned("제목을 '2026 공급계약'으로 바꿔").plan
+    );
+    assert!(
+        matches!(op("'㈜한빛'을 '(주)한빛'으로 바꿔줘"), Op::EditText { find, replace, .. } if find == "㈜한빛" && replace == "(주)한빛")
+    );
+    assert!(
+        matches!(op("이 문서를 참고 자료로 표시"), Op::SetRole { role: RoleParam::Knowledge }),
+        "{:?}",
+        planned("이 문서를 참고 자료로 표시").plan
+    );
+    // reference material
+    assert!(
+        matches!(op("'사규' 참고 자료 묶음 만들어"), Op::ManageReference { action: ReferenceAction::Create, name: Some(n), .. } if n == "사규")
+    );
+    let r = planned("선택 문서를 사규 묶음에 넣어");
+    assert!(
+        matches!(&r.plan.operations[0], Op::ManageReference { action: ReferenceAction::Add, group: Some(g), .. } if g == "사규"),
+        "{r:?}"
+    );
+    assert_eq!(r.plan.scope.doc_ids.len(), 2);
+    assert!(
+        matches!(op("사규 묶음 삭제해"), Op::ManageReference { action: ReferenceAction::Delete, .. }),
+        "{:?}",
+        planned("사규 묶음 삭제해").plan
+    );
+    assert!(
+        matches!(op("사규 묶음 사용 안 함"), Op::ManageReference { action: ReferenceAction::Disable, .. }),
+        "{:?}",
+        planned("사규 묶음 사용 안 함").plan
+    );
+    assert!(
+        matches!(op("용어 'MM'은 '맨먼스'로 등록"), Op::DefineTerm { action: TermAction::Save, term, definition: Some(d), .. } if term == "MM" && d == "맨먼스")
+    );
+    assert!(
+        matches!(op("용어 'MM' 삭제"), Op::DefineTerm { action: TermAction::Delete, .. }),
+        "{:?}",
+        planned("용어 'MM' 삭제").plan
+    );
+    assert!(
+        matches!(op("이 문서를 2024년판으로 표시"), Op::SetVersion { label: Some(l), latest: Some(true), .. } if l == "2024")
+    );
+    assert!(
+        matches!(op("이 문서 버전 표시 해제"), Op::SetVersion { clear: Some(true), .. }),
+        "{:?}",
+        planned("이 문서 버전 표시 해제").plan
+    );
+    // projects
+    assert!(
+        matches!(op("한빛 심사 프로젝트 이름을 '한빛 2차'로"), Op::UpdateProject { project: Some(p), name: Some(n), .. } if p == "p-hanbit" && n == "한빛 2차")
+    );
+    assert!(
+        matches!(op("한빛 심사 프로젝트 종료일 12월 31일"), Op::UpdateProject { end_date: Some(d), .. } if d == "2026-12-31")
+    );
+    assert!(
+        matches!(op("한빛 심사 프로젝트 삭제"), Op::DeleteProject { project: Some(p) } if p == "p-hanbit"),
+        "{:?}",
+        planned("한빛 심사 프로젝트 삭제").plan
+    );
+    let r = planned("선택 문서를 한빛 심사 프로젝트에서 빼줘");
+    assert!(
+        matches!(&r.plan.operations[0], Op::RemoveFromProject { project: Some(p), .. } if p == "p-hanbit"),
+        "{r:?}"
+    );
+    assert_eq!(r.plan.scope.doc_ids.len(), 2);
+    assert!(
+        matches!(op("미배정 문서 프로젝트로 자동 분류"), Op::ClassifyProjects { apply: Some(false), .. }),
+        "{:?}",
+        planned("미배정 문서 프로젝트로 자동 분류").plan
+    );
+    assert!(
+        matches!(op("템플릿 '유지보수 2차' 삭제"), Op::ManageTemplate { action: TemplateAction::Delete, template: Some(n), .. } if n == "유지보수 2차")
+    );
+    // forms
+    assert!(
+        matches!(op("견적서 양식 기본으로"), Op::ManageSchema { action: SchemaAction::SetDefault, schema, .. } if schema == "quotation")
+    );
+    assert!(
+        matches!(op("영수증 양식 끄기"), Op::ManageSchema { action: SchemaAction::Disable, schema, .. } if schema == "영수증")
+    );
+    // system
+    assert!(
+        matches!(op("UI 배율 125%로"), Op::SetSetting { key, value } if key == "ui.scale_percent" && value.as_f64() == Some(125.0))
+    );
+    assert!(
+        matches!(op("자동 임베딩 꺼줘"), Op::SetSetting { key, value } if key == "knowledge.auto_embed" && value == json!(false))
+    );
+    assert!(
+        matches!(op("12B 모델 받아줘"), Op::ManageModel { action: ModelAction::Download, id: Some(id), .. } if id == "gemma4-12b-q4km")
+    );
+    assert!(
+        matches!(op("모델 폴더 D:\\models\\x 가져와"), Op::ManageModel { action: ModelAction::Import, path: Some(p), .. } if p == "D:\\models\\x")
+    );
+    assert!(matches!(op("엔진 꺼"), Op::Engine { action: EngineOp::Stop }), "{:?}", planned("엔진 꺼").plan);
+    assert!(matches!(op("엔진 켜줘"), Op::Engine { action: EngineOp::Start }), "{:?}", planned("엔진 켜줘").plan);
+    assert!(
+        matches!(op("워크스페이스 D:\\Work 열어"), Op::Workspace { action: WorkspaceAction::Open, path: Some(p) } if p == "D:\\Work")
+    );
+    assert!(
+        matches!(op("지금 파기 실행"), Op::Maintenance { action: MaintenanceAction::PurgeNow }),
+        "{:?}",
+        planned("지금 파기 실행").plan
+    );
+    assert!(
+        matches!(op("끝난 작업 지워"), Op::Maintenance { action: MaintenanceAction::ClearFinishedJobs }),
+        "{:?}",
+        planned("끝난 작업 지워").plan
+    );
+    // Confirmations and scope needs.
+    assert!(planned("한빛 심사 프로젝트 삭제").plan.requires_confirmation);
+    assert!(planned("선택한 문서 하나로 합쳐줘").plan.requires_confirmation);
+    assert!(!planned("이 문서 90도 돌려줘").plan.requires_confirmation);
+    // The older rules keep their meaning next to the new ones.
+    assert!(matches!(op("다크 테마로 바꿔"), Op::SetTheme { .. }), "{:?}", planned("다크 테마로 바꿔").plan);
+    assert!(matches!(op("모델을 12B로 바꿔"), Op::SetModel { .. }), "{:?}", planned("모델을 12B로 바꿔").plan);
+    assert!(matches!(op("inbox 감시 꺼"), Op::SetInboxWatch { enabled: false }), "{:?}", planned("inbox 감시 꺼").plan);
+    assert!(matches!(op("선택한 문서 삭제"), Op::Delete { .. }), "{:?}", planned("선택한 문서 삭제").plan);
+    assert!(
+        matches!(op("선택한 문서를 한빛 심사 프로젝트에 추가해"), Op::AddToProject { .. }),
+        "{:?}",
+        planned("선택한 문서를 한빛 심사 프로젝트에 추가해").plan
+    );
+}
+
+/// 0.6.0 two-stage planning: the family call narrows the op table and grammar of the plan call;
+/// a wrong family is retried once with every op.
+#[test]
+fn two_stage_planning_routes_by_family_and_widens_on_failure() {
+    let text = "한빛과 거래한 계약 중 작년 것만 골라서 보여줘";
+    let chat = StageChat::new();
+    chat.push("families", json!({ "families": ["ask"] }));
+    chat.push("plan", json!({ "summary": "한빛 계약 검색", "intent": "search", "scope": { "filter": { "doc_type": "contract" } }, "operations": [{ "op": "search", "query": "한빛" }], "requires_confirmation": false, "confidence": 0.9 }));
+    let r = plan(Some(&deps(&chat)), text, &ctx(), PlanMode::ModelFirst).unwrap();
+    assert_eq!(r.families, vec![OpFamily::Ask]);
+    assert!(matches!(&r.plan.operations[0], Op::Search { .. }), "{r:?}");
+    let reqs = chat.requests.lock().unwrap();
+    let route = reqs.iter().find(|r| StageChat::stage_of(r).as_deref() == Some("families")).unwrap();
+    assert!(route.messages[0]["content"].as_str().unwrap().contains("- ask:"));
+    let planned = reqs.iter().find(|r| StageChat::stage_of(r).as_deref() == Some("plan")).unwrap();
+    let system = planned.messages[0]["content"].as_str().unwrap();
+    assert!(system.contains("- search:") && !system.contains("- aggregate:"), "family table only");
+    let ops = planned.response_format.as_ref().unwrap()["json_schema"]["schema"]["properties"]["operations"]["items"]
+        ["anyOf"]
+        .as_array()
+        .unwrap()
+        .len();
+    assert_eq!(ops, OpFamily::Ask.ops().len());
+    drop(reqs);
+    // The family grammar cannot express the answer twice → one more attempt with every op.
+    let chat = StageChat::new();
+    chat.push("families", json!({ "families": ["system"] }));
+    chat.push("plan", json!({ "summary": "x", "intent": "noop", "scope": {}, "operations": [], "requires_confirmation": false, "confidence": 0.8 }));
+    chat.push("plan", json!({ "summary": "x", "intent": "noop", "scope": {}, "operations": [], "requires_confirmation": false, "confidence": 0.8 }));
+    chat.push("plan", json!({ "summary": "한빛 계약 검색", "intent": "search", "scope": {}, "operations": [{ "op": "search", "query": "한빛" }], "requires_confirmation": false, "confidence": 0.9 }));
+    let r = plan(Some(&deps(&chat)), text, &ctx(), PlanMode::ModelFirst).unwrap();
+    assert!(matches!(&r.plan.operations[0], Op::Search { .. }), "{r:?}");
+    assert_eq!(r.attempts, 3);
+    assert_eq!(chat.calls("plan"), 3);
+    // Family prompts stay small: the whole stage-1 prompt is a fraction of the single-stage one.
+    let fam = prompts::message_tokens(&prompts::family_messages(&ctx(), text, None));
+    let full = prompts::message_tokens(&prompts::messages_for(&ctx(), text, None, prompts::Tier::Full, None));
+    assert!(fam * 4 < full, "family prompt {fam} vs full {full}");
 }
 
 /// 0.5.0: the assistant's "현재 프로젝트" scope is the default scope of commands that name none
@@ -766,9 +972,12 @@ fn model_path_requeries_once_with_feedback() {
     assert_eq!(r.plan.scope.filter.date_from.as_deref(), Some("2025-01-01"));
     assert_eq!(r.model.as_deref(), Some("scripted"));
     assert_eq!(chat.calls("plan"), 2);
-    // The re-query carried the previous output and the validator's finding.
+    // The re-query carried the previous output and the validator's finding (the family-routing
+    // call that preceded the plan calls has no scripted reply here, so the plan requests are the
+    // ones with the plan schema).
     let reqs = chat.requests.lock().unwrap();
-    let second = &reqs[1];
+    let plans: Vec<_> = reqs.iter().filter(|r| StageChat::stage_of(r).as_deref() == Some("plan")).collect();
+    let second = plans[1];
     let last_user = second.messages.last().unwrap()["content"].as_str().unwrap().to_string();
     assert!(last_user.contains("limit") || last_user.contains("unknown field"), "{last_user}");
     assert!(second.messages[0]["content"].as_str().unwrap().contains("- aggregate:"));
@@ -855,9 +1064,13 @@ fn model_path_requeries_once_with_feedback() {
     let r = plan(Some(&d), "영수증 중 한빛 것만 골라서 보여줘", &ctx(), PlanMode::RulesFirst).unwrap();
     assert_eq!(r.source, PlanSource::Model, "{r:?}");
     assert_eq!(r.attempts, 1);
+    // The overflow hit the (first) family-routing call; the plan call then used a tier below Full.
     let reqs = chat.requests.lock().unwrap();
-    assert_eq!(reqs.len(), 2);
-    assert!(reqs[1].messages.len() < reqs[0].messages.len());
+    let plans: Vec<_> = reqs.iter().filter(|r| StageChat::stage_of(r).as_deref() == Some("plan")).collect();
+    assert_eq!(plans.len(), 1);
+    let full =
+        prompts::messages_for(&ctx(), "영수증 중 한빛 것만 골라서 보여줘", None, prompts::Tier::Full, None).len();
+    assert!(plans[0].messages.len() < full, "{} < {full}", plans[0].messages.len());
 }
 
 // ---------------------------------------------------------------------------
