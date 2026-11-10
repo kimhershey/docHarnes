@@ -136,18 +136,123 @@ test.describe("P6 document generation", () => {
     await expect(references.first()).toHaveAttribute("data-excluded", "false");
     await expect(references.first()).toContainText("개발계약서-2p.pdf");
 
-    // Exclude the reference, give feedback, regenerate: the new draft drops the document and records the instruction.
+    // Exclude the reference, instruct the 초안 어시스턴트 on the whole draft (0.7.0): the new draft drops the
+    // document, records the instruction and the revision log keeps it.
     await page.getByTestId("generate-reference-exclude").first().check();
     await expect(references.first()).toHaveAttribute("data-excluded", "true");
-    await expect(page.getByTestId("generate-regenerate-panel")).toContainText(tpl(ko.generate.form.excluded_hint, { count: 1 }));
-    await page.getByTestId("generate-feedback").fill("더 짧게");
-    await page.getByTestId("generate-regenerate").click();
+    await expect(page.getByTestId("generate-revise-panel")).toContainText(tpl(ko.generate.form.excluded_hint, { count: 1 }));
+    await expect(page.getByTestId("generate-revise-log")).toContainText(ko.generate.revise.log_empty);
+    await expect(page.getByTestId("generate-revise-run")).toBeDisabled();
+    await page.getByTestId("generate-revise-instruction").fill("더 짧게");
+    await page.getByTestId("generate-revise-run").click();
     await expect(page.getByTestId("generate-notes")).toContainText("재생성 반영: 더 짧게", { timeout: 15_000 });
     await expect(references).toHaveCount(0);
     await expect(page.getByTestId("generate-references")).toContainText(ko.generate.editor.no_references);
+    await expect(page.getByTestId("generate-revise-log").getByTestId("generate-revise-log-entry")).toHaveCount(1);
+    await expect(page.getByTestId("generate-revise-log")).toContainText("더 짧게");
+    await expect(page.getByTestId("generate-revise-log")).toContainText(tpl(ko.generate.revise.done, { scope: "전체" }));
     // The instruction box is cleared for the next round; the editor is usable again.
-    await expect(page.getByTestId("generate-feedback")).toHaveValue("");
+    await expect(page.getByTestId("generate-revise-instruction")).toHaveValue("");
     await expect(page.getByTestId("generate-editor")).toHaveAttribute("data-disabled", "false");
+  });
+
+  test("body blocks and the 초안 어시스턴트 (0.7.0): add / move / remove a paragraph, rewrite one section, add a new section", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openGenerate(page);
+    await page.getByTestId("generate-template").click();
+    await page.getByRole("option", { name: ko.generate.templates.meeting_minutes }).click();
+    await page.getByTestId("generate-content").fill("한빛 포털 구축 주간 회의록, 일정 점검과 리스크 논의");
+    await page.getByTestId("generate-run").click();
+    await expect(page.getByTestId("generate-preview")).toBeVisible({ timeout: 15_000 });
+    const headings = page.locator('[data-testid^="generate-block-"][data-block-kind="heading"]');
+    expect(await headings.count()).toBeGreaterThanOrEqual(2);
+    const frame = page.getByTestId("generate-preview-frame");
+    const srcdoc = async () => (await frame.getAttribute("srcdoc")) ?? "";
+
+    // Add a paragraph after the first heading: it is focused, typed into, and the preview follows.
+    const inputs = page.locator('[data-testid^="generate-block-input-"]');
+    const before = await inputs.count();
+    await page.getByTestId("draft-block-add-paragraph-0").click();
+    await expect(inputs).toHaveCount(before + 1);
+    await expect(page.getByTestId("generate-block-input-1")).toBeFocused();
+    await expect(page.getByTestId("generate-block-1")).toHaveAttribute("data-block-kind", "paragraph");
+    await page.getByTestId("generate-block-input-1").fill("새로 넣은 문단입니다.");
+    await expect.poll(srcdoc, { timeout: 10_000 }).toContain("새로 넣은 문단입니다.");
+    // Move it one down, then remove it: the block count and the preview go back.
+    await page.getByTestId("draft-block-down-1").click();
+    await expect(page.getByTestId("generate-block-input-2")).toHaveValue("새로 넣은 문단입니다.");
+    await page.getByTestId("draft-block-remove-2").click();
+    await expect(inputs).toHaveCount(before);
+    await expect.poll(srcdoc, { timeout: 10_000 }).not.toContain("새로 넣은 문단입니다.");
+    // An edit is persisted to the draft store (debounced) — the mock keeps drafts in localStorage.
+    await page.getByTestId("generate-block-input-1").fill("유지되는 문단입니다.");
+    await expect.poll(() => page.evaluate(() => Object.keys(localStorage).some((k) => (localStorage.getItem(k) ?? "").includes("유지되는 문단입니다."))), { timeout: 10_000 }).toBe(true);
+
+    // The per-section "AI 수정" button picks that section and focuses the instruction box.
+    const second = Number((await headings.nth(1).getAttribute("data-testid"))!.replace("generate-block-", ""));
+    const heading2 = await page.getByTestId(`generate-block-input-${second}`).inputValue();
+    await page.getByTestId(`draft-section-revise-${second}`).click();
+    await expect(page.getByTestId("generate-revise-instruction")).toBeFocused();
+    await expect(page.getByTestId("generate-revise-scope")).toContainText(`2. ${heading2}`);
+    // Rewrite section 2: its heading stays, its body quotes the instruction, the note and the log record it.
+    await page.getByTestId("generate-revise-instruction").fill("더 자세히");
+    await page.getByTestId("generate-revise-run").click();
+    await expect(page.getByTestId("generate-notes")).toContainText(`AI 수정(2절 '${heading2}'): 더 자세히`, { timeout: 15_000 });
+    await expect(page.getByTestId(`generate-block-input-${second}`)).toHaveValue(heading2);
+    await expect(page.getByTestId(`generate-block-input-${second + 1}`)).toHaveValue(/지시 반영: 더 자세히/);
+    await expect(page.getByTestId("generate-revise-log")).toContainText(tpl(ko.generate.revise.done, { scope: `2. ${heading2}` }));
+    await expect(page.getByTestId("generate-revise-instruction")).toHaveValue("");
+    await expect(page.getByTestId("generate-editor")).toHaveAttribute("data-disabled", "false");
+    // Add a new section at the end with its own heading.
+    await page.getByTestId("generate-revise-scope").click();
+    await page.getByTestId("generate-revise-scope-append").click();
+    await page.getByTestId("generate-revise-heading").fill("결론");
+    await page.getByTestId("generate-revise-instruction").fill("기대 효과를 정리");
+    await page.getByTestId("generate-revise-run").click();
+    await expect(page.getByTestId("generate-notes")).toContainText("AI 수정(새 절 '결론' — 끝): 기대 효과를 정리", { timeout: 15_000 });
+    await expect(page.locator('[data-testid^="generate-block-input-"].font-semibold').last()).toHaveValue("결론");
+    await expect(page.getByTestId("generate-revise-log").getByTestId("generate-revise-log-entry")).toHaveCount(2);
+    // The preview is scaled to its column ("맞춤"); "100%" shows the sheet at its real size.
+    await expect(page.getByTestId("generate-preview-zoom")).toHaveAttribute("data-zoom", "fit");
+    await page.getByTestId("generate-preview-zoom").click();
+    await expect(page.getByTestId("generate-preview-zoom")).toHaveAttribute("data-zoom", "full");
+    await expect(page.getByTestId("generate-preview-box")).toHaveAttribute("data-scale", "1.00");
+  });
+
+  test("assistant: '2절 다시 써줘 …' revises the open draft (plan → result card → the generate screen); without a draft it asks to open one", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    // No draft open: the command is a clarification, not a plan.
+    await page.getByTestId("nav-assistant").click();
+    await page.getByTestId("assistant-input").fill("2절 다시 써줘");
+    await page.getByTestId("assistant-send").click();
+    await expect(page.locator('[data-testid="assistant-card-clarify"]').last()).toContainText("초안을 먼저", { timeout: 15_000 });
+
+    await openGenerate(page);
+    await page.getByTestId("generate-template").click();
+    await page.getByRole("option", { name: ko.generate.templates.progress_report }).click();
+    await page.getByTestId("generate-content").fill("한빛 포털 구축 10월 진척 보고서, 전체 진척률 60%");
+    await page.getByTestId("generate-run").click();
+    await expect(page.getByTestId("generate-preview")).toBeVisible({ timeout: 15_000 });
+    const heading2 = await page.locator('[data-testid^="generate-block-"][data-block-kind="heading"]').nth(1).locator("textarea").inputValue();
+
+    await page.getByTestId("nav-assistant").click();
+    await page.getByTestId("assistant-input").fill("2절 다시 써줘 — 리스크를 더 자세히");
+    await page.getByTestId("assistant-send").click();
+    const plan = page.locator('[data-testid="assistant-card-plan"]').last();
+    await expect(plan).toBeVisible({ timeout: 15_000 });
+    await expect(plan).toContainText(ko.planner.ops.revise_draft);
+    await expect(plan).toContainText(tpl(ko.planner.params.revise_section, { index: 2 }));
+    await expect(plan).toContainText("리스크를 더 자세히");
+    // No confirmation needed (the revision is previewed on the generate screen): the plan runs at once.
+    await expect(plan).toHaveAttribute("data-plan-status", "done", { timeout: 15_000 });
+    const result = page.locator('[data-testid="assistant-card-result"]').last();
+    await expect(result).toBeVisible({ timeout: 20_000 });
+    await expect(result).toHaveAttribute("data-result-status", "done");
+    await result.getByTestId("result-open-draft").click();
+    await expect(page.getByTestId("page-generate")).toBeVisible();
+    await expect(page.getByTestId("generate-notes")).toContainText(`AI 수정(2절 '${heading2}'): 리스크를 더 자세히`);
   });
 
   test("assistant: '견적서 만들어줘 …' → plan card → draft job → result card opens the draft here", async ({ page }) => {

@@ -33,6 +33,26 @@ async function expectNotClipped(el: Locator): Promise<void> {
   expect(r.outside, "text descendants outside the box").toBe(0);
 }
 
+/**
+ * No horizontal scrollbar anywhere inside `el`: neither on `el` itself nor on a descendant that scrolls
+ * (`overflow-x: auto | scroll`), except the ones marked `data-hscroll="ok"` (wide tables that are meant to
+ * scroll sideways inside their own box).
+ */
+async function expectNoHorizontalOverflow(el: Locator): Promise<void> {
+  const r = await el.evaluate((node) => {
+    const bars: string[] = [];
+    for (const child of [node, ...Array.from(node.querySelectorAll("*"))]) {
+      const style = getComputedStyle(child);
+      if (style.display === "none") continue;
+      const scrolls = child === node || style.overflowX === "auto" || style.overflowX === "scroll";
+      if (!scrolls || child.getAttribute("data-hscroll") === "ok") continue;
+      if (child.scrollWidth > child.clientWidth + 1) bars.push(`${child.tagName.toLowerCase()}${child.getAttribute("data-testid") ? `[${child.getAttribute("data-testid")}]` : ""} ${child.scrollWidth}>${child.clientWidth}`);
+    }
+    return bars;
+  });
+  expect(r, "elements with a horizontal scrollbar").toEqual([]);
+}
+
 type Box = { x: number; y: number; width: number; height: number };
 
 /** Boxes of `items` (top to bottom) and the assertion that no two of them overlap vertically. */
@@ -121,6 +141,35 @@ test.describe("UI 배율", () => {
     expect((await title.boundingBox())!.height, "title line is not squeezed").toBeGreaterThan(12);
     await expect(c.getByText(/쪽 · /)).toBeVisible();
     await expectNotClipped(c);
+  });
+});
+
+test.describe("UI 배율 — 문서 작성", () => {
+  test("the preview is scaled to its column: no sideways overflow and no page scroll at 150 % and 90 % (0.7.0)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await page.getByTestId("nav-generate").click();
+    await page.getByTestId("generate-template").click();
+    await page.getByRole("option", { name: ko.generate.templates.estimate }).click();
+    await page.getByTestId("generate-content").fill("DocuLens에 백엔드개발 고급 3MM 단가 2,500,000원, 유효기간 30일 견적서");
+    await page.getByTestId("generate-run").click();
+    await expect(page.getByTestId("generate-preview-frame")).toHaveAttribute("data-loaded", "true", { timeout: 15_000 });
+    for (const percent of [150, 90] as const) {
+      await setScale(page, percent);
+      await page.getByTestId("nav-generate").click();
+      await expect(page.getByTestId("generate-preview-frame")).toBeVisible();
+      await expectNoHorizontalOverflow(page.getByTestId("page-generate"));
+      // The page itself never scrolls: each column scrolls on its own.
+      const main = page.locator("main#main");
+      expect(await main.evaluate((el) => el.scrollHeight - el.clientHeight), `main scrolls vertically at ${percent} %`).toBeLessThanOrEqual(1);
+      expect(await main.evaluate((el) => el.scrollWidth - el.clientWidth), `main scrolls sideways at ${percent} %`).toBeLessThanOrEqual(1);
+      // The A4 sheet is wider than the 1280 px window's centre column, so it is shrunk to fit and lies inside the box.
+      expect(await page.getByTestId("generate-preview-box").getAttribute("data-scale")).not.toBe("1.00");
+      const box = (await page.getByTestId("generate-preview-box").boundingBox())!;
+      const frame = (await page.getByTestId("generate-preview-frame").boundingBox())!;
+      expect(frame.x + frame.width).toBeLessThanOrEqual(box.x + box.width + 1);
+      expect(frame.y + frame.height).toBeLessThanOrEqual(box.y + box.height + 1);
+    }
   });
 });
 

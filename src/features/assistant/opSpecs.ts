@@ -207,6 +207,19 @@ const SPECS: OpSpec[] = [
     desc_ko: "문서 초안 생성(미리보기 후 문서 생성 화면에서 저장)",
     desc_en: "draft a document (previewed, saved on the generate screen)",
   },
+  // 0.7.0 (plan §1.5): the 초안 어시스턴트 as an op — revise the draft open on the 문서 작성 screen.
+  {
+    op: "revise_draft",
+    params: [
+      p("draft_id", str, false, "초안 id(없으면 문서 작성 화면에 열린 초안)", "draft id (default: the draft open on the generate screen)"),
+      p("scope", en(["section", "insert_after", "whole"]), true, "범위: section(절 다시 쓰기) / insert_after(절 뒤에 새 절) / whole(전체)", "scope: section (rewrite) / insert_after (new section) / whole"),
+      p("section", int, false, "절 번호(1부터; insert_after에서 비우면 끝에 추가)", "section ordinal (1-based; empty = append for insert_after)"),
+      p("heading", str, false, "새 절 제목", "heading of the new section"),
+      p("instruction", str, true, "수정 지시", "revision instruction"),
+    ],
+    desc_ko: "열린 초안의 절 수정·새 절 추가·전체 수정(문서 작성 화면)",
+    desc_en: "revise a section, add a section or rewrite the open draft (generate screen)",
+  },
   {
     op: "register_form",
     params: [p("doc_ref", str, false, "문서 id·이름 또는 current", "document id / name or current"), p("name", str, false, "양식 이름", "form name"), p("doc_type_slug", str, false, "유형 슬러그", "type slug"), p("doc_ids", list, false, "샘플 문서 id 여러 개(필드 병합)", "several sample document ids (merged fields)")],
@@ -362,10 +375,10 @@ export const OP_KINDS: readonly OpKind[] = SPECS.map((s) => s.op);
 export const UI_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["define_schema", "set_model", "set_profile", "set_theme", "set_language", "set_setting", "open", "job", "engine", "help", "clarify", "noop", "reindex", "set_inbox_watch", "register_form", "set_retention", "manage_model", "workspace", "maintenance"]);
 
 /** Ops that need the vision / chat model (`OpKind::needs_model`). */
-export const MODEL_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["classify", "ocr", "extract", "answer", "summarize", "import", "draft_document", "explain", "compare", "define_rule", "request_supplement"]);
+export const MODEL_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["classify", "ocr", "extract", "answer", "summarize", "import", "draft_document", "revise_draft", "explain", "compare", "define_rule", "request_supplement"]);
 
 /** Ops whose step payload is a `Draft` the 문서 생성 screen opens. */
-export const DRAFT_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["draft_document", "request_supplement"]);
+export const DRAFT_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["draft_document", "revise_draft", "request_supplement"]);
 
 /** Journaled file operations that honour `only_reviewed`. */
 export const FILE_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["organize", "rename", "move"]);

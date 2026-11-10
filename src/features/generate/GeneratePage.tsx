@@ -18,7 +18,8 @@ import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
 
-import { documentSourceIds, regenerationRequest, toggleExcluded, withDocumentSources } from "./draft";
+import { documentSourceIds, pickerToReviseScope, reviseRequest, reviseScopeLabel, sectionsOf, toggleExcluded, withDocumentSources } from "./draft";
+import { DraftAssistantPanel, type ReviseLogEntry } from "./DraftAssistantPanel";
 import { DraftEditor } from "./DraftEditor";
 import { DraftPreview } from "./DraftPreview";
 import { DraftsDrawer } from "./DraftsDrawer";
@@ -44,7 +45,15 @@ export function GeneratePage() {
   const setDraft = useGenerateStore((s) => s.setDraft);
   const setJobId = useGenerateStore((s) => s.setJobId);
   const job = useJob(jobId);
-  const [feedback, setFeedback] = useState("");
+  // 초안 어시스턴트 (0.7.0 §1.5): scope picker value, the new section's heading, the instruction and the log of
+  // finished revisions; `pendingRevise` remembers what the running job was asked so its outcome can be logged.
+  const [reviseScope, setReviseScope] = useState("whole");
+  const [reviseHeading, setReviseHeading] = useState("");
+  const [instruction, setInstruction] = useState("");
+  const [reviseLog, setReviseLog] = useState<ReviseLogEntry[]>([]);
+  const pendingRevise = useRef<{ instruction: string; scope: string } | null>(null);
+  const logSeq = useRef(0);
+  const instructionRef = useRef<HTMLTextAreaElement>(null);
   const [excluded, setExcluded] = useState<string[]>([]);
   const [saveOpen, setSaveOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -104,22 +113,46 @@ export function GeneratePage() {
         if (isDraftOutcome(result)) {
           setDraft(result.draft);
           setSaved(null);
-          setFeedback("");
+          setInstruction("");
+          const asked = pendingRevise.current;
+          if (asked) {
+            // The core / mock records the revision as the draft's last note.
+            const note = result.draft.notes[result.draft.notes.length - 1] ?? null;
+            setReviseLog((log) => [...log, { id: ++logSeq.current, instruction: asked.instruction, scope: asked.scope, note }]);
+          }
           invalidateDrafts();
         } else {
           // Job book cleared / result not delivered: the draft store still has it.
           toast(t("generate.form.job_result_missing"), "warn", { label: t("generate.drafts"), onClick: () => setDraftsOpen(true) });
         }
+        pendingRevise.current = null;
       } else if (job.state === "failed") {
+        pendingRevise.current = null;
         toast(t("generate.form.job_failed", { message: describeJobError(job, t) ?? "" }), "danger");
       } else if (job.state === "cancelled") {
+        pendingRevise.current = null;
         toast(t("generate.form.job_cancelled"), "warn");
       } else if (job.state === "interrupted") {
+        pendingRevise.current = null;
         toast(t("generate.form.job_interrupted", { reason: t("jobs.error.interrupted") }), "warn");
       }
       setJobId(null);
     })();
   }, [job, cancelPersist, setDraft, setJobId, toast, t]);
+
+  // Another draft (new, opened, handed over): the revision log and the scope belong to the old one.
+  const draftId = draft?.id ?? null;
+  useEffect(() => {
+    setReviseLog([]);
+    setReviseScope("whole");
+    setReviseHeading("");
+  }, [draftId]);
+  // A scope naming a section that no longer exists (blocks removed, draft rewritten) falls back to the whole draft.
+  const sectionCount = draft ? sectionsOf(draft.body).length : 0;
+  useEffect(() => {
+    const m = reviseScope.match(/^(?:section|insert_after):(\d+)$/);
+    if (m && Number(m[1]) > sectionCount) setReviseScope("whole");
+  }, [reviseScope, sectionCount]);
 
   const start = useCallback(
     async (req: typeof request) => {
@@ -136,10 +169,18 @@ export function GeneratePage() {
     [cancelPersist, setJobId, toast, t],
   );
 
-  const generate = () => void start({ ...request, previous: null, feedback: null, excluded_sources: [], language });
-  const regenerate = () => {
-    if (!draft) return;
-    void start(regenerationRequest({ ...request, language }, draft, feedback, excluded));
+  const generate = () => void start({ ...request, previous: null, feedback: null, excluded_sources: [], revise: null, language });
+  /** 초안 어시스턴트: the current draft, the picked scope and the instruction go through the ordinary draft job. */
+  const revise = () => {
+    if (!draft || !instruction.trim()) return;
+    const scope = pickerToReviseScope(reviseScope, reviseHeading);
+    pendingRevise.current = { instruction: instruction.trim(), scope: reviseScopeLabel(scope, draft.body, language !== "en") };
+    void start(reviseRequest({ ...request, language }, draft, instruction, scope, excluded));
+  };
+  /** The editor's per-section "AI 수정" button: pick that section and go to the instruction box. */
+  const reviseSection = (ordinal: number) => {
+    setReviseScope(`section:${ordinal}`);
+    instructionRef.current?.focus();
   };
   const cancel = () => {
     if (jobId) void useJobsStore.getState().cancel(jobId);
@@ -246,7 +287,10 @@ export function GeneratePage() {
   const reset = () => {
     cancelPersist();
     useGenerateStore.getState().reset(language);
-    setFeedback("");
+    setInstruction("");
+    setReviseLog([]);
+    setReviseScope("whole");
+    setReviseHeading("");
     setExcluded([]);
     setSaved(null);
   };
@@ -291,17 +335,23 @@ export function GeneratePage() {
           </div>
         )}
       </div>
-      {/* Three columns from lg; below, the editor takes a second row across the full width instead of being squeezed under the form. */}
-      <div className="grid min-h-0 flex-1 grid-cols-[18rem_minmax(0,1fr)] grid-rows-[minmax(0,3fr)_minmax(0,2fr)] lg:grid-cols-[18rem_minmax(0,1fr)_24rem] lg:grid-rows-1 xl:grid-cols-[20rem_minmax(0,1fr)_26rem]">
-        <aside className="min-h-0 overflow-y-auto border-r border-border p-4">
-          <RequestForm request={request} onChange={(patch) => setRequest(patch)} onGenerate={generate} job={job} running={running} hasDraft={!!draft} feedback={feedback} onFeedback={setFeedback} onRegenerate={regenerate} excludedCount={excluded.length} onCancel={cancel} />
-        </aside>
-        <section className="min-h-0 min-w-0" aria-label={t("generate.preview.title")}>
-          <DraftPreview draft={draft} />
-        </section>
-        <aside className="col-span-2 min-h-0 overflow-y-auto border-t border-border p-4 lg:col-span-1 lg:border-l lg:border-t-0" aria-label={t("generate.editor.title")}>
-          {draft ? <DraftEditor draft={draft} onChange={changeDraft} excluded={excluded} onToggleExcluded={(id) => setExcluded((x) => toggleExcluded(x, id))} disabled={running} /> : <p className="text-sm text-fg-subtle">{t("generate.editor.empty")}</p>}
-        </aside>
+      {/* Layout by the width available to the screen in rem (a container query, so the UI 배율 counts like a narrower
+          window): three columns from 64 rem; below that the editor takes a second row across the full width instead of
+          being squeezed under the form. Every cell scrolls on its own (0.7.0 §1.3): the columns clip sideways and the
+          preview clips both ways, so the page / `main` never grows a scrollbar. */}
+      <div className="@container flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[16rem_minmax(0,1fr)] grid-rows-[minmax(0,3fr)_minmax(0,2fr)] overflow-hidden @5xl:grid-cols-[18rem_minmax(0,1fr)_24rem] @5xl:grid-rows-1 @7xl:grid-cols-[20rem_minmax(0,1fr)_26rem]" data-testid="generate-layout">
+          <aside className="flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto overflow-x-hidden border-r border-border p-4">
+            <RequestForm request={request} onChange={(patch) => setRequest(patch)} onGenerate={generate} job={job} running={running} onCancel={cancel} />
+            {draft && <DraftAssistantPanel ref={instructionRef} draft={draft} scope={reviseScope} onScope={setReviseScope} heading={reviseHeading} onHeading={setReviseHeading} instruction={instruction} onInstruction={setInstruction} onRun={revise} running={running} excludedCount={excluded.length} log={reviseLog} />}
+          </aside>
+          <section className="min-h-0 min-w-0 overflow-hidden" aria-label={t("generate.preview.title")}>
+            <DraftPreview draft={draft} />
+          </section>
+          <aside className="col-span-2 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden border-t border-border p-4 @5xl:col-span-1 @5xl:border-l @5xl:border-t-0" aria-label={t("generate.editor.title")}>
+            {draft ? <DraftEditor draft={draft} onChange={changeDraft} excluded={excluded} onToggleExcluded={(id) => setExcluded((x) => toggleExcluded(x, id))} disabled={running} onRevise={reviseSection} /> : <p className="text-sm text-fg-subtle">{t("generate.editor.empty")}</p>}
+          </aside>
+        </div>
       </div>
       {draft && <SaveDialog open={saveOpen} onOpenChange={(o) => { setSaveOpen(o); if (!o) setSaveError(null); }} draft={draft} defaultOutput={request.output} busy={saving} error={saveError} onSave={(req) => void save(req)} />}
       <DraftsDrawer open={draftsOpen} onOpenChange={setDraftsOpen} onOpen={(d) => void openSaved(d)} onDelete={deleteSaved} currentId={draft?.id ?? null} />
