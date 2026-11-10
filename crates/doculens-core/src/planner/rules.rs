@@ -1763,6 +1763,233 @@ fn draft_template(t: &Text<'_>, ctx: &PlanContext) -> Option<(String, String)> {
     }
 }
 
+/// The 1-based ordinal in "3절" / "section 3" (digits directly before 절 or after "section").
+fn section_ordinal(raw: &str) -> Option<u32> {
+    let chars: Vec<char> = raw.chars().collect();
+    for (i, c) in chars.iter().enumerate() {
+        if *c == '절' {
+            let mut j = i;
+            while j > 0 && chars[j - 1] == ' ' {
+                j -= 1;
+            }
+            let mut k = j;
+            while k > 0 && chars[k - 1].is_ascii_digit() {
+                k -= 1;
+            }
+            if k < j {
+                if let Ok(n) = chars[k..j].iter().collect::<String>().parse::<u32>() {
+                    return Some(n);
+                }
+            }
+        }
+    }
+    let lower = raw.to_lowercase();
+    let mut rest = lower.as_str();
+    while let Some(pos) = rest.find("section") {
+        let after = rest[pos + "section".len()..].trim_start();
+        let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
+        if let Ok(n) = digits.parse::<u32>() {
+            return Some(n);
+        }
+        rest = &rest[pos + "section".len()..];
+    }
+    None
+}
+
+/// Whether "절" occurs as the word for a section (not inside 절차 / 절반 / 조절 …).
+fn has_section_word(raw: &str) -> bool {
+    let chars: Vec<char> = raw.chars().collect();
+    chars.iter().enumerate().any(|(i, c)| {
+        *c == '절'
+            && chars.get(i + 1).is_none_or(|n| !('가'..='힣').contains(n) || "을를이가은는도만의".contains(*n))
+            && (i == 0 || chars[i - 1] == ' ' || chars[i - 1].is_ascii_digit())
+    }) || raw.to_lowercase().contains("section")
+}
+
+/// Title of the section to add: a quoted name, else the words before "절" ("결론 절 추가" → 결론,
+/// "2절 뒤에 위험 관리 절 추가" → 위험 관리) or after "section" ("add a Risks section" → Risks).
+fn new_section_heading(t: &Text<'_>) -> Option<String> {
+    if let Some(q) = quoted_all(t.raw).into_iter().next() {
+        return Some(q);
+    }
+    let words: Vec<&str> = t.raw.split_whitespace().collect();
+    if let Some(pos) =
+        words.iter().rposition(|w| w.starts_with('절') && !w.chars().next().is_some_and(|c| c.is_ascii_digit()))
+    {
+        let mut picked: Vec<&str> = Vec::new();
+        for w in words[..pos].iter().rev() {
+            let stop = w.chars().any(|c| c.is_ascii_digit())
+                || w.ends_with("뒤에")
+                || w.ends_with("다음에")
+                || w.ends_with("앞에")
+                || w.ends_with("에")
+                || w.ends_with("초안")
+                || ["새", "새로운", "하나", "한", "또"].contains(w);
+            if stop {
+                break;
+            }
+            picked.push(w);
+            if picked.len() == 3 {
+                break;
+            }
+        }
+        picked.reverse();
+        let heading = picked.join(" ");
+        if !heading.is_empty() {
+            return Some(heading);
+        }
+    }
+    // English: "add a conclusion section", "add a section called Risks", "insert a Risks section after section 2".
+    let lower = t.lower.clone();
+    let words: Vec<&str> = lower.split_whitespace().collect();
+    if let Some(pos) = words.iter().position(|w| w.trim_matches(|c: char| !c.is_alphanumeric()) == "section") {
+        let skip = ["a", "an", "the", "new", "add", "insert", "another"];
+        if let Some(w) = words[..pos].iter().rev().find(|w| !skip.contains(w)).filter(|w| !["section"].contains(w)) {
+            if !w.chars().any(|c| c.is_ascii_digit()) && !["after", "before", "draft"].contains(w) {
+                return Some(w.to_string());
+            }
+        }
+        let tail = &words[pos + 1..];
+        if let Some(i) = tail.iter().position(|w| ["called", "titled", "named"].contains(w)) {
+            let name: Vec<&str> =
+                tail[i + 1..].iter().take_while(|w| !["after", "before", "at"].contains(w)).copied().collect();
+            if !name.is_empty() {
+                return Some(name.join(" "));
+            }
+        }
+    }
+    None
+}
+
+/// 0.7.0 plan §1.5: "3절 다시 써줘", "결론 절 추가해줘", "초안 전체 격식체로" → `revise_draft` on
+/// the draft open in the 문서 작성 screen (the validator fills `draft_id` from the context).
+fn revise_draft_rule(t: &Text<'_>, _ctx: &PlanContext) -> Option<Plan> {
+    if t.is_question() {
+        return None;
+    }
+    let section_word = has_section_word(t.raw);
+    let draft_word = t.has(&["초안", "draft"]);
+    if !(section_word || draft_word) {
+        return None;
+    }
+    // Not a revision: drafting from scratch, splitting pages, registering, exporting …
+    if t.has(&[
+        "쪽부터",
+        "쪽마다",
+        "페이지",
+        "page",
+        "등록",
+        "register",
+        "내보내",
+        "export",
+        "양식 만들",
+        "삭제",
+        "delete",
+        "지워",
+    ]) {
+        return None;
+    }
+    let revise_words = [
+        "다시 써",
+        "다시써",
+        "다시 작성",
+        "다시 생성",
+        "다시 만들",
+        "고쳐",
+        "수정",
+        "보강",
+        "자세히",
+        "짧게",
+        "간단히",
+        "줄여",
+        "늘려",
+        "바꿔",
+        "격식",
+        "구어체",
+        "문어체",
+        "어조",
+        "말투",
+        "다듬",
+        "요약해",
+        "rewrite",
+        "revise",
+        "expand",
+        "shorten",
+        "fix",
+        "reword",
+        "rephrase",
+        "formal",
+        "casual",
+        "tone",
+        "longer",
+        "shorter",
+        "more detail",
+        "polish",
+        "improve",
+        "regenerate",
+    ];
+    let add_words = ["추가", "넣어", "새 절", "새절", "만들어", "add", "insert", "new section"];
+    let ordinal = section_ordinal(t.raw);
+    let instruction = t.raw.trim().to_string();
+    // "결론 절 추가해줘", "2절 뒤에 '위험 관리' 절 추가", "add a conclusion section"
+    if section_word
+        && t.has(&add_words)
+        && !t.has(&["문서 추가", "document to", "프로젝트", "project", "참고 자료", "reference"])
+    {
+        let after = (t.has(&["뒤에", "다음에", "after"]) || (ordinal.is_some() && !t.has(&["앞에", "before"])))
+            .then_some(ordinal)
+            .flatten();
+        let heading = new_section_heading(t);
+        let summary = match (&heading, after) {
+            (Some(h), Some(n)) => t
+                .t(&format!("{n}절 뒤에 '{h}' 절을 추가합니다"), &format!("Add a '{h}' section after section {n}"))
+                .to_string(),
+            (Some(h), None) => {
+                t.t(&format!("'{h}' 절을 끝에 추가합니다"), &format!("Add a '{h}' section at the end")).to_string()
+            }
+            (None, Some(n)) => t
+                .t(&format!("{n}절 뒤에 새 절을 추가합니다"), &format!("Add a new section after section {n}"))
+                .to_string(),
+            (None, None) => t.t("끝에 새 절을 추가합니다", "Add a new section at the end").to_string(),
+        };
+        return Some(mk(
+            Op::ReviseDraft { draft_id: None, scope: "insert_after".into(), section: after, heading, instruction },
+            Scope::default(),
+            0.86,
+            summary,
+        ));
+    }
+    // "3절 다시 써줘", "2절을 더 자세히", "rewrite section 2 more formally"
+    if let Some(n) = ordinal.filter(|_| t.has(&revise_words) || t.has(&["써줘", "써 줘", "write"])) {
+        return Some(mk(
+            Op::ReviseDraft { draft_id: None, scope: "section".into(), section: Some(n), heading: None, instruction },
+            Scope::default(),
+            0.86,
+            t.t(&format!("{n}절을 모델이 고쳐 씁니다"), &format!("Rewrite section {n}")).to_string(),
+        ));
+    }
+    // "초안 전체 격식체로", "전체 다시 써줘", "rewrite the whole draft"
+    if t.has(&["전체", "전부", "처음부터", "whole", "entire", "all of it", "everything"])
+        && (draft_word || t.has(&revise_words))
+        && t.has(&revise_words)
+    {
+        return Some(mk(
+            Op::ReviseDraft { draft_id: None, scope: "whole".into(), section: None, heading: None, instruction },
+            Scope::default(),
+            0.8,
+            t.t("초안 전체를 지시대로 다시 생성합니다", "Regenerate the whole draft per the instruction").to_string(),
+        ));
+    }
+    // "이 절 다시 써줘" without a number: ask which one.
+    if section_word && t.has(&["이 절", "현재 절", "this section", "the section"]) && t.has(&revise_words) {
+        return Some(Plan::clarify(
+            t.t("몇 번째 절을 고칠까요? (예: 3절 다시 써줘)", "Which section? (e.g. rewrite section 3)"),
+            0.5,
+        ));
+    }
+    None
+}
+
 fn draft_document(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     if t.is_question() || !t.has(DRAFT_VERBS) {
         return None;
@@ -3745,6 +3972,7 @@ pub fn plan(text: &str, ctx: &PlanContext) -> Option<Plan> {
         .or_else(|| register_form(&t, ctx))
         .or_else(|| project_ops(&t, ctx))
         .or_else(|| define_schema(&t, ctx))
+        .or_else(|| revise_draft_rule(&t, ctx))
         .or_else(|| draft_document(&t, ctx))
         .or_else(|| export(&t, ctx))
         .or_else(|| aggregate(&t, ctx))

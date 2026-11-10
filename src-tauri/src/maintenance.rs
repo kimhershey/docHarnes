@@ -248,6 +248,10 @@ pub fn run(app: &AppHandle, ctl: &JobControl) -> WorkerResult {
         Some(days) => {
             summary.purged.answers +=
                 db.with(|c| kb_repo::purge_answers_before(c, &cutoff_utc(days))).unwrap_or(0) as u64;
+            // 0.7.0: chat sessions not touched within the period (their messages cascade).
+            summary.purged.answers += db
+                .with(|c| doculens_core::knowledge::chat::purge_sessions_before(c, &cutoff_utc(days)))
+                .unwrap_or(0) as u64;
         }
         None => summary.skipped.push("chats".into()),
     }

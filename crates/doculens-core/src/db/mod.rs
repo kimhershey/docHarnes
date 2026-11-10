@@ -26,10 +26,11 @@ const MIGRATIONS: &[(u32, &str)] = &[
     (9, include_str!("schema/0009_page_text_history.sql")),
     (10, include_str!("schema/0010_reference_groups.sql")),
     (11, include_str!("schema/0011_collections_rebuild.sql")),
+    (12, include_str!("schema/0012_chat_sessions.sql")),
 ];
 
 /// Schema version the current build expects.
-pub const SCHEMA_VERSION: u32 = 11;
+pub const SCHEMA_VERSION: u32 = 12;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -341,7 +342,9 @@ mod tests {
                 rows.collect()
             })
             .unwrap();
-        for t in ["documents", "pages", "tags", "document_tags", "import_batches", "kv"] {
+        for t in
+            ["documents", "pages", "tags", "document_tags", "import_batches", "kv", "chat_sessions", "chat_messages"]
+        {
             assert!(tables.iter().any(|n| n == t), "missing table {t}: {tables:?}");
         }
     }

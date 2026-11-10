@@ -63,6 +63,15 @@ pub fn draft(app: &AppHandle, mut req: DraftRequest, project_id: Option<String>,
     if req.content.trim().is_empty() && req.previous.is_none() {
         return Err(UiError::invalid("content_empty"));
     }
+    // 0.7.0: a revision needs the draft it edits and an instruction.
+    if req.revise.is_some() {
+        if req.previous.is_none() {
+            return Err(UiError::invalid("revise_previous_missing"));
+        }
+        if req.feedback.as_deref().map(str::trim).unwrap_or("").is_empty() {
+            return Err(UiError::invalid("revise_instruction_empty"));
+        }
+    }
     // Caps: the body as the validator allows it, sources and feedback as the prompt takes them.
     req.content = req.content.trim().chars().take(6_000).collect();
     for s in &mut req.sources {

@@ -24,6 +24,7 @@ fn field(key: &str, ko: &str, en: &str, kind: &str) -> FieldSummary {
 
 fn ctx() -> PlanContext {
     PlanContext {
+        draft_id: None,
         today: NaiveDate::from_ymd_opt(2026, 11, 4).unwrap(),
         language: Language::Ko,
         folders: vec!["inbox".into(), "documents/2026/10".into()],
@@ -609,6 +610,57 @@ fn plan_of(ops: Value, scope: Value) -> Plan {
         "summary": "s", "intent": "search", "scope": scope, "operations": ops, "requires_confirmation": false, "confidence": 0.9
     }))
     .unwrap()
+}
+
+/// 0.7.0 plan §1.5: draft-revision phrases → `revise_draft` on the draft open in the 문서 작성
+/// screen; without an open draft the validator asks for one, and drafting / splitting sentences
+/// keep their own ops.
+#[test]
+fn revise_draft_rules_target_the_open_draft() {
+    let mut c = ctx();
+    c.draft_id = Some("dr1".into());
+    let planned = |text: &str| plan(None, text, &c, PlanMode::RulesFirst).unwrap();
+    let op = |text: &str| planned(text).plan.operations[0].clone();
+    let check = |text: &str, ok: bool| assert!(ok, "{text}: {:?}", planned(text).plan);
+    check(
+        "3절 다시 써줘, 숫자는 그대로",
+        matches!(op("3절 다시 써줘, 숫자는 그대로"), Op::ReviseDraft { ref scope, section: Some(3), draft_id: Some(ref d), ref instruction, .. }
+            if scope == "section" && d == "dr1" && instruction.starts_with("3절")),
+    );
+    check(
+        "2절을 더 자세히",
+        matches!(op("2절을 더 자세히"), Op::ReviseDraft { ref scope, section: Some(2), .. } if scope == "section"),
+    );
+    check(
+        "결론 절 추가해줘",
+        matches!(op("결론 절 추가해줘"), Op::ReviseDraft { ref scope, section: None, heading: Some(ref h), .. } if scope == "insert_after" && h == "결론"),
+    );
+    check(
+        "2절 뒤에 '위험 관리' 절 추가",
+        matches!(op("2절 뒤에 '위험 관리' 절 추가"), Op::ReviseDraft { ref scope, section: Some(2), heading: Some(ref h), .. } if scope == "insert_after" && h == "위험 관리"),
+    );
+    check(
+        "초안 전체 격식체로 바꿔줘",
+        matches!(op("초안 전체 격식체로 바꿔줘"), Op::ReviseDraft { ref scope, section: None, .. } if scope == "whole"),
+    );
+    check(
+        "rewrite section 2 more formally",
+        matches!(op("rewrite section 2 more formally"), Op::ReviseDraft { ref scope, section: Some(2), .. } if scope == "section"),
+    );
+    check(
+        "add a conclusion section",
+        matches!(op("add a conclusion section"), Op::ReviseDraft { ref scope, heading: Some(ref h), .. } if scope == "insert_after" && h == "conclusion"),
+    );
+    check("이 절 다시 써줘", matches!(op("이 절 다시 써줘"), Op::Clarify { .. }));
+    // Not revisions.
+    check("견적서 만들어줘", !matches!(op("견적서 만들어줘"), Op::ReviseDraft { .. }));
+    check("이 문서 3쪽부터 나눠줘", !matches!(op("이 문서 3쪽부터 나눠줘"), Op::ReviseDraft { .. }));
+    check("절차서 양식으로 등록해줘", !matches!(op("절차서 양식으로 등록해줘"), Op::ReviseDraft { .. }));
+    check("절반으로 줄여서 요약해줘", !matches!(op("절반으로 줄여서 요약해줘"), Op::ReviseDraft { .. }));
+    // No open draft: the plan is rejected with `draft_required`.
+    let none = ctx();
+    let r = plan(None, "3절 다시 써줘", &none, PlanMode::RulesFirst).unwrap();
+    assert!(r.issues.iter().any(|i| i.code == "draft_required"), "{r:?}");
 }
 
 /// 0.6.0: every GUI function has a phrase rule (plan §4); the sentences of the plan parse to

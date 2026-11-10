@@ -50,6 +50,8 @@ pub const GROUP_BY: &[&str] = &["month", "vendor", "doc_type", "project", "none"
 pub const EXPORT_FORMATS: &[&str] = &["xlsx", "csv", "jsonl", "md", "pdf_searchable"];
 pub const DOC_STATUSES: &[&str] = &["new", "rendered", "extracted", "reviewed", "archived"];
 pub const DRAFT_OUTPUTS: &[&str] = &["hwpx", "docx", "pdf", "md"];
+/// `revise_draft.scope` (0.7.0).
+pub const REVISE_SCOPES: &[&str] = &["section", "insert_after", "whole"];
 pub const TONES: &[&str] = &["formal", "plain", "concise"];
 pub const LENGTHS: &[&str] = &["short", "medium", "long"];
 pub const EXPLAIN_SCOPES: &[&str] = &["kb", "reference", "project", "document"];
@@ -262,6 +264,18 @@ pub const OP_SPECS: &[OpSpec] = &[
         ],
         desc_ko: "양식·템플릿으로 문서 초안 생성(미리보기 후 저장)",
         desc_en: "draft a document from a form / template (preview, then save)",
+    },
+    OpSpec {
+        kind: OpKind::ReviseDraft,
+        params: &[
+            p("draft_id", ParamType::Str, false, "초안 id(생략 = 문서 작성 화면에 열린 초안)", "draft id (omit = the draft open in the document generator)"),
+            p("scope", ParamType::Enum(REVISE_SCOPES), true, "section(절 다시 쓰기) | insert_after(새 절 추가) | whole(전체 다시)", "section (rewrite one) | insert_after (add a section) | whole"),
+            p("section", ParamType::Int, false, "절 번호(1부터; insert_after는 그 뒤에, 생략 = 끝에)", "1-based section number (insert_after: after it; omit = at the end)"),
+            p("heading", ParamType::Str, false, "새 절 제목(선택)", "title of the new section (optional)"),
+            p("instruction", ParamType::Str, true, "수정 지시(자연어)", "revision instruction"),
+        ],
+        desc_ko: "열린 초안의 절을 다시 쓰거나 새 절을 넣거나 전체를 다시 생성(AI 수정)",
+        desc_en: "revise the open draft: rewrite a section, insert one or regenerate the whole",
     },
     OpSpec {
         kind: OpKind::RegisterForm,

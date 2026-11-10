@@ -73,6 +73,8 @@ pub enum OpKind {
     Delete,
     Export,
     DraftDocument,
+    /// 0.7.0: revise the open draft (a section, a new section or the whole).
+    ReviseDraft,
     RegisterForm,
     Explain,
     Compare,
@@ -118,7 +120,7 @@ pub enum OpKind {
 }
 
 impl OpKind {
-    pub const ALL: [OpKind; 62] = [
+    pub const ALL: [OpKind; 63] = [
         OpKind::Import,
         OpKind::SetInboxWatch,
         OpKind::Classify,
@@ -140,6 +142,7 @@ impl OpKind {
         OpKind::Delete,
         OpKind::Export,
         OpKind::DraftDocument,
+        OpKind::ReviseDraft,
         OpKind::RegisterForm,
         OpKind::Explain,
         OpKind::Compare,
@@ -206,6 +209,7 @@ impl OpKind {
             OpKind::Delete => "delete",
             OpKind::Export => "export",
             OpKind::DraftDocument => "draft_document",
+            OpKind::ReviseDraft => "revise_draft",
             OpKind::RegisterForm => "register_form",
             OpKind::Explain => "explain",
             OpKind::Compare => "compare",
@@ -288,6 +292,7 @@ impl OpKind {
             | OpKind::RequestSupplement => OpFamily::Projects,
             OpKind::DefineSchema | OpKind::RegisterForm | OpKind::ManageSchema => OpFamily::Forms,
             OpKind::DraftDocument => OpFamily::Compose,
+            OpKind::ReviseDraft => OpFamily::Compose,
             OpKind::Aggregate | OpKind::Export => OpFamily::Output,
             OpKind::SetSetting
             | OpKind::SetTheme
@@ -352,6 +357,7 @@ impl OpKind {
                 | OpKind::Summarize
                 | OpKind::Import
                 | OpKind::DraftDocument
+                | OpKind::ReviseDraft
                 | OpKind::Explain
                 | OpKind::Compare
                 | OpKind::DefineRule
@@ -986,6 +992,22 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         length: Option<Length>,
     },
+    /// 0.7.0 plan §1.5: revise the draft open in the 문서 작성 screen (or `draft_id`) — one
+    /// section rewritten, a new section inserted or the whole draft regenerated per `instruction`.
+    ReviseDraft {
+        /// Draft id; `None` = the draft open in the document generator (`PlanContext::draft_id`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        draft_id: Option<String>,
+        /// `section` | `insert_after` | `whole`.
+        scope: String,
+        /// 1-based section ordinal (`section`: the one rewritten; `insert_after`: insert after it, none = at the end).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        section: Option<u32>,
+        /// Title of the inserted section (optional).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        heading: Option<String>,
+        instruction: String,
+    },
     /// §3.4.0 form registration — runs in the UI (field grid confirmation).
     RegisterForm {
         /// Document id or `current`.
@@ -1280,6 +1302,7 @@ impl Op {
             Op::Delete { .. } => OpKind::Delete,
             Op::Export { .. } => OpKind::Export,
             Op::DraftDocument { .. } => OpKind::DraftDocument,
+            Op::ReviseDraft { .. } => OpKind::ReviseDraft,
             Op::RegisterForm { .. } => OpKind::RegisterForm,
             Op::Explain { .. } => OpKind::Explain,
             Op::Compare { .. } => OpKind::Compare,
@@ -1331,7 +1354,7 @@ impl Op {
             Op::Organize { .. } | Op::Rename { .. } | Op::Move { .. } => SideEffect::Files,
             Op::Delete { .. } => SideEffect::Trash,
             Op::Export { .. } => SideEffect::FileCreate,
-            Op::DraftDocument { .. } | Op::RequestSupplement { .. } => SideEffect::FileCreate,
+            Op::DraftDocument { .. } | Op::RequestSupplement { .. } | Op::ReviseDraft { .. } => SideEffect::FileCreate,
             Op::RegisterForm { .. }
             | Op::CreateProject { .. }
             | Op::AddToProject { .. }
@@ -1655,6 +1678,8 @@ pub struct PlanContext {
     /// (work documents ∪ reference material ∪ 공통 참고 자료).
     #[serde(default)]
     pub scope_project: Option<String>,
+    /// 0.7.0: the draft open in the 문서 작성 screen (default target of `revise_draft`).
+    pub draft_id: Option<String>,
     /// Earlier turns of the assistant conversation (oldest first), for commands that refer back
     /// ("그것도 엑셀로", "같은 폴더로").
     #[serde(default)]
@@ -1688,6 +1713,7 @@ impl Default for PlanContext {
             projects: Vec::new(),
             current_project: None,
             scope_project: None,
+            draft_id: None,
             history: Vec::new(),
         }
     }

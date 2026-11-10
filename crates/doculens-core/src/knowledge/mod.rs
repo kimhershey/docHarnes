@@ -7,6 +7,7 @@
 //! router (embeddings / chat) and events around these functions.
 
 pub mod answer;
+pub mod chat;
 pub mod chunker;
 pub mod embed;
 pub mod index;

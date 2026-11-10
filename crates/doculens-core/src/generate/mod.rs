@@ -259,6 +259,57 @@ pub struct DraftRequest {
     /// work documents + reference material + the 공통 참고 자료 (0.5.0 plan A); `None` = everything.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
+    /// 0.7.0 (plan §1.5): revise `previous` instead of regenerating it — one section rewritten
+    /// or a new section inserted per `feedback` (the instruction); `Whole` is the full
+    /// regeneration with the instruction passed to every section call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revise: Option<ReviseScope>,
+}
+
+/// What a revision touches (`DraftRequest.revise`). Sections are the runs of `Draft::body`
+/// split at headings of level ≤ 2 (`sections_of`); ordinals are 1-based.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "scope", rename_all = "snake_case")]
+pub enum ReviseScope {
+    /// Rewrite section `section` (fields, tables and the other sections stay).
+    Section { section: usize },
+    /// Insert a new section after `section` (`None` = at the end), titled `heading` when given.
+    InsertAfter {
+        #[serde(default)]
+        section: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        heading: Option<String>,
+    },
+    /// Regenerate the whole draft with the instruction (`previous` + `feedback`).
+    Whole,
+}
+
+/// A section of a draft body: blocks `start..end` (the heading block included when `titled`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Section {
+    pub start: usize,
+    pub end: usize,
+    /// The heading text (`None` for a leading run without a level ≤ 2 heading).
+    pub heading: Option<String>,
+}
+
+/// Splits a body into sections at headings of level ≤ 2. A leading run without such a heading
+/// is section 1 (untitled); a body without headings is one section; an empty body has none.
+pub fn sections_of(body: &[DraftBlock]) -> Vec<Section> {
+    let mut out: Vec<Section> = Vec::new();
+    for (i, b) in body.iter().enumerate() {
+        match b {
+            DraftBlock::Heading { level, text } if *level <= 2 => {
+                if let Some(last) = out.last_mut() {
+                    last.end = i;
+                }
+                out.push(Section { start: i, end: body.len(), heading: Some(text.clone()) });
+            }
+            _ if out.is_empty() => out.push(Section { start: i, end: body.len(), heading: None }),
+            _ => {}
+        }
+    }
+    out
 }
 
 impl Default for DraftRequest {
@@ -278,6 +329,7 @@ impl Default for DraftRequest {
             excluded_sources: Vec::new(),
             max_tokens: None,
             project_id: None,
+            revise: None,
         }
     }
 }

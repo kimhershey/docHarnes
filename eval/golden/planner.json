@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "context": "planner-context.json",
-  "description": "플래너 골든셋(0.3.0: SW 개발 문서 기준) — 명령 → 기대 플랜 100건(한국어 70·영어 20·혼합 10). 기대값은 규칙 출력이 아니라 사람이 기대하는 플랜입니다. 비교 규칙은 eval/README.md 참조. 0.6.0: 에이전트 op(회전·분할·제목·글자·역할·참고 자료·용어·판·프로젝트 수정/삭제·자동 분류·양식·설정 카탈로그·모델·엔진·유지보수) 25건 추가.",
+  "description": "플래너 골든셋(0.3.0: SW 개발 문서 기준) — 명령 → 기대 플랜 100건(한국어 70·영어 20·혼합 10). 기대값은 규칙 출력이 아니라 사람이 기대하는 플랜입니다. 비교 규칙은 eval/README.md 참조. 0.6.0: 에이전트 op(회전·분할·제목·글자·역할·참고 자료·용어·판·프로젝트 수정/삭제·자동 분류·양식·설정 카탈로그·모델·엔진·유지보수) 25건 추가. 0.7.0: 초안 어시스턴트 op revise_draft(절 다시 쓰기·새 절·전체; context.draft_id = 열린 초안) 4건.",
   "items": [
     {
       "id": "ko-01",
@@ -2322,6 +2322,89 @@
         ]
       },
       "note": "0.6.0 catalog setting"
+    },
+    {
+      "id": "ko-91",
+      "category": "ko",
+      "text": "3절 다시 써줘, 숫자는 그대로",
+      "expected": {
+        "intent": "revise_draft",
+        "ops": [
+          "revise_draft"
+        ],
+        "params": [
+          {
+            "scope": "section",
+            "section": 3
+          }
+        ]
+      },
+      "context": {
+        "draft_id": "dr1"
+      },
+      "note": "0.7.0 초안 어시스턴트: 절 다시 쓰기"
+    },
+    {
+      "id": "ko-92",
+      "category": "ko",
+      "text": "결론 절 추가해줘",
+      "expected": {
+        "intent": "revise_draft",
+        "ops": [
+          "revise_draft"
+        ],
+        "params": [
+          {
+            "scope": "insert_after",
+            "heading": "결론"
+          }
+        ]
+      },
+      "context": {
+        "draft_id": "dr1"
+      },
+      "note": "0.7.0 초안 어시스턴트: 새 절"
+    },
+    {
+      "id": "ko-93",
+      "category": "ko",
+      "text": "초안 전체 격식체로 바꿔줘",
+      "expected": {
+        "intent": "revise_draft",
+        "ops": [
+          "revise_draft"
+        ],
+        "params": [
+          {
+            "scope": "whole"
+          }
+        ]
+      },
+      "context": {
+        "draft_id": "dr1"
+      },
+      "note": "0.7.0 초안 어시스턴트: 전체"
+    },
+    {
+      "id": "en-26",
+      "category": "en",
+      "text": "rewrite section 2 more formally",
+      "expected": {
+        "intent": "revise_draft",
+        "ops": [
+          "revise_draft"
+        ],
+        "params": [
+          {
+            "scope": "section",
+            "section": 2
+          }
+        ]
+      },
+      "context": {
+        "draft_id": "dr1"
+      },
+      "note": "0.7.0 draft assistant"
     }
   ]
 }

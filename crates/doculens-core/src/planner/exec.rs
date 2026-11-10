@@ -17,7 +17,7 @@ use crate::documents::import::{self, ImportDeps, ImportOptions};
 use crate::documents::{repo as docs, DocumentRecord, DocumentRole};
 use crate::error::{CoreError, Result};
 use crate::export::{self, ExportRequest};
-use crate::generate::{self, DraftRequest, GenerateDeps, SourceRef};
+use crate::generate::{self, DraftRequest, GenerateDeps, ReviseScope, SourceRef};
 use crate::knowledge::answer::{self, AnswerDeps, ChatBackend};
 use crate::knowledge::embed::Embedder;
 use crate::knowledge::repo as knowledge_repo;
@@ -1006,6 +1006,74 @@ fn run_step(
                 format!("'{}' 초안 생성 — 문서 생성 화면에서 확인·저장", outcome.draft.title)
             } else {
                 format!("Drafted '{}' — review and save in the document generator", outcome.draft.title)
+            };
+            Ok(StepOutcome { summary, payload: serde_json::to_value(&outcome).unwrap_or(Value::Null), imported: None })
+        }
+        // 0.7.0 plan §1.5: revise a stored draft (the one open in the generator unless `draft_id` says otherwise).
+        Op::ReviseDraft { draft_id, scope, section, heading, instruction } => {
+            let chat = deps.chat.ok_or_else(|| no_model(deps))?;
+            let model = deps.model.clone().ok_or_else(|| no_model(deps))?;
+            let id = draft_id.clone().ok_or_else(|| CoreError::Invalid("revise_draft needs a draft id".into()))?;
+            let previous = generate::store::load(deps.paths(), &id)?;
+            let revise = match scope.as_str() {
+                "section" => ReviseScope::Section { section: section.unwrap_or(1).max(1) as usize },
+                "insert_after" => ReviseScope::InsertAfter {
+                    section: section.map(|n| n as usize).filter(|n| *n >= 1),
+                    heading: heading.clone(),
+                },
+                _ => ReviseScope::Whole,
+            };
+            let _lease = LeaseGuard::acquire(deps.lease);
+            let vlm = Vlm::new(chat, model, deps.profile, deps.cancel).with_context(deps.ctx_size);
+            let base = previous.request.as_deref().cloned().unwrap_or_default();
+            let req = DraftRequest {
+                language: previous.language,
+                previous: Some(Box::new(previous)),
+                feedback: Some(instruction.clone()),
+                revise: Some(revise),
+                ..base
+            };
+            let gdeps = GenerateDeps {
+                db,
+                paths: deps.paths(),
+                vlm: Some(&vlm),
+                knowledge: Some(SearchDeps { db, analyzer: deps.analyzer, embedder: deps.embedder }),
+                printer: Some(deps.import.printer),
+                import: Some(&deps.import),
+                cancel: deps.cancel,
+                language: deps.language,
+                progress: None,
+            };
+            progress("revise_draft", 0, 1, instruction);
+            let outcome = generate::draft(&gdeps, &req)?;
+            let _ = generate::store::save(deps.paths(), &outcome.draft);
+            let what = match scope.as_str() {
+                "section" => {
+                    if deps.ko() {
+                        format!("{}절", section.unwrap_or(1))
+                    } else {
+                        format!("section {}", section.unwrap_or(1))
+                    }
+                }
+                "insert_after" => {
+                    if deps.ko() {
+                        "새 절".to_string()
+                    } else {
+                        "a new section".to_string()
+                    }
+                }
+                _ => {
+                    if deps.ko() {
+                        "전체".to_string()
+                    } else {
+                        "the whole draft".to_string()
+                    }
+                }
+            };
+            let summary = if deps.ko() {
+                format!("'{}' 초안 {what} AI 수정 — 문서 생성 화면에서 확인·저장", outcome.draft.title)
+            } else {
+                format!("Revised {what} of '{}' — review and save in the document generator", outcome.draft.title)
             };
             Ok(StepOutcome { summary, payload: serde_json::to_value(&outcome).unwrap_or(Value::Null), imported: None })
         }
@@ -2445,6 +2513,43 @@ pub fn preview(
                 },
                 json!({ "form_ref": form_ref, "sources": sources, "output": output }),
                 true,
+            ),
+            Op::ReviseDraft { scope, section, instruction, .. } => (
+                {
+                    let what = match scope.as_str() {
+                        "section" => {
+                            if ko {
+                                format!("{}절을", section.unwrap_or(1))
+                            } else {
+                                format!("section {}", section.unwrap_or(1))
+                            }
+                        }
+                        "insert_after" => {
+                            if ko {
+                                "새 절을".into()
+                            } else {
+                                "a new section".into()
+                            }
+                        }
+                        _ => {
+                            if ko {
+                                "전체를".into()
+                            } else {
+                                "the whole draft".into()
+                            }
+                        }
+                    };
+                    if ko {
+                        format!(
+                            "열린 초안의 {what} 모델이 고쳐 씁니다: {} → 문서 생성 화면에서 확인·저장",
+                            crate::pipeline::prompts::truncate(instruction, 80)
+                        )
+                    } else {
+                        format!("The model revises {what} of the open draft: {} → review and save in the document generator", crate::pipeline::prompts::truncate(instruction, 80))
+                    }
+                },
+                json!({ "scope": scope, "section": section }),
+                false,
             ),
             Op::DefineRule { project, template, description } => {
                 // Deterministic preview: the phrase rules only (no model), so the card can show the grid.

@@ -1637,3 +1637,160 @@ fn a_large_budget_drafts_section_by_section_and_keeps_sections_on_cancel() {
     assert_eq!(out3.sections, 1);
     assert_eq!(chat3.requests.lock().unwrap()[0].max_tokens, Some(2_000));
 }
+
+/// 0.7.0 plan §1.5: `DraftRequest.revise` rewrites one section or inserts one with a single
+/// `draft_revise` call that carries the current text, the surrounding text and the instruction;
+/// a whole regeneration of a split draft passes the instruction (and the section's earlier text)
+/// to every section call.
+#[test]
+fn revise_edits_one_section_in_place_and_split_regeneration_carries_the_instruction() {
+    use super::{Draft, DraftRequest, ReviseScope, TemplateKind, TemplateRef};
+    let w = world();
+    let h = |t: &str| DraftBlock::Heading { level: 2, text: t.into() };
+    let p = |t: &str| DraftBlock::Paragraph { text: t.into(), source: None };
+    let mut previous = Draft::default();
+    previous.id = "dr-1".into();
+    previous.title = "10월 진척 보고서".into();
+    previous.template = TemplateRef::Builtin { template: TemplateKind::ProgressReport };
+    previous.doc_type = Some("progress_report".into());
+    previous.language = Language::Ko;
+    previous.body = vec![h("보고 개요"), p("10월 진척 현황"), h("금주 실적"), p("실적 A"), h("차주 계획"), p("계획 B")];
+    let blocks = |items: Vec<Value>| json!({ "blocks": items }).to_string();
+    let para = |t: &str| json!({"kind": "paragraph", "text": t, "items": [], "source_index": null});
+
+    // 1. Rewrite section 2: heading kept, body replaced, the other sections untouched.
+    let chat = SeqChat::new(vec![blocks(vec![para("실적 A를 더 자세히: 1,200 MM")])]);
+    let vlm = Vlm::new(&chat, "scripted".into(), Profile::Balanced, None);
+    let deps = w.deps(Some(&vlm), None);
+    let req = DraftRequest {
+        form_ref: Some("progress_report".into()),
+        previous: Some(Box::new(previous.clone())),
+        feedback: Some("2절을 더 자세히".into()),
+        revise: Some(ReviseScope::Section { section: 2 }),
+        use_knowledge: false,
+        ..Default::default()
+    };
+    let out = draft::draft(&deps, &req).unwrap();
+    assert_eq!(out.sections, 1);
+    let d = &out.draft;
+    assert_eq!(d.id, "dr-1");
+    let headings = |d: &Draft| -> Vec<String> {
+        d.body
+            .iter()
+            .filter_map(|b| match b {
+                DraftBlock::Heading { level: 2, text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(headings(d), ["보고 개요", "금주 실적", "차주 계획"]);
+    assert!(matches!(&d.body[1], DraftBlock::Paragraph { text, .. } if text == "10월 진척 현황"));
+    assert!(matches!(&d.body[3], DraftBlock::Paragraph { text, .. } if text == "실적 A를 더 자세히: 1,200 MM"));
+    assert!(matches!(&d.body[5], DraftBlock::Paragraph { text, .. } if text == "계획 B"));
+    assert!(d.notes.iter().any(|n| n.starts_with("AI 수정(2절 '금주 실적')")), "{:?}", d.notes);
+    assert!(d.request.as_ref().is_some_and(|r| r.previous.is_none() && r.revise.is_none() && r.feedback.is_none()));
+    let prompt = chat.prompt(0);
+    for needle in [
+        "2/3번째 절",
+        "[현재 절 본문]",
+        "실적 A",
+        "[앞 내용 요약]",
+        "10월 진척 현황",
+        "[뒤 내용 요약]",
+        "계획 B",
+        "[수정 요청]",
+        "2절을 더 자세히",
+    ] {
+        assert!(prompt.contains(needle), "missing {needle}: {prompt}");
+    }
+    assert_eq!(
+        chat.requests.lock().unwrap()[0].response_format.as_ref().unwrap()["json_schema"]["name"],
+        "draft_revise"
+    );
+
+    // 2. Insert a titled section after section 1.
+    let chat2 = SeqChat::new(vec![blocks(vec![para("리스크 없음")])]);
+    let vlm2 = Vlm::new(&chat2, "scripted".into(), Profile::Balanced, None);
+    let deps2 = w.deps(Some(&vlm2), None);
+    let out2 = draft::draft(
+        &deps2,
+        &DraftRequest {
+            previous: Some(Box::new(previous.clone())),
+            feedback: Some("리스크 절 추가".into()),
+            revise: Some(ReviseScope::InsertAfter { section: Some(1), heading: Some("리스크".into()) }),
+            ..req.clone()
+        },
+    )
+    .unwrap();
+    assert_eq!(headings(&out2.draft), ["보고 개요", "리스크", "금주 실적", "차주 계획"]);
+    assert!(matches!(&out2.draft.body[3], DraftBlock::Paragraph { text, .. } if text == "리스크 없음"));
+    assert!(chat2.prompt(0).contains("절 제목은 \"리스크\""), "{}", chat2.prompt(0));
+
+    // 3. Insert at the end without a title: the reply's first heading becomes the section title.
+    let chat3 = SeqChat::new(vec![blocks(vec![
+        json!({"kind": "heading", "text": "결론", "items": [], "source_index": null}),
+        para("마무리"),
+    ])]);
+    let vlm3 = Vlm::new(&chat3, "scripted".into(), Profile::Balanced, None);
+    let deps3 = w.deps(Some(&vlm3), None);
+    let out3 = draft::draft(
+        &deps3,
+        &DraftRequest {
+            previous: Some(Box::new(previous.clone())),
+            feedback: Some("결론 절 추가".into()),
+            revise: Some(ReviseScope::InsertAfter { section: None, heading: None }),
+            ..req.clone()
+        },
+    )
+    .unwrap();
+    assert_eq!(headings(&out3.draft), ["보고 개요", "금주 실적", "차주 계획", "결론"]);
+    assert!(matches!(out3.draft.body.last(), Some(DraftBlock::Paragraph { text, .. }) if text == "마무리"));
+
+    // 4. Errors: a missing section, a missing instruction.
+    let chat4 = SeqChat::new(vec![]);
+    let vlm4 = Vlm::new(&chat4, "scripted".into(), Profile::Balanced, None);
+    let deps4 = w.deps(Some(&vlm4), None);
+    let bad = draft::draft(&deps4, &DraftRequest { revise: Some(ReviseScope::Section { section: 9 }), ..req.clone() });
+    assert!(matches!(bad, Err(CoreError::Invalid(_))), "{bad:?}");
+    let bad = draft::draft(&deps4, &DraftRequest { feedback: None, ..req.clone() });
+    assert!(matches!(bad, Err(CoreError::Invalid(_))), "{bad:?}");
+
+    // 5. Whole regeneration through the split flow: every section call sees the instruction and,
+    //    when the heading matches, the section's earlier text.
+    let head = json!({
+        "title": "10월 진척 보고서",
+        "fields": [{"key": "project_name", "value": "한빛 포털 구축", "source_index": null}],
+        "tables": [],
+        "body": [{"kind": "heading", "text": "보고 개요", "items": [], "source_index": null}, para("개요입니다.")],
+        "notes": []
+    })
+    .to_string();
+    let section = |t: &str| blocks(vec![para(t)]);
+    let chat5 = SeqChat::new(vec![
+        head,
+        section("실적입니다."),
+        section("계획입니다."),
+        section("이슈입니다."),
+        section("지원입니다."),
+    ]);
+    let vlm5 = Vlm::new(&chat5, "scripted".into(), Profile::Balanced, None);
+    let deps5 = w.deps(Some(&vlm5), None);
+    let out5 = draft::draft(
+        &deps5,
+        &DraftRequest {
+            content: "한빛 포털 구축 10월 진척 보고서".into(),
+            max_tokens: Some(8_000),
+            previous: Some(Box::new(out.draft.clone())),
+            feedback: Some("더 간결하게".into()),
+            revise: Some(ReviseScope::Whole),
+            ..req.clone()
+        },
+    )
+    .unwrap();
+    assert_eq!(out5.sections, 5);
+    let p2 = chat5.prompt(1);
+    assert!(p2.contains("[수정 요청]") && p2.contains("더 간결하게"), "{p2}");
+    assert!(p2.contains("[이 절의 이전 본문]") && p2.contains("1,200 MM"), "{p2}");
+    let p3 = chat5.prompt(3);
+    assert!(p3.contains("[수정 요청]") && !p3.contains("[이 절의 이전 본문]"), "{p3}");
+}

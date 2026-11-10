@@ -8,8 +8,8 @@ use doculens_core::documents::{repo as docs, DocumentRole};
 use doculens_core::knowledge::index::index_status;
 use doculens_core::knowledge::search::search;
 use doculens_core::knowledge::{
-    embed, repo, Answer, AnswerKind, AnswerRequest, Chunk, Collection, CollectionInput, GlossaryEntry, GlossaryInput,
-    IndexStatus, SavedAnswer, SearchRequest, SearchResponse, VersionGroup, VersionInfo, VersionInput,
+    chat, embed, repo, Answer, AnswerKind, AnswerRequest, Chunk, Collection, CollectionInput, GlossaryEntry,
+    GlossaryInput, IndexStatus, SavedAnswer, SearchRequest, SearchResponse, VersionGroup, VersionInfo, VersionInput,
 };
 
 use crate::commands::documents::{view, DocumentView};
@@ -251,6 +251,55 @@ pub fn knowledge_answer_delete(app: AppHandle, id: i64) -> UiResult<bool> {
     let ok = ctx.db.with(|c| repo::delete_answer(c, id))?;
     ctx.emit(&app, "answers", vec![id.to_string()]);
     Ok(ok)
+}
+
+// -- chat sessions (0.7.0 item 6) -------------------------------------------
+
+#[tauri::command(async)]
+pub fn chat_sessions_list(app: AppHandle) -> UiResult<Vec<chat::ChatSessionSummary>> {
+    let ctx = knowledge_bridge::context(&app)?;
+    Ok(ctx.db.with_read(chat::list_sessions)?)
+}
+
+#[tauri::command(async)]
+pub fn chat_session_create(app: AppHandle, title: Option<String>) -> UiResult<chat::ChatSessionSummary> {
+    let ctx = knowledge_bridge::context(&app)?;
+    Ok(ctx.db.with(|c| chat::create_session(c, title.as_deref()))?)
+}
+
+#[tauri::command(async)]
+pub fn chat_session_rename(app: AppHandle, id: String, title: String) -> UiResult<bool> {
+    let ctx = knowledge_bridge::context(&app)?;
+    Ok(ctx.db.with(|c| chat::rename_session(c, &id, &title))?)
+}
+
+#[tauri::command(async)]
+pub fn chat_session_delete(app: AppHandle, id: String) -> UiResult<bool> {
+    let ctx = knowledge_bridge::context(&app)?;
+    Ok(ctx.db.with(|c| chat::delete_session(c, &id))?)
+}
+
+#[tauri::command(async)]
+pub fn chat_messages_list(app: AppHandle, session_id: String) -> UiResult<Vec<chat::ChatMessageRow>> {
+    let ctx = knowledge_bridge::context(&app)?;
+    Ok(ctx.db.with_read(|c| chat::list_messages(c, &session_id))?)
+}
+
+/// Stores or replaces one message of a session (`payload` = the UI's message JSON, kept as is).
+#[tauri::command(async)]
+pub fn chat_message_put(app: AppHandle, session_id: String, seq: i64, payload: serde_json::Value) -> UiResult<bool> {
+    if payload.to_string().len() > 2_000_000 {
+        return Err(UiError::invalid("chat_message_too_large"));
+    }
+    let ctx = knowledge_bridge::context(&app)?;
+    Ok(ctx.db.with(|c| chat::put_message(c, &session_id, seq, &payload))?)
+}
+
+/// Drops the messages of a session from `from_seq` on.
+#[tauri::command(async)]
+pub fn chat_messages_truncate(app: AppHandle, session_id: String, from_seq: i64) -> UiResult<u64> {
+    let ctx = knowledge_bridge::context(&app)?;
+    Ok(ctx.db.with(|c| chat::truncate_messages(c, &session_id, from_seq))? as u64)
 }
 
 // -- glossary / versions ----------------------------------------------------

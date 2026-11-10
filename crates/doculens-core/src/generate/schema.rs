@@ -23,6 +23,8 @@ pub const SCHEMA_NAME: &str = "draft_document";
 pub const OUTLINE_SCHEMA_NAME: &str = "draft_outline";
 /// One section's body blocks of a split draft.
 pub const SECTION_SCHEMA_NAME: &str = "draft_section";
+/// A revised or inserted section (0.7.0 `DraftRequest.revise`): the same `{ blocks }` shape as a section.
+pub const REVISE_SCHEMA_NAME: &str = "draft_revise";
 pub const MAX_OUTLINE_SECTIONS: usize = 12;
 pub const MAX_BODY_BLOCKS: usize = 24;
 pub const MAX_LIST_ITEMS: usize = 12;
