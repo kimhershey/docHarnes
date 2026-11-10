@@ -230,6 +230,17 @@
   "assistant": {
     "title": "AI Assistant",
     "new_chat": "New chat",
+    "sessions": {
+      "title": "Chats",
+      "new": "New chat",
+      "rename": "Rename",
+      "delete": "Delete",
+      "delete_confirm": "Delete the chat '{{title}}' and its conversation? This cannot be undone.",
+      "untitled": "New chat",
+      "empty": "No chats yet.",
+      "messages": "{{count}} message(s)",
+      "menu": "Menu of {{title}}"
+    },
     "scope": {
       "label": "Scope",
       "all": "All",
@@ -281,7 +292,7 @@
     },
     "memory": {
       "turns": "Memory: {{count}} turns",
-      "hint": "The last turns of this conversation (up to 8) and what the screen shows (open document, selection, folder, project) travel with every question and command. 'New chat' clears them."
+      "hint": "The last turns of this conversation (up to 8) and what the screen shows (open document, selection, folder, project) travel with every question and command. Chats are stored in the workspace; 'New chat' starts a fresh one."
     },
     "cancelled_pending": "Cancelled the pending question / plan.",
     "source_control": "control",
@@ -1186,6 +1197,7 @@
   },
   "errors": {
     "io": "File error: {{message}}",
+    "chat_interrupted": "The answer was interrupted when the app closed. Please ask again.",
     "json": "Settings file format error: {{message}}",
     "workspace_locked": "Another instance is using the workspace (pid {{pid}} on {{host}}).",
     "invalid_workspace": "This path cannot be used as a workspace: {{message}}",

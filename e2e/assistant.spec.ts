@@ -1,0 +1,94 @@
+import { expect, test, type Page } from "@playwright/test";
+
+import { createWorkspace, freshApp, openAssistantScreen } from "./helpers";
+
+import ko from "../src/i18n/ko.json" with { type: "json" };
+
+// 0.7.0 §1.6: assistant chat sessions — a conversation per session, stored per workspace (the mock keeps
+// them in localStorage): 새 채팅 starts an empty one, the rail switches back with the messages restored,
+// a reload keeps the list and the active session, rename and delete work from the row menu.
+
+const rows = (page: Page) => page.locator('[data-testid="assistant-sessions"] [data-session-id]');
+const activeRow = (page: Page) => page.locator('[data-testid="assistant-sessions"] [data-session-id][data-active="true"]');
+
+async function send(page: Page, text: string) {
+  await page.getByTestId("assistant-input").fill(text);
+  await page.getByTestId("assistant-send").click();
+}
+
+test.describe("assistant chat sessions", () => {
+  test("new chat, switch back, reload, rename and delete", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openAssistantScreen(page);
+
+    // A fresh workspace has one (empty) session; a slash command fills it with two remembered turns.
+    await expect(rows(page)).toHaveCount(1);
+    await expect(page.getByTestId("assistant-memory")).toHaveAttribute("data-turns", "0");
+    await send(page, "/테마 다크");
+    await expect(page.locator('[data-testid="assistant-card-executed"]').last()).toBeVisible();
+    await expect(page.getByTestId("assistant-memory")).toHaveAttribute("data-turns", "2");
+    // The session takes its title from the first user message.
+    await expect(activeRow(page)).toContainText("/테마 다크");
+
+    // 새 채팅: an empty second session becomes active; the first keeps its conversation.
+    await page.getByTestId("assistant-new-chat").click();
+    await expect(rows(page)).toHaveCount(2);
+    await expect(page.getByTestId("assistant-memory")).toHaveAttribute("data-turns", "0");
+    await expect(page.locator('[data-testid="assistant-card-executed"]')).toHaveCount(0);
+    await expect(activeRow(page)).toContainText(ko.assistant.sessions.untitled);
+    // Another 새 채팅 while the active one is empty does not pile up sessions.
+    await page.getByTestId("assistant-new-chat-header").click();
+    await expect(rows(page)).toHaveCount(2);
+
+    // Back to the first session: its messages and memory are restored.
+    await rows(page).filter({ hasText: "/테마 다크" }).locator("button").first().click();
+    await expect(page.locator('[data-testid="assistant-card-executed"]').last()).toBeVisible();
+    await expect(page.getByTestId("assistant-memory")).toHaveAttribute("data-turns", "2");
+    const firstId = await activeRow(page).getAttribute("data-session-id");
+    expect(firstId).toBeTruthy();
+
+    // A reload keeps the sessions (stored per workspace) and the active one.
+    await page.reload();
+    await expect(page.getByTestId("app-shell")).toBeVisible();
+    await openAssistantScreen(page);
+    await expect(rows(page)).toHaveCount(2);
+    await expect(activeRow(page)).toHaveAttribute("data-session-id", firstId!);
+    await expect(page.locator('[data-testid="assistant-card-executed"]').last()).toBeVisible();
+    await expect(page.getByTestId("assistant-memory")).toHaveAttribute("data-turns", "2");
+
+    // Rename from the row menu (Enter commits).
+    await page.getByTestId(`assistant-session-menu-${firstId}`).click();
+    await page.getByTestId("assistant-session-rename").click();
+    const input = page.getByTestId("assistant-session-rename-input");
+    await expect(input).toBeVisible();
+    await input.fill("테마 바꾸기");
+    await input.press("Enter");
+    await expect(activeRow(page)).toContainText("테마 바꾸기");
+    await page.reload();
+    await expect(page.getByTestId("app-shell")).toBeVisible();
+    await openAssistantScreen(page);
+    await expect(activeRow(page)).toContainText("테마 바꾸기");
+
+    // Delete the active session after confirming: the remaining one becomes active, empty.
+    await page.getByTestId(`assistant-session-menu-${firstId}`).click();
+    await page.getByTestId("assistant-session-delete").click();
+    await expect(page.getByTestId("confirm-dialog")).toBeVisible();
+    await page.getByTestId("confirm-ok").click();
+    await expect(rows(page)).toHaveCount(1);
+    await expect(activeRow(page)).not.toHaveAttribute("data-session-id", firstId!);
+    await expect(page.getByTestId("assistant-memory")).toHaveAttribute("data-turns", "0");
+    await expect(page.locator('[data-testid="assistant-card-executed"]')).toHaveCount(0);
+  });
+
+  test("the input waits for the sessions and the composer sends into the active one", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openAssistantScreen(page);
+    await expect(page.getByTestId("assistant-send")).toBeEnabled();
+    await send(page, "/테마 라이트");
+    await expect(page.locator('[data-testid="assistant-card-executed"]').last()).toBeVisible();
+    await expect(activeRow(page)).toContainText("/테마 라이트");
+    await expect(activeRow(page)).toContainText("2");
+  });
+});

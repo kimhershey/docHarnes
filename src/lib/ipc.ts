@@ -42,6 +42,8 @@ import type {
   AnswerKind,
   AnswerRequest,
   AppInfo,
+  ChatMessageRow,
+  ChatSessionSummary,
   Chunk,
   Collection,
   CollectionInput,
@@ -271,6 +273,14 @@ export const api = {
   knowledgeVersions: () => invoke<VersionGroup[]>("knowledge_versions"),
   knowledgeVersionSet: (input: VersionInput) => invoke<VersionInfo>("knowledge_version_set", { input }),
   knowledgeVersionClear: (documentId: string) => invoke<boolean>("knowledge_version_clear", { documentId }),
+
+  // -- assistant chat sessions (0.7.0 §1.6; messages are stored as the UI's JSON) --
+  chatSessionsList: () => invoke<ChatSessionSummary[]>("chat_sessions_list"),
+  chatSessionCreate: (title: string | null = null) => invoke<ChatSessionSummary>("chat_session_create", { title }),
+  chatSessionRename: (id: string, title: string) => invoke<void>("chat_session_rename", { id, title }),
+  chatSessionDelete: (id: string) => invoke<void>("chat_session_delete", { id }),
+  chatMessagesList: (sessionId: string) => invoke<ChatMessageRow[]>("chat_messages_list", { sessionId }),
+  chatMessagePut: (sessionId: string, seq: number, payload: unknown) => invoke<void>("chat_message_put", { sessionId, seq, payload }),
 
   // -- pipeline (P4) --
   pipelineStatus: () => invoke<PipelineStatus>("pipeline_status"),

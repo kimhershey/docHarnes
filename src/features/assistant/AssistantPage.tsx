@@ -24,7 +24,7 @@ import { useDocument, useKnowledgeStatus, usePipelineStatus } from "@/lib/querie
 import { isComposing, matchesChord } from "@/lib/shortcuts";
 import { isJobFinished, type AnswerRequest, type Job, type Plan, type PlanExecution, type PlanIssue, type PlanResponse, type PreRouteResult, type SearchMode, type SearchScope, type UiPlanContext } from "@/lib/types";
 import { errorCode, isMac } from "@/lib/utils";
-import { useAssistantStore, type ClarifyStatus, type Message, type NewMessage, type PlanMessage } from "@/stores/assistant";
+import { selectMessages, useAssistantStore, type ClarifyStatus, type Message, type NewMessage, type PlanMessage } from "@/stores/assistant";
 import { useAttachmentsStore } from "@/stores/attachments";
 import { useDocumentsStore } from "@/stores/documents";
 import { useEngineStore } from "@/stores/engine";
@@ -43,6 +43,7 @@ import { ExecutionCard } from "./ExecutionCard";
 import { UI_OPS } from "./opSpecs";
 import { PlanCard } from "./PlanCard";
 import { ResultCard } from "./ResultCard";
+import { SessionList, SessionPicker } from "./SessionList";
 
 /** Question-like text (used only when the planner is unavailable: such input still goes to the knowledge base). */
 export function looksLikeQuestion(text: string): boolean {
@@ -88,7 +89,11 @@ export function AssistantPage() {
   const currentProjectName = useProjectsStore((s) => s.currentProjectName);
   const { data: knowledgeStatus } = useKnowledgeStatus(!!workspace);
   const { data: pipeline } = usePipelineStatus(!!workspace);
-  const messages = useAssistantStore((s) => s.messages);
+  // The active chat session's messages (0.7.0 §1.6: sessions are stored per workspace; see the store).
+  const messages = useAssistantStore(selectMessages);
+  const activeId = useAssistantStore((s) => s.activeId);
+  const sessions = useAssistantStore((s) => s.sessions);
+  const hydrating = useAssistantStore((s) => s.hydrating);
   const pendingUiActions = useAssistantStore((s) => s.pendingUiActions);
   const jobs = useJobsStore((s) => s.jobs);
   // The last viewed document is offered as a scope only while no library selection exists (the
@@ -131,7 +136,9 @@ export function AssistantPage() {
   });
   const [followUp, setFollowUp] = useState(false);
   const [cancelling, setCancelling] = useState<string | null>(null);
-  const [planning, setPlanning] = useState(false);
+  // The session whose command is being interpreted (only that session shows the spinner / blocks its composer).
+  const [planningSession, setPlanningSession] = useState<string | null>(null);
+  const planning = planningSession !== null && planningSession === activeId;
   const [loadingModel, setLoadingModel] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -145,15 +152,16 @@ export function AssistantPage() {
     useAssistantStore.getState().bind(workspacePath);
   }, [workspacePath]);
 
-  const push = (m: NewMessage) => useAssistantStore.getState().push(m);
-  const patch = (id: number, f: (m: Message) => Message) => useAssistantStore.getState().patch(id, f);
-  const patchPlan = (id: number, f: (m: PlanMessage) => PlanMessage) => patch(id, (m) => (m.role === "assistant" && m.kind === "plan" ? f(m) : m));
-  const currentMessages = () => useAssistantStore.getState().messages;
+  // Every request writes into the session it started in (`sid`), even if the user switches meanwhile.
+  const push = (sid: string, m: NewMessage) => useAssistantStore.getState().push(sid, m);
+  const patch = (sid: string, id: number, f: (m: Message) => Message) => useAssistantStore.getState().patch(sid, id, f);
+  const patchPlan = (sid: string, id: number, f: (m: PlanMessage) => PlanMessage) => patch(sid, id, (m) => (m.role === "assistant" && m.kind === "plan" ? f(m) : m));
+  const messagesOf = (sid: string) => useAssistantStore.getState().messagesBySession[sid] ?? [];
 
   const anyPending = messages.some((m) => m.role === "assistant" && m.kind === "answer" && m.pending);
   // How much of the conversation the next question / command will carry.
   const memoryTurns = useMemo(() => conversationTurns(messages).length, [messages]);
-  const busy = anyPending || planning;
+  const busy = anyPending || planning || hydrating || activeId === null;
   const activePlan = [...messages].reverse().find((m): m is PlanMessage => m.role === "assistant" && m.kind === "plan" && m.status === "pending") ?? null;
   const pendingClarify = [...messages].reverse().find((m): m is Extract<Message, { kind: "clarify" }> => m.role === "assistant" && m.kind === "clarify" && m.status === "pending") ?? null;
 
@@ -197,25 +205,25 @@ export function AssistantPage() {
   };
 
   /** "근거만 찾기": lists the hits of a knowledge search for `query` (no model call). */
-  const findEvidence = async (query: string) => {
+  const findEvidence = async (sid: string, query: string) => {
     const mode = searchMode;
-    const id = push({ role: "assistant", kind: "evidence", query, mode, response: null, error: null, pending: true });
+    const id = push(sid, { role: "assistant", kind: "evidence", query, mode, response: null, error: null, pending: true });
     try {
       const response = await api.knowledgeSearch({ query, mode, scope: knowledgeScope(), limit: 30 });
-      patch(id, (m) => (m.role === "assistant" && m.kind === "evidence" ? { ...m, response, pending: false } : m));
+      patch(sid, id, (m) => (m.role === "assistant" && m.kind === "evidence" ? { ...m, response, pending: false } : m));
     } catch (e) {
-      patch(id, (m) => (m.role === "assistant" && m.kind === "evidence" ? { ...m, error: e, pending: false } : m));
+      patch(sid, id, (m) => (m.role === "assistant" && m.kind === "evidence" ? { ...m, error: e, pending: false } : m));
     }
   };
 
-  const askKnowledge = async (question: string, extra: Partial<AnswerRequest> = {}) => {
+  const askKnowledge = async (sid: string, question: string, extra: Partial<AnswerRequest> = {}) => {
     // The conversation so far travels with every question (the model resolves "그 문서", "아까 금액");
     // the previous evidence is kept for an explicit follow-up or a question that leans on the
     // conversation, so an unrelated question is still retrieved afresh and can end in "no evidence".
-    const history = conversationTurns(currentMessages());
+    const history = conversationTurns(messagesOf(sid));
     const previous =
       followUp || (history.length > 0 && looksLikeFollowUp(question))
-        ? [...currentMessages()].reverse().find((m): m is Extract<Message, { kind: "answer" }> => m.role === "assistant" && m.kind === "answer" && !!m.answer && !m.answer.no_evidence)
+        ? [...messagesOf(sid)].reverse().find((m): m is Extract<Message, { kind: "answer" }> => m.role === "assistant" && m.kind === "answer" && !!m.answer && !m.answer.no_evidence)
         : undefined;
     const request: AnswerRequest = {
       question,
@@ -230,13 +238,13 @@ export function AssistantPage() {
     };
     const requestId = newRequestId();
     useKnowledgeStore.getState().beginStream(requestId);
-    const id = push({ role: "assistant", kind: "answer", requestId, request, answer: null, error: null, pending: true });
+    const id = push(sid, { role: "assistant", kind: "answer", requestId, request, answer: null, error: null, pending: true });
     try {
       // What the screen shows (open document, selection, folder, project) goes along as the session context.
       const answer = await api.knowledgeAnswer(request, requestId, planContext());
-      patch(id, (m) => (m.role === "assistant" && m.kind === "answer" ? { ...m, answer, pending: false } : m));
+      patch(sid, id, (m) => (m.role === "assistant" && m.kind === "answer" ? { ...m, answer, pending: false } : m));
     } catch (e) {
-      patch(id, (m) => (m.role === "assistant" && m.kind === "answer" ? { ...m, error: e, pending: false } : m));
+      patch(sid, id, (m) => (m.role === "assistant" && m.kind === "answer" ? { ...m, error: e, pending: false } : m));
     } finally {
       clearStream(requestId);
       setCancelling(null);
@@ -257,34 +265,34 @@ export function AssistantPage() {
   );
 
   /** Sends a (confirmed, possibly edited) plan to the executor: a job or an inline execution. */
-  const runPlan = async (m: PlanMessage) => {
+  const runPlan = async (sid: string, m: PlanMessage) => {
     const id = m.id;
     if (m.status !== "pending") return;
-    patchPlan(id, (x) => ({ ...x, status: "executing", errors: null }));
+    patchPlan(sid, id, (x) => ({ ...x, status: "executing", errors: null }));
     try {
       const res = await api.plannerExecute(m.plan, m.text, m.context);
-      patchPlan(id, (x) => ({ ...x, status: "done", editing: false }));
+      patchPlan(sid, id, (x) => ({ ...x, status: "done", editing: false }));
       if (res.job_id) {
         // The job's `ui_actions` run when its finished state is observed here (once, even after navigating away).
         useAssistantStore.getState().trackJob(
           res.job_id,
           m.plan.operations.filter((o) => UI_OPS.has(o.op)),
         );
-        push({ role: "assistant", kind: "execution", text: m.text, response: m.response, plan: m.plan, jobId: res.job_id });
+        push(sid, { role: "assistant", kind: "execution", text: m.text, response: m.response, plan: m.plan, jobId: res.job_id });
       } else if (res.execution) {
-        push({ role: "assistant", kind: "result", text: m.text, response: m.response, plan: m.plan, execution: res.execution });
+        push(sid, { role: "assistant", kind: "result", text: m.text, response: m.response, plan: m.plan, execution: res.execution });
         await runUiActions(res.execution.ui_actions);
       }
     } catch (e) {
       const code = errorCode(e);
       const detail = (e as { detail?: unknown }).detail;
       if (code === "plan_invalid" && Array.isArray(detail)) {
-        patchPlan(id, (x) => ({ ...x, status: "pending", errors: (detail as PlanIssue[]).filter((i) => i.blocking) }));
+        patchPlan(sid, id, (x) => ({ ...x, status: "pending", errors: (detail as PlanIssue[]).filter((i) => i.blocking) }));
         return;
       }
-      patchPlan(id, (x) => ({ ...x, status: "pending" }));
+      patchPlan(sid, id, (x) => ({ ...x, status: "pending" }));
       if (code === "plan_invalid") {
-        patchPlan(id, (x) => ({ ...x, errors: [{ path: "", code: "plan_invalid", message: describeError(e, t), blocking: true }] }));
+        patchPlan(sid, id, (x) => ({ ...x, errors: [{ path: "", code: "plan_invalid", message: describeError(e, t), blocking: true }] }));
         return;
       }
       useUiStore.getState().toast(describeError(e, t), "danger");
@@ -292,23 +300,23 @@ export function AssistantPage() {
   };
 
   /** Executes the plan card `id` as it currently is (edited plan included). */
-  const execute = async (id: number) => {
-    const m = currentMessages().find((x): x is PlanMessage => x.id === id && x.role === "assistant" && x.kind === "plan");
-    if (m) await runPlan(m);
+  const execute = async (sid: string, id: number) => {
+    const m = messagesOf(sid).find((x): x is PlanMessage => x.id === id && x.role === "assistant" && x.kind === "plan");
+    if (m) await runPlan(sid, m);
   };
 
-  const cancelPlan = (id: number) => patchPlan(id, (x) => ({ ...x, status: "cancelled", editing: false }));
-  const patchClarify = (id: number, status: ClarifyStatus) => patch(id, (m) => (m.role === "assistant" && m.kind === "clarify" ? { ...m, status } : m));
-  const cancelClarify = (id: number) => patchClarify(id, "cancelled");
+  const cancelPlan = (sid: string, id: number) => patchPlan(sid, id, (x) => ({ ...x, status: "cancelled", editing: false }));
+  const patchClarify = (sid: string, id: number, status: ClarifyStatus) => patch(sid, id, (m) => (m.role === "assistant" && m.kind === "clarify" ? { ...m, status } : m));
+  const cancelClarify = (sid: string, id: number) => patchClarify(sid, id, "cancelled");
   /** 취소 (button or a bare "취소" typed): drops the pending question / plan without any inference. */
-  const cancelPending = (): boolean => {
+  const cancelPending = (sid: string): boolean => {
     let cancelled = false;
     if (activePlan) {
-      cancelPlan(activePlan.id);
+      cancelPlan(sid, activePlan.id);
       cancelled = true;
     }
     if (pendingClarify) {
-      cancelClarify(pendingClarify.id);
+      cancelClarify(sid, pendingClarify.id);
       cancelled = true;
     }
     return cancelled;
@@ -317,36 +325,36 @@ export function AssistantPage() {
    * 되묻기: the user's reply to the assistant's question (or to a proposed plan) goes back to the
    * model together with the original command and the question — routed by rule, never guessed.
    */
-  const askBack = async (messageId: number, original: string, question: string, reply: string) => {
+  const askBack = async (sid: string, messageId: number, original: string, question: string, reply: string) => {
     if (busy) return;
-    patchClarify(messageId, "answered");
-    patchPlan(messageId, (x) => ({ ...x, status: "cancelled", editing: false }));
-    push({ role: "user", text: reply });
+    patchClarify(sid, messageId, "answered");
+    patchPlan(sid, messageId, (x) => ({ ...x, status: "cancelled", editing: false }));
+    push(sid, { role: "user", text: reply });
     const composed = askBackText(original, question, reply, i18n.language.startsWith("ko"));
-    const context: UiPlanContext = { ...planContext(), history: conversationTurns(currentMessages()), routing: loadRouting() };
-    setPlanning(true);
+    const context: UiPlanContext = { ...planContext(), history: conversationTurns(messagesOf(sid)), routing: loadRouting() };
+    setPlanningSession(sid);
     let response: PlanResponse;
     try {
       response = await api.plannerPlan(composed, context);
     } catch (e) {
-      setPlanning(false);
-      push({ role: "assistant", kind: "error", text: describeError(e, t) });
+      setPlanningSession(null);
+      push(sid, { role: "assistant", kind: "error", text: describeError(e, t) });
       return;
     }
-    setPlanning(false);
-    await handlePlan(original, response, context);
+    setPlanningSession(null);
+    await handlePlan(sid, original, response, context);
   };
 
   /** Routes a planner response to the matching card / action. */
-  const handlePlan = async (textValue: string, response: PlanResponse, context: UiPlanContext) => {
+  const handlePlan = async (sid: string, textValue: string, response: PlanResponse, context: UiPlanContext) => {
     const plan = response.result.plan;
     switch (planKind(plan)) {
       case "clarify":
-        push({ role: "assistant", kind: "clarify", text: textValue, response, status: "pending" });
+        push(sid, { role: "assistant", kind: "clarify", text: textValue, response, status: "pending" });
         focusInput(textValue);
         return;
       case "help":
-        push({ role: "assistant", kind: "help" });
+        push(sid, { role: "assistant", kind: "help" });
         return;
       case "answer": {
         const op = plan.operations.find((o) => o.op === "answer");
@@ -356,13 +364,13 @@ export function AssistantPage() {
         if (plan.scope.folder) base.folder = plan.scope.folder;
         // knowledge=false: the sentence carries the text to work on — answer from it, look nothing up.
         const retrieve = !(op && op.op === "answer" && op.knowledge === false);
-        await askKnowledge(question, { scope: base, retrieve });
+        await askKnowledge(sid, question, { scope: base, retrieve });
         return;
       }
       case "ui":
         if (!requiresConfirmation(response)) {
           const summaries = await executeUiOps(plan.operations, navigate, t);
-          push({ role: "assistant", kind: "executed", text: summaries.join(" · ") || plan.summary || textValue, source: sourceLabel(response.result.source, t), confidence: plan.confidence });
+          push(sid, { role: "assistant", kind: "executed", text: summaries.join(" · ") || plan.summary || textValue, source: sourceLabel(response.result.source, t), confidence: plan.confidence });
           return;
         }
         break;
@@ -370,26 +378,28 @@ export function AssistantPage() {
         break;
     }
     const card: NewMessage = { role: "assistant", kind: "plan", text: textValue, response, plan, context, status: "pending", errors: null, editing: false };
-    const id = push(card);
+    const id = push(sid, card);
     // An immediate execution works from the message itself (the store is updated synchronously).
-    if (!requiresConfirmation(response)) await runPlan({ ...card, id } as PlanMessage);
+    if (!requiresConfirmation(response)) await runPlan(sid, { ...card, id } as PlanMessage);
   };
 
   const send = async (value: string) => {
     const v = value.trim();
-    if (!v || busy) return;
+    // The session the command belongs to is fixed here: a switch while it runs does not redirect its cards.
+    const sid = useAssistantStore.getState().activeId;
+    if (!v || busy || !sid) return;
     setText("");
-    push({ role: "user", text: v, attachments: scope === "selection" && selectionKind === "attached" ? attached.map((d) => ({ id: d.id, name: d.name })) : undefined });
+    push(sid, { role: "user", text: v, attachments: scope === "selection" && selectionKind === "attached" ? attached.map((d) => ({ id: d.id, name: d.name })) : undefined });
     // 0. "근거만 찾기": every sentence is a search (slash commands still run).
     if (evidenceOnly && !isSlashCommand(v)) {
-      await findEvidence(v);
+      await findEvidence(sid, v);
       return;
     }
     // 1. Rules first, and only these (user decision 2026-11-09): a bare 취소 while a question or plan
     //    is pending drops it, and slash commands run at once — neither waits for the model.
     if (isCancelCommand(v) && (activePlan || pendingClarify)) {
-      cancelPending();
-      push({ role: "assistant", kind: "executed", text: t("assistant.cancelled_pending"), source: t("assistant.source_control"), confidence: 1 });
+      cancelPending(sid);
+      push(sid, { role: "assistant", kind: "executed", text: t("assistant.cancelled_pending"), source: t("assistant.source_control"), confidence: 1 });
       return;
     }
     if (isSlashCommand(v)) {
@@ -400,44 +410,45 @@ export function AssistantPage() {
         route = null;
       }
       if (route?.matched && route.op === "help") {
-        push({ role: "assistant", kind: "help" });
+        push(sid, { role: "assistant", kind: "help" });
         return;
       }
       if (route?.matched) {
         const outcome = await executePreRoute(route, navigate, t);
-        push({ role: "assistant", kind: "executed", text: outcome.summary || describePreRoute(route, t), source: t("assistant.source_slash"), confidence: route.confidence });
+        push(sid, { role: "assistant", kind: "executed", text: outcome.summary || describePreRoute(route, t), source: t("assistant.source_slash"), confidence: route.confidence });
         return;
       }
     }
     // 2. Everything else is the model's to interpret (the phrase rules only in the legacy "rules_first" mode,
     //    설정 > 일반 > 고급), with the conversation so far.
-    const context: UiPlanContext = { ...planContext(), history: conversationTurns(currentMessages()), routing: loadRouting() };
-    setPlanning(true);
+    const context: UiPlanContext = { ...planContext(), history: conversationTurns(messagesOf(sid)), routing: loadRouting() };
+    setPlanningSession(sid);
     let response: PlanResponse;
     try {
       response = await api.plannerPlan(v, context);
     } catch (e) {
-      setPlanning(false);
+      setPlanningSession(null);
       // Planner unavailable: questions still reach the knowledge base; anything else is reported.
       if (looksLikeQuestion(v)) {
-        await askKnowledge(v);
+        await askKnowledge(sid, v);
         return;
       }
-      push({ role: "assistant", kind: "error", text: describeError(e, t) });
+      push(sid, { role: "assistant", kind: "error", text: describeError(e, t) });
       return;
     }
-    setPlanning(false);
-    await handlePlan(v, response, context);
+    setPlanningSession(null);
+    await handlePlan(sid, v, response, context);
   };
 
+  // Text handed over by another screen (command palette, pre-router help) is sent into the active session once it exists.
   useEffect(() => {
-    if (pending && consumed.current !== pending) {
+    if (pending && !hydrating && activeId && consumed.current !== pending) {
       consumed.current = pending;
       setPending(null);
       void send(pending);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pending]);
+  }, [pending, hydrating, activeId]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
@@ -446,6 +457,8 @@ export function AssistantPage() {
   // Ctrl+Enter approves / Esc cancels the active plan card (settings.shortcuts; IME-safe). Esc inside a text
   // field (the composer, a plan editor input) is left to that field (review M5).
   useEffect(() => {
+    const sid = activeId;
+    if (!sid) return;
     if (!activePlan && pendingClarify) {
       const closeChord = shortcuts?.close || "Escape";
       const mac = isMac();
@@ -454,7 +467,7 @@ export function AssistantPage() {
         if (isComposing(e) || e.defaultPrevented || !matchesChord(e, closeChord, mac)) return;
         if (isEditable(e.target) || hasOpenLayer() || useUiStore.getState().paletteOpen) return;
         e.preventDefault();
-        cancelClarify(id);
+        cancelClarify(sid, id);
       };
       window.addEventListener("keydown", handler);
       return () => window.removeEventListener("keydown", handler);
@@ -468,17 +481,17 @@ export function AssistantPage() {
       if (isComposing(e) || e.defaultPrevented) return;
       if (matchesChord(e, executeChord, mac)) {
         e.preventDefault();
-        void execute(id);
+        void execute(sid, id);
       } else if (matchesChord(e, closeChord, mac)) {
         if (isEditable(e.target) || hasOpenLayer() || useUiStore.getState().paletteOpen) return;
         e.preventDefault();
-        cancelPlan(id);
+        cancelPlan(sid, id);
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePlan?.id, pendingClarify?.id, shortcuts?.execute_plan, shortcuts?.close]);
+  }, [activeId, activePlan?.id, pendingClarify?.id, shortcuts?.execute_plan, shortcuts?.close]);
 
   // Owed `ui_actions` of job-backed plans: run once when the finished job is observed (on mount and on
   // every job update), whether or not the execution card was mounted when the job finished.
@@ -504,10 +517,10 @@ export function AssistantPage() {
     }
   }, [pendingUiActions, jobs, runUiActions]);
 
-  const feedback = async (messageId: number, id: number, value: number | null) => {
+  const feedback = async (sid: string, messageId: number, id: number, value: number | null) => {
     try {
       await api.knowledgeAnswerFeedback(id, value);
-      patch(messageId, (m) => (m.role === "assistant" && m.kind === "answer" && m.answer ? { ...m, answer: { ...m.answer, feedback: value } } : m));
+      patch(sid, messageId, (m) => (m.role === "assistant" && m.kind === "answer" && m.answer ? { ...m, answer: { ...m.answer, feedback: value } } : m));
     } catch (e) {
       useUiStore.getState().toast(describeError(e, t), "danger");
     }
@@ -547,14 +560,30 @@ export function AssistantPage() {
   const gateSeconds = gate ? Math.ceil((gate.estimated_wait_ms ?? 0) / 1000) : 0;
   const lastDocName = lastDoc?.original_name ?? null;
 
+  // The session this render shows: every card callback below writes into it (a card of another session is never on screen).
+  const sid = activeId ?? "";
+  const store = () => useAssistantStore.getState();
+  const reportError = (e: unknown) => useUiStore.getState().toast(describeError(e, t), "danger");
+
   return (
-    <div className="relative flex h-full flex-col" data-testid="page-assistant" {...drop.props}>
+    <div className="relative flex h-full" data-testid="page-assistant" {...drop.props}>
       <DropHint active={drop.isActive} over={drop.isOver} testId="assistant-drop-hint">
         {t("assistant.attachments.drop")}
       </DropHint>
+      <SessionList
+        sessions={sessions}
+        activeId={activeId}
+        busy={hydrating}
+        onNew={() => void store().newSession().catch(reportError)}
+        onSelect={(id) => void store().select(id)}
+        onRename={(id, title) => void store().rename(id, title).catch(reportError)}
+        onRemove={(id) => void store().remove(id).catch(reportError)}
+      />
+      <div className="flex min-w-0 flex-1 flex-col">
       <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2">
         <h1 className="text-base font-semibold">{t("assistant.title")}</h1>
-        <Button variant="ghost" size="sm" onClick={() => useAssistantStore.getState().clear()}>
+        <SessionPicker sessions={sessions} activeId={activeId} onSelect={(id) => void store().select(id)} />
+        <Button variant="ghost" size="sm" onClick={() => void store().newSession().catch(reportError)} disabled={hydrating} data-testid="assistant-new-chat-header">
           {t("assistant.new_chat")}
         </Button>
         <div className="ml-auto flex flex-wrap items-center gap-3 text-xs text-fg-muted">
@@ -661,8 +690,8 @@ export function AssistantPage() {
                       streamText={streams[m.requestId] ?? ""}
                       error={m.error}
                       onCitation={(c) => openCitation(navigate, c)}
-                      onAskGeneral={() => void askKnowledge(m.request.question, { allow_general: true, keep_chunks: [] })}
-                      onFeedback={(id, v) => void feedback(m.id, id, v)}
+                      onAskGeneral={() => void askKnowledge(sid, m.request.question, { allow_general: true, keep_chunks: [] })}
+                      onFeedback={(id, v) => void feedback(sid, m.id, id, v)}
                       onCancel={m.pending && cancelling !== m.requestId ? () => cancelAnswer(m.requestId) : undefined}
                     />
                   </div>
@@ -675,12 +704,12 @@ export function AssistantPage() {
                     errors={m.errors}
                     editing={m.editing}
                     active={activePlan?.id === m.id}
-                    onChange={(plan) => patchPlan(m.id, (x) => ({ ...x, plan, errors: null }))}
-                    onExecute={() => void execute(m.id)}
-                    onCancel={() => cancelPlan(m.id)}
+                    onChange={(plan) => patchPlan(sid, m.id, (x) => ({ ...x, plan, errors: null }))}
+                    onExecute={() => void execute(sid, m.id)}
+                    onCancel={() => cancelPlan(sid, m.id)}
                     onRephrase={() => focusInput(m.text)}
-                    onToggleEdit={() => patchPlan(m.id, (x) => ({ ...x, editing: !x.editing }))}
-                    onAskBack={(reply) => void askBack(m.id, m.text, m.plan.summary ?? m.text, reply)}
+                    onToggleEdit={() => patchPlan(sid, m.id, (x) => ({ ...x, editing: !x.editing }))}
+                    onAskBack={(reply) => void askBack(sid, m.id, m.text, m.plan.summary ?? m.text, reply)}
                   />
                 )}
                 {m.kind === "evidence" && (
@@ -709,8 +738,8 @@ export function AssistantPage() {
                     loading={loadingModel}
                     onLoadModel={() => void loadModel()}
                     onRephrase={() => focusInput(m.text)}
-                    onAskBack={(reply) => void askBack(m.id, m.text, clarificationQuestion(m.response.result.plan) || t("planner.clarify.fallback"), reply)}
-                    onCancel={() => cancelClarify(m.id)}
+                    onAskBack={(reply) => void askBack(sid, m.id, m.text, clarificationQuestion(m.response.result.plan) || t("planner.clarify.fallback"), reply)}
+                    onCancel={() => cancelClarify(sid, m.id)}
                   />
                 )}
                 {(m.kind === "executed" || m.kind === "help" || m.kind === "error") && (
@@ -814,6 +843,7 @@ export function AssistantPage() {
             </Button>
           </form>
         </div>
+      </div>
       </div>
     </div>
   );
