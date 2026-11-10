@@ -189,7 +189,8 @@ fn real_llama_server_load_chat_switch() {
             use_count: 0,
         }];
         let page = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(96, 128, image::Rgb([250, 250, 250])));
-        let img = pipeline::image::prepare_image(&page, pipeline::image::VisionGeometry::GEMMA4, 64).expect("page image");
+        let img =
+            pipeline::image::prepare_image(&page, pipeline::image::VisionGeometry::GEMMA4, 64).expect("page image");
         let messages = vec![
             serde_json::json!({ "role": "system", "content": prompts::SYSTEM_JSON }),
             user_message_with_image(&prompts::classify(&types), &img.url),
@@ -288,7 +289,8 @@ fn real_llama_server_load_chat_switch() {
     if ready[0].has_vision {
         let vlm = Vlm::new(&m, first.clone(), Profile::Speed, None);
         let page = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(96, 128, image::Rgb([250, 250, 250])));
-        let img = pipeline::image::prepare_image(&page, pipeline::image::VisionGeometry::GEMMA4, 64).expect("page image");
+        let img =
+            pipeline::image::prepare_image(&page, pipeline::image::VisionGeometry::GEMMA4, 64).expect("page image");
         let t = Instant::now();
         match pipeline::forms::derive_with_vlm(
             &vlm,

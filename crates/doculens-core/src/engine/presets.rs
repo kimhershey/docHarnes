@@ -188,6 +188,14 @@ fn model_options(entry: Option<&ModelEntry>, d: &DiscoveredModel, ctx: &PresetCo
             num(&defaults, "image_min_tokens").unwrap_or(u64::from(geom.default_min_tokens)).min(max_tokens);
         push(&mut opts, "image-min-tokens", min_tokens.to_string());
         push(&mut opts, "image-max-tokens", max_tokens.to_string());
+        if geom == VisionGeometry::GEMMA4 && !gemma4_causal_images(d) {
+            // Gemma 4 unified (12B) and the CI fixture decode image tokens with non-causal
+            // attention: llama.cpp needs the whole image inside one micro-batch (otherwise the
+            // server silently caps image_max_tokens to n_ubatch, or asserts when the floor exceeds it).
+            let ubatch = max_tokens.max(512).div_ceil(64) * 64;
+            push(&mut opts, "ubatch-size", ubatch.to_string());
+            push(&mut opts, "batch-size", ubatch.max(2_048).to_string());
+        }
     }
     let two_slots =
         ctx.backend != Backend::Cpu && matches!(ctx.tier, Tier::Vram12gb | Tier::Vram16gb | Tier::Vram24gbPlus);
@@ -220,6 +228,12 @@ fn model_options(entry: Option<&ModelEntry>, d: &DiscoveredModel, ctx: &PresetCo
         push(&mut opts, "mmproj-offload", "false".into());
     }
     opts
+}
+
+/// Gemma 4 E2B / E4B (hidden size 1,536 / 2,560) keep causal attention on image tokens; every
+/// other Gemma 4 text size runs the image through non-causal attention (llama.cpp mtmd).
+fn gemma4_causal_images(d: &DiscoveredModel) -> bool {
+    matches!(d.primary_meta().and_then(|m| m.embedding_length), Some(1_536) | Some(2_560))
 }
 
 fn trim_float(v: f64) -> String {
@@ -354,10 +368,16 @@ mod tests {
         let ini = b.file.to_ini();
         assert!(ini.starts_with("version = 1\n"));
         assert!(ini.contains("[*]\nflash-attn = on\n"));
-        assert!(!ini.contains("[*]\nflash-attn = on\n") || !ini.split("[gemma4").next().unwrap().contains("image-min-tokens"), "the image floor is per model, not global");
+        assert!(
+            !ini.contains("[*]\nflash-attn = on\n")
+                || !ini.split("[gemma4").next().unwrap().contains("image-min-tokens"),
+            "the image floor is per model, not global"
+        );
         assert!(ini.contains("slots = false"));
         assert!(ini.contains("[gemma4-e4b-q6k]\n"));
-        assert!(ini.contains(&format!("model = {}\n", tmp.path().join("gemma").join("gemma-4-E4B-it-Q6_K.gguf").display())));
+        assert!(
+            ini.contains(&format!("model = {}\n", tmp.path().join("gemma").join("gemma-4-E4B-it-Q6_K.gguf").display()))
+        );
         assert!(ini.contains("mmproj = "));
         // accuracy profile asks for 2,200 image tokens; Gemma 4's encoder caps at 1,120 and floors at 512
         assert!(ini.contains("load-on-startup = true\nctx-size = 32768\nimage-min-tokens = 512\nimage-max-tokens = 1120\nparallel = 1\ntemp = 0.1\ntop-k = 64\ntop-p = 0.95\nreasoning = off\nreasoning-budget = 0\n"), "{ini}");
@@ -374,7 +394,12 @@ mod tests {
             debug: true,
         };
         let ini = build_presets(&Registry::builtin(), &found, &ctx).file.to_ini();
-        assert!(ini.contains("ctx-size = 8192\nimage-min-tokens = 512\nimage-max-tokens = 1120\nparallel = 2\nkv-unified = true\n"), "{ini}");
+        assert!(
+            ini.contains(
+                "ctx-size = 8192\nimage-min-tokens = 512\nimage-max-tokens = 1120\nparallel = 2\nkv-unified = true\n"
+            ),
+            "{ini}"
+        );
         assert!(ini.contains("load-on-startup = false"));
         assert!(!ini.contains("slots = false"));
         // cpu backend → no GPU layers anywhere
@@ -390,6 +415,52 @@ mod tests {
         assert!(ini.contains("n-gpu-layers = 0\nbatch-size"));
         assert!(ini.contains("image-min-tokens = 512\nimage-max-tokens = 1024\n"), "{ini}");
         assert!(ini.contains("flash-attn = auto"));
+    }
+
+    #[test]
+    fn gemma4_unified_models_get_a_micro_batch_that_holds_one_image() {
+        let tmp = tempfile::tempdir().unwrap();
+        let g = tmp.path().join("g12");
+        std::fs::create_dir_all(&g).unwrap();
+        let mut meta = synthetic_gemma4_metadata("Gemma 4 12B", 15, true);
+        meta.iter_mut().find(|(k, _)| *k == "gemma4.embedding_length").unwrap().1 = GgufValue::U32(3840);
+        write_minimal_gguf(&g.join("gemma-4-12b-it-Q4_K_M.gguf"), &meta, &[("a", &[8], 0)]).unwrap();
+        write_minimal_gguf(
+            &g.join("mmproj-F16.gguf"),
+            &[
+                ("general.architecture", GgufValue::String("clip".into())),
+                ("clip.projector_type", GgufValue::String("gemma4uv".into())),
+                ("clip.has_vision_encoder", GgufValue::Bool(true)),
+            ],
+            &[("v", &[8], 1)],
+        )
+        .unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        for f in std::fs::read_dir(&g).unwrap().flatten() {
+            std::fs::File::options().write(true).open(f.path()).unwrap().set_modified(old).unwrap();
+        }
+        let found = scan_models_dir(tmp.path(), &Registry::builtin(), ScanOptions::default());
+        assert_eq!(found[0].id, "gemma4-12b-q4km");
+        let settings = ModelSettings::default();
+        let ctx = PresetContext {
+            backend: Backend::Cu129,
+            tier: Tier::Vram12gb,
+            profile: Profile::Accuracy,
+            settings: &settings,
+            active_model: None,
+            debug: false,
+        };
+        let ini = build_presets(&Registry::builtin(), &found, &ctx).file.to_ini();
+        // 1,120 image tokens → 1,152-token micro-batch (multiple of 64), batch stays 2,048
+        assert!(
+            ini.contains("image-min-tokens = 512\nimage-max-tokens = 1120\nubatch-size = 1152\nbatch-size = 2048\n"),
+            "{ini}"
+        );
+        // the E4B fixture (hidden 2,560) decodes images causally: no per-model micro-batch
+        let found = fixture(tmp.path());
+        let ini = build_presets(&Registry::builtin(), &found, &ctx).file.to_ini();
+        let e4b = ini.split("[gemma4-e4b-q6k]").nth(1).unwrap().split("\n[").next().unwrap();
+        assert!(!e4b.contains("ubatch-size"), "{e4b}");
     }
 
     #[test]

@@ -751,6 +751,12 @@ pub fn entry_from_discovered(d: &DiscoveredModel) -> ModelEntry {
     });
     if d.role == ModelRole::Embedding {
         defaults = serde_json::json!({ "ctx": ctx_max.min(2048), "kv": "f16", "embeddings": true, "pooling": "cls", "n_gpu_layers": 0 });
+        if arch.starts_with("gemma-embedding") {
+            // EmbeddingGemma: mean pooling and the retrieval prompts of the model card.
+            defaults["pooling"] = serde_json::json!("mean");
+            defaults["query_prefix"] = serde_json::json!("task: search result | query: ");
+            defaults["document_prefix"] = serde_json::json!("title: none | text: ");
+        }
     } else if d.has_vision {
         let geom = crate::pipeline::image::VisionGeometry::for_arch(&arch);
         defaults["image_min_tokens"] = serde_json::json!(geom.default_min_tokens);

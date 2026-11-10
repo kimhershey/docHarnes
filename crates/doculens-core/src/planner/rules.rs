@@ -477,11 +477,20 @@ fn model_id(t: &Text<'_>, ctx: &PlanContext) -> Option<String> {
             return Some(id.clone());
         }
         for part in id.split(['-', '_', '.']).map(compact).filter(|p| p.len() >= 2) {
-            if part.chars().any(|c| c.is_ascii_digit())
-                && t.compact.contains(&part)
-                && best.is_none_or(|(_, l)| part.len() > l)
-            {
-                best = Some((id, part.len()));
+            if !part.chars().any(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            // Gemma's effective sizes ("e4b") are also written as plain "4B".
+            let plain = part
+                .strip_prefix('e')
+                .filter(|rest| {
+                    rest.ends_with('b') && rest.len() >= 2 && rest[..rest.len() - 1].chars().all(|c| c.is_ascii_digit())
+                })
+                .map(str::to_string);
+            for cand in std::iter::once(part.clone()).chain(plain) {
+                if t.compact.contains(&cand) && best.is_none_or(|(_, l)| cand.len() > l) {
+                    best = Some((id, cand.len()));
+                }
             }
         }
     }

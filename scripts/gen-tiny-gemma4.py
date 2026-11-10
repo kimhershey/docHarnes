@@ -217,7 +217,13 @@ def write_text_model(path: pathlib.Path, tokens, merges):
     def norm(n):
         return (1.0 + rng.standard_normal(n) * 0.01).astype(np.float32)
 
-    w.add_tensor("token_embd.weight", f16((len(tokens), N_EMBD), 0.5))
+    # Tied output head: zero the control-token rows so the random model's argmax is never a
+    # control token (`<channel|>` would otherwise stop the chat parser on every reply).
+    tok_embd = f16((len(tokens), N_EMBD), 0.5)
+    for i, t in enumerate(tokens):
+        if t in SPECIALS:
+            tok_embd[i] = 0
+    w.add_tensor("token_embd.weight", tok_embd)
     w.add_tensor("output_norm.weight", norm(N_EMBD))
     # "proportional" RoPE on the global layers: rotate the first head_dim*0.25 dims,
     # freeze the rest (converter: [1.0]*n_rot + [1e30]*n_unrot over head_dim/2 pairs).

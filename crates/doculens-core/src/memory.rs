@@ -95,7 +95,13 @@ impl ModelArch {
         full_attention_interval: 1,
         n_head_kv: 1,
         head_dim: 512,
-        swa: Some(SwaLayout { window: 1024, n_swa_layers: 40, n_global_layers: 8, n_head_kv_swa: 8, head_dim_swa: 256 }),
+        swa: Some(SwaLayout {
+            window: 1024,
+            n_swa_layers: 40,
+            n_global_layers: 8,
+            n_head_kv_swa: 8,
+            head_dim_swa: 256,
+        }),
     };
     /// Qwen3.5-4B / 9B drop-ins: 32 layers, interval 4 → 8 full-attention layers,
     /// 4 KV heads × head_dim 256.
@@ -125,7 +131,12 @@ impl ModelArch {
     /// KV-cache bytes for `ctx` tokens (one slot, or the unified pool).
     pub fn kv_bytes(&self, ctx: u64, kv: KvCacheType) -> u64 {
         let bpe = kv.bytes_per_element();
-        let global = ctx * u64::from(self.n_full_attention_layers()) * u64::from(self.n_head_kv) * u64::from(self.head_dim) * 2 * bpe;
+        let global = ctx
+            * u64::from(self.n_full_attention_layers())
+            * u64::from(self.n_head_kv)
+            * u64::from(self.head_dim)
+            * 2
+            * bpe;
         let sliding = match self.swa {
             Some(s) => {
                 ctx.min(u64::from(s.window))

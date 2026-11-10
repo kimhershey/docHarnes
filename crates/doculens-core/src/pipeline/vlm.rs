@@ -34,7 +34,16 @@ pub struct Vlm<'a> {
 
 impl<'a> Vlm<'a> {
     pub fn new(chat: &'a dyn ChatBackend, model: String, profile: Profile, cancel: Option<&'a AtomicBool>) -> Vlm<'a> {
-        Vlm { chat, model, profile, cancel, temperature: None, seed: None, ctx: None, geometry: VisionGeometry::DEFAULT }
+        Vlm {
+            chat,
+            model,
+            profile,
+            cancel,
+            temperature: None,
+            seed: None,
+            ctx: None,
+            geometry: VisionGeometry::DEFAULT,
+        }
     }
     /// Page images are sized for this encoder (Gemma 4 by default; Qwen drop-ins differ).
     pub fn with_geometry(mut self, geometry: VisionGeometry) -> Vlm<'a> {

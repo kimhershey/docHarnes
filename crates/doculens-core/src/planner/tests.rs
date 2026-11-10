@@ -202,6 +202,9 @@ fn example_commands_plan_without_a_model() {
     assert_eq!(kinds(&r.plan), [OpKind::SetTheme, OpKind::SetModel], "{r:?}");
     assert!(matches!(&r.plan.operations[0], Op::SetTheme { theme: Theme::Dark }));
     assert!(matches!(&r.plan.operations[1], Op::SetModel { id } if id == "gemma4-12b-q4km"));
+    // Gemma's effective sizes are written "E4B" in the id but said as "4B".
+    let r = planned("모델을 4B로 바꿔");
+    assert!(matches!(&r.plan.operations[0], Op::SetModel { id } if id == "gemma4-e4b-q5km"), "{r:?}");
 
     // 7. relative date + total → aggregate with the resolved range
     let r = planned("지난달 영수증 합계 얼마야?");

@@ -133,13 +133,11 @@ pub fn run_draft(
         ctx_size = state.engine.status().model(&m).and_then(|x| x.ctx);
         model = Some(m);
     }
-    let vlm = model
-        .as_ref()
-        .map(|m| {
-            Vlm::new(&state.engine, m.clone(), pctx.profile, Some(&ctl.cancel))
-                .with_context(ctx_size)
-                .with_geometry(pipeline_bridge::vision_geometry(&state, m))
-        });
+    let vlm = model.as_ref().map(|m| {
+        Vlm::new(&state.engine, m.clone(), pctx.profile, Some(&ctl.cancel))
+            .with_context(ctx_size)
+            .with_geometry(pipeline_bridge::vision_geometry(&state, m))
+    });
     let analyzer = knowledge_bridge::analyzer(app);
     let embedder = knowledge_bridge::embedder(app, false).ok().flatten();
     let import = pctx.docs.deps();

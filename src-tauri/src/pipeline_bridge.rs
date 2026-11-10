@@ -12,9 +12,9 @@ use tauri::{AppHandle, Emitter, Manager};
 use doculens_core::db::Db;
 use doculens_core::documents::import::ImportSource;
 use doculens_core::jobs::{JobPriority, JobSpec};
+use doculens_core::pipeline::image::VisionGeometry;
 use doculens_core::pipeline::schema::SchemaDraft;
 use doculens_core::pipeline::split as splitter;
-use doculens_core::pipeline::image::VisionGeometry;
 use doculens_core::pipeline::vlm::Vlm;
 use doculens_core::pipeline::{forms, repo, PipelineLevel, ProcessRequest};
 use doculens_core::settings::{AutoProcessingLevel, ProcessingSettings, Profile};
@@ -342,13 +342,11 @@ pub fn run_schema_discovery(
             Err(e) => log::warn!("schema discovery without the vision model ({}): text heuristics only", e.message),
         }
     }
-    let vlm = model
-        .as_ref()
-        .map(|m| {
-            Vlm::new(&state.engine, m.clone(), pctx.profile, Some(&ctl.cancel))
-                .with_context(ctx_size)
-                .with_geometry(vision_geometry(&state, m))
-        });
+    let vlm = model.as_ref().map(|m| {
+        Vlm::new(&state.engine, m.clone(), pctx.profile, Some(&ctl.cancel))
+            .with_context(ctx_size)
+            .with_geometry(vision_geometry(&state, m))
+    });
     let deps = pctx.docs.deps();
     let total = documents.len() as u64;
     let lease = state.gate.batch_begin();
