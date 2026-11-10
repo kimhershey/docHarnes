@@ -11,7 +11,7 @@ import { AnswerCard } from "@/features/knowledge/AnswerCard";
 import { openCitation } from "@/features/knowledge/AnswersPanel";
 import { RuleSummary } from "@/features/projects/RuleGrid";
 import { verdictVariant } from "@/features/projects/rules";
-import { hitHref } from "@/features/search/SearchPage";
+import { hitHref } from "./evidence";
 import { runJournal } from "@/lib/commands";
 import { revealPath } from "@/lib/ipc";
 import { SCREEN_ROUTES, type Draft, type OrganizeItem, type Plan, type PlanExecution, type PlanResponse, type StepStatus, type UndoReport } from "@/lib/types";

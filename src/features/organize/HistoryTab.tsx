@@ -1,14 +1,14 @@
 import { ChevronDown, ChevronRight, Redo2, Undo2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
-import { api } from "@/lib/ipc";
+import { api, subscribe } from "@/lib/ipc";
 import { invalidateJournal, useJournalBatches, useJournalEntries } from "@/lib/queries";
-import type { JournalBatch, JournalEntry } from "@/lib/types";
+import { EVENTS, type JournalBatch, type JournalEntry, type PipelineChanged } from "@/lib/types";
 import { formatDate } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui";
 
@@ -54,11 +54,26 @@ function Entries({ batchId }: { batchId: string }) {
   );
 }
 
-/** 이력 tab: journal batches (newest first) with undo / redo and the per-file entries. */
+/** 정리 이력 (작업 현황 tab since 0.5.0): journal batches (newest first) with undo / redo and the per-file entries. */
 export function HistoryTab() {
   const { t, i18n } = useTranslation();
   const toast = useUiStore((s) => s.toast);
   const { data, isLoading, error } = useJournalBatches(100);
+  // Batches change from the assistant / viewer / organise screen too (`pipeline://changed` kind `journal`).
+  useEffect(() => {
+    let off: (() => void) | null = null;
+    let cancelled = false;
+    void subscribe<PipelineChanged>(EVENTS.pipelineChanged, (ev) => {
+      if (ev.kind === "journal") invalidateJournal();
+    }).then((unsub) => {
+      if (cancelled) unsub();
+      else off = unsub;
+    });
+    return () => {
+      cancelled = true;
+      off?.();
+    };
+  }, []);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const batches = useMemo(() => [...(data ?? [])].sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0)), [data]);

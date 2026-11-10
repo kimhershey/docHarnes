@@ -7,8 +7,8 @@ import { Spinner } from "@/components/ui/spinner";
 import { useProjectReport } from "@/lib/queries";
 import { useUiStore } from "@/stores/ui";
 
-/** 리포트 tab: the backend's Markdown summary (§3.14.3), rendered + copyable. */
-export function ReportTab({ projectId, active }: { projectId: string; active: boolean }) {
+/** 리포트 section of the 결과 tab: the backend's Markdown summary (§3.14.3), rendered + copyable. */
+export function ReportSection({ projectId, active }: { projectId: string; active: boolean }) {
   const { t } = useTranslation();
   const toast = useUiStore((s) => s.toast);
   const { data, isLoading, refetch } = useProjectReport(projectId, active);

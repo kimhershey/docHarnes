@@ -29,6 +29,13 @@ user PC: `docs/RUN-GUIDE.md`.
 5. Installer builds (Actions "Windows installer (manual)") are dispatched only after every task of the
    request is finished and the full verification (`cargo test --workspace`, clippy, vitest, Playwright,
    CI on the pushed commit) reports no FAILED — never mid-work (user decision 2026-11-09).
+6. **One version per branch** (user decision 2026-11-10): every piece of work starts by bumping the version
+   (new features / structural changes → minor, fixes → patch; `Cargo.toml`, `package.json` + lock,
+   `src-tauri/tauri.conf.json`, the mock backend's version strings, `npm run notices`) and creating
+   `release/<major.minor.patch>` from `main` (never a bare `v0.5.0` — that is the release tag's name).
+   Work, WIP snapshots and the installer build happen on that branch; the user merges it into `main`
+   (pull request) and the publish run creates the `v<version>` tag. The old `phase/*` branches are history
+   (`phase/p6-p7` carried 0.1.0–0.4.0 and the start of 0.5.0).
 
 ## Commands
 - Rust: `cargo test --workspace` (lib + `tests/engine_process.rs`), `cargo check -p doculens`,
@@ -126,7 +133,8 @@ user PC: `docs/RUN-GUIDE.md`.
   `chunks` + FTS5 `chunks_fts`/`chunks_fts_tri`, sqlite-vec `chunks_vec`, `collections`, `doc_versions`, `glossary`,
   `answers`; pipeline tables `schemas`, `schema_versions`, `extraction_runs`, `fields`, `field_history`; P5 tables
   `journal_batches`, `ops_journal`, `jobs`; P6 tables `projects`, `project_templates`, `project_documents`,
-  `project_rules`, `project_runs`, `project_rule_results`; `pages.layout` word-box JSON (0006); `projects.keywords` (0007)), drafts `.doculens/drafts/<id>.json`, page cache
+  `project_rules`, `project_runs`, `project_rule_results`; `pages.layout` word-box JSON (0006); `projects.keywords` (0007);
+  `collections.kind` / `collections.project_id` (0010) and the `collections` rebuild without a table-wide UNIQUE(name) (0011, schema 11)), drafts `.doculens/drafts/<id>.json`, page cache
   `.doculens/cache/{pages,thumbs,converted}/<doc_id>/`, extraction mirror `.doculens/extractions/<doc_id>/<run_id>/`;
   DB rows store workspace-relative paths only. OCR text lives in `pages.text` (`text_source = ocr`) so the knowledge
   indexer re-chunks it.

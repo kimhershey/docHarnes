@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import type { Answer, AnswerRequest, Op, Plan, PlanExecution, PlanIssue, PlanResponse, UiPlanContext } from "@/lib/types";
+import type { Answer, AnswerRequest, Op, Plan, PlanExecution, PlanIssue, PlanResponse, SearchMode, SearchResponse, UiPlanContext } from "@/lib/types";
 
 /** Plan card lifecycle (design §3.7.6). */
 export type PlanStatus = "pending" | "executing" | "done" | "cancelled";
@@ -16,6 +16,8 @@ export type Message =
   | { id: number; role: "assistant"; kind: "execution"; text: string; response: PlanResponse; plan: Plan; jobId: string }
   | { id: number; role: "assistant"; kind: "result"; text: string; response: PlanResponse; plan: Plan; execution: PlanExecution }
   | { id: number; role: "assistant"; kind: "clarify"; text: string; response: PlanResponse; status: ClarifyStatus }
+  /** "근거만 찾기" (0.5.0): the hits of a knowledge search, no model call. */
+  | { id: number; role: "assistant"; kind: "evidence"; query: string; mode: SearchMode; response: SearchResponse | null; error: unknown; pending: boolean }
   | { id: number; role: "assistant"; kind: "error"; text: string };
 
 export type PlanMessage = Extract<Message, { kind: "plan" }>;

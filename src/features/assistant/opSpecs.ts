@@ -43,7 +43,7 @@ export const SETTING_KEYS = ["render_dpi", "pii_masking", "auto_pipeline", "inbo
 export const OUTPUT_FORMAT_VALUES = ["hwpx", "docx", "pdf", "md"] as const;
 export const TONE_VALUES = ["formal", "plain", "concise"] as const;
 export const DRAFT_LENGTH_VALUES = ["short", "medium", "long"] as const;
-export const EXPLAIN_SCOPES = ["kb", "collection", "project", "document"] as const;
+export const EXPLAIN_SCOPES = ["kb", "reference", "project", "document"] as const;
 export const RETENTION_ITEMS = ["documents", "extractions", "logs", "journal", "chats", "temp"] as const;
 
 const str: ParamType = { kind: "string" };

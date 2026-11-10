@@ -424,12 +424,29 @@ fn project_scope_unions_work_documents_and_reference_material() {
         })
         .unwrap();
     w.db.with(|c| repo::add_docs_to_collection(c, &off.id, &["exp".into()])).unwrap();
-    // A group saved with a project id is that project's group; the same name elsewhere gets a suffix.
+    // A project's group carries the project's name even when a common group has it (and the
+    // other way round); common groups stay unique among themselves; one group per project.
     let p2 =
         w.db.with(|c| projects::save_project(c, &ProjectInput { name: "사규".into(), ..Default::default() })).unwrap();
     let g2 = w.db.with(|c| repo::project_reference_group(c, &p2.id, &p2.name)).unwrap();
-    assert_eq!((g2.name.as_str(), g2.kind), ("사규 (2)", CollectionKind::Project));
-    let via_input =
+    assert_eq!(
+        (g2.name.as_str(), g2.kind, g2.project_id.as_deref()),
+        ("사규", CollectionKind::Project, Some(p2.id.as_str()))
+    );
+    let same_as_project =
+        w.db.with(|c| {
+            repo::save_collection(
+                c,
+                &CollectionInput { name: "한빛 납품".into(), active: true, ..CollectionInput::default() },
+            )
+        })
+        .unwrap();
+    assert!(same_as_project.is_common());
+    let dup =
+        w.db.with(|c| repo::save_collection(c, &CollectionInput { name: "사규".into(), ..CollectionInput::default() }))
+            .unwrap_err();
+    assert!(dup.to_string().contains("collection_name_taken"), "{dup}");
+    let second =
         w.db.with(|c| {
             repo::save_collection(
                 c,
@@ -438,9 +455,24 @@ fn project_scope_unions_work_documents_and_reference_material() {
                 },
             )
         })
+        .unwrap_err();
+    assert!(second.to_string().contains("project_group_exists"), "{second}");
+    let p3 =
+        w.db.with(|c| projects::save_project(c, &ProjectInput { name: "세 번째".into(), ..Default::default() }))
+            .unwrap();
+    let via_input =
+        w.db.with(|c| {
+            repo::save_collection(
+                c,
+                &CollectionInput {
+                    name: "임시".into(), project_id: Some(p3.id.clone()), ..CollectionInput::default()
+                },
+            )
+        })
         .unwrap();
-    assert_eq!((via_input.kind, via_input.project_id.as_deref()), (CollectionKind::Project, Some(p2.id.as_str())));
-    assert!(w.db.with(|c| repo::delete_collection(c, &via_input.id)).unwrap());
+    assert_eq!((via_input.kind, via_input.project_id.as_deref()), (CollectionKind::Project, Some(p3.id.as_str())));
+    assert!(w.db.with(|c| projects::delete_project(c, &p3.id)).unwrap());
+    assert!(w.db.with(|c| repo::get_collection(c, &via_input.id)).unwrap().is_none());
 
     let allowed = w.db.with(|c| repo::scope_doc_ids(c, &SearchScope::project(&project.id))).unwrap().unwrap();
     assert_eq!(sorted(allowed), vec!["con", "reg2", "sec"]);
@@ -483,7 +515,7 @@ fn project_scope_unions_work_documents_and_reference_material() {
     assert!(w.db.with(|c| repo::get_collection(c, &group.id)).unwrap().is_none());
     assert!(w.db.with(|c| docs::get_document(c, "sec")).unwrap().is_some());
     let cols = w.db.with(repo::list_collections).unwrap();
-    assert_eq!(cols.iter().filter(|c| c.is_common()).count(), 2);
+    assert_eq!(cols.iter().filter(|c| c.is_common()).count(), 3);
     assert_eq!(cols.iter().filter(|c| c.project_id.as_deref() == Some(p2.id.as_str())).count(), 1);
 }
 

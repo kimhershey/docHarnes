@@ -961,13 +961,21 @@ export function defaultImportOptions(): ImportOptions {
 // src-tauri/src/commands/knowledge.rs
 // ---------------------------------------------------------------------------
 
+/**
+ * 참고 자료 묶음 (0.5.0 plan §2): `reference` = a group of the common reference material, `project` = the one
+ * reference group of a project (`project_id` set; created on demand by `project_reference_group`).
+ */
+export type CollectionKind = "reference" | "project";
+
 export interface Collection {
   id: string;
   name: string;
   description: string | null;
   color: string | null;
   active: boolean;
-  watch_folder: string | null;
+  kind: CollectionKind;
+  /** The owning project of a `project` group; null for the common reference groups. */
+  project_id: string | null;
   created_at: string;
   updated_at: string;
   doc_count: number;
@@ -980,8 +988,12 @@ export interface CollectionInput {
   description?: string | null;
   color?: string | null;
   active?: boolean;
-  watch_folder?: string | null;
+  /** Set on a project's reference group (kind `project`); omitted / null = a common reference group. */
+  project_id?: string | null;
 }
+
+/** The common reference material's virtual id on the projects screen (`/projects/common`). */
+export const COMMON_REFERENCE_ID = "common";
 
 export interface VersionInfo {
   document_id: string;
@@ -1049,6 +1061,11 @@ export interface SearchScope {
   folder?: string | null;
   latest_only?: boolean;
   active_collections_only?: boolean;
+  /**
+   * Project scope (0.5.0 plan §2): the allowed set is the project's work documents ∪ its reference group ∪ the
+   * active common reference groups; with `documents` also set, those documents replace the work documents.
+   */
+  project_id?: string | null;
 }
 
 export interface SearchRequest {
@@ -1578,7 +1595,8 @@ export type JobOp = "show" | "cancel" | "retry" | "pause" | "resume" | "prioriti
 export type EngineOp = "restart" | "sleep" | "wake";
 export type OpenTarget = "document" | "page" | "folder" | "screen";
 /** `explain.scope` (appendix D). */
-export type ExplainScope = "kb" | "collection" | "project" | "document";
+/** `reference` = the 공통 참고 자료 (0.5.0; `collection` was its pre-0.5.0 name and still deserialises in Rust). */
+export type ExplainScope = "kb" | "reference" | "project" | "document";
 /** `set_retention.item` (appendix D; the page cache is size-capped → `set_setting cache_limit_gb`). */
 export type RetentionTarget = "documents" | "extractions" | "logs" | "journal" | "chats" | "temp";
 export const RETENTION_TARGETS: RetentionTarget[] = ["documents", "extractions", "logs", "journal", "chats", "temp"];
@@ -1610,7 +1628,7 @@ export type Op =
   | { op: "explain"; selection?: string | null; question?: string | null; scope?: ExplainScope | null; allow_general_knowledge?: boolean | null }
   | { op: "compare"; doc_ids: string[]; aspects?: string[] }
   | { op: "create_project"; name: string; template?: string | null; doc_types_required?: string[]; start_date?: string | null; end_date?: string | null }
-  | { op: "add_to_project"; project?: string | null; doc_ids?: string[] }
+  | { op: "add_to_project"; project?: string | null; doc_ids?: string[]; as_reference?: boolean | null }
   | { op: "define_rule"; project?: string | null; template?: string | null; description: string }
   | { op: "check_consistency"; project?: string | null; rules?: string[] }
   | { op: "request_supplement"; project?: string | null; findings?: string[]; output?: OutputFormat | null }
@@ -1742,6 +1760,8 @@ export interface UiPlanContext {
   current_page?: number | null;
   /** Project open on the projects screen (default target of project ops). */
   current_project?: string | null;
+  /** Project the assistant's "현재 프로젝트" scope names (0.5.0): default scope of commands, evidence scope of questions. */
+  project_id?: string | null;
   /** Earlier turns of the assistant conversation (oldest first). */
   history?: ConversationTurn[];
   /** Interpretation mode (omitted = model first). */

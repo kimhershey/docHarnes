@@ -11,7 +11,8 @@ import { SCREEN_ROUTES, type PreRouteResult, type Screen } from "@/lib/types";
 import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 
-const SCREENS = Object.keys(SCREEN_ROUTES) as Screen[];
+/** The "이동" group lists the sidebar screens (0.5.0); the folded screens stay reachable through /열기 and their routes. */
+const SCREENS: Screen[] = ["library", "assistant", "review", "projects", "generate", "jobs", "settings"];
 
 export function CommandPalette() {
   const { t } = useTranslation();

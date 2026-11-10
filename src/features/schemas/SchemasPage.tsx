@@ -72,9 +72,9 @@ const SchemaRow = memo(function SchemaRow({ s, selected, onSelect, ko, t }: { s:
 });
 
 /**
- * 추출 스키마 / 양식 screen (design §3.7.2): registered forms + sample forms,
- * the field grid, NL create/modify, form registration, type → schema mapping,
- * version history, lint and a sample test run.
+ * 양식·추출 항목 (design §3.7.2; a settings tab since 0.5.0, plan §1): registered forms + sample forms,
+ * the field grid, form registration as the primary action (NL create / modify and a blank item are the
+ * editor's helper buttons), type → schema mapping, version history, lint and a sample test run.
  */
 export function SchemasPage() {
   const { t, i18n } = useTranslation();
@@ -353,14 +353,6 @@ export function SchemasPage() {
           <Upload />
           {t("schemas.register_form")}
         </Button>
-        <Button size="sm" variant="secondary" onClick={() => openNl(null)} data-testid="schemas-nl-create">
-          <MessageSquareText />
-          {t("schemas.nl_create")}
-        </Button>
-        <Button size="sm" variant="secondary" onClick={newSchema} data-testid="schemas-new">
-          <FilePlus2 />
-          {t("schemas.new")}
-        </Button>
       </header>
       {newType && (
         <div className="flex items-center gap-2 border-b border-border bg-info-soft px-4 py-1.5 text-xs" role="status" data-testid="schemas-reclassify-banner" data-new-type={newType.slug}>
@@ -425,6 +417,18 @@ export function SchemasPage() {
           </Card>
         </aside>
         <section className="flex min-w-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+          {/* Helper actions of the editor (plan §3): a blank item or one described in natural language. */}
+          <div className="flex flex-wrap items-center gap-2 text-xs text-fg-muted">
+            <span>{t("schemas.editor.helpers")}</span>
+            <Button size="sm" variant="ghost" onClick={() => openNl(null)} data-testid="schemas-nl-create">
+              <MessageSquareText />
+              {t("schemas.nl_create")}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={newSchema} data-testid="schemas-new">
+              <FilePlus2 />
+              {t("schemas.new")}
+            </Button>
+          </div>
           {!draft ? (
             <p className="text-sm text-fg-muted">{t("schemas.list.empty")}</p>
           ) : (

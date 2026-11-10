@@ -1162,6 +1162,11 @@ pub struct PlanContext {
     pub projects: Vec<ProjectSummary>,
     /// Project open in the UI (default target of project ops).
     pub current_project: Option<String>,
+    /// Project the assistant's "현재 프로젝트" scope names (0.5.0): the default scope of a command
+    /// that names no documents / folder / project of its own, and the evidence scope of questions
+    /// (work documents ∪ reference material ∪ 공통 참고 자료).
+    #[serde(default)]
+    pub scope_project: Option<String>,
     /// Earlier turns of the assistant conversation (oldest first), for commands that refer back
     /// ("그것도 엑셀로", "같은 폴더로").
     #[serde(default)]
@@ -1194,6 +1199,7 @@ impl Default for PlanContext {
             model_ids: Vec::new(),
             projects: Vec::new(),
             current_project: None,
+            scope_project: None,
             history: Vec::new(),
         }
     }

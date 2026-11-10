@@ -48,6 +48,9 @@ pub struct UiPlanContext {
     pub current_page: Option<u32>,
     /// Project open on the projects screen (default target of project ops, §3.15).
     pub current_project: Option<String>,
+    /// Project the assistant's "현재 프로젝트" scope names (0.5.0): default scope of commands and
+    /// evidence scope of questions.
+    pub project_id: Option<String>,
     /// Earlier turns of the assistant conversation (oldest first).
     pub history: Vec<ConversationTurn>,
     /// Interpretation mode (default: the model reads every sentence; `rules_first` is the legacy path).
@@ -146,6 +149,7 @@ pub fn build_context(app: &AppHandle, ui: &UiPlanContext) -> UiResult<PlanContex
         model_ids,
         projects,
         current_project: ui.current_project.clone(),
+        scope_project: ui.project_id.clone(),
         history: ui.history.clone(),
     })
 }

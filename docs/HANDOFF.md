@@ -15,6 +15,11 @@
   축약·모듈 단위 컴파일 검증, 리뷰 서브에이전트는 단계 말에만.
 - 설치파일 빌드(Actions "Windows installer (manual)")는 **요청된 작업이 모두 끝나고 전체 검증(Rust 테스트·clippy·vitest·
   Playwright·푸시한 커밋의 CI)에 FAILED가 없음을 확인한 뒤에만** 실행한다(사용자 결정 2026-11-09). 작업 도중 빌드 금지.
+- **버전별 브랜치**(사용자 결정 2026-11-10 "앞으로는 마이너와 패치 버전을 올려서 브랜치를 생성하고 작업하자"): 작업을 시작할 때 버전을 올리고
+  (새 기능·구조 변경 = 마이너, 수정 = 패치; `Cargo.toml`·`package.json`/lock·`src-tauri/tauri.conf.json`·모의 백엔드 버전 문자열·`npm run notices`)
+  `main`에서 `release/<major.minor.patch>` 브랜치를 만들어 그 위에서 작업·WIP 푸시·설치파일 빌드를 한다(`v0.5.0` 같은 이름은 릴리스 태그와 겹치므로
+  쓰지 않음). 끝나면 사용자가 PR로 `main`에 병합하고 게시 실행이 `v<버전>` 태그를 만든다. 첫 적용: `release/0.5.0`(`main` 4c2a7ca = PR #18까지 병합된
+  `phase/p6-p7`에서 분기; `phase/*` 브랜치는 0.1.0~0.4.0과 0.5.0 초반의 기록으로만 남김).
 
 ## 단계 현황
 
@@ -1624,13 +1629,18 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 - **배경**: 2026-11-10 검토 2건(GUI에서 불필요한 요소 — AIDP·오피스에이전트 참고; 지식 저장소와 프로젝트 역할 통합)에서 사용자가 **A안**(프로젝트 = 업무 문서 + 참고 자료,
   프로젝트 밖 참고 문서는 공통 참고 자료)과 GUI 정리 제안, 메뉴 용어 변경을 택했다. 계획 §0~§5가 결정 사항이다.
 - **데이터**: 마이그레이션 `0010_reference_groups.sql` — `collections.kind TEXT NOT NULL DEFAULT 'reference'`(`reference` | `project`), `collections.project_id TEXT REFERENCES projects(id)
-  ON DELETE CASCADE` + 인덱스, `SCHEMA_VERSION = 10`. 기존 컬렉션은 모두 `reference`·`project_id NULL` = 공통 참고 자료의 묶음(데이터 이동 없음). `watch_folder` 열은 남기고
-  읽기·쓰기를 모두 뺐다(`Collection`·`CollectionInput`에서 제거).
+  ON DELETE CASCADE` + 인덱스. 기존 컬렉션은 모두 `reference`·`project_id NULL` = 공통 참고 자료의 묶음(데이터 이동 없음). `watch_folder` 열은 남기고
+  읽기·쓰기를 모두 뺐다(`Collection`·`CollectionInput`에서 제거). **`0011_collections_rebuild.sql`**(`SCHEMA_VERSION = 11`): 프로젝트 묶음이 프로젝트 이름을 그대로 쓰도록
+  0002의 표 전체 `UNIQUE(name)`을 없앴다 — SQLite는 인라인 제약을 못 지우므로 `collections`를 다시 만들고(`collection_docs`도 함께: RENAME이 자식 FK를 옛 표로 돌려
+  놓고 그 표를 지우면 멤버십이 연쇄 삭제됨) 인덱스(`project_id`, `name COLLATE NOCASE`)를 다시 건다. 공통 묶음끼리의 대소문자 무시 유일성은 `save_collection`이,
+  프로젝트당 1묶음은 `project_reference_group`/`save_collection`(`project_group_exists`)이 지킨다. `db::tests::migrates_collections_from_schema_9_without_losing_memberships`가
+  0.4.0 모양(스키마 9) DB를 심어 10·11을 거친 뒤 멤버십·연쇄 삭제·`foreign_key_check`를 확인한다.
 - **코어** (`crates/doculens-core`):
   - `knowledge/mod.rs`: `CollectionKind`, `Collection.kind`/`project_id`(+`is_common()`), `CollectionInput.project_id`(생성 때만 의미), `SearchScope.project_id` + `SearchScope::project(id)`,
     `is_unrestricted`에 포함.
-  - `knowledge/repo.rs`: `COLLECTION_COLS`에 kind/project_id; `save_collection`은 생성 시 `project_id` → kind `project`, 갱신은 저장된 kind·project 유지;
-    `reference_group_of_project` / `project_reference_group(conn, project_id, project_name)`(없으면 생성, 이름 = 프로젝트 이름, 겹치면 " (2)" 식 번호; 모르는 프로젝트는
+  - `knowledge/repo.rs`: `COLLECTION_COLS`에 kind/project_id; `save_collection`은 생성 시 `project_id` → kind `project`(프로젝트 없음 `project_not_found`, 이미 묶음이 있으면
+    `project_group_exists`), 갱신은 저장된 kind·project 유지, 이름 유일성(`collection_name_taken`)은 공통 묶음끼리만(모의와 동일);
+    `reference_group_of_project` / `project_reference_group(conn, project_id, project_name)`(없으면 생성, 이름 = 프로젝트 이름 — 공통 묶음과 같아도 됨; 모르는 프로젝트는
     `project_not_found`) / `sync_reference_group_name` / `delete_reference_groups_of_project` / `common_reference_doc_ids`(활성·프로젝트 없음) / `project_work_doc_ids` /
     `project_reference_doc_ids`. **`scope_doc_ids`**: `project_id`가 있으면 허용 집합 = 업무 문서(`project_documents`) ∪ 프로젝트 묶음 문서 ∪ 활성 공통 묶음 문서;
     `documents`가 함께 오면 그 문서들이 업무 문서를 대신한다(선택·첨부 문서로 물어도 참고 자료는 함께 봄 — 플래너 실행기의 working set도 이 경로); `collections`·`roles`·`folder`는
@@ -1640,17 +1650,41 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
     실행기는 `as_reference`면 묶음 보장 → `add_docs_to_collection` → `set_role(knowledge)`(트랜잭션), 아니면 종전 `copies::add_documents`; 요약 "프로젝트 참고 자료에 문서 n건 추가".
     규칙: "참고 자료로/참고로/지침으로/규정으로/기준으로/as reference/guideline" → `as_reference`; 삭제 규칙의 보호어에 "참고 자료·묶음" 추가. `ExplainScope::Collection` →
     `Reference`(직렬화 `reference`, 옛 `collection`은 alias로 역직렬화; `EXPLAIN_SCOPES` 갱신). 실행기의 `Search`·`Answer`·`Explain`(문서 범위 제외)이 `plan.scope.filter.project_id`를
-    `SearchScope.project_id`로 넘겨 플랜의 프로젝트 범위도 합집합 규칙을 쓴다.
+    `SearchScope.project_id`로 넘겨 플랜의 프로젝트 범위도 합집합 규칙을 쓴다. **`PlanContext.scope_project`**(셸 `UiPlanContext.project_id` — 어시스턴트 "현재 프로젝트" 칩):
+    문서·폴더·프로젝트를 스스로 말하지 않은 명령의 기본 범위(`rules::scope_of` 끝과 `validate`에서 — 모델 플랜도; `add_to_project`·`import`는 제외, 유형·날짜 필터와는 교집합),
+    프롬프트 컨텍스트에 "범위 프로젝트" 줄. **`exec::plan_scope`**: `add_to_project`의 대상 프로젝트는 소속 필터가 아니라 목적지이므로 문서 집합(실행·미리보기)에서 뺀다 —
+    "선택한 문서를 한빛 프로젝트에 추가해"가 선택 ∩ 프로젝트 멤버로 비어 `no_documents`가 되던 0.3.0 버그 수정(`exec_tests::add_to_project_takes_outside_documents_and_reference_material`).
   - `generate`: `DraftRequest.project_id`(serde 기본 없음) — `use_knowledge`·`SourceRef::Knowledge`·절별 추가 검색이 `SearchScope::project(id)`로 돈다(`KnowledgeLookup` 묶음 인자).
   - 테스트: `knowledge::tests::project_scope_unions_work_documents_and_reference_material`(묶음 생성·단일성·이름 충돌 번호·`save_collection(project_id)`·합집합·문서 대체·역할 교집합·
     구판/비활성 면제·모르는 프로젝트·이름 동기화·삭제 연쇄·옛 컬렉션 = 공통), `planner::tests`에 "참고 자료로 넣어줘"·영어 "as reference material" 케이스.
 - **셸** (`src-tauri`): `project_add_documents(id, doc_ids, as_reference?)`(참고 자료면 묶음 보장 + 추가 + 역할 knowledge, `knowledge://changed collections`·`documents://changed updated`
   발행), 신규 `project_reference_group(id) -> Collection`(없으면 생성), `project_delete`가 묶음 삭제를 발행, `project_update` 뒤 `collections` 변경 발행. `knowledge_search`·
   `knowledge_answer`는 `SearchScope.project_id`를 그대로 받는다(명령 서명 변경 없음). 기존 `knowledge_collection_add {id: 묶음, set_role: true}`로 참고 자료 묶음에 넣어도 같다.
-- **프런트**(포크 F1·F2; 아래 "프런트" 단락은 통합 뒤 갱신): 사이드바 7개(`library`·`assistant`·`review`·`projects`·`generate`·`jobs`·`settings`; `nav.*` i18n), 홈·검색·스키마·
-  지식 베이스·정리/내보내기·모델 관리자 화면은 메뉴에서 빼고 문서함 띠·어시스턴트 "근거만 찾기"·설정 탭(AI 모델·양식·추출 항목·참고 자료)·작업 현황 "정리 이력" 탭으로 흡수;
-  프로젝트 목록 맨 위 "공통 참고 자료", 상세 5탭, "프로젝트에 넣기" 대화상자; 모의 백엔드에 `project_reference_group`·`kind`/`project_id`·`as_reference`.
+- **프런트**(포크 F1 — 셸·문서함·어시스턴트·설정·작업 현황; 포크 F2 — 프로젝트·참고 자료·넣기 대화상자·모의; 사용자 허용 "에이전트 여러 개"):
+  - F1: `App.tsx`(index → `/library`, `/search` → 어시스턴트 근거 모드, `/models`·`/schemas` → 설정 탭 리다이렉트, 쿼리 보존 — `/schemas?register=…` 포함, `/knowledge` →
+    `/projects/common` 심), `Sidebar.tsx` 7개(`nav.*`; 드롭 대상 문서함·프로젝트·문서 작성, 나머지는 스프링 로딩만), `CommandPalette.tsx`, `StatusBar.tsx`(AI 엔진 상태 + 모델 이름 +
+    작업 배지 + 게이트 안내), `LibraryPage.tsx`(오늘 할 일 띠 `TodayStrip.tsx`, 집계 바 삭제, 정리·내보내기 버튼, 프로젝트에 넣기, 우클릭 `LibraryContextMenu.tsx`; 삭제 `HomePage`·
+    `SearchPage`·`AggregateBar`·`aggregate.ts`), `AssistantPage.tsx`(범위 전체·현재 프로젝트·선택 문서, 근거만 찾기 `assistant-evidence-only`/`assistant-evidence-mode` →
+    `knowledge_search`만 호출, 해석 선택 제거; `evidence.tsx` `EvidenceCard`), `SettingsPage.tsx`(탭 7개 `?tab=`, 일반 탭에 테마·단축키·정보·고급(해석 `settings-routing`),
+    처리 탭에 다시 검사·모든 문서 다시 렌더, `tabs.ts`), `ModelsPage.tsx`(추천 카드 + `settings-models-advanced`), `SchemasPage.tsx`(양식 등록 기본), `JobsPage.tsx`(정리 이력
+    `jobs-tab-history`), `OrganizePage.tsx`(이력 탭 제거), `dnd/store.ts` `hoverTargetAt`; i18n 용어 일괄 교체; E2E `helpers.ts`(`openSettingsTab`·`openModelsAdvanced`·
+    `openAssistantScreen`) + smoke·documents·dnd·engine·organize·planner·pipeline 스펙 재작성.
+  - F2: `types.ts`(`CollectionKind`, `Collection.kind/project_id`, `CollectionInput.project_id`, `SearchScope.project_id`, `add_to_project.as_reference`, `COMMON_REFERENCE_ID`,
+    `watch_folder` 제거), 모의(`mock-knowledge.ts` 묶음 종류·프로젝트 묶음 생성/이름 동기화/삭제·범위 합집합, `mock-projects.ts` `project_reference_group`, `mock-planner.ts`
+    `as_reference`), `ipc.ts` `projectReferenceGroup`, `ProjectsPage.tsx`(고정 카드 `projects-common-reference`, `?put=`/`?classify=`, 드롭 → 넣기), `ProjectDetailPage.tsx`(탭 문서·
+    참고 자료·규칙·결과·설정, `/projects/common`), `ResultsTab.tsx`(관계 + 리포트), `ReferenceTab.tsx`, `CommonReferencePage.tsx`, `PutInProjectDialog.tsx`(대상·종류·자동 분류 제안·
+    파일에서 가져오기), `ReferenceDocsPanel.tsx`·`ReferenceGroupsView.tsx`·`ReferenceAdvancedPanel.tsx`·`reference.ts`·`hit.tsx`, `IngestWizard.tsx`(`lockCollection`),
+    `AddToCollectionDialog.tsx`는 넣기 대화상자 래퍼(뷰어), `KnowledgePage.tsx`는 리다이렉트 심; 삭제 `PickProjectDialog`·`CollectionsPanel`; `mock-reference.test.ts` 3건,
+    `e2e/reference.spec.ts`(옛 `knowledge.spec`) 5건, `projects.spec.ts` 수정.
+  - 통합(직접): 설명 범위 와이어 값 `collection` → `reference`(`ExplainScope` 타입·`opSpecs`·모의 검증은 둘 다 수락·i18n `explain_scope_reference`), `UiPlanContext.project_id`
+    타입 필드(F1의 느슨한 캐스트 제거), 모의 버전 문자열 0.5.0, 묶음 이름 규칙을 모의와 맞춤(위 0011).
 - **문서**: `docs/plan/v0.5.0.md`, `docs/releases/v0.5.0.md`, 설계 §3.7.2 머리말·§3.14·§3.15 머리말, RUN-GUIDE(메뉴 이름·첫 실행 흐름), 체크리스트 "0.5.0" 절, README·CLAUDE.md.
+- **브랜치·CI**: 사용자 결정(버전별 브랜치)에 따라 `main`(PR #18 병합 커밋 4c2a7ca)에서 `release/0.5.0`을 분기해 통합 커밋 81e8e8d, `ci.yml`에 `release/**` 트리거 추가(3a2a26f).
+  CI run 42795675001(3a2a26f) 7개 잡 모두 성공. `main`의 run 42791778103(4c2a7ca)은 Web 잡 실패 — WIP 커밋에 포크가 스테이징한 옛 화면 파일 삭제만 먼저 들어가
+  타입체크가 깨진 상태였고, `release/0.5.0`을 병합하면 해소된다.
+- **Lite 설치파일**: "Windows installer (manual)" run 42797299609(`--ref release/0.5.0`, `ref=3a2a26f`, `variant=lite`, `publish=false`) 성공 — 아티팩트
+  `DocuLens-Setup-Lite-0.5.0-x64` 50,824,823 B(2027-02-08까지 보관). 게시(`publish=true`, 같은 `ref=3a2a26f`)는 사용자 확인 뒤(계획 §4 5); 그 뒤 `release/0.5.0` →
+  `main` PR 병합.
 
 ### 테스트·검증
 
@@ -1674,6 +1708,7 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | 2026-11-10 0.3.0 1차 — 내장 양식 SW 개발 문서화 (b561120 + 후속 커밋) | `cargo test --workspace` 코어 303(4 ignored; `pipeline::schema` 13 보임/6 숨김 검사·`planner` 18·`projects` 18)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(SW 문구 31건·문맥 재작성, 기준선 재생성, 미달은 이전과 같은 mx-10 1건); vitest 25파일 147건(`mock-generate.test` 규칙 파서·프로젝트 템플릿 SW화, `template.test` 예시 견적서); Playwright 전체 실행 50건 중 48 통과 → 정리 예시 문서·어시스턴트 테스트 템플릿(유지보수) 수정 뒤 `organize`·`projects` 스펙 7/7 재실행 통과; `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(93fb59b 푸시 이벤트, run 42761926963) |
 | 2026-11-10 0.3.0 2~6차 통합 — 생성 템플릿 SW화(1번) · 토큰 예산/절별 생성(4번) · 프로젝트 단계·프로젝트별 정리·추적 사본(5+6번) · 문서 N개 스키마 도출(2번) · 글자 수정 이력(7번) | `cargo test --workspace` 코어 317(4 ignored; `generate` 토큰 예산·분할 2건, `projects`·`organize`·`export`·`aggregate`·`planner` 프로젝트 8건, `pipeline` 스키마 도출 3건, `documents::import` 이력 1건 포함)·셸 3·평가 15·통합 1, clippy(-D warnings)·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(기준선 +0.0 pt, 미달은 mx-10 1건); `npm run typecheck`·`npm run build`·`licenses:check` 통과, vitest 26파일 150건, Playwright 53/53(`generate` 4·`projects` 6·`organize` 4·`pipeline` 2·`dnd`·`documents` 5 재작성 포함); 병렬 에이전트 3개가 같은 트리에서 작업해 중간 WIP 스냅샷 3건(1c885b4·97acb87·d742501, `[skip ci]`)을 거쳤고 통합 커밋에서 CI 실행 — CI 7개 잡 모두 성공(d166b5b 푸시 이벤트, run 42771458691) |
 | 2026-11-10 0.3.0 릴리스 (772782f + 문서 77e8b69) | 버전 범프·고지/SBOM 재생성 뒤 `cargo test --workspace`·clippy·fmt·`cargo deny`·vitest·`npm run build`·`licenses:check`·`nsis:check` 통과; CI 7개 잡 성공(run 42771724261); Lite 설치파일 빌드 run 42772557097 성공, Release v0.3.0 게시(Lite 48.4 MiB + sha256 + SBOM + 고지) |
+| 2026-11-10 0.5.0 프로젝트 중심 통합 (브랜치 `release/0.5.0`; WIP 94b6803·2661bf5·fcf34d7·bc806be → 통합 커밋은 CI 기록 참고) | `DOCULENS_PDFIUM=… cargo test --workspace --no-fail-fast` 코어 328(4 ignored; `db` 스키마 9→11 마이그레이션 1건, `knowledge::tests` 프로젝트 범위 1건, `planner` 참고 자료 문구·범위 프로젝트·`exec_tests` add_to_project 3건 포함)·셸 3·평가 15·통합 1, clippy(-D warnings)·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(+0.0 pt); `npm run typecheck`·`npm run build`·`licenses:check`·`nsis:check` 통과, vitest 26파일 147건(`aggregate.test` 삭제, `mock-reference.test` 3건 추가), Playwright 54/54(`reference.spec` 5건 + 재작성 스펙; 포크별 실행 44/44·10/10 뒤 통합 전체 1회); CI run 42795675001(3a2a26f) 7개 잡 성공; Lite 설치파일 빌드 run 42797299609 성공(아티팩트 50,824,823 B, publish=false) |
 | 2026-11-10 0.4.0 모델 교체 (WIP 7b939ab·d973eb1·483daae → 통합 커밋은 CI 기록 참고) | `DOCULENS_PDFIUM=… cargo test --workspace --no-fail-fast` 코어 324(4 ignored; `registry`·`modelstore`·`gguf`·`memory`·`engine::presets`·`pipeline::image` Gemma 4 테스트, `knowledge` 접두어 1건, `planner` "4B" 1건 포함)·셸 3·평가 15·통합 1, clippy(-D warnings)·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(기준선 재생성 +0.0 pt, 미달은 mx-10 1건); 실제 엔진 테스트(로컬 b12066 CPU 빌드 + `tiny-gemma4`): 1 passed(137 s; 로드 2.5 s, 채팅·스트리밍 8 델타·json_schema `{"ok": true}`·이미지 채팅(프롬프트 557 토큰)·분류 JSON·KIE 접두·플래너(모델 오류 허용 경로)·양식/NL 스키마(잘림 허용)·초안·규칙 문법 수락; 모델 섹션 `image-min-tokens 512 / image-max-tokens 1024 / ubatch-size 1024`); `npm run typecheck`·`npm run build`·`licenses:check`·`nsis:check` 통과, vitest 26파일 150건, Playwright 53/53; 병렬 에이전트 2개(프런트·문서 / 임베딩·플래너·평가); CI 7개 잡 모두 성공(d238dc4 푸시 이벤트, run 42781321912 — 실제 llama-server 잡은 tiny-gemma4 픽스처); Lite 설치파일 빌드 run 42782108585 성공(`ref=d238dc4`, `publish=false` — 아티팩트 `DocuLens-Setup-Lite-0.4.0-x64` 50,798,147 B, 2027-02-08까지 보관; 이후 사용자 지시로 run 42784292140 `publish=true` → Release v0.4.0 게시, Lite 50,802,945 B) |
 | 2026-11-09 이미지 위 글자 레이어 · 우측 패널 AI 검색/이력 (488af39·9e56dd6) | `cargo test --workspace` 코어 266(3 ignored; `documents::layout` 9·`render` 실 PDFium 문자 박스·`import` 레이아웃 왕복 추가)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과; vitest 23파일 139건(`text-layer.test.ts` 8 추가); Playwright 41/41(`documents`·`knowledge`·`pipeline` 스펙을 레이어·검토 큐 기준으로 재작성); CI 7개 잡 두 커밋 모두 성공 |
 | 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 3회(run 42471185353·42475854955 solid 43 MB, 42547230697 파일별 압축 47.6 MB; 159 파일 검사 통과) · 1~3번 반영 Lite 빌드 성공(run 42577030466, 검증된 커밋 a461405 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.5 MB; Release 게시는 권한 분류기 거부로 publish=false) · **1~8번(어시스턴트 모델 우선·되묻기·취소 포함) 반영 Lite 빌드 성공(run 42592935148, 검증된 커밋 3467ad4 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.6 MB, 2027-02-07까지 보관; publish=false — Release 게시는 사용자 작업)** · **0.2.0 릴리스(2026-11-09, https://github.com/kimhershey/docHarnes/releases/tag/v0.2.0)**: 검증된 커밋 3d55db8 고정, publish=true — Full run 42613728278(`DocuLens-Setup-Full-0.2.0-x64.exe` 1,156,786,994 B) → Lite run 42613985631(`DocuLens-Setup-Lite-0.2.0-x64.exe` 50,579,259 B); 자산 6개(설치파일 2종 + `.sha256` 2 + `THIRD-PARTY-NOTICES.md` + `sbom.cdx.json`); 이번에는 publish 디스패치가 거부되지 않음 · **4차 수정 반영 Lite 빌드 성공(2026-11-10, run 42753243021, 검증된 커밋 c5a8aa2 고정, 아티팩트 `DocuLens-Setup-Lite-0.2.0-x64` 50,593,409 B, 2027-02-08까지 보관; publish=false — 버전은 아직 0.2.0, 릴리스 v0.2.0의 설치파일은 3d55db8 빌드 그대로)** · **Full 0.1.0 빌드 성공(run 42547228170): 1.1 GB, 219 파일, CUDA 팩 cu121·cu129 동봉 검사 통과** · CUDA 팩 빌드 성공(cu121 run 42533483890 · cu129 run 42533486332 → Release v0.1.0) — 위 "패키징·고지" 참조 |

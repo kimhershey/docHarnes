@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import ko from "../src/i18n/ko.json" with { type: "json" };
-import { card, createWorkspace, docId, freshApp, importViaLibrary, tpl } from "./helpers";
+import { card, createWorkspace, docId, freshApp, importViaLibrary, openSettingsTab, tpl } from "./helpers";
 
 // P5 assistant planner (design §3.5 / §3.7.6) against the browser mock: the
 // aggregate card, plan → execution → result cards of an export, the organise
@@ -178,8 +178,10 @@ test.describe("P5 planner", () => {
   test("되묻기 replies with the question's context; 취소 (button or typed) drops pending cards by rule", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
+    // The interpretation mode moved to 설정 > 일반 > 고급 (plan §3): model first by default.
+    await openSettingsTab(page, "general");
+    await expect(page.getByTestId("settings-routing")).toContainText(ko.assistant.routing.model_first);
     await openAssistant(page);
-    await expect(page.getByTestId("assistant-routing")).toContainText(ko.assistant.routing.model_first);
 
     // A sentence the (mock) model cannot read → a clarification card waiting for a reply.
     await send(page, "보라색 코끼리를 춤추게 해줘");

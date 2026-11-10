@@ -46,6 +46,10 @@ export function conversationTurns(messages: Message[], max = MAX_MEMORY_TURNS): 
         if (q) turns.push({ role: "assistant", text: clip(q) });
         break;
       }
+      case "evidence":
+        // What was found (titles only) so a follow-up question can lean on "그 문서".
+        if (m.response && !m.pending && m.response.hits.length > 0) turns.push({ role: "assistant", text: clip([...new Set(m.response.hits.map((h) => h.title))].join(", ")) });
+        break;
       default:
         break;
     }

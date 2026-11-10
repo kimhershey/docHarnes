@@ -7,8 +7,8 @@ const W = 720;
 const H = 420;
 const R = 150;
 
-/** 관계 tab: documents on a circle, shared entities as labelled edges (§3.15 "관계 그래프"). */
-export function RelationsTab({ graph }: { graph: RelationGraph }) {
+/** 관계 그래프 section of the 결과 tab: documents on a circle, shared entities as labelled edges (§3.15). */
+export function RelationsSection({ graph }: { graph: RelationGraph }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const n = graph.nodes.length;

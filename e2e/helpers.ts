@@ -87,3 +87,26 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 export function tplPattern(template: string, vars: Record<string, string | number>): RegExp {
   return new RegExp(escapeRe(template).replace(/\\\{\\\{(\w+)\\\}\\\}/g, (_, k: string) => (k in vars ? escapeRe(String(vars[k])) : "\\d+")));
 }
+
+export type SettingsTab = "general" | "workspace" | "processing" | "models" | "schemas" | "reference" | "privacy";
+
+/** Opens a settings tab (0.5.0: AI 모델 · 양식·추출 항목 · 참고 자료 live in the settings). */
+export async function openSettingsTab(page: Page, tab: SettingsTab): Promise<void> {
+  await page.getByTestId("nav-settings").click();
+  await page.getByTestId(`settings-tab-${tab}`).click();
+  await expect(page.getByTestId(`settings-tab-${tab}`)).toHaveAttribute("data-state", "active");
+}
+
+/** 설정 > AI 모델 with its "고급" section (engine card, hardware, manual tier, discovered / registry tables) opened. */
+export async function openModelsAdvanced(page: Page): Promise<void> {
+  await openSettingsTab(page, "models");
+  const advanced = page.getByTestId("settings-models-advanced");
+  if ((await advanced.getAttribute("data-open")) !== "true") await page.getByTestId("settings-models-advanced-toggle").click();
+  await expect(advanced).toHaveAttribute("data-open", "true");
+}
+
+/** Opens the assistant from the sidebar. */
+export async function openAssistantScreen(page: Page): Promise<void> {
+  await page.getByTestId("nav-assistant").click();
+  await expect(page.getByTestId("page-assistant")).toBeVisible();
+}

@@ -102,28 +102,38 @@ pub fn get_collection(conn: &Connection, id: &str) -> rusqlite::Result<Option<Co
         .optional()
 }
 
-/// Inserts (no id) or updates a collection. Names are unique. A new group with `project_id`
-/// becomes that project's reference group (kind `project`); on update the kind and project are
-/// kept as stored.
+/// Inserts (no id) or updates a collection. Names are unique (case-insensitively) among the
+/// groups of the 공통 참고 자료; a project's group carries the project's name and may share it
+/// with a common group. A new group with `project_id` becomes that project's reference group
+/// (kind `project`; at most one per project — `project_group_exists` otherwise); on update the
+/// kind and project are kept as stored.
 pub fn save_collection(conn: &Connection, input: &CollectionInput) -> rusqlite::Result<Collection> {
     let name = input.name.trim();
     if name.is_empty() {
         return Err(typed("collection_name_empty"));
     }
-    let taken: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM collections WHERE name = ?1 COLLATE NOCASE AND id <> COALESCE(?2, '')",
-        params![name, input.id],
-        |r| r.get(0),
-    )?;
-    if taken > 0 {
-        return Err(typed("collection_name_taken"));
+    let stored = match &input.id {
+        Some(id) => Some(get_collection(conn, id)?.ok_or_else(|| typed("collection_not_found"))?),
+        None => None,
+    };
+    let new_project = input.project_id.as_deref().map(str::trim).filter(|p| !p.is_empty());
+    let common = match &stored {
+        Some(c) => c.is_common(),
+        None => new_project.is_none(),
+    };
+    if common {
+        let taken: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM collections WHERE project_id IS NULL AND name = ?1 COLLATE NOCASE AND id <> COALESCE(?2, '')",
+            params![name, input.id],
+            |r| r.get(0),
+        )?;
+        if taken > 0 {
+            return Err(typed("collection_name_taken"));
+        }
     }
     let now = now();
     let id = match &input.id {
         Some(id) => {
-            if !collection_exists(conn, id)? {
-                return Err(typed("collection_not_found"));
-            }
             conn.execute(
                 "UPDATE collections SET name = ?2, description = ?3, color = ?4, active = ?5, updated_at = ?6 WHERE id = ?1",
                 params![id, name, input.description, input.color, input.active as i64, now],
@@ -132,8 +142,17 @@ pub fn save_collection(conn: &Connection, input: &CollectionInput) -> rusqlite::
         }
         None => {
             let id = new_id();
-            let project_id = input.project_id.as_deref().map(str::trim).filter(|p| !p.is_empty());
+            let project_id = new_project;
             let kind = if project_id.is_some() { CollectionKind::Project } else { CollectionKind::Reference };
+            if let Some(p) = project_id {
+                let exists: i64 = conn.query_row("SELECT COUNT(*) FROM projects WHERE id = ?1", [p], |r| r.get(0))?;
+                if exists == 0 {
+                    return Err(typed("project_not_found"));
+                }
+                if reference_group_of_project(conn, p)?.is_some() {
+                    return Err(typed("project_group_exists"));
+                }
+            }
             conn.execute(
                 "INSERT INTO collections (id, name, description, color, active, kind, project_id, created_at, updated_at) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
@@ -159,22 +178,14 @@ pub fn reference_group_of_project(conn: &Connection, project_id: &str) -> rusqli
     .optional()
 }
 
-/// A name for a project's reference group that no other collection uses (case-insensitive).
-fn free_group_name(conn: &Connection, wanted: &str, own_id: Option<&str>) -> rusqlite::Result<String> {
-    let base = wanted.trim();
-    let base = if base.is_empty() { "참고 자료" } else { base };
-    for n in 0u32..100 {
-        let candidate = if n == 0 { base.to_string() } else { format!("{base} ({})", n + 1) };
-        let taken: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM collections WHERE name = ?1 COLLATE NOCASE AND id <> COALESCE(?2, '')",
-            params![candidate, own_id],
-            |r| r.get(0),
-        )?;
-        if taken == 0 {
-            return Ok(candidate);
-        }
+/// The name a project's reference group carries: the project's name ("참고 자료" when blank).
+fn group_name(project_name: &str) -> &str {
+    let name = project_name.trim();
+    if name.is_empty() {
+        "참고 자료"
+    } else {
+        name
     }
-    Ok(format!("{base} {}", new_id()))
 }
 
 /// The reference group of a project (0.5.0 plan A), created on first use and named after the
@@ -191,7 +202,7 @@ pub fn project_reference_group(
     if exists == 0 {
         return Err(typed("project_not_found"));
     }
-    let name = free_group_name(conn, project_name, None)?;
+    let name = group_name(project_name);
     let id = new_id();
     let now = now();
     conn.execute(
@@ -202,13 +213,12 @@ pub fn project_reference_group(
     get_collection(conn, &id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
 }
 
-/// Renames a project's reference group after the project (no-op without a group or when the
-/// name is already in use elsewhere beyond the numbered fallback).
+/// Renames a project's reference group after the project (no-op without a group).
 pub fn sync_reference_group_name(conn: &Connection, project_id: &str, project_name: &str) -> rusqlite::Result<()> {
     let Some(group) = reference_group_of_project(conn, project_id)? else {
         return Ok(());
     };
-    let name = free_group_name(conn, project_name, Some(&group.id))?;
+    let name = group_name(project_name);
     if name != group.name {
         conn.execute(
             "UPDATE collections SET name = ?2, updated_at = ?3 WHERE id = ?1",

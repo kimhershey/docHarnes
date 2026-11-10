@@ -46,18 +46,18 @@
     "disabled": "Disabled"
   },
   "nav": {
-    "home": "Home",
-    "library": "Document library",
-    "search": "Search",
-    "assistant": "Assistant",
-    "review": "Review queue",
-    "schemas": "Schemas / forms",
-    "knowledge": "Knowledge base",
-    "generate": "Generate document",
+    "home": "Start screen",
+    "library": "Documents",
+    "search": "Find evidence",
+    "assistant": "AI Assistant",
+    "review": "Review Inbox",
+    "schemas": "Forms & fields",
+    "knowledge": "Reference material",
+    "generate": "Compose",
     "projects": "Projects",
-    "organize": "Organize / export",
-    "jobs": "Jobs",
-    "models": "Model manager",
+    "organize": "Organise · export",
+    "jobs": "Activity",
+    "models": "AI models",
     "settings": "Settings",
     "collapse": "Collapse sidebar",
     "expand": "Expand sidebar",
@@ -79,15 +79,9 @@
     "tier": "Tier"
   },
   "statusbar": {
-    "engine": "Engine",
-    "engine_not_started": "Engine not connected (P1)",
+    "engine": "AI engine",
     "engine_no_model": "No model",
-    "vram": "VRAM",
-    "queue": "{{count}} queued",
-    "model": "Model",
-    "network_offline": "No network (offline)",
-    "network_online": "Online",
-    "preview": "Preview",
+    "queue": "{{count}} jobs",
     "engine_stopped": "Engine stopped",
     "engine_starting": "Starting",
     "engine_restarting": "Restarting",
@@ -95,7 +89,6 @@
     "engine_ready": "Ready",
     "engine_idle": "Idle (no model loaded)",
     "engine_degraded": "Engine error",
-    "vram_used": "VRAM used",
     "engine_stopping": "Stopping",
     "gate_busy": "Batch running — responding in about {{seconds}}s",
     "gate_busy_short": "Batch running",
@@ -137,8 +130,8 @@
     "open_workspace": "Open another workspace",
     "undo_done": "{{restored}} restored ({{skipped}} skipped)",
     "redo_done": "{{restored}} redone ({{skipped}} skipped)",
-    "undo_started": "Undo started as a job (see Jobs).",
-    "redo_started": "Redo started as a job (see Jobs).",
+    "undo_started": "Undo started as a job (see Activity).",
+    "redo_started": "Redo started as a job (see Activity).",
     "nothing_to_undo": "Nothing to undo.",
     "nothing_to_redo": "Nothing to redo."
   },
@@ -172,7 +165,7 @@
       "import_existing": "Import the found files now"
     },
     "hardware": {
-      "intro": "The detected hardware decides the tier and the recommended model. You can override both in the model manager at any time.",
+      "intro": "The detected hardware decides the tier and the recommended model. You can override both in Settings > AI models at any time.",
       "gpu": "GPU",
       "no_gpu": "No GPU detected (CPU-only tier)",
       "vram": "VRAM (free / total)",
@@ -193,7 +186,7 @@
       "import": "Import from USB / folder",
       "import_desc": "Drop GGUF + mmproj files fetched on another PC into the workspace model folder; they are registered automatically (drop-in folder).",
       "later": "Later",
-      "later_desc": "Start without a model. You can prepare one in the model manager any time.",
+      "later_desc": "Start without a model. You can prepare one in Settings > AI models any time.",
       "required_files": "Export required file list",
       "required_files_hint": "Copy file names, sizes, SHA-256 and URLs as text to download them on another PC.",
       "models_dir": "Model folder",
@@ -234,53 +227,14 @@
     "cores": "{{physical}} cores / {{logical}} threads",
     "probed_at": "Probed at"
   },
-  "home": {
-    "welcome": "{{name}}",
-    "welcome_sub": "Workspace: {{path}}",
-    "stats": {
-      "new": "New",
-      "processing": "Processing",
-      "review": "Awaiting review",
-      "done": "Done"
-    },
-    "stats_hint": "Awaiting review / done come from the pipeline. Check low-confidence fields in the review queue.",
-    "engine_card": "Hardware · engine",
-    "command_title": "Command in natural language",
-    "command_hint": "Theme, language and navigation run immediately; document commands go to the assistant (P5 planner).",
-    "command_placeholder": "e.g. process the inbox / last month's receipt total / switch to dark mode",
-    "examples": [
-      "process inbox",
-      "last month's receipt total",
-      "tax invoices → Excel",
-      "switch to dark mode",
-      "open settings"
-    ],
-    "quick": {
-      "title": "Quick actions",
-      "import": "Import documents",
-      "models": "Prepare a model",
-      "settings": "Settings",
-      "assistant": "Open assistant"
-    },
-    "recent_docs": "Recent documents",
-    "recent_empty": "No documents yet. Import them in the library or drop them into inbox/.",
-    "no_workspace": "Open a workspace first.",
-    "recent_open": "Open library",
-    "review_link": "Open the review queue",
-    "review_fields": "{{count}} field(s) awaiting review",
-    "command_drop": "Drop documents or files to attach them in the assistant"
-  },
   "assistant": {
-    "title": "Assistant",
+    "title": "AI Assistant",
     "new_chat": "New chat",
     "scope": {
       "label": "Scope",
       "all": "All",
-      "folder": "Current folder",
+      "project": "Current project",
       "selection": "Selected documents",
-      "knowledge": "Knowledge base",
-      "collection": "Collection: {{name}}",
-      "folder_named": "Current folder {{folder}}",
       "selection_count": "Selected documents ({{count}})",
       "document": "Current document",
       "document_named": "Current document: {{name}}",
@@ -288,11 +242,15 @@
       "project_clear": "Clear the project context",
       "attached": "Attached documents ({{count}})"
     },
+    "evidence": {
+      "toggle": "Find evidence only",
+      "hint": "Lists the matching passages of your documents without calling the model. The scope selection applies as well."
+    },
     "placeholder": "Command or ask in natural language (한국어 / English) · / for slash commands",
     "send": "Send",
     "empty": "How can I help? Try one of the examples.",
     "help_title": "Help",
-    "help_body": "Natural-language commands become a plan card (steps · impact · preview) that runs after your approval. Examples: process inbox, last month's receipt total, tax invoices → Excel, move receipts into monthly folders, summarize the selected documents, undo the last rename. Instant commands: /theme dark|light|system|high-contrast, /lang ko|en, /open <screen>, /job pause, /undo. Questions are answered from the knowledge base with per-sentence sources. Ctrl+Enter approves · Esc cancels · Ctrl+Z undoes.",
+    "help_body": "Natural-language commands become a plan card (steps · impact · preview) that runs after your approval. Examples: process inbox, last month's receipt total, tax invoices → Excel, move receipts into monthly folders, summarize the selected documents, undo the last rename. Instant commands: /theme dark|light|system|high-contrast, /lang ko|en, /open <screen>, /job pause, /undo. Questions are answered from the reference material with per-sentence sources. Ctrl+Enter approves · Esc cancels · Ctrl+Z undoes.",
     "executed": "Done",
     "date_resolved": "Date range: {{from}} – {{to}} ({{label}})",
     "source_slash": "slash command",
@@ -310,14 +268,14 @@
       "switch to Korean",
       "/open models"
     ],
-    "qa_hint": "Ask a question and the assistant answers from the knowledge base with per-sentence sources.",
+    "qa_hint": "Ask a question and the assistant answers from the reference material with per-sentence sources.",
     "planning": "Interpreting…",
     "attachments": {
       "label": "Attached documents",
       "count": "{{count}} attached document(s)",
       "clear": "Clear attachments",
       "remove": "Remove attachment: {{name}}",
-      "hint": "Drag library documents or drop files here: they become the scope of your questions and commands",
+      "hint": "Drag documents from Documents or drop files here: they become the scope of your questions and commands",
       "drop": "Drop documents or files to attach",
       "added": "Attached {{count}} document(s)"
     },
@@ -341,7 +299,7 @@
       "classify": "Classify",
       "set_doc_type": "Set type",
       "ocr": "OCR",
-      "define_schema": "Define schema",
+      "define_schema": "Define field set",
       "extract": "Extract",
       "validate": "Validate",
       "review": "Review",
@@ -410,11 +368,11 @@
       "profile_fine_print": "fine-print profile",
       "mode_create": "create",
       "mode_modify": "modify: {{base}}",
-      "schema": "schema {{name}}",
-      "schema_auto": "auto (schema per type)",
+      "schema": "field set {{name}}",
+      "schema_auto": "auto (field set per type)",
       "fields": "{{count}} fields",
       "all_fields": "all fields",
-      "review_show": "show review queue",
+      "review_show": "show Review Inbox",
       "review_approve": "approve all",
       "review_reject": "reject all",
       "review_correct": "correct",
@@ -464,8 +422,8 @@
       "sources": "{{count}} quoted documents",
       "current_document": "current document",
       "current_project": "current project",
-      "explain_scope_kb": "knowledge base",
-      "explain_scope_collection": "collection",
+      "explain_scope_kb": "reference material",
+      "explain_scope_reference": "reference group",
       "explain_scope_project": "project",
       "explain_scope_document": "document",
       "allow_general": "general knowledge allowed",
@@ -542,7 +500,7 @@
         "to": "To",
         "status": "Status"
       },
-      "impact_draft": "{{count}} document draft(s) (saved on the generate screen)",
+      "impact_draft": "{{count}} document draft(s) (saved on the Compose screen)",
       "impact_project": "{{count}} project / rule change(s)",
       "retention_shorter": "The retention period gets shorter — expired data is deleted by the next purge run.",
       "rule_description": "Rule: {{description}}",
@@ -577,7 +535,7 @@
         "ui": "handled in the UI",
         "cancelled": "cancelled"
       },
-      "open_review": "Open review queue ({{count}})",
+      "open_review": "Open Review Inbox ({{count}})",
       "moves": "Move log",
       "undo": "↶ Undo",
       "undone": "{{restored}} restored ({{skipped}} skipped)",
@@ -628,7 +586,7 @@
       "fallback": "What would you like to do? Please be a little more specific.",
       "no_model": "The planner model is not loaded, so the sentence cannot be interpreted. Load a model or switch the interpretation above to 'rules'.",
       "load_model": "Load model ({{model}})",
-      "open_models": "Open model manager",
+      "open_models": "Open Settings > AI models",
       "loading": "Loading the model…",
       "retry_hint": "Reply and Cancel act at once; every other sentence is read by the model.",
       "ask_back": "Reply",
@@ -644,7 +602,7 @@
       "open_document": "Opening document: {{name}}",
       "open_page": "Opening {{name}} page {{page}}",
       "open_folder": "Opening folder: {{folder}}",
-      "define_schema": "Create the schema on the schema screen from '{{description}}'.",
+      "define_schema": "Create the field set from '{{description}}' under Settings > Forms & fields.",
       "job": "Job {{action}}: #{{id}}",
       "job_none": "No matching job.",
       "engine_restart": "Restarting the engine.",
@@ -661,7 +619,7 @@
     }
   },
   "models": {
-    "title": "Model manager",
+    "title": "Settings > AI models",
     "hardware": "Hardware",
     "tier": "Tier",
     "tier_mode": "Tier selection",
@@ -670,6 +628,11 @@
     "active_model": "Active model",
     "active_auto": "Automatic (tier recommendation)",
     "recommended": "Recommended",
+    "recommended_card": "Recommended model",
+    "recommended_hint": "The model that fits this PC is chosen automatically; download or load it and you are set.",
+    "primary_hint": "The AI model the documents are read with. Drop-in folders are detected automatically.",
+    "advanced": "Advanced",
+    "advanced_hint": "engine details · hardware · manual tier · discovered models · registry",
     "registry": "Model registry",
     "columns": {
       "model": "Model",
@@ -705,7 +668,7 @@
       "already": "The same files already exist in the target folder.",
       "plan": "Validate",
       "run": "Import",
-      "started": "Import started. Follow the progress on the Jobs screen."
+      "started": "Import started. Follow the progress on the Activity screen."
     },
     "activate": "Activate",
     "p1_hint": "Arrives in phase P1",
@@ -738,7 +701,7 @@
     "user_added": "User added",
     "download_hint": "Fetched from Hugging Face and verified with SHA-256.",
     "download_disabled": "Online downloads are disabled in settings.",
-    "download_started": "Download started. Follow the progress on the Jobs screen.",
+    "download_started": "Download started. Follow the progress on the Activity screen.",
     "hash_started": "Hash verification started.",
     "load_started": "Model load started.",
     "delete_confirm": "Delete the folder '{{folder}}' and the model files in it? This cannot be undone.",
@@ -849,15 +812,16 @@
     "title": "Settings",
     "tabs": {
       "general": "General",
-      "theme": "Theme",
       "workspace": "Workspace",
       "processing": "Processing",
-      "privacy": "Privacy · retention",
-      "shortcuts": "Shortcuts",
-      "about": "About",
-      "knowledge": "Knowledge base"
+      "models": "AI models",
+      "schemas": "Forms & fields",
+      "reference": "Reference material",
+      "privacy": "Privacy · retention"
     },
     "general": {
+      "advanced": "Advanced",
+      "advanced_hint": "Settings you rarely change, such as how the AI assistant interprets free text.",
       "language": "Language",
       "language_hint": "Korean is the default for the UI and commands; English works too.",
       "scale": "UI scale",
@@ -899,7 +863,7 @@
       },
       "render_dpi": "Default render DPI",
       "review_threshold": "Review threshold",
-      "review_threshold_hint": "Fields below this confidence go to the review queue.",
+      "review_threshold_hint": "Fields below this confidence go to the Review Inbox.",
       "review_threshold_scope": "Applies to new extractions and to 'Re-run validation' in the Fields tab; flags of already extracted documents stay as they are.",
       "audit_sample": "Random audit sample of high-confidence fields",
       "organize_reviewed_only": "Organize/move reviewed documents only",
@@ -915,7 +879,11 @@
       "precise_hint": "A second sample (T=0.3) lowers the confidence of values that differ. Time ×1.5–2.",
       "dense_reocr": "Fine-print re-OCR of dense pages",
       "dense_reocr_hint": "Pages with {{cells}}+ table cells get a second OCR pass at the fine-print budget.",
-      "dense_cells": "Table cells that make a page dense"
+      "dense_cells": "Table cells that make a page dense",
+      "maintenance": "Documents maintenance",
+      "maintenance_hint": "Rescan the Documents folder or rebuild the page images of every document. Also available in the right-click menu of Documents.",
+      "rerender_all": "Re-render all documents",
+      "rerender_all_confirm": "Rebuilds the page images of {{count}} document(s). This can take a while. Continue?"
     },
     "privacy": {
       "pii_masking": "Store identifiers masked",
@@ -972,6 +940,7 @@
       }
     },
     "shortcuts": {
+      "title": "Shortcuts",
       "action": "Action",
       "keys": "Keys",
       "hint": "Editing shortcuts arrives in a later phase. Enter is ignored while composing Korean text.",
@@ -992,13 +961,14 @@
         "zoom_reset": "Reset zoom",
         "ui_scale_up": "Increase UI scale",
         "ui_scale_down": "Decrease UI scale",
-        "go_home": "Go to home",
-        "go_library": "Go to library",
+        "go_home": "Go to the start screen (Documents)",
+        "go_library": "Go to Documents",
         "go_assistant": "Go to assistant",
         "go_settings": "Go to settings"
       }
     },
     "about": {
+      "title": "About",
       "version": "Version",
       "settings_path": "Settings file",
       "app_data": "App data folder",
@@ -1010,7 +980,7 @@
       "font": "Font: Pretendard Variable (OFL-1.1, unmodified file bundled)"
     },
     "knowledge": {
-      "title": "Knowledge base",
+      "title": "Reference material (advanced)",
       "hint": "Defaults for chunking, indexing, embeddings and grounded answers.",
       "auto_index": "Index imported documents automatically",
       "auto_index_hint": "Chunks changed documents after import, rescan and re-render.",
@@ -1029,8 +999,8 @@
       "min_similarity_hint": "Chunks found only by embedding similarity count as evidence above this value (0.5 for EmbeddingGemma 2 — tune on your PC)."
     },
     "generation": {
-      "title": "Document generation",
-      "hint": "Reply token caps of document generation. Larger requests are reduced to the cap; budgets above about 3,000 tokens are drafted as an outline followed by sections.",
+      "title": "Compose",
+      "hint": "Reply token caps of composing. Larger requests are reduced to the cap; budgets above about 3,000 tokens are drafted as an outline followed by sections.",
       "max_tokens_gpu": "Token cap on GPU (CUDA / Vulkan)",
       "max_tokens_gpu_hint": "Default 32,768 · maximum 65,536",
       "max_tokens_cpu": "Token cap on a CPU-only engine",
@@ -1070,8 +1040,8 @@
       "no_files": "Choose files or type paths.",
       "no_documents": "No documents selected.",
       "rotation": "Rotation must be a multiple of 90 degrees.",
-      "collection_name_taken": "A collection with that name already exists.",
-      "collection_name_empty": "Enter a collection name.",
+      "collection_name_taken": "A reference group with that name already exists.",
+      "collection_name_empty": "Enter a reference group name.",
       "glossary_term_empty": "Enter a term.",
       "version_group_empty": "Enter a version group name.",
       "no_active_model": "No model is loaded in the engine. Load one on the Models screen and retry.",
@@ -1079,14 +1049,14 @@
       "no_text": "This document has no text. Run OCR ('Process ▸ Classify + OCR') and try again.",
       "document_id_required": "Select a document first.",
       "glossary_term_taken": "That term already exists.",
-      "collection_not_found": "Collection not found (it may have been deleted).",
+      "collection_not_found": "Reference group not found (it may have been deleted).",
       "document_not_found": "Document not found.",
       "feedback_invalid": "Invalid feedback value.",
-      "schema_name_duplicate": "A schema with this name already exists. Enter another name.",
-      "schema_name_empty": "Enter a schema name.",
+      "schema_name_duplicate": "A field set with this name already exists. Enter another name.",
+      "schema_name_empty": "Enter a field set name.",
       "schema_doc_type_invalid": "The type slug must be snake_case starting with a lower-case letter.",
-      "schema_invalid": "The schema has errors; see the grammar check.",
-      "schema_not_found": "Schema not found.",
+      "schema_invalid": "The field set has errors; see the grammar check.",
+      "schema_not_found": "Field set not found.",
       "schema_builtin": "Built-in sample forms cannot be deleted (duplicate and edit instead).",
       "field_not_found": "Field not found.",
       "field_value_empty": "Enter a value.",
@@ -1110,13 +1080,14 @@
     "settings_partial": "Some settings sections ({{sections}}) were invalid and have been reset to defaults."
   },
   "jobs": {
-    "title": "Jobs",
+    "title": "Activity",
     "clear_finished": "Clear finished",
     "tabs": {
       "queued": "Queued",
       "active": "Running",
       "finished": "Finished",
-      "failed": "Failed"
+      "failed": "Failed",
+      "history": "Organise history"
     },
     "empty": "No active jobs.",
     "empty_finished": "No finished jobs.",
@@ -1128,7 +1099,7 @@
       "model_download": "Model download",
       "model_hash": "Hash verification",
       "document_import": "Document import",
-      "document_rescan": "Library rescan",
+      "document_rescan": "Documents rescan",
       "document_render": "Page render",
       "knowledge_index": "Knowledge index",
       "knowledge_embed": "Embeddings",
@@ -1157,7 +1128,7 @@
       "files": "{{count}} file(s)",
       "documents": "{{count}} document(s)",
       "inbox": "inbox folder",
-      "library": "library",
+      "library": "Documents",
       "engine": "engine",
       "entries": "{{count}} entries"
     },
@@ -1210,7 +1181,7 @@
       "interrupted": "Interrupted by app shutdown (retryable).",
       "cancelled": "Cancelled.",
       "no_model": "No vision model is loaded. Load one on the Models screen.",
-      "schema_not_found": "Schema not found: {{name}}",
+      "schema_not_found": "Field set not found: {{name}}",
       "export_exists": "A file with this name already exists (overwrite required).",
       "path_outside": "The output path is outside the workspace.",
       "no_documents": "No matching documents.",
@@ -1225,12 +1196,12 @@
     "result_loading": "Loading result…"
   },
   "library": {
-    "title": "Document library",
+    "title": "Documents",
     "import": "Import",
     "inbox_watch": "Watch inbox",
     "inbox_watch_hint": "Files placed in inbox/ are imported automatically.",
     "rescan": "Rescan",
-    "rescan_started": "Rescanning the library.",
+    "rescan_started": "Rescanning Documents.",
     "search_placeholder": "Search file name / title",
     "view_grid": "Grid",
     "view_list": "List",
@@ -1260,10 +1231,9 @@
       "select_all": "Select all",
       "delete_title": "Delete documents",
       "open_doc": "Open document",
-      "add_to_kb": "Add to knowledge base",
+      "put_in_project": "Put in project",
       "register_form": "Make a form from the selection",
-      "merge": "Merge",
-      "classify": "Classify into projects"
+      "merge": "Merge"
     },
     "columns": {
       "name": "Name",
@@ -1289,19 +1259,36 @@
       "name_desc": "Name Z→A",
       "size_desc": "Largest first"
     },
-    "rescan_running": "A library rescan is already running.",
+    "rescan_running": "A Documents rescan is already running.",
     "list_label": "Document list",
     "grid_label": "Document cards",
     "import_existing_hint": "Scans the whole workspace folder (except .doculens) and opens the preview.",
-    "role_knowledge": "Knowledge",
+    "role_knowledge": "Reference",
+    "role_work": "Work document",
     "kb_added": "Added {{count}} documents to '{{name}}'.",
     "kb_added_one": "Added {{count}} document to '{{name}}'.",
     "review_pending": "Review",
-    "review_open": "Open in the review queue: {{name}}",
+    "review_open": "Open in the Review Inbox: {{name}}",
     "process_started": "Processing started.",
     "organize_selected": "Organise…",
     "export_selected": "Export…",
-    "drag_hint": "Drag cards onto the assistant, knowledge, projects or generate screens, or onto the left menu"
+    "drag_hint": "Drag cards onto the AI Assistant, Projects or Compose screens, or onto the left menu (Documents · Projects · Compose)",
+    "context_menu": "Documents menu",
+    "today": {
+      "title": "Today",
+      "workspace": "Workspace: {{path}}",
+      "no_workspace": "Open a workspace first.",
+      "inbox": "Inbox {{count}}",
+      "new": "New {{count}}",
+      "processing": "Processing {{count}}",
+      "review": "Awaiting review {{count}}",
+      "done": "Done {{count}}",
+      "review_fields": "{{count}} field(s) awaiting review → Review Inbox",
+      "engine": "AI engine",
+      "engine_open": "Open Settings > AI models",
+      "recent": "Recent",
+      "recent_empty": "No documents yet. Click Import or drop files into inbox/."
+    }
   },
   "documents": {
     "status": {
@@ -1395,7 +1382,7 @@
     },
     "truncated": "Too many files; only the first 5,000 are shown.",
     "nothing": "Nothing new to import.",
-    "started": "Import started. Progress is shown on the Jobs screen.",
+    "started": "Import started. Progress is shown on the Activity screen.",
     "no_paths": "Choose files or type paths.",
     "filter_name": "Documents",
     "previewing": "Checking files…",
@@ -1408,7 +1395,7 @@
     "eta_short": "Estimated under a minute (model load excluded)"
   },
   "viewer": {
-    "back": "Library",
+    "back": "Documents",
     "page": "{{page}} / {{total}}",
     "prev": "Previous page",
     "next": "Next page",
@@ -1458,7 +1445,7 @@
     "thumb_label": "Go to page {{page}}",
     "toolbar": "Document tools",
     "kb_badge": "Knowledge",
-    "add_to_kb": "Add to knowledge base",
+    "add_to_kb": "Add to reference material",
     "explain": "Explain",
     "explain_shortcut": "Ctrl+E",
     "highlight": "Highlighting: {{q}}",
@@ -1470,7 +1457,7 @@
       "history": "Answers for this document",
       "none": "No questions yet.",
       "scope_doc": "This document",
-      "scope_kb": "Whole knowledge base"
+      "scope_kb": "Whole reference material"
     },
     "summary": {
       "title": "Summary",
@@ -1526,7 +1513,7 @@
     },
     "confidence_badge": "Confidence {{value}}",
     "type_changed_title": "Re-extract with the new type",
-    "type_changed": "Type changed. Re-extract with the new type's schema?",
+    "type_changed": "Type changed. Re-extract with the new type's field set?",
     "reextract": "Re-extract",
     "ocr_badge": "OCR",
     "image_failed": "The page image could not be loaded. A page purged from the cache comes back after a re-render.",
@@ -1573,7 +1560,7 @@
   },
   "answer": {
     "sources": "Sources",
-    "no_evidence": "No evidence was found in the knowledge base.",
+    "no_evidence": "No evidence was found in the reference material.",
     "ask_general": "Answer from general knowledge",
     "general_badge": "General knowledge",
     "conflicts": "Conflict",
@@ -1604,20 +1591,15 @@
     "text_only_hint": "Answered from the text you sent; no documents were looked up or cited."
   },
   "search": {
-    "title": "Search",
-    "placeholder": "Search (e.g. travel allowance limit, 123-45-67890)",
-    "run": "Search",
+    "title": "Evidence",
+    "placeholder": "Words to find (e.g. travel allowance limit, 123-45-67890) · matching passages only, no model call",
+    "run": "Find",
+    "searching": "Searching…",
     "mode": {
       "label": "Mode",
       "hybrid": "Hybrid",
       "keyword": "Keyword",
       "semantic": "Semantic"
-    },
-    "scope": {
-      "label": "Scope",
-      "all": "All documents",
-      "knowledge": "Knowledge base",
-      "collection": "Collection: {{name}}"
     },
     "results": "{{count}} results · {{ms}}ms",
     "no_results": "No results.",
@@ -1639,16 +1621,8 @@
     "results_one": "{{count}} result · {{ms}}ms"
   },
   "knowledge": {
-    "title": "Knowledge base",
-    "subtitle": "Load regulations, guidelines and past documents and answer with evidence.",
-    "tabs": {
-      "overview": "Overview",
-      "collections": "Collections",
-      "versions": "Versions",
-      "glossary": "Glossary",
-      "test": "Question test",
-      "answers": "Answer log"
-    },
+    "title": "Reference material",
+    "subtitle": "Keep regulations, guidelines and past documents in groups; they ground questions, searches and drafts.",
     "status": {
       "title": "Index status",
       "documents": "Documents",
@@ -1658,8 +1632,8 @@
       "failed": "Failed",
       "chunks": "Chunks",
       "embedded": "Embedded",
-      "knowledge_docs": "Knowledge docs",
-      "collections": "Collections",
+      "knowledge_docs": "Reference docs",
+      "collections": "Reference groups",
       "glossary_terms": "Terms",
       "answers": "Answers",
       "helpful": "Helpful",
@@ -1679,7 +1653,7 @@
     "embedding": {
       "label": "Embedding model",
       "none": "The registry has no embedding model.",
-      "not_installed": "The embedding model ({{model}}) is not installed; keyword search only. Install it on the Models screen.",
+      "not_installed": "The embedding model ({{model}}) is not installed; keyword search only. Install it under Settings > AI models.",
       "not_loaded": "The embedding model ({{model}}) is installed. Run to load it into the engine and embed the chunks.",
       "ready": "Embedding model ({{model}}) available",
       "progress": "{{embedded}} / {{total}} chunks embedded",
@@ -1689,7 +1663,7 @@
       "reset_done": "Embeddings reset."
     },
     "actions": {
-      "ingest": "Ingest wizard",
+      "ingest": "Import files",
       "index": "Update index",
       "reindex": "Re-index all",
       "index_started": "Indexing started.",
@@ -1699,60 +1673,33 @@
       "reindex_confirm": "Re-chunk and re-index every document? Stored embeddings are cleared and recomputed."
     },
     "collections": {
-      "title": "Collections",
-      "new": "New collection",
-      "edit": "Edit",
-      "name": "Name",
-      "description": "Description",
-      "active": "Active",
-      "inactive": "Inactive",
-      "docs_count": "{{count}} docs",
-      "chunks_count": "{{count}} chunks",
-      "empty": "No collections yet. Use the ingest wizard to add regulations and guidelines.",
-      "delete": "Delete",
-      "delete_confirm": "Delete collection '{{name}}'? Its documents stay in the library.",
-      "save": "Save",
-      "cancel": "Cancel",
-      "docs_title": "Collection documents",
-      "remove_doc": "Remove",
-      "no_docs": "This collection has no documents.",
-      "select": "Select a collection",
-      "add_title": "Add to knowledge base",
-      "add_hint": "Adds the {{count}} selected documents to a collection and marks them as knowledge documents.",
-      "create_inline": "Create a new collection",
-      "name_placeholder": "e.g. Company regulations",
-      "saved": "Collection saved.",
-      "deleted": "Collection deleted.",
-      "open_doc": "Open document",
-      "docs_count_one": "{{count}} doc",
-      "chunks_count_one": "{{count}} chunk",
-      "drop_hint": "Drop documents or files to add them to this collection",
-      "drop_add": "Add to {{name}}",
-      "pending_title": "Add the {{count}} dropped document(s) to a collection"
+      "create_inline": "Create a new group",
+      "docs_count": "{{count}} docs"
     },
     "wizard": {
-      "title": "Knowledge ingest wizard",
+      "title": "Import reference material",
       "step_files": "1. Files & folders",
-      "step_collection": "2. Collection & options",
+      "step_collection": "2. Group & options",
       "step_preview": "3. Preview",
       "paths_hint": "Enter file or folder paths one per line, or use the pickers. Folders include their subfolders.",
       "pick_files": "Pick files",
       "pick_folder": "Pick folder",
       "next": "Next",
       "back": "Back",
-      "start": "Start ingest",
-      "started": "Ingest started. Import → chunking → indexing run in the background.",
-      "collection_label": "Collection",
-      "new_collection_name": "New collection name",
+      "start": "Start import",
+      "started": "Import started. Import → chunking → indexing run in the background.",
+      "collection_label": "Group",
+      "new_collection_name": "New group name",
       "render_label": "Render pages (thumbnails, viewer)",
       "move_label": "Move originals into the workspace",
       "preview": "Preview",
       "previewing": "Checking files…",
       "summary": "new {{new}} · relink {{relink}} · duplicates {{dup}} · registered {{registered}} · unsupported {{unsupported}}",
-      "nothing": "No new files to ingest (already registered documents are only added to the collection).",
-      "role_hint": "Ingested documents get the 'knowledge' role and serve as evidence for search and answers.",
+      "nothing": "No new files to import (already registered documents are only added to the group).",
+      "role_hint": "Imported documents get the 'reference material' role and ground searches, answers and drafts.",
       "steps_label": "Steps",
-      "drop_hint": "You can also drop files or folders here"
+      "drop_hint": "You can also drop files or folders here",
+      "locked_label": "Target group"
     },
     "versions": {
       "title": "Document versions",
@@ -1795,6 +1742,18 @@
       "title": "Answer log",
       "empty": "No saved answers.",
       "stats": "helpful {{helpful}} · wrong {{wrong}}"
+    },
+    "advanced": {
+      "title": "Reference material (advanced)",
+      "hint": "Index and embedding status plus document versions, the glossary, the question test and the answer log. Groups and documents are managed on the Projects screen (common reference material and each project's Reference material tab).",
+      "open_common": "Open common reference material",
+      "index": "Index status",
+      "embedding": "Embeddings",
+      "tokenizer": "Tokenizer",
+      "versions": "Document versions",
+      "glossary": "Glossary",
+      "test": "Question test",
+      "answers": "Answer log"
     }
   },
   "pipeline": {
@@ -1817,9 +1776,9 @@
       "engine_off": "Auto-processing was skipped: the engine is off. Start it, or enable auto-start in Settings.",
       "model_ready": "Vision model {{model}} ready",
       "model_not_loaded": "Vision model {{model}} is not loaded; it loads when processing starts.",
-      "model_none": "No vision model. Install one in the Model manager.",
+      "model_none": "No vision model. Install one in Settings > AI models.",
       "confirm_title": "Replace existing extraction results",
-      "confirm_body": "{{count}} document(s) already have extraction results; a new run replaces them. Approvals and corrections of the previous run stay in the History tab, but the Fields tab and the review queue switch to the new results.",
+      "confirm_body": "{{count}} document(s) already have extraction results; a new run replaces them. Approvals and corrections of the previous run stay in the History tab, but the Fields tab and the Review Inbox switch to the new results.",
       "confirm_ok": "Extract again"
     },
     "status": {
@@ -1883,7 +1842,7 @@
     },
     "merge": {
       "title": "Merge documents",
-      "hint": "Combines the {{count}} selected documents, in library order, into one PDF. The originals stay.",
+      "hint": "Combines the {{count}} selected documents, in list order, into one PDF. The originals stay.",
       "name": "File name (optional)",
       "run": "Merge",
       "started": "Merge job started.",
@@ -1893,16 +1852,16 @@
     }
   },
   "schemas": {
-    "title": "Extraction schemas / forms",
+    "title": "Forms & field sets",
     "subtitle": "Registered forms and the built-in sample forms define document types and the fields to extract.",
     "list": {
-      "user": "Registered forms · user schemas",
+      "user": "Registered forms · user field sets",
       "builtin": "Built-in sample forms",
       "empty": "No registered forms yet. Start with 'Register form' or 'Create from description'.",
       "disabled": "Disabled",
       "hidden": "{{count}} hidden built-in forms — the tax invoice, receipt and other 0.2 forms. Switch one on to use it again."
     },
-    "new": "New schema",
+    "new": "New field set",
     "nl_create": "Create from description",
     "nl_modify": "Modify by description",
     "register_form": "Register form",
@@ -1919,6 +1878,7 @@
     "uses": "{{count}} use(s)",
     "pending_hint": "Waiting for the model. Cancelling discards the result when it arrives.",
     "editor": {
+      "helpers": "Editor tools:",
       "name": "Name (Korean)",
       "name_en": "Name (English)",
       "doc_type": "Type slug",
@@ -1941,33 +1901,33 @@
       "up": "Move up",
       "down": "Move down",
       "save": "Save",
-      "saved": "Schema saved.",
+      "saved": "Field set saved.",
       "registered": "Form registered. It now feeds the classifier and the extractor.",
       "lint_ok": "Grammar check passed (GBNF-convertible)",
       "lint_errors": "{{count}} error(s)",
       "lint_warnings": "{{count}} warning(s)",
       "delete": "Delete",
-      "delete_confirm": "Delete schema '{{name}}'? Existing extractions are kept.",
-      "deleted": "Schema deleted.",
+      "delete_confirm": "Delete field set '{{name}}'? Existing extractions are kept.",
+      "deleted": "Field set deleted.",
       "versions": "Version history",
       "no_versions": "No earlier versions.",
       "restore_version": "Load this version",
       "note": "Change note (optional)",
       "duplicate": "Duplicate",
       "test": "Test on a sample document",
-      "test_hint": "Extracts the chosen document with this schema (fill rate in the viewer's Fields tab).",
+      "test_hint": "Extracts the chosen document with this field set (fill rate in the viewer's Fields tab).",
       "test_started": "Test extraction started.",
       "test_pick": "Choose document",
       "open_form_doc": "Open form document",
-      "new_draft": "New schema (unsaved)",
+      "new_draft": "New field set (unsaved)",
       "unsaved": "You have unsaved changes.",
       "discard": "Discard",
       "discard_confirm": "You have unsaved changes. Discard them and continue?",
       "duplicate_name": "{{name}} (copy)",
-      "name_taken": "A schema with this name already exists. Enter another name."
+      "name_taken": "A field set with this name already exists. Enter another name."
     },
     "lint": {
-      "fields_empty": "A schema needs at least one field.",
+      "fields_empty": "A field set needs at least one field.",
       "fields_many": "More than {{n}} fields.",
       "key_duplicate": "Duplicate key.",
       "key_reserved": "value / evidence / confidence are reserved keys.",
@@ -1985,15 +1945,15 @@
       "rule_unknown": "Unknown rule '{{detail}}' is ignored."
     },
     "mapping": {
-      "title": "Type → schema mapping",
-      "hint": "The classifier's type enum is built from the enabled schemas' type slugs. Registered forms take precedence over samples.",
+      "title": "Type → field set mapping",
+      "hint": "The classifier's type enum is built from the enabled field sets' type slugs. Registered forms take precedence over samples.",
       "type": "Type",
-      "schema": "Default schema",
+      "schema": "Default field set",
       "builtin": "Built-in",
       "user": "User"
     },
     "nl": {
-      "title": "Create a schema from a description",
+      "title": "Create a field set from a description",
       "modify_title": "Modify '{{name}}' by description",
       "description": "Description",
       "placeholder": "e.g. Quotation: vendor, quote date, items (name · qty · unit price · amount), total, valid until",
@@ -2003,32 +1963,32 @@
     },
     "form": {
       "title": "Register a form",
-      "hint": "Finds the input items of a sample document (blank form or filled example) and creates a schema plus a document type. HWPX/DOCX forms are read from their table structure; PDFs / images use the vision model.",
+      "hint": "Finds the input items of a sample document (blank form or filled example) and creates a field set plus a document type. HWPX/DOCX forms are read from their table structure; PDFs / images use the vision model.",
       "document": "Form document",
-      "pick": "Pick from the library",
+      "pick": "Pick from Documents",
       "name": "Form name",
       "name_hint": "Leave empty to use the document title / file name.",
       "derive": "Derive fields",
       "deriving": "Looking for fields in the form…",
       "confirm": "Check and edit the derived fields, then register.",
       "register": "Register form",
-      "no_docs": "The library is empty. Import the form document first.",
+      "no_docs": "Documents is empty. Import the form document first.",
       "drop_hint": "Drop a document to use it as the form sample",
-      "documents_hint": "Pick one or more sample documents. With several, the fields of every sample are found and merged into one schema (items on at least half of the samples are kept; items on all of them become required).",
+      "documents_hint": "Pick one or more sample documents. With several, the fields of every sample are found and merged into one field set (items on at least half of the samples are kept; items on all of them become required).",
       "selected_count": "{{count}} selected",
       "none_selected": "No documents selected.",
       "cancel_job": "Cancel discovery",
       "job_failed": "Field discovery failed: {{message}}",
       "job_cancelled": "Field discovery was cancelled.",
-      "job_result_missing": "The discovery result was not delivered. Open it again from the Jobs screen.",
+      "job_result_missing": "The discovery result was not delivered. Open it again from the Activity screen.",
       "discovery_summary": "Merged {{fields}} fields from {{docs}} documents ({{dropped}} dropped). Check and edit them, then register.",
       "source_structure": "table structure",
       "source_model": "model",
       "source_text": "text rules",
       "source_failed": "failed",
       "open_in_editor": "Open in the editor",
-      "name_taken_title": "A schema with this name exists",
-      "name_taken_body": "'{{name}}' is already in use. Another name saves a separate schema; keeping it leaves the schema unsavable.",
+      "name_taken_title": "A field set with this name exists",
+      "name_taken_body": "'{{name}}' is already in use. Another name saves a separate field set; keeping it leaves the field set unsavable.",
       "name_taken_apply": "Rename",
       "name_taken_keep": "Keep as is"
     },
@@ -2039,7 +1999,7 @@
     }
   },
   "review": {
-    "title": "Review queue",
+    "title": "Review Inbox",
     "subtitle": "Approve or correct low-confidence, failed-validation and missing required fields from the keyboard.",
     "filters": {
       "doc_type": "Type",
@@ -2082,16 +2042,17 @@
     "announce": "Current item {{title}} ({{index}}/{{total}})"
   },
   "organize": {
+    "title": "Organise · export",
+    "back": "Back to Documents",
     "tabs": {
       "organize": "Organise",
-      "export": "Export",
-      "history": "History"
+      "export": "Export"
     },
     "scope": {
       "title": "Document scope",
       "mode": "Scope",
       "all": "All documents",
-      "selection": "Library selection ({{count}})",
+      "selection": "Documents selection ({{count}})",
       "folder": "Folder: {{folder}}",
       "root_folder": "(workspace root)",
       "doc_type": "Type",
@@ -2239,7 +2200,7 @@
       "text": "Body text"
     },
     "target_hint": {
-      "fields": "Extracted field values (schema columns per type)",
+      "fields": "Extracted field values (field set columns per type)",
       "table": "Tables found in OCR / text layer",
       "text": "Page text"
     },
@@ -2256,7 +2217,7 @@
     "only_reviewed": "Reviewed documents only",
     "columns": {
       "title": "Columns",
-      "hint": "Choose a type to pick its schema fields. With nothing picked every field is exported.",
+      "hint": "Choose a type to pick its field set fields. With nothing picked every field is exported.",
       "all": "Select all",
       "none": "Clear",
       "common": "Common columns",
@@ -2303,45 +2264,8 @@
     "table_xlsx_exists": "A file with this name already exists. Change the path or choose overwrite on the Export tab.",
     "table_xlsx_done": "Table XLSX saved: {{path}}"
   },
-  "aggregate": {
-    "title": "Aggregate",
-    "field": "Field",
-    "fn_label": "Function",
-    "count": "Count",
-    "fn": {
-      "sum": "Sum",
-      "count": "Count",
-      "avg": "Average",
-      "min": "Min",
-      "max": "Max"
-    },
-    "include_unreviewed": "Include review pending",
-    "run": "Aggregate",
-    "monthly": "By month",
-    "collapse": "Collapse aggregate bar",
-    "expand": "Expand aggregate bar",
-    "count_value": "{{count}}",
-    "reviewed": "reviewed {{count}} {{value}}",
-    "pending": "pending {{count}} {{value}}",
-    "pending_excluded": "pending {{count}} {{value}} excluded",
-    "reviewed_count": "reviewed {{count}}",
-    "pending_count": "pending {{count}}",
-    "pending_count_excluded": "pending {{count}} excluded",
-    "missing": "no value {{count}}",
-    "group": "{{key}}: {{value}} ({{count}})",
-    "no_groups": "No groups.",
-    "empty": "No documents to aggregate.",
-    "basis": {
-      "doc_date": "by document date",
-      "imported_at": "by import date",
-      "mixed": "by document date (import date when unknown)"
-    },
-    "running": "Aggregating…",
-    "scope_selection": "{{count}} selected",
-    "scope_type": "type {{type}}"
-  },
   "generate": {
-    "title": "Generate document",
+    "title": "Compose",
     "new": "New",
     "drafts": "Drafts",
     "open_in_generate": "Open in Generate",
@@ -2372,7 +2296,7 @@
       "excluded_hint": "{{count}} excluded reference(s) are applied on regeneration.",
       "job_failed": "Generation failed: {{message}}",
       "job_cancelled": "Generation cancelled.",
-      "job_interrupted": "{{reason}} You can retry it on the Jobs screen.",
+      "job_interrupted": "{{reason}} You can retry it on the Activity screen.",
       "job_result_missing": "The draft result could not be loaded. You can open it from the drafts list.",
       "drop_hint": "Drop documents or files to add them as sources",
       "sources_added": "Added {{count}} source(s)",
@@ -2435,7 +2359,7 @@
     },
     "reference_source": {
       "document": "document",
-      "knowledge": "knowledge base",
+      "knowledge": "reference material",
       "aggregate": "aggregate",
       "text": "text"
     },
@@ -2488,18 +2412,18 @@
     },
     "save": {
       "title": "Save",
-      "hint": "Saves under documents/generated/ in the workspace and registers the file in the library as a generated document.",
+      "hint": "Saves under documents/generated/ in the workspace and registers the file in Documents as a generated document.",
       "format": "Format",
       "file_name": "File name",
-      "register": "Register in the library",
+      "register": "Register in Documents",
       "overwrite": "Overwrite the existing file",
       "blocking_warning": "{{count}} validation issue(s) need confirmation before saving. You can still save; the document stays 'unreviewed'.",
       "confirm": "Save",
       "saved": "Saved: {{path}}",
       "open_folder": "Open folder",
-      "open_library": "Show in library",
+      "open_library": "Show in Documents",
       "exists": "A file with this name already exists. Turn on overwrite or change the file name.",
-      "warning_markdown": "Markdown (.md) is registered in the library as a generated document too (text format) and is searchable.",
+      "warning_markdown": "Markdown (.md) is registered in Documents as a generated document too (text format) and is searchable.",
       "saved_as": "Saved as {{format}}: {{path}}"
     },
     "drafts_list": {
@@ -2525,7 +2449,7 @@
       "meta": "{{fields}} fields · {{issues}} issues · {{source}}"
     },
     "open_busy_title": "A draft is being generated",
-    "open_busy": "Another draft is being generated on the document generator. If you open this one now, the running job's result stays available on the Jobs screen."
+    "open_busy": "Another draft is being generated on the Compose screen. If you open this one now, the running job's result stays available on the Activity screen."
   },
   "projects": {
     "title": "Projects",
@@ -2537,7 +2461,7 @@
       "kanban": "Kanban"
     },
     "empty_title": "No projects yet",
-    "empty_body": "Group documents by case (review, vendor, assignment) and verify them with a required-document checklist and consistency rules.",
+    "empty_body": "Group work documents and reference material per review, vendor or task, and verify them with a required-document checklist and consistency rules.",
     "card": {
       "intake_no": "Intake {{no}}",
       "owner": "Owner {{owner}}",
@@ -2592,7 +2516,7 @@
       "checked": "Check finished — pass {{pass}} · mismatch {{mismatch}} · undetermined {{undetermined}} · missing {{missing}}",
       "supplement": "Supplement request",
       "delete": "Delete",
-      "delete_confirm": "Delete the project '{{name}}'? The documents stay in the library.",
+      "delete_confirm": "Delete the project '{{name}}'? Its reference group goes with it; the documents stay in Documents.",
       "deleted": "Project deleted.",
       "not_found": "Project not found.",
       "phase": "Phase",
@@ -2606,11 +2530,10 @@
     },
     "tabs": {
       "documents": "Documents",
+      "reference": "Reference material",
       "rules": "Rules",
       "results": "Results",
-      "relations": "Relations",
-      "report": "Report",
-      "settings": "Organise / export"
+      "settings": "Settings"
     },
     "documents": {
       "checklist": "Required documents",
@@ -2618,10 +2541,10 @@
       "missing": "missing",
       "present": "{{count}}",
       "extra": "extra",
-      "add": "Add from library",
+      "add": "Pick from Documents",
       "remove": "Remove from project",
       "open": "Open",
-      "empty": "The project has no documents yet. Add some from the library.",
+      "empty": "No work documents yet. Pick some from Documents or drop files here.",
       "columns": {
         "name": "Document",
         "type": "Type",
@@ -2631,13 +2554,13 @@
         "actions": "Actions",
         "path": "Path"
       },
-      "add_title": "Add documents",
-      "add_hint": "Adds library documents to the project; classified documents count towards the checklist.",
+      "add_title": "Add work documents",
+      "add_hint": "Adds documents from Documents as this project's work documents; classified documents count towards the checklist.",
       "add_done": "Add ({{count}})",
       "added": "{{count}} document(s) added.",
       "search": "Search documents…",
       "none": "No documents to add.",
-      "drop_hint": "Drag library documents or files here to add them",
+      "drop_hint": "Drop documents or files here to add them as work documents",
       "copy": {
         "original": "Original",
         "synced": "Copy",
@@ -2646,7 +2569,8 @@
         "resync": "Resync",
         "resync_hint": "Rewrites this project's copies from the originals.",
         "resynced": "Copies resynced (rewritten {{rewritten}} · renamed {{renamed}} · created {{created}})."
-      }
+      },
+      "title": "Work documents"
     },
     "rules": {
       "title": "Consistency rules",
@@ -2717,7 +2641,11 @@
       },
       "missing_types": "Missing documents: {{types}}",
       "evidence_open": "Open {{name}}",
-      "required": "required"
+      "required": "required",
+      "relations_title": "Relation graph",
+      "report_title": "Report",
+      "report_show": "Show report",
+      "report_hide": "Hide report"
     },
     "relations": {
       "caption": "Shared entities between documents",
@@ -2783,13 +2711,6 @@
       "copy_suffix": "(copy)",
       "incomplete_rules": "Complete {{count}} incomplete rule(s) first."
     },
-    "pick": {
-      "title": "Choose a project",
-      "hint": "Pick the project that receives the {{count}} dropped document(s).",
-      "hint_files": "Pick the project that receives the {{count}} dropped file(s).",
-      "none": "No projects yet. Create one first.",
-      "add": "Add"
-    },
     "classify": {
       "button": "Auto-classify",
       "button_hint": "Suggests a project for documents that belong to none, from their title and content.",
@@ -2846,6 +2767,83 @@
       "saved": "Project settings saved.",
       "organize_now": "Organise this project",
       "export_now": "Export this project"
+    },
+    "common": {
+      "title": "Common reference material",
+      "hint": "Regulations, guidelines and past documents shared by every project's questions, searches and drafts. Each group can be switched on and off.",
+      "groups": "{{count}} groups · {{active}} in use",
+      "open": "Open",
+      "advanced": "Advanced settings"
+    },
+    "reference": {
+      "title": "Reference material",
+      "hint": "Regulations, guidelines and past documents that ground this project's questions, searches and drafts. The common reference material is used as well.",
+      "groups": "Groups",
+      "new_group": "New group",
+      "rename": "Rename",
+      "rename_title": "Rename group",
+      "name": "Name",
+      "name_placeholder": "e.g. Company regulations",
+      "save": "Save",
+      "active": "In use",
+      "inactive": "Not in use",
+      "delete": "Delete group",
+      "delete_confirm": "Delete the group '{{name}}'? Its documents stay in Documents.",
+      "saved": "Group saved.",
+      "deleted": "Group deleted.",
+      "no_groups": "No groups yet. Create one or import files.",
+      "select_group": "Pick a group on the left.",
+      "docs_title": "Documents",
+      "docs_count": "{{count}} docs",
+      "add": "Pick from Documents",
+      "add_title": "Add reference material",
+      "add_hint": "Adds documents from Documents as reference material; they get the 'reference material' role.",
+      "ingest": "Import files",
+      "remove": "Remove",
+      "open_doc": "Open",
+      "empty": "No reference material yet.",
+      "drop_hint": "Drop documents or files here to add them as reference material",
+      "drop_add": "Add to {{name}}",
+      "added": "{{count}} document(s) added as reference material.",
+      "removed": "Removed from the reference material.",
+      "group_loading": "Preparing the reference group…",
+      "columns": {
+        "name": "Document",
+        "type": "Type",
+        "pages": "Pages",
+        "status": "Status",
+        "actions": "Actions"
+      }
+    },
+    "put": {
+      "title": "Put in project",
+      "hint": "Choose where the {{count}} document(s) go and as what.",
+      "target": "Destination",
+      "target_project": "Project",
+      "target_common": "Common reference material",
+      "common_hint": "Goes into a reference group used by every question and search, independent of projects.",
+      "search": "Search projects…",
+      "no_projects": "No projects yet. Create one with 'New project…' or put the documents into the common reference material.",
+      "no_match": "No project matches.",
+      "new_project": "New project…",
+      "new_project_name": "New project name",
+      "create": "Create",
+      "created": "Project '{{name}}' created.",
+      "kind": "Kind",
+      "kind_work": "Work document",
+      "kind_work_hint": "Checklist, consistency checks and organising",
+      "kind_reference": "Reference material",
+      "kind_reference_hint": "Evidence for questions, searches and drafts",
+      "kind_reference_only": "The common reference material only takes reference material.",
+      "group": "Group",
+      "new_group": "New group…",
+      "new_group_name": "New group name",
+      "suggest": "Suggest by auto-classify",
+      "suggested_none": "No project could be suggested; pick one yourself.",
+      "confirm": "Put",
+      "done_work": "{{count}} work document(s) put into '{{name}}'.",
+      "done_reference": "{{count}} document(s) put into the reference material of '{{name}}'.",
+      "open_target": "Open"
     }
   },
   "dnd": {

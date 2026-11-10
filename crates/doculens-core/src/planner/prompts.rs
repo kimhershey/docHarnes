@@ -334,6 +334,17 @@ pub fn context_block(ctx: &PlanContext, text: &str, compact: bool) -> String {
     if let Some(f) = ctx.current_folder.as_deref() {
         s.push_str(&format!("{}: {f}\n", if ko { "현재 폴더" } else { "current folder" }));
     }
+    if let Some(p) = ctx.scope_project.as_deref() {
+        let name = ctx.projects.iter().find(|x| x.id == p).map(|x| x.name.as_str()).unwrap_or(p);
+        s.push_str(&format!(
+            "{}: {name} ({p})\n",
+            if ko {
+                "범위 프로젝트(명시가 없으면 이 프로젝트의 문서·참고 자료)"
+            } else {
+                "scope project (default when none is named)"
+            }
+        ));
+    }
     if !ctx.projects.is_empty() {
         let projects: Vec<String> = ctx
             .projects

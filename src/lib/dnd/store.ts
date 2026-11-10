@@ -88,6 +88,24 @@ export function targetAt(x: number, y: number, kind: PayloadKind): string | null
   return null;
 }
 
+/**
+ * The innermost registered target at a viewport point that spring-loads (`onHover`), whether or not it takes
+ * the payload: since 0.5.0 most sidebar entries only switch screens while a drag rests on them (plan §3).
+ */
+export function hoverTargetAt(x: number, y: number): string | null {
+  if (typeof document === "undefined") return null;
+  let el: Element | null = document.elementFromPoint(x, y);
+  while (el) {
+    const host = el.closest<HTMLElement>("[data-doc-drop]");
+    if (!host) return null;
+    const id = host.dataset.docDrop ?? "";
+    const h = targets.get(id)?.current;
+    if (h && !h.disabled && h.onHover) return id;
+    el = host.parentElement;
+  }
+  return null;
+}
+
 /** Spring-loading timer for the target the pointer currently hovers. */
 let hoverTimer: ReturnType<typeof setTimeout> | null = null;
 let hoverTarget: string | null = null;
@@ -98,17 +116,18 @@ function clearHover() {
   hoverTarget = null;
 }
 
-function setOver(id: string | null) {
+/** `id` = the target that takes the payload (highlighted), `hoverId` = the one that spring-loads (may be hover-only). */
+function setOver(id: string | null, hoverId: string | null = id) {
   const state = useDndStore.getState();
   if (state.overTarget !== id) useDndStore.setState({ overTarget: id });
-  if (hoverTarget === id) return;
+  if (hoverTarget === hoverId) return;
   clearHover();
-  const h = id ? targets.get(id)?.current : undefined;
-  if (id && h?.onHover && !h.disabled) {
-    hoverTarget = id;
+  const h = hoverId ? targets.get(hoverId)?.current : undefined;
+  if (hoverId && h?.onHover && !h.disabled) {
+    hoverTarget = hoverId;
     hoverTimer = setTimeout(() => {
       hoverTimer = null;
-      targets.get(id)?.current.onHover?.();
+      targets.get(hoverId)?.current.onHover?.();
     }, h.springMs ?? 700);
   }
 }
@@ -119,13 +138,13 @@ export function beginDocDrag(docs: DragDoc[], pointer: { x: number; y: number })
   if (docs.length === 0) return;
   useDndStore.setState({ dragging: docs, moved: true, pointer });
   // Through `setOver` so a drag that starts over a spring-loading target arms its timer at once.
-  setOver(targetAt(pointer.x, pointer.y, "documents"));
+  setOver(targetAt(pointer.x, pointer.y, "documents"), hoverTargetAt(pointer.x, pointer.y));
 }
 
 export function moveDocDrag(x: number, y: number): void {
   if (!useDndStore.getState().dragging) return;
   useDndStore.setState({ pointer: { x, y } });
-  setOver(targetAt(x, y, "documents"));
+  setOver(targetAt(x, y, "documents"), hoverTargetAt(x, y));
 }
 
 /** Ends the drag; with `drop` the hovered target receives the documents. Returns whether a target took them. */
@@ -144,7 +163,7 @@ export function endDocDrag(drop: boolean): boolean {
 
 export function nativeDragOver(x: number, y: number): void {
   useDndStore.setState({ nativeDragging: true, pointer: { x, y } });
-  setOver(targetAt(x, y, "files"));
+  setOver(targetAt(x, y, "files"), hoverTargetAt(x, y));
 }
 
 export function nativeDragLeave(): void {

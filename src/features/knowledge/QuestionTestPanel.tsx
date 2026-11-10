@@ -8,18 +8,16 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
-import { useKnowledgeStore } from "@/stores/knowledge";
+import type { SearchResponse } from "@/lib/types";
 
-import { hitHref, Snippet } from "../search/SearchPage";
+import { hitHref, Snippet } from "./hit";
 
-/** "Which evidence does this question retrieve?" — search only, no model call. */
+/** "Which evidence does this question retrieve?" — search only, no model call (설정 > 참고 자료(고급)). */
 export function QuestionTestPanel() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const storedQuestion = useKnowledgeStore((s) => s.testQuestion);
-  const result = useKnowledgeStore((s) => s.testResult);
-  const setTest = useKnowledgeStore((s) => s.setTest);
-  const [question, setQuestion] = useState(storedQuestion);
+  const [question, setQuestion] = useState("");
+  const [result, setResult] = useState<SearchResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
@@ -29,8 +27,7 @@ export function QuestionTestPanel() {
     setBusy(true);
     setError(null);
     try {
-      const r = await api.knowledgeSearch({ query: question, mode: "hybrid", limit: 10, per_document: 3 });
-      setTest(question, r);
+      setResult(await api.knowledgeSearch({ query: question, mode: "hybrid", limit: 10, per_document: 3 }));
     } catch (err) {
       setError(err);
     } finally {
@@ -40,7 +37,6 @@ export function QuestionTestPanel() {
 
   return (
     <div className="flex flex-col gap-2" data-testid="knowledge-test">
-      <h2 className="text-sm font-semibold">{t("knowledge.test.title")}</h2>
       <p className="text-xs text-fg-muted">{t("knowledge.test.hint")}</p>
       <form className="flex gap-2" onSubmit={run}>
         <Input value={question} onChange={(e) => setQuestion(e.target.value)} placeholder={t("knowledge.test.placeholder")} aria-label={t("knowledge.test.title")} data-testid="kb-test-input" />

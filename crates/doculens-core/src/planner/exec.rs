@@ -36,7 +36,7 @@ use crate::settings::{KnowledgeSettings, Language, ProcessingSettings, Profile};
 
 use super::{
     compact, scope, AggregateFn, ExplainScope, ExportLayout, ExportTarget, GroupBy, OcrProfile, Op, OpKind, Plan,
-    ReviewOnly, ReviewOp, SummarizeTarget, SummaryLength,
+    ReviewOnly, ReviewOp, Scope, SummarizeTarget, SummaryLength,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -209,12 +209,32 @@ pub struct ExecProgress {
 /// Documents the plan works on right now: the scope, narrowed to what an
 /// earlier import step registered.
 fn working_set(deps: &ExecDeps<'_>, plan: &Plan, imported: Option<&[String]>) -> Result<Vec<DocumentRecord>> {
-    let mut docs = deps.db().with(|c| scope::resolve(c, &plan.scope))?;
+    working_set_in(deps, &plan_scope(plan), imported)
+}
+
+fn working_set_in(deps: &ExecDeps<'_>, scope: &Scope, imported: Option<&[String]>) -> Result<Vec<DocumentRecord>> {
+    let mut docs = deps.db().with(|c| scope::resolve(c, scope))?;
     if let Some(ids) = imported {
         let keep: HashSet<&str> = ids.iter().map(String::as_str).collect();
         docs.retain(|d| keep.contains(d.id.as_str()));
     }
     Ok(docs)
+}
+
+/// The scope a plan's documents come from. "선택한 문서를 한빛 프로젝트에 추가해" names the project as
+/// the destination of `add_to_project`, not as a membership filter: documents outside it are the
+/// point, so the target project is dropped from the filter for such plans.
+pub fn plan_scope(plan: &Plan) -> Scope {
+    let mut s = plan.scope.clone();
+    let target = s.filter.project_id.as_deref();
+    let adds_to_target = plan.operations.iter().any(|op| match op {
+        Op::AddToProject { project, .. } => project.is_none() || project.as_deref() == target,
+        _ => false,
+    });
+    if target.is_some() && adds_to_target {
+        s.filter.project_id = None;
+    }
+    s
 }
 
 fn ids(docs: &[DocumentRecord]) -> Vec<String> {
@@ -1442,7 +1462,7 @@ pub fn preview(
     language: Language,
 ) -> Result<PlanPreview> {
     let ko = language == Language::Ko;
-    let docs_ = db.with(|c| scope::resolve(c, &plan.scope))?;
+    let docs_ = db.with(|c| scope::resolve(c, &plan_scope(plan)))?;
     let mut out = PlanPreview {
         document_count: docs_.len() as u64,
         document_ids: ids(&docs_),

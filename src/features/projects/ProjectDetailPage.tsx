@@ -13,41 +13,52 @@ import { describeJobError } from "@/features/jobs/describe";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
 import { invalidateProjects, useProject } from "@/lib/queries";
-import { SCREEN_ROUTES, isDraftOutcome, isJobFinished, type OutputFormat } from "@/lib/types";
+import { COMMON_REFERENCE_ID, SCREEN_ROUTES, isDraftOutcome, isJobFinished, type OutputFormat } from "@/lib/types";
 import { useGenerateStore } from "@/stores/generate";
 import { useJob, useJobsStore } from "@/stores/jobs";
 import { useProjectsStore } from "@/stores/projects";
 import { useUiStore } from "@/stores/ui";
 
+import { CommonReferencePage } from "./CommonReferencePage";
 import { DocumentsTab } from "./DocumentsTab";
 import { NewProjectDialog, todayIso } from "./NewProjectDialog";
 import { PhaseBadges } from "./ProjectsPage";
 import { ProjectSettingsTab } from "./ProjectSettingsTab";
-import { RelationsTab } from "./RelationsTab";
-import { ReportTab } from "./ReportTab";
+import { ReferenceTab } from "./ReferenceTab";
 import { ResultsTab } from "./ResultsTab";
 import { RulesTab } from "./RulesTab";
 import { SupplementDialog } from "./SupplementDialog";
 
-type TabId = "documents" | "rules" | "results" | "relations" | "report" | "settings";
-const TABS: TabId[] = ["documents", "rules", "results", "relations", "report", "settings"];
+type TabId = "documents" | "reference" | "rules" | "results" | "settings";
+const TABS: TabId[] = ["documents", "reference", "rules", "results", "settings"];
+/** 0.4 links (`?tab=relations|report`) land on the merged 결과 tab. */
+function tabOf(param: string | null): TabId | null {
+  if (!param) return null;
+  if (param === "relations" || param === "report") return "results";
+  return (TABS as string[]).includes(param) ? (param as TabId) : null;
+}
+
+/** `/projects/:id` — the virtual id `common` is the 공통 참고 자료 view; anything else is a project. */
+export function ProjectDetailPage() {
+  const { id = "" } = useParams();
+  if (id === COMMON_REFERENCE_ID) return <CommonReferencePage />;
+  return <ProjectView key={id} id={id} />;
+}
 
 /**
- * One project (design §3.15, 0.3.0 plan §5): header with the computed phase (시작·종료일 editors, 기한 경과
- * badge), the document checklist, rules, check results with evidence links, the relation graph, the summary
- * report and the organise / export settings; "보완요청서" starts a draft job and opens the result on the
- * 문서 생성 screen.
+ * One project (design §3.15, 0.3.0 plan §5, 0.5.0 plan §2): header with the computed phase (시작·종료일 editors,
+ * 기한 경과 badge) and the tabs 문서 (checklist + 업무 문서) · 참고 자료 (the project's reference group) · 규칙 ·
+ * 결과 (check results with evidence links, relation graph, report) · 설정 (정리·내보내기); "보완요청서" starts a
+ * draft job and opens the result on the 문서 작성 screen.
  */
-export function ProjectDetailPage() {
+function ProjectView({ id }: { id: string }) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
-  const { id = "" } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const toast = useUiStore((s) => s.toast);
   const setCurrentProject = useProjectsStore((s) => s.setCurrentProject);
   const { data: detail, isLoading, error } = useProject(id);
-  const initialTab = searchParams.get("tab");
-  const [tab, setTab] = useState<TabId>(initialTab && (TABS as string[]).includes(initialTab) ? (initialTab as TabId) : "documents");
+  const [tab, setTab] = useState<TabId>(tabOf(searchParams.get("tab")) ?? "documents");
   const [checking, setChecking] = useState(false);
   const [supplementOpen, setSupplementOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -66,8 +77,8 @@ export function ProjectDetailPage() {
   }, [loadedId, loadedName, setCurrentProject]);
 
   useEffect(() => {
-    const param = searchParams.get("tab");
-    if (param && (TABS as string[]).includes(param) && param !== tab) setTab(param as TabId);
+    const param = tabOf(searchParams.get("tab"));
+    if (param && param !== tab) setTab(param);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
   const switchTab = (next: TabId) => {
@@ -261,17 +272,14 @@ export function ProjectDetailPage() {
           <TabsContent value="documents">
             <DocumentsTab detail={detail} />
           </TabsContent>
+          <TabsContent value="reference">
+            <ReferenceTab detail={detail} />
+          </TabsContent>
           <TabsContent value="rules">
             <RulesTab detail={detail} />
           </TabsContent>
           <TabsContent value="results">
             <ResultsTab detail={detail} onCheck={() => void check()} checking={checking} />
-          </TabsContent>
-          <TabsContent value="relations">
-            <RelationsTab graph={detail.relations} />
-          </TabsContent>
-          <TabsContent value="report">
-            <ReportTab projectId={p.id} active={tab === "report"} />
           </TabsContent>
           <TabsContent value="settings">
             <ProjectSettingsTab detail={detail} />

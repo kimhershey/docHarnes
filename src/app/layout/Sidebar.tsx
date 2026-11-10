@@ -1,27 +1,10 @@
-import {
-  BookOpen,
-  Brain,
-  Briefcase,
-  ClipboardCheck,
-  FilePlus2,
-  FolderOpen,
-  FolderTree,
-  Home,
-  ListTodo,
-  MessageSquare,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Puzzle,
-  ScanSearch,
-  Search,
-  Settings,
-} from "lucide-react";
+import { Briefcase, ClipboardCheck, FilePlus2, FolderOpen, ListTodo, PanelLeftClose, PanelLeftOpen, ScanSearch, Settings, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { NavLink, useLocation, useNavigate } from "react-router";
 
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { docsFromIds, importDroppedFiles, useDocumentDropTarget, type DragDoc, type DropTargetHandlers } from "@/lib/dnd";
+import { docsFromIds, importDroppedFiles, useDocumentDropTarget, type DropTargetHandlers } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
 import { invalidateProjects, usePipelineStatus } from "@/lib/queries";
@@ -33,28 +16,27 @@ import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspace } from "@/stores/workspace";
 
-const MAIN: { screen: Screen; icon: typeof Home }[] = [
-  { screen: "home", icon: Home },
+/**
+ * The seven screens of 0.5.0 (plan §1): 문서함 · AI 어시스턴트 · 검토함 · 프로젝트 · 문서 작성 · 작업 현황 · 설정.
+ * Models, forms / extraction fields, reference material and organise / export live inside the settings,
+ * the projects screen, the document library and the jobs screen; their routes still resolve.
+ */
+const MAIN: { screen: Screen; icon: typeof FolderOpen }[] = [
   { screen: "library", icon: FolderOpen },
-  { screen: "search", icon: Search },
-  { screen: "assistant", icon: MessageSquare },
+  { screen: "assistant", icon: Sparkles },
   { screen: "review", icon: ClipboardCheck },
-  { screen: "schemas", icon: Puzzle },
-  { screen: "knowledge", icon: BookOpen },
-  { screen: "generate", icon: FilePlus2 },
   { screen: "projects", icon: Briefcase },
-  { screen: "organize", icon: FolderTree },
+  { screen: "generate", icon: FilePlus2 },
   { screen: "jobs", icon: ListTodo },
-  { screen: "models", icon: Brain },
   { screen: "settings", icon: Settings },
 ];
 
 /**
- * Sidebar entries as drop targets (design §3.4 "끌어다 놓기"): a document or file dropped on an entry
- * performs that screen's "add" (attach to the assistant, add to a collection / project / draft
- * sources, register as a form, open the import dialog) and switches to it. While a drag is in
- * progress, resting on any entry for a moment switches screens (spring-loading) so the drop can
- * land on a specific place of the destination.
+ * Sidebar entries as drop targets (design §3.4 "끌어다 놓기"): files dropped on 문서함 open the import
+ * dialog, documents / files dropped on 프로젝트 go to the open project (or wait for a pick) and on
+ * 문서 작성 become draft sources. Every entry spring-loads: resting on it while dragging switches
+ * screens so the drop can land on a specific place of the destination (the assistant's composer, a
+ * project card, the form registration of 설정 > 양식·추출 항목).
  */
 function useNavDrop(screen: Screen, enabled: boolean) {
   const { t } = useTranslation();
@@ -65,35 +47,12 @@ function useNavDrop(screen: Screen, enabled: boolean) {
   const go = (to: string = route) => {
     if (location.pathname !== to) navigate(to);
   };
-  const attach = (docs: DragDoc[]) => {
-    useAttachmentsStore.getState().attach(docs);
-    toast(t("assistant.attachments.added", { count: docs.length }), "ok");
-    go(SCREEN_ROUTES.assistant);
-  };
   const setPending = (patch: Parameters<ReturnType<typeof useAttachmentsStore.getState>["setPending"]>[0]) => useAttachmentsStore.getState().setPending(patch);
   const handlers: DropTargetHandlers = { disabled: !enabled, onHover: () => go() };
   switch (screen) {
-    case "home":
-    case "assistant":
-      handlers.onDocuments = attach;
-      handlers.onFiles = (paths) =>
-        void importDroppedFiles(paths, {}, t)
-          .then(docsFromIds)
-          .then((docs) => docs.length > 0 && attach(docs));
-      break;
     case "library":
       handlers.onFiles = (paths) => {
         setPending({ pendingLibraryPaths: paths });
-        go();
-      };
-      break;
-    case "knowledge":
-      handlers.onDocuments = (docs) => {
-        setPending({ pendingKnowledgeDocs: docs });
-        go();
-      };
-      handlers.onFiles = (paths) => {
-        setPending({ pendingKnowledgePaths: paths });
         go();
       };
       break;
@@ -144,36 +103,22 @@ function useNavDrop(screen: Screen, enabled: boolean) {
             go();
           });
       break;
-    case "schemas":
-      handlers.onDocuments = (docs) => {
-        setPending({ pendingFormDoc: docs[0] ?? null });
-        go();
-      };
-      handlers.onFiles = (paths) =>
-        void importDroppedFiles(paths, {}, t)
-          .then(docsFromIds)
-          .then((docs) => {
-            if (docs.length === 0) return;
-            setPending({ pendingFormDoc: docs[0] ?? null });
-            go();
-          });
-      break;
     default:
+      // Spring-loading only: the screen itself takes the drop (the assistant attaches, 양식 등록 registers).
       break;
   }
   return useDocumentDropTarget(handlers);
 }
 
-function Item({ screen, icon: Icon, collapsed, badge, ariaLabel, dropEnabled }: { screen: Screen; icon: typeof Home; collapsed: boolean; badge?: string; ariaLabel?: string; dropEnabled: boolean }) {
+function Item({ screen, icon: Icon, collapsed, badge, ariaLabel, dropEnabled }: { screen: Screen; icon: typeof FolderOpen; collapsed: boolean; badge?: string; ariaLabel?: string; dropEnabled: boolean }) {
   const { t } = useTranslation();
   const label = t(`nav.${screen}`);
-  // The accessible name carries what the badge shows ("검토 큐, 대기 12"), the visible text stays short.
+  // The accessible name carries what the badge shows ("검토함, 대기 12"), the visible text stays short.
   const name = ariaLabel ?? label;
   const drop = useNavDrop(screen, dropEnabled);
   const link = (
     <NavLink
       to={SCREEN_ROUTES[screen]}
-      end={screen === "home"}
       data-testid={`nav-${screen}`}
       {...drop.props}
       title={drop.isActive ? t("dnd.nav_drop", { screen: label }) : undefined}

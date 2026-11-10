@@ -1,4 +1,4 @@
-import { ExternalLink, Play } from "lucide-react";
+import { ExternalLink, FileText, Play } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
@@ -10,6 +10,8 @@ import { useProjectRuns } from "@/lib/queries";
 import type { CheckRun, Evidence, ProjectDetail } from "@/lib/types";
 import { formatDate } from "@/lib/utils";
 
+import { RelationsSection } from "./RelationsTab";
+import { ReportSection } from "./ReportTab";
 import { verdictVariant } from "./rules";
 
 function EvidenceLink({ e, onOpen, t }: { e: Evidence | null; onOpen: (e: Evidence) => void; t: (k: string, o?: Record<string, unknown>) => string }) {
@@ -27,12 +29,16 @@ function EvidenceLink({ e, onOpen, t }: { e: Evidence | null; onOpen: (e: Eviden
   );
 }
 
-/** 결과 tab: run the check, the verdict chips, the results table with evidence links and the run history. */
+/**
+ * 결과 tab (0.5.0 plan §3: one tab instead of 결과·관계·리포트): run the check, the verdict chips, the results
+ * table with evidence links and the run history on top, the relation graph below and the report behind a button.
+ */
 export function ResultsTab({ detail, onCheck, checking }: { detail: ProjectDetail; onCheck: () => void; checking: boolean }) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const { data: runs } = useProjectRuns(detail.project.id);
   const [selected, setSelected] = useState<string | null>(null);
+  const [reportOpen, setReportOpen] = useState(false);
   // A new check run replaces a history selection (otherwise the tab keeps showing the older run).
   const lastRunId = detail.last_run?.id ?? null;
   useEffect(() => setSelected(null), [lastRunId]);
@@ -42,7 +48,11 @@ export function ResultsTab({ detail, onCheck, checking }: { detail: ProjectDetai
     navigate(`/library/${e.doc_id}${e.page ? `?page=${e.page}` : ""}`);
   };
   return (
-    <div className="flex flex-col gap-3" data-testid="project-results">
+    <div className="flex flex-col gap-5" data-testid="project-results">
+      <section className="flex flex-col gap-3" aria-labelledby="results-check-title">
+      <h3 id="results-check-title" className="sr-only">
+        {t("projects.results.run")}
+      </h3>
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" onClick={onCheck} disabled={checking} data-testid="project-check">
           <Play />
@@ -121,6 +131,25 @@ export function ResultsTab({ detail, onCheck, checking }: { detail: ProjectDetai
           </table>
         </>
       )}
+      </section>
+      <section className="flex flex-col gap-2" aria-labelledby="results-relations-title">
+        <h3 id="results-relations-title" className="text-sm font-semibold">
+          {t("projects.results.relations_title")}
+        </h3>
+        <RelationsSection graph={detail.relations} />
+      </section>
+      <section className="flex flex-col gap-2" aria-labelledby="results-report-title">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 id="results-report-title" className="text-sm font-semibold">
+            {t("projects.results.report_title")}
+          </h3>
+          <Button size="sm" variant="outline" onClick={() => setReportOpen((v) => !v)} aria-expanded={reportOpen} data-testid="project-report-toggle">
+            <FileText />
+            {reportOpen ? t("projects.results.report_hide") : t("projects.results.report_show")}
+          </Button>
+        </div>
+        {reportOpen && <ReportSection projectId={detail.project.id} active={reportOpen} />}
+      </section>
     </div>
   );
 }

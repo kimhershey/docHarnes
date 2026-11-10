@@ -3,11 +3,9 @@ import { expect, test, type Page } from "@playwright/test";
 import ko from "../src/i18n/ko.json" with { type: "json" };
 import { card, createWorkspace, docId, freshApp, importViaLibrary, tpl, tplPattern } from "./helpers";
 
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
 // P5 acceptance (design §3.7 "정리/내보내기", §3.5 "되돌리기"): organise preview (held while
 // review pending → moved under the monthly folder), journaled apply with undo from the result and
-// from the batch history, the export wizard, the library aggregate bar and the bulk-bar shortcuts
+// from the batch history (작업 현황 > 정리 이력), the export wizard and the 문서함 정리 / 내보내기 shortcuts
 // — against the browser mock backend. Real file moves, the journal and the writers are covered by
 // the Rust tests.
 
@@ -30,7 +28,8 @@ test.describe("P5 organise / export", () => {
     await createWorkspace(page);
     const { receipt, invoice } = await importAndProcessReceipt(page);
 
-    await page.getByTestId("nav-organize").click();
+    // 정리 opens from the 문서함 toolbar (plan §3); without a selection it covers the whole library.
+    await page.getByTestId("library-organize").click();
     await expect(page.getByTestId("page-organize")).toBeVisible();
     // Defaults: monthly preset, default name template, "reviewed only" from the settings (on).
     await expect(page.getByTestId("organize-folder-template")).toHaveValue("documents/{{year}}/{{month}}/{{doc_type}}");
@@ -70,8 +69,9 @@ test.describe("P5 organise / export", () => {
     await expect(page.getByTestId("organize-result")).toContainText(tplPattern(ko.organize.done, { failed: 0 }), { timeout: 15_000 });
     await expect(page.getByTestId("organize-undo")).toBeVisible();
 
-    // History lists the batch; undo it there and inspect the entries.
-    await page.getByTestId("organize-tab-history").click();
+    // 작업 현황 > 정리 이력 lists the batch (plan §1); undo it there and inspect the entries.
+    await page.getByTestId("nav-jobs").click();
+    await page.getByTestId("jobs-tab-history").click();
     const batch = page.locator('[data-testid^="history-batch-"][data-batch-kind="organize"]').first();
     await expect(batch).toBeVisible();
     await expect(batch).toContainText(ko.organize.history.kind.organize);
@@ -87,8 +87,9 @@ test.describe("P5 organise / export", () => {
     const undoBatch = page.locator('[data-testid^="history-batch-"][data-batch-kind="undo"]').first();
     await expect(undoBatch).toBeVisible();
     await expect(undoBatch.getByTestId("history-redo")).toBeVisible();
-    // The organise tab's result reflects the undo.
-    await page.getByTestId("organize-tab-organize").click();
+    // Back in 정리 nothing is left to undo.
+    await page.getByTestId("nav-library").click();
+    await page.getByTestId("library-organize").click();
     await expect(page.getByTestId("organize-undo")).toBeHidden();
   });
 
@@ -97,8 +98,8 @@ test.describe("P5 organise / export", () => {
     await createWorkspace(page);
     await importAndProcessReceipt(page);
 
-    await page.getByTestId("nav-organize").click();
-    await page.getByTestId("organize-tab-export").click();
+    await page.getByTestId("library-export").click();
+    await expect(page.getByTestId("export-tab")).toBeVisible();
     await expect(page.getByTestId("export-target")).toContainText(ko.export.target.fields);
     await page.getByTestId("export-format").click();
     await page.getByRole("option", { name: ko.export.format.csv }).click();
@@ -174,38 +175,13 @@ test.describe("P5 organise / export", () => {
     await expect(page.getByTestId(`organize-row-${receipt}`)).toContainText("documents/한빛 포털 구축/견적서/");
   });
 
-  test("library: the aggregate bar sums the selection and the bulk-bar shortcut carries it to 정리", async ({ page }) => {
+  test("library: 정리 / 내보내기 carry the selection to the organise screen (the aggregate bar is gone: ask the assistant)", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
     const { receipt } = await importAndProcessReceipt(page);
 
-    await expect(page.getByTestId("aggregate-bar")).toBeHidden();
+    await expect(page.getByTestId("aggregate-bar")).toHaveCount(0);
     await page.getByTestId(`doc-select-${receipt}`).check();
-    const bar = page.getByTestId("aggregate-bar");
-    await expect(bar).toBeVisible();
-    await expect(bar).toContainText(tpl(ko.aggregate.scope_selection, { count: 1 }));
-    // The receipt's total is review pending: kept apart from the headline until "검토 대기 포함" is on.
-    const value = page.getByTestId("aggregate-value");
-    const pendingExcluded = new RegExp(escapeRe(tpl(ko.aggregate.pending_excluded, { count: 1, value: "@@" })).replace("@@", "([\\d,.]+)"));
-    await expect(value).toContainText(`${ko.aggregate.fn.sum} 0 = ${tpl(ko.aggregate.reviewed, { count: 0, value: 0 })}`, { timeout: 10_000 });
-    await expect(value).toHaveText(pendingExcluded);
-    const total = (await value.textContent())?.match(pendingExcluded)?.[1] ?? "";
-    expect(total).not.toBe("");
-    await page.getByTestId("aggregate-include-unreviewed").click();
-    await expect(value).toContainText(`${ko.aggregate.fn.sum} ${total} = ${tpl(ko.aggregate.reviewed, { count: 0, value: 0 })} + ${tpl(ko.aggregate.pending, { count: 1, value: total })}`, { timeout: 10_000 });
-    await page.getByTestId("aggregate-monthly").click();
-    await expect(page.getByTestId("aggregate-groups")).toContainText("2026-10", { timeout: 10_000 });
-    // Count mode disables the function select.
-    await page.getByTestId("aggregate-field").click();
-    await page.getByRole("option", { name: ko.aggregate.count }).click();
-    await expect(page.getByTestId("aggregate-fn")).toBeDisabled();
-    await expect(page.getByTestId("aggregate-value")).toContainText(ko.aggregate.fn.count, { timeout: 10_000 });
-    // Collapsing keeps the bar as a slim row.
-    await page.getByTestId("aggregate-toggle").click();
-    await expect(bar).toHaveAttribute("data-open", "false");
-    await page.getByTestId("aggregate-toggle").click();
-    await expect(bar).toHaveAttribute("data-open", "true");
-
     // "정리…" opens the organise screen scoped to the selection; "내보내기…" the export tab.
     await page.getByTestId("library-organize").click();
     await expect(page.getByTestId("page-organize")).toBeVisible();

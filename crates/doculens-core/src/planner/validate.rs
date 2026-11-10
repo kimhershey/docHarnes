@@ -200,6 +200,17 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
     if clarifies > 0 && plan.operations.len() > 1 {
         issues.push(PlanIssue::error("operations", "clarify_mixed", "clarify must be the only operation"));
     }
+    // The assistant's "현재 프로젝트" scope (0.5.0) is the default scope of a plan that names no
+    // documents / folder / project — also for model plans, which may leave the filter out.
+    // `add_to_project` and `import` bring documents in from outside, so they keep their scope.
+    if plan.scope.filter.project_id.is_none() && plan.scope.doc_ids.is_empty() && plan.scope.folder.is_none() {
+        if let Some(p) = ctx.scope_project.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+            let brings_in = plan.operations.iter().any(|op| matches!(op, Op::AddToProject { .. } | Op::Import { .. }));
+            if !brings_in && ctx.projects.iter().any(|x| x.id == p) {
+                plan.scope.filter.project_id = Some(p.to_string());
+            }
+        }
+    }
     let scope_doc_type = plan.scope.filter.doc_type.clone();
     let plan_scope_empty = plan.scope.is_empty();
     for (i, op) in plan.operations.iter_mut().enumerate() {

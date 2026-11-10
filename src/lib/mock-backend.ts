@@ -294,8 +294,8 @@ function openWorkspace(path: string, create: boolean, name: string | null, local
       manifest: {
         workspace_id: crypto.randomUUID(),
         schema_version: 1,
-        app_version: "0.4.0",
-        last_opened_app_version: "0.4.0",
+        app_version: "0.5.0",
+        last_opened_app_version: "0.5.0",
         name: name?.trim() || basename(p),
         created_at: new Date().toISOString(),
         last_opened_at: null,
@@ -2275,7 +2275,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "app_info":
       return r({
         name: "DocuLens",
-        version: "0.4.0",
+        version: "0.5.0",
         settings_path: "(browser) localStorage:doculens.mock.settings",
         app_data_dir: "(browser)",
         engines_dir: "(browser)/engines",
@@ -2668,6 +2668,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "project_request_supplement":
     case "project_classify_preview":
     case "project_classify_apply":
+    case "project_reference_group":
     case "maintenance_status":
     case "maintenance_run_now": {
       if (!current) throw err("no_workspace", "no workspace is open");

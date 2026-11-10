@@ -1,11 +1,13 @@
-import { ExternalLink, FolderOpen, Play, Trash2 } from "lucide-react";
+import { ExternalLink, FolderOpen, FolderSearch, Play, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router";
 
 import { THEME_ICONS } from "@/app/layout/ThemeMenu";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ConfirmDialog, type ConfirmRequest } from "@/components/ui/confirm-dialog";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import { Label } from "@/components/ui/label";
@@ -13,10 +15,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ReferenceAdvancedPanel } from "@/features/knowledge/ReferenceAdvancedPanel";
+import { ModelsPage } from "@/features/models/ModelsPage";
+import { SchemasPage } from "@/features/schemas/SchemasPage";
+import { loadRouting, saveRouting } from "@/lib/assistant-control";
 import { isTauri, openExternal, revealPath } from "@/lib/ipc";
-import { invalidateMaintenance, useAppInfo, useMaintenanceStatus, useRegistry } from "@/lib/queries";
+import { invalidateMaintenance, useAppInfo, useDocuments, useMaintenanceStatus, useRegistry } from "@/lib/queries";
 import { queryClient, queryKeys } from "@/lib/query-client";
-import { LANGUAGES, RETENTION_DAY_ITEMS, THEMES, isJobFinished, type AutoProcessingLevel, type ReducedMotion, type RetentionPolicy, AUTO_PROCESSING_LEVELS } from "@/lib/types";
+import { LANGUAGES, RETENTION_DAY_ITEMS, THEMES, isJobFinished, type AutoProcessingLevel, type PlanMode, type ReducedMotion, type RetentionPolicy, AUTO_PROCESSING_LEVELS } from "@/lib/types";
 import { describeError } from "@/lib/errors";
 import { cn, formatDate } from "@/lib/utils";
 import { api } from "@/lib/ipc";
@@ -26,8 +32,27 @@ import { useUiStore } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
 
 import { maintenanceSkippedText, maintenanceSummaryText } from "./maintenance";
+import { SETTINGS_TABS, isSettingsTab, type SettingsTab } from "./tabs";
 
-const TABS = ["general", "theme", "workspace", "processing", "knowledge", "privacy", "shortcuts", "about"] as const;
+const LAST_TAB_KEY = "doculens.settings.tab";
+
+/** The tab opened last (a plain /settings visit, e.g. by spring-loading a drag onto the menu entry, returns to it). */
+function loadLastTab(): SettingsTab {
+  try {
+    const v = localStorage.getItem(LAST_TAB_KEY);
+    return isSettingsTab(v) ? v : "general";
+  } catch {
+    return "general";
+  }
+}
+
+function saveLastTab(tab: SettingsTab): void {
+  try {
+    localStorage.setItem(LAST_TAB_KEY, tab);
+  } catch {
+    /* private window / blocked storage */
+  }
+}
 
 function Row({ label, hint, children, htmlFor }: { label: string; hint?: React.ReactNode; children: React.ReactNode; htmlFor?: string }) {
   return (
@@ -41,26 +66,43 @@ function Row({ label, hint, children, htmlFor }: { label: string; hint?: React.R
   );
 }
 
+/**
+ * 설정 (0.5.0 plan §1): 일반(테마·단축키·정보·고급) · 워크스페이스 · 처리 · AI 모델 · 양식·추출 항목 · 참고 자료 ·
+ * 프라이버시·보존. The tab lives in the URL (`?tab=models`) so the status bar, the library strip and the
+ * old `/models` · `/schemas` routes can open one; the embedded screens read their own params next to it.
+ */
 export function SettingsPage() {
   const { t } = useTranslation();
   const settings = useSettingsStore((s) => s.settings);
+  const [params, setParams] = useSearchParams();
+  const requested = params.get("tab");
+  const tab: SettingsTab = isSettingsTab(requested) ? requested : loadLastTab();
+  useEffect(() => saveLastTab(tab), [tab]);
+  const select = (value: string) => {
+    const next = new URLSearchParams(params);
+    next.set("tab", value);
+    setParams(next, { replace: true });
+  };
   if (!settings) return null;
   return (
-    <div className="mx-auto flex max-w-4xl flex-col gap-4 p-6" data-testid="page-settings">
+    <div className="mx-auto flex max-w-6xl flex-col gap-4 p-6" data-testid="page-settings">
       <h1 className="text-xl font-semibold">{t("settings.title")}</h1>
-      <Tabs defaultValue="general">
+      <Tabs value={tab} onValueChange={select}>
         <TabsList>
-          {TABS.map((tab) => (
-            <TabsTrigger key={tab} value={tab} data-testid={`settings-tab-${tab}`}>
-              {t(`settings.tabs.${tab}`)}
+          {SETTINGS_TABS.map((id) => (
+            <TabsTrigger key={id} value={id} data-testid={`settings-tab-${id}`}>
+              {t(`settings.tabs.${id}`)}
             </TabsTrigger>
           ))}
         </TabsList>
         <TabsContent value="general">
-          <GeneralTab />
-        </TabsContent>
-        <TabsContent value="theme">
-          <ThemeTab />
+          <div className="flex flex-col gap-4">
+            <GeneralTab />
+            <ThemeTab />
+            <ShortcutsTab />
+            <AdvancedCard />
+            <AboutTab />
+          </div>
         </TabsContent>
         <TabsContent value="workspace">
           <WorkspaceTab />
@@ -71,20 +113,61 @@ export function SettingsPage() {
             <GenerationCard />
           </div>
         </TabsContent>
-        <TabsContent value="knowledge">
-          <KnowledgeTab />
+        <TabsContent value="models">
+          {/* The model manager of 0.4 (recommended model first, the tables behind "고급"). */}
+          <ModelsPage embedded />
+        </TabsContent>
+        <TabsContent value="schemas">
+          {/* 양식·추출 항목: the schema screen of 0.4 with 양식 등록 as the primary action. */}
+          <div className="h-[75vh] min-h-[36rem] overflow-hidden rounded-lg border border-border bg-bg-elevated" data-testid="settings-schemas">
+            <SchemasPage />
+          </div>
+        </TabsContent>
+        <TabsContent value="reference">
+          <div className="flex flex-col gap-4" data-testid="settings-reference">
+            <KnowledgeTab />
+            {/* Versions · glossary · answer log · index statistics · embedding runs (plan §3, F2). */}
+            <ReferenceAdvancedPanel />
+          </div>
         </TabsContent>
         <TabsContent value="privacy">
           <PrivacyTab />
         </TabsContent>
-        <TabsContent value="shortcuts">
-          <ShortcutsTab />
-        </TabsContent>
-        <TabsContent value="about">
-          <AboutTab />
-        </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+/** 일반 > 고급: how the assistant interprets free text (the select that left the assistant's header, plan §3). */
+function AdvancedCard() {
+  const { t } = useTranslation();
+  const [routing, setRouting] = useState<PlanMode>(() => loadRouting());
+  return (
+    <Card data-testid="settings-advanced">
+      <CardHeader>
+        <CardTitle>{t("settings.general.advanced")}</CardTitle>
+        <CardDescription>{t("settings.general.advanced_hint")}</CardDescription>
+      </CardHeader>
+      <CardContent className="divide-y divide-border">
+        <Row label={t("assistant.routing.label")} hint={t("assistant.routing.hint")}>
+          <Select
+            value={routing}
+            onValueChange={(v) => {
+              setRouting(v as PlanMode);
+              saveRouting(v as PlanMode);
+            }}
+          >
+            <SelectTrigger className="w-48" aria-label={t("assistant.routing.label")} data-testid="settings-routing">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="model_first">{t("assistant.routing.model_first")}</SelectItem>
+              <SelectItem value="rules_first">{t("assistant.routing.rules_first")}</SelectItem>
+            </SelectContent>
+          </Select>
+        </Row>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -319,7 +402,37 @@ function ProcessingTab() {
   const settings = useSettingsStore((s) => s.settings)!;
   const update = useSettingsStore((s) => s.update);
   const reload = useSettingsStore((s) => s.load);
+  const toast = useUiStore((s) => s.toast);
+  const workspace = useWorkspaceStore((s) => s.current);
   const p = settings.processing;
+  // 다시 검사 · 모든 문서 다시 렌더 (plan §3: the library toolbar keeps only import / organise / export).
+  const { data: allDocs } = useDocuments({ limit: 10_000, sort: "imported_desc" }, !!workspace);
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
+  const rescan = async () => {
+    try {
+      const job = await api.documentsRescan();
+      toast(job ? t("library.rescan_started") : t("library.rescan_running"), "info");
+    } catch (e) {
+      toast(describeError(e, t), "danger");
+    }
+  };
+  const rerenderAll = () => {
+    const ids = (allDocs ?? []).map((d) => d.id);
+    if (ids.length === 0) return;
+    setConfirm({
+      title: t("settings.processing.rerender_all"),
+      description: t("settings.processing.rerender_all_confirm", { count: ids.length }),
+      confirmLabel: t("library.actions.rerender"),
+      onConfirm: async () => {
+        try {
+          await api.documentsRerender(ids, null);
+          toast(t("library.rerender_started"), "ok");
+        } catch (e) {
+          toast(describeError(e, t), "danger");
+        }
+      },
+    });
+  };
   // The threshold is read by every new extraction and by "검증 다시 실행": drop the cached pipeline
   // queries so the status / queue pick the new value up on their next fetch (review M8).
   const commitThreshold = async (v: number) => {
@@ -404,6 +517,7 @@ function ProcessingTab() {
         </Row>
         <Row label={t("settings.processing.inbox_watch")} hint={t("library.inbox_watch_hint")}>
           <Switch
+            data-testid="settings-inbox-watch"
             checked={p.inbox_watch}
             onCheckedChange={(v) =>
               void api
@@ -417,7 +531,18 @@ function ProcessingTab() {
           <NumberField id="cache-gb" value={settings.cache.page_cache_max_gb} min={0.5} max={1000} step={0.5} precision={1} onCommit={(v) => void update((s) => void (s.cache.page_cache_max_gb = v))} testId="settings-cache-gb" />
           <span className="text-sm text-fg-muted">GB</span>
         </Row>
+        <Row label={t("settings.processing.maintenance")} hint={t("settings.processing.maintenance_hint")}>
+          <Button variant="secondary" size="sm" disabled={!workspace} onClick={() => void rescan()} data-testid="settings-rescan">
+            <FolderSearch />
+            {t("library.rescan")}
+          </Button>
+          <Button variant="secondary" size="sm" disabled={!workspace || !allDocs || allDocs.length === 0} onClick={rerenderAll} data-testid="settings-rerender-all">
+            <RefreshCw />
+            {t("settings.processing.rerender_all")}
+          </Button>
+        </Row>
       </CardContent>
+      <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
     </Card>
   );
 }
@@ -731,8 +856,9 @@ function ShortcutsTab() {
   const { t } = useTranslation();
   const settings = useSettingsStore((s) => s.settings)!;
   return (
-    <Card>
+    <Card data-testid="settings-shortcuts">
       <CardHeader>
+        <CardTitle>{t("settings.shortcuts.title")}</CardTitle>
         <CardDescription>{t("settings.shortcuts.hint")}</CardDescription>
       </CardHeader>
       <CardContent>
@@ -763,7 +889,7 @@ function AboutTab() {
   const { t } = useTranslation();
   const { data: info } = useAppInfo();
   return (
-    <Card>
+    <Card data-testid="settings-about">
       <CardHeader>
         <CardTitle>
           {t("app.name")} {info?.version ?? ""}

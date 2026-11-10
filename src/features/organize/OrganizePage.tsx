@@ -1,27 +1,27 @@
+import { ArrowLeft } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router";
+import { Link, useSearchParams } from "react-router";
 
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { subscribe } from "@/lib/ipc";
-import { invalidateJournal } from "@/lib/queries";
-import { EVENTS, type ExportTarget, type PipelineChanged } from "@/lib/types";
+import { SCREEN_ROUTES, type ExportTarget } from "@/lib/types";
 import { useDocumentsStore } from "@/stores/documents";
 
 import { ExportTab, type ExportPreset } from "./ExportTab";
-import { HistoryTab } from "./HistoryTab";
 import { OrganizeTab } from "./OrganizeTab";
 import type { ProjectRequest } from "./scope";
 
-type TabId = "organize" | "export" | "history";
-const TABS: TabId[] = ["organize", "export", "history"];
+type TabId = "organize" | "export";
+const TABS: TabId[] = ["organize", "export"];
 const EXPORT_TARGETS: ExportTarget[] = ["fields", "table", "text"];
 
 /**
- * 정리 / 내보내기 (design §3.7): organise (templates + dry-run diff + journaled apply), the export
- * wizard and the batch history. `/organize?tab=export&selection=1` from the library bulk bar picks
- * the tab and scopes the request to the library selection (`useDocumentsStore.selectedIds`);
- * `&target=table` (viewer "표 → XLSX") presets the export target.
+ * 정리 · 내보내기 (design §3.7; a sub-view of 문서함 since 0.5.0, plan §3): organise (templates + dry-run
+ * diff + journaled apply) and the export wizard. The batch history moved to 작업 현황 > 정리 이력.
+ * `/organize?tab=export&selection=1` from the library toolbar picks the tab and scopes the request to
+ * the library selection (`useDocumentsStore.selectedIds`); `&target=table` (viewer "표 → XLSX") presets
+ * the export target; `?project=<id>` ("이 프로젝트 정리 / 내보내기") scopes both tabs to that project.
  */
 export function OrganizePage() {
   const { t } = useTranslation();
@@ -31,7 +31,6 @@ export function OrganizePage() {
   /** Bumped by `?selection=1` so the tabs switch their scope to the library selection. */
   const [selectionRequest, setSelectionRequest] = useState(0);
   const [exportPreset, setExportPreset] = useState<ExportPreset | null>(null);
-  /** `?project=<id>` ("이 프로젝트 정리 / 내보내기"): scope both tabs to that project with its settings. */
   const [projectRequest, setProjectRequest] = useState<ProjectRequest | null>(null);
 
   useEffect(() => {
@@ -52,25 +51,17 @@ export function OrganizePage() {
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
 
-  // Batches change from the assistant / viewer too (`pipeline://changed` kind `journal`).
-  useEffect(() => {
-    let off: (() => void) | null = null;
-    let cancelled = false;
-    void subscribe<PipelineChanged>(EVENTS.pipelineChanged, (ev) => {
-      if (ev.kind === "journal") invalidateJournal();
-    }).then((unsub) => {
-      if (cancelled) unsub();
-      else off = unsub;
-    });
-    return () => {
-      cancelled = true;
-      off?.();
-    };
-  }, []);
-
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto p-6" data-testid="page-organize">
-      <h1 className="mb-4 text-xl font-semibold">{t("nav.organize")}</h1>
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <Button variant="ghost" size="sm" asChild>
+          <Link to={SCREEN_ROUTES.library} data-testid="organize-back">
+            <ArrowLeft />
+            {t("organize.back")}
+          </Link>
+        </Button>
+        <h1 className="text-xl font-semibold">{t("organize.title")}</h1>
+      </div>
       <Tabs value={tab} onValueChange={(v) => setTab(v as TabId)}>
         <TabsList>
           {TABS.map((id) => (
@@ -79,15 +70,12 @@ export function OrganizePage() {
             </TabsTrigger>
           ))}
         </TabsList>
-        {/* The panels stay mounted so a built plan / export preview survives a look at the history. */}
+        {/* The panels stay mounted so a built plan / export preview survives a tab switch. */}
         <TabsContent value="organize" forceMount className="data-[state=inactive]:hidden">
           <OrganizeTab selectedIds={selectedIds} selectionRequest={selectionRequest} projectRequest={projectRequest} />
         </TabsContent>
         <TabsContent value="export" forceMount className="data-[state=inactive]:hidden">
           <ExportTab selectedIds={selectedIds} selectionRequest={selectionRequest} active={tab === "export"} preset={exportPreset} projectRequest={projectRequest} />
-        </TabsContent>
-        <TabsContent value="history" forceMount className="data-[state=inactive]:hidden">
-          <HistoryTab />
         </TabsContent>
       </Tabs>
     </div>

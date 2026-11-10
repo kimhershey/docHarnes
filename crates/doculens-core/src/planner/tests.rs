@@ -9,6 +9,7 @@ use crate::pipeline::vlm::testing::StageChat;
 use crate::prerouter::DateRange;
 use crate::settings::{Language, Profile, Theme};
 
+use super::exec;
 use super::llm::{self, plan, PlannerDeps};
 use super::prompts;
 use super::rules;
@@ -89,6 +90,7 @@ fn ctx() -> PlanContext {
         model_ids: vec!["gemma4-e4b-q5km".into(), "gemma4-12b-q4km".into()],
         projects: Vec::new(),
         current_project: None,
+        scope_project: None,
         history: Vec::new(),
     }
 }
@@ -344,6 +346,10 @@ fn p6_rules_plan_drafts_projects_explanations_and_retention() {
     );
     let r = planned("add these to the 한빛 심사 project as reference material");
     assert!(matches!(&r.plan.operations[0], Op::AddToProject { as_reference: true, .. }), "{r:?}");
+    // The target project is the destination, not a membership filter, for the documents it takes.
+    let r = planned("선택한 문서를 한빛 심사 프로젝트에 추가해");
+    assert_eq!(r.plan.scope.filter.project_id.as_deref(), Some("p-hanbit"));
+    assert!(exec::plan_scope(&r.plan).filter.project_id.is_none(), "{r:?}");
     let r = planned("정합성 검사 돌려줘");
     assert!(
         matches!(&r.plan.operations[0], Op::CheckConsistency { project: Some(p), .. } if p == "p-hanbit"),
@@ -603,6 +609,39 @@ fn plan_of(ops: Value, scope: Value) -> Plan {
         "summary": "s", "intent": "search", "scope": scope, "operations": ops, "requires_confirmation": false, "confidence": 0.9
     }))
     .unwrap()
+}
+
+/// 0.5.0: the assistant's "현재 프로젝트" scope is the default scope of commands that name none
+/// (rules and model plans alike); explicit documents / folders / projects and `add_to_project` /
+/// `import` keep their own scope.
+#[test]
+fn scope_project_is_the_default_scope_of_commands() {
+    let mut c = ctx();
+    c.projects = vec![ProjectSummary { id: "p-hanbit".into(), name: "한빛 심사".into(), status: "active".into() }];
+    c.scope_project = Some("p-hanbit".into());
+    let planned = |text: &str| plan(None, text, &c, PlanMode::RulesFirst).unwrap();
+    let r = planned("전부 OCR 해줘");
+    assert!(matches!(&r.plan.operations[0], Op::Ocr { .. }), "{r:?}");
+    assert_eq!(r.plan.scope.filter.project_id.as_deref(), Some("p-hanbit"), "{r:?}");
+    let r = planned("지난달 영수증 합계 얼마야?");
+    assert!(matches!(&r.plan.operations[0], Op::Aggregate { .. }), "{r:?}");
+    assert_eq!(r.plan.scope.filter.project_id.as_deref(), Some("p-hanbit"), "filters intersect: {r:?}");
+    assert!(r.plan.scope.filter.date_from.is_some());
+    let r = planned("inbox 폴더의 영수증을 전부 처리해줘");
+    assert_eq!(r.plan.scope.folder.as_deref(), Some("inbox"));
+    assert!(r.plan.scope.filter.project_id.is_none(), "a named folder wins: {r:?}");
+    let r = planned("선택한 문서 요약해줘");
+    assert!(!r.plan.scope.doc_ids.is_empty() && r.plan.scope.filter.project_id.is_none(), "{r:?}");
+    // Model-shaped plans without a filter get the project too; add_to_project does not.
+    let mut p = plan_of(json!([{ "op": "answer", "question": "납품 기한은?" }]), json!({}));
+    validate::validate(&mut p, &c, None);
+    assert_eq!(p.scope.filter.project_id.as_deref(), Some("p-hanbit"));
+    let mut p = plan_of(json!([{ "op": "add_to_project", "doc_ids": ["d9"] }]), json!({}));
+    validate::validate(&mut p, &c, None);
+    assert!(p.scope.filter.project_id.is_none(), "{p:?}");
+    let mut p = plan_of(json!([{ "op": "search", "query": "x" }]), json!({ "doc_ids": ["d1a2"] }));
+    validate::validate(&mut p, &c, None);
+    assert!(p.scope.filter.project_id.is_none(), "explicit documents win: {p:?}");
 }
 
 #[test]
@@ -965,6 +1004,63 @@ mod exec_tests {
             "approval_no": sv("12345678", "카드 승인 12345678", 60),
             "cash_receipt_no": none, "cash_receipt_id": none
         })
+    }
+
+    /// 0.5.0: `add_to_project` takes documents from outside the target project (the scope filter
+    /// names the destination), and `as_reference` fills the project's reference group with role
+    /// `knowledge` instead of the work documents.
+    #[test]
+    fn add_to_project_takes_outside_documents_and_reference_material() {
+        use crate::knowledge::repo as knowledge_repo;
+        use crate::projects::{repo as projects_repo, ProjectInput};
+        let w = World::new();
+        w.add_image("d1", "inbox/a.jpg");
+        w.add_image("d2", "inbox/b.jpg");
+        let project = w
+            .db
+            .with(|c| projects_repo::save_project(c, &ProjectInput { name: "한빛 납품".into(), ..Default::default() }))
+            .unwrap();
+        let scope = Scope {
+            doc_ids: vec!["d1".into()],
+            filter: ScopeFilter { project_id: Some(project.id.clone()), ..ScopeFilter::default() },
+            ..Scope::default()
+        };
+        let plan = plan_of(
+            vec![Op::AddToProject { project: Some(project.id.clone()), doc_ids: Vec::new(), as_reference: false }],
+            scope,
+        );
+        let preview = exec::preview(&w.db, &w.paths, &plan, &ProcessingSettings::default(), Language::Ko).unwrap();
+        assert_eq!(preview.document_count, 1, "the target project is not a membership filter");
+        let ex = exec::run(&w.deps(None), &plan, &mut |_| {}).unwrap();
+        assert!(matches!(ex.steps[0].status, StepStatus::Done), "{:?}", ex.steps[0]);
+        assert_eq!(ex.steps[0].payload["added"], 1);
+        let members = w.db.with(|c| projects_repo::documents_of(c, &project.id)).unwrap();
+        assert_eq!(members.iter().map(|m| m.document.id.as_str()).collect::<Vec<_>>(), vec!["d1"]);
+        // Reference material: the group is created on first use, the document's role changes.
+        let plan = plan_of(
+            vec![Op::AddToProject {
+                project: Some(project.id.clone()),
+                doc_ids: vec!["d2".into()],
+                as_reference: true,
+            }],
+            Scope::default(),
+        );
+        let ex = exec::run(&w.deps(None), &plan, &mut |_| {}).unwrap();
+        assert!(matches!(ex.steps[0].status, StepStatus::Done), "{:?}", ex.steps[0]);
+        assert_eq!(
+            (ex.steps[0].payload["added"].as_u64(), ex.steps[0].payload["as_reference"].as_bool()),
+            (Some(1), Some(true))
+        );
+        assert!(ex.steps[0].summary.contains("참고 자료"), "{}", ex.steps[0].summary);
+        let group = w.db.with(|c| knowledge_repo::reference_group_of_project(c, &project.id)).unwrap().unwrap();
+        assert_eq!(group.name, "한빛 납품");
+        assert_eq!(w.db.with(|c| knowledge_repo::collection_doc_ids(c, &group.id)).unwrap(), vec!["d2".to_string()]);
+        assert_eq!(w.doc("d2").role, DocumentRole::Knowledge);
+        assert_eq!(
+            w.db.with(|c| projects_repo::documents_of(c, &project.id)).unwrap().len(),
+            1,
+            "work documents unchanged"
+        );
     }
 
     fn plan_of(ops: Vec<Op>, scope: Scope) -> Plan {

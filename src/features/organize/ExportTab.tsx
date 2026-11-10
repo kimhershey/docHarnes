@@ -11,7 +11,7 @@ import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import { schemaForType } from "@/features/library/aggregate";
+import { schemaForType } from "./schemaForType";
 import { fieldLabel } from "@/features/pipeline/labels";
 import { api, revealPath } from "@/lib/ipc";
 import { useProjects, useSchemas } from "@/lib/queries";

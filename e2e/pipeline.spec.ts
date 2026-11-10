@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import ko from "../src/i18n/ko.json" with { type: "json" };
-import { card, createWorkspace, docId, freshApp, importViaLibrary, tpl, tplPattern } from "./helpers";
+import { card, createWorkspace, docId, freshApp, importViaLibrary, openSettingsTab, tpl, tplPattern } from "./helpers";
 
 // P4 acceptance (design §4.1): bulk processing (classify → OCR → extract) →
 // review flags on the card and in the viewer → keyboard review queue →
@@ -155,7 +155,7 @@ test.describe("P4 pipeline", () => {
     await importViaLibrary(page, ["D:\\forms\\견적서 양식.hwpx", "D:\\scan\\견적서-1p.jpg"], { autoLevel: "none" });
 
     // Built-in samples are listed; NL creation opens a draft in the editor.
-    await page.getByTestId("nav-schemas").click();
+    await openSettingsTab(page, "schemas");
     await expect(page.getByTestId("page-schemas")).toBeVisible();
     // 13 software forms are listed; the 6 business forms of 0.1 stay hidden (disabled) behind a disclosure.
     await expect(page.locator('[data-testid^="schema-row-builtin-"]:visible')).toHaveCount(13);
