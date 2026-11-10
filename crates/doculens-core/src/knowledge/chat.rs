@@ -166,12 +166,31 @@ fn first_user_text(conn: &Connection, session_id: &str) -> rusqlite::Result<Opti
 }
 
 /// Stores (or replaces) message `seq` of a session, bumps `updated_at` and names an untitled
-/// session after its first user message. `false` when the session does not exist.
+/// session after its first user message. A session the retention purge removed while the UI
+/// still had it open is re-created (untitled) so the conversation is not dropped silently;
+/// `false` only for an empty session id.
 pub fn put_message(conn: &Connection, session_id: &str, seq: i64, payload: &Value) -> rusqlite::Result<bool> {
-    let Some(session) = get_session(conn, session_id)? else {
+    if session_id.trim().is_empty() {
         return Ok(false);
-    };
+    }
     let ts = now();
+    let session = match get_session(conn, session_id)? {
+        Some(s) => s,
+        None => {
+            conn.execute(
+                "INSERT INTO chat_sessions (id, title, title_auto, created_at, updated_at) VALUES (?1, '', 1, ?2, ?2)",
+                params![session_id, ts],
+            )?;
+            ChatSessionSummary {
+                id: session_id.to_string(),
+                title: String::new(),
+                title_auto: true,
+                created_at: parse_ts(ts.clone()),
+                updated_at: parse_ts(ts.clone()),
+                message_count: 0,
+            }
+        }
+    };
     conn.execute(
         "INSERT INTO chat_messages (session_id, seq, payload, created_at) VALUES (?1, ?2, ?3, ?4) \
          ON CONFLICT(session_id, seq) DO UPDATE SET payload = excluded.payload",
@@ -233,8 +252,12 @@ mod tests {
         let rows = db.with(|c| list_messages(c, &s.id)).unwrap();
         assert_eq!(rows.iter().map(|r| r.seq).collect::<Vec<_>>(), [1, 2, 3]);
         assert_eq!(rows[1].payload["kind"], "answer");
-        // Unknown session: nothing stored.
-        assert!(!db.with(|c| put_message(c, "nope", 1, &json!({"role": "user", "text": "x"}))).unwrap());
+        // A session the purge removed is re-created by the next message (untitled → auto title); an empty id is refused.
+        assert!(db.with(|c| put_message(c, "gone", 1, &json!({"role": "user", "text": "되살림"}))).unwrap());
+        let revived = db.with(|c| get_session(c, "gone")).unwrap().unwrap();
+        assert_eq!((revived.title.as_str(), revived.message_count), ("되살림", 1));
+        assert!(db.with(|c| delete_session(c, "gone")).unwrap());
+        assert!(!db.with(|c| put_message(c, "", 1, &json!({"role": "user", "text": "x"}))).unwrap());
         // Rename clears the automatic flag; an empty rename restores the automatic title.
         assert!(db.with(|c| rename_session(c, &s.id, "  합계   정리 ")).unwrap());
         let got = db.with(|c| get_session(c, &s.id)).unwrap().unwrap();

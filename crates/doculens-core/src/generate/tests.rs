@@ -1654,7 +1654,15 @@ fn revise_edits_one_section_in_place_and_split_regeneration_carries_the_instruct
         template: TemplateRef::Builtin { template: TemplateKind::ProgressReport },
         doc_type: Some("progress_report".into()),
         language: Language::Ko,
-        body: vec![h("보고 개요"), p("10월 진척 현황"), h("금주 실적"), p("실적 A"), h("차주 계획"), p("계획 B")],
+        body: vec![
+            h("보고 개요"),
+            p("10월 진척 현황"),
+            h("금주 실적"),
+            p("실적 A"),
+            DraftBlock::TableRef { key: "items".into() },
+            h("차주 계획"),
+            p("계획 B"),
+        ],
         ..Default::default()
     };
     let blocks = |items: Vec<Value>| json!({ "blocks": items }).to_string();
@@ -1688,7 +1696,9 @@ fn revise_edits_one_section_in_place_and_split_regeneration_carries_the_instruct
     assert_eq!(headings(d), ["보고 개요", "금주 실적", "차주 계획"]);
     assert!(matches!(&d.body[1], DraftBlock::Paragraph { text, .. } if text == "10월 진척 현황"));
     assert!(matches!(&d.body[3], DraftBlock::Paragraph { text, .. } if text == "실적 A를 더 자세히: 1,200 MM"));
-    assert!(matches!(&d.body[5], DraftBlock::Paragraph { text, .. } if text == "계획 B"));
+    // The table the section placed stays in it (the model cannot emit table references).
+    assert!(matches!(&d.body[4], DraftBlock::TableRef { key } if key == "items"), "{:?}", d.body);
+    assert!(matches!(&d.body[6], DraftBlock::Paragraph { text, .. } if text == "계획 B"));
     assert!(d.notes.iter().any(|n| n.starts_with("AI 수정(2절 '금주 실적')")), "{:?}", d.notes);
     assert!(d.request.as_ref().is_some_and(|r| r.previous.is_none() && r.revise.is_none() && r.feedback.is_none()));
     let prompt = chat.prompt(0);
@@ -1726,6 +1736,7 @@ fn revise_edits_one_section_in_place_and_split_regeneration_carries_the_instruct
     .unwrap();
     assert_eq!(headings(&out2.draft), ["보고 개요", "리스크", "금주 실적", "차주 계획"]);
     assert!(matches!(&out2.draft.body[3], DraftBlock::Paragraph { text, .. } if text == "리스크 없음"));
+    assert!(out2.draft.body.iter().any(|b| matches!(b, DraftBlock::TableRef { key } if key == "items")));
     assert!(chat2.prompt(0).contains("절 제목은 \"리스크\""), "{}", chat2.prompt(0));
 
     // 3. Insert at the end without a title: the reply's first heading becomes the section title.

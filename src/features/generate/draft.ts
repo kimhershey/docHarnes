@@ -189,11 +189,6 @@ export function hasBlockingIssues(draft: Draft): boolean {
   return draft.issues.some((i) => i.blocking);
 }
 
-/** The regeneration request: the current draft as `previous`, the feedback and the excluded references. */
-export function regenerationRequest(base: DraftRequest, draft: Draft, feedback: string, excluded: string[]): DraftRequest {
-  return { ...base, previous: draft, feedback: feedback.trim() || null, excluded_sources: excluded };
-}
-
 export function toggleExcluded(excluded: string[], docId: string): string[] {
   return excluded.includes(docId) ? excluded.filter((x) => x !== docId) : [...excluded, docId];
 }

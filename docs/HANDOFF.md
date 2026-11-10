@@ -1761,7 +1761,24 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   `attachments.ts` 세션별 첨부(`switchSession`·`dropSession`), `SessionList.tsx`(레일 `assistant-sessions`, `assistant-new-chat`, 행 `assistant-session-${id}`, 메뉴 이름 바꾸기 인라인 입력·삭제 확인,
   `md` 미만 `assistant-session-picker`), `AssistantPage` 요청 경로 전부 세션 포착·세션별 `planningSession`·헤더 "새 대화" = `assistant-new-chat-header`, IPC 래퍼 6개, `mock-chat.ts`(워크스페이스별
   localStorage), i18n `assistant.sessions.*`·`errors.chat_interrupted`, `assistant.test.ts` 9건, `e2e/assistant.spec.ts` 2건. 포크 검증: typecheck, vitest 152, build, Playwright 전체 62/62.
-- **(2)(3)(5-UI) 포크 A**: (병합 후 기록)
+- **(2)(3)(5-UI) 포크 A**(병합 a64b3b1; `e2e/scale.spec.ts`만 포크 B와 충돌 → 두 헬퍼·두 테스트 모두 유지): `types.ts`(`ReviseScope`·`DraftRequest.revise`·`revise_draft` op·`UiPlanContext.draft_id`),
+  `src/lib/draft-sections.ts`(`sectionsOf`·`sectionAt`·`reviseScopeLabel`; 화면·모의 공용), `draft.ts`(`insertBlock`·`removeBlock`·`moveBlock`·`setBlockLevel`·`newBlock` + `body[i]` 이슈 재색인,
+  `reviseRequest`; 테스트 +3), `DraftEditor`(블록 도구 막대 `draft-block-add-{paragraph,heading,list}-${i}`·`-up/-down/-remove`·`draft-block-level`, `draft-body-add`, 절 제목 `draft-section-revise-${i}`,
+  표 래퍼 `data-hscroll="ok"`), `DraftAssistantPanel.tsx`(`generate-revise-{panel,scope,heading,instruction,run,log}`, Ctrl+Enter), `DraftPreview`(ResizeObserver 폭 맞춤 — iframe transform
+  축소, `generate-preview-zoom` `data-zoom=fit|full`, `generate-preview-box` `data-scale`, 메모 목록 상한), `GeneratePage`(수정 상태·로그, `revise()`는 일반 초안 작업, **컨테이너 쿼리 레이아웃**:
+  `@5xl`(64 rem) 이상 3열·미만 2행 — 150 % 배율에서 고정 rem 양쪽 열이 1280 px를 넘어 미리보기가 0 px로 접히던 버그를 함께 고침, 모든 셀 overflow 봉쇄), `RequestForm`(재생성 패널 제거),
+  어시스턴트 `opSpecs`·`describePlan`(+테스트, OP_KINDS 63)·`ResultCard` 초안 핸드오프·`AssistantPage` `planContext().draft_id`, `mock-generate.ts`(`reviseDraft`, 단계 `revising`, `previous`가 있으면 빈
+  내용 허용), `mock-planner.ts`(`ruleReviseDraft`, 초안 없으면 되묻기, `buildContext.draft_id`), `jobs/describe.ts`(`revising`), i18n(`generate.revise.*`·`generate.editor.*`·`generate.preview.zoom_*`·
+  `planner.ops.revise_draft`·`planner.params.revise_*`·`jobs.detail.draft_revising`; `generate.form.{feedback,feedback_placeholder,regenerate}` 삭제), E2E `generate.spec`(+2: 블록 편집·절/새 절 수정·
+  확대 전환, 어시스턴트 "2절 다시 써줘" 초안 없음 → 되묻기 / 있음 → 결과가 수정 초안을 연다), `scale.spec` `expectNoHorizontalOverflow` + 문서 작성 150 %·90 %(`main` 스크롤 없음, 시트 축소).
+  포크 검증: typecheck, vitest 150, build, Playwright generate 6·scale 4·agent 6.
+- **리뷰(code-review, medium, `release/0.6.0..release/0.7.0`)** 10건 → 8건 수정: ① 절 다시 쓰기가 그 절의 `table_ref`를 버려 표가 본문에서 빠짐 → 교체 블록 뒤에 그 절의 표 참조를 그대로 붙임(테스트 보강);
+  ② 보존 파기가 지운 세션에 메시지를 쓰면 `put_message`가 false를 돌려 조용히 버려짐 → 세션 행을 다시 만들고 저장(빈 id만 거부); ③ `notes.truncate(12)`가 최신 메모(AI 수정 메모)를 버림 → 앞쪽을 잘라
+  최신 유지 + 자료 메모 중복 제거; ④ "요약해"가 수정 동사여서 "초안 전체 요약해줘"·"3절 요약해줘"가 `revise_draft`로 → 요약/summar 제외(테스트 2건); ⑤ 세션 삭제 시 `dropSession` 뒤 `switchSession`이
+  지운 id 아래에 첨부를 다시 보관 → 전환 뒤 삭제; ⑥ `generateDraft`가 거부되면 `pendingRevise`가 남아 다음 생성이 수정으로 기록됨 → 실패 시 해제; ⑦ `finish_draft`가 `previous`만 지워 전체 재생성의
+  `revise: whole`이 저장 요청에 남음 → `revise`도 제거(+ 재열기 시 프런트도 `revise: null`); ⑧ 플랜 카드가 `context.history`·`response.context.history`째로 저장돼 세션이 길어질수록 이력이 제곱으로 중복
+  → 저장 시 `history: []`; ⑩ 죽은 `regenerationRequest` 제거(테스트는 `reviseRequest`로). 남김: ⑨ 파기 요약이 지운 세션을 `answers` 카운터에 더함 — 보존 항목 "대화 기록"이 답변·세션을 함께 가리키므로
+  의도된 합산으로 두고 메모만 남김.
 - **문서**: `docs/plan/v0.7.0.md`, `docs/releases/v0.7.0.md`, RUN-GUIDE(§1.0·§3 6~9·§4 0.7.0 명령), 체크리스트 "0.7.0", CLAUDE.md(planner 63·knowledge chat·generate revise·schema 12), 설계 §3.5 0.7.0 메모.
 - **검증·배포**: 아래 검증 표(통합 후 전체 실행)와 릴리스 기록.
 

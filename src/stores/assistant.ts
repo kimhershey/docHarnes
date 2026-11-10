@@ -98,9 +98,23 @@ function storableError(e: unknown): unknown {
   return { code: errorCode(e) ?? "generic", message: errorMessage(e) };
 }
 
-/** The message as it is written (errors flattened; everything else is plain data). */
+/** A plan context without the conversation turns it embeds (they are the other stored messages). */
+function withoutHistory<T extends { history?: unknown }>(ctx: T): T {
+  return "history" in ctx ? { ...ctx, history: [] } : ctx;
+}
+
+/**
+ * The message as it is written: errors flattened, and plan / execution / result / clarify cards without the
+ * conversation history their `context` and `response.context` carry (otherwise every card would store every
+ * earlier turn again).
+ */
 function storable(m: Message): unknown {
-  if (m.role === "assistant" && (m.kind === "answer" || m.kind === "evidence")) return { ...m, error: storableError(m.error) };
+  if (m.role !== "assistant") return m;
+  if (m.kind === "answer" || m.kind === "evidence") return { ...m, error: storableError(m.error) };
+  if (m.kind === "plan") return { ...m, context: withoutHistory(m.context), response: { ...m.response, context: withoutHistory(m.response.context) } };
+  if (m.kind === "execution" || m.kind === "result" || m.kind === "clarify") {
+    return { ...m, response: { ...m.response, context: withoutHistory(m.response.context) } };
+  }
   return m;
 }
 
@@ -315,8 +329,10 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
         delete loaded[id];
         return { sessions: s.sessions.filter((x) => x.id !== id), messagesBySession, loaded, activeId: wasActive ? null : s.activeId };
       });
-      useAttachmentsStore.getState().dropSession(id);
-      if (!wasActive) return;
+      if (!wasActive) {
+        useAttachmentsStore.getState().dropSession(id);
+        return;
+      }
       let next = get().sessions[0]?.id ?? null;
       if (!next) {
         const created = await api.chatSessionCreate(null);
@@ -325,7 +341,9 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
         next = created.id;
       }
       set({ activeId: next });
+      // Switch first (the current attachments move to the next session), then forget the deleted one.
       useAttachmentsStore.getState().switchSession(id, next);
+      useAttachmentsStore.getState().dropSession(id);
       rememberActive(workspace, next);
       await load(next);
     },

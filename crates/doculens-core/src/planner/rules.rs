@@ -1872,8 +1872,10 @@ fn revise_draft_rule(t: &Text<'_>, _ctx: &PlanContext) -> Option<Plan> {
     if !(section_word || draft_word) {
         return None;
     }
-    // Not a revision: drafting from scratch, splitting pages, registering, exporting …
+    // Not a revision: summaries, drafting from scratch, splitting pages, registering, exporting …
     if t.has(&[
+        "요약",
+        "summar",
         "쪽부터",
         "쪽마다",
         "페이지",
@@ -1910,7 +1912,6 @@ fn revise_draft_rule(t: &Text<'_>, _ctx: &PlanContext) -> Option<Plan> {
         "어조",
         "말투",
         "다듬",
-        "요약해",
         "rewrite",
         "revise",
         "expand",

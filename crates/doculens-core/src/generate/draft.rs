@@ -631,9 +631,11 @@ fn finish_draft(d: &mut Draft, spec: &TemplateSpec, req: &DraftRequest) {
     d.language = req.language;
     d.tone = req.tone;
     d.length = req.length;
-    // Keep the request for regeneration without nesting the whole previous draft inside it.
+    // Keep the request for regeneration without nesting the whole previous draft inside it (nor the
+    // 0.7.0 revision scope, which belongs to one call).
     let mut stored = req.clone();
     stored.previous = None;
+    stored.revise = None;
     d.request = Some(Box::new(stored));
 }
 
@@ -1593,6 +1595,8 @@ fn revise(deps: &GenerateDeps<'_>, req: &DraftRequest, scope: &ReviseScope, star
             }
         }
         replacement.extend(new_blocks);
+        // The model cannot emit table references: the tables the section placed stay in it (after the new text).
+        replacement.extend(prev.body[start..end].iter().filter(|b| matches!(b, DraftBlock::TableRef { .. })).cloned());
         d.body.splice(start..end, replacement);
     }
     for s in &sources {
@@ -1608,7 +1612,11 @@ fn revise(deps: &GenerateDeps<'_>, req: &DraftRequest, scope: &ReviseScope, star
     stored.feedback = None;
     stored.revise = None;
     d.request = Some(Box::new(stored));
-    d.notes.extend(notes);
+    for n in notes {
+        if !d.notes.contains(&n) {
+            d.notes.push(n);
+        }
+    }
     let where_ = match (&heading, rewrite) {
         (Some(h), true) => format!("{index}절 '{h}'"),
         (None, true) => format!("{index}절"),
@@ -1627,7 +1635,9 @@ fn revise(deps: &GenerateDeps<'_>, req: &DraftRequest, scope: &ReviseScope, star
     if reply.truncated {
         d.notes.push(section_truncated_note(index, heading.as_deref().unwrap_or(""), ko));
     }
-    d.notes.truncate(12);
+    // Keep the newest notes (the revision note last).
+    let excess = d.notes.len().saturating_sub(12);
+    d.notes.drain(..excess);
     super::validate::validate(&mut d);
     Ok(DraftOutcome {
         draft: d,

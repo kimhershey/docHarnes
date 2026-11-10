@@ -163,6 +163,8 @@ export function GeneratePage() {
         handled.current = null;
         setJobId(job_id);
       } catch (e) {
+        // A revision that never started must not be logged against the next generation.
+        pendingRevise.current = null;
         toast(describeError(e, t), "danger");
       }
     },

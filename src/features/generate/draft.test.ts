@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Draft, DraftIssue, SchemaRecord, TemplateInfo } from "@/lib/types";
 
-import { addRow, applySuggestion, blockText, blockWithText, documentSourceIds, formRefToPicker, hasBlockingIssues, insertBlock, moveBlock, newBlock, parseIssuePath, pickerToFormRef, pickerToReviseScope, regenerationRequest, removeBlock, removeRow, reviseRequest, reviseScopeLabel, reviseScopeToPicker, sectionAt, sectionsOf, setBlockLevel, setFieldValue, toggleExcluded, withDocumentSources } from "./draft";
+import { addRow, applySuggestion, blockText, blockWithText, documentSourceIds, formRefToPicker, hasBlockingIssues, insertBlock, moveBlock, newBlock, parseIssuePath, pickerToFormRef, pickerToReviseScope, removeBlock, removeRow, reviseRequest, reviseScopeLabel, reviseScopeToPicker, sectionAt, sectionsOf, setBlockLevel, setFieldValue, toggleExcluded, withDocumentSources } from "./draft";
 
 function draft(): Draft {
   return {
@@ -89,11 +89,12 @@ describe("draft edits", () => {
     expect(blockText(draft().body[3]!)).toBe("");
   });
 
-  it("builds the regeneration request with previous, feedback and exclusions", () => {
+  it("builds the whole-draft revision request with previous, the trimmed instruction and exclusions", () => {
     const d = draft();
-    const req = regenerationRequest({ form_ref: "quotation", format_description: null, content: "c", sources: [], output: "hwpx", tone: "formal", length: "medium", language: "ko", use_knowledge: true, feedback: null, previous: null, excluded_sources: [], max_tokens: null }, d, "  더 짧게 ", ["doc1"]);
+    const req = reviseRequest({ form_ref: "quotation", format_description: null, content: "c", sources: [], output: "hwpx", tone: "formal", length: "medium", language: "ko", use_knowledge: true, feedback: null, previous: null, excluded_sources: [], max_tokens: null }, d, "  더 짧게 ", { scope: "whole" }, ["doc1"]);
     expect(req.previous).toBe(d);
     expect(req.feedback).toBe("더 짧게");
+    expect(req.revise).toEqual({ scope: "whole" });
     expect(req.excluded_sources).toEqual(["doc1"]);
     expect(toggleExcluded(["a"], "a")).toEqual([]);
     expect(toggleExcluded(["a"], "b")).toEqual(["a", "b"]);

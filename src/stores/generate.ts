@@ -61,7 +61,7 @@ export const useGenerateStore = create<GenerateState>((set, get) => ({
       draft,
       jobId: null,
       handoff: true,
-      request: draft.request ? { ...draft.request, previous: null, feedback: null } : { ...s.request, content: s.request.content || draft.title },
+      request: draft.request ? { ...draft.request, previous: null, feedback: null, revise: null } : { ...s.request, content: s.request.content || draft.title },
     })),
 
   consumeHandoff: () => set({ handoff: false }),

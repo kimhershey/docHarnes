@@ -657,6 +657,8 @@ fn revise_draft_rules_target_the_open_draft() {
     check("이 문서 3쪽부터 나눠줘", !matches!(op("이 문서 3쪽부터 나눠줘"), Op::ReviseDraft { .. }));
     check("절차서 양식으로 등록해줘", !matches!(op("절차서 양식으로 등록해줘"), Op::ReviseDraft { .. }));
     check("절반으로 줄여서 요약해줘", !matches!(op("절반으로 줄여서 요약해줘"), Op::ReviseDraft { .. }));
+    check("초안 전체 요약해줘", !matches!(op("초안 전체 요약해줘"), Op::ReviseDraft { .. }));
+    check("3절 요약해줘", !matches!(op("3절 요약해줘"), Op::ReviseDraft { .. }));
     // No open draft: the plan is rejected with `draft_required`.
     let none = ctx();
     let r = plan(None, "3절 다시 써줘", &none, PlanMode::RulesFirst).unwrap();
