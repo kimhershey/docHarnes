@@ -497,6 +497,140 @@ pub fn set_page_text_and_layout(
     Ok(true)
 }
 
+// ---------------------------------------------------------------------------
+// Page text edit history (0.3.0 item 7): undo / redo of on-image and manual corrections
+// ---------------------------------------------------------------------------
+
+/// Text, word layout (JSON) and text source of a page as stored — the unit the edit history records.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PageTextState {
+    pub text: Option<String>,
+    pub layout: Option<String>,
+    pub source: Option<String>,
+}
+
+/// One row of `page_text_history`: a correction of a page (`kind = "edit"`, `source` = layer | add |
+/// manual) or the bookkeeping of an undo / redo (`kind = "revert" | "redo"`, `target_id` = the edit it
+/// undid or re-applied). `previous` / `new` are the page state before and after the row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageTextHistoryRow {
+    pub id: i64,
+    pub document_id: String,
+    pub page_no: u32,
+    pub kind: String,
+    pub source: String,
+    pub target_id: Option<i64>,
+    pub previous: PageTextState,
+    pub new: PageTextState,
+    pub edited_at: DateTime<Utc>,
+}
+
+pub fn page_text_state(conn: &Connection, id: &str, page_no: u32) -> rusqlite::Result<Option<PageTextState>> {
+    conn.query_row(
+        "SELECT text, layout, text_source FROM pages WHERE document_id = ?1 AND page_no = ?2",
+        params![id, page_no as i64],
+        |r| Ok(PageTextState { text: r.get(0)?, layout: r.get(1)?, source: r.get(2)? }),
+    )
+    .optional()
+}
+
+/// Puts a page back into a recorded state (text, layout and source exactly as they were) and bumps
+/// the document so the knowledge indexer re-chunks it. Returns false when the page does not exist.
+pub fn restore_page_text_state(
+    conn: &Connection,
+    id: &str,
+    page_no: u32,
+    state: &PageTextState,
+) -> rusqlite::Result<bool> {
+    let now = ts(&Utc::now());
+    let n = conn.execute(
+        "UPDATE pages SET text = ?3, has_text = ?4, text_source = ?5, layout = ?6 WHERE document_id = ?1 AND page_no = ?2",
+        params![id, page_no as i64, state.text, state.text.is_some() as i64, state.source, state.layout],
+    )?;
+    if n == 0 {
+        return Ok(false);
+    }
+    conn.execute(
+        "UPDATE documents SET updated_at = ?2, \
+         has_text_layer = (SELECT COUNT(*) > 0 FROM pages WHERE document_id = ?1 AND has_text = 1) WHERE id = ?1",
+        params![id, now],
+    )?;
+    Ok(true)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn insert_page_text_history(
+    conn: &Connection,
+    id: &str,
+    page_no: u32,
+    kind: &str,
+    source: &str,
+    target_id: Option<i64>,
+    previous: &PageTextState,
+    new: &PageTextState,
+) -> rusqlite::Result<i64> {
+    conn.execute(
+        "INSERT INTO page_text_history (document_id, page_no, kind, source, target_id, previous_text, previous_layout, \
+         previous_source, new_text, new_layout, new_source, edited_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![
+            id,
+            page_no as i64,
+            kind,
+            source,
+            target_id,
+            previous.text,
+            previous.layout,
+            previous.source,
+            new.text,
+            new.layout,
+            new.source,
+            ts(&Utc::now()),
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// History rows of one page (or of the whole document) in insertion order.
+pub fn page_text_history(
+    conn: &Connection,
+    id: &str,
+    page_no: Option<u32>,
+) -> rusqlite::Result<Vec<PageTextHistoryRow>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT id, document_id, page_no, kind, source, target_id, previous_text, previous_layout, previous_source, \
+         new_text, new_layout, new_source, edited_at FROM page_text_history \
+         WHERE document_id = ?1 AND (?2 IS NULL OR page_no = ?2) ORDER BY id",
+    )?;
+    let rows = stmt.query_map(params![id, page_no.map(|p| p as i64)], |r| {
+        Ok(PageTextHistoryRow {
+            id: r.get(0)?,
+            document_id: r.get(1)?,
+            page_no: r.get::<_, i64>(2)?.max(0) as u32,
+            kind: r.get(3)?,
+            source: r.get(4)?,
+            target_id: r.get(5)?,
+            previous: PageTextState { text: r.get(6)?, layout: r.get(7)?, source: r.get(8)? },
+            new: PageTextState { text: r.get(9)?, layout: r.get(10)?, source: r.get(11)? },
+            edited_at: parse_ts(r.get(12)?).unwrap_or(DateTime::<Utc>::MIN_UTC),
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn delete_page_text_history(conn: &Connection, ids: &[i64]) -> rusqlite::Result<usize> {
+    let mut n = 0;
+    for id in ids {
+        n += conn.execute("DELETE FROM page_text_history WHERE id = ?1", [id])?;
+    }
+    Ok(n)
+}
+
+/// Daily maintenance: history rows older than the cutoff (the undo history follows the journal retention).
+pub fn purge_page_text_history_before(conn: &Connection, cutoff: &DateTime<Utc>) -> rusqlite::Result<usize> {
+    conn.execute("DELETE FROM page_text_history WHERE edited_at < ?1", [ts(cutoff)])
+}
+
 pub fn set_page_rotation(conn: &Connection, id: &str, page_no: u32, rotation: u16) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE pages SET rotation = ?3, rendered_at = ?4 WHERE document_id = ?1 AND page_no = ?2",

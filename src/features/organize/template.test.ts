@@ -68,6 +68,15 @@ describe("live example", () => {
     expect(folderOnly.missing).toEqual(["doc_type"]);
   });
 
+  it("renders the project variables of the sample document", () => {
+    const r = renderTargetPath("{{project_code}}_{{title}}", "documents/{{project}}/{{doc_type}}", EXAMPLE_DOCUMENT, { typeLabel });
+    expect(r.path).toBe("documents/한빛 포털 구축/견적서/2026-001_scan_0008.jpg");
+    expect(r.missing).toEqual([]);
+    const noProject = renderTargetPath(null, "documents/{{project}}", { ...EXAMPLE_DOCUMENT, project: undefined }, { typeLabel });
+    expect(noProject.path).toBe("documents/미상/scan_0008.jpg");
+    expect(noProject.missing).toEqual(["project"]);
+  });
+
   it("falls back to the import date and the original stem for title, and caps the path length", () => {
     const doc = { ...EXAMPLE_DOCUMENT, doc_date: null, title: null };
     expect(renderTargetPath("{{year}}-{{month}}-{{day}}_{{title}}_{{tags}}.{{ext}}", "documents", doc, { typeLabel }).path).toBe("documents/2026-10-15_scan_0008_외주.jpg.jpg");

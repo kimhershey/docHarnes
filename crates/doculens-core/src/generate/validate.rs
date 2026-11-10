@@ -96,7 +96,9 @@ fn validate_tables(
 ) -> Option<TableTotals> {
     let mut totals: Option<TableTotals> = None;
     for t in &mut draft.tables {
-        let qty = col(t, &["quantity", "qty"]);
+        // 수량 of goods, or 투입 MM of a staffing (software estimate) table.
+        let qty = col(t, &["quantity", "qty", "months"]);
+        let qty_label = qty.map(|i| t.columns[i].label.clone()).unwrap_or_else(|| "수량".into());
         let unit = col(t, &["unit_price", "price"]);
         let supply = col(t, &["supply_amount", "amount", "supply"]);
         let tax = col(t, &["tax_amount", "tax", "vat"]);
@@ -115,8 +117,9 @@ fn validate_tables(
                         "sum_mismatch",
                         if ko {
                             format!(
-                                "{}행: 수량 {} × 단가 {} = {} 이지만 공급가액은 {}입니다",
+                                "{}행: {} {} × 단가 {} = {} 이지만 공급가액은 {}입니다",
                                 ri + 1,
+                                qty_label,
                                 format_number(q),
                                 format_won(u),
                                 format_won(computed),

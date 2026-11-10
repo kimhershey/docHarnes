@@ -177,7 +177,7 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
       return joinParts([form ? pt("form", { name: form }) : op.format_description ? truncate(op.format_description, 40) : pt("form_auto"), truncate(op.content, 60), op.sources && op.sources.length > 0 ? pt("sources", { count: op.sources.length }) : null, op.output ? op.output.toUpperCase() : null, op.tone ? t(`generate.tone.${op.tone}`) : null, op.length ? t(`generate.length.${op.length}`) : null]);
     }
     case "register_form":
-      return joinParts([op.doc_ref && op.doc_ref !== "current" ? op.doc_ref : pt("current_document"), op.name ?? null, op.doc_type_slug ? docTypeName(op.doc_type_slug, ctx.context, lang) : null]);
+      return joinParts([op.doc_ids && op.doc_ids.length >= 2 ? pt("sample_docs", { count: op.doc_ids.length }) : op.doc_ref && op.doc_ref !== "current" ? op.doc_ref : pt("current_document"), op.name ?? null, op.doc_type_slug ? docTypeName(op.doc_type_slug, ctx.context, lang) : null]);
     case "explain":
       return joinParts([truncate(op.selection ?? op.question ?? "", 80), op.scope ? pt(`explain_scope_${op.scope}`) : null, op.allow_general_knowledge ? pt("allow_general") : null]);
     case "compare":
@@ -223,8 +223,15 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
   }
 }
 
-const TEMPLATE_KEYS = ["official_letter", "quotation", "transaction_statement", "contract", "report", "minutes", "supplement_request"];
-const PROJECT_TEMPLATE_KEYS: Record<string, string> = { "builtin-certification_review": "certification_review", "builtin-vendor_onboarding": "vendor_onboarding", "builtin-purchase_settlement": "purchase_settlement" };
+const TEMPLATE_KEYS = ["rfp", "proposal", "sow", "srs", "dev_contract", "wbs", "progress_report", "meeting_minutes", "test_report", "change_request", "acceptance", "estimate", "supplement_request", "official_letter", "quotation", "transaction_statement", "contract", "report", "minutes"];
+const PROJECT_TEMPLATE_KEYS: Record<string, string> = {
+  "builtin-outsourcing": "outsourcing",
+  "builtin-maintenance": "maintenance",
+  "builtin-internal_dev": "internal_dev",
+  "builtin-certification_review": "certification_review",
+  "builtin-vendor_onboarding": "vendor_onboarding",
+  "builtin-purchase_settlement": "purchase_settlement",
+};
 
 /** Built-in project templates get their i18n name; user templates are shown by id / name. */
 export function projectTemplateName(ref: string, t: TFunction): string {

@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 import ko from "../src/i18n/ko.json" with { type: "json" };
 
-import { createWorkspace, freshApp, openImportPreview } from "./helpers";
+import { createWorkspace, freshApp, openImportPreview, tpl } from "./helpers";
 
 // P2 acceptance (design §4.1): import (preview with duplicates / unsupported
 // reasons) → rendered pages → library grid/list → viewer navigation, rotation,
@@ -219,6 +219,19 @@ test.describe("P2 documents", () => {
     await expect(layer.locator("[data-edited]").first()).toHaveCSS("color", "rgb(11, 106, 138)");
     await expect(layer.locator("[data-word-index]:not([data-edited])").first()).toHaveCSS("color", "rgba(0, 0, 0, 0)");
     await expect(page.getByTestId("viewer-text-source")).toHaveText(ko.viewer.text_edit.source.manual);
+    // Ctrl+Z in the viewer takes the correction back (the page's own history, not the file journal) and the
+    // words lose their corrected colour; Ctrl+Shift+Z re-applies it. The layer bar counts the corrections.
+    await expect(page.getByTestId("viewer-text-edits-count")).toHaveText(tpl(ko.viewer.text_edit.count, { count: 1 }));
+    await page.getByTestId("page-viewer").focus();
+    await page.keyboard.press("Control+z");
+    await expect(layer).toContainText("1쪽의 텍스트 레이어입니다.");
+    await expect(layer.locator("[data-edited]")).toHaveCount(0);
+    await expect(page.getByTestId("toaster")).toContainText(ko.viewer.text_edit.undone);
+    await expect(page.getByTestId("viewer-text-edits-count")).toHaveText(tpl(ko.viewer.text_edit.count, { count: 0 }));
+    await page.keyboard.press("Control+Shift+z");
+    await expect(layer).toContainText("첫째 쪽의 본문 레이어입니다.");
+    await expect(layer.locator("[data-edited]")).toHaveCount(3);
+    await expect(page.getByTestId("viewer-text-source")).toHaveText(ko.viewer.text_edit.source.manual);
     // Escape drops a selection; a drag on empty space offers to add text the recogniser missed.
     await word("합계").click();
     await page.getByTestId("page-viewer").focus();
@@ -238,6 +251,18 @@ test.describe("P2 documents", () => {
     await add.fill("담당자 확인");
     await page.keyboard.press("Enter");
     await expect(layer).toContainText("담당자 확인");
+    // The 이력 tab lists both corrections (newest first); "이 수정 되돌리기" takes the added words back and
+    // marks the entry undone, while the earlier correction stays.
+    await page.getByTestId("viewer-tab-history").click();
+    const edits = page.locator('[data-testid="history-text-edit"]');
+    await expect(edits).toHaveCount(2);
+    await expect(edits.first()).toContainText("담당자 확인");
+    await expect(edits.nth(1)).toContainText("첫째 쪽의 본문");
+    await edits.first().getByTestId("history-text-revert").click();
+    await expect(layer).not.toContainText("담당자 확인");
+    await expect(layer).toContainText("첫째 쪽의 본문 레이어입니다.");
+    await expect(edits.first()).toHaveAttribute("data-undone", "true");
+    await expect(edits.first().getByTestId("history-text-revert")).toHaveCount(0);
     // The corrections are searchable right away (the mock re-indexes on save).
     await page.getByTestId("nav-search").click();
     await page.getByTestId("search-input").fill("첫째 쪽");

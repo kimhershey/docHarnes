@@ -535,7 +535,7 @@ fn schema_crud_defaults_versions_and_doc_types() {
 
     // A user schema for a new type becomes its default; a user schema for an existing type beats the sample.
     let draft = SchemaDraft {
-        name: "견적서".into(),
+        name: "우리 견적서".into(),
         doc_type: "quotation".into(),
         source: SchemaSource::User,
         definition: SchemaDef::new(vec![FieldDef::new("total", "합계", "Total", FieldKind::Amount).required()], &[]),
@@ -562,7 +562,7 @@ fn schema_crud_defaults_versions_and_doc_types() {
     // Editing stores a version row; invalid drafts and builtin deletion are refused.
     let mut edit = SchemaDraft {
         id: Some(q.id.clone()),
-        name: "견적서".into(),
+        name: "우리 견적서".into(),
         doc_type: "quotation".into(),
         definition: SchemaDef::new(
             vec![
@@ -641,7 +641,8 @@ fn forms_register_from_structure_and_from_the_model() {
     })
     .unwrap();
     let deps = w.import_deps();
-    let draft = forms::derive(&deps, None, &w.doc("f1"), Some("견적서")).unwrap();
+    // The built-in sample is already called 견적서: a user form needs its own name (name guard).
+    let draft = forms::derive(&deps, None, &w.doc("f1"), Some("한빛 견적서")).unwrap();
     assert_eq!(draft.source, SchemaSource::Form);
     assert_eq!(draft.form_document_id.as_deref(), Some("f1"));
     assert_eq!(draft.doc_type, "estimate");
@@ -705,6 +706,110 @@ fn forms_register_from_structure_and_from_the_model() {
     assert_eq!(po2.version, 2);
     assert!(po2.definition.field("due_date").is_some());
     assert!(forms::nl_schema(&vlm, "   ", None).is_err());
+}
+
+#[test]
+fn schema_discovery_merges_samples_and_the_name_guard_refuses_duplicates() {
+    let w = World::new();
+    // A blank HWPX form (read from its tables) and a scanned sample read by the scripted model.
+    let hwpx = w.paths.root.join("documents/estimate-form.hwpx");
+    std::fs::create_dir_all(hwpx.parent().unwrap()).unwrap();
+    crate::documents::convert::hwpx::write_sample_hwpx(&hwpx, 1, crate::documents::fixtures::TINY_PNG).unwrap();
+    w.db.with(|c| {
+        docs::insert_document(
+            c,
+            &NewDocument {
+                id: "s1".into(),
+                rel_path: "documents/estimate-form.hwpx".into(),
+                original_name: "estimate-form.hwpx".into(),
+                source_kind: SourceKind::Hwpx,
+                content_hash: "h-s1".into(),
+                size_bytes: 1,
+                file_modified_at: None,
+                role: DocumentRole::Work,
+                import_batch_id: None,
+            },
+        )
+    })
+    .unwrap();
+    w.add_doc("s2", "estimate-scan.jpg", SourceKind::Image, &[None]);
+    let field = |key: &str, label: &str, kind: &str, required: bool| json!({"key": key, "label_ko": label, "label_en": key, "type": kind, "required": required, "regex_hint": null, "example": null, "options": [], "columns": []});
+    w.chat.push(
+        "form_fields",
+        json!({
+            "name": "견적서", "name_en": "Estimate", "doc_type": "estimate", "description_ko": "견적", "description_en": "estimate",
+            "fields": [field("project_name", "사업명", "string", true), field("recipient", "수신", "string", true), field("grand_total", "합계금액", "amount", false)]
+        }),
+    );
+    let deps = w.import_deps();
+    let vlm = w.vlm();
+    let mut seen: Vec<(usize, Option<(u32, u32)>)> = Vec::new();
+    let out =
+        forms::discover(&deps, Some(&vlm), &[w.doc("s1"), w.doc("s2")], Some("한빛 견적서"), None, &mut |p| {
+            seen.push((p.index, p.page))
+        })
+        .unwrap();
+    assert_eq!(out.kind, "schema_discovery");
+    assert_eq!(out.documents.len(), 2);
+    assert_eq!((out.documents[0].source.as_str(), out.documents[1].source.as_str()), ("structure", "model"));
+    assert!(out.documents[0].field_count >= 1 && out.documents[1].field_count == 3);
+    assert_eq!(out.documents[1].pages_used, vec![1]);
+    assert_eq!(w.chat.image_calls(), 1, "one page per scanned sample");
+    assert!(seen.iter().any(|(i, p)| *i == 1 && *p == Some((1, 1))), "{seen:?}");
+    let d = &out.draft;
+    assert_eq!((d.name.as_str(), d.doc_type.as_str()), ("한빛 견적서", "estimate"));
+    assert_eq!(d.source, SchemaSource::Form);
+    assert_eq!(d.form_document_id.as_deref(), Some("s1"));
+    assert_eq!(d.sample_document_ids, vec!["s2".to_string()]);
+    // Two samples: every field of either is kept (⌈2/2⌉ = 1); one seen on a single sample is not required.
+    assert_eq!(out.merged_fields, d.definition.fields.len());
+    assert_eq!(out.dropped_fields, 0);
+    let project = d.definition.field("project_name").expect("the model's field survives the merge");
+    assert!(!project.required, "required means on every sample");
+    assert!(d.definition.field("recipient").is_some());
+
+    // Registering marks both samples as forms of the type.
+    let saved = forms::register(&w.db, d).unwrap();
+    for id in ["s1", "s2"] {
+        let doc = w.doc(id);
+        assert_eq!(
+            (doc.role, doc.doc_type.as_deref(), doc.doc_type_source.as_deref()),
+            (DocumentRole::Form, Some("estimate"), Some("form")),
+            "{id}"
+        );
+    }
+
+    // The name guard: the built-in sample is called 견적서 (case / space insensitive), the editor gets "(2)".
+    assert!(w.db.with(|c| repo::name_exists(c, "견적서", None)).unwrap());
+    assert!(w.db.with(|c| repo::name_exists(c, " 견 적 서 ", None)).unwrap());
+    assert!(
+        !w.db.with(|c| repo::name_exists(c, "한빛 견적서", Some(saved.id.as_str()))).unwrap(),
+        "editing keeps its own name"
+    );
+    assert!(w.db.with(|c| repo::name_exists(c, "한빛 견적서", None)).unwrap());
+    assert_eq!(w.db.with(|c| repo::free_name(c, "견적서", None)).unwrap(), "견적서 (2)");
+    let dup = SchemaDraft {
+        name: "견적서".into(),
+        doc_type: "estimate".into(),
+        source: SchemaSource::User,
+        definition: SchemaDef::new(vec![FieldDef::new("total", "합계", "Total", FieldKind::Amount)], &[]),
+        ..Default::default()
+    };
+    let err = w.db.with(|c| repo::save_schema(c, &dup)).unwrap_err();
+    assert!(err.to_string().contains("schema_name_duplicate"), "{err}");
+    assert!(w.db.with(|c| repo::save_schema(c, &SchemaDraft { name: "견적서 (2)".into(), ..dup.clone() })).is_ok());
+
+    // A sample the model cannot read is reported, not fatal, while another sample succeeded.
+    w.add_doc("s3", "blank-scan.jpg", SourceKind::Image, &[None]);
+    *w.chat.fail_with.lock().unwrap() = Some("boom".into());
+    let out = forms::discover(&deps, Some(&vlm), &[w.doc("s1"), w.doc("s3")], None, None, &mut |_| {}).unwrap();
+    assert_eq!(out.documents[1].source, "failed");
+    assert!(out.documents[1].note.as_deref().is_some_and(|n| n.contains("no_fields")), "{:?}", out.documents[1].note);
+    assert_eq!(out.documents[0].source, "structure");
+    assert!(out.draft.note.as_deref().is_some_and(|n| n.contains("blank-scan.jpg")), "{:?}", out.draft.note);
+    // Alone, that sample is an error.
+    assert!(forms::discover(&deps, Some(&vlm), &[w.doc("s3")], None, None, &mut |_| {}).is_err());
+    *w.chat.fail_with.lock().unwrap() = None;
 }
 
 #[test]
@@ -862,7 +967,7 @@ fn review_gaps_pii_precision_reset_and_defaults() {
             repo::save_schema(
                 c,
                 &SchemaDraft {
-                    name: "견적서".into(),
+                    name: "이동 견적서".into(),
                     doc_type: "quotation".into(),
                     source: SchemaSource::User,
                     definition: SchemaDef::new(vec![FieldDef::new("total", "합계", "Total", FieldKind::Amount)], &[]),
@@ -878,7 +983,7 @@ fn review_gaps_pii_precision_reset_and_defaults() {
                 c,
                 &SchemaDraft {
                     id: Some(q.id.clone()),
-                    name: "견적서".into(),
+                    name: "이동 견적서".into(),
                     doc_type: "receipt".into(),
                     source: SchemaSource::User,
                     definition: q.definition.clone(),
@@ -897,7 +1002,7 @@ fn review_gaps_pii_precision_reset_and_defaults() {
                 c,
                 &SchemaDraft {
                     id: Some(q.id.clone()),
-                    name: "견적서".into(),
+                    name: "이동 견적서".into(),
                     doc_type: "quotation".into(),
                     source: SchemaSource::User,
                     definition: q.definition.clone(),

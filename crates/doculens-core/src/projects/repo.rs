@@ -20,8 +20,8 @@ use crate::pipeline::repo::{self as pipeline_repo, typed};
 use crate::settings::Language;
 
 use super::{
-    relations, CheckRun, ChecklistItem, Evidence, Project, ProjectDetail, ProjectDocument, ProjectInput, ProjectStatus,
-    ProjectTemplate, Rule, RuleOp, RuleOperand, RuleResult, TemplateInput, Verdict,
+    relations, CheckRun, ChecklistItem, Evidence, Project, ProjectDetail, ProjectDocument, ProjectInput, ProjectPhase,
+    ProjectSettings, ProjectTemplate, Rule, RuleOp, RuleOperand, RuleResult, TemplateInput, Verdict,
 };
 
 fn ts(d: &DateTime<Utc>) -> String {
@@ -597,8 +597,21 @@ pub fn delete_template(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
 // Projects
 // ---------------------------------------------------------------------------
 
-const PROJECT_COLUMNS: &str = "id, name, template_id, status, intake_no, owner, due_date, notes, inbox_folder, \
-created_at, updated_at, last_check_at, keywords";
+const PROJECT_COLUMNS: &str = "id, name, template_id, intake_no, owner, start_date, end_date, settings, notes, \
+inbox_folder, created_at, updated_at, last_check_at, keywords";
+
+fn settings_json(settings: &ProjectSettings) -> String {
+    serde_json::to_string(settings).unwrap_or_else(|_| "{}".into())
+}
+
+fn parse_settings(json: Option<String>) -> ProjectSettings {
+    json.and_then(|j| serde_json::from_str::<ProjectSettings>(&j).ok()).unwrap_or_default()
+}
+
+/// A stored ISO date, blank-cleaned; anything unparsable is dropped so the phase stays sane.
+fn clean_date(v: Option<String>) -> Option<String> {
+    blank(v).and_then(|d| super::parse_date(&d).map(|x| x.format("%Y-%m-%d").to_string()))
+}
 
 /// Normalises a keyword list: trimmed, NFC, non-empty, no duplicates (case-insensitive), ≤ 32.
 pub fn normalize_keywords(keywords: &[String]) -> Vec<String> {
@@ -625,23 +638,35 @@ fn parse_keywords(json: Option<String>) -> Vec<String> {
 }
 
 fn row_to_project(r: &Row<'_>) -> rusqlite::Result<Project> {
-    let status: String = r.get(3)?;
+    let start_date: Option<String> = r.get(5)?;
+    let end_date: Option<String> = r.get(6)?;
+    let created_at = parse_ts(r.get(10)?).unwrap_or_else(Utc::now);
+    let today = chrono::Local::now().date_naive();
+    let phase = super::phase_for(
+        start_date.as_deref().and_then(super::parse_date),
+        end_date.as_deref().and_then(super::parse_date),
+        created_at.with_timezone(&chrono::Local).date_naive(),
+        today,
+    );
     Ok(Project {
         id: r.get(0)?,
         name: r.get(1)?,
         template_id: r.get(2)?,
-        status: ProjectStatus::parse(&status).unwrap_or_default(),
-        intake_no: r.get(4)?,
-        owner: r.get(5)?,
-        due_date: r.get(6)?,
-        notes: r.get(7)?,
-        inbox_folder: r.get(8)?,
-        keywords: parse_keywords(r.get(12)?),
-        created_at: parse_ts(r.get(9)?).unwrap_or_else(Utc::now),
-        updated_at: parse_ts(r.get(10)?).unwrap_or_else(Utc::now),
+        intake_no: r.get(3)?,
+        owner: r.get(4)?,
+        start_date,
+        end_date,
+        phase,
+        overdue: false,
+        settings: parse_settings(r.get(7)?),
+        notes: r.get(8)?,
+        inbox_folder: r.get(9)?,
+        keywords: parse_keywords(r.get(13)?),
+        created_at,
+        updated_at: parse_ts(r.get(11)?).unwrap_or_else(Utc::now),
         document_count: 0,
         missing_count: 0,
-        last_check_at: parse_ts(r.get(11)?),
+        last_check_at: parse_ts(r.get(12)?),
         last_pass: 0,
         last_mismatch: 0,
         last_undetermined: 0,
@@ -723,6 +748,11 @@ fn fill_counters(conn: &Connection, projects: &mut [Project], only: Option<&str>
                 p.last_check_at = parse_ts(Some(started.clone()));
             }
         }
+        // 기한 경과 (decision 5): the end date has passed but the case is not complete — required
+        // documents are missing, the last check left mismatches, or nothing was ever checked.
+        p.overdue = p.phase == ProjectPhase::Done
+            && p.end_date.is_some()
+            && (p.missing_count > 0 || p.last_mismatch > 0 || p.last_check_at.is_none());
     }
     Ok(())
 }
@@ -805,7 +835,6 @@ pub fn save_project(conn: &Connection, input: &ProjectInput) -> rusqlite::Result
     let id = match &input.id {
         Some(id) if !id.trim().is_empty() => {
             let before = get_project(conn, id)?.ok_or_else(|| typed("project_not_found"))?;
-            let status = input.status.unwrap_or(before.status);
             // `None` keeps the stored value, `Some("")` (blank) clears it.
             let merged = |given: &Option<String>, stored: &Option<String>| match given {
                 None => stored.clone(),
@@ -813,17 +842,20 @@ pub fn save_project(conn: &Connection, input: &ProjectInput) -> rusqlite::Result
             };
             let template_id = merged(&input.template_id, &before.template_id);
             let keywords = keywords_json(input.keywords.as_deref().unwrap_or(&before.keywords));
+            let settings = settings_json(input.settings.as_ref().unwrap_or(&before.settings));
             conn.execute(
-                "UPDATE projects SET name = ?2, template_id = ?3, status = ?4, intake_no = ?5, owner = ?6, due_date = ?7, \
-                 notes = ?8, inbox_folder = ?9, updated_at = ?10, keywords = ?11 WHERE id = ?1",
+                "UPDATE projects SET name = ?2, template_id = ?3, intake_no = ?4, owner = ?5, start_date = ?6, \
+                 end_date = ?7, settings = ?8, notes = ?9, inbox_folder = ?10, updated_at = ?11, keywords = ?12 \
+                 WHERE id = ?1",
                 params![
                     id,
                     name,
                     template_id,
-                    status.as_str(),
                     merged(&input.intake_no, &before.intake_no),
                     merged(&input.owner, &before.owner),
-                    merged(&input.due_date, &before.due_date),
+                    clean_date(merged(&input.start_date, &before.start_date)),
+                    clean_date(merged(&input.end_date, &before.end_date)),
+                    settings,
                     merged(&input.notes, &before.notes),
                     merged(&input.inbox_folder, &before.inbox_folder).map(|f| documents::nfc(&f)),
                     now,
@@ -840,16 +872,18 @@ pub fn save_project(conn: &Connection, input: &ProjectInput) -> rusqlite::Result
         _ => {
             let id = documents::new_id();
             conn.execute(
-                "INSERT INTO projects (id, name, template_id, status, intake_no, owner, due_date, notes, inbox_folder, \
-                 created_at, updated_at, keywords) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?11)",
+                "INSERT INTO projects (id, name, template_id, intake_no, owner, start_date, end_date, settings, notes, \
+                 inbox_folder, created_at, updated_at, keywords) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, ?12)",
                 params![
                     id,
                     name,
                     template_id,
-                    input.status.unwrap_or_default().as_str(),
                     blank(input.intake_no.clone()),
                     blank(input.owner.clone()),
-                    blank(input.due_date.clone()),
+                    clean_date(input.start_date.clone()),
+                    clean_date(input.end_date.clone()),
+                    settings_json(input.settings.as_ref().unwrap_or(&ProjectSettings::default())),
                     blank(input.notes.clone()),
                     blank(input.inbox_folder.clone()).map(|f| documents::nfc(&f)),
                     now,
@@ -877,10 +911,30 @@ pub fn delete_project(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
     Ok(conn.execute("DELETE FROM projects WHERE id = ?1", [id])? > 0)
 }
 
-pub fn set_status(conn: &Connection, id: &str, status: ProjectStatus) -> rusqlite::Result<()> {
+/// Sets the start / end dates (`Some(None)` clears one, `None` keeps it); the phase follows.
+pub fn set_dates(
+    conn: &Connection,
+    id: &str,
+    start: Option<Option<&str>>,
+    end: Option<Option<&str>>,
+) -> rusqlite::Result<()> {
+    let before = get_project(conn, id)?.ok_or_else(|| typed("project_not_found"))?;
+    let pick = |given: Option<Option<&str>>, stored: &Option<String>| match given {
+        None => stored.clone(),
+        Some(v) => clean_date(v.map(str::to_string)),
+    };
+    conn.execute(
+        "UPDATE projects SET start_date = ?2, end_date = ?3, updated_at = ?4 WHERE id = ?1",
+        params![id, pick(start, &before.start_date), pick(end, &before.end_date), ts(&Utc::now())],
+    )?;
+    Ok(())
+}
+
+/// Replaces the organise / export settings of a project.
+pub fn set_settings(conn: &Connection, id: &str, settings: &ProjectSettings) -> rusqlite::Result<()> {
     let n = conn.execute(
-        "UPDATE projects SET status = ?2, updated_at = ?3 WHERE id = ?1",
-        params![id, status.as_str(), ts(&Utc::now())],
+        "UPDATE projects SET settings = ?2, updated_at = ?3 WHERE id = ?1",
+        params![id, settings_json(settings), ts(&Utc::now())],
     )?;
     if n == 0 {
         return Err(typed("project_not_found"));
@@ -926,7 +980,7 @@ pub fn remove_document(conn: &Connection, project_id: &str, doc_id: &str) -> rus
 }
 
 /// Member documents that still exist (deleted / purged documents are skipped), in the order
-/// they were added.
+/// they were added, each with its tracked copy in this project's folder when it has one.
 pub fn documents_of(conn: &Connection, project_id: &str) -> rusqlite::Result<Vec<ProjectDocument>> {
     let mut st = conn.prepare_cached(
         "SELECT pd.document_id, pd.added_at FROM project_documents pd JOIN documents d ON d.id = pd.document_id \
@@ -934,13 +988,35 @@ pub fn documents_of(conn: &Connection, project_id: &str) -> rusqlite::Result<Vec
     )?;
     let rows: Vec<(String, Option<String>)> =
         st.query_map([project_id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+    let copies = super::copies::list_for_project(conn, project_id)?;
     let mut out = Vec::new();
     for (id, added) in rows {
         if let Some(document) = docs::get_document(conn, &id)? {
-            out.push(ProjectDocument { document, added_at: parse_ts(added).unwrap_or_else(Utc::now) });
+            let copy = copies.iter().find(|c| c.document_id == id).cloned();
+            out.push(ProjectDocument { document, added_at: parse_ts(added).unwrap_or_else(Utc::now), copy });
         }
     }
     Ok(out)
+}
+
+/// `(document id, project id)` memberships of every document, oldest membership first — the
+/// first project of a document is its "home" (the `{{project}}` variable without a project scope).
+pub fn all_memberships(conn: &Connection) -> rusqlite::Result<Vec<(String, String)>> {
+    let mut st =
+        conn.prepare_cached("SELECT document_id, project_id FROM project_documents ORDER BY added_at, rowid")?;
+    let rows: Vec<(String, String)> =
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+/// Document ids of a project (members that still exist).
+pub fn member_ids(conn: &Connection, project_id: &str) -> rusqlite::Result<Vec<String>> {
+    let mut st = conn.prepare_cached(
+        "SELECT pd.document_id FROM project_documents pd JOIN documents d ON d.id = pd.document_id \
+         WHERE pd.project_id = ?1 AND d.deleted_at IS NULL ORDER BY pd.added_at, pd.rowid",
+    )?;
+    let ids: Vec<String> = st.query_map([project_id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(ids)
 }
 
 /// Projects a document belongs to (viewer badge / deletion hooks).

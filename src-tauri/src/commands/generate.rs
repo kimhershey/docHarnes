@@ -17,6 +17,11 @@ pub fn generate_templates() -> Vec<TemplateInfo> {
     generate_bridge::templates()
 }
 
+#[tauri::command]
+pub fn generate_budget_info(app: AppHandle) -> UiResult<generate_bridge::BudgetInfo> {
+    generate_bridge::budget_info(&app)
+}
+
 #[tauri::command(async)]
 pub fn generate_draft(app: AppHandle, req: DraftRequest) -> UiResult<JobStarted> {
     generate_bridge::draft(&app, req, None, "generate").map(|job_id| JobStarted { job_id })

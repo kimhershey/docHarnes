@@ -1415,6 +1415,160 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 - 사용자 결정대로 구형 양식·템플릿은 삭제하지 않고 숨겼다. 기존 작업 공간은 `BUILTIN_VERSION` 갱신으로 열 때 자동 전환된다
   (사용자 편집 구형 양식은 유지).
 
+
+### 0.3.0 2차 — 문서 생성 내장 템플릿을 SW 개발 문서로 (2026-11-10; 계획 §1, 결정 1·2 "목록 그대로, 구형은 숨김")
+
+- **코어 `generate/mod.rs`**: `TemplateKind` 19종 — SW 12종(rfp·proposal·sow·srs·dev_contract·wbs·progress_report·meeting_minutes·
+  test_report·change_request·acceptance·estimate) + supplement_request + 숨긴 구형 6종(official_letter·quotation·transaction_statement·
+  contract·report·minutes; `hidden()`, `visible()`). 생성 slug = 추출 doc_type slug(테스트가 `pipeline::schema::builtin(slug)`로 확인).
+  `templates.rs`: `list()`(보이는 13) / `list_all()`(19) / `get()`은 숨김 포함; `match_keywords()`는 보이는 템플릿만, `match_keywords_any()`는
+  명시 형식 참조용("A4 공문 형식" → 공문); 필드 키는 추출 스키마와 동일(`project_name`·`amount`·`supplier.name`·견적 `items[]`
+  역할·등급·투입 MM·단가·공급가액); 절 목록은 계획 §1 표. 견적서는 인력·MM 기준으로 재정의해 포함(구형 품목 견적서는 숨김) —
+  어시스턴트·RUN-GUIDE의 견적서 예시와 추출 `estimate` 어휘를 유지하기 위한 결정.
+- **흐름·렌더·검증**: `resolve_spec`은 명시 `form_ref`면 숨긴 템플릿도 이름·키워드로 찾고, 내용 문장은 보이는 템플릿만 보며, 못 찾으면
+  종전처럼 `report`(숨김이지만 범용 레이아웃)로 떨어진다. 렌더의 갑·을 인터리브·서명 블록을 개발 계약서(client/contractor)·검수확인서에도
+  적용, 견적서는 표 우선·공급자 서명. 검증은 `months`(투입 MM) 열을 수량으로 인정(MM×단가=공급가액, 합계·세액 자동 채움, 메시지에 열 이름).
+  시스템 프롬프트의 문서 목록 갱신.
+- **플래너**: `TEMPLATE_WORDS`를 SW 13종 우선으로(진척·테스트·완료 보고서가 범용 보고서보다 먼저), 공문·보고서는 자기 단어로만 도달;
+  `aggregate_first`는 "문장의 유형 ≠ 선택된 템플릿"일 때로("지난달 견적서 집계 결과로 보고서 초안"); few-shot 견적서 예시를 estimate로;
+  `planner::validate`는 `templates_all()`로 숨긴 이름도 경고 없이 통과.
+- **프런트**: `TemplateKind`·`TEMPLATE_KINDS`(보이는 13)·`HIDDEN_TEMPLATE_KINDS`, i18n `generate.templates.*` 12종 추가(구형 키 유지),
+  `describePlan` 템플릿·프로젝트 템플릿 키, 모의 플래너 `DRAFT_TEMPLATES`(구체 → 범용 순)·`PROJECT_TEMPLATE_WORDS`(외주·유지보수·내부 개발),
+  모의 생성기: SW 13종 + 구형 6종(`ALL_TEMPLATES`, 명시 참조만), 긴 키워드 우선 매칭, 인력 라인 파서("백엔드개발 고급 3MM 단가
+  2,500,000원"), 합계 실수 시뮬레이션(세액 분리 양식은 합계에 세액 누락 → 검증기가 8,250,000 제안), 새 절 문장.
+- **테스트**: `generate::tests`(13/19·slug=doc_type·키워드·숨김 참조·견적서 열), `planner::tests`(estimate·dev_contract), vitest
+  `mock-generate.test`(견적서·숨김 참조·진척 보고서 매칭), E2E `generate.spec`(견적서 흐름·진척 보고서 재생성·어시스턴트 견적서).
+  `playwright.config.ts`는 `PW_PORT`·`PW_OUT_DIR`로 여러 실행을 나란히 돌릴 수 있게 함(병렬 에이전트용).
+- **문서**: RUN-GUIDE 8번·v1.1 예시, 설계 §3.13 템플릿 목록·NL 예시, 체크리스트, 계획 §1 진행, CLAUDE.md 레이아웃.
+
+
+### 0.3.0 3차 — 프로젝트 상태를 시작·종료일로, 프로젝트별 정리·내보내기와 추적 사본 (2026-11-10; 계획 §5·§6, 결정 5 "종료일 지난 미완은 기한 경과 배지, 종료일 없으면 진행중"·결정 6 "여러 프로젝트 문서는 양쪽에 사본"; 병렬 에이전트)
+
+- **코어 `projects/`**: 수동 상태(`ProjectStatus`) 제거. `ProjectPhase { Planned, Active, Done }`은 `phase_for(start, end, created, today)`로
+  읽을 때 계산(시작 전 진행예정, 종료일 지나면 완료, 그 외·종료일 없음은 진행중). `Project.overdue`(기한 경과)는 단계가 아니라 배지 —
+  완료이면서 종료일이 있고 필수 서류 누락·최근 불일치가 남았거나 검사한 적이 없을 때. `ProjectInput.start_date/end_date`(새 프로젝트는
+  화면에서 오늘이 기본 시작), `repo::set_dates`, "완료 처리"는 종료일 = 오늘, "다시 열기"는 종료일 비움. `ProjectSettings`(JSON,
+  `projects.settings`): folder_template·name_template·group_by·export_format·export_layout·export_path·copies(기본 true), 기본 폴더
+  `DEFAULT_PROJECT_FOLDER = documents/{{project}}/{{doc_type}}`. 리포트·보완요청서 요청 JSON에 phase/overdue/start/end.
+- **마이그레이션 0008** `0008_project_dates.sql`: `projects.start_date/end_date/settings` 추가, 시작 ← created_at, 종료 ← done이면
+  updated_at 아니면 due_date, `status` 열 DROP COLUMN(SQLite ≥ 3.35; `due_date` 열은 남지만 쓰지 않음), `document_copies` 테이블.
+- **추적 사본 `projects/copies.rs`**: 레코드 하나 + `document_copies(document_id, project_id, rel_path UNIQUE, content_hash, size_bytes,
+  state synced|modified|missing)`. 문서가 두 번째 이상 프로젝트에 들어갈 때만 그 프로젝트의 폴더 템플릿으로 물리 사본을 쓴다(첫 프로젝트는
+  원본이 사본; 같은 이름이면 `_2`). `add_documents`·`remove_document`·`remove_project_copies`·`remove_all_for_document`,
+  `sync_document`(원본 변경 → 재작성, 이동·개명 → 따라감, 밖에서 고친 사본은 `modified` 표시만), `sync_project`(강제 재작성 = "다시 동기화"),
+  `rescan`(파일 없는 사본 복구, 모듈을 거치지 않은 소속 — 자동 분류·inbox 매핑·프로젝트로 가져오기 — 의 빠진 사본 생성; `import::rescan`
+  끝에서 호출). 가져오기 계획은 사본 경로를 `Duplicate`로 돌려 재등록을 막고, 문서 삭제·프로젝트 삭제는 사본을 먼저 지운다.
+  정리 `apply`는 이동한 문서의 사본을 동기화한다. 셸 `project_sync_copies`(구 `project_set_status` 자리).
+- **정리·내보내기·집계**: 템플릿 변수 `{{project}} {{project_code}} {{project_phase}} {{project_start}} {{project_end}} {{project_owner}}`
+  (범위의 프로젝트, 없으면 문서의 첫 프로젝트; 없으면 미상 + needs_review), `GroupBy::Project` 폴더 프리셋 "프로젝트별",
+  `ScopeFilter.project_id`(scope → 소속 문서). 내보내기: 프로젝트가 있는 문서가 있거나 `ExportLayout::SheetPerProject`면 "프로젝트" 열,
+  프로젝트별 시트·CSV 파일(`<파일>_<프로젝트>.csv`, "프로젝트 없음"은 마지막), JSONL `project`, 프로젝트 범위 기본 경로
+  `exports/<날짜>_<프로젝트>.<ext>`. 집계 `group_by = project`.
+- **플래너**: `GroupBy::Project`("프로젝트별"·"by project" — 프로젝트 참조가 아님), 이름이 든 "○○ 프로젝트 문서 …"는 `scope.filter.project_id`,
+  `create_project { start_date, end_date }`(YYYY-MM-DD 검증), 스키마 enum·설명 갱신; `ProjectSummary.status`에는 phase 문자열(평가 문맥의
+  프로젝트 status "intake" → "active" 한 줄만 변경, 골든셋·기준선은 그대로 99/100). 규칙 문구는 `planner/tests.rs::project_group_words_and_project_scope`.
+- **프런트**: 칸반 3열(진행예정·진행중·완료, 이동 버튼 없음) + 카드 `data-project-phase/overdue`, 상세 헤더 단계·기한 경과 배지와
+  시작·종료 날짜 입력(즉시 저장)·완료 처리·다시 열기, 새 프로젝트 대화상자 시작·종료일, 문서 탭 경로 열 + 사본 배지(사본/원본과 다름/사본 없음)
+  + "다시 동기화", 새 탭 "정리·내보내기"(`ProjectSettingsTab`: 폴더·파일명 템플릿, 사본 보관, 내보내기 형식·레이아웃·경로, "이 프로젝트 정리"·
+  "이 프로젝트 내보내기" → `/organize?project=<id>`), 정리·내보내기 범위에 "프로젝트" 모드 + "프로젝트 설정 사용" 스위치. 모의
+  백엔드(`mock-projects.ts` 단계·날짜·설정·가상 사본, `mock-planner.ts` 프로젝트 범위·그룹·변수·시트)·i18n ko/en 동기.
+- **E2E**: `projects.spec` 단계 흐름(종료일 과거 → 완료 + 기한 경과, 다시 열기, 시작일 미래 → 진행예정)과 공유 문서 사본(두 번째 프로젝트의
+  `archive/{{project}}/{{doc_type}}` 사본 → 다시 동기화 → 소속 해제로 소멸 → 재추가), `organize.spec` "이 프로젝트 정리"(프로젝트 범위·설정 채움·
+  `{{project}}`·`{{project_code}}`·`{{project_phase}}`·프로젝트별 프리셋·미상·실행).
+- **남은 것**: 템플릿 단위 정리 설정 상속 없음(프로젝트별만), 분류·inbox 매핑으로 들어온 소속의 사본은 재검사/다시 동기화 때 생성, 사본 이름 변경
+  추적 시 유형 라벨은 한국어 고정, 외부 변경은 재검사·다시 동기화 시점에만 감지(fswatch 연동 없음), `due_date` 열 잔존, 내보내기 탭의
+  프로젝트 설정 채움은 E2E 미포함(Rust 테스트만), 모의 백엔드의 사본은 가상(파일 없음).
+
+### 0.3.0 4차 — 양식 등록을 문서 1~N개의 자동 스키마 도출로 (2026-11-10; 계획 §2, 결정 3 "편집 후 저장 버튼 · 이름 중복은 팝업 · 같은 이름이면 저장 비활성"; 병렬 에이전트)
+
+- **코어 `pipeline/forms.rs`**: `discover(deps, vlm, docs, hint, cancel, progress)` — 샘플 문서마다 `discover_document`(오피스 형식은 표 구조,
+  스캔·PDF는 모델이 첫 쪽 + 표가 있는 쪽 최대 3장을 쪽마다 읽어 병합, 모델이 없거나 실패하면 텍스트 규칙으로 대체하고 메모에 남김)로 초안을
+  만들고 `merge_drafts`로 하나로 합친다: 라벨의 표준 키(`key_from_label`)로 필드를 맞추고 ⌈n/2⌉개 이상의 샘플에 나온 필드만 채택, 빈도 → 첫
+  등장 순 정렬, 라벨·종류는 다수결(동률이면 string보다 구체적인 종류), enum 선택지·표 열은 합집합(≤ 12·≤ 20), `required`는 모든 샘플에 있을
+  때만, 이름은 힌트 → 다수결, 슬러그는 `slug_for_name`. `infer_rules`는 합계·세액·기간·퍼센트·테스트 건수 규칙을 `KNOWN_RULES` 안에서만 붙인다.
+  결과 `DiscoveryOutcome { kind: "schema_discovery", draft, documents[], merged_fields, dropped_fields }`는 저장되지 않고 편집기로 간다. 실패한
+  샘플은 다른 샘플이 성공했으면 `source: "failed"`로 보고만 한다. `SchemaDraft.sample_document_ids`, `register`가 샘플 문서 전부를 `role=form`·
+  `doc_type=slug`로 표시.
+- **이름 중복 안전장치 `pipeline/repo.rs`**: `name_exists(name, excluding)`(대소문자·공백·구두점 무시), `free_name`("이름 (2)"…), `save_schema`는
+  중복이면 `schema_name_duplicate`로 거부(내장 샘플 이름 포함 — 사용자 양식 "견적서"는 "견적서 (2)"가 된다).
+- **작업화**: `JobSpec::SchemaDiscovery { doc_ids, name_hint }`(엔진 레인) → 셸 `pipeline_bridge::schema_discovery_job` / `run_schema_discovery`
+  (스캔 샘플이 있을 때만 비전 모델 자동 로드, 실패 시 텍스트 규칙; `batch_begin`/`checkpoint`; 진행 "<제목> · discover (p/q)"), 명령
+  `pipeline_schema_discover`·`pipeline_schema_name_exists`, `JobKind::SchemaDiscovery`.
+- **플래너**: `register_form` op에 `doc_ids[]`(규칙은 선택 문서 전체를 넣음, 미리보기 "문서 n개에서 필드를 도출·병합…"), UI 실행은
+  `/schemas?register=id1,id2&name=`.
+- **프런트**: 양식 등록 대화상자가 체크 목록(문서 여러 개·드롭·파일 가져오기)·이름 힌트·작업 진행 카드(진행률·취소)로 바뀌고 결과 초안을 편집기에
+  "저장되지 않은 변경"으로 연다. 편집기 위에 도출 요약(`schema-discovery-summary`: 문서별 출처(표 구조/모델/텍스트 규칙/실패)·필드 수). 이름
+  입력마다 중복 검사(250 ms) → 중복이면 저장 버튼 비활성 + 입력란 아래 오류, 새 초안의 이름이 이미 있으면 팝업이 "이름 (2)"를 제안
+  (`schema-name-taken`). 작업 화면 결과 카드 "편집기에서 열기"(`useSchemasStore` 핸드오버). 라이브러리 일괄 바 "선택 문서로 양식 만들기"(문서 1개
+  이상). 모의 백엔드가 같은 병합·중복 규칙을 흉내(`mergeDrafts`·`inferRules`·`schemaDiscoveryWorker`). 옛 단일 문서 명령 `pipeline_form_derive`는
+  남겨 두되 UI는 쓰지 않음.
+- **검증(에이전트 환경)**: 코어 단위 테스트 3건 추가(`forms::tests` 병합·규칙 2, `pipeline::tests::schema_discovery_merges_samples_and_the_name_guard_refuses_duplicates`),
+  vitest `mock-schema-discovery.test.ts` 4건, Playwright `pipeline.spec` 양식 등록 구간 재작성(샘플 2개 → 작업 → 병합 10필드 → "견적서 (2)" 팝업
+  → 저장 → 두 카드 모두 견적서)·`dnd.spec` 그대로 — 통합 검증 수치는 아래 표.
+
+### 0.3.0 5차 — 문서 생성 토큰 예산 + 개요→절별 분할 생성 (2026-11-10; 계획 §4, 결정 4 "GPU 상향·CPU 제한")
+
+- **코어 `generate/`**: `DraftRequest.max_tokens: Option<u32>`(없으면 길이 프리셋 1,200/1,800/2,600), `prompts::reply_budget`·`split_needed`
+  (예산 > 3,000 토큰 또는 컨텍스트의 35 %)·`section_budget`(전체 × 비중, 600~3,000). `draft()`는 작은 예산이면 종전 단일 호출, 크면
+  `draft_split`: ① 절 계획 — 템플릿 절 목록이 있으면 그대로(비중 1), 없으면 `draft_outline` 문법(제목·절 4~12개·비중·지침, 700 토큰)으로
+  모델이 정하고 실패 시 범용 5절; ② 머리 호출 — 종전 `draft_document` 문법으로 필드·표 전부 + 1절 본문만(절 예산 + 600); ③ 절마다
+  `draft_section` 문법(blocks ≤ 24)으로 호출하되 [확정 정보](제목·채워진 필드 ≤ 12)·[앞 절 요약](직전 본문 꼬리 600자)·절 지침·절별 지식
+  재검색(절 제목 질의, ≤ 3건, 번호는 공용 자료 뒤에 이어짐)을 넣음; 모델이 쓴 소제목은 level 3, 절 제목(level 2)은 조립기가 보장; ④ 사용량
+  합산, 역방향 검증 1회, 메모 "토큰 예산 N로 n개 절을 나눠 생성했습니다". 취소(플래그·`Cancelled`)는 절 사이에서 멈추고 생성된 절을 보존
+  (메모 "취소되어 n/m절까지만 생성했습니다"), JSON 실패 절은 제목만 남기고 메모. `GenerateDeps.progress`(0.25~0.95, "outline" / "section i/n"
+  / "finishing"), `DraftOutcome.sections`. `schema.rs`에 outline·section 문법(문법 안전 검사 포함), `parse_body`·`call_json_with_retry` 분리.
+- **설정 `GenerationSettings`**: `max_tokens_gpu` 32,768(1,200~65,536)·`max_tokens_cpu` 8,192(1,200~12,288), `cap(gpu)`; `AppSettings.generation`.
+- **셸**: `generate_bridge::draft`가 요청 예산을 활성 백엔드 상한으로 자르고(`budget_info`: 모델 컨텍스트·GPU 여부·상한·분할 임계),
+  `run_draft`가 절 진행률을 작업 책에 넘기며(`detail` "section 3/8"), 취소된 분할 초안도 저장 뒤 취소 보고(초안 목록에서 열림). 명령
+  `generate_budget_info`.
+- **프런트**: 생성 화면 "토큰 예산" 컨트롤(`generate-token-budget-select`: 길이 설정에 따름 / 2,600 / 6,000 / 12,000 / 24,000 문서 한 통 /
+  직접 입력 `generate-token-budget-input`), 모델 컨텍스트·상한 표시, 힌트(한 번에 / 절별 + 예상 시간: GPU 25 tok/s·CPU 6 tok/s 가정),
+  CPU 전용 경고(≥ 6,000); 설정 > 처리에 "문서 생성" 카드(GPU·CPU 상한, `settings-generation`); 작업 상세 "n/m절 작성 중"·"개요 작성 중";
+  `types.ts`(`max_tokens?`, `TOKEN_BUDGET_PRESETS`, `LENGTH_TOKENS`, `BudgetInfo`, `GenerationSettings`), `useGenerateBudgetInfo`. 모의
+  백엔드: 예산 > 3,000이면 절별 진행률·모든 절 생성(≥ 12,000은 절당 문단 추가)·메모, `generate_budget_info`(8K 컨텍스트·GPU·상한 32,768).
+- **테스트**: `generate::tests` 2건(예산 도우미·문법 안전; 진척 보고서 5절 분할 — 제목 순서·소제목 level 3·사용량 합산·진행률·절 프롬프트의
+  확정 정보/앞 절 요약·예산 배분 1,600(+600) — 3절 요청 시 취소 → 2절 보존 — 작은 예산은 단일 호출), vitest(모의 생성기), E2E
+  `generate.spec` "토큰 예산: 문서 한 통 → 8절".
+- **보류**: 실시간 스트리밍 미리보기(`generate://delta`, 계획의 2차 선택), 생성 중 컨텍스트 32K 재기동(분할이 더 안정적이라 두지 않음),
+  tok/s 실측 기반 예상 시간(현재 상수).
+- **문서**: RUN-GUIDE 8번 토큰 예산 문단, 체크리스트(GPU·CPU), 계획 §4 진행.
+
+
+### 0.3.0 6차 — 뷰어 글자 수정 이력 + Ctrl+Z 범위 분리 (2026-11-10; 계획 §10 7번, 사용자 보고 "되돌리기가 동작하지 않음"; 병렬 에이전트)
+
+- **DB 마이그레이션 0009** `page_text_history`(document_id·page_no, `kind` edit|revert|redo, `source` layer|add|manual, `target_id`, 이전/이후
+  텍스트·레이아웃 JSON·출처, `edited_at`; 문서 삭제 시 CASCADE, `SCHEMA_VERSION = 9`). 쪽마다 최근 50건 유지, 유지보수 작업이 저널 보존 기간으로
+  함께 삭제(`purge_page_text_history_before`, 집계는 "저널"에 포함).
+- **코어 `documents/import.rs`**: `edit_words`·`add_words`·새 `set_page_text`가 수정 전후 상태(텍스트·레이아웃·출처)를 기록. `undo_page_text`
+  (가장 최근 적용 수정 되돌림)·`redo_page_text`(가장 오래된 되돌린 수정 재적용)·`revert_page_text_to`(이력 항목과 그 뒤 수정을 모두 되돌림)·
+  `page_text_history`(쪽/문서 단위, 바뀐 단어 요약 before → after, `can_undo`/`can_redo`). 되돌리면 `text_source`도 원래 값(layer/ocr)으로 복귀,
+  되돌린 뒤 새 수정은 재실행 분기 삭제(편집기 규칙). 원본 파일 불변. 적용된 수정은 항상 접두 구간이라 되돌리기 = 최신 적용 수정, 다시 실행 = 가장
+  오래된 되돌린 수정.
+- **셸 명령** `documents_page_text_history`, `documents_undo_page_text`, `documents_redo_page_text`, `documents_revert_page_text`
+  (`documents://changed` + 지식 재색인); `documents_set_page_text`도 이력 기록.
+- **UI**: 뷰어에서 Ctrl+Z는 **현재 쪽에 되돌릴 글자 수정이 있으면 그것을**, 없으면 종전처럼 파일 저널을 되돌림(Ctrl+Shift+Z·설정의 다시 실행
+  단축키 = 재적용; 전역 단축키 훅은 화면이 처리한 키(`defaultPrevented`)를 건너뜀). 레이어 바에 "수정 n건" 배지 + 되돌리기/다시 실행 버튼
+  (`viewer-text-edits-count`·`viewer-text-undo`·`viewer-text-redo`), 이력 탭에 "글자 수정" 목록(쪽 · 전 → 후 · 출처 · 시각, 되돌려짐 배지,
+  "이 수정 되돌리기" `history-text-revert`). 토스트 "글자 수정을 되돌렸습니다 / 다시 적용했습니다". 모의 백엔드 `mock-text-history.ts`(같은 규칙의
+  TS 트윈) + `MockDoc.text_history`.
+- **검증(에이전트 환경)**: Rust `documents::import` 1건 추가(기록·되돌리기·재실행·출처 복귀·분기 삭제·revert_to·상한 50·전체 목록·purge) —
+  `cargo test -p doculens-core --lib -- documents:: knowledge:: db::` 111 통과; Playwright `documents.spec` 5/5(수정 → Ctrl+Z → Ctrl+Shift+Z →
+  이력 탭 2건 → "이 수정 되돌리기"). 통합 검증 수치는 아래 표.
+
+
+### 0.3.0 릴리스 (2026-11-10; 사용자 지시 "최종 종료 후에는 0.3.0 으로 릴리즈 생성 및 LITE 만 빌드해서 배포")
+
+- 버전 0.3.0: `Cargo.toml`(workspace, 4개 크레이트 상속)·`Cargo.lock`, `package.json`·`package-lock.json`(`npm version`), `src-tauri/tauri.conf.json`,
+  모의 `app_info`/`settings` 버전 문자열, `npm run notices`(SBOM 버전), RUN-GUIDE의 설치파일 이름·릴리스 링크(v0.3.0 Lite · Full은 v0.2.0 · CUDA 팩은
+  v0.1.0), 체크리스트 릴리스 항목.
+- 릴리스 노트 `docs/releases/v0.3.0.md`(한국어; 설치파일 표는 Lite만, CUDA 팩·Full 없음 안내, 0.2.0 작업 공간 자동 마이그레이션 0008·0009).
+  `release-windows.yml`이 `v0.3.0` 생성 때 이 파일을 `--notes-file`로 씀(0.2.0 릴리스 때 추가한 경로).
+- 배포: Actions "Windows installer (manual)" `variant=lite`, `publish=true`, `ref=<검증된 커밋>` 1회만(Full·CUDA 팩 빌드 없음 — Full은 v0.2.0에서
+  그대로 받음). 실행·자산 크기는 아래 표.
+- 결과: 릴리스 커밋 772782f CI 7개 잡 성공(run 42771724261) → `ref=772782f` Lite 빌드 run 42772557097 성공(약 11분) →
+  GitHub Release `v0.3.0`(https://github.com/kimhershey/docHarnes/releases/tag/v0.3.0, draft·prerelease 아님) 자산 4개:
+  `DocuLens-Setup-Lite-0.3.0-x64.exe` 50,802,102 B(48.4 MiB) · `.sha256` · `sbom.cdx.json` · `THIRD-PARTY-NOTICES.md`.
+
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
@@ -1434,7 +1588,9 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | 2026-11-09 어시스턴트 모델 우선 해석 + 되묻기·취소 (3467ad4) | `cargo test --workspace` 코어 296(4 ignored; `planner` 15·`prerouter` 8 포함)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과; vitest 25파일 147건; Playwright 46건(`planner.spec` 되묻기·취소 1건 추가); `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(3467ad4 푸시 이벤트) |
 | 2026-11-09 UI 배율 대응 A안(고정 px 상자 제거) | 프런트 전용 변경(Rust·고지·SBOM 변경 없음): `npm run typecheck`·`npm run build`·`licenses:check` 통과, vitest 25파일 147건, Playwright 49건(`scale.spec` 3건 추가; 1280×800 기본 뷰포트에서 150 % 검사); 모의 백엔드 15화면 × 4조건 자동 점검에서 실제 잘림 0; CI 7개 잡 모두 성공(be0b82d 푸시 이벤트, run 42601541022) |
 | 2026-11-10 요약 컨텍스트 초과 · 불필요한 RAG (4차, e7bf331·c5a8aa2) | `cargo test --workspace` 코어 303(4 ignored; `knowledge::tests` 3건·`planner::guard` 3건·`planner::tests` 1건 추가)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과, 새 의존성 없음; vitest 25파일 147건; Playwright 50건(`planner.spec` 붙여 넣은 글 1건 추가); `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(c5a8aa2 푸시 이벤트, run 42749113495) |
-| 2026-11-10 0.3.0 1차 — 내장 양식 SW 개발 문서화 (b561120 + 후속 커밋) | `cargo test --workspace` 코어 303(4 ignored; `pipeline::schema` 13 보임/6 숨김 검사·`planner` 18·`projects` 18)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(SW 문구 31건·문맥 재작성, 기준선 재생성, 미달은 이전과 같은 mx-10 1건); vitest 25파일 147건(`mock-generate.test` 규칙 파서·프로젝트 템플릿 SW화, `template.test` 예시 견적서); Playwright 전체 실행 50건 중 48 통과 → 정리 예시 문서·어시스턴트 테스트 템플릿(유지보수) 수정 뒤 `organize`·`projects` 스펙 7/7 재실행 통과; `npm run build`·`licenses:check` 통과; CI: 아래 기록 |
+| 2026-11-10 0.3.0 1차 — 내장 양식 SW 개발 문서화 (b561120 + 후속 커밋) | `cargo test --workspace` 코어 303(4 ignored; `pipeline::schema` 13 보임/6 숨김 검사·`planner` 18·`projects` 18)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(SW 문구 31건·문맥 재작성, 기준선 재생성, 미달은 이전과 같은 mx-10 1건); vitest 25파일 147건(`mock-generate.test` 규칙 파서·프로젝트 템플릿 SW화, `template.test` 예시 견적서); Playwright 전체 실행 50건 중 48 통과 → 정리 예시 문서·어시스턴트 테스트 템플릿(유지보수) 수정 뒤 `organize`·`projects` 스펙 7/7 재실행 통과; `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(93fb59b 푸시 이벤트, run 42761926963) |
+| 2026-11-10 0.3.0 2~6차 통합 — 생성 템플릿 SW화(1번) · 토큰 예산/절별 생성(4번) · 프로젝트 단계·프로젝트별 정리·추적 사본(5+6번) · 문서 N개 스키마 도출(2번) · 글자 수정 이력(7번) | `cargo test --workspace` 코어 317(4 ignored; `generate` 토큰 예산·분할 2건, `projects`·`organize`·`export`·`aggregate`·`planner` 프로젝트 8건, `pipeline` 스키마 도출 3건, `documents::import` 이력 1건 포함)·셸 3·평가 15·통합 1, clippy(-D warnings)·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(기준선 +0.0 pt, 미달은 mx-10 1건); `npm run typecheck`·`npm run build`·`licenses:check` 통과, vitest 26파일 150건, Playwright 53/53(`generate` 4·`projects` 6·`organize` 4·`pipeline` 2·`dnd`·`documents` 5 재작성 포함); 병렬 에이전트 3개가 같은 트리에서 작업해 중간 WIP 스냅샷 3건(1c885b4·97acb87·d742501, `[skip ci]`)을 거쳤고 통합 커밋에서 CI 실행 — CI 7개 잡 모두 성공(d166b5b 푸시 이벤트, run 42771458691) |
+| 2026-11-10 0.3.0 릴리스 (772782f + 문서 77e8b69) | 버전 범프·고지/SBOM 재생성 뒤 `cargo test --workspace`·clippy·fmt·`cargo deny`·vitest·`npm run build`·`licenses:check`·`nsis:check` 통과; CI 7개 잡 성공(run 42771724261); Lite 설치파일 빌드 run 42772557097 성공, Release v0.3.0 게시(Lite 48.4 MiB + sha256 + SBOM + 고지) |
 | 2026-11-09 이미지 위 글자 레이어 · 우측 패널 AI 검색/이력 (488af39·9e56dd6) | `cargo test --workspace` 코어 266(3 ignored; `documents::layout` 9·`render` 실 PDFium 문자 박스·`import` 레이아웃 왕복 추가)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과; vitest 23파일 139건(`text-layer.test.ts` 8 추가); Playwright 41/41(`documents`·`knowledge`·`pipeline` 스펙을 레이어·검토 큐 기준으로 재작성); CI 7개 잡 두 커밋 모두 성공 |
 | 설치파일 빌드(Actions "Windows installer (manual)", Windows 러너) | Lite 0.1.0 빌드 성공 3회(run 42471185353·42475854955 solid 43 MB, 42547230697 파일별 압축 47.6 MB; 159 파일 검사 통과) · 1~3번 반영 Lite 빌드 성공(run 42577030466, 검증된 커밋 a461405 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.5 MB; Release 게시는 권한 분류기 거부로 publish=false) · **1~8번(어시스턴트 모델 우선·되묻기·취소 포함) 반영 Lite 빌드 성공(run 42592935148, 검증된 커밋 3467ad4 고정, 아티팩트 `DocuLens-Setup-Lite-0.1.0-x64` 50.6 MB, 2027-02-07까지 보관; publish=false — Release 게시는 사용자 작업)** · **0.2.0 릴리스(2026-11-09, https://github.com/kimhershey/docHarnes/releases/tag/v0.2.0)**: 검증된 커밋 3d55db8 고정, publish=true — Full run 42613728278(`DocuLens-Setup-Full-0.2.0-x64.exe` 1,156,786,994 B) → Lite run 42613985631(`DocuLens-Setup-Lite-0.2.0-x64.exe` 50,579,259 B); 자산 6개(설치파일 2종 + `.sha256` 2 + `THIRD-PARTY-NOTICES.md` + `sbom.cdx.json`); 이번에는 publish 디스패치가 거부되지 않음 · **4차 수정 반영 Lite 빌드 성공(2026-11-10, run 42753243021, 검증된 커밋 c5a8aa2 고정, 아티팩트 `DocuLens-Setup-Lite-0.2.0-x64` 50,593,409 B, 2027-02-08까지 보관; publish=false — 버전은 아직 0.2.0, 릴리스 v0.2.0의 설치파일은 3d55db8 빌드 그대로)** · **Full 0.1.0 빌드 성공(run 42547228170): 1.1 GB, 219 파일, CUDA 팩 cu121·cu129 동봉 검사 통과** · CUDA 팩 빌드 성공(cu121 run 42533483890 · cu129 run 42533486332 → Release v0.1.0) — 위 "패키징·고지" 참조 |
 
@@ -1511,8 +1667,8 @@ P6·P7 항목.
    항목별 현재 구현·변경·영향 파일·사용자 결정(§9, 2026-11-10 답변 반영: 옛 양식 숨김, 저장은 편집 후 버튼 + 이름 중복 검사, 토큰 상한
    GPU 32K/CPU 8K, 기한 경과 배지, 여러 프로젝트 문서는 추적되는 사본)·순서(3 → 1 → 5+6 → 2 → 4 → 7, 약 16.5 작업일). §10: 뷰어
    수정은 앱 내부 데이터만 바꾸고 원본은 불변 — 되돌리기는 파일 저널 전용이라 글자 수정 이력·되돌리기를 7번으로 추가(우선은 그대로 둠).
-   **진행**: 3번(추출 내장 양식 SW 문서화) 2026-11-10 완료 — 위 "0.3.0 1차" 절. 다음은 1번(생성 템플릿) → 5+6 → 2 → 4 → 7, 끝나면
-   0.3.0 릴리스 노트(`docs/releases/v0.3.0.md`) + Lite 설치파일만 `publish=true`로 게시(사용자 지시).
+   **진행**: 3·1·5+6·2·4·7번 모두 2026-11-10 완료(위 "0.3.0 1차~6차" 절; 1·4번은 직접, 2·5+6·7번은 병렬 에이전트 — 사용자 허용).
+   0.3.0 릴리스도 완료(위 "0.3.0 릴리스" 절: Release v0.3.0, Lite만). 남은 것은 각 절의 "남은 것"·체크리스트 항목.
 1. 남은 부록 D op(GUI 전용: `render`·`rotate`·`split`·`merge`·`add_to_kb`·`manage_collection`·`define_term`·`set_tier`·
    `set_backend`·`import_model`·`download_model`·`benchmark`·`open_workspace`)을 플래너에서 UI 액션으로 연결.
 2. P4·P5 숙제 중 미착수: bbox 그라운딩(디지털 PDF 문자 박스), 배치 PDF 자동 경계 탐지, 컬렉션 폴더 감시, OCR 출력 건전성

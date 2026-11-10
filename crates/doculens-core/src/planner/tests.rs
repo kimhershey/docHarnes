@@ -93,6 +93,53 @@ fn ctx() -> PlanContext {
     }
 }
 
+/// 0.3.0 item 6: "프로젝트별" groups folders / sheets / totals by project; a named project is the scope.
+#[test]
+fn project_group_words_and_project_scope() {
+    let mut c = ctx();
+    c.projects = vec![
+        ProjectSummary { id: "p-hanbit".into(), name: "한빛 심사".into(), status: "active".into() },
+        ProjectSummary { id: "p-acme".into(), name: "Acme onboarding".into(), status: "done".into() },
+    ];
+    let planned = |text: &str| plan(None, text, &c, PlanMode::RulesFirst).unwrap();
+    let grouped_by_project = |r: &PlanResult| {
+        matches!(
+            &r.plan.operations[0],
+            Op::Organize { group_by: Some(GroupBy::Project), .. } | Op::Move { group_by: Some(GroupBy::Project), .. }
+        )
+    };
+    let r = planned("전체 문서를 프로젝트별로 정리해줘");
+    assert!(grouped_by_project(&r), "{r:?}");
+    assert!(r.plan.scope.filter.project_id.is_none(), "the group word is not a project reference: {r:?}");
+    let r = planned("검토 완료된 문서 전부 프로젝트별 폴더로 옮겨");
+    assert!(grouped_by_project(&r), "{r:?}");
+    let r = planned("프로젝트별 영수증 합계 알려줘");
+    assert!(matches!(&r.plan.operations[0], Op::Aggregate { group_by: Some(GroupBy::Project), .. }), "{r:?}");
+    let r = planned("Organize all documents by project");
+    assert!(grouped_by_project(&r), "{r:?}");
+    // A named project narrows the scope and the per-type layout stays.
+    let r = planned("한빛 심사 프로젝트 문서 엑셀로 내보내");
+    assert!(matches!(&r.plan.operations[0], Op::Export { format: ExportFormat::Xlsx, .. }), "{r:?}");
+    assert_eq!(r.plan.scope.filter.project_id.as_deref(), Some("p-hanbit"), "{r:?}");
+    let r = planned("Acme onboarding 프로젝트 계약서 월별로 정리");
+    assert!(
+        matches!(
+            &r.plan.operations[0],
+            Op::Organize { group_by: Some(GroupBy::Month), .. } | Op::Move { group_by: Some(GroupBy::Month), .. }
+        ),
+        "{r:?}"
+    );
+    assert_eq!(r.plan.scope.filter.project_id.as_deref(), Some("p-acme"));
+    assert_eq!(r.plan.scope.filter.doc_type.as_deref(), Some("contract"));
+    // The schema accepts the new group / layout values and the create_project dates.
+    let schema = schema::plan_schema();
+    let text = serde_json::to_string(&schema).unwrap();
+    assert!(
+        text.contains("\"project\"") && text.contains("sheet_per_project") && text.contains("start_date"),
+        "{text}"
+    );
+}
+
 fn kinds(p: &Plan) -> Vec<OpKind> {
     p.operations.iter().map(Op::kind).collect()
 }
@@ -247,18 +294,19 @@ fn p6_rules_plan_drafts_projects_explanations_and_retention() {
     c.current_project = Some("p-hanbit".into());
     let planned = |text: &str| plan(None, text, &c, PlanMode::RulesFirst).unwrap();
 
-    // Drafting: a built-in template picked from the keyword, the whole sentence as content.
+    // Drafting: a built-in template picked from the keyword (견적서 → the software estimate; the context has no
+    // registered 견적서 form), the whole sentence as content.
     let r = planned("등록된 견적서 양식으로 ㈜한빛에 노트북 10대, 대당 1,200,000원, 유효기간 30일 견적서 만들어줘");
     assert_eq!(kinds(&r.plan), [OpKind::DraftDocument], "{r:?}");
     assert!(
-        matches!(&r.plan.operations[0], Op::DraftDocument { form_ref, content, .. } if form_ref.as_deref() == Some("quotation") && content.contains("노트북"))
+        matches!(&r.plan.operations[0], Op::DraftDocument { form_ref, content, .. } if form_ref.as_deref() == Some("estimate") && content.contains("노트북"))
     );
     assert!(r.plan.requires_confirmation);
     assert!(!has_errors(&r.issues), "{:?}", r.issues);
     // Rewrite the open contract → the selection is a source.
     let r = planned("이 계약서 내용으로 갑·을 바꿔서 계약서 다시 써줘");
     assert!(
-        matches!(&r.plan.operations[0], Op::DraftDocument { form_ref, sources, .. } if form_ref.as_deref() == Some("contract") && sources == &["d1a2".to_string()]),
+        matches!(&r.plan.operations[0], Op::DraftDocument { form_ref, sources, .. } if form_ref.as_deref() == Some("dev_contract") && sources == &["d1a2".to_string()]),
         "{r:?}"
     );
     // A report from the aggregate card, as PDF: aggregate the receipts first, then draft from the totals.

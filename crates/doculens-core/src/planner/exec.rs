@@ -950,6 +950,7 @@ fn run_step(
                 import: Some(&deps.import),
                 cancel: deps.cancel,
                 language: deps.language,
+                progress: None,
             };
             progress("draft", 0, 1, content);
             let outcome = generate::draft(&gdeps, &req)?;
@@ -1027,7 +1028,7 @@ fn run_step(
                 imported: None,
             })
         }
-        Op::CreateProject { name, template, doc_types_required } => {
+        Op::CreateProject { name, template, doc_types_required, start_date, end_date } => {
             let templates = db.with(projects_repo::list_templates)?;
             let mut template_id = template.as_deref().and_then(|t| {
                 templates
@@ -1049,13 +1050,25 @@ fn run_step(
                 })?;
                 template_id = Some(tp.id);
             }
-            let input = ProjectInput { name: name.clone(), template_id, ..ProjectInput::default() };
+            let input = ProjectInput {
+                name: name.clone(),
+                template_id,
+                start_date: start_date.clone(),
+                end_date: end_date.clone(),
+                ..ProjectInput::default()
+            };
             let project = db.with(|c| projects_repo::save_project(c, &input))?;
             let mut added = 0u32;
             if !plan.scope.is_empty() {
                 let docs_ = working_set(deps, plan, imported)?;
                 if !docs_.is_empty() {
-                    added = db.with(|c| projects_repo::add_documents(c, &project.id, &ids(&docs_)))?;
+                    added = crate::projects::copies::add_documents(
+                        db,
+                        deps.paths(),
+                        &project.id,
+                        &ids(&docs_),
+                        deps.language,
+                    )?;
                     out.documents.extend(ids(&docs_));
                 }
             }
@@ -1080,7 +1093,7 @@ fn run_step(
             if target.is_empty() {
                 return Err(CoreError::Invalid("no_documents".into()));
             }
-            let added = db.with(|c| projects_repo::add_documents(c, &pid, &target))?;
+            let added = crate::projects::copies::add_documents(db, deps.paths(), &pid, &target, deps.language)?;
             out.documents.extend(target.iter().cloned());
             let detail = db.with(|c| projects_repo::get_project(c, &pid))?;
             Ok(StepOutcome {
@@ -1208,6 +1221,7 @@ fn run_step(
                 import: Some(&deps.import),
                 cancel: deps.cancel,
                 language: deps.language,
+                progress: None,
             };
             let outcome = generate::draft(&gdeps, &req)?;
             let _ = generate::store::save(deps.paths(), &outcome.draft);
@@ -1667,13 +1681,22 @@ pub fn preview(
                 json!({ "item": item, "days": days }),
                 true,
             ),
-            Op::RegisterForm { doc_ref, name, .. } => (
+            Op::RegisterForm { doc_ref, name, doc_ids, .. } => (
                 if ko {
-                    "문서에서 필드를 도출해 양식으로 등록합니다(필드 그리드 확인)".into()
+                    if doc_ids.len() >= 2 {
+                        format!("문서 {}개에서 필드를 도출·병합해 양식으로 등록합니다(필드 그리드 확인)", doc_ids.len())
+                    } else {
+                        "문서에서 필드를 도출해 양식으로 등록합니다(필드 그리드 확인)".into()
+                    }
+                } else if doc_ids.len() >= 2 {
+                    format!(
+                        "Derives and merges the fields of {} documents and registers the form (field grid)",
+                        doc_ids.len()
+                    )
                 } else {
                     "Derives the fields and registers the form (field grid)".into()
                 },
-                json!({ "doc_ref": doc_ref, "name": name }),
+                json!({ "doc_ref": doc_ref, "name": name, "doc_ids": doc_ids }),
                 true,
             ),
             _ => (String::new(), Value::Null, op.needs_confirmation()),

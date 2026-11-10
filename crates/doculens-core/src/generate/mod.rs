@@ -99,40 +99,97 @@ pub enum Length {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TemplateKind {
+    // The software-development set (0.3.0): the slugs equal the pipeline's document types.
+    Rfp,
+    Proposal,
+    Sow,
+    Srs,
+    DevContract,
+    Wbs,
+    ProgressReport,
+    MeetingMinutes,
+    TestReport,
+    ChangeRequest,
+    Acceptance,
+    Estimate,
+    SupplementRequest,
+    // The generic set of 0.1, hidden since 0.3.0 (user decision 2026-11-10): not listed in the
+    // picker and not matched from free text, but an explicit reference and saved drafts keep working.
     OfficialLetter,
     Quotation,
     TransactionStatement,
     Contract,
     Report,
     Minutes,
-    SupplementRequest,
 }
 
 impl TemplateKind {
-    pub const ALL: [TemplateKind; 7] = [
+    pub const ALL: [TemplateKind; 19] = [
+        TemplateKind::Rfp,
+        TemplateKind::Proposal,
+        TemplateKind::Sow,
+        TemplateKind::Srs,
+        TemplateKind::DevContract,
+        TemplateKind::Wbs,
+        TemplateKind::ProgressReport,
+        TemplateKind::MeetingMinutes,
+        TemplateKind::TestReport,
+        TemplateKind::ChangeRequest,
+        TemplateKind::Acceptance,
+        TemplateKind::Estimate,
+        TemplateKind::SupplementRequest,
         TemplateKind::OfficialLetter,
         TemplateKind::Quotation,
         TemplateKind::TransactionStatement,
         TemplateKind::Contract,
         TemplateKind::Report,
         TemplateKind::Minutes,
-        TemplateKind::SupplementRequest,
     ];
 
     pub fn as_str(self) -> &'static str {
         match self {
+            TemplateKind::Rfp => "rfp",
+            TemplateKind::Proposal => "proposal",
+            TemplateKind::Sow => "sow",
+            TemplateKind::Srs => "srs",
+            TemplateKind::DevContract => "dev_contract",
+            TemplateKind::Wbs => "wbs",
+            TemplateKind::ProgressReport => "progress_report",
+            TemplateKind::MeetingMinutes => "meeting_minutes",
+            TemplateKind::TestReport => "test_report",
+            TemplateKind::ChangeRequest => "change_request",
+            TemplateKind::Acceptance => "acceptance",
+            TemplateKind::Estimate => "estimate",
+            TemplateKind::SupplementRequest => "supplement_request",
             TemplateKind::OfficialLetter => "official_letter",
             TemplateKind::Quotation => "quotation",
             TemplateKind::TransactionStatement => "transaction_statement",
             TemplateKind::Contract => "contract",
             TemplateKind::Report => "report",
             TemplateKind::Minutes => "minutes",
-            TemplateKind::SupplementRequest => "supplement_request",
         }
     }
 
     pub fn parse(s: &str) -> Option<TemplateKind> {
         TemplateKind::ALL.into_iter().find(|k| k.as_str() == s.trim())
+    }
+
+    /// The generic templates of 0.1: kept for explicit references and saved drafts, out of the picker.
+    pub fn hidden(self) -> bool {
+        matches!(
+            self,
+            TemplateKind::OfficialLetter
+                | TemplateKind::Quotation
+                | TemplateKind::TransactionStatement
+                | TemplateKind::Contract
+                | TemplateKind::Report
+                | TemplateKind::Minutes
+        )
+    }
+
+    /// The templates the UI offers and free text is matched against, in UI order.
+    pub fn visible() -> impl Iterator<Item = TemplateKind> {
+        TemplateKind::ALL.into_iter().filter(|k| !k.hidden())
     }
 }
 
@@ -194,6 +251,10 @@ pub struct DraftRequest {
     pub previous: Option<Box<Draft>>,
     /// Knowledge documents the user excluded in the "참고 문서" panel (§3.14.4).
     pub excluded_sources: Vec<String>,
+    /// Reply token budget (0.3.0 item 4). `None` → the `length` preset. Budgets above
+    /// `prompts::SPLIT_THRESHOLD_TOKENS` (or 35 % of the context) are produced section by section.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
 }
 
 impl Default for DraftRequest {
@@ -211,6 +272,7 @@ impl Default for DraftRequest {
             feedback: None,
             previous: None,
             excluded_sources: Vec::new(),
+            max_tokens: None,
         }
     }
 }
@@ -381,6 +443,9 @@ pub struct DraftOutcome {
     pub elapsed_ms: u64,
     /// `rules` when no model call was needed (e.g. a filled 보완요청서 from findings), else `model`.
     pub source: String,
+    /// Model calls that produced body sections (1 = one-shot draft; >1 = outline → sections flow).
+    #[serde(default)]
+    pub sections: u32,
 }
 
 /// Save request (문서 생성 screen "저장", planner `draft_document` after confirmation).
@@ -479,7 +544,13 @@ pub struct GenerateDeps<'a> {
     pub import: Option<&'a ImportDeps<'a>>,
     pub cancel: Option<&'a AtomicBool>,
     pub language: Language,
+    /// Section-level progress of a split draft: `(fraction 0..1, detail)` — the job bridge forwards
+    /// it to the job book ("section 3/8").
+    pub progress: Option<&'a ProgressFn<'a>>,
 }
+
+/// Progress callback of a split draft (`fraction 0..1`, stage detail such as `section 3/8`).
+pub type ProgressFn<'a> = dyn Fn(f32, &str) + Sync + 'a;
 
 impl GenerateDeps<'_> {
     pub fn ko(&self) -> bool {
@@ -498,6 +569,11 @@ impl GenerateDeps<'_> {
 /// The built-in templates with their fields and sections.
 pub fn templates() -> Vec<TemplateInfo> {
     templates::list()
+}
+
+/// Every built-in template, the hidden generic ones included (explicit references, old drafts).
+pub fn templates_all() -> Vec<TemplateInfo> {
+    templates::list_all()
 }
 
 /// Resolves `form_ref` / `format_description` / `content` to a template reference

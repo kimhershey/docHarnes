@@ -33,7 +33,7 @@ export function PickProjectDialog({ open, onOpenChange, projects, count, mode, o
                   data-testid={`project-pick-${p.id}`}
                 >
                   <span className="min-w-0 flex-1 truncate font-medium">{p.name}</span>
-                  <Badge variant="outline">{t(`projects.status.${p.status}`)}</Badge>
+                  <Badge variant="outline">{t(`projects.phase.${p.phase}`)}</Badge>
                   <span className="text-xs text-fg-subtle">{t("projects.card.documents", { count: p.document_count })}</span>
                 </button>
               </li>

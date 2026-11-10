@@ -460,6 +460,7 @@
       "cache_limit_gb": "page cache limit (GB)",
       "form": "form {{name}}",
       "form_auto": "auto-selected form",
+      "sample_docs": "{{count}} sample documents",
       "sources": "{{count}} quoted documents",
       "current_document": "current document",
       "current_project": "current project",
@@ -1027,6 +1028,14 @@
       "min_similarity": "Semantic evidence threshold (cosine similarity)",
       "min_similarity_hint": "Chunks found only by embedding similarity count as evidence above this value (bge-m3 ≈ 0.5)."
     },
+    "generation": {
+      "title": "Document generation",
+      "hint": "Reply token caps of document generation. Larger requests are reduced to the cap; budgets above about 3,000 tokens are drafted as an outline followed by sections.",
+      "max_tokens_gpu": "Token cap on GPU (CUDA / Vulkan)",
+      "max_tokens_gpu_hint": "Default 32,768 · maximum 65,536",
+      "max_tokens_cpu": "Token cap on a CPU-only engine",
+      "max_tokens_cpu_hint": "Default 8,192 · maximum 12,288 — a whole document takes over an hour on a CPU."
+    },
     "notifications": {
       "job_complete": "Notify when jobs complete",
       "job_complete_hint": "Shows an OS notification when a batch job finishes.",
@@ -1073,6 +1082,7 @@
       "collection_not_found": "Collection not found (it may have been deleted).",
       "document_not_found": "Document not found.",
       "feedback_invalid": "Invalid feedback value.",
+      "schema_name_duplicate": "A schema with this name already exists. Enter another name.",
       "schema_name_empty": "Enter a schema name.",
       "schema_doc_type_invalid": "The type slug must be snake_case starting with a lower-case letter.",
       "schema_invalid": "The schema has errors; see the grammar check.",
@@ -1131,7 +1141,8 @@
       "undo": "Undo",
       "redo": "Redo",
       "draft": "Document draft",
-      "maintenance": "Retention purge"
+      "maintenance": "Retention purge",
+      "schema_discovery": "Form field discovery"
     },
     "state": {
       "queued": "Queued",
@@ -1171,7 +1182,11 @@
       "nothing_to_redo": "nothing to redo",
       "interrupted": "interrupted by app shutdown (retryable)",
       "workspace_closed": "workspace closed",
-      "drafting": "Drafting"
+      "drafting": "Drafting",
+      "draft_outline": "Writing the outline",
+      "draft_section": "Writing section {{index}}/{{total}}",
+      "discovering": "{{name}} · finding fields{{page}}",
+      "discovery_summary": "{{fields}} fields merged from {{docs}} documents"
     },
     "empty_queued": "No queued jobs.",
     "empty_failed": "No failed jobs.",
@@ -1203,7 +1218,9 @@
       "content_empty": "There is no content to generate from.",
       "project_not_found": "Project not found.",
       "no_check_run": "Run the consistency check first.",
-      "no_findings": "There are no mismatch / missing findings."
+      "no_findings": "There are no mismatch / missing findings.",
+      "document_not_found": "Document not found.",
+      "no_fields": "No fields were found in the sample documents. Check that they carry text."
     },
     "result_loading": "Loading result…"
   },
@@ -1244,7 +1261,7 @@
       "delete_title": "Delete documents",
       "open_doc": "Open document",
       "add_to_kb": "Add to knowledge base",
-      "register_form": "Register as form",
+      "register_form": "Make a form from the selection",
       "merge": "Merge",
       "classify": "Classify into projects"
     },
@@ -1485,6 +1502,12 @@
       "restore": "Restore this value",
       "restored": "Value restored.",
       "run_line": "{{model}} · {{fields}} fields · {{review}} to review · {{ms}} ms",
+        "text_edits": "Text edits",
+        "text_line": "p.{{page}} · {{before}} → {{after}}",
+        "text_revert": "Undo this edit",
+        "text_revert_title": "Undoes this edit and every later one, back to the state before it (the original file is unchanged)",
+        "text_undone": "undone",
+        "text_source": {"layer": "word edit", "add": "words added", "manual": "whole text"},
       "status": {
         "running": "Running",
         "done": "Done",
@@ -1522,7 +1545,13 @@
         "ocr": "OCR",
         "manual": "Edited"
       },
-      "edited_title": "Corrected by hand — the page image itself is unchanged; this text is what search, questions and extraction use."
+      "edited_title": "Corrected by hand — the page image itself is unchanged; this text is what search, questions and extraction use.",
+        "count": "{{count}} edits",
+        "undo": "Undo text edit (Ctrl+Z)",
+        "redo": "Redo text edit (Ctrl+Shift+Z)",
+        "undone": "Text edit undone",
+        "redone": "Text edit re-applied",
+        "nothing_to_undo": "This page has no text edit to undo"
     },
     "layer": {
       "aria": "Page text layer",
@@ -1934,7 +1963,8 @@
       "unsaved": "You have unsaved changes.",
       "discard": "Discard",
       "discard_confirm": "You have unsaved changes. Discard them and continue?",
-      "duplicate_name": "{{name}} (copy)"
+      "duplicate_name": "{{name}} (copy)",
+      "name_taken": "A schema with this name already exists. Enter another name."
     },
     "lint": {
       "fields_empty": "A schema needs at least one field.",
@@ -1983,7 +2013,24 @@
       "confirm": "Check and edit the derived fields, then register.",
       "register": "Register form",
       "no_docs": "The library is empty. Import the form document first.",
-      "drop_hint": "Drop a document to use it as the form sample"
+      "drop_hint": "Drop a document to use it as the form sample",
+      "documents_hint": "Pick one or more sample documents. With several, the fields of every sample are found and merged into one schema (items on at least half of the samples are kept; items on all of them become required).",
+      "selected_count": "{{count}} selected",
+      "none_selected": "No documents selected.",
+      "cancel_job": "Cancel discovery",
+      "job_failed": "Field discovery failed: {{message}}",
+      "job_cancelled": "Field discovery was cancelled.",
+      "job_result_missing": "The discovery result was not delivered. Open it again from the Jobs screen.",
+      "discovery_summary": "Merged {{fields}} fields from {{docs}} documents ({{dropped}} dropped). Check and edit them, then register.",
+      "source_structure": "table structure",
+      "source_model": "model",
+      "source_text": "text rules",
+      "source_failed": "failed",
+      "open_in_editor": "Open in the editor",
+      "name_taken_title": "A schema with this name exists",
+      "name_taken_body": "'{{name}}' is already in use. Another name saves a separate schema; keeping it leaves the schema unsavable.",
+      "name_taken_apply": "Rename",
+      "name_taken_keep": "Keep as is"
     },
     "reclassify": {
       "banner": "New type '{{name}}' added. Re-classify the {{count}} document(s) typed 'other'?",
@@ -2051,7 +2098,12 @@
       "all_types": "All types",
       "date_from": "From",
       "date_to": "To",
-      "date_hint": "By document date (import date when unknown)"
+      "date_hint": "By document date (import date when unknown)",
+      "project": "Project: {{name}}",
+      "project_mode": "Project",
+      "project_pick": "Pick a project",
+      "project_settings": "Use the project's settings",
+      "project_settings_hint": "Fills the project's folder / file-name templates."
     },
     "name": {
       "title": "File-name template",
@@ -2074,7 +2126,13 @@
       "name": "Original name",
       "tags": "Tags",
       "seq": "Sequence",
-      "ext": "Extension"
+      "ext": "Extension",
+      "project": "Project",
+      "project_code": "Project code",
+      "project_phase": "Project phase",
+      "project_start": "Project start",
+      "project_end": "Project end",
+      "project_owner": "Project owner"
     },
     "folder": {
       "title": "Folder template",
@@ -2083,7 +2141,8 @@
         "month": "By month",
         "vendor": "By vendor",
         "doc_type": "By type",
-        "custom": "Custom"
+        "custom": "Custom",
+        "project": "By project"
       },
       "keep": "Keep folders"
     },
@@ -2210,7 +2269,8 @@
     "layout": {
       "title": "Layout",
       "sheet_per_type": "Sheet per type + items sheet",
-      "single": "Single sheet"
+      "single": "Single sheet",
+      "sheet_per_project": "Sheet per project + items sheet"
     },
     "path": {
       "title": "Save path",
@@ -2315,7 +2375,22 @@
       "job_interrupted": "{{reason}} You can retry it on the Jobs screen.",
       "job_result_missing": "The draft result could not be loaded. You can open it from the drafts list.",
       "drop_hint": "Drop documents or files to add them as sources",
-      "sources_added": "Added {{count}} source(s)"
+      "sources_added": "Added {{count}} source(s)",
+      "token_budget": "Token budget",
+      "token_budget_custom": "Custom token count",
+      "token_presets": {
+        "auto": "Follow the length setting ({{tokens}} tokens)",
+        "p2600": "2,600 — one or two pages",
+        "p6000": "6,000 — a short document",
+        "p12000": "12,000 — a typical document",
+        "p24000": "24,000 — a whole document (RFP / SOW)",
+        "custom": "Custom ({{tokens}} tokens)"
+      },
+      "budget_info": "Model context {{ctx}} · cap {{cap}}",
+      "budget_info_cap": "Cap {{cap}} tokens",
+      "budget_single": "{{tokens}} tokens in one pass · about {{minutes}} min",
+      "budget_split": "{{tokens}} tokens — outline, then section by section · about {{minutes}} min",
+      "cpu_warning": "CPU-only engine: this budget can take more than an hour, so the cap is {{cap}} tokens."
     },
     "tone": {
       "formal": "Formal",
@@ -2339,6 +2414,18 @@
       "transaction_statement": "Transaction statement",
       "contract": "Contract",
       "report": "Report",
+            "rfp": "Request for proposal (RFP)",
+      "proposal": "Proposal",
+      "sow": "Statement of work",
+      "srs": "Requirements specification",
+      "dev_contract": "Software development contract",
+      "wbs": "WBS / schedule",
+      "progress_report": "Progress report",
+      "meeting_minutes": "Meeting minutes",
+      "test_report": "Test report",
+      "change_request": "Change request",
+      "acceptance": "Acceptance certificate",
+      "estimate": "Estimate",
       "minutes": "Minutes",
       "supplement_request": "Supplement request"
     },
@@ -2451,39 +2538,28 @@
     },
     "empty_title": "No projects yet",
     "empty_body": "Group documents by case (review, vendor, assignment) and verify them with a required-document checklist and consistency rules.",
-    "status": {
-      "intake": "Intake",
-      "extracting": "Extracting",
-      "validating": "Validating",
-      "supplement": "Supplement",
-      "done": "Done"
-    },
     "card": {
       "intake_no": "Intake {{no}}",
       "owner": "Owner {{owner}}",
-      "due": "Due {{date}}",
       "documents": "{{count}} documents",
       "missing": "{{count}} missing",
       "verdicts": "pass {{pass}} · mismatch {{mismatch}} · undetermined {{undetermined}}",
       "no_check": "Not checked",
-      "move_prev": "Move to the previous step",
-      "move_next": "Move to the next step",
-      "moved": "Moved '{{name}}' to {{status}}.",
-      "move_prev_named": "Move '{{name}}' to the previous step ({{status}})",
-      "move_next_named": "Move '{{name}}' to the next step ({{status}})",
-      "done_confirm_title": "Mark '{{name}}' as done",
-      "done_confirm": "The last check left {{mismatch}} mismatch(es) and {{missing}} missing document(s). Move it to Done anyway?",
-      "done_confirm_unchecked": "The consistency check has not been run yet. Move it to Done anyway?",
-      "drop_add": "Add to {{name}}"
+      "drop_add": "Add to {{name}}",
+      "start": "Start {{date}}",
+      "end": "End {{date}}",
+      "open_ended": "No end date",
+      "copy": "Copy"
     },
     "columns": {
       "name": "Name",
       "status": "Status",
       "intake_no": "Intake no.",
       "owner": "Owner",
-      "due": "Due",
       "documents": "Documents",
-      "last_check": "Last check"
+      "last_check": "Last check",
+      "start": "Start",
+      "end": "End"
     },
     "dialog": {
       "title": "New project",
@@ -2494,7 +2570,6 @@
       "template_none": "(none)",
       "intake_no": "Intake no.",
       "owner": "Owner",
-      "due": "Due",
       "inbox_folder": "inbox subfolder mapping",
       "inbox_hint": "Documents arriving in inbox/<folder> join this project automatically.",
       "create": "Create",
@@ -2502,7 +2577,10 @@
       "created": "Project created.",
       "keywords": "Classification keywords",
       "keywords_placeholder": "e.g. Hanbit, new office, 2026-001 (comma-separated)",
-      "keywords_hint": "Auto-classification looks for these in document titles, file names, vendors and text."
+      "keywords_hint": "Auto-classification looks for these in document titles, file names, vendors and text.",
+      "start": "Start date",
+      "end": "End date",
+      "end_hint": "Leave empty to keep the project active."
     },
     "detail": {
       "back": "Projects",
@@ -2516,14 +2594,23 @@
       "delete": "Delete",
       "delete_confirm": "Delete the project '{{name}}'? The documents stay in the library.",
       "deleted": "Project deleted.",
-      "not_found": "Project not found."
+      "not_found": "Project not found.",
+      "phase": "Phase",
+      "start": "Start",
+      "end": "End",
+      "dates_saved": "Dates saved.",
+      "complete": "Mark complete",
+      "complete_hint": "Sets the end date to today.",
+      "reopen": "Reopen",
+      "reopen_hint": "Clears the end date (active again)."
     },
     "tabs": {
       "documents": "Documents",
       "rules": "Rules",
       "results": "Results",
       "relations": "Relations",
-      "report": "Report"
+      "report": "Report",
+      "settings": "Organise / export"
     },
     "documents": {
       "checklist": "Required documents",
@@ -2541,7 +2628,8 @@
         "status": "Status",
         "review": "Review",
         "added": "Added",
-        "actions": "Actions"
+        "actions": "Actions",
+        "path": "Path"
       },
       "add_title": "Add documents",
       "add_hint": "Adds library documents to the project; classified documents count towards the checklist.",
@@ -2549,7 +2637,16 @@
       "added": "{{count}} document(s) added.",
       "search": "Search documents…",
       "none": "No documents to add.",
-      "drop_hint": "Drag library documents or files here to add them"
+      "drop_hint": "Drag library documents or files here to add them",
+      "copy": {
+        "original": "Original",
+        "synced": "Copy",
+        "modified": "Differs from original",
+        "missing": "Copy missing",
+        "resync": "Resync",
+        "resync_hint": "Rewrites this project's copies from the originals.",
+        "resynced": "Copies resynced (rewritten {{rewritten}} · renamed {{renamed}} · created {{created}})."
+      }
     },
     "rules": {
       "title": "Consistency rules",
@@ -2723,6 +2820,32 @@
       "alternatives": "Other candidates: {{names}}",
       "apply": "Apply ({{count}})",
       "applied": "Assigned {{count}} documents to {{projects}} projects."
+    },
+    "phase": {
+      "planned": "Planned",
+      "active": "Active",
+      "done": "Done"
+    },
+    "badge": {
+      "overdue": "Overdue",
+      "overdue_hint": "The end date has passed but required documents are missing, mismatches remain or no check has run."
+    },
+    "settings": {
+      "title": "Project organise / export settings",
+      "hint": "Templates used when this project's documents are organised, and the folder that holds copies of documents that also belong to another project. Empty = default ({{default}}).",
+      "folder_template": "Folder template",
+      "name_template": "File-name template",
+      "name_default": "(empty = default file-name template)",
+      "copies": "Keep copies of documents shared with other projects",
+      "copies_hint": "A document joining this project as its second (or later) project gets a tracked physical copy in the folder above; the copy follows changes of the original and is removed when the document leaves the project.",
+      "export_format": "Export format",
+      "export_layout": "Export layout",
+      "export_path": "Export path",
+      "export_default": "(default)",
+      "save": "Save settings",
+      "saved": "Project settings saved.",
+      "organize_now": "Organise this project",
+      "export_now": "Export this project"
     }
   },
   "dnd": {

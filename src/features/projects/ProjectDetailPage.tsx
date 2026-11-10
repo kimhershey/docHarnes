@@ -1,4 +1,4 @@
-import { ArrowLeft, FileOutput, Pencil, Play, Trash2 } from "lucide-react";
+import { ArrowLeft, CheckCircle2, FileOutput, Pencil, Play, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams, useSearchParams } from "react-router";
@@ -6,35 +6,37 @@ import { useNavigate, useParams, useSearchParams } from "react-router";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog, type ConfirmRequest } from "@/components/ui/confirm-dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { describeJobError } from "@/features/jobs/describe";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
 import { invalidateProjects, useProject } from "@/lib/queries";
-import { PROJECT_STATUSES, SCREEN_ROUTES, isDraftOutcome, isJobFinished, type OutputFormat, type ProjectStatus } from "@/lib/types";
+import { SCREEN_ROUTES, isDraftOutcome, isJobFinished, type OutputFormat } from "@/lib/types";
 import { useGenerateStore } from "@/stores/generate";
 import { useJob, useJobsStore } from "@/stores/jobs";
 import { useProjectsStore } from "@/stores/projects";
 import { useUiStore } from "@/stores/ui";
 
 import { DocumentsTab } from "./DocumentsTab";
-import { NewProjectDialog } from "./NewProjectDialog";
+import { NewProjectDialog, todayIso } from "./NewProjectDialog";
+import { PhaseBadges } from "./ProjectsPage";
+import { ProjectSettingsTab } from "./ProjectSettingsTab";
 import { RelationsTab } from "./RelationsTab";
 import { ReportTab } from "./ReportTab";
 import { ResultsTab } from "./ResultsTab";
-import { doneMoveWarning } from "./rules";
 import { RulesTab } from "./RulesTab";
 import { SupplementDialog } from "./SupplementDialog";
 
-type TabId = "documents" | "rules" | "results" | "relations" | "report";
-const TABS: TabId[] = ["documents", "rules", "results", "relations", "report"];
+type TabId = "documents" | "rules" | "results" | "relations" | "report" | "settings";
+const TABS: TabId[] = ["documents", "rules", "results", "relations", "report", "settings"];
 
 /**
- * One project (design §3.15): header with the status board step, the document checklist, rules, check
- * results with evidence links, the relation graph and the summary report; "보완요청서" starts a draft job
- * and opens the result on the 문서 생성 screen.
+ * One project (design §3.15, 0.3.0 plan §5): header with the computed phase (시작·종료일 editors, 기한 경과
+ * badge), the document checklist, rules, check results with evidence links, the relation graph, the summary
+ * report and the organise / export settings; "보완요청서" starts a draft job and opens the result on the
+ * 문서 생성 screen.
  */
 export function ProjectDetailPage() {
   const { t, i18n } = useTranslation();
@@ -116,26 +118,16 @@ export function ProjectDetailPage() {
       setChecking(false);
     }
   };
-  const applyStatus = async (status: ProjectStatus) => {
+  // Dates drive the phase (plan §5): "" clears a date, an omitted date keeps its stored value.
+  const saveDates = async (dates: { start_date?: string; end_date?: string }) => {
+    if (!detail) return;
     try {
-      await api.projectSetStatus(id, status);
+      await api.projectUpdate({ id, name: detail.project.name, ...dates });
       invalidateProjects([id]);
-      toast(t("projects.card.moved", { name: detail?.project.name ?? "", status: t(`projects.status.${status}`) }), "ok");
+      toast(t("projects.detail.dates_saved"), "ok");
     } catch (e) {
       toast(describeError(e, t), "danger");
     }
-  };
-  // 완료 with open findings (or without any check) is confirmed first; cancelling keeps the current status.
-  const setStatus = (status: ProjectStatus) => {
-    const p = detail?.project;
-    const warning = p && status === "done" ? doneMoveWarning(p) : null;
-    if (!p || !warning) return void applyStatus(status);
-    setConfirm({
-      title: t("projects.card.done_confirm_title", { name: p.name }),
-      description: warning === "unchecked" ? t("projects.card.done_confirm_unchecked") : t("projects.card.done_confirm", { mismatch: p.last_mismatch, missing: p.missing_count }),
-      confirmLabel: t("projects.status.done"),
-      onConfirm: () => applyStatus(status),
-    });
   };
   const supplement = async (findingIds: string[], output: OutputFormat) => {
     try {
@@ -190,7 +182,7 @@ export function ProjectDetailPage() {
   const p = detail.project;
   const generating = !!job && !isJobFinished(job);
   return (
-    <div className="flex h-full min-h-0 flex-col" data-testid="page-project" data-project-id={p.id}>
+    <div className="flex h-full min-h-0 flex-col" data-testid="page-project" data-project-id={p.id} data-project-phase={p.phase}>
       <div className="flex flex-col gap-2 border-b border-border px-4 py-3">
         <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" variant="ghost" onClick={() => navigate(SCREEN_ROUTES.projects)} data-testid="project-back">
@@ -200,18 +192,7 @@ export function ProjectDetailPage() {
           <h1 className="text-base font-semibold" data-testid="project-title">
             {p.name}
           </h1>
-          <Select value={p.status} onValueChange={(v) => setStatus(v as ProjectStatus)}>
-            <SelectTrigger className="h-8 w-36" aria-label={t("projects.detail.status")} data-testid="project-status">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {PROJECT_STATUSES.map((s) => (
-                <SelectItem key={s} value={s}>
-                  {t(`projects.status.${s}`)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <PhaseBadges project={p} />
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <Button size="sm" variant="outline" onClick={() => setEditOpen(true)} data-testid="project-edit">
               <Pencil />
@@ -231,10 +212,28 @@ export function ProjectDetailPage() {
             </Button>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2 text-xs text-fg-muted">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-xs text-fg-muted">
+          <label className="flex items-center gap-1">
+            <span>{t("projects.detail.start")}</span>
+            <Input type="date" className="h-7 w-36 text-xs" value={p.start_date ?? ""} onChange={(e) => void saveDates({ start_date: e.target.value })} aria-label={t("projects.detail.start")} data-testid="project-start" />
+          </label>
+          <label className="flex items-center gap-1">
+            <span>{t("projects.detail.end")}</span>
+            <Input type="date" className="h-7 w-36 text-xs" value={p.end_date ?? ""} onChange={(e) => void saveDates({ end_date: e.target.value })} aria-label={t("projects.detail.end")} data-testid="project-end" />
+          </label>
+          {p.end_date ? (
+            <Button size="sm" variant="ghost" className="h-7" onClick={() => void saveDates({ end_date: "" })} title={t("projects.detail.reopen_hint")} data-testid="project-reopen">
+              <RotateCcw />
+              {t("projects.detail.reopen")}
+            </Button>
+          ) : (
+            <Button size="sm" variant="ghost" className="h-7" onClick={() => void saveDates({ end_date: todayIso() })} title={t("projects.detail.complete_hint")} data-testid="project-complete">
+              <CheckCircle2 />
+              {t("projects.detail.complete")}
+            </Button>
+          )}
           {p.intake_no && <span>{t("projects.card.intake_no", { no: p.intake_no })}</span>}
           {p.owner && <span>{t("projects.card.owner", { owner: p.owner })}</span>}
-          {p.due_date && <span>{t("projects.card.due", { date: p.due_date })}</span>}
           {detail.template && (
             <span>
               {t("projects.detail.template")}: {ko ? detail.template.name_ko : detail.template.name_en}
@@ -273,6 +272,9 @@ export function ProjectDetailPage() {
           </TabsContent>
           <TabsContent value="report">
             <ReportTab projectId={p.id} active={tab === "report"} />
+          </TabsContent>
+          <TabsContent value="settings">
+            <ProjectSettingsTab detail={detail} />
           </TabsContent>
         </Tabs>
       </div>

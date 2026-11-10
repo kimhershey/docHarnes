@@ -31,6 +31,33 @@ pub fn templates() -> Vec<TemplateInfo> {
     generate::templates()
 }
 
+/// What the 문서 생성 screen needs to size a token budget (0.3.0 item 4).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BudgetInfo {
+    /// Context size of the loaded vision model, when known.
+    pub ctx: Option<u32>,
+    /// llama-server runs on CUDA / Vulkan (false = CPU only).
+    pub gpu: bool,
+    /// Reply token cap of the active backend (settings).
+    pub cap: u32,
+    /// Budgets above this are drafted section by section.
+    pub split_threshold: u32,
+}
+
+pub fn budget_info(app: &AppHandle) -> UiResult<BudgetInfo> {
+    let state = app.state::<AppState>();
+    let settings = state.settings_snapshot()?;
+    let status = state.engine.status();
+    let gpu = status.binary.as_ref().is_none_or(|b| b.backend != doculens_core::hw::Backend::Cpu);
+    let ctx = status.active_model.as_deref().and_then(|m| status.model(m)).and_then(|m| m.ctx);
+    Ok(BudgetInfo {
+        ctx,
+        gpu,
+        cap: settings.generation.cap(gpu),
+        split_threshold: generate::prompts::SPLIT_THRESHOLD_TOKENS,
+    })
+}
+
 /// Queues a draft job; returns the job id (the result is a `DraftOutcome`).
 pub fn draft(app: &AppHandle, mut req: DraftRequest, project_id: Option<String>, source: &str) -> UiResult<String> {
     if req.content.trim().is_empty() && req.previous.is_none() {
@@ -51,6 +78,11 @@ pub fn draft(app: &AppHandle, mut req: DraftRequest, project_id: Option<String>,
         }
     }
     let state = app.state::<AppState>();
+    // The reply token budget is capped by the active backend (GPU 32K / CPU 8K by default, settings).
+    if let Some(m) = req.max_tokens {
+        let info = budget_info(app)?;
+        req.max_tokens = Some(m.clamp(200, info.cap));
+    }
     let pctx = pipeline_bridge::context(app)?; // a workspace must be open
     let label = draft_label(&req, pctx.db());
     state.jobs.submit(
@@ -107,6 +139,10 @@ pub fn run_draft(
     let analyzer = knowledge_bridge::analyzer(app);
     let embedder = knowledge_bridge::embedder(app, false).ok().flatten();
     let import = pctx.docs.deps();
+    // Section-level progress of a split draft ("section 3/8", "outline", "finishing").
+    let progress_cb = |frac: f32, detail: &str| {
+        state.jobs.progress(&job.id, Some(frac), None, None, Some(detail.to_string()));
+    };
     let deps = GenerateDeps {
         db: pctx.db(),
         paths: &pctx.docs.paths,
@@ -120,15 +156,17 @@ pub fn run_draft(
         import: Some(&import),
         cancel: Some(&ctl.cancel),
         language: req.language,
+        progress: Some(&progress_cb),
     };
     // The model call holds the engine like any batch step (interactive requests cut in between).
     let _gate = state.gate.batch_begin();
     state.jobs.progress(&job.id, Some(0.2), None, None, Some("drafting".into()));
     let outcome: DraftOutcome = generate::draft(&deps, req).map_err(|e| (e.to_string(), None))?;
+    // A split draft cancelled between sections keeps what was written: save it before reporting the cancel.
+    let _ = store::save(&pctx.docs.paths, &outcome.draft);
     if ctl.cancelled() {
         return Err(("cancelled".into(), None));
     }
-    let _ = store::save(&pctx.docs.paths, &outcome.draft);
     let detail = if req.language == doculens_core::settings::Language::Ko {
         format!(
             "{} · 필드 {} · 검토 항목 {}",
@@ -175,6 +213,7 @@ pub fn save(app: &AppHandle, req: &SaveRequest) -> UiResult<SavedDocument> {
         import: Some(&import),
         cancel: None,
         language: req.draft.language,
+        progress: None,
     };
     let saved = generate::save(&deps, req).map_err(UiError::from)?;
     if let Some(id) = saved.doc_id.clone() {

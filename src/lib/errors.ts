@@ -29,6 +29,7 @@ export function describeError(e: unknown, t: TFunction): string {
       collection_not_found: "errors.reasons.collection_not_found",
       document_not_found: "errors.reasons.document_not_found",
       feedback_invalid: "errors.reasons.feedback_invalid",
+      schema_name_duplicate: "errors.reasons.schema_name_duplicate",
       version_group_empty: "errors.reasons.version_group_empty",
       no_active_model: "errors.reasons.no_active_model",
       embedding_model_not_installed: "errors.reasons.embedding_model_not_installed",

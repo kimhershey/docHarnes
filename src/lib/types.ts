@@ -97,8 +97,15 @@ export interface AppSettings {
   privacy: PrivacySettings;
   notifications: NotificationSettings;
   knowledge: KnowledgeSettings;
+  generation: GenerationSettings;
   shortcuts: Record<string, string>;
   window: WindowState;
+}
+
+/** Reply token caps of document generation by engine backend (settings > 처리). */
+export interface GenerationSettings {
+  max_tokens_gpu: number;
+  max_tokens_cpu: number;
 }
 
 export interface KnowledgeSettings {
@@ -542,7 +549,8 @@ export type JobKind =
   | "undo"
   | "redo"
   | "draft"
-  | "maintenance";
+  | "maintenance"
+  | "schema_discovery";
 export type JobState = "queued" | "running" | "paused" | "done" | "failed" | "cancelled" | "interrupted";
 export type JobPriority = "low" | "normal" | "high" | "interactive";
 
@@ -810,6 +818,35 @@ export interface PageLayout {
   version: number;
   source: LayoutSource;
   words: PageWord[];
+}
+
+/** One correction of a page's text (viewer 이력 "글자 수정"); `undone` after Ctrl+Z (0.3.0 item 7). */
+export interface PageTextEdit {
+  id: number;
+  page_no: number;
+  /** `layer` (words edited on the image), `add` (words added), `manual` (whole text). */
+  source: string;
+  edited_at: string;
+  undone: boolean;
+  /** The words that changed (common head and tail stripped). */
+  before: string;
+  after: string;
+}
+
+/** Corrections of a page (or document), newest first, and whether the page can undo / redo. */
+export interface PageTextHistory {
+  entries: PageTextEdit[];
+  can_undo: boolean;
+  can_redo: boolean;
+}
+
+/** The page after an undo / redo / revert of its text. */
+export interface PageTextRevert {
+  page_no: number;
+  text: string | null;
+  text_source: string | null;
+  layout: PageLayout | null;
+  history: PageTextHistory;
 }
 
 export interface DocumentFilter {
@@ -1275,6 +1312,33 @@ export interface SchemaDraft {
   definition: SchemaDef;
   form_document_id: string | null;
   note: string | null;
+  /** Further sample documents of a multi-document discovery (0.3.0 §2); registered as forms with the first. */
+  sample_document_ids?: string[];
+}
+
+/** `forms::DocDiscovery` — what one sample document contributed to a `schema_discovery` job. */
+export interface DocDiscovery {
+  doc_id: string;
+  title: string;
+  /** `structure` (office tables) | `model` | `text` (heuristics) | `failed`. */
+  source: string;
+  pages_used: number[];
+  field_count: number;
+  note?: string | null;
+}
+
+/** `forms::DiscoveryOutcome` — the result of a `schema_discovery` job: the unsaved draft + per-document summary. */
+export interface SchemaDiscoveryOutcome {
+  kind: "schema_discovery";
+  draft: SchemaDraft;
+  documents: DocDiscovery[];
+  merged_fields: number;
+  dropped_fields: number;
+}
+
+export function isSchemaDiscoveryOutcome(v: unknown): v is SchemaDiscoveryOutcome {
+  const o = v as SchemaDiscoveryOutcome | null;
+  return typeof o === "object" && o !== null && o.kind === "schema_discovery" && typeof o.draft === "object" && o.draft !== null && Array.isArray(o.documents);
 }
 
 export function draftFromSchema(s: SchemaRecord): SchemaDraft {
@@ -1501,10 +1565,10 @@ export type OpKind =
   | "noop";
 
 export type AggregateFn = "sum" | "count" | "avg" | "min" | "max";
-export type GroupBy = "month" | "vendor" | "doc_type" | "none";
+export type GroupBy = "month" | "vendor" | "doc_type" | "project" | "none";
 export type ExportFormat = "xlsx" | "csv" | "jsonl" | "md" | "pdf_searchable";
 export const EXPORT_FORMATS: ExportFormat[] = ["xlsx", "csv", "jsonl", "md", "pdf_searchable"];
-export type ExportLayout = "sheet_per_type" | "single";
+export type ExportLayout = "sheet_per_type" | "sheet_per_project" | "single";
 export type ExportInclude = "evidence" | "confidence" | "status";
 export type ExportTarget = "fields" | "table" | "text";
 export type SettingKey = "render_dpi" | "pii_masking" | "auto_pipeline" | "inbox_watch" | "review_threshold" | "cache_limit_gb" | "journal_days";
@@ -1542,10 +1606,10 @@ export type Op =
   | { op: "delete"; to_trash?: boolean | null }
   | { op: "export"; format: ExportFormat; path?: string | null; columns?: string[]; layout?: ExportLayout | null; include?: ExportInclude[]; target?: ExportTarget | null }
   | { op: "draft_document"; form_ref?: string | null; format_description?: string | null; content: string; sources?: string[]; output?: OutputFormat | null; tone?: Tone | null; length?: DraftLength | null }
-  | { op: "register_form"; doc_ref?: string | null; name?: string | null; doc_type_slug?: string | null }
+  | { op: "register_form"; doc_ref?: string | null; name?: string | null; doc_type_slug?: string | null; doc_ids?: string[] }
   | { op: "explain"; selection?: string | null; question?: string | null; scope?: ExplainScope | null; allow_general_knowledge?: boolean | null }
   | { op: "compare"; doc_ids: string[]; aspects?: string[] }
-  | { op: "create_project"; name: string; template?: string | null; doc_types_required?: string[] }
+  | { op: "create_project"; name: string; template?: string | null; doc_types_required?: string[]; start_date?: string | null; end_date?: string | null }
   | { op: "add_to_project"; project?: string | null; doc_ids?: string[] }
   | { op: "define_rule"; project?: string | null; template?: string | null; description: string }
   | { op: "check_consistency"; project?: string | null; rules?: string[] }
@@ -1575,6 +1639,8 @@ export interface ScopeFilter {
   tags?: string[];
   min_confidence?: number | null;
   review_status?: ReviewStatus | null;
+  /** Documents of one project (plan §6 project scope). */
+  project_id?: string | null;
 }
 
 export interface Scope {
@@ -1661,7 +1727,8 @@ export interface PlanContext {
 export interface ProjectSummary {
   id: string;
   name: string;
-  status: ProjectStatus;
+  /** The computed phase (`planned` | `active` | `done`); the field keeps its 0.2 name. */
+  status: ProjectPhase;
 }
 
 /** How the assistant interprets free text: the model reads every sentence (default) or the legacy phrase rules go first. */
@@ -1744,12 +1811,15 @@ export interface OrganizeRequest {
   language?: Language;
 }
 
-export const TEMPLATE_VARIABLES = ["year", "month", "day", "doc_type", "vendor", "total", "title", "original_name", "name", "tags", "seq", "ext"] as const;
+export const TEMPLATE_VARIABLES = ["year", "month", "day", "doc_type", "vendor", "total", "title", "original_name", "name", "tags", "seq", "ext", "project", "project_code", "project_phase", "project_start", "project_end", "project_owner"] as const;
 export const DEFAULT_NAME_TEMPLATE = "{{year}}-{{month}}-{{day}}_{{doc_type}}_{{vendor}}_{{total}}";
+/** Default project folder (plan §6): `{{project}}` = the document's project. */
+export const DEFAULT_PROJECT_FOLDER = "documents/{{project}}/{{doc_type}}";
 export const FOLDER_TEMPLATES: Record<GroupBy, string> = {
   month: "documents/{{year}}/{{month}}/{{doc_type}}",
   vendor: "documents/{{vendor}}/{{doc_type}}",
   doc_type: "documents/{{doc_type}}",
+  project: DEFAULT_PROJECT_FOLDER,
   none: "documents/{{doc_type}}",
 };
 
@@ -1941,8 +2011,30 @@ export const TONES: Tone[] = ["formal", "plain", "concise"];
 /** `generate::Length` (named apart from the summarise length). */
 export type DraftLength = "short" | "medium" | "long";
 export const DRAFT_LENGTHS: DraftLength[] = ["short", "medium", "long"];
-export type TemplateKind = "official_letter" | "quotation" | "transaction_statement" | "contract" | "report" | "minutes" | "supplement_request";
-export const TEMPLATE_KINDS: TemplateKind[] = ["official_letter", "quotation", "transaction_statement", "contract", "report", "minutes", "supplement_request"];
+export type TemplateKind =
+  | "rfp"
+  | "proposal"
+  | "sow"
+  | "srs"
+  | "dev_contract"
+  | "wbs"
+  | "progress_report"
+  | "meeting_minutes"
+  | "test_report"
+  | "change_request"
+  | "acceptance"
+  | "estimate"
+  | "supplement_request"
+  | "official_letter"
+  | "quotation"
+  | "transaction_statement"
+  | "contract"
+  | "report"
+  | "minutes";
+/** Templates offered in the picker (UI order, 0.3.0: the software-development set + 보완요청서). */
+export const TEMPLATE_KINDS: TemplateKind[] = ["rfp", "proposal", "sow", "srs", "dev_contract", "wbs", "progress_report", "meeting_minutes", "test_report", "change_request", "acceptance", "estimate", "supplement_request"];
+/** The generic templates of 0.1: hidden from the picker, but drafts that use them still open. */
+export const HIDDEN_TEMPLATE_KINDS: TemplateKind[] = ["official_letter", "quotation", "transaction_statement", "contract", "report", "minutes"];
 
 export type TemplateRef = { kind: "builtin"; template: TemplateKind } | { kind: "form"; schema_id: string; doc_id?: string | null };
 
@@ -1965,10 +2057,25 @@ export interface DraftRequest {
   feedback: string | null;
   previous: Draft | null;
   excluded_sources: string[];
+  /** Reply token budget (0.3.0): absent / null → the length preset; above ~3,000 the draft is produced section by section. */
+  max_tokens?: number | null;
+}
+
+/** Token budget presets of the 문서 생성 screen (the last one is a whole RFP / SOW). */
+export const TOKEN_BUDGET_PRESETS = [2600, 6000, 12000, 24000] as const;
+/** Reply tokens of the length presets (`generate::prompts::max_tokens`). */
+export const LENGTH_TOKENS: Record<DraftLength, number> = { short: 1200, medium: 1800, long: 2600 };
+
+/** `generate_budget_info`: what the screen needs to size a token budget. */
+export interface BudgetInfo {
+  ctx: number | null;
+  gpu: boolean;
+  cap: number;
+  split_threshold: number;
 }
 
 export function defaultDraftRequest(language: Language = "ko"): DraftRequest {
-  return { form_ref: null, format_description: null, content: "", sources: [], output: "hwpx", tone: "formal", length: "medium", language, use_knowledge: true, feedback: null, previous: null, excluded_sources: [] };
+  return { form_ref: null, format_description: null, content: "", sources: [], output: "hwpx", tone: "formal", length: "medium", language, use_knowledge: true, feedback: null, previous: null, excluded_sources: [], max_tokens: null };
 }
 
 export interface DraftCitation {
@@ -2051,6 +2158,8 @@ export interface DraftOutcome {
   elapsed_ms: number;
   /** How the draft was produced: `rules` (no model call) | `model`. */
   source: string;
+  /** Model calls that produced body sections (1 = one shot, >1 = outline → sections). */
+  sections?: number;
   /** Draft job payloads only (`generate_bridge::run_draft`): where the job came from (`generate`, `project`, …). */
   job_source?: string;
   /** Draft job / `request_supplement` payloads: the project the draft belongs to. */
@@ -2117,17 +2226,61 @@ export function isDraftOutcome(v: unknown): v is DraftOutcome {
 // Projects (P6) — mirrors crates/doculens-core/src/projects/mod.rs
 // ---------------------------------------------------------------------------
 
-export type ProjectStatus = "intake" | "extracting" | "validating" | "supplement" | "done";
-export const PROJECT_STATUSES: ProjectStatus[] = ["intake", "extracting", "validating", "supplement", "done"];
+/** Phase computed from the project's dates (0.3.0 plan §5): before the start, between, after the end. */
+export type ProjectPhase = "planned" | "active" | "done";
+export const PROJECT_PHASES: ProjectPhase[] = ["planned", "active", "done"];
+
+/** Per-project organise / export settings (plan §6); every field optional, `copies` on by default. */
+export interface ProjectSettings {
+  folder_template?: string | null;
+  name_template?: string | null;
+  group_by?: GroupBy | null;
+  export_format?: ExportFormat | null;
+  export_layout?: ExportLayout | null;
+  export_path?: string | null;
+  copies: boolean;
+}
+
+export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = { folder_template: null, name_template: null, group_by: null, export_format: null, export_layout: null, export_path: null, copies: true };
+
+export type CopyState = "synced" | "modified" | "missing";
+
+/** A tracked physical copy of a document in another project's folder (decision 6). */
+export interface DocumentCopy {
+  document_id: string;
+  project_id: string;
+  rel_path: string;
+  content_hash: string;
+  size_bytes: number;
+  state: CopyState;
+  created_at: string;
+  synced_at: string;
+}
+
+/** Result of "다시 동기화" (`project_sync_copies`). */
+export interface ProjectCopySyncReport {
+  renamed: number;
+  rewritten: number;
+  created: number;
+  modified: number;
+  missing: number;
+  removed: number;
+}
 
 export interface Project {
   id: string;
   name: string;
   template_id: string | null;
-  status: ProjectStatus;
   intake_no: string | null;
   owner: string | null;
-  due_date: string | null;
+  /** ISO dates; null start = the creation day, null end = open-ended. */
+  start_date: string | null;
+  end_date: string | null;
+  /** Computed from the dates for today. */
+  phase: ProjectPhase;
+  /** 기한 경과: the end date has passed but the case is incomplete (badge, not a phase). */
+  overdue: boolean;
+  settings: ProjectSettings;
   notes: string | null;
   inbox_folder: string | null;
   /** Classification keywords (자동 분류), matched against document titles / names / text. */
@@ -2147,12 +2300,15 @@ export interface ProjectInput {
   id?: string | null;
   name: string;
   template_id?: string | null;
-  status?: ProjectStatus | null;
   intake_no?: string | null;
   owner?: string | null;
-  due_date?: string | null;
+  /** ISO dates; on update null keeps the stored value and "" clears it. */
+  start_date?: string | null;
+  end_date?: string | null;
   notes?: string | null;
   inbox_folder?: string | null;
+  /** Omitted / null keeps the stored settings. */
+  settings?: ProjectSettings | null;
   /** Omitted / null keeps the stored keywords, an empty list clears them. */
   keywords?: string[] | null;
 }
@@ -2326,6 +2482,8 @@ export interface RelationGraph {
 export interface ProjectDocument {
   document: DocumentRecord;
   added_at: string;
+  /** The tracked copy in this project's folder when the document also belongs to an earlier project. */
+  copy?: DocumentCopy | null;
 }
 
 export interface ProjectDetail {
@@ -2343,7 +2501,7 @@ export interface ProjectsChanged {
 }
 
 export function isProject(v: unknown): v is Project {
-  return typeof v === "object" && v !== null && typeof (v as Project).id === "string" && typeof (v as Project).name === "string" && typeof (v as Project).status === "string" && typeof (v as Project).document_count === "number";
+  return typeof v === "object" && v !== null && typeof (v as Project).id === "string" && typeof (v as Project).name === "string" && typeof (v as Project).phase === "string" && typeof (v as Project).document_count === "number";
 }
 
 export function isProjectDetail(v: unknown): v is ProjectDetail {

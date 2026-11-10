@@ -3,8 +3,9 @@
 use tauri::AppHandle;
 
 use doculens_core::generate::OutputFormat;
+use doculens_core::projects::copies::SyncReport;
 use doculens_core::projects::{
-    CheckRun, Project, ProjectDetail, ProjectInput, ProjectStatus, ProjectTemplate, Rule, RuleDraft, TemplateInput,
+    CheckRun, Project, ProjectDetail, ProjectInput, ProjectTemplate, Rule, RuleDraft, TemplateInput,
 };
 
 use crate::commands::generate::JobStarted;
@@ -48,8 +49,8 @@ pub fn project_remove_document(app: AppHandle, id: String, doc_id: String) -> Ui
 }
 
 #[tauri::command(async)]
-pub fn project_set_status(app: AppHandle, id: String, status: ProjectStatus) -> UiResult<Project> {
-    projects_bridge::set_status(&app, &id, status)
+pub fn project_sync_copies(app: AppHandle, id: String) -> UiResult<SyncReport> {
+    projects_bridge::sync_copies(&app, &id)
 }
 
 #[tauri::command(async)]

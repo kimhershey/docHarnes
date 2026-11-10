@@ -308,7 +308,7 @@
     {
       "id": "p-hanbit",
       "name": "한빛 납품",
-      "status": "intake"
+      "status": "active"
     }
   ],
   "current_project": "p-hanbit"

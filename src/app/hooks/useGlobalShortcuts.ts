@@ -37,7 +37,8 @@ export function useGlobalShortcuts() {
     if (!shortcuts) return;
     const mac = isMac();
     const handler = (e: KeyboardEvent) => {
-      if (e.isComposing) return;
+      // A screen that handled the key itself (the viewer's text-edit undo) keeps it.
+      if (e.isComposing || e.defaultPrevented) return;
       const ui = useUiStore.getState();
       const settings = useSettingsStore.getState();
       const hasModifier = e.ctrlKey || e.metaKey || e.altKey;

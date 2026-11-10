@@ -526,12 +526,20 @@ function applyDate(scope: Scope, d: DateRange | null): void {
 }
 
 /** Scope from the sentence: selection words → selected ids; `inbox` → that folder; otherwise the type / date filter. */
+/** "프로젝트별로 정리" / "by project": group folders / sheets / totals by project (plan §6). */
+const PROJECT_GROUP_WORDS = ["프로젝트별", "byproject", "perproject"];
+
 function scopeOf(t: Text, ctx: PlanContext, dt: DocTypeSummary | null, d: DateRange | null): Scope {
   const scope = emptyScope();
   if (has(t, SELECTION_WORDS)) scope.doc_ids = selectionIds(ctx);
   if (has(t, ["inbox", "인박스", "받은함"])) scope.folder = "inbox";
   else if (has(t, ["이폴더", "여기있는", "현재폴더", "thisfolder", "currentfolder", "here"])) scope.folder = ctx.current_folder;
   if (dt) scope.filter = { ...(scope.filter ?? {}), doc_type: dt.slug };
+  // "한빛 프로젝트 문서를 월별로 정리해": a known project named with the project word is the scope.
+  if (has(t, ["프로젝트", "project"]) && !has(t, PROJECT_GROUP_WORDS)) {
+    const ref = projectRefOf(t, ctx);
+    if (ref) scope.filter = { ...(scope.filter ?? {}), project_id: ref };
+  }
   applyDate(scope, d);
   return scope;
 }
@@ -599,35 +607,76 @@ function modelId(t: Text, ctx: PlanContext): string | null {
 // -- P6 rules: document generation, projects, rules, retention (rules.rs additions) --
 
 const DRAFT_VERBS = ["만들어", "작성", "써줘", "써 줘", "초안", "생성", "뽑아줘", "draft", "write", "create", "make"];
+// First match wins: the specific software documents before the generic 보고서 / 공문 layouts of 0.1
+// (hidden from the picker but still reachable by their own words), mirroring rules.rs TEMPLATE_WORDS.
 const DRAFT_TEMPLATES: [string, TemplateKind][] = [
   ["보완요청서", "supplement_request"],
-  ["견적서", "quotation"],
-  ["견적", "quotation"],
+  ["보완 요청서", "supplement_request"],
+  ["제안요청서", "rfp"],
+  ["제안 요청서", "rfp"],
+  ["rfp", "rfp"],
+  ["제안서", "proposal"],
+  ["proposal", "proposal"],
+  ["과업지시서", "sow"],
+  ["과업내용서", "sow"],
+  ["statement of work", "sow"],
+  ["요구사항 정의서", "srs"],
+  ["요구사항 명세서", "srs"],
+  ["requirements specification", "srs"],
+  ["개발 계약서", "dev_contract"],
+  ["용역 계약서", "dev_contract"],
+  ["계약서", "dev_contract"],
+  ["contract", "dev_contract"],
+  ["agreement", "dev_contract"],
+  ["wbs", "wbs"],
+  ["일정표", "wbs"],
+  ["작업분류체계", "wbs"],
+  ["진척 보고서", "progress_report"],
+  ["진척 보고", "progress_report"],
+  ["주간 보고", "progress_report"],
+  ["월간 보고", "progress_report"],
+  ["진도 보고", "progress_report"],
+  ["progress report", "progress_report"],
+  ["weekly report", "progress_report"],
+  ["회의록", "meeting_minutes"],
+  ["meeting minutes", "meeting_minutes"],
+  ["minutes", "meeting_minutes"],
+  ["테스트 결과서", "test_report"],
+  ["시험 결과서", "test_report"],
+  ["테스트 보고서", "test_report"],
+  ["test report", "test_report"],
+  ["변경요청서", "change_request"],
+  ["변경 요청서", "change_request"],
+  ["변경요청", "change_request"],
+  ["change request", "change_request"],
+  ["검수확인서", "acceptance"],
+  ["검수 확인서", "acceptance"],
+  ["검수조서", "acceptance"],
+  ["완료보고서", "acceptance"],
+  ["acceptance", "acceptance"],
+  ["견적서", "estimate"],
+  ["견적", "estimate"],
+  ["estimate", "estimate"],
+  ["quotation", "estimate"],
   ["공문", "official_letter"],
   ["협조문", "official_letter"],
   ["안내문", "official_letter"],
-  ["거래명세서", "transaction_statement"],
-  ["명세서", "transaction_statement"],
-  ["계약서", "contract"],
+  ["official letter", "official_letter"],
+  ["letter", "official_letter"],
   ["보고서", "report"],
   ["정산서", "report"],
-  ["회의록", "minutes"],
-  ["quotation", "quotation"],
-  ["contract", "contract"],
   ["report", "report"],
-  ["minutes", "minutes"],
-  ["letter", "official_letter"],
 ];
 const PROJECT_TEMPLATE_WORDS: [string, string][] = [
-  ["인증심사", "builtin-certification_review"],
-  ["인증", "builtin-certification_review"],
-  ["거래처등록", "builtin-vendor_onboarding"],
-  ["거래처", "builtin-vendor_onboarding"],
-  ["구매정산", "builtin-purchase_settlement"],
-  ["정산", "builtin-purchase_settlement"],
-  ["certification", "builtin-certification_review"],
-  ["vendor", "builtin-vendor_onboarding"],
-  ["settlement", "builtin-purchase_settlement"],
+  ["외주개발", "builtin-outsourcing"],
+  ["외주", "builtin-outsourcing"],
+  ["유지보수", "builtin-maintenance"],
+  ["내부개발", "builtin-internal_dev"],
+  ["자체개발", "builtin-internal_dev"],
+  ["outsourc", "builtin-outsourcing"],
+  ["maintenance", "builtin-maintenance"],
+  ["in-house", "builtin-internal_dev"],
+  ["internal", "builtin-internal_dev"],
 ];
 
 function outputOf(t: Text): OutputFormat | null {
@@ -755,7 +804,7 @@ function ruleRegisterForm(t: Text, ctx: PlanContext): Plan | null {
     .split(/\s+/)
     .map((w) => w.replace(/^["'“”‘’]+|["'“”‘’]+$/g, ""))
     .find((w) => w.includes(".") && w.length > 3);
-  return single({ op: "register_form", doc_ref: named ?? ids[0] ?? null, name: null, doc_type_slug: null }, 0.84, tr(t.ko, "문서를 양식으로 등록합니다 (필드 그리드 확인)", "Register the document as a form (field grid confirmation)"));
+  return single({ op: "register_form", doc_ref: named ?? ids[0] ?? null, name: null, doc_type_slug: null, doc_ids: ids }, 0.84, tr(t.ko, "문서를 양식으로 등록합니다 (필드 그리드 확인)", "Register the document as a form (field grid confirmation)"));
 }
 
 /** "이 두 문서 비교해줘" → compare (2–5 selected documents). */
@@ -875,7 +924,7 @@ function ruleAggregate(t: Text, ctx: PlanContext): Plan | null {
   const scoped =
     docTypeOf(t, ctx) !== null ||
     dateOf(t, ctx) !== null ||
-    has(t, ["월별", "거래처별", "유형별", "monthly", "byvendor", "bytype", "집계", "총합", "모든", "모두", "전부", "전체", "across", "all "]) ||
+    has(t, ["월별", "거래처별", "유형별", "프로젝트별", "monthly", "byvendor", "bytype", "byproject", "집계", "총합", "모든", "모두", "전부", "전체", "across", "all "]) ||
     (selectionIds(ctx).length > 0 && has(t, SELECTION_WORDS));
   if (!scoped) return null;
   const func: AggregateFn = has(t, ["평균", "average", "avg", "mean"])
@@ -896,7 +945,7 @@ function ruleAggregate(t: Text, ctx: PlanContext): Plan | null {
     const mentioned = fieldsMentioned(t, schema).filter((f) => f.kind === "amount" || f.kind === "integer");
     field = (mentioned[0] ?? totalField(schema))?.key ?? null;
   }
-  const groupBy: GroupBy | null = has(t, ["월별", "달별", "monthly", "bymonth", "permonth"]) ? "month" : has(t, ["거래처별", "업체별", "byvendor", "pervendor"]) ? "vendor" : has(t, ["유형별", "종류별", "bytype", "pertype"]) ? "doc_type" : null;
+  const groupBy: GroupBy | null = has(t, ["월별", "달별", "monthly", "bymonth", "permonth"]) ? "month" : has(t, ["거래처별", "업체별", "byvendor", "pervendor"]) ? "vendor" : has(t, ["유형별", "종류별", "bytype", "pertype"]) ? "doc_type" : has(t, PROJECT_GROUP_WORDS) ? "project" : null;
   const includeUnreviewed = has(t, ["검토대기포함", "검토미완료포함", "미검토포함", "대기포함", "includeunreviewed", "includingunreviewed"]) ? true : null;
   const label = typeLabel(dt, t.ko, tr(t.ko, "문서", "documents"));
   const fieldDef = field && schema ? schema.fields.find((f) => f.key === field) : undefined;
@@ -930,13 +979,15 @@ function ruleInbox(t: Text, ctx: PlanContext): Plan | null {
     ? "month"
     : has(t, ["거래처별", "업체별", "byvendor"])
       ? "vendor"
+      : has(t, PROJECT_GROUP_WORDS)
+        ? "project"
       : has(t, ["유형별", "종류별", "bytype", "정리", "폴더로", "옮겨", "이동", "organi", "move", "sort into"])
         ? "doc_type"
         : null;
   if (group) ops.push({ op: "move", folder: FOLDER_TEMPLATES[group], group_by: group, only_reviewed: null });
   const label = typeLabel(dt, t.ko, tr(t.ko, "문서", "documents"));
   const summary = t.ko
-    ? `inbox의 ${label}을(를) 가져와 ${ops.length > 1 ? "분류·OCR·추출한 뒤 " : "등록하고 "}${group === "month" ? "월별 폴더로 이동합니다" : group === "vendor" ? "거래처별 폴더로 이동합니다" : group ? "유형별 폴더로 이동합니다" : "마칩니다"}`
+    ? `inbox의 ${label}을(를) 가져와 ${ops.length > 1 ? "분류·OCR·추출한 뒤 " : "등록하고 "}${group === "month" ? "월별 폴더로 이동합니다" : group === "vendor" ? "거래처별 폴더로 이동합니다" : group === "project" ? "프로젝트별 폴더로 이동합니다" : group ? "유형별 폴더로 이동합니다" : "마칩니다"}`
     : `Import ${label} from inbox${ops.length > 1 ? ", classify, OCR and extract them" : ""}${group === "month" ? ", then move them into monthly folders" : group === "vendor" ? ", then move them into vendor folders" : group ? ", then move them into type folders" : ""}`;
   return many(ops, scope, 0.88, summary);
 }
@@ -944,6 +995,7 @@ function ruleInbox(t: Text, ctx: PlanContext): Plan | null {
 function groupWord(g: GroupBy, ko: boolean): string {
   if (g === "month") return ko ? "월별" : "monthly";
   if (g === "vendor") return ko ? "거래처별" : "vendor";
+  if (g === "project") return ko ? "프로젝트별" : "project";
   return ko ? "유형별" : "type";
 }
 
@@ -956,13 +1008,13 @@ function ruleOrganize(t: Text, ctx: PlanContext): Plan | null {
   const d = dateOf(t, ctx);
   const scope = scopeOf(t, ctx, dt, d);
   const onlyReviewed = has(t, ["검토완료", "검토된", "reviewedonly", "onlyreviewed"]) ? true : null;
-  const group: GroupBy | null = has(t, ["월별", "달별", "monthly", "bymonth"]) ? "month" : has(t, ["거래처별", "업체별", "byvendor"]) ? "vendor" : has(t, ["유형별", "종류별", "bytype"]) ? "doc_type" : null;
+  const group: GroupBy | null = has(t, ["월별", "달별", "monthly", "bymonth"]) ? "month" : has(t, ["거래처별", "업체별", "byvendor"]) ? "vendor" : has(t, ["유형별", "종류별", "bytype"]) ? "doc_type" : has(t, PROJECT_GROUP_WORDS) ? "project" : null;
   // "X 폴더로 옮겨": an explicit folder name.
   const words = t.raw.split(/\s+/).filter(Boolean);
   let explicit: string | null = null;
   for (let i = 0; i + 1 < words.length; i += 1) {
     const name = (words[i] ?? "").replace(/^["'“”‘’]+|["'“”‘’]+$/g, "");
-    if (compact(words[i + 1] ?? "").startsWith("폴더") && name && !has(t, ["월별", "거래처별", "유형별"]) && !ctxDocType(ctx, name)) {
+    if (compact(words[i + 1] ?? "").startsWith("폴더") && name && !has(t, ["월별", "거래처별", "유형별", "프로젝트별"]) && !ctxDocType(ctx, name)) {
       explicit = name;
       break;
     }
@@ -1852,6 +1904,10 @@ export function resolveScope(scope: Scope | undefined): MockDoc[] {
     });
   }
   if (f.doc_type) docs = docs.filter((d) => d.doc_type === f.doc_type);
+  if (f.project_id) {
+    const pid = f.project_id;
+    docs = docs.filter((d) => mp.isMember(pid, d.id));
+  }
   const tags = f.tags ?? [];
   if (tags.length > 0) docs = docs.filter((d) => tags.every((t) => d.tags.some((x) => x.toLowerCase() === t.toLowerCase())));
   if (f.review_status) docs = docs.filter((d) => d.review_status === f.review_status);
@@ -2070,10 +2126,22 @@ function joinPath(folder: string, name: string, ext: string): string {
   return folder ? `${folder}/${file}` : file;
 }
 
-function variableOf(doc: MockDoc, labels: DocTypeInfo[], lang: Language, v: string, stem: string, ext: string, seq: number | null): string | null {
+function variableOf(doc: MockDoc, labels: DocTypeInfo[], lang: Language, v: string, stem: string, ext: string, seq: number | null, project: mp.ProjectVars | null = null): string | null {
   const [date] = basisDate(doc);
   const parts = date ? dateParts(date) : null;
   switch (v) {
+    case "project":
+      return project?.name ?? null;
+    case "project_code":
+      return project?.code ?? null;
+    case "project_phase":
+      return project?.phase ?? null;
+    case "project_start":
+      return project?.start ?? null;
+    case "project_end":
+      return project?.end ?? null;
+    case "project_owner":
+      return project?.owner ?? null;
     case "year":
       return parts?.year ?? null;
     case "month":
@@ -2122,9 +2190,11 @@ export function organizePlan(req: OrganizeRequest): OrganizePlan {
   const out: OrganizePlan = { items: [], moves: 0, unchanged: 0, held: 0, missing_files: 0, needs_review: 0, name_template: req.name_template ?? null, folder_template: req.folder_template ?? null, only_reviewed: onlyReviewed };
   const taken = new Set<string>();
   const seqByFolder = new Map<string, number>();
+  const scopeProject = req.scope?.filter?.project_id ?? null;
   for (const doc of docs) {
     const display = doc.title ?? doc.original_name;
     const from = doc.rel_path;
+    const project = mp.projectVarsFor(doc.id, scopeProject);
     if (onlyReviewed && doc.review_status === "pending") {
       out.held += 1;
       out.items.push({ doc_id: doc.id, name: display, from, to: null, status: "held", reason: "review_pending", missing: [] });
@@ -2138,7 +2208,7 @@ export function organizePlan(req: OrganizeRequest): OrganizePlan {
     // Folder first (it must not use {{seq}}), then the running number inside that folder.
     let folder: string;
     if (req.folder_template != null) {
-      const r = renderTemplate(req.folder_template, (v) => variableOf(doc, labels, lang, v, stem, ext, null));
+      const r = renderTemplate(req.folder_template, (v) => variableOf(doc, labels, lang, v, stem, ext, null, project));
       missing.push(...r.missing);
       folder = sanitizeFolder(r.text);
     } else folder = relDir(from);
@@ -2146,7 +2216,7 @@ export function organizePlan(req: OrganizeRequest): OrganizePlan {
     seqByFolder.set(folder, seq);
     let name: string;
     if (req.name_template != null) {
-      const r = renderTemplate(req.name_template, (v) => variableOf(doc, labels, lang, v, stem, ext, seq));
+      const r = renderTemplate(req.name_template, (v) => variableOf(doc, labels, lang, v, stem, ext, seq, project));
       missing.push(...r.missing);
       name = sanitizeComponent(r.text);
     } else name = stem;
@@ -2386,10 +2456,12 @@ class Acc {
   }
 }
 
-function groupKey(groupBy: GroupBy, doc: MockDoc, date: string | null): string | null {
+function groupKey(groupBy: GroupBy, doc: MockDoc, date: string | null, project: string | null = null): string | null {
   switch (groupBy) {
     case "none":
       return null;
+    case "project":
+      return project ?? UNKNOWN;
     case "month":
       return date ? date.slice(0, 7) : UNKNOWN;
     case "vendor":
@@ -2439,7 +2511,8 @@ export function aggregate(req: AggregateRequest): AggregateResult {
         unreviewed = docPending || (found?.[1] ?? false);
       } else value = null;
     }
-    const group = groupKey(groupBy, doc, date);
+    const project = groupBy === "project" ? (mp.projectVarsFor(doc.id, req.scope?.filter?.project_id ?? null)?.name ?? null) : null;
+    const group = groupKey(groupBy, doc, date, project);
     if (value !== null) {
       total.add(value, unreviewed, includeUnreviewed);
       if (group !== null) {
@@ -2520,6 +2593,13 @@ interface Prepared {
   skipped: [string, string][];
   schemas: Map<string, SchemaRecord>;
   folder: boolean;
+  /** Document id → project name (the scope's project, else the document's first project). */
+  projects: Map<string, string>;
+}
+
+/** The "프로젝트" column is present for a per-project layout or when any document has a project. */
+function projectColumn(p: Prepared, req: ExportRequest): boolean {
+  return (req.layout ?? "sheet_per_type") === "sheet_per_project" || p.projects.size > 0;
 }
 
 /** Default target: `exports/<today>_<type label>.<ext>` (`문서` without a single type, `_표` / `_텍스트` for the table / text targets, `검색가능` for searchable PDFs). */
@@ -2581,6 +2661,9 @@ function prepareExport(req: ExportRequest): Prepared {
   const docs: ExportDoc[] = [];
   const skipped: [string, string][] = [];
   const schemas = new Map<string, SchemaRecord>();
+  const projects = new Map<string, string>();
+  const scopeProjectId = req.scope?.filter?.project_id ?? null;
+  let scopeProject: string | null = null;
   for (const rec of resolveScope(req.scope)) {
     if (req.only_reviewed && rec.review_status === "pending") {
       skipped.push([rec.id, "review_pending"]);
@@ -2590,15 +2673,21 @@ function prepareExport(req: ExportRequest): Prepared {
       const s = pl.schemaForDocType(rec.doc_type);
       if (s) schemas.set(rec.doc_type, s);
     }
+    const project = mp.projectVarsFor(rec.id, scopeProjectId);
+    if (project) {
+      projects.set(rec.id, project.name);
+      if (scopeProjectId) scopeProject = project.name;
+    }
     docs.push({ rec, date: basisDate(rec)[0], fields: wantFields && rec.last_run_id ? pl.latestFields(rec.id) : [] });
   }
-  const label = scopeTypeLabel(req, docs, schemas, ko);
+  // A project scope is filed as `exports/<date>_<project>.<ext>` (plan §6).
+  const label = scopeProject ?? scopeTypeLabel(req, docs, schemas, ko);
   let rel = req.path && req.path.trim() ? normalizeRelPath(req.path) : defaultExportPath(req.format, target, label, todayIso());
   rel = ensureExtension(rel, extensionOf(req.format));
   const folder = req.format === "pdf_searchable" && docs.length > 1;
   if (folder) rel = stripExtension(rel);
   const ws = currentWorkspacePath() ?? "";
-  return { rel, absolute: `${ws}/${rel}`, exists: exportExists(rel), docs, skipped, schemas, folder };
+  return { rel, absolute: `${ws}/${rel}`, exists: exportExists(rel), docs, skipped, schemas, folder, projects };
 }
 
 interface Column {
@@ -2638,10 +2727,12 @@ function unionColumns(docs: ExportDoc[], schemas: Map<string, SchemaRecord>, req
   return out;
 }
 
-function fieldsHeader(cols: Column[], req: ExportRequest): string[] {
+function fieldsHeader(cols: Column[], req: ExportRequest, p: Prepared): string[] {
   const ko = (req.language ?? "ko") === "ko";
   const include = req.include ?? [];
-  const h = [tr(ko, "파일", "File"), tr(ko, "유형", "Type"), tr(ko, "날짜", "Date"), tr(ko, "검토 상태", "Review")];
+  const h = [tr(ko, "파일", "File"), tr(ko, "유형", "Type")];
+  if (projectColumn(p, req)) h.push(tr(ko, "프로젝트", "Project"));
+  h.push(tr(ko, "날짜", "Date"), tr(ko, "검토 상태", "Review"));
   if (include.includes("confidence")) h.push(tr(ko, "신뢰도", "Confidence"));
   for (const c of cols) {
     const label = columnLabel(c, ko);
@@ -2691,12 +2782,16 @@ function sheetNames(raw: string[]): string[] {
   return used;
 }
 
-/** Grids of the fields target: one per type (or a single one) plus the long-form items grid. */
-function fieldsSheetNames(p: Prepared, req: ExportRequest): string[] {
+/** Grid names of the fields target before Excel sanitising: per type, per project ("프로젝트 없음" last) or a single one. */
+function fieldsGridNames(p: Prepared, req: ExportRequest): string[] {
   const ko = (req.language ?? "ko") === "ko";
   const names: string[] = [];
-  if ((req.layout ?? "sheet_per_type") === "single") names.push(tr(ko, "필드", "Fields"));
-  else {
+  const layout = req.layout ?? "sheet_per_type";
+  if (layout === "single") names.push(tr(ko, "필드", "Fields"));
+  else if (layout === "sheet_per_project") {
+    const keys = [...new Set(p.docs.map((d) => p.projects.get(d.rec.id) ?? ""))].sort((a, b) => (a === "" ? 1 : b === "" ? -1 : a.localeCompare(b)));
+    for (const k of keys) names.push(k === "" ? tr(ko, "프로젝트 없음", "No project") : k);
+  } else {
     const seen = new Set<string>();
     for (const d of p.docs) {
       const slug = d.rec.doc_type ?? "";
@@ -2705,8 +2800,13 @@ function fieldsSheetNames(p: Prepared, req: ExportRequest): string[] {
       names.push(typeLabelOf(d, p.schemas, ko));
     }
   }
-  names.push(tr(ko, "품목", "Items"));
-  return sheetNames(names);
+  return names;
+}
+
+/** Grids of the fields target: one per type / project (or a single one) plus the long-form items grid. */
+function fieldsSheetNames(p: Prepared, req: ExportRequest): string[] {
+  const ko = (req.language ?? "ko") === "ko";
+  return sheetNames([...fieldsGridNames(p, req), tr(ko, "품목", "Items")]);
 }
 
 function tableSheetName(doc: ExportDoc, page: number, index: number): string {
@@ -2723,7 +2823,7 @@ export function exportPreview(req: ExportRequest): ExportPreview {
   if (req.format === "pdf_searchable") {
     /* no columns / sheets */
   } else if (target === "fields") {
-    columns = fieldsHeader(unionColumns(p.docs, p.schemas, req), req);
+    columns = fieldsHeader(unionColumns(p.docs, p.schemas, req), req, p);
     if (req.format === "xlsx") sheets = fieldsSheetNames(p, req);
   } else if (target === "table") {
     if (req.format === "xlsx") sheets = sheetNames(p.docs.flatMap((d) => pl.documentTables(d.rec.id).map((t) => tableSheetName(d, t.page, t.index))));
@@ -2775,7 +2875,12 @@ export async function runExport(req: ExportRequest, ctl: JobControl | null): Pro
     const items = p.docs.reduce((n, d) => n + d.fields.filter((f) => f.row !== null).length, 0);
     rows += items;
     if (req.format === "xlsx") sheets = fieldsSheetNames(p, req);
-    else if (req.format === "csv" && items > 0) extra.push(`${stripExtension(p.rel)}_items.csv`);
+    else if (req.format === "csv") {
+      // Per-project CSV files next to the main one (the Rust writer splits the grids the same way).
+      const grids = fieldsGridNames(p, req);
+      if ((req.layout ?? "sheet_per_type") === "sheet_per_project" && grids.length > 1) for (const g of grids) extra.push(`${stripExtension(p.rel)}_${sanitizeComponent(g)}.csv`);
+      if (items > 0) extra.push(`${stripExtension(p.rel)}_items.csv`);
+    }
   } else if (target === "table") {
     const names: string[] = [];
     let found = 0;
@@ -3421,6 +3526,8 @@ export async function runJobSpec(job: Job, spec: JobSpec, ctl: JobControl): Prom
       return mg.draftWorker(job, spec, ctl);
     case "maintenance":
       return mp.maintenanceWorker(job, ctl);
+    case "schema_discovery":
+      return pl.schemaDiscoveryWorker(job, spec, ctl);
   }
 }
 

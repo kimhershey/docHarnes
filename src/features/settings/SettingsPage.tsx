@@ -66,7 +66,10 @@ export function SettingsPage() {
           <WorkspaceTab />
         </TabsContent>
         <TabsContent value="processing">
-          <ProcessingTab />
+          <div className="flex flex-col gap-4">
+            <ProcessingTab />
+            <GenerationCard />
+          </div>
         </TabsContent>
         <TabsContent value="knowledge">
           <KnowledgeTab />
@@ -413,6 +416,30 @@ function ProcessingTab() {
         <Row label={t("settings.processing.cache")} htmlFor="cache-gb">
           <NumberField id="cache-gb" value={settings.cache.page_cache_max_gb} min={0.5} max={1000} step={0.5} precision={1} onCommit={(v) => void update((s) => void (s.cache.page_cache_max_gb = v))} testId="settings-cache-gb" />
           <span className="text-sm text-fg-muted">GB</span>
+        </Row>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Reply token caps of document generation by engine backend (0.3.0 item 4; user decision: GPU raised, CPU limited). */
+function GenerationCard() {
+  const { t } = useTranslation();
+  const settings = useSettingsStore((s) => s.settings)!;
+  const update = useSettingsStore((s) => s.update);
+  const g = settings.generation;
+  return (
+    <Card data-testid="settings-generation">
+      <CardHeader>
+        <CardTitle>{t("settings.generation.title")}</CardTitle>
+        <CardDescription>{t("settings.generation.hint")}</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <Row label={t("settings.generation.max_tokens_gpu")} hint={t("settings.generation.max_tokens_gpu_hint")} htmlFor="gen-cap-gpu">
+          <NumberField id="gen-cap-gpu" value={g.max_tokens_gpu} min={1200} max={65536} step={1024} onCommit={(v) => void update((s) => void (s.generation.max_tokens_gpu = v))} testId="settings-gen-cap-gpu" />
+        </Row>
+        <Row label={t("settings.generation.max_tokens_cpu")} hint={t("settings.generation.max_tokens_cpu_hint")} htmlFor="gen-cap-cpu">
+          <NumberField id="gen-cap-cpu" value={g.max_tokens_cpu} min={1200} max={12288} step={512} onCommit={(v) => void update((s) => void (s.generation.max_tokens_cpu = v))} testId="settings-gen-cap-cpu" />
         </Row>
       </CardContent>
     </Card>

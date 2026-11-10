@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmDialog, type ConfirmRequest } from "@/components/ui/confirm-dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
@@ -17,9 +18,10 @@ import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
 import { useDocTypes, useDocuments, useSchemaVersions, useSchemas } from "@/lib/queries";
 import { queryClient, queryKeys } from "@/lib/query-client";
-import { draftFromSchema, newFieldDef, type SchemaDraft, type SchemaRecord } from "@/lib/types";
+import { draftFromSchema, newFieldDef, type SchemaDiscoveryOutcome, type SchemaDraft, type SchemaRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useAttachmentsStore } from "@/stores/attachments";
+import { useSchemasStore } from "@/stores/schemas";
 import { useUiStore } from "@/stores/ui";
 
 import { FormRegisterDialog } from "./FormRegisterDialog";
@@ -88,13 +90,19 @@ export function SchemasPage() {
   const [nlOpen, setNlOpen] = useState(false);
   const [nlBase, setNlBase] = useState<SchemaRecord | null>(null);
   const [formOpen, setFormOpen] = useState(false);
-  const [formDoc, setFormDoc] = useState<string | null>(null);
+  const [formDocs, setFormDocs] = useState<string[] | null>(null);
+  const [formName, setFormName] = useState<string | null>(null);
+  /** Summary of the discovery job whose merged draft is in the editor (0.3.0 §2), until it is saved / replaced. */
+  const [discovery, setDiscovery] = useState<SchemaDiscoveryOutcome | null>(null);
+  /** Another schema already carries the draft's name: saving stays off until it changes (decision 2026-11-10). */
+  const [nameTaken, setNameTaken] = useState(false);
+  const [renameAsk, setRenameAsk] = useState<{ base: string; proposal: string } | null>(null);
   // A document dropped on the sidebar's 스키마 entry registers as a form.
   const pendingFormDoc = useAttachmentsStore((s) => s.pendingFormDoc);
   useEffect(() => {
     if (!pendingFormDoc) return;
     useAttachmentsStore.getState().setPending({ pendingFormDoc: null });
-    setFormDoc(pendingFormDoc.id);
+    setFormDocs([pendingFormDoc.id]);
     setFormOpen(true);
   }, [pendingFormDoc]);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
@@ -112,18 +120,45 @@ export function SchemasPage() {
   const builtinShown = useMemo(() => builtin.filter((s) => s.enabled), [builtin]);
   const builtinHidden = useMemo(() => builtin.filter((s) => !s.enabled), [builtin]);
 
-  // `?register=<doc id>` from the library's "양식으로 등록" opens the form dialog on that document.
+  // `?register=<doc id>[,<id>…]` from the library's "선택 문서로 양식 만들기" (and the assistant) opens the
+  // form dialog on those documents; `name` carries the assistant's form name.
   const registerDoc = params.get("register");
   useEffect(() => {
     if (registerDoc) {
-      setFormDoc(registerDoc);
+      setFormDocs(registerDoc.split(",").map((x) => x.trim()).filter(Boolean));
+      setFormName(params.get("name"));
       setFormOpen(true);
       const next = new URLSearchParams(params);
       next.delete("register");
+      next.delete("name");
       setParams(next, { replace: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [registerDoc]);
+
+  // Live duplicate-name check (debounced); the save button follows it.
+  useEffect(() => {
+    const name = draft?.name.trim() ?? "";
+    if (!name) {
+      setNameTaken(false);
+      return;
+    }
+    let live = true;
+    const h = setTimeout(() => {
+      api.pipelineSchemaNameExists(name, draft?.id ?? null).then(
+        (taken) => {
+          if (live) setNameTaken(taken);
+        },
+        () => {
+          if (live) setNameTaken(false);
+        },
+      );
+    }, 250);
+    return () => {
+      live = false;
+      clearTimeout(h);
+    };
+  }, [draft?.name, draft?.id]);
 
   /**
    * Every replacement of a dirty draft (another schema, a new / duplicated / generated
@@ -152,14 +187,39 @@ export function SchemasPage() {
         setSelectedId(s.id);
         setDraft(draftFromSchema(s));
         setDirty(false);
+        setDiscovery(null);
       }),
     [guardDirty],
   );
-  const openDraft = (d: SchemaDraft) => {
+  /** A new draft whose name is already in use gets the popup proposing "<name> (k)" (saving stays off meanwhile). */
+  const checkNewName = useCallback(async (d: SchemaDraft) => {
+    const base = d.name.trim();
+    if (d.id || !base) return;
+    try {
+      if (!(await api.pipelineSchemaNameExists(base, null))) return;
+      let proposal = `${base} (2)`;
+      for (let k = 3; k < 50 && (await api.pipelineSchemaNameExists(proposal, null)); k += 1) proposal = `${base} (${k})`;
+      setRenameAsk({ base, proposal });
+    } catch {
+      // The save-time check still refuses duplicates.
+    }
+  }, []);
+  const openDraft = (d: SchemaDraft, from: SchemaDiscoveryOutcome | null = null) => {
     setSelectedId(d.id);
     setDraft(d);
     setDirty(true);
+    setDiscovery(from);
+    void checkNewName(d);
   };
+  const openDiscovery = (o: SchemaDiscoveryOutcome) => openDraft(o.draft, o);
+  // A finished discovery job handed over from the 작업 screen / the assistant.
+  const pendingDiscovery = useSchemasStore((s) => s.pending);
+  useEffect(() => {
+    if (!pendingDiscovery) return;
+    const o = useSchemasStore.getState().take();
+    if (o) guardDirty(() => openDraft(o.draft, o));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingDiscovery]);
   const change = (d: SchemaDraft) => {
     setDraft(d);
     setDirty(true);
@@ -174,9 +234,9 @@ export function SchemasPage() {
   // The whole screen takes drops (user report 2026-11-09: a card carried here by spring-loading, or a
   // file from Explorer, landed on nothing): a document opens "양식 등록" on it, a file is imported first.
   const registerDropped = useCallback(
-    (id: string) =>
+    (ids: string[]) =>
       guardDirty(() => {
-        setFormDoc(id);
+        setFormDocs(ids);
         setFormOpen(true);
       }),
     [guardDirty],
@@ -184,11 +244,11 @@ export function SchemasPage() {
   const pageDrop = useDocumentDropTarget({
     disabled: formOpen || nlOpen,
     onDocuments: (dropped) => {
-      if (dropped[0]) registerDropped(dropped[0].id);
+      if (dropped.length > 0) registerDropped(dropped.map((d) => d.id));
     },
     onFiles: (paths) =>
       void importDroppedFiles(paths, {}, t).then((ids) => {
-        if (ids[0]) registerDropped(ids[0]);
+        if (ids.length > 0) registerDropped(ids);
       }),
   });
 
@@ -204,6 +264,8 @@ export function SchemasPage() {
       setSelectedId(saved.id);
       setDraft(draftFromSchema(saved));
       setDirty(false);
+      setDiscovery(null);
+      setRenameAsk(null);
     } catch (e) {
       toast(describeError(e, t), "danger");
     } finally {
@@ -405,14 +467,24 @@ export function SchemasPage() {
                       )}
                     </>
                   )}
-                  <Button size="sm" onClick={() => void save()} disabled={busy} data-testid="schema-save">
+                  <Button size="sm" onClick={() => void save()} disabled={busy || nameTaken} data-testid="schema-save">
                     <Save />
                     {draft.source === "form" && !draft.id ? t("schemas.form.register") : t("schemas.editor.save")}
                   </Button>
                 </span>
               </div>
               {draft.source === "form" && !draft.id && <p className="rounded-md bg-info-soft px-3 py-1.5 text-xs">{t("schemas.form.confirm")}</p>}
-              <SchemaEditor draft={draft} onChange={change} />
+              {discovery && (
+                <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-bg-sunken px-3 py-1.5 text-xs" data-testid="schema-discovery-summary">
+                  <span>{t("schemas.form.discovery_summary", { docs: discovery.documents.filter((d) => d.source !== "failed").length, fields: discovery.merged_fields, dropped: discovery.dropped_fields })}</span>
+                  {discovery.documents.map((d) => (
+                    <Badge key={d.doc_id} variant={d.source === "failed" ? "danger" : "outline"} title={d.note ?? undefined} data-testid={`schema-discovery-doc-${d.doc_id}`}>
+                      {d.title} · {t(`schemas.form.source_${d.source}`, { defaultValue: d.source })} {d.field_count}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+              <SchemaEditor draft={draft} onChange={change} nameError={nameTaken ? t("schemas.editor.name_taken") : null} />
               {draft.id && (
                 <div className="grid gap-3 md:grid-cols-2">
                   <Card>
@@ -468,7 +540,48 @@ export function SchemasPage() {
         </section>
       </div>
       <NlSchemaDialog open={nlOpen} onOpenChange={setNlOpen} base={nlBase} onDraft={openDraft} />
-      <FormRegisterDialog open={formOpen} onOpenChange={(o) => { setFormOpen(o); if (!o) setFormDoc(null); }} documentId={formDoc} onDraft={openDraft} />
+      <FormRegisterDialog
+        open={formOpen}
+        onOpenChange={(o) => {
+          setFormOpen(o);
+          if (!o) {
+            setFormDocs(null);
+            setFormName(null);
+          }
+        }}
+        documentIds={formDocs}
+        initialName={formName}
+        onDraft={openDiscovery}
+      />
+      <Dialog
+        open={!!renameAsk}
+        onOpenChange={(o) => {
+          if (!o) setRenameAsk(null);
+        }}
+      >
+        <DialogContent closeLabel={t("common.close")} data-testid="schema-name-taken">
+          <DialogHeader>
+            <DialogTitle>{t("schemas.form.name_taken_title")}</DialogTitle>
+            <DialogDescription>{t("schemas.form.name_taken_body", { name: renameAsk?.base ?? "" })}</DialogDescription>
+          </DialogHeader>
+          <Input value={renameAsk?.proposal ?? ""} onChange={(e) => setRenameAsk((r) => (r ? { ...r, proposal: e.target.value } : r))} aria-label={t("schemas.editor.name")} data-testid="schema-name-taken-input" />
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => setRenameAsk(null)} data-testid="schema-name-taken-keep">
+              {t("schemas.form.name_taken_keep")}
+            </Button>
+            <Button
+              onClick={() => {
+                if (renameAsk && draft) change({ ...draft, name: renameAsk.proposal.trim() || draft.name });
+                setRenameAsk(null);
+              }}
+              disabled={!renameAsk?.proposal.trim()}
+              data-testid="schema-name-taken-apply"
+            >
+              {t("schemas.form.name_taken_apply")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
     </div>
   );

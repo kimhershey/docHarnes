@@ -1,4 +1,4 @@
-import { RotateCcw } from "lucide-react";
+import { RotateCcw, Undo2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
@@ -6,17 +6,35 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
-import { useFieldHistory, useRuns } from "@/lib/queries";
+import { useDocumentTextHistory, useFieldHistory, useRuns } from "@/lib/queries";
+import { queryClient, queryKeys } from "@/lib/query-client";
 import type { DocumentView } from "@/lib/types";
-import { formatDate } from "@/lib/utils";
+import { cn, formatDate } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui";
 
-/** Viewer "이력" tab: extraction runs (model · tokens · time) and field snapshots with "이 값으로 복원". */
+/**
+ * Viewer "이력" tab: extraction runs (model · tokens · time), field snapshots with "이 값으로 복원" and the
+ * page text corrections with "이 수정 되돌리기" (0.3.0 item 7).
+ */
 export function HistoryPanel({ doc }: { doc: DocumentView }) {
   const { t, i18n } = useTranslation();
   const toast = useUiStore((s) => s.toast);
   const { data: runs, isLoading } = useRuns(doc.id);
   const { data: changes } = useFieldHistory(doc.id);
+  const { data: textEdits } = useDocumentTextHistory(doc.id, null);
+  const revertText = async (historyId: number) => {
+    try {
+      const r = await api.documentsRevertPageText(doc.id, historyId);
+      queryClient.setQueryData(queryKeys.documentPageLayout(doc.id, r.page_no), r.layout);
+      queryClient.setQueryData(queryKeys.documentTextHistory(doc.id, r.page_no), r.history);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.documentTextHistory(doc.id, null) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.documentPageText(doc.id, r.page_no) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.documentPages(doc.id, false) });
+      toast(t("viewer.text_edit.undone"), "ok");
+    } catch (e) {
+      toast(describeError(e, t), "danger");
+    }
+  };
   const restore = async (id: number) => {
     try {
       await api.pipelineRestore(id);
@@ -70,6 +88,37 @@ export function HistoryPanel({ doc }: { doc: DocumentView }) {
                   <RotateCcw />
                   {t("viewer.history.restore")}
                 </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+      <section>
+        <h3 className="mb-1 font-semibold text-fg-muted">{t("viewer.history.text_edits")}</h3>
+        {!textEdits || textEdits.entries.length === 0 ? (
+          <p className="text-fg-muted">{t("viewer.history.none")}</p>
+        ) : (
+          <ul className="flex flex-col gap-1">
+            {textEdits.entries.map((e) => (
+              <li key={e.id} className={cn("flex items-center gap-2 rounded-md border border-border px-2 py-1", e.undone && "opacity-60")} data-testid="history-text-edit" data-undone={e.undone ? "true" : "false"} data-page={e.page_no}>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-medium">{t("viewer.history.text_line", { page: e.page_no, before: e.before || "–", after: e.after || "–" })}</div>
+                  <div className="flex items-center gap-1 text-fg-subtle">
+                    <span>{t(`viewer.history.text_source.${e.source}`, { defaultValue: e.source })}</span>
+                    <span>· {formatDate(e.edited_at, i18n.language)}</span>
+                    {e.undone && (
+                      <Badge variant="muted" className="text-[0.625rem]">
+                        {t("viewer.history.text_undone")}
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+                {!e.undone && (
+                  <Button size="sm" variant="ghost" className="h-6" onClick={() => void revertText(e.id)} title={t("viewer.history.text_revert_title")} data-testid="history-text-revert">
+                    <Undo2 />
+                    {t("viewer.history.text_revert")}
+                  </Button>
+                )}
               </li>
             ))}
           </ul>

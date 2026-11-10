@@ -239,7 +239,7 @@ export function ResultCard({ execution, plan, response, error }: { execution: Pl
           <div key={p.index} className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-bg p-2 text-xs" data-testid="result-project">
             <Briefcase className="size-4 text-accent" aria-hidden="true" />
             <span className="font-medium selectable">{p.project?.name ?? projectNameOf(p.projectId)}</span>
-            {p.project && <Badge variant="muted">{t(`projects.status.${p.project.status}`)}</Badge>}
+            {p.project && <Badge variant="muted">{t(`projects.phase.${p.project.phase}`)}</Badge>}
             {p.project && <span className="text-fg-muted">{t("projects.card.documents", { count: p.project.document_count })}</span>}
             {pid && (
               <Button size="sm" variant="secondary" onClick={() => navigate(`${SCREEN_ROUTES.projects}/${pid}`)} data-testid="result-open-project">

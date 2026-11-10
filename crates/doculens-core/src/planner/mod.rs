@@ -340,6 +340,8 @@ pub enum GroupBy {
     Month,
     Vendor,
     DocType,
+    /// By the document's project (its first project; the scope's project when one is set).
+    Project,
     #[default]
     None,
 }
@@ -350,6 +352,7 @@ impl GroupBy {
             GroupBy::Month => "month",
             GroupBy::Vendor => "vendor",
             GroupBy::DocType => "doc_type",
+            GroupBy::Project => "project",
             GroupBy::None => "none",
         }
     }
@@ -454,6 +457,8 @@ impl ExportFormat {
 pub enum ExportLayout {
     #[default]
     SheetPerType,
+    /// One sheet (XLSX) / file (CSV) per project (plan §6); documents outside projects share one.
+    SheetPerProject,
     Single,
 }
 
@@ -697,6 +702,9 @@ pub enum Op {
         name: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         doc_type_slug: Option<String>,
+        /// Several sample documents (0.3.0 §2 multi-document discovery); `doc_ref` names one.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        doc_ids: Vec<String>,
     },
     /// §3.14.2 grounded explanation of a selection / question.
     Explain {
@@ -722,6 +730,11 @@ pub enum Op {
         template: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         doc_types_required: Vec<String>,
+        /// ISO dates (plan §5: 시작·종료일; both optional).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_date: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        end_date: Option<String>,
     },
     AddToProject {
         /// Project id or name; `None` = the project open in the UI.
@@ -977,6 +990,9 @@ pub struct ScopeFilter {
     pub min_confidence: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub review_status: Option<ReviewStatus>,
+    /// Documents of one project (id; the validator resolves names) — plan §6 project scope.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
 }
 
 impl ScopeFilter {
@@ -987,6 +1003,7 @@ impl ScopeFilter {
             && self.keyword.is_none()
             && self.vendor.is_none()
             && self.status.is_none()
+            && self.project_id.is_none()
             && self.tags.is_empty()
             && self.min_confidence.is_none()
             && self.review_status.is_none()
@@ -1149,7 +1166,8 @@ pub struct PlanContext {
 pub struct ProjectSummary {
     pub id: String,
     pub name: String,
-    /// `intake` | `extracting` | `validating` | `supplement` | `done`.
+    /// The computed phase: `planned` | `active` | `done` (0.3.0; the field keeps its old name so
+    /// stored plans and the evaluation context still load).
     pub status: String,
 }
 

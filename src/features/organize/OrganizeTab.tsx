@@ -13,9 +13,10 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { docTypeLabel } from "@/features/pipeline/labels";
 import { api } from "@/lib/ipc";
-import { invalidateJournal, useDocTypes, useJournalBatches } from "@/lib/queries";
+import { invalidateJournal, useDocTypes, useJournalBatches, useProjects } from "@/lib/queries";
 import {
   DEFAULT_NAME_TEMPLATE,
+  DEFAULT_PROJECT_FOLDER,
   FOLDER_TEMPLATES,
   TEMPLATE_VARIABLES,
   isJobFinished,
@@ -33,7 +34,7 @@ import { useUiStore } from "@/stores/ui";
 
 import { describeOrganizeError, knownCode, templateVariablesOf } from "./errors";
 import { ScopeSection } from "./ScopeSection";
-import { defaultScope, toScope, type ScopeState } from "./scope";
+import { defaultScope, toScope, type ProjectRequest, type ScopeState } from "./scope";
 import { EXAMPLE_DOCUMENT, renderTargetPath } from "./template";
 import { TemplateEditor } from "./TemplateEditor";
 import { useJob } from "./useJob";
@@ -41,7 +42,7 @@ import { useJob } from "./useJob";
 /** Diff rows shown before "전체 보기" (design §3.7: 행 제한 + 전체 보기). */
 const ROW_LIMIT = 50;
 type FolderPreset = GroupBy | "custom";
-const FOLDER_PRESETS: FolderPreset[] = ["month", "vendor", "doc_type", "custom"];
+const FOLDER_PRESETS: FolderPreset[] = ["month", "vendor", "doc_type", "project", "custom"];
 /** `{{seq}}` is numbered inside the target folder, so the folder template cannot use it. */
 const FOLDER_VARIABLES = TEMPLATE_VARIABLES.filter((v) => v !== "seq");
 
@@ -76,12 +77,15 @@ function asApplyReport(v: unknown): ApplyReport | null {
 }
 
 /** 정리 tab: scope → templates → dry-run diff → confirmed apply as a job → undo of that batch. */
-export function OrganizeTab({ selectedIds, selectionRequest }: { selectedIds: string[]; selectionRequest: number }) {
+export function OrganizeTab({ selectedIds, selectionRequest, projectRequest = null }: { selectedIds: string[]; selectionRequest: number; projectRequest?: ProjectRequest | null }) {
   const { t, i18n } = useTranslation();
   const toast = useUiStore((s) => s.toast);
   const defaultOnlyReviewed = useSettingsStore((s) => s.settings?.processing.organize_reviewed_only ?? true);
   const { data: docTypes } = useDocTypes();
+  const { data: projects } = useProjects();
   const [scope, setScope] = useState<ScopeState>(() => defaultScope(selectedIds.length > 0));
+  /** With a project scope, the project's own folder / file-name templates fill the editors (plan §6). */
+  const [useProjectSettings, setUseProjectSettings] = useState(true);
   const [nameTemplate, setNameTemplate] = useState(DEFAULT_NAME_TEMPLATE);
   const [keepName, setKeepName] = useState(false);
   const [preset, setPreset] = useState<FolderPreset>("month");
@@ -116,6 +120,24 @@ export function OrganizeTab({ selectedIds, selectionRequest }: { selectedIds: st
   useEffect(() => {
     if (scope.mode === "selection" && selectedIds.length === 0) setScope((s) => ({ ...s, mode: "all" }));
   }, [scope.mode, selectedIds.length]);
+  // "/organize?project=<id>" from the project's settings tab.
+  useEffect(() => {
+    if (!projectRequest) return;
+    setScope((s) => ({ ...s, mode: "project", projectId: projectRequest.id }));
+    setUseProjectSettings(true);
+  }, [projectRequest]);
+  const scopeProject = scope.mode === "project" ? projects?.find((p) => p.id === scope.projectId) : undefined;
+  const scopeProjectKey = scopeProject ? `${scopeProject.id}:${scopeProject.settings.folder_template ?? ""}:${scopeProject.settings.name_template ?? ""}` : null;
+  useEffect(() => {
+    if (!scopeProject || !useProjectSettings) return;
+    const folder = scopeProject.settings.folder_template?.trim() || DEFAULT_PROJECT_FOLDER;
+    setFolderTemplate(folder);
+    const match = FOLDER_PRESETS.find((p) => p !== "custom" && FOLDER_TEMPLATES[p as GroupBy] === folder);
+    setPreset(match ?? "custom");
+    setNameTemplate(scopeProject.settings.name_template?.trim() || DEFAULT_NAME_TEMPLATE);
+    setKeepFolder(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeProjectKey, useProjectSettings]);
 
   const effectiveName = keepName ? null : nameTemplate;
   const effectiveFolder = keepFolder ? null : folderTemplate;
@@ -241,8 +263,15 @@ export function OrganizeTab({ selectedIds, selectionRequest }: { selectedIds: st
         <CardHeader>
           <CardTitle>{t("organize.scope.title")}</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-3">
           <ScopeSection value={scope} onChange={setScope} selectedCount={selectedIds.length} testId="organize-scope" />
+          {scopeProject && (
+            <label className="flex items-center gap-2 text-sm" data-testid="organize-project-settings-row">
+              <Switch checked={useProjectSettings} onCheckedChange={setUseProjectSettings} data-testid="organize-project-settings" />
+              {t("organize.scope.project_settings")}
+              <span className="text-xs text-fg-subtle">{t("organize.scope.project_settings_hint")}</span>
+            </label>
+          )}
         </CardContent>
       </Card>
 

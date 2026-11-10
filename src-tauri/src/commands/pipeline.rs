@@ -189,6 +189,19 @@ pub fn pipeline_form_derive(app: AppHandle, document_id: String, name: Option<St
     pipeline_bridge::form_derive(&app, &document_id, name.as_deref()).map_err(retype)
 }
 
+/// 0.3.0 §2: field discovery over 1..N sample documents as a job; the result opens the editor unsaved.
+#[tauri::command(async)]
+pub fn pipeline_schema_discover(app: AppHandle, document_ids: Vec<String>, name: Option<String>) -> UiResult<String> {
+    pipeline_bridge::schema_discovery_job(&app, document_ids, name).map_err(retype)
+}
+
+/// Whether another schema already carries `name` (case / space insensitive); the editor disables saving.
+#[tauri::command(async)]
+pub fn pipeline_schema_name_exists(app: AppHandle, name: String, excluding_id: Option<String>) -> UiResult<bool> {
+    let ctx = pipeline_bridge::context(&app)?;
+    Ok(ctx.db().with_read(|c| repo::name_exists(c, &name, excluding_id.as_deref()))?)
+}
+
 #[tauri::command(async)]
 pub fn pipeline_form_register(app: AppHandle, draft: SchemaDraft) -> UiResult<SchemaRecord> {
     let ctx = pipeline_bridge::context(&app)?;

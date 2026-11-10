@@ -18,6 +18,7 @@ pub fn folder_template(group: GroupBy) -> &'static str {
     match group {
         GroupBy::Month => "documents/{{year}}/{{month}}/{{doc_type}}",
         GroupBy::Vendor => "documents/{{vendor}}/{{doc_type}}",
+        GroupBy::Project => crate::projects::DEFAULT_PROJECT_FOLDER,
         GroupBy::DocType => "documents/{{doc_type}}",
         GroupBy::None => "documents/{{doc_type}}",
     }
@@ -340,6 +341,11 @@ fn scope_of(t: &Text<'_>, ctx: &PlanContext, dt: Option<&DocTypeSummary>, d: Opt
         scope.folder = Some("inbox".into());
     } else if t.has(&["이폴더", "여기있는", "현재폴더", "this folder", "current folder", "here"]) {
         scope.folder = ctx.current_folder.clone();
+    }
+    // "한빛 프로젝트 문서를 월별로 정리해": a known project named with the project word is the scope
+    // (plan §6); "프로젝트별" alone groups by project and names none.
+    if t.has(&["프로젝트", "project"]) && !t.has(PROJECT_GROUP_WORDS) {
+        scope.filter.project_id = project_ref(t, ctx);
     }
     // "이 계약서 요약" names the open document by its type; the type is not a library-wide filter then.
     if let Some(dt) = dt.filter(|_| scope.doc_ids.is_empty() || !open_doc_by_type) {
@@ -694,9 +700,11 @@ fn aggregate(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
             "월별",
             "거래처별",
             "유형별",
+            "프로젝트별",
             "monthly",
             "by vendor",
             "by type",
+            "by project",
             "집계",
             "총합",
             "모든",
@@ -743,6 +751,8 @@ fn aggregate(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         Some(GroupBy::Vendor)
     } else if t.has(&["유형별", "종류별", "by type", "per type"]) {
         Some(GroupBy::DocType)
+    } else if t.has(PROJECT_GROUP_WORDS) {
+        Some(GroupBy::Project)
     } else {
         None
     };
@@ -826,6 +836,8 @@ fn inbox(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         Some(GroupBy::Month)
     } else if t.has(&["거래처별", "업체별", "by vendor"]) {
         Some(GroupBy::Vendor)
+    } else if t.has(PROJECT_GROUP_WORDS) {
+        Some(GroupBy::Project)
     } else if t.has(&[
         "유형별",
         "종류별",
@@ -854,6 +866,7 @@ fn inbox(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
             match group {
                 Some(GroupBy::Month) => "월별 폴더로 이동합니다",
                 Some(GroupBy::Vendor) => "거래처별 폴더로 이동합니다",
+                Some(GroupBy::Project) => "프로젝트별 폴더로 이동합니다",
                 Some(_) => "유형별 폴더로 이동합니다",
                 None => "마칩니다",
             }
@@ -865,6 +878,7 @@ fn inbox(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
             match group {
                 Some(GroupBy::Month) => ", then move them into monthly folders",
                 Some(GroupBy::Vendor) => ", then move them into vendor folders",
+                Some(GroupBy::Project) => ", then move them into project folders",
                 Some(_) => ", then move them into type folders",
                 None => "",
             }
@@ -927,6 +941,8 @@ fn organize(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         Some(GroupBy::Vendor)
     } else if t.has(&["유형별", "종류별", "by type"]) {
         Some(GroupBy::DocType)
+    } else if t.has(PROJECT_GROUP_WORDS) {
+        Some(GroupBy::Project)
     } else {
         None
     };
@@ -935,7 +951,7 @@ fn organize(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         let name = w[0].trim_matches(|c: char| "\"'“”‘’".contains(c));
         if compact(w[1]).starts_with("폴더")
             && !name.is_empty()
-            && !t.has(&["월별", "거래처별", "유형별"])
+            && !t.has(&["월별", "거래처별", "유형별", "프로젝트별"])
             && doc_type_label_matches(ctx, name).is_none()
         {
             Some(name.to_string())
@@ -999,6 +1015,8 @@ fn group_word(g: GroupBy, ko: bool) -> &'static str {
         (GroupBy::Month, false) => "monthly",
         (GroupBy::Vendor, true) => "거래처별",
         (GroupBy::Vendor, false) => "vendor",
+        (GroupBy::Project, true) => "프로젝트별",
+        (GroupBy::Project, false) => "project",
         (GroupBy::DocType | GroupBy::None, true) => "유형별",
         (GroupBy::DocType | GroupBy::None, false) => "type",
     }
@@ -1553,7 +1571,12 @@ const DRAFT_VERBS: &[&str] = &[
     "make a",
 ];
 
+/// "프로젝트별로 정리" / "by project": group the folders / sheets / totals by project (plan §6).
+const PROJECT_GROUP_WORDS: &[&str] = &["프로젝트별", "프로젝트 별", "by project", "per project"];
+
 /// Built-in template keywords (kept here so the rules do not depend on the template catalogue).
+/// First match wins, so the specific software documents come before the generic 보고서 / 공문
+/// layouts of 0.1 (hidden from the picker but still reachable by their own words).
 const TEMPLATE_WORDS: &[(crate::generate::TemplateKind, &str, &str, &[&str])] = &[
     (
         crate::generate::TemplateKind::SupplementRequest,
@@ -1562,24 +1585,98 @@ const TEMPLATE_WORDS: &[(crate::generate::TemplateKind, &str, &str, &[&str])] = 
         &["보완요청서", "보완 요청서", "supplement request", "supplement letter"],
     ),
     (
+        crate::generate::TemplateKind::Rfp,
+        "제안요청서",
+        "RFP",
+        &["제안요청서", "제안 요청서", "rfp", "request for proposal"],
+    ),
+    (crate::generate::TemplateKind::Proposal, "제안서", "proposal", &["제안서", "proposal"]),
+    (
+        crate::generate::TemplateKind::Sow,
+        "과업지시서",
+        "statement of work",
+        &["과업지시서", "과업 지시서", "과업내용서", "sow", "statement of work"],
+    ),
+    (
+        crate::generate::TemplateKind::Srs,
+        "요구사항 정의서",
+        "requirements specification",
+        &[
+            "요구사항 정의서",
+            "요구사항정의서",
+            "요구사항 명세서",
+            "요구사항명세서",
+            "srs",
+            "requirements specification",
+        ],
+    ),
+    (
+        crate::generate::TemplateKind::DevContract,
+        "개발 계약서",
+        "development contract",
+        &["개발 계약서", "개발계약서", "용역 계약서", "용역계약서", "계약서", "contract", "agreement"],
+    ),
+    (
+        crate::generate::TemplateKind::Wbs,
+        "WBS",
+        "WBS",
+        &["wbs", "일정표", "작업분류체계", "작업 분류 체계", "work breakdown"],
+    ),
+    (
+        crate::generate::TemplateKind::ProgressReport,
+        "진척 보고서",
+        "progress report",
+        &[
+            "진척 보고서",
+            "진척보고서",
+            "진척 보고",
+            "주간 보고서",
+            "주간보고서",
+            "주간 보고",
+            "월간 보고서",
+            "월간보고서",
+            "월간 보고",
+            "진도 보고",
+            "progress report",
+            "weekly report",
+            "status report",
+        ],
+    ),
+    (
+        crate::generate::TemplateKind::MeetingMinutes,
+        "회의록",
+        "meeting minutes",
+        &["회의록", "meeting minutes", "minutes", "meeting notes"],
+    ),
+    (
+        crate::generate::TemplateKind::TestReport,
+        "테스트 결과서",
+        "test report",
+        &["테스트 결과서", "테스트결과서", "시험 결과서", "시험결과서", "테스트 보고서", "test report", "test results"],
+    ),
+    (
+        crate::generate::TemplateKind::ChangeRequest,
+        "변경요청서",
+        "change request",
+        &["변경요청서", "변경 요청서", "변경요청", "change request"],
+    ),
+    (
+        crate::generate::TemplateKind::Acceptance,
+        "검수확인서",
+        "acceptance certificate",
+        &["검수확인서", "검수 확인서", "검수조서", "완료보고서", "완료 보고서", "acceptance certificate", "acceptance"],
+    ),
+    (
+        crate::generate::TemplateKind::Estimate,
+        "견적서",
+        "estimate",
+        &["견적서", "견적", "estimate", "quotation", "quote"],
+    ),
+    (
         crate::generate::TemplateKind::OfficialLetter,
         "공문",
         "official letter",
-        &["공문", "official letter", "formal letter"],
-    ),
-    (crate::generate::TemplateKind::Quotation, "견적서", "quotation", &["견적서", "견적", "quotation", "quote"]),
-    (
-        crate::generate::TemplateKind::TransactionStatement,
-        "거래명세서",
-        "transaction statement",
-        &["거래명세서", "거래명세표", "거래 명세서", "transaction statement", "statement of account"],
-    ),
-    (crate::generate::TemplateKind::Contract, "계약서", "contract", &["계약서", "contract", "agreement"]),
-    (
-        crate::generate::TemplateKind::Minutes,
-        "회의록",
-        "minutes",
-        &["회의록", "meeting minutes", "minutes", "meeting notes"],
+        &["공문", "협조문", "official letter", "formal letter"],
     ),
     (crate::generate::TemplateKind::Report, "보고서", "report", &["보고서", "리포트", "정산서", "report"]),
 ];
@@ -1714,9 +1811,10 @@ fn draft_document(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         Some((slug, label)) => (Some(slug), label),
         None => (None, t.t("문서", "document").to_string()),
     };
-    // "지난달 영수증 집계 결과로 경비 보고서 초안" → aggregate the type first, then draft from the card.
+    // "지난달 견적서 집계 결과로 보고서 초안" → aggregate the type first, then draft from the card
+    // (unless the type named is the template itself: "견적서 집계로 견적서" is one draft).
     let aggregate_first = sources.iter().any(|s| s == "aggregate")
-        && doc_type(t, ctx).is_some_and(|d| !TEMPLATE_WORDS.iter().any(|(k, ..)| k.as_str() == d.slug));
+        && doc_type(t, ctx).is_some_and(|d| form_ref.as_deref() != Some(d.slug.as_str()));
     let op = Op::DraftDocument {
         form_ref,
         format_description: None,
@@ -2056,7 +2154,12 @@ fn project_ops(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
             .collect();
         let summary =
             t.t(&format!("'{name}' 프로젝트를 만듭니다"), &format!("Create the project '{name}'")).to_string();
-        return Some(mk(Op::CreateProject { name, template, doc_types_required }, Scope::default(), 0.82, summary));
+        return Some(mk(
+            Op::CreateProject { name, template, doc_types_required, start_date: None, end_date: None },
+            Scope::default(),
+            0.82,
+            summary,
+        ));
     }
     None
 }
@@ -2306,7 +2409,7 @@ fn register_form(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     }
     let name = quoted(t.raw);
     Some(mk(
-        Op::RegisterForm { doc_ref, name, doc_type_slug: None },
+        Op::RegisterForm { doc_ref, name, doc_type_slug: None, doc_ids: selection_ids(ctx) },
         Scope::default(),
         0.85,
         t.t("열린 문서를 양식으로 등록합니다(필드 그리드 확인)", "Register the open document as a form (field grid)")

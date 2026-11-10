@@ -423,12 +423,10 @@ export function LibraryPage() {
                 <FileOutput />
                 {t("library.export_selected")}
               </Button>
-              {selectedVisible.length === 1 && (
-                <Button size="sm" variant="ghost" onClick={() => navigate(`/schemas?register=${selectedVisible[0]}`)} data-testid="library-register-form">
-                  <Upload />
-                  {t("library.actions.register_form")}
-                </Button>
-              )}
+              <Button size="sm" variant="ghost" onClick={() => navigate(`/schemas?register=${selectedVisible.join(",")}`)} data-testid="library-register-form">
+                <Upload />
+                {t("library.actions.register_form")}
+              </Button>
               {selectedVisible.length >= 2 && (
                 <Button size="sm" variant="ghost" onClick={() => setMergeOpen(true)} data-testid="library-merge">
                   <Merge />

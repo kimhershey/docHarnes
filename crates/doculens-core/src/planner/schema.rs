@@ -46,7 +46,7 @@ const fn p(name: &'static str, ty: ParamType, required: bool, ko: &'static str, 
 pub const THEMES: &[&str] = &["light", "dark", "system", "high-contrast"];
 pub const LANGS: &[&str] = &["ko", "en"];
 pub const PROFILES: &[&str] = &["accuracy", "balanced", "speed", "fine_print"];
-pub const GROUP_BY: &[&str] = &["month", "vendor", "doc_type", "none"];
+pub const GROUP_BY: &[&str] = &["month", "vendor", "doc_type", "project", "none"];
 pub const EXPORT_FORMATS: &[&str] = &["xlsx", "csv", "jsonl", "md", "pdf_searchable"];
 pub const DOC_STATUSES: &[&str] = &["new", "rendered", "extracted", "reviewed", "archived"];
 pub const DRAFT_OUTPUTS: &[&str] = &["hwpx", "docx", "pdf", "md"];
@@ -189,8 +189,8 @@ pub const OP_SPECS: &[OpSpec] = &[
     OpSpec {
         kind: OpKind::Organize,
         params: &[
-            p("template", ParamType::Str, false, "파일명 템플릿({{year}} {{month}} {{day}} {{doc_type}} {{vendor}} {{total}} {{title}} {{original_name}} {{tags}} {{seq}})", "file-name template"),
-            p("folder_template", ParamType::Str, false, "폴더 템플릿(워크스페이스 상대)", "folder template (workspace-relative)"),
+            p("template", ParamType::Str, false, "파일명 템플릿({{year}} {{month}} {{day}} {{doc_type}} {{vendor}} {{total}} {{title}} {{original_name}} {{tags}} {{seq}} {{project}} {{project_code}})", "file-name template"),
+            p("folder_template", ParamType::Str, false, "폴더 템플릿(워크스페이스 상대; {{project}} = 문서의 프로젝트)", "folder template (workspace-relative; {{project}} = the document's project)"),
             p("group_by", ParamType::Enum(GROUP_BY), false, "폴더 그룹", "folder grouping"),
             p("only_reviewed", ParamType::Bool, false, "검토 완료 문서만(기본 true)", "reviewed documents only (default true)"),
             p("dry_run", ParamType::Bool, false, "미리보기만", "preview only"),
@@ -238,7 +238,7 @@ pub const OP_SPECS: &[OpSpec] = &[
             p("format", ParamType::Enum(EXPORT_FORMATS), true, "형식", "format"),
             p("path", ParamType::Str, false, "저장 경로(워크스페이스 상대, 기본 exports/날짜_유형.확장자)", "output path (workspace-relative)"),
             p("columns", ParamType::StrList, false, "포함할 필드(비우면 전체)", "fields to include (empty = all)"),
-            p("layout", ParamType::Enum(&["sheet_per_type", "single"]), false, "XLSX 시트 구성", "XLSX layout"),
+            p("layout", ParamType::Enum(&["sheet_per_type", "sheet_per_project", "single"]), false, "XLSX 시트 구성(유형별 / 프로젝트별 / 단일)", "XLSX layout (per type / per project / single)"),
             p("include", ParamType::EnumList(&["evidence", "confidence", "status"]), false, "공통 열", "extra columns"),
             p("target", ParamType::Enum(&["fields", "table", "text"]), false, "필드 / 표 / 본문 텍스트", "fields / tables / page text"),
         ],
@@ -265,8 +265,9 @@ pub const OP_SPECS: &[OpSpec] = &[
             p("doc_ref", ParamType::Str, false, "양식 문서 id 또는 current(열린 문서)", "form document id or current"),
             p("name", ParamType::Str, false, "양식 이름", "form name"),
             p("doc_type_slug", ParamType::Str, false, "새 문서 유형 슬러그(선택)", "new document-type slug (optional)"),
+            p("doc_ids", ParamType::StrList, false, "샘플 문서 id 여러 개(선택; 문서 1~N개로 필드를 병합)", "several sample document ids (optional; fields merged over them)"),
         ],
-        desc_ko: "열린/지정 문서를 양식으로 등록(필드 도출 → 확인)",
+        desc_ko: "열린/지정 문서(1~N개)를 양식으로 등록(필드 도출 → 확인)",
         desc_en: "register the open / given document as a form (field grid confirmation)",
     },
     OpSpec {
@@ -295,6 +296,8 @@ pub const OP_SPECS: &[OpSpec] = &[
             p("name", ParamType::Str, true, "프로젝트 이름", "project name"),
             p("template", ParamType::Str, false, "프로젝트 템플릿 이름/ID", "project template name / id"),
             p("doc_types_required", ParamType::StrList, false, "필수 문서 유형 슬러그", "required document-type slugs"),
+            p("start_date", ParamType::Str, false, "시작일(YYYY-MM-DD; 없으면 오늘)", "start date (YYYY-MM-DD; default today)"),
+            p("end_date", ParamType::Str, false, "종료일(YYYY-MM-DD; 없으면 진행중)", "end date (YYYY-MM-DD; none = open-ended)"),
         ],
         desc_ko: "프로젝트(케이스) 만들기",
         desc_en: "create a project (case)",

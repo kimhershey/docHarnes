@@ -97,7 +97,7 @@ pub fn build_context(app: &AppHandle, ui: &UiPlanContext) -> UiResult<PlanContex
     })?;
     let projects = projects
         .iter()
-        .map(|p| ProjectSummary { id: p.id.clone(), name: p.name.clone(), status: p.status.as_str().to_string() })
+        .map(|p| ProjectSummary { id: p.id.clone(), name: p.name.clone(), status: p.phase.as_str().to_string() })
         .collect();
     let doc_types = types
         .iter()
@@ -359,6 +359,9 @@ fn run_spec(app: &AppHandle, job: &Job, spec: &JobSpec, ctl: &JobControl) -> Wor
             crate::generate_bridge::run_draft(app, job, req, project_id.as_deref(), source, ctl, &pctx)
         }
         JobSpec::Maintenance => crate::maintenance::run(app, ctl),
+        JobSpec::SchemaDiscovery { doc_ids, name_hint } => {
+            pipeline_bridge::run_schema_discovery(app, job, doc_ids, name_hint.as_deref(), ctl, &pctx)
+        }
     };
     if state.workspace_generation.load(Ordering::SeqCst) == generation && !state.switching.load(Ordering::SeqCst) {
         knowledge_bridge::auto_index(app);

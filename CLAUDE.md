@@ -81,7 +81,10 @@ user PC: `docs/RUN-GUIDE.md`.
   mod: dry-run diff + apply, journal: `ops_journal` + `journal/ops-YYYYMM.jsonl`, LIFO undo / redo), `aggregate` (sum /
   count / avg / min / max with the reviewed / unreviewed split), `export` (XLSX / CSV / JSONL / MD / searchable PDF),
   `jobs/` (persistent job rows + specs incl. `Draft` / `Maintenance`, priorities / lanes, `JobControl` pause / cancel,
-  `EngineGate` interactive cut-in), `generate/` (P6 §3.13: built-in templates, grammar-safe draft schema, prompts, VLM
+  `EngineGate` interactive cut-in), `generate/` (P6 §3.13: built-in templates — 12 software-development templates + 보완요청서 (slug = pipeline doc type),
+  the 6 generic 0.1 templates kept hidden (`TemplateKind::hidden`; explicit references and saved drafts still work); grammar-safe draft schema
+  (+ `draft_outline` / `draft_section`), token budget `DraftRequest.max_tokens` capped per backend (`settings.generation`) — budgets above
+  ~3,000 tokens run `draft_split` (outline → head call with fields/tables → one call per section, progress callback, partial drafts on cancel), prompts, VLM
   draft + rule-based 보완요청서, reverse validation, HTML / MD / DOCX / HWPX / PDF writers, registered-form filling,
   drafts store under `.doculens/drafts/`), `projects/` (P6 §3.15: projects / templates / rules repo, NL → rule JSON,
   deterministic consistency check with evidence, relation graph, Markdown report, 보완요청서 request builder, inbox

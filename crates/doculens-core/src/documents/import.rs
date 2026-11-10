@@ -415,6 +415,17 @@ pub fn plan(
                     continue;
                 }
             }
+            // A tracked copy in another project folder (projects::copies) is the registered
+            // original under a second path: never a new document.
+            if let Some(copy) = db.with(|c| crate::projects::copies::find_by_rel_path(c, rel))? {
+                let original = db.with(|c| repo::get_document(c, &copy.document_id))?;
+                item.status = ImportItemStatus::Duplicate {
+                    of: copy.document_id.clone(),
+                    of_rel_path: original.map(|d| d.rel_path).unwrap_or(copy.rel_path),
+                };
+                plan.items.push(item);
+                continue;
+            }
         }
         let hash = match blake3_file(&path) {
             Ok(h) => h,
@@ -992,9 +1003,13 @@ pub fn edit_words(
     if start >= end || end > layout.words.len() {
         return Err(CoreError::Invalid(format!("word range {start}..{end} (page has {} words)", layout.words.len())));
     }
-    let text = deps.db.with(|c| repo::get_page(c, &doc.id, page_no))?.and_then(|p| p.text).unwrap_or_default();
+    // The state before the edit (the computed layout is cached by now) goes into the edit history.
+    let before = deps.db.with(|c| repo::page_text_state(c, &doc.id, page_no))?.unwrap_or_default();
+    let text = before.text.clone().unwrap_or_default();
     let new_text = layout::apply_edit(&mut layout, &text, start, end, replacement);
     deps.db.with(|c| repo::set_page_text_and_layout(c, &doc.id, page_no, &new_text, &layout.to_json()))?;
+    let after = deps.db.with(|c| repo::page_text_state(c, &doc.id, page_no))?.unwrap_or_default();
+    record_page_text_edit(deps.db, &doc.id, page_no, "layer", &before, &after)?;
     Ok(layout)
 }
 
@@ -1019,10 +1034,250 @@ pub fn add_words(
         .ok_or_else(|| CoreError::NotFound(format!("page {page_no}")))?;
     let mut layout =
         ensure_layout(deps, doc, page_no)?.unwrap_or_else(|| PageLayout::empty(layout::LayoutSource::Estimated));
+    let before = deps.db.with(|c| repo::page_text_state(c, &doc.id, page_no))?.unwrap_or_default();
     let text = page.text.unwrap_or_default();
     let new_text = layout::add_words(&mut layout, &text, bbox, new_text);
     deps.db.with(|c| repo::set_page_text_and_layout(c, &doc.id, page_no, &new_text, &layout.to_json()))?;
+    let after = deps.db.with(|c| repo::page_text_state(c, &doc.id, page_no))?.unwrap_or_default();
+    record_page_text_edit(deps.db, &doc.id, page_no, "add", &before, &after)?;
     Ok(layout)
+}
+
+// ---------------------------------------------------------------------------
+// Page text edit history (0.3.0 item 7): undo / redo of corrections, scoped to the page
+// ---------------------------------------------------------------------------
+
+/// Corrections kept per page; older ones (with their undo bookkeeping) are dropped on the next edit.
+pub const PAGE_TEXT_HISTORY_CAP: usize = 50;
+/// Longest "before" / "after" excerpt shown for an edit.
+const CHANGE_SUMMARY_CHARS: usize = 60;
+
+/// One correction of a page as the viewer lists it ("글자 수정"); `undone` after Ctrl+Z.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PageTextEdit {
+    pub id: i64,
+    pub page_no: u32,
+    /// `layer` (words edited on the image), `add` (words added over an empty spot), `manual` (whole text).
+    pub source: String,
+    pub edited_at: DateTime<Utc>,
+    pub undone: bool,
+    /// The words that changed (common head and tail stripped).
+    pub before: String,
+    pub after: String,
+}
+
+/// The corrections of a page (or of a document), newest first, plus whether the page can undo / redo.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct PageTextHistory {
+    pub entries: Vec<PageTextEdit>,
+    pub can_undo: bool,
+    pub can_redo: bool,
+}
+
+/// Result of an undo / redo / revert: the page as it is now.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PageTextRevert {
+    pub page_no: u32,
+    pub text: Option<String>,
+    pub text_source: Option<String>,
+    pub layout: Option<PageLayout>,
+    pub history: PageTextHistory,
+}
+
+/// The corrections of a page with their state: an edit is undone when the latest revert / redo row
+/// that targets it is a revert. Undo takes the newest applied edit and redo the oldest undone one, so
+/// the applied edits always form a prefix (the cursor of a classic undo stack).
+fn edit_states(rows: &[repo::PageTextHistoryRow]) -> Vec<(&repo::PageTextHistoryRow, bool)> {
+    rows.iter()
+        .filter(|r| r.kind == "edit")
+        .map(|e| {
+            let undone = rows
+                .iter()
+                .rev()
+                .find(|b| b.kind != "edit" && b.target_id == Some(e.id))
+                .is_some_and(|b| b.kind == "revert");
+            (e, undone)
+        })
+        .collect()
+}
+
+/// The words that differ between two page texts (common head and tail stripped, clipped).
+fn change_summary(before: Option<&str>, after: Option<&str>) -> (String, String) {
+    let a: Vec<&str> = before.unwrap_or("").split_whitespace().collect();
+    let b: Vec<&str> = after.unwrap_or("").split_whitespace().collect();
+    let mut head = 0;
+    while head < a.len() && head < b.len() && a[head] == b[head] {
+        head += 1;
+    }
+    let mut tail = 0;
+    while tail < a.len() - head && tail < b.len() - head && a[a.len() - 1 - tail] == b[b.len() - 1 - tail] {
+        tail += 1;
+    }
+    let clip = |words: &[&str]| -> String {
+        let joined = words.join(" ");
+        if joined.chars().count() > CHANGE_SUMMARY_CHARS {
+            format!("{}…", joined.chars().take(CHANGE_SUMMARY_CHARS).collect::<String>())
+        } else {
+            joined
+        }
+    };
+    (clip(&a[head..a.len() - tail]), clip(&b[head..b.len() - tail]))
+}
+
+fn history_view(rows: &[repo::PageTextHistoryRow], page_no: Option<u32>) -> PageTextHistory {
+    let states = edit_states(rows);
+    let entries = states
+        .iter()
+        .rev()
+        .map(|(e, undone)| {
+            let (before, after) = change_summary(e.previous.text.as_deref(), e.new.text.as_deref());
+            PageTextEdit {
+                id: e.id,
+                page_no: e.page_no,
+                source: e.source.clone(),
+                edited_at: e.edited_at,
+                undone: *undone,
+                before,
+                after,
+            }
+        })
+        .collect();
+    // Undo / redo are per page: a whole-document listing only enumerates.
+    let (can_undo, can_redo) = match page_no {
+        Some(_) => (states.iter().any(|(_, u)| !*u), states.iter().any(|(_, u)| *u)),
+        None => (false, false),
+    };
+    PageTextHistory { entries, can_undo, can_redo }
+}
+
+/// The corrections of a page (`page_no`) or of the whole document, newest first.
+pub fn page_text_history(db: &Db, doc_id: &str, page_no: Option<u32>) -> Result<PageTextHistory> {
+    let rows = db.with(|c| repo::page_text_history(c, doc_id, page_no))?;
+    Ok(history_view(&rows, page_no))
+}
+
+/// Records a correction. A new edit while earlier ones are undone drops that redo branch (as every
+/// editor does), and the oldest edits beyond [`PAGE_TEXT_HISTORY_CAP`] go with their bookkeeping.
+fn record_page_text_edit(
+    db: &Db,
+    doc_id: &str,
+    page_no: u32,
+    source: &str,
+    before: &repo::PageTextState,
+    after: &repo::PageTextState,
+) -> Result<()> {
+    if before == after {
+        return Ok(());
+    }
+    db.with(|c| {
+        let rows = repo::page_text_history(c, doc_id, Some(page_no))?;
+        let states = edit_states(&rows);
+        let mut gone: Vec<i64> = states.iter().filter(|(_, undone)| *undone).map(|(e, _)| e.id).collect();
+        let kept = states.len() - gone.len();
+        if kept + 1 > PAGE_TEXT_HISTORY_CAP {
+            let excess = kept + 1 - PAGE_TEXT_HISTORY_CAP;
+            gone.extend(states.iter().filter(|(_, undone)| !*undone).take(excess).map(|(e, _)| e.id));
+        }
+        let drop: Vec<i64> = rows
+            .iter()
+            .filter(|r| gone.contains(&r.id) || r.target_id.is_some_and(|t| gone.contains(&t)))
+            .map(|r| r.id)
+            .collect();
+        repo::delete_page_text_history(c, &drop)?;
+        repo::insert_page_text_history(c, doc_id, page_no, "edit", source, None, before, after)?;
+        Ok(())
+    })
+}
+
+/// Saves a replacement of a page's whole text (viewer "텍스트 입력") and records it in the edit
+/// history. Returns false when the page does not exist.
+pub fn set_page_text(db: &Db, doc_id: &str, page_no: u32, text: &str) -> Result<bool> {
+    let Some(before) = db.with(|c| repo::page_text_state(c, doc_id, page_no))? else {
+        return Ok(false);
+    };
+    db.with(|c| repo::set_page_text(c, doc_id, page_no, text))?;
+    let after = db.with(|c| repo::page_text_state(c, doc_id, page_no))?.unwrap_or_default();
+    record_page_text_edit(db, doc_id, page_no, "manual", &before, &after)?;
+    Ok(true)
+}
+
+/// Restores the state before (`redo = false`) or after (`redo = true`) a correction and records the move.
+fn move_page_text(
+    deps: &ImportDeps<'_>,
+    doc_id: &str,
+    page_no: u32,
+    target: &repo::PageTextHistoryRow,
+    redo: bool,
+) -> Result<()> {
+    let state = if redo { &target.new } else { &target.previous };
+    deps.db.with(|c| {
+        let current = repo::page_text_state(c, doc_id, page_no)?.unwrap_or_default();
+        repo::restore_page_text_state(c, doc_id, page_no, state)?;
+        repo::insert_page_text_history(
+            c,
+            doc_id,
+            page_no,
+            if redo { "redo" } else { "revert" },
+            &target.source,
+            Some(target.id),
+            &current,
+            state,
+        )?;
+        Ok(())
+    })
+}
+
+fn revert_view(deps: &ImportDeps<'_>, doc: &DocumentRecord, page_no: u32) -> Result<PageTextRevert> {
+    let state = deps.db.with(|c| repo::page_text_state(c, &doc.id, page_no))?.unwrap_or_default();
+    let layout = match state.layout.as_deref().and_then(PageLayout::from_json) {
+        Some(l) => Some(l),
+        None => ensure_layout(deps, doc, page_no)?,
+    };
+    let history = page_text_history(deps.db, &doc.id, Some(page_no))?;
+    Ok(PageTextRevert { page_no, text: state.text, text_source: state.source, layout, history })
+}
+
+/// Ctrl+Z in the viewer: takes back the newest applied correction of the page (text, layout and
+/// source as they were). `None` when the page has nothing to undo.
+pub fn undo_page_text(deps: &ImportDeps<'_>, doc: &DocumentRecord, page_no: u32) -> Result<Option<PageTextRevert>> {
+    let rows = deps.db.with(|c| repo::page_text_history(c, &doc.id, Some(page_no)))?;
+    let Some(target) = edit_states(&rows).iter().rev().find(|(_, undone)| !*undone).map(|(e, _)| (*e).clone()) else {
+        return Ok(None);
+    };
+    move_page_text(deps, &doc.id, page_no, &target, false)?;
+    Ok(Some(revert_view(deps, doc, page_no)?))
+}
+
+/// Ctrl+Shift+Z / Ctrl+Y: re-applies the oldest undone correction of the page.
+pub fn redo_page_text(deps: &ImportDeps<'_>, doc: &DocumentRecord, page_no: u32) -> Result<Option<PageTextRevert>> {
+    let rows = deps.db.with(|c| repo::page_text_history(c, &doc.id, Some(page_no)))?;
+    let Some(target) = edit_states(&rows).iter().find(|(_, undone)| *undone).map(|(e, _)| (*e).clone()) else {
+        return Ok(None);
+    };
+    move_page_text(deps, &doc.id, page_no, &target, true)?;
+    Ok(Some(revert_view(deps, doc, page_no)?))
+}
+
+/// 이력 tab "이 수정 되돌리기": undoes the correction `history_id` and every later one of its page,
+/// so the page reads as it did before that correction.
+pub fn revert_page_text_to(deps: &ImportDeps<'_>, doc: &DocumentRecord, history_id: i64) -> Result<PageTextRevert> {
+    let rows = deps.db.with(|c| repo::page_text_history(c, &doc.id, None))?;
+    let target = rows
+        .iter()
+        .find(|r| r.id == history_id && r.kind == "edit")
+        .ok_or_else(|| CoreError::NotFound(format!("text edit {history_id}")))?;
+    let page_no = target.page_no;
+    let page_rows: Vec<repo::PageTextHistoryRow> = rows.iter().filter(|r| r.page_no == page_no).cloned().collect();
+    let states = edit_states(&page_rows);
+    if states.iter().any(|(e, undone)| e.id == history_id && *undone) {
+        return Err(CoreError::Invalid(format!("text edit {history_id} is already undone")));
+    }
+    let to_undo: Vec<repo::PageTextHistoryRow> =
+        states.iter().rev().filter(|(e, undone)| !*undone && e.id >= history_id).map(|(e, _)| (*e).clone()).collect();
+    for e in &to_undo {
+        move_page_text(deps, &doc.id, page_no, e, false)?;
+    }
+    revert_view(deps, doc, page_no)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -1054,6 +1309,12 @@ pub fn rescan(
         if let Err(e) = rescan_one(deps, &doc, cancel, &mut report, on_document) {
             log::debug!("rescan: document {} failed: {e}", doc.id);
             report.failed.push((doc.id.clone(), e.to_string()));
+        }
+    }
+    // Tracked copies of shared project documents (projects::copies): missing / edited / stale.
+    if !cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        if let Err(e) = crate::projects::copies::rescan(deps.db, deps.paths) {
+            log::debug!("rescan: copies failed: {e}");
         }
     }
     Ok(report)
@@ -1164,6 +1425,10 @@ pub fn delete_document(deps: &ImportDeps<'_>, id: &str, keep_file: bool) -> Resu
     }
     DocumentCache::for_document(deps.paths, id).remove_all();
     crate::pipeline::run::remove_mirror(deps.paths, id);
+    // Copies in other project folders go with the original (projects::copies).
+    if let Err(e) = crate::projects::copies::remove_all_for_document(deps.db, deps.paths, id) {
+        log::debug!("copies of {id} not removed: {e}");
+    }
     deps.db.with(|c| repo::delete_document(c, id))?;
     Ok(moved_to)
 }
@@ -1281,6 +1546,116 @@ mod tests {
         let page = e.db.with(|c| repo::get_page(c, &id, 1)).unwrap().unwrap();
         assert_eq!(page.text_source.as_deref(), Some("manual"));
         assert!(e.db.with(|c| repo::page_layout_json(c, &id, 1)).unwrap().is_some());
+    }
+
+    /// A registered document with one text page (no image, no renderer needed).
+    fn text_doc(e: &Env, id: &str, text: &str) -> DocumentRecord {
+        e.db.with(|c| {
+            repo::insert_document(
+                c,
+                &NewDocument {
+                    id: id.into(),
+                    rel_path: format!("documents/{id}.pdf"),
+                    original_name: format!("{id}.pdf"),
+                    source_kind: SourceKind::Pdf,
+                    content_hash: format!("hash-{id}"),
+                    size_bytes: 10,
+                    file_modified_at: None,
+                    role: DocumentRole::Work,
+                    import_batch_id: None,
+                },
+            )?;
+            repo::replace_pages(
+                c,
+                id,
+                &[NewPage { page_no: 1, text: Some(text.into()), ..Default::default() }],
+                None,
+                false,
+                None,
+            )?;
+            repo::set_status(c, id, DocumentStatus::Rendered, None)
+        })
+        .unwrap();
+        e.db.with(|c| repo::get_document(c, id)).unwrap().unwrap()
+    }
+
+    #[test]
+    fn page_text_edits_are_recorded_undone_redone_truncated_and_capped() {
+        let e = env();
+        let d = deps(&e, None);
+        let doc = text_doc(&e, "h1", "Hello DocuLens memo");
+        let page = || e.db.with(|c| repo::get_page(c, "h1", 1)).unwrap().unwrap();
+        assert_eq!(page().text_source.as_deref(), Some("layer"));
+        // A whole-text replacement records the state before / after and the words that changed.
+        assert!(set_page_text(&e.db, "h1", 1, "Hello World memo").unwrap());
+        let h = page_text_history(&e.db, "h1", Some(1)).unwrap();
+        assert_eq!(h.entries.len(), 1);
+        let first = &h.entries[0];
+        assert_eq!(
+            (first.before.as_str(), first.after.as_str(), first.source.as_str()),
+            ("DocuLens", "World", "manual")
+        );
+        assert!(h.can_undo && !h.can_redo);
+        // Saving the same text again records nothing; an unknown page is false.
+        set_page_text(&e.db, "h1", 1, "Hello World memo").unwrap();
+        assert_eq!(page_text_history(&e.db, "h1", Some(1)).unwrap().entries.len(), 1);
+        assert!(!set_page_text(&e.db, "h1", 9, "x").unwrap());
+        // Words added on the image (no page image here → an estimated layout) are a second correction.
+        add_words(&d, &doc, 1, (0.1, 0.5, 0.3, 0.03), "추가 메모").unwrap();
+        let h = page_text_history(&e.db, "h1", Some(1)).unwrap();
+        assert_eq!(h.entries.len(), 2);
+        assert_eq!((h.entries[0].source.as_str(), h.entries[0].after.as_str()), ("add", "추가 메모"));
+        // Undo puts text, layout and source back; the entry is marked undone and redo opens.
+        let r = undo_page_text(&d, &doc, 1).unwrap().unwrap();
+        assert_eq!(r.text.as_deref(), Some("Hello World memo"));
+        assert_eq!(r.text_source.as_deref(), Some("manual"));
+        assert!(r.history.entries[0].undone && !r.history.entries[1].undone);
+        assert!(r.history.can_undo && r.history.can_redo);
+        let r = redo_page_text(&d, &doc, 1).unwrap().unwrap();
+        assert!(r.text.as_deref().unwrap().contains("추가 메모"), "{:?}", r.text);
+        assert!(r.layout.as_ref().is_some_and(|l| l.words.iter().any(|w| w.t == "추가" && w.edited)));
+        assert!(!r.history.can_redo);
+        // Two undos → the original text layer and its source are back; nothing more to undo.
+        undo_page_text(&d, &doc, 1).unwrap().unwrap();
+        let r = undo_page_text(&d, &doc, 1).unwrap().unwrap();
+        assert_eq!((r.text.as_deref(), r.text_source.as_deref()), (Some("Hello DocuLens memo"), Some("layer")));
+        assert!(!r.history.can_undo && r.history.can_redo);
+        assert!(undo_page_text(&d, &doc, 1).unwrap().is_none());
+        assert_eq!(page().text.as_deref(), Some("Hello DocuLens memo"));
+        // A new correction while others are undone drops the redo branch.
+        set_page_text(&e.db, "h1", 1, "Hello Again memo").unwrap();
+        let h = page_text_history(&e.db, "h1", Some(1)).unwrap();
+        assert_eq!(h.entries.len(), 1);
+        assert_eq!(h.entries[0].after, "Again");
+        assert!(!h.can_redo && redo_page_text(&d, &doc, 1).unwrap().is_none());
+        // Reverting to a correction undoes it and every later one of the page.
+        set_page_text(&e.db, "h1", 1, "Hello Again memo 2").unwrap();
+        set_page_text(&e.db, "h1", 1, "Hello Again memo 3").unwrap();
+        let h = page_text_history(&e.db, "h1", Some(1)).unwrap();
+        assert_eq!(h.entries.len(), 3);
+        let second = h.entries[1].id;
+        let r = revert_page_text_to(&d, &doc, second).unwrap();
+        assert_eq!(r.text.as_deref(), Some("Hello Again memo"));
+        assert_eq!(r.history.entries.iter().filter(|x| x.undone).count(), 2);
+        assert!(matches!(revert_page_text_to(&d, &doc, second), Err(CoreError::Invalid(_))));
+        assert!(matches!(revert_page_text_to(&d, &doc, 9_999), Err(CoreError::NotFound(_))));
+        // The cap keeps the newest 50 corrections (and drops the undone ones first).
+        for i in 0..60 {
+            set_page_text(&e.db, "h1", 1, &format!("Hello cap {i}")).unwrap();
+        }
+        let h = page_text_history(&e.db, "h1", Some(1)).unwrap();
+        assert_eq!(h.entries.len(), PAGE_TEXT_HISTORY_CAP);
+        assert_eq!((h.entries[0].before.as_str(), h.entries[0].after.as_str()), ("58", "59"));
+        assert!(h.entries.iter().all(|x| !x.undone));
+        // The whole-document listing enumerates without undo / redo; the purge empties old rows.
+        let all = page_text_history(&e.db, "h1", None).unwrap();
+        assert_eq!(all.entries.len(), PAGE_TEXT_HISTORY_CAP);
+        assert!(!all.can_undo && !all.can_redo);
+        let purged =
+            e.db.with(|c| repo::purge_page_text_history_before(c, &(Utc::now() + chrono::Duration::days(1)))).unwrap();
+        assert!(purged >= PAGE_TEXT_HISTORY_CAP);
+        assert!(page_text_history(&e.db, "h1", Some(1)).unwrap().entries.is_empty());
+        assert_eq!(page().text.as_deref(), Some("Hello cap 59"), "the purge keeps the page as it is");
     }
 
     #[test]
@@ -1427,18 +1802,7 @@ mod tests {
         let e = env();
         let ext = external_dir(&e);
         RgbImage::from_pixel(120, 80, Rgb([200, 200, 200])).save(ext.join("scan.jpg")).unwrap();
-        let input = crate::projects::ProjectInput {
-            id: None,
-            name: "드롭 프로젝트".into(),
-            template_id: None,
-            status: None,
-            intake_no: None,
-            owner: None,
-            due_date: None,
-            notes: None,
-            keywords: None,
-            inbox_folder: None,
-        };
+        let input = crate::projects::ProjectInput { name: "드롭 프로젝트".into(), ..Default::default() };
         let project = e.db.with(|c| crate::projects::repo::save_project(c, &input)).unwrap();
         let options = ImportOptions { project_id: Some(project.id.clone()), ..ImportOptions::default() };
         let d = deps(&e, None);

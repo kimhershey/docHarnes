@@ -64,7 +64,16 @@ export function describeJobDetail(job: Job, t: TFunction): string | null {
   if (d === "loading model") return t("jobs.detail.loading_model");
   // -- P6 draft job (`generate_bridge::run_draft`): "loading model" above, then "drafting"; the finishing
   // detail ("<title> · 필드 n · 검토 항목 m") and the P7 maintenance summary are already localised.
-  if (d === "drafting") return t("jobs.detail.drafting");
+  if (d === "drafting" || d === "finishing") return t("jobs.detail.drafting");
+  // Split draft (0.3.0): "outline", then "section i/n".
+  if (d === "outline") return t("jobs.detail.draft_outline");
+  m = d.match(/^section (\d+)\/(\d+)$/);
+  if (m) return t("jobs.detail.draft_section", { index: Number(m[1]), total: Number(m[2]) });
+  // -- 0.3.0 §2 schema discovery (`pipeline_bridge::run_schema_discovery`): per-document / per-page progress, then the merge.
+  m = d.match(/^(.+) · discover(?: \((\d+)\/(\d+)\))?$/);
+  if (m) return t("jobs.detail.discovering", { name: m[1], page: m[2] ? ` (${m[2]}/${m[3]})` : "" });
+  m = d.match(/^merged (\d+) fields from (\d+) documents$/);
+  if (m) return t("jobs.detail.discovery_summary", { fields: Number(m[1]), docs: Number(m[2]) });
   // -- persistent runner (P5, `planner_bridge.rs`) --
   m = d.match(/^plan (\d+)\/(\d+) · (.*)$/);
   if (m) return t("jobs.detail.plan_summary", { done: Number(m[1]), total: Number(m[2]), summary: m[3] });
@@ -110,6 +119,8 @@ const ERROR_CODES: Record<string, string> = {
   project_not_found: "jobs.error.project_not_found",
   no_check_run: "jobs.error.no_check_run",
   no_findings: "jobs.error.no_findings",
+  document_not_found: "jobs.error.document_not_found",
+  no_fields: "jobs.error.no_fields",
 };
 
 function describeErrorText(raw: string, t: TFunction): string {

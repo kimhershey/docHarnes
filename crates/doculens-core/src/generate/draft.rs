@@ -31,7 +31,7 @@ use crate::pipeline::prompts::{truncate, Stage};
 use crate::pipeline::repo as prepo;
 use crate::pipeline::schema::{SchemaRecord, SchemaSource};
 use crate::pipeline::validate::{normalize_date, value_text};
-use crate::pipeline::vlm::Vlm;
+use crate::pipeline::vlm::{Reply, Vlm};
 use crate::settings::Language;
 
 use super::prompts::{self, SourceBlock};
@@ -111,7 +111,7 @@ pub fn resolve_spec(db: &Db, req: &DraftRequest) -> Result<TemplateSpec> {
         if let Some(rec) = find_schema(db, r, false)? {
             return Ok(TemplateSpec::from_schema(&rec));
         }
-        if let Some(k) = templates::match_keywords(r) {
+        if let Some(k) = templates::match_keywords_any(r) {
             return Ok(TemplateSpec::builtin(k));
         }
         if let Some(rec) = find_schema(db, r, true)? {
@@ -522,7 +522,33 @@ fn parse_reply(v: &Value, spec: &TemplateSpec, req: &DraftRequest, sources: &[So
             rows,
         });
     }
-    for b in v["body"].as_array().into_iter().flatten().take(schema::MAX_BODY_BLOCKS) {
+    let refs: Vec<&Source> = sources.iter().collect();
+    d.body = parse_body(&v["body"], &refs);
+    d.notes = v["notes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(str_of)
+        .filter(|s| !s.is_empty())
+        .take(schema::MAX_NOTES)
+        .collect();
+    d.references = references(sources);
+    finish_draft(&mut d, spec, req);
+    d
+}
+
+/// Body blocks of a reply (`body` of the one-shot draft, `blocks` of a section call). `sources` are
+/// numbered from 1 in `source_index`; headings come out at level 2.
+fn parse_body(v: &Value, sources: &[&Source]) -> Vec<DraftBlock> {
+    let cite = |idx: &Value| -> Option<DraftCitation> {
+        let i = idx.as_u64()?;
+        if i == 0 {
+            return None;
+        }
+        sources.get(i as usize - 1).map(|s| s.citation.clone())
+    };
+    let mut body = Vec::new();
+    for b in v.as_array().into_iter().flatten().take(schema::MAX_BODY_BLOCKS) {
         let kind = b.get("kind").and_then(Value::as_str).unwrap_or("paragraph");
         let text = str_of(b.get("text").unwrap_or(&Value::Null));
         let items: Vec<String> = b
@@ -536,7 +562,7 @@ fn parse_reply(v: &Value, spec: &TemplateSpec, req: &DraftRequest, sources: &[So
         match kind {
             "heading" => {
                 if !text.is_empty() {
-                    d.body.push(DraftBlock::Heading { level: 2, text });
+                    body.push(DraftBlock::Heading { level: 2, text });
                 }
             }
             "list" => {
@@ -549,12 +575,12 @@ fn parse_reply(v: &Value, spec: &TemplateSpec, req: &DraftRequest, sources: &[So
                     items
                 };
                 if !items.is_empty() {
-                    d.body.push(DraftBlock::List { items, ordered: false });
+                    body.push(DraftBlock::List { items, ordered: false });
                 }
             }
             _ => {
                 if !text.is_empty() {
-                    d.body.push(DraftBlock::Paragraph {
+                    body.push(DraftBlock::Paragraph {
                         text,
                         source: cite(b.get("source_index").unwrap_or(&Value::Null)),
                     });
@@ -562,17 +588,7 @@ fn parse_reply(v: &Value, spec: &TemplateSpec, req: &DraftRequest, sources: &[So
             }
         }
     }
-    d.notes = v["notes"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(str_of)
-        .filter(|s| !s.is_empty())
-        .take(schema::MAX_NOTES)
-        .collect();
-    d.references = references(sources);
-    finish_draft(&mut d, spec, req);
-    d
+    body
 }
 
 /// Distinct citations of the offered sources (the "참고 문서" panel).
@@ -1000,27 +1016,14 @@ pub fn draft(deps: &GenerateDeps<'_>, req: &DraftRequest) -> Result<DraftOutcome
                 completion_tokens: 0,
                 elapsed_ms: elapsed(&started),
                 source: "rules".into(),
+                sections: 0,
             });
         }
         return Err(CoreError::EngineNotRunning);
     };
 
     let prompt_ko = req.language == Language::Ko;
-    let reply_tokens = prompts::max_tokens(req.length);
-    let budget = prompts::source_budget(vlm.ctx, reply_tokens);
-    let blocks: Vec<SourceBlock<'_>> = sources
-        .iter()
-        .enumerate()
-        .map(|(i, s)| SourceBlock {
-            index: i as u32 + 1,
-            kind: &s.citation.source,
-            title: &s.citation.title,
-            text: &s.text,
-        })
-        .collect();
-    let user_text = prompts::user(&spec, req, &blocks, budget, prompt_ko);
-    let system = json!({ "role": "system", "content": prompts::system(prompt_ko) });
-    let schema_v = schema::json_schema(&spec);
+    let reply_tokens = prompts::reply_budget(req);
     // Stage::NlSchema (text-only JSON stage) with the drafting temperature — see `prompts`.
     let model = Vlm {
         chat: vlm.chat,
@@ -1031,33 +1034,16 @@ pub fn draft(deps: &GenerateDeps<'_>, req: &DraftRequest) -> Result<DraftOutcome
         seed: vlm.seed,
         ctx: vlm.ctx,
     };
-    let messages = vec![system.clone(), user_message(&user_text)];
+    if prompts::split_needed(reply_tokens, vlm.ctx) {
+        return draft_split(deps, &model, &spec, req, &sources, reply_tokens, notes, started);
+    }
+    let budget = prompts::source_budget(vlm.ctx, reply_tokens);
+    let blocks = source_blocks(&sources);
+    let user_text = prompts::user(&spec, req, &blocks, budget, prompt_ko);
+    let system = json!({ "role": "system", "content": prompts::system(prompt_ko) });
+    let schema_v = schema::json_schema(&spec);
     let (value, reply) =
-        match model.call_json(Stage::NlSchema, &messages, schema::SCHEMA_NAME, &schema_v, Some(reply_tokens)) {
-            Ok(v) => v,
-            Err(e) if is_json_failure(&e) => {
-                log::warn!("draft: first reply unusable ({e}); retrying with a reminder");
-                let retry = Vlm {
-                    chat: vlm.chat,
-                    model: vlm.model.clone(),
-                    profile: vlm.profile,
-                    cancel: vlm.cancel.or(deps.cancel),
-                    temperature: model.temperature.map(|t| (t + 0.1).min(0.5)),
-                    seed: Some(vlm.seed.unwrap_or(7) + 1),
-                    ctx: vlm.ctx,
-                };
-                let messages =
-                    vec![system, user_message(&format!("{user_text}{}", prompts::retry_reminder(prompt_ko)))];
-                retry.call_json(
-                    Stage::NlSchema,
-                    &messages,
-                    schema::SCHEMA_NAME,
-                    &schema_v,
-                    Some(reply_tokens * 3 / 2),
-                )?
-            }
-            Err(e) => return Err(e),
-        };
+        call_json_with_retry(&model, &system, &user_text, schema::SCHEMA_NAME, &schema_v, reply_tokens, prompt_ko)?;
     let mut d = parse_reply(&value, &spec, req, &sources);
     d.model = Some(model.model.clone());
     d.notes.extend(notes);
@@ -1078,5 +1064,335 @@ pub fn draft(deps: &GenerateDeps<'_>, req: &DraftRequest) -> Result<DraftOutcome
         completion_tokens: reply.usage.completion,
         elapsed_ms: elapsed(&started),
         source: "model".into(),
+        sections: 1,
     })
+}
+
+/// Numbered source blocks as the prompt shows them.
+fn source_blocks<'a>(sources: &'a [Source]) -> Vec<SourceBlock<'a>> {
+    sources
+        .iter()
+        .enumerate()
+        .map(|(i, s)| SourceBlock {
+            index: i as u32 + 1,
+            kind: &s.citation.source,
+            title: &s.citation.title,
+            text: &s.text,
+        })
+        .collect()
+}
+
+/// One JSON stage call; an unparseable first reply is retried once with a reminder, other sampling and
+/// a ×1.5 budget.
+fn call_json_with_retry(
+    model: &Vlm<'_>,
+    system: &Value,
+    user_text: &str,
+    name: &str,
+    schema_v: &Value,
+    budget: u32,
+    ko: bool,
+) -> Result<(Value, Reply)> {
+    let messages = vec![system.clone(), user_message(user_text)];
+    match model.call_json(Stage::NlSchema, &messages, name, schema_v, Some(budget)) {
+        Ok(v) => Ok(v),
+        Err(e) if is_json_failure(&e) => {
+            log::warn!("draft ({name}): first reply unusable ({e}); retrying with a reminder");
+            let retry = Vlm {
+                chat: model.chat,
+                model: model.model.clone(),
+                profile: model.profile,
+                cancel: model.cancel,
+                temperature: model.temperature.map(|t| (t + 0.1).min(0.5)),
+                seed: Some(model.seed.unwrap_or(7) + 1),
+                ctx: model.ctx,
+            };
+            let messages = vec![system.clone(), user_message(&format!("{user_text}{}", prompts::retry_reminder(ko)))];
+            retry.call_json(Stage::NlSchema, &messages, name, schema_v, Some(budget * 3 / 2))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Tail of the body written so far (paragraph and list text), for the next section's prompt.
+fn previous_summary(body: &[DraftBlock]) -> String {
+    let mut text = String::new();
+    for b in body {
+        match b {
+            DraftBlock::Heading { text: t, .. } => {
+                text.push_str("\n## ");
+                text.push_str(t);
+                text.push('\n');
+            }
+            DraftBlock::Paragraph { text: t, .. } => {
+                text.push_str(t);
+                text.push(' ');
+            }
+            DraftBlock::List { items, .. } => {
+                text.push_str(&items.join("; "));
+                text.push(' ');
+            }
+            DraftBlock::TableRef { .. } => {}
+        }
+    }
+    let count = text.chars().count();
+    if count > prompts::PREVIOUS_SUMMARY_CHARS {
+        let skip = count - prompts::PREVIOUS_SUMMARY_CHARS;
+        format!("…{}", text.chars().skip(skip).collect::<String>().trim())
+    } else {
+        text.trim().to_string()
+    }
+}
+
+/// Sections of the outline reply (2–12 entries), or `None` when the model gave fewer.
+fn parse_outline(v: &Value) -> Option<Vec<prompts::SectionPlan>> {
+    let plans: Vec<prompts::SectionPlan> = v["sections"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|x| {
+            let heading = str_of(x.get("heading").unwrap_or(&Value::Null));
+            if heading.is_empty() {
+                return None;
+            }
+            let weight = x.get("weight").and_then(Value::as_u64).unwrap_or(1).clamp(1, 10) as u32;
+            Some(prompts::SectionPlan { heading, weight, notes: str_of(x.get("notes").unwrap_or(&Value::Null)) })
+        })
+        .take(schema::MAX_OUTLINE_SECTIONS)
+        .collect();
+    (plans.len() >= 2).then_some(plans)
+}
+
+/// The outline → sections flow (0.3.0 item 4): fields, tables and the first section come from one call,
+/// every further section from its own call with the settled facts and the tail of the previous text.
+/// Cancellation between sections keeps what was written (the draft says so in its notes).
+#[allow(clippy::too_many_arguments)]
+fn draft_split(
+    deps: &GenerateDeps<'_>,
+    model: &Vlm<'_>,
+    spec: &TemplateSpec,
+    req: &DraftRequest,
+    sources: &[Source],
+    total: u32,
+    mut notes: Vec<String>,
+    started: Instant,
+) -> Result<DraftOutcome> {
+    let ko = deps.ko();
+    let prompt_ko = req.language == Language::Ko;
+    let report = |frac: f32, detail: &str| {
+        if let Some(p) = deps.progress {
+            p(frac, detail);
+        }
+    };
+    let system = json!({ "role": "system", "content": prompts::system(prompt_ko) });
+    let blocks = source_blocks(sources);
+    let (mut prompt_tokens, mut completion_tokens) = (0u64, 0u64);
+
+    // 1. Section plan: the template's sections, else an outline call, else the generic outline.
+    let template_sections = spec.sections(prompt_ko);
+    let mut plans: Vec<prompts::SectionPlan> = if template_sections.is_empty() {
+        report(0.22, "outline");
+        let budget = prompts::source_budget(model.ctx, prompts::OUTLINE_TOKENS);
+        let text = prompts::outline_user(spec, req, &blocks, budget, total, prompt_ko);
+        match call_json_with_retry(
+            model,
+            &system,
+            &text,
+            schema::OUTLINE_SCHEMA_NAME,
+            &schema::outline_schema(),
+            prompts::OUTLINE_TOKENS,
+            prompt_ko,
+        ) {
+            Ok((v, reply)) => {
+                prompt_tokens += reply.usage.prompt;
+                completion_tokens += reply.usage.completion;
+                parse_outline(&v).unwrap_or_else(|| prompts::fallback_outline(prompt_ko))
+            }
+            Err(e) if is_json_failure(&e) => prompts::fallback_outline(prompt_ko),
+            Err(e) => return Err(e),
+        }
+    } else {
+        template_sections
+            .iter()
+            .map(|h| prompts::SectionPlan { heading: h.clone(), weight: 1, notes: String::new() })
+            .collect()
+    };
+    if plans.len() < 2 {
+        plans = prompts::fallback_outline(prompt_ko);
+    }
+    let n = plans.len();
+    let weights_sum: u32 = plans.iter().map(|p| p.weight.max(1)).sum();
+
+    // 2. Head call: fields, tables and the first section.
+    let first_budget = prompts::section_budget(total, plans[0].weight, weights_sum);
+    let head_budget = first_budget + prompts::HEAD_EXTRA_TOKENS;
+    report(0.25, &format!("section 1/{n}"));
+    let budget = prompts::source_budget(model.ctx, head_budget);
+    let mut text = prompts::user(spec, req, &blocks, budget, prompt_ko);
+    text.push_str(&prompts::split_head_note(&plans[0], n, first_budget, prompt_ko));
+    let (value, reply) = call_json_with_retry(
+        model,
+        &system,
+        &text,
+        schema::SCHEMA_NAME,
+        &schema::json_schema(spec),
+        head_budget,
+        prompt_ko,
+    )?;
+    prompt_tokens += reply.usage.prompt;
+    completion_tokens += reply.usage.completion;
+    let mut d = parse_reply(&value, spec, req, sources);
+    d.model = Some(model.model.clone());
+    ensure_section_heading(&mut d.body, 0, &plans[0].heading);
+    if reply.truncated {
+        notes.push(section_truncated_note(1, &plans[0].heading, ko));
+    }
+    let mut sections_done = 1u32;
+    let facts: Vec<(String, String)> = std::iter::once((tr(ko, "제목", "title"), d.title.clone()))
+        .chain(
+            d.fields.iter().filter(|f| !f.value.trim().is_empty()).take(11).map(|f| (f.label.clone(), f.value.clone())),
+        )
+        .collect();
+    let excluded: HashSet<&str> = req.excluded_sources.iter().map(String::as_str).collect();
+
+    // 3. The remaining sections.
+    for (i, plan) in plans.iter().enumerate().skip(1) {
+        if deps.cancelled() || model.cancelled() {
+            notes.push(partial_note(sections_done, n, ko));
+            break;
+        }
+        report(0.25 + 0.7 * (i as f32 / n as f32), &format!("section {}/{n}", i + 1));
+        let budget_tokens = prompts::section_budget(total, plan.weight, weights_sum);
+        // Extra knowledge for this section (its heading as the query), numbered after the shared sources.
+        let mut extra: Vec<Source> = Vec::new();
+        if req.use_knowledge && deps.knowledge.is_some() {
+            let mut seen: HashSet<i64> = HashSet::new();
+            let mut scratch = Vec::new();
+            let _ = knowledge_sources(deps, &plan.heading, 3, false, &excluded, &mut seen, &mut extra, &mut scratch);
+            extra.truncate(3);
+        }
+        let combined: Vec<&Source> = sources.iter().chain(extra.iter()).collect();
+        let section_blocks: Vec<SourceBlock<'_>> = combined
+            .iter()
+            .enumerate()
+            .map(|(k, s)| SourceBlock {
+                index: k as u32 + 1,
+                kind: &s.citation.source,
+                title: &s.citation.title,
+                text: &s.text,
+            })
+            .collect();
+        let budget = prompts::source_budget(model.ctx, budget_tokens);
+        let previous = previous_summary(&d.body);
+        let text = prompts::section_user(
+            spec,
+            req,
+            &section_blocks,
+            budget,
+            plan,
+            i + 1,
+            n,
+            budget_tokens,
+            &facts,
+            &previous,
+            prompt_ko,
+        );
+        match call_json_with_retry(
+            model,
+            &system,
+            &text,
+            schema::SECTION_SCHEMA_NAME,
+            &schema::section_schema(),
+            budget_tokens,
+            prompt_ko,
+        ) {
+            Ok((v, reply)) => {
+                prompt_tokens += reply.usage.prompt;
+                completion_tokens += reply.usage.completion;
+                let start = d.body.len();
+                let mut blocks = parse_body(&v["blocks"], &combined);
+                // The model's own headings are sub-headings of this section.
+                for b in &mut blocks {
+                    if let DraftBlock::Heading { level, .. } = b {
+                        *level = 3;
+                    }
+                }
+                d.body.extend(blocks);
+                ensure_section_heading(&mut d.body, start, &plan.heading);
+                for s in &extra {
+                    let c = &s.citation;
+                    if !d
+                        .references
+                        .iter()
+                        .any(|o| o.doc_id == c.doc_id && o.chunk_id == c.chunk_id && o.page == c.page)
+                    {
+                        d.references.push(c.clone());
+                    }
+                }
+                if reply.truncated {
+                    notes.push(section_truncated_note(i + 1, &plan.heading, ko));
+                }
+                sections_done += 1;
+            }
+            Err(CoreError::Cancelled) => {
+                notes.push(partial_note(sections_done, n, ko));
+                break;
+            }
+            Err(e) if is_json_failure(&e) => {
+                let start = d.body.len();
+                ensure_section_heading(&mut d.body, start, &plan.heading);
+                notes.push(if ko {
+                    format!("{}절 '{}'은 모델 응답을 읽을 수 없어 비워 두었습니다.", i + 1, plan.heading)
+                } else {
+                    format!("Section {} '{}' was left empty: the model reply was unusable.", i + 1, plan.heading)
+                });
+                sections_done += 1;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    notes.push(if ko {
+        format!("토큰 예산 {total}로 {n}개 절을 나눠 생성했습니다.")
+    } else {
+        format!("Generated in {n} sections with a budget of {total} tokens.")
+    });
+    d.notes.extend(notes);
+    if spec.builtin_kind() == Some(TemplateKind::SupplementRequest) {
+        complete_supplement(&mut d, sources);
+    }
+    super::validate::validate(&mut d);
+    report(0.97, "finishing");
+    Ok(DraftOutcome {
+        draft: d,
+        prompt_tokens,
+        completion_tokens,
+        elapsed_ms: started.elapsed().as_millis() as u64,
+        source: "model".into(),
+        sections: sections_done,
+    })
+}
+
+/// Makes sure the body at `start` opens with the section's level-2 heading.
+fn ensure_section_heading(body: &mut Vec<DraftBlock>, start: usize, heading: &str) {
+    let has =
+        matches!(body.get(start), Some(DraftBlock::Heading { level: 2, text }) if compact(text) == compact(heading));
+    if !has {
+        body.insert(start.min(body.len()), DraftBlock::Heading { level: 2, text: heading.to_string() });
+    }
+}
+
+fn section_truncated_note(index: usize, heading: &str, ko: bool) -> String {
+    if ko {
+        format!("{index}절 '{heading}'의 응답이 길이 제한으로 잘렸을 수 있습니다.")
+    } else {
+        format!("Section {index} '{heading}' may have been cut by the token limit.")
+    }
+}
+
+fn partial_note(done: u32, total: usize, ko: bool) -> String {
+    if ko {
+        format!("취소되어 {done}/{total}절까지만 생성했습니다 (여기까지 생성됨).")
+    } else {
+        format!("Cancelled after {done}/{total} sections (generated this far).")
+    }
 }

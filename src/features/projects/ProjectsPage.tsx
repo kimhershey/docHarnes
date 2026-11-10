@@ -1,17 +1,16 @@
-import { ArrowLeft, ArrowRight, Briefcase, LayoutGrid, List, Plus, Settings2, Sparkles } from "lucide-react";
+import { AlertTriangle, Briefcase, LayoutGrid, List, Plus, Settings2, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ConfirmDialog, type ConfirmRequest } from "@/components/ui/confirm-dialog";
 import { Spinner } from "@/components/ui/spinner";
 import { DropHint, importDroppedFiles, useDocumentDropTarget, type DragDoc } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
 import { invalidateProjects, useProjects, useProjectTemplates } from "@/lib/queries";
-import { PROJECT_STATUSES, type Project, type ProjectStatus } from "@/lib/types";
+import { PROJECT_PHASES, type Project, type ProjectPhase } from "@/lib/types";
 import { cn, formatDate } from "@/lib/utils";
 import { useAttachmentsStore } from "@/stores/attachments";
 import { useProjectsStore } from "@/stores/projects";
@@ -21,32 +20,56 @@ import { useWorkspace } from "@/stores/workspace";
 import { ClassifyDialog } from "./ClassifyDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { PickProjectDialog } from "./PickProjectDialog";
-import { doneMoveWarning, nextStatus } from "./rules";
 import { TemplatesDialog } from "./TemplatesDialog";
 
-function statusVariant(s: ProjectStatus): "ok" | "warn" | "danger" | "muted" | "info" {
-  switch (s) {
+export function phaseVariant(p: ProjectPhase): "ok" | "warn" | "danger" | "muted" | "info" {
+  switch (p) {
     case "done":
       return "ok";
-    case "supplement":
-      return "warn";
-    case "validating":
+    case "active":
       return "info";
     default:
       return "muted";
   }
 }
 
+/** Badges of the computed phase and the 기한 경과 flag (plan §5, decision 5). */
+export function PhaseBadges({ project, compact }: { project: Pick<Project, "phase" | "overdue">; compact?: boolean }) {
+  const { t } = useTranslation();
+  return (
+    <>
+      <Badge variant={phaseVariant(project.phase)} data-testid="project-phase" data-phase={project.phase}>
+        {t(`projects.phase.${project.phase}`)}
+      </Badge>
+      {project.overdue && (
+        <Badge variant="danger" title={t("projects.badge.overdue_hint")} data-testid="project-overdue">
+          <AlertTriangle className={cn("size-3", compact && "hidden")} aria-hidden="true" />
+          {t("projects.badge.overdue")}
+        </Badge>
+      )}
+    </>
+  );
+}
+
+/** "시작 2026-02-01 · 종료 2027-01-31" (or 종료일 없음). */
+export function DatesLine({ project }: { project: Pick<Project, "start_date" | "end_date"> }) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {project.start_date && <span data-testid="project-start-date">{t("projects.card.start", { date: project.start_date })}</span>}
+      <span data-testid="project-end-date">{project.end_date ? t("projects.card.end", { date: project.end_date }) : t("projects.card.open_ended")}</span>
+    </>
+  );
+}
+
 type DropHandlers = { onDropDocs: (p: Project, docs: DragDoc[]) => void; onDropFiles: (p: Project, paths: string[]) => void };
 
-function ProjectCard({ project, onMove, templateName, compact, onDropDocs, onDropFiles }: { project: Project; onMove: (p: Project, to: ProjectStatus) => void; templateName: string | null; compact: boolean } & DropHandlers) {
+function ProjectCard({ project, templateName, compact, onDropDocs, onDropFiles }: { project: Project; templateName: string | null; compact: boolean } & DropHandlers) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
-  const prev = nextStatus(project.status, -1);
-  const next = nextStatus(project.status, 1);
   const drop = useDocumentDropTarget({ onDocuments: (docs) => onDropDocs(project, docs), onFiles: (paths) => onDropFiles(project, paths) });
   return (
-    <li className={cn("relative flex flex-col gap-1.5 rounded-lg border border-border bg-bg-elevated p-3 text-sm", drop.isOver && "border-accent")} data-testid={`project-card-${project.id}`} data-project-status={project.status} data-project-name={project.name} {...drop.props}>
+    <li className={cn("relative flex flex-col gap-1.5 rounded-lg border border-border bg-bg-elevated p-3 text-sm", drop.isOver && "border-accent")} data-testid={`project-card-${project.id}`} data-project-phase={project.phase} data-project-overdue={project.overdue} data-project-name={project.name} {...drop.props}>
       <DropHint active={drop.isActive} over={drop.isOver} className="text-[0.6875rem]" testId={`project-card-drop-${project.id}`}>
         {t("projects.card.drop_add", { name: project.name })}
       </DropHint>
@@ -54,12 +77,19 @@ function ProjectCard({ project, onMove, templateName, compact, onDropDocs, onDro
         <button type="button" className="min-w-0 flex-1 text-left font-medium hover:underline cursor-pointer" onClick={() => navigate(`/projects/${project.id}`)} data-testid="project-open">
           {project.name}
         </button>
-        {!compact && <Badge variant={statusVariant(project.status)}>{t(`projects.status.${project.status}`)}</Badge>}
+        <span className="flex flex-wrap justify-end gap-1">
+          {!compact && <PhaseBadges project={project} compact />}
+          {compact && project.overdue && (
+            <Badge variant="danger" title={t("projects.badge.overdue_hint")} data-testid="project-overdue">
+              {t("projects.badge.overdue")}
+            </Badge>
+          )}
+        </span>
       </div>
       <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-fg-muted">
         {project.intake_no && <span>{t("projects.card.intake_no", { no: project.intake_no })}</span>}
         {project.owner && <span>{t("projects.card.owner", { owner: project.owner })}</span>}
-        {project.due_date && <span>{t("projects.card.due", { date: project.due_date })}</span>}
+        <DatesLine project={project} />
         {templateName && <span>{templateName}</span>}
       </div>
       <div className="flex flex-wrap items-center gap-1.5 text-xs">
@@ -72,14 +102,6 @@ function ProjectCard({ project, onMove, templateName, compact, onDropDocs, onDro
         <span className="text-fg-subtle" data-testid="project-verdicts">
           {project.last_check_at ? t("projects.card.verdicts", { pass: project.last_pass, mismatch: project.last_mismatch, undetermined: project.last_undetermined }) : t("projects.card.no_check")}
         </span>
-      </div>
-      <div className="flex items-center gap-1">
-        <Button size="icon-sm" variant="ghost" disabled={!prev} onClick={() => prev && onMove(project, prev)} aria-label={prev ? t("projects.card.move_prev_named", { name: project.name, status: t(`projects.status.${prev}`) }) : t("projects.card.move_prev")} data-testid="project-move-prev">
-          <ArrowLeft />
-        </Button>
-        <Button size="icon-sm" variant="ghost" disabled={!next} onClick={() => next && onMove(project, next)} aria-label={next ? t("projects.card.move_next_named", { name: project.name, status: t(`projects.status.${next}`) }) : t("projects.card.move_next")} data-testid="project-move-next">
-          <ArrowRight />
-        </Button>
         <span className="ml-auto text-[0.6875rem] text-fg-subtle">{formatDate(project.updated_at, i18n.language)}</span>
       </div>
     </li>
@@ -91,43 +113,57 @@ function ProjectRow({ p, onDropDocs, onDropFiles }: { p: Project } & DropHandler
   const navigate = useNavigate();
   const drop = useDocumentDropTarget({ onDocuments: (docs) => onDropDocs(p, docs), onFiles: (paths) => onDropFiles(p, paths) });
   return (
-    <tr key={p.id} className={cn("cursor-pointer hover:bg-bg-sunken", drop.isActive && "outline-dashed outline-1 outline-offset-[-1px] outline-border", drop.isOver && "bg-accent-soft outline-accent")} {...drop.props} onClick={() => navigate(`/projects/${p.id}`)} data-testid={`project-row-${p.id}`} data-project-status={p.status}>
-                  <td className="py-2 pr-3 font-medium">
-                    {/* The row click is a mouse shortcut; the name is the keyboard-reachable control. */}
-                    <button
-                      type="button"
-                      className="text-left hover:underline cursor-pointer"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        navigate(`/projects/${p.id}`);
-                      }}
-                      data-testid="project-row-open"
-                    >
-                      {p.name}
-                    </button>
-                  </td>
-                  <td className="py-2 pr-3">
-                    <Badge variant={statusVariant(p.status)}>{t(`projects.status.${p.status}`)}</Badge>
-                  </td>
-                  <td className="py-2 pr-3 text-fg-muted">{p.intake_no ?? "—"}</td>
-                  <td className="py-2 pr-3 text-fg-muted">{p.owner ?? "—"}</td>
-                  <td className="py-2 pr-3 text-fg-muted">{p.due_date ?? "—"}</td>
-                  <td className="py-2 pr-3">
-                    {p.document_count}
-                    {p.missing_count > 0 && (
-                      <Badge variant="danger" className="ml-2">
-                        {t("projects.card.missing", { count: p.missing_count })}
-                      </Badge>
-                    )}
-                  </td>
-                  <td className="py-2 pr-3 text-fg-muted">{p.last_check_at ? t("projects.card.verdicts", { pass: p.last_pass, mismatch: p.last_mismatch, undetermined: p.last_undetermined }) : t("projects.card.no_check")}</td>
+    <tr key={p.id} className={cn("cursor-pointer hover:bg-bg-sunken", drop.isActive && "outline-dashed outline-1 outline-offset-[-1px] outline-border", drop.isOver && "bg-accent-soft outline-accent")} {...drop.props} onClick={() => navigate(`/projects/${p.id}`)} data-testid={`project-row-${p.id}`} data-project-phase={p.phase}>
+      <td className="py-2 pr-3 font-medium">
+        {/* The row click is a mouse shortcut; the name is the keyboard-reachable control. */}
+        <button
+          type="button"
+          className="text-left hover:underline cursor-pointer"
+          onClick={(e) => {
+            e.stopPropagation();
+            navigate(`/projects/${p.id}`);
+          }}
+          data-testid="project-row-open"
+        >
+          {p.name}
+        </button>
+      </td>
+      <td className="py-2 pr-3">
+        <span className="flex flex-wrap gap-1">
+          <PhaseBadges project={p} compact />
+        </span>
+      </td>
+      <td className="py-2 pr-3 text-fg-muted">{p.intake_no ?? "—"}</td>
+      <td className="py-2 pr-3 text-fg-muted">{p.owner ?? "—"}</td>
+      <td className="py-2 pr-3 text-fg-muted">{p.start_date ?? "—"}</td>
+      <td className="py-2 pr-3 text-fg-muted">{p.end_date ?? "—"}</td>
+      <td className="py-2 pr-3">
+        {p.document_count}
+        {p.missing_count > 0 && (
+          <Badge variant="danger" className="ml-2">
+            {t("projects.card.missing", { count: p.missing_count })}
+          </Badge>
+        )}
+      </td>
+      <td className="py-2 pr-3 text-fg-muted">{p.last_check_at ? t("projects.card.verdicts", { pass: p.last_pass, mismatch: p.last_mismatch, undetermined: p.last_undetermined }) : t("projects.card.no_check")}</td>
     </tr>
   );
 }
 
+/** Kanban order inside a column: nearest end date first, open-ended last (completed: latest end first). */
+function byDates(phase: ProjectPhase) {
+  return (a: Project, b: Project) => {
+    const ea = a.end_date ?? "9999-99-99";
+    const eb = b.end_date ?? "9999-99-99";
+    if (phase === "done") return eb.localeCompare(ea) || a.name.localeCompare(b.name);
+    return ea.localeCompare(eb) || (a.start_date ?? "").localeCompare(b.start_date ?? "") || a.name.localeCompare(b.name);
+  };
+}
+
 /**
- * 프로젝트 (design §3.15): list / kanban of the workspace's cases (접수 → 추출 → 검증 → 보완요청 → 완료) with
- * keyboard-usable move buttons, the "새 프로젝트" dialog and the templates manager.
+ * 프로젝트 (design §3.15, 0.3.0 plan §5): list / kanban of the workspace's cases by their computed phase
+ * (진행예정 → 진행중 → 완료 from the start / end dates, 기한 경과 badge), the "새 프로젝트" dialog and the
+ * templates manager.
  */
 export function ProjectsPage() {
   const { t, i18n } = useTranslation();
@@ -140,7 +176,6 @@ export function ProjectsPage() {
   const { data: templates } = useProjectTemplates(!!workspace);
   const [newOpen, setNewOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
-  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   // 자동 분류: opened from the header (unassigned documents) or from the library with `?classify=<ids>`.
   const [searchParams, setSearchParams] = useSearchParams();
   const [classify, setClassify] = useState<{ open: boolean; docIds: string[] }>({ open: false, docIds: [] });
@@ -156,26 +191,6 @@ export function ProjectsPage() {
   const templateName = (id: string | null) => {
     const tpl = templates?.find((x) => x.id === id);
     return tpl ? (ko ? tpl.name_ko : tpl.name_en) : null;
-  };
-  const doMove = async (p: Project, to: ProjectStatus) => {
-    try {
-      await api.projectSetStatus(p.id, to);
-      invalidateProjects([p.id]);
-      toast(t("projects.card.moved", { name: p.name, status: t(`projects.status.${to}`) }), "ok");
-    } catch (e) {
-      toast(describeError(e, t), "danger");
-    }
-  };
-  // 완료 with open findings (or without any check) is confirmed first, with the counts.
-  const move = (p: Project, to: ProjectStatus) => {
-    const warning = to === "done" ? doneMoveWarning(p) : null;
-    if (!warning) return void doMove(p, to);
-    setConfirm({
-      title: t("projects.card.done_confirm_title", { name: p.name }),
-      description: warning === "unchecked" ? t("projects.card.done_confirm_unchecked") : t("projects.card.done_confirm", { mismatch: p.last_mismatch, missing: p.missing_count }),
-      confirmLabel: t("projects.status.done"),
-      onConfirm: () => doMove(p, to),
-    });
   };
   const list = projects ?? [];
   // Drops on a card / row: documents join the project, files are imported into it.
@@ -255,18 +270,18 @@ export function ProjectsPage() {
             </Button>
           </div>
         ) : view === "kanban" ? (
-          <div className="grid min-w-[60rem] grid-cols-5 gap-3" data-testid="projects-kanban">
-            {PROJECT_STATUSES.map((status) => {
-              const column = list.filter((p) => p.status === status);
+          <div className="grid min-w-[48rem] grid-cols-3 gap-3" data-testid="projects-kanban">
+            {PROJECT_PHASES.map((phase) => {
+              const column = list.filter((p) => p.phase === phase).sort(byDates(phase));
               return (
-                <section key={status} className="flex min-h-40 flex-col gap-2 rounded-lg bg-bg-sunken p-2" aria-labelledby={`kanban-${status}`} data-testid={`kanban-${status}`}>
-                  <h2 id={`kanban-${status}`} className="flex items-center gap-2 px-1 text-xs font-semibold uppercase tracking-wide text-fg-subtle">
-                    {t(`projects.status.${status}`)}
+                <section key={phase} className="flex min-h-40 flex-col gap-2 rounded-lg bg-bg-sunken p-2" aria-labelledby={`kanban-${phase}`} data-testid={`kanban-${phase}`}>
+                  <h2 id={`kanban-${phase}`} className="flex items-center gap-2 px-1 text-xs font-semibold uppercase tracking-wide text-fg-subtle">
+                    {t(`projects.phase.${phase}`)}
                     <Badge variant="muted">{column.length}</Badge>
                   </h2>
                   <ul className="flex flex-col gap-2">
                     {column.map((p) => (
-                      <ProjectCard key={p.id} project={p} onMove={move} templateName={templateName(p.template_id)} compact onDropDocs={onDropDocs} onDropFiles={onDropFiles} />
+                      <ProjectCard key={p.id} project={p} templateName={templateName(p.template_id)} compact onDropDocs={onDropDocs} onDropFiles={onDropFiles} />
                     ))}
                   </ul>
                 </section>
@@ -281,7 +296,8 @@ export function ProjectsPage() {
                 <th className="py-2 pr-3">{t("projects.columns.status")}</th>
                 <th className="py-2 pr-3">{t("projects.columns.intake_no")}</th>
                 <th className="py-2 pr-3">{t("projects.columns.owner")}</th>
-                <th className="py-2 pr-3">{t("projects.columns.due")}</th>
+                <th className="py-2 pr-3">{t("projects.columns.start")}</th>
+                <th className="py-2 pr-3">{t("projects.columns.end")}</th>
                 <th className="py-2 pr-3">{t("projects.columns.documents")}</th>
                 <th className="py-2 pr-3">{t("projects.columns.last_check")}</th>
               </tr>
@@ -298,7 +314,6 @@ export function ProjectsPage() {
       <PickProjectDialog open={pick !== null} onOpenChange={(o) => !o && setPick(null)} projects={list} count={pick ? (pick.mode === "docs" ? pick.docs.length : pick.paths.length) : 0} mode={pick?.mode ?? "docs"} onPick={onPick} onCreate={() => setNewOpen(true)} />
       <TemplatesDialog open={templatesOpen} onOpenChange={setTemplatesOpen} />
       <ClassifyDialog open={classify.open} onOpenChange={(o) => setClassify((c) => ({ ...c, open: o }))} docIds={classify.docIds} projects={list} />
-      <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 }

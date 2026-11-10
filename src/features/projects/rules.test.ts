@@ -1,6 +1,5 @@
 // Rule grid helpers against the real Korean strings: field options of nested
-// schemas, completeness, unresolved operands, the one-line summary and the
-// kanban step order.
+// schemas, completeness, unresolved operands and the one-line summary.
 import i18next from "i18next";
 import { describe, expect, it } from "vitest";
 
@@ -8,7 +7,7 @@ import en from "@/i18n/en.json";
 import ko from "@/i18n/ko.json";
 import type { DocTypeInfo, FieldDef, Rule, SchemaRecord } from "@/lib/types";
 
-import { doneMoveWarning, fieldOptions, nextStatus, newRule, operandLabel, parseTolerance, ruleComplete, ruleSummary, schemaForType, unresolvedOperands } from "./rules";
+import { fieldOptions, newRule, operandLabel, parseTolerance, ruleComplete, ruleSummary, schemaForType, unresolvedOperands } from "./rules";
 
 const instance = i18next.createInstance();
 await instance.init({ lng: "ko", fallbackLng: false, resources: { ko: { translation: ko }, en: { translation: en } }, interpolation: { escapeValue: false } });
@@ -65,24 +64,10 @@ describe("rule helpers", () => {
     expect(parseTolerance("abc")).toBeNull();
   });
 
-  it("asks before moving an unchecked project or one with open findings to 완료", () => {
-    expect(doneMoveWarning({ last_check_at: null, last_mismatch: 0, missing_count: 0 })).toBe("unchecked");
-    expect(doneMoveWarning({ last_check_at: "2026-11-08T00:00:00Z", last_mismatch: 1, missing_count: 0 })).toBe("findings");
-    expect(doneMoveWarning({ last_check_at: "2026-11-08T00:00:00Z", last_mismatch: 0, missing_count: 2 })).toBe("findings");
-    expect(doneMoveWarning({ last_check_at: "2026-11-08T00:00:00Z", last_mismatch: 0, missing_count: 0 })).toBeNull();
-  });
-
   it("flags operands the schemas cannot resolve", () => {
     expect(unresolvedOperands(rule, schemas, types)).toEqual([]);
     expect(unresolvedOperands({ ...rule, left: { doc_type: "tax_invoice", field: "nope", value: null } }, schemas, types)).toEqual(["left"]);
     expect(unresolvedOperands({ ...rule, right: { doc_type: "contract", field: "amount", value: null } }, schemas, types)).toEqual(["right"]);
     expect(unresolvedOperands({ ...rule, op: "present", right: { doc_type: "contract", field: "amount", value: null } }, schemas, types)).toEqual([]);
-  });
-
-  it("walks the kanban columns in order", () => {
-    expect(nextStatus("intake", 1)).toBe("extracting");
-    expect(nextStatus("intake", -1)).toBeNull();
-    expect(nextStatus("supplement", 1)).toBe("done");
-    expect(nextStatus("done", 1)).toBeNull();
   });
 });

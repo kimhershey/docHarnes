@@ -4,7 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { docTypeLabel } from "@/features/pipeline/labels";
-import { useDocTypes, useDocumentStats } from "@/lib/queries";
+import { useDocTypes, useDocumentStats, useProjects } from "@/lib/queries";
 
 import type { ScopeState } from "./scope";
 
@@ -12,21 +12,25 @@ import type { ScopeState } from "./scope";
 const ALL = "__all__";
 const SELECTION = "__selection__";
 const FOLDER_PREFIX = "folder:";
+const PROJECT_PREFIX = "project:";
 
 /**
  * "문서 범위" shared by the organise and export tabs: everything / the library selection / a
- * folder, narrowed by document type and a date range (document date, import date as fallback).
+ * folder / a project (plan §6), narrowed by document type and a date range (document date, import
+ * date as fallback).
  */
 export function ScopeSection({ value, onChange, selectedCount, testId }: { value: ScopeState; onChange: (next: ScopeState) => void; selectedCount: number; testId: string }) {
   const { t, i18n } = useTranslation();
   const { data: stats } = useDocumentStats();
   const { data: docTypes } = useDocTypes();
+  const { data: projects } = useProjects();
   const folders = stats?.folders ?? [];
-  const modeValue = value.mode === "selection" ? SELECTION : value.mode === "folder" ? `${FOLDER_PREFIX}${value.folder ?? ""}` : ALL;
+  const modeValue = value.mode === "selection" ? SELECTION : value.mode === "folder" ? `${FOLDER_PREFIX}${value.folder ?? ""}` : value.mode === "project" ? `${PROJECT_PREFIX}${value.projectId ?? ""}` : ALL;
   const setMode = (v: string) => {
-    if (v === SELECTION) onChange({ ...value, mode: "selection", folder: null });
-    else if (v.startsWith(FOLDER_PREFIX)) onChange({ ...value, mode: "folder", folder: v.slice(FOLDER_PREFIX.length) });
-    else onChange({ ...value, mode: "all", folder: null });
+    if (v === SELECTION) onChange({ ...value, mode: "selection", folder: null, projectId: null });
+    else if (v.startsWith(FOLDER_PREFIX)) onChange({ ...value, mode: "folder", folder: v.slice(FOLDER_PREFIX.length), projectId: null });
+    else if (v.startsWith(PROJECT_PREFIX)) onChange({ ...value, mode: "project", folder: null, projectId: v.slice(PROJECT_PREFIX.length) });
+    else onChange({ ...value, mode: "all", folder: null, projectId: null });
   };
   const slugs = [...new Set([...(docTypes ?? []).map((d) => d.slug), "other"])];
   return (
@@ -43,6 +47,11 @@ export function ScopeSection({ value, onChange, selectedCount, testId }: { value
             {folders.map((f) => (
               <SelectItem key={f.rel_dir} value={`${FOLDER_PREFIX}${f.rel_dir}`}>
                 {t("organize.scope.folder", { folder: f.rel_dir === "" ? t("organize.scope.root_folder") : f.rel_dir })} ({f.count})
+              </SelectItem>
+            ))}
+            {(projects ?? []).map((p) => (
+              <SelectItem key={p.id} value={`${PROJECT_PREFIX}${p.id}`} data-testid={`${testId}-project-${p.id}`}>
+                {t("organize.scope.project", { name: p.name })} ({p.document_count})
               </SelectItem>
             ))}
           </SelectContent>

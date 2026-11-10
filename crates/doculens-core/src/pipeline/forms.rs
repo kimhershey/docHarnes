@@ -3,9 +3,11 @@
 //! "label: ____" lines, no model needed) or with the VLM for PDF / image
 //! forms, and create / modify schemas from a description.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::db::Db;
@@ -340,6 +342,7 @@ fn draft(name: String, fields: Vec<FieldDef>) -> SchemaDraft {
         form_document_id: None,
         note: None,
         name,
+        sample_document_ids: Vec::new(),
     }
 }
 
@@ -367,82 +370,14 @@ pub fn derive_with_vlm(
 
 /// Derives the draft for a registered form document: office formats from
 /// their structure, PDFs / images with the VLM (text heuristics without one).
+/// One document of [`discover`]; kept for the single-document command.
 pub fn derive(
     deps: &ImportDeps<'_>,
     vlm: Option<&Vlm<'_>>,
     doc: &DocumentRecord,
     name: Option<&str>,
 ) -> Result<SchemaDraft> {
-    let abs = doc.absolute_path(deps.paths);
-    let fallback_name =
-        name.map(str::to_string).filter(|n| !n.trim().is_empty()).or_else(|| doc.title.clone()).unwrap_or_else(|| {
-            abs.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "양식".into())
-        });
-    let pages = deps.db.with(|c| docs::list_pages(c, &doc.id, true))?;
-    let text: String = pages.iter().filter_map(|p| p.text.as_deref()).collect::<Vec<_>>().join("\n");
-    let mut draft = if doc.source_kind.needs_conversion() && abs.is_file() {
-        let model = convert::read_document(&abs, doc.source_kind)?;
-        let d = derive_from_model(&model, Some(&fallback_name));
-        if d.definition.fields.is_empty() {
-            match vlm {
-                Some(v) => derive_with_vlm(v, None, Some(&text), Some(&fallback_name))?,
-                None => d,
-            }
-        } else {
-            d
-        }
-    } else {
-        let cache = DocumentCache::for_document(deps.paths, &doc.id);
-        let first = pages.iter().find(|p| p.width_px > 0);
-        let img = match first {
-            Some(p) => {
-                let path = cache.page_file(p.page_no);
-                if path.is_file() {
-                    Some(image::prepare(&path, 2_048)?)
-                } else {
-                    None
-                }
-            }
-            None => None,
-        };
-        let from_text = |note: Option<String>| -> Result<SchemaDraft> {
-            if text.trim().is_empty() {
-                return Err(CoreError::Invalid("no_model".into()));
-            }
-            let tables: Vec<ExtractedTable> = pages
-                .iter()
-                .flat_map(|p| super::ocr::parse_tables(p.text.as_deref().unwrap_or(""), p.page_no))
-                .collect();
-            let mut d = derive_from_text(&text, &tables, Some(&fallback_name));
-            d.note = note;
-            Ok(d)
-        };
-        match vlm {
-            Some(v) => match derive_with_vlm(
-                v,
-                img.as_ref().map(|i| i.url.as_str()),
-                Some(text.as_str()).filter(|t| !t.trim().is_empty()),
-                Some(&fallback_name),
-            ) {
-                Ok(d) => d,
-                // A model failure (cut-off reply, output-parser 500, engine hiccup) must not leave the
-                // user without a draft (user report 2026-11-09 "양식 등록이 되지 않음"): the text / table
-                // heuristics stand in and the note says why, so the editor can still be confirmed.
-                Err(e) if !text.trim().is_empty() => {
-                    log::warn!("form field discovery with the model failed, using the text heuristics: {e}");
-                    from_text(Some(format!("모델 응답 실패로 텍스트 규칙으로 도출했습니다: {e}")))?
-                }
-                Err(e) => return Err(e),
-            },
-            None => from_text(None)?,
-        }
-    };
-    draft.source = SchemaSource::Form;
-    draft.form_document_id = Some(doc.id.clone());
-    if draft.definition.fields.is_empty() {
-        draft.definition.fields.push(FieldDef::new("title", "제목", "Title", FieldKind::String));
-    }
-    Ok(draft)
+    discover_document(deps, vlm, doc, name, None, &mut |_, _| {}).map(|(d, _)| d)
 }
 
 /// Saves a confirmed form draft and marks the sample document as the form
@@ -453,10 +388,16 @@ pub fn register(db: &Db, draft: &SchemaDraft) -> Result<SchemaRecord> {
     if draft.doc_type.trim().is_empty() || !schema::is_key(&draft.doc_type) {
         draft.doc_type = slug_for_name(&draft.name);
     }
-    let form_doc = draft.form_document_id.clone();
+    // Every sample document becomes a form of the type (one draft, 1..N samples since 0.3.0).
+    let mut sample_docs: Vec<String> = draft.form_document_id.iter().cloned().collect();
+    for id in &draft.sample_document_ids {
+        if !sample_docs.contains(id) {
+            sample_docs.push(id.clone());
+        }
+    }
     db.with_tx(move |tx| {
         let saved = repo::save_schema(tx, &draft)?;
-        if let Some(id) = &form_doc {
+        for id in &sample_docs {
             if docs::get_document(tx, id)?.is_some() {
                 docs::set_role(tx, id, DocumentRole::Form)?;
                 docs::set_doc_type(tx, id, Some(&saved.doc_type), Some("form"))?;
@@ -495,6 +436,566 @@ pub fn nl_schema(vlm: &Vlm<'_>, description: &str, base: Option<&SchemaRecord>) 
 /// Source kinds whose structure can be read without a model.
 pub fn structural_kind(kind: SourceKind) -> bool {
     kind.needs_conversion()
+}
+
+// ---------------------------------------------------------------------------
+// Multi-document discovery (0.3.0 §2): one job over 1..N sample documents
+// ---------------------------------------------------------------------------
+
+/// Pages of a scanned / PDF form the model reads: the first rendered page, then pages with a table.
+const MAX_DISCOVERY_PAGES: usize = 3;
+/// Enum options kept after merging (the grammar lint warns above this).
+const MAX_MERGED_OPTIONS: usize = 12;
+/// Table columns kept after merging.
+const MAX_MERGED_COLUMNS: usize = 20;
+
+/// What one sample document contributed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DocDiscovery {
+    pub doc_id: String,
+    pub title: String,
+    /// `structure` (office tables), `model` (vision model), `text` (text heuristics) or `failed`.
+    pub source: String,
+    pub pages_used: Vec<u32>,
+    pub field_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Result of a discovery job: the unsaved draft the editor opens plus the per-document summary.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscoveryOutcome {
+    /// Discriminator of the job result (`schema_discovery`).
+    pub kind: String,
+    pub draft: SchemaDraft,
+    pub documents: Vec<DocDiscovery>,
+    /// Fields adopted (seen in at least ⌈n/2⌉ documents) and dropped by that threshold.
+    pub merged_fields: usize,
+    pub dropped_fields: usize,
+}
+
+/// Progress of [`discover`]: the document being read and, for scanned pages, the page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DiscoveryProgress<'a> {
+    pub index: usize,
+    pub total: usize,
+    pub title: &'a str,
+    pub page: Option<(u32, u32)>,
+}
+
+/// Counts of [`merge_drafts`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MergeStats {
+    pub adopted: usize,
+    pub dropped: usize,
+}
+
+fn vote(votes: &mut Vec<(String, usize)>, v: &str) {
+    let v = v.trim();
+    if v.is_empty() {
+        return;
+    }
+    match votes.iter_mut().find(|(k, _)| k == v) {
+        Some((_, n)) => *n += 1,
+        None => votes.push((v.to_string(), 1)),
+    }
+}
+
+fn top(votes: &[(String, usize)]) -> Option<&str> {
+    votes.iter().max_by_key(|(_, n)| *n).map(|(k, _)| k.as_str())
+}
+
+/// A field's identity across documents: its canonical key (known label → key, else the key itself).
+fn field_norm(f: &FieldDef) -> String {
+    let base = if f.label_ko.trim().is_empty() { f.key.clone() } else { schema::key_from_label(&f.label_ko, &f.key) };
+    if f.kind == FieldKind::Table {
+        format!("{base}/table")
+    } else {
+        base
+    }
+}
+
+/// `String` is the least specific kind; a typed vote wins a tie against it.
+fn kind_rank(k: FieldKind) -> u8 {
+    match k {
+        FieldKind::String => 0,
+        FieldKind::Table | FieldKind::Group => 2,
+        _ => 1,
+    }
+}
+
+struct ColumnAcc {
+    norm: String,
+    first: usize,
+    votes: usize,
+    def: FieldDef,
+}
+
+struct FieldAcc {
+    norm: String,
+    first: (usize, usize),
+    /// Drafts the field appears in (once per draft).
+    docs: usize,
+    keys: Vec<(String, usize)>,
+    labels_ko: Vec<(String, usize)>,
+    label_en: String,
+    kinds: Vec<(FieldKind, usize)>,
+    required_votes: usize,
+    options: Vec<String>,
+    columns: Vec<ColumnAcc>,
+    example: Option<String>,
+    description: Option<String>,
+    regex_hint: Option<String>,
+    mask: bool,
+}
+
+impl FieldAcc {
+    fn new(norm: String, first: (usize, usize)) -> FieldAcc {
+        FieldAcc {
+            norm,
+            first,
+            docs: 0,
+            keys: Vec::new(),
+            labels_ko: Vec::new(),
+            label_en: String::new(),
+            kinds: Vec::new(),
+            required_votes: 0,
+            options: Vec::new(),
+            columns: Vec::new(),
+            example: None,
+            description: None,
+            regex_hint: None,
+            mask: false,
+        }
+    }
+
+    fn add(&mut self, f: &FieldDef) {
+        self.docs += 1;
+        vote(&mut self.keys, &f.key);
+        vote(&mut self.labels_ko, &f.label_ko);
+        if self.label_en.is_empty() && !f.label_en.trim().is_empty() {
+            self.label_en = f.label_en.trim().to_string();
+        }
+        match self.kinds.iter_mut().find(|(k, _)| *k == f.kind) {
+            Some((_, n)) => *n += 1,
+            None => self.kinds.push((f.kind, 1)),
+        }
+        if f.required {
+            self.required_votes += 1;
+        }
+        for o in &f.options {
+            if !self.options.contains(o) && self.options.len() < MAX_MERGED_OPTIONS {
+                self.options.push(o.clone());
+            }
+        }
+        for (ci, c) in f.fields.iter().enumerate() {
+            let norm = field_norm(c);
+            match self.columns.iter_mut().find(|x| x.norm == norm) {
+                Some(x) => x.votes += 1,
+                None => self.columns.push(ColumnAcc { norm, first: ci, votes: 1, def: c.clone() }),
+            }
+        }
+        if self.example.is_none() {
+            self.example = f.example.clone().filter(|e| !e.trim().is_empty());
+        }
+        if self.description.is_none() {
+            self.description = f.description.clone().filter(|d| !d.trim().is_empty());
+        }
+        if self.regex_hint.is_none() {
+            self.regex_hint = f.regex_hint.clone().filter(|r| !r.trim().is_empty());
+        }
+        self.mask |= f.mask;
+    }
+
+    fn kind(&self) -> FieldKind {
+        self.kinds
+            .iter()
+            .max_by(|a, b| a.1.cmp(&b.1).then(kind_rank(a.0).cmp(&kind_rank(b.0))))
+            .map(|(k, _)| *k)
+            .unwrap_or_default()
+    }
+
+    fn into_field(mut self, key: String, n_drafts: usize) -> FieldDef {
+        let label_ko = top(&self.labels_ko).unwrap_or(&key).to_string();
+        let label_en = if self.label_en.is_empty() { english_label(&label_ko, &key) } else { self.label_en.clone() };
+        let kind = self.kind();
+        let mut f = FieldDef::new(&key, &label_ko, &label_en, kind);
+        // Required = printed on every sample (a single sample keeps what was derived from it).
+        f.required = if n_drafts >= 2 { self.docs == n_drafts } else { self.required_votes > 0 };
+        f.example = self.example.take();
+        f.description = self.description.take();
+        f.regex_hint = self.regex_hint.take();
+        f.mask = self.mask;
+        if kind == FieldKind::Enum {
+            f.options = std::mem::take(&mut self.options);
+        }
+        if kind == FieldKind::Table {
+            self.columns.sort_by(|a, b| b.votes.cmp(&a.votes).then(a.first.cmp(&b.first)));
+            let mut keys: Vec<String> = Vec::new();
+            for c in self.columns.into_iter().take(MAX_MERGED_COLUMNS) {
+                let mut col = c.def;
+                let base = col.key.clone();
+                let mut n = 2;
+                while keys.contains(&col.key) {
+                    col.key = format!("{base}_{n}");
+                    n += 1;
+                }
+                keys.push(col.key.clone());
+                col.fields.clear();
+                f.fields.push(col);
+            }
+        }
+        f
+    }
+}
+
+/// Deterministic cross-field rules a merged field set supports (`KNOWN_RULES` only — the model
+/// never writes rules).
+pub fn infer_rules(def: &SchemaDef) -> Vec<String> {
+    let has = |k: &str| def.field(k).is_some();
+    let table_amount = def
+        .fields
+        .iter()
+        .filter(|f| f.kind == FieldKind::Table)
+        .any(|t| t.fields.iter().any(|c| matches!(c.key.as_str(), "supply_amount" | "amount")));
+    let percent = def.fields.iter().any(|f| {
+        f.key.ends_with("_percent") || f.key.ends_with("_rate") || f.fields.iter().any(|c| c.key == "progress")
+    });
+    let mut rules = Vec::new();
+    if has("supply_total") && has("tax_total") && (has("grand_total") || has("total")) {
+        rules.push(schema::RULE_SUPPLY_TAX_TOTAL.to_string());
+        rules.push(schema::RULE_TAX_RATE.to_string());
+    }
+    if table_amount && has("supply_total") {
+        rules.push(schema::RULE_ITEMS_SUM_SUPPLY.to_string());
+    } else if table_amount && (has("grand_total") || has("total")) {
+        rules.push(schema::RULE_ITEMS_SUM_TOTAL.to_string());
+    }
+    if has("period_start") && has("period_end") {
+        rules.push(schema::RULE_PERIOD_ORDER.to_string());
+    }
+    if percent {
+        rules.push(schema::RULE_PERCENT_RANGE.to_string());
+    }
+    if has("total_cases") && has("passed") && has("failed") {
+        rules.push(schema::RULE_TEST_COUNTS.to_string());
+    }
+    rules
+}
+
+/// Merges the drafts derived from several samples into one: fields are matched by their canonical
+/// key, kept when at least `min_docs` drafts carry them, ordered by frequency then first
+/// appearance; labels and kinds by majority (a typed kind beats `string` on a tie), enum options
+/// and table columns by union; `required` means "on every sample". The user's `hint` names the
+/// form, else the most common derived name.
+pub fn merge_drafts(drafts: &[SchemaDraft], hint: Option<&str>, min_docs: usize) -> (SchemaDraft, MergeStats) {
+    let n = drafts.len();
+    let min_docs = min_docs.clamp(1, n.max(1));
+    let mut accs: Vec<FieldAcc> = Vec::new();
+    for (di, d) in drafts.iter().enumerate() {
+        let mut seen: Vec<String> = Vec::new();
+        for (fi, f) in d.definition.fields.iter().enumerate() {
+            // Two fields of one sample never merge into each other.
+            let mut norm = field_norm(f);
+            let base = norm.clone();
+            let mut k = 2;
+            while seen.contains(&norm) {
+                norm = format!("{base}#{k}");
+                k += 1;
+            }
+            seen.push(norm.clone());
+            let acc = match accs.iter_mut().position(|a| a.norm == norm) {
+                Some(i) => &mut accs[i],
+                None => {
+                    accs.push(FieldAcc::new(norm, (di, fi)));
+                    accs.last_mut().expect("just pushed")
+                }
+            };
+            acc.add(f);
+        }
+    }
+    let total = accs.len();
+    let mut adopted: Vec<FieldAcc> = accs.into_iter().filter(|a| a.docs >= min_docs).collect();
+    adopted.sort_by(|a, b| b.docs.cmp(&a.docs).then(a.first.cmp(&b.first)));
+    adopted.truncate(schema::MAX_FIELDS);
+    let stats = MergeStats { adopted: adopted.len(), dropped: total.saturating_sub(adopted.len()) };
+    let mut keys: Vec<String> = Vec::new();
+    let mut fields = Vec::new();
+    for acc in adopted {
+        let base = top(&acc.keys).map(str::to_string).unwrap_or_else(|| acc.norm.replace("/table", ""));
+        let base = if schema::is_key(&base) { base } else { schema::key_from_label(&base, "field") };
+        let mut key = base.clone();
+        let mut k = 2;
+        while keys.contains(&key) || matches!(key.as_str(), "value" | "evidence" | "confidence") {
+            key = format!("{base}_{k}");
+            k += 1;
+        }
+        keys.push(key.clone());
+        fields.push(acc.into_field(key, n));
+    }
+    // Name: the user's hint, else the most common derived name; the type slug follows the name
+    // unless that gives a hash slug while the samples agreed on a real one.
+    let mut names: Vec<(String, usize)> = Vec::new();
+    let mut types: Vec<(String, usize)> = Vec::new();
+    for d in drafts {
+        vote(&mut names, &d.name);
+        vote(&mut types, &d.doc_type);
+    }
+    let name = hint
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+        .map(str::to_string)
+        .or_else(|| top(&names).map(str::to_string))
+        .unwrap_or_else(|| "양식".to_string());
+    let mut doc_type = slug_for_name(&name);
+    if doc_type.starts_with("form_") {
+        if let Some(t) = top(&types).filter(|t| schema::is_key(t) && !t.starts_with("form_")) {
+            doc_type = t.to_string();
+        }
+    }
+    let mut sample_document_ids: Vec<String> = Vec::new();
+    for d in drafts {
+        for id in d.form_document_id.iter().chain(d.sample_document_ids.iter()) {
+            if !sample_document_ids.contains(id) {
+                sample_document_ids.push(id.clone());
+            }
+        }
+    }
+    let form_document_id = sample_document_ids.first().cloned();
+    let mut definition = SchemaDef { fields, rules: Vec::new() };
+    definition.rules = infer_rules(&definition);
+    let draft = SchemaDraft {
+        id: None,
+        name_en: drafts.iter().find_map(|d| d.name_en.clone().filter(|n| !n.trim().is_empty())),
+        doc_type,
+        source: SchemaSource::Form,
+        description_ko: drafts.iter().find_map(|d| d.description_ko.clone().filter(|x| !x.trim().is_empty())),
+        description_en: drafts.iter().find_map(|d| d.description_en.clone().filter(|x| !x.trim().is_empty())),
+        definition,
+        form_document_id,
+        note: None,
+        name,
+        sample_document_ids: sample_document_ids.into_iter().skip(1).collect(),
+    };
+    (draft, stats)
+}
+
+/// Fields of one sample document: office formats from their structure, scanned / PDF forms
+/// through the model page by page (first page + pages with tables, at most
+/// [`MAX_DISCOVERY_PAGES`]), text heuristics when the model is missing or fails.
+pub fn discover_document(
+    deps: &ImportDeps<'_>,
+    vlm: Option<&Vlm<'_>>,
+    doc: &DocumentRecord,
+    name: Option<&str>,
+    cancel: Option<&AtomicBool>,
+    on_page: &mut dyn FnMut(u32, u32),
+) -> Result<(SchemaDraft, DocDiscovery)> {
+    let title = doc.title.clone().unwrap_or_else(|| doc.original_name.clone());
+    let abs = doc.absolute_path(deps.paths);
+    let fallback_name =
+        name.map(str::to_string).filter(|n| !n.trim().is_empty()).or_else(|| doc.title.clone()).unwrap_or_else(|| {
+            abs.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "양식".into())
+        });
+    let pages = deps.db.with(|c| docs::list_pages(c, &doc.id, true))?;
+    let text: String = pages.iter().filter_map(|p| p.text.as_deref()).collect::<Vec<_>>().join("\n");
+    let mut source = "text";
+    let mut pages_used: Vec<u32> = Vec::new();
+    let mut note: Option<String> = None;
+    let from_text = |note: Option<String>| -> Result<SchemaDraft> {
+        if text.trim().is_empty() {
+            return Err(CoreError::Invalid("no_model".into()));
+        }
+        let tables: Vec<ExtractedTable> =
+            pages.iter().flat_map(|p| super::ocr::parse_tables(p.text.as_deref().unwrap_or(""), p.page_no)).collect();
+        let mut d = derive_from_text(&text, &tables, Some(&fallback_name));
+        d.note = note;
+        Ok(d)
+    };
+    let mut draft = if doc.source_kind.needs_conversion() && abs.is_file() {
+        let model = convert::read_document(&abs, doc.source_kind)?;
+        let d = derive_from_model(&model, Some(&fallback_name));
+        if d.definition.fields.is_empty() {
+            match vlm {
+                Some(v) => {
+                    source = "model";
+                    derive_with_vlm(
+                        v,
+                        None,
+                        Some(text.as_str()).filter(|t| !t.trim().is_empty()),
+                        Some(&fallback_name),
+                    )?
+                }
+                None => d,
+            }
+        } else {
+            source = "structure";
+            d
+        }
+    } else {
+        let cache = DocumentCache::for_document(deps.paths, &doc.id);
+        let rendered = |p: &&crate::documents::PageRecord| p.width_px > 0 && cache.page_file(p.page_no).is_file();
+        // The first rendered page, then pages carrying a table.
+        let mut picks: Vec<&crate::documents::PageRecord> = pages.iter().filter(rendered).take(1).collect();
+        for p in pages.iter().filter(rendered) {
+            if picks.len() >= MAX_DISCOVERY_PAGES {
+                break;
+            }
+            if picks.iter().any(|q| q.page_no == p.page_no) {
+                continue;
+            }
+            if !super::ocr::parse_tables(p.text.as_deref().unwrap_or(""), p.page_no).is_empty() {
+                picks.push(p);
+            }
+        }
+        match vlm {
+            Some(v) if !picks.is_empty() => {
+                let mut per_page: Vec<SchemaDraft> = Vec::new();
+                let mut failures: Vec<String> = Vec::new();
+                let total = picks.len() as u32;
+                for (i, p) in picks.iter().enumerate() {
+                    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+                        return Err(CoreError::Cancelled);
+                    }
+                    on_page(i as u32 + 1, total);
+                    let img = image::prepare(&cache.page_file(p.page_no), 2_048)?;
+                    match derive_with_vlm(
+                        v,
+                        Some(&img.url),
+                        p.text.as_deref().filter(|t| !t.trim().is_empty()),
+                        Some(&fallback_name),
+                    ) {
+                        Ok(d) => {
+                            pages_used.push(p.page_no);
+                            per_page.push(d);
+                        }
+                        Err(e) => {
+                            log::warn!("form field discovery on page {} of {} failed: {e}", p.page_no, doc.id);
+                            failures.push(format!("{}쪽: {e}", p.page_no));
+                        }
+                    }
+                }
+                if per_page.is_empty() {
+                    // A model failure must not leave the user without a draft (user report 2026-11-09):
+                    // the text / table heuristics stand in and the note says why.
+                    if text.trim().is_empty() {
+                        return Err(CoreError::Invalid(format!("no_fields: {}", failures.join("; "))));
+                    }
+                    from_text(Some(format!("모델 응답 실패로 텍스트 규칙으로 도출했습니다: {}", failures.join("; "))))?
+                } else {
+                    source = "model";
+                    if !failures.is_empty() {
+                        note = Some(format!("일부 쪽은 모델 응답 실패로 건너뛰었습니다: {}", failures.join("; ")));
+                    }
+                    let (merged, _) = merge_drafts(&per_page, Some(&fallback_name), 1);
+                    merged
+                }
+            }
+            Some(v) => match derive_with_vlm(
+                v,
+                None,
+                Some(text.as_str()).filter(|t| !t.trim().is_empty()),
+                Some(&fallback_name),
+            ) {
+                Ok(d) => {
+                    source = "model";
+                    d
+                }
+                Err(e) if !text.trim().is_empty() => {
+                    log::warn!("form field discovery with the model failed, using the text heuristics: {e}");
+                    from_text(Some(format!("모델 응답 실패로 텍스트 규칙으로 도출했습니다: {e}")))?
+                }
+                Err(e) => return Err(e),
+            },
+            None => from_text(None)?,
+        }
+    };
+    draft.source = SchemaSource::Form;
+    draft.form_document_id = Some(doc.id.clone());
+    draft.sample_document_ids.clear();
+    if draft.definition.fields.is_empty() {
+        draft.definition.fields.push(FieldDef::new("title", "제목", "Title", FieldKind::String));
+    }
+    if note.is_some() {
+        draft.note = note.clone();
+    }
+    let summary = DocDiscovery {
+        doc_id: doc.id.clone(),
+        title,
+        source: source.into(),
+        pages_used,
+        field_count: draft.definition.fields.len(),
+        note: draft.note.clone(),
+    };
+    Ok((draft, summary))
+}
+
+/// Field discovery over 1..N sample documents (0.3.0 §2): each sample is read on its own, the
+/// drafts are merged (a field needs ⌈n/2⌉ samples), deterministic rules are attached and the
+/// result goes to the editor unsaved. A sample that fails is reported, not fatal, while another
+/// sample succeeded.
+pub fn discover(
+    deps: &ImportDeps<'_>,
+    vlm: Option<&Vlm<'_>>,
+    documents: &[DocumentRecord],
+    name: Option<&str>,
+    cancel: Option<&AtomicBool>,
+    progress: &mut dyn FnMut(DiscoveryProgress<'_>),
+) -> Result<DiscoveryOutcome> {
+    if documents.is_empty() {
+        return Err(CoreError::Invalid("no documents".into()));
+    }
+    let n = documents.len();
+    let mut drafts: Vec<SchemaDraft> = Vec::new();
+    let mut summaries: Vec<DocDiscovery> = Vec::new();
+    for (i, doc) in documents.iter().enumerate() {
+        if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            return Err(CoreError::Cancelled);
+        }
+        let title = doc.title.clone().unwrap_or_else(|| doc.original_name.clone());
+        progress(DiscoveryProgress { index: i, total: n, title: &title, page: None });
+        let outcome = discover_document(deps, vlm, doc, name, cancel, &mut |p, t| {
+            progress(DiscoveryProgress { index: i, total: n, title: &title, page: Some((p, t)) })
+        });
+        match outcome {
+            Ok((d, s)) => {
+                drafts.push(d);
+                summaries.push(s);
+            }
+            Err(CoreError::Cancelled) => return Err(CoreError::Cancelled),
+            Err(e) if n > 1 => {
+                log::warn!("form field discovery skipped {}: {e}", doc.id);
+                summaries.push(DocDiscovery {
+                    doc_id: doc.id.clone(),
+                    title,
+                    source: "failed".into(),
+                    pages_used: Vec::new(),
+                    field_count: 0,
+                    note: Some(e.to_string()),
+                });
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    if drafts.is_empty() {
+        let why: Vec<String> = summaries.iter().filter_map(|s| s.note.clone()).collect();
+        return Err(CoreError::Invalid(format!("no_fields: {}", why.join("; "))));
+    }
+    let min_docs = drafts.len().div_ceil(2);
+    let (mut draft, stats) = merge_drafts(&drafts, name, min_docs);
+    let notes: Vec<String> =
+        summaries.iter().filter_map(|s| s.note.as_ref().map(|n| format!("{}: {n}", s.title))).collect();
+    draft.note = (!notes.is_empty()).then(|| notes.join(" / "));
+    if draft.definition.fields.is_empty() {
+        draft.definition.fields.push(FieldDef::new("title", "제목", "Title", FieldKind::String));
+    }
+    Ok(DiscoveryOutcome {
+        kind: "schema_discovery".into(),
+        draft,
+        documents: summaries,
+        merged_fields: stats.adopted,
+        dropped_fields: stats.dropped,
+    })
 }
 
 #[cfg(test)]
@@ -570,5 +1071,107 @@ mod tests {
         assert_eq!(slug_for_name("거래명세서(공급자용)"), "transaction_statement");
         assert_eq!(slug_for_name("Purchase Order"), "purchase_order");
         assert!(slug_for_name("특이한양식").starts_with("form_"));
+    }
+
+    fn fd(key: &str, label: &str, kind: FieldKind) -> FieldDef {
+        FieldDef::new(key, label, key, kind)
+    }
+
+    fn sample(name: &str, doc: &str, fields: Vec<FieldDef>) -> SchemaDraft {
+        let mut d = draft(name.to_string(), fields);
+        d.form_document_id = Some(doc.into());
+        d
+    }
+
+    #[test]
+    fn merges_samples_by_majority_with_required_on_all_and_union_of_columns() {
+        use FieldKind::*;
+        let blank = sample(
+            "견적서 양식",
+            "d1",
+            vec![
+                fd("recipient", "수신", String),
+                fd("date", "견적일자", Date),
+                FieldDef::new("total", "합계금액", "Total", Amount).required(),
+                fd("note", "비고", String),
+                FieldDef::new("items", "견적 내역", "Items", Table).with(vec![
+                    fd("item_name", "품명", String),
+                    fd("quantity", "수량", Integer),
+                    fd("amount", "금액", Amount),
+                ]),
+            ],
+        );
+        let filled = sample(
+            "견적서",
+            "d2",
+            vec![
+                fd("project_name", "사업명", String),
+                fd("recipient", "수신", String),
+                fd("date", "견적일자", Date),
+                fd("total", "합계금액", Amount),
+                FieldDef::new("items", "견적 내역", "Items", Table)
+                    .with(vec![fd("item_name", "품명", String), fd("unit_price", "단가", Amount)]),
+                fd("valid_until", "유효기간", String),
+            ],
+        );
+        let (m, stats) = merge_drafts(&[blank.clone(), filled.clone()], Some("견적서"), 1);
+        assert_eq!((m.name.as_str(), m.doc_type.as_str()), ("견적서", "estimate"));
+        let keys: Vec<&str> = m.definition.fields.iter().map(|f| f.key.as_str()).collect();
+        assert_eq!(keys, ["recipient", "date", "total", "items", "note", "project_name", "valid_until"], "{keys:?}");
+        let required: Vec<&str> = m.definition.fields.iter().filter(|f| f.required).map(|f| f.key.as_str()).collect();
+        assert_eq!(required, ["recipient", "date", "total", "items"], "on every sample");
+        let items = m.definition.table("items").unwrap();
+        assert_eq!(
+            items.fields.iter().map(|c| c.key.as_str()).collect::<Vec<_>>(),
+            ["item_name", "quantity", "unit_price", "amount"],
+            "columns by union: the shared one first, then by first position"
+        );
+        assert_eq!((stats.adopted, stats.dropped), (7, 0));
+        assert_eq!(m.form_document_id.as_deref(), Some("d1"));
+        assert_eq!(m.sample_document_ids, vec!["d2".to_string()]);
+        assert_eq!(m.source, SchemaSource::Form);
+        assert_eq!(m.definition.rules, vec![schema::RULE_ITEMS_SUM_TOTAL.to_string()]);
+
+        // Three samples: a field on one sample falls below ⌈3/2⌉; a typed kind beats `string` on a tie.
+        let third = sample("견적서", "d3", vec![fd("valid_until", "유효기간", Date), fd("recipient", "수신", String)]);
+        let (m3, s3) = merge_drafts(&[blank, filled, third], None, 2);
+        let keys: Vec<&str> = m3.definition.fields.iter().map(|f| f.key.as_str()).collect();
+        assert_eq!(keys, ["recipient", "date", "total", "items", "valid_until"], "{keys:?}");
+        assert_eq!(s3.dropped, 2, "note and project_name");
+        assert_eq!(m3.definition.field("valid_until").unwrap().kind, Date);
+        let required: Vec<&str> = m3.definition.fields.iter().filter(|f| f.required).map(|f| f.key.as_str()).collect();
+        assert_eq!(required, ["recipient"]);
+        assert_eq!(m3.name, "견적서", "the most common derived name without a hint");
+        assert_eq!(m3.sample_document_ids, vec!["d2".to_string(), "d3".to_string()]);
+    }
+
+    #[test]
+    fn infers_only_known_rules_from_the_merged_keys() {
+        use FieldKind::*;
+        let def = SchemaDef {
+            fields: vec![
+                fd("supply_total", "공급가액 합계", Amount),
+                fd("tax_total", "세액 합계", Amount),
+                fd("grand_total", "합계금액", Amount),
+                FieldDef::new("items", "견적 내역", "Items", Table).with(vec![fd("supply_amount", "공급가액", Amount)]),
+                fd("period_start", "시작", Date),
+                fd("period_end", "종료", Date),
+                fd("progress_percent", "진척률", Amount),
+            ],
+            rules: Vec::new(),
+        };
+        let rules = infer_rules(&def);
+        assert_eq!(
+            rules,
+            [
+                schema::RULE_SUPPLY_TAX_TOTAL,
+                schema::RULE_TAX_RATE,
+                schema::RULE_ITEMS_SUM_SUPPLY,
+                schema::RULE_PERIOD_ORDER,
+                schema::RULE_PERCENT_RANGE
+            ]
+        );
+        assert!(rules.iter().all(|r| schema::KNOWN_RULES.contains(&r.as_str())));
+        assert!(infer_rules(&SchemaDef { fields: vec![fd("name", "성명", String)], rules: Vec::new() }).is_empty());
     }
 }

@@ -142,6 +142,15 @@ export function useFields(documentId: string | undefined, runId: string | null =
   });
 }
 
+/** Corrections of a page (`pageNo`) or of the whole document (`null`), with the page's undo / redo state. */
+export function useDocumentTextHistory(documentId: string | undefined, pageNo: number | null) {
+  return useQuery({
+    queryKey: queryKeys.documentTextHistory(documentId ?? "", pageNo),
+    queryFn: () => api.documentsPageTextHistory(documentId ?? "", pageNo),
+    enabled: !!documentId,
+  });
+}
+
 export function useFieldHistory(documentId: string | undefined) {
   return useQuery({ queryKey: queryKeys.fieldHistory(documentId ?? ""), queryFn: () => api.pipelineFieldHistory(documentId ?? ""), enabled: !!documentId });
 }
@@ -160,7 +169,13 @@ export const generateKeys = {
   all: ["generate"] as const,
   templates: ["generate", "templates"] as const,
   drafts: ["generate", "drafts"] as const,
+  budget: ["generate", "budget"] as const,
 };
+
+/** Token budget context of the generate screen (model context, backend, cap). */
+export function useGenerateBudgetInfo(enabled = true) {
+  return useQuery({ queryKey: generateKeys.budget, queryFn: () => api.generateBudgetInfo(), enabled, staleTime: 30_000 });
+}
 
 export function useGenerateTemplates(enabled = true) {
   return useQuery({ queryKey: generateKeys.templates, queryFn: () => api.generateTemplates(), enabled, staleTime: Infinity });

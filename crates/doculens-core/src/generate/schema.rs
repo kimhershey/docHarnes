@@ -19,6 +19,11 @@ use super::templates::TemplateSpec;
 
 /// Name of the `response_format` schema (the scripted test backend keys replies by it).
 pub const SCHEMA_NAME: &str = "draft_document";
+/// Outline call of a split draft (0.3.0 item 4): title + section plan.
+pub const OUTLINE_SCHEMA_NAME: &str = "draft_outline";
+/// One section's body blocks of a split draft.
+pub const SECTION_SCHEMA_NAME: &str = "draft_section";
+pub const MAX_OUTLINE_SECTIONS: usize = 12;
 pub const MAX_BODY_BLOCKS: usize = 24;
 pub const MAX_LIST_ITEMS: usize = 12;
 pub const MAX_TABLE_ROWS: usize = 40;
@@ -26,6 +31,61 @@ pub const MAX_NOTES: usize = 6;
 
 fn enum_of(keys: &[String]) -> Value {
     json!({ "enum": keys.iter().map(|k| Value::String(k.clone())).collect::<Vec<_>>() })
+}
+
+/// Body block list (`heading | paragraph | list` with an optional source index).
+fn body_schema() -> Value {
+    json!({
+        "type": "array",
+        "maxItems": MAX_BODY_BLOCKS,
+        "items": {
+            "type": "object",
+            "properties": {
+                "kind": { "enum": ["heading", "paragraph", "list"] },
+                "text": { "type": "string" },
+                "items": { "type": "array", "maxItems": MAX_LIST_ITEMS, "items": { "type": "string" } },
+                "source_index": { "type": ["integer", "null"] }
+            },
+            "required": ["kind", "text", "items", "source_index"],
+            "additionalProperties": false
+        }
+    })
+}
+
+/// JSON Schema of the outline reply: `{ "title", "sections": [{ "heading", "weight", "notes" }] }`.
+pub fn outline_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "title": { "type": "string" },
+            "sections": {
+                "type": "array",
+                "maxItems": MAX_OUTLINE_SECTIONS,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "heading": { "type": "string" },
+                        "weight": { "type": "integer" },
+                        "notes": { "type": "string" }
+                    },
+                    "required": ["heading", "weight", "notes"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        "required": ["title", "sections"],
+        "additionalProperties": false
+    })
+}
+
+/// JSON Schema of one section reply: `{ "blocks": [...] }` (the section heading is added by the assembler).
+pub fn section_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": { "blocks": body_schema() },
+        "required": ["blocks"],
+        "additionalProperties": false
+    })
 }
 
 /// JSON Schema for the draft reply of `spec`.
@@ -77,21 +137,7 @@ pub fn json_schema(spec: &TemplateSpec) -> Value {
             "title": { "type": "string" },
             "fields": fields,
             "tables": tables,
-            "body": {
-                "type": "array",
-                "maxItems": MAX_BODY_BLOCKS,
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "kind": { "enum": ["heading", "paragraph", "list"] },
-                        "text": { "type": "string" },
-                        "items": { "type": "array", "maxItems": MAX_LIST_ITEMS, "items": { "type": "string" } },
-                        "source_index": { "type": ["integer", "null"] }
-                    },
-                    "required": ["kind", "text", "items", "source_index"],
-                    "additionalProperties": false
-                }
-            },
+            "body": body_schema(),
             "notes": { "type": "array", "maxItems": MAX_NOTES, "items": { "type": "string" } }
         },
         "required": ["title", "fields", "tables", "body", "notes"],

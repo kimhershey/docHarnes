@@ -329,12 +329,15 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
     case "register_form": {
       // §3.4.0 form registration: the schema screen's dialog derives the fields and confirms them in the grid.
       const ref = (op.doc_ref ?? "").trim();
-      const doc = ref && ref !== "current" ? await resolveDocument(ref) : ui.lastDocument ? await resolveDocument(ui.lastDocument.id) : (useDocumentsStore.getState().selectedIds[0] ? await resolveDocument(useDocumentsStore.getState().selectedIds[0]!) : null);
+      // Several sample documents (0.3.0 §2) → one discovery job; otherwise the named / open / selected one.
+      const many = op.doc_ids && op.doc_ids.length > 0 ? op.doc_ids : useDocumentsStore.getState().selectedIds;
+      const docs = many.length >= 2 ? (await Promise.all(many.map((id) => resolveDocument(id)))).filter((d): d is NonNullable<typeof d> => !!d) : [];
+      const doc = docs[0] ?? (ref && ref !== "current" ? await resolveDocument(ref) : ui.lastDocument ? await resolveDocument(ui.lastDocument.id) : (useDocumentsStore.getState().selectedIds[0] ? await resolveDocument(useDocumentsStore.getState().selectedIds[0]!) : null));
       if (!doc) throw new Error(t("planner.ui.document_not_found", { ref: ref || t("planner.params.current_document") }));
-      const params = new URLSearchParams({ register: doc.id });
+      const params = new URLSearchParams({ register: docs.length >= 2 ? docs.map((d) => d.id).join(",") : doc.id });
       if (op.name) params.set("name", op.name);
       navigate(`${SCREEN_ROUTES.schemas}?${params.toString()}`);
-      return done(t("planner.ui.register_form", { name: doc.original_name }), "info");
+      return done(t("planner.ui.register_form", { name: docs.length >= 2 ? t("planner.params.sample_docs", { count: docs.length }) : doc.original_name }), "info");
     }
     case "set_retention": {
       const ws = useWorkspaceStore.getState();

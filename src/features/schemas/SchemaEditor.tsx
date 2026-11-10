@@ -357,7 +357,7 @@ function FieldRow({ field, index, count, nested, onChange, onRemove, onMove }: {
  * Field grid of a schema draft (design §3.7.2 "필드 그리드: key/라벨/타입/필수/정규식/예시")
  * with the grammar lint shown live (debounced through the backend's lint command).
  */
-export function SchemaEditor({ draft, onChange, lintTick = 400 }: { draft: SchemaDraft; onChange: (d: SchemaDraft) => void; lintTick?: number }) {
+export function SchemaEditor({ draft, onChange, lintTick = 400, nameError = null }: { draft: SchemaDraft; onChange: (d: SchemaDraft) => void; lintTick?: number; nameError?: string | null }) {
   const { t } = useTranslation();
   const [issues, setIssues] = useState<LintIssue[]>([]);
   /** Sequence of the lint request whose answer is still wanted; a slower, older response is dropped. */
@@ -396,7 +396,12 @@ export function SchemaEditor({ draft, onChange, lintTick = 400 }: { draft: Schem
       <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
         <div>
           <Label htmlFor="schema-name">{t("schemas.editor.name")}</Label>
-          <Input id="schema-name" value={draft.name} onChange={(e) => set({ name: e.target.value })} data-testid="schema-name" />
+          <Input id="schema-name" value={draft.name} onChange={(e) => set({ name: e.target.value })} aria-invalid={nameError ? true : undefined} className={nameError ? "border-danger" : undefined} data-testid="schema-name" />
+          {nameError && (
+            <p className="text-xs text-danger" role="alert" data-testid="schema-name-error">
+              {nameError}
+            </p>
+          )}
         </div>
         <div>
           <Label htmlFor="schema-name-en">{t("schemas.editor.name_en")}</Label>

@@ -14,7 +14,13 @@ import { useUiStore } from "@/stores/ui";
 
 const NONE = "__none__";
 
-/** "새 프로젝트" / 편집: name, template, 접수번호, 담당, 기한, inbox subfolder mapping. */
+/** Today as a local ISO date (the default start of a new project). */
+export function todayIso(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** "새 프로젝트" / 편집: name, template, 접수번호, 담당, 시작·종료일 (plan §5), inbox subfolder mapping, keywords. */
 export function NewProjectDialog({ open, onOpenChange, project, onSaved }: { open: boolean; onOpenChange: (o: boolean) => void; project?: Project | null; onSaved: (p: Project) => void }) {
   const { t, i18n } = useTranslation();
   const toast = useUiStore((s) => s.toast);
@@ -23,7 +29,8 @@ export function NewProjectDialog({ open, onOpenChange, project, onSaved }: { ope
   const [template, setTemplate] = useState<string>(NONE);
   const [intakeNo, setIntakeNo] = useState("");
   const [owner, setOwner] = useState("");
-  const [due, setDue] = useState("");
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
   const [inbox, setInbox] = useState("");
   const [keywords, setKeywords] = useState("");
   const [busy, setBusy] = useState(false);
@@ -34,7 +41,8 @@ export function NewProjectDialog({ open, onOpenChange, project, onSaved }: { ope
     setTemplate(project?.template_id ?? NONE);
     setIntakeNo(project?.intake_no ?? "");
     setOwner(project?.owner ?? "");
-    setDue(project?.due_date ?? "");
+    setStart(project ? (project.start_date ?? "") : todayIso());
+    setEnd(project?.end_date ?? "");
     setInbox(project?.inbox_folder ?? "");
     setKeywords((project?.keywords ?? []).join(", "));
   }, [open, project]);
@@ -42,14 +50,15 @@ export function NewProjectDialog({ open, onOpenChange, project, onSaved }: { ope
     setBusy(true);
     try {
       // Optional fields follow the core contract: "" clears a stored value, an omitted / null field keeps it.
-      // The dialog has no notes field, so notes are left out and survive an edit.
+      // The dialog has no notes / settings fields, so those are left out and survive an edit.
       const input: ProjectInput = {
         id: project?.id ?? null,
         name: name.trim(),
         template_id: template === NONE ? "" : template,
         intake_no: intakeNo.trim(),
         owner: owner.trim(),
-        due_date: due.trim(),
+        start_date: start.trim(),
+        end_date: end.trim(),
         inbox_folder: inbox.trim(),
         keywords: keywords
           .split(/[,\n;]+/)
@@ -103,7 +112,7 @@ export function NewProjectDialog({ open, onOpenChange, project, onSaved }: { ope
               </SelectContent>
             </Select>
           </div>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="project-intake">{t("projects.dialog.intake_no")}</Label>
               <Input id="project-intake" value={intakeNo} onChange={(e) => setIntakeNo(e.target.value)} data-testid="project-intake" />
@@ -113,8 +122,13 @@ export function NewProjectDialog({ open, onOpenChange, project, onSaved }: { ope
               <Input id="project-owner" value={owner} onChange={(e) => setOwner(e.target.value)} data-testid="project-owner" />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="project-due">{t("projects.dialog.due")}</Label>
-              <Input id="project-due" type="date" value={due} onChange={(e) => setDue(e.target.value)} data-testid="project-due" />
+              <Label htmlFor="project-start-input">{t("projects.dialog.start")}</Label>
+              <Input id="project-start-input" type="date" value={start} onChange={(e) => setStart(e.target.value)} data-testid="project-start-input" />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="project-end-input">{t("projects.dialog.end")}</Label>
+              <Input id="project-end-input" type="date" value={end} onChange={(e) => setEnd(e.target.value)} data-testid="project-end-input" />
+              <p className="text-xs text-fg-subtle">{t("projects.dialog.end_hint")}</p>
             </div>
           </div>
           <div className="flex flex-col gap-1.5">
