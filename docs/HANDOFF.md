@@ -1679,6 +1679,11 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   - 통합(직접): 설명 범위 와이어 값 `collection` → `reference`(`ExplainScope` 타입·`opSpecs`·모의 검증은 둘 다 수락·i18n `explain_scope_reference`), `UiPlanContext.project_id`
     타입 필드(F1의 느슨한 캐스트 제거), 모의 버전 문자열 0.5.0, 묶음 이름 규칙을 모의와 맞춤(위 0011).
 - **문서**: `docs/plan/v0.5.0.md`, `docs/releases/v0.5.0.md`, 설계 §3.7.2 머리말·§3.14·§3.15 머리말, RUN-GUIDE(메뉴 이름·첫 실행 흐름), 체크리스트 "0.5.0" 절, README·CLAUDE.md.
+- **브랜치·CI**: 사용자 결정(버전별 브랜치)에 따라 `main`(PR #18 병합 커밋 4c2a7ca)에서 `release/0.5.0`을 분기해 통합 커밋 81e8e8d, `ci.yml`에 `release/**` 트리거 추가(3a2a26f).
+  CI run 42795675001(3a2a26f) 7개 잡 모두 성공. `main`의 run 42791778103(4c2a7ca)은 Web 잡 실패 — WIP 커밋에 포크가 스테이징한 옛 화면 파일 삭제만 먼저 들어가
+  타입체크가 깨진 상태였고, `release/0.5.0`을 병합하면 해소된다.
+- **Lite 설치파일**: "Windows installer (manual)" run 42797299609(`--ref release/0.5.0`, `ref=3a2a26f`, `variant=lite`, `publish=false`) — 결과는 아래 검증 표.
+  게시(`publish=true`)는 사용자 확인 뒤(계획 §4 5).
 
 ### 테스트·검증
 
