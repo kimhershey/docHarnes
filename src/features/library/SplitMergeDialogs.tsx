@@ -121,7 +121,7 @@ export function MergeDialog({ open, onOpenChange, ids, onDone }: { open: boolean
   };
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="relative max-w-md" closeLabel={t("common.close")} data-testid="merge-dialog" {...drop.props}>
+      <DialogContent className="max-w-md" closeLabel={t("common.close")} data-testid="merge-dialog" {...drop.props}>
         <DropHint active={drop.isActive} over={drop.isOver} testId="merge-drop-hint">
           {t("pipeline.merge.drop_hint")}
         </DropHint>

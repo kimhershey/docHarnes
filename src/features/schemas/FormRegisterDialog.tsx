@@ -113,7 +113,7 @@ export function FormRegisterDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => (o ? onOpenChange(true) : close())}>
-      <DialogContent closeLabel={t("common.close")} data-testid="form-register-dialog" className="relative" {...drop.props}>
+      <DialogContent closeLabel={t("common.close")} data-testid="form-register-dialog" {...drop.props}>
         <DropHint active={drop.isActive} over={drop.isOver} testId="form-register-drop-hint">
           {t("schemas.form.drop_hint")}
         </DropHint>
@@ -153,7 +153,9 @@ export function FormRegisterDialog({
                 {t("schemas.form.deriving")}
               </span>
               <Progress value={job?.progress ?? null} label={t("schemas.form.deriving")} />
-              <span className="text-xs text-fg-subtle">{detail ?? t("schemas.pending_hint")}</span>
+              <span className="text-xs text-fg-subtle" data-testid="form-register-pending-hint">
+                {job?.state === "queued" ? t("schemas.form.waiting_hint") : (detail ?? t("schemas.pending_hint"))}
+              </span>
             </div>
           )}
         </div>

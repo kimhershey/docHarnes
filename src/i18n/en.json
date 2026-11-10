@@ -2145,6 +2145,7 @@
       "name_hint": "Leave empty to use the document title / file name.",
       "derive": "Derive fields",
       "deriving": "Looking for fields in the form…",
+      "waiting_hint": "Starts once the running engine job (document processing etc.) finishes; see Jobs for the queue.",
       "confirm": "Check and edit the derived fields, then register.",
       "register": "Register form",
       "no_docs": "Documents is empty. Import the form document first.",
