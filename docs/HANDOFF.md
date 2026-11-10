@@ -1443,6 +1443,9 @@ P6·P7 항목.
 
 ## 다음 단계 메모 (v1.x)
 
+0. **0.3.0 계획(사용자 요청 6건, 2026-11-10)**: `docs/plan/v0.3.0.md` — 생성 템플릿·추출 내장 양식을 SW 개발 문서로, 문서 N개로
+   스키마 자동 저장, 생성 토큰 예산(절별 분할 생성), 프로젝트 상태를 시작·종료일 기준으로, 정리·내보내기의 프로젝트(설정)별 분류.
+   항목별 현재 구현·변경·영향 파일·결정 질문(§9)·순서(3 → 1 → 5+6 → 2 → 4, 약 15 작업일)를 적어 두었고 사용자 답을 기다린다.
 1. 남은 부록 D op(GUI 전용: `render`·`rotate`·`split`·`merge`·`add_to_kb`·`manage_collection`·`define_term`·`set_tier`·
    `set_backend`·`import_model`·`download_model`·`benchmark`·`open_workspace`)을 플래너에서 UI 액션으로 연결.
 2. P4·P5 숙제 중 미착수: bbox 그라운딩(디지털 PDF 문자 박스), 배치 PDF 자동 경계 탐지, 컬렉션 폴더 감시, OCR 출력 건전성
