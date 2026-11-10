@@ -93,7 +93,13 @@ pub fn draft(app: &AppHandle, mut req: DraftRequest, project_id: Option<String>,
         req.max_tokens = Some(m.clamp(200, info.cap));
     }
     let pctx = pipeline_bridge::context(app)?; // a workspace must be open
-    let label = draft_label(&req, pctx.db());
+    let mut label = draft_label(&req, pctx.db());
+    if req.revise.is_some() {
+        // 0.7.0: a revision job is listed under the draft's title ("… · AI 수정").
+        let title = req.previous.as_deref().map(|d| d.title.trim().to_string()).filter(|t| !t.is_empty());
+        let ko = req.language == doculens_core::settings::Language::Ko;
+        label = format!("{} · {}", title.unwrap_or(label), if ko { "AI 수정" } else { "AI revision" });
+    }
     state.jobs.submit(
         JobSpec::Draft { req: Box::new(req), project_id, source: source.to_string() },
         &label,
