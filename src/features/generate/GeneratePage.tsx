@@ -453,10 +453,13 @@ export function GeneratePage() {
               ))}
             </div>
           )}
-          <section className={cn("min-h-0 min-w-0 overflow-hidden", narrow && pane !== "preview" && "hidden")} aria-label={t("generate.preview.title")} data-testid="generate-pane-preview-box">
+          {/* Narrow: the two panes share one cell and the one that is not picked is `invisible`, not `display: none` —
+              it keeps its layout, so the boxes inside it (the editor's table scrollers with their sr-only captions)
+              still hold what they scroll, and it takes neither clicks nor focus. */}
+          <section className={cn("min-h-0 min-w-0 overflow-hidden", narrow && "col-start-2 row-start-2", narrow && pane !== "preview" && "invisible")} aria-label={t("generate.preview.title")} data-testid="generate-pane-preview-box">
             <DraftPreview draft={draft} />
           </section>
-          <aside className={cn("relative min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-4", narrow ? pane !== "editor" && "hidden" : "border-l border-border")} aria-label={t("generate.editor.title")} data-testid="generate-pane-editor-box">
+          <aside className={cn("relative min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-4", narrow ? cn("col-start-2 row-start-2", pane !== "editor" && "invisible") : "border-l border-border")} aria-label={t("generate.editor.title")} data-testid="generate-pane-editor-box">
             {draft ? <DraftEditor draft={draft} onChange={changeDraft} excluded={excluded} onToggleExcluded={(id) => setExcluded((x) => toggleExcluded(x, id))} disabled={running || arriving} onRevise={reviseSection} /> : <p className="text-sm text-fg-subtle">{t("generate.editor.empty")}</p>}
           </aside>
         </div>
