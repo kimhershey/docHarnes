@@ -317,6 +317,21 @@ pub fn sections_of(body: &[DraftBlock]) -> Vec<Section> {
 pub const MAX_STORED_TEXT_CHARS: usize = 20_000;
 
 impl DraftRequest {
+    /// Makes the project of a draft job and the project of its request one thing. A job started for
+    /// a project (`job_project`: a 보완요청서 requested from the project page) gives its project to a
+    /// request that names none, so the request's knowledge searches stay inside it; a request that
+    /// names a project (the planner's project scope, the 문서 작성 screen) gives it to a job that has
+    /// none, so the result links to it. Returns the job's project.
+    pub fn bind_project(&mut self, job_project: Option<String>) -> Option<String> {
+        let named = |p: Option<String>| p.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+        self.project_id = named(self.project_id.take());
+        let job_project = named(job_project).or_else(|| self.project_id.clone());
+        if self.project_id.is_none() {
+            self.project_id = job_project.clone();
+        }
+        job_project
+    }
+
     /// Bounds the request's free text for storage: the content (trimmed), the instruction and every
     /// pasted text source keep [`MAX_STORED_TEXT_CHARS`] characters. This is not the prompt limit:
     /// what the model is given of the content and the instruction is decided — and reported when it

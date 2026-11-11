@@ -84,6 +84,8 @@ pub fn draft(app: &AppHandle, mut req: DraftRequest, project_id: Option<String>,
     // small context), and the core reports a cut in the draft — cutting to those limits here as well
     // would hide it.
     req.bound_stored_text();
+    // A draft that belongs to a project searches for evidence inside it, and its result links to it.
+    let project_id = req.bind_project(project_id);
     let state = app.state::<AppState>();
     // The reply token budget is capped by the active backend (GPU 32K / CPU 8K by default, settings).
     if let Some(m) = req.max_tokens {

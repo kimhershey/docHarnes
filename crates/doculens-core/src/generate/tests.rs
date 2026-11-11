@@ -670,6 +670,121 @@ fn knowledge_sources_are_numbered_and_excludable() {
     assert!(out2.draft.notes.iter().any(|n| n.contains("근거를 찾지 못했습니다")), "{:?}", out2.draft.notes);
 }
 
+/// CON-3 (core side): a draft that carries `project_id` looks for evidence inside that project — its work
+/// documents, its reference group and the 공통 참고 자료 — in every lookup: the explicit query, the content
+/// query, the per-section queries of a split draft and a revision. Another project's documents stay out.
+#[test]
+fn project_drafts_search_for_evidence_inside_the_project() {
+    use crate::knowledge::{repo as krepo, CollectionInput};
+    use crate::projects::{repo as projects, ProjectInput};
+    let w = world();
+    // Two projects whose 과업지시서 both speak of the 검수 기준, and a common regulation.
+    w.add_doc(
+        "a-sow",
+        "한빛_과업지시서.pdf",
+        DocumentRole::Work,
+        &["한빛 포털 과업지시서\n\n검수 기준: 통합 테스트 통과율 95% 이상이면 검수를 완료한다. 추진 일정은 12월까지다."],
+    );
+    w.add_doc(
+        "b-sow",
+        "새빛_과업지시서.pdf",
+        DocumentRole::Work,
+        &["새빛 쇼핑몰 과업지시서\n\n검수 기준: 통합 테스트 통과율 80% 이상이면 검수를 완료한다. 추진 일정은 3월까지다."],
+    );
+    w.add_doc(
+        "rule",
+        "검수규정.pdf",
+        DocumentRole::Knowledge,
+        &["검수 규정\n\n제5조(검수 기준) 검수는 과업지시서의 검수 기준에 따른다."],
+    );
+    let analyzer = Analyzer::simple();
+    for id in ["a-sow", "b-sow", "rule"] {
+        let doc = w.db.with(|c| docs::get_document(c, id)).unwrap().unwrap();
+        index_document(&IndexDeps { db: &w.db, analyzer: &analyzer, options: Default::default() }, &doc, true).unwrap();
+    }
+    let project = |name: &str, doc: &str| {
+        let p = w.db.with(|c| projects::save_project(c, &ProjectInput { name: name.into(), ..Default::default() }));
+        let p = p.unwrap();
+        w.db.with(|c| projects::add_documents(c, &p.id, &[doc.to_string()])).unwrap();
+        p.id
+    };
+    let a = project("한빛 포털", "a-sow");
+    let _b = project("새빛 쇼핑몰", "b-sow");
+    let common =
+        w.db.with(|c| {
+            krepo::save_collection(c, &CollectionInput { name: "사규".into(), active: true, ..Default::default() })
+        })
+        .unwrap();
+    w.db.with(|c| krepo::add_docs_to_collection(c, &common.id, &["rule".into()])).unwrap();
+
+    let reply = json!({"title": "검수 보고", "fields": [], "tables": [], "body": [], "notes": []}).to_string();
+    let section = json!({ "blocks": [{"kind": "paragraph", "text": "본문", "items": [], "source_index": null}] });
+    // Runs a draft and returns every prompt of its calls plus the documents offered as references.
+    let run = |req: &DraftRequest| {
+        let chat = SeqChat::new(vec![reply.clone(), section.to_string()]);
+        let vlm = Vlm::new(&chat, "scripted".into(), Profile::Balanced, None);
+        let mut deps = w.deps(Some(&vlm), None);
+        deps.knowledge = Some(SearchDeps { db: &w.db, analyzer: &analyzer, embedder: None });
+        let out = draft::draft(&deps, req).unwrap();
+        let calls = chat.requests.lock().unwrap().len();
+        let prompts: Vec<String> = (0..calls).map(|c| chat.user_prompt(c)).collect();
+        let mut refs: Vec<String> = out.draft.references.iter().filter_map(|r| r.doc_id.clone()).collect();
+        refs.sort();
+        refs.dedup();
+        (prompts.join("\n=====\n"), refs, out)
+    };
+    let base = DraftRequest {
+        form_ref: Some("progress_report".into()),
+        content: "검수 기준에 따른 통합 테스트 진척 보고".into(),
+        sources: vec![SourceRef::Knowledge { query: "검수 기준 통과율".into() }],
+        use_knowledge: true,
+        ..Default::default()
+    };
+    // Without a project the whole library is searched: both projects' documents come back.
+    let (prompts, everything, _) = run(&base);
+    assert_eq!(everything, ["a-sow", "b-sow", "rule"], "{prompts}");
+    // Inside project A: its own 과업지시서 and the common regulation, never project B's.
+    let in_a = DraftRequest { project_id: Some(a.clone()), ..base.clone() };
+    let (prompts, refs, out) = run(&in_a);
+    assert_eq!(refs, ["a-sow", "rule"], "{prompts}");
+    assert!(prompts.contains("통과율 95%") && !prompts.contains("새빛") && !prompts.contains("80%"), "{prompts}");
+    // The stored request keeps the project, so a regeneration stays inside it.
+    assert_eq!(out.draft.request.as_ref().unwrap().project_id.as_deref(), Some(a.as_str()));
+    // Section by section (five calls, each section looks up its own heading): still no document of B.
+    let (prompts, refs, out) = run(&DraftRequest { max_tokens: Some(8_000), ..in_a.clone() });
+    assert_eq!(out.sections, 5);
+    assert!(!refs.contains(&"b-sow".to_string()) && !prompts.contains("새빛"), "{refs:?}\n{prompts}");
+    // A section revision of that draft gathers its sources the same way.
+    let revise = DraftRequest {
+        previous: Some(Box::new(filled_progress_report())),
+        feedback: Some("검수 기준을 인용해 주세요".into()),
+        revise: Some(super::ReviseScope::Section { section: 2 }),
+        ..in_a.clone()
+    };
+    let (prompts, refs, _) = run(&revise);
+    assert_eq!(refs, ["a-sow", "rule"], "{prompts}");
+    assert!(!prompts.contains("새빛"), "{prompts}");
+
+    // A project that no longer exists allows nothing, like every project-scoped search — the draft says why
+    // it has no evidence (only when it would have searched).
+    let gone = DraftRequest { project_id: Some("gone".into()), ..base.clone() };
+    let (_, refs, out) = run(&gone);
+    assert!(refs.is_empty(), "{refs:?}");
+    assert!(out.draft.notes.iter().any(|n| n.contains("프로젝트를 찾을 수 없어")), "{:?}", out.draft.notes);
+    let (_, _, out) = run(&DraftRequest { sources: Vec::new(), use_knowledge: false, ..gone });
+    assert!(!out.draft.notes.iter().any(|n| n.contains("프로젝트를 찾을 수 없어")), "{:?}", out.draft.notes);
+
+    // The job bridge makes the job's project and the request's project one thing.
+    let mut from_project_page = DraftRequest::default();
+    assert_eq!(from_project_page.bind_project(Some(a.clone())), Some(a.clone()));
+    assert_eq!(from_project_page.project_id.as_deref(), Some(a.as_str()), "the 보완요청서 searches inside its project");
+    let mut from_screen = DraftRequest { project_id: Some(format!(" {a} ")), ..Default::default() };
+    assert_eq!(from_screen.bind_project(None), Some(a.clone()), "the result links to the request's project");
+    assert_eq!(from_screen.project_id.as_deref(), Some(a.as_str()));
+    let mut none = DraftRequest { project_id: Some("  ".into()), ..Default::default() };
+    assert_eq!((none.bind_project(Some(String::new())), none.project_id.clone()), (None, None));
+}
+
 #[test]
 fn supplement_request_is_composed_by_rules_without_a_model() {
     let w = world();

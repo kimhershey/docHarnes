@@ -405,6 +405,18 @@ fn knowledge_sources(
 pub fn gather_sources(deps: &GenerateDeps<'_>, req: &DraftRequest, notes: &mut Vec<String>) -> Result<Vec<Source>> {
     let ko = deps.ko();
     let scope = knowledge_scope(req);
+    // A project that no longer exists allows nothing (as everywhere a project scopes a search):
+    // say so instead of drafting without evidence in silence.
+    let searches = req.use_knowledge || req.sources.iter().any(|s| matches!(s, SourceRef::Knowledge { .. }));
+    if let Some(project) = scope.project_id.as_deref().filter(|_| searches) {
+        if deps.db.with(|c| crate::projects::repo::get_project(c, project))?.is_none() {
+            notes.push(tr(
+                ko,
+                "이 초안의 프로젝트를 찾을 수 없어 참고 자료를 검색하지 못했습니다 — 프로젝트를 다시 지정하세요.",
+                "The project of this draft no longer exists, so no reference material was searched; choose the project again.",
+            ));
+        }
+    }
     let excluded: HashSet<&str> = req.excluded_sources.iter().map(String::as_str).collect();
     let mut seen: HashSet<i64> = HashSet::new();
     let mut out: Vec<Source> = Vec::new();
