@@ -789,25 +789,18 @@ pub fn parse_answer(text: &str, max_source: u32) -> (Vec<AnswerSentence>, Option
             continue;
         }
         let stripped = line.trim_start_matches(['#', '*', '-', ' ', '>']).trim();
-        let head_prefix = stripped
-            .strip_prefix("상충")
-            .or_else(|| stripped.strip_prefix("Conflicts"))
-            .or_else(|| stripped.strip_prefix("Conflict"))
-            .or_else(|| stripped.strip_prefix("conflict"));
-        let is_conflict_head =
-            head_prefix.is_some_and(|rest| rest.trim_start_matches(['*', ' ']).starts_with([':', '：']));
+        // The plural forms come first: "Conflicts: none" must not leave "s: none" behind.
+        let head_rest = ["상충", "Conflicts", "conflicts", "Conflict", "conflict"]
+            .iter()
+            .find_map(|head| stripped.strip_prefix(head))
+            .filter(|rest| rest.trim_start_matches(['*', ' ']).starts_with([':', '：']));
+        let is_conflict_head = head_rest.is_some();
         if is_conflict_head || in_conflicts {
             in_conflicts = true;
-            let body = if is_conflict_head {
-                stripped
-                    .trim_start_matches("상충")
-                    .trim_start_matches("Conflict")
-                    .trim_start_matches("conflict")
-                    .trim_start_matches("Conflicts")
-                    .trim_start_matches([':', '：', '*', ' '])
-                    .trim()
-            } else {
-                line
+            // The heading's own line continues after the colon; later lines belong to the paragraph whole.
+            let body = match head_rest {
+                Some(rest) => rest.trim_start_matches([':', '：', '*', ' ']).trim(),
+                None => line,
             };
             if !body.is_empty() {
                 let c = conflicts.get_or_insert_with(String::new);
@@ -1326,6 +1319,20 @@ mod tests {
         assert!(c.is_none());
         let (_, c) = parse_answer("답변[1].\n\n**상충:** 구판은 120,000원[2].", 2);
         assert_eq!(c.as_deref(), Some("구판은 120,000원[2]."));
+    }
+
+    /// KNO-12: the plural heading an English reply uses ("Conflicts:") is stripped whole — "Conflicts: none"
+    /// used to leave "s: none" behind, which was shown as a conflict warning.
+    #[test]
+    fn the_plural_conflicts_heading_is_stripped_whole() {
+        for none in ["Conflicts: none", "Conflicts: None.", "**Conflicts:** none", "conflicts: none", "Conflicts : N/A"] {
+            let (_, c) = parse_answer(&format!("Answer [1].\n\n{none}"), 1);
+            assert!(c.is_none(), "{none:?} → {c:?}");
+        }
+        let (_, c) = parse_answer("Answer [1].\n\nConflicts: the 2023 edition caps it at 120,000 [2].", 2);
+        assert_eq!(c.as_deref(), Some("the 2023 edition caps it at 120,000 [2]."));
+        let (_, c) = parse_answer("Answer [1].\n\nconflicts: the editions differ [2].", 2);
+        assert_eq!(c.as_deref(), Some("the editions differ [2]."));
     }
 
     #[test]
