@@ -503,7 +503,22 @@ impl EngineManager {
                 ..EngineStatus::default()
             };
         });
-        launch(&self.inner, &cfg, generation)?;
+        if let Err(e) = launch(&self.inner, &cfg, generation) {
+            // `launch` records the failures it sees once the process exists (early exit, no
+            // `/health`). When the process could not be created at all (binary blocked or missing,
+            // no free port) nothing else leaves "starting", and the start button stays disabled.
+            let message = e.to_string();
+            self.inner.log(LogLine::app(format!("engine start failed: {message}")));
+            self.inner.update_status(|s| {
+                if s.state == EngineState::Starting {
+                    s.state = EngineState::Stopped;
+                    s.pid = None;
+                    s.port = None;
+                    s.last_error = Some(message.clone());
+                }
+            });
+            return Err(e);
+        }
         spawn_monitor(&self.inner, generation);
         spawn_sse(&self.inner, generation);
         Ok(self.inner.status())
@@ -895,6 +910,44 @@ mod tests {
         assert!(m.recent_logs(10).is_empty());
         // stop on a stopped manager is a no-op
         m.stop().unwrap();
+        assert_eq!(m.status().state, EngineState::Stopped);
+    }
+
+    /// PLT-14: when the sidecar cannot even be created (binary blocked by antivirus or missing, no
+    /// free port) the engine must not stay "starting" — the start button is disabled in that state.
+    #[test]
+    fn failed_launch_leaves_the_engine_stopped_with_the_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let binary = EngineBinary {
+            path: tmp.path().join("missing-llama-server"),
+            backend: Backend::Cpu,
+            version: None,
+            build_number: None,
+            source: EngineSource::Env,
+        };
+        let cfg = EngineConfig::new(binary, tmp.path().join("presets.ini"), tmp.path().to_path_buf());
+        let m = EngineManager::new();
+        let events = m.subscribe();
+        let err = m.start(cfg.clone()).unwrap_err();
+        assert!(err.to_string().contains("cannot start"), "{err}");
+        let st = m.status();
+        assert_eq!(st.state, EngineState::Stopped);
+        assert!(!m.is_starting());
+        assert!(st.last_error.as_deref().is_some_and(|e| e.contains("cannot start")), "{:?}", st.last_error);
+        assert_eq!((st.pid, st.port), (None, None));
+        // The webview hears about the final state, and the reason is in the engine log.
+        let states: Vec<EngineState> = events
+            .try_iter()
+            .filter_map(|e| match e {
+                EngineEvent::Status { status } => Some(status.state),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(states.first(), Some(&EngineState::Starting));
+        assert_eq!(states.last(), Some(&EngineState::Stopped));
+        assert!(m.recent_logs(10).iter().any(|l| l.text.contains("engine start failed")));
+        // Starting again is possible and fails the same clean way.
+        assert!(m.start(cfg).is_err());
         assert_eq!(m.status().state, EngineState::Stopped);
     }
 }
