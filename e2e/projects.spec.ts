@@ -60,6 +60,39 @@ test.describe("P6 projects", () => {
     await expect(page.getByTestId("checklist-wbs")).toHaveAttribute("data-missing", "false");
     await expect(page.getByTestId("checklist-test_report")).toHaveAttribute("data-missing", "false");
 
+    // UI-4: no column of the table is squeezed. The type ("요구사항정의서" used to break into three lines), the
+    // status and the date stay on one line; the path is a second line under the name.
+    const srsRow = page.getByTestId(`project-doc-${srs}`);
+    /** Number of text lines in a cell of the requirements row (the line boxes of its text nodes). */
+    const lines = (testId: string) =>
+      srsRow.getByTestId(testId).evaluate((el) => {
+        const tops = new Set<number>();
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          for (const r of range.getClientRects()) tops.add(Math.round(r.top));
+        }
+        return tops.size;
+      });
+    await expect(srsRow.getByTestId("project-doc-type")).toHaveText(ko.documents.doc_types.srs);
+    for (const cell of ["project-doc-name", "project-doc-type", "project-doc-status", "project-doc-review", "project-doc-added"]) expect(await lines(cell), `${cell} is one line`).toBe(1);
+    const nameBox = (await srsRow.getByTestId("project-doc-name").boundingBox())!;
+    const pathBox = (await srsRow.getByTestId("project-doc-path").boundingBox())!;
+    expect(pathBox.y, "the path is under the name").toBeGreaterThanOrEqual(nameBox.y + nameBox.height - 1);
+    await expect(srsRow.getByTestId("project-doc-path")).toHaveAttribute("title", /요구사항정의서-v1\.2\.pdf$/);
+    // A narrower tab (a small window, or 1280 px at about 150 %): the less important columns give way instead of
+    // squeezing the others, and nothing scrolls sideways.
+    await page.setViewportSize({ width: 860, height: 800 });
+    await expect(srsRow.getByTestId("project-doc-added")).toBeHidden();
+    await expect(srsRow.getByTestId("project-doc-review")).toBeHidden();
+    await expect(srsRow.getByTestId("project-doc-status")).toBeVisible();
+    for (const cell of ["project-doc-type", "project-doc-status"]) expect(await lines(cell), `${cell} is one line when narrow`).toBe(1);
+    expect((await srsRow.getByTestId("project-doc-name").boundingBox())!.width, "the name keeps a readable width").toBeGreaterThan(150);
+    for (const box of [page.locator("main#main"), page.getByTestId("project-documents-drop")]) expect(await box.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await expect(srsRow.getByTestId("project-doc-added")).toBeVisible();
+
     // Rules: the template's three rules, then two sentences converted in the grid.
     await page.getByTestId("project-tab-rules").click();
     await expect(page.getByTestId("rule-list").locator('[data-testid^="rule-"][data-rule-enabled]')).toHaveCount(3);
