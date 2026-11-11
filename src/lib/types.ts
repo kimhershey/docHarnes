@@ -902,6 +902,12 @@ export interface ImportReport {
   batch_id: string;
   imported: string[];
   relinked: string[];
+  /**
+   * Registered documents the batch met again (same path / same content, 0.8.0): they were put into the batch's
+   * collection / project like the imported ones. An import where every file is already registered succeeds
+   * with these ids instead of failing with "nothing to import".
+   */
+  existing?: string[];
   failed: [string, string][];
   skipped: number;
   cancelled: boolean;
@@ -1248,7 +1254,15 @@ export interface Answer {
   document_id: string | null;
   created_at: string | null;
   feedback: number | null;
+  /**
+   * Set when the request text or the reply was cut (absent otherwise, 0.8.0): `input` — the text of a text-only
+   * request did not fit the model's context and only its beginning was read; `output` — the reply stopped at
+   * the token limit; `both`.
+   */
+  truncated?: AnswerTruncation;
 }
+
+export type AnswerTruncation = "input" | "output" | "both";
 
 export interface SavedAnswer {
   id: number;
@@ -1290,10 +1304,38 @@ export interface ProcessRequest {
   document_ids: string[];
   level: PipelineLevel;
   schema?: SchemaChoice;
+  /**
+   * Re-run stages whose results already exist. OCR text is read again; page text the user corrected by hand
+   * (`text_source = manual`) is only replaced together with `reocr_manual`.
+   */
   force?: boolean;
+  /** With `force`: also re-OCR pages whose text was corrected by hand, replacing the correction (default off). */
+  reocr_manual?: boolean;
   profile?: Profile | null;
   pages?: number[];
   precise?: boolean | null;
+  /** Leave the extraction of documents that already have one alone (the automatic pipeline after an import). */
+  skip_extracted?: boolean;
+  /**
+   * Identity of the request across attempts (set by the shell when the job is queued): a job that is retried or
+   * resumed goes on with the documents it has not finished (`ProcessReport.resumed`).
+   */
+  request_id?: string;
+}
+
+/** Mirror of `pipeline::ProcessReport`: the result of a pipeline job / a classify · ocr · extract plan step. */
+export interface ProcessReport {
+  /** Documents this run processed. */
+  processed: string[];
+  skipped?: string[];
+  /** Documents an earlier attempt of the same request (`ProcessRequest.request_id`) had already finished. */
+  resumed?: string[];
+  failed: [string, string][];
+  classified: number;
+  ocr_pages: number;
+  extracted: number;
+  review_pending: number;
+  cancelled: boolean;
 }
 
 export type FieldKind = "string" | "amount" | "integer" | "date" | "boolean" | "enum" | "brn" | "rrn" | "account" | "phone" | "email" | "table" | "group";
@@ -1984,7 +2026,10 @@ export interface OrganizeItem {
   from: string;
   to: string | null;
   status: OrganizeItemStatus;
-  /** `review_pending` | `missing_file` | `source_changed` | an error. */
+  /**
+   * `review_pending` | `missing_file` | `source_changed` | `project_copy` (status `unchanged`: the document is a
+   * copy filed into a project, which organising leaves where it is) | an error.
+   */
   reason?: string | null;
   /** Template variables that rendered as 미상. */
   missing?: string[];
@@ -2617,8 +2662,15 @@ export interface Evidence {
   value: string | null;
   normalized: string | null;
   page: number | null;
-  status: string | null;
+  /**
+   * Field review state at check time (`auto`, `pending`, `approved`, `rejected`, …), or why there is no field:
+   * `absent` (the extraction has no such field), `not_extracted` (the document has no extraction run yet),
+   * `missing_document` (no document of the type), `document` (a document-level value stands in).
+   */
+  status: EvidenceStatus | null;
 }
+
+export type EvidenceStatus = FieldStatus | "pending" | "absent" | "not_extracted" | "missing_document" | "document";
 
 export interface RuleResult {
   id: string;
@@ -2644,6 +2696,11 @@ export interface CheckRun {
   missing: number;
   results: RuleResult[];
   missing_doc_types: string[];
+  /**
+   * Only some of the enabled rules were run (`rule_ids`). Such a run answers that question alone: it is returned
+   * to the caller but not stored, so it never replaces the project's last full check. Absent on a full run.
+   */
+  partial?: true;
 }
 
 export interface ChecklistItem {

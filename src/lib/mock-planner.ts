@@ -46,6 +46,7 @@ import * as mg from "./mock-generate";
 import { mockKnowledge, projectReferenceGroup } from "./mock-knowledge";
 import * as pl from "./mock-pipeline";
 import * as mp from "./mock-projects";
+import { resolveJosa } from "./josa";
 import {
   DEFAULT_NAME_TEMPLATE,
   EVENTS,
@@ -190,8 +191,13 @@ export function compact(s: string): string {
   return out;
 }
 
+/**
+ * A sentence of the mock in the UI language. Like the app's strings (the i18n post-processor) and the core's own
+ * sentences, the Korean one names its particles by the word in front of them: "문서을(를)" reads "문서를",
+ * "'시스템'(으)로" reads "'시스템'으로" (an ending that cannot be decided — Latin letters — keeps the written form).
+ */
 function tr(ko: boolean, k: string, e: string): string {
-  return ko ? k : e;
+  return ko ? resolveJosa(k) : e;
 }
 
 function countLabel(n: number, ko: boolean): string {
@@ -310,12 +316,13 @@ export function isClarification(plan: Plan): boolean {
   return plan.intent === "clarify" || plan.operations.every((o) => o.op === "clarify") || (plan.operations.length === 0 && !!plan.clarification_question);
 }
 
+// A plan's summary is one of the mock's own sentences: its particles are resolved here, whichever way it was built.
 function single(op: Op, confidence: number, summary: string, scope: Scope = emptyScope()): Plan {
-  return { intent: op.op, scope, operations: [op], requires_confirmation: needsConfirmation(op), confidence, clarification_question: null, summary };
+  return { intent: op.op, scope, operations: [op], requires_confirmation: needsConfirmation(op), confidence, clarification_question: null, summary: resolveJosa(summary) };
 }
 
 function many(ops: Op[], scope: Scope, confidence: number, summary: string): Plan {
-  return { intent: ops[0]?.op ?? "noop", scope, operations: ops, requires_confirmation: ops.some(needsConfirmation), confidence, clarification_question: null, summary };
+  return { intent: ops[0]?.op ?? "noop", scope, operations: ops, requires_confirmation: ops.some(needsConfirmation), confidence, clarification_question: null, summary: resolveJosa(summary) };
 }
 
 function clarify(question: string, confidence: number): Plan {
@@ -1357,7 +1364,7 @@ function ruleSetRetention(t: Text): Plan | null {
   const item = RETENTION_WORDS.find(([w]) => t.compact.includes(compact(w)))?.[1];
   if (!item) return null;
   const forever = has(t, ["무기한", "영구", "forever", "indefinitely", "never"]);
-  const m = t.raw.match(/(\d+)\s*(일|days?|d)/iu);
+  const m = t.raw.match(/(\d+)\s*(일|(?:days?|d)\b)/iu);
   if (!forever && !m) return null;
   const days = forever ? -1 : Number(m![1]);
   const label = tr(t.ko, { documents: "원본 문서", extractions: "추출 결과", logs: "로그", journal: "파일 조작 저널", chats: "대화 기록", temp: "임시 데이터" }[item], item);
@@ -1767,11 +1774,43 @@ function ruleOpenDocument(t: Text): Plan | null {
 
 const QUESTION_WORDS = ["알려줘", "알려주", "알려", "뭐야", "무엇", "어떻게", "어디", "언제", "누구", "왜", "인가요", "인지", "나요", "까요", "가요", "설명해", "explain", "what", "how", "when", "where", "why", "which", "who"];
 
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * The type a question names as the place to look — "지난달 회의록에서 결정된 사항은?", "견적서 중에서 …",
+ * "what do the contracts say in the meeting minutes" — as opposed to the type it asks about: "견적서 내용은?" is a
+ * question about estimates, not a filter on the documents typed 견적서. (The mock has no model to tell the two
+ * apart; the particle after the type name stands in for it.)
+ */
+function placeTypeOf(t: Text, ctx: PlanContext): DocTypeSummary | null {
+  let best: { d: DocTypeSummary; len: number } | null = null;
+  for (const d of ctx.doc_types) {
+    for (const label of [d.label_ko, d.label_en, d.slug, ...docTypeAliases(d.slug)]) {
+      const len = Array.from(compact(label)).length;
+      if (len < 2 || (best !== null && len <= best.len)) continue;
+      const name = label.trim().toLowerCase().split(/\s+/).map(escapeRegExp).join("\\s*");
+      const korean = new RegExp(`${name}(?:\\s*문서)?(?:들)?\\s*(?:에서|중에서|중에|안에서|내에서)(?=[\\s,.?？]|$)`, "u");
+      const english = new RegExp(`\\b(?:in|from|within)\\s+(?:the\\s+|all\\s+|my\\s+|our\\s+)?${name}s?\\b`, "u");
+      if (korean.test(t.lower) || english.test(t.lower)) best = { d, len };
+    }
+  }
+  return best?.d ?? null;
+}
+
 function ruleAnswer(t: Text, ctx: PlanContext): Plan | null {
   const question = /[?？]$/.test(t.raw.trim()) || has(t, QUESTION_WORDS);
   if (!question) return null;
+  // The scope the question names stays on the plan (KNO-5): the selection, a type named as the place to look,
+  // a known project named with the project word. A date phrase ("지난달 …") is put on the scope by the
+  // validator, as for every plan. The UI asks within the documents that scope resolves to.
   const scope = emptyScope();
   if (has(t, SELECTION_WORDS)) scope.doc_ids = selectionIds(ctx);
+  const place = placeTypeOf(t, ctx);
+  if (place) scope.filter = { ...(scope.filter ?? {}), doc_type: place.slug };
+  if (has(t, ["프로젝트", "project"]) && !has(t, PROJECT_GROUP_WORDS)) {
+    const ref = projectRefOf(t, ctx);
+    if (ref) scope.filter = { ...(scope.filter ?? {}), project_id: ref };
+  }
   return single({ op: "answer", question: t.raw.trim(), cite: true }, 0.8, tr(t.ko, "지식 베이스·문서에서 근거를 찾아 답합니다", "Answer with evidence from the knowledge base / documents"), scope);
 }
 
@@ -3150,6 +3189,9 @@ export function organizePlan(req: OrganizeRequest): OrganizePlan {
   const taken = new Set<string>();
   const seqByFolder = new Map<string, number>();
   const scopeProject = req.scope?.filter?.project_id ?? null;
+  // Documents that are in the scope's project through a tracked copy: the copy is that project's file, the
+  // original belongs to the folder of an earlier project (`organize::plan`, PRJ-7).
+  const filedAsCopies = scopeProject ? mp.copiedDocIds(scopeProject) : new Set<string>();
   for (const doc of docs) {
     const display = doc.title ?? doc.original_name;
     const from = doc.rel_path;
@@ -3157,6 +3199,13 @@ export function organizePlan(req: OrganizeRequest): OrganizePlan {
     if (onlyReviewed && doc.review_status === "pending") {
       out.held += 1;
       out.items.push({ doc_id: doc.id, name: display, from, to: null, status: "held", reason: "review_pending", missing: [] });
+      continue;
+    }
+    if (filedAsCopies.has(doc.id)) {
+      // Organising this project must not pull the original out of its own project's folder and drop it next
+      // to its copy: it stays put.
+      out.unchanged += 1;
+      out.items.push({ doc_id: doc.id, name: display, from, to: null, status: "unchanged", reason: "project_copy", missing: [] });
       continue;
     }
     const [nameStem, nameExt] = splitName(basename(doc.original_name));
@@ -4398,7 +4447,7 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
       payload.groups = groups;
       payload.group_by = groupBy;
       const by = { project: ko ? "프로젝트별" : "by project", doc_type: ko ? "유형별" : "by type", folder: ko ? "폴더별" : "by folder", none: "" }[groupBy];
-      const summary = groupBy === "none" ? (ko ? `${made}을(를) 하나로 요약` : `One summary of ${made}`) : ko ? `${made} 요약 · ${by} 묶음 ${groups.length}개` : `Summarised ${made} · ${groups.length} group(s) ${by}`;
+      const summary = groupBy === "none" ? (ko ? resolveJosa(`${made}을(를) 하나로 요약`) : `One summary of ${made}`) : ko ? `${made} 요약 · ${by} 묶음 ${groups.length}개` : `Summarised ${made} · ${groups.length} group(s) ${by}`;
       return { summary: summary + tail, payload };
     }
     case "aggregate": {

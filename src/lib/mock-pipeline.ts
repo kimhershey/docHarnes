@@ -47,6 +47,7 @@ import {
   type PipelineChanged,
   type PipelineLevel,
   type PipelineStatus,
+  type ProcessReport,
   type ProcessRequest,
   type ReviewAction,
   type ReviewFilter,
@@ -740,6 +741,18 @@ function normalizeValue(kind: FieldKind, v: string): { normalized: string | null
     }
     case "date": {
       const m = v.match(/(20\d{2}|19\d{2})\D{0,3}(\d{1,2})\D{0,3}(\d{1,2})/);
+      // Year last (`validate::parse_date`): a part above 12 is the day; when both could be the month, `/` reads
+      // month first and `.` / `-` day first — and the field is flagged, since that order is a guess.
+      const last = m ? null : v.match(/(?<!\d)(\d{1,2})\s*([.\-/])\s*(\d{1,2})\s*[.\-/]\s*((?:19|20)\d{2})(?!\d)/);
+      if (last) {
+        const [a, b] = [Number(last[1]), Number(last[3])];
+        const monthFirst = a > 12 || b > 12 ? b > 12 : last[2] === "/";
+        const [month, day] = monthFirst ? [a, b] : [b, a];
+        if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+          if (a <= 12 && b <= 12 && a !== b) issues.push({ rule: "date_ambiguous", level: "warn", message: "일·월 순서가 불분명한 날짜 — 확인 필요 / day and month order is a guess" });
+          return { normalized: `${last[4]}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`, issues };
+        }
+      }
       if (!m) {
         issues.push({ rule: "date_parse", level: "fail", message: "날짜 형식을 인식할 수 없음 / unrecognised date" });
         return { normalized: null, issues };
@@ -1160,15 +1173,7 @@ function recomputeDoc(s: PState, doc: MockDoc): void {
 }
 
 /** Mirror of `pipeline::run::ProcessReport` (the payload of a pipeline job / plan step). */
-export interface MockProcessReport {
-  processed: string[];
-  failed: [string, string][];
-  classified: number;
-  ocr_pages: number;
-  extracted: number;
-  review_pending: number;
-  cancelled: boolean;
-}
+export type MockProcessReport = ProcessReport;
 
 /** Mirror of `pipeline::ProcessProgress` (`page` = (done, total) inside the current document). */
 export interface ProcessProgress {
@@ -1232,10 +1237,18 @@ export async function runProcess(req: ProcessRequest, ctl: JobControl | null, pr
           let ocrPages = 0;
           for (const [pi, p] of doc.pages.entries()) {
             if (wantedPages && !wantedPages.has(p.page_no)) continue;
-            // Like `pipeline::run`: OCR output and manual corrections are only replaced by a forced re-run.
-            const isOcr = p.text_source === "ocr" || p.text_source === "manual";
-            const ownText = !!p.text && !isOcr;
-            const doOcr = isOcr ? !!req.force : ownText ? settings.processing.ocr_digital_pdf && (!!req.force || !p.ocr_at) : true;
+            // Like `pipeline::run`: OCR output is only replaced by a forced re-run. A manual correction is the
+            // user's own text: force alone keeps it, the request has to ask for it with `reocr_manual` (a page
+            // the user emptied by hand has nothing to lose).
+            const hasText = !!p.text && p.text.trim() !== "";
+            const doOcr =
+              p.text_source === "manual"
+                ? !!req.force && (!!req.reocr_manual || !hasText)
+                : p.text_source === "ocr"
+                  ? !!req.force
+                  : hasText
+                    ? settings.processing.ocr_digital_pdf && (!!req.force || !p.ocr_at)
+                    : true;
             if (!doOcr || p.width_px === 0) continue;
             progress({ stage: "ocr", current: name, done: i, total: docs.length, page: [pi + 1, doc.pages.length] });
             await pace(ctl, 120);
@@ -1515,6 +1528,7 @@ function saveSchema(s: PState, draft: SchemaDraft): SchemaRecord {
   if (draft.id) {
     const cur = s.schemas.find((x) => x.id === draft.id);
     if (!cur) throw typed("schema_not_found");
+    if (cur.doc_type !== draft.doc_type.trim()) keepGeneral(s, cur);
     pushVersion(cur.id, { version: cur.version, definition: structuredClone(cur.definition), note: draft.note, created_at: now() });
     cur.name = name;
     cur.name_en = draft.name_en?.trim() || null;
@@ -1550,6 +1564,18 @@ function saveSchema(s: PState, draft: SchemaDraft): SchemaRecord {
   };
   s.schemas.push(rec);
   return rec;
+}
+
+/** The fallback document type (`repo::GENERAL_DOC_TYPE`): what a document is extracted with when no other type fits. */
+const GENERAL_DOC_TYPE = "general";
+
+/**
+ * `repo::keep_general`: refuses a change that takes the last enabled schema of the fallback type away (switching
+ * it off, deleting it or moving it to another type) — every 기타 document would fail with `schema_not_found`.
+ */
+function keepGeneral(s: PState, sc: SchemaRecord): void {
+  if (sc.doc_type !== GENERAL_DOC_TYPE || !sc.enabled) return;
+  if (!s.schemas.some((x) => x.id !== sc.id && x.doc_type === GENERAL_DOC_TYPE && x.enabled)) throw err("invalid", "schema_general_required");
 }
 
 const VERSIONS_KEY = "doculens.mock.schema-versions";
@@ -2083,6 +2109,7 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
       const sc = s.schemas.find((x) => x.id === a.id);
       if (!sc) return false;
       if (sc.source === "builtin") throw typed("schema_builtin");
+      keepGeneral(s, sc);
       s.schemas = s.schemas.filter((x) => x.id !== sc.id);
       if (sc.is_default) {
         const next = s.schemas.filter((x) => x.doc_type === sc.doc_type).sort((x, y) => Number(x.source === "builtin") - Number(y.source === "builtin"))[0];
@@ -2104,6 +2131,7 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
     case "pipeline_schema_set_enabled": {
       const sc = s.schemas.find((x) => x.id === a.id);
       if (!sc) throw typed("schema_not_found");
+      if (!a.enabled) keepGeneral(s, sc);
       sc.enabled = !!a.enabled;
       save(s);
       changed("schemas", [sc.id]);
