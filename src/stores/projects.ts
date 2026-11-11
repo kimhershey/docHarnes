@@ -1,7 +1,8 @@
 import { create } from "zustand";
 
 import { subscribe } from "@/lib/ipc";
-import { invalidateProjects } from "@/lib/queries";
+import { invalidateProjects, projectKeys } from "@/lib/queries";
+import { queryClient } from "@/lib/query-client";
 import { EVENTS, type ProjectsChanged } from "@/lib/types";
 
 /** Projects screen state that survives navigation plus the `projects://changed` wiring (§3.15). */
@@ -59,6 +60,21 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   setCurrentProject: (id, name = null) => set((s) => ({ currentProject: id, currentProjectName: id ? (name ?? (s.currentProject === id ? s.currentProjectName : null)) : null })),
   clearCurrentProject: (id = null) => set((s) => (id === null || s.currentProject === id ? { currentProject: null, currentProjectName: null } : s)),
 }));
+
+/**
+ * A document changed — imported, removed, classified, extracted, reviewed (`documents://changed` /
+ * `pipeline://changed`). The project screens show the documents' type, status and review state, the checklist
+ * follows the types and the cards count the documents, so the project list and the open details are refetched
+ * with the library (PRJ-10: after a file was dropped on a project its type stayed "—" and the checklist "누락"
+ * until the screen was left and opened again). A project's 참고 자료 rows come from its reference group, so the
+ * groups' document lists follow too. Runs and reports are stored results: they change with a check, not here.
+ * Called from the two stores' debounced refresh, so a burst of events is one refetch.
+ */
+export function refreshProjectsForDocuments(): void {
+  void queryClient.invalidateQueries({ queryKey: projectKeys.list });
+  void queryClient.invalidateQueries({ queryKey: ["projects", "detail"] });
+  void queryClient.invalidateQueries({ predicate: (q) => q.queryKey[0] === "knowledge" && q.queryKey[1] === "collections" && q.queryKey[3] === "docs" });
+}
 
 /** Workspace switch: the open project belongs to the old workspace. */
 export function resetProjects(): void {

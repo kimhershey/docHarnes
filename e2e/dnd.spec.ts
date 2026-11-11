@@ -241,4 +241,24 @@ test.describe("document drag and drop", () => {
     await page.getByTestId("nav-library").click();
     await expect(page.getByTestId(`doc-card-${rules}`).locator('[data-testid^="doc-role-"]')).toHaveText(ko.library.role_knowledge);
   });
+
+  test("a new file dropped on the 문서 tab: its type and the checklist follow the automatic classification without leaving the screen (PRJ-10)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await page.getByTestId("nav-projects").click();
+    await page.getByTestId("projects-new").click();
+    await page.getByTestId("project-name").fill("자동 분류 사업");
+    await page.getByTestId("project-template").click();
+    await page.getByRole("option", { name: ko.projects.templates.builtin.internal_dev }).click();
+    await page.getByTestId("project-submit").click();
+    await expect(page.getByTestId("page-project")).toBeVisible();
+    await expect(page.getByTestId("checklist-srs")).toHaveAttribute("data-missing", "true");
+    // The import attaches the file to the project; the classification that follows only sends document /
+    // pipeline events — the tab used to keep the type "—" and the checklist "누락" until it was opened again.
+    await dropFiles(page, page.getByTestId("project-documents-drop"), ["요구사항정의서-v2.pdf"]);
+    const row = page.getByTestId("project-documents-table").locator("tbody tr");
+    await expect(row).toHaveCount(1, { timeout: 20_000 });
+    await expect(row.getByTestId("project-doc-type")).toHaveText(ko.documents.doc_types.srs, { timeout: 15_000 });
+    await expect(page.getByTestId("checklist-srs")).toHaveAttribute("data-missing", "false");
+  });
 });
