@@ -676,16 +676,33 @@ fn import_one(
     let keep_pages =
         relinked && doc.page_count > 0 && DocumentCache::for_document(deps.paths, &id).page_file(1).is_file();
     if keep_pages {
-        deps.db.with(|c| repo::set_status(c, &id, DocumentStatus::Rendered, None))?;
+        let status = settled_status(deps.db, &doc, DocumentStatus::Rendered);
+        deps.db.with(|c| repo::set_status(c, &id, status, None))?;
     } else {
         process_document(deps, &doc, plan.options.render, plan.options.dpi, cancel, page_progress)?;
     }
     Ok((id, relinked))
 }
 
+/// The status a document holds once its pages are there again (`rendered` is what the renderer
+/// reports: `rendered`, or `new` without page images). Rendering never takes back what the
+/// pipeline reached: `archived` stays, and while the latest extraction run stands (`last_run_id`;
+/// a content change clears it) the document stays `extracted` / `reviewed`. A document that
+/// comes back from `missing` / `importing` / `error` lost that status, so it is read off the
+/// latest run's fields.
+fn settled_status(db: &Db, doc: &DocumentRecord, rendered: DocumentStatus) -> DocumentStatus {
+    match doc.status {
+        DocumentStatus::Archived => DocumentStatus::Archived,
+        _ if doc.last_run_id.is_none() => rendered,
+        DocumentStatus::Extracted | DocumentStatus::Reviewed => doc.status,
+        _ => db.with(|c| crate::pipeline::review::status_from_fields(c, &doc.id)).ok().flatten().unwrap_or(rendered),
+    }
+}
+
 /// Inserts the row, relinks a `missing` document, or — when the path is
 /// already registered (e.g. a `missing` row at the same path whose content
 /// changed) — refreshes that row instead of hitting the UNIQUE constraint.
+/// Returns `(id, relinked)`; `relinked` means the same content came back.
 #[allow(clippy::too_many_arguments)]
 fn register(
     deps: &ImportDeps<'_>,
@@ -709,13 +726,22 @@ fn register(
         _ => deps.db.with(|c| repo::find_by_rel_path(c, rel))?.map(|d| d.id),
     };
     if let Some(id) = existing_id {
+        // Only the same content is a relink. Other content at a registered path (a `missing` row
+        // whose file was replaced — a scanner writing the next `scan_0001.pdf`) keeps the row's
+        // identity (tags, project, manual type) but nothing derived from the old file: the hash
+        // change resets the pipeline state and the page cache goes, so it is processed afresh.
+        let previous = deps.db.with(|c| repo::get_document(c, &id))?;
+        let same_content = previous.is_some_and(|d| d.content_hash == hash);
         deps.db.with_tx(|tx| {
             repo::set_rel_path(tx, &id, rel, display_name)?;
             repo::set_file_info(tx, &id, &hash, size, modified)?;
             repo::set_status(tx, &id, DocumentStatus::Importing, None)?;
             attach_to_collection(tx, &plan.options, &id)
         })?;
-        return Ok((id, true));
+        if !same_content {
+            DocumentCache::for_document(deps.paths, &id).remove_all();
+        }
+        return Ok((id, same_content));
     }
     let id = new_id();
     deps.db.with(|c| {
@@ -779,10 +805,14 @@ pub fn process_document(
         convert::guard(doc.source_kind.as_str(), || process_inner(deps, doc, render_pages, dpi, cancel, page_progress));
     match &result {
         Ok(status) => {
-            deps.db.with(|c| repo::set_status(c, &doc.id, *status, None))?;
+            let settled = settled_status(deps.db, doc, *status);
+            deps.db.with(|c| repo::set_status(c, &doc.id, settled, None))?;
         }
         Err(CoreError::Cancelled) => {
-            deps.db.with(|c| repo::set_status(c, &doc.id, DocumentStatus::New, None))?;
+            // The page rows are untouched until a render completes: an extracted / reviewed /
+            // archived document keeps that status through a cancelled re-render as well.
+            let settled = settled_status(deps.db, doc, DocumentStatus::New);
+            deps.db.with(|c| repo::set_status(c, &doc.id, settled, None))?;
         }
         Err(e) => {
             let msg = e.to_string();
@@ -1361,14 +1391,15 @@ fn rescan_one(
             } else if doc.status == DocumentStatus::Missing {
                 let cache = DocumentCache::for_document(deps.paths, &doc.id);
                 let has_pages = doc.page_count > 0 && cache.page_file(1).is_file();
+                // `missing` forgot whether the document was extracted / reviewed: the latest run tells.
+                let status = settled_status(
+                    deps.db,
+                    doc,
+                    if has_pages { DocumentStatus::Rendered } else { DocumentStatus::New },
+                );
                 deps.db.with(|c| {
                     repo::set_file_info(c, &doc.id, &hash, meta.len(), modified_at(&meta))?;
-                    repo::set_status(
-                        c,
-                        &doc.id,
-                        if has_pages { DocumentStatus::Rendered } else { DocumentStatus::New },
-                        None,
-                    )
+                    repo::set_status(c, &doc.id, status, None)
                 })?;
                 report.restored.push(doc.id.clone());
                 needs_process = !has_pages;
@@ -1962,6 +1993,182 @@ mod tests {
         // inbox_plan ignores registered files.
         let p = inbox_plan(&e.db, &e.paths, &ImportOptions::default()).unwrap();
         assert!(p.items.is_empty());
+    }
+
+    /// Imports one image from outside the workspace into `documents/`; returns the document id.
+    fn import_image(e: &Env, name: &str, size: (u32, u32)) -> String {
+        let ext = external_dir(e);
+        let src = ext.join(name);
+        RgbImage::from_pixel(size.0, size.1, Rgb([10, 10, 10])).save(&src).unwrap();
+        let plan =
+            plan(&e.db, &e.paths, std::slice::from_ref(&src), &ImportOptions::default(), ImportSource::Drop).unwrap();
+        let report = run(&deps(e, None), &plan, None, &mut |_| {}, &mut |_, _| {}).unwrap();
+        assert_eq!(report.imported.len(), 1, "{report:?}");
+        report.imported[0].clone()
+    }
+
+    /// Gives a document a finished extraction run with one required field (`pending` = it waits
+    /// in the review queue → `extracted`, otherwise `reviewed`).
+    fn mark_extracted(e: &Env, id: &str, pending: bool) {
+        use crate::pipeline::repo as pipe;
+        let run = format!("run-{}", new_id());
+        e.db.with(|c| {
+            pipe::insert_run(
+                c,
+                &pipe::NewRun {
+                    id: &run,
+                    document_id: id,
+                    schema: None,
+                    doc_type: None,
+                    model: "scripted",
+                    profile: "balanced",
+                    precise: false,
+                },
+            )?;
+            let field = pipe::NewField {
+                path: "total".into(),
+                key: "total".into(),
+                label_ko: "합계".into(),
+                required: true,
+                value: Some("1,000".into()),
+                confidence: 0.9,
+                review_reason: pending.then_some(crate::pipeline::ReviewReason::LowConfidence),
+                ..Default::default()
+            };
+            pipe::insert_fields(c, &run, id, &[field])?;
+            pipe::set_extracted(c, id, &run, Some(0.9), pending, None, None, None)
+        })
+        .unwrap();
+    }
+
+    /// Audit DOC-4: every re-render (settings "다시 렌더", the automatic one after a cache purge,
+    /// missing → restored) wrote `rendered` over extracted / reviewed / archived.
+    #[test]
+    fn a_rerender_keeps_the_pipeline_status() {
+        let e = env();
+        let d = deps(&e, None);
+        let get = |id: &str| e.db.with(|c| repo::get_document(c, id)).unwrap().unwrap();
+        let (a, b, c) = (
+            import_image(&e, "a.png", (40, 30)),
+            import_image(&e, "b.png", (30, 40)),
+            import_image(&e, "c.png", (20, 20)),
+        );
+        mark_extracted(&e, &a, true);
+        mark_extracted(&e, &b, false);
+        e.db.with(|conn| repo::set_status(conn, &c, DocumentStatus::Archived, None)).unwrap();
+        assert_eq!(
+            (get(&a).status, get(&b).status, get(&c).status),
+            (DocumentStatus::Extracted, DocumentStatus::Reviewed, DocumentStatus::Archived)
+        );
+        for id in [&a, &b, &c] {
+            process_document(&d, &get(id), true, None, None, &mut |_| {}).unwrap();
+        }
+        assert_eq!(
+            (get(&a).status, get(&b).status, get(&c).status),
+            (DocumentStatus::Extracted, DocumentStatus::Reviewed, DocumentStatus::Archived),
+            "a re-render does not take the pipeline status back"
+        );
+        // The file disappears and comes back unchanged: `missing` forgot the status, the latest run restores it.
+        let path_a = get(&a).absolute_path(&e.paths);
+        let parked = e._dir.path().join("parked.png");
+        std::fs::rename(&path_a, &parked).unwrap();
+        assert_eq!(rescan(&d, None, &mut |_| {}).unwrap().missing, vec![a.clone()]);
+        std::fs::rename(&parked, &path_a).unwrap();
+        assert_eq!(rescan(&d, None, &mut |_| {}).unwrap().restored, vec![a.clone()]);
+        assert_eq!(get(&a).status, DocumentStatus::Extracted, "restored with its review still pending");
+        // Changed content resets what the pipeline derived, so the status is plain `rendered` again.
+        let path_b = get(&b).absolute_path(&e.paths);
+        RgbImage::from_pixel(50, 60, Rgb([200, 0, 0])).save(&path_b).unwrap();
+        let later = SystemTime::now() + Duration::from_secs(30);
+        std::fs::File::options().write(true).open(&path_b).unwrap().set_modified(later).unwrap();
+        assert_eq!(rescan(&d, None, &mut |_| {}).unwrap().changed, vec![b.clone()]);
+        let doc_b = get(&b);
+        assert_eq!((doc_b.status, doc_b.last_run_id), (DocumentStatus::Rendered, None));
+    }
+
+    /// Audit DOC-5: a different file written to the path of a `missing` document (a scanner reusing
+    /// `scan_0001.pdf`) was "relinked" and kept the old page images and text.
+    #[test]
+    fn a_different_file_at_a_missing_path_is_processed_afresh() {
+        let e = env();
+        let d = deps(&e, None);
+        let src = e.paths.inbox_dir().join("scan_0001.png");
+        RgbImage::from_pixel(64, 64, Rgb([0, 0, 0])).save(&src).unwrap();
+        crate::modelstore::mark_settled(&src);
+        let first = inbox_plan(&e.db, &e.paths, &ImportOptions::default()).unwrap();
+        let id = run(&d, &first, None, &mut |_| {}, &mut |_, _| {}).unwrap().imported[0].clone();
+        let old_hash = e.db.with(|c| repo::get_document(c, &id)).unwrap().unwrap().content_hash;
+        mark_extracted(&e, &id, true);
+        // The scanner software takes the file away, then writes the next scan under the same name.
+        std::fs::remove_file(&src).unwrap();
+        assert_eq!(rescan(&d, None, &mut |_| {}).unwrap().missing, vec![id.clone()]);
+        RgbImage::from_pixel(32, 48, Rgb([255, 255, 255])).save(&src).unwrap();
+        crate::modelstore::mark_settled(&src);
+        let second = inbox_plan(&e.db, &e.paths, &ImportOptions::default()).unwrap();
+        assert_eq!(second.items.len(), 1);
+        assert_eq!(second.items[0].status, ImportItemStatus::New, "other content: not a relink");
+        let report = run(&d, &second, None, &mut |_| {}, &mut |_, _| {}).unwrap();
+        assert_eq!((report.imported.clone(), report.relinked.clone()), (vec![id.clone()], Vec::new()), "{report:?}");
+        let doc = e.db.with(|c| repo::get_document(c, &id)).unwrap().unwrap();
+        assert_ne!(doc.content_hash, old_hash);
+        assert_eq!(
+            (doc.status, doc.last_run_id.clone()),
+            (DocumentStatus::Rendered, None),
+            "the old extraction is gone"
+        );
+        let pages = e.db.with(|c| repo::list_pages(c, &id, false)).unwrap();
+        assert_eq!((pages[0].width_px, pages[0].height_px), (32, 48), "pages come from the new file");
+        // The same file coming back after `missing` is still a relink that keeps its pages and status.
+        let again = e.paths.documents_dir().join("moved.png");
+        mark_extracted(&e, &id, true);
+        std::fs::rename(&src, &again).unwrap();
+        rescan(&d, None, &mut |_| {}).unwrap();
+        let third =
+            plan(&e.db, &e.paths, std::slice::from_ref(&again), &ImportOptions::default(), ImportSource::Folder)
+                .unwrap();
+        assert!(matches!(third.items[0].status, ImportItemStatus::Relink { .. }));
+        let report = run(&d, &third, None, &mut |_| {}, &mut |_, _| {}).unwrap();
+        assert_eq!(report.relinked, vec![id.clone()]);
+        let doc = e.db.with(|c| repo::get_document(c, &id)).unwrap().unwrap();
+        assert_eq!((doc.status, doc.rel_path.as_str()), (DocumentStatus::Extracted, "documents/moved.png"));
+    }
+
+    /// Audit DOC-6: a manual page text (with its word boxes and undo history) corrects one content;
+    /// after the file changed it stayed over the new page image.
+    #[test]
+    fn changed_content_drops_manual_page_text_and_its_history() {
+        let e = env();
+        text_doc(&e, "m1", "원래 텍스트 레이어");
+        assert!(set_page_text(&e.db, "m1", 1, "손으로 고친 텍스트").unwrap());
+        e.db.with(|c| {
+            c.execute(
+                "UPDATE documents SET vendor = '옛 거래처', doc_date = '2026-01-02', total_amount = 12500 WHERE id = 'm1'",
+                [],
+            )
+        })
+        .unwrap();
+        let page = || e.db.with(|c| repo::get_page(c, "m1", 1)).unwrap().unwrap();
+        let doc = || e.db.with(|c| repo::get_document(c, "m1")).unwrap().unwrap();
+        assert_eq!(page_text_history(&e.db, "m1", Some(1)).unwrap().entries.len(), 1);
+        // The same content (a touched file): nothing is lost.
+        e.db.with(|c| repo::set_file_info(c, "m1", "hash-m1", 10, None)).unwrap();
+        assert_eq!(
+            (page().text.as_deref(), page().text_source.as_deref()),
+            (Some("손으로 고친 텍스트"), Some("manual"))
+        );
+        assert_eq!(page_text_history(&e.db, "m1", Some(1)).unwrap().entries.len(), 1);
+        assert_eq!(doc().vendor.as_deref(), Some("옛 거래처"));
+        // Other content: the correction, its layout and its history go with the old content, and so
+        // do the vendor / date / amount the old extraction left on the document.
+        e.db.with(|c| repo::set_file_info(c, "m1", "hash-m1-v2", 12, None)).unwrap();
+        assert_eq!((page().text, page().text_source, page().has_text), (None, None, false));
+        assert!(e.db.with(|c| repo::page_layout_json(c, "m1", 1)).unwrap().is_none());
+        assert!(page_text_history(&e.db, "m1", Some(1)).unwrap().entries.is_empty());
+        assert_eq!((doc().vendor, doc().doc_date, doc().total_amount, doc().has_text_layer), (None, None, None, false));
+        // The re-render that follows stores the new file's own text.
+        let fresh = NewPage { page_no: 1, text: Some("새 텍스트 레이어".into()), ..Default::default() };
+        e.db.with(|c| repo::replace_pages(c, "m1", &[fresh], None, false, None)).unwrap();
+        assert_eq!((page().text.as_deref(), page().text_source.as_deref()), (Some("새 텍스트 레이어"), Some("layer")));
     }
 
     #[test]

@@ -145,6 +145,24 @@ pub fn recompute_document(conn: &Connection, doc_id: &str) -> rusqlite::Result<R
     Ok(status)
 }
 
+/// The status a document with a finished extraction holds, read off its latest run's fields by
+/// the promotion rule of [`recompute_document`]: a field still waiting for review or a required
+/// field without a value keeps it `extracted`, otherwise it is `reviewed`. `None` = no fields
+/// (nothing extracted). Used when the stored status was lost (`missing` → restored, re-import).
+pub fn status_from_fields(
+    conn: &Connection,
+    doc_id: &str,
+) -> rusqlite::Result<Option<crate::documents::DocumentStatus>> {
+    use crate::documents::DocumentStatus;
+    let fields = repo::latest_fields(conn, doc_id)?;
+    if fields.is_empty() {
+        return Ok(None);
+    }
+    let pending = fields.iter().any(FieldRecord::needs_review);
+    let required_ok = fields.iter().filter(|f| f.required).all(|f| f.effective_value().is_some());
+    Ok(Some(if !pending && required_ok { DocumentStatus::Reviewed } else { DocumentStatus::Extracted }))
+}
+
 /// Approves every pending field of a document (optionally only one reason).
 pub fn approve_document(db: &Db, doc_id: &str, only: Option<ReviewReason>) -> Result<usize> {
     let filter = ReviewFilter { document_id: Some(doc_id.to_string()), reason: only, ..Default::default() };
