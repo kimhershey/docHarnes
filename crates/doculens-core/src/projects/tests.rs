@@ -1027,6 +1027,74 @@ fn present_on_pending_boolean_is_undetermined_and_false_fails() {
     assert!(run.results[1].message.contains("아니오"));
 }
 
+/// A document that was classified (its type is set) but never extracted: no run, no fields.
+fn classified_only(db: &Db, id: &str, doc_type: &str) {
+    insert_inbox_doc(db, id, &format!("documents/{id}_{doc_type}.pdf"));
+    db.with(|c| docs::set_doc_type(c, id, Some(doc_type), Some("auto"))).unwrap();
+}
+
+/// PRJ-3: the default auto-processing stops after classification. A rule on a document that has no
+/// extraction run yet is "undetermined (not extracted)" — not a mismatch that lands in the 보완요청서.
+#[test]
+fn rules_on_documents_without_an_extraction_run_are_undetermined() {
+    let db = db();
+    classified_only(&db, "c9", "contract");
+    seed_br(&db, "br1", "123-45-67890", "한빛상사");
+    let p = project(&db, "추출 전", None);
+    add(&db, &p.id, &["c9", "br1"]);
+    add_rule(&db, &p.id, "계약서 서명 필수", RuleOperand::field("contract", "signed"), RuleOp::Present, None, None);
+    add_rule(
+        &db,
+        &p.id,
+        "계약서 당사자 사업자번호 = 사업자등록증 등록번호",
+        RuleOperand::field("contract", "parties.brn"),
+        RuleOp::Eq,
+        Some(RuleOperand::field("business_registration", "registration_no")),
+        None,
+    );
+    add_rule(
+        &db,
+        &p.id,
+        "계약금액 숫자",
+        RuleOperand::field("contract", "amount"),
+        RuleOp::Matches,
+        Some(RuleOperand::literal("^[0-9]+$")),
+        None,
+    );
+    // An extracted document that lacks the value is still a mismatch.
+    add_rule(
+        &db,
+        &p.id,
+        "사업자등록증 업태 필수",
+        RuleOperand::field("business_registration", "business_type"),
+        RuleOp::Present,
+        None,
+        None,
+    );
+    let run = check(&deps(&db, None), &p.id, &[]).unwrap();
+    let by = |desc: &str| run.results.iter().find(|r| r.description == desc).unwrap();
+    for desc in ["계약서 서명 필수", "계약서 당사자 사업자번호 = 사업자등록증 등록번호", "계약금액 숫자"] {
+        let r = by(desc);
+        assert_eq!(r.verdict, Verdict::Undetermined, "{desc}: {}", r.message);
+        assert!(r.message.contains("추출") && r.message.contains("c9_contract.pdf"), "{desc}: {}", r.message);
+        assert_eq!(r.left.as_ref().unwrap().status.as_deref(), Some("not_extracted"), "{desc}");
+    }
+    let absent = by("사업자등록증 업태 필수");
+    assert_eq!(absent.verdict, Verdict::Mismatch, "{}", absent.message);
+    assert_eq!(absent.left.as_ref().unwrap().status.as_deref(), Some("absent"));
+    assert_eq!((run.pass, run.mismatch, run.undetermined, run.missing), (0, 1, 3, 0));
+    // English wording and the report: the next step is to run the extraction, and the 보완요청서 lists the
+    // real mismatch only.
+    let en = check(&ProjectDeps { db: &db, vlm: None, language: Language::En }, &p.id, &[]).unwrap();
+    assert!(en.results[0].message.contains("not extracted yet"), "{}", en.results[0].message);
+    let md = report(&db, &p.id, Language::Ko).unwrap();
+    assert!(md.contains("[추출 전]") && md.contains("추출 전 문서가 걸린 규칙 3건: 추출 실행 후 재검사"), "{md}");
+    assert!(!md.contains("검토 큐 처리 후 재검사"), "nothing waits in the review queue: {md}");
+    let req = supplement_request(&db, &p.id, &run, &[], OutputFormat::Hwpx, Language::Ko).unwrap();
+    assert_eq!(req.sources.len(), 2, "one finding + the project: {:?}", req.sources);
+    assert!(req.content.contains("불일치 1건"), "{}", req.content);
+}
+
 #[test]
 fn relations_link_shared_entities() {
     let db = db();

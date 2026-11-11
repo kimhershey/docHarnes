@@ -4,7 +4,8 @@
 //! columns per row, literals), values are normalised by field kind (BRN digits,
 //! amounts, ISO dates, booleans, names without ㈜ / spacing) and compared with
 //! the rule operator. Verdicts: `pass` / `mismatch` / `undetermined` (absent,
-//! unparsable, review-pending or rejected value, incomparable kinds) /
+//! unparsable, review-pending or rejected value, incomparable kinds, or a
+//! document that has no extraction run yet) /
 //! `missing` (no document of the referenced type). With several documents of
 //! one type every pairing is evaluated and the worst verdict is reported with
 //! the offending pair as evidence; rows of a table column take the best row.
@@ -114,6 +115,8 @@ impl Norm {
 /// Why a value could not take part in a comparison.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Gap {
+    /// The document has no extraction run yet (classified only): there is nothing to judge.
+    NotExtracted,
     /// No field with that path in the document's latest run.
     Absent,
     /// The field exists but has no value.
@@ -358,10 +361,13 @@ impl Env<'_> {
             if let Some(r) = self.document_level(d, path, &base) {
                 return vec![r];
             }
+            // A document that was never extracted has no fields at all: its values are unknown, not missing.
+            let (status, gap) =
+                if d.doc.last_run_id.is_none() { ("not_extracted", Gap::NotExtracted) } else { ("absent", Gap::Absent) };
             return vec![Resolved {
-                evidence: Evidence { status: Some("absent".into()), ..base },
+                evidence: Evidence { status: Some(status.into()), ..base },
                 value: None,
-                gap: Some(Gap::Absent),
+                gap: Some(gap),
                 name_like: name_like(path),
                 kind: self.ctx.field(slug, path).map(|f| f.kind),
             }];
@@ -481,6 +487,12 @@ fn gap_message(ko: bool, r: &Resolved, gap: Gap) -> String {
     );
     let raw = r.evidence.value.clone().unwrap_or_default();
     match gap {
+        Gap::NotExtracted => tr(
+            ko,
+            &format!("{who}: 아직 추출하지 않은 문서라 판단할 수 없습니다. 추출을 실행한 뒤 다시 검사하세요."),
+            &format!("{who}: the document is not extracted yet, cannot judge. Run the extraction, then check again."),
+        )
+        .to_string(),
         Gap::Absent | Gap::Empty => {
             tr(ko, &format!("{who}: 값이 없어 판단할 수 없습니다."), &format!("{who}: no value, cannot judge."))
                 .to_string()
@@ -731,11 +743,12 @@ impl Env<'_> {
         );
         let le = Some(l.evidence.clone());
         match (l.gap, &l.value) {
-            (Some(Gap::Pending), _) => Outcome {
+            // Review pending, or nothing extracted yet: the value may well be there.
+            (Some(gap @ (Gap::Pending | Gap::NotExtracted)), _) => Outcome {
                 verdict: Verdict::Undetermined,
                 left: le,
                 right: None,
-                message: gap_message(ko, l, Gap::Pending),
+                message: gap_message(ko, l, gap),
             },
             (Some(Gap::Unparsable), _) => Outcome {
                 verdict: Verdict::Pass,

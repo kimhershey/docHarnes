@@ -79,6 +79,7 @@ pub fn evidence_text(e: Option<&Evidence>, ko: bool) -> String {
     match e.status.as_deref() {
         Some("pending") => parts.push(tr(ko, "[검토 대기]", "[pending]").into()),
         Some("rejected") => parts.push(tr(ko, "[거부]", "[rejected]").into()),
+        Some("not_extracted") => parts.push(tr(ko, "[추출 전]", "[not extracted]").into()),
         Some("missing_document") => parts.push(tr(ko, "[문서 없음]", "[no document]").into()),
         _ => {}
     }
@@ -296,12 +297,31 @@ pub fn render(d: &ProjectDetail, language: Language) -> String {
                     .to_string(),
                 );
             }
-            if run.undetermined > 0 {
+            // Rules that could not be judged because a document has not been extracted yet need the
+            // extraction, not the review queue.
+            let not_extracted = |e: &Option<Evidence>| e.as_ref().is_some_and(|e| e.status.as_deref() == Some("not_extracted"));
+            let pending_extraction = run
+                .results
+                .iter()
+                .filter(|r| r.verdict == Verdict::Undetermined && (not_extracted(&r.left) || not_extracted(&r.right)))
+                .count() as u32;
+            if pending_extraction > 0 {
                 steps.push(
                     tr(
                         ko,
-                        &format!("판단불가 {}건: 검토 큐 처리 후 재검사", run.undetermined),
-                        &format!("{} undetermined: clear the review queue and re-run", run.undetermined),
+                        &format!("추출 전 문서가 걸린 규칙 {pending_extraction}건: 추출 실행 후 재검사"),
+                        &format!("{pending_extraction} rule(s) wait for a document that is not extracted yet: run the extraction and re-run"),
+                    )
+                    .to_string(),
+                );
+            }
+            let undetermined = run.undetermined.saturating_sub(pending_extraction);
+            if undetermined > 0 {
+                steps.push(
+                    tr(
+                        ko,
+                        &format!("판단불가 {undetermined}건: 검토 큐 처리 후 재검사"),
+                        &format!("{undetermined} undetermined: clear the review queue and re-run"),
                     )
                     .to_string(),
                 );

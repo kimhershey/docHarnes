@@ -376,7 +376,8 @@ pub struct RuleDraft {
 pub enum Verdict {
     Pass,
     Mismatch,
-    /// A value could not be compared (missing / unparsable / review pending).
+    /// A value could not be compared (missing / unparsable / review pending, or the document has no
+    /// extraction run yet — evidence status `not_extracted`).
     Undetermined,
     /// A document of the referenced type is not in the project.
     Missing,
@@ -410,7 +411,10 @@ pub struct Evidence {
     pub value: Option<String>,
     pub normalized: Option<String>,
     pub page: Option<u32>,
-    /// Field review state at check time (`auto`, `pending`, `approved`, …).
+    /// Field review state at check time (`auto`, `pending`, `approved`, `rejected`, …), or why there is
+    /// no field: `absent` (the extraction has no such field), `not_extracted` (the document has no
+    /// extraction run yet), `missing_document` (no document of the type), `document` (a document-level
+    /// value stands in).
     pub status: Option<String>,
 }
 
