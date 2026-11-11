@@ -27,6 +27,7 @@ import type {
   TemplateInput,
   AggregateRequest,
   AggregateResult,
+  ExecuteArgs,
   ExecuteResponse,
   ExportPreview,
   ExportRequest,
@@ -319,7 +320,9 @@ export const api = {
 
   // -- planner / organise / journal / aggregate / export / job control (P5) --
   plannerPlan: (text: string, context: UiPlanContext = {}) => invoke<PlanResponse>("planner_plan", { text, context }),
-  plannerExecute: (plan: Plan, text: string, context: UiPlanContext = {}) => invoke<ExecuteResponse>("planner_execute", { args: { plan, text, context } }),
+  /** `plannedText`: the 되묻기 text the plan was made from, when it is not `text` (`ExecuteArgs.planned_text`). */
+  plannerExecute: (plan: Plan, text: string, context: UiPlanContext = {}, plannedText: string | null = null) =>
+    invoke<ExecuteResponse>("planner_execute", { args: { plan, text, context, ...(plannedText ? { planned_text: plannedText } : {}) } satisfies ExecuteArgs }),
   organizePlan: (req: OrganizeRequest) => invoke<OrganizePlan>("organize_plan", { req }),
   organizeApply: (plan: OrganizePlan, label: string | null = null) => invoke<string>("organize_apply", { plan, label }),
   journalBatches: (limit = 50) => invoke<JournalBatch[]>("journal_batches", { limit }),

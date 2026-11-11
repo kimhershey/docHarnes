@@ -69,6 +69,7 @@ import {
   type DocTypeInfo,
   type DocTypeSummary,
   type DocumentsChanged,
+  type ExecuteArgs,
   type ExecuteResponse,
   type ExportFormat,
   type ExportPreview,
@@ -481,6 +482,59 @@ function splitClauses(text: string): string[] {
 
 const SELECTION_WORDS = ["이문서", "이계약서", "이영수증", "이견적서", "이보고서", "이파일", "선택문서", "선택한", "선택된", "현재문서", "열린문서", "지금문서", "선택영역", "이페이지", "현재페이지", "thisdocument", "thisfile", "thispage", "selected", "theselection", "thesedocuments", "currentdocument", "thiscontract", "thisreceipt"];
 const ALL_WORDS = ["전부", "전체", "모두", "모든", "다 ", "라이브러리전체", "alldocuments", "everything", "all "];
+
+/** A 되묻기 text (`askBackText`): the sentence, the assistant's question, the user's reply. */
+const ASK_BACK = /^([\s\S]*?)\n\n\[(?:어시스턴트 질문|Assistant question)\] [\s\S]*?\n\[(?:사용자 답변|User reply)\] ([\s\S]*)$/;
+
+/** The user's own words of a planner text: of a 되묻기 text the sentence and the reply, not the assistant's question. */
+function userWords(text: string): string {
+  const m = text.match(ASK_BACK);
+  return m ? `${m[1]!.trim()} ${m[2]!.trim()}`.trim() : text;
+}
+
+/**
+ * `rules::mentions_all`: the user explicitly targets the whole library. Read from the user's words only —
+ * the scope question itself says "전체면 '전부'라고 해 주세요".
+ */
+function mentionsAll(text: string): boolean {
+  const words = userWords(text);
+  return has(mkText(words, true), ["전부", "전체", "모두", "모든", "라이브러리전체", "alldocuments", "everything"]) || /\ball\b/i.test(words);
+}
+
+/** `validate::scope_required`: a plan that changes documents but names none. */
+function scopeRequired(plan: Plan): boolean {
+  if (!scopeIsEmpty(plan.scope)) return false;
+  return plan.operations.some((op) => {
+    switch (op.op) {
+      case "set_doc_type":
+      case "tag":
+      case "delete":
+      case "rename":
+      case "move":
+      case "rotate":
+      case "rerender":
+      case "split":
+      case "merge":
+      case "set_title":
+      case "edit_text":
+      case "set_role":
+      case "set_version":
+        return true;
+      case "organize":
+        return op.dry_run !== true;
+      case "review":
+        return op.action === "approve" || op.action === "reject" || op.action === "correct";
+      case "manage_reference":
+        return op.action === "add" || op.action === "remove";
+      case "remove_from_project":
+        return (op.doc_ids ?? []).length === 0;
+      default:
+        return false;
+    }
+  });
+}
+
+const SCOPE_REQUIRED_MESSAGE = "this plan changes documents but names none: select documents or give a folder / type / date range";
 
 function selectionIds(ctx: PlanContext): string[] {
   if (ctx.selected_doc_ids.length > 0) return [...ctx.selected_doc_ids];
@@ -2532,11 +2586,23 @@ export function planText(text: string, ctx: PlanContext, opts: { model?: boolean
     result.completion_tokens = 60;
     // A 되묻기 reply arrives as "original + [어시스턴트 질문] … + [사용자 답변] …": a model reads the reply as the
     // answer to its question; the parser standing in for it must not read the question's own words.
-    const askBack = t.match(/^([\s\S]*?)\n\n\[(?:어시스턴트 질문|Assistant question)\] [\s\S]*?\n\[(?:사용자 답변|User reply)\] ([\s\S]*)$/);
+    const askBack = t.match(ASK_BACK);
     const own = askBack ? null : textOnlyAnswer(t, ko);
     if (own && accept(own, "model")) return result;
     const understood = askBack ? (rulesPlan(`${askBack[1]!.trim()} ${askBack[2]!.trim()}`.trim(), ctx) ?? rulesPlan(askBack[2]!.trim(), ctx)) : rulesPlan(t, ctx);
-    if (understood && accept(understood, "model")) return result;
+    if (understood && accept(understood, "model")) {
+      // `llm::guard_scope`: a plan that changes documents but names none asks which ones — unless the user
+      // said "전부" (in the sentence, or in the reply to that very question).
+      if (!isClarification(result.plan) && scopeRequired(result.plan) && !mentionsAll(t)) {
+        const question = clarify(
+          ko ? "어떤 문서를 대상으로 할까요? 라이브러리에서 선택하거나 폴더·유형·날짜를 말씀해 주세요(전체면 '전부'라고 해 주세요)." : "Which documents? Select them in the library or name a folder / type / date range (say 'all documents' for the whole library).",
+          Math.min(result.plan.confidence, 0.5),
+        );
+        question.summary = result.plan.summary;
+        result.plan = question;
+      }
+      return result;
+    }
     result.source = "model";
     if (understood) {
       // Read, but the plan does not validate: the model asks with the first problem.
@@ -4639,7 +4705,7 @@ export async function mockPlanner(cmd: string, a: Record<string, any>): Promise<
       return { result, preview, context: ctx } satisfies PlanResponse;
     }
     case "planner_execute": {
-      const args = (a.args ?? {}) as { plan?: Plan; text?: string; context?: UiPlanContext | null };
+      const args = (a.args ?? {}) as Partial<ExecuteArgs>;
       if (!args.plan) throw err("plan_invalid", "the plan is missing", [] satisfies PlanIssue[]);
       const plan = structuredClone(args.plan);
       const text = args.text ?? "";
@@ -4647,6 +4713,11 @@ export async function mockPlanner(cmd: string, a: Record<string, any>): Promise<
       const issues = validatePlan(plan, ctx, resolveRelativeDate(text, new Date(`${ctx.today}T12:00:00`)));
       if (hasErrors(issues)) throw err("plan_invalid", issues.find((i) => i.blocking)?.message ?? "", issues);
       if (isClarification(plan)) throw err("invalid", "plan_clarify");
+      // `planner_bridge::execute`: the scope check again, against the text the plan was made from —
+      // `planned_text` after a 되묻기 (PLN-7), else the sentence.
+      if (scopeRequired(plan) && !mentionsAll(args.planned_text || text)) {
+        throw err("plan_invalid", SCOPE_REQUIRED_MESSAGE, [issue("scope", "scope_required", SCOPE_REQUIRED_MESSAGE)] satisfies PlanIssue[]);
+      }
       if (inlineOnly(plan)) {
         const execution = await runPlan(plan, ctx, null, () => undefined);
         afterExecution(execution);

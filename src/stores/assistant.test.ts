@@ -169,6 +169,19 @@ describe("assistant store", () => {
     expect(restored[1]).toMatchObject({ kind: "answer", pending: false, error: null });
   });
 
+  // PLN-7: the 되묻기 text a plan was made from stays on the card — also across a restart, when the plan is
+  // approved later.
+  it("keeps the text a plan was made from on the stored card", async () => {
+    const sid = await boundTo("C:\\Work\\Docs");
+    const composed = "태그 '긴급' 달아줘\n\n[어시스턴트 질문] 어떤 문서를 대상으로 할까요?\n[사용자 답변] 전부";
+    useAssistantStore.getState().push(sid, { role: "assistant", kind: "plan", text: "태그 '긴급' 달아줘", plannedText: composed, response: { context: {} } as never, plan: { operations: [] } as never, context: {}, status: "pending", errors: null, editing: false });
+    await flushChatWrites();
+    expect(fake.state.messages[sid]![0]!.payload).toMatchObject({ text: "태그 '긴급' 달아줘", plannedText: composed });
+    resetAssistant();
+    await boundTo("C:\\Work\\Docs");
+    expect(selectMessages(useAssistantStore.getState())[0]).toMatchObject({ kind: "plan", status: "pending", plannedText: composed });
+  });
+
   it("flushChatWrites sends what waits and resolves when everything is stored", async () => {
     const sid = await boundTo("C:\\Work\\Docs");
     const s = useAssistantStore.getState();

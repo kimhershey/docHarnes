@@ -269,6 +269,40 @@ test.describe("P5 planner", () => {
     await expect(assistantCard(page, "plan")).toHaveCount(1);
   });
 
+  // PLN-7: a command that changes documents but names none is answered with "어떤 문서를 … (전체면 '전부')".
+  // The plan made from the reply "전부" could not run: execution checked the scope against the original
+  // sentence, which does not say "전부". The card keeps the 되묻기 text and sends it along (`planned_text`).
+  test("a plan made by answering the scope question with '전부' can run", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서-1p.jpg", "D:\\scan\\개발계약서-2p.pdf"], { autoLevel: "none" });
+    await openAssistant(page);
+
+    // No selection, folder or type: the planner asks which documents.
+    await send(page, "태그 '긴급' 달아줘");
+    const first = assistantCard(page, "clarify").last();
+    await expect(first).toHaveAttribute("data-clarify-status", "pending", { timeout: 15_000 });
+    await expect(first.getByTestId("clarify-question")).toContainText("전부");
+    // A reply that does not name the whole library is asked again (the question's own "전부" does not count).
+    await first.getByTestId("clarify-reply").fill("그냥 해줘");
+    await first.getByTestId("clarify-ask-back").click();
+    await expect(assistantCard(page, "clarify")).toHaveCount(2, { timeout: 15_000 });
+    const second = assistantCard(page, "clarify").last();
+    await expect(second).toHaveAttribute("data-clarify-status", "pending");
+    await expect(assistantCard(page, "plan")).toHaveCount(0);
+
+    // "전부": the plan covers the library and runs.
+    await second.getByTestId("clarify-reply").fill("전부");
+    await second.getByTestId("clarify-ask-back").click();
+    const plan = assistantCard(page, "plan").last();
+    await expect(plan).toBeVisible({ timeout: 15_000 });
+    await approveIfPending(page, plan);
+    await expect(plan.getByTestId("plan-errors")).toHaveCount(0);
+    const result = assistantCard(page, "result").last();
+    await expect(result).toHaveAttribute("data-result-status", "done", { timeout: 15_000 });
+    await expect(result.getByTestId("result-step-0")).toHaveAttribute("data-step-status", "done");
+  });
+
   // CON-12: clearing a required value in the plan editor sent a plan the IPC layer cannot read — a raw English
   // "invalid args … missing field `days`" instead of a field error.
   test("a required value cleared in the plan editor is a field error on the card, not a raw error", async ({ page }) => {

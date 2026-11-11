@@ -1902,6 +1902,23 @@ export interface PlanExecution {
   restored_paths?: string[];
 }
 
+/** `planner_execute` arguments (`ExecuteArgs` in `src-tauri/src/commands/planner.rs`). */
+export interface ExecuteArgs {
+  /** The plan as the card shows it (confirmed, possibly edited). */
+  plan: Plan;
+  /** The user's sentence: the job's label. */
+  text: string;
+  context?: UiPlanContext;
+  /**
+   * The text the plan was made from, when that is not `text` itself: after a 되묻기 the planner read
+   * `askBackText(original, question, reply)` — the original sentence, the assistant's question and the
+   * user's reply. What execution re-checks against the user's words (the "전부" that allows a plan without
+   * a scope, PLN-7) must be checked against this text, or a plan the user approved cannot run. Absent /
+   * null: the plan was made from `text`.
+   */
+  planned_text?: string | null;
+}
+
 export interface ExecuteResponse {
   /** Set when the plan runs as a background job (its result lands in `Job.result`). */
   job_id: string | null;

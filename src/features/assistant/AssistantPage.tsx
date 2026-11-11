@@ -324,7 +324,9 @@ export function AssistantPage() {
     }
     patchPlan(sid, id, (x) => ({ ...x, status: "executing", errors: null }));
     try {
-      const res = await api.plannerExecute(m.plan, m.text, m.context);
+      // A plan made from a 되묻기 goes with the text it was made from: the executor re-checks the plan against
+      // the user's words (a "전부" in the reply is what allows a plan without a scope).
+      const res = await api.plannerExecute(m.plan, m.text, m.context, m.plannedText ?? null);
       // The workspace was switched (or the chat deleted) meanwhile: nothing of this run belongs here any more.
       if (!live(sid)) return;
       patchPlan(sid, id, (x) => ({ ...x, status: "done", editing: false }));
@@ -401,11 +403,15 @@ export function AssistantPage() {
       return;
     }
     setPlanningSession(null);
-    await handlePlan(sid, original, response, context);
+    // The card keeps the user's sentence as its text and the composed text as what the plan was made from.
+    await handlePlan(sid, original, response, context, composed);
   };
 
-  /** Routes a planner response to the matching card / action. */
-  const handlePlan = async (sid: string, textValue: string, response: PlanResponse, context: UiPlanContext) => {
+  /**
+   * Routes a planner response to the matching card / action. `plannedText`: the text the planner read when
+   * it was not `textValue` (a 되묻기); a plan card keeps it for the executor (PLN-7).
+   */
+  const handlePlan = async (sid: string, textValue: string, response: PlanResponse, context: UiPlanContext, plannedText?: string) => {
     // An interpretation that arrives for a conversation that is gone (workspace switched, chat deleted) is
     // dropped as a whole: no card, no answer request and no immediate execution in the other workspace.
     if (!live(sid)) return;
@@ -443,7 +449,7 @@ export function AssistantPage() {
       default:
         break;
     }
-    const card: NewMessage = { role: "assistant", kind: "plan", text: textValue, response, plan, context, status: "pending", errors: null, editing: false };
+    const card: NewMessage = { role: "assistant", kind: "plan", text: textValue, ...(plannedText ? { plannedText } : {}), response, plan, context, status: "pending", errors: null, editing: false };
     const id = push(sid, card);
     // An immediate execution works from the message itself (the store is updated synchronously).
     if (!requiresConfirmation(response)) await runPlan(sid, { ...card, id } as PlanMessage);

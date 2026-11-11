@@ -18,7 +18,12 @@ export type Message =
   | { id: number; createdAt?: string; role: "assistant"; kind: "executed"; text: string; source: string; confidence: number; failures?: string[]; ran?: number }
   | { id: number; createdAt?: string; role: "assistant"; kind: "answer"; requestId: string; request: AnswerRequest; answer: Answer | null; error: unknown; pending: boolean }
   | { id: number; createdAt?: string; role: "assistant"; kind: "help" }
-  | { id: number; createdAt?: string; role: "assistant"; kind: "plan"; text: string; response: PlanResponse; plan: Plan; context: UiPlanContext; status: PlanStatus; errors: PlanIssue[] | null; editing: boolean }
+  /**
+   * `text` is the user's sentence. `plannedText` is set when the plan was made from something else — the
+   * 되묻기 text (`askBackText`: sentence + question + reply) — and goes to the executor with the plan
+   * (`ExecuteArgs.planned_text`), which re-checks the plan against the text it was made from (PLN-7).
+   */
+  | { id: number; createdAt?: string; role: "assistant"; kind: "plan"; text: string; plannedText?: string; response: PlanResponse; plan: Plan; context: UiPlanContext; status: PlanStatus; errors: PlanIssue[] | null; editing: boolean }
   /** `uiResults`: what became of the execution's `ui_actions` once the UI ran them (one per action, in order). */
   | { id: number; createdAt?: string; role: "assistant"; kind: "execution"; text: string; response: PlanResponse; plan: Plan; jobId: string; uiResults?: UiOpResult[] }
   | { id: number; createdAt?: string; role: "assistant"; kind: "result"; text: string; response: PlanResponse; plan: Plan; execution: PlanExecution; uiResults?: UiOpResult[] }
