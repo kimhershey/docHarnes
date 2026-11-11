@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 
+import { nextJournalBatch, setUndoScope } from "@/app/hooks/useGlobalShortcuts";
 import { remPx, useRootFontSize } from "@/app/hooks/useRootFontSize";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -327,31 +328,61 @@ export function DocumentViewer() {
     void queryClient.invalidateQueries({ queryKey: queryKeys.documentPages(id, false) });
     setSelected([]);
   };
+  /**
+   * Takes back / re-applies the page's last text correction. False when the page has none — asked of the
+   * backend, not of the cached history, which lags a moment behind an edit that was just saved.
+   */
+  const revertText = async (redo: boolean): Promise<boolean> => {
+    if (!id || !page) return false;
+    try {
+      const r = redo ? await api.documentsRedoPageText(id, page.page_no) : await api.documentsUndoPageText(id, page.page_no);
+      if (!r) return false;
+      applyTextRevert(r);
+      toast(t(redo ? "viewer.text_edit.redone" : "viewer.text_edit.undone"), "ok");
+    } catch (e) {
+      toast(describeError(e, t), "danger");
+    }
+    return true;
+  };
   const undoText = async () => {
-    if (!id || !page) return;
-    try {
-      const r = await api.documentsUndoPageText(id, page.page_no);
-      if (!r) {
-        toast(t("viewer.text_edit.nothing_to_undo"), "info");
-        return;
-      }
-      applyTextRevert(r);
-      toast(t("viewer.text_edit.undone"), "ok");
-    } catch (e) {
-      toast(describeError(e, t), "danger");
-    }
+    if (!(await revertText(false))) toast(t("viewer.text_edit.nothing_to_undo"), "info");
   };
-  const redoText = async () => {
-    if (!id || !page) return;
-    try {
-      const r = await api.documentsRedoPageText(id, page.page_no);
-      if (!r) return;
-      applyTextRevert(r);
-      toast(t("viewer.text_edit.redone"), "ok");
-    } catch (e) {
-      toast(describeError(e, t), "danger");
-    }
+  const redoText = async () => void (await revertText(true));
+
+  // Ctrl+Z / Ctrl+Y that miss the viewer's own key handling — the focus is on a toolbar button, or the cached
+  // history has not caught up yet — still mean this page's corrections first. With none left, the file journal
+  // (organise / rename / delete batches, unrelated to this document's text) is reverted from here only after a
+  // confirmation that names the batch (DOC-2).
+  const undoScope = useRef({ revertText, askJournal: (_redo: boolean, _proceed: () => void): void => undefined });
+  undoScope.current = {
+    revertText,
+    askJournal: (redo, proceed) => {
+      void api
+        .journalBatches(50)
+        .then((batches) => nextJournalBatch(batches, redo))
+        .catch(() => undefined)
+        .then((batch) => {
+          if (batch === null) {
+            toast(t(redo ? "palette.nothing_to_redo" : "palette.nothing_to_undo"), "info");
+            return;
+          }
+          const what = batch ? ` ${t("viewer.journal.batch", { kind: t(`organize.history.kind.${batch.kind}`, { defaultValue: batch.label ?? batch.kind }), count: batch.entries, date: formatDate(batch.created_at, i18n.language) })}` : "";
+          setConfirm({ title: t(redo ? "viewer.journal.redo_title" : "viewer.journal.undo_title"), description: `${t(redo ? "viewer.journal.redo_body" : "viewer.journal.undo_body")}${what}`, confirmLabel: t(redo ? "viewer.journal.redo_ok" : "viewer.journal.undo_ok"), danger: true, onConfirm: proceed });
+        });
+    },
   };
+  const loaded = !!doc && !isLoading && !error;
+  useEffect(() => {
+    if (!loaded) return undefined;
+    return setUndoScope({ run: (redo) => undoScope.current.revertText(redo), confirmJournal: (redo, proceed) => undoScope.current.askJournal(redo, proceed) });
+  }, [loaded]);
+  // The viewer owns the keyboard as soon as the document is on the screen (←/→, +/-, Enter, Ctrl+Z). Its root only
+  // exists once the document has loaded: on a first open the reset effect above runs while the spinner is still
+  // showing, so its focus call found nothing and the keys were not heard until a click (DOC-2).
+  const focusViewer = useCallback(() => rootRef.current?.focus({ preventScroll: true }), []);
+  useEffect(() => {
+    if (loaded) focusViewer();
+  }, [id, loaded, focusViewer]);
 
   const rerender = async () => {
     if (!id) return;
@@ -693,6 +724,7 @@ export function DocumentViewer() {
                   hits={hits}
                   selected={selected}
                   onSelect={setSelected}
+                  onEditorClose={focusViewer}
                   fields={fields ?? []}
                   onExplain={(sel) => explain(sel)}
                   editSeq={editSeq}

@@ -1603,6 +1603,15 @@
   },
   "viewer": {
     "back": "Documents",
+    "journal": {
+      "undo_title": "Undo a file operation",
+      "undo_body": "This page has no text correction to undo. Undo the last file operation (organise / rename / delete) instead? It has nothing to do with this document's text corrections.",
+      "undo_ok": "Undo the file operation",
+      "redo_title": "Redo a file operation",
+      "redo_body": "This page has no text correction to redo. Redo the file operation that was undone last instead?",
+      "redo_ok": "Redo",
+      "batch": "Target: {{kind}} · {{count}} item(s) · {{date}}"
+    },
     "page": "{{page}} / {{total}}",
     "prev": "Previous page",
     "next": "Next page",
