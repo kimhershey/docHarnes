@@ -15,6 +15,7 @@
 //! document generation / project ops stay for v1.1.
 
 pub mod exec;
+pub mod fastpath;
 pub mod guard;
 pub mod llm;
 pub mod prompts;
