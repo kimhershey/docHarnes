@@ -25,6 +25,8 @@ tauri-plugin-dialog = "2"
 tauri-plugin-log = "2"
 # OS toast when a long job finishes (design §3.9; MIT OR Apache-2.0).
 tauri-plugin-notification = "2"
+# One running instance: a second launch brings the first window to the front (MIT OR Apache-2.0).
+tauri-plugin-single-instance = "2"
 serde.workspace = true
 serde_json.workspace = true
 log.workspace = true

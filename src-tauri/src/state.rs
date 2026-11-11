@@ -36,7 +36,13 @@ pub struct UiError {
 impl From<CoreError> for UiError {
     fn from(e: CoreError) -> Self {
         let detail = match &e {
-            CoreError::WorkspaceLocked { pid, host } => Some(serde_json::json!({ "pid": pid, "host": host })),
+            // A lock of this PC that still blocks belongs to a running DocuLens and is never taken
+            // over; only a lock from another host can be force-released.
+            CoreError::WorkspaceLocked { pid, host } => Some(serde_json::json!({
+                "pid": pid,
+                "host": host,
+                "forcible": *host != doculens_core::workspace::hostname(),
+            })),
             _ => None,
         };
         UiError { code: e.code().to_string(), message: e.to_string(), detail }
@@ -143,7 +149,11 @@ pub struct AppState {
 impl AppState {
     /// Loads settings (never fails: a corrupt file is moved aside).
     pub fn bootstrap() -> AppState {
-        let app_paths = AppPaths::default_location();
+        Self::bootstrap_at(AppPaths::default_location())
+    }
+
+    /// [`Self::bootstrap`] on a given app-data folder (tests use a temporary one).
+    pub fn bootstrap_at(app_paths: AppPaths) -> AppState {
         let settings_path = app_paths.settings_file();
         let (settings, status) = AppSettings::load(&settings_path).unwrap_or_else(|e| {
             log::error!("cannot read {}: {e}", settings_path.display());
@@ -305,6 +315,19 @@ impl AppState {
         Ok(())
     }
 
+    /// App exit: checkpoint the database and release the workspace lock. The process ends without
+    /// running destructors, so the lock file would stay behind and the workspace would read as
+    /// "in use" on the next PC that opens it (USB / shared / synced folder). The active workspace
+    /// stays recorded in the settings for the next start.
+    pub fn release_workspace_for_exit(&self) {
+        // Nothing may start against the workspace any more.
+        self.switching.store(true, Ordering::SeqCst);
+        let mut guard = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(ws) = guard.take() {
+            ws.close();
+        }
+    }
+
     pub fn with_workspace<T>(&self, f: impl FnOnce(&Workspace) -> T) -> UiResult<T> {
         let guard = self.workspace.lock().map_err(|_| UiError::poisoned())?;
         match guard.as_ref() {
@@ -327,5 +350,79 @@ impl AppState {
             settings_path: self.settings_path(),
             workspace: self.startup_workspace.lock().map_err(|_| UiError::poisoned())?.clone(),
         })
+    }
+}
+
+/// Test helpers of the shell crate (it has no `tempfile` dependency).
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::path::{Path, PathBuf};
+
+    use doculens_core::paths::AppPaths;
+
+    use super::AppState;
+
+    /// A scratch folder under the OS temp directory, removed on drop.
+    pub struct TempDir(PathBuf);
+
+    impl TempDir {
+        pub fn new() -> TempDir {
+            let dir = std::env::temp_dir().join(format!("doculens-shell-test-{}", uuid::Uuid::new_v4().simple()));
+            std::fs::create_dir_all(&dir).expect("temp dir");
+            TempDir(dir)
+        }
+        pub fn path(&self) -> &Path {
+            &self.0
+        }
+        /// An app state whose app-data folder (settings, presets, logs) lives in this folder.
+        pub fn state(&self) -> AppState {
+            AppState::bootstrap_at(AppPaths::new(self.0.join("appdata")))
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use doculens_core::paths::WorkspacePaths;
+
+    use super::test_support::TempDir;
+    use super::*;
+
+    /// PLT-6: the process exits without dropping the state, so the exit handler closes the
+    /// workspace by hand. The lock file must be gone and the workspace still be the active one.
+    #[test]
+    fn exit_releases_the_workspace_lock_and_keeps_the_workspace_active() {
+        let tmp = TempDir::new();
+        let state = tmp.state();
+        let root = tmp.path().join("ws");
+        state.open_workspace_inner(&root, OpenOptions { create: true, ..Default::default() }).unwrap();
+        let lock = WorkspacePaths::new(&root).lock_file();
+        assert!(lock.is_file());
+
+        state.release_workspace_for_exit();
+        assert!(!lock.exists(), "another PC must not find the workspace \"in use\"");
+        assert!(state.workspace.lock().unwrap().is_none());
+        assert!(state.switching.load(Ordering::SeqCst), "no background work may start during exit");
+        let (saved, _) = AppSettings::load(&state.settings_path()).unwrap();
+        assert_eq!(saved.active_workspace.as_deref(), Some(root.as_path()), "the next start reopens it");
+        // Idempotent: a second call (or an exit without a workspace) is harmless.
+        state.release_workspace_for_exit();
+    }
+
+    /// PLT-18: the error tells the webview whether "force unlock" can help at all.
+    #[test]
+    fn locked_error_says_whether_force_unlock_applies() {
+        let here = UiError::from(CoreError::WorkspaceLocked { pid: 42, host: doculens_core::workspace::hostname() });
+        assert_eq!(here.code, "workspace_locked");
+        let detail = here.detail.unwrap();
+        assert_eq!((detail["pid"].as_u64(), detail["forcible"].as_bool()), (Some(42), Some(false)));
+        let elsewhere = UiError::from(CoreError::WorkspaceLocked { pid: 7, host: "another-pc".into() });
+        assert_eq!(elsewhere.detail.unwrap()["forcible"].as_bool(), Some(true));
     }
 }

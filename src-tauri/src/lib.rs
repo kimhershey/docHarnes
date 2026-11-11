@@ -27,6 +27,10 @@ pub fn run() {
     let state = AppState::bootstrap();
 
     let app = tauri::Builder::default()
+        // Registered first: a second launch hands over to the running instance and exits before
+        // anything else is set up (two instances would overwrite each other's settings file and
+        // could run two engines on one workspace).
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| focus_main_window(app)))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
@@ -258,9 +262,21 @@ pub fn run() {
             // model instances down gracefully.
             let state = app.state::<AppState>();
             let _ = state.engine.stop();
+            // The process exits without dropping the state: close the workspace by hand so its
+            // database is checkpointed and its lock file removed.
+            state.release_workspace_for_exit();
             // Sleep prevention (`power`) needs no release: its thread-bound state goes with the process.
         }
     });
+}
+
+/// A second launch of the app: bring the running window to the front instead.
+fn focus_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
 }
 
 /// Native window theme for a persisted theme choice (`System` = follow OS).

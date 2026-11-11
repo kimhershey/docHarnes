@@ -98,27 +98,53 @@ pub struct LockInfo {
 pub enum LockState {
     /// No lock file.
     Free,
-    /// Lock from a process that no longer exists on this host.
+    /// Lock from a process that no longer exists on this host, or whose pid now belongs to
+    /// another program.
     Stale,
-    /// Lock from a live process on this host.
+    /// Lock from a live DocuLens process on this host.
     HeldHere,
     /// Lock written by another host (network share) — liveness unknown.
     HeldElsewhere,
 }
 
-fn hostname() -> String {
+/// Host name written into lock files (and compared against them).
+pub fn hostname() -> String {
     sysinfo::System::host_name().unwrap_or_else(|| "localhost".to_string())
 }
 
-fn process_alive(pid: u32) -> bool {
-    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+/// Whether the names the OS reports for a live process (executable file name, process name) can
+/// be a DocuLens binary: the app, the eval tool, a test binary — or this very executable under
+/// another name. Pids are reused: after a crash the pid in a lock file may belong to any program,
+/// and that must not read as "workspace in use". With no name known the answer is yes, so such a
+/// lock keeps needing the user's decision.
+fn looks_like_doculens(names: &[&str], own_exe: Option<&str>) -> bool {
+    let own = own_exe.map(str::to_lowercase);
+    let mut known = false;
+    for name in names.iter().map(|n| n.to_lowercase()).filter(|n| !n.is_empty()) {
+        known = true;
+        // Linux reports the process name cut to 15 characters.
+        let is_own = own.as_deref().is_some_and(|o| o == name || (name.len() >= 15 && o.starts_with(&name)));
+        if name.starts_with("doculens") || is_own {
+            return true;
+        }
+    }
+    !known
+}
+
+/// True when `pid` is a live process on this host that can be DocuLens.
+fn live_doculens_process(pid: u32) -> bool {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
     let mut sys = System::new();
     sys.refresh_processes_specifics(
         ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
         true,
-        ProcessRefreshKind::nothing(),
+        ProcessRefreshKind::nothing().with_exe(UpdateKind::OnlyIfNotSet),
     );
-    sys.process(Pid::from_u32(pid)).is_some()
+    let Some(process) = sys.process(Pid::from_u32(pid)) else { return false };
+    let exe = process.exe().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = process.name().to_string_lossy().into_owned();
+    let own = std::env::current_exe().ok().and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
+    looks_like_doculens(&[&exe, &name], own.as_deref())
 }
 
 pub fn read_lock(paths: &WorkspacePaths) -> (LockState, Option<LockInfo>) {
@@ -126,7 +152,7 @@ pub fn read_lock(paths: &WorkspacePaths) -> (LockState, Option<LockInfo>) {
     let Ok(info) = serde_json::from_slice::<LockInfo>(&bytes) else { return (LockState::Stale, None) };
     let state = if info.host != hostname() {
         LockState::HeldElsewhere
-    } else if info.pid != std::process::id() && !process_alive(info.pid) {
+    } else if info.pid != std::process::id() && !live_doculens_process(info.pid) {
         LockState::Stale
     } else {
         LockState::HeldHere
@@ -242,7 +268,8 @@ pub struct OpenOptions {
     /// Display name for a newly created workspace (defaults to the folder name).
     pub name: Option<String>,
     pub locale: Option<Language>,
-    /// Take over a lock held by another host or a live process (user confirmed).
+    /// Take over a lock written by another host (user confirmed). A lock held by a live DocuLens
+    /// process on this host is never taken over.
     pub force_unlock: bool,
 }
 
@@ -291,7 +318,11 @@ fn acquire_lock(paths: &WorkspacePaths, force_unlock: bool) -> Result<Uuid> {
             LockState::HeldHere | LockState::HeldElsewhere => {
                 let info = existing.expect("lock info present when held");
                 let ours = info.pid == std::process::id() && info.host == hostname();
-                if !ours && !force_unlock {
+                // A lock from another host can be taken over on the user's word: nobody can tell
+                // whether that instance still runs. A live DocuLens on this PC cannot — two
+                // instances on one workspace mean two engines and every queued job run twice.
+                let forcible = state == LockState::HeldElsewhere;
+                if !ours && !(force_unlock && forcible) {
                     return Err(CoreError::WorkspaceLocked { pid: info.pid, host: info.host });
                 }
                 std::fs::write(&lock_path, &bytes).map_err(|e| CoreError::io(&lock_path, e))?;
@@ -517,6 +548,116 @@ mod tests {
             LockState::HeldHere => assert!(matches!(result, Err(CoreError::WorkspaceLocked { pid: 1, .. }))),
             _ => assert!(result.is_ok()),
         }
+    }
+
+    /// PLT-6: which live processes may hold a lock (pid reuse after a crash must not).
+    #[test]
+    fn only_doculens_processes_hold_a_lock() {
+        for names in [
+            &["DocuLens.exe", "DocuLens.exe"][..],
+            &["doculens", "doculens"],
+            &["doculens-eval", "doculens-eval"],
+            &["doculens_core-35abcffb7ae94113", "doculens_core-3"],
+            &["", "doculens_lib-0f1"],
+        ] {
+            assert!(looks_like_doculens(names, Some("whatever")), "{names:?}");
+        }
+        for names in
+            [&["chrome.exe", "chrome.exe"][..], &["", "svchost.exe"], &["sleep", "sleep"], &["coreutils", "sleep"]]
+        {
+            assert!(!looks_like_doculens(names, Some("DocuLens.exe")), "{names:?}");
+        }
+        // The app under another file name still recognises its own second instance …
+        assert!(looks_like_doculens(&["Viewer.exe", "Viewer.exe"], Some("viewer.exe")));
+        assert!(looks_like_doculens(&["", "my-renamed-app-"], Some("my-renamed-app-binary")));
+        assert!(!looks_like_doculens(&["", "my"], Some("my-renamed-app-binary")));
+        // … and a process the OS tells nothing about keeps the lock (the user decides).
+        assert!(looks_like_doculens(&["", ""], Some("DocuLens.exe")));
+        assert!(looks_like_doculens(&[], None));
+    }
+
+    fn write_lock(paths: &WorkspacePaths, pid: u32) {
+        let info = LockInfo {
+            pid,
+            host: hostname(),
+            app_version: "0.0.0".into(),
+            created_at: Utc::now(),
+            token: Some(Uuid::new_v4()),
+        };
+        std::fs::write(paths.lock_file(), serde_json::to_vec(&info).unwrap()).unwrap();
+    }
+
+    /// PLT-6: the app crashed and its pid now belongs to another program on the same PC.
+    #[cfg(unix)]
+    #[test]
+    fn a_lock_whose_pid_was_reused_is_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ws");
+        drop(Workspace::open(&root, OpenOptions { create: true, ..Default::default() }).unwrap());
+        let paths = WorkspacePaths::new(&root);
+        let mut other = std::process::Command::new("sleep").arg("60").spawn().unwrap();
+        write_lock(&paths, other.id());
+        assert_eq!(read_lock(&paths).0, LockState::Stale);
+        let ws = Workspace::open(&root, OpenOptions::default()).expect("no forced unlock needed");
+        assert_eq!(read_lock(&paths).0, LockState::HeldHere);
+        drop(ws);
+        let _ = other.kill();
+        let _ = other.wait();
+    }
+
+    /// Not a test of its own: the body of the second "DocuLens" process the next test starts
+    /// (this test binary again, which is a `doculens…` executable). It lives until stdin closes.
+    #[test]
+    #[ignore = "helper process of a_live_doculens_lock_is_never_taken_over"]
+    fn lock_holder_process() {
+        if std::env::var_os("DOCULENS_TEST_LOCK_HOLDER").is_some() {
+            let _ = std::io::stdin().read_line(&mut String::new());
+        }
+    }
+
+    /// PLT-18: a second instance must not get into a workspace a live DocuLens holds — not even
+    /// with "force unlock" (two engines, every queued job run twice). PLT-6: once that process is
+    /// gone its lock is stale and the workspace opens without asking.
+    #[test]
+    fn a_live_doculens_lock_is_never_taken_over() {
+        use std::process::{Command, Stdio};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("ws");
+        drop(Workspace::open(&root, OpenOptions { create: true, ..Default::default() }).unwrap());
+        let paths = WorkspacePaths::new(&root);
+        assert!(!paths.lock_file().exists(), "closing released the lock");
+
+        let mut holder = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "workspace::tests::lock_holder_process", "--ignored", "--nocapture", "--test-threads=1"])
+            .env("DOCULENS_TEST_LOCK_HOLDER", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        write_lock(&paths, holder.id());
+        assert_eq!(read_lock(&paths).0, LockState::HeldHere);
+        for force_unlock in [false, true] {
+            let refused = Workspace::open(&root, OpenOptions { force_unlock, ..Default::default() });
+            assert!(
+                matches!(&refused, Err(CoreError::WorkspaceLocked { pid, .. }) if *pid == holder.id()),
+                "force_unlock = {force_unlock}: {refused:?}"
+            );
+        }
+        // A lock from another host is the one case "force unlock" is for.
+        let mut elsewhere: LockInfo = serde_json::from_slice(&std::fs::read(paths.lock_file()).unwrap()).unwrap();
+        elsewhere.host = "another-pc".into();
+        std::fs::write(paths.lock_file(), serde_json::to_vec(&elsewhere).unwrap()).unwrap();
+        assert!(matches!(Workspace::open(&root, OpenOptions::default()), Err(CoreError::WorkspaceLocked { .. })));
+        drop(Workspace::open(&root, OpenOptions { force_unlock: true, ..Default::default() }).unwrap());
+
+        // The other instance exits (or crashes): its lock no longer blocks anything.
+        write_lock(&paths, holder.id());
+        drop(holder.stdin.take());
+        let _ = holder.wait();
+        assert_eq!(read_lock(&paths).0, LockState::Stale);
+        drop(Workspace::open(&root, OpenOptions::default()).unwrap());
+        assert!(!paths.lock_file().exists());
     }
 
     #[test]
