@@ -171,7 +171,10 @@ pub fn auto_process(app: &AppHandle, ids: Vec<String>, level: Option<AutoProcess
         emit_changed(app, "engine_off", ids);
         return;
     }
-    match process_job(app, ProcessRequest { document_ids: ids, level, ..Default::default() }) {
+    // Automatic runs never replace an extraction that already stands (second guard next to the
+    // import job, which only hands over new content).
+    let req = ProcessRequest { document_ids: ids, level, skip_extracted: true, ..Default::default() };
+    match process_job(app, req) {
         Ok(_) => {}
         Err(e) if e.code == "no_workspace" => {}
         Err(e) => log::warn!("auto pipeline not started: {}", e.message),

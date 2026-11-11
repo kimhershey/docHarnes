@@ -1095,3 +1095,48 @@ fn extraction_page_budget_keeps_first_then_last() {
     assert_eq!(nos(9, &[]), vec![1, 2, 3, 4, 5]);
     assert_eq!(nos(2, &[2, 3, 4]), vec![2, 4], "an explicit page list is honoured");
 }
+
+/// Audit PIP-1: the automatic pipeline after an import re-extracted documents that only came
+/// back under a new name (inbox default = full processing) — reviewed fields were replaced by a
+/// fresh run and the review started over.
+#[test]
+fn automatic_runs_leave_extracted_documents_alone() {
+    let w = World::new();
+    w.add_doc("r1", "receipt.pdf", SourceKind::Pdf, &[None]);
+    w.chat.push("classify", classify_reply("receipt", 0));
+    w.chat.push_ocr(RECEIPT_OCR);
+    w.chat.push("kie_receipt", receipt_kie());
+    let deps = w.deps(None);
+    run::process(&deps, &ProcessRequest { document_ids: vec!["r1".into()], ..Default::default() }, &mut |_| {})
+        .unwrap();
+    // The user corrects one field and approves the rest: the document is reviewed.
+    let approval = w.fields("r1").into_iter().find(|f| f.path == "approval_no").unwrap();
+    review::apply(&w.db, &[approval.id], &ReviewAction::Correct { value: "87654321".into() }, None).unwrap();
+    review::approve_document(&w.db, "r1", None).unwrap();
+    assert_eq!(w.doc("r1").status, DocumentStatus::Reviewed);
+    let snapshot = |w: &World| -> Vec<(String, Option<String>, FieldStatus)> {
+        w.fields("r1").into_iter().map(|f| (f.path, f.value, f.status)).collect()
+    };
+    let before = snapshot(&w);
+
+    // The automatic pipeline comes by again (the file was renamed and relinked through the inbox).
+    let auto = ProcessRequest { document_ids: vec!["r1".into()], skip_extracted: true, ..Default::default() };
+    let report = run::process(&deps, &auto, &mut |_| {}).unwrap();
+    assert_eq!((report.processed.len(), report.extracted, report.failed.len()), (1, 0, 0), "{report:?}");
+    assert_eq!(w.chat.calls("kie_receipt"), 1, "no second extraction call");
+    assert_eq!(w.db.with(|c| repo::list_runs(c, "r1")).unwrap().len(), 1);
+    assert_eq!(snapshot(&w), before, "the reviewed fields stand");
+    assert_eq!((w.doc("r1").status, w.doc("r1").review_status), (DocumentStatus::Reviewed, ReviewStatus::Done));
+
+    // The same automatic request still processes a document that has no extraction yet …
+    w.add_doc("r2", "receipt-2.pdf", SourceKind::Pdf, &[None]);
+    w.chat.push("classify", classify_reply("receipt", 0));
+    w.chat.push("kie_receipt", receipt_kie());
+    let auto = ProcessRequest { document_ids: vec!["r2".into()], skip_extracted: true, ..Default::default() };
+    assert_eq!(run::process(&deps, &auto, &mut |_| {}).unwrap().extracted, 1);
+    // … and an explicit request replaces the latest run as before (the UI confirms first).
+    w.chat.push("kie_receipt", receipt_kie());
+    let explicit = ProcessRequest { document_ids: vec!["r1".into()], ..Default::default() };
+    assert_eq!(run::process(&deps, &explicit, &mut |_| {}).unwrap().extracted, 1);
+    assert_eq!(w.db.with(|c| repo::list_runs(c, "r1")).unwrap().len(), 2);
+}

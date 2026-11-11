@@ -295,6 +295,12 @@ fn process_document(
     }
 
     // ---- 3. extraction -----------------------------------------------------
+    if req.skip_extracted && doc.last_run_id.is_some() {
+        // An automatic run never replaces an extraction that stands (its approvals and corrections
+        // would be gone); only an explicit request extracts a document again.
+        log::info!("pipeline {}: already extracted, automatic run leaves it alone", doc.id);
+        return Ok(out);
+    }
     if extraction_pages(&pages, deps.settings.kie_max_pages as usize, &req.pages).is_empty() {
         // Blank-only / unrendered documents have nothing to extract; not an error.
         log::info!("pipeline {}: no usable pages, extraction skipped", doc.id);

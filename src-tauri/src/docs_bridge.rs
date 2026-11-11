@@ -367,7 +367,7 @@ pub fn import_job(app: &AppHandle, plan: ImportPlan) -> UiResult<String> {
     let job_id = job.clone();
     let source = plan.source;
     let auto_level = plan.options.auto_level;
-    // Ids of the documents this import touched, handed to the auto pipeline afterwards.
+    // Ids of the documents this import brought in, handed to the auto pipeline afterwards.
     let processed: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let processed_after = processed.clone();
     spawn_job_thread(
@@ -430,8 +430,10 @@ pub fn import_job(app: &AppHandle, plan: ImportPlan) -> UiResult<String> {
             // that started this import attaches the new documents once the job finishes.
             state.jobs.set_result(&job_id, serde_json::to_value(&report).ok());
             if let Ok(mut p) = processed.lock() {
+                // Only new content goes to the automatic pipeline. A relinked document (the same
+                // file under a new name / place) keeps what was extracted and reviewed: handing it
+                // over re-extracted it and reset its review (audit PIP-1).
                 p.extend(report.imported.iter().cloned());
-                p.extend(report.relinked.iter().cloned());
                 p.retain(|id| batch_ids.contains(id));
             }
             if report.cancelled || cancel.load(Ordering::Relaxed) {

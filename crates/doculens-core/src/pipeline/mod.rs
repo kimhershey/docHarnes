@@ -92,6 +92,10 @@ pub struct ProcessRequest {
     pub pages: Vec<u32>,
     /// Precision mode override.
     pub precise: Option<bool>,
+    /// Leave the extraction of documents that already have one alone (the automatic pipeline
+    /// after an import: a document that merely came back under a new name must not lose its
+    /// reviewed fields). Explicit requests keep this off — they replace the latest run.
+    pub skip_extracted: bool,
 }
 
 impl Default for ProcessRequest {
@@ -104,6 +108,7 @@ impl Default for ProcessRequest {
             profile: None,
             pages: Vec::new(),
             precise: None,
+            skip_extracted: false,
         }
     }
 }
