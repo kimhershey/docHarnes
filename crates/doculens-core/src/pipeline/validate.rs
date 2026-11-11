@@ -24,51 +24,215 @@ fn re(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
 // Normalisation
 // ---------------------------------------------------------------------------
 
-/// Parses a printed amount: `1,250,000원`, `₩12,500`, `(3,000)` (negative),
-/// `-500`, `12만원`, `1억 2,000만원`, `1.5만`. Returns `None` when no digit is found.
+/// Korean numeral syllables (`일` … `구`, `영`).
+fn han_digit(c: char) -> Option<f64> {
+    "영일이삼사오육칠팔구".chars().position(|d| d == c).map(|i| i as f64)
+}
+
+/// `십` / `백` / `천`: multipliers inside one group of four digits.
+fn small_unit(c: char) -> Option<f64> {
+    match c {
+        '십' => Some(10.0),
+        '백' => Some(100.0),
+        '천' => Some(1_000.0),
+        _ => None,
+    }
+}
+
+/// `만` / `억` / `조`: the group units.
+fn big_unit(c: char) -> Option<f64> {
+    match c {
+        '만' => Some(1e4),
+        '억' => Some(1e8),
+        '조' => Some(1e12),
+        _ => None,
+    }
+}
+
+fn is_blank(c: char) -> bool {
+    c == ' ' || c == '\u{a0}'
+}
+
+/// Reads a printed number at `i`: digits with thousands commas (`1,250,000`), thousands separated
+/// by single spaces (`1 250 000`) and one decimal part. Returns the value and the index after it.
+fn read_number(chars: &[char], i: usize) -> Option<(f64, usize)> {
+    let n = chars.len();
+    let digit = |k: usize| k < n && chars[k].is_ascii_digit();
+    let mut text = String::new();
+    let (mut k, mut commas) = (i, false);
+    while digit(k) || (k < n && chars[k] == ',' && digit(k + 1)) {
+        if chars[k] == ',' {
+            commas = true;
+        } else {
+            text.push(chars[k]);
+        }
+        k += 1;
+    }
+    if !commas && text.len() <= 3 {
+        while k < n && is_blank(chars[k]) && digit(k + 1) && digit(k + 2) && digit(k + 3) && !digit(k + 4) {
+            text.extend(&chars[k + 1..k + 4]);
+            k += 4;
+        }
+    }
+    if k < n && chars[k] == '.' && digit(k + 1) {
+        text.push('.');
+        k += 1;
+        while digit(k) {
+            text.push(chars[k]);
+            k += 1;
+        }
+        // `1.250.000` is not a decimal number.
+        if k < n && chars[k] == '.' && digit(k + 1) {
+            return None;
+        }
+    }
+    text.parse::<f64>().ok().map(|v| (v, k))
+}
+
+/// One amount expression found in a text.
+#[derive(Debug, Clone, Copy)]
+struct AmountToken {
+    value: f64,
+    /// A currency mark stands next to it (`₩` / `$` / `금` before, `원` / `KRW` after).
+    currency: bool,
+    /// Directly followed by `%` or a counter word (`1식`, `3건`, `2026년`): a count, a rate, a date part.
+    count_like: bool,
+}
+
+/// Reads one amount expression at `i`: a number, optionally with Korean numerals and units
+/// (`3천만`, `삼백만`, `1억 2,000만`, `12만 5천`). Returns the value, the index after it and whether
+/// it holds a digit / a unit.
+fn read_amount(chars: &[char], i: usize) -> Option<(f64, usize, bool, bool)> {
+    let n = chars.len();
+    let (mut total, mut group) = (0f64, 0f64);
+    let mut pending: Option<f64> = None;
+    let (mut j, mut has_digit, mut has_unit) = (i, false, false);
+    while j < n {
+        let c = chars[j];
+        if c.is_ascii_digit() {
+            if pending.is_some() {
+                break;
+            }
+            let (v, end) = read_number(chars, j)?;
+            pending = Some(v);
+            has_digit = true;
+            j = end;
+        } else if let Some(d) = han_digit(c) {
+            if pending.is_some() {
+                break;
+            }
+            pending = Some(d);
+            j += 1;
+        } else if let Some(u) = small_unit(c) {
+            group += pending.take().unwrap_or(1.0) * u;
+            has_unit = true;
+            j += 1;
+        } else if let Some(u) = big_unit(c) {
+            let g = group + pending.take().unwrap_or(0.0);
+            total += if g == 0.0 { u } else { g * u };
+            group = 0.0;
+            has_unit = true;
+            j += 1;
+            // "1억 2,000만", "12만 5천원": one blank inside the amount, when what follows goes on
+            // with a unit or the currency ("1억 2명" does not).
+            if j + 1 < n && is_blank(chars[j]) {
+                let next = j + 1;
+                let goes_on = if chars[next].is_ascii_digit() {
+                    read_number(chars, next).is_some_and(|(_, end)| {
+                        end < n
+                            && (small_unit(chars[end]).is_some()
+                                || big_unit(chars[end]).is_some()
+                                || chars[end] == '원')
+                    })
+                } else {
+                    han_digit(chars[next]).is_some() || small_unit(chars[next]).is_some()
+                };
+                if goes_on {
+                    j = next;
+                }
+            }
+        } else {
+            break;
+        }
+    }
+    (j > i).then(|| (total + group + pending.unwrap_or(0.0), j, has_digit, has_unit))
+}
+
+/// Every amount expression of a text, in order.
+fn amount_tokens(text: &str) -> Vec<AmountToken> {
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    let is_currency_sign = |c: char| matches!(c, '₩' | '￦' | '\\' | '$');
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < n {
+        let c = chars[i];
+        let starts = c.is_ascii_digit() || han_digit(c).is_some() || small_unit(c).is_some() || big_unit(c).is_some();
+        // Not inside a word / code / another number ("A123", "v1.2").
+        let glued = i > 0 && (chars[i - 1].is_ascii_alphanumeric() || (chars[i - 1] == '.' && c.is_ascii_digit()));
+        if !starts || glued {
+            i += 1;
+            continue;
+        }
+        let Some((value, end, has_digit, has_unit)) = read_amount(&chars, i) else {
+            i += 1;
+            continue;
+        };
+        // What stands before (blanks and currency signs skipped) and after the expression.
+        let mut b = i;
+        let mut sign_seen = false;
+        while b > 0 && (is_blank(chars[b - 1]) || is_currency_sign(chars[b - 1])) {
+            sign_seen |= is_currency_sign(chars[b - 1]);
+            b -= 1;
+        }
+        let before = (b > 0).then(|| chars[b - 1]);
+        let mut a = end;
+        while a < n && is_blank(chars[a]) {
+            a += 1;
+        }
+        let rest: String = chars[a..n.min(a + 3)].iter().collect::<String>().to_lowercase();
+        let currency = sign_seen
+            || before == Some('금')
+            || rest.starts_with('원')
+            || rest.starts_with("krw")
+            || rest.starts_with("won");
+        // A run of numeral syllables is a word ("삼성", "이천") unless it is written as money.
+        if !has_digit && !(has_unit && currency) {
+            i = end;
+            continue;
+        }
+        let minus = matches!(before, Some('-' | '−' | '△' | '▲'));
+        // Accounting style "(3,000)": a bare number in brackets is negative.
+        let bracketed = !currency && before == Some('(') && a < n && chars[a] == ')';
+        let count_like = end < n && (chars[end] == '%' || (('가'..='힣').contains(&chars[end]) && chars[end] != '원'));
+        out.push(AmountToken { value: if minus || bracketed { -value } else { value }, currency, count_like });
+        i = end;
+    }
+    out
+}
+
+/// Parses a printed amount: `1,250,000원`, `₩12,500`, `(3,000)` (negative), `-500`, `△3,000`,
+/// `12만원`, `1억 2,000만원`, `3천만원`, `금 삼백만원정`, `1.5만`.
+///
+/// One amount expression is taken, never the digits of the whole text glued together: the first
+/// one written as money (`₩` / `금` before, `원` / `KRW` after) — `1,100,000원 (VAT 10% 포함)`,
+/// `1식 5,000,000원` — else the only plain number, else the only counted one (`3개`, `85%`).
+/// Several unrelated numbers without a currency mark are not an amount (`None`).
 pub fn normalize_amount(s: &str) -> Option<f64> {
-    let t = s.trim();
-    if t.is_empty() {
-        return None;
+    let tokens = amount_tokens(s);
+    if let Some(t) = tokens.iter().find(|t| t.currency) {
+        return Some(t.value);
     }
-    let mut negative =
-        t.starts_with('-') || t.starts_with('(') && t.ends_with(')') || t.starts_with('△') || t.starts_with('▲');
-    let cleaned: String = t
-        .chars()
-        .filter(|c| !matches!(c, ',' | ' ' | '\u{a0}' | '₩' | '\\' | '$' | '원' | '정' | '(' | ')' | '△' | '▲'))
-        .collect();
-    let cleaned = cleaned.trim_end_matches("KRW").trim_end_matches("krw").trim().to_string();
-    let cleaned = cleaned
-        .strip_prefix('-')
-        .map(|r| {
-            negative = true;
-            r.to_string()
-        })
-        .unwrap_or(cleaned);
-    // Korean magnitude words.
-    if cleaned.contains('억') || cleaned.contains('만') {
-        let mut total = 0f64;
-        let mut rest = cleaned.as_str();
-        if let Some((a, r)) = rest.split_once('억') {
-            total += a.trim().parse::<f64>().ok()? * 100_000_000.0;
-            rest = r;
+    let only = |count_like: bool| {
+        let mut it = tokens.iter().filter(|t| t.count_like == count_like);
+        match (it.next(), it.next()) {
+            (Some(t), None) => Some(Some(t.value)),
+            (Some(_), Some(_)) => Some(None),
+            _ => None,
         }
-        if let Some((m, r)) = rest.split_once('만') {
-            total += m.trim().parse::<f64>().ok()? * 10_000.0;
-            rest = r;
-        }
-        let rest = rest.trim();
-        if !rest.is_empty() {
-            total += rest.parse::<f64>().ok()?;
-        }
-        return Some(if negative { -total } else { total });
-    }
-    let digits: String = cleaned.chars().filter(|c| c.is_ascii_digit() || *c == '.').collect();
-    if digits.is_empty() || !digits.chars().any(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    let v: f64 = digits.trim_matches('.').parse().ok()?;
-    Some(if negative { -v } else { v })
+    };
+    // Plain numbers first; counted ones (`3개`, `85%`) only when there is nothing else.
+    only(false).or_else(|| only(true)).flatten()
 }
 
 pub fn normalize_integer(s: &str) -> Option<i64> {
@@ -81,33 +245,73 @@ pub fn normalize_integer(s: &str) -> Option<i64> {
 
 /// Parses the common Korean / ISO date spellings into `YYYY-MM-DD`
 /// (`2026-10-14`, `2026.10.14`, `2026/10/14`, `2026년 10월 14일`, `26.10.14`,
-/// `20261014`, `2026-10-14 12:31`). Month/day order is year-first only.
+/// `20261014`, `2026-10-14 12:31`) and the spellings with the year last (`14.10.2026`,
+/// `10/14/2026`). Only real calendar days are accepted.
+///
+/// Year last: a part above 12 is the day; when both could be the month, `/` reads month first
+/// (US) and `.` / `-` day first (European) — [`parse_date`] reports that guess. A two-digit year
+/// is taken from the century that keeps it at most 20 years ahead (`85.03.15` → 1985).
 pub fn normalize_date(s: &str) -> Option<String> {
+    use chrono::Datelike;
+    parse_date(s, chrono::Local::now().year()).map(|(date, _)| date)
+}
+
+/// [`normalize_date`] with the year "now" given, plus whether the day / month order was a guess
+/// (`03/04/2026`).
+pub fn parse_date(s: &str, this_year: i32) -> Option<(String, bool)> {
     static FULL: OnceLock<Regex> = OnceLock::new();
     static SHORT: OnceLock<Regex> = OnceLock::new();
     static COMPACT: OnceLock<Regex> = OnceLock::new();
+    static YEAR_LAST: OnceLock<Regex> = OnceLock::new();
     let t = s.trim();
     if t.is_empty() {
         return None;
     }
-    let make = |y: i64, m: i64, d: i64| -> Option<String> {
-        if !(1..=12).contains(&m) || !(1..=31).contains(&d) || !(1900..=2100).contains(&y) {
+    let make = |y: i32, m: u32, d: u32| -> Option<String> {
+        if !(1900..=2100).contains(&y) {
             return None;
         }
-        Some(format!("{y:04}-{m:02}-{d:02}"))
+        chrono::NaiveDate::from_ymd_opt(y, m, d).map(|date| date.format("%Y-%m-%d").to_string())
     };
-    let full = re(&FULL, r"(?P<y>(?:19|20)\d{2})\s*[.\-/년]\s*(?P<m>\d{1,2})\s*[.\-/월]\s*(?P<d>\d{1,2})\s*일?");
-    if let Some(c) = full.captures(t) {
-        return make(c["y"].parse().ok()?, c["m"].parse().ok()?, c["d"].parse().ok()?);
+    // The regex crate has no look-around: a match that starts or ends inside a longer number
+    // ("2026.10.145", "12026-10-14") is not a date.
+    let standalone = |c: &regex::Captures| {
+        let m = c.get(0).expect("whole match");
+        let digit = |ch: Option<char>| ch.is_some_and(|ch| ch.is_ascii_digit());
+        !digit(t[..m.start()].chars().next_back()) && !digit(t[m.end()..].chars().next())
+    };
+    let num = |c: &regex::Captures, name: &str| c[name].parse::<u32>().ok();
+
+    let full = re(&FULL, r"(?P<y>(?:19|20)\d{2})\s*[.\-/년]\s*(?P<m>\d{1,2})\s*[.\-/월]\s*(?P<d>\d{1,2})");
+    for c in full.captures_iter(t).filter(|c| standalone(c)) {
+        if let Some(date) = make(num(&c, "y")? as i32, num(&c, "m")?, num(&c, "d")?) {
+            return Some((date, false));
+        }
     }
-    let compact = re(&COMPACT, r"\b(?P<y>(?:19|20)\d{2})(?P<m>\d{2})(?P<d>\d{2})\b");
-    if let Some(c) = compact.captures(t) {
-        return make(c["y"].parse().ok()?, c["m"].parse().ok()?, c["d"].parse().ok()?);
+    let compact = re(&COMPACT, r"(?P<y>(?:19|20)\d{2})(?P<m>\d{2})(?P<d>\d{2})");
+    for c in compact.captures_iter(t).filter(|c| standalone(c)) {
+        if let Some(date) = make(num(&c, "y")? as i32, num(&c, "m")?, num(&c, "d")?) {
+            return Some((date, false));
+        }
     }
-    let short = re(&SHORT, r"\b(?P<y>\d{2})\s*[.\-/년]\s*(?P<m>\d{1,2})\s*[.\-/월]\s*(?P<d>\d{1,2})\s*일?");
-    if let Some(c) = short.captures(t) {
-        let y: i64 = c["y"].parse().ok()?;
-        return make(2000 + y, c["m"].parse().ok()?, c["d"].parse().ok()?);
+    let year_last = re(&YEAR_LAST, r"(?P<a>\d{1,2})\s*(?P<s>[.\-/])\s*(?P<b>\d{1,2})\s*[.\-/]\s*(?P<y>(?:19|20)\d{2})");
+    for c in year_last.captures_iter(t).filter(|c| standalone(c)) {
+        let (a, b, y) = (num(&c, "a")?, num(&c, "b")?, num(&c, "y")? as i32);
+        let guess = a <= 12 && b <= 12 && a != b;
+        let month_first = if a > 12 || b > 12 { b > 12 } else { &c["s"] == "/" };
+        let (m, d) = if month_first { (a, b) } else { (b, a) };
+        if let Some(date) = make(y, m, d) {
+            return Some((date, guess));
+        }
+    }
+    let short = re(&SHORT, r"(?P<y>\d{2})\s*[.\-/년]\s*(?P<m>\d{1,2})\s*[.\-/월]\s*(?P<d>\d{1,2})");
+    for c in short.captures_iter(t).filter(|c| standalone(c)) {
+        let yy = num(&c, "y")? as i32;
+        let century = this_year - this_year.rem_euclid(100);
+        let year = if century + yy > this_year + 20 { century - 100 + yy } else { century + yy };
+        if let Some(date) = make(year, num(&c, "m")?, num(&c, "d")?) {
+            return Some((date, false));
+        }
     }
     None
 }
@@ -271,8 +475,20 @@ pub fn validate_value(def: &FieldDef, value: &str) -> (Option<String>, Vec<Valid
                 None
             }
         },
-        FieldKind::Date => match normalize_date(v) {
-            Some(d) => Some(d),
+        FieldKind::Date => match parse_date(v, {
+            use chrono::Datelike;
+            chrono::Local::now().year()
+        }) {
+            Some((d, guess)) => {
+                if guess {
+                    issues.push(issue(
+                        "date_ambiguous",
+                        "warn",
+                        "일·월 순서가 불분명한 날짜 — 확인 필요 / day and month order is a guess",
+                    ));
+                }
+                Some(d)
+            }
             None => {
                 issues.push(issue("date_parse", "fail", "날짜 형식을 인식할 수 없음 / unrecognised date"));
                 None
@@ -726,6 +942,66 @@ mod tests {
         assert_eq!(format_number(12.5), "12.5");
         assert_eq!(won(1250000.0), "1,250,000");
         assert_eq!(won(-500.0), "-500");
+    }
+
+    /// Audit PIP-9: the two-digit-year pattern bit into a four-digit year at the end
+    /// ("03/04/2026" → 2003-04-20, "14.10.2026" → 2014-10-20) and put every two-digit year
+    /// into the 2000s ("85.03.15" → 2085-03-15), without a warning.
+    #[test]
+    fn dates_with_the_year_last_and_two_digit_years() {
+        assert_eq!(normalize_date("14.10.2026").as_deref(), Some("2026-10-14"), "day first: 14 cannot be a month");
+        assert_eq!(normalize_date("10-14-2026").as_deref(), Some("2026-10-14"), "month first: 14 cannot be a month");
+        assert_eq!(normalize_date("26.10.2026").as_deref(), Some("2026-10-26"));
+        assert_eq!(normalize_date("03/04/2026").as_deref(), Some("2026-03-04"), "slash: month first");
+        assert_eq!(normalize_date("04.03.2026").as_deref(), Some("2026-03-04"), "dot: day first");
+        assert_eq!(normalize_date("85.03.15").as_deref(), Some("1985-03-15"));
+        assert_eq!(normalize_date("26.10.14").as_deref(), Some("2026-10-14"));
+        assert_eq!(normalize_date("2026.10.145"), None, "a day followed by another digit is not a date");
+        assert_eq!(normalize_date("2026-02-30"), None, "not a calendar day");
+        // The century follows the year the document is read in, never more than 20 years ahead.
+        assert_eq!(parse_date("46.01.02", 2026), Some(("2046-01-02".into(), false)));
+        assert_eq!(parse_date("47.01.02", 2026), Some(("1947-01-02".into(), false)));
+        assert_eq!(parse_date("99.12.31", 2101), Some(("2099-12-31".into(), false)));
+        // A guessed day / month order is a warning on the field, an unambiguous one is not.
+        let date = FieldDef::new("d", "일자", "", FieldKind::Date);
+        let (n, issues) = validate_value(&date, "03/04/2026");
+        assert_eq!(n.as_deref(), Some("2026-03-04"));
+        assert_eq!((issues.len(), issues[0].rule.as_str(), issues[0].level.as_str()), (1, "date_ambiguous", "warn"));
+        for clear in ["14.10.2026", "05.05.2026", "2026-03-04", "26.03.04"] {
+            assert!(validate_value(&date, clear).1.is_empty(), "{clear}");
+        }
+    }
+
+    /// Audit PIP-10: the amount normaliser glued every digit of the text together
+    /// ("1,100,000원 (VAT 10% 포함)" → 110,000,010) and could not read 천 / 백 / 십 or Korean numerals.
+    #[test]
+    fn amounts_take_one_token_and_read_korean_units() {
+        for (text, expected) in [
+            ("1,100,000원 (VAT 10% 포함)", 1_100_000.0),
+            ("1식 5,000,000원", 5_000_000.0),
+            ("(₩1,100,000)", 1_100_000.0),
+            ("3천만원", 30_000_000.0),
+            ("금 삼백만원정", 3_000_000.0),
+            ("3억 5천만원", 350_000_000.0),
+            ("일금 일억이천삼백만원정", 123_000_000.0),
+            ("12만 5천원", 125_000.0),
+            ("1 250 000원", 1_250_000.0),
+            ("합계 12,500", 12_500.0),
+            ("총 3건 1,500,000원", 1_500_000.0),
+            ("1,100,000원(공급가액 1,000,000원 + 부가세 100,000원)", 1_100_000.0),
+            ("△3,000", -3_000.0),
+            ("-₩500", -500.0),
+            ("만원", 10_000.0),
+            ("USD 1,200.50", 1_200.5),
+        ] {
+            assert_eq!(normalize_amount(text), Some(expected), "{text}");
+        }
+        // Words made of numeral syllables, several unrelated numbers, dates: not an amount.
+        for text in ["삼성전자", "이천", "2 × 4,500 = 9,000", "2026년 3월 2일", "1.250.000", ""] {
+            assert_eq!(normalize_amount(text), None, "{text}");
+        }
+        assert_eq!(normalize_integer("85%"), Some(85));
+        assert_eq!(normalize_integer("2 EA"), Some(2));
     }
 
     #[test]
