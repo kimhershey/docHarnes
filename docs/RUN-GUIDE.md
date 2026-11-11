@@ -13,7 +13,7 @@ DocuLens를 **실제 Windows PC에서 설치·실행·빌드·검증**하는 절
 |---|---|---|---|
 | A. 데스크톱 개발 실행 | `npm run tauri dev` | Windows 10/11, Node 22, Rust stable(MSVC), VS Build Tools C++, WebView2 | 실제 엔진·모델·파일 처리까지 전 기능 |
 | B. 브라우저 미리보기 | `npm run dev` → http://localhost:1420 | Node 22만 | 화면 흐름 확인(모의 백엔드 — 실제 파일·모델 처리 없음) |
-| C. 설치파일 빌드 | `npm run tauri build` → `target\release\bundle\nsis\DocuLens_0.5.0_x64-setup.exe` | A와 동일(첫 빌드 때 NSIS를 자동으로 받음) | 다른 PC에 설치(사용자 단위 설치, 관리자 권한 불필요) |
+| C. 설치파일 빌드 | `npm run tauri build` → `target\release\bundle\nsis\DocuLens_<버전>_x64-setup.exe` | A와 동일(첫 빌드 때 NSIS를 자동으로 받음) | 다른 PC에 설치(사용자 단위 설치, 관리자 권한 불필요) |
 | D. 배포 설치파일 설치 | GitHub Releases → `DocuLens-Setup-Lite-<버전>-x64.exe` 다운로드 → 실행 | Windows 10 1803+/11 x64만(개발 도구 불필요) | **사용자 PC 권장 경로** — §1.1. 엔진 팩·PDFium·ko-dic 동봉, 모델만 앱에서 준비 |
 
 - 첫 `tauri dev`/`tauri build`는 Rust 의존성 전체를 컴파일하므로 수 분~십여 분 걸립니다. 이후에는 증분 빌드입니다.
@@ -22,10 +22,15 @@ DocuLens를 **실제 Windows PC에서 설치·실행·빌드·검증**하는 절
   `node scripts/fetch-kodic.mjs --bundle`, `npm run notices`를 실행합니다(§2.2). 고지 파일(`THIRD-PARTY-NOTICES.md`,
   `sbom.cdx.json`, `licenses/THIRD-PARTY-LICENSES.txt`)은 `npm run notices`가 만들며 `tauri build`가 함께 담습니다.
 - GitHub Actions의 "Windows installer (manual)" 워크플로(`.github/workflows/release-windows.yml`)를 수동 실행하면 위
-  자산을 모두 동봉한 설치파일을 만듭니다. 입력: `ref`(기본 `main`), `variant`(`lite` | `full`), `publish`(릴리스 업로드).
+  자산을 모두 동봉한 설치파일을 만듭니다. 입력: `ref`(비워 두면 워크플로를 실행한 브랜치의 커밋), `variant`(`lite` | `full`),
+  `publish`(릴리스 업로드), `allow_overwrite`(아래). 빌드에 앞서 버전 일치 검사(`npm run versions:check` — Cargo·npm·
+  `tauri.conf.json`·모의 백엔드·SBOM의 버전이 같고, `release/<버전>` 브랜치에서는 그 버전인지)가 돕니다.
   결과는 아티팩트 `DocuLens-Setup-<Lite|Full>-<버전>-x64`(설치파일 + `.sha256`)이고, `publish=true`면 GitHub Release
-  `v<버전>`에 설치파일·해시·`THIRD-PARTY-NOTICES.md`·`sbom.cdx.json`을 올립니다. Full은 "CUDA engine packs (manual)"
-  워크플로가 먼저 릴리스에 올려 둔 `DocuLens-EnginePack-cu121-<태그>.zip`·`cu129`를 내려받아 넣습니다(`engines/README.md`).
+  `v<버전>`에 설치파일·해시·`THIRD-PARTY-NOTICES.md`·`sbom.cdx.json`을 올립니다(Release가 없으면 빌드한 커밋에 만듭니다).
+  태그 `v<버전>`이 이미 **다른 커밋**에 있으면 게시하지 않고 실패합니다(`scripts/release-guard.mjs` — 공개된 설치파일이 다른
+  소스의 빌드로 바뀌는 것을 막습니다. 알고서 덮어쓸 때만 `allow_overwrite=true`). Full은 "CUDA engine packs (manual)"
+  워크플로가 올려 둔 `DocuLens-EnginePack-cu121-<엔진 태그>.zip`·`cu129`를, 워크플로에 엔진 태그별로 적어 둔
+  Release(b12066 → `v0.1.0`)에서 내려받아 넣으며 `.sha256` 자산이 없으면 실패합니다(`engines/README.md`).
 - Linux 실행은 개발·CI 전용입니다(배포 범위 외). 필요한 패키지는 `CLAUDE.md`의 "Linux build deps".
 
 ### 1.0 끌어다 놓기 요약
@@ -33,30 +38,37 @@ DocuLens를 **실제 Windows PC에서 설치·실행·빌드·검증**하는 절
 - **파일을 끌어다 놓기**: 탐색기의 PDF·이미지·HWPX·DOCX·HWP·XLSX·PPTX·텍스트 파일을 앱 어디에나 놓으면 가져오기 대화상자가 열리고, 특정 자리에 놓으면
   그 자리에 맞게 가져온 뒤 추가됩니다 — AI 어시스턴트(질문 범위로 첨부), 참고 자료 묶음(공통 참고 자료; 0.5.0),
   프로젝트 카드·문서 탭(그 프로젝트로), 문서 작성의 원본 상자, 양식 등록·병합 대화상자, 왼쪽 메뉴(문서함 = 가져오기, 프로젝트, 문서 작성).
-- **라이브러리 문서를 끌기**: 카드나 행을 누른 채 움직이면 드래그가 시작됩니다(선택된 문서를 끌면 선택 전체). 끌고 있는 동안 왼쪽 메뉴
-  위에 잠시 머물면 그 화면으로 바뀌므로, 예를 들어 라이브러리 → 프로젝트 메뉴에 머문 뒤 → 특정 프로젝트 카드에 놓을 수 있습니다.
+- **문서함의 문서를 끌기**: 카드나 행을 누른 채 움직이면 드래그가 시작됩니다(선택된 문서를 끌면 선택 전체). 끌고 있는 동안 왼쪽 메뉴
+  위에 잠시 머물면 그 화면으로 바뀌므로, 예를 들어 문서함 → 프로젝트 메뉴에 머문 뒤 → 특정 프로젝트 카드에 놓을 수 있습니다.
   Esc로 취소합니다.
 - 어시스턴트에 첨부한 문서는 범위 선택기의 "첨부 문서 N개"가 되어 이후 질문·명령이 그 문서들만 다루며, 칩의 ×나 "첨부 모두 지우기"로
   해제합니다.
 
 ### 1.1 배포 설치파일 설치 (방식 D)
 
-1. GitHub Releases의 `v<버전>`에서 `DocuLens-Setup-Lite-<버전>-x64.exe`(또는 `-Full-`)와 같은 이름의 `.sha256` 파일을 받습니다
-   (최신 판은 https://github.com/kimhershey/docHarnes/releases/latest — 0.6.0은 Lite 설치파일과 `.sha256`·고지·SBOM만 배포(0.4.0은 v0.4.0 태그; 0.5.0은 릴리스 없이 0.6.0에 포함),
-   Full 설치파일은 https://github.com/kimhershey/docHarnes/releases/tag/v0.2.0 , CUDA 엔진 팩 zip은
-   https://github.com/kimhershey/docHarnes/releases/tag/v0.1.0 자산에 있습니다 — 엔진 태그 b12066이 같아 그대로 씁니다. 변경 내용은 `docs/releases/v0.6.0.md`).
+1. GitHub Releases에서 `DocuLens-Setup-Lite-<버전>-x64.exe`와 같은 이름의 `.sha256` 파일을 받습니다
+   (최신 판: https://github.com/kimhershey/docHarnes/releases/latest ; 판별 변경 내용은 `docs/releases/v<버전>.md`).
+   0.3.0부터는 판마다 Lite 설치파일과 `.sha256`·고지·SBOM만 올립니다. Release가 있는 판은 v0.1.0~v0.4.0과 v0.6.0이고,
+   0.5.0과 0.7.0은 Release가 없습니다(0.5.0의 변경은 0.6.0 판에 들어 있음). <!-- 0.8.0: 리드가 갱신 -->
    - 아직 릴리스에 올리지 않은 빌드(`publish=false`)는 Actions의 해당 실행 페이지 하단 **Artifacts**에서
      `DocuLens-Setup-<Lite|Full>-<버전>-x64` zip으로 받습니다(GitHub 로그인 필요, 90일 보관). zip 안에 설치파일과 `.sha256`이 있습니다.
    - **Lite**: 앱 + llama-server CPU·Vulkan 팩(`engines\cpu`, `engines\vulkan`) + PDFium(`pdfium\`) + ko-dic(`ko-dic\`)
-     + 고지 파일(`THIRD-PARTY-NOTICES.md`, `sbom.cdx.json`, `licenses\THIRD-PARTY-LICENSES.txt`). 약 48 MB(0.1.0 Lite 빌드 47.6 MB,
-       압축 전 303 MB · 159개 파일).
-   - **Full**: Lite + CUDA 팩 `engines\cu121`(드라이버 CUDA 12.1~12.7) · `engines\cu129`(12.8+, RTX 50 포함). 약 1.1 GB(0.1.0 Full
-     빌드 1,156 MB, 압축 전 3.1 GB · 219개 파일 — 설치 공간 3.5 GB 이상). NVIDIA GPU가 없으면 Lite로 충분하고, Lite에 CUDA 팩만 나중에
-     추가하려면 §2의 "CUDA 팩" 행을 따릅니다.
+     + 고지 파일(`THIRD-PARTY-NOTICES.md`, `sbom.cdx.json`, `licenses\THIRD-PARTY-LICENSES.txt`). 약 50 MB(게시된 0.1.0~0.6.0 Lite
+       설치파일은 모두 50.5~51.0 MB; 0.1.0 빌드 기준 압축 전 303 MB · 159개 파일).
+   - **NVIDIA GPU(CUDA)**: Lite를 설치한 뒤 CUDA 엔진 팩 zip을 앱 데이터 폴더에 풉니다. Release v0.1.0
+     (https://github.com/kimhershey/docHarnes/releases/tag/v0.1.0 )의 `DocuLens-EnginePack-cu121-b12066.zip`(드라이버 CUDA 12.1~12.7)
+     또는 `-cu129-`(12.8+, RTX 50 포함)을 `.sha256`으로 확인하고 `%LOCALAPPDATA%\DocuLens\engines\b12066\cu121\`(`cu129\`)에 풀면,
+     엔진 태그(b12066)가 같은 판의 Lite와 함께 쓸 수 있습니다(§2.2의 "CUDA 팩" 행). 앱 데이터 폴더의 팩은 설치 폴더 밖에 있어
+     새 판을 설치해도 남습니다. NVIDIA GPU가 없으면 Lite만으로 충분합니다.
+   - **Full**(Lite + CUDA 팩 `engines\cu121`·`engines\cu129` 동봉. 설치파일 1,157 MB, 압축 전 약 3.1 GB · 219개 파일 —
+     설치 공간 3.5 GB 이상)은 **v0.2.0 판에만** 있습니다. 그 설치파일은 0.2.0 앱을 설치하므로 최신 판을 대신할 수 없습니다 —
+     0.2.0 앱은 이후 판이 한 번 연 작업 공간을 열지 못합니다(DB 스키마가 더 새롭다는 오류). 또 Full 0.2.0 위에 새 Lite를 설치할 때
+     설치 화면의 기본 선택(이전 판을 제거한 뒤 설치)을 그대로 두면 Full에 들어 있던 `engines\cu121`·`cu129`도 함께 지워집니다.
+     CUDA 팩은 위 항목처럼 앱 데이터 폴더에 따로 두세요.
    - **모델(GGUF)은 어느 쪽에도 들어 있지 않습니다.** 첫 실행 뒤 설정 > AI 모델(0.4.0까지는 모델 관리자 메뉴)에서 준비합니다(§2.3, §3).
 2. SHA-256을 확인합니다(명령 프롬프트 또는 PowerShell).
    ```
-   certutil -hashfile DocuLens-Setup-Lite-0.6.0-x64.exe SHA256
+   certutil -hashfile DocuLens-Setup-Lite-<버전>-x64.exe SHA256
    ```
    출력된 해시가 `.sha256` 파일의 값(공백 앞 64자)과 같아야 합니다(대소문자 무관). 다르면 실행하지 말고 다시 받으세요.
 3. 실행합니다. 설치파일은 **코드 서명이 없어** SmartScreen이 "Windows의 PC 보호" 창을 띄웁니다 → **추가 정보 → 실행**.
@@ -90,12 +102,13 @@ npm install
 | 자산 | 받는 방법 | 설치 위치 | 없을 때 |
 |---|---|---|---|
 | **llama-server 엔진 팩** | `node scripts/fetch-engine.mjs --tag b12066 --packs cpu,vulkan --pin` (설치파일 동봉용은 `--bundle`) | `%LOCALAPPDATA%\DocuLens\engines\b12066\cpu\`, `...\vulkan\` (`--bundle`: `src-tauri\resources\engines\<팩>\`) | 엔진 카드에 "실행 파일을 찾지 못했습니다" → 분류·OCR·추출·답변 불가 |
-| **CUDA 팩**(NVIDIA, 선택) | Full 설치파일, 또는 GitHub Release `v0.1.0` 자산 `DocuLens-EnginePack-cu121-b12066.zip`·`DocuLens-EnginePack-cu129-b12066.zip`(워크플로 "CUDA engine packs (manual)"이 빌드, 각 `.sha256` 동봉)을 풀어 넣기, 또는 `engines/README.md`대로 자체 빌드 | `...\engines\b12066\cu121\` (`cu129`) | Vulkan/CPU 팩으로 동작(느림) |
-| **PDFium**(PDF 렌더·텍스트 레이어) | `node scripts/fetch-pdfium.mjs` | `%LOCALAPPDATA%\DocuLens\pdfium\pdfium.dll` | PDF 가져오기·렌더 불가, 라이브러리 상단 "PDFium 없음" 경고 |
+| **CUDA 팩**(NVIDIA, 선택) | GitHub Release `v0.1.0` 자산 `DocuLens-EnginePack-cu121-b12066.zip`·`DocuLens-EnginePack-cu129-b12066.zip`(워크플로 "CUDA engine packs (manual)"이 빌드, 각 `.sha256` 동봉)을 풀어 넣기, 또는 `engines/README.md`대로 자체 빌드. Full 설치파일은 v0.2.0 판뿐이고 0.2.0 앱을 설치하므로 쓰지 않음(§1.1) | `...\engines\b12066\cu121\` (`cu129`) | Vulkan/CPU 팩으로 동작(느림) |
+| **PDFium**(PDF 렌더·텍스트 레이어) | `node scripts/fetch-pdfium.mjs` | `%LOCALAPPDATA%\DocuLens\pdfium\pdfium.dll` | PDF 가져오기·렌더 불가, 문서함 상단 "PDFium 없음" 경고 |
 | **ko-dic**(한국어 형태소 사전, 선택) | `node scripts/fetch-kodic.mjs` (Rust 필요, 약 82 MB, 수 분) | `%LOCALAPPDATA%\DocuLens\tokenizers\ko-dic\` | 간이 분석기로 동작(검색 재현율이 낮음) |
 | **VLM 모델**(GGUF + mmproj) | §2.3 | `<워크스페이스>\.doculens\models\<폴더>\` | 가져오기·검색·정리·내보내기만 가능 |
 
-- `--pin`은 받은 zip의 SHA-256을 `engines/manifest.json`에 기록합니다(첫 PC에서 한 번).
+- `engines/manifest.json`에 SHA-256이 고정된 팩(Windows `cpu`·`vulkan`)은 받은 zip의 해시가 다르면 설치하지 않습니다.
+  `--pin`은 아직 고정되지 않은 항목의 해시를 매니페스트에 기록할 때만 쓰입니다.
 - 설치파일에 엔진 팩·PDFium·ko-dic을 동봉하려면 빌드 전에 각 스크립트를 `--bundle`로 실행합니다
   (`src-tauri/resources/{engines,pdfium,ko-dic}/`에 들어가며 git에는 올라가지 않음). `node scripts/fetch-engine.mjs --bundle --dry-run`은
   네트워크 없이 대상 폴더만 보여 줍니다. 배포 설치파일(§1.1)에는 이미 들어 있으므로 이 표의 자산을 따로 받을 필요가 없습니다.
@@ -116,9 +129,10 @@ npm install
 | `gemma4-e2b-q4km` | Gemma 4 E2B (Q4_K_M, CPU·저여유) | CPU·6·8 GB | `gemma-4-E2B-it-Q4_K_M.gguf` + `mmproj-F16.gguf` (unsloth/gemma-4-E2B-it-GGUF) |
 | `gemma4-e2b-q8` | Gemma 4 E2B (Q8_0, CPU 정확도·6 GB) | CPU·6·8 GB | `gemma-4-E2B-it-Q8_0.gguf` + `mmproj-F16.gguf` |
 | `gemma4-12b-q4km` | Gemma 4 12B (Q4_K_M, 12 GB+) | 12·16·24 GB+ | `gemma-4-12b-it-Q4_K_M.gguf` + `mmproj-F16.gguf` (unsloth/gemma-4-12b-it-GGUF) |
-| `embed-gemma2-q8` | EmbeddingGemma 2 (Q8_0, 임베딩 · CPU) | 전 티어 | `embeddinggemma-2-Q8_0.gguf` (ggml-org/embeddinggemma-2-GGUF) — 지식 베이스 의미 검색용(선택) |
+| `embed-gemma2-q8` | EmbeddingGemma 2 (Q8_0, 임베딩 · CPU) | 전 티어 | `embeddinggemma-2-Q8_0.gguf` (ggml-org/embeddinggemma-2-GGUF) — 참고 자료 의미 검색용(선택) |
 
-모든 파일이 8 GB 이하이고 크기·해시는 미고정(`verified: false`)입니다. 0.3.0에서 받아 둔 Qwen 폴더는 "사용자 추가 모델"로 계속
+모든 파일이 8 GB 이하이고, 파일마다 받는 주소(Hugging Face 저장소의 커밋)·크기·SHA-256이 `models/registry.json`에 고정돼
+있습니다(2026-11-11의 커밋 기준, `verified: true`). 0.3.0에서 받아 둔 Qwen 폴더는 "사용자 추가 모델"로 계속
 인식되어 쓸 수 있지만 추천·다운로드 목록에는 나오지 않습니다.
 
 넣는 방법은 셋 중 하나입니다.
@@ -126,9 +140,11 @@ npm install
 1. **드롭인**: 파일을 `<워크스페이스>\.doculens\models\<아무 이름>\`에 복사합니다. 복사가 끝나면 2초 안에 "준비됨"으로
    등록됩니다(복사 중에는 "복사 중"). 가장 단순하고 USB로 옮길 때 권장.
 2. **설정 > AI 모델 > GGUF 가져오기**: 복사/이동/하드링크 선택, 같은 폴더의 mmproj를 자동으로 짝지음, LICENSE 동봉.
-3. **설정 > AI 모델 > 받기**(추천 모델 카드): 네트워크가 허용된 PC에서 Hugging Face에서 받아 SHA-256으로 검증합니다(`settings.json`의
-   `models.allow_online_download`로 끌 수 있음, 기본 켜짐 — 화면에는 토글이 없음). 현재 레지스트리는 크기·해시가 미고정(`verified: false`)이므로 처음 받은 뒤 "해시 검증"으로 얻은 값을
-   `models/registry.json`에 고정해 주세요.
+3. **설정 > AI 모델 > 받기**(추천 모델 카드): 네트워크가 허용된 PC에서 Hugging Face의 고정된 커밋 주소에서 받고, 받은 파일의
+   SHA-256이 레지스트리 값과 다르면 그 파일을 버리고 실패합니다(`settings.json`의 `models.allow_online_download`로 끌 수 있음,
+   기본 켜짐 — 화면에는 토글이 없음). 폴더에 이미 있는 같은 이름의 파일은 다시 받지 않고 건너뛰므로(이때는 검증하지 않음) 의심스러우면
+   "해시 검증"을 돌리세요. LICENSE 파일은 함께 받지 않습니다(출처 저장소에 LICENSE 파일이 없음) — 대신 폴더의 `SOURCE.txt`에 출처
+   저장소와 라이선스 링크가 남습니다.
 
 8 GB GPU면 `gemma4-e4b-q5km`(32K 컨텍스트) 또는 여유 VRAM 7.1 GiB 이상이면 `gemma4-e4b-q6k`, 6 GB GPU면 `gemma4-e2b-q8`, GPU가 없으면
 `gemma4-e2b-q4km`(8K)을 권장합니다 — 티어 자동 선택(`auto:gemma4-e4b` 적응형 규칙)도 같은 기준입니다.
@@ -173,6 +189,7 @@ npm install
    참고 자료를 근거로 쓰고, 선택·첨부 문서로 물어도 프로젝트의 참고 자료는 함께 봅니다. **근거만 찾기** 토글을 켜면 모델을 부르지 않고 검색 결과만
    보여 줍니다(하이브리드/키워드/의미 선택; 옛 검색 화면). 자연어 명령 → 플랜 카드(출처: 문장 규칙 또는 모델, 영향 미리보기) → Ctrl+Enter 승인 / Esc 취소 →
    실행 카드(진행률·일시정지·취소) → 결과 카드(되돌리기·폴더 열기). 문서함의 정리·내보내기 화면과 작업 현황은 같은 작업 큐를 씁니다.
+   <!-- 0.8.0: 리드가 갱신 -->
    **해석 방식**: `/`로 시작하는 명령과 "취소"·되묻기만 규칙으로 즉시 처리하고, 그 밖의 모든 문장은 **모델이 해석**합니다(설정 > 일반 > 고급의 "해석"
    선택에서 "규칙(구형)"으로 바꾸면 종전처럼 문장 규칙이 먼저 해석합니다 — GPU가 없어 모델이 느린 PC용). 어시스턴트가 되묻는 카드에는
    답변 입력란과 **되묻기·취소** 버튼이 있고, 플랜 카드에서도 되묻기로 고칠 점을 말할 수 있습니다. 대기 중인 질문·플랜은 "취소"라고
@@ -184,7 +201,7 @@ npm install
 8. **문서 작성**(0.4.0까지 "문서 생성") — 내장 템플릿(제안요청서·제안서·과업지시서·요구사항 정의서·개발 계약서·WBS·진척 보고서·회의록·테스트 결과서·
    변경요청서·검수확인서·견적서·보완요청서; 0.2의 공문·거래명세서 등 범용 템플릿은 숨김) 또는 등록 양식을 고르고 내용을 적으면 모델이
    초안(필드·품목표·본문·근거 인용)을 만듭니다. 가운데 미리보기(0.7.0: 창 폭에 맞춰 축소, "100 %"로 실제 크기), 우측 편집 그리드(합계 불일치 "제안 적용",
-   0.7.0: 본문 블록마다 문단·절 제목·목록 추가 / 삭제 / 위·아래 이동 / 제목 수준), 참고 문서 패널 → HWPX·DOCX·PDF·Markdown으로 저장하면 라이브러리에 "생성"
+   0.7.0: 본문 블록마다 문단·절 제목·목록 추가 / 삭제 / 위·아래 이동 / 제목 수준), 참고 문서 패널 → HWPX·DOCX·PDF·Markdown으로 저장하면 문서함에 "생성"
    문서로 등록됩니다. 등록 양식이 HWPX/DOCX면 원본 양식 파일을 그대로 채웁니다.
    **초안 어시스턴트**(0.7.0; 옛 "재생성 지시"): 요청 폼 아래에서 범위(전체 / n절 다시 쓰기 / n절 뒤에 새 절 / 끝에 새 절)를 고르고 지시를 적으면 모델이 그
    부분만 고쳐 씁니다(필드·표·다른 절은 그대로; 절 제목 옆 "AI 수정"이 범위를 잡아 줌). AI 어시스턴트 화면에서도 초안을 연 채 "3절 다시 써줘", "결론 절 추가해줘",
@@ -204,7 +221,11 @@ npm install
 
 ## 4. 어시스턴트 명령·슬래시·단축키
 
-**설계 예시 명령 12종**(규칙으로 해석되어 모델 없이도 플랜 카드가 뜸):
+<!-- 0.8.0: 리드가 갱신 -->
+**설계 예시 명령 12종** — 기본 해석("모델")에서는 불러온 모델이 플랜으로 만듭니다. 모델을 불러오지 않았으면 플랜 카드가 아니라
+"플래너 모델이 로드되지 않아 해석할 수 없습니다. 모델을 로드하거나 해석 방식을 '규칙'으로 바꿔 주세요." 되묻기 카드가 뜹니다.
+설정 > 일반 > 고급의 해석을 "규칙(구형)"으로 바꾸면 모델 없이 문장 규칙만으로 12종 모두 플랜 카드가 됩니다(규칙 경로는 CI의
+골든셋 게이트가 지킴):
 
 - "inbox 폴더의 견적서를 전부 처리하고 월별 폴더로 정리해줘"
 - "견적서에서 공급가액·세액·합계만 뽑아서 엑셀로" / "개발 계약서 → 엑셀"
@@ -212,7 +233,7 @@ npm install
 - "거래처명이 ㈜한빛인 문서 찾아줘" / "find documents from Hanbit"
 - "이 계약서의 계약기간과 위약금 조항 알려줘" (뷰어에서 문서를 연 상태)
 - "요구사항 정의서 스키마에 '담당자' 필드 추가해"
-- "다크 테마로 바꾸고 모델을 9B로 올려"
+- "다크 테마로 바꾸고 모델을 12B로 올려"
 - "선택 영역 다시 OCR 해줘"
 - "방금 이름 바꾼 거 되돌려", "작업 일시정지"
 
@@ -222,9 +243,9 @@ npm install
 돌려줘", "보완요청서 만들어줘", "이 조항 설명해줘", "선택한 두 문서 비교해줘", "저널은 30일만 보관해", "이 문서를 '휴가신청서' 양식으로
 등록해".
 
-규칙이 못 푸는 문장(예: "한빛과 거래한 계약 중 작년 것만 골라서 보여줘")은 로드된 모델이 플랜을 만듭니다(문법 제약 JSON,
-검증 실패 시 재질의 1회, 그래도 안 되면 명확화 질문). 문서를 바꾸는 명령에 범위가 없으면 "전부"라고 말하지 않은 한
-명확화로 돌아갑니다.
+기본 해석에서는 `/` 명령을 뺀 모든 문장을 불러온 모델이 플랜으로 만듭니다(문법 제약 JSON, 검증 실패 시 재질의 1회, 그래도 안 되면
+명확화 질문). "규칙(구형)"에서는 문장 규칙이 먼저 풀고, 규칙이 못 푸는 문장(예: "한빛과 거래한 계약 중 작년 것만 골라서 보여줘")만
+모델로 갑니다. 어느 쪽이든 문서를 바꾸는 명령에 범위가 없으면 "전부"라고 말하지 않은 한 명확화로 돌아갑니다.
 
 **0.6.0 추가 명령(에이전트가 모든 기능 수행)**: 화면에서 되는 일은 모두 말로도 됩니다 — "이 문서 90도 돌려줘", "선택한 문서 300 DPI로 다시 렌더", "이 문서 3쪽부터
 나눠줘" / "5쪽마다 분할", "선택한 문서 하나로 합쳐서 '계약 묶음'", "제목을 '2026 공급계약'으로", "'㈜한빛'을 '(주)한빛'으로 바꿔줘", "이 문서를 참고 자료로 표시",
@@ -244,21 +265,22 @@ npm install
 2026-11-10). 지식 응답의 근거 분량은 설정의 컨텍스트 토큰과 로드된 모델의 컨텍스트 중 작은 쪽에 맞춰지고, 서버가 길이를 거부하면 근거를
 줄여 다시 시도하므로 "exceeds the available context size" 오류로 끝나지 않습니다.
 
-**기본 단축키**(설정 > 단축키에서 변경):
+**기본 단축키**(설정 > 일반의 단축키 표는 보기 전용이고 편집 화면은 아직 없습니다. 바꾸려면 앱을 끈 뒤 `settings.json`의
+`shortcuts` 값을 직접 고칩니다):
 
 | 동작 | 키 | 동작 | 키 |
 |---|---|---|---|
 | 명령 팔레트 | Ctrl+K | 플랜 승인 | Ctrl+Enter |
 | 닫기·취소 | Esc | 되돌리기 / 다시 실행 | Ctrl+Z / Ctrl+Y |
-| 홈 / 라이브러리 / 어시스턴트 | Ctrl+1 / 2 / 3 | 설정 | Ctrl+, |
+| 처음 화면(= 문서함) / 문서함 / 어시스턴트 | Ctrl+1 / 2 / 3 | 설정 | Ctrl+, |
 | 테마 전환 | Ctrl+Shift+T | 선택 문장 설명 | Ctrl+E |
 | 검토: 승인 / 수정 / 보류 / 다음 | Enter / E / S / N | 확대 / 축소 / 원래대로 | Ctrl+= / Ctrl+- / Ctrl+0 |
 | UI 배율 | Ctrl+Shift+= / Ctrl+Shift+- | | |
 
 한글 입력 조합 중에는 Enter·Ctrl+Enter가 전송·승인으로 새지 않도록 처리돼 있습니다(사용자 PC에서 확인 항목).
 
-**UI 배율**(설정 > 일반, 90~150 %)은 글자와 상자를 함께 키우는 확대처럼 동작합니다(2026-11-09부터; 그 전에는 라이브러리 카드·목록 행·썸네일이
-px 고정이라 125 % 이상에서 글자가 잘렸음). 150 %에서는 1280 px 폭 이하 창이면 라이브러리 필터가 여러 줄로 줄바꿈되고 목록에 가로 스크롤이
+**UI 배율**(설정 > 일반, 90~150 %)은 글자와 상자를 함께 키우는 확대처럼 동작합니다(2026-11-09부터; 그 전에는 문서함 카드·목록 행·썸네일이
+px 고정이라 125 % 이상에서 글자가 잘렸음). 150 %에서는 1280 px 폭 이하 창이면 문서함 필터가 여러 줄로 줄바꿈되고 목록에 가로 스크롤이
 생기므로 1600 px 이상 폭을 권장합니다. Windows 디스플레이 배율(125·150 %)은 WebView2가 전체를 같은 비율로 키우므로 별도 설정이 필요 없습니다.
 
 ## 5. 데이터 위치
@@ -292,12 +314,14 @@ px 고정이라 125 % 이상에서 글자가 잘렸음). 150 %에서는 1280 px 
 | `DOCULENS_LLAMA_SERVER=<llama-server> DOCULENS_TEST_MODELS_DIR=$PWD/crates/doculens-core/tests/fixtures cargo test -p doculens-core --test real_engine -- --nocapture` | 실제 llama-server + 초소형 Gemma 4 픽스처(채팅·이미지·KIE·플래너 문법) | 통과 |
 | `DOCULENS_FIXTURE_OUT=<dir> cargo test -p doculens-core --lib -- --ignored gen_fixtures` | 샘플 입력 문서 생성 | — |
 | `DOCULENS_EXPORT_OUT=<dir> cargo test -p doculens-core --lib -- --ignored gen_export_samples` | 내보내기 5종 샘플 파일 생성(XLSX·CSV·JSONL·MD·검색 가능 PDF) | 9개 파일 |
-| `cargo run -p doculens-eval -- planner --golden eval/golden/planner.json --baseline eval/baselines/planner-rules.json` | 플래너 골든셋 100건 정확도 + 회귀 게이트(0.5pt) | CI 게이트 |
+| `cargo run -p doculens-eval -- planner --golden eval/golden/planner.json --baseline eval/baselines/planner-rules.json` | 플래너 골든셋(0.7.0 기준 129건) 규칙 경로 정확도 + 회귀 게이트(0.5pt) <!-- 0.8.0: 리드가 갱신 --> | CI 게이트 |
 | `cargo run -p doculens-eval -- pipeline --manifest … --engine … --model …` / `scorecard` | 실모델 파이프라인 지표(분류 F1·정확일치·ANLS*·CER·p50/p95)·양자화 스코어카드 | 사용자 PC |
-| `npm run notices` | THIRD-PARTY-NOTICES · SBOM(CycloneDX) · 라이선스 전문 재생성 | CI `notices` 잡이 최신성 검사 |
+| `npm run notices` | THIRD-PARTY-NOTICES(모델·엔진 절과 크레이트·패키지 목록) · SBOM(CycloneDX) · 라이선스 전문 재생성 | CI `notices` 잡이 최신성 검사 |
+| `npm run versions:check` | `Cargo.toml`·`Cargo.lock`·`package.json`·`package-lock.json`·`tauri.conf.json`·모의 백엔드·SBOM의 버전 일치(`release/<버전>` 브랜치에서는 그 버전인지도) | CI `notices` 잡과 설치파일 워크플로의 첫 단계 |
 
-GitHub Actions `CI`(푸시·PR)가 위 항목을 License gate / Web / Real llama-server / Rust Linux / Windows compile 다섯 작업으로
-실행합니다. Windows 실창 E2E(tauri-driver)와 GPU 실측은 사용자 PC 항목입니다.
+GitHub Actions `CI`(푸시·PR)는 위 항목을 일곱 작업으로 실행합니다: `rust`(코어 + Tauri 셸, Linux), `web`(타입·단위·빌드·E2E),
+`engine-real`(실제 llama-server + 초소형 Gemma 4 픽스처), `license`(라이선스 게이트), `windows-check`(Windows 컴파일 검사),
+`notices`(버전 일치 + 고지·SBOM 최신성), `eval-gate`(플래너 골든셋). Windows 실창 E2E(tauri-driver)와 GPU 실측은 사용자 PC 항목입니다.
 
 개발 중 유용한 환경 변수: `DOCULENS_LLAMA_SERVER`(엔진 실행 파일), `DOCULENS_LLAMA_SERVER_BACKEND`, `DOCULENS_PDFIUM`,
 `DOCULENS_KODIC`, `DOCULENS_APP_DATA`(앱 데이터 폴더를 바꿔 격리 실행).
@@ -310,7 +334,7 @@ GitHub Actions `CI`(푸시·PR)가 위 항목을 License gate / Web / Real llama
 | 엔진 카드 "b11747 이상 필요" | 오래된 llama.cpp 빌드 | b12066 팩으로 교체 |
 | 엔진이 시작하자마자 종료됨 — `VCRUNTIME140.dll` · `VCRUNTIME140_1.dll` · `MSVCP140.dll`을 찾을 수 없다는 Windows 오류 창, 또는 종료 코드 `0xC0000135`(DLL 없음) | llama-server 팩이 Microsoft Visual C++ 런타임 DLL을 쓰는데 팩에도 설치파일에도 들어 있지 않음(b12066 CPU·Vulkan 공식 팩의 임포트 표로 확인; 런타임이 없는 PC에서의 실제 증상은 아직 실기로 보지 못함. 앱 본체는 런타임을 정적으로 링크하므로 해당 없음) | Microsoft "Visual C++ 2015-2022 재배포 가능 패키지(x64)"(`vc_redist.x64.exe`, https://aka.ms/vs/17/release/vc_redist.x64.exe )를 설치하고 앱을 다시 시작. 오프라인 PC는 다른 PC에서 받아 옮겨 설치. 설치 여부는 `C:\Windows\System32\vcruntime140_1.dll`·`msvcp140.dll`이 있는지로 확인. 팩이 무엇을 밖에서 가져오는지는 `node scripts/list-pe-imports.mjs <팩 폴더>`로 볼 수 있음 |
 | 로드 직후 "Compute error" / 엔진 반복 종료 → "중단됨" | 팩 폴더에 두 백엔드 계열이 섞임, 또는 VRAM 부족 | 팩 폴더 정리(한 계열만) → 재시작; 작은 양자화·컨텍스트나 CPU 백엔드로 변경 |
-| 라이브러리 상단 "PDFium 없음" | `pdfium.dll` 미설치 | `node scripts/fetch-pdfium.mjs` 후 재시작 |
+| 문서함 상단 "PDFium 없음" | `pdfium.dll` 미설치(배포 설치파일에는 동봉) | 개발 실행이면 `node scripts/fetch-pdfium.mjs` 후 재시작 |
 | 모델 폴더가 "복사 중"에 머묾 | 파일이 아직 쓰이는 중(안정화 대기) | 복사 완료 대기; 2초 넘게 변하지 않으면 폴더 이름 확인(GGUF + mmproj) |
 | 다운로드 버튼 비활성 | `settings.json`의 `models.allow_online_download`가 false이거나 오프라인 | 값을 true로 바꾸거나 USB 드롭인 사용 |
 | 작업 로그 "prompt exceeds the context" / KIE·플래너 400 | 프리셋 컨텍스트(8K)보다 긴 입력 | 플래너는 작은 프롬프트로 자동 재시도("retrying smaller"); 반복되면 모델 컨텍스트 프리셋 확대 |
@@ -324,9 +348,9 @@ GitHub Actions `CI`(푸시·PR)가 위 항목을 License gate / Web / Real llama
 
 `docs/user-pc-checklist.md`의 항목을 처음 한 번은 아래 순서로 밟는 것을 권장합니다(약 1~2시간, 모델 다운로드 제외).
 
-1. **환경** — 창이 뜨고 온보딩 → 홈이 동작하는가, `settings.json`·워크스페이스 폴더 생성, 테마 4종·한/영 전환, 한글 IME 조합 중
+1. **환경** — 창이 뜨고 온보딩 → 처음 화면(문서함)이 동작하는가, `settings.json`·워크스페이스 폴더 생성, 테마 4종·한/영 전환, 한글 IME 조합 중
    Enter 미전송, UI 배율 (P0 항목).
-2. **엔진·모델** — 팩 설치와 SHA-256 고정(`--pin`), 엔진 카드의 버전·백엔드·장치 조회(VRAM), 실제 Gemma 4 E4B 드롭인 → "준비됨" →
+2. **엔진·모델** — 팩 설치(받은 zip이 매니페스트의 SHA-256과 일치), 엔진 카드의 버전·백엔드·장치 조회(VRAM), 실제 Gemma 4 E4B 드롭인 → "준비됨" →
    로드 → 상태바 VRAM 사용량, 모델 테스트의 한국어 응답과 tok/s(RTX 4060 기대 50~80), 강제 종료 후 재기동(1회)·자식 프로세스
    잔존 없음, `<|channel>thought` 생각 채널 미출력 (P1).
 3. **문서** — 100쪽 이상 스캔 PDF 가져오기 → 썸네일 → 뷰어 속도(200 DPI 쪽당 ≈1초), 실제 HWPX/DOCX/HWP 변환본, EXIF 회전 JPG,
@@ -335,15 +359,15 @@ GitHub Actions `CI`(푸시·PR)가 위 항목을 License gate / Web / Real llama
    근거 없음 배너, 설명·요약 (P3).
 5. **파이프라인** — 표준 처리 끝까지(쪽당 30~50초 GPU 기대), 분류·OCR 마스킹·KIE 합계 검증, 검토 큐 키, 양식 등록, NL 스키마,
    inbox 전체 자동 처리, 분할/병합, 출력 파서 500 여부, 8K 프리셋에서 긴 쪽 처리 (P4).
-6. **자연어·작업** — 예시 명령 12종 플랜 카드, 모델 플랜과 컨텍스트 축소 재시도, 플랜 편집 후 재검증, 실제 파일 이동과 되돌리기
+6. **자연어·작업** — 모델을 불러온 상태에서 예시 명령 12종 플랜 카드, 모델 플랜과 컨텍스트 축소 재시도, 플랜 편집 후 재검증, 실제 파일 이동과 되돌리기
    (탐색기에서 바꾼 항목만 건너뜀), 내보내기 5종을 Excel/Acrobat에서 열어 한글 확인(CSV BOM, PDF Ctrl+F), 집계의 검토 완료/대기
    분리, 배치 중 질문 끼어들기(쪽 경계), 일시정지·재개·우선순위·재시도, 강제 종료 후 "중단됨"과 대기열 복원, 저널 파일과
    `jobs` 테이블 (P5).
-7. **문서 생성·프로젝트(v1.1)** — 실모델 초안 생성과 HWPX/DOCX/PDF 저장(한컴·Word에서 열기), 등록 양식 채우기, 규칙 정의·정합성
+7. **문서 작성·프로젝트(v1.1)** — 실모델 초안 생성과 HWPX/DOCX/PDF 저장(한컴·Word에서 열기), 등록 양식 채우기, 규칙 정의·정합성
    검사·보완요청서, inbox 하위 폴더 매핑 (P6).
-8. **품질·배포(v1.1)** — 릴리스 설치파일(Lite/Full) 오프라인 설치, 평가 하네스로 양자화 스코어카드 채우기, 파기 작업·알림·절전
-   방지 (P7).
-9. **골든셋**(사용자 제공) — 분류 F1·OCR CER·KIE 필드 정확도·플래너 명령→플랜 100건(`doculens-eval`로 측정).
+8. **품질·배포(v1.1)** — 릴리스 설치파일(Lite) 오프라인 설치, NVIDIA PC는 CUDA 팩을 앱 데이터 폴더에 풀어 쓰기(§1.1), 평가 하네스로
+   양자화 스코어카드 채우기, 파기 작업·알림·절전 방지 (P7).
+9. **골든셋**(사용자 제공) — 분류 F1·OCR CER·KIE 필드 정확도·플래너 명령→플랜 골든셋(0.7.0 기준 129건, `doculens-eval`로 측정). <!-- 0.8.0: 리드가 갱신 -->
 
-확인 결과는 이슈로 남기거나 다음 세션에 전달해 주세요. 특히 **레지스트리 크기·SHA-256 고정**(모델·엔진 팩)은 첫 PC에서
-한 번만 하면 이후 다운로드 검증이 자동으로 적용됩니다.
+확인 결과는 이슈로 남기거나 다음 세션에 전달해 주세요. 모델 파일(크기·SHA-256·저장소 커밋)과 Windows 엔진 팩(cpu·vulkan의 SHA-256)은
+저장소에 고정돼 있으므로, 첫 PC에서는 받은 모델이 "해시 검증" 뒤 "검증됨"으로 바뀌는지만 확인하면 됩니다.
