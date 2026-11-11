@@ -18,6 +18,7 @@ use crate::documents::{repo as docs, DocumentRecord, DocumentRole};
 use crate::error::{CoreError, Result};
 use crate::export::{self, ExportRequest};
 use crate::generate::{self, DraftRequest, GenerateDeps, ReviseScope, SourceRef};
+use crate::josa;
 use crate::knowledge::answer::{self, AnswerDeps, ChatBackend};
 use crate::knowledge::embed::Embedder;
 use crate::knowledge::repo as knowledge_repo;
@@ -1385,7 +1386,7 @@ fn run_step(
             out.documents.extend(created.iter().cloned());
             Ok(StepOutcome {
                 summary: if deps.ko() {
-                    format!("'{}'을(를) {}개 문서로 분할", doc.original_name, created.len())
+                    format!("{} {}개 문서로 분할", josa::eul_reul(&format!("'{}'", doc.original_name)), created.len())
                 } else {
                     format!("Split '{}' into {} documents", doc.original_name, created.len())
                 },
@@ -1416,7 +1417,7 @@ fn run_step(
             out.documents.push(doc.id.clone());
             Ok(StepOutcome {
                 summary: if deps.ko() {
-                    format!("제목을 '{}'(으)로", title.trim())
+                    format!("제목을 {} 바꿈", josa::euro_ro(&format!("'{}'", title.trim())))
                 } else {
                     format!("Title set to '{}'", title.trim())
                 },
@@ -1541,7 +1542,7 @@ fn run_step(
                             let s = match action {
                                 ReferenceAction::Rename => {
                                     if ko {
-                                        format!("묶음 이름을 '{}'(으)로", saved.name)
+                                        format!("묶음 이름을 {} 바꿈", josa::euro_ro(&format!("'{}'", saved.name)))
                                     } else {
                                         format!("Group renamed to '{}'", saved.name)
                                     }
@@ -1916,7 +1917,11 @@ fn run_step(
                     db.with_tx(|tx| pipeline_repo::set_default_schema(tx, &rec.id))?;
                     (
                         if ko {
-                            format!("'{}'을(를) {} 유형의 기본 양식으로", rec.name, rec.doc_type)
+                            format!(
+                                "{} {} 유형의 기본 양식으로 지정",
+                                josa::eul_reul(&format!("'{}'", rec.name)),
+                                rec.doc_type
+                            )
                         } else {
                             format!("'{}' is now the default schema of {}", rec.name, rec.doc_type)
                         },
@@ -1956,7 +1961,7 @@ fn run_step(
                     let saved = db.with_tx(|tx| pipeline_repo::save_schema(tx, &draft))?;
                     (
                         if ko {
-                            format!("양식 이름을 '{}'(으)로", saved.name)
+                            format!("양식 이름을 {} 바꿈", josa::euro_ro(&format!("'{}'", saved.name)))
                         } else {
                             format!("Schema renamed to '{}'", saved.name)
                         },
@@ -2666,7 +2671,7 @@ pub fn preview(
                     match (&t, ko) {
                         (Some(t), true) => format!("템플릿 '{}' 삭제", t.name_ko),
                         (Some(t), false) => format!("Delete template '{}'", t.name_en),
-                        (None, true) => format!("템플릿 '{key}'을(를) 찾을 수 없음"),
+                        (None, true) => format!("템플릿 {} 찾을 수 없음", josa::eul_reul(&format!("'{key}'"))),
                         (None, false) => format!("Template '{key}' not found"),
                     },
                     json!({ "template": t.as_ref().map(|t| t.id.clone()), "builtin": t.as_ref().map(|t| t.builtin) }),
@@ -2679,7 +2684,7 @@ pub fn preview(
                     match (&rec, ko) {
                         (Some(r), true) => format!("양식 '{}' 삭제(사용 {}회)", r.name, r.use_count),
                         (Some(r), false) => format!("Delete schema '{}' (used {} times)", r.name, r.use_count),
-                        (None, true) => format!("양식 '{schema}'을(를) 찾을 수 없음"),
+                        (None, true) => format!("양식 {} 찾을 수 없음", josa::eul_reul(&format!("'{schema}'"))),
                         (None, false) => format!("Schema '{schema}' not found"),
                     },
                     json!({ "schema": rec.as_ref().map(|r| r.id.clone()), "builtin": rec.as_ref().map(|r| r.builtin_key.is_some()) }),

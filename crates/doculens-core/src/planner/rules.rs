@@ -4,6 +4,7 @@
 //! conservative — anything they do not recognise goes to the model.
 
 use crate::generate::{Length, OutputFormat, Tone};
+use crate::josa;
 use crate::prerouter::{self, DateRange, PreRoutedOp};
 use crate::settings::{Language, Profile};
 use chrono::{Datelike, NaiveDate};
@@ -665,9 +666,10 @@ fn export(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     });
     let label = type_label(dt, t.ko, t.t("문서", "documents"));
     let summary = if t.ko {
+        // "… XLSX 파일로": the particle follows a Korean noun, not the format's Latin name.
         match columns.len() {
-            0 => format!("{label}을(를) {}(으)로 내보냅니다", format.as_str().to_uppercase()),
-            n => format!("{label}에서 {n}개 필드를 추출해 {}(으)로 내보냅니다", format.as_str().to_uppercase()),
+            0 => format!("{} {} 파일로 내보냅니다", josa::eul_reul(label), format.as_str().to_uppercase()),
+            n => format!("{label}에서 {n}개 필드를 추출해 {} 파일로 내보냅니다", format.as_str().to_uppercase()),
         }
     } else {
         match columns.len() {
@@ -888,7 +890,8 @@ fn inbox(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     let label = type_label(dt, t.ko, t.t("문서", "documents"));
     let summary = if t.ko {
         format!(
-            "inbox의 {label}을(를) 가져와 {}{}",
+            "inbox의 {} 가져와 {}{}",
+            josa::eul_reul(label),
             if ops.len() > 1 { "분류·OCR·추출한 뒤 " } else { "등록하고 " },
             match group {
                 Some(GroupBy::Month) => "월별 폴더로 이동합니다",
@@ -1000,7 +1003,11 @@ fn organize(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         let folder = if folder.contains('/') { folder } else { format!("documents/{folder}") };
         (
             Op::Move { folder: folder.clone(), group_by: None, only_reviewed },
-            t.t(&format!("{label}을(를) {folder}/ 로 이동합니다"), &format!("Move {label} to {folder}/")).to_string(),
+            t.t(
+                &format!("{} {folder}/ 폴더로 이동합니다", josa::eul_reul(label)),
+                &format!("Move {label} to {folder}/"),
+            )
+            .to_string(),
         )
     } else if rename {
         let g = group.unwrap_or(GroupBy::DocType);
@@ -1023,7 +1030,7 @@ fn organize(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         (
             Op::Move { folder: folder_template(g).into(), group_by: Some(g), only_reviewed },
             t.t(
-                &format!("{label}을(를) {} 폴더로 이동합니다", group_word(g, true)),
+                &format!("{} {} 폴더로 이동합니다", josa::eul_reul(label), group_word(g, true)),
                 &format!("Move {label} into {} folders", group_word(g, false)),
             )
             .to_string(),
@@ -1117,7 +1124,7 @@ fn tag(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     };
     let summary = t
         .t(
-            &format!("태그 {}을(를) {}", names.join(", "), if remove { "제거합니다" } else { "추가합니다" }),
+            &format!("태그 {} {}", josa::eul_reul(&names.join(", ")), if remove { "제거합니다" } else { "추가합니다" }),
             &format!("{} tag(s) {}", if remove { "Remove" } else { "Add" }, names.join(", ")),
         )
         .to_string();
@@ -1171,7 +1178,8 @@ fn delete(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         Op::Delete { to_trash: Some(true) },
         scope,
         0.85,
-        t.t(&format!("{label}을(를) 휴지통으로 보냅니다"), &format!("Move {label} to the recycle bin")).to_string(),
+        t.t(&format!("{} 휴지통으로 보냅니다", josa::eul_reul(label)), &format!("Move {label} to the recycle bin"))
+            .to_string(),
     ))
 }
 
@@ -1276,7 +1284,7 @@ fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         })
         .collect();
     let summary = if t.ko {
-        format!("{label}을(를) {}합니다{}", what.join("·"), if force { "(다시 실행)" } else { "" })
+        format!("{} {}합니다{}", josa::eul_reul(label), what.join("·"), if force { "(다시 실행)" } else { "" })
     } else {
         format!("{} {label}{}", what.join(", "), if force { " (re-run)" } else { "" })
     };
@@ -1431,7 +1439,7 @@ fn search(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         Op::Search { query: q.clone(), mode: None, top_k: None },
         scope,
         0.85,
-        t.t(&format!("'{q}'을(를) 검색합니다"), &format!("Search for '{q}'")).to_string(),
+        t.t(&format!("{} 검색합니다", josa::eul_reul(&format!("'{q}'"))), &format!("Search for '{q}'")).to_string(),
     ))
 }
 
@@ -2101,7 +2109,10 @@ fn draft_document(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         let agg = Op::Aggregate { func: AggregateFn::Sum, field: None, group_by: None, include_unreviewed: None };
         let summary = t
             .t(
-                &format!("{}을(를) 집계한 뒤 그 결과로 {label} 초안을 만듭니다", type_label(dt, true, "문서")),
+                &format!(
+                    "{} 집계한 뒤 그 결과로 {label} 초안을 만듭니다",
+                    josa::eul_reul(type_label(dt, true, "문서"))
+                ),
                 &format!(
                     "Aggregate the {} first, then draft a {label} from the totals",
                     type_label(dt, false, "documents")
@@ -2657,7 +2668,11 @@ fn set_retention(t: &Text<'_>) -> Option<Plan> {
         Op::SetRetention { item, days },
         Scope::default(),
         0.85,
-        t.t(&format!("{label} 보존 기간을 {period}로 설정합니다"), &format!("Keep {label} for {period}")).to_string(),
+        t.t(
+            &format!("{label} 보존 기간을 {} 설정합니다", josa::euro_ro(&period)),
+            &format!("Keep {label} for {period}"),
+        )
+        .to_string(),
     ))
 }
 
@@ -3145,7 +3160,7 @@ fn manage_model_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
             },
             Scope::default(),
             0.86,
-            t.t(&format!("모델 티어를 {tier}(으)로"), &format!("Model tier → {tier}")).to_string(),
+            t.t(&format!("모델 티어 → {tier}"), &format!("Model tier → {tier}")).to_string(),
         ));
     }
     if t.has(&["백엔드", "backend"]) {
@@ -3162,7 +3177,7 @@ fn manage_model_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
                 },
                 Scope::default(),
                 0.86,
-                t.t(&format!("엔진 백엔드를 {b}(으)로"), &format!("Engine backend → {b}")).to_string(),
+                t.t(&format!("엔진 백엔드 → {b}"), &format!("Engine backend → {b}")).to_string(),
             ));
         }
     }
@@ -3199,19 +3214,18 @@ fn manage_model_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     let Some(id) = id else {
         return Some(Plan::clarify(t.t("어느 모델인가요? 모델 ID를 알려주세요.", "Which model? Give its id."), 0.5));
     };
+    // "<id> 모델을 …": the particle follows 모델, not the Latin id.
     let summary = match action {
-        ModelAction::Download => {
-            t.t(&format!("모델 {id}을(를) 내려받습니다"), &format!("Download model {id}")).to_string()
-        }
-        ModelAction::Delete => t.t(&format!("모델 {id}을(를) 삭제합니다"), &format!("Delete model {id}")).to_string(),
+        ModelAction::Download => t.t(&format!("{id} 모델을 내려받습니다"), &format!("Download model {id}")).to_string(),
+        ModelAction::Delete => t.t(&format!("{id} 모델을 삭제합니다"), &format!("Delete model {id}")).to_string(),
         ModelAction::Verify => {
-            t.t(&format!("모델 {id}의 해시를 검증합니다"), &format!("Verify model {id}")).to_string()
+            t.t(&format!("{id} 모델의 해시를 검증합니다"), &format!("Verify model {id}")).to_string()
         }
         ModelAction::Benchmark => {
-            t.t(&format!("모델 {id}을(를) 테스트합니다"), &format!("Benchmark model {id}")).to_string()
+            t.t(&format!("{id} 모델을 테스트합니다"), &format!("Benchmark model {id}")).to_string()
         }
-        ModelAction::Load => t.t(&format!("모델 {id}을(를) 로드합니다"), &format!("Load model {id}")).to_string(),
-        _ => t.t(&format!("모델 {id}을(를) 내립니다"), &format!("Unload model {id}")).to_string(),
+        ModelAction::Load => t.t(&format!("{id} 모델을 로드합니다"), &format!("Load model {id}")).to_string(),
+        _ => t.t(&format!("{id} 모델을 내립니다"), &format!("Unload model {id}")).to_string(),
     };
     Some(mk(
         Op::ManageModel { action, id: Some(id), tier: None, backend: None, path: None },
@@ -3348,7 +3362,7 @@ fn document_edit_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
                 Op::SetRole { role },
                 scope,
                 0.85,
-                t.t(&format!("{label}(으)로 표시합니다"), &format!("Mark as {label}")).to_string(),
+                t.t(&format!("{} 표시합니다", josa::euro_ro(&label)), &format!("Mark as {label}")).to_string(),
             ));
         }
     }
@@ -3476,7 +3490,11 @@ fn document_edit_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
                 Op::SetTitle { title: title.clone() },
                 scope,
                 0.86,
-                t.t(&format!("제목을 '{title}'(으)로"), &format!("Title → '{title}'")).to_string(),
+                t.t(
+                    &format!("제목을 {} 바꿉니다", josa::euro_ro(&format!("'{title}'"))),
+                    &format!("Title → '{title}'"),
+                )
+                .to_string(),
             ));
         }
     }
@@ -3505,8 +3523,15 @@ fn document_edit_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
                 Op::EditText { find: q[0].clone(), replace: q[1].clone(), pages },
                 scope,
                 0.84,
-                t.t(&format!("'{}' → '{}'(으)로 바꿉니다", q[0], q[1]), &format!("Replace '{}' with '{}'", q[0], q[1]))
-                    .to_string(),
+                t.t(
+                    &format!(
+                        "{} {} 바꿉니다",
+                        josa::eul_reul(&format!("'{}'", q[0])),
+                        josa::euro_ro(&format!("'{}'", q[1]))
+                    ),
+                    &format!("Replace '{}' with '{}'", q[0], q[1]),
+                )
+                .to_string(),
             ));
         }
     }
@@ -3642,7 +3667,11 @@ fn reference_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
             Op::ManageReference { action: ReferenceAction::Create, group: None, name: Some(n.clone()), project: None },
             Scope::default(),
             0.86,
-            t.t(&format!("참고 자료 묶음 '{n}'을(를) 만듭니다"), &format!("Create reference group '{n}'")).to_string(),
+            t.t(
+                &format!("참고 자료 묶음 {} 만듭니다", josa::eul_reul(&format!("'{n}'"))),
+                &format!("Create reference group '{n}'"),
+            )
+            .to_string(),
         ));
     }
     let action = if t.has(&["삭제", "지워", "지우", "delete", "remove the group"]) && !t.has(&["에서", "from"])
@@ -3930,9 +3959,12 @@ fn schema_admin_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     };
     let name = if action == SchemaAction::Rename { q.last().cloned() } else { None };
     let summary = match action {
-        SchemaAction::SetDefault => {
-            t.t(&format!("'{schema}'을(를) 기본 양식으로"), &format!("Make '{schema}' the default schema")).to_string()
-        }
+        SchemaAction::SetDefault => t
+            .t(
+                &format!("{} 기본 양식으로 지정합니다", josa::eul_reul(&format!("'{schema}'"))),
+                &format!("Make '{schema}' the default schema"),
+            )
+            .to_string(),
         SchemaAction::Disable => {
             t.t(&format!("'{schema}' 양식 사용 안 함"), &format!("Disable schema '{schema}'")).to_string()
         }

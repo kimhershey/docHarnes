@@ -1127,6 +1127,9 @@ fn model_path_requeries_once_with_feedback() {
     assert!(plans[0].messages.len() < full, "{} < {full}", plans[0].messages.len());
 }
 
+/// 0.8.0 audit fixes on the deterministic side (validation, scope, phrase rules): `tests/deterministic_side.rs`.
+mod deterministic_side;
+
 // ---------------------------------------------------------------------------
 // Executor
 // ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ pub mod generate;
 pub mod gguf;
 pub mod hw;
 pub mod jobs;
+pub mod josa;
 pub mod jsonorder;
 pub mod knowledge;
 pub mod memory;
