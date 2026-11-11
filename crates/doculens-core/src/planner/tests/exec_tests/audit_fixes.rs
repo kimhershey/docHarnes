@@ -327,8 +327,8 @@ fn a_scope_that_matches_nothing_finds_nothing() {
     // So is an explanation.
     let explain = plan_of(
         vec![Op::Explain {
-            selection: Some("합계".into()),
-            question: Some("이 합계는 무엇인가?".into()),
+            selection: Some("스타벅스".into()),
+            question: Some("합계는?".into()),
             scope: None,
             allow_general_knowledge: None,
         }],
@@ -625,4 +625,166 @@ fn check_consistency_resolves_rule_references_or_fails() {
         assert_eq!(last_run().map(|r| r.id), stored, "{reference}: the latest check was not replaced");
     }
     assert!(preview(&w, &check(&["없는 규칙"])).steps[0].summary.contains("찾을 수 없음"));
+}
+
+/// GEN-3 in the executor: `revise_draft` stored its result over the draft unconditionally, so a
+/// cancelled "초안 전체 다시 써줘" through the assistant replaced the complete draft with the
+/// sections written so far. The result now goes through `store::save_job_result`.
+#[test]
+fn a_cancelled_revision_keeps_the_complete_draft() {
+    use std::sync::atomic::AtomicUsize;
+
+    use crate::engine::{ChatRequest, ChatResponse};
+    use crate::generate::templates::TemplateSpec;
+    use crate::generate::{self, Draft, DraftBlock, DraftRequest, TemplateKind, TemplateRef};
+    use crate::knowledge::answer::ChatBackend;
+
+    /// Sets the cancel flag while the model answers its `at`-th call.
+    struct CancelAt<'a> {
+        inner: &'a StageChat,
+        cancel: &'a AtomicBool,
+        at: usize,
+        calls: AtomicUsize,
+    }
+    impl CancelAt<'_> {
+        fn called(&self) {
+            if self.calls.fetch_add(1, Ordering::Relaxed) + 1 == self.at {
+                self.cancel.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+    impl ChatBackend for CancelAt<'_> {
+        fn model_id(&self) -> Option<String> {
+            self.inner.model_id()
+        }
+        fn chat_stream(
+            &self,
+            req: &ChatRequest,
+            on_delta: &mut dyn FnMut(&str) -> bool,
+        ) -> crate::error::Result<ChatResponse> {
+            self.called();
+            self.inner.chat_stream(req, on_delta)
+        }
+        fn complete(&self, req: &ChatRequest) -> crate::error::Result<ChatResponse> {
+            self.called();
+            self.inner.complete(req)
+        }
+    }
+
+    let w = World::new();
+    // A complete progress report, drafted section by section (a budget above the split threshold).
+    let headings = TemplateSpec::builtin(TemplateKind::ProgressReport).sections(true).to_vec();
+    assert!(headings.len() >= 3, "{headings:?}");
+    let mut complete = Draft {
+        id: "dr-full".into(),
+        title: "11월 2주차 진척 보고서".into(),
+        template: TemplateRef::Builtin { template: TemplateKind::ProgressReport },
+        doc_type: Some("progress_report".into()),
+        request: Some(Box::new(DraftRequest {
+            form_ref: Some("progress_report".into()),
+            content: "한빛 포털 구축 진척 보고서".into(),
+            max_tokens: Some(8_000),
+            use_knowledge: false,
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    for heading in &headings {
+        complete.body.push(DraftBlock::Heading { level: 2, text: heading.clone() });
+        complete.body.push(DraftBlock::Paragraph { text: format!("{heading} — 원래 본문"), source: None });
+    }
+    generate::store::save(&w.paths, &complete).unwrap();
+    let para = |t: &str| json!({ "kind": "paragraph", "text": t, "items": [], "source_index": null });
+    w.chat.push(
+        "draft_document",
+        json!({
+            "title": "11월 2주차 진척 보고서",
+            "fields": [],
+            "tables": [],
+            "body": [{ "kind": "heading", "text": headings[0], "items": [], "source_index": null }, para("새 개요")],
+            "notes": []
+        }),
+    );
+    w.chat.push("draft_section", json!({ "blocks": [para("새 본문")] }));
+    let plan = plan_of(
+        vec![Op::ReviseDraft {
+            draft_id: Some("dr-full".into()),
+            scope: "whole".into(),
+            section: None,
+            heading: None,
+            instruction: "더 간결하게".into(),
+        }],
+        Scope::default(),
+    );
+    let sections = |id: &str| generate::sections_of(&generate::store::load(&w.paths, id).unwrap().body).len();
+    let first_paragraph = |id: &str| {
+        generate::store::load(&w.paths, id).unwrap().body.into_iter().find_map(|b| match b {
+            DraftBlock::Paragraph { text, .. } => Some(text),
+            _ => None,
+        })
+    };
+
+    // Cancelled while the second section is written: the step is cancelled, the complete draft
+    // stays and what was written so far is stored next to it.
+    let cancel = AtomicBool::new(false);
+    let chat = CancelAt { inner: &w.chat, cancel: &cancel, at: 2, calls: AtomicUsize::new(0) };
+    let mut deps = w.deps(Some(&cancel));
+    deps.chat = Some(&chat);
+    let ex = exec::run(&deps, &plan, &mut |_| {}).unwrap();
+    assert_eq!(ex.steps[0].status, StepStatus::Cancelled, "{:?}", ex.steps[0]);
+    assert_eq!(sections("dr-full"), headings.len(), "the complete draft is still stored");
+    assert_eq!(first_paragraph("dr-full"), Some(format!("{} — 원래 본문", headings[0])));
+    let listed = generate::store::list(&w.paths).unwrap();
+    assert_eq!(listed.len(), 2, "{listed:?}");
+    let partial = listed.iter().find(|d| d.id != "dr-full").expect("the partial result").id.clone();
+    assert!(sections(&partial) < headings.len());
+    let notes = generate::store::load(&w.paths, &partial).unwrap().notes;
+    assert!(notes[0].starts_with("취소된 작업이 남긴 결과입니다"), "{notes:?}");
+
+    // Not cancelled: the revision replaces the draft it started from, and the payload says so.
+    let ex = run(&w, &plan);
+    assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
+    assert_eq!(ex.steps[0].payload["draft_store"], json!({ "status": "saved" }));
+    assert_eq!(ex.steps[0].payload["draft"]["id"], json!("dr-full"));
+    assert_eq!(first_paragraph("dr-full").as_deref(), Some("새 개요"));
+    assert_eq!(generate::store::list(&w.paths).unwrap().len(), 2);
+}
+
+/// CON-3: the 보완요청서 the assistant writes for a project carries that project in its request,
+/// so the draft — and a later regeneration from the stored request — searches inside it.
+#[test]
+fn a_supplement_request_is_bound_to_its_project() {
+    let w = World::new();
+    let project =
+        w.db.with(|c| projects_repo::save_project(c, &ProjectInput { name: "한빛 납품".into(), ..Default::default() }))
+            .unwrap();
+    w.db.with(|c| {
+        projects_repo::save_rule(
+            c,
+            &project.id,
+            &Rule {
+                description: "견적서 작성일자는 필수".into(),
+                left: RuleOperand::field("estimate", "issue_date"),
+                op: RuleOp::Present,
+                enabled: true,
+                ..Rule::default()
+            },
+        )
+    })
+    .unwrap();
+    let check =
+        plan_of(vec![Op::CheckConsistency { project: Some(project.id.clone()), rules: Vec::new() }], Scope::default());
+    assert_eq!(run(&w, &check).steps[0].status, StepStatus::Done);
+    let plan = plan_of(
+        vec![Op::RequestSupplement { project: Some(project.id.clone()), findings: Vec::new(), output: None }],
+        Scope::default(),
+    );
+    // No model: the findings make a rule-composed draft.
+    let mut deps = w.deps(None);
+    deps.chat = None;
+    deps.model = None;
+    let ex = exec::run(&deps, &plan, &mut |_| {}).unwrap();
+    assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
+    assert_eq!(ex.steps[0].payload["project_id"], json!(project.id));
+    assert_eq!(ex.steps[0].payload["draft"]["request"]["project_id"], json!(project.id));
 }

@@ -394,3 +394,35 @@ fn check_consistency_rule_references_are_tidied() {
         p.operations
     );
 }
+
+/// GEN-14 (planner side): the validator cut a draft's content at 6,000 and a revision's
+/// instruction at 2,000 characters before the generator saw them, so the generator's "what was
+/// left out" notes could never fire. Both keep what the generator stores.
+#[test]
+fn draft_text_reaches_the_generator_at_the_length_it_stores() {
+    use crate::generate::MAX_STORED_TEXT_CHARS;
+    let c = PlanContext { draft_id: Some("dr-1".into()), ..ctx() };
+    let text = |n: usize| "가나다라마 ".chars().cycle().take(n).collect::<String>().trim().to_string();
+    let lengths = |content: usize, instruction: usize| {
+        let mut p = plan_of(
+            json!([
+                { "op": "draft_document", "content": text(content) },
+                { "op": "revise_draft", "draft_id": "dr-1", "scope": "whole", "instruction": text(instruction) }
+            ]),
+            json!({}),
+        );
+        let issues = validate::validate(&mut p, &c, None);
+        assert!(!has_errors(&issues), "{issues:?}");
+        match (&p.operations[0], &p.operations[1]) {
+            (Op::DraftDocument { content, .. }, Op::ReviseDraft { instruction, .. }) => {
+                (content.chars().count(), instruction.chars().count())
+            }
+            other => panic!("{other:?}"),
+        }
+    };
+    let kept = |n: usize| text(n).chars().count();
+    assert_eq!(lengths(7_500, 3_000), (kept(7_500), kept(3_000)), "longer than the old cuts, kept whole");
+    let (content, instruction) = lengths(MAX_STORED_TEXT_CHARS + 500, MAX_STORED_TEXT_CHARS + 500);
+    assert!(content <= MAX_STORED_TEXT_CHARS && content > MAX_STORED_TEXT_CHARS - 2, "{content}");
+    assert!(instruction <= MAX_STORED_TEXT_CHARS && instruction > MAX_STORED_TEXT_CHARS - 2, "{instruction}");
+}
