@@ -148,6 +148,8 @@ export function AssistantPage() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const consumed = useRef<string | null>(null);
   const observing = useRef(new Set<string>());
+  /** Jobs started from this page whose end has not been reported to it yet (see `onJobFinished`). */
+  const startedJobs = useRef(new Set<string>());
   const examples = t("assistant.examples", { returnObjects: true }) as string[];
 
   // The conversation is keyed by the workspace path (a switch also clears it through `resetDocumentQueries`,
@@ -299,6 +301,7 @@ export function AssistantPage() {
       if (!live(sid)) return;
       patchPlan(sid, id, (x) => ({ ...x, status: "done", editing: false }));
       if (res.job_id) {
+        startedJobs.current.add(res.job_id);
         // The job's `ui_actions` run when its finished state is observed here (once, even after navigating away).
         useAssistantStore.getState().trackJob(
           res.job_id,
@@ -589,11 +592,16 @@ export function AssistantPage() {
   };
 
   const onJobFinished = useCallback(
-    (execution: PlanExecution | null, job: Job) => {
+    (execution: PlanExecution | null, job: Job, live: boolean) => {
+      // A job this page started and has not reported yet counts as watched even when it failed before its
+      // card could see it running.
+      const startedHere = startedJobs.current.delete(job.id);
       if (execution) {
         const ops = useAssistantStore.getState().claimUiActions(job.id, execution.ui_actions);
         if (ops) void runUiActions(ops);
-      } else if (job.state === "failed") {
+      } else if (job.state === "failed" && (live || startedHere)) {
+        // Only a failure that happens now is announced: the card of a job that failed earlier says so itself,
+        // and a toast on every reopening of the chat (session switch, restart) is noise (KNO-11).
         const message = describeJobError(job, t);
         if (message) useUiStore.getState().toast(message, "danger");
       }

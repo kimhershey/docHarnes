@@ -32,7 +32,22 @@ type ResultState = "idle" | "loading" | "settled";
  * `jobs_get` (the broadcast omits it); a job the store does not know is looked
  * up once, and one that disappears without finishing is reported as removed.
  */
-export function ExecutionCard({ jobId, plan, response, onFinished }: { jobId: string; plan: Plan; response: PlanResponse; onFinished: (execution: PlanExecution | null, job: Job) => void }) {
+export function ExecutionCard({
+  jobId,
+  plan,
+  response,
+  onFinished,
+}: {
+  jobId: string;
+  plan: Plan;
+  response: PlanResponse;
+  /**
+   * Called once per mount when the job is finished and its result settled. `live` says whether this card
+   * watched the job run: only then is the end news — a card that mounts on a job that had already ended
+   * (chat reopened, app restarted) reports `false`, and the page does not announce the old failure again.
+   */
+  onFinished: (execution: PlanExecution | null, job: Job, live: boolean) => void;
+}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const toast = useUiStore((s) => s.toast);
@@ -46,6 +61,9 @@ export function ExecutionCard({ jobId, plan, response, onFinished }: { jobId: st
   const job = snapshot ?? fetched;
   const finishedRef = useRef(false);
   const finished = job ? isJobFinished(job) : false;
+  // Set while this card sees the job unfinished (queued / running / paused).
+  const sawUnfinished = useRef(false);
+  if (job && !finished) sawUnfinished.current = true;
   const execution = snapshot && isPlanExecution(snapshot.result) ? snapshot.result : fetched && isPlanExecution(fetched.result) ? fetched.result : null;
   const resultSettled = execution !== null || resultState === "settled";
 
@@ -93,7 +111,7 @@ export function ExecutionCard({ jobId, plan, response, onFinished }: { jobId: st
   useEffect(() => {
     if (!job || !finished || !resultSettled || finishedRef.current) return;
     finishedRef.current = true;
-    onFinished(execution, job);
+    onFinished(execution, job, sawUnfinished.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [finished, resultSettled]);
 

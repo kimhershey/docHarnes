@@ -206,6 +206,38 @@ test.describe("P5 planner", () => {
     await expect(assistantCard(page, "plan")).toHaveCount(1);
   });
 
+  // KNO-11: the execution card reported a finished job to the page every time it mounted, so the failure
+  // toast of an old job came back whenever its chat was opened again.
+  test("a failed job is announced once: reopening its chat does not toast again", async ({ page }) => {
+    // The mock's engine is off: a plan that needs the model fails as a job without a result.
+    await freshApp(page, { "doculens.mock.vision": "engine_off" });
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서-1p.jpg"], { autoLevel: "none" });
+    await page.getByTestId(`doc-select-${await docId(page, "견적서-1p.jpg")}`).check();
+    await openAssistant(page);
+    await page.getByTestId("assistant-scope").click();
+    await page.getByTestId("assistant-scope-selection").click();
+    await send(page, "선택 문서 요약");
+    const execution = assistantCard(page, "execution").last();
+    await expect(execution).toHaveAttribute("data-job-state", "failed", { timeout: 15_000 });
+    await expect(execution.getByTestId("execution-outcome")).toContainText(ko.errors.engine_not_running);
+    const failureToasts = page.getByTestId("toaster").getByRole("status").filter({ hasText: ko.errors.engine_not_running });
+    await expect(failureToasts).toHaveCount(1);
+    await failureToasts.getByRole("button", { name: "dismiss" }).click();
+    await expect(failureToasts).toHaveCount(0);
+
+    // Another chat and back: the card mounts again on the job that already failed.
+    const sessions = page.locator('[data-testid="assistant-sessions"] [data-session-id]');
+    await page.getByTestId("assistant-new-chat").click();
+    await expect(sessions).toHaveCount(2);
+    await expect(assistantCard(page, "execution")).toHaveCount(0);
+    await sessions.filter({ hasText: "선택 문서 요약" }).locator("button").first().click();
+    await expect(assistantCard(page, "execution").last()).toHaveAttribute("data-job-state", "failed", { timeout: 15_000 });
+    await expect(assistantCard(page, "execution").last().getByTestId("execution-outcome")).toContainText(ko.errors.engine_not_running);
+    await page.waitForTimeout(500);
+    await expect(failureToasts).toHaveCount(0);
+  });
+
   test("되묻기 replies with the question's context; 취소 (button or typed) drops pending cards by rule", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
