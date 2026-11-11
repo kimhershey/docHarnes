@@ -1294,3 +1294,42 @@ fn one_bad_page_does_not_fail_the_whole_extraction() {
     assert!(report.failed[0].1.contains("not JSON"), "{:?}", report.failed);
     assert_eq!(w.db.with(|c| repo::list_runs(c, "t2")).unwrap()[0].status, "failed");
 }
+
+/// Audit PIP-6: when the engine died or was stopped during a batch, every remaining document
+/// "failed" within seconds (300 documents, engine gone at the 40th → 260 marked 처리 오류).
+#[test]
+fn a_missing_engine_stops_the_batch_and_leaves_the_rest_untouched() {
+    let w = World::new();
+    for id in ["a", "b", "c"] {
+        w.add_doc(id, &format!("{id}.pdf"), SourceKind::Pdf, &[None]);
+    }
+    w.chat.push("classify", classify_reply("receipt", 0));
+    w.chat.push_ocr(RECEIPT_OCR);
+    w.chat.push("kie_receipt", receipt_kie());
+    let deps = w.deps(None);
+    let req = ProcessRequest { document_ids: vec!["a".into(), "b".into(), "c".into()], ..Default::default() };
+    // The engine goes away when the second document starts: its port refuses connections.
+    let refused = "POST /v1/chat/completions: io: Connection refused (os error 111)";
+    let err = run::process(&deps, &req, &mut |p| {
+        if p.done == 1 {
+            *w.chat.fail_with.lock().unwrap() = Some(refused.into());
+        }
+    })
+    .unwrap_err();
+    assert_eq!(err.code(), "engine_not_running", "{err}");
+    assert!(w.doc("a").extracted_at.is_some(), "the document before the failure is done");
+    for id in ["b", "c"] {
+        let d = w.doc(id);
+        assert!(d.pipeline_error.is_none(), "{id}: no 처리 오류 for a missing engine: {:?}", d.pipeline_error);
+        assert!(d.classified_at.is_none() && d.extracted_at.is_none(), "{id} is untouched");
+    }
+    let status = w.db.with(repo::pipeline_status).unwrap();
+    assert_eq!((status.extracted, status.failed), (1, 0));
+
+    // An error the engine answered with is still that document's failure, and the batch goes on.
+    *w.chat.fail_with.lock().unwrap() = Some("/v1/chat/completions: HTTP 400: grammar".into());
+    let rest = ProcessRequest { document_ids: vec!["b".into(), "c".into()], ..Default::default() };
+    let report = run::process(&deps, &rest, &mut |_| {}).unwrap();
+    assert_eq!(report.failed.len(), 2, "{report:?}");
+    assert!(w.doc("b").pipeline_error.is_some() && w.doc("c").pipeline_error.is_some());
+}

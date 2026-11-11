@@ -72,7 +72,9 @@ struct DocOutcome {
     review_pending: bool,
 }
 
-/// Runs the request over its documents; failures are recorded per document.
+/// Runs the request over its documents; failures are recorded per document. A missing engine is
+/// not a document's failure: it ends the request with an error and the remaining documents stay
+/// as they were.
 pub fn process(
     deps: &PipelineDeps<'_>,
     req: &ProcessRequest,
@@ -115,6 +117,19 @@ pub fn process(
             Err(CoreError::Cancelled) => {
                 report.cancelled = true;
                 break;
+            }
+            Err(e) if super::vlm::engine_unavailable(&e) => {
+                // The engine is gone — stopped, crashed, its port closed (audit PIP-6). Neither
+                // this document nor the ones after it are at fault: each would "fail" within
+                // seconds, and a batch of 300 that lost the engine at the 40th document ended
+                // with 260 documents marked 처리 오류. They stay untouched and the request fails
+                // as a whole; running it again goes on from here.
+                log::warn!(
+                    "pipeline: engine unavailable at document {} ({e}); {} document(s) left untouched",
+                    doc.id,
+                    documents.len() - i
+                );
+                return Err(if super::vlm::transport_failure(&e) { CoreError::EngineNotRunning } else { e });
             }
             Err(e) => {
                 let msg = e.to_string();
