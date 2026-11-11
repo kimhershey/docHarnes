@@ -9,7 +9,7 @@ import ko from "@/i18n/ko.json";
 import type { UiOpResult } from "@/lib/commands";
 import type { CheckRun, Draft, DraftOutcome, Plan, PlanContext, PlanExecution, PlanPreview, PlanResponse, Project, ProjectDetail, RuleDraft } from "@/lib/types";
 
-import { agentStepDetail, deriveResultActions, formatAmount, impactLine, impactOf, isPlanExecution, onlyReviewedValue, opLabel, planKind, projectName, requiresConfirmation, ruleDraftPreview, summarizeOp, uiContextFor, uiResultsByStep, withOnlyReviewed } from "./describePlan";
+import { agentStepDetail, deriveResultActions, formatAmount, impactLine, impactOf, isPlanExecution, listTotal, onlyReviewedValue, opLabel, organizePreview, planKind, projectName, requiresConfirmation, ruleDraftPreview, summarizeOp, uiContextFor, uiResultsByStep, withOnlyReviewed } from "./describePlan";
 import { OP_KINDS, OP_SPECS, UI_OPS } from "./opSpecs";
 
 const instance = i18next.createInstance();
@@ -215,6 +215,45 @@ describe("agentStepDetail", () => {
     expect(agentStepDetail("define_term", { action: "delete", term: entry }, t)?.text).toBe("용어 삭제 · '공급가액'");
     // A bare string still works.
     expect(agentStepDetail("define_term", { action: "save", term: "합계" }, t)?.text).toBe("용어 저장 · '합계'");
+  });
+});
+
+// CON-16: a card that was too large to store whole is read back with the first rows of its lists and
+// `<list>_total` next to them — the numbers on the card are those of the whole.
+describe("lists of a card stored smaller", () => {
+  const rows = (n: number, status: "move" | "held" | "done") => Array.from({ length: n }, (_, i) => ({ doc_id: `d${i}`, name: `f${i}.pdf`, from: `inbox/f${i}.pdf`, to: `documents/f${i}.pdf`, status }));
+
+  it("listTotal: the list's length, or the total kept beside a cut list", () => {
+    expect(listTotal({ documents: ["a", "b"] }, "documents")).toBe(2);
+    expect(listTotal({ documents: ["a", "b"], documents_total: 6000 }, "documents")).toBe(6000);
+    expect(listTotal({}, "documents")).toBe(0);
+  });
+
+  it("the plan preview counts every row, not only the ones kept", () => {
+    const step = { index: 0, op: "move" as const, summary: "", payload: { items: [...rows(150, "move"), ...rows(50, "held")], items_total: 6000, moves: 5800, held: 200, unchanged: 0 }, confirm: true };
+    const preview = organizePreview(step)!;
+    expect(preview.items).toHaveLength(200);
+    expect(preview).toMatchObject({ total: 6000, moves: 5800, held: 200 });
+    expect(impactOf(plan([{ op: "move", folder: "x" }]), { document_count: 6000, document_ids: [], steps: [step], requires_confirmation: true })).toMatchObject({ documents: 6000, moves: 5800 });
+    // A whole preview: the total is the rows it shows.
+    expect(organizePreview({ ...step, payload: { items: [...rows(2, "move"), { ...rows(1, "move")[0]!, status: "unchanged" }], moves: 2, held: 0, unchanged: 1 } })).toMatchObject({ total: 2 });
+  });
+
+  it("the result card counts every moved file and every document of a step", () => {
+    const execution: PlanExecution = {
+      steps: [
+        { index: 0, op: "move", status: "done", summary: "", payload: { batch_id: "b1", moved: 5990, held: 0, failed: rows(10, "done"), failed_total: 10, items: rows(200, "done"), items_total: 6000 }, elapsed_ms: 1 },
+        { index: 1, op: "rotate", status: "done", summary: "", payload: { documents: ["a", "b"], documents_total: 6000, degrees: 90 }, elapsed_ms: 1 },
+      ],
+      cancelled: false,
+      documents: [],
+      ui_actions: [],
+      batches: ["b1"],
+    };
+    const actions = deriveResultActions(execution, plan([{ op: "move", folder: "x" }, { op: "rotate", degrees: 90 }]));
+    expect(actions.organise[0]).toMatchObject({ total: 6000, moved: 5990, failed: 10, batchId: "b1" });
+    expect(actions.organise[0]!.items).toHaveLength(200);
+    expect(agentStepDetail("rotate", execution.steps[1]!.payload, t)?.text).toContain("6000");
   });
 });
 

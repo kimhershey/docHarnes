@@ -3,7 +3,7 @@
 // exactly once. The `chat_*` commands are faked in memory.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ChatMessageRow, ChatSessionSummary, Op } from "@/lib/types";
+import type { ChatMessageRow, ChatSessionSummary, Op, OrganizeItem, OrganizePlan, Plan, PlanContext, PlanExecution, PlanResult } from "@/lib/types";
 
 const fake = vi.hoisted(() => {
   // One workspace database at a time, like the backend: `switchWorkspace` opens another (empty) one.
@@ -53,6 +53,11 @@ const fake = vi.hoisted(() => {
     // Like the core (`chat::put_message`): a session this database does not have is re-created, untitled.
     chatMessagePut: async (id: string, seq: number, payload: unknown) => {
       if (state.putGate) await state.putGate;
+      // Like `chat_message_put` (`commands/knowledge.rs`): a message above 2,000,000 bytes of JSON is refused.
+      if (new TextEncoder().encode(JSON.stringify(payload)).length > 2_000_000) {
+        state.log.push(`too large ${id}/${seq}`);
+        throw { code: "invalid", message: "chat_message_too_large" };
+      }
       state.log.push(`put ${id}/${seq}`);
       state.puts += 1;
       let s = state.sessions.find((x) => x.id === id);
@@ -90,10 +95,45 @@ const fake = vi.hoisted(() => {
 vi.mock("@/lib/ipc", () => ({ api: fake.api }));
 
 import { useAttachmentsStore } from "./attachments";
-import { DROPPED, PATCH_WRITE_DELAY_MS, flushChatWrites, resetAssistant, restoreMessage, selectMessages, useAssistantStore } from "./assistant";
+import { DROPPED, PATCH_WRITE_DELAY_MS, flushChatWrites, resetAssistant, restoreMessage, selectMessages, storedMessage, useAssistantStore, type Message, type NewMessage, type PlanMessage } from "./assistant";
 
 const theme: Op = { op: "set_theme", theme: "dark" };
 const open: Op = { op: "open", target: "screen", ref: "jobs" };
+
+const jsonBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
+/** Document ids as the core makes them: 32 hex characters. */
+const docIdOf = (i: number) => i.toString(16).padStart(32, "0");
+const planContext: PlanContext = { today: "2026-11-11", language: "ko", folders: [], doc_types: [], schemas: [], tags: [], current_folder: null, selected_doc_ids: [], current_document: null, current_page: null, document_count: 0, model_ids: [], projects: [], current_project: null, history: [] };
+const planResult: Omit<PlanResult, "plan"> = { text: "", source: "model", issues: [], date: null, attempts: 1, model: "gemma4-e4b-q5km", prompt_tokens: 900, completion_tokens: 40 };
+const tagPlan: Plan = { intent: "tag", scope: {}, operations: [{ op: "tag", add: ["2025"] }], requires_confirmation: true, confidence: 0.9, summary: "태그 2025을(를) 추가합니다" };
+
+type NewPlanCard = Extract<NewMessage, { kind: "plan" }>;
+
+/** A "월별 폴더로 옮겨" plan card over `count` receipts as the planner returns it: the preview lists every file. */
+function organisePlanCard(count: number): NewPlanCard {
+  const items: OrganizeItem[] = Array.from({ length: count }, (_, i) => {
+    const n = String(i + 1).padStart(5, "0");
+    const name = `2026-10-03 한빛소프트 유지보수 견적서 ${n}.pdf`;
+    return { doc_id: docIdOf(i), name, from: `inbox/2026-10/스캔 문서/${name}`, to: `documents/2026/10/견적서/2026-10-03_견적서_한빛소프트_12500000_${n}.pdf`, status: "move", reason: null, missing: [] };
+  });
+  const plan: Plan = { intent: "move", scope: { filter: { doc_type: "estimate" } }, operations: [{ op: "move", folder: "documents/{{year}}/{{month}}/{{doc_type}}", group_by: "month" }], requires_confirmation: true, confidence: 0.86, summary: "견적서을(를) 월별 폴더로 이동합니다" };
+  const preview: OrganizePlan = { items, moves: count, unchanged: 0, held: 0, missing_files: 0, needs_review: 0, name_template: null, folder_template: "documents/{{year}}/{{month}}/{{doc_type}}", only_reviewed: true };
+  return {
+    role: "assistant",
+    kind: "plan",
+    text: "견적서 월별 폴더로 옮겨",
+    response: {
+      result: { ...planResult, text: "견적서 월별 폴더로 옮겨", plan },
+      preview: { document_count: count, document_ids: items.map((i) => i.doc_id), steps: [{ index: 0, op: "move", summary: "", payload: preview, confirm: true }], requires_confirmation: true },
+      context: { ...planContext, document_count: count },
+    },
+    plan,
+    context: {},
+    status: "pending",
+    errors: null,
+    editing: false,
+  };
+}
 
 async function settled(): Promise<void> {
   for (let i = 0; i < 50 && useAssistantStore.getState().hydrating; i += 1) await new Promise((r) => setTimeout(r, 0));
@@ -451,6 +491,154 @@ describe("assistant store", () => {
     expect(after.push(sid, { role: "user", text: "fine" })).toBeGreaterThan(3);
     await flushChatWrites();
     expect(fake.state.messages[sid]!.slice(0, 3).map((r) => (r.payload as { text: string }).text)).toEqual(["stored 1", "stored 2", "stored 3"]);
+  });
+
+  // CON-16: the preview of a file-op plan lists every file. Above ~5,000 documents the card is more than the
+  // 2,000,000 bytes `chat_message_put` takes: it was not stored (a console warning only) and was gone from
+  // the chat after a restart.
+  it("stores a plan card whose preview lists thousands of files: the first rows and the counts", async () => {
+    const sid = await boundTo("C:\\Work\\Docs");
+    const s = useAssistantStore.getState();
+    s.push(sid, { role: "user", text: "견적서 월별 폴더로 옮겨" });
+    const card = organisePlanCard(6_000);
+    expect(jsonBytes(card)).toBeGreaterThan(2_000_000);
+    const id = s.push(sid, card);
+    await flushChatWrites();
+    expect(fake.state.log.filter((l) => l.startsWith("too large"))).toEqual([]);
+    expect(fake.state.messages[sid]!.map((r) => r.seq)).toContain(id);
+    // The card on screen is not touched: every row is there until the app closes.
+    const live = selectMessages(useAssistantStore.getState()).find((m) => m.id === id) as PlanMessage;
+    expect((live.response.preview!.steps[0]!.payload as OrganizePlan).items).toHaveLength(6_000);
+    expect(live.clipped).toBeUndefined();
+
+    resetAssistant();
+    await boundTo("C:\\Work\\Docs");
+    const restored = selectMessages(useAssistantStore.getState()).find((m) => m.id === id) as PlanMessage;
+    expect(restored).toMatchObject({ kind: "plan", status: "pending", clipped: "lists" });
+    // The plan itself is whole — it can still be approved — and so are the numbers of its preview.
+    expect(restored.plan).toEqual(card.plan);
+    expect(restored.response.result.plan).toEqual(card.plan);
+    expect(restored.response.preview).toMatchObject({ document_count: 6_000, document_ids_total: 6_000 });
+    const payload = restored.response.preview!.steps[0]!.payload as OrganizePlan & { items_total: number };
+    expect(payload).toMatchObject({ moves: 6_000, held: 0, unchanged: 0, items_total: 6_000 });
+    expect(payload.items).toEqual((card.response.preview!.steps[0]!.payload as OrganizePlan).items.slice(0, 200));
+    // Approved after the restart, the stored card keeps what it has: the totals are not counted again from the rows.
+    useAssistantStore.getState().patch(sid, id, (m) => (m.role === "assistant" && m.kind === "plan" ? { ...m, status: "done" } : m));
+    await flushChatWrites();
+    const stored = fake.state.messages[sid]!.find((r) => r.seq === id)!.payload as PlanMessage;
+    expect(stored).toMatchObject({ status: "done", clipped: "lists" });
+    expect(stored.response.preview!.steps[0]!.payload).toMatchObject({ items_total: 6_000 });
+  });
+
+  it("stores a result card with thousands of moved files, keeping what its buttons need", async () => {
+    const sid = await boundTo("C:\\Work\\Docs");
+    const plan = organisePlanCard(6_000);
+    const items = (plan.response.preview!.steps[0]!.payload as OrganizePlan).items.map((item) => ({ ...item, status: "done" as const }));
+    const execution: PlanExecution = {
+      steps: [{ index: 0, op: "move", status: "done", summary: "6,000건 이동", payload: { batch_id: "b1", moved: 6_000, held: 0, failed: [], items }, elapsed_ms: 1 }],
+      cancelled: false,
+      documents: items.map((i) => i.doc_id),
+      ui_actions: [theme],
+      batches: ["b1"],
+    };
+    const id = useAssistantStore.getState().push(sid, { role: "assistant", kind: "result", text: plan.text, response: plan.response, plan: plan.plan, execution });
+    await flushChatWrites();
+    expect(fake.state.log.filter((l) => l.startsWith("too large"))).toEqual([]);
+    resetAssistant();
+    await boundTo("C:\\Work\\Docs");
+    const restored = selectMessages(useAssistantStore.getState()).find((m) => m.id === id) as Extract<Message, { kind: "result" }>;
+    expect(restored).toMatchObject({ kind: "result", clipped: "lists" });
+    // Undo works from the batch id; the UI ops and the plan are whole.
+    expect(restored.execution).toMatchObject({ batches: ["b1"], ui_actions: [theme], cancelled: false, documents_total: 6_000 });
+    expect(restored.plan).toEqual(plan.plan);
+    const payload = restored.execution.steps[0]!.payload as { items: unknown[] };
+    expect(payload).toMatchObject({ batch_id: "b1", moved: 6_000, items_total: 6_000, failed: [] });
+    expect(payload.items).toHaveLength(200);
+  });
+
+  it("a plan on more selected documents than a message can hold is stored as a record that cannot run", async () => {
+    const sid = await boundTo("C:\\Work\\Docs");
+    const ids = Array.from({ length: 30_000 }, (_, i) => docIdOf(i));
+    const plan: Plan = { ...tagPlan, scope: { doc_ids: ids } };
+    const card: NewPlanCard = {
+      role: "assistant",
+      kind: "plan",
+      text: "선택 문서에 태그 '2025' 달아줘",
+      response: {
+        result: { ...planResult, text: "선택 문서에 태그 '2025' 달아줘", plan },
+        preview: { document_count: ids.length, document_ids: ids, steps: [{ index: 0, op: "tag", summary: "문서 30000건", payload: { documents: ids.length }, confirm: true }], requires_confirmation: true },
+        context: { ...planContext, selected_doc_ids: ids },
+      },
+      plan,
+      context: { selected_doc_ids: ids },
+      status: "pending",
+      errors: null,
+      editing: true,
+    };
+    const id = useAssistantStore.getState().push(sid, card);
+    await flushChatWrites();
+    expect(fake.state.log.filter((l) => l.startsWith("too large"))).toEqual([]);
+    // In this session the card is whole and can be approved.
+    expect(selectMessages(useAssistantStore.getState()).find((m) => m.id === id)).toMatchObject({ status: "pending", plan: { scope: { doc_ids: ids } } });
+    resetAssistant();
+    await boundTo("C:\\Work\\Docs");
+    const restored = selectMessages(useAssistantStore.getState()).find((m) => m.id === id) as PlanMessage;
+    // After a restart it is a record: the ids are a count, so nothing may run from it.
+    expect(restored).toMatchObject({ kind: "plan", status: "cancelled", editing: false, clipped: "all", text: "선택 문서에 태그 '2025' 달아줘" });
+    expect(restored.plan.scope).toMatchObject({ doc_ids_total: 30_000 });
+    expect(restored.plan.scope.doc_ids).toEqual(ids.slice(0, 10));
+    expect(restored.plan.operations).toEqual(plan.operations);
+    expect(restored.response.preview).toMatchObject({ document_count: 30_000 });
+    // Once it ran in this session, the record says so.
+    resetAssistant();
+    fake.reset();
+    const again = await boundTo("C:\\Work\\Docs");
+    const ran = useAssistantStore.getState().push(again, card);
+    useAssistantStore.getState().patch(again, ran, (m) => (m.role === "assistant" && m.kind === "plan" ? { ...m, status: "done", editing: false } : m));
+    await flushChatWrites();
+    expect(fake.state.messages[again]!.find((r) => r.seq === ran)!.payload).toMatchObject({ status: "done", clipped: "all" });
+  });
+
+  it("a message that is too large in one text is stored cut, not dropped", async () => {
+    const sid = await boundTo("C:\\Work\\Docs");
+    // Ten UTF-16 units per repetition, the emoji's two at 7–8: the 20,000th unit is the first half of an emoji.
+    const pasted = `가나${"가나다라마바사😀 ".repeat(80_000)}`;
+    expect(pasted.charCodeAt(19_999)).toBe(0xd83d);
+    expect(jsonBytes({ role: "user", text: pasted })).toBeGreaterThan(2_000_000);
+    const id = useAssistantStore.getState().push(sid, { role: "user", text: pasted });
+    await flushChatWrites();
+    expect(fake.state.log.filter((l) => l.startsWith("too large"))).toEqual([]);
+    const stored = fake.state.messages[sid]!.find((r) => r.seq === id)!.payload as { text: string; clipped?: string };
+    expect(stored.clipped).toBe("all");
+    expect(stored.text.endsWith("…")).toBe(true);
+    expect(pasted.startsWith(stored.text.slice(0, -1))).toBe(true);
+    // Whole characters only: half of a surrogate pair is not valid JSON for the backend.
+    expect(stored.text).toHaveLength(20_000);
+    expect(/[\ud800-\udbff](?![\udc00-\udfff])/.test(stored.text)).toBe(false);
+    expect(jsonBytes(stored)).toBeLessThan(2_000_000);
+  });
+
+  it("storedMessage leaves a message that fits as it is, and never cuts what a card runs with", () => {
+    const small = { ...organisePlanCard(20), id: 7 } as PlanMessage;
+    const stored = storedMessage(small) as PlanMessage;
+    expect(stored.clipped).toBeUndefined();
+    expect(stored.response.preview).toEqual(small.response.preview);
+    expect(stored.plan).toEqual(small.plan);
+    // 12,000 selected documents and their preview rows: over the limit as it is, but the lists that are only
+    // shown go first — the scope, the context the plan runs with and the interpreted plan are whole.
+    const ids = Array.from({ length: 12_000 }, (_, i) => docIdOf(i));
+    const base = organisePlanCard(12_000);
+    const plan: Plan = { ...base.plan, scope: { doc_ids: ids } };
+    const big = { ...base, id: 8, plan, context: { selected_doc_ids: ids }, response: { ...base.response, result: { ...base.response.result, plan }, context: { ...base.response.context, selected_doc_ids: ids } } } as PlanMessage;
+    expect(jsonBytes(big)).toBeGreaterThan(2_000_000);
+    const cut = storedMessage(big) as PlanMessage;
+    expect(cut).toMatchObject({ clipped: "lists", status: "pending" });
+    expect(cut.plan).toEqual(plan);
+    expect(cut.context).toEqual({ selected_doc_ids: ids });
+    expect(cut.response.result.plan).toEqual(plan);
+    expect(cut.response.context).toMatchObject({ selected_doc_ids_total: 12_000 });
+    expect(cut.response.context.selected_doc_ids.length).toBeLessThan(12_000);
+    expect(jsonBytes(cut)).toBeLessThan(2_000_000);
   });
 
   it("restoreMessage drops rows that are not messages", () => {

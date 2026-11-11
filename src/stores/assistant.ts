@@ -12,7 +12,19 @@ export type PlanStatus = "pending" | "executing" | "done" | "cancelled";
 /** Clarification card lifecycle: waiting for the user's reply, replied to (되묻기), or cancelled. */
 export type ClarifyStatus = "pending" | "answered" | "cancelled";
 
-export type Message =
+/**
+ * Set on the stored copy of a message that was too large to be stored whole (`storedMessage`) — so on a
+ * message read back after a restart, never on one made in this session:
+ * - `lists`: the lists that are only shown (the rows of a preview or of a result, id lists nothing reads) hold
+ *   their first rows, and `<name>_total` next to a list says how many there were. The plan, its scope and
+ *   what the card's buttons need are whole.
+ * - `all`: even that did not fit. Every long list — the document ids of a scope included — and every long
+ *   text is cut. The message is a record: nothing may run from it again (a plan that was waiting for
+ *   approval is stored as cancelled).
+ */
+export type Clipped = "lists" | "all";
+
+export type Message = { clipped?: Clipped } & (
   | { id: number; createdAt?: string; role: "user"; text: string; attachments?: { id: string; name: string }[] }
   /** UI ops that ran at once. `failures`: the errors of the ops that failed (absent = all ran), `ran`: how many did run. */
   | { id: number; createdAt?: string; role: "assistant"; kind: "executed"; text: string; source: string; confidence: number; failures?: string[]; ran?: number }
@@ -35,7 +47,8 @@ export type Message =
   | { id: number; createdAt?: string; role: "assistant"; kind: "clarify"; text: string; response: PlanResponse; status: ClarifyStatus }
   /** "근거만 찾기" (0.5.0): the hits of a knowledge search, no model call. */
   | { id: number; createdAt?: string; role: "assistant"; kind: "evidence"; query: string; mode: SearchMode; response: SearchResponse | null; error: unknown; pending: boolean }
-  | { id: number; createdAt?: string; role: "assistant"; kind: "error"; text: string };
+  | { id: number; createdAt?: string; role: "assistant"; kind: "error"; text: string }
+);
 
 export type PlanMessage = Extract<Message, { kind: "plan" }>;
 
@@ -165,7 +178,7 @@ function withoutHistory<T extends { history?: unknown }>(ctx: T): T {
  * conversation history their `context` and `response.context` carry (otherwise every card would store every
  * earlier turn again).
  */
-function storable(m: Message): unknown {
+function storable(m: Message): Message {
   if (m.role !== "assistant") return m;
   if (m.kind === "answer" || m.kind === "evidence") return { ...m, error: storableError(m.error) };
   if (m.kind === "plan") return { ...m, context: withoutHistory(m.context), response: { ...m.response, context: withoutHistory(m.response.context) } };
@@ -173,6 +186,119 @@ function storable(m: Message): unknown {
     return { ...m, response: { ...m.response, context: withoutHistory(m.response.context) } };
   }
   return m;
+}
+
+/**
+ * What a stored message may take. `chat_message_put` refuses a message above 2,000,000 bytes of JSON
+ * (`src-tauri/src/commands/knowledge.rs`); the budget leaves room to spare, since the backend measures its
+ * own serialisation.
+ */
+const STORED_BUDGET_BYTES = 1_500_000;
+/** Rows kept of a list that is only shown, tried in this order until the message fits. */
+const KEPT_ROWS = [200, 50, 10] as const;
+/** A record (`Clipped` "all") keeps this many entries of every list and this many characters of every text (tried in this order). */
+const RECORD_ROWS = 10;
+const RECORD_CHARS = [20_000, 2_000, 200] as const;
+
+function fitsStore(value: unknown): boolean {
+  const json = JSON.stringify(value) ?? "";
+  // A UTF-16 unit is at most three bytes of UTF-8: most messages need no counting.
+  return json.length * 3 <= STORED_BUDGET_BYTES || new TextEncoder().encode(json).length <= STORED_BUDGET_BYTES;
+}
+
+/** The first `chars` characters of a long text (never half of a surrogate pair — that is not valid JSON for the backend). */
+function cutText(text: string, chars: number): string {
+  if (text.length <= chars) return text;
+  const last = text.charCodeAt(chars - 1);
+  return `${text.slice(0, last >= 0xd800 && last <= 0xdbff ? chars - 1 : chars)}…`;
+}
+
+/**
+ * `value` with every list longer than `rows` cut to its first `rows` entries (and every text longer than
+ * `chars`, when given). A cut list that is a property gets `<key>_total` next to it: how many there were.
+ */
+function clip(value: unknown, rows: number, chars = Number.POSITIVE_INFINITY): unknown {
+  if (typeof value === "string") return cutText(value, chars);
+  if (Array.isArray(value)) return (value.length > rows ? value.slice(0, rows) : value).map((v) => clip(v, rows, chars));
+  if (typeof value !== "object" || value === null) return value;
+  const record = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [key, v] of Object.entries(record)) out[key] = clip(v, rows, chars);
+  for (const [key, v] of Object.entries(record)) {
+    if (!Array.isArray(v) || v.length <= rows) continue;
+    // A list cut before (a message read back and written again) keeps the total it came with.
+    const known = record[`${key}_total`];
+    out[`${key}_total`] = Math.max(v.length, typeof known === "number" ? known : 0);
+  }
+  return out;
+}
+
+/** The steps of a preview / an execution with the lists of each payload cut (the steps themselves stay). */
+function clipSteps<T extends { payload: unknown }>(steps: T[], rows: number): T[] {
+  return Array.isArray(steps) ? steps.map((s) => ({ ...s, payload: clip(s.payload, rows) })) : steps;
+}
+
+/** A preview with its lists cut: the document ids and the rows of each step's payload. */
+function clipPreview<T extends PlanPreview | null | undefined>(preview: T, rows: number): T {
+  if (!preview) return preview;
+  const { steps, ...rest } = preview;
+  return { ...(clip(rest, rows) as typeof rest), steps: clipSteps(steps, rows) } as T;
+}
+
+/** A planner response with the lists that are only shown cut: its preview and the selection its context echoes. */
+function clipResponse(response: PlanResponse, rows: number): PlanResponse {
+  const context = response.context ? { ...response.context, ...(clip({ selected_doc_ids: response.context.selected_doc_ids }, rows) as { selected_doc_ids: string[] }) } : response.context;
+  return { ...response, preview: clipPreview(response.preview, rows), context };
+}
+
+/**
+ * The message with the lists cut that are only shown — never the plan, its scope, the context it runs with,
+ * the undo batches or the UI ops of an execution: what a card does after a restart is what it did before.
+ * The same object when the message has no such list.
+ */
+function withClippedLists(m: Message, rows: number): Message {
+  if (m.role !== "assistant") return m;
+  switch (m.kind) {
+    case "plan":
+      return { ...m, response: clipResponse(m.response, rows), ...(m.preview ? { preview: clipPreview(m.preview, rows) } : {}) };
+    case "execution":
+    case "clarify":
+      return { ...m, response: clipResponse(m.response, rows) };
+    case "result": {
+      const { steps, ui_actions, batches, ...rest } = m.execution;
+      const execution: PlanExecution = { ...(clip(rest, rows) as typeof rest), steps: clipSteps(steps, rows), ui_actions, batches };
+      return { ...m, response: clipResponse(m.response, rows), execution };
+    }
+    default:
+      return m;
+  }
+}
+
+/**
+ * The message as `chat_message_put` gets it. The backend takes 2,000,000 bytes per message; a card above
+ * that was not stored at all and was gone from the chat after a restart (CON-16) — the preview of a file
+ * op lists every file, about 400 bytes each. So a message over the budget is stored smaller (`Clipped`):
+ * first with the lists that are only shown cut to their first rows — the counts beside them are those of
+ * the whole — and, when it is the document ids of the scope itself (or one long text) that do not fit, as a
+ * record nothing runs from. The message on screen stays whole either way.
+ */
+export function storedMessage(m: Message): Message {
+  const whole = storable(m);
+  if (fitsStore(whole)) return whole;
+  for (const rows of KEPT_ROWS) {
+    const lists = withClippedLists(whole, rows);
+    if (lists === whole) break;
+    const cut: Message = { ...lists, clipped: whole.clipped === "all" ? "all" : "lists" };
+    if (fitsStore(cut)) return cut;
+  }
+  let record = whole;
+  for (const chars of RECORD_CHARS) {
+    record = { ...(clip(whole, RECORD_ROWS, chars) as Message), clipped: "all" };
+    if (fitsStore(record)) break;
+  }
+  // The ids of its scope are a count now: a plan that was waiting cannot be approved from this copy.
+  if (record.role === "assistant" && record.kind === "plan" && (record.status === "pending" || record.status === "executing")) return { ...record, status: "cancelled", editing: false };
+  return record;
 }
 
 const INTERRUPTED = { code: "chat_interrupted", message: "chat_interrupted" };
@@ -257,7 +383,7 @@ function writeNow(key: string, slot: WriteSlot): void {
     return;
   }
   slot.inflight = api
-    .chatMessagePut(slot.sessionId, m.id, storable(m))
+    .chatMessagePut(slot.sessionId, m.id, storedMessage(m))
     .then(
       () => undefined,
       (e: unknown) => console.warn("chat message not stored", e),

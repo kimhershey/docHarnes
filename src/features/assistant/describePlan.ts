@@ -363,9 +363,18 @@ export interface AgentStepDetail {
   openProject?: string | null;
 }
 
+/**
+ * How many entries the list `record[key]` has — or had: a card that was too large to store whole keeps the
+ * first rows of a long list and the number of all of them in `<key>_total` (`storedMessage`, CON-16).
+ */
+export function listTotal(record: Record<string, unknown>, key: string): number {
+  const list = record[key];
+  return Math.max(Array.isArray(list) ? list.length : 0, num(record[`${key}_total`]));
+}
+
 export function agentStepDetail(op: OpKind, payload: unknown, t: TFunction): AgentStepDetail | null {
   if (!isRecord(payload)) return null;
-  const docs = Array.isArray(payload.documents) ? payload.documents.length : null;
+  const docs = Array.isArray(payload.documents) ? listTotal(payload, "documents") : null;
   const dt = (key: string, vars?: Record<string, unknown>) => t(`planner.result.detail.${key}`, vars);
   switch (op) {
     case "rotate":
@@ -374,10 +383,10 @@ export function agentStepDetail(op: OpKind, payload: unknown, t: TFunction): Age
       return { text: dt("rerender", { documents: docs ?? 0 }) };
     case "split": {
       const created = Array.isArray(payload.created) ? (payload.created as unknown[]).map(String) : [];
-      return { text: dt("split", { count: created.length }), openDocument: created[0] ?? null };
+      return { text: dt("split", { count: listTotal(payload, "created") }), openDocument: created[0] ?? null };
     }
     case "merge":
-      return { text: dt("merge", { count: Array.isArray(payload.sources) ? payload.sources.length : 0 }), openDocument: str(payload.document_id) };
+      return { text: dt("merge", { count: listTotal(payload, "sources") }), openDocument: str(payload.document_id) };
     case "set_title":
       return { text: dt("set_title", { documents: docs ?? 0 }) };
     case "edit_text":
@@ -516,7 +525,13 @@ export function uiContextFor(
 // ---------------------------------------------------------------------------
 
 export interface OrganizePreviewRows {
+  /** The rows to show: files that move or are held back. */
   items: OrganizeItem[];
+  /**
+   * How many such rows the plan has. More than `items` on a card that was stored with the first rows of its
+   * lists only (`storedMessage`): the counters are those of the whole plan.
+   */
+  total: number;
   moves: number;
   held: number;
   unchanged: number;
@@ -525,7 +540,8 @@ export interface OrganizePreviewRows {
 export function organizePreview(step: StepPreview | undefined): OrganizePreviewRows | null {
   if (!step || !isRecord(step.payload) || !Array.isArray(step.payload.items)) return null;
   const p = step.payload as unknown as OrganizePlan;
-  return { items: p.items.filter((i) => i.status === "move" || i.status === "held"), moves: num(p.moves), held: num(p.held), unchanged: num(p.unchanged) };
+  const items = p.items.filter((i) => i.status === "move" || i.status === "held");
+  return { items, total: Math.max(items.length, num(p.moves) + num(p.held)), moves: num(p.moves), held: num(p.held), unchanged: num(p.unchanged) };
 }
 
 export function exportPreview(step: StepPreview | undefined): ExportPreview | null {
@@ -636,6 +652,8 @@ export interface OrganizeOutcome {
   held: number;
   failed: number;
   items: OrganizeItem[];
+  /** How many rows the step reported (more than `items` on a card stored with the first rows only). */
+  total: number;
 }
 
 export interface ResultActions {
@@ -708,8 +726,9 @@ export function deriveResultActions(execution: PlanExecution, plan: Plan): Resul
             batchId: str(payload.batch_id),
             moved: num(payload.moved),
             held: num(payload.held),
-            failed: Array.isArray(payload.failed) ? payload.failed.length : num(payload.failed),
+            failed: Array.isArray(payload.failed) ? listTotal(payload, "failed") : num(payload.failed),
             items: (payload.items as unknown[]).filter(isRecord) as unknown as OrganizeItem[],
+            total: listTotal(payload, "items"),
           });
         }
         break;

@@ -265,6 +265,10 @@
     "executed": "실행했습니다",
     "executed_partial": "일부만 실행했습니다",
     "executed_failed": "실행하지 못했습니다",
+    "clipped": {
+      "lists": "카드가 커서 목록은 앞부분만 보관했습니다. 건수는 전체 기준입니다.",
+      "all": "카드가 너무 커서 요약만 보관했습니다. 문서 목록이 일부뿐이라 이 카드에서 다시 실행하거나 계산할 수 없습니다."
+    },
     "date_resolved": "날짜 범위 해석: {{from}} ~ {{to}} ({{label}})",
     "source_slash": "슬래시 명령",
     "source_phrase": "문장 규칙",

@@ -798,7 +798,8 @@ export function AssistantPage() {
                       onCitation={(c) => openCitation(navigate, c)}
                       // "일반 지식으로 답하기": the stored request again — the scope (and history) of the original
                       // question, not what the selector shows by now (KNO-13) — with general knowledge allowed.
-                      onAskGeneral={() => void askKnowledge(sid, m.request.question, { ...m.request, allow_general: true, keep_chunks: [] })}
+                      // Not from a record (CON-16): its request was cut to fit, the scope's documents included.
+                      onAskGeneral={m.clipped === "all" ? undefined : () => void askKnowledge(sid, m.request.question, { ...m.request, allow_general: true, keep_chunks: [] })}
                       onFeedback={(id, v) => void feedback(sid, m.id, id, v)}
                       onCancel={m.pending && cancelling !== m.requestId ? () => cancelAnswer(m.requestId) : undefined}
                     />
@@ -815,6 +816,7 @@ export function AssistantPage() {
                     // An edit drops the preview of the plan before it; the card fetches the one of the edited plan
                     // and hands it back (PLN-14).
                     editedPreview={m.preview}
+                    clipped={m.clipped}
                     onPreview={(preview) => patchPlan(sid, m.id, (x) => ({ ...x, preview }), true)}
                     onChange={(plan) => patchPlan(sid, m.id, (x) => ({ ...x, plan, errors: null, preview: undefined }), true)}
                     onExecute={() => void execute(sid, m.id)}
@@ -839,8 +841,9 @@ export function AssistantPage() {
                     }}
                   />
                 )}
-                {m.kind === "execution" && <ExecutionCard jobId={m.jobId} plan={m.plan} response={m.response} uiResults={m.uiResults} onFinished={onJobFinished} />}
-                {m.kind === "result" && <ResultCard execution={m.execution} plan={m.plan} response={m.response} uiResults={m.uiResults} />}
+                {/* The execution card's result comes from the job book, whole: only a record (`all`) is marked. */}
+                {m.kind === "execution" && <ExecutionCard jobId={m.jobId} plan={m.plan} response={m.response} uiResults={m.uiResults} onFinished={onJobFinished} clipped={m.clipped === "all" ? "all" : undefined} />}
+                {m.kind === "result" && <ResultCard execution={m.execution} plan={m.plan} response={m.response} uiResults={m.uiResults} clipped={m.clipped} />}
                 {m.kind === "clarify" && (
                   <ClarifyCard
                     question={clarificationQuestion(m.response.result.plan) || t("planner.clarify.fallback")}

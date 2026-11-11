@@ -13,12 +13,13 @@ import { retentionShortens } from "@/lib/commands";
 import { api } from "@/lib/ipc";
 import type { OrganizeItem, Plan, PlanIssue, PlanPreview, PlanResponse, StepPreview } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import type { PlanStatus } from "@/stores/assistant";
+import type { Clipped, PlanStatus } from "@/stores/assistant";
 import { useSettingsStore, useShortcut } from "@/stores/settings";
 import { useWorkspaceStore } from "@/stores/workspace";
 
 import { describeExportError, describeOrganizeError } from "@/features/organize/errors";
 
+import { ClippedNote } from "./ClippedNote";
 import { exportPreview, impactLine, impactOf, onlyReviewedValue, opLabel, organizePreview, requiresConfirmation, ruleDraftPreview, sourceLabel, summarizeOp, warningIssues, withOnlyReviewed } from "./describePlan";
 import { PlanEditor } from "./PlanEditor";
 import { planKey, previewEditedPlan, previewFailure } from "./repreview";
@@ -29,8 +30,12 @@ const PREVIEW_ROWS = 3;
 /** An edited plan is previewed this long after the last edit (the editor patches the plan per keystroke). */
 const REPREVIEW_DELAY_MS = 350;
 
-/** Organise diff preview: first rows of `payload.items` (from → to), held rows marked, "전체 보기" expands. */
-export function OrganizeDiff({ items, index }: { items: OrganizeItem[]; index: number }) {
+/**
+ * Organise diff preview: first rows of `payload.items` (from → to), held rows marked, "전체 보기" expands.
+ * `total`: how many rows the plan has when `items` is only the first of them (a card read back after it was
+ * stored smaller, CON-16) — the count line then reads "200 / 6000".
+ */
+export function OrganizeDiff({ items, index, total }: { items: OrganizeItem[]; index: number; total?: number }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   if (items.length === 0) return null;
@@ -38,7 +43,7 @@ export function OrganizeDiff({ items, index }: { items: OrganizeItem[]; index: n
   return (
     <div className="mt-1 flex flex-col gap-1 text-xs" data-testid={`plan-preview-${index}`}>
       <div className="flex items-center gap-2 text-fg-subtle">
-        <span>{t("planner.card.preview_count", { shown: shown.length, total: items.length })}</span>
+        <span data-testid="plan-preview-count">{t("planner.card.preview_count", { shown: shown.length, total: Math.max(items.length, total ?? 0) })}</span>
         {items.length > PREVIEW_ROWS && (
           <button type="button" className="text-accent hover:underline cursor-pointer" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded} data-testid="plan-preview-expand">
             {expanded ? t("planner.card.show_less") : t("planner.card.show_all")}
@@ -128,7 +133,7 @@ function StepPreviewView({ step, index }: { step: StepPreview | undefined; index
       {organise && (
         <>
           <span className="text-xs text-fg-muted">{t("planner.card.organize_summary", { moves: organise.moves, held: organise.held, unchanged: organise.unchanged })}</span>
-          <OrganizeDiff items={organise.items} index={index} />
+          <OrganizeDiff items={organise.items} total={organise.total} index={index} />
         </>
       )}
       {exp && (
@@ -163,6 +168,7 @@ export function PlanCard({
   onAskBack,
   editedPreview,
   onPreview,
+  clipped,
 }: {
   response: PlanResponse;
   plan: Plan;
@@ -181,6 +187,8 @@ export function PlanCard({
   editedPreview?: PlanPreview | null;
   /** The preview of the edited plan arrived: the owner keeps it with the plan (and drops it at the next edit). */
   onPreview?: (preview: PlanPreview) => void;
+  /** The card was read back from a copy stored smaller than it was (CON-16): it says so. */
+  clipped?: Clipped;
 }) {
   const { t, i18n } = useTranslation();
   const [reply, setReply] = useState("");
@@ -318,6 +326,7 @@ export function PlanCard({
           )}
         </p>
       )}
+      <ClippedNote clipped={clipped} />
       {onlyReviewed !== null && (
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <label className="flex items-center gap-2">

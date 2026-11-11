@@ -106,6 +106,9 @@ export async function mockChat(cmd: string, a: Record<string, any>): Promise<unk
       return [...(s.messages[String(a.sessionId)] ?? [])].sort((x, y) => x.seq - y.seq);
     }
     case "chat_message_put": {
+      // `commands/knowledge.rs`: a message above 2,000,000 bytes of JSON is refused (the UI stores a large
+      // card smaller — `storedMessage` — so this must not happen).
+      if (new TextEncoder().encode(JSON.stringify(a.payload) ?? "").length > 2_000_000) throw err("invalid", "chat_message_too_large");
       const id = String(a.sessionId ?? "");
       if (!id.trim()) return false;
       const seq = Number(a.seq);

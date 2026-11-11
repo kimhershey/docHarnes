@@ -11,6 +11,7 @@ import { describeJobDetail, describeJobError } from "@/features/jobs/describe";
 import type { UiOpResult } from "@/lib/commands";
 import { describeError } from "@/lib/errors";
 import { SCREEN_ROUTES, isJobFinished, type Job, type Plan, type PlanExecution, type PlanResponse } from "@/lib/types";
+import type { Clipped } from "@/stores/assistant";
 import { useJob, useJobsStore } from "@/stores/jobs";
 import { useUiStore } from "@/stores/ui";
 
@@ -39,10 +40,13 @@ export function ExecutionCard({
   response,
   uiResults,
   onFinished,
+  clipped,
 }: {
   jobId: string;
   plan: Plan;
   response: PlanResponse;
+  /** `all`: the card is a record, read back from a copy without the document ids of the plan's scope (CON-16). */
+  clipped?: Clipped;
   /** What became of the job's `ui_actions` once the page ran them (shown on the result part). */
   uiResults?: UiOpResult[] | null;
   /**
@@ -196,7 +200,7 @@ export function ExecutionCard({
           </div>
         </>
       )}
-      {finished && execution && <ResultCard execution={execution} plan={plan} response={response} error={job.state === "failed" ? error : null} uiResults={uiResults} />}
+      {finished && execution && <ResultCard execution={execution} plan={plan} response={response} error={job.state === "failed" ? error : null} uiResults={uiResults} clipped={clipped} />}
       {finished && !execution && !resultSettled && (
         <span className="flex items-center gap-2 text-xs text-fg-muted" role="status" data-testid="execution-result-loading">
           <Spinner />

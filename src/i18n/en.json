@@ -265,6 +265,10 @@
     "executed": "Done",
     "executed_partial": "Partly done",
     "executed_failed": "Failed",
+    "clipped": {
+      "lists": "This card was large, so only the first rows of its lists were kept. The counts are those of the whole.",
+      "all": "This card was too large to keep: only a summary was stored. Its document list is partial, so nothing can be run or counted again from it."
+    },
     "date_resolved": "Date range: {{from}} – {{to}} ({{label}})",
     "source_slash": "slash command",
     "source_phrase": "phrase rule",

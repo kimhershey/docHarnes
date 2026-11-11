@@ -16,10 +16,12 @@ import { runJournal, type UiOpResult } from "@/lib/commands";
 import { revealPath } from "@/lib/ipc";
 import { SCREEN_ROUTES, type Draft, type OpKind, type OrganizeItem, type Plan, type PlanExecution, type PlanResponse, type StepStatus, type UndoReport } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import type { Clipped } from "@/stores/assistant";
 import { useGenerateStore } from "@/stores/generate";
 import { usePipelineStore } from "@/stores/pipeline";
 
 import { AggregateCard } from "./AggregateCard";
+import { ClippedNote } from "./ClippedNote";
 import { agentStepDetail, aggregateRequestFor, deriveResultActions, opLabel, uiResultsByStep } from "./describePlan";
 
 function StatusIcon({ status }: { status: StepStatus }) {
@@ -111,6 +113,7 @@ export function ResultCard({
   response,
   error,
   uiResults,
+  clipped,
 }: {
   execution: PlanExecution;
   plan: Plan;
@@ -118,6 +121,11 @@ export function ResultCard({
   error?: string | null;
   /** What became of the execution's `ui_actions` (absent until the UI ran them): a failed one fails its step and the card. */
   uiResults?: UiOpResult[] | null;
+  /**
+   * The card was read back from a copy stored smaller than it was (CON-16): it says so, and as a record
+   * (`all` — the document ids of the plan's scope are a count) it does not offer to count anything again.
+   */
+  clipped?: Clipped;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -132,6 +140,8 @@ export function ResultCard({
   const outcome = execution.cancelled ? "cancelled" : actions.failed || error || uiFailed ? "failed" : "done";
   const undoBatch = actions.batches[actions.batches.length - 1] ?? null;
   const moveItems = actions.organise.flatMap((o) => o.items);
+  // The number of files, also when the card holds the first rows only.
+  const moveTotal = actions.organise.reduce((n, o) => n + o.total, 0);
   const context = response?.context ?? null;
 
   const undo = async () => {
@@ -220,7 +230,7 @@ export function ResultCard({
           )}
           {moveItems.length > 0 && (
             <Button size="sm" variant="outline" aria-pressed={showMoves} onClick={() => setShowMoves((v) => !v)} data-testid="result-toggle-moves">
-              {t("planner.result.moves")} ({moveItems.length})
+              {t("planner.result.moves")} ({moveTotal})
             </Button>
           )}
           {undoBatch && (
@@ -279,7 +289,8 @@ export function ResultCard({
         </div>
       ))}
       {actions.aggregates.map((a) => (
-        <AggregateCard key={a.index} result={a.result} request={a.op ? aggregateRequestFor(a.op, plan.scope, a.result.include_unreviewed) : null} summary={plan.summary ?? execution.steps[a.index]?.summary ?? ""} context={context} />
+        // Counting again takes the plan's scope: not offered on a record, whose document ids are a count.
+        <AggregateCard key={a.index} result={a.result} request={a.op && clipped !== "all" ? aggregateRequestFor(a.op, plan.scope, a.result.include_unreviewed) : null} summary={plan.summary ?? execution.steps[a.index]?.summary ?? ""} context={context} />
       ))}
       {actions.drafts.map((d) => (
         <div key={d.index} className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-bg p-2 text-xs" data-testid="result-draft">
@@ -341,6 +352,7 @@ export function ResultCard({
           </Button>
         </div>
       ))}
+      <ClippedNote clipped={clipped} />
       <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
     </div>
   );

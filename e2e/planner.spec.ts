@@ -411,6 +411,57 @@ test.describe("P5 planner", () => {
     await move.getByTestId("plan-cancel").click();
   });
 
+  // CON-16: a plan card over thousands of files is more than the 2,000,000 bytes a stored message may have;
+  // it is stored with the first rows of its lists and the counts of all (`storedMessage`, covered by the store
+  // tests). Read back, the card shows the numbers of the whole plan and can still be approved.
+  test("a plan card read back from a smaller stored copy shows the counts of the whole plan", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서-1p.jpg"], { autoLevel: "none" });
+    await processReceipt(page);
+    await approveReceipt(page);
+    await openAssistant(page);
+    await send(page, "견적서 월별 폴더로 옮겨");
+    await expect(assistantCard(page, "plan").last()).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    await page.waitForTimeout(500);
+    // The stored copy of the same plan over 6,000 files, as `storedMessage` writes it: 200 rows, the totals beside them.
+    await page.evaluate(() => {
+      type Row = { payload: { kind?: string; clipped?: string; response: { preview: { document_count: number; document_ids: string[]; document_ids_total?: number; steps: { payload: { items: { doc_id: string; from: string }[]; items_total?: number; moves: number } }[] } } } };
+      const all = JSON.parse(localStorage.getItem("doculens.mock.chat") ?? "{}") as Record<string, { messages: Record<string, Row[]> }>;
+      for (const workspace of Object.values(all)) {
+        for (const row of Object.values(workspace.messages).flat()) {
+          const p = row.payload;
+          if (p.kind !== "plan") continue;
+          const payload = p.response.preview.steps[0]!.payload;
+          const first = payload.items[0]!;
+          payload.items = Array.from({ length: 200 }, (_, i) => (i === 0 ? first : { ...first, doc_id: `${first.doc_id}-${i}`, from: first.from.replace(".jpg", `-${i}.jpg`) }));
+          payload.items_total = 6000;
+          payload.moves = 6000;
+          p.response.preview.document_count = 6000;
+          p.response.preview.document_ids_total = 6000;
+          p.clipped = "lists";
+        }
+      }
+      localStorage.setItem("doculens.mock.chat", JSON.stringify(all));
+    });
+    await page.reload();
+    await expect(page.getByTestId("app-shell")).toBeVisible();
+    await openAssistant(page);
+    const plan = assistantCard(page, "plan").last();
+    await expect(plan).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    await expect(plan.getByTestId("plan-step-0")).toContainText(tpl(ko.planner.card.organize_summary, { moves: 6000, held: 0, unchanged: 0 }));
+    await expect(plan.getByTestId("plan-preview-count")).toHaveText(tpl(ko.planner.card.preview_count, { shown: 3, total: 6000 }));
+    await expect(plan.getByTestId("plan-impact")).toContainText(tpl(ko.planner.card.impact_moves, { count: 6000 }));
+    await expect(plan.getByTestId("card-clipped")).toHaveText(ko.assistant.clipped.lists);
+    await plan.getByTestId("plan-preview-expand").click();
+    await expect(plan.getByTestId("plan-preview-count")).toHaveText(tpl(ko.planner.card.preview_count, { shown: 200, total: 6000 }));
+    await expect(plan.getByTestId("plan-preview-row")).toHaveCount(200);
+    // The plan itself was stored whole: it runs (over the one file this workspace really has).
+    await plan.getByTestId("plan-execute").click();
+    await expect(plan).toHaveAttribute("data-plan-status", "done", { timeout: 15_000 });
+    await expect(assistantCard(page, "result").last()).toHaveAttribute("data-result-status", "done", { timeout: 20_000 });
+  });
+
   // KNO-11: the execution card reported a finished job to the page every time it mounted, so the failure
   // toast of an old job came back whenever its chat was opened again.
   test("a failed job is announced once: reopening its chat does not toast again", async ({ page }) => {
