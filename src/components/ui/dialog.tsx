@@ -44,8 +44,8 @@ const DialogContent = React.forwardRef<React.ElementRef<typeof DialogPrimitive.C
         {...props}
       >
         {/* The space under the last child is a spacer (`::after`, its negative margin cancels the grid gap) and not
-            padding: a sticky box stays inside the scroll box's padding, so with `pb-6` the footer would stop 1.5 rem
-            above the dialog's edge. `scroll-pb`: a field scrolled into view (focus, Tab) stops above the footer. */}
+            padding: a sticky box is kept inside the scroll box's content edge, so with `pb-6` the footer would stop
+            1.5 rem above the dialog's edge. `scroll-pb`: a field scrolled into view (focus, Tab) stops above the footer. */}
         <div className="grid min-h-0 grid-cols-[minmax(0,1fr)] gap-4 overflow-y-auto scroll-pb-20 px-6 pt-6 after:-mt-4 after:block after:h-6 after:content-['']" data-dialog-body="">
           {children}
         </div>
