@@ -1285,6 +1285,84 @@ fn editions_are_searchable_again_once_their_latest_edition_is_gone() {
     assert_eq!(groups[0].documents.iter().map(|d| d.document_id.as_str()).collect::<Vec<_>>(), vec!["reg2", "reg0"]);
 }
 
+/// PRJ-16: looking at a project's reference group does not create it. The screen gets an unsaved group under
+/// the id the group will have; the row is written when the first document is added — opening a project used
+/// to leave an empty group behind (one more in the settings' list for every project ever opened).
+#[test]
+fn a_project_reference_group_is_written_on_first_use_not_when_it_is_shown() {
+    use crate::projects::{repo as projects, ProjectInput};
+    let w = World::new();
+    let project =
+        w.db.with(|c| projects::save_project(c, &ProjectInput { name: "한빛 납품".into(), ..Default::default() }))
+            .unwrap();
+    // What the project screen asks for when it opens.
+    let shown = w.db.with_read(|c| repo::peek_project_reference_group(c, &project.id)).unwrap();
+    assert_eq!(
+        (shown.kind, shown.project_id.as_deref(), shown.name.as_str(), shown.active, shown.doc_count),
+        (CollectionKind::Project, Some(project.id.as_str()), "한빛 납품", true, 0)
+    );
+    assert_eq!(shown.id, repo::project_group_id(&project.id));
+    assert!(w.db.with(repo::list_collections).unwrap().is_empty(), "nothing was written");
+    assert_eq!(w.db.with(repo::index_status).unwrap().collections, 0);
+    assert!(w.db.with(|c| repo::reference_group_of_project(c, &project.id)).unwrap().is_none());
+    // The id works wherever a collection id goes: it is a valid target and reads as an empty group.
+    assert!(w.db.with(|c| repo::collection_exists(c, &shown.id)).unwrap());
+    assert!(w.db.with(|c| repo::collection_documents(c, &shown.id)).unwrap().is_empty());
+    assert_eq!(w.db.with(|c| repo::remove_docs_from_collection(c, &shown.id, &["sec".into()])).unwrap(), 0);
+    let scope = SearchScope { collections: vec![shown.id.clone()], ..SearchScope::default() };
+    assert!(w.db.with(|c| repo::scope_doc_ids(c, &scope)).unwrap().unwrap().is_empty());
+    // The first document writes the group — under the same id, so what the screen holds stays valid.
+    assert_eq!(w.db.with(|c| repo::add_docs_to_collection(c, &shown.id, &["sec".into()])).unwrap(), 1);
+    let stored = w.db.with(|c| repo::reference_group_of_project(c, &project.id)).unwrap().unwrap();
+    assert_eq!((stored.id.as_str(), stored.kind, stored.name.as_str(), stored.doc_count), (shown.id.as_str(), CollectionKind::Project, "한빛 납품", 1));
+    assert_eq!(w.db.with_read(|c| repo::peek_project_reference_group(c, &project.id)).unwrap(), stored);
+    assert!(w.db.with(|c| repo::project_reference_doc_ids(c, &project.id)).unwrap().contains("sec"));
+    assert_eq!(w.db.with(repo::list_collections).unwrap().len(), 1);
+    // The writing variant (planner, "참고 자료로 넣기") and a group made through the form use that id as well.
+    let second =
+        w.db.with(|c| projects::save_project(c, &ProjectInput { name: "두 번째".into(), ..Default::default() })).unwrap();
+    let created = w.db.with(|c| repo::project_reference_group(c, &second.id, &second.name)).unwrap();
+    assert_eq!(created.id, repo::project_group_id(&second.id));
+    let third =
+        w.db.with(|c| projects::save_project(c, &ProjectInput { name: "세 번째".into(), ..Default::default() })).unwrap();
+    let via_form =
+        w.db.with(|c| {
+            repo::save_collection(
+                c,
+                &CollectionInput { name: "임시".into(), project_id: Some(third.id.clone()), ..CollectionInput::default() },
+            )
+        })
+        .unwrap();
+    assert_eq!(via_form.id, repo::project_group_id(&third.id));
+    // A group from before 0.8.0 keeps its random id; the derived id is then not a collection.
+    let old =
+        w.db.with(|c| projects::save_project(c, &ProjectInput { name: "예전 프로젝트".into(), ..Default::default() }))
+            .unwrap();
+    w.db.with(|c| {
+        c.execute(
+            "INSERT INTO collections (id, name, active, kind, project_id, created_at, updated_at) \
+             VALUES ('legacy-group', '예전 프로젝트', 1, 'project', ?1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [&old.id],
+        )
+    })
+    .unwrap();
+    assert_eq!(w.db.with_read(|c| repo::peek_project_reference_group(c, &old.id)).unwrap().id, "legacy-group");
+    let derived = repo::project_group_id(&old.id);
+    assert!(!w.db.with(|c| repo::collection_exists(c, &derived)).unwrap());
+    let err = w.db.with(|c| repo::add_docs_to_collection(c, &derived, &["sec".into()])).unwrap_err();
+    assert!(err.to_string().contains("collection_not_found"), "{err}");
+    // Unknown projects and made-up ids are still errors.
+    assert!(!w.db.with(|c| repo::collection_exists(c, "pg-nope")).unwrap());
+    let err = w.db.with(|c| repo::add_docs_to_collection(c, "pg-nope", &["sec".into()])).unwrap_err();
+    assert!(err.to_string().contains("collection_not_found"), "{err}");
+    let err = w.db.with_read(|c| repo::peek_project_reference_group(c, "nope")).unwrap_err();
+    assert!(err.to_string().contains("project_not_found"), "{err}");
+    // Deleting the project takes its group along, written or not.
+    assert!(w.db.with(|c| projects::delete_project(c, &project.id)).unwrap());
+    assert!(w.db.with(|c| repo::get_collection(c, &shown.id)).unwrap().is_none());
+    assert!(!w.db.with(|c| repo::collection_exists(c, &shown.id)).unwrap());
+}
+
 /// KNO-6: chunks indexed while an embedding run is busy are embedded by that run — it used to stop at the
 /// number of chunks pending when it started and leave the new documents without vectors.
 #[test]

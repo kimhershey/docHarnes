@@ -57,8 +57,14 @@ fn typed(code: &str) -> rusqlite::Error {
     rusqlite::Error::InvalidParameterName(code.to_string())
 }
 
-pub fn collection_exists(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
+fn collection_stored(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
     conn.query_row("SELECT COUNT(*) FROM collections WHERE id = ?1", [id], |r| r.get::<_, i64>(0)).map(|n| n > 0)
+}
+
+/// Whether documents can be put into the collection `id`: a stored collection, or the reference group
+/// of a project that has not been written yet (it is, when its first document arrives).
+pub fn collection_exists(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
+    Ok(collection_stored(conn, id)? || pending_project_group(conn, id)?.is_some())
 }
 
 pub fn document_exists(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
@@ -141,8 +147,9 @@ pub fn save_collection(conn: &Connection, input: &CollectionInput) -> rusqlite::
             id.clone()
         }
         None => {
-            let id = new_id();
             let project_id = new_project;
+            // A project's group has a predictable id (see `project_group_id`).
+            let id = project_id.map(project_group_id).unwrap_or_else(new_id);
             let kind = if project_id.is_some() { CollectionKind::Project } else { CollectionKind::Reference };
             if let Some(p) = project_id {
                 let exists: i64 = conn.query_row("SELECT COUNT(*) FROM projects WHERE id = ?1", [p], |r| r.get(0))?;
@@ -188,8 +195,67 @@ fn group_name(project_name: &str) -> &str {
     }
 }
 
+/// Id of the reference group of a project that has none yet. It is derived from the project id, so the
+/// group can be named before it exists: looking at a project ([`peek_project_reference_group`]) hands out
+/// an unsaved group under this id, and the row is written under the same id when the first document
+/// arrives ([`add_docs_to_collection`]). Groups created before 0.8.0 keep the random id they have.
+pub fn project_group_id(project_id: &str) -> String {
+    format!("{PROJECT_GROUP_PREFIX}{project_id}")
+}
+
+const PROJECT_GROUP_PREFIX: &str = "pg-";
+
+/// The project `(id, name)` whose reference group `collection_id` would be, when that group is not
+/// written yet. `None` for any other id, an unknown project, or a project that already has a group.
+fn pending_project_group(conn: &Connection, collection_id: &str) -> rusqlite::Result<Option<(String, String)>> {
+    let Some(project_id) = collection_id.strip_prefix(PROJECT_GROUP_PREFIX) else { return Ok(None) };
+    let name: Option<String> =
+        conn.query_row("SELECT name FROM projects WHERE id = ?1", [project_id], |r| r.get(0)).optional()?;
+    let Some(name) = name else { return Ok(None) };
+    if reference_group_of_project(conn, project_id)?.is_some() {
+        return Ok(None);
+    }
+    Ok(Some((project_id.to_string(), name)))
+}
+
+fn insert_project_group(conn: &Connection, id: &str, project_id: &str, project_name: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO collections (id, name, description, color, active, kind, project_id, created_at, updated_at) \
+         VALUES (?1, ?2, NULL, NULL, 1, 'project', ?3, ?4, ?4)",
+        params![id, group_name(project_name), project_id, now()],
+    )?;
+    Ok(())
+}
+
+/// The reference group of a project as the screen shows it, without creating anything: the stored group,
+/// or — for a project that has none yet — an unsaved, empty group under [`project_group_id`]. Opening a
+/// project must not leave an empty group behind (it used to count in the settings' group list).
+pub fn peek_project_reference_group(conn: &Connection, project_id: &str) -> rusqlite::Result<Collection> {
+    if let Some(group) = reference_group_of_project(conn, project_id)? {
+        return Ok(group);
+    }
+    let name: Option<String> =
+        conn.query_row("SELECT name FROM projects WHERE id = ?1", [project_id], |r| r.get(0)).optional()?;
+    let Some(name) = name else { return Err(typed("project_not_found")) };
+    let now = Utc::now();
+    Ok(Collection {
+        id: project_group_id(project_id),
+        name: group_name(&name).to_string(),
+        description: None,
+        color: None,
+        active: true,
+        kind: CollectionKind::Project,
+        project_id: Some(project_id.to_string()),
+        created_at: now,
+        updated_at: now,
+        doc_count: 0,
+        chunk_count: 0,
+    })
+}
+
 /// The reference group of a project (0.5.0 plan A), created on first use and named after the
-/// project (`project_name`; a later rename follows through `sync_reference_group_name`).
+/// project (`project_name`; a later rename follows through `sync_reference_group_name`). Use it where
+/// the group is about to receive documents; to merely show it, [`peek_project_reference_group`].
 pub fn project_reference_group(
     conn: &Connection,
     project_id: &str,
@@ -202,14 +268,8 @@ pub fn project_reference_group(
     if exists == 0 {
         return Err(typed("project_not_found"));
     }
-    let name = group_name(project_name);
-    let id = new_id();
-    let now = now();
-    conn.execute(
-        "INSERT INTO collections (id, name, description, color, active, kind, project_id, created_at, updated_at) \
-         VALUES (?1, ?2, NULL, NULL, 1, 'project', ?3, ?4, ?4)",
-        params![id, name, project_id, now],
-    )?;
+    let id = project_group_id(project_id);
+    insert_project_group(conn, &id, project_id, project_name)?;
     get_collection(conn, &id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
 }
 
@@ -268,9 +328,14 @@ pub fn collection_doc_ids(conn: &Connection, id: &str) -> rusqlite::Result<Vec<S
     Ok(rows)
 }
 
+/// Adds documents to a collection. The reference group of a project is written here on first use when the
+/// screen so far only held its unsaved form ([`peek_project_reference_group`]).
 pub fn add_docs_to_collection(conn: &Connection, id: &str, doc_ids: &[String]) -> rusqlite::Result<u32> {
-    if !collection_exists(conn, id)? {
-        return Err(typed("collection_not_found"));
+    if !collection_stored(conn, id)? {
+        match pending_project_group(conn, id)? {
+            Some((project_id, name)) => insert_project_group(conn, id, &project_id, &name)?,
+            None => return Err(typed("collection_not_found")),
+        }
     }
     let now = now();
     let mut st = conn

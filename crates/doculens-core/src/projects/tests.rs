@@ -1511,6 +1511,35 @@ fn inbox_subfolders_map_to_projects() {
     );
 }
 
+/// PRJ-16: the inbox subfolder → project mapping ignores letter case. On Windows "inbox/Hanbit" and
+/// "inbox/hanbit" are one folder; a second spelling used to create a second project.
+#[test]
+fn inbox_mapping_ignores_letter_case() {
+    let db = db();
+    for (id, path) in [("h1", "inbox/Hanbit/a.pdf"), ("h2", "inbox/hanbit/b.pdf"), ("h3", "inbox/HANBIT/c.pdf")] {
+        insert_inbox_doc(&db, id, path);
+    }
+    let pid = assign_inbox_document(&db, "h1", "inbox/Hanbit/a.pdf", true).unwrap().unwrap();
+    assert_eq!(assign_inbox_document(&db, "h2", "inbox/hanbit/b.pdf", true).unwrap().as_deref(), Some(pid.as_str()));
+    assert_eq!(assign_inbox_document(&db, "h3", "inbox/HANBIT/c.pdf", false).unwrap().as_deref(), Some(pid.as_str()));
+    let projects = db.with(repo::list_projects).unwrap();
+    assert_eq!(projects.len(), 1, "{:?}", projects.iter().map(|p| &p.name).collect::<Vec<_>>());
+    assert_eq!((projects[0].inbox_folder.as_deref(), projects[0].document_count), (Some("Hanbit"), 3));
+    // Two mappings that differ in case only (an older workspace): the exact spelling wins.
+    let lower = db
+        .with(|c| {
+            repo::save_project(
+                c,
+                &ProjectInput { name: "hanbit 2".into(), inbox_folder: Some("hanbit".into()), ..Default::default() },
+            )
+        })
+        .unwrap();
+    insert_inbox_doc(&db, "h4", "inbox/hanbit/d.pdf");
+    insert_inbox_doc(&db, "h5", "inbox/Hanbit/e.pdf");
+    assert_eq!(assign_inbox_document(&db, "h4", "inbox/hanbit/d.pdf", true).unwrap(), Some(lower.id.clone()));
+    assert_eq!(assign_inbox_document(&db, "h5", "inbox/Hanbit/e.pdf", true).unwrap(), Some(pid));
+}
+
 #[test]
 fn normalisation_helpers() {
     use check::{normalize, normalize_name, Norm};

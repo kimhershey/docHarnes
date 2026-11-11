@@ -80,19 +80,13 @@ pub fn delete(app: &AppHandle, id: &str) -> UiResult<bool> {
     Ok(ok)
 }
 
-/// The project's reference group (참고 자료 묶음; 0.5.0 plan A), created on first use.
+/// The project's reference group (참고 자료 묶음; 0.5.0 plan A) as the project screen shows it. Nothing is
+/// created here: a project without a group gets an unsaved, empty one under the id the group will have,
+/// and the row is written when the first document is added to it (`add_docs_to_collection`) — opening a
+/// project used to leave an empty group in the settings' list.
 pub fn reference_group(app: &AppHandle, id: &str) -> UiResult<Collection> {
     let pctx = pipeline_bridge::context(app)?;
-    let (group, created) = pctx.db().with(|c| {
-        let existing = knowledge_repo::reference_group_of_project(c, id)?;
-        let name = repo::get_project(c, id)?.map(|p| p.name).unwrap_or_default();
-        let group = knowledge_repo::project_reference_group(c, id, &name)?;
-        Ok((group, existing.is_none()))
-    })?;
-    if created {
-        knowledge_bridge::emit_changed(app, "collections", vec![group.id.clone()]);
-    }
-    Ok(group)
+    pctx.db().with_read(|c| knowledge_repo::peek_project_reference_group(c, id)).map_err(UiError::from)
 }
 
 pub fn get(app: &AppHandle, id: &str) -> UiResult<ProjectDetail> {

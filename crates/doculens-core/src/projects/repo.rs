@@ -1325,19 +1325,28 @@ pub fn inbox_folder_of(rel_path: &str) -> Option<String> {
 }
 
 /// Maps a document imported from an inbox subfolder to the project with that
-/// `inbox_folder` (when `create` is set: else a project named like the folder is mapped, else
-/// one is created with the folder name). Returns the project id when the document is a member
-/// afterwards.
+/// `inbox_folder` — compared without letter case — (when `create` is set: else a project named
+/// like the folder is mapped, else one is created with the folder name). Returns the project id
+/// when the document is a member afterwards.
 pub fn assign_inbox_document(db: &Db, doc_id: &str, rel_path: &str, create: bool) -> Result<Option<String>> {
     let Some(folder) = inbox_folder_of(rel_path) else { return Ok(None) };
     db.with(|c| {
-        let existing: Option<String> = c
-            .query_row(
-                "SELECT id FROM projects WHERE inbox_folder = ?1 ORDER BY updated_at DESC LIMIT 1",
-                [&folder],
-                |r| r.get(0),
-            )
-            .optional()?;
+        // Folder names are matched without letter case: on Windows "inbox/Hanbit" and "inbox/hanbit" are
+        // one folder, and a second spelling must not become a second project. The exact spelling wins
+        // where an older workspace holds both.
+        let mapped: Vec<(String, String)> = {
+            let mut st = c.prepare_cached(
+                "SELECT id, inbox_folder FROM projects WHERE inbox_folder IS NOT NULL ORDER BY updated_at DESC, name",
+            )?;
+            let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        let key = folder.to_lowercase();
+        let existing: Option<String> = mapped
+            .iter()
+            .find(|(_, f)| *f == folder)
+            .or_else(|| mapped.iter().find(|(_, f)| documents::nfc(f).to_lowercase() == key))
+            .map(|(id, _)| id.clone());
         let project_id = match existing {
             Some(id) => id,
             // A project already named like the folder (and not mapped to another folder) takes
