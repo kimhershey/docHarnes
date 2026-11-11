@@ -118,6 +118,24 @@ test.describe("P0 shell", () => {
     await expect(page.getByTestId("retention-chats_days")).toHaveValue("30");
   });
 
+  test("settings: every select has an accessible name (언어, 애니메이션 줄이기, 자동 처리 수준 둘)", async ({ page }) => {
+    await freshShell(page);
+    await onboard(page);
+    await page.getByTestId("nav-settings").click();
+    // The trigger is named by its row's label — a screen reader used to announce only the value ("한국어").
+    await expect(page.getByRole("combobox", { name: "언어", exact: true })).toHaveAttribute("data-testid", "language-select");
+    await expect(page.getByRole("combobox", { name: "애니메이션 줄이기", exact: true })).toBeVisible();
+    await page.getByTestId("settings-tab-processing").click();
+    await expect(page.getByRole("combobox", { name: "가져오기 후 자동 처리", exact: true })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "inbox 감시 자동 처리", exact: true })).toHaveAttribute("data-testid", "settings-inbox-auto-level");
+    // No select on these two tabs is left without a name.
+    for (const tab of ["general", "processing"]) {
+      await page.getByTestId(`settings-tab-${tab}`).click();
+      const unnamed = await page.getByRole("combobox").evaluateAll((els) => els.filter((el) => !el.getAttribute("aria-label") && !el.getAttribute("aria-labelledby")).length);
+      expect(unnamed, tab).toBe(0);
+    }
+  });
+
   test("설정 > AI 모델 lists the registry (behind 고급) and switches tier manually", async ({ page }) => {
     await freshShell(page);
     await onboard(page);

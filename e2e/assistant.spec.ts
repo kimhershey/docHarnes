@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { createWorkspace, docId, freshApp, importViaLibrary, openAssistantScreen } from "./helpers";
+import { card, createWorkspace, docId, freshApp, importViaLibrary, openAssistantScreen } from "./helpers";
 
 import ko from "../src/i18n/ko.json" with { type: "json" };
 
@@ -298,6 +298,73 @@ test.describe("assistant chat sessions", () => {
     await expect(evidence).toHaveCount(2);
     await expect(evidence.last()).toHaveAttribute("data-pending", "false", { timeout: 15_000 });
     await expect(evidence.last().locator(`[data-testid="evidence-hit"][data-doc-id="${guide}"]`)).toHaveCount(0);
+  });
+
+  // KNO-5: a plan that is a single question dropped the scope it names — "회의록에서 …" searched every
+  // document, since only `scope.doc_ids` / `scope.folder` reached the knowledge request.
+  test("a question that names a document type finds evidence in the documents of that type only; a scope without documents says so", async ({ page }) => {
+    test.setTimeout(60_000);
+    await freshApp(page);
+    await createWorkspace(page);
+    // Two documents of different types whose text both carry the word the questions ask about ("한빛").
+    await importViaLibrary(page, ["D:\\scan\\한빛_견적서.pdf", "D:\\scan\\한빛_회의록.pdf"], { autoLevel: "none" });
+    for (const name of ["한빛_견적서.pdf", "한빛_회의록.pdf"]) await page.getByTestId(`doc-select-${await docId(page, name)}`).check();
+    await page.getByTestId("library-process").click();
+    await page.getByTestId("library-process-classify").click();
+    await expect(card(page, "한빛_회의록.pdf")).toContainText(ko.documents.doc_types.meeting_minutes, { timeout: 15_000 });
+    await expect(card(page, "한빛_견적서.pdf")).toContainText(ko.documents.doc_types.estimate, { timeout: 15_000 });
+    const sources = (answer: ReturnType<typeof answerCards>) => answer.locator("details ol");
+
+    // No scope in the sentence: both documents are evidence.
+    await openAssistantScreen(page);
+    await send(page, "한빛 내용은?");
+    const everywhere = answerCards(page).nth(0);
+    await expect(everywhere).toHaveAttribute("data-answer-state", "done", { timeout: 15_000 });
+    await expect(sources(everywhere)).toContainText("한빛_견적서.pdf");
+    await expect(sources(everywhere)).toContainText("한빛_회의록.pdf");
+
+    // "회의록에서 …": the documents of that type only.
+    await send(page, "회의록에서 한빛 내용은?");
+    const minutes = answerCards(page).nth(1);
+    await expect(minutes).toHaveAttribute("data-answer-state", "done", { timeout: 15_000 });
+    await expect(minutes.getByTestId("answer-source").first()).toBeVisible();
+    await expect(sources(minutes)).toContainText("한빛_회의록.pdf");
+    await expect(sources(minutes)).not.toContainText("한빛_견적서.pdf");
+
+    // A type no document has: "no evidence" for that scope — not a search over everything — and nothing to
+    // repeat with general knowledge.
+    await send(page, "검수확인서에서 한빛 내용은?");
+    const none = answerCards(page).nth(2);
+    await expect(none).toHaveAttribute("data-answer-state", "no_evidence", { timeout: 15_000 });
+    await expect(none.getByTestId("answer-no-evidence")).toHaveText(ko.assistant.scope.no_documents);
+    await expect(none.getByTestId("answer-ask-general")).toHaveCount(0);
+    await expect(none.getByTestId("answer-source")).toHaveCount(0);
+
+    // The card is stored as it is: the same note after a restart.
+    await page.reload();
+    await expect(page.getByTestId("app-shell")).toBeVisible();
+    await openAssistantScreen(page);
+    await expect(answerCards(page)).toHaveCount(3, { timeout: 15_000 });
+    await expect(answerCards(page).nth(2).getByTestId("answer-no-evidence")).toHaveText(ko.assistant.scope.no_documents);
+    await expect(sources(answerCards(page).nth(1))).not.toContainText("한빛_견적서.pdf");
+  });
+
+  // KNO-3: a pasted text that does not fit was cut silently; the answer card says so now (`Answer.truncated`).
+  test("an answer whose text was cut says so under the answer", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openAssistantScreen(page);
+    // Short enough: no note.
+    await send(page, "다음 문장을 다듬어 정리해줘: 금번 과업은 당사가 수행하며 기한은 12월말까지로 하고 산출물은 설계서와 소스코드로 함. 검수는 발주처가 납품 후 2주 내에 완료하는 것으로 한다.");
+    const short = answerCards(page).nth(0);
+    await expect(short).toHaveAttribute("data-answer-state", "done", { timeout: 15_000 });
+    await expect(short.getByTestId("answer-truncated")).toHaveCount(0);
+    // Longer than the (mock) model context: only the beginning was processed.
+    await send(page, `다음 문장을 다듬어 정리해줘: ${"금번 과업은 당사가 수행하며 기한은 12월말까지로 하고 산출물은 설계서와 소스코드로 함. ".repeat(140)}`);
+    const long = answerCards(page).nth(1);
+    await expect(long).toHaveAttribute("data-answer-state", "done", { timeout: 30_000 });
+    await expect(long.getByTestId("answer-truncated")).toHaveText(ko.answer.truncated_input);
+    await expect(long.getByTestId("answer-truncated")).toHaveAttribute("data-truncated", "input");
   });
 
   test("the input waits for the sessions and the composer sends into the active one", async ({ page }) => {
