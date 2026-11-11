@@ -20,6 +20,9 @@
 // Read-only. Uses the GitHub CLI (`gh api`; GH_TOKEN on Actions) with the REST endpoints
 // git/matching-refs/tags/<tag> (an empty list means "no such tag", so nothing depends on error texts) and
 // git/tags/<sha> (peels an annotated tag).
+//
+// The script always runs its check when started: there is deliberately no "only when executed directly" test,
+// because a guard that could end up doing nothing would exit 0 and let the publish through.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -70,19 +73,19 @@ function ghApi(apiPath, attempts = 3) {
 }
 
 /** The commit `refs/tags/<tag>` points at, or null when the tag does not exist. */
-export function tagCommit(repo, tag, api = ghApi) {
-  const refs = api(`repos/${repo}/git/matching-refs/tags/${tag}`);
+function tagCommit(repo, tag) {
+  const refs = ghApi(`repos/${repo}/git/matching-refs/tags/${tag}`);
   if (!Array.isArray(refs)) throw new Error("unexpected answer from git/matching-refs");
   const ref = refs.find((r) => r?.ref === `refs/tags/${tag}`); // the endpoint matches by prefix (v0.8.0 → v0.8.0-rc1 too)
   if (!ref) return null;
   let object = ref.object;
-  for (let hop = 0; object?.type === "tag" && hop < 5; hop++) object = api(`repos/${repo}/git/tags/${object.sha}`).object;
+  for (let hop = 0; object?.type === "tag" && hop < 5; hop++) object = ghApi(`repos/${repo}/git/tags/${object.sha}`)?.object;
   if (object?.type !== "commit" || !SHA.test(object.sha ?? "")) throw new Error(`refs/tags/${tag} does not resolve to a commit`);
   return object.sha;
 }
 
-/** Decides from the two commits; pure, so the rules are testable without the network. */
-export function decide({ tag, built, tagged, allowOverwrite }) {
+/** Decides from the built commit and the commit the tag points at (null = no such tag). */
+function decide({ tag, built, tagged, allowOverwrite }) {
   if (tagged === null) return { ok: true, level: "info", message: `tag ${tag} does not exist yet — a new Release will be created at ${built}` };
   if (tagged === built) return { ok: true, level: "info", message: `tag ${tag} already points at the built commit ${built} — same source, assets may be added or replaced` };
   const what = `tag ${tag} points at ${tagged}, but this run builds ${built}`;
@@ -118,12 +121,11 @@ function main(argv) {
   return verdict.ok ? 0 : 1;
 }
 
-// Run only when executed directly (the helpers are importable for tests) — the same check as scripts/fetch-engine.mjs.
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try {
-    process.exitCode = main(process.argv.slice(2));
-  } catch (e) {
-    say("error", `${e.message} — refusing to publish because the tag could not be checked`);
-    process.exitCode = 1;
-  }
+// Any failure to reach a verdict is a refusal (exit code 1), never a pass. The exit code is set before the check
+// runs, and process.exitCode (not process.exit) lets the output drain when stdout is a pipe.
+process.exitCode = 1;
+try {
+  process.exitCode = main(process.argv.slice(2));
+} catch (e) {
+  say("error", `${e.message} — refusing to publish because the tag could not be checked`);
 }
