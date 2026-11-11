@@ -152,14 +152,12 @@ fn path_taken(
         return Ok(true);
     }
     let registered: i64 =
-        conn.query_row("SELECT COUNT(*) FROM documents WHERE rel_path = ?1 COLLATE NOCASE", [candidate], |r| {
-            r.get(0)
-        })?;
+        conn.query_row("SELECT COUNT(*) FROM documents WHERE rel_path = ?1 COLLATE NOCASE", [candidate], |r| r.get(0))?;
     if registered > 0 {
         return Ok(true);
     }
-    let mut st = conn
-        .prepare_cached("SELECT document_id, project_id FROM document_copies WHERE rel_path = ?1 COLLATE NOCASE")?;
+    let mut st =
+        conn.prepare_cached("SELECT document_id, project_id FROM document_copies WHERE rel_path = ?1 COLLATE NOCASE")?;
     let owners: Vec<(String, String)> =
         st.query_map([candidate], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
     let own = |(d, p): &(String, String)| *d == doc.id && *p == project.id;

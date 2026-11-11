@@ -1479,7 +1479,8 @@ mod tests {
     /// used to leave "s: none" behind, which was shown as a conflict warning.
     #[test]
     fn the_plural_conflicts_heading_is_stripped_whole() {
-        for none in ["Conflicts: none", "Conflicts: None.", "**Conflicts:** none", "conflicts: none", "Conflicts : N/A"] {
+        for none in ["Conflicts: none", "Conflicts: None.", "**Conflicts:** none", "conflicts: none", "Conflicts : N/A"]
+        {
             let (_, c) = parse_answer(&format!("Answer [1].\n\n{none}"), 1);
             assert!(c.is_none(), "{none:?} → {c:?}");
         }
@@ -1645,7 +1646,8 @@ mod tests {
 
         // A request that dies without a result is an error, not a hang.
         let stop = Arc::new(AtomicBool::new(false));
-        let died: Result<()> = wait_or_abandon("test-answer", &stop, &|| false, || panic!("worker died (expected in this test)"));
+        let died: Result<()> =
+            wait_or_abandon("test-answer", &stop, &|| false, || panic!("worker died (expected in this test)"));
         assert!(died.unwrap_err().to_string().contains("ended without a result"));
     }
 

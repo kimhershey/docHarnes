@@ -387,8 +387,11 @@ impl Env<'_> {
                 return vec![r];
             }
             // A document that was never extracted has no fields at all: its values are unknown, not missing.
-            let (status, gap) =
-                if d.doc.last_run_id.is_none() { ("not_extracted", Gap::NotExtracted) } else { ("absent", Gap::Absent) };
+            let (status, gap) = if d.doc.last_run_id.is_none() {
+                ("not_extracted", Gap::NotExtracted)
+            } else {
+                ("absent", Gap::Absent)
+            };
             return vec![Resolved {
                 evidence: Evidence { status: Some(status.into()), ..base },
                 value: None,
@@ -772,12 +775,9 @@ impl Env<'_> {
         let le = Some(l.evidence.clone());
         match (l.gap, &l.value) {
             // Review pending, or nothing extracted yet: the value may well be there.
-            (Some(gap @ (Gap::Pending | Gap::NotExtracted)), _) => Outcome {
-                verdict: Verdict::Undetermined,
-                left: le,
-                right: None,
-                message: gap_message(ko, l, gap),
-            },
+            (Some(gap @ (Gap::Pending | Gap::NotExtracted)), _) => {
+                Outcome { verdict: Verdict::Undetermined, left: le, right: None, message: gap_message(ko, l, gap) }
+            }
             (Some(Gap::Unparsable), _) => Outcome {
                 verdict: Verdict::Pass,
                 left: le,

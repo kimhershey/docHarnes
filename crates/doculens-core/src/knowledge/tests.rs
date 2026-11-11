@@ -913,8 +913,7 @@ fn collections_glossary_and_version_crud() {
         .unwrap();
     assert_eq!(g2.id, g.id, "case-insensitive upsert");
     let words = |s: &str| s.split_whitespace().map(str::to_lowercase).collect::<Vec<_>>();
-    let exp =
-        db.with(|x| repo::glossary_expansions(x, "세금 없음", &["세금".into(), "없음".into()], &words)).unwrap();
+    let exp = db.with(|x| repo::glossary_expansions(x, "세금 없음", &["세금".into(), "없음".into()], &words)).unwrap();
     assert_eq!(exp, vec![("세금".to_string(), vec!["VAT".to_string()])], "term keeps its original spelling");
     assert!(db.with(|x| repo::delete_glossary(x, g.id)).unwrap());
 
@@ -1251,7 +1250,8 @@ fn editions_are_searchable_again_once_their_latest_edition_is_gone() {
         })
         .unwrap()
     };
-    let is_latest = |w: &World, doc: &str| w.db.with(|c| repo::get_version(c, doc)).unwrap().is_some_and(|v| v.is_latest);
+    let is_latest =
+        |w: &World, doc: &str| w.db.with(|c| repo::get_version(c, doc)).unwrap().is_some_and(|v| v.is_latest);
     // A third, older edition (2022) joins the 2023 / 2024 editions of the fixture.
     add_doc(&w.db, "reg0", "출장비규정_2022.pdf", DocumentRole::Knowledge, &[REGULATION_V1]);
     index_pending(&w.index_deps(), None, false, None, &mut |_| {}).unwrap();
@@ -1314,22 +1314,31 @@ fn a_project_reference_group_is_written_on_first_use_not_when_it_is_shown() {
     // The first document writes the group — under the same id, so what the screen holds stays valid.
     assert_eq!(w.db.with(|c| repo::add_docs_to_collection(c, &shown.id, &["sec".into()])).unwrap(), 1);
     let stored = w.db.with(|c| repo::reference_group_of_project(c, &project.id)).unwrap().unwrap();
-    assert_eq!((stored.id.as_str(), stored.kind, stored.name.as_str(), stored.doc_count), (shown.id.as_str(), CollectionKind::Project, "한빛 납품", 1));
+    assert_eq!(
+        (stored.id.as_str(), stored.kind, stored.name.as_str(), stored.doc_count),
+        (shown.id.as_str(), CollectionKind::Project, "한빛 납품", 1)
+    );
     assert_eq!(w.db.with_read(|c| repo::peek_project_reference_group(c, &project.id)).unwrap(), stored);
     assert!(w.db.with(|c| repo::project_reference_doc_ids(c, &project.id)).unwrap().contains("sec"));
     assert_eq!(w.db.with(repo::list_collections).unwrap().len(), 1);
     // The writing variant (planner, "참고 자료로 넣기") and a group made through the form use that id as well.
     let second =
-        w.db.with(|c| projects::save_project(c, &ProjectInput { name: "두 번째".into(), ..Default::default() })).unwrap();
+        w.db.with(|c| projects::save_project(c, &ProjectInput { name: "두 번째".into(), ..Default::default() }))
+            .unwrap();
     let created = w.db.with(|c| repo::project_reference_group(c, &second.id, &second.name)).unwrap();
     assert_eq!(created.id, repo::project_group_id(&second.id));
     let third =
-        w.db.with(|c| projects::save_project(c, &ProjectInput { name: "세 번째".into(), ..Default::default() })).unwrap();
+        w.db.with(|c| projects::save_project(c, &ProjectInput { name: "세 번째".into(), ..Default::default() }))
+            .unwrap();
     let via_form =
         w.db.with(|c| {
             repo::save_collection(
                 c,
-                &CollectionInput { name: "임시".into(), project_id: Some(third.id.clone()), ..CollectionInput::default() },
+                &CollectionInput {
+                    name: "임시".into(),
+                    project_id: Some(third.id.clone()),
+                    ..CollectionInput::default()
+                },
             )
         })
         .unwrap();
@@ -1455,7 +1464,11 @@ fn an_embedding_run_picks_up_chunks_indexed_meanwhile() {
     let mut req = SearchRequest::new("임베딩 도중에 색인된 문서");
     req.mode = SearchMode::Semantic;
     let hits = search(&w.search_deps(Some(&embedder.inner)), &req).unwrap().hits;
-    assert!(hits.iter().any(|h| h.document_id == "late"), "{:?}", hits.iter().map(|h| &h.document_id).collect::<Vec<_>>());
+    assert!(
+        hits.iter().any(|h| h.document_id == "late"),
+        "{:?}",
+        hits.iter().map(|h| &h.document_id).collect::<Vec<_>>()
+    );
 }
 
 /// KNO-8: a glossary term the analyzer splits into morphemes (공급가액 → 공급 + 가액 under ko-dic) and a
@@ -1475,17 +1488,15 @@ fn glossary_expansion_covers_compounds_and_multi_word_synonyms() {
         repo::save_glossary(
             c,
             &GlossaryInput {
-                id: None,
-                term: "공급가액".into(),
-                definition: None,
-                synonyms: vec!["net amount".into()],
+                id: None, term: "공급가액".into(), definition: None, synonyms: vec!["net amount".into()]
             },
         )
     })
     .unwrap();
     let docs_of = |resp: &SearchResponse| resp.hits.iter().map(|h| h.document_id.clone()).collect::<Vec<_>>();
     // Korean compound (with a particle under ko-dic) → the English synonym.
-    let query = if w.analyzer.kind() == AnalyzerKind::KoDic { "공급가액은 얼마야?" } else { "공급가액 합계" };
+    let query =
+        if w.analyzer.kind() == AnalyzerKind::KoDic { "공급가액은 얼마야?" } else { "공급가액 합계" };
     let resp = search(&w.search_deps(None), &SearchRequest::new(query)).unwrap();
     assert_eq!(resp.expanded_terms, vec!["net amount".to_string()], "terms {:?}", resp.query_terms);
     assert!(docs_of(&resp).contains(&"inv".to_string()), "{:?}", docs_of(&resp));
@@ -1595,8 +1606,7 @@ impl ChatBackend for RecordingChat {
 
 /// A pasted text of about 6,000 characters with the instruction before and after it.
 fn long_text_request() -> AnswerRequest {
-    let body: String =
-        (1..=200).map(|i| format!("{i}번째 문장은 금번 과업의 수행 범위와 일정을 설명함. ")).collect();
+    let body: String = (1..=200).map(|i| format!("{i}번째 문장은 금번 과업의 수행 범위와 일정을 설명함. ")).collect();
     let mut req = AnswerRequest::question(&format!("다음 글을 다듬어줘:\n{body}\n위 글을 공문 문체로 정리해 주세요."));
     assert!(req.question.chars().count() > 5_000);
     req.retrieve = false;
@@ -1650,7 +1660,13 @@ fn a_text_only_request_is_sized_from_the_model_context() {
 
     // The reply stopped at its token limit → marked as cut as well.
     let limited = RecordingChat::new("다듬다 만 글", Some("length"));
-    let deps = AnswerDeps { search: w.search_deps(None), chat: &limited, model: None, cancelled: None, context_size: Some(4_096) };
+    let deps = AnswerDeps {
+        search: w.search_deps(None),
+        chat: &limited,
+        model: None,
+        cancelled: None,
+        context_size: Some(4_096),
+    };
     assert_eq!(answer(&deps, &long_text_request(), &mut |_| true).unwrap().truncated, Some(Truncation::Both));
     let mut short = AnswerRequest::question("다음 문장을 다듬어줘: 금번 과업은 당사가 수행함.");
     short.retrieve = false;

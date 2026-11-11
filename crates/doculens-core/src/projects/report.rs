@@ -306,7 +306,8 @@ pub fn render(d: &ProjectDetail, language: Language) -> String {
             }
             // Rules that could not be judged because a document has not been extracted yet need the
             // extraction, not the review queue.
-            let not_extracted = |e: &Option<Evidence>| e.as_ref().is_some_and(|e| e.status.as_deref() == Some("not_extracted"));
+            let not_extracted =
+                |e: &Option<Evidence>| e.as_ref().is_some_and(|e| e.status.as_deref() == Some("not_extracted"));
             let pending_extraction = run
                 .results
                 .iter()

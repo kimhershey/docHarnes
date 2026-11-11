@@ -471,7 +471,10 @@ fn project_scope_organise_leaves_documents_filed_there_as_copies() {
     let by_id = |id: &str| p.items.iter().find(|i| i.doc_id == id).unwrap().clone();
     // The shared document: nothing to do here, its copy already is this project's file.
     let shared = by_id("a");
-    assert_eq!((shared.status, shared.to.as_deref(), shared.reason.as_deref()), (ItemStatus::Unchanged, None, Some("project_copy")));
+    assert_eq!(
+        (shared.status, shared.to.as_deref(), shared.reason.as_deref()),
+        (ItemStatus::Unchanged, None, Some("project_copy"))
+    );
     // The project's own document is filed as usual.
     assert_eq!(by_id("b").to.as_deref(), Some("documents/B 사업/계약서/검수확인서.pdf"));
     assert_eq!((p.moves, p.unchanged), (1, 1));
@@ -499,7 +502,10 @@ fn project_scope_organise_leaves_documents_filed_there_as_copies() {
         ..req.clone()
     };
     let p = plan(&w.db, &w.paths, &home).unwrap();
-    assert_eq!(p.items.iter().find(|i| i.doc_id == "a").unwrap().to.as_deref(), Some("documents/A 사업/계약서/계약서_계약서.pdf"));
+    assert_eq!(
+        p.items.iter().find(|i| i.doc_id == "a").unwrap().to.as_deref(),
+        Some("documents/A 사업/계약서/계약서_계약서.pdf")
+    );
     apply(&w.db, &w.paths, &p, "organize", "프로젝트 정리", "test", None, &mut no_progress).unwrap();
     let followed = w.db.with(|c| copies::list_for_project(c, &second.id)).unwrap().remove(0);
     assert_eq!(followed.rel_path, "documents/B 사업/계약서/계약서_계약서.pdf");

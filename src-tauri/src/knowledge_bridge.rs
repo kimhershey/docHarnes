@@ -548,10 +548,8 @@ impl AnswerRun {
             }
             // An empty fragment only asks whether to go on (a streamed event without visible text).
             if !d.is_empty() {
-                let _ = app.emit(
-                    EV_ANSWER,
-                    AnswerDelta { request_id: request_id.clone(), delta: d.to_string(), done: false },
-                );
+                let _ = app
+                    .emit(EV_ANSWER, AnswerDelta { request_id: request_id.clone(), delta: d.to_string(), done: false });
             }
             true
         };

@@ -1090,7 +1090,8 @@ fn rules_on_documents_without_an_extraction_run_are_undetermined() {
     );
     let run = check(&deps(&db, None), &p.id, &[]).unwrap();
     let by = |desc: &str| run.results.iter().find(|r| r.description == desc).unwrap();
-    for desc in ["계약서 서명 필수", "계약서 당사자 사업자번호 = 사업자등록증 등록번호", "계약금액 숫자"] {
+    for desc in ["계약서 서명 필수", "계약서 당사자 사업자번호 = 사업자등록증 등록번호", "계약금액 숫자"]
+    {
         let r = by(desc);
         assert_eq!(r.verdict, Verdict::Undetermined, "{desc}: {}", r.message);
         assert!(r.message.contains("추출") && r.message.contains("c9_contract.pdf"), "{desc}: {}", r.message);
@@ -1153,7 +1154,15 @@ fn text_values_keep_decimal_points_and_signs() {
     let p = project(&db, "버전", None);
     add(&db, &p.id, &["srs1", "wbs1"]);
     let literal = |desc: &str, field: &str, value: &str| {
-        add_rule(&db, &p.id, desc, RuleOperand::field("srs", field), RuleOp::Eq, Some(RuleOperand::literal(value)), None)
+        add_rule(
+            &db,
+            &p.id,
+            desc,
+            RuleOperand::field("srs", field),
+            RuleOp::Eq,
+            Some(RuleOperand::literal(value)),
+            None,
+        )
     };
     literal("버전은 1.2", "version", "1.2");
     literal("버전은 12", "version", "12");
@@ -1441,7 +1450,10 @@ fn supplement_request_lists_findings_as_text_sources() {
     let err = request(&["nope", "missing_doc:receipt"]).unwrap_err();
     assert!(matches!(err, CoreError::Invalid(ref m) if m == "findings_not_in_run"), "{err}");
     // An undetermined row next to a real finding is simply left out.
-    assert_eq!(titles(&request(&[&undetermined.id, &mismatch_id]).unwrap()), vec![format!("finding:mismatch:{mismatch_id}")]);
+    assert_eq!(
+        titles(&request(&[&undetermined.id, &mismatch_id]).unwrap()),
+        vec![format!("finding:mismatch:{mismatch_id}")]
+    );
     // Nothing selected and nothing to request → `no_findings`.
     let clean = self::project(&db, "문제 없음", None);
     let clean_run = check(&deps(&db, None), &clean.id, &[]).unwrap();
@@ -1796,8 +1808,15 @@ fn phase_follows_the_start_and_end_dates() {
     assert_eq!(phase_for(Some(today + chrono::Duration::days(1)), None, today, today), ProjectPhase::Planned);
     assert_eq!(phase_for(Some(today), None, today, today), ProjectPhase::Active);
     assert_eq!(phase_for(Some(d("2026-01-01")), Some(d("2026-12-31")), today, today), ProjectPhase::Active);
-    assert_eq!(phase_for(Some(d("2026-01-01")), Some(today + chrono::Duration::days(1)), today, today), ProjectPhase::Active);
-    assert_eq!(phase_for(Some(d("2026-01-01")), Some(today), today, today), ProjectPhase::Done, "done from the end date on");
+    assert_eq!(
+        phase_for(Some(d("2026-01-01")), Some(today + chrono::Duration::days(1)), today, today),
+        ProjectPhase::Active
+    );
+    assert_eq!(
+        phase_for(Some(d("2026-01-01")), Some(today), today, today),
+        ProjectPhase::Done,
+        "done from the end date on"
+    );
     assert_eq!(phase_for(Some(today), Some(today), today, today), ProjectPhase::Done, "a one-day project");
     assert_eq!(phase_for(Some(d("2026-01-01")), Some(d("2026-11-09")), today, today), ProjectPhase::Done);
     // Without a start the creation day is the start; without an end the project never completes.

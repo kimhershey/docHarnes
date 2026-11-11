@@ -497,7 +497,10 @@ fn promote_newest_edition(conn: &Connection, group_key: &str) -> rusqlite::Resul
         )
         .optional()?;
     if let Some(id) = &newest {
-        conn.execute("UPDATE doc_versions SET is_latest = 1, updated_at = ?2 WHERE document_id = ?1", params![id, now()])?;
+        conn.execute(
+            "UPDATE doc_versions SET is_latest = 1, updated_at = ?2 WHERE document_id = ?1",
+            params![id, now()],
+        )?;
     }
     Ok(newest)
 }
