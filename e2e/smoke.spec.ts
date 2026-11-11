@@ -34,7 +34,11 @@ test.describe("P0 shell", () => {
     await page.getByTestId("theme-option-dark").click();
     await page.reload();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-    // Ctrl+Shift+T toggles light/dark
+    // Ctrl+Shift+T toggles light/dark. The attribute above is set by the inline script of index.html before
+    // the app starts; the shortcut is bound by the app shell once the settings are loaded — pressed before
+    // that, the key went nowhere and the theme stayed dark (an occasional failure on a busy machine).
+    await expect(page.getByTestId("app-shell")).toBeVisible();
+    await expect(page.getByTestId("theme-menu")).toBeVisible();
     await page.keyboard.press("Control+Shift+T");
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   });
