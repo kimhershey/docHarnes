@@ -156,6 +156,19 @@ impl EngineStatus {
     pub fn loaded_models(&self) -> impl Iterator<Item = &ModelInstanceStatus> {
         self.models.iter().filter(|m| m.is_usable())
     }
+    /// GPU memory (bytes) the loaded instances hold right now: the router's `memory.effective`
+    /// device bytes plus the mmproj; `file_bytes(id)` stands in for an instance the router gives
+    /// no figure for. Sleeping instances have released their memory; a CPU engine uses none.
+    pub fn gpu_bytes_in_use(&self, file_bytes: &dyn Fn(&str) -> Option<u64>) -> u64 {
+        if !self.binary.as_ref().is_some_and(|b| b.backend != crate::hw::Backend::Cpu) {
+            return 0;
+        }
+        self.models
+            .iter()
+            .filter(|m| m.is_loaded())
+            .map(|m| m.memory_effective_bytes.or_else(|| file_bytes(&m.id)).unwrap_or(0))
+            .sum()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -899,6 +912,42 @@ mod tests {
         assert!(u.loaded_at.is_none());
         assert_eq!(u.memory_effective_bytes, None);
         assert!(is_running_status("loading") && !is_usable_status("loading"));
+    }
+
+    /// PLT-3: what the engine itself holds on the GPU (given back to the tier judgement).
+    #[test]
+    fn gpu_memory_in_use_counts_loaded_instances_only() {
+        let binary = |backend| EngineBinary {
+            path: "/x/llama-server".into(),
+            backend,
+            version: None,
+            build_number: None,
+            source: EngineSource::AppData,
+        };
+        let model = |id: &str, status: &str, bytes: Option<u64>| ModelInstanceStatus {
+            id: id.into(),
+            status: status.into(),
+            memory_effective_bytes: bytes,
+            ..Default::default()
+        };
+        let mut st = EngineStatus {
+            state: EngineState::Running,
+            binary: Some(binary(Backend::Cu121)),
+            models: vec![
+                model("loaded", "loaded", Some(6_000)),
+                model("no-figure", "loaded", None),
+                model("sleeping", "sleeping", Some(4_000)),
+                model("idle", "unloaded", None),
+            ],
+            ..Default::default()
+        };
+        let files = |id: &str| (id == "no-figure").then_some(700u64);
+        assert_eq!(st.gpu_bytes_in_use(&files), 6_700);
+        assert_eq!(st.gpu_bytes_in_use(&|_| None), 6_000);
+        st.binary = Some(binary(Backend::Cpu));
+        assert_eq!(st.gpu_bytes_in_use(&files), 0);
+        st.binary = None;
+        assert_eq!(st.gpu_bytes_in_use(&files), 0);
     }
 
     #[test]

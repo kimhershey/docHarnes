@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
 use doculens_core::engine::{ChatRequest, EngineDevice, EngineStatus, LogLine, ModelInstanceStatus};
-use doculens_core::hw::{self, GpuSource, HardwareSummary};
+use doculens_core::hw::{GpuSource, HardwareSummary};
 use doculens_core::modelstore::{self, ImportMode, ImportPlan, InstallState};
 use doculens_core::paths::normalize_user_path;
 use doculens_core::prerouter::{self, DateRange, PreRouteResult};
@@ -260,7 +260,7 @@ pub fn workspace_set_preferred_model(state: State<'_, AppState>, model_id: Optio
 pub fn hw_probe(state: State<'_, AppState>, refresh: Option<bool>) -> UiResult<HardwareSummary> {
     if refresh.unwrap_or(false) {
         let mut guard = state.hardware.lock().map_err(|_| UiError::poisoned())?;
-        *guard = Some(hw::probe());
+        *guard = Some(engine_bridge::probe_hardware(&state));
     }
     state.hardware()
 }
@@ -505,8 +505,11 @@ pub fn engine_list_devices(app: AppHandle, state: State<'_, AppState>) -> UiResu
     let devices = doculens_core::engine::devices::list_devices(&binary.path, Duration::from_secs(60))?;
     if !devices.is_empty() {
         let gpus = doculens_core::engine::devices::to_gpu_infos(&devices);
+        // The free figures were read just now, with whatever the engine has loaded.
+        let engine_used_mib = engine_bridge::engine_vram_in_use_mib(&state);
         let mut guard = state.hardware.lock().map_err(|_| UiError::poisoned())?;
         if let Some(hw) = guard.as_mut() {
+            hw.engine_used_mib = engine_used_mib;
             // Keep NVML driver/CC details when the names match.
             let mut merged = gpus;
             for g in &mut merged {

@@ -637,17 +637,23 @@ pub struct InstallState {
     pub warnings: Vec<String>,
 }
 
+/// Whether a scanned folder holds this registry model: built-in entries match through
+/// `registry_match`; user-added entries (synthesised from a folder) match by their id.
+fn holds_model(d: &DiscoveredModel, model: &ModelEntry) -> bool {
+    match &d.registry_match {
+        Some(m) => m.id == model.id,
+        None => model.user_added && d.id == model.id,
+    }
+}
+
+/// True when a ready folder holds this model (what [`install_state`] reports as `installed`).
+pub fn is_installed(model: &ModelEntry, discovered: &[DiscoveredModel]) -> bool {
+    discovered.iter().any(|d| d.health.is_ready() && holds_model(d, model))
+}
+
 /// Installation state of a registry model given the scan results.
 pub fn install_state(models_dir: &Path, model: &ModelEntry, discovered: &[DiscoveredModel]) -> InstallState {
-    // Built-in entries match through `registry_match`; user-added entries
-    // (synthesised from a folder) match by their id.
-    let candidates: Vec<&DiscoveredModel> = discovered
-        .iter()
-        .filter(|d| match &d.registry_match {
-            Some(m) => m.id == model.id,
-            None => model.user_added && d.id == model.id,
-        })
-        .collect();
+    let candidates: Vec<&DiscoveredModel> = discovered.iter().filter(|d| holds_model(d, model)).collect();
     // Prefer a ready, hash-verified folder.
     let best = candidates
         .iter()
@@ -1422,6 +1428,12 @@ mod tests {
         assert!(!st2.installed);
         assert_eq!(st2.folder, Some(models.join("gemma4-e4b-q4km")));
         assert_eq!(st2.missing_files.len(), 2);
+        assert!(is_installed(reg.get("gemma4-e4b-q6k").unwrap(), &found));
+        assert!(!is_installed(reg.get("gemma4-e4b-q4km").unwrap(), &found));
+
+        // "자동" (PLT-3): today's free VRAM recommends Q5_K_M, the folder on disk holds Q6_K.
+        let auto = reg.auto_model(Tier::Vram8gb, Some(7_000), &|m| is_installed(m, &found)).unwrap();
+        assert_eq!(auto.id, "gemma4-e4b-q6k");
     }
 
     #[test]

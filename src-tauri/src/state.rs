@@ -209,7 +209,7 @@ impl AppState {
     pub fn hardware(&self) -> UiResult<HardwareSummary> {
         let mut guard = self.hardware.lock().map_err(|_| UiError::poisoned())?;
         if guard.is_none() {
-            *guard = Some(doculens_core::hw::probe());
+            *guard = Some(crate::engine_bridge::probe_hardware(self));
         }
         Ok(guard.clone().expect("probed"))
     }

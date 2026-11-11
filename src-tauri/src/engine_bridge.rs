@@ -15,7 +15,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use doculens_core::engine::{
     locate, presets, EngineBinary, EngineConfig, EngineEvent, EngineStatus, PresetBuild, PresetContext,
 };
-use doculens_core::hw::{self, TierAssessment};
+use doculens_core::hw::{self, HardwareSummary, TierAssessment};
 use doculens_core::modelstore::{
     self, DiscoveredModel, ImportPlan, InstallState, ModelHealth, ModelWatcher, ScanOptions,
 };
@@ -154,21 +154,42 @@ pub struct Assessment {
     pub active_model_installed: Option<InstallState>,
 }
 
+/// GPU memory (MiB) the engine's loaded instances hold right now.
+pub fn engine_vram_in_use_mib(state: &AppState) -> u64 {
+    let index = state.model_index();
+    let file_bytes = |id: &str| index.discovered.iter().find(|d| d.id == id).map(|d| d.total_bytes);
+    state.engine.status().gpu_bytes_in_use(&file_bytes) / doculens_core::memory::MIB
+}
+
+/// The shell's hardware probe: the core probe plus the engine's own share of the VRAM at this
+/// moment, so a probe taken while a model is loaded does not lower the tier (PLT-3).
+pub fn probe_hardware(state: &AppState) -> HardwareSummary {
+    let mut hw = hw::probe();
+    hw.engine_used_mib = engine_vram_in_use_mib(state);
+    hw
+}
+
 pub fn assess(state: &AppState) -> UiResult<Assessment> {
     let hw = state.hardware()?;
     let settings = state.settings_snapshot()?;
     let tier = hw::assess(&hw, &settings.models);
     let registry = state.merged_registry();
+    let index = state.model_index();
     let recommended = registry.default_model_for(tier.tier, tier.free_vram_mib).cloned();
+    // "자동" runs the recommendation when it is installed, otherwise the closest installed model:
+    // the free VRAM differs a little at every start and must not select a model that is not on
+    // disk (every request would fail with "unknown model id").
+    let auto = || {
+        registry.auto_model(tier.tier, tier.free_vram_mib, &|m| modelstore::is_installed(m, &index.discovered)).cloned()
+    };
     let active = if settings.models.active_model == "auto" {
-        recommended.clone()
+        auto()
     } else {
         // An id that is neither built in nor a drop-in any more (0.3.0 Qwen entries after the 0.4.0
-        // registry swap, a removed folder) falls back to the tier recommendation; the setting itself
+        // registry swap, a removed folder) falls back to what "자동" would run; the setting itself
         // is left alone so the explicit choice returns with its folder.
-        registry.get(&settings.models.active_model).cloned().or_else(|| recommended.clone())
+        registry.get(&settings.models.active_model).cloned().or_else(auto)
     };
-    let index = state.model_index();
     let installed = match (&active, state.workspace_models_dir()) {
         (Some(m), Some(dir)) => Some(modelstore::install_state(&dir, m, &index.discovered)),
         _ => None,
