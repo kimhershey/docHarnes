@@ -136,6 +136,7 @@ pub fn per_project(plan: &Plan) -> bool {
         matches!(
             op,
             Op::Summarize { group_by: Some(super::SummaryGroup::Project), .. }
+                | Op::Search { group_by: Some(super::SummaryGroup::Project), .. }
                 | Op::Aggregate { group_by: Some(super::GroupBy::Project), .. }
         )
     })
@@ -610,6 +611,17 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
                                 "screen_unknown",
                                 format!("unknown screen '{reference}'"),
                             ));
+                        }
+                    }
+                    OpenTarget::Project => {
+                        let want = compact(reference);
+                        match ctx.projects.iter().find(|p| p.id == *reference || compact(&p.name) == want) {
+                            Some(p) => *reference = p.id.clone(),
+                            None => issues.push(PlanIssue::error(
+                                at("ref"),
+                                "project_unknown",
+                                format!("unknown project '{reference}'"),
+                            )),
                         }
                     }
                     OpenTarget::Folder => match workspace_relative(reference) {

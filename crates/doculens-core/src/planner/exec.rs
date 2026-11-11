@@ -41,7 +41,7 @@ use crate::settings::{KnowledgeSettings, Language, ProcessingSettings, Profile};
 
 use super::{
     compact, scope, AggregateFn, ExplainScope, ExportLayout, ExportTarget, GroupBy, OcrProfile, Op, OpKind, Plan,
-    ReferenceAction, ReviewOnly, ReviewOp, SchemaAction, Scope, TemplateAction, TermAction,
+    ReferenceAction, ReviewOnly, ReviewOp, SchemaAction, Scope, SummaryGroup, TemplateAction, TermAction,
 };
 
 mod summarize;
@@ -283,6 +283,90 @@ fn scope_narrows(plan: &Plan, imported: Option<&[String]>) -> bool {
     let mut s = plan.scope.clone();
     s.filter.project_id = None;
     imported.is_some() || !s.is_empty()
+}
+
+/// The scope is "the reference material of this project" and nothing else: the search scope adds
+/// the project's reference group and the common reference material by itself, so no document list
+/// stands in for them (and an empty reference group is not "no document matches").
+fn project_reference_only(plan: &Plan, imported: Option<&[String]>) -> bool {
+    let f = &plan.scope.filter;
+    if imported.is_some() || f.project_id.is_none() || f.role != Some(crate::planner::RoleParam::Knowledge) {
+        return false;
+    }
+    let mut rest = plan.scope.clone();
+    rest.filter.project_id = None;
+    rest.filter.role = None;
+    rest.is_empty()
+}
+
+/// The hits of a search listed per project / document type / folder: `{ key, label, hits }` with
+/// `hits` = indexes into the response's hit list. A hit of a document in two projects is listed
+/// under both; hits outside every project come last.
+fn search_groups(deps: &ExecDeps<'_>, hits: &[crate::knowledge::SearchHit], group: SummaryGroup) -> Result<Vec<Value>> {
+    let db = deps.db();
+    let ko = deps.ko();
+    let mut groups: Vec<(String, String, Vec<usize>)> = Vec::new();
+    let mut put = |key: &str, label: String, i: usize| match groups.iter_mut().find(|g| g.0 == key) {
+        Some(g) => g.2.push(i),
+        None => groups.push((key.to_string(), label, vec![i])),
+    };
+    match group {
+        SummaryGroup::Project => {
+            let mut ids: Vec<String> = hits.iter().map(|h| h.document_id.clone()).collect();
+            ids.sort();
+            ids.dedup();
+            let (memberships, projects) = db.with(|c| {
+                Ok((projects_repo::memberships_with_reference(c, &ids)?, projects_repo::list_projects(c)?))
+            })?;
+            let name = |id: &str| projects.iter().find(|p| p.id == id).map(|p| p.name.clone());
+            for (i, h) in hits.iter().enumerate() {
+                let mut placed = false;
+                for pid in memberships.get(&h.document_id).map(Vec::as_slice).unwrap_or(&[]) {
+                    if let Some(n) = name(pid) {
+                        put(pid, n, i);
+                        placed = true;
+                    }
+                }
+                if !placed {
+                    put("", if ko { "프로젝트 없음".into() } else { "No project".into() }, i);
+                }
+            }
+        }
+        SummaryGroup::DocType => {
+            let labels = db.with(projects_repo::doc_type_labels)?;
+            for (i, h) in hits.iter().enumerate() {
+                let slug = h.doc_type.clone().unwrap_or_default();
+                let label = if slug.is_empty() {
+                    if ko {
+                        "유형 없음".to_string()
+                    } else {
+                        "No type".to_string()
+                    }
+                } else {
+                    projects_repo::type_label(&labels, &slug, ko)
+                };
+                put(&slug, label, i);
+            }
+        }
+        _ => {
+            for (i, h) in hits.iter().enumerate() {
+                let dir = h.rel_path.rsplit_once('/').map(|(d, _)| d).unwrap_or("").to_string();
+                let label = if dir.is_empty() {
+                    if ko {
+                        "(최상위)".to_string()
+                    } else {
+                        "(root)".to_string()
+                    }
+                } else {
+                    dir.clone()
+                };
+                put(&dir, label, i);
+            }
+        }
+    }
+    // Hits outside every project / without a type come last.
+    groups.sort_by_key(|g| g.0.is_empty());
+    Ok(groups.into_iter().map(|(key, label, hits)| json!({ "key": key, "label": label, "hits": hits })).collect())
 }
 
 fn nothing_in_scope(deps: &ExecDeps<'_>) -> StepOutcome {
@@ -771,9 +855,13 @@ fn run_step(
                 imported: None,
             })
         }
-        Op::Search { query, mode, top_k } => {
-            let narrowed = scope_narrows(plan, imported);
-            let docs_ = if plan.scope.is_empty() && imported.is_none() {
+        Op::Search { query, mode, top_k, group_by } => {
+            let role = plan.scope.filter.role.map(|r| r.as_role());
+            // "이 프로젝트의 참고 자료에서 …": the project's reference group and the common reference
+            // material come from the search scope itself (`project_id` + `roles`).
+            let reference_of_project = project_reference_only(plan, imported);
+            let narrowed = scope_narrows(plan, imported) && !reference_of_project;
+            let docs_ = if (plan.scope.is_empty() && imported.is_none()) || reference_of_project {
                 Vec::new()
             } else {
                 working_set(deps, plan, imported)?
@@ -800,20 +888,32 @@ fn run_step(
             req.scope = SearchScope {
                 documents: ids(&docs_),
                 project_id: plan.scope.filter.project_id.clone(),
+                roles: role.into_iter().collect(),
                 latest_only: deps.knowledge.latest_only,
                 ..SearchScope::default()
             };
             let resp = search::search(&SearchDeps { db, analyzer: deps.analyzer, embedder: deps.embedder }, &req)?;
             let n = resp.hits.len();
-            Ok(StepOutcome {
-                summary: if deps.ko() {
-                    format!("'{query}' 검색 결과 {n}건")
+            let mut summary =
+                if deps.ko() { format!("'{query}' 검색 결과 {n}건") } else { format!("{n} hits for '{query}'") };
+            let mut payload = serde_json::to_value(&resp).unwrap_or(Value::Null);
+            // "프로젝트별로 검색해줘" (0.8.1): the same hits, listed per group.
+            if let Some(group) = group_by.filter(|g| *g != SummaryGroup::None) {
+                let groups = search_groups(deps, &resp.hits, group)?;
+                let by = match group {
+                    SummaryGroup::Project => deps.t("프로젝트별", "by project"),
+                    SummaryGroup::DocType => deps.t("유형별", "by type"),
+                    _ => deps.t("폴더별", "by folder"),
+                };
+                summary.push_str(&if deps.ko() {
+                    format!(" · {by} 묶음 {}개", groups.len())
                 } else {
-                    format!("{n} hits for '{query}'")
-                },
-                payload: serde_json::to_value(&resp).unwrap_or(Value::Null),
-                imported: None,
-            })
+                    format!(" · {} group(s) {by}", groups.len())
+                });
+                payload["groups"] = Value::Array(groups);
+                payload["group_by"] = json!(group);
+            }
+            Ok(StepOutcome { summary, payload, imported: None })
         }
         Op::Answer { question, cite: _, knowledge, mode, reply } => {
             // A ready reply (a greeting, "this cannot be done"): shown as it is — no model, no lookup.
@@ -847,7 +947,8 @@ fn run_step(
             // A question that is not about the documents is not refused for a filter that matches none of
             // them (a date range read from "작년 …"): it is looked up in the whole library instead.
             let general = style == crate::knowledge::AnswerStyle::General;
-            let unmatched = retrieve && docs_.is_empty() && scope_narrows(plan, imported);
+            let reference_of_project = project_reference_only(plan, imported);
+            let unmatched = retrieve && docs_.is_empty() && scope_narrows(plan, imported) && !reference_of_project;
             if unmatched && !general {
                 return Ok(no_documents_answer(deps, question, AnswerKind::Answer));
             }
@@ -860,6 +961,7 @@ fn run_step(
             req.scope = SearchScope {
                 documents: ids(&docs_),
                 project_id: if unmatched { None } else { plan.scope.filter.project_id.clone() },
+                roles: plan.scope.filter.role.map(|r| r.as_role()).into_iter().collect(),
                 latest_only: deps.knowledge.latest_only,
                 ..SearchScope::default()
             };

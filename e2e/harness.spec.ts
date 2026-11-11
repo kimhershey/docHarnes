@@ -289,3 +289,55 @@ test.describe("0.8.0 assistant harness", () => {
     await expect(split.locator('[data-warning-code="grouping_dropped"]')).toBeVisible();
   });
 });
+
+// 0.8.1: a project's 참고 자료 are part of the project; the sentence says where to look.
+test.describe("0.8.1 projects and reference material", () => {
+  test("'프로젝트 열어줘' opens the project; a search can be per project and over the reference material only", async ({ page }) => {
+    test.setTimeout(90_000);
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서.hwpx", "D:\\규정\\정보보안지침.pdf", "D:\\scan\\개발계약서-2p.pdf"]);
+    const estimate = await docId(page, "견적서.hwpx");
+    const guideline = await docId(page, "정보보안지침.pdf");
+    await newProject(page, "한빛 포털 구축");
+    await addToOpenProject(page, estimate);
+    // The guideline goes into the project's reference group.
+    await expect(page.getByTestId("project-documents")).toHaveAttribute("data-group-id", /.+/, { timeout: 10_000 });
+    await page.getByTestId("project-add-documents").click();
+    await page.getByTestId("project-add-kind-reference").check();
+    await page.getByTestId(`project-add-doc-${guideline}`).check();
+    await page.getByTestId("project-add-done").click();
+    await expect(page.getByTestId(`project-doc-${guideline}`)).toHaveAttribute("data-kind", "reference");
+
+    // "X 프로젝트 열어줘" used to land on the library's folder view.
+    await page.getByTestId("nav-library").click();
+    await openAssistantScreen(page);
+    await page.getByTestId("assistant-scope").click();
+    await page.getByRole("option", { name: ko.assistant.scope.all, exact: true }).click();
+    await send(page, "한빛 포털 구축 프로젝트 열어줘");
+    await expect(page.getByTestId("project-title")).toHaveText("한빛 포털 구축", { timeout: 15_000 });
+
+    // The hits per project: the reference document counts for its project, the contract has none.
+    await openAssistantScreen(page);
+    await page.getByTestId("assistant-scope").click();
+    await page.getByRole("option", { name: ko.assistant.scope.all, exact: true }).click();
+    await send(page, "프로젝트별로 텍스트 검색해줘");
+    const grouped = assistantCard(page, "result").last();
+    await expect(grouped).toHaveAttribute("data-result-status", "done", { timeout: 30_000 });
+    const groups = grouped.getByTestId("result-search-group");
+    await expect(groups).toHaveCount(2);
+    await expect(groups.nth(0)).toContainText("한빛 포털 구축");
+    await expect(groups.nth(0)).toContainText("정보보안지침");
+    await expect(groups.nth(1)).toContainText("프로젝트 없음");
+
+    // "참고 자료에서 …": only the reference document is searched.
+    await send(page, "참고 자료에서 텍스트 검색해줘");
+    await expect(assistantCard(page, "result")).toHaveCount(2, { timeout: 30_000 });
+    const reference = assistantCard(page, "result").last();
+    await expect(reference).toHaveAttribute("data-result-status", "done", { timeout: 30_000 });
+    const hits = reference.getByTestId("result-hit");
+    await expect(hits.first()).toContainText("정보보안지침");
+    await expect(reference.getByTestId("result-search")).not.toContainText("견적서");
+    await expect(reference.getByTestId("result-search")).not.toContainText("개발계약서");
+  });
+});

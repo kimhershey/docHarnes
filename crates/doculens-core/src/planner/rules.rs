@@ -1521,7 +1521,7 @@ fn search(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     let dt = doc_type(t, ctx);
     let scope = scope_or_project(t, ctx, dt, d.as_ref());
     Some(mk(
-        Op::Search { query: q.clone(), mode: None, top_k: None },
+        Op::Search { query: q.clone(), mode: None, top_k: None, group_by: None },
         scope,
         0.85,
         t.t(&format!("{} 검색합니다", josa::eul_reul(&format!("'{q}'"))), &format!("Search for '{q}'")).to_string(),

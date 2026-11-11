@@ -43,7 +43,7 @@ import {
   type WorkerOutcome,
 } from "./mock-backend";
 import * as mg from "./mock-generate";
-import { mockKnowledge, projectReferenceGroup } from "./mock-knowledge";
+import { mockKnowledge, projectReferenceDocIds, projectReferenceGroup } from "./mock-knowledge";
 import * as pl from "./mock-pipeline";
 import * as mp from "./mock-projects";
 import { resolveJosa } from "./josa";
@@ -304,7 +304,8 @@ function filterIsEmpty(f: Scope["filter"] | undefined): boolean {
     f.status == null &&
     (f.tags ?? []).length === 0 &&
     f.min_confidence == null &&
-    f.review_status == null
+    f.review_status == null &&
+    f.role == null
   );
 }
 
@@ -1759,6 +1760,12 @@ function ruleSearch(t: Text, ctx: PlanContext): Plan | null {
   const d = dateOf(t, ctx);
   const dt = docTypeOf(t, ctx);
   const scope = scopeOf(t, ctx, dt, d);
+  // "프로젝트별로 … 검색" (0.8.1): the hits per group; the words of the split are not the query.
+  const group = summaryGroupOf(t);
+  if (group) {
+    q = q.replace(/(프로젝트|사업|유형|종류|폴더)\s?(별로|별|마다)/g, " ").replace(/\bby (project|type|folder)\b/gi, " ").replace(/\s+/g, " ").trim() || q;
+    return single({ op: "search", query: q, mode: null, top_k: null, group_by: group }, 0.85, tr(t.ko, `'${q}'을(를) 검색합니다`, `Search for '${q}'`), scope);
+  }
   return single({ op: "search", query: q, mode: null, top_k: null }, 0.85, tr(t.ko, `'${q}'을(를) 검색합니다`, `Search for '${q}'`), scope);
 }
 
@@ -1829,12 +1836,22 @@ function ruleTopic(t: Text): Plan | null {
   return single({ op: "answer", question: t.raw.trim(), cite: true }, 0.7, tr(t.ko, "지식 베이스·문서에서 근거를 찾아 답합니다", "Answer with evidence from the knowledge base / documents"));
 }
 
+/** "한빛 포털 프로젝트 열어줘" (0.8.1): the project's page — the sentence names exactly one project and asks to open it. */
+function ruleOpenProject(t: Text, ctx: PlanContext): Plan | null {
+  if (!has(t, ["열어", "열기", "보여", "open", "show"]) || has(t, ["폴더", "folder", "문서", "document", "파일", "file"])) return null;
+  const named = ctx.projects.filter((p) => p.name && compact(p.name).length >= 2 && t.compact.includes(compact(p.name)));
+  if (named.length !== 1) return null;
+  const p = named[0]!;
+  return single({ op: "open", target: "project", ref: p.id }, 0.9, tr(t.ko, `'${p.name}' 프로젝트를 엽니다`, `Open the project '${p.name}'`));
+}
+
 /** Tries the rules in order (`rules::plan`); `null` leaves the command to the model. */
 export function rulesPlan(text: string, ctx: PlanContext): Plan | null {
   const raw = text.trim();
   if (!raw) return null;
   const t = mkText(raw, ctx.language === "ko" || /[가-힣]/.test(raw));
   return (
+    ruleOpenProject(t, ctx) ??
     ruleUndoRedo(t) ??
     ruleJobControl(t) ??
     ruleEngine(t) ??
@@ -2249,6 +2266,10 @@ export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | nul
         op.ref = op.ref.trim();
         if (op.target === "screen") {
           if (!SCREENS.has(op.ref)) issues.push(issue(at("ref"), "screen_unknown", `unknown screen '${op.ref}'`));
+        } else if (op.target === "project") {
+          const found = ctx.projects.find((x) => x.id === op.ref || compact(x.name) === compact(op.ref));
+          if (found) op.ref = found.id;
+          else issues.push(issue(at("ref"), "project_unknown", `unknown project '${op.ref}'`));
         } else if (op.target === "folder") {
           const p = workspaceRelative(op.ref);
           if (p === null) issues.push(issue(at("ref"), "path_invalid", `'${op.ref}' is not a workspace folder`));
@@ -2828,6 +2849,40 @@ function contractChecks(text: string, plan: Plan, ko: boolean): PlanIssue[] {
   return notes;
 }
 
+/** `guard::where_to_look` (0.8.1): "참고 자료에서 …", "한빛 프로젝트에서 …" and "한빛 프로젝트 열어줘" as the sentence says. */
+function whereToLook(text: string, plan: Plan, ctx: PlanContext, ko: boolean): PlanIssue[] {
+  const notes: PlanIssue[] = [];
+  const said = compact(userWords(text));
+  const named = ctx.projects.filter((p) => p.name && compact(p.name).length >= 2 && said.includes(compact(p.name)));
+  const project = named.length === 1 ? named[0]! : null;
+  const only = plan.operations.length === 1 ? plan.operations[0]! : null;
+  if (only && only.op === "open") {
+    if (project && only.target !== "project" && only.target !== "page" && !said.includes("폴더") && !said.includes("folder")) {
+      only.target = "project";
+      only.ref = project.id;
+      plan.summary = ko ? `'${project.name}' 프로젝트를 엽니다` : `Open the project '${project.name}'`;
+    }
+    return notes;
+  }
+  const reads = plan.operations.length > 0 && plan.operations.every((op) => ["search", "summarize", "explain", "aggregate", "export"].includes(op.op) || (op.op === "answer" && op.knowledge !== false && !op.mode));
+  if (!reads) return notes;
+  plan.scope.filter = plan.scope.filter ?? {};
+  const reference = ["참고자료", "참고문서", "referencematerial"].some((w) => said.includes(w));
+  const work = ["업무문서", "작업문서", "workdocument"].some((w) => said.includes(w));
+  if (plan.scope.filter.role == null && reference !== work) {
+    plan.scope.filter.role = reference ? "knowledge" : "work";
+    for (const op of plan.operations) if (op.op === "search") op.query = op.query.replace(/(참고|업무)\s?(자료|문서)?\s?(에서|만)?(?=\s|$)/g, " ").replace(/\s+/g, " ").trim() || op.query;
+    const label = reference ? (ko ? "참고 자료" : "reference material") : ko ? "업무 문서" : "work documents";
+    notes.push(issue("scope.filter.role", "scope_filled", ko ? `문장대로 ${label}만 대상으로 합니다` : `only ${label}, as the sentence says`, false));
+  }
+  const perProject = plan.operations.some((op) => (op.op === "summarize" || op.op === "search" || op.op === "aggregate") && op.group_by === "project");
+  if (project && !plan.scope.filter.project_id && (plan.scope.doc_ids ?? []).length === 0 && plan.scope.folder == null && !perProject) {
+    plan.scope.filter.project_id = project.id;
+    notes.push(issue("scope.filter.project_id", "scope_filled", ko ? `문장의 '${project.name}' 프로젝트를 대상으로 합니다` : `the project '${project.name}' from the sentence is the scope`, false));
+  }
+  return notes;
+}
+
 export function plannerModelEnabled(): boolean {
   return flag(PLANNER_MODEL_KEY, "on");
 }
@@ -2859,11 +2914,13 @@ export function planText(text: string, ctx: PlanContext, opts: { model?: boolean
   };
   if (!t) return result;
   const accept = (p: Plan, source: PlanResult["source"]): boolean => {
+    // `guard::where_to_look` (0.8.1): the kind of document and the project the user's words name.
+    const notes = isClarification(p) ? [] : whereToLook(t, p, ctx, ko);
     const issues = validatePlan(p, ctx, date);
     if (hasErrors(issues)) return false;
     result.source = source;
     result.plan = p;
-    result.issues = issues;
+    result.issues = [...issues, ...notes];
     return true;
   };
   // 0.8.0: greetings and whole-sentence settings never reach the model (both modes).
@@ -2996,8 +3053,11 @@ export function resolveScope(scope: Scope | undefined): MockDoc[] {
   if (f.doc_type) docs = docs.filter((d) => d.doc_type === f.doc_type);
   if (f.project_id) {
     const pid = f.project_id;
-    docs = docs.filter((d) => mp.isMember(pid, d.id));
+    // 0.8.1: a project's 참고 자료 are its reference group — asked for with `role: knowledge`.
+    const reference = f.role === "knowledge" ? new Set(projectReferenceDocIds(pid)) : null;
+    docs = docs.filter((d) => (reference ? reference.has(d.id) : mp.isMember(pid, d.id)));
   }
+  if (f.role) docs = docs.filter((d) => d.role === f.role);
   const tags = f.tags ?? [];
   if (tags.length > 0) docs = docs.filter((d) => tags.every((t) => d.tags.some((x) => x.toLowerCase() === t.toLowerCase())));
   if (f.review_status) docs = docs.filter((d) => d.review_status === f.review_status);
@@ -4458,8 +4518,40 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
     }
     case "search": {
       const docs = scopeIsEmpty(plan.scope) ? [] : workingSet(plan, imported);
-      const resp = (await mockKnowledge("knowledge_search", { req: { query: op.query, mode: op.mode ?? "hybrid", limit: Math.min(200, Math.max(1, op.top_k ?? 20)), scope: { documents: idsOf(docs), latest_only: settings.knowledge.latest_only } } })) as SearchResponse;
-      return { summary: ko ? `'${op.query}' 검색 결과 ${resp.hits.length}건` : `${resp.hits.length} hits for '${op.query}'`, payload: { ...resp, total: resp.total_candidates } };
+      const role = plan.scope.filter?.role ?? null;
+      const resp = (await mockKnowledge("knowledge_search", { req: { query: op.query, mode: op.mode ?? "hybrid", limit: Math.min(200, Math.max(1, op.top_k ?? 20)), scope: { documents: idsOf(docs), latest_only: settings.knowledge.latest_only, ...(role ? { roles: [role] } : {}) } } })) as SearchResponse;
+      let summary = ko ? `'${op.query}' 검색 결과 ${resp.hits.length}건` : `${resp.hits.length} hits for '${op.query}'`;
+      const payload: Record<string, unknown> = { ...resp, total: resp.total_candidates };
+      // "프로젝트별로 검색" (0.8.1, `exec::search_groups`): the same hits per project / type / folder.
+      const groupBy = op.group_by ?? "none";
+      if (groupBy !== "none") {
+        const projects = mp.projectSummaries();
+        const groups: { key: string; label: string; hits: number[] }[] = [];
+        const put = (key: string, label: string, i: number) => {
+          const g = groups.find((x) => x.key === key);
+          if (g) g.hits.push(i);
+          else groups.push({ key, label, hits: [i] });
+        };
+        resp.hits.forEach((h, i) => {
+          if (groupBy === "project") {
+            const own = projects.filter((p) => mp.projectDocIds(p.id).includes(h.document_id) || projectReferenceDocIds(p.id).includes(h.document_id));
+            if (own.length === 0) put("", ko ? "프로젝트 없음" : "No project", i);
+            for (const p of own) put(p.id, p.name, i);
+          } else if (groupBy === "doc_type") {
+            const label = ctx.doc_types.find((x) => x.slug === h.doc_type);
+            put(h.doc_type ?? "", label ? (ko ? label.label_ko : label.label_en) : ko ? "유형 없음" : "No type", i);
+          } else {
+            const dir = relDir(h.rel_path);
+            put(dir, dir || (ko ? "(최상위)" : "(root)"), i);
+          }
+        });
+        groups.sort((a, b) => Number(a.key === "") - Number(b.key === ""));
+        const by = { project: ko ? "프로젝트별" : "by project", doc_type: ko ? "유형별" : "by type", folder: ko ? "폴더별" : "by folder" }[groupBy];
+        summary += ko ? ` · ${by} 묶음 ${groups.length}개` : ` · ${groups.length} group(s) ${by}`;
+        payload.groups = groups;
+        payload.group_by = groupBy;
+      }
+      return { summary, payload };
     }
     case "answer": {
       // A ready reply (greeting) needs no model and no documents.

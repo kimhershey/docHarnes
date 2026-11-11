@@ -147,6 +147,7 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
                 let mut issues = validate::validate(&mut p, ctx, date.as_ref());
                 if !has_errors(&issues) {
                     issues.extend(guard::split_check(text, &mut p, ko));
+                    issues.extend(guard::where_to_look(text, &mut p, ctx, ko));
                     result.source = PlanSource::Rules;
                     result.plan = scoped(p);
                     result.issues = issues;
@@ -170,6 +171,7 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
             if !has_errors(&issues) {
                 // A split the rule's op cannot express is confirmed, as for model plans.
                 issues.extend(guard::split_check(text, &mut p, ko));
+                issues.extend(guard::where_to_look(text, &mut p, ctx, ko));
                 result.source = PlanSource::Rules;
                 result.plan = scoped(p);
                 result.issues = issues;
@@ -332,6 +334,8 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
                 guard::noop_to_chat(text, &mut plan, ko);
                 // The one document type the sentence names is the scope of a plan that named none.
                 issues.extend(guard::type_filter_repair(text, &mut plan, ctx, ko));
+                // … and so are the kind of document and the project it names; "X 프로젝트 열어줘" opens it.
+                issues.extend(guard::where_to_look(text, &mut plan, ctx, ko));
                 // What the sentence does not support is confirmed, whatever the model's confidence.
                 issues.extend(guard::contract_checks(text, &mut plan, ko));
                 // A split by project the checks put back: the validator had already filled the open

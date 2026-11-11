@@ -298,8 +298,9 @@ fn a_scope_that_matches_nothing_finds_nothing() {
     w.db.with(|c| docs::set_page_text(c, "d1", 1, "스타벅스 역삼점 영수증 합계 12,500원")).unwrap();
     index_document(&IndexDeps { db: &w.db, analyzer: &w.analyzer, options: Default::default() }, &w.doc("d1"), true)
         .unwrap();
-    let search =
-        |scope: Scope| run(&w, &plan_of(vec![Op::Search { query: "스타벅스".into(), mode: None, top_k: None }], scope));
+    let search = |scope: Scope| {
+        run(&w, &plan_of(vec![Op::Search { query: "스타벅스".into(), mode: None, top_k: None, group_by: None }], scope))
+    };
     // The whole library finds the page.
     let ex = search(Scope::default());
     assert_eq!(ex.steps[0].payload["hits"].as_array().map(Vec::len), Some(1), "{:?}", ex.steps[0]);
@@ -912,4 +913,88 @@ fn set_role_keeps_reference_group_members_reference_material() {
         "{}",
         ex.steps[0].summary
     );
+}
+
+/// 0.8.1: a project holds its work documents and its 참고 자료. The scope can name the kind, the search
+/// can list its hits per project, and a document of a project's reference group belongs to that project.
+#[test]
+fn reference_material_of_a_project_is_part_of_the_project() {
+    let w = World::new();
+    for (id, path, text) in [
+        ("work", "inbox/work.jpg", "한빛 포털 구축 계약서 납품 기한은 12월 말"),
+        ("ref", "inbox/ref.jpg", "정보보안 지침 납품 기한 준수 절차"),
+        ("other", "inbox/other.jpg", "새봄 ERP 납품 기한은 3월 말"),
+    ] {
+        w.add_image(id, path);
+        w.db.with(|c| docs::set_page_text(c, id, 1, text)).unwrap();
+        index_document(&IndexDeps { db: &w.db, analyzer: &w.analyzer, options: Default::default() }, &w.doc(id), true)
+            .unwrap();
+    }
+    let project =
+        w.db.with(|c| projects_repo::save_project(c, &ProjectInput { name: "한빛 포털".into(), ..Default::default() }))
+            .unwrap();
+    w.db.with(|c| projects_repo::add_documents(c, &project.id, &["work".to_string()])).unwrap();
+    w.db.with(|c| {
+        let group = crate::knowledge::repo::project_reference_group(c, &project.id, &project.name)?;
+        crate::knowledge::repo::add_docs_to_collection(c, &group.id, &["ref".to_string()])?;
+        docs::set_role(c, "ref", DocumentRole::Knowledge)
+    })
+    .unwrap();
+
+    // The scope names the kind: the project's work documents (as before), or its reference group.
+    let in_project = |role: Option<RoleParam>| Scope {
+        filter: ScopeFilter { project_id: Some(project.id.clone()), role, ..ScopeFilter::default() },
+        ..Scope::default()
+    };
+    let resolved = |scope: &Scope| -> Vec<String> {
+        w.db.with(|c| crate::planner::scope::resolve(c, scope)).unwrap().into_iter().map(|d| d.id).collect()
+    };
+    assert_eq!(resolved(&in_project(None)), vec!["work"]);
+    assert_eq!(resolved(&in_project(Some(RoleParam::Knowledge))), vec!["ref"]);
+    assert_eq!(resolved(&in_project(Some(RoleParam::Work))), vec!["work"]);
+    let everywhere =
+        Scope { filter: ScopeFilter { role: Some(RoleParam::Knowledge), ..Default::default() }, ..Default::default() };
+    assert_eq!(resolved(&everywhere), vec!["ref"]);
+
+    // A search over the project's reference material finds the guideline only.
+    let search = |scope: Scope, group_by: Option<SummaryGroup>| {
+        run(&w, &plan_of(vec![Op::Search { query: "납품 기한".into(), mode: None, top_k: None, group_by }], scope))
+    };
+    let hits = |ex: &exec::PlanExecution| -> Vec<String> {
+        let mut ids: Vec<String> = ex.steps[0].payload["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["document_id"].as_str().unwrap().to_string())
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    };
+    assert_eq!(hits(&search(in_project(Some(RoleParam::Knowledge)), None)), vec!["ref"]);
+    assert_eq!(hits(&search(in_project(Some(RoleParam::Work)), None)), vec!["work"]);
+    assert_eq!(hits(&search(in_project(None), None)), vec!["ref", "work"], "the project scope reads both, as before");
+
+    // "프로젝트별로 검색": the same hits per project — the reference document under its project, the
+    // document of no project last.
+    let ex = search(Scope::default(), Some(SummaryGroup::Project));
+    assert_eq!(hits(&ex), vec!["other", "ref", "work"]);
+    let groups = ex.steps[0].payload["groups"].as_array().unwrap().clone();
+    assert_eq!(groups.len(), 2, "{groups:?}");
+    assert_eq!(groups[0]["label"], json!("한빛 포털"));
+    assert_eq!(groups[0]["hits"].as_array().unwrap().len(), 2);
+    assert_eq!(groups[1]["label"], json!("프로젝트 없음"));
+    assert!(ex.steps[0].summary.contains("프로젝트별 묶음 2개"), "{}", ex.steps[0].summary);
+
+    // The organiser files the reference document under its project too.
+    let vars =
+        w.db.with(|c| {
+            crate::organize::project_vars(
+                c,
+                &Scope::default(),
+                &["work".to_string(), "ref".to_string(), "other".to_string()],
+            )
+        })
+        .unwrap();
+    assert!(vars.contains_key("work") && vars.contains_key("ref") && !vars.contains_key("other"), "{:?}", vars.keys());
 }

@@ -101,6 +101,13 @@ export function projectReferenceGroup(projectId: string, name: string): Collecti
   return collectionView(s, c);
 }
 
+/** Documents of a project's reference group (read-only: no group is created) and the project of each such document (0.8.1). */
+export function projectReferenceDocIds(projectId: string): string[] {
+  const s = load();
+  const c = s.collections.find((x) => x.kind === "project" && x.project_id === projectId);
+  return c ? [...(s.collectionDocs[c.id] ?? [])] : [];
+}
+
 /** Documents that sit in a reference group (common or a project's): reference material, not work to be filed. */
 export function referenceDocIds(): Set<string> {
   return new Set(Object.values(load().collectionDocs).flat());

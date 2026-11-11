@@ -82,7 +82,8 @@ pub(crate) fn project_vars(
         }
         return Ok(out);
     }
-    let memberships = crate::projects::repo::all_memberships(conn)?;
+    // (a project's 참고 자료 belong to it as well — 0.8.1)
+    let memberships = crate::projects::repo::all_memberships_with_reference(conn)?;
     let wanted: HashSet<&str> = doc_ids.iter().map(String::as_str).collect();
     let mut projects: HashMap<String, ProjectVars> = HashMap::new();
     for (doc_id, project_id) in memberships {

@@ -1706,7 +1706,10 @@ mod exec_tests {
         cancel.store(false, Ordering::Relaxed);
 
         // Search runs without a model (no hits on an un-indexed workspace, but no error).
-        let plan = plan_of(vec![Op::Search { query: "스타벅스".into(), mode: None, top_k: Some(5) }], Scope::default());
+        let plan = plan_of(
+            vec![Op::Search { query: "스타벅스".into(), mode: None, group_by: None, top_k: Some(5) }],
+            Scope::default(),
+        );
         let ex = exec::run(&deps, &plan, &mut |_| {}).unwrap();
         assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
         assert_eq!(ex.steps[0].payload["hits"].as_array().map(Vec::len), Some(0));

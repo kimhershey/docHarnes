@@ -1018,6 +1018,43 @@ pub fn all_memberships(conn: &Connection) -> rusqlite::Result<Vec<(String, Strin
     Ok(rows)
 }
 
+/// `(document, project)` pairs of everything a project holds (0.8.1): its work documents first, then
+/// the documents of its reference group. A project's 참고 자료 used to count as "no project" for the
+/// organiser's `{{project}}` folders and for per-project summaries.
+pub fn all_memberships_with_reference(conn: &Connection) -> rusqlite::Result<Vec<(String, String)>> {
+    let mut rows = all_memberships(conn)?;
+    let mut st = conn.prepare_cached(
+        "SELECT cd.document_id, c.project_id FROM collection_docs cd JOIN collections c ON c.id = cd.collection_id \
+         WHERE c.project_id IS NOT NULL ORDER BY cd.added_at, cd.rowid",
+    )?;
+    let reference: Vec<(String, String)> =
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+    for pair in reference {
+        if !rows.contains(&pair) {
+            rows.push(pair);
+        }
+    }
+    Ok(rows)
+}
+
+/// The projects of each document, work membership or reference group (see [`all_memberships_with_reference`]).
+pub fn memberships_with_reference(
+    conn: &Connection,
+    doc_ids: &[String],
+) -> rusqlite::Result<BTreeMap<String, Vec<String>>> {
+    let wanted: std::collections::HashSet<&str> = doc_ids.iter().map(String::as_str).collect();
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (doc, project) in all_memberships_with_reference(conn)? {
+        if wanted.contains(doc.as_str()) {
+            let list = out.entry(doc).or_default();
+            if !list.contains(&project) {
+                list.push(project);
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Document ids of a project (members that still exist).
 pub fn member_ids(conn: &Connection, project_id: &str) -> rusqlite::Result<Vec<String>> {
     let mut st = conn.prepare_cached(

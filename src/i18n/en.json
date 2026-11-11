@@ -767,6 +767,7 @@
       "inbox_watch_on": "Inbox watching turned on.",
       "inbox_watch_off": "Inbox watching turned off.",
       "document_not_found": "Document not found: {{ref}}",
+      "open_project": "Opening the project",
       "unknown_screen": "Unknown screen: {{ref}}",
       "noop": "Nothing to do.",
       "register_form": "Form registration of '{{name}}' started (confirm the field grid).",

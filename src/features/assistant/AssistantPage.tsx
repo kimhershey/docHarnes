@@ -210,7 +210,9 @@ export function AssistantPage() {
 
   // A scope that no longer applies (selection cleared, project context dropped) falls back to 전체.
   useEffect(() => {
-    if ((scope === "selection" && selectionKind === null) || (scope === "project" && !currentProject)) setScope("all");
+    // (back to the open project when there is one: the search stays inside it — 0.8.1)
+    if (scope === "selection" && selectionKind === null) setScope(currentProject ? "project" : "all");
+    else if (scope === "project" && !currentProject) setScope("all");
   }, [scope, selectionKind, currentProject]);
   // Attaching documents selects them as the scope; an opened project becomes the scope (the chip is the scope, plan §1).
   const attachedCount = attached.length;
@@ -481,6 +483,7 @@ export function AssistantPage() {
         if (target.kind === "documents") {
           if (target.documents.length > 0) base.documents = target.documents;
           if (target.projectId) base.project_id = target.projectId;
+          if (target.role) base.roles = [target.role];
         } else {
           if (plan.scope.doc_ids && plan.scope.doc_ids.length > 0) base.documents = plan.scope.doc_ids;
           if (plan.scope.folder) base.folder = plan.scope.folder;

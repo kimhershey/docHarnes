@@ -1870,6 +1870,18 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 - **사용자 결정(2026-11-11, 릴리스 뒤)**: PKG-1에 대해 "앞으로 lite 만 쓸려고" — Full 설치파일·CUDA 팩은 더 만들지 않는다. 이미 게시된 자산(v0.2.0의 Full 설치파일, v0.1.0의 CUDA 팩)은 그대로 두었고(내리라는 지시 없음), 문서의 "NVIDIA PC는 v0.1.0의 CUDA 팩" 안내도 그대로다 —
   Lite 전용으로 굳히려면 그 안내와 `release-windows.yml`의 `full` 변형·`cuda-packs.yml`을 정리하는 것이 다음 일이다(앱 EULA는 그러면 필요 없음).
 
+### 0.8.1 — 프로젝트의 참고 자료 · 문장이 말한 범위 (2026-11-11; 브랜치 `release/0.8.1`, `main` 69adf24에서 분기; 릴리스 노트 `docs/releases/v0.8.1.md`)
+
+- **사용자 보고(0.8.0 설치 뒤)**: ① 검색·요약이 참고 자료가 아니라 업무 문서에서 읽는다 ② 검색이 프로젝트별로 실행되지 않는다(프로젝트를 연 채 검색 / "프로젝트별로 검색") ③ 폴더별 정리에서 참고 자료의 문서가 프로젝트로 인식되지 않는다 ④ "프로젝트 열어줘"가 문서함 폴더 화면으로 간다.
+  사용자 결정: "1, 2, 3, 4 전부 수행 및 0.8.1 릴리즈", 검증은 토큰을 아끼도록 줄인다(항목별 단위 테스트 + 타입 검사 + 관련 E2E + CI 한 번; 독립 검토·실모델 재측정 없음). 참고 자료 구분은 없애지 않고 조건을 추가하는 쪽(사용자 선택).
+- **원인**: 프로젝트의 문서가 두 군데(업무 = `project_documents`, 참고 = 프로젝트 참고 자료 묶음 `collections.project_id` + `collection_docs`)에 있는데 플랜 범위·정리·묶음이 앞쪽만 읽었다. 플랜 문법의 범위에는 프로젝트(`project_id`는 문법 밖)와 문서 종류를 적을 자리가 없었고, `open`에는 프로젝트 대상이 없었다.
+- **구현**: `ScopeFilter.role`(work | knowledge; 프로젝트와 함께면 knowledge = 그 프로젝트의 참고 묶음) — `scope::resolve`, 검색·답변의 `SearchScope.roles`; `Op::Search.group_by` + `exec::search_groups`(payload `groups: [{key,label,hits:[색인]}]`);
+  `OpenTarget::Project`(검증기가 이름 → id); `guard::where_to_look`(모델·규칙 플랜 공통: 사용자가 쓴 말의 종류·프로젝트 이름을 범위에 채움 `scope_filled`, "X 프로젝트 열어줘"를 프로젝트 열기로 바꿈; 읽기 전용 op에만 적용);
+  `guard::keep_the_split`이 검색도 봄; `validate::per_project`에 검색 포함; `projects::repo::all_memberships_with_reference` / `memberships_with_reference`(정리의 `project_vars`, 요약·검색 묶음). 화면: 결과 카드의 묶음 검색(`result-search-group`), `open project`, 답변 요청의 `roles`,
+  선택 범위가 풀리면 열린 프로젝트로 복귀. 모의 백엔드 동기화 + `e2e/harness.spec.ts` 1건.
+- **하지 않은 것**: 문서 종류를 말하지 않았을 때의 기본값은 그대로(검색·질문은 업무 + 참고, 프로젝트 범위의 요약·파일 작업은 업무 문서만). 플랜 카드의 범위 줄에 종류를 따로 표시하지 않음(경고 줄로만 알림). 설명(`explain`) op의 역할 필터. 실제 모델 측정.
+<!-- 0.8.1-RELEASE-RECORD -->
+
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
