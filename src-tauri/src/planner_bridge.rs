@@ -201,6 +201,12 @@ pub fn plan(app: &AppHandle, text: &str, ui: &UiPlanContext) -> UiResult<PlanRes
             result = r;
         }
     }
+    // A plan that changes documents without naming any got here only because the sentence said
+    // "전부" (the planner's scope guard): inside the 현재 프로젝트 scope that "all" is the project.
+    // (The validator leaves such a plan's scope empty so that the guard can ask — audit PLN-6.)
+    if !result.plan.is_clarification() {
+        planner::validate::apply_default_scope(&mut result.plan, &ctx);
+    }
     let preview = if result.plan.is_clarification() {
         None
     } else {
