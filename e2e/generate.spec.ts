@@ -276,6 +276,57 @@ test.describe("P6 document generation", () => {
     await expect(list).toHaveValue("첫째 항목\n둘째 항목");
   });
 
+  test("saving as Markdown registers the file in the library like the other formats (GEN-9)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openGenerate(page);
+    await page.getByTestId("generate-template").click();
+    await page.getByRole("option", { name: ko.generate.templates.meeting_minutes }).click();
+    await page.getByTestId("generate-content").fill("한빛 포털 구축 주간 회의록, 일정 점검과 리스크 논의");
+    await page.getByTestId("generate-run").click();
+    await expect(page.getByTestId("generate-preview")).toBeVisible({ timeout: 15_000 });
+
+    await page.getByTestId("generate-save").click();
+    await page.getByTestId("generate-save-format").click();
+    await page.getByRole("option", { name: ko.generate.output.md }).click();
+    // The hint says a Markdown file is registered too: the switch stays on and usable (it was forced off).
+    await expect(page.getByTestId("generate-save-dialog")).toContainText(ko.generate.save.warning_markdown);
+    await expect(page.getByTestId("generate-save-register")).toBeEnabled();
+    await expect(page.getByTestId("generate-save-register")).toHaveAttribute("aria-checked", "true");
+    await page.getByTestId("generate-save-confirm").click();
+    await expect(page.getByTestId("generate-saved")).toContainText(/^documents\/generated\/.+\.md/, { timeout: 10_000 });
+    await expect(page.getByTestId("toast-action")).toHaveText(ko.generate.save.open_library);
+    await expect(page.getByTestId("generate-saved-library")).toBeVisible();
+    await page.getByTestId("nav-library").click();
+    await expect(page.locator('[data-testid^="doc-card-"]')).toHaveCount(1);
+    await expect(page.locator('[data-testid^="doc-card-"]').first()).toHaveAttribute("data-doc-name", /\.md$/);
+  });
+
+  test("the 문서 선택 dialog keeps its ticks and search while a job reports progress behind it (GEN-6)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\개발계약서-2p.pdf", "D:\\scan\\견적서-1p.jpg"], { autoLevel: "none" });
+    const contract = await docId(page, "개발계약서-2p.pdf");
+    await openGenerate(page);
+    await page.getByTestId("generate-template").click();
+    await page.getByRole("option", { name: ko.generate.templates.progress_report }).click();
+    await page.getByTestId("generate-content").fill("한빛 포털 구축 10월 진척 보고서, 전체 진척률 60%");
+    // At the mock's real pace the draft job reports progress for more than a second: every report re-renders the form.
+    await page.evaluate(() => localStorage.removeItem("doculens.mock.fast"));
+    await page.getByTestId("generate-run").click();
+    await expect(page.getByTestId("generate-progress")).toBeVisible();
+    await page.getByTestId("generate-pick-sources").click();
+    await expect(page.getByTestId("generate-sources-dialog")).toBeVisible();
+    await page.getByTestId("generate-sources-search").fill("계약");
+    await page.getByTestId(`generate-source-${contract}`).check();
+    // The job finishes behind the dialog; the search text and the tick are still there.
+    await expect(page.getByTestId("generate-preview")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("generate-sources-search")).toHaveValue("계약");
+    await expect(page.getByTestId(`generate-source-${contract}`)).toBeChecked();
+    await page.getByTestId("generate-sources-done").click();
+    await expect(page.getByTestId("generate-sources").locator("li")).toHaveCount(1);
+  });
+
   test("assistant: '2절 다시 써줘 …' revises the open draft (plan → result card → the generate screen); without a draft it asks to open one", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
