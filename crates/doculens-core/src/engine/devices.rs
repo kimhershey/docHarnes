@@ -59,9 +59,31 @@ pub fn is_software_device(description: &str) -> bool {
     ["llvmpipe", "lavapipe", "swiftshader", "software rasterizer", "basic render driver"].iter().any(|s| d.contains(s))
 }
 
+/// Whether the Vulkan loader the pack links against can be found. On Windows a program whose
+/// DLL is missing does not just fail: the system shows a "vulkan-1.dll was not found" dialog — a
+/// background probe must never cause that on a PC without Vulkan (VM, basic display driver).
+pub fn vulkan_loader_present(vulkan_binary: &Path) -> bool {
+    if cfg!(windows) {
+        const LOADER: &str = "vulkan-1.dll";
+        let beside = vulkan_binary.parent().is_some_and(|dir| dir.join(LOADER).is_file());
+        let system = ["SystemRoot", "windir"]
+            .iter()
+            .filter_map(std::env::var_os)
+            .any(|root| Path::new(&root).join("System32").join(LOADER).is_file());
+        beside || system
+    } else {
+        // A missing libvulkan only makes the process exit with an error.
+        true
+    }
+}
+
 /// GPUs for a machine on which NVML reports none (AMD / Intel cards, PLT-4): what the Vulkan
-/// engine pack lists with `--list-devices`, without software rasterisers.
+/// engine pack lists with `--list-devices`, without software rasterisers. No Vulkan loader on
+/// the PC means no Vulkan GPU, and the pack is not started at all.
 pub fn probe_vulkan_gpus(vulkan_binary: &Path, timeout: Duration) -> Result<Vec<GpuInfo>> {
+    if !vulkan_loader_present(vulkan_binary) {
+        return Ok(Vec::new());
+    }
     let devices: Vec<EngineDevice> =
         list_devices(vulkan_binary, timeout)?.into_iter().filter(|d| !is_software_device(&d.description)).collect();
     Ok(to_gpu_infos(&devices))
@@ -167,5 +189,7 @@ mod tests {
             ("AMD Radeon RX 7600", 8176, GpuSource::Engine)
         );
         assert!(probe_vulkan_gpus(&tmp.path().join("missing"), Duration::from_secs(5)).is_err());
+        // Only Windows needs the loader check (a missing DLL raises a system dialog there).
+        assert!(vulkan_loader_present(&bin));
     }
 }
