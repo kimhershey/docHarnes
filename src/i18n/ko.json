@@ -867,6 +867,12 @@
       "speed": "속도",
       "fine_print": "잔글씨"
     },
+    "display_terms": {
+      "low_headroom": "저여유",
+      "accuracy": "정확도",
+      "balanced": "균형",
+      "embedding": "임베딩"
+    },
     "backends": {
       "auto": "자동",
       "cuda": "CUDA (cu121 / cu129 팩)",

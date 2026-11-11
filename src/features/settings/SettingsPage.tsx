@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router";
 
+import { useModelDisplay } from "@/app/hooks/useModelDisplay";
 import { THEME_ICONS } from "@/app/layout/ThemeMenu";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -518,8 +519,8 @@ function ProcessingTab() {
         <Row label={t("settings.processing.inbox_watch")} hint={t("library.inbox_watch_hint")}>
           <Switch
             data-testid="settings-inbox-watch"
-            checked={p.inbox_watch}
             aria-label={t("settings.processing.inbox_watch")}
+            checked={p.inbox_watch}
             onCheckedChange={(v) =>
               void api
                 .documentsSetInboxWatch(v)
@@ -617,6 +618,7 @@ function KnowledgeTab() {
   const settings = useSettingsStore((s) => s.settings)!;
   const update = useSettingsStore((s) => s.update);
   const { data: registry } = useRegistry();
+  const modelName = useModelDisplay();
   const k = settings.knowledge;
   const embeddings = (registry?.models ?? []).filter((m) => m.role === "embedding");
   const DEFAULT = "__default__";
@@ -655,7 +657,7 @@ function KnowledgeTab() {
               <SelectItem value={DEFAULT}>{t("settings.knowledge.embedding_default", { model: registry?.default_embedding ?? "-" })}</SelectItem>
               {embeddings.map((m) => (
                 <SelectItem key={m.id} value={m.id}>
-                  {m.display}
+                  {modelName(m.display)}
                 </SelectItem>
               ))}
             </SelectContent>

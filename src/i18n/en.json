@@ -867,6 +867,12 @@
       "speed": "Speed",
       "fine_print": "Fine print"
     },
+    "display_terms": {
+      "low_headroom": "low memory",
+      "accuracy": "accuracy",
+      "balanced": "balanced",
+      "embedding": "embedding"
+    },
     "backends": {
       "auto": "Automatic",
       "cuda": "CUDA (cu121 / cu129 pack)",

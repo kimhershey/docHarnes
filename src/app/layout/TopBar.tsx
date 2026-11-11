@@ -11,6 +11,7 @@ import { useActiveJobs } from "@/stores/jobs";
 import { useShortcut } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 
+import { useModelDisplay } from "../hooks/useModelDisplay";
 import { ThemeMenu } from "./ThemeMenu";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
@@ -20,6 +21,8 @@ export function TopBar() {
   const paletteChord = useShortcut("command_palette");
   const { data: assessment } = useAssessment();
   const jobs = useActiveJobs();
+  const modelName = useModelDisplay();
+  const activeModel = modelName(assessment?.active_model?.display);
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-bg-elevated px-3" data-testid="topbar">
@@ -40,10 +43,10 @@ export function TopBar() {
           {t("topbar.jobs", { count: jobs.length })}
         </Badge>
       </Link>
-      <Badge variant={assessment?.active_model_installed?.installed ? "ok" : "outline"} className="gap-1" data-testid="model-badge" title={assessment?.active_model?.display}>
+      <Badge variant={assessment?.active_model_installed?.installed ? "ok" : "outline"} className="gap-1" data-testid="model-badge" title={activeModel ?? undefined}>
         <Cpu className="size-3" aria-hidden="true" />
         <span className="max-w-40 truncate">
-          {assessment ? `${t(`hw.tier.${assessment.tier.tier}`)} · ${assessment.active_model?.display ?? t("topbar.no_model")}` : "…"}
+          {assessment ? `${t(`hw.tier.${assessment.tier.tier}`)} · ${activeModel ?? t("topbar.no_model")}` : "…"}
         </span>
       </Badge>
       <ThemeMenu />
