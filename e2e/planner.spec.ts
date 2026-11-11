@@ -532,12 +532,18 @@ test.describe("P5 planner", () => {
 
     // 되묻기 on a plan card: the reply re-plans with the plan as context; the old card is closed.
     await send(page, "견적서 월별 폴더로 옮겨");
-    const plan2 = assistantCard(page, "plan").last();
-    await expect(plan2).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    await expect(assistantCard(page, "plan").last()).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    // The card is pinned by its position. `.last()` is resolved again on every check, and the re-planned
+    // card the reply produces takes that place as soon as it arrives: whenever it arrived before the
+    // "cancelled" check below ran, the check looked at the new (pending) card and the test failed
+    // (about one run in ten on a busy machine).
+    const index = (await assistantCard(page, "plan").count()) - 1;
+    const plan2 = assistantCard(page, "plan").nth(index);
     await plan2.getByTestId("plan-ask-back-input").fill("검토 안 된 것도 같이 옮겨");
     await plan2.getByTestId("plan-ask-back").click();
     await expect(plan2).toHaveAttribute("data-plan-status", "cancelled");
-    await expect(page.locator('[data-testid="assistant-card-plan"]')).toHaveCount(3, { timeout: 15_000 });
+    // One more plan card: the re-planned one, waiting for approval.
+    await expect(assistantCard(page, "plan")).toHaveCount(index + 2, { timeout: 15_000 });
     await expect(assistantCard(page, "plan").last()).toHaveAttribute("data-plan-status", "pending");
   });
 
