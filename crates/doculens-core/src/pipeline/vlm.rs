@@ -77,6 +77,31 @@ fn is_output_format_error(e: &CoreError) -> bool {
     matches!(e, CoreError::Engine(m) if m.contains("does not match the expected"))
 }
 
+/// The request never reached a working server: the engine client failed before any HTTP
+/// status arrived (`POST <path>: io: Connection refused …`, a connect timeout) or the
+/// connection broke while the reply was streamed (`stream: …`) — the process is gone.
+/// Classified by the client's message shape, not by the OS error text (that one is localised).
+pub fn transport_failure(e: &CoreError) -> bool {
+    match e {
+        CoreError::Engine(m) => {
+            m.starts_with("POST ")
+                || m.starts_with("GET ")
+                || (m.starts_with("stream: ") && !m.to_ascii_lowercase().contains("utf-8"))
+        }
+        _ => false,
+    }
+}
+
+/// The engine itself is unavailable — stopped, crashed, its port closed, or answering 502 / 503 /
+/// 504 for a model instance that is gone — as opposed to a request it answered with an error or
+/// a reply that could not be used. Nothing about the document at hand is wrong then, and the
+/// next document would fail the same way within seconds (audit PIP-6).
+pub fn engine_unavailable(e: &CoreError) -> bool {
+    matches!(e, CoreError::EngineNotRunning)
+        || transport_failure(e)
+        || matches!(e, CoreError::Engine(m) if ["HTTP 502", "HTTP 503", "HTTP 504"].iter().any(|s| m.contains(s)))
+}
+
 /// Token usage of one or more calls.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Usage {
@@ -93,12 +118,15 @@ impl Usage {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Reply {
     pub content: String,
     pub usage: Usage,
     pub truncated: bool,
     pub attempts: u32,
+    /// The reply was cut because prompt + reply filled the context of the loaded instance: a
+    /// bigger reply budget cannot help, a shorter prompt can.
+    pub context_full: bool,
 }
 
 impl Vlm<'_> {
@@ -211,7 +239,13 @@ impl Vlm<'_> {
                             stage.as_str(),
                             self.ctx
                         );
-                        return Ok(Reply { content: res.content, usage, truncated, attempts: attempt });
+                        return Ok(Reply {
+                            content: res.content,
+                            usage,
+                            truncated,
+                            attempts: attempt,
+                            context_full: true,
+                        });
                     }
                     if truncated && attempt < MAX_ATTEMPTS {
                         // JSON cut mid-way is unusable: ×1.5 up to three tries. OCR gets one ×2 pass
@@ -234,7 +268,13 @@ impl Vlm<'_> {
                         last = Some(res);
                         continue;
                     }
-                    return Ok(Reply { content: res.content, usage, truncated, attempts: attempt });
+                    return Ok(Reply {
+                        content: res.content,
+                        usage,
+                        truncated,
+                        attempts: attempt,
+                        context_full: false,
+                    });
                 }
             }
         }
@@ -244,7 +284,7 @@ impl Vlm<'_> {
             if truncated {
                 log::warn!("{}: reply still truncated after {MAX_ATTEMPTS} attempts", stage.as_str());
             }
-            return Ok(Reply { content: res.content, usage, truncated, attempts: MAX_ATTEMPTS });
+            return Ok(Reply { content: res.content, usage, truncated, attempts: MAX_ATTEMPTS, context_full: false });
         }
         Err(last_err.unwrap_or_else(|| CoreError::engine("no reply")))
     }
@@ -261,24 +301,23 @@ impl Vlm<'_> {
         let reply = self.call(stage, messages, Some((name, schema)), max_tokens)?;
         match parse_json(&reply.content) {
             Some(v) => Ok((v, reply)),
-            None => {
-                if reply.truncated {
-                    // The prompt count lets callers tell "the model rambled" from "the slot was full".
-                    Err(CoreError::engine(format!(
-                        "{} reply was cut off ({} tokens; prompt {} tokens)",
-                        stage.as_str(),
-                        reply.usage.completion,
-                        reply.usage.prompt
-                    )))
-                } else {
-                    Err(CoreError::engine(format!(
-                        "{} reply is not JSON: {}",
-                        stage.as_str(),
-                        prompts::truncate(&reply.content, 120)
-                    )))
-                }
-            }
+            None => Err(unusable_json(stage, &reply)),
         }
+    }
+}
+
+/// The error of a JSON stage whose reply cannot be parsed.
+pub fn unusable_json(stage: Stage, reply: &Reply) -> CoreError {
+    if reply.truncated {
+        // The prompt count lets callers tell "the model rambled" from "the slot was full".
+        CoreError::engine(format!(
+            "{} reply was cut off ({} tokens; prompt {} tokens)",
+            stage.as_str(),
+            reply.usage.completion,
+            reply.usage.prompt
+        ))
+    } else {
+        CoreError::engine(format!("{} reply is not JSON: {}", stage.as_str(), prompts::truncate(&reply.content, 120)))
     }
 }
 
@@ -296,12 +335,66 @@ pub fn parse_json(text: &str) -> Option<Value> {
     serde_json::from_str::<Value>(&t[start..=end]).ok()
 }
 
+/// Salvages a JSON object whose end was cut off by the reply length limit: everything up to the
+/// last complete member / element is kept and the containers still open there are closed.
+/// `{"total": {…}, "items": [{"name": "A"}, {"name": "B", "am` → `{"total": {…}, "items":
+/// [{"name": "A"}]}` — an object inside an array (a table row) is only kept whole, a row with
+/// half its cells would read like a complete one. `None` when not even one complete member arrived.
+pub fn repair_truncated_json(text: &str) -> Option<Value> {
+    let start = text.find('{')?;
+    let s = &text[start..];
+    let mut stack: Vec<u8> = Vec::new();
+    let (mut in_string, mut escaped) = (false, false);
+    // The last place the text can be cut at: just before a `,` or just after a closing bracket
+    // (both follow a complete value), with the containers that are open there.
+    let mut cut: Option<(usize, Vec<u8>)> = None;
+    let inside_row = |stack: &[u8]| matches!(stack, [.., b']', b'}']);
+    for (i, c) in s.char_indices() {
+        if in_string {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' => in_string = true,
+            '{' => stack.push(b'}'),
+            '[' => stack.push(b']'),
+            '}' | ']' => {
+                if stack.pop() != Some(c as u8) {
+                    return None; // not the JSON we know how to close
+                }
+                if stack.is_empty() {
+                    // Complete after all (trailing text follows): the ordinary parser's case.
+                    return serde_json::from_str(&s[..=i]).ok();
+                }
+                if !inside_row(&stack) {
+                    cut = Some((i + 1, stack.clone()));
+                }
+            }
+            ',' if !inside_row(&stack) => cut = Some((i, stack.clone())),
+            _ => {}
+        }
+    }
+    let (end, open) = cut?;
+    let mut repaired = s[..end].to_string();
+    repaired.extend(open.iter().rev().map(|b| *b as char));
+    serde_json::from_str(&repaired).ok()
+}
+
 #[cfg(test)]
 pub(crate) mod testing {
     //! Scripted backend keyed by stage (the `json_schema` name of the request).
     use std::sync::Mutex;
 
     use super::*;
+
+    /// Members of the queue entry `push_raw` stores (raw reply text, its finish reason).
+    const RAW_REPLY: &str = "__raw_reply";
+    const RAW_FINISH: &str = "__raw_finish";
 
     pub struct StageChat {
         pub replies: Mutex<Vec<(String, Value)>>,
@@ -337,6 +430,13 @@ pub(crate) mod testing {
         /// Queues a JSON reply for the named stage (consumed first-in first-out; the last consumed one repeats).
         pub fn push(&self, stage: &str, v: Value) {
             self.replies.lock().unwrap().push((stage.into(), v));
+        }
+        /// Queues a reply for the named stage as raw text with its own finish reason (a cut-off
+        /// reply: `Some("length")`). It takes its turn in the stage's queue like a JSON reply but is
+        /// served once only — it never becomes the repeating last reply.
+        pub fn push_raw(&self, stage: &str, content: &str, finish: Option<&str>) {
+            let marker = serde_json::json!({ RAW_REPLY: content, RAW_FINISH: finish });
+            self.replies.lock().unwrap().push((stage.into(), marker));
         }
         pub fn push_ocr(&self, text: &str) {
             self.ocr.lock().unwrap().push(text.into());
@@ -381,6 +481,7 @@ pub(crate) mod testing {
                     return Err(CoreError::engine(q.remove(0)));
                 }
             }
+            let mut raw_finish: Option<String> = None;
             let content = match Self::stage_of(req) {
                 Some(stage) => {
                     let mut replies = self.replies.lock().unwrap();
@@ -388,8 +489,16 @@ pub(crate) mod testing {
                     match idx {
                         Some(i) => {
                             let v = replies.remove(i).1;
-                            self.last.lock().unwrap().insert(stage, v.clone());
-                            v.to_string()
+                            match v.get(RAW_REPLY).and_then(Value::as_str) {
+                                Some(raw) => {
+                                    raw_finish = v.get(RAW_FINISH).and_then(Value::as_str).map(str::to_string);
+                                    raw.to_string()
+                                }
+                                None => {
+                                    self.last.lock().unwrap().insert(stage, v.clone());
+                                    v.to_string()
+                                }
+                            }
                         }
                         None => match self.last.lock().unwrap().get(&stage) {
                             Some(v) => v.to_string(),
@@ -410,7 +519,9 @@ pub(crate) mod testing {
             };
             Ok(ChatResponse {
                 content,
-                finish_reason: Some(self.finish.lock().unwrap().clone().unwrap_or_else(|| "stop".into())),
+                finish_reason: Some(
+                    raw_finish.or_else(|| self.finish.lock().unwrap().clone()).unwrap_or_else(|| "stop".into()),
+                ),
                 usage: Some({
                     let (p, c) = self.usage.lock().unwrap().unwrap_or((100, 20));
                     crate::engine::client::ChatUsage { prompt_tokens: p, completion_tokens: c, total_tokens: p + c }
@@ -534,6 +645,62 @@ mod tests {
         assert_eq!(parse_json("```json\n{\"a\": 1}\n```"), Some(json!({"a": 1})));
         assert_eq!(parse_json("Sure: {\"a\": [1, 2]} done"), Some(json!({"a": [1, 2]})));
         assert_eq!(parse_json("nothing"), None);
+    }
+
+    /// Audit PIP-8: a reply cut by the length limit is salvaged up to its last complete member.
+    #[test]
+    fn truncated_json_is_salvaged_up_to_the_last_complete_member() {
+        let total = json!({ "value": "1,000", "evidence": "합계 1,000", "confidence": 90 });
+        // Cut inside the second table row: complete rows only.
+        let cut = r#"{"total": {"value": "1,000", "evidence": "합계 1,000", "confidence": 90}, "items": [{"name": "A, B", "amount": "500"}, {"name": "C", "amo"#;
+        assert_eq!(
+            repair_truncated_json(cut),
+            Some(json!({ "total": total, "items": [{ "name": "A, B", "amount": "500" }] }))
+        );
+        // Cut inside a field object: the members that arrived are kept (brackets and escaped
+        // quotes inside strings do not count).
+        let cut = "```json\n{\"a\": {\"value\": \"x\", \"evidence\": \"e\", \"confidence\": 9}, \"b\": {\"value\": \"y \\\"q\\\" }\", \"evid";
+        assert_eq!(
+            repair_truncated_json(cut),
+            Some(json!({ "a": { "value": "x", "evidence": "e", "confidence": 9 }, "b": { "value": "y \"q\" }" } }))
+        );
+        // A number may be cut in the middle: the member before it is the last complete one.
+        assert_eq!(repair_truncated_json(r#"{"a": 1, "b": 12"#), Some(json!({ "a": 1 })));
+        // Nothing complete, no JSON, mismatched brackets: no salvage.
+        assert_eq!(repair_truncated_json(r#"{"a": {"value": "x"#), None);
+        assert_eq!(repair_truncated_json("no json here"), None);
+        assert_eq!(repair_truncated_json(r#"{"a": [1, 2}, "b": 3"#), None);
+        // A complete object passes through.
+        assert_eq!(repair_truncated_json(r#"{"a": [1, 2]} trailing"#), Some(json!({ "a": [1, 2] })));
+    }
+
+    /// Audit PIP-6: only a missing engine stops a batch; a request the engine answered does not.
+    #[test]
+    fn engine_level_failures_are_told_from_request_failures() {
+        let engine = |m: &str| CoreError::engine(m);
+        assert!(engine_unavailable(&CoreError::EngineNotRunning));
+        assert!(engine_unavailable(&engine("POST /v1/chat/completions: io: Connection refused (os error 111)")));
+        assert!(engine_unavailable(&engine(
+            "POST /v1/chat/completions: io: 대상 컴퓨터에서 연결을 거부했으므로 연결하지 못했습니다. (os error 10061)"
+        )));
+        assert!(engine_unavailable(&engine("POST /v1/chat/completions: timeout: connect")));
+        assert!(engine_unavailable(&engine("stream: unexpected end of file")));
+        assert!(engine_unavailable(&engine("/v1/chat/completions: HTTP 503: Loading model")));
+        for answered in [
+            "/v1/chat/completions: HTTP 400: grammar",
+            "/v1/chat/completions: HTTP 500: The model produced output that does not match the expected peg-native format",
+            "stream error: {\"code\":500,\"message\":\"x\"}",
+            "stream: stream did not contain valid UTF-8",
+            "kie reply is not JSON: …",
+            "no scripted reply for stage classify",
+        ] {
+            assert!(!engine_unavailable(&engine(answered)), "{answered}");
+        }
+        assert!(!engine_unavailable(&CoreError::Cancelled));
+        assert!(
+            transport_failure(&engine("GET /health: io: Connection refused"))
+                && !transport_failure(&CoreError::EngineNotRunning)
+        );
     }
 
     #[test]

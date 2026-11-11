@@ -390,6 +390,27 @@ struct OcrColumns {
     layout: Option<String>,
 }
 
+/// The pages as the knowledge index sees them: with `privacy.pii_masking` on (the default),
+/// resident registration numbers in a text layer / converted text / hand-corrected text are
+/// masked before they are chunked, so the search index, the snippets and the answers built from
+/// it never hold them. `pages.text` itself — what the viewer shows — is left as it is.
+pub fn list_pages_for_index(conn: &Connection, id: &str) -> rusqlite::Result<Vec<PageRecord>> {
+    list_pages_masked(conn, id, crate::pipeline::validate::index_masking())
+}
+
+/// [`list_pages`] with the texts masked when `mask` is set.
+pub fn list_pages_masked(conn: &Connection, id: &str, mask: bool) -> rusqlite::Result<Vec<PageRecord>> {
+    let mut pages = list_pages(conn, id, true)?;
+    if mask {
+        for page in &mut pages {
+            if let Some(text) = page.text.as_mut().filter(|t| crate::pipeline::validate::contains_rrn(t)) {
+                *text = crate::pipeline::validate::mask_text(text);
+            }
+        }
+    }
+    Ok(pages)
+}
+
 pub fn list_pages(conn: &Connection, id: &str, with_text: bool) -> rusqlite::Result<Vec<PageRecord>> {
     let mut stmt = conn.prepare_cached(
         "SELECT document_id, page_no, width_px, height_px, width_pt, height_pt, dpi, rotation, has_text, text, is_blank, \
@@ -428,7 +449,8 @@ pub fn get_page(conn: &Connection, id: &str, page_no: u32) -> rusqlite::Result<O
 }
 
 /// Stores a manual correction of a page's text (`text_source = 'manual'`, design §3.7 "직접 수정"):
-/// it survives re-renders and the OCR stage (only a forced re-OCR replaces it) and bumps the
+/// it survives re-renders and the OCR stage (only a forced re-OCR that asks for it with
+/// `ProcessRequest.reocr_manual` replaces it; a changed source file drops it) and bumps the
 /// document so the knowledge indexer re-chunks it. An empty text clears the page's text.
 /// Returns false when the page does not exist.
 pub fn set_page_text(conn: &Connection, id: &str, page_no: u32, text: &str) -> rusqlite::Result<bool> {
@@ -664,8 +686,9 @@ pub fn set_rel_path(conn: &Connection, id: &str, rel_path: &str, original_name: 
 }
 
 /// Records a file's hash / size / mtime. A changed hash means different content: the
-/// OCR text, page classes and extraction bookkeeping of the old content are dropped
-/// so the next pipeline run starts over (a manual document type is kept).
+/// OCR text, manual page corrections (with their edit history), page classes and
+/// extraction bookkeeping of the old content are dropped so the next pipeline run starts
+/// over (a manual document type is kept).
 pub fn set_file_info(
     conn: &Connection,
     id: &str,
@@ -685,17 +708,22 @@ pub fn set_file_info(
     Ok(())
 }
 
-/// Forgets everything the pipeline derived from a document's previous content.
+/// Forgets everything the pipeline and the user derived from a document's previous content:
+/// OCR text, manual page corrections and their undo history, every word layout, the page
+/// classes and the extraction bookkeeping (vendor / date / amount of the latest run included).
+/// A page's own text layer stays until the re-render that follows replaces it.
 pub fn reset_pipeline_state(conn: &Connection, id: &str) -> rusqlite::Result<()> {
     conn.execute(
-        "UPDATE pages SET text = CASE WHEN text_source = 'ocr' THEN NULL ELSE text END, \
-         has_text = CASE WHEN text_source = 'ocr' THEN 0 ELSE has_text END, \
-         layout = CASE WHEN text_source = 'ocr' THEN NULL ELSE layout END, \
-         text_source = CASE WHEN text_source = 'ocr' THEN NULL ELSE text_source END, ocr_at = NULL, ocr_profile = NULL, \
-         ocr_model = NULL, classified_at = NULL, page_doc_type = NULL, page_language = NULL, page_rotation = NULL \
-         WHERE document_id = ?1",
+        "UPDATE pages SET text = CASE WHEN text_source IN ('ocr', 'manual') THEN NULL ELSE text END, \
+         has_text = CASE WHEN text_source IN ('ocr', 'manual') THEN 0 ELSE has_text END, \
+         layout = NULL, \
+         text_source = CASE WHEN text_source IN ('ocr', 'manual') THEN NULL ELSE text_source END, ocr_at = NULL, \
+         ocr_profile = NULL, ocr_model = NULL, classified_at = NULL, page_doc_type = NULL, page_language = NULL, \
+         page_rotation = NULL WHERE document_id = ?1",
         [id],
     )?;
+    // The corrections of the old content must not be re-applied over the new pages by undo / redo.
+    conn.execute("DELETE FROM page_text_history WHERE document_id = ?1", [id])?;
     conn.execute(
         "UPDATE documents SET has_text_layer = EXISTS(SELECT 1 FROM pages WHERE document_id = ?1 AND has_text = 1) WHERE id = ?1",
         [id],
@@ -704,7 +732,7 @@ pub fn reset_pipeline_state(conn: &Connection, id: &str) -> rusqlite::Result<()>
         "UPDATE documents SET doc_type = CASE WHEN doc_type_source = 'manual' THEN doc_type ELSE NULL END, \
          doc_type_source = CASE WHEN doc_type_source = 'manual' THEN 'manual' ELSE NULL END, classified_at = NULL, \
          ocr_at = NULL, extracted_at = NULL, last_run_id = NULL, review_status = 'none', confidence = NULL, \
-         pipeline_error = NULL, updated_at = ?2 WHERE id = ?1",
+         vendor = NULL, doc_date = NULL, total_amount = NULL, pipeline_error = NULL, updated_at = ?2 WHERE id = ?1",
         params![id, ts(&Utc::now())],
     )?;
     Ok(())

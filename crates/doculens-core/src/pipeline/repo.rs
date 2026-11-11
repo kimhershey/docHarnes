@@ -240,6 +240,66 @@ pub fn free_name(conn: &Connection, name: &str, excluding: Option<&str>) -> rusq
     Ok(format!("{base} ({})", chrono::Utc::now().timestamp()))
 }
 
+/// The fallback document type: what a document is extracted with when no other type fits it
+/// (`run::resolve_schema`). It must always have an enabled schema.
+pub const GENERAL_DOC_TYPE: &str = "general";
+
+/// Refuses a change that takes the last enabled schema of the fallback type away (disabling,
+/// deleting or moving it to another type): every "기타" document would fail with
+/// `schema_not_found` afterwards.
+fn keep_general(conn: &Connection, s: &SchemaRecord) -> rusqlite::Result<()> {
+    if s.doc_type != GENERAL_DOC_TYPE || !s.enabled {
+        return Ok(());
+    }
+    let others: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM schemas WHERE doc_type = ?1 AND enabled = 1 AND id <> ?2",
+        params![GENERAL_DOC_TYPE, s.id],
+        |r| r.get(0),
+    )?;
+    if others == 0 {
+        return Err(typed("schema_general_required"));
+    }
+    Ok(())
+}
+
+/// `true` when no enabled schema other than `excluding` has this document type: the type is
+/// gone from the type list (`doc_types`) once `excluding` leaves it.
+fn type_would_vanish(conn: &Connection, doc_type: &str, excluding: &str) -> rusqlite::Result<bool> {
+    let others: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM schemas WHERE doc_type = ?1 AND enabled = 1 AND id <> ?2",
+        params![doc_type, excluding],
+        |r| r.get(0),
+    )?;
+    Ok(others == 0)
+}
+
+/// Documents a type change or the deletion of this schema may touch: the documents of its type,
+/// the ones pinned to it and its form sample (for the `documents://changed` event).
+pub fn documents_of_schema(conn: &Connection, s: &SchemaRecord) -> rusqlite::Result<Vec<String>> {
+    let mut stmt =
+        conn.prepare("SELECT id FROM documents WHERE doc_type = ?1 OR schema_id = ?2 OR id = ?3 ORDER BY id")?;
+    let rows = stmt.query_map(params![s.doc_type, s.id, s.form_document_id], |r| r.get(0))?;
+    rows.collect()
+}
+
+/// A form sample whose schema is gone is an ordinary document again (unless another schema
+/// still uses it as its form). Its type is kept as the user's choice.
+fn release_form_sample(conn: &Connection, s: &SchemaRecord, now: &str) -> rusqlite::Result<()> {
+    let Some(doc) = s.form_document_id.as_deref() else { return Ok(()) };
+    let still_used: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM schemas WHERE form_document_id = ?1 AND id <> ?2",
+        params![doc, s.id],
+        |r| r.get(0),
+    )?;
+    if still_used == 0 {
+        conn.execute(
+            "UPDATE documents SET role = 'work',              doc_type_source = CASE WHEN doc_type IS NULL THEN NULL ELSE 'manual' END, updated_at = ?2              WHERE id = ?1 AND role = 'form'",
+            params![doc, now],
+        )?;
+    }
+    Ok(())
+}
+
 pub fn save_schema(conn: &Connection, draft: &SchemaDraft) -> rusqlite::Result<SchemaRecord> {
     let name = draft.name.trim();
     if name.is_empty() {
@@ -278,6 +338,21 @@ pub fn save_schema(conn: &Connection, draft: &SchemaDraft) -> rusqlite::Result<S
             // Moving a schema to another type: the old type promotes another schema when this
             // was its default; the new type keeps exactly one default.
             if current.doc_type != doc_type {
+                keep_general(conn, &current)?;
+                // The documents follow the type: the ones pinned to this schema and its form
+                // sample always, every document of the old type when no other schema keeps that
+                // type alive (they would show the raw slug and drop out of the type filter).
+                let vanishes = type_would_vanish(conn, &current.doc_type, id)?;
+                conn.execute(
+                    "UPDATE documents SET doc_type = ?2, updated_at = ?6                      WHERE doc_type = ?1 AND (?3 OR schema_id = ?4 OR id = ?5)",
+                    params![current.doc_type, doc_type, vanishes, id, current.form_document_id, now],
+                )?;
+                if vanishes {
+                    conn.execute(
+                        "UPDATE pages SET page_doc_type = ?2 WHERE page_doc_type = ?1",
+                        params![current.doc_type, doc_type],
+                    )?;
+                }
                 if current.is_default {
                     conn.execute(
                         "UPDATE schemas SET is_default = 1 WHERE doc_type = ?1 AND id = \
@@ -362,6 +437,11 @@ pub fn set_default_schema(conn: &Connection, id: &str) -> rusqlite::Result<()> {
 }
 
 pub fn set_schema_enabled(conn: &Connection, id: &str, enabled: bool) -> rusqlite::Result<()> {
+    if !enabled {
+        if let Some(s) = get_schema(conn, id)? {
+            keep_general(conn, &s)?;
+        }
+    }
     let n = conn.execute(
         "UPDATE schemas SET enabled = ?2, updated_at = ?3 WHERE id = ?1",
         params![id, enabled as i64, ts(&Utc::now())],
@@ -373,10 +453,27 @@ pub fn set_schema_enabled(conn: &Connection, id: &str, enabled: bool) -> rusqlit
 }
 
 /// Deletes a non-builtin schema (runs keep their `schema_id` as a loose reference).
+///
+/// The documents follow: a pinned schema is unpinned, the form sample is an ordinary document
+/// again, and when the type has no enabled schema left its documents become unclassified (the
+/// next run classifies them again) instead of carrying a slug no type list knows.
 pub fn delete_schema(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
     let Some(s) = get_schema(conn, id)? else { return Ok(false) };
     if s.source == SchemaSource::Builtin {
         return Err(typed("schema_builtin"));
+    }
+    keep_general(conn, &s)?;
+    let now = ts(&Utc::now());
+    release_form_sample(conn, &s, &now)?;
+    if type_would_vanish(conn, &s.doc_type, id)? {
+        conn.execute(
+            "UPDATE documents SET role = CASE WHEN role = 'form' THEN 'work' ELSE role END, doc_type = NULL,              doc_type_source = NULL, classified_at = NULL, updated_at = ?2 WHERE doc_type = ?1",
+            params![s.doc_type, now],
+        )?;
+        conn.execute(
+            "UPDATE pages SET page_doc_type = NULL, classified_at = NULL WHERE page_doc_type = ?1",
+            [&s.doc_type],
+        )?;
     }
     conn.execute("DELETE FROM schemas WHERE id = ?1", [id])?;
     if s.is_default {
@@ -997,6 +1094,55 @@ fn field_history_by_id(conn: &Connection, id: i64) -> rusqlite::Result<Option<Fi
         },
     )
     .optional()
+}
+
+// ---------------------------------------------------------------------------
+// Request journal (resume, audit PIP-5)
+// ---------------------------------------------------------------------------
+//
+// A processing request that is run again — a job retried after a failure / cancel, or resumed
+// after the app was closed — must go on with the documents it has not finished, not start over.
+// The documents a request finished are kept as `kv` rows `pipeline.request.<request id>.<doc id>`
+// until the request runs to its end.
+
+const REQUEST_JOURNAL: &str = "pipeline.request.";
+/// Journals nobody came back for are dropped after this many days.
+const REQUEST_JOURNAL_DAYS: i64 = 30;
+
+fn journal_prefix(request_id: &str) -> String {
+    format!("{REQUEST_JOURNAL}{request_id}.")
+}
+
+/// Documents an earlier attempt of the request finished.
+pub fn request_done(conn: &Connection, request_id: &str) -> rusqlite::Result<Vec<String>> {
+    let prefix = journal_prefix(request_id);
+    let mut st = conn.prepare_cached("SELECT key FROM kv WHERE substr(key, 1, length(?1)) = ?1")?;
+    let keys: Vec<String> = st.query_map([&prefix], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(keys.iter().filter_map(|k| k.strip_prefix(&prefix)).map(str::to_string).collect())
+}
+
+/// Notes that the request finished a document.
+pub fn request_mark_done(conn: &Connection, request_id: &str, doc_id: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO kv (key, value, updated_at) VALUES (?1, 'done', ?2) \
+         ON CONFLICT(key) DO UPDATE SET updated_at = excluded.updated_at",
+        params![format!("{}{doc_id}", journal_prefix(request_id)), ts(&Utc::now())],
+    )?;
+    Ok(())
+}
+
+/// Forgets the journal of a request that ran to its end.
+pub fn request_clear(conn: &Connection, request_id: &str) -> rusqlite::Result<usize> {
+    conn.execute("DELETE FROM kv WHERE substr(key, 1, length(?1)) = ?1", [journal_prefix(request_id)])
+}
+
+/// Drops the journals of requests that were never run again (older than [`REQUEST_JOURNAL_DAYS`]).
+pub fn prune_request_journals(conn: &Connection) -> rusqlite::Result<usize> {
+    let cutoff = Utc::now() - chrono::Duration::days(REQUEST_JOURNAL_DAYS);
+    conn.execute(
+        "DELETE FROM kv WHERE substr(key, 1, length(?1)) = ?1 AND updated_at < ?2",
+        params![REQUEST_JOURNAL, ts(&cutoff)],
+    )
 }
 
 // ---------------------------------------------------------------------------

@@ -338,6 +338,19 @@ pub fn is_key(s: &str) -> bool {
         && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'_')
 }
 
+/// Key under which a merged table row carries the page it was read from. A column cannot use it
+/// (a "제목 · 페이지" table of contents would get its page column replaced by the source page).
+pub const ROW_PAGE_KEY: &str = "page";
+
+/// A derived table column key, moved off the reserved row key (`page` → `page_no`).
+pub fn column_key(key: String) -> String {
+    if key == ROW_PAGE_KEY {
+        "page_no".into()
+    } else {
+        key
+    }
+}
+
 /// Best-effort key from a label: ASCII letters/digits lower-cased, runs of
 /// anything else collapsed to `_`; non-ASCII labels get a dictionary hit or
 /// the `fallback`.
@@ -700,11 +713,11 @@ pub fn draft_from_metaschema(v: &Value, source: SchemaSource) -> SchemaDraft {
                 let cl_ko = c.get("label_ko").and_then(Value::as_str).unwrap_or("").trim().to_string();
                 let cl_en = c.get("label_en").and_then(Value::as_str).unwrap_or("").trim().to_string();
                 let ck = c.get("key").and_then(Value::as_str).unwrap_or("").trim().to_string();
-                let mut ck = if is_key(&ck) {
+                let mut ck = column_key(if is_key(&ck) {
                     ck
                 } else {
                     key_from_label(if cl_en.is_empty() { &cl_ko } else { &cl_en }, &format!("col_{}", j + 1))
-                };
+                });
                 let mut n = 2;
                 let base = ck.clone();
                 while cseen.contains(&ck) {
@@ -840,6 +853,14 @@ fn lint_field(f: &FieldDef, path: &str, nested: bool, out: &mut Vec<LintIssue>) 
                 let cp = format!("{path}.{}", c.key);
                 if !seen.insert(c.key.clone()) {
                     out.push(issue("error", &cp, "key_duplicate", "duplicate column key"));
+                }
+                if f.kind == FieldKind::Table && c.key == ROW_PAGE_KEY {
+                    out.push(issue(
+                        "error",
+                        &cp,
+                        "key_reserved",
+                        "'page' is reserved in a table row (the page the row was read from); use e.g. 'page_no'",
+                    ));
                 }
                 lint_field(c, &cp, true, out);
             }
@@ -1813,6 +1834,30 @@ mod tests {
         };
         let issues = lint(&def);
         let codes: Vec<&str> = issues.iter().map(|i| i.code.as_str()).collect();
+        // Audit PIP-12: a table column keyed `page` would be replaced by the row's source page.
+        let toc = |column: &str| SchemaDef {
+            fields: vec![
+                FieldDef::new("toc", "목차", "", FieldKind::Table).with(vec![
+                    FieldDef::new("title", "제목", "", FieldKind::String),
+                    FieldDef::new(column, "페이지", "", FieldKind::Integer),
+                ]),
+                // Outside a table row nothing clashes: a scalar or a group member may be `page`.
+                FieldDef::new("page", "쪽", "", FieldKind::Integer),
+                FieldDef::new("cover", "표지", "", FieldKind::Group).with(vec![FieldDef::new(
+                    "page",
+                    "쪽",
+                    "",
+                    FieldKind::Integer,
+                )]),
+            ],
+            rules: vec![],
+        };
+        let reserved: Vec<LintIssue> = lint(&toc("page")).into_iter().filter(|i| i.level == "error").collect();
+        assert_eq!(reserved.len(), 1, "{reserved:?}");
+        assert_eq!((reserved[0].code.as_str(), reserved[0].path.as_str()), ("key_reserved", "toc.page"));
+        assert!(!has_errors(&lint(&toc("page_no"))));
+        assert_eq!(column_key("page".into()), "page_no");
+        assert_eq!(column_key("pages".into()), "pages");
         for c in
             ["key_format", "regex_anchor", "enum_empty", "nesting", "key_duplicate", "key_reserved", "rule_unknown"]
         {

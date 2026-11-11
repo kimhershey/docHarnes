@@ -33,7 +33,18 @@ const INBOX_SETTLE: Duration = Duration::from_secs(3);
 const INBOX_RETRY: Duration = Duration::from_secs(4);
 /// How long a workspace switch waits for cancelled document jobs to stop.
 const CANCEL_WAIT: Duration = Duration::from_secs(8);
-const DOC_JOBS: [JobKind; 3] = [JobKind::DocumentImport, JobKind::DocumentRescan, JobKind::DocumentRender];
+/// Jobs that write documents: a rescan started meanwhile would reprocess what they are writing.
+const DOC_JOBS: [JobKind; 5] = [
+    JobKind::DocumentImport,
+    JobKind::DocumentRescan,
+    JobKind::DocumentRender,
+    JobKind::DocumentSplit,
+    JobKind::DocumentMerge,
+];
+/// Jobs that put files into the workspace and register them themselves. An inbox scan that ran
+/// meanwhile took those files for new arrivals (a split inside `inbox/` then failed on the
+/// duplicate path and rolled back the watcher's documents — audit DOC-3), so it waits for them.
+const INBOX_BLOCKERS: [JobKind; 3] = [JobKind::DocumentImport, JobKind::DocumentSplit, JobKind::DocumentMerge];
 /// Everything that touches the workspace DB on a background thread.
 const WORKSPACE_JOBS: [JobKind; 13] = [
     JobKind::DocumentImport,
@@ -179,6 +190,9 @@ pub fn context(app: &AppHandle) -> UiResult<DocsContext> {
     let (db, paths) = state.with_workspace(|ws| (ws.db.clone(), ws.paths.clone()))?;
     let generation = state.workspace_generation.load(Ordering::SeqCst);
     let settings = state.settings_snapshot()?;
+    // The indexer masks resident numbers in page texts by this switch (PIP-7); every index /
+    // pipeline / import job builds its context here first, so it follows the settings.
+    doculens_core::pipeline::validate::set_index_masking(settings.privacy.pii_masking);
     let render_options =
         RenderOptions { dpi: settings.processing.render_dpi.clamp(72, 600), thumbnails: true, ..Default::default() };
     let printer: Arc<dyn PdfPrinter> =
@@ -254,7 +268,12 @@ pub fn start_inbox_watcher(app: &AppHandle, paths: &WorkspacePaths) {
     let state = app.state::<AppState>();
     let inbox = paths.inbox_dir();
     let app2 = app.clone();
-    let relevant = |p: &std::path::Path| p.is_dir() || SourceKind::from_path(p).is_some();
+    // Office owner files (`~$보고서.docx`) and other temporaries are no reason to scan the inbox.
+    let relevant = |p: &std::path::Path| {
+        p.is_dir()
+            || (SourceKind::from_path(p).is_some()
+                && !p.file_name().is_some_and(|n| import::is_transient_name(&n.to_string_lossy())))
+    };
     // The callback runs on the watcher thread (which `Drop` joins): only hand off.
     let on_change = move || spawn_inbox_scan(&app2);
     match DirWatcher::start(&inbox, INBOX_SETTLE, "doculens-inbox-watch", relevant, on_change) {
@@ -350,13 +369,15 @@ pub fn import_job(app: &AppHandle, plan: ImportPlan) -> UiResult<String> {
     let ctx = context(app)?;
     let subject = match plan.source {
         ImportSource::Inbox => "inbox".to_string(),
+        // Nothing new: the job only puts the registered documents into the collection / project.
+        _ if plan.new_count + plan.relink_count == 0 => format!("{} documents", plan.existing_ids().len()),
         _ => format!("{} files", plan.new_count + plan.relink_count),
     };
     let (job, cancel) = state.jobs.create(JobKind::DocumentImport, &subject);
     let job_id = job.clone();
     let source = plan.source;
     let auto_level = plan.options.auto_level;
-    // Ids of the documents this import touched, handed to the auto pipeline afterwards.
+    // Ids of the documents this import brought in, handed to the auto pipeline afterwards.
     let processed: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let processed_after = processed.clone();
     spawn_job_thread(
@@ -394,6 +415,17 @@ pub fn import_job(app: &AppHandle, plan: ImportPlan) -> UiResult<String> {
             if !batch_ids.is_empty() {
                 ctx.emit(app, "batch", batch_ids.clone());
             }
+            // Registered documents the batch met again joined its collection / project (their role
+            // may have followed the collection): the lists refresh for them as well.
+            let has_target = plan.options.collection_id.is_some() || plan.options.project_id.is_some();
+            if has_target && !report.existing.is_empty() {
+                ctx.emit(app, "updated", report.existing.clone());
+            }
+            if let Some(cid) = plan.options.collection_id.as_deref() {
+                if ctx.is_current(app) {
+                    crate::knowledge_bridge::emit_changed(app, "collections", vec![cid.to_string()]);
+                }
+            }
             // §3.15: `inbox/<folder>/…` joins the project mapped to that folder (created on demand).
             let mut assigned: Vec<String> = Vec::new();
             for id in report.imported.iter().chain(report.relinked.iter()) {
@@ -419,8 +451,10 @@ pub fn import_job(app: &AppHandle, plan: ImportPlan) -> UiResult<String> {
             // that started this import attaches the new documents once the job finishes.
             state.jobs.set_result(&job_id, serde_json::to_value(&report).ok());
             if let Ok(mut p) = processed.lock() {
+                // Only new content goes to the automatic pipeline. A relinked document (the same
+                // file under a new name / place) keeps what was extracted and reviewed: handing it
+                // over re-extracted it and reset its review (audit PIP-1).
                 p.extend(report.imported.iter().cloned());
-                p.extend(report.relinked.iter().cloned());
                 p.retain(|id| batch_ids.contains(id));
             }
             if report.cancelled || cancel.load(Ordering::Relaxed) {
@@ -462,13 +496,21 @@ pub fn spawn_inbox_scan(app: &AppHandle) {
     std::thread::Builder::new().name("doculens-inbox-scan".into()).spawn(move || inbox_job(&app2)).ok();
 }
 
+/// Runs the inbox scan that was put off while a job of [`INBOX_BLOCKERS`] ran (called from the
+/// `after` hook of such a job, once it is no longer active).
+pub fn inbox_scan_if_dirty(app: &AppHandle) {
+    if app.state::<AppState>().inbox_dirty.swap(false, Ordering::SeqCst) {
+        spawn_inbox_scan(app);
+    }
+}
+
 /// Imports settled, unregistered inbox files (watcher / toggle / startup).
 /// Runs on a background thread; see `spawn_inbox_scan`.
 pub fn inbox_job(app: &AppHandle) {
     let state = app.state::<AppState>();
-    if state.jobs.is_active_kind(&[JobKind::DocumentImport]) {
-        // A drop import may be copying into inbox/ right now, or an inbox run is
-        // in progress: re-check when the running job finishes.
+    if state.jobs.is_active_kind(&INBOX_BLOCKERS) {
+        // A drop import may be copying into inbox/ right now, an inbox run is in progress, or a
+        // split / merge is writing files it registers itself: re-check when that job finishes.
         state.inbox_dirty.store(true, Ordering::SeqCst);
         return;
     }
@@ -647,16 +689,26 @@ pub fn delete_documents(app: &AppHandle, ids: &[String], keep_files: bool) -> Ui
     let deps = ctx.deps();
     let mut removed = Vec::new();
     let mut errors = Vec::new();
+    let mut in_use = 0usize;
     for id in ids {
         match import::delete_document(&deps, id, keep_files) {
             Ok(_) => removed.push(id.clone()),
-            Err(e) => errors.push(format!("{id}: {e}")),
+            Err(e) => {
+                // The file is held open by another program: the document stays (audit DOC-12).
+                if matches!(&e, CoreError::Invalid(m) if m == import::FILE_IN_USE) {
+                    in_use += 1;
+                }
+                errors.push(format!("{id}: {e}"));
+            }
         }
     }
     if !removed.is_empty() {
         emit_changed(app, "removed", removed.clone());
     }
     if !errors.is_empty() && removed.is_empty() {
+        if in_use == errors.len() {
+            return Err(UiError::invalid(import::FILE_IN_USE));
+        }
         return Err(UiError::invalid(errors.join("; ")));
     }
     Ok(removed)

@@ -35,6 +35,18 @@ pub fn ranges(total: u32, boundaries: &[u32]) -> Vec<(u32, u32)> {
 
 /// Writes one PDF per range next to `out_dir/<stem>_partN.pdf`; returns `(path, pages)`.
 pub fn split_pdf(src: &Path, boundaries: &[u32], out_dir: &Path, stem: &str) -> Result<Vec<(PathBuf, u32)>> {
+    split_pdf_avoiding(src, boundaries, out_dir, stem, &|p| p.exists())
+}
+
+/// [`split_pdf`] with the caller's notion of a taken file name (existing files plus, for
+/// documents, paths that are registered in the workspace database).
+fn split_pdf_avoiding(
+    src: &Path,
+    boundaries: &[u32],
+    out_dir: &Path,
+    stem: &str,
+    taken: &dyn Fn(&Path) -> bool,
+) -> Result<Vec<(PathBuf, u32)>> {
     let doc = Document::load(src).map_err(|e| pdf_err("load", e))?;
     let total = doc.get_pages().len() as u32;
     if total < 2 {
@@ -52,7 +64,7 @@ pub fn split_pdf(src: &Path, boundaries: &[u32], out_dir: &Path, stem: &str) -> 
         part.delete_pages(&remove);
         part.prune_objects();
         part.renumber_objects();
-        let path = import::unique_target(out_dir, &format!("{stem}_part{}.pdf", i + 1), &|p| p.exists());
+        let path = import::unique_target(out_dir, &format!("{stem}_part{}.pdf", i + 1), taken);
         part.save(&path).map_err(|e| CoreError::io(&path, e))?;
         out.push((path, last - first + 1));
     }
@@ -223,30 +235,26 @@ fn pdf_source(deps: &ImportDeps<'_>, doc: &DocumentRecord) -> Result<PathBuf> {
             jpeg_to_pdf(&src, &out, doc.render_dpi.unwrap_or(200) as f32)?;
             Ok(out)
         }
-        _ => {
-            let converted = DocumentCache::for_document(deps.paths, &doc.id).converted_pdf();
-            if converted.is_file() {
-                Ok(converted)
-            } else {
-                Err(CoreError::Unsupported(format!("{}: no converted PDF", doc.original_name)))
-            }
-        }
+        // Office / text documents: the converted copy, written again when the cache purge took it.
+        _ => import::ensure_converted_pdf(deps, doc),
     }
 }
 
-fn register(
-    deps: &ImportDeps<'_>,
-    path: &Path,
-    role: crate::documents::DocumentRole,
-    cancel: Option<&AtomicBool>,
-) -> Result<String> {
+/// `true` when a workspace path already belongs to a registered document (any status: a
+/// `missing` row still owns its `rel_path`).
+fn is_registered(deps: &ImportDeps<'_>, path: &Path) -> bool {
+    crate::documents::to_rel_path(&deps.paths.root, path)
+        .is_some_and(|rel| deps.db.with(|c| docs::find_by_rel_path(c, &rel)).ok().flatten().is_some())
+}
+
+/// The row of a PDF this module wrote (a split part, a merge result), not inserted yet.
+fn new_row(deps: &ImportDeps<'_>, path: &Path, role: crate::documents::DocumentRole) -> Result<NewDocument> {
     let rel = crate::documents::to_rel_path(&deps.paths.root, path)
         .ok_or_else(|| CoreError::InvalidWorkspace(format!("{} is outside the workspace", path.display())))?;
     let meta = std::fs::metadata(path).map_err(|e| CoreError::io(path, e))?;
-    let id = crate::documents::new_id();
-    let new = NewDocument {
-        id: id.clone(),
-        rel_path: rel.clone(),
+    Ok(NewDocument {
+        id: crate::documents::new_id(),
+        rel_path: rel,
         original_name: crate::documents::nfc(
             &path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
         ),
@@ -256,11 +264,25 @@ fn register(
         file_modified_at: meta.modified().ok().map(chrono::DateTime::<chrono::Utc>::from),
         role,
         import_batch_id: None,
-    };
+    })
+}
+
+/// Renders a freshly inserted row.
+fn render_row(deps: &ImportDeps<'_>, id: &str, cancel: Option<&AtomicBool>) -> Result<()> {
+    let record = deps.db.with(|c| docs::get_document(c, id))?.ok_or_else(|| CoreError::NotFound(id.to_string()))?;
+    import::process_document(deps, &record, true, None, cancel, &mut |_| {})
+}
+
+fn register(
+    deps: &ImportDeps<'_>,
+    path: &Path,
+    role: crate::documents::DocumentRole,
+    cancel: Option<&AtomicBool>,
+) -> Result<String> {
+    let new = new_row(deps, path, role)?;
     deps.db.with(|c| docs::insert_document(c, &new))?;
-    let record = deps.db.with(|c| docs::get_document(c, &id))?.ok_or_else(|| CoreError::NotFound(id.clone()))?;
-    import::process_document(deps, &record, true, None, cancel, &mut |_| {})?;
-    Ok(id)
+    render_row(deps, &new.id, cancel)?;
+    Ok(new.id)
 }
 
 /// Splits a document at the given boundaries into new documents stored next
@@ -271,37 +293,72 @@ pub fn split_document(
     boundaries: &[u32],
     cancel: Option<&AtomicBool>,
 ) -> Result<Vec<String>> {
+    split_document_observed(deps, doc, boundaries, cancel, &mut |_| {})
+}
+
+/// The part files of a split: path and page count.
+pub(crate) type PartFiles = [(PathBuf, u32)];
+
+/// [`split_document`]; `after_write` sees the part files once they are on disk and before any of
+/// them is registered (tests stand in for another importer there).
+pub(crate) fn split_document_observed(
+    deps: &ImportDeps<'_>,
+    doc: &DocumentRecord,
+    boundaries: &[u32],
+    cancel: Option<&AtomicBool>,
+    after_write: &mut dyn FnMut(&PartFiles),
+) -> Result<Vec<String>> {
     let src = pdf_source(deps, doc)?;
     let abs = doc.absolute_path(deps.paths);
     let dir = abs.parent().map(Path::to_path_buf).unwrap_or_else(|| deps.paths.documents_dir());
     let stem = abs.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "document".into());
-    let parts = split_pdf(&src, boundaries, &dir, &stem)?;
-    let mut ids = Vec::new();
+    // A name a (missing) document still owns is taken even when no file is there.
+    let parts = split_pdf_avoiding(&src, boundaries, &dir, &stem, &|p| is_registered(deps, p))?;
+    after_write(&parts);
+    let mut ids: Vec<String> = Vec::new();
     let result: Result<()> = (|| {
+        // Every part gets its row before the first one is rendered (rendering takes seconds per
+        // part): from here on the parts are registered documents for anyone who looks — an inbox
+        // scan or a folder import never takes a part that is waiting for its turn as a new file.
+        let mut rows = Vec::with_capacity(parts.len());
         for (path, _) in &parts {
-            let id = register(deps, path, doc.role, cancel)?;
-            ids.push(id.clone());
+            rows.push(new_row(deps, path, doc.role)?);
+        }
+        deps.db.with_tx(|tx| rows.iter().try_for_each(|row| docs::insert_document(tx, row)))?;
+        ids = rows.into_iter().map(|r| r.id).collect();
+        for id in &ids {
+            render_row(deps, id, cancel)?;
             if let Some(dt) = &doc.doc_type {
-                deps.db.with(|c| docs::set_doc_type(c, &id, Some(dt), doc.doc_type_source.as_deref()))?;
+                deps.db.with(|c| docs::set_doc_type(c, id, Some(dt), doc.doc_type_source.as_deref()))?;
             }
             if !doc.tags.is_empty() {
-                deps.db.with(|c| docs::set_tags(c, &id, &doc.tags))?;
+                deps.db.with(|c| docs::set_tags(c, id, &doc.tags))?;
             }
         }
         Ok(())
     })();
     if let Err(e) = result {
-        // All or nothing: a cancelled / failed split leaves neither half-registered parts nor files.
-        for id in &ids {
-            let _ = import::delete_document(deps, id, false);
-        }
-        for (path, _) in &parts {
-            let _ = std::fs::remove_file(path);
-        }
+        rollback_parts(deps, &ids, &parts);
         return Err(e);
     }
     deps.db.with(|c| docs::set_status(c, &doc.id, DocumentStatus::Archived, None))?;
     Ok(ids)
+}
+
+/// All or nothing for a cancelled / failed split — but only for what the split itself created:
+/// its rows go, and so do the part files nobody else registered. A part that another importer
+/// registered in the meantime is that document's file now and stays (deleting it left a
+/// document without a file, audit DOC-3).
+fn rollback_parts(deps: &ImportDeps<'_>, ids: &[String], parts: &[(PathBuf, u32)]) {
+    for id in ids {
+        // Row + caches only; the file is removed below instead of going to the OS trash.
+        let _ = import::delete_document(deps, id, true);
+    }
+    for (path, _) in parts {
+        if !is_registered(deps, path) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 /// A user-supplied file stem: one path component, no traversal, no control characters.
@@ -346,7 +403,7 @@ pub fn merge_documents(
     }
     let dir = deps.paths.documents_dir();
     std::fs::create_dir_all(&dir).map_err(|e| CoreError::io(&dir, e))?;
-    let out = import::unique_target(&dir, &format!("{stem}.pdf"), &|p| p.exists());
+    let out = import::unique_target(&dir, &format!("{stem}.pdf"), &|p| is_registered(deps, p));
     merge_pdfs(&sources, &out)?;
     register(deps, &out, documents[0].role, cancel)
 }

@@ -39,7 +39,7 @@ pub fn classify_page(
         (None, None) => {
             return Ok((
                 PageClass { doc_type: "other".into(), rotation: 0, is_blank: true, language: "ko".into() },
-                Reply { content: String::new(), usage: Default::default(), truncated: false, attempts: 0 },
+                Reply::default(),
             ))
         }
     };

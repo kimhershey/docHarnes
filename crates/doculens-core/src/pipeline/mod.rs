@@ -84,14 +84,28 @@ pub struct ProcessRequest {
     pub document_ids: Vec<String>,
     pub level: PipelineLevel,
     pub schema: SchemaChoice,
-    /// Re-run stages whose results already exist.
+    /// Re-run stages whose results already exist. OCR text is read again; page text the user
+    /// corrected by hand (`text_source = manual`) is only replaced together with `reocr_manual`.
     pub force: bool,
+    /// With `force`: also re-OCR pages whose text was corrected by hand, replacing the
+    /// correction (off by default — a forced re-extraction must not undo the user's typing).
+    pub reocr_manual: bool,
     /// Inference profile override (`None` = settings).
     pub profile: Option<crate::settings::Profile>,
     /// Pages to restrict OCR / extraction to (empty = all).
     pub pages: Vec<u32>,
     /// Precision mode override.
     pub precise: Option<bool>,
+    /// Leave the extraction of documents that already have one alone (the automatic pipeline
+    /// after an import: a document that merely came back under a new name must not lose its
+    /// reviewed fields). Explicit requests keep this off — they replace the latest run.
+    pub skip_extracted: bool,
+    /// Identity of the request across attempts (set when a job is queued). The runner journals
+    /// the documents a request finished under this id, so the same request run again — a job
+    /// that is retried or resumed after an interruption — goes on with the rest instead of
+    /// starting over. `None` = no journal (every run processes every document).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 impl Default for ProcessRequest {
@@ -101,9 +115,12 @@ impl Default for ProcessRequest {
             level: PipelineLevel::Extract,
             schema: SchemaChoice::Auto,
             force: false,
+            reocr_manual: false,
             profile: None,
             pages: Vec::new(),
             precise: None,
+            skip_extracted: false,
+            request_id: None,
         }
     }
 }
@@ -121,8 +138,13 @@ pub struct ProcessProgress {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ProcessReport {
+    /// Documents this run processed.
     pub processed: Vec<String>,
     pub skipped: Vec<String>,
+    /// Documents an earlier attempt of the same request (`ProcessRequest.request_id`) had
+    /// already finished: left as they are.
+    #[serde(default)]
+    pub resumed: Vec<String>,
     pub failed: Vec<(String, String)>,
     pub classified: u32,
     pub ocr_pages: u32,

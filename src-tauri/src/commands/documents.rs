@@ -231,7 +231,10 @@ pub struct ImportRunArgs {
     pub source: ImportSource,
 }
 
-/// Starts the import job; returns the job id.
+/// Starts the import job; returns the job id. A plan with nothing new to import is refused
+/// (`nothing to import`) — unless it carries a collection / project and met documents that are
+/// already registered: then the job only puts those documents into the target and lists them in
+/// its result (`ImportReport.existing`).
 #[tauri::command(async)]
 pub fn documents_import_run(app: AppHandle, args: ImportRunArgs) -> UiResult<String> {
     let mut plan = args.token.as_deref().and_then(|t| docs_bridge::take_plan(&app, t));
@@ -250,7 +253,7 @@ pub fn documents_import_run(app: AppHandle, args: ImportRunArgs) -> UiResult<Str
             import::plan(&ctx.db, &ctx.paths, &sources, &args.options.unwrap_or_default(), args.source)?
         }
     };
-    if plan.new_count + plan.relink_count == 0 {
+    if plan.new_count + plan.relink_count == 0 && !plan.attaches_existing() {
         return Err(UiError::invalid("nothing to import"));
     }
     docs_bridge::import_job(&app, plan)

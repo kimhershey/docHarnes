@@ -81,7 +81,8 @@ pub fn indexed_text(heading_path: Option<&str>, text: &str) -> String {
 
 /// Chunks one document unless its text is unchanged since the last run.
 pub fn index_document(deps: &IndexDeps<'_>, doc: &DocumentRecord, force: bool) -> Result<IndexOutcome> {
-    let pages = deps.db.with(|c| docs::list_pages(c, &doc.id, true))?;
+    // Resident numbers are masked here when `privacy.pii_masking` is on (PIP-7).
+    let pages = deps.db.with(|c| docs::list_pages_for_index(c, &doc.id))?;
     let hash = page_text_hash(&pages);
     if !force {
         if let Some(state) = deps.db.with(|c| repo::index_state(c, &doc.id))? {

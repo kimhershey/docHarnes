@@ -2451,7 +2451,7 @@ fn pipeline_step(
         cancel: deps.cancel,
         ctx: deps.ctx_size,
     };
-    let req = ProcessRequest { document_ids: ids(&docs_), level, schema, force, profile, pages, precise: None };
+    let req = ProcessRequest { document_ids: ids(&docs_), level, schema, force, profile, pages, ..Default::default() };
     let stage = level.as_str().to_string();
     let report = pipeline_run::process(&pdeps, &req, &mut |p| {
         // Page boundary: pause / let interactive requests in (a cancel surfaces through the flag).

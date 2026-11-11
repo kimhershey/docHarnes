@@ -1115,7 +1115,7 @@
     },
     "privacy": {
       "pii_masking": "Store identifiers masked",
-      "pii_masking_hint": "Resident/foreigner registration numbers and bank accounts are stored only in masked form (YYMMDD-G******); the original is never stored.",
+      "pii_masking_hint": "Resident/foreigner registration numbers are stored only in masked form (YYMMDD-G******) in OCR text, extracted values, the search index and the extraction mirror. Bank accounts are masked only in values extracted as account fields. The file itself and the original text shown in the viewer (text layer, converted text, text you corrected) are not changed.",
       "retention_title": "Retention / purge",
       "retention_hint": "Stored per workspace. A daily purge job deletes expired items without the OS recycle bin and writes the counts to the audit log.",
       "items": {
