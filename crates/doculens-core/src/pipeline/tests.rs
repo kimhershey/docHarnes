@@ -652,6 +652,126 @@ fn review_actions_history_and_promotion() {
     assert!(review::apply(&w.db, &[supply.id], &ReviewAction::Correct { value: "  ".into() }, None).is_err());
 }
 
+/// Audit PIP-15: deleting a form or changing its type slug left the documents behind (a raw slug
+/// as the label, gone from the type filter, the sample still a "form"), and switching the
+/// built-in `general` off made every other document fail with `schema_not_found`.
+#[test]
+fn documents_follow_a_deleted_or_retyped_schema_and_general_stays() {
+    let w = World::new();
+    let code = |e: crate::error::CoreError| e.to_string();
+    // The fallback type cannot lose its last enabled schema.
+    let general = w.db.with(|c| repo::schema_for_doc_type(c, repo::GENERAL_DOC_TYPE)).unwrap().unwrap();
+    let err = w.db.with(|c| repo::set_schema_enabled(c, &general.id, false)).unwrap_err();
+    assert!(code(err).contains("schema_general_required"));
+    assert!(w.db.with(|c| repo::get_schema(c, &general.id)).unwrap().unwrap().enabled);
+    let field = || SchemaDef::new(vec![FieldDef::new("title", "제목", "Title", FieldKind::String)], &[]);
+    let draft = |name: &str, doc_type: &str| SchemaDraft {
+        name: name.into(),
+        doc_type: doc_type.into(),
+        source: SchemaSource::User,
+        definition: field(),
+        ..Default::default()
+    };
+    // With a second general schema the built-in one may be switched off; then that one is the last.
+    let mine = w.db.with(|c| repo::save_schema(c, &draft("우리 일반 문서", "general"))).unwrap();
+    w.db.with(|c| repo::set_schema_enabled(c, &general.id, false)).unwrap();
+    for refused in [
+        w.db.with(|c| repo::set_schema_enabled(c, &mine.id, false)).map(|_| ()),
+        w.db.with(|c| repo::delete_schema(c, &mine.id)).map(|_| ()),
+        w.db.with(|c| {
+            repo::save_schema(c, &SchemaDraft { id: Some(mine.id.clone()), ..draft("우리 일반 문서", "misc") })
+        })
+        .map(|_| ()),
+    ] {
+        assert!(code(refused.unwrap_err()).contains("schema_general_required"));
+    }
+    w.db.with(|c| repo::set_schema_enabled(c, &general.id, true)).unwrap();
+    assert!(w.db.with(|c| repo::delete_schema(c, &mine.id)).unwrap(), "fine once the built-in one is back");
+
+    // A registered form: the sample is the form of the type, two more documents carry the type.
+    for id in ["sample", "a", "b", "other"] {
+        w.add_doc(id, &format!("{id}.pdf"), SourceKind::Pdf, &[Some("본문")]);
+    }
+    let form = forms::register(
+        &w.db,
+        &SchemaDraft { form_document_id: Some("sample".into()), ..draft("입고 검수표", "inspection") },
+    )
+    .unwrap();
+    w.db.with(|c| {
+        docs::set_doc_type(c, "a", Some("inspection"), Some("auto"))?;
+        docs::set_doc_type(c, "b", Some("inspection"), Some("manual"))?;
+        docs::set_doc_type(c, "other", Some("contract"), Some("auto"))?;
+        repo::set_schema_override(c, "b", Some(&form.id))?;
+        c.execute("UPDATE pages SET page_doc_type = 'inspection' WHERE document_id = 'a'", [])?;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(w.doc("sample").role, DocumentRole::Form);
+    let touched = w.db.with(|c| repo::documents_of_schema(c, &form)).unwrap();
+    assert_eq!(touched, vec!["a".to_string(), "b".into(), "sample".into()]);
+
+    // A new slug: the documents of the type move with it (nothing else has the old type).
+    let renamed =
+        w.db.with_tx(|tx| {
+            repo::save_schema(
+                tx,
+                &SchemaDraft { id: Some(form.id.clone()), ..draft("입고 검수표", "acceptance_check") },
+            )
+        })
+        .unwrap();
+    assert_eq!(renamed.doc_type, "acceptance_check");
+    for id in ["sample", "a", "b"] {
+        assert_eq!(w.doc(id).doc_type.as_deref(), Some("acceptance_check"), "{id}");
+    }
+    assert_eq!(w.pages("a")[0].page_doc_type.as_deref(), Some("acceptance_check"));
+    assert_eq!(
+        (w.doc("b").doc_type_source.as_deref(), w.doc("other").doc_type.as_deref()),
+        (Some("manual"), Some("contract"))
+    );
+    assert!(w.db.with(repo::doc_types).unwrap().iter().any(|t| t.slug == "acceptance_check"));
+
+    // Moving onto a type that other schemas share and away again: only its own documents follow.
+    let to_contract = SchemaDraft { id: Some(form.id.clone()), ..draft("입고 검수표", "contract") };
+    w.db.with_tx(|tx| repo::save_schema(tx, &to_contract)).unwrap();
+    assert_eq!(w.doc("a").doc_type.as_deref(), Some("contract"));
+    let back = SchemaDraft { id: Some(form.id.clone()), ..draft("입고 검수표", "inspection") };
+    w.db.with_tx(|tx| repo::save_schema(tx, &back)).unwrap();
+    assert_eq!(w.doc("sample").doc_type.as_deref(), Some("inspection"), "its form sample");
+    assert_eq!(w.doc("b").doc_type.as_deref(), Some("inspection"), "pinned to the schema");
+    assert_eq!(w.doc("a").doc_type.as_deref(), Some("contract"), "the built-in contract type still exists");
+    assert_eq!(w.doc("other").doc_type.as_deref(), Some("contract"));
+
+    // Deleting the form: the type is gone, so its documents are unclassified work documents again.
+    assert!(w.db.with_tx(|tx| repo::delete_schema(tx, &form.id)).unwrap());
+    for id in ["sample", "b"] {
+        let d = w.doc(id);
+        assert_eq!(
+            (d.role, d.doc_type, d.doc_type_source, d.schema_id),
+            (DocumentRole::Work, None, None, None),
+            "{id}"
+        );
+        assert!(d.classified_at.is_none());
+    }
+    assert_eq!(w.doc("a").doc_type.as_deref(), Some("contract"));
+    assert_eq!(run::resolve_schema(&w.db, &w.doc("b"), &SchemaChoice::Auto).unwrap().doc_type, "general");
+
+    // A second form of a type that lives on: only its sample is released, with its type kept.
+    w.add_doc("s2", "s2.pdf", SourceKind::Pdf, &[Some("본문")]);
+    let second = forms::register(
+        &w.db,
+        &SchemaDraft { form_document_id: Some("s2".into()), ..draft("우리 계약서", "contract") },
+    )
+    .unwrap();
+    assert_eq!(w.doc("s2").role, DocumentRole::Form);
+    assert!(w.db.with_tx(|tx| repo::delete_schema(tx, &second.id)).unwrap());
+    let s2 = w.doc("s2");
+    assert_eq!(
+        (s2.role, s2.doc_type.as_deref(), s2.doc_type_source.as_deref()),
+        (DocumentRole::Work, Some("contract"), Some("manual"))
+    );
+    assert_eq!(w.doc("other").doc_type.as_deref(), Some("contract"));
+}
+
 #[test]
 fn schema_crud_defaults_versions_and_doc_types() {
     let w = World::new();

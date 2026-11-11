@@ -93,16 +93,46 @@ pub fn pipeline_schema_versions(app: AppHandle, id: String) -> UiResult<Vec<Sche
 #[tauri::command(async)]
 pub fn pipeline_schema_save(app: AppHandle, draft: SchemaDraft) -> UiResult<SchemaRecord> {
     let ctx = pipeline_bridge::context(&app)?;
-    let saved = ctx.db().with_tx(|tx| repo::save_schema(tx, &draft)).map_err(typed_error)?;
+    // A changed type slug moves the documents of the type with it (PIP-15): they are refreshed.
+    let (saved, moved) = ctx
+        .db()
+        .with_tx(|tx| {
+            let before = match &draft.id {
+                Some(id) => repo::get_schema(tx, id)?,
+                None => None,
+            };
+            let moved = match &before {
+                Some(b) if b.doc_type != draft.doc_type.trim() => repo::documents_of_schema(tx, b)?,
+                _ => Vec::new(),
+            };
+            Ok((repo::save_schema(tx, &draft)?, moved))
+        })
+        .map_err(typed_error)?;
     ctx.emit(&app, "schemas", vec![saved.id.clone()]);
+    if !moved.is_empty() {
+        docs_bridge::emit_changed(&app, "updated", moved);
+    }
     Ok(saved)
 }
 
 #[tauri::command(async)]
 pub fn pipeline_schema_delete(app: AppHandle, id: String) -> UiResult<bool> {
     let ctx = pipeline_bridge::context(&app)?;
-    let removed = ctx.db().with_tx(|tx| repo::delete_schema(tx, &id)).map_err(typed_error)?;
+    // The documents of a deleted form lose its type / the form role (PIP-15): they are refreshed.
+    let (removed, touched) = ctx
+        .db()
+        .with_tx(|tx| {
+            let touched = match repo::get_schema(tx, &id)? {
+                Some(s) => repo::documents_of_schema(tx, &s)?,
+                None => Vec::new(),
+            };
+            Ok((repo::delete_schema(tx, &id)?, touched))
+        })
+        .map_err(typed_error)?;
     ctx.emit(&app, "schemas", vec![id]);
+    if removed && !touched.is_empty() {
+        docs_bridge::emit_changed(&app, "updated", touched);
+    }
     Ok(removed)
 }
 
