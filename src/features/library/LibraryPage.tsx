@@ -758,7 +758,8 @@ function ListView({ docs, selected, onToggle, onOpen, onOpenReview, typeLabel, l
               </span>
               <span role="gridcell" className={cn("min-w-0", LIST_COL_SHOW.doc_type)}>
                 {doc.doc_type && (
-                  <Badge variant="outline" className="max-w-full truncate" data-testid={`doc-type-${doc.id}`}>
+                  // The label is cut to the column (the full name is in the tooltip).
+                  <Badge variant="outline" className="max-w-full truncate" title={typeLabel(doc.doc_type)} data-testid={`doc-type-${doc.id}`}>
                     {typeLabel(doc.doc_type)}
                   </Badge>
                 )}

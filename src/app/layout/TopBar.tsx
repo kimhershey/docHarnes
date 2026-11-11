@@ -27,10 +27,12 @@ export function TopBar() {
   return (
     <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-bg-elevated px-3" data-testid="topbar">
       <WorkspaceSwitcher />
+      {/* The hint is cut to the bar's width at a large UI 배율: the tooltip carries all of it (0.7.0 audit UI-16). */}
       <button
         type="button"
         className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-md border border-border bg-bg px-3 text-sm text-fg-subtle hover:border-border-strong cursor-text"
         onClick={() => openPalette()}
+        title={t("topbar.command")}
         data-testid="command-bar"
       >
         <Search className="size-4 shrink-0" aria-hidden="true" />

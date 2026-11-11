@@ -74,7 +74,7 @@ export function StatusBar() {
           {t("statusbar.engine")}: {t(`statusbar.${ind.key}`)}
         </span>
         {modelLabel && (
-          <span className="truncate text-fg-subtle" data-testid="statusbar-model">
+          <span className="truncate text-fg-subtle" title={modelLabel} data-testid="statusbar-model">
             · {modelLabel}
           </span>
         )}
