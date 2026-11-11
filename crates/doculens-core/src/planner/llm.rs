@@ -223,7 +223,12 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
             result.completion_tokens += c;
             result.source = PlanSource::Model;
             result.route = Some(reply_mode.as_str().to_string());
-            result.plan = reply_plan(text, reply_mode, ko);
+            let mut p = reply_plan(text, reply_mode, ko);
+            // A text that came with the request is worked on as it is, whatever the route was called.
+            if guard::carried_text(text).is_some() {
+                guard::make_text_only(text, &mut p, ko);
+            }
+            result.plan = p;
             return Ok(result);
         }
         Ok((Route::Families(families), (p, c))) => {
@@ -298,6 +303,16 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
         result.raw = Some(reply.content.clone());
         let parsed = parse_and_validate(&value, ctx, date.as_ref());
         match parsed {
+            // "Nothing to do" from one family's grammar may be a command of another family:
+            // one more try with every op before it is taken as small talk.
+            Ok((plan, _)) if guard::is_noop_only(&plan) && kinds.is_some() && !widened => {
+                widened = true;
+                kinds = None;
+                plan_schema = schema::plan_schema();
+                feedback = None;
+                attempt = 1;
+                continue;
+            }
             Ok((mut plan, mut issues)) => {
                 result.source = PlanSource::Model;
                 // A sentence that carries its own text is answered from that text, not from the library.

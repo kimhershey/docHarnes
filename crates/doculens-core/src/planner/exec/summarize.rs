@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use serde_json::{json, Value};
 
 use crate::documents::DocumentRecord;
-use crate::error::Result;
+use crate::error::{CoreError, Result};
 use crate::knowledge::answer::{self, AnswerDeps};
 use crate::knowledge::search::SearchDeps;
 use crate::knowledge::{Answer, AnswerKind, AnswerRequest, SummaryMode};
@@ -272,7 +272,9 @@ pub(super) fn run(
         cancelled: Some(&cancelled),
         context_size: deps.ctx_size,
     };
-    let mut answers: Vec<Answer> = Vec::with_capacity(docs.len());
+    // A document without text (not processed yet, an image without OCR) has nothing to summarise.
+    // It is left out and named in the result; it does not throw away the summaries made so far.
+    let mut answers: Vec<Option<Answer>> = Vec::with_capacity(docs.len());
     for (i, d) in docs.iter().enumerate() {
         deps.checkpoint()?;
         progress("summarize", i as u32, total, &d.original_name);
@@ -281,28 +283,46 @@ pub(super) fn run(
         req.document_id = Some(d.id.clone());
         req.summary_mode = mode;
         req.context_tokens = deps.knowledge.context_tokens;
-        answers.push(answer::summarize(&adeps, &req, &mut |_| !deps.cancelled())?);
+        match answer::summarize(&adeps, &req, &mut |_| !deps.cancelled()) {
+            Ok(a) => answers.push(Some(a)),
+            Err(CoreError::NotFound(reason)) if reason == "no_text" => answers.push(None),
+            Err(e) => return Err(e),
+        }
+    }
+    if answers.iter().all(Option::is_none) {
+        return Err(CoreError::NotFound("no_text".into()));
     }
     let summaries: Vec<Value> = docs
         .iter()
         .zip(&answers)
-        .map(|(d, a)| json!({ "document_id": d.id, "name": d.original_name, "answer": a }))
+        .filter_map(|(d, a)| Some(json!({ "document_id": d.id, "name": d.original_name, "answer": a.as_ref()? })))
+        .collect();
+    let skipped: Vec<Value> = docs
+        .iter()
+        .zip(&answers)
+        .filter(|(_, a)| a.is_none())
+        .map(|(d, _)| json!({ "document_id": d.id, "name": d.original_name, "reason": "no_text" }))
         .collect();
 
     let mut group_values: Vec<Value> = Vec::new();
     if let Some(groups) = &groups {
         let mut done = docs.len() as u32;
         for g in groups {
-            let ids: Vec<&str> = g.docs.iter().map(|&i| docs[i].id.as_str()).collect();
-            let answer = if g.docs.len() == 1 {
-                answers[g.docs[0]].clone()
-            } else {
-                deps.checkpoint()?;
-                progress("summarize", done, total, &g.label);
-                done += 1;
-                let items: Vec<(String, String)> =
-                    g.docs.iter().map(|&i| (docs[i].original_name.clone(), answers[i].text.clone())).collect();
-                combine(&adeps, deps, &g.label, &items, deps.knowledge.context_tokens)?
+            // Only the documents that have a summary make up the group's summary.
+            let members: Vec<(usize, &Answer)> =
+                g.docs.iter().filter_map(|&i| answers[i].as_ref().map(|a| (i, a))).collect();
+            let ids: Vec<&str> = members.iter().map(|(i, _)| docs[*i].id.as_str()).collect();
+            let answer = match members.as_slice() {
+                [] => continue,
+                [(_, only)] => (*only).clone(),
+                many => {
+                    deps.checkpoint()?;
+                    progress("summarize", done.min(total.saturating_sub(1)), total, &g.label);
+                    done += 1;
+                    let items: Vec<(String, String)> =
+                        many.iter().map(|(i, a)| (docs[*i].original_name.clone(), a.text.clone())).collect();
+                    combine(&adeps, deps, &g.label, &items, deps.knowledge.context_tokens)?
+                }
             };
             group_values.push(json!({ "key": g.key, "label": g.label, "document_ids": ids, "answer": answer }));
         }
@@ -314,15 +334,27 @@ pub(super) fn run(
         SummaryGroup::Folder => Some(deps.t("폴더별", "by folder")),
         SummaryGroup::None => None,
     };
-    let summary = match (&groups, criterion) {
-        (Some(g), Some(by)) if deps.ko() => format!("{} 요약 · {by} 묶음 {}개", count_label(deps, docs.len()), g.len()),
-        (Some(g), Some(by)) => format!("Summarised {} · {} group(s) {by}", count_label(deps, docs.len()), g.len()),
-        (Some(_), None) if deps.ko() => format!("{} 요약 · 묶음 하나로", count_label(deps, docs.len())),
-        (Some(_), None) => format!("Summarised {} as one set", count_label(deps, docs.len())),
-        (None, _) if deps.ko() => format!("{} 요약", count_label(deps, docs.len())),
-        (None, _) => format!("Summarised {}", count_label(deps, docs.len())),
+    let made = summaries.len();
+    let made_groups = group_values.len();
+    let mut summary = match (&groups, criterion) {
+        (Some(_), Some(by)) if deps.ko() => format!("{} 요약 · {by} 묶음 {made_groups}개", count_label(deps, made)),
+        (Some(_), Some(by)) => format!("Summarised {} · {made_groups} group(s) {by}", count_label(deps, made)),
+        (Some(_), None) if deps.ko() => format!("{} 요약 · 묶음 하나로", count_label(deps, made)),
+        (Some(_), None) => format!("Summarised {} as one set", count_label(deps, made)),
+        (None, _) if deps.ko() => format!("{} 요약", count_label(deps, made)),
+        (None, _) => format!("Summarised {}", count_label(deps, made)),
     };
+    if !skipped.is_empty() {
+        summary.push_str(&if deps.ko() {
+            format!(" · 본문이 없는 문서 {}건은 건너뜀", skipped.len())
+        } else {
+            format!(" · {} document(s) without text skipped", skipped.len())
+        });
+    }
     let mut payload = json!({ "summaries": summaries });
+    if !skipped.is_empty() {
+        payload["skipped"] = Value::Array(skipped);
+    }
     if groups.is_some() {
         payload["groups"] = Value::Array(group_values);
         payload["group_by"] = json!(group_by.unwrap_or(SummaryGroup::None));

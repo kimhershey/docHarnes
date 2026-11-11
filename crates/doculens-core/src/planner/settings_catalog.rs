@@ -254,7 +254,7 @@ pub const NAMES: &[(&str, &[&str])] = &[
     ("ui.reduced_motion", &["움직임 줄이기", "애니메이션 줄이기", "reduced motion"]),
     ("ui.sidebar_collapsed", &["사이드바 접기", "사이드바", "sidebar"]),
     ("models.tier_mode", &["티어 선택", "티어 모드", "tier mode"]),
-    ("models.manual_tier", &["수동 티어", "manual tier"]),
+    ("models.manual_tier", &["수동 티어", "티어", "manual tier", "tier"]),
     ("models.active_model", &["활성 모델", "사용 모델", "active model"]),
     ("models.profile", &["프로파일", "추론 프로파일", "profile", "inference profile"]),
     ("models.backend", &["백엔드", "엔진 백엔드", "backend", "engine backend"]),

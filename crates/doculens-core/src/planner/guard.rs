@@ -9,13 +9,16 @@
 use serde_json::Value;
 
 use super::settings_catalog::{self as catalog, ValueType};
-use super::{fastpath, AnswerMode, GroupBy, Op, OpKind, Plan, PlanIssue, Scope, SummarizeTarget, SummaryGroup};
+use super::{
+    fastpath, AnswerMode, GroupBy, ModelAction, Op, OpKind, Plan, PlanIssue, Scope, SummarizeTarget, SummaryGroup,
+};
 
 /// A folder or a content filter names documents on purpose. A date range alone does not: the date
 /// resolver fills it from any date in the sentence, including dates inside the pasted text.
 fn explicit_scope(plan: &Plan) -> bool {
     let f = &plan.scope.filter;
     plan.scope.folder.is_some()
+        || !plan.scope.doc_ids.is_empty()
         || f.doc_type.is_some()
         || f.keyword.is_some()
         || f.vendor.is_some()
@@ -79,7 +82,12 @@ fn has_rewrite_verb(s: &str) -> bool {
 pub fn carried_text(text: &str) -> Option<&str> {
     let text = text.trim();
     for sep in [':', '：', '\n', '"', '“', '「', '『'] {
-        if let Some(pos) = text.find(sep) {
+        // ("10:30" and "3:1" are not "instruction: text")
+        let between_digits = |pos: usize| {
+            text[..pos].chars().next_back().is_some_and(|c| c.is_ascii_digit())
+                && text[pos + sep.len_utf8()..].chars().next().is_some_and(|c| c.is_ascii_digit())
+        };
+        if let Some(pos) = text.match_indices(sep).map(|(i, _)| i).find(|i| !between_digits(*i)) {
             let (head, tail) = text.split_at(pos);
             let body = tail
                 .trim_start_matches(sep)
@@ -108,6 +116,30 @@ pub fn carried_text(text: &str) -> Option<&str> {
     None
 }
 
+/// Turns `plan` into one text-only `answer` over the user's whole sentence.
+pub fn make_text_only(text: &str, plan: &mut Plan, ko: bool) {
+    plan.intent = OpKind::Answer;
+    plan.scope = Scope::default();
+    plan.operations = vec![Op::Answer {
+        question: text.trim().to_string(),
+        cite: Some(false),
+        knowledge: Some(false),
+        mode: None,
+        reply: None,
+    }];
+    plan.requires_confirmation = false;
+    plan.clarification_question = None;
+    plan.unmet = None;
+    plan.summary = Some(
+        if ko {
+            "보내 주신 글을 문서 검색 없이 요청대로 다듬습니다"
+        } else {
+            "Works on the text you sent, without looking documents up"
+        }
+        .to_string(),
+    );
+}
+
 /// Re-targets a plan made of knowledge-base ops (summarize / answer / explain / compare / search) with
 /// no folder or filter to one text-only `answer` when the sentence carries the text it talks about.
 /// Returns the note shown on the card when it did.
@@ -124,25 +156,7 @@ pub fn prefer_text_only_answer(text: &str, plan: &mut Plan, ko: bool) -> Option<
     if !knowledge_only {
         return None;
     }
-    plan.intent = OpKind::Answer;
-    plan.scope = Scope::default();
-    plan.operations = vec![Op::Answer {
-        question: text.trim().to_string(),
-        cite: Some(false),
-        knowledge: Some(false),
-        mode: None,
-        reply: None,
-    }];
-    plan.requires_confirmation = false;
-    plan.clarification_question = None;
-    plan.summary = Some(
-        if ko {
-            "보내 주신 글을 문서 검색 없이 요청대로 다듬습니다"
-        } else {
-            "Works on the text you sent, without looking documents up"
-        }
-        .to_string(),
-    );
+    make_text_only(text, plan, ko);
     Some(PlanIssue::warn(
         "operations",
         "text_only_answer",
@@ -194,25 +208,48 @@ pub fn restore_carried_text(text: &str, plan: &mut Plan) {
     }
 }
 
+/// Whether the plan only says "nothing to do".
+pub fn is_noop_only(plan: &Plan) -> bool {
+    !plan.operations.is_empty() && plan.operations.iter().all(|o| matches!(o, Op::Noop {}))
+}
+
 /// A plan that only says "nothing to do" is a turn that was not a command: answer it instead of
-/// showing an empty plan card and a "skipped" result (audit USR-3).
+/// showing an empty plan card and a "skipped" result (audit USR-3). When the model also said what
+/// it could not do (`unmet`), that is the answer — said as it is, without another model call.
 pub fn noop_to_chat(text: &str, plan: &mut Plan, ko: bool) -> bool {
-    if plan.operations.is_empty() || !plan.operations.iter().all(|o| matches!(o, Op::Noop {})) {
+    if !is_noop_only(plan) {
         return false;
     }
+    let unmet = plan.unmet.as_deref().map(str::trim).filter(|u| !u.is_empty()).map(str::to_string);
+    let reply = unmet.as_ref().map(|u| {
+        if ko {
+            format!("이 요청은 지금 할 수 없습니다: {u}")
+        } else {
+            format!("I cannot do this: {u}")
+        }
+    });
     plan.operations = vec![Op::Answer {
         question: text.trim().to_string(),
         cite: Some(false),
         knowledge: Some(false),
         mode: Some(AnswerMode::Chat),
-        reply: None,
+        reply,
     }];
     plan.intent = OpKind::Answer;
     plan.scope = Scope::default();
     plan.requires_confirmation = false;
     plan.unmet = None;
-    plan.summary =
-        Some((if ko { "명령이 아닌 말에 답합니다" } else { "Replies to a turn that is not a command" }).to_string());
+    // The model's confidence in "nothing to do" is not a reason to ask "did I understand you?".
+    plan.confidence = plan.confidence.max(super::MIN_CONFIDENCE);
+    plan.summary = Some(
+        match (unmet.is_some(), ko) {
+            (true, true) => "할 수 없는 요청이라고 답합니다",
+            (true, false) => "Says that it cannot do this",
+            (false, true) => "명령이 아닌 말에 답합니다",
+            (false, false) => "Replies to a turn that is not a command",
+        }
+        .to_string(),
+    );
     true
 }
 
@@ -271,13 +308,46 @@ const SPLIT_PHRASES_EN: &[(&str, SplitBy)] = &[
     ("by document", SplitBy::Document),
 ];
 
-/// `noun` + "별" as a suffix: "프로젝트별", "프로젝트 별로" — not "프로젝트 별도 관리" or "별표".
+/// Endings of a word after "N별" that make the pair a title, not a way of splitting:
+/// "거래처별 단가표", "월별 보고서", "유형별 폴더" — against "거래처별 합계", "프로젝트 별 내용".
+const TITLE_ENDINGS: &[&str] = &[
+    "표",
+    "보고서",
+    "리포트",
+    "폴더",
+    "목록",
+    "대장",
+    "명세서",
+    "내역서",
+    "시트",
+    "파일",
+    "자료",
+    "양식",
+    "report",
+    "sheet",
+    "folder",
+];
+const NOUN_PARTICLES: &[&str] = &["으로", "에서", "의", "을", "를", "은", "는", "이", "가", "로", "에", "도"];
+
+/// `noun` + "별" as the way to split: "프로젝트별로", "프로젝트 별 내용을 요약", "거래처별 합계" —
+/// not "프로젝트 별도 관리", "월별표" or a title such as "월별 보고서".
 fn has_byeol(text: &str, noun: &str) -> bool {
     [format!("{noun}별"), format!("{noun} 별")].iter().any(|needle| {
-        text.match_indices(needle.as_str()).any(|(at, _)| match text[at + needle.len()..].chars().next() {
-            None => true,
-            Some('로') => true,
-            Some(c) => !('가'..='힣').contains(&c),
+        text.match_indices(needle.as_str()).any(|(at, _)| {
+            let rest = &text[at + needle.len()..];
+            if rest.is_empty() || rest.starts_with('로') {
+                return true;
+            }
+            // Glued to another syllable ("별도", "별표"): not the suffix.
+            if rest.chars().next().is_some_and(|c| ('가'..='힣').contains(&c)) {
+                return false;
+            }
+            let mut next = rest.split_whitespace().next().unwrap_or_default();
+            next = next.trim_end_matches(|c: char| !c.is_alphanumeric());
+            if let Some(stem) = NOUN_PARTICLES.iter().find_map(|p| next.strip_suffix(p)) {
+                next = stem;
+            }
+            !TITLE_ENDINGS.iter().any(|t| next.ends_with(t))
         })
     })
 }
@@ -322,6 +392,18 @@ fn aggregate_group(text: &str) -> Option<GroupBy> {
 /// not a guess. Returns whether an op that drops the split is left.
 fn keep_the_split(text: &str, plan: &mut Plan) -> bool {
     let Some(split) = split_of(text) else { return false };
+    // The split may belong to another step ("유형별 폴더로 정리하고 요약해줘"): a plan that
+    // already groups something has taken it.
+    let taken = plan.operations.iter().any(|op| match op {
+        Op::Move { group_by, .. } => !matches!(group_by, None | Some(GroupBy::None)),
+        Op::Organize { .. } | Op::Export { .. } | Op::ClassifyProjects { .. } => true,
+        Op::Aggregate { group_by, .. } => !matches!(group_by, None | Some(GroupBy::None)),
+        Op::Summarize { group_by, .. } => !matches!(group_by, None | Some(SummaryGroup::None)),
+        _ => false,
+    });
+    if taken {
+        return false;
+    }
     let mut dropped = false;
     for op in &mut plan.operations {
         match op {
@@ -359,11 +441,13 @@ fn value_text(value: &Value) -> String {
 
 /// The value is something the sentence says: the number, an on / off word, the value's name.
 fn value_is_grounded(text: &str, key: &str, ty: ValueType, value: &Value) -> bool {
+    let said = |v: f64| fastpath::numbers_in(text).iter().any(|n| (n - v).abs() < 1e-9);
     match ty {
         ValueType::Bool => value.as_bool().is_some_and(|b| fastpath::polarity(text) == Some(b)),
-        ValueType::Int { .. } | ValueType::IntChoice(_) | ValueType::Float { .. } => {
-            let Some(v) = value.as_f64() else { return false };
-            fastpath::numbers_in(text).iter().any(|n| (n - v).abs() < 1e-9 || (n / 100.0 - v).abs() < 1e-9)
+        ValueType::Int { .. } | ValueType::IntChoice(_) => value.as_f64().is_some_and(said),
+        // A ratio may be said as a percentage ("90%" for 0.9); nothing else is divided.
+        ValueType::Float { percent, .. } => {
+            value.as_f64().is_some_and(|v| said(v) || (percent && text.contains('%') && said(v * 100.0)))
         }
         ValueType::Enum(_) => {
             let v = value_text(value);
@@ -375,52 +459,64 @@ fn value_is_grounded(text: &str, key: &str, ty: ValueType, value: &Value) -> boo
         }
         ValueType::Str => {
             let v = value_text(value);
-            let t = text.to_lowercase();
-            !v.is_empty()
-                && (t.contains(&v)
-                    || v.split(['-', '_', '/', '\\', '.', ' '])
-                        .any(|part| part.chars().count() >= 3 && t.contains(part)))
+            !v.is_empty() && text.to_lowercase().contains(&v)
         }
     }
 }
 
+/// A model id is named when the sentence has the part that tells the models apart: its size
+/// ("12b", "e4b") — the family ("gemma4") is in every id — or the whole id.
+fn model_is_named(text: &str, id: &str) -> bool {
+    let t: String = text.to_lowercase().chars().filter(|c| !c.is_whitespace()).collect();
+    let id = id.to_lowercase();
+    if t.contains(&id) {
+        return true;
+    }
+    let is_size = |part: &str| {
+        let digits = part.trim_start_matches('e').trim_end_matches('b');
+        part.ends_with('b') && !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit() || c == '.')
+    };
+    let sizes: Vec<&str> = id.split(['-', '_']).filter(|part| is_size(part)).collect();
+    !sizes.is_empty() && sizes.iter().all(|size| t.contains(size))
+}
+
 /// `Some(what)` when a change that runs without confirmation is not something the sentence names
 /// (audit USR-1: "UI 배율 120%" ran `set_profile balanced` on the model's own confidence of 0.95).
+/// Both have to be in the sentence: the setting and the value ("영어로 번역해줘" has a language,
+/// not the language setting).
 fn ungrounded(text: &str, op: &Op) -> Option<String> {
     let named = |key: &str| {
         catalog::find(key).is_some_and(|(_, spec)| catalog::names_of(spec).iter().any(|n| fastpath::mentions(text, n)))
     };
-    let enum_value = |key: &str, value: &str| {
+    let grounded = |key: &str, value: &Value| {
         catalog::find(key)
-            .is_some_and(|(_, spec)| value_is_grounded(text, key, spec.ty, &Value::String(value.to_string())))
+            .is_some_and(|(canonical, spec)| named(canonical) && value_is_grounded(text, canonical, spec.ty, value))
     };
     match op {
         Op::SetSetting { key, value } => {
-            let (canonical, spec) = catalog::find(key)?;
-            if named(canonical) && value_is_grounded(text, canonical, spec.ty, value) {
-                None
-            } else {
-                Some(format!("{} → {}", spec.label_ko, value_text(value)))
-            }
+            let (_, spec) = catalog::find(key)?;
+            (!grounded(key, value)).then(|| format!("{} → {}", spec.label_ko, value_text(value)))
         }
         Op::SetTheme { theme } => {
-            (!enum_value("ui.theme", theme.as_str())).then(|| format!("테마 → {}", theme.as_str()))
+            let v = Value::String(theme.as_str().to_string());
+            (!grounded("ui.theme", &v)).then(|| format!("테마 → {}", theme.as_str()))
         }
         Op::SetLanguage { lang } => {
-            (!enum_value("ui.language", lang.as_str())).then(|| format!("언어 → {}", lang.as_str()))
+            let v = Value::String(lang.as_str().to_string());
+            (!grounded("ui.language", &v)).then(|| format!("언어 → {}", lang.as_str()))
         }
         Op::SetProfile { profile } => {
             let v = serde_json::to_value(profile).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
-            (!enum_value("models.profile", &v)).then(|| format!("추론 프로파일 → {v}"))
+            (!grounded("models.profile", &Value::String(v.clone()))).then(|| format!("추론 프로파일 → {v}"))
         }
-        Op::SetModel { id } => {
-            let t = text.to_lowercase();
-            let id_l = id.to_lowercase();
-            let grounded = t.contains(&id_l)
-                || id_l.split(['-', '_', '.']).any(|part| {
-                    part.chars().count() >= 2 && part.chars().any(|c| c.is_ascii_digit()) && t.contains(part)
-                });
-            (!grounded).then(|| format!("모델 → {id}"))
+        Op::SetInboxWatch { enabled } => (!grounded("processing.inbox_watch", &Value::Bool(*enabled)))
+            .then(|| format!("inbox 감시 → {}", if *enabled { "켜기" } else { "끄기" })),
+        Op::SetModel { id } => (!model_is_named(text, id)).then(|| format!("모델 → {id}")),
+        Op::ManageModel { action: ModelAction::SetTier, tier: Some(tier), .. } => {
+            (!grounded("models.manual_tier", &Value::String(tier.clone()))).then(|| format!("티어 → {tier}"))
+        }
+        Op::ManageModel { action: ModelAction::SetBackend, backend: Some(backend), .. } => {
+            (!grounded("models.backend", &Value::String(backend.clone()))).then(|| format!("백엔드 → {backend}"))
         }
         _ => None,
     }
@@ -523,6 +619,8 @@ mod tests {
         assert_eq!(carried_text(&format!("이 내용 알려줘: {BODY}")), None);
         assert_eq!(carried_text("다듬어줘: 짧은 글"), None);
         assert_eq!(carried_text("이 계약서의 계약기간은?"), None);
+        // A colon inside a time is not "instruction: text".
+        assert_eq!(carried_text(&format!("회의록 요약해줘 10:30 이후 분량만 {BODY}")), None);
     }
 
     #[test]
@@ -549,6 +647,10 @@ mod tests {
         assert!(prefer_text_only_answer(&text, &mut validate, true).is_none());
         let mut plain = kb_plan(Op::Summarize { target: None, length: None, group_by: None });
         assert!(prefer_text_only_answer("지난달 계약서 요약해줘", &mut plain, true).is_none());
+        // Documents the plan names are a scope too: the "text" is an instruction about them.
+        let mut selected = kb_plan(Op::Summarize { target: None, length: None, group_by: None });
+        selected.scope.doc_ids = vec!["d1".into()];
+        assert!(prefer_text_only_answer(&text, &mut selected, true).is_none());
         // A date range the resolver filled from "12월말" inside the body is not an explicit scope.
         let mut dated = kb_plan(Op::Summarize { target: Some(SummarizeTarget::EachDoc), length: None, group_by: None });
         dated.scope.filter.date_from = Some("2025-12-01".into());
@@ -610,6 +712,60 @@ mod tests {
             let mut p = model_plan(vec![op]);
             assert!(codes(text, &mut p).is_empty(), "{text}: {p:?}");
             assert!(!p.requires_confirmation, "{text}");
+        }
+        // 0.8.0 review: the value alone is not enough, a negated sentence grounds nothing, a model
+        // family grounds no model, and a number is not divided for an integer setting.
+        for (text, op) in [
+            ("시스템 요구사항 문서 찾아줘", Op::SetTheme { theme: Theme::System }),
+            ("이 문서를 영어로 번역해줘", Op::SetLanguage { lang: crate::settings::Language::En }),
+            ("금액을 정확하게 추출해줘", Op::SetProfile { profile: Profile::Accuracy }),
+            ("개인정보 마스킹 끄지 마세요", Op::SetSetting { key: "privacy.pii_masking".into(), value: json!(false) }),
+            ("gemma4 e2b로 바꿔", Op::SetModel { id: "gemma4-12b-q4km".into() }),
+            ("근거 개수 500", Op::SetSetting { key: "knowledge.top_k".into(), value: json!(5) }),
+            ("inbox 폴더의 견적서를 처리해줘", Op::SetInboxWatch { enabled: true }),
+            (
+                "엔진 다시 시작해줘",
+                Op::ManageModel {
+                    action: ModelAction::SetBackend,
+                    id: None,
+                    tier: None,
+                    backend: Some("cpu".into()),
+                    path: None,
+                },
+            ),
+        ] {
+            let mut p = model_plan(vec![op]);
+            assert_eq!(codes(text, &mut p), vec!["ungrounded_change"], "{text}");
+            assert!(p.requires_confirmation, "{text}");
+        }
+        for (text, op) in [
+            (
+                "검토 임계값을 0.6으로 낮춰줘",
+                Op::SetSetting { key: "processing.review_threshold".into(), value: json!(0.6) },
+            ),
+            (
+                "검토 임계값을 90%로 해줘",
+                Op::SetSetting { key: "processing.review_threshold".into(), value: json!(0.9) },
+            ),
+            (
+                "근거 컨텍스트 토큰을 8,000으로",
+                Op::SetSetting { key: "knowledge.context_tokens".into(), value: json!(8000) },
+            ),
+            ("inbox 감시 꺼줘", Op::SetInboxWatch { enabled: false }),
+            ("모델을 e2b로 바꿔", Op::SetModel { id: "gemma4-e2b-q4km".into() }),
+            (
+                "엔진 백엔드를 cpu로 바꿔",
+                Op::ManageModel {
+                    action: ModelAction::SetBackend,
+                    id: None,
+                    tier: None,
+                    backend: Some("cpu".into()),
+                    path: None,
+                },
+            ),
+        ] {
+            let mut p = model_plan(vec![op]);
+            assert!(codes(text, &mut p).is_empty(), "{text}: {p:?}");
         }
         // Ops that are not settings changes are not this check's business.
         let mut p = model_plan(vec![Op::Search { query: "한빛".into(), mode: None, top_k: None }]);
@@ -676,6 +832,21 @@ mod tests {
         assert_eq!(split_of("유형 별 요약"), Some(SplitBy::DocType));
         assert_eq!(split_of("summarize the documents by project"), Some(SplitBy::Project));
         assert_eq!(split_of("월별 합계"), Some(SplitBy::Month));
+        // "N별" inside a title, or a split that another step of the plan already took (0.8.0 review).
+        for text in [
+            "거래처별 단가표의 합계 알려줘",
+            "프로젝트별 예산표 요약해줘",
+            "월별 보고서 요약해줘",
+            "유형별 폴더로 정리하고 요약해줘",
+        ] {
+            assert_eq!(split_of(text), None, "{text}");
+        }
+        let mut p = model_plan(vec![
+            Op::Move { folder: "documents/{{doc_type}}".into(), group_by: Some(GroupBy::DocType), only_reviewed: None },
+            summarize(Some(SummarizeTarget::EachDoc), None),
+        ]);
+        assert!(codes("유형별로 정리하고 요약해줘", &mut p).is_empty());
+        assert!(matches!(&p.operations[1], Op::Summarize { group_by: None, .. }), "{p:?}");
         // Clarifications are questions already.
         let mut p = Plan::clarify("어느 프로젝트인가요?", 0.4);
         p.unmet = Some("x".into());
@@ -695,6 +866,13 @@ mod tests {
                 if question == "그렇구나, 알겠어."
         ));
         assert!(p.scope.is_empty() && !p.requires_confirmation && p.intent == OpKind::Answer);
+        // What the model said it cannot do is the reply, and a low confidence asks nothing back.
+        let mut p = model_plan(vec![Op::Noop {}]);
+        p.unmet = Some("메일 발송은 할 수 없습니다".into());
+        p.confidence = 0.3;
+        assert!(noop_to_chat("이 문서를 메일로 보내줘", &mut p, true));
+        assert!(matches!(&p.operations[0], Op::Answer { reply: Some(r), .. } if r.contains("메일 발송")), "{p:?}");
+        assert!(p.unmet.is_none() && p.confidence >= crate::planner::MIN_CONFIDENCE);
         // A plan that does something next to a noop, and an empty plan, are left alone.
         let mut p = model_plan(vec![Op::Noop {}, Op::Help {}]);
         assert!(!noop_to_chat("도움말", &mut p, true));

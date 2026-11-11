@@ -96,11 +96,20 @@ fn only_pleasantries(words: &[&str]) -> Option<bool> {
     Some(thanks)
 }
 
-/// Lowercase, sentence punctuation dropped, whitespace collapsed.
+/// Lowercase, sentence punctuation dropped, whitespace collapsed. A `.` or `,` between two digits
+/// belongs to the number ("0.6", "8,000") and stays.
 fn plain(text: &str) -> String {
-    let lower = text.trim().to_lowercase();
-    let cleaned: String =
-        lower.chars().map(|c| if matches!(c, '.' | '!' | '~' | ',' | '^' | '♡' | '♥') { ' ' } else { c }).collect();
+    let chars: Vec<char> = text.trim().to_lowercase().chars().collect();
+    let digit = |i: usize| chars.get(i).is_some_and(|c| c.is_ascii_digit());
+    let cleaned: String = chars
+        .iter()
+        .enumerate()
+        .map(|(i, &c)| match c {
+            '.' | ',' if i > 0 && digit(i - 1) && digit(i + 1) => c,
+            '.' | '!' | '~' | ',' | '^' | '♡' | '♥' => ' ',
+            _ => c,
+        })
+        .collect();
     cleaned.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -171,74 +180,61 @@ const QUESTION_MARKS: &[&str] = &[
     "can i",
 ];
 
+// A sentence is applied only when every word of it is recognised as a whole. Words are never
+// matched by their beginning: "끄지마" starts like "끄기" and means the opposite, "해제" starts
+// like "해줘", "now" starts like "no" (0.8.0 review).
+
 /// Particles that may surround the name and the value.
 const PARTICLES: &[&str] =
-    &["으로", "로", "을", "를", "은", "는", "이", "가", "에", "의", "도", "만", "좀", "값", "쪽", "모드"];
-/// Stems of the verbs (and requests) that mean "change it": the rest of such a word is its ending.
-const CHANGE_STEMS: &[&str] = &[
-    "바꿔",
-    "바꾸",
-    "변경",
-    "설정",
-    "적용",
-    "맞춰",
-    "맞추",
-    "세팅",
-    "올려",
-    "올리",
-    "내려",
-    "내리",
-    "낮춰",
-    "낮추",
-    "높여",
-    "높이",
-    "키워",
-    "키우",
-    "줄여",
-    "줄이",
+    &["으로", "로", "을", "를", "은", "는", "이", "가", "에", "의", "도", "좀", "값", "쪽", "모드"];
+/// Change verbs that say nothing about a direction, as noun + 하다 …
+const SET_NOUNS: &[&str] = &["변경", "설정", "적용", "세팅", "지정"];
+/// … and in their 아/어 form.
+const SET_VERBS: &[&str] = &["바꿔", "맞춰", "해"];
+/// Verbs that move a value. With a number they are absolute only after "(으)로" ("120으로 올려줘");
+/// "10% 올려줘" is an amount to add, which needs the current value.
+const MOVE_VERBS: &[&str] = &["올려", "내려", "낮춰", "높여", "키워", "줄여", "늘려"];
+/// Endings of a noun + 하다 verb, all of them requests or plain statements of intent.
+const HADA_ENDINGS: &[&str] = &[
+    "",
     "해",
+    "해줘",
+    "해줘요",
+    "해주세요",
+    "해줄래",
+    "해줄래요",
+    "해라",
+    "해요",
     "하자",
-    "하게",
-    "하기",
-    "하도록",
+    "하세요",
+    "합니다",
     "함",
-    "합",
-    "줘",
-    "주세요",
-    "부탁",
-    "set",
-    "change",
-    "switch",
-    "make",
-    "use",
-    "please",
-    "to",
-    "the",
-    "it",
-    "as",
+    "하기",
+    "할게",
+    "해봐",
+    "해주라",
+    "하도록",
 ];
-/// Units that may follow a number.
-const UNITS: &[&str] = &[
-    "퍼센트",
-    "프로",
-    "기가바이트",
-    "기가",
-    "gb",
-    "dpi",
-    "토큰",
-    "페이지",
-    "초",
-    "분",
-    "일",
-    "개",
-    "쪽",
-    "장",
-    "px",
-    "pt",
-];
-const ON_WORDS: &[&str] = &["켜", "켬", "on", "사용", "활성", "허용", "enable", "true"];
-const OFF_WORDS: &[&str] = &["꺼", "끄", "끔", "off", "해제", "비활성", "금지", "disable", "false", "중지"];
-const NEGATIONS: &[&str] = &["안", "않", "no", "not"];
+/// Endings of an 아/어-form verb.
+const VERB_ENDINGS: &[&str] =
+    &["", "줘", "줘요", "주세요", "줄래", "줄래요", "주라", "라", "요", "봐", "놔", "놔줘", "둬", "둬줘", "고"];
+/// Whole words that only ask.
+const REQUEST_WORDS: &[&str] = &["줘", "주세요", "부탁", "부탁해", "부탁해요", "부탁합니다", "부탁드립니다"];
+/// English words around a setting and its value.
+const FILLERS_EN: &[&str] =
+    &["set", "change", "switch", "make", "use", "turn", "please", "to", "the", "it", "as", "my"];
+
+/// On / off for a boolean setting: noun + 하다, 아/어-form verbs and whole words.
+const ON_NOUNS: &[&str] = &["사용", "활성화", "활성", "허용"];
+const ON_VERBS: &[&str] = &["켜"];
+const ON_WORDS: &[&str] = &["켬", "켜기", "켜짐", "on", "enable", "enabled", "true"];
+const OFF_NOUNS: &[&str] = &["해제", "비활성화", "비활성", "금지", "중지"];
+const OFF_VERBS: &[&str] = &["꺼"];
+const OFF_WORDS: &[&str] = &["끔", "끄기", "꺼짐", "off", "disable", "disabled", "false"];
+/// "사용 안 함": the words that may follow an on-noun to switch it off.
+const NOT_DOING: &[&str] = &["안함", "안해", "안해요", "안합니다", "안해줘"];
+const NOT: &str = "안";
+const DOING: &[&str] = &["함", "해", "해요", "합니다", "해줘"];
 
 fn is_question(p: &str) -> bool {
     QUESTION_MARKS.iter().any(|q| p.contains(q))
@@ -293,26 +289,147 @@ pub(super) fn numbers_in(text: &str) -> Vec<f64> {
         .collect()
 }
 
-/// `Some(true)` / `Some(false)` when the sentence says on / off (켜 · 꺼 · 사용 안 함 …).
-pub(super) fn polarity(text: &str) -> Option<bool> {
-    let (mut on, mut off, mut negated) = (false, false, false);
-    for tok in lex(&plain(text)) {
-        if let Tok::Word(w) = tok {
-            let w = w.as_str();
-            if OFF_WORDS.iter().any(|x| w.starts_with(x)) {
-                off = true;
-            } else if ON_WORDS.iter().any(|x| w.starts_with(x)) {
-                on = true;
-            } else if NEGATIONS.iter().any(|x| w == *x || (w.starts_with(x) && w.chars().count() <= 3)) {
-                negated = true;
-            }
+/// What one word says, when the whole word is recognised.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Word {
+    /// Particles, a neutral change verb, a request: nothing but glue.
+    Glue {
+        verb: bool,
+    },
+    /// A verb that moves a value (올려줘 · 줄여줘).
+    Move,
+    On,
+    /// An on-noun on its own ("사용"), which a following "안 함" turns off.
+    OnNoun,
+    Off,
+    /// "안": only meaningful between an on-noun and 함 / 해.
+    Not,
+    /// "함" · "해" after "안".
+    Doing,
+    /// "안함" · "안해" as one word.
+    NotDoing,
+}
+
+fn stem_with_ending(word: &str, stems: &[&str], endings: &[&str]) -> bool {
+    stems.iter().any(|stem| word.strip_prefix(stem).is_some_and(|rest| endings.contains(&rest)))
+}
+
+/// Reads a word as a whole (after any leading particles); `None` when a part of it is unknown.
+fn word_kind(word: &str) -> Option<Word> {
+    let mut rest = word;
+    loop {
+        if rest.is_empty() {
+            return Some(Word::Glue { verb: false });
         }
+        if let Some(kind) = bare_word_kind(rest) {
+            return Some(kind);
+        }
+        let particle = PARTICLES.iter().find(|p| rest.starts_with(**p))?;
+        rest = &rest[particle.len()..];
     }
-    match (on, off, negated) {
-        (true, false, false) => Some(true),
-        (false, true, _) | (true, false, true) => Some(false),
-        _ => None,
+}
+
+fn bare_word_kind(word: &str) -> Option<Word> {
+    if word == NOT {
+        return Some(Word::Not);
     }
+    if NOT_DOING.contains(&word) {
+        return Some(Word::NotDoing);
+    }
+    if ON_WORDS.contains(&word) || stem_with_ending(word, ON_VERBS, VERB_ENDINGS) {
+        return Some(Word::On);
+    }
+    if OFF_WORDS.contains(&word)
+        || stem_with_ending(word, OFF_VERBS, VERB_ENDINGS)
+        || stem_with_ending(word, OFF_NOUNS, HADA_ENDINGS)
+    {
+        return Some(Word::Off);
+    }
+    if ON_NOUNS.contains(&word) {
+        return Some(Word::OnNoun);
+    }
+    if stem_with_ending(word, ON_NOUNS, HADA_ENDINGS) {
+        return Some(Word::On);
+    }
+    // "사용안함" written as one word.
+    if ON_NOUNS.iter().any(|n| word.strip_prefix(n).is_some_and(|rest| NOT_DOING.contains(&rest))) {
+        return Some(Word::Off);
+    }
+    if stem_with_ending(word, MOVE_VERBS, VERB_ENDINGS) {
+        return Some(Word::Move);
+    }
+    if stem_with_ending(word, SET_NOUNS, HADA_ENDINGS) || stem_with_ending(word, SET_VERBS, VERB_ENDINGS) {
+        return Some(Word::Glue { verb: true });
+    }
+    if REQUEST_WORDS.contains(&word) || FILLERS_EN.contains(&word) {
+        return Some(Word::Glue { verb: false });
+    }
+    // "함" · "해요" after "안" (as a neutral verb "해" + ending they were caught above).
+    if DOING.contains(&word) {
+        return Some(Word::Doing);
+    }
+    None
+}
+
+/// On / off said by a run of recognised words: `Ok(None)` when none of them says either, `Err`
+/// when they contradict each other or a "안" stands where it means something else.
+fn switch_of(words: &[Word]) -> std::result::Result<Option<bool>, ()> {
+    let mut said: Option<bool> = None;
+    let say = |v: bool, said: &mut Option<bool>| match *said {
+        Some(old) if old != v => Err(()),
+        _ => {
+            *said = Some(v);
+            Ok(())
+        }
+    };
+    let mut i = 0;
+    while i < words.len() {
+        match words[i] {
+            Word::On => say(true, &mut said)?,
+            Word::Off => say(false, &mut said)?,
+            Word::OnNoun => match (words.get(i + 1), words.get(i + 2)) {
+                (Some(Word::NotDoing), _) => {
+                    say(false, &mut said)?;
+                    i += 1;
+                }
+                (Some(Word::Not), Some(Word::Doing | Word::Glue { verb: true })) => {
+                    say(false, &mut said)?;
+                    i += 2;
+                }
+                _ => say(true, &mut said)?,
+            },
+            Word::Not | Word::NotDoing => return Err(()),
+            Word::Doing | Word::Glue { .. } | Word::Move => {}
+        }
+        i += 1;
+    }
+    Ok(said)
+}
+
+/// `Some(true)` / `Some(false)` when the sentence says on / off in so many words (켜줘 · 꺼 ·
+/// 사용 안 함); `None` when it says neither, both, or anything negated ("끄지 마세요").
+pub(super) fn polarity(text: &str) -> Option<bool> {
+    let plain = plain(text);
+    if is_refusal(&plain) {
+        return None;
+    }
+    let words: Vec<Word> = lex(&plain)
+        .into_iter()
+        .filter_map(|t| match t {
+            Tok::Word(w) => word_kind(&w),
+            _ => None,
+        })
+        .collect();
+    switch_of(&words).ok().flatten()
+}
+
+/// The sentence asks not to do something ("끄지 마", "바꾸지 말고", "don't").
+fn is_refusal(plain: &str) -> bool {
+    let compact: String = plain.chars().filter(|c| !c.is_whitespace()).collect();
+    ["지마", "지말", "지않", "하지는", "않게", "않도록", "못하게", "안되게"].iter().any(|m| compact.contains(m))
+        || plain.split(' ').any(|w| {
+            ["don't", "dont", "don", "not", "never", "no", "마", "마세요", "마라", "말고", "말아줘"].contains(&w)
+        })
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -372,41 +489,45 @@ fn lex(s: &str) -> Vec<Tok> {
     out
 }
 
-/// A word made only of particles, optionally ending in a change verb ("으로변경해줘", "로", "바꿔줄래").
-fn is_filler(word: &str) -> bool {
-    let mut rest = word;
-    loop {
-        if rest.is_empty() || CHANGE_STEMS.iter().any(|s| rest.starts_with(s)) {
-            return true;
+/// Units a number may carry for a setting, with the factor to the setting's own unit. A unit the
+/// setting does not have ("절전 대기 5분" for a field in seconds is fine, "캐시 상한 50%" is not)
+/// leaves the sentence to the model.
+fn units_of(key: &str) -> &'static [(&'static str, f64)] {
+    match key {
+        "ui.scale_percent" | "processing.audit_sample_percent" => &[("퍼센트", 1.0), ("프로", 1.0)],
+        "processing.render_dpi" => &[("dpi", 1.0)],
+        "models.sleep_idle_seconds" => {
+            &[("시간", 3600.0), ("분", 60.0), ("초", 1.0), ("seconds", 1.0), ("sec", 1.0), ("s", 1.0)]
         }
-        match PARTICLES.iter().find(|p| rest.starts_with(**p)) {
-            Some(p) => rest = &rest[p.len()..],
-            None => return false,
-        }
+        "cache.page_cache_max_gb" => &[("기가바이트", 1.0), ("기가", 1.0), ("gb", 1.0)],
+        "knowledge.top_k" | "models.resident_models_max" | "processing.dense_cells" => &[("개", 1.0)],
+        "processing.kie_max_pages" => &[("페이지", 1.0), ("쪽", 1.0), ("장", 1.0), ("pages", 1.0)],
+        "knowledge.context_tokens"
+        | "knowledge.chunk_target_tokens"
+        | "generation.max_tokens_gpu"
+        | "generation.max_tokens_cpu" => &[("토큰", 1.0), ("tokens", 1.0)],
+        "journal_days" => &[("일", 1.0), ("days", 1.0)],
+        _ => &[],
     }
 }
 
-fn has_change_verb(tokens: &[Tok]) -> bool {
-    tokens.iter().any(|t| match t {
-        Tok::Word(w) => {
-            let mut rest = w.as_str();
-            loop {
-                if CHANGE_STEMS.iter().any(|s| rest.starts_with(s)) {
-                    return true;
-                }
-                match PARTICLES.iter().find(|p| rest.starts_with(**p)) {
-                    Some(p) if rest.len() > p.len() => rest = &rest[p.len()..],
-                    _ => return false,
-                }
-            }
-        }
-        _ => false,
-    })
+/// What `%` after the number means for a setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Percent {
+    /// The setting is a percentage: "120%" is 120.
+    Itself,
+    /// The setting is a 0–1 ratio: "90%" is 0.9.
+    Ratio,
+    /// The setting is neither: "50%" of what?
+    Meaningless,
 }
 
-/// A word after a number: a unit, then fillers ("퍼센트로", "gb", "초로바꿔").
-fn is_unit_then_filler(word: &str) -> bool {
-    UNITS.iter().any(|u| word.strip_prefix(u).is_some_and(is_filler))
+fn percent_of(spec: &SettingSpec) -> Percent {
+    match (spec.key, spec.ty) {
+        ("ui.scale_percent" | "processing.audit_sample_percent", _) => Percent::Itself,
+        (_, ValueType::Float { percent: true, .. }) => Percent::Ratio,
+        _ => Percent::Meaningless,
+    }
 }
 
 /// The setting the sentence names: the longest name found; `None` when two different settings
@@ -467,53 +588,81 @@ fn read_value(spec: &SettingSpec, rest: &str) -> Option<Reading> {
         }
     }
     let tokens = lex(&rest);
-    let mut numbers: Vec<f64> = Vec::new();
-    let (mut on, mut off, mut negated) = (false, false, false);
-    let mut after_number = false;
-    for tok in &tokens {
-        match tok {
-            Tok::Num(n) => {
-                numbers.push(*n);
-                after_number = true;
-                continue;
-            }
-            Tok::Percent => {}
-            Tok::Word(w) => {
-                let w = w.as_str();
-                let bool_setting = matches!(spec.ty, ValueType::Bool);
-                if after_number && is_unit_then_filler(w) {
-                } else if bool_setting && OFF_WORDS.iter().any(|x| w.starts_with(x)) {
-                    off = true;
-                } else if bool_setting && ON_WORDS.iter().any(|x| w.starts_with(x)) {
-                    on = true;
-                } else if bool_setting && NEGATIONS.iter().any(|x| w.starts_with(x)) {
-                    negated = true;
-                } else if !is_filler(w) {
-                    return None;
-                }
-            }
-        }
-        after_number = false;
+    if is_refusal(&rest) {
+        return None;
     }
+    // Every token has to be accounted for: numbers (with the setting's own unit), `%` where it
+    // means something, and words that are recognised as a whole.
+    let mut numbers: Vec<f64> = Vec::new();
+    let mut words: Vec<Word> = Vec::new();
+    let (mut percent, mut absolute) = (false, false);
+    let mut i = 0;
+    while i < tokens.len() {
+        match &tokens[i] {
+            Tok::Num(n) => {
+                let mut value = *n;
+                // What follows the number: `%`, then a word that may start with a unit and "(으)로".
+                if matches!(tokens.get(i + 1), Some(Tok::Percent)) {
+                    percent = true;
+                    i += 1;
+                }
+                if let Some(Tok::Word(w)) = tokens.get(i + 1) {
+                    let mut tail = w.as_str();
+                    if let Some((unit, factor)) = units_of(spec.key).iter().find(|(u, _)| tail.starts_with(u)) {
+                        value *= factor;
+                        tail = &tail[unit.len()..];
+                    }
+                    if tail.starts_with("으로") || tail.starts_with("로") {
+                        absolute = true;
+                    }
+                    if tail.len() < w.len() {
+                        // The unit was taken off: the rest of the word must be glue.
+                        words.push(word_kind(tail)?);
+                        i += 1;
+                    }
+                }
+                numbers.push(value);
+            }
+            Tok::Percent => return None,
+            Tok::Word(w) => words.push(word_kind(w)?),
+        }
+        i += 1;
+    }
+    let moves = words.contains(&Word::Move);
+    let has_verb = moves || words.iter().any(|w| matches!(w, Word::Glue { verb: true }));
+    let switch = switch_of(&words).ok()?;
     let value = match spec.ty {
         ValueType::Bool => {
-            if !numbers.is_empty() {
+            if !numbers.is_empty() || moves {
                 return None;
             }
-            match (on, off, negated) {
-                (true, false, false) => Some(Value::Bool(true)),
-                (false, true, false) | (true, false, true) => Some(Value::Bool(false)),
-                (false, false, false) => None,
+            switch.map(Value::Bool)
+        }
+        ValueType::Int { .. } | ValueType::IntChoice(_) | ValueType::Float { .. } => {
+            if switch.is_some() {
+                return None;
+            }
+            match numbers.as_slice() {
+                [] if percent => return None,
+                [] => None,
+                [n] => {
+                    // "10% 올려줘" / "2000 올려줘": an amount to add, not the value.
+                    if moves && !absolute {
+                        return None;
+                    }
+                    let n = match (percent, percent_of(spec)) {
+                        (false, Percent::Ratio) if *n >= 1.0 => return None, // "임계값 1": 1 % or 100 %?
+                        (false, _) | (true, Percent::Itself) => *n,
+                        (true, Percent::Ratio) => *n / 100.0,
+                        (true, Percent::Meaningless) => return None,
+                    };
+                    Some(serde_json::json!(n))
+                }
                 _ => return None,
             }
         }
-        ValueType::Int { .. } | ValueType::IntChoice(_) | ValueType::Float { .. } => match numbers.as_slice() {
-            [] => None,
-            [n] => Some(serde_json::json!(n)),
-            _ => return None,
-        },
         ValueType::Enum(_) => {
-            if !numbers.is_empty() {
+            if !numbers.is_empty() || percent || moves || switch.is_some() {
                 return None;
             }
             enum_value.map(|v| Value::String(v.to_string()))
@@ -523,7 +672,7 @@ fn read_value(spec: &SettingSpec, rest: &str) -> Option<Reading> {
     };
     match value {
         Some(v) => Some(Reading::Value(v)),
-        None if has_change_verb(&tokens) => Some(Reading::Missing),
+        None if has_verb => Some(Reading::Missing),
         None => None,
     }
 }
@@ -705,6 +854,57 @@ mod tests {
                 "{text} must not be applied by the fast path: {got:?}"
             );
         }
+    }
+
+    /// 0.8.0 review: words were matched by their beginning, so a negated or relative sentence was
+    /// applied — and applied the wrong way round.
+    #[test]
+    fn negated_relative_and_foreign_unit_sentences_are_not_applied() {
+        for text in [
+            // the opposite of what a prefix match reads
+            "개인정보 마스킹 끄지마",
+            "개인정보 마스킹 끄지 마세요",
+            "자동 임베딩 켜지 마",
+            "배율 120으로 바꾸지마",
+            "dpi 300으로 변경하지마",
+            "다크 모드 해제",
+            "enable masking now",
+            "do not enable masking",
+            "don't change the ui scale to 120",
+            // an amount to add, not the value
+            "검토 임계값 10% 올려줘",
+            "토큰 상한 2000 올려줘",
+            "저널 보관 30일 줄여줘",
+            "배율 10 키워줘",
+            // a unit the setting does not have, or a bare 1 for a ratio
+            "캐시 상한 50%",
+            "근거 개수 5%",
+            "검토 임계값 1",
+            // words that only start like a known one
+            "마스킹 해상도",
+            "배율 120 안내",
+        ] {
+            let got = plan(text, &ctx());
+            assert!(got.as_ref().is_none_or(Plan::is_clarification), "{text} must not be applied: {got:?}");
+        }
+        // The same settings, said plainly.
+        assert_eq!(setting_of("자동 임베딩 사용안함"), Some(("knowledge.auto_embed".into(), json!(false))));
+        assert_eq!(setting_of("개인정보 마스킹 사용 안 해"), Some(("privacy.pii_masking".into(), json!(false))));
+        assert_eq!(setting_of("개인정보 마스킹 사용"), Some(("privacy.pii_masking".into(), json!(true))));
+        assert_eq!(setting_of("turn on pii masking"), Some(("privacy.pii_masking".into(), json!(true))));
+        assert_eq!(setting_of("배율 120으로 올려줘"), Some(("ui.scale_percent".into(), json!(120))));
+        assert_eq!(setting_of("절전 대기 5분"), Some(("models.sleep_idle_seconds".into(), json!(300))));
+        assert_eq!(setting_of("절전 대기 90초로"), Some(("models.sleep_idle_seconds".into(), json!(90))));
+        assert_eq!(setting_of("검토 임계값 1%"), Some(("processing.review_threshold".into(), json!(0.01))));
+        assert_eq!(setting_of("검토 임계값 0.6"), Some(("processing.review_threshold".into(), json!(0.6))));
+        assert_eq!(setting_of("근거 컨텍스트 토큰 8,000"), Some(("knowledge.context_tokens".into(), json!(8000))));
+        assert_eq!(setting_of("캐시 상한 50gb"), Some(("cache.page_cache_max_gb".into(), json!(50.0))));
+        // On / off words mean what they say for the guard as well.
+        assert_eq!(polarity("개인정보 마스킹은 꺼줘"), Some(false));
+        assert_eq!(polarity("마스킹 사용 안 함"), Some(false));
+        assert_eq!(polarity("마스킹 끄지 마세요"), None);
+        assert_eq!(polarity("마스킹 켜고 알림은 꺼"), None);
+        assert_eq!(numbers_in("임계값 0.6, 토큰 8,000"), vec![0.6, 8000.0]);
     }
 
     #[test]
