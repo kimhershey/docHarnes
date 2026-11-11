@@ -839,7 +839,19 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
             }
             Op::CheckConsistency { project, rules } => {
                 check_project(project, ctx, &at("project"), &mut issues);
-                rules.retain(|r| !r.trim().is_empty());
+                // Rule references are tidied here and resolved against the project's rules when
+                // the check runs (`exec::resolve_rules`: the context carries no rule list) — one
+                // that matches no rule fails the step instead of storing an empty run as the
+                // project's latest check (audit PRJ-12).
+                let mut seen: Vec<String> = Vec::new();
+                for r in rules.iter() {
+                    let r: String = r.trim().chars().take(200).collect();
+                    if !r.is_empty() && !seen.contains(&r) {
+                        seen.push(r);
+                    }
+                }
+                seen.truncate(50);
+                *rules = seen;
             }
             Op::RequestSupplement { project, findings, .. } => {
                 check_project(project, ctx, &at("project"), &mut issues);

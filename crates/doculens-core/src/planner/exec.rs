@@ -1470,8 +1470,11 @@ fn run_step(
             };
             let _lease = vlm.as_ref().map(|_| LeaseGuard::acquire(deps.lease));
             let pdeps = ProjectDeps { db, vlm: vlm.as_ref(), language: deps.language };
-            let run = projects::check(&pdeps, &pid, rules)?;
-            let summary = if deps.ko() {
+            // A reference that matches no rule fails here: the check would otherwise run zero
+            // rules and that empty run would become the project's latest check (audit PRJ-12).
+            let rule_ids = resolve_rules(db, &pid, rules)?;
+            let run = projects::check(&pdeps, &pid, &rule_ids)?;
+            let mut summary = if deps.ko() {
                 format!(
                     "통과 {} · 불일치 {} · 판단불가 {} · 누락 {}",
                     run.pass, run.mismatch, run.undetermined, run.missing
@@ -1482,6 +1485,13 @@ fn run_step(
                     run.pass, run.mismatch, run.undetermined, run.missing
                 )
             };
+            if !rule_ids.is_empty() {
+                summary.push_str(&if deps.ko() {
+                    format!(" (규칙 {}개만 검사)", rule_ids.len())
+                } else {
+                    format!(" ({} rules only)", rule_ids.len())
+                });
+            }
             Ok(StepOutcome { summary, payload: serde_json::to_value(&run).unwrap_or(Value::Null), imported: None })
         }
         Op::RequestSupplement { project, findings, output } => {
@@ -2233,6 +2243,39 @@ fn review_field<'a>(
                 _ => None,
             }
         })
+}
+
+/// Resolves the rule references of `check_consistency` to rule ids: a rule id, or words of a
+/// rule's description ("계약금액 규칙만 검사해줘" → the rules that mention 계약금액). Empty = every
+/// enabled rule. A reference that matches no enabled rule is an error — the check must not run
+/// zero rules and store that as the project's latest result (audit PRJ-12).
+fn resolve_rules(db: &Db, project_id: &str, references: &[String]) -> Result<Vec<String>> {
+    if references.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rules = db.with(|c| projects_repo::rules_of(c, project_id))?;
+    let mut out: Vec<String> = Vec::new();
+    for reference in references {
+        let reference = reference.trim();
+        let words = reference.trim_end_matches("규칙").trim_end_matches("rules").trim_end_matches("rule").trim();
+        let key = compact(words);
+        let matched: Vec<&projects::Rule> = rules
+            .iter()
+            .filter(|r| r.id == reference || (key.chars().count() >= 2 && compact(&r.description).contains(&key)))
+            .collect();
+        if matched.is_empty() {
+            return Err(CoreError::Invalid(format!("rule_unknown: {reference}")));
+        }
+        if !matched.iter().any(|r| r.enabled) {
+            return Err(CoreError::Invalid(format!("rule_disabled: {reference}")));
+        }
+        for r in matched.into_iter().filter(|r| r.enabled) {
+            if !out.contains(&r.id) {
+                out.push(r.id.clone());
+            }
+        }
+    }
+    Ok(out)
 }
 
 fn non_empty(docs_: Vec<DocumentRecord>) -> Result<Vec<DocumentRecord>> {
@@ -3053,6 +3096,31 @@ pub fn preview(
                     json!({ "project_id": project, "name": name, "documents": n }),
                     n >= 2,
                 )
+            }
+            // Which rules a partial check runs (a reference that matches none fails the step — audit PRJ-12).
+            Op::CheckConsistency { project, rules } if !rules.is_empty() => {
+                let resolved = project.as_deref().map(|pid| resolve_rules(db, pid, rules));
+                match resolved {
+                    Some(Ok(ids_)) => (
+                        if ko {
+                            format!("규칙 {}개만 검사", ids_.len())
+                        } else {
+                            format!("checks {} rules only", ids_.len())
+                        },
+                        json!({ "rules": ids_ }),
+                        false,
+                    ),
+                    Some(Err(e)) => (
+                        if ko {
+                            format!("검사할 규칙을 찾을 수 없음: {}", rules.join(", "))
+                        } else {
+                            format!("no such rule: {}", rules.join(", "))
+                        },
+                        json!({ "rules": [], "error": e.to_string() }),
+                        false,
+                    ),
+                    None => (String::new(), Value::Null, false),
+                }
             }
             // `review correct`: the field and its current value in each document.
             Op::Review { action: ReviewOp::Correct, field, value, .. } => {
