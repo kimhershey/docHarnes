@@ -1750,16 +1750,24 @@ fn run_step(
                 Ok(kept)
             })?;
             out.documents.extend(ids(&docs_));
+            let changed = docs_.len() - kept;
             let note = match (kept, deps.ko()) {
                 (0, _) => String::new(),
                 (n, true) => format!(" (참고 자료 묶음에 들어 있는 {n}건은 참고 자료로 유지)"),
                 (n, false) => format!(" ({n} still in a reference group stay reference material)"),
             };
             Ok(StepOutcome {
-                summary: if deps.ko() {
-                    format!("{} 역할: {}{note}", count_label(deps, docs_.len() - kept), role_label(target, true))
+                summary: if changed == 0 {
+                    // Nothing changed: say why instead of "0건".
+                    if deps.ko() {
+                        format!("참고 자료 묶음에 들어 있는 문서라 참고 자료로 둡니다({kept}건). 묶음에서 빼면 업무 문서가 됩니다")
+                    } else {
+                        format!("Still in a reference group: kept as reference material ({kept}). Take them out of the group to make them work documents")
+                    }
+                } else if deps.ko() {
+                    format!("{} 역할: {}{note}", count_label(deps, changed), role_label(target, true))
                 } else {
-                    format!("{} marked as {}{note}", count_label(deps, docs_.len() - kept), role_label(target, false))
+                    format!("{} marked as {}{note}", count_label(deps, changed), role_label(target, false))
                 },
                 payload: json!({ "documents": ids(&docs_), "role": target }),
                 imported: None,
