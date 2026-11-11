@@ -6,9 +6,10 @@ import { describe, expect, it } from "vitest";
 
 import en from "@/i18n/en.json";
 import ko from "@/i18n/ko.json";
+import type { UiOpResult } from "@/lib/commands";
 import type { CheckRun, Draft, DraftOutcome, Plan, PlanContext, PlanExecution, PlanPreview, PlanResponse, Project, ProjectDetail, RuleDraft } from "@/lib/types";
 
-import { deriveResultActions, formatAmount, impactLine, impactOf, isPlanExecution, onlyReviewedValue, opLabel, planKind, projectName, requiresConfirmation, ruleDraftPreview, summarizeOp, uiContextFor, withOnlyReviewed } from "./describePlan";
+import { deriveResultActions, formatAmount, impactLine, impactOf, isPlanExecution, onlyReviewedValue, opLabel, planKind, projectName, requiresConfirmation, ruleDraftPreview, summarizeOp, uiContextFor, uiResultsByStep, withOnlyReviewed } from "./describePlan";
 import { OP_KINDS, OP_SPECS, UI_OPS } from "./opSpecs";
 
 const instance = i18next.createInstance();
@@ -179,6 +180,40 @@ describe("result actions", () => {
 });
 
 // The P6 ops in the shapes `exec.rs` really sends (review H1), plus the bare shapes the browser mock used to send.
+// PLN-17: the UI runs the steps the executor leaves to it; what became of each is shown on its step.
+describe("uiResultsByStep", () => {
+  const step = (index: number, op: PlanExecution["steps"][number]["op"], status: PlanExecution["steps"][number]["status"]): PlanExecution["steps"][number] => ({ index, op, status, summary: "", payload: null, elapsed_ms: 0 });
+  const result = (op: UiOpResult["op"], ok: boolean): UiOpResult => ({ op, ok, summary: ok ? `${op} done` : "", error: ok ? null : `${op} failed` });
+
+  it("assigns the k-th result to the k-th step the executor left to the UI", () => {
+    const execution: PlanExecution = {
+      steps: [step(0, "tag", "done"), step(1, "set_theme", "ui"), step(2, "noop", "skipped"), step(3, "manage_model", "ui")],
+      cancelled: false,
+      documents: [],
+      ui_actions: [{ op: "set_theme", theme: "dark" }, { op: "noop" }, { op: "manage_model", action: "delete", id: "x" }],
+      batches: [],
+    };
+    const map = uiResultsByStep(execution, [result("set_theme", true), result("noop", true), result("manage_model", false)]);
+    expect([...map.keys()]).toEqual([1, 2, 3]);
+    expect(map.get(1)).toMatchObject({ ok: true, summary: "set_theme done" });
+    expect(map.get(3)).toMatchObject({ ok: false, error: "manage_model failed" });
+  });
+
+  it("leaves steps without a result alone: none yet, or a step skipped after a failure", () => {
+    const execution: PlanExecution = {
+      steps: [step(0, "search", "failed"), step(1, "open", "skipped"), step(2, "set_theme", "ui")],
+      cancelled: false,
+      documents: [],
+      ui_actions: [{ op: "set_theme", theme: "dark" }],
+      batches: [],
+    };
+    expect(uiResultsByStep(execution, null).size).toBe(0);
+    expect(uiResultsByStep(execution, []).size).toBe(0);
+    // `open` was skipped by the executor (not handed over): the one result is the theme's.
+    expect([...uiResultsByStep(execution, [result("set_theme", false)]).keys()]).toEqual([2]);
+  });
+});
+
 describe("result actions (P6 payloads)", () => {
   const draft: Draft = {
     id: "d1",

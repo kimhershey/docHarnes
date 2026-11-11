@@ -10,7 +10,7 @@ import { describeError } from "./errors";
 import { api } from "./ipc";
 import { queryClient, queryKeys } from "./query-client";
 import { coerceSettingValue, resolveSettingKey, setSettingByPath, settingSpec } from "./settingsCatalog";
-import { SCREEN_ROUTES, isJobFinished, type BackendPreference, type DocumentView, type Job, type JobOp, type JobState, type Language, type Op, type PreRouteResult, type RetentionPolicy, type RetentionTarget, type Screen, type Theme, type Tier, type UndoReport } from "./types";
+import { SCREEN_ROUTES, isJobFinished, type BackendPreference, type DocumentView, type Job, type JobOp, type JobState, type Language, type Op, type OpKind, type PreRouteResult, type RetentionPolicy, type RetentionTarget, type Screen, type Theme, type Tier, type UndoReport } from "./types";
 import { errorCode, errorMessage } from "./utils";
 import { flushChatWrites } from "@/stores/assistant";
 import { useDocumentsStore } from "@/stores/documents";
@@ -571,18 +571,34 @@ export function resolveJob(jobs: Job[], id: string | null | undefined, action: J
   return newest(candidates);
 }
 
-/** Runs several UI ops in order, toasting failures; returns the summaries of the ones that ran. */
-export async function executeUiOps(ops: Op[], navigate: NavigateFunction, t: TFunction): Promise<string[]> {
-  const summaries: string[] = [];
+/** What became of one UI-side op: `executeUiOps` returns one per op, in the order of the ops. */
+export interface UiOpResult {
+  op: OpKind;
+  ok: boolean;
+  /** Translated summary of what was done (may be empty; empty for a failed op). */
+  summary: string;
+  /** Translated error of a failed op. */
+  error: string | null;
+}
+
+/**
+ * Runs several UI ops in order. A failure is toasted and does not stop the ops after it; the result
+ * says for every op whether it ran, so the card that asked for them can show a failure as one (a toast
+ * alone left the card saying "실행됨", PLN-17).
+ */
+export async function executeUiOps(ops: Op[], navigate: NavigateFunction, t: TFunction): Promise<UiOpResult[]> {
+  const results: UiOpResult[] = [];
   for (const op of ops) {
     try {
       const outcome = await executeUiOp(op, navigate, t);
-      if (outcome.summary) summaries.push(outcome.summary);
+      results.push({ op: op.op, ok: true, summary: outcome.summary, error: null });
     } catch (e) {
-      useUiStore.getState().toast(describeError(e, t), "danger");
+      const error = describeError(e, t);
+      useUiStore.getState().toast(error, "danger");
+      results.push({ op: op.op, ok: false, summary: "", error });
     }
   }
-  return summaries;
+  return results;
 }
 
 // ---------------------------------------------------------------------------

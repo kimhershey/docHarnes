@@ -5,6 +5,7 @@
 
 import type { TFunction } from "i18next";
 
+import type { UiOpResult } from "@/lib/commands";
 import { settingSpec } from "@/lib/settingsCatalog";
 import {
   FOLDER_TEMPLATES,
@@ -742,4 +743,24 @@ export function deriveResultActions(execution: PlanExecution, plan: Plan): Resul
 
 export function isPlanExecution(v: unknown): v is PlanExecution {
   return isRecord(v) && Array.isArray(v.steps) && Array.isArray(v.ui_actions) && Array.isArray(v.batches);
+}
+
+/**
+ * The outcome of each step's UI action, by step index. The executor leaves UI ops to the UI: it lists
+ * them in `ui_actions` in step order and marks their steps `ui` (`skipped` for clarify / noop), so the
+ * k-th result belongs to the k-th such step.
+ */
+export function uiResultsByStep(execution: PlanExecution, results: UiOpResult[] | null | undefined): Map<number, UiOpResult> {
+  const out = new Map<number, UiOpResult>();
+  if (!results || results.length === 0) return out;
+  let k = 0;
+  for (const step of execution.steps) {
+    const result = results[k];
+    if (!result) break;
+    const handedOver = step.status === "ui" || (step.status === "skipped" && (step.op === "clarify" || step.op === "noop"));
+    if (!handedOver || result.op !== step.op) continue;
+    out.set(step.index, result);
+    k += 1;
+  }
+  return out;
 }

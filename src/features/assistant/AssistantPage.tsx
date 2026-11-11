@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next";
 import { AlertCircle, Bot, Briefcase, HelpCircle, Paperclip, Plus, Send, Sparkles, User, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -14,7 +15,7 @@ import { describeJobError } from "@/features/jobs/describe";
 import { AnswerCard } from "@/features/knowledge/AnswerCard";
 import { openCitation } from "@/features/knowledge/AnswersPanel";
 import { settingsTabPath } from "@/features/settings/tabs";
-import { describePreRoute, executePreRoute, executeUiOps } from "@/lib/commands";
+import { describePreRoute, executePreRoute, executeUiOps, type UiOpResult } from "@/lib/commands";
 import { docsFromIds, DropHint, importDroppedFiles, useDocumentDropTarget, type DragDoc } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
 import { askBackText, isCancelCommand, isSlashCommand, loadRouting } from "@/lib/assistant-control";
@@ -54,6 +55,30 @@ export function looksLikeQuestion(text: string): boolean {
 
 function hasOpenLayer(): boolean {
   return document.querySelector('[role="dialog"], [role="listbox"], [role="menu"], [cmdk-dialog]') !== null;
+}
+
+/** An "executed" card whose UI ops did not all run says so: `failed` when none ran, `partial` when some did (PLN-17). */
+function executedStatus(m: Message): "done" | "partial" | "failed" {
+  if (m.role !== "assistant" || m.kind !== "executed" || !m.failures || m.failures.length === 0) return "done";
+  return (m.ran ?? 0) > 0 ? "partial" : "failed";
+}
+
+/** The card's badge text. */
+function executedLabel(m: Message, t: TFunction): string {
+  const status = executedStatus(m);
+  return status === "done" ? t("assistant.executed") : status === "partial" ? t("assistant.executed_partial") : t("assistant.executed_failed");
+}
+
+/** Keeps what became of a finished job's UI actions on that job's execution card (in whichever loaded chat it is). */
+function recordJobUiResults(jobId: string, results: UiOpResult[]): void {
+  if (results.length === 0) return;
+  const store = useAssistantStore.getState();
+  for (const [sid, list] of Object.entries(store.messagesBySession)) {
+    const card = list.find((m) => m.role === "assistant" && m.kind === "execution" && m.jobId === jobId);
+    if (!card) continue;
+    store.patch(sid, card.id, (m) => (m.role === "assistant" && m.kind === "execution" ? { ...m, uiResults: results } : m));
+    return;
+  }
 }
 
 /** The three scopes of 0.5.0 (plan §0): everything, the current project, or the selected / attached / open documents. */
@@ -282,13 +307,8 @@ export function AssistantPage() {
     void api.knowledgeAnswerCancel(requestId).catch(() => undefined);
   };
 
-  const runUiActions = useCallback(
-    async (ops: Plan["operations"]) => {
-      if (ops.length === 0) return;
-      await executeUiOps(ops, navigate, t);
-    },
-    [navigate, t],
-  );
+  /** Runs the UI's part of a plan; one result per op, so the card can show an op that failed as failed. */
+  const runUiActions = useCallback(async (ops: Plan["operations"]): Promise<UiOpResult[]> => (ops.length === 0 ? [] : executeUiOps(ops, navigate, t)), [navigate, t]);
 
   /** Sends a (confirmed, possibly edited) plan to the executor: a job or an inline execution. */
   const runPlan = async (sid: string, m: PlanMessage) => {
@@ -309,8 +329,10 @@ export function AssistantPage() {
         );
         push(sid, { role: "assistant", kind: "execution", text: m.text, response: m.response, plan: m.plan, jobId: res.job_id });
       } else if (res.execution) {
-        push(sid, { role: "assistant", kind: "result", text: m.text, response: m.response, plan: m.plan, execution: res.execution });
-        await runUiActions(res.execution.ui_actions);
+        const resultId = push(sid, { role: "assistant", kind: "result", text: m.text, response: m.response, plan: m.plan, execution: res.execution });
+        // The UI's part of the plan runs now; what became of it is kept on the result card (PLN-17).
+        const uiResults = await runUiActions(res.execution.ui_actions);
+        if (uiResults.length > 0) patch(sid, resultId, (x) => (x.role === "assistant" && x.kind === "result" ? { ...x, uiResults } : x));
       }
     } catch (e) {
       const code = errorCode(e);
@@ -401,8 +423,12 @@ export function AssistantPage() {
       }
       case "ui":
         if (!requiresConfirmation(response)) {
-          const summaries = await executeUiOps(plan.operations, navigate, t);
-          push(sid, { role: "assistant", kind: "executed", text: summaries.join(" · ") || plan.summary || textValue, source: sourceLabel(response.result.source, t), confidence: plan.confidence });
+          const results = await executeUiOps(plan.operations, navigate, t);
+          const ran = results.filter((r) => r.ok);
+          const failures = results.filter((r) => !r.ok).map((r) => r.error ?? "");
+          // The card says what ran — or, when nothing ran, what was asked for — and lists the ops that failed.
+          const summary = ran.map((r) => r.summary).filter(Boolean).join(" · ") || plan.summary || textValue;
+          push(sid, { role: "assistant", kind: "executed", text: summary, source: sourceLabel(response.result.source, t), confidence: plan.confidence, ...(failures.length > 0 ? { failures, ran: ran.length } : {}) });
           return;
         }
         break;
@@ -557,7 +583,7 @@ export function AssistantPage() {
           const full = job && !isPlanExecution(job.result) ? await store.fetch(jobId) : job;
           const execution = full && isPlanExecution(full.result) ? full.result : null;
           const ops = useAssistantStore.getState().claimUiActions(jobId, execution ? execution.ui_actions : []);
-          if (ops && ops.length > 0) await runUiActions(ops);
+          if (ops && ops.length > 0) recordJobUiResults(jobId, await runUiActions(ops));
         } finally {
           observing.current.delete(jobId);
         }
@@ -598,7 +624,7 @@ export function AssistantPage() {
       const startedHere = startedJobs.current.delete(job.id);
       if (execution) {
         const ops = useAssistantStore.getState().claimUiActions(job.id, execution.ui_actions);
-        if (ops) void runUiActions(ops);
+        if (ops) void runUiActions(ops).then((results) => recordJobUiResults(job.id, results));
       } else if (job.state === "failed" && (live || startedHere)) {
         // Only a failure that happens now is announced: the card of a job that failed earlier says so itself,
         // and a toast on every reopening of the chat (session switch, restart) is noise (KNO-11).
@@ -793,8 +819,8 @@ export function AssistantPage() {
                     }}
                   />
                 )}
-                {m.kind === "execution" && <ExecutionCard jobId={m.jobId} plan={m.plan} response={m.response} onFinished={onJobFinished} />}
-                {m.kind === "result" && <ResultCard execution={m.execution} plan={m.plan} response={m.response} />}
+                {m.kind === "execution" && <ExecutionCard jobId={m.jobId} plan={m.plan} response={m.response} uiResults={m.uiResults} onFinished={onJobFinished} />}
+                {m.kind === "result" && <ResultCard execution={m.execution} plan={m.plan} response={m.response} uiResults={m.uiResults} />}
                 {m.kind === "clarify" && (
                   <ClarifyCard
                     question={clarificationQuestion(m.response.result.plan) || t("planner.clarify.fallback")}
@@ -810,16 +836,27 @@ export function AssistantPage() {
                   />
                 )}
                 {(m.kind === "executed" || m.kind === "help" || m.kind === "error") && (
-                  <div className="w-full rounded-lg border border-border bg-bg-elevated p-3 text-sm" role="group" aria-label={m.kind === "help" ? t("assistant.help_title") : m.kind === "error" ? t("common.error") : t("assistant.executed")} data-testid={`assistant-card-${m.kind}`}>
+                  <div
+                    className="w-full rounded-lg border border-border bg-bg-elevated p-3 text-sm"
+                    role="group"
+                    aria-label={m.kind === "help" ? t("assistant.help_title") : m.kind === "error" ? t("common.error") : executedLabel(m, t)}
+                    data-testid={`assistant-card-${m.kind}`}
+                    data-executed-status={m.kind === "executed" ? executedStatus(m) : undefined}
+                  >
                     {m.kind === "executed" && (
                       <div className="flex flex-col gap-1">
                         <div className="flex items-center gap-2">
-                          <Badge variant="ok">{t("assistant.executed")}</Badge>
+                          <Badge variant={executedStatus(m) === "done" ? "ok" : executedStatus(m) === "failed" ? "danger" : "warn"}>{executedLabel(m, t)}</Badge>
                           <span className="text-xs text-fg-subtle">
                             {m.source} · {t("assistant.confidence", { value: m.confidence.toFixed(2) })}
                           </span>
                         </div>
                         <p className="selectable">{m.text}</p>
+                        {(m.failures ?? []).map((failure, i) => (
+                          <p key={i} className="text-xs text-danger selectable" role="alert" data-testid="executed-failure">
+                            {t("planner.result.step_failed", { error: failure })}
+                          </p>
+                        ))}
                       </div>
                     )}
                     {m.kind === "help" && (

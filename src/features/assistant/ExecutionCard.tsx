@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
 import { describeJobDetail, describeJobError } from "@/features/jobs/describe";
+import type { UiOpResult } from "@/lib/commands";
 import { describeError } from "@/lib/errors";
 import { SCREEN_ROUTES, isJobFinished, type Job, type Plan, type PlanExecution, type PlanResponse } from "@/lib/types";
 import { useJob, useJobsStore } from "@/stores/jobs";
@@ -36,11 +37,14 @@ export function ExecutionCard({
   jobId,
   plan,
   response,
+  uiResults,
   onFinished,
 }: {
   jobId: string;
   plan: Plan;
   response: PlanResponse;
+  /** What became of the job's `ui_actions` once the page ran them (shown on the result part). */
+  uiResults?: UiOpResult[] | null;
   /**
    * Called once per mount when the job is finished and its result settled. `live` says whether this card
    * watched the job run: only then is the end news — a card that mounts on a job that had already ended
@@ -192,7 +196,7 @@ export function ExecutionCard({
           </div>
         </>
       )}
-      {finished && execution && <ResultCard execution={execution} plan={plan} response={response} error={job.state === "failed" ? error : null} />}
+      {finished && execution && <ResultCard execution={execution} plan={plan} response={response} error={job.state === "failed" ? error : null} uiResults={uiResults} />}
       {finished && !execution && !resultSettled && (
         <span className="flex items-center gap-2 text-xs text-fg-muted" role="status" data-testid="execution-result-loading">
           <Spinner />

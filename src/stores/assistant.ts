@@ -1,5 +1,6 @@
 import { create } from "zustand";
 
+import type { UiOpResult } from "@/lib/commands";
 import { api } from "@/lib/ipc";
 import type { Answer, AnswerRequest, ChatMessageRow, ChatSessionSummary, Op, Plan, PlanExecution, PlanIssue, PlanResponse, SearchMode, SearchResponse, UiPlanContext } from "@/lib/types";
 import { errorCode, errorMessage } from "@/lib/utils";
@@ -13,12 +14,14 @@ export type ClarifyStatus = "pending" | "answered" | "cancelled";
 
 export type Message =
   | { id: number; createdAt?: string; role: "user"; text: string; attachments?: { id: string; name: string }[] }
-  | { id: number; createdAt?: string; role: "assistant"; kind: "executed"; text: string; source: string; confidence: number }
+  /** UI ops that ran at once. `failures`: the errors of the ops that failed (absent = all ran), `ran`: how many did run. */
+  | { id: number; createdAt?: string; role: "assistant"; kind: "executed"; text: string; source: string; confidence: number; failures?: string[]; ran?: number }
   | { id: number; createdAt?: string; role: "assistant"; kind: "answer"; requestId: string; request: AnswerRequest; answer: Answer | null; error: unknown; pending: boolean }
   | { id: number; createdAt?: string; role: "assistant"; kind: "help" }
   | { id: number; createdAt?: string; role: "assistant"; kind: "plan"; text: string; response: PlanResponse; plan: Plan; context: UiPlanContext; status: PlanStatus; errors: PlanIssue[] | null; editing: boolean }
-  | { id: number; createdAt?: string; role: "assistant"; kind: "execution"; text: string; response: PlanResponse; plan: Plan; jobId: string }
-  | { id: number; createdAt?: string; role: "assistant"; kind: "result"; text: string; response: PlanResponse; plan: Plan; execution: PlanExecution }
+  /** `uiResults`: what became of the execution's `ui_actions` once the UI ran them (one per action, in order). */
+  | { id: number; createdAt?: string; role: "assistant"; kind: "execution"; text: string; response: PlanResponse; plan: Plan; jobId: string; uiResults?: UiOpResult[] }
+  | { id: number; createdAt?: string; role: "assistant"; kind: "result"; text: string; response: PlanResponse; plan: Plan; execution: PlanExecution; uiResults?: UiOpResult[] }
   | { id: number; createdAt?: string; role: "assistant"; kind: "clarify"; text: string; response: PlanResponse; status: ClarifyStatus }
   /** "근거만 찾기" (0.5.0): the hits of a knowledge search, no model call. */
   | { id: number; createdAt?: string; role: "assistant"; kind: "evidence"; query: string; mode: SearchMode; response: SearchResponse | null; error: unknown; pending: boolean }

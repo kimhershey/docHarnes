@@ -263,6 +263,8 @@
     "help_title": "Help",
     "help_body": "Natural-language commands become a plan card (steps · impact · preview) that runs after your approval. Examples: process inbox, last month's receipt total, tax invoices → Excel, move receipts into monthly folders, summarize the selected documents, undo the last rename. Instant commands: /theme dark|light|system|high-contrast, /lang ko|en, /open <screen>, /job pause, /undo. Questions are answered from the reference material with per-sentence sources. Ctrl+Enter approves · Esc cancels · Ctrl+Z undoes.",
     "executed": "Done",
+    "executed_partial": "Partly done",
+    "executed_failed": "Failed",
     "date_resolved": "Date range: {{from}} – {{to}} ({{label}})",
     "source_slash": "slash command",
     "source_phrase": "phrase rule",

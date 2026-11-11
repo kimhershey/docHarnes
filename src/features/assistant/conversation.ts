@@ -32,7 +32,8 @@ export function conversationTurns(messages: Message[], max = MAX_MEMORY_TURNS): 
         if (m.answer && !m.pending && !(m.answer.no_evidence && !m.answer.used_general_knowledge)) turns.push({ role: "assistant", text: clip(m.answer.text) });
         break;
       case "executed":
-        turns.push({ role: "assistant", text: clip(m.text) });
+        // An op that failed is remembered as failed (the card's text alone says what was asked for).
+        turns.push({ role: "assistant", text: clip(m.failures && m.failures.length > 0 ? `${m.text} ✖ ${m.failures.join(" / ")}` : m.text) });
         break;
       case "plan":
         if (m.status !== "cancelled") turns.push({ role: "assistant", text: clip(m.plan.summary ?? m.text) });

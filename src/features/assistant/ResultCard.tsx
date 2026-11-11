@@ -12,7 +12,7 @@ import { openCitation } from "@/features/knowledge/AnswersPanel";
 import { RuleSummary } from "@/features/projects/RuleGrid";
 import { verdictVariant } from "@/features/projects/rules";
 import { hitHref } from "./evidence";
-import { runJournal } from "@/lib/commands";
+import { runJournal, type UiOpResult } from "@/lib/commands";
 import { revealPath } from "@/lib/ipc";
 import { SCREEN_ROUTES, type Draft, type OpKind, type OrganizeItem, type Plan, type PlanExecution, type PlanResponse, type StepStatus, type UndoReport } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -20,7 +20,7 @@ import { useGenerateStore } from "@/stores/generate";
 import { usePipelineStore } from "@/stores/pipeline";
 
 import { AggregateCard } from "./AggregateCard";
-import { agentStepDetail, aggregateRequestFor, deriveResultActions, opLabel } from "./describePlan";
+import { agentStepDetail, aggregateRequestFor, deriveResultActions, opLabel, uiResultsByStep } from "./describePlan";
 
 function StatusIcon({ status }: { status: StepStatus }) {
   switch (status) {
@@ -98,7 +98,20 @@ function AgentStepLine({ op, payload }: { op: OpKind; payload: unknown }) {
  * then the actions the payloads allow — review queue, move log, undo, export
  * folder, search hits, answers / summaries and aggregate results.
  */
-export function ResultCard({ execution, plan, response, error }: { execution: PlanExecution; plan: Plan; response: PlanResponse | null; error?: string | null }) {
+export function ResultCard({
+  execution,
+  plan,
+  response,
+  error,
+  uiResults,
+}: {
+  execution: PlanExecution;
+  plan: Plan;
+  response: PlanResponse | null;
+  error?: string | null;
+  /** What became of the execution's `ui_actions` (absent until the UI ran them): a failed one fails its step and the card. */
+  uiResults?: UiOpResult[] | null;
+}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [showMoves, setShowMoves] = useState(false);
@@ -107,7 +120,9 @@ export function ResultCard({ execution, plan, response, error }: { execution: Pl
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const draftJobRunning = useDraftJobRunning();
   const actions = deriveResultActions(execution, plan);
-  const outcome = execution.cancelled ? "cancelled" : actions.failed || error ? "failed" : "done";
+  const uiByStep = uiResultsByStep(execution, uiResults);
+  const uiFailed = (uiResults ?? []).some((r) => !r.ok);
+  const outcome = execution.cancelled ? "cancelled" : actions.failed || error || uiFailed ? "failed" : "done";
   const undoBatch = actions.batches[actions.batches.length - 1] ?? null;
   const moveItems = actions.organise.flatMap((o) => o.items);
   const context = response?.context ?? null;
@@ -150,26 +165,38 @@ export function ResultCard({ execution, plan, response, error }: { execution: Pl
         <span className="text-xs text-fg-subtle">{t("planner.result.title")}</span>
       </div>
       <ol className="flex flex-col gap-1" aria-label={t("planner.card.steps")}>
-        {execution.steps.map((step) => (
-          <li key={step.index} className="flex items-start gap-2" data-testid={`result-step-${step.index}`} data-step-status={step.status}>
-            <span className="mt-0.5 shrink-0">
-              <StatusIcon status={step.status} />
-            </span>
-            <div className="flex min-w-0 flex-1 flex-col">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium">{opLabel(step.op, t)}</span>
-                {step.summary && <span className="text-fg-muted selectable">{step.summary}</span>}
-                {(step.status === "skipped" || step.status === "cancelled" || step.status === "ui") && <span className="text-xs text-fg-subtle">{t(`planner.result.status.${step.status}`)}</span>}
+        {execution.steps.map((step) => {
+          // A step the executor left to the UI is `ui` whatever the UI made of it: once the UI has run it, its
+          // own outcome is the step's mark (a failed UI op used to keep the ✓, PLN-17).
+          const ui = uiByStep.get(step.index) ?? null;
+          const shown: StepStatus = ui && step.status === "ui" ? (ui.ok ? "done" : "failed") : step.status;
+          return (
+            <li key={step.index} className="flex items-start gap-2" data-testid={`result-step-${step.index}`} data-step-status={step.status} data-ui-status={ui ? (ui.ok ? "done" : "failed") : undefined}>
+              <span className="mt-0.5 shrink-0">
+                <StatusIcon status={shown} />
+              </span>
+              <div className="flex min-w-0 flex-1 flex-col">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{opLabel(step.op, t)}</span>
+                  {step.summary && <span className="text-fg-muted selectable">{step.summary}</span>}
+                  {ui?.ok && ui.summary && <span className="text-fg-muted selectable">{ui.summary}</span>}
+                  {(step.status === "skipped" || step.status === "cancelled" || (step.status === "ui" && !ui)) && <span className="text-xs text-fg-subtle">{t(`planner.result.status.${step.status}`)}</span>}
+                </div>
+                {step.error && (
+                  <span className="text-xs text-danger selectable" role="alert">
+                    {t("planner.result.step_failed", { error: step.error })}
+                  </span>
+                )}
+                {ui && !ui.ok && (
+                  <span className="text-xs text-danger selectable" role="alert" data-testid="result-ui-error">
+                    {t("planner.result.step_failed", { error: ui.error ?? "" })}
+                  </span>
+                )}
+                {step.status === "done" && <AgentStepLine op={step.op} payload={step.payload} />}
               </div>
-              {step.error && (
-                <span className="text-xs text-danger selectable" role="alert">
-                  {t("planner.result.step_failed", { error: step.error })}
-                </span>
-              )}
-              {step.status === "done" && <AgentStepLine op={step.op} payload={step.payload} />}
-            </div>
-          </li>
-        ))}
+            </li>
+          );
+        })}
       </ol>
       {error && !actions.failed && (
         <p className="text-xs text-danger selectable" role="alert">
