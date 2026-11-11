@@ -27,7 +27,13 @@ export type Clipped = "lists" | "all";
 export type Message = { clipped?: Clipped } & (
   | { id: number; createdAt?: string; role: "user"; text: string; attachments?: { id: string; name: string }[] }
   /** UI ops that ran at once. `failures`: the errors of the ops that failed (absent = all ran), `ran`: how many did run. */
-  | { id: number; createdAt?: string; role: "assistant"; kind: "executed"; text: string; source: string; confidence: number; failures?: string[]; ran?: number }
+  /**
+   * `undo` (0.8.0): the ops that put back what a settings change replaced ("UI 배율 100 → 130" → back to 100);
+   * `undone` once they ran.
+   */
+  | { id: number; createdAt?: string; role: "assistant"; kind: "executed"; text: string; source: string; confidence: number; failures?: string[]; ran?: number; undo?: Op[]; undone?: boolean }
+  /** A ready reply shown as it is (0.8.0): a fixed greeting, "nothing to do", "this cannot be done". No model call. */
+  | { id: number; createdAt?: string; role: "assistant"; kind: "reply"; text: string; source: string }
   | { id: number; createdAt?: string; role: "assistant"; kind: "answer"; requestId: string; request: AnswerRequest; answer: Answer | null; error: unknown; pending: boolean }
   | { id: number; createdAt?: string; role: "assistant"; kind: "help" }
   /**

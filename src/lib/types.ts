@@ -1204,7 +1204,14 @@ export interface AnswerRequest {
   /** Earlier turns, oldest first (the question itself is not included). */
   history?: ConversationTurn[];
   session?: SessionState | null;
+  /**
+   * How the turn is answered (0.8.0): `grounded` (default) from the evidence; `general` for a question that is
+   * not about the documents (evidence when it answers it, general knowledge otherwise); `chat` for small talk.
+   */
+  style?: AnswerStyle;
 }
+
+export type AnswerStyle = "grounded" | "general" | "chat";
 
 export interface Citation {
   index: number;
@@ -1673,8 +1680,14 @@ export type Op =
   | { op: "review"; action: ReviewOp; field?: string | null; value?: string | null; only?: ReviewOnly | null }
   | { op: "reindex"; scope?: "fts" | "vec" | "all" | null }
   | { op: "search"; query: string; mode?: SearchMode | null; top_k?: number | null }
-  | { op: "answer"; question: string; cite?: boolean | null; knowledge?: boolean | null }
-  | { op: "summarize"; target?: "each_doc" | "set" | null; length?: "short" | "long" | null }
+  /**
+   * `mode` (0.8.0): the turn is not a document question — `chat` = greeting / small talk (nothing is looked
+   * up), `general` = a question that is not about the documents (evidence when there is some, general
+   * knowledge otherwise). `reply`: a ready answer (fixed greetings, "this cannot be done") shown as it is.
+   */
+  | { op: "answer"; question: string; cite?: boolean | null; knowledge?: boolean | null; mode?: AnswerMode | null; reply?: string | null }
+  /** `group_by` (0.8.0): one combined summary per project / document type / folder. */
+  | { op: "summarize"; target?: "each_doc" | "set" | null; length?: "short" | "long" | null; group_by?: SummaryGroup | null }
   | { op: "aggregate"; fn: AggregateFn; field?: string | null; group_by?: GroupBy | null; include_unreviewed?: boolean | null }
   | { op: "organize"; template?: string | null; folder_template?: string | null; group_by?: GroupBy | null; only_reviewed?: boolean | null; dry_run?: boolean | null }
   | { op: "rename"; template: string; only_reviewed?: boolean | null }
@@ -1754,6 +1767,9 @@ export interface Scope {
   filter?: ScopeFilter;
 }
 
+export type AnswerMode = "chat" | "general";
+export type SummaryGroup = "none" | "project" | "doc_type" | "folder";
+
 export interface Plan {
   intent: OpKind;
   scope: Scope;
@@ -1763,6 +1779,8 @@ export interface Plan {
   clarification_question?: string | null;
   /** One-line interpretation ("해석: …"). */
   summary?: string | null;
+  /** The part of the request the plan does not cover (0.8.0); a plan that has one waits for confirmation. */
+  unmet?: string | null;
 }
 
 export interface PlanIssue {
@@ -1772,7 +1790,8 @@ export interface PlanIssue {
   blocking: boolean;
 }
 
-export type PlanSource = "prerouter" | "rules" | "model" | "none";
+/** `fast` (0.8.0): read without the model — a sentence that is exactly a setting and its value, or a fixed greeting. */
+export type PlanSource = "prerouter" | "rules" | "model" | "fast" | "none";
 
 export interface PlanResult {
   text: string;
@@ -1787,6 +1806,8 @@ export interface PlanResult {
   raw?: string | null;
   /** Op families the two-stage planner routed to (0.6.0 plan §2; absent on rule / pre-router plans). */
   families?: OpFamily[] | null;
+  /** `chat` / `general` when the routing call answered instead of planning (0.8.0). */
+  route?: AnswerMode | null;
 }
 
 export interface DocTypeSummary {
@@ -1874,6 +1895,8 @@ export interface PlanPreview {
   document_ids: string[];
   steps: StepPreview[];
   requires_confirmation: boolean;
+  /** Whether any step reads the scope; `false` for settings, navigation, small talk (no "대상 문서 N건"). */
+  uses_scope?: boolean;
 }
 
 export interface PlanResponse {

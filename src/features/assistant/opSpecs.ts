@@ -144,10 +144,14 @@ const SPECS: OpSpec[] = [
     desc_ko: "문서 검색",
     desc_en: "search documents",
   },
-  { op: "answer", params: [p("question", str, true, "질문", "question"), p("cite", bool, false, "출처 인용(기본 true)", "cite sources (default true)"), p("knowledge", bool, false, "지식 베이스 검색(기본 true; 보낸 글만 다듬을 때 false)", "search the knowledge base (default true; false for the user's own text)")], desc_ko: "근거 기반 질의응답(지식 베이스·문서)", desc_en: "grounded question answering" },
+  { op: "answer", params: [p("question", str, true, "질문", "question"), p("cite", bool, false, "출처 인용(기본 true)", "cite sources (default true)"), p("knowledge", bool, false, "지식 베이스 검색(기본 true; 보낸 글만 다듬을 때 false)", "search the knowledge base (default true; false for the user's own text)"), p("mode", en(["chat", "general"]), false, "문서 질문이 아닐 때만: chat=인사·잡담, general=문서와 무관한 지식 질문", "only when it is not a document question: chat = greeting / small talk, general = a knowledge question unrelated to the documents")], desc_ko: "근거 기반 질의응답(지식 베이스·문서)", desc_en: "grounded question answering" },
   {
     op: "summarize",
-    params: [p("target", en(["each_doc", "set"]), false, "문서별 / 묶음 하나로", "per document / one summary"), p("length", en(["short", "long"]), false, "길이", "length")],
+    params: [
+      p("target", en(["each_doc", "set"]), false, "문서별 / 묶음 하나로", "per document / one summary"),
+      p("length", en(["short", "long"]), false, "길이", "length"),
+      p("group_by", en(["none", "project", "doc_type", "folder"]), false, "묶음별 요약: 프로젝트·문서 유형·폴더마다 하나씩(‘프로젝트별로’)", "one combined summary per project / document type / folder ('by project')"),
+    ],
     desc_ko: "요약",
     desc_en: "summarise",
   },

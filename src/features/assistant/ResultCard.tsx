@@ -278,6 +278,26 @@ export function ResultCard({
       ))}
       {actions.summaries.map((s) => (
         <div key={s.index} className="flex flex-col gap-2" data-testid="result-summaries">
+          {/* One combined summary per group comes first (0.8.0); the per-document summaries follow. */}
+          {s.groups.length > 0 && (
+            <div className="flex flex-col gap-2" data-testid="result-summary-groups" data-group-by={s.groupBy ?? "none"}>
+              {s.groups.map((g) => (
+                <div key={g.key || g.label} className="flex flex-col gap-1 rounded-md border border-border bg-bg p-2" data-testid="result-summary-group">
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="font-medium">{g.label}</span>
+                    <span className="text-fg-muted">{t("planner.result.summary_group_docs", { count: g.documents })}</span>
+                  </div>
+                  <AnswerCard answer={g.answer} compact onCitation={(c) => openCitation(navigate, c)} />
+                </div>
+              ))}
+              {s.items.length > 0 && <p className="text-xs font-medium text-fg-muted">{t("planner.result.summary_by_document", { count: s.items.length })}</p>}
+            </div>
+          )}
+          {s.skipped.length > 0 && (
+            <p className="text-xs text-warn" data-testid="result-summary-skipped">
+              {t("planner.result.summary_skipped", { count: s.skipped.length, names: s.skipped.slice(0, 5).join(", ") })}
+            </p>
+          )}
           {s.items.map((item) => (
             <div key={item.document_id} className="flex flex-col gap-1">
               <button type="button" className="self-start text-xs font-medium text-accent hover:underline cursor-pointer" onClick={() => navigate(`${SCREEN_ROUTES.library}/${item.document_id}`)}>

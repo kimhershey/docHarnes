@@ -9,7 +9,7 @@ import type { NavigateFunction } from "react-router";
 import { describeError } from "./errors";
 import { api } from "./ipc";
 import { queryClient, queryKeys } from "./query-client";
-import { coerceSettingValue, resolveSettingKey, setSettingByPath, settingSpec } from "./settingsCatalog";
+import { coerceSettingValue, getSettingByPath, resolveSettingKey, setSettingByPath, settingSpec } from "./settingsCatalog";
 import { SCREEN_ROUTES, isJobFinished, type BackendPreference, type DocumentView, type Job, type JobOp, type JobState, type Language, type Op, type OpKind, type PreRouteResult, type RetentionPolicy, type RetentionTarget, type Screen, type Theme, type Tier, type UndoReport } from "./types";
 import { errorCode, errorMessage } from "./utils";
 import { flushChatWrites } from "@/stores/assistant";
@@ -23,6 +23,8 @@ import { useWorkspaceStore } from "@/stores/workspace";
 export interface ExecuteOutcome {
   /** Human-readable summary of what happened (already translated). */
   summary: string;
+  /** Ops that put back what this one replaced (a settings change: the previous value). Absent when nothing changed. */
+  undo?: Op[];
 }
 
 export function describePreRoute(result: PreRouteResult, t: TFunction): string {
@@ -45,16 +47,18 @@ export async function executePreRoute(result: PreRouteResult, navigate: Navigate
   const ui = useUiStore.getState();
   switch (result.op) {
     case "set_theme": {
+      const before = settings.settings?.ui.theme;
       await settings.setTheme(result.theme);
       const summary = t("theme.changed", { theme: t(`theme.${result.theme}`) });
       ui.toast(summary, "ok");
-      return { summary };
+      return { summary, ...(before && before !== result.theme ? { undo: [{ op: "set_theme", theme: before }] } : {}) };
     }
     case "set_language": {
+      const before = settings.settings?.ui.language;
       await settings.setLanguage(result.language);
       const summary = t("language.changed", { language: t(`language.${result.language}`) });
       ui.toast(summary, "ok");
-      return { summary };
+      return { summary, ...(before && before !== result.language ? { undo: [{ op: "set_language", lang: before }] } : {}) };
     }
     case "open": {
       navigate(SCREEN_ROUTES[result.screen]);
@@ -154,7 +158,7 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
       const spec = settingSpec(path);
       if (!spec) throw new Error(t("planner.ui.unknown_setting", { key: op.key }));
       const value = coerceSettingValue(spec, op.value);
-      const shown = settingValueLabel(path, value, t);
+      const before = settings.settings ? getSettingByPath(settings.settings, path) : undefined;
       switch (path) {
         case "ui.theme":
           await settings.setTheme(value as Theme);
@@ -173,7 +177,8 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
           break;
         case "models.active_model":
           await settings.setActiveModel(String(value));
-          await useEngineStore.getState().loadModel(String(value));
+          // "auto" is a choice, not a model: the engine picks one, there is nothing to load by that name.
+          if (String(value) !== "auto") await useEngineStore.getState().loadModel(String(value));
           break;
         case "processing.inbox_watch":
           await api.documentsSetInboxWatch(value as boolean);
@@ -183,7 +188,13 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
           await settings.update((d) => setSettingByPath(d, path, value));
           break;
       }
-      return done(t("planner.ui.set_setting", { key: t(spec.label), value: shown }));
+      // What was stored is what is reported (the store normalises on save), next to what it replaced.
+      const stored = useSettingsStore.getState().settings;
+      const after = stored ? getSettingByPath(stored, path) : value;
+      const label = (v: unknown) => settingValueLabel(path, v as string | number | boolean | null, t);
+      if (before === undefined || before === null) return done(t("planner.ui.set_setting", { key: t(spec.label), value: label(after) }));
+      if (before === after) return done(t("planner.ui.set_setting_same", { key: t(spec.label), value: label(after) }), "info");
+      return { ...done(t("planner.ui.set_setting_changed", { key: t(spec.label), from: label(before), to: label(after) })), undo: [{ op: "set_setting", key: path, value: before as string | number | boolean }] };
     }
     case "set_model": {
       await settings.setActiveModel(op.id);
@@ -191,8 +202,10 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
       return done(t("planner.ui.set_model", { id: op.id }), "info");
     }
     case "set_profile": {
+      const before = settings.settings?.models.profile;
       await settings.update((d) => void (d.models.profile = op.profile));
-      return done(t("planner.ui.set_profile", { profile: t(`models.profiles.${op.profile}`) }));
+      const said = done(t("planner.ui.set_profile", { profile: t(`models.profiles.${op.profile}`) }));
+      return before && before !== op.profile ? { ...said, undo: [{ op: "set_profile", profile: before }] } : said;
     }
     case "open": {
       switch (op.target) {
@@ -579,6 +592,8 @@ export interface UiOpResult {
   summary: string;
   /** Translated error of a failed op. */
   error: string | null;
+  /** Ops that put back what this op replaced (settings changes). */
+  undo?: Op[];
 }
 
 /**
@@ -591,7 +606,7 @@ export async function executeUiOps(ops: Op[], navigate: NavigateFunction, t: TFu
   for (const op of ops) {
     try {
       const outcome = await executeUiOp(op, navigate, t);
-      results.push({ op: op.op, ok: true, summary: outcome.summary, error: null });
+      results.push({ op: op.op, ok: true, summary: outcome.summary, error: null, ...(outcome.undo ? { undo: outcome.undo } : {}) });
     } catch (e) {
       const error = describeError(e, t);
       useUiStore.getState().toast(error, "danger");

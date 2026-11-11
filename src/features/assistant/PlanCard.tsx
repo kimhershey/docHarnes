@@ -146,6 +146,9 @@ function StepPreviewView({ step, index }: { step: StepPreview | undefined; index
   );
 }
 
+/** Notes of `planner::guard::contract_checks`: each of them makes the plan one the user confirms. */
+const CONTRACT_WARNINGS: ReadonlySet<string> = new Set(["unmet_request", "grouping_dropped", "ungrounded_change"]);
+
 /**
  * Plan card (design §3.7.6): header with confidence / source, the
  * interpretation, one checklist row per op with its parameter summary and
@@ -317,7 +320,7 @@ export function PlanCard({
       {(previewOf !== "none" || previewError) && (
         <p className="text-xs text-fg-muted" data-testid="plan-impact" data-preview={previewOf}>
           {previewOf === "planned" || previewOf === "edited" ? (
-            impactLine(impact, t)
+            impactLine(impact, t, preview?.uses_scope !== false)
           ) : previewOf === "refreshing" ? (
             <span className="flex items-center gap-1" role="status">
               <Spinner /> {t("planner.card.preview_refreshing")}
@@ -340,12 +343,17 @@ export function PlanCard({
       )}
       {warnings.length > 0 && (
         <ul className="flex flex-col gap-0.5 text-xs text-fg-muted" aria-label={t("planner.card.warnings")} data-testid="plan-warnings">
-          {warnings.map((w, i) => (
-            <li key={i}>
-              ⚠ {w.message}
-              {w.path && <span className="text-fg-subtle"> ({w.path})</span>}
-            </li>
-          ))}
+          {warnings.map((w, i) => {
+            // The planner's checks against the sentence (0.8.0) are why this card waits for approval: they
+            // stand out, and their internal path says nothing to the user.
+            const contract = CONTRACT_WARNINGS.has(w.code);
+            return (
+              <li key={i} className={contract ? "font-medium text-warn" : undefined} data-warning-code={w.code}>
+                ⚠ {w.message}
+                {w.path && !contract && <span className="text-fg-subtle"> ({w.path})</span>}
+              </li>
+            );
+          })}
         </ul>
       )}
       {editing && pending && <PlanEditor plan={plan} context={context} onChange={onChange} />}

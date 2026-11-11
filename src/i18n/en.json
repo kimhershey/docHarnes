@@ -307,7 +307,11 @@
       "model_first": "Model",
       "rules_first": "Rules (legacy)",
       "hint": "Model: only slash commands and reply / cancel are handled by rules, everything else by the model (default). Rules (legacy): phrase rules first, the model only when they fail."
-    }
+    },
+    "nothing_to_do": "I found nothing to do. Ask about your documents, or tell me a task — import, organise, extract, summarise.",
+    "reply_label": "Assistant reply",
+    "undo_change": "Undo",
+    "undone": "Put back to the previous value."
   },
   "planner": {
     "ops": {
@@ -379,7 +383,8 @@
       "prerouter": "slash",
       "rules": "phrase rule",
       "model": "model",
-      "none": "none"
+      "none": "none",
+      "fast": "read directly"
     },
     "fn": {
       "sum": "sum",
@@ -552,7 +557,12 @@
       "maintenance_inbox_scan": "scan the inbox",
       "default_value": "default",
       "engine_start": "start",
-      "engine_stop": "stop"
+      "engine_stop": "stop",
+      "mode_chat": "conversation",
+      "mode_general": "not about the documents",
+      "summary_group_project": "one per project",
+      "summary_group_doc_type": "one per type",
+      "summary_group_folder": "one per folder"
     },
     "scope": {
       "title": "Scope",
@@ -618,7 +628,8 @@
       "retention_shorter": "The retention period gets shorter — expired data is deleted by the next purge run.",
       "rule_description": "Rule: {{description}}",
       "ask_back": "Reply",
-      "ask_back_placeholder": "Ask about this plan or say what to change"
+      "ask_back_placeholder": "Ask about this plan or say what to change",
+      "impact_no_scope": "Side effects: {{effects}}"
     },
     "execution": {
       "title": "Running · job #{{id}}",
@@ -686,7 +697,10 @@
         "classify_preview": "{{suggested}} suggestions — apply on the projects screen",
         "manage_schema": "{{action}} · '{{name}}'"
       },
-      "open_document": "Open document"
+      "open_document": "Open document",
+      "summary_group_docs": "{{count}} document(s)",
+      "summary_by_document": "{{count}} per-document summaries",
+      "summary_skipped": "{{count}} document(s) without text skipped: {{names}}"
     },
     "aggregate": {
       "title": "Aggregate — {{summary}}",
@@ -773,7 +787,9 @@
       "maintenance_clear_jobs": "Finished jobs cleared.",
       "maintenance_rescan": "Library rescan started.",
       "maintenance_rescan_busy": "Rescan after the running document job finishes.",
-      "maintenance_inbox_scan": "Inbox scanned."
+      "maintenance_inbox_scan": "Inbox scanned.",
+      "set_setting_changed": "Setting changed: {{key}} {{from}} → {{to}}",
+      "set_setting_same": "{{key}} is already {{value}}."
     },
     "settings": {
       "ui_theme": "Theme",

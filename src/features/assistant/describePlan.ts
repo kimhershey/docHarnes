@@ -181,9 +181,12 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
     case "search":
       return joinParts([`'${op.query}'`, op.mode ? t(`search.mode.${op.mode}`) : null, op.top_k ? pt("top_k", { count: op.top_k }) : null]);
     case "answer":
-      return joinParts([truncate(op.question, 80), op.knowledge === false ? pt("knowledge_text_only") : null]);
-    case "summarize":
-      return joinParts([op.target ? pt(op.target) : null, op.length ? pt(op.length) : null]);
+      return joinParts([truncate(op.question, 80), op.mode ? pt(`mode_${op.mode}`) : op.knowledge === false ? pt("knowledge_text_only") : null]);
+    case "summarize": {
+      // A grouping replaces "문서별 / 묶음 하나로": the group is what the summary is made per.
+      const grouped = op.group_by && op.group_by !== "none";
+      return joinParts([grouped ? pt(`summary_group_${op.group_by}`) : op.target ? pt(op.target) : null, op.length ? pt(op.length) : null]);
+    }
     case "aggregate":
       return joinParts([t(`planner.fn.${op.fn}`), op.field ?? null, groupLabel(op.group_by, t), op.include_unreviewed ? pt("include_unreviewed") : null]);
     case "organize": {
@@ -435,7 +438,8 @@ export function agentStepDetail(op: OpKind, payload: unknown, t: TFunction): Age
 // Plan classification / editing
 // ---------------------------------------------------------------------------
 
-export type PlanKind = "clarify" | "help" | "answer" | "ui" | "work";
+/** `noop`: a plan with nothing to do (0.8.0: answered with one line instead of an empty plan card). */
+export type PlanKind = "clarify" | "help" | "answer" | "ui" | "noop" | "work";
 
 export function isClarification(plan: Plan): boolean {
   return plan.intent === "clarify" || (plan.operations.length > 0 && plan.operations.every((o) => o.op === "clarify")) || (plan.operations.length === 0 && !!plan.clarification_question);
@@ -450,6 +454,7 @@ export function clarificationQuestion(plan: Plan): string {
 export function planKind(plan: Plan): PlanKind {
   if (isClarification(plan)) return "clarify";
   const real = plan.operations.filter((o) => o.op !== "noop");
+  if (real.length === 0) return "noop";
   if (real.length === 1 && real[0]!.op === "help") return "help";
   if (real.length === 1 && real[0]!.op === "answer") return "answer";
   if (real.length > 0 && real.every((o) => UI_OPS.has(o.op))) return "ui";
@@ -599,7 +604,8 @@ export function impactOf(plan: Plan, preview: PlanPreview | null): Impact {
   return impact;
 }
 
-export function impactLine(impact: Impact, t: TFunction): string {
+/** `usesScope = false`: no step reads documents (settings, navigation), so no "대상 문서 N건" (audit USR-3). */
+export function impactLine(impact: Impact, t: TFunction, usesScope = true): string {
   const effects = [
     impact.moves > 0 ? t("planner.card.impact_moves", { count: impact.moves }) : null,
     impact.deletes > 0 ? t("planner.card.impact_delete", { count: impact.deletes }) : null,
@@ -607,7 +613,8 @@ export function impactLine(impact: Impact, t: TFunction): string {
     impact.drafts > 0 ? t("planner.card.impact_draft", { count: impact.drafts }) : null,
     impact.projects > 0 ? t("planner.card.impact_project", { count: impact.projects }) : null,
   ].filter((x): x is string => x !== null);
-  return t("planner.card.impact", { effects: effects.length > 0 ? effects.join(" · ") : t("planner.card.impact_none"), count: impact.documents });
+  const said = effects.length > 0 ? effects.join(" · ") : t("planner.card.impact_none");
+  return usesScope ? t("planner.card.impact", { effects: said, count: impact.documents }) : t("planner.card.impact_no_scope", { effects: said });
 }
 
 // ---------------------------------------------------------------------------
@@ -663,7 +670,17 @@ export interface ResultActions {
   exports: { index: number; result: ExportResult }[];
   searches: { index: number; query: string; response: SearchResponse }[];
   answers: { index: number; answer: Answer }[];
-  summaries: { index: number; items: { document_id: string; name: string; answer: Answer }[] }[];
+  /**
+   * `groups` (0.8.0): one combined summary per project / type / folder, or the single "묶음 하나로" summary;
+   * `skipped`: documents without text that were left out.
+   */
+  summaries: {
+    index: number;
+    items: { document_id: string; name: string; answer: Answer }[];
+    groups: { key: string; label: string; documents: number; answer: Answer }[];
+    groupBy: string | null;
+    skipped: string[];
+  }[];
   aggregates: { index: number; result: AggregateResult; op: Extract<Op, { op: "aggregate" }> | null }[];
   undos: { index: number; report: UndoReport }[];
   /** `draft_document` / `request_supplement`: drafts the 문서 생성 screen opens (P6); the supplement's project when known. */
@@ -782,7 +799,12 @@ export function deriveResultActions(execution: PlanExecution, plan: Plan): Resul
             .filter(isRecord)
             .filter((s) => isAnswer(s.answer))
             .map((s) => ({ document_id: String(s.document_id ?? ""), name: String(s.name ?? ""), answer: s.answer as Answer }));
-          out.summaries.push({ index: step.index, items });
+          const groups = (Array.isArray(payload.groups) ? (payload.groups as unknown[]) : [])
+            .filter(isRecord)
+            .filter((g) => isAnswer(g.answer))
+            .map((g) => ({ key: String(g.key ?? ""), label: String(g.label ?? ""), documents: Array.isArray(g.document_ids) ? g.document_ids.length : 0, answer: g.answer as Answer }));
+          const skipped = (Array.isArray(payload.skipped) ? (payload.skipped as unknown[]) : []).filter(isRecord).map((d) => String(d.name ?? d.document_id ?? ""));
+          out.summaries.push({ index: step.index, items, groups, groupBy: str(payload.group_by), skipped });
         }
         break;
       case "aggregate":

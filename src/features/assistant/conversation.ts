@@ -35,6 +35,9 @@ export function conversationTurns(messages: Message[], max = MAX_MEMORY_TURNS): 
         // An op that failed is remembered as failed (the card's text alone says what was asked for).
         turns.push({ role: "assistant", text: clip(m.failures && m.failures.length > 0 ? `${m.text} ✖ ${m.failures.join(" / ")}` : m.text) });
         break;
+      case "reply":
+        turns.push({ role: "assistant", text: clip(m.text) });
+        break;
       case "plan":
         if (m.status !== "cancelled") turns.push({ role: "assistant", text: clip(m.plan.summary ?? m.text) });
         break;

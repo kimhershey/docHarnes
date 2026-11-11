@@ -23,7 +23,7 @@ import { looksLikeFollowUp } from "@/lib/follow-up";
 import { api } from "@/lib/ipc";
 import { useDocument, useKnowledgeStatus, usePipelineStatus } from "@/lib/queries";
 import { isComposing, matchesChord } from "@/lib/shortcuts";
-import { isJobFinished, type AnswerRequest, type Job, type Plan, type PlanExecution, type PlanIssue, type PlanResponse, type PreRouteResult, type SearchMode, type SearchScope, type UiPlanContext } from "@/lib/types";
+import { isJobFinished, type AnswerRequest, type Job, type Op, type Plan, type PlanExecution, type PlanIssue, type PlanResponse, type PreRouteResult, type SearchMode, type SearchScope, type UiPlanContext } from "@/lib/types";
 import { errorCode, isMac } from "@/lib/utils";
 import { selectMessages, useAssistantStore, type ClarifyStatus, type Message, type NewMessage, type PlanMessage } from "@/stores/assistant";
 import { useAttachmentsStore } from "@/stores/attachments";
@@ -366,6 +366,12 @@ export function AssistantPage() {
     if (m) await runPlan(sid, m);
   };
 
+  /** 되돌리기 on an executed card: puts the previous values back and marks the card. */
+  const undoExecuted = async (sid: string, id: number, ops: Op[]) => {
+    const results = await executeUiOps(ops, navigate, t);
+    if (results.every((r) => r.ok)) patch(sid, id, (m) => (m.role === "assistant" && m.kind === "executed" ? { ...m, undone: true } : m));
+  };
+
   const cancelPlan = (sid: string, id: number) => patchPlan(sid, id, (x) => ({ ...x, status: "cancelled", editing: false }));
   const patchClarify = (sid: string, id: number, status: ClarifyStatus) => patch(sid, id, (m) => (m.role === "assistant" && m.kind === "clarify" ? { ...m, status } : m));
   const cancelClarify = (sid: string, id: number) => patchClarify(sid, id, "cancelled");
@@ -424,15 +430,28 @@ export function AssistantPage() {
       case "help":
         push(sid, { role: "assistant", kind: "help" });
         return;
+      case "noop":
+        // Nothing to do: one line instead of an empty plan card and a "건너뜀" result (audit USR-3).
+        push(sid, { role: "assistant", kind: "reply", text: t("assistant.nothing_to_do"), source: sourceLabel(response.result.source, t) });
+        return;
       case "answer": {
-        const op = plan.operations.find((o) => o.op === "answer");
-        const question = op && op.op === "answer" ? op.question : textValue;
+        const found = plan.operations.find((o) => o.op === "answer");
+        const op = found && found.op === "answer" ? found : null;
+        const question = op ? op.question : textValue;
+        // A ready reply (a fixed greeting, "this cannot be done"): shown as it is, no model call.
+        if (op?.reply) {
+          push(sid, { role: "assistant", kind: "reply", text: op.reply, source: sourceLabel(response.result.source, t) });
+          return;
+        }
         const base = knowledgeScope();
         if (plan.scope.doc_ids && plan.scope.doc_ids.length > 0) base.documents = plan.scope.doc_ids;
         if (plan.scope.folder) base.folder = plan.scope.folder;
+        // mode=chat: small talk, nothing is looked up. mode=general: not about the documents — evidence when
+        // there is some, general knowledge (marked as such) otherwise, whatever the setting says.
         // knowledge=false: the sentence carries the text to work on — answer from it, look nothing up.
-        const retrieve = !(op && op.op === "answer" && op.knowledge === false);
-        await askKnowledge(sid, question, { scope: base, retrieve });
+        const style = op?.mode === "chat" ? "chat" : op?.mode === "general" ? "general" : null;
+        const retrieve = style !== "chat" && op?.knowledge !== false;
+        await askKnowledge(sid, question, { scope: base, retrieve, ...(style ? { style } : {}), ...(style === "general" ? { allow_general: true } : {}) });
         return;
       }
       case "ui":
@@ -442,7 +461,9 @@ export function AssistantPage() {
           const failures = results.filter((r) => !r.ok).map((r) => r.error ?? "");
           // The card says what ran — or, when nothing ran, what was asked for — and lists the ops that failed.
           const summary = ran.map((r) => r.summary).filter(Boolean).join(" · ") || plan.summary || textValue;
-          push(sid, { role: "assistant", kind: "executed", text: summary, source: sourceLabel(response.result.source, t), confidence: plan.confidence, ...(failures.length > 0 ? { failures, ran: ran.length } : {}) });
+          // What a settings change replaced can be put back from the card (last change first).
+          const undo = ran.flatMap((r) => r.undo ?? []).reverse();
+          push(sid, { role: "assistant", kind: "executed", text: summary, source: sourceLabel(response.result.source, t), confidence: plan.confidence, ...(failures.length > 0 ? { failures, ran: ran.length } : {}), ...(undo.length > 0 ? { undo } : {}) });
           return;
         }
         break;
@@ -858,6 +879,12 @@ export function AssistantPage() {
                     onCancel={() => cancelClarify(sid, m.id)}
                   />
                 )}
+                {m.kind === "reply" && (
+                  <div className="w-full rounded-lg border border-border bg-bg-elevated p-3 text-sm" role="group" aria-label={t("assistant.reply_label")} data-testid="assistant-card-reply">
+                    <p className="whitespace-pre-line selectable">{m.text}</p>
+                    <p className="mt-1 text-xs text-fg-subtle">{t("planner.card.source", { source: m.source })}</p>
+                  </div>
+                )}
                 {(m.kind === "executed" || m.kind === "help" || m.kind === "error") && (
                   <div
                     className="w-full rounded-lg border border-border bg-bg-elevated p-3 text-sm"
@@ -875,6 +902,19 @@ export function AssistantPage() {
                           </span>
                         </div>
                         <p className="selectable">{m.text}</p>
+                        {m.undo && m.undo.length > 0 && (
+                          <div className="flex items-center gap-2">
+                            {m.undone ? (
+                              <span className="text-xs text-fg-muted" data-testid="executed-undone">
+                                {t("assistant.undone")}
+                              </span>
+                            ) : (
+                              <Button size="sm" variant="outline" onClick={() => activeId && void undoExecuted(activeId, m.id, m.undo ?? [])} data-testid="executed-undo">
+                                {t("assistant.undo_change")}
+                              </Button>
+                            )}
+                          </div>
+                        )}
                         {(m.failures ?? []).map((failure, i) => (
                           <p key={i} className="text-xs text-danger selectable" role="alert" data-testid="executed-failure">
                             {t("planner.result.step_failed", { error: failure })}
