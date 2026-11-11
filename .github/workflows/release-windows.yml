@@ -6,7 +6,9 @@ name: Windows installer (manual)
 #   lite  = app + llama-server CPU & Vulkan packs (official llama.cpp release zips) + PDFium + ko-dic.
 #           Models (3–8 GB) are never bundled: the user downloads or drops them in from the model manager.
 #   full  = lite + the self-built CUDA packs cu121 / cu129, downloaded from the Release assets that
-#           .github/workflows/cuda-packs.yml publishes (DocuLens-EnginePack-<pack>-<tag>.zip).
+#           .github/workflows/cuda-packs.yml publishes (DocuLens-EnginePack-<pack>-<tag>.zip). The packs belong to
+#           a llama.cpp tag, not to an app version: the step below reads them from the Release recorded for the
+#           engine tag (CUDA_PACK_RELEASES) and refuses a pack without its .sha256 file.
 #
 # Publishing (publish=true): tag v<version> must not already exist on another commit than the one built —
 # scripts/release-guard.mjs checks it before the build and again before the upload. `gh release upload --clobber`
@@ -121,35 +123,43 @@ jobs:
       - name: Download the CUDA packs from the GitHub Release (full variant)
         if: inputs.variant == 'full'
         shell: pwsh
+        env:
+          # Home of the self-built packs per llama.cpp tag: "<engine tag>=<release tag>" pairs separated by spaces.
+          # cuda-packs.yml attaches DocuLens-EnginePack-<pack>-<engine tag>.zip (+ .sha256) to the Release of the app
+          # version it ran on, and that Release stays their home for every later app version. Add a pair when
+          # engines/manifest.json moves to a new tag and the packs have been rebuilt.
+          CUDA_PACK_RELEASES: "b12066=v0.1.0"
         run: |
           $tag = "${{ steps.meta.outputs.engine_tag }}"
           $repo = $env:GITHUB_REPOSITORY
           $packs = Join-Path $env:RUNNER_TEMP "packs"
           New-Item -ItemType Directory -Force $packs | Out-Null
-          # Prefer the release this build publishes to; fall back to the latest release.
-          $release = "v${{ steps.meta.outputs.version }}"
-          gh release view $release --repo $repo --json tagName 2>$null | Out-Null
-          if ($LASTEXITCODE -ne 0) { Write-Host "::notice::release $release does not exist yet; looking for the CUDA packs on the latest release"; $release = $null }
+          # The packs belong to the llama.cpp tag, not to the app version being built: read them from the Release
+          # recorded for that tag — never from "the Release of this version" or "the latest Release".
+          $release = $null
+          foreach ($pair in ($env:CUDA_PACK_RELEASES -split '\s+')) {
+            $kv = $pair -split '=', 2
+            if ($kv.Count -eq 2 -and $kv[0] -eq $tag) { $release = $kv[1] }
+          }
+          if (-not $release) {
+            Write-Host "::error::no Release is recorded for the CUDA packs of llama.cpp $tag. Build them with the 'CUDA engine packs (manual)' workflow (publish=true) and add '$tag=<release tag>' to CUDA_PACK_RELEASES in .github/workflows/release-windows.yml."
+            exit 1
+          }
+          Write-Host "CUDA packs of llama.cpp ${tag} are read from Release ${release}"
           foreach ($pack in "cu121", "cu129") {
             $asset = "DocuLens-EnginePack-$pack-$tag.zip"
-            $ghArgs = @("release", "download")
-            if ($release) { $ghArgs += $release }
-            $ghArgs += @("--repo", $repo, "--pattern", $asset, "--pattern", "$asset.sha256", "--dir", $packs)
-            & gh @ghArgs
+            gh release download $release --repo $repo --pattern $asset --pattern "$asset.sha256" --dir $packs
             $zip = Join-Path $packs $asset
             if (-not (Test-Path $zip)) {
-              $where = if ($release) { $release } else { "the latest release" }
-              Write-Host "::error::$asset is not attached to $where. Run the 'CUDA engine packs (manual)' workflow with pack=$pack and publish=true first (engines/README.md, 'Building the CUDA packs')."
+              Write-Host "::error::$asset is not attached to Release $release. Run the 'CUDA engine packs (manual)' workflow with pack=$pack and publish=true first (engines/README.md, 'Building the CUDA packs')."
               exit 1
             }
-            if (Test-Path "$zip.sha256") {
-              $expected = ((Get-Content "$zip.sha256" -Raw).Trim() -split '\s+')[0].ToLower()
-              $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-              if ($expected -ne $actual) { Write-Host "::error::$asset SHA-256 mismatch: expected $expected, got $actual"; exit 1 }
-              Write-Host "$asset sha256 $actual (verified)"
-            } else {
-              Write-Host "::warning::$asset.sha256 is missing — the pack was not verified"
-            }
+            # The .sha256 that cuda-packs.yml uploads next to the zip is required: an unverified pack is not bundled.
+            if (-not (Test-Path "$zip.sha256")) { Write-Host "::error::$asset.sha256 is not attached to Release $release, so the pack cannot be verified"; exit 1 }
+            $expected = ((Get-Content "$zip.sha256" -Raw).Trim() -split '\s+')[0].ToLower()
+            $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+            if ($expected -ne $actual) { Write-Host "::error::$asset SHA-256 mismatch: expected $expected, got $actual"; exit 1 }
+            Write-Host "$asset sha256 $actual (verified)"
             $dest = "src-tauri/resources/engines/$pack"
             if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
             New-Item -ItemType Directory -Force $dest | Out-Null
