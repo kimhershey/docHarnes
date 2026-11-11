@@ -1681,6 +1681,49 @@ fn classification_scores_titles_vendors_intake_numbers_and_text() {
     assert!(checklist.iter().any(|i| i.doc_type == "business_registration" && i.missing), "d5 was not applied");
 }
 
+/// PRJ-6: the automatic classification sorts unassigned *work* documents. Reference material (the role, or a
+/// place in any reference group), registered forms and generated drafts are not offered — a shared regulation
+/// used to be suggested, and applied, as a work document of whichever project its title matched.
+#[test]
+fn classification_leaves_reference_material_forms_and_drafts_alone() {
+    use super::classify::ClassifyRequest;
+    use crate::knowledge::{repo as knowledge_repo, CollectionInput};
+    let db = db();
+    let hanbit = project_with(&db, "한빛상사 거래처 등록", None, &["한빛"], None);
+    seed_titled(&db, "w1", "계약서_한빛.pdf", "contract", "㈜한빛무역", "한빛 공급 계약");
+    seed_titled(&db, "k1", "한빛_거래규정.pdf", "general", "", "한빛 거래 규정");
+    seed_titled(&db, "g1", "한빛_업무지침.pdf", "general", "", "한빛 업무 지침");
+    seed_titled(&db, "f1", "한빛_신청서_양식.pdf", "application_form", "", "한빛 신청서 양식");
+    seed_titled(&db, "d1", "한빛_보완요청서_초안.pdf", "general", "", "한빛 보완요청서 초안");
+    db.with(|c| {
+        docs::set_role(c, "k1", DocumentRole::Knowledge)?;
+        docs::set_role(c, "f1", DocumentRole::Form)?;
+        docs::set_role(c, "d1", DocumentRole::Generated)?;
+        // g1 keeps the work role but sits in a reference group (added without the role switch).
+        let group = knowledge_repo::save_collection(c, &CollectionInput { name: "사규".into(), ..Default::default() })?;
+        knowledge_repo::add_docs_to_collection(c, &group.id, &["g1".to_string()])?;
+        Ok(())
+    })
+    .unwrap();
+    let deps = deps(&db, None);
+    let ids = |r: &classify::ClassifyResult| r.suggestions.iter().map(|s| s.doc_id.clone()).collect::<Vec<_>>();
+    // Default target: the unassigned work document only.
+    let result = classify(&deps, &ClassifyRequest::default()).unwrap();
+    assert_eq!(ids(&result), vec!["w1"], "{:?}", result.suggestions);
+    assert_eq!(db.with(repo::unassigned_document_ids).unwrap(), vec!["w1"]);
+    // "Also the assigned ones" widens it to every work document — not to the reference material.
+    db.with(|c| repo::add_documents(c, &hanbit.id, &["w1".to_string()])).unwrap();
+    seed_titled(&db, "w2", "거래명세서_한빛.pdf", "receipt", "㈜한빛무역", "한빛 납품");
+    let mut all = ids(&classify(&deps, &ClassifyRequest { include_assigned: true, ..Default::default() }).unwrap());
+    all.sort();
+    assert_eq!(all, vec!["w1", "w2"]);
+    assert_eq!(ids(&classify(&deps, &ClassifyRequest::default()).unwrap()), vec!["w2"]);
+    // Documents the user names are classified whatever they are.
+    let explicit =
+        classify(&deps, &ClassifyRequest { doc_ids: vec!["k1".into(), "f1".into()], ..Default::default() }).unwrap();
+    assert_eq!(ids(&explicit), vec!["k1", "f1"]);
+}
+
 #[test]
 fn the_model_decides_undecided_documents_when_asked() {
     use super::classify::{ClassifyRequest, SuggestionSource};

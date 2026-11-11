@@ -1041,12 +1041,28 @@ pub fn projects_of_document(conn: &Connection, doc_id: &str) -> rusqlite::Result
     Ok(out)
 }
 
-/// Documents (not deleted) that belong to no project, newest import first.
+/// Work documents (not deleted) that belong to no project yet, newest import first — what the automatic
+/// classification sorts by default. Reference material (the `knowledge` role, or a place in any reference
+/// group), registered forms and generated drafts are not work documents of a project.
 pub fn unassigned_document_ids(conn: &Connection) -> rusqlite::Result<Vec<String>> {
-    let mut st = conn.prepare_cached(
-        "SELECT id FROM documents WHERE deleted_at IS NULL AND id NOT IN (SELECT document_id FROM project_documents) \
-         ORDER BY imported_at DESC, id",
-    )?;
+    classifiable_document_ids(conn, false)
+}
+
+/// Every work document, assigned to a project or not (the exclusions of [`unassigned_document_ids`]).
+pub fn work_document_ids(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    classifiable_document_ids(conn, true)
+}
+
+fn classifiable_document_ids(conn: &Connection, include_assigned: bool) -> rusqlite::Result<Vec<String>> {
+    let mut sql = String::from(
+        "SELECT id FROM documents WHERE deleted_at IS NULL AND role = 'work' \
+         AND id NOT IN (SELECT document_id FROM collection_docs)",
+    );
+    if !include_assigned {
+        sql.push_str(" AND id NOT IN (SELECT document_id FROM project_documents)");
+    }
+    sql.push_str(" ORDER BY imported_at DESC, id");
+    let mut st = conn.prepare_cached(&sql)?;
     let ids: Vec<String> = st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
     Ok(ids)
 }

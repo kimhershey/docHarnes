@@ -27,7 +27,8 @@ use super::{Project, ProjectDeps};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ClassifyRequest {
-    /// Documents to classify; empty = every document that belongs to no project yet.
+    /// Documents to classify; empty = every work document that belongs to no project yet (reference
+    /// material, registered forms and generated drafts are left alone unless named here).
     pub doc_ids: Vec<String>,
     /// Candidate projects (empty = all).
     pub project_ids: Vec<String>,
@@ -340,10 +341,12 @@ pub fn suggest(deps: &ProjectDeps<'_>, req: &ClassifyRequest) -> Result<Classify
         if !req.project_ids.is_empty() {
             projects.retain(|p| req.project_ids.contains(&p.id));
         }
+        // Without explicit documents the target is the work documents: reference material, registered
+        // forms and generated drafts are not sorted into projects.
         let doc_ids: Vec<String> = if !req.doc_ids.is_empty() {
             req.doc_ids.clone()
         } else if req.include_assigned {
-            docs::list_documents(c, &Default::default())?.into_iter().map(|d| d.id).collect()
+            repo::work_document_ids(c)?
         } else {
             repo::unassigned_document_ids(c)?
         };
