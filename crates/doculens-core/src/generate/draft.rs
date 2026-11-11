@@ -1083,9 +1083,9 @@ pub fn draft(deps: &GenerateDeps<'_>, req: &DraftRequest) -> Result<DraftOutcome
     if prompts::split_needed(reply_tokens, vlm.ctx) {
         return draft_split(deps, &model, &spec, req, &sources, reply_tokens, notes, started);
     }
-    let budget = prompts::source_budget(vlm.ctx, reply_tokens);
+    let allow = prompts::user_allowance(req, sources.len(), vlm.ctx, reply_tokens, 0, prompt_ko);
     let blocks = source_blocks(&sources);
-    let user_text = prompts::user(&spec, req, &blocks, budget, prompt_ko);
+    let user_text = prompts::user(&spec, req, &blocks, &allow, prompt_ko);
     let system = json!({ "role": "system", "content": prompts::system(prompt_ko) });
     let schema_v = schema::json_schema(&spec);
     let (value, reply) =
@@ -1239,8 +1239,9 @@ fn draft_split(
     let template_sections = spec.sections(prompt_ko);
     let mut plans: Vec<prompts::SectionPlan> = if template_sections.is_empty() {
         report(0.22, "outline");
-        let budget = prompts::source_budget(model.ctx, prompts::OUTLINE_TOKENS);
-        let text = prompts::outline_user(spec, req, &blocks, budget, total, prompt_ko);
+        let want = prompts::Blocks::of(req, false, blocks.len());
+        let allow = prompts::allot(model.ctx, prompts::OUTLINE_TOKENS, want);
+        let text = prompts::outline_user(spec, req, &blocks, &allow, total, prompt_ko);
         match call_json_with_retry(
             model,
             &system,
@@ -1274,9 +1275,11 @@ fn draft_split(
     let first_budget = prompts::section_budget(total, plans[0].weight, weights_sum);
     let head_budget = first_budget + prompts::HEAD_EXTRA_TOKENS;
     report(0.25, &format!("section 1/{n}"));
-    let budget = prompts::source_budget(model.ctx, head_budget);
-    let mut text = prompts::user(spec, req, &blocks, budget, prompt_ko);
-    text.push_str(&prompts::split_head_note(&plans[0], n, first_budget, prompt_ko));
+    let head_note = prompts::split_head_note(&plans[0], n, first_budget, prompt_ko);
+    let allow =
+        prompts::user_allowance(req, sources.len(), model.ctx, head_budget, head_note.chars().count(), prompt_ko);
+    let mut text = prompts::user(spec, req, &blocks, &allow, prompt_ko);
+    text.push_str(&head_note);
     let (value, reply) = call_json_with_retry(
         model,
         &system,
@@ -1300,6 +1303,7 @@ fn draft_split(
             d.fields.iter().filter(|f| !f.value.trim().is_empty()).take(11).map(|f| (f.label.clone(), f.value.clone())),
         )
         .collect();
+    let facts_chars = prompts::facts_chars(&facts, prompt_ko);
     let excluded: HashSet<&str> = req.excluded_sources.iter().map(String::as_str).collect();
 
     // 3. The remaining sections.
@@ -1331,7 +1335,6 @@ fn draft_split(
                 text: &s.text,
             })
             .collect();
-        let budget = prompts::source_budget(model.ctx, budget_tokens);
         let previous = previous_summary(&d.body);
         // 0.7.0: a regeneration passes the instruction and this section's earlier text along.
         let earlier = req.previous.as_deref().and_then(|p| earlier_section_text(&p.body, &plan.heading));
@@ -1339,11 +1342,16 @@ fn draft_split(
             feedback: req.feedback.as_deref(),
             previous_section: earlier.as_deref(),
         });
+        // The facts, the tail of the text so far and the section's earlier text take room as well.
+        let mut want = prompts::Blocks::of(req, revision.is_some(), section_blocks.len());
+        want.previous = earlier.as_deref().map_or(0, |e| e.chars().count());
+        want.fixed += facts_chars + previous.chars().count();
+        let allow = prompts::allot(model.ctx, budget_tokens, want);
         let text = prompts::section_user(
             spec,
             req,
             &section_blocks,
-            budget,
+            &allow,
             plan,
             i + 1,
             n,
@@ -1462,6 +1470,21 @@ fn tail_chars(text: &str, max: usize) -> String {
     }
 }
 
+/// Cuts the text a revision shows of the draft to `max` characters: the section being rewritten
+/// comes first, the text before and after it share what is left.
+fn fit_revision_context(current: String, before: String, after: String, max: usize) -> (String, String, String) {
+    let chars = |s: &str| s.chars().count();
+    if chars(&current) + chars(&before) + chars(&after) <= max {
+        return (current, before, after);
+    }
+    let current = truncate(&current, max);
+    let each = max.saturating_sub(chars(&current)) / 2;
+    if each == 0 {
+        return (current, String::new(), String::new());
+    }
+    (current, tail_chars(&before, each), truncate(&after, each))
+}
+
 /// The text of the section headed `heading` in an earlier draft body (without the heading).
 fn earlier_section_text(body: &[DraftBlock], heading: &str) -> Option<String> {
     let want = compact(heading);
@@ -1534,7 +1557,6 @@ fn revise(deps: &GenerateDeps<'_>, req: &DraftRequest, scope: &ReviseScope, star
         geometry: vlm.geometry,
     };
     let tokens = prompts::reply_budget(req).clamp(prompts::MIN_SECTION_TOKENS, prompts::MAX_SECTION_TOKENS);
-    let budget = prompts::source_budget(model.ctx, tokens);
     let blocks = source_blocks(&sources);
     let facts: Vec<(String, String)> = std::iter::once((tr(ko, "제목", "title"), prev.title.clone()))
         .chain(
@@ -1553,6 +1575,13 @@ fn revise(deps: &GenerateDeps<'_>, req: &DraftRequest, scope: &ReviseScope, star
     };
     let before = tail_chars(&blocks_text(&prev.body[..start]), prompts::REVISION_CONTEXT_CHARS);
     let after = truncate(&blocks_text(&prev.body[end..]), prompts::REVISION_CONTEXT_CHARS);
+    // The section and its surroundings share the context with the facts and the sources.
+    let chars = |s: &str| s.chars().count();
+    let mut want = prompts::Blocks::of(req, true, blocks.len());
+    want.previous = chars(&current) + chars(&before) + chars(&after);
+    want.fixed += prompts::facts_chars(&facts, prompt_ko);
+    let allow = prompts::allot(model.ctx, tokens, want);
+    let (current, before, after) = fit_revision_context(current, before, after, allow.previous);
     let rv = prompts::RevisePrompt {
         rewrite,
         index,
@@ -1565,7 +1594,7 @@ fn revise(deps: &GenerateDeps<'_>, req: &DraftRequest, scope: &ReviseScope, star
         after: &after,
         instruction,
     };
-    let user_text = prompts::revise_user(&spec, req, &blocks, budget, &rv, prompt_ko);
+    let user_text = prompts::revise_user(&spec, req, &blocks, &allow, &rv, prompt_ko);
     let system = json!({ "role": "system", "content": prompts::system(prompt_ko) });
     if let Some(p) = deps.progress {
         p(0.3, "revising");

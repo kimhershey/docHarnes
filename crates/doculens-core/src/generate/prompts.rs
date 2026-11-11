@@ -13,9 +13,12 @@
 //! ([`max_tokens`]). `Kie` would reserve image tokens the draft never uses.
 //!
 //! Size: the fixed parts are ≈ 450 (ko) tokens, a template adds ≈ 15 tokens per
-//! field, sources are capped by [`source_budget`] (≤ 4,500 chars ≈ 4,500
-//! tokens worst case for Korean) and the content at [`MAX_CONTENT_CHARS`];
-//! typical prompts stay under 3K tokens, worst case ≈ 7K, replies 1–2.5K.
+//! field. The variable blocks — the instruction, the content, the previous
+//! draft or the section a revision works on, the sources — share what the
+//! context leaves next to the fixed parts and the reply ([`allot`]; Korean ≈ 1
+//! token per character); with an unknown context the static caps apply
+//! (sources ≤ 4,500 chars, content ≤ [`MAX_CONTENT_CHARS`]). Typical prompts
+//! stay under 3K tokens, replies 1–2.5K.
 
 use crate::pipeline::prompts::truncate;
 use crate::pipeline::schema::FieldKind;
@@ -31,8 +34,89 @@ pub const MAX_FEEDBACK_CHARS: usize = 600;
 /// Per-source and total caps (characters) when the context size is unknown.
 pub const MAX_SOURCE_CHARS: usize = 1_400;
 pub const MAX_TOTAL_SOURCE_CHARS: usize = 4_500;
-/// Rough size of everything but the sources (system + rules + template), in tokens.
+/// Rough size of the fixed parts (system + rules + template), in tokens.
 const FIXED_TOKENS: u32 = 1_400;
+/// What the sources (together, and each of them), the earlier text of a revision and the content
+/// keep when the context is tight.
+pub const MIN_SOURCE_CHARS: usize = 600;
+const MIN_PER_SOURCE_CHARS: usize = 200;
+const MIN_PREVIOUS_CHARS: usize = 600;
+const MIN_CONTENT_CHARS: usize = 600;
+/// Layout description shown to the model.
+const MAX_FORMAT_CHARS: usize = 600;
+/// Body text of the previous draft shown to a regeneration.
+const PREVIOUS_BODY_CHARS: usize = 2_500;
+
+// -- Sharing the context between the variable blocks ---------------------------------------------
+
+/// Uncut sizes (characters) of the blocks one prompt shows besides the fixed text and the sources.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Blocks {
+    /// The request's content (`[내용]`).
+    pub content: usize,
+    /// The instruction of a regeneration / revision (`[수정 요청]`); 0 when the prompt has none.
+    pub feedback: usize,
+    /// Earlier text the call works on: the previous-draft block of a regeneration, the section a
+    /// revision rewrites with its surroundings, a section's earlier text. Cut to what fits.
+    pub previous: usize,
+    /// Blocks shown as they are: the layout description, settled facts, the tail of the sections
+    /// written so far, the split note.
+    pub fixed: usize,
+    /// Number of numbered sources: each keeps a slice, so more sources need more room.
+    pub sources: usize,
+}
+
+impl Blocks {
+    /// The request's own text next to `sources` numbered sources: its content and layout
+    /// description, and the instruction when `with_feedback` (the prompt shows it).
+    pub fn of(req: &DraftRequest, with_feedback: bool, sources: usize) -> Blocks {
+        let chars = |s: Option<&str>| s.map(str::trim).map_or(0, |t| t.chars().count());
+        Blocks {
+            content: chars(Some(req.content.as_str())),
+            feedback: if with_feedback { chars(req.feedback.as_deref()) } else { 0 },
+            previous: 0,
+            fixed: chars(req.format_description.as_deref()).min(MAX_FORMAT_CHARS),
+            sources,
+        }
+    }
+}
+
+/// Character allowances of one prompt (Korean ≈ 1 token per character).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Allowance {
+    pub content: usize,
+    pub feedback: usize,
+    pub previous: usize,
+    /// All sources together.
+    pub sources: usize,
+}
+
+/// Shares the context left next to the fixed prompt and the reply between the variable blocks, in
+/// the order they matter: the instruction, the content, the earlier text a revision works on, then
+/// the sources (which keep a slice each). Only the sources used to be budgeted, as if the rest
+/// took no room — a filled previous draft plus full sources overflowed an 8K context and the reply
+/// was cut. With an unknown context (`None`) the static caps apply.
+pub fn allot(ctx: Option<u32>, reply_tokens: u32, want: Blocks) -> Allowance {
+    let feedback = want.feedback.min(MAX_FEEDBACK_CHARS);
+    let content = want.content.min(MAX_CONTENT_CHARS);
+    let Some(ctx) = ctx else {
+        return Allowance { content, feedback, previous: want.previous, sources: MAX_TOTAL_SOURCE_CHARS };
+    };
+    let free = ctx.saturating_sub(FIXED_TOKENS + reply_tokens + 256) as usize;
+    let mut left = free.saturating_sub(want.fixed + feedback);
+    // The floor of the sources: a slice for each (none when there are no sources).
+    let source_floor = match want.sources {
+        0 => 0,
+        n => (n * MIN_PER_SOURCE_CHARS).clamp(MIN_SOURCE_CHARS, MAX_TOTAL_SOURCE_CHARS),
+    };
+    // The content leaves room for the floors of what comes after it, and keeps a floor itself.
+    let after = source_floor + if want.previous > 0 { MIN_PREVIOUS_CHARS } else { 0 };
+    let content = content.min(left.saturating_sub(after).max(MIN_CONTENT_CHARS));
+    left = left.saturating_sub(content);
+    let previous = want.previous.min(left.saturating_sub(source_floor).max(MIN_PREVIOUS_CHARS));
+    left = left.saturating_sub(previous);
+    Allowance { content, feedback, previous, sources: left.clamp(source_floor, MAX_TOTAL_SOURCE_CHARS) }
+}
 
 /// Reply budget by requested length (retries grow it ×1.5 inside `Vlm::call`).
 pub fn max_tokens(length: Length) -> u32 {
@@ -94,8 +178,9 @@ pub fn fallback_outline(ko: bool) -> Vec<SectionPlan> {
     names.iter().map(|n| SectionPlan { heading: n.to_string(), weight: 1, notes: String::new() }).collect()
 }
 
-/// Shared head of the split-flow messages: the request line, the template and the content.
-fn request_head(spec: &TemplateSpec, req: &DraftRequest, ko: bool, out: &mut String) {
+/// Shared head of the split-flow messages: the request line, the template and the content (cut
+/// to `content_chars`).
+fn request_head(spec: &TemplateSpec, req: &DraftRequest, ko: bool, content_chars: usize, out: &mut String) {
     out.push_str(&format!(
         "{}: {} / {}: {}\n\n",
         if ko { "언어" } else { "Language" },
@@ -109,9 +194,14 @@ fn request_head(spec: &TemplateSpec, req: &DraftRequest, ko: bool, out: &mut Str
     template_block(spec, ko, out);
     if let Some(desc) = req.format_description.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
         out.push_str(if ko { "형식 설명: " } else { "Layout description: " });
-        out.push_str(&truncate(desc, 600));
+        out.push_str(&truncate(desc, MAX_FORMAT_CHARS));
         out.push('\n');
     }
+    content_block(req, ko, content_chars, out);
+}
+
+/// The `[내용]` block: the request's content, cut to `max_chars`.
+fn content_block(req: &DraftRequest, ko: bool, max_chars: usize, out: &mut String) {
     out.push_str(if ko { "\n[내용]\n" } else { "\n[Content]\n" });
     let content = req.content.trim();
     if content.is_empty() {
@@ -121,7 +211,7 @@ fn request_head(spec: &TemplateSpec, req: &DraftRequest, ko: bool, out: &mut Str
             "(no content given — draft from the sources)"
         });
     } else {
-        out.push_str(&truncate(content, MAX_CONTENT_CHARS));
+        out.push_str(&truncate(content, max_chars));
     }
     out.push('\n');
 }
@@ -131,7 +221,7 @@ pub fn outline_user(
     spec: &TemplateSpec,
     req: &DraftRequest,
     sources: &[SourceBlock<'_>],
-    budget: usize,
+    allow: &Allowance,
     total_tokens: u32,
     ko: bool,
 ) -> String {
@@ -141,8 +231,8 @@ pub fn outline_user(
     } else {
         "Write the outline (section plan) of a long document for the template and content below, as JSON.\n"
     });
-    request_head(spec, req, ko, &mut out);
-    sources_block(sources, budget, ko, &mut out);
+    request_head(spec, req, ko, allow.content, &mut out);
+    sources_block(sources, allow.sources, ko, &mut out);
     out.push_str(&if ko {
         format!(
             "\n[출력 규칙]\n- title: 문서 제목.\n- sections: 4~{} 개의 절(heading = 절 제목, weight = 분량 비중 1~10, notes = 그 절에 담을 내용 한 줄).\n\
@@ -235,7 +325,7 @@ pub fn revise_user(
     spec: &TemplateSpec,
     req: &DraftRequest,
     sources: &[SourceBlock<'_>],
-    budget: usize,
+    allow: &Allowance,
     rv: &RevisePrompt<'_>,
     ko: bool,
 ) -> String {
@@ -274,9 +364,9 @@ pub fn revise_user(
             }
         )
     });
-    request_head(spec, req, ko, &mut out);
+    request_head(spec, req, ko, allow.content, &mut out);
     facts_block(rv.facts, ko, &mut out);
-    sources_block(sources, budget, ko, &mut out);
+    sources_block(sources, allow.sources, ko, &mut out);
     if !rv.before.trim().is_empty() {
         out.push_str(if ko { "\n[앞 내용 요약]\n" } else { "\n[Text before]\n" });
         out.push_str(rv.before.trim());
@@ -301,7 +391,7 @@ pub fn revise_user(
         out.push('\n');
     }
     out.push_str(if ko { "\n[수정 요청]\n" } else { "\n[Revision request]\n" });
-    out.push_str(&truncate(rv.instruction.trim(), MAX_FEEDBACK_CHARS));
+    out.push_str(&truncate(rv.instruction.trim(), allow.feedback));
     out.push('\n');
     let paragraphs = (rv.tokens / 450).clamp(1, 8);
     out.push_str(&if ko {
@@ -330,7 +420,7 @@ pub fn section_user(
     spec: &TemplateSpec,
     req: &DraftRequest,
     sources: &[SourceBlock<'_>],
-    budget: usize,
+    allow: &Allowance,
     plan: &SectionPlan,
     index: usize,
     total: usize,
@@ -346,9 +436,9 @@ pub fn section_user(
     } else {
         format!("Write only the body of section {index}/{total} \"{}\" of the document, as JSON.\n", plan.heading)
     });
-    request_head(spec, req, ko, &mut out);
+    request_head(spec, req, ko, allow.content, &mut out);
     facts_block(facts, ko, &mut out);
-    sources_block(sources, budget, ko, &mut out);
+    sources_block(sources, allow.sources, ko, &mut out);
     if !previous.trim().is_empty() {
         out.push_str(if ko { "\n[앞 절 요약]\n" } else { "\n[Previous sections]\n" });
         out.push_str(previous.trim());
@@ -359,12 +449,12 @@ pub fn section_user(
     if let Some(r) = revision {
         if let Some(prev) = r.previous_section.map(str::trim).filter(|t| !t.is_empty()) {
             out.push_str(if ko { "\n[이 절의 이전 본문]\n" } else { "\n[Earlier text of this section]\n" });
-            out.push_str(&truncate(prev, REVISION_SECTION_CHARS));
+            out.push_str(&truncate(prev, allow.previous.min(REVISION_SECTION_CHARS)));
             out.push('\n');
         }
         if let Some(fb) = r.feedback.map(str::trim).filter(|f| !f.is_empty()) {
             out.push_str(if ko { "\n[수정 요청]\n" } else { "\n[Revision request]\n" });
-            out.push_str(&truncate(fb, MAX_FEEDBACK_CHARS));
+            out.push_str(&truncate(fb, allow.feedback));
             out.push('\n');
         }
     }
@@ -390,18 +480,6 @@ pub fn section_user(
         )
     });
     out
-}
-
-/// Characters of source text that fit next to the fixed prompt and the reply in a
-/// context of `ctx` tokens (Korean ≈ 1 token per character); `None` = unknown.
-pub fn source_budget(ctx: Option<u32>, reply_tokens: u32) -> usize {
-    match ctx {
-        None => MAX_TOTAL_SOURCE_CHARS,
-        Some(ctx) => {
-            let free = ctx.saturating_sub(FIXED_TOKENS + reply_tokens + 256) as usize;
-            free.clamp(600, MAX_TOTAL_SOURCE_CHARS)
-        }
-    }
 }
 
 /// One numbered source as shown to the model.
@@ -553,7 +631,7 @@ fn sources_block(sources: &[SourceBlock<'_>], budget: usize, ko: bool, out: &mut
         return;
     }
     // Share the budget: every source gets at least a slice, long ones are cut.
-    let per = (budget / sources.len().max(1)).clamp(200, MAX_SOURCE_CHARS);
+    let per = (budget / sources.len().max(1)).clamp(MIN_PER_SOURCE_CHARS, MAX_SOURCE_CHARS);
     for s in sources {
         out.push_str(&format!(
             "<source index=\"{}\" kind=\"{}\" title=\"{}\">\n",
@@ -566,53 +644,107 @@ fn sources_block(sources: &[SourceBlock<'_>], budget: usize, ko: bool, out: &mut
     }
 }
 
-/// Compact text of the previous draft for a regeneration.
-fn previous_block(prev: &Draft, ko: bool, out: &mut String) {
-    out.push_str(if ko { "\n[이전 초안]\n" } else { "\n[Previous draft]\n" });
-    out.push_str(&format!("title: {}\n", prev.title));
-    for f in &prev.fields {
-        if !f.value.trim().is_empty() {
-            out.push_str(&format!(
-                "- {}: {}{}\n",
-                f.key,
-                truncate(f.value.trim(), 120),
-                if f.user_edited {
-                    if ko {
-                        " (사용자 수정 — 그대로 유지)"
-                    } else {
-                        " (user edited — keep as is)"
-                    }
-                } else {
-                    ""
+/// Compact text of the previous draft for a regeneration: the title, the filled fields and the
+/// table rows (what the user settled), then the body — as much as `max_chars` allows.
+fn previous_block(prev: &Draft, ko: bool, max_chars: usize, out: &mut String) {
+    let mut block = String::from(if ko { "\n[이전 초안]\n" } else { "\n[Previous draft]\n" });
+    block.push_str(&format!("title: {}\n", prev.title));
+    let mut used = block.chars().count();
+    // Adds a line; `false` once the allowance is used up (a long last line is shown in part).
+    let mut push = |block: &mut String, line: &str| -> bool {
+        let n = line.chars().count() + 1;
+        if used + n <= max_chars {
+            used += n;
+            block.push_str(line);
+            block.push('\n');
+            return true;
+        }
+        let rest = max_chars.saturating_sub(used);
+        if rest >= 40 {
+            block.push_str(&line.chars().take(rest).collect::<String>());
+            block.push('\n');
+        }
+        used = max_chars;
+        false
+    };
+    let complete = 'lines: {
+        for f in prev.fields.iter().filter(|f| !f.value.trim().is_empty()) {
+            let mark = match (f.user_edited, ko) {
+                (true, true) => " (사용자 수정 — 그대로 유지)",
+                (true, false) => " (user edited — keep as is)",
+                (false, _) => "",
+            };
+            if !push(&mut block, &format!("- {}: {}{mark}", f.key, truncate(f.value.trim(), 120))) {
+                break 'lines false;
+            }
+        }
+        for t in &prev.tables {
+            for (i, row) in t.rows.iter().take(12).enumerate() {
+                if !push(&mut block, &format!("- {}[{}]: {}", t.key, i, truncate(&row.join(" | "), 160))) {
+                    break 'lines false;
                 }
-            ));
+            }
         }
-    }
-    for t in &prev.tables {
-        for (i, row) in t.rows.iter().take(12).enumerate() {
-            out.push_str(&format!("- {}[{}]: {}\n", t.key, i, truncate(&row.join(" | "), 160)));
+        let mut body = 0usize;
+        for b in &prev.body {
+            let line = match b {
+                DraftBlock::Heading { text, .. } => format!("# {text}"),
+                DraftBlock::Paragraph { text, .. } => text.clone(),
+                DraftBlock::List { items, .. } => items.iter().map(|i| format!("- {i}")).collect::<Vec<_>>().join("\n"),
+                DraftBlock::TableRef { key } => format!("[table {key}]"),
+            };
+            body += line.chars().count();
+            if body > PREVIOUS_BODY_CHARS || !push(&mut block, &line) {
+                break 'lines false;
+            }
         }
+        true
+    };
+    if !complete {
+        block.push_str("…\n");
     }
-    let mut chars = 0usize;
-    for b in &prev.body {
-        let line = match b {
-            DraftBlock::Heading { text, .. } => format!("# {text}"),
-            DraftBlock::Paragraph { text, .. } => text.clone(),
-            DraftBlock::List { items, .. } => items.iter().map(|i| format!("- {i}")).collect::<Vec<_>>().join("\n"),
-            DraftBlock::TableRef { key } => format!("[table {key}]"),
-        };
-        chars += line.chars().count();
-        if chars > 2_500 {
-            out.push_str("…\n");
-            break;
-        }
-        out.push_str(&line);
-        out.push('\n');
-    }
+    out.push_str(&block);
 }
 
-/// The user message. `budget` is the character allowance for all sources together.
-pub fn user(spec: &TemplateSpec, req: &DraftRequest, sources: &[SourceBlock<'_>], budget: usize, ko: bool) -> String {
+/// Uncut size of the previous-draft block: what a regeneration wants to show of `prev`.
+pub fn previous_chars(prev: &Draft, ko: bool) -> usize {
+    let mut block = String::new();
+    previous_block(prev, ko, usize::MAX, &mut block);
+    block.chars().count()
+}
+
+/// Size of the settled-facts block of a section / revision call.
+pub fn facts_chars(facts: &[(String, String)], ko: bool) -> usize {
+    let mut block = String::new();
+    facts_block(facts, ko, &mut block);
+    block.chars().count()
+}
+
+/// Allowances of the draft prompt ([`user`]) with `sources` numbered sources in a context of
+/// `ctx` tokens: the instruction and the content, the previous draft of a regeneration, then the
+/// sources. `extra` is text appended to the message as it is (the split note of a head call).
+pub fn user_allowance(
+    req: &DraftRequest,
+    sources: usize,
+    ctx: Option<u32>,
+    reply_tokens: u32,
+    extra: usize,
+    ko: bool,
+) -> Allowance {
+    let mut want = Blocks::of(req, true, sources);
+    want.previous = req.previous.as_deref().map_or(0, |p| previous_chars(p, ko));
+    want.fixed += extra;
+    allot(ctx, reply_tokens, want)
+}
+
+/// The user message of a draft / regeneration; `allow` comes from [`user_allowance`].
+pub fn user(
+    spec: &TemplateSpec,
+    req: &DraftRequest,
+    sources: &[SourceBlock<'_>],
+    allow: &Allowance,
+    ko: bool,
+) -> String {
     let mut out = String::with_capacity(4_096);
     out.push_str(if ko {
         "아래 양식과 내용으로 문서 초안을 JSON으로 작성하세요.\n"
@@ -635,28 +767,17 @@ pub fn user(spec: &TemplateSpec, req: &DraftRequest, sources: &[SourceBlock<'_>]
     template_block(spec, ko, &mut out);
     if let Some(desc) = req.format_description.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
         out.push_str(if ko { "형식 설명: " } else { "Layout description: " });
-        out.push_str(&truncate(desc, 600));
+        out.push_str(&truncate(desc, MAX_FORMAT_CHARS));
         out.push('\n');
     }
-    out.push_str(if ko { "\n[내용]\n" } else { "\n[Content]\n" });
-    let content = req.content.trim();
-    if content.is_empty() {
-        out.push_str(if ko {
-            "(별도 내용 없음 — 자료만으로 작성)"
-        } else {
-            "(no content given — draft from the sources)"
-        });
-    } else {
-        out.push_str(&truncate(content, MAX_CONTENT_CHARS));
-    }
-    out.push('\n');
-    sources_block(sources, budget, ko, &mut out);
+    content_block(req, ko, allow.content, &mut out);
+    sources_block(sources, allow.sources, ko, &mut out);
     if let Some(prev) = req.previous.as_deref() {
-        previous_block(prev, ko, &mut out);
+        previous_block(prev, ko, allow.previous, &mut out);
     }
     if let Some(fb) = req.feedback.as_deref().map(str::trim).filter(|f| !f.is_empty()) {
         out.push_str(if ko { "\n[수정 요청]\n" } else { "\n[Revision request]\n" });
-        out.push_str(&truncate(fb, MAX_FEEDBACK_CHARS));
+        out.push_str(&truncate(fb, allow.feedback));
         out.push('\n');
     }
     out.push_str(if ko {

@@ -182,6 +182,17 @@ impl SeqChat {
             .collect::<Vec<_>>()
             .join("\n")
     }
+    /// The user message of a call (without the system message).
+    fn user_prompt(&self, call: usize) -> String {
+        let reqs = self.requests.lock().unwrap();
+        reqs[call]
+            .messages
+            .iter()
+            .filter(|m| m["role"] == "user")
+            .filter_map(|m| m["content"].as_str().map(str::to_string))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }
 
 impl ChatBackend for SeqChat {
@@ -1240,12 +1251,14 @@ fn amount_fields_are_classified_as_money_or_plain_numbers() {
         assert_eq!(render::is_money("field_3", label), expected, "{label}");
     }
     // The prompt announces plain numbers as numbers (they used to be "금액" like money).
+    let req = DraftRequest::default();
+    let allow = super::prompts::user_allowance(&req, 0, None, 1_800, 0, true);
     let spec = TemplateSpec::builtin(TemplateKind::ProgressReport);
-    let prompt = super::prompts::user(&spec, &DraftRequest::default(), &[], 0, true);
+    let prompt = super::prompts::user(&spec, &req, &[], &allow, true);
     assert!(prompt.contains("- progress_percent — 전체 진척률(%) — 숫자"), "{prompt}");
     assert!(prompt.contains("progress=진척률(%)(숫자)"), "{prompt}");
     let spec = TemplateSpec::builtin(TemplateKind::Estimate);
-    let prompt = super::prompts::user(&spec, &DraftRequest::default(), &[], 0, true);
+    let prompt = super::prompts::user(&spec, &req, &[], &allow, true);
     assert!(prompt.contains("months=투입 MM(숫자)") && prompt.contains("unit_price=단가(금액)"), "{prompt}");
     assert!(prompt.contains("- grand_total — 합계금액 — 금액; 필수"), "{prompt}");
 }
@@ -2027,6 +2040,156 @@ fn token_budget_helpers_and_split_decision() {
     assert!(schema::is_grammar_safe(&schema::outline_schema()));
     assert!(schema::is_grammar_safe(&schema::section_schema()));
     assert_eq!(super::prompts::fallback_outline(true).len(), 5);
+
+    // GEN-13: the instruction, the content, the earlier text of a revision and the sources share what the
+    // context leaves next to the fixed prompt (1,400), the reply and a margin (256).
+    use super::prompts::{allot, Allowance, Blocks};
+    let want = |content, feedback, previous| Blocks { content, feedback, previous, fixed: 0, sources: 3 };
+    // Unknown context: the static caps, as before.
+    assert_eq!(
+        allot(None, 1_800, want(100, 50, 3_000)),
+        Allowance { content: 100, feedback: 50, previous: 3_000, sources: 4_500 }
+    );
+    // 8K with a medium reply leaves 4,736 characters: a plain draft keeps the full source cap …
+    assert_eq!(allot(Some(8_192), 1_800, want(100, 0, 0)).sources, 4_500);
+    // … a regeneration shows its previous draft and gives the sources the rest …
+    assert_eq!(
+        allot(Some(8_192), 1_800, want(100, 36, 3_000)),
+        Allowance { content: 100, feedback: 36, previous: 3_000, sources: 1_600 }
+    );
+    // … and when it gets tight the previous draft is cut before the sources fall under their floor.
+    assert_eq!(
+        allot(Some(8_192), 2_600, want(100, 36, 6_000)),
+        Allowance { content: 100, feedback: 36, previous: 3_200, sources: 600 }
+    );
+    // Blocks shown as they are (facts, the split note) come off the top.
+    assert_eq!(allot(Some(8_192), 2_600, Blocks { fixed: 1_000, ..want(100, 36, 6_000) }).previous, 2_200);
+    // Every source keeps a slice (200 characters each): twelve of them need 2,400.
+    assert_eq!(
+        allot(Some(8_192), 1_800, Blocks { sources: 12, ..want(100, 36, 3_000) }),
+        Allowance { content: 100, feedback: 36, previous: 2_200, sources: 2_400 }
+    );
+    // Without sources the previous draft may use the room.
+    assert_eq!(allot(Some(8_192), 2_600, Blocks { sources: 0, ..want(100, 36, 6_000) }).previous, 3_800);
+    // A context too small for everything: each block keeps its floor.
+    assert_eq!(
+        allot(Some(4_096), 2_600, want(2_000, 100, 3_000)),
+        Allowance { content: 600, feedback: 100, previous: 600, sources: 600 }
+    );
+}
+
+/// Characters of the variable blocks of a draft prompt: everything from `[내용]` up to the output rules
+/// (content, sources, previous draft / revision context, instruction).
+fn variable_chars(user_prompt: &str) -> usize {
+    let from = user_prompt.find("[내용]").expect("content block");
+    let to = user_prompt.rfind("[출력 규칙]").expect("output rules");
+    user_prompt[from..to].chars().count()
+}
+
+/// A 진척 보고서 whose five sections are filled (700 characters each) — the "내용이 찬 초안" of GEN-13.
+fn filled_progress_report() -> Draft {
+    let text = |seed: &str, n: usize| seed.chars().cycle().take(n).collect::<String>();
+    let mut d = template_draft(
+        TemplateKind::ProgressReport,
+        &[("project_name", "한빛 포털 구축"), ("report_date", "2026-11-10"), ("progress_percent", "62.5")],
+    );
+    d.id = "dr-filled".into();
+    d.title = "11월 2주차 진척 보고서".into();
+    d.fields.iter_mut().find(|f| f.key == "project_name").unwrap().user_edited = true;
+    for (i, heading) in TemplateSpec::builtin(TemplateKind::ProgressReport).sections(true).iter().enumerate() {
+        d.body.push(DraftBlock::Heading { level: 2, text: heading.clone() });
+        d.body
+            .push(DraftBlock::Paragraph { text: text(&format!("{}절 본문입니다. ", i + 1), 700), source: None });
+    }
+    d
+}
+
+/// GEN-13: a regeneration / revision prompt carries the previous draft (or the section and its surroundings)
+/// next to the sources. The source budget ignored those blocks, so on an 8K context (CPU, speed profile) a
+/// filled draft plus full sources overflowed the context and the reply was cut. Every variable block now
+/// shares what the context leaves next to the fixed prompt and the reply.
+#[test]
+fn regeneration_and_revision_prompts_fit_a_small_context() {
+    use super::ReviseScope;
+    const CTX: u32 = 8_192;
+    // What `prompts` leaves for the variable blocks: context − fixed prompt (1,400) − reply − margin (256).
+    let free = |reply: u32| (CTX - 1_400 - reply - 256) as usize;
+    // Block titles and the four `<source …>` tags are not counted by the budget.
+    const MARKUP: usize = 400;
+    let w = world();
+    let prev = filled_progress_report();
+    let sources: Vec<SourceRef> = (1..=4)
+        .map(|i| SourceRef::Text {
+            title: Some(format!("회의 메모 {i}")),
+            text: format!("메모 {i}의 내용입니다. ").chars().cycle().take(2_000).collect(),
+        })
+        .collect();
+    let base = DraftRequest {
+        form_ref: Some("progress_report".into()),
+        content: "한빛 포털 구축 11월 2주차 진척 보고서".into(),
+        sources,
+        use_knowledge: false,
+        previous: Some(Box::new(prev.clone())),
+        feedback: Some("표현을 더 간결하게 다듬어 주세요".into()),
+        ..Default::default()
+    };
+    let para = |t: &str| json!({"kind": "paragraph", "text": t, "items": [], "source_index": null});
+    let whole_reply = json!({
+        "title": "11월 2주차 진척 보고서",
+        "fields": [{"key": "project_name", "value": "한빛 포털 구축", "source_index": null}],
+        "tables": [],
+        "body": [{"kind": "heading", "text": "보고 개요", "items": [], "source_index": null}, para("개요입니다.")],
+        "notes": []
+    })
+    .to_string();
+    let section_reply = json!({ "blocks": [para("다듬은 본문입니다.")] }).to_string();
+
+    // 1. "전체 다시 쓰기" in one call (medium length = 1,800 tokens).
+    let chat = SeqChat::new(vec![whole_reply.clone()]);
+    let vlm = Vlm::new(&chat, "scripted".into(), Profile::Balanced, None).with_context(Some(CTX));
+    draft::draft(&w.deps(Some(&vlm), None), &base).unwrap();
+    let prompt = chat.user_prompt(0);
+    let used = variable_chars(&prompt);
+    assert!(used <= free(1_800) + MARKUP, "one-shot regeneration: {used} > {}", free(1_800));
+    // The previous draft is still what the prompt is about, and every source keeps a slice.
+    assert!(prompt.contains("[이전 초안]") && prompt.contains("project_name: 한빛 포털 구축 (사용자 수정"), "{prompt}");
+    assert!(prompt.contains("1절 본문입니다.") && prompt.contains("[수정 요청]\n표현을 더 간결하게"), "{prompt}");
+    assert_eq!(prompt.matches("<source index=").count(), 4, "{prompt}");
+    assert!(prompt.contains("메모 4의 내용입니다."), "{prompt}");
+
+    // 2. A section rewrite: the section's text and its surroundings count as well.
+    let chat2 = SeqChat::new(vec![section_reply.clone()]);
+    let vlm2 = Vlm::new(&chat2, "scripted".into(), Profile::Balanced, None).with_context(Some(CTX));
+    let revise = DraftRequest { revise: Some(ReviseScope::Section { section: 2 }), ..base.clone() };
+    draft::draft(&w.deps(Some(&vlm2), None), &revise).unwrap();
+    let prompt = chat2.user_prompt(0);
+    let used = variable_chars(&prompt);
+    assert!(used <= free(1_800) + MARKUP, "section revision: {used} > {}", free(1_800));
+    assert!(prompt.contains("[현재 절 본문]\n2절 본문입니다."), "{prompt}");
+    assert_eq!(prompt.matches("<source index=").count(), 4, "{prompt}");
+
+    // 3. "전체 다시 쓰기" section by section (8,000 tokens over five sections: 1,600 each, the head 2,200).
+    let chat3 = SeqChat::new(vec![
+        whole_reply,
+        section_reply.clone(),
+        section_reply.clone(),
+        section_reply.clone(),
+        section_reply,
+    ]);
+    let vlm3 = Vlm::new(&chat3, "scripted".into(), Profile::Balanced, None).with_context(Some(CTX));
+    let split = DraftRequest { max_tokens: Some(8_000), revise: Some(ReviseScope::Whole), ..base.clone() };
+    let out = draft::draft(&w.deps(Some(&vlm3), None), &split).unwrap();
+    assert_eq!(out.sections, 5);
+    let head = variable_chars(&chat3.user_prompt(0));
+    assert!(head <= free(2_200) + MARKUP, "head call: {head} > {}", free(2_200));
+    for call in 1..5 {
+        let prompt = chat3.user_prompt(call);
+        let used = variable_chars(&prompt);
+        assert!(used <= free(1_600) + MARKUP, "section call {call}: {used} > {}", free(1_600));
+        assert!(prompt.contains("[수정 요청]\n표현을 더 간결하게"), "{prompt}");
+    }
+    // The second section call still shows that section's earlier text.
+    assert!(chat3.user_prompt(1).contains("[이 절의 이전 본문]\n2절 본문입니다."), "{}", chat3.user_prompt(1));
 }
 
 #[test]
