@@ -2482,6 +2482,7 @@
     "drafts": "Drafts",
     "open_in_generate": "Open in Generate",
     "handoff": "The generated draft is open. Check the preview and save it.",
+    "reloaded": "Loaded the latest saved draft: it includes changes made elsewhere.",
     "form": {
       "title": "Request",
       "template": "Form / template",

@@ -362,6 +362,86 @@ test.describe("P6 document generation", () => {
     await expect(page.getByTestId("generate-notes")).toContainText(`AI 수정(2절 '${heading2}'): 리스크를 더 자세히`);
   });
 
+  test("문서 작성 화면에서 열기 on the jobs page opens the saved draft, not the job's first snapshot (GEN-4)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openGenerate(page);
+    await page.getByTestId("generate-template").click();
+    await page.getByRole("option", { name: ko.generate.templates.estimate }).click();
+    await page.getByTestId("generate-content").fill("DocuLens에 백엔드개발 고급 3MM 단가 2,500,000원, 유효기간 30일 견적서");
+    await page.getByTestId("generate-run").click();
+    await expect(page.getByTestId("generate-preview")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("generate-field-input-note")).toHaveValue("");
+
+    // Edit the draft and leave at once: the edit is written when the screen is left, not dropped.
+    await page.getByTestId("generate-field-input-note").fill("부가세 별도");
+    await page.getByTestId("nav-jobs").click();
+    await expect.poll(() => page.evaluate(() => (localStorage.getItem("doculens.mock.drafts") ?? "").includes("부가세 별도")), { timeout: 10_000 }).toBe(true);
+
+    // The job's result is the draft as it was generated (no note). Opening it shows the saved draft with the edit.
+    await page.getByTestId("jobs-tab-finished").click();
+    const job = page.locator('[data-job-kind="draft"]').first();
+    await job.getByTestId("job-result").locator("summary").click();
+    await job.getByTestId("job-open-draft").click();
+    await expect(page.getByTestId("page-generate")).toBeVisible();
+    await expect(page.getByTestId("generate-field-input-note")).toHaveValue("부가세 별도");
+    await expect(page.getByTestId("toaster")).toContainText(ko.generate.reloaded);
+    // The next keystroke is saved on top of the saved draft: the earlier edit survives.
+    await page.getByTestId("generate-title").fill("견적서 (최종)");
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const all = JSON.parse(localStorage.getItem("doculens.mock.drafts") ?? "{}") as Record<string, { title: string; fields: { key: string; value: string }[] }[]>;
+            const d = Object.values(all).flat()[0];
+            return `${d?.title} / ${d?.fields.find((f) => f.key === "note")?.value}`;
+          }),
+        { timeout: 10_000 },
+      )
+      .toBe("견적서 (최종) / 부가세 별도");
+  });
+
+  test("an edit made just before leaving is in the assistant's revision, and the revision shows when coming back by the sidebar (GEN-7)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openGenerate(page);
+    await page.getByTestId("generate-template").click();
+    await page.getByRole("option", { name: ko.generate.templates.progress_report }).click();
+    await page.getByTestId("generate-content").fill("한빛 포털 구축 10월 진척 보고서, 전체 진척률 60%");
+    await page.getByTestId("generate-run").click();
+    await expect(page.getByTestId("generate-preview")).toBeVisible({ timeout: 15_000 });
+    const heading2 = await page.locator('[data-testid^="generate-block-"][data-block-kind="heading"]').nth(1).locator("textarea").inputValue();
+
+    // An edit, then straight to the assistant — inside the autosave pause.
+    await page.getByTestId("generate-title").fill("10월 진척 보고서 (수정)");
+    await page.getByTestId("nav-assistant").click();
+    await page.getByTestId("assistant-input").fill("2절 다시 써줘 — 리스크를 더 자세히");
+    await page.getByTestId("assistant-send").click();
+    const plan = page.locator('[data-testid="assistant-card-plan"]').last();
+    await expect(plan).toHaveAttribute("data-plan-status", "done", { timeout: 15_000 });
+    await expect(page.locator('[data-testid="assistant-card-result"]').last()).toHaveAttribute("data-result-status", "done", { timeout: 20_000 });
+
+    // Back by the sidebar, not by the result card: the screen shows the revised draft, with the edit in it.
+    await page.getByTestId("nav-generate").click();
+    await expect(page.getByTestId("generate-notes")).toContainText(`AI 수정(2절 '${heading2}'): 리스크를 더 자세히`);
+    await expect(page.getByTestId("generate-title")).toHaveValue("10월 진척 보고서 (수정)");
+    await expect(page.getByTestId("toaster")).toContainText(ko.generate.reloaded);
+    await expect(page.getByTestId("generate-editor")).toHaveAttribute("data-disabled", "false");
+    // The next edit is saved on top of the revision instead of overwriting it with the old draft.
+    await page.getByTestId("generate-title").fill("10월 진척 보고서 (최종)");
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const all = JSON.parse(localStorage.getItem("doculens.mock.drafts") ?? "{}") as Record<string, { title: string; notes: string[] }[]>;
+            const d = Object.values(all).flat()[0];
+            return `${d?.title} / ${d?.notes.some((n) => n.includes("AI 수정")) ? "revised" : "not revised"}`;
+          }),
+        { timeout: 10_000 },
+      )
+      .toBe("10월 진척 보고서 (최종) / revised");
+  });
+
   test("assistant: '견적서 만들어줘 …' → plan card → draft job → result card opens the draft here", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
