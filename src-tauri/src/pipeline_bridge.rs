@@ -18,6 +18,7 @@ use doculens_core::pipeline::split as splitter;
 use doculens_core::pipeline::vlm::Vlm;
 use doculens_core::pipeline::{forms, repo, PipelineLevel, ProcessRequest};
 use doculens_core::settings::{AutoProcessingLevel, ProcessingSettings, Profile};
+use doculens_core::CoreError;
 
 use crate::docs_bridge::{self, spawn_job_thread, AfterJob, DocsContext};
 use crate::engine_bridge;
@@ -66,6 +67,81 @@ pub fn context(app: &AppHandle) -> UiResult<PipelineContext> {
         profile: settings.models.profile,
         pii_masking: settings.privacy.pii_masking,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Typed errors (audit PIP-3)
+// ---------------------------------------------------------------------------
+//
+// Expected failures reach the webview as `{ code: "invalid", message: "<reason>" }` — the shape
+// the knowledge / document commands use and the frontend translates (`errors.reasons.<reason>`).
+// The pipeline commands used to put the reason into `code` instead, which the frontend showed as
+// "오류: schema_name_empty"; reasons outside a fixed list surfaced as "데이터베이스 오류: …".
+
+/// `true` for a stable reason code: an ASCII snake_case identifier such as `schema_name_empty`.
+fn is_reason_code(s: &str) -> bool {
+    let b = s.as_bytes();
+    !b.is_empty()
+        && b.len() <= 64
+        && b[0].is_ascii_lowercase()
+        && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'_')
+}
+
+/// The reason a core error carries, if it is one of the expected failures:
+/// * repositories signal them as `rusqlite::Error::InvalidParameterName(code)`, which arrives as
+///   `CoreError::Db("Invalid parameter name: <code>")`;
+/// * core functions signal them as `CoreError::Invalid(<code>)`.
+///
+/// Texts the frontend already maps keep their spelling (`no documents`), the merge name check
+/// gets its code; any other free text is not a reason.
+pub fn reason_code(e: &CoreError) -> Option<String> {
+    let raw = match e {
+        CoreError::Db(m) => m.strip_prefix("Invalid parameter name: ")?,
+        CoreError::Invalid(m) => m.as_str(),
+        _ => return None,
+    }
+    .trim();
+    match raw {
+        "invalid name" => Some("merge_name_invalid".into()),
+        "no documents" | "no fields" => Some(raw.to_string()),
+        _ if is_reason_code(raw) => Some(raw.to_string()),
+        _ => None,
+    }
+}
+
+/// Core error → UI error: an expected failure becomes `invalid` + its reason, anything else
+/// keeps the `CoreError` code and message.
+pub fn typed_error(e: CoreError) -> UiError {
+    match reason_code(&e) {
+        Some(reason) => UiError::invalid(reason),
+        None => e.into(),
+    }
+}
+
+/// Shell errors that wrap a core reason (`invalid value: description_empty`, the engine's
+/// `engine_not_running`) get the same shape.
+pub fn retyped(e: UiError) -> UiError {
+    const WRAPPED: [&str; 6] = [
+        "description_empty",
+        "schema_not_found",
+        "no_active_model",
+        "no_model",
+        "engine_not_running",
+        "model_not_loaded",
+    ];
+    if let Some(code) = WRAPPED.iter().find(|c| e.code == **c || e.message.contains(**c)) {
+        return UiError::invalid(*code);
+    }
+    if is_reason_code(&e.code) && e.code == e.message {
+        // The former pipeline shape (`code` = `message` = reason).
+        return UiError::invalid(e.message);
+    }
+    if e.code == "invalid" {
+        if let Some(reason) = e.message.strip_prefix("invalid value: ").filter(|r| is_reason_code(r)) {
+            return UiError::invalid(reason);
+        }
+    }
+    e
 }
 
 // ---------------------------------------------------------------------------
@@ -421,4 +497,49 @@ pub fn on_workspace_changed(app: &AppHandle) {
             }
         })
         .ok();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shape(e: UiError) -> (String, String) {
+        (e.code, e.message)
+    }
+
+    /// Audit PIP-3: expected failures arrive as `invalid` + reason, whatever layer raised them.
+    #[test]
+    fn expected_failures_are_typed_as_invalid_plus_reason() {
+        let invalid = |reason: &str| ("invalid".to_string(), reason.to_string());
+        // Repository signal (rusqlite InvalidParameterName → CoreError::Db).
+        let repo_err = |code: &str| CoreError::Db(format!("Invalid parameter name: {code}"));
+        for code in ["schema_name_empty", "schema_name_duplicate", "schema_doc_type_invalid", "schema_general_required"]
+        {
+            assert_eq!(shape(typed_error(repo_err(code))), invalid(code), "{code}");
+        }
+        // Core signal.
+        assert_eq!(shape(typed_error(CoreError::Invalid("description_empty".into()))), invalid("description_empty"));
+        assert_eq!(shape(typed_error(CoreError::Invalid("invalid name".into()))), invalid("merge_name_invalid"));
+        assert_eq!(shape(typed_error(CoreError::Invalid("no documents".into()))), invalid("no documents"));
+        // Anything else keeps the core code and message.
+        let db = typed_error(CoreError::Db("UNIQUE constraint failed: documents.rel_path".into()));
+        assert_eq!(db.code, "db");
+        let free = typed_error(CoreError::Invalid("word range 3..9 (page has 4 words)".into()));
+        assert_eq!(shape(free), ("invalid".into(), "invalid value: word range 3..9 (page has 4 words)".into()));
+        assert_eq!(typed_error(CoreError::NoWorkspace).code, "no_workspace");
+
+        // Shell errors that wrap a reason.
+        assert_eq!(shape(retyped(CoreError::EngineNotRunning.into())), invalid("engine_not_running"));
+        assert_eq!(shape(retyped(CoreError::Invalid("no_model".into()).into())), invalid("no_model"));
+        assert_eq!(shape(retyped(UiError::invalid("no_active_model"))), invalid("no_active_model"));
+        assert_eq!(
+            shape(retyped(CoreError::Invalid("schema_key_reserved".into()).into())),
+            invalid("schema_key_reserved")
+        );
+        let old_shape = UiError { code: "schema_name_empty".into(), message: "schema_name_empty".into(), detail: None };
+        assert_eq!(shape(retyped(old_shape)), invalid("schema_name_empty"));
+        let other = retyped(CoreError::Cancelled.into());
+        assert_eq!(other.code, "cancelled");
+        assert!(is_reason_code("merge_name_invalid") && !is_reason_code("no documents") && !is_reason_code("X"));
+    }
 }

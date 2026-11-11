@@ -13,40 +13,9 @@ use doculens_core::pipeline::{
 };
 
 use crate::docs_bridge;
-use crate::pipeline_bridge::{self, VisionModelInfo};
+use crate::pipeline_bridge::{self, retyped as retype, typed_error, VisionModelInfo};
 use crate::protocol;
 use crate::state::{AppState, UiError, UiResult};
-
-/// Repository / core errors with a stable code → typed UI errors (`code` carries
-/// the key the frontend translates; the message repeats it for logs).
-fn typed_error(e: doculens_core::CoreError) -> UiError {
-    const CODES: [&str; 14] = [
-        "schema_name_empty",
-        "schema_doc_type_invalid",
-        "schema_invalid",
-        "schema_not_found",
-        "schema_builtin",
-        "document_not_found",
-        "field_not_found",
-        "field_value_empty",
-        "change_not_found",
-        "description_empty",
-        "no_model",
-        "no_text",
-        "no documents",
-        "invalid name",
-    ];
-    let m = e.to_string();
-    if let Some(code) = CODES.iter().find(|c| m.contains(*c)) {
-        let code = match *code {
-            "no documents" => "no_documents",
-            "invalid name" => "merge_name_invalid",
-            c => c,
-        };
-        return UiError { code: code.into(), message: code.into(), detail: None };
-    }
-    e.into()
-}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PipelineStatusView {
@@ -78,7 +47,7 @@ pub fn pipeline_status(app: AppHandle) -> UiResult<PipelineStatusView> {
 #[tauri::command(async)]
 pub fn pipeline_process(app: AppHandle, req: ProcessRequest) -> UiResult<Option<String>> {
     if req.document_ids.is_empty() {
-        return Err(UiError { code: "no_documents".into(), message: "no_documents".into(), detail: None });
+        return Err(UiError::invalid("no documents"));
     }
     pipeline_bridge::process_job(&app, req)
 }
@@ -159,27 +128,10 @@ pub fn pipeline_schema_lint(definition: SchemaDef) -> Vec<LintIssue> {
     schema::lint(&definition)
 }
 
-/// Shell errors that wrap a core message keep the stable code the frontend keys on.
-fn retype(e: UiError) -> UiError {
-    for code in [
-        "description_empty",
-        "schema_not_found",
-        "no_model",
-        "engine_not_running",
-        "model_not_loaded",
-        "no_active_model",
-    ] {
-        if e.message.contains(code) || e.code == code {
-            return UiError { code: code.into(), message: code.into(), detail: None };
-        }
-    }
-    e
-}
-
 #[tauri::command(async)]
 pub fn pipeline_schema_from_nl(app: AppHandle, description: String, base_id: Option<String>) -> UiResult<SchemaDraft> {
     if description.trim().is_empty() {
-        return Err(UiError { code: "description_empty".into(), message: "description_empty".into(), detail: None });
+        return Err(UiError::invalid("description_empty"));
     }
     pipeline_bridge::nl_schema(&app, &description, base_id.as_deref()).map_err(retype)
 }
@@ -374,7 +326,7 @@ pub fn pipeline_table_export(app: AppHandle, document_id: String, page: u32, ind
     let csv = pipeline_table_csv(app, document_id, page, index)?;
     let target = doculens_core::paths::normalize_user_path(&path);
     if target.as_os_str().is_empty() || target.is_dir() {
-        return Err(UiError::invalid("invalid export path"));
+        return Err(UiError::invalid("export_path_invalid"));
     }
     std::fs::write(&target, csv.as_bytes()).map_err(|e| doculens_core::CoreError::io(&target, e))?;
     Ok(())
@@ -382,7 +334,7 @@ pub fn pipeline_table_export(app: AppHandle, document_id: String, page: u32, ind
 
 #[tauri::command(async)]
 pub fn pipeline_split(app: AppHandle, document_id: String, boundaries: Vec<u32>) -> UiResult<String> {
-    pipeline_bridge::split_job(&app, document_id, boundaries)
+    pipeline_bridge::split_job(&app, document_id, boundaries).map_err(retype)
 }
 
 #[tauri::command(async)]
