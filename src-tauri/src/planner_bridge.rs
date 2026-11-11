@@ -72,6 +72,32 @@ pub struct ExecuteResponse {
     pub job_id: Option<String>,
     /// Set when the plan ran inline.
     pub execution: Option<PlanExecution>,
+    /// Set for a `preview_only` call: nothing ran — the plan as the executor would take it and
+    /// the preview of its side effects (the card of an edited plan shows these).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<PlanCheck>,
+}
+
+/// A (possibly edited) plan checked the way `execute` checks it, without running it.
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanCheck {
+    /// The plan after validation (normalised parameters, default scope, confirmation flag).
+    pub plan: Plan,
+    pub preview: PlanPreview,
+    /// Non-blocking findings (blocking ones make the call fail with `plan_invalid`).
+    pub issues: Vec<planner::PlanIssue>,
+}
+
+/// What `planner_execute` is told besides the plan.
+#[derive(Debug, Clone, Default)]
+pub struct ExecuteOptions<'a> {
+    /// The exact text the plan was made from (`PlanResponse.result.text`). After an ask-back it is
+    /// the command, the assistant's question and the user's reply — the reply is where "전부" was
+    /// said, so the scope check reads this text and not the command shown on the card (audit PLN-7).
+    /// `None` = the command itself.
+    pub planned_text: Option<&'a str>,
+    /// Validate and preview only (the card of an edited plan); nothing is executed.
+    pub preview_only: bool,
 }
 
 /// The engine gate as an executor lease: model-bound steps occupy the single slot, imports and
@@ -244,11 +270,19 @@ fn inline_only(plan: &Plan) -> bool {
 }
 
 /// Executes a (confirmed, possibly edited) plan: quick plans inline, the rest
-/// as a persistent job.
-pub fn execute(app: &AppHandle, mut plan: Plan, text: &str, ui: &UiPlanContext) -> UiResult<ExecuteResponse> {
+/// as a persistent job. With `options.preview_only` the plan is only checked and previewed.
+pub fn execute(
+    app: &AppHandle,
+    mut plan: Plan,
+    text: &str,
+    ui: &UiPlanContext,
+    options: &ExecuteOptions<'_>,
+) -> UiResult<ExecuteResponse> {
     let ctx = build_context(app, ui)?;
-    let date = doculens_core::prerouter::resolve_relative_date(text, ctx.today);
-    let issues = planner::validate::validate(&mut plan, &ctx, date.as_ref());
+    // The plan comes from a card: its date range is the one the planning step resolved — or what
+    // the user made of it in the editor. The date phrase of the sentence is not applied again, or
+    // a range the user removed would come back (audit PLN-14).
+    let issues = planner::validate::validate(&mut plan, &ctx, None);
     if planner::has_errors(&issues) {
         return Err(UiError {
             code: "plan_invalid".into(),
@@ -259,18 +293,28 @@ pub fn execute(app: &AppHandle, mut plan: Plan, text: &str, ui: &UiPlanContext) 
     if plan.is_clarification() {
         return Err(UiError::invalid("plan_clarify"));
     }
-    if let Some(issue) = planner::validate::scope_required(&plan) {
-        if !planner::rules::mentions_all(text) {
-            return Err(UiError {
-                code: "plan_invalid".into(),
-                message: issue.message.clone(),
-                detail: serde_json::to_value(vec![issue]).ok(),
-            });
-        }
+    // Documents must be named unless the user said "전부" — in the text the plan was made from,
+    // which after an ask-back includes the reply (audit PLN-7).
+    let said = options.planned_text.filter(|t| !t.trim().is_empty()).unwrap_or(text);
+    if let Some(issue) = planner::validate::settle_scope(&mut plan, &ctx, said) {
+        return Err(UiError {
+            code: "plan_invalid".into(),
+            message: issue.message.clone(),
+            detail: serde_json::to_value(vec![issue]).ok(),
+        });
+    }
+    if options.preview_only {
+        let pctx = pipeline_bridge::context(app)?;
+        let preview = exec::preview(pctx.db(), &pctx.docs.paths, &plan, &pctx.settings, ctx.language)?;
+        return Ok(ExecuteResponse {
+            job_id: None,
+            execution: None,
+            preview: Some(PlanCheck { plan, preview, issues }),
+        });
     }
     if inline_only(&plan) {
         let execution = run_inline(app, &plan, &ctx)?;
-        return Ok(ExecuteResponse { job_id: None, execution: Some(execution) });
+        return Ok(ExecuteResponse { job_id: None, execution: Some(execution), preview: None });
     }
     let state = app.state::<AppState>();
     let subject = plan.summary.clone().unwrap_or_else(|| text.to_string());
@@ -279,7 +323,7 @@ pub fn execute(app: &AppHandle, mut plan: Plan, text: &str, ui: &UiPlanContext) 
         &subject,
         JobPriority::Normal,
     )?;
-    Ok(ExecuteResponse { job_id: Some(id), execution: None })
+    Ok(ExecuteResponse { job_id: Some(id), execution: None, preview: None })
 }
 
 fn run_inline(app: &AppHandle, plan: &Plan, ctx: &PlanContext) -> UiResult<PlanExecution> {
