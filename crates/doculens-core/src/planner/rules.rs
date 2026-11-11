@@ -205,9 +205,28 @@ const SELECTION_WORDS: &[&str] = &[
 ];
 const ALL_WORDS: &[&str] = &["전부", "전체", "모두", "모든", "라이브러리전체", "all documents", "everything", "all"];
 
-/// Whether the sentence explicitly targets the whole library ("전부", "모든 문서", "all documents").
+/// Whether the user's own words explicitly target the whole library ("전부", "모든 문서", "all
+/// documents"). In an ask-back text only the command and the reply count: the assistant's
+/// question says "전체면 '전부'라고 해 주세요" itself, which made every reply read as "all".
 pub fn mentions_all(text: &str) -> bool {
-    Text::new(text, true).has(ALL_WORDS)
+    Text::new(&user_words(text), true).has(ALL_WORDS)
+}
+
+/// The user's own words of an ask-back text. The assistant sends the reply to a question as
+/// `<command>\n\n[어시스턴트 질문] <question>\n[사용자 답변] <reply>` (`[Assistant question]` /
+/// `[User reply]` in English; `askBackText` in the UI) — the question is dropped. Any other text
+/// is returned as is.
+pub fn user_words(text: &str) -> String {
+    const QUESTION: [&str; 2] = ["[어시스턴트 질문]", "[Assistant question]"];
+    const REPLY: [&str; 2] = ["[사용자 답변]", "[User reply]"];
+    let Some(q_at) = QUESTION.iter().filter_map(|m| text.find(m)).min() else { return text.to_string() };
+    let (command, rest) = text.split_at(q_at);
+    // The reply follows the last reply marker (the question may quote one).
+    let reply = REPLY.iter().filter_map(|m| rest.rfind(m).map(|i| (i, &rest[i + m.len()..]))).max_by_key(|(i, _)| *i);
+    match reply {
+        Some((_, reply)) => format!("{}\n{}", command.trim_end(), reply.trim()),
+        None => command.trim_end().to_string(),
+    }
 }
 
 fn selection_ids(ctx: &PlanContext) -> Vec<String> {
@@ -335,7 +354,8 @@ fn refers_to_open_doc(t: &Text<'_>, ctx: &PlanContext) -> bool {
     })
 }
 
-fn scope_of(t: &Text<'_>, ctx: &PlanContext, dt: Option<&DocTypeSummary>, d: Option<&DateRange>) -> Scope {
+/// What the sentence itself names: the selection, a folder, a project, a type, a date range.
+fn named_scope(t: &Text<'_>, ctx: &PlanContext, dt: Option<&DocTypeSummary>, d: Option<&DateRange>) -> Scope {
     let mut scope = Scope::default();
     let open_doc_by_type = refers_to_open_doc(t, ctx);
     if t.has(SELECTION_WORDS) || open_doc_by_type {
@@ -356,12 +376,34 @@ fn scope_of(t: &Text<'_>, ctx: &PlanContext, dt: Option<&DocTypeSummary>, d: Opt
         scope.filter.doc_type = Some(dt.slug.clone());
     }
     apply_date(&mut scope, d);
-    // The assistant's "현재 프로젝트" scope (0.5.0) is the default when the sentence names no
-    // documents, folder or project of its own (filters such as a type / date intersect with it).
+    scope
+}
+
+/// The assistant's "현재 프로젝트" scope (0.5.0): the default when the sentence names no documents,
+/// folder or project of its own (filters such as a type / date intersect with it).
+fn default_project(mut scope: Scope, ctx: &PlanContext) -> Scope {
     if scope.filter.project_id.is_none() && scope.doc_ids.is_empty() && scope.folder.is_none() {
         scope.filter.project_id = ctx.scope_project.clone().filter(|p| !p.trim().is_empty());
     }
     scope
+}
+
+/// Scope of a rule that changes documents. The project scope joins what the sentence names, but
+/// it never stands in for it: with nothing named the scope stays empty (the rule falls back to
+/// the selection or asks which documents) unless the sentence says "전부" — then "all" is the
+/// project (audit PLN-6: "90도 돌려줘" used to rotate the whole open project).
+fn scope_of(t: &Text<'_>, ctx: &PlanContext, dt: Option<&DocTypeSummary>, d: Option<&DateRange>) -> Scope {
+    let scope = named_scope(t, ctx, dt, d);
+    if scope.is_empty() && !t.has(ALL_WORDS) {
+        return scope;
+    }
+    default_project(scope, ctx)
+}
+
+/// Scope of a rule that only reads or processes documents (totals, exports, search, classify /
+/// OCR / extract / summarise): the project scope is the default scope.
+fn scope_or_project(t: &Text<'_>, ctx: &PlanContext, dt: Option<&DocTypeSummary>, d: Option<&DateRange>) -> Scope {
+    default_project(named_scope(t, ctx, dt, d), ctx)
 }
 
 fn mk(op: Op, scope: Scope, confidence: f32, summary: String) -> Plan {
@@ -634,7 +676,7 @@ fn export(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     }
     let dt = doc_type(t, ctx);
     let d = date(t, ctx);
-    let mut scope = scope_of(t, ctx, dt, d.as_ref());
+    let mut scope = scope_or_project(t, ctx, dt, d.as_ref());
     if scope.folder.is_none() && scope.doc_ids.is_empty() && dt.is_none() && d.is_none() && !t.has(ALL_WORDS) {
         scope.folder = ctx.current_folder.clone();
     }
@@ -759,7 +801,7 @@ fn aggregate(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     };
     let dt = doc_type(t, ctx);
     let d = date(t, ctx);
-    let scope = scope_of(t, ctx, dt, d.as_ref());
+    let scope = scope_or_project(t, ctx, dt, d.as_ref());
     let schema = dt.and_then(|d| ctx.schema_for_type(&d.slug));
     let field = if func == AggregateFn::Count {
         None
@@ -1200,7 +1242,7 @@ fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     let force = t.has(&["다시", "재처리", "재추출", "재분류", "재실행", "again", "redo", "force"]);
     let dt = doc_type(t, ctx);
     let d = date(t, ctx);
-    let mut scope = scope_of(t, ctx, dt, d.as_ref());
+    let mut scope = scope_or_project(t, ctx, dt, d.as_ref());
     if scope.is_empty() && !t.has(ALL_WORDS) {
         if !selection_ids(ctx).is_empty() && (t.has(&["이", "선택", "this", "selected"]) || summarize || ocr) {
             scope.doc_ids = selection_ids(ctx);
@@ -1434,7 +1476,7 @@ fn search(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     }
     let d = date(t, ctx);
     let dt = doc_type(t, ctx);
-    let scope = scope_of(t, ctx, dt, d.as_ref());
+    let scope = scope_or_project(t, ctx, dt, d.as_ref());
     Some(mk(
         Op::Search { query: q.clone(), mode: None, top_k: None },
         scope,
@@ -2105,7 +2147,7 @@ fn draft_document(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         .to_string();
     if aggregate_first {
         let dt = doc_type(t, ctx);
-        let scope = scope_of(t, ctx, dt, date(t, ctx).as_ref());
+        let scope = scope_or_project(t, ctx, dt, date(t, ctx).as_ref());
         let agg = Op::Aggregate { func: AggregateFn::Sum, field: None, group_by: None, include_unreviewed: None };
         let summary = t
             .t(

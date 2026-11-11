@@ -18,13 +18,9 @@ use super::{
     PlanContext, PlanIssue, ReferenceAction, ReviewOp, SchemaAction, TemplateAction, MAX_OPS,
 };
 
-/// Ops that change documents must name their targets: an empty scope would mean the whole
-/// library. Callers skip this when the sentence explicitly said so ("전부", "all documents").
-pub fn scope_required(plan: &Plan) -> Option<PlanIssue> {
-    if !plan.scope.is_empty() {
-        return None;
-    }
-    let needs = plan.operations.iter().any(|op| match op {
+/// Ops that change the documents of the plan scope (they must name their targets).
+fn changes_documents(op: &Op) -> bool {
+    match op {
         Op::SetDocType { .. } | Op::Tag { .. } | Op::Delete { .. } | Op::Rename { .. } | Op::Move { .. } => true,
         Op::Organize { dry_run, .. } => !dry_run.unwrap_or(false),
         Op::Review { action: ReviewOp::Approve | ReviewOp::Reject | ReviewOp::Correct, .. } => true,
@@ -40,14 +36,119 @@ pub fn scope_required(plan: &Plan) -> Option<PlanIssue> {
         Op::ManageReference { action: ReferenceAction::Add | ReferenceAction::Remove, .. } => true,
         Op::RemoveFromProject { doc_ids, .. } => doc_ids.is_empty(),
         _ => false,
-    });
-    needs.then(|| {
+    }
+}
+
+/// Ops that change documents must name their targets: an empty scope would mean the whole
+/// library. Callers skip this when the sentence explicitly said so ("전부", "all documents").
+///
+/// `validate` runs first and never fills the assistant's "현재 프로젝트" default scope into a plan
+/// that fails this check (audit PLN-6), so the default cannot stand in for the documents a
+/// command has to name; once the sentence said "전부", [`apply_default_scope`] makes that "all"
+/// the project.
+pub fn scope_required(plan: &Plan) -> Option<PlanIssue> {
+    if !plan.scope.is_empty() {
+        return None;
+    }
+    plan.operations.iter().any(changes_documents).then(|| {
         PlanIssue::error(
             "scope",
             "scope_required",
             "this plan changes documents but names none: select documents or give a folder / type / date range",
         )
     })
+}
+
+/// Whether the op reads the plan scope (the documents in scope or its project filter).
+/// Settings, navigation, project / template / schema / glossary administration and the ops that
+/// carry their own targets do not; `create_project` only takes documents the scope names.
+fn reads_scope(op: &Op, scope: &super::Scope) -> bool {
+    match op {
+        Op::Classify { .. } | Op::SetDocType { .. } | Op::Ocr { .. } | Op::Extract { .. } | Op::Validate {} => true,
+        Op::Review { action, .. } => *action != ReviewOp::Show,
+        Op::Search { .. } | Op::Summarize { .. } | Op::Aggregate { .. } | Op::Explain { .. } => true,
+        // A text-only answer and small talk look nothing up.
+        Op::Answer { knowledge, mode, .. } => *knowledge != Some(false) && *mode != Some(super::AnswerMode::Chat),
+        Op::Organize { .. } | Op::Rename { .. } | Op::Move { .. } | Op::Tag { .. } | Op::Delete { .. } => true,
+        Op::Export { .. } | Op::DraftDocument { .. } | Op::ClassifyProjects { .. } => true,
+        Op::Rotate { .. }
+        | Op::Rerender { .. }
+        | Op::Split { .. }
+        | Op::Merge { .. }
+        | Op::SetTitle { .. }
+        | Op::EditText { .. }
+        | Op::SetRole { .. }
+        | Op::SetVersion { .. } => true,
+        Op::ManageReference { action: ReferenceAction::Add | ReferenceAction::Remove, .. } => true,
+        Op::AddToProject { doc_ids, .. } | Op::RemoveFromProject { doc_ids, .. } => doc_ids.is_empty(),
+        Op::CreateProject { .. } => !scope.is_empty(),
+        _ => false,
+    }
+}
+
+/// Whether any op of the plan works on the documents of its scope. `false` for plans of
+/// settings / navigation / administration ops: their cards show no document count.
+pub fn uses_scope(plan: &Plan) -> bool {
+    plan.operations.iter().any(|op| reads_scope(op, &plan.scope))
+}
+
+/// Fills the assistant's "현재 프로젝트" scope (0.5.0) into a plan that names no documents, folder
+/// or project of its own; filters such as a type or a date range intersect with it. Returns
+/// whether the project was filled in.
+///
+/// Not applied to plans without an op that reads the scope, nor to plans that bring documents
+/// into a project from outside it: `add_to_project`, `import`, `classify_projects` (unassigned
+/// documents) and `create_project` — a new project takes the documents the command names, never
+/// a copy of the project that happens to be open (audit PLN-5).
+///
+/// `validate` calls this for every plan except one that changes documents without naming any
+/// (see [`scope_required`]); the caller that let such a plan through because the sentence said
+/// "전부" calls it afterwards, so "all" in the project scope means the project, not the library.
+pub fn apply_default_scope(plan: &mut Plan, ctx: &PlanContext) -> bool {
+    if plan.scope.filter.project_id.is_some() || !plan.scope.doc_ids.is_empty() || plan.scope.folder.is_some() {
+        return false;
+    }
+    let Some(p) = ctx.scope_project.as_deref().map(str::trim).filter(|p| !p.is_empty()) else { return false };
+    if !ctx.projects.iter().any(|x| x.id == p) {
+        return false;
+    }
+    let from_outside = plan.operations.iter().any(|op| {
+        matches!(
+            op,
+            Op::AddToProject { .. } | Op::Import { .. } | Op::ClassifyProjects { .. } | Op::CreateProject { .. }
+        )
+    });
+    if from_outside || !uses_scope(plan) {
+        return false;
+    }
+    plan.scope.filter.project_id = Some(p.to_string());
+    true
+}
+
+/// The scope gate of a plan the user is about to run, in one call: a plan that changes documents
+/// must name them unless the user's own words say "전부" (`text` = the sentence the plan was made
+/// from; the assistant's question inside an ask-back text does not count), and "all" inside the
+/// "현재 프로젝트" scope is the project.
+pub fn settle_scope(plan: &mut Plan, ctx: &PlanContext, text: &str) -> Option<PlanIssue> {
+    if let Some(issue) = scope_required(plan) {
+        if !super::rules::mentions_all(text) {
+            return Some(issue);
+        }
+    }
+    apply_default_scope(plan, ctx);
+    None
+}
+
+/// Confirmations decided by the validator on top of `Op::needs_confirmation`: taking several
+/// documents out of a project deletes their copies in the project folder for good (audit PLN-6; a
+/// scope-wide removal is counted by the preview), and a new workspace folder is created at the
+/// path the sentence was read as (PLN-18).
+fn confirmed_here(op: &Op) -> bool {
+    match op {
+        Op::RemoveFromProject { doc_ids, .. } => doc_ids.len() >= 2,
+        Op::Workspace { action: super::WorkspaceAction::Create, .. } => true,
+        _ => false,
+    }
 }
 
 /// Parses the model's JSON into a plan. Serde errors become a single blocking
@@ -213,14 +314,11 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
     }
     // The assistant's "현재 프로젝트" scope (0.5.0) is the default scope of a plan that names no
     // documents / folder / project — also for model plans, which may leave the filter out.
-    // `add_to_project` and `import` bring documents in from outside, so they keep their scope.
-    if plan.scope.filter.project_id.is_none() && plan.scope.doc_ids.is_empty() && plan.scope.folder.is_none() {
-        if let Some(p) = ctx.scope_project.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
-            let brings_in = plan.operations.iter().any(|op| matches!(op, Op::AddToProject { .. } | Op::Import { .. }));
-            if !brings_in && ctx.projects.iter().any(|x| x.id == p) {
-                plan.scope.filter.project_id = Some(p.to_string());
-            }
-        }
+    // The documents-required check comes first (audit PLN-6): a plan that changes documents
+    // without naming any keeps its empty scope, so the callers' `scope_required` guard asks which
+    // documents are meant instead of the whole project being rotated / re-rendered / removed.
+    if scope_required(plan).is_none() {
+        apply_default_scope(plan, ctx);
     }
     let scope_doc_type = plan.scope.filter.doc_type.clone();
     let plan_scope_empty = plan.scope.is_empty();
@@ -1066,7 +1164,9 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
     } else if !plan.operations.iter().any(|o| o.kind() == plan.intent) {
         plan.recompute_intent();
     }
-    plan.requires_confirmation = plan.requires_confirmation || plan.operations.iter().any(Op::needs_confirmation);
+    plan.requires_confirmation = plan.requires_confirmation
+        || plan.operations.iter().any(Op::needs_confirmation)
+        || plan.operations.iter().any(confirmed_here);
     issues
 }
 
