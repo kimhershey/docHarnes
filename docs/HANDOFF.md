@@ -1786,6 +1786,32 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   **Release v0.7.0 게시는 사용자 확인 뒤**(0.7.0 요청에 게시 지시가 없었음; 게시하려면 같은 `ref=3dcb27c`로 `publish=true` 1회 — 릴리스 노트 `docs/releases/v0.7.0.md`가 본문이 됨).
   `main` 병합은 사용자 PR: `release/0.6.0`(0491812, 2efc181 이후 문서만)과 `release/0.7.0`(3dcb27c + 이 기록) — 0.7.0 브랜치가 0.6.0 끝을 포함하므로 `release/0.7.0` 하나만 병합해도 됨.
 
+### 0.7.1 — 0.7.0 전체 동작 점검 → 수정 필요 목록 (2026-11-11; 사용자 지시 "동작을 모두 점검하고 수정이 필요한 부분을 체크해서 리스트로 남겨줘"; 브랜치 `release/0.7.1` — `main` dbb598e에서 분기)
+
+- **상태**: **목록만 작성했고 코드는 고치지 않았다**(지시가 목록). 목록은 `docs/audit/v0.7.0.md` — 149건(A 4 · B 31 · C 71 · D 43), 항목마다 체크 상자·문제(시나리오)·수정 방향·위치·확인 수준.
+  영역 11절(USR 사용자 보고 5 · UI 화면 16 · PLN 플래너 15 · PLT 플랫폼 16 · DOC 문서 15 · KNO 참고 자료·채팅 15 · PIP 파이프라인 15 · GEN 문서 작성 14 · PRJ 프로젝트 16 · PKG 패키징·고지·문서 14 · CON 계약 8),
+  §14 문제없음으로 확인한 것 + 0.7.0 일곱 항목 재확인, §15 권장 수정 순서(0.7.1용 6묶음 51건 = A·B 35건 전부 + 함께 끝나는 C·D) + 결정이 필요한 것 7건, 부록 A 합친 보고 대응표, 부록 B 재현 조건.
+- **선행**: 사용자가 PR #22로 `release/0.7.0`을 `main`에 병합(dbb598e; 트리는 53197a1과 같음, main CI run 42938205630 7개 잡 통과). **Release v0.7.0은 게시하지 않았다**(최신 Release는 v0.6.0).
+  범프 커밋 16c9067(0.7.1: `Cargo.toml`·`Cargo.lock`·`package.json`/lock·`tauri.conf.json`·모의 백엔드·고지/SBOM)을 `[skip ci]` 없이 푸시 → CI run 42938573265 7개 잡 통과.
+- **방법**: ① 위 두 CI 기준선 ② 브라우저 빌드(모의 백엔드) Playwright 순회 — 온보딩~설정 7탭·명령 팔레트, 19개 화면 × 배율 100·120·150 %, 대화상자는 150 %와 최소 창 960×600, 화면마다 루트 넘침·가로 넘침·줄 수·접근성 이름·콘솔 오류·번역 키 자동 측정, 스크린샷 128장
+  ③ 화면↔코어 명령 180개 이름·인수 기계 대조(불일치 없음, 미사용 `chat_messages_truncate` 1개) ④ 읽기 전용 점검 에이전트 9개(플래너·플랫폼·문서·참고 자료/어시스턴트·파이프라인·문서 작성·프로젝트·패키징/문서/라이선스·계약)
+  ⑤ A·B 등급 35건은 원본 코드를 다시 읽거나 재현(나머지 "점검 보고" 표시 항목은 고치기 전에 재현부터) ⑥ 설정 문제는 로컬 llama-server + `tiny-gemma4` 픽스처에 실제 플랜 문법을 걸어 실험.
+- **같은 날 사용자 추가 보고**: ① 실기 스크린샷(gemma4-e4b-q4km) — "UI 배율 120%"·"배율을 130 으로 변경해줘" → "프로파일: 균형", "DPI 를 200 으로 변경해줘" → "테마를 '시스템'(으)로 변경했습니다", "안녕하세요" → 빈 플랜 카드(USR-1~3)
+  ② "실패작업 재실행" — 사용량 한도로 실패한 점검 에이전트 9개를 재개해 모두 완료 ③ 스크린샷 — 설정 > 양식·추출 항목의 "유형 → 추출 항목 매핑" 표에서 내장/사용자 열을 없애도 된다(USR-5).
+- **가장 중요한 발견**
+  - **PLN-1(USR-1의 근본 원인)**: 플래너 스키마를 `serde_json::Value`(BTreeMap)로 만들어 `properties`가 알파벳순으로 직렬화되고, llama.cpp의 json-schema→문법 변환이 그 순서를 강제한다. `set_setting`은 `{"key":…,"op":…,"value":…}`로만 쓸 수 있어 모델이 `"op"`부터 쓰면
+    system 계열에서 set_profile·set_theme·open·undo·redo·help·clarify·noop만 남는다(실기 증상과 일치). op 63개 중 24개가 같은 깔때기. 최상위도 confidence·intent가 operations보다 먼저. 실험: system 계열 요청 40회 중 `set_setting` 객체 16/16이 `{"key":`로 시작.
+    few-shot 응답도 `serde_json::to_string(Value)`라 같은 순서이고, 추출(KIE)·분류·초안 스키마도 같은 방식(초안은 body가 title·fields보다 먼저 — 품질 영향 미측정). `preserve_order` 기능은 작업 공간 전체의 키 순서를 바꾸므로 플래너 스키마에 국한한 순서 보존 직렬화를 권장.
+  - **USR-4**: `AppSettings::from_value`(`settings.rs:598`)가 `knowledge`·`generation` 섹션을 읽지 않아 재시작마다 기본값(다음 저장 때 파일도 덮임).
+  - **UI-1**: 0.7.0의 3번이 덜 고쳐짐 — `DraftEditor.tsx`의 `sr-only` caption/th가 `position: static` 스크롤 상자 밖으로 나가 문서 루트가 1441×1242(창 1280×800)가 되고 휠로 창 전체가 442 px 밀린다. E2E가 `main`만 검사해 놓쳤다 → `documentElement` 단언 필요.
+  - **UI-3**: `DialogContent` 기본형에 최대 높이가 없어 배율 150 %에서 프로젝트 대화상자 959 px(창 800), 최소 창에서도 640 px — 버튼에 닿지 못한다.
+  - **확인 없이 덮어쓰기**: 어시스턴트 `extract`(PLN-3), 재연결 문서 자동 재추출(PIP-1), 검토함 재추출·양식 테스트(PIP-2), 취소한 초안 작업의 저장본 덮어쓰기(GEN-3), 결과 카드의 옛 스냅샷(GEN-4), 기본 프로젝트 범위가 문서 지정 필수 검사를 통과(PLN-5·PLN-6).
+  - **기능 불능**: HTML 엔티티 디코더의 바이트 슬라이스 패닉(DOC-1, `text.rs:338` — "R&D 센터 소개"), 목록 블록 입력(GEN-5), 보완요청서의 초안 어시스턴트(GEN-1), 등록된 파일 끌어다 놓기(PRJ-1), 모델 폴더 가져오기(PLT-12), `review` correct/show 무동작(PLN-8).
+  - **배포**: 공개 저장소의 Release v0.2.0(Full 1.16 GB)·v0.1.0(CUDA 팩 2개)에 NVIDIA 재배포 파일이 올라가 있는데 `cuda-packs.yml` 주석과 체크리스트가 전제로 적은 앱 EULA가 미결(PKG-1, 사용자 결정), `THIRD-PARTY-NOTICES.md:109-111`의 모델 항목이 아직 Qwen·bge(PKG-2).
+- **이 환경에서 못 본 것**: Windows 실기(설치·WebView2 인쇄·알림·탐색기 끌어다 놓기·폴더 감시), GPU 팩 선택과 추론, 실제 Gemma 4의 플랜·추출·초안·답변 품질, 대용량, 한컴/Word 호환 — 목록 §2 "한계".
+- **점검 도구**는 세션 스크래치에만 있다(커밋하지 않음). 고칠 때 E2E로 옮길 단언: 화면마다 `documentElement.scrollWidth/Height ≤ 창`·휠 뒤 `window.scrollY = 0`(UI-1), 배율 150 %·최소 창에서 모든 대화상자가 창 안(UI-3), 어시스턴트 플랜 카드 가로 넘침(UI-2).
+- **다음**: 사용자 확인 뒤 `release/0.7.1`에서 §15의 묶음 1(PLN-1 → USR-1~4)부터 수정. 결정이 필요한 것 7건(PKG-1 EULA/자산, v0.7.0 게시 여부 — 0.7.1 게시 권장, 설정 문장을 규칙 먼저 볼지, USR-5 범위, 동작하지 않는 설정, 업무/참고 구분의 의미, Full 설치파일 정책)은 목록 §15.
+
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
@@ -1808,6 +1834,7 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 | 2026-11-10 0.3.0 1차 — 내장 양식 SW 개발 문서화 (b561120 + 후속 커밋) | `cargo test --workspace` 코어 303(4 ignored; `pipeline::schema` 13 보임/6 숨김 검사·`planner` 18·`projects` 18)·셸 3·평가 15·통합 1, clippy·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(SW 문구 31건·문맥 재작성, 기준선 재생성, 미달은 이전과 같은 mx-10 1건); vitest 25파일 147건(`mock-generate.test` 규칙 파서·프로젝트 템플릿 SW화, `template.test` 예시 견적서); Playwright 전체 실행 50건 중 48 통과 → 정리 예시 문서·어시스턴트 테스트 템플릿(유지보수) 수정 뒤 `organize`·`projects` 스펙 7/7 재실행 통과; `npm run build`·`licenses:check` 통과; CI 7개 잡 모두 성공(93fb59b 푸시 이벤트, run 42761926963) |
 | 2026-11-10 0.3.0 2~6차 통합 — 생성 템플릿 SW화(1번) · 토큰 예산/절별 생성(4번) · 프로젝트 단계·프로젝트별 정리·추적 사본(5+6번) · 문서 N개 스키마 도출(2번) · 글자 수정 이력(7번) | `cargo test --workspace` 코어 317(4 ignored; `generate` 토큰 예산·분할 2건, `projects`·`organize`·`export`·`aggregate`·`planner` 프로젝트 8건, `pipeline` 스키마 도출 3건, `documents::import` 이력 1건 포함)·셸 3·평가 15·통합 1, clippy(-D warnings)·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(기준선 +0.0 pt, 미달은 mx-10 1건); `npm run typecheck`·`npm run build`·`licenses:check` 통과, vitest 26파일 150건, Playwright 53/53(`generate` 4·`projects` 6·`organize` 4·`pipeline` 2·`dnd`·`documents` 5 재작성 포함); 병렬 에이전트 3개가 같은 트리에서 작업해 중간 WIP 스냅샷 3건(1c885b4·97acb87·d742501, `[skip ci]`)을 거쳤고 통합 커밋에서 CI 실행 — CI 7개 잡 모두 성공(d166b5b 푸시 이벤트, run 42771458691) |
 | 2026-11-10 0.3.0 릴리스 (772782f + 문서 77e8b69) | 버전 범프·고지/SBOM 재생성 뒤 `cargo test --workspace`·clippy·fmt·`cargo deny`·vitest·`npm run build`·`licenses:check`·`nsis:check` 통과; CI 7개 잡 성공(run 42771724261); Lite 설치파일 빌드 run 42772557097 성공, Release v0.3.0 게시(Lite 48.4 MiB + sha256 + SBOM + 고지) |
+| 2026-11-11 0.7.1 범프 + 0.7.0 전체 점검 (브랜치 `release/0.7.1`; 범프 16c9067, 코드 변경 없음) | 기준선: `main` dbb598e CI run 42938205630 · 범프 CI run 42938573265 모두 7개 잡 성공. 점검: 브라우저 빌드 Playwright 순회(19개 화면 × 배율 3종 + 대화상자, 스크린샷 128장; 콘솔 오류·번역 키 노출 0), 명령 대조 180개 일치, 플랜 문법 실험(llama-server + `tiny-gemma4`, system 계열 40회), 규칙 플래너에 설정 문장 11개(5개 실패 = USR-2). 결과 `docs/audit/v0.7.0.md` 149건 — 수정은 아직 없음 |
 | 2026-11-10 0.7.0 7건 일괄 (브랜치 `release/0.7.0`; 범프 d7c1f3e CI 통과, WIP be4e798·0c8c8ad·4bf1298, 포크 병합 ab369f1·0026c15 → 통합은 릴리스 기록 참고) | 코어: `DOCULENS_PDFIUM=… cargo test --workspace --no-fail-fast` 코어 336(4 ignored; `knowledge::chat` 1건, `generate::tests` revise 1건, `planner::tests` revise_draft 규칙 1건, `db` 0012 포함)·셸 3·평가 15·통합 1, clippy(-D warnings)·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 129건 99.2%(+0.0 pt, 기준선 재생성). 웹(통합 트리): `npm run typecheck`·`npm run build`·`licenses:check`·`nsis:check` 통과, vitest 26파일 155건(`draft.test` +3, `assistant.test` 9, `describePlan.test` 63 op, `mock-reference.test` asReference), Playwright 전체 66/66(2.9분; 새 `assistant.spec` 2, `generate.spec` 6, `scale.spec` 4, `reference.spec`·`projects.spec` 통합 탭) + 리뷰 반영 뒤 generate·assistant·agent·planner 20/20 재실행; CI·빌드는 릴리스 기록 참고 |
 | 2026-11-10 0.6.0 에이전트 전기능 (브랜치 `release/0.6.0`; WIP 34af57f·ee718ff → 통합 커밋은 릴리스 기록 참고) | `DOCULENS_PDFIUM=… cargo test --workspace --no-fail-fast` 코어 333(4 ignored; `settings_catalog` 2건, `planner::tests` 규칙 커버리지·2단계 라우팅·`exec_tests::agent_ops_run_against_the_workspace` 포함)·셸 3·평가 15·통합 1, clippy(-D warnings)·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 125건 99.2%(기준선 재생성); `npm run typecheck`·`npm run build`·`licenses:check`·`nsis:check` 통과, vitest 26파일 147건, Playwright 60/60(`agent.spec` 6건 포함, 통합 전체 1회 2.7분); CI run 42808591342(2efc181) 7개 잡 성공; Lite 빌드·게시 run 42810685950 → Release v0.6.0(51,010,802 B) |
 | 2026-11-10 0.5.0 프로젝트 중심 통합 (브랜치 `release/0.5.0`; WIP 94b6803·2661bf5·fcf34d7·bc806be → 통합 커밋은 CI 기록 참고) | `DOCULENS_PDFIUM=… cargo test --workspace --no-fail-fast` 코어 328(4 ignored; `db` 스키마 9→11 마이그레이션 1건, `knowledge::tests` 프로젝트 범위 1건, `planner` 참고 자료 문구·범위 프로젝트·`exec_tests` add_to_project 3건 포함)·셸 3·평가 15·통합 1, clippy(-D warnings)·fmt·`cargo deny` 통과(새 의존성 없음); 플래너 골든셋 99/100(+0.0 pt); `npm run typecheck`·`npm run build`·`licenses:check`·`nsis:check` 통과, vitest 26파일 147건(`aggregate.test` 삭제, `mock-reference.test` 3건 추가), Playwright 54/54(`reference.spec` 5건 + 재작성 스펙; 포크별 실행 44/44·10/10 뒤 통합 전체 1회); CI run 42795675001(3a2a26f) 7개 잡 성공; Lite 설치파일 빌드 run 42797299609 성공(아티팩트 50,824,823 B, publish=false) |
@@ -1883,6 +1910,8 @@ P6·P7 항목.
 
 ## 다음 단계 메모 (v1.x)
 
+000000. **0.7.1 — 0.7.0 점검 목록 처리(2026-11-11)**: `docs/audit/v0.7.0.md` 149건(A 4 · B 31 · C 71 · D 43) — **아직 수정 전**. 권장 순서는 목록 §15: 묶음 1(PLN-1 문법 키 순서 → USR-1~4 설정) → 2(화면: UI-1 창 전체 스크롤·UI-3 대화상자) → 3(확인 없는 덮어쓰기) → 4(기능 불능) → 5(실행 환경) → 6(배포·고지).
+   결정이 필요한 것 7건(PKG-1 EULA, v0.7.0 게시 여부 등)은 사용자 확인. Release v0.7.0은 게시하지 않았고 0.7.1 게시를 권장. "점검 보고" 표시 항목은 고치기 전에 재현부터.
 00000. **0.7.0 7건 일괄(2026-11-10)**: `docs/plan/v0.7.0.md` — 위 "0.7.0" 절대로 구현·검증·CI·Lite 빌드(run 42822456037, publish=false) 완료; Release v0.7.0 게시와 `main` 병합(PR)은 사용자 확인. 남은 것은 체크리스트 "0.7.0" 절(실모델로 절 수정 품질·세션 저장·보존 파기 확인)과
    계획 §4의 범위 밖 항목(프로젝트 저장 구조 통합, 초안 어시스턴트 다중 턴, 세션 검색·내보내기).
 0000. **0.6.0 에이전트 전기능(2026-11-10)**: `docs/plan/v0.6.0.md` — 위 "0.6.0" 절대로 구현·게시(Release v0.6.0, 2efc181). 남은 것은 `release/0.6.0` → `main` 재병합(사용자 PR), 체크리스트 "0.6.0" 절(실모델로 계열 선택 정확도·지연 확인)과
