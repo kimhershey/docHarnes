@@ -31,7 +31,9 @@ export function WorkspaceChooser({ mode, onOpened, showRecent = true }: Workspac
   const [name, setName] = useState("");
   const [inspection, setInspection] = useState<WorkspaceInspection | null>(null);
   const [busy, setBusy] = useState(false);
-  const [lockedBy, setLockedBy] = useState<{ pid: number; host: string } | null>(null);
+  // `forcible`: whether the lock can be taken over. A lock from another host can (nobody can tell whether that
+  // instance still runs); the lock of a DocuLens running on this PC cannot — the backend refuses it either way.
+  const [lockedBy, setLockedBy] = useState<{ pid: number; host: string; forcible: boolean } | null>(null);
 
   useEffect(() => {
     const p = path.trim();
@@ -74,8 +76,8 @@ export function WorkspaceChooser({ mode, onOpened, showRecent = true }: Workspac
       onOpened(ws);
     } catch (e) {
       if (errorCode(e) === "workspace_locked") {
-        const d = (e as { detail?: { pid?: number; host?: string } }).detail;
-        setLockedBy({ pid: d?.pid ?? 0, host: d?.host ?? "?" });
+        const d = (e as { detail?: { pid?: number; host?: string; forcible?: boolean } }).detail;
+        setLockedBy({ pid: d?.pid ?? 0, host: d?.host ?? "?", forcible: d?.forcible !== false });
       } else {
         toast(describeError(e, t), "danger");
       }
@@ -143,11 +145,13 @@ export function WorkspaceChooser({ mode, onOpened, showRecent = true }: Workspac
       )}
 
       {lockedBy && (
-        <div className="flex items-center justify-between gap-2 rounded-md border border-warn bg-warn-soft p-3 text-sm">
+        <div className="flex items-center justify-between gap-2 rounded-md border border-warn bg-warn-soft p-3 text-sm" data-testid="workspace-locked" data-forcible={lockedBy.forcible}>
           <span>{t("onboarding.workspace.inspect_locked", { pid: lockedBy.pid, host: lockedBy.host })}</span>
-          <Button variant="outline" size="sm" onClick={() => void submit(true)}>
-            {t("onboarding.workspace.force_unlock")}
-          </Button>
+          {lockedBy.forcible && (
+            <Button variant="outline" size="sm" onClick={() => void submit(true)} data-testid="workspace-force-unlock">
+              {t("onboarding.workspace.force_unlock")}
+            </Button>
+          )}
         </div>
       )}
 

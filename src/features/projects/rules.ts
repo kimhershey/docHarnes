@@ -4,7 +4,7 @@
 
 import type { TFunction } from "i18next";
 
-import type { DocTypeInfo, FieldDef, Rule, RuleOperand, SchemaRecord, Verdict } from "@/lib/types";
+import type { DocTypeInfo, Evidence, FieldDef, Rule, RuleOperand, SchemaRecord, Verdict } from "@/lib/types";
 
 export interface FieldOption {
   path: string;
@@ -103,6 +103,18 @@ export function unresolvedOperands(rule: Rule, schemas: SchemaRecord[] | undefin
   check(rule.left, "left");
   if (rule.op !== "present") check(rule.right, "right");
   return out;
+}
+
+/**
+ * The evidence states that say why a value is not settled, as `report::evidence_text` marks them in the
+ * report: the document has no extraction yet (추출 전), the field waits for review or was rejected there, or
+ * there is no document of the type. Every other state (approved, auto, absent …) has no mark.
+ */
+const EVIDENCE_STATUS_MARKS: readonly string[] = ["not_extracted", "pending", "rejected", "missing_document"];
+
+/** The mark next to a piece of evidence on the check results ("추출 전", "검토 대기" …); null for a settled value. */
+export function evidenceStatusLabel(status: Evidence["status"] | undefined, t: (k: string) => string): string | null {
+  return status && EVIDENCE_STATUS_MARKS.includes(status) ? t(`projects.results.evidence_status.${status}`) : null;
 }
 
 export function verdictVariant(v: Verdict): "ok" | "warn" | "danger" | "muted" {

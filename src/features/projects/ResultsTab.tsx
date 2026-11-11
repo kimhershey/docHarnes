@@ -12,20 +12,35 @@ import { formatDate } from "@/lib/utils";
 
 import { RelationsSection } from "./RelationsTab";
 import { ReportSection } from "./ReportTab";
-import { verdictVariant } from "./rules";
+import { evidenceStatusLabel, verdictVariant } from "./rules";
 
 function EvidenceLink({ e, onOpen, t }: { e: Evidence | null; onOpen: (e: Evidence) => void; t: (k: string, o?: Record<string, unknown>) => string }) {
-  if (!e || !e.doc_name) return <span className="text-fg-subtle">{e?.value ?? "—"}</span>;
-  return (
-    <button type="button" className="inline-flex max-w-[16rem] items-center gap-1 truncate text-accent hover:underline cursor-pointer" onClick={() => onOpen(e)} title={e.value ?? undefined} aria-label={t("projects.results.evidence_open", { name: e.doc_name })} data-testid="result-evidence">
-      <ExternalLink className="size-3 shrink-0" aria-hidden="true" />
-      <span className="truncate">
-        {e.doc_name}
-        {e.page ? ` p.${e.page}` : ""}
-        {e.label ? ` · ${e.label}` : ""}
-        {e.value ? ` = ${e.value}` : ""}
+  const status = e ? evidenceStatusLabel(e.status, t) : null;
+  const mark = status && (
+    <span className="shrink-0 text-fg-subtle" data-testid="result-evidence-status" data-status={e?.status ?? undefined}>
+      [{status}]
+    </span>
+  );
+  if (!e || !e.doc_name)
+    return (
+      <span className="inline-flex items-center gap-1 text-fg-subtle">
+        {e?.value ?? "—"}
+        {mark}
       </span>
-    </button>
+    );
+  return (
+    <span className="inline-flex max-w-full items-center gap-1">
+      <button type="button" className="inline-flex max-w-[16rem] items-center gap-1 truncate text-accent hover:underline cursor-pointer" onClick={() => onOpen(e)} title={e.value ?? undefined} aria-label={t("projects.results.evidence_open", { name: e.doc_name })} data-testid="result-evidence">
+        <ExternalLink className="size-3 shrink-0" aria-hidden="true" />
+        <span className="truncate">
+          {e.doc_name}
+          {e.page ? ` p.${e.page}` : ""}
+          {e.label ? ` · ${e.label}` : ""}
+          {e.value ? ` = ${e.value}` : ""}
+        </span>
+      </button>
+      {mark}
+    </span>
   );
 }
 

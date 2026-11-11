@@ -5,8 +5,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/ipc";
 import { generateKeys, journalKeys, maintenanceKey, projectKeys } from "@/lib/queries";
 import { queryClient, queryKeys } from "@/lib/query-client";
-import type { SchemaDiscoveryOutcome } from "@/lib/types";
+import type { ChatSessionSummary, SchemaDiscoveryOutcome, WorkspaceView } from "@/lib/types";
 
+import { resetAssistant, useAssistantStore } from "./assistant";
 import { usePipelineStore } from "./pipeline";
 import { useSchemasStore } from "./schemas";
 import { resetWorkspaceQueries, useWorkspaceStore } from "./workspace";
@@ -96,5 +97,52 @@ describe("workspace switch", () => {
     await expect(useWorkspaceStore.getState().open("E:\\unplugged")).rejects.toMatchObject({ code: "invalid_workspace" });
     for (const key of scoped) expect(queryClient.getQueryData(key), JSON.stringify(key)).toEqual(fromPreviousWorkspace);
     open.mockRestore();
+  });
+
+  // KNO-9: the plan editor's keystrokes are written a moment after the last one. A switch in that moment sent
+  // them to the other workspace's database (or dropped them); they go out before the backend is told to switch.
+  it("sends the chat writes that still wait before the backend opens, creates or closes a workspace", async () => {
+    const calls: string[] = [];
+    const session: ChatSessionSummary = { id: "s1", title: "", title_auto: true, created_at: "2026-11-11T00:00:00Z", updated_at: "2026-11-11T00:00:00Z", message_count: 0 };
+    const view = { path: "C:\\Work\\B" } as WorkspaceView;
+    const spies = [
+      vi.spyOn(api, "chatSessionsList").mockResolvedValue([session]),
+      vi.spyOn(api, "chatMessagesList").mockResolvedValue([]),
+      vi.spyOn(api, "chatMessagePut").mockImplementation(async (_sid, _seq, payload) => {
+        // The write takes a moment: the switch must wait for it, not merely start it.
+        await new Promise((r) => setTimeout(r, 5));
+        calls.push(`put ${(payload as { text?: string }).text ?? ""}`);
+      }),
+      vi.spyOn(api, "workspaceOpen").mockImplementation(async () => (calls.push("open"), view)),
+      vi.spyOn(api, "workspaceCreate").mockImplementation(async () => (calls.push("create"), view)),
+      vi.spyOn(api, "workspaceClose").mockImplementation(async () => void calls.push("close")),
+    ];
+    const typed = async (text: string) => {
+      resetAssistant();
+      useAssistantStore.getState().bind("C:\\Work\\A");
+      for (let i = 0; i < 10 && !useAssistantStore.getState().loaded.s1; i++) await new Promise((r) => setTimeout(r, 0));
+      const s = useAssistantStore.getState();
+      const id = s.push("s1", { role: "user", text: "초안" });
+      // Let the push itself be stored, then leave a deferred edit waiting (written 300 ms later on its own).
+      await new Promise((r) => setTimeout(r, 20));
+      calls.length = 0;
+      s.patch("s1", id, (m) => (m.role === "user" ? { ...m, text } : m), { defer: true });
+    };
+    try {
+      await typed("닫기 전");
+      await useWorkspaceStore.getState().close();
+      expect(calls).toEqual(["put 닫기 전", "close"]);
+
+      await typed("열기 전");
+      await useWorkspaceStore.getState().open("C:\\Work\\B");
+      expect(calls).toEqual(["put 열기 전", "open"]);
+
+      await typed("만들기 전");
+      await useWorkspaceStore.getState().create("C:\\Work\\B");
+      expect(calls).toEqual(["put 만들기 전", "create"]);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+      resetAssistant();
+    }
   });
 });
