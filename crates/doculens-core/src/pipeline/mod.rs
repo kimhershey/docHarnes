@@ -84,8 +84,12 @@ pub struct ProcessRequest {
     pub document_ids: Vec<String>,
     pub level: PipelineLevel,
     pub schema: SchemaChoice,
-    /// Re-run stages whose results already exist.
+    /// Re-run stages whose results already exist. OCR text is read again; page text the user
+    /// corrected by hand (`text_source = manual`) is only replaced together with `reocr_manual`.
     pub force: bool,
+    /// With `force`: also re-OCR pages whose text was corrected by hand, replacing the
+    /// correction (off by default — a forced re-extraction must not undo the user's typing).
+    pub reocr_manual: bool,
     /// Inference profile override (`None` = settings).
     pub profile: Option<crate::settings::Profile>,
     /// Pages to restrict OCR / extraction to (empty = all).
@@ -105,6 +109,7 @@ impl Default for ProcessRequest {
             level: PipelineLevel::Extract,
             schema: SchemaChoice::Auto,
             force: false,
+            reocr_manual: false,
             profile: None,
             pages: Vec::new(),
             precise: None,

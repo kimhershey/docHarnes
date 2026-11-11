@@ -428,7 +428,8 @@ pub fn get_page(conn: &Connection, id: &str, page_no: u32) -> rusqlite::Result<O
 }
 
 /// Stores a manual correction of a page's text (`text_source = 'manual'`, design §3.7 "직접 수정"):
-/// it survives re-renders and the OCR stage (only a forced re-OCR replaces it) and bumps the
+/// it survives re-renders and the OCR stage (only a forced re-OCR that asks for it with
+/// `ProcessRequest.reocr_manual` replaces it; a changed source file drops it) and bumps the
 /// document so the knowledge indexer re-chunks it. An empty text clears the page's text.
 /// Returns false when the page does not exist.
 pub fn set_page_text(conn: &Connection, id: &str, page_no: u32, text: &str) -> rusqlite::Result<bool> {

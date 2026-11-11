@@ -285,30 +285,55 @@ fn scanned_receipt_runs_end_to_end() {
     assert_eq!(used, 2);
 }
 
+/// Audit PIP-2: a forced re-run (the review screen's "재추출", the form editor's "테스트") read
+/// every page again and replaced the page text the user had corrected by hand.
 #[test]
-fn manual_text_is_kept_unless_ocr_is_forced() {
+fn manual_text_is_only_replaced_when_the_request_asks_for_it() {
     let w = World::new();
-    w.add_doc("m1", "memo.pdf", SourceKind::Pdf, &[None]);
+    w.add_doc("m1", "memo.pdf", SourceKind::Pdf, &[None, None]);
     w.db.with(|c| docs::set_page_text(c, "m1", 1, "손으로 고친 영수증 텍스트")).unwrap();
     w.chat.push("classify", classify_reply("receipt", 0));
-    let deps = w.deps(None);
-    let req = ProcessRequest { document_ids: vec!["m1".into()], level: PipelineLevel::Ocr, ..Default::default() };
-    let report = run::process(&deps, &req, &mut |_| {}).unwrap();
-    assert_eq!(report.ocr_pages, 0, "manual text is not overwritten: {report:?}");
-    let page = &w.pages("m1")[0];
-    assert_eq!(page.text.as_deref(), Some("손으로 고친 영수증 텍스트"));
-    assert_eq!(page.text_source.as_deref(), Some("manual"));
-    // A forced re-run replaces it with OCR output.
     w.chat.push_ocr(RECEIPT_OCR);
-    let forced = ProcessRequest {
+    let deps = w.deps(None);
+    let source = |w: &World, page: usize| w.pages("m1")[page - 1].text_source.clone();
+    let ocr = |force: bool, reocr_manual: bool| ProcessRequest {
         document_ids: vec!["m1".into()],
         level: PipelineLevel::Ocr,
-        force: true,
+        force,
+        reocr_manual,
         ..Default::default()
     };
-    let report = run::process(&deps, &forced, &mut |_| {}).unwrap();
+    // A normal run reads the page without text and leaves the corrected one alone.
+    let report = run::process(&deps, &ocr(false, false), &mut |_| {}).unwrap();
+    assert_eq!(report.ocr_pages, 1, "manual text is not overwritten: {report:?}");
+    assert_eq!(w.pages("m1")[0].text.as_deref(), Some("손으로 고친 영수증 텍스트"));
+    assert_eq!((source(&w, 1).as_deref(), source(&w, 2).as_deref()), (Some("manual"), Some("ocr")));
+    // Force reads the OCR page again — and still keeps the manual correction.
+    let report = run::process(&deps, &ocr(true, false), &mut |_| {}).unwrap();
     assert_eq!(report.ocr_pages, 1, "{report:?}");
-    assert_eq!(w.pages("m1")[0].text_source.as_deref(), Some("ocr"));
+    assert_eq!(w.pages("m1")[0].text.as_deref(), Some("손으로 고친 영수증 텍스트"));
+    assert_eq!(source(&w, 1).as_deref(), Some("manual"));
+    // `reocr_manual` without force changes nothing.
+    assert_eq!(run::process(&deps, &ocr(false, true), &mut |_| {}).unwrap().ocr_pages, 0);
+    assert_eq!(source(&w, 1).as_deref(), Some("manual"));
+    // Only the explicit flag replaces the correction with OCR output.
+    let report = run::process(&deps, &ocr(true, true), &mut |_| {}).unwrap();
+    assert_eq!(report.ocr_pages, 2, "{report:?}");
+    assert_eq!(source(&w, 1).as_deref(), Some("ocr"));
+    assert!(w.pages("m1")[0].text.as_deref().unwrap().contains("스타벅스"));
+    // A page the user emptied by hand holds no correction: a forced run reads it again.
+    w.db.with(|c| docs::set_page_text(c, "m1", 1, "  ")).unwrap();
+    assert_eq!(source(&w, 1).as_deref(), Some("manual"));
+    assert_eq!(run::process(&deps, &ocr(false, false), &mut |_| {}).unwrap().ocr_pages, 0);
+    assert_eq!(run::process(&deps, &ocr(true, false), &mut |_| {}).unwrap().ocr_pages, 2);
+    assert_eq!(source(&w, 1).as_deref(), Some("ocr"));
+    // The request reads its flag from JSON as sent by the UI; without it the default is off.
+    let parsed: ProcessRequest =
+        serde_json::from_value(json!({ "document_ids": ["m1"], "level": "extract", "force": true })).unwrap();
+    assert!(parsed.force && !parsed.reocr_manual && !parsed.skip_extracted);
+    let parsed: ProcessRequest =
+        serde_json::from_value(json!({ "document_ids": ["m1"], "force": true, "reocr_manual": true })).unwrap();
+    assert!(parsed.reocr_manual);
 }
 
 #[test]

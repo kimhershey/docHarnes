@@ -234,14 +234,14 @@ fn process_document(
         if !wanted || page.is_blank == Some(true) || page.width_px == 0 {
             continue;
         }
-        // OCR output and manual corrections are only replaced by a forced re-run.
-        let is_ocr = matches!(page.text_source.as_deref(), Some("ocr") | Some("manual"));
-        let do_ocr = if is_ocr {
-            req.force
-        } else if has_text(page) {
-            deps.settings.ocr_digital_pdf && (req.force || page.ocr_at.is_none())
-        } else {
-            true
+        // OCR output is only replaced by a forced re-run. A manual correction is the user's own
+        // text: force alone keeps it (the review screen's "재추출" used to wipe it), the request has
+        // to ask for it with `reocr_manual`. A page the user emptied by hand has nothing to lose.
+        let do_ocr = match page.text_source.as_deref() {
+            Some("manual") => req.force && (req.reocr_manual || !has_text(page)),
+            Some("ocr") => req.force,
+            _ if has_text(page) => deps.settings.ocr_digital_pdf && (req.force || page.ocr_at.is_none()),
+            _ => true,
         };
         if !do_ocr {
             continue;
