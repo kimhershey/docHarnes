@@ -406,7 +406,11 @@ export function AssistantPage() {
     if (!requiresConfirmation(response)) await runPlan(sid, { ...card, id } as PlanMessage);
   };
 
-  const send = async (value: string) => {
+  /**
+   * Sends a sentence. `searchOnly` is the "근거만 찾기" mode of this one call: a caller that has just
+   * switched the mode passes the new value, since the `evidenceOnly` this closure sees is still the old one.
+   */
+  const send = async (value: string, searchOnly: boolean = evidenceOnly) => {
     const v = value.trim();
     // The session the command belongs to is fixed here: a switch while it runs does not redirect its cards.
     const sid = useAssistantStore.getState().activeId;
@@ -414,7 +418,7 @@ export function AssistantPage() {
     setText("");
     push(sid, { role: "user", text: v, attachments: scope === "selection" && selectionKind === "attached" ? attached.map((d) => ({ id: d.id, name: d.name })) : undefined });
     // 0. "근거만 찾기": every sentence is a search (slash commands still run).
-    if (evidenceOnly && !isSlashCommand(v)) {
+    if (searchOnly && !isSlashCommand(v)) {
       await findEvidence(sid, v);
       return;
     }
@@ -765,8 +769,9 @@ export function AssistantPage() {
                     pending={m.pending}
                     embeddingReady={embeddingReady}
                     onAsk={(q) => {
+                      // "이 결과로 질문": the model is asked now — not another search (KNO-4).
                       setEvidenceOnly(false);
-                      void send(q);
+                      void send(q, false);
                     }}
                   />
                 )}

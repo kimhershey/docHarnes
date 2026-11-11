@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { createWorkspace, freshApp, openAssistantScreen } from "./helpers";
+import { createWorkspace, freshApp, importViaLibrary, openAssistantScreen } from "./helpers";
 
 import ko from "../src/i18n/ko.json" with { type: "json" };
 
@@ -174,6 +174,28 @@ test.describe("assistant chat sessions", () => {
     await page.getByTestId("assistant-input").press("Enter");
     await expect(page.getByTestId("assistant-input")).toHaveValue("");
     await expect(page.getByTestId("assistant-messages")).toContainText("견적서 월별 폴더로 옮겨");
+  });
+
+  // KNO-4: "이 결과로 질문" switched "근거만 찾기" off and sent the question in the same click — with the
+  // mode value of the previous render, so the first click only searched again.
+  test("'이 결과로 질문' on an evidence card asks the model on the first click", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서.hwpx"]);
+    await openAssistantScreen(page);
+    await page.getByTestId("assistant-evidence-only").click();
+    await send(page, "견적서 내용은?");
+    const evidence = page.locator('[data-testid="assistant-card-evidence"]');
+    await expect(evidence).toHaveCount(1);
+    await expect(evidence.first().getByTestId("evidence-hit").first()).toBeVisible({ timeout: 15_000 });
+
+    await evidence.first().getByTestId("evidence-ask").first().click();
+    await expect(page.getByTestId("assistant-evidence-only")).toHaveAttribute("data-state", "unchecked");
+    const answer = page.locator('[data-testid="assistant-card-answer"] [data-testid="answer-card"]');
+    await expect(answer).toHaveCount(1, { timeout: 15_000 });
+    await expect(answer.first()).toHaveAttribute("data-answer-state", "done", { timeout: 15_000 });
+    // One search, one answer — not a second search.
+    await expect(evidence).toHaveCount(1);
   });
 
   test("the input waits for the sessions and the composer sends into the active one", async ({ page }) => {
