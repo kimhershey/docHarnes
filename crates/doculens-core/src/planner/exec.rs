@@ -105,6 +105,11 @@ pub struct PlanPreview {
     pub steps: Vec<StepPreview>,
     /// Whether the plan needs the card (side effects, overwrite, deletion …).
     pub requires_confirmation: bool,
+    /// Whether any step works on the documents in scope (`validate::uses_scope`). `false` for
+    /// plans of settings / navigation / administration ops: `document_count` then says nothing
+    /// about the plan and the card should not show it.
+    #[serde(default)]
+    pub uses_scope: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1330,7 +1335,9 @@ fn run_step(
             };
             let project = db.with(|c| projects_repo::save_project(c, &input))?;
             let mut added = 0u32;
-            if !plan.scope.is_empty() {
+            // Only documents the plan names (or an earlier step imported) join the new project;
+            // the validator no longer fills the open project in as a default scope (audit PLN-5).
+            if !plan.scope.is_empty() || imported.is_some() {
                 let docs_ = working_set(deps, plan, imported)?;
                 if !docs_.is_empty() {
                     added = crate::projects::copies::add_documents(
@@ -2488,6 +2495,7 @@ pub fn preview(
         document_ids: ids(&docs_),
         steps: Vec::new(),
         requires_confirmation: plan.requires_confirmation,
+        uses_scope: super::validate::uses_scope(plan),
     };
     for (index, op) in plan.operations.iter().enumerate() {
         let kind = op.kind();
@@ -3011,6 +3019,20 @@ pub fn preview(
                     },
                     json!({ "suggested": suggested, "undecided": undecided, "apply": apply, "use_model": use_model, "suggestions": result.map(|r| r.suggestions) }),
                     apply.unwrap_or(false),
+                )
+            }
+            // A new project takes the documents the command names — the card says how many (audit PLN-5).
+            Op::CreateProject { name, .. } => {
+                let n = if plan.scope.is_empty() { 0 } else { docs_.len() };
+                (
+                    match (ko, n) {
+                        (true, 0) => format!("새 프로젝트 '{name}'(문서 없이 만듦)"),
+                        (true, n) => format!("새 프로젝트 '{name}' · 문서 {n}건을 함께 넣음"),
+                        (false, 0) => format!("New project '{name}' (no documents)"),
+                        (false, n) => format!("New project '{name}' with {n} documents"),
+                    },
+                    json!({ "name": name, "documents": n }),
+                    true,
                 )
             }
             // `review correct`: the field and its current value in each document.
