@@ -3035,6 +3035,25 @@ pub fn preview(
                     true,
                 )
             }
+            // Taking documents out of a project deletes their copies in the project folder: two or
+            // more are confirmed first (audit PLN-6).
+            Op::RemoveFromProject { project, doc_ids } => {
+                let n = if doc_ids.is_empty() { docs_.len() } else { doc_ids.len() };
+                let name = project
+                    .as_deref()
+                    .and_then(|pid| db.with(|c| projects_repo::get_project(c, pid)).ok().flatten())
+                    .map(|p| p.name)
+                    .unwrap_or_default();
+                (
+                    if ko {
+                        format!("프로젝트 '{name}'에서 문서 {n}건 제외(프로젝트 폴더의 사본 삭제, 원본은 남음)")
+                    } else {
+                        format!("{n} documents leave project '{name}' (their copies in the project folder are deleted; the originals stay)")
+                    },
+                    json!({ "project_id": project, "name": name, "documents": n }),
+                    n >= 2,
+                )
+            }
             // `review correct`: the field and its current value in each document.
             Op::Review { action: ReviewOp::Correct, field, value, .. } => {
                 let reference = field.as_deref().unwrap_or_default();
