@@ -81,6 +81,38 @@ test.describe("assistant chat sessions", () => {
     await expect(page.locator('[data-testid="assistant-card-executed"]')).toHaveCount(0);
   });
 
+  // KNO-2: the assistant's own "워크스페이스 … 만들어" switches the workspace before its "실행됨" card is
+  // pushed. That card belongs to the conversation of the old workspace: written under the old session id
+  // it would land in the new workspace's database, where the backend (the mock does the same) re-creates
+  // the unknown session — an untitled ghost chat.
+  test("a card that arrives after the assistant switched the workspace is not written into the new one", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openAssistantScreen(page);
+    await send(page, "새 워크스페이스 D:\\Other 만들어");
+    await expect(page.getByTestId("page-library")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("workspace-switcher")).toHaveAttribute("title", "D:\\Other");
+
+    await openAssistantScreen(page);
+    // Exactly the one fresh chat of the new workspace, empty.
+    await expect(rows(page)).toHaveCount(1);
+    await expect(activeRow(page)).toContainText(ko.assistant.sessions.untitled);
+    await expect(page.getByTestId("assistant-memory")).toHaveAttribute("data-turns", "0");
+    await expect(page.getByTestId("assistant-send")).toBeEnabled();
+    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("doculens.mock.chat") ?? "{}") as Record<string, { sessions: { id: string }[]; messages: Record<string, unknown[]> }>);
+    expect(stored["D:\\Other"]!.sessions).toHaveLength(1);
+    expect(Object.values(stored["D:\\Other"]!.messages).flat()).toHaveLength(0);
+    // The first workspace keeps the command in its own chat.
+    expect(stored["C:\\Work\\Docs"]!.sessions).toHaveLength(1);
+    expect(Object.values(stored["C:\\Work\\Docs"]!.messages).flat()).toHaveLength(1);
+
+    // A reload hydrates from the store alone: still one chat.
+    await page.reload();
+    await expect(page.getByTestId("app-shell")).toBeVisible();
+    await openAssistantScreen(page);
+    await expect(rows(page)).toHaveCount(1);
+  });
+
   test("the input waits for the sessions and the composer sends into the active one", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);

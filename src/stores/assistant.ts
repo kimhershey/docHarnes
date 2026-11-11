@@ -30,6 +30,8 @@ export type NewMessage = DistributiveOmit<Message, "id" | "createdAt">;
 
 /** The stable empty list (a selector must return the same reference while nothing changes). */
 export const EMPTY_MESSAGES: Message[] = [];
+/** What `push` returns for a message that was not accepted (see `accepts`): no message has this id. */
+export const DROPPED = -1;
 /** Auto titles: the first user message clipped to this many characters (the core applies the same rule). */
 export const AUTO_TITLE_CHARS = 40;
 const ACTIVE_KEY = "doculens.assistant.active";
@@ -44,10 +46,20 @@ const ACTIVE_KEY = "doculens.assistant.active";
  * on stream deltas, which live in the knowledge store. The `ui_actions` owed by job-backed
  * plans are tracked by job id per workspace, whichever session is open, so the assistant
  * page can run them exactly once when it observes the finished job.
+ *
+ * A request can outlive its conversation: the workspace is switched (by the user, or by the
+ * assistant's own "워크스페이스 … 열어") or the chat is deleted while a plan / answer is still on
+ * its way. What such a request writes afterwards must go nowhere — the backend is already on the
+ * other workspace's database and re-creates a session it does not know, which leaves an untitled
+ * ghost chat there. So a request captures `generation` together with its session id when it
+ * starts, and `push` / `patch` drop what arrives for another generation or for a session that
+ * is no longer listed (`accepts`).
  */
 interface AssistantState {
   /** Workspace the conversations belong to (null = none yet). */
   workspace: string | null;
+  /** Counts the workspaces this store was bound to: it changes on every switch (`bind` to another path, `resetAssistant`). */
+  generation: number;
   /** The session list / active messages are being loaded (the composer waits). */
   hydrating: boolean;
   sessions: ChatSessionSummary[];
@@ -61,9 +73,17 @@ interface AssistantState {
   /** Binds the conversations to a workspace; a different path starts afresh and hydrates. */
   bind: (workspace: string | null) => void;
   hydrate: () => Promise<void>;
-  /** Appends to the session captured when the request started (never "whatever is active now"). */
-  push: (sessionId: string, message: NewMessage) => number;
-  patch: (sessionId: string, id: number, f: (m: Message) => Message) => void;
+  /**
+   * Whether a request that started in `generation` (omitted = now) may still write into `sessionId`:
+   * the store is on the same workspace and the session is one of its chats (not deleted meanwhile).
+   */
+  accepts: (sessionId: string, generation?: number) => boolean;
+  /**
+   * Appends to the session captured when the request started (never "whatever is active now").
+   * Returns the message id, or `DROPPED` when the conversation is gone (`accepts`).
+   */
+  push: (sessionId: string, message: NewMessage, generation?: number) => number;
+  patch: (sessionId: string, id: number, f: (m: Message) => Message, generation?: number) => void;
   /** "새 채팅": a fresh session (the active one is reused while it is still empty). Resolves to its id. */
   newSession: () => Promise<string | null>;
   select: (id: string) => Promise<void>;
@@ -162,66 +182,130 @@ function touch(sessions: ChatSessionSummary[], id: string, message: Message, cre
 
 /** Patches of one message are written together, this long after the last one (plan edits are keystroke-wise). */
 export const PATCH_WRITE_DELAY_MS = 300;
-const pendingWrites = new Map<string, { timer: ReturnType<typeof setTimeout>; write: () => void }>();
 
-/** Writes every pending patch now (tests; the app relies on the delay being short). */
-export function flushChatWrites(): void {
-  for (const [key, w] of pendingWrites) {
-    clearTimeout(w.timer);
-    pendingWrites.delete(key);
-    w.write();
+/**
+ * One slot per message with something to write. At most one write of a message is in flight — a newer
+ * state waits for it, so the stored message can never go back to an older one — and a waiting patch is
+ * written once its delay has passed. A slot belongs to the workspace generation it was opened in.
+ */
+interface WriteSlot {
+  sessionId: string;
+  id: number;
+  generation: number;
+  timer: ReturnType<typeof setTimeout> | null;
+  inflight: Promise<void> | null;
+  /** The message changed while a write was in flight: write once more when that one is done. */
+  again: boolean;
+}
+const writeSlots = new Map<string, WriteSlot>();
+/** Sessions being deleted: nothing more is written into them. */
+const removing = new Set<string>();
+
+/** Writes the message's latest state now (after the write in flight, if there is one). */
+function writeNow(key: string, slot: WriteSlot): void {
+  if (slot.timer) {
+    clearTimeout(slot.timer);
+    slot.timer = null;
+  }
+  if (slot.inflight) {
+    slot.again = true;
+    return;
+  }
+  slot.again = false;
+  const s = useAssistantStore.getState();
+  // The workspace may have changed or the chat been deleted while the write waited: then it goes nowhere.
+  const m = s.accepts(slot.sessionId, slot.generation) ? (s.messagesBySession[slot.sessionId] ?? []).find((x) => x.id === slot.id) : undefined;
+  if (!m) {
+    if (writeSlots.get(key) === slot) writeSlots.delete(key);
+    return;
+  }
+  slot.inflight = api
+    .chatMessagePut(slot.sessionId, m.id, storable(m))
+    .then(
+      () => undefined,
+      (e: unknown) => console.warn("chat message not stored", e),
+    )
+    .then(() => {
+      slot.inflight = null;
+      if (slot.again) writeNow(key, slot);
+      else if (!slot.timer && writeSlots.get(key) === slot) writeSlots.delete(key);
+    });
+}
+
+function scheduleWrite(sessionId: string, id: number, generation: number, delayMs: number): void {
+  const key = `${sessionId}/${id}`;
+  let slot = writeSlots.get(key);
+  if (!slot || slot.generation !== generation) {
+    slot = { sessionId, id, generation, timer: null, inflight: null, again: false };
+    writeSlots.set(key, slot);
+  }
+  const current = slot;
+  if (delayMs <= 0) {
+    writeNow(key, current);
+    return;
+  }
+  if (current.timer) clearTimeout(current.timer);
+  current.timer = setTimeout(() => {
+    current.timer = null;
+    writeNow(key, current);
+  }, delayMs);
+}
+
+/** Forgets what is still waiting (all of it, or one session's); writes in flight finish on their own. */
+function dropWaitingWrites(sessionId?: string): void {
+  for (const [key, slot] of [...writeSlots]) {
+    if (sessionId !== undefined && slot.sessionId !== sessionId) continue;
+    if (slot.timer) clearTimeout(slot.timer);
+    slot.timer = null;
+    slot.again = false;
+    if (sessionId === undefined || !slot.inflight) writeSlots.delete(key);
+  }
+}
+
+/** Resolves once no write of the session is in flight any more. */
+async function writesSettled(sessionId: string): Promise<void> {
+  for (;;) {
+    const inflight = [...writeSlots.values()].filter((s) => s.sessionId === sessionId && s.inflight).map((s) => s.inflight);
+    if (inflight.length === 0) return;
+    await Promise.all(inflight);
+  }
+}
+
+/** Writes every waiting patch now; resolves once nothing is in flight any more. */
+export async function flushChatWrites(): Promise<void> {
+  for (;;) {
+    for (const [key, slot] of [...writeSlots]) if (slot.timer) writeNow(key, slot);
+    const inflight = [...writeSlots.values()].filter((s) => s.inflight).map((s) => s.inflight);
+    if (inflight.length === 0) return;
+    await Promise.all(inflight);
   }
 }
 
 export const useAssistantStore = create<AssistantState>((set, get) => {
-  const write = (sessionId: string, m: Message) => {
-    void api.chatMessagePut(sessionId, m.id, storable(m)).catch((e: unknown) => console.warn("chat message not stored", e));
-  };
-  /** A new message is written at once. */
-  const persist = (sessionId: string, m: Message) => {
-    const key = `${sessionId}/${m.id}`;
-    const w = pendingWrites.get(key);
-    if (w) {
-      clearTimeout(w.timer);
-      pendingWrites.delete(key);
-    }
-    write(sessionId, m);
-  };
-  /** A patched message is written once the patches settle (the latest state of the message at that time). */
-  const persistSoon = (sessionId: string, id: number) => {
-    const key = `${sessionId}/${id}`;
-    const prev = pendingWrites.get(key);
-    if (prev) clearTimeout(prev.timer);
-    const doWrite = () => {
-      pendingWrites.delete(key);
-      const m = (get().messagesBySession[sessionId] ?? []).find((x) => x.id === id);
-      if (m) write(sessionId, m);
-    };
-    pendingWrites.set(key, { timer: setTimeout(doWrite, PATCH_WRITE_DELAY_MS), write: doWrite });
-  };
   const bumpNextId = (rows: ChatMessageRow[]) => {
     const max = rows.reduce((acc, r) => Math.max(acc, r.seq), 0);
     if (max >= get().nextId) set({ nextId: max + 1 });
   };
   /** Loads a session's messages once (the workspace may change meanwhile: then the result is dropped). */
   const load = async (id: string) => {
-    const ws = get().workspace;
+    const generation = get().generation;
     if (get().loaded[id]) return;
     try {
       const rows = await api.chatMessagesList(id);
-      if (get().workspace !== ws) return;
+      if (get().generation !== generation) return;
       const messages = rows.map(restoreMessage).filter((m): m is Message => m !== null);
       bumpNextId(rows);
       set((s) => ({ messagesBySession: { ...s.messagesBySession, [id]: messages }, loaded: { ...s.loaded, [id]: true } }));
     } catch (e) {
       console.warn("chat session not loaded", e);
-      if (get().workspace !== ws) return;
+      if (get().generation !== generation) return;
       set((s) => ({ messagesBySession: { ...s.messagesBySession, [id]: s.messagesBySession[id] ?? [] }, loaded: { ...s.loaded, [id]: true } }));
     }
   };
 
   return {
     workspace: null,
+    generation: 0,
     hydrating: false,
     sessions: [],
     activeId: null,
@@ -232,18 +316,21 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
 
     bind: (workspace) => {
       if (get().workspace === workspace) return;
-      set({ workspace, sessions: [], activeId: null, messagesBySession: {}, loaded: {}, pendingUiActions: {}, hydrating: workspace !== null });
+      // The backend is already on the other workspace: what still waits to be written belongs to the old one.
+      dropWaitingWrites();
+      set((s) => ({ workspace, generation: s.generation + 1, sessions: [], activeId: null, messagesBySession: {}, loaded: {}, pendingUiActions: {}, hydrating: workspace !== null }));
       if (workspace !== null) void get().hydrate();
     },
 
     hydrate: async () => {
       const ws = get().workspace;
+      const generation = get().generation;
       if (!ws) return;
       try {
         let sessions = await api.chatSessionsList();
-        if (get().workspace !== ws) return;
+        if (get().generation !== generation) return;
         if (sessions.length === 0) sessions = [await api.chatSessionCreate(null)];
-        if (get().workspace !== ws) return;
+        if (get().generation !== generation) return;
         const remembered = readActive(ws);
         const activeId = (sessions.find((s) => s.id === remembered) ?? sessions[0]!).id;
         set({ sessions, activeId });
@@ -252,11 +339,18 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
       } catch (e) {
         console.warn("chat sessions not loaded", e);
       } finally {
-        if (get().workspace === ws) set({ hydrating: false });
+        if (get().generation === generation) set({ hydrating: false });
       }
     },
 
-    push: (sessionId, message) => {
+    accepts: (sessionId, generation) => {
+      const s = get();
+      if (generation !== undefined && generation !== s.generation) return false;
+      return !removing.has(sessionId) && s.sessions.some((x) => x.id === sessionId);
+    },
+
+    push: (sessionId, message, generation) => {
+      if (!get().accepts(sessionId, generation)) return DROPPED;
       const id = get().nextId;
       const createdAt = new Date().toISOString();
       const m = { ...message, id, createdAt } as Message;
@@ -265,11 +359,13 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
         messagesBySession: { ...s.messagesBySession, [sessionId]: [...(s.messagesBySession[sessionId] ?? []), m] },
         sessions: touch(s.sessions, sessionId, m, createdAt, true),
       }));
-      persist(sessionId, m);
+      // A new message is written at once.
+      scheduleWrite(sessionId, id, get().generation, 0);
       return id;
     },
 
-    patch: (sessionId, id, f) => {
+    patch: (sessionId, id, f, generation) => {
+      if (!get().accepts(sessionId, generation)) return;
       let patched = false;
       set((s) => {
         const list = s.messagesBySession[sessionId];
@@ -281,15 +377,16 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
         });
         return { messagesBySession: { ...s.messagesBySession, [sessionId]: next } };
       });
-      if (patched) persistSoon(sessionId, id);
+      // A patched message is written once the patches settle (the latest state of the message at that time).
+      if (patched) scheduleWrite(sessionId, id, get().generation, PATCH_WRITE_DELAY_MS);
     },
 
     newSession: async () => {
-      const { activeId, messagesBySession, workspace } = get();
+      const { activeId, messagesBySession, workspace, generation } = get();
       if (!workspace) return null;
       if (activeId && (messagesBySession[activeId] ?? []).length === 0) return activeId;
       const created = await api.chatSessionCreate(null);
-      if (get().workspace !== workspace) return null;
+      if (get().generation !== generation) return null;
       set((s) => ({
         sessions: [created, ...s.sessions.filter((x) => x.id !== created.id)],
         activeId: created.id,
@@ -318,9 +415,23 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     },
 
     remove: async (id) => {
-      const workspace = get().workspace;
-      await api.chatSessionDelete(id);
-      if (get().workspace !== workspace) return;
+      const { workspace, generation } = get();
+      // From here on nothing is written into the session: a message that reached the backend after the
+      // delete would make it re-create the session (an untitled ghost chat). Writes already on their way
+      // are let through first.
+      removing.add(id);
+      dropWaitingWrites(id);
+      try {
+        await writesSettled(id);
+        await api.chatSessionDelete(id);
+      } catch (e) {
+        removing.delete(id);
+        throw e;
+      }
+      if (get().generation !== generation) {
+        removing.delete(id);
+        return;
+      }
       const wasActive = get().activeId === id;
       set((s) => {
         const messagesBySession = { ...s.messagesBySession };
@@ -329,6 +440,8 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
         delete loaded[id];
         return { sessions: s.sessions.filter((x) => x.id !== id), messagesBySession, loaded, activeId: wasActive ? null : s.activeId };
       });
+      // No longer listed: `accepts` refuses it from the list alone.
+      removing.delete(id);
       if (!wasActive) {
         useAttachmentsStore.getState().dropSession(id);
         return;
@@ -336,7 +449,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
       let next = get().sessions[0]?.id ?? null;
       if (!next) {
         const created = await api.chatSessionCreate(null);
-        if (get().workspace !== workspace) return;
+        if (get().generation !== generation) return;
         set((s) => ({ sessions: [created, ...s.sessions], messagesBySession: { ...s.messagesBySession, [created.id]: [] }, loaded: { ...s.loaded, [created.id]: true } }));
         next = created.id;
       }
@@ -364,5 +477,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
 
 /** Workspace switch: the conversations and the owed UI actions belong to the old workspace. */
 export function resetAssistant(): void {
-  useAssistantStore.setState({ workspace: null, hydrating: false, sessions: [], activeId: null, messagesBySession: {}, loaded: {}, pendingUiActions: {} });
+  // Called once the backend is on the other workspace: nothing of the old conversations may be written any more.
+  dropWaitingWrites();
+  useAssistantStore.setState((s) => ({ workspace: null, generation: s.generation + 1, hydrating: false, sessions: [], activeId: null, messagesBySession: {}, loaded: {}, pendingUiActions: {} }));
 }

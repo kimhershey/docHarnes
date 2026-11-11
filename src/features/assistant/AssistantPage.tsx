@@ -147,17 +147,26 @@ export function AssistantPage() {
   const observing = useRef(new Set<string>());
   const examples = t("assistant.examples", { returnObjects: true }) as string[];
 
-  // The conversation is keyed by the workspace path (a switch also clears it through `resetDocumentQueries`).
+  // The conversation is keyed by the workspace path (a switch also clears it through `resetDocumentQueries`,
+  // which unbinds the store even when the same folder is opened again).
   const workspacePath = workspace?.path ?? null;
+  const boundWorkspace = useAssistantStore((s) => s.workspace);
   useEffect(() => {
-    useAssistantStore.getState().bind(workspacePath);
-  }, [workspacePath]);
+    if (boundWorkspace !== workspacePath) useAssistantStore.getState().bind(workspacePath);
+  }, [workspacePath, boundWorkspace]);
 
-  // Every request writes into the session it started in (`sid`), even if the user switches meanwhile.
-  const push = (sid: string, m: NewMessage) => useAssistantStore.getState().push(sid, m);
-  const patch = (sid: string, id: number, f: (m: Message) => Message) => useAssistantStore.getState().patch(sid, id, f);
+  // Every request writes into the session it started in (`sid`), even if the user switches chats meanwhile —
+  // and only while that conversation still exists. The helpers below belong to the render whose handler
+  // started the request, so they carry the workspace generation of that moment: a card that arrives after a
+  // workspace switch (the assistant's own "워크스페이스 … 열어" included) or after its chat was deleted is
+  // dropped by the store instead of being written into the other workspace's database (KNO-2).
+  const generation = useAssistantStore((s) => s.generation);
+  const push = (sid: string, m: NewMessage) => useAssistantStore.getState().push(sid, m, generation);
+  const patch = (sid: string, id: number, f: (m: Message) => Message) => useAssistantStore.getState().patch(sid, id, f, generation);
   const patchPlan = (sid: string, id: number, f: (m: PlanMessage) => PlanMessage) => patch(sid, id, (m) => (m.role === "assistant" && m.kind === "plan" ? f(m) : m));
   const messagesOf = (sid: string) => useAssistantStore.getState().messagesBySession[sid] ?? [];
+  /** Whether the conversation a request started in is still there: when not, the request stops (no card, no side effect). */
+  const live = (sid: string) => useAssistantStore.getState().accepts(sid, generation);
 
   const anyPending = messages.some((m) => m.role === "assistant" && m.kind === "answer" && m.pending);
   // How much of the conversation the next question / command will carry.
@@ -220,6 +229,7 @@ export function AssistantPage() {
   };
 
   const askKnowledge = async (sid: string, question: string, extra: Partial<AnswerRequest> = {}) => {
+    if (!live(sid)) return;
     // The conversation so far travels with every question (the model resolves "그 문서", "아까 금액");
     // the previous evidence is kept for an explicit follow-up or a question that leans on the
     // conversation, so an unrelated question is still retrieved afresh and can end in "no evidence".
@@ -270,10 +280,12 @@ export function AssistantPage() {
   /** Sends a (confirmed, possibly edited) plan to the executor: a job or an inline execution. */
   const runPlan = async (sid: string, m: PlanMessage) => {
     const id = m.id;
-    if (m.status !== "pending") return;
+    if (m.status !== "pending" || !live(sid)) return;
     patchPlan(sid, id, (x) => ({ ...x, status: "executing", errors: null }));
     try {
       const res = await api.plannerExecute(m.plan, m.text, m.context);
+      // The workspace was switched (or the chat deleted) meanwhile: nothing of this run belongs here any more.
+      if (!live(sid)) return;
       patchPlan(sid, id, (x) => ({ ...x, status: "done", editing: false }));
       if (res.job_id) {
         // The job's `ui_actions` run when its finished state is observed here (once, even after navigating away).
@@ -329,7 +341,7 @@ export function AssistantPage() {
    * model together with the original command and the question — routed by rule, never guessed.
    */
   const askBack = async (sid: string, messageId: number, original: string, question: string, reply: string) => {
-    if (busy) return;
+    if (busy || !live(sid)) return;
     patchClarify(sid, messageId, "answered");
     patchPlan(sid, messageId, (x) => ({ ...x, status: "cancelled", editing: false }));
     push(sid, { role: "user", text: reply });
@@ -350,6 +362,9 @@ export function AssistantPage() {
 
   /** Routes a planner response to the matching card / action. */
   const handlePlan = async (sid: string, textValue: string, response: PlanResponse, context: UiPlanContext) => {
+    // An interpretation that arrives for a conversation that is gone (workspace switched, chat deleted) is
+    // dropped as a whole: no card, no answer request and no immediate execution in the other workspace.
+    if (!live(sid)) return;
     const plan = response.result.plan;
     switch (planKind(plan)) {
       case "clarify":
@@ -390,7 +405,7 @@ export function AssistantPage() {
     const v = value.trim();
     // The session the command belongs to is fixed here: a switch while it runs does not redirect its cards.
     const sid = useAssistantStore.getState().activeId;
-    if (!v || busy || !sid) return;
+    if (!v || busy || !sid || !live(sid)) return;
     setText("");
     push(sid, { role: "user", text: v, attachments: scope === "selection" && selectionKind === "attached" ? attached.map((d) => ({ id: d.id, name: d.name })) : undefined });
     // 0. "근거만 찾기": every sentence is a search (slash commands still run).
@@ -412,6 +427,7 @@ export function AssistantPage() {
       } catch {
         route = null;
       }
+      if (!live(sid)) return;
       if (route?.matched && route.op === "help") {
         push(sid, { role: "assistant", kind: "help" });
         return;
@@ -494,7 +510,7 @@ export function AssistantPage() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, activePlan?.id, pendingClarify?.id, shortcuts?.execute_plan, shortcuts?.close]);
+  }, [activeId, generation, activePlan?.id, pendingClarify?.id, shortcuts?.execute_plan, shortcuts?.close]);
 
   // Owed `ui_actions` of job-backed plans: run once when the finished job is observed (on mount and on
   // every job update), whether or not the execution card was mounted when the job finished.

@@ -6,13 +6,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatMessageRow, ChatSessionSummary, Op } from "@/lib/types";
 
 const fake = vi.hoisted(() => {
-  const state = { sessions: [] as ChatSessionSummary[], messages: {} as Record<string, ChatMessageRow[]>, seq: 1, puts: 0, clock: 0 };
+  // One workspace database at a time, like the backend: `switchWorkspace` opens another (empty) one.
+  const state = { sessions: [] as ChatSessionSummary[], messages: {} as Record<string, ChatMessageRow[]>, seq: 1, puts: 0, clock: 0, log: [] as string[], putGate: null as Promise<void> | null };
   const stamp = () => new Date(Date.UTC(2026, 10, 10, 0, 0, state.clock++)).toISOString();
-  const find = (id: string) => {
-    const s = state.sessions.find((x) => x.id === id);
-    if (!s) throw { code: "not_found", message: "chat_session_not_found" };
-    return s;
-  };
   const api = {
     chatSessionsList: async () =>
       [...state.sessions].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).map((s) => ({ ...s, message_count: (state.messages[s.id] ?? []).length })),
@@ -24,21 +20,27 @@ const fake = vi.hoisted(() => {
       return { ...s };
     },
     chatSessionRename: async (id: string, title: string) => {
-      const s = find(id);
+      const s = state.sessions.find((x) => x.id === id);
+      if (!s) return;
       s.title = title;
       s.title_auto = false;
     },
     chatSessionDelete: async (id: string) => {
+      state.log.push(`delete ${id}`);
       state.sessions = state.sessions.filter((x) => x.id !== id);
       delete state.messages[id];
     },
-    chatMessagesList: async (id: string) => {
-      find(id);
-      return [...(state.messages[id] ?? [])];
-    },
+    chatMessagesList: async (id: string) => [...(state.messages[id] ?? [])],
+    // Like the core (`chat::put_message`): a session this database does not have is re-created, untitled.
     chatMessagePut: async (id: string, seq: number, payload: unknown) => {
-      const s = find(id);
+      if (state.putGate) await state.putGate;
+      state.log.push(`put ${id}/${seq}`);
       state.puts += 1;
+      let s = state.sessions.find((x) => x.id === id);
+      if (!s) {
+        s = { id, title: "", title_auto: true, created_at: stamp(), updated_at: stamp(), message_count: 0 };
+        state.sessions.push(s);
+      }
       const rows = state.messages[id] ?? [];
       const row = rows.find((r) => r.seq === seq);
       if (row) row.payload = payload;
@@ -49,20 +51,25 @@ const fake = vi.hoisted(() => {
       if (s.title_auto && s.title === "" && p.role === "user" && p.text) s.title = p.text.slice(0, 40);
     },
   };
-  const reset = () => {
+  const switchWorkspace = () => {
     state.sessions = [];
     state.messages = {};
+  };
+  const reset = () => {
+    switchWorkspace();
     state.seq = 1;
     state.puts = 0;
     state.clock = 0;
+    state.log = [];
+    state.putGate = null;
   };
-  return { state, api, reset };
+  return { state, api, reset, switchWorkspace };
 });
 
 vi.mock("@/lib/ipc", () => ({ api: fake.api }));
 
 import { useAttachmentsStore } from "./attachments";
-import { flushChatWrites, resetAssistant, restoreMessage, selectMessages, useAssistantStore } from "./assistant";
+import { DROPPED, PATCH_WRITE_DELAY_MS, flushChatWrites, resetAssistant, restoreMessage, selectMessages, useAssistantStore } from "./assistant";
 
 const theme: Op = { op: "set_theme", theme: "dark" };
 const open: Op = { op: "open", target: "screen", ref: "jobs" };
@@ -221,6 +228,103 @@ describe("assistant store", () => {
     useAssistantStore.getState().trackJob("job4", [open]);
     resetAssistant();
     expect(useAssistantStore.getState()).toMatchObject({ workspace: null, sessions: [], activeId: null, pendingUiActions: {} });
+  });
+
+  // KNO-2: a request that outlives its conversation must write nowhere — the backend is on the other
+  // workspace's database by then and would re-create the unknown session as an untitled ghost chat.
+  it("drops what a request writes after the workspace was switched", async () => {
+    const first = await boundTo("C:\\Work\\Docs");
+    const generation = useAssistantStore.getState().generation;
+    const asked = useAssistantStore.getState().push(first, { role: "user", text: "워크스페이스 D:\\Other 열어" }, generation);
+    expect(asked).not.toBe(DROPPED);
+    await settled();
+    // The backend opens the other workspace, then the UI follows (`resetDocumentQueries`, then the page binds).
+    fake.switchWorkspace();
+    resetAssistant();
+    const other = await boundTo("D:\\Other");
+    expect(other).not.toBe(first);
+    expect(useAssistantStore.getState().generation).not.toBe(generation);
+    const puts = fake.state.puts;
+    const s = useAssistantStore.getState();
+    // The cards of the request that started in the first workspace arrive now.
+    expect(s.accepts(first, generation)).toBe(false);
+    expect(s.push(first, { role: "assistant", kind: "executed", text: "워크스페이스를 열었습니다", source: "model", confidence: 0.9 }, generation)).toBe(DROPPED);
+    s.patch(first, asked, (m) => (m.role === "user" ? { ...m, text: "late" } : m), generation);
+    // The session id of another workspace is refused whatever the generation (it is not one of this workspace's chats)…
+    expect(s.push(first, { role: "assistant", kind: "help" })).toBe(DROPPED);
+    // …and a stale request cannot write into a chat of the new workspace either.
+    expect(s.push(other, { role: "assistant", kind: "help" }, generation)).toBe(DROPPED);
+    await flushChatWrites();
+    expect(fake.state.puts).toBe(puts);
+    expect(fake.state.sessions.map((x) => x.id)).toEqual([other]);
+    expect(useAssistantStore.getState().messagesBySession[first]).toBeUndefined();
+    expect(selectMessages(useAssistantStore.getState())).toEqual([]);
+  });
+
+  it("does not write a patch that was still waiting when the workspace changed", async () => {
+    const first = await boundTo("C:\\Work\\Docs");
+    const s = useAssistantStore.getState();
+    const id = s.push(first, { role: "user", text: "a" });
+    await settled();
+    s.patch(first, id, (m) => (m.role === "user" ? { ...m, text: "edited" } : m));
+    const puts = fake.state.puts;
+    fake.switchWorkspace();
+    resetAssistant();
+    await new Promise((r) => setTimeout(r, PATCH_WRITE_DELAY_MS + 50));
+    await flushChatWrites();
+    expect(fake.state.puts).toBe(puts);
+    expect(fake.state.sessions).toEqual([]);
+  });
+
+  it("ignores late writes for a deleted chat and deletes only after the writes on their way", async () => {
+    const first = await boundTo("C:\\Work\\Docs");
+    const s = useAssistantStore.getState();
+    const generation = s.generation;
+    s.push(first, { role: "user", text: "질문" });
+    await settled();
+    const second = (await s.newSession())!;
+    // A message of the first chat is still being written when the chat is deleted: the delete waits for it
+    // (the other order would let the backend re-create the session).
+    let open = () => {};
+    fake.state.putGate = new Promise<void>((r) => (open = r));
+    fake.state.log = [];
+    const answer = s.push(first, { role: "assistant", kind: "executed", text: "done", source: "rule", confidence: 1 });
+    const removed = s.remove(first);
+    // While the delete is under way nothing more is accepted.
+    expect(useAssistantStore.getState().accepts(first, generation)).toBe(false);
+    expect(s.push(first, { role: "assistant", kind: "help" }, generation)).toBe(DROPPED);
+    await settled();
+    expect(fake.state.log).toEqual([]);
+    fake.state.putGate = null;
+    open();
+    await removed;
+    expect(fake.state.log).toEqual([`put ${first}/${answer}`, `delete ${first}`]);
+    // The plan / answer of a request that was running arrives after the delete.
+    const puts = fake.state.puts;
+    expect(useAssistantStore.getState().push(first, { role: "assistant", kind: "help" }, generation)).toBe(DROPPED);
+    useAssistantStore.getState().patch(first, answer, (m) => m, generation);
+    await flushChatWrites();
+    expect(fake.state.puts).toBe(puts);
+    expect(fake.state.sessions.map((x) => x.id)).toEqual([second]);
+    expect(useAssistantStore.getState().messagesBySession[first]).toBeUndefined();
+    expect(useAssistantStore.getState().activeId).toBe(second);
+  });
+
+  it("never has two writes of one message in flight: the newer state follows the older one", async () => {
+    const first = await boundTo("C:\\Work\\Docs");
+    const s = useAssistantStore.getState();
+    let open = () => {};
+    fake.state.putGate = new Promise<void>((r) => (open = r));
+    const id = s.push(first, { role: "user", text: "v1" });
+    s.patch(first, id, (m) => (m.role === "user" ? { ...m, text: "v2" } : m));
+    const flushed = flushChatWrites();
+    await settled();
+    expect(fake.state.puts).toBe(0);
+    fake.state.putGate = null;
+    open();
+    await flushed;
+    expect(fake.state.log).toEqual([`put ${first}/${id}`, `put ${first}/${id}`]);
+    expect((fake.state.messages[first]![0]!.payload as { text: string }).text).toBe("v2");
   });
 
   it("restoreMessage drops rows that are not messages", () => {

@@ -1,6 +1,9 @@
 // Browser mock of the assistant chat-session commands (0.7.0 §1.6): sessions and their messages
 // per workspace in localStorage, the same contract as the Rust `chat_*` commands (messages are
-// the UI's JSON payloads, the title follows the first user message until renamed).
+// the UI's JSON payloads, the title follows the first user message until renamed). Where the UI
+// could tell the difference the mock follows the core (`knowledge/chat.rs`): session ids are
+// unique across workspaces, a message put for a session the workspace does not have re-creates
+// that session (untitled), listing an unknown session is an empty list.
 
 import { currentWorkspacePath, err } from "./mock-backend";
 import type { ChatMessageRow, ChatSessionSummary } from "./types";
@@ -12,11 +15,10 @@ export const AUTO_TITLE_CHARS = 40;
 interface ChatState {
   sessions: ChatSessionSummary[];
   messages: Record<string, ChatMessageRow[]>;
-  seq: number;
 }
 
 function empty(): ChatState {
-  return { sessions: [], messages: {}, seq: 1 };
+  return { sessions: [], messages: {} };
 }
 
 function loadAll(): Record<string, ChatState> {
@@ -41,14 +43,13 @@ function now(): string {
   return new Date().toISOString();
 }
 
-function summary(s: ChatState, c: ChatSessionSummary): ChatSessionSummary {
-  return { ...c, message_count: (s.messages[c.id] ?? []).length };
+/** Like the core's `new_id` (a UUID without dashes): never the same in two workspaces. */
+function newId(): string {
+  return crypto.randomUUID().replace(/-/g, "");
 }
 
-function session(s: ChatState, id: string): ChatSessionSummary {
-  const c = s.sessions.find((x) => x.id === id);
-  if (!c) throw err("not_found", "chat_session_not_found");
-  return c;
+function summary(s: ChatState, c: ChatSessionSummary): ChatSessionSummary {
+  return { ...c, message_count: (s.messages[c.id] ?? []).length };
 }
 
 /** The auto title of a session from a user message payload (null when the payload is not one). */
@@ -69,37 +70,45 @@ export async function mockChat(cmd: string, a: Record<string, any>): Promise<unk
       return [...s.sessions].sort((x, y) => y.updated_at.localeCompare(x.updated_at)).map((c) => summary(s, c));
     case "chat_session_create": {
       const title = typeof a.title === "string" ? a.title.trim() : "";
-      const c: ChatSessionSummary = { id: `chat-${s.seq++}`, title, title_auto: title === "", created_at: now(), updated_at: now(), message_count: 0 };
+      const c: ChatSessionSummary = { id: newId(), title, title_auto: title === "", created_at: now(), updated_at: now(), message_count: 0 };
       s.sessions.push(c);
       s.messages[c.id] = [];
       save(s);
       return summary(s, c);
     }
     case "chat_session_rename": {
-      const c = session(s, String(a.id));
       const title = String(a.title ?? "").trim();
-      if (!title) throw err("invalid", "chat_title_empty");
+      if (!title) throw err("invalid", "title_empty");
+      const c = s.sessions.find((x) => x.id === String(a.id));
+      if (!c) return false;
       c.title = title;
       c.title_auto = false;
+      c.updated_at = now();
       save(s);
-      return undefined;
+      return true;
     }
     case "chat_session_delete": {
       const id = String(a.id);
+      const existed = s.sessions.some((x) => x.id === id);
       s.sessions = s.sessions.filter((x) => x.id !== id);
       delete s.messages[id];
       save(s);
-      return undefined;
+      return existed;
     }
-    case "chat_messages_list": {
-      const id = String(a.sessionId);
-      session(s, id);
-      return [...(s.messages[id] ?? [])].sort((x, y) => x.seq - y.seq);
-    }
+    case "chat_messages_list":
+      return [...(s.messages[String(a.sessionId)] ?? [])].sort((x, y) => x.seq - y.seq);
     case "chat_message_put": {
-      const c = session(s, String(a.sessionId));
+      const id = String(a.sessionId ?? "");
+      if (!id.trim()) return false;
       const seq = Number(a.seq);
       if (!Number.isInteger(seq)) throw err("invalid", "chat_seq_invalid");
+      // `chat::put_message`: a session this workspace does not have (purged meanwhile — or, the bug the UI
+      // must not trigger, a message of another workspace's chat) is re-created untitled.
+      let c = s.sessions.find((x) => x.id === id);
+      if (!c) {
+        c = { id, title: "", title_auto: true, created_at: now(), updated_at: now(), message_count: 0 };
+        s.sessions.push(c);
+      }
       const rows = s.messages[c.id] ?? [];
       const existing = rows.find((x) => x.seq === seq);
       if (existing) existing.payload = a.payload;
@@ -108,7 +117,7 @@ export async function mockChat(cmd: string, a: Record<string, any>): Promise<unk
       c.updated_at = now();
       if (c.title_auto && c.title === "") c.title = autoTitle(a.payload) ?? "";
       save(s);
-      return undefined;
+      return true;
     }
     default:
       throw err("internal", `unknown chat command: ${cmd}`);
