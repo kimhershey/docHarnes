@@ -66,6 +66,8 @@ DocuLens를 **실제 Windows PC에서 설치·실행·빌드·검증**하는 절
    관리자를 먼저 설치해 두세요).
 5. 설치 후 첫 실행에서 설정 > AI 모델 > 고급의 엔진 카드에 동봉된 팩이 잡힙니다(백엔드 자동 선택 — §2.2). 더 새 엔진을 쓰려면
    `%LOCALAPPDATA%\DocuLens\engines\<태그>\<팩>\`에 팩을 넣으면 그쪽이 동봉 팩보다 우선합니다.
+   동봉 엔진(llama-server)은 Microsoft Visual C++ 2015-2022 런타임(x64)이 PC에 있어야 시작합니다. 설치파일에는 들어 있지 않으므로,
+   다른 프로그램이 이미 설치해 두지 않은 PC(특히 새로 설치한 오프라인 PC)에서는 §7의 `VCRUNTIME140.dll` 행대로 먼저 설치하세요.
 
 ## 2. 준비물 (Windows)
 
@@ -306,6 +308,7 @@ GitHub Actions `CI`(푸시·PR)가 위 항목을 License gate / Web / Real llama
 |---|---|---|
 | 엔진 카드 "llama-server 실행 파일을 찾지 못했습니다" | 엔진 팩 미설치 | §2.2의 `fetch-engine.mjs`로 설치하거나 "실행 파일 직접 지정" |
 | 엔진 카드 "b11747 이상 필요" | 오래된 llama.cpp 빌드 | b12066 팩으로 교체 |
+| 엔진이 시작하자마자 종료됨 — `VCRUNTIME140.dll` · `VCRUNTIME140_1.dll` · `MSVCP140.dll`을 찾을 수 없다는 Windows 오류 창, 또는 종료 코드 `0xC0000135`(DLL 없음) | llama-server 팩이 Microsoft Visual C++ 런타임 DLL을 쓰는데 팩에도 설치파일에도 들어 있지 않음(b12066 CPU·Vulkan 공식 팩의 임포트 표로 확인; 런타임이 없는 PC에서의 실제 증상은 아직 실기로 보지 못함. 앱 본체는 런타임을 정적으로 링크하므로 해당 없음) | Microsoft "Visual C++ 2015-2022 재배포 가능 패키지(x64)"(`vc_redist.x64.exe`, https://aka.ms/vs/17/release/vc_redist.x64.exe )를 설치하고 앱을 다시 시작. 오프라인 PC는 다른 PC에서 받아 옮겨 설치. 설치 여부는 `C:\Windows\System32\vcruntime140_1.dll`·`msvcp140.dll`이 있는지로 확인. 팩이 무엇을 밖에서 가져오는지는 `node scripts/list-pe-imports.mjs <팩 폴더>`로 볼 수 있음 |
 | 로드 직후 "Compute error" / 엔진 반복 종료 → "중단됨" | 팩 폴더에 두 백엔드 계열이 섞임, 또는 VRAM 부족 | 팩 폴더 정리(한 계열만) → 재시작; 작은 양자화·컨텍스트나 CPU 백엔드로 변경 |
 | 라이브러리 상단 "PDFium 없음" | `pdfium.dll` 미설치 | `node scripts/fetch-pdfium.mjs` 후 재시작 |
 | 모델 폴더가 "복사 중"에 머묾 | 파일이 아직 쓰이는 중(안정화 대기) | 복사 완료 대기; 2초 넘게 변하지 않으면 폴더 이름 확인(GGUF + mmproj) |

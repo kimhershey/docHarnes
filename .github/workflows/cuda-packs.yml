@@ -184,6 +184,13 @@ jobs:
           Get-ChildItem $out | Format-Table Name, @{ n = 'MB'; e = { [math]::Round($_.Length / 1MB, 1) } } -AutoSize | Out-String | Write-Host
           exit 0
 
+      # Informational only (PKG-10): what the pack imports from outside its folder. A build that links the MSVC
+      # runtime as DLLs (VCRUNTIME140.dll, MSVCP140.dll …) needs the Microsoft Visual C++ 2015-2022 Redistributable
+      # on the user's PC, like the official llama.cpp packs do. Reads the PE import tables itself; never fails the build.
+      - name: List the DLLs the pack needs from outside (informational)
+        continue-on-error: true
+        run: node scripts/list-pe-imports.mjs pack
+
       - name: Zip and hash
         shell: pwsh
         run: |

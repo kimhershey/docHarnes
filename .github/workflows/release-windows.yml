@@ -198,6 +198,15 @@ jobs:
           $all = Get-ChildItem $root -Recurse -File | Measure-Object -Property Length -Sum
           Write-Host ("bundled resources: {0:N0} files, {1:N1} MB" -f $all.Count, ($all.Sum / 1MB))
 
+      # Informational only (PKG-10): the official llama.cpp packs import VCRUNTIME140.dll, VCRUNTIME140_1.dll and
+      # MSVCP140.dll without shipping them (checked on the b12066 cpu / vulkan zips), so the engine needs the
+      # Microsoft Visual C++ 2015-2022 Redistributable on the user's PC. The script reads the PE import tables itself
+      # (no dumpbin / objdump) and prints, per pack, what is imported from outside the pack folder; it never fails
+      # the build, and continue-on-error covers the script being absent on an older ref.
+      - name: List the DLLs the bundled llama-server packs need from outside (informational)
+        continue-on-error: true
+        run: node scripts/list-pe-imports.mjs src-tauri/resources/engines
+
       - name: Generate THIRD-PARTY-NOTICES / SBOM / license texts (bundled by tauri.conf.json)
         run: node scripts/gen-notices.mjs
       - run: npm run build
