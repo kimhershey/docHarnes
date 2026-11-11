@@ -23,6 +23,7 @@ import {
   type WorkerOutcome,
 } from "./mock-backend";
 import { sectionsOf } from "./draft-sections";
+import { resolveJosa } from "./josa";
 import * as pl from "./mock-pipeline";
 import {
   EVENTS,
@@ -702,7 +703,7 @@ function sentenceFor(section: string, content: string, ko: boolean, tone: DraftR
     case "분석":
       return `주요 수치와 추이를 검토한 결과 특이 사항은 없었으며, 세부 내역은 첨부 표를 참고하시기 바랍니다.${cite}`;
     case "결론 및 제언":
-      return `위 내용을 바탕으로 ${subject}을(를) 계획대로 진행할 것을 제언${ending}`;
+      return resolveJosa(`위 내용을 바탕으로 ${subject}을(를) 계획대로 진행할 것을 제언${ending}`);
     case "견적 조건":
       return `본 견적은 부가가치세 별도이며, 투입 인력·기간과 유효기간은 상기와 같${ending === "임." ? "음." : "습니다."}`;
     case "사업 개요":
@@ -1123,7 +1124,7 @@ export function validateDraft(draft: Draft): void {
     const v = f.value.trim();
     f.normalized = null;
     if (!v) {
-      if (f.required) issues.push({ path: `fields.${f.key}`, code: "required_missing", message: ko ? `필수 항목 '${f.label}'이(가) 비어 있습니다.` : `Required field '${f.label}' is empty.`, blocking: true });
+      if (f.required) issues.push({ path: `fields.${f.key}`, code: "required_missing", message: ko ? resolveJosa(`필수 항목 '${f.label}'이(가) 비어 있습니다.`) : `Required field '${f.label}' is empty.`, blocking: true });
       continue;
     }
     switch (f.kind) {
@@ -1161,7 +1162,7 @@ export function validateDraft(draft: Draft): void {
         const u = parseAmount(row[ui]);
         const a = parseAmount(row[ai]);
         if (q !== null && u !== null && a !== null && Math.abs(q * u - a) > 0.5) {
-          issues.push({ path: `tables.${table.key}[${ri}].${table.columns[ai]!.key}`, code: "sum_mismatch", message: ko ? `${ri + 1}행 금액 ${row[ai]}이(가) 수량×단가(${formatAmount(q * u)})와 다릅니다.` : `Row ${ri + 1} amount ${row[ai]} differs from quantity × unit price (${formatAmount(q * u)}).`, blocking: true, suggestion: formatAmount(q * u) });
+          issues.push({ path: `tables.${table.key}[${ri}].${table.columns[ai]!.key}`, code: "sum_mismatch", message: ko ? resolveJosa(`${ri + 1}행 금액 ${row[ai]}이(가) 수량×단가(${formatAmount(q * u)})와 다릅니다.`) : `Row ${ri + 1} amount ${row[ai]} differs from quantity × unit price (${formatAmount(q * u)}).`, blocking: true, suggestion: formatAmount(q * u) });
         }
       }
     });
@@ -1180,7 +1181,7 @@ export function validateDraft(draft: Draft): void {
     }
     const total = parseAmount(totalField.value);
     if (total !== null && Math.abs(total - expected) > 0.5) {
-      issues.push({ path: `fields.${totalField.key}`, code: "sum_mismatch", message: ko ? `'${totalField.label}' ${totalField.value}이(가) 품목 합계 ${formatAmount(expected)}와 다릅니다.` : `'${totalField.label}' ${totalField.value} differs from the item sum ${formatAmount(expected)}.`, blocking: true, suggestion: formatAmount(expected) });
+      issues.push({ path: `fields.${totalField.key}`, code: "sum_mismatch", message: ko ? resolveJosa(`'${totalField.label}' ${totalField.value}이(가) 품목 합계 ${formatAmount(expected)}와 다릅니다.`) : `'${totalField.label}' ${totalField.value} differs from the item sum ${formatAmount(expected)}.`, blocking: true, suggestion: formatAmount(expected) });
     }
   }
   // Body claims that quote a source keep their citation; a paragraph that states a number without one is flagged (warning).

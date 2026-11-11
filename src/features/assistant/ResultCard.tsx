@@ -22,7 +22,7 @@ import { usePipelineStore } from "@/stores/pipeline";
 
 import { AggregateCard } from "./AggregateCard";
 import { ClippedNote } from "./ClippedNote";
-import { agentStepDetail, aggregateRequestFor, deriveResultActions, opLabel, uiResultsByStep } from "./describePlan";
+import { agentStepDetail, aggregateRequestFor, deriveResultActions, opLabel, organizeReasonText, uiResultsByStep } from "./describePlan";
 
 function StatusIcon({ status }: { status: StepStatus }) {
   switch (status) {
@@ -70,7 +70,11 @@ function MovesTable({ items }: { items: OrganizeItem[] }) {
             </td>
             <td className="py-0.5">
               <Badge variant={item.status === "done" || item.status === "move" ? "ok" : item.status === "failed" || item.status === "missing" ? "danger" : "warn"}>{t(`planner.result.item_status.${item.status}`)}</Badge>
-              {item.reason && item.status !== "done" && <span className="ml-1 text-fg-subtle">{item.reason}</span>}
+              {item.reason && item.status !== "done" && (
+                <span className="ml-1 text-fg-subtle" data-testid="result-move-reason" data-reason={item.reason}>
+                  {organizeReasonText(item.reason, t)}
+                </span>
+              )}
             </td>
           </tr>
         ))}

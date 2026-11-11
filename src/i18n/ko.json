@@ -251,7 +251,8 @@
       "document_named": "현재 문서: {{name}}",
       "project_named": "프로젝트: {{name}}",
       "project_clear": "프로젝트 컨텍스트 해제",
-      "attached": "첨부 문서 {{count}}개"
+      "attached": "첨부 문서 {{count}}개",
+      "no_documents": "말씀하신 범위에 해당하는 문서가 없습니다."
     },
     "evidence": {
       "toggle": "근거만 찾기",
@@ -311,7 +312,8 @@
     "nothing_to_do": "할 일을 찾지 못했습니다. 문서에 대해 묻거나, 가져오기·정리·추출·요약 같은 작업을 말씀해 주세요.",
     "reply_label": "어시스턴트 답변",
     "undo_change": "되돌리기",
-    "undone": "이전 값으로 되돌렸습니다."
+    "undone": "이전 값으로 되돌렸습니다.",
+    "undo_stale": "그 뒤에 값이 다시 바뀌어 되돌리지 않았습니다."
   },
   "planner": {
     "ops": {
@@ -592,6 +594,11 @@
       "show_less": "접기",
       "held": "(보류) 검토 후 이동",
       "missing_values": "값 미상: {{vars}}",
+      "reasons": {
+        "project_copy": "이 프로젝트에 사본으로 정리된 문서라 그대로 둠",
+        "missing_file": "파일을 찾을 수 없음"
+      },
+      "unmet": "요청 중 반영하지 못한 부분: {{unmet}}",
       "organize_summary": "이동 {{moves}}건 · 보류 {{held}}건 · 변경 없음 {{unchanged}}건",
       "export_path": "문서 {{count}}건 → {{path}}",
       "overwrite": "(기존 파일 덮어씀)",
@@ -1280,6 +1287,7 @@
       "glossary_term_taken": "같은 용어가 이미 있습니다.",
       "collection_not_found": "참고 자료 묶음을 찾을 수 없습니다(삭제되었을 수 있습니다).",
       "document_not_found": "문서를 찾을 수 없습니다.",
+      "file_in_use": "다른 프로그램이 파일을 사용 중이라 삭제하지 못했습니다.",
       "feedback_invalid": "피드백 값이 올바르지 않습니다.",
       "schema_name_duplicate": "같은 이름의 스키마가 이미 있습니다. 다른 이름을 입력하세요.",
       "schema_name_empty": "스키마 이름을 입력하세요.",
@@ -1287,6 +1295,7 @@
       "schema_invalid": "스키마에 오류가 있습니다. 문법 검사 결과를 확인하세요.",
       "schema_not_found": "스키마를 찾을 수 없습니다.",
       "schema_builtin": "내장 샘플 양식은 삭제할 수 없습니다(복제 후 수정하세요).",
+      "schema_general_required": "'일반' 양식은 하나 이상 켜져 있어야 합니다.",
       "field_not_found": "필드를 찾을 수 없습니다.",
       "field_value_empty": "값을 입력하세요.",
       "change_not_found": "변경 이력을 찾을 수 없습니다.",
@@ -1301,6 +1310,7 @@
       "export_exists": "같은 이름의 파일이 이미 있습니다. 덮어쓰기를 켜거나 이름을 바꾸세요.",
       "export_over_document": "그 경로에 문서함에 등록된 문서가 있어 덮어쓸 수 없습니다. 파일 이름을 바꾸세요.",
       "export_over_form": "채우는 원본 양식 파일 위에는 저장할 수 없습니다. 파일 이름을 바꾸세요.",
+      "export_path_invalid": "저장할 경로가 올바르지 않습니다. 폴더가 아닌 파일 이름을 지정하세요.",
       "path_is_document": "내보낼 경로에 문서함에 등록된 문서가 있습니다. 다른 파일 이름이나 폴더를 고르세요.",
       "path_outside": "워크스페이스 밖의 경로에는 저장할 수 없습니다.",
       "project_not_found": "프로젝트를 찾을 수 없습니다(삭제되었을 수 있습니다).",
@@ -1312,6 +1322,8 @@
       "rule_not_found": "규칙을 찾을 수 없습니다(삭제되었을 수 있습니다).",
       "no_check_run": "정합성 검사 결과가 없습니다. 먼저 정합성 검사를 실행하세요.",
       "no_findings": "보완요청서에 넣을 항목이 없습니다. 불일치·누락 항목을 하나 이상 고르세요.",
+      "findings_not_requestable": "통과·판단불가 결과만 골랐습니다. 불일치·누락 항목을 하나 이상 고르세요.",
+      "findings_not_in_run": "고른 항목이 마지막으로 저장된 정합성 검사 결과에 없습니다. 검사를 다시 실행한 뒤 고르세요.",
       "content_empty": "작성할 내용을 입력하세요.",
       "revise_previous_missing": "수정할 초안이 없습니다. 초안을 먼저 열거나 만드세요.",
       "revise_instruction_empty": "수정 지시를 입력하세요.",
@@ -1438,6 +1450,8 @@
       "project_not_found": "프로젝트를 찾을 수 없습니다.",
       "no_check_run": "먼저 정합성 검사를 실행하세요.",
       "no_findings": "불일치·누락 항목이 없습니다.",
+      "findings_not_requestable": "통과·판단불가 결과만 골랐습니다. 불일치·누락 항목을 하나 이상 고르세요.",
+      "findings_not_in_run": "고른 항목이 마지막으로 저장된 정합성 검사 결과에 없습니다. 검사를 다시 실행하세요.",
       "document_not_found": "문서를 찾을 수 없습니다.",
       "no_fields": "샘플 문서에서 필드를 찾지 못했습니다. 텍스트가 있는 문서인지 확인하세요."
     },
@@ -1856,7 +1870,9 @@
     "follow_up": "후속 질문(이전 근거 유지)",
     "citation_aria": "근거 {{index}}: {{label}}",
     "text_only": "검색 없이 답변",
-    "text_only_hint": "보내 주신 글만으로 답했습니다. 문서를 찾거나 인용하지 않았습니다."
+    "text_only_hint": "보내 주신 글만으로 답했습니다. 문서를 찾거나 인용하지 않았습니다.",
+    "truncated_input": "보낸 글이 길어 앞부분만 처리했습니다.",
+    "truncated_output": "답변이 길이 한도에서 끊겼습니다."
   },
   "search": {
     "title": "근거",
@@ -2047,7 +2063,11 @@
       "model_none": "비전 모델이 없습니다. AI 모델 설정에서 모델을 설치하세요.",
       "confirm_title": "기존 추출 결과 대체",
       "confirm_body": "이미 추출된 문서 {{count}}건의 결과를 새 실행으로 대체합니다. 이전 실행의 승인·수정 내역은 이력 탭에 남지만, 필드 탭과 검토함은 새 결과 기준으로 바뀝니다.",
-      "confirm_ok": "새로 추출"
+      "confirm_ok": "새로 추출",
+      "force_body": "분류와 OCR을 다시 실행합니다. 이미 읽어 둔 페이지 텍스트(OCR 결과)는 새로 읽은 결과로 바뀝니다.",
+      "force_ok": "다시 처리",
+      "reocr_manual": "직접 고친 글자도 다시 읽기",
+      "reocr_manual_hint": "켜면 직접 고친 페이지 텍스트도 새 OCR 결과로 바뀝니다. 꺼 두면 직접 고친 쪽은 그대로 두고 나머지 쪽만 다시 읽습니다."
     },
     "status": {
       "label": "처리 파이프라인",
@@ -2136,7 +2156,7 @@
     "default": "기본",
     "set_default": "이 유형의 기본으로",
     "enabled": "분류에 사용",
-    "general_locked": "분류되지 않은 문서(기타)를 추출할 때 쓰는 기본 양식이라 끌 수 없습니다.",
+    "general_locked": "분류되지 않은 문서(기타)를 추출할 때 쓰는 '일반' 양식은 하나 이상 켜져 있어야 해서, 마지막 하나는 끄거나 삭제할 수 없습니다.",
     "version": "v{{version}}",
     "source": {
       "builtin": "내장",
@@ -2306,6 +2326,10 @@
     "value": "값",
     "evidence": "근거",
     "validation": "검증",
+    "rules": {
+      "partial_page": "일부 쪽만 추출됨",
+      "date_ambiguous": "일·월 순서가 모호한 날짜"
+    },
     "page": "{{page}}쪽",
     "edit_title": "값 수정",
     "edit_hint": "인쇄된 값을 그대로 입력하세요. 금액·날짜는 저장 시 정규화됩니다.",
@@ -2406,7 +2430,8 @@
       "review_pending": "검토 대기",
       "missing_file": "파일 없음",
       "source_changed": "원본이 바뀜",
-      "document_missing": "문서 없음"
+      "document_missing": "문서 없음",
+      "project_copy": "이 프로젝트에 사본으로 정리된 문서라 그대로 둠"
     },
     "unknown_values": "값 미상: {{vars}}",
     "show_all": "전체 보기 ({{count}}건)",
@@ -2851,7 +2876,7 @@
       "checked": "검사 완료 — 통과 {{pass}} · 불일치 {{mismatch}} · 판단불가 {{undetermined}} · 누락 {{missing}}",
       "supplement": "보완요청서",
       "delete": "삭제",
-      "delete_confirm": "프로젝트 '{{name}}'을(를) 삭제할까요? 참고 자료 묶음도 함께 지워지고, 문서는 문서함에 남습니다.",
+      "delete_confirm": "프로젝트 '{{name}}'을(를) 삭제할까요? 참고 자료 묶음도 함께 지워지고, 문서는 문서함에 남습니다. 프로젝트 폴더에 둔 사본은 지워지지만, 직접 고친 사본은 폴더에 그대로 남습니다.",
       "deleted": "프로젝트를 삭제했습니다.",
       "not_found": "프로젝트를 찾을 수 없습니다.",
       "phase": "상태",
@@ -2878,6 +2903,7 @@
       "extra": "추가",
       "add": "문서함에서 고르기",
       "remove": "프로젝트에서 제외",
+      "remove_confirm": "'{{name}}'을(를) 이 프로젝트에서 제외할까요? 프로젝트 폴더에 둔 사본은 지워지고 원본은 그대로 남습니다. 직접 고친 사본(원본과 다름)은 지우지 않고 폴더에 그대로 둡니다.",
       "open": "열기",
       "empty": "문서가 없습니다. 문서함에서 고르거나 파일을 끌어다 놓으세요.",
       "columns": {
@@ -2988,6 +3014,12 @@
       },
       "missing_types": "누락 서류: {{types}}",
       "evidence_open": "{{name}} 열기",
+      "evidence_status": {
+        "not_extracted": "추출 전",
+        "pending": "검토 대기",
+        "rejected": "거부",
+        "missing_document": "문서 없음"
+      },
       "required": "필수",
       "relations_title": "관계 그래프",
       "report_title": "리포트",
@@ -3110,7 +3142,7 @@
       "name_template": "파일명 템플릿",
       "name_default": "(비우면 기본 파일명 템플릿)",
       "copies": "여러 프로젝트에 속한 문서의 사본 보관",
-      "copies_hint": "문서가 두 번째 이상 프로젝트로 들어오면 위 폴더에 물리적 사본을 두고 추적합니다. 원본이 바뀌면 사본을 갱신하고, 프로젝트에서 빼면 사본을 지웁니다.",
+      "copies_hint": "문서가 두 번째 이상 프로젝트로 들어오면 위 폴더에 물리적 사본을 두고 추적합니다. 원본이 바뀌면 사본을 갱신하고, 프로젝트에서 빼면 사본을 지웁니다(직접 고친 사본은 지우지 않고 그대로 둡니다).",
       "export_format": "내보내기 형식",
       "export_layout": "내보내기 레이아웃",
       "export_path": "내보내기 경로",

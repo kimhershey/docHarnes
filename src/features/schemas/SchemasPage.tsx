@@ -33,11 +33,13 @@ function emptyDraft(): SchemaDraft {
 }
 
 /**
- * The built-in `general` form is the fallback every 기타 / unclassified document is extracted with
- * (`pipeline::run::resolve_schema`), so while it is on it cannot be switched off (PIP-15).
+ * `general` is the fallback type every 기타 / unclassified document is extracted with
+ * (`pipeline::run::resolve_schema`), so it must always have an enabled form: the last one that is on can
+ * neither be switched off nor deleted — the backend refuses both with `schema_general_required`
+ * (`repo::keep_general`, PIP-15). A second enabled `general` form (a user's copy) unlocks either of them.
  */
-function isLockedOn(s: SchemaRecord): boolean {
-  return s.source === "builtin" && s.doc_type === "general" && s.enabled;
+export function isLastGeneral(s: SchemaRecord, all: readonly SchemaRecord[]): boolean {
+  return s.doc_type === "general" && s.enabled && !all.some((x) => x.id !== s.id && x.doc_type === "general" && x.enabled);
 }
 
 /** A schema the user just saved under a new type slug: offers to re-classify the documents typed "other". */
@@ -307,9 +309,9 @@ export function SchemasPage() {
       toast(describeError(e, t), "danger");
     }
   };
-  const generalLocked = !!selected && isLockedOn(selected);
+  const generalLocked = !!selected && isLastGeneral(selected, schemas ?? []);
   const setEnabled = async (s: SchemaRecord, enabled: boolean) => {
-    if (!enabled && isLockedOn(s)) return;
+    if (!enabled && isLastGeneral(s, schemas ?? [])) return;
     try {
       await api.pipelineSchemaSetEnabled(s.id, enabled);
     } catch (e) {
@@ -465,9 +467,9 @@ export function SchemasPage() {
                 <span className="ml-auto flex flex-wrap items-center gap-1">
                   {selected && (
                     <>
-                      {/* The built-in `general` form is what every 기타 / unclassified document is extracted with: switched
-                          off, those documents fail with schema_not_found (PIP-15), so it stays on (a form that is
-                          already off can still be switched back on). */}
+                      {/* The last enabled `general` form is what every 기타 / unclassified document is extracted with:
+                          switched off or deleted, those documents fail with schema_not_found (PIP-15), so it stays
+                          (a form that is already off can still be switched back on). */}
                       <label className="mr-2 flex items-center gap-1 text-xs" title={generalLocked ? t("schemas.general_locked") : undefined}>
                         <Switch checked={selected.enabled} onCheckedChange={(v) => void setEnabled(selected, v)} disabled={generalLocked} aria-label={t("schemas.enabled")} data-testid="schema-enabled" data-locked={generalLocked || undefined} />
                         {t("schemas.enabled")}
@@ -485,10 +487,13 @@ export function SchemasPage() {
                         {t("schemas.nl_modify")}
                       </Button>
                       {selected.source !== "builtin" && (
-                        <Button size="sm" variant="ghost" className="text-danger" onClick={() => remove(selected)} data-testid="schema-delete">
-                          <Trash2 />
-                          {t("schemas.editor.delete")}
-                        </Button>
+                        // A disabled button shows no tooltip of its own: the wrapper carries it.
+                        <span title={generalLocked ? t("schemas.general_locked") : undefined}>
+                          <Button size="sm" variant="ghost" className="text-danger" onClick={() => remove(selected)} disabled={generalLocked} data-testid="schema-delete" data-locked={generalLocked || undefined}>
+                            <Trash2 />
+                            {t("schemas.editor.delete")}
+                          </Button>
+                        </span>
                       )}
                       {selected.form_document_id && (
                         <Button size="sm" variant="ghost" onClick={() => navigate(`/library/${selected.form_document_id}`)}>

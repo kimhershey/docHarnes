@@ -14,7 +14,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
-import { CONFIDENCE_TEXT_CLASS, DEFAULT_REVIEW_THRESHOLD, confidenceGlyph, confidenceTone, docTypeLabel, fieldTitle, formatConfidence, reasonVariant } from "@/features/pipeline/labels";
+import { CONFIDENCE_TEXT_CLASS, DEFAULT_REVIEW_THRESHOLD, confidenceGlyph, confidenceTone, docTypeLabel, fieldTitle, formatConfidence, reasonVariant, validationRuleLabel } from "@/features/pipeline/labels";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
 import { useDocTypes, usePipelineStatus, useReviewQueue } from "@/lib/queries";
@@ -432,11 +432,17 @@ export function ReviewPage() {
                     <>
                       <dt className="text-fg-subtle">{t("review.validation")}</dt>
                       <dd className="flex flex-col gap-1">
-                        {current.validation.map((v, k) => (
-                          <span key={k} className={v.level === "fail" ? "text-danger" : v.level === "warn" ? "text-warn" : ""}>
-                            {v.message}
-                          </span>
-                        ))}
+                        {current.validation.map((v, k) => {
+                          // The rule's name first where it has one (the core's message is the detail: which page, why).
+                          const rule = validationRuleLabel(v.rule, t);
+                          return (
+                            <span key={k} className={v.level === "fail" ? "text-danger" : v.level === "warn" ? "text-warn" : ""} data-testid="review-validation" data-rule={v.rule}>
+                              {rule && <span className="font-medium">{rule}</span>}
+                              {rule && v.message ? " — " : ""}
+                              {v.message}
+                            </span>
+                          );
+                        })}
                       </dd>
                     </>
                   )}

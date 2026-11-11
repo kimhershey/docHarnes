@@ -1951,10 +1951,15 @@ export function upsertDoc(doc: MockDoc): void {
 
 async function runDocumentImport(plan: DocumentImportPlan): Promise<string> {
   const importable = plan.items.filter((i) => i.status.kind === "new" || i.status.kind === "relink");
-  // Documents the batch merely re-encountered still join the batch's collection / project (as in Rust).
-  const reencountered = plan.items.flatMap((i) => (i.status.kind === "already_registered" ? [i.status.id] : i.status.kind === "duplicate" ? [i.status.of] : []));
-  if (importable.length === 0) throw err("invalid", "nothing to import");
-  const subject = plan.source === "inbox" ? "inbox" : `${importable.length} files`;
+  // Registered documents the batch merely met again — the same path, or the same content under another path —
+  // each once (`ImportPlan::existing_ids`): they still join the batch's collection / project.
+  const reencountered = [...new Set(plan.items.flatMap((i) => (i.status.kind === "already_registered" ? [i.status.id] : i.status.kind === "duplicate" ? [i.status.of] : [])))];
+  const hasTarget = !!(plan.options.collection_id || plan.options.project_id);
+  // `documents_import_run`: a plan with nothing new is refused — unless it has a collection / project to put
+  // its registered documents into (`attaches_existing`); then the job only attaches them and names them in
+  // `ImportReport.existing`.
+  if (importable.length === 0 && !(hasTarget && reencountered.length > 0)) throw err("invalid", "nothing to import");
+  const subject = plan.source === "inbox" ? "inbox" : importable.length === 0 ? `${reencountered.length} documents` : `${importable.length} files`;
   const job = createJob("document_import", subject);
   const settings = loadSettings();
   const dpi = plan.options.dpi ?? settings.processing.render_dpi;
@@ -2034,7 +2039,9 @@ async function runDocumentImport(plan: DocumentImportPlan): Promise<string> {
     }
     if (ids.length > 0) emit(EVENTS.documentsChanged, { kind: "batch", ids } satisfies DocumentsChanged);
     const wasCancelled = cancelled.has(job.id);
-    const touched = [...ids, ...reencountered];
+    // The plan may be minutes old: a document deleted since is simply not there to attach.
+    const existing = reencountered.filter((id) => wsDocs().some((d) => d.id === id));
+    const touched = [...ids, ...existing];
     const kb = await import("./mock-knowledge");
     if (plan.options.collection_id) kb.attachToCollection(plan.options.collection_id, touched, plan.options.role);
     if (plan.options.project_id) {
@@ -2045,8 +2052,10 @@ async function runDocumentImport(plan: DocumentImportPlan): Promise<string> {
         /* project deleted meanwhile */
       }
     }
+    // Their role may have followed the collection: the lists refresh for them as well.
+    if (hasTarget && existing.length > 0) emit(EVENTS.documentsChanged, { kind: "updated", ids: existing } satisfies DocumentsChanged);
     // The report mirrors Rust's `ImportReport` (the job's structured result; drop targets read the ids).
-    const report: ImportReport = { batch_id: job.id, imported: ids, relinked: [], failed: [], skipped: plan.duplicate_count + plan.unsupported_count, cancelled: wasCancelled };
+    const report: ImportReport = { batch_id: job.id, imported: ids, relinked: [], existing, failed: [], skipped: plan.duplicate_count + plan.unsupported_count, cancelled: wasCancelled };
     if (wasCancelled) finishJob(job.id, { ok: false, error: "cancelled", result: report });
     else finishJob(job.id, { ok: true, detail: `imported ${ids.length} / skipped ${plan.duplicate_count + plan.unsupported_count}`, result: report });
     kb.autoIndex();
@@ -2446,7 +2455,8 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
           `- ${f.name}`,
           `  size: ${f.size} bytes (~${(f.size / 1024 ** 3).toFixed(2)} GiB)`,
           `  sha256: ${f.sha256 ?? "(not pinned yet - verify after download)"}`,
-          `  url: ${f.hf ? `https://huggingface.co/${f.hf}/resolve/main/${f.name}` : "(no public URL)"}`,
+          // `ModelFile::download_url`: the pinned address of the registry entry, else the repository's main branch.
+          `  url: ${f.url ?? (f.hf ? `https://huggingface.co/${f.hf}/resolve/main/${f.name}` : "(no public URL)")}`,
         ]),
         "",
         "Also copy LICENSE / NOTICE files from the source repository into the same folder.",

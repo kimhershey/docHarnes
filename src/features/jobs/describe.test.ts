@@ -87,6 +87,17 @@ describe("describeJobError", () => {
     expect(describeJobError(job({ error: "no_documents" }), t)).toBe(ko.jobs.error.no_documents);
   });
 
+  it("tells the three reasons a 보완요청서 has nothing to request apart", () => {
+    expect(describeJobError(job({ error: "no_findings" }), t)).toBe(ko.jobs.error.no_findings);
+    expect(describeJobError(job({ error: "findings_not_requestable" }), t)).toBe(ko.jobs.error.findings_not_requestable);
+    expect(describeJobError(job({ error: "findings_not_in_run" }), t)).toBe(ko.jobs.error.findings_not_in_run);
+    // As the reason of a failed plan step and behind the core's prefix.
+    expect(describeJobError(job({ error: "request_supplement: findings_not_in_run" }), t)).toBe(`${ko.planner.ops.request_supplement}: ${ko.jobs.error.findings_not_in_run}`);
+    expect(describeJobError(job({ error: "invalid value: findings_not_requestable" }), t)).toBe(ko.jobs.error.findings_not_requestable);
+    const english = ((k: string, o?: Record<string, unknown>) => instance.t(k, { ...o, lng: "en" })) as typeof t;
+    expect(describeJobError(job({ error: "findings_not_in_run" }), english)).toBe(en.jobs.error.findings_not_in_run);
+  });
+
   it("carries the schema name and translates the op of a failed plan step", () => {
     expect(describeJobError(job({ error: "schema_not_found: 영수증 v2" }), t)).toBe("스키마를 찾을 수 없습니다: 영수증 v2");
     expect(describeJobError(job({ error: "export: export_exists" }), t)).toBe(`${ko.planner.ops.export}: ${ko.jobs.error.export_exists}`);

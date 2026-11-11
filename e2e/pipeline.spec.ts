@@ -344,6 +344,143 @@ test.describe("P4 pipeline", () => {
     await expect(page.getByTestId("viewer-text-source")).toHaveText(ko.viewer.text_edit.source.ocr);
   });
 
+  // 0.8.0: a forced re-run keeps page text corrected by hand unless the request says `reocr_manual`.
+  test("'잔글씨 프로파일로 다시 처리' keeps hand-corrected page text unless '직접 고친 글자도 다시 읽기' is ticked", async ({ page }) => {
+    test.setTimeout(90_000);
+    await freshApp(page);
+    await createWorkspace(page);
+    await processEstimate(page);
+    const id = await docId(page, "견적서-1p.jpg");
+    const layer = page.getByTestId("viewer-text-layer");
+    const openViewer = async () => {
+      await page.getByTestId("nav-library").click();
+      await page.getByTestId(`doc-open-${id}`).click();
+      await expect(layer).toBeVisible();
+    };
+    const processed = async (count: number) => {
+      await page.getByTestId("nav-jobs").click();
+      await page.getByTestId("jobs-tab-finished").click();
+      await expect(page.locator('[data-job-kind="pipeline"][data-job-state="done"]')).toHaveCount(count, { timeout: 20_000 });
+    };
+    /** 문서함 > 처리 > 잔글씨 프로파일로 다시 처리, up to its confirmation. */
+    const finePrint = async () => {
+      await page.getByTestId("nav-library").click();
+      await page.getByTestId(`doc-select-${id}`).check();
+      await page.getByTestId("library-process").click();
+      await page.getByTestId("library-process-fine-print").click();
+      await expect(page.getByTestId("confirm-dialog")).toBeVisible();
+    };
+
+    // A word of the recognised page text is corrected by hand.
+    await openViewer();
+    await layer.locator("[data-word-index]").first().click();
+    await page.getByTestId("page-viewer").focus();
+    await page.keyboard.press("Enter");
+    await page.getByTestId("viewer-text-input").fill("손교정");
+    await page.keyboard.press("Enter");
+    await expect(layer).toContainText("손교정");
+    await expect(page.getByTestId("viewer-text-source")).toHaveText(ko.viewer.text_edit.source.manual);
+
+    // The confirmation carries the choice, off by default, with what it does.
+    await finePrint();
+    const dialog = page.getByTestId("confirm-dialog");
+    await expect(dialog).toContainText(ko.pipeline.process.confirm_title);
+    await expect(dialog).toContainText(ko.pipeline.process.reocr_manual);
+    await expect(dialog).toContainText(ko.pipeline.process.reocr_manual_hint);
+    await expect(dialog.getByTestId("confirm-option")).not.toBeChecked();
+    // Cancelling starts nothing.
+    await page.getByTestId("confirm-cancel").click();
+    await expect(dialog).toBeHidden();
+    await processed(1);
+
+    // Confirmed as it is: the document is processed again (forced), the correction is still there.
+    await finePrint();
+    await page.getByTestId("confirm-ok").click();
+    await expect(page.getByTestId("toaster")).toContainText(tpl(ko.pipeline.process.started, { count: 1 }));
+    await processed(2);
+    await openViewer();
+    await expect(layer).toContainText("손교정");
+    await expect(page.getByTestId("viewer-text-source")).toHaveText(ko.viewer.text_edit.source.manual);
+
+    // Ticked: the page is read again and the correction is replaced. The box is off again for the next run.
+    await finePrint();
+    await expect(dialog.getByTestId("confirm-option")).not.toBeChecked();
+    await dialog.getByTestId("confirm-option").check();
+    await page.getByTestId("confirm-ok").click();
+    await processed(3);
+    await openViewer();
+    await expect(layer).not.toContainText("손교정");
+    await expect(page.getByTestId("viewer-text-source")).toHaveText(ko.viewer.text_edit.source.ocr);
+
+    // The other menu entries have no such choice: an ordinary extraction of a document with results only asks to replace them.
+    await page.getByTestId("nav-library").click();
+    await page.getByTestId(`doc-select-${id}`).check();
+    await page.getByTestId("library-process").click();
+    await page.getByTestId("library-process-standard").click();
+    await expect(dialog).toContainText(ko.pipeline.process.confirm_title);
+    await expect(dialog.getByTestId("confirm-option")).toHaveCount(0);
+    await page.getByTestId("confirm-cancel").click();
+  });
+
+  // PIP-15: `general` is what a document is extracted with when no other type fits. Its last enabled form —
+  // the built-in one or a user's — can neither be switched off nor deleted (the backend refuses both with
+  // `schema_general_required`).
+  test("the last enabled 일반 form can neither be switched off nor deleted; a second one unlocks it", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openSettingsTab(page, "schemas");
+    const enabled = page.getByTestId("schema-enabled");
+    const remove = page.getByTestId("schema-delete");
+    const generalCopy = page.locator('[data-testid^="schema-row-"][data-schema-doc-type="general"]:not([data-testid="schema-row-builtin-general"])');
+
+    // Alone, the built-in form is locked on (a built-in has no delete button at all).
+    await page.getByTestId("schema-row-builtin-general").click();
+    await expect(enabled).toBeChecked();
+    await expect(enabled).toBeDisabled();
+    await expect(enabled).toHaveAttribute("data-locked", "true");
+    await expect(remove).toHaveCount(0);
+
+    // A copy of it is a second enabled 일반 form: neither is the last one any more.
+    await page.getByTestId("schema-duplicate").click();
+    await page.getByTestId("schema-save").click();
+    await expect(page.getByTestId("toaster")).toContainText(ko.schemas.editor.saved);
+    await expect(generalCopy).toHaveCount(1);
+    await expect(generalCopy).toHaveAttribute("aria-current", "true");
+    await expect(enabled).toBeEnabled();
+    await expect(remove).toBeEnabled();
+    await page.getByTestId("schema-row-builtin-general").click();
+    await expect(enabled).toBeEnabled();
+    await expect(enabled).not.toHaveAttribute("data-locked", "true");
+
+    // The built-in one is switched off: now the copy is the last enabled 일반 form — no switch, no delete, and why.
+    await enabled.click();
+    await expect(page.getByTestId("schema-row-builtin-general")).toHaveAttribute("data-schema-enabled", "false");
+    await generalCopy.click();
+    await expect(enabled).toBeChecked();
+    await expect(enabled).toBeDisabled();
+    await expect(enabled).toHaveAttribute("data-locked", "true");
+    await expect(remove).toBeDisabled();
+    await expect(remove).toHaveAttribute("data-locked", "true");
+    await expect(remove.locator("xpath=..")).toHaveAttribute("title", ko.schemas.general_locked);
+    await expect(page.locator("label", { has: enabled })).toHaveAttribute("title", ko.schemas.general_locked);
+
+    // With the built-in form back on, the copy can go.
+    await page.getByTestId("schemas-hidden-builtins").locator("summary").click();
+    await page.getByTestId("schema-row-builtin-general").click();
+    await expect(enabled).not.toBeChecked();
+    await enabled.click();
+    await expect(page.getByTestId("schema-row-builtin-general")).toHaveAttribute("data-schema-enabled", "true");
+    await generalCopy.click();
+    await expect(remove).toBeEnabled();
+    await remove.click();
+    await page.getByTestId("confirm-ok").click();
+    await expect(page.getByTestId("toaster")).toContainText(ko.schemas.editor.deleted);
+    await expect(generalCopy).toHaveCount(0);
+    // Alone again: locked.
+    await page.getByTestId("schema-row-builtin-general").click();
+    await expect(enabled).toBeDisabled();
+  });
+
   test("양식 테스트 asks before it replaces a document's results; the built-in 일반 form cannot be switched off (PIP-2, PIP-15)", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);

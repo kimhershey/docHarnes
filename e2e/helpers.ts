@@ -85,9 +85,23 @@ export function tpl(template: string, vars: Record<string, string | number>): st
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** A regex for a ko.json template: the given vars are fixed, every other placeholder matches a number. */
+/** The written particle forms of ko.json ("을(를)" …) with the particles the app may show in their place. */
+const WRITTEN_PARTICLES: [string, string][] = [
+  ["을(를)", "(?:을|를|을\\(를\\))"],
+  ["이(가)", "(?:이|가|이\\(가\\))"],
+  ["은(는)", "(?:은|는|은\\(는\\))"],
+  ["(으)로", "(?:으로|로|\\(으\\)로)"],
+];
+
+/**
+ * A regex for a ko.json template: the given vars are fixed, every other placeholder matches a number. A written
+ * particle form matches whichever particle the app resolved it to (it depends on the word — here often a
+ * number that is not known in advance — in front of it).
+ */
 export function tplPattern(template: string, vars: Record<string, string | number>): RegExp {
-  return new RegExp(escapeRe(template).replace(/\\\{\\\{(\w+)\\\}\\\}/g, (_, k: string) => (k in vars ? escapeRe(String(vars[k])) : "\\d+")));
+  let source = escapeRe(template).replace(/\\\{\\\{(\w+)\\\}\\\}/g, (_, k: string) => (k in vars ? escapeRe(String(vars[k])) : "\\d+"));
+  for (const [written, either] of WRITTEN_PARTICLES) source = source.split(escapeRe(written)).join(either);
+  return new RegExp(source);
 }
 
 export type SettingsTab = "general" | "workspace" | "processing" | "models" | "schemas" | "reference" | "privacy";

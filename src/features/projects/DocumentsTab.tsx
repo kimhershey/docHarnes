@@ -5,6 +5,7 @@ import { useNavigate } from "react-router";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog, type ConfirmRequest } from "@/components/ui/confirm-dialog";
 import { Spinner } from "@/components/ui/spinner";
 import { IngestWizard } from "@/features/knowledge/IngestWizard";
 import { addToReferenceGroup, invalidateReference, useProjectReferenceDocs } from "@/features/knowledge/reference";
@@ -74,6 +75,7 @@ export function DocumentsTab({ detail }: { detail: ProjectDetail }) {
   const [syncing, setSyncing] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
   const [switching, setSwitching] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
 
   const rows = useMemo<Row[]>(() => {
     const refIds = new Set((refDocs ?? []).map((d) => d.id));
@@ -156,6 +158,21 @@ export function DocumentsTab({ detail }: { detail: ProjectDetail }) {
     } catch (e) {
       toast(describeError(e, t), "danger");
     }
+  };
+  /**
+   * 제외: a document that is in this project through a tracked copy takes that file with it, so it asks first —
+   * and says which file goes and which stays (PRJ-9: a copy the user edited is their work and is kept; the
+   * original is never touched). A document without a copy only leaves the list and is removed at once.
+   */
+  const askRemove = (row: Row) => {
+    if (!row.copy) return void remove(row);
+    setConfirm({
+      title: t("projects.documents.remove"),
+      description: t("projects.documents.remove_confirm", { name: name(row.doc) }),
+      confirmLabel: t("projects.documents.remove"),
+      danger: true,
+      onConfirm: () => remove(row),
+    });
   };
   const resync = async () => {
     setSyncing(true);
@@ -323,7 +340,7 @@ export function DocumentsTab({ detail }: { detail: ProjectDetail }) {
                         <Button size="icon-sm" variant="ghost" onClick={() => navigate(`/library/${d.id}`)} aria-label={t("projects.documents.open")}>
                           <ExternalLink />
                         </Button>
-                        <Button size="icon-sm" variant="ghost" className="text-danger" onClick={() => void remove(row)} aria-label={t("projects.documents.remove")} data-testid="project-doc-remove">
+                        <Button size="icon-sm" variant="ghost" className="text-danger" onClick={() => askRemove(row)} aria-label={t("projects.documents.remove")} data-testid="project-doc-remove">
                           <X />
                         </Button>
                       </div>
@@ -337,6 +354,7 @@ export function DocumentsTab({ detail }: { detail: ProjectDetail }) {
       </section>
       <AddDocumentsDialog open={addOpen} onOpenChange={setAddOpen} excludeIds={rows.map((r) => r.doc.id)} onAdd={(ids, kind) => void add(ids, kind)} withKind />
       {group && <IngestWizard open={wizard} collectionId={group.id} lockCollection onOpenChange={setWizard} />}
+      <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
     </div>
   );
 }

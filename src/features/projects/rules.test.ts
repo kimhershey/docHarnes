@@ -7,7 +7,7 @@ import en from "@/i18n/en.json";
 import ko from "@/i18n/ko.json";
 import type { DocTypeInfo, FieldDef, Rule, SchemaRecord } from "@/lib/types";
 
-import { fieldOptions, newRule, operandLabel, parseTolerance, ruleComplete, ruleSummary, schemaForType, unresolvedOperands } from "./rules";
+import { evidenceStatusLabel, fieldOptions, newRule, operandLabel, parseTolerance, ruleComplete, ruleSummary, schemaForType, unresolvedOperands } from "./rules";
 
 const instance = i18next.createInstance();
 await instance.init({ lng: "ko", fallbackLng: false, resources: { ko: { translation: ko }, en: { translation: en } }, interpolation: { escapeValue: false } });
@@ -74,6 +74,16 @@ describe("rule helpers", () => {
     expect(parseTolerance("0.5")).toBe(0.5);
     expect(parseTolerance("-3")).toBe(0);
     expect(parseTolerance("abc")).toBeNull();
+  });
+
+  it("marks evidence whose value is not settled: 추출 전, 검토 대기, 거부, 문서 없음", () => {
+    expect(evidenceStatusLabel("not_extracted", t)).toBe("추출 전");
+    expect(evidenceStatusLabel("pending", t)).toBe(ko.projects.results.evidence_status.pending);
+    expect(evidenceStatusLabel("rejected", t)).toBe(ko.projects.results.evidence_status.rejected);
+    expect(evidenceStatusLabel("missing_document", t)).toBe(ko.projects.results.evidence_status.missing_document);
+    // A settled value (approved, read automatically, a document-level value) and a plain gap carry no mark.
+    for (const status of ["approved", "corrected", "auto", "document", "absent", null, undefined] as const) expect(evidenceStatusLabel(status, t), String(status)).toBeNull();
+    expect(Object.keys(en.projects.results.evidence_status).sort()).toEqual(Object.keys(ko.projects.results.evidence_status).sort());
   });
 
   it("flags operands the schemas cannot resolve", () => {

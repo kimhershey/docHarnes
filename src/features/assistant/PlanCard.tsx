@@ -20,7 +20,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { describeExportError, describeOrganizeError } from "@/features/organize/errors";
 
 import { ClippedNote } from "./ClippedNote";
-import { exportPreview, impactLine, impactOf, onlyReviewedValue, opLabel, organizePreview, requiresConfirmation, ruleDraftPreview, sourceLabel, summarizeOp, warningIssues, withOnlyReviewed } from "./describePlan";
+import { exportPreview, impactLine, impactOf, onlyReviewedValue, opLabel, organizePreview, organizeReasonText, requiresConfirmation, ruleDraftPreview, sourceLabel, summarizeOp, warningIssues, withOnlyReviewed } from "./describePlan";
 import { PlanEditor } from "./PlanEditor";
 import { planKey, previewEditedPlan, previewFailure } from "./repreview";
 
@@ -78,7 +78,7 @@ export function OrganizeDiff({ items, index, total }: { items: OrganizeItem[]; i
                   <>
                     <AlertTriangle className="mr-1 inline size-3" aria-hidden="true" />
                     {t("planner.card.held")}
-                    {item.reason && item.reason !== "review_pending" && <span className="ml-1 text-fg-subtle">({item.reason})</span>}
+                    {item.reason && item.reason !== "review_pending" && <span className="ml-1 text-fg-subtle">({organizeReasonText(item.reason, t)})</span>}
                   </>
                 ) : (
                   <>

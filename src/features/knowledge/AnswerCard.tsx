@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { describeError } from "@/lib/errors";
-import type { Answer, AnswerSentence, Citation, SavedAnswer } from "@/lib/types";
+import type { Answer, AnswerSentence, AnswerTruncation, Citation, SavedAnswer } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui";
 
@@ -33,6 +33,18 @@ export function paragraphsOf(text: string, sentences: AnswerSentence[]): AnswerS
     if (idx >= 0) cursor = idx + s.text.length;
   }
   return paragraphs;
+}
+
+/**
+ * The note under an answer whose request text or reply was cut (`Answer.truncated`, KNO-3): one sentence per
+ * side that was cut, both for `both`.
+ */
+export function truncationNote(truncated: AnswerTruncation | null | undefined, t: (k: string) => string): string | null {
+  if (!truncated) return null;
+  const parts: string[] = [];
+  if (truncated === "input" || truncated === "both") parts.push(t("answer.truncated_input"));
+  if (truncated === "output" || truncated === "both") parts.push(t("answer.truncated_output"));
+  return parts.length > 0 ? parts.join(" ") : null;
 }
 
 /** Splits a sentence into text and `[n]` markers rendered as clickable chips. */
@@ -80,6 +92,8 @@ export function AnswerCard({
   onDelete,
   onCancel,
   compact,
+  chat,
+  noEvidenceText,
 }: {
   answer: AnyAnswer | null;
   streamText?: string;
@@ -91,6 +105,13 @@ export function AnswerCard({
   onDelete?: (id: number) => void;
   onCancel?: () => void;
   compact?: boolean;
+  /**
+   * The answer is a small-talk reply (the request went out with `style: "chat"`): it has no sources because
+   * nothing was looked up, which is not "answered from the text you sent" — no 검색 없이 답변 badge.
+   */
+  chat?: boolean;
+  /** What the "no evidence" note says instead of the general sentence (a scope that matched no document). */
+  noEvidenceText?: string;
 }) {
   const { t } = useTranslation();
   const toast = useUiStore((s) => s.toast);
@@ -106,6 +127,7 @@ export function AnswerCard({
   const id = answer?.id ?? null;
   const state = pending ? "pending" : answer ? (answer.no_evidence && !answer.used_general_knowledge ? "no_evidence" : "done") : error ? "error" : "idle";
   const paragraphs = answer ? paragraphsOf(answer.text, answer.sentences) : [];
+  const truncated = answer && "truncated" in answer ? truncationNote(answer.truncated, t) : null;
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-border bg-bg-elevated p-3 text-sm" data-testid="answer-card" data-answer-state={state}>
       {answer && (
@@ -116,7 +138,7 @@ export function AnswerCard({
               {t("answer.general_badge")}
             </Badge>
           )}
-          {!answer.no_evidence && !answer.used_general_knowledge && answer.sources.length === 0 && (
+          {!chat && !answer.no_evidence && !answer.used_general_knowledge && answer.sources.length === 0 && (
             <Badge variant="outline" data-testid="answer-text-only" title={t("answer.text_only_hint")}>
               {t("answer.text_only")}
             </Badge>
@@ -146,7 +168,7 @@ export function AnswerCard({
       )}
       {state === "no_evidence" && (
         <div className="flex flex-wrap items-center gap-2 rounded-md bg-warn-soft px-2 py-1.5 text-warn" data-testid="answer-no-evidence">
-          <span>{t("answer.no_evidence")}</span>
+          <span>{noEvidenceText ?? t("answer.no_evidence")}</span>
           {onAskGeneral && (
             <Button size="sm" variant="outline" onClick={onAskGeneral} data-testid="answer-ask-general">
               {t("answer.ask_general")}
@@ -168,6 +190,11 @@ export function AnswerCard({
             <p className="whitespace-pre-wrap selectable">{answer.text}</p>
           )}
         </div>
+      )}
+      {state === "done" && answer && truncated && (
+        <p className="rounded-md bg-warn-soft px-2 py-1 text-xs text-warn" role="note" data-testid="answer-truncated" data-truncated={"truncated" in answer ? answer.truncated : undefined}>
+          {truncated}
+        </p>
       )}
       {!pending && answer && "conflicts" in answer && answer.conflicts && (
         <div className="rounded-md border border-warn/40 bg-warn-soft px-2 py-1.5 text-xs" data-testid="answer-conflicts">

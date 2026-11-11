@@ -81,6 +81,80 @@ test.describe("0.8.0 assistant harness", () => {
     await expect(page.getByTestId("scale-value")).toContainText("120");
   });
 
+  // 0.8.0 review: 되돌리기 replayed the value from before the change whatever had happened since —
+  // "배율 120", "배율 150", 되돌리기 on the first card set 100 and said "이전 값으로 되돌렸습니다".
+  test("되돌리기 on a settings card whose value was changed again changes nothing and says so", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openAssistantScreen(page);
+
+    await send(page, "UI 배율 120%");
+    await expect(assistantCard(page, "executed")).toHaveCount(1, { timeout: 15_000 });
+    await send(page, "UI 배율 150%");
+    await expect(assistantCard(page, "executed")).toHaveCount(2, { timeout: 15_000 });
+    expect(await settingsValue(page, "ui.scale_percent")).toBe(150);
+    const first = assistantCard(page, "executed").nth(0);
+    const second = assistantCard(page, "executed").nth(1);
+
+    // The first card would put 100 back, but what it set (120) is no longer the value: nothing changes.
+    await first.getByTestId("executed-undo").click();
+    await expect(first.getByTestId("executed-undo-stale")).toHaveText(ko.assistant.undo_stale);
+    await expect(first.getByTestId("executed-undo")).toHaveCount(0);
+    await expect(first.getByTestId("executed-undone")).toHaveCount(0);
+    expect(await settingsValue(page, "ui.scale_percent")).toBe(150);
+
+    // The card keeps saying so after a restart; the last change can still be undone.
+    await page.reload();
+    await expect(page.getByTestId("app-shell")).toBeVisible();
+    await openAssistantScreen(page);
+    await expect(assistantCard(page, "executed")).toHaveCount(2, { timeout: 15_000 });
+    await expect(first.getByTestId("executed-undo-stale")).toHaveText(ko.assistant.undo_stale);
+    await second.getByTestId("executed-undo").click();
+    await expect(second.getByTestId("executed-undone")).toBeVisible();
+    expect(await settingsValue(page, "ui.scale_percent")).toBe(120);
+  });
+
+  // 0.8.0 review: an answer has no approval step, so the part of the request the planner could not cover
+  // ("… 메일로 보내줘") was dropped without a word.
+  test("a question that also asks for something the app cannot do says what is left out, then answers", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\개발계약서-2p.pdf"]);
+    await openAssistantScreen(page);
+
+    await send(page, "위약금 조항 알려주고 메일로 보내줘");
+    const note = page.locator('[data-testid="assistant-card-reply"][data-reply-note="unmet"]');
+    await expect(note).toHaveCount(1, { timeout: 15_000 });
+    await expect(note).toContainText("메일");
+    // The answer follows without waiting for an approval: no plan card.
+    await expect(answerCards(page)).toHaveCount(1, { timeout: 15_000 });
+    await expect(answerCards(page).first()).toHaveAttribute("data-answer-state", /^(done|no_evidence)$/, { timeout: 15_000 });
+    await expect(page.locator('[data-testid="assistant-card-plan"]')).toHaveCount(0);
+    // The note comes before the answer.
+    const cards = page.locator('[data-testid="assistant-messages"] [data-testid^="assistant-card-"]');
+    await expect(cards.nth(0)).toHaveAttribute("data-testid", "assistant-card-reply");
+    await expect(cards.nth(1)).toHaveAttribute("data-testid", "assistant-card-answer");
+
+    // A plain question has no note.
+    await send(page, "위약금 조항 알려줘");
+    await expect(answerCards(page)).toHaveCount(2, { timeout: 15_000 });
+    await expect(note).toHaveCount(1);
+  });
+
+  // The core's fast path takes a sentence that is nothing but a greeting; "안녕?" is left to the model, which
+  // answers it as small talk.
+  test("a greeting with a question mark is answered by the model as small talk, not by the fast path", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openAssistantScreen(page);
+    await send(page, "안녕?");
+    const chat = answerCards(page).first();
+    await expect(chat).toHaveAttribute("data-answer-state", "done", { timeout: 15_000 });
+    await expect(chat).toContainText("DocuLens 어시스턴트");
+    await expect(chat.getByTestId("answer-text-only")).toHaveCount(0);
+    await expect(assistantCard(page, "reply")).toHaveCount(0);
+  });
+
   test("a greeting gets a reply at once: no plan card, no answer card, no model", async ({ page }) => {
     // The planner model is off: a greeting must not need it.
     await freshApp(page, { planner_model: "off" });
@@ -112,6 +186,8 @@ test.describe("0.8.0 assistant harness", () => {
     await expect(chat).toHaveAttribute("data-answer-state", "done", { timeout: 15_000 });
     await expect(chat).toContainText("DocuLens 어시스턴트");
     await expect(chat.getByTestId("answer-no-evidence")).toHaveCount(0);
+    // Nothing was looked up, but this is small talk, not an answer from a text the user sent: no "검색 없이 답변".
+    await expect(chat.getByTestId("answer-text-only")).toHaveCount(0);
 
     // "문서와 무관한 지식 질문에 답하게 할지 → 응답하도록 하자": answered even though no document covers it.
     await send(page, "대한민국의 수도는 어디야?");
@@ -120,6 +196,21 @@ test.describe("0.8.0 assistant harness", () => {
     await expect(general.getByTestId("answer-general-badge")).toBeVisible();
     await expect(page.locator('[data-testid="assistant-card-plan"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="assistant-card-clarify"]')).toHaveCount(0);
+
+    // A text the user sends to be worked on is the text-only answer: it keeps the badge.
+    await send(page, "다음 문장을 다듬어 정리해줘: 금번 과업은 당사가 수행하며 기한은 12월말까지로 하고 산출물은 설계서와 소스코드로 함. 검수는 발주처가 납품 후 2주 내에 완료하는 것으로 한다.");
+    const textOnly = answerCards(page).nth(2);
+    await expect(textOnly).toHaveAttribute("data-answer-state", "done", { timeout: 15_000 });
+    await expect(textOnly.getByTestId("answer-text-only")).toHaveText(ko.answer.text_only);
+
+    // The request's style is kept on the stored message: the same after a restart.
+    await page.reload();
+    await expect(page.getByTestId("app-shell")).toBeVisible();
+    await openAssistantScreen(page);
+    await expect(answerCards(page)).toHaveCount(3, { timeout: 15_000 });
+    await expect(answerCards(page).nth(0)).toContainText("DocuLens 어시스턴트");
+    await expect(answerCards(page).nth(0).getByTestId("answer-text-only")).toHaveCount(0);
+    await expect(answerCards(page).nth(2).getByTestId("answer-text-only")).toBeVisible();
   });
 
   test("'프로젝트 별 내용을 요약해줘' makes one summary per project, with the documents outside every project last", async ({ page }) => {
@@ -166,6 +257,15 @@ test.describe("0.8.0 assistant harness", () => {
     await plan.getByTestId("plan-execute").click();
     await expect(plan).toHaveAttribute("data-plan-status", "done", { timeout: 15_000 });
     expect(await settingsValue(page, "ui.scale_percent")).toBe(125);
+
+    // The same for a change that is not a number: a theme the sentence does not name.
+    await send(page, "눈이 편한 화면으로 해줘");
+    const theme = assistantCard(page, "plan").last();
+    await expect(theme).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    await expect(theme.locator('[data-warning-code="ungrounded_change"]')).toContainText("ui.theme");
+    await expect(page.locator("html")).not.toHaveAttribute("data-theme", "dark");
+    await theme.getByTestId("plan-cancel").click();
+    await expect(page.locator("html")).not.toHaveAttribute("data-theme", "dark");
   });
 
   test("a part the plan leaves out and a split it cannot make are said on the card before anything runs", async ({ page }) => {
