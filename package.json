@@ -15,6 +15,7 @@
     "licenses:check": "node scripts/check-licenses.mjs",
     "notices": "node scripts/gen-notices.mjs",
     "nsis:check": "node scripts/check-nsis-template.mjs",
+    "versions:check": "node scripts/check-versions.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

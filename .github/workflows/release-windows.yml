@@ -56,6 +56,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # Before the long build: the installer name and the Release tag come from src-tauri/tauri.conf.json, so every
+      # other place that records the version must agree, and a build dispatched on release/<version> must be that
+      # version (scripts/check-versions.mjs reads the branch from GITHUB_REF_NAME).
+      - name: Versions agree (Cargo.toml / Cargo.lock, package.json / lock, tauri.conf.json, mock backend, SBOM)
+        run: node scripts/check-versions.mjs
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: npm ci
