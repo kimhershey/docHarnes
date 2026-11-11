@@ -269,20 +269,18 @@ fn inline_only(plan: &Plan) -> bool {
     })
 }
 
-/// Executes a (confirmed, possibly edited) plan: quick plans inline, the rest
-/// as a persistent job. With `options.preview_only` the plan is only checked and previewed.
-pub fn execute(
-    app: &AppHandle,
-    mut plan: Plan,
+/// The checks a plan from a card passes before it runs or is previewed; returns the non-blocking
+/// findings. The plan is normalised in place and gets the 현재 프로젝트 default scope where it applies.
+fn check_for_execution(
+    plan: &mut Plan,
+    ctx: &PlanContext,
     text: &str,
-    ui: &UiPlanContext,
     options: &ExecuteOptions<'_>,
-) -> UiResult<ExecuteResponse> {
-    let ctx = build_context(app, ui)?;
+) -> UiResult<Vec<planner::PlanIssue>> {
     // The plan comes from a card: its date range is the one the planning step resolved — or what
     // the user made of it in the editor. The date phrase of the sentence is not applied again, or
     // a range the user removed would come back (audit PLN-14).
-    let issues = planner::validate::validate(&mut plan, &ctx, None);
+    let issues = planner::validate::validate(plan, ctx, None);
     if planner::has_errors(&issues) {
         return Err(UiError {
             code: "plan_invalid".into(),
@@ -296,13 +294,27 @@ pub fn execute(
     // Documents must be named unless the user said "전부" — in the text the plan was made from,
     // which after an ask-back includes the reply (audit PLN-7).
     let said = options.planned_text.filter(|t| !t.trim().is_empty()).unwrap_or(text);
-    if let Some(issue) = planner::validate::settle_scope(&mut plan, &ctx, said) {
+    if let Some(issue) = planner::validate::settle_scope(plan, ctx, said) {
         return Err(UiError {
             code: "plan_invalid".into(),
             message: issue.message.clone(),
             detail: serde_json::to_value(vec![issue]).ok(),
         });
     }
+    Ok(issues)
+}
+
+/// Executes a (confirmed, possibly edited) plan: quick plans inline, the rest
+/// as a persistent job. With `options.preview_only` the plan is only checked and previewed.
+pub fn execute(
+    app: &AppHandle,
+    mut plan: Plan,
+    text: &str,
+    ui: &UiPlanContext,
+    options: &ExecuteOptions<'_>,
+) -> UiResult<ExecuteResponse> {
+    let ctx = build_context(app, ui)?;
+    let issues = check_for_execution(&mut plan, &ctx, text, options)?;
     if options.preview_only {
         let pctx = pipeline_bridge::context(app)?;
         let preview = exec::preview(pctx.db(), &pctx.docs.paths, &plan, &pctx.settings, ctx.language)?;
@@ -899,5 +911,98 @@ mod tests {
         assert_eq!(changes(vec![done(OpKind::Review, json!({ "changed": 3 }))]).pipeline, ["review"]);
         assert_eq!(changes(vec![step(OpKind::DefineTerm, StepStatus::Failed, json!({}))]), StepChanges::default());
         assert_eq!(changes(vec![done(OpKind::Tag, json!({ "documents": ["d1"] }))]), StepChanges::default());
+    }
+
+    fn context(scope_project: Option<&str>) -> PlanContext {
+        PlanContext {
+            today: chrono::NaiveDate::from_ymd_opt(2026, 11, 4).unwrap(),
+            projects: vec![ProjectSummary {
+                id: "p-hanbit".into(), name: "한빛 납품".into(), status: "active".into()
+            }],
+            scope_project: scope_project.map(str::to_string),
+            ..PlanContext::default()
+        }
+    }
+
+    /// "태그 '긴급' 달아줘" as a plan from a card: a tag step and whatever scope the card carries.
+    fn tag_plan(scope: planner::Scope) -> Plan {
+        let mut plan = Plan::single(Op::Tag { add: vec!["긴급".into()], remove: Vec::new() }, 0.9, "태그 추가");
+        plan.scope = scope;
+        plan
+    }
+
+    fn checked(plan: &mut Plan, ctx: &PlanContext, text: &str, planned_text: Option<&str>) -> Result<(), String> {
+        let options = ExecuteOptions { planned_text, preview_only: false };
+        check_for_execution(plan, ctx, text, &options).map(|_| ()).map_err(|e| {
+            let codes: Vec<String> = e
+                .detail
+                .as_ref()
+                .and_then(Value::as_array)
+                .map(|issues| issues.iter().filter_map(|i| i["code"].as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            format!("{}: {}", e.code, codes.join(","))
+        })
+    }
+
+    /// Audit PLN-7: a plan made after an ask-back ("… 전체면 '전부'라고 해 주세요" → "전부") could
+    /// never run — the card keeps the command only, and execution looked for "전부" in it.
+    #[test]
+    fn a_plan_runs_against_the_text_it_was_made_from() {
+        const COMMAND: &str = "태그 '긴급' 달아줘";
+        let asked = |reply: &str| {
+            format!("{COMMAND}\n\n[어시스턴트 질문] 어떤 문서에 적용할까요? 전체면 '전부'라고 해 주세요.\n[사용자 답변] {reply}")
+        };
+        let library = context(None);
+        // The card's command alone names no documents.
+        let mut plan = tag_plan(planner::Scope::default());
+        assert_eq!(checked(&mut plan, &library, COMMAND, None), Err("plan_invalid: scope_required".into()));
+        assert_eq!(checked(&mut plan, &library, COMMAND, Some("  ")), Err("plan_invalid: scope_required".into()));
+        // With the text of the planning call the reply counts — the user's reply, not the question.
+        assert_eq!(checked(&mut plan, &library, COMMAND, Some(&asked("전부"))), Ok(()));
+        assert!(plan.scope.is_empty(), "outside a project \"all\" is the library: {:?}", plan.scope);
+        assert_eq!(
+            checked(&mut plan, &library, COMMAND, Some(&asked("영수증만"))),
+            Err("plan_invalid: scope_required".into())
+        );
+        // Inside the 현재 프로젝트 scope "all" is the project (audit PLN-6).
+        let in_project = context(Some("p-hanbit"));
+        let mut plan = tag_plan(planner::Scope::default());
+        assert_eq!(checked(&mut plan, &in_project, COMMAND, None), Err("plan_invalid: scope_required".into()));
+        assert_eq!(checked(&mut plan, &in_project, COMMAND, Some(&asked("전부"))), Ok(()));
+        assert_eq!(plan.scope.filter.project_id.as_deref(), Some("p-hanbit"));
+        // A sentence that says "all" itself needs no second text.
+        let mut plan = tag_plan(planner::Scope::default());
+        assert_eq!(checked(&mut plan, &library, "모든 문서에 태그 '긴급' 달아줘", None), Ok(()));
+    }
+
+    /// Audit PLN-14: execution resolved the date phrase of the command again and wrote it into the
+    /// plan, so a range the user had removed in the plan editor came back.
+    #[test]
+    fn a_plan_from_a_card_keeps_the_date_range_it_carries() {
+        const COMMAND: &str = "지난달 영수증에 태그 '긴급' 달아줘";
+        let ctx = context(None);
+        let receipts = |from: Option<&str>, to: Option<&str>| planner::Scope {
+            filter: planner::ScopeFilter {
+                doc_type: Some("receipt".into()),
+                date_from: from.map(str::to_string),
+                date_to: to.map(str::to_string),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let range = |plan: &Plan| (plan.scope.filter.date_from.clone(), plan.scope.filter.date_to.clone());
+        // The planning step does read the phrase: this is what used to run again at execution.
+        let date = doculens_core::prerouter::resolve_relative_date(COMMAND, ctx.today);
+        let mut planned = tag_plan(receipts(None, None));
+        planner::validate::validate(&mut planned, &ctx, date.as_ref());
+        assert_eq!(range(&planned), (Some("2026-10-01".into()), Some("2026-10-31".into())));
+        // The user removed the range on the card: it stays removed.
+        let mut plan = tag_plan(receipts(None, None));
+        assert_eq!(checked(&mut plan, &ctx, COMMAND, None), Ok(()));
+        assert_eq!(range(&plan), (None, None));
+        // … or narrowed it: the plan runs with the edited range.
+        let mut plan = tag_plan(receipts(Some("2026-10-01"), Some("2026-10-15")));
+        assert_eq!(checked(&mut plan, &ctx, COMMAND, None), Ok(()));
+        assert_eq!(range(&plan), (Some("2026-10-01".into()), Some("2026-10-15".into())));
     }
 }
