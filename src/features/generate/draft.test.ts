@@ -7,7 +7,7 @@ import en from "@/i18n/en.json";
 import ko from "@/i18n/ko.json";
 import type { Draft, DraftIssue, SchemaRecord, TemplateInfo } from "@/lib/types";
 
-import { addRow, anchorScope, applySuggestion, blockInputText, blockText, blockWithText, clampTokenBudget, documentSourceIds, followScopeAnchor, formRefToPicker, hasBlockingIssues, insertBlock, issueLocation, MIN_TOKEN_BUDGET, moveBlock, newBlock, NO_SCOPE, parseIssuePath, parseTokenBudget, pickerToFormRef, scopeSectionOrdinal, withScopeOrdinal, pickerToReviseScope, removeBlock, removeRow, reviseRequest, reviseScopeLabel, reviseScopeToPicker, sectionAt, sectionsOf, setBlockLevel, setFieldValue, toggleExcluded, withDocumentSources } from "./draft";
+import { addRow, anchorScope, applySuggestion, blockInputText, blockText, blockWithText, charCount, clampTokenBudget, documentSourceIds, followScopeAnchor, formRefToPicker, hasBlockingIssues, insertBlock, issueLocation, MIN_TOKEN_BUDGET, moveBlock, newBlock, NO_SCOPE, parseIssuePath, parseTokenBudget, pickerToFormRef, scopeSectionOrdinal, withScopeOrdinal, pickerToReviseScope, removeBlock, removeRow, reviseRequest, reviseScopeLabel, reviseScopeToPicker, sectionAt, sectionsOf, setBlockLevel, setFieldValue, toggleExcluded, withDocumentSources } from "./draft";
 
 const instance = i18next.createInstance();
 await instance.init({ lng: "ko", fallbackLng: false, resources: { ko: { translation: ko }, en: { translation: en } }, interpolation: { escapeValue: false } });
@@ -48,6 +48,14 @@ function draft(): Draft {
     saved_doc_id: null,
   };
 }
+
+describe("charCount (GEN-14)", () => {
+  it("counts characters like the core: code points, so an emoji or a Hangul syllable is one", () => {
+    expect(charCount("")).toBe(0);
+    expect(charCount("견적서 ABC")).toBe(7);
+    expect(charCount("📄📄")).toBe(2);
+  });
+});
 
 describe("draft edits", () => {
   it("marks edited fields and keeps the others", () => {

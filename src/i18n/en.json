@@ -2510,7 +2510,22 @@
     "open_in_generate": "Open in Generate",
     "handoff": "The generated draft is open. Check the preview and save it.",
     "reloaded": "Loaded the latest saved draft: it includes changes made elsewhere.",
+    "store": {
+      "copy_newer": "The original draft was edited after the job started, so the result was stored as a new draft instead of over it. The original is still in the draft list.",
+      "copy_cancelled": "What the cancelled job had written was stored as a new draft. The original draft is unchanged.",
+      "not_saved_deleted": "The draft was deleted while the job ran, so the result was not stored in the draft list. Edit or save it to keep it.",
+      "not_saved_failed": "The result could not be stored in the draft list. Edit or save it to keep it."
+    },
+    "cut": {
+      "content": "Only the first {{passed}} of the {{chars}} characters of the content were passed to the model.",
+      "feedback": "Only the first {{passed}} of the {{chars}} characters of the instruction were passed to the model."
+    },
     "form": {
+      "char_count": "{{count}} / {{max}} characters",
+      "char_over": "only the first {{max}} are passed to the model",
+      "project_scope": "Reference material is searched inside the project '{{name}}'.",
+      "project_scope_missing": "This draft belongs to a project that no longer exists. Clear the scope to search for reference material.",
+      "project_scope_clear": "Clear scope",
       "title": "Request",
       "template": "Form / template",
       "template_auto": "(auto — inferred from the content)",
@@ -2691,6 +2706,8 @@
       "template_unknown_field": "Unknown field"
     },
     "save": {
+      "omitted_body": "{{count}} body block(s) left out",
+      "omitted_body_hint": "A registered form takes fields and tables only. Save as PDF or Markdown to keep the body.",
       "title": "Save",
       "hint": "Saves under documents/generated/ in the workspace and registers the file in Documents as a generated document.",
       "format": "Format",

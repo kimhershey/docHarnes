@@ -2172,6 +2172,12 @@ export interface DraftRequest {
    * whole draft — following `feedback` (the instruction). Absent / null = the ordinary draft / regeneration.
    */
   revise?: ReviseScope | null;
+  /**
+   * 0.8.0 (CON-3): the project the draft belongs to. Knowledge searches of the draft stay inside the project's
+   * work documents, its reference group and the 공통 참고 자료; absent / null = everything. Stored with the draft's
+   * request, so regenerations and revisions of a project draft keep it.
+   */
+  project_id?: string | null;
 }
 
 /**
@@ -2192,7 +2198,27 @@ export interface BudgetInfo {
   gpu: boolean;
   cap: number;
   split_threshold: number;
+  /** 0.8.0 (GEN-14): characters of the content / of the instruction the model is given at most; more is cut and reported. */
+  content_max_chars?: number;
+  instruction_max_chars?: number;
 }
+
+/** Part of the request's own text that did not reach the model (`DraftOutcome.input_cuts`, GEN-14). */
+export interface InputCut {
+  /** `content` (`DraftRequest.content`) | `feedback` (the instruction). */
+  field: "content" | "feedback";
+  /** Characters the request carried … */
+  chars: number;
+  /** … and how many of them (the first ones) the model saw. */
+  passed: number;
+}
+
+/**
+ * Where a draft job stored its result (`generate::store::save_job_result`, GEN-3): under the draft's own id, as a
+ * new draft because replacing the original would lose something (the job was cancelled, or the stored draft was
+ * edited after the job started), or not at all.
+ */
+export type DraftStoreOutcome = { status: "saved" } | { status: "copy"; original: string; reason: "cancelled" | "newer" } | { status: "not_saved"; reason: "deleted" | "failed" };
 
 export function defaultDraftRequest(language: Language = "ko"): DraftRequest {
   return { form_ref: null, format_description: null, content: "", sources: [], output: "hwpx", tone: "formal", length: "medium", language, use_knowledge: true, feedback: null, previous: null, excluded_sources: [], max_tokens: null, revise: null };
@@ -2284,6 +2310,10 @@ export interface DraftOutcome {
   job_source?: string;
   /** Draft job / `request_supplement` payloads: the project the draft belongs to. */
   project_id?: string | null;
+  /** The user's text the model saw only in part; absent when nothing was cut. */
+  input_cuts?: InputCut[];
+  /** Draft job payloads only: where the result was stored. */
+  draft_store?: DraftStoreOutcome | null;
 }
 
 export interface SaveRequest {
@@ -2302,6 +2332,8 @@ export interface SavedDocument {
   doc_id: string | null;
   filled_form: boolean;
   warnings: string[];
+  /** 0.8.0 (GEN-11): body blocks a registered form could not take (0 = nothing was left out; `warnings` says it in words). */
+  omitted_body_blocks?: number;
 }
 
 export interface TemplateField {

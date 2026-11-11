@@ -388,6 +388,26 @@ test.describe("P6 document generation", () => {
     await expect(page.getByTestId("generate-preview-frame")).toBeVisible();
   });
 
+  test("the content and the instruction name their limits, and a cut is reported after the draft (GEN-14 on the screen)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openGenerate(page);
+    const limit = page.getByTestId("generate-content-limit");
+    await expect(limit).toContainText("6,000");
+    await expect(limit).toHaveAttribute("data-over", "false");
+    // Past the limit the counter says what will happen, before the draft is made.
+    await page.getByTestId("generate-content").fill("가".repeat(6_010));
+    await expect(limit).toHaveAttribute("data-over", "true");
+    await expect(limit).toContainText("6,010");
+    await expect(limit).toContainText(tpl(ko.generate.form.char_over, { max: "6,000" }));
+    await page.getByTestId("generate-run").click();
+    await expect(page.getByTestId("generate-preview")).toBeVisible({ timeout: 15_000 });
+    // The job reports what the model did not see (`input_cuts`).
+    await expect(page.getByTestId("toaster")).toContainText(tpl(ko.generate.cut.content, { chars: "6,010", passed: "6,000" }));
+    // The 초안 어시스턴트's instruction has its own limit.
+    await expect(page.getByTestId("generate-revise-limit")).toContainText("2,000");
+  });
+
   test("saving as Markdown registers the file in the library like the other formats (GEN-9)", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);

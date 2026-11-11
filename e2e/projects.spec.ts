@@ -245,6 +245,11 @@ test.describe("P6 projects", () => {
     const requested = page.getByTestId("generate-table-findings").locator('[data-testid^="generate-row-findings-"]');
     await expect(requested).toHaveCount(1);
     await expect(requested.first().locator("input").nth(1)).toHaveValue(/WBS/);
+    // A project draft keeps its project (CON-3): the form says where reference material is searched, with a way out.
+    const projectScope = page.getByTestId("generate-project-scope");
+    await expect(projectScope).toContainText(tpl(ko.generate.form.project_scope, { name: "서류 누락 사업" }));
+    await page.getByTestId("generate-project-scope-clear").click();
+    await expect(projectScope).toHaveCount(0);
   });
 
   test("shared document: the second project keeps a tracked copy under its folder, dropped with the membership", async ({ page }) => {

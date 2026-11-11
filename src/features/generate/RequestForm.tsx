@@ -11,11 +11,12 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { describeJobDetail } from "@/features/jobs/describe";
 import { DropHint, importDroppedFiles, useDocumentDropTarget } from "@/lib/dnd";
-import { useDocuments, useGenerateBudgetInfo, useGenerateTemplates, useSchemas } from "@/lib/queries";
+import { useDocuments, useGenerateBudgetInfo, useGenerateTemplates, useProjects, useSchemas } from "@/lib/queries";
 import { isComposing } from "@/lib/shortcuts";
 import { DRAFT_LENGTHS, LENGTH_TOKENS, OUTPUT_FORMATS, TOKEN_BUDGET_PRESETS, TONES, type DraftLength, type DraftRequest, type Job, type OutputFormat, type Tone } from "@/lib/types";
 import { useUiStore } from "@/stores/ui";
 
+import { CharLimit } from "./CharLimit";
 import { clampTokenBudget, documentSourceIds, formRefToPicker, MIN_TOKEN_BUDGET, parseTokenBudget, pickerToFormRef, withDocumentSources } from "./draft";
 import { SourcePickerDialog } from "./SourcePickerDialog";
 
@@ -63,6 +64,9 @@ export function RequestForm({
   const ko = i18n.language.startsWith("ko");
   const detail = job ? describeJobDetail(job, t) : null;
   const canGenerate = request.content.trim().length > 0 && !running;
+  // The project a project draft belongs to (its name for the scope notice).
+  const { data: projects } = useProjects(!!request.project_id);
+  const scopeProject = request.project_id ? (projects?.find((p) => p.id === request.project_id) ?? null) : null;
   // Token budget (0.3.0): the length preset or an explicit number, capped by the active backend's limit.
   const { data: budgetInfo } = useGenerateBudgetInfo();
   const cap = budgetInfo?.cap ?? 32_768;
@@ -120,6 +124,7 @@ export function RequestForm({
           {t("generate.form.content")} <span className="text-danger">*</span>
         </Label>
         <Textarea id="gen-content" rows={5} value={request.content} onChange={(e) => onChange({ content: e.target.value })} placeholder={t("generate.form.content_placeholder")} lang={i18n.language} data-testid="generate-content" />
+        <CharLimit text={request.content} max={budgetInfo?.content_max_chars} testId="generate-content-limit" />
       </div>
       <div className="relative flex flex-col gap-1.5" {...drop.props} data-testid="generate-sources-drop">
         <DropHint active={drop.isActive} over={drop.isOver} testId="generate-drop-hint">
@@ -156,6 +161,15 @@ export function RequestForm({
         <span>{t("generate.form.use_knowledge")}</span>
         <Switch checked={request.use_knowledge} onCheckedChange={(v) => onChange({ use_knowledge: v })} aria-label={t("generate.form.use_knowledge")} data-testid="generate-use-knowledge" />
       </label>
+      {/* A project draft (CON-3): its reference material is searched inside the project. Said here, with a way out. */}
+      {request.project_id && (
+        <div className="flex items-start gap-2 rounded-md border border-border bg-bg-sunken px-2 py-1.5 text-xs text-fg-muted" data-testid="generate-project-scope" data-project-id={request.project_id}>
+          <span className="min-w-0 flex-1">{scopeProject ? t("generate.form.project_scope", { name: scopeProject.name }) : projects ? t("generate.form.project_scope_missing") : t("generate.form.project_scope", { name: "…" })}</span>
+          <Button size="sm" variant="ghost" className="h-6 shrink-0 px-2 text-xs" onClick={() => onChange({ project_id: null })} data-testid="generate-project-scope-clear">
+            {t("generate.form.project_scope_clear")}
+          </Button>
+        </div>
+      )}
       {/* 어조 and 길이 share a row, 출력 형식 has its own: three selects side by side left room for one letter each
           in this 16–20 rem column ("격…", "H…", UI-5). */}
       <div className="grid grid-cols-2 gap-2" data-testid="generate-options">

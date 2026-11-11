@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 
 import { useRootFontSize } from "@/app/hooks/useRootFontSize";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog, type ConfirmRequest } from "@/components/ui/confirm-dialog";
 import { describeJobError } from "@/features/jobs/describe";
@@ -193,6 +194,12 @@ export function GeneratePage() {
           setDraft(result.draft);
           setSaved(null);
           setInstruction("");
+          // Where the job stored its result (GEN-3) and what the model did not see of the request (GEN-14).
+          const stored = result.draft_store;
+          const draftsAction = { label: t("generate.drafts"), onClick: () => setDraftsOpen(true) };
+          if (stored?.status === "copy") toast(t(stored.reason === "cancelled" ? "generate.store.copy_cancelled" : "generate.store.copy_newer"), "warn", draftsAction);
+          else if (stored?.status === "not_saved") toast(t(stored.reason === "deleted" ? "generate.store.not_saved_deleted" : "generate.store.not_saved_failed"), "warn");
+          for (const cut of result.input_cuts ?? []) toast(t(cut.field === "feedback" ? "generate.cut.feedback" : "generate.cut.content", { chars: cut.chars.toLocaleString(language), passed: cut.passed.toLocaleString(language) }), "warn");
           if (asked) {
             // The core / mock records the revision as the draft's last note.
             const note = result.draft.notes[result.draft.notes.length - 1] ?? null;
@@ -204,21 +211,17 @@ export function GeneratePage() {
           toast(t("generate.form.job_result_missing"), "warn", { label: t("generate.drafts"), onClick: () => setDraftsOpen(true) });
         }
       } else {
-        // The job delivered no draft, so the one on the screen stays. A revision cancelled between sections has
-        // written its partial result over the stored copy (GEN-3): the screen's draft is written back, so the
-        // stored copy is the complete draft again and the next check against the store does not read the partial one.
-        const onScreen = useGenerateStore.getState().draft;
-        if (asked && onScreen) {
-          editDraft(onScreen);
-          persist(onScreen);
-        }
+        // The job delivered no draft, so the one on the screen stays; its stored copy is untouched too — the
+        // backend stores what a cancelled job had written so far as a new draft, never over the original (GEN-3).
+        // That copy shows up in the draft list.
+        invalidateDrafts();
         if (job.state === "failed") toast(t("generate.form.job_failed", { message: describeJobError(job, t) ?? "" }), "danger");
-        else if (job.state === "cancelled") toast(t("generate.form.job_cancelled"), "warn");
+        else if (job.state === "cancelled") toast(t("generate.form.job_cancelled"), "warn", { label: t("generate.drafts"), onClick: () => setDraftsOpen(true) });
         else if (job.state === "interrupted") toast(t("generate.form.job_interrupted", { reason: t("jobs.error.interrupted") }), "warn");
       }
       setJobId(null);
     })();
-  }, [job, cancelPersist, persist, setDraft, editDraft, setJobId, toast, t]);
+  }, [job, cancelPersist, setDraft, setJobId, toast, t, language]);
 
   // The scope names a section by its ordinal, and edits shift ordinals (GEN-10). The picked section is followed
   // by its heading; when it is gone — its heading block removed, the draft rewritten — the scope is cleared and
@@ -408,6 +411,12 @@ export function GeneratePage() {
             {saved && (
               <span className="flex items-center gap-1 text-xs text-fg-muted" data-testid="generate-saved">
                 <span className="font-mono selectable">{saved.rel_path}</span>
+                {/* A registered form takes fields and tables only (GEN-11): what the file lacks stays on the screen, not only in a toast. */}
+                {(saved.omitted_body_blocks ?? 0) > 0 && (
+                  <Badge variant="warn" title={t("generate.save.omitted_body_hint")} data-testid="generate-saved-omitted">
+                    {t("generate.save.omitted_body", { count: saved.omitted_body_blocks })}
+                  </Badge>
+                )}
                 <Button size="sm" variant="ghost" onClick={() => void revealPath(saved.absolute)} data-testid="generate-saved-folder">
                   <FolderOpen />
                   {t("generate.save.open_folder")}

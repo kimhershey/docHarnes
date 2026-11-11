@@ -34,9 +34,11 @@ import {
   type DraftField,
   type DraftIssue,
   type DraftOutcome,
+  type DraftStoreOutcome,
   type DraftRequest,
   type DraftSummary,
   type DraftTable,
+  type InputCut,
   type Job,
   type Language,
   type OutputFormat,
@@ -1435,7 +1437,17 @@ export function saveDraft(req: SaveRequest): SavedDocument {
   draft.saved_doc_id = docId;
   putDraft(draft);
   const sep = ws.includes("\\") ? "\\" : "/";
-  return { rel_path: rel, absolute: `${ws}${sep}${rel.split("/").join(sep)}`, format: req.output, doc_id: docId, filled_form: draft.template.kind === "form" && (req.output === "hwpx" || req.output === "docx"), warnings };
+  const filled_form = draft.template.kind === "form" && (req.output === "hwpx" || req.output === "docx");
+  // `render::save`: the body of a draft does not go into a filled form; `fill::body_blocks` counts what was left out.
+  const omitted_body_blocks = filled_form ? draft.body.filter((b) => (b.kind === "heading" || b.kind === "paragraph" ? b.text.trim() !== "" : b.kind === "list" ? b.items.some((i) => i.trim() !== "") : false)).length : 0;
+  if (omitted_body_blocks > 0) {
+    warnings.push(
+      ko
+        ? `등록 양식에는 필드와 표만 채워집니다. 본문 ${omitted_body_blocks}개 블록은 저장한 파일에 들어가지 않았습니다. 본문까지 담으려면 PDF나 Markdown으로 저장하세요.`
+        : `A registered form takes fields and tables only: ${omitted_body_blocks} body block(s) were left out of the saved file. Save as PDF or Markdown to keep the body.`,
+    );
+  }
+  return { rel_path: rel, absolute: `${ws}${sep}${rel.split("/").join(sep)}`, format: req.output, doc_id: docId, filled_form, warnings, omitted_body_blocks };
 }
 
 // ---------------------------------------------------------------------------
@@ -1451,6 +1463,65 @@ export interface DraftJobSpec {
   /** `JobSpec::Draft { project_id, source }`: the project of a 보완요청서 and where the job came from. */
   project_id?: string | null;
   source?: string;
+  /** `store::JobInput.existed`: the draft the job starts from was in the draft store when the job was created. */
+  existed?: boolean;
+}
+
+/** `prompts::MAX_CONTENT_CHARS` / `MAX_FEEDBACK_CHARS`: what the model is given of the content / the instruction at most. */
+const MAX_CONTENT_CHARS = 6_000;
+const MAX_FEEDBACK_CHARS = 2_000;
+
+/** `draft::InputBudget::report`: the request's own text the model saw only in part, with a note on the draft. */
+function reportInputCuts(req: DraftRequest, draft: Draft): InputCut[] {
+  const ko = req.language !== "en";
+  const cuts: InputCut[] = [];
+  const check = (field: InputCut["field"], text: string | null | undefined, max: number, labelKo: string, labelEn: string) => {
+    const chars = Array.from(text ?? "").length;
+    if (chars <= max) return;
+    cuts.push({ field, chars, passed: max });
+    draft.notes.push(ko ? `${labelKo} ${chars.toLocaleString("ko-KR")}자 중 앞 ${max.toLocaleString("ko-KR")}자만 모델에 전달했습니다.` : `Only the first ${max.toLocaleString("en-US")} of the ${chars.toLocaleString("en-US")} characters of the ${labelEn} were passed to the model.`);
+  };
+  check("content", req.content, MAX_CONTENT_CHARS, "내용", "content");
+  check("feedback", req.feedback, MAX_FEEDBACK_CHARS, "지시문", "instruction");
+  return cuts;
+}
+
+/** `store::same_content`: title, field values, table rows and body — timestamps, notes and issues do not count. */
+function sameDraftContent(a: Draft, b: Draft): boolean {
+  const view = (d: Draft) => JSON.stringify([d.title, d.body, d.fields.map((f) => [f.key, f.value]), d.tables.map((t) => [t.key, t.rows])]);
+  return view(a) === view(b);
+}
+
+/** What the job captured when it was created (`store::JobInput`). */
+interface JobInput {
+  captured_at: string;
+  existed: boolean;
+}
+
+/**
+ * `store::save_job_result`: the result of a draft job replaces the stored draft it started from only when that
+ * loses nothing. When the stored draft was changed after the job took its input the result becomes a new draft
+ * (new id, a note, no export path); when it was deleted meanwhile nothing is stored. (The mock has no partial
+ * result of a cancelled job, so the `cancelled` copy does not occur here.)
+ */
+function storeJobResult(draft: Draft, previous: Draft | null, input: JobInput | null, ko: boolean): DraftStoreOutcome {
+  const started = previous && previous.id === draft.id ? previous : null;
+  if (started && input) {
+    const stored = findDraft(started.id);
+    if (input.existed && !stored) return { status: "not_saved", reason: "deleted" };
+    if (stored && stored.updated_at > input.captured_at && !sameDraftContent(stored, started)) {
+      const original = draft.id;
+      draft.id = newId();
+      draft.created_at = now();
+      draft.saved_path = null;
+      draft.saved_doc_id = null;
+      draft.notes.unshift(ko ? "작업이 시작된 뒤 원래 초안이 수정되어, 덮어쓰지 않고 새 초안으로 저장했습니다." : "The original draft was edited after this job started, so the result was stored as a new draft.");
+      putDraft(draft);
+      return { status: "copy", original, reason: "newer" };
+    }
+  }
+  putDraft(draft);
+  return { status: "saved" };
 }
 
 function templateName(req: DraftRequest, ko: boolean): string {
@@ -1464,19 +1535,26 @@ function templateName(req: DraftRequest, ko: boolean): string {
 export function submitDraftJob(req: DraftRequest, prepared: Draft | null = null, origin: { project_id?: string | null; source?: string } = {}): string {
   const ko = req.language !== "en";
   const label = prepared?.title ?? req.content.replace(/\s+/g, " ").trim().slice(0, 60) ?? "";
-  return submitJob({ kind: "draft", req, prepared, label, project_id: origin.project_id ?? null, source: origin.source ?? "generate" } satisfies DraftJobSpec, templateName(req, ko), "normal");
+  // `generate_bridge::draft`: the job's project and the request's are bound to each other (`DraftRequest::bind_project`).
+  const project_id = origin.project_id?.trim() || req.project_id?.trim() || null;
+  const bound: DraftRequest = { ...req, project_id: req.project_id?.trim() || project_id };
+  const existed = !!req.previous && !!findDraft(req.previous.id);
+  return submitJob({ kind: "draft", req: bound, prepared, label, project_id, source: origin.source ?? "generate", existed } satisfies DraftJobSpec, templateName(req, ko), "normal");
 }
 
 /**
  * Runs one draft (the executor's `draft_document` step and the draft job share it). The stage words are the
  * shell's (`generate_bridge::run_draft`): "loading model" (model drafts only), then "drafting".
  */
-export async function draftNow(req: DraftRequest, ctl: JobControl | null, progress: (stage: string, frac: number) => void, prepared: Draft | null = null): Promise<DraftOutcome> {
+export async function draftNow(req: DraftRequest, ctl: JobControl | null, progress: (stage: string, frac: number) => void, prepared: Draft | null = null, input: JobInput | null = null): Promise<DraftOutcome> {
+  const ko = req.language !== "en";
   const started = performance.now();
   if (prepared) {
     progress("drafting", 0.2);
     await pace(ctl, 200);
     const draft = structuredClone(prepared);
+    // The job's project is bound to the request the draft keeps, so later revisions stay inside it.
+    if (draft.request && req.project_id) draft.request.project_id = req.project_id;
     validateDraft(draft);
     putDraft(draft);
     return { draft, prompt_tokens: 0, completion_tokens: 0, elapsed_ms: Math.round(performance.now() - started), source: "rules" };
@@ -1495,9 +1573,10 @@ export async function draftNow(req: DraftRequest, ctl: JobControl | null, progre
     const draft = reviseDraft(req);
     progress("revising", 0.95);
     await pace(ctl, 150);
-    putDraft(draft);
+    const input_cuts = reportInputCuts(req, draft);
+    const draft_store = storeJobResult(draft, req.previous, input, ko);
     const chars = Array.from(req.feedback ?? "").length;
-    return { draft, prompt_tokens: 1800 + chars, completion_tokens: 120 + chars, elapsed_ms: Math.round(performance.now() - started), source: "model", sections: 1 };
+    return { draft, prompt_tokens: 1800 + chars, completion_tokens: 120 + chars, elapsed_ms: Math.round(performance.now() - started), source: "model", sections: 1, ...(input_cuts.length > 0 ? { input_cuts } : {}), ...(input ? { draft_store } : {}) };
   }
   progress("drafting", 0.2);
   const knowledge = req.use_knowledge ? await knowledgeCitations(req.content.slice(0, 60), req.excluded_sources) : [];
@@ -1518,9 +1597,10 @@ export async function draftNow(req: DraftRequest, ctl: JobControl | null, progre
   const draft = buildDraft(req, knowledge);
   progress(split ? "finishing" : "drafting", 0.95);
   await pace(ctl, 150);
-  putDraft(draft);
+  const input_cuts = reportInputCuts(req, draft);
+  const draft_store = storeJobResult(draft, req.previous, input, ko);
   const chars = Array.from(req.content).length;
-  return { draft, prompt_tokens: (2400 + chars) * sections, completion_tokens: 350 + draft.body.length * 40, elapsed_ms: Math.round(performance.now() - started), source: "model", sections };
+  return { draft, prompt_tokens: (2400 + chars) * sections, completion_tokens: 350 + draft.body.length * 40, elapsed_ms: Math.round(performance.now() - started), source: "model", sections, ...(input_cuts.length > 0 ? { input_cuts } : {}), ...(input ? { draft_store } : {}) };
 }
 
 export async function draftWorker(job: Job, spec: DraftJobSpec, ctl: JobControl): Promise<WorkerOutcome> {
@@ -1532,6 +1612,7 @@ export async function draftWorker(job: Job, spec: DraftJobSpec, ctl: JobControl)
         updateJob(job.id, { progress: frac, detail: stage });
       },
       spec.prepared ?? null,
+      { captured_at: job.created_at, existed: spec.existed ?? false },
     );
     const d = outcome.draft;
     // Finishing detail and payload like `run_draft`: localised summary; `source` stays the draft's own origin.
@@ -1557,7 +1638,7 @@ export async function mockGenerate(cmd: string, a: Record<string, any>): Promise
       return listTemplates();
     case "generate_budget_info":
       // The mock engine is a GPU build with an 8K context; the cap follows the default settings.
-      return { ctx: 8192, gpu: true, cap: 32768, split_threshold: SPLIT_THRESHOLD_TOKENS } satisfies BudgetInfo;
+      return { ctx: 8192, gpu: true, cap: 32768, split_threshold: SPLIT_THRESHOLD_TOKENS, content_max_chars: MAX_CONTENT_CHARS, instruction_max_chars: MAX_FEEDBACK_CHARS } satisfies BudgetInfo;
     case "generate_draft": {
       const req = a.req as DraftRequest | undefined;
       // Like `generate_bridge::draft`: an empty content is fine when a previous draft is revised / regenerated.

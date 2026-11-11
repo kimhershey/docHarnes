@@ -7,9 +7,11 @@ import { Input, Textarea } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { useGenerateBudgetInfo } from "@/lib/queries";
 import type { Draft } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+import { CharLimit } from "./CharLimit";
 import { NO_SCOPE, sectionsOf } from "./draft";
 
 /** One finished revision: what was asked, where, and the note the draft recorded. */
@@ -47,6 +49,7 @@ export const DraftAssistantPanel = forwardRef<
   }
 >(function DraftAssistantPanel({ draft, placement = "bottom", scope, onScope, heading, onHeading, instruction, onInstruction, onRun, running, excludedCount, log }, ref) {
   const { t, i18n } = useTranslation();
+  const { data: budgetInfo } = useGenerateBudgetInfo();
   const sections = sectionsOf(draft.body);
   const untitled = t("generate.revise.untitled");
   // No scope (the picked section was removed by an edit, GEN-10): nothing runs until one is picked again.
@@ -116,6 +119,7 @@ export const DraftAssistantPanel = forwardRef<
           lang={i18n.language}
           data-testid="generate-revise-instruction"
         />
+        <CharLimit text={instruction} max={budgetInfo?.instruction_max_chars} testId="generate-revise-limit" />
       </div>
       {excludedCount > 0 && <p className="text-xs text-fg-muted">{t("generate.form.excluded_hint", { count: excludedCount })}</p>}
       <Button variant="secondary" onClick={onRun} disabled={!canRun} data-testid="generate-revise-run">

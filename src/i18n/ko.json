@@ -2510,7 +2510,22 @@
     "open_in_generate": "문서 작성 화면에서 열기",
     "handoff": "생성된 초안을 열었습니다. 미리보기를 확인하고 저장하세요.",
     "reloaded": "저장된 최신 초안을 불러왔습니다. 다른 곳에서 고친 내용이 반영되어 있습니다.",
+    "store": {
+      "copy_newer": "작업이 시작된 뒤 원래 초안이 수정되어, 결과를 덮어쓰지 않고 새 초안으로 저장했습니다. 원래 초안은 초안 목록에 그대로 있습니다.",
+      "copy_cancelled": "취소된 작업이 남긴 결과를 새 초안으로 저장했습니다. 원래 초안은 그대로입니다.",
+      "not_saved_deleted": "작업 중에 초안이 삭제되어 결과를 초안 목록에 저장하지 않았습니다. 남기려면 내용을 고치거나 저장하세요.",
+      "not_saved_failed": "결과를 초안 목록에 저장하지 못했습니다. 남기려면 내용을 고치거나 저장하세요."
+    },
+    "cut": {
+      "content": "내용 {{chars}}자 중 앞 {{passed}}자만 모델에 전달되었습니다.",
+      "feedback": "지시문 {{chars}}자 중 앞 {{passed}}자만 모델에 전달되었습니다."
+    },
     "form": {
+      "char_count": "{{count}} / {{max}}자",
+      "char_over": "앞 {{max}}자까지만 모델에 전달됩니다",
+      "project_scope": "프로젝트 '{{name}}'의 자료 안에서 참고 자료를 찾습니다.",
+      "project_scope_missing": "삭제된 프로젝트의 초안입니다. 범위를 해제해야 참고 자료를 찾을 수 있습니다.",
+      "project_scope_clear": "범위 해제",
       "title": "요청",
       "template": "양식 / 템플릿",
       "template_auto": "(자동 — 내용에서 추론)",
@@ -2691,6 +2706,8 @@
       "template_unknown_field": "양식에 없는 필드"
     },
     "save": {
+      "omitted_body": "본문 {{count}}개 블록 제외",
+      "omitted_body_hint": "등록 양식에는 필드와 표만 채워집니다. 본문까지 담으려면 PDF나 Markdown으로 저장하세요.",
       "title": "저장",
       "hint": "워크스페이스의 documents/generated/ 아래에 저장하고 문서함에 '생성' 문서로 등록합니다.",
       "format": "형식",

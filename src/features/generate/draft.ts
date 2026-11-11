@@ -184,6 +184,11 @@ export function followScopeAnchor(anchor: ScopeAnchor, body: DraftBlock[]): numb
 }
 
 /** Smallest reply-token budget the request form accepts (the largest is the backend's cap). */
+/** Characters as the core counts them (`chars().count()`): code points, not UTF-16 units (an emoji is one). */
+export function charCount(text: string): number {
+  return Array.from(text).length;
+}
+
 export const MIN_TOKEN_BUDGET = 200;
 
 export function clampTokenBudget(value: number, cap: number): number {
