@@ -604,6 +604,8 @@ impl AppSettings {
         take(&map, "cache", &mut out.cache, &mut bad);
         take(&map, "privacy", &mut out.privacy, &mut bad);
         take(&map, "notifications", &mut out.notifications, &mut bad);
+        take(&map, "knowledge", &mut out.knowledge, &mut bad);
+        take(&map, "generation", &mut out.generation, &mut bad);
         take(&map, "shortcuts", &mut out.shortcuts, &mut bad);
         take(&map, "window", &mut out.window, &mut bad);
         (out, bad)
@@ -736,6 +738,99 @@ mod tests {
         assert_eq!(s.ui.language, Language::Ko);
         assert_eq!(s.processing.review_threshold, 1.0);
         assert_eq!(s.ui.scale_percent, 100);
+    }
+
+    /// A settings object in which every top-level section differs from the defaults (and stays
+    /// inside the ranges `normalize` clamps to, so a load returns it unchanged).
+    fn non_default_settings() -> AppSettings {
+        let mut s = AppSettings {
+            schema_version: SETTINGS_SCHEMA_VERSION + 1,
+            ui: UiSettings {
+                theme: Theme::Dark,
+                language: Language::En,
+                scale_percent: 130,
+                reduced_motion: ReducedMotion::On,
+                sidebar_collapsed: true,
+            },
+            models: ModelSettings {
+                tier_mode: TierMode::Manual,
+                manual_tier: Some(Tier::Vram12gb),
+                active_model: "gemma4-e4b-q4km".into(),
+                profile: Profile::Speed,
+                backend: BackendPreference::Vulkan,
+                resident_models_max: 3,
+                sleep_idle_seconds: 60,
+                allow_online_download: false,
+                auto_start_engine: false,
+                warmup_after_load: false,
+                vision_on_cpu: true,
+                engine_binary: Some(PathBuf::from("/opt/llama/llama-server")),
+            },
+            processing: ProcessingSettings {
+                auto_level: AutoProcessingLevel::Full,
+                inbox_auto_level: AutoProcessingLevel::None,
+                render_dpi: 300,
+                review_threshold: 0.65,
+                audit_sample_percent: 12,
+                organize_reviewed_only: false,
+                inbox_watch: false,
+                ocr_digital_pdf: true,
+                kie_max_pages: 9,
+                precise_mode: true,
+                dense_reocr: false,
+                dense_cells: 120,
+            },
+            cache: CacheSettings { page_cache_max_gb: 42.5, keep_thumbnails: false },
+            privacy: PrivacySettings { pii_masking: false, db_encryption: true },
+            notifications: NotificationSettings { job_complete: false, prevent_sleep_during_jobs: true },
+            knowledge: KnowledgeSettings {
+                auto_index: false,
+                auto_embed: false,
+                embedding_model: Some("embed-gemma2-q8".into()),
+                latest_only: false,
+                allow_general_knowledge: true,
+                context_tokens: 9_000,
+                top_k: 12,
+                chunk_target_tokens: 640,
+                min_vector_similarity: 0.35,
+            },
+            generation: GenerationSettings { max_tokens_gpu: 24_000, max_tokens_cpu: 4_096 },
+            window: WindowState { width: 1600, height: 900, maximized: true, x: Some(40), y: Some(-8) },
+            ..Default::default()
+        };
+        s.shortcuts.insert("command_palette".into(), "Ctrl+P".into());
+        s.remember_workspace(Path::new("/w/one"), "one");
+        s
+    }
+
+    /// USR-4: every section the file can hold must survive save → load. `from_value` reads the
+    /// sections one by one, so a section it forgets silently returns to its defaults on every start
+    /// (0.7.0 lost `knowledge` and `generation` this way).
+    #[test]
+    fn every_section_survives_a_save_and_load() {
+        let s = non_default_settings();
+        // The fixture really covers every section: a section added later fails here until it gets
+        // a non-default value above (and with it a place in this round trip).
+        let ours = serde_json::to_value(&s).unwrap();
+        let defaults = serde_json::to_value(AppSettings::default()).unwrap();
+        for (key, default_value) in defaults.as_object().unwrap() {
+            assert_ne!(ours.get(key), Some(default_value), "the fixture leaves `{key}` at its default");
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        s.save(&path).unwrap();
+        let (loaded, status) = AppSettings::load(&path).unwrap();
+        assert_eq!(status, LoadStatus::Loaded);
+        let loaded_json = serde_json::to_value(&loaded).unwrap();
+        for (key, saved_value) in ours.as_object().unwrap() {
+            assert_eq!(loaded_json.get(key), Some(saved_value), "section `{key}` did not survive the reload");
+        }
+        assert_eq!(loaded, s);
+        // The lenient loader and plain serde agree on which sections exist.
+        let (lenient, bad) = AppSettings::from_value(ours.clone());
+        assert!(bad.is_empty(), "{bad:?}");
+        assert_eq!(lenient, serde_json::from_value::<AppSettings>(ours).unwrap());
     }
 
     #[test]
