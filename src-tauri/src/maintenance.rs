@@ -309,8 +309,11 @@ pub fn run(app: &AppHandle, ctl: &JobControl) -> WorkerResult {
                     break;
                 }
                 // Registered forms and knowledge documents are reference material, not records
-                // with a retention period.
-                if matches!(d.role, DocumentRole::Form | DocumentRole::Knowledge) {
+                // with a retention period — and so is any document in a reference group, whatever
+                // its role says (one project may use a shared regulation as a work document).
+                if matches!(d.role, DocumentRole::Form | DocumentRole::Knowledge)
+                    || db.with(|c| kb_repo::in_reference_group(c, &d.id)).unwrap_or(true)
+                {
                     if !kept_noted {
                         summary.skipped.push("documents:forms_knowledge_kept".into());
                         kept_noted = true;

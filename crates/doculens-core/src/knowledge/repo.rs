@@ -371,6 +371,26 @@ pub fn collection_documents(conn: &Connection, id: &str) -> rusqlite::Result<Vec
     Ok(out)
 }
 
+/// Whether the document sits in any reference group — a group of the 공통 참고 자료 or a project's.
+/// Such a document is reference material whatever its `role` column says: the retention purge skips it
+/// and no single project can turn it into a plain work document.
+pub fn in_reference_group(conn: &Connection, doc_id: &str) -> rusqlite::Result<bool> {
+    conn.query_row("SELECT COUNT(*) FROM collection_docs WHERE document_id = ?1", [doc_id], |r| r.get::<_, i64>(0))
+        .map(|n| n > 0)
+}
+
+/// Sets a document's role, deriving it from the memberships where they decide: a document that is still
+/// in a reference group stays `knowledge` when it is asked to become a work document. Switching the kind
+/// of a document inside one project (참고 자료 → 업무 문서) must not change what it is for the common
+/// material or for another project — the switch used to flip the role everywhere and, with a document
+/// retention period, put the shared regulation on the purge list. Returns the role the document has now.
+pub fn set_role_by_membership(conn: &Connection, doc_id: &str, role: DocumentRole) -> rusqlite::Result<DocumentRole> {
+    let role =
+        if role == DocumentRole::Work && in_reference_group(conn, doc_id)? { DocumentRole::Knowledge } else { role };
+    crate::documents::repo::set_role(conn, doc_id, role)?;
+    Ok(role)
+}
+
 /// `(collection id, name)` pairs of a document.
 pub fn collections_of_document(conn: &Connection, doc_id: &str) -> rusqlite::Result<Vec<(String, String)>> {
     let mut st = conn.prepare(

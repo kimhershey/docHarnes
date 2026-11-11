@@ -1363,6 +1363,54 @@ fn a_project_reference_group_is_written_on_first_use_not_when_it_is_shown() {
     assert!(!w.db.with(|c| repo::collection_exists(c, &shown.id)).unwrap());
 }
 
+/// PRJ-4: the role follows the memberships. A regulation that is common reference material stays reference
+/// material when one project switches its own use of it to "업무 문서" — the switch used to make it a work
+/// document everywhere (and, with a document retention period, a candidate for the next purge).
+#[test]
+fn a_document_in_a_reference_group_stays_reference_material() {
+    use crate::projects::{repo as projects, ProjectInput};
+    let w = World::new();
+    let role = |id: &str| w.db.with(|c| docs::get_document(c, id)).unwrap().unwrap().role;
+    let common =
+        w.db.with(|c| repo::save_collection(c, &CollectionInput { name: "사규".into(), ..CollectionInput::default() }))
+            .unwrap();
+    let project =
+        w.db.with(|c| projects::save_project(c, &ProjectInput { name: "한빛 납품".into(), ..Default::default() }))
+            .unwrap();
+    let group = w.db.with(|c| repo::project_reference_group(c, &project.id, &project.name)).unwrap();
+    w.db.with(|c| {
+        repo::add_docs_to_collection(c, &common.id, &["sec".into()])?;
+        repo::add_docs_to_collection(c, &group.id, &["sec".into()])
+    })
+    .unwrap();
+    assert!(w.db.with(|c| repo::in_reference_group(c, "sec")).unwrap());
+    assert!(!w.db.with(|c| repo::in_reference_group(c, "con")).unwrap());
+    // The project turns the guideline into one of its work documents (the three calls of the kind switch).
+    w.db.with(|c| {
+        repo::remove_docs_from_collection(c, &group.id, &["sec".into()])?;
+        projects::add_documents(c, &project.id, &["sec".into()])?;
+        Ok(())
+    })
+    .unwrap();
+    let now = w.db.with(|c| repo::set_role_by_membership(c, "sec", DocumentRole::Work)).unwrap();
+    assert_eq!((now, role("sec")), (DocumentRole::Knowledge, DocumentRole::Knowledge), "still in the common group");
+    assert!(w.db.with(|c| repo::in_reference_group(c, "sec")).unwrap(), "… which also keeps it from the purge");
+    assert!(w.db.with(|c| projects::member_ids(c, &project.id)).unwrap().contains(&"sec".to_string()));
+    // Out of its last group, the same request makes it a work document.
+    w.db.with(|c| repo::remove_docs_from_collection(c, &common.id, &["sec".into()])).unwrap();
+    assert!(!w.db.with(|c| repo::in_reference_group(c, "sec")).unwrap());
+    assert_eq!(w.db.with(|c| repo::set_role_by_membership(c, "sec", DocumentRole::Work)).unwrap(), DocumentRole::Work);
+    assert_eq!(role("sec"), DocumentRole::Work);
+    // Every other request is carried out as asked.
+    assert_eq!(
+        w.db.with(|c| repo::set_role_by_membership(c, "con", DocumentRole::Knowledge)).unwrap(),
+        DocumentRole::Knowledge
+    );
+    w.db.with(|c| repo::add_docs_to_collection(c, &common.id, &["con".into()])).unwrap();
+    assert_eq!(w.db.with(|c| repo::set_role_by_membership(c, "con", DocumentRole::Form)).unwrap(), DocumentRole::Form);
+    assert_eq!(role("con"), DocumentRole::Form);
+}
+
 /// KNO-6: chunks indexed while an embedding run is busy are embedded by that run — it used to stop at the
 /// number of chunks pending when it started and leave the new documents without vectors.
 #[test]
