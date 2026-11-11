@@ -162,8 +162,10 @@ export function AssistantPage() {
   // dropped by the store instead of being written into the other workspace's database (KNO-2).
   const generation = useAssistantStore((s) => s.generation);
   const push = (sid: string, m: NewMessage) => useAssistantStore.getState().push(sid, m, generation);
-  const patch = (sid: string, id: number, f: (m: Message) => Message) => useAssistantStore.getState().patch(sid, id, f, generation);
-  const patchPlan = (sid: string, id: number, f: (m: PlanMessage) => PlanMessage) => patch(sid, id, (m) => (m.role === "assistant" && m.kind === "plan" ? f(m) : m));
+  // A patch is stored at once (a settled card must not come back unsettled after a restart, KNO-9); `defer`
+  // is for the plan editor, whose every keystroke is a patch.
+  const patch = (sid: string, id: number, f: (m: Message) => Message, defer = false) => useAssistantStore.getState().patch(sid, id, f, { generation, defer });
+  const patchPlan = (sid: string, id: number, f: (m: PlanMessage) => PlanMessage, defer = false) => patch(sid, id, (m) => (m.role === "assistant" && m.kind === "plan" ? f(m) : m), defer);
   const messagesOf = (sid: string) => useAssistantStore.getState().messagesBySession[sid] ?? [];
   /** Whether the conversation a request started in is still there: when not, the request stops (no card, no side effect). */
   const live = (sid: string) => useAssistantStore.getState().accepts(sid, generation);
@@ -723,7 +725,7 @@ export function AssistantPage() {
                     errors={m.errors}
                     editing={m.editing}
                     active={activePlan?.id === m.id}
-                    onChange={(plan) => patchPlan(sid, m.id, (x) => ({ ...x, plan, errors: null }))}
+                    onChange={(plan) => patchPlan(sid, m.id, (x) => ({ ...x, plan, errors: null }), true)}
                     onExecute={() => void execute(sid, m.id)}
                     onCancel={() => cancelPlan(sid, m.id)}
                     onRephrase={() => focusInput(m.text)}

@@ -25,6 +25,13 @@ export type Message =
   | { id: number; createdAt?: string; role: "assistant"; kind: "error"; text: string };
 
 export type PlanMessage = Extract<Message, { kind: "plan" }>;
+
+export interface PatchOptions {
+  /** The workspace generation the request started in (see `accepts`). */
+  generation?: number;
+  /** Write after `PATCH_WRITE_DELAY_MS` without further patches instead of at once (plan editor input). */
+  defer?: boolean;
+}
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 export type NewMessage = DistributiveOmit<Message, "id" | "createdAt">;
 
@@ -41,9 +48,12 @@ const ACTIVE_KEY = "doculens.assistant.active";
  * message list, stored in the workspace DB through the `chat_*` commands (the UI's message
  * JSON as it is; the core only derives the auto title). The store is the live cache: the
  * session list and the active session's messages are hydrated when the workspace is bound,
- * the other sessions' messages when they are selected. Messages are written after `push`
- * and after every `patch` (a card settling: answer done, plan status change, edit) — never
- * on stream deltas, which live in the knowledge store. The `ui_actions` owed by job-backed
+ * the other sessions' messages when they are selected. Messages are written at `push` and
+ * at every `patch` (a card settling: answer done, plan status change) — at once, so a plan
+ * that ran is not restored as "승인 대기" (and run again) when the app closes right after;
+ * only the plan editor's keystrokes are written together after a short delay
+ * (`flushChatWrites` sends those before the workspace is switched or the page goes away).
+ * Stream deltas are never written; they live in the knowledge store. The `ui_actions` owed by job-backed
  * plans are tracked by job id per workspace, whichever session is open, so the assistant
  * page can run them exactly once when it observes the finished job.
  *
@@ -83,7 +93,12 @@ interface AssistantState {
    * Returns the message id, or `DROPPED` when the conversation is gone (`accepts`).
    */
   push: (sessionId: string, message: NewMessage, generation?: number) => number;
-  patch: (sessionId: string, id: number, f: (m: Message) => Message, generation?: number) => void;
+  /**
+   * Changes a message. The new state is written at once — a card that settled (plan executed / cancelled,
+   * answer finished, question answered) must not be restored in its earlier state after a restart —
+   * unless `defer` is set: keystroke-wise edits are written together shortly after the last one.
+   */
+  patch: (sessionId: string, id: number, f: (m: Message) => Message, options?: PatchOptions) => void;
   /** "새 채팅": a fresh session (the active one is reused while it is still empty). Resolves to its id. */
   newSession: () => Promise<string | null>;
   select: (id: string) => Promise<void>;
@@ -180,7 +195,7 @@ function touch(sessions: ChatSessionSummary[], id: string, message: Message, cre
   return [next, ...sessions.filter((s) => s.id !== id)];
 }
 
-/** Patches of one message are written together, this long after the last one (plan edits are keystroke-wise). */
+/** Deferred patches of one message (plan edits are keystroke-wise) are written together, this long after the last one. */
 export const PATCH_WRITE_DELAY_MS = 300;
 
 /**
@@ -271,7 +286,11 @@ async function writesSettled(sessionId: string): Promise<void> {
   }
 }
 
-/** Writes every waiting patch now; resolves once nothing is in flight any more. */
+/**
+ * Writes every waiting patch now; resolves once nothing is in flight any more. To be awaited before the
+ * backend is told to open / close a workspace: afterwards the writes would reach the other database, so
+ * `bind` / `resetAssistant` can only drop what is still waiting.
+ */
 export async function flushChatWrites(): Promise<void> {
   for (;;) {
     for (const [key, slot] of [...writeSlots]) if (slot.timer) writeNow(key, slot);
@@ -280,6 +299,10 @@ export async function flushChatWrites(): Promise<void> {
     await Promise.all(inflight);
   }
 }
+
+// The page is going away (window closed, reload): send what still waits. Best effort — the calls are
+// asynchronous — which is why state transitions never wait in the first place.
+if (typeof window !== "undefined") window.addEventListener("pagehide", () => void flushChatWrites());
 
 export const useAssistantStore = create<AssistantState>((set, get) => {
   const bumpNextId = (rows: ChatMessageRow[]) => {
@@ -364,8 +387,8 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
       return id;
     },
 
-    patch: (sessionId, id, f, generation) => {
-      if (!get().accepts(sessionId, generation)) return;
+    patch: (sessionId, id, f, options) => {
+      if (!get().accepts(sessionId, options?.generation)) return;
       let patched = false;
       set((s) => {
         const list = s.messagesBySession[sessionId];
@@ -377,8 +400,8 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
         });
         return { messagesBySession: { ...s.messagesBySession, [sessionId]: next } };
       });
-      // A patched message is written once the patches settle (the latest state of the message at that time).
-      if (patched) scheduleWrite(sessionId, id, get().generation, PATCH_WRITE_DELAY_MS);
+      // Either way the latest state of the message at the time of the write is what gets stored.
+      if (patched) scheduleWrite(sessionId, id, get().generation, options?.defer ? PATCH_WRITE_DELAY_MS : 0);
     },
 
     newSession: async () => {

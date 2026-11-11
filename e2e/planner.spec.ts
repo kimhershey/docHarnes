@@ -175,6 +175,37 @@ test.describe("P5 planner", () => {
     await expect(undo).toBeDisabled();
   });
 
+  // KNO-9: the card's state used to be written 300 ms after it changed, so a reload (or a workspace switch /
+  // the app closing) inside that window restored the finished plan as "승인 대기" — runnable again.
+  test("a plan that finished right before a reload is restored as executed, not as waiting for approval", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서-1p.jpg"], { autoLevel: "none" });
+    await processReceipt(page);
+    await approveReceipt(page);
+
+    await openAssistant(page);
+    await send(page, "견적서 월별 폴더로 옮겨");
+    const plan = assistantCard(page, "plan").last();
+    await expect(plan).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    await plan.getByTestId("plan-execute").click();
+    await expect(plan).toHaveAttribute("data-plan-status", "done", { timeout: 15_000 });
+    // No pause before the reload.
+    await page.reload();
+    await expect(page.getByTestId("app-shell")).toBeVisible();
+    await openAssistant(page);
+    const restored = assistantCard(page, "plan").last();
+    await expect(restored).toHaveAttribute("data-plan-status", "done", { timeout: 15_000 });
+    await expect(restored.getByTestId("plan-execute")).toHaveCount(0);
+    // Ctrl+Enter finds no plan waiting: the move does not run a second time.
+    await expect(assistantCard(page, "execution")).toHaveCount(1);
+    await page.getByTestId("assistant-messages").click();
+    await page.keyboard.press("Control+Enter");
+    await page.waitForTimeout(500);
+    await expect(assistantCard(page, "execution")).toHaveCount(1);
+    await expect(assistantCard(page, "plan")).toHaveCount(1);
+  });
+
   test("되묻기 replies with the question's context; 취소 (button or typed) drops pending cards by rule", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);

@@ -108,16 +108,57 @@ describe("assistant store", () => {
     expect(fake.state.messages[sid]!.map((r) => r.seq)).toEqual([a, b]);
     // The summary follows: auto title from the first user message, count, recency.
     expect(useAssistantStore.getState().sessions[0]).toMatchObject({ id: sid, title: "inbox 처리", message_count: 2 });
-    // Patches are written together once they settle (the latest state of the message).
-    s.patch(sid, a, (m) => (m.role === "user" ? { ...m, text: "edit" } : m));
-    s.patch(sid, a, (m) => (m.role === "user" ? { ...m, text: "edited" } : m));
+    // Deferred patches (the plan editor's keystrokes) are written together once they settle: the latest state.
+    s.patch(sid, a, (m) => (m.role === "user" ? { ...m, text: "edit" } : m), { defer: true });
+    s.patch(sid, a, (m) => (m.role === "user" ? { ...m, text: "edited" } : m), { defer: true });
     expect(selectMessages(useAssistantStore.getState())[0]).toMatchObject({ id: a, text: "edited" });
     await settled();
     expect(fake.state.puts).toBe(2);
-    flushChatWrites();
-    await settled();
+    await flushChatWrites();
     expect(fake.state.puts).toBe(3);
     expect((fake.state.messages[sid]![0]!.payload as { text: string }).text).toBe("edited");
+    // Any other patch is written at once.
+    s.patch(sid, a, (m) => (m.role === "user" ? { ...m, text: "now" } : m));
+    await settled();
+    expect(fake.state.puts).toBe(4);
+    expect((fake.state.messages[sid]![0]!.payload as { text: string }).text).toBe("now");
+  });
+
+  // KNO-9: the state a card settles in is stored when it changes, not 300 ms later — a workspace switch or
+  // the app closing in between restored a finished plan as "승인 대기" (Ctrl+Enter ran it again) and a
+  // finished answer as "중단됨".
+  it("stores a card's settled state at once: a restart restores the plan as executed and the answer as answered", async () => {
+    const sid = await boundTo("C:\\Work\\Docs");
+    const s = useAssistantStore.getState();
+    const plan = s.push(sid, { role: "assistant", kind: "plan", text: "견적서 옮겨", response: { context: {} } as never, plan: { operations: [] } as never, context: {}, status: "pending", errors: null, editing: false });
+    const answer = s.push(sid, { role: "assistant", kind: "answer", requestId: "r1", request: { question: "q" } as never, answer: null, error: null, pending: true });
+    s.patch(sid, plan, (m) => (m.role === "assistant" && m.kind === "plan" ? { ...m, status: "executing" } : m));
+    s.patch(sid, plan, (m) => (m.role === "assistant" && m.kind === "plan" ? { ...m, status: "done" } : m));
+    s.patch(sid, answer, (m) => (m.role === "assistant" && m.kind === "answer" ? { ...m, pending: false, answer: { text: "답", sources: [], sentences: [] } as never } : m));
+    // No timer has to pass: a few ticks for the calls already made.
+    await settled();
+    const stored = fake.state.messages[sid]!.map((r) => r.payload as { status?: string; pending?: boolean });
+    expect(stored[0]).toMatchObject({ status: "done" });
+    expect(stored[1]).toMatchObject({ pending: false });
+    // "Restart": the store is rebuilt from what was stored.
+    resetAssistant();
+    await boundTo("C:\\Work\\Docs");
+    const restored = selectMessages(useAssistantStore.getState());
+    expect(restored[0]).toMatchObject({ kind: "plan", status: "done" });
+    expect(restored[1]).toMatchObject({ kind: "answer", pending: false, error: null });
+  });
+
+  it("flushChatWrites sends what waits and resolves when everything is stored", async () => {
+    const sid = await boundTo("C:\\Work\\Docs");
+    const s = useAssistantStore.getState();
+    const id = s.push(sid, { role: "user", text: "a" });
+    s.patch(sid, id, (m) => (m.role === "user" ? { ...m, text: "typing" } : m), { defer: true });
+    await flushChatWrites();
+    expect((fake.state.messages[sid]![0]!.payload as { text: string }).text).toBe("typing");
+    // Nothing left: a second flush is a no-op.
+    const puts = fake.state.puts;
+    await flushChatWrites();
+    expect(fake.state.puts).toBe(puts);
   });
 
   it("writes into the session a request started in, not the one selected meanwhile", async () => {
@@ -249,7 +290,7 @@ describe("assistant store", () => {
     // The cards of the request that started in the first workspace arrive now.
     expect(s.accepts(first, generation)).toBe(false);
     expect(s.push(first, { role: "assistant", kind: "executed", text: "워크스페이스를 열었습니다", source: "model", confidence: 0.9 }, generation)).toBe(DROPPED);
-    s.patch(first, asked, (m) => (m.role === "user" ? { ...m, text: "late" } : m), generation);
+    s.patch(first, asked, (m) => (m.role === "user" ? { ...m, text: "late" } : m), { generation });
     // The session id of another workspace is refused whatever the generation (it is not one of this workspace's chats)…
     expect(s.push(first, { role: "assistant", kind: "help" })).toBe(DROPPED);
     // …and a stale request cannot write into a chat of the new workspace either.
@@ -266,7 +307,7 @@ describe("assistant store", () => {
     const s = useAssistantStore.getState();
     const id = s.push(first, { role: "user", text: "a" });
     await settled();
-    s.patch(first, id, (m) => (m.role === "user" ? { ...m, text: "edited" } : m));
+    s.patch(first, id, (m) => (m.role === "user" ? { ...m, text: "edited" } : m), { defer: true });
     const puts = fake.state.puts;
     fake.switchWorkspace();
     resetAssistant();
@@ -302,7 +343,7 @@ describe("assistant store", () => {
     // The plan / answer of a request that was running arrives after the delete.
     const puts = fake.state.puts;
     expect(useAssistantStore.getState().push(first, { role: "assistant", kind: "help" }, generation)).toBe(DROPPED);
-    useAssistantStore.getState().patch(first, answer, (m) => m, generation);
+    useAssistantStore.getState().patch(first, answer, (m) => m, { generation });
     await flushChatWrites();
     expect(fake.state.puts).toBe(puts);
     expect(fake.state.sessions.map((x) => x.id)).toEqual([second]);

@@ -12,6 +12,7 @@ import { queryClient, queryKeys } from "./query-client";
 import { coerceSettingValue, resolveSettingKey, setSettingByPath, settingSpec } from "./settingsCatalog";
 import { SCREEN_ROUTES, isJobFinished, type BackendPreference, type DocumentView, type Language, type Op, type PreRouteResult, type RetentionPolicy, type RetentionTarget, type Screen, type Theme, type Tier, type UndoReport } from "./types";
 import { errorCode, errorMessage } from "./utils";
+import { flushChatWrites } from "@/stores/assistant";
 import { useDocumentsStore } from "@/stores/documents";
 import { useEngineStore } from "@/stores/engine";
 import { useJobsStore } from "@/stores/jobs";
@@ -113,6 +114,11 @@ function toNumber(v: unknown): number {
   const n = typeof v === "number" ? v : Number(String(v).replace(/[^0-9.-]/g, ""));
   if (!Number.isFinite(n)) throw new Error(`invalid number: ${String(v)}`);
   return n;
+}
+
+/** The assistant's chat writes, sent and stored — but a workspace op does not hang on a write that is stuck. */
+function chatWritesSettled(): Promise<void> {
+  return Promise.race([flushChatWrites(), new Promise<void>((resolve) => setTimeout(resolve, 2000))]);
 }
 
 
@@ -389,10 +395,14 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
     }
     case "workspace": {
       const ws = useWorkspaceStore.getState();
+      // The conversation so far — this very command and its plan / result cards — belongs to the workspace
+      // being left: its writes must reach that database before the backend moves on (afterwards they
+      // could only be dropped).
       switch (op.action) {
         case "open": {
           const path = (op.path ?? "").trim();
           if (!path) throw new Error(t("planner.ui.path_required"));
+          await chatWritesSettled();
           const view = await ws.open(path);
           navigate(SCREEN_ROUTES.library);
           return done(t("planner.ui.workspace_open", { name: view.manifest.name || path }));
@@ -400,11 +410,13 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
         case "create": {
           const path = (op.path ?? "").trim();
           if (!path) throw new Error(t("planner.ui.path_required"));
+          await chatWritesSettled();
           const view = await ws.create(path, null, null);
           navigate(SCREEN_ROUTES.library);
           return done(t("planner.ui.workspace_create", { name: view.manifest.name || path }));
         }
         case "close":
+          await chatWritesSettled();
           await ws.close();
           return done(t("planner.ui.workspace_close"), "info");
         case "forget": {
