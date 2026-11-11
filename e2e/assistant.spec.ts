@@ -144,6 +144,38 @@ test.describe("assistant chat sessions", () => {
     await expect(activeRow(page)).toContainText("/테마 다크");
   });
 
+  // KNO-10: a sentence handed over by the command palette while the assistant was answering vanished
+  // (the page consumed it and `send` refused it). It waits in the composer now.
+  test("a sentence sent from the palette while the assistant answers waits in the composer", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openAssistantScreen(page);
+    // The mock reads its speed flag per stream delta: slow it down so the answer below is still running
+    // when the palette hands its sentence over.
+    await page.evaluate(() => localStorage.removeItem("doculens.mock.fast"));
+    const body = "금번 과업은 당사가 수행하며 기한은 12월말까지로 하고 산출물은 설계서와 소스코드로 함. ".repeat(20);
+    await send(page, `다음 문장을 다듬어 정리해줘: ${body}`);
+    const answer = page.locator('[data-testid="assistant-card-answer"] [data-testid="answer-card"]').last();
+    await expect(answer).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("assistant-send")).toBeDisabled();
+
+    await page.keyboard.press("Control+K");
+    await expect(page.getByTestId("command-palette")).toBeVisible();
+    await page.getByTestId("palette-input").fill("견적서 월별 폴더로 옮겨");
+    await page.getByTestId("palette-send").click();
+    await expect(page.getByTestId("assistant-input")).toHaveValue("견적서 월별 폴더로 옮겨");
+    // The answer was not interrupted and no second command started.
+    await expect(page.locator('[data-testid="assistant-card-plan"], [data-testid="assistant-card-clarify"]')).toHaveCount(0);
+    await page.evaluate(() => localStorage.setItem("doculens.mock.fast", "1"));
+    await expect(answer).toHaveAttribute("data-answer-state", "done", { timeout: 30_000 });
+
+    // Still in the composer once the answer is done; Enter sends it.
+    await expect(page.getByTestId("assistant-input")).toHaveValue("견적서 월별 폴더로 옮겨");
+    await page.getByTestId("assistant-input").press("Enter");
+    await expect(page.getByTestId("assistant-input")).toHaveValue("");
+    await expect(page.getByTestId("assistant-messages")).toContainText("견적서 월별 폴더로 옮겨");
+  });
+
   test("the input waits for the sessions and the composer sends into the active one", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);

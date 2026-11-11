@@ -465,13 +465,23 @@ export function AssistantPage() {
   };
 
   // Text handed over by another screen (command palette, pre-router help) is sent into the active session once
-  // it exists and its messages are read.
+  // it exists and its messages are read. While the assistant is in the middle of an answer or an
+  // interpretation `send` takes nothing: the sentence then waits in the composer (after what is already typed
+  // there) instead of being lost (KNO-10).
   useEffect(() => {
-    if (pending && !hydrating && activeId && sessionLoaded && consumed.current !== pending) {
-      consumed.current = pending;
-      setPending(null);
-      void send(pending);
+    if (!pending) {
+      consumed.current = null; // the same sentence may be handed over again later
+      return;
     }
+    if (hydrating || !activeId || !sessionLoaded || consumed.current === pending) return;
+    consumed.current = pending;
+    setPending(null);
+    if (anyPending || planning) {
+      setText((current) => (current.trim() ? `${current.trimEnd()}\n${pending}` : pending));
+      window.setTimeout(() => inputRef.current?.focus(), 0);
+      return;
+    }
+    void send(pending);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending, hydrating, activeId, sessionLoaded]);
 
