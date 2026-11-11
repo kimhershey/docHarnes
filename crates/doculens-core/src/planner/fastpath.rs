@@ -23,6 +23,21 @@ use super::{AnswerMode, Op, Plan, PlanContext};
 /// Reads `text` without the model, or `None` when the model should read it.
 pub fn plan(text: &str, ctx: &PlanContext) -> Option<Plan> {
     let ko = ctx.language == Language::Ko;
+    // A reply to the assistant's question arrives as "command / question / reply" (`askBackText`
+    // in the UI). Only the user's words count, and a reply that is the value the question asked
+    // for ("배율 바꿔줘" → "값을 알려 주세요" → "120") completes the setting.
+    let words = super::rules::user_words(text);
+    if words != text {
+        let (command, reply) = words.rsplit_once('\n')?;
+        if let Some(p) = setting(&words, ko).filter(|p| !p.is_clarification()) {
+            return Some(p);
+        }
+        // The command already carried a value that was refused ("UI 배율 200" → "150").
+        let chars: Vec<char> = plain(command).chars().collect();
+        let (_, span) = named_setting(&chars)?;
+        let name: String = chars[span.0..span.1].iter().collect();
+        return setting(&format!("{name} {reply}"), ko);
+    }
     greeting(text, ko).or_else(|| setting(text, ko))
 }
 
@@ -907,6 +922,23 @@ mod tests {
         assert_eq!(numbers_in("임계값 0.6, 토큰 8,000"), vec![0.6, 8000.0]);
     }
 
+    /// The reply to "which value?" finishes the command without the model.
+    #[test]
+    fn a_reply_to_the_assistants_question_completes_the_setting() {
+        let ask = |command: &str, reply: &str| {
+            format!("{command}\n\n[어시스턴트 질문] UI 배율(%) — 바꿀 값을 함께 말씀해 주세요(90~150).\n[사용자 답변] {reply}")
+        };
+        assert_eq!(setting_of(&ask("배율 바꿔줘", "120")), Some(("ui.scale_percent".into(), json!(120))));
+        assert_eq!(setting_of(&ask("배율 바꿔줘", "120%로 해줘")), Some(("ui.scale_percent".into(), json!(120))));
+        assert_eq!(setting_of(&ask("UI 배율 200", "150")), Some(("ui.scale_percent".into(), json!(150))));
+        // Still out of range: asked again, not applied. The question's own "90~150" is never read as a value.
+        assert!(plan(&ask("UI 배율 200", "180"), &ctx()).unwrap().is_clarification());
+        assert!(plan(&ask("배율 바꿔줘", "글쎄 잘 모르겠어"), &ctx()).is_none());
+        // A reply to a question about something else is the model's.
+        let other = "선택한 문서 삭제해줘\n\n[어시스턴트 질문] 어떤 문서를 삭제할까요?\n[사용자 답변] 배율 120";
+        assert!(plan(other, &ctx()).is_none());
+    }
+
     #[test]
     fn out_of_range_values_are_not_applied() {
         for text in ["UI 배율 200", "DPI 250으로 변경해줘", "근거 개수 500"] {
@@ -922,8 +954,8 @@ mod tests {
 
     #[test]
     fn confirmed_settings_stay_confirmed() {
-        let p = plan("db 암호화 켜줘", &ctx()).unwrap();
-        assert!(p.requires_confirmation, "{p:?}");
+        // (the two settings that are confirmed — a path and a model — are text and never read here)
+        assert!(plan("엔진 실행 파일 경로 C:\\llama\\llama-server.exe", &ctx()).is_none());
         let p = plan("ui 배율 120", &ctx()).unwrap();
         assert!(!p.requires_confirmation);
         assert_eq!(p.confidence, 1.0);

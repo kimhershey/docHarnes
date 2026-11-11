@@ -81,6 +81,10 @@ fn has_rewrite_verb(s: &str) -> bool {
 /// `MIN_BODY_CHARS` characters.
 pub fn carried_text(text: &str) -> Option<&str> {
     let text = text.trim();
+    // A reply to the assistant's question is "command / question / reply", not a text to work on.
+    if super::rules::user_words(text) != text {
+        return None;
+    }
     for sep in [':', '：', '\n', '"', '“', '「', '『'] {
         // ("10:30" and "3:1" are not "instruction: text")
         let between_digits = |pos: usize| {
@@ -525,7 +529,8 @@ fn ungrounded(text: &str, op: &Op) -> Option<String> {
 /// The split the sentence asks for ("~별", "마다", "by …"): filled in when the op has the criterion,
 /// shown and confirmed when it has not (담당자별 …). Also applied to plans made by the phrase rules.
 pub fn split_check(text: &str, plan: &mut Plan, ko: bool) -> Option<PlanIssue> {
-    if plan.is_clarification() || !keep_the_split(text, plan) {
+    let said = super::rules::user_words(text);
+    if plan.is_clarification() || !keep_the_split(&said, plan) {
         return None;
     }
     plan.requires_confirmation = true;
@@ -548,6 +553,10 @@ pub fn split_check(text: &str, plan: &mut Plan, ko: bool) -> Option<PlanIssue> {
 /// found turns the plan into one the user confirms, with a note for the card; the model's own
 /// `confidence` plays no part.
 pub fn contract_checks(text: &str, plan: &mut Plan, ko: bool) -> Vec<PlanIssue> {
+    // Only what the user wrote grounds a plan: the assistant's question inside an ask-back text
+    // names settings and ranges of its own.
+    let said = super::rules::user_words(text);
+    let text = said.as_str();
     let mut notes = Vec::new();
     if plan.is_clarification() {
         return notes;
@@ -767,6 +776,21 @@ mod tests {
             let mut p = model_plan(vec![op]);
             assert!(codes(text, &mut p).is_empty(), "{text}: {p:?}");
         }
+        // The assistant's question does not ground a value: only the reply does.
+        let ask = |reply: &str| {
+            format!("배율 바꿔줘\n\n[어시스턴트 질문] UI 배율(%) — 바꿀 값을 함께 말씀해 주세요(90~150).\n[사용자 답변] {reply}")
+        };
+        let scale = |v: i64| Op::SetSetting { key: "ui.scale_percent".into(), value: json!(v) };
+        let mut p = model_plan(vec![scale(150)]);
+        assert_eq!(codes(&ask("적당히 해줘"), &mut p), vec!["ungrounded_change"]);
+        let mut p = model_plan(vec![scale(130)]);
+        assert!(codes(&ask("130으로"), &mut p).is_empty());
+        assert_eq!(
+            carried_text(&ask(
+                "다음 글을 다듬어서 요약해줘 그리고 130으로 맞춰줘 부탁해요 꼭이요 감사합니다 정말로요 진짜"
+            )),
+            None
+        );
         // Ops that are not settings changes are not this check's business.
         let mut p = model_plan(vec![Op::Search { query: "한빛".into(), mode: None, top_k: None }]);
         assert!(codes("한빛 계약 찾아줘", &mut p).is_empty());

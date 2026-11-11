@@ -298,13 +298,6 @@
     }
   },
   {
-    "confirm": true,
-    "key": "privacy.db_encryption",
-    "type": {
-      "kind": "boolean"
-    }
-  },
-  {
     "confirm": false,
     "key": "notifications.job_complete",
     "type": {

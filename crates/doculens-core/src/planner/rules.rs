@@ -1246,6 +1246,10 @@ fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     // "프로젝트별로 요약해줘" (0.8.0): one summary per group, over the library unless documents are named.
     let summary_only = summarize && !(classify || ocr || extract || validate || generic);
     let grouping = if summary_only { super::guard::summary_group(t.raw) } else { None };
+    if grouping == Some(super::SummaryGroup::Project) && scope.filter.project_id == ctx.scope_project {
+        // One summary per project: the open project is not a filter on them.
+        scope.filter.project_id = None;
+    }
     if scope.is_empty() && !t.has(ALL_WORDS) && grouping.is_none() {
         if !selection_ids(ctx).is_empty() && (t.has(&["이", "선택", "this", "selected"]) || summarize || ocr) {
             scope.doc_ids = selection_ids(ctx);

@@ -154,10 +154,10 @@ fn a_model_plan_without_documents_asks_inside_a_project() {
     assert!(r.plan.is_clarification(), "{:?}", r.plan);
     let chat = StageChat::new();
     chat.push("plan", rotate());
-    let mut r = plan(Some(&deps(&chat)), "전부 90도 돌려줘", &c, PlanMode::ModelFirst).unwrap();
+    let r = plan(Some(&deps(&chat)), "전부 90도 돌려줘", &c, PlanMode::ModelFirst).unwrap();
     assert!(matches!(r.plan.operations[0], Op::Rotate { degrees: 90, .. }), "{:?}", r.plan);
-    // The caller (the shell's `plan` / `execute`) settles the scope: "all" is the project.
-    assert!(validate::apply_default_scope(&mut r.plan, &c));
+    // "all" inside the project scope is the project — settled by `plan` itself, so the shell,
+    // the evaluation and every other caller see the same plan.
     assert_eq!(project_of(&r.plan), Some("p-hanbit"));
 }
 

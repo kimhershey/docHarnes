@@ -789,7 +789,6 @@
       "cache_page_cache_max_gb": "Page cache limit (GB)",
       "cache_keep_thumbnails": "Keep thumbnails",
       "privacy_pii_masking": "Mask personal identifiers",
-      "privacy_db_encryption": "Database encryption",
       "notifications_job_complete": "Job-complete notification",
       "notifications_prevent_sleep_during_jobs": "Prevent sleep during jobs",
       "knowledge_auto_index": "Index automatically",

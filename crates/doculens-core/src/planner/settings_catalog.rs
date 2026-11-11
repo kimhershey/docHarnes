@@ -116,7 +116,6 @@ pub const SETTINGS: &[SettingSpec] = &[
     s("cache.keep_thumbnails", ValueType::Bool, "썸네일 보관", "keep thumbnails"),
     // privacy
     s("privacy.pii_masking", ValueType::Bool, "개인정보 마스킹", "PII masking"),
-    sc("privacy.db_encryption", ValueType::Bool, "DB 암호화", "database encryption"),
     // notifications
     s("notifications.job_complete", ValueType::Bool, "작업 완료 알림", "job-complete notification"),
     s("notifications.prevent_sleep_during_jobs", ValueType::Bool, "배치 중 절전 방지", "prevent sleep during jobs"),
@@ -207,7 +206,6 @@ pub const SETTING_KEYS: &[&str] = &[
     "cache.page_cache_max_gb",
     "cache.keep_thumbnails",
     "privacy.pii_masking",
-    "privacy.db_encryption",
     "notifications.job_complete",
     "notifications.prevent_sleep_during_jobs",
     "knowledge.auto_index",
@@ -289,7 +287,6 @@ pub const NAMES: &[(&str, &[&str])] = &[
     ),
     ("cache.keep_thumbnails", &["썸네일 보관", "썸네일 유지", "keep thumbnails"]),
     ("privacy.pii_masking", &["개인정보 마스킹", "pii 마스킹", "마스킹", "pii masking", "masking"]),
-    ("privacy.db_encryption", &["db 암호화", "데이터베이스 암호화", "database encryption"]),
     ("notifications.job_complete", &["작업 완료 알림", "완료 알림", "알림", "job notification", "notifications"]),
     ("notifications.prevent_sleep_during_jobs", &["절전 방지", "배치 중 절전 방지", "prevent sleep"]),
     ("knowledge.auto_index", &["자동 색인", "auto index", "automatic indexing"]),
@@ -660,8 +657,10 @@ mod tests {
         keys.sort_unstable();
         keys.dedup();
         assert_eq!(keys.len(), SETTING_KEYS.len(), "duplicate keys");
-        // Every settings struct field the plan names has an entry (count from plan §1.5 + journal_days).
-        assert_eq!(SETTINGS.len(), 47);
+        // Every settings field the assistant may change has an entry, plus `journal_days`. 0.8.0
+        // took `privacy.db_encryption` out: nothing encrypts the database, so there is no switch.
+        assert_eq!(SETTINGS.len(), 46);
+        assert!(find("privacy.db_encryption").is_none());
     }
 
     #[test]

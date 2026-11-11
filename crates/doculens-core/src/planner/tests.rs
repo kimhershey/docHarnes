@@ -2115,3 +2115,25 @@ fn model_plans_are_checked_against_the_sentence() {
     assert!(matches!(&r.plan.operations[..], [Op::Answer { mode: Some(AnswerMode::Chat), .. }]), "{r:?}");
     assert!(!r.plan.requires_confirmation && r.plan.scope.is_empty());
 }
+
+/// "프로젝트별로 요약해줘" asks for every project: the assistant's "현재 프로젝트" scope is not a
+/// filter on it, by rule or by model; any other summary inside the scope stays in the project.
+#[test]
+fn a_summary_per_project_is_not_narrowed_to_the_open_project() {
+    let mut c = ctx();
+    c.projects = vec![ProjectSummary { id: "p-hanbit".into(), name: "한빛 납품".into(), status: "active".into() }];
+    c.scope_project = Some("p-hanbit".into());
+    let project_of = |p: &Plan| p.scope.filter.project_id.clone();
+    let r = plan(None, "프로젝트별로 요약해줘", &c, PlanMode::RulesFirst).unwrap();
+    assert!(matches!(&r.plan.operations[..], [Op::Summarize { group_by: Some(SummaryGroup::Project), .. }]), "{r:?}");
+    assert_eq!(project_of(&r.plan), None, "{r:?}");
+    let chat = StageChat::new();
+    chat.push("families", json!({ "families": ["ask"] }));
+    chat.push("plan", json!({ "summary": "s", "unmet": "", "intent": "summarize", "scope": {}, "operations": [{ "op": "summarize", "target": "set" }], "requires_confirmation": false, "confidence": 0.9 }));
+    let r = plan(Some(&deps(&chat)), "프로젝트 별 내용을 요약해줘", &c, PlanMode::ModelFirst).unwrap();
+    assert!(matches!(&r.plan.operations[..], [Op::Summarize { group_by: Some(SummaryGroup::Project), .. }]), "{r:?}");
+    // The validator filled the open project in before the split was put back: taken out again.
+    assert_eq!(project_of(&r.plan), None, "{r:?}");
+    let r = plan(None, "유형별로 요약해줘", &c, PlanMode::RulesFirst).unwrap();
+    assert_eq!(project_of(&r.plan).as_deref(), Some("p-hanbit"), "{r:?}");
+}

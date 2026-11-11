@@ -117,7 +117,15 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
         }
     }
 
-    let scoped = |plan: Plan| guard_scope(plan, text, ko);
+    let scoped = |plan: Plan| {
+        let mut plan = guard_scope(plan, text, ko);
+        // A plan let through because the sentence said "전부": inside the "현재 프로젝트" scope
+        // that is the project, not the library (the validator skipped the default for it).
+        if !plan.is_clarification() {
+            validate::apply_default_scope(&mut plan, ctx);
+        }
+        plan
+    };
     if mode == PlanMode::ModelFirst {
         // Slash commands stay deterministic; every other sentence is the model's to read.
         if text.starts_with('/') {
@@ -324,6 +332,11 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
                 guard::noop_to_chat(text, &mut plan, ko);
                 // What the sentence does not support is confirmed, whatever the model's confidence.
                 issues.extend(guard::contract_checks(text, &mut plan, ko));
+                // A split by project the checks put back: the validator had already filled the open
+                // project in as the default scope, which would leave one group.
+                if validate::per_project(&plan) && plan.scope.filter.project_id == ctx.scope_project {
+                    plan.scope.filter.project_id = None;
+                }
                 result.issues = issues;
                 result.plan = scoped(finalize(plan, ko));
                 return Ok(result);

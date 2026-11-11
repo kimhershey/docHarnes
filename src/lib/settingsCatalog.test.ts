@@ -18,7 +18,9 @@ describe("settings catalog", () => {
     // The retention period is not an AppSettings field; commands.ts applies it on its own.
     expect(catalog.some((r) => r.key === "journal_days")).toBe(true);
     expect(settingSpec("journal_days")).toBeNull();
-    expect(spec("privacy.db_encryption").confirm).toBe(true);
+    expect(spec("models.engine_binary").confirm).toBe(true);
+    // Nothing encrypts the database yet, so the switch is not offered (0.8.0, PLT-10).
+    expect(settingSpec("privacy.db_encryption")).toBeNull();
     expect(spec("ui.scale_percent").type).toEqual({ kind: "integer", min: 90, max: 150 });
   });
 

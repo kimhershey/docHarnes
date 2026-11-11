@@ -789,7 +789,6 @@
       "cache_page_cache_max_gb": "페이지 캐시 상한(GB)",
       "cache_keep_thumbnails": "썸네일 유지",
       "privacy_pii_masking": "고유식별정보 마스킹",
-      "privacy_db_encryption": "DB 암호화",
       "notifications_job_complete": "작업 완료 알림",
       "notifications_prevent_sleep_during_jobs": "작업 중 절전 방지",
       "knowledge_auto_index": "자동 색인",

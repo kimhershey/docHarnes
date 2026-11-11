@@ -118,11 +118,23 @@ pub fn apply_default_scope(plan: &mut Plan, ctx: &PlanContext) -> bool {
             Op::AddToProject { .. } | Op::Import { .. } | Op::ClassifyProjects { .. } | Op::CreateProject { .. }
         )
     });
-    if from_outside || !uses_scope(plan) {
+    // "프로젝트별로 요약해줘" asks for every project: the open one is not a filter on it (0.8.0).
+    if from_outside || per_project(plan) || !uses_scope(plan) {
         return false;
     }
     plan.scope.filter.project_id = Some(p.to_string());
     true
+}
+
+/// The plan makes one result per project (a summary or an aggregate grouped by project).
+pub fn per_project(plan: &Plan) -> bool {
+    plan.operations.iter().any(|op| {
+        matches!(
+            op,
+            Op::Summarize { group_by: Some(super::SummaryGroup::Project), .. }
+                | Op::Aggregate { group_by: Some(super::GroupBy::Project), .. }
+        )
+    })
 }
 
 /// The scope gate of a plan the user is about to run, in one call: a plan that changes documents
