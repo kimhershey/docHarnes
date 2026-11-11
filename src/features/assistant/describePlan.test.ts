@@ -9,7 +9,7 @@ import ko from "@/i18n/ko.json";
 import type { UiOpResult } from "@/lib/commands";
 import type { CheckRun, Draft, DraftOutcome, Plan, PlanContext, PlanExecution, PlanPreview, PlanResponse, Project, ProjectDetail, RuleDraft } from "@/lib/types";
 
-import { agentStepDetail, deriveResultActions, formatAmount, impactLine, impactOf, isPlanExecution, listTotal, onlyReviewedValue, opLabel, organizePreview, planKind, projectName, requiresConfirmation, ruleDraftPreview, summarizeOp, uiContextFor, uiResultsByStep, withOnlyReviewed } from "./describePlan";
+import { agentStepDetail, deriveResultActions, formatAmount, impactLine, impactOf, isPlanExecution, listTotal, onlyReviewedValue, opLabel, organizePreview, organizeReasonText, planKind, projectName, requiresConfirmation, ruleDraftPreview, summarizeOp, uiContextFor, uiResultsByStep, withOnlyReviewed } from "./describePlan";
 import { OP_KINDS, OP_SPECS, UI_OPS } from "./opSpecs";
 
 const instance = i18next.createInstance();
@@ -258,6 +258,25 @@ describe("lists of a card stored smaller", () => {
 });
 
 // PLN-17: the UI runs the steps the executor leaves to it; what became of each is shown on its step.
+describe("organizeReasonText", () => {
+  it("words the reasons that have copy, in both languages", () => {
+    expect(organizeReasonText("project_copy", t)).toBe("이 프로젝트에 사본으로 정리된 문서라 그대로 둠");
+    expect(organizeReasonText("missing_file", t)).toBe("파일을 찾을 수 없음");
+    const english = ((k: string, o?: Record<string, unknown>) => instance.t(k, { ...o, lng: "en" })) as typeof t;
+    expect(organizeReasonText("project_copy", english)).toBe(en.planner.card.reasons.project_copy);
+    expect(Object.keys(en.planner.card.reasons).sort()).toEqual(Object.keys(ko.planner.card.reasons).sort());
+  });
+
+  it("leaves every other reason as it is: a code without copy, an error text, nothing", () => {
+    expect(organizeReasonText("review_pending", t)).toBe("review_pending");
+    expect(organizeReasonText("source_changed", t)).toBe("source_changed");
+    expect(organizeReasonText("액세스가 거부되었습니다. (os error 5)", t)).toBe("액세스가 거부되었습니다. (os error 5)");
+    expect(organizeReasonText("I/O error at C:\\work\\a.pdf: project_copy", t)).toBe("I/O error at C:\\work\\a.pdf: project_copy");
+    expect(organizeReasonText(null, t)).toBeNull();
+    expect(organizeReasonText("", t)).toBeNull();
+  });
+});
+
 describe("uiResultsByStep", () => {
   const step = (index: number, op: PlanExecution["steps"][number]["op"], status: PlanExecution["steps"][number]["status"]): PlanExecution["steps"][number] => ({ index, op, status, summary: "", payload: null, elapsed_ms: 0 });
   const result = (op: UiOpResult["op"], ok: boolean): UiOpResult => ({ op, ok, summary: ok ? `${op} done` : "", error: ok ? null : `${op} failed` });

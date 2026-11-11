@@ -23,7 +23,7 @@ import { looksLikeFollowUp } from "@/lib/follow-up";
 import { api } from "@/lib/ipc";
 import { useDocument, useKnowledgeStatus, usePipelineStatus } from "@/lib/queries";
 import { isComposing, matchesChord } from "@/lib/shortcuts";
-import { isJobFinished, type AnswerRequest, type Job, type Op, type Plan, type PlanExecution, type PlanIssue, type PlanResponse, type PreRouteResult, type SearchMode, type SearchScope, type UiPlanContext } from "@/lib/types";
+import { isJobFinished, type Answer, type AnswerRequest, type Job, type Op, type Plan, type PlanExecution, type PlanIssue, type PlanResponse, type PreRouteResult, type SearchMode, type SearchScope, type UiPlanContext } from "@/lib/types";
 import { errorCode, isMac } from "@/lib/utils";
 import { selectMessages, useAssistantStore, type ClarifyStatus, type Message, type NewMessage, type PlanMessage } from "@/stores/assistant";
 import { useAttachmentsStore } from "@/stores/attachments";
@@ -37,6 +37,7 @@ import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
 
+import { planAnswerScope, sameSearchScope } from "./answerScope";
 import { ClarifyCard } from "./ClarifyCard";
 import { conversationTurns } from "./conversation";
 import { clarificationQuestion, isPlanExecution, planKind, requiresConfirmation, sourceLabel, uiContextFor } from "./describePlan";
@@ -276,14 +277,20 @@ export function AssistantPage() {
       followUp || (history.length > 0 && looksLikeFollowUp(question))
         ? [...messagesOf(sid)].reverse().find((m): m is Extract<Message, { kind: "answer" }> => m.role === "assistant" && m.kind === "answer" && !!m.answer && !m.answer.no_evidence)
         : undefined;
+    const searchScope = extra.scope ?? knowledgeScope();
+    // The previous evidence is only kept while this question looks in the same place as the answer it came
+    // from (KNO-1). After the scope changed — another project, a document attached, a type the plan names —
+    // those passages may lie outside it: sent along, they would be cited for a document the user is not
+    // asking about, and the answer could never be "no evidence".
+    const keep = previous && sameSearchScope(previous.request.scope, searchScope) ? previous.answer!.sources.slice(0, 4).map((s) => s.chunk_id) : [];
     const request: AnswerRequest = {
       question,
       kind: "answer",
-      scope: knowledgeScope(),
+      scope: searchScope,
       allow_general: knowledge?.allow_general_knowledge ?? false,
       top_k: knowledge?.top_k ?? 8,
       context_tokens: knowledge?.context_tokens ?? 6000,
-      keep_chunks: previous ? previous.answer!.sources.slice(0, 4).map((s) => s.chunk_id) : [],
+      keep_chunks: keep,
       history,
       ...extra,
     };
@@ -443,14 +450,31 @@ export function AssistantPage() {
           push(sid, { role: "assistant", kind: "reply", text: op.reply, source: sourceLabel(response.result.source, t) });
           return;
         }
-        const base = knowledgeScope();
-        if (plan.scope.doc_ids && plan.scope.doc_ids.length > 0) base.documents = plan.scope.doc_ids;
-        if (plan.scope.folder) base.folder = plan.scope.folder;
         // mode=chat: small talk, nothing is looked up. mode=general: not about the documents — evidence when
         // there is some, general knowledge (marked as such) otherwise, whatever the setting says.
         // knowledge=false: the sentence carries the text to work on — answer from it, look nothing up.
         const style = op?.mode === "chat" ? "chat" : op?.mode === "general" ? "general" : null;
         const retrieve = style !== "chat" && op?.knowledge !== false;
+        const base = knowledgeScope();
+        // The scope the plan names is the scope of the question (KNO-5): "지난달 회의록에서 결정된 사항은?" and
+        // "한빛 프로젝트 문서에서 납품 기한 알려줘" look in the documents the plan's scope resolved to (the
+        // preview's), not in everything the selector allows. An answer that looks nothing up has no scope.
+        const target = retrieve ? planAnswerScope(plan, response.preview) : ({ kind: "selector" } as const);
+        if (target.kind === "none") {
+          // The scope matches no document: "no evidence" for that scope, without a model call — an empty
+          // document list in the request would search everything. (The card offers no "일반 지식으로 답하기":
+          // its request has no scope to repeat.)
+          const noDocuments: Answer = { id: null, kind: "answer", question, text: t("assistant.scope.no_documents"), sentences: [], sources: [], no_evidence: true, used_general_knowledge: false, conflicts: null, model: null, elapsed_ms: 0, prompt_tokens: 0, completion_tokens: 0, document_id: null, created_at: new Date().toISOString(), feedback: null };
+          push(sid, { role: "assistant", kind: "answer", requestId: newRequestId(), request: { question, kind: "answer", scope: base, retrieve, history: [] }, answer: noDocuments, error: null, pending: false, scopeEmpty: true });
+          return;
+        }
+        if (target.kind === "documents") {
+          if (target.documents.length > 0) base.documents = target.documents;
+          if (target.projectId) base.project_id = target.projectId;
+        } else {
+          if (plan.scope.doc_ids && plan.scope.doc_ids.length > 0) base.documents = plan.scope.doc_ids;
+          if (plan.scope.folder) base.folder = plan.scope.folder;
+        }
         await askKnowledge(sid, question, { scope: base, retrieve, ...(style ? { style } : {}), ...(style === "general" ? { allow_general: true } : {}) });
         return;
       }
@@ -816,11 +840,17 @@ export function AssistantPage() {
                       pending={m.pending}
                       streamText={streams[m.requestId] ?? ""}
                       error={m.error}
+                      // A small-talk reply (the request went out with `style: "chat"`, kept on the stored message)
+                      // is not a text-only answer: no "검색 없이 답변" badge.
+                      chat={m.request.style === "chat"}
+                      // The scope the question named matches no document (KNO-5): the card says so.
+                      noEvidenceText={m.scopeEmpty ? t("assistant.scope.no_documents") : undefined}
                       onCitation={(c) => openCitation(navigate, c)}
                       // "일반 지식으로 답하기": the stored request again — the scope (and history) of the original
                       // question, not what the selector shows by now (KNO-13) — with general knowledge allowed.
                       // Not from a record (CON-16): its request was cut to fit, the scope's documents included.
-                      onAskGeneral={m.clipped === "all" ? undefined : () => void askKnowledge(sid, m.request.question, { ...m.request, allow_general: true, keep_chunks: [] })}
+                      // Not for a scope without documents either: there is no request that searched it.
+                      onAskGeneral={m.clipped === "all" || m.scopeEmpty ? undefined : () => void askKnowledge(sid, m.request.question, { ...m.request, allow_general: true, keep_chunks: [] })}
                       onFeedback={(id, v) => void feedback(sid, m.id, id, v)}
                       onCancel={m.pending && cancelling !== m.requestId ? () => cancelAnswer(m.requestId) : undefined}
                     />

@@ -34,7 +34,12 @@ export type Message = { clipped?: Clipped } & (
   | { id: number; createdAt?: string; role: "assistant"; kind: "executed"; text: string; source: string; confidence: number; failures?: string[]; ran?: number; undo?: Op[]; undone?: boolean }
   /** A ready reply shown as it is (0.8.0): a fixed greeting, "nothing to do", "this cannot be done". No model call. */
   | { id: number; createdAt?: string; role: "assistant"; kind: "reply"; text: string; source: string }
-  | { id: number; createdAt?: string; role: "assistant"; kind: "answer"; requestId: string; request: AnswerRequest; answer: Answer | null; error: unknown; pending: boolean }
+  /**
+   * `request` is what was asked — its `style` says how (a `chat` reply is small talk, not a text-only answer).
+   * `scopeEmpty`: the scope the question named matched no document, so nothing was asked: `answer` is a ready
+   * "no evidence" for that scope and `request` was never sent.
+   */
+  | { id: number; createdAt?: string; role: "assistant"; kind: "answer"; requestId: string; request: AnswerRequest; answer: Answer | null; error: unknown; pending: boolean; scopeEmpty?: true }
   | { id: number; createdAt?: string; role: "assistant"; kind: "help" }
   /**
    * `text` is the user's sentence. `plannedText` is set when the plan was made from something else — the

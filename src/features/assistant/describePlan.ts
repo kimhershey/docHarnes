@@ -542,6 +542,16 @@ export interface OrganizePreviewRows {
   unchanged: number;
 }
 
+/**
+ * The text of an organise item's `reason` on the plan / result cards. The reasons with copy of their own
+ * (`project_copy`: the document is a copy filed into the project and stays where it is, `missing_file`) are
+ * shown through `planner.card.reasons.*`; any other reason — an error text, a code without copy — as it is.
+ */
+export function organizeReasonText(reason: string | null | undefined, t: TFunction): string | null {
+  if (!reason) return null;
+  return /^[a-z][a-z0-9_]*$/.test(reason) ? t(`planner.card.reasons.${reason}`, { defaultValue: reason }) : reason;
+}
+
 export function organizePreview(step: StepPreview | undefined): OrganizePreviewRows | null {
   if (!step || !isRecord(step.payload) || !Array.isArray(step.payload.items)) return null;
   const p = step.payload as unknown as OrganizePlan;
