@@ -518,14 +518,14 @@ pub fn import_job(app: &AppHandle, plan: ImportPlan) -> String {
             j.bytes_total = Some(plan.total_bytes);
             j.detail = Some(format!("{:?}", plan.mode).to_lowercase());
         });
-        let folder = modelstore::run_import(&plan, &mut |p| {
+        let imported = modelstore::run_import(&plan, &mut |p| {
             let frac = if p.total > 0 { p.total_done as f32 / p.total as f32 } else { 0.0 };
             state.jobs.progress(&job2, Some(frac), Some(p.total_done), Some(p.total), Some(p.file.clone()));
             !cancel.load(Ordering::Relaxed)
-        })
-        .map_err(|e| e.to_string())?;
+        });
+        // Also after a failure: files copied before it are in the folder already.
         rescan_and_sync(app);
-        Ok(Some(folder.display().to_string()))
+        Ok(Some(imported.map_err(|e| e.to_string())?.display().to_string()))
     });
     job
 }
@@ -552,6 +552,17 @@ pub fn download_job(app: &AppHandle, model_id: &str) -> UiResult<String> {
         let state = app.state::<AppState>();
         let target = models_dir.join(&model.id);
         let total: u64 = model.files.iter().map(|f| f.size).sum();
+        // Everything still to fetch has to fit before the first byte is written (PLT-13); each
+        // file is checked again against the size the server reports.
+        let part_len =
+            |name: &str| std::fs::metadata(target.join(format!("{name}.part"))).map(|m| m.len()).unwrap_or(0);
+        let remaining: u64 = model
+            .files
+            .iter()
+            .filter(|f| !target.join(&f.name).is_file())
+            .map(|f| f.size.saturating_sub(part_len(&f.name)))
+            .sum();
+        modelstore::ensure_free_space(&target, remaining).map_err(|e| e.to_string())?;
         let agent = modelstore::download_agent();
         let mut done_before = 0u64;
         for f in &model.files {
@@ -578,8 +589,16 @@ pub fn download_job(app: &AppHandle, model_id: &str) -> UiResult<String> {
                     Some(name.clone()),
                 );
                 !cancel.load(Ordering::Relaxed)
-            })
-            .map_err(|e| e.to_string())?;
+            });
+            let outcome = match outcome {
+                Ok(o) => o,
+                Err(e) => {
+                    // The `.part` file stays for a resume. The scan lists the folder as incomplete,
+                    // so the user can also delete it there (PLT-13).
+                    rescan_and_sync(app);
+                    return Err(e.to_string());
+                }
+            };
             done_before += outcome.bytes;
         }
         let _ = std::fs::write(
