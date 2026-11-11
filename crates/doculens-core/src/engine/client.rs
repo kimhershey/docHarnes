@@ -459,11 +459,13 @@ impl RouterClient {
                 return Err(CoreError::engine(format!("stream error: {err}")));
             }
             if let Some(choice) = v.get("choices").and_then(Value::as_array).and_then(|a| a.first()) {
-                if let Some(delta) = choice.get("delta").and_then(|d| d.get("content")).and_then(Value::as_str) {
-                    out.content.push_str(delta);
-                    if !on_delta(delta) {
-                        return Err(CoreError::Cancelled);
-                    }
+                // Every streamed event is a cancel point: one without visible text (the role chunk, hidden
+                // reasoning, prompt progress) asks the callback with an empty fragment, so a cancel does not
+                // wait for the next visible token.
+                let delta = choice.get("delta").and_then(|d| d.get("content")).and_then(Value::as_str).unwrap_or("");
+                out.content.push_str(delta);
+                if !on_delta(delta) {
+                    return Err(CoreError::Cancelled);
                 }
                 if let Some(r) = choice.get("delta").and_then(|d| d.get("reasoning_content")).and_then(Value::as_str) {
                     if !r.is_empty() {

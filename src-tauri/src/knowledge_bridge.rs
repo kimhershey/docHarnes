@@ -473,49 +473,104 @@ pub fn answer(app: &AppHandle, req: AnswerRequest, request_id: String, ui: Optio
     if let Ok(mut r) = state.answer_running.lock() {
         r.insert(request_id.clone());
     }
-    let rid = request_id.clone();
-    let app_c = app.clone();
-    let cancelled = move || app_c.state::<AppState>().answer_cancels.lock().map(|c| c.contains(&rid)).unwrap_or(false);
     // The loaded model's context caps the evidence budget so the prompt always fits the slot.
     let context_size = state.engine.status().model(&model).and_then(|m| m.ctx);
-    let deps = AnswerDeps {
-        search: ctx.search_deps(embedder.as_ref().map(|e| e as &dyn Embedder)),
-        chat: &state.engine,
-        model: Some(model),
-        cancelled: Some(&cancelled),
+    // "중지" (and a workspace switch) must take effect at once — also while the request queues behind a batch
+    // job and while the engine evaluates the prompt, where the model call cannot be interrupted. The request
+    // runs on a thread of its own: this one returns `cancelled` as soon as the cancel is there, and the
+    // abandoned request ends at its next cancel point (the first streamed token at the latest).
+    let stop = Arc::new(AtomicBool::new(false));
+    let run = AnswerRun {
+        slot: AnswerSlot { app: app.clone(), request_id: request_id.clone() },
+        ctx,
+        embedder,
+        model,
+        req,
         context_size,
+        stop: stop.clone(),
     };
-    let rid = request_id.clone();
-    let app2 = app.clone();
-    let cancelled_ref = &cancelled;
-    let mut on_delta = move |d: &str| {
-        if cancelled_ref() {
-            return false;
-        }
-        let _ = app2.emit(EV_ANSWER, AnswerDelta { request_id: rid.clone(), delta: d.to_string(), done: false });
-        true
-    };
-    // Interactive request: a running batch yields at its next page boundary (§3.9).
-    let result = state.gate.interactive(|| match req.kind {
-        AnswerKind::Answer | AnswerKind::Explain => answer::answer(&deps, &req, &mut on_delta),
-        AnswerKind::Summary => answer::summarize(&deps, &req, &mut on_delta),
-        AnswerKind::Compare => answer::compare(&deps, &req, &mut on_delta),
-    });
-    if let Ok(mut c) = state.answer_cancels.lock() {
-        c.remove(&request_id);
-    }
-    if let Ok(mut r) = state.answer_running.lock() {
-        r.remove(&request_id);
-    }
-    let _ = app.emit(EV_ANSWER, AnswerDelta { request_id, delta: String::new(), done: true });
-    let out = result?;
-    if out.id.is_some() {
-        ctx.emit(app, "answers", Vec::new());
-    }
-    Ok(out)
+    let cancelled = || state.answer_cancels.lock().map(|c| c.contains(&request_id)).unwrap_or(false);
+    let result = answer::wait_or_abandon("doculens-answer", &stop, &cancelled, move || run.run());
+    let _ = app.emit(EV_ANSWER, AnswerDelta { request_id: request_id.clone(), delta: String::new(), done: true });
+    Ok(result?)
 }
 
-/// Stops the streamed answer tagged `request_id` at its next delta.
+/// A request in `answer_running`: leaves it (and the cancel set) when the run ends — also when the run never
+/// starts or panics — so a workspace switch does not wait for a request that is gone.
+struct AnswerSlot {
+    app: AppHandle,
+    request_id: String,
+}
+
+impl Drop for AnswerSlot {
+    fn drop(&mut self) {
+        let state = self.app.state::<AppState>();
+        if let Ok(mut c) = state.answer_cancels.lock() {
+            c.remove(&self.request_id);
+        }
+        if let Ok(mut r) = state.answer_running.lock() {
+            r.remove(&self.request_id);
+        }; // the guard's temporary must go before `state`
+    }
+}
+
+/// One answer request with everything it needs, so it can run on its own thread.
+struct AnswerRun {
+    slot: AnswerSlot,
+    ctx: KnowledgeContext,
+    embedder: Option<RouterEmbedder>,
+    model: String,
+    req: AnswerRequest,
+    context_size: Option<u32>,
+    /// Raised by the waiting command when it gives up on this run.
+    stop: Arc<AtomicBool>,
+}
+
+impl AnswerRun {
+    fn run(self) -> doculens_core::Result<Answer> {
+        let app = &self.slot.app;
+        let request_id = &self.slot.request_id;
+        let state = app.state::<AppState>();
+        let cancelled = || {
+            self.stop.load(Ordering::SeqCst)
+                || state.answer_cancels.lock().map(|c| c.contains(request_id)).unwrap_or(false)
+        };
+        let deps = AnswerDeps {
+            search: self.ctx.search_deps(self.embedder.as_ref().map(|e| e as &dyn Embedder)),
+            chat: &state.engine,
+            model: Some(self.model.clone()),
+            cancelled: Some(&cancelled),
+            context_size: self.context_size,
+        };
+        let mut on_delta = |d: &str| {
+            if cancelled() {
+                return false;
+            }
+            // An empty fragment only asks whether to go on (a streamed event without visible text).
+            if !d.is_empty() {
+                let _ = app.emit(
+                    EV_ANSWER,
+                    AnswerDelta { request_id: request_id.clone(), delta: d.to_string(), done: false },
+                );
+            }
+            true
+        };
+        // Interactive request: a running batch yields at its next page boundary (§3.9); a request that was
+        // cancelled meanwhile stops waiting for it.
+        let out = state.gate.interactive_cancellable(Some(self.stop.as_ref()), || match self.req.kind {
+            AnswerKind::Answer | AnswerKind::Explain => answer::answer(&deps, &self.req, &mut on_delta),
+            AnswerKind::Summary => answer::summarize(&deps, &self.req, &mut on_delta),
+            AnswerKind::Compare => answer::compare(&deps, &self.req, &mut on_delta),
+        })??;
+        if out.id.is_some() {
+            self.ctx.emit(app, "answers", Vec::new());
+        }
+        Ok(out)
+    }
+}
+
+/// Stops the answer tagged `request_id`: its command returns `cancelled` at once (the request itself ends at
+/// its next cancel point).
 pub fn cancel_answer(app: &AppHandle, request_id: &str) -> bool {
     let state = app.state::<AppState>();
     let running = state.answer_running.lock().map(|r| r.contains(request_id)).unwrap_or(false);

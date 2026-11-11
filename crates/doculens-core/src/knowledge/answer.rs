@@ -6,7 +6,9 @@
 //! app, a scripted backend in tests).
 
 use std::collections::VecDeque;
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 
@@ -81,6 +83,47 @@ impl ChatBackend for ScriptedChat {
             }
         }
         Ok(ChatResponse { content: self.reply.clone(), ..ChatResponse::default() })
+    }
+}
+
+/// How often a waiting caller looks at its cancel signal.
+const ABANDON_POLL: Duration = Duration::from_millis(50);
+
+/// Runs `work` on a thread of its own and waits for it — or gives up as soon as `cancelled` turns true.
+///
+/// A model request cannot be interrupted while the engine evaluates the prompt (the HTTP call blocks until
+/// the first token arrives), and an interactive request may queue behind a batch job first. Waiting here
+/// instead lets "중지" answer at once: the caller gets `Cancelled` while the abandoned request ends at its
+/// next cancel point (`stop` is raised for it; at the latest when the first token is streamed) and cleans up
+/// on its own thread.
+pub fn wait_or_abandon<T: Send + 'static>(
+    thread_name: &str,
+    stop: &Arc<AtomicBool>,
+    cancelled: &dyn Fn() -> bool,
+    work: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::Builder::new()
+        .name(thread_name.into())
+        .spawn(move || {
+            // The receiver is gone when the caller gave up: nobody waits for this result.
+            let _ = tx.send(work());
+        })
+        .map_err(|e| CoreError::Invalid(format!("could not start {thread_name}: {e}")))?;
+    loop {
+        match rx.recv_timeout(ABANDON_POLL) {
+            Ok(result) => return result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if cancelled() {
+                    stop.store(true, Ordering::SeqCst);
+                    return Err(CoreError::Cancelled);
+                }
+            }
+            // The worker panicked before it could send.
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(CoreError::Invalid(format!("{thread_name} ended without a result")));
+            }
+        }
     }
 }
 
@@ -1559,6 +1602,51 @@ mod tests {
         assert_eq!(clamp_request(&r).question.chars().count(), 6_000);
         r.kind = AnswerKind::Compare;
         assert_eq!(clamp_request(&r).question.chars().count(), MAX_QUESTION_CHARS, "only plain answers bring a text");
+    }
+
+    /// KNO-14: a request that is stuck (queued behind a batch job, or at the engine before its first token)
+    /// does not hold the caller: a cancel answers at once and the request is told to stop.
+    #[test]
+    fn a_cancel_is_answered_at_once_while_the_request_winds_down() {
+        // Finishes normally: the result comes back, nothing is raised.
+        let stop = Arc::new(AtomicBool::new(false));
+        let out = wait_or_abandon("test-answer", &stop, &|| false, || Ok(41 + 1));
+        assert_eq!(out.unwrap(), 42);
+        assert!(!stop.load(Ordering::SeqCst));
+        let failed: Result<u8> = wait_or_abandon("test-answer", &stop, &|| false, || Err(CoreError::engine("boom")));
+        assert!(failed.unwrap_err().to_string().contains("boom"));
+
+        // Stuck request: it only ends once it is told to stop (as the engine call does at its next token).
+        let stop = Arc::new(AtomicBool::new(false));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (ended_tx, ended_rx) = mpsc::channel();
+        let worker_stop = stop.clone();
+        let canceller = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(120));
+            canceller.store(true, Ordering::SeqCst);
+        });
+        let started = Instant::now();
+        let out: Result<()> = wait_or_abandon("test-answer", &stop, &|| cancel.load(Ordering::SeqCst), move || {
+            while !worker_stop.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            // "First token": the abandoned request sees the stop and winds down (long after the caller left).
+            std::thread::sleep(Duration::from_millis(1_500));
+            ended_tx.send(()).ok();
+            Err(CoreError::Cancelled)
+        });
+        let waited = started.elapsed();
+        assert!(matches!(out, Err(CoreError::Cancelled)), "{out:?}");
+        assert!(waited >= Duration::from_millis(100) && waited < Duration::from_millis(1_200), "{waited:?}");
+        assert!(stop.load(Ordering::SeqCst), "the request is told to stop");
+        assert!(ended_rx.try_recv().is_err(), "the caller did not wait for the request to end");
+        ended_rx.recv_timeout(Duration::from_secs(20)).expect("the abandoned request ends on its own");
+
+        // A request that dies without a result is an error, not a hang.
+        let stop = Arc::new(AtomicBool::new(false));
+        let died: Result<()> = wait_or_abandon("test-answer", &stop, &|| false, || panic!("worker died (expected in this test)"));
+        assert!(died.unwrap_err().to_string().contains("ended without a result"));
     }
 
     #[test]
