@@ -1,5 +1,5 @@
 import { AlertTriangle, CheckSquare, CornerDownLeft, Pencil, Play, RotateCcw, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
@@ -204,8 +204,11 @@ export function PlanCard({
   // The numbers on the card belong to the plan it shows (PLN-14): the planner's preview while the plan is as
   // interpreted; once the scope or a parameter was edited, the preview of the edited plan — and none while
   // that one is on its way (the card used to keep "대상 문서 3건" of the plan before the edit).
-  const key = planKey(plan);
-  const edited = key !== planKey(result.plan);
+  // (Keyed once per plan object: the page renders its cards on every keystroke in the composer, and a scope
+  // can name thousands of documents.)
+  const key = useMemo(() => planKey(plan), [plan]);
+  const interpretedKey = useMemo(() => planKey(result.plan), [result.plan]);
+  const edited = key !== interpretedKey;
   const preview = edited ? (editedPreview ?? null) : response.preview;
   const refreshing = edited && !editedPreview && pending && previewError === null;
   const impact = impactOf(plan, preview);
