@@ -440,13 +440,24 @@ pub fn finding_from_result(r: &RuleResult, labels: &[(String, String, String)], 
     }
 }
 
-/// Finding id of a missing document type (`finding_ids` entry).
+/// Finding id of a missing document type: `missing_doc:<doc type slug>`, one per entry of
+/// `CheckRun::missing_doc_types`. Selectable in `finding_ids` next to the rule findings (`RuleResult::id`).
 pub fn missing_doc_finding_id(doc_type: &str) -> String {
     format!("missing_doc:{doc_type}")
 }
 
-/// Builds the 보완요청서 draft request from a check run (`finding_ids` empty = every mismatch
-/// / missing finding). Fails with `no_findings` when nothing is selected.
+/// Builds the 보완요청서 draft request from a check run.
+///
+/// `finding_ids` empty = every mismatch / missing finding. Otherwise exactly the selected findings: rule
+/// results by `RuleResult::id` and missing required documents by [`missing_doc_finding_id`] — a selection of
+/// rule results alone leaves the missing documents out, so the dialog lists them as rows of their own.
+/// A rule that only failed because a document type is absent is folded into that document's finding when
+/// both are part of the request. Undetermined (and passed) results are never requested.
+///
+/// Errors (`CoreError::Invalid`):
+/// * `no_findings` — nothing was selected and the run has no mismatch / missing finding;
+/// * `findings_not_requestable` — the selection holds only undetermined (or passed) results;
+/// * `findings_not_in_run` — none of the selected ids belongs to this run (a selection made before a re-check).
 pub fn supplement_request(
     db: &Db,
     project_id: &str,
@@ -467,13 +478,17 @@ pub fn supplement_request(
     let Some((project, template, documents, labels)) = loaded else {
         return Err(CoreError::NotFound(format!("project {project_id}")));
     };
-    let want = |id: &str| finding_ids.is_empty() || finding_ids.iter().any(|f| f == id);
+    let everything = finding_ids.is_empty();
+    let want = |id: &str| everything || finding_ids.iter().any(|f| f == id);
     let mut findings: Vec<Finding> = Vec::new();
+    // Document types whose missing-document finding is part of the request.
+    let mut requested_types: Vec<&str> = Vec::new();
     for t in &run.missing_doc_types {
         let id = missing_doc_finding_id(t);
         if !want(&id) {
             continue;
         }
+        requested_types.push(t);
         let label = repo::type_label(&labels, t, ko);
         findings.push(Finding {
             id,
@@ -491,22 +506,35 @@ pub fn supplement_request(
             .to_string(),
         });
     }
+    // Selected results that cannot be requested (undetermined: nothing is known to be wrong yet).
+    let mut not_requestable = 0usize;
     for r in &run.results {
-        if !matches!(r.verdict, Verdict::Mismatch | Verdict::Missing) || !want(&r.id) {
+        if !want(&r.id) {
             continue;
         }
-        // A rule that only failed because a required document is absent is covered by the
-        // missing-document finding when the selection is "everything".
-        if finding_ids.is_empty() && r.verdict == Verdict::Missing {
-            let slug = r.left.as_ref().and_then(|e| e.doc_type.clone()).unwrap_or_default();
-            if run.missing_doc_types.contains(&slug) {
+        if !matches!(r.verdict, Verdict::Mismatch | Verdict::Missing) {
+            not_requestable += 1;
+            continue;
+        }
+        // A rule that only failed because a required document is absent is covered by that document's
+        // own finding when it is part of the request.
+        if r.verdict == Verdict::Missing {
+            let slug = r.left.as_ref().and_then(|e| e.doc_type.as_deref()).unwrap_or_default();
+            if requested_types.contains(&slug) {
                 continue;
             }
         }
         findings.push(finding_from_result(r, &labels, ko));
     }
     if findings.is_empty() {
-        return Err(CoreError::Invalid("no_findings".into()));
+        let code = if everything {
+            "no_findings"
+        } else if not_requestable > 0 {
+            "findings_not_requestable"
+        } else {
+            "findings_not_in_run"
+        };
+        return Err(CoreError::Invalid(code.into()));
     }
     let mismatches = findings.iter().filter(|f| f.verdict == "mismatch").count();
     let missing = findings.len() - mismatches;

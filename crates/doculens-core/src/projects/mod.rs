@@ -567,8 +567,9 @@ pub fn report(db: &Db, project_id: &str, language: Language) -> Result<String> {
     report::markdown(db, project_id, language)
 }
 
-/// Builds the 보완요청서 draft request from the findings of a check run
-/// (`finding_ids` empty = every mismatch / missing); the `generate` module renders it.
+/// Builds the 보완요청서 draft request from the findings of a check run; the `generate` module renders it.
+/// `finding_ids` empty = every mismatch / missing; otherwise rule results by `RuleResult::id` and missing
+/// required documents by `missing_doc:<doc type>` (errors and details: [`report::supplement_request`]).
 pub fn supplement_request(
     db: &Db,
     project_id: &str,

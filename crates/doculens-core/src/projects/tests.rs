@@ -1301,6 +1301,16 @@ fn supplement_request_lists_findings_as_text_sources() {
         None,
         None,
     );
+    // The tax total waits in the review queue → undetermined (never part of a request).
+    add_rule(
+        &db,
+        &p.id,
+        "세액 = 100,000",
+        RuleOperand::field("tax_invoice", "tax_total"),
+        RuleOp::Eq,
+        Some(RuleOperand::literal("100,000")),
+        None,
+    );
     let run = check(&deps(&db, None), &p.id, &[]).unwrap();
     let req = supplement_request(&db, &p.id, &run, &[], OutputFormat::Hwpx, Language::Ko).unwrap();
     assert_eq!(req.form_ref.as_deref(), Some("supplement_request"));
@@ -1360,8 +1370,65 @@ fn supplement_request_lists_findings_as_text_sources() {
     )
     .unwrap();
     assert_eq!(missing_only.sources.len(), 2);
-    let none = supplement_request(&db, &p.id, &run, &["nope".into()], OutputFormat::Docx, Language::Ko).unwrap_err();
-    assert!(matches!(none, CoreError::Invalid(ref m) if m == "no_findings"));
+
+    // PRJ-2: a missing required document is a finding of its own (`missing_doc:<type>`), selectable next to
+    // the rule findings — the dialog's default selection must not lose it.
+    let request = |ids: &[&str]| {
+        let ids: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
+        supplement_request(&db, &p.id, &run, &ids, OutputFormat::Hwpx, Language::Ko)
+    };
+    let titles = |req: &crate::generate::DraftRequest| -> Vec<String> {
+        req.sources
+            .iter()
+            .filter_map(|s| match s {
+                SourceRef::Text { title, .. } => title.clone().filter(|t| t.starts_with("finding:")),
+                _ => None,
+            })
+            .collect()
+    };
+    let by = |desc: &str| run.results.iter().find(|r| r.description == desc).unwrap();
+    let mismatch_id = by("계약금액 = 세금계산서 합계금액").id.clone();
+    let signed = by("신청서 서명 필수");
+    assert_eq!(signed.verdict, Verdict::Missing, "the application form is missing");
+    let both = request(&[&mismatch_id, "missing_doc:application_form"]).unwrap();
+    assert_eq!(
+        titles(&both),
+        vec!["finding:missing:missing_doc:application_form".to_string(), format!("finding:mismatch:{mismatch_id}")]
+    );
+    assert!(both.content.contains("불일치 1건") && both.content.contains("누락 1건"), "{}", both.content);
+    // The rule that only failed for that missing document is folded into it — as in "everything" — …
+    let folded = request(&[&signed.id, "missing_doc:application_form"]).unwrap();
+    assert_eq!(titles(&folded), vec!["finding:missing:missing_doc:application_form".to_string()]);
+    // … and stands for the missing document when it is selected alone.
+    let alone = request(&[&signed.id]).unwrap();
+    assert_eq!(titles(&alone), vec![format!("finding:missing:{}", signed.id)]);
+    // The whole default selection of the dialog (every mismatch / missing row) equals "everything".
+    let mut all: Vec<&str> = run
+        .results
+        .iter()
+        .filter(|r| matches!(r.verdict, Verdict::Mismatch | Verdict::Missing))
+        .map(|r| r.id.as_str())
+        .collect();
+    all.push("missing_doc:application_form");
+    assert_eq!(titles(&request(&all).unwrap()).len(), titles(&req).len());
+
+    // Selections that cannot produce a request get a typed error instead of `no_findings`.
+    let undetermined = by("세액 = 100,000");
+    assert_eq!(undetermined.verdict, Verdict::Undetermined);
+    let err = request(&[&undetermined.id]).unwrap_err();
+    assert!(matches!(err, CoreError::Invalid(ref m) if m == "findings_not_requestable"), "{err}");
+    let passed = by("계약서 당사자 사업자번호 = 사업자등록증 등록번호");
+    let err = request(&[&passed.id, &undetermined.id]).unwrap_err();
+    assert!(matches!(err, CoreError::Invalid(ref m) if m == "findings_not_requestable"), "{err}");
+    let err = request(&["nope", "missing_doc:receipt"]).unwrap_err();
+    assert!(matches!(err, CoreError::Invalid(ref m) if m == "findings_not_in_run"), "{err}");
+    // An undetermined row next to a real finding is simply left out.
+    assert_eq!(titles(&request(&[&undetermined.id, &mismatch_id]).unwrap()), vec![format!("finding:mismatch:{mismatch_id}")]);
+    // Nothing selected and nothing to request → `no_findings`.
+    let clean = self::project(&db, "문제 없음", None);
+    let clean_run = check(&deps(&db, None), &clean.id, &[]).unwrap();
+    let err = supplement_request(&db, &clean.id, &clean_run, &[], OutputFormat::Hwpx, Language::Ko).unwrap_err();
+    assert!(matches!(err, CoreError::Invalid(ref m) if m == "no_findings"), "{err}");
 }
 
 fn insert_inbox_doc(db: &Db, id: &str, rel_path: &str) {
