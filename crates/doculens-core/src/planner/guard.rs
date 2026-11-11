@@ -80,11 +80,10 @@ fn has_rewrite_verb(s: &str) -> bool {
 /// "body + newline + instruction", with a rewrite verb in the instruction and a body of at least
 /// `MIN_BODY_CHARS` characters.
 pub fn carried_text(text: &str) -> Option<&str> {
-    let text = text.trim();
-    // A reply to the assistant's question is "command / question / reply", not a text to work on.
-    if super::rules::user_words(text) != text {
-        return None;
-    }
+    // Of a reply to the assistant's question ("command / question / reply") only the command can carry
+    // a text: the question and the reply are not something to work on (and the question's own colon
+    // and line breaks would read as "instruction: text").
+    let text = super::rules::command_of(text).trim();
     for sep in [':', '：', '\n', '"', '“', '「', '『'] {
         // ("10:30" and "3:1" are not "instruction: text")
         let between_digits = |pos: usize| {
@@ -205,11 +204,26 @@ pub fn restore_carried_text(text: &str, plan: &mut Plan) {
     if carried_text(text).is_none() {
         return;
     }
+    // (Of a reply to the assistant's question the whole exchange goes back in: the reply — "영어로" —
+    // is part of what to do with the text.)
     for op in &mut plan.operations {
         if let Op::Answer { question, knowledge: Some(false), mode: None, .. } = op {
             *question = text.trim().to_string();
         }
     }
+}
+
+/// Whether the user's words name the project the assistant's scope is set to ("한빛 프로젝트 문서를
+/// 프로젝트별로 …"): then its id in a plan's scope is the user's, not the default scope's.
+pub fn names_scope_project(text: &str, ctx: &super::PlanContext) -> bool {
+    let Some(id) = ctx.scope_project.as_deref() else { return false };
+    let said = super::compact(&super::rules::user_words(text));
+    ctx.projects.iter().any(|p| {
+        p.id == id && {
+            let name = super::compact(&p.name);
+            !name.is_empty() && said.contains(&name)
+        }
+    })
 }
 
 /// Whether the plan only says "nothing to do".
@@ -903,6 +917,58 @@ mod tests {
         let mut p = model_plan(vec![Op::Help {}]);
         p.operations.clear();
         assert!(!noop_to_chat("x", &mut p, true));
+    }
+
+    /// A reply to a question about a pasted text: the text is still the command's, the planner still
+    /// reads an excerpt of it, and the answer works on the whole exchange.
+    #[test]
+    fn a_reply_about_a_pasted_text_keeps_the_text() {
+        let body = BODY.repeat(6);
+        let text =
+            format!("다음 글 번역해줘: {body}\n\n[어시스턴트 질문] 어떤 언어로 번역할까요?\n[사용자 답변] 영어로");
+        assert_eq!(carried_text(&text), Some(body.as_str()));
+        let planning = planning_text(&text);
+        assert!(planning.chars().count() < 340, "{}", planning.chars().count());
+        assert!(
+            planning.contains("[어시스턴트 질문] 어떤 언어로") && planning.ends_with("[사용자 답변] 영어로"),
+            "{planning}"
+        );
+        // A plan that looks the text up in the library is re-targeted to the text itself.
+        let mut p = model_plan(vec![Op::Answer {
+            question: "번역".into(),
+            cite: None,
+            knowledge: None,
+            mode: None,
+            reply: None,
+        }]);
+        assert!(prefer_text_only_answer(&text, &mut p, true).is_some());
+        assert!(
+            matches!(&p.operations[0], Op::Answer { question, knowledge: Some(false), .. } if question.contains(&body) && question.ends_with("영어로"))
+        );
+        // The assistant's question alone is never a carried text ("요약" + a long question with a colon).
+        let ask = format!(
+            "견적서 요약해줘\n\n[어시스턴트 질문] 어떤 문서를 요약할까요: 라이브러리에서 선택하거나 폴더·유형·날짜를 말씀해 주세요(전체면 '전부'라고 해 주세요).\n[사용자 답변] 전부"
+        );
+        assert_eq!(carried_text(&ask), None);
+    }
+
+    /// "프로젝트별" clears the open project as a filter — unless the sentence names that project.
+    #[test]
+    fn the_open_project_is_only_dropped_when_the_sentence_does_not_name_it() {
+        let ctx = crate::planner::PlanContext {
+            scope_project: Some("p1".into()),
+            projects: vec![crate::planner::ProjectSummary {
+                id: "p1".into(),
+                name: "한빛 포털 구축".into(),
+                status: "active".into(),
+            }],
+            ..Default::default()
+        };
+        assert!(!names_scope_project("프로젝트별로 요약해줘", &ctx));
+        assert!(names_scope_project("한빛 포털 구축 문서를 프로젝트별로 요약해줘", &ctx));
+        // Only the user's words count.
+        let ask = "프로젝트별로 요약해줘\n\n[어시스턴트 질문] '한빛 포털 구축'만 볼까요?\n[사용자 답변] 아니 전부";
+        assert!(!names_scope_project(ask, &ctx));
     }
 
     /// Audit PLN-16: a long pasted text is planned from its instruction and an excerpt.

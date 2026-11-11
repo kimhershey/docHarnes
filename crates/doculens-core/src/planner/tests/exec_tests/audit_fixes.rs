@@ -846,6 +846,43 @@ fn answer_steps_follow_the_reply_route() {
     let ex = run(&w, &answer("플루토늄 xyzzy 가 뭐야?", None, None, None));
     assert_eq!(ex.steps[0].payload["no_evidence"], json!(true));
     assert_eq!(calls(), 2);
+
+    // A filter that matches no document (a type the library has none of) refuses a question about the
+    // documents, not one that is not about them.
+    let mut general = answer("플루토늄 xyzzy 가 뭐야?", None, Some(AnswerMode::General), None);
+    general.scope = of_type("contract");
+    let ex = run(&w, &general);
+    assert_eq!(ex.steps[0].payload["used_general_knowledge"], json!(true), "{:?}", ex.steps[0].payload);
+    assert_eq!(calls(), 3);
+}
+
+/// PRJ-16 through the assistant: a project's reference group that holds no document yet is not
+/// stored — a rename writes it first, a delete has nothing to delete.
+#[test]
+fn a_project_group_that_is_not_stored_yet_can_be_renamed_but_not_deleted() {
+    let w = World::new();
+    let project =
+        w.db.with(|c| projects_repo::save_project(c, &ProjectInput { name: "한빛 포털".into(), ..Default::default() }))
+            .unwrap();
+    let group = |action: ReferenceAction, name: Option<&str>| {
+        plan_of(
+            vec![Op::ManageReference {
+                action,
+                group: None,
+                name: name.map(str::to_string),
+                project: Some(project.id.clone()),
+            }],
+            Scope::default(),
+        )
+    };
+    let stored = || w.db.with(crate::knowledge::repo::list_collections).unwrap().len();
+    assert_eq!(stored(), 0);
+    let ex = run(&w, &group(ReferenceAction::Delete, None));
+    assert_eq!(ex.steps[0].status, StepStatus::Failed, "{:?}", ex.steps[0]);
+    assert_eq!(stored(), 0, "looking the group up wrote nothing");
+    let ex = run(&w, &group(ReferenceAction::Disable, None));
+    assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
+    assert_eq!(stored(), 1);
 }
 
 /// PRJ-4 through the assistant: "업무 문서로 바꿔줘" leaves a document that is still in a reference

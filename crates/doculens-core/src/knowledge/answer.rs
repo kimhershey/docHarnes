@@ -229,8 +229,35 @@ const GENERAL_MARKERS: [&str; 2] = ["(일반 지식 기반 답변)", "(General-k
 
 /// Whether the model said it answered from general knowledge instead of the sources.
 fn says_general(text: &str) -> bool {
-    let head = text.trim_start();
+    // Models decorate the first line ("**(일반 지식 기반 답변)**", "> (…)").
+    let head =
+        text.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '*' | '#' | '>' | '_' | '"' | '“' | '\''));
     GENERAL_MARKERS.iter().any(|m| head.starts_with(m))
+}
+
+/// `text` without its citation markers ("[1]", "[1, 2]") — for an answer that turned out to use no source.
+fn without_citations(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '[' {
+            if let Some(close) = chars[i + 1..].iter().position(|c| *c == ']') {
+                let inner: String = chars[i + 1..i + 1 + close].iter().collect();
+                if !citation_markers(&format!("[{inner}]")).is_empty() {
+                    // The blank before a marker goes with it ("…입니다 [1]." → "…입니다.").
+                    if out.ends_with(' ') {
+                        out.pop();
+                    }
+                    i += close + 2;
+                    continue;
+                }
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
 }
 
 /// System prompt of a small-talk turn (`AnswerStyle::Chat`): a short, friendly reply that invents
@@ -1206,13 +1233,18 @@ pub fn answer(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn FnM
     out.text = resp.content.trim().to_string();
     // The UI marks an answer whose text or reply was cut instead of showing it as complete.
     out.truncated = Truncation::of(input_cut, resp.finish_reason.as_deref() == Some("length"));
-    if mixed && says_general(&out.text) {
-        // The passages had nothing to do with the question: the answer is general knowledge, and
-        // sources it did not use would read as its evidence.
-        out.used_general_knowledge = true;
-        out.no_evidence = true;
-        sources.clear();
-        out.sources.clear();
+    if mixed {
+        // The passages had nothing to do with the question when the model says so on the first line —
+        // or when it cites none of them (a small model may leave the marker out): the answer is general
+        // knowledge then, and sources it did not use would read as its evidence.
+        let cited = citation_markers(&out.text).into_iter().any(|n| n as usize <= sources.len());
+        if says_general(&out.text) || !cited {
+            out.used_general_knowledge = true;
+            out.no_evidence = true;
+            sources.clear();
+            out.sources.clear();
+            out.text = without_citations(&out.text);
+        }
     }
     let (sentences, conflicts) = parse_answer(&out.text, sources.len() as u32);
     out.sentences = sentences;

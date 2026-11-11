@@ -844,7 +844,11 @@ fn run_step(
             } else {
                 working_set(deps, plan, imported)?
             };
-            if retrieve && docs_.is_empty() && scope_narrows(plan, imported) {
+            // A question that is not about the documents is not refused for a filter that matches none of
+            // them (a date range read from "작년 …"): it is looked up in the whole library instead.
+            let general = style == crate::knowledge::AnswerStyle::General;
+            let unmatched = retrieve && docs_.is_empty() && scope_narrows(plan, imported);
+            if unmatched && !general {
                 return Ok(no_documents_answer(deps, question, AnswerKind::Answer));
             }
             let _lease = LeaseGuard::acquire(deps.lease);
@@ -855,7 +859,7 @@ fn run_step(
             req.save = style != crate::knowledge::AnswerStyle::Chat;
             req.scope = SearchScope {
                 documents: ids(&docs_),
-                project_id: plan.scope.filter.project_id.clone(),
+                project_id: if unmatched { None } else { plan.scope.filter.project_id.clone() },
                 latest_only: deps.knowledge.latest_only,
                 ..SearchScope::default()
             };
@@ -1801,9 +1805,22 @@ fn run_step(
                 | ReferenceAction::Enable
                 | ReferenceAction::Disable
                 | ReferenceAction::Delete => {
-                    let col = resolve_group(db, group.as_deref(), project.as_deref())?.ok_or_else(|| {
+                    let not_found = || {
                         CoreError::NotFound(if ko { "참고 자료 묶음".into() } else { "reference group".into() })
-                    })?;
+                    };
+                    let mut col = resolve_group(db, group.as_deref(), project.as_deref())?.ok_or_else(not_found)?;
+                    // A project's group that has no document yet is not stored: there is nothing to
+                    // delete, and a rename / switch writes it first.
+                    if db.with(|c| knowledge_repo::get_collection(c, &col.id))?.is_none() {
+                        let pid = col
+                            .project_id
+                            .clone()
+                            .filter(|_| *action != ReferenceAction::Delete)
+                            .ok_or_else(not_found)?;
+                        let name =
+                            db.with(|c| projects_repo::get_project(c, &pid))?.map(|p| p.name).unwrap_or_default();
+                        col = db.with(|c| knowledge_repo::project_reference_group(c, &pid, &name))?;
+                    }
                     let (col, summary) = match action {
                         ReferenceAction::Delete => {
                             db.with(|c| knowledge_repo::delete_collection(c, &col.id))?;

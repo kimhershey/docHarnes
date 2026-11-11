@@ -29,6 +29,13 @@ pub fn plan(text: &str, ctx: &PlanContext) -> Option<Plan> {
     let words = super::rules::user_words(text);
     if words != text {
         let (command, reply) = words.rsplit_once('\n')?;
+        // Only the fast path's own question is answered here ("which value?", "that value is out of
+        // range"): the command alone must already be a settings sentence without a usable value. A
+        // reply to any other question is the model's — "이 문서를 다른 언어로 번역해줘" → "어떤 언어로
+        // 번역할까요?" → "영어" names a setting ("언어") and a value of it, and is not a settings command.
+        if !setting(command, ko).is_some_and(|p| p.is_clarification()) {
+            return None;
+        }
         if let Some(p) = setting(&words, ko).filter(|p| !p.is_clarification()) {
             return Some(p);
         }
@@ -937,6 +944,18 @@ mod tests {
         // A reply to a question about something else is the model's.
         let other = "선택한 문서 삭제해줘\n\n[어시스턴트 질문] 어떤 문서를 삭제할까요?\n[사용자 답변] 배율 120";
         assert!(plan(other, &ctx()).is_none());
+        // … also when the command happens to contain a setting's name and the reply one of its values:
+        // the question was the model's, about the translation and the rendering.
+        let model_asked = |command: &str, question: &str, reply: &str| {
+            format!("{command}\n\n[어시스턴트 질문] {question}\n[사용자 답변] {reply}")
+        };
+        for (command, question, reply) in [
+            ("이 문서를 다른 언어로 번역해줘", "어떤 언어로 번역할까요?", "영어"),
+            ("해상도 높여서 다시 렌더해줘", "해상도를 몇으로 할까요?", "300"),
+            ("테마 색을 표에 맞춰 보고서 써줘", "어떤 테마로 쓸까요?", "다크"),
+        ] {
+            assert!(plan(&model_asked(command, question, reply), &ctx()).is_none(), "{command} / {reply}");
+        }
     }
 
     #[test]

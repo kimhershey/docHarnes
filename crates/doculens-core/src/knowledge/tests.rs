@@ -1798,6 +1798,27 @@ fn chat_and_general_styles_answer_without_claiming_evidence() {
     assert!(a.used_general_knowledge && a.no_evidence && a.sources.is_empty(), "{a:?}");
     assert!(a.sentences.iter().all(|s| s.citations.is_empty()));
 
+    // … also when the model leaves the marker out and cites nothing, or decorates the first line; a
+    // stray citation next to the marker is removed with the sources it pointed at.
+    for reply in [
+        "출장은 업무를 위해 근무지를 떠나는 일입니다.",
+        "**(일반 지식 기반 답변)** 출장은 업무를 위해 근무지를 떠나는 일입니다 [1].",
+    ] {
+        let chat = RecordingChat::new(reply, Some("stop"));
+        let deps = AnswerDeps {
+            search: w.search_deps(None),
+            chat: &chat,
+            model: None,
+            cancelled: None,
+            context_size: Some(8_192),
+        };
+        let mut once = req.clone();
+        once.save = false;
+        let a = answer(&deps, &once, &mut |_| true).unwrap();
+        assert!(a.used_general_knowledge && a.sources.is_empty(), "{reply}: {a:?}");
+        assert!(!a.text.contains("[1]") && a.text.ends_with("일입니다."), "{}", a.text);
+    }
+
     // Summaries and comparisons have no styles: a stray value changes nothing.
     let after = w.db.with(|c| repo::list_answers(c, None, None, 50)).unwrap().len();
     assert_eq!(after, before + 3, "the three general answers are kept, the two chat replies are not");
