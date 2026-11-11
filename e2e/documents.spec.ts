@@ -361,4 +361,28 @@ test.describe("P2 documents", () => {
     await expect(card).toHaveAttribute("data-doc-status", "rendered");
     await expect(badge).toHaveText(ko.documents.status.rendered);
   });
+
+  test("받은 문서함 chip: documents that sit only in a folder below the inbox are listed, and a folder's count is the size of its list (DOC-15)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page); // C:\Work\Docs
+    await importViaLibrary(page, ["C:\\Work\\Docs\\inbox\\2026-11\\청구서.pdf", "C:\\Work\\Docs\\inbox\\2026-11\\영수증.pdf", "D:\\scan\\계약서.pdf"], { autoLevel: "none" });
+    const cards = page.locator('[data-testid^="doc-card-"]');
+    await expect(cards).toHaveCount(3);
+    // Nothing lies in `inbox` itself. The chip counts the folders below it, and a click lists them (the selection
+    // used to be dropped at once, so the click did nothing).
+    const chip = page.getByTestId("library-today-stat-inbox");
+    await expect(chip).toContainText(tpl(ko.library.today.inbox, { count: 2 }));
+    await chip.click();
+    await expect(cards).toHaveCount(2);
+    await expect(page.locator('[data-testid^="doc-card-"][data-doc-name="계약서.pdf"]')).toHaveCount(0);
+    // The selected folder is shown in the navigation, and the number next to a folder is what its list holds.
+    const inbox = page.getByTestId("folder-inbox");
+    await expect(inbox).toHaveAttribute("aria-current", "true");
+    await expect(inbox).toContainText("2");
+    await expect(page.getByTestId("folder-inbox/2026-11")).toContainText("2");
+    await page.getByTestId("folder-inbox/2026-11").click();
+    await expect(cards).toHaveCount(2);
+    await page.getByTestId("folder-all").click();
+    await expect(cards).toHaveCount(3);
+  });
 });

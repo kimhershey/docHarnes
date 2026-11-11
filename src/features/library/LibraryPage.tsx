@@ -45,6 +45,7 @@ import { LibraryContextMenu, type LibraryContextRequest } from "./LibraryContext
 import { RetryImage } from "./RetryImage";
 import { MergeDialog } from "./SplitMergeDialogs";
 import { DocStatusBadge } from "./DocStatusBadge";
+import { folderCount, listedFolders } from "./folders";
 import { TodayStrip } from "./TodayStrip";
 import { useDocumentDrop } from "./useDocumentDrop";
 
@@ -146,10 +147,13 @@ export function LibraryPage() {
     });
   }, [visibleIds, isPlaceholderData, docs]);
 
-  // A folder that lost its last document falls back to "all".
+  // A folder that lost its last document falls back to "all" — counting the folders below it, like the list
+  // filter does: "받은 문서함 N건" selects `inbox` also when the files sit in `inbox/<sub>`, and that selection
+  // used to be dropped at once (DOC-15).
   useEffect(() => {
-    if (folder !== null && stats && !stats.folders.some((f) => f.rel_dir === folder)) setFolder(null);
+    if (folder !== null && stats && folderCount(stats.folders, folder) === 0) setFolder(null);
   }, [folder, stats, setFolder]);
+  const navFolders = useMemo(() => listedFolders(stats?.folders ?? [], folder), [stats, folder]);
 
   const openImport = useCallback((paths?: string[], source: ImportSource = "drop") => {
     setImportPaths(paths);
@@ -292,7 +296,7 @@ export function LibraryPage() {
       <nav className="hidden w-56 shrink-0 flex-col border-r border-border p-3 md:flex" aria-label={t("library.folders.title")}>
         <h2 className="mb-2 px-2 text-xs font-semibold uppercase tracking-wide text-fg-subtle">{t("library.folders.title")}</h2>
         <FolderItem label={t("library.folders.all")} count={stats?.total} active={folder === null} onClick={() => setFolder(null)} testId="folder-all" />
-        {(stats?.folders ?? []).map((f) => (
+        {navFolders.map((f) => (
           <FolderItem
             key={f.rel_dir}
             label={f.rel_dir === "" ? t("library.folders.root") : f.rel_dir}

@@ -13,6 +13,8 @@ import { useDocumentsStore } from "@/stores/documents";
 import { useEngineStore } from "@/stores/engine";
 import { useWorkspace } from "@/stores/workspace";
 
+import { folderCount } from "./folders";
+
 const OPEN_KEY = "doculens.library.today";
 
 function loadOpen(): boolean {
@@ -54,7 +56,8 @@ export function TodayStrip() {
     });
 
   const by = stats?.by_status ?? {};
-  const inbox = (stats?.folders ?? []).filter((f) => f.rel_dir === "inbox" || f.rel_dir.startsWith("inbox/")).reduce((n, f) => n + f.count, 0);
+  // The same count as the folder the chip selects (the inbox and the folders below it).
+  const inbox = folderCount(stats?.folders ?? [], "inbox");
   const counts: { key: "inbox" | "new" | "processing" | "review" | "done"; value: number }[] = [
     { key: "inbox", value: inbox },
     { key: "new", value: (by.new ?? 0) + (by.importing ?? 0) },
