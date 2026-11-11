@@ -2033,3 +2033,121 @@ fn copies_respect_the_project_settings_and_are_cleaned_up_with_their_owners() {
     assert!(!stored.settings.copies && stored.settings.folder_template.is_none());
     assert_eq!(stored.settings.folder_template(), DEFAULT_PROJECT_FOLDER);
 }
+
+impl CopyWorld {
+    fn read(&self, rel: &str) -> Vec<u8> {
+        std::fs::read(self.paths.root.join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"))
+    }
+
+    fn write(&self, rel: &str, bytes: &[u8]) {
+        let abs = self.paths.root.join(rel);
+        std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        std::fs::write(abs, bytes).unwrap();
+    }
+}
+
+/// PRJ-8: a project copy is only ever written over its own earlier copy. A file the user put in the project
+/// folder, and a registered document whose path differs in letter case only (one file on Windows), keep
+/// their content: the copy takes the next free name.
+#[test]
+fn a_copy_never_overwrites_a_file_that_is_not_its_own() {
+    let w = CopyWorld::new();
+    w.doc("d1", "documents/계약서.pdf", b"contract of A", "contract");
+    let a = w.project("A 사업", None);
+    let b = w.project("B 사업", None);
+    w.add(&a.id, &["d1"]);
+    // 1. A file the user saved where the copy would go (nothing registers it).
+    let target = "documents/B 사업/계약서/계약서.pdf";
+    w.write(target, b"the user's own file");
+    w.add(&b.id, &["d1"]);
+    let copy = w.copies_of(&b.id).remove(0);
+    assert_eq!(copy.rel_path, "documents/B 사업/계약서/계약서_2.pdf", "the taken name is skipped");
+    assert_eq!(w.read(target), b"the user's own file");
+    assert_eq!(w.read(&copy.rel_path), b"contract of A");
+    // Its own copy is still refreshed in place when the original changes.
+    w.write("documents/계약서.pdf", b"contract of A, v2");
+    let r = copies::sync_document(&w.db, &w.paths, "d1", false).unwrap();
+    assert_eq!((r.rewritten, r.renamed), (1, 0), "{r:?}");
+    assert_eq!(w.copies_of(&b.id)[0].rel_path, copy.rel_path);
+    assert_eq!(w.read(&copy.rel_path), b"contract of A, v2");
+    assert_eq!(w.read(target), b"the user's own file");
+
+    // 2. A registered document whose path differs in case only: on Windows that is the same file.
+    let c = w.project("C 사업", None);
+    w.doc("d2", "documents/C 사업/계약서/계약서.PDF", b"another document", "contract");
+    w.add(&c.id, &["d2"]);
+    w.add(&c.id, &["d1"]);
+    let copy_c = w.copies_of(&c.id).remove(0);
+    assert_eq!(copy_c.rel_path, "documents/C 사업/계약서/계약서_2.pdf", "{copy_c:?}");
+    assert_eq!(w.read("documents/C 사업/계약서/계약서.PDF"), b"another document");
+    // 3. The same for another document's tracked copy.
+    w.doc("d3", "documents/other/계약서_2.PDF", b"third", "contract");
+    let d = w.project("D 사업", None);
+    w.add(&d.id, &["d3"]);
+    w.add(&c.id, &["d3"]);
+    let names: Vec<String> = w.copies_of(&c.id).into_iter().map(|x| x.rel_path).collect();
+    assert!(names.contains(&"documents/C 사업/계약서/계약서_2_2.PDF".to_string()), "{names:?}");
+}
+
+/// PRJ-9: a copy the user edited in the project folder is their work. Taking the document out of the project,
+/// deleting the project or deleting the document drops the tracking but leaves that file where it is; copies
+/// DocuLens wrote and nobody touched are still removed.
+#[test]
+fn an_edited_copy_is_kept_when_its_membership_ends() {
+    let w = CopyWorld::new();
+    w.doc("d1", "documents/계약서.pdf", b"contract", "contract");
+    w.doc("d2", "documents/검수확인서.pdf", b"acceptance", "contract");
+    let a = w.project("A 사업", None);
+    let b = w.project("B 사업", None);
+    let c = w.project("C 사업", None);
+    w.add(&a.id, &["d1", "d2"]);
+    w.add(&b.id, &["d1", "d2"]);
+    w.add(&c.id, &["d1", "d2"]);
+    let (b1, b2) = ("documents/B 사업/계약서/계약서.pdf", "documents/B 사업/계약서/검수확인서.pdf");
+    let (c1, c2) = ("documents/C 사업/계약서/계약서.pdf", "documents/C 사업/계약서/검수확인서.pdf");
+    assert!(w.exists(b1) && w.exists(b2) && w.exists(c1) && w.exists(c2));
+
+    // Removed from the project: the edited copy stays, the untouched one goes.
+    w.write(b1, b"contract with my notes");
+    assert!(copies::remove_document(&w.db, &w.paths, &b.id, "d1").unwrap());
+    assert!(copies::remove_document(&w.db, &w.paths, &b.id, "d2").unwrap());
+    assert!(w.copies_of(&b.id).is_empty(), "no copy is tracked any more");
+    assert_eq!(w.read(b1), b"contract with my notes");
+    assert!(!w.exists(b2));
+    // The kept file is not overwritten when the document comes back: the new copy gets its own name.
+    w.add(&b.id, &["d1"]);
+    assert_eq!(w.copies_of(&b.id)[0].rel_path, "documents/B 사업/계약서/계약서_2.pdf");
+    assert_eq!(w.read(b1), b"contract with my notes");
+
+    // Project deleted: same rule for each of its copies.
+    w.write(c2, b"acceptance, signed by hand");
+    assert_eq!(copies::remove_project_copies(&w.db, &w.paths, &c.id).unwrap(), 2);
+    assert!(w.copies_of(&c.id).is_empty());
+    assert!(!w.exists(c1));
+    assert_eq!(w.read(c2), b"acceptance, signed by hand");
+
+    // Document deleted: every copy row goes, an edited copy file stays.
+    let again = "documents/B 사업/계약서/계약서_2.pdf";
+    w.write(again, b"edited again");
+    assert_eq!(copies::remove_all_for_document(&w.db, &w.paths, "d1").unwrap(), 1);
+    assert!(w.db.with(|c| copies::list_for_document(c, "d1")).unwrap().is_empty());
+    assert_eq!(w.read(again), b"edited again");
+    assert!(w.exists("documents/계약서.pdf"), "the original is never touched here");
+}
+
+/// PRJ-16: the folder of a copy uses the same (Korean) type label whatever the UI language — a copy made
+/// under the English UI used to land in "…/Contract/" and move to "…/계약서/" at the next rescan.
+#[test]
+fn copy_folders_do_not_depend_on_the_ui_language() {
+    let w = CopyWorld::new();
+    w.doc("d1", "documents/계약서.pdf", b"contract", "contract");
+    let a = w.project("A 사업", None);
+    let b = w.project("B 사업", None);
+    copies::add_documents(&w.db, &w.paths, &a.id, &["d1".to_string()], Language::En).unwrap();
+    copies::add_documents(&w.db, &w.paths, &b.id, &["d1".to_string()], Language::En).unwrap();
+    let copy = w.copies_of(&b.id).remove(0);
+    assert_eq!(copy.rel_path, "documents/B 사업/계약서/계약서.pdf");
+    let r = copies::rescan(&w.db, &w.paths).unwrap();
+    assert_eq!(r, copies::SyncReport::default(), "nothing moves at the next rescan");
+    assert_eq!(w.copies_of(&b.id)[0].rel_path, copy.rel_path);
+}
