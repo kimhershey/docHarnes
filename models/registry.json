@@ -1,5 +1,5 @@
 {
-  "$comment": "DocuLens model registry (design §3.3.4 / §2.6; 0.4.0 ladder = Gemma 4 + EmbeddingGemma 2, all weights Apache-2.0, no Chinese-origin models by user decision 2026-11-10, every file ≤ 8 GB). Entries with verified=false carry sizes/hashes that still have to be pinned on a machine with huggingface.co access (Appendix B). File sizes are the Hugging Face listing values (decimal GB) and approximate until pinned.",
+  "$comment": "DocuLens model registry (design §3.3.4 / §2.6; 0.4.0 ladder = Gemma 4 + EmbeddingGemma 2, all weights Apache-2.0, no Chinese-origin models by user decision 2026-11-10, every file ≤ 8 GB). Pinned 2026-11-11 (0.8.0) from the Hugging Face API (api/models/<repo> → commit sha, api/models/<repo>/tree/<sha> → lfs.size, lfs.oid): a file's url names the repository commit (resolve/<commit>/…, never the moving main branch), size is the exact byte size and sha256 the Git LFS oid at that commit. The in-app download fails on a SHA-256 mismatch; a file whose sha256 is null is not hash-checked. verified=true means every file of the entry has size and sha256 pinned — a new entry stays verified=false until then. To move to a newer upload, change commit, size and sha256 of a file together.",
   "schema_version": 1,
   "models": [
     {
@@ -14,8 +14,20 @@
       "modalities": ["text", "image"],
       "ctx_max": 131072,
       "files": [
-        { "name": "gemma-4-E2B-it-Q4_K_M.gguf", "sha256": null, "size": 3110000000, "hf": "unsloth/gemma-4-E2B-it-GGUF" },
-        { "name": "mmproj-F16.gguf", "sha256": null, "size": 986000000, "hf": "unsloth/gemma-4-E2B-it-GGUF" }
+        {
+          "name": "gemma-4-E2B-it-Q4_K_M.gguf",
+          "sha256": "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
+          "size": 3106738272,
+          "hf": "unsloth/gemma-4-E2B-it-GGUF",
+          "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2/gemma-4-E2B-it-Q4_K_M.gguf"
+        },
+        {
+          "name": "mmproj-F16.gguf",
+          "sha256": null,
+          "size": 985654080,
+          "hf": "unsloth/gemma-4-E2B-it-GGUF",
+          "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2/mmproj-F16.gguf"
+        }
       ],
       "requirements": { "min_free_vram_mib": 4200, "min_ram_mib": 8192, "tiers": ["cpu_only", "vram_6gb", "vram_8gb"] },
       "defaults": {
@@ -38,8 +50,20 @@
       "modalities": ["text", "image"],
       "ctx_max": 131072,
       "files": [
-        { "name": "gemma-4-E2B-it-Q8_0.gguf", "sha256": null, "size": 5050000000, "hf": "unsloth/gemma-4-E2B-it-GGUF" },
-        { "name": "mmproj-F16.gguf", "sha256": null, "size": 986000000, "hf": "unsloth/gemma-4-E2B-it-GGUF" }
+        {
+          "name": "gemma-4-E2B-it-Q8_0.gguf",
+          "sha256": "605d3c2647d7c58c1e4b5375ccb5702acf94c2611b4c8d4877812f8fdd32d053",
+          "size": 5048352864,
+          "hf": "unsloth/gemma-4-E2B-it-GGUF",
+          "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2/gemma-4-E2B-it-Q8_0.gguf"
+        },
+        {
+          "name": "mmproj-F16.gguf",
+          "sha256": null,
+          "size": 985654080,
+          "hf": "unsloth/gemma-4-E2B-it-GGUF",
+          "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2/mmproj-F16.gguf"
+        }
       ],
       "requirements": { "min_free_vram_mib": 4900, "min_ram_mib": 12288, "tiers": ["cpu_only", "vram_6gb", "vram_8gb"] },
       "defaults": {
@@ -62,8 +86,20 @@
       "modalities": ["text", "image"],
       "ctx_max": 131072,
       "files": [
-        { "name": "gemma-4-E4B-it-Q4_K_M.gguf", "sha256": null, "size": 4980000000, "hf": "unsloth/gemma-4-E4B-it-GGUF" },
-        { "name": "mmproj-F16.gguf", "sha256": null, "size": 990000000, "hf": "unsloth/gemma-4-E4B-it-GGUF" }
+        {
+          "name": "gemma-4-E4B-it-Q4_K_M.gguf",
+          "sha256": "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87",
+          "size": 4977171584,
+          "hf": "unsloth/gemma-4-E4B-it-GGUF",
+          "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/bfc15c382204943c3a8fff0c750b94ae2364d7a3/gemma-4-E4B-it-Q4_K_M.gguf"
+        },
+        {
+          "name": "mmproj-F16.gguf",
+          "sha256": null,
+          "size": 990372672,
+          "hf": "unsloth/gemma-4-E4B-it-GGUF",
+          "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/bfc15c382204943c3a8fff0c750b94ae2364d7a3/mmproj-F16.gguf"
+        }
       ],
       "requirements": { "min_free_vram_mib": 5800, "min_ram_mib": 8192, "tiers": ["vram_8gb", "vram_12gb"] },
       "defaults": {
@@ -86,8 +122,20 @@
       "modalities": ["text", "image"],
       "ctx_max": 131072,
       "files": [
-        { "name": "gemma-4-E4B-it-Q5_K_M.gguf", "sha256": null, "size": 5480000000, "hf": "unsloth/gemma-4-E4B-it-GGUF" },
-        { "name": "mmproj-F16.gguf", "sha256": null, "size": 990000000, "hf": "unsloth/gemma-4-E4B-it-GGUF" }
+        {
+          "name": "gemma-4-E4B-it-Q5_K_M.gguf",
+          "sha256": "a5d6e634db151368d2caa4270fd32ab604d96c2d1291950586989f46d8e17d36",
+          "size": 5481798784,
+          "hf": "unsloth/gemma-4-E4B-it-GGUF",
+          "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/bfc15c382204943c3a8fff0c750b94ae2364d7a3/gemma-4-E4B-it-Q5_K_M.gguf"
+        },
+        {
+          "name": "mmproj-F16.gguf",
+          "sha256": null,
+          "size": 990372672,
+          "hf": "unsloth/gemma-4-E4B-it-GGUF",
+          "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/bfc15c382204943c3a8fff0c750b94ae2364d7a3/mmproj-F16.gguf"
+        }
       ],
       "requirements": { "min_free_vram_mib": 6000, "min_ram_mib": 8192, "tiers": ["vram_8gb", "vram_12gb"] },
       "defaults": {
@@ -110,8 +158,20 @@
       "modalities": ["text", "image"],
       "ctx_max": 131072,
       "files": [
-        { "name": "gemma-4-E4B-it-Q6_K.gguf", "sha256": null, "size": 7070000000, "hf": "unsloth/gemma-4-E4B-it-GGUF" },
-        { "name": "mmproj-F16.gguf", "sha256": null, "size": 990000000, "hf": "unsloth/gemma-4-E4B-it-GGUF" }
+        {
+          "name": "gemma-4-E4B-it-Q6_K.gguf",
+          "sha256": "fd83f3ef44d22e00ff0f638753dde9a66a83e8ccf79c11024f47d383c489531b",
+          "size": 7074929792,
+          "hf": "unsloth/gemma-4-E4B-it-GGUF",
+          "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/bfc15c382204943c3a8fff0c750b94ae2364d7a3/gemma-4-E4B-it-Q6_K.gguf"
+        },
+        {
+          "name": "mmproj-F16.gguf",
+          "sha256": null,
+          "size": 990372672,
+          "hf": "unsloth/gemma-4-E4B-it-GGUF",
+          "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/bfc15c382204943c3a8fff0c750b94ae2364d7a3/mmproj-F16.gguf"
+        }
       ],
       "requirements": { "min_free_vram_mib": 7100, "min_ram_mib": 8192, "tiers": ["vram_8gb", "vram_12gb", "vram_16gb"] },
       "defaults": {
@@ -134,8 +194,20 @@
       "modalities": ["text", "image"],
       "ctx_max": 262144,
       "files": [
-        { "name": "gemma-4-12b-it-Q4_K_M.gguf", "sha256": null, "size": 7120000000, "hf": "unsloth/gemma-4-12b-it-GGUF" },
-        { "name": "mmproj-F16.gguf", "sha256": null, "size": 175000000, "hf": "unsloth/gemma-4-12b-it-GGUF" }
+        {
+          "name": "gemma-4-12b-it-Q4_K_M.gguf",
+          "sha256": "0a270ec9fe6b34f4a0d33992b6135117b484ebc4766ab76b51d4ae8c457e4c42",
+          "size": 7121861440,
+          "hf": "unsloth/gemma-4-12b-it-GGUF",
+          "url": "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/fc034cfff751157913579611efad8462ac1be606/gemma-4-12b-it-Q4_K_M.gguf"
+        },
+        {
+          "name": "mmproj-F16.gguf",
+          "sha256": null,
+          "size": 175115840,
+          "hf": "unsloth/gemma-4-12b-it-GGUF",
+          "url": "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/fc034cfff751157913579611efad8462ac1be606/mmproj-F16.gguf"
+        }
       ],
       "requirements": { "min_free_vram_mib": 8850, "min_ram_mib": 16384, "tiers": ["vram_12gb", "vram_16gb", "vram_24gb_plus"] },
       "defaults": {
@@ -158,7 +230,13 @@
       "modalities": ["text"],
       "ctx_max": 8192,
       "files": [
-        { "name": "embeddinggemma-2-Q8_0.gguf", "sha256": null, "size": 309855456, "hf": "ggml-org/embeddinggemma-2-GGUF" }
+        {
+          "name": "embeddinggemma-2-Q8_0.gguf",
+          "sha256": "2188ac1deca4b77dffefd603c2776a9d76d9d74ec01841392982ebb840b09135",
+          "size": 309855456,
+          "hf": "ggml-org/embeddinggemma-2-GGUF",
+          "url": "https://huggingface.co/ggml-org/embeddinggemma-2-GGUF/resolve/6ea3e3a309d12a4779cfda98b8c19800d2d5da71/embeddinggemma-2-Q8_0.gguf"
+        }
       ],
       "requirements": {
         "min_free_vram_mib": 0,
@@ -173,7 +251,7 @@
       },
       "capabilities": { "embeddings": true },
       "prompt_profile": null,
-      "verified": false
+      "verified": true
     }
   ],
   "tier_defaults": {
