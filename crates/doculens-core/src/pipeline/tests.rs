@@ -772,6 +772,47 @@ fn documents_follow_a_deleted_or_retyped_schema_and_general_stays() {
     assert_eq!(w.doc("other").doc_type.as_deref(), Some("contract"));
 }
 
+/// Audit PIP-11: the type slug comes from the end of the form name, so "결과보고서" and
+/// "검토보고서" both became `report`; the second form was not the default and never used.
+#[test]
+fn a_second_form_with_the_same_name_ending_gets_its_own_type() {
+    let w = World::new();
+    assert_eq!(
+        (forms::slug_for_name("결과보고서"), forms::slug_for_name("검토보고서")),
+        ("report".into(), "report".into())
+    );
+    let draft = |name: &str, doc_type: &str| SchemaDraft {
+        name: name.into(),
+        doc_type: doc_type.into(),
+        definition: SchemaDef::new(vec![FieldDef::new("title", "제목", "Title", FieldKind::String)], &[]),
+        ..Default::default()
+    };
+    let first = forms::register(&w.db, &draft("결과보고서", "")).unwrap();
+    assert_eq!((first.doc_type.as_str(), first.is_default), ("report", true));
+    let second = forms::register(&w.db, &draft("검토보고서", "")).unwrap();
+    assert_eq!((second.doc_type.as_str(), second.is_default), ("report_2", true), "a type of its own, and its default");
+    let third = forms::register(&w.db, &draft("점검보고서", "")).unwrap();
+    assert_eq!(third.doc_type, "report_3");
+    for (slug, id) in [("report", &first.id), ("report_2", &second.id), ("report_3", &third.id)] {
+        assert_eq!(&w.db.with(|c| repo::schema_for_doc_type(c, slug)).unwrap().unwrap().id, id);
+    }
+    let types = w.db.with(repo::doc_types).unwrap();
+    let label = |slug: &str| types.iter().find(|t| t.slug == slug).map(|t| t.label_ko.clone());
+    assert_eq!(label("report_2").as_deref(), Some("검토보고서"), "the classifier sees it under its name");
+
+    // A type that only has the built-in sample is taken over, as before.
+    assert_eq!(forms::slug_for_name("우리 견적서"), "estimate");
+    let estimate = forms::register(&w.db, &draft("우리 견적서", "")).unwrap();
+    assert_eq!((estimate.doc_type.as_str(), estimate.is_default), ("estimate", true));
+    // A type the draft names is the user's choice.
+    let chosen = forms::register(&w.db, &draft("분기 보고서", "report")).unwrap();
+    assert_eq!((chosen.doc_type.as_str(), chosen.is_default), ("report", false));
+    // Derived drafts (the editor opens them unsaved) already carry the free type.
+    assert_eq!(w.db.with(|c| forms::free_doc_type(c, "report")).unwrap(), "report_4");
+    assert_eq!(w.db.with(|c| forms::free_doc_type(c, "rfp")).unwrap(), "rfp");
+    assert_eq!(w.db.with(|c| forms::free_doc_type(c, "brand_new")).unwrap(), "brand_new");
+}
+
 #[test]
 fn schema_crud_defaults_versions_and_doc_types() {
     let w = World::new();
