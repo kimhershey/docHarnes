@@ -235,14 +235,8 @@ fn pdf_source(deps: &ImportDeps<'_>, doc: &DocumentRecord) -> Result<PathBuf> {
             jpeg_to_pdf(&src, &out, doc.render_dpi.unwrap_or(200) as f32)?;
             Ok(out)
         }
-        _ => {
-            let converted = DocumentCache::for_document(deps.paths, &doc.id).converted_pdf();
-            if converted.is_file() {
-                Ok(converted)
-            } else {
-                Err(CoreError::Unsupported(format!("{}: no converted PDF", doc.original_name)))
-            }
-        }
+        // Office / text documents: the converted copy, written again when the cache purge took it.
+        _ => import::ensure_converted_pdf(deps, doc),
     }
 }
 

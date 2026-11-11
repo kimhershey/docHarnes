@@ -1165,3 +1165,36 @@ fn automatic_runs_leave_extracted_documents_alone() {
     assert_eq!(run::process(&deps, &explicit, &mut |_| {}).unwrap().extracted, 1);
     assert_eq!(w.db.with(|c| repo::list_runs(c, "r1")).unwrap().len(), 2);
 }
+
+/// Audit DOC-10: after the retention purge trimmed `cache/converted/`, splitting or merging an
+/// office document failed with "no converted PDF" although its pages were still shown.
+#[test]
+fn split_and_merge_write_a_purged_converted_pdf_again() {
+    let w = World::new();
+    let hwpx = w.paths.root.join("documents/견적서.hwpx");
+    std::fs::create_dir_all(hwpx.parent().unwrap()).unwrap();
+    crate::documents::convert::hwpx::write_sample_hwpx(&hwpx, 3, crate::documents::fixtures::TINY_PNG).unwrap();
+    let deps = w.import_deps();
+    let plan = crate::documents::import::plan(
+        &w.db,
+        &w.paths,
+        std::slice::from_ref(&hwpx),
+        &Default::default(),
+        crate::documents::import::ImportSource::Folder,
+    )
+    .unwrap();
+    let report = crate::documents::import::run(&deps, &plan, None, &mut |_| {}, &mut |_, _| {}).unwrap();
+    let id = report.imported[0].clone();
+    let cache = DocumentCache::for_document(&w.paths, &id);
+    assert!(cache.converted_pdf().is_file(), "stub printer: one page per section");
+    // The purge takes the document's folder under cache/converted/.
+    std::fs::remove_dir_all(&cache.converted_dir).unwrap();
+    let parts = super::split::split_document(&deps, &w.doc(&id), &[2], None).unwrap();
+    assert_eq!(parts.len(), 2);
+    assert!(cache.converted_pdf().is_file(), "written again from the source file");
+    assert_eq!(w.doc(&id).status, DocumentStatus::Archived);
+    // The same for a merge that takes the office document as a source.
+    std::fs::remove_dir_all(&cache.converted_dir).unwrap();
+    let merged = super::split::merge_documents(&deps, &[w.doc(&id), w.doc(&parts[0])], Some("합본"), None).unwrap();
+    assert_eq!(lopdf::Document::load(w.paths.root.join(&w.doc(&merged).rel_path)).unwrap().get_pages().len(), 3 + 1);
+}

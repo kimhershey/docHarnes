@@ -951,6 +951,31 @@ fn text_only_pages(text: Option<String>) -> Vec<NewPage> {
     }
 }
 
+/// The PDF a converted (office / text) document renders from. The retention purge trims
+/// `cache/converted/<id>/` by size while the page images stay, so the file may be gone: it is
+/// written again from the source document — rotating, splitting and merging need it although the
+/// viewer still shows every page (audit DOC-10).
+pub fn ensure_converted_pdf(deps: &ImportDeps<'_>, doc: &DocumentRecord) -> Result<PathBuf> {
+    let cache = DocumentCache::for_document(deps.paths, &doc.id);
+    let pdf = cache.converted_pdf();
+    if pdf.is_file() {
+        return Ok(pdf);
+    }
+    let abs = doc.absolute_path(deps.paths);
+    if !abs.is_file() {
+        return Err(CoreError::NotFound(format!("{} (file missing)", doc.rel_path)));
+    }
+    log::info!("converted PDF of document {} is gone; converting again", doc.id);
+    let conv = convert::convert(&abs, doc.source_kind, &cache.converted_dir, deps.printer)?;
+    conv.pdf.ok_or_else(|| {
+        CoreError::Convert(format!(
+            "PDF 변환본 생성 실패({}): {}",
+            conv.printer,
+            conv.print_error.unwrap_or_else(|| "no PDF".into())
+        ))
+    })
+}
+
 /// Re-renders one page with a new rotation (viewer "회전 저장").
 pub fn rotate_page(deps: &ImportDeps<'_>, doc: &DocumentRecord, page_no: u32, rotation: u16) -> Result<NewPage> {
     let rotation = rotation % 360;
@@ -965,8 +990,8 @@ pub fn rotate_page(deps: &ImportDeps<'_>, doc: &DocumentRecord, page_no: u32, ro
             .pop()
             .ok_or_else(|| CoreError::Render("no page".into()))?,
         _ => {
-            let pdf = if doc.source_kind == SourceKind::Pdf { abs } else { cache.converted_pdf() };
             let svc = deps.render.ok_or_else(|| CoreError::Render("PDFium is not available".into()))?;
+            let pdf = if doc.source_kind == SourceKind::Pdf { abs } else { ensure_converted_pdf(deps, doc)? };
             render::render_pdf_page(svc, &pdf, &cache, &opts, page_no, rotation)?
         }
     };
@@ -2259,5 +2284,35 @@ mod tests {
         assert_eq!(e.db.with(|c| repo::get_page(c, &big.id, 2)).unwrap().unwrap().rotation, 90);
         let stats = e.db.with(repo::stats).unwrap();
         assert_eq!(stats.total_pages, 103);
+    }
+
+    /// Audit DOC-10: the retention purge trims `cache/converted/` (a tenth of the cache cap) while
+    /// the page images stay; rotating a page of such an office document then failed on the missing PDF.
+    #[test]
+    fn a_purged_converted_pdf_is_written_again_for_rotation() {
+        let Some(svc) = pdfium() else {
+            eprintln!("import tests: skipped (set DOCULENS_PDFIUM)");
+            return;
+        };
+        let e = env();
+        let d = deps(&e, Some(svc));
+        let ext = external_dir(&e);
+        hwpx::write_sample_hwpx(&ext.join("견적서.hwpx"), 2, TINY_PNG).unwrap();
+        let plan =
+            plan(&e.db, &e.paths, std::slice::from_ref(&ext), &ImportOptions::default(), ImportSource::Drop).unwrap();
+        let id = run(&d, &plan, None, &mut |_| {}, &mut |_, _| {}).unwrap().imported[0].clone();
+        let doc = e.db.with(|c| repo::get_document(c, &id)).unwrap().unwrap();
+        let cache = DocumentCache::for_document(&e.paths, &id);
+        assert!(cache.converted_pdf().is_file() && cache.page_file(1).is_file());
+        std::fs::remove_dir_all(&cache.converted_dir).unwrap();
+        // The helper writes it again from the source file; the rotation works.
+        let p = rotate_page(&d, &doc, 1, 90).unwrap();
+        assert!(p.width_px > p.height_px, "A4 portrait turned: {}x{}", p.width_px, p.height_px);
+        assert!(cache.converted_pdf().is_file());
+        assert_eq!(e.db.with(|c| repo::get_page(c, &id, 1)).unwrap().unwrap().rotation, 90);
+        // A PDF document is its own source; a missing source file is still an error.
+        std::fs::remove_dir_all(&cache.converted_dir).unwrap();
+        std::fs::remove_file(doc.absolute_path(&e.paths)).unwrap();
+        assert_eq!(ensure_converted_pdf(&d, &doc).unwrap_err().code(), "not_found");
     }
 }
