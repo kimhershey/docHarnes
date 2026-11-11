@@ -10,7 +10,7 @@ import { describeError } from "./errors";
 import { api } from "./ipc";
 import { queryClient, queryKeys } from "./query-client";
 import { coerceSettingValue, resolveSettingKey, setSettingByPath, settingSpec } from "./settingsCatalog";
-import { SCREEN_ROUTES, isJobFinished, type BackendPreference, type DocumentView, type Language, type Op, type PreRouteResult, type RetentionPolicy, type RetentionTarget, type Screen, type Theme, type Tier, type UndoReport } from "./types";
+import { SCREEN_ROUTES, isJobFinished, type BackendPreference, type DocumentView, type Job, type JobOp, type JobState, type Language, type Op, type PreRouteResult, type RetentionPolicy, type RetentionTarget, type Screen, type Theme, type Tier, type UndoReport } from "./types";
 import { errorCode, errorMessage } from "./utils";
 import { flushChatWrites } from "@/stores/assistant";
 import { useDocumentsStore } from "@/stores/documents";
@@ -541,11 +541,25 @@ const SETTING_LABELS: Record<string, string> = {
   journal_days: "settings.privacy.items.journal_days",
 };
 
-/** `job(id: "last")`: the most recent persistent job the action applies to. */
-function resolveJob(jobs: ReturnType<typeof useJobsStore.getState>["jobs"], id: string | null | undefined, action: string) {
+/**
+ * `job(id: "last")` / no id: the persistent job the action applies to. "작업 일시정지" / "작업 취소" mean
+ * the job that is at work — running first, then (cancel only: a paused job cannot be paused again) a
+ * paused one, then one still waiting — not simply the newest unfinished job, which is usually a queued
+ * one behind it (PLN-15). The other actions take the most recent job in a state they can act on.
+ */
+export function resolveJob(jobs: Job[], id: string | null | undefined, action: JobOp): Job | null {
   if (id && id !== "last") return jobs.find((j) => j.id === id || j.id.startsWith(id)) ?? null;
   const persistent = jobs.filter((j) => j.persistent);
   const pool = persistent.length > 0 ? persistent : jobs;
+  const newest = (list: Job[]): Job | null => [...list].sort((a, b) => b.created_at.localeCompare(a.created_at))[0] ?? null;
+  if (action === "pause" || action === "cancel") {
+    const order: JobState[] = action === "pause" ? ["running", "queued"] : ["running", "paused", "queued"];
+    for (const state of order) {
+      const hit = newest(pool.filter((j) => j.state === state));
+      if (hit) return hit;
+    }
+    return null;
+  }
   const candidates =
     action === "retry"
       ? pool.filter((j) => j.state === "failed" || j.state === "cancelled" || j.state === "interrupted")
@@ -554,7 +568,7 @@ function resolveJob(jobs: ReturnType<typeof useJobsStore.getState>["jobs"], id: 
         : action === "prioritize"
           ? pool.filter((j) => j.state === "queued" || j.state === "paused")
           : pool.filter((j) => !isJobFinished(j));
-  return [...candidates].sort((a, b) => b.created_at.localeCompare(a.created_at))[0] ?? null;
+  return newest(candidates);
 }
 
 /** Runs several UI ops in order, toasting failures; returns the summaries of the ones that ran. */
