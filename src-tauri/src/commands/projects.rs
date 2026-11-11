@@ -51,7 +51,9 @@ pub fn project_add_documents(
     projects_bridge::add_documents(&app, &id, &doc_ids, as_reference.unwrap_or(false))
 }
 
-/// The project's reference group (참고 자료 묶음), created on first use.
+/// The project's reference group (참고 자료 묶음). Reading it creates nothing: a project without a group
+/// gets an unsaved, empty one whose id works with the collection commands (the group is written when the
+/// first document is added).
 #[tauri::command(async)]
 pub fn project_reference_group(app: AppHandle, id: String) -> UiResult<Collection> {
     projects_bridge::reference_group(&app, &id)

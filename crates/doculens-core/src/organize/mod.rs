@@ -149,7 +149,8 @@ pub struct OrganizeItem {
     pub from: String,
     pub to: Option<String>,
     pub status: ItemStatus,
-    /// `review_pending` | `missing_file` | an apply error.
+    /// `review_pending` | `missing_file` | `project_copy` (unchanged: in the scope's project the document is
+    /// a tracked copy of another project's original) | an apply error.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// Template variables without a value (rendered as `미상` → "검토 필요").
@@ -206,7 +207,7 @@ pub fn plan(db: &Db, paths: &WorkspacePaths, req: &OrganizeRequest) -> Result<Or
             return Err(CoreError::Invalid(format!("template_variable: {}", unknown.join(", "))));
         }
     }
-    let (documents, labels, projects) = db.with(|c| {
+    let (documents, labels, projects, filed_as_copies) = db.with(|c| {
         let docs = scope::resolve(c, &req.scope)?;
         let types = pipeline_repo::doc_types(c)?;
         let labels = TypeLabels {
@@ -215,7 +216,15 @@ pub fn plan(db: &Db, paths: &WorkspacePaths, req: &OrganizeRequest) -> Result<Or
         };
         let ids: Vec<String> = docs.iter().map(|d| d.id.clone()).collect();
         let projects = project_vars(c, &req.scope, &ids)?;
-        Ok((docs, labels, projects))
+        // Documents that are in the scope's project through a tracked copy: the copy is that project's
+        // file, the original belongs to the folder of an earlier project.
+        let filed_as_copies: HashSet<String> = match req.scope.filter.project_id.as_deref() {
+            Some(pid) => {
+                crate::projects::copies::list_for_project(c, pid)?.into_iter().map(|copy| copy.document_id).collect()
+            }
+            None => HashSet::new(),
+        };
+        Ok((docs, labels, projects, filed_as_copies))
     })?;
     let mut out = OrganizePlan {
         name_template: req.name_template.clone(),
@@ -251,6 +260,21 @@ pub fn plan(db: &Db, paths: &WorkspacePaths, req: &OrganizeRequest) -> Result<Or
                 to: None,
                 status: ItemStatus::Held,
                 reason: Some("review_pending".into()),
+                missing: Vec::new(),
+            });
+            continue;
+        }
+        if filed_as_copies.contains(&doc.id) {
+            // Organising this project must not pull the original out of its own project's folder and drop
+            // it next to its copy (`…_2`); the copy stays put and keeps following the original's name.
+            out.unchanged += 1;
+            out.items.push(OrganizeItem {
+                doc_id: doc.id.clone(),
+                name: display,
+                from,
+                to: None,
+                status: ItemStatus::Unchanged,
+                reason: Some("project_copy".into()),
                 missing: Vec::new(),
             });
             continue;

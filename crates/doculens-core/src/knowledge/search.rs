@@ -202,12 +202,18 @@ pub fn search(deps: &SearchDeps<'_>, req: &SearchRequest) -> Result<SearchRespon
     let mut words = raw_words(query);
     words.truncate(MAX_QUERY_TERMS);
     let expansions = if req.expand_glossary && !terms.is_empty() {
-        deps.db.with_read(|c| repo::glossary_expansions(c, &terms))?
+        // Glossary forms are matched as the analyzer tokenises them, like the query itself.
+        deps.db.with_read(|c| repo::glossary_expansions(c, query, &terms, &|s| deps.analyzer.query_terms(s)))?
     } else {
         Vec::new()
     };
     resp.query_terms = terms.clone();
-    resp.expanded_terms = expansions.iter().flat_map(|(_, f)| f.iter().cloned()).collect();
+    // A form of several tokens expands each of its terms: list every synonym once.
+    for form in expansions.iter().flat_map(|(_, forms)| forms) {
+        if !resp.expanded_terms.contains(form) {
+            resp.expanded_terms.push(form.clone());
+        }
+    }
 
     let allowed = deps.db.with_read(|c| repo::scope_doc_ids(c, &req.scope))?;
     if allowed.as_ref().is_some_and(|a| a.is_empty()) {

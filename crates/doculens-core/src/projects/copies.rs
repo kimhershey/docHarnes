@@ -11,7 +11,13 @@
 //!    renames / rewrites the copies whose files are still what DocuLens wrote;
 //! 4. a copy edited outside DocuLens hashes differently from what was written → state `modified`
 //!    and it is left alone ("원본과 다름 — 다시 동기화" resets it from the original);
-//! 5. leaving the project removes that copy, deleting the document removes them all.
+//! 5. leaving the project removes that copy, deleting the document removes them all — except a
+//!    copy the user edited: its tracking row goes, the file stays where it is (it is their work);
+//! 6. a copy is only ever written over its own earlier file: a registered document, another copy
+//!    (paths compared without letter case — one file on Windows) or any other file found at the
+//!    target makes the copy take the next free name (`_2`, `_3` …);
+//! 7. the folder of a copy uses the Korean type labels whatever the UI language, so a rescan under
+//!    another language never moves it.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -127,10 +133,49 @@ fn labels(conn: &Connection) -> rusqlite::Result<TypeLabels> {
     })
 }
 
+/// Language of the type / phase labels in copy folders. Fixed: a copy made under the English UI used to be
+/// filed under "…/Contract/" and moved to "…/계약서/" by the next rescan (which knows no UI language).
+const COPY_LABEL_LANGUAGE: Language = Language::Ko;
+
+/// Whether the copy of `doc` in `project` may not be written at `candidate`: the path belongs to the original,
+/// to a registered document or to another tracked copy (compared without letter case: `견적서.PDF` and
+/// `견적서.pdf` are one file on Windows), or some other file is there — one the user put in the folder.
+/// Only this copy's own earlier file may be written over.
+fn path_taken(
+    conn: &Connection,
+    paths: &WorkspacePaths,
+    project: &Project,
+    doc: &DocumentRecord,
+    candidate: &str,
+) -> rusqlite::Result<bool> {
+    if candidate.to_lowercase() == doc.rel_path.to_lowercase() {
+        return Ok(true);
+    }
+    let registered: i64 =
+        conn.query_row("SELECT COUNT(*) FROM documents WHERE rel_path = ?1 COLLATE NOCASE", [candidate], |r| r.get(0))?;
+    if registered > 0 {
+        return Ok(true);
+    }
+    let mut st =
+        conn.prepare_cached("SELECT document_id, project_id FROM document_copies WHERE rel_path = ?1 COLLATE NOCASE")?;
+    let owners: Vec<(String, String)> =
+        st.query_map([candidate], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+    let own = |(d, p): &(String, String)| *d == doc.id && *p == project.id;
+    if owners.iter().any(|o| !own(o)) {
+        return Ok(true);
+    }
+    Ok(!owners.iter().any(own) && from_rel_path(&paths.root, candidate).exists())
+}
+
 /// Target path of a document's copy inside a project: the project's folder template
-/// (`{{project}}` = this project) plus the document's current file name; collisions with
-/// registered documents or other copies get `_2`, `_3` ….
-fn target_path(conn: &Connection, project: &Project, doc: &DocumentRecord, lang: Language) -> rusqlite::Result<String> {
+/// (`{{project}}` = this project) plus the document's current file name; a name that is taken
+/// ([`path_taken`]) gets `_2`, `_3` ….
+fn target_path(
+    conn: &Connection,
+    paths: &WorkspacePaths,
+    project: &Project,
+    doc: &DocumentRecord,
+) -> rusqlite::Result<String> {
     let labels = labels(conn)?;
     let vars = ProjectVars::from(project);
     let file = doc.rel_path.rsplit('/').next().unwrap_or(&doc.rel_path).to_string();
@@ -139,7 +184,7 @@ fn target_path(conn: &Connection, project: &Project, doc: &DocumentRecord, lang:
         _ => (file.clone(), String::new()),
     };
     let (rendered, _) = render(project.settings.folder_template(), &|v| {
-        document_variable(doc, &labels, lang, v, &stem, &ext, None, Some(&vars))
+        document_variable(doc, &labels, COPY_LABEL_LANGUAGE, v, &stem, &ext, None, Some(&vars))
     });
     let folder = sanitize_folder(&rendered);
     let join = |name: &str| {
@@ -153,10 +198,7 @@ fn target_path(conn: &Connection, project: &Project, doc: &DocumentRecord, lang:
     let base = sanitize_component(&stem);
     let mut candidate = join(&base);
     let mut n = 2;
-    while candidate == doc.rel_path
-        || docs::find_by_rel_path(conn, &candidate)?.is_some()
-        || find_by_rel_path(conn, &candidate)?.is_some_and(|c| c.document_id != doc.id || c.project_id != project.id)
-    {
+    while path_taken(conn, paths, project, doc, &candidate)? {
         candidate = join(&format!("{base}_{n}"));
         n += 1;
         if n > 10_000 {
@@ -166,9 +208,14 @@ fn target_path(conn: &Connection, project: &Project, doc: &DocumentRecord, lang:
     Ok(candidate)
 }
 
-fn write_copy(paths: &WorkspacePaths, from_rel: &str, to_rel: &str) -> Result<(String, u64)> {
+/// Copies the original to `to_rel`. Only `replace` — the copy's own earlier file at that path — may be
+/// written over; any other file found there is not this module's to touch.
+fn write_copy(paths: &WorkspacePaths, from_rel: &str, to_rel: &str, replace: bool) -> Result<(String, u64)> {
     let from = from_rel_path(&paths.root, from_rel);
     let to = from_rel_path(&paths.root, to_rel);
+    if !replace && to.exists() {
+        return Err(CoreError::Invalid(format!("copy target exists: {to_rel}")));
+    }
     if let Some(parent) = to.parent() {
         std::fs::create_dir_all(parent).map_err(|e| CoreError::io(parent, e))?;
     }
@@ -184,14 +231,29 @@ fn remove_file(path: &Path) {
     }
 }
 
-/// Writes (or rewrites) the copy of `doc` in `project`; returns the stored row.
-fn ensure_copy(
-    db: &Db,
-    paths: &WorkspacePaths,
-    project: &Project,
-    doc: &DocumentRecord,
-    lang: Language,
-) -> Result<DocumentCopy> {
+/// Deletes the file of a copy whose tracking ends (the document leaves the project, the project or the
+/// document is deleted) — unless the user edited it: a file that no longer hashes as DocuLens wrote it is
+/// their work and stays where it is, untracked. Returns whether the file was deleted.
+fn remove_copy_file(paths: &WorkspacePaths, copy: &DocumentCopy) -> bool {
+    let abs = from_rel_path(&paths.root, &copy.rel_path);
+    if !abs.is_file() {
+        return false;
+    }
+    match blake3_file(&abs) {
+        Ok(hash) if hash == copy.content_hash => std::fs::remove_file(&abs).is_ok(),
+        Ok(_) => {
+            log::info!("the edited copy {} is kept (no longer tracked)", copy.rel_path);
+            false
+        }
+        Err(e) => {
+            log::warn!("copy {} left in place: {e}", copy.rel_path);
+            false
+        }
+    }
+}
+
+/// Writes the copy of `doc` in `project` when it has none on disk; returns the stored row.
+fn ensure_copy(db: &Db, paths: &WorkspacePaths, project: &Project, doc: &DocumentRecord) -> Result<DocumentCopy> {
     let existing = db.with(|c| {
         let mut st = c.prepare_cached(&format!(
             "SELECT {COPY_COLUMNS} FROM document_copies WHERE document_id = ?1 AND project_id = ?2"
@@ -203,8 +265,9 @@ fn ensure_copy(
             return Ok(copy);
         }
     }
-    let rel = db.with(|c| target_path(c, project, doc, lang))?;
-    let (hash, size) = write_copy(paths, &doc.rel_path, &rel)?;
+    let rel = db.with(|c| target_path(c, paths, project, doc))?;
+    // A fresh path (or this copy's own, whose file is gone): nothing is there to replace.
+    let (hash, size) = write_copy(paths, &doc.rel_path, &rel, false)?;
     let created = Utc::now();
     let copy = DocumentCopy {
         document_id: doc.id.clone(),
@@ -224,12 +287,15 @@ fn ensure_copy(
 /// calls for: a document that already belongs to another project gets a copy in this project's
 /// folder when the project keeps copies. Copy failures do not undo the membership (they are
 /// retried by [`rescan`]). Returns the number of documents actually added.
+///
+/// `_lang` (the UI language) no longer plays a part: copy folders always use the Korean type labels
+/// ([`COPY_LABEL_LANGUAGE`]). The parameter stays for the callers.
 pub fn add_documents(
     db: &Db,
     paths: &WorkspacePaths,
     project_id: &str,
     doc_ids: &[String],
-    lang: Language,
+    _lang: Language,
 ) -> Result<u32> {
     let before: HashMap<String, usize> = db.with(|c| {
         let mut out = HashMap::new();
@@ -257,38 +323,41 @@ pub fn add_documents(
         if !from_rel_path(&paths.root, &doc.rel_path).is_file() {
             continue;
         }
-        if let Err(e) = ensure_copy(db, paths, &project, &doc, lang) {
+        if let Err(e) = ensure_copy(db, paths, &project, &doc) {
             log::warn!("copy of {} for project {} failed: {e}", doc.id, project.id);
         }
     }
     Ok(added)
 }
 
-/// Removes a document from a project together with its copy in that project.
+/// Removes a document from a project together with its copy in that project (a copy the user edited
+/// keeps its file, see [`remove_copy_file`]).
 pub fn remove_document(db: &Db, paths: &WorkspacePaths, project_id: &str, doc_id: &str) -> Result<bool> {
     let copies = db.with(|c| list_for_document(c, doc_id))?;
     for copy in copies.iter().filter(|c| c.project_id == project_id) {
-        remove_file(&from_rel_path(&paths.root, &copy.rel_path));
+        remove_copy_file(paths, copy);
         db.with(|c| delete_row(c, doc_id, project_id))?;
     }
     db.with(|c| repo::remove_document(c, project_id, doc_id))
 }
 
-/// Deletes every copy file of a project (before the project row goes).
+/// Ends the tracking of every copy of a project (before the project row goes) and deletes the copy files
+/// DocuLens wrote; copies the user edited stay in the folder. Returns the number of copies untracked.
 pub fn remove_project_copies(db: &Db, paths: &WorkspacePaths, project_id: &str) -> Result<u32> {
     let copies = db.with(|c| list_for_project(c, project_id))?;
     for copy in &copies {
-        remove_file(&from_rel_path(&paths.root, &copy.rel_path));
+        remove_copy_file(paths, copy);
         db.with(|c| delete_row(c, &copy.document_id, &copy.project_id))?;
     }
     Ok(copies.len() as u32)
 }
 
-/// Deletes every copy of a document (before the document is deleted).
+/// Ends the tracking of every copy of a document (before the document is deleted) and deletes the copy
+/// files DocuLens wrote; copies the user edited stay. Returns the number of copies untracked.
 pub fn remove_all_for_document(db: &Db, paths: &WorkspacePaths, doc_id: &str) -> Result<u32> {
     let copies = db.with(|c| list_for_document(c, doc_id))?;
     for copy in &copies {
-        remove_file(&from_rel_path(&paths.root, &copy.rel_path));
+        remove_copy_file(paths, copy);
         db.with(|c| delete_row(c, &copy.document_id, &copy.project_id))?;
     }
     Ok(copies.len() as u32)
@@ -331,8 +400,7 @@ pub fn sync_document(db: &Db, paths: &WorkspacePaths, doc_id: &str, force: bool)
             continue;
         }
         // Where the copy should live now (the original may have been renamed / moved).
-        let lang = Language::Ko;
-        let want = db.with(|c| target_path(c, &project, &doc, lang))?;
+        let want = db.with(|c| target_path(c, paths, &project, &doc))?;
         let same_place = want == copy.rel_path;
         if same_place && unmodified && original_hash == copy.content_hash {
             continue;
@@ -340,7 +408,8 @@ pub fn sync_document(db: &Db, paths: &WorkspacePaths, doc_id: &str, force: bool)
         if !same_place && on_disk.is_some() {
             remove_file(&abs);
         }
-        let (hash, size) = write_copy(paths, &doc.rel_path, &want)?;
+        // In place this copy's own file is rewritten; a new place is free (`target_path`).
+        let (hash, size) = write_copy(paths, &doc.rel_path, &want, same_place)?;
         let fresh = DocumentCopy {
             rel_path: want,
             content_hash: hash,
@@ -414,7 +483,7 @@ fn ensure_missing_copies(db: &Db, paths: &WorkspacePaths, only_project: Option<&
         if doc.deleted_at.is_some() || !from_rel_path(&paths.root, &doc.rel_path).is_file() {
             continue;
         }
-        match ensure_copy(db, paths, &project, &doc, Language::Ko) {
+        match ensure_copy(db, paths, &project, &doc) {
             Ok(_) => created += 1,
             Err(e) => log::warn!("copy of {} for project {} failed: {e}", doc.id, project.id),
         }

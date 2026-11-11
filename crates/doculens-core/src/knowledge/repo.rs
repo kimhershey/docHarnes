@@ -57,8 +57,14 @@ fn typed(code: &str) -> rusqlite::Error {
     rusqlite::Error::InvalidParameterName(code.to_string())
 }
 
-pub fn collection_exists(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
+fn collection_stored(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
     conn.query_row("SELECT COUNT(*) FROM collections WHERE id = ?1", [id], |r| r.get::<_, i64>(0)).map(|n| n > 0)
+}
+
+/// Whether documents can be put into the collection `id`: a stored collection, or the reference group
+/// of a project that has not been written yet (it is, when its first document arrives).
+pub fn collection_exists(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
+    Ok(collection_stored(conn, id)? || pending_project_group(conn, id)?.is_some())
 }
 
 pub fn document_exists(conn: &Connection, id: &str) -> rusqlite::Result<bool> {
@@ -141,8 +147,9 @@ pub fn save_collection(conn: &Connection, input: &CollectionInput) -> rusqlite::
             id.clone()
         }
         None => {
-            let id = new_id();
             let project_id = new_project;
+            // A project's group has a predictable id (see `project_group_id`).
+            let id = project_id.map(project_group_id).unwrap_or_else(new_id);
             let kind = if project_id.is_some() { CollectionKind::Project } else { CollectionKind::Reference };
             if let Some(p) = project_id {
                 let exists: i64 = conn.query_row("SELECT COUNT(*) FROM projects WHERE id = ?1", [p], |r| r.get(0))?;
@@ -188,8 +195,67 @@ fn group_name(project_name: &str) -> &str {
     }
 }
 
+/// Id of the reference group of a project that has none yet. It is derived from the project id, so the
+/// group can be named before it exists: looking at a project ([`peek_project_reference_group`]) hands out
+/// an unsaved group under this id, and the row is written under the same id when the first document
+/// arrives ([`add_docs_to_collection`]). Groups created before 0.8.0 keep the random id they have.
+pub fn project_group_id(project_id: &str) -> String {
+    format!("{PROJECT_GROUP_PREFIX}{project_id}")
+}
+
+const PROJECT_GROUP_PREFIX: &str = "pg-";
+
+/// The project `(id, name)` whose reference group `collection_id` would be, when that group is not
+/// written yet. `None` for any other id, an unknown project, or a project that already has a group.
+fn pending_project_group(conn: &Connection, collection_id: &str) -> rusqlite::Result<Option<(String, String)>> {
+    let Some(project_id) = collection_id.strip_prefix(PROJECT_GROUP_PREFIX) else { return Ok(None) };
+    let name: Option<String> =
+        conn.query_row("SELECT name FROM projects WHERE id = ?1", [project_id], |r| r.get(0)).optional()?;
+    let Some(name) = name else { return Ok(None) };
+    if reference_group_of_project(conn, project_id)?.is_some() {
+        return Ok(None);
+    }
+    Ok(Some((project_id.to_string(), name)))
+}
+
+fn insert_project_group(conn: &Connection, id: &str, project_id: &str, project_name: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO collections (id, name, description, color, active, kind, project_id, created_at, updated_at) \
+         VALUES (?1, ?2, NULL, NULL, 1, 'project', ?3, ?4, ?4)",
+        params![id, group_name(project_name), project_id, now()],
+    )?;
+    Ok(())
+}
+
+/// The reference group of a project as the screen shows it, without creating anything: the stored group,
+/// or — for a project that has none yet — an unsaved, empty group under [`project_group_id`]. Opening a
+/// project must not leave an empty group behind (it used to count in the settings' group list).
+pub fn peek_project_reference_group(conn: &Connection, project_id: &str) -> rusqlite::Result<Collection> {
+    if let Some(group) = reference_group_of_project(conn, project_id)? {
+        return Ok(group);
+    }
+    let name: Option<String> =
+        conn.query_row("SELECT name FROM projects WHERE id = ?1", [project_id], |r| r.get(0)).optional()?;
+    let Some(name) = name else { return Err(typed("project_not_found")) };
+    let now = Utc::now();
+    Ok(Collection {
+        id: project_group_id(project_id),
+        name: group_name(&name).to_string(),
+        description: None,
+        color: None,
+        active: true,
+        kind: CollectionKind::Project,
+        project_id: Some(project_id.to_string()),
+        created_at: now,
+        updated_at: now,
+        doc_count: 0,
+        chunk_count: 0,
+    })
+}
+
 /// The reference group of a project (0.5.0 plan A), created on first use and named after the
-/// project (`project_name`; a later rename follows through `sync_reference_group_name`).
+/// project (`project_name`; a later rename follows through `sync_reference_group_name`). Use it where
+/// the group is about to receive documents; to merely show it, [`peek_project_reference_group`].
 pub fn project_reference_group(
     conn: &Connection,
     project_id: &str,
@@ -202,14 +268,8 @@ pub fn project_reference_group(
     if exists == 0 {
         return Err(typed("project_not_found"));
     }
-    let name = group_name(project_name);
-    let id = new_id();
-    let now = now();
-    conn.execute(
-        "INSERT INTO collections (id, name, description, color, active, kind, project_id, created_at, updated_at) \
-         VALUES (?1, ?2, NULL, NULL, 1, 'project', ?3, ?4, ?4)",
-        params![id, name, project_id, now],
-    )?;
+    let id = project_group_id(project_id);
+    insert_project_group(conn, &id, project_id, project_name)?;
     get_collection(conn, &id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
 }
 
@@ -268,9 +328,14 @@ pub fn collection_doc_ids(conn: &Connection, id: &str) -> rusqlite::Result<Vec<S
     Ok(rows)
 }
 
+/// Adds documents to a collection. The reference group of a project is written here on first use when the
+/// screen so far only held its unsaved form ([`peek_project_reference_group`]).
 pub fn add_docs_to_collection(conn: &Connection, id: &str, doc_ids: &[String]) -> rusqlite::Result<u32> {
-    if !collection_exists(conn, id)? {
-        return Err(typed("collection_not_found"));
+    if !collection_stored(conn, id)? {
+        match pending_project_group(conn, id)? {
+            Some((project_id, name)) => insert_project_group(conn, id, &project_id, &name)?,
+            None => return Err(typed("collection_not_found")),
+        }
     }
     let now = now();
     let mut st = conn
@@ -304,6 +369,26 @@ pub fn collection_documents(conn: &Connection, id: &str) -> rusqlite::Result<Vec
         }
     }
     Ok(out)
+}
+
+/// Whether the document sits in any reference group — a group of the 공통 참고 자료 or a project's.
+/// Such a document is reference material whatever its `role` column says: the retention purge skips it
+/// and no single project can turn it into a plain work document.
+pub fn in_reference_group(conn: &Connection, doc_id: &str) -> rusqlite::Result<bool> {
+    conn.query_row("SELECT COUNT(*) FROM collection_docs WHERE document_id = ?1", [doc_id], |r| r.get::<_, i64>(0))
+        .map(|n| n > 0)
+}
+
+/// Sets a document's role, deriving it from the memberships where they decide: a document that is still
+/// in a reference group stays `knowledge` when it is asked to become a work document. Switching the kind
+/// of a document inside one project (참고 자료 → 업무 문서) must not change what it is for the common
+/// material or for another project — the switch used to flip the role everywhere and, with a document
+/// retention period, put the shared regulation on the purge list. Returns the role the document has now.
+pub fn set_role_by_membership(conn: &Connection, doc_id: &str, role: DocumentRole) -> rusqlite::Result<DocumentRole> {
+    let role =
+        if role == DocumentRole::Work && in_reference_group(conn, doc_id)? { DocumentRole::Knowledge } else { role };
+    crate::documents::repo::set_role(conn, doc_id, role)?;
+    Ok(role)
 }
 
 /// `(collection id, name)` pairs of a document.
@@ -377,8 +462,47 @@ pub fn set_version(conn: &Connection, input: &VersionInput) -> rusqlite::Result<
     get_version(conn, &input.document_id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
 }
 
+/// Removes a document's version row ("버전 해제"). When it was its group's latest edition, the newest
+/// remaining edition takes over, so the older ones stay superseded behind a current edition instead of
+/// being hidden for good.
 pub fn clear_version(conn: &Connection, doc_id: &str) -> rusqlite::Result<bool> {
-    Ok(conn.execute("DELETE FROM doc_versions WHERE document_id = ?1", [doc_id])? > 0)
+    let row: Option<(String, bool)> = conn
+        .query_row("SELECT group_key, is_latest FROM doc_versions WHERE document_id = ?1", [doc_id], |r| {
+            Ok((r.get(0)?, r.get::<_, i64>(1)? != 0))
+        })
+        .optional()?;
+    let Some((group, was_latest)) = row else { return Ok(false) };
+    conn.execute("DELETE FROM doc_versions WHERE document_id = ?1", [doc_id])?;
+    if was_latest {
+        promote_newest_edition(conn, &group)?;
+    }
+    Ok(true)
+}
+
+/// Marks the newest edition of a group (effective date, then import time) as its latest when the group
+/// has none. Returns the promoted document.
+fn promote_newest_edition(conn: &Connection, group_key: &str) -> rusqlite::Result<Option<String>> {
+    const LIVE: &str = "FROM doc_versions v JOIN documents d ON d.id = v.document_id \
+                        WHERE v.group_key = ?1 AND d.deleted_at IS NULL";
+    let latest: i64 =
+        conn.query_row(&format!("SELECT COUNT(*) {LIVE} AND v.is_latest = 1"), [group_key], |r| r.get(0))?;
+    if latest > 0 {
+        return Ok(None);
+    }
+    let newest: Option<String> = conn
+        .query_row(
+            &format!("SELECT v.document_id {LIVE} ORDER BY v.effective_date DESC, d.imported_at DESC LIMIT 1"),
+            [group_key],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(id) = &newest {
+        conn.execute(
+            "UPDATE doc_versions SET is_latest = 1, updated_at = ?2 WHERE document_id = ?1",
+            params![id, now()],
+        )?;
+    }
+    Ok(newest)
 }
 
 // ---------------------------------------------------------------------------
@@ -454,28 +578,76 @@ pub fn delete_glossary(conn: &Connection, id: i64) -> rusqlite::Result<bool> {
     Ok(conn.execute("DELETE FROM glossary WHERE id = ?1", [id])? > 0)
 }
 
-/// For each query term that is a glossary term or synonym (case-insensitive),
-/// the other forms of that entry. Small table: scanned in memory.
-pub fn glossary_expansions(conn: &Connection, terms: &[String]) -> rusqlite::Result<Vec<(String, Vec<String>)>> {
+/// For the query terms that make up a glossary term or synonym found in the query, the other forms of that
+/// entry (see [`expand_terms`]). Small table: scanned in memory.
+pub fn glossary_expansions(
+    conn: &Connection,
+    query: &str,
+    terms: &[String],
+    tokenize: &dyn Fn(&str) -> Vec<String>,
+) -> rusqlite::Result<Vec<(String, Vec<String>)>> {
     if terms.is_empty() {
         return Ok(Vec::new());
     }
-    let entries = list_glossary(conn)?;
-    let mut out = Vec::new();
-    for t in terms {
-        let tl = t.to_lowercase();
-        for e in &entries {
-            let mut forms: Vec<String> = std::iter::once(e.term.clone()).chain(e.synonyms.iter().cloned()).collect();
-            if forms.iter().any(|f| f.to_lowercase() == tl) {
-                forms.retain(|f| f.to_lowercase() != tl);
-                if !forms.is_empty() {
-                    out.push((t.clone(), forms));
+    Ok(expand_terms(&list_glossary(conn)?, query, terms, tokenize))
+}
+
+/// NFKC, lower-case, no whitespace: how a glossary form is looked for in the query text.
+fn compact_form(s: &str) -> String {
+    super::tokenize::normalize(s).chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// Glossary expansion of query terms: `(term, other forms of its entry)` in query order.
+///
+/// A form (the entry's term or a synonym) matches when the query text contains it — case and spacing
+/// aside — and every token the analyzer makes of it (`tokenize`, the same function that produced `terms`)
+/// is a query term. Matching the token sequence instead of the whole word is what lets a compound the
+/// dictionary splits ("공급가액" → 공급 + 가액 under ko-dic) and a synonym of several words ("net amount")
+/// expand at all; the literal check keeps "출장 일정" from expanding as "출장비" when the analyzer drops a
+/// suffix. Every term of a matched form receives the entry's other forms: `(A ∨ S) ∧ (B ∨ S)` is
+/// `(A ∧ B) ∨ S`, so the AND query still asks for the compound or its synonym.
+pub fn expand_terms(
+    entries: &[GlossaryEntry],
+    query: &str,
+    terms: &[String],
+    tokenize: &dyn Fn(&str) -> Vec<String>,
+) -> Vec<(String, Vec<String>)> {
+    let haystack = compact_form(query);
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+    for e in entries {
+        let forms: Vec<&String> = std::iter::once(&e.term).chain(e.synonyms.iter()).collect();
+        for form in &forms {
+            let key = compact_form(form);
+            if key.is_empty() || !haystack.contains(&key) {
+                continue;
+            }
+            let mut tokens = tokenize(form);
+            if tokens.is_empty() {
+                tokens.push(super::tokenize::normalize(form));
+            }
+            if !tokens.iter().all(|t| terms.contains(t)) {
+                continue;
+            }
+            let others: Vec<&String> = forms.iter().copied().filter(|f| compact_form(f) != key).collect();
+            for t in terms.iter().filter(|t| tokens.contains(t)) {
+                let at = match out.iter().position(|(term, _)| term == t) {
+                    Some(i) => i,
+                    None => {
+                        out.push((t.clone(), Vec::new()));
+                        out.len() - 1
+                    }
+                };
+                for o in &others {
+                    if !out[at].1.contains(o) {
+                        out[at].1.push((*o).clone());
+                    }
                 }
-                break;
             }
         }
     }
-    Ok(out)
+    out.retain(|(_, forms)| !forms.is_empty());
+    out.sort_by_key(|(t, _)| terms.iter().position(|x| x == t));
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -853,7 +1025,14 @@ pub fn scope_doc_ids(conn: &Connection, scope: &SearchScope) -> rusqlite::Result
     // documents whose every collection is inactive.
     let mut excluded: HashSet<String> = HashSet::new();
     if scope.latest_only {
-        let mut st = conn.prepare("SELECT document_id FROM doc_versions WHERE is_latest = 0")?;
+        // An edition is superseded only while its group still has a latest edition. Once that one is
+        // cleared, demoted, moved to another group or deleted with its document, the editions that are
+        // left are all there is — hiding them would leave the title unanswerable.
+        let mut st = conn.prepare(
+            "SELECT v.document_id FROM doc_versions v WHERE v.is_latest = 0 AND EXISTS (\
+               SELECT 1 FROM doc_versions l JOIN documents d ON d.id = l.document_id \
+               WHERE l.group_key = v.group_key AND l.is_latest = 1 AND d.deleted_at IS NULL)",
+        )?;
         excluded.extend(st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?);
     }
     if scope.collections.is_empty() && scope.active_collections_only {

@@ -900,11 +900,28 @@ fn check_run_verdicts_with_evidence() {
     assert!(p2.last_check_at.is_some());
     assert_eq!((p2.last_pass, p2.last_mismatch, p2.last_undetermined), (8, 3, 1));
 
-    // Subset of rules, second run becomes the latest.
+    assert!(!run.partial);
+
+    // PRJ-12: a run over some of the rules answers that question only. It is returned but not stored, so the
+    // last full run stays the project's "최근 검사" (card counters, report, 보완요청서).
     let subset = check(&deps(&db, None), &p.id, std::slice::from_ref(&contract_brn.rule_id)).unwrap();
     assert_eq!(subset.results.len(), 1);
-    assert_eq!(db.with(|c| repo::list_runs(c, &p.id, 10)).unwrap().len(), 2);
-    assert_eq!(db.with(|c| repo::last_run(c, &p.id)).unwrap().unwrap().id, subset.id);
+    assert!(subset.partial);
+    assert_eq!((subset.pass, subset.mismatch, subset.undetermined, subset.missing), (1, 0, 0, 0));
+    // Rule ids that match nothing give an empty partial run — which used to replace the full result.
+    let none = check(&deps(&db, None), &p.id, &["no-such-rule".to_string()]).unwrap();
+    assert!(none.partial && none.results.is_empty());
+    assert_eq!(db.with(|c| repo::list_runs(c, &p.id, 10)).unwrap().len(), 1, "partial runs are not stored");
+    assert_eq!(db.with(|c| repo::last_run(c, &p.id)).unwrap().unwrap().id, run.id);
+    let p3 = db.with(|c| repo::get_project(c, &p.id)).unwrap().unwrap();
+    assert_eq!((p3.last_pass, p3.last_mismatch, p3.last_undetermined), (8, 3, 1), "the card keeps the full run");
+    assert_eq!(p3.last_check_at, p2.last_check_at);
+    assert!(supplement_request(&db, &p.id, &stored, &[], OutputFormat::Hwpx, Language::Ko).is_ok());
+    // Naming every enabled rule is a full run again.
+    let all_ids: Vec<String> = run.results.iter().map(|r| r.rule_id.clone()).collect();
+    let full = check(&deps(&db, None), &p.id, &all_ids).unwrap();
+    assert!(!full.partial && full.results.len() == 13);
+    assert_eq!(db.with(|c| repo::last_run(c, &p.id)).unwrap().unwrap().id, full.id);
     assert!(matches!(check(&deps(&db, None), "nope", &[]).unwrap_err(), CoreError::NotFound(_)));
 }
 
@@ -1027,6 +1044,161 @@ fn present_on_pending_boolean_is_undetermined_and_false_fails() {
     assert!(run.results[1].message.contains("아니오"));
 }
 
+/// A document that was classified (its type is set) but never extracted: no run, no fields.
+fn classified_only(db: &Db, id: &str, doc_type: &str) {
+    insert_inbox_doc(db, id, &format!("documents/{id}_{doc_type}.pdf"));
+    db.with(|c| docs::set_doc_type(c, id, Some(doc_type), Some("auto"))).unwrap();
+}
+
+/// PRJ-3: the default auto-processing stops after classification. A rule on a document that has no
+/// extraction run yet is "undetermined (not extracted)" — not a mismatch that lands in the 보완요청서.
+#[test]
+fn rules_on_documents_without_an_extraction_run_are_undetermined() {
+    let db = db();
+    classified_only(&db, "c9", "contract");
+    seed_br(&db, "br1", "123-45-67890", "한빛상사");
+    let p = project(&db, "추출 전", None);
+    add(&db, &p.id, &["c9", "br1"]);
+    add_rule(&db, &p.id, "계약서 서명 필수", RuleOperand::field("contract", "signed"), RuleOp::Present, None, None);
+    add_rule(
+        &db,
+        &p.id,
+        "계약서 당사자 사업자번호 = 사업자등록증 등록번호",
+        RuleOperand::field("contract", "parties.brn"),
+        RuleOp::Eq,
+        Some(RuleOperand::field("business_registration", "registration_no")),
+        None,
+    );
+    add_rule(
+        &db,
+        &p.id,
+        "계약금액 숫자",
+        RuleOperand::field("contract", "amount"),
+        RuleOp::Matches,
+        Some(RuleOperand::literal("^[0-9]+$")),
+        None,
+    );
+    // An extracted document that lacks the value is still a mismatch.
+    add_rule(
+        &db,
+        &p.id,
+        "사업자등록증 업태 필수",
+        RuleOperand::field("business_registration", "business_type"),
+        RuleOp::Present,
+        None,
+        None,
+    );
+    let run = check(&deps(&db, None), &p.id, &[]).unwrap();
+    let by = |desc: &str| run.results.iter().find(|r| r.description == desc).unwrap();
+    for desc in ["계약서 서명 필수", "계약서 당사자 사업자번호 = 사업자등록증 등록번호", "계약금액 숫자"]
+    {
+        let r = by(desc);
+        assert_eq!(r.verdict, Verdict::Undetermined, "{desc}: {}", r.message);
+        assert!(r.message.contains("추출") && r.message.contains("c9_contract.pdf"), "{desc}: {}", r.message);
+        assert_eq!(r.left.as_ref().unwrap().status.as_deref(), Some("not_extracted"), "{desc}");
+    }
+    let absent = by("사업자등록증 업태 필수");
+    assert_eq!(absent.verdict, Verdict::Mismatch, "{}", absent.message);
+    assert_eq!(absent.left.as_ref().unwrap().status.as_deref(), Some("absent"));
+    assert_eq!((run.pass, run.mismatch, run.undetermined, run.missing), (0, 1, 3, 0));
+    // English wording and the report: the next step is to run the extraction, and the 보완요청서 lists the
+    // real mismatch only.
+    let en = check(&ProjectDeps { db: &db, vlm: None, language: Language::En }, &p.id, &[]).unwrap();
+    assert!(en.results[0].message.contains("not extracted yet"), "{}", en.results[0].message);
+    let md = report(&db, &p.id, Language::Ko).unwrap();
+    assert!(md.contains("[추출 전]") && md.contains("추출 전 문서가 걸린 규칙 3건: 추출 실행 후 재검사"), "{md}");
+    assert!(!md.contains("검토 큐 처리 후 재검사"), "nothing waits in the review queue: {md}");
+    let req = supplement_request(&db, &p.id, &run, &[], OutputFormat::Hwpx, Language::Ko).unwrap();
+    assert_eq!(req.sources.len(), 2, "one finding + the project: {:?}", req.sources);
+    assert!(req.content.contains("불일치 1건"), "{}", req.content);
+}
+
+/// PRJ-11: a free-text value keeps its decimal point and its sign when it is compared — version "1.2" used to
+/// be compared as 12 ("1.2" failed against the literal 1.2 and passed against "12").
+#[test]
+fn text_values_keep_decimal_points_and_signs() {
+    use check::{normalize, normalize_text, Norm};
+    assert_eq!(normalize_text("1.2"), "1.2");
+    assert_eq!(normalize_text("V1.2.3 (최종)"), "v1.2.3최종");
+    assert_eq!(normalize_text("-5"), "-5");
+    assert_eq!(normalize_text("1,200"), "1200", "thousands separators still go");
+    assert_eq!(normalize_text("A-1"), "a1", "a hyphen inside a code still goes");
+    assert_eq!(normalize_text("3. 개요"), "3개요", "a full stop is not a decimal point");
+    assert_eq!(normalize_text("㈜한빛 상사"), "한빛상사");
+    assert_eq!(normalize_text("Hanbit Co., Ltd."), "hanbit");
+    assert_eq!(normalize(FieldKind::String, "1.2", None), Some(Norm::Text("1.2".into())));
+
+    let db = db();
+    seed_doc(
+        &db,
+        "srs1",
+        "srs",
+        ("", "2026-03-02", 0.0),
+        false,
+        &[
+            ("version", "1.2", None, Str, None),
+            ("doc_no", "V1.2-rc", None, Str, None),
+            ("approved_on", "2026.03.02", None, Str, None),
+            ("delta", "-5", None, Str, None),
+            ("page_total", "1,200", None, Str, None),
+        ],
+    );
+    seed_doc(
+        &db,
+        "wbs1",
+        "wbs",
+        ("", "2026-03-02", 0.0),
+        false,
+        &[("version", "12", None, Str, None), ("approved_on", "2026-03-02", None, Str, None)],
+    );
+    let p = project(&db, "버전", None);
+    add(&db, &p.id, &["srs1", "wbs1"]);
+    let literal = |desc: &str, field: &str, value: &str| {
+        add_rule(
+            &db,
+            &p.id,
+            desc,
+            RuleOperand::field("srs", field),
+            RuleOp::Eq,
+            Some(RuleOperand::literal(value)),
+            None,
+        )
+    };
+    literal("버전은 1.2", "version", "1.2");
+    literal("버전은 12", "version", "12");
+    literal("문서번호", "doc_no", "v1.2-RC");
+    literal("증감 -5", "delta", "-5");
+    literal("증감 5", "delta", "5");
+    literal("쪽수", "page_total", "1200");
+    let pair = |desc: &str, field: &str| {
+        add_rule(
+            &db,
+            &p.id,
+            desc,
+            RuleOperand::field("srs", field),
+            RuleOp::Eq,
+            Some(RuleOperand::field("wbs", field)),
+            None,
+        )
+    };
+    pair("버전 일치", "version");
+    pair("승인일 일치", "approved_on");
+    let run = check(&deps(&db, None), &p.id, &[]).unwrap();
+    let verdict = |desc: &str| {
+        let r = run.results.iter().find(|r| r.description == desc).unwrap();
+        (r.verdict, r.message.clone())
+    };
+    assert_eq!(verdict("버전은 1.2").0, Verdict::Pass, "{}", verdict("버전은 1.2").1);
+    assert_eq!(verdict("버전은 12").0, Verdict::Mismatch, "{}", verdict("버전은 12").1);
+    assert_eq!(verdict("문서번호").0, Verdict::Pass, "{}", verdict("문서번호").1);
+    assert_eq!(verdict("증감 -5").0, Verdict::Pass, "{}", verdict("증감 -5").1);
+    assert_eq!(verdict("증감 5").0, Verdict::Mismatch, "{}", verdict("증감 5").1);
+    assert_eq!(verdict("쪽수").0, Verdict::Pass, "{}", verdict("쪽수").1);
+    assert_eq!(verdict("버전 일치").0, Verdict::Mismatch, "1.2 is not 12: {}", verdict("버전 일치").1);
+    assert!(verdict("버전 일치").1.contains("1.2"), "{}", verdict("버전 일치").1);
+    assert_eq!(verdict("승인일 일치").0, Verdict::Pass, "the same date in two spellings: {}", verdict("승인일 일치").1);
+}
+
 #[test]
 fn relations_link_shared_entities() {
     let db = db();
@@ -1116,6 +1288,24 @@ fn report_markdown_lists_documents_checklist_and_verdicts() {
     assert!(matches!(report(&db, "nope", Language::Ko).unwrap_err(), CoreError::NotFound(_)));
 }
 
+/// PRJ-14: the report prints its check times on the machine's clock — they used to be UTC, nine hours behind
+/// Korean time and often on the previous day. (Run with `TZ=Asia/Seoul` to see the difference.)
+#[test]
+fn report_check_times_are_local() {
+    let db = db();
+    let p = certification_world(&db);
+    let run = check(&deps(&db, None), &p.id, &[]).unwrap();
+    let md = report(&db, &p.id, Language::Ko).unwrap();
+    let local = run.finished_at.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string();
+    assert!(md.contains(&format!("최근 검사: {local}\n")), "header stamp {local}: {md}");
+    assert!(md.contains(&format!("최근 검사 {local} — 통과")), "run stamp {local}: {md}");
+    // Whatever zone the tests run in: a check at 23:30 UTC is 08:30 on the next day in Korea.
+    let t = chrono::DateTime::parse_from_rfc3339("2026-11-10T23:30:00Z").unwrap().with_timezone(&chrono::Utc);
+    let kst = chrono::FixedOffset::east_opt(9 * 3600).unwrap();
+    assert_eq!(report::stamp(&t, &kst), "2026-11-11 08:30");
+    assert_eq!(report::stamp(&t, &chrono::Utc), "2026-11-10 23:30");
+}
+
 #[test]
 fn supplement_request_lists_findings_as_text_sources() {
     let db = db();
@@ -1136,6 +1326,16 @@ fn supplement_request_lists_findings_as_text_sources() {
         RuleOperand::field("tax_invoice", "remarks"),
         RuleOp::Present,
         None,
+        None,
+    );
+    // The tax total waits in the review queue → undetermined (never part of a request).
+    add_rule(
+        &db,
+        &p.id,
+        "세액 = 100,000",
+        RuleOperand::field("tax_invoice", "tax_total"),
+        RuleOp::Eq,
+        Some(RuleOperand::literal("100,000")),
         None,
     );
     let run = check(&deps(&db, None), &p.id, &[]).unwrap();
@@ -1197,8 +1397,68 @@ fn supplement_request_lists_findings_as_text_sources() {
     )
     .unwrap();
     assert_eq!(missing_only.sources.len(), 2);
-    let none = supplement_request(&db, &p.id, &run, &["nope".into()], OutputFormat::Docx, Language::Ko).unwrap_err();
-    assert!(matches!(none, CoreError::Invalid(ref m) if m == "no_findings"));
+
+    // PRJ-2: a missing required document is a finding of its own (`missing_doc:<type>`), selectable next to
+    // the rule findings — the dialog's default selection must not lose it.
+    let request = |ids: &[&str]| {
+        let ids: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
+        supplement_request(&db, &p.id, &run, &ids, OutputFormat::Hwpx, Language::Ko)
+    };
+    let titles = |req: &crate::generate::DraftRequest| -> Vec<String> {
+        req.sources
+            .iter()
+            .filter_map(|s| match s {
+                SourceRef::Text { title, .. } => title.clone().filter(|t| t.starts_with("finding:")),
+                _ => None,
+            })
+            .collect()
+    };
+    let by = |desc: &str| run.results.iter().find(|r| r.description == desc).unwrap();
+    let mismatch_id = by("계약금액 = 세금계산서 합계금액").id.clone();
+    let signed = by("신청서 서명 필수");
+    assert_eq!(signed.verdict, Verdict::Missing, "the application form is missing");
+    let both = request(&[&mismatch_id, "missing_doc:application_form"]).unwrap();
+    assert_eq!(
+        titles(&both),
+        vec!["finding:missing:missing_doc:application_form".to_string(), format!("finding:mismatch:{mismatch_id}")]
+    );
+    assert!(both.content.contains("불일치 1건") && both.content.contains("누락 1건"), "{}", both.content);
+    // The rule that only failed for that missing document is folded into it — as in "everything" — …
+    let folded = request(&[&signed.id, "missing_doc:application_form"]).unwrap();
+    assert_eq!(titles(&folded), vec!["finding:missing:missing_doc:application_form".to_string()]);
+    // … and stands for the missing document when it is selected alone.
+    let alone = request(&[&signed.id]).unwrap();
+    assert_eq!(titles(&alone), vec![format!("finding:missing:{}", signed.id)]);
+    // The whole default selection of the dialog (every mismatch / missing row) equals "everything".
+    let mut all: Vec<&str> = run
+        .results
+        .iter()
+        .filter(|r| matches!(r.verdict, Verdict::Mismatch | Verdict::Missing))
+        .map(|r| r.id.as_str())
+        .collect();
+    all.push("missing_doc:application_form");
+    assert_eq!(titles(&request(&all).unwrap()).len(), titles(&req).len());
+
+    // Selections that cannot produce a request get a typed error instead of `no_findings`.
+    let undetermined = by("세액 = 100,000");
+    assert_eq!(undetermined.verdict, Verdict::Undetermined);
+    let err = request(&[&undetermined.id]).unwrap_err();
+    assert!(matches!(err, CoreError::Invalid(ref m) if m == "findings_not_requestable"), "{err}");
+    let passed = by("계약서 당사자 사업자번호 = 사업자등록증 등록번호");
+    let err = request(&[&passed.id, &undetermined.id]).unwrap_err();
+    assert!(matches!(err, CoreError::Invalid(ref m) if m == "findings_not_requestable"), "{err}");
+    let err = request(&["nope", "missing_doc:receipt"]).unwrap_err();
+    assert!(matches!(err, CoreError::Invalid(ref m) if m == "findings_not_in_run"), "{err}");
+    // An undetermined row next to a real finding is simply left out.
+    assert_eq!(
+        titles(&request(&[&undetermined.id, &mismatch_id]).unwrap()),
+        vec![format!("finding:mismatch:{mismatch_id}")]
+    );
+    // Nothing selected and nothing to request → `no_findings`.
+    let clean = self::project(&db, "문제 없음", None);
+    let clean_run = check(&deps(&db, None), &clean.id, &[]).unwrap();
+    let err = supplement_request(&db, &clean.id, &clean_run, &[], OutputFormat::Hwpx, Language::Ko).unwrap_err();
+    assert!(matches!(err, CoreError::Invalid(ref m) if m == "no_findings"), "{err}");
 }
 
 fn insert_inbox_doc(db: &Db, id: &str, rel_path: &str) {
@@ -1261,6 +1521,35 @@ fn inbox_subfolders_map_to_projects() {
         None,
         "unknown documents are not members"
     );
+}
+
+/// PRJ-16: the inbox subfolder → project mapping ignores letter case. On Windows "inbox/Hanbit" and
+/// "inbox/hanbit" are one folder; a second spelling used to create a second project.
+#[test]
+fn inbox_mapping_ignores_letter_case() {
+    let db = db();
+    for (id, path) in [("h1", "inbox/Hanbit/a.pdf"), ("h2", "inbox/hanbit/b.pdf"), ("h3", "inbox/HANBIT/c.pdf")] {
+        insert_inbox_doc(&db, id, path);
+    }
+    let pid = assign_inbox_document(&db, "h1", "inbox/Hanbit/a.pdf", true).unwrap().unwrap();
+    assert_eq!(assign_inbox_document(&db, "h2", "inbox/hanbit/b.pdf", true).unwrap().as_deref(), Some(pid.as_str()));
+    assert_eq!(assign_inbox_document(&db, "h3", "inbox/HANBIT/c.pdf", false).unwrap().as_deref(), Some(pid.as_str()));
+    let projects = db.with(repo::list_projects).unwrap();
+    assert_eq!(projects.len(), 1, "{:?}", projects.iter().map(|p| &p.name).collect::<Vec<_>>());
+    assert_eq!((projects[0].inbox_folder.as_deref(), projects[0].document_count), (Some("Hanbit"), 3));
+    // Two mappings that differ in case only (an older workspace): the exact spelling wins.
+    let lower = db
+        .with(|c| {
+            repo::save_project(
+                c,
+                &ProjectInput { name: "hanbit 2".into(), inbox_folder: Some("hanbit".into()), ..Default::default() },
+            )
+        })
+        .unwrap();
+    insert_inbox_doc(&db, "h4", "inbox/hanbit/d.pdf");
+    insert_inbox_doc(&db, "h5", "inbox/Hanbit/e.pdf");
+    assert_eq!(assign_inbox_document(&db, "h4", "inbox/hanbit/d.pdf", true).unwrap(), Some(lower.id.clone()));
+    assert_eq!(assign_inbox_document(&db, "h5", "inbox/Hanbit/e.pdf", true).unwrap(), Some(pid));
 }
 
 #[test]
@@ -1433,6 +1722,49 @@ fn classification_scores_titles_vendors_intake_numbers_and_text() {
     assert!(checklist.iter().any(|i| i.doc_type == "business_registration" && i.missing), "d5 was not applied");
 }
 
+/// PRJ-6: the automatic classification sorts unassigned *work* documents. Reference material (the role, or a
+/// place in any reference group), registered forms and generated drafts are not offered — a shared regulation
+/// used to be suggested, and applied, as a work document of whichever project its title matched.
+#[test]
+fn classification_leaves_reference_material_forms_and_drafts_alone() {
+    use super::classify::ClassifyRequest;
+    use crate::knowledge::{repo as knowledge_repo, CollectionInput};
+    let db = db();
+    let hanbit = project_with(&db, "한빛상사 거래처 등록", None, &["한빛"], None);
+    seed_titled(&db, "w1", "계약서_한빛.pdf", "contract", "㈜한빛무역", "한빛 공급 계약");
+    seed_titled(&db, "k1", "한빛_거래규정.pdf", "general", "", "한빛 거래 규정");
+    seed_titled(&db, "g1", "한빛_업무지침.pdf", "general", "", "한빛 업무 지침");
+    seed_titled(&db, "f1", "한빛_신청서_양식.pdf", "application_form", "", "한빛 신청서 양식");
+    seed_titled(&db, "d1", "한빛_보완요청서_초안.pdf", "general", "", "한빛 보완요청서 초안");
+    db.with(|c| {
+        docs::set_role(c, "k1", DocumentRole::Knowledge)?;
+        docs::set_role(c, "f1", DocumentRole::Form)?;
+        docs::set_role(c, "d1", DocumentRole::Generated)?;
+        // g1 keeps the work role but sits in a reference group (added without the role switch).
+        let group = knowledge_repo::save_collection(c, &CollectionInput { name: "사규".into(), ..Default::default() })?;
+        knowledge_repo::add_docs_to_collection(c, &group.id, &["g1".to_string()])?;
+        Ok(())
+    })
+    .unwrap();
+    let deps = deps(&db, None);
+    let ids = |r: &classify::ClassifyResult| r.suggestions.iter().map(|s| s.doc_id.clone()).collect::<Vec<_>>();
+    // Default target: the unassigned work document only.
+    let result = classify(&deps, &ClassifyRequest::default()).unwrap();
+    assert_eq!(ids(&result), vec!["w1"], "{:?}", result.suggestions);
+    assert_eq!(db.with(repo::unassigned_document_ids).unwrap(), vec!["w1"]);
+    // "Also the assigned ones" widens it to every work document — not to the reference material.
+    db.with(|c| repo::add_documents(c, &hanbit.id, &["w1".to_string()])).unwrap();
+    seed_titled(&db, "w2", "거래명세서_한빛.pdf", "receipt", "㈜한빛무역", "한빛 납품");
+    let mut all = ids(&classify(&deps, &ClassifyRequest { include_assigned: true, ..Default::default() }).unwrap());
+    all.sort();
+    assert_eq!(all, vec!["w1", "w2"]);
+    assert_eq!(ids(&classify(&deps, &ClassifyRequest::default()).unwrap()), vec!["w2"]);
+    // Documents the user names are classified whatever they are.
+    let explicit =
+        classify(&deps, &ClassifyRequest { doc_ids: vec!["k1".into(), "f1".into()], ..Default::default() }).unwrap();
+    assert_eq!(ids(&explicit), vec!["k1", "f1"]);
+}
+
 #[test]
 fn the_model_decides_undecided_documents_when_asked() {
     use super::classify::{ClassifyRequest, SuggestionSource};
@@ -1476,7 +1808,16 @@ fn phase_follows_the_start_and_end_dates() {
     assert_eq!(phase_for(Some(today + chrono::Duration::days(1)), None, today, today), ProjectPhase::Planned);
     assert_eq!(phase_for(Some(today), None, today, today), ProjectPhase::Active);
     assert_eq!(phase_for(Some(d("2026-01-01")), Some(d("2026-12-31")), today, today), ProjectPhase::Active);
-    assert_eq!(phase_for(Some(d("2026-01-01")), Some(today), today, today), ProjectPhase::Active, "the end day counts");
+    assert_eq!(
+        phase_for(Some(d("2026-01-01")), Some(today + chrono::Duration::days(1)), today, today),
+        ProjectPhase::Active
+    );
+    assert_eq!(
+        phase_for(Some(d("2026-01-01")), Some(today), today, today),
+        ProjectPhase::Done,
+        "done from the end date on"
+    );
+    assert_eq!(phase_for(Some(today), Some(today), today, today), ProjectPhase::Done, "a one-day project");
     assert_eq!(phase_for(Some(d("2026-01-01")), Some(d("2026-11-09")), today, today), ProjectPhase::Done);
     // Without a start the creation day is the start; without an end the project never completes.
     assert_eq!(phase_for(None, None, d("2026-12-01"), today), ProjectPhase::Planned);
@@ -1489,6 +1830,40 @@ fn phase_follows_the_start_and_end_dates() {
     );
     assert!(parse_date("nope").is_none() && parse_date(" 2026-01-05 ").is_some());
     assert_eq!(parse_date("2026-01-05T09:00:00Z"), parse_date("2026-01-05"), "a timestamp keeps its day");
+}
+
+/// PRJ-5: "완료 처리" stores today as the end date — the project is 완료 at once (it used to stay 진행중
+/// until the next day), and it is not "기한 경과" on the very day it was completed.
+#[test]
+fn completing_a_project_today_takes_effect_today() {
+    let db = db();
+    let p = project(&db, "오늘 완료", Some("tpl_certification_audit"));
+    assert_eq!(p.phase, ProjectPhase::Active);
+    let today = chrono::Local::now().date_naive().to_string();
+    // What the "완료 처리" button sends: an update with today's date as the end date.
+    let done = db
+        .with(|c| {
+            repo::save_project(
+                c,
+                &ProjectInput {
+                    id: Some(p.id.clone()),
+                    name: p.name.clone(),
+                    end_date: Some(today.clone()),
+                    ..Default::default()
+                },
+            )
+        })
+        .unwrap();
+    assert_eq!((done.phase, done.end_date.as_deref()), (ProjectPhase::Done, Some(today.as_str())));
+    assert!(!done.overdue && done.missing_count == 3, "open findings, but the end date has not passed yet");
+    assert_eq!(db.with(repo::list_projects).unwrap().iter().find(|x| x.id == p.id).unwrap().phase, ProjectPhase::Done);
+    // "다시 열기" clears the end date; a date in the past is done and — with open findings — overdue.
+    db.with(|c| repo::set_dates(c, &p.id, None, Some(None))).unwrap();
+    assert_eq!(db.with(|c| repo::get_project(c, &p.id)).unwrap().unwrap().phase, ProjectPhase::Active);
+    let yesterday = (chrono::Local::now().date_naive() - chrono::Duration::days(1)).to_string();
+    db.with(|c| repo::set_dates(c, &p.id, None, Some(Some(&yesterday)))).unwrap();
+    let late = db.with(|c| repo::get_project(c, &p.id)).unwrap().unwrap();
+    assert_eq!((late.phase, late.overdue), (ProjectPhase::Done, true));
 }
 
 #[test]
@@ -1705,4 +2080,122 @@ fn copies_respect_the_project_settings_and_are_cleaned_up_with_their_owners() {
     let stored = w.db.with(|c| repo::get_project(c, &no_copies.id)).unwrap().unwrap();
     assert!(!stored.settings.copies && stored.settings.folder_template.is_none());
     assert_eq!(stored.settings.folder_template(), DEFAULT_PROJECT_FOLDER);
+}
+
+impl CopyWorld {
+    fn read(&self, rel: &str) -> Vec<u8> {
+        std::fs::read(self.paths.root.join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"))
+    }
+
+    fn write(&self, rel: &str, bytes: &[u8]) {
+        let abs = self.paths.root.join(rel);
+        std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        std::fs::write(abs, bytes).unwrap();
+    }
+}
+
+/// PRJ-8: a project copy is only ever written over its own earlier copy. A file the user put in the project
+/// folder, and a registered document whose path differs in letter case only (one file on Windows), keep
+/// their content: the copy takes the next free name.
+#[test]
+fn a_copy_never_overwrites_a_file_that_is_not_its_own() {
+    let w = CopyWorld::new();
+    w.doc("d1", "documents/계약서.pdf", b"contract of A", "contract");
+    let a = w.project("A 사업", None);
+    let b = w.project("B 사업", None);
+    w.add(&a.id, &["d1"]);
+    // 1. A file the user saved where the copy would go (nothing registers it).
+    let target = "documents/B 사업/계약서/계약서.pdf";
+    w.write(target, b"the user's own file");
+    w.add(&b.id, &["d1"]);
+    let copy = w.copies_of(&b.id).remove(0);
+    assert_eq!(copy.rel_path, "documents/B 사업/계약서/계약서_2.pdf", "the taken name is skipped");
+    assert_eq!(w.read(target), b"the user's own file");
+    assert_eq!(w.read(&copy.rel_path), b"contract of A");
+    // Its own copy is still refreshed in place when the original changes.
+    w.write("documents/계약서.pdf", b"contract of A, v2");
+    let r = copies::sync_document(&w.db, &w.paths, "d1", false).unwrap();
+    assert_eq!((r.rewritten, r.renamed), (1, 0), "{r:?}");
+    assert_eq!(w.copies_of(&b.id)[0].rel_path, copy.rel_path);
+    assert_eq!(w.read(&copy.rel_path), b"contract of A, v2");
+    assert_eq!(w.read(target), b"the user's own file");
+
+    // 2. A registered document whose path differs in case only: on Windows that is the same file.
+    let c = w.project("C 사업", None);
+    w.doc("d2", "documents/C 사업/계약서/계약서.PDF", b"another document", "contract");
+    w.add(&c.id, &["d2"]);
+    w.add(&c.id, &["d1"]);
+    let copy_c = w.copies_of(&c.id).remove(0);
+    assert_eq!(copy_c.rel_path, "documents/C 사업/계약서/계약서_2.pdf", "{copy_c:?}");
+    assert_eq!(w.read("documents/C 사업/계약서/계약서.PDF"), b"another document");
+    // 3. The same for another document's tracked copy.
+    w.doc("d3", "documents/other/계약서_2.PDF", b"third", "contract");
+    let d = w.project("D 사업", None);
+    w.add(&d.id, &["d3"]);
+    w.add(&c.id, &["d3"]);
+    let names: Vec<String> = w.copies_of(&c.id).into_iter().map(|x| x.rel_path).collect();
+    assert!(names.contains(&"documents/C 사업/계약서/계약서_2_2.PDF".to_string()), "{names:?}");
+}
+
+/// PRJ-9: a copy the user edited in the project folder is their work. Taking the document out of the project,
+/// deleting the project or deleting the document drops the tracking but leaves that file where it is; copies
+/// DocuLens wrote and nobody touched are still removed.
+#[test]
+fn an_edited_copy_is_kept_when_its_membership_ends() {
+    let w = CopyWorld::new();
+    w.doc("d1", "documents/계약서.pdf", b"contract", "contract");
+    w.doc("d2", "documents/검수확인서.pdf", b"acceptance", "contract");
+    let a = w.project("A 사업", None);
+    let b = w.project("B 사업", None);
+    let c = w.project("C 사업", None);
+    w.add(&a.id, &["d1", "d2"]);
+    w.add(&b.id, &["d1", "d2"]);
+    w.add(&c.id, &["d1", "d2"]);
+    let (b1, b2) = ("documents/B 사업/계약서/계약서.pdf", "documents/B 사업/계약서/검수확인서.pdf");
+    let (c1, c2) = ("documents/C 사업/계약서/계약서.pdf", "documents/C 사업/계약서/검수확인서.pdf");
+    assert!(w.exists(b1) && w.exists(b2) && w.exists(c1) && w.exists(c2));
+
+    // Removed from the project: the edited copy stays, the untouched one goes.
+    w.write(b1, b"contract with my notes");
+    assert!(copies::remove_document(&w.db, &w.paths, &b.id, "d1").unwrap());
+    assert!(copies::remove_document(&w.db, &w.paths, &b.id, "d2").unwrap());
+    assert!(w.copies_of(&b.id).is_empty(), "no copy is tracked any more");
+    assert_eq!(w.read(b1), b"contract with my notes");
+    assert!(!w.exists(b2));
+    // The kept file is not overwritten when the document comes back: the new copy gets its own name.
+    w.add(&b.id, &["d1"]);
+    assert_eq!(w.copies_of(&b.id)[0].rel_path, "documents/B 사업/계약서/계약서_2.pdf");
+    assert_eq!(w.read(b1), b"contract with my notes");
+
+    // Project deleted: same rule for each of its copies.
+    w.write(c2, b"acceptance, signed by hand");
+    assert_eq!(copies::remove_project_copies(&w.db, &w.paths, &c.id).unwrap(), 2);
+    assert!(w.copies_of(&c.id).is_empty());
+    assert!(!w.exists(c1));
+    assert_eq!(w.read(c2), b"acceptance, signed by hand");
+
+    // Document deleted: every copy row goes, an edited copy file stays.
+    let again = "documents/B 사업/계약서/계약서_2.pdf";
+    w.write(again, b"edited again");
+    assert_eq!(copies::remove_all_for_document(&w.db, &w.paths, "d1").unwrap(), 1);
+    assert!(w.db.with(|c| copies::list_for_document(c, "d1")).unwrap().is_empty());
+    assert_eq!(w.read(again), b"edited again");
+    assert!(w.exists("documents/계약서.pdf"), "the original is never touched here");
+}
+
+/// PRJ-16: the folder of a copy uses the same (Korean) type label whatever the UI language — a copy made
+/// under the English UI used to land in "…/Contract/" and move to "…/계약서/" at the next rescan.
+#[test]
+fn copy_folders_do_not_depend_on_the_ui_language() {
+    let w = CopyWorld::new();
+    w.doc("d1", "documents/계약서.pdf", b"contract", "contract");
+    let a = w.project("A 사업", None);
+    let b = w.project("B 사업", None);
+    copies::add_documents(&w.db, &w.paths, &a.id, &["d1".to_string()], Language::En).unwrap();
+    copies::add_documents(&w.db, &w.paths, &b.id, &["d1".to_string()], Language::En).unwrap();
+    let copy = w.copies_of(&b.id).remove(0);
+    assert_eq!(copy.rel_path, "documents/B 사업/계약서/계약서.pdf");
+    let r = copies::rescan(&w.db, &w.paths).unwrap();
+    assert_eq!(r, copies::SyncReport::default(), "nothing moves at the next rescan");
+    assert_eq!(w.copies_of(&b.id)[0].rel_path, copy.rel_path);
 }

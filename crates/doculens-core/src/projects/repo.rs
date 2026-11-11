@@ -731,6 +731,7 @@ fn fill_counters(conn: &Connection, projects: &mut [Project], only: Option<&str>
         Some(id) => st.query_map([id], map)?.collect::<rusqlite::Result<_>>()?,
         None => st.query_map([], map)?.collect::<rusqlite::Result<_>>()?,
     };
+    let today = chrono::Local::now().date_naive();
     for p in projects.iter_mut() {
         let present = types.get(&p.id).cloned().unwrap_or_default();
         p.document_count = present.len() as u32;
@@ -749,9 +750,11 @@ fn fill_counters(conn: &Connection, projects: &mut [Project], only: Option<&str>
             }
         }
         // 기한 경과 (decision 5): the end date has passed but the case is not complete — required
-        // documents are missing, the last check left mismatches, or nothing was ever checked.
+        // documents are missing, the last check left mismatches, or nothing was ever checked. The end
+        // date itself (the day "완료 처리" stores) is 완료 but not overdue yet.
+        let ended = p.end_date.as_deref().and_then(super::parse_date).is_some_and(|e| e < today);
         p.overdue = p.phase == ProjectPhase::Done
-            && p.end_date.is_some()
+            && ended
             && (p.missing_count > 0 || p.last_mismatch > 0 || p.last_check_at.is_none());
     }
     Ok(())
@@ -1038,12 +1041,28 @@ pub fn projects_of_document(conn: &Connection, doc_id: &str) -> rusqlite::Result
     Ok(out)
 }
 
-/// Documents (not deleted) that belong to no project, newest import first.
+/// Work documents (not deleted) that belong to no project yet, newest import first — what the automatic
+/// classification sorts by default. Reference material (the `knowledge` role, or a place in any reference
+/// group), registered forms and generated drafts are not work documents of a project.
 pub fn unassigned_document_ids(conn: &Connection) -> rusqlite::Result<Vec<String>> {
-    let mut st = conn.prepare_cached(
-        "SELECT id FROM documents WHERE deleted_at IS NULL AND id NOT IN (SELECT document_id FROM project_documents) \
-         ORDER BY imported_at DESC, id",
-    )?;
+    classifiable_document_ids(conn, false)
+}
+
+/// Every work document, assigned to a project or not (the exclusions of [`unassigned_document_ids`]).
+pub fn work_document_ids(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    classifiable_document_ids(conn, true)
+}
+
+fn classifiable_document_ids(conn: &Connection, include_assigned: bool) -> rusqlite::Result<Vec<String>> {
+    let mut sql = String::from(
+        "SELECT id FROM documents WHERE deleted_at IS NULL AND role = 'work' \
+         AND id NOT IN (SELECT document_id FROM collection_docs)",
+    );
+    if !include_assigned {
+        sql.push_str(" AND id NOT IN (SELECT document_id FROM project_documents)");
+    }
+    sql.push_str(" ORDER BY imported_at DESC, id");
+    let mut st = conn.prepare_cached(&sql)?;
     let ids: Vec<String> = st.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
     Ok(ids)
 }
@@ -1209,6 +1228,7 @@ fn row_to_run(conn: &Connection, r: &Row<'_>) -> rusqlite::Result<CheckRun> {
         undetermined: r.get::<_, i64>(6)?.max(0) as u32,
         missing: r.get::<_, i64>(7)?.max(0) as u32,
         missing_doc_types: from_json(r.get(8)?),
+        partial: false, // only full runs are stored
     })
 }
 
@@ -1305,19 +1325,28 @@ pub fn inbox_folder_of(rel_path: &str) -> Option<String> {
 }
 
 /// Maps a document imported from an inbox subfolder to the project with that
-/// `inbox_folder` (when `create` is set: else a project named like the folder is mapped, else
-/// one is created with the folder name). Returns the project id when the document is a member
-/// afterwards.
+/// `inbox_folder` — compared without letter case — (when `create` is set: else a project named
+/// like the folder is mapped, else one is created with the folder name). Returns the project id
+/// when the document is a member afterwards.
 pub fn assign_inbox_document(db: &Db, doc_id: &str, rel_path: &str, create: bool) -> Result<Option<String>> {
     let Some(folder) = inbox_folder_of(rel_path) else { return Ok(None) };
     db.with(|c| {
-        let existing: Option<String> = c
-            .query_row(
-                "SELECT id FROM projects WHERE inbox_folder = ?1 ORDER BY updated_at DESC LIMIT 1",
-                [&folder],
-                |r| r.get(0),
-            )
-            .optional()?;
+        // Folder names are matched without letter case: on Windows "inbox/Hanbit" and "inbox/hanbit" are
+        // one folder, and a second spelling must not become a second project. The exact spelling wins
+        // where an older workspace holds both.
+        let mapped: Vec<(String, String)> = {
+            let mut st = c.prepare_cached(
+                "SELECT id, inbox_folder FROM projects WHERE inbox_folder IS NOT NULL ORDER BY updated_at DESC, name",
+            )?;
+            let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        let key = folder.to_lowercase();
+        let existing: Option<String> = mapped
+            .iter()
+            .find(|(_, f)| *f == folder)
+            .or_else(|| mapped.iter().find(|(_, f)| documents::nfc(f).to_lowercase() == key))
+            .map(|(id, _)| id.clone());
         let project_id = match existing {
             Some(id) => id,
             // A project already named like the folder (and not mapped to another folder) takes

@@ -4,7 +4,8 @@
 //! columns per row, literals), values are normalised by field kind (BRN digits,
 //! amounts, ISO dates, booleans, names without ㈜ / spacing) and compared with
 //! the rule operator. Verdicts: `pass` / `mismatch` / `undetermined` (absent,
-//! unparsable, review-pending or rejected value, incomparable kinds) /
+//! unparsable, review-pending or rejected value, incomparable kinds, or a
+//! document that has no extraction run yet) /
 //! `missing` (no document of the referenced type). With several documents of
 //! one type every pairing is evaluated and the worst verdict is reported with
 //! the offending pair as evidence; rows of a table column take the best row.
@@ -51,7 +52,8 @@ pub enum Norm {
     /// Digits only (BRN, phone, account).
     Digits(String),
     Bool(bool),
-    /// Lower-case, whitespace / corporate suffixes removed.
+    /// Lower-case, whitespace / punctuation / corporate suffixes removed; a decimal point between digits
+    /// and a leading minus are kept ([`normalize_text`]).
     Text(String),
 }
 
@@ -114,6 +116,8 @@ impl Norm {
 /// Why a value could not take part in a comparison.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Gap {
+    /// The document has no extraction run yet (classified only): there is nothing to judge.
+    NotExtracted,
     /// No field with that path in the document's latest run.
     Absent,
     /// The field exists but has no value.
@@ -138,6 +142,30 @@ struct Resolved {
 /// Lower-case text without whitespace, punctuation and Korean corporate markers
 /// (`㈜한빛 상사` = `(주)한빛상사` = `한빛상사`).
 pub fn normalize_name(s: &str) -> String {
+    strip_markers(s).chars().filter(|c| c.is_alphanumeric()).collect()
+}
+
+/// Comparison key of a free-text value: like [`normalize_name`] (case, spacing, punctuation and corporate
+/// markers do not count), but what makes two numbers differ survives — a decimal point between digits and
+/// the minus of a leading number. Version "1.2" stays "1.2" (not "12") and "-5" is not "5", while
+/// "1,200" is still "1200" and "A-1" still "a1".
+pub fn normalize_text(s: &str) -> String {
+    let chars: Vec<char> = strip_markers(s).chars().collect();
+    let mut out = String::with_capacity(chars.len());
+    for (i, c) in chars.iter().enumerate() {
+        let digit_next = chars.get(i + 1).is_some_and(char::is_ascii_digit);
+        let keep = c.is_alphanumeric()
+            || (*c == '.' && digit_next && i > 0 && chars[i - 1].is_ascii_digit())
+            || (*c == '-' && digit_next && out.is_empty());
+        if keep {
+            out.push(*c);
+        }
+    }
+    out
+}
+
+/// NFC lower-case text without the corporate markers.
+fn strip_markers(s: &str) -> String {
     let mut t = documents::nfc(s).to_lowercase();
     for m in [
         "주식회사",
@@ -166,7 +194,7 @@ pub fn normalize_name(s: &str) -> String {
     ] {
         t = t.replace(m, "");
     }
-    t.chars().filter(|c| c.is_alphanumeric()).collect()
+    t
 }
 
 fn parse_bool(s: &str) -> Option<bool> {
@@ -202,13 +230,13 @@ pub fn normalize(kind: FieldKind, value: &str, normalized: Option<&str>) -> Opti
             .map(str::to_string)
             .or_else(|| normalize_date(v))
             .map(Norm::Date),
-        FieldKind::Boolean => Some(parse_bool(v).map(Norm::Bool).unwrap_or_else(|| Norm::Text(normalize_name(v)))),
+        FieldKind::Boolean => Some(parse_bool(v).map(Norm::Bool).unwrap_or_else(|| Norm::Text(normalize_text(v)))),
         FieldKind::Phone | FieldKind::Account => {
             let d: String = v.chars().filter(|c| c.is_ascii_digit()).collect();
-            Some(if d.is_empty() { Norm::Text(normalize_name(v)) } else { Norm::Digits(d) })
+            Some(if d.is_empty() { Norm::Text(normalize_text(v)) } else { Norm::Digits(d) })
         }
         _ => {
-            let t = normalize_name(v);
+            let t = normalize_text(v);
             (!t.is_empty()).then_some(Norm::Text(t))
         }
     }
@@ -224,7 +252,7 @@ fn literal_norm(value: &str, kind: Option<FieldKind>) -> Option<Norm> {
         Some(FieldKind::Brn) => normalize(FieldKind::Brn, v, None),
         Some(FieldKind::Amount | FieldKind::Integer) => normalize_amount(v).map(Norm::Number),
         Some(FieldKind::Date) => normalize_date(v).map(Norm::Date),
-        Some(FieldKind::Boolean) => parse_bool(v).map(Norm::Bool).or_else(|| Some(Norm::Text(normalize_name(v)))),
+        Some(FieldKind::Boolean) => parse_bool(v).map(Norm::Bool).or_else(|| Some(Norm::Text(normalize_text(v)))),
         Some(FieldKind::Phone | FieldKind::Account) => normalize(FieldKind::Phone, v, None),
         _ => {
             let numeric = v.chars().any(|c| c.is_ascii_digit())
@@ -238,7 +266,7 @@ fn literal_norm(value: &str, kind: Option<FieldKind>) -> Option<Norm> {
             if let Some(b) = parse_bool(v) {
                 return Some(Norm::Bool(b));
             }
-            Some(Norm::Text(normalize_name(v)))
+            Some(Norm::Text(normalize_text(v)))
         }
     }
 }
@@ -358,10 +386,16 @@ impl Env<'_> {
             if let Some(r) = self.document_level(d, path, &base) {
                 return vec![r];
             }
+            // A document that was never extracted has no fields at all: its values are unknown, not missing.
+            let (status, gap) = if d.doc.last_run_id.is_none() {
+                ("not_extracted", Gap::NotExtracted)
+            } else {
+                ("absent", Gap::Absent)
+            };
             return vec![Resolved {
-                evidence: Evidence { status: Some("absent".into()), ..base },
+                evidence: Evidence { status: Some(status.into()), ..base },
                 value: None,
-                gap: Some(Gap::Absent),
+                gap: Some(gap),
                 name_like: name_like(path),
                 kind: self.ctx.field(slug, path).map(|f| f.kind),
             }];
@@ -441,7 +475,7 @@ impl Env<'_> {
         }
         if aliases("company_name").contains(&key) {
             let v = d.doc.vendor.clone()?;
-            let n = normalize_name(&v);
+            let n = normalize_text(&v);
             return Some(mk("vendor", "거래처(문서)", "Vendor (document)", v, Norm::Text(n), true, FieldKind::String));
         }
         None
@@ -481,6 +515,12 @@ fn gap_message(ko: bool, r: &Resolved, gap: Gap) -> String {
     );
     let raw = r.evidence.value.clone().unwrap_or_default();
     match gap {
+        Gap::NotExtracted => tr(
+            ko,
+            &format!("{who}: 아직 추출하지 않은 문서라 판단할 수 없습니다. 추출을 실행한 뒤 다시 검사하세요."),
+            &format!("{who}: the document is not extracted yet, cannot judge. Run the extraction, then check again."),
+        )
+        .to_string(),
         Gap::Absent | Gap::Empty => {
             tr(ko, &format!("{who}: 값이 없어 판단할 수 없습니다."), &format!("{who}: no value, cannot judge."))
                 .to_string()
@@ -557,7 +597,10 @@ fn compare(op: RuleOp, l: &Norm, r: &Norm, tolerance: Option<f64>) -> Option<boo
                     (_, Norm::Digits(b)) => l.digits().map(|a| a == *b)?,
                     (Norm::Bool(a), _) => r.boolean().map(|b| *a == b)?,
                     (_, Norm::Bool(b)) => l.boolean().map(|a| a == *b)?,
-                    (Norm::Text(a), Norm::Text(b)) => a == b,
+                    // Free text: the same key, or the same date in two spellings ("2026.03.02" / "2026-03-02").
+                    (Norm::Text(a), Norm::Text(b)) => {
+                        a == b || matches!((l.date(), r.date()), (Some(x), Some(y)) if x == y)
+                    }
                     _ => return None,
                 }
             };
@@ -731,12 +774,10 @@ impl Env<'_> {
         );
         let le = Some(l.evidence.clone());
         match (l.gap, &l.value) {
-            (Some(Gap::Pending), _) => Outcome {
-                verdict: Verdict::Undetermined,
-                left: le,
-                right: None,
-                message: gap_message(ko, l, Gap::Pending),
-            },
+            // Review pending, or nothing extracted yet: the value may well be there.
+            (Some(gap @ (Gap::Pending | Gap::NotExtracted)), _) => {
+                Outcome { verdict: Verdict::Undetermined, left: le, right: None, message: gap_message(ko, l, gap) }
+            }
             (Some(Gap::Unparsable), _) => Outcome {
                 verdict: Verdict::Pass,
                 left: le,
@@ -985,7 +1026,8 @@ impl Env<'_> {
     }
 }
 
-/// Runs the project's enabled rules (`rule_ids` empty = all), persists the run and returns it.
+/// Runs the project's enabled rules (`rule_ids` empty = all) and returns the run. A run over every enabled
+/// rule is persisted; a partial one (`CheckRun::partial`) is not.
 pub fn run(deps: &ProjectDeps<'_>, project_id: &str, rule_ids: &[String]) -> Result<CheckRun> {
     let started_at = Utc::now();
     let loaded = deps.db.with(|c| {
@@ -1009,6 +1051,9 @@ pub fn run(deps: &ProjectDeps<'_>, project_id: &str, rule_ids: &[String]) -> Res
     };
     let env = Env { docs: &docs, ctx: &ctx, labels: &labels, ko: deps.ko(), vlm: deps.vlm };
     let run_id = documents::new_id();
+    let enabled: Vec<&Rule> = rules.iter().filter(|r| r.enabled).collect();
+    let selected: Vec<&Rule> =
+        enabled.iter().copied().filter(|r| rule_ids.is_empty() || rule_ids.contains(&r.id)).collect();
     let mut run = CheckRun {
         id: run_id.clone(),
         project_id: project_id.to_string(),
@@ -1020,8 +1065,9 @@ pub fn run(deps: &ProjectDeps<'_>, project_id: &str, rule_ids: &[String]) -> Res
         missing: 0,
         results: Vec::new(),
         missing_doc_types: required.iter().filter(|t| env.docs_of(t).is_empty()).cloned().collect(),
+        partial: selected.len() < enabled.len(),
     };
-    for rule in rules.iter().filter(|r| r.enabled && (rule_ids.is_empty() || rule_ids.contains(&r.id))) {
+    for rule in selected {
         if deps.vlm.is_some_and(|v| v.cancelled()) {
             return Err(CoreError::Cancelled);
         }
@@ -1046,7 +1092,11 @@ pub fn run(deps: &ProjectDeps<'_>, project_id: &str, rule_ids: &[String]) -> Res
         });
     }
     run.finished_at = Utc::now();
-    deps.db.with(|c| repo::insert_run(c, &run))?;
+    // The stored run is the project's "최근 검사" (card counters, report, 보완요청서): a run over some of the
+    // rules — or over none, when the ids match nothing — must not take the place of the last full one.
+    if !run.partial {
+        deps.db.with(|c| repo::insert_run(c, &run))?;
+    }
     Ok(run)
 }
 
