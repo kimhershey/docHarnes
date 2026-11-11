@@ -741,7 +741,7 @@ export function AssistantPage() {
         </div>
       </div>
 
-      <div ref={listRef} className="flex-1 overflow-y-auto p-4" data-testid="assistant-messages">
+      <div ref={listRef} className="relative flex-1 overflow-y-auto p-4" data-testid="assistant-messages">
         {sessionLoadFailed && (
           <div className="mx-auto mb-3 flex max-w-3xl flex-wrap items-center gap-2 rounded-lg border border-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert" data-testid="assistant-load-failed">
             <AlertCircle className="size-4 shrink-0" aria-hidden="true" />
