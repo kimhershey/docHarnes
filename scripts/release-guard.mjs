@@ -53,6 +53,8 @@ function parseArgs(argv) {
 }
 
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+// Pause before the 2nd / 3rd attempt of a failed API call: 2 s, then 4 s (DOCULENS_GUARD_RETRY_MS shortens it in tests).
+const RETRY_MS = Number.parseInt(process.env.DOCULENS_GUARD_RETRY_MS ?? "", 10) >= 0 ? Number.parseInt(process.env.DOCULENS_GUARD_RETRY_MS, 10) : 2000;
 
 /** `gh api <path>` → parsed JSON. Retries transient failures; throws after the last attempt. */
 function ghApi(apiPath, attempts = 3) {
@@ -67,7 +69,7 @@ function ghApi(apiPath, attempts = 3) {
         last = `gh api ${apiPath}: the answer is not JSON`;
       }
     } else last = `gh api ${apiPath}: ${(r.stderr || r.stdout || `exit code ${r.status}`).trim().split(/\r?\n/)[0]}`;
-    if (attempt < attempts) sleep(2000 * attempt);
+    if (attempt < attempts) sleep(RETRY_MS * attempt);
   }
   throw new Error(last);
 }

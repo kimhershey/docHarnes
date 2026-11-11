@@ -318,6 +318,7 @@ px 고정이라 125 % 이상에서 글자가 잘렸음). 150 %에서는 1280 px 
 | `cargo run -p doculens-eval -- pipeline --manifest … --engine … --model …` / `scorecard` | 실모델 파이프라인 지표(분류 F1·정확일치·ANLS*·CER·p50/p95)·양자화 스코어카드 | 사용자 PC |
 | `npm run notices` | THIRD-PARTY-NOTICES(모델·엔진 절과 크레이트·패키지 목록) · SBOM(CycloneDX) · 라이선스 전문 재생성 | CI `notices` 잡이 최신성 검사 |
 | `npm run versions:check` | `Cargo.toml`·`Cargo.lock`·`package.json`·`package-lock.json`·`tauri.conf.json`·모의 백엔드·SBOM의 버전 일치(`release/<버전>` 브랜치에서는 그 버전인지도) | CI `notices` 잡과 설치파일 워크플로의 첫 단계 |
+| `node --test "scripts/tests/*.test.mjs"` | 릴리스·CI 스크립트의 회귀 테스트(버전 일치 검사, npm 라이선스 게이트, 릴리스 가드, PE 임포트 읽기) | CI `web` 잡 |
 
 GitHub Actions `CI`(푸시·PR)는 위 항목을 일곱 작업으로 실행합니다: `rust`(코어 + Tauri 셸, Linux), `web`(타입·단위·빌드·E2E),
 `engine-real`(실제 llama-server + 초소형 Gemma 4 픽스처), `license`(라이선스 게이트), `windows-check`(Windows 컴파일 검사),

@@ -73,6 +73,10 @@ jobs:
       - run: npm run typecheck
       - run: npm run nsis:check
       - run: npm test
+      # Node's own test runner, no dependencies: the scripts the release depends on (version check, npm license
+      # gate, release guard with a fake `gh`, PE import reader with synthetic images).
+      - name: Script tests (scripts/tests)
+        run: node --test "scripts/tests/*.test.mjs"
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run e2e
