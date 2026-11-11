@@ -1240,7 +1240,7 @@ dependencies = [
 
 [[package]]
 name = "doculens"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "chrono",
  "doculens-core",
@@ -1263,7 +1263,7 @@ dependencies = [
 
 [[package]]
 name = "doculens-core"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "blake3",
  "calamine",
@@ -1303,7 +1303,7 @@ dependencies = [
 
 [[package]]
 name = "doculens-eval"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "chrono",
  "doculens-core",
@@ -1313,7 +1313,7 @@ dependencies = [
 
 [[package]]
 name = "doculens-kodic"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "lindera",
  "lindera-dictionary",
