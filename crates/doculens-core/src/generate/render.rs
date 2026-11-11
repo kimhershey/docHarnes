@@ -25,7 +25,7 @@ use crate::pipeline::validate::normalize_amount;
 use crate::settings::Language;
 use crate::version::WORKSPACE_DIR_NAME;
 
-use super::templates::TemplateSpec;
+use super::templates::{compact, TemplateSpec};
 use super::validate::format_won;
 use super::{
     fill, office, store, Draft, DraftBlock, DraftCitation, DraftField, DraftTable, GenerateDeps, OutputFormat,
@@ -218,7 +218,11 @@ fn plan(draft: &Draft) -> Plan<'_> {
 
     // 1. Title (letters show the template name and carry the subject in the head).
     items.push(Item::Title(if letter { template_name.clone() } else { title.clone() }));
-    used.insert("title".into());
+    // The `title` field is the subject line of a letter head (below). Elsewhere it is a field of its
+    // own (계약명, 회의명, 변경 제목) and goes into the grid — unless it only repeats the document title.
+    if letter || draft.field("title").is_some_and(|f| compact(&f.value) == compact(&title)) {
+        used.insert("title".into());
+    }
 
     // 2. Letter head.
     if letter {

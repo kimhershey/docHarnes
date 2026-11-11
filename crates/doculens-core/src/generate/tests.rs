@@ -1083,6 +1083,68 @@ fn docx_and_hwpx_written_from_scratch_read_back() {
     assert_eq!(first.compression(), zip::CompressionMethod::Stored);
 }
 
+/// A built-in draft with every scalar field of its template (empty) and the given values.
+fn template_draft(kind: TemplateKind, values: &[(&str, &str)]) -> Draft {
+    let spec = TemplateSpec::builtin(kind);
+    let mut d = Draft { template: TemplateRef::Builtin { template: kind }, ..Default::default() };
+    d.doc_type = Some(kind.as_str().into());
+    d.fields = spec
+        .scalars()
+        .map(|f| {
+            let value = values.iter().find(|(k, _)| *k == f.key).map(|(_, v)| *v).unwrap_or("");
+            field(&f.key, &f.label_ko, FieldKind::parse(&f.kind).unwrap(), f.required, value)
+        })
+        .collect();
+    d.tables = spec
+        .tables()
+        .map(|f| DraftTable {
+            key: f.key.clone(),
+            label: f.label_ko.clone(),
+            columns: f.columns.clone(),
+            rows: Vec::new(),
+        })
+        .collect();
+    d
+}
+
+/// GEN-15: the required `title` field of the templates that are not letters (계약명, 회의명, 변경 제목) is
+/// printed in the preview and in every saved format; it was dropped everywhere before.
+#[test]
+fn title_fields_of_non_letter_templates_are_rendered() {
+    for (kind, label, value) in [
+        (TemplateKind::DevContract, "계약명", "한빛 포털 구축 용역 계약"),
+        (TemplateKind::MeetingMinutes, "회의명", "11월 2주차 주간 회의"),
+        (TemplateKind::ChangeRequest, "변경 제목", "로그인 화면에 SSO 추가"),
+    ] {
+        let mut d = template_draft(kind, &[("title", value)]);
+        d.title = "문서 머리 제목".into();
+        let html = render::to_html(&d);
+        assert!(html.contains("<h1 class=\"title\">문서 머리 제목</h1>"), "{kind:?}");
+        assert!(html.contains(&format!("<th>{label}</th><td>{value}</td>")), "{kind:?}: {html}");
+        let md = render::to_markdown(&d);
+        assert!(md.contains(&format!("| {label} | {value} |")), "{kind:?}: {md}");
+        // The DOCX / HWPX writers take the same plan.
+        let grid = table_texts(&render::doc_model(&d));
+        assert!(
+            grid.iter().flatten().any(|row| row.contains(&label.to_string()) && row.contains(&value.to_string())),
+            "{kind:?}: {grid:?}"
+        );
+        // A title field that only repeats the document title is not printed twice …
+        d.title = format!(" {value} ");
+        let html = render::to_html(&d);
+        assert!(html.contains(&format!("<h1 class=\"title\">{value}</h1>")), "{kind:?}");
+        assert!(!html.contains(&format!("<th>{label}</th>")), "{kind:?}: {html}");
+        // … and an empty required one shows its blank like any other required field.
+        let empty = template_draft(kind, &[]);
+        assert!(render::to_html(&empty).contains(&format!("<th>{label}</th><td><span class=\"blank\">")), "{kind:?}");
+    }
+    // Letters keep their layout: the subject line of the head, no grid row.
+    let mut letter = template_draft(TemplateKind::SupplementRequest, &[("title", "제출 서류 보완 요청")]);
+    letter.title = "제출 서류 보완 요청".into();
+    let html = render::to_html(&letter);
+    assert!(html.contains("<b>제목</b> 제출 서류 보완 요청") && !html.contains("<th>제목</th>"), "{html}");
+}
+
 // ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
