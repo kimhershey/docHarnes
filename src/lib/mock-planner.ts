@@ -58,6 +58,7 @@ import {
   type AggregateRequest,
   type AggregateResult,
   type Answer,
+  type AnswerMode,
   type AnswerRequest,
   type ApplyReport,
   type DraftRequest,
@@ -108,6 +109,7 @@ import {
   type StepPreview,
   type ReviseScope,
   type StepResult,
+  type SummaryGroup,
   type Totals,
   type UiPlanContext,
   type UndoReport,
@@ -1665,6 +1667,20 @@ function ruleDelete(t: Text, ctx: PlanContext): Plan | null {
   return single({ op: "delete", to_trash: true }, 0.85, tr(t.ko, `${label}을(를) 휴지통으로 보냅니다`, `Move ${label} to the recycle bin`), scope);
 }
 
+/** The split a summary sentence asks for (`guard::summary_group`): "프로젝트 별", "유형별", "폴더마다", "by project". */
+function summaryGroupOf(t: Text): SummaryGroup | null {
+  const split = (words: readonly string[]): boolean => words.some((w) => [`${w}별`, `${w}마다`, `by${w}`, `per${w}`, `each${w}`].some((x) => t.compact.includes(compact(x))));
+  if (split(["프로젝트", "사업", "project"])) return "project";
+  if (split(["유형", "종류", "문서유형", "문서종류", "type", "doctype", "documenttype"])) return "doc_type";
+  if (split(["폴더", "folder"])) return "folder";
+  return null;
+}
+
+/** A split the op has no criterion for ("담당자별", "월별", "by owner"): the plan says so and waits (`guard::split_check`). */
+function unknownSplit(t: Text): boolean {
+  return /[가-힣]{2,}\s?(별|마다)(로|\s|$)/.test(t.raw) || /\b(by|per) [a-z]+/i.test(t.raw);
+}
+
 function ruleProcess(t: Text, ctx: PlanContext): Plan | null {
   const classify = has(t, ["분류", "classif", "유형판정", "유형을정"]);
   const ocr = has(t, ["ocr", "문자인식", "텍스트인식", "글자인식", "텍스트추출", "읽어"]);
@@ -1677,7 +1693,9 @@ function ruleProcess(t: Text, ctx: PlanContext): Plan | null {
   const dt = docTypeOf(t, ctx);
   const d = dateOf(t, ctx);
   const scope = scopeOf(t, ctx, dt, d);
-  if (scopeIsEmpty(scope) && !has(t, ALL_WORDS)) {
+  // "프로젝트 별 요약" (0.8.0): one combined summary per group, over every document unless the sentence narrows it.
+  const groupBy = summarize ? summaryGroupOf(t) : null;
+  if (scopeIsEmpty(scope) && !has(t, ALL_WORDS) && groupBy === null) {
     const sel = selectionIds(ctx);
     if (sel.length > 0 && (has(t, ["이", "선택", "this", "selected"]) || summarize || ocr)) scope.doc_ids = sel;
     else if (ctx.current_folder && has(t, ["여기", "here"])) scope.folder = ctx.current_folder;
@@ -1688,7 +1706,7 @@ function ruleProcess(t: Text, ctx: PlanContext): Plan | null {
   if (summarize) {
     const target = has(t, ["하나로", "합쳐", "묶어", "전체요약", "together", "onesummary", "combined"]) ? "set" : "each_doc";
     const length = has(t, ["짧게", "한줄", "간단", "short", "brief"]) ? "short" : has(t, ["길게", "자세", "상세", "long", "detailed"]) ? "long" : null;
-    ops.push({ op: "summarize", target, length });
+    ops.push(groupBy ? { op: "summarize", target, length, group_by: groupBy } : { op: "summarize", target, length });
   }
   if (classify || generic) ops.push({ op: "classify", doc_types: dt ? [dt.slug] : [], force: force ? true : null });
   if (ocr || generic) {
@@ -2528,6 +2546,157 @@ function modelPlan(text: string, ctx: PlanContext, date: DateRange | null): Plan
   return finalize(plan, ko);
 }
 
+// ---------------------------------------------------------------------------
+// 0.8.0 harness contract (planner/fastpath.rs, llm::route_turn, guard::contract_checks)
+// ---------------------------------------------------------------------------
+
+const GREETINGS = ["안녕하세요", "안녕하십니까", "안녕", "하이", "헬로", "반갑습니다", "반가워요", "반가워", "good morning", "good afternoon", "good evening", "hello", "hi there", "hi", "hey"];
+const THANKS = ["감사합니다", "감사해요", "고맙습니다", "고마워요", "고마워", "수고하셨습니다", "수고했어", "thank you", "thanks", "thx"];
+
+/** Lower-cased words of a sentence without punctuation (a `.` or `,` between digits stays). */
+function plainWords(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/(\d)[.,](?=\d)/g, "$1\u0000")
+    .replace(/[^\p{L}\p{N}%\u0000\s]/gu, " ")
+    .replace(/\u0000/g, ".")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** A sentence that is nothing but a greeting / thanks (`fastpath::greeting`): `true` = thanks. */
+function pleasantry(text: string): boolean | null {
+  let rest = ` ${plainWords(text)} `;
+  let found: boolean | null = null;
+  for (const [list, thanks] of [
+    [THANKS, true],
+    [GREETINGS, false],
+  ] as const) {
+    for (const w of list) {
+      if (!rest.includes(` ${w} `)) continue;
+      rest = rest.split(` ${w} `).join("  ");
+      found = found === true ? true : thanks;
+    }
+  }
+  return rest.trim() === "" ? found : null;
+}
+
+const NOT_A_COMMAND = ["?", "？", "뭐야", "뭐지", "뭔가", "무엇", "무슨", "알려", "어떻게", "얼마", "어디", "왜", "하지마", "하지 마", "말고", "말아", "않", "what", "how", "why", "which", "don't", "do not", "never"];
+const SETTING_OPS: readonly OpKind[] = ["set_setting", "set_theme", "set_language", "set_profile", "set_inbox_watch"];
+
+/**
+ * The narrow fast path (0.8.0, both interpretation modes): a sentence that is nothing but a greeting, or
+ * one whole settings sentence ("UI 배율 120%", "다크 모드로 바꿔줘"). Questions, negations and sentences that
+ * say more than the setting go to the model.
+ */
+function fastPlan(text: string, ctx: PlanContext): Plan | null {
+  if (ASK_BACK.test(text)) return null;
+  const ko = ctx.language === "ko" || /[가-힣]/.test(text);
+  const thanks = pleasantry(text);
+  if (thanks !== null) {
+    const reply = thanks
+      ? ko
+        ? "도움이 되어 다행입니다. 더 필요한 것이 있으면 말씀해 주세요."
+        : "Glad that helped. Tell me if you need anything else."
+      : ko
+        ? "안녕하세요! 문서에 대해 물어보시거나, 가져오기·정리·추출·요약 같은 작업을 말씀해 주세요."
+        : "Hello! Ask me about your documents, or tell me what to do — import, organise, extract, summarise.";
+    const plan = single({ op: "answer", question: text.trim(), cite: false, knowledge: false, mode: "chat", reply }, 1, ko ? "인사에 답합니다" : "Replies to the greeting");
+    plan.requires_confirmation = false;
+    return plan;
+  }
+  const lower = text.toLowerCase();
+  if (text.startsWith("/") || isCompound(text) || NOT_A_COMMAND.some((w) => lower.includes(w)) || text.trim().split(/\s+/).length > 6) return null;
+  const t = mkText(text.trim(), ko);
+  let plan = ruleCatalogSetting(t);
+  if (!plan) {
+    const pre = prerouted(text, ctx);
+    if (pre && pre.confidence >= 0.9) plan = pre.plan;
+  }
+  if (!plan || plan.operations.length !== 1 || !SETTING_OPS.includes(plan.operations[0]!.op)) return null;
+  plan.confidence = 1;
+  return plan;
+}
+
+/** The mock has no model to judge "this is small talk" / "this is not about the documents": these phrases stand in for it. */
+const CHAT_HINTS = ["넌누구", "너는누구", "누구세요", "뭘할수있", "무엇을할수있", "뭐할수있", "잘지내", "심심", "whoareyou", "whatcanyoudo", "howareyou"];
+const GENERAL_HINTS = ["수도는", "수도가", "날씨", "몇년에", "누가발명", "무슨뜻", "뜻이뭐", "capitalof", "weather", "whoinvented", "whatdoes", "whatisthemeaning"];
+const WORKSPACE_WORDS = ["문서", "파일", "자료", "계약", "견적", "제안", "회의", "보고", "프로젝트", "요구", "검수", "납품", "설정", "모델", "document", "file", "contract", "estimate", "proposal", "meeting", "report", "project", "setting", "model"];
+
+/** The routing call's `chat` / `general` reply routes (`llm::route_turn`): answered without a plan call. */
+function replyRoute(text: string, ctx: PlanContext): AnswerMode | null {
+  if (ASK_BACK.test(text) || carriedText(text)) return null;
+  const t = mkText(text, true);
+  if (has(t, CHAT_HINTS)) return "chat";
+  if (!has(t, GENERAL_HINTS) || has(t, WORKSPACE_WORDS) || has(t, SELECTION_WORDS)) return null;
+  if (ctx.projects.some((p) => p.name && t.compact.includes(compact(p.name)))) return null;
+  return "general";
+}
+
+function replyPlan(text: string, mode: AnswerMode, ko: boolean): Plan {
+  const op: Op = mode === "chat" ? { op: "answer", question: text.trim(), cite: false, knowledge: false, mode } : { op: "answer", question: text.trim(), cite: true, mode };
+  const summary = mode === "chat" ? (ko ? "대화에 답합니다" : "Replies to the conversation") : ko ? "문서와 무관한 질문에 답합니다(문서에 근거가 있으면 근거로)" : "Answers a question that is not about the documents (from evidence when there is some)";
+  const plan = single(op, 0.9, summary);
+  plan.requires_confirmation = false;
+  return plan;
+}
+
+/** Things this app does not do: a model plan names them in `unmet` instead of dropping them silently. */
+const UNSUPPORTED: [string[], string, string][] = [
+  [["메일", "email", "e-mail"], "메일 보내기(이 앱은 메일을 보내지 않습니다)", "sending e-mail (this app sends none)"],
+  [["팩스", "fax"], "팩스 보내기", "sending a fax"],
+  [["인쇄", "프린트", "print"], "인쇄", "printing"],
+];
+
+/**
+ * Stand-in for a model reading of a vague wish ("글자를 더 크게 해줘"): a settings change whose value the
+ * sentence does not carry — the contract check below makes it one the user confirms.
+ */
+function vagueScalePlan(t: Text): Plan | null {
+  const bigger = has(t, ["크게", "키워", "bigger", "larger"]);
+  const smaller = has(t, ["작게", "smaller"]);
+  if (!has(t, ["글자", "글씨", "화면", "text", "font", "screen"]) || bigger === smaller) return null;
+  const current = loadSettings().ui.scale_percent ?? 100;
+  const next = Math.min(200, Math.max(100, current + (bigger ? 25 : -25)));
+  return single({ op: "set_setting", key: "ui.scale_percent", value: next }, 0.8, tr(t.ko, `UI 배율을 ${next}%로 바꿉니다`, `Set the UI scale to ${next}%`));
+}
+
+/**
+ * `guard::contract_checks`: a model plan is compared with the sentence it was made from. A part the plan
+ * leaves out, a split it cannot make and a settings change the sentence does not name each make the plan
+ * one the user confirms, with a note for the card.
+ */
+function contractChecks(text: string, plan: Plan, ko: boolean): PlanIssue[] {
+  const notes: PlanIssue[] = [];
+  if (isClarification(plan)) return notes;
+  const said = userWords(text);
+  const t = mkText(said, ko);
+  if (!plan.unmet) {
+    const missing = UNSUPPORTED.find(([words]) => has(t, words));
+    if (missing) plan.unmet = ko ? missing[1] : missing[2];
+  }
+  if (plan.unmet) {
+    plan.requires_confirmation = true;
+    notes.push(issue("unmet", "unmet_request", ko ? `요청 중 반영하지 못한 부분: ${plan.unmet}` : `not covered by this plan: ${plan.unmet}`, false));
+  }
+  const splits = plan.operations.some((op) => (op.op === "summarize" && (op.group_by ?? "none") === "none") || (op.op === "aggregate" && (op.group_by ?? "none") === "none"));
+  if (splits && summaryGroupOf(t) === null && unknownSplit(t)) {
+    plan.requires_confirmation = true;
+    if (!plan.unmet) plan.unmet = ko ? "묶음별로 나누는 부분('~별')" : "the split into groups ('by …')";
+    notes.push(issue("operations", "grouping_dropped", ko ? "문장은 나눠서 처리하라고 하는데 이 기준으로는 나눌 수 없어 한 덩어리로 처리합니다" : "the sentence asks for one result per group, which this plan cannot do; it makes a single one", false));
+  }
+  plan.operations.forEach((op, i) => {
+    if (op.op !== "set_setting" || typeof op.value !== "number") return;
+    // A number the sentence does not carry (a ratio said as a percentage counts).
+    const numbers = (said.match(/\d+(?:[.,]\d+)?/g) ?? []).map((n) => Number(n.replace(",", ".")));
+    if (numbers.some((n) => n === op.value || n / 100 === op.value)) return;
+    plan.requires_confirmation = true;
+    const what = `${op.key} → ${String(op.value)}`;
+    notes.push(issue(`operations[${i}]`, "ungrounded_change", ko ? `문장에서 이 변경의 근거를 찾지 못했습니다(${what}). 맞으면 승인해 주세요` : `the sentence does not name this change (${what}); approve it if it is what you meant`, false));
+  });
+  return notes;
+}
+
 export function plannerModelEnabled(): boolean {
   return flag(PLANNER_MODEL_KEY, "on");
 }
@@ -2566,6 +2735,9 @@ export function planText(text: string, ctx: PlanContext, opts: { model?: boolean
     result.issues = issues;
     return true;
   };
+  // 0.8.0: greetings and whole-sentence settings never reach the model (both modes).
+  const quick = fastPlan(t, ctx);
+  if (quick && accept(quick, "fast")) return result;
   // Model first (the default since 2026-11-09): slash commands → pre-router, everything else → the
   // (simulated) model. The mock has no model: the phrase parser's reading stands in for the model's,
   // labelled "model"; sentences it cannot read get the model guess below.
@@ -2589,8 +2761,19 @@ export function planText(text: string, ctx: PlanContext, opts: { model?: boolean
     const askBack = t.match(ASK_BACK);
     const own = askBack ? null : textOnlyAnswer(t, ko);
     if (own && accept(own, "model")) return result;
-    const understood = askBack ? (rulesPlan(`${askBack[1]!.trim()} ${askBack[2]!.trim()}`.trim(), ctx) ?? rulesPlan(askBack[2]!.trim(), ctx)) : rulesPlan(t, ctx);
+    // The routing call answers small talk and questions that are not about the documents without a plan call.
+    const route = replyRoute(t, ctx);
+    if (route && accept(replyPlan(t, route, ko), "model")) {
+      result.route = route;
+      result.completion_tokens = 12;
+      return result;
+    }
+    const said = mkText(userWords(t), ko);
+    const understood =
+      (askBack ? (rulesPlan(`${askBack[1]!.trim()} ${askBack[2]!.trim()}`.trim(), ctx) ?? rulesPlan(askBack[2]!.trim(), ctx)) : rulesPlan(t, ctx)) ?? vagueScalePlan(said);
     if (understood && accept(understood, "model")) {
+      // What the plan leaves out or adds on its own makes it one the user confirms (`guard::contract_checks`).
+      result.issues.push(...contractChecks(t, result.plan, ko));
       // `llm::guard_scope`: a plan that changes documents but names none asks which ones — unless the user
       // said "전부" (in the sentence, or in the reply to that very question).
       if (!isClarification(result.plan) && scopeRequired(result.plan) && !mentionsAll(t)) {
@@ -3715,12 +3898,35 @@ function organizePreview(req: OrganizeRequest, ko: boolean, confirm: boolean): [
   }
 }
 
+const SCOPE_OPS: readonly OpKind[] = ["classify", "set_doc_type", "ocr", "extract", "validate", "search", "summarize", "aggregate", "explain", "organize", "rename", "move", "tag", "delete", "export", "draft_document", "classify_projects", "rotate", "rerender", "split", "merge", "set_title", "edit_text", "set_role", "set_version"];
+
+/** `validate::uses_scope`: whether any op works on the documents in scope — settings, navigation and small talk do not, and their cards show no document count. */
+export function usesScope(plan: Plan): boolean {
+  return plan.operations.some((op) => {
+    switch (op.op) {
+      case "answer":
+        return op.knowledge !== false && op.mode !== "chat";
+      case "review":
+        return op.action !== "show";
+      case "manage_reference":
+        return op.action === "add" || op.action === "remove";
+      case "add_to_project":
+      case "remove_from_project":
+        return (op.doc_ids ?? []).length === 0;
+      case "create_project":
+        return !scopeIsEmpty(plan.scope);
+      default:
+        return SCOPE_OPS.includes(op.op);
+    }
+  });
+}
+
 /** Previews the side effects of a plan for the confirmation card (`exec::preview`). */
 export function planPreview(plan: Plan, ctx: PlanContext): PlanPreview {
   const ko = ctx.language === "ko";
   const settings = loadSettings();
   const docs = resolveScope(plan.scope);
-  const out: PlanPreview = { document_count: docs.length, document_ids: docs.map((d) => d.id), steps: [], requires_confirmation: plan.requires_confirmation };
+  const out: PlanPreview = { document_count: docs.length, document_ids: docs.map((d) => d.id), steps: [], requires_confirmation: plan.requires_confirmation, uses_scope: usesScope(plan) };
   plan.operations.forEach((op, index) => {
     let summary = "";
     let payload: unknown = null;
@@ -4115,10 +4321,16 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
       return { summary: ko ? `'${op.query}' 검색 결과 ${resp.hits.length}건` : `${resp.hits.length} hits for '${op.query}'`, payload: { ...resp, total: resp.total_candidates } };
     }
     case "answer": {
+      // A ready reply (greeting) needs no model and no documents.
+      if (op.reply) return { summary: op.reply, payload: { reply: op.reply, mode: op.mode ?? "chat" } };
       requireModel();
+      if (op.mode === "chat" || op.knowledge === false) {
+        const ans = (await mockKnowledge("knowledge_answer", { req: { question: op.question, kind: "answer", retrieve: false, save: false, ...(op.mode === "chat" ? { style: "chat" } : {}) }, requestId: `plan-${newId()}` })) as Answer;
+        return { summary: Array.from(ans.text).length > 200 ? `${Array.from(ans.text).slice(0, 200).join("")}…` : ans.text, payload: ans };
+      }
       const docs = scopeIsEmpty(plan.scope) ? [] : workingSet(plan, imported);
       const ans = (await mockKnowledge("knowledge_answer", {
-        req: { question: op.question, kind: "answer", scope: { documents: idsOf(docs), latest_only: settings.knowledge.latest_only }, allow_general: settings.knowledge.allow_general_knowledge, top_k: settings.knowledge.top_k, context_tokens: settings.knowledge.context_tokens, min_similarity: settings.knowledge.min_vector_similarity },
+        req: { question: op.question, kind: "answer", ...(op.mode === "general" ? { style: "general" } : {}), scope: { documents: idsOf(docs), latest_only: settings.knowledge.latest_only }, allow_general: op.mode === "general" || settings.knowledge.allow_general_knowledge, top_k: settings.knowledge.top_k, context_tokens: settings.knowledge.context_tokens, min_similarity: settings.knowledge.min_vector_similarity },
         requestId: `plan-${newId()}`,
       })) as Answer;
       const text = Array.from(ans.text);
@@ -4129,14 +4341,65 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
       const docs = workingSet(plan, imported);
       if (docs.length === 0) throw err("no_documents", "no_documents");
       const mode = op.length === "short" ? "one_line" : op.length === "long" ? "one_page" : "key_points";
-      const summaries: unknown[] = [];
+      const summaries: { document_id: string; name: string; answer: Answer }[] = [];
+      const skipped: { document_id: string; name: string }[] = [];
       for (const [i, d] of docs.entries()) {
         if (ctl) await ctl.checkpoint();
         progress("summarize", i, docs.length, d.original_name);
-        const ans = await mockKnowledge("knowledge_answer", { req: { question: "", kind: "summary", document_id: d.id, summary_mode: mode, context_tokens: settings.knowledge.context_tokens }, requestId: `plan-${newId()}` });
-        summaries.push({ document_id: d.id, name: d.original_name, answer: ans });
+        try {
+          const ans = (await mockKnowledge("knowledge_answer", { req: { question: "", kind: "summary", document_id: d.id, summary_mode: mode, context_tokens: settings.knowledge.context_tokens }, requestId: `plan-${newId()}` })) as Answer;
+          summaries.push({ document_id: d.id, name: d.original_name, answer: ans });
+        } catch (e) {
+          // A document without text is left out and named; the others keep their summaries (0.8.0).
+          if (messageOf(e) !== "no_text") throw e;
+          skipped.push({ document_id: d.id, name: d.original_name });
+        }
       }
-      return { summary: ko ? `${countLabel(docs.length, ko)} 요약` : `Summarised ${countLabel(docs.length, ko)}`, payload: { summaries } };
+      if (summaries.length === 0) throw err("not_found", "no_text");
+      const made = countLabel(summaries.length, ko);
+      const tail = skipped.length > 0 ? (ko ? ` · 본문이 없는 문서 ${skipped.length}건은 건너뜀` : ` · ${skipped.length} document(s) without text skipped`) : "";
+      const payload: Record<string, unknown> = { summaries };
+      if (skipped.length > 0) payload.skipped = skipped;
+      const groupBy = op.group_by ?? "none";
+      if (groupBy === "none" && op.target !== "set") return { summary: (ko ? `${made} 요약` : `Summarised ${made}`) + tail, payload };
+      // One combined summary per group (`exec::summarize`): the first lines of the group's document summaries.
+      const byDoc = new Map(docs.map((d) => [d.id, d]));
+      const projects = mp.projectSummaries();
+      const none = ko ? "프로젝트 없음" : "No project";
+      const keyOf = (id: string): [string, string] => {
+        const d = byDoc.get(id);
+        if (groupBy === "project") {
+          const p = projects.find((x) => mp.projectDocIds(x.id).includes(id));
+          return p ? [p.id, p.name] : ["", none];
+        }
+        if (groupBy === "doc_type") {
+          const slug = d?.doc_type ?? "";
+          const label = ctx.doc_types.find((x) => x.slug === slug);
+          return [slug, label ? (ko ? label.label_ko : label.label_en) : ko ? "유형 미지정" : "No type"];
+        }
+        if (groupBy === "folder") {
+          const dir = d ? relDir(d.rel_path) : "";
+          return [dir, dir || (ko ? "(최상위)" : "(root)")];
+        }
+        return ["", ko ? "전체" : "All documents"];
+      };
+      const groups: { key: string; label: string; document_ids: string[]; answer: Answer }[] = [];
+      for (const s of summaries) {
+        const [key, label] = keyOf(s.document_id);
+        const g = groups.find((x) => x.key === key);
+        const line = s.answer.text.split("\n")[0] ?? "";
+        if (g) {
+          g.document_ids.push(s.document_id);
+          g.answer = { ...g.answer, text: `${g.answer.text}\n${line}`, sources: [...g.answer.sources, ...s.answer.sources].slice(0, 12) };
+        } else groups.push({ key, label, document_ids: [s.document_id], answer: { ...s.answer, id: null, question: label, text: line, document_id: null } });
+      }
+      // Documents outside every project come last.
+      if (groupBy === "project") groups.sort((a, b) => Number(a.key === "") - Number(b.key === ""));
+      payload.groups = groups;
+      payload.group_by = groupBy;
+      const by = { project: ko ? "프로젝트별" : "by project", doc_type: ko ? "유형별" : "by type", folder: ko ? "폴더별" : "by folder", none: "" }[groupBy];
+      const summary = groupBy === "none" ? (ko ? `${made}을(를) 하나로 요약` : `One summary of ${made}`) : ko ? `${made} 요약 · ${by} 묶음 ${groups.length}개` : `Summarised ${made} · ${groups.length} group(s) ${by}`;
+      return { summary: summary + tail, payload };
     }
     case "aggregate": {
       const res = aggregate({ func: op.fn, field: op.field ?? null, group_by: op.group_by ?? "none", include_unreviewed: op.include_unreviewed ?? false, scope: plan.scope });
