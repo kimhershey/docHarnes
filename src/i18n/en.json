@@ -2240,6 +2240,12 @@
     "doc_approved": "{{count}} field(s) approved.",
     "reextract": "Re-extract (fine print)",
     "reextract_precise": "Re-extract (precision mode)",
+    "reextract_what": {
+      "fine_print": "Extracts '{{name}}' again with the fine-print profile (higher resolution).",
+      "precise": "Extracts '{{name}}' again in precision mode (two passes compared)."
+    },
+    "reextract_start_over": "Start over with classification and OCR",
+    "reextract_start_over_hint": "Reads the page text again. Page text you corrected by hand is replaced by the new OCR result too.",
     "open_doc": "Open document",
     "value": "Value",
     "evidence": "Evidence",

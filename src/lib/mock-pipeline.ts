@@ -1232,14 +1232,18 @@ export async function runProcess(req: ProcessRequest, ctl: JobControl | null, pr
           let ocrPages = 0;
           for (const [pi, p] of doc.pages.entries()) {
             if (wantedPages && !wantedPages.has(p.page_no)) continue;
-            const ownText = !!p.text && p.text_source !== "ocr";
-            const doOcr = p.text_source === "ocr" ? !!req.force : ownText ? settings.processing.ocr_digital_pdf : true;
+            // Like `pipeline::run`: OCR output and manual corrections are only replaced by a forced re-run.
+            const isOcr = p.text_source === "ocr" || p.text_source === "manual";
+            const ownText = !!p.text && !isOcr;
+            const doOcr = isOcr ? !!req.force : ownText ? settings.processing.ocr_digital_pdf && (!!req.force || !p.ocr_at) : true;
             if (!doOcr || p.width_px === 0) continue;
             progress({ stage: "ocr", current: name, done: i, total: docs.length, page: [pi + 1, doc.pages.length] });
             await pace(ctl, 120);
             p.text = ocrText(doc, type, p.page_no);
             p.text_source = "ocr";
             p.ocr_at = now();
+            // `repo::set_page_ocr` drops the stored word boxes: they belong to the text that was replaced.
+            p.layout = null;
             ocrPages += 1;
           }
           if (ocrPages > 0) doc.ocr_at = now();

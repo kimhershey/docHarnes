@@ -275,4 +275,72 @@ test.describe("P4 pipeline", () => {
     await expect(page.getByTestId("toaster")).not.toContainText("merge_name_invalid");
     await expect(page.getByTestId("merge-dialog")).toBeVisible();
   });
+
+  test("review queue: re-extraction asks first, and page text corrected by hand survives unless the reviewer starts over (PIP-2)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await processEstimate(page);
+    const id = await docId(page, "견적서-1p.jpg");
+    const layer = page.getByTestId("viewer-text-layer");
+    const openViewer = async () => {
+      await page.getByTestId("nav-library").click();
+      await page.getByTestId(`doc-open-${id}`).click();
+      await expect(layer).toBeVisible();
+    };
+    /** Finished processing jobs on 작업 현황 (the first one is `processEstimate`). */
+    const processed = async (count: number) => {
+      await page.getByTestId("nav-jobs").click();
+      await page.getByTestId("jobs-tab-finished").click();
+      await expect(page.locator('[data-job-kind="pipeline"][data-job-state="done"]')).toHaveCount(count, { timeout: 20_000 });
+    };
+
+    // A word of the recognised page text is corrected by hand.
+    await openViewer();
+    await layer.locator("[data-word-index]").first().click();
+    await page.getByTestId("page-viewer").focus();
+    await page.keyboard.press("Enter");
+    await page.getByTestId("viewer-text-input").fill("손교정");
+    await page.keyboard.press("Enter");
+    await expect(layer).toContainText("손교정");
+    await expect(page.getByTestId("viewer-text-source")).toHaveText(ko.viewer.text_edit.source.manual);
+
+    // 검토함 > "잔글씨로 재추출" asks like the library's 처리 menu; cancelling starts nothing.
+    await page.getByTestId("nav-review").click();
+    await expect(page.locator('[data-testid^="review-item-"]').first()).toBeVisible();
+    const dialog = page.getByTestId("review-reextract-dialog");
+    await page.getByTestId("review-reextract-fine-print").click();
+    await expect(dialog).toContainText(ko.pipeline.process.confirm_title);
+    await expect(dialog).toContainText(tpl(ko.pipeline.process.confirm_body, { count: 1 }));
+    await expect(dialog.getByTestId("review-reextract-what")).toContainText("견적서-1p.jpg");
+    await expect(dialog.getByTestId("review-reextract-start-over")).not.toBeChecked();
+    await dialog.getByTestId("review-reextract-cancel").click();
+    await expect(dialog).toBeHidden();
+    // The precise mode has no "start over" choice.
+    await page.getByTestId("review-reextract-precise").click();
+    await expect(dialog).toHaveAttribute("data-mode", "precise");
+    await expect(dialog.getByTestId("review-reextract-start-over")).toHaveCount(0);
+    await dialog.getByTestId("review-reextract-cancel").click();
+    await expect(dialog).toBeHidden();
+    await processed(1);
+
+    // Confirmed without "start over": a new extraction, but no forced OCR — the corrected text is still there.
+    await page.getByTestId("nav-review").click();
+    await page.getByTestId("review-reextract-fine-print").click();
+    await dialog.getByTestId("review-reextract-ok").click();
+    await expect(page.getByTestId("toaster")).toContainText(tpl(ko.pipeline.process.started, { count: 1 }));
+    await processed(2);
+    await openViewer();
+    await expect(layer).toContainText("손교정");
+    await expect(page.getByTestId("viewer-text-source")).toHaveText(ko.viewer.text_edit.source.manual);
+
+    // Only the explicit choice reads the pages again and replaces the correction.
+    await page.getByTestId("nav-review").click();
+    await page.getByTestId("review-reextract-fine-print").click();
+    await dialog.getByTestId("review-reextract-start-over").check();
+    await dialog.getByTestId("review-reextract-ok").click();
+    await processed(3);
+    await openViewer();
+    await expect(layer).not.toContainText("손교정");
+    await expect(page.getByTestId("viewer-text-source")).toHaveText(ko.viewer.text_edit.source.ocr);
+  });
 });

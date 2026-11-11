@@ -318,14 +318,24 @@ export function SchemasPage() {
         form_document_id: null,
       }),
     );
-  const testRun = async () => {
+  // 테스트 (PIP-2): an extraction of the picked document with this form. It is not a forced run — a forced run
+  // classifies and reads the pages again, replacing page text corrected by hand — and when the document already
+  // has results it asks first, like the library's 처리 menu: the new run replaces its fields and their review.
+  const testRun = () => {
     if (!draft?.id || !testDoc) return;
-    try {
-      await api.pipelineProcess({ document_ids: [testDoc], level: "extract", schema: { kind: "id", id: draft.id }, force: true });
-      toast(t("schemas.editor.test_started"), "info");
-    } catch (e) {
-      toast(describeError(e, t), "danger");
-    }
+    const schemaId = draft.id;
+    const docId = testDoc;
+    const start = async () => {
+      try {
+        await api.pipelineProcess({ document_ids: [docId], level: "extract", schema: { kind: "id", id: schemaId } });
+        toast(t("schemas.editor.test_started"), "info");
+      } catch (e) {
+        toast(describeError(e, t), "danger");
+      }
+    };
+    const doc = docs?.find((d) => d.id === docId);
+    if (doc && doc.extracted_at === null && doc.review_status !== "done") return void start();
+    setConfirm({ title: t("pipeline.process.confirm_title"), description: t("pipeline.process.confirm_body", { count: 1 }), confirmLabel: t("pipeline.process.confirm_ok"), danger: true, onConfirm: start });
   };
   const reclassify = async () => {
     const ids = (otherDocs ?? []).map((d) => d.id);
@@ -536,7 +546,7 @@ export function SchemasPage() {
                           ))}
                         </SelectContent>
                       </Select>
-                      <Button size="sm" variant="secondary" onClick={() => void testRun()} disabled={!testDoc} data-testid="schema-test-run">
+                      <Button size="sm" variant="secondary" onClick={testRun} disabled={!testDoc} data-testid="schema-test-run">
                         {t("schemas.editor.test")}
                       </Button>
                     </CardContent>

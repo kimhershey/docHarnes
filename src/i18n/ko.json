@@ -2240,6 +2240,12 @@
     "doc_approved": "{{count}}개 필드를 승인했습니다.",
     "reextract": "잔글씨로 재추출",
     "reextract_precise": "정밀 모드로 재추출",
+    "reextract_what": {
+      "fine_print": "'{{name}}' 문서를 잔글씨 프로파일(고해상도)로 다시 추출합니다.",
+      "precise": "'{{name}}' 문서를 정밀 모드(두 번 읽어 대조)로 다시 추출합니다."
+    },
+    "reextract_start_over": "분류·OCR부터 다시 실행",
+    "reextract_start_over_hint": "페이지 텍스트를 새로 읽습니다. 직접 고친 페이지 텍스트도 새 OCR 결과로 바뀝니다.",
     "open_doc": "문서 열기",
     "value": "값",
     "evidence": "근거",
