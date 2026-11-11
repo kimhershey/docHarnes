@@ -472,6 +472,17 @@ flowchart LR
 
 > **0.7.0(2026-11-10, 계획 `docs/plan/v0.7.0.md`)**: 문서 작성 화면의 "재생성 지시"는 **초안 어시스턴트**(범위: 절 다시 쓰기 / 새 절 / 전체; `DraftRequest.revise`)가 되었고 같은 일을 하는 op `revise_draft`(열린 초안 = `PlanContext.draft_id`)가 플랜 스키마에 들어갔다(op 63). 어시스턴트 대화는 세션 단위로 워크스페이스 DB(`chat_sessions`·`chat_messages`, 0012)에 남는다. 프로젝트 상세의 "문서"·"참고 자료" 탭은 구분 열을 가진 "문서" 탭 하나로 합쳐졌다(저장 구조는 0.5.0 그대로).
 
+> **0.8.0(2026-11-11, 사용자 PC 보고 "설정을 정상적으로 조작하지 못함"·"근거 확인이 필요 없는 질문을 판별하지 못함", 계획 `docs/plan/v0.8.0.md`, 검토 `docs/audit/v0.7.0-harness-review.md`)**: 위 그림의 "Pre-router → 플래너 → 검증기" 사이에 네 가지가 더해졌다.
+> ① **순서**: llama.cpp는 문법의 키 순서를 스키마 `properties`의 순서로 고정하는데, 요청 본문이 키를 이름순으로 내보내고 있었다(플랜은 `confidence`부터, `set_setting`은 `key`부터 써야 했다).
+> 요청 본문을 각 스키마의 `required` 순서로 쓴다(`jsonorder`). 플랜은 `summary → unmet → intent → scope → operations → requires_confirmation → confidence`, op는 `op`부터.
+> ② **글로 답하는 길**: 1단계 분류가 계열 8개 말고 `chat`(인사·잡담)·`general`(문서와 무관한 질문)을 고를 수 있고, 이때는 플랜 호출 없이 `answer{mode}` 하나가 된다(`chat`은 검색 없이, `general`은 근거가 있으면 근거로·없으면 일반 지식으로 "문서 근거 없이 답함" 표시).
+> ③ **빠른 경로**(`planner::fastpath`): 문장 전체가 "설정 이름 하나 + 그 타입의 값 하나"이거나 정해진 인사말이면 해석 방식과 관계없이 모델보다 먼저 읽는다. 남는 낱말이 있거나 물음이면 모델에 맡긴다. 범위 밖 값은 실행하지 않고 범위를 알려 준다.
+> ④ **문장과의 대조**(`planner::guard`): 모델이 적은 `confidence`는 자동 실행의 근거가 아니다. 확인 없이 실행되는 설정 변경은 설정 이름과 값이 문장에 있어야 하고, 없으면 확인 카드가 된다(`ungrounded_change`).
+> 요청 중 op로 표현하지 못한 부분은 플랜의 `unmet`에 적히고 확인을 받는다. "~별·마다"는 op가 그 기준을 가지면(요약: 프로젝트·유형·폴더, 집계: 월·거래처·유형·프로젝트) 채워 넣고, 가지지 않으면 확인을 받는다. 할 일이 없는 플랜(`noop`)은 대화 답변이 된다.
+> `set_setting`의 문법은 값의 타입별 대안으로 나뉘어 키와 값의 타입이 어긋날 수 없고, 프롬프트에는 `키 = 한국어 라벨 [범위]` 표가 들어간다. 설정 범위는 코어 카탈로그 한 곳에서 화면용 카탈로그(`src/lib/settingsCatalog.json`)까지 만든다.
+> `summarize`는 `group_by`(프로젝트·유형·폴더)를 가지며 묶음마다 문서별 요약을 합친 요약 하나를 만든다(`target = set`도 같은 방식으로 실제 구현).
+> 측정: 골든셋 163건(종류: 대화·질문·명령·설정), 실제 llama-server의 문법 순서 회귀 테스트, 실제 모델 경로의 정확도와 "확인 없이 실행됐을 잘못된 변경" 건수(`eval/README.md`).
+
 **플랜 JSON 스키마(요지)**: `intent ∈ {import, set_inbox_watch, render, rotate, split, merge, classify, set_doc_type, ocr, define_schema, register_form, extract, validate, review, reindex, search, answer, explain, aggregate, summarize, compare, draft_document, add_to_kb, manage_collection, define_term, create_project, add_to_project, define_rule, check_consistency, request_supplement, organize, rename, move, tag, delete, export, set_model, set_tier, set_profile, set_backend, import_model, download_model, benchmark, set_theme, set_language, set_setting, set_retention, open, open_workspace, job, engine, undo, redo, help, clarify, noop}`, `scope{folder, doc_ids, filter{doc_type, date_from, date_to, keyword, vendor, status, tags[], min_confidence, review_status}}`, `operations[]`(각 op는 const 타입 + 파라미터, 부록 D), `requires_confirmation`, `confidence`, `clarification_question`. 부록 D의 파라미터 스키마가 검증기의 단일 진실 원천이며, 스키마에 없는 파라미터는 거부된다. 날짜 기준 필드는 `doc_date`(문서 날짜) 기본, 없으면 가져온 날짜 — 결과 카드에 "기준: 문서 날짜" 표기.
 
 **예시 명령 → 플랜**
