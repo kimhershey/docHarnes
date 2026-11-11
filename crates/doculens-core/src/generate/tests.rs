@@ -182,6 +182,17 @@ impl SeqChat {
             .collect::<Vec<_>>()
             .join("\n")
     }
+    /// The user message of a call (without the system message).
+    fn user_prompt(&self, call: usize) -> String {
+        let reqs = self.requests.lock().unwrap();
+        reqs[call]
+            .messages
+            .iter()
+            .filter(|m| m["role"] == "user")
+            .filter_map(|m| m["content"].as_str().map(str::to_string))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }
 
 impl ChatBackend for SeqChat {
@@ -659,6 +670,121 @@ fn knowledge_sources_are_numbered_and_excludable() {
     assert!(out2.draft.notes.iter().any(|n| n.contains("근거를 찾지 못했습니다")), "{:?}", out2.draft.notes);
 }
 
+/// CON-3 (core side): a draft that carries `project_id` looks for evidence inside that project — its work
+/// documents, its reference group and the 공통 참고 자료 — in every lookup: the explicit query, the content
+/// query, the per-section queries of a split draft and a revision. Another project's documents stay out.
+#[test]
+fn project_drafts_search_for_evidence_inside_the_project() {
+    use crate::knowledge::{repo as krepo, CollectionInput};
+    use crate::projects::{repo as projects, ProjectInput};
+    let w = world();
+    // Two projects whose 과업지시서 both speak of the 검수 기준, and a common regulation.
+    w.add_doc(
+        "a-sow",
+        "한빛_과업지시서.pdf",
+        DocumentRole::Work,
+        &["한빛 포털 과업지시서\n\n검수 기준: 통합 테스트 통과율 95% 이상이면 검수를 완료한다. 추진 일정은 12월까지다."],
+    );
+    w.add_doc(
+        "b-sow",
+        "새빛_과업지시서.pdf",
+        DocumentRole::Work,
+        &["새빛 쇼핑몰 과업지시서\n\n검수 기준: 통합 테스트 통과율 80% 이상이면 검수를 완료한다. 추진 일정은 3월까지다."],
+    );
+    w.add_doc(
+        "rule",
+        "검수규정.pdf",
+        DocumentRole::Knowledge,
+        &["검수 규정\n\n제5조(검수 기준) 검수는 과업지시서의 검수 기준에 따른다."],
+    );
+    let analyzer = Analyzer::simple();
+    for id in ["a-sow", "b-sow", "rule"] {
+        let doc = w.db.with(|c| docs::get_document(c, id)).unwrap().unwrap();
+        index_document(&IndexDeps { db: &w.db, analyzer: &analyzer, options: Default::default() }, &doc, true).unwrap();
+    }
+    let project = |name: &str, doc: &str| {
+        let p = w.db.with(|c| projects::save_project(c, &ProjectInput { name: name.into(), ..Default::default() }));
+        let p = p.unwrap();
+        w.db.with(|c| projects::add_documents(c, &p.id, &[doc.to_string()])).unwrap();
+        p.id
+    };
+    let a = project("한빛 포털", "a-sow");
+    let _b = project("새빛 쇼핑몰", "b-sow");
+    let common =
+        w.db.with(|c| {
+            krepo::save_collection(c, &CollectionInput { name: "사규".into(), active: true, ..Default::default() })
+        })
+        .unwrap();
+    w.db.with(|c| krepo::add_docs_to_collection(c, &common.id, &["rule".into()])).unwrap();
+
+    let reply = json!({"title": "검수 보고", "fields": [], "tables": [], "body": [], "notes": []}).to_string();
+    let section = json!({ "blocks": [{"kind": "paragraph", "text": "본문", "items": [], "source_index": null}] });
+    // Runs a draft and returns every prompt of its calls plus the documents offered as references.
+    let run = |req: &DraftRequest| {
+        let chat = SeqChat::new(vec![reply.clone(), section.to_string()]);
+        let vlm = Vlm::new(&chat, "scripted".into(), Profile::Balanced, None);
+        let mut deps = w.deps(Some(&vlm), None);
+        deps.knowledge = Some(SearchDeps { db: &w.db, analyzer: &analyzer, embedder: None });
+        let out = draft::draft(&deps, req).unwrap();
+        let calls = chat.requests.lock().unwrap().len();
+        let prompts: Vec<String> = (0..calls).map(|c| chat.user_prompt(c)).collect();
+        let mut refs: Vec<String> = out.draft.references.iter().filter_map(|r| r.doc_id.clone()).collect();
+        refs.sort();
+        refs.dedup();
+        (prompts.join("\n=====\n"), refs, out)
+    };
+    let base = DraftRequest {
+        form_ref: Some("progress_report".into()),
+        content: "검수 기준에 따른 통합 테스트 진척 보고".into(),
+        sources: vec![SourceRef::Knowledge { query: "검수 기준 통과율".into() }],
+        use_knowledge: true,
+        ..Default::default()
+    };
+    // Without a project the whole library is searched: both projects' documents come back.
+    let (prompts, everything, _) = run(&base);
+    assert_eq!(everything, ["a-sow", "b-sow", "rule"], "{prompts}");
+    // Inside project A: its own 과업지시서 and the common regulation, never project B's.
+    let in_a = DraftRequest { project_id: Some(a.clone()), ..base.clone() };
+    let (prompts, refs, out) = run(&in_a);
+    assert_eq!(refs, ["a-sow", "rule"], "{prompts}");
+    assert!(prompts.contains("통과율 95%") && !prompts.contains("새빛") && !prompts.contains("80%"), "{prompts}");
+    // The stored request keeps the project, so a regeneration stays inside it.
+    assert_eq!(out.draft.request.as_ref().unwrap().project_id.as_deref(), Some(a.as_str()));
+    // Section by section (five calls, each section looks up its own heading): still no document of B.
+    let (prompts, refs, out) = run(&DraftRequest { max_tokens: Some(8_000), ..in_a.clone() });
+    assert_eq!(out.sections, 5);
+    assert!(!refs.contains(&"b-sow".to_string()) && !prompts.contains("새빛"), "{refs:?}\n{prompts}");
+    // A section revision of that draft gathers its sources the same way.
+    let revise = DraftRequest {
+        previous: Some(Box::new(filled_progress_report())),
+        feedback: Some("검수 기준을 인용해 주세요".into()),
+        revise: Some(super::ReviseScope::Section { section: 2 }),
+        ..in_a.clone()
+    };
+    let (prompts, refs, _) = run(&revise);
+    assert_eq!(refs, ["a-sow", "rule"], "{prompts}");
+    assert!(!prompts.contains("새빛"), "{prompts}");
+
+    // A project that no longer exists allows nothing, like every project-scoped search — the draft says why
+    // it has no evidence (only when it would have searched).
+    let gone = DraftRequest { project_id: Some("gone".into()), ..base.clone() };
+    let (_, refs, out) = run(&gone);
+    assert!(refs.is_empty(), "{refs:?}");
+    assert!(out.draft.notes.iter().any(|n| n.contains("프로젝트를 찾을 수 없어")), "{:?}", out.draft.notes);
+    let (_, _, out) = run(&DraftRequest { sources: Vec::new(), use_knowledge: false, ..gone });
+    assert!(!out.draft.notes.iter().any(|n| n.contains("프로젝트를 찾을 수 없어")), "{:?}", out.draft.notes);
+
+    // The job bridge makes the job's project and the request's project one thing.
+    let mut from_project_page = DraftRequest::default();
+    assert_eq!(from_project_page.bind_project(Some(a.clone())), Some(a.clone()));
+    assert_eq!(from_project_page.project_id.as_deref(), Some(a.as_str()), "the 보완요청서 searches inside its project");
+    let mut from_screen = DraftRequest { project_id: Some(format!(" {a} ")), ..Default::default() };
+    assert_eq!(from_screen.bind_project(None), Some(a.clone()), "the result links to the request's project");
+    assert_eq!(from_screen.project_id.as_deref(), Some(a.as_str()));
+    let mut none = DraftRequest { project_id: Some("  ".into()), ..Default::default() };
+    assert_eq!((none.bind_project(Some(String::new())), none.project_id.clone()), (None, None));
+}
+
 #[test]
 fn supplement_request_is_composed_by_rules_without_a_model() {
     let w = world();
@@ -773,6 +899,112 @@ fn supplement_request_maps_project_json_findings() {
     let d2 = draft::draft(&deps, &req2).unwrap().draft;
     assert_eq!(d2.field("recipient").unwrap().value, "한빛 품질팀");
     assert_eq!(d2.field("due_date").unwrap().value, "2026-12-20");
+}
+
+/// GEN-1: the 초안 어시스턴트 on a rule-composed 보완요청서. A request that carries `revise`, `feedback` or
+/// `previous` is not rule-only (the job bridge loads the model for it); without a model it fails instead of
+/// being recomposed by rules, and with one the instruction reaches the model and the user's edits survive.
+#[test]
+fn supplement_request_revisions_take_the_model_path() {
+    use super::ReviseScope;
+    let w = world();
+    let base = DraftRequest {
+        form_ref: Some("supplement_request".into()),
+        content: "수신: ㈜한빛\n기한: 2026-11-30".into(),
+        sources: vec![SourceRef::Text {
+            title: Some("정합성 검사 결과".into()),
+            text: "계약서 | 서명 누락 | 계약서 3쪽 | 서명본 제출".into(),
+        }],
+        use_knowledge: false,
+        ..Default::default()
+    };
+    assert!(draft::rule_only(&base));
+    // The rule-composed draft, then edited in the 문서 작성 screen: a table cell and a body paragraph.
+    let mut prev = draft::draft(&w.deps(None, None), &base).unwrap().draft;
+    prev.tables[0].rows[0][3] = "서명본을 11월 20일까지 제출".into();
+    let edited = prev.body.iter().position(|b| matches!(b, DraftBlock::Paragraph { .. })).unwrap();
+    prev.body[edited] = DraftBlock::Paragraph { text: "사용자가 고친 근거 문단".into(), source: None };
+    let with_prev = |revise: Option<ReviseScope>, feedback: Option<&str>| DraftRequest {
+        previous: Some(Box::new(prev.clone())),
+        feedback: feedback.map(str::to_string),
+        revise,
+        ..base.clone()
+    };
+    let whole = with_prev(Some(ReviseScope::Whole), Some("더 정중하게"));
+    let section = with_prev(Some(ReviseScope::Section { section: 2 }), Some("2절을 더 정중하게"));
+    let insert =
+        with_prev(Some(ReviseScope::InsertAfter { section: None, heading: Some("문의".into()) }), Some("문의 절"));
+    let regenerate = with_prev(None, None);
+    let feedback_only = DraftRequest { feedback: Some("더 짧게".into()), ..base.clone() };
+    for (name, req) in [
+        ("whole", &whole),
+        ("section", &section),
+        ("insert", &insert),
+        ("previous", &regenerate),
+        ("feedback", &feedback_only),
+    ] {
+        assert!(!draft::rule_only(req), "{name}: the bridge must load the model");
+        // Before the fix `whole`, `previous` and `feedback` were recomposed by rules: the instruction was
+        // ignored and the edited cell / paragraph were lost.
+        let r = draft::draft(&w.deps(None, None), req);
+        assert!(matches!(r, Err(CoreError::EngineNotRunning)), "{name}: {r:?}");
+    }
+    // A blank instruction is no instruction; other templates and non-text sources were never rule-only.
+    assert!(draft::rule_only(&DraftRequest { feedback: Some("  ".into()), ..base.clone() }));
+    assert!(!draft::rule_only(&DraftRequest { sources: Vec::new(), ..base.clone() }));
+    assert!(!draft::rule_only(&DraftRequest { form_ref: Some("estimate".into()), ..base.clone() }));
+    let mut mixed = base.clone();
+    mixed.sources.push(SourceRef::Document { doc_id: "d".into() });
+    assert!(!draft::rule_only(&mixed));
+
+    // With the model, a section revision rewrites that section only: the item table stays in it, the
+    // edited cell and the other sections are untouched.
+    let para = |t: &str| json!({"kind": "paragraph", "text": t, "items": [], "source_index": null});
+    let chat = SeqChat::new(vec![json!({ "blocks": [para("아래 항목의 보완을 정중히 요청드립니다.")] }).to_string()]);
+    let vlm = Vlm::new(&chat, "scripted".into(), Profile::Balanced, None);
+    let out = draft::draft(&w.deps(Some(&vlm), None), &section).unwrap();
+    assert_eq!(out.source, "model");
+    let d = &out.draft;
+    assert_eq!(d.id, prev.id);
+    assert_eq!(d.tables[0].rows[0][3], "서명본을 11월 20일까지 제출");
+    assert!(d
+        .body
+        .iter()
+        .any(|b| matches!(b, DraftBlock::Paragraph { text, .. } if text == "사용자가 고친 근거 문단")));
+    let s2 = super::sections_of(&d.body)[1].clone();
+    assert_eq!(s2.heading.as_deref(), Some("보완 요청 사항"));
+    assert!(
+        matches!(&d.body[s2.start + 1], DraftBlock::Paragraph { text, .. } if text == "아래 항목의 보완을 정중히 요청드립니다.")
+    );
+    assert!(d.body[s2.start..s2.end].iter().any(|b| matches!(b, DraftBlock::TableRef { key } if key == "items")));
+    assert!(chat.prompt(0).contains("[수정 요청]\n2절을 더 정중하게"), "{}", chat.prompt(0));
+
+    // "전체 다시 쓰기": the model sees the edited draft and the instruction, and its reply is the result.
+    let reply = json!({
+        "title": "보완 요청",
+        "fields": [{"key": "recipient", "value": "㈜한빛", "source_index": null}],
+        "tables": [{"key": "items", "rows": [["계약서", "서명 누락", "계약서 3쪽", "서명본을 11월 20일까지 제출해 주시기 바랍니다"]]}],
+        "body": [
+            {"kind": "heading", "text": "근거", "items": [], "source_index": null},
+            para("정중히 다시 쓴 근거 문단")
+        ],
+        "notes": []
+    });
+    let chat2 = SeqChat::json(reply);
+    let vlm2 = Vlm::new(&chat2, "scripted".into(), Profile::Balanced, None);
+    let out2 = draft::draft(&w.deps(Some(&vlm2), None), &whole).unwrap();
+    assert_eq!(out2.source, "model");
+    let prompt = chat2.prompt(0);
+    assert!(prompt.contains("[이전 초안]") && prompt.contains("사용자가 고친 근거 문단"), "{prompt}");
+    assert!(prompt.contains("서명본을 11월 20일까지 제출") && prompt.contains("[수정 요청]\n더 정중하게"), "{prompt}");
+    assert_eq!(out2.draft.id, prev.id);
+    assert_eq!(out2.draft.tables[0].rows[0][3], "서명본을 11월 20일까지 제출해 주시기 바랍니다");
+    assert!(out2
+        .draft
+        .body
+        .iter()
+        .any(|b| matches!(b, DraftBlock::Paragraph { text, .. } if text == "정중히 다시 쓴 근거 문단")));
+    assert!(!out2.draft.notes.iter().any(|n| n.contains("규칙으로 작성")), "{:?}", out2.draft.notes);
 }
 
 // ---------------------------------------------------------------------------
@@ -977,6 +1209,272 @@ fn docx_and_hwpx_written_from_scratch_read_back() {
     assert_eq!(first.compression(), zip::CompressionMethod::Stored);
 }
 
+/// A built-in draft with every scalar field of its template (empty) and the given values.
+fn template_draft(kind: TemplateKind, values: &[(&str, &str)]) -> Draft {
+    let spec = TemplateSpec::builtin(kind);
+    let mut d = Draft { template: TemplateRef::Builtin { template: kind }, ..Default::default() };
+    d.doc_type = Some(kind.as_str().into());
+    d.fields = spec
+        .scalars()
+        .map(|f| {
+            let value = values.iter().find(|(k, _)| *k == f.key).map(|(_, v)| *v).unwrap_or("");
+            field(&f.key, &f.label_ko, FieldKind::parse(&f.kind).unwrap(), f.required, value)
+        })
+        .collect();
+    d.tables = spec
+        .tables()
+        .map(|f| DraftTable {
+            key: f.key.clone(),
+            label: f.label_ko.clone(),
+            columns: f.columns.clone(),
+            rows: Vec::new(),
+        })
+        .collect();
+    d
+}
+
+/// GEN-15: the required `title` field of the templates that are not letters (계약명, 회의명, 변경 제목) is
+/// printed in the preview and in every saved format; it was dropped everywhere before.
+#[test]
+fn title_fields_of_non_letter_templates_are_rendered() {
+    for (kind, label, value) in [
+        (TemplateKind::DevContract, "계약명", "한빛 포털 구축 용역 계약"),
+        (TemplateKind::MeetingMinutes, "회의명", "11월 2주차 주간 회의"),
+        (TemplateKind::ChangeRequest, "변경 제목", "로그인 화면에 SSO 추가"),
+    ] {
+        let mut d = template_draft(kind, &[("title", value)]);
+        d.title = "문서 머리 제목".into();
+        let html = render::to_html(&d);
+        assert!(html.contains("<h1 class=\"title\">문서 머리 제목</h1>"), "{kind:?}");
+        assert!(html.contains(&format!("<th>{label}</th><td>{value}</td>")), "{kind:?}: {html}");
+        let md = render::to_markdown(&d);
+        assert!(md.contains(&format!("| {label} | {value} |")), "{kind:?}: {md}");
+        // The DOCX / HWPX writers take the same plan.
+        let grid = table_texts(&render::doc_model(&d));
+        assert!(
+            grid.iter().flatten().any(|row| row.contains(&label.to_string()) && row.contains(&value.to_string())),
+            "{kind:?}: {grid:?}"
+        );
+        // A title field that only repeats the document title is not printed twice …
+        d.title = format!(" {value} ");
+        let html = render::to_html(&d);
+        assert!(html.contains(&format!("<h1 class=\"title\">{value}</h1>")), "{kind:?}");
+        assert!(!html.contains(&format!("<th>{label}</th>")), "{kind:?}: {html}");
+        // … and an empty required one shows its blank like any other required field.
+        let empty = template_draft(kind, &[]);
+        assert!(render::to_html(&empty).contains(&format!("<th>{label}</th><td><span class=\"blank\">")), "{kind:?}");
+    }
+    // Letters keep their layout: the subject line of the head, no grid row.
+    let mut letter = template_draft(TemplateKind::SupplementRequest, &[("title", "제출 서류 보완 요청")]);
+    letter.title = "제출 서류 보완 요청".into();
+    let html = render::to_html(&letter);
+    assert!(html.contains("<b>제목</b> 제출 서류 보완 요청") && !html.contains("<th>제목</th>"), "{html}");
+}
+
+/// GEN-2: the `amount` kind is every number with a possible fraction, not only money. Each amount field and
+/// column of the built-in templates is classified on purpose (a new one must be added here), and labels
+/// decide for registered forms.
+#[test]
+fn amount_fields_are_classified_as_money_or_plain_numbers() {
+    // (template, field key | "<table>.<column>")
+    let money = [
+        ("rfp", "budget"),
+        ("proposal", "price"),
+        ("sow", "amount"),
+        ("sow", "milestones.amount"),
+        ("dev_contract", "amount"),
+        ("dev_contract", "payments.amount"),
+        ("change_request", "impact_cost"),
+        ("acceptance", "amount"),
+        ("estimate", "supply_total"),
+        ("estimate", "tax_total"),
+        ("estimate", "grand_total"),
+        ("estimate", "items.unit_price"),
+        ("estimate", "items.supply_amount"),
+        ("quotation", "supply_total"),
+        ("quotation", "tax_total"),
+        ("quotation", "grand_total"),
+        ("quotation", "items.unit_price"),
+        ("quotation", "items.supply_amount"),
+        ("quotation", "items.tax_amount"),
+        ("transaction_statement", "supply_total"),
+        ("transaction_statement", "tax_total"),
+        ("transaction_statement", "grand_total"),
+        ("transaction_statement", "items.unit_price"),
+        ("transaction_statement", "items.supply_amount"),
+        ("transaction_statement", "items.tax_amount"),
+        ("contract", "amount"),
+    ];
+    let numbers = [
+        ("rfp", "evaluation.points"),
+        ("proposal", "team.months"),
+        ("sow", "milestones.ratio"),
+        ("dev_contract", "payments.ratio"),
+        ("wbs", "tasks.progress"),
+        ("progress_report", "progress_percent"),
+        ("progress_report", "plan_percent"),
+        ("progress_report", "tasks.progress"),
+        ("test_report", "pass_rate"),
+        ("estimate", "items.months"),
+    ];
+    let mut seen = 0usize;
+    for t in templates::list_all() {
+        let mut check = |path: String, key: &str, labels: &[&str], kind: &str| {
+            if kind != "amount" {
+                return;
+            }
+            seen += 1;
+            let id = (t.kind.as_str(), path.as_str());
+            let expected = money.contains(&id);
+            assert!(expected || numbers.contains(&id), "unclassified amount field {id:?}");
+            for label in labels {
+                assert_eq!(render::is_money(key, label), expected, "{id:?} ({label})");
+            }
+        };
+        for f in &t.fields {
+            check(f.key.clone(), &f.key, &[f.label_ko.as_str(), f.label_en.as_str()], &f.kind);
+            for c in &f.columns {
+                check(format!("{}.{}", f.key, c.key), &c.key, &[c.label.as_str()], &c.kind);
+            }
+        }
+    }
+    assert_eq!(seen, money.len() + numbers.len(), "every listed field exists");
+    // Registered forms: the key is derived from the label and says nothing, so the label decides.
+    for (label, expected) in [
+        ("계약금액", true),
+        ("합계", true),
+        ("단가", true),
+        ("공급가액", true),
+        ("세액", true),
+        ("비용 영향", true),
+        ("환율 적용 금액", true),
+        ("Unit price", true),
+        ("진척률(%)", false),
+        ("통과율", false),
+        ("세율", false),
+        ("투입 MM", false),
+        ("공수(M/M)", false),
+        ("수량", false),
+        ("투입 인원 (명)", false),
+        ("배점", false),
+        ("Qty", false),
+        ("Pass rate (%)", false),
+        // Money in another unit: the figure is printed as entered, without `원`.
+        ("금액(천원)", false),
+        ("계약금액 (USD)", false),
+    ] {
+        assert_eq!(render::is_money("field_3", label), expected, "{label}");
+    }
+    // The prompt announces plain numbers as numbers (they used to be "금액" like money).
+    let req = DraftRequest::default();
+    let allow = super::prompts::user_allowance(&req, 0, None, 1_800, 0, true);
+    let spec = TemplateSpec::builtin(TemplateKind::ProgressReport);
+    let prompt = super::prompts::user(&spec, &req, &[], &allow, true);
+    assert!(prompt.contains("- progress_percent — 전체 진척률(%) — 숫자"), "{prompt}");
+    assert!(prompt.contains("progress=진척률(%)(숫자)"), "{prompt}");
+    let spec = TemplateSpec::builtin(TemplateKind::Estimate);
+    let prompt = super::prompts::user(&spec, &req, &[], &allow, true);
+    assert!(prompt.contains("months=투입 MM(숫자)") && prompt.contains("unit_price=단가(금액)"), "{prompt}");
+    assert!(prompt.contains("- grand_total — 합계금액 — 금액; 필수"), "{prompt}");
+}
+
+/// GEN-2: percentages, person-months and meeting times are printed as entered — "62.5" was "63원", "95.2" was
+/// "95원", 0.5 MM was "1" and "2026-11-10 14:00" lost its time — while money keeps its format.
+#[test]
+fn rendered_values_keep_decimals_and_times_and_format_only_money() {
+    use FieldKind::*;
+    // 진척 보고서: 전체 / 계획 진척률 and the per-task progress column.
+    let mut report = template_draft(
+        TemplateKind::ProgressReport,
+        &[
+            ("project_name", "한빛 포털 구축"),
+            ("report_date", "2026-11-10"),
+            ("progress_percent", "62.5"),
+            ("plan_percent", "70"),
+        ],
+    );
+    report.title = "11월 2주차 진척 보고서".into();
+    report.tables.iter_mut().find(|t| t.key == "tasks").unwrap().rows =
+        vec![vec!["화면 설계".into(), "김설계".into(), "완료".into(), "완료".into(), "87.5".into()]];
+    validate::validate(&mut report);
+    assert!(!report.has_blocking_issues(), "{:?}", report.issues);
+    let html = render::to_html(&report);
+    assert!(html.contains("<th>전체 진척률(%)</th><td>62.5</td>"), "{html}");
+    assert!(html.contains("<th>계획 진척률(%)</th><td>70</td>"), "{html}");
+    assert!(html.contains("<td class=\"num\">87.5</td>"), "{html}");
+    assert!(!html.contains("63원") && !html.contains("70원") && !html.contains(">88<"), "{html}");
+    let md = render::to_markdown(&report);
+    assert!(md.contains("| 전체 진척률(%) | 62.5 |") && md.contains("| 87.5 |"), "{md}");
+    let model = table_texts(&render::doc_model(&report));
+    assert!(model
+        .iter()
+        .flatten()
+        .any(|r| r.contains(&"전체 진척률(%)".to_string()) && r.contains(&"62.5".to_string())));
+
+    // 테스트 결과서: 통과율.
+    let mut test = template_draft(
+        TemplateKind::TestReport,
+        &[
+            ("project_name", "한빛 포털 구축"),
+            ("test_date", "2026-11-10"),
+            ("pass_rate", "95.2"),
+            ("total_cases", "125"),
+        ],
+    );
+    validate::validate(&mut test);
+    let html = render::to_html(&test);
+    assert!(html.contains("<th>통과율(%)</th><td>95.2</td>") && !html.contains("95원"), "{html}");
+
+    // 견적서: 0.5 MM stays 0.5 while the money columns and totals are formatted.
+    let mut estimate = template_draft(
+        TemplateKind::Estimate,
+        &[("issue_date", "2026-11-10"), ("recipient", "㈜한빛"), ("supplier.name", "㈜도큐렌즈")],
+    );
+    estimate.tables[0].rows = vec![
+        vec!["PM".into(), "특급".into(), "0.5".into(), "12000000".into(), "".into(), "".into()],
+        vec!["개발자".into(), "고급".into(), "2.5".into(), "9,000,000".into(), "22500000".into(), "".into()],
+    ];
+    validate::validate(&mut estimate);
+    assert!(!estimate.has_blocking_issues(), "{:?}", estimate.issues);
+    let html = render::to_html(&estimate);
+    assert!(html.contains("<td class=\"num\">0.5</td>") && html.contains("<td class=\"num\">2.5</td>"), "{html}");
+    assert!(html.contains("<td class=\"num\">12,000,000</td>") && html.contains("<td class=\"num\">6,000,000</td>"));
+    assert!(html.contains("<td class=\"num\">22,500,000</td>"), "{html}");
+    assert!(html.contains("<th>합계금액</th><td>31,350,000원</td>"), "0.5 × 12,000,000 + 22,500,000 + 10 %: {html}");
+    let md = render::to_markdown(&estimate);
+    assert!(md.contains("| PM | 특급 | 0.5 | 12,000,000 | 6,000,000 |"), "{md}");
+
+    // 회의록: the meeting time survives; a bare date is still normalised.
+    let mut minutes = template_draft(
+        TemplateKind::MeetingMinutes,
+        &[("title", "주간 회의"), ("meeting_date", "2026-11-10 14:00"), ("next_meeting", "2026.11.17")],
+    );
+    minutes.title = "주간 회의".into();
+    validate::validate(&mut minutes);
+    assert_eq!(minutes.field("meeting_date").unwrap().normalized.as_deref(), Some("2026-11-10"));
+    let html = render::to_html(&minutes);
+    assert!(html.contains("<th>일시</th><td>2026-11-10 14:00</td>"), "{html}");
+    assert!(html.contains("<th>차기 회의</th><td>2026-11-17</td>"), "{html}");
+
+    // Field by field: whole money is formatted, anything else is the writer's wording.
+    let money = |value: &str, ko: bool| render::display_value(&field("amount", "계약금액", Amount, true, value), ko);
+    assert_eq!(money("120000000", true), "120,000,000원");
+    assert_eq!(money("120000000", false), "KRW 120,000,000");
+    assert_eq!(money("1억 2,000만원", true), "120,000,000원");
+    assert_eq!(money("1,234.56", true), "1,234.56", "a fraction is never rounded");
+    assert_eq!(money("USD 1,200", true), "USD 1,200", "another currency is not won");
+    assert_eq!(money("1,200,000원 (부가세 별도)", true), "1,200,000원 (부가세 별도)");
+    let date = |value: &str| {
+        let mut f = field("period", "기간", Date, false, value);
+        f.normalized = crate::pipeline::validate::normalize_date(value);
+        render::display_value(&f, true)
+    };
+    assert_eq!(date("2026년 11월 8일"), "2026-11-08");
+    assert_eq!(date("2026-11-10 ~ 2026-11-14"), "2026-11-10 ~ 2026-11-14");
+    assert_eq!(date("2026-11-10 - 2026-11-14"), "2026-11-10 - 2026-11-14");
+    assert_eq!(date("2026-11-10 (화) 오후 2시"), "2026-11-10 (화) 오후 2시");
+}
+
 // ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
@@ -1014,6 +1512,184 @@ fn store_round_trip() {
         Err(CoreError::Invalid(_))
     ));
     assert!(w.paths.drafts_dir().starts_with(w.paths.app_dir()));
+}
+
+/// GEN-3: a draft job used to write its result over the stored draft whatever had happened meanwhile — the
+/// partial result of a cancelled "전체 다시 쓰기" replaced the complete draft, a retried job put its old
+/// snapshot over newer edits, a deleted draft came back. `save_job_result` decides where a result may go.
+#[test]
+fn job_results_do_not_replace_complete_or_newer_drafts() {
+    use super::store::{save_job_result, CopyReason, JobInput, JobSave, SkipReason};
+    use chrono::{Duration, Utc};
+    let w = world();
+    let p = |t: &str| DraftBlock::Paragraph { text: t.into(), source: None };
+    // The stored draft the job starts from, exported once.
+    let mut original = quotation_draft();
+    original.id = "dr-orig".into();
+    original.saved_path = Some("documents/generated/견적.docx".into());
+    let reset = || {
+        for s in store::list(&w.paths).unwrap() {
+            store::delete(&w.paths, &s.id).unwrap();
+        }
+        store::save(&w.paths, &original).unwrap();
+    };
+    let stored = |id: &str| store::load(&w.paths, id).unwrap();
+    let ids = || {
+        let mut v: Vec<String> = store::list(&w.paths).unwrap().into_iter().map(|s| s.id).collect();
+        v.sort();
+        v
+    };
+    // What a job makes of it: the same id (a regeneration / revision keeps the id of `previous`).
+    let result = |text: &str| {
+        let mut d = original.clone();
+        d.body = vec![p(text)];
+        d
+    };
+    // The job took its input after the draft was last stored …
+    let after_save = Utc::now() + Duration::seconds(30);
+    // … or long before (a failed job retried from the job list keeps its creation time and its `previous`).
+    let hour_ago = Utc::now() - Duration::hours(1);
+    let input = |captured_at| JobInput { previous: Some(&original), captured_at, existed: true };
+
+    // 1. Nothing happened meanwhile: the result replaces the draft, and the outcome carries the stored time.
+    reset();
+    let mut d = result("고쳐 쓴 본문");
+    assert_eq!(save_job_result(&w.paths, &mut d, &input(after_save), false, true).unwrap(), JobSave::Saved);
+    assert_eq!((d.id.as_str(), ids()), ("dr-orig", vec!["dr-orig".to_string()]));
+    assert_eq!(stored("dr-orig").body, vec![p("고쳐 쓴 본문")]);
+    assert_eq!(stored("dr-orig").updated_at, d.updated_at);
+
+    // 2. Cancelled: the complete draft stays, what the job wrote so far becomes a draft of its own.
+    reset();
+    let mut partial = result("1절만 다시 쓴 부분 결과");
+    partial.notes.push("취소되어 2/8절까지만 생성했습니다 (여기까지 생성됨).".into());
+    let saved = save_job_result(&w.paths, &mut partial, &input(after_save), true, true).unwrap();
+    assert_eq!(saved, JobSave::Copy { original: "dr-orig".into(), reason: CopyReason::Cancelled });
+    assert_ne!(partial.id, "dr-orig");
+    assert_eq!(stored("dr-orig").body, original.body, "the complete draft is untouched");
+    let copy = stored(&partial.id);
+    assert_eq!(copy.body, vec![p("1절만 다시 쓴 부분 결과")]);
+    assert!(
+        copy.notes[0].starts_with("취소된 작업이 남긴 결과입니다") && copy.notes[1].contains("2/8절"),
+        "{:?}",
+        copy.notes
+    );
+    assert_eq!(copy.saved_path, None, "the export belongs to the original");
+    assert_eq!(stored("dr-orig").saved_path, original.saved_path);
+    assert_eq!(ids().len(), 2);
+    // A cancelled new draft keeps what was written under its own id, as before.
+    let mut fresh = quotation_draft();
+    let fresh_id = fresh.id.clone();
+    let no_previous = JobInput { previous: None, captured_at: after_save, existed: false };
+    assert_eq!(save_job_result(&w.paths, &mut fresh, &no_previous, true, true).unwrap(), JobSave::Saved);
+    assert!(fresh.id == fresh_id && store::exists(&w.paths, &fresh_id));
+
+    // 3. Retried after the user edited and saved the draft: the edits stay, the result goes next to them.
+    reset();
+    let mut edited = original.clone();
+    edited.body.push(p("그 사이에 사용자가 덧붙인 문단"));
+    store::save(&w.paths, &edited).unwrap();
+    let mut late = result("옛 스냅샷으로 만든 결과");
+    let saved = save_job_result(&w.paths, &mut late, &input(hour_ago), false, false).unwrap();
+    assert_eq!(saved, JobSave::Copy { original: "dr-orig".into(), reason: CopyReason::Newer });
+    assert_eq!(stored("dr-orig").body, edited.body, "the newer edits survive");
+    assert_eq!(stored(&late.id).body, vec![p("옛 스냅샷으로 만든 결과")]);
+    assert!(stored(&late.id).notes[0].starts_with("The original draft was edited after this job started"));
+
+    // 4. Newer on disk but saying the same as the job's input (the editor's save raced the job): replaced.
+    reset();
+    let mut d = result("결과");
+    assert_eq!(save_job_result(&w.paths, &mut d, &input(hour_ago), false, true).unwrap(), JobSave::Saved);
+    assert_eq!(stored("dr-orig").body, vec![p("결과")]);
+
+    // 5. Stored before the job took its input, and different from it (the request carried edits the
+    //    editor had not saved yet): replaced — the job's input was the newer one.
+    reset();
+    let mut unsaved = original.clone();
+    unsaved.title = "아직 저장되지 않은 편집".into();
+    let from_editor = JobInput { previous: Some(&unsaved), captured_at: after_save, existed: true };
+    let mut d = unsaved.clone();
+    d.body = vec![p("결과")];
+    assert_eq!(save_job_result(&w.paths, &mut d, &from_editor, false, true).unwrap(), JobSave::Saved);
+    assert_eq!(stored("dr-orig").title, "아직 저장되지 않은 편집");
+
+    // 6. Deleted while the job ran: not brought back. (A draft that was not stored when the job started is.)
+    reset();
+    store::delete(&w.paths, "dr-orig").unwrap();
+    let mut d = result("결과");
+    let saved = save_job_result(&w.paths, &mut d, &input(after_save), false, true).unwrap();
+    assert_eq!(saved, JobSave::NotSaved { reason: SkipReason::Deleted });
+    assert!(ids().is_empty());
+    let not_stored = JobInput { previous: Some(&original), captured_at: after_save, existed: false };
+    assert_eq!(save_job_result(&w.paths, &mut d, &not_stored, false, true).unwrap(), JobSave::Saved);
+    assert_eq!(ids(), ["dr-orig"]);
+
+    // The shapes the job result carries (`draft_store`).
+    let json = |s: JobSave| serde_json::to_value(s).unwrap();
+    assert_eq!(json(JobSave::Saved), json!({"status": "saved"}));
+    assert_eq!(
+        json(JobSave::Copy { original: "dr-orig".into(), reason: CopyReason::Cancelled }),
+        json!({"status": "copy", "original": "dr-orig", "reason": "cancelled"})
+    );
+    assert_eq!(
+        json(JobSave::Copy { original: "dr-orig".into(), reason: CopyReason::Newer }),
+        json!({"status": "copy", "original": "dr-orig", "reason": "newer"})
+    );
+    assert_eq!(
+        json(JobSave::NotSaved { reason: SkipReason::Deleted }),
+        json!({"status": "not_saved", "reason": "deleted"})
+    );
+}
+
+/// GEN-3, the audit's scenario end to end: "전체 다시 쓰기" of a filled draft cancelled after two of five
+/// sections. The job result is partial; stored through `save_job_result` it leaves the complete draft alone.
+#[test]
+fn a_cancelled_regeneration_keeps_the_complete_draft() {
+    use super::store::{save_job_result, CopyReason, JobInput, JobSave};
+    let w = world();
+    let complete = filled_progress_report();
+    store::save(&w.paths, &complete).unwrap();
+    let para = |t: &str| json!({"kind": "paragraph", "text": t, "items": [], "source_index": null});
+    let head = json!({
+        "title": "11월 2주차 진척 보고서",
+        "fields": [],
+        "tables": [],
+        "body": [{"kind": "heading", "text": "보고 개요", "items": [], "source_index": null}, para("새 개요")],
+        "notes": []
+    });
+    let chat = SeqChat::new(vec![head.to_string(), json!({ "blocks": [para("새 본문")] }).to_string()]);
+    let cancel = AtomicBool::new(false);
+    let vlm = Vlm::new(&chat, "scripted".into(), Profile::Balanced, Some(&cancel));
+    let on_progress = |_f: f32, detail: &str| {
+        if detail == "section 3/5" {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    };
+    let mut deps = w.deps(Some(&vlm), None);
+    deps.progress = Some(&on_progress);
+    let req = DraftRequest {
+        form_ref: Some("progress_report".into()),
+        content: "한빛 포털 구축 진척 보고서".into(),
+        max_tokens: Some(8_000),
+        previous: Some(Box::new(complete.clone())),
+        feedback: Some("더 간결하게".into()),
+        revise: Some(super::ReviseScope::Whole),
+        use_knowledge: false,
+        ..Default::default()
+    };
+    let captured_at = chrono::Utc::now();
+    let mut out = draft::draft(&deps, &req).unwrap();
+    assert_eq!(out.sections, 2, "cancelled between sections");
+    assert_eq!(out.draft.id, complete.id, "a regeneration keeps the id — it used to be stored over the draft");
+    let input = JobInput { previous: req.previous.as_deref(), captured_at, existed: true };
+    let saved = save_job_result(&w.paths, &mut out.draft, &input, true, true).unwrap();
+    assert_eq!(saved, JobSave::Copy { original: complete.id.clone(), reason: CopyReason::Cancelled });
+    let sections = |d: &Draft| super::sections_of(&d.body).len();
+    assert_eq!(sections(&store::load(&w.paths, &complete.id).unwrap()), 5, "the complete draft is still stored");
+    let partial = store::load(&w.paths, &out.draft.id).unwrap();
+    assert_eq!(sections(&partial), 2);
+    assert!(partial.notes[0].starts_with("취소된 작업이 남긴 결과입니다"), "{:?}", partial.notes);
+    assert!(partial.notes.iter().any(|n| n.contains("2/5절까지만")), "{:?}", partial.notes);
 }
 
 // ---------------------------------------------------------------------------
@@ -1185,6 +1861,11 @@ fn write_docx_form(path: &Path) {
     ));
     body.push_str("</w:tbl>");
     body.push_str(r#"<w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>"#);
+    write_docx_package(path, &body);
+}
+
+/// A minimal DOCX package around the given `<w:body>` content.
+fn write_docx_package(path: &Path, body: &str) {
     let document = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {W_NS}><w:body>{body}</w:body></w:document>"#
     );
@@ -1500,6 +2181,139 @@ fn save_never_overwrites_forms_or_library_documents() {
     assert_eq!(doc.role, DocumentRole::Work, "the row is untouched");
 }
 
+/// Registers `write_docx_form` as the form document `form-doc` of the workspace.
+fn register_docx_form(w: &World) {
+    let form_rel = "documents/forms/견적서양식.docx";
+    let form_abs = w.paths.root.join(form_rel);
+    std::fs::create_dir_all(form_abs.parent().unwrap()).unwrap();
+    write_docx_form(&form_abs);
+    w.db.with(|c| {
+        docs::insert_document(
+            c,
+            &NewDocument {
+                id: "form-doc".into(),
+                rel_path: form_rel.into(),
+                original_name: "견적서양식.docx".into(),
+                source_kind: SourceKind::Docx,
+                content_hash: "form-hash".into(),
+                size_bytes: 10,
+                file_modified_at: None,
+                role: DocumentRole::Form,
+                import_batch_id: None,
+            },
+        )?;
+        docs::set_status(c, "form-doc", DocumentStatus::New, None)
+    })
+    .unwrap();
+}
+
+/// GEN-11: a registered HWPX / DOCX form takes the fields and the tables only. Saving a draft that has a
+/// body into it used to drop the body without a word (the preview shows it); now the save says so.
+#[test]
+fn saving_into_a_registered_form_warns_about_the_body_it_leaves_out() {
+    let w = world();
+    register_docx_form(&w);
+    let deps = w.deps(None, None);
+    let mut d = form_draft(Some("form-doc"));
+    d.body = vec![
+        DraftBlock::Heading { level: 2, text: "납품 조건".into() },
+        DraftBlock::Paragraph { text: "납품은 발주 후 2주 이내에 완료합니다.".into(), source: None },
+        DraftBlock::TableRef { key: "items".into() },
+        DraftBlock::List { items: vec!["무상 보증 1년".into()], ordered: false },
+        DraftBlock::Paragraph { text: "  ".into(), source: None },
+    ];
+    let save = |draft: &Draft, output: OutputFormat, name: &str| {
+        render::save(
+            &deps,
+            &SaveRequest {
+                draft: draft.clone(),
+                output,
+                file_name: Some(name.into()),
+                register: false,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+    let saved = save(&d, OutputFormat::Docx, "본문포함");
+    assert!(saved.filled_form);
+    let body_warnings: Vec<&String> = saved.warnings.iter().filter(|w| w.contains("본문")).collect();
+    assert_eq!(body_warnings.len(), 1, "{:?}", saved.warnings);
+    assert!(body_warnings[0].contains("3개"), "three blocks carry text: {}", body_warnings[0]);
+    assert_eq!(saved.omitted_body_blocks, 3, "the heading, the paragraph and the list");
+    assert_eq!(serde_json::to_value(&saved).unwrap()["omitted_body_blocks"], json!(3));
+    // The fill itself is as before: fields and item rows are placed, the body is not in the file.
+    let back = docx::read(&saved.absolute).unwrap();
+    assert_eq!(table_texts(&back)[0][0], vec!["수신", "㈜한빛", "견적일자", "2026-11-08"]);
+    assert!(!back.text().contains("납품은 발주 후 2주"), "{}", back.text());
+    // Nothing to leave out, nothing to warn about: a draft without a body, and the generic renderer
+    // (Markdown / PDF of a form draft), which does print the body.
+    let plain = save(&form_draft(Some("form-doc")), OutputFormat::Docx, "본문없음");
+    assert!(plain.filled_form && !plain.warnings.iter().any(|w| w.contains("본문")), "{:?}", plain.warnings);
+    assert_eq!(plain.omitted_body_blocks, 0);
+    let md = save(&d, OutputFormat::Md, "본문포함");
+    assert!(!md.filled_form && !md.warnings.iter().any(|w| w.contains("본문")), "{:?}", md.warnings);
+    assert_eq!(md.omitted_body_blocks, 0);
+    assert!(std::fs::read_to_string(&md.absolute).unwrap().contains("납품은 발주 후 2주 이내에 완료합니다."));
+}
+
+/// GEN-2 in a filled form: the slots get the same values as the rendered document — a percentage, a
+/// person-month figure and a meeting time as entered, money with separators.
+#[test]
+fn filled_forms_keep_numbers_and_times_as_entered() {
+    use FieldKind::*;
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("form.docx");
+    let mut body = "<w:tbl><w:tblPr/>".to_string();
+    for label in ["전체 진척률(%)", "통과율(%)", "일시", "계약금액"] {
+        body.push_str(&format!("<w:tr>{}{}</w:tr>", docx_text_cell(label), docx_cell("<w:p/>")));
+    }
+    body.push_str("</w:tbl><w:p/><w:tbl><w:tblPr/>");
+    body.push_str(&format!(
+        "<w:tr>{}{}{}{}</w:tr>",
+        docx_text_cell("역할"),
+        docx_text_cell("투입 MM"),
+        docx_text_cell("단가"),
+        docx_text_cell("공급가액")
+    ));
+    body.push_str(&format!("<w:tr>{}</w:tr></w:tbl>", docx_cell("<w:p/>").repeat(4)));
+    write_docx_package(&src, &body);
+    let mut d =
+        Draft { template: TemplateRef::Form { schema_id: "form-schema".into(), doc_id: None }, ..Default::default() };
+    d.fields = vec![
+        field("progress_percent", "전체 진척률(%)", Amount, false, "62.5"),
+        field("pass_rate", "통과율(%)", Amount, false, "95.2"),
+        field("meeting_date", "일시", Date, false, "2026-11-10 14:00"),
+        field("amount", "계약금액", Amount, false, "120000000"),
+    ];
+    d.tables = vec![DraftTable {
+        key: "items".into(),
+        label: "견적 내역".into(),
+        columns: vec![
+            col("role", "역할", String),
+            col("months", "투입 MM", Amount),
+            col("unit_price", "단가", Amount),
+            col("supply_amount", "공급가액", Amount),
+        ],
+        rows: vec![vec!["PM".into(), "0.5".into(), "12000000".into(), "6000000".into()]],
+    }];
+    validate::validate(&mut d);
+    let out = dir.path().join("filled.docx");
+    let warnings = fill::fill_form(&src, SourceKind::Docx, &d, &out).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let tables = table_texts(&docx::read(&out).unwrap());
+    assert_eq!(
+        tables[0],
+        vec![
+            vec!["전체 진척률(%)", "62.5"],
+            vec!["통과율(%)", "95.2"],
+            vec!["일시", "2026-11-10 14:00"],
+            vec!["계약금액", "120,000,000"],
+        ]
+    );
+    assert_eq!(tables[1][1], vec!["PM", "0.5", "12,000,000", "6,000,000"]);
+}
+
 // ---------------------------------------------------------------------------
 // Token budgets and the outline → sections flow (0.3.0 item 4)
 // ---------------------------------------------------------------------------
@@ -1519,6 +2333,269 @@ fn token_budget_helpers_and_split_decision() {
     assert!(schema::is_grammar_safe(&schema::outline_schema()));
     assert!(schema::is_grammar_safe(&schema::section_schema()));
     assert_eq!(super::prompts::fallback_outline(true).len(), 5);
+
+    // GEN-13: the instruction, the content, the earlier text of a revision and the sources share what the
+    // context leaves next to the fixed prompt (1,400), the reply and a margin (256).
+    use super::prompts::{allot, Allowance, Blocks};
+    let want = |content, feedback, previous| Blocks { content, feedback, previous, fixed: 0, sources: 3 };
+    // Unknown context: the static caps, as before.
+    assert_eq!(
+        allot(None, 1_800, want(100, 50, 3_000)),
+        Allowance { content: 100, feedback: 50, previous: 3_000, sources: 4_500 }
+    );
+    // 8K with a medium reply leaves 4,736 characters: a plain draft keeps the full source cap …
+    assert_eq!(allot(Some(8_192), 1_800, want(100, 0, 0)).sources, 4_500);
+    // … a regeneration shows its previous draft and gives the sources the rest …
+    assert_eq!(
+        allot(Some(8_192), 1_800, want(100, 36, 3_000)),
+        Allowance { content: 100, feedback: 36, previous: 3_000, sources: 1_600 }
+    );
+    // … and when it gets tight the previous draft is cut before the sources fall under their floor.
+    assert_eq!(
+        allot(Some(8_192), 2_600, want(100, 36, 6_000)),
+        Allowance { content: 100, feedback: 36, previous: 3_200, sources: 600 }
+    );
+    // Blocks shown as they are (facts, the split note) come off the top.
+    assert_eq!(allot(Some(8_192), 2_600, Blocks { fixed: 1_000, ..want(100, 36, 6_000) }).previous, 2_200);
+    // Every source keeps a slice (200 characters each): twelve of them need 2,400.
+    assert_eq!(
+        allot(Some(8_192), 1_800, Blocks { sources: 12, ..want(100, 36, 3_000) }),
+        Allowance { content: 100, feedback: 36, previous: 2_200, sources: 2_400 }
+    );
+    // Without sources the previous draft may use the room.
+    assert_eq!(allot(Some(8_192), 2_600, Blocks { sources: 0, ..want(100, 36, 6_000) }).previous, 3_800);
+    // A context too small for everything: each block keeps its floor.
+    assert_eq!(
+        allot(Some(4_096), 2_600, want(2_000, 100, 3_000)),
+        Allowance { content: 600, feedback: 100, previous: 600, sources: 600 }
+    );
+}
+
+/// Characters of the variable blocks of a draft prompt: everything from `[내용]` up to the output rules
+/// (content, sources, previous draft / revision context, instruction).
+fn variable_chars(user_prompt: &str) -> usize {
+    let from = user_prompt.find("[내용]").expect("content block");
+    let to = user_prompt.rfind("[출력 규칙]").expect("output rules");
+    user_prompt[from..to].chars().count()
+}
+
+/// A 진척 보고서 whose five sections are filled (700 characters each) — the "내용이 찬 초안" of GEN-13.
+fn filled_progress_report() -> Draft {
+    let text = |seed: &str, n: usize| seed.chars().cycle().take(n).collect::<String>();
+    let mut d = template_draft(
+        TemplateKind::ProgressReport,
+        &[("project_name", "한빛 포털 구축"), ("report_date", "2026-11-10"), ("progress_percent", "62.5")],
+    );
+    d.id = "dr-filled".into();
+    d.title = "11월 2주차 진척 보고서".into();
+    d.fields.iter_mut().find(|f| f.key == "project_name").unwrap().user_edited = true;
+    for (i, heading) in TemplateSpec::builtin(TemplateKind::ProgressReport).sections(true).iter().enumerate() {
+        d.body.push(DraftBlock::Heading { level: 2, text: heading.clone() });
+        d.body
+            .push(DraftBlock::Paragraph { text: text(&format!("{}절 본문입니다. ", i + 1), 700), source: None });
+    }
+    d
+}
+
+/// GEN-13: a regeneration / revision prompt carries the previous draft (or the section and its surroundings)
+/// next to the sources. The source budget ignored those blocks, so on an 8K context (CPU, speed profile) a
+/// filled draft plus full sources overflowed the context and the reply was cut. Every variable block now
+/// shares what the context leaves next to the fixed prompt and the reply.
+#[test]
+fn regeneration_and_revision_prompts_fit_a_small_context() {
+    use super::ReviseScope;
+    const CTX: u32 = 8_192;
+    // What `prompts` leaves for the variable blocks: context − fixed prompt (1,400) − reply − margin (256).
+    let free = |reply: u32| (CTX - 1_400 - reply - 256) as usize;
+    // Block titles and the four `<source …>` tags are not counted by the budget.
+    const MARKUP: usize = 400;
+    let w = world();
+    let prev = filled_progress_report();
+    let sources: Vec<SourceRef> = (1..=4)
+        .map(|i| SourceRef::Text {
+            title: Some(format!("회의 메모 {i}")),
+            text: format!("메모 {i}의 내용입니다. ").chars().cycle().take(2_000).collect(),
+        })
+        .collect();
+    let base = DraftRequest {
+        form_ref: Some("progress_report".into()),
+        content: "한빛 포털 구축 11월 2주차 진척 보고서".into(),
+        sources,
+        use_knowledge: false,
+        previous: Some(Box::new(prev.clone())),
+        feedback: Some("표현을 더 간결하게 다듬어 주세요".into()),
+        ..Default::default()
+    };
+    let para = |t: &str| json!({"kind": "paragraph", "text": t, "items": [], "source_index": null});
+    let whole_reply = json!({
+        "title": "11월 2주차 진척 보고서",
+        "fields": [{"key": "project_name", "value": "한빛 포털 구축", "source_index": null}],
+        "tables": [],
+        "body": [{"kind": "heading", "text": "보고 개요", "items": [], "source_index": null}, para("개요입니다.")],
+        "notes": []
+    })
+    .to_string();
+    let section_reply = json!({ "blocks": [para("다듬은 본문입니다.")] }).to_string();
+
+    // 1. "전체 다시 쓰기" in one call (medium length = 1,800 tokens).
+    let chat = SeqChat::new(vec![whole_reply.clone()]);
+    let vlm = Vlm::new(&chat, "scripted".into(), Profile::Balanced, None).with_context(Some(CTX));
+    draft::draft(&w.deps(Some(&vlm), None), &base).unwrap();
+    let prompt = chat.user_prompt(0);
+    let used = variable_chars(&prompt);
+    assert!(used <= free(1_800) + MARKUP, "one-shot regeneration: {used} > {}", free(1_800));
+    // The previous draft is still what the prompt is about, and every source keeps a slice.
+    assert!(prompt.contains("[이전 초안]") && prompt.contains("project_name: 한빛 포털 구축 (사용자 수정"), "{prompt}");
+    assert!(prompt.contains("1절 본문입니다.") && prompt.contains("[수정 요청]\n표현을 더 간결하게"), "{prompt}");
+    assert_eq!(prompt.matches("<source index=").count(), 4, "{prompt}");
+    assert!(prompt.contains("메모 4의 내용입니다."), "{prompt}");
+
+    // 2. A section rewrite: the section's text and its surroundings count as well.
+    let chat2 = SeqChat::new(vec![section_reply.clone()]);
+    let vlm2 = Vlm::new(&chat2, "scripted".into(), Profile::Balanced, None).with_context(Some(CTX));
+    let revise = DraftRequest { revise: Some(ReviseScope::Section { section: 2 }), ..base.clone() };
+    draft::draft(&w.deps(Some(&vlm2), None), &revise).unwrap();
+    let prompt = chat2.user_prompt(0);
+    let used = variable_chars(&prompt);
+    assert!(used <= free(1_800) + MARKUP, "section revision: {used} > {}", free(1_800));
+    assert!(prompt.contains("[현재 절 본문]\n2절 본문입니다."), "{prompt}");
+    assert_eq!(prompt.matches("<source index=").count(), 4, "{prompt}");
+
+    // 3. "전체 다시 쓰기" section by section (8,000 tokens over five sections: 1,600 each, the head 2,200).
+    let chat3 = SeqChat::new(vec![
+        whole_reply,
+        section_reply.clone(),
+        section_reply.clone(),
+        section_reply.clone(),
+        section_reply,
+    ]);
+    let vlm3 = Vlm::new(&chat3, "scripted".into(), Profile::Balanced, None).with_context(Some(CTX));
+    let split = DraftRequest { max_tokens: Some(8_000), revise: Some(ReviseScope::Whole), ..base.clone() };
+    let out = draft::draft(&w.deps(Some(&vlm3), None), &split).unwrap();
+    assert_eq!(out.sections, 5);
+    let head = variable_chars(&chat3.user_prompt(0));
+    assert!(head <= free(2_200) + MARKUP, "head call: {head} > {}", free(2_200));
+    for call in 1..5 {
+        let prompt = chat3.user_prompt(call);
+        let used = variable_chars(&prompt);
+        assert!(used <= free(1_600) + MARKUP, "section call {call}: {used} > {}", free(1_600));
+        assert!(prompt.contains("[수정 요청]\n표현을 더 간결하게"), "{prompt}");
+    }
+    // The second section call still shows that section's earlier text.
+    assert!(chat3.user_prompt(1).contains("[이 절의 이전 본문]\n2절 본문입니다."), "{}", chat3.user_prompt(1));
+}
+
+/// GEN-14: the content was cut at 2,000 characters and the instruction at 600 on the way into the prompt
+/// while the job bridge (and the planner) accept 6,000 / 2,000 — the rest was dropped without a word.
+/// The prompt now takes what the callers accept, and when something is cut the draft says so.
+#[test]
+fn long_content_and_instructions_reach_the_model_or_the_draft_says_what_was_cut() {
+    let w = world();
+    let reply = json!({"title": "보고서", "fields": [], "tables": [], "body": [], "notes": []});
+    let run = |req: &DraftRequest, ctx: u32| {
+        let chat = SeqChat::json(reply.clone());
+        let vlm = Vlm::new(&chat, "scripted".into(), Profile::Balanced, None).with_context(Some(ctx));
+        let out = draft::draft(&w.deps(Some(&vlm), None), req).unwrap();
+        (out, chat.user_prompt(0))
+    };
+    // 3,000 characters of content and 900 of instruction, each ending in a marker.
+    let content = format!("{}끝머리표식A", "가".repeat(2_990));
+    let instruction = format!("{}끝머리표식B", "나".repeat(890));
+    let req = DraftRequest {
+        form_ref: Some("report".into()),
+        content: content.clone(),
+        feedback: Some(instruction.clone()),
+        use_knowledge: false,
+        ..Default::default()
+    };
+    // A GPU-sized context takes both in full: nothing to report.
+    let (out, prompt) = run(&req, 32_768);
+    assert!(prompt.contains("끝머리표식A"), "the content was cut at 2,000 characters");
+    assert!(prompt.contains("끝머리표식B"), "the instruction was cut at 600 characters");
+    assert!(!out.draft.notes.iter().any(|n| n.contains("전달했습니다")), "{:?}", out.draft.notes);
+    assert!(out.input_cuts.is_empty());
+    assert!(serde_json::to_value(&out).unwrap().get("input_cuts").is_none(), "absent when nothing was cut");
+
+    // Over the limits themselves: the first 6,000 / 2,000 characters are passed and both cuts are reported,
+    // in the notes (shown under the preview) and as `input_cuts`. ('뷁' / '쀍' occur nowhere else in a prompt.)
+    let cut = |field: &str, chars: u32, passed: u32| super::InputCut { field: field.into(), chars, passed };
+    let over = DraftRequest { content: "뷁".repeat(7_000), feedback: Some("쀍".repeat(2_500)), ..req.clone() };
+    let (out, prompt) = run(&over, 32_768);
+    assert_eq!((prompt.matches('뷁').count(), prompt.matches('쀍').count()), (6_000, 2_000));
+    assert_eq!(out.input_cuts, vec![cut("content", 7_000, 6_000), cut("feedback", 2_500, 2_000)]);
+    assert!(
+        out.draft.notes.iter().any(|n| n.starts_with("내용 7,000자 중 앞 6,000자만 모델에 전달했습니다")),
+        "{:?}",
+        out.draft.notes
+    );
+    assert!(
+        out.draft.notes.iter().any(|n| n == "수정 지시 2,500자 중 앞 2,000자만 모델에 전달했습니다."),
+        "{:?}",
+        out.draft.notes
+    );
+    assert_eq!(
+        serde_json::to_value(&out).unwrap()["input_cuts"],
+        json!([
+            {"field": "content", "chars": 7000, "passed": 6000},
+            {"field": "feedback", "chars": 2500, "passed": 2000}
+        ])
+    );
+    // The stored request keeps the whole text (a later regeneration on a bigger context can use it).
+    assert_eq!(out.draft.request.as_ref().unwrap().content.chars().count(), 7_000);
+
+    // An 8K context cannot hold 6,000 characters of content next to the reply (8,192 − 1,400 − 1,800 − 256
+    // leaves 4,736): what fits is passed and the draft says how much.
+    let long = DraftRequest { content: "뷁".repeat(6_000), feedback: None, ..req.clone() };
+    let (out, prompt) = run(&long, 8_192);
+    assert_eq!(prompt.matches('뷁').count(), 4_736);
+    assert_eq!(out.input_cuts, vec![cut("content", 6_000, 4_736)]);
+    assert!(out.draft.notes.iter().any(|n| n.starts_with("내용 6,000자 중 앞 4,736자만")), "{:?}", out.draft.notes);
+
+    // Section by section: every call has its own allowance; the smallest one is what is reported, once.
+    let section = json!({ "blocks": [{"kind": "paragraph", "text": "본문", "items": [], "source_index": null}] });
+    let chat = SeqChat::new(vec![reply.to_string(), section.to_string()]);
+    let vlm = Vlm::new(&chat, "scripted".into(), Profile::Balanced, None).with_context(Some(8_192));
+    let split = DraftRequest { max_tokens: Some(8_000), ..long.clone() };
+    let out = draft::draft(&w.deps(Some(&vlm), None), &split).unwrap();
+    assert!(out.sections > 1);
+    let calls = chat.requests.lock().unwrap().len();
+    let least = (0..calls).map(|c| chat.user_prompt(c).matches('뷁').count()).min().unwrap();
+    assert_eq!(out.input_cuts, vec![cut("content", 6_000, least as u32)]);
+    assert_eq!(out.draft.notes.iter().filter(|n| n.starts_with("내용 6,000자 중")).count(), 1, "{:?}", out.draft.notes);
+
+    // A section revision reports the cut instruction before its own note (the screen logs the last note).
+    let chat = SeqChat::new(vec![section.to_string()]);
+    let vlm = Vlm::new(&chat, "scripted".into(), Profile::Balanced, None).with_context(Some(32_768));
+    let revise = DraftRequest {
+        form_ref: Some("progress_report".into()),
+        previous: Some(Box::new(filled_progress_report())),
+        feedback: Some("쀍".repeat(2_500)),
+        revise: Some(super::ReviseScope::Section { section: 2 }),
+        use_knowledge: false,
+        ..Default::default()
+    };
+    let out = draft::draft(&w.deps(Some(&vlm), None), &revise).unwrap();
+    assert_eq!(chat.user_prompt(0).matches('쀍').count(), 2_000);
+    assert_eq!(out.input_cuts, vec![cut("feedback", 2_500, 2_000)]);
+    let notes = &out.draft.notes;
+    assert!(notes[notes.len() - 1].starts_with("AI 수정(2절"), "{notes:?}");
+    assert_eq!(notes[notes.len() - 2], "수정 지시 2,500자 중 앞 2,000자만 모델에 전달했습니다.");
+
+    // The job bridge only bounds what is stored with the job (20,000 characters per text). It used to cut
+    // the content to 6,000 and the instruction to 2,000 itself — a cut the core could not see or report.
+    let mut stored = DraftRequest {
+        content: format!("  {}  ", "뷁".repeat(7_000)),
+        feedback: Some("쀍".repeat(2_500)),
+        sources: vec![SourceRef::Text { title: None, text: "가".repeat(25_000) }],
+        ..Default::default()
+    };
+    stored.bound_stored_text();
+    assert_eq!(stored.content.chars().count(), 7_000);
+    assert_eq!(stored.feedback.as_ref().unwrap().chars().count(), 2_500);
+    assert!(matches!(&stored.sources[0], SourceRef::Text { text, .. } if text.chars().count() == 20_000));
+    stored.content = "뷁".repeat(30_000);
+    stored.bound_stored_text();
+    assert_eq!(stored.content.chars().count(), super::MAX_STORED_TEXT_CHARS);
 }
 
 #[test]
@@ -1636,6 +2713,131 @@ fn a_large_budget_drafts_section_by_section_and_keeps_sections_on_cancel() {
     .unwrap();
     assert_eq!(out3.sections, 1);
     assert_eq!(chat3.requests.lock().unwrap()[0].max_tokens, Some(2_000));
+}
+
+/// A scripted model that reports each call: `on_call(n)` runs while call `n` is "in flight".
+struct HookChat<'a> {
+    inner: SeqChat,
+    started: &'a std::sync::atomic::AtomicUsize,
+    finished: &'a std::sync::atomic::AtomicUsize,
+    on_call: &'a (dyn Fn(usize) + Sync),
+}
+
+impl ChatBackend for HookChat<'_> {
+    fn model_id(&self) -> Option<String> {
+        self.inner.model_id()
+    }
+    fn chat_stream(
+        &self,
+        req: &ChatRequest,
+        on_delta: &mut dyn FnMut(&str) -> bool,
+    ) -> crate::error::Result<ChatResponse> {
+        let n = self.started.fetch_add(1, Ordering::SeqCst) + 1;
+        (self.on_call)(n);
+        let reply = self.inner.chat_stream(req, on_delta);
+        self.finished.fetch_add(1, Ordering::SeqCst);
+        reply
+    }
+}
+
+/// PLT-5: a draft job held the engine gate from its first model call to its last, without a checkpoint:
+/// an assistant request waited for the whole draft (tens of minutes for a long one) and "일시정지" only
+/// changed the label. The job bridge now calls `EngineGate::checkpoint` from the draft's progress
+/// callback. This wires the same thing around the core: every progress report of a split draft comes
+/// between two model calls, a waiting interactive request is served there, and a paused job parks there.
+#[test]
+fn a_split_draft_lets_interactive_requests_in_and_pauses_between_sections() {
+    use crate::jobs::{EngineGate, JobControl};
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    let w = world();
+    let gate = EngineGate::new();
+    let ctl = JobControl::new(Arc::new(AtomicBool::new(false)));
+    // Model calls started / finished so far.
+    let started = AtomicUsize::new(0);
+    let finished = AtomicUsize::new(0);
+    // Calls finished when the assistant's request ran / when the paused job was found parked.
+    let served_after = AtomicUsize::new(usize::MAX);
+    let parked_after = AtomicUsize::new(usize::MAX);
+    let ran_while_paused = AtomicBool::new(false);
+    let report_during_call = AtomicBool::new(false);
+    let wait_for = |what: &str, done: &dyn Fn() -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !done() {
+            if Instant::now() > deadline {
+                ctl.resume(); // never leave the draft parked
+                panic!("timed out waiting for {what}");
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    };
+    let head = json!({
+        "title": "10월 진척 보고서",
+        "fields": [],
+        "tables": [],
+        "body": [{"kind": "heading", "text": "보고 개요", "items": [], "source_index": null}],
+        "notes": []
+    });
+    let section = json!({ "blocks": [{"kind": "paragraph", "text": "본문", "items": [], "source_index": null}] });
+    let req = DraftRequest {
+        form_ref: Some("progress_report".into()),
+        content: "한빛 포털 구축 10월 진척 보고서".into(),
+        max_tokens: Some(8_000),
+        use_knowledge: false,
+        ..Default::default()
+    };
+    let sections = std::thread::scope(|scope| {
+        let on_call = |n: usize| {
+            if n == 2 {
+                // While section 2 is being written the user asks the assistant something.
+                scope.spawn(|| {
+                    gate.interactive(|| served_after.store(finished.load(Ordering::SeqCst), Ordering::SeqCst))
+                });
+                wait_for("the assistant request to queue", &|| gate.status().waiting == 1);
+            }
+            if n == 3 {
+                // While section 3 is being written the user presses 일시정지 (what `JobBook::pause` does).
+                ctl.pause();
+                scope.spawn(|| {
+                    wait_for("the job to park", &|| !gate.status().batch_busy && finished.load(Ordering::SeqCst) >= 3);
+                    parked_after.store(finished.load(Ordering::SeqCst), Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(80));
+                    ran_while_paused.store(started.load(Ordering::SeqCst) > 3, Ordering::SeqCst);
+                    ctl.resume();
+                });
+            }
+        };
+        let chat = HookChat {
+            inner: SeqChat::new(vec![head.to_string(), section.to_string()]),
+            started: &started,
+            finished: &finished,
+            on_call: &on_call,
+        };
+        let vlm = Vlm::new(&chat, "scripted".into(), Profile::Balanced, Some(&ctl.cancel));
+        // The bridge's progress callback: report, and let go of the engine at the boundary.
+        let on_progress = |_fraction: f32, _detail: &str| {
+            if started.load(Ordering::SeqCst) != finished.load(Ordering::SeqCst) {
+                report_during_call.store(true, Ordering::SeqCst);
+            }
+            let _ = gate.checkpoint(&ctl);
+        };
+        let mut deps = w.deps(Some(&vlm), None);
+        deps.cancel = Some(&ctl.cancel);
+        deps.progress = Some(&on_progress);
+        let lease = gate.batch_begin();
+        let out = draft::draft(&deps, &req).unwrap();
+        drop(lease);
+        out.sections
+    });
+    assert_eq!(sections, 5, "the draft is complete");
+    assert!(!report_during_call.load(Ordering::SeqCst), "every progress report is a boundary between calls");
+    // Before the fix the request ran only when the whole draft was done (5 calls finished).
+    assert_eq!(served_after.load(Ordering::SeqCst), 2, "the assistant was served right after section 2");
+    assert_eq!(parked_after.load(Ordering::SeqCst), 3, "the paused job parked after the call in flight");
+    assert!(!ran_while_paused.load(Ordering::SeqCst), "no model call while paused");
+    assert!(!gate.status().batch_busy);
 }
 
 /// 0.7.0 plan §1.5: `DraftRequest.revise` rewrites one section or inserts one with a single

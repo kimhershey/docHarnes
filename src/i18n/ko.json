@@ -867,6 +867,12 @@
       "speed": "속도",
       "fine_print": "잔글씨"
     },
+    "display_terms": {
+      "low_headroom": "저여유",
+      "accuracy": "정확도",
+      "balanced": "균형",
+      "embedding": "임베딩"
+    },
     "backends": {
       "auto": "자동",
       "cuda": "CUDA (cu121 / cu129 팩)",
@@ -1422,10 +1428,11 @@
       "kind": "형식",
       "all": "전체",
       "doc_type": "유형",
-      "review": "검토"
+      "review": "검토",
+      "labelled": "{{label}}: {{value}}"
     },
     "empty_title": "아직 문서가 없습니다",
-    "empty_body": "PDF·이미지·HWP·HWPX·DOCX 파일을 여기에 끌어다 놓거나 '가져오기'를 누르세요. inbox/ 폴더에 넣어도 자동으로 등록됩니다.",
+    "empty_body": "PDF·이미지·HWP/HWPX/HML·DOC/DOCX·XLS/XLSX·PPT/PPTX·RTF·텍스트 파일을 여기에 끌어다 놓거나 '가져오기'를 누르세요. inbox/ 폴더에 넣어도 자동으로 등록됩니다.",
     "no_match": "조건에 맞는 문서가 없습니다.",
     "drop_overlay": "여기에 놓아 가져오기",
     "selected": "{{count}}개 선택",
@@ -1566,7 +1573,7 @@
   },
   "import_docs": {
     "title": "문서 가져오기",
-    "description": "PDF·이미지·HWP·HWPX·DOCX 파일을 등록하고 페이지를 렌더링합니다. 워크스페이스 밖의 파일은 선택한 폴더로 복사됩니다.",
+    "description": "PDF·이미지·HWP/HWPX/HML·DOC/DOCX·XLS/XLSX·PPT/PPTX·RTF·텍스트 파일을 등록하고 페이지를 렌더링합니다. 워크스페이스 밖의 파일은 선택한 폴더로 복사됩니다.",
     "pick": "파일 선택…",
     "paths_label": "파일 경로(줄마다 하나)",
     "paths_placeholder": "예: D:\\scan\\영수증-3p.pdf",
@@ -2175,9 +2182,7 @@
       "title": "유형 → 추출 항목 매핑",
       "hint": "분류 프롬프트의 유형 enum은 사용 중인 추출 항목의 유형 슬러그로 구성됩니다. 등록 양식이 내장 샘플보다 우선합니다.",
       "type": "유형",
-      "schema": "기본 스키마",
-      "builtin": "내장",
-      "user": "사용자"
+      "schema": "기본 스키마"
     },
     "nl": {
       "title": "자연어로 추출 항목 만들기",

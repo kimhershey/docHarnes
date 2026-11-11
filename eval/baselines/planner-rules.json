@@ -1,30 +1,30 @@
 {
   "schema_version": 1,
   "kind": "planner",
-  "generated_at": "2026-11-10T12:38:09Z",
+  "generated_at": "2026-11-11T05:10:03Z",
   "golden": "eval/golden/planner.json",
-  "golden_count": 129,
+  "golden_count": 163,
   "context": "eval/golden/planner-context.json",
   "today": "2026-11-08",
   "mode": "rules",
-  "total": 129,
-  "correct": 128,
-  "accuracy": 0.9922480620155039,
+  "total": 163,
+  "correct": 154,
+  "accuracy": 0.9447852760736196,
   "by_category": {
     "en": {
-      "total": 26,
-      "correct": 26,
-      "accuracy": 1.0
+      "total": 31,
+      "correct": 30,
+      "accuracy": 0.967741935483871
     },
     "ko": {
-      "total": 93,
-      "correct": 93,
-      "accuracy": 1.0
+      "total": 121,
+      "correct": 114,
+      "accuracy": 0.9421487603305785
     },
     "mixed": {
-      "total": 10,
-      "correct": 9,
-      "accuracy": 0.9
+      "total": 11,
+      "correct": 10,
+      "accuracy": 0.9090909090909091
     }
   },
   "by_intent": {
@@ -34,14 +34,14 @@
       "accuracy": 1.0
     },
     "aggregate": {
-      "total": 9,
+      "total": 10,
       "correct": 9,
-      "accuracy": 1.0
+      "accuracy": 0.9
     },
     "answer": {
-      "total": 4,
-      "correct": 4,
-      "accuracy": 1.0
+      "total": 16,
+      "correct": 10,
+      "accuracy": 0.625
     },
     "check_consistency": {
       "total": 1,
@@ -49,8 +49,8 @@
       "accuracy": 1.0
     },
     "clarify": {
-      "total": 1,
-      "correct": 1,
+      "total": 3,
+      "correct": 3,
       "accuracy": 1.0
     },
     "classify": {
@@ -168,11 +168,6 @@
       "correct": 3,
       "accuracy": 1.0
     },
-    "noop": {
-      "total": 1,
-      "correct": 1,
-      "accuracy": 1.0
-    },
     "ocr": {
       "total": 4,
       "correct": 4,
@@ -214,8 +209,8 @@
       "accuracy": 1.0
     },
     "rerender": {
-      "total": 1,
-      "correct": 1,
+      "total": 2,
+      "correct": 2,
       "accuracy": 1.0
     },
     "review": {
@@ -234,8 +229,8 @@
       "accuracy": 1.0
     },
     "search": {
-      "total": 4,
-      "correct": 4,
+      "total": 5,
+      "correct": 5,
       "accuracy": 1.0
     },
     "set_doc_type": {
@@ -259,8 +254,8 @@
       "accuracy": 1.0
     },
     "set_profile": {
-      "total": 1,
-      "correct": 1,
+      "total": 2,
+      "correct": 2,
       "accuracy": 1.0
     },
     "set_retention": {
@@ -274,9 +269,9 @@
       "accuracy": 1.0
     },
     "set_setting": {
-      "total": 5,
-      "correct": 5,
-      "accuracy": 1.0
+      "total": 16,
+      "correct": 15,
+      "accuracy": 0.9375
     },
     "set_theme": {
       "total": 4,
@@ -299,8 +294,8 @@
       "accuracy": 1.0
     },
     "summarize": {
-      "total": 4,
-      "correct": 4,
+      "total": 10,
+      "correct": 10,
       "accuracy": 1.0
     },
     "tag": {
@@ -324,13 +319,42 @@
       "accuracy": 1.0
     }
   },
+  "by_kind": {
+    "chat": {
+      "total": 5,
+      "correct": 4,
+      "accuracy": 0.8
+    },
+    "command": {
+      "total": 100,
+      "correct": 98,
+      "accuracy": 0.98
+    },
+    "question": {
+      "total": 27,
+      "correct": 23,
+      "accuracy": 0.8518518518518519
+    },
+    "setting": {
+      "total": 31,
+      "correct": 29,
+      "accuracy": 0.9354838709677419
+    }
+  },
   "by_source": {
-    "prerouter": 9,
-    "rules": 120
+    "fast": 23,
+    "none": 1,
+    "prerouter": 7,
+    "rules": 132
   },
   "by_cause": {
-    "rule_clarified": 1
+    "confirmation": 1,
+    "no_rule": 1,
+    "params": 5,
+    "rule_clarified": 1,
+    "wrong_ops": 1
   },
+  "unasked_changes": 1,
   "items": [
     {
       "id": "ko-01",
@@ -348,7 +372,9 @@
       ],
       "summary": "inbox의 견적서을(를) 가져와 분류·OCR·추출한 뒤 월별 폴더로 이동합니다",
       "confidence": 0.88,
-      "latency_ms": 1.381457,
+      "latency_ms": 2.2149460000000003,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -395,7 +421,9 @@
       ],
       "summary": "견적서에서 3개 필드를 추출해 XLSX(으)로 내보냅니다",
       "confidence": 0.88,
-      "latency_ms": 1.9053609999999999,
+      "latency_ms": 2.64562,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -439,7 +467,9 @@
       ],
       "summary": "2026-10-01 ~ 2026-10-31 견적서의 합계금액 합계",
       "confidence": 0.9,
-      "latency_ms": 1.200555,
+      "latency_ms": 2.0546990000000003,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -471,7 +501,9 @@
       ],
       "summary": "'㈜한빛'을(를) 검색합니다",
       "confidence": 0.85,
-      "latency_ms": 1.511665,
+      "latency_ms": 2.32497,
+      "kind": "question",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -498,7 +530,9 @@
       ],
       "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
       "confidence": 0.8,
-      "latency_ms": 0.427039,
+      "latency_ms": 0.469933,
+      "kind": "question",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -529,7 +563,9 @@
       ],
       "summary": "요구사항 정의서 스키마를 수정합니다(스키마 화면에서 확인)",
       "confidence": 0.85,
-      "latency_ms": 1.1436899999999999,
+      "latency_ms": 1.891429,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -559,7 +595,9 @@
       ],
       "summary": "테마를 dark(으)로, 모델을 gemma4-12b-q4km(으)로",
       "confidence": 0.9,
-      "latency_ms": 0.6637770000000001,
+      "latency_ms": 2.047846,
+      "kind": "setting",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -590,7 +628,9 @@
       ],
       "summary": "선택 문서을(를) OCR합니다(다시 실행)",
       "confidence": 0.87,
-      "latency_ms": 1.061532,
+      "latency_ms": 1.547153,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -626,7 +666,9 @@
       ],
       "summary": "마지막 파일 작업을 되돌립니다",
       "confidence": 0.95,
-      "latency_ms": 0.093663,
+      "latency_ms": 0.712997,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -652,7 +694,9 @@
       ],
       "summary": "실행 중인 작업을 일시정지합니다",
       "confidence": 0.92,
-      "latency_ms": 0.11346,
+      "latency_ms": 0.593088,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -680,7 +724,9 @@
       ],
       "summary": "소프트웨어 개발 계약서을(를) XLSX(으)로 내보냅니다",
       "confidence": 0.88,
-      "latency_ms": 1.2620120000000001,
+      "latency_ms": 1.75022,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -713,7 +759,9 @@
       ],
       "summary": "inbox의 문서을(를) 가져와 분류·OCR·추출한 뒤 마칩니다",
       "confidence": 0.88,
-      "latency_ms": 0.9038339999999999,
+      "latency_ms": 1.3086300000000002,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -751,7 +799,9 @@
       ],
       "summary": "inbox의 문서을(를) 가져와 등록하고 마칩니다",
       "confidence": 0.88,
-      "latency_ms": 0.8897459999999999,
+      "latency_ms": 1.433761,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -773,14 +823,16 @@
       "category": "ko",
       "text": "inbox 감시 꺼줘",
       "correct": true,
-      "source": "rules",
+      "source": "fast",
       "intent": "set_inbox_watch",
       "ops": [
         "set_inbox_watch"
       ],
-      "summary": "inbox 감시를 끕니다",
-      "confidence": 0.9,
-      "latency_ms": 0.694477,
+      "summary": "inbox 감시 → off",
+      "confidence": 1.0,
+      "latency_ms": 0.48562,
+      "kind": "setting",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -807,7 +859,9 @@
       ],
       "summary": "열린 문서를 양식으로 등록합니다(필드 그리드 확인)",
       "confidence": 0.85,
-      "latency_ms": 0.430338,
+      "latency_ms": 1.951829,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -837,7 +891,9 @@
       ],
       "summary": "문서을(를) 분류합니다",
       "confidence": 0.87,
-      "latency_ms": 0.9529169999999999,
+      "latency_ms": 2.449954,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -864,7 +920,9 @@
       ],
       "summary": "문서 유형을 견적서(으)로 설정합니다",
       "confidence": 0.87,
-      "latency_ms": 1.007719,
+      "latency_ms": 1.8088220000000002,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -894,7 +952,9 @@
       ],
       "summary": "선택 문서을(를) OCR합니다(다시 실행)",
       "confidence": 0.87,
-      "latency_ms": 1.283978,
+      "latency_ms": 1.821164,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -919,21 +979,28 @@
       "category": "ko",
       "text": "고마워, 수고했어",
       "correct": true,
-      "source": "rules",
-      "intent": "noop",
+      "source": "fast",
+      "intent": "answer",
       "ops": [
-        "noop"
+        "answer"
       ],
-      "summary": "별도 작업 없음",
-      "confidence": 0.9,
-      "latency_ms": 0.860687,
+      "summary": "인사에 답합니다",
+      "confidence": 1.0,
+      "latency_ms": 0.030094,
+      "kind": "chat",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
       "mismatches": [],
       "operations": [
         {
-          "op": "noop"
+          "cite": false,
+          "knowledge": false,
+          "mode": "chat",
+          "op": "answer",
+          "question": "고마워, 수고했어",
+          "reply": "도움이 되어 다행입니다. 더 필요한 것이 있으면 말씀해 주세요."
         }
       ],
       "scope": {
@@ -952,7 +1019,9 @@
       ],
       "summary": "새 추출 스키마를 만듭니다(스키마 화면에서 확인)",
       "confidence": 0.85,
-      "latency_ms": 0.8685620000000001,
+      "latency_ms": 1.75222,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -980,7 +1049,9 @@
       ],
       "summary": "견적서 스키마를 수정합니다(스키마 화면에서 확인)",
       "confidence": 0.85,
-      "latency_ms": 1.028336,
+      "latency_ms": 2.20245,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1009,7 +1080,9 @@
       ],
       "summary": "선택 문서을(를) 추출합니다(다시 실행)",
       "confidence": 0.87,
-      "latency_ms": 1.4729750000000001,
+      "latency_ms": 2.025988,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1040,7 +1113,9 @@
       ],
       "summary": "소프트웨어 개발 계약서을(를) 추출·검증합니다",
       "confidence": 0.87,
-      "latency_ms": 1.1593879999999999,
+      "latency_ms": 1.930527,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1074,7 +1149,9 @@
       ],
       "summary": "선택 문서을(를) 검증합니다(다시 실행)",
       "confidence": 0.87,
-      "latency_ms": 1.282018,
+      "latency_ms": 1.904929,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1103,7 +1180,9 @@
       ],
       "summary": "소프트웨어 개발 계약서을(를) 추출합니다",
       "confidence": 0.87,
-      "latency_ms": 1.565074,
+      "latency_ms": 2.3740129999999997,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1136,7 +1215,9 @@
       ],
       "summary": "검토 대기 필드를 일괄 승인합니다",
       "confidence": 0.85,
-      "latency_ms": 0.597585,
+      "latency_ms": 1.260477,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1164,7 +1245,9 @@
       ],
       "summary": "화면을 엽니다",
       "confidence": 0.9,
-      "latency_ms": 0.07961099999999999,
+      "latency_ms": 0.543085,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1192,7 +1275,9 @@
       ],
       "summary": "정합성 규칙을 만들어 규칙 그리드에서 확인합니다",
       "confidence": 0.8,
-      "latency_ms": 0.933817,
+      "latency_ms": 2.722513,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1220,7 +1305,9 @@
       ],
       "summary": "검색 색인을 다시 만듭니다",
       "confidence": 0.88,
-      "latency_ms": 0.635631,
+      "latency_ms": 1.506465,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1247,7 +1334,9 @@
       ],
       "summary": "선택한 문서를 비교 요약합니다",
       "confidence": 0.85,
-      "latency_ms": 0.6511750000000001,
+      "latency_ms": 1.286563,
+      "kind": "question",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1281,7 +1370,9 @@
       ],
       "summary": "'위약금'을(를) 검색합니다",
       "confidence": 0.85,
-      "latency_ms": 1.60651,
+      "latency_ms": 2.217635,
+      "kind": "question",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1310,7 +1401,9 @@
       ],
       "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
       "confidence": 0.8,
-      "latency_ms": 0.711325,
+      "latency_ms": 0.70639,
+      "kind": "question",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1341,7 +1434,9 @@
       ],
       "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
       "confidence": 0.8,
-      "latency_ms": 0.535877,
+      "latency_ms": 0.558428,
+      "kind": "question",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1369,7 +1464,9 @@
       ],
       "summary": "선택 문서을(를) 요약합니다",
       "confidence": 0.87,
-      "latency_ms": 0.960956,
+      "latency_ms": 1.579154,
+      "kind": "question",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1400,7 +1497,9 @@
       ],
       "summary": "선택 문서을(를) 요약합니다",
       "confidence": 0.87,
-      "latency_ms": 1.623527,
+      "latency_ms": 2.408173,
+      "kind": "question",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1433,7 +1532,9 @@
       ],
       "summary": "2026-01-01 ~ 2026-12-31 견적서의 세액 합계 합계",
       "confidence": 0.9,
-      "latency_ms": 1.734448,
+      "latency_ms": 2.249208,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1465,7 +1566,9 @@
       ],
       "summary": "견적서의 건수",
       "confidence": 0.9,
-      "latency_ms": 1.1286200000000002,
+      "latency_ms": 1.051728,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1495,7 +1598,9 @@
       ],
       "summary": "견적서의 합계금액 평균",
       "confidence": 0.9,
-      "latency_ms": 1.9649590000000001,
+      "latency_ms": 2.279603,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1526,7 +1631,9 @@
       ],
       "summary": "2025-01-01 ~ 2025-12-31 소프트웨어 개발 계약서의 계약금액 최대값",
       "confidence": 0.9,
-      "latency_ms": 1.9996530000000001,
+      "latency_ms": 1.1655879999999998,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1558,7 +1665,9 @@
       ],
       "summary": "2026-11-01 ~ 2026-11-30 견적서의 합계금액 합계",
       "confidence": 0.9,
-      "latency_ms": 1.9785559999999998,
+      "latency_ms": 2.4525580000000002,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1591,7 +1700,9 @@
       ],
       "summary": "견적서의 이름을 바꾸고 유형별 폴더로 정리합니다",
       "confidence": 0.86,
-      "latency_ms": 1.807518,
+      "latency_ms": 2.447063,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1622,7 +1733,9 @@
       ],
       "summary": "견적서의 파일명을 템플릿에 맞춰 바꿉니다",
       "confidence": 0.86,
-      "latency_ms": 1.60599,
+      "latency_ms": 2.086717,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1652,7 +1765,9 @@
       ],
       "summary": "문서을(를) 거래처별 폴더로 이동합니다",
       "confidence": 0.86,
-      "latency_ms": 1.444346,
+      "latency_ms": 2.020084,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1681,7 +1796,9 @@
       ],
       "summary": "문서을(를) documents/보관/ 로 이동합니다",
       "confidence": 0.86,
-      "latency_ms": 1.5194349999999999,
+      "latency_ms": 2.062324,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1711,7 +1828,9 @@
       ],
       "summary": "태그 경비, 10월을(를) 추가합니다",
       "confidence": 0.85,
-      "latency_ms": 1.0904580000000001,
+      "latency_ms": 1.874412,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1747,7 +1866,9 @@
       ],
       "summary": "태그 중요을(를) 제거합니다",
       "confidence": 0.85,
-      "latency_ms": 1.328246,
+      "latency_ms": 2.339263,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1779,7 +1900,9 @@
       ],
       "summary": "소프트웨어 개발 계약서을(를) 휴지통으로 보냅니다",
       "confidence": 0.85,
-      "latency_ms": 1.523503,
+      "latency_ms": 1.821322,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1810,7 +1933,9 @@
       ],
       "summary": "선택한 문서를 프로젝트에 추가합니다",
       "confidence": 0.82,
-      "latency_ms": 1.409273,
+      "latency_ms": 2.1202270000000003,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1842,7 +1967,9 @@
       ],
       "summary": "견적서을(를) CSV(으)로 내보냅니다",
       "confidence": 0.88,
-      "latency_ms": 1.697741,
+      "latency_ms": 1.9725910000000002,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1874,7 +2001,9 @@
       ],
       "summary": "소프트웨어 개발 계약서을(를) PDF_SEARCHABLE(으)로 내보냅니다",
       "confidence": 0.88,
-      "latency_ms": 1.232058,
+      "latency_ms": 1.860692,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1905,7 +2034,9 @@
       ],
       "summary": "견적서을(를) XLSX(으)로 내보냅니다",
       "confidence": 0.88,
-      "latency_ms": 1.377213,
+      "latency_ms": 1.859855,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1935,7 +2066,9 @@
       ],
       "summary": "견적서 초안을 만들어 문서 생성 화면에서 보여 줍니다",
       "confidence": 0.82,
-      "latency_ms": 1.0969820000000001,
+      "latency_ms": 1.9684250000000003,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1963,7 +2096,9 @@
       ],
       "summary": "모델을 gemma4-e4b-q5km(으)로",
       "confidence": 0.9,
-      "latency_ms": 0.657928,
+      "latency_ms": 1.107512,
+      "kind": "setting",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -1990,7 +2125,9 @@
       ],
       "summary": "프로파일을 accuracy(으)로",
       "confidence": 0.88,
-      "latency_ms": 0.692516,
+      "latency_ms": 1.397961,
+      "kind": "setting",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2017,7 +2154,9 @@
       ],
       "summary": "지식 베이스 근거로 설명합니다",
       "confidence": 0.8,
-      "latency_ms": 0.772934,
+      "latency_ms": 0.732028,
+      "kind": "question",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2044,7 +2183,9 @@
       ],
       "summary": "테마를 high-contrast(으)로 바꿉니다",
       "confidence": 0.9,
-      "latency_ms": 0.041075,
+      "latency_ms": 0.5784400000000001,
+      "kind": "setting",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2071,7 +2212,9 @@
       ],
       "summary": "UI 언어를 en(으)로 바꿉니다",
       "confidence": 0.9,
-      "latency_ms": 0.035285,
+      "latency_ms": 0.584544,
+      "kind": "setting",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2091,14 +2234,16 @@
       "category": "ko",
       "text": "렌더링 DPI를 300으로 설정해",
       "correct": true,
-      "source": "rules",
+      "source": "fast",
       "intent": "set_setting",
       "ops": [
         "set_setting"
       ],
-      "summary": "렌더 DPI를 300로",
-      "confidence": 0.88,
-      "latency_ms": 0.706253,
+      "summary": "렌더 DPI → 300",
+      "confidence": 1.0,
+      "latency_ms": 0.6775019999999999,
+      "kind": "setting",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2126,7 +2271,9 @@
       ],
       "summary": "대화 기록 보존 기간을 180일로 설정합니다",
       "confidence": 0.85,
-      "latency_ms": 0.5580620000000001,
+      "latency_ms": 1.153582,
+      "kind": "setting",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2154,7 +2301,9 @@
       ],
       "summary": "'2026 감사 대응' 프로젝트를 만듭니다",
       "confidence": 0.82,
-      "latency_ms": 1.112719,
+      "latency_ms": 1.705232,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2184,7 +2333,9 @@
       ],
       "summary": "화면을 엽니다",
       "confidence": 0.9,
-      "latency_ms": 0.081034,
+      "latency_ms": 1.419694,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2212,7 +2363,9 @@
       ],
       "summary": "계약서_2026.pdf 문서를 엽니다",
       "confidence": 0.85,
-      "latency_ms": 1.09019,
+      "latency_ms": 1.8692520000000001,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2240,7 +2393,9 @@
       ],
       "summary": "화면을 엽니다",
       "confidence": 0.9,
-      "latency_ms": 0.059527000000000004,
+      "latency_ms": 0.649246,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2268,7 +2423,9 @@
       ],
       "summary": "실패한 작업을 재시도합니다",
       "confidence": 0.92,
-      "latency_ms": 0.074864,
+      "latency_ms": 0.733604,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2296,7 +2453,9 @@
       ],
       "summary": "프로젝트 문서 간 정합성 규칙을 실행합니다",
       "confidence": 0.85,
-      "latency_ms": 0.944747,
+      "latency_ms": 1.743206,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2323,7 +2482,9 @@
       ],
       "summary": "엔진을 제어합니다",
       "confidence": 0.9,
-      "latency_ms": 0.081634,
+      "latency_ms": 0.732484,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2350,7 +2511,9 @@
       ],
       "summary": "불일치·누락 항목으로 보완요청서 초안을 만듭니다",
       "confidence": 0.85,
-      "latency_ms": 0.873531,
+      "latency_ms": 1.7182199999999999,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2377,7 +2540,9 @@
       ],
       "summary": "되돌린 작업을 다시 실행합니다",
       "confidence": 0.95,
-      "latency_ms": 0.105593,
+      "latency_ms": 0.710878,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2403,7 +2568,9 @@
       ],
       "summary": "도움말",
       "confidence": 0.9,
-      "latency_ms": 0.012248,
+      "latency_ms": 0.43121499999999996,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2429,7 +2596,9 @@
       ],
       "summary": "어떤 문서를 삭제할까요? 라이브러리에서 선택하거나 유형·날짜를 말씀해 주세요.",
       "confidence": 0.5,
-      "latency_ms": 0.964062,
+      "latency_ms": 1.385842,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2456,7 +2625,9 @@
       ],
       "summary": "'Hanbit'을(를) 검색합니다",
       "confidence": 0.85,
-      "latency_ms": 1.659394,
+      "latency_ms": 2.0109239999999997,
+      "kind": "question",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2483,7 +2654,9 @@
       ],
       "summary": "실행 중인 작업을 일시정지합니다",
       "confidence": 0.92,
-      "latency_ms": 0.067346,
+      "latency_ms": 0.5023529999999999,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2514,7 +2687,9 @@
       ],
       "summary": "inbox의 문서을(를) 가져와 분류·OCR·추출한 뒤 마칩니다",
       "confidence": 0.88,
-      "latency_ms": 1.121253,
+      "latency_ms": 1.608258,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2552,7 +2727,9 @@
       ],
       "summary": "견적서을(를) XLSX(으)로 내보냅니다",
       "confidence": 0.88,
-      "latency_ms": 1.53106,
+      "latency_ms": 1.9802499999999998,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2584,7 +2761,9 @@
       ],
       "summary": "2026-01-01 ~ 2026-12-31 소프트웨어 개발 계약서의 건수",
       "confidence": 0.9,
-      "latency_ms": 1.2221339999999998,
+      "latency_ms": 1.208854,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2615,7 +2794,9 @@
       ],
       "summary": "2026-10-01 ~ 2026-10-31 견적서의 합계금액 합계",
       "confidence": 0.9,
-      "latency_ms": 2.208116,
+      "latency_ms": 2.297352,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2647,7 +2828,9 @@
       ],
       "summary": "선택 문서을(를) 요약합니다",
       "confidence": 0.87,
-      "latency_ms": 1.408442,
+      "latency_ms": 1.9165219999999998,
+      "kind": "question",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2678,7 +2861,9 @@
       ],
       "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
       "confidence": 0.8,
-      "latency_ms": 0.467794,
+      "latency_ms": 0.48033499999999996,
+      "kind": "question",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2709,7 +2894,9 @@
       ],
       "summary": "선택 문서을(를) OCR합니다",
       "confidence": 0.87,
-      "latency_ms": 1.702168,
+      "latency_ms": 2.006021,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2745,7 +2932,9 @@
       ],
       "summary": "문서을(를) 월별 폴더로 이동합니다",
       "confidence": 0.86,
-      "latency_ms": 1.448375,
+      "latency_ms": 2.120261,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2776,7 +2965,9 @@
       ],
       "summary": "견적서의 파일명을 템플릿에 맞춰 바꿉니다",
       "confidence": 0.86,
-      "latency_ms": 1.5198550000000002,
+      "latency_ms": 2.341128,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2806,7 +2997,9 @@
       ],
       "summary": "태그 urgent을(를) 추가합니다",
       "confidence": 0.85,
-      "latency_ms": 1.323327,
+      "latency_ms": 2.157904,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2838,7 +3031,9 @@
       ],
       "summary": "제안서을(를) 휴지통으로 보냅니다",
       "confidence": 0.85,
-      "latency_ms": 1.742529,
+      "latency_ms": 1.8591,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2862,14 +3057,16 @@
       "category": "en",
       "text": "switch to the light theme",
       "correct": true,
-      "source": "prerouter",
+      "source": "fast",
       "intent": "set_theme",
       "ops": [
         "set_theme"
       ],
-      "summary": "테마를 light(으)로 바꿉니다",
-      "confidence": 0.9,
-      "latency_ms": 0.051989,
+      "summary": "테마 → light",
+      "confidence": 1.0,
+      "latency_ms": 0.52717,
+      "kind": "setting",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2896,7 +3093,9 @@
       ],
       "summary": "화면을 엽니다",
       "confidence": 0.9,
-      "latency_ms": 0.081982,
+      "latency_ms": 0.55667,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2924,7 +3123,9 @@
       ],
       "summary": "엔진을 제어합니다",
       "confidence": 0.9,
-      "latency_ms": 0.088271,
+      "latency_ms": 0.541977,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2951,7 +3152,9 @@
       ],
       "summary": "공문 초안을 만들어 문서 생성 화면에서 보여 줍니다",
       "confidence": 0.82,
-      "latency_ms": 1.637924,
+      "latency_ms": 1.969961,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -2972,14 +3175,16 @@
       "category": "en",
       "text": "set the review threshold to 90%",
       "correct": true,
-      "source": "rules",
+      "source": "fast",
       "intent": "set_setting",
       "ops": [
         "set_setting"
       ],
-      "summary": "검토 임계값을 0.9로",
-      "confidence": 0.85,
-      "latency_ms": 0.7826810000000001,
+      "summary": "검토 임계값 → 0.9",
+      "confidence": 1.0,
+      "latency_ms": 0.6381610000000001,
+      "kind": "setting",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3007,7 +3212,9 @@
       ],
       "summary": "문서을(를) 분류합니다",
       "confidence": 0.87,
-      "latency_ms": 1.4295390000000001,
+      "latency_ms": 1.87672,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3034,7 +3241,9 @@
       ],
       "summary": "문서 유형을 테스트 결과서(으)로 설정합니다",
       "confidence": 0.87,
-      "latency_ms": 1.1245610000000001,
+      "latency_ms": 1.623074,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3065,7 +3274,9 @@
       ],
       "summary": "inbox의 견적서을(를) 가져와 분류·OCR·추출한 뒤 마칩니다",
       "confidence": 0.88,
-      "latency_ms": 0.840631,
+      "latency_ms": 1.431667,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3099,7 +3310,9 @@
       ],
       "summary": "제안서을(를) XLSX(으)로 내보냅니다",
       "confidence": 0.88,
-      "latency_ms": 0.9676170000000001,
+      "latency_ms": 1.538914,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3129,7 +3342,9 @@
       ],
       "summary": "선택 문서을(를) 요약합니다",
       "confidence": 0.87,
-      "latency_ms": 1.316143,
+      "latency_ms": 1.79266,
+      "kind": "question",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3160,7 +3375,9 @@
       ],
       "summary": "2026-10-01 ~ 2026-10-31 견적서의 합계금액 합계",
       "confidence": 0.9,
-      "latency_ms": 1.353295,
+      "latency_ms": 1.3158480000000001,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3192,7 +3409,9 @@
       ],
       "summary": "선택 문서을(를) OCR합니다(다시 실행)",
       "confidence": 0.87,
-      "latency_ms": 1.554861,
+      "latency_ms": 2.4448640000000004,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3221,14 +3440,16 @@
       "category": "mixed",
       "text": "theme dark로 바꿔줘",
       "correct": true,
-      "source": "prerouter",
+      "source": "fast",
       "intent": "set_theme",
       "ops": [
         "set_theme"
       ],
-      "summary": "테마를 dark(으)로 바꿉니다",
-      "confidence": 0.9,
-      "latency_ms": 0.05657,
+      "summary": "테마 → dark",
+      "confidence": 1.0,
+      "latency_ms": 0.576994,
+      "kind": "setting",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3255,7 +3476,9 @@
       ],
       "summary": "모델을 gemma4-12b-q4km(으)로",
       "confidence": 0.9,
-      "latency_ms": 0.6990930000000001,
+      "latency_ms": 1.613265,
+      "kind": "setting",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3282,7 +3505,9 @@
       ],
       "summary": "'위약금'을(를) 검색합니다",
       "confidence": 0.85,
-      "latency_ms": 1.6333739999999999,
+      "latency_ms": 2.074408,
+      "kind": "question",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3309,7 +3534,9 @@
       ],
       "summary": "선택한 문서를 비교 요약합니다",
       "confidence": 0.85,
-      "latency_ms": 0.730507,
+      "latency_ms": 1.3237800000000002,
+      "kind": "question",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3344,7 +3571,9 @@
       ],
       "summary": "어떤 문서에 태그를 적용할까요? 라이브러리에서 선택하거나 유형·날짜를 말씀해 주세요.",
       "confidence": 0.5,
-      "latency_ms": 1.84528,
+      "latency_ms": 2.0362750000000003,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3386,7 +3615,9 @@
       ],
       "summary": "90° 회전합니다",
       "confidence": 0.86,
-      "latency_ms": 0.626533,
+      "latency_ms": 1.183957,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3416,7 +3647,9 @@
       ],
       "summary": "다시 렌더합니다",
       "confidence": 0.86,
-      "latency_ms": 0.436755,
+      "latency_ms": 1.118354,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3446,7 +3679,9 @@
       ],
       "summary": "문서를 나눕니다",
       "confidence": 0.84,
-      "latency_ms": 0.612292,
+      "latency_ms": 1.258409,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3478,7 +3713,9 @@
       ],
       "summary": "제목을 '2026 공급계약'(으)로",
       "confidence": 0.86,
-      "latency_ms": 0.6241760000000001,
+      "latency_ms": 1.505802,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3511,7 +3748,9 @@
       ],
       "summary": "'㈜한빛' → '(주)한빛'(으)로 바꿉니다",
       "confidence": 0.84,
-      "latency_ms": 0.705075,
+      "latency_ms": 1.332595,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3542,7 +3781,9 @@
       ],
       "summary": "참고 자료(으)로 표시합니다",
       "confidence": 0.85,
-      "latency_ms": 0.6125529999999999,
+      "latency_ms": 1.242545,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3572,7 +3813,9 @@
       ],
       "summary": "참고 자료 묶음 '사규'을(를) 만듭니다",
       "confidence": 0.86,
-      "latency_ms": 0.23615999999999998,
+      "latency_ms": 0.969845,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3600,7 +3843,9 @@
       ],
       "summary": "'사규' 묶음에 문서를 넣습니다(참고 자료로 표시)",
       "confidence": 0.84,
-      "latency_ms": 0.549235,
+      "latency_ms": 1.224548,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3631,7 +3876,9 @@
       ],
       "summary": "용어 'MM' 등록",
       "confidence": 0.86,
-      "latency_ms": 0.244768,
+      "latency_ms": 0.9322090000000001,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3660,7 +3907,9 @@
       ],
       "summary": "'2024' 최신본으로 표시합니다",
       "confidence": 0.82,
-      "latency_ms": 0.526035,
+      "latency_ms": 1.212664,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3694,7 +3943,9 @@
       ],
       "summary": "프로젝트 정보를 수정합니다",
       "confidence": 0.84,
-      "latency_ms": 0.38619099999999995,
+      "latency_ms": 1.638461,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3722,7 +3973,9 @@
       ],
       "summary": "프로젝트 정보를 수정합니다",
       "confidence": 0.84,
-      "latency_ms": 0.482178,
+      "latency_ms": 1.38167,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3753,7 +4006,9 @@
       ],
       "summary": "프로젝트를 삭제합니다(문서는 문서함에 남음)",
       "confidence": 0.84,
-      "latency_ms": 0.2959,
+      "latency_ms": 0.981314,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3780,7 +4035,9 @@
       ],
       "summary": "문서를 프로젝트로 자동 분류합니다(제안)",
       "confidence": 0.84,
-      "latency_ms": 0.5377500000000001,
+      "latency_ms": 1.51468,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3808,7 +4065,9 @@
       ],
       "summary": "'견적서'을(를) 기본 양식으로",
       "confidence": 0.84,
-      "latency_ms": 0.41369900000000004,
+      "latency_ms": 1.056069,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3829,14 +4088,16 @@
       "category": "ko",
       "text": "UI 배율 125%로",
       "correct": true,
-      "source": "rules",
+      "source": "fast",
       "intent": "set_setting",
       "ops": [
         "set_setting"
       ],
-      "summary": "UI 배율(%) → 125.0",
-      "confidence": 0.86,
-      "latency_ms": 0.499791,
+      "summary": "UI 배율(%) → 125",
+      "confidence": 1.0,
+      "latency_ms": 0.500042,
+      "kind": "setting",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3857,14 +4118,16 @@
       "category": "ko",
       "text": "자동 임베딩 꺼줘",
       "correct": true,
-      "source": "rules",
+      "source": "fast",
       "intent": "set_setting",
       "ops": [
         "set_setting"
       ],
-      "summary": "자동 임베딩 → false",
-      "confidence": 0.86,
-      "latency_ms": 0.6015280000000001,
+      "summary": "자동 임베딩 → off",
+      "confidence": 1.0,
+      "latency_ms": 0.590698,
+      "kind": "setting",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3892,7 +4155,9 @@
       ],
       "summary": "모델 gemma4-12b-q4km을(를) 내려받습니다",
       "confidence": 0.86,
-      "latency_ms": 0.22128499999999998,
+      "latency_ms": 0.731619,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3920,7 +4185,9 @@
       ],
       "summary": "엔진을 제어합니다",
       "confidence": 0.9,
-      "latency_ms": 0.067424,
+      "latency_ms": 0.687569,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3947,7 +4214,9 @@
       ],
       "summary": "보존 기간이 지난 항목을 지금 파기합니다",
       "confidence": 0.88,
-      "latency_ms": 0.160553,
+      "latency_ms": 0.78423,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -3974,7 +4243,9 @@
       ],
       "summary": "180° 회전합니다",
       "confidence": 0.86,
-      "latency_ms": 0.595955,
+      "latency_ms": 1.5615080000000001,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -4004,7 +4275,9 @@
       ],
       "summary": "프로젝트를 삭제합니다(문서는 문서함에 남음)",
       "confidence": 0.84,
-      "latency_ms": 0.322553,
+      "latency_ms": 0.927203,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -4031,7 +4304,9 @@
       ],
       "summary": "모델 gemma4-12b-q4km을(를) 내려받습니다",
       "confidence": 0.86,
-      "latency_ms": 0.23521499999999998,
+      "latency_ms": 0.725047,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -4059,7 +4334,9 @@
       ],
       "summary": "엔진을 제어합니다",
       "confidence": 0.9,
-      "latency_ms": 0.100223,
+      "latency_ms": 0.5503370000000001,
+      "kind": "command",
+      "requires_confirmation": true,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -4079,14 +4356,16 @@
       "category": "en",
       "text": "set the ui scale to 125%",
       "correct": true,
-      "source": "rules",
+      "source": "fast",
       "intent": "set_setting",
       "ops": [
         "set_setting"
       ],
-      "summary": "UI 배율(%) → 125.0",
-      "confidence": 0.86,
-      "latency_ms": 0.674884,
+      "summary": "UI 배율(%) → 125",
+      "confidence": 1.0,
+      "latency_ms": 0.831377,
+      "kind": "setting",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -4114,7 +4393,9 @@
       ],
       "summary": "3절을 모델이 고쳐 씁니다",
       "confidence": 0.86,
-      "latency_ms": 0.884999,
+      "latency_ms": 1.61302,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -4144,7 +4425,9 @@
       ],
       "summary": "'결론' 절을 끝에 추가합니다",
       "confidence": 0.86,
-      "latency_ms": 0.5879,
+      "latency_ms": 1.195287,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -4174,7 +4457,9 @@
       ],
       "summary": "초안 전체를 지시대로 다시 생성합니다",
       "confidence": 0.8,
-      "latency_ms": 0.842802,
+      "latency_ms": 1.568324,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -4203,7 +4488,9 @@
       ],
       "summary": "2절을 모델이 고쳐 씁니다",
       "confidence": 0.86,
-      "latency_ms": 0.817319,
+      "latency_ms": 1.295434,
+      "kind": "command",
+      "requires_confirmation": false,
       "attempts": 0,
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -4215,6 +4502,1158 @@
           "op": "revise_draft",
           "scope": "section",
           "section": 2
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-94",
+      "category": "ko",
+      "text": "UI 배율 120%",
+      "correct": true,
+      "source": "fast",
+      "intent": "set_setting",
+      "ops": [
+        "set_setting"
+      ],
+      "summary": "UI 배율(%) → 120",
+      "confidence": 1.0,
+      "latency_ms": 0.47902900000000004,
+      "kind": "setting",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "key": "ui.scale_percent",
+          "op": "set_setting",
+          "value": 120
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-95",
+      "category": "ko",
+      "text": "ui배율을 100%로 바꿔줘",
+      "correct": true,
+      "source": "fast",
+      "intent": "set_setting",
+      "ops": [
+        "set_setting"
+      ],
+      "summary": "UI 배율(%) → 100",
+      "confidence": 1.0,
+      "latency_ms": 48.834033,
+      "kind": "setting",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "key": "ui.scale_percent",
+          "op": "set_setting",
+          "value": 100
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-96",
+      "category": "ko",
+      "text": "배율을 130 으로 변경해줘",
+      "correct": true,
+      "source": "fast",
+      "intent": "set_setting",
+      "ops": [
+        "set_setting"
+      ],
+      "summary": "UI 배율(%) → 130",
+      "confidence": 1.0,
+      "latency_ms": 0.7598280000000001,
+      "kind": "setting",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "key": "ui.scale_percent",
+          "op": "set_setting",
+          "value": 130
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-97",
+      "category": "ko",
+      "text": "DPI 를 200 으로 변경해줘",
+      "correct": true,
+      "source": "fast",
+      "intent": "set_setting",
+      "ops": [
+        "set_setting"
+      ],
+      "summary": "렌더 DPI → 200",
+      "confidence": 1.0,
+      "latency_ms": 0.622626,
+      "kind": "setting",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "key": "processing.render_dpi",
+          "op": "set_setting",
+          "value": 200
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-98",
+      "category": "ko",
+      "text": "프로파일 정확도",
+      "correct": true,
+      "source": "fast",
+      "intent": "set_profile",
+      "ops": [
+        "set_profile"
+      ],
+      "summary": "추론 프로파일 → accuracy",
+      "confidence": 1.0,
+      "latency_ms": 0.63263,
+      "kind": "setting",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "set_profile",
+          "profile": "accuracy"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-99",
+      "category": "ko",
+      "text": "화면 배율 150",
+      "correct": true,
+      "source": "fast",
+      "intent": "set_setting",
+      "ops": [
+        "set_setting"
+      ],
+      "summary": "UI 배율(%) → 150",
+      "confidence": 1.0,
+      "latency_ms": 0.49091100000000004,
+      "kind": "setting",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "key": "ui.scale_percent",
+          "op": "set_setting",
+          "value": 150
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-100",
+      "category": "ko",
+      "text": "렌더링 해상도 300으로",
+      "correct": true,
+      "source": "fast",
+      "intent": "set_setting",
+      "ops": [
+        "set_setting"
+      ],
+      "summary": "렌더 DPI → 300",
+      "confidence": 1.0,
+      "latency_ms": 0.643818,
+      "kind": "setting",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "key": "processing.render_dpi",
+          "op": "set_setting",
+          "value": 300
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-101",
+      "category": "ko",
+      "text": "글자 크기 키워줘",
+      "correct": true,
+      "source": "fast",
+      "intent": "clarify",
+      "ops": [
+        "clarify"
+      ],
+      "summary": "UI 배율(%) — 바꿀 값을 함께 말씀해 주세요(90~150).",
+      "confidence": 1.0,
+      "latency_ms": 1.0698750000000001,
+      "kind": "setting",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "clarify",
+          "question": "UI 배율(%) — 바꿀 값을 함께 말씀해 주세요(90~150)."
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-102",
+      "category": "ko",
+      "text": "개인정보 마스킹 사용 안 함",
+      "correct": true,
+      "source": "fast",
+      "intent": "set_setting",
+      "ops": [
+        "set_setting"
+      ],
+      "summary": "개인정보 마스킹 → off",
+      "confidence": 1.0,
+      "latency_ms": 0.7301439999999999,
+      "kind": "setting",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "key": "privacy.pii_masking",
+          "op": "set_setting",
+          "value": false
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-103",
+      "category": "ko",
+      "text": "UI 배율 200",
+      "correct": true,
+      "source": "fast",
+      "intent": "clarify",
+      "ops": [
+        "clarify"
+      ],
+      "summary": "UI 배율(%) 값은 90~150 범위에서 고를 수 있습니다. 그 안의 값으로 다시 말씀해 주세요.",
+      "confidence": 1.0,
+      "latency_ms": 1.139206,
+      "kind": "setting",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "clarify",
+          "question": "UI 배율(%) 값은 90~150 범위에서 고를 수 있습니다. 그 안의 값으로 다시 말씀해 주세요."
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "en-27",
+      "category": "en",
+      "text": "ui scale 140",
+      "correct": true,
+      "source": "fast",
+      "intent": "set_setting",
+      "ops": [
+        "set_setting"
+      ],
+      "summary": "UI 배율(%) → 140",
+      "confidence": 1.0,
+      "latency_ms": 0.448809,
+      "kind": "setting",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "key": "ui.scale_percent",
+          "op": "set_setting",
+          "value": 140
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "mx-11",
+      "category": "mixed",
+      "text": "render dpi 300으로",
+      "correct": true,
+      "source": "fast",
+      "intent": "set_setting",
+      "ops": [
+        "set_setting"
+      ],
+      "summary": "렌더 DPI → 300",
+      "confidence": 1.0,
+      "latency_ms": 0.474337,
+      "kind": "setting",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "key": "processing.render_dpi",
+          "op": "set_setting",
+          "value": 300
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-104",
+      "category": "ko",
+      "text": "글자가 작아서 잘 안 보여, 화면 배율을 120으로 올려줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "set_setting",
+      "ops": [
+        "set_setting"
+      ],
+      "summary": "UI 배율(%) → 120.0",
+      "confidence": 0.86,
+      "latency_ms": 2.33899,
+      "kind": "setting",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "key": "ui.scale_percent",
+          "op": "set_setting",
+          "value": 120
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-105",
+      "category": "ko",
+      "text": "배율 130으로 바꾸고 견적서 요약해줘",
+      "correct": false,
+      "cause": "wrong_ops",
+      "source": "rules",
+      "intent": "set_setting",
+      "ops": [
+        "set_setting"
+      ],
+      "summary": "UI 배율(%) → 130.0",
+      "confidence": 0.86,
+      "latency_ms": 1.195463,
+      "kind": "setting",
+      "requires_confirmation": false,
+      "unasked_change": true,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [
+        {
+          "kind": "ops",
+          "expected": [
+            "set_setting",
+            "summarize"
+          ],
+          "produced": [
+            "set_setting"
+          ]
+        }
+      ],
+      "operations": [
+        {
+          "key": "ui.scale_percent",
+          "op": "set_setting",
+          "value": 130
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-106",
+      "category": "ko",
+      "text": "UI 배율이 뭐야?",
+      "correct": true,
+      "source": "rules",
+      "intent": "answer",
+      "ops": [
+        "answer"
+      ],
+      "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
+      "confidence": 0.8,
+      "latency_ms": 4.208483,
+      "kind": "setting",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "cite": true,
+          "op": "answer",
+          "question": "UI 배율이 뭐야?"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-107",
+      "category": "ko",
+      "text": "다크 테마 문서 찾아줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "search",
+      "ops": [
+        "search"
+      ],
+      "summary": "'다크 테마'을(를) 검색합니다",
+      "confidence": 0.85,
+      "latency_ms": 2.5085810000000004,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "search",
+          "query": "다크 테마"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-108",
+      "category": "ko",
+      "text": "이 문서 해상도 300으로 다시 렌더해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "rerender",
+      "ops": [
+        "rerender"
+      ],
+      "summary": "다시 렌더합니다",
+      "confidence": 0.86,
+      "latency_ms": 1.314704,
+      "kind": "command",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "dpi": 300,
+          "op": "rerender"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-109",
+      "category": "ko",
+      "text": "DPI 200으로 바꿨어",
+      "correct": false,
+      "cause": "params",
+      "source": "rules",
+      "intent": "answer",
+      "ops": [
+        "answer"
+      ],
+      "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
+      "confidence": 0.7,
+      "latency_ms": 1.702307,
+      "kind": "setting",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [
+        {
+          "kind": "params",
+          "index": 0,
+          "expected": {
+            "mode": "chat"
+          },
+          "produced": {
+            "cite": true,
+            "op": "answer",
+            "question": "DPI 200으로 바꿨어"
+          }
+        }
+      ],
+      "operations": [
+        {
+          "cite": true,
+          "op": "answer",
+          "question": "DPI 200으로 바꿨어"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-110",
+      "category": "ko",
+      "text": "안녕하세요.",
+      "correct": true,
+      "source": "fast",
+      "intent": "answer",
+      "ops": [
+        "answer"
+      ],
+      "summary": "인사에 답합니다",
+      "confidence": 1.0,
+      "latency_ms": 0.020831000000000002,
+      "kind": "chat",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "cite": false,
+          "knowledge": false,
+          "mode": "chat",
+          "op": "answer",
+          "question": "안녕하세요.",
+          "reply": "안녕하세요! 문서에 대해 물어보시거나, 가져오기·정리·추출·요약 같은 작업을 말씀해 주세요."
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-111",
+      "category": "ko",
+      "text": "점심 뭐 먹을지 고민이네",
+      "correct": false,
+      "cause": "params",
+      "source": "rules",
+      "intent": "answer",
+      "ops": [
+        "answer"
+      ],
+      "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
+      "confidence": 0.7,
+      "latency_ms": 1.712986,
+      "kind": "chat",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [
+        {
+          "kind": "params",
+          "index": 0,
+          "expected": {
+            "mode": "chat"
+          },
+          "produced": {
+            "cite": true,
+            "op": "answer",
+            "question": "점심 뭐 먹을지 고민이네"
+          }
+        }
+      ],
+      "operations": [
+        {
+          "cite": true,
+          "op": "answer",
+          "question": "점심 뭐 먹을지 고민이네"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "en-28",
+      "category": "en",
+      "text": "Hello!",
+      "correct": true,
+      "source": "fast",
+      "intent": "answer",
+      "ops": [
+        "answer"
+      ],
+      "summary": "인사에 답합니다",
+      "confidence": 1.0,
+      "latency_ms": 0.015331,
+      "kind": "chat",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "cite": false,
+          "knowledge": false,
+          "mode": "chat",
+          "op": "answer",
+          "question": "Hello!",
+          "reply": "안녕하세요! 문서에 대해 물어보시거나, 가져오기·정리·추출·요약 같은 작업을 말씀해 주세요."
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "en-29",
+      "category": "en",
+      "text": "thanks, that really helped",
+      "correct": true,
+      "source": "rules",
+      "intent": "noop",
+      "ops": [
+        "noop"
+      ],
+      "summary": "별도 작업 없음",
+      "confidence": 0.9,
+      "latency_ms": 1.481121,
+      "kind": "chat",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "noop"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-112",
+      "category": "ko",
+      "text": "애자일 방법론이 뭐야?",
+      "correct": false,
+      "cause": "params",
+      "source": "rules",
+      "intent": "answer",
+      "ops": [
+        "answer"
+      ],
+      "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
+      "confidence": 0.8,
+      "latency_ms": 0.632228,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [
+        {
+          "kind": "params",
+          "index": 0,
+          "expected": {
+            "mode": "general"
+          },
+          "produced": {
+            "cite": true,
+            "op": "answer",
+            "question": "애자일 방법론이 뭐야?"
+          }
+        }
+      ],
+      "operations": [
+        {
+          "cite": true,
+          "op": "answer",
+          "question": "애자일 방법론이 뭐야?"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-113",
+      "category": "ko",
+      "text": "대한민국 수도가 어디야?",
+      "correct": false,
+      "cause": "params",
+      "source": "rules",
+      "intent": "answer",
+      "ops": [
+        "answer"
+      ],
+      "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
+      "confidence": 0.8,
+      "latency_ms": 0.6039669999999999,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [
+        {
+          "kind": "params",
+          "index": 0,
+          "expected": {
+            "mode": "general"
+          },
+          "produced": {
+            "cite": true,
+            "op": "answer",
+            "question": "대한민국 수도가 어디야?"
+          }
+        }
+      ],
+      "operations": [
+        {
+          "cite": true,
+          "op": "answer",
+          "question": "대한민국 수도가 어디야?"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "en-30",
+      "category": "en",
+      "text": "what does SLA stand for?",
+      "correct": false,
+      "cause": "params",
+      "source": "rules",
+      "intent": "answer",
+      "ops": [
+        "answer"
+      ],
+      "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
+      "confidence": 0.8,
+      "latency_ms": 0.655578,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [
+        {
+          "kind": "params",
+          "index": 0,
+          "expected": {
+            "mode": "general"
+          },
+          "produced": {
+            "cite": true,
+            "op": "answer",
+            "question": "what does SLA stand for?"
+          }
+        }
+      ],
+      "operations": [
+        {
+          "cite": true,
+          "op": "answer",
+          "question": "what does SLA stand for?"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-114",
+      "category": "ko",
+      "text": "이 계약서에서 지체상금이 얼마로 정해져 있어?",
+      "correct": true,
+      "source": "rules",
+      "intent": "answer",
+      "ops": [
+        "answer"
+      ],
+      "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
+      "confidence": 0.8,
+      "latency_ms": 0.47877800000000004,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "cite": true,
+          "op": "answer",
+          "question": "이 계약서에서 지체상금이 얼마로 정해져 있어?"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-115",
+      "category": "ko",
+      "text": "프로젝트 별 내용을 요약해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "문서을(를) 요약합니다",
+      "confidence": 0.87,
+      "latency_ms": 1.95889,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "group_by": "project",
+          "op": "summarize",
+          "target": "each_doc"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-116",
+      "category": "ko",
+      "text": "유형별로 문서를 요약해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "문서을(를) 요약합니다",
+      "confidence": 0.87,
+      "latency_ms": 1.691205,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "group_by": "doc_type",
+          "op": "summarize",
+          "target": "each_doc"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-117",
+      "category": "ko",
+      "text": "폴더마다 문서 내용을 요약해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "문서을(를) 요약합니다",
+      "confidence": 0.87,
+      "latency_ms": 1.797026,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "group_by": "folder",
+          "op": "summarize",
+          "target": "each_doc"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "en-31",
+      "category": "en",
+      "text": "summarize the documents by project",
+      "correct": true,
+      "source": "rules",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "문서을(를) 요약합니다",
+      "confidence": 0.87,
+      "latency_ms": 1.906919,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "group_by": "project",
+          "op": "summarize",
+          "target": "each_doc"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-118",
+      "category": "ko",
+      "text": "선택한 문서를 전부 하나로 묶어 요약해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "선택 문서을(를) 요약합니다",
+      "confidence": 0.87,
+      "latency_ms": 1.993796,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize",
+          "target": "set"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2",
+          "d7f3"
+        ],
+        "filter": {}
+      }
+    },
+    {
+      "id": "ko-119",
+      "category": "ko",
+      "text": "지난달 견적서 합계를 메일로 보내줘",
+      "correct": false,
+      "cause": "confirmation",
+      "source": "rules",
+      "intent": "aggregate",
+      "ops": [
+        "aggregate"
+      ],
+      "summary": "2026-10-01 ~ 2026-10-31 견적서의 합계금액 합계",
+      "confidence": 0.9,
+      "latency_ms": 3.186429,
+      "kind": "command",
+      "requires_confirmation": false,
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [
+        {
+          "kind": "plan",
+          "field": "requires_confirmation",
+          "expected": true,
+          "produced": false
+        },
+        {
+          "kind": "plan",
+          "field": "unmet",
+          "expected": true,
+          "produced": ""
+        }
+      ],
+      "operations": [
+        {
+          "field": "grand_total",
+          "fn": "sum",
+          "op": "aggregate"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "date_from": "2026-10-01",
+          "date_to": "2026-10-31",
+          "doc_type": "estimate"
+        }
+      }
+    },
+    {
+      "id": "ko-120",
+      "category": "ko",
+      "text": "견적서를 담당자별로 요약해줘",
+      "correct": true,
+      "source": "rules",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "견적서을(를) 요약합니다",
+      "confidence": 0.87,
+      "latency_ms": 2.36768,
+      "kind": "question",
+      "requires_confirmation": true,
+      "unmet": "묶음별로 나누는 부분('~별')",
+      "notes": [
+        "grouping_dropped"
+      ],
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize",
+          "target": "each_doc"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "doc_type": "estimate"
+        }
+      }
+    },
+    {
+      "id": "ko-121",
+      "category": "ko",
+      "text": "다음 문장을 다듬어줘: 금번 과업은 당사가 수행하며 기한은 12월말까지로 하고 산출물은 설계서와 소스코드로 함. 검수는 발주처가 납품 후 2주 내에 완료하는 것으로 하며 하자보수 기간은 검수 완료일로부터 1년으로 함.",
+      "correct": false,
+      "cause": "no_rule",
+      "source": "none",
+      "intent": "clarify",
+      "ops": [
+        "clarify"
+      ],
+      "summary": "규칙으로 해석할 수 없는 명령이고 모델이 로드되지 않아 플랜을 만들 수 없습니다. 모델을 로드하거나 명령을 바꿔 주세요.",
+      "confidence": 0.0,
+      "latency_ms": 6.975175,
+      "kind": "question",
+      "requires_confirmation": false,
+      "notes": [
+        "no_model"
+      ],
+      "attempts": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "mismatches": [
+        {
+          "kind": "intent",
+          "expected": "answer",
+          "produced": "clarify"
+        },
+        {
+          "kind": "ops",
+          "expected": [
+            "answer"
+          ],
+          "produced": [
+            "clarify"
+          ]
+        }
+      ],
+      "operations": [
+        {
+          "op": "clarify",
+          "question": "규칙으로 해석할 수 없는 명령이고 모델이 로드되지 않아 플랜을 만들 수 없습니다. 모델을 로드하거나 명령을 바꿔 주세요."
         }
       ],
       "scope": {

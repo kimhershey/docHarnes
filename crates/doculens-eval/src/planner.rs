@@ -1,8 +1,9 @@
 //! `planner` subcommand: every golden command through
 //! `doculens_core::planner::llm::plan` — rules + pre-router (deterministic) and,
-//! with `--engine`, the full product path (rules → model with one re-query) —
-//! with accuracy per category / intent, a miss list grouped by cause and the
-//! 0.5 pt regression gate against a baseline file.
+//! with `--engine`, the product path (fast path → model: routing call + plan call
+//! with one re-query) — with accuracy per category / intent / kind of turn, the
+//! misses that would have run a change unasked, a miss list grouped by cause and
+//! the 0.5 pt regression gate against a baseline file.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -13,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use doculens_core::planner::llm::{plan, PlannerDeps};
-use doculens_core::planner::{PlanContext, PlanMode, PlanResult, PlanSource};
+use doculens_core::planner::{PlanContext, PlanMode, PlanResult, PlanSource, SideEffect};
 use doculens_core::settings::Profile;
 
 use crate::cli::Args;
@@ -25,12 +26,25 @@ pub const RESULTS_SCHEMA_VERSION: u32 = 1;
 /// Design §3.11 regression gate: block when accuracy drops by more than 0.5 pt.
 pub const MAX_DROP_PT: f64 = 0.5;
 
-const KNOWN_FLAGS: &[&str] =
-    &["golden", "context", "baseline", "out", "engine", "models-dir", "model", "backend", "profile", "verbose", "help"];
+const KNOWN_FLAGS: &[&str] = &[
+    "golden",
+    "context",
+    "baseline",
+    "out",
+    "engine",
+    "models-dir",
+    "model",
+    "backend",
+    "profile",
+    "ids",
+    "kinds",
+    "verbose",
+    "help",
+];
 
 pub const USAGE: &str = "doculens-eval planner --golden <json> [--context <json>] [--baseline <results.json>] [--out <results.json>]
                       [--engine <llama-server> --models-dir <dir> --model <id> [--backend cpu|vulkan|cu121|cu129] [--profile ...]]
-                      [--verbose]";
+                      [--ids ko-94,ko-110,...] [--kinds chat,question,command,setting] [--verbose]";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Bucket {
@@ -62,6 +76,23 @@ pub struct ItemResult {
     pub summary: Option<String>,
     pub confidence: f32,
     pub latency_ms: f64,
+    /// `chat` | `question` | `command` | `setting` (0.8.0).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind: String,
+    #[serde(default)]
+    pub requires_confirmation: bool,
+    /// What the plan says it leaves out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unmet: Option<String>,
+    /// `chat` / `general` when the routing call answered instead of planning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<String>,
+    /// Codes of the notes the planner attached (`ungrounded_change`, `grouping_dropped`, …).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+    /// A wrong plan that changes something and would have run without asking.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unasked_change: bool,
     #[serde(default)]
     pub attempts: u32,
     #[serde(default)]
@@ -96,10 +127,19 @@ pub struct Pass {
     pub accuracy: f64,
     pub by_category: BTreeMap<String, Bucket>,
     pub by_intent: BTreeMap<String, Bucket>,
+    /// Accuracy per kind of turn (chat / question / command / setting; audit PLN-21).
+    #[serde(default)]
+    pub by_kind: BTreeMap<String, Bucket>,
     pub by_source: BTreeMap<String, u32>,
     pub by_cause: BTreeMap<String, u32>,
+    /// Wrong plans that change something and would have run without confirmation — the
+    /// failure the user reported ("UI 배율 120%" → the profile was changed).
+    #[serde(default)]
+    pub unasked_changes: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latency: Option<Latency>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub latency_by_kind: BTreeMap<String, Latency>,
     pub items: Vec<ItemResult>,
 }
 
@@ -130,6 +170,7 @@ fn source_name(s: PlanSource) -> &'static str {
         PlanSource::Prerouter => "prerouter",
         PlanSource::Rules => "rules",
         PlanSource::Model => "model",
+        PlanSource::Fast => "fast",
         PlanSource::None => "none",
     }
 }
@@ -141,6 +182,9 @@ pub fn cause(expected: &Expected, r: &PlanResult, mismatches: &[Mismatch]) -> Op
     }
     let produced_clarify = r.plan.is_clarification();
     let expected_passive = expected.intent == "clarify" || expected.intent == "noop";
+    if mismatches.iter().all(|m| m.kind() == "plan") {
+        return Some("confirmation");
+    }
     if r.source == PlanSource::None || r.issues.iter().any(|i| i.code == "no_model") {
         return Some("no_rule");
     }
@@ -165,6 +209,7 @@ pub fn cause_label(code: &str) -> &'static str {
         "wrong_ops" => "의도·연산 오판",
         "params" => "파라미터 누락·오류",
         "scope" => "범위(scope) 오류",
+        "confirmation" => "확인 여부·'반영하지 못한 부분' 표시가 다름",
         _ => "기타",
     }
 }
@@ -173,6 +218,7 @@ fn evaluate(items: &[GoldenItem], ctx: &PlanContext, deps: Option<&PlannerDeps<'
     let mut pass = Pass { mode: if deps.is_some() { "model" } else { "rules" }.to_string(), ..Default::default() };
     pass.model = deps.map(|d| d.model.clone());
     let mut latencies = Vec::with_capacity(items.len());
+    let mut kind_latencies: BTreeMap<String, Vec<f64>> = BTreeMap::new();
     for (n, item) in items.iter().enumerate() {
         let item_ctx = match golden::item_context(ctx, item) {
             Ok(c) => c,
@@ -196,10 +242,16 @@ fn evaluate(items: &[GoldenItem], ctx: &PlanContext, deps: Option<&PlannerDeps<'
         };
         let latency_ms = t.elapsed().as_secs_f64() * 1000.0;
         latencies.push(latency_ms);
+        let kind = item.kind().to_string();
+        kind_latencies.entry(kind.clone()).or_default().push(latency_ms);
         let mismatches = golden::compare(&item.expected, &r.plan);
         let correct = mismatches.is_empty();
         let cause = cause(&item.expected, &r, &mismatches).map(String::from);
         let ops = golden::op_kinds(&r.plan);
+        let unasked_change = !correct
+            && !r.plan.is_clarification()
+            && !r.plan.requires_confirmation
+            && r.plan.operations.iter().any(|op| op.side_effect() != SideEffect::None);
         if verbose {
             eprintln!(
                 "[{}/{}] {} {} {} → {}[{}] ({}) {:.0} ms",
@@ -216,6 +268,8 @@ fn evaluate(items: &[GoldenItem], ctx: &PlanContext, deps: Option<&PlannerDeps<'
         }
         pass.by_category.entry(item.category.clone()).or_default().add(correct);
         pass.by_intent.entry(item.expected.intent.clone()).or_default().add(correct);
+        pass.by_kind.entry(kind.clone()).or_default().add(correct);
+        pass.unasked_changes += u32::from(unasked_change);
         *pass.by_source.entry(source_name(r.source).to_string()).or_default() += 1;
         if let Some(c) = &cause {
             *pass.by_cause.entry(c.clone()).or_default() += 1;
@@ -234,6 +288,12 @@ fn evaluate(items: &[GoldenItem], ctx: &PlanContext, deps: Option<&PlannerDeps<'
             summary: r.plan.summary.clone().or(r.plan.clarification_question.clone()),
             confidence: r.plan.confidence,
             latency_ms,
+            kind,
+            requires_confirmation: r.plan.requires_confirmation,
+            unmet: r.plan.unmet.clone(),
+            route: r.route.clone(),
+            notes: r.issues.iter().map(|i| i.code.clone()).collect(),
+            unasked_change,
             attempts: r.attempts,
             prompt_tokens: r.prompt_tokens,
             completion_tokens: r.completion_tokens,
@@ -245,11 +305,13 @@ fn evaluate(items: &[GoldenItem], ctx: &PlanContext, deps: Option<&PlannerDeps<'
     }
     pass.accuracy = if pass.total == 0 { 0.0 } else { f64::from(pass.correct) / f64::from(pass.total) };
     if deps.is_some() {
-        pass.latency = Some(Latency {
-            p50_ms: metrics::percentile(&latencies, 50.0).unwrap_or(0.0),
-            p95_ms: metrics::percentile(&latencies, 95.0).unwrap_or(0.0),
-            mean_ms: metrics::mean(&latencies).unwrap_or(0.0),
-        });
+        let latency = |values: &[f64]| Latency {
+            p50_ms: metrics::percentile(values, 50.0).unwrap_or(0.0),
+            p95_ms: metrics::percentile(values, 95.0).unwrap_or(0.0),
+            mean_ms: metrics::mean(values).unwrap_or(0.0),
+        };
+        pass.latency = Some(latency(&latencies));
+        pass.latency_by_kind = kind_latencies.iter().map(|(k, v)| (k.clone(), latency(v))).collect();
     }
     pass
 }
@@ -270,10 +332,25 @@ fn print_pass(pass: &Pass, title: &str) {
         .map(|(k, b)| format!("{k} {}/{}{}", b.correct, b.total, if b.correct < b.total { "*" } else { "" }))
         .collect();
     println!("  의도별(미달 *): {}", intents.join(", "));
+    let kinds: Vec<String> = golden::KINDS
+        .iter()
+        .filter_map(|k| {
+            pass.by_kind.get(*k).map(|b| format!("{} {}/{} ({})", kind_label(k), b.correct, b.total, pct(b.accuracy)))
+        })
+        .collect();
+    println!("  종류별: {}", kinds.join(" · "));
     let sources: Vec<String> = pass.by_source.iter().map(|(k, n)| format!("{k} {n}")).collect();
     println!("  플랜 출처: {}", sources.join(" · "));
+    println!("  확인 없이 실행됐을 잘못된 변경: {}건", pass.unasked_changes);
     if let Some(l) = &pass.latency {
         println!("  응답 시간: p50 {:.0} ms · p95 {:.0} ms · 평균 {:.0} ms", l.p50_ms, l.p95_ms, l.mean_ms);
+        let per_kind: Vec<String> = golden::KINDS
+            .iter()
+            .filter_map(|k| pass.latency_by_kind.get(*k).map(|l| format!("{} p50 {:.0} ms", kind_label(k), l.p50_ms)))
+            .collect();
+        if !per_kind.is_empty() {
+            println!("  응답 시간(종류별): {}", per_kind.join(" · "));
+        }
     }
     let misses: Vec<&ItemResult> = pass.items.iter().filter(|i| !i.correct).collect();
     println!("불일치 {}건 (원인별):", misses.len());
@@ -283,7 +360,7 @@ fn print_pass(pass: &Pass, title: &str) {
         println!("  [{} — {}] {n}건", code, cause_label(code));
         for m in misses.iter().filter(|m| m.cause.as_deref() == Some(code)) {
             println!(
-                "    {} \"{}\"\n      기대 {}[{}] / 결과 {}[{}] (출처 {}{}) — {}",
+                "    {} \"{}\"\n      기대 {}[{}] / 결과 {}[{}] (출처 {}{}{}) — {}",
                 m.id,
                 m.text,
                 expected_of(m).0,
@@ -292,6 +369,7 @@ fn print_pass(pass: &Pass, title: &str) {
                 m.ops.join(","),
                 m.source,
                 if m.confidence > 0.0 { format!(", 신뢰도 {:.2}", m.confidence) } else { String::new() },
+                if m.unasked_change { ", 확인 없이 실행" } else { "" },
                 m.summary.as_deref().unwrap_or("-")
             );
             for mm in &m.mismatches {
@@ -302,12 +380,24 @@ fn print_pass(pass: &Pass, title: &str) {
                     Mismatch::Scope { expected, produced } => {
                         println!("      scope 기대 {expected} / 결과 {produced}");
                     }
+                    Mismatch::Plan { field, expected, produced } => {
+                        println!("      {field} 기대 {expected} / 결과 {produced}");
+                    }
                     _ => {}
                 }
             }
         }
     }
     println!();
+}
+
+fn kind_label(kind: &str) -> &'static str {
+    match kind {
+        "chat" => "대화",
+        "question" => "질문",
+        "setting" => "설정",
+        _ => "명령",
+    }
 }
 
 /// `(intent, ops)` the item expected — recovered from the mismatch list when present,
@@ -409,16 +499,48 @@ pub fn run(args: &Args) -> Result<i32, String> {
         return Err(format!("알 수 없는 옵션 {}\n{USAGE}", unknown.join(" ")));
     }
     let golden_path = PathBuf::from(args.opt("golden").ok_or_else(|| format!("--golden 이 필요합니다\n{USAGE}"))?);
-    let set = golden::load(&golden_path)?;
+    let mut set = golden::load(&golden_path)?;
+    // A part of the set (a model on a CPU needs minutes per item): by id and / or by kind of turn.
+    let list = |name: &str| -> Vec<String> {
+        args.opt(name)
+            .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+            .unwrap_or_default()
+    };
+    let (ids, kinds) = (list("ids"), list("kinds"));
+    if let Some(unknown) = kinds.iter().find(|k| !golden::KINDS.contains(&k.as_str())) {
+        return Err(format!("알 수 없는 종류 {unknown} (허용: {})", golden::KINDS.join("|")));
+    }
+    if let Some(unknown) = ids.iter().find(|id| !set.items.iter().any(|i| &i.id == *id)) {
+        return Err(format!("골든셋에 없는 id {unknown}"));
+    }
+    let partial = !ids.is_empty() || !kinds.is_empty();
+    if partial {
+        if args.opt("baseline").is_some() {
+            return Err("--ids / --kinds 로 일부만 돌릴 때는 --baseline(회귀 게이트)을 쓸 수 없습니다".into());
+        }
+        let total = set.items.len();
+        set.items.retain(|i| {
+            (ids.is_empty() || ids.contains(&i.id)) && (kinds.is_empty() || kinds.iter().any(|k| k == i.kind()))
+        });
+        if set.items.is_empty() {
+            return Err("--ids / --kinds 에 맞는 항목이 없습니다".into());
+        }
+        println!("부분 실행: {total}건 중 {}건", set.items.len());
+    }
     let (ctx, context_name) = load_context(args, &golden_path, &set)?;
     let verbose = args.flag("verbose");
     println!(
-        "골든셋 {} ({}건: {}) · 컨텍스트 {} · 기준일 {}",
+        "골든셋 {} ({}건: {}; {}) · 컨텍스트 {} · 기준일 {}",
         golden_path.display(),
         set.items.len(),
         golden::CATEGORIES
             .iter()
             .map(|c| format!("{c} {}", set.items.iter().filter(|i| i.category == *c).count()))
+            .collect::<Vec<_>>()
+            .join(" / "),
+        golden::KINDS
+            .iter()
+            .map(|k| format!("{} {}", kind_label(k), set.items.iter().filter(|i| i.kind() == *k).count()))
             .collect::<Vec<_>>()
             .join(" / "),
         context_name,
@@ -465,7 +587,7 @@ pub fn run(args: &Args) -> Result<i32, String> {
             cancel: None,
         };
         let pass = evaluate(&set.items, &ctx, Some(&deps), verbose);
-        print_pass(&pass, &format!("플래너 정확도 — 규칙 + 모델 {} (제품 경로)", opts.model));
+        print_pass(&pass, &format!("플래너 정확도 — 빠른 경로 + 모델 {} (제품 경로)", opts.model));
         engine_info = Some(running.info.clone());
         model_pass = Some(pass);
     }

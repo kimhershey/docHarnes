@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "context": "planner-context.json",
-  "description": "플래너 골든셋(0.3.0: SW 개발 문서 기준) — 명령 → 기대 플랜 100건(한국어 70·영어 20·혼합 10). 기대값은 규칙 출력이 아니라 사람이 기대하는 플랜입니다. 비교 규칙은 eval/README.md 참조. 0.6.0: 에이전트 op(회전·분할·제목·글자·역할·참고 자료·용어·판·프로젝트 수정/삭제·자동 분류·양식·설정 카탈로그·모델·엔진·유지보수) 25건 추가. 0.7.0: 초안 어시스턴트 op revise_draft(절 다시 쓰기·새 절·전체; context.draft_id = 열린 초안) 4건.",
+  "description": "플래너 골든셋(0.3.0: SW 개발 문서 기준) — 명령 → 기대 플랜 100건(한국어 70·영어 20·혼합 10). 기대값은 규칙 출력이 아니라 사람이 기대하는 플랜입니다. 비교 규칙은 eval/README.md 참조. 0.6.0: 에이전트 op(회전·분할·제목·글자·역할·참고 자료·용어·판·프로젝트 수정/삭제·자동 분류·양식·설정 카탈로그·모델·엔진·유지보수) 25건 추가. 0.7.0: 초안 어시스턴트 op revise_draft(절 다시 쓰기·새 절·전체; context.draft_id = 열린 초안) 4건. 0.8.0: 2026-11-11 사용자 보고 문장과 변형·반례 34건 — 설정(빠른 경로·문장 속 설정·범위 밖·반례), 대화, 문서와 무관한 질문, 묶음 요약, 표현할 수 없는 요청, 붙여 넣은 글. 항목의 kind(chat|question|command|setting)별 정확도와 expected.confirm·unmet·alt를 쓴다.",
   "items": [
     {
       "id": "ko-01",
@@ -371,12 +371,26 @@
       "category": "ko",
       "text": "고마워, 수고했어",
       "expected": {
-        "intent": "noop",
+        "intent": "answer",
         "ops": [
-          "noop"
+          "answer"
+        ],
+        "params": [
+          {
+            "mode": "chat"
+          }
+        ],
+        "confirm": false,
+        "alt": [
+          {
+            "intent": "noop",
+            "ops": [
+              "noop"
+            ]
+          }
         ]
       },
-      "note": "잡담 — 아무 작업도 하지 않음"
+      "note": "잡담 — 0.8.0: 플랜 없이 한 줄로 답한다(이전 기대값 noop도 인정)"
     },
     {
       "id": "ko-20",
@@ -2405,6 +2419,676 @@
         "draft_id": "dr1"
       },
       "note": "0.7.0 draft assistant"
+    },
+    {
+      "id": "ko-94",
+      "category": "ko",
+      "text": "UI 배율 120%",
+      "expected": {
+        "intent": "set_setting",
+        "ops": [
+          "set_setting"
+        ],
+        "params": [
+          {
+            "key": "ui.scale_percent",
+            "value": 120
+          }
+        ],
+        "confirm": false
+      },
+      "note": "0.8.0 사용자 보고(USR-1): 0.7.0은 '프로파일: 균형'을 실행"
+    },
+    {
+      "id": "ko-95",
+      "category": "ko",
+      "text": "ui배율을 100%로 바꿔줘",
+      "expected": {
+        "intent": "set_setting",
+        "ops": [
+          "set_setting"
+        ],
+        "params": [
+          {
+            "key": "ui.scale_percent",
+            "value": 100
+          }
+        ],
+        "confirm": false
+      },
+      "note": "0.8.0 사용자 보고(USR-1)"
+    },
+    {
+      "id": "ko-96",
+      "category": "ko",
+      "text": "배율을 130 으로 변경해줘",
+      "expected": {
+        "intent": "set_setting",
+        "ops": [
+          "set_setting"
+        ],
+        "params": [
+          {
+            "key": "ui.scale_percent",
+            "value": 130
+          }
+        ],
+        "confirm": false
+      },
+      "note": "0.8.0 사용자 보고(USR-1): 0.7.0은 '프로파일: 균형'을 실행"
+    },
+    {
+      "id": "ko-97",
+      "category": "ko",
+      "text": "DPI 를 200 으로 변경해줘",
+      "expected": {
+        "intent": "set_setting",
+        "ops": [
+          "set_setting"
+        ],
+        "params": [
+          {
+            "key": "processing.render_dpi",
+            "value": 200
+          }
+        ],
+        "confirm": false
+      },
+      "note": "0.8.0 사용자 보고(USR-1): 0.7.0은 '테마 → 시스템'을 실행"
+    },
+    {
+      "id": "ko-98",
+      "category": "ko",
+      "text": "프로파일 정확도",
+      "expected": {
+        "intent": "set_profile",
+        "ops": [
+          "set_profile"
+        ],
+        "params": [
+          {
+            "profile": "accuracy"
+          }
+        ],
+        "confirm": false
+      },
+      "note": "0.8.0 사용자 보고(USR-1)"
+    },
+    {
+      "id": "ko-99",
+      "category": "ko",
+      "text": "화면 배율 150",
+      "expected": {
+        "intent": "set_setting",
+        "ops": [
+          "set_setting"
+        ],
+        "params": [
+          {
+            "key": "ui.scale_percent",
+            "value": 150
+          }
+        ],
+        "confirm": false
+      },
+      "note": "0.8.0 짧은 꼴(USR-2)"
+    },
+    {
+      "id": "ko-100",
+      "category": "ko",
+      "text": "렌더링 해상도 300으로",
+      "expected": {
+        "intent": "set_setting",
+        "ops": [
+          "set_setting"
+        ],
+        "params": [
+          {
+            "key": "processing.render_dpi",
+            "value": 300
+          }
+        ],
+        "confirm": false
+      },
+      "note": "0.8.0 짧은 꼴(USR-2)"
+    },
+    {
+      "id": "ko-101",
+      "category": "ko",
+      "text": "글자 크기 키워줘",
+      "expected": {
+        "intent": "clarify",
+        "ops": [
+          "clarify"
+        ]
+      },
+      "kind": "setting",
+      "note": "0.8.0 값이 없는 상대 변경(USR-2) — 엉뚱한 값을 넣지 않고 값을 묻는다"
+    },
+    {
+      "id": "ko-102",
+      "category": "ko",
+      "text": "개인정보 마스킹 사용 안 함",
+      "expected": {
+        "intent": "set_setting",
+        "ops": [
+          "set_setting"
+        ],
+        "params": [
+          {
+            "key": "privacy.pii_masking",
+            "value": false
+          }
+        ],
+        "confirm": false
+      },
+      "note": "0.8.0 켜기/끄기 설정"
+    },
+    {
+      "id": "ko-103",
+      "category": "ko",
+      "text": "UI 배율 200",
+      "expected": {
+        "intent": "clarify",
+        "ops": [
+          "clarify"
+        ]
+      },
+      "kind": "setting",
+      "note": "0.8.0 범위(90~150) 밖 — 값을 잘라 넣지 않고 범위를 알려 준다"
+    },
+    {
+      "id": "en-27",
+      "category": "en",
+      "text": "ui scale 140",
+      "expected": {
+        "intent": "set_setting",
+        "ops": [
+          "set_setting"
+        ],
+        "params": [
+          {
+            "key": "ui.scale_percent",
+            "value": 140
+          }
+        ],
+        "confirm": false
+      },
+      "note": "0.8.0 short form"
+    },
+    {
+      "id": "mx-11",
+      "category": "mixed",
+      "text": "render dpi 300으로",
+      "expected": {
+        "intent": "set_setting",
+        "ops": [
+          "set_setting"
+        ],
+        "params": [
+          {
+            "key": "processing.render_dpi",
+            "value": 300
+          }
+        ],
+        "confirm": false
+      },
+      "note": "0.8.0 혼합 표기"
+    },
+    {
+      "id": "ko-104",
+      "category": "ko",
+      "text": "글자가 작아서 잘 안 보여, 화면 배율을 120으로 올려줘",
+      "expected": {
+        "intent": "set_setting",
+        "ops": [
+          "set_setting"
+        ],
+        "params": [
+          {
+            "key": "ui.scale_percent",
+            "value": 120
+          }
+        ],
+        "confirm": false
+      },
+      "note": "0.8.0 이유가 붙은 설정 문장"
+    },
+    {
+      "id": "ko-105",
+      "category": "ko",
+      "text": "배율 130으로 바꾸고 견적서 요약해줘",
+      "expected": {
+        "intent": "set_setting",
+        "ops": [
+          "set_setting",
+          "summarize"
+        ],
+        "params": [
+          {
+            "key": "ui.scale_percent",
+            "value": 130
+          },
+          null
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "estimate"
+          }
+        }
+      },
+      "note": "0.8.0 설정 + 다른 작업"
+    },
+    {
+      "id": "ko-106",
+      "category": "ko",
+      "text": "UI 배율이 뭐야?",
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "alt": [
+          {
+            "intent": "help",
+            "ops": [
+              "help"
+            ]
+          }
+        ]
+      },
+      "kind": "setting",
+      "note": "0.8.0 반례: 설정 이름이 든 물음"
+    },
+    {
+      "id": "ko-107",
+      "category": "ko",
+      "text": "다크 테마 문서 찾아줘",
+      "expected": {
+        "intent": "search",
+        "ops": [
+          "search"
+        ]
+      },
+      "note": "0.8.0 반례: 설정 값 이름이 든 검색"
+    },
+    {
+      "id": "ko-108",
+      "category": "ko",
+      "text": "이 문서 해상도 300으로 다시 렌더해줘",
+      "expected": {
+        "intent": "rerender",
+        "ops": [
+          "rerender"
+        ],
+        "params": [
+          {
+            "dpi": 300
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      },
+      "note": "0.8.0 반례: 설정이 아니라 이 문서 하나의 재렌더"
+    },
+    {
+      "id": "ko-109",
+      "category": "ko",
+      "text": "DPI 200으로 바꿨어",
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "params": [
+          {
+            "mode": "chat"
+          }
+        ],
+        "confirm": false,
+        "alt": [
+          {
+            "intent": "noop",
+            "ops": [
+              "noop"
+            ]
+          },
+          {
+            "intent": "clarify",
+            "ops": [
+              "clarify"
+            ]
+          }
+        ]
+      },
+      "kind": "setting",
+      "note": "0.8.0 반례: 명령이 아니라 알림"
+    },
+    {
+      "id": "ko-110",
+      "category": "ko",
+      "text": "안녕하세요.",
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "params": [
+          {
+            "mode": "chat"
+          }
+        ],
+        "confirm": false
+      },
+      "note": "0.8.0 사용자 보고(USR-6): 0.7.0은 빈 플랜 카드 + '건너뜀' 결과"
+    },
+    {
+      "id": "ko-111",
+      "category": "ko",
+      "text": "점심 뭐 먹을지 고민이네",
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "params": [
+          {
+            "mode": "chat"
+          }
+        ],
+        "confirm": false,
+        "alt": [
+          {
+            "intent": "noop",
+            "ops": [
+              "noop"
+            ]
+          }
+        ]
+      },
+      "note": "0.8.0 잡담"
+    },
+    {
+      "id": "en-28",
+      "category": "en",
+      "text": "Hello!",
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "params": [
+          {
+            "mode": "chat"
+          }
+        ],
+        "confirm": false
+      },
+      "note": "0.8.0 greeting"
+    },
+    {
+      "id": "en-29",
+      "category": "en",
+      "text": "thanks, that really helped",
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "params": [
+          {
+            "mode": "chat"
+          }
+        ],
+        "confirm": false,
+        "alt": [
+          {
+            "intent": "noop",
+            "ops": [
+              "noop"
+            ]
+          }
+        ]
+      },
+      "note": "0.8.0 thanks with extra words"
+    },
+    {
+      "id": "ko-112",
+      "category": "ko",
+      "text": "애자일 방법론이 뭐야?",
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "params": [
+          {
+            "mode": "general"
+          }
+        ],
+        "confirm": false
+      },
+      "note": "0.8.0 일반 지식 질문(USR-6) — 문서 근거 없이도 답한다"
+    },
+    {
+      "id": "ko-113",
+      "category": "ko",
+      "text": "대한민국 수도가 어디야?",
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "params": [
+          {
+            "mode": "general"
+          }
+        ],
+        "confirm": false
+      },
+      "note": "0.8.0 일반 지식 질문"
+    },
+    {
+      "id": "en-30",
+      "category": "en",
+      "text": "what does SLA stand for?",
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "params": [
+          {
+            "mode": "general"
+          }
+        ],
+        "confirm": false
+      },
+      "note": "0.8.0 general knowledge question"
+    },
+    {
+      "id": "ko-114",
+      "category": "ko",
+      "text": "이 계약서에서 지체상금이 얼마로 정해져 있어?",
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "params": [
+          {
+            "mode": null
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      },
+      "note": "0.8.0 반례: 문서 질문은 근거 기반(mode 없음)"
+    },
+    {
+      "id": "ko-115",
+      "category": "ko",
+      "text": "프로젝트 별 내용을 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "group_by": "project"
+          }
+        ]
+      },
+      "note": "0.8.0 사용자 보고(USR-7): 0.7.0은 전체를 한 덩어리로 요약"
+    },
+    {
+      "id": "ko-116",
+      "category": "ko",
+      "text": "유형별로 문서를 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "group_by": "doc_type"
+          }
+        ]
+      },
+      "note": "0.8.0 묶음 요약"
+    },
+    {
+      "id": "ko-117",
+      "category": "ko",
+      "text": "폴더마다 문서 내용을 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "group_by": "folder"
+          }
+        ]
+      },
+      "note": "0.8.0 묶음 요약"
+    },
+    {
+      "id": "en-31",
+      "category": "en",
+      "text": "summarize the documents by project",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "group_by": "project"
+          }
+        ]
+      },
+      "note": "0.8.0 grouped summary"
+    },
+    {
+      "id": "ko-118",
+      "category": "ko",
+      "text": "선택한 문서를 전부 하나로 묶어 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "target": "set",
+            "group_by": null
+          }
+        ]
+      },
+      "context": {
+        "selected_doc_ids": [
+          "d1a2",
+          "d7f3"
+        ]
+      },
+      "note": "0.8.0 반례: 묶음 하나 — 나누지 않는다"
+    },
+    {
+      "id": "ko-119",
+      "category": "ko",
+      "text": "지난달 견적서 합계를 메일로 보내줘",
+      "expected": {
+        "intent": "aggregate",
+        "ops": [
+          "aggregate"
+        ],
+        "params": [
+          {
+            "fn": "sum"
+          }
+        ],
+        "unmet": true,
+        "confirm": true,
+        "alt": [
+          {
+            "intent": "clarify",
+            "ops": [
+              "clarify"
+            ]
+          }
+        ]
+      },
+      "note": "0.8.0 표현할 수 없는 부분(USR-7): 메일 발송은 없다 — unmet에 적고 확인을 받거나 되묻는다"
+    },
+    {
+      "id": "ko-120",
+      "category": "ko",
+      "text": "견적서를 담당자별로 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "unmet": true,
+        "confirm": true,
+        "alt": [
+          {
+            "intent": "clarify",
+            "ops": [
+              "clarify"
+            ]
+          }
+        ]
+      },
+      "note": "0.8.0 표현할 수 없는 묶음 기준(담당자) — 한 덩어리로 바꿔 바로 실행하지 않는다"
+    },
+    {
+      "id": "ko-121",
+      "category": "ko",
+      "text": "다음 문장을 다듬어줘: 금번 과업은 당사가 수행하며 기한은 12월말까지로 하고 산출물은 설계서와 소스코드로 함. 검수는 발주처가 납품 후 2주 내에 완료하는 것으로 하며 하자보수 기간은 검수 완료일로부터 1년으로 함.",
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "params": [
+          {
+            "knowledge": false
+          }
+        ],
+        "confirm": false
+      },
+      "note": "0.8.0 붙여 넣은 글(PLN-16) — 문서함을 찾지 않는다"
     }
   ]
 }

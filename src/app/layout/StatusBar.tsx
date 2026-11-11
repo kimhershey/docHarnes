@@ -11,6 +11,8 @@ import { useEngineStore } from "@/stores/engine";
 import { useActiveJobs } from "@/stores/jobs";
 import { useWorkspace } from "@/stores/workspace";
 
+import { useModelDisplay } from "../hooks/useModelDisplay";
+
 /** Engine dot + label per design §3.7.1: ● 준비 / 로딩 / 모델 없음 / 오프라인. */
 export function engineIndicator(
   status: ReturnType<typeof useEngineStore.getState>["status"],
@@ -56,7 +58,8 @@ export function StatusBar() {
   const installed = (assessment?.active_model_installed?.installed ?? false) || (index?.discovered.some((d) => d.health.kind === "ready") ?? false);
   const ind = engineIndicator(status, installed);
   const loaded = status?.models.find((m) => m.status === "loaded" || m.status === "sleeping") ?? null;
-  const modelLabel = loaded ? loaded.id : (assessment?.active_model_installed?.installed ? assessment.active_model?.display : null) ?? null;
+  const modelName = useModelDisplay();
+  const modelLabel = loaded ? loaded.id : (assessment?.active_model_installed?.installed ? modelName(assessment.active_model?.display) : null) ?? null;
   const running = jobs.filter((j) => j.state === "running").length;
   const paused = jobs.filter((j) => j.state === "paused").length;
   const queued = jobs.length - running - paused;
@@ -71,7 +74,7 @@ export function StatusBar() {
           {t("statusbar.engine")}: {t(`statusbar.${ind.key}`)}
         </span>
         {modelLabel && (
-          <span className="truncate text-fg-subtle" data-testid="statusbar-model">
+          <span className="truncate text-fg-subtle" title={modelLabel} data-testid="statusbar-model">
             · {modelLabel}
           </span>
         )}

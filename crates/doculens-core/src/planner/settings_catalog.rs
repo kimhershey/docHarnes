@@ -97,12 +97,12 @@ pub const SETTINGS: &[SettingSpec] = &[
     ),
     s("processing.inbox_watch", ValueType::Bool, "inbox 감시", "inbox watching"),
     s("processing.ocr_digital_pdf", ValueType::Bool, "디지털 PDF도 OCR", "OCR digital PDFs too"),
-    s("processing.kie_max_pages", ValueType::Int { min: 1, max: 50 }, "추출 최대 쪽수", "extraction page limit"),
+    s("processing.kie_max_pages", ValueType::Int { min: 1, max: 32 }, "추출 최대 쪽수", "extraction page limit"),
     s("processing.precise_mode", ValueType::Bool, "정밀 모드", "precise mode"),
     s("processing.dense_reocr", ValueType::Bool, "빽빽한 표 재OCR", "re-OCR dense tables"),
     s(
         "processing.dense_cells",
-        ValueType::Int { min: 0, max: 10_000 },
+        ValueType::Int { min: 10, max: 2_000 },
         "빽빽한 표 기준 셀 수",
         "dense-table cell threshold",
     ),
@@ -128,14 +128,14 @@ pub const SETTINGS: &[SettingSpec] = &[
     s("knowledge.allow_general_knowledge", ValueType::Bool, "근거 없을 때 일반 지식 허용", "allow general knowledge"),
     s(
         "knowledge.context_tokens",
-        ValueType::Int { min: 512, max: 131_072 },
+        ValueType::Int { min: 1_000, max: 24_000 },
         "근거 컨텍스트 토큰",
         "evidence context tokens",
     ),
-    s("knowledge.top_k", ValueType::Int { min: 1, max: 50 }, "근거 개수(top-k)", "evidence hits (top-k)"),
+    s("knowledge.top_k", ValueType::Int { min: 1, max: 32 }, "근거 개수(top-k)", "evidence hits (top-k)"),
     s(
         "knowledge.chunk_target_tokens",
-        ValueType::Int { min: 100, max: 4_000 },
+        ValueType::Int { min: 120, max: 2_000 },
         "청크 목표 토큰",
         "chunk target tokens",
     ),
@@ -148,13 +148,13 @@ pub const SETTINGS: &[SettingSpec] = &[
     // generation
     s(
         "generation.max_tokens_gpu",
-        ValueType::Int { min: 256, max: 65_536 },
+        ValueType::Int { min: 1_200, max: 65_536 },
         "문서 작성 토큰 상한(GPU)",
         "drafting token cap (GPU)",
     ),
     s(
         "generation.max_tokens_cpu",
-        ValueType::Int { min: 256, max: 12_288 },
+        ValueType::Int { min: 1_200, max: 12_288 },
         "문서 작성 토큰 상한(CPU)",
         "drafting token cap (CPU)",
     ),
@@ -229,6 +229,246 @@ pub const SETTING_KEYS: &[&str] = &[
     "review_threshold",
     "cache_limit_gb",
 ];
+
+/// Other names users give a setting (lowercase). The labels are names too (`names_of`). Used by
+/// the whole-sentence fast path and by the grounding check of model-proposed changes
+/// (0.8.0 plan §1.5 / §1.6) — never to guess a setting from a word inside a longer sentence.
+pub const NAMES: &[(&str, &[&str])] = &[
+    ("ui.theme", &["테마", "화면 테마", "색 테마", "모드", "theme", "color theme", "mode"]),
+    ("ui.language", &["언어", "ui 언어", "화면 언어", "language", "ui language"]),
+    (
+        "ui.scale_percent",
+        &[
+            "ui 배율",
+            "화면 배율",
+            "배율",
+            "화면 크기",
+            "글자 크기",
+            "글씨 크기",
+            "확대 비율",
+            "ui scale",
+            "scale",
+            "zoom",
+        ],
+    ),
+    ("ui.reduced_motion", &["움직임 줄이기", "애니메이션 줄이기", "reduced motion"]),
+    ("ui.sidebar_collapsed", &["사이드바 접기", "사이드바", "sidebar"]),
+    ("models.tier_mode", &["티어 선택", "티어 모드", "tier mode"]),
+    ("models.manual_tier", &["수동 티어", "manual tier"]),
+    ("models.active_model", &["활성 모델", "사용 모델", "active model"]),
+    ("models.profile", &["프로파일", "추론 프로파일", "profile", "inference profile"]),
+    ("models.backend", &["백엔드", "엔진 백엔드", "backend", "engine backend"]),
+    ("models.resident_models_max", &["상주 모델", "상주 모델 수", "resident models"]),
+    ("models.sleep_idle_seconds", &["엔진 절전 대기", "절전 대기", "engine sleep", "sleep after"]),
+    ("models.allow_online_download", &["온라인 다운로드", "online download", "online downloads"]),
+    ("models.auto_start_engine", &["엔진 자동 시작", "auto start engine", "engine auto start"]),
+    ("models.warmup_after_load", &["워밍업", "로드 후 워밍업", "warm up", "warmup"]),
+    ("models.vision_on_cpu", &["비전 인코더", "vision encoder", "vision on cpu"]),
+    ("models.engine_binary", &["엔진 실행 파일", "engine binary"]),
+    (
+        "processing.auto_level",
+        &["자동 처리", "자동 처리 수준", "가져온 뒤 자동 처리", "auto processing", "processing level"],
+    ),
+    ("processing.inbox_auto_level", &["inbox 자동 처리", "받은 문서함 자동 처리", "inbox processing"]),
+    (
+        "processing.render_dpi",
+        &["렌더 dpi", "렌더링 dpi", "렌더링 해상도", "렌더 해상도", "해상도", "dpi", "render dpi", "resolution"],
+    ),
+    ("processing.review_threshold", &["검토 임계값", "검토 기준", "review threshold"]),
+    ("processing.audit_sample_percent", &["감사 표본", "audit sample"]),
+    ("processing.organize_reviewed_only", &["검토 완료만 정리", "검토 완료 문서만 정리", "reviewed only"]),
+    ("processing.inbox_watch", &["inbox 감시", "받은 문서함 감시", "폴더 감시", "inbox watch", "inbox watching"]),
+    ("processing.ocr_digital_pdf", &["디지털 pdf ocr", "디지털 pdf도 ocr", "ocr digital pdf"]),
+    ("processing.kie_max_pages", &["추출 최대 쪽수", "추출 쪽수", "최대 쪽수", "extraction page limit", "max pages"]),
+    ("processing.precise_mode", &["정밀 모드", "precise mode"]),
+    ("processing.dense_reocr", &["빽빽한 표 재ocr", "잔글씨 재ocr", "dense re-ocr"]),
+    ("processing.dense_cells", &["빽빽한 표 기준", "dense cells"]),
+    (
+        "cache.page_cache_max_gb",
+        &["페이지 캐시 상한", "캐시 상한", "캐시 한도", "페이지 캐시", "cache limit", "page cache"],
+    ),
+    ("cache.keep_thumbnails", &["썸네일 보관", "썸네일 유지", "keep thumbnails"]),
+    ("privacy.pii_masking", &["개인정보 마스킹", "pii 마스킹", "마스킹", "pii masking", "masking"]),
+    ("privacy.db_encryption", &["db 암호화", "데이터베이스 암호화", "database encryption"]),
+    ("notifications.job_complete", &["작업 완료 알림", "완료 알림", "알림", "job notification", "notifications"]),
+    ("notifications.prevent_sleep_during_jobs", &["절전 방지", "배치 중 절전 방지", "prevent sleep"]),
+    ("knowledge.auto_index", &["자동 색인", "auto index", "automatic indexing"]),
+    ("knowledge.auto_embed", &["자동 임베딩", "auto embed", "automatic embedding"]),
+    ("knowledge.embedding_model", &["임베딩 모델", "embedding model"]),
+    ("knowledge.latest_only", &["최신본만", "최신본만 사용", "latest only", "latest editions only"]),
+    ("knowledge.allow_general_knowledge", &["일반 지식 허용", "일반 지식", "general knowledge"]),
+    ("knowledge.context_tokens", &["근거 컨텍스트 토큰", "컨텍스트 토큰", "근거 토큰", "context tokens"]),
+    ("knowledge.top_k", &["근거 개수", "검색 수", "top-k", "top k", "topk"]),
+    ("knowledge.chunk_target_tokens", &["청크 목표 토큰", "청크 크기", "chunk size", "chunk target tokens"]),
+    (
+        "knowledge.min_vector_similarity",
+        &["최소 벡터 유사도", "최소 유사도", "유사도", "minimum similarity", "similarity"],
+    ),
+    (
+        "generation.max_tokens_gpu",
+        &["문서 작성 토큰 상한", "토큰 상한", "토큰 예산", "drafting token cap", "token cap"],
+    ),
+    ("generation.max_tokens_cpu", &["cpu 토큰 상한", "cpu 토큰 예산", "cpu token cap"]),
+    ("journal_days", &["저널 보관 일수", "저널 보관", "journal retention"]),
+];
+
+/// One value of an enum setting and how users say it.
+pub type ValueName = (&'static str, &'static [&'static str]);
+
+/// How users name the values of the enum settings (lowercase; the value itself always counts).
+pub const VALUE_NAMES: &[(&str, &[ValueName])] = &[
+    (
+        "ui.theme",
+        &[
+            ("dark", &["다크", "어두운", "어둡게", "dark"]),
+            ("light", &["라이트", "밝은", "밝게", "light"]),
+            ("system", &["시스템", "system"]),
+            ("high-contrast", &["고대비", "high contrast", "high-contrast"]),
+        ],
+    ),
+    ("ui.language", &[("ko", &["한국어", "한글", "korean"]), ("en", &["영어", "english"])]),
+    (
+        "ui.reduced_motion",
+        &[("system", &["시스템", "system"]), ("on", &["켜", "켜기", "on"]), ("off", &["꺼", "끄기", "off"])],
+    ),
+    ("models.tier_mode", &[("auto", &["자동", "auto"]), ("manual", &["수동", "manual"])]),
+    (
+        "models.profile",
+        &[
+            ("accuracy", &["정확도", "정확", "accuracy"]),
+            ("balanced", &["균형", "balanced"]),
+            ("speed", &["속도", "빠르게", "speed"]),
+            ("fine_print", &["잔글씨", "fine print", "fine_print"]),
+        ],
+    ),
+    (
+        "models.backend",
+        &[("auto", &["자동", "auto"]), ("cuda", &["cuda", "쿠다"]), ("vulkan", &["vulkan", "벌칸"]), ("cpu", &["cpu"])],
+    ),
+    (
+        "processing.auto_level",
+        &[
+            ("none", &["없음", "안 함", "안함", "none"]),
+            ("classify_only", &["분류만", "classify only"]),
+            ("classify_and_ocr", &["분류와 ocr", "ocr까지", "classify and ocr"]),
+            ("full", &["전체", "추출까지", "full"]),
+        ],
+    ),
+    (
+        "processing.inbox_auto_level",
+        &[
+            ("none", &["없음", "안 함", "안함", "none"]),
+            ("classify_only", &["분류만", "classify only"]),
+            ("classify_and_ocr", &["분류와 ocr", "ocr까지", "classify and ocr"]),
+            ("full", &["전체", "추출까지", "full"]),
+        ],
+    ),
+];
+
+/// A label without its unit suffix, lowercase: "UI 배율(%)" → "ui 배율".
+fn bare_label(label: &str) -> String {
+    let cut = label.find(['(', '（']).unwrap_or(label.len());
+    label[..cut].trim().to_lowercase()
+}
+
+/// Every name of a setting, lowercase, longest first: its labels, its path and `NAMES`.
+pub fn names_of(spec: &SettingSpec) -> Vec<String> {
+    let mut names =
+        vec![bare_label(spec.label_ko), bare_label(spec.label_en), spec.label_ko.to_lowercase(), spec.key.to_string()];
+    if let Some((_, extra)) = NAMES.iter().find(|(k, _)| *k == spec.key) {
+        names.extend(extra.iter().map(|n| n.to_string()));
+    }
+    names.retain(|n| !n.is_empty());
+    names.sort_by(|a, b| b.chars().count().cmp(&a.chars().count()).then(a.cmp(b)));
+    names.dedup();
+    names
+}
+
+/// Names of the values of an enum setting (`value`, then how users say it).
+pub fn value_names(key: &str) -> &'static [ValueName] {
+    VALUE_NAMES.iter().find(|(k, _)| *k == key).map(|(_, v)| *v).unwrap_or(&[])
+}
+
+/// What a setting accepts, for messages: "90~150", "150, 200, 300", "켜기 / 끄기", "light, dark, …".
+pub fn range_hint(spec: &SettingSpec, ko: bool) -> String {
+    match spec.ty {
+        ValueType::Bool => (if ko { "켜기 / 끄기" } else { "on / off" }).to_string(),
+        ValueType::Int { min, max } => format!("{min}~{max}"),
+        ValueType::IntChoice(choices) => choices.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(", "),
+        ValueType::Float { min, max, percent } if percent && max <= 1.0 => {
+            format!("{}~{} ({}~{} %)", min, max, (min * 100.0) as i64, (max * 100.0) as i64)
+        }
+        ValueType::Float { min, max, .. } => format!("{min}~{max}"),
+        ValueType::Enum(values) => values.join(", "),
+        ValueType::Str => (if ko { "글자" } else { "text" }).to_string(),
+    }
+}
+
+/// JSON Schema of a setting's value for the planner grammar: the model can only write a value of
+/// the key's type (0.8.0 plan §1.5; until 0.7 every key took any string / number / boolean).
+pub fn value_schema(ty: ValueType) -> Value {
+    match ty {
+        ValueType::Bool => serde_json::json!({ "type": "boolean" }),
+        ValueType::Int { .. } | ValueType::IntChoice(_) => serde_json::json!({ "type": "integer" }),
+        ValueType::Float { .. } => serde_json::json!({ "type": "number" }),
+        ValueType::Enum(values) => serde_json::json!({ "enum": values }),
+        ValueType::Str => serde_json::json!({ "type": "string" }),
+    }
+}
+
+/// Keys the grammar offers for one value shape: the catalog paths only. The 0.1–0.5 short keys
+/// (`ALIASES`) still deserialise, but offering two spellings of one setting gives the model a
+/// choice that means nothing.
+pub fn keys_of_shape(shape: ValueShape) -> Vec<&'static str> {
+    SETTINGS.iter().filter(|s| ValueShape::of(s.ty) == shape).map(|s| s.key).collect()
+}
+
+/// Value shapes of the grammar's `set_setting` alternatives (an enum setting is its own shape).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueShape {
+    Bool,
+    Integer,
+    Number,
+    Text,
+    Choice,
+}
+
+impl ValueShape {
+    pub fn of(ty: ValueType) -> ValueShape {
+        match ty {
+            ValueType::Bool => ValueShape::Bool,
+            ValueType::Int { .. } | ValueType::IntChoice(_) => ValueShape::Integer,
+            ValueType::Float { .. } => ValueShape::Number,
+            ValueType::Str => ValueShape::Text,
+            ValueType::Enum(_) => ValueShape::Choice,
+        }
+    }
+}
+
+/// The catalog as data for the UI (`src/lib/settingsCatalog.json`). The UI's catalog is built from
+/// this file, so a range has one home (audit CON-8: the two catalogs and `settings.rs` disagreed —
+/// "근거 컨텍스트 토큰 40000" passed the planner and failed in the UI, "top-k 50" was saved as 32).
+pub fn export_json() -> Value {
+    use serde_json::json;
+    Value::Array(
+        SETTINGS
+            .iter()
+            .map(|s| {
+                let ty = match s.ty {
+                    ValueType::Bool => json!({ "kind": "boolean" }),
+                    ValueType::Int { min, max } => json!({ "kind": "integer", "min": min, "max": max }),
+                    ValueType::IntChoice(choices) => json!({ "kind": "integer", "choices": choices }),
+                    ValueType::Float { min, max, percent } => {
+                        json!({ "kind": "number", "min": min, "max": max, "percent": percent })
+                    }
+                    ValueType::Enum(values) => json!({ "kind": "enum", "values": values }),
+                    ValueType::Str => json!({ "kind": "string" }),
+                };
+                json!({ "key": s.key, "type": ty, "confirm": s.confirm })
+            })
+            .collect(),
+    )
+}
 
 /// Canonical catalog key of `key` (alias-aware, case-insensitive, `/` tolerated), with its spec.
 pub fn find(key: &str) -> Option<(&'static str, &'static SettingSpec)> {
@@ -363,6 +603,50 @@ pub fn coerce(spec: &SettingSpec, value: &mut Value) -> std::result::Result<(), 
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// `src/lib/settingsCatalog.json` is this table. Regenerate with
+    /// `DOCULENS_WRITE_CATALOG=1 cargo test -p doculens-core --lib settings_catalog` and commit it.
+    #[test]
+    fn the_ui_catalog_file_is_this_table() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/lib/settingsCatalog.json");
+        let expected = serde_json::to_string_pretty(&export_json()).unwrap() + "\n";
+        if std::env::var_os("DOCULENS_WRITE_CATALOG").is_some() {
+            std::fs::write(&path, &expected).unwrap();
+        }
+        let actual = std::fs::read_to_string(&path).unwrap_or_default().replace("\r\n", "\n");
+        assert!(
+            actual == expected,
+            "{} is stale: run `DOCULENS_WRITE_CATALOG=1 cargo test -p doculens-core --lib settings_catalog` and commit it",
+            path.display()
+        );
+    }
+
+    /// The ranges are the ones `AppSettings::normalize` keeps: a value the catalog accepts is the
+    /// value that is saved.
+    #[test]
+    fn accepted_values_survive_normalisation() {
+        use crate::settings::AppSettings;
+        for spec in SETTINGS {
+            let Some((section, field)) = spec.key.split_once('.') else { continue };
+            let edges: Vec<Value> = match spec.ty {
+                ValueType::Int { min, max } => vec![Value::from(min), Value::from(max)],
+                ValueType::IntChoice(choices) => choices.iter().map(|c| Value::from(*c)).collect(),
+                ValueType::Float { min, max, .. } => vec![Value::from(min), Value::from(max)],
+                _ => continue,
+            };
+            for edge in edges {
+                let mut v = serde_json::to_value(AppSettings::default()).unwrap();
+                assert!(v[section].get(field).is_some(), "{} is not a settings field", spec.key);
+                v[section][field] = edge.clone();
+                let mut settings: AppSettings = serde_json::from_value(v).unwrap();
+                settings.normalize();
+                let saved = serde_json::to_value(&settings).unwrap();
+                let got = saved[section][field].as_f64().unwrap();
+                let want = edge.as_f64().unwrap();
+                assert!((got - want).abs() < 1e-6, "{}: {want} is accepted but saved as {got}", spec.key);
+            }
+        }
+    }
 
     #[test]
     fn setting_keys_match_the_catalog() {

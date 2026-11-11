@@ -23,7 +23,7 @@ use crate::knowledge::embed::Embedder;
 use crate::knowledge::repo as knowledge_repo;
 use crate::knowledge::search::{self, SearchDeps};
 use crate::knowledge::tokenize::Analyzer;
-use crate::knowledge::{AnswerKind, AnswerRequest, SearchRequest, SearchScope, SummaryMode};
+use crate::knowledge::{AnswerKind, AnswerRequest, SearchRequest, SearchScope};
 use crate::knowledge::{Collection, CollectionInput, GlossaryInput, VersionInput};
 use crate::organize::{self, journal, OrganizeRequest};
 use crate::paths::WorkspacePaths;
@@ -40,9 +40,10 @@ use crate::settings::{KnowledgeSettings, Language, ProcessingSettings, Profile};
 
 use super::{
     compact, scope, AggregateFn, ExplainScope, ExportLayout, ExportTarget, GroupBy, OcrProfile, Op, OpKind, Plan,
-    ReferenceAction, ReviewOnly, ReviewOp, SchemaAction, Scope, SummarizeTarget, SummaryLength, TemplateAction,
-    TermAction,
+    ReferenceAction, ReviewOnly, ReviewOp, SchemaAction, Scope, TemplateAction, TermAction,
 };
+
+mod summarize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -629,7 +630,7 @@ fn run_step(
                 imported: None,
             })
         }
-        Op::Answer { question, cite: _, knowledge } => {
+        Op::Answer { question, cite: _, knowledge, .. } => {
             let chat = deps.chat.ok_or_else(|| no_model(deps))?;
             let _lease = LeaseGuard::acquire(deps.lease);
             let docs_ = if plan.scope.is_empty() { Vec::new() } else { working_set(deps, plan, imported)? };
@@ -664,51 +665,8 @@ fn run_step(
                 imported: None,
             })
         }
-        Op::Summarize { target, length } => {
-            let chat = deps.chat.ok_or_else(|| no_model(deps))?;
-            let _lease = LeaseGuard::acquire(deps.lease);
-            let docs_ = working_set(deps, plan, imported)?;
-            if docs_.is_empty() {
-                return Err(CoreError::Invalid("no_documents".into()));
-            }
-            let mode = match length {
-                Some(SummaryLength::Short) => SummaryMode::OneLine,
-                Some(SummaryLength::Long) => SummaryMode::OnePage,
-                None => SummaryMode::KeyPoints,
-            };
-            let selected: Vec<&DocumentRecord> = match target {
-                Some(SummarizeTarget::Set) => docs_.iter().collect(),
-                _ => docs_.iter().collect(),
-            };
-            let cancelled = || deps.cancelled();
-            let adeps = AnswerDeps {
-                search: SearchDeps { db, analyzer: deps.analyzer, embedder: deps.embedder },
-                chat,
-                model: deps.model.clone(),
-                cancelled: Some(&cancelled),
-                context_size: deps.ctx_size,
-            };
-            let mut summaries = Vec::new();
-            for (i, d) in selected.iter().enumerate() {
-                deps.checkpoint()?;
-                progress("summarize", i as u32, selected.len() as u32, &d.original_name);
-                let mut req = AnswerRequest::question("");
-                req.kind = AnswerKind::Summary;
-                req.document_id = Some(d.id.clone());
-                req.summary_mode = mode;
-                req.context_tokens = deps.knowledge.context_tokens;
-                let ans = answer::summarize(&adeps, &req, &mut |_| !deps.cancelled())?;
-                summaries.push(json!({ "document_id": d.id, "name": d.original_name, "answer": ans }));
-            }
-            Ok(StepOutcome {
-                summary: if deps.ko() {
-                    format!("{} 요약", count_label(deps, selected.len()))
-                } else {
-                    format!("Summarised {}", count_label(deps, selected.len()))
-                },
-                payload: json!({ "summaries": summaries }),
-                imported: None,
-            })
+        Op::Summarize { target, length, group_by } => {
+            summarize::run(deps, plan, imported, *target, *length, *group_by, progress)
         }
         Op::Aggregate { func, field, group_by, include_unreviewed } => {
             let req = AggregateRequest {

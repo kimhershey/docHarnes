@@ -378,6 +378,7 @@ fn mk_many(ops: Vec<Op>, scope: Scope, confidence: f32, summary: String) -> Plan
         confidence,
         clarification_question: None,
         summary: Some(summary),
+        unmet: None,
     };
     p.requires_confirmation = p.operations.iter().any(Op::needs_confirmation);
     p
@@ -1192,7 +1193,9 @@ fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     let dt = doc_type(t, ctx);
     let d = date(t, ctx);
     let mut scope = scope_of(t, ctx, dt, d.as_ref());
-    if scope.is_empty() && !t.has(ALL_WORDS) {
+    // "프로젝트별로 요약해줘" (0.8.0): one summary per group, over the library unless documents are named.
+    let grouping = if summarize { super::guard::summary_group(t.raw) } else { None };
+    if scope.is_empty() && !t.has(ALL_WORDS) && grouping.is_none() {
         if !selection_ids(ctx).is_empty() && (t.has(&["이", "선택", "this", "selected"]) || summarize || ocr) {
             scope.doc_ids = selection_ids(ctx);
         } else if ctx.current_folder.is_some() && t.has(&["여기", "here"]) {
@@ -1224,7 +1227,7 @@ fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         } else {
             None
         };
-        ops.push(Op::Summarize { target: Some(target), length });
+        ops.push(Op::Summarize { target: Some(target), length, group_by: grouping });
     }
     if classify || generic {
         ops.push(Op::Classify {
@@ -1490,7 +1493,7 @@ fn answer(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         scope.doc_ids = selection_ids(ctx);
     }
     Some(mk(
-        Op::Answer { question: t.raw.trim().to_string(), cite: Some(true), knowledge: None },
+        Op::Answer { question: t.raw.trim().to_string(), cite: Some(true), knowledge: None, mode: None, reply: None },
         scope,
         0.8,
         t.t("지식 베이스·문서에서 근거를 찾아 답합니다", "Answer with evidence from the knowledge base / documents")
@@ -1574,7 +1577,7 @@ fn topic(t: &Text<'_>) -> Option<Plan> {
         return Some(mk(Op::Noop {}, Scope::default(), 0.9, t.t("별도 작업 없음", "Nothing to do").into()));
     }
     Some(mk(
-        Op::Answer { question: t.raw.trim().to_string(), cite: Some(true), knowledge: None },
+        Op::Answer { question: t.raw.trim().to_string(), cite: Some(true), knowledge: None, mode: None, reply: None },
         Scope::default(),
         0.7,
         t.t("지식 베이스·문서에서 근거를 찾아 답합니다", "Answer with evidence from the knowledge base / documents")

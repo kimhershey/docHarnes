@@ -10,7 +10,7 @@ use tauri::{AppHandle, Manager};
 
 use doculens_core::generate::{
     self, store, Draft, DraftOutcome, DraftRequest, DraftSummary, GenerateDeps, SaveRequest, SavedDocument,
-    TemplateInfo, TemplateKind,
+    TemplateInfo,
 };
 use doculens_core::jobs::{JobControl, JobPriority, JobSpec};
 use doculens_core::knowledge::embed::Embedder;
@@ -42,6 +42,11 @@ pub struct BudgetInfo {
     pub cap: u32,
     /// Budgets above this are drafted section by section.
     pub split_threshold: u32,
+    /// Characters of the content (`DraftRequest.content`) and of a revision instruction
+    /// (`DraftRequest.feedback`) a prompt takes at most. A small context takes less; the draft says
+    /// what was cut (`DraftOutcome.input_cuts` and its notes).
+    pub content_max_chars: u32,
+    pub instruction_max_chars: u32,
 }
 
 pub fn budget_info(app: &AppHandle) -> UiResult<BudgetInfo> {
@@ -55,6 +60,8 @@ pub fn budget_info(app: &AppHandle) -> UiResult<BudgetInfo> {
         gpu,
         cap: settings.generation.cap(gpu),
         split_threshold: generate::prompts::SPLIT_THRESHOLD_TOKENS,
+        content_max_chars: generate::prompts::MAX_CONTENT_CHARS as u32,
+        instruction_max_chars: generate::prompts::MAX_FEEDBACK_CHARS as u32,
     })
 }
 
@@ -72,20 +79,13 @@ pub fn draft(app: &AppHandle, mut req: DraftRequest, project_id: Option<String>,
             return Err(UiError::invalid("revise_instruction_empty"));
         }
     }
-    // Caps: the body as the validator allows it, sources and feedback as the prompt takes them.
-    req.content = req.content.trim().chars().take(6_000).collect();
-    for s in &mut req.sources {
-        if let generate::SourceRef::Text { text, .. } = s {
-            if text.chars().count() > 20_000 {
-                *text = text.chars().take(20_000).collect();
-            }
-        }
-    }
-    if let Some(f) = req.feedback.as_mut() {
-        if f.chars().count() > 2_000 {
-            *f = f.chars().take(2_000).collect();
-        }
-    }
+    // Only the size stored with the job is bounded here. What a prompt takes of the content and the
+    // instruction is the core's decision (`prompts::MAX_CONTENT_CHARS` / `MAX_FEEDBACK_CHARS`, less on a
+    // small context), and the core reports a cut in the draft — cutting to those limits here as well
+    // would hide it.
+    req.bound_stored_text();
+    // A draft that belongs to a project searches for evidence inside it, and its result links to it.
+    let project_id = req.bind_project(project_id);
     let state = app.state::<AppState>();
     // The reply token budget is capped by the active backend (GPU 32K / CPU 8K by default, settings).
     if let Some(m) = req.max_tokens {
@@ -122,11 +122,11 @@ fn draft_label(req: &DraftRequest, db: &doculens_core::db::Db) -> String {
     }
 }
 
-/// Whether a request can be filled without the model (보완요청서 from findings).
+/// Whether a request can be filled without the model (a fresh 보완요청서 from findings). A request
+/// with `revise`, `feedback` or `previous` — the 초안 어시스턴트 on such a draft — is not: it takes
+/// the model path like any other draft.
 fn rule_only(req: &DraftRequest) -> bool {
-    req.form_ref.as_deref().and_then(TemplateKind::parse) == Some(TemplateKind::SupplementRequest)
-        && req.sources.iter().all(|s| matches!(s, generate::SourceRef::Text { .. }))
-        && !req.sources.is_empty()
+    generate::draft::rule_only(req)
 }
 
 /// Worker for `JobSpec::Draft`.
@@ -140,6 +140,10 @@ pub fn run_draft(
     pctx: &pipeline_bridge::PipelineContext,
 ) -> WorkerResult {
     let state = app.state::<AppState>();
+    let ko = req.language == doculens_core::settings::Language::Ko;
+    // Whether the draft this job revises is stored right now: a draft deleted while the job runs is
+    // not brought back by its result.
+    let existed = req.previous.as_deref().is_some_and(|p| store::exists(&pctx.docs.paths, &p.id));
     let mut model: Option<String> = None;
     let mut ctx_size = None;
     if !rule_only(req) {
@@ -156,8 +160,12 @@ pub fn run_draft(
     let analyzer = knowledge_bridge::analyzer(app);
     let embedder = knowledge_bridge::embedder(app, false).ok().flatten();
     let import = pctx.docs.deps();
-    // Section-level progress of a split draft ("section 3/8", "outline", "finishing").
+    // Section-level progress of a split draft ("section 3/8", "outline", "finishing") or of a revision.
+    // Every report comes between two model calls, so it is also where the job lets go of the engine:
+    // assistant requests that are waiting run now instead of after the whole draft, and a paused job
+    // parks here until it is resumed (a cancel surfaces through the flag the core checks next).
     let progress_cb = |frac: f32, detail: &str| {
+        let _ = state.gate.checkpoint(ctl);
         state.jobs.progress(&job.id, Some(frac), None, None, Some(detail.to_string()));
     };
     let deps = GenerateDeps {
@@ -175,16 +183,32 @@ pub fn run_draft(
         language: req.language,
         progress: Some(&progress_cb),
     };
-    // The model call holds the engine like any batch step (interactive requests cut in between).
+    // A model call holds the engine like any batch step; interactive requests cut in at the
+    // checkpoints between the calls (the progress callback above). The first checkpoint comes before
+    // the first call: a pause asked for while the model was loading holds the job here, and a request
+    // that is being answered right now finishes first. A rule-composed draft makes no call and does
+    // not wait for anyone.
     let _gate = state.gate.batch_begin();
-    state.jobs.progress(&job.id, Some(0.2), None, None, Some("drafting".into()));
-    let outcome: DraftOutcome = generate::draft(&deps, req).map_err(|e| (e.to_string(), None))?;
-    // A split draft cancelled between sections keeps what was written: save it before reporting the cancel.
-    let _ = store::save(&pctx.docs.paths, &outcome.draft);
-    if ctl.cancelled() {
+    if vlm.is_some() && state.gate.checkpoint(ctl).is_err() {
         return Err(("cancelled".into(), None));
     }
-    let detail = if req.language == doculens_core::settings::Language::Ko {
+    state.jobs.progress(&job.id, Some(0.2), None, None, Some("drafting".into()));
+    let mut outcome: DraftOutcome = generate::draft(&deps, req).map_err(|e| (e.to_string(), None))?;
+    // The result replaces the stored draft it started from only when that loses nothing. After a
+    // cancel (a split draft keeps the sections written so far) or when the stored draft was changed
+    // after this job was created — edits made before a failed job is retried — it is stored as a new
+    // draft; a new draft is stored under its own id as before.
+    let cancelled = ctl.cancelled();
+    let input = store::JobInput { previous: req.previous.as_deref(), captured_at: job.created_at, existed };
+    let stored =
+        store::save_job_result(&pctx.docs.paths, &mut outcome.draft, &input, cancelled, ko).unwrap_or_else(|e| {
+            log::warn!("draft job {}: the result could not be stored: {e}", job.id);
+            store::JobSave::NotSaved { reason: store::SkipReason::Failed }
+        });
+    if cancelled {
+        return Err(("cancelled".into(), None));
+    }
+    let mut detail = if ko {
         format!(
             "{} · 필드 {} · 검토 항목 {}",
             outcome.draft.title,
@@ -199,11 +223,26 @@ pub fn run_draft(
             outcome.draft.issues.len()
         )
     };
+    detail.push_str(match (&stored, ko) {
+        (store::JobSave::Saved, _) => "",
+        (store::JobSave::Copy { .. }, true) => " · 원래 초안이 그 사이 수정되어 새 초안으로 저장",
+        (store::JobSave::Copy { .. }, false) => " · stored as a new draft (the original was edited meanwhile)",
+        (store::JobSave::NotSaved { reason: store::SkipReason::Deleted }, true) => {
+            " · 초안이 삭제되어 목록에 저장하지 않음"
+        }
+        (store::JobSave::NotSaved { reason: store::SkipReason::Deleted }, false) => {
+            " · not stored (the draft was deleted)"
+        }
+        (store::JobSave::NotSaved { reason: store::SkipReason::Failed }, true) => " · 초안 목록에 저장하지 못함",
+        (store::JobSave::NotSaved { reason: store::SkipReason::Failed }, false) => " · could not be stored",
+    });
     let mut payload = serde_json::to_value(&outcome).map_err(|e| (e.to_string(), None))?;
     if let Some(obj) = payload.as_object_mut() {
         obj.insert("project_id".into(), serde_json::json!(project_id));
         // `source` is the draft's own field (rules | model); the job origin lives under its own key.
         obj.insert("job_source".into(), serde_json::json!(source));
+        // Where the result went: `{status: saved}` | `{status: copy, original, reason}` | `{status: not_saved, reason}`.
+        obj.insert("draft_store".into(), serde_json::to_value(&stored).unwrap_or(serde_json::Value::Null));
     }
     Ok((Some(detail), Some(payload)))
 }

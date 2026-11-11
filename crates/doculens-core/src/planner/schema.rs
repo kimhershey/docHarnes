@@ -58,6 +58,14 @@ pub const EXPLAIN_SCOPES: &[&str] = &["kb", "reference", "project", "document"];
 pub const RETENTION_ITEMS: &[&str] = &["documents", "extractions", "logs", "journal", "chats", "temp"];
 /// `set_setting.key`: the settings catalog paths + the 0.1–0.5 short keys (`planner::settings_catalog`).
 pub use super::settings_catalog::SETTING_KEYS;
+
+/// `answer.mode` (0.8.0 plan §1.2).
+pub const ANSWER_MODES: &[&str] = &["chat", "general"];
+/// `summarize.group_by` (0.8.0 plan §1.4).
+pub const SUMMARY_GROUPS: &[&str] = &["none", "project", "doc_type", "folder"];
+/// Routes of the first model call that are not op families: the turn is answered in prose.
+pub const ROUTE_CHAT: &str = "chat";
+pub const ROUTE_GENERAL: &str = "general";
 pub const ROLES: &[&str] = &["work", "knowledge", "form"];
 pub const REFERENCE_ACTIONS: &[&str] = &["create", "rename", "delete", "enable", "disable", "add", "remove"];
 pub const SAVE_DELETE: &[&str] = &["save", "delete"];
@@ -168,15 +176,17 @@ pub const OP_SPECS: &[OpSpec] = &[
             p("question", ParamType::Str, true, "질문", "question"),
             p("cite", ParamType::Bool, false, "출처 인용(기본 true)", "cite sources (default true)"),
             p("knowledge", ParamType::Bool, false, "지식 베이스 검색(기본 true; 사용자가 보낸 글만 다듬을 때 false)", "search the knowledge base (default true; false to work on the user's own text)"),
+            p("mode", ParamType::Enum(ANSWER_MODES), false, "문서 질문이 아닐 때만: chat=인사·잡담, general=문서와 무관한 지식 질문", "only when it is not a document question: chat = greeting / small talk, general = a knowledge question unrelated to the documents"),
         ],
-        desc_ko: "근거 기반 질의응답(지식 베이스·문서)",
-        desc_en: "grounded question answering",
+        desc_ko: "질의응답 — 기본은 문서 근거 기반",
+        desc_en: "question answering — grounded in the documents by default",
     },
     OpSpec {
         kind: OpKind::Summarize,
         params: &[
-            p("target", ParamType::Enum(&["each_doc", "set"]), false, "문서별 / 묶음 하나로", "per document / one summary"),
+            p("target", ParamType::Enum(&["each_doc", "set"]), false, "문서별 / 범위 전체를 묶음 하나로", "per document / the whole scope as one summary"),
             p("length", ParamType::Enum(&["short", "long"]), false, "길이", "length"),
+            p("group_by", ParamType::Enum(SUMMARY_GROUPS), false, "묶음별 요약: 프로젝트·문서 유형·폴더마다 하나씩(‘프로젝트별로’)", "one combined summary per project / document type / folder ('by project')"),
         ],
         desc_ko: "요약",
         desc_en: "summarise",
@@ -624,9 +634,11 @@ pub fn op_specs_for(kinds: &[OpKind]) -> Vec<&'static OpSpec> {
     OP_SPECS.iter().filter(|s| kinds.contains(&s.kind)).collect()
 }
 
-/// The family-selection reply of the two-stage planner: one or two families.
+/// The reply of the first model call (two-stage planning): one or two op families, or one of the
+/// reply routes `chat` / `general` when the turn is not a command at all (0.8.0 plan §1.2).
 pub fn family_schema() -> Value {
-    let families: Vec<Value> = super::OpFamily::ALL.iter().map(|f| Value::String(f.as_str().into())).collect();
+    let mut families: Vec<Value> = vec![Value::String(ROUTE_CHAT.into()), Value::String(ROUTE_GENERAL.into())];
+    families.extend(super::OpFamily::ALL.iter().map(|f| Value::String(f.as_str().into())));
     json!({
         "type": "object",
         "properties": {
@@ -672,6 +684,59 @@ pub fn op_schema(spec: &OpSpec) -> Value {
     json!({ "type": "object", "properties": props, "required": required, "additionalProperties": false })
 }
 
+/// `set_setting` as one grammar alternative per value shape, so the model can only pair a key
+/// with a value of that key's type (0.8.0 plan §1.5): booleans, integers, numbers, free text, and
+/// one alternative per group of enum settings that share their values.
+pub fn setting_schemas() -> Vec<Value> {
+    use super::settings_catalog::{self as catalog, ValueShape, ValueType};
+    let alternative = |keys: Vec<&str>, value: Value| {
+        json!({
+            "type": "object",
+            "properties": { "op": { "const": "set_setting" }, "key": { "enum": keys }, "value": value },
+            "required": ["op", "key", "value"],
+            "additionalProperties": false
+        })
+    };
+    let mut out = Vec::new();
+    for (shape, value) in [
+        (ValueShape::Bool, json!({ "type": "boolean" })),
+        (ValueShape::Integer, json!({ "type": "integer" })),
+        (ValueShape::Number, json!({ "type": "number" })),
+        (ValueShape::Text, json!({ "type": "string" })),
+    ] {
+        let keys = catalog::keys_of_shape(shape);
+        if !keys.is_empty() {
+            out.push(alternative(keys, value));
+        }
+    }
+    // Enum settings, grouped by their value list (the two auto-processing levels share one).
+    let mut groups: Vec<(&'static [&'static str], Vec<&'static str>)> = Vec::new();
+    for key in catalog::keys_of_shape(ValueShape::Choice) {
+        let Some((_, spec)) = catalog::find(key) else { continue };
+        let ValueType::Enum(values) = spec.ty else { continue };
+        match groups.iter_mut().find(|(v, _)| *v == values) {
+            Some((_, keys)) => keys.push(key),
+            None => groups.push((values, vec![key])),
+        }
+    }
+    for (values, keys) in groups {
+        out.push(alternative(keys, json!({ "enum": values })));
+    }
+    out
+}
+
+/// "키 = 라벨 [값]" lines of every setting the assistant may change — the model reads the Korean
+/// label next to the path instead of guessing from 46 English paths (audit USR-1 / PLN-9).
+pub fn settings_table(ko: bool) -> String {
+    use super::settings_catalog as catalog;
+    let mut out = String::new();
+    for spec in catalog::SETTINGS {
+        let label = if ko { spec.label_ko } else { spec.label_en };
+        out.push_str(&format!("  {} = {} [{}]\n", spec.key, label, catalog::range_hint(spec, ko)));
+    }
+    out
+}
+
 pub fn scope_schema() -> Value {
     json!({
         "type": "object",
@@ -707,11 +772,22 @@ pub fn plan_schema() -> Value {
 /// The PlanSchema restricted to `kinds` (the chosen families' ops; 0.6.0 two-stage planning).
 pub fn plan_schema_for(kinds: &[OpKind]) -> Value {
     let intents: Vec<Value> = kinds.iter().map(|k| Value::String(k.as_str().into())).collect();
-    let ops: Vec<Value> = op_specs_for(kinds).into_iter().map(op_schema).collect();
+    let mut ops: Vec<Value> = Vec::new();
+    for spec in op_specs_for(kinds) {
+        if spec.kind == OpKind::SetSetting {
+            ops.extend(setting_schemas());
+        } else {
+            ops.push(op_schema(spec));
+        }
+    }
+    // `required` is the order the model writes the keys in (`jsonorder` keeps it on the wire): the
+    // interpretation first, what it could not express next, the operations after that — and the
+    // confidence last, when there is a plan to be confident about.
     json!({
         "type": "object",
         "properties": {
             "summary": { "type": "string" },
+            "unmet": { "type": "string" },
             "intent": { "enum": intents },
             "scope": scope_schema(),
             "operations": { "type": "array", "items": { "anyOf": ops }, "minItems": 1, "maxItems": super::MAX_OPS },
@@ -719,7 +795,7 @@ pub fn plan_schema_for(kinds: &[OpKind]) -> Value {
             "confidence": { "type": "number" },
             "clarification_question": { "type": "string" }
         },
-        "required": ["summary", "intent", "scope", "operations", "requires_confirmation", "confidence"],
+        "required": ["summary", "unmet", "intent", "scope", "operations", "requires_confirmation", "confidence"],
         "additionalProperties": false
     })
 }
@@ -782,7 +858,14 @@ pub fn op_table_for(kinds: &[OpKind], ko: bool, compact: bool) -> String {
             })
             .collect();
         let desc = if ko { s.desc_ko } else { s.desc_en };
-        if params.is_empty() {
+        if s.kind == OpKind::SetSetting {
+            // The keys come with their labels and accepted values instead of a bare list.
+            out.push_str(&if ko {
+                format!("- set_setting: {desc} [key: 아래 설정 표의 키; value: 그 설정의 값]\n{}", settings_table(true))
+            } else {
+                format!("- set_setting: {desc} [key: a key of the settings table below; value: a value of that setting]\n{}", settings_table(false))
+            });
+        } else if params.is_empty() {
             out.push_str(&format!("- {}: {desc}\n", s.kind.as_str()));
         } else {
             out.push_str(&format!("- {}: {desc} [{}]\n", s.kind.as_str(), params.join("; ")));
