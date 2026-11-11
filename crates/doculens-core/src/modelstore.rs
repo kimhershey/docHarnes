@@ -1146,7 +1146,12 @@ fn free_space_of(dir: &Path) -> Option<u64> {
 #[cfg(windows)]
 fn free_space_of(dir: &Path) -> Option<u64> {
     use std::os::windows::ffi::OsStrExt;
-    let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let mut wide: Vec<u16> = dir.as_os_str().encode_wide().collect();
+    // A UNC name must end with a backslash; a trailing one is fine for every directory.
+    if wide.last() != Some(&u16::from(b'\\')) {
+        wide.push(u16::from(b'\\'));
+    }
+    wide.push(0);
     let mut free_for_caller = 0u64;
     // SAFETY: `wide` is a NUL-terminated UTF-16 path; the two unused out-pointers may be null.
     let ok = unsafe {

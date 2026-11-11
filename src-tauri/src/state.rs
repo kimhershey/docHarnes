@@ -60,6 +60,9 @@ impl UiError {
 
 pub type UiResult<T> = std::result::Result<T, UiError>;
 
+/// How long the exit handler waits for the last database checkpoint.
+const EXIT_CHECKPOINT_WAIT: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// What happened while opening the startup workspace (shown once by the UI).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -351,10 +354,20 @@ impl AppState {
     pub fn release_workspace_for_exit(&self) {
         // Nothing may start against the workspace any more.
         self.switching.store(true, Ordering::SeqCst);
-        let mut guard = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(ws) = guard.take() {
-            ws.close();
+        let Some(ws) = self.workspace.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
+        // The checkpoint waits for the database connection. A job thread that is still inside a
+        // long database call must not keep the app from exiting, so it gets a bounded wait (the
+        // WAL is replayed at the next open otherwise). The lock file goes either way.
+        let db = ws.db.clone();
+        let (done, checkpointed) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new().name("doculens-exit-checkpoint".into()).spawn(move || {
+            let _ = db.checkpoint();
+            let _ = done.send(());
+        });
+        if spawned.is_ok() {
+            let _ = checkpointed.recv_timeout(EXIT_CHECKPOINT_WAIT);
         }
+        drop(ws); // releases the lock file (only if it is still this handle's)
     }
 
     pub fn with_workspace<T>(&self, f: impl FnOnce(&Workspace) -> T) -> UiResult<T> {
