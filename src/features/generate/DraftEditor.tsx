@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import type { Draft, DraftBlock, DraftIssue } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-import { addRow, applySuggestion, blockInputText, blockWithText, fieldKindLabel, insertBlock, isSectionHeading, issuesFor, moveBlock, newBlock, removeBlock, removeRow, sectionAt, setBlock, setBlockLevel, setCell, setFieldValue, setTitle, type NewBlockKind } from "./draft";
+import { addRow, applySuggestion, blockInputText, blockWithText, fieldKindLabel, insertBlock, isSectionHeading, issueLocation, issuesFor, moveBlock, newBlock, removeBlock, removeRow, sectionAt, setBlock, setBlockLevel, setCell, setFieldValue, setTitle, type NewBlockKind } from "./draft";
 
 /**
  * The textarea of one body block. The draft gets the block's text on every keystroke (a list: its cleaned
@@ -316,7 +316,11 @@ export function DraftEditor({ draft, onChange, excluded, onToggleExcluded, disab
               <li key={n} className={cn("flex items-start gap-1.5", i.blocking ? "text-danger" : "text-warn")} data-testid="generate-issue-row" data-issue-code={i.code}>
                 <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
                 <span className="selectable">
-                  {i.message} <span className="text-fg-subtle">({i.path})</span>
+                  {/* Where the issue is, in the draft's words — the field label, the table cell, the body block — not the internal path (UI-8). */}
+                  {i.message}{" "}
+                  <span className="text-fg-subtle" data-testid="generate-issue-where">
+                    ({issueLocation(draft, i.path, t)})
+                  </span>
                 </span>
                 {i.suggestion != null && (
                   <button type="button" className="shrink-0 text-accent hover:underline cursor-pointer" onClick={() => apply(i)}>

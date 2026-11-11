@@ -2644,6 +2644,14 @@
       "move_up": "Move up",
       "move_down": "Move down",
       "level_toggle": "Heading level {{level}} → {{next}}",
+      "issue_at_cell": "{{table}} row {{row}} · {{column}}",
+      "issue_at_body": "Body block {{index}} · {{kind}}",
+      "block_kind": {
+        "heading": "heading",
+        "paragraph": "paragraph",
+        "list": "list",
+        "table_ref": "table"
+      },
       "body_empty": "The body is empty."
     },
     "issue_codes": {

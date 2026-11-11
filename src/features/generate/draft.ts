@@ -251,6 +251,28 @@ export function parseIssuePath(path: string): { kind: "field"; key: string } | {
   return { kind: "other" };
 }
 
+/**
+ * Where a validation issue points, in the draft's own words (UI-8: the list showed the internal paths —
+ * "(fields.grand_total)", "(body[3])"): the field's label, "<table> <n>행 · <column>" or the body block with
+ * its kind. A path of another shape is returned as it is.
+ */
+export function issueLocation(draft: Draft, path: string, t: TFunction): string {
+  const target = parseIssuePath(path);
+  switch (target.kind) {
+    case "field":
+      return draft.fields.find((f) => f.key === target.key)?.label || target.key;
+    case "cell": {
+      const table = draft.tables.find((x) => x.key === target.table);
+      const column = table?.columns.find((c) => c.key === target.column);
+      return t("generate.editor.issue_at_cell", { table: table?.label || target.table, row: target.row + 1, column: column?.label || target.column });
+    }
+    case "body":
+      return t("generate.editor.issue_at_body", { index: target.index + 1, kind: t(`generate.editor.block_kind.${draft.body[target.index]?.kind ?? "paragraph"}`) });
+    default:
+      return path;
+  }
+}
+
 /** Applies the validator's suggestion (computed sum, normalised value) and drops the issue. */
 export function applySuggestion(draft: Draft, issue: DraftIssue): Draft {
   if (issue.suggestion == null) return draft;

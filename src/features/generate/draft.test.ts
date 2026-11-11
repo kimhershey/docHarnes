@@ -1,10 +1,18 @@
 // Draft edit helpers of the 문서 생성 screen: field / cell edits, applying validator
 // suggestions, body block text round-trips, source lists and the form picker mapping.
+import i18next from "i18next";
 import { describe, expect, it } from "vitest";
 
+import en from "@/i18n/en.json";
+import ko from "@/i18n/ko.json";
 import type { Draft, DraftIssue, SchemaRecord, TemplateInfo } from "@/lib/types";
 
-import { addRow, anchorScope, applySuggestion, blockInputText, blockText, blockWithText, clampTokenBudget, documentSourceIds, followScopeAnchor, formRefToPicker, hasBlockingIssues, insertBlock, MIN_TOKEN_BUDGET, moveBlock, newBlock, NO_SCOPE, parseIssuePath, parseTokenBudget, pickerToFormRef, scopeSectionOrdinal, withScopeOrdinal, pickerToReviseScope, removeBlock, removeRow, reviseRequest, reviseScopeLabel, reviseScopeToPicker, sectionAt, sectionsOf, setBlockLevel, setFieldValue, toggleExcluded, withDocumentSources } from "./draft";
+import { addRow, anchorScope, applySuggestion, blockInputText, blockText, blockWithText, clampTokenBudget, documentSourceIds, followScopeAnchor, formRefToPicker, hasBlockingIssues, insertBlock, issueLocation, MIN_TOKEN_BUDGET, moveBlock, newBlock, NO_SCOPE, parseIssuePath, parseTokenBudget, pickerToFormRef, scopeSectionOrdinal, withScopeOrdinal, pickerToReviseScope, removeBlock, removeRow, reviseRequest, reviseScopeLabel, reviseScopeToPicker, sectionAt, sectionsOf, setBlockLevel, setFieldValue, toggleExcluded, withDocumentSources } from "./draft";
+
+const instance = i18next.createInstance();
+await instance.init({ lng: "ko", fallbackLng: false, resources: { ko: { translation: ko }, en: { translation: en } }, interpolation: { escapeValue: false } });
+const t = instance.t.bind(instance);
+const tEn = ((k: string, o?: Record<string, unknown>) => instance.t(k, { ...o, lng: "en" })) as typeof t;
 
 function draft(): Draft {
   return {
@@ -72,6 +80,19 @@ describe("draft edits", () => {
     expect(parseIssuePath("tables.items[2].amount")).toEqual({ kind: "cell", table: "items", row: 2, column: "amount" });
     expect(parseIssuePath("body[3]")).toEqual({ kind: "body", index: 3 });
     expect(parseIssuePath("x")).toEqual({ kind: "other" });
+  });
+
+  it("says where an issue is in the draft's own words, not as an internal path (UI-8)", () => {
+    const d = draft();
+    expect(issueLocation(d, "fields.total", t)).toBe("합계금액");
+    expect(issueLocation(d, "tables.items[0].amount", t)).toBe("견적 품목 1행 · 금액");
+    expect(issueLocation(d, "body[1]", t)).toBe("본문 블록 2 · 문단");
+    expect(issueLocation(d, "body[2]", t)).toBe("본문 블록 3 · 목록");
+    expect(issueLocation(d, "body[0]", tEn)).toBe("Body block 1 · heading");
+    // A key the draft no longer has falls back to the key; a path of another shape is shown as it is.
+    expect(issueLocation(d, "fields.gone", t)).toBe("gone");
+    expect(issueLocation(d, "tables.items[3].extra", t)).toBe("견적 품목 4행 · extra");
+    expect(issueLocation(d, "title", t)).toBe("title");
   });
 
   it("adds and removes table rows", () => {

@@ -2644,6 +2644,14 @@
       "move_up": "위로",
       "move_down": "아래로",
       "level_toggle": "제목 수준 {{level}} → {{next}}",
+      "issue_at_cell": "{{table}} {{row}}행 · {{column}}",
+      "issue_at_body": "본문 블록 {{index}} · {{kind}}",
+      "block_kind": {
+        "heading": "제목",
+        "paragraph": "문단",
+        "list": "목록",
+        "table_ref": "표"
+      },
       "body_empty": "본문이 비어 있습니다."
     },
     "issue_codes": {

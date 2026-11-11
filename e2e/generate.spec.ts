@@ -42,6 +42,11 @@ test.describe("P6 document generation", () => {
     await expect(page.getByTestId("generate-field-input-grand_total")).toHaveValue("7,500,000");
     const issue = page.getByTestId("generate-field-grand_total").getByTestId("generate-issue-sum_mismatch");
     await expect(issue).toBeVisible();
+    // The issue list names the field by its label, not by the internal path "(fields.grand_total)" (UI-8).
+    const totalLabel = ((await page.locator('label[for="gen-field-grand_total"]').textContent()) ?? "").replace("*", "").trim();
+    expect(totalLabel.length).toBeGreaterThan(0);
+    await expect(page.getByTestId("generate-issue-row").filter({ has: page.locator('[data-testid="generate-issue-where"]', { hasText: `(${totalLabel})` }) })).toHaveCount(1);
+    await expect(page.getByTestId("generate-issues")).not.toContainText("fields.grand_total");
 
     // Editing a field marks it as user-edited.
     await page.getByTestId("generate-field-input-note").fill("부가세 별도");
