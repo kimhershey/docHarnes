@@ -55,10 +55,26 @@ describe("summarizeOp", () => {
   it("describes extract / organise / export like the design rows", () => {
     expect(summarizeOp({ op: "extract", schema_ref: "s1", fields: ["a", "b", "c"] }, t, ctx)).toBe("스키마 영수증 · 필드 3개");
     expect(summarizeOp({ op: "extract" }, t, ctx)).toBe("자동(유형별 스키마) · 전체 필드");
-    expect(summarizeOp({ op: "organize", group_by: "month" }, t, ctx)).toBe("documents/{{year}}/{{month}}/{{doc_type}} · group_by=month");
-    expect(summarizeOp({ op: "move", folder: "documents/{{year}}", only_reviewed: false }, t, ctx)).toBe("documents/{{year}} · 검토 미완료 포함");
-    expect(summarizeOp({ op: "export", format: "xlsx", path: "exports/a.xlsx", columns: ["x"], include: ["status"] }, t, ctx)).toBe("XLSX · exports/a.xlsx · 열 1개 · 공통 열: status");
-    expect(summarizeOp({ op: "aggregate", fn: "sum", field: "total", group_by: "month" }, t, ctx)).toBe("합계 · total · group_by=month");
+    // UI-15: no internal notation on the card (`documents/{{doc_type}} · group_by=doc_type`) — the grouping and
+    // the template variables are named in words.
+    expect(summarizeOp({ op: "organize", group_by: "month" }, t, ctx)).toBe("월별 폴더(documents/<연도>/<월>/<유형>)");
+    expect(summarizeOp({ op: "organize", group_by: "doc_type" }, t, ctx)).toBe("유형별 폴더(documents/<유형>)");
+    expect(summarizeOp({ op: "organize", template: "{{year}}-{{month}}_{{vendor}}", folder_template: "archive/{{project}}", group_by: "month", dry_run: true }, t, ctx)).toBe("파일명 <연도>-<월>_<거래처> · 폴더 archive/<프로젝트> · 미리보기만");
+    expect(summarizeOp({ op: "move", folder: "documents/{{year}}", only_reviewed: false }, t, ctx)).toBe("폴더 documents/<연도> · 검토 미완료 포함");
+    expect(summarizeOp({ op: "move", folder: "documents/{{vendor}}/{{doc_type}}", group_by: "vendor" }, t, ctx)).toBe("거래처별 폴더(documents/<거래처>/<유형>)");
+    expect(summarizeOp({ op: "rename", template: "{{title}}_{{seq}}" }, t, ctx)).toBe("파일명 <제목>_<순번>");
+    expect(summarizeOp({ op: "export", format: "xlsx", path: "exports/a.xlsx", columns: ["x"], include: ["status"] }, t, ctx)).toBe("XLSX · exports/a.xlsx · 열 1개 · 공통 열: 상태");
+    expect(summarizeOp({ op: "aggregate", fn: "sum", field: "total", group_by: "month" }, t, ctx)).toBe("합계 · total · 월별");
+    expect(summarizeOp({ op: "aggregate", fn: "count", group_by: "none" }, t, ctx)).toBe("건수");
+    expect(summarizeOp({ op: "import", source: "inbox", auto_pipeline: "classify" }, t, ctx)).toBe("inbox/ · 자동 처리: 분류까지");
+    expect(summarizeOp({ op: "reindex", scope: "vec" }, t, ctx)).toBe("의미(벡터) 색인");
+    const en_ = instance.getFixedT("en");
+    expect(summarizeOp({ op: "organize", group_by: "project" }, en_, { lang: "en", context })).toBe("folders per project (documents/<Project>/<Type>)");
+    // No step summary shows a raw `{{variable}}` or `key=value`.
+    for (const op of [{ op: "organize", group_by: "vendor" }, { op: "move", folder: "x/{{unknown_var}}" }, { op: "rename", template: "{{name}}.{{ext}}" }] as const) {
+      const text = summarizeOp(op as never, t, ctx);
+      expect(text, text).not.toMatch(/\{\{|=/);
+    }
   });
   it("describes the P6 ops (drafts, projects, rules, retention)", () => {
     expect(summarizeOp({ op: "draft_document", form_ref: "quotation", content: "노트북 10대 견적", sources: ["a", "b"], output: "pdf" }, t, ctx)).toBe("양식 견적서 · 노트북 10대 견적 · 인용 문서 2건 · PDF");

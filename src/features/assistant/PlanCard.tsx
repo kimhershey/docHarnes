@@ -246,7 +246,11 @@ export function PlanCard({
                   <span className="tabular-nums text-fg-subtle">{i + 1}</span>
                   <span className="font-medium">{opLabel(op.op, t)}</span>
                   {step?.confirm && <AlertTriangle className="size-3.5 text-warn" role="img" aria-label={t("planner.card.needs_confirmation")} />}
-                  {params && <span className="truncate text-fg-muted selectable">{params}</span>}
+                  {params && (
+                    <span className="truncate text-fg-muted selectable" title={params} data-testid={`plan-step-params-${i}`}>
+                      {params}
+                    </span>
+                  )}
                 </div>
                 {op.op === "set_retention" && retention && retentionShortens(retention, op.item, op.days) && (
                   <span className="text-xs text-warn" data-testid={`plan-retention-shorter-${i}`}>

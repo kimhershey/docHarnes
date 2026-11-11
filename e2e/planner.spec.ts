@@ -136,6 +136,8 @@ test.describe("P5 planner", () => {
     await expect(plan).toHaveAttribute("data-plan-status", "pending");
     await expect(plan).toHaveAttribute("data-plan-active", "true");
     await expect(plan).toContainText(ko.planner.ops.move);
+    // UI-15: the step names the grouping and the folder in words, not `documents/{{year}}/… · group_by=month`.
+    await expect(plan.getByTestId("plan-step-params-0")).toHaveText(tpl(ko.planner.params.folder_grouped, { group: ko.planner.params.group_month, path: "documents/<연도>/<월>/<유형>" }));
     await expect(plan.getByTestId("plan-only-reviewed")).toBeVisible();
     await expect(plan.getByTestId("plan-impact")).toContainText(tpl(ko.planner.card.impact_moves, { count: 1 }));
     const row = plan.locator('[data-testid="plan-preview-row"][data-item-status="move"]').first();

@@ -21,6 +21,7 @@ import {
   type Draft,
   type ExportPreview,
   type ExportResult,
+  type GroupBy,
   type Op,
   type OpKind,
   type OrganizeItem,
@@ -101,9 +102,41 @@ export interface SummaryContext {
   context?: PlanContext | null;
 }
 
+/** "월별" / "거래처별" / "유형별" / "프로젝트별" (null for no grouping). */
+function groupLabel(group: GroupBy | null | undefined, t: TFunction): string | null {
+  switch (group) {
+    case "month":
+      return t("planner.params.group_month");
+    case "vendor":
+      return t("planner.params.group_vendor");
+    case "doc_type":
+      return t("planner.params.group_doc_type");
+    case "project":
+      return t("planner.params.group_project");
+    default:
+      return null;
+  }
+}
+
+/** A file-name / folder template with its variables named in words: `documents/{{year}}/{{doc_type}}` → `documents/<연도>/<유형>`. */
+export function readableTemplate(template: string, t: TFunction): string {
+  return template.replace(/\{\{\s*([A-Za-z_]+)\s*\}\}/g, (_match, name: string) => `<${t(`organize.variables.${name}`, { defaultValue: name })}>`);
+}
+
+/**
+ * Where a file op puts the documents, in words (UI-15: the card showed `documents/{{doc_type}} · group_by=doc_type`):
+ * "유형별 폴더(documents/<유형>)" when the folder is the grouping's own, else "폴더 <path>".
+ */
+function folderLabel(folder: string | null | undefined, group: GroupBy | null | undefined, t: TFunction): string | null {
+  if (!folder) return null;
+  const path = readableTemplate(folder, t);
+  const grouped = group && FOLDER_TEMPLATES[group] === folder ? groupLabel(group, t) : null;
+  return grouped ? t("planner.params.folder_grouped", { group: grouped, path }) : t("planner.params.folder_template", { path });
+}
+
 /**
  * One-line parameter summary of a plan step ("스키마 영수증 · 필드 11개",
- * "documents/{{year}}/{{month}}/{{doc_type}} · group_by=month").
+ * "월별 폴더(documents/<연도>/<월>/<유형>)").
  */
 export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: "ko" }): string {
   const lang = ctx.lang;
@@ -114,7 +147,7 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
       return joinParts([
         source === "folder" ? pt("source_folder", { path: op.path ?? "" }) : source === "files" ? pt("source_files") : pt("source_inbox"),
         op.recursive ? pt("recursive") : null,
-        op.auto_pipeline ? pt("auto_pipeline", { level: op.auto_pipeline }) : null,
+        op.auto_pipeline ? pt("auto_pipeline", { level: t(`settings.processing.auto_levels.${op.auto_pipeline === "classify" ? "classify_only" : op.auto_pipeline}`) }) : null,
       ]);
     }
     case "set_inbox_watch":
@@ -144,7 +177,7 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
         op.action === "correct" && op.field ? `${op.field} = ${op.value ?? ""}` : null,
       ]);
     case "reindex":
-      return op.scope ? pt("scope", { scope: op.scope }) : "";
+      return op.scope ? pt(`reindex_${op.scope}`) : "";
     case "search":
       return joinParts([`'${op.query}'`, op.mode ? t(`search.mode.${op.mode}`) : null, op.top_k ? pt("top_k", { count: op.top_k }) : null]);
     case "answer":
@@ -152,15 +185,15 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
     case "summarize":
       return joinParts([op.target ? pt(op.target) : null, op.length ? pt(op.length) : null]);
     case "aggregate":
-      return joinParts([t(`planner.fn.${op.fn}`), op.field ?? null, op.group_by && op.group_by !== "none" ? pt("group_by", { value: op.group_by }) : null, op.include_unreviewed ? pt("include_unreviewed") : null]);
+      return joinParts([t(`planner.fn.${op.fn}`), op.field ?? null, groupLabel(op.group_by, t), op.include_unreviewed ? pt("include_unreviewed") : null]);
     case "organize": {
       const folder = op.folder_template ?? (op.group_by ? FOLDER_TEMPLATES[op.group_by] : null);
-      return joinParts([op.template ?? null, folder, op.group_by ? pt("group_by", { value: op.group_by }) : null, op.only_reviewed === false ? pt("with_unreviewed") : null, op.dry_run ? pt("dry_run") : null]);
+      return joinParts([op.template ? pt("name_template", { template: readableTemplate(op.template, t) }) : null, folderLabel(folder, op.group_by, t), op.only_reviewed === false ? pt("with_unreviewed") : null, op.dry_run ? pt("dry_run") : null]);
     }
     case "rename":
-      return joinParts([op.template, op.only_reviewed === false ? pt("with_unreviewed") : null]);
+      return joinParts([pt("name_template", { template: readableTemplate(op.template, t) }), op.only_reviewed === false ? pt("with_unreviewed") : null]);
     case "move":
-      return joinParts([op.folder, op.group_by ? pt("group_by", { value: op.group_by }) : null, op.only_reviewed === false ? pt("with_unreviewed") : null]);
+      return joinParts([folderLabel(op.folder, op.group_by, t), op.only_reviewed === false ? pt("with_unreviewed") : null]);
     case "tag":
       return joinParts([op.add && op.add.length > 0 ? `+${op.add.join(", ")}` : null, op.remove && op.remove.length > 0 ? `−${op.remove.join(", ")}` : null]);
     case "delete":
@@ -171,7 +204,7 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
         op.path ?? pt("default_path"),
         op.columns && op.columns.length > 0 ? pt("columns", { count: op.columns.length }) : null,
         op.layout ? pt(`layout_${op.layout}`) : null,
-        op.include && op.include.length > 0 ? pt("include", { list: op.include.join(", ") }) : null,
+        op.include && op.include.length > 0 ? pt("include", { list: op.include.map((column) => t(`export.columns.${column}`)).join(", ") }) : null,
         op.target && op.target !== "fields" ? pt(`target_${op.target}`) : null,
       ]);
     case "draft_document": {
