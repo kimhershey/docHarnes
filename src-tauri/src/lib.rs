@@ -22,9 +22,14 @@ use doculens_core::settings::Theme;
 
 use crate::state::AppState;
 
+/// Size at which the app log is rotated, and how many rotated files are kept next to it.
+const LOG_FILE_MAX_BYTES: u128 = 2 * 1024 * 1024;
+const LOG_FILES_KEPT: usize = 20;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let state = AppState::bootstrap();
+    let log_dir = state.app_paths.logs_dir();
 
     let app = tauri::Builder::default()
         // Registered first: a second launch hands over to the running instance and exits before
@@ -36,6 +41,19 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_log::Builder::new()
+                // The app log lives with the rest of the app data — `<AppData>/DocuLens/logs`, the
+                // folder the guide names and the daily purge cleans by the "앱 로그" retention —
+                // not in the Tauri identifier folder (the plugin's default: one 40 KB file there
+                // that neither of them knew about). Rotated files stay until the purge removes
+                // them by age; `KeepSome` bounds the folder when the purge is off.
+                .clear_targets()
+                .target(tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout))
+                .target(tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Folder {
+                    path: log_dir,
+                    file_name: None,
+                }))
+                .max_file_size(LOG_FILE_MAX_BYTES)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(LOG_FILES_KEPT))
                 .level(log::LevelFilter::Info)
                 .level_for("doculens_core", log::LevelFilter::Debug)
                 .level_for("doculens_lib", log::LevelFilter::Debug)
@@ -47,6 +65,9 @@ pub fn run() {
             let handle = app.handle().clone();
             let state = app.state::<AppState>();
             let _ = state.app.set(handle.clone());
+            if let Ok(old) = app.path().app_log_dir() {
+                remove_legacy_logs(&old, &state.app_paths.logs_dir());
+            }
             state.jobs.attach(handle.clone());
             planner_bridge::install_worker(&handle);
             power::install(&handle);
@@ -270,6 +291,23 @@ pub fn run() {
     });
 }
 
+/// Up to 0.7.x the log plugin wrote to its default folder, `<LocalAppData>/com.doculens.app/logs`.
+/// The log files left there are removed once, so no old log outlives the "앱 로그" retention in a
+/// folder the purge never looks at. Anything that is not a log file stays.
+fn remove_legacy_logs(old: &std::path::Path, current: &std::path::Path) {
+    if old == current {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(old) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() && path.extension().is_some_and(|e| e == "log" || e == "bak") {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+    let _ = std::fs::remove_dir(old); // succeeds only when nothing else is in it
+}
+
 /// A second launch of the app: bring the running window to the front instead.
 fn focus_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -286,5 +324,40 @@ pub(crate) fn native_theme(theme: Theme) -> Option<tauri::Theme> {
         // The high-contrast palette is black-on-white-text (`color-scheme: dark`).
         Theme::Dark | Theme::HighContrast => Some(tauri::Theme::Dark),
         Theme::System => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::test_support::TempDir;
+
+    /// PKG-11: the 0.7.x log folder is emptied of its log files (and removed when that leaves it
+    /// empty); the current log folder is never touched.
+    #[test]
+    fn legacy_log_files_are_removed_once() {
+        let tmp = TempDir::new();
+        let old = tmp.path().join("com.doculens.app").join("logs");
+        let current = tmp.path().join("DocuLens").join("logs");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::create_dir_all(&current).unwrap();
+        for name in ["DocuLens.log", "DocuLens_2026-11-01_09-00-00.log", "DocuLens_2026-11-01_09-00-00.log.bak"] {
+            std::fs::write(old.join(name), b"old").unwrap();
+        }
+        std::fs::write(current.join("DocuLens.log"), b"new").unwrap();
+
+        remove_legacy_logs(&current, &current);
+        assert!(current.join("DocuLens.log").is_file(), "same folder: nothing to clean");
+        remove_legacy_logs(&old, &current);
+        assert!(!old.exists());
+        assert!(current.join("DocuLens.log").is_file());
+
+        // Something that is not a log keeps the folder and itself.
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("notes.txt"), b"keep").unwrap();
+        std::fs::write(old.join("DocuLens.log"), b"old").unwrap();
+        remove_legacy_logs(&old, &current);
+        assert!(old.join("notes.txt").is_file() && !old.join("DocuLens.log").exists());
+        remove_legacy_logs(&tmp.path().join("missing"), &current);
     }
 }
