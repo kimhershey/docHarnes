@@ -5,7 +5,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/ipc";
 import { generateKeys, journalKeys, maintenanceKey, projectKeys } from "@/lib/queries";
 import { queryClient, queryKeys } from "@/lib/query-client";
+import type { SchemaDiscoveryOutcome } from "@/lib/types";
 
+import { usePipelineStore } from "./pipeline";
+import { useSchemasStore } from "./schemas";
 import { resetWorkspaceQueries, useWorkspaceStore } from "./workspace";
 
 /** One key of every query family that reads the open workspace — and one nobody has written yet. */
@@ -77,6 +80,14 @@ describe("workspace switch", () => {
     await store.close();
     expectOnlyMachineDataLeft();
     expect(useWorkspaceStore.getState().current).toBeNull();
+  });
+
+  it("forgets ids of the previous workspace that live outside the query cache", async () => {
+    usePipelineStore.getState().openReviewForDocument("doc-of-workspace-a");
+    useSchemasStore.getState().openDiscovery({ job_id: "job-of-workspace-a" } as unknown as SchemaDiscoveryOutcome);
+    await useWorkspaceStore.getState().create("C:\\Work\\C");
+    expect(usePipelineStore.getState().reviewDocument).toBeNull();
+    expect(useSchemasStore.getState().pending).toBeNull();
   });
 
   it("keeps the caches when the switch fails", async () => {

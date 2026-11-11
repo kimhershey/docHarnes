@@ -7,6 +7,8 @@ import { errorMessage } from "@/lib/utils";
 
 import { resetDocumentQueries } from "./documents";
 import { resetKnowledgeQueries } from "./knowledge";
+import { usePipelineStore } from "./pipeline";
+import { useSchemasStore } from "./schemas";
 import { useSettingsStore } from "./settings";
 
 interface WorkspaceState {
@@ -44,6 +46,10 @@ function afterWorkspaceChange() {
   resetWorkspaceQueries();
   resetDocumentQueries();
   resetKnowledgeQueries();
+  // Ids of the previous workspace held outside the query cache: the review queue's document
+  // filter and a form-discovery result waiting for the 양식 screen.
+  usePipelineStore.setState({ reviewDocument: null, notice: null });
+  useSchemasStore.setState({ pending: null });
   void useSettingsStore.getState().load();
 }
 
