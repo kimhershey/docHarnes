@@ -19,7 +19,7 @@ import { ReferenceAdvancedPanel } from "@/features/knowledge/ReferenceAdvancedPa
 import { ModelsPage } from "@/features/models/ModelsPage";
 import { SchemasPage } from "@/features/schemas/SchemasPage";
 import { loadRouting, saveRouting } from "@/lib/assistant-control";
-import { isTauri, openExternal, revealPath } from "@/lib/ipc";
+import { isTauri, openAppDocument, revealPath } from "@/lib/ipc";
 import { invalidateMaintenance, useAppInfo, useDocuments, useMaintenanceStatus, useRegistry } from "@/lib/queries";
 import { queryClient, queryKeys } from "@/lib/query-client";
 import { LANGUAGES, RETENTION_DAY_ITEMS, THEMES, isJobFinished, type AutoProcessingLevel, type PlanMode, type ReducedMotion, type RetentionPolicy, AUTO_PROCESSING_LEVELS } from "@/lib/types";
@@ -886,6 +886,8 @@ function ShortcutsTab() {
 function AboutTab() {
   const { t } = useTranslation();
   const { data: info } = useAppInfo();
+  const toast = useUiStore((s) => s.toast);
+  const openDocument = (document: Parameters<typeof openAppDocument>[0]) => void openAppDocument(document).catch((e: unknown) => toast(describeError(e, t), "danger"));
   return (
     <Card data-testid="settings-about">
       <CardHeader>
@@ -909,12 +911,17 @@ function AboutTab() {
           <p className="font-medium">{t("settings.about.licenses")}</p>
           <p className="text-fg-muted">{t("settings.about.licenses_hint")}</p>
           <p className="text-fg-muted">{t("settings.about.font")}</p>
+          {/* The files that came with this installation open in a text viewer — no web address: the app runs offline. */}
           <div className="mt-2 flex flex-wrap gap-2">
-            <Button variant="outline" size="sm" onClick={() => void openExternal("https://github.com/kimhershey/docHarnes/blob/main/THIRD-PARTY-NOTICES.md")}>
+            <Button variant="outline" size="sm" disabled={!isTauri} onClick={() => openDocument("notices")} data-testid="about-notices">
               <ExternalLink />
               {t("settings.about.notices")}
             </Button>
-            <Button variant="outline" size="sm" onClick={() => void openExternal("https://github.com/kimhershey/docHarnes/blob/main/docs/design/doculens-design-v1.1.md")}>
+            <Button variant="outline" size="sm" disabled={!isTauri} onClick={() => openDocument("licenses")} data-testid="about-licenses">
+              <ExternalLink />
+              {t("settings.about.license_texts")}
+            </Button>
+            <Button variant="outline" size="sm" disabled={!isTauri} onClick={() => openDocument("design_doc")} data-testid="about-design-doc">
               <ExternalLink />
               {t("settings.about.design_doc")}
             </Button>

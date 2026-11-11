@@ -1163,6 +1163,7 @@
       "licenses": "Open-source notices",
       "licenses_hint": "Only licenses without a source-disclosure obligation are used (Apache-2.0 / MIT / BSD / ISC / OFL …). All model weights are Apache-2.0 (Gemma 4, EmbeddingGemma 2).",
       "notices": "Open THIRD-PARTY-NOTICES",
+      "license_texts": "Open the license texts",
       "design_doc": "Design document",
       "font": "Font: Pretendard Variable (OFL-1.1, unmodified file bundled)"
     },

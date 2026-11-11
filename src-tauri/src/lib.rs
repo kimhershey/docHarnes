@@ -134,6 +134,8 @@ pub fn run() {
             commands::jobs_clear_finished,
             commands::prerouter_route,
             commands::prerouter_resolve_date,
+            commands::reveal_path,
+            commands::open_app_document,
             commands::startup_status,
             commands::documents::documents_list,
             commands::documents::documents_stats,

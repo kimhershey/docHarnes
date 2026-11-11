@@ -653,6 +653,9 @@ export interface AppInfo {
   debug: boolean;
 }
 
+/** Documents shipped with the app (`open_app_document`). */
+export type AppDocument = "notices" | "licenses" | "design_doc";
+
 export interface UiError {
   code: string;
   message: string;

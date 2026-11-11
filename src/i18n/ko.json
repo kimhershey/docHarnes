@@ -1163,6 +1163,7 @@
       "licenses": "오픈소스 고지",
       "licenses_hint": "소스 공개 의무가 없는 라이선스(Apache-2.0 / MIT / BSD / ISC / OFL 등)만 사용합니다. 모델 가중치는 모두 Apache-2.0(Gemma 4, EmbeddingGemma 2)입니다.",
       "notices": "THIRD-PARTY-NOTICES 보기",
+      "license_texts": "라이선스 전문 보기",
       "design_doc": "설계 문서",
       "font": "글꼴: Pretendard Variable (OFL-1.1, 원본 파일 동봉)"
     },

@@ -41,6 +41,7 @@ import type {
   Answer,
   AnswerKind,
   AnswerRequest,
+  AppDocument,
   AppInfo,
   ChatMessageRow,
   ChatSessionSummary,
@@ -426,20 +427,25 @@ export async function pickExecutable(title: string): Promise<string | null> {
   return typeof result === "string" ? result : null;
 }
 
-/** Reveals a path in the OS file manager (Tauri only). */
+/**
+ * Reveals a path in the OS file manager (Tauri only). When the file is gone (moved, deleted) the
+ * nearest folder above it that still exists opens instead — decided in Rust (`reveal_path`).
+ */
 export async function revealPath(path: string): Promise<void> {
   if (!isTauri) {
     console.info("[mock] reveal", path);
     return;
   }
-  const opener = await import("@tauri-apps/plugin-opener");
-  try {
-    await opener.revealItemInDir(path);
-  } catch {
-    // Fallback for paths the reveal API rejects (e.g. a missing file): open the containing folder.
-    const dir = path.replace(/[\\/][^\\/]*$/, "");
-    await opener.openPath(dir || path);
+  await invoke<{ path: string; exact: boolean }>("reveal_path", { path });
+}
+
+/** Opens a document that ships with the app (notices, license texts, design document) in a text viewer (Tauri only). */
+export async function openAppDocument(document: AppDocument): Promise<void> {
+  if (!isTauri) {
+    console.info("[mock] open app document", document);
+    return;
   }
+  await invoke<string>("open_app_document", { document });
 }
 
 export async function openExternal(url: string): Promise<void> {
