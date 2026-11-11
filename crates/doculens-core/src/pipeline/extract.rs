@@ -13,7 +13,7 @@ use super::prompts::{self, Stage};
 use super::repo::NewField;
 use super::schema::{self, FieldDef, FieldKind, SchemaDef, SchemaRecord};
 use super::validate::{self, ConfidenceInput, Values};
-use super::vlm::{Reply, Vlm};
+use super::vlm::{self, Reply, Vlm};
 use super::{ReviewReason, ValidationIssue};
 
 /// One page's input to the extractor.
@@ -32,15 +32,37 @@ pub fn context_overflow(e: &CoreError) -> bool {
     crate::engine::client::context_overflow(e)
 }
 
+/// What the model returned for one page.
+#[derive(Debug, Clone)]
+pub struct PageExtraction {
+    pub value: Value,
+    pub reply: Reply,
+    /// The reply was cut off and salvaged up to its last complete member: fields and table rows
+    /// after the cut are missing.
+    pub partial: bool,
+}
+
+/// The next shorter page-text anchor (half, then nothing).
+fn shorter_anchor(chars: usize) -> usize {
+    if chars > 1_000 {
+        chars / 2
+    } else {
+        0
+    }
+}
+
 /// Extracts one page. `temperature` overrides the preset (precision-mode second sample).
 /// When the prompt does not fit the context, the page-text anchor is shortened
-/// (half, then a quarter, then dropped) before giving up.
+/// (half, then a quarter, then dropped) before giving up. A reply that is cut off by the length
+/// limit no longer fails the page (audit PIP-8): when the context was the limit, the anchor is
+/// shortened to give the reply room; what still arrives cut is salvaged up to its last complete
+/// member and returned as `partial`.
 pub fn extract_page(
     vlm: &Vlm<'_>,
     schema: &SchemaRecord,
     page: &PageInput<'_>,
     temperature: Option<f32>,
-) -> Result<(Value, Reply)> {
+) -> Result<PageExtraction> {
     let js = schema::json_schema(&schema.definition);
     let name = format!("kie_{}", schema.doc_type);
     // Precision mode (§3.4): the same request sampled at T=t with another seed —
@@ -60,6 +82,8 @@ pub fn extract_page(
     let image_tokens = page.image_url.map(|_| p.image_tokens.unwrap_or(1_024)).unwrap_or(0);
     let budget = prompts::text_budget(caller.ctx, image_tokens, p.max_tokens, fixed, prompts::KIE_TEXT_CHARS);
     let mut text_chars = page.text.map(|t| t.chars().count().min(budget)).unwrap_or(0);
+    // The best partial answer so far (a cut-off reply, salvaged).
+    let mut salvaged: Option<PageExtraction> = None;
     loop {
         let shortened;
         let text = match (page.text, text_chars) {
@@ -75,16 +99,53 @@ pub fn extract_page(
             Some(url) => vec![system, user_message_with_image(&prompt, url)],
             None => vec![system, user_message(&prompt)],
         };
-        match caller.call_json(Stage::Kie, &messages, &name, &js, None) {
+        let reply = match caller.call(Stage::Kie, &messages, Some((&name, &js)), None) {
             Err(e) if context_overflow(&e) && text_chars > 0 => {
-                text_chars = if text_chars > 1_000 { text_chars / 2 } else { 0 };
+                text_chars = shorter_anchor(text_chars);
                 log::warn!(
                     "kie page {}: prompt exceeds the context, retrying with {text_chars} text chars",
                     page.page_no
                 );
+                continue;
             }
-            r => return r,
+            // A later attempt failing does not take back what an earlier one salvaged — unless
+            // the run is over anyway (cancelled, engine gone).
+            Err(e) => {
+                return match salvaged {
+                    Some(partial) if !matches!(e, CoreError::Cancelled) && !vlm::engine_unavailable(&e) => Ok(partial),
+                    _ => Err(e),
+                }
+            }
+            Ok(reply) => reply,
+        };
+        if let Some(value) = vlm::parse_json(&reply.content) {
+            return Ok(PageExtraction { value, reply, partial: false });
         }
+        if !reply.truncated {
+            return salvaged.ok_or_else(|| vlm::unusable_json(Stage::Kie, &reply));
+        }
+        let context_full = reply.context_full;
+        match vlm::repair_truncated_json(&reply.content) {
+            Some(value) => salvaged = Some(PageExtraction { value, reply, partial: true }),
+            None if salvaged.is_none() && !(context_full && text_chars > 0) => {
+                return Err(vlm::unusable_json(Stage::Kie, &reply));
+            }
+            None => {}
+        }
+        if context_full && text_chars > 0 {
+            // The context is the limit, not the reply budget: a shorter anchor leaves the reply room.
+            text_chars = shorter_anchor(text_chars);
+            log::warn!("kie page {}: reply cut by the context, retrying with {text_chars} text chars", page.page_no);
+            continue;
+        }
+        if let Some(partial) = &salvaged {
+            log::warn!(
+                "kie page {}: reply cut off after {} tokens, keeping the complete part",
+                page.page_no,
+                partial.reply.usage.completion
+            );
+        }
+        return salvaged.ok_or_else(|| CoreError::engine(format!("kie page {} reply was cut off", page.page_no)));
     }
 }
 
@@ -243,6 +304,32 @@ pub struct Built {
     pub vendor: Option<String>,
     pub doc_date: Option<String>,
     pub total_amount: Option<f64>,
+}
+
+/// Rule name of the marker a partially extracted page leaves on a field.
+pub const RULE_PARTIAL_PAGE: &str = "partial_page";
+
+/// Marks an extraction that is known to be incomplete — a page whose reply was cut off, or a page
+/// that failed while others answered. One field per such page (the last one that got a value from
+/// it, else the first field) carries the note as a warning and goes to the review queue, so the
+/// document cannot settle as reviewed with rows or fields silently missing.
+pub fn flag_incomplete(built: &mut Built, incomplete: &[(u32, String)]) {
+    for (page_no, note) in incomplete {
+        let anchor = built
+            .fields
+            .iter()
+            .rposition(|f| f.page == Some(*page_no) && f.value.is_some())
+            .or_else(|| (!built.fields.is_empty()).then_some(0));
+        let Some(i) = anchor else { continue };
+        let field = &mut built.fields[i];
+        field.validation.push(ValidationIssue {
+            rule: RULE_PARTIAL_PAGE.into(),
+            level: "warn".into(),
+            message: note.clone(),
+        });
+        field.review_reason.get_or_insert(ReviewReason::ValidationFailed);
+    }
+    built.review_count = built.fields.iter().filter(|f| f.review_reason.is_some()).count() as u32;
 }
 
 fn scalar_obj<'a>(v: &'a Value, path: &[&str]) -> Option<&'a Value> {
@@ -681,8 +768,9 @@ mod tests {
         let vlm = Vlm::new(&chat, "m".into(), crate::settings::Profile::Balanced, None);
         let text = "가".repeat(4_000);
         let page = PageInput { page_no: 1, page_count: 1, image_url: None, text: Some(&text) };
-        let (v, _) = extract_page(&vlm, &s, &page, None).unwrap();
-        assert_eq!(v["total"]["value"], "1,000");
+        let x = extract_page(&vlm, &s, &page, None).unwrap();
+        assert_eq!(x.value["total"]["value"], "1,000");
+        assert!(!x.partial);
         let prompts: Vec<usize> = chat
             .requests
             .lock()
@@ -721,6 +809,77 @@ mod tests {
         let err = extract_page(&vlm, &s, &page, None).unwrap_err();
         assert!(context_overflow(&err));
         assert_eq!(chat.requests.lock().unwrap().len(), 4, "4000 → 2000 → 1000 → none");
+    }
+
+    /// Audit PIP-8: a reply cut by the length limit failed the page (and with it the document).
+    #[test]
+    fn a_cut_off_reply_is_salvaged_and_the_context_limit_shortens_the_anchor() {
+        use super::super::vlm::testing::StageChat;
+        let s = receipt_schema();
+        let cut = r#"{"store_name": {"value": "한빛상사", "evidence": "한빛상사", "confidence": 92}, "items": [{"name": "A", "quantity": "1", "unit_price": "500", "amount": "500"}, {"name": "B", "quanti"#;
+        let text = "가".repeat(4_000);
+        let page = PageInput { page_no: 2, page_count: 3, image_url: None, text: Some(&text) };
+
+        // Cut by the reply budget: three attempts with a growing budget, then the complete part is kept.
+        let chat = StageChat::new();
+        for _ in 0..3 {
+            chat.push_raw("kie_receipt", cut, Some("length"));
+        }
+        let vlm = Vlm::new(&chat, "m".into(), crate::settings::Profile::Balanced, None);
+        let x = extract_page(&vlm, &s, &page, None).unwrap();
+        assert!(x.partial && x.reply.truncated);
+        assert_eq!(x.value["store_name"]["value"], "한빛상사");
+        assert_eq!(x.value["items"].as_array().unwrap().len(), 1, "the half-written row is dropped: {}", x.value);
+        assert_eq!(chat.requests.lock().unwrap().len(), 3);
+
+        // Cut by the context (prompt + reply fill it): no bigger budget, a shorter anchor instead —
+        // and the second answer is complete.
+        let chat = StageChat::new();
+        chat.push_raw("kie_receipt", cut, Some("length"));
+        chat.push("kie_receipt", json!({ "store_name": sv("한빛상사", "한빛상사", 92), "items": [] }));
+        *chat.usage.lock().unwrap() = Some((6_200, 2_048)); // 6,200 + 2,048 fill the 8,192 context
+        let vlm = Vlm::new(&chat, "m".into(), crate::settings::Profile::Balanced, None).with_context(Some(8_192));
+        let x = extract_page(&vlm, &s, &page, None).unwrap();
+        assert!(!x.partial, "{}", x.value);
+        let prompts: Vec<usize> = chat
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.messages[1]["content"].as_str().unwrap().chars().count())
+            .collect();
+        assert_eq!(prompts.len(), 2);
+        assert!(prompts[1] < prompts[0], "the retry carries a shorter anchor: {prompts:?}");
+
+        // Nothing complete arrived: the page still fails, with the cut-off error.
+        let chat = StageChat::new();
+        for _ in 0..3 {
+            chat.push_raw("kie_receipt", r#"{"store_name": {"value": "한빛"#, Some("length"));
+        }
+        let vlm = Vlm::new(&chat, "m".into(), crate::settings::Profile::Balanced, None);
+        let err = extract_page(&vlm, &s, &page, None).unwrap_err();
+        assert!(err.to_string().contains("cut off"), "{err}");
+
+        // The marker a partial page leaves: its last value goes to review with a warning.
+        let merged = merge_pages(&s.definition, &[(2, x.value)]);
+        let mut built = build_fields(
+            &s,
+            &merged,
+            None,
+            &BTreeMap::new(),
+            FieldOptions { review_threshold: 0.5, audit_percent: 0, pii_masking: true },
+            "d",
+        );
+        let before = built.review_count;
+        flag_incomplete(&mut built, &[(2, "2쪽: 일부만 추출됨".into())]);
+        let flagged: Vec<&NewField> =
+            built.fields.iter().filter(|f| f.validation.iter().any(|i| i.rule == RULE_PARTIAL_PAGE)).collect();
+        assert_eq!(flagged.len(), 1);
+        assert_eq!(
+            (flagged[0].path.as_str(), flagged[0].review_reason),
+            ("store_name", Some(ReviewReason::ValidationFailed))
+        );
+        assert_eq!(built.review_count, before + 1);
     }
 
     #[test]

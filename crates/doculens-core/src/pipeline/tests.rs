@@ -1241,3 +1241,56 @@ fn restore_applies_to_the_field_of_the_latest_run() {
     let err = review::restore(&w.db, change.id).unwrap_err();
     assert!(err.to_string().contains("field_not_found"), "{err}");
 }
+
+/// Audit PIP-8: one page whose extraction reply was cut off by the length limit (a table of 30+
+/// rows on an 8K preset) failed the whole document and threw the other pages' results away.
+#[test]
+fn one_bad_page_does_not_fail_the_whole_extraction() {
+    let w = World::new();
+    let p1 = "스타벅스 역삼점\n사업자등록번호 220-81-62517\n2026-10-14 12:31\n합계 12,500";
+    w.add_doc("t1", "receipt-3p.pdf", SourceKind::Pdf, &[Some(p1), Some("품목 계속\n라떼 1 5,000"), Some("비고")]);
+    w.chat.push("classify", classify_reply("receipt", 0));
+    // Page 1 answers in full; page 2 is cut inside its second row (three attempts with a growing
+    // reply budget); page 3 answers with something that is not JSON.
+    w.chat.push("kie_receipt", receipt_kie());
+    let cut = r#"{"store_name": {"value": null, "evidence": null, "confidence": 0}, "items": [{"name": "라떼", "quantity": "1", "unit_price": "5,000", "amount": "5,000"}, {"name": "쿠"#;
+    for _ in 0..3 {
+        w.chat.push_raw("kie_receipt", cut, Some("length"));
+    }
+    w.chat.push_raw("kie_receipt", "죄송합니다, 이 쪽은 읽을 수 없습니다.", None);
+    let deps = w.deps(None);
+    let req = ProcessRequest { document_ids: vec!["t1".into()], ..Default::default() };
+    let report = run::process(&deps, &req, &mut |_| {}).unwrap();
+    assert_eq!((report.failed.len(), report.extracted, report.review_pending), (0, 1, 1), "{report:?}");
+    let runs = w.db.with(|c| repo::list_runs(c, "t1")).unwrap();
+    assert_eq!((runs[0].status.as_str(), runs[0].pages_done), ("done", 2));
+    let note = runs[0].error.as_deref().unwrap_or("");
+    assert!(note.contains("2쪽") && note.contains("3쪽") && note.contains("not JSON"), "{note}");
+
+    // Page 1's values and page 2's complete row are there; the half-written row is not.
+    let fields = w.fields("t1");
+    let f = |p: &str| fields.iter().find(|f| f.path == p).unwrap();
+    assert_eq!(f("store_name").value.as_deref(), Some("스타벅스 역삼점"));
+    assert_eq!((f("items[2].name").value.as_deref(), f("items[2].name").page), (Some("라떼"), Some(2)));
+    assert!(fields.iter().all(|f| f.row != Some(3)), "no row from the cut part");
+    // Each incomplete page leaves one marked field in the review queue.
+    let marked: Vec<&str> = fields
+        .iter()
+        .filter(|f| f.validation.iter().any(|i| i.rule == super::extract::RULE_PARTIAL_PAGE))
+        .map(|f| f.path.as_str())
+        .collect();
+    assert_eq!(marked, ["store_name", "items[2].amount"], "page 3 → first field, page 2 → its last value");
+    assert!(fields.iter().filter(|f| marked.contains(&f.path.as_str())).all(|f| f.needs_review()));
+    assert_eq!((w.doc("t1").status, w.doc("t1").review_status), (DocumentStatus::Extracted, ReviewStatus::Pending));
+
+    // When no page answers, the document fails as before.
+    w.add_doc("t2", "bad.pdf", SourceKind::Pdf, &[Some("본문")]);
+    w.db.with(|c| docs::set_doc_type(c, "t2", Some("receipt"), Some("manual"))).unwrap();
+    w.chat.push_raw("kie_receipt", "not json", None);
+    let report =
+        run::process(&deps, &ProcessRequest { document_ids: vec!["t2".into()], ..Default::default() }, &mut |_| {})
+            .unwrap();
+    assert_eq!(report.failed.len(), 1, "{report:?}");
+    assert!(report.failed[0].1.contains("not JSON"), "{:?}", report.failed);
+    assert_eq!(w.db.with(|c| repo::list_runs(c, "t2")).unwrap()[0].status, "failed");
+}

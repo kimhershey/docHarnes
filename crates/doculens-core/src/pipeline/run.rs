@@ -326,7 +326,7 @@ fn process_document(
     })?;
     let started = Instant::now();
     match extract_document(deps, vlm, &schema, &pages, &req.pages, precise, progress) {
-        Ok((merged, second, run_usage, pages_done)) => {
+        Ok(Extracted { merged, second, usage: run_usage, pages_done, incomplete }) => {
             usage.add(run_usage);
             let texts: BTreeMap<u32, String> =
                 pages.iter().filter(|p| has_text(p)).map(|p| (p.page_no, p.text.clone().unwrap_or_default())).collect();
@@ -335,7 +335,12 @@ fn process_document(
                 audit_percent: deps.settings.audit_sample_percent,
                 pii_masking: deps.pii_masking,
             };
-            let built = extract::build_fields(&schema, &merged, second.as_ref(), &texts, opts, &doc.id);
+            let mut built = extract::build_fields(&schema, &merged, second.as_ref(), &texts, opts, &doc.id);
+            // A page that was cut off or failed leaves the result incomplete: it goes to review and
+            // the run says so (the history panel shows the note), instead of the document failing.
+            extract::flag_incomplete(&mut built, &incomplete);
+            let partial_note = (!incomplete.is_empty())
+                .then(|| incomplete.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>().join("; "));
             let review_pending = built.review_count > 0;
             let field_count = built.fields.len() as u32;
             // Nothing unmasked reaches the database or the mirror (§3.8).
@@ -350,7 +355,7 @@ fn process_document(
                     &rid,
                     &RunOutcome {
                         status: "done",
-                        error: None,
+                        error: partial_note.as_deref(),
                         duration_ms: started.elapsed().as_millis() as u64,
                         prompt_tokens: usage.prompt,
                         completion_tokens: usage.completion,
@@ -454,7 +459,23 @@ pub(crate) fn extraction_pages<'a>(pages: &'a [PageRecord], max: usize, only: &[
     chosen
 }
 
-type Extracted = (Value, Option<Value>, Usage, u32);
+/// The merged model output of a document's pages.
+struct Extracted {
+    merged: Value,
+    /// Precision-mode second sample.
+    second: Option<Value>,
+    usage: Usage,
+    /// Pages that produced a result.
+    pages_done: u32,
+    /// Pages whose result is known to be incomplete — the reply was cut off, or the page failed
+    /// while others answered — with the note shown to the reviewer.
+    incomplete: Vec<(u32, String)>,
+}
+
+/// An error that ends the whole run: nothing about one page or one document is wrong.
+fn ends_the_run(e: &CoreError) -> bool {
+    matches!(e, CoreError::Cancelled) || super::vlm::engine_unavailable(e)
+}
 
 fn extract_document(
     deps: &PipelineDeps<'_>,
@@ -474,6 +495,8 @@ fn extract_document(
     let mut usage = Usage::default();
     let mut primary: Vec<(u32, Value)> = Vec::new();
     let mut second: Vec<(u32, Value)> = Vec::new();
+    let mut incomplete: Vec<(u32, String)> = Vec::new();
+    let mut first_failure: Option<CoreError> = None;
     let total = chosen.len() as u32;
     for (i, page) in chosen.iter().enumerate() {
         if deps.cancelled() {
@@ -487,18 +510,53 @@ fn extract_document(
             image_url: img.as_ref().map(|i| i.url.as_str()),
             text: page.text.as_deref(),
         };
-        let (v, reply) = extract::extract_page(vlm, schema, &input, None)?;
-        usage.add(reply.usage);
-        primary.push((page.page_no, v));
+        // One page must not take the document down (audit PIP-8): a page that cannot be extracted
+        // is noted and the pages that answer are used.
+        let page_no = page.page_no;
+        match extract::extract_page(vlm, schema, &input, None) {
+            Ok(x) => {
+                usage.add(x.reply.usage);
+                if x.partial {
+                    incomplete.push((
+                        page_no,
+                        format!(
+                            "{page_no}쪽: 추출 응답이 길이 제한으로 잘려 일부만 추출됨 / page {page_no}: reply cut off, partial result"
+                        ),
+                    ));
+                }
+                primary.push((page_no, x.value));
+            }
+            Err(e) if ends_the_run(&e) => return Err(e),
+            Err(e) => {
+                log::warn!("kie page {page_no} failed: {e}");
+                incomplete.push((
+                    page_no,
+                    format!("{page_no}쪽: 추출 실패 — 이 쪽의 값이 빠져 있음 / page {page_no} failed: {e}"),
+                ));
+                first_failure.get_or_insert(e);
+                continue;
+            }
+        }
         if precise {
-            let (v2, r2) = extract::extract_page(vlm, schema, &input, Some(0.3))?;
-            usage.add(r2.usage);
-            second.push((page.page_no, v2));
+            // The second sample only feeds the agreement signal: without it the page's fields
+            // simply have none.
+            match extract::extract_page(vlm, schema, &input, Some(0.3)) {
+                Ok(x2) => {
+                    usage.add(x2.reply.usage);
+                    second.push((page_no, x2.value));
+                }
+                Err(e) if ends_the_run(&e) => return Err(e),
+                Err(e) => log::warn!("kie page {page_no}: precision sample failed: {e}"),
+            }
         }
     }
+    if primary.is_empty() {
+        // No page answered: the document fails with the first page's error, as before.
+        return Err(first_failure.unwrap_or_else(|| CoreError::engine("no page could be extracted")));
+    }
     let merged = extract::merge_pages(&schema.definition, &primary);
-    let merged2 = precise.then(|| extract::merge_pages(&schema.definition, &second));
-    Ok((merged, merged2, usage, total))
+    let second = precise.then(|| extract::merge_pages(&schema.definition, &second));
+    Ok(Extracted { merged, second, usage, pages_done: primary.len() as u32, incomplete })
 }
 
 /// Human-readable mirror: `extractions/<doc>/<run>/{result.json, pNNNN.md}` + `LATEST`.
