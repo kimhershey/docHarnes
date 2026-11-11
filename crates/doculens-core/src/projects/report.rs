@@ -54,6 +54,15 @@ fn cell(s: &str) -> String {
     s.replace('|', "\\|").replace('\n', " ")
 }
 
+/// `YYYY-MM-DD HH:MM` on the clock of `tz`. Check times are stored in UTC; the report shows them on the
+/// machine's clock (`chrono::Local`) — in UTC they read nine hours early in Korea, often on the day before.
+pub(super) fn stamp<Tz: chrono::TimeZone>(t: &chrono::DateTime<chrono::Utc>, tz: &Tz) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    t.with_timezone(tz).format("%Y-%m-%d %H:%M").to_string()
+}
+
 fn dash(s: Option<&str>) -> String {
     s.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).unwrap_or_else(|| "-".into())
 }
@@ -124,9 +133,7 @@ pub fn render(d: &ProjectDetail, language: Language) -> String {
         tr(ko, "누락", "Missing"),
         p.missing_count,
         tr(ko, "최근 검사", "Last check"),
-        p.last_check_at
-            .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
-            .unwrap_or_else(|| tr(ko, "없음", "none").into()),
+        p.last_check_at.map(|t| stamp(&t, &chrono::Local)).unwrap_or_else(|| tr(ko, "없음", "none").into()),
     ));
     if let Some(n) = p.notes.as_deref().filter(|n| !n.trim().is_empty()) {
         s.push_str(&format!("- {}: {}\n", tr(ko, "메모", "Notes"), n.trim()));
@@ -199,7 +206,7 @@ pub fn render(d: &ProjectDetail, language: Language) -> String {
             s.push_str(&format!(
                 "{} {} — {} {} · {} {} · {} {} · {} {}\n\n",
                 tr(ko, "최근 검사", "Last check"),
-                run.finished_at.format("%Y-%m-%d %H:%M"),
+                stamp(&run.finished_at, &chrono::Local),
                 tr(ko, "통과", "pass"),
                 run.pass,
                 tr(ko, "불일치", "mismatch"),

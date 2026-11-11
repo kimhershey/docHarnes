@@ -1279,6 +1279,24 @@ fn report_markdown_lists_documents_checklist_and_verdicts() {
     assert!(matches!(report(&db, "nope", Language::Ko).unwrap_err(), CoreError::NotFound(_)));
 }
 
+/// PRJ-14: the report prints its check times on the machine's clock — they used to be UTC, nine hours behind
+/// Korean time and often on the previous day. (Run with `TZ=Asia/Seoul` to see the difference.)
+#[test]
+fn report_check_times_are_local() {
+    let db = db();
+    let p = certification_world(&db);
+    let run = check(&deps(&db, None), &p.id, &[]).unwrap();
+    let md = report(&db, &p.id, Language::Ko).unwrap();
+    let local = run.finished_at.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string();
+    assert!(md.contains(&format!("최근 검사: {local}\n")), "header stamp {local}: {md}");
+    assert!(md.contains(&format!("최근 검사 {local} — 통과")), "run stamp {local}: {md}");
+    // Whatever zone the tests run in: a check at 23:30 UTC is 08:30 on the next day in Korea.
+    let t = chrono::DateTime::parse_from_rfc3339("2026-11-10T23:30:00Z").unwrap().with_timezone(&chrono::Utc);
+    let kst = chrono::FixedOffset::east_opt(9 * 3600).unwrap();
+    assert_eq!(report::stamp(&t, &kst), "2026-11-11 08:30");
+    assert_eq!(report::stamp(&t, &chrono::Utc), "2026-11-10 23:30");
+}
+
 #[test]
 fn supplement_request_lists_findings_as_text_sources() {
     let db = db();
