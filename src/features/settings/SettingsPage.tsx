@@ -186,7 +186,7 @@ function GeneralTab() {
       <CardContent className="divide-y divide-border pt-2">
         <Row label={t("settings.general.language")} hint={t("settings.general.language_hint")}>
           <Select value={settings.ui.language} onValueChange={(v) => void setLanguage(v as "ko" | "en")}>
-            <SelectTrigger className="w-48" data-testid="language-select">
+            <SelectTrigger className="w-48" aria-label={t("settings.general.language")} data-testid="language-select">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -206,7 +206,7 @@ function GeneralTab() {
         </Row>
         <Row label={t("settings.general.reduced_motion")}>
           <Select value={settings.ui.reduced_motion} onValueChange={(v) => void update((s) => void (s.ui.reduced_motion = v as ReducedMotion))}>
-            <SelectTrigger className="w-48">
+            <SelectTrigger className="w-48" aria-label={t("settings.general.reduced_motion")} data-testid="settings-reduced-motion">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -451,7 +451,7 @@ function ProcessingTab() {
       <CardContent className="divide-y divide-border">
         <Row label={t("settings.processing.auto_level")}>
           <Select value={p.auto_level} onValueChange={(v) => void update((s) => void (s.processing.auto_level = v as AutoProcessingLevel))}>
-            <SelectTrigger className="w-56">
+            <SelectTrigger className="w-56" aria-label={t("settings.processing.auto_level")} data-testid="settings-auto-level">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -465,7 +465,7 @@ function ProcessingTab() {
         </Row>
         <Row label={t("settings.processing.inbox_auto_level")}>
           <Select value={p.inbox_auto_level} onValueChange={(v) => void update((s) => void (s.processing.inbox_auto_level = v as AutoProcessingLevel))}>
-            <SelectTrigger className="w-56" data-testid="settings-inbox-auto-level">
+            <SelectTrigger className="w-56" aria-label={t("settings.processing.inbox_auto_level")} data-testid="settings-inbox-auto-level">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>

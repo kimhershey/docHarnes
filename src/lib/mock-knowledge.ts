@@ -101,6 +101,11 @@ export function projectReferenceGroup(projectId: string, name: string): Collecti
   return collectionView(s, c);
 }
 
+/** Documents that sit in a reference group (common or a project's): reference material, not work to be filed. */
+export function referenceDocIds(): Set<string> {
+  return new Set(Object.values(load().collectionDocs).flat());
+}
+
 /** `project_update` renamed the project: its reference group follows. */
 export function renameProjectReferenceGroup(projectId: string, name: string): void {
   const s = load();
@@ -375,7 +380,14 @@ function allowedDocs(s: KbState, scope: SearchScope | undefined): Set<string> | 
   if (scope.roles?.length) intersect(new Set(wsDocs().filter((d) => scope.roles?.includes(d.role)).map((d) => d.id)));
   if (scope.folder) intersect(new Set(wsDocs().filter((d) => d.rel_path.startsWith(`${scope.folder}/`)).map((d) => d.id)));
   const excluded = new Set<string>();
-  if (scope.latest_only !== false) for (const [id, v] of Object.entries(s.versions)) if (!v.is_latest) excluded.add(id);
+  if (scope.latest_only !== false) {
+    // An edition is superseded only while its group still has a latest edition whose document is there
+    // (`repo::scope_doc_ids`, KNO-7): once that one is cleared or deleted, the editions that are left are all
+    // there is — hiding them would leave the title unanswerable.
+    const live = new Set(wsDocs().map((d) => d.id));
+    const withLatest = new Set(Object.values(s.versions).filter((v) => v.is_latest && live.has(v.document_id)).map((v) => v.group_key));
+    for (const [id, v] of Object.entries(s.versions)) if (!v.is_latest && withLatest.has(v.group_key)) excluded.add(id);
+  }
   if (!scope.collections?.length && scope.active_collections_only !== false) {
     const inactive = new Set(s.collections.filter((c) => !c.active).map((c) => c.id));
     for (const [cid, ids] of Object.entries(s.collectionDocs)) {
@@ -528,15 +540,20 @@ function citation(index: number, h: SearchHit): Citation {
 
 const cancelledAnswers = new Set<string>();
 
+/** Stand-in for the model's context: the characters of a text-only request (다듬기 · 교정 · 번역) the mock reads. */
+export const TEXT_ONLY_CHARS = 6000;
+
 /** Streams the text in small deltas; returns false when the request was cancelled midway. */
 async function stream(requestId: string, text: string): Promise<boolean> {
-  for (let i = 0; i < text.length; i += 6) {
+  // Six characters at a time; a long text (a pasted document) in at most ~200 pieces, so it does not take minutes.
+  const step = Math.max(6, Math.ceil(text.length / 200));
+  for (let i = 0; i < text.length; i += step) {
     if (cancelledAnswers.has(requestId)) {
       cancelledAnswers.delete(requestId);
       emit(EVENTS.knowledgeAnswer, { request_id: requestId, delta: "", done: true } satisfies AnswerDelta);
       return false;
     }
-    emit(EVENTS.knowledgeAnswer, { request_id: requestId, delta: text.slice(i, i + 6), done: false } satisfies AnswerDelta);
+    emit(EVENTS.knowledgeAnswer, { request_id: requestId, delta: text.slice(i, i + step), done: false } satisfies AnswerDelta);
     await new Promise((r) => setTimeout(r, tick(20)));
   }
   emit(EVENTS.knowledgeAnswer, { request_id: requestId, delta: "", done: true } satisfies AnswerDelta);
@@ -614,7 +631,11 @@ async function answer(req: AnswerRequest, requestId: string): Promise<Answer> {
   }
   if (req.retrieve === false) {
     // Text-only request: the pasted text is the material — nothing is looked up or cited (the "model" tidies it).
-    const body = carriedText(req.question) ?? req.question;
+    const whole = carriedText(req.question) ?? req.question;
+    // A text that does not fit the model's context is read from its beginning only, and the answer says so
+    // (`Answer.truncated`, KNO-3).
+    const body = whole.length > TEXT_ONLY_CHARS ? whole.slice(0, TEXT_ONLY_CHARS) : whole;
+    if (body.length < whole.length) base.truncated = "input";
     base.text = body
       .replace(/\s+/g, " ")
       .replace(/\s*([.。])\s*/g, "$1 ")
@@ -649,8 +670,11 @@ async function answer(req: AnswerRequest, requestId: string): Promise<Answer> {
       kind === "explain" ? `${req.selection ?? ""} ${req.question}`.trim() : previous && looksLikeFollowUp(req.question) ? `${req.question} ${previous}` : req.question;
     const scope: SearchScope = { ...(req.scope ?? {}) };
     if (kind === "explain" && req.document_id && scope.documents?.length && !scope.documents.includes(req.document_id)) scope.documents = [...scope.documents, req.document_id];
+    // Evidence kept from the previous answer counts only inside this request's scope (KNO-1): a chunk of a
+    // document the scope leaves out is dropped, so the answer can still end in "no evidence".
+    const inScope = allowedDocs(s, scope);
     const kept = (req.keep_chunks ?? []).length
-      ? Object.values(s.chunks).flat().filter((c) => req.keep_chunks?.includes(c.id)).map((c) => hitFromChunk(c, wsDocs().find((x) => x.id === c.document_id), ["morph"]))
+      ? Object.values(s.chunks).flat().filter((c) => req.keep_chunks?.includes(c.id) && (!inScope || inScope.has(c.document_id))).map((c) => hitFromChunk(c, wsDocs().find((x) => x.id === c.document_id), ["morph"]))
       : [];
     const fresh = query.trim() ? search({ query, scope, limit: (req.top_k ?? 8) * 2, per_document: 4 }).hits : [];
     const hits = [...kept, ...fresh.filter((h) => !kept.some((k) => k.chunk_id === h.chunk_id))];
@@ -884,8 +908,20 @@ export async function mockKnowledge(cmd: string, a: Record<string, any>): Promis
       return { ...v, title: d ? docTitle(d) : v.document_id };
     }
     case "knowledge_version_clear": {
-      const had = String(a.documentId) in s.versions;
+      const cleared = s.versions[String(a.documentId)];
+      const had = cleared !== undefined;
       delete s.versions[String(a.documentId)];
+      // `repo::clear_version`: when the group's latest edition leaves, the newest one that is left takes over
+      // (effective date, then import time) — the older ones stay behind a current edition.
+      if (cleared?.is_latest) {
+        const docs = new Map(wsDocs().map((d) => [d.id, d]));
+        const left = Object.values(s.versions).filter((v) => v.group_key === cleared.group_key && docs.has(v.document_id));
+        if (left.length > 0 && !left.some((v) => v.is_latest)) {
+          const imported = (v: (typeof left)[number]) => docs.get(v.document_id)?.imported_at ?? "";
+          left.sort((x, y) => (y.effective_date ?? "").localeCompare(x.effective_date ?? "") || imported(y).localeCompare(imported(x)));
+          left[0]!.is_latest = true;
+        }
+      }
       save(s);
       changed("versions", [String(a.documentId)]);
       return had;

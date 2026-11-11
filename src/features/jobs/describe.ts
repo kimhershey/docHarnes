@@ -138,6 +138,10 @@ const ERROR_CODES: Record<string, string> = {
   project_not_found: "jobs.error.project_not_found",
   no_check_run: "jobs.error.no_check_run",
   no_findings: "jobs.error.no_findings",
+  // 보완요청서 (`report::supplement_request`): only passed / undetermined results were selected; the selected
+  // results are not part of the last stored check.
+  findings_not_requestable: "jobs.error.findings_not_requestable",
+  findings_not_in_run: "jobs.error.findings_not_in_run",
   document_not_found: "jobs.error.document_not_found",
   no_fields: "jobs.error.no_fields",
 };

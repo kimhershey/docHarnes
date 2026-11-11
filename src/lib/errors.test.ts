@@ -36,6 +36,23 @@ describe("describeError", () => {
     expect(describeError({ code: "invalid", message: "invalid value: schema_not_found: 영수증 v2" }, t)).toBe(reasons.schema_not_found);
   });
 
+  it("translates the 0.8.0 reasons of the pipeline / document / project commands (`{ code: \"invalid\", message: <reason> }`)", () => {
+    // The last enabled 일반 form cannot be switched off, deleted or retyped (`repo::keep_general`).
+    expect(describeError({ code: "invalid", message: "schema_general_required" }, t)).toBe(reasons.schema_general_required);
+    expect(describeError({ code: "db", message: "database error: Invalid parameter name: schema_general_required" }, t)).toBe(reasons.schema_general_required);
+    // A table export to a folder / an empty path; a merge name that is no file name.
+    expect(describeError({ code: "invalid", message: "export_path_invalid" }, t)).toBe(reasons.export_path_invalid);
+    expect(describeError({ code: "invalid", message: "merge_name_invalid" }, t)).toBe(reasons.merge_name_invalid);
+    // A deletion whose file another program holds open (DOC-12).
+    expect(describeError({ code: "invalid", message: "file_in_use" }, t)).toBe(reasons.file_in_use);
+    expect(describeError({ code: "invalid", message: "invalid value: file_in_use" }, t)).toBe(reasons.file_in_use);
+    // 보완요청서: only passed / undetermined results selected; a selection of another check run.
+    expect(describeError({ code: "invalid", message: "invalid value: findings_not_requestable" }, t)).toBe(reasons.findings_not_requestable);
+    expect(describeError({ code: "invalid", message: "invalid value: findings_not_in_run" }, t)).toBe(reasons.findings_not_in_run);
+    expect(reasons.schema_general_required).toContain("일반");
+    expect(reasons.file_in_use).toContain("사용 중");
+  });
+
   it("names what a `not_found` error is missing (`CoreError::NotFound(\"project <id>\")`)", () => {
     expect(describeError({ code: "not_found", message: "not found: project 3f2a9c" }, t)).toBe(reasons.project_not_found);
     // No copy for that noun: the class template with the raw reason.

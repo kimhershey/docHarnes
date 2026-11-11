@@ -450,6 +450,18 @@ export function clarificationQuestion(plan: Plan): string {
   return plan.clarification_question ?? op?.question ?? "";
 }
 
+/**
+ * The note for a plan that leaves part of the request out (`Plan.unmet`, set by the planner or by
+ * `guard::contract_checks`): the planner's own `unmet_request` warning, else a sentence made from `unmet`.
+ * Null when nothing was left out.
+ */
+export function unmetRequestNote(plan: Pick<Plan, "unmet">, issues: PlanIssue[], t: TFunction): string | null {
+  const issue = issues.find((i) => !i.blocking && i.code === "unmet_request" && i.message.trim() !== "");
+  if (issue) return issue.message.trim();
+  const unmet = (plan.unmet ?? "").trim();
+  return unmet ? t("planner.card.unmet", { unmet }) : null;
+}
+
 /** What the assistant does with a plan before any confirmation logic. */
 export function planKind(plan: Plan): PlanKind {
   if (isClarification(plan)) return "clarify";
@@ -540,6 +552,16 @@ export interface OrganizePreviewRows {
   moves: number;
   held: number;
   unchanged: number;
+}
+
+/**
+ * The text of an organise item's `reason` on the plan / result cards. The reasons with copy of their own
+ * (`project_copy`: the document is a copy filed into the project and stays where it is, `missing_file`) are
+ * shown through `planner.card.reasons.*`; any other reason — an error text, a code without copy — as it is.
+ */
+export function organizeReasonText(reason: string | null | undefined, t: TFunction): string | null {
+  if (!reason) return null;
+  return /^[a-z][a-z0-9_]*$/.test(reason) ? t(`planner.card.reasons.${reason}`, { defaultValue: reason }) : reason;
 }
 
 export function organizePreview(step: StepPreview | undefined): OrganizePreviewRows | null {

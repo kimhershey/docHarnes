@@ -253,7 +253,23 @@ test.describe("P5 planner", () => {
     await expect(plan).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
     await plan.getByTestId("plan-execute").click();
     await expect(plan).toHaveAttribute("data-plan-status", "done", { timeout: 15_000 });
-    // No pause before the reload.
+    // No pause before the reload — beyond the write itself. A card's settled state is written at once, but a
+    // write is a call to the backend: it lands a few turns of the event loop later (in the mock each call
+    // crosses a lazily imported chunk). Reloading at the very moment the card showed "done" cut that call
+    // off about one run in eight on a busy machine, and the card came back as "승인 대기" — the same result
+    // as the bug this test is about. So the page is given event-loop turns, not time: at most 50 (a write that
+    // waited for a 300 ms timer, as it once did, would not be there after them).
+    const stored = await page.evaluate(async () => {
+      type Row = { payload: { kind?: string; status?: string } };
+      const settled = () => {
+        const all = JSON.parse(localStorage.getItem("doculens.mock.chat") ?? "{}") as Record<string, { messages: Record<string, Row[]> }>;
+        const rows = Object.values(all).flatMap((w) => Object.values(w.messages).flat());
+        return rows.some((r) => r.payload.kind === "plan" && r.payload.status === "done") && rows.some((r) => r.payload.kind === "execution");
+      };
+      for (let turn = 0; turn < 50 && !settled(); turn++) await new Promise((r) => setTimeout(r, 0));
+      return settled();
+    });
+    expect(stored, "the executed plan and its execution card are stored within a few turns of the event loop").toBe(true);
     await page.reload();
     await expect(page.getByTestId("app-shell")).toBeVisible();
     await openAssistant(page);
@@ -532,13 +548,18 @@ test.describe("P5 planner", () => {
 
     // 되묻기 on a plan card: the reply re-plans with the plan as context; the old card is closed.
     await send(page, "견적서 월별 폴더로 옮겨");
-    const plan2 = assistantCard(page, "plan").last();
-    await expect(plan2).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
-    await plan2.getByTestId("plan-ask-back-input").fill("검토 안 된 것도 같이 옮겨");
-    await plan2.getByTestId("plan-ask-back").click();
-    await expect(plan2).toHaveAttribute("data-plan-status", "cancelled");
-    await expect(page.locator('[data-testid="assistant-card-plan"]')).toHaveCount(3, { timeout: 15_000 });
-    await expect(assistantCard(page, "plan").last()).toHaveAttribute("data-plan-status", "pending");
+    const plans = page.locator('[data-testid="assistant-card-plan"]');
+    await expect(plans.last()).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    // The cards so far: the aggregate's own plan card (실행됨), the cancelled one and this one. The card that is
+    // asked about is addressed by its position — `.last()` would move on to the re-planned card once it arrives
+    // (the test used to count the cards in the instant before that and failed whenever the reply was quicker).
+    const asked = (await plans.count()) - 1;
+    expect(asked).toBe(2);
+    await plans.nth(asked).getByTestId("plan-ask-back-input").fill("검토 안 된 것도 같이 옮겨");
+    await plans.nth(asked).getByTestId("plan-ask-back").click();
+    await expect(plans.nth(asked)).toHaveAttribute("data-plan-status", "cancelled");
+    await expect(plans).toHaveCount(asked + 2, { timeout: 15_000 });
+    await expect(plans.last()).toHaveAttribute("data-plan-status", "pending");
   });
 
   test("a pasted text with 다듬어줘 is answered from the text itself: no plan card, no retrieval", async ({ page }) => {

@@ -5,6 +5,7 @@ import { queryClient, queryKeys } from "@/lib/query-client";
 import type { Language, RetentionPolicy, StartupStatus, WorkspaceView } from "@/lib/types";
 import { errorMessage } from "@/lib/utils";
 
+import { chatWritesSettled } from "./assistant";
 import { resetDocumentQueries } from "./documents";
 import { resetKnowledgeQueries } from "./knowledge";
 import { usePipelineStore } from "./pipeline";
@@ -69,6 +70,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   },
 
   open: async (path, forceUnlock = false) => {
+    // Chat writes still waiting (the plan editor's keystrokes) belong to the workspace that is open now: they
+    // go out (`flushChatWrites`) before the backend switches, or they would land in the other workspace's
+    // database (KNO-9). A write that is stuck does not block the switch for good.
+    await chatWritesSettled();
     const ws = await api.workspaceOpen(path, forceUnlock);
     set({ current: ws, error: null });
     afterWorkspaceChange();
@@ -76,6 +81,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   },
 
   create: async (path, name = null, locale = null, forceUnlock = false) => {
+    await chatWritesSettled();
     const ws = await api.workspaceCreate(path, name, locale, forceUnlock);
     set({ current: ws, error: null });
     afterWorkspaceChange();
@@ -83,6 +89,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   },
 
   close: async () => {
+    await chatWritesSettled();
     await api.workspaceClose();
     set({ current: null });
     afterWorkspaceChange();

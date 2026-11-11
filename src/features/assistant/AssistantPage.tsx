@@ -15,7 +15,7 @@ import { describeJobError } from "@/features/jobs/describe";
 import { AnswerCard } from "@/features/knowledge/AnswerCard";
 import { openCitation } from "@/features/knowledge/AnswersPanel";
 import { settingsTabPath } from "@/features/settings/tabs";
-import { describePreRoute, executePreRoute, executeUiOps, type UiOpResult } from "@/lib/commands";
+import { describePreRoute, executePreRoute, executeUiOps, undoSettingsChange, type UiOpResult } from "@/lib/commands";
 import { docsFromIds, DropHint, importDroppedFiles, useDocumentDropTarget, type DragDoc } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
 import { askBackText, isCancelCommand, isSlashCommand, loadRouting } from "@/lib/assistant-control";
@@ -23,7 +23,7 @@ import { looksLikeFollowUp } from "@/lib/follow-up";
 import { api } from "@/lib/ipc";
 import { useDocument, useKnowledgeStatus, usePipelineStatus } from "@/lib/queries";
 import { isComposing, matchesChord } from "@/lib/shortcuts";
-import { isJobFinished, type AnswerRequest, type Job, type Op, type Plan, type PlanExecution, type PlanIssue, type PlanResponse, type PreRouteResult, type SearchMode, type SearchScope, type UiPlanContext } from "@/lib/types";
+import { isJobFinished, type Answer, type AnswerRequest, type Job, type Op, type Plan, type PlanExecution, type PlanIssue, type PlanResponse, type PreRouteResult, type SearchMode, type SearchScope, type UiPlanContext } from "@/lib/types";
 import { errorCode, isMac } from "@/lib/utils";
 import { selectMessages, useAssistantStore, type ClarifyStatus, type Message, type NewMessage, type PlanMessage } from "@/stores/assistant";
 import { useAttachmentsStore } from "@/stores/attachments";
@@ -37,9 +37,10 @@ import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
 
+import { planAnswerScope, sameSearchScope } from "./answerScope";
 import { ClarifyCard } from "./ClarifyCard";
 import { conversationTurns } from "./conversation";
-import { clarificationQuestion, isPlanExecution, planKind, requiresConfirmation, sourceLabel, uiContextFor } from "./describePlan";
+import { clarificationQuestion, isPlanExecution, planKind, requiresConfirmation, sourceLabel, uiContextFor, unmetRequestNote } from "./describePlan";
 import { EvidenceCard } from "./evidence";
 import { ExecutionCard } from "./ExecutionCard";
 import { UI_OPS, missingRequiredParams, paramDesc } from "./opSpecs";
@@ -276,14 +277,20 @@ export function AssistantPage() {
       followUp || (history.length > 0 && looksLikeFollowUp(question))
         ? [...messagesOf(sid)].reverse().find((m): m is Extract<Message, { kind: "answer" }> => m.role === "assistant" && m.kind === "answer" && !!m.answer && !m.answer.no_evidence)
         : undefined;
+    const searchScope = extra.scope ?? knowledgeScope();
+    // The previous evidence is only kept while this question looks in the same place as the answer it came
+    // from (KNO-1). After the scope changed — another project, a document attached, a type the plan names —
+    // those passages may lie outside it: sent along, they would be cited for a document the user is not
+    // asking about, and the answer could never be "no evidence".
+    const keep = previous && sameSearchScope(previous.request.scope, searchScope) ? previous.answer!.sources.slice(0, 4).map((s) => s.chunk_id) : [];
     const request: AnswerRequest = {
       question,
       kind: "answer",
-      scope: knowledgeScope(),
+      scope: searchScope,
       allow_general: knowledge?.allow_general_knowledge ?? false,
       top_k: knowledge?.top_k ?? 8,
       context_tokens: knowledge?.context_tokens ?? 6000,
-      keep_chunks: previous ? previous.answer!.sources.slice(0, 4).map((s) => s.chunk_id) : [],
+      keep_chunks: keep,
       history,
       ...extra,
     };
@@ -366,10 +373,15 @@ export function AssistantPage() {
     if (m) await runPlan(sid, m);
   };
 
-  /** 되돌리기 on an executed card: puts the previous values back and marks the card. */
-  const undoExecuted = async (sid: string, id: number, ops: Op[]) => {
-    const results = await executeUiOps(ops, navigate, t);
-    if (results.every((r) => r.ok)) patch(sid, id, (m) => (m.role === "assistant" && m.kind === "executed" ? { ...m, undone: true } : m));
+  /**
+   * 되돌리기 on an executed card: puts the previous values back and marks the card — unless the setting was
+   * changed again since (by a later sentence, on the settings screen, before a restart): then the value the
+   * card would put back is no longer "the previous one", nothing is changed and the card says so.
+   */
+  const undoExecuted = async (sid: string, id: number, ops: Op[], applied: Op[] | undefined) => {
+    const outcome = await undoSettingsChange(ops, applied, navigate, t);
+    if (outcome === "failed") return;
+    patch(sid, id, (m) => (m.role === "assistant" && m.kind === "executed" ? (outcome === "stale" ? { ...m, undoStale: true } : { ...m, undone: true }) : m));
   };
 
   const cancelPlan = (sid: string, id: number) => patchPlan(sid, id, (x) => ({ ...x, status: "cancelled", editing: false }));
@@ -438,19 +450,41 @@ export function AssistantPage() {
         const found = plan.operations.find((o) => o.op === "answer");
         const op = found && found.op === "answer" ? found : null;
         const question = op ? op.question : textValue;
+        // What the planner says the plan leaves out ("위약금 조항 알려주고 메일로 보내줘": no mail is sent) is said
+        // before the answer. A plan card would show the note next to its approve button; an answer has no
+        // side effect to approve, so it does not wait — but the part that was dropped must not vanish.
+        const unmetNote = unmetRequestNote(plan, response.result.issues, t);
+        if (unmetNote) push(sid, { role: "assistant", kind: "reply", text: unmetNote, source: sourceLabel(response.result.source, t), note: "unmet" });
         // A ready reply (a fixed greeting, "this cannot be done"): shown as it is, no model call.
         if (op?.reply) {
           push(sid, { role: "assistant", kind: "reply", text: op.reply, source: sourceLabel(response.result.source, t) });
           return;
         }
-        const base = knowledgeScope();
-        if (plan.scope.doc_ids && plan.scope.doc_ids.length > 0) base.documents = plan.scope.doc_ids;
-        if (plan.scope.folder) base.folder = plan.scope.folder;
         // mode=chat: small talk, nothing is looked up. mode=general: not about the documents — evidence when
         // there is some, general knowledge (marked as such) otherwise, whatever the setting says.
         // knowledge=false: the sentence carries the text to work on — answer from it, look nothing up.
         const style = op?.mode === "chat" ? "chat" : op?.mode === "general" ? "general" : null;
         const retrieve = style !== "chat" && op?.knowledge !== false;
+        const base = knowledgeScope();
+        // The scope the plan names is the scope of the question (KNO-5): "지난달 회의록에서 결정된 사항은?" and
+        // "한빛 프로젝트 문서에서 납품 기한 알려줘" look in the documents the plan's scope resolved to (the
+        // preview's), not in everything the selector allows. An answer that looks nothing up has no scope.
+        const target = retrieve ? planAnswerScope(plan, response.preview) : ({ kind: "selector" } as const);
+        if (target.kind === "none") {
+          // The scope matches no document: "no evidence" for that scope, without a model call — an empty
+          // document list in the request would search everything. (The card offers no "일반 지식으로 답하기":
+          // its request has no scope to repeat.)
+          const noDocuments: Answer = { id: null, kind: "answer", question, text: t("assistant.scope.no_documents"), sentences: [], sources: [], no_evidence: true, used_general_knowledge: false, conflicts: null, model: null, elapsed_ms: 0, prompt_tokens: 0, completion_tokens: 0, document_id: null, created_at: new Date().toISOString(), feedback: null };
+          push(sid, { role: "assistant", kind: "answer", requestId: newRequestId(), request: { question, kind: "answer", scope: base, retrieve, history: [] }, answer: noDocuments, error: null, pending: false, scopeEmpty: true });
+          return;
+        }
+        if (target.kind === "documents") {
+          if (target.documents.length > 0) base.documents = target.documents;
+          if (target.projectId) base.project_id = target.projectId;
+        } else {
+          if (plan.scope.doc_ids && plan.scope.doc_ids.length > 0) base.documents = plan.scope.doc_ids;
+          if (plan.scope.folder) base.folder = plan.scope.folder;
+        }
         await askKnowledge(sid, question, { scope: base, retrieve, ...(style ? { style } : {}), ...(style === "general" ? { allow_general: true } : {}) });
         return;
       }
@@ -461,9 +495,11 @@ export function AssistantPage() {
           const failures = results.filter((r) => !r.ok).map((r) => r.error ?? "");
           // The card says what ran — or, when nothing ran, what was asked for — and lists the ops that failed.
           const summary = ran.map((r) => r.summary).filter(Boolean).join(" · ") || plan.summary || textValue;
-          // What a settings change replaced can be put back from the card (last change first).
+          // What a settings change replaced can be put back from the card (last change first) — while the
+          // settings still hold what the change set (`applied`).
           const undo = ran.flatMap((r) => r.undo ?? []).reverse();
-          push(sid, { role: "assistant", kind: "executed", text: summary, source: sourceLabel(response.result.source, t), confidence: plan.confidence, ...(failures.length > 0 ? { failures, ran: ran.length } : {}), ...(undo.length > 0 ? { undo } : {}) });
+          const applied = ran.flatMap((r) => r.applied ?? []);
+          push(sid, { role: "assistant", kind: "executed", text: summary, source: sourceLabel(response.result.source, t), confidence: plan.confidence, ...(failures.length > 0 ? { failures, ran: ran.length } : {}), ...(undo.length > 0 ? { undo, applied } : {}) });
           return;
         }
         break;
@@ -816,11 +852,17 @@ export function AssistantPage() {
                       pending={m.pending}
                       streamText={streams[m.requestId] ?? ""}
                       error={m.error}
+                      // A small-talk reply (the request went out with `style: "chat"`, kept on the stored message)
+                      // is not a text-only answer: no "검색 없이 답변" badge.
+                      chat={m.request.style === "chat"}
+                      // The scope the question named matches no document (KNO-5): the card says so.
+                      noEvidenceText={m.scopeEmpty ? t("assistant.scope.no_documents") : undefined}
                       onCitation={(c) => openCitation(navigate, c)}
                       // "일반 지식으로 답하기": the stored request again — the scope (and history) of the original
                       // question, not what the selector shows by now (KNO-13) — with general knowledge allowed.
                       // Not from a record (CON-16): its request was cut to fit, the scope's documents included.
-                      onAskGeneral={m.clipped === "all" ? undefined : () => void askKnowledge(sid, m.request.question, { ...m.request, allow_general: true, keep_chunks: [] })}
+                      // Not for a scope without documents either: there is no request that searched it.
+                      onAskGeneral={m.clipped === "all" || m.scopeEmpty ? undefined : () => void askKnowledge(sid, m.request.question, { ...m.request, allow_general: true, keep_chunks: [] })}
                       onFeedback={(id, v) => void feedback(sid, m.id, id, v)}
                       onCancel={m.pending && cancelling !== m.requestId ? () => cancelAnswer(m.requestId) : undefined}
                     />
@@ -880,8 +922,12 @@ export function AssistantPage() {
                   />
                 )}
                 {m.kind === "reply" && (
-                  <div className="w-full rounded-lg border border-border bg-bg-elevated p-3 text-sm" role="group" aria-label={t("assistant.reply_label")} data-testid="assistant-card-reply">
-                    <p className="whitespace-pre-line selectable">{m.text}</p>
+                  <div className="w-full rounded-lg border border-border bg-bg-elevated p-3 text-sm" role="group" aria-label={t("assistant.reply_label")} data-testid="assistant-card-reply" data-reply-note={m.note}>
+                    {/* A note about the part of the request that was not carried out reads as a warning. */}
+                    <p className={m.note === "unmet" ? "flex items-start gap-1.5 whitespace-pre-line text-warn selectable" : "whitespace-pre-line selectable"}>
+                      {m.note === "unmet" && <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />}
+                      <span className="min-w-0">{m.text}</span>
+                    </p>
                     <p className="mt-1 text-xs text-fg-subtle">{t("planner.card.source", { source: m.source })}</p>
                   </div>
                 )}
@@ -908,8 +954,12 @@ export function AssistantPage() {
                               <span className="text-xs text-fg-muted" data-testid="executed-undone">
                                 {t("assistant.undone")}
                               </span>
+                            ) : m.undoStale ? (
+                              <span className="text-xs text-fg-muted" data-testid="executed-undo-stale">
+                                {t("assistant.undo_stale")}
+                              </span>
                             ) : (
-                              <Button size="sm" variant="outline" onClick={() => activeId && void undoExecuted(activeId, m.id, m.undo ?? [])} data-testid="executed-undo">
+                              <Button size="sm" variant="outline" onClick={() => activeId && void undoExecuted(activeId, m.id, m.undo ?? [], m.applied)} data-testid="executed-undo">
                                 {t("assistant.undo_change")}
                               </Button>
                             )}

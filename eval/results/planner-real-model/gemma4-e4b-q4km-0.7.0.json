@@ -25,8 +25,8 @@
  "mode": "model",
  "model": "gemma4-e4b-q4km",
  "golden": "eval/golden/planner.json (part)",
- "note": "merged from 2 batch runs of doculens-eval planner --engine … --model gemma4-e4b-q4km --backend cpu",
- "total": 10,
+ "note": "merged from 4 batch runs of doculens-eval planner --engine … --model gemma4-e4b-q4km --backend cpu",
+ "total": 23,
  "items": [
   {
    "id": "ko-94",
@@ -465,6 +465,532 @@
     "filter": {}
    },
    "raw": "{\n  \"confidence\": 0.9,\n  \"intent\": \"clarify\",\n  \"operations\": [\n    {\n      \"op\": \"clarify\",\n      \"question\": \"UI 배율이 무엇인지에 대한 설명을 요청하셨습니다. 이 질문은 시스템 설정에 대한 일반적인 질문이므로, 특정 문서나 작업에 대한 요청이 아닙니다. DocuLens의 UI 배율 설정(ui.scale_percent)에 대해 더 자세히 알고 싶으신가요, 아니면 다른 것을 문의하신 것인가요?\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {},\n  \"summary\": \"UI 배율에 대한 정의를 요청함\"\n}"
+  },
+  {
+   "id": "ko-120",
+   "category": "ko",
+   "text": "견적서를 담당자별로 요약해줘",
+   "correct": true,
+   "source": "model",
+   "intent": "summarize",
+   "ops": [
+    "summarize"
+   ],
+   "summary": "견적서(estimate)를 담당자별로 요약합니다.",
+   "confidence": 0.9,
+   "latency_ms": 232329.691308,
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 3444,
+   "completion_tokens": 138,
+   "mismatches": [],
+   "operations": [
+    {
+     "op": "summarize",
+     "target": "each_doc"
+    }
+   ],
+   "scope": {
+    "filter": {
+     "doc_type": "estimate"
+    }
+   },
+   "raw": "{\n  \"confidence\": 0.9,\n  \"intent\": \"summarize\",\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"target\": \"each_doc\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {\n    \"filter\": {\n      \"doc_type\": \"estimate\"\n    }\n  },\n  \"summary\": \"견적서(estimate)를 담당자별로 요약합니다.\"\n}"
+  },
+  {
+   "id": "ko-116",
+   "category": "ko",
+   "text": "유형별로 문서를 요약해줘",
+   "correct": false,
+   "cause": "params",
+   "source": "model",
+   "intent": "summarize",
+   "ops": [
+    "summarize"
+   ],
+   "summary": "모든 문서 유형별로 문서를 요약합니다.",
+   "confidence": 0.8,
+   "latency_ms": 182931.862229,
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 2780,
+   "completion_tokens": 110,
+   "mismatches": [
+    {
+     "kind": "params",
+     "index": 0,
+     "expected": {
+      "group_by": "doc_type"
+     },
+     "produced": {
+      "op": "summarize",
+      "target": "each_doc"
+     }
+    }
+   ],
+   "operations": [
+    {
+     "op": "summarize",
+     "target": "each_doc"
+    }
+   ],
+   "scope": {
+    "filter": {}
+   },
+   "raw": "{\n  \"confidence\": 0.8,\n  \"intent\": \"summarize\",\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"target\": \"each_doc\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {},\n  \"summary\": \"모든 문서 유형별로 문서를 요약합니다.\"\n}"
+  },
+  {
+   "id": "ko-113",
+   "category": "ko",
+   "text": "대한민국 수도가 어디야?",
+   "correct": false,
+   "cause": "params",
+   "source": "model",
+   "intent": "answer",
+   "ops": [
+    "answer"
+   ],
+   "summary": "일반 지식으로 질문에 답변합니다.",
+   "confidence": 0.6,
+   "latency_ms": 36449.738463,
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 2774,
+   "completion_tokens": 115,
+   "mismatches": [
+    {
+     "kind": "params",
+     "index": 0,
+     "expected": {
+      "mode": "general"
+     },
+     "produced": {
+      "knowledge": true,
+      "op": "answer",
+      "question": "대한민국 수도가 어디야?"
+     }
+    }
+   ],
+   "operations": [
+    {
+     "knowledge": true,
+     "op": "answer",
+     "question": "대한민국 수도가 어디야?"
+    }
+   ],
+   "scope": {
+    "filter": {}
+   },
+   "raw": "{\n  \"confidence\": 0.6,\n  \"intent\": \"answer\",\n  \"operations\": [\n    {\n      \"op\": \"answer\",\n      \"question\": \"대한민국 수도가 어디야?\",\n      \"knowledge\": true\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {},\n  \"summary\": \"일반 지식으로 질문에 답변합니다.\"\n}"
+  },
+  {
+   "id": "ko-105",
+   "category": "ko",
+   "text": "배율 130으로 바꾸고 견적서 요약해줘",
+   "correct": false,
+   "cause": "wrong_ops",
+   "source": "model",
+   "intent": "set_theme",
+   "ops": [
+    "set_theme",
+    "summarize"
+   ],
+   "summary": "Set scale to 130% and summarize all documents.",
+   "confidence": 0.9,
+   "latency_ms": 255174.979675,
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 4022,
+   "completion_tokens": 160,
+   "mismatches": [
+    {
+     "kind": "intent",
+     "expected": "set_setting",
+     "produced": "set_theme"
+    },
+    {
+     "kind": "ops",
+     "expected": [
+      "set_setting",
+      "summarize"
+     ],
+     "produced": [
+      "set_theme",
+      "summarize"
+     ]
+    }
+   ],
+   "operations": [
+    {
+     "op": "set_theme",
+     "theme": "high-contrast"
+    },
+    {
+     "length": "short",
+     "op": "summarize",
+     "target": "each_doc"
+    }
+   ],
+   "scope": {
+    "filter": {}
+   },
+   "raw": "{\n  \"confidence\": 0.9,\n  \"intent\": \"set_setting\",\n  \"operations\": [\n    {\n      \"op\": \"set_theme\",\n      \"theme\": \"high-contrast\"\n    },\n    {\n      \"op\": \"summarize\",\n      \"length\": \"short\",\n      \"target\": \"each_doc\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {\n    \"doc_ids\": []\n  },\n  \"summary\": \"Set scale to 130% and summarize all documents.\"\n}"
+  },
+  {
+   "id": "ko-109",
+   "category": "ko",
+   "text": "DPI 200으로 바꿨어",
+   "correct": false,
+   "cause": "wrong_ops",
+   "source": "model",
+   "intent": "set_theme",
+   "ops": [
+    "set_theme"
+   ],
+   "summary": "Set DPI to 200",
+   "confidence": 0.95,
+   "latency_ms": 161417.957917,
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 3261,
+   "completion_tokens": 106,
+   "mismatches": [
+    {
+     "kind": "intent",
+     "expected": "answer",
+     "produced": "set_theme"
+    },
+    {
+     "kind": "ops",
+     "expected": [
+      "answer"
+     ],
+     "produced": [
+      "set_theme"
+     ]
+    }
+   ],
+   "operations": [
+    {
+     "op": "set_theme",
+     "theme": "high-contrast"
+    }
+   ],
+   "scope": {
+    "filter": {}
+   },
+   "raw": "{\n  \"confidence\": 0.95,\n  \"intent\": \"set_setting\",\n  \"operations\": [\n    {\n      \"op\": \"set_theme\",\n      \"theme\": \"high-contrast\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {},\n  \"summary\": \"Set DPI to 200\"\n}"
+  },
+  {
+   "id": "ko-05",
+   "category": "ko",
+   "text": "이 계약서의 계약기간과 위약금 조항 알려줘",
+   "correct": true,
+   "source": "model",
+   "intent": "answer",
+   "ops": [
+    "answer"
+   ],
+   "summary": "선택한 계약서에서 계약기간과 위약금 조항을 근거와 함께 답합니다",
+   "confidence": 0.9,
+   "latency_ms": 206475.51631900002,
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 2788,
+   "completion_tokens": 150,
+   "mismatches": [],
+   "operations": [
+    {
+     "cite": true,
+     "op": "answer",
+     "question": "이 계약서의 계약기간과 위약금 조항은?"
+    }
+   ],
+   "scope": {
+    "doc_ids": [
+     "d1a2"
+    ],
+    "filter": {}
+   },
+   "raw": "{\n  \"confidence\": 0.9,\n  \"intent\": \"answer\",\n  \"operations\": [\n    {\n      \"op\": \"answer\",\n      \"question\": \"이 계약서의 계약기간과 위약금 조항은?\",\n      \"cite\": true\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {\n    \"doc_ids\": [\"d1a2\"]\n  },\n  \"summary\": \"선택한 계약서에서 계약기간과 위약금 조항을 근거와 함께 답합니다\"\n}"
+  },
+  {
+   "id": "ko-07",
+   "category": "ko",
+   "text": "다크 테마로 바꾸고 모델을 12B로 올려",
+   "correct": false,
+   "cause": "wrong_ops",
+   "source": "model",
+   "intent": "set_theme",
+   "ops": [
+    "set_theme",
+    "set_profile"
+   ],
+   "summary": "Switch to dark theme and use the 12B model",
+   "confidence": 0.95,
+   "latency_ms": 205847.69358400002,
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 3271,
+   "completion_tokens": 133,
+   "mismatches": [
+    {
+     "kind": "ops",
+     "expected": [
+      "set_theme",
+      "set_model"
+     ],
+     "produced": [
+      "set_theme",
+      "set_profile"
+     ]
+    }
+   ],
+   "operations": [
+    {
+     "op": "set_theme",
+     "theme": "dark"
+    },
+    {
+     "op": "set_profile",
+     "profile": "balanced"
+    }
+   ],
+   "scope": {
+    "filter": {}
+   },
+   "raw": "{\n  \"confidence\": 0.95,\n  \"intent\": \"set_theme\",\n  \"operations\": [\n    {\n      \"op\": \"set_theme\",\n      \"theme\": \"dark\"\n    },\n    {\n      \"op\": \"set_profile\",\n      \"profile\": \"balanced\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {},\n  \"summary\": \"Switch to dark theme and use the 12B model\"\n}"
+  },
+  {
+   "id": "ko-121",
+   "category": "ko",
+   "text": "다음 문장을 다듬어줘: 금번 과업은 당사가 수행하며 기한은 12월말까지로 하고 산출물은 설계서와 소스코드로 함. 검수는 발주처가 납품 후 2주 내에 완료하는 것으로 하며 하자보수 기간은 검수 완료일로부터 1년으로 함.",
+   "correct": false,
+   "cause": "wrong_ops",
+   "source": "model",
+   "intent": "draft_document",
+   "ops": [
+    "draft_document"
+   ],
+   "summary": "제공된 문장을 공식적인 어조로 다듬어 마크다운 형식의 초안을 생성합니다.",
+   "confidence": 0.95,
+   "latency_ms": 238431.875536,
+   "requires_confirmation": true,
+   "attempts": 1,
+   "prompt_tokens": 2865,
+   "completion_tokens": 203,
+   "mismatches": [
+    {
+     "kind": "intent",
+     "expected": "answer",
+     "produced": "draft_document"
+    },
+    {
+     "kind": "ops",
+     "expected": [
+      "answer"
+     ],
+     "produced": [
+      "draft_document"
+     ]
+    }
+   ],
+   "operations": [
+    {
+     "content": "금번 과업은 당사가 수행하며 기한은 12월말까지로 하고 산출물은 설계서와 소스코드로 함. 검수는 발주처가 납품 후 2주 내에 완료하는 것으로 하며 하자보수 기간은 검수 완료일로부터 1년으로 함.",
+     "op": "draft_document",
+     "output": "md",
+     "tone": "formal"
+    }
+   ],
+   "scope": {
+    "filter": {
+     "date_from": "2025-12-01",
+     "date_to": "2025-12-31"
+    }
+   },
+   "raw": "{\n  \"confidence\": 0.95,\n  \"intent\": \"draft_document\",\n  \"operations\": [\n    {\n      \"content\": \"금번 과업은 당사가 수행하며 기한은 12월말까지로 하고 산출물은 설계서와 소스코드로 함. 검수는 발주처가 납품 후 2주 내에 완료하는 것으로 하며 하자보수 기간은 검수 완료일로부터 1년으로 함.\",\n      \"op\": \"draft_document\",\n      \"output\": \"md\",\n      \"tone\": \"formal\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {},\n  \"summary\": \"제공된 문장을 공식적인 어조로 다듬어 마크다운 형식의 초안을 생성합니다.\"\n}"
+  },
+  {
+   "id": "en-30",
+   "category": "en",
+   "text": "what does SLA stand for?",
+   "correct": false,
+   "cause": "params",
+   "source": "model",
+   "intent": "answer",
+   "ops": [
+    "answer"
+   ],
+   "summary": "SLA의 의미에 대해 지식 베이스를 사용하여 답변합니다.",
+   "confidence": 0.9,
+   "latency_ms": 225038.62765799998,
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 2772,
+   "completion_tokens": 119,
+   "mismatches": [
+    {
+     "kind": "params",
+     "index": 0,
+     "expected": {
+      "mode": "general"
+     },
+     "produced": {
+      "knowledge": true,
+      "op": "answer",
+      "question": "what does SLA stand for?"
+     }
+    }
+   ],
+   "operations": [
+    {
+     "knowledge": true,
+     "op": "answer",
+     "question": "what does SLA stand for?"
+    }
+   ],
+   "scope": {
+    "filter": {}
+   },
+   "raw": "{\n  \"confidence\": 0.9,\n  \"intent\": \"answer\",\n  \"operations\": [\n    {\n      \"op\": \"answer\",\n      \"question\": \"what does SLA stand for?\",\n      \"knowledge\": true\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {},\n  \"summary\": \"SLA의 의미에 대해 지식 베이스를 사용하여 답변합니다.\"\n}"
+  },
+  {
+   "id": "en-31",
+   "category": "en",
+   "text": "summarize the documents by project",
+   "correct": false,
+   "cause": "params",
+   "source": "model",
+   "intent": "summarize",
+   "ops": [
+    "summarize"
+   ],
+   "summary": "모든 문서를 프로젝트별로 요약합니다.",
+   "confidence": 0.9,
+   "latency_ms": 63830.867643,
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 2772,
+   "completion_tokens": 109,
+   "mismatches": [
+    {
+     "kind": "params",
+     "index": 0,
+     "expected": {
+      "group_by": "project"
+     },
+     "produced": {
+      "op": "summarize",
+      "target": "each_doc"
+     }
+    }
+   ],
+   "operations": [
+    {
+     "op": "summarize",
+     "target": "each_doc"
+    }
+   ],
+   "scope": {
+    "filter": {}
+   },
+   "raw": "{\n  \"confidence\": 0.9,\n  \"intent\": \"summarize\",\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"target\": \"each_doc\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {},\n  \"summary\": \"모든 문서를 프로젝트별로 요약합니다.\"\n}"
+  },
+  {
+   "id": "ko-114",
+   "category": "ko",
+   "text": "이 계약서에서 지체상금이 얼마로 정해져 있어?",
+   "correct": true,
+   "source": "model",
+   "intent": "answer",
+   "ops": [
+    "answer"
+   ],
+   "summary": "선택된 문서(d1a2)를 기반으로 지체상금에 대해 근거를 찾아 답변합니다.",
+   "confidence": 0.9,
+   "latency_ms": 146514.86866900002,
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 2790,
+   "completion_tokens": 162,
+   "mismatches": [],
+   "operations": [
+    {
+     "cite": true,
+     "knowledge": true,
+     "op": "answer",
+     "question": "이 계약서에서 지체상금이 얼마로 정해져 있어?"
+    }
+   ],
+   "scope": {
+    "doc_ids": [
+     "d1a2"
+    ],
+    "filter": {}
+   },
+   "raw": "{\n  \"confidence\": 0.9,\n  \"intent\": \"answer\",\n  \"operations\": [\n    {\n      \"op\": \"answer\",\n      \"question\": \"이 계약서에서 지체상금이 얼마로 정해져 있어?\",\n      \"cite\": true,\n      \"knowledge\": true\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {\n    \"doc_ids\": [\"d1a2\"]\n  },\n  \"summary\": \"선택된 문서(d1a2)를 기반으로 지체상금에 대해 근거를 찾아 답변합니다.\"\n}"
+  },
+  {
+   "id": "ko-107",
+   "category": "ko",
+   "text": "다크 테마 문서 찾아줘",
+   "correct": true,
+   "source": "model",
+   "intent": "search",
+   "ops": [
+    "search"
+   ],
+   "summary": "Search for documents related to 'dark theme'",
+   "confidence": 0.9,
+   "latency_ms": 295130.755558,
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 3920,
+   "completion_tokens": 109,
+   "mismatches": [],
+   "operations": [
+    {
+     "op": "search",
+     "query": "다크 테마"
+    }
+   ],
+   "scope": {
+    "filter": {}
+   },
+   "raw": "{\n  \"confidence\": 0.9,\n  \"intent\": \"search\",\n  \"operations\": [\n    {\n      \"op\": \"search\",\n      \"query\": \"다크 테마\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {},\n  \"summary\": \"Search for documents related to 'dark theme'\"\n}"
+  },
+  {
+   "id": "ko-108",
+   "category": "ko",
+   "text": "이 문서 해상도 300으로 다시 렌더해줘",
+   "correct": true,
+   "source": "model",
+   "intent": "rerender",
+   "ops": [
+    "rerender"
+   ],
+   "summary": "현재 선택된 문서(d1a2)를 300 DPI로 다시 렌더링합니다.",
+   "confidence": 0.95,
+   "latency_ms": 169411.73378900002,
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 3161,
+   "completion_tokens": 141,
+   "mismatches": [],
+   "operations": [
+    {
+     "dpi": 300,
+     "op": "rerender"
+    }
+   ],
+   "scope": {
+    "doc_ids": [
+     "d1a2"
+    ],
+    "filter": {}
+   },
+   "raw": "{\n  \"confidence\": 0.95,\n  \"intent\": \"rerender\",\n  \"operations\": [\n    {\n      \"op\": \"rerender\",\n      \"dpi\": 300\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {\n    \"doc_ids\": [\n      \"d1a2\"\n    ]\n  },\n  \"summary\": \"현재 선택된 문서(d1a2)를 300 DPI로 다시 렌더링합니다.\"\n}"
   }
  ]
 }

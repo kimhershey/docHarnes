@@ -242,6 +242,56 @@ test.describe("document drag and drop", () => {
     await expect(page.getByTestId(`doc-card-${rules}`).locator('[data-testid^="doc-role-"]')).toHaveText(ko.library.role_knowledge);
   });
 
+  // 0.8.0: an import where every file is registered already runs when it has somewhere to put them — the job
+  // names them in `ImportReport.existing` — and the drop stands for imported ∪ existing.
+  test("a drop of registered files runs an attach-only import; a mixed drop attaches the new and the registered ones; the assistant takes a registered file", async ({ page }) => {
+    test.setTimeout(60_000);
+    const [contract, annex] = await libraryWithDocs(page, ["C:\\scan\\계약서.pdf", "C:\\scan\\부속서.pdf"]);
+    await page.getByTestId("nav-projects").click();
+    await page.getByTestId("projects-new").click();
+    await page.getByTestId("project-name").fill("드롭 프로젝트");
+    await page.getByTestId("project-submit").click();
+    await expect(page.getByTestId("project-title")).toContainText("드롭 프로젝트");
+    const rows = page.getByTestId("project-documents-table").locator("tbody tr");
+
+    // Only a registered file: nothing is imported, the job attaches the document and the drop counts it.
+    await dropFiles(page, page.getByTestId("project-documents-drop"), ["계약서.pdf"]);
+    await expect(page.getByTestId(`project-doc-${contract}`)).toBeVisible({ timeout: 15_000 });
+    await expect(rows).toHaveCount(1);
+    await expect(page.getByTestId("toaster")).toContainText(tpl(ko.projects.documents.added, { count: 1 }));
+
+    // A registered file and a new one in one drop: both join (imported ∪ existing).
+    await dropFiles(page, page.getByTestId("project-documents-drop"), ["부속서.pdf", "신규 계획서.pdf"]);
+    await expect(page.getByTestId(`project-doc-${annex}`)).toBeVisible({ timeout: 20_000 });
+    await expect(rows).toHaveCount(3, { timeout: 20_000 });
+    await expect(page.getByTestId("project-documents-table")).toContainText("신규 계획서.pdf");
+    await expect(page.getByTestId("toaster")).toContainText(tpl(ko.projects.documents.added, { count: 2 }));
+
+    // 작업 현황: the attach-only run is an import job of its own ("문서 1개": nothing imported, one skipped).
+    await page.getByTestId("nav-jobs").click();
+    await page.getByTestId("jobs-tab-finished").click();
+    const attachOnly = page.locator('[data-job-kind="document_import"][data-job-subject="1 documents"]');
+    await expect(attachOnly).toHaveCount(1);
+    await expect(attachOnly).toHaveAttribute("data-job-state", "done");
+    await expect(attachOnly).toContainText(tpl(ko.jobs.subject.documents, { count: 1 }));
+    await expect(attachOnly.getByTestId("job-detail")).toContainText(tpl(ko.jobs.detail.import_summary, { imported: 0, relinked: 0, failed: 0, skipped: 1 }));
+    // The library still holds each document once.
+    await page.getByTestId("nav-library").click();
+    await expect(card(page, "계약서.pdf")).toHaveCount(1);
+    await expect(card(page, "부속서.pdf")).toHaveCount(1);
+    await expect(card(page, "신규 계획서.pdf")).toHaveCount(1);
+
+    // No target to attach to (the assistant): no import job runs, the registered document becomes an attachment.
+    await page.getByTestId("nav-assistant").click();
+    await expect(page.getByTestId("page-assistant")).toBeVisible();
+    await dropFiles(page, page.getByTestId("assistant-messages"), ["계약서.pdf"]);
+    await expect(page.getByTestId(`assistant-attachment-${contract}`)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("assistant-attachments")).toContainText("계약서.pdf");
+    await page.getByTestId("nav-jobs").click();
+    await page.getByTestId("jobs-tab-finished").click();
+    await expect(page.locator('[data-job-kind="document_import"]')).toHaveCount(3);
+  });
+
   test("a new file dropped on the 문서 tab: its type and the checklist follow the automatic classification without leaving the screen (PRJ-10)", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);

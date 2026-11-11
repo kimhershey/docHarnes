@@ -59,7 +59,10 @@ export function ProcessMenu({
 
   // Extraction always creates a new run (the runner never skips it), which demotes the review of the
   // affected documents: ask first when any of them already has results (review M3).
-  const run = async (req: Omit<ProcessRequest, "document_ids">) => {
+  // A forced run ("잔글씨 프로파일로 다시 처리", "처음부터 다시") reads the pages again, so it always asks — and
+  // the confirmation carries the one choice a forced run has (0.8.0): page text corrected by hand is kept
+  // unless "직접 고친 글자도 다시 읽기" is ticked (`ProcessRequest.reocr_manual`, off by default).
+  const run = async (req: Omit<ProcessRequest, "document_ids">, label?: string) => {
     if (ids.length === 0) return;
     if (req.level !== "extract") return start(req);
     let records: ProcessMenuDoc[] = docs ?? [];
@@ -71,16 +74,17 @@ export function ProcessMenu({
       }
     }
     const replaced = records.filter((d) => ids.includes(d.id) && (d.extracted_at !== null || d.review_status === "done")).length;
-    if (replaced === 0) return start(req);
+    if (replaced === 0 && !req.force) return start(req);
     // Opened once the dropdown has unmounted so the two Radix layers do not fight over focus.
     window.setTimeout(
       () =>
         setConfirm({
-          title: t("pipeline.process.confirm_title"),
-          description: t("pipeline.process.confirm_body", { count: replaced }),
-          confirmLabel: t("pipeline.process.confirm_ok"),
-          danger: true,
-          onConfirm: () => start(req),
+          title: replaced > 0 ? t("pipeline.process.confirm_title") : (label ?? t("pipeline.process.force")),
+          description: replaced > 0 ? t("pipeline.process.confirm_body", { count: replaced }) : t("pipeline.process.force_body"),
+          confirmLabel: replaced > 0 ? t("pipeline.process.confirm_ok") : t("pipeline.process.force_ok"),
+          danger: replaced > 0,
+          option: req.force ? { label: t("pipeline.process.reocr_manual"), hint: t("pipeline.process.reocr_manual_hint") } : undefined,
+          onConfirm: (reocrManual) => start(req.force && reocrManual ? { ...req, reocr_manual: true } : req),
         }),
       0,
     );
@@ -106,13 +110,13 @@ export function ProcessMenu({
             {t("pipeline.process.ocr")}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => void run({ level: "extract", force: true, profile: "fine_print" })} data-testid={`${testId}-fine-print`}>
+          <DropdownMenuItem onSelect={() => void run({ level: "extract", force: true, profile: "fine_print" }, t("pipeline.process.fine_print"))} data-testid={`${testId}-fine-print`}>
             {t("pipeline.process.fine_print")}
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => void run({ level: "extract", precise: true })} data-testid={`${testId}-precise`}>
             {t("pipeline.process.precise")}
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => void run({ level: "extract", force: true })} data-testid={`${testId}-force`}>
+          <DropdownMenuItem onSelect={() => void run({ level: "extract", force: true }, t("pipeline.process.force"))} data-testid={`${testId}-force`}>
             {t("pipeline.process.force")}
           </DropdownMenuItem>
         </DropdownMenuContent>

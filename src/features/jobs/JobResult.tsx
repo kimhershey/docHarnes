@@ -9,12 +9,12 @@ import { isPlanExecution, isRecord, opLabel } from "@/features/assistant/describ
 import { useDraftJobRunning } from "@/features/generate/useDraftJobRunning";
 import { maintenanceSummaryText } from "@/features/settings/maintenance";
 import { revealPath } from "@/lib/ipc";
-import { SCREEN_ROUTES, isDraftOutcome, isMaintenanceSummary, isSchemaDiscoveryOutcome, type Draft, type Job } from "@/lib/types";
+import { SCREEN_ROUTES, isDraftOutcome, isMaintenanceSummary, isSchemaDiscoveryOutcome, type Draft, type Job, type ProcessReport } from "@/lib/types";
 import { useGenerateStore } from "@/stores/generate";
 import { useSchemasStore } from "@/stores/schemas";
 
 /** `pipeline::run::ProcessReport` (pipeline jobs, extract / classify / ocr steps). */
-function isProcessReport(v: unknown): v is { processed: unknown[]; failed: unknown[]; classified: number; ocr_pages: number; extracted: number; review_pending?: number } {
+function isProcessReport(v: unknown): v is Pick<ProcessReport, "processed" | "failed" | "classified" | "ocr_pages" | "extracted"> & Partial<ProcessReport> {
   return isRecord(v) && Array.isArray(v.processed) && Array.isArray(v.failed) && typeof v.classified === "number" && typeof v.ocr_pages === "number" && typeof v.extracted === "number";
 }
 

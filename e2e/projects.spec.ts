@@ -295,7 +295,18 @@ test.describe("P6 projects", () => {
     // 다시 동기화 reports what it did; removing the membership drops the copy and the original stays in A.
     await page.getByTestId("project-resync-copies").click();
     await expect(page.getByTestId("toaster")).toContainText(tpl(ko.projects.documents.copy.resynced, { rewritten: 0, renamed: 0, created: 0 }));
+    // The document is here through a copy, so 제외 asks first and says which file goes and which stays (PRJ-9):
+    // the copy in the project folder is deleted, the original is not, and a copy the user edited is kept.
     await rowB.getByTestId("project-doc-remove").click();
+    const removal = page.getByTestId("confirm-dialog");
+    await expect(removal).toContainText("요구사항정의서-v1.2.pdf");
+    await expect(removal).toContainText(ko.projects.documents.remove_confirm.split("? ")[1]!);
+    await expect(removal).toContainText("직접 고친 사본");
+    await page.getByTestId("confirm-cancel").click();
+    await expect(removal).toBeHidden();
+    await expect(rowB).toHaveCount(1);
+    await rowB.getByTestId("project-doc-remove").click();
+    await page.getByTestId("confirm-ok").click();
     await expect(rowB).toHaveCount(0, { timeout: 10_000 });
     await page.getByTestId("project-back").click();
     const cardA = page.locator('[data-testid^="project-card-"][data-project-name="A 사업"]');

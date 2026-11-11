@@ -24,7 +24,7 @@ import {
   type WorkerOutcome,
 } from "./mock-backend";
 import { buildSupplementDraft, submitDraftJob } from "./mock-generate";
-import { attachToCollection, deleteProjectReferenceGroup, projectReferenceGroup, renameProjectReferenceGroup } from "./mock-knowledge";
+import { attachToCollection, deleteProjectReferenceGroup, projectReferenceGroup, referenceDocIds, renameProjectReferenceGroup } from "./mock-knowledge";
 import * as pl from "./mock-pipeline";
 import {
   DEFAULT_PROJECT_FOLDER,
@@ -67,6 +67,7 @@ import {
   type Verdict,
 } from "./types";
 import { docTypeAliases } from "./doc-type-aliases";
+import { resolveJosa } from "./josa";
 
 const KEY = "doculens.mock.projects";
 const MAINT_KEY = "doculens.mock.maintenance";
@@ -257,12 +258,24 @@ function checklist(s: PState, p: Project): ChecklistItem[] {
 }
 
 /** Recomputes the counters the list / kanban cards show. */
-/** `projects::phase_for`: before the start → planned, after the end → done, else active. */
+/**
+ * `projects::phase_for`: before the start → planned, from the end date on → done (`end <= today`: "완료 처리"
+ * stores today as the end date and the project is 완료 at once), else active.
+ */
 export function phaseFor(start: string | null, end: string | null, created: string, today = todayIso()): ProjectPhase {
   const from = start ?? created.slice(0, 10);
   if (today < from) return "planned";
-  if (end && end < today) return "done";
+  if (end && end <= today) return "done";
   return "active";
+}
+
+/**
+ * 기한 경과 (decision 5, `repo::refresh`): the end date has passed (`end < today` — on the end date itself the
+ * project is 완료 but not overdue yet) and the case is not complete: required documents are missing, the last
+ * check left mismatches, or nothing was ever checked.
+ */
+export function overdueFor(p: Pick<Project, "phase" | "end_date" | "missing_count" | "last_mismatch" | "last_check_at">, today = todayIso()): boolean {
+  return p.phase === "done" && !!p.end_date && p.end_date.slice(0, 10) < today && (p.missing_count > 0 || p.last_mismatch > 0 || p.last_check_at === null);
 }
 
 function refresh(s: PState, p: Project): Project {
@@ -276,8 +289,7 @@ function refresh(s: PState, p: Project): Project {
   p.last_undetermined = last?.undetermined ?? 0;
   p.settings = { ...DEFAULT_PROJECT_SETTINGS, ...(p.settings ?? {}) };
   p.phase = phaseFor(p.start_date, p.end_date, p.created_at);
-  // 기한 경과 (decision 5): the end date passed but the case is incomplete.
-  p.overdue = p.phase === "done" && !!p.end_date && (p.missing_count > 0 || p.last_mismatch > 0 || p.last_check_at === null);
+  p.overdue = overdueFor(p);
   return p;
 }
 
@@ -315,6 +327,15 @@ export function projectDocIds(projectId: string, s: PState = load()): string[] {
 
 export function isMember(projectId: string, docId: string, s: PState = load()): boolean {
   return s.members.some((m) => m.project_id === projectId && m.doc_id === docId);
+}
+
+/**
+ * Documents that are in the project through a tracked copy (`copies::list_for_project`): the copy is that
+ * project's file, the original belongs to the folder of an earlier project — organising this project leaves
+ * them where they are (`project_copy`).
+ */
+export function copiedDocIds(projectId: string, s: PState = load()): Set<string> {
+  return new Set(s.copies.filter((c) => c.project_id === projectId).map((c) => c.document_id));
 }
 
 /** Target path of a document's copy in a project (mock twin of `copies::target_path`). */
@@ -761,7 +782,7 @@ export function parseRule(description: string, knownTypes: TypeInfo[] = typeInfo
   if (lit !== null) right = { doc_type: null, field: null, value: lit };
   if (right === null && op !== "present") issues.push(isKo ? "비교할 오른쪽 대상(다른 문서의 필드 또는 값)을 찾지 못했습니다." : "Could not resolve the right operand (another document's field or a literal).");
   if (op === "within_pct" && tolerance === null) issues.push(isKo ? "허용 오차(%)가 필요합니다." : "A tolerance (%) is required.");
-  for (const u of unresolved) issues.push(isKo ? `'${u}'을(를) 알려진 문서 유형·필드에서 찾지 못했습니다.` : `'${u}' is not a known document type / field.`);
+  for (const u of unresolved) issues.push(isKo ? resolveJosa(`'${u}'을(를) 알려진 문서 유형·필드에서 찾지 못했습니다.`) : `'${u}' is not a known document type / field.`);
   const resolvedLeft = !!left.doc_type && !!left.field && !unresolved.includes(left.field);
   const resolvedRight = op === "present" || (right !== null && (right.value !== null || (!!right.doc_type && !!right.field && !unresolved.includes(right.field ?? ""))));
   const confidence = resolvedLeft && resolvedRight ? (mentions.length >= 1 ? 0.92 : 0.8) : resolvedLeft || resolvedRight ? 0.55 : 0.3;
@@ -810,7 +831,9 @@ function evidence(doc: MockDoc, f: FieldRecord | null, field: string): Evidence 
     value: f?.value ?? null,
     normalized: f?.normalized ?? null,
     page: f?.page ?? null,
-    status: f ? (pending ? "pending" : f.status) : null,
+    // Why there is no field (`check.rs`): a document that was never extracted has no fields at all — its
+    // values are unknown, not missing.
+    status: f ? (pending ? "pending" : f.status) : doc.last_run_id ? "absent" : "not_extracted",
   };
 }
 
@@ -845,7 +868,7 @@ function evaluate(r: Rule, docs: MockDoc[], isKo: boolean): RuleResult {
     if (!o) return { ev: null, field: null, verdict: null, literal: null };
     if (!o.doc_type && !o.field) return { ev: { doc_id: null, doc_name: null, doc_type: null, field: null, label: null, value: o.value, normalized: o.value, page: null, status: null }, field: null, verdict: null, literal: o.value };
     const candidates = docs.filter((d) => d.doc_type === o.doc_type);
-    if (candidates.length === 0) return { ev: { doc_id: null, doc_name: null, doc_type: o.doc_type, field: o.field, label: null, value: null, normalized: null, page: null, status: null }, field: null, verdict: "missing", literal: null };
+    if (candidates.length === 0) return { ev: { doc_id: null, doc_name: null, doc_type: o.doc_type, field: o.field, label: null, value: null, normalized: null, page: null, status: "missing_document" }, field: null, verdict: "missing", literal: null };
     const path = o.field ?? "";
     let found: { d: MockDoc; f: FieldRecord | null } | null = null;
     for (const d of candidates) {
@@ -877,8 +900,11 @@ function evaluate(r: Rule, docs: MockDoc[], isKo: boolean): RuleResult {
   }
   if (L.verdict === "undetermined" || (R.verdict === "undetermined" && !R.literal)) {
     base.verdict = "undetermined";
+    const gap = L.verdict === "undetermined" ? L : R;
     const which = L.verdict === "undetermined" ? `${typeLabel(r.left.doc_type)} ${L.ev?.label ?? r.left.field}` : `${typeLabel(r.right?.doc_type ?? null)} ${R.ev?.label ?? r.right?.field}`;
-    base.message = isKo ? `${which} 값이 추출되지 않아 비교할 수 없습니다.` : `${which} has no extracted value to compare.`;
+    // `check::gap_message`: a document without an extraction run is named as such.
+    if (gap.ev?.status === "not_extracted") base.message = isKo ? `${gap.ev.doc_name ?? ""} ${gap.ev.label ?? gap.ev.field ?? ""}: 아직 추출하지 않은 문서라 판단할 수 없습니다. 추출을 실행한 뒤 다시 검사하세요.` : `${gap.ev.doc_name ?? ""} ${gap.ev.label ?? gap.ev.field ?? ""}: the document is not extracted yet, cannot judge. Run the extraction, then check again.`;
+    else base.message = isKo ? `${which} 값이 추출되지 않아 비교할 수 없습니다.` : `${which} has no extracted value to compare.`;
     return base;
   }
   const kind = kindOf(L.ev, L.field, R.field);
@@ -940,7 +966,8 @@ export function check(projectId: string, ruleIds: string[]): CheckRun {
   const p = getProject(s, projectId, "not_found");
   const isKo = ko();
   const docs = docsOf(s, p.id);
-  const rules = s.rules.filter((r) => r.project_id === p.id && r.rule.enabled && (ruleIds.length === 0 || ruleIds.includes(r.rule.id))).map((r) => r.rule);
+  const enabled = s.rules.filter((r) => r.project_id === p.id && r.rule.enabled).map((r) => r.rule);
+  const rules = enabled.filter((r) => ruleIds.length === 0 || ruleIds.includes(r.id));
   const started = now();
   const run: CheckRun = { id: newId(), project_id: p.id, started_at: started, finished_at: started, pass: 0, mismatch: 0, undetermined: 0, missing: 0, results: [], missing_doc_types: checklist(s, p).filter((c) => c.missing).map((c) => c.doc_type) };
   for (const r of rules) {
@@ -950,6 +977,9 @@ export function check(projectId: string, ruleIds: string[]): CheckRun {
     run[res.verdict] += 1;
   }
   run.finished_at = now();
+  // `check::run`: the stored run is the project's "최근 검사" (card counters, report, 보완요청서) — a run over
+  // some of the rules answers that question alone and is returned without being stored.
+  if (rules.length < enabled.length) return { ...run, partial: true };
   s.runs.push(run);
   if (s.runs.length > 200) s.runs = s.runs.slice(-200);
   p.updated_at = now();
@@ -1087,7 +1117,12 @@ export function supplementRequest(projectId: string, findingIds: string[], outpu
     return !(everything && r.verdict === "missing" && run.missing_doc_types.includes(r.left?.doc_type ?? ""));
   });
   const isKo = ko();
-  if (findings.length === 0 && missingTypes.length === 0) throw err("invalid", "invalid value: no_findings");
+  if (findings.length === 0 && missingTypes.length === 0) {
+    // `report::supplement_request`: nothing selected and nothing to request / only passed or undetermined
+    // results selected / the selected ids are not part of this run (a selection made before a re-check).
+    const notRequestable = run.results.some((r) => want(r.id) && r.verdict !== "mismatch" && r.verdict !== "missing");
+    throw err("invalid", `invalid value: ${everything ? "no_findings" : notRequestable ? "findings_not_requestable" : "findings_not_in_run"}`);
+  }
   const docs = docsOf(s, p.id);
   const party = docs.flatMap((d) => pl.latestFields(d.id)).find((f) => ["contractor.name", "proposer.name", "supplier.name", "company_name", "store_name", "applicant.name"].includes(f.path) && f.value)?.value ?? null;
   const d = buildSupplementDraft({
@@ -1169,8 +1204,9 @@ export async function maintenanceWorker(job: Job, ctl: JobControl): Promise<Work
   const stages = ["journal", "jobs", "answers", "cache", "trash", "logs", "temp", "documents", "extractions"] as const;
   const purged: MaintenanceSummary["purged"] = { journal: 0, jobs: 0, answers: 0, cache_bytes: 0, trash: 0, logs: 0, temp: 0, documents: 0, extractions: 0 };
   const retention = currentWorkspaceView()?.manifest.retention;
+  // `purge_enabled` only switches the daily schedule: a job that got here was asked for ("지금 파기 실행") and
+  // purges with the daily run switched off as well (`maintenance::run`).
   const skipped: string[] = [];
-  if (retention && !retention.purge_enabled) skipped.push("disabled");
   const policyOf: Partial<Record<(typeof stages)[number], number | null | undefined>> = { journal: retention?.journal_days, jobs: retention?.job_logs_days, answers: retention?.chats_days, logs: retention?.app_logs_days, temp: retention?.temp_days, documents: retention?.documents_days, extractions: retention?.extractions_days };
   let cancelled = false;
   for (const [i, stage] of stages.entries()) {
@@ -1304,7 +1340,12 @@ export function classifySuggest(req: ClassifyRequest): ClassifyResult {
   const projects = req.project_ids?.length ? s.projects.filter((p) => req.project_ids!.includes(p.id)) : s.projects;
   const all = wsDocs();
   const assigned = new Set(s.members.map((m) => m.doc_id));
-  const docs = req.doc_ids?.length ? all.filter((d) => req.doc_ids!.includes(d.id)) : req.include_assigned ? all : all.filter((d) => !assigned.has(d.id)).sort((a, b) => b.imported_at.localeCompare(a.imported_at));
+  // Without explicit documents the target is the work documents (`repo::classifiable_document_ids`): reference
+  // material (a role of its own, or a place in a reference group), registered forms and generated drafts are
+  // not sorted into projects.
+  const reference = referenceDocIds();
+  const work = all.filter((d) => d.role === "work" && !reference.has(d.id)).sort((a, b) => b.imported_at.localeCompare(a.imported_at));
+  const docs = req.doc_ids?.length ? all.filter((d) => req.doc_ids!.includes(d.id)) : req.include_assigned ? work : work.filter((d) => !assigned.has(d.id));
   const result: ClassifyResult = { suggestions: [], suggested: 0, undecided: 0, model_calls: 0, notes: [] };
   if (projects.length === 0) result.notes.push(isKo ? "프로젝트가 없습니다. 먼저 프로젝트를 만드세요." : "No projects yet: create one first.");
   if (req.use_model) result.notes.push(isKo ? "모델이 없어 규칙 점수만 사용했습니다." : "No model: rule scores only.");
