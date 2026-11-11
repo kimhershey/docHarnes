@@ -381,6 +381,42 @@ mod tests {
         let t = required_files_text(m, Path::new("C:\\Work\\.doculens\\models\\gemma4-e4b-q6k"));
         assert!(t.contains("gemma-4-E4B-it-Q6_K.gguf"));
         assert!(t.contains("mmproj-F16.gguf"));
-        assert!(t.contains("https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/mmproj-F16.gguf"));
+        // PKG-6: the address names a repository commit, never the moving `main` branch
+        assert!(t.contains(
+            "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/bfc15c382204943c3a8fff0c750b94ae2364d7a3/mmproj-F16.gguf"
+        ));
+        assert!(!t.contains("/resolve/main/"));
+        assert!(!t.contains("not pinned yet"));
+    }
+
+    /// PKG-6: every built-in file carries an exact size, a lowercase SHA-256 (the form `gguf::sha256_file`
+    /// produces — `modelstore::match_registry` compares it case-sensitively) and a commit address.
+    #[test]
+    fn builtin_files_are_pinned_to_a_commit_and_a_hash() {
+        let r = Registry::builtin();
+        for m in &r.models {
+            assert!(m.verified, "{}", m.id);
+            for f in &m.files {
+                let sha = f.sha256.as_deref().unwrap_or_else(|| panic!("{}: {} has no sha256", m.id, f.name));
+                assert!(
+                    sha.len() == 64 && sha.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+                    "{}: {sha}",
+                    m.id
+                );
+                assert!(f.size > 0, "{}: {}", m.id, f.name);
+                let url = f.download_url().expect("download url");
+                let repo = f.hf.as_deref().expect("hf repository");
+                let rest = url
+                    .strip_prefix(&format!("https://huggingface.co/{repo}/resolve/"))
+                    .unwrap_or_else(|| panic!("{}: unexpected address {url}", m.id));
+                let (revision, name) = rest.split_once('/').expect("revision/name");
+                assert!(
+                    revision.len() == 40 && revision.bytes().all(|b| b.is_ascii_hexdigit()),
+                    "{}: {url} is not pinned to a commit",
+                    m.id
+                );
+                assert_eq!(name, f.name, "{}", m.id);
+            }
+        }
     }
 }

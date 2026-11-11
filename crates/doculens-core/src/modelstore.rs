@@ -569,16 +569,21 @@ fn match_registry(registry: &Registry, weights: &[ScannedFile], mmproj: Option<&
         }
     }
     if let Some((_, entry)) = best {
-        let all_pins_match = entry.files.iter().all(|pf| match &pf.sha256 {
+        let pin_matches = |pf: &ModelFile| match &pf.sha256 {
             Some(pin) => files.iter().any(|sf| hash_of(sf) == Some(pin.as_str())),
             None => true,
-        });
+        };
+        // Weights pins decide validity. A differing mmproj (other precision, a later upload) only
+        // leaves the folder unverified — the same rule as the name match below.
+        let weights_match = entry.files.iter().filter(|pf| !pf.is_mmproj()).all(pin_matches);
+        let mmproj_match = entry.files.iter().filter(|pf| pf.is_mmproj()).all(pin_matches);
         let all_hashed = files.iter().all(|f| f.hashes.is_some());
-        return Some(RegistryMatch {
-            id: entry.id.clone(),
-            by: MatchBy::Hash,
-            verified: Some(all_pins_match && all_hashed),
-        });
+        let verified = match (weights_match && all_hashed, mmproj_match) {
+            (false, _) => Some(false),
+            (true, true) => Some(true),
+            (true, false) => None,
+        };
+        return Some(RegistryMatch { id: entry.id.clone(), by: MatchBy::Hash, verified });
     }
     // By name: every registry file name present.
     for entry in &registry.models {
@@ -1768,6 +1773,10 @@ mod tests {
         let models = tmp.path().join("models");
         make_folder(&models, "q", "gemma-4-E4B-it-Q4_K_M.gguf", true);
         let mut reg = Registry::builtin();
+        // The built-in entries are pinned to the real files (PKG-6); this test pins the synthetic folder itself.
+        for f in reg.models.iter_mut().flat_map(|m| m.files.iter_mut()) {
+            f.sha256 = None;
+        }
         let found = scan_models_dir(&models, &reg, ScanOptions::default());
         let mut calls = 0;
         let hashes = hash_model(&models, &found[0], &mut |_, _, _| {
@@ -1793,6 +1802,27 @@ mod tests {
         assert_eq!(found[0].registry_match.as_ref().unwrap().verified, Some(false));
         assert_eq!(found[0].health, ModelHealth::Invalid { reason: "hash_mismatch".into() });
         assert!(calls > 0);
+    }
+
+    /// PKG-6: the built-in entries pin their mmproj too. The right weights next to another mmproj
+    /// (other precision, a later upload) must stay usable — unverified, not `hash_mismatch`.
+    #[test]
+    fn hash_match_with_another_mmproj_stays_usable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let models = tmp.path().join("models");
+        make_folder(&models, "q", "gemma-4-E4B-it-Q4_K_M.gguf", true);
+        let mut reg = Registry::builtin();
+        let found = scan_models_dir(&models, &reg, ScanOptions::default());
+        let hashes = hash_model(&models, &found[0], &mut |_, _, _| true).unwrap();
+        let sha = hashes.iter().find(|(n, _)| n == "gemma-4-E4B-it-Q4_K_M.gguf").unwrap().1.sha256.clone();
+        // weights pinned to this folder's file, mmproj left at the built-in (real) pin
+        let m = reg.models.iter_mut().find(|m| m.id == "gemma4-e4b-q4km").unwrap();
+        m.files[0].sha256 = Some(sha);
+        assert!(m.files[1].is_mmproj() && m.files[1].sha256.is_some());
+        let found = scan_models_dir(&models, &reg, ScanOptions::default());
+        let rm = found[0].registry_match.as_ref().unwrap();
+        assert_eq!((rm.id.as_str(), rm.by, rm.verified), ("gemma4-e4b-q4km", MatchBy::Hash, None));
+        assert!(found[0].health.is_ready(), "{:?}", found[0].health);
     }
 
     #[test]
