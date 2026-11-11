@@ -207,7 +207,11 @@ pub fn vision_model(app: &AppHandle, load: bool, cancel: Option<&AtomicBool>) ->
 
 /// Queues a processing request as a persistent job (engine lane: one at a time,
 /// priority order, pausable, restored after a restart). Returns the job id.
-pub fn process_job(app: &AppHandle, req: ProcessRequest) -> UiResult<Option<String>> {
+///
+/// The request gets its id here: the job's spec is replayed as it is when the job is retried
+/// or resumed after an interruption, and the core runner journals the documents a request
+/// finished under that id — the next attempt goes on with the rest (audit PIP-5).
+pub fn process_job(app: &AppHandle, mut req: ProcessRequest) -> UiResult<Option<String>> {
     let state = app.state::<AppState>();
     if state.switching.load(Ordering::SeqCst) {
         return Ok(None);
@@ -215,6 +219,8 @@ pub fn process_job(app: &AppHandle, req: ProcessRequest) -> UiResult<Option<Stri
     if req.document_ids.is_empty() {
         return Err(UiError::invalid("no documents"));
     }
+    // Always a fresh id: two jobs must never share a journal, whatever the caller sent.
+    req.request_id = Some(uuid::Uuid::new_v4().simple().to_string());
     let subject = format!("{} documents", req.document_ids.len());
     let id = state.jobs.submit(JobSpec::Pipeline { req }, &subject, JobPriority::Normal)?;
     Ok(Some(id))

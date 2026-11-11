@@ -1333,3 +1333,62 @@ fn a_missing_engine_stops_the_batch_and_leaves_the_rest_untouched() {
     assert_eq!(report.failed.len(), 2, "{report:?}");
     assert!(w.doc("b").pipeline_error.is_some() && w.doc("c").pipeline_error.is_some());
 }
+
+/// Audit PIP-5: a processing job that was retried or resumed replayed its request from the first
+/// document — 60 of 100 done, stop, continue: the 60 were extracted again (the time once more, and
+/// whatever had been reviewed in between was replaced).
+#[test]
+fn a_replayed_request_goes_on_where_it_stopped() {
+    let w = World::new();
+    for id in ["a", "b", "c"] {
+        w.add_doc(id, &format!("{id}.pdf"), SourceKind::Pdf, &[None]);
+    }
+    w.chat.push("classify", classify_reply("receipt", 0));
+    w.chat.push_ocr(RECEIPT_OCR);
+    w.chat.push("kie_receipt", receipt_kie());
+    let ids: Vec<String> = vec!["a".into(), "b".into(), "c".into()];
+    let req = ProcessRequest { document_ids: ids.clone(), request_id: Some("req1".into()), ..Default::default() };
+    let runs = |id: &str| w.db.with(|c| repo::list_runs(c, id)).unwrap().len();
+
+    // First attempt: the job is cancelled when the second document starts.
+    let cancel = AtomicBool::new(false);
+    let deps = w.deps(Some(&cancel));
+    let report = run::process(&deps, &req, &mut |p| {
+        if p.done == 1 {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    })
+    .unwrap();
+    assert!(report.cancelled);
+    assert_eq!((report.processed.clone(), report.resumed.len()), (vec!["a".to_string()], 0));
+    assert_eq!((runs("a"), runs("b"), runs("c")), (1, 0, 0));
+    // Meanwhile the user reviews the finished document.
+    review::approve_document(&w.db, "a", None).unwrap();
+    let reviewed = w.doc("a").status;
+
+    // The job is retried: the same request, replayed. The finished document is left alone.
+    cancel.store(false, std::sync::atomic::Ordering::Relaxed);
+    let report = run::process(&deps, &req, &mut |_| {}).unwrap();
+    assert_eq!(report.resumed, vec!["a".to_string()]);
+    assert_eq!(report.processed, vec!["b".to_string(), "c".to_string()]);
+    assert_eq!((runs("a"), runs("b"), runs("c")), (1, 1, 1), "a is not extracted a second time");
+    assert_eq!(w.doc("a").status, reviewed, "its review stands");
+    assert_eq!(w.chat.calls("kie_receipt"), 3);
+
+    // The request ran to its end, so its journal is gone: nothing of it is left in the store,
+    // and a request without an id (or another id) processes every document as before.
+    assert!(w.db.with(|c| repo::request_done(c, "req1")).unwrap().is_empty());
+    let plain = ProcessRequest { document_ids: ids.clone(), ..Default::default() };
+    let report = run::process(&deps, &plain, &mut |_| {}).unwrap();
+    assert_eq!((report.processed.len(), report.resumed.len(), runs("a")), (3, 0, 2));
+
+    // A document that failed is not journalled: the next attempt tries it again.
+    let retry = ProcessRequest { document_ids: ids, request_id: Some("req2".into()), ..Default::default() };
+    *w.chat.fail_with.lock().unwrap() = Some("POST /v1/chat/completions: io: Connection refused (os error 111)".into());
+    w.db.with(|c| repo::request_mark_done(c, "req2", "a")).unwrap(); // as if `a` had been finished
+    assert_eq!(run::process(&deps, &retry, &mut |_| {}).unwrap_err().code(), "engine_not_running");
+    assert_eq!(w.db.with(|c| repo::request_done(c, "req2")).unwrap(), vec!["a".to_string()], "the journal is kept");
+    *w.chat.fail_with.lock().unwrap() = None;
+    let report = run::process(&deps, &retry, &mut |_| {}).unwrap();
+    assert_eq!((report.resumed.len(), report.processed.len()), (1, 2));
+}

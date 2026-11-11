@@ -1000,6 +1000,55 @@ fn field_history_by_id(conn: &Connection, id: i64) -> rusqlite::Result<Option<Fi
 }
 
 // ---------------------------------------------------------------------------
+// Request journal (resume, audit PIP-5)
+// ---------------------------------------------------------------------------
+//
+// A processing request that is run again — a job retried after a failure / cancel, or resumed
+// after the app was closed — must go on with the documents it has not finished, not start over.
+// The documents a request finished are kept as `kv` rows `pipeline.request.<request id>.<doc id>`
+// until the request runs to its end.
+
+const REQUEST_JOURNAL: &str = "pipeline.request.";
+/// Journals nobody came back for are dropped after this many days.
+const REQUEST_JOURNAL_DAYS: i64 = 30;
+
+fn journal_prefix(request_id: &str) -> String {
+    format!("{REQUEST_JOURNAL}{request_id}.")
+}
+
+/// Documents an earlier attempt of the request finished.
+pub fn request_done(conn: &Connection, request_id: &str) -> rusqlite::Result<Vec<String>> {
+    let prefix = journal_prefix(request_id);
+    let mut st = conn.prepare_cached("SELECT key FROM kv WHERE substr(key, 1, length(?1)) = ?1")?;
+    let keys: Vec<String> = st.query_map([&prefix], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(keys.iter().filter_map(|k| k.strip_prefix(&prefix)).map(str::to_string).collect())
+}
+
+/// Notes that the request finished a document.
+pub fn request_mark_done(conn: &Connection, request_id: &str, doc_id: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO kv (key, value, updated_at) VALUES (?1, 'done', ?2) \
+         ON CONFLICT(key) DO UPDATE SET updated_at = excluded.updated_at",
+        params![format!("{}{doc_id}", journal_prefix(request_id)), ts(&Utc::now())],
+    )?;
+    Ok(())
+}
+
+/// Forgets the journal of a request that ran to its end.
+pub fn request_clear(conn: &Connection, request_id: &str) -> rusqlite::Result<usize> {
+    conn.execute("DELETE FROM kv WHERE substr(key, 1, length(?1)) = ?1", [journal_prefix(request_id)])
+}
+
+/// Drops the journals of requests that were never run again (older than [`REQUEST_JOURNAL_DAYS`]).
+pub fn prune_request_journals(conn: &Connection) -> rusqlite::Result<usize> {
+    let cutoff = Utc::now() - chrono::Duration::days(REQUEST_JOURNAL_DAYS);
+    conn.execute(
+        "DELETE FROM kv WHERE substr(key, 1, length(?1)) = ?1 AND updated_at < ?2",
+        params![REQUEST_JOURNAL, ts(&cutoff)],
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Status
 // ---------------------------------------------------------------------------
 

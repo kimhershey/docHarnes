@@ -100,6 +100,12 @@ pub struct ProcessRequest {
     /// after an import: a document that merely came back under a new name must not lose its
     /// reviewed fields). Explicit requests keep this off — they replace the latest run.
     pub skip_extracted: bool,
+    /// Identity of the request across attempts (set when a job is queued). The runner journals
+    /// the documents a request finished under this id, so the same request run again — a job
+    /// that is retried or resumed after an interruption — goes on with the rest instead of
+    /// starting over. `None` = no journal (every run processes every document).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 impl Default for ProcessRequest {
@@ -114,6 +120,7 @@ impl Default for ProcessRequest {
             pages: Vec::new(),
             precise: None,
             skip_extracted: false,
+            request_id: None,
         }
     }
 }
@@ -131,8 +138,13 @@ pub struct ProcessProgress {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ProcessReport {
+    /// Documents this run processed.
     pub processed: Vec<String>,
     pub skipped: Vec<String>,
+    /// Documents an earlier attempt of the same request (`ProcessRequest.request_id`) had
+    /// already finished: left as they are.
+    #[serde(default)]
+    pub resumed: Vec<String>,
     pub failed: Vec<(String, String)>,
     pub classified: u32,
     pub ocr_pages: u32,

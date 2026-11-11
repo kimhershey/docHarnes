@@ -94,11 +94,29 @@ pub fn process(
             report.skipped.push(id.clone());
         }
     }
+    // Resume (audit PIP-5): a request that is run again — a retried or resumed job — goes on
+    // with what it has not finished. Re-running the finished documents cost the time once more
+    // and replaced what the user had reviewed in between.
+    let journal = req.request_id.as_deref().filter(|id| crate::documents::is_safe_id(id));
+    let finished_before: std::collections::HashSet<String> = match journal {
+        Some(rid) => db
+            .with(|c| {
+                repo::prune_request_journals(c)?;
+                repo::request_done(c, rid)
+            })?
+            .into_iter()
+            .collect(),
+        None => Default::default(),
+    };
     let total = documents.len() as u32;
     for (i, doc) in documents.iter().enumerate() {
         if deps.cancelled() {
             report.cancelled = true;
             break;
+        }
+        if finished_before.contains(&doc.id) {
+            report.resumed.push(doc.id.clone());
+            continue;
         }
         let name = doc.title.clone().unwrap_or_else(|| doc.original_name.clone());
         let mut stage_progress = |stage: &str, page: Option<(u32, u32)>| {
@@ -113,6 +131,9 @@ pub fn process(
                 report.ocr_pages += out.ocr_pages;
                 report.extracted += out.extracted as u32;
                 report.review_pending += out.review_pending as u32;
+                if let Some(rid) = journal {
+                    let _ = db.with(|c| repo::request_mark_done(c, rid, &doc.id));
+                }
             }
             Err(CoreError::Cancelled) => {
                 report.cancelled = true;
@@ -138,6 +159,11 @@ pub fn process(
                 report.failed.push((doc.id.clone(), msg));
             }
         }
+    }
+    // The request ran to its end (documents that failed were tried): nothing is left to resume.
+    // A cancelled or engine-less run keeps its journal for the next attempt.
+    if let (Some(rid), false) = (journal, report.cancelled) {
+        let _ = db.with(|c| repo::request_clear(c, rid));
     }
     progress(&ProcessProgress { done: total, total, current: String::new(), stage: "done".into(), page: None });
     Ok(report)
