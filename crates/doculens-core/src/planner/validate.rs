@@ -981,7 +981,11 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
             } => {
                 check_project(project, ctx, &at("project"), &mut issues);
                 trim_opt(name, 120);
-                trim_opt(template, 120);
+                // An empty template clears the project's template (as the op table says; the
+                // dates work the same way), so `Some("")` must survive (audit PLN-19).
+                if let Some(t) = template.as_mut() {
+                    *t = t.trim().chars().take(120).collect();
+                }
                 trim_opt(owner, 120);
                 trim_opt(intake_no, 120);
                 trim_opt(notes, 4_000);
