@@ -210,6 +210,8 @@ pub fn split_job(app: &AppHandle, doc_id: String, boundaries: Vec<u32>) -> UiRes
             {
                 return;
             }
+            // An inbox scan that was put off while the parts were written and registered.
+            docs_bridge::inbox_scan_if_dirty(app);
             knowledge_bridge::auto_index(app);
             let ids = new_ids_after.lock().map(|n| n.clone()).unwrap_or_default();
             auto_process(app, ids, None, ImportSource::Drop);
@@ -256,6 +258,7 @@ pub fn merge_job(app: &AppHandle, ids: Vec<String>, name: Option<String>) -> UiR
             {
                 return;
             }
+            docs_bridge::inbox_scan_if_dirty(app);
             knowledge_bridge::auto_index(app);
             if let Some(id) = merged_after.lock().ok().and_then(|m| m.clone()) {
                 auto_process(app, vec![id], None, ImportSource::Drop);

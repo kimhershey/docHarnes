@@ -853,6 +853,55 @@ fn split_registers_parts_and_archives_the_original() {
     assert_eq!(lopdf::Document::load(w.paths.root.join(&m.rel_path)).unwrap().get_pages().len(), 4);
 }
 
+/// Audit DOC-3: while a split registered its parts one by one, the inbox watcher imported the
+/// parts still waiting; the split then hit the duplicate path and its rollback deleted the files
+/// of the documents the watcher had just registered.
+#[test]
+fn a_failed_split_rolls_back_only_its_own_parts() {
+    let w = World::new();
+    let path = w.paths.inbox_dir().join("batch.pdf");
+    crate::documents::convert::write_blank_pdf(&path, 4, &["a".into(), "b".into(), "c".into(), "d".into()]).unwrap();
+    let row = |id: &str, rel: &str| NewDocument {
+        id: id.into(),
+        rel_path: rel.into(),
+        original_name: rel.rsplit('/').next().unwrap().into(),
+        source_kind: SourceKind::Pdf,
+        content_hash: format!("h-{id}"),
+        size_bytes: 1,
+        file_modified_at: None,
+        role: DocumentRole::Work,
+        import_batch_id: None,
+    };
+    w.db.with(|c| docs::insert_document(c, &row("s1", "inbox/batch.pdf"))).unwrap();
+    w.db.with(|c| docs::set_status(c, "s1", DocumentStatus::Rendered, None)).unwrap();
+    let deps = w.import_deps();
+    let (part1, part2) = (w.paths.inbox_dir().join("batch_part1.pdf"), w.paths.inbox_dir().join("batch_part2.pdf"));
+    // Another importer registers part 2 between the write and the split's own registration.
+    let err = super::split::split_document_observed(&deps, &w.doc("s1"), &[3], None, &mut |parts| {
+        assert_eq!(
+            parts.iter().map(|(p, n)| (p.clone(), *n)).collect::<Vec<_>>(),
+            [(part1.clone(), 2), (part2.clone(), 2)]
+        );
+        w.db.with(|c| docs::insert_document(c, &row("watcher", "inbox/batch_part2.pdf"))).unwrap();
+    })
+    .unwrap_err();
+    assert_eq!(err.code(), "db", "{err}");
+    assert!(!part1.exists(), "the split's own unregistered part is removed");
+    assert!(part2.is_file(), "the other importer's document keeps its file");
+    assert_eq!(w.doc("watcher").rel_path, "inbox/batch_part2.pdf");
+    assert_eq!(w.doc("s1").status, DocumentStatus::Rendered, "the original is not archived by a failed split");
+    let all = w.db.with(|c| docs::list_documents(c, &Default::default())).unwrap();
+    assert_eq!(all.len(), 2, "no half-registered part rows: {:?}", all.iter().map(|d| &d.rel_path).collect::<Vec<_>>());
+
+    // A name a document still owns is not reused, even when its file is gone (a `missing` part of
+    // an earlier split used to end the next split with a UNIQUE(rel_path) error).
+    std::fs::remove_file(&part2).unwrap();
+    let ids = super::split::split_document(&deps, &w.doc("s1"), &[3], None).unwrap();
+    let rels: Vec<String> = ids.iter().map(|id| w.doc(id).rel_path).collect();
+    assert_eq!(rels, ["inbox/batch_part1.pdf", "inbox/batch_part2_2.pdf"]);
+    assert_eq!(w.doc("s1").status, DocumentStatus::Archived);
+}
+
 /// Phase-end review gaps: nothing unmasked in the run result / mirror, the
 /// precision pass samples with its own temperature, a changed file resets the
 /// pipeline state (manual type kept), revalidation is idempotent, corrections

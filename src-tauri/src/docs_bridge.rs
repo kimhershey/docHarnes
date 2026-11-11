@@ -33,7 +33,18 @@ const INBOX_SETTLE: Duration = Duration::from_secs(3);
 const INBOX_RETRY: Duration = Duration::from_secs(4);
 /// How long a workspace switch waits for cancelled document jobs to stop.
 const CANCEL_WAIT: Duration = Duration::from_secs(8);
-const DOC_JOBS: [JobKind; 3] = [JobKind::DocumentImport, JobKind::DocumentRescan, JobKind::DocumentRender];
+/// Jobs that write documents: a rescan started meanwhile would reprocess what they are writing.
+const DOC_JOBS: [JobKind; 5] = [
+    JobKind::DocumentImport,
+    JobKind::DocumentRescan,
+    JobKind::DocumentRender,
+    JobKind::DocumentSplit,
+    JobKind::DocumentMerge,
+];
+/// Jobs that put files into the workspace and register them themselves. An inbox scan that ran
+/// meanwhile took those files for new arrivals (a split inside `inbox/` then failed on the
+/// duplicate path and rolled back the watcher's documents — audit DOC-3), so it waits for them.
+const INBOX_BLOCKERS: [JobKind; 3] = [JobKind::DocumentImport, JobKind::DocumentSplit, JobKind::DocumentMerge];
 /// Everything that touches the workspace DB on a background thread.
 const WORKSPACE_JOBS: [JobKind; 13] = [
     JobKind::DocumentImport,
@@ -462,13 +473,21 @@ pub fn spawn_inbox_scan(app: &AppHandle) {
     std::thread::Builder::new().name("doculens-inbox-scan".into()).spawn(move || inbox_job(&app2)).ok();
 }
 
+/// Runs the inbox scan that was put off while a job of [`INBOX_BLOCKERS`] ran (called from the
+/// `after` hook of such a job, once it is no longer active).
+pub fn inbox_scan_if_dirty(app: &AppHandle) {
+    if app.state::<AppState>().inbox_dirty.swap(false, Ordering::SeqCst) {
+        spawn_inbox_scan(app);
+    }
+}
+
 /// Imports settled, unregistered inbox files (watcher / toggle / startup).
 /// Runs on a background thread; see `spawn_inbox_scan`.
 pub fn inbox_job(app: &AppHandle) {
     let state = app.state::<AppState>();
-    if state.jobs.is_active_kind(&[JobKind::DocumentImport]) {
-        // A drop import may be copying into inbox/ right now, or an inbox run is
-        // in progress: re-check when the running job finishes.
+    if state.jobs.is_active_kind(&INBOX_BLOCKERS) {
+        // A drop import may be copying into inbox/ right now, an inbox run is in progress, or a
+        // split / merge is writing files it registers itself: re-check when that job finishes.
         state.inbox_dirty.store(true, Ordering::SeqCst);
         return;
     }
