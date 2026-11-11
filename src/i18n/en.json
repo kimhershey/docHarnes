@@ -312,7 +312,8 @@
     "nothing_to_do": "I found nothing to do. Ask about your documents, or tell me a task — import, organise, extract, summarise.",
     "reply_label": "Assistant reply",
     "undo_change": "Undo",
-    "undone": "Put back to the previous value."
+    "undone": "Put back to the previous value.",
+    "undo_stale": "The value has changed again since, so it was not put back."
   },
   "planner": {
     "ops": {
@@ -597,6 +598,7 @@
         "project_copy": "Filed in this project as a copy, so it stays where it is",
         "missing_file": "File not found"
       },
+      "unmet": "Not covered: {{unmet}}",
       "organize_summary": "{{moves}} moves · {{held}} held · {{unchanged}} unchanged",
       "export_path": "{{count}} documents → {{path}}",
       "overwrite": "(overwrites the existing file)",

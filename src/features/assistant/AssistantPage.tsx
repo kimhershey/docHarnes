@@ -15,7 +15,7 @@ import { describeJobError } from "@/features/jobs/describe";
 import { AnswerCard } from "@/features/knowledge/AnswerCard";
 import { openCitation } from "@/features/knowledge/AnswersPanel";
 import { settingsTabPath } from "@/features/settings/tabs";
-import { describePreRoute, executePreRoute, executeUiOps, type UiOpResult } from "@/lib/commands";
+import { describePreRoute, executePreRoute, executeUiOps, undoSettingsChange, type UiOpResult } from "@/lib/commands";
 import { docsFromIds, DropHint, importDroppedFiles, useDocumentDropTarget, type DragDoc } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
 import { askBackText, isCancelCommand, isSlashCommand, loadRouting } from "@/lib/assistant-control";
@@ -40,7 +40,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { planAnswerScope, sameSearchScope } from "./answerScope";
 import { ClarifyCard } from "./ClarifyCard";
 import { conversationTurns } from "./conversation";
-import { clarificationQuestion, isPlanExecution, planKind, requiresConfirmation, sourceLabel, uiContextFor } from "./describePlan";
+import { clarificationQuestion, isPlanExecution, planKind, requiresConfirmation, sourceLabel, uiContextFor, unmetRequestNote } from "./describePlan";
 import { EvidenceCard } from "./evidence";
 import { ExecutionCard } from "./ExecutionCard";
 import { UI_OPS, missingRequiredParams, paramDesc } from "./opSpecs";
@@ -373,10 +373,15 @@ export function AssistantPage() {
     if (m) await runPlan(sid, m);
   };
 
-  /** 되돌리기 on an executed card: puts the previous values back and marks the card. */
-  const undoExecuted = async (sid: string, id: number, ops: Op[]) => {
-    const results = await executeUiOps(ops, navigate, t);
-    if (results.every((r) => r.ok)) patch(sid, id, (m) => (m.role === "assistant" && m.kind === "executed" ? { ...m, undone: true } : m));
+  /**
+   * 되돌리기 on an executed card: puts the previous values back and marks the card — unless the setting was
+   * changed again since (by a later sentence, on the settings screen, before a restart): then the value the
+   * card would put back is no longer "the previous one", nothing is changed and the card says so.
+   */
+  const undoExecuted = async (sid: string, id: number, ops: Op[], applied: Op[] | undefined) => {
+    const outcome = await undoSettingsChange(ops, applied, navigate, t);
+    if (outcome === "failed") return;
+    patch(sid, id, (m) => (m.role === "assistant" && m.kind === "executed" ? (outcome === "stale" ? { ...m, undoStale: true } : { ...m, undone: true }) : m));
   };
 
   const cancelPlan = (sid: string, id: number) => patchPlan(sid, id, (x) => ({ ...x, status: "cancelled", editing: false }));
@@ -445,6 +450,11 @@ export function AssistantPage() {
         const found = plan.operations.find((o) => o.op === "answer");
         const op = found && found.op === "answer" ? found : null;
         const question = op ? op.question : textValue;
+        // What the planner says the plan leaves out ("위약금 조항 알려주고 메일로 보내줘": no mail is sent) is said
+        // before the answer. A plan card would show the note next to its approve button; an answer has no
+        // side effect to approve, so it does not wait — but the part that was dropped must not vanish.
+        const unmetNote = unmetRequestNote(plan, response.result.issues, t);
+        if (unmetNote) push(sid, { role: "assistant", kind: "reply", text: unmetNote, source: sourceLabel(response.result.source, t), note: "unmet" });
         // A ready reply (a fixed greeting, "this cannot be done"): shown as it is, no model call.
         if (op?.reply) {
           push(sid, { role: "assistant", kind: "reply", text: op.reply, source: sourceLabel(response.result.source, t) });
@@ -485,9 +495,11 @@ export function AssistantPage() {
           const failures = results.filter((r) => !r.ok).map((r) => r.error ?? "");
           // The card says what ran — or, when nothing ran, what was asked for — and lists the ops that failed.
           const summary = ran.map((r) => r.summary).filter(Boolean).join(" · ") || plan.summary || textValue;
-          // What a settings change replaced can be put back from the card (last change first).
+          // What a settings change replaced can be put back from the card (last change first) — while the
+          // settings still hold what the change set (`applied`).
           const undo = ran.flatMap((r) => r.undo ?? []).reverse();
-          push(sid, { role: "assistant", kind: "executed", text: summary, source: sourceLabel(response.result.source, t), confidence: plan.confidence, ...(failures.length > 0 ? { failures, ran: ran.length } : {}), ...(undo.length > 0 ? { undo } : {}) });
+          const applied = ran.flatMap((r) => r.applied ?? []);
+          push(sid, { role: "assistant", kind: "executed", text: summary, source: sourceLabel(response.result.source, t), confidence: plan.confidence, ...(failures.length > 0 ? { failures, ran: ran.length } : {}), ...(undo.length > 0 ? { undo, applied } : {}) });
           return;
         }
         break;
@@ -910,8 +922,12 @@ export function AssistantPage() {
                   />
                 )}
                 {m.kind === "reply" && (
-                  <div className="w-full rounded-lg border border-border bg-bg-elevated p-3 text-sm" role="group" aria-label={t("assistant.reply_label")} data-testid="assistant-card-reply">
-                    <p className="whitespace-pre-line selectable">{m.text}</p>
+                  <div className="w-full rounded-lg border border-border bg-bg-elevated p-3 text-sm" role="group" aria-label={t("assistant.reply_label")} data-testid="assistant-card-reply" data-reply-note={m.note}>
+                    {/* A note about the part of the request that was not carried out reads as a warning. */}
+                    <p className={m.note === "unmet" ? "flex items-start gap-1.5 whitespace-pre-line text-warn selectable" : "whitespace-pre-line selectable"}>
+                      {m.note === "unmet" && <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />}
+                      <span className="min-w-0">{m.text}</span>
+                    </p>
                     <p className="mt-1 text-xs text-fg-subtle">{t("planner.card.source", { source: m.source })}</p>
                   </div>
                 )}
@@ -938,8 +954,12 @@ export function AssistantPage() {
                               <span className="text-xs text-fg-muted" data-testid="executed-undone">
                                 {t("assistant.undone")}
                               </span>
+                            ) : m.undoStale ? (
+                              <span className="text-xs text-fg-muted" data-testid="executed-undo-stale">
+                                {t("assistant.undo_stale")}
+                              </span>
                             ) : (
-                              <Button size="sm" variant="outline" onClick={() => activeId && void undoExecuted(activeId, m.id, m.undo ?? [])} data-testid="executed-undo">
+                              <Button size="sm" variant="outline" onClick={() => activeId && void undoExecuted(activeId, m.id, m.undo ?? [], m.applied)} data-testid="executed-undo">
                                 {t("assistant.undo_change")}
                               </Button>
                             )}

@@ -312,7 +312,8 @@
     "nothing_to_do": "할 일을 찾지 못했습니다. 문서에 대해 묻거나, 가져오기·정리·추출·요약 같은 작업을 말씀해 주세요.",
     "reply_label": "어시스턴트 답변",
     "undo_change": "되돌리기",
-    "undone": "이전 값으로 되돌렸습니다."
+    "undone": "이전 값으로 되돌렸습니다.",
+    "undo_stale": "그 뒤에 값이 다시 바뀌어 되돌리지 않았습니다."
   },
   "planner": {
     "ops": {
@@ -597,6 +598,7 @@
         "project_copy": "이 프로젝트에 사본으로 정리된 문서라 그대로 둠",
         "missing_file": "파일을 찾을 수 없음"
       },
+      "unmet": "요청 중 반영하지 못한 부분: {{unmet}}",
       "organize_summary": "이동 {{moves}}건 · 보류 {{held}}건 · 변경 없음 {{unchanged}}건",
       "export_path": "문서 {{count}}건 → {{path}}",
       "overwrite": "(기존 파일 덮어씀)",

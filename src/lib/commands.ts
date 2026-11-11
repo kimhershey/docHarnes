@@ -10,9 +10,9 @@ import { describeError } from "./errors";
 import { api } from "./ipc";
 import { queryClient, queryKeys } from "./query-client";
 import { coerceSettingValue, getSettingByPath, resolveSettingKey, setSettingByPath, settingSpec } from "./settingsCatalog";
-import { SCREEN_ROUTES, isJobFinished, type BackendPreference, type DocumentView, type Job, type JobOp, type JobState, type Language, type Op, type OpKind, type PreRouteResult, type RetentionPolicy, type RetentionTarget, type Screen, type Theme, type Tier, type UndoReport } from "./types";
+import { SCREEN_ROUTES, isJobFinished, type AppSettings, type BackendPreference, type DocumentView, type Job, type JobOp, type JobState, type Language, type Op, type OpKind, type PreRouteResult, type RetentionPolicy, type RetentionTarget, type Screen, type Theme, type Tier, type UndoReport } from "./types";
 import { errorCode, errorMessage } from "./utils";
-import { flushChatWrites } from "@/stores/assistant";
+import { chatWritesSettled } from "@/stores/assistant";
 import { useDocumentsStore } from "@/stores/documents";
 import { useEngineStore } from "@/stores/engine";
 import { useJobsStore } from "@/stores/jobs";
@@ -25,6 +25,39 @@ export interface ExecuteOutcome {
   summary: string;
   /** Ops that put back what this one replaced (a settings change: the previous value). Absent when nothing changed. */
   undo?: Op[];
+  /**
+   * What the change left behind, as settings ops (the setting and the value it has now): `undo` only runs while
+   * the settings still say so (`undoSettingsChange`). A later change of the same setting makes the undo stale —
+   * replayed, it would put a value back that is no longer "the previous one".
+   */
+  applied?: Op[];
+}
+
+/** The setting a settings op writes and the value it sets (`null` for an op that is no settings change). */
+export function settingOfOp(op: Op): { path: string; value: unknown } | null {
+  switch (op.op) {
+    case "set_setting":
+      return op.key === "journal_days" ? null : { path: resolveSettingKey(op.key), value: op.value };
+    case "set_theme":
+      return { path: "ui.theme", value: op.theme };
+    case "set_language":
+      return { path: "ui.language", value: op.lang };
+    case "set_profile":
+      return { path: "models.profile", value: op.profile };
+    case "set_inbox_watch":
+      return { path: "processing.inbox_watch", value: op.enabled };
+    default:
+      return null;
+  }
+}
+
+/** Whether the settings still hold every value of `applied` (see `ExecuteOutcome.applied`). */
+export function settingsStillHold(applied: Op[], settings: AppSettings | null): boolean {
+  if (!settings) return false;
+  return applied.every((op) => {
+    const s = settingOfOp(op);
+    return s !== null && getSettingByPath(settings, s.path) === s.value;
+  });
 }
 
 export function describePreRoute(result: PreRouteResult, t: TFunction): string {
@@ -51,14 +84,14 @@ export async function executePreRoute(result: PreRouteResult, navigate: Navigate
       await settings.setTheme(result.theme);
       const summary = t("theme.changed", { theme: t(`theme.${result.theme}`) });
       ui.toast(summary, "ok");
-      return { summary, ...(before && before !== result.theme ? { undo: [{ op: "set_theme", theme: before }] } : {}) };
+      return { summary, ...(before && before !== result.theme ? { undo: [{ op: "set_theme", theme: before }], applied: [{ op: "set_theme", theme: result.theme }] } : {}) };
     }
     case "set_language": {
       const before = settings.settings?.ui.language;
       await settings.setLanguage(result.language);
       const summary = t("language.changed", { language: t(`language.${result.language}`) });
       ui.toast(summary, "ok");
-      return { summary, ...(before && before !== result.language ? { undo: [{ op: "set_language", lang: before }] } : {}) };
+      return { summary, ...(before && before !== result.language ? { undo: [{ op: "set_language", lang: before }], applied: [{ op: "set_language", lang: result.language }] } : {}) };
     }
     case "open": {
       navigate(SCREEN_ROUTES[result.screen]);
@@ -120,11 +153,6 @@ function toNumber(v: unknown): number {
   return n;
 }
 
-/** The assistant's chat writes, sent and stored — but a workspace op does not hang on a write that is stuck. */
-function chatWritesSettled(): Promise<void> {
-  return Promise.race([flushChatWrites(), new Promise<void>((resolve) => setTimeout(resolve, 2000))]);
-}
-
 
 /**
  * Performs one UI-side op of a plan (or of an execution's `ui_actions`).
@@ -159,6 +187,8 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
       if (!spec) throw new Error(t("planner.ui.unknown_setting", { key: op.key }));
       const value = coerceSettingValue(spec, op.value);
       const before = settings.settings ? getSettingByPath(settings.settings, path) : undefined;
+      // "티어 자동" clears the manual tier: what it was is kept here, for the undo (it is gone afterwards).
+      const manualTierBefore = settings.settings?.models.manual_tier ?? null;
       switch (path) {
         case "ui.theme":
           await settings.setTheme(value as Theme);
@@ -194,7 +224,12 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
       const label = (v: unknown) => settingValueLabel(path, v as string | number | boolean | null, t);
       if (before === undefined || before === null) return done(t("planner.ui.set_setting", { key: t(spec.label), value: label(after) }));
       if (before === after) return done(t("planner.ui.set_setting_same", { key: t(spec.label), value: label(after) }), "info");
-      return { ...done(t("planner.ui.set_setting_changed", { key: t(spec.label), from: label(before), to: label(after) })), undo: [{ op: "set_setting", key: path, value: before as string | number | boolean }] };
+      // Back from "auto" to the manual mode means back to the tier that was chosen (setting the tier sets the mode).
+      const undo: Op[] =
+        path === "models.tier_mode" && before === "manual" && manualTierBefore
+          ? [{ op: "set_setting", key: "models.manual_tier", value: manualTierBefore }]
+          : [{ op: "set_setting", key: path, value: before as string | number | boolean }];
+      return { ...done(t("planner.ui.set_setting_changed", { key: t(spec.label), from: label(before), to: label(after) })), undo, applied: [{ op: "set_setting", key: path, value: after as string | number | boolean }] };
     }
     case "set_model": {
       await settings.setActiveModel(op.id);
@@ -205,7 +240,7 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
       const before = settings.settings?.models.profile;
       await settings.update((d) => void (d.models.profile = op.profile));
       const said = done(t("planner.ui.set_profile", { profile: t(`models.profiles.${op.profile}`) }));
-      return before && before !== op.profile ? { ...said, undo: [{ op: "set_profile", profile: before }] } : said;
+      return before && before !== op.profile ? { ...said, undo: [{ op: "set_profile", profile: before }], applied: [{ op: "set_profile", profile: op.profile }] } : said;
     }
     case "open": {
       switch (op.target) {
@@ -312,11 +347,10 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
       if (scope === "vec" || scope === "all") await api.knowledgeEmbed(true);
       return done(t("planner.ui.reindex"), "info");
     }
-    case "set_inbox_watch": {
-      await api.documentsSetInboxWatch(op.enabled);
-      await settings.update((d) => void (d.processing.inbox_watch = op.enabled));
-      return done(t(op.enabled ? "planner.ui.inbox_watch_on" : "planner.ui.inbox_watch_off"));
-    }
+    case "set_inbox_watch":
+      // "inbox 감시 꺼" (the planner's fast path) is the setting `processing.inbox_watch`: the same card —
+      // before → after, "already off", 되돌리기 — as `set_setting` for it.
+      return executeUiOp({ op: "set_setting", key: "processing.inbox_watch", value: op.enabled }, navigate, t);
     case "register_form": {
       // §3.4.0 form registration: the schema screen's dialog derives the fields and confirms them in the grid.
       const ref = (op.doc_ref ?? "").trim();
@@ -594,6 +628,8 @@ export interface UiOpResult {
   error: string | null;
   /** Ops that put back what this op replaced (settings changes). */
   undo?: Op[];
+  /** What the op left behind (`ExecuteOutcome.applied`). */
+  applied?: Op[];
 }
 
 /**
@@ -606,7 +642,7 @@ export async function executeUiOps(ops: Op[], navigate: NavigateFunction, t: TFu
   for (const op of ops) {
     try {
       const outcome = await executeUiOp(op, navigate, t);
-      results.push({ op: op.op, ok: true, summary: outcome.summary, error: null, ...(outcome.undo ? { undo: outcome.undo } : {}) });
+      results.push({ op: op.op, ok: true, summary: outcome.summary, error: null, ...(outcome.undo ? { undo: outcome.undo } : {}), ...(outcome.applied ? { applied: outcome.applied } : {}) });
     } catch (e) {
       const error = describeError(e, t);
       useUiStore.getState().toast(error, "danger");
@@ -614,6 +650,23 @@ export async function executeUiOps(ops: Op[], navigate: NavigateFunction, t: TFu
     }
   }
   return results;
+}
+
+/**
+ * 되돌리기 of a settings change: runs `undo` — unless the settings no longer hold what the change set
+ * (`applied`). "배율 120", then "배율 150", then 되돌리기 on the first card must not set 100: 120 is not what
+ * would be undone any more. The current values are read from the backend first (the card may be from before a
+ * restart, the setting may have been changed on the settings screen). `stale`: nothing was changed.
+ * A card without `applied` (stored by an earlier build) is undone as before.
+ */
+export async function undoSettingsChange(undo: Op[], applied: Op[] | undefined, navigate: NavigateFunction, t: TFunction): Promise<"undone" | "stale" | "failed"> {
+  if (undo.length === 0) return "failed";
+  if (applied && applied.length > 0) {
+    await useSettingsStore.getState().load();
+    if (!settingsStillHold(applied, useSettingsStore.getState().settings)) return "stale";
+  }
+  const results = await executeUiOps(undo, navigate, t);
+  return results.every((r) => r.ok) ? "undone" : "failed";
 }
 
 // ---------------------------------------------------------------------------

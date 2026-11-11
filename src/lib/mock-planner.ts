@@ -2048,6 +2048,9 @@ function draftRequestOf(op: Extract<Op, { op: "draft_document" }>, plan: Plan, c
   };
 }
 
+/** `validate::MAX_CARRIED_TEXT_CHARS`: the longest text a text-only answer plan carries. */
+const MAX_CARRIED_TEXT_CHARS = 60_000;
+
 export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | null): PlanIssue[] {
   const issues: PlanIssue[] = [];
   plan.confidence = Number.isFinite(plan.confidence) ? Math.min(1, Math.max(0, plan.confidence)) : 0;
@@ -2165,10 +2168,14 @@ export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | nul
         if (!op.query) issues.push(issue(at("query"), "query_empty", "search needs a query"));
         if (op.top_k != null) op.top_k = Math.min(200, Math.max(1, op.top_k));
         break;
-      case "answer":
-        op.question = Array.from(op.question.trim()).slice(0, 4000).join("");
+      case "answer": {
+        // A sentence that carries its own text (다듬기 · 번역 · 정리) keeps it — the answer path sizes it from
+        // the model's context and marks an answer whose text was cut (KNO-3). A question stays a question.
+        const textOnly = op.knowledge === false && op.mode !== "chat";
+        op.question = Array.from(op.question.trim()).slice(0, textOnly ? MAX_CARRIED_TEXT_CHARS : 4000).join("");
         if (!op.question) issues.push(issue(at("question"), "question_empty", "answer needs a question"));
         break;
+      }
       case "aggregate": {
         const text = (op.field ?? "").trim();
         if (!text) {
@@ -2603,8 +2610,8 @@ function plainWords(text: string): string {
     .trim();
 }
 
-/** A sentence that is nothing but a greeting / thanks (`fastpath::greeting`): `true` = thanks. */
-function pleasantry(text: string): boolean | null {
+/** The greeting / thanks words of a sentence that holds nothing else, whatever its punctuation: `true` = thanks. */
+function pleasantryWords(text: string): boolean | null {
   let rest = ` ${plainWords(text)} `;
   let found: boolean | null = null;
   for (const [list, thanks] of [
@@ -2618,6 +2625,15 @@ function pleasantry(text: string): boolean | null {
     }
   }
   return rest.trim() === "" ? found : null;
+}
+
+/**
+ * A sentence that is nothing but a greeting / thanks (`fastpath::greeting`): `true` = thanks. The core keeps
+ * `?` / `？` when it compares the words, so "안녕?" is not "nothing but a greeting": it is left to the model
+ * (whose routing call answers it as small talk, see `replyRoute`).
+ */
+function pleasantry(text: string): boolean | null {
+  return /[?？]/.test(text) ? null : pleasantryWords(text);
 }
 
 const NOT_A_COMMAND = ["?", "？", "뭐야", "뭐지", "뭔가", "무엇", "무슨", "알려", "어떻게", "얼마", "어디", "왜", "하지마", "하지 마", "말고", "말아", "않", "what", "how", "why", "which", "don't", "do not", "never"];
@@ -2666,7 +2682,8 @@ const WORKSPACE_WORDS = ["문서", "파일", "자료", "계약", "견적", "제�
 function replyRoute(text: string, ctx: PlanContext): AnswerMode | null {
   if (ASK_BACK.test(text) || carriedText(text)) return null;
   const t = mkText(text, true);
-  if (has(t, CHAT_HINTS)) return "chat";
+  // A greeting the fast path left alone because it ends in a question mark ("안녕?") is small talk all the same.
+  if (has(t, CHAT_HINTS) || pleasantryWords(text) !== null) return "chat";
   if (!has(t, GENERAL_HINTS) || has(t, WORKSPACE_WORDS) || has(t, SELECTION_WORDS)) return null;
   if (ctx.projects.some((p) => p.name && t.compact.includes(compact(p.name)))) return null;
   return "general";
@@ -2701,6 +2718,73 @@ function vagueScalePlan(t: Text): Plan | null {
 }
 
 /**
+ * Stand-in for a model reading of a vague wish that is not a number ("눈이 편한 화면으로 해줘"): a theme the
+ * sentence does not name — the contract check below makes it one the user confirms.
+ */
+function vagueThemePlan(t: Text): Plan | null {
+  if (!has(t, ["눈이편", "눈이 편", "눈아파", "눈이 아파", "눈부", "easyontheeyes", "easy on the eyes"])) return null;
+  return single({ op: "set_theme", theme: "dark" }, 0.8, tr(t.ko, "테마를 다크로 바꿉니다", "Switch the theme to dark"));
+}
+
+const ON_WORDS = ["켜", "활성", "on", "enable", "사용", "allow", "허용", "줄이기", "줄여"];
+const OFF_WORDS = ["꺼", "끄", "해제", "off", "disable", "사용안함", "사용 안", "stop", "안함"];
+/** How people say the values of the settings ops that carry a name instead of a number (next to the value itself). */
+const VALUE_WORDS: Readonly<Record<string, readonly string[]>> = {
+  dark: ["다크", "어두운", "어둡"],
+  light: ["라이트", "밝은", "밝게"],
+  system: ["시스템"],
+  high_contrast: ["고대비", "contrast"],
+  ko: ["한국어", "한글", "korean"],
+  en: ["영어", "영문", "english"],
+  fast: ["빠른", "빠르게", "속도"],
+  balanced: ["균형"],
+  accuracy: ["정확"],
+  fine_print: ["잔글씨", "fine print"],
+  none: OFF_WORDS,
+  full: ["추출", "전체", "extract"],
+  classify_and_ocr: ["ocr"],
+  classify_only: ["분류", "classify"],
+  auto: ["자동"],
+  manual: ["수동"],
+};
+
+/**
+ * Whether the user's words carry the value of a settings change that is not a number (`guard::value_is_grounded`,
+ * simplified): a switch needs its on / off word, a named value its own word or one of the ways people say it.
+ */
+function valueSaid(t: Text, key: string, value: string | boolean): boolean {
+  if (typeof value === "boolean") return has(t, value ? ON_WORDS : OFF_WORDS);
+  const v = value.toLowerCase();
+  const spec = settingSpec(key);
+  const aliases = spec?.type.kind === "enum" ? Object.entries(spec.type.aliases ?? {}).filter(([, to]) => to === v).map(([said]) => said) : [];
+  const words = [v, v.replace(/_/g, " "), ...aliases, ...(VALUE_WORDS[v] ?? [])];
+  // "애니메이션 줄이기" on / off is said like a switch.
+  if (key === "ui.reduced_motion" && (v === "on" || v === "off")) return has(t, v === "on" ? ON_WORDS : OFF_WORDS);
+  return has(t, words);
+}
+
+/** The settings op as `[setting, value]` when its value is a name or a switch (numbers have their own check). */
+function namedChange(op: Op): [string, string | boolean] | null {
+  switch (op.op) {
+    case "set_theme":
+      return ["ui.theme", op.theme];
+    case "set_language":
+      return ["ui.language", op.lang];
+    case "set_profile":
+      return ["models.profile", op.profile];
+    case "set_inbox_watch":
+      return ["processing.inbox_watch", op.enabled];
+    case "set_setting": {
+      const key = resolveSettingKey(op.key);
+      const kind = settingSpec(key)?.type.kind;
+      return (kind === "boolean" || kind === "enum") && (typeof op.value === "boolean" || typeof op.value === "string") ? [key, op.value] : null;
+    }
+    default:
+      return null;
+  }
+}
+
+/**
  * `guard::contract_checks`: a model plan is compared with the sentence it was made from. A part the plan
  * leaves out, a split it cannot make and a settings change the sentence does not name each make the plan
  * one the user confirms, with a note for the card.
@@ -2725,12 +2809,20 @@ function contractChecks(text: string, plan: Plan, ko: boolean): PlanIssue[] {
     notes.push(issue("operations", "grouping_dropped", ko ? "문장은 나눠서 처리하라고 하는데 이 기준으로는 나눌 수 없어 한 덩어리로 처리합니다" : "the sentence asks for one result per group, which this plan cannot do; it makes a single one", false));
   }
   plan.operations.forEach((op, i) => {
-    if (op.op !== "set_setting" || typeof op.value !== "number") return;
-    // A number the sentence does not carry (a ratio said as a percentage counts).
-    const numbers = (said.match(/\d+(?:[.,]\d+)?/g) ?? []).map((n) => Number(n.replace(",", ".")));
-    if (numbers.some((n) => n === op.value || n / 100 === op.value)) return;
+    let what: string;
+    const named = namedChange(op);
+    if (named) {
+      // A theme, a language, a profile, a switch or a named value the sentence does not say.
+      if (valueSaid(t, named[0], named[1])) return;
+      what = `${named[0]} → ${String(named[1])}`;
+    } else {
+      if (op.op !== "set_setting" || typeof op.value !== "number") return;
+      // A number the sentence does not carry (a ratio said as a percentage counts).
+      const numbers = (said.match(/\d+(?:[.,]\d+)?/g) ?? []).map((n) => Number(n.replace(",", ".")));
+      if (numbers.some((n) => n === op.value || n / 100 === op.value)) return;
+      what = `${op.key} → ${String(op.value)}`;
+    }
     plan.requires_confirmation = true;
-    const what = `${op.key} → ${String(op.value)}`;
     notes.push(issue(`operations[${i}]`, "ungrounded_change", ko ? `문장에서 이 변경의 근거를 찾지 못했습니다(${what}). 맞으면 승인해 주세요` : `the sentence does not name this change (${what}); approve it if it is what you meant`, false));
   });
   return notes;
@@ -2809,7 +2901,7 @@ export function planText(text: string, ctx: PlanContext, opts: { model?: boolean
     }
     const said = mkText(userWords(t), ko);
     const understood =
-      (askBack ? (rulesPlan(`${askBack[1]!.trim()} ${askBack[2]!.trim()}`.trim(), ctx) ?? rulesPlan(askBack[2]!.trim(), ctx)) : rulesPlan(t, ctx)) ?? vagueScalePlan(said);
+      (askBack ? (rulesPlan(`${askBack[1]!.trim()} ${askBack[2]!.trim()}`.trim(), ctx) ?? rulesPlan(askBack[2]!.trim(), ctx)) : rulesPlan(t, ctx)) ?? vagueScalePlan(said) ?? vagueThemePlan(said);
     if (understood && accept(understood, "model")) {
       // What the plan leaves out or adds on its own makes it one the user confirms (`guard::contract_checks`).
       result.issues.push(...contractChecks(t, result.plan, ko));
@@ -4411,39 +4503,54 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
       if (skipped.length > 0) payload.skipped = skipped;
       const groupBy = op.group_by ?? "none";
       if (groupBy === "none" && op.target !== "set") return { summary: (ko ? `${made} 요약` : `Summarised ${made}`) + tail, payload };
-      // One combined summary per group (`exec::summarize`): the first lines of the group's document summaries.
-      const byDoc = new Map(docs.map((d) => [d.id, d]));
-      const projects = mp.projectSummaries();
-      const none = ko ? "프로젝트 없음" : "No project";
-      const keyOf = (id: string): [string, string] => {
-        const d = byDoc.get(id);
-        if (groupBy === "project") {
-          const p = projects.find((x) => mp.projectDocIds(x.id).includes(id));
-          return p ? [p.id, p.name] : ["", none];
-        }
-        if (groupBy === "doc_type") {
-          const slug = d?.doc_type ?? "";
-          const label = ctx.doc_types.find((x) => x.slug === slug);
-          return [slug, label ? (ko ? label.label_ko : label.label_en) : ko ? "유형 미지정" : "No type"];
-        }
-        if (groupBy === "folder") {
-          const dir = d ? relDir(d.rel_path) : "";
-          return [dir, dir || (ko ? "(최상위)" : "(root)")];
-        }
-        return ["", ko ? "전체" : "All documents"];
+      // One combined summary per group (`exec::summarize::group_documents`).
+      const answered = new Map(summaries.map((x) => [x.document_id, x]));
+      const sets: { key: string; label: string; docs: string[] }[] = [];
+      const put = (key: string, label: string, id: string) => {
+        const g = sets.find((x) => x.key === key);
+        if (g) g.docs.push(id);
+        else sets.push({ key, label, docs: [id] });
       };
+      if (groupBy === "project") {
+        // Every project in display order — a document that belongs to two projects is in both groups — and
+        // the documents outside every project last.
+        for (const p of mp.projectSummaries()) sets.push({ key: p.id, label: p.name, docs: [] });
+        const none = { key: "", label: ko ? "프로젝트 없음" : "No project", docs: [] as string[] };
+        for (const d of docs) {
+          const homes = sets.filter((g) => mp.isMember(g.key, d.id));
+          for (const g of homes) g.docs.push(d.id);
+          if (homes.length === 0) none.docs.push(d.id);
+        }
+        sets.push(none);
+      } else if (groupBy === "doc_type") {
+        for (const d of docs) {
+          const slug = d.doc_type ?? "";
+          const label = ctx.doc_types.find((x) => x.slug === slug);
+          put(slug, slug === "" ? (ko ? "유형 없음" : "No type") : label ? (ko ? label.label_ko : label.label_en) : slug, d.id);
+        }
+      } else if (groupBy === "folder") {
+        for (const d of docs) {
+          const dir = relDir(d.rel_path);
+          put(dir, dir || (ko ? "(최상위)" : "(top level)"), d.id);
+        }
+      } else sets.push({ key: "all", label: ko ? "전체" : "All documents", docs: docs.map((d) => d.id) });
       const groups: { key: string; label: string; document_ids: string[]; answer: Answer }[] = [];
-      for (const s of summaries) {
-        const [key, label] = keyOf(s.document_id);
-        const g = groups.find((x) => x.key === key);
-        const line = s.answer.text.split("\n")[0] ?? "";
-        if (g) {
-          g.document_ids.push(s.document_id);
-          g.answer = { ...g.answer, text: `${g.answer.text}\n${line}`, sources: [...g.answer.sources, ...s.answer.sources].slice(0, 12) };
-        } else groups.push({ key, label, document_ids: [s.document_id], answer: { ...s.answer, id: null, question: label, text: line, document_id: null } });
+      for (const g of sets) {
+        // Only the documents that have a summary make up the group's summary.
+        const members = g.docs.map((id) => answered.get(id)).filter((x): x is (typeof summaries)[number] => x !== undefined);
+        if (members.length === 0) continue;
+        let answer: Answer;
+        if (members.length === 1) {
+          // A group of one document needs no combining call: its summary is the document's.
+          answer = members[0]!.answer;
+        } else {
+          // The combined summary is text made from the document summaries (a text-only answer): it cites
+          // nothing — no sources, and no `[n]` markers of the summaries it was made from.
+          const lines = members.map((m) => (m.answer.text.split("\n")[0] ?? "").replace(/\s*\[\d+(?:\s*,\s*\d+)*\]/g, "").trim()).filter(Boolean);
+          answer = { ...members[0]!.answer, id: null, kind: "answer", question: g.label, text: lines.join("\n"), sentences: lines.map((text) => ({ text, citations: [] })), sources: [], conflicts: null, document_id: null, feedback: null };
+        }
+        groups.push({ key: g.key, label: g.label, document_ids: members.map((m) => m.document_id), answer });
       }
-      // Documents outside every project come last.
-      if (groupBy === "project") groups.sort((a, b) => Number(a.key === "") - Number(b.key === ""));
       payload.groups = groups;
       payload.group_by = groupBy;
       const by = { project: ko ? "프로젝트별" : "by project", doc_type: ko ? "유형별" : "by type", folder: ko ? "폴더별" : "by folder", none: "" }[groupBy];

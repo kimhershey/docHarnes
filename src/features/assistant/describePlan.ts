@@ -450,6 +450,18 @@ export function clarificationQuestion(plan: Plan): string {
   return plan.clarification_question ?? op?.question ?? "";
 }
 
+/**
+ * The note for a plan that leaves part of the request out (`Plan.unmet`, set by the planner or by
+ * `guard::contract_checks`): the planner's own `unmet_request` warning, else a sentence made from `unmet`.
+ * Null when nothing was left out.
+ */
+export function unmetRequestNote(plan: Pick<Plan, "unmet">, issues: PlanIssue[], t: TFunction): string | null {
+  const issue = issues.find((i) => !i.blocking && i.code === "unmet_request" && i.message.trim() !== "");
+  if (issue) return issue.message.trim();
+  const unmet = (plan.unmet ?? "").trim();
+  return unmet ? t("planner.card.unmet", { unmet }) : null;
+}
+
 /** What the assistant does with a plan before any confirmation logic. */
 export function planKind(plan: Plan): PlanKind {
   if (isClarification(plan)) return "clarify";

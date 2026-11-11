@@ -4,7 +4,7 @@
 // editions, pinned download addresses, Korean particles and the scope of a question.
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { defaultImportOptions, type Answer, type CheckRun, type ClassifyResult, type Collection, type ImportOptions, type ImportReport, type MaintenanceStatus, type PageView, type ProjectDetail, type Rule, type SchemaRecord, type SearchResponse, type SearchScope } from "@/lib/types";
+import { defaultImportOptions, type Answer, type CheckRun, type ClassifyResult, type Collection, type ImportOptions, type ImportReport, type MaintenanceStatus, type PageView, type Plan, type ProjectDetail, type Rule, type SchemaRecord, type SearchResponse, type SearchScope } from "@/lib/types";
 
 const store = new Map<string, string>();
 (globalThis as unknown as { localStorage: Storage }).localStorage = {
@@ -387,5 +387,110 @@ describe("planner (rules, validate, guard)", () => {
     expect(dated.scope.filter?.date_to).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     // Small talk and a sentence that brings its own text look nothing up: no scope.
     expect(plan("넌 누구야?").scope.filter?.doc_type ?? null).toBeNull();
+  });
+
+  it("a greeting with a question mark is left to the model, which answers it as small talk (`fastpath::greeting`)", () => {
+    const ctx = planner.buildContext();
+    // Nothing but a greeting: the fast path replies itself, without the model.
+    for (const text of ["안녕", "안녕하세요.", "고마워!"]) {
+      const r = planner.planText(text, ctx, { model: false });
+      expect(r.source, text).toBe("fast");
+      expect(r.plan.operations[0], text).toMatchObject({ op: "answer", mode: "chat" });
+      expect((r.plan.operations[0] as { reply?: string }).reply, text).toBeTruthy();
+    }
+    // "안녕?" is not "nothing but a greeting" for the core (it keeps `?` / `？`): no fast path …
+    for (const text of ["안녕?", "안녕하세요？"]) {
+      const r = planner.planText(text, ctx);
+      expect(r.source, text).toBe("model");
+      expect(r.route, text).toBe("chat");
+      expect(r.plan.operations[0], text).toMatchObject({ op: "answer", mode: "chat", knowledge: false });
+      // … so the reply is the model's, not a ready one.
+      expect((r.plan.operations[0] as { reply?: string }).reply, text).toBeUndefined();
+      // Without a model such a sentence cannot be answered by the fast path either.
+      expect(planner.planText(text, ctx, { model: false }).issues.map((i) => i.code), text).toContain("no_model");
+    }
+  });
+
+  it("an answer plan says what it leaves out: '… 알려주고 메일로 보내줘' carries `unmet` and the `unmet_request` note", () => {
+    const ctx = planner.buildContext();
+    const r = planner.planText("위약금 조항 알려주고 메일로 보내줘", ctx);
+    expect(r.plan.operations.map((o) => o.op)).toEqual(["answer"]);
+    expect(r.plan.unmet).toContain("메일");
+    const note = r.issues.find((i) => i.code === "unmet_request");
+    expect(note).toMatchObject({ blocking: false });
+    expect(note!.message).toContain("메일");
+    // A question that leaves nothing out has no note.
+    const plain = planner.planText("위약금 조항 알려줘", ctx);
+    expect(plain.plan.unmet ?? null).toBeNull();
+    expect(plain.issues.map((i) => i.code)).not.toContain("unmet_request");
+  });
+
+  it("a settings change whose value the sentence does not name waits for approval — numbers, themes, switches (`guard::contract_checks`)", () => {
+    const ctx = planner.buildContext();
+    const read = (text: string) => {
+      const r = planner.planText(text, ctx);
+      return { ops: r.plan.operations, confirm: r.plan.requires_confirmation, notes: r.issues.filter((i) => i.code === "ungrounded_change").map((i) => i.message) };
+    };
+    // A vague wish: the (simulated) model picks a theme on its own.
+    const vague = read("눈이 편한 화면으로 해줘");
+    expect(vague.ops).toEqual([{ op: "set_theme", theme: "dark" }]);
+    expect(vague.confirm).toBe(true);
+    expect(vague.notes).toHaveLength(1);
+    expect(vague.notes[0]).toContain("ui.theme → dark");
+    // The number case as before.
+    expect(read("글자를 더 크게 해줘")).toMatchObject({ confirm: true, notes: [expect.stringContaining("ui.scale_percent")] });
+    // Named values and switches the sentence says are grounded: no note, no approval.
+    for (const text of ["다크 모드로 바꾸고 언어를 영어로", "시스템 테마로 바꾸고 언어를 한국어로"]) {
+      const said = read(text);
+      expect(said.ops.map((o) => o.op), text).toEqual(["set_theme", "set_language"]);
+      expect(said.notes, text).toEqual([]);
+      expect(said.confirm, text).toBe(false);
+    }
+  });
+
+  it("grouped summaries follow `exec::summarize`: both projects of a shared document, a combined text without sources or markers, '유형 없음'", async () => {
+    const ids = await importDocs(["견적서_한빛.pdf", "계약서_한빛.pdf", "지침.pdf"]);
+    await indexAll();
+    const [estimate, contract, guide] = [ids["견적서_한빛.pdf"]!, ids["계약서_한빛.pdf"]!, ids["지침.pdf"]!];
+    const a = await backend.mockInvoke<{ id: string }>("project_create", { input: { name: "한빛 포털" } });
+    const b = await backend.mockInvoke<{ id: string }>("project_create", { input: { name: "새봄 ERP" } });
+    await backend.mockInvoke("project_add_documents", { id: a.id, docIds: [estimate, contract] });
+    // The contract belongs to both projects.
+    await backend.mockInvoke("project_add_documents", { id: b.id, docIds: [contract] });
+    const ctx = planner.buildContext();
+    const run = async (group_by: "project" | "doc_type" | "folder" | null, target: "set" | "each_doc" = "each_doc") => {
+      const plan: Plan = { intent: "summarize", scope: { folder: null, doc_ids: [estimate, contract, guide], filter: {} }, operations: [{ op: "summarize", target, length: null, ...(group_by ? { group_by } : {}) }], requires_confirmation: false, confidence: 0.9, summary: "요약" };
+      const exec = await planner.runPlan(plan, ctx, null, () => undefined);
+      return exec.steps[0]!.payload as { summaries: { document_id: string; answer: Answer }[]; groups?: { key: string; label: string; document_ids: string[]; answer: Answer }[]; group_by?: string };
+    };
+
+    const byProject = await run("project");
+    const groups = byProject.groups!;
+    // One group per project, the documents outside every project last; the shared contract is in both.
+    expect(groups.map((g) => g.label).sort()).toEqual(["새봄 ERP", "프로젝트 없음", "한빛 포털"].sort());
+    expect(groups[groups.length - 1]).toMatchObject({ key: "", label: "프로젝트 없음", document_ids: [guide] });
+    const hanbit = groups.find((g) => g.key === a.id)!;
+    const saebom = groups.find((g) => g.key === b.id)!;
+    expect([...hanbit.document_ids].sort()).toEqual([estimate, contract].sort());
+    expect(saebom.document_ids).toEqual([contract]);
+    // A combined summary is text made from the document summaries: no sources, no citation markers.
+    expect(hanbit.answer.sources).toEqual([]);
+    expect(hanbit.answer.text).not.toMatch(/\[\d+\]/);
+    expect(hanbit.answer.text.split("\n")).toHaveLength(2);
+    expect(hanbit.answer.id).toBeNull();
+    // A group of one document is that document's summary as it is (with its sources).
+    const contractSummary = byProject.summaries.find((x) => x.document_id === contract)!.answer;
+    expect(contractSummary.sources.length).toBeGreaterThan(0);
+    expect(saebom.answer).toEqual(contractSummary);
+
+    // No document has a type yet: one group, labelled "유형 없음" ("No type" in English).
+    const byType = await run("doc_type");
+    expect(byType.groups!.map((g) => [g.key, g.label, g.document_ids.length])).toEqual([["", "유형 없음", 3]]);
+    expect(byType.groups![0]!.answer.sources).toEqual([]);
+    // One summary of the whole set.
+    const whole = await run(null, "set");
+    expect(whole.groups!.map((g) => [g.key, g.label])).toEqual([["all", "전체"]]);
+    // Per-document summaries only: no groups.
+    expect((await run(null)).groups).toBeUndefined();
   });
 });

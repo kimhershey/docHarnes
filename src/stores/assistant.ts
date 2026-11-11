@@ -31,9 +31,16 @@ export type Message = { clipped?: Clipped } & (
    * `undo` (0.8.0): the ops that put back what a settings change replaced ("UI 배율 100 → 130" → back to 100);
    * `undone` once they ran.
    */
-  | { id: number; createdAt?: string; role: "assistant"; kind: "executed"; text: string; source: string; confidence: number; failures?: string[]; ran?: number; undo?: Op[]; undone?: boolean }
-  /** A ready reply shown as it is (0.8.0): a fixed greeting, "nothing to do", "this cannot be done". No model call. */
-  | { id: number; createdAt?: string; role: "assistant"; kind: "reply"; text: string; source: string }
+  /**
+   * `applied`: what the change left behind (the settings and the values they got) — 되돌리기 only runs while the
+   * settings still say so; `undoStale` once it found they no longer do (changed again since): nothing was put back.
+   */
+  | { id: number; createdAt?: string; role: "assistant"; kind: "executed"; text: string; source: string; confidence: number; failures?: string[]; ran?: number; undo?: Op[]; applied?: Op[]; undone?: boolean; undoStale?: boolean }
+  /**
+   * A ready reply shown as it is (0.8.0): a fixed greeting, "nothing to do", "this cannot be done". No model call.
+   * `note: "unmet"`: the part of the request an answer does not cover ("… 메일로 보내줘"), said before that answer.
+   */
+  | { id: number; createdAt?: string; role: "assistant"; kind: "reply"; text: string; source: string; note?: "unmet" }
   /**
    * `request` is what was asked — its `style` says how (a `chat` reply is small talk, not a text-only answer).
    * `scopeEmpty`: the scope the question named matched no document, so nothing was asked: `answer` is a ready
@@ -457,6 +464,14 @@ export async function flushChatWrites(): Promise<void> {
     if (inflight.length === 0) return;
     await Promise.all(inflight);
   }
+}
+
+/**
+ * `flushChatWrites` for a workspace switch: the writes are sent and stored before the backend moves on — but
+ * the switch does not hang on a write that is stuck (it gives up waiting after `timeoutMs`).
+ */
+export function chatWritesSettled(timeoutMs = 2000): Promise<void> {
+  return Promise.race([flushChatWrites(), new Promise<void>((resolve) => setTimeout(resolve, timeoutMs))]);
 }
 
 // The page is going away (window closed, reload): send what still waits. Best effort — the calls are
