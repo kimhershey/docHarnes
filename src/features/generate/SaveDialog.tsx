@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -24,13 +24,16 @@ export function SaveDialog({ open, onOpenChange, draft, defaultOutput, busy, err
   const [fileName, setFileName] = useState("");
   const [register, setRegister] = useState(true);
   const [overwrite, setOverwrite] = useState(false);
+  // Reset when the dialog opens, not while it is open (a draft refreshed behind it would wipe the typed name).
+  const wasOpen = useRef(false);
   useEffect(() => {
-    if (open) {
+    if (open && !wasOpen.current) {
       setOutput(defaultOutput);
       setFileName(defaultName(draft));
       setRegister(true);
       setOverwrite(false);
     }
+    wasOpen.current = open;
   }, [open, defaultOutput, draft]);
   const blocking = draft.issues.filter((i) => i.blocking).length;
   return (
