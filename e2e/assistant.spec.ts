@@ -63,7 +63,19 @@ test.describe("assistant chat sessions", () => {
     await expect(page.locator('[data-testid="assistant-card-executed"]')).toHaveCount(0);
     await expect(activeRow(page)).toContainText(ko.assistant.sessions.untitled);
     // Another 새 채팅 while the active one is empty does not pile up sessions.
+    await page.getByTestId("assistant-new-chat").click();
+    await expect(rows(page)).toHaveCount(2);
+    // UI-10: one "새 채팅" button at a time, under one name — the header's stands in for the rail's only where
+    // the rail is hidden (a window narrower than the rail's breakpoint).
+    await expect(page.getByTestId("assistant-new-chat")).toHaveText(ko.assistant.sessions.new);
+    await expect(page.getByTestId("assistant-new-chat-header")).toBeHidden();
+    await page.setViewportSize({ width: 700, height: 800 });
+    await expect(page.getByTestId("assistant-sessions")).toBeHidden();
+    await expect(page.getByTestId("assistant-new-chat-header")).toBeVisible();
+    await expect(page.getByTestId("assistant-new-chat-header")).toHaveText(ko.assistant.sessions.new);
+    await expect(page.getByTestId("assistant-session-picker")).toBeVisible();
     await page.getByTestId("assistant-new-chat-header").click();
+    await page.setViewportSize({ width: 1280, height: 800 });
     await expect(rows(page)).toHaveCount(2);
 
     // Back to the first session: its messages and memory are restored.

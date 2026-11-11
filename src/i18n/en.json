@@ -229,7 +229,6 @@
   },
   "assistant": {
     "title": "AI Assistant",
-    "new_chat": "New chat",
     "sessions": {
       "title": "Chats",
       "new": "New chat",

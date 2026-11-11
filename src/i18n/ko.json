@@ -229,7 +229,6 @@
   },
   "assistant": {
     "title": "AI 어시스턴트",
-    "new_chat": "새 대화",
     "sessions": {
       "title": "채팅",
       "new": "새 채팅",

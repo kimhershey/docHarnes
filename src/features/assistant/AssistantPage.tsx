@@ -1,4 +1,4 @@
-import { AlertCircle, Bot, Briefcase, HelpCircle, Paperclip, Send, Sparkles, User, X } from "lucide-react";
+import { AlertCircle, Bot, Briefcase, HelpCircle, Paperclip, Plus, Send, Sparkles, User, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router";
@@ -628,8 +628,10 @@ export function AssistantPage() {
       <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2">
         <h1 className="text-base font-semibold">{t("assistant.title")}</h1>
         <SessionPicker sessions={sessions} activeId={activeId} onSelect={(id) => void store().select(id)} />
-        <Button variant="ghost" size="sm" onClick={() => void store().newSession().catch(reportError)} disabled={hydrating} data-testid="assistant-new-chat-header">
-          {t("assistant.new_chat")}
+        {/* The rail has "새 채팅" (`SessionList`); this one stands in for it only where the rail is hidden (below `md`), under the same name. */}
+        <Button variant="ghost" size="sm" className="md:hidden" onClick={() => void store().newSession().catch(reportError)} disabled={hydrating} data-testid="assistant-new-chat-header">
+          <Plus className="size-4" aria-hidden="true" />
+          {t("assistant.sessions.new")}
         </Button>
         <div className="ml-auto flex flex-wrap items-center gap-3 text-xs text-fg-muted">
           <label className="flex items-center gap-1" title={t("assistant.evidence.hint")}>
