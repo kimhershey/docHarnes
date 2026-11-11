@@ -567,14 +567,44 @@ fn run_step(
                 imported: None,
             })
         }
-        Op::Review { action, only, field: _, value: _ } => {
-            let docs_ = working_set(deps, plan, imported)?;
+        Op::Review { action, only, field, value } => {
             let reason = match only {
                 Some(ReviewOnly::LowConfidence) => Some(ReviewReason::LowConfidence),
                 Some(ReviewOnly::Failed) => Some(ReviewReason::ValidationFailed),
                 _ => None,
             };
+            // `show`: the review screen is the app's — hand it over as a navigation action
+            // (the step used to do nothing and report "0 fields rejected", audit PLN-8).
+            if *action == ReviewOp::Show {
+                let scoped = !plan.scope.is_empty() || imported.is_some();
+                let in_scope: Option<HashSet<String>> =
+                    if scoped { Some(ids(&working_set(deps, plan, imported)?).into_iter().collect()) } else { None };
+                let pending =
+                    db.with(|c| pipeline_repo::review_queue(c, &ReviewFilter { reason, ..ReviewFilter::default() }))?;
+                let pending: Vec<&crate::pipeline::FieldRecord> =
+                    pending.iter().filter(|f| in_scope.as_ref().is_none_or(|s| s.contains(&f.document_id))).collect();
+                let mut documents: Vec<String> = pending.iter().map(|f| f.document_id.clone()).collect();
+                documents.sort();
+                documents.dedup();
+                out.ui_actions.push(Op::Open { target: super::OpenTarget::Screen, reference: "review".into() });
+                return Ok(StepOutcome {
+                    summary: if deps.ko() {
+                        format!("검토 대기 필드 {}개(문서 {}건) — 검토함을 엽니다", pending.len(), documents.len())
+                    } else {
+                        format!(
+                            "{} fields in {} documents wait for review — opening the review queue",
+                            pending.len(),
+                            documents.len()
+                        )
+                    },
+                    payload: json!({ "action": action, "review_fields": pending.len(), "documents": documents }),
+                    imported: None,
+                });
+            }
+            let docs_ = working_set(deps, plan, imported)?;
             let mut changed = 0usize;
+            // `correct`: documents whose latest extraction has no such field.
+            let mut without_field: Vec<String> = Vec::new();
             for d in &docs_ {
                 deps.checkpoint()?;
                 match action {
@@ -591,17 +621,51 @@ fn run_step(
                             changed += review::apply(db, &fids, &ReviewAction::Reject, Some("planner"))?.len();
                         }
                     }
-                    ReviewOp::Correct | ReviewOp::Show => {}
+                    ReviewOp::Correct => {
+                        let (Some(field), Some(value)) = (field.as_deref(), value.as_deref()) else {
+                            return Err(CoreError::Invalid("correct_needs_field".into()));
+                        };
+                        let fields = db.with(|c| pipeline_repo::latest_fields(c, &d.id))?;
+                        match review_field(&fields, field) {
+                            Some(f) => {
+                                let action = ReviewAction::Correct { value: value.to_string() };
+                                changed += review::apply(db, &[f.id], &action, Some("planner"))?.len();
+                            }
+                            None => without_field.push(d.id.clone()),
+                        }
+                    }
+                    ReviewOp::Show => {}
                 }
                 out.documents.push(d.id.clone());
             }
-            Ok(StepOutcome {
-                summary: if deps.ko() {
-                    format!("필드 {changed}개 {}", if *action == ReviewOp::Approve { "승인" } else { "거부" })
+            if *action == ReviewOp::Correct && changed == 0 {
+                // Nothing was corrected: say why instead of reporting a finished step.
+                return Err(CoreError::Invalid(if docs_.is_empty() {
+                    "no_documents".into()
                 } else {
-                    format!("{changed} fields {}", if *action == ReviewOp::Approve { "approved" } else { "rejected" })
-                },
-                payload: json!({ "changed": changed, "documents": ids(&docs_) }),
+                    format!("field_not_found: {}", field.as_deref().unwrap_or_default())
+                }));
+            }
+            let (done_ko, done_en) = match action {
+                ReviewOp::Approve => ("승인", "approved"),
+                ReviewOp::Reject => ("거부", "rejected"),
+                _ => ("수정", "corrected"),
+            };
+            let mut summary = if deps.ko() {
+                format!("필드 {changed}개 {done_ko}")
+            } else {
+                format!("{changed} fields {done_en}")
+            };
+            if !without_field.is_empty() {
+                summary.push_str(&if deps.ko() {
+                    format!(" · 해당 필드가 없는 문서 {}건", without_field.len())
+                } else {
+                    format!(" · {} documents without that field", without_field.len())
+                });
+            }
+            Ok(StepOutcome {
+                summary,
+                payload: json!({ "action": action, "changed": changed, "documents": ids(&docs_), "without_field": without_field }),
                 imported: None,
             })
         }
@@ -1983,6 +2047,34 @@ fn run_step(
     }
 }
 
+/// The field of a document's latest extraction that `review correct` names: by path
+/// (`supplier.brn`, `items[2].amount`), by key, or by label in either language — a scalar field
+/// for a key / label, and a label the reference is only part of when exactly one field has it.
+fn review_field<'a>(
+    fields: &'a [crate::pipeline::FieldRecord],
+    reference: &str,
+) -> Option<&'a crate::pipeline::FieldRecord> {
+    let reference = reference.trim();
+    let key = compact(reference);
+    if key.is_empty() {
+        return None;
+    }
+    let scalar = || fields.iter().filter(|f| f.row.is_none());
+    fields
+        .iter()
+        .find(|f| f.path == reference)
+        .or_else(|| scalar().find(|f| compact(&f.key) == key || compact(&f.path) == key))
+        .or_else(|| scalar().find(|f| compact(&f.label_ko) == key || compact(&f.label_en) == key))
+        .or_else(|| {
+            let mut partial =
+                scalar().filter(|f| compact(&f.label_ko).contains(&key) || compact(&f.label_en).contains(&key));
+            match (partial.next(), partial.next()) {
+                (Some(f), None) => Some(f),
+                _ => None,
+            }
+        })
+}
+
 fn non_empty(docs_: Vec<DocumentRecord>) -> Result<Vec<DocumentRecord>> {
     if docs_.is_empty() {
         return Err(CoreError::Invalid("no_documents".into()));
@@ -2418,7 +2510,7 @@ pub fn preview(
             // Bulk edits of several documents are confirmed first.
             Op::Tag { .. }
             | Op::SetDocType { .. }
-            | Op::Review { action: ReviewOp::Approve | ReviewOp::Reject | ReviewOp::Correct, .. } => {
+            | Op::Review { action: ReviewOp::Approve | ReviewOp::Reject, .. } => {
                 (count_label_lang(docs_.len(), ko), json!({ "documents": docs_.len() }), docs_.len() > 1)
             }
             Op::Import { source, path, paths: file_paths, recursive, .. } => match source {
@@ -2719,6 +2811,43 @@ pub fn preview(
                     },
                     json!({ "suggested": suggested, "undecided": undecided, "apply": apply, "use_model": use_model, "suggestions": result.map(|r| r.suggestions) }),
                     apply.unwrap_or(false),
+                )
+            }
+            // `review correct`: the field and its current value in each document.
+            Op::Review { action: ReviewOp::Correct, field, value, .. } => {
+                let reference = field.as_deref().unwrap_or_default();
+                let mut matches = Vec::new();
+                for d in docs_.iter().take(200) {
+                    let fields = db.with(|c| pipeline_repo::latest_fields(c, &d.id)).unwrap_or_default();
+                    if let Some(f) = review_field(&fields, reference) {
+                        matches.push(json!({ "document_id": d.id, "field_id": f.id, "path": f.path, "label_ko": f.label_ko, "label_en": f.label_en, "value": f.value }));
+                    }
+                }
+                let new = value.as_deref().unwrap_or_default();
+                let label = matches
+                    .first()
+                    .and_then(|m| m.get(if ko { "label_ko" } else { "label_en" }).and_then(Value::as_str))
+                    .filter(|l| !l.is_empty())
+                    .unwrap_or(reference)
+                    .to_string();
+                let summary = match (matches.len(), ko) {
+                    (0, true) => format!("문서 {}건에서 필드 '{reference}' 찾을 수 없음", docs_.len()),
+                    (0, false) => format!("field '{reference}' not found in {} documents", docs_.len()),
+                    (1, _) => format!(
+                        "{label}: {} → {new}",
+                        matches[0].get("value").and_then(Value::as_str).unwrap_or(if ko {
+                            "(값 없음)"
+                        } else {
+                            "(empty)"
+                        })
+                    ),
+                    (n, true) => format!("문서 {n}건의 '{label}' → {new}"),
+                    (n, false) => format!("'{label}' of {n} documents → {new}"),
+                };
+                (
+                    summary,
+                    json!({ "documents": docs_.len(), "field": reference, "value": new, "matches": matches }),
+                    true,
                 )
             }
             _ => (String::new(), Value::Null, op.needs_confirmation()),
