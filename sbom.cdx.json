@@ -1,7 +1,7 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
-  "serialNumber": "urn:uuid:c190d0a8-d5ac-860d-bf48-5f511ff2eaff",
+  "serialNumber": "urn:uuid:a3af579a-d2df-8e0b-86df-fb6dec80744b",
   "version": 1,
   "metadata": {
     "tools": {
@@ -13970,6 +13970,35 @@
         }
       ],
       "purl": "pkg:cargo/tauri-plugin-opener@2.7.2",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/tauri-apps/plugins-workspace"
+        }
+      ],
+      "properties": [
+        {
+          "name": "doculens:ecosystem",
+          "value": "cargo"
+        },
+        {
+          "name": "doculens:scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/tauri-plugin-single-instance@2.5.5",
+      "name": "tauri-plugin-single-instance",
+      "version": "2.5.5",
+      "scope": "required",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "purl": "pkg:cargo/tauri-plugin-single-instance@2.5.5",
       "externalReferences": [
         {
           "type": "vcs",

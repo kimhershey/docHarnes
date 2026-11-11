@@ -20,7 +20,7 @@ import { ReferenceAdvancedPanel } from "@/features/knowledge/ReferenceAdvancedPa
 import { ModelsPage } from "@/features/models/ModelsPage";
 import { SchemasPage } from "@/features/schemas/SchemasPage";
 import { loadRouting, saveRouting } from "@/lib/assistant-control";
-import { isTauri, openExternal, revealPath } from "@/lib/ipc";
+import { isTauri, openAppDocument, revealPath } from "@/lib/ipc";
 import { invalidateMaintenance, useAppInfo, useDocuments, useMaintenanceStatus, useRegistry } from "@/lib/queries";
 import { queryClient, queryKeys } from "@/lib/query-client";
 import { LANGUAGES, RETENTION_DAY_ITEMS, THEMES, isJobFinished, type AutoProcessingLevel, type PlanMode, type ReducedMotion, type RetentionPolicy, AUTO_PROCESSING_LEVELS } from "@/lib/types";
@@ -529,7 +529,7 @@ function ProcessingTab() {
             }
           />
         </Row>
-        <Row label={t("settings.processing.cache")} htmlFor="cache-gb">
+        <Row label={t("settings.processing.cache")} hint={t("settings.processing.cache_hint")} htmlFor="cache-gb">
           <NumberField id="cache-gb" value={settings.cache.page_cache_max_gb} min={0.5} max={1000} step={0.5} precision={1} onCommit={(v) => void update((s) => void (s.cache.page_cache_max_gb = v))} testId="settings-cache-gb" />
           <span className="text-sm text-fg-muted">GB</span>
         </Row>
@@ -726,7 +726,8 @@ function PrivacyTab() {
             <div className="flex flex-col gap-3" data-testid="retention-form">
               <table className="w-full text-sm">
                 <tbody className="divide-y divide-border">
-                  {RETENTION_DAY_ITEMS.map((item) => {
+                  {/* Nothing in the app writes golden-set exports: a retention period for them would do nothing. */}
+                  {RETENTION_DAY_ITEMS.filter((item) => item !== "golden_exports_days").map((item) => {
                     const value = draft[item];
                     const unlimited = value === null;
                     const unlimitedLabel = item === "extractions_days" ? t("settings.privacy.same_as_documents") : t("settings.privacy.forever");
@@ -761,11 +762,8 @@ function PrivacyTab() {
                   })}
                 </tbody>
               </table>
-              <div className="grid gap-3 md:grid-cols-3">
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor="page-cache">{t("settings.privacy.page_cache")}</Label>
-                  <Input id="page-cache" type="number" min={0.5} max={1000} step={0.5} value={draft.page_cache_max_gb} onChange={(e) => setDraft({ ...draft, page_cache_max_gb: Math.min(1000, Math.max(0.5, Number(e.target.value) || 0.5)) })} />
-                </div>
+              {/* The page-cache cap is one value now: 처리 › 페이지 캐시 상한 (settings.cache), which the purge reads. */}
+              <div className="grid gap-3 md:grid-cols-2">
                 <div className="flex flex-col gap-1.5">
                   <Label htmlFor="purge-hour">{t("settings.privacy.purge_hour")}</Label>
                   <Input id="purge-hour" type="number" min={0} max={23} value={draft.purge_hour_local} onChange={(e) => setDraft({ ...draft, purge_hour_local: Math.min(23, Math.max(0, Number(e.target.value) || 0)) })} data-testid="purge-hour" />
@@ -891,6 +889,8 @@ function ShortcutsTab() {
 function AboutTab() {
   const { t } = useTranslation();
   const { data: info } = useAppInfo();
+  const toast = useUiStore((s) => s.toast);
+  const openDocument = (document: Parameters<typeof openAppDocument>[0]) => void openAppDocument(document).catch((e: unknown) => toast(describeError(e, t), "danger"));
   return (
     <Card data-testid="settings-about">
       <CardHeader>
@@ -914,12 +914,17 @@ function AboutTab() {
           <p className="font-medium">{t("settings.about.licenses")}</p>
           <p className="text-fg-muted">{t("settings.about.licenses_hint")}</p>
           <p className="text-fg-muted">{t("settings.about.font")}</p>
+          {/* The files that came with this installation open in a text viewer — no web address: the app runs offline. */}
           <div className="mt-2 flex flex-wrap gap-2">
-            <Button variant="outline" size="sm" onClick={() => void openExternal("https://github.com/kimhershey/docHarnes/blob/main/THIRD-PARTY-NOTICES.md")}>
+            <Button variant="outline" size="sm" disabled={!isTauri} onClick={() => openDocument("notices")} data-testid="about-notices">
               <ExternalLink />
               {t("settings.about.notices")}
             </Button>
-            <Button variant="outline" size="sm" onClick={() => void openExternal("https://github.com/kimhershey/docHarnes/blob/main/docs/design/doculens-design-v1.1.md")}>
+            <Button variant="outline" size="sm" disabled={!isTauri} onClick={() => openDocument("licenses")} data-testid="about-licenses">
+              <ExternalLink />
+              {t("settings.about.license_texts")}
+            </Button>
+            <Button variant="outline" size="sm" disabled={!isTauri} onClick={() => openDocument("design_doc")} data-testid="about-design-doc">
               <ExternalLink />
               {t("settings.about.design_doc")}
             </Button>

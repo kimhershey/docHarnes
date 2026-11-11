@@ -1062,6 +1062,7 @@
       "organize_reviewed_only": "검토 완료 문서만 정리/이동",
       "inbox_watch": "inbox 폴더 감시",
       "cache": "페이지 캐시 상한",
+      "cache_hint": "파기 작업이 이 크기를 넘으면 오래 쓰지 않은 페이지 이미지부터 지웁니다. 최근 7일 안에 쓴 것은 남깁니다.",
       "hint": "가져온 문서를 어디까지 자동 처리할지, 검토함 기준과 추출 옵션을 정합니다.",
       "inbox_auto_level": "inbox 감시 자동 처리",
       "ocr_digital_pdf": "텍스트 레이어가 있어도 OCR 실행",
@@ -1096,7 +1097,6 @@
       "forever": "무기한",
       "same_as_documents": "문서와 동일",
       "immediate": "즉시 파기",
-      "page_cache": "페이지 캐시 상한 (GB, LRU)",
       "purge_enabled": "매일 파기 작업 실행",
       "purge_hour": "파기 작업 시각",
       "purge_log": "파기 내역 보기",
@@ -1169,6 +1169,7 @@
       "licenses": "오픈소스 고지",
       "licenses_hint": "소스 공개 의무가 없는 라이선스(Apache-2.0 / MIT / BSD / ISC / OFL 등)만 사용합니다. 모델 가중치는 모두 Apache-2.0(Gemma 4, EmbeddingGemma 2)입니다.",
       "notices": "THIRD-PARTY-NOTICES 보기",
+      "license_texts": "라이선스 전문 보기",
       "design_doc": "설계 문서",
       "font": "글꼴: Pretendard Variable (OFL-1.1, 원본 파일 동봉)"
     },

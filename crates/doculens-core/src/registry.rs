@@ -170,6 +170,60 @@ impl Registry {
         }
     }
 
+    /// The model "자동" runs. The tier default ([`Self::default_model_for`]) when it is installed;
+    /// otherwise the closest installed model, so a small change of the free VRAM between two
+    /// starts (Q6_K on disk, Q5_K_M recommended today) never selects a model that is not there.
+    /// Preference among the installed ones: another quantisation of the default's adaptive group,
+    /// the same family on this tier, the same family, any other vision model, a user-added text
+    /// model; inside a group the largest one that fits the free VRAM, else the smallest. With no
+    /// usable model installed the tier default is returned, so the UI can offer its download.
+    pub fn auto_model(
+        &self,
+        tier: Tier,
+        free_vram_mib: Option<u64>,
+        installed: &dyn Fn(&ModelEntry) -> bool,
+    ) -> Option<&ModelEntry> {
+        let recommended = self.default_model_for(tier, free_vram_mib);
+        if recommended.is_some_and(installed) {
+            return recommended;
+        }
+        // Quantisations that stand in for each other: the adaptive group behind the tier default.
+        let group: Vec<&str> = match self.tier_defaults.get(&tier).and_then(|t| t.strip_prefix("auto:")) {
+            Some(key) => self.adaptive.get(key).map(|rules| rules.iter().map(|r| r.model.as_str()).collect()),
+            None => recommended.and_then(|rec| {
+                self.adaptive
+                    .values()
+                    .find(|rules| rules.iter().any(|r| r.model == rec.id))
+                    .map(|rules| rules.iter().map(|r| r.model.as_str()).collect())
+            }),
+        }
+        .unwrap_or_default();
+        let family = recommended.map(|m| m.family.as_str());
+        let free = free_vram_mib.unwrap_or(0);
+        let distance = |m: &ModelEntry| -> u8 {
+            if m.role != ModelRole::Vlm {
+                4
+            } else if group.contains(&m.id.as_str()) {
+                0
+            } else if family == Some(m.family.as_str()) && m.requirements.tiers.contains(&tier) {
+                1
+            } else if family == Some(m.family.as_str()) {
+                2
+            } else {
+                3
+            }
+        };
+        self.models
+            .iter()
+            .filter(|m| (m.role == ModelRole::Vlm || (m.user_added && m.role == ModelRole::Llm)) && installed(m))
+            .min_by_key(|m| {
+                let need = m.requirements.min_free_vram_mib;
+                let fits = need <= free;
+                (distance(m), !fits, if fits { u64::MAX - need } else { need }, m.id.as_str())
+            })
+            .or(recommended)
+    }
+
     /// Models usable on a tier (by `requirements.tiers`), VLMs first.
     pub fn models_for_tier(&self, tier: Tier) -> Vec<&ModelEntry> {
         let mut v: Vec<&ModelEntry> = self.models.iter().filter(|m| m.requirements.tiers.contains(&tier)).collect();
@@ -271,6 +325,53 @@ mod tests {
         assert_eq!(r.default_model_for(Tier::Vram24gbPlus, Some(23_000)).unwrap().id, "gemma4-12b-q4km");
         assert_eq!(r.resolve("embed-gemma2-q8", None).unwrap().family, "embeddinggemma-2");
         assert!(r.resolve("auto:nope", None).is_none());
+    }
+
+    /// PLT-3: "자동" on fake inventories of installed models.
+    #[test]
+    fn auto_prefers_an_installed_model_over_an_uninstalled_recommendation() {
+        let r = Registry::builtin();
+        let auto = |tier: Tier, free: Option<u64>, on_disk: &[&str]| {
+            r.auto_model(tier, free, &|m: &ModelEntry| on_disk.contains(&m.id.as_str())).map(|m| m.id.clone())
+        };
+        let some = |id: &str| Some(id.to_string());
+        // The recommendation itself when it is installed, and when nothing is (→ download offer).
+        assert_eq!(auto(Tier::Vram8gb, Some(7_126), &["gemma4-e4b-q6k"]), some("gemma4-e4b-q6k"));
+        assert_eq!(auto(Tier::Vram8gb, Some(6_200), &[]), some("gemma4-e4b-q5km"));
+        // Q6_K was downloaded at 7,126 MiB free; today 7,000 MiB are free and Q5_K_M is recommended.
+        assert_eq!(r.default_model_for(Tier::Vram8gb, Some(7_000)).unwrap().id, "gemma4-e4b-q5km");
+        assert_eq!(auto(Tier::Vram8gb, Some(7_000), &["gemma4-e4b-q6k"]), some("gemma4-e4b-q6k"));
+        // Two quantisations of the group on disk: the largest that fits the free VRAM.
+        let both = ["gemma4-e4b-q4km", "gemma4-e4b-q6k"];
+        assert_eq!(auto(Tier::Vram8gb, Some(7_000), &both), some("gemma4-e4b-q4km"));
+        assert_eq!(auto(Tier::Vram8gb, Some(6_200), &["gemma4-e4b-q4km", "gemma4-e2b-q8"]), some("gemma4-e4b-q4km"));
+        // Nothing of the group: the same family on this tier, then the same family at all.
+        assert_eq!(auto(Tier::Vram8gb, Some(7_126), &["gemma4-e2b-q4km", "gemma4-12b-q4km"]), some("gemma4-e2b-q4km"));
+        assert_eq!(auto(Tier::Vram8gb, Some(7_126), &["gemma4-12b-q4km"]), some("gemma4-12b-q4km"));
+        // A reading that says "CPU only" (no GPU known) still runs what is installed.
+        assert_eq!(r.default_model_for(Tier::CpuOnly, None).unwrap().id, "gemma4-e2b-q4km");
+        assert_eq!(auto(Tier::CpuOnly, None, &["gemma4-e4b-q6k"]), some("gemma4-e4b-q6k"));
+        // The embedding model is never a chat model.
+        assert_eq!(auto(Tier::Vram8gb, Some(7_126), &["embed-gemma2-q8"]), some("gemma4-e4b-q6k"));
+
+        // Drop-in models: a vision model before a text-only one, both only when no built-in one is there.
+        let mut merged = r.clone();
+        let mut vlm = r.get("gemma4-e2b-q4km").unwrap().clone();
+        vlm.id = "my-vlm".into();
+        vlm.family = "qwen35".into();
+        vlm.user_added = true;
+        let mut llm = vlm.clone();
+        llm.id = "my-llm".into();
+        llm.role = ModelRole::Llm;
+        merged.models.extend([llm, vlm]);
+        let auto_merged = |on_disk: &[&str]| {
+            merged
+                .auto_model(Tier::Vram8gb, Some(7_126), &|m: &ModelEntry| on_disk.contains(&m.id.as_str()))
+                .map(|m| m.id.clone())
+        };
+        assert_eq!(auto_merged(&["my-llm", "my-vlm"]), some("my-vlm"));
+        assert_eq!(auto_merged(&["my-llm"]), some("my-llm"));
+        assert_eq!(auto_merged(&["my-llm", "my-vlm", "gemma4-12b-q4km"]), some("gemma4-12b-q4km"));
     }
 
     #[test]

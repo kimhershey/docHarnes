@@ -13,9 +13,9 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use doculens_core::engine::{
-    locate, presets, EngineBinary, EngineConfig, EngineEvent, EngineStatus, PresetBuild, PresetContext,
+    devices, locate, presets, EngineBinary, EngineConfig, EngineEvent, EngineStatus, PresetBuild, PresetContext,
 };
-use doculens_core::hw::{self, TierAssessment};
+use doculens_core::hw::{self, Backend, HardwareSummary, TierAssessment};
 use doculens_core::modelstore::{
     self, DiscoveredModel, ImportPlan, InstallState, ModelHealth, ModelWatcher, ScanOptions,
 };
@@ -33,6 +33,8 @@ pub const EV_MODELS_CHANGED: &str = "models://changed";
 
 const LOAD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const WATCH_SETTLE: Duration = Duration::from_secs(2);
+/// `llama-server --list-devices` of the Vulkan pack during the hardware probe (normally < 2 s).
+const VULKAN_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 
 // ---------------------------------------------------------------------------
 // Model folders
@@ -154,21 +156,57 @@ pub struct Assessment {
     pub active_model_installed: Option<InstallState>,
 }
 
+/// GPU memory (MiB) the engine's loaded instances hold right now.
+pub fn engine_vram_in_use_mib(state: &AppState) -> u64 {
+    let index = state.model_index();
+    let file_bytes = |id: &str| index.discovered.iter().find(|d| d.id == id).map(|d| d.total_bytes);
+    state.engine.status().gpu_bytes_in_use(&file_bytes) / doculens_core::memory::MIB
+}
+
+/// The shell's hardware probe: the core probe plus the engine's own share of the VRAM at this
+/// moment, so a probe taken while a model is loaded does not lower the tier (PLT-3). NVML only
+/// knows NVIDIA cards: when it finds no GPU, the Vulkan pack (AppData or bundled) is asked for
+/// its devices, so a discrete AMD / Intel card selects the Vulkan backend and a GPU tier
+/// (PLT-4). Integrated graphics are not counted: "auto" stays on the CPU pack there.
+pub fn probe_hardware(state: &AppState) -> HardwareSummary {
+    let mut hw = hw::probe();
+    hw.engine_used_mib = engine_vram_in_use_mib(state);
+    if hw.gpus.is_empty() {
+        let roots = state.app().map(bundled_roots).unwrap_or_default();
+        if let Some(pack) = locate::find_pack(&state.app_paths.engines_dir(), &roots, Backend::Vulkan) {
+            match devices::probe_vulkan_gpus(&pack.path, VULKAN_PROBE_TIMEOUT) {
+                Ok(gpus) => {
+                    log::info!("hardware: the Vulkan pack lists {} discrete GPU(s)", gpus.len());
+                    hw.gpus = gpus;
+                }
+                Err(e) => log::warn!("hardware: asking the Vulkan pack for its devices failed: {e}"),
+            }
+        }
+    }
+    hw
+}
+
 pub fn assess(state: &AppState) -> UiResult<Assessment> {
     let hw = state.hardware()?;
     let settings = state.settings_snapshot()?;
     let tier = hw::assess(&hw, &settings.models);
     let registry = state.merged_registry();
+    let index = state.model_index();
     let recommended = registry.default_model_for(tier.tier, tier.free_vram_mib).cloned();
+    // "자동" runs the recommendation when it is installed, otherwise the closest installed model:
+    // the free VRAM differs a little at every start and must not select a model that is not on
+    // disk (every request would fail with "unknown model id").
+    let auto = || {
+        registry.auto_model(tier.tier, tier.free_vram_mib, &|m| modelstore::is_installed(m, &index.discovered)).cloned()
+    };
     let active = if settings.models.active_model == "auto" {
-        recommended.clone()
+        auto()
     } else {
         // An id that is neither built in nor a drop-in any more (0.3.0 Qwen entries after the 0.4.0
-        // registry swap, a removed folder) falls back to the tier recommendation; the setting itself
+        // registry swap, a removed folder) falls back to what "자동" would run; the setting itself
         // is left alone so the explicit choice returns with its folder.
-        registry.get(&settings.models.active_model).cloned().or_else(|| recommended.clone())
+        registry.get(&settings.models.active_model).cloned().or_else(auto)
     };
-    let index = state.model_index();
     let installed = match (&active, state.workspace_models_dir()) {
         (Some(m), Some(dir)) => Some(modelstore::install_state(&dir, m, &index.discovered)),
         _ => None,
@@ -481,14 +519,14 @@ pub fn import_job(app: &AppHandle, plan: ImportPlan) -> String {
             j.bytes_total = Some(plan.total_bytes);
             j.detail = Some(format!("{:?}", plan.mode).to_lowercase());
         });
-        let folder = modelstore::run_import(&plan, &mut |p| {
+        let imported = modelstore::run_import(&plan, &mut |p| {
             let frac = if p.total > 0 { p.total_done as f32 / p.total as f32 } else { 0.0 };
             state.jobs.progress(&job2, Some(frac), Some(p.total_done), Some(p.total), Some(p.file.clone()));
             !cancel.load(Ordering::Relaxed)
-        })
-        .map_err(|e| e.to_string())?;
+        });
+        // Also after a failure: files copied before it are in the folder already.
         rescan_and_sync(app);
-        Ok(Some(folder.display().to_string()))
+        Ok(Some(imported.map_err(|e| e.to_string())?.display().to_string()))
     });
     job
 }
@@ -515,6 +553,17 @@ pub fn download_job(app: &AppHandle, model_id: &str) -> UiResult<String> {
         let state = app.state::<AppState>();
         let target = models_dir.join(&model.id);
         let total: u64 = model.files.iter().map(|f| f.size).sum();
+        // Everything still to fetch has to fit before the first byte is written (PLT-13); each
+        // file is checked again against the size the server reports.
+        let part_len =
+            |name: &str| std::fs::metadata(target.join(format!("{name}.part"))).map(|m| m.len()).unwrap_or(0);
+        let remaining: u64 = model
+            .files
+            .iter()
+            .filter(|f| !target.join(&f.name).is_file())
+            .map(|f| f.size.saturating_sub(part_len(&f.name)))
+            .sum();
+        modelstore::ensure_free_space(&target, remaining).map_err(|e| e.to_string())?;
         let agent = modelstore::download_agent();
         let mut done_before = 0u64;
         for f in &model.files {
@@ -541,8 +590,16 @@ pub fn download_job(app: &AppHandle, model_id: &str) -> UiResult<String> {
                     Some(name.clone()),
                 );
                 !cancel.load(Ordering::Relaxed)
-            })
-            .map_err(|e| e.to_string())?;
+            });
+            let outcome = match outcome {
+                Ok(o) => o,
+                Err(e) => {
+                    // The `.part` file stays for a resume. The scan lists the folder as incomplete,
+                    // so the user can also delete it there (PLT-13).
+                    rescan_and_sync(app);
+                    return Err(e.to_string());
+                }
+            };
             done_before += outcome.bytes;
         }
         let _ = std::fs::write(
