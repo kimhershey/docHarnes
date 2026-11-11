@@ -2148,9 +2148,7 @@
       "title": "Type → field set mapping",
       "hint": "The classifier's type enum is built from the enabled field sets' type slugs. Registered forms take precedence over samples.",
       "type": "Type",
-      "schema": "Default field set",
-      "builtin": "Built-in",
-      "user": "User"
+      "schema": "Default field set"
     },
     "nl": {
       "title": "Create a field set from a description",

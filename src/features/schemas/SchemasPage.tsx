@@ -392,23 +392,26 @@ export function SchemasPage() {
               <CardDescription className="text-xs">{t("schemas.mapping.hint")}</CardDescription>
             </CardHeader>
             <CardContent className="p-3 pt-0">
-              <table className="w-full text-xs" data-testid="schemas-mapping">
+              {/* Two equal columns (`table-fixed`): a slug stays on one line and is cut with an ellipsis (the whole slug in
+                  the tooltip) instead of breaking mid-word in the narrow pane; the label wraps at its spaces. */}
+              <table className="w-full table-fixed text-xs" data-testid="schemas-mapping">
                 <thead>
                   <tr className="text-left text-fg-subtle">
-                    <th scope="col" className="py-1 font-medium">
+                    <th scope="col" className="py-1 pr-2 font-medium">
                       {t("schemas.mapping.type")}
                     </th>
-                    <th scope="col" colSpan={2} className="py-1 font-medium">
+                    <th scope="col" className="py-1 font-medium">
                       {t("schemas.mapping.schema")}
                     </th>
                   </tr>
                 </thead>
                 <tbody>
                   {(docTypes ?? []).map((d) => (
-                    <tr key={d.slug} className="border-t border-border">
-                      <td className="py-1 font-mono">{d.slug}</td>
+                    <tr key={d.slug} className="border-t border-border" data-testid={`schemas-mapping-row-${d.slug}`}>
+                      <td className="truncate py-1 pr-2 font-mono" title={d.slug}>
+                        {d.slug}
+                      </td>
                       <td className="py-1">{ko ? d.label_ko : d.label_en}</td>
-                      <td className="py-1 text-right text-fg-subtle">{d.builtin ? t("schemas.mapping.builtin") : t("schemas.mapping.user")}</td>
                     </tr>
                   ))}
                 </tbody>
