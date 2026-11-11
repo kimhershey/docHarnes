@@ -8,6 +8,11 @@ name: Windows installer (manual)
 #   full  = lite + the self-built CUDA packs cu121 / cu129, downloaded from the Release assets that
 #           .github/workflows/cuda-packs.yml publishes (DocuLens-EnginePack-<pack>-<tag>.zip).
 #
+# Publishing (publish=true): tag v<version> must not already exist on another commit than the one built —
+# scripts/release-guard.mjs checks it before the build and again before the upload. `gh release upload --clobber`
+# would otherwise replace the installer of a published Release with a build of other source while the tag stays on
+# the old commit (this happened to v0.1.0). allow_overwrite=true is the explicit way to do that on purpose.
+#
 # Bundled layout inside the installer (Tauri resource dir = install dir): engines/<pack>/llama-server.exe, pdfium/,
 # ko-dic/, THIRD-PARTY-NOTICES.md, sbom.cdx.json, licenses/THIRD-PARTY-LICENSES.txt.
 #
@@ -23,9 +28,9 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "Git ref to build"
+        description: "Git ref to build (branch, tag or commit SHA). Empty = the branch this workflow is run from"
         required: false
-        default: "main"
+        default: ""
       variant:
         description: "Installer variant (lite = CPU/Vulkan packs, full = + CUDA packs from the Release assets)"
         type: choice
@@ -33,6 +38,10 @@ on:
         default: lite
       publish:
         description: "Upload the installer, its SHA-256, THIRD-PARTY-NOTICES.md and sbom.cdx.json to Release v<version>"
+        type: boolean
+        default: false
+      allow_overwrite:
+        description: "With publish: replace the assets of Release v<version> even though its tag is on another commit than the one built (default: fail)"
         type: boolean
         default: false
 
@@ -55,6 +64,7 @@ jobs:
       DOCULENS_FETCH_ATTEMPTS: "6"
     steps:
       # Third-party actions are pinned to a commit; the comment names the release that commit is.
+      # An empty ref makes actions/checkout use the commit the workflow was dispatched on.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.ref }}
@@ -67,6 +77,10 @@ jobs:
       # version (scripts/check-versions.mjs reads the branch from GITHUB_REF_NAME).
       - name: Versions agree (Cargo.toml / Cargo.lock, package.json / lock, tauri.conf.json, mock backend, SBOM)
         run: node scripts/check-versions.mjs
+      # Fails in the first minute instead of after the build when the tag already belongs to other source.
+      - name: Release guard — tag v<version> must not exist on another commit (publish only)
+        if: inputs.publish
+        run: node scripts/release-guard.mjs --allow-overwrite "${{ inputs.allow_overwrite }}"
       # dtolnay/rust-toolchain: a pinned commit must be on its master branch (the per-toolchain branches such as
       # `stable` are rewritten and garbage-collected), and master takes the toolchain as an input.
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-15
@@ -256,6 +270,10 @@ jobs:
           $version = "${{ steps.meta.outputs.version }}"
           $tag = "v$version"
           $repo = $env:GITHUB_REPOSITORY
+          # Checked again right before the upload: --clobber below must never replace the assets of a Release whose
+          # tag is on another commit than the one built here (scripts/release-guard.mjs; allow_overwrite overrides).
+          node scripts/release-guard.mjs --tag $tag --allow-overwrite "${{ inputs.allow_overwrite }}"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
           gh release view $tag --repo $repo --json tagName 2>$null | Out-Null
           if ($LASTEXITCODE -ne 0) {
             $sha = (git rev-parse HEAD).Trim()
