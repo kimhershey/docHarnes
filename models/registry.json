@@ -23,7 +23,7 @@
         },
         {
           "name": "mmproj-F16.gguf",
-          "sha256": null,
+          "sha256": "140be8d7849741f88c50757d529b84373ee8e27052cc2236855b537f4a8215fa",
           "size": 985654080,
           "hf": "unsloth/gemma-4-E2B-it-GGUF",
           "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2/mmproj-F16.gguf"
@@ -36,7 +36,7 @@
       },
       "capabilities": { "json_schema": true, "tools": true },
       "prompt_profile": "gemma4-doc-v1",
-      "verified": false
+      "verified": true
     },
     {
       "id": "gemma4-e2b-q8",
@@ -59,7 +59,7 @@
         },
         {
           "name": "mmproj-F16.gguf",
-          "sha256": null,
+          "sha256": "140be8d7849741f88c50757d529b84373ee8e27052cc2236855b537f4a8215fa",
           "size": 985654080,
           "hf": "unsloth/gemma-4-E2B-it-GGUF",
           "url": "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2/mmproj-F16.gguf"
@@ -72,7 +72,7 @@
       },
       "capabilities": { "json_schema": true, "tools": true },
       "prompt_profile": "gemma4-doc-v1",
-      "verified": false
+      "verified": true
     },
     {
       "id": "gemma4-e4b-q4km",
@@ -95,7 +95,7 @@
         },
         {
           "name": "mmproj-F16.gguf",
-          "sha256": null,
+          "sha256": "ddf46c21d7078e95338cfc22306b19b276a29a5ad089023449dd54d4b6170a51",
           "size": 990372672,
           "hf": "unsloth/gemma-4-E4B-it-GGUF",
           "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/bfc15c382204943c3a8fff0c750b94ae2364d7a3/mmproj-F16.gguf"
@@ -108,7 +108,7 @@
       },
       "capabilities": { "json_schema": true, "tools": true },
       "prompt_profile": "gemma4-doc-v1",
-      "verified": false
+      "verified": true
     },
     {
       "id": "gemma4-e4b-q5km",
@@ -131,7 +131,7 @@
         },
         {
           "name": "mmproj-F16.gguf",
-          "sha256": null,
+          "sha256": "ddf46c21d7078e95338cfc22306b19b276a29a5ad089023449dd54d4b6170a51",
           "size": 990372672,
           "hf": "unsloth/gemma-4-E4B-it-GGUF",
           "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/bfc15c382204943c3a8fff0c750b94ae2364d7a3/mmproj-F16.gguf"
@@ -144,7 +144,7 @@
       },
       "capabilities": { "json_schema": true, "tools": true },
       "prompt_profile": "gemma4-doc-v1",
-      "verified": false
+      "verified": true
     },
     {
       "id": "gemma4-e4b-q6k",
@@ -167,7 +167,7 @@
         },
         {
           "name": "mmproj-F16.gguf",
-          "sha256": null,
+          "sha256": "ddf46c21d7078e95338cfc22306b19b276a29a5ad089023449dd54d4b6170a51",
           "size": 990372672,
           "hf": "unsloth/gemma-4-E4B-it-GGUF",
           "url": "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/bfc15c382204943c3a8fff0c750b94ae2364d7a3/mmproj-F16.gguf"
@@ -180,7 +180,7 @@
       },
       "capabilities": { "json_schema": true, "tools": true },
       "prompt_profile": "gemma4-doc-v1",
-      "verified": false
+      "verified": true
     },
     {
       "id": "gemma4-12b-q4km",
@@ -203,7 +203,7 @@
         },
         {
           "name": "mmproj-F16.gguf",
-          "sha256": null,
+          "sha256": "91f086971e56d7a7d8d39e271873fccdb49541bd259d6e02c401a4f1cb7a219e",
           "size": 175115840,
           "hf": "unsloth/gemma-4-12b-it-GGUF",
           "url": "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/fc034cfff751157913579611efad8462ac1be606/mmproj-F16.gguf"
@@ -216,7 +216,7 @@
       },
       "capabilities": { "json_schema": true, "tools": true },
       "prompt_profile": "gemma4-doc-v1",
-      "verified": false
+      "verified": true
     },
     {
       "id": "embed-gemma2-q8",
