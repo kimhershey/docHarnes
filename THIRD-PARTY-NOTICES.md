@@ -127,10 +127,14 @@ model files inside the workspace (`.doculens/models/<id>/`).
 
 Generated from `engines/manifest.json` — do not edit by hand.
 
-- llama.cpp `llama-server` — MIT, © Georgi Gerganov and contributors. Pinned to release `b12066` (<https://github.com/ggml-org/llama.cpp/releases/tag/b12066>).
+- llama.cpp `llama-server` — MIT, © 2023-2026 The ggml authors. Pinned to release `b12066` (<https://github.com/ggml-org/llama.cpp/releases/tag/b12066>).
+- The MIT license text of that release ships as `LICENSE-llama.cpp.txt` inside every pack folder and in
+  `licenses/THIRD-PARTY-LICENSES.txt` (the official release archives contain no copy of it).
 - Bundled with every release installer (Lite and Full) under `engines/<pack>/`, unpacked from the official release assets:
   - `cpu` — `llama-b12066-bin-win-cpu-x64.zip` (SHA-256 `cc2aad487f973e02c99a14719481bf1babc1a4eab3876915fc7b88133df314e8`)
   - `vulkan` — `llama-b12066-bin-win-vulkan-x64.zip` (SHA-256 `8eec3c8aa2494c4b196550ff9884a7cc601458c15e6b18b5ba2fa618d43afc54`)
+- LLVM OpenMP runtime (`libomp.dll`, part of those archives) — Apache-2.0 WITH LLVM-exception, © LLVM Project contributors. Its license
+  file ships unchanged inside every pack folder as `LICENSE-LLVM-OpenMP`.
 - Optional CUDA packs, not part of the Lite installer: `cu121` (CUDA 12.1.1 toolkit), `cu129` (CUDA 12.9.1 toolkit) — the same llama.cpp tag built by
   `.github/workflows/cuda-packs.yml`.
 <!-- generated:models-engine:end -->

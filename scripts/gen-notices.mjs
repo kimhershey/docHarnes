@@ -44,10 +44,19 @@ const kodicManifest = JSON.parse(readFileSync(path.join(ROOT, "engines", "kodic.
 const modelRegistry = JSON.parse(readFileSync(path.join(ROOT, "models", "registry.json"), "utf8"));
 
 // engines/manifest.json records the pinned llama.cpp tag, the release URL, the asset names and their hashes, but no
-// license or copyright field. The two values below are the ones this notice file and the SBOM have always stated
-// for llama.cpp; they are the only license statement in the generated model / engine sections that does not come
-// from a manifest.
-const LLAMA_CPP = { license: "MIT", copyright: "© Georgi Gerganov and contributors" };
+// license field. The license is the file committed from the pinned tag (engines/licenses/llama.cpp-LICENSE.txt):
+// its copyright line is quoted in the notice, its full text goes into the bundled license texts, and
+// scripts/fetch-engine.mjs copies it into every unpacked pack as LICENSE-llama.cpp.txt.
+const LLAMA_LICENSE_FILE = path.join(ROOT, "engines", "licenses", "llama.cpp-LICENSE.txt");
+const llamaLicenseText = readFileSync(LLAMA_LICENSE_FILE, "utf8").replace(/\r\n?/g, "\n").trim();
+const llamaCopyright = /^Copyright \(c\) (.+)$/m.exec(llamaLicenseText)?.[1];
+if (!/^MIT License$/m.test(llamaLicenseText) || !llamaCopyright) {
+  console.error(`${path.relative(ROOT, LLAMA_LICENSE_FILE)}: expected llama.cpp's MIT license with its copyright line`);
+  process.exit(1);
+}
+const LLAMA_CPP = { license: "MIT", copyright: `© ${llamaCopyright}` };
+// The official packs link the LLVM OpenMP runtime and ship it as libomp.dll with its own license file.
+const LLVM_OPENMP = { license: "Apache-2.0 WITH LLVM-exception", copyright: "© LLVM Project contributors", file: "LICENSE-LLVM-OpenMP" };
 
 /** Packs the release installers bundle: the official llama.cpp release assets (not self-built, not an alias). */
 function officialEnginePacks() {
@@ -262,6 +271,15 @@ function bundledAssets() {
     },
     {
       type: "library",
+      name: "LLVM OpenMP runtime (libomp.dll, inside the llama.cpp packs)",
+      version: `bundled with llama.cpp ${engineManifest.tag}`,
+      purl: `pkg:generic/llvm-openmp?bundled_with=llama.cpp%40${engineManifest.tag}`,
+      license: LLVM_OPENMP.license,
+      scope: "required",
+      note: `libomp.dll + ${LLVM_OPENMP.file} in every official pack folder`,
+    },
+    {
+      type: "library",
       name: "PDFium (bblanchon/pdfium-binaries)",
       version: pdfiumManifest.version,
       purl: `pkg:github/bblanchon/pdfium-binaries@${encodeURIComponent(pdfiumManifest.tag)}`,
@@ -407,12 +425,20 @@ function renderModelsAndEngine() {
       engineManifest.release_url ? ` (${link(engineManifest.release_url)})` : " (no release link in `engines/manifest.json`)"
     }.`,
   );
+  lines.push(
+    "- The MIT license text of that release ships as `LICENSE-llama.cpp.txt` inside every pack folder and in",
+    "  `licenses/THIRD-PARTY-LICENSES.txt` (the official release archives contain no copy of it).",
+  );
   if (official.length) {
     lines.push("- Bundled with every release installer (Lite and Full) under `engines/<pack>/`, unpacked from the official release assets:");
     for (const [pack, a] of official) {
       const asset = a.asset ? code(a.asset) : `the asset matching ${(a.match ?? []).map(code).join(" / ") || "(no pattern)"}`;
       lines.push(`  - ${code(pack)} — ${asset} (${a.sha256 ? `SHA-256 ${code(a.sha256)}` : "SHA-256 not pinned in `engines/manifest.json`"})`);
     }
+    lines.push(
+      `- LLVM OpenMP runtime (\`libomp.dll\`, part of those archives) — ${LLVM_OPENMP.license}, ${LLVM_OPENMP.copyright}. Its license`,
+      `  file ships unchanged inside every pack folder as \`${LLVM_OPENMP.file}\`.`,
+    );
   }
   if (selfBuilt.length) {
     const packs = selfBuilt.map(([pack, a]) => `${code(pack)} (CUDA ${md(a.toolkit_version ?? a.toolkit ?? "?")} toolkit)`).join(", ");
@@ -537,6 +563,21 @@ function renderLicenseTexts(crates, npm) {
   out.push("runtime — and sbom.cdx.json for the machine-readable inventory). Crate texts are copied verbatim from the crate");
   out.push("sources in the cargo registry, npm texts from node_modules. Entries without a license file in their package");
   out.push("state the SPDX expression declared by the package instead.");
+  // Bundled binaries that are neither a crate nor an npm package.
+  out.push("");
+  out.push(rule);
+  out.push(`llama.cpp ${engineManifest.tag}  [bundled runtime: engines/<pack>/llama-server and its libraries]`);
+  out.push(`License: ${LLAMA_CPP.license}`);
+  if (engineManifest.release_url) out.push(`Release: ${engineManifest.release_url}`);
+  out.push(rule);
+  out.push("");
+  out.push(llamaLicenseText);
+  out.push("");
+  out.push(
+    `(The LLVM OpenMP runtime inside the packs, libomp.dll, is licensed under ${LLVM_OPENMP.license}; its license file`,
+    `${LLVM_OPENMP.file} ships unchanged inside every pack folder. PDFium, mecab-ko-dic and the Pretendard font carry`,
+    "their license files in their own folders — see THIRD-PARTY-NOTICES.md.)",
+  );
   let missing = 0;
   let unavailable = 0;
   for (const e of [...crates, ...npm]) {

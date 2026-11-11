@@ -79,10 +79,20 @@ CPUs), and zips `llama-server.exe` + all `*.dll` from `build/bin/Release/` +
 `cudart64_12.dll`, `cublas64_12.dll`, `cublasLt64_12.dll` from the toolkit
 `bin/` + `LICENSE-llama.cpp.txt` + `NVIDIA-CUDA-EULA.txt` + `pack.json` as
 `DocuLens-EnginePack-<pack>-<tag>.zip` (+ `.sha256`). With `publish=true` the
-zip becomes an asset of the GitHub Release `v<app version>`; the Full
-installer build (`release-windows.yml`, `variant=full`) downloads exactly these
-assets and bundles them as `engines/cu121/` and `engines/cu129/`. A user PC can
-also unzip an asset into `%LOCALAPPDATA%\DocuLens\engines\<tag>\<pack>\`.
+zip becomes an asset of the GitHub Release the workflow ran for, and that
+Release stays the packs' home: they belong to a llama.cpp tag, not to an app
+version. The Full installer build (`release-windows.yml`, `variant=full`) reads
+them from the Release recorded for the engine tag in its `CUDA_PACK_RELEASES`
+list (`b12066=v0.1.0`), requires the `.sha256` next to each zip and bundles them
+as `engines/cu121/` and `engines/cu129/`. A user PC can also unzip an asset into
+`%LOCALAPPDATA%\DocuLens\engines\<tag>\<pack>\`.
+
+License files inside a pack folder: the official `cpu` / `vulkan` archives ship
+`LICENSE-LLVM-OpenMP` (for their `libomp.dll`) but no copy of llama.cpp's own MIT
+license, so `scripts/fetch-engine.mjs` adds `LICENSE-llama.cpp.txt` from
+`engines/licenses/llama.cpp-LICENSE.txt` (the `LICENSE` file of the pinned tag —
+replace it when `manifest.json` moves to another tag). The self-built CUDA packs
+take the same file from their llama.cpp checkout.
 
 Installer size: the Full bundle is ~3.1 GB uncompressed (cu121 pack 1,875 MB —
 `ggml-cuda.dll` 1,233 MB + cuBLAS 607 MB; cu129 pack 1,017 MB — cuBLAS 735 MB +

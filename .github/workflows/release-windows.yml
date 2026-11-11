@@ -173,7 +173,9 @@ jobs:
         run: |
           $root = "src-tauri/resources"
           $required = @("$root/pdfium/pdfium.dll", "$root/pdfium/LICENSE", "$root/ko-dic/dict.words", "$root/ko-dic/LICENSE-mecab-ko-dic.txt",
-                        "$root/engines/cpu/llama-server.exe", "$root/engines/vulkan/llama-server.exe")
+                        "$root/engines/cpu/llama-server.exe", "$root/engines/vulkan/llama-server.exe",
+                        "$root/engines/cpu/LICENSE-llama.cpp.txt", "$root/engines/vulkan/LICENSE-llama.cpp.txt",
+                        "$root/engines/cpu/LICENSE-LLVM-OpenMP", "$root/engines/vulkan/LICENSE-LLVM-OpenMP")
           if ("${{ inputs.variant }}" -eq "full") { $required += @("$root/engines/cu121/llama-server.exe", "$root/engines/cu129/llama-server.exe") }
           $missing = $required | Where-Object { -not (Test-Path $_) }
           if ($missing) { $missing | ForEach-Object { Write-Host "::error::missing bundled asset: $_" }; exit 1 }

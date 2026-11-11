@@ -69,9 +69,15 @@ Elasticsearch, GPL TEDS implementations, axe-core (dev only).
 - HWP 5.0 parsing uses `hwp` (Apache-2.0); keep its notice ("한글과컴퓨터의 한/글
   문서 파일(.hwp) 공개 문서를 참고") in `THIRD-PARTY-NOTICES.md`.
 - Generated notices: `npm run notices` (`scripts/gen-notices.mjs`) regenerates the inventory
-  section of `THIRD-PARTY-NOTICES.md`, `sbom.cdx.json` (CycloneDX 1.5) and, at build time, the
-  bundled license texts `licenses/THIRD-PARTY-LICENSES.txt`; the CI job `notices` fails when the
-  committed files are stale.
+  section and the "Models" / "Inference engine" sections of `THIRD-PARTY-NOTICES.md` (from
+  `Cargo.lock`, `package-lock.json`, `models/registry.json`, `engines/manifest.json`),
+  `sbom.cdx.json` (CycloneDX 1.5) and, at build time, the bundled license texts
+  `licenses/THIRD-PARTY-LICENSES.txt`; the CI job `notices` fails when the committed files are stale.
+- Bundled binaries that are not a crate or an npm package carry their license text with them:
+  llama.cpp (`LICENSE-llama.cpp.txt` in every pack folder, copied from
+  `engines/licenses/llama.cpp-LICENSE.txt` because the official archives contain none, and
+  quoted in the bundled license texts), the LLVM OpenMP runtime of those archives
+  (`LICENSE-LLVM-OpenMP`), PDFium (`LICENSE` + `licenses/`), mecab-ko-dic and the font.
 
 ## UI code reuse
 
