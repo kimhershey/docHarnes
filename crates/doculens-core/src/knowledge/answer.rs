@@ -1621,6 +1621,9 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let cancel = Arc::new(AtomicBool::new(false));
         let (ended_tx, ended_rx) = mpsc::channel();
+        // The request cannot end before the test lets it: whatever the machine load, the caller's answer below
+        // came while the request was still running.
+        let (release_tx, release_rx) = mpsc::channel::<()>();
         let worker_stop = stop.clone();
         let canceller = cancel.clone();
         std::thread::spawn(move || {
@@ -1632,16 +1635,17 @@ mod tests {
             while !worker_stop.load(Ordering::SeqCst) {
                 std::thread::sleep(Duration::from_millis(5));
             }
-            // "First token": the abandoned request sees the stop and winds down (long after the caller left).
-            std::thread::sleep(Duration::from_millis(1_500));
+            // "First token": the abandoned request sees the stop and winds down, long after the caller left.
+            release_rx.recv().ok();
             ended_tx.send(()).ok();
             Err(CoreError::Cancelled)
         });
         let waited = started.elapsed();
         assert!(matches!(out, Err(CoreError::Cancelled)), "{out:?}");
-        assert!(waited >= Duration::from_millis(100) && waited < Duration::from_millis(1_200), "{waited:?}");
+        assert!(waited >= Duration::from_millis(100), "not before the cancel: {waited:?}");
         assert!(stop.load(Ordering::SeqCst), "the request is told to stop");
         assert!(ended_rx.try_recv().is_err(), "the caller did not wait for the request to end");
+        release_tx.send(()).expect("the abandoned request is still running");
         ended_rx.recv_timeout(Duration::from_secs(20)).expect("the abandoned request ends on its own");
 
         // A request that dies without a result is an error, not a hang.
