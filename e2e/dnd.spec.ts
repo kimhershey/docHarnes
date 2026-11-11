@@ -204,4 +204,41 @@ test.describe("document drag and drop", () => {
     await expect(imported).toBeVisible();
     await expect(imported.locator('[data-testid^="doc-role-"]')).toHaveText(ko.library.role_knowledge);
   });
+
+  test("a file that is already in the library joins the project / reference group it is dropped on (PRJ-1)", async ({ page }) => {
+    const [contract, annex, rules] = await libraryWithDocs(page, ["C:\\scan\\계약서.pdf", "C:\\scan\\부속서.pdf", "C:\\scan\\취업규칙.pdf"]);
+    await page.getByTestId("nav-projects").click();
+    await page.getByTestId("projects-new").click();
+    await page.getByTestId("project-name").fill("드롭 프로젝트");
+    await page.getByTestId("project-submit").click();
+    await expect(page.getByTestId("project-title")).toContainText("드롭 프로젝트");
+    // The 문서 tab. The file holds nothing new, so no import runs — the document it stands for joins the project
+    // (the drop used to say "문서 1건을 추가했습니다" and add nothing).
+    await expect(page.getByTestId("project-documents-empty")).toBeVisible();
+    await dropFiles(page, page.getByTestId("project-documents-drop"), ["계약서.pdf"]);
+    await expect(page.getByTestId(`project-doc-${contract}`)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId(`project-doc-${contract}`)).toHaveAttribute("data-kind", "work");
+    await expect(page.getByTestId("project-documents-table").locator("tbody tr")).toHaveCount(1);
+    // A project card.
+    await page.getByTestId("project-back").click();
+    const projectCard = page.locator('[data-testid^="project-card-"]').first();
+    await expect(projectCard).toContainText(tpl(ko.projects.card.documents, { count: 1 }));
+    await dropFiles(page, projectCard, ["부속서.pdf"]);
+    await expect(projectCard).toContainText(tpl(ko.projects.card.documents, { count: 2 }), { timeout: 15_000 });
+    await projectCard.getByTestId("project-open").click();
+    await expect(page.getByTestId(`project-doc-${annex}`)).toBeVisible();
+    // A common reference group: the document joins it as 참고 자료.
+    await page.getByTestId("project-back").click();
+    await page.getByTestId("projects-common-reference-open").click();
+    await expect(page.getByTestId("page-common-reference")).toBeVisible();
+    await page.getByTestId("reference-group-new").click();
+    await page.getByTestId("reference-name").fill("규정");
+    await page.getByTestId("reference-name-save").click();
+    const group = page.getByTestId("reference-group-item").filter({ hasText: "규정" });
+    await expect(group).toBeVisible();
+    await dropFiles(page, group, ["취업규칙.pdf"]);
+    await expect(group).toContainText(tpl(ko.projects.reference.docs_count, { count: 1 }), { timeout: 15_000 });
+    await page.getByTestId("nav-library").click();
+    await expect(page.getByTestId(`doc-card-${rules}`).locator('[data-testid^="doc-role-"]')).toHaveText(ko.library.role_knowledge);
+  });
 });
