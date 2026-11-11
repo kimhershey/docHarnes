@@ -1,9 +1,9 @@
 import { create } from "zustand";
 
-import { subscribe } from "@/lib/ipc";
+import { api, subscribe } from "@/lib/ipc";
 import { invalidateProjects, projectKeys } from "@/lib/queries";
 import { queryClient } from "@/lib/query-client";
-import { EVENTS, type ProjectsChanged } from "@/lib/types";
+import { EVENTS, type Project, type ProjectsChanged } from "@/lib/types";
 
 /** Projects screen state that survives navigation plus the `projects://changed` wiring (§3.15). */
 interface ProjectsState {
@@ -12,7 +12,8 @@ interface ProjectsState {
   /**
    * The project opened last on the detail route — the assistant's `current_project` context ("정합성 검사해"
    * targets it). Kept after leaving the page; cleared only by `resetProjects()` (workspace switch), the
-   * project's deletion or the chip's clear button on the assistant screen.
+   * project's deletion — wherever it happens, see `reconcileCurrentProject` — or the chip's clear button on
+   * the assistant screen.
    */
   currentProject: string | null;
   /** Name shown in the assistant's "프로젝트: …" chip. */
@@ -41,7 +42,33 @@ function scheduleInvalidate(ids: string[]) {
     pendingAll = false;
     pendingIds = new Set();
     invalidateProjects(all ? [] : ids);
+    void reconcileCurrentProject();
   }, 150);
+}
+
+/**
+ * Keeps the project context true to the project list after a `projects://changed`: a project deleted anywhere
+ * but on its own page — by the assistant's `delete_project`, from another window — used to stay the assistant's
+ * "프로젝트: …" context and the target of files dropped on the 프로젝트 menu entry (PRJ-16); a rename is picked up
+ * the same way. A failed list call (no workspace, backend error) changes nothing: the next event checks again.
+ */
+export async function reconcileCurrentProject(list: () => Promise<Project[]> = () => api.projectsList()): Promise<void> {
+  const current = useProjectsStore.getState().currentProject;
+  if (!current) return;
+  let projects: Project[];
+  try {
+    // The same query as the project list: the refetch the invalidation started is shared, not repeated.
+    projects = await queryClient.fetchQuery({ queryKey: projectKeys.list, queryFn: list, staleTime: 0 });
+    // A fetch that was already under way may predate a project created since: ask once more before dropping it.
+    if (!projects.some((p) => p.id === current)) projects = await list();
+  } catch {
+    return;
+  }
+  const state = useProjectsStore.getState();
+  if (state.currentProject !== current) return;
+  const found = projects.find((p) => p.id === current);
+  if (!found) state.clearCurrentProject(current);
+  else if (found.name !== state.currentProjectName) state.setCurrentProject(current, found.name);
 }
 
 export const useProjectsStore = create<ProjectsState>((set, get) => ({
