@@ -4354,10 +4354,11 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
       if (op.action === "delete") {
         if (!existing) throw err("invalid", "glossary_term_not_found");
         await mockKnowledge("knowledge_glossary_delete", { id: existing.id });
-        return { summary: ko ? `용어 '${op.term}' 삭제` : `Deleted the term '${op.term}'`, payload: { action: "delete", term: op.term } };
+        // Like `exec.rs`: `term` is the glossary entry (CON-10).
+        return { summary: ko ? `용어 '${op.term}' 삭제` : `Deleted the term '${op.term}'`, payload: { action: "delete", term: existing } };
       }
       const saved = (await mockKnowledge("knowledge_glossary_save", { input: { id: existing?.id ?? null, term: op.term, definition: op.definition ?? existing?.definition ?? null, synonyms: op.synonyms && op.synonyms.length > 0 ? op.synonyms : (existing?.synonyms ?? []) } })) as GlossaryEntry;
-      return { summary: ko ? `용어 '${saved.term}' 저장` : `Saved the term '${saved.term}'`, payload: { action: "save", term: saved.term, entry: saved } };
+      return { summary: ko ? `용어 '${saved.term}' 저장` : `Saved the term '${saved.term}'`, payload: { action: "save", term: saved } };
     }
     case "set_version": {
       const docs = workingSet(plan, imported);
@@ -4408,11 +4409,12 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
     case "classify_projects": {
       const docs = scopeIsEmpty(plan.scope) ? [] : workingSet(plan, imported);
       const result = (await mp.mockProjects("project_classify_preview", { req: { doc_ids: idsOf(docs), project_ids: [], use_model: !!op.use_model } })) as ClassifyResult;
-      if (!op.apply) return { summary: ko ? `제안 ${result.suggested}건 · 미정 ${result.undecided}건 (프로젝트 화면에서 적용)` : `${result.suggested} suggestions · ${result.undecided} undecided (apply on the projects screen)`, payload: { suggested: result.suggested, applied: null, suggestions: result.suggestions } };
+      // Like `exec.rs`: `applied` is a number (0 when nothing was assigned) and `apply_result` tells the two runs apart (CON-9).
       const assignments = result.suggestions.filter((x) => x.project_id).map((x) => ({ doc_id: x.doc_id, project_id: x.project_id! }));
+      if (!op.apply || assignments.length === 0) return { summary: ko ? `제안 ${result.suggested}건 · 미정 ${result.undecided}건 (프로젝트 화면에서 적용)` : `${result.suggested} suggestions · ${result.undecided} undecided (apply on the projects screen)`, payload: { suggested: result.suggested, undecided: result.undecided, applied: 0, suggestions: result.suggestions, apply_result: null } };
       const applied = (await mp.mockProjects("project_classify_apply", { assignments })) as ClassifyApplyResult;
       out.documents.push(...assignments.map((x) => x.doc_id));
-      return { summary: ko ? `문서 ${applied.added}건을 프로젝트에 배정` : `Assigned ${applied.added} documents to projects`, payload: { suggested: result.suggested, applied: applied.added, suggestions: result.suggestions } };
+      return { summary: ko ? `문서 ${applied.added}건을 프로젝트에 배정` : `Assigned ${applied.added} documents to projects`, payload: { suggested: result.suggested, undecided: result.undecided, applied: assignments.length, suggestions: result.suggestions, apply_result: applied } };
     }
     case "manage_schema": {
       const sc = pl.getSchema(op.schema);

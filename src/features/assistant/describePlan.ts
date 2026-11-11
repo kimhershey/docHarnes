@@ -355,8 +355,11 @@ export function agentStepDetail(op: OpKind, payload: unknown, t: TFunction): Age
       const group = isRecord(payload.group) ? str(payload.group.name) : null;
       return { text: dt("manage_reference", { action: t(`planner.params.reference_${String(payload.action ?? "")}`), group: group ?? "", documents: docs ?? 0 }) };
     }
-    case "define_term":
-      return { text: dt("define_term", { action: t(`planner.params.term_${String(payload.action ?? "save")}`), term: str(payload.term) ?? "" }) };
+    case "define_term": {
+      // `exec.rs` sends the glossary entry (`term: { id, term, definition, synonyms }`); a bare string is accepted too.
+      const term = isRecord(payload.term) ? str(payload.term.term) : str(payload.term);
+      return { text: dt("define_term", { action: t(`planner.params.term_${String(payload.action ?? "save")}`), term: term ?? "" }) };
+    }
     case "set_version":
       return { text: dt("set_version", { documents: docs ?? 0, group: str(payload.group_key) ?? "" }) };
     case "update_project": {
@@ -371,8 +374,12 @@ export function agentStepDetail(op: OpKind, payload: unknown, t: TFunction): Age
       const tpl = isRecord(payload.template) ? payload.template : null;
       return { text: dt("manage_template", { action: t(`planner.params.template_${String(payload.action ?? "save")}`), name: tpl ? (str(tpl.name_ko) ?? "") : "" }) };
     }
-    case "classify_projects":
-      return { text: dt(payload.applied != null ? "classify_applied" : "classify_preview", { suggested: num(payload.suggested), applied: num(payload.applied) }) };
+    case "classify_projects": {
+      // `exec.rs`: `applied` is always a number (0 for a run that only suggests); a run that assigned carries
+      // its `apply_result`. Without that key (older payloads) a null `applied` meant "suggestions only".
+      const assigned = "apply_result" in payload ? payload.apply_result != null : payload.applied != null;
+      return { text: dt(assigned ? "classify_applied" : "classify_preview", { suggested: num(payload.suggested), applied: num(payload.applied) }) };
+    }
     case "manage_schema": {
       const schema = isRecord(payload.schema) ? payload.schema : null;
       return { text: dt("manage_schema", { action: t(`planner.params.schema_${String(payload.action ?? "")}`), name: schema ? (str(schema.name) ?? "") : "" }) };

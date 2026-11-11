@@ -9,7 +9,7 @@ import ko from "@/i18n/ko.json";
 import type { UiOpResult } from "@/lib/commands";
 import type { CheckRun, Draft, DraftOutcome, Plan, PlanContext, PlanExecution, PlanPreview, PlanResponse, Project, ProjectDetail, RuleDraft } from "@/lib/types";
 
-import { deriveResultActions, formatAmount, impactLine, impactOf, isPlanExecution, onlyReviewedValue, opLabel, planKind, projectName, requiresConfirmation, ruleDraftPreview, summarizeOp, uiContextFor, uiResultsByStep, withOnlyReviewed } from "./describePlan";
+import { agentStepDetail, deriveResultActions, formatAmount, impactLine, impactOf, isPlanExecution, onlyReviewedValue, opLabel, planKind, projectName, requiresConfirmation, ruleDraftPreview, summarizeOp, uiContextFor, uiResultsByStep, withOnlyReviewed } from "./describePlan";
 import { OP_KINDS, OP_SPECS, UI_OPS } from "./opSpecs";
 
 const instance = i18next.createInstance();
@@ -180,6 +180,28 @@ describe("result actions", () => {
 });
 
 // The P6 ops in the shapes `exec.rs` really sends (review H1), plus the bare shapes the browser mock used to send.
+// CON-9 / CON-10: the detail line of an agent step reads the payload `planner/exec.rs` sends.
+describe("agentStepDetail", () => {
+  it("classify_projects: a run that only suggests is not shown as '배정 0건'", () => {
+    // `exec.rs`: `applied` is 0 (not null) without an assignment; `apply_result` is null.
+    const suggested = { suggested: 3, undecided: 1, applied: 0, suggestions: [], apply_result: null };
+    expect(agentStepDetail("classify_projects", suggested, t)?.text).toBe("제안 3건 — 프로젝트 화면에서 적용");
+    const assigned = { suggested: 3, undecided: 1, applied: 2, suggestions: [], apply_result: { added: 2, already: 0, project_ids: ["p1"] } };
+    expect(agentStepDetail("classify_projects", assigned, t)?.text).toBe("제안 3건 · 배정 2건");
+    // Payloads without `apply_result` (stored cards of 0.7.0, the old mock): null = suggestions only.
+    expect(agentStepDetail("classify_projects", { suggested: 3, applied: null }, t)?.text).toBe("제안 3건 — 프로젝트 화면에서 적용");
+    expect(agentStepDetail("classify_projects", { suggested: 3, applied: 2 }, t)?.text).toBe("제안 3건 · 배정 2건");
+  });
+
+  it("define_term: the term comes from the glossary entry the executor sends", () => {
+    const entry = { id: 7, term: "공급가액", definition: "부가세를 뺀 금액", synonyms: ["net amount"], created_at: "", updated_at: "" };
+    expect(agentStepDetail("define_term", { action: "save", term: entry }, t)?.text).toBe("용어 저장 · '공급가액'");
+    expect(agentStepDetail("define_term", { action: "delete", term: entry }, t)?.text).toBe("용어 삭제 · '공급가액'");
+    // A bare string still works.
+    expect(agentStepDetail("define_term", { action: "save", term: "합계" }, t)?.text).toBe("용어 저장 · '합계'");
+  });
+});
+
 // PLN-17: the UI runs the steps the executor leaves to it; what became of each is shown on its step.
 describe("uiResultsByStep", () => {
   const step = (index: number, op: PlanExecution["steps"][number]["op"], status: PlanExecution["steps"][number]["status"]): PlanExecution["steps"][number] => ({ index, op, status, summary: "", payload: null, elapsed_ms: 0 });
