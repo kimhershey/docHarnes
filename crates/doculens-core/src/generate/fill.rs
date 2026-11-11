@@ -34,11 +34,10 @@ use regex::Regex;
 use crate::documents::SourceKind;
 use crate::error::{CoreError, Result};
 use crate::pipeline::schema::{key_from_label, FieldKind};
-use crate::pipeline::validate::normalize_amount;
 use crate::settings::Language;
 
+use super::render::{date_text, money_text};
 use super::templates::compact;
-use super::validate::format_won;
 use super::{Draft, DraftBlock, DraftField};
 
 /// Largest main XML part rewritten (decompressed).
@@ -133,13 +132,15 @@ impl Target {
     }
 }
 
+/// The value as written into the form: the same rules as the rendered document (money with
+/// separators, other numbers and dates that say more than a date as entered) without the
+/// currency mark — a form prints its own unit next to the slot.
 fn display_value(f: &DraftField) -> String {
     let v = f.value.trim();
     match FieldKind::parse(&f.kind) {
-        Some(FieldKind::Amount) => normalize_amount(v).map(format_won).unwrap_or_else(|| v.to_string()),
-        Some(FieldKind::Date | FieldKind::Brn | FieldKind::Phone) => {
-            f.normalized.clone().unwrap_or_else(|| v.to_string())
-        }
+        Some(FieldKind::Amount) => money_text(&f.key, &f.label, v).unwrap_or_else(|| v.to_string()),
+        Some(FieldKind::Date) => date_text(v, f.normalized.as_deref()),
+        Some(FieldKind::Brn | FieldKind::Phone) => f.normalized.clone().unwrap_or_else(|| v.to_string()),
         _ => v.to_string(),
     }
 }
@@ -196,9 +197,10 @@ impl FillState {
                         (0..t.columns.len())
                             .map(|i| {
                                 let v = r.get(i).map(|s| s.trim()).unwrap_or("");
-                                match FieldKind::parse(&t.columns[i].kind) {
+                                let c = &t.columns[i];
+                                match FieldKind::parse(&c.kind) {
                                     Some(FieldKind::Amount) => {
-                                        normalize_amount(v).map(format_won).unwrap_or_else(|| v.to_string())
+                                        money_text(&c.key, &c.label, v).unwrap_or_else(|| v.to_string())
                                     }
                                     _ => v.to_string(),
                                 }

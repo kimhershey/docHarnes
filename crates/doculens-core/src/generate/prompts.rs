@@ -20,6 +20,7 @@
 use crate::pipeline::prompts::truncate;
 use crate::pipeline::schema::FieldKind;
 
+use super::render::is_money;
 use super::templates::TemplateSpec;
 use super::{Draft, DraftBlock, DraftRequest, Length, Tone};
 
@@ -467,6 +468,15 @@ fn kind_label(kind: &str, ko: bool) -> &'static str {
     FieldKind::parse(kind).map(|k| k.label(ko)).unwrap_or(if ko { "문자열" } else { "text" })
 }
 
+/// The kind as the model is told. The `amount` kind also carries plain numbers (percentages,
+/// person-months, points): those are announced as numbers, not as money.
+fn field_kind_label(key: &str, label: &str, kind: &str, ko: bool) -> &'static str {
+    if FieldKind::parse(kind) == Some(FieldKind::Amount) && !is_money(key, label) {
+        return if ko { "숫자" } else { "number" };
+    }
+    kind_label(kind, ko)
+}
+
 /// Template section: fields, tables and body outline.
 fn template_block(spec: &TemplateSpec, ko: bool, out: &mut String) {
     out.push_str(if ko { "[양식]\n" } else { "[Template]\n" });
@@ -481,7 +491,7 @@ fn template_block(spec: &TemplateSpec, ko: bool, out: &mut String) {
             "- {} — {} — {}{}\n",
             f.key,
             f.label(ko),
-            kind_label(&f.kind, ko),
+            field_kind_label(&f.key, f.label(ko), &f.kind, ko),
             if f.required {
                 if ko {
                     "; 필수"
@@ -501,8 +511,11 @@ fn template_block(spec: &TemplateSpec, ko: bool, out: &mut String) {
             "Tables (`tables` array; each row is a string array in column order, no header row):\n"
         });
         for t in &tables {
-            let cols: Vec<String> =
-                t.columns.iter().map(|c| format!("{}={}({})", c.key, c.label, kind_label(&c.kind, ko))).collect();
+            let cols: Vec<String> = t
+                .columns
+                .iter()
+                .map(|c| format!("{}={}({})", c.key, c.label, field_kind_label(&c.key, &c.label, &c.kind, ko)))
+                .collect();
             out.push_str(&format!("- {} — {}: {}\n", t.key, t.label(ko), cols.join(", ")));
         }
     }

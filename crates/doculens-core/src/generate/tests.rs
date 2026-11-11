@@ -1145,6 +1145,208 @@ fn title_fields_of_non_letter_templates_are_rendered() {
     assert!(html.contains("<b>제목</b> 제출 서류 보완 요청") && !html.contains("<th>제목</th>"), "{html}");
 }
 
+/// GEN-2: the `amount` kind is every number with a possible fraction, not only money. Each amount field and
+/// column of the built-in templates is classified on purpose (a new one must be added here), and labels
+/// decide for registered forms.
+#[test]
+fn amount_fields_are_classified_as_money_or_plain_numbers() {
+    // (template, field key | "<table>.<column>")
+    let money = [
+        ("rfp", "budget"),
+        ("proposal", "price"),
+        ("sow", "amount"),
+        ("sow", "milestones.amount"),
+        ("dev_contract", "amount"),
+        ("dev_contract", "payments.amount"),
+        ("change_request", "impact_cost"),
+        ("acceptance", "amount"),
+        ("estimate", "supply_total"),
+        ("estimate", "tax_total"),
+        ("estimate", "grand_total"),
+        ("estimate", "items.unit_price"),
+        ("estimate", "items.supply_amount"),
+        ("quotation", "supply_total"),
+        ("quotation", "tax_total"),
+        ("quotation", "grand_total"),
+        ("quotation", "items.unit_price"),
+        ("quotation", "items.supply_amount"),
+        ("quotation", "items.tax_amount"),
+        ("transaction_statement", "supply_total"),
+        ("transaction_statement", "tax_total"),
+        ("transaction_statement", "grand_total"),
+        ("transaction_statement", "items.unit_price"),
+        ("transaction_statement", "items.supply_amount"),
+        ("transaction_statement", "items.tax_amount"),
+        ("contract", "amount"),
+    ];
+    let numbers = [
+        ("rfp", "evaluation.points"),
+        ("proposal", "team.months"),
+        ("sow", "milestones.ratio"),
+        ("dev_contract", "payments.ratio"),
+        ("wbs", "tasks.progress"),
+        ("progress_report", "progress_percent"),
+        ("progress_report", "plan_percent"),
+        ("progress_report", "tasks.progress"),
+        ("test_report", "pass_rate"),
+        ("estimate", "items.months"),
+    ];
+    let mut seen = 0usize;
+    for t in templates::list_all() {
+        let mut check = |path: String, key: &str, labels: &[&str], kind: &str| {
+            if kind != "amount" {
+                return;
+            }
+            seen += 1;
+            let id = (t.kind.as_str(), path.as_str());
+            let expected = money.contains(&id);
+            assert!(expected || numbers.contains(&id), "unclassified amount field {id:?}");
+            for label in labels {
+                assert_eq!(render::is_money(key, label), expected, "{id:?} ({label})");
+            }
+        };
+        for f in &t.fields {
+            check(f.key.clone(), &f.key, &[f.label_ko.as_str(), f.label_en.as_str()], &f.kind);
+            for c in &f.columns {
+                check(format!("{}.{}", f.key, c.key), &c.key, &[c.label.as_str()], &c.kind);
+            }
+        }
+    }
+    assert_eq!(seen, money.len() + numbers.len(), "every listed field exists");
+    // Registered forms: the key is derived from the label and says nothing, so the label decides.
+    for (label, expected) in [
+        ("계약금액", true),
+        ("합계", true),
+        ("단가", true),
+        ("공급가액", true),
+        ("세액", true),
+        ("비용 영향", true),
+        ("환율 적용 금액", true),
+        ("Unit price", true),
+        ("진척률(%)", false),
+        ("통과율", false),
+        ("세율", false),
+        ("투입 MM", false),
+        ("공수(M/M)", false),
+        ("수량", false),
+        ("투입 인원 (명)", false),
+        ("배점", false),
+        ("Qty", false),
+        ("Pass rate (%)", false),
+        // Money in another unit: the figure is printed as entered, without `원`.
+        ("금액(천원)", false),
+        ("계약금액 (USD)", false),
+    ] {
+        assert_eq!(render::is_money("field_3", label), expected, "{label}");
+    }
+    // The prompt announces plain numbers as numbers (they used to be "금액" like money).
+    let spec = TemplateSpec::builtin(TemplateKind::ProgressReport);
+    let prompt = super::prompts::user(&spec, &DraftRequest::default(), &[], 0, true);
+    assert!(prompt.contains("- progress_percent — 전체 진척률(%) — 숫자"), "{prompt}");
+    assert!(prompt.contains("progress=진척률(%)(숫자)"), "{prompt}");
+    let spec = TemplateSpec::builtin(TemplateKind::Estimate);
+    let prompt = super::prompts::user(&spec, &DraftRequest::default(), &[], 0, true);
+    assert!(prompt.contains("months=투입 MM(숫자)") && prompt.contains("unit_price=단가(금액)"), "{prompt}");
+    assert!(prompt.contains("- grand_total — 합계금액 — 금액; 필수"), "{prompt}");
+}
+
+/// GEN-2: percentages, person-months and meeting times are printed as entered — "62.5" was "63원", "95.2" was
+/// "95원", 0.5 MM was "1" and "2026-11-10 14:00" lost its time — while money keeps its format.
+#[test]
+fn rendered_values_keep_decimals_and_times_and_format_only_money() {
+    use FieldKind::*;
+    // 진척 보고서: 전체 / 계획 진척률 and the per-task progress column.
+    let mut report = template_draft(
+        TemplateKind::ProgressReport,
+        &[
+            ("project_name", "한빛 포털 구축"),
+            ("report_date", "2026-11-10"),
+            ("progress_percent", "62.5"),
+            ("plan_percent", "70"),
+        ],
+    );
+    report.title = "11월 2주차 진척 보고서".into();
+    report.tables.iter_mut().find(|t| t.key == "tasks").unwrap().rows =
+        vec![vec!["화면 설계".into(), "김설계".into(), "완료".into(), "완료".into(), "87.5".into()]];
+    validate::validate(&mut report);
+    assert!(!report.has_blocking_issues(), "{:?}", report.issues);
+    let html = render::to_html(&report);
+    assert!(html.contains("<th>전체 진척률(%)</th><td>62.5</td>"), "{html}");
+    assert!(html.contains("<th>계획 진척률(%)</th><td>70</td>"), "{html}");
+    assert!(html.contains("<td class=\"num\">87.5</td>"), "{html}");
+    assert!(!html.contains("63원") && !html.contains("70원") && !html.contains(">88<"), "{html}");
+    let md = render::to_markdown(&report);
+    assert!(md.contains("| 전체 진척률(%) | 62.5 |") && md.contains("| 87.5 |"), "{md}");
+    let model = table_texts(&render::doc_model(&report));
+    assert!(model
+        .iter()
+        .flatten()
+        .any(|r| r.contains(&"전체 진척률(%)".to_string()) && r.contains(&"62.5".to_string())));
+
+    // 테스트 결과서: 통과율.
+    let mut test = template_draft(
+        TemplateKind::TestReport,
+        &[
+            ("project_name", "한빛 포털 구축"),
+            ("test_date", "2026-11-10"),
+            ("pass_rate", "95.2"),
+            ("total_cases", "125"),
+        ],
+    );
+    validate::validate(&mut test);
+    let html = render::to_html(&test);
+    assert!(html.contains("<th>통과율(%)</th><td>95.2</td>") && !html.contains("95원"), "{html}");
+
+    // 견적서: 0.5 MM stays 0.5 while the money columns and totals are formatted.
+    let mut estimate = template_draft(
+        TemplateKind::Estimate,
+        &[("issue_date", "2026-11-10"), ("recipient", "㈜한빛"), ("supplier.name", "㈜도큐렌즈")],
+    );
+    estimate.tables[0].rows = vec![
+        vec!["PM".into(), "특급".into(), "0.5".into(), "12000000".into(), "".into(), "".into()],
+        vec!["개발자".into(), "고급".into(), "2.5".into(), "9,000,000".into(), "22500000".into(), "".into()],
+    ];
+    validate::validate(&mut estimate);
+    assert!(!estimate.has_blocking_issues(), "{:?}", estimate.issues);
+    let html = render::to_html(&estimate);
+    assert!(html.contains("<td class=\"num\">0.5</td>") && html.contains("<td class=\"num\">2.5</td>"), "{html}");
+    assert!(html.contains("<td class=\"num\">12,000,000</td>") && html.contains("<td class=\"num\">6,000,000</td>"));
+    assert!(html.contains("<td class=\"num\">22,500,000</td>"), "{html}");
+    assert!(html.contains("<th>합계금액</th><td>31,350,000원</td>"), "0.5 × 12,000,000 + 22,500,000 + 10 %: {html}");
+    let md = render::to_markdown(&estimate);
+    assert!(md.contains("| PM | 특급 | 0.5 | 12,000,000 | 6,000,000 |"), "{md}");
+
+    // 회의록: the meeting time survives; a bare date is still normalised.
+    let mut minutes = template_draft(
+        TemplateKind::MeetingMinutes,
+        &[("title", "주간 회의"), ("meeting_date", "2026-11-10 14:00"), ("next_meeting", "2026.11.17")],
+    );
+    minutes.title = "주간 회의".into();
+    validate::validate(&mut minutes);
+    assert_eq!(minutes.field("meeting_date").unwrap().normalized.as_deref(), Some("2026-11-10"));
+    let html = render::to_html(&minutes);
+    assert!(html.contains("<th>일시</th><td>2026-11-10 14:00</td>"), "{html}");
+    assert!(html.contains("<th>차기 회의</th><td>2026-11-17</td>"), "{html}");
+
+    // Field by field: whole money is formatted, anything else is the writer's wording.
+    let money = |value: &str, ko: bool| render::display_value(&field("amount", "계약금액", Amount, true, value), ko);
+    assert_eq!(money("120000000", true), "120,000,000원");
+    assert_eq!(money("120000000", false), "KRW 120,000,000");
+    assert_eq!(money("1억 2,000만원", true), "120,000,000원");
+    assert_eq!(money("1,234.56", true), "1,234.56", "a fraction is never rounded");
+    assert_eq!(money("USD 1,200", true), "USD 1,200", "another currency is not won");
+    assert_eq!(money("1,200,000원 (부가세 별도)", true), "1,200,000원 (부가세 별도)");
+    let date = |value: &str| {
+        let mut f = field("period", "기간", Date, false, value);
+        f.normalized = crate::pipeline::validate::normalize_date(value);
+        render::display_value(&f, true)
+    };
+    assert_eq!(date("2026년 11월 8일"), "2026-11-08");
+    assert_eq!(date("2026-11-10 ~ 2026-11-14"), "2026-11-10 ~ 2026-11-14");
+    assert_eq!(date("2026-11-10 - 2026-11-14"), "2026-11-10 - 2026-11-14");
+    assert_eq!(date("2026-11-10 (화) 오후 2시"), "2026-11-10 (화) 오후 2시");
+}
+
 // ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
@@ -1353,6 +1555,11 @@ fn write_docx_form(path: &Path) {
     ));
     body.push_str("</w:tbl>");
     body.push_str(r#"<w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr>"#);
+    write_docx_package(path, &body);
+}
+
+/// A minimal DOCX package around the given `<w:body>` content.
+fn write_docx_package(path: &Path, body: &str) {
     let document = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {W_NS}><w:body>{body}</w:body></w:document>"#
     );
@@ -1742,6 +1949,63 @@ fn saving_into_a_registered_form_warns_about_the_body_it_leaves_out() {
     assert!(!md.filled_form && !md.warnings.iter().any(|w| w.contains("본문")), "{:?}", md.warnings);
     assert_eq!(md.omitted_body_blocks, 0);
     assert!(std::fs::read_to_string(&md.absolute).unwrap().contains("납품은 발주 후 2주 이내에 완료합니다."));
+}
+
+/// GEN-2 in a filled form: the slots get the same values as the rendered document — a percentage, a
+/// person-month figure and a meeting time as entered, money with separators.
+#[test]
+fn filled_forms_keep_numbers_and_times_as_entered() {
+    use FieldKind::*;
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("form.docx");
+    let mut body = "<w:tbl><w:tblPr/>".to_string();
+    for label in ["전체 진척률(%)", "통과율(%)", "일시", "계약금액"] {
+        body.push_str(&format!("<w:tr>{}{}</w:tr>", docx_text_cell(label), docx_cell("<w:p/>")));
+    }
+    body.push_str("</w:tbl><w:p/><w:tbl><w:tblPr/>");
+    body.push_str(&format!(
+        "<w:tr>{}{}{}{}</w:tr>",
+        docx_text_cell("역할"),
+        docx_text_cell("투입 MM"),
+        docx_text_cell("단가"),
+        docx_text_cell("공급가액")
+    ));
+    body.push_str(&format!("<w:tr>{}</w:tr></w:tbl>", docx_cell("<w:p/>").repeat(4)));
+    write_docx_package(&src, &body);
+    let mut d =
+        Draft { template: TemplateRef::Form { schema_id: "form-schema".into(), doc_id: None }, ..Default::default() };
+    d.fields = vec![
+        field("progress_percent", "전체 진척률(%)", Amount, false, "62.5"),
+        field("pass_rate", "통과율(%)", Amount, false, "95.2"),
+        field("meeting_date", "일시", Date, false, "2026-11-10 14:00"),
+        field("amount", "계약금액", Amount, false, "120000000"),
+    ];
+    d.tables = vec![DraftTable {
+        key: "items".into(),
+        label: "견적 내역".into(),
+        columns: vec![
+            col("role", "역할", String),
+            col("months", "투입 MM", Amount),
+            col("unit_price", "단가", Amount),
+            col("supply_amount", "공급가액", Amount),
+        ],
+        rows: vec![vec!["PM".into(), "0.5".into(), "12000000".into(), "6000000".into()]],
+    }];
+    validate::validate(&mut d);
+    let out = dir.path().join("filled.docx");
+    let warnings = fill::fill_form(&src, SourceKind::Docx, &d, &out).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let tables = table_texts(&docx::read(&out).unwrap());
+    assert_eq!(
+        tables[0],
+        vec![
+            vec!["전체 진척률(%)", "62.5"],
+            vec!["통과율(%)", "95.2"],
+            vec!["일시", "2026-11-10 14:00"],
+            vec!["계약금액", "120,000,000"],
+        ]
+    );
+    assert_eq!(tables[1][1], vec!["PM", "0.5", "12,000,000", "6,000,000"]);
 }
 
 // ---------------------------------------------------------------------------
