@@ -49,8 +49,9 @@ const DialogContent = React.forwardRef<React.ElementRef<typeof DialogPrimitive.C
         <div className="grid min-h-0 grid-cols-[minmax(0,1fr)] gap-4 overflow-y-auto scroll-pb-20 px-6 pt-6 after:-mt-4 after:block after:h-6 after:content-['']" data-dialog-body="">
           {children}
         </div>
-        <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100 cursor-pointer" aria-label={closeLabel}>
-          <X className="size-4" />
+        {/* Opaque, so a field scrolling past under the button does not show through (the icon alone is dimmed). */}
+        <DialogPrimitive.Close className="group absolute right-4 top-4 -m-1 rounded-sm bg-bg-elevated p-1 cursor-pointer" aria-label={closeLabel}>
+          <X className="size-4 opacity-70 group-hover:opacity-100" />
         </DialogPrimitive.Close>
       </DialogPrimitive.Content>
     </DialogPortal>
