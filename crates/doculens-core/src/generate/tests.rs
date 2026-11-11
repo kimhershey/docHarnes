@@ -1668,6 +1668,82 @@ fn save_never_overwrites_forms_or_library_documents() {
     assert_eq!(doc.role, DocumentRole::Work, "the row is untouched");
 }
 
+/// Registers `write_docx_form` as the form document `form-doc` of the workspace.
+fn register_docx_form(w: &World) {
+    let form_rel = "documents/forms/견적서양식.docx";
+    let form_abs = w.paths.root.join(form_rel);
+    std::fs::create_dir_all(form_abs.parent().unwrap()).unwrap();
+    write_docx_form(&form_abs);
+    w.db.with(|c| {
+        docs::insert_document(
+            c,
+            &NewDocument {
+                id: "form-doc".into(),
+                rel_path: form_rel.into(),
+                original_name: "견적서양식.docx".into(),
+                source_kind: SourceKind::Docx,
+                content_hash: "form-hash".into(),
+                size_bytes: 10,
+                file_modified_at: None,
+                role: DocumentRole::Form,
+                import_batch_id: None,
+            },
+        )?;
+        docs::set_status(c, "form-doc", DocumentStatus::New, None)
+    })
+    .unwrap();
+}
+
+/// GEN-11: a registered HWPX / DOCX form takes the fields and the tables only. Saving a draft that has a
+/// body into it used to drop the body without a word (the preview shows it); now the save says so.
+#[test]
+fn saving_into_a_registered_form_warns_about_the_body_it_leaves_out() {
+    let w = world();
+    register_docx_form(&w);
+    let deps = w.deps(None, None);
+    let mut d = form_draft(Some("form-doc"));
+    d.body = vec![
+        DraftBlock::Heading { level: 2, text: "납품 조건".into() },
+        DraftBlock::Paragraph { text: "납품은 발주 후 2주 이내에 완료합니다.".into(), source: None },
+        DraftBlock::TableRef { key: "items".into() },
+        DraftBlock::List { items: vec!["무상 보증 1년".into()], ordered: false },
+        DraftBlock::Paragraph { text: "  ".into(), source: None },
+    ];
+    let save = |draft: &Draft, output: OutputFormat, name: &str| {
+        render::save(
+            &deps,
+            &SaveRequest {
+                draft: draft.clone(),
+                output,
+                file_name: Some(name.into()),
+                register: false,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+    };
+    let saved = save(&d, OutputFormat::Docx, "본문포함");
+    assert!(saved.filled_form);
+    let body_warnings: Vec<&String> = saved.warnings.iter().filter(|w| w.contains("본문")).collect();
+    assert_eq!(body_warnings.len(), 1, "{:?}", saved.warnings);
+    assert!(body_warnings[0].contains("3개"), "three blocks carry text: {}", body_warnings[0]);
+    assert_eq!(saved.omitted_body_blocks, 3, "the heading, the paragraph and the list");
+    assert_eq!(serde_json::to_value(&saved).unwrap()["omitted_body_blocks"], json!(3));
+    // The fill itself is as before: fields and item rows are placed, the body is not in the file.
+    let back = docx::read(&saved.absolute).unwrap();
+    assert_eq!(table_texts(&back)[0][0], vec!["수신", "㈜한빛", "견적일자", "2026-11-08"]);
+    assert!(!back.text().contains("납품은 발주 후 2주"), "{}", back.text());
+    // Nothing to leave out, nothing to warn about: a draft without a body, and the generic renderer
+    // (Markdown / PDF of a form draft), which does print the body.
+    let plain = save(&form_draft(Some("form-doc")), OutputFormat::Docx, "본문없음");
+    assert!(plain.filled_form && !plain.warnings.iter().any(|w| w.contains("본문")), "{:?}", plain.warnings);
+    assert_eq!(plain.omitted_body_blocks, 0);
+    let md = save(&d, OutputFormat::Md, "본문포함");
+    assert!(!md.filled_form && !md.warnings.iter().any(|w| w.contains("본문")), "{:?}", md.warnings);
+    assert_eq!(md.omitted_body_blocks, 0);
+    assert!(std::fs::read_to_string(&md.absolute).unwrap().contains("납품은 발주 후 2주 이내에 완료합니다."));
+}
+
 // ---------------------------------------------------------------------------
 // Token budgets and the outline → sections flow (0.3.0 item 4)
 // ---------------------------------------------------------------------------

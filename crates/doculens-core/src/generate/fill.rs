@@ -15,6 +15,9 @@
 //! * (d) fields that could not be placed (and empty required fields) are
 //!   reported as warnings.
 //!
+//! The draft's body has no slot in a form and is not written (`body_blocks`
+//! counts what is left out; `render::save` warns about it).
+//!
 //! Labels are matched after normalisation (whitespace / punctuation removed,
 //! `pipeline::schema::key_from_label` for spelling variants such as 사업자번호).
 
@@ -36,7 +39,7 @@ use crate::settings::Language;
 
 use super::templates::compact;
 use super::validate::format_won;
-use super::{Draft, DraftField};
+use super::{Draft, DraftBlock, DraftField};
 
 /// Largest main XML part rewritten (decompressed).
 const MAX_XML_BYTES: u64 = 64 * 1024 * 1024;
@@ -253,6 +256,21 @@ impl FillState {
         }
         self.warnings
     }
+}
+
+/// Body blocks of the draft that carry text (headings, paragraphs, lists; table references are
+/// placed as tables). A form has no slot for them, so this is what a filled form leaves out —
+/// the caller tells the user.
+pub fn body_blocks(draft: &Draft) -> usize {
+    draft
+        .body
+        .iter()
+        .filter(|b| match b {
+            DraftBlock::Heading { text, .. } | DraftBlock::Paragraph { text, .. } => !text.trim().is_empty(),
+            DraftBlock::List { items, .. } => items.iter().any(|i| !i.trim().is_empty()),
+            DraftBlock::TableRef { .. } => false,
+        })
+        .count()
 }
 
 /// Fills `src` (a DOCX or HWPX form) with the draft's values and writes `out`.

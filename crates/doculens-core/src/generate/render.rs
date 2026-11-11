@@ -1061,6 +1061,21 @@ pub fn save(deps: &GenerateDeps<'_>, req: &SaveRequest) -> Result<SavedDocument>
         }
     }
 
+    // A registered form has slots for fields and item rows only: the body the preview shows is not
+    // in the filled file. The fill stays as it is — the user is told what was left out.
+    let omitted_body_blocks = if filled_form { fill::body_blocks(&draft) as u32 } else { 0 };
+    if omitted_body_blocks > 0 {
+        warnings.push(tr(
+            ko,
+            &format!(
+                "등록 양식에는 필드와 표만 채워집니다. 본문 {omitted_body_blocks}개 블록은 저장한 파일에 들어가지 않았습니다 — 본문까지 담으려면 PDF나 Markdown으로 저장하세요."
+            ),
+            &format!(
+                "A registered form takes fields and tables only: {omitted_body_blocks} body block(s) were left out of the saved file. Save as PDF or Markdown to keep the body."
+            ),
+        ));
+    }
+
     let mut doc_id = None;
     if req.register {
         match deps.import {
@@ -1081,5 +1096,5 @@ pub fn save(deps: &GenerateDeps<'_>, req: &SaveRequest) -> Result<SavedDocument>
             format!("Could not store the draft: {e}")
         });
     }
-    Ok(SavedDocument { rel_path: rel, absolute: abs, format, doc_id, filled_form, warnings })
+    Ok(SavedDocument { rel_path: rel, absolute: abs, format, doc_id, filled_form, warnings, omitted_body_blocks })
 }

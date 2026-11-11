@@ -546,6 +546,11 @@ pub struct SavedDocument {
     pub filled_form: bool,
     /// Printing / filling problems that did not stop the save (e.g. PDF printer unavailable → MD kept).
     pub warnings: Vec<String>,
+    /// Body blocks with text (headings, paragraphs, lists) that a filled form left out: a registered
+    /// HWPX / DOCX form has slots for fields and item rows only. `warnings` carries the sentence for
+    /// the user; 0 when nothing was left out or no form was filled.
+    #[serde(default)]
+    pub omitted_body_blocks: u32,
 }
 
 /// Field definition of a built-in template (for the UI picker and the prompt).
