@@ -48,8 +48,8 @@ DocuLens를 **실제 Windows PC에서 설치·실행·빌드·검증**하는 절
 
 1. GitHub Releases에서 `DocuLens-Setup-Lite-<버전>-x64.exe`와 같은 이름의 `.sha256` 파일을 받습니다
    (최신 판: https://github.com/kimhershey/docHarnes/releases/latest ; 판별 변경 내용은 `docs/releases/v<버전>.md`).
-   0.3.0부터는 판마다 Lite 설치파일과 `.sha256`·고지·SBOM만 올립니다. Release가 있는 판은 v0.1.0~v0.4.0과 v0.6.0이고,
-   0.5.0과 0.7.0은 Release가 없습니다(0.5.0의 변경은 0.6.0 판에 들어 있음). <!-- 0.8.0: 리드가 갱신 -->
+   0.3.0부터는 판마다 Lite 설치파일과 `.sha256`·고지·SBOM만 올립니다. Release가 있는 판은 v0.1.0~v0.4.0, v0.6.0, v0.8.0이고,
+   0.5.0과 0.7.0은 Release가 없습니다(0.5.0의 변경은 0.6.0 판에, 0.7.0의 변경은 0.8.0 판에 들어 있음).
    - 아직 릴리스에 올리지 않은 빌드(`publish=false`)는 Actions의 해당 실행 페이지 하단 **Artifacts**에서
      `DocuLens-Setup-<Lite|Full>-<버전>-x64` zip으로 받습니다(GitHub 로그인 필요, 90일 보관). zip 안에 설치파일과 `.sha256`이 있습니다.
    - **Lite**: 앱 + llama-server CPU·Vulkan 팩(`engines\cpu`, `engines\vulkan`) + PDFium(`pdfium\`) + ko-dic(`ko-dic\`)
@@ -189,7 +189,10 @@ npm install
    참고 자료를 근거로 쓰고, 선택·첨부 문서로 물어도 프로젝트의 참고 자료는 함께 봅니다. **근거만 찾기** 토글을 켜면 모델을 부르지 않고 검색 결과만
    보여 줍니다(하이브리드/키워드/의미 선택; 옛 검색 화면). 자연어 명령 → 플랜 카드(출처: 문장 규칙 또는 모델, 영향 미리보기) → Ctrl+Enter 승인 / Esc 취소 →
    실행 카드(진행률·일시정지·취소) → 결과 카드(되돌리기·폴더 열기). 문서함의 정리·내보내기 화면과 작업 현황은 같은 작업 큐를 씁니다.
-   <!-- 0.8.0: 리드가 갱신 -->
+   **0.8.0부터**: 인사("안녕하세요")와 설정 한 문장("UI 배율 120%", "DPI 를 200 으로 변경해줘", "다크 모드로 바꿔줘")은 모델을 거치지 않고 바로 처리합니다
+   (카드의 출처 "바로 해석"; 설정 카드에는 바꾸기 전 값 → 새 값과 **되돌리기** 버튼). 잡담과 문서와 무관한 질문에는 플랜 없이 답하고(일반 지식으로 답한 카드에는
+   **일반 지식** 배지), "프로젝트 별 / 유형별 / 폴더별 요약"은 묶음마다 요약을 만듭니다. 모델이 만든 플랜이 문장과 어긋나면(반영하지 못한 부분, 나눌 수 없는 기준,
+   문장에 없는 설정 변경) 바로 실행하지 않고 카드에 사유를 적어 승인을 기다립니다.
    **해석 방식**: `/`로 시작하는 명령과 "취소"·되묻기만 규칙으로 즉시 처리하고, 그 밖의 모든 문장은 **모델이 해석**합니다(설정 > 일반 > 고급의 "해석"
    선택에서 "규칙(구형)"으로 바꾸면 종전처럼 문장 규칙이 먼저 해석합니다 — GPU가 없어 모델이 느린 PC용). 어시스턴트가 되묻는 카드에는
    답변 입력란과 **되묻기·취소** 버튼이 있고, 플랜 카드에서도 되묻기로 고칠 점을 말할 수 있습니다. 대기 중인 질문·플랜은 "취소"라고
@@ -221,7 +224,6 @@ npm install
 
 ## 4. 어시스턴트 명령·슬래시·단축키
 
-<!-- 0.8.0: 리드가 갱신 -->
 **설계 예시 명령 12종** — 기본 해석("모델")에서는 불러온 모델이 플랜으로 만듭니다. 모델을 불러오지 않았으면 플랜 카드가 아니라
 "플래너 모델이 로드되지 않아 해석할 수 없습니다. 모델을 로드하거나 해석 방식을 '규칙'으로 바꿔 주세요." 되묻기 카드가 뜹니다.
 설정 > 일반 > 고급의 해석을 "규칙(구형)"으로 바꾸면 모델 없이 문장 규칙만으로 12종 모두 플랜 카드가 됩니다(규칙 경로는 CI의
@@ -314,7 +316,7 @@ px 고정이라 125 % 이상에서 글자가 잘렸음). 150 %에서는 1280 px 
 | `DOCULENS_LLAMA_SERVER=<llama-server> DOCULENS_TEST_MODELS_DIR=$PWD/crates/doculens-core/tests/fixtures cargo test -p doculens-core --test real_engine -- --nocapture` | 실제 llama-server + 초소형 Gemma 4 픽스처(채팅·이미지·KIE·플래너 문법) | 통과 |
 | `DOCULENS_FIXTURE_OUT=<dir> cargo test -p doculens-core --lib -- --ignored gen_fixtures` | 샘플 입력 문서 생성 | — |
 | `DOCULENS_EXPORT_OUT=<dir> cargo test -p doculens-core --lib -- --ignored gen_export_samples` | 내보내기 5종 샘플 파일 생성(XLSX·CSV·JSONL·MD·검색 가능 PDF) | 9개 파일 |
-| `cargo run -p doculens-eval -- planner --golden eval/golden/planner.json --baseline eval/baselines/planner-rules.json` | 플래너 골든셋(0.7.0 기준 129건) 규칙 경로 정확도 + 회귀 게이트(0.5pt) <!-- 0.8.0: 리드가 갱신 --> | CI 게이트 |
+| `cargo run -p doculens-eval -- planner --golden eval/golden/planner.json --baseline eval/baselines/planner-rules.json` | 플래너 골든셋(0.8.0 기준 163건: 대화 5 · 질문 27 · 명령 100 · 설정 31) 규칙 경로 정확도 + 회귀 게이트(0.5pt) | CI 게이트 |
 | `cargo run -p doculens-eval -- pipeline --manifest … --engine … --model …` / `scorecard` | 실모델 파이프라인 지표(분류 F1·정확일치·ANLS*·CER·p50/p95)·양자화 스코어카드 | 사용자 PC |
 | `npm run notices` | THIRD-PARTY-NOTICES(모델·엔진 절과 크레이트·패키지 목록) · SBOM(CycloneDX) · 라이선스 전문 재생성 | CI `notices` 잡이 최신성 검사 |
 | `npm run versions:check` | `Cargo.toml`·`Cargo.lock`·`package.json`·`package-lock.json`·`tauri.conf.json`·모의 백엔드·SBOM의 버전 일치(`release/<버전>` 브랜치에서는 그 버전인지도) | CI `notices` 잡과 설치파일 워크플로의 첫 단계 |
@@ -368,7 +370,7 @@ GitHub Actions `CI`(푸시·PR)는 위 항목을 일곱 작업으로 실행합�
    검사·보완요청서, inbox 하위 폴더 매핑 (P6).
 8. **품질·배포(v1.1)** — 릴리스 설치파일(Lite) 오프라인 설치, NVIDIA PC는 CUDA 팩을 앱 데이터 폴더에 풀어 쓰기(§1.1), 평가 하네스로
    양자화 스코어카드 채우기, 파기 작업·알림·절전 방지 (P7).
-9. **골든셋**(사용자 제공) — 분류 F1·OCR CER·KIE 필드 정확도·플래너 명령→플랜 골든셋(0.7.0 기준 129건, `doculens-eval`로 측정). <!-- 0.8.0: 리드가 갱신 -->
+9. **골든셋**(사용자 제공) — 분류 F1·OCR CER·KIE 필드 정확도·플래너 명령→플랜 골든셋(0.8.0 기준 163건, `doculens-eval`로 측정; 실제 모델 측정 절차는 `eval/README.md`).
 
 확인 결과는 이슈로 남기거나 다음 세션에 전달해 주세요. 모델 파일(크기·SHA-256·저장소 커밋)과 Windows 엔진 팩(cpu·vulkan의 SHA-256)은
 저장소에 고정돼 있으므로, 첫 PC에서는 받은 모델이 "해시 검증" 뒤 "검증됨"으로 바뀌는지만 확인하면 됩니다.
