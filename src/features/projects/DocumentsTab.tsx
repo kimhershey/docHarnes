@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { IngestWizard } from "@/features/knowledge/IngestWizard";
 import { addToReferenceGroup, invalidateReference, useProjectReferenceDocs } from "@/features/knowledge/reference";
+import { DocStatusText } from "@/features/library/DocStatusBadge";
 import { docTypeLabel } from "@/features/pipeline/labels";
 import { DropHint, importDroppedFiles, useDocumentDropTarget } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
@@ -30,6 +31,16 @@ interface Row {
   added_at: string | null;
   copy: ProjectDocument["copy"] | null;
 }
+
+/**
+ * The columns that give way when the tab is narrow (UI-4): each shows from a container width at which the name
+ * column still keeps about 10 rem. Container queries are in rem, so a larger UI 배율 hides them like a narrower window.
+ */
+const COLUMN_FROM = {
+  status: "hidden @xl:table-cell",
+  review: "hidden @2xl:table-cell",
+  added: "hidden @4xl:table-cell",
+} as const;
 
 function copyVariant(state: CopyState): "ok" | "warn" | "danger" | "muted" {
   switch (state) {
@@ -185,7 +196,7 @@ export function DocumentsTab({ detail }: { detail: ProjectDetail }) {
           </ul>
         )}
       </section>
-      <section aria-labelledby="docs-title" className="relative flex flex-col gap-2" {...drop.props} data-testid="project-documents-drop">
+      <section aria-labelledby="docs-title" className="@container relative flex flex-col gap-2" {...drop.props} data-testid="project-documents-drop">
         <DropHint active={drop.isActive} over={drop.isOver} testId="project-documents-drop-hint">
           {t("projects.documents.drop_hint")}
         </DropHint>
@@ -236,15 +247,19 @@ export function DocumentsTab({ detail }: { detail: ProjectDetail }) {
           )
         ) : (
           <table className="w-full text-sm" data-testid="project-documents-table">
+            {/* Column widths (UI-4): every column but the name is as wide as its content and never breaks (the page
+                lets text break anywhere, which squeezed 유형 / 상태 / 추가일 to a character per line); the name takes
+                what is left (`w-full max-w-0`: its own long content does not widen it) and carries the path as a
+                second, truncated line. The less important columns show only when the tab is wide enough —
+                container width in rem, so the UI 배율 counts like a narrower window. */}
             <thead className="text-left text-xs uppercase tracking-wide text-fg-subtle">
               <tr>
                 <th className="py-2 pr-3">{t("projects.documents.columns.name")}</th>
-                <th className="py-2 pr-3">{t("projects.documents.columns.kind")}</th>
-                <th className="py-2 pr-3">{t("projects.documents.columns.type")}</th>
-                <th className="py-2 pr-3">{t("projects.documents.columns.path")}</th>
-                <th className="py-2 pr-3">{t("projects.documents.columns.status")}</th>
-                <th className="py-2 pr-3">{t("projects.documents.columns.review")}</th>
-                <th className="py-2 pr-3">{t("projects.documents.columns.added")}</th>
+                <th className="whitespace-nowrap py-2 pr-3">{t("projects.documents.columns.kind")}</th>
+                <th className="whitespace-nowrap py-2 pr-3">{t("projects.documents.columns.type")}</th>
+                <th className={cn("whitespace-nowrap py-2 pr-3", COLUMN_FROM.status)}>{t("projects.documents.columns.status")}</th>
+                <th className={cn("whitespace-nowrap py-2 pr-3", COLUMN_FROM.review)}>{t("projects.documents.columns.review")}</th>
+                <th className={cn("whitespace-nowrap py-2 pr-3", COLUMN_FROM.added)}>{t("projects.documents.columns.added")}</th>
                 <th className="py-2">
                   <span className="sr-only">{t("projects.documents.columns.actions")}</span>
                 </th>
@@ -255,10 +270,27 @@ export function DocumentsTab({ detail }: { detail: ProjectDetail }) {
                 const d = row.doc;
                 const copy = row.copy;
                 const other: DocKind = row.kind === "work" ? "reference" : "work";
+                const path = copy ? copy.rel_path : d.rel_path;
+                const typeLabel = docTypeLabel(d.doc_type, docTypes, t, i18n.language);
                 return (
                   <tr key={d.id} data-testid={`project-doc-${d.id}`} data-kind={row.kind} data-both={row.both} data-copy-state={copy?.state ?? "original"}>
-                    <td className="py-2 pr-3 font-medium">{name(d)}</td>
-                    <td className="py-2 pr-3">
+                    <td className="w-full min-w-[10rem] max-w-0 py-2 pr-3">
+                      <div className="font-medium" data-testid="project-doc-name">
+                        {name(d)}
+                      </div>
+                      <div className="mt-0.5 flex min-w-0 items-center gap-1 text-xs text-fg-muted">
+                        <span className="sr-only">{t("projects.documents.columns.path")}</span>
+                        <code className="selectable min-w-0 truncate" title={path} data-testid="project-doc-path">
+                          {path}
+                        </code>
+                        {copy && (
+                          <Badge variant={copyVariant(copy.state)} className="shrink-0" data-testid="project-doc-copy" data-state={copy.state}>
+                            {t(`projects.documents.copy.${copy.state}`)}
+                          </Badge>
+                        )}
+                      </div>
+                    </td>
+                    <td className="whitespace-nowrap py-2 pr-3">
                       <span className="flex flex-wrap items-center gap-1">
                         <Button size="sm" variant="outline" className="h-7 gap-1 px-2" onClick={() => void switchKind(row)} disabled={switching === d.id} title={t("projects.documents.kind_switch_hint", { kind: kindLabel(other) })} aria-label={t("projects.documents.kind_switch_hint", { kind: kindLabel(other) })} data-testid="project-doc-kind" data-kind={row.kind}>
                           <ArrowLeftRight className="size-3" aria-hidden="true" />
@@ -271,22 +303,21 @@ export function DocumentsTab({ detail }: { detail: ProjectDetail }) {
                         )}
                       </span>
                     </td>
-                    <td className="py-2 pr-3 text-fg-muted">{docTypeLabel(d.doc_type, docTypes, t, i18n.language)}</td>
-                    <td className="py-2 pr-3 text-xs text-fg-muted">
-                      <span className="flex flex-wrap items-center gap-1">
-                        <code className="selectable break-all" data-testid="project-doc-path">
-                          {copy ? copy.rel_path : d.rel_path}
-                        </code>
-                        {copy && (
-                          <Badge variant={copyVariant(copy.state)} data-testid="project-doc-copy" data-state={copy.state}>
-                            {t(`projects.documents.copy.${copy.state}`)}
-                          </Badge>
-                        )}
+                    <td className="py-2 pr-3 text-fg-muted" data-testid="project-doc-type">
+                      {/* One line; only a very long (user-defined) type name is cut, with the whole name on hover. */}
+                      <span className="block max-w-[12rem] truncate" title={typeLabel}>
+                        {typeLabel}
                       </span>
                     </td>
-                    <td className="py-2 pr-3 text-fg-muted">{t(`documents.status.${d.status}`)}</td>
-                    <td className="py-2 pr-3 text-fg-muted">{row.kind === "reference" ? "—" : d.review_status === "pending" ? t("library.review_pending") : d.review_status === "done" ? t("documents.status.reviewed") : "—"}</td>
-                    <td className="py-2 pr-3 text-xs text-fg-subtle">{row.added_at ? formatDate(row.added_at, i18n.language) : "—"}</td>
+                    <td className={cn("whitespace-nowrap py-2 pr-3 text-fg-muted", COLUMN_FROM.status)} data-testid="project-doc-status">
+                      <DocStatusText doc={d} />
+                    </td>
+                    <td className={cn("whitespace-nowrap py-2 pr-3 text-fg-muted", COLUMN_FROM.review)} data-testid="project-doc-review">
+                      {row.kind === "reference" ? "—" : d.review_status === "pending" ? t("library.review_pending") : d.review_status === "done" ? t("documents.status.reviewed") : "—"}
+                    </td>
+                    <td className={cn("whitespace-nowrap py-2 pr-3 text-xs text-fg-subtle", COLUMN_FROM.added)} data-testid="project-doc-added">
+                      {row.added_at ? formatDate(row.added_at, i18n.language) : "—"}
+                    </td>
                     <td className="py-2">
                       <div className="flex justify-end gap-1">
                         <Button size="icon-sm" variant="ghost" onClick={() => navigate(`/library/${d.id}`)} aria-label={t("projects.documents.open")}>

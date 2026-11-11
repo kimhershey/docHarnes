@@ -1905,6 +1905,21 @@ function makeImportPlan(paths: string[], options: ImportOptions, source: ImportS
   return plan;
 }
 
+/**
+ * `documents::import::process_document` stores this on the row before it converts / renders a document (crash
+ * safety: a row that dies in a parser must not stay `importing`), and replaces it with the outcome afterwards.
+ */
+const PROCESSING_MARKER = "interrupted while processing";
+
+/** Marks a document as being processed, like the first statement of `process_document`. */
+function beginProcessing(d: MockDoc): void {
+  d.status = "error";
+  d.error = PROCESSING_MARKER;
+  d.updated_at = new Date().toISOString();
+  upsertDoc(d);
+  emit(EVENTS.documentsChanged, { kind: "updated", ids: [d.id] } satisfies DocumentsChanged);
+}
+
 function renderDocPages(d: MockDoc, dpi: number): void {
   const n = pageCountFor(d.original_name, d.source_kind);
   const scale = dpi / 200;
@@ -1924,6 +1939,7 @@ function renderDocPages(d: MockDoc, dpi: number): void {
   d.converted = ["hwpx", "docx", "hwp"].includes(d.source_kind);
   d.conversion_note = d.converted ? "변환본(근사 렌더): 글상자·수식은 생략될 수 있습니다." : null;
   d.status = "rendered";
+  d.error = null;
   d.updated_at = now;
 }
 
@@ -1993,17 +2009,23 @@ async function runDocumentImport(plan: DocumentImportPlan): Promise<string> {
       if (doc.status === "importing") {
         const pages = pageCountFor(doc.original_name, doc.source_kind);
         const steps = Math.min(6, pages);
+        // While the document is converted / rendered its row carries the crash marker (status `error`).
+        beginProcessing(doc);
         const ok = await simulate(job.id, steps, 150, (i) => {
           updateJob(job.id, { progress: (done + i / steps) / importable.length, detail: `${item.name} (${Math.round((pages * i) / steps)}/${pages})` });
         });
         if (!ok) {
           doc.status = "new";
+          doc.error = null;
           upsertDoc(doc);
           emit(EVENTS.documentsChanged, { kind: "updated", ids: [doc.id] } satisfies DocumentsChanged);
           break;
         }
         if (plan.options.render) renderDocPages(doc, dpi);
-        else doc.status = "new";
+        else {
+          doc.status = "new";
+          doc.error = null;
+        }
         upsertDoc(doc);
         emit(EVENTS.documentsChanged, { kind: "updated", ids: [doc.id] } satisfies DocumentsChanged);
       }
@@ -2191,8 +2213,16 @@ function mockDocuments(cmd: string, a: Record<string, any>): unknown { // eslint
           const d = wsDocs().find((x) => x.id === id);
           if (!d) continue;
           updateJob(job.id, { progress: i / ids.length, detail: d.original_name });
+          beginProcessing(d);
           const ok = await simulate(job.id, 2, 150, () => undefined);
-          if (!ok) break;
+          if (!ok) {
+            // `process_document`: a cancelled run leaves the document `new`.
+            d.status = "new";
+            d.error = null;
+            upsertDoc(d);
+            emit(EVENTS.documentsChanged, { kind: "updated", ids: [id] } satisfies DocumentsChanged);
+            break;
+          }
           renderDocPages(d, dpi);
           upsertDoc(d);
           emit(EVENTS.documentsChanged, { kind: "updated", ids: [id] } satisfies DocumentsChanged);

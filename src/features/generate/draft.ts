@@ -4,6 +4,7 @@
 
 import type { TFunction } from "i18next";
 
+import { sectionsOf } from "@/lib/draft-sections";
 import type { Draft, DraftBlock, DraftIssue, DraftRequest, ReviseScope, SchemaRecord, SourceRef, TemplateInfo, TemplateRef } from "@/lib/types";
 
 export { isSectionHeading, reviseScopeLabel, sectionAt, sectionsOf, type DraftSection } from "@/lib/draft-sections";
@@ -130,6 +131,82 @@ export function pickerToReviseScope(value: string, heading: string | null = null
   return { scope: "whole" };
 }
 
+// -- the section a revise scope names, across edits (GEN-10) -----------------------------------------------
+// A scope stores a section ordinal. When blocks are added, removed or moved the ordinals shift: the picked
+// section is remembered by its heading and followed; when it is gone the scope is cleared — it must never
+// quietly become another section or "the whole draft".
+
+/** The picker value for "nothing picked" (the panel shows a placeholder and cannot run). */
+export const NO_SCOPE = "";
+
+/** The section ordinal in a scope picker value (`section:N` / `insert_after:N`); null for the other scopes. */
+export function scopeSectionOrdinal(value: string): number | null {
+  const m = value.match(/^(?:section|insert_after):(\d+)$/);
+  return m ? Number(m[1]) : null;
+}
+
+/** The same kind of scope on another section. */
+export function withScopeOrdinal(value: string, ordinal: number): string {
+  return value.replace(/:\d+$/, `:${ordinal}`);
+}
+
+/** What identifies the section a scope names: its ordinal and heading, and how many sections there were. */
+export interface ScopeAnchor {
+  ordinal: number;
+  heading: string | null;
+  count: number;
+}
+
+/** The anchor of the section `value` names in `body`; null when the scope names no section or the section does not exist. */
+export function anchorScope(value: string, body: DraftBlock[]): ScopeAnchor | null {
+  const ordinal = scopeSectionOrdinal(value);
+  if (ordinal === null) return null;
+  const sections = sectionsOf(body);
+  const section = sections.find((s) => s.ordinal === ordinal);
+  return section ? { ordinal, heading: section.heading, count: sections.length } : null;
+}
+
+/**
+ * Where the anchored section is in the edited body: its ordinal (possibly a new one), or null when it is gone.
+ * Same ordinal and heading → still there. Otherwise the one section with that heading (blocks were added,
+ * removed or moved around it). A heading retyped in place — no section has the old heading, the section count is
+ * unchanged — keeps the ordinal. Anything else (the section was removed or merged, or its heading is ambiguous
+ * after a structural change) → null.
+ */
+export function followScopeAnchor(anchor: ScopeAnchor, body: DraftBlock[]): number | null {
+  const sections = sectionsOf(body);
+  const at = sections.find((s) => s.ordinal === anchor.ordinal);
+  if (at && at.heading === anchor.heading) return anchor.ordinal;
+  const same = sections.filter((s) => s.heading === anchor.heading);
+  if (same.length === 1) return same[0]!.ordinal;
+  if (same.length === 0 && at && sections.length === anchor.count) return anchor.ordinal;
+  return null;
+}
+
+/** Smallest reply-token budget the request form accepts (the largest is the backend's cap). */
+/** Characters as the core counts them (`chars().count()`): code points, not UTF-16 units (an emoji is one). */
+export function charCount(text: string): number {
+  return Array.from(text).length;
+}
+
+export const MIN_TOKEN_BUDGET = 200;
+
+export function clampTokenBudget(value: number, cap: number): number {
+  return Math.min(cap, Math.max(MIN_TOKEN_BUDGET, Math.round(value)));
+}
+
+/**
+ * The custom token budget as it is applied when its box loses focus or Enter is pressed (GEN-12: clamping on
+ * every keystroke turned "6000" into 32768 — "6" was already raised to 200). Empty → null (the length
+ * preset), a number → rounded and clamped to 200…cap, anything else → undefined (keep the stored value).
+ */
+export function parseTokenBudget(text: string, cap: number): number | null | undefined {
+  const s = text.trim();
+  if (s === "") return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? clampTokenBudget(n, cap) : undefined;
+}
+
 /** Text form of a block for a textarea: list items one per line. */
 export function blockText(block: DraftBlock): string {
   switch (block.kind) {
@@ -143,6 +220,7 @@ export function blockText(block: DraftBlock): string {
   }
 }
 
+/** The block with `text` from its textarea; a list takes one item per line, cleaned (trimmed, empty lines dropped). */
 export function blockWithText(block: DraftBlock, text: string): DraftBlock {
   switch (block.kind) {
     case "heading":
@@ -156,6 +234,17 @@ export function blockWithText(block: DraftBlock, text: string): DraftBlock {
   }
 }
 
+/**
+ * What a block's textarea shows while it is being edited (GEN-5). The draft always holds a list's cleaned
+ * items, but showing those back on every keystroke swallowed Enter and spaces ("첫째 항목⏎둘째 항목" became
+ * "첫째항목둘째항목"): the box keeps the text as typed (`typed`, null once it loses focus) for as long as that
+ * text still stands for the block; a change from outside (a suggestion, a move, a revision) shows the block.
+ */
+export function blockInputText(block: DraftBlock, typed: string | null): string {
+  const text = blockText(block);
+  return typed !== null && blockText(blockWithText(block, typed)) === text ? typed : text;
+}
+
 /** Issue path → `fields.<key>` key, `tables.<key>[row].<col>` cell or `body[i]` block. */
 export function parseIssuePath(path: string): { kind: "field"; key: string } | { kind: "cell"; table: string; row: number; column: string } | { kind: "body"; index: number } | { kind: "other" } {
   let m = path.match(/^fields\.(.+)$/);
@@ -165,6 +254,28 @@ export function parseIssuePath(path: string): { kind: "field"; key: string } | {
   m = path.match(/^body\[(\d+)\]$/);
   if (m) return { kind: "body", index: Number(m[1]) };
   return { kind: "other" };
+}
+
+/**
+ * Where a validation issue points, in the draft's own words (UI-8: the list showed the internal paths —
+ * "(fields.grand_total)", "(body[3])"): the field's label, "<table> <n>행 · <column>" or the body block with
+ * its kind. A path of another shape is returned as it is.
+ */
+export function issueLocation(draft: Draft, path: string, t: TFunction): string {
+  const target = parseIssuePath(path);
+  switch (target.kind) {
+    case "field":
+      return draft.fields.find((f) => f.key === target.key)?.label || target.key;
+    case "cell": {
+      const table = draft.tables.find((x) => x.key === target.table);
+      const column = table?.columns.find((c) => c.key === target.column);
+      return t("generate.editor.issue_at_cell", { table: table?.label || target.table, row: target.row + 1, column: column?.label || target.column });
+    }
+    case "body":
+      return t("generate.editor.issue_at_body", { index: target.index + 1, kind: t(`generate.editor.block_kind.${draft.body[target.index]?.kind ?? "paragraph"}`) });
+    default:
+      return path;
+  }
 }
 
 /** Applies the validator's suggestion (computed sum, normalised value) and drops the issue. */

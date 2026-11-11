@@ -7,7 +7,7 @@ import en from "@/i18n/en.json";
 import ko from "@/i18n/ko.json";
 import type { Job } from "@/lib/types";
 
-import { describeJobDetail, describeJobError } from "./describe";
+import { describeJobCounter, describeJobDetail, describeJobError } from "./describe";
 
 const instance = i18next.createInstance();
 await instance.init({ lng: "ko", fallbackLng: false, resources: { ko: { translation: ko }, en: { translation: en } }, interpolation: { escapeValue: false } });
@@ -100,5 +100,24 @@ describe("describeJobError", () => {
 
   it("uses the English strings in English", () => {
     expect(describeJobError(job({ error: "workspace closed" }), ((k: string, o?: Record<string, unknown>) => instance.t(k, { ...o, lng: "en" })) as typeof t)).toBe(en.jobs.error.workspace_closed);
+  });
+});
+
+describe("describeJobCounter (CON-11)", () => {
+  it("shows item counts as counts: documents of a processing job, plan steps, chunks, files", () => {
+    expect(describeJobCounter(job({ kind: "pipeline", bytes_done: 3, bytes_total: 12 }), "ko")).toBe("3 / 12");
+    expect(describeJobCounter(job({ kind: "plan", bytes_done: 1, bytes_total: 3 }), "ko")).toBe("1 / 3");
+    expect(describeJobCounter(job({ kind: "knowledge_embed", bytes_done: 1200, bytes_total: 4800 }), "ko")).toBe("1,200 / 4,800");
+    expect(describeJobCounter(job({ kind: "organize", bytes_done: null, bytes_total: 7 }), "ko")).toBe("0 / 7");
+  });
+
+  it("keeps bytes for the transfers (model download / import / hash check)", () => {
+    expect(describeJobCounter(job({ kind: "model_download", bytes_done: 3 * 1024 * 1024, bytes_total: 5 * 1024 * 1024 * 1024 }), "ko")).toBe("3 MiB / 5.00 GiB");
+    expect(describeJobCounter(job({ kind: "model_import", bytes_done: 0, bytes_total: 2048 }), "ko")).toBe("0 B / 2 KiB");
+    expect(describeJobCounter(job({ kind: "model_hash", bytes_done: 512, bytes_total: 1024 }), "ko")).toBe("512 B / 1 KiB");
+  });
+
+  it("shows nothing without a total", () => {
+    expect(describeJobCounter(job({ kind: "pipeline", bytes_done: 3, bytes_total: null }), "ko")).toBeNull();
   });
 });

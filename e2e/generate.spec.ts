@@ -42,6 +42,11 @@ test.describe("P6 document generation", () => {
     await expect(page.getByTestId("generate-field-input-grand_total")).toHaveValue("7,500,000");
     const issue = page.getByTestId("generate-field-grand_total").getByTestId("generate-issue-sum_mismatch");
     await expect(issue).toBeVisible();
+    // The issue list names the field by its label, not by the internal path "(fields.grand_total)" (UI-8).
+    const totalLabel = ((await page.locator('label[for="gen-field-grand_total"]').textContent()) ?? "").replace("*", "").trim();
+    expect(totalLabel.length).toBeGreaterThan(0);
+    await expect(page.getByTestId("generate-issue-row").filter({ has: page.locator('[data-testid="generate-issue-where"]', { hasText: `(${totalLabel})` }) })).toHaveCount(1);
+    await expect(page.getByTestId("generate-issues")).not.toContainText("fields.grand_total");
 
     // Editing a field marks it as user-edited.
     await page.getByTestId("generate-field-input-note").fill("부가세 별도");
@@ -104,6 +109,32 @@ test.describe("P6 document generation", () => {
     await page.getByTestId("generate-token-budget-24000").click();
     await expect(page.getByTestId("generate-token-budget-input")).toHaveValue("24000");
     await expect(page.getByTestId("generate-token-budget-hint")).toContainText("절별");
+    // A number typed into the box is applied when the box is left or on Enter, never per keystroke (GEN-12:
+    // "6000" used to end as 32768 because "6" was raised to 200 at once).
+    const budget = page.getByTestId("generate-token-budget-input");
+    await budget.click();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await page.keyboard.type("6000");
+    await expect(budget).toHaveValue("6000");
+    await expect(page.getByTestId("generate-token-budget-hint")).toContainText("6,000");
+    await page.keyboard.press("Enter");
+    await expect(budget).toHaveValue("6000");
+    await expect(page.getByTestId("generate-token-budget-select")).toContainText("6,000");
+    // Out-of-range numbers are clamped once, on blur: below 200 → 200, above the cap → the cap.
+    await budget.fill("50");
+    await page.getByTestId("generate-content").focus();
+    await expect(budget).toHaveValue("200");
+    await budget.fill("99999");
+    await page.getByTestId("generate-content").focus();
+    await expect(budget).toHaveValue("32768");
+    // Emptying the box goes back to the length preset; the "문서 한 통" preset is picked again for the run below.
+    await budget.fill("");
+    await page.getByTestId("generate-content").focus();
+    await expect(page.getByTestId("generate-token-budget-hint")).toContainText("한 번에");
+    await page.getByTestId("generate-token-budget-select").click();
+    await page.getByTestId("generate-token-budget-24000").click();
+    await expect(budget).toHaveValue("24000");
     await page.getByTestId("generate-run").click();
     // Section progress is reported while the job runs, then every template section is in the draft.
     await expect(page.getByTestId("generate-progress")).toContainText("절 작성 중", { timeout: 15_000 });
@@ -220,6 +251,214 @@ test.describe("P6 document generation", () => {
     await expect(page.getByTestId("generate-preview-box")).toHaveAttribute("data-scale", "1.00");
   });
 
+  test("a list block takes what is typed: Enter and spaces stay, the box is cleaned on blur (GEN-5)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openGenerate(page);
+    await page.getByTestId("generate-template").click();
+    await page.getByRole("option", { name: ko.generate.templates.meeting_minutes }).click();
+    await page.getByTestId("generate-content").fill("한빛 포털 구축 주간 회의록, 일정 점검과 리스크 논의");
+    await page.getByTestId("generate-run").click();
+    await expect(page.getByTestId("generate-preview")).toBeVisible({ timeout: 15_000 });
+
+    // "목록 추가" after the first heading: the new, empty list block is focused.
+    await page.getByTestId("draft-block-add-list-0").click();
+    const list = page.getByTestId("generate-block-input-1");
+    await expect(page.getByTestId("generate-block-1")).toHaveAttribute("data-block-kind", "list");
+    await expect(list).toBeFocused();
+    // Typed key by key — the audit's reproduction ended as "첫째항목둘째항목".
+    await page.keyboard.type("첫째 항목");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("둘째 항목");
+    await expect(list).toHaveValue("첫째 항목\n둘째 항목");
+    // The draft holds the two items: the preview lists both.
+    const srcdoc = async () => (await page.getByTestId("generate-preview-frame").getAttribute("srcdoc")) ?? "";
+    await expect.poll(srcdoc, { timeout: 10_000 }).toContain("<li>첫째 항목</li><li>둘째 항목</li>");
+    // The empty line after another Enter stays while typing and is cleaned when the box loses focus.
+    await page.keyboard.press("Enter");
+    await expect(list).toHaveValue("첫째 항목\n둘째 항목\n");
+    await page.getByTestId("generate-title").focus();
+    await expect(list).toHaveValue("첫째 항목\n둘째 항목");
+  });
+
+  test("the revise scope follows its section across edits and is cleared — never turned into 전체 다시 쓰기 — when the section is removed (GEN-10)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openGenerate(page);
+    await page.getByTestId("generate-template").click();
+    await page.getByRole("option", { name: ko.generate.templates.meeting_minutes }).click();
+    await page.getByTestId("generate-content").fill("한빛 포털 구축 주간 회의록, 일정 점검과 리스크 논의");
+    await page.getByTestId("generate-run").click();
+    await expect(page.getByTestId("generate-preview")).toBeVisible({ timeout: 15_000 });
+    const headings = page.locator('[data-testid^="generate-block-"][data-block-kind="heading"]');
+    const count = await headings.count();
+    expect(count).toBeGreaterThanOrEqual(2);
+
+    // Pick the last section with its "AI 수정" button.
+    const last = Number((await headings.last().getAttribute("data-testid"))!.replace("generate-block-", ""));
+    const lastHeading = await page.getByTestId(`generate-block-input-${last}`).inputValue();
+    await page.getByTestId(`draft-section-revise-${last}`).click();
+    const scope = page.getByTestId("generate-revise-scope");
+    await expect(scope).toContainText(lastHeading);
+    const ordinal = Number(((await scope.textContent()) ?? "").match(/(\d+)\.\s/)?.[1]);
+    expect(ordinal).toBeGreaterThanOrEqual(2);
+    await expect(scope).toHaveAttribute("data-scope", `section:${ordinal}`);
+    // A new section heading inserted above shifts the ordinals: the scope still names the picked section.
+    await page.getByTestId("draft-block-add-heading-0").click();
+    await page.getByTestId("generate-block-input-1").fill("새 절");
+    await expect(scope).toHaveAttribute("data-scope", `section:${ordinal + 1}`);
+    await expect(scope).toContainText(`${ordinal + 1}. ${lastHeading}`);
+    // Its heading block removed (the section is merged into the one before): the scope is cleared with a notice.
+    await page.getByTestId(`draft-block-remove-${last + 1}`).click();
+    await expect(scope).toHaveAttribute("data-scope", "none");
+    await expect(scope).toContainText(ko.generate.revise.scope_none);
+    await expect(page.getByTestId("generate-revise-scope-lost")).toHaveText(ko.generate.revise.scope_lost);
+    await expect(page.getByTestId("toaster")).toContainText(ko.generate.revise.scope_lost);
+    // Nothing runs without a scope; picking one again enables the button.
+    await page.getByTestId("generate-revise-instruction").fill("더 짧게");
+    await expect(page.getByTestId("generate-revise-run")).toBeDisabled();
+    await scope.click();
+    await page.getByTestId("generate-revise-scope-section-1").click();
+    await expect(page.getByTestId("generate-revise-run")).toBeEnabled();
+    await expect(page.getByTestId("generate-revise-scope-lost")).toHaveCount(0);
+  });
+
+  test("the form's selects show their values in full; a narrow window gives the editor a pane of its own (UI-5)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openGenerate(page);
+    /** The value of a select is neither wrapped into clamped lines ("격…") nor cut sideways. */
+    const shownInFull = async (testId: string, text: string) => {
+      const value = page.getByTestId(testId).locator("span").first();
+      await expect(value).toHaveText(text);
+      expect(await value.evaluate((el) => el.scrollHeight <= el.clientHeight + 1 && el.scrollWidth <= el.clientWidth + 1), `${testId} shows "${text}" in full`).toBe(true);
+    };
+    const checkSelects = async () => {
+      await shownInFull("generate-tone", ko.generate.tone.formal);
+      await shownInFull("generate-length", ko.generate.length.medium);
+      await shownInFull("generate-output", ko.generate.output.hwpx);
+      // The "토큰 예산" label stays on one line.
+      const label = (await page.locator('label[for="gen-budget"]').boundingBox())!;
+      expect(label.height, "토큰 예산 is one line").toBeLessThan(24);
+    };
+
+    // 1280 px at 100 %: three columns.
+    await expect(page.getByTestId("generate-layout")).toHaveAttribute("data-layout", "wide");
+    await checkSelects();
+    await page.getByTestId("generate-template").click();
+    await page.getByRole("option", { name: ko.generate.templates.estimate }).click();
+    await page.getByTestId("generate-content").fill("DocuLens에 백엔드개발 고급 3MM 단가 2,500,000원, 유효기간 30일 견적서");
+    await page.getByTestId("generate-run").click();
+    await expect(page.getByTestId("generate-preview")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("generate-pane-switch")).toHaveCount(0);
+    await expect(page.getByTestId("generate-editor")).toBeVisible();
+    await expect(page.getByTestId("generate-revise-panel")).toHaveAttribute("data-placement", "bottom");
+
+    // A 1000 px window (like 1280 px at about 130 %): the form column beside one pane. The preview shows first;
+    // "편집" gives the editor the whole height instead of two fifths of it.
+    await page.setViewportSize({ width: 1000, height: 800 });
+    const layout = page.getByTestId("generate-layout");
+    await expect(layout).toHaveAttribute("data-layout", "narrow");
+    await checkSelects();
+    await expect(page.getByTestId("generate-preview-frame")).toBeVisible();
+    await expect(page.getByTestId("generate-editor")).toBeHidden();
+    // The 초안 어시스턴트 is the first thing in the form column: in view without scrolling.
+    await expect(page.getByTestId("generate-revise-panel")).toHaveAttribute("data-placement", "top");
+    await expect(page.getByTestId("generate-revise-instruction")).toBeInViewport();
+    await page.getByTestId("generate-pane-editor").click();
+    await expect(page.getByTestId("generate-editor")).toBeVisible();
+    await expect(page.getByTestId("generate-preview-frame")).toBeHidden();
+    const whole = (await layout.boundingBox())!;
+    const editor = (await page.getByTestId("generate-pane-editor-box").boundingBox())!;
+    expect(editor.height, "the editor pane takes (almost) the whole height").toBeGreaterThan(whole.height * 0.85);
+    // Editing works in the pane, and the preview follows when it is shown again.
+    await page.getByTestId("generate-title").fill("견적서 (좁은 창)");
+    await page.getByTestId("generate-pane-preview").click();
+    await expect(page.getByTestId("generate-preview-frame")).toBeVisible();
+    await expect.poll(async () => (await page.getByTestId("generate-preview-frame").getAttribute("srcdoc")) ?? "", { timeout: 10_000 }).toContain("견적서 (좁은 창)");
+    // Nothing scrolls sideways and the page itself does not scroll.
+    const main = page.locator("main#main");
+    expect(await main.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+    expect(await main.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(1);
+
+    // Back to the wide window: both panes side by side again.
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await expect(layout).toHaveAttribute("data-layout", "wide");
+    await expect(page.getByTestId("generate-editor")).toBeVisible();
+    await expect(page.getByTestId("generate-preview-frame")).toBeVisible();
+  });
+
+  test("the content and the instruction name their limits, and a cut is reported after the draft (GEN-14 on the screen)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openGenerate(page);
+    const limit = page.getByTestId("generate-content-limit");
+    await expect(limit).toContainText("6,000");
+    await expect(limit).toHaveAttribute("data-over", "false");
+    // Past the limit the counter says what will happen, before the draft is made.
+    await page.getByTestId("generate-content").fill("가".repeat(6_010));
+    await expect(limit).toHaveAttribute("data-over", "true");
+    await expect(limit).toContainText("6,010");
+    await expect(limit).toContainText(tpl(ko.generate.form.char_over, { max: "6,000" }));
+    await page.getByTestId("generate-run").click();
+    await expect(page.getByTestId("generate-preview")).toBeVisible({ timeout: 15_000 });
+    // The job reports what the model did not see (`input_cuts`).
+    await expect(page.getByTestId("toaster")).toContainText(tpl(ko.generate.cut.content, { chars: "6,010", passed: "6,000" }));
+    // The 초안 어시스턴트's instruction has its own limit.
+    await expect(page.getByTestId("generate-revise-limit")).toContainText("2,000");
+  });
+
+  test("saving as Markdown registers the file in the library like the other formats (GEN-9)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openGenerate(page);
+    await page.getByTestId("generate-template").click();
+    await page.getByRole("option", { name: ko.generate.templates.meeting_minutes }).click();
+    await page.getByTestId("generate-content").fill("한빛 포털 구축 주간 회의록, 일정 점검과 리스크 논의");
+    await page.getByTestId("generate-run").click();
+    await expect(page.getByTestId("generate-preview")).toBeVisible({ timeout: 15_000 });
+
+    await page.getByTestId("generate-save").click();
+    await page.getByTestId("generate-save-format").click();
+    await page.getByRole("option", { name: ko.generate.output.md }).click();
+    // The hint says a Markdown file is registered too: the switch stays on and usable (it was forced off).
+    await expect(page.getByTestId("generate-save-dialog")).toContainText(ko.generate.save.warning_markdown);
+    await expect(page.getByTestId("generate-save-register")).toBeEnabled();
+    await expect(page.getByTestId("generate-save-register")).toHaveAttribute("aria-checked", "true");
+    await page.getByTestId("generate-save-confirm").click();
+    await expect(page.getByTestId("generate-saved")).toContainText(/^documents\/generated\/.+\.md/, { timeout: 10_000 });
+    await expect(page.getByTestId("toast-action")).toHaveText(ko.generate.save.open_library);
+    await expect(page.getByTestId("generate-saved-library")).toBeVisible();
+    await page.getByTestId("nav-library").click();
+    await expect(page.locator('[data-testid^="doc-card-"]')).toHaveCount(1);
+    await expect(page.locator('[data-testid^="doc-card-"]').first()).toHaveAttribute("data-doc-name", /\.md$/);
+  });
+
+  test("the 문서 선택 dialog keeps its ticks and search while a job reports progress behind it (GEN-6)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\개발계약서-2p.pdf", "D:\\scan\\견적서-1p.jpg"], { autoLevel: "none" });
+    const contract = await docId(page, "개발계약서-2p.pdf");
+    await openGenerate(page);
+    await page.getByTestId("generate-template").click();
+    await page.getByRole("option", { name: ko.generate.templates.progress_report }).click();
+    await page.getByTestId("generate-content").fill("한빛 포털 구축 10월 진척 보고서, 전체 진척률 60%");
+    // At the mock's real pace the draft job reports progress for more than a second: every report re-renders the form.
+    await page.evaluate(() => localStorage.removeItem("doculens.mock.fast"));
+    await page.getByTestId("generate-run").click();
+    await expect(page.getByTestId("generate-progress")).toBeVisible();
+    await page.getByTestId("generate-pick-sources").click();
+    await expect(page.getByTestId("generate-sources-dialog")).toBeVisible();
+    await page.getByTestId("generate-sources-search").fill("계약");
+    await page.getByTestId(`generate-source-${contract}`).check();
+    // The job finishes behind the dialog; the search text and the tick are still there.
+    await expect(page.getByTestId("generate-preview")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("generate-sources-search")).toHaveValue("계약");
+    await expect(page.getByTestId(`generate-source-${contract}`)).toBeChecked();
+    await page.getByTestId("generate-sources-done").click();
+    await expect(page.getByTestId("generate-sources").locator("li")).toHaveCount(1);
+  });
+
   test("assistant: '2절 다시 써줘 …' revises the open draft (plan → result card → the generate screen); without a draft it asks to open one", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
@@ -253,6 +492,86 @@ test.describe("P6 document generation", () => {
     await result.getByTestId("result-open-draft").click();
     await expect(page.getByTestId("page-generate")).toBeVisible();
     await expect(page.getByTestId("generate-notes")).toContainText(`AI 수정(2절 '${heading2}'): 리스크를 더 자세히`);
+  });
+
+  test("문서 작성 화면에서 열기 on the jobs page opens the saved draft, not the job's first snapshot (GEN-4)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openGenerate(page);
+    await page.getByTestId("generate-template").click();
+    await page.getByRole("option", { name: ko.generate.templates.estimate }).click();
+    await page.getByTestId("generate-content").fill("DocuLens에 백엔드개발 고급 3MM 단가 2,500,000원, 유효기간 30일 견적서");
+    await page.getByTestId("generate-run").click();
+    await expect(page.getByTestId("generate-preview")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("generate-field-input-note")).toHaveValue("");
+
+    // Edit the draft and leave at once: the edit is written when the screen is left, not dropped.
+    await page.getByTestId("generate-field-input-note").fill("부가세 별도");
+    await page.getByTestId("nav-jobs").click();
+    await expect.poll(() => page.evaluate(() => (localStorage.getItem("doculens.mock.drafts") ?? "").includes("부가세 별도")), { timeout: 10_000 }).toBe(true);
+
+    // The job's result is the draft as it was generated (no note). Opening it shows the saved draft with the edit.
+    await page.getByTestId("jobs-tab-finished").click();
+    const job = page.locator('[data-job-kind="draft"]').first();
+    await job.getByTestId("job-result").locator("summary").click();
+    await job.getByTestId("job-open-draft").click();
+    await expect(page.getByTestId("page-generate")).toBeVisible();
+    await expect(page.getByTestId("generate-field-input-note")).toHaveValue("부가세 별도");
+    await expect(page.getByTestId("toaster")).toContainText(ko.generate.reloaded);
+    // The next keystroke is saved on top of the saved draft: the earlier edit survives.
+    await page.getByTestId("generate-title").fill("견적서 (최종)");
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const all = JSON.parse(localStorage.getItem("doculens.mock.drafts") ?? "{}") as Record<string, { title: string; fields: { key: string; value: string }[] }[]>;
+            const d = Object.values(all).flat()[0];
+            return `${d?.title} / ${d?.fields.find((f) => f.key === "note")?.value}`;
+          }),
+        { timeout: 10_000 },
+      )
+      .toBe("견적서 (최종) / 부가세 별도");
+  });
+
+  test("an edit made just before leaving is in the assistant's revision, and the revision shows when coming back by the sidebar (GEN-7)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openGenerate(page);
+    await page.getByTestId("generate-template").click();
+    await page.getByRole("option", { name: ko.generate.templates.progress_report }).click();
+    await page.getByTestId("generate-content").fill("한빛 포털 구축 10월 진척 보고서, 전체 진척률 60%");
+    await page.getByTestId("generate-run").click();
+    await expect(page.getByTestId("generate-preview")).toBeVisible({ timeout: 15_000 });
+    const heading2 = await page.locator('[data-testid^="generate-block-"][data-block-kind="heading"]').nth(1).locator("textarea").inputValue();
+
+    // An edit, then straight to the assistant — inside the autosave pause.
+    await page.getByTestId("generate-title").fill("10월 진척 보고서 (수정)");
+    await page.getByTestId("nav-assistant").click();
+    await page.getByTestId("assistant-input").fill("2절 다시 써줘 — 리스크를 더 자세히");
+    await page.getByTestId("assistant-send").click();
+    const plan = page.locator('[data-testid="assistant-card-plan"]').last();
+    await expect(plan).toHaveAttribute("data-plan-status", "done", { timeout: 15_000 });
+    await expect(page.locator('[data-testid="assistant-card-result"]').last()).toHaveAttribute("data-result-status", "done", { timeout: 20_000 });
+
+    // Back by the sidebar, not by the result card: the screen shows the revised draft, with the edit in it.
+    await page.getByTestId("nav-generate").click();
+    await expect(page.getByTestId("generate-notes")).toContainText(`AI 수정(2절 '${heading2}'): 리스크를 더 자세히`);
+    await expect(page.getByTestId("generate-title")).toHaveValue("10월 진척 보고서 (수정)");
+    await expect(page.getByTestId("toaster")).toContainText(ko.generate.reloaded);
+    await expect(page.getByTestId("generate-editor")).toHaveAttribute("data-disabled", "false");
+    // The next edit is saved on top of the revision instead of overwriting it with the old draft.
+    await page.getByTestId("generate-title").fill("10월 진척 보고서 (최종)");
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const all = JSON.parse(localStorage.getItem("doculens.mock.drafts") ?? "{}") as Record<string, { title: string; notes: string[] }[]>;
+            const d = Object.values(all).flat()[0];
+            return `${d?.title} / ${d?.notes.some((n) => n.includes("AI 수정")) ? "revised" : "not revised"}`;
+          }),
+        { timeout: 10_000 },
+      )
+      .toBe("10월 진척 보고서 (최종) / revised");
   });
 
   test("assistant: '견적서 만들어줘 …' → plan card → draft job → result card opens the draft here", async ({ page }) => {

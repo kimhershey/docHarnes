@@ -44,7 +44,8 @@ import { ImportDocumentsDialog } from "./ImportDocumentsDialog";
 import { LibraryContextMenu, type LibraryContextRequest } from "./LibraryContextMenu";
 import { RetryImage } from "./RetryImage";
 import { MergeDialog } from "./SplitMergeDialogs";
-import { statusVariant } from "./status";
+import { DocStatusBadge } from "./DocStatusBadge";
+import { folderCount, listedFolders } from "./folders";
 import { TodayStrip } from "./TodayStrip";
 import { useDocumentDrop } from "./useDocumentDrop";
 
@@ -146,10 +147,13 @@ export function LibraryPage() {
     });
   }, [visibleIds, isPlaceholderData, docs]);
 
-  // A folder that lost its last document falls back to "all".
+  // A folder that lost its last document falls back to "all" — counting the folders below it, like the list
+  // filter does: "받은 문서함 N건" selects `inbox` also when the files sit in `inbox/<sub>`, and that selection
+  // used to be dropped at once (DOC-15).
   useEffect(() => {
-    if (folder !== null && stats && !stats.folders.some((f) => f.rel_dir === folder)) setFolder(null);
+    if (folder !== null && stats && folderCount(stats.folders, folder) === 0) setFolder(null);
   }, [folder, stats, setFolder]);
+  const navFolders = useMemo(() => listedFolders(stats?.folders ?? [], folder), [stats, folder]);
 
   const openImport = useCallback((paths?: string[], source: ImportSource = "drop") => {
     setImportPaths(paths);
@@ -292,7 +296,7 @@ export function LibraryPage() {
       <nav className="hidden w-56 shrink-0 flex-col border-r border-border p-3 md:flex" aria-label={t("library.folders.title")}>
         <h2 className="mb-2 px-2 text-xs font-semibold uppercase tracking-wide text-fg-subtle">{t("library.folders.title")}</h2>
         <FolderItem label={t("library.folders.all")} count={stats?.total} active={folder === null} onClick={() => setFolder(null)} testId="folder-all" />
-        {(stats?.folders ?? []).map((f) => (
+        {navFolders.map((f) => (
           <FolderItem
             key={f.rel_dir}
             label={f.rel_dir === "" ? t("library.folders.root") : f.rel_dir}
@@ -647,9 +651,7 @@ function DocCard({ doc, selected, onToggle, onOpen, onOpenReview, t, typeLabel, 
       {/* Badges live outside the open button so the review badge can be a button of its own (no nested controls). */}
       <div className="flex shrink-0 flex-wrap items-center gap-1 px-2 pb-2 text-xs text-fg-muted">
         <Badge variant="outline">{t(`documents.kind.${doc.source_kind}`)}</Badge>
-        <Badge variant={statusVariant(doc.status)} data-testid={`doc-status-${doc.id}`}>
-          {t(`documents.status.${doc.status}`)}
-        </Badge>
+        <DocStatusBadge doc={doc} testId={`doc-status-${doc.id}`} />
         {doc.converted && <Badge variant="info">{t("library.converted")}</Badge>}
         {doc.doc_type && (
           <Badge variant="outline" data-testid={`doc-type-${doc.id}`}>
@@ -754,7 +756,7 @@ function ListView({ docs, selected, onToggle, onOpen, onOpenReview, typeLabel, l
                 {doc.page_count}
               </span>
               <span role="gridcell">
-                <Badge variant={statusVariant(doc.status)}>{t(`documents.status.${doc.status}`)}</Badge>
+                <DocStatusBadge doc={doc} />
               </span>
               <span role="gridcell" className={cn("min-w-0", LIST_COL_SHOW.doc_type)}>
                 {doc.doc_type && (

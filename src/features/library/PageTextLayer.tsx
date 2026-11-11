@@ -37,6 +37,7 @@ export function PageTextLayer({
   fields,
   onExplain,
   editSeq,
+  onEditorClose,
 }: {
   doc: DocumentView;
   page: PageView;
@@ -50,6 +51,8 @@ export function PageTextLayer({
   onExplain: (text: string) => void;
   /** Bumped by the viewer when Enter / F2 asks to edit the current selection. */
   editSeq: number;
+  /** The inline editor (correct / add words) closed — saved, cancelled or dropped by a page change. */
+  onEditorClose?: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const toast = useUiStore((s) => s.toast);
@@ -102,6 +105,15 @@ export function PageTextLayer({
       inputRef.current.select();
     }
   }, [editing, adding]);
+  // The editor's input holds the focus while it is open. When it closes the input is gone and the focus would
+  // fall to <body>, where the viewer's keys are not heard — Ctrl+Z for the correction just saved reached the
+  // global file-journal undo instead (DOC-2). The viewer takes the focus back.
+  const editorOpen = editing !== null || adding !== null;
+  const editorWasOpen = useRef(false);
+  useEffect(() => {
+    if (editorWasOpen.current && !editorOpen) onEditorClose?.();
+    editorWasOpen.current = editorOpen;
+  }, [editorOpen, onEditorClose]);
 
   const point = (e: ReactPointerEvent): [number, number] => {
     const r = rootRef.current?.getBoundingClientRect();

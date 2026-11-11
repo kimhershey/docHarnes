@@ -11,16 +11,22 @@ export interface FieldOption {
   label_ko: string;
   label_en: string;
   kind: string;
+  /** A table column (`<table>.<column>`): the rule looks at the column's values, not at one field. */
+  column: boolean;
 }
 
-/** Scalar field paths of a schema (group children as `group.child`; tables are skipped). */
+/**
+ * Field paths of a schema a rule can name — the same list as the core's `rules::fields_of_def`: scalars, group
+ * children (`group.child`) and table columns (`table.column`, labelled "<table> <column>"). Table columns were
+ * left out (PRJ-15), so a rule on one — e.g. the amount of a payment stage — showed as a problem in the grid and
+ * could neither be picked nor corrected there, although the check supports it.
+ */
 export function fieldOptions(schema: SchemaRecord | undefined | null): FieldOption[] {
   if (!schema) return [];
   const out: FieldOption[] = [];
-  const push = (f: FieldDef, path: string, prefixKo = "", prefixEn = "") => out.push({ path, label_ko: `${prefixKo}${f.label_ko || f.label_en || f.key}`.trim(), label_en: `${prefixEn}${f.label_en || f.label_ko || f.key}`.trim(), kind: f.kind });
+  const push = (f: FieldDef, path: string, column = false, prefixKo = "", prefixEn = "") => out.push({ path, label_ko: `${prefixKo}${f.label_ko || f.label_en || f.key}`.trim(), label_en: `${prefixEn}${f.label_en || f.label_ko || f.key}`.trim(), kind: f.kind, column });
   for (const f of schema.definition.fields) {
-    if (f.kind === "table") continue;
-    if (f.kind === "group") for (const c of f.fields) push(c, `${f.key}.${c.key}`, `${f.label_ko} `, `${f.label_en} `);
+    if (f.kind === "group" || f.kind === "table") for (const c of f.fields) push(c, `${f.key}.${c.key}`, f.kind === "table", `${f.label_ko} `, `${f.label_en} `);
     else push(f, f.key);
   }
   return out;

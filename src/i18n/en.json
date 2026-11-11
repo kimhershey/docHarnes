@@ -1263,6 +1263,24 @@
       "no_fields": "No fields selected.",
       "no_split_boundary": "Pick a split page inside the document (page 2 or later).",
       "merge_two": "Select at least two documents to merge.",
+      "merge_name_invalid": "That name cannot be used for the merged document. Shorten it and leave out / \\ : * ? \" < > |.",
+      "export_exists": "A file with that name already exists. Turn on overwrite or change the name.",
+      "export_over_document": "A document registered in the library is at that path and cannot be overwritten. Change the file name.",
+      "export_over_form": "Cannot save on top of the form file that is being filled. Change the file name.",
+      "path_is_document": "The export path points at a document registered in the library. Choose another file name or folder.",
+      "path_outside": "Cannot save to a path outside the workspace.",
+      "project_not_found": "Project not found (it may have been deleted).",
+      "project_name_empty": "Enter a project name.",
+      "name_empty": "Enter a name.",
+      "template_not_found": "Project template not found (it may have been deleted).",
+      "template_builtin": "Built-in templates cannot be changed or deleted (duplicate and edit instead).",
+      "template_name_empty": "Enter a template name.",
+      "rule_not_found": "Rule not found (it may have been deleted).",
+      "no_check_run": "There is no consistency check result yet. Run the consistency check first.",
+      "no_findings": "Nothing to put in the supplement request. Pick at least one mismatch or missing item.",
+      "content_empty": "Enter the content to write.",
+      "revise_previous_missing": "There is no draft to revise. Open or create a draft first.",
+      "revise_instruction_empty": "Enter the revision instruction.",
       "table_not_found": "Table not found.",
       "plan_clarify": "The plan is a clarification question — answer it first."
     }
@@ -1496,7 +1514,13 @@
       "reviewed": "Reviewed",
       "archived": "Archived",
       "missing": "File missing",
-      "error": "Error"
+      "error": "Error",
+      "processing": "Processing",
+      "interrupted": "Interrupted"
+    },
+    "status_hint": {
+      "processing": "Conversion / rendering is in progress.",
+      "interrupted": "Processing stopped before it finished. Re-render the document to process it again."
     },
     "kind": {
       "pdf": "PDF",
@@ -1593,6 +1617,15 @@
   },
   "viewer": {
     "back": "Documents",
+    "journal": {
+      "undo_title": "Undo a file operation",
+      "undo_body": "This page has no text correction to undo. Undo the last file operation (organise / rename / delete) instead? It has nothing to do with this document's text corrections.",
+      "undo_ok": "Undo the file operation",
+      "redo_title": "Redo a file operation",
+      "redo_body": "This page has no text correction to redo. Redo the file operation that was undone last instead?",
+      "redo_ok": "Redo",
+      "batch": "Target: {{kind}} · {{count}} item(s) · {{date}}"
+    },
     "page": "{{page}} / {{total}}",
     "prev": "Previous page",
     "next": "Next page",
@@ -2069,6 +2102,7 @@
     "default": "Default",
     "set_default": "Make default for this type",
     "enabled": "Used by the classifier",
+    "general_locked": "This is the fallback form for unclassified (Other) documents, so it cannot be switched off.",
     "version": "v{{version}}",
     "source": {
       "builtin": "Built-in",
@@ -2228,6 +2262,12 @@
     "doc_approved": "{{count}} field(s) approved.",
     "reextract": "Re-extract (fine print)",
     "reextract_precise": "Re-extract (precision mode)",
+    "reextract_what": {
+      "fine_print": "Extracts '{{name}}' again with the fine-print profile (higher resolution).",
+      "precise": "Extracts '{{name}}' again in precision mode (two passes compared)."
+    },
+    "reextract_start_over": "Start over with classification and OCR",
+    "reextract_start_over_hint": "Reads the page text again. Page text you corrected by hand is replaced by the new OCR result too.",
     "open_doc": "Open document",
     "value": "Value",
     "evidence": "Evidence",
@@ -2470,7 +2510,23 @@
     "drafts": "Drafts",
     "open_in_generate": "Open in Generate",
     "handoff": "The generated draft is open. Check the preview and save it.",
+    "reloaded": "Loaded the latest saved draft: it includes changes made elsewhere.",
+    "store": {
+      "copy_newer": "The original draft was edited after the job started, so the result was stored as a new draft instead of over it. The original is still in the draft list.",
+      "copy_cancelled": "What the cancelled job had written was stored as a new draft. The original draft is unchanged.",
+      "not_saved_deleted": "The draft was deleted while the job ran, so the result was not stored in the draft list. Edit or save it to keep it.",
+      "not_saved_failed": "The result could not be stored in the draft list. Edit or save it to keep it."
+    },
+    "cut": {
+      "content": "Only the first {{passed}} of the {{chars}} characters of the content were passed to the model.",
+      "feedback": "Only the first {{passed}} of the {{chars}} characters of the instruction were passed to the model."
+    },
     "form": {
+      "char_count": "{{count}} / {{max}} characters",
+      "char_over": "only the first {{max}} are passed to the model",
+      "project_scope": "Reference material is searched inside the project '{{name}}'.",
+      "project_scope_missing": "This draft belongs to a project that no longer exists. Clear the scope to search for reference material.",
+      "project_scope_clear": "Clear scope",
       "title": "Request",
       "template": "Form / template",
       "template_auto": "(auto — inferred from the content)",
@@ -2581,6 +2637,8 @@
       "scope_section": "Rewrite {{index}}. {{heading}}",
       "scope_insert_after": "New section after {{index}}. {{heading}}",
       "scope_append": "New section at the end",
+      "scope_none": "Pick a scope",
+      "scope_lost": "The section picked for rewriting was removed by an edit, so the scope was cleared. Pick the scope again.",
       "untitled": "(untitled)",
       "heading": "New section heading (optional)",
       "heading_placeholder": "e.g. Conclusion",
@@ -2629,6 +2687,14 @@
       "move_up": "Move up",
       "move_down": "Move down",
       "level_toggle": "Heading level {{level}} → {{next}}",
+      "issue_at_cell": "{{table}} row {{row}} · {{column}}",
+      "issue_at_body": "Body block {{index}} · {{kind}}",
+      "block_kind": {
+        "heading": "heading",
+        "paragraph": "paragraph",
+        "list": "list",
+        "table_ref": "table"
+      },
       "body_empty": "The body is empty."
     },
     "issue_codes": {
@@ -2641,6 +2707,8 @@
       "template_unknown_field": "Unknown field"
     },
     "save": {
+      "omitted_body": "{{count}} body block(s) left out",
+      "omitted_body_hint": "A registered form takes fields and tables only. Save as PDF or Markdown to keep the body.",
       "title": "Save",
       "hint": "Saves under documents/generated/ in the workspace and registers the file in Documents as a generated document.",
       "format": "Format",
@@ -2677,6 +2745,9 @@
     },
     "result": {
       "meta": "{{fields}} fields · {{issues}} issues · {{source}}"
+    },
+    "layout": {
+      "panes": "Switch between preview and editor"
     },
     "open_busy_title": "A draft is being generated",
     "open_busy": "Another draft is being generated on the Compose screen. If you open this one now, the running job's result stays available on the Activity screen."
@@ -2913,6 +2984,11 @@
       "hint": "Drafts a supplement request from the selected mismatch / missing findings; review and save it on the generate screen.",
       "findings": "Findings",
       "select_all": "Select all",
+      "missing_doc": "{{type}} document required",
+      "missing_doc_message": "No {{type}} document in the project.",
+      "covered": "Not selected by default: the missing-document item above already asks for it.",
+      "undetermined_hint": "Undetermined items cannot go into the request. Extract / review the documents and run the check again.",
+      "pick_one": "Select at least one item for the request.",
       "output": "Output",
       "generate": "Generate",
       "generating": "Drafting…",

@@ -1,7 +1,24 @@
 import type { TFunction } from "i18next";
 
 import { OP_KINDS } from "@/features/assistant/opSpecs";
-import type { Job, JobPriority, OpKind } from "@/lib/types";
+import type { Job, JobKind, JobPriority, OpKind } from "@/lib/types";
+import { formatBytes } from "@/lib/utils";
+
+/**
+ * The jobs whose `bytes_done` / `bytes_total` really are bytes (model download, model import, hash check).
+ * Every other job puts an item count into the same pair — documents (processing, indexing, field discovery),
+ * chunks (embedding), plan steps, files (organise).
+ */
+const BYTE_JOB_KINDS: readonly JobKind[] = ["model_download", "model_import", "model_hash"];
+
+/** The "done / total" counter of a job row: bytes for transfers, plain counts for everything else (CON-11). Null without a total. */
+export function describeJobCounter(job: Pick<Job, "kind" | "bytes_done" | "bytes_total">, locale: string): string | null {
+  if (job.bytes_total == null) return null;
+  const done = job.bytes_done ?? 0;
+  if (BYTE_JOB_KINDS.includes(job.kind)) return `${formatBytes(done)} / ${formatBytes(job.bytes_total)}`;
+  const n = new Intl.NumberFormat(locale);
+  return `${n.format(done)} / ${n.format(job.bytes_total)}`;
+}
 
 /**
  * The shell reports job subjects / details as compact English strings

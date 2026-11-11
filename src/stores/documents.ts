@@ -7,7 +7,7 @@ import { EVENTS, type DocumentsChanged } from "@/lib/types";
 import { resetAssistant } from "./assistant";
 import { resetAttachments } from "./attachments";
 import { resetGenerate } from "./generate";
-import { resetProjects } from "./projects";
+import { refreshProjectsForDocuments, resetProjects } from "./projects";
 import { useUiStore } from "./ui";
 
 /** Library UI state that survives navigation (view mode, filters, selection). */
@@ -27,12 +27,13 @@ interface DocumentsState {
 
 let invalidateTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** Coalesces bursts of `documents://changed` (one per imported file) into one refetch. */
+/** Coalesces bursts of `documents://changed` (one per imported file) into one refetch — of the library and of the project screens that show these documents. */
 function scheduleInvalidate() {
   if (invalidateTimer) return;
   invalidateTimer = setTimeout(() => {
     invalidateTimer = null;
     void queryClient.invalidateQueries({ queryKey: queryKeys.documents });
+    refreshProjectsForDocuments();
   }, 150);
 }
 
