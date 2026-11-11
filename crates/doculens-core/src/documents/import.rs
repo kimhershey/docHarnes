@@ -204,8 +204,36 @@ impl ImportPlan {
     }
 }
 
+/// File names that are never documents: the owner (lock) file Office keeps next to an open
+/// document (`~$보고서.docx`, hidden on Windows), Word's `~WRL0001.tmp`, LibreOffice's
+/// `.~lock.…#`, temporaries of browsers and of our own copies (`.crdownload`, `.part`, `.tmp` …)
+/// and shell metadata. A watched inbox registered them as broken documents (audit DOC-11).
+pub fn is_transient_name(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.starts_with("~$")
+        || lower.starts_with(".~lock.")
+        || [".tmp", ".temp", ".crdownload", ".part", ".partial", ".download"].iter().any(|ext| lower.ends_with(ext))
+        || matches!(lower.as_str(), "thumbs.db" | "ehthumbs.db" | "desktop.ini")
+}
+
+/// Hidden / system entries of a folder walk (Windows attributes: Explorer does not show them,
+/// and Office marks its owner files hidden). Dot-files are handled by name on every platform.
+#[cfg(windows)]
+fn is_hidden_or_system(entry: &std::fs::DirEntry) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+    const FILE_ATTRIBUTE_SYSTEM: u32 = 0x4;
+    entry.metadata().is_ok_and(|m| m.file_attributes() & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM) != 0)
+}
+
+#[cfg(not(windows))]
+fn is_hidden_or_system(_entry: &std::fs::DirEntry) -> bool {
+    false
+}
+
 /// Walks `sources` (files or folders) collecting candidate files; hidden
-/// entries, `.doculens/` and symlinks are skipped. Returns `(files, truncated)`.
+/// entries, lock / temporary files, `.doculens/` and symlinks are skipped (a file named
+/// explicitly is kept and classified by the plan). Returns `(files, truncated)`.
 pub fn collect_paths(sources: &[PathBuf], max_files: usize) -> (Vec<PathBuf>, bool) {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
@@ -237,6 +265,10 @@ pub fn collect_paths(sources: &[PathBuf], max_files: usize) -> (Vec<PathBuf>, bo
                 }
                 let Ok(ft) = entry.file_type() else { continue };
                 if ft.is_symlink() {
+                    continue;
+                }
+                // Lock files, temporaries and hidden / system entries are not documents.
+                if (ft.is_file() && is_transient_name(&name)) || is_hidden_or_system(&entry) {
                     continue;
                 }
                 let path = entry.path();
@@ -298,6 +330,11 @@ pub struct Classified {
 pub fn classify(path: &Path, meta: &std::fs::Metadata) -> Classified {
     if meta.len() == 0 {
         return Classified { reason: Some("empty".into()), ..Default::default() };
+    }
+    // An Office owner file (`~$보고서.docx`) or a half-written download carries a document
+    // extension or even document bytes; it still is not a document.
+    if path.file_name().is_some_and(|n| is_transient_name(&n.to_string_lossy())) {
+        return Classified { reason: Some("unsupported_extension".into()), ..Default::default() };
     }
     if meta.len() > MAX_FILE_BYTES {
         return Classified { reason: Some("too_large".into()), ..Default::default() };
@@ -1499,6 +1536,8 @@ pub fn inbox_plan(db: &Db, paths: &WorkspacePaths, options: &ImportOptions) -> R
 
 /// Deletes a document: DB row, cache, and (unless `keep_file`) the file —
 /// OS trash first, `.doculens/trash/` as fallback (USB sticks, network shares).
+/// A file that cannot be removed (held open by another program) fails the deletion with
+/// [`FILE_IN_USE`] and the document stays registered.
 pub fn delete_document(deps: &ImportDeps<'_>, id: &str, keep_file: bool) -> Result<Option<PathBuf>> {
     let doc = deps.db.with(|c| repo::get_document(c, id))?.ok_or_else(|| CoreError::NotFound(id.to_string()))?;
     let abs = doc.absolute_path(deps.paths);
@@ -1510,6 +1549,9 @@ pub fn delete_document(deps: &ImportDeps<'_>, id: &str, keep_file: bool) -> Resu
                 log::info!("os trash unavailable ({e}); using the workspace trash folder");
                 moved_to = Some(move_to_workspace_trash(deps.paths, &doc.id, &doc.original_name, &abs)?);
             }
+        }
+        if abs.exists() {
+            return Err(CoreError::Invalid(FILE_IN_USE.into()));
         }
     }
     DocumentCache::for_document(deps.paths, id).remove_all();
@@ -1537,10 +1579,27 @@ pub(crate) fn move_to_workspace_trash(
     let target =
         unique_target(&trash_dir, &format!("{}_{}", &doc_id[..8.min(doc_id.len())], original_name), &|_| false);
     std::fs::rename(abs, &target).or_else(|_| copy_or_move(abs, &target, true))?;
+    original_must_be_gone(abs, &target)?;
     if let Ok(f) = std::fs::File::options().write(true).open(&target) {
         let _ = f.set_modified(SystemTime::now());
     }
     Ok(target)
+}
+
+/// Reason of a deletion that failed because the file could not be removed (`CoreError::Invalid`).
+pub const FILE_IN_USE: &str = "file_in_use";
+
+/// A file another program holds open (Word, a PDF viewer) can still be copied, but not renamed
+/// or removed: the copy-then-remove fallback then leaves the original where it was. Reporting
+/// the document as deleted would drop its row while the file stays — and an inbox scan would
+/// register it again (audit DOC-12). The trash copy is taken back and the deletion fails.
+fn original_must_be_gone(original: &Path, trash_copy: &Path) -> Result<()> {
+    if !original.exists() {
+        return Ok(());
+    }
+    let _ = std::fs::remove_file(trash_copy);
+    log::warn!("a document file could not be removed (in use by another program?)");
+    Err(CoreError::Invalid(FILE_IN_USE.into()))
 }
 
 #[cfg(test)]
@@ -1788,6 +1847,50 @@ mod tests {
         assert_eq!(plan.unsupported_count, 2);
     }
 
+    /// Audit DOC-11: Word / Excel keep an owner file `~$보고서.docx` next to an open document; a
+    /// watched inbox registered it (and other temporaries) as a broken document.
+    #[test]
+    fn lock_files_and_temporaries_are_never_documents() {
+        let e = env();
+        let inbox = e.paths.inbox_dir();
+        // 162 bytes: the user name in ANSI and UTF-16, as Word writes it.
+        let mut owner = vec![4u8];
+        owner.extend_from_slice(b"hong");
+        owner.resize(55, 0);
+        owner.extend("hong".encode_utf16().flat_map(|u| u.to_le_bytes()));
+        owner.resize(162, 0);
+        std::fs::write(inbox.join("~$보고서.docx"), &owner).unwrap();
+        std::fs::write(inbox.join("~WRL0001.tmp"), &owner).unwrap();
+        write_blank_pdf(&inbox.join("견적서.pdf.crdownload"), 1, &[]).unwrap();
+        write_blank_pdf(&inbox.join("스캔.pdf.part"), 1, &[]).unwrap();
+        std::fs::write(inbox.join("Thumbs.db"), b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1thumbs").unwrap();
+        std::fs::write(inbox.join("보고서.txt"), "본문").unwrap();
+        for entry in std::fs::read_dir(&inbox).unwrap().flatten() {
+            crate::modelstore::mark_settled(&entry.path());
+        }
+        for name in
+            ["~$보고서.docx", "~$예산.xlsx", "~WRL0001.tmp", "a.TMP", "b.pdf.crdownload", "c.pdf.part", "Thumbs.db"]
+        {
+            assert!(is_transient_name(name), "{name}");
+        }
+        for name in ["보고서.docx", "~물결 메모.txt", "temp.pdf", "part.pdf", "tmp"] {
+            assert!(!is_transient_name(name), "{name}");
+        }
+        // The inbox scan and a folder import only see the real document.
+        let p = inbox_plan(&e.db, &e.paths, &ImportOptions::default()).unwrap();
+        assert_eq!(p.items.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(), ["보고서.txt"]);
+        let folder =
+            plan(&e.db, &e.paths, std::slice::from_ref(&inbox), &ImportOptions::default(), ImportSource::Folder)
+                .unwrap();
+        assert_eq!(folder.items.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(), ["보고서.txt"]);
+        // A lock file handed over by name is listed as unsupported, never imported.
+        let named =
+            plan(&e.db, &e.paths, &[inbox.join("~$보고서.docx")], &ImportOptions::default(), ImportSource::Drop)
+                .unwrap();
+        assert_eq!(named.new_count, 0);
+        assert!(matches!(named.items[0].status, ImportItemStatus::Unsupported { .. }), "{:?}", named.items[0]);
+    }
+
     #[test]
     fn classify_lets_the_content_decide() {
         let e = env();
@@ -1992,6 +2095,29 @@ mod tests {
         let second = move_to_workspace_trash(&e.paths, "0123456789abcdef", "old.pdf", &file).unwrap();
         assert_ne!(second, moved);
         assert!(second.is_file());
+    }
+
+    /// Audit DOC-12: a file another program holds open can be copied to the trash folder but not
+    /// removed; the deletion was still reported as done (row gone, file left — and re-registered by
+    /// the next inbox scan). The state after such a copy-then-remove is checked here directly: a
+    /// lock cannot be taken on this platform's file systems.
+    #[test]
+    fn a_file_that_cannot_be_removed_fails_the_deletion() {
+        let e = env();
+        let original = e.paths.inbox_dir().join("열려 있는 문서.pdf");
+        write_blank_pdf(&original, 1, &[]).unwrap();
+        std::fs::create_dir_all(e.paths.trash_dir()).unwrap();
+        let copy = e.paths.trash_dir().join("01234567_열려 있는 문서.pdf");
+        std::fs::copy(&original, &copy).unwrap();
+        // Both files exist: the original was not removed.
+        let err = original_must_be_gone(&original, &copy).unwrap_err();
+        assert!(matches!(err, CoreError::Invalid(ref m) if m == FILE_IN_USE), "{err:?}");
+        assert!(original.is_file() && !copy.exists(), "the trash copy is taken back, the document stays");
+        // The normal outcome: the original is gone, the trash copy stays.
+        std::fs::copy(&original, &copy).unwrap();
+        std::fs::remove_file(&original).unwrap();
+        original_must_be_gone(&original, &copy).unwrap();
+        assert!(copy.is_file());
     }
 
     #[test]

@@ -265,7 +265,12 @@ pub fn start_inbox_watcher(app: &AppHandle, paths: &WorkspacePaths) {
     let state = app.state::<AppState>();
     let inbox = paths.inbox_dir();
     let app2 = app.clone();
-    let relevant = |p: &std::path::Path| p.is_dir() || SourceKind::from_path(p).is_some();
+    // Office owner files (`~$보고서.docx`) and other temporaries are no reason to scan the inbox.
+    let relevant = |p: &std::path::Path| {
+        p.is_dir()
+            || (SourceKind::from_path(p).is_some()
+                && !p.file_name().is_some_and(|n| import::is_transient_name(&n.to_string_lossy())))
+    };
     // The callback runs on the watcher thread (which `Drop` joins): only hand off.
     let on_change = move || spawn_inbox_scan(&app2);
     match DirWatcher::start(&inbox, INBOX_SETTLE, "doculens-inbox-watch", relevant, on_change) {
@@ -681,16 +686,26 @@ pub fn delete_documents(app: &AppHandle, ids: &[String], keep_files: bool) -> Ui
     let deps = ctx.deps();
     let mut removed = Vec::new();
     let mut errors = Vec::new();
+    let mut in_use = 0usize;
     for id in ids {
         match import::delete_document(&deps, id, keep_files) {
             Ok(_) => removed.push(id.clone()),
-            Err(e) => errors.push(format!("{id}: {e}")),
+            Err(e) => {
+                // The file is held open by another program: the document stays (audit DOC-12).
+                if matches!(&e, CoreError::Invalid(m) if m == import::FILE_IN_USE) {
+                    in_use += 1;
+                }
+                errors.push(format!("{id}: {e}"));
+            }
         }
     }
     if !removed.is_empty() {
         emit_changed(app, "removed", removed.clone());
     }
     if !errors.is_empty() && removed.is_empty() {
+        if in_use == errors.len() {
+            return Err(UiError::invalid(import::FILE_IN_USE));
+        }
         return Err(UiError::invalid(errors.join("; ")));
     }
     Ok(removed)
