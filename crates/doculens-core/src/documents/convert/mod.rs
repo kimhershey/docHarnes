@@ -153,9 +153,32 @@ pub fn write_blank_pdf_sized(path: &Path, pages: u32, texts: &[String], (w_pt, h
     std::fs::write(path, out).map_err(|e| CoreError::io(path, e))
 }
 
-/// Reads an office document into the model.
+/// Text of a caught panic payload (`panic!("…")` carries a `String` or a `&str`).
+pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_else(|| "panic".to_string())
+}
+
+/// Runs a reader / writer and turns a panic inside it into a conversion error, the way the HWP
+/// reader always did: a malformed file fails its own document instead of unwinding through the
+/// import batch (and failing the whole job with the rest of the files unprocessed).
+pub(crate) fn guard<T>(what: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(r) => r,
+        Err(payload) => {
+            let msg = panic_message(payload.as_ref());
+            log::error!("{what}: converter panicked: {msg}");
+            Err(CoreError::Convert(format!("{what} 변환기 내부 오류: {msg}")))
+        }
+    }
+}
+
+/// Reads an office document into the model. A panic inside a reader is a conversion error.
 pub fn read_document(path: &Path, kind: SourceKind) -> Result<DocModel> {
-    match kind {
+    guard(kind.as_str(), || match kind {
         SourceKind::Hwpx => hwpx::read(path),
         SourceKind::Docx => docx::read(path),
         SourceKind::Hwp => hwp::read(path),
@@ -170,7 +193,7 @@ pub fn read_document(path: &Path, kind: SourceKind) -> Result<DocModel> {
         SourceKind::Pdf | SourceKind::Image => {
             Err(CoreError::Unsupported(format!("{} is not an office document", kind.as_str())))
         }
-    }
+    })
 }
 
 /// Result of a conversion: the model (text/structure), the HTML bundle and —
@@ -190,17 +213,22 @@ pub struct Conversion {
 /// usable, design §3.4 "변환본" semantics).
 pub fn convert(source: &Path, kind: SourceKind, out_dir: &Path, printer: &dyn PdfPrinter) -> Result<Conversion> {
     let model = read_document(source, kind)?;
-    if out_dir.exists() {
-        std::fs::remove_dir_all(out_dir).map_err(|e| CoreError::io(out_dir, e))?;
-    }
-    let html = html::write_bundle(&model, out_dir)?;
-    let pdf = out_dir.join("document.pdf");
-    let (pdf, print_error) = match printer.print_to_pdf(&html, &pdf, PageSize::for_model(&model)) {
-        Ok(()) if pdf.is_file() && std::fs::metadata(&pdf).map(|m| m.len() > 0).unwrap_or(false) => (Some(pdf), None),
-        Ok(()) => (None, Some("printer produced no PDF".to_string())),
-        Err(e) => (None, Some(e.to_string())),
-    };
-    Ok(Conversion { model, html, pdf, print_error, printer: printer.name() })
+    // The HTML writer and the printer run under the same guard as the readers.
+    guard(kind.as_str(), || {
+        if out_dir.exists() {
+            std::fs::remove_dir_all(out_dir).map_err(|e| CoreError::io(out_dir, e))?;
+        }
+        let html = html::write_bundle(&model, out_dir)?;
+        let pdf = out_dir.join("document.pdf");
+        let (pdf, print_error) = match printer.print_to_pdf(&html, &pdf, PageSize::for_model(&model)) {
+            Ok(()) if pdf.is_file() && std::fs::metadata(&pdf).map(|m| m.len() > 0).unwrap_or(false) => {
+                (Some(pdf), None)
+            }
+            Ok(()) => (None, Some("printer produced no PDF".to_string())),
+            Err(e) => (None, Some(e.to_string())),
+        };
+        Ok(Conversion { model, html, pdf, print_error, printer: printer.name() })
+    })
 }
 
 #[cfg(test)]
@@ -231,6 +259,32 @@ mod tests {
         assert_eq!(PageSize::for_model(&DocModel::default()), PageSize::A4);
         let (w_pt, h_pt) = PageSize::A4.points();
         assert!((w_pt - 595.28).abs() < 0.01 && (h_pt - 841.89).abs() < 0.01);
+    }
+
+    /// Audit DOC-1: a panic inside a reader, the HTML writer or the printer is a conversion error
+    /// of that document, never an unwinding import batch.
+    #[test]
+    fn a_panicking_converter_is_a_conversion_error() {
+        let err = guard::<()>("text", || panic!("byte index 12 is not a char boundary")).unwrap_err();
+        assert_eq!(err.code(), "convert");
+        assert!(err.to_string().contains("byte index 12"), "{err}");
+        assert_eq!(guard("text", || Ok(7)).unwrap(), 7);
+        assert_eq!(guard::<()>("text", || Err(CoreError::Cancelled)).unwrap_err().code(), "cancelled");
+
+        struct PanickingPrinter;
+        impl PdfPrinter for PanickingPrinter {
+            fn print_to_pdf(&self, _html: &Path, _pdf: &Path, _page: PageSize) -> Result<()> {
+                panic!("printer exploded")
+            }
+            fn name(&self) -> &'static str {
+                "panicking"
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let memo = dir.path().join("memo.txt");
+        std::fs::write(&memo, "R&D 센터 소개\n본문").unwrap();
+        let err = convert(&memo, SourceKind::Text, &dir.path().join("out"), &PanickingPrinter).unwrap_err();
+        assert!(matches!(&err, CoreError::Convert(m) if m.contains("printer exploded")), "{err}");
     }
 
     #[test]

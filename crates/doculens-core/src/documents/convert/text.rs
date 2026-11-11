@@ -328,6 +328,9 @@ fn markdown_model(text: &str) -> DocModel {
     model
 }
 
+/// Longest character reference looked for after an `&` (bytes, the `&` and the `;` included).
+const MAX_ENTITY_BYTES: usize = 12;
+
 /// Decodes the common named and numeric character references.
 fn decode_entities(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -335,7 +338,10 @@ fn decode_entities(s: &str) -> String {
     while let Some(pos) = rest.find('&') {
         out.push_str(&rest[..pos]);
         rest = &rest[pos..];
-        let Some(end) = rest[..rest.len().min(12)].find(';') else {
+        // The `;` is searched in the bytes: a `&` followed by Korean text ("R&D 센터") has no char
+        // boundary at byte 12, and `;` is ASCII, so its byte index is always a boundary.
+        let window = &rest.as_bytes()[..rest.len().min(MAX_ENTITY_BYTES)];
+        let Some(end) = window.iter().position(|b| *b == b';') else {
             out.push('&');
             rest = &rest[1..];
             continue;
@@ -348,6 +354,18 @@ fn decode_entities(s: &str) -> String {
             "quot" => Some('"'),
             "apos" | "#39" => Some('\''),
             "nbsp" => Some(' '),
+            "middot" => Some('·'),
+            "hellip" => Some('…'),
+            "ndash" => Some('–'),
+            "mdash" => Some('—'),
+            "lsquo" => Some('‘'),
+            "rsquo" => Some('’'),
+            "ldquo" => Some('“'),
+            "rdquo" => Some('”'),
+            "bull" => Some('•'),
+            "times" => Some('×'),
+            "copy" => Some('©'),
+            "reg" => Some('®'),
             n if n.starts_with("#x") || n.starts_with("#X") => {
                 u32::from_str_radix(&n[2..], 16).ok().and_then(char::from_u32)
             }
@@ -371,7 +389,9 @@ fn decode_entities(s: &str) -> String {
 
 /// Removes `<tag …>…</tag>` blocks (case-insensitive) such as scripts and styles.
 fn strip_element(html: &str, tag: &str) -> String {
-    let lower = html.to_lowercase();
+    // ASCII lower-casing keeps every byte offset valid for `html` (Unicode lower-casing changes
+    // the length of some characters, e.g. `İ`, and the offsets would then split a character).
+    let lower = html.to_ascii_lowercase();
     let open = format!("<{tag}");
     let close = format!("</{tag}>");
     let mut out = String::with_capacity(html.len());
@@ -391,7 +411,7 @@ fn strip_element(html: &str, tag: &str) -> String {
 fn html_model(html: &str) -> DocModel {
     let mut model = DocModel::default();
     let body = strip_element(&strip_element(html, "script"), "style");
-    let lower = body.to_lowercase();
+    let lower = body.to_ascii_lowercase();
     if let Some(s) = lower.find("<title") {
         if let Some(gt) = lower[s..].find('>') {
             if let Some(e) = lower[s + gt..].find("</title>") {
@@ -661,5 +681,43 @@ mod tests {
         std::fs::write(&fake, "<!DOCTYPE html><html><body><h2>영수증</h2><p>합계 10,000원</p></body></html>").unwrap();
         let model = read(&fake).unwrap();
         assert_eq!(model.title.as_deref(), Some("영수증"));
+    }
+
+    /// Audit DOC-1: `&` followed by Korean text put byte 12 of the entity window inside a Hangul
+    /// syllable and the slice panicked (the import job failed, the rest of the batch was left).
+    #[test]
+    fn ampersand_before_korean_text_is_not_a_panic() {
+        for (input, expected) in [
+            ("R&D 센터 소개", "R&D 센터 소개"),
+            ("기획&middot;조정", "기획·조정"),
+            ("연구&amp;개발본부", "연구&개발본부"),
+            ("매출&이익 분석", "매출&이익 분석"),
+            ("A&B", "A&B"),
+            ("R&D센터", "R&D센터"),
+            ("끝&", "끝&"),
+            ("&#44032;&#xB098;", "가나"),
+            ("&unknown; 그대로", "&unknown; 그대로"),
+        ] {
+            assert_eq!(decode_entities(input), expected, "{input}");
+        }
+        // The whole reader, through the guarded entry point the import uses.
+        let dir = tempfile::tempdir().unwrap();
+        let html = dir.path().join("rnd.html");
+        std::fs::write(
+            &html,
+            "<html><head><title>R&D 센터 소개</title></head><body><h1>기획&middot;조정</h1>\
+             <p>연구&amp;개발본부 매출&이익 분석</p></body></html>",
+        )
+        .unwrap();
+        let model = crate::documents::convert::read_document(&html, crate::documents::SourceKind::Text).unwrap();
+        assert_eq!(model.title.as_deref(), Some("R&D 센터 소개"));
+        let text = model.text();
+        assert!(text.contains("기획·조정") && text.contains("연구&개발본부 매출&이익 분석"), "{text}");
+        // Characters whose lower-case form has another byte length (İ → i̇) used to shift the tag
+        // offsets taken from the lower-cased copy.
+        let tr = dir.path().join("tr.html");
+        std::fs::write(&tr, "<html><body><p>İSTANBUL İİİ</p><SCRIPT>x()</SCRIPT><p>본문 İ</p></body></html>").unwrap();
+        let text = read(&tr).unwrap().text();
+        assert!(text.contains("İSTANBUL İİİ") && text.contains("본문 İ") && !text.contains("x()"), "{text}");
     }
 }

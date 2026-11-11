@@ -754,6 +754,11 @@ fn attach_to_collection(conn: &rusqlite::Connection, options: &ImportOptions, id
     Ok(())
 }
 
+/// `documents.error` of a document whose conversion / rendering is running right now (status
+/// `error` for crash safety, see [`process_document`]). The text is stable: the UI shows such a
+/// document as "처리 중" instead of a failure while a document job is alive.
+pub const PROCESSING_MARKER: &str = "interrupted while processing";
+
 /// Converts (office formats) and renders a registered document, replacing its
 /// pages and setting the final status. Errors are recorded on the document
 /// (status `error`) and returned.
@@ -767,8 +772,11 @@ pub fn process_document(
 ) -> Result<()> {
     // Crash safety: if the process dies inside a parser/renderer (abort, OOM), the row
     // must not stay `importing` (which the startup rescan would retry forever).
-    deps.db.with(|c| repo::set_status(c, &doc.id, DocumentStatus::Error, Some("interrupted while processing")))?;
-    let result = process_inner(deps, doc, render_pages, dpi, cancel, page_progress);
+    deps.db.with(|c| repo::set_status(c, &doc.id, DocumentStatus::Error, Some(PROCESSING_MARKER)))?;
+    // A panic anywhere in the conversion / rendering of this document fails this document only
+    // (the batch goes on with the next file).
+    let result =
+        convert::guard(doc.source_kind.as_str(), || process_inner(deps, doc, render_pages, dpi, cancel, page_progress));
     match &result {
         Ok(status) => {
             deps.db.with(|c| repo::set_status(c, &doc.id, *status, None))?;
@@ -1795,6 +1803,39 @@ mod tests {
         if let Some(p) = moved {
             assert!(p.starts_with(e.paths.trash_dir()));
         }
+    }
+
+    /// Audit DOC-1: a converter panic used to unwind through `run` — the job failed and the files
+    /// after the bad one were never processed.
+    #[test]
+    fn a_panic_in_one_document_does_not_stop_the_batch() {
+        struct PanickingPrinter;
+        impl PdfPrinter for PanickingPrinter {
+            fn print_to_pdf(&self, _html: &Path, _pdf: &Path, _page: convert::PageSize) -> Result<()> {
+                panic!("printer exploded")
+            }
+            fn name(&self) -> &'static str {
+                "panicking"
+            }
+        }
+        let e = env();
+        let ext = external_dir(&e);
+        std::fs::write(ext.join("a-memo.html"), "<html><body><p>R&D 센터 소개</p></body></html>").unwrap();
+        RgbImage::from_pixel(120, 80, Rgb([200, 200, 200])).save(ext.join("b-scan.jpg")).unwrap();
+        let d = ImportDeps { printer: &PanickingPrinter, ..deps(&e, None) };
+        let plan =
+            plan(&e.db, &e.paths, std::slice::from_ref(&ext), &ImportOptions::default(), ImportSource::Drop).unwrap();
+        assert_eq!(plan.new_count, 2);
+        let report = run(&d, &plan, None, &mut |_| {}, &mut |_, _| {}).unwrap();
+        assert_eq!(report.failed.len(), 1, "{report:?}");
+        assert_eq!(report.failed[0].0, "a-memo.html");
+        assert!(report.failed[0].1.contains("printer exploded"), "{:?}", report.failed);
+        assert_eq!(report.imported.len(), 1, "the file after the bad one is still imported");
+        let docs = e.db.with(|c| repo::list_documents(c, &DocumentFilter::default())).unwrap();
+        let bad = docs.iter().find(|x| x.original_name == "a-memo.html").unwrap();
+        assert_eq!(bad.status, DocumentStatus::Error);
+        assert!(bad.error.as_deref().is_some_and(|m| m.contains("printer exploded") && m != PROCESSING_MARKER));
+        assert_eq!(docs.iter().find(|x| x.original_name == "b-scan.jpg").unwrap().status, DocumentStatus::Rendered);
     }
 
     #[test]
