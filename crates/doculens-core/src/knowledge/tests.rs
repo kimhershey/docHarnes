@@ -1285,6 +1285,53 @@ fn editions_are_searchable_again_once_their_latest_edition_is_gone() {
     assert_eq!(groups[0].documents.iter().map(|d| d.document_id.as_str()).collect::<Vec<_>>(), vec!["reg2", "reg0"]);
 }
 
+/// KNO-6: chunks indexed while an embedding run is busy are embedded by that run — it used to stop at the
+/// number of chunks pending when it started and leave the new documents without vectors.
+#[test]
+fn an_embedding_run_picks_up_chunks_indexed_meanwhile() {
+    /// Indexes one more document while the first batch is "at the engine".
+    struct Interleaving<'a> {
+        inner: HashEmbedder,
+        world: &'a World,
+        late: std::sync::Mutex<bool>,
+    }
+    impl Embedder for Interleaving<'_> {
+        fn model_id(&self) -> &str {
+            self.inner.model_id()
+        }
+        fn embed(&self, inputs: &[String]) -> crate::error::Result<Vec<Vec<f32>>> {
+            let mut late = self.late.lock().unwrap();
+            if !*late {
+                *late = true;
+                let text = format!("{REGULATION_V2}\n제6조(부칙) 임베딩 도중에 색인된 문서이다.");
+                add_doc(&self.world.db, "late", "나중규정.pdf", DocumentRole::Knowledge, &[&text]);
+                let report = index_pending(&self.world.index_deps(), None, false, None, &mut |_| {}).unwrap();
+                assert_eq!(report.indexed, vec!["late".to_string()]);
+                assert!(report.chunks >= 3, "the late document must outnumber one batch: {}", report.chunks);
+            }
+            self.inner.embed(inputs)
+        }
+    }
+    let w = World::new();
+    let before = w.db.with(embed::pending_count).unwrap();
+    let embedder = Interleaving { inner: HashEmbedder::new(16), world: &w, late: std::sync::Mutex::new(false) };
+    let mut shown: Vec<(u64, u64)> = Vec::new();
+    let report = embed::embed_pending(&w.db, &embedder, 2, None, &mut |done, total| shown.push((done, total))).unwrap();
+    let (total, embedded) = w.db.with(repo::chunk_counts).unwrap();
+    assert!(total > before, "the late document added chunks");
+    assert_eq!((embedded, report.remaining, report.failed), (total, 0, 0), "{report:?}");
+    assert_eq!(report.embedded, total);
+    assert!(w.db.with(|c| repo::list_chunks(c, "late")).unwrap().iter().all(|c| c.embedded));
+    // The progress total follows the run instead of ending above 100 %.
+    assert!(shown.iter().all(|(done, total)| done <= total), "{shown:?}");
+    assert_eq!(shown.last(), Some(&(total, total)));
+    // The new chunks are searchable by meaning straight away.
+    let mut req = SearchRequest::new("임베딩 도중에 색인된 문서");
+    req.mode = SearchMode::Semantic;
+    let hits = search(&w.search_deps(Some(&embedder.inner)), &req).unwrap().hits;
+    assert!(hits.iter().any(|h| h.document_id == "late"), "{:?}", hits.iter().map(|h| &h.document_id).collect::<Vec<_>>());
+}
+
 /// KNO-8: a glossary term the analyzer splits into morphemes (공급가액 → 공급 + 가액 under ko-dic) and a
 /// synonym of several words ("net amount") expand the query like a single-word term does.
 #[test]

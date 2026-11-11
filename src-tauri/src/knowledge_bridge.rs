@@ -3,7 +3,7 @@
 //! `knowledge://changed` / `knowledge://answer` events.
 
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -304,12 +304,21 @@ pub fn index_job(app: &AppHandle, ids: Option<Vec<String>>, force: bool) -> UiRe
     Ok(Some(job))
 }
 
+/// An embedding run was asked for while one was active. The active run embeds whatever is indexed while it
+/// walks the chunks, but a request that arrives in its last moments would be lost: the run looks at this
+/// flag when it ends and starts once more.
+static EMBED_AGAIN: AtomicBool = AtomicBool::new(false);
+
 /// Embeds chunks without vectors. `load_model` starts the engine / loads the
 /// embedding model when needed (user action); automatic runs only use an
 /// already loaded model.
 pub fn embed_job(app: &AppHandle, load_model: bool) -> UiResult<Option<String>> {
     let state = app.state::<AppState>();
-    if state.switching.load(Ordering::SeqCst) || state.jobs.is_active_kind(&[JobKind::KnowledgeEmbed]) {
+    if state.switching.load(Ordering::SeqCst) {
+        return Ok(None);
+    }
+    if state.jobs.is_active_kind(&[JobKind::KnowledgeEmbed]) {
+        EMBED_AGAIN.store(true, Ordering::SeqCst);
         return Ok(None);
     }
     let ctx = context(app)?;
@@ -333,9 +342,13 @@ pub fn embed_job(app: &AppHandle, load_model: bool) -> UiResult<Option<String>> 
     }
     let load_model = load_model || !info.loaded;
     let Some((job, cancel)) = state.jobs.create_if_idle(JobKind::KnowledgeEmbed, &model) else {
+        EMBED_AGAIN.store(true, Ordering::SeqCst);
         return Ok(None);
     };
+    // This run covers everything pending now, earlier requests included.
+    EMBED_AGAIN.store(false, Ordering::SeqCst);
     let job_id = job.clone();
+    let generation = ctx.generation;
     spawn_job_thread(
         "doculens-kb-embed",
         app.clone(),
@@ -361,7 +374,18 @@ pub fn embed_job(app: &AppHandle, load_model: bool) -> UiResult<Option<String>> 
                 if report.reset { " (rebuilt for a new model)" } else { "" }
             )))
         },
-        None,
+        Some(Box::new(move |app: &AppHandle| {
+            // A request skipped while this run was active (documents indexed as it finished): run once more.
+            // Never chain into a workspace that is being closed / was switched meanwhile.
+            let state = app.state::<AppState>();
+            let again = EMBED_AGAIN.swap(false, Ordering::SeqCst);
+            if again
+                && !state.switching.load(Ordering::SeqCst)
+                && state.workspace_generation.load(Ordering::SeqCst) == generation
+            {
+                let _ = embed_job(app, false);
+            }
+        }) as AfterJob),
     );
     Ok(Some(job))
 }
