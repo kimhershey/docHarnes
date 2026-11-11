@@ -240,7 +240,10 @@ impl Backend {
 
 /// Backend selection rule (design §3.3.1 / §3.12): NVIDIA + CUDA pack
 /// installed → cu129 if driver CUDA ≥ 12.8, cu121 if ≥ 12.1; any other GPU
-/// → Vulkan (when a Vulkan engine is installed); otherwise CPU.
+/// → Vulkan (when a Vulkan engine is installed); otherwise CPU. An explicit
+/// Vulkan preference is honoured even when no GPU was detected (detection only
+/// covers NVML and what a Vulkan pack lists; the user knows the machine).
+/// The result is one of `installed`, or `Cpu` as the last resort.
 pub fn select_backend(
     gpu: Option<&GpuInfo>,
     installed: &[Backend],
@@ -258,7 +261,8 @@ pub fn select_backend(
                 None
             }
         });
-    let vulkan_choice = if gpu.is_some() && has(Backend::Vulkan) { Some(Backend::Vulkan) } else { None };
+    let vulkan_choice =
+        if (gpu.is_some() || preference == P::Vulkan) && has(Backend::Vulkan) { Some(Backend::Vulkan) } else { None };
 
     match preference {
         P::Cpu => Backend::Cpu,
@@ -410,6 +414,25 @@ mod tests {
         let g = gpu("NVIDIA RTX 4090", 24576, Some(20000), Some((12, 9)));
         assert_eq!(select_backend(Some(&g), &all, BackendPreference::Cpu), Backend::Cpu);
         assert_eq!(select_backend(Some(&g), &all, BackendPreference::Vulkan), Backend::Vulkan);
+    }
+
+    /// PLT-4: NVML only sees NVIDIA cards, so on an AMD / Intel PC no GPU may be known.
+    #[test]
+    fn explicit_vulkan_is_honoured_without_a_detected_gpu() {
+        let lite = [Backend::Vulkan, Backend::Cpu];
+        assert_eq!(select_backend(None, &lite, BackendPreference::Vulkan), Backend::Vulkan);
+        // … but only when a Vulkan pack exists, and "auto" still needs a GPU to leave the CPU.
+        assert_eq!(select_backend(None, &[Backend::Cpu], BackendPreference::Vulkan), Backend::Cpu);
+        assert_eq!(select_backend(None, &lite, BackendPreference::Auto), Backend::Cpu);
+        assert_eq!(select_backend(None, &lite, BackendPreference::Cuda), Backend::Cpu);
+        // A GPU the Vulkan pack listed (source = engine, no CUDA details) selects Vulkan on "auto".
+        let mut amd = gpu("AMD Radeon RX 7600", 8176, Some(7900), None);
+        amd.source = GpuSource::Engine;
+        assert_eq!(select_backend(Some(&amd), &lite, BackendPreference::Auto), Backend::Vulkan);
+        assert_eq!(select_backend(Some(&amd), &lite, BackendPreference::Cuda), Backend::Vulkan);
+        assert_eq!(select_backend(Some(&amd), &lite, BackendPreference::Cpu), Backend::Cpu);
+        // Whatever is selected is installed, except the CPU last resort.
+        assert_eq!(select_backend(Some(&amd), &[Backend::Cu121], BackendPreference::Auto), Backend::Cpu);
     }
 
     #[test]

@@ -13,9 +13,9 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use doculens_core::engine::{
-    locate, presets, EngineBinary, EngineConfig, EngineEvent, EngineStatus, PresetBuild, PresetContext,
+    devices, locate, presets, EngineBinary, EngineConfig, EngineEvent, EngineStatus, PresetBuild, PresetContext,
 };
-use doculens_core::hw::{self, HardwareSummary, TierAssessment};
+use doculens_core::hw::{self, Backend, HardwareSummary, TierAssessment};
 use doculens_core::modelstore::{
     self, DiscoveredModel, ImportPlan, InstallState, ModelHealth, ModelWatcher, ScanOptions,
 };
@@ -33,6 +33,8 @@ pub const EV_MODELS_CHANGED: &str = "models://changed";
 
 const LOAD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const WATCH_SETTLE: Duration = Duration::from_secs(2);
+/// `llama-server --list-devices` of the Vulkan pack during the hardware probe (normally < 2 s).
+const VULKAN_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 
 // ---------------------------------------------------------------------------
 // Model folders
@@ -162,10 +164,24 @@ pub fn engine_vram_in_use_mib(state: &AppState) -> u64 {
 }
 
 /// The shell's hardware probe: the core probe plus the engine's own share of the VRAM at this
-/// moment, so a probe taken while a model is loaded does not lower the tier (PLT-3).
+/// moment, so a probe taken while a model is loaded does not lower the tier (PLT-3). NVML only
+/// knows NVIDIA cards: when it finds no GPU, the Vulkan pack (AppData or bundled) is asked for
+/// its devices, so an AMD / Intel card selects the Vulkan backend and a GPU tier (PLT-4).
 pub fn probe_hardware(state: &AppState) -> HardwareSummary {
     let mut hw = hw::probe();
     hw.engine_used_mib = engine_vram_in_use_mib(state);
+    if hw.gpus.is_empty() {
+        let roots = state.app().map(bundled_roots).unwrap_or_default();
+        if let Some(pack) = locate::find_pack(&state.app_paths.engines_dir(), &roots, Backend::Vulkan) {
+            match devices::probe_vulkan_gpus(&pack.path, VULKAN_PROBE_TIMEOUT) {
+                Ok(gpus) => {
+                    log::info!("hardware: the Vulkan pack lists {} GPU(s)", gpus.len());
+                    hw.gpus = gpus;
+                }
+                Err(e) => log::warn!("hardware: asking the Vulkan pack for its devices failed: {e}"),
+            }
+        }
+    }
     hw
 }
 
