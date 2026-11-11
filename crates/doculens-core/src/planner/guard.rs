@@ -66,6 +66,9 @@ const REWRITE_EN: &[&str] = &[
     "formal",
     "bullet",
 ];
+/// Words of an instruction that asks for a document to be written, not for its text to be worked on.
+const DRAFT_WORDS: &[&str] =
+    &["작성", "초안", "만들", "문서로", "양식", "draft", "create", "compose", "generate", "document"];
 /// Shortest body that counts as "the text came with the request".
 const MIN_BODY_CHARS: usize = 60;
 /// Longest instruction part; anything longer is a question in its own right.
@@ -147,13 +150,19 @@ pub fn make_text_only(text: &str, plan: &mut Plan, ko: bool) {
 /// no folder or filter to one text-only `answer` when the sentence carries the text it talks about.
 /// Returns the note shown on the card when it did.
 pub fn prefer_text_only_answer(text: &str, plan: &mut Plan, ko: bool) -> Option<PlanIssue> {
-    carried_text(text)?;
+    let body = carried_text(text)?;
     if plan.operations.is_empty() || explicit_scope(plan) {
         return None;
     }
+    // A text to polish that the model turned into a new document ("다음 문장을 다듬어줘: …" came back from
+    // the real model as `draft_document` over that text) is still a text to polish — unless the
+    // instruction itself asks for a document.
+    let instruction = super::rules::command_of(text).replace(body, " ").to_lowercase();
+    let asks_for_document = DRAFT_WORDS.iter().any(|w| instruction.contains(w));
     let knowledge_only = plan.operations.iter().all(|op| match op {
         Op::Summarize { .. } | Op::Explain { .. } | Op::Compare { .. } | Op::Search { .. } => true,
         Op::Answer { knowledge, .. } => knowledge.unwrap_or(true),
+        Op::DraftDocument { sources, .. } => !asks_for_document && sources.is_empty(),
         _ => false,
     });
     if !knowledge_only {
@@ -848,6 +857,30 @@ mod tests {
         let mut p = model_plan(vec![dpi()]);
         assert!(codes("렌더 DPI를 200으로 바꿔줘", &mut p).is_empty());
         assert!(!p.requires_confirmation);
+
+        // "다음 문장을 다듬어줘: …" came back as a new document drafted from the sentence.
+        let draft = |content: &str| Op::DraftDocument {
+            form_ref: Some("dev_contract".into()),
+            format_description: None,
+            content: content.to_string(),
+            sources: Vec::new(),
+            output: None,
+            tone: None,
+            length: None,
+        };
+        let text = format!("다음 문장을 다듬어줘: {BODY}");
+        let mut p = model_plan(vec![draft(BODY)]);
+        p.requires_confirmation = true;
+        assert!(prefer_text_only_answer(&text, &mut p, true).is_some());
+        assert!(
+            matches!(&p.operations[..], [Op::Answer { knowledge: Some(false), question, .. }] if question == &text)
+        );
+        assert!(!p.requires_confirmation);
+        // An instruction that asks for a document keeps the draft.
+        let text = format!("다음 내용을 다듬어서 회의록으로 작성해줘: {BODY}");
+        let mut p = model_plan(vec![draft(BODY)]);
+        assert!(prefer_text_only_answer(&text, &mut p, true).is_none());
+        assert!(matches!(&p.operations[..], [Op::DraftDocument { .. }]));
 
         // "배율 130으로 바꾸고 견적서 요약해줘": the summary had no scope.
         let ctx = crate::planner::PlanContext {
