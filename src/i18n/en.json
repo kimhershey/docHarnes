@@ -2701,6 +2701,9 @@
     "result": {
       "meta": "{{fields}} fields · {{issues}} issues · {{source}}"
     },
+    "layout": {
+      "panes": "Switch between preview and editor"
+    },
     "open_busy_title": "A draft is being generated",
     "open_busy": "Another draft is being generated on the Compose screen. If you open this one now, the running job's result stays available on the Activity screen."
   },

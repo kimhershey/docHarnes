@@ -323,6 +323,71 @@ test.describe("P6 document generation", () => {
     await expect(page.getByTestId("generate-revise-scope-lost")).toHaveCount(0);
   });
 
+  test("the form's selects show their values in full; a narrow window gives the editor a pane of its own (UI-5)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openGenerate(page);
+    /** The value of a select is neither wrapped into clamped lines ("격…") nor cut sideways. */
+    const shownInFull = async (testId: string, text: string) => {
+      const value = page.getByTestId(testId).locator("span").first();
+      await expect(value).toHaveText(text);
+      expect(await value.evaluate((el) => el.scrollHeight <= el.clientHeight + 1 && el.scrollWidth <= el.clientWidth + 1), `${testId} shows "${text}" in full`).toBe(true);
+    };
+    const checkSelects = async () => {
+      await shownInFull("generate-tone", ko.generate.tone.formal);
+      await shownInFull("generate-length", ko.generate.length.medium);
+      await shownInFull("generate-output", ko.generate.output.hwpx);
+      // The "토큰 예산" label stays on one line.
+      const label = (await page.locator('label[for="gen-budget"]').boundingBox())!;
+      expect(label.height, "토큰 예산 is one line").toBeLessThan(24);
+    };
+
+    // 1280 px at 100 %: three columns.
+    await expect(page.getByTestId("generate-layout")).toHaveAttribute("data-layout", "wide");
+    await checkSelects();
+    await page.getByTestId("generate-template").click();
+    await page.getByRole("option", { name: ko.generate.templates.estimate }).click();
+    await page.getByTestId("generate-content").fill("DocuLens에 백엔드개발 고급 3MM 단가 2,500,000원, 유효기간 30일 견적서");
+    await page.getByTestId("generate-run").click();
+    await expect(page.getByTestId("generate-preview")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("generate-pane-switch")).toHaveCount(0);
+    await expect(page.getByTestId("generate-editor")).toBeVisible();
+    await expect(page.getByTestId("generate-revise-panel")).toHaveAttribute("data-placement", "bottom");
+
+    // A 1000 px window (like 1280 px at about 130 %): the form column beside one pane. The preview shows first;
+    // "편집" gives the editor the whole height instead of two fifths of it.
+    await page.setViewportSize({ width: 1000, height: 800 });
+    const layout = page.getByTestId("generate-layout");
+    await expect(layout).toHaveAttribute("data-layout", "narrow");
+    await checkSelects();
+    await expect(page.getByTestId("generate-preview-frame")).toBeVisible();
+    await expect(page.getByTestId("generate-editor")).toBeHidden();
+    // The 초안 어시스턴트 is the first thing in the form column: in view without scrolling.
+    await expect(page.getByTestId("generate-revise-panel")).toHaveAttribute("data-placement", "top");
+    await expect(page.getByTestId("generate-revise-instruction")).toBeInViewport();
+    await page.getByTestId("generate-pane-editor").click();
+    await expect(page.getByTestId("generate-editor")).toBeVisible();
+    await expect(page.getByTestId("generate-preview-frame")).toBeHidden();
+    const whole = (await layout.boundingBox())!;
+    const editor = (await page.getByTestId("generate-pane-editor-box").boundingBox())!;
+    expect(editor.height, "the editor pane takes (almost) the whole height").toBeGreaterThan(whole.height * 0.85);
+    // Editing works in the pane, and the preview follows when it is shown again.
+    await page.getByTestId("generate-title").fill("견적서 (좁은 창)");
+    await page.getByTestId("generate-pane-preview").click();
+    await expect(page.getByTestId("generate-preview-frame")).toBeVisible();
+    await expect.poll(async () => (await page.getByTestId("generate-preview-frame").getAttribute("srcdoc")) ?? "", { timeout: 10_000 }).toContain("견적서 (좁은 창)");
+    // Nothing scrolls sideways and the page itself does not scroll.
+    const main = page.locator("main#main");
+    expect(await main.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+    expect(await main.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(1);
+
+    // Back to the wide window: both panes side by side again.
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await expect(layout).toHaveAttribute("data-layout", "wide");
+    await expect(page.getByTestId("generate-editor")).toBeVisible();
+    await expect(page.getByTestId("generate-preview-frame")).toBeVisible();
+  });
+
   test("saving as Markdown registers the file in the library like the other formats (GEN-9)", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);

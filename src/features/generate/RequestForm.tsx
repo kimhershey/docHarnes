@@ -156,11 +156,13 @@ export function RequestForm({
         <span>{t("generate.form.use_knowledge")}</span>
         <Switch checked={request.use_knowledge} onCheckedChange={(v) => onChange({ use_knowledge: v })} aria-label={t("generate.form.use_knowledge")} data-testid="generate-use-knowledge" />
       </label>
-      <div className="grid grid-cols-3 gap-2">
-        <div className="flex flex-col gap-1.5">
+      {/* 어조 and 길이 share a row, 출력 형식 has its own: three selects side by side left room for one letter each
+          in this 16–20 rem column ("격…", "H…", UI-5). */}
+      <div className="grid grid-cols-2 gap-2" data-testid="generate-options">
+        <div className="flex min-w-0 flex-col gap-1.5">
           <Label htmlFor="gen-tone">{t("generate.form.tone")}</Label>
           <Select value={request.tone} onValueChange={(v) => onChange({ tone: v as Tone })}>
-            <SelectTrigger id="gen-tone" className="h-8" aria-label={t("generate.form.tone")} data-testid="generate-tone">
+            <SelectTrigger id="gen-tone" className="h-8 px-2" aria-label={t("generate.form.tone")} data-testid="generate-tone">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -172,10 +174,10 @@ export function RequestForm({
             </SelectContent>
           </Select>
         </div>
-        <div className="flex flex-col gap-1.5">
+        <div className="flex min-w-0 flex-col gap-1.5">
           <Label htmlFor="gen-length">{t("generate.form.length")}</Label>
           <Select value={request.length} onValueChange={(v) => onChange({ length: v as DraftLength })}>
-            <SelectTrigger id="gen-length" className="h-8" aria-label={t("generate.form.length")} data-testid="generate-length">
+            <SelectTrigger id="gen-length" className="h-8 px-2" aria-label={t("generate.form.length")} data-testid="generate-length">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -187,10 +189,10 @@ export function RequestForm({
             </SelectContent>
           </Select>
         </div>
-        <div className="flex flex-col gap-1.5">
+        <div className="col-span-2 flex min-w-0 flex-col gap-1.5">
           <Label htmlFor="gen-output">{t("generate.form.output")}</Label>
           <Select value={request.output} onValueChange={(v) => onChange({ output: v as OutputFormat })}>
-            <SelectTrigger id="gen-output" className="h-8" aria-label={t("generate.form.output")} data-testid="generate-output">
+            <SelectTrigger id="gen-output" className="h-8 px-2" aria-label={t("generate.form.output")} data-testid="generate-output">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -204,13 +206,16 @@ export function RequestForm({
         </div>
       </div>
       <div className="flex flex-col gap-1.5" data-testid="generate-token-budget">
-        <div className="flex items-center justify-between gap-2">
-          <Label htmlFor="gen-budget">{t("generate.form.token_budget")}</Label>
+        {/* The label never breaks; the context / cap note drops to its own line when the column is narrow. */}
+        <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
+          <Label htmlFor="gen-budget" className="shrink-0 whitespace-nowrap">
+            {t("generate.form.token_budget")}
+          </Label>
           <span className="text-xs text-fg-subtle">{budgetInfo?.ctx ? t("generate.form.budget_info", { ctx: fmt(budgetInfo.ctx), cap: fmt(cap) }) : t("generate.form.budget_info_cap", { cap: fmt(cap) })}</span>
         </div>
         <div className="flex items-center gap-2">
           <Select value={budgetPicker} onValueChange={(v) => setBudget(v === "auto" ? null : Number(v))}>
-            <SelectTrigger id="gen-budget" className="h-8 flex-1" aria-label={t("generate.form.token_budget")} data-testid="generate-token-budget-select">
+            <SelectTrigger id="gen-budget" className="h-8 min-w-0 flex-1 px-2" aria-label={t("generate.form.token_budget")} data-testid="generate-token-budget-select">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -227,7 +232,7 @@ export function RequestForm({
           </Select>
           <Input
             type="number"
-            className="h-8 w-28 shrink-0 text-right tabular-nums"
+            className="h-8 w-24 shrink-0 px-2 text-right tabular-nums"
             min={MIN_TOKEN_BUDGET}
             max={cap}
             step={100}

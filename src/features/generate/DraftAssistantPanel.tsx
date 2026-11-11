@@ -21,8 +21,9 @@ export interface ReviseLogEntry {
 }
 
 /**
- * 초안 어시스턴트 (0.7.0 plan §1.5) — the bottom of the request column once a draft exists: a scope (the whole
- * draft, one section to rewrite, a new section after one or at the end), an instruction and the run button.
+ * 초안 어시스턴트 (0.7.0 plan §1.5) — in the request column once a draft exists, below the form (`placement`
+ * "bottom") or, in the screen's narrow layout, above it ("top", UI-5): a scope (the whole draft, one section to
+ * rewrite, a new section after one or at the end), an instruction and the run button.
  * The revision is the ordinary draft job with `DraftRequest.revise`; the page follows it like a generation
  * and appends the outcome to the log. The ref is the instruction box, focused by the editor's per-section
  * "AI 수정" buttons.
@@ -31,6 +32,7 @@ export const DraftAssistantPanel = forwardRef<
   HTMLTextAreaElement,
   {
     draft: Draft;
+    placement?: "top" | "bottom";
     /** Scope picker value (`reviseScopeToPicker`). */
     scope: string;
     onScope: (value: string) => void;
@@ -43,7 +45,7 @@ export const DraftAssistantPanel = forwardRef<
     excludedCount: number;
     log: ReviseLogEntry[];
   }
->(function DraftAssistantPanel({ draft, scope, onScope, heading, onHeading, instruction, onInstruction, onRun, running, excludedCount, log }, ref) {
+>(function DraftAssistantPanel({ draft, placement = "bottom", scope, onScope, heading, onHeading, instruction, onInstruction, onRun, running, excludedCount, log }, ref) {
   const { t, i18n } = useTranslation();
   const sections = sectionsOf(draft.body);
   const untitled = t("generate.revise.untitled");
@@ -52,7 +54,7 @@ export const DraftAssistantPanel = forwardRef<
   const canRun = instruction.trim().length > 0 && !running && !noScope;
   const isInsert = scope.startsWith("insert_after:");
   return (
-    <section className="flex flex-col gap-2 border-t border-border pt-3" aria-labelledby="gen-revise-title" data-testid="generate-revise-panel">
+    <section className={cn("flex flex-col gap-2 border-border", placement === "top" ? "border-b pb-3" : "border-t pt-3")} aria-labelledby="gen-revise-title" data-testid="generate-revise-panel" data-placement={placement}>
       <h2 id="gen-revise-title" className="flex items-center gap-1.5 text-sm font-semibold">
         <Sparkles className="size-4 text-accent" aria-hidden="true" />
         {t("generate.revise.title")}

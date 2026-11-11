@@ -1,8 +1,9 @@
 import { CheckCheck, FilePlus2, FolderOpen, Library, ListTree, Save } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 
+import { useRootFontSize } from "@/app/hooks/useRootFontSize";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog, type ConfirmRequest } from "@/components/ui/confirm-dialog";
 import { describeJobError } from "@/features/jobs/describe";
@@ -10,7 +11,7 @@ import { describeError } from "@/lib/errors";
 import { api, revealPath } from "@/lib/ipc";
 import { invalidateDrafts } from "@/lib/queries";
 import { isJobFinished, isDraftOutcome, type Draft, type DraftSummary, type Language, type SaveRequest, type SavedDocument } from "@/lib/types";
-import { errorCode } from "@/lib/utils";
+import { cn, errorCode } from "@/lib/utils";
 import { useAttachmentsStore } from "@/stores/attachments";
 import { persistDraft, syncDraftWithStore, useGenerateStore } from "@/stores/generate";
 import { useJob, useJobsStore } from "@/stores/jobs";
@@ -23,6 +24,7 @@ import { DraftAssistantPanel, type ReviseLogEntry } from "./DraftAssistantPanel"
 import { DraftEditor } from "./DraftEditor";
 import { DraftPreview } from "./DraftPreview";
 import { DraftsDrawer } from "./DraftsDrawer";
+import { GENERATE_GRID, generateLayout } from "./layout";
 import { RequestForm } from "./RequestForm";
 import { SaveDialog } from "./SaveDialog";
 
@@ -73,6 +75,31 @@ export function GeneratePage() {
   const pendingPut = useRef<Draft | null>(null);
   // True until the draft on the screen has been checked against the draft store once (the editor is locked meanwhile).
   const [arriving, setArriving] = useState(true);
+  // Layout by the measured width in rem (UI-5); in the narrow layout one pane shows beside the form.
+  const layoutRef = useRef<HTMLDivElement>(null);
+  const rootPx = useRootFontSize();
+  const [layoutWidth, setLayoutWidth] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const el = layoutRef.current;
+    if (!el) return undefined;
+    const measure = () => setLayoutWidth(el.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  const layout = layoutWidth === null ? "wide" : generateLayout(layoutWidth, rootPx);
+  const narrow = layout === "narrow";
+  const [pane, setPane] = useState<"preview" | "editor">("preview");
+  // In the narrow layout the 초안 어시스턴트 is put above the form. When it appears there — a draft arrived, or the
+  // window became narrow — the form column goes back to its top: the column is usually scrolled down to the
+  // "초안 생성" button at that moment, and the browser's scroll anchoring would keep the form where it is and
+  // leave the panel above the fold.
+  const formColumnRef = useRef<HTMLElement>(null);
+  const assistantOnTop = narrow && draft !== null;
+  useLayoutEffect(() => {
+    if (assistantOnTop && formColumnRef.current) formColumnRef.current.scrollTop = 0;
+  }, [assistantOnTop]);
 
   const workspacePath = workspace?.path ?? null;
   useEffect(() => {
@@ -360,6 +387,10 @@ export function GeneratePage() {
     setSaved(null);
   };
 
+  const assistant = draft ? (
+    <DraftAssistantPanel ref={instructionRef} placement={narrow ? "top" : "bottom"} draft={draft} scope={reviseScope} onScope={pickScope} heading={reviseHeading} onHeading={setReviseHeading} instruction={instruction} onInstruction={setInstruction} onRun={revise} running={running} excludedCount={excluded.length} log={reviseLog} />
+  ) : null;
+
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="page-generate">
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2">
@@ -400,20 +431,32 @@ export function GeneratePage() {
           </div>
         )}
       </div>
-      {/* Layout by the width available to the screen in rem (a container query, so the UI 배율 counts like a narrower
-          window): three columns from 64 rem; below that the editor takes a second row across the full width instead of
-          being squeezed under the form. Every cell scrolls on its own (0.7.0 §1.3): the columns clip sideways and the
-          preview clips both ways, so the page / `main` never grows a scrollbar. */}
-      <div className="@container flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[16rem_minmax(0,1fr)] grid-rows-[minmax(0,3fr)_minmax(0,2fr)] overflow-hidden @5xl:grid-cols-[18rem_minmax(0,1fr)_24rem] @5xl:grid-rows-1 @7xl:grid-cols-[20rem_minmax(0,1fr)_26rem]" data-testid="generate-layout">
-          <aside className="flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto overflow-x-hidden border-r border-border p-4">
+      {/* Layout by the width the screen gets, measured in rem (so the UI 배율 counts like a narrower window): three
+          columns from 64 rem. Below that (UI-5) the form column stands next to one pane — the preview or the editor,
+          switched with the two buttons above it — instead of an editor squeezed into two fifths of the height, and the
+          초안 어시스턴트 comes first in the form column so it is in view while the draft is revised. Every cell scrolls
+          on its own (0.7.0 §1.3): the columns clip sideways and the preview clips both ways, so the page / `main`
+          never grows a scrollbar. */}
+      <div ref={layoutRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <div className={cn("grid min-h-0 min-w-0 flex-1 overflow-hidden", GENERATE_GRID[layout])} data-testid="generate-layout" data-layout={layout}>
+          <aside ref={formColumnRef} className={cn("flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto overflow-x-hidden border-r border-border p-4", narrow && "row-span-2")} data-testid="generate-form-column">
+            {narrow && assistant}
             <RequestForm request={request} onChange={(patch) => setRequest(patch)} onGenerate={generate} job={job} running={running} onCancel={cancel} />
-            {draft && <DraftAssistantPanel ref={instructionRef} draft={draft} scope={reviseScope} onScope={pickScope} heading={reviseHeading} onHeading={setReviseHeading} instruction={instruction} onInstruction={setInstruction} onRun={revise} running={running} excludedCount={excluded.length} log={reviseLog} />}
+            {!narrow && assistant}
           </aside>
-          <section className="min-h-0 min-w-0 overflow-hidden" aria-label={t("generate.preview.title")}>
+          {narrow && (
+            <div className="flex min-w-0 items-center gap-1 border-b border-border px-3 py-1.5" role="group" aria-label={t("generate.layout.panes")} data-testid="generate-pane-switch">
+              {(["preview", "editor"] as const).map((p) => (
+                <Button key={p} size="sm" variant={pane === p ? "secondary" : "ghost"} className="h-7" aria-pressed={pane === p} onClick={() => setPane(p)} data-testid={`generate-pane-${p}`}>
+                  {t(`generate.${p}.title`)}
+                </Button>
+              ))}
+            </div>
+          )}
+          <section className={cn("min-h-0 min-w-0 overflow-hidden", narrow && pane !== "preview" && "hidden")} aria-label={t("generate.preview.title")} data-testid="generate-pane-preview-box">
             <DraftPreview draft={draft} />
           </section>
-          <aside className="col-span-2 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden border-t border-border p-4 @5xl:col-span-1 @5xl:border-l @5xl:border-t-0" aria-label={t("generate.editor.title")}>
+          <aside className={cn("relative min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-4", narrow ? pane !== "editor" && "hidden" : "border-l border-border")} aria-label={t("generate.editor.title")} data-testid="generate-pane-editor-box">
             {draft ? <DraftEditor draft={draft} onChange={changeDraft} excluded={excluded} onToggleExcluded={(id) => setExcluded((x) => toggleExcluded(x, id))} disabled={running || arriving} onRevise={reviseSection} /> : <p className="text-sm text-fg-subtle">{t("generate.editor.empty")}</p>}
           </aside>
         </div>
