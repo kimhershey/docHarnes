@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use doculens_core::aggregate::{self, AggregateRequest, AggregateResult};
 use doculens_core::documents::import::{self as doc_import, ImportOptions, ImportSource};
@@ -364,7 +364,88 @@ fn after_execution(app: &AppHandle, pctx: &pipeline_bridge::PipelineContext, exe
     if !execution.batches.is_empty() {
         pctx.emit(app, "journal", Vec::new());
     }
+    emit_step_changes(app, pctx, execution);
     reimport_restored(app, pctx, &execution.restored_paths);
+}
+
+/// What the finished steps of an execution changed besides documents, as the events the screens
+/// listen to: the glossary, editions and reference groups (`knowledge://changed`), projects and
+/// their templates / rules / check results (`projects://changed`), extraction schemas and review
+/// decisions (`pipeline://changed`).
+#[derive(Debug, Default, PartialEq)]
+struct StepChanges {
+    /// `knowledge://changed` kinds (`glossary`, `versions`, `collections`).
+    knowledge: Vec<&'static str>,
+    /// `pipeline://changed` kinds (`schemas`, `review`).
+    pipeline: Vec<&'static str>,
+    /// Whether `projects://changed` is due, and the projects the payloads name.
+    projects: bool,
+    project_ids: Vec<String>,
+}
+
+fn step_changes(execution: &PlanExecution) -> StepChanges {
+    fn once(kinds: &mut Vec<&'static str>, kind: &'static str) {
+        if !kinds.contains(&kind) {
+            kinds.push(kind);
+        }
+    }
+    let mut out = StepChanges::default();
+    for step in execution.steps.iter().filter(|s| s.status == exec::StepStatus::Done) {
+        let payload = &step.payload;
+        let count = |key: &str| payload.get(key).and_then(Value::as_u64).unwrap_or(0);
+        let project_id = ["project_id", "id"]
+            .iter()
+            .find_map(|k| payload.get(k).and_then(Value::as_str))
+            .or_else(|| payload.get("project").and_then(|p| p.get("id")).and_then(Value::as_str));
+        let project = |out: &mut StepChanges| {
+            out.projects = true;
+            if let Some(id) = project_id {
+                if !out.project_ids.iter().any(|x| x == id) {
+                    out.project_ids.push(id.to_string());
+                }
+            }
+        };
+        match step.op {
+            OpKind::DefineTerm => once(&mut out.knowledge, "glossary"),
+            OpKind::SetVersion => once(&mut out.knowledge, "versions"),
+            OpKind::ManageReference => once(&mut out.knowledge, "collections"),
+            OpKind::CreateProject | OpKind::RemoveFromProject | OpKind::CheckConsistency | OpKind::DefineRule => {
+                project(&mut out)
+            }
+            // A rename renames the project's reference group, a deletion takes the group along,
+            // and `as_reference` fills it.
+            OpKind::UpdateProject | OpKind::DeleteProject | OpKind::AddToProject => {
+                project(&mut out);
+                once(&mut out.knowledge, "collections");
+            }
+            // Templates are listed on the projects screen; a rule saved to a template too.
+            OpKind::ManageTemplate => out.projects = true,
+            OpKind::ClassifyProjects if count("applied") > 0 => out.projects = true,
+            OpKind::ManageSchema => once(&mut out.pipeline, "schemas"),
+            OpKind::Review if count("changed") > 0 => once(&mut out.pipeline, "review"),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The assistant changed the glossary, an edition, a project, a template or a schema: the screen
+/// that shows it must hear about it now, not at its next periodic refresh (audit CON-6).
+fn emit_step_changes(app: &AppHandle, pctx: &pipeline_bridge::PipelineContext, execution: &PlanExecution) {
+    if !pctx.docs.is_current(app) {
+        return; // the workspace was switched while the plan ran
+    }
+    let changes = step_changes(execution);
+    for kind in changes.knowledge {
+        knowledge_bridge::emit_changed(app, kind, Vec::new());
+    }
+    for kind in changes.pipeline {
+        pctx.emit(app, kind, execution.documents.clone());
+    }
+    if changes.projects {
+        let _ =
+            app.emit(crate::projects_bridge::PROJECTS_EVENT, serde_json::json!({ "project_ids": changes.project_ids }));
+    }
 }
 
 fn reimport_restored(app: &AppHandle, pctx: &pipeline_bridge::PipelineContext, paths: &[String]) {
@@ -771,4 +852,52 @@ fn typed(e: CoreError) -> UiError {
         return UiError { code: (*code).into(), message: m, detail: None };
     }
     e.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use doculens_core::planner::exec::{StepResult, StepStatus};
+    use serde_json::json;
+
+    fn step(op: OpKind, status: StepStatus, payload: Value) -> StepResult {
+        StepResult { index: 0, op, status, summary: String::new(), payload, error: None, elapsed_ms: 0 }
+    }
+
+    fn changes(steps: Vec<StepResult>) -> StepChanges {
+        step_changes(&PlanExecution { steps, ..PlanExecution::default() })
+    }
+
+    /// Audit CON-6: after the assistant changed the glossary, an edition, a project, a template or
+    /// a schema, the screen that shows it kept the old content until its periodic refresh.
+    #[test]
+    fn finished_steps_name_the_change_events_of_what_they_touched() {
+        let done = |op, payload| step(op, StepStatus::Done, payload);
+        let c = changes(vec![done(OpKind::DefineTerm, json!({ "action": "save" }))]);
+        assert_eq!((c.knowledge.as_slice(), c.projects, c.pipeline.is_empty()), (&["glossary"][..], false, true));
+        assert_eq!(changes(vec![done(OpKind::SetVersion, json!({}))]).knowledge, ["versions"]);
+        assert_eq!(changes(vec![done(OpKind::ManageReference, json!({}))]).knowledge, ["collections"]);
+        assert_eq!(changes(vec![done(OpKind::ManageSchema, json!({}))]).pipeline, ["schemas"]);
+        // Projects: the payloads name the project in three shapes.
+        let c = changes(vec![
+            done(OpKind::CreateProject, json!({ "id": "p1", "name": "한빛" })),
+            done(OpKind::UpdateProject, json!({ "project": { "id": "p2" } })),
+            done(OpKind::RemoveFromProject, json!({ "project_id": "p3", "removed": 1 })),
+            done(OpKind::CheckConsistency, json!({ "id": "run-1", "project_id": "p1" })),
+        ]);
+        assert!(c.projects);
+        assert_eq!(c.project_ids, ["p1", "p2", "p3"]);
+        assert_eq!(c.knowledge, ["collections"], "a project rename renames its reference group");
+        // Templates have no project: every project view refreshes (an empty id list).
+        let c = changes(vec![done(OpKind::ManageTemplate, json!({ "action": "save" }))]);
+        assert!(c.projects && c.project_ids.is_empty());
+        // Suggestions that assigned nothing, review steps that changed nothing and steps that did
+        // not finish announce nothing.
+        assert_eq!(changes(vec![done(OpKind::ClassifyProjects, json!({ "applied": 0 }))]), StepChanges::default());
+        assert!(changes(vec![done(OpKind::ClassifyProjects, json!({ "applied": 2 }))]).projects);
+        assert_eq!(changes(vec![done(OpKind::Review, json!({ "changed": 0 }))]), StepChanges::default());
+        assert_eq!(changes(vec![done(OpKind::Review, json!({ "changed": 3 }))]).pipeline, ["review"]);
+        assert_eq!(changes(vec![step(OpKind::DefineTerm, StepStatus::Failed, json!({}))]), StepChanges::default());
+        assert_eq!(changes(vec![done(OpKind::Tag, json!({ "documents": ["d1"] }))]), StepChanges::default());
+    }
 }
