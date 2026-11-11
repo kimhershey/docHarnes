@@ -254,14 +254,18 @@ pub fn merge_pages(def: &SchemaDef, pages: &[(u32, Value)]) -> Value {
     for f in &def.fields {
         match f.kind {
             FieldKind::Table => {
+                // The source page of a row lives under `page`. The lint rejects a column of that
+                // name; a schema saved before that keeps its column value (and the row has no
+                // source page) instead of having it replaced.
+                let page_is_column = f.fields.iter().any(|c| c.key == schema::ROW_PAGE_KEY);
                 let mut rows = Vec::new();
                 for (page_no, v) in pages {
                     if let Some(arr) = v.get(&f.key).and_then(Value::as_array) {
                         for r in arr {
                             if r.as_object().is_some_and(|o| o.values().any(|x| validate::value_text(x).is_some())) {
                                 let mut row = r.clone();
-                                if let Some(m) = row.as_object_mut() {
-                                    m.insert("page".into(), json!(page_no));
+                                if let Some(m) = row.as_object_mut().filter(|_| !page_is_column) {
+                                    m.insert(schema::ROW_PAGE_KEY.into(), json!(page_no));
                                 }
                                 rows.push(row);
                             }
@@ -484,7 +488,12 @@ pub fn build_fields(
             FieldKind::Table => {
                 let arr = merged.get(&f.key).and_then(Value::as_array).cloned().unwrap_or_default();
                 for (ri, row) in arr.iter().take(schema::MAX_ROWS).enumerate() {
-                    let page = row.get("page").and_then(Value::as_u64).map(|p| p as u32);
+                    // (Not when `page` is a column of an older schema: that is a printed number.)
+                    let page = row
+                        .get(schema::ROW_PAGE_KEY)
+                        .filter(|_| f.fields.iter().all(|c| c.key != schema::ROW_PAGE_KEY))
+                        .and_then(Value::as_u64)
+                        .map(|p| p as u32);
                     // Row evidence is built from the *stored* (masked) cell values.
                     let row_text: Vec<String> = f
                         .fields
@@ -688,6 +697,27 @@ mod tests {
         assert_eq!(m["total"]["page"], 1);
         assert_eq!(m["items"].as_array().unwrap().len(), 2, "empty rows are dropped");
         assert_eq!(m["items"][1]["page"], 2);
+    }
+
+    /// Audit PIP-12: a table of contents with a `page` column (a schema saved before the lint
+    /// rejected that key) got every printed page number replaced by the page the row was read from.
+    #[test]
+    fn a_page_column_of_an_older_schema_keeps_its_printed_value() {
+        let def = SchemaDef {
+            fields: vec![FieldDef::new("toc", "목차", "", FieldKind::Table).with(vec![
+                FieldDef::new("title", "제목", "", FieldKind::String),
+                FieldDef::new("page", "페이지", "", FieldKind::Integer),
+            ])],
+            rules: vec![],
+        };
+        let p2 = json!({ "toc": [{ "title": "1. 개요", "page": "3" }, { "title": "2. 범위", "page": "17" }] });
+        let m = merge_pages(&def, &[(2, p2)]);
+        assert_eq!((&m["toc"][0]["page"], &m["toc"][1]["page"]), (&json!("3"), &json!("17")));
+        let schema = SchemaRecord { definition: def, ..receipt_schema() };
+        let opts = FieldOptions { review_threshold: 0.8, audit_percent: 0, pii_masking: true };
+        let built = build_fields(&schema, &m, None, &BTreeMap::new(), opts, "doc");
+        let cell = built.fields.iter().find(|f| f.path == "toc[1].page").expect("the page column");
+        assert_eq!((cell.normalized.as_deref(), cell.page), (Some("17"), None), "the row has no source page");
     }
 
     #[test]

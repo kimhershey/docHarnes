@@ -171,7 +171,7 @@ impl Collector {
         let mut seen: Vec<String> = Vec::new();
         for (i, c) in columns.iter().enumerate() {
             let label = c.trim().trim_end_matches([':', '：']).to_string();
-            let mut ck = schema::key_from_label(&label, &format!("col_{}", i + 1));
+            let mut ck = schema::column_key(schema::key_from_label(&label, &format!("col_{}", i + 1)));
             let base = ck.clone();
             let mut n = 2;
             while seen.contains(&ck) {
