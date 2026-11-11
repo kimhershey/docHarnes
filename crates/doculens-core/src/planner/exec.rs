@@ -945,6 +945,9 @@ fn run_step(
                 tone: tone.unwrap_or_default(),
                 length: length.unwrap_or_default(),
                 language: deps.language,
+                // A draft asked for inside a project looks its reference material up in that project
+                // (work documents ∪ reference group ∪ 공통 참고 자료), not in the whole library (audit CON-3).
+                project_id: plan.scope.filter.project_id.clone(),
                 ..DraftRequest::default()
             };
             let gdeps = GenerateDeps {
