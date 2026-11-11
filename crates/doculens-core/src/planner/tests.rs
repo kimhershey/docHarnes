@@ -598,7 +598,13 @@ fn specs_match_serde_and_the_grammar_schema() {
     assert!(serde_json::from_value::<Op>(json!({ "op": "search", "query": "x", "limit": 5 })).is_err());
     assert!(serde_json::from_value::<Plan>(json!({ "intent": "search", "operations": [], "extra": 1 })).is_err());
     let s = schema::plan_schema();
-    assert_eq!(s["properties"]["operations"]["items"]["anyOf"].as_array().unwrap().len(), OP_SPECS.len());
+    // One grammar alternative per op; `set_setting` alone has one per value shape (0.8.0).
+    let alternatives = s["properties"]["operations"]["items"]["anyOf"].as_array().unwrap();
+    let op_of = |a: &Value| a["properties"]["op"]["const"].as_str().unwrap_or_default().to_string();
+    let named: std::collections::BTreeSet<String> = alternatives.iter().map(op_of).collect();
+    assert_eq!(named.len(), OP_SPECS.len());
+    assert_eq!(alternatives.iter().filter(|a| op_of(a) != "set_setting").count(), OP_SPECS.len() - 1);
+    assert_eq!(alternatives.iter().filter(|a| op_of(a) == "set_setting").count(), schema::setting_schemas().len());
     assert_eq!(s["properties"]["operations"]["maxItems"], json!(MAX_OPS));
     assert!(s["properties"]["intent"]["enum"].as_array().unwrap().len() == OpKind::ALL.len());
     assert!(schema::op_table(true, false).contains("- aggregate:"));
@@ -1095,7 +1101,8 @@ fn model_path_requeries_once_with_feedback() {
     {
         // 4K never gets the full prompt; the exact tier depends on the estimate.
         let reqs = chat.requests.lock().unwrap();
-        assert!(reqs[0].messages.len() <= 1 + 4 * 2 + 1);
+        let planned = reqs.iter().find(|r| StageChat::stage_of(r).as_deref() == Some("plan")).unwrap();
+        assert!(planned.messages.len() <= 1 + 4 * 2 + 1);
         assert!(
             prompts::tier_for(&c, text, None, prompts::prompt_budget(Some(4096), llm::REPLY_TOKENS), None)
                 < prompts::Tier::Full
@@ -1791,6 +1798,21 @@ fn print_prompt_sizes() {
             chars - ascii
         );
     }
+    // Two-stage path: the routing call, then one family's op table per plan call.
+    eprintln!("routing: est={}", prompts::message_tokens(&prompts::family_messages(&c, text, None)));
+    for family in OpFamily::ALL {
+        let kinds = family.ops();
+        let sizes: Vec<String> = [prompts::Tier::Full, prompts::Tier::Compact, prompts::Tier::Minimal]
+            .into_iter()
+            .map(|tier| {
+                let msgs = prompts::messages_for_kinds(&c, text, None, tier, None, Some(&kinds));
+                format!("{tier:?}={}", prompts::message_tokens(&msgs))
+            })
+            .collect();
+        let grammar = crate::jsonorder::to_string(&schema::plan_schema_for(&kinds)).len();
+        eprintln!("{}: {} · schema {} bytes", family.as_str(), sizes.join(" "), grammar);
+    }
+    eprintln!("all ops: schema {} bytes", crate::jsonorder::to_string(&schema::plan_schema()).len());
 }
 
 #[test]
@@ -1813,10 +1835,16 @@ fn model_first_mode_sends_every_sentence_but_slash_commands_to_the_model() {
     let chat = StageChat::new();
     chat.push(
         "plan",
-        json!({ "summary": "테마 변경", "intent": "set_theme", "scope": {}, "operations": [{ "op": "set_theme", "theme": "dark" }], "requires_confirmation": false, "confidence": 0.9 }),
+        json!({ "summary": "한빛 계약 검색", "unmet": "", "intent": "search", "scope": {}, "operations": [{ "op": "search", "query": "한빛 계약" }], "requires_confirmation": false, "confidence": 0.9 }),
     );
-    let r = plan(Some(&deps(&chat)), "다크 테마로 바꿔줘", &c, PlanMode::ModelFirst).unwrap();
+    assert_eq!(plan(None, "한빛 계약서 찾아줘", &c, PlanMode::RulesFirst).unwrap().source, PlanSource::Rules);
+    let r = plan(Some(&deps(&chat)), "한빛 계약서 찾아줘", &c, PlanMode::ModelFirst).unwrap();
     assert_eq!(r.source, PlanSource::Model, "{r:?}");
+    assert_eq!(chat.calls("plan"), 1);
+    assert!(matches!(r.plan.operations[0], Op::Search { .. }));
+    // A sentence that is nothing but a setting's name and a value is read without the model (0.8.0 fast path).
+    let r = plan(Some(&deps(&chat)), "다크 테마로 바꿔줘", &c, PlanMode::ModelFirst).unwrap();
+    assert_eq!(r.source, PlanSource::Fast, "{r:?}");
     assert_eq!(chat.calls("plan"), 1);
     assert!(matches!(r.plan.operations[0], Op::SetTheme { theme: Theme::Dark }));
     // Slash commands never reach the model.
@@ -1832,4 +1860,258 @@ fn model_first_mode_sends_every_sentence_but_slash_commands_to_the_model() {
     // The legacy mode still answers the same sentence by rule.
     let r = plan(None, "지난달 영수증 합계", &c, PlanMode::RulesFirst).unwrap();
     assert_eq!(r.source, PlanSource::Rules);
+}
+
+// ---------------------------------------------------------------------------
+// 0.8.0 plan §1: the planner contract (root causes of the 2026-11-11 report)
+// ---------------------------------------------------------------------------
+
+/// Audit PLN-1: llama.cpp writes required properties in the order of the schema's `properties`,
+/// and a `serde_json::Value` map sorts them by name — the model had to commit to `confidence`
+/// before it wrote what it understood, and `set_setting` had to start with a key. The request
+/// body now follows each schema's `required` order.
+#[test]
+fn the_grammar_makes_the_model_write_what_it_understood_first() {
+    use crate::jsonorder;
+    let schema = schema::plan_schema();
+    let body = jsonorder::to_string(&schema);
+    // Top level: the interpretation, what is left out, then the plan, and the confidence last.
+    let props = &body[body.find("\"properties\":{").unwrap()..];
+    let pos = |key: &str| props.find(&format!("\"{key}\":")).unwrap_or_else(|| panic!("{key} missing"));
+    let order = ["summary", "unmet", "intent", "scope", "operations", "requires_confirmation", "confidence"];
+    for pair in order.windows(2) {
+        assert!(pos(pair[0]) < pos(pair[1]), "{} must come before {}", pair[0], pair[1]);
+    }
+    assert_eq!(schema["required"], json!(order));
+    // Every op alternative starts with its name, then its required parameters in spec order.
+    for alternative in schema["properties"]["operations"]["items"]["anyOf"].as_array().unwrap() {
+        let written = jsonorder::to_string(alternative);
+        let keys = jsonorder::top_level_keys(&written[written.find("\"properties\":").unwrap() + 13..]);
+        let required: Vec<String> =
+            alternative["required"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+        assert_eq!(required[0], "op", "{written}");
+        assert_eq!(keys[..required.len()], required[..], "{written}");
+    }
+    // The model's own reply, written back as an example, has the same order.
+    let reply = prompts::example_reply(
+        &json!({ "confidence": 0.9, "intent": "search", "operations": [{ "query": "한빛", "op": "search" }], "requires_confirmation": false, "scope": {}, "summary": "한빛 검색" }),
+        &schema,
+    );
+    assert_eq!(
+        reply,
+        r#"{"summary":"한빛 검색","unmet":"","intent":"search","scope":{},"operations":[{"op":"search","query":"한빛"}],"requires_confirmation":false,"confidence":0.9}"#
+    );
+    // Every few-shot of every tier is written that way and parses as a plan.
+    for ko in [true, false] {
+        let mut c = ctx();
+        c.language = if ko { Language::Ko } else { Language::En };
+        for tier in [prompts::Tier::Full, prompts::Tier::Compact, prompts::Tier::Minimal] {
+            let messages = prompts::messages_for(&c, "x", None, tier, None);
+            for m in messages.iter().filter(|m| m["role"] == "assistant") {
+                let content = m["content"].as_str().unwrap();
+                assert!(content.starts_with("{\"summary\":"), "{content}");
+                // (an optional `clarification_question` follows the required keys)
+                let keys = jsonorder::top_level_keys(content);
+                assert_eq!(keys[..order.len()], order, "{content}");
+                let value: Value = serde_json::from_str(content).unwrap();
+                validate::parse_plan(&value).unwrap_or_else(|e| panic!("{content}: {e:?}"));
+            }
+        }
+    }
+}
+
+/// 0.8.0 plan §1.5: a settings change pairs a key only with a value of that key's type.
+#[test]
+fn settings_grammar_pairs_each_key_with_its_value_type() {
+    use super::settings_catalog as catalog;
+    let alternatives = schema::setting_schemas();
+    let keys_of = |a: &Value| -> Vec<String> {
+        a["properties"]["key"]["enum"].as_array().unwrap().iter().map(|k| k.as_str().unwrap().to_string()).collect()
+    };
+    let all: Vec<String> = alternatives.iter().flat_map(keys_of).collect();
+    let unique: std::collections::BTreeSet<&String> = all.iter().collect();
+    assert_eq!(all.len(), unique.len(), "a key belongs to one alternative");
+    assert_eq!(all.len(), catalog::SETTINGS.len());
+    for a in &alternatives {
+        assert_eq!(a["required"], json!(["op", "key", "value"]));
+    }
+    let alternative_of = |key: &str| alternatives.iter().find(|a| keys_of(a).iter().any(|k| k == key)).unwrap();
+    assert_eq!(alternative_of("ui.scale_percent")["properties"]["value"], json!({ "type": "integer" }));
+    assert_eq!(alternative_of("processing.render_dpi")["properties"]["value"], json!({ "type": "integer" }));
+    assert_eq!(alternative_of("privacy.pii_masking")["properties"]["value"], json!({ "type": "boolean" }));
+    let theme = &alternative_of("ui.theme")["properties"]["value"]["enum"];
+    assert!(theme.as_array().unwrap().contains(&json!("dark")), "{theme}");
+    assert!(!keys_of(alternative_of("ui.theme")).iter().any(|k| k == "models.profile"));
+    // The prompt's table names every setting in the user's language, with its range.
+    let table = schema::settings_table(true);
+    assert!(table.contains("ui.scale_percent = UI 배율(%) [90~150]"), "{table}");
+    assert_eq!(table.lines().count(), catalog::SETTINGS.len());
+    assert!(schema::op_table_for(&OpFamily::System.ops(), true, false).contains("ui.scale_percent = UI 배율(%)"));
+    assert!(!schema::op_table_for(&OpFamily::Ask.ops(), true, false).contains("ui.scale_percent"));
+}
+
+/// 0.8.0 plan §1.2 (audit USR-3 / PLN-2): a turn that is not a command is answered without a plan
+/// call — small talk without any lookup, a general question with evidence when there is some.
+#[test]
+fn turns_that_are_not_commands_are_answered_without_a_plan() {
+    let c = ctx();
+    let chat = StageChat::new();
+    chat.push("families", json!({ "families": ["chat"] }));
+    let r = plan(Some(&deps(&chat)), "오늘 좀 피곤하네", &c, PlanMode::ModelFirst).unwrap();
+    assert_eq!((r.source, r.route.as_deref(), r.attempts), (PlanSource::Model, Some("chat"), 0), "{r:?}");
+    assert_eq!(chat.calls("plan"), 0);
+    assert!(matches!(
+        &r.plan.operations[..],
+        [Op::Answer { mode: Some(AnswerMode::Chat), knowledge: Some(false), reply: None, question, .. }]
+            if question == "오늘 좀 피곤하네"
+    ));
+    assert!(!r.plan.requires_confirmation && r.plan.scope.is_empty() && r.issues.is_empty(), "{r:?}");
+
+    let chat = StageChat::new();
+    chat.push("families", json!({ "families": ["general"] }));
+    let r = plan(Some(&deps(&chat)), "양자컴퓨터가 뭐야?", &c, PlanMode::ModelFirst).unwrap();
+    assert_eq!(r.route.as_deref(), Some("general"));
+    assert_eq!(chat.calls("plan"), 0);
+    assert!(matches!(&r.plan.operations[..], [Op::Answer { mode: Some(AnswerMode::General), knowledge: None, .. }]));
+    assert!(!r.plan.requires_confirmation);
+
+    // A reply route next to a family is a command: "고마워, 견적서 합계도 알려줘".
+    let chat = StageChat::new();
+    chat.push("families", json!({ "families": ["chat", "ask"] }));
+    chat.push("plan", json!({ "summary": "한빛 검색", "unmet": "", "intent": "search", "scope": {}, "operations": [{ "op": "search", "query": "한빛" }], "requires_confirmation": false, "confidence": 0.9 }));
+    let r = plan(Some(&deps(&chat)), "고마워, 한빛 계약도 찾아줘", &c, PlanMode::ModelFirst).unwrap();
+    assert_eq!((r.route.as_deref(), r.families.clone()), (None, vec![OpFamily::Ask]), "{r:?}");
+    assert!(matches!(&r.plan.operations[0], Op::Search { .. }));
+
+    // The routing prompt and grammar know both routes; the reply plan round-trips through serde.
+    let routes = schema::family_schema();
+    let names = routes["properties"]["families"]["items"]["enum"].as_array().unwrap();
+    assert!(names.contains(&json!("chat")) && names.contains(&json!("general")), "{routes}");
+    assert_eq!(names.len(), OpFamily::ALL.len() + 2);
+    let system = prompts::family_messages(&c, "x", None)[0]["content"].as_str().unwrap().to_string();
+    assert!(system.contains("- chat:") && system.contains("- general:"), "{system}");
+    let v = serde_json::to_value(&r.plan).unwrap();
+    assert_eq!(serde_json::from_value::<Plan>(v).unwrap(), r.plan);
+    let chat_plan = plan(
+        Some(&deps(&{
+            let chat = StageChat::new();
+            chat.push("families", json!({ "families": ["chat"] }));
+            chat
+        })),
+        "그렇구나",
+        &c,
+        PlanMode::ModelFirst,
+    )
+    .unwrap()
+    .plan;
+    let v = serde_json::to_value(&chat_plan).unwrap();
+    assert_eq!(v["operations"][0]["mode"], "chat");
+    assert_eq!(serde_json::from_value::<Plan>(v).unwrap(), chat_plan);
+}
+
+/// 0.8.0 plan §1.6 (audit USR-1 / USR-2): a sentence that is nothing but a setting's name and a
+/// value never reaches the model, in either interpretation mode.
+#[test]
+fn whole_sentence_settings_and_greetings_skip_the_model_in_both_modes() {
+    let c = ctx();
+    for mode in [PlanMode::ModelFirst, PlanMode::RulesFirst] {
+        let chat = StageChat::new();
+        let d = deps(&chat);
+        for (text, key, value) in [
+            ("UI 배율 120%", "ui.scale_percent", json!(120)),
+            ("ui배율을 100%로 바꿔줘", "ui.scale_percent", json!(100)),
+            ("배율을 130 으로 변경해줘", "ui.scale_percent", json!(130)),
+            ("DPI 를 200 으로 변경해줘", "processing.render_dpi", json!(200)),
+        ] {
+            let r = plan(Some(&d), text, &c, mode).unwrap();
+            assert_eq!(r.source, PlanSource::Fast, "{mode:?} {text}: {r:?}");
+            assert!(
+                matches!(&r.plan.operations[..], [Op::SetSetting { key: k, value: v }] if k == key && *v == value),
+                "{mode:?} {text}: {:?}",
+                r.plan
+            );
+            assert!(!r.plan.requires_confirmation && !has_errors(&r.issues), "{text}: {r:?}");
+        }
+        let r = plan(Some(&d), "프로파일 정확도", &c, mode).unwrap();
+        assert_eq!(r.source, PlanSource::Fast);
+        assert!(matches!(&r.plan.operations[..], [Op::SetProfile { profile: Profile::Accuracy }]));
+        let r = plan(Some(&d), "안녕하세요.", &c, mode).unwrap();
+        assert_eq!(r.source, PlanSource::Fast);
+        assert!(matches!(&r.plan.operations[..], [Op::Answer { mode: Some(AnswerMode::Chat), reply: Some(_), .. }]));
+        // A value outside the range is asked about instead of clamped.
+        let r = plan(Some(&d), "UI 배율 200", &c, mode).unwrap();
+        assert_eq!(r.source, PlanSource::Fast);
+        assert!(r.plan.is_clarification(), "{r:?}");
+        assert!(chat.requests.lock().unwrap().is_empty(), "no model call in {mode:?}");
+    }
+    // Without a model the fast path still works; a slash command stays the pre-router's.
+    assert_eq!(plan(None, "UI 배율 120%", &c, PlanMode::ModelFirst).unwrap().source, PlanSource::Fast);
+    assert_eq!(plan(None, "/테마 라이트", &c, PlanMode::ModelFirst).unwrap().source, PlanSource::Prerouter);
+}
+
+/// 0.8.0 plan §1.3 / §1.5: a model plan is checked against the sentence before it may run unasked.
+#[test]
+fn model_plans_are_checked_against_the_sentence() {
+    let c = ctx();
+    let reply = |ops: Value, unmet: &str| json!({ "summary": "s", "unmet": unmet, "intent": ops[0]["op"], "scope": {}, "operations": ops, "requires_confirmation": false, "confidence": 0.95 });
+    let run = |text: &str, families: &str, plan_reply: Value| {
+        let chat = StageChat::new();
+        chat.push("families", json!({ "families": [families] }));
+        chat.push("plan", plan_reply);
+        let r = plan(Some(&deps(&chat)), text, &c, PlanMode::ModelFirst).unwrap();
+        assert_eq!(r.source, PlanSource::Model, "{text}: {r:?}");
+        r
+    };
+    let codes = |r: &PlanResult| r.issues.iter().map(|i| i.code.clone()).collect::<Vec<_>>();
+    // The 0.7.0 misreading of a settings sentence the fast path leaves to the model.
+    let text = "화면 글씨가 너무 작아서 그런데 좀 키워줄 수 있어?";
+    assert!(super::fastpath::plan(text, &c).is_none());
+    let r = run(text, "system", reply(json!([{ "op": "set_profile", "profile": "balanced" }]), ""));
+    assert_eq!(codes(&r), vec!["ungrounded_change"], "{r:?}");
+    assert!(r.plan.requires_confirmation && !has_errors(&r.issues));
+    assert!(matches!(&r.plan.operations[..], [Op::SetProfile { .. }]), "the plan is kept for the user to judge");
+    // A change the sentence names runs as before.
+    let r = run(
+        "눈이 아파서 그런데 다크 테마로 바꿔줄래",
+        "system",
+        reply(json!([{ "op": "set_theme", "theme": "dark" }]), ""),
+    );
+    assert!(codes(&r).is_empty() && !r.plan.requires_confirmation, "{r:?}");
+    // The reported grouping sentence: one summary of everything is not what was asked. The
+    // criterion is in the sentence, so the 0.7.0 plan is repaired; the right plan passes as it is.
+    let text = "프로젝트 별 내용을 요약해줘";
+    for ops in [
+        json!([{ "op": "summarize", "target": "set" }]),
+        json!([{ "op": "summarize", "target": "set", "group_by": "project" }]),
+    ] {
+        let r = run(text, "ask", reply(ops, ""));
+        assert!(codes(&r).is_empty() && r.plan.unmet.is_none() && !r.plan.requires_confirmation, "{r:?}");
+        assert!(matches!(&r.plan.operations[..], [Op::Summarize { group_by: Some(SummaryGroup::Project), .. }]));
+    }
+    // A criterion the op does not have is not replaced by "everything as one" behind the user's back.
+    let r = run("견적서를 담당자별로 요약해줘", "ask", reply(json!([{ "op": "summarize", "target": "set" }]), ""));
+    assert_eq!(codes(&r), vec!["grouping_dropped"], "{r:?}");
+    assert!(r.plan.requires_confirmation && r.plan.unmet.is_some());
+    // What the model itself reports as left out.
+    let r = run(
+        "지난달 견적서를 거래처별 표로 만들어 메일로 보내줘",
+        "output",
+        reply(json!([{ "op": "aggregate", "fn": "sum", "field": "total", "group_by": "vendor" }]), "메일로 보내기"),
+    );
+    assert!(codes(&r).contains(&"unmet_request".to_string()), "{r:?}");
+    assert!(r.plan.requires_confirmation);
+    assert_eq!(r.plan.unmet.as_deref(), Some("메일로 보내기"));
+    // A value the setting does not accept, twice: the question names the setting and its range.
+    let chat = StageChat::new();
+    chat.push("families", json!({ "families": ["system"] }));
+    chat.push("plan", reply(json!([{ "op": "set_setting", "key": "ui.scale_percent", "value": 300 }]), ""));
+    let r = plan(Some(&deps(&chat)), "글자가 너무 작으니 화면을 세 배로 키워줘", &c, PlanMode::ModelFirst).unwrap();
+    assert!(r.plan.is_clarification(), "{r:?}");
+    let question = r.plan.clarification_question.clone().unwrap_or_default();
+    assert!(question.contains("UI 배율(%)") && question.contains("90~150"), "{question}");
+    assert!(!question.contains("must be"), "{question}");
+    // "Nothing to do" is answered, not shown as an empty plan.
+    let r = run("음, 그렇구나.", "system", reply(json!([{ "op": "noop" }]), ""));
+    assert!(matches!(&r.plan.operations[..], [Op::Answer { mode: Some(AnswerMode::Chat), .. }]), "{r:?}");
+    assert!(!r.plan.requires_confirmation && r.plan.scope.is_empty());
 }

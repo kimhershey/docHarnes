@@ -1,6 +1,7 @@
 import { expect, type Page } from "@playwright/test";
 
 import ko from "../src/i18n/ko.json" with { type: "json" };
+import { resolveJosa } from "../src/lib/josa";
 
 // Shared flows for the mock-backend specs (one copy instead of five, review L12): app reset,
 // onboarding, library import, card lookups and ko.json template interpolation.
@@ -78,7 +79,8 @@ export async function docId(page: Page, name: string): Promise<string> {
 
 /** Fills the `{{var}}` placeholders of a ko.json template (unknown placeholders are left as they are). */
 export function tpl(template: string, vars: Record<string, string | number>): string {
-  return template.replace(/\{\{(\w+)\}\}/g, (m, k: string) => (k in vars ? String(vars[k]) : m));
+  // The app resolves "을(를)" / "(으)로" to the particle the word takes (i18n post-processor); so does the expectation.
+  return resolveJosa(template.replace(/\{\{(\w+)\}\}/g, (m, k: string) => (k in vars ? String(vars[k]) : m)));
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

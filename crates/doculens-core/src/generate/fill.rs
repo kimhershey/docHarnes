@@ -15,6 +15,9 @@
 //! * (d) fields that could not be placed (and empty required fields) are
 //!   reported as warnings.
 //!
+//! The draft's body has no slot in a form and is not written (`body_blocks`
+//! counts what is left out; `render::save` warns about it).
+//!
 //! Labels are matched after normalisation (whitespace / punctuation removed,
 //! `pipeline::schema::key_from_label` for spelling variants such as 사업자번호).
 
@@ -31,12 +34,11 @@ use regex::Regex;
 use crate::documents::SourceKind;
 use crate::error::{CoreError, Result};
 use crate::pipeline::schema::{key_from_label, FieldKind};
-use crate::pipeline::validate::normalize_amount;
 use crate::settings::Language;
 
+use super::render::{date_text, money_text};
 use super::templates::compact;
-use super::validate::format_won;
-use super::{Draft, DraftField};
+use super::{Draft, DraftBlock, DraftField};
 
 /// Largest main XML part rewritten (decompressed).
 const MAX_XML_BYTES: u64 = 64 * 1024 * 1024;
@@ -130,13 +132,15 @@ impl Target {
     }
 }
 
+/// The value as written into the form: the same rules as the rendered document (money with
+/// separators, other numbers and dates that say more than a date as entered) without the
+/// currency mark — a form prints its own unit next to the slot.
 fn display_value(f: &DraftField) -> String {
     let v = f.value.trim();
     match FieldKind::parse(&f.kind) {
-        Some(FieldKind::Amount) => normalize_amount(v).map(format_won).unwrap_or_else(|| v.to_string()),
-        Some(FieldKind::Date | FieldKind::Brn | FieldKind::Phone) => {
-            f.normalized.clone().unwrap_or_else(|| v.to_string())
-        }
+        Some(FieldKind::Amount) => money_text(&f.key, &f.label, v).unwrap_or_else(|| v.to_string()),
+        Some(FieldKind::Date) => date_text(v, f.normalized.as_deref()),
+        Some(FieldKind::Brn | FieldKind::Phone) => f.normalized.clone().unwrap_or_else(|| v.to_string()),
         _ => v.to_string(),
     }
 }
@@ -193,9 +197,10 @@ impl FillState {
                         (0..t.columns.len())
                             .map(|i| {
                                 let v = r.get(i).map(|s| s.trim()).unwrap_or("");
-                                match FieldKind::parse(&t.columns[i].kind) {
+                                let c = &t.columns[i];
+                                match FieldKind::parse(&c.kind) {
                                     Some(FieldKind::Amount) => {
-                                        normalize_amount(v).map(format_won).unwrap_or_else(|| v.to_string())
+                                        money_text(&c.key, &c.label, v).unwrap_or_else(|| v.to_string())
                                     }
                                     _ => v.to_string(),
                                 }
@@ -253,6 +258,21 @@ impl FillState {
         }
         self.warnings
     }
+}
+
+/// Body blocks of the draft that carry text (headings, paragraphs, lists; table references are
+/// placed as tables). A form has no slot for them, so this is what a filled form leaves out —
+/// the caller tells the user.
+pub fn body_blocks(draft: &Draft) -> usize {
+    draft
+        .body
+        .iter()
+        .filter(|b| match b {
+            DraftBlock::Heading { text, .. } | DraftBlock::Paragraph { text, .. } => !text.trim().is_empty(),
+            DraftBlock::List { items, .. } => items.iter().any(|i| !i.trim().is_empty()),
+            DraftBlock::TableRef { .. } => false,
+        })
+        .count()
 }
 
 /// Fills `src` (a DOCX or HWPX form) with the draft's values and writes `out`.

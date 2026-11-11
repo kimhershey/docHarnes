@@ -25,7 +25,7 @@ use crate::pipeline::validate::normalize_amount;
 use crate::settings::Language;
 use crate::version::WORKSPACE_DIR_NAME;
 
-use super::templates::TemplateSpec;
+use super::templates::{compact, TemplateSpec};
 use super::validate::format_won;
 use super::{
     fill, office, store, Draft, DraftBlock, DraftCitation, DraftField, DraftTable, GenerateDeps, OutputFormat,
@@ -69,29 +69,154 @@ fn kind_of(f: &DraftField) -> FieldKind {
     FieldKind::parse(&f.kind).unwrap_or_default()
 }
 
-/// Value as printed in the document (amounts with separators and a currency mark,
-/// dates / BRNs in their normalised form).
+/// Keys (last path segment) of amount-kind fields and columns that are plain numbers.
+const NUMBER_KEYS: [&str; 14] = [
+    "months",
+    "ratio",
+    "progress",
+    "points",
+    "quantity",
+    "qty",
+    "count",
+    "rate",
+    "percent",
+    "percentage",
+    "score",
+    "hours",
+    "days",
+    "weight",
+];
+const NUMBER_KEY_ENDINGS: [&str; 11] =
+    ["_percent", "_rate", "_ratio", "_count", "_months", "_points", "_qty", "_quantity", "_hours", "_days", "_score"];
+/// English unit words of a label that name a plain number.
+const NUMBER_LABEL_WORDS: [&str; 13] = [
+    "mm",
+    "qty",
+    "quantity",
+    "rate",
+    "ratio",
+    "percent",
+    "percentage",
+    "points",
+    "score",
+    "hours",
+    "days",
+    "months",
+    "count",
+];
+/// Unit nouns a Korean label ends with when the field is a plain number (진척률, 투입 인원 …).
+const NUMBER_LABEL_ENDINGS: [&str; 17] = [
+    "율",
+    "률",
+    "수량",
+    "개월",
+    "개월수",
+    "인원",
+    "인원수",
+    "건수",
+    "횟수",
+    "시간",
+    "일수",
+    "개수",
+    "배점",
+    "점수",
+    "공수",
+    "중량",
+    "면적",
+];
+
+/// Units in a label that are not plain won: the value is in that unit, so no `원` is put after it.
+const OTHER_UNITS: [&str; 13] =
+    ["천원", "만원", "백만", "억원", "USD", "usd", "달러", "$", "EUR", "유로", "JPY", "엔화", "¥"];
+
+/// Whether an amount-kind field or column holds money in won. The pipeline's `amount` kind is
+/// every number that may carry a fraction — percentages, person-months, points and quantities as
+/// well as money — so the currency format is decided per field: by its key (the built-in
+/// templates name theirs `progress_percent`, `pass_rate`, `months`, `ratio` …) and by the unit
+/// its label names (registered forms: `진척률(%)`, `투입 MM`, `수량`, `금액(천원)`).
+pub fn is_money(key: &str, label: &str) -> bool {
+    let key = key.rsplit('.').next().unwrap_or(key).trim().to_ascii_lowercase();
+    if NUMBER_KEYS.contains(&key.as_str()) || NUMBER_KEY_ENDINGS.iter().any(|e| key.ends_with(e)) {
+        return false;
+    }
+    let label = label.trim();
+    if label.contains(['%', '％'])
+        || label.to_ascii_lowercase().contains("m/m")
+        || OTHER_UNITS.iter().any(|u| label.contains(u))
+    {
+        return false;
+    }
+    let mut words = label.split(|c: char| !c.is_ascii_alphabetic()).filter(|w| !w.is_empty());
+    if words.any(|w| NUMBER_LABEL_WORDS.contains(&w.to_ascii_lowercase().as_str())) {
+        return false;
+    }
+    // A parenthesised unit aside: "투입 인원 (명)".
+    let base = label.find(['(', '（']).map_or(label, |i| &label[..i]).trim_end();
+    !NUMBER_LABEL_ENDINGS.iter().any(|e| base.ends_with(e))
+}
+
+/// Whether the entry is nothing but an amount: digits with separators, a sign, the won mark
+/// (원, ₩, KRW) or the Korean magnitude words. Anything more — another currency, "약", a remark
+/// in brackets — is the writer's wording.
+fn bare_amount(v: &str) -> bool {
+    let t = v.trim();
+    let t = ["KRW", "krw"].iter().find_map(|m| t.strip_suffix(m).or_else(|| t.strip_prefix(m))).unwrap_or(t);
+    t.chars().any(|c| c.is_ascii_digit())
+        && t.chars().all(|c| {
+            c.is_ascii_digit()
+                || c.is_whitespace()
+                || matches!(c, ',' | '.' | '-' | '(' | ')' | '₩' | '\\' | '원' | '정' | '만' | '억' | '△' | '▲')
+        })
+}
+
+/// A money amount as printed (`1,250,000`), or `None` when the value is printed as entered: the
+/// field is not money, the entry says more than an amount, or it is not a whole number — a
+/// fraction is never rounded away (0.5 MM, 62.5 %, 1,234.56).
+pub(super) fn money_text(key: &str, label: &str, v: &str) -> Option<String> {
+    if !is_money(key, label) || !bare_amount(v) {
+        return None;
+    }
+    let n = normalize_amount(v)?;
+    (n.fract().abs() < 1e-9).then(|| format_won(n))
+}
+
+/// A date field as printed: the normalised date when the entry is nothing but one date; an entry
+/// that says more (a time, a weekday, a range) is printed as entered.
+pub(super) fn date_text(v: &str, normalized: Option<&str>) -> String {
+    let bare =
+        v.chars().all(|c| c.is_ascii_digit() || c.is_whitespace() || matches!(c, '.' | '-' | '/' | '년' | '월' | '일'))
+            && v.chars().filter(char::is_ascii_digit).count() <= 8;
+    match normalized {
+        Some(n) if bare => n.to_string(),
+        _ => v.to_string(),
+    }
+}
+
+/// Value as printed in the document: money with separators and a currency mark, other numbers as
+/// entered, dates / BRNs / phone numbers in their normalised form.
 pub fn display_value(f: &DraftField, ko: bool) -> String {
     let v = f.value.trim();
     if v.is_empty() {
         return String::new();
     }
     match kind_of(f) {
-        FieldKind::Amount => match normalize_amount(v) {
-            Some(n) if ko => format!("{}원", format_won(n)),
-            Some(n) => format!("KRW {}", format_won(n)),
+        FieldKind::Amount => match money_text(&f.key, &f.label, v) {
+            Some(n) if ko => format!("{n}원"),
+            Some(n) => format!("KRW {n}"),
             None => v.to_string(),
         },
-        FieldKind::Date | FieldKind::Brn | FieldKind::Phone => f.normalized.clone().unwrap_or_else(|| v.to_string()),
+        FieldKind::Date => date_text(v, f.normalized.as_deref()),
+        FieldKind::Brn | FieldKind::Phone => f.normalized.clone().unwrap_or_else(|| v.to_string()),
         _ => v.to_string(),
     }
 }
 
 fn display_cell(t: &DraftTable, col: usize, v: &str) -> String {
     let v = v.trim();
-    let kind = t.columns.get(col).and_then(|c| FieldKind::parse(&c.kind)).unwrap_or_default();
-    match kind {
-        FieldKind::Amount => normalize_amount(v).map(format_won).unwrap_or_else(|| v.to_string()),
+    match t.columns.get(col) {
+        Some(c) if FieldKind::parse(&c.kind) == Some(FieldKind::Amount) => {
+            money_text(&c.key, &c.label, v).unwrap_or_else(|| v.to_string())
+        }
         _ => v.to_string(),
     }
 }
@@ -218,7 +343,11 @@ fn plan(draft: &Draft) -> Plan<'_> {
 
     // 1. Title (letters show the template name and carry the subject in the head).
     items.push(Item::Title(if letter { template_name.clone() } else { title.clone() }));
-    used.insert("title".into());
+    // The `title` field is the subject line of a letter head (below). Elsewhere it is a field of its
+    // own (계약명, 회의명, 변경 제목) and goes into the grid — unless it only repeats the document title.
+    if letter || draft.field("title").is_some_and(|f| compact(&f.value) == compact(&title)) {
+        used.insert("title".into());
+    }
 
     // 2. Letter head.
     if letter {
@@ -1056,6 +1185,20 @@ pub fn save(deps: &GenerateDeps<'_>, req: &SaveRequest) -> Result<SavedDocument>
             })?;
         }
     }
+    // A registered form has slots for fields and item rows only: the body the preview shows is not
+    // in the filled file. The fill stays as it is — the user is told what was left out.
+    let omitted_body_blocks = if filled_form { fill::body_blocks(&draft) as u32 } else { 0 };
+    if omitted_body_blocks > 0 {
+        warnings.push(tr(
+            ko,
+            &format!(
+                "등록 양식에는 필드와 표만 채워집니다. 본문 {omitted_body_blocks}개 블록은 저장한 파일에 들어가지 않았습니다 — 본문까지 담으려면 PDF나 Markdown으로 저장하세요."
+            ),
+            &format!(
+                "A registered form takes fields and tables only: {omitted_body_blocks} body block(s) were left out of the saved file. Save as PDF or Markdown to keep the body."
+            ),
+        ));
+    }
 
     let mut doc_id = None;
     if req.register {
@@ -1077,5 +1220,5 @@ pub fn save(deps: &GenerateDeps<'_>, req: &SaveRequest) -> Result<SavedDocument>
             format!("Could not store the draft: {e}")
         });
     }
-    Ok(SavedDocument { rel_path: rel, absolute: abs, format, doc_id, filled_form, warnings })
+    Ok(SavedDocument { rel_path: rel, absolute: abs, format, doc_id, filled_form, warnings, omitted_body_blocks })
 }

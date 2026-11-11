@@ -1,4 +1,6 @@
-//! Planning entry point: pre-router → phrase rules → model with one re-query.
+//! Planning entry point: whole-sentence fast path → (slash commands | pre-router → phrase rules)
+//! → model: a routing call (op families, or a reply route for a turn that is not a command) and
+//! a plan call with one re-query, followed by the checks of `guard::contract_checks`.
 
 use std::sync::atomic::AtomicBool;
 
@@ -13,8 +15,8 @@ use crate::settings::{Language, Profile};
 
 use super::rules::is_compound;
 use super::{
-    has_errors, prompts, rules, schema, validate, Op, OpFamily, OpKind, OpenTarget, Plan, PlanContext, PlanIssue,
-    PlanMode, PlanResult, PlanSource, MIN_CONFIDENCE,
+    fastpath, guard, has_errors, prompts, rules, schema, validate, AnswerMode, Op, OpFamily, OpKind, OpenTarget, Plan,
+    PlanContext, PlanIssue, PlanMode, PlanResult, PlanSource, MIN_CONFIDENCE,
 };
 
 /// Model access for the planner (`None` in `plan` = rules only).
@@ -100,6 +102,21 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
         return Ok(result);
     }
 
+    // 0. The whole-sentence fast path (0.8.0 plan §1.6): a settings sentence that is exactly a
+    //    setting's name and a value of its type, or a fixed greeting. In every mode, before the
+    //    model; anything it cannot account for completely falls through.
+    if !text.starts_with('/') {
+        if let Some(mut p) = fastpath::plan(text, ctx) {
+            let issues = validate::validate(&mut p, ctx, date.as_ref());
+            if !has_errors(&issues) {
+                result.source = PlanSource::Fast;
+                result.plan = p;
+                result.issues = issues;
+                return Ok(result);
+            }
+        }
+    }
+
     let scoped = |plan: Plan| guard_scope(plan, text, ko);
     if mode == PlanMode::ModelFirst {
         // Slash commands stay deterministic; every other sentence is the model's to read.
@@ -119,8 +136,9 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
         //    ("다크 테마로 바꾸고 모델을 9B로 올려") go to the rules first so the second clause is kept.
         if is_compound(text) {
             if let Some(mut p) = rules::plan(text, ctx) {
-                let issues = validate::validate(&mut p, ctx, date.as_ref());
+                let mut issues = validate::validate(&mut p, ctx, date.as_ref());
                 if !has_errors(&issues) {
+                    issues.extend(guard::split_check(text, &mut p, ko));
                     result.source = PlanSource::Rules;
                     result.plan = scoped(p);
                     result.issues = issues;
@@ -140,8 +158,10 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
 
         // 2. phrase rules
         if let Some(mut p) = rules::plan(text, ctx) {
-            let issues = validate::validate(&mut p, ctx, date.as_ref());
+            let mut issues = validate::validate(&mut p, ctx, date.as_ref());
             if !has_errors(&issues) {
+                // A split the rule's op cannot express is confirmed, as for model plans.
+                issues.extend(guard::split_check(text, &mut p, ko));
                 result.source = PlanSource::Rules;
                 result.plan = scoped(p);
                 result.issues = issues;
@@ -193,8 +213,20 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
     // back to the single-stage prompt with every op.
     let mut kinds: Option<Vec<OpKind>> = None;
     let mut route_budget: Option<u32> = None;
-    match route_families(&vlm, ctx, text, date.as_ref()) {
-        Ok((families, (p, c))) => {
+    // A sentence that brings a long text along is planned from its instruction and an excerpt.
+    let planning = guard::planning_text(text);
+    let planning_text: &str = planning.as_ref();
+    match route_turn(&vlm, ctx, planning_text, date.as_ref()) {
+        Ok((Route::Reply(reply_mode), (p, c))) => {
+            // Not a command: no plan call. The turn is answered in prose (0.8.0 plan §1.2).
+            result.prompt_tokens += p;
+            result.completion_tokens += c;
+            result.source = PlanSource::Model;
+            result.route = Some(reply_mode.as_str().to_string());
+            result.plan = reply_plan(text, reply_mode, ko);
+            return Ok(result);
+        }
+        Ok((Route::Families(families), (p, c))) => {
             result.prompt_tokens += p;
             result.completion_tokens += c;
             if !families.is_empty() {
@@ -207,7 +239,7 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
             // Even the short routing prompt did not fit: size the plan prompt to the slot the
             // server reported (scaled by how far its count was from our estimate).
             if is_context_overflow(&e) {
-                let used = prompts::message_tokens(&prompts::family_messages(ctx, text, date.as_ref())).max(1);
+                let used = prompts::message_tokens(&prompts::family_messages(ctx, planning_text, date.as_ref())).max(1);
                 route_budget = request_and_slot(&e).map(|(request, slot)| {
                     let ratio = (request as f32 / used as f32).max(0.5);
                     let room = slot.saturating_sub(REPLY_TOKENS + 128);
@@ -233,7 +265,7 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
         attempt += 1;
         result.attempts += 1;
         let fb = feedback.as_ref().map(|(p, i)| (p.as_str(), i.as_slice()));
-        let (messages, tier) = prompts::messages_kinds(ctx, text, date.as_ref(), budget, fb, kinds.as_deref());
+        let (messages, tier) = prompts::messages_kinds(ctx, planning_text, date.as_ref(), budget, fb, kinds.as_deref());
         let (value, reply) = match vlm.call_json(Stage::Plan, &messages, "plan", &plan_schema, Some(REPLY_TOKENS)) {
             Ok(v) => v,
             Err(CoreError::Cancelled) => return Err(CoreError::Cancelled),
@@ -269,9 +301,14 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
             Ok((mut plan, mut issues)) => {
                 result.source = PlanSource::Model;
                 // A sentence that carries its own text is answered from that text, not from the library.
-                if let Some(note) = super::guard::prefer_text_only_answer(text, &mut plan, ko) {
+                guard::restore_carried_text(text, &mut plan);
+                if let Some(note) = guard::prefer_text_only_answer(text, &mut plan, ko) {
                     issues.push(note);
                 }
+                // "Nothing to do" is a turn that was not a command: reply instead of an empty card.
+                guard::noop_to_chat(text, &mut plan, ko);
+                // What the sentence does not support is confirmed, whatever the model's confidence.
+                issues.extend(guard::contract_checks(text, &mut plan, ko));
                 result.issues = issues;
                 result.plan = scoped(finalize(plan, ko));
                 return Ok(result);
@@ -291,33 +328,81 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
         }
     }
     // Two rejected attempts → clarification with the first error.
-    let first = result.issues.iter().find(|i| i.blocking).map(|i| i.message.clone()).unwrap_or_default();
+    let first = result.issues.iter().find(|i| i.blocking);
+    let question = first
+        .and_then(|i| setting_range_question(i, ko))
+        .unwrap_or_else(|| clarification_text(ko, &first.map(|i| i.message.clone()).unwrap_or_default()));
     result.source = PlanSource::Model;
-    result.plan = Plan::clarify(clarification_text(ko, &first), 0.0);
+    result.plan = Plan::clarify(question, 0.0);
     Ok(result)
 }
 
-/// Stage 1 of the two-stage planner: the op families of the command (deduplicated, at most two)
-/// with the call's token usage.
-fn route_families(
-    vlm: &Vlm<'_>,
-    ctx: &PlanContext,
-    text: &str,
-    date: Option<&DateRange>,
-) -> Result<(Vec<OpFamily>, (u64, u64))> {
+/// A settings value the validator rejected twice is asked about in the user's words: the
+/// setting's label and what it accepts, not the validator's English message (audit CON-8).
+fn setting_range_question(issue: &PlanIssue, ko: bool) -> Option<String> {
+    use super::settings_catalog as catalog;
+    if issue.code != "setting_value" {
+        return None;
+    }
+    let (_, spec) = catalog::find(issue.message.split_whitespace().next()?)?;
+    let range = catalog::range_hint(spec, ko);
+    Some(if ko {
+        format!("{} 설정에 넣을 수 있는 값은 {range}입니다. 어떤 값으로 바꿀까요?", spec.label_ko)
+    } else {
+        format!("{} accepts {range}. Which value should I set?", spec.label_en)
+    })
+}
+
+/// What the first model call made of the turn.
+enum Route {
+    /// A command: the op families it belongs to (deduplicated, at most two; empty = unknown reply).
+    Families(Vec<OpFamily>),
+    /// Not a command (0.8.0 plan §1.2): small talk, or a question that is not about the documents.
+    Reply(AnswerMode),
+}
+
+/// Stage 1 of the two-stage planner, with the call's token usage. A reply route counts only when
+/// it stands alone: "안녕, 견적서 합계 알려줘" names a family too and stays a command.
+fn route_turn(vlm: &Vlm<'_>, ctx: &PlanContext, text: &str, date: Option<&DateRange>) -> Result<(Route, (u64, u64))> {
     let messages = prompts::family_messages(ctx, text, date);
     let (value, reply) =
         vlm.call_json(Stage::Plan, &messages, "families", &schema::family_schema(), Some(ROUTE_TOKENS))?;
-    let mut families: Vec<OpFamily> = value
-        .get("families")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|v| v.as_str().and_then(OpFamily::parse))
-        .collect();
+    let names: Vec<&str> =
+        value.get("families").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
+    let mut families: Vec<OpFamily> = names.iter().filter_map(|n| OpFamily::parse(n)).collect();
     families.dedup();
     families.truncate(2);
-    Ok((families, (reply.usage.prompt, reply.usage.completion)))
+    let usage = (reply.usage.prompt, reply.usage.completion);
+    if families.is_empty() {
+        if names.contains(&schema::ROUTE_CHAT) {
+            return Ok((Route::Reply(AnswerMode::Chat), usage));
+        }
+        if names.contains(&schema::ROUTE_GENERAL) {
+            return Ok((Route::Reply(AnswerMode::General), usage));
+        }
+    }
+    Ok((Route::Families(families), usage))
+}
+
+/// The plan of a turn that is answered in prose: one `answer` op in the given mode. `chat` looks
+/// nothing up; `general` uses evidence from the library when there is some and general knowledge
+/// (marked as such) otherwise.
+fn reply_plan(text: &str, mode: AnswerMode, ko: bool) -> Plan {
+    let (knowledge, cite, summary) = match (mode, ko) {
+        (AnswerMode::Chat, true) => (Some(false), Some(false), "대화에 답합니다"),
+        (AnswerMode::Chat, false) => (Some(false), Some(false), "Replies to the conversation"),
+        (AnswerMode::General, true) => (None, Some(true), "문서와 무관한 질문에 답합니다(문서에 근거가 있으면 근거로)"),
+        (AnswerMode::General, false) => {
+            (None, Some(true), "Answers a question that is not about the documents (from evidence when there is some)")
+        }
+    };
+    let mut plan = Plan::single(
+        Op::Answer { question: text.trim().to_string(), cite, knowledge, mode: Some(mode), reply: None },
+        0.9,
+        summary,
+    );
+    plan.requires_confirmation = false;
+    plan
 }
 
 /// llama-server rejects prompts longer than the slot context with HTTP 400

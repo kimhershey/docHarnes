@@ -11,11 +11,18 @@ const COLORS: Record<ToastKind, string> = {
   danger: "border-danger text-danger",
 };
 
+/**
+ * Toasts sit at the top, over the top bar's status badges (job count, model): in the bottom right corner they
+ * covered the assistant's send button, the action buttons of a table's last row and dialog footers for the seconds
+ * they stay (0.7.0 audit UI-11). A single one-line toast is about as tall as the top bar, so it hides nothing of
+ * the screen below; a stack grows downwards. `right-[5.5rem]` leaves the theme switch at the bar's right end
+ * (two icon buttons, 4.25 rem, plus the bar's padding) uncovered — on the onboarding screen as well.
+ */
 export function Toaster() {
   const toasts = useUiStore((s) => s.toasts);
   const dismiss = useUiStore((s) => s.dismissToast);
   return (
-    <div className="pointer-events-none fixed bottom-10 right-4 z-[60] flex w-96 max-w-[calc(100vw-2rem)] flex-col gap-2" aria-live="polite" aria-atomic="false" data-testid="toaster">
+    <div className="pointer-events-none fixed right-[5.5rem] top-1 z-[60] flex w-96 max-w-[calc(100vw-6rem)] flex-col gap-2" aria-live="polite" aria-atomic="false" data-testid="toaster">
       {toasts.map((t) => {
         const Icon = ICONS[t.kind];
         return (

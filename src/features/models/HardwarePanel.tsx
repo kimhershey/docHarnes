@@ -1,6 +1,7 @@
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { useModelDisplay } from "@/app/hooks/useModelDisplay";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
@@ -14,6 +15,7 @@ import { useUiStore } from "@/stores/ui";
 /** Hardware probe + tier assessment (onboarding step 2 and the model manager). */
 export function HardwarePanel() {
   const { t, i18n } = useTranslation();
+  const modelName = useModelDisplay();
   const hw = useHardware();
   const assessment = useAssessment();
   const toast = useUiStore((s) => s.toast);
@@ -90,7 +92,7 @@ export function HardwarePanel() {
               <span className="text-xs text-fg-muted">{t(`hw.basis.${a.tier.basis}`)}</span>
             </dd>
             <dt className="text-fg-muted">{t("onboarding.hardware.recommended")}</dt>
-            <dd>{a.recommended_model?.display ?? t("common.none")}</dd>
+            <dd>{modelName(a.recommended_model?.display) ?? t("common.none")}</dd>
           </>
         )}
         <dt className="text-fg-muted">{t("hw.probed_at")}</dt>

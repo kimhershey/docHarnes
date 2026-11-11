@@ -14,7 +14,7 @@
 // engines). Uses `tar` to unpack (bsdtar on Windows 10+ handles zip files).
 // Set GH_TOKEN / GITHUB_TOKEN to authenticate the GitHub API call (CI rate limits).
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -24,6 +24,11 @@ import { downloadGithubAsset, fetchWithRetry, githubHeaders as sharedHeaders } f
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const manifestPath = path.join(ROOT, "engines", "manifest.json");
+// llama.cpp's MIT license at the pinned tag. The official release zips carry no copy of it (only
+// LICENSE-LLVM-OpenMP for the bundled libomp.dll), and the license asks for the text to accompany every copy —
+// so it is put next to the unpacked binaries, under the name the self-built CUDA packs already use.
+const LLAMA_LICENSE = path.join(ROOT, "engines", "licenses", "llama.cpp-LICENSE.txt");
+export const LLAMA_LICENSE_NAME = "LICENSE-llama.cpp.txt";
 
 /** Default app-data engines directory (`<AppData>/DocuLens/engines`). */
 export function appDataEnginesDir(env = process.env, platform = process.platform) {
@@ -158,6 +163,7 @@ async function main() {
     if (existsSync(target)) rmSync(target, { recursive: true, force: true });
     unpack(tmp, target);
     rmSync(tmp, { force: true });
+    if (!existsSync(path.join(target, LLAMA_LICENSE_NAME))) copyFileSync(LLAMA_LICENSE, path.join(target, LLAMA_LICENSE_NAME));
     writeFileSync(
       path.join(target, "pack.json"),
       JSON.stringify({ tag, pack: entry.pack ?? pack, asset: asset.name, sha256: sha, bundled: bundle, fetched_at: new Date().toISOString() }, null, 2),

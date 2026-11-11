@@ -212,6 +212,11 @@ test.describe("UI 배율 — 문서 작성", () => {
       const main = page.locator("main#main");
       expect(await main.evaluate((el) => el.scrollHeight - el.clientHeight), `main scrolls vertically at ${percent} %`).toBeLessThanOrEqual(1);
       expect(await main.evaluate((el) => el.scrollWidth - el.clientWidth), `main scrolls sideways at ${percent} %`).toBeLessThanOrEqual(1);
+      // Nor does the window: looking at `main` alone missed the editor table's sr-only caption, which made the document
+      // 1441 × 1242 px in the 1280 × 800 window (0.7.0 audit UI-1; every screen is checked in layout.spec.ts).
+      const root = await page.evaluate(() => [document.documentElement.scrollWidth - window.innerWidth, document.documentElement.scrollHeight - window.innerHeight]);
+      expect(root[0], `the document is wider than the window at ${percent} %`).toBeLessThanOrEqual(0);
+      expect(root[1], `the document is taller than the window at ${percent} %`).toBeLessThanOrEqual(0);
       // The A4 sheet is wider than the 1280 px window's centre column, so it is shrunk to fit and lies inside the box.
       expect(await page.getByTestId("generate-preview-box").getAttribute("data-scale")).not.toBe("1.00");
       const box = (await page.getByTestId("generate-preview-box").boundingBox())!;

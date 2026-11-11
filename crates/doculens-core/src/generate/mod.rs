@@ -312,6 +312,49 @@ pub fn sections_of(body: &[DraftBlock]) -> Vec<Section> {
     out
 }
 
+/// Characters of free text a request keeps per item when it is stored with its job (the content,
+/// the instruction, each pasted text source).
+pub const MAX_STORED_TEXT_CHARS: usize = 20_000;
+
+impl DraftRequest {
+    /// Makes the project of a draft job and the project of its request one thing. A job started for
+    /// a project (`job_project`: a 보완요청서 requested from the project page) gives its project to a
+    /// request that names none, so the request's knowledge searches stay inside it; a request that
+    /// names a project (the planner's project scope, the 문서 작성 screen) gives it to a job that has
+    /// none, so the result links to it. Returns the job's project.
+    pub fn bind_project(&mut self, job_project: Option<String>) -> Option<String> {
+        let named = |p: Option<String>| p.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+        self.project_id = named(self.project_id.take());
+        let job_project = named(job_project).or_else(|| self.project_id.clone());
+        if self.project_id.is_none() {
+            self.project_id = job_project.clone();
+        }
+        job_project
+    }
+
+    /// Bounds the request's free text for storage: the content (trimmed), the instruction and every
+    /// pasted text source keep [`MAX_STORED_TEXT_CHARS`] characters. This is not the prompt limit:
+    /// what the model is given of the content and the instruction is decided — and reported when it
+    /// is less than the whole — by the prompt (`prompts::MAX_CONTENT_CHARS`, `MAX_FEEDBACK_CHARS`).
+    pub fn bound_stored_text(&mut self) {
+        let bound = |text: &mut String| {
+            if text.chars().count() > MAX_STORED_TEXT_CHARS {
+                *text = text.chars().take(MAX_STORED_TEXT_CHARS).collect();
+            }
+        };
+        self.content = self.content.trim().to_string();
+        bound(&mut self.content);
+        if let Some(feedback) = self.feedback.as_mut() {
+            bound(feedback);
+        }
+        for source in &mut self.sources {
+            if let SourceRef::Text { text, .. } = source {
+                bound(text);
+            }
+        }
+    }
+}
+
 impl Default for DraftRequest {
     fn default() -> Self {
         Self {
@@ -503,6 +546,22 @@ pub struct DraftOutcome {
     /// Model calls that produced body sections (1 = one-shot draft; >1 = outline → sections flow).
     #[serde(default)]
     pub sections: u32,
+    /// The user's own text the model saw only in part: the content is limited to
+    /// `prompts::MAX_CONTENT_CHARS`, the instruction to `prompts::MAX_FEEDBACK_CHARS`, and a small
+    /// context can take less. The draft's notes carry the same in words. Empty = nothing was cut.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_cuts: Vec<InputCut>,
+}
+
+/// Part of the request's text that did not reach the model (`DraftOutcome.input_cuts`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputCut {
+    /// `content` (`DraftRequest.content`) | `feedback` (`DraftRequest.feedback`, the instruction).
+    pub field: String,
+    /// Characters the request carried.
+    pub chars: u32,
+    /// Characters passed to the model (the first ones).
+    pub passed: u32,
 }
 
 /// Save request (문서 생성 screen "저장", planner `draft_document` after confirmation).
@@ -546,6 +605,11 @@ pub struct SavedDocument {
     pub filled_form: bool,
     /// Printing / filling problems that did not stop the save (e.g. PDF printer unavailable → MD kept).
     pub warnings: Vec<String>,
+    /// Body blocks with text (headings, paragraphs, lists) that a filled form left out: a registered
+    /// HWPX / DOCX form has slots for fields and item rows only. `warnings` carries the sentence for
+    /// the user; 0 when nothing was left out or no form was filled.
+    #[serde(default)]
+    pub omitted_body_blocks: u32,
 }
 
 /// Field definition of a built-in template (for the UI picker and the prompt).
@@ -601,8 +665,10 @@ pub struct GenerateDeps<'a> {
     pub import: Option<&'a ImportDeps<'a>>,
     pub cancel: Option<&'a AtomicBool>,
     pub language: Language,
-    /// Section-level progress of a split draft: `(fraction 0..1, detail)` — the job bridge forwards
-    /// it to the job book ("section 3/8").
+    /// Section-level progress of a split draft / of a revision: `(fraction 0..1, detail)` — the job
+    /// bridge forwards it to the job book ("section 3/8"). It is called between model calls only,
+    /// never while one is in flight, and may block: the bridge uses it as the engine checkpoint
+    /// where waiting interactive requests run and a paused job parks.
     pub progress: Option<&'a ProgressFn<'a>>,
 }
 

@@ -144,7 +144,7 @@ export function DraftEditor({ draft, onChange, excluded, onToggleExcluded, disab
           {table.rows.length === 0 ? (
             <p className="text-xs text-fg-subtle">{t("generate.editor.no_rows")}</p>
           ) : (
-            <div className="overflow-x-auto" data-hscroll="ok">
+            <div className="relative overflow-x-auto" data-hscroll="ok">
               <table className="w-full text-xs">
                 <caption className="sr-only">{table.label}</caption>
                 <thead>

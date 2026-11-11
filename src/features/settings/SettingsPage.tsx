@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router";
 
+import { useModelDisplay } from "@/app/hooks/useModelDisplay";
 import { THEME_ICONS } from "@/app/layout/ThemeMenu";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -216,7 +217,7 @@ function GeneralTab() {
           </Select>
         </Row>
         <Row label={t("settings.general.sidebar")}>
-          <Switch checked={settings.ui.sidebar_collapsed} onCheckedChange={(v) => void update((s) => void (s.ui.sidebar_collapsed = v))} />
+          <Switch checked={settings.ui.sidebar_collapsed} onCheckedChange={(v) => void update((s) => void (s.ui.sidebar_collapsed = v))} aria-label={t("settings.general.sidebar")} />
         </Row>
         <Row label={t("settings.notifications.job_complete")} hint={t("settings.notifications.job_complete_hint")}>
           <Switch checked={settings.notifications.job_complete} onCheckedChange={(v) => void update((s) => void (s.notifications.job_complete = v))} aria-label={t("settings.notifications.job_complete")} data-testid="settings-notify-job-complete" />
@@ -477,16 +478,16 @@ function ProcessingTab() {
           </Select>
         </Row>
         <Row label={t("settings.processing.ocr_digital_pdf")} hint={t("settings.processing.ocr_digital_pdf_hint")}>
-          <Switch checked={p.ocr_digital_pdf} onCheckedChange={(v) => void update((s) => void (s.processing.ocr_digital_pdf = v))} data-testid="settings-ocr-digital" />
+          <Switch checked={p.ocr_digital_pdf} onCheckedChange={(v) => void update((s) => void (s.processing.ocr_digital_pdf = v))} aria-label={t("settings.processing.ocr_digital_pdf")} data-testid="settings-ocr-digital" />
         </Row>
         <Row label={t("settings.processing.kie_max_pages")} hint={t("settings.processing.kie_max_pages_hint")} htmlFor="kie-max-pages">
           <NumberField id="kie-max-pages" value={p.kie_max_pages} min={1} max={32} step={1} onCommit={(v) => void update((s) => void (s.processing.kie_max_pages = v))} testId="settings-kie-max-pages" />
         </Row>
         <Row label={t("settings.processing.precise_mode")} hint={t("settings.processing.precise_hint")}>
-          <Switch checked={p.precise_mode} onCheckedChange={(v) => void update((s) => void (s.processing.precise_mode = v))} data-testid="settings-precise-mode" />
+          <Switch checked={p.precise_mode} onCheckedChange={(v) => void update((s) => void (s.processing.precise_mode = v))} aria-label={t("settings.processing.precise_mode")} data-testid="settings-precise-mode" />
         </Row>
         <Row label={t("settings.processing.dense_reocr")} hint={t("settings.processing.dense_reocr_hint", { cells: p.dense_cells })}>
-          <Switch checked={p.dense_reocr} onCheckedChange={(v) => void update((s) => void (s.processing.dense_reocr = v))} data-testid="settings-dense-reocr" />
+          <Switch checked={p.dense_reocr} onCheckedChange={(v) => void update((s) => void (s.processing.dense_reocr = v))} aria-label={t("settings.processing.dense_reocr")} data-testid="settings-dense-reocr" />
         </Row>
         <Row label={t("settings.processing.dense_cells")} htmlFor="dense-cells">
           <NumberField id="dense-cells" value={p.dense_cells} min={10} max={2000} step={10} onCommit={(v) => void update((s) => void (s.processing.dense_cells = v))} testId="settings-dense-cells" />
@@ -513,11 +514,12 @@ function ProcessingTab() {
           <span className="text-sm text-fg-muted">%</span>
         </Row>
         <Row label={t("settings.processing.organize_reviewed_only")}>
-          <Switch checked={p.organize_reviewed_only} onCheckedChange={(v) => void update((s) => void (s.processing.organize_reviewed_only = v))} />
+          <Switch checked={p.organize_reviewed_only} onCheckedChange={(v) => void update((s) => void (s.processing.organize_reviewed_only = v))} aria-label={t("settings.processing.organize_reviewed_only")} />
         </Row>
         <Row label={t("settings.processing.inbox_watch")} hint={t("library.inbox_watch_hint")}>
           <Switch
             data-testid="settings-inbox-watch"
+            aria-label={t("settings.processing.inbox_watch")}
             checked={p.inbox_watch}
             onCheckedChange={(v) =>
               void api
@@ -616,6 +618,7 @@ function KnowledgeTab() {
   const settings = useSettingsStore((s) => s.settings)!;
   const update = useSettingsStore((s) => s.update);
   const { data: registry } = useRegistry();
+  const modelName = useModelDisplay();
   const k = settings.knowledge;
   const embeddings = (registry?.models ?? []).filter((m) => m.role === "embedding");
   const DEFAULT = "__default__";
@@ -640,10 +643,10 @@ function KnowledgeTab() {
       </CardHeader>
       <CardContent className="divide-y divide-border">
         <Row label={t("settings.knowledge.auto_index")} hint={t("settings.knowledge.auto_index_hint")}>
-          <Switch checked={k.auto_index} onCheckedChange={(v) => void update((s) => void (s.knowledge.auto_index = v))} data-testid="kb-auto-index" />
+          <Switch checked={k.auto_index} onCheckedChange={(v) => void update((s) => void (s.knowledge.auto_index = v))} aria-label={t("settings.knowledge.auto_index")} data-testid="kb-auto-index" />
         </Row>
         <Row label={t("settings.knowledge.auto_embed")} hint={t("settings.knowledge.auto_embed_hint")}>
-          <Switch checked={k.auto_embed} onCheckedChange={(v) => void update((s) => void (s.knowledge.auto_embed = v))} />
+          <Switch checked={k.auto_embed} onCheckedChange={(v) => void update((s) => void (s.knowledge.auto_embed = v))} aria-label={t("settings.knowledge.auto_embed")} />
         </Row>
         <Row label={t("settings.knowledge.embedding_model")}>
           <Select value={k.embedding_model ?? DEFAULT} onValueChange={(v) => void update((s) => void (s.knowledge.embedding_model = v === DEFAULT ? null : v))}>
@@ -654,17 +657,17 @@ function KnowledgeTab() {
               <SelectItem value={DEFAULT}>{t("settings.knowledge.embedding_default", { model: registry?.default_embedding ?? "-" })}</SelectItem>
               {embeddings.map((m) => (
                 <SelectItem key={m.id} value={m.id}>
-                  {m.display}
+                  {modelName(m.display)}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
         </Row>
         <Row label={t("settings.knowledge.latest_only")} hint={t("settings.knowledge.latest_only_hint")}>
-          <Switch checked={k.latest_only} onCheckedChange={(v) => void update((s) => void (s.knowledge.latest_only = v))} />
+          <Switch checked={k.latest_only} onCheckedChange={(v) => void update((s) => void (s.knowledge.latest_only = v))} aria-label={t("settings.knowledge.latest_only")} />
         </Row>
         <Row label={t("settings.knowledge.allow_general")} hint={t("settings.knowledge.allow_general_hint")}>
-          <Switch checked={k.allow_general_knowledge} onCheckedChange={(v) => void update((s) => void (s.knowledge.allow_general_knowledge = v))} data-testid="kb-allow-general" />
+          <Switch checked={k.allow_general_knowledge} onCheckedChange={(v) => void update((s) => void (s.knowledge.allow_general_knowledge = v))} aria-label={t("settings.knowledge.allow_general")} data-testid="kb-allow-general" />
         </Row>
         <Row label={t("settings.knowledge.min_similarity")} hint={t("settings.knowledge.min_similarity_hint")}>
           <div className="flex items-center gap-3">
@@ -707,7 +710,7 @@ function PrivacyTab() {
       <Card>
         <CardContent className="divide-y divide-border pt-2">
           <Row label={t("settings.privacy.pii_masking")} hint={t("settings.privacy.pii_masking_hint")}>
-            <Switch checked={settings.privacy.pii_masking} onCheckedChange={(v) => void update((s) => void (s.privacy.pii_masking = v))} data-testid="pii-masking" />
+            <Switch checked={settings.privacy.pii_masking} onCheckedChange={(v) => void update((s) => void (s.privacy.pii_masking = v))} aria-label={t("settings.privacy.pii_masking")} data-testid="pii-masking" />
           </Row>
         </CardContent>
       </Card>
@@ -769,7 +772,7 @@ function PrivacyTab() {
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <Label>{t("settings.privacy.purge_enabled")}</Label>
-                  <Switch checked={draft.purge_enabled} onCheckedChange={(v) => setDraft({ ...draft, purge_enabled: v })} />
+                  <Switch checked={draft.purge_enabled} onCheckedChange={(v) => setDraft({ ...draft, purge_enabled: v })} aria-label={t("settings.privacy.purge_enabled")} />
                 </div>
               </div>
               <div className="flex items-center justify-end">

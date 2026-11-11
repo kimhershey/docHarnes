@@ -1,0 +1,420 @@
+[
+  {
+    "confirm": false,
+    "key": "ui.theme",
+    "type": {
+      "kind": "enum",
+      "values": [
+        "light",
+        "dark",
+        "system",
+        "high-contrast"
+      ]
+    }
+  },
+  {
+    "confirm": false,
+    "key": "ui.language",
+    "type": {
+      "kind": "enum",
+      "values": [
+        "ko",
+        "en"
+      ]
+    }
+  },
+  {
+    "confirm": false,
+    "key": "ui.scale_percent",
+    "type": {
+      "kind": "integer",
+      "max": 150,
+      "min": 90
+    }
+  },
+  {
+    "confirm": false,
+    "key": "ui.reduced_motion",
+    "type": {
+      "kind": "enum",
+      "values": [
+        "system",
+        "on",
+        "off"
+      ]
+    }
+  },
+  {
+    "confirm": false,
+    "key": "ui.sidebar_collapsed",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": false,
+    "key": "models.tier_mode",
+    "type": {
+      "kind": "enum",
+      "values": [
+        "auto",
+        "manual"
+      ]
+    }
+  },
+  {
+    "confirm": false,
+    "key": "models.manual_tier",
+    "type": {
+      "kind": "enum",
+      "values": [
+        "cpu_only",
+        "vram_6gb",
+        "vram_8gb",
+        "vram_12gb",
+        "vram_16gb",
+        "vram_24gb_plus"
+      ]
+    }
+  },
+  {
+    "confirm": false,
+    "key": "models.active_model",
+    "type": {
+      "kind": "string"
+    }
+  },
+  {
+    "confirm": false,
+    "key": "models.profile",
+    "type": {
+      "kind": "enum",
+      "values": [
+        "accuracy",
+        "balanced",
+        "speed",
+        "fine_print"
+      ]
+    }
+  },
+  {
+    "confirm": false,
+    "key": "models.backend",
+    "type": {
+      "kind": "enum",
+      "values": [
+        "auto",
+        "cuda",
+        "vulkan",
+        "cpu"
+      ]
+    }
+  },
+  {
+    "confirm": false,
+    "key": "models.resident_models_max",
+    "type": {
+      "kind": "integer",
+      "max": 4,
+      "min": 1
+    }
+  },
+  {
+    "confirm": false,
+    "key": "models.sleep_idle_seconds",
+    "type": {
+      "kind": "integer",
+      "max": 86400,
+      "min": 0
+    }
+  },
+  {
+    "confirm": false,
+    "key": "models.allow_online_download",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": false,
+    "key": "models.auto_start_engine",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": false,
+    "key": "models.warmup_after_load",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": false,
+    "key": "models.vision_on_cpu",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": true,
+    "key": "models.engine_binary",
+    "type": {
+      "kind": "string"
+    }
+  },
+  {
+    "confirm": false,
+    "key": "processing.auto_level",
+    "type": {
+      "kind": "enum",
+      "values": [
+        "none",
+        "classify_only",
+        "classify_and_ocr",
+        "full"
+      ]
+    }
+  },
+  {
+    "confirm": false,
+    "key": "processing.inbox_auto_level",
+    "type": {
+      "kind": "enum",
+      "values": [
+        "none",
+        "classify_only",
+        "classify_and_ocr",
+        "full"
+      ]
+    }
+  },
+  {
+    "confirm": false,
+    "key": "processing.render_dpi",
+    "type": {
+      "choices": [
+        150,
+        200,
+        300
+      ],
+      "kind": "integer"
+    }
+  },
+  {
+    "confirm": false,
+    "key": "processing.review_threshold",
+    "type": {
+      "kind": "number",
+      "max": 1.0,
+      "min": 0.0,
+      "percent": true
+    }
+  },
+  {
+    "confirm": false,
+    "key": "processing.audit_sample_percent",
+    "type": {
+      "kind": "integer",
+      "max": 100,
+      "min": 0
+    }
+  },
+  {
+    "confirm": false,
+    "key": "processing.organize_reviewed_only",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": false,
+    "key": "processing.inbox_watch",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": false,
+    "key": "processing.ocr_digital_pdf",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": false,
+    "key": "processing.kie_max_pages",
+    "type": {
+      "kind": "integer",
+      "max": 32,
+      "min": 1
+    }
+  },
+  {
+    "confirm": false,
+    "key": "processing.precise_mode",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": false,
+    "key": "processing.dense_reocr",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": false,
+    "key": "processing.dense_cells",
+    "type": {
+      "kind": "integer",
+      "max": 2000,
+      "min": 10
+    }
+  },
+  {
+    "confirm": false,
+    "key": "cache.page_cache_max_gb",
+    "type": {
+      "kind": "number",
+      "max": 1000.0,
+      "min": 0.5,
+      "percent": false
+    }
+  },
+  {
+    "confirm": false,
+    "key": "cache.keep_thumbnails",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": false,
+    "key": "privacy.pii_masking",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": true,
+    "key": "privacy.db_encryption",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": false,
+    "key": "notifications.job_complete",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": false,
+    "key": "notifications.prevent_sleep_during_jobs",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": false,
+    "key": "knowledge.auto_index",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": false,
+    "key": "knowledge.auto_embed",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": false,
+    "key": "knowledge.embedding_model",
+    "type": {
+      "kind": "string"
+    }
+  },
+  {
+    "confirm": false,
+    "key": "knowledge.latest_only",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": false,
+    "key": "knowledge.allow_general_knowledge",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": false,
+    "key": "knowledge.context_tokens",
+    "type": {
+      "kind": "integer",
+      "max": 24000,
+      "min": 1000
+    }
+  },
+  {
+    "confirm": false,
+    "key": "knowledge.top_k",
+    "type": {
+      "kind": "integer",
+      "max": 32,
+      "min": 1
+    }
+  },
+  {
+    "confirm": false,
+    "key": "knowledge.chunk_target_tokens",
+    "type": {
+      "kind": "integer",
+      "max": 2000,
+      "min": 120
+    }
+  },
+  {
+    "confirm": false,
+    "key": "knowledge.min_vector_similarity",
+    "type": {
+      "kind": "number",
+      "max": 1.0,
+      "min": 0.0,
+      "percent": true
+    }
+  },
+  {
+    "confirm": false,
+    "key": "generation.max_tokens_gpu",
+    "type": {
+      "kind": "integer",
+      "max": 65536,
+      "min": 1200
+    }
+  },
+  {
+    "confirm": false,
+    "key": "generation.max_tokens_cpu",
+    "type": {
+      "kind": "integer",
+      "max": 12288,
+      "min": 1200
+    }
+  },
+  {
+    "confirm": false,
+    "key": "journal_days",
+    "type": {
+      "kind": "integer",
+      "max": 36500,
+      "min": 0
+    }
+  }
+]
