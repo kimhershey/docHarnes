@@ -216,67 +216,138 @@ pub fn noop_to_chat(text: &str, plan: &mut Plan, ko: bool) -> bool {
     true
 }
 
-/// What a sentence asks to be split by.
+/// What a sentence asks to be split by ("프로젝트별", "유형 별로", "각 프로젝트", "폴더마다",
+/// "by project", "per vendor" …).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Split {
+pub enum SplitBy {
     /// 문서별 · 파일별 — one result per document.
     Document,
-    /// 프로젝트별 · 유형별 · 폴더별 · 거래처별 · 월별 … — one result per group.
-    Group,
+    Project,
+    DocType,
+    Folder,
+    Vendor,
+    Month,
+    /// A criterion no op can express (담당자별, 분기별 …).
+    Other,
 }
 
-const GROUP_NOUNS: &[&str] =
-    &["프로젝트", "유형", "종류", "타입", "폴더", "거래처", "업체", "담당자", "월", "연도", "년도", "분기", "날짜"];
-const DOCUMENT_NOUNS: &[&str] = &["문서", "파일"];
+const SPLIT_NOUNS: &[(&str, SplitBy)] = &[
+    ("프로젝트", SplitBy::Project),
+    ("유형", SplitBy::DocType),
+    ("종류", SplitBy::DocType),
+    ("타입", SplitBy::DocType),
+    ("폴더", SplitBy::Folder),
+    ("거래처", SplitBy::Vendor),
+    ("업체", SplitBy::Vendor),
+    ("월", SplitBy::Month),
+    ("담당자", SplitBy::Other),
+    ("연도", SplitBy::Other),
+    ("년도", SplitBy::Other),
+    ("분기", SplitBy::Other),
+    ("날짜", SplitBy::Other),
+    ("문서", SplitBy::Document),
+    ("파일", SplitBy::Document),
+];
+const SPLIT_PHRASES_EN: &[(&str, SplitBy)] = &[
+    ("by project", SplitBy::Project),
+    ("per project", SplitBy::Project),
+    ("each project", SplitBy::Project),
+    ("by type", SplitBy::DocType),
+    ("per type", SplitBy::DocType),
+    ("by document type", SplitBy::DocType),
+    ("by folder", SplitBy::Folder),
+    ("per folder", SplitBy::Folder),
+    ("each folder", SplitBy::Folder),
+    ("by vendor", SplitBy::Vendor),
+    ("per vendor", SplitBy::Vendor),
+    ("by month", SplitBy::Month),
+    ("per month", SplitBy::Month),
+    ("monthly", SplitBy::Month),
+    ("by owner", SplitBy::Other),
+    ("by quarter", SplitBy::Other),
+    ("by year", SplitBy::Other),
+    ("per document", SplitBy::Document),
+    ("each document", SplitBy::Document),
+    ("by document", SplitBy::Document),
+];
 
-/// "프로젝트별", "유형 별로", "각 프로젝트", "폴더마다", "by project", "per vendor" …
-fn asks_to_split(text: &str) -> Option<Split> {
-    let t = text.to_lowercase();
-    let with_suffix = |noun: &str| {
-        ["별", " 별", "마다", " 마다"].iter().any(|suffix| t.contains(&format!("{noun}{suffix}")))
-            || t.contains(&format!("각 {noun}"))
-            || t.contains(&format!("각각의 {noun}"))
-    };
-    if GROUP_NOUNS.iter().any(|n| with_suffix(n)) {
-        return Some(Split::Group);
-    }
-    if [
-        "by project",
-        "per project",
-        "by type",
-        "per type",
-        "by folder",
-        "per folder",
-        "by vendor",
-        "per vendor",
-        "by month",
-        "each project",
-        "for each project",
-    ]
-    .iter()
-    .any(|p| t.contains(p))
-    {
-        return Some(Split::Group);
-    }
-    if DOCUMENT_NOUNS.iter().any(|n| with_suffix(n)) || t.contains("per document") || t.contains("each document") {
-        return Some(Split::Document);
-    }
-    None
-}
-
-/// The plan has an op that could have been split but is not.
-fn drops_the_split(plan: &Plan, split: Split) -> bool {
-    plan.operations.iter().any(|op| match op {
-        Op::Summarize { target, group_by, .. } => {
-            let grouped = !matches!(group_by, None | Some(SummaryGroup::None));
-            match split {
-                Split::Group => !grouped,
-                Split::Document => !grouped && *target == Some(SummarizeTarget::Set),
-            }
-        }
-        Op::Aggregate { group_by, .. } => split == Split::Group && matches!(group_by, None | Some(GroupBy::None)),
-        _ => false,
+/// `noun` + "별" as a suffix: "프로젝트별", "프로젝트 별로" — not "프로젝트 별도 관리" or "별표".
+fn has_byeol(text: &str, noun: &str) -> bool {
+    [format!("{noun}별"), format!("{noun} 별")].iter().any(|needle| {
+        text.match_indices(needle.as_str()).any(|(at, _)| match text[at + needle.len()..].chars().next() {
+            None => true,
+            Some('로') => true,
+            Some(c) => !('가'..='힣').contains(&c),
+        })
     })
+}
+
+/// The criterion the sentence asks to split the result by, if any.
+pub fn split_of(text: &str) -> Option<SplitBy> {
+    let t = text.to_lowercase();
+    for (noun, by) in SPLIT_NOUNS {
+        let each = [format!("{noun}마다"), format!("{noun} 마다"), format!("각 {noun}"), format!("각각의 {noun}")];
+        // ("월" alone is too short for "각 월…": 각 월요일)
+        let named = has_byeol(&t, noun) || (*noun != "월" && each.iter().any(|e| t.contains(e.as_str())));
+        if named {
+            return Some(*by);
+        }
+    }
+    SPLIT_PHRASES_EN.iter().find(|(phrase, _)| t.contains(phrase)).map(|(_, by)| *by)
+}
+
+/// The grouping of a summary the sentence names, when `summarize` can express it.
+pub fn summary_group(text: &str) -> Option<SummaryGroup> {
+    match split_of(text)? {
+        SplitBy::Project => Some(SummaryGroup::Project),
+        SplitBy::DocType => Some(SummaryGroup::DocType),
+        SplitBy::Folder => Some(SummaryGroup::Folder),
+        _ => None,
+    }
+}
+
+/// The grouping of an aggregate the sentence names, when `aggregate` can express it.
+fn aggregate_group(text: &str) -> Option<GroupBy> {
+    match split_of(text)? {
+        SplitBy::Project => Some(GroupBy::Project),
+        SplitBy::DocType => Some(GroupBy::DocType),
+        SplitBy::Vendor => Some(GroupBy::Vendor),
+        SplitBy::Month => Some(GroupBy::Month),
+        _ => None,
+    }
+}
+
+/// Puts the split the sentence names into the ops that can express it ("프로젝트별로 요약해줘" with a
+/// plan that summarises everything as one): the criterion is in the sentence, so this is a repair,
+/// not a guess. Returns whether an op that drops the split is left.
+fn keep_the_split(text: &str, plan: &mut Plan) -> bool {
+    let Some(split) = split_of(text) else { return false };
+    let mut dropped = false;
+    for op in &mut plan.operations {
+        match op {
+            Op::Summarize { target, group_by, .. } if matches!(group_by, None | Some(SummaryGroup::None)) => {
+                if split == SplitBy::Document {
+                    if *target == Some(SummarizeTarget::Set) {
+                        *target = Some(SummarizeTarget::EachDoc);
+                    }
+                } else if let Some(group) = summary_group(text) {
+                    *group_by = Some(group);
+                } else {
+                    dropped = true;
+                }
+            }
+            Op::Aggregate { group_by, .. }
+                if split != SplitBy::Document && matches!(group_by, None | Some(GroupBy::None)) =>
+            {
+                match aggregate_group(text) {
+                    Some(group) => *group_by = Some(group),
+                    None => dropped = true,
+                }
+            }
+            _ => {}
+        }
+    }
+    dropped
 }
 
 fn value_text(value: &Value) -> String {
@@ -355,6 +426,28 @@ fn ungrounded(text: &str, op: &Op) -> Option<String> {
     }
 }
 
+/// The split the sentence asks for ("~별", "마다", "by …"): filled in when the op has the criterion,
+/// shown and confirmed when it has not (담당자별 …). Also applied to plans made by the phrase rules.
+pub fn split_check(text: &str, plan: &mut Plan, ko: bool) -> Option<PlanIssue> {
+    if plan.is_clarification() || !keep_the_split(text, plan) {
+        return None;
+    }
+    plan.requires_confirmation = true;
+    if plan.unmet.is_none() {
+        let what = if ko { "묶음별로 나누는 부분('~별')" } else { "the split into groups ('by …')" };
+        plan.unmet = Some(what.to_string());
+    }
+    Some(PlanIssue::warn(
+        "operations",
+        "grouping_dropped",
+        if ko {
+            "문장은 나눠서 처리하라고 하는데 이 기준으로는 나눌 수 없어 한 덩어리로 처리합니다"
+        } else {
+            "the sentence asks for one result per group, which this plan cannot do; it makes a single one"
+        },
+    ))
+}
+
 /// Checks a model plan against the sentence it was made from (0.8.0 plan §1.3 / §1.5). Anything
 /// found turns the plan into one the user confirms, with a note for the card; the model's own
 /// `confidence` plays no part.
@@ -381,25 +474,7 @@ pub fn contract_checks(text: &str, plan: &mut Plan, ko: bool) -> Vec<PlanIssue> 
         plan.unmet = Some(unmet);
     }
     // 2. The sentence asks for one result per group and the plan makes one for everything.
-    if plan.unmet.is_none() {
-        if let Some(split) = asks_to_split(text) {
-            if drops_the_split(plan, split) {
-                let what =
-                    if ko { "묶음별로 나누는 부분('~별')" } else { "the split into groups ('by …')" };
-                plan.requires_confirmation = true;
-                plan.unmet = Some(what.to_string());
-                notes.push(PlanIssue::warn(
-                    "operations",
-                    "grouping_dropped",
-                    if ko {
-                        "문장은 나눠서 처리하라고 하는데 플랜은 한 덩어리로 처리합니다"
-                    } else {
-                        "the sentence asks for one result per group but the plan makes a single one"
-                    },
-                ));
-            }
-        }
-    }
+    notes.extend(split_check(text, plan, ko));
     // 3. A settings change the sentence does not name.
     let ungrounded_ops: Vec<(usize, String)> =
         plan.operations.iter().enumerate().filter_map(|(i, op)| ungrounded(text, op).map(|w| (i, w))).collect();
@@ -551,15 +626,38 @@ mod tests {
         assert_eq!(codes("전체 내용을 요약해줘", &mut p), vec!["unmet_request"]);
         assert!(p.requires_confirmation);
         assert_eq!(p.unmet.as_deref(), Some("프로젝트별로 나누기"));
-        // The model says nothing, the sentence does.
+        // The model says nothing, the sentence does: a criterion the op has is filled in …
         let mut p = model_plan(vec![summarize(Some(SummarizeTarget::Set), None)]);
         p.unmet = Some(String::new());
-        assert_eq!(codes("프로젝트 별 내용을 요약해줘", &mut p), vec!["grouping_dropped"]);
-        assert!(p.requires_confirmation && p.unmet.is_some());
+        assert!(codes("프로젝트 별 내용을 요약해줘", &mut p).is_empty());
+        assert!(matches!(&p.operations[0], Op::Summarize { group_by: Some(SummaryGroup::Project), .. }), "{p:?}");
+        assert!(!p.requires_confirmation && p.unmet.is_none());
         let mut p = model_plan(vec![summarize(Some(SummarizeTarget::Set), Some(SummaryGroup::None))]);
-        assert_eq!(codes("각 프로젝트의 진행 상황을 요약해줘", &mut p), vec!["grouping_dropped"]);
+        assert!(codes("각 폴더의 문서를 요약해줘", &mut p).is_empty());
+        assert!(matches!(&p.operations[0], Op::Summarize { group_by: Some(SummaryGroup::Folder), .. }));
         let mut p = model_plan(vec![summarize(Some(SummarizeTarget::Set), None)]);
-        assert_eq!(codes("문서별로 요약해줘", &mut p), vec!["grouping_dropped"]);
+        assert!(codes("문서별로 요약해줘", &mut p).is_empty());
+        assert!(matches!(
+            &p.operations[0],
+            Op::Summarize { target: Some(SummarizeTarget::EachDoc), group_by: None, .. }
+        ));
+        let aggregate = |group_by| Op::Aggregate {
+            func: crate::planner::AggregateFn::Sum,
+            field: Some("total".into()),
+            group_by,
+            include_unreviewed: None,
+        };
+        let mut p = model_plan(vec![aggregate(None)]);
+        assert!(codes("거래처별 견적 합계 알려줘", &mut p).is_empty());
+        assert!(matches!(&p.operations[0], Op::Aggregate { group_by: Some(GroupBy::Vendor), .. }));
+        // … and one it does not have is shown and confirmed.
+        let mut p = model_plan(vec![summarize(Some(SummarizeTarget::Set), None)]);
+        assert_eq!(codes("견적서를 담당자별로 요약해줘", &mut p), vec!["grouping_dropped"]);
+        assert!(p.requires_confirmation && p.unmet.is_some());
+        let mut p = model_plan(vec![summarize(Some(SummarizeTarget::Set), None)]);
+        assert_eq!(codes("월별로 요약해줘", &mut p), vec!["grouping_dropped"]);
+        let mut p = model_plan(vec![aggregate(Some(GroupBy::None))]);
+        assert_eq!(codes("폴더마다 합계를 내줘", &mut p), vec!["grouping_dropped"]);
         // A plan that keeps the split passes, and an empty `unmet` is dropped.
         let mut p = model_plan(vec![summarize(Some(SummarizeTarget::Set), Some(SummaryGroup::Project))]);
         p.unmet = Some(String::new());
@@ -569,6 +667,15 @@ mod tests {
         assert!(codes("문서별로 요약해줘", &mut p).is_empty());
         let mut p = model_plan(vec![summarize(Some(SummarizeTarget::Set), None)]);
         assert!(codes("이 프로젝트 문서를 요약해줘", &mut p).is_empty());
+        assert!(matches!(&p.operations[0], Op::Summarize { group_by: None, .. }));
+        // "별" that is not the suffix.
+        assert_eq!(split_of("프로젝트 별도 관리 문서를 요약해줘"), None);
+        assert_eq!(split_of("월별표를 요약해줘"), None);
+        assert_eq!(split_of("각 월요일 회의록 요약"), None);
+        assert_eq!(split_of("프로젝트별로"), Some(SplitBy::Project));
+        assert_eq!(split_of("유형 별 요약"), Some(SplitBy::DocType));
+        assert_eq!(split_of("summarize the documents by project"), Some(SplitBy::Project));
+        assert_eq!(split_of("월별 합계"), Some(SplitBy::Month));
         // Clarifications are questions already.
         let mut p = Plan::clarify("어느 프로젝트인가요?", 0.4);
         p.unmet = Some("x".into());

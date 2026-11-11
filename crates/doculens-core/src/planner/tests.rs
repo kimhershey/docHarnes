@@ -2071,14 +2071,21 @@ fn model_plans_are_checked_against_the_sentence() {
         reply(json!([{ "op": "set_theme", "theme": "dark" }]), ""),
     );
     assert!(codes(&r).is_empty() && !r.plan.requires_confirmation, "{r:?}");
-    // The reported grouping sentence: one summary of everything is not what was asked.
+    // The reported grouping sentence: one summary of everything is not what was asked. The
+    // criterion is in the sentence, so the 0.7.0 plan is repaired; the right plan passes as it is.
     let text = "프로젝트 별 내용을 요약해줘";
-    let r = run(text, "ask", reply(json!([{ "op": "summarize", "target": "set" }]), ""));
+    for ops in [
+        json!([{ "op": "summarize", "target": "set" }]),
+        json!([{ "op": "summarize", "target": "set", "group_by": "project" }]),
+    ] {
+        let r = run(text, "ask", reply(ops, ""));
+        assert!(codes(&r).is_empty() && r.plan.unmet.is_none() && !r.plan.requires_confirmation, "{r:?}");
+        assert!(matches!(&r.plan.operations[..], [Op::Summarize { group_by: Some(SummaryGroup::Project), .. }]));
+    }
+    // A criterion the op does not have is not replaced by "everything as one" behind the user's back.
+    let r = run("견적서를 담당자별로 요약해줘", "ask", reply(json!([{ "op": "summarize", "target": "set" }]), ""));
     assert_eq!(codes(&r), vec!["grouping_dropped"], "{r:?}");
     assert!(r.plan.requires_confirmation && r.plan.unmet.is_some());
-    let r = run(text, "ask", reply(json!([{ "op": "summarize", "target": "set", "group_by": "project" }]), ""));
-    assert!(codes(&r).is_empty() && r.plan.unmet.is_none(), "{r:?}");
-    assert!(matches!(&r.plan.operations[..], [Op::Summarize { group_by: Some(SummaryGroup::Project), .. }]));
     // What the model itself reports as left out.
     let r = run(
         "지난달 견적서를 거래처별 표로 만들어 메일로 보내줘",

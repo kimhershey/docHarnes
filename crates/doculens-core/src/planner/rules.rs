@@ -1193,7 +1193,9 @@ fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     let dt = doc_type(t, ctx);
     let d = date(t, ctx);
     let mut scope = scope_of(t, ctx, dt, d.as_ref());
-    if scope.is_empty() && !t.has(ALL_WORDS) {
+    // "프로젝트별로 요약해줘" (0.8.0): one summary per group, over the library unless documents are named.
+    let grouping = if summarize { super::guard::summary_group(t.raw) } else { None };
+    if scope.is_empty() && !t.has(ALL_WORDS) && grouping.is_none() {
         if !selection_ids(ctx).is_empty() && (t.has(&["이", "선택", "this", "selected"]) || summarize || ocr) {
             scope.doc_ids = selection_ids(ctx);
         } else if ctx.current_folder.is_some() && t.has(&["여기", "here"]) {
@@ -1225,7 +1227,7 @@ fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         } else {
             None
         };
-        ops.push(Op::Summarize { target: Some(target), length, group_by: None });
+        ops.push(Op::Summarize { target: Some(target), length, group_by: grouping });
     }
     if classify || generic {
         ops.push(Op::Classify {

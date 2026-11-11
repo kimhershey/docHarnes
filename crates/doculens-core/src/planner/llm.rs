@@ -136,8 +136,9 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
         //    ("다크 테마로 바꾸고 모델을 9B로 올려") go to the rules first so the second clause is kept.
         if is_compound(text) {
             if let Some(mut p) = rules::plan(text, ctx) {
-                let issues = validate::validate(&mut p, ctx, date.as_ref());
+                let mut issues = validate::validate(&mut p, ctx, date.as_ref());
                 if !has_errors(&issues) {
+                    issues.extend(guard::split_check(text, &mut p, ko));
                     result.source = PlanSource::Rules;
                     result.plan = scoped(p);
                     result.issues = issues;
@@ -157,8 +158,10 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
 
         // 2. phrase rules
         if let Some(mut p) = rules::plan(text, ctx) {
-            let issues = validate::validate(&mut p, ctx, date.as_ref());
+            let mut issues = validate::validate(&mut p, ctx, date.as_ref());
             if !has_errors(&issues) {
+                // A split the rule's op cannot express is confirmed, as for model plans.
+                issues.extend(guard::split_check(text, &mut p, ko));
                 result.source = PlanSource::Rules;
                 result.plan = scoped(p);
                 result.issues = issues;

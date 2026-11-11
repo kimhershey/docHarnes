@@ -64,14 +64,37 @@ const THANKS: &[&str] = &[
     "수고하셨습니다",
     "잘했어",
     "잘했어요",
-    "좋아요",
     "thanks",
     "thank you",
     "thanks a lot",
     "thx",
-    "great",
-    "nice",
 ];
+// ("좋아요", "great" and the like are not here: they also answer a question the assistant asked.)
+
+/// Whether the words are greeting / thanks phrases and nothing else ("고마워, 수고했어"), and
+/// whether one of them is a thanks. Phrases are up to three words ("thanks a lot").
+fn only_pleasantries(words: &[&str]) -> Option<bool> {
+    if words.is_empty() || words.len() > 6 {
+        return None;
+    }
+    let (mut i, mut thanks) = (0, false);
+    while i < words.len() {
+        let step = (1..=3.min(words.len() - i)).rev().find_map(|n| {
+            let phrase = words[i..i + n].join(" ");
+            if THANKS.contains(&phrase.as_str()) {
+                Some((n, true))
+            } else if GREETINGS.contains(&phrase.as_str()) {
+                Some((n, false))
+            } else {
+                None
+            }
+        });
+        let (n, is_thanks) = step?;
+        thanks |= is_thanks;
+        i += n;
+    }
+    Some(thanks)
+}
 
 /// Lowercase, sentence punctuation dropped, whitespace collapsed.
 fn plain(text: &str) -> String {
@@ -83,20 +106,14 @@ fn plain(text: &str) -> String {
 
 fn greeting(text: &str, ko: bool) -> Option<Plan> {
     let p = plain(text);
-    let reply = if GREETINGS.contains(&p.as_str()) {
-        if ko {
-            "안녕하세요! 문서에 대해 물어보시거나, 가져오기·정리·추출·요약 같은 작업을 말씀해 주세요."
-        } else {
+    let thanks = only_pleasantries(&p.split(' ').collect::<Vec<_>>())?;
+    let reply = match (thanks, ko) {
+        (false, true) => "안녕하세요! 문서에 대해 물어보시거나, 가져오기·정리·추출·요약 같은 작업을 말씀해 주세요.",
+        (false, false) => {
             "Hello! Ask me about your documents, or tell me what to do — import, organise, extract, summarise."
         }
-    } else if THANKS.contains(&p.as_str()) {
-        if ko {
-            "도움이 되어 다행입니다. 더 필요한 것이 있으면 말씀해 주세요."
-        } else {
-            "Glad that helped. Tell me if you need anything else."
-        }
-    } else {
-        return None;
+        (true, true) => "도움이 되어 다행입니다. 더 필요한 것이 있으면 말씀해 주세요.",
+        (true, false) => "Glad that helped. Tell me if you need anything else.",
     };
     let mut plan = Plan::single(
         Op::Answer {
@@ -725,8 +742,15 @@ mod tests {
             }
             assert!(!p.requires_confirmation);
         }
-        // A greeting followed by a request is the model's.
+        // Several pleasantries in one turn are still only that.
+        let p = plan("고마워, 수고했어", &ctx()).unwrap();
+        assert!(matches!(&p.operations[0], Op::Answer { reply: Some(r), .. } if r.contains("다행")), "{p:?}");
+        assert!(plan("Hello, thanks a lot!", &ctx()).is_some());
+        // A greeting followed by a request is the model's, and so is a word that may answer a question.
         assert!(plan("안녕하세요, 견적서 합계 알려주세요", &ctx()).is_none());
+        assert!(plan("고마워 그런데 이건 뭐야", &ctx()).is_none());
+        assert!(plan("좋아요", &ctx()).is_none());
+        assert!(plan("", &ctx()).is_none());
         assert!(plan("안녕 못한 하루", &ctx()).is_none());
     }
 }
