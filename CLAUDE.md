@@ -4,7 +4,7 @@
 Offline, Windows-only desktop client (Tauri 2 + React/TypeScript UI, Rust core)
 that processes Korean/English business documents with a local VLM
 (Gemma 4 E2B/E4B/12B via llama-server; embedding EmbeddingGemma 2 — no Chinese-origin models since 0.4.0, user decision 2026-11-10). Design: `docs/design/doculens-design-v1.1.md`
-(Korean, authoritative). Status and next steps: `docs/HANDOFF.md`. Open findings of the 0.7.0 audit (149 items, to be worked off on `release/0.7.1`): `docs/audit/v0.7.0.md`. How to install / run / build / verify on a
+(Korean, authoritative). Status and next steps: `docs/HANDOFF.md`. Open findings of the 0.7.0 audit (153 items, to be worked off on `release/0.7.1`): `docs/audit/v0.7.0.md`; the assistant harness review (root causes of misinterpretation, recommended design, decisions pending): `docs/audit/v0.7.0-harness-review.md`. How to install / run / build / verify on a
 user PC: `docs/RUN-GUIDE.md`.
 
 ## Hard rules
