@@ -26,12 +26,25 @@ pub const RESULTS_SCHEMA_VERSION: u32 = 1;
 /// Design §3.11 regression gate: block when accuracy drops by more than 0.5 pt.
 pub const MAX_DROP_PT: f64 = 0.5;
 
-const KNOWN_FLAGS: &[&str] =
-    &["golden", "context", "baseline", "out", "engine", "models-dir", "model", "backend", "profile", "verbose", "help"];
+const KNOWN_FLAGS: &[&str] = &[
+    "golden",
+    "context",
+    "baseline",
+    "out",
+    "engine",
+    "models-dir",
+    "model",
+    "backend",
+    "profile",
+    "ids",
+    "kinds",
+    "verbose",
+    "help",
+];
 
 pub const USAGE: &str = "doculens-eval planner --golden <json> [--context <json>] [--baseline <results.json>] [--out <results.json>]
                       [--engine <llama-server> --models-dir <dir> --model <id> [--backend cpu|vulkan|cu121|cu129] [--profile ...]]
-                      [--verbose]";
+                      [--ids ko-94,ko-110,...] [--kinds chat,question,command,setting] [--verbose]";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Bucket {
@@ -486,7 +499,34 @@ pub fn run(args: &Args) -> Result<i32, String> {
         return Err(format!("알 수 없는 옵션 {}\n{USAGE}", unknown.join(" ")));
     }
     let golden_path = PathBuf::from(args.opt("golden").ok_or_else(|| format!("--golden 이 필요합니다\n{USAGE}"))?);
-    let set = golden::load(&golden_path)?;
+    let mut set = golden::load(&golden_path)?;
+    // A part of the set (a model on a CPU needs minutes per item): by id and / or by kind of turn.
+    let list = |name: &str| -> Vec<String> {
+        args.opt(name)
+            .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+            .unwrap_or_default()
+    };
+    let (ids, kinds) = (list("ids"), list("kinds"));
+    if let Some(unknown) = kinds.iter().find(|k| !golden::KINDS.contains(&k.as_str())) {
+        return Err(format!("알 수 없는 종류 {unknown} (허용: {})", golden::KINDS.join("|")));
+    }
+    if let Some(unknown) = ids.iter().find(|id| !set.items.iter().any(|i| &i.id == *id)) {
+        return Err(format!("골든셋에 없는 id {unknown}"));
+    }
+    let partial = !ids.is_empty() || !kinds.is_empty();
+    if partial {
+        if args.opt("baseline").is_some() {
+            return Err("--ids / --kinds 로 일부만 돌릴 때는 --baseline(회귀 게이트)을 쓸 수 없습니다".into());
+        }
+        let total = set.items.len();
+        set.items.retain(|i| {
+            (ids.is_empty() || ids.contains(&i.id)) && (kinds.is_empty() || kinds.iter().any(|k| k == i.kind()))
+        });
+        if set.items.is_empty() {
+            return Err("--ids / --kinds 에 맞는 항목이 없습니다".into());
+        }
+        println!("부분 실행: {total}건 중 {}건", set.items.len());
+    }
     let (ctx, context_name) = load_context(args, &golden_path, &set)?;
     let verbose = args.flag("verbose");
     println!(

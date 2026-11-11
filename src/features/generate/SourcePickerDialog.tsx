@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -15,11 +15,15 @@ export function SourcePickerDialog({ open, onOpenChange, selected, onChange }: {
   const { data: docs } = useDocuments({ limit: 500, sort: "imported_desc", query: query.trim() || null }, open);
   const { data: docTypes } = useDocTypes(open);
   const [picked, setPicked] = useState<Set<string>>(() => new Set(selected));
+  // The ticks and the search start from the form's sources when the dialog opens — only then. `selected` is a
+  // fresh array on every render of the form (job progress, a library refresh), which used to reset both (GEN-6).
+  const wasOpen = useRef(false);
   useEffect(() => {
-    if (open) {
+    if (open && !wasOpen.current) {
       setPicked(new Set(selected));
       setQuery("");
     }
+    wasOpen.current = open;
   }, [open, selected]);
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();

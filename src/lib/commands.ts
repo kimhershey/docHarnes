@@ -9,9 +9,10 @@ import type { NavigateFunction } from "react-router";
 import { describeError } from "./errors";
 import { api } from "./ipc";
 import { queryClient, queryKeys } from "./query-client";
-import { coerceSettingValue, resolveSettingKey, setSettingByPath, settingSpec } from "./settingsCatalog";
-import { SCREEN_ROUTES, isJobFinished, type BackendPreference, type DocumentView, type Language, type Op, type PreRouteResult, type RetentionPolicy, type RetentionTarget, type Screen, type Theme, type Tier, type UndoReport } from "./types";
+import { coerceSettingValue, getSettingByPath, resolveSettingKey, setSettingByPath, settingSpec } from "./settingsCatalog";
+import { SCREEN_ROUTES, isJobFinished, type BackendPreference, type DocumentView, type Job, type JobOp, type JobState, type Language, type Op, type OpKind, type PreRouteResult, type RetentionPolicy, type RetentionTarget, type Screen, type Theme, type Tier, type UndoReport } from "./types";
 import { errorCode, errorMessage } from "./utils";
+import { flushChatWrites } from "@/stores/assistant";
 import { useDocumentsStore } from "@/stores/documents";
 import { useEngineStore } from "@/stores/engine";
 import { useJobsStore } from "@/stores/jobs";
@@ -22,6 +23,8 @@ import { useWorkspaceStore } from "@/stores/workspace";
 export interface ExecuteOutcome {
   /** Human-readable summary of what happened (already translated). */
   summary: string;
+  /** Ops that put back what this one replaced (a settings change: the previous value). Absent when nothing changed. */
+  undo?: Op[];
 }
 
 export function describePreRoute(result: PreRouteResult, t: TFunction): string {
@@ -44,16 +47,18 @@ export async function executePreRoute(result: PreRouteResult, navigate: Navigate
   const ui = useUiStore.getState();
   switch (result.op) {
     case "set_theme": {
+      const before = settings.settings?.ui.theme;
       await settings.setTheme(result.theme);
       const summary = t("theme.changed", { theme: t(`theme.${result.theme}`) });
       ui.toast(summary, "ok");
-      return { summary };
+      return { summary, ...(before && before !== result.theme ? { undo: [{ op: "set_theme", theme: before }] } : {}) };
     }
     case "set_language": {
+      const before = settings.settings?.ui.language;
       await settings.setLanguage(result.language);
       const summary = t("language.changed", { language: t(`language.${result.language}`) });
       ui.toast(summary, "ok");
-      return { summary };
+      return { summary, ...(before && before !== result.language ? { undo: [{ op: "set_language", lang: before }] } : {}) };
     }
     case "open": {
       navigate(SCREEN_ROUTES[result.screen]);
@@ -115,6 +120,11 @@ function toNumber(v: unknown): number {
   return n;
 }
 
+/** The assistant's chat writes, sent and stored — but a workspace op does not hang on a write that is stuck. */
+function chatWritesSettled(): Promise<void> {
+  return Promise.race([flushChatWrites(), new Promise<void>((resolve) => setTimeout(resolve, 2000))]);
+}
+
 
 /**
  * Performs one UI-side op of a plan (or of an execution's `ui_actions`).
@@ -148,7 +158,7 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
       const spec = settingSpec(path);
       if (!spec) throw new Error(t("planner.ui.unknown_setting", { key: op.key }));
       const value = coerceSettingValue(spec, op.value);
-      const shown = settingValueLabel(path, value, t);
+      const before = settings.settings ? getSettingByPath(settings.settings, path) : undefined;
       switch (path) {
         case "ui.theme":
           await settings.setTheme(value as Theme);
@@ -167,7 +177,8 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
           break;
         case "models.active_model":
           await settings.setActiveModel(String(value));
-          await useEngineStore.getState().loadModel(String(value));
+          // "auto" is a choice, not a model: the engine picks one, there is nothing to load by that name.
+          if (String(value) !== "auto") await useEngineStore.getState().loadModel(String(value));
           break;
         case "processing.inbox_watch":
           await api.documentsSetInboxWatch(value as boolean);
@@ -177,7 +188,13 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
           await settings.update((d) => setSettingByPath(d, path, value));
           break;
       }
-      return done(t("planner.ui.set_setting", { key: t(spec.label), value: shown }));
+      // What was stored is what is reported (the store normalises on save), next to what it replaced.
+      const stored = useSettingsStore.getState().settings;
+      const after = stored ? getSettingByPath(stored, path) : value;
+      const label = (v: unknown) => settingValueLabel(path, v as string | number | boolean | null, t);
+      if (before === undefined || before === null) return done(t("planner.ui.set_setting", { key: t(spec.label), value: label(after) }));
+      if (before === after) return done(t("planner.ui.set_setting_same", { key: t(spec.label), value: label(after) }), "info");
+      return { ...done(t("planner.ui.set_setting_changed", { key: t(spec.label), from: label(before), to: label(after) })), undo: [{ op: "set_setting", key: path, value: before as string | number | boolean }] };
     }
     case "set_model": {
       await settings.setActiveModel(op.id);
@@ -185,8 +202,10 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
       return done(t("planner.ui.set_model", { id: op.id }), "info");
     }
     case "set_profile": {
+      const before = settings.settings?.models.profile;
       await settings.update((d) => void (d.models.profile = op.profile));
-      return done(t("planner.ui.set_profile", { profile: t(`models.profiles.${op.profile}`) }));
+      const said = done(t("planner.ui.set_profile", { profile: t(`models.profiles.${op.profile}`) }));
+      return before && before !== op.profile ? { ...said, undo: [{ op: "set_profile", profile: before }] } : said;
     }
     case "open": {
       switch (op.target) {
@@ -389,10 +408,14 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
     }
     case "workspace": {
       const ws = useWorkspaceStore.getState();
+      // The conversation so far — this very command and its plan / result cards — belongs to the workspace
+      // being left: its writes must reach that database before the backend moves on (afterwards they
+      // could only be dropped).
       switch (op.action) {
         case "open": {
           const path = (op.path ?? "").trim();
           if (!path) throw new Error(t("planner.ui.path_required"));
+          await chatWritesSettled();
           const view = await ws.open(path);
           navigate(SCREEN_ROUTES.library);
           return done(t("planner.ui.workspace_open", { name: view.manifest.name || path }));
@@ -400,11 +423,13 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
         case "create": {
           const path = (op.path ?? "").trim();
           if (!path) throw new Error(t("planner.ui.path_required"));
+          await chatWritesSettled();
           const view = await ws.create(path, null, null);
           navigate(SCREEN_ROUTES.library);
           return done(t("planner.ui.workspace_create", { name: view.manifest.name || path }));
         }
         case "close":
+          await chatWritesSettled();
           await ws.close();
           return done(t("planner.ui.workspace_close"), "info");
         case "forget": {
@@ -529,11 +554,25 @@ const SETTING_LABELS: Record<string, string> = {
   journal_days: "settings.privacy.items.journal_days",
 };
 
-/** `job(id: "last")`: the most recent persistent job the action applies to. */
-function resolveJob(jobs: ReturnType<typeof useJobsStore.getState>["jobs"], id: string | null | undefined, action: string) {
+/**
+ * `job(id: "last")` / no id: the persistent job the action applies to. "작업 일시정지" / "작업 취소" mean
+ * the job that is at work — running first, then (cancel only: a paused job cannot be paused again) a
+ * paused one, then one still waiting — not simply the newest unfinished job, which is usually a queued
+ * one behind it (PLN-15). The other actions take the most recent job in a state they can act on.
+ */
+export function resolveJob(jobs: Job[], id: string | null | undefined, action: JobOp): Job | null {
   if (id && id !== "last") return jobs.find((j) => j.id === id || j.id.startsWith(id)) ?? null;
   const persistent = jobs.filter((j) => j.persistent);
   const pool = persistent.length > 0 ? persistent : jobs;
+  const newest = (list: Job[]): Job | null => [...list].sort((a, b) => b.created_at.localeCompare(a.created_at))[0] ?? null;
+  if (action === "pause" || action === "cancel") {
+    const order: JobState[] = action === "pause" ? ["running", "queued"] : ["running", "paused", "queued"];
+    for (const state of order) {
+      const hit = newest(pool.filter((j) => j.state === state));
+      if (hit) return hit;
+    }
+    return null;
+  }
   const candidates =
     action === "retry"
       ? pool.filter((j) => j.state === "failed" || j.state === "cancelled" || j.state === "interrupted")
@@ -542,21 +581,39 @@ function resolveJob(jobs: ReturnType<typeof useJobsStore.getState>["jobs"], id: 
         : action === "prioritize"
           ? pool.filter((j) => j.state === "queued" || j.state === "paused")
           : pool.filter((j) => !isJobFinished(j));
-  return [...candidates].sort((a, b) => b.created_at.localeCompare(a.created_at))[0] ?? null;
+  return newest(candidates);
 }
 
-/** Runs several UI ops in order, toasting failures; returns the summaries of the ones that ran. */
-export async function executeUiOps(ops: Op[], navigate: NavigateFunction, t: TFunction): Promise<string[]> {
-  const summaries: string[] = [];
+/** What became of one UI-side op: `executeUiOps` returns one per op, in the order of the ops. */
+export interface UiOpResult {
+  op: OpKind;
+  ok: boolean;
+  /** Translated summary of what was done (may be empty; empty for a failed op). */
+  summary: string;
+  /** Translated error of a failed op. */
+  error: string | null;
+  /** Ops that put back what this op replaced (settings changes). */
+  undo?: Op[];
+}
+
+/**
+ * Runs several UI ops in order. A failure is toasted and does not stop the ops after it; the result
+ * says for every op whether it ran, so the card that asked for them can show a failure as one (a toast
+ * alone left the card saying "실행됨", PLN-17).
+ */
+export async function executeUiOps(ops: Op[], navigate: NavigateFunction, t: TFunction): Promise<UiOpResult[]> {
+  const results: UiOpResult[] = [];
   for (const op of ops) {
     try {
       const outcome = await executeUiOp(op, navigate, t);
-      if (outcome.summary) summaries.push(outcome.summary);
+      results.push({ op: op.op, ok: true, summary: outcome.summary, error: null, ...(outcome.undo ? { undo: outcome.undo } : {}) });
     } catch (e) {
-      useUiStore.getState().toast(describeError(e, t), "danger");
+      const error = describeError(e, t);
+      useUiStore.getState().toast(error, "danger");
+      results.push({ op: op.op, ok: false, summary: "", error });
     }
   }
-  return summaries;
+  return results;
 }
 
 // ---------------------------------------------------------------------------

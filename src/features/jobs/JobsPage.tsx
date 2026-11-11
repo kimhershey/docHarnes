@@ -10,11 +10,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { HistoryTab } from "@/features/organize/HistoryTab";
 import { describeError } from "@/lib/errors";
 import { isJobFinished, type Job } from "@/lib/types";
-import { formatBytes, formatDate } from "@/lib/utils";
+import { formatDate } from "@/lib/utils";
 import { useJobResultLoaded, useJobsStore } from "@/stores/jobs";
 import { useUiStore } from "@/stores/ui";
 
-import { describeJobDetail, describeJobError, describeJobPriority, describeJobSubject } from "./describe";
+import { describeJobCounter, describeJobDetail, describeJobError, describeJobPriority, describeJobSubject } from "./describe";
 import { JobResult } from "./JobResult";
 
 /** Engine start cannot be interrupted (P1); every other kind unloads / discards partial files on cancel. */
@@ -95,6 +95,7 @@ function JobRow({ job, onAction }: { job: Job; onAction: (action: Action, id: st
   const subject = describeJobSubject(job, t);
   const detail = describeJobDetail(job, t);
   const error = describeJobError(job, t);
+  const counter = describeJobCounter(job, i18n.language);
   const persistent = job.persistent === true;
   // `jobs://update` omits `result`; the store fetches it once the job finishes.
   const resultLoaded = useJobResultLoaded(job.id);
@@ -164,9 +165,9 @@ function JobRow({ job, onAction }: { job: Job; onAction: (action: Action, id: st
       </div>
       {!finished && <Progress value={job.state === "queued" || job.state === "paused" ? null : job.progress} label={subject} />}
       <div className="flex flex-wrap gap-3 text-xs text-fg-muted">
-        {job.bytes_total != null && (
-          <span className="tabular-nums">
-            {formatBytes(job.bytes_done ?? 0)} / {formatBytes(job.bytes_total)}
+        {counter && (
+          <span className="tabular-nums" data-testid="job-counter">
+            {counter}
           </span>
         )}
         {detail && (

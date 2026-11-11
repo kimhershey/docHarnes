@@ -653,6 +653,9 @@ export interface AppInfo {
   debug: boolean;
 }
 
+/** Documents shipped with the app (`open_app_document`). */
+export type AppDocument = "notices" | "licenses" | "design_doc";
+
 export interface UiError {
   code: string;
   message: string;
@@ -1201,7 +1204,14 @@ export interface AnswerRequest {
   /** Earlier turns, oldest first (the question itself is not included). */
   history?: ConversationTurn[];
   session?: SessionState | null;
+  /**
+   * How the turn is answered (0.8.0): `grounded` (default) from the evidence; `general` for a question that is
+   * not about the documents (evidence when it answers it, general knowledge otherwise); `chat` for small talk.
+   */
+  style?: AnswerStyle;
 }
+
+export type AnswerStyle = "grounded" | "general" | "chat";
 
 export interface Citation {
   index: number;
@@ -1670,8 +1680,14 @@ export type Op =
   | { op: "review"; action: ReviewOp; field?: string | null; value?: string | null; only?: ReviewOnly | null }
   | { op: "reindex"; scope?: "fts" | "vec" | "all" | null }
   | { op: "search"; query: string; mode?: SearchMode | null; top_k?: number | null }
-  | { op: "answer"; question: string; cite?: boolean | null; knowledge?: boolean | null }
-  | { op: "summarize"; target?: "each_doc" | "set" | null; length?: "short" | "long" | null }
+  /**
+   * `mode` (0.8.0): the turn is not a document question — `chat` = greeting / small talk (nothing is looked
+   * up), `general` = a question that is not about the documents (evidence when there is some, general
+   * knowledge otherwise). `reply`: a ready answer (fixed greetings, "this cannot be done") shown as it is.
+   */
+  | { op: "answer"; question: string; cite?: boolean | null; knowledge?: boolean | null; mode?: AnswerMode | null; reply?: string | null }
+  /** `group_by` (0.8.0): one combined summary per project / document type / folder. */
+  | { op: "summarize"; target?: "each_doc" | "set" | null; length?: "short" | "long" | null; group_by?: SummaryGroup | null }
   | { op: "aggregate"; fn: AggregateFn; field?: string | null; group_by?: GroupBy | null; include_unreviewed?: boolean | null }
   | { op: "organize"; template?: string | null; folder_template?: string | null; group_by?: GroupBy | null; only_reviewed?: boolean | null; dry_run?: boolean | null }
   | { op: "rename"; template: string; only_reviewed?: boolean | null }
@@ -1714,13 +1730,15 @@ export type Op =
   | { op: "set_role"; role: RoleChoice }
   // §1.2 reference material
   | { op: "manage_reference"; action: ReferenceAction; group?: string | null; name?: string | null; project?: string | null }
-  | { op: "define_term"; action: TermAction; term: string; definition?: string | null; synonyms?: string[] }
+  /** `action` defaults to `save` in the core (the plan editor may leave it out). */
+  | { op: "define_term"; action?: TermAction; term: string; definition?: string | null; synonyms?: string[] }
   | { op: "set_version"; group_key?: string | null; label?: string | null; effective_date?: string | null; latest?: boolean | null; clear?: boolean | null }
   // §1.3 projects
   | { op: "update_project"; project?: string | null; name?: string | null; template?: string | null; start_date?: string | null; end_date?: string | null; owner?: string | null; intake_no?: string | null; notes?: string | null; keywords?: string[]; inbox_folder?: string | null }
   | { op: "delete_project"; project?: string | null }
   | { op: "remove_from_project"; project?: string | null; doc_ids?: string[] }
-  | { op: "manage_template"; action: TemplateAction; template?: string | null; name?: string | null; doc_types_required?: string[]; description?: string | null }
+  /** `action` defaults to `save` in the core. */
+  | { op: "manage_template"; action?: TemplateAction; template?: string | null; name?: string | null; doc_types_required?: string[]; description?: string | null }
   | { op: "classify_projects"; apply?: boolean | null; use_model?: boolean | null }
   // §1.4 forms
   | { op: "manage_schema"; action: SchemaAction; schema: string; name?: string | null }
@@ -1749,6 +1767,9 @@ export interface Scope {
   filter?: ScopeFilter;
 }
 
+export type AnswerMode = "chat" | "general";
+export type SummaryGroup = "none" | "project" | "doc_type" | "folder";
+
 export interface Plan {
   intent: OpKind;
   scope: Scope;
@@ -1758,6 +1779,8 @@ export interface Plan {
   clarification_question?: string | null;
   /** One-line interpretation ("해석: …"). */
   summary?: string | null;
+  /** The part of the request the plan does not cover (0.8.0); a plan that has one waits for confirmation. */
+  unmet?: string | null;
 }
 
 export interface PlanIssue {
@@ -1767,7 +1790,8 @@ export interface PlanIssue {
   blocking: boolean;
 }
 
-export type PlanSource = "prerouter" | "rules" | "model" | "none";
+/** `fast` (0.8.0): read without the model — a sentence that is exactly a setting and its value, or a fixed greeting. */
+export type PlanSource = "prerouter" | "rules" | "model" | "fast" | "none";
 
 export interface PlanResult {
   text: string;
@@ -1782,6 +1806,8 @@ export interface PlanResult {
   raw?: string | null;
   /** Op families the two-stage planner routed to (0.6.0 plan §2; absent on rule / pre-router plans). */
   families?: OpFamily[] | null;
+  /** `chat` / `general` when the routing call answered instead of planning (0.8.0). */
+  route?: AnswerMode | null;
 }
 
 export interface DocTypeSummary {
@@ -1869,6 +1895,8 @@ export interface PlanPreview {
   document_ids: string[];
   steps: StepPreview[];
   requires_confirmation: boolean;
+  /** Whether any step reads the scope; `false` for settings, navigation, small talk (no "대상 문서 N건"). */
+  uses_scope?: boolean;
 }
 
 export interface PlanResponse {
@@ -1898,6 +1926,23 @@ export interface PlanExecution {
   /** Journal batch ids created (undo entry points). */
   batches: string[];
   restored_paths?: string[];
+}
+
+/** `planner_execute` arguments (`ExecuteArgs` in `src-tauri/src/commands/planner.rs`). */
+export interface ExecuteArgs {
+  /** The plan as the card shows it (confirmed, possibly edited). */
+  plan: Plan;
+  /** The user's sentence: the job's label. */
+  text: string;
+  context?: UiPlanContext;
+  /**
+   * The text the plan was made from, when that is not `text` itself: after a 되묻기 the planner read
+   * `askBackText(original, question, reply)` — the original sentence, the assistant's question and the
+   * user's reply. What execution re-checks against the user's words (the "전부" that allows a plan without
+   * a scope, PLN-7) must be checked against this text, or a plan the user approved cannot run. Absent /
+   * null: the plan was made from `text`.
+   */
+  planned_text?: string | null;
 }
 
 export interface ExecuteResponse {
@@ -2172,6 +2217,12 @@ export interface DraftRequest {
    * whole draft — following `feedback` (the instruction). Absent / null = the ordinary draft / regeneration.
    */
   revise?: ReviseScope | null;
+  /**
+   * 0.8.0 (CON-3): the project the draft belongs to. Knowledge searches of the draft stay inside the project's
+   * work documents, its reference group and the 공통 참고 자료; absent / null = everything. Stored with the draft's
+   * request, so regenerations and revisions of a project draft keep it.
+   */
+  project_id?: string | null;
 }
 
 /**
@@ -2192,7 +2243,27 @@ export interface BudgetInfo {
   gpu: boolean;
   cap: number;
   split_threshold: number;
+  /** 0.8.0 (GEN-14): characters of the content / of the instruction the model is given at most; more is cut and reported. */
+  content_max_chars?: number;
+  instruction_max_chars?: number;
 }
+
+/** Part of the request's own text that did not reach the model (`DraftOutcome.input_cuts`, GEN-14). */
+export interface InputCut {
+  /** `content` (`DraftRequest.content`) | `feedback` (the instruction). */
+  field: "content" | "feedback";
+  /** Characters the request carried … */
+  chars: number;
+  /** … and how many of them (the first ones) the model saw. */
+  passed: number;
+}
+
+/**
+ * Where a draft job stored its result (`generate::store::save_job_result`, GEN-3): under the draft's own id, as a
+ * new draft because replacing the original would lose something (the job was cancelled, or the stored draft was
+ * edited after the job started), or not at all.
+ */
+export type DraftStoreOutcome = { status: "saved" } | { status: "copy"; original: string; reason: "cancelled" | "newer" } | { status: "not_saved"; reason: "deleted" | "failed" };
 
 export function defaultDraftRequest(language: Language = "ko"): DraftRequest {
   return { form_ref: null, format_description: null, content: "", sources: [], output: "hwpx", tone: "formal", length: "medium", language, use_knowledge: true, feedback: null, previous: null, excluded_sources: [], max_tokens: null, revise: null };
@@ -2284,6 +2355,10 @@ export interface DraftOutcome {
   job_source?: string;
   /** Draft job / `request_supplement` payloads: the project the draft belongs to. */
   project_id?: string | null;
+  /** The user's text the model saw only in part; absent when nothing was cut. */
+  input_cuts?: InputCut[];
+  /** Draft job payloads only: where the result was stored. */
+  draft_store?: DraftStoreOutcome | null;
 }
 
 export interface SaveRequest {
@@ -2302,6 +2377,8 @@ export interface SavedDocument {
   doc_id: string | null;
   filled_form: boolean;
   warnings: string[];
+  /** 0.8.0 (GEN-11): body blocks a registered form could not take (0 = nothing was left out; `warnings` says it in words). */
+  omitted_body_blocks?: number;
 }
 
 export interface TemplateField {

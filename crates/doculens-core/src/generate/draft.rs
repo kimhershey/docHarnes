@@ -11,8 +11,9 @@
 //! excluded documents) → `prompts` → `Vlm::call_json(Stage::NlSchema, …)`
 //! under the grammar of `schema` (one retry with a reminder when the reply is
 //! not JSON) → `Draft` with citations resolved from `source_index` →
-//! `validate`. Without a model only the 보완요청서 can be composed, by rules
-//! from the request's text sources (`source = "rules"`).
+//! `validate`. Without a model only a fresh 보완요청서 can be composed, by rules
+//! from the request's text sources (`source = "rules"`); a revision or a
+//! regeneration (`revise` / `feedback` / `previous`) always needs the model.
 
 use std::collections::{BTreeMap, HashSet};
 use std::time::Instant;
@@ -39,7 +40,7 @@ use super::schema;
 use super::templates::{self, compact, TemplateSpec};
 use super::{
     sections_of, Draft, DraftBlock, DraftCitation, DraftField, DraftOutcome, DraftRequest, DraftTable, GenerateDeps,
-    ReviseScope, SourceRef, TemplateKind, TemplateRef,
+    InputCut, ReviseScope, SourceRef, TemplateKind, TemplateRef,
 };
 
 /// Upper bound on numbered sources shown to the model.
@@ -404,6 +405,18 @@ fn knowledge_sources(
 pub fn gather_sources(deps: &GenerateDeps<'_>, req: &DraftRequest, notes: &mut Vec<String>) -> Result<Vec<Source>> {
     let ko = deps.ko();
     let scope = knowledge_scope(req);
+    // A project that no longer exists allows nothing (as everywhere a project scopes a search):
+    // say so instead of drafting without evidence in silence.
+    let searches = req.use_knowledge || req.sources.iter().any(|s| matches!(s, SourceRef::Knowledge { .. }));
+    if let Some(project) = scope.project_id.as_deref().filter(|_| searches) {
+        if deps.db.with(|c| crate::projects::repo::get_project(c, project))?.is_none() {
+            notes.push(tr(
+                ko,
+                "이 초안의 프로젝트를 찾을 수 없어 참고 자료를 검색하지 못했습니다 — 프로젝트를 다시 지정하세요.",
+                "The project of this draft no longer exists, so no reference material was searched; choose the project again.",
+            ));
+        }
+    }
     let excluded: HashSet<&str> = req.excluded_sources.iter().map(String::as_str).collect();
     let mut seen: HashSet<i64> = HashSet::new();
     let mut out: Vec<Source> = Vec::new();
@@ -1013,6 +1026,78 @@ fn is_json_failure(e: &CoreError) -> bool {
     matches!(e, CoreError::Engine(m) if m.contains("not JSON") || m.contains("cut off"))
 }
 
+/// How much of the request's own text the prompts of one job passed on: the smallest allowance
+/// of the content and of the instruction over all calls.
+#[derive(Default)]
+struct InputUse {
+    content: Option<usize>,
+    feedback: Option<usize>,
+}
+
+impl InputUse {
+    /// One prompt was built with `allow`; `with_feedback` when it shows the instruction.
+    fn see(&mut self, allow: &prompts::Allowance, with_feedback: bool) {
+        self.content = Some(self.content.map_or(allow.content, |c| c.min(allow.content)));
+        if with_feedback {
+            self.feedback = Some(self.feedback.map_or(allow.feedback, |f| f.min(allow.feedback)));
+        }
+    }
+
+    /// What was cut, with a note for the user about each.
+    fn report(&self, req: &DraftRequest, ko: bool, notes: &mut Vec<String>) -> Vec<InputCut> {
+        let n = |v: usize| super::validate::format_won(v as f64);
+        let mut cuts = Vec::new();
+        let content = req.content.trim().chars().count();
+        if let Some(passed) = self.content.filter(|p| *p < content) {
+            notes.push(if ko {
+                format!(
+                    "내용 {}자 중 앞 {}자만 모델에 전달했습니다 — 나머지는 자료(텍스트)로 추가하면 참고합니다.",
+                    n(content),
+                    n(passed)
+                )
+            } else {
+                format!(
+                    "Only the first {} of {} characters of the content reached the model; add the rest as a text source.",
+                    n(passed),
+                    n(content)
+                )
+            });
+            cuts.push(InputCut { field: "content".into(), chars: content as u32, passed: passed as u32 });
+        }
+        let feedback = req.feedback.as_deref().map_or(0, |f| f.trim().chars().count());
+        if let Some(passed) = self.feedback.filter(|p| *p < feedback) {
+            notes.push(if ko {
+                format!("수정 지시 {}자 중 앞 {}자만 모델에 전달했습니다.", n(feedback), n(passed))
+            } else {
+                format!(
+                    "Only the first {} of {} characters of the instruction reached the model.",
+                    n(passed),
+                    n(feedback)
+                )
+            });
+            cuts.push(InputCut { field: "feedback".into(), chars: feedback as u32, passed: passed as u32 });
+        }
+        cuts
+    }
+}
+
+/// A request that works on an earlier draft: a revision scope, an instruction (`feedback`) or the
+/// draft itself (`previous`). Only the model can apply these — the rule-based 보완요청서 path would
+/// ignore the instruction and rebuild the body and the item table from the findings, dropping
+/// what the user changed (GEN-1).
+fn needs_model(req: &DraftRequest) -> bool {
+    req.revise.is_some() || req.previous.is_some() || req.feedback.as_deref().is_some_and(|f| !f.trim().is_empty())
+}
+
+/// Whether the host may skip loading the model: an explicit 보완요청서 composed from text sources
+/// (the findings of the projects module) and nothing that [`needs_model`].
+pub fn rule_only(req: &DraftRequest) -> bool {
+    !needs_model(req)
+        && req.form_ref.as_deref().and_then(TemplateKind::parse) == Some(TemplateKind::SupplementRequest)
+        && !req.sources.is_empty()
+        && req.sources.iter().all(|s| matches!(s, SourceRef::Text { .. }))
+}
+
 /// Produces a validated draft.
 pub fn draft(deps: &GenerateDeps<'_>, req: &DraftRequest) -> Result<DraftOutcome> {
     let started = Instant::now();
@@ -1031,7 +1116,9 @@ pub fn draft(deps: &GenerateDeps<'_>, req: &DraftRequest) -> Result<DraftOutcome
     }
     let elapsed = |s: &Instant| s.elapsed().as_millis() as u64;
     let Some(vlm) = deps.vlm else {
-        if spec.builtin_kind() == Some(TemplateKind::SupplementRequest) {
+        // Rules compose a fresh 보완요청서 only; a regeneration / revision without a model fails
+        // instead of silently ignoring the instruction (GEN-1).
+        if spec.builtin_kind() == Some(TemplateKind::SupplementRequest) && !needs_model(req) {
             let mut d = supplement_draft(&spec, req, &sources, deps.ko());
             d.notes.extend(notes);
             super::validate::validate(&mut d);
@@ -1042,6 +1129,7 @@ pub fn draft(deps: &GenerateDeps<'_>, req: &DraftRequest) -> Result<DraftOutcome
                 elapsed_ms: elapsed(&started),
                 source: "rules".into(),
                 sections: 0,
+                input_cuts: Vec::new(),
             });
         }
         return Err(CoreError::EngineNotRunning);
@@ -1063,9 +1151,12 @@ pub fn draft(deps: &GenerateDeps<'_>, req: &DraftRequest) -> Result<DraftOutcome
     if prompts::split_needed(reply_tokens, vlm.ctx) {
         return draft_split(deps, &model, &spec, req, &sources, reply_tokens, notes, started);
     }
-    let budget = prompts::source_budget(vlm.ctx, reply_tokens);
+    let allow = prompts::user_allowance(req, sources.len(), vlm.ctx, reply_tokens, 0, prompt_ko);
+    let mut input = InputUse::default();
+    input.see(&allow, true);
+    let input_cuts = input.report(req, deps.ko(), &mut notes);
     let blocks = source_blocks(&sources);
-    let user_text = prompts::user(&spec, req, &blocks, budget, prompt_ko);
+    let user_text = prompts::user(&spec, req, &blocks, &allow, prompt_ko);
     let system = json!({ "role": "system", "content": prompts::system(prompt_ko) });
     let schema_v = schema::json_schema(&spec);
     let (value, reply) =
@@ -1091,6 +1182,7 @@ pub fn draft(deps: &GenerateDeps<'_>, req: &DraftRequest) -> Result<DraftOutcome
         elapsed_ms: elapsed(&started),
         source: "model".into(),
         sections: 1,
+        input_cuts,
     })
 }
 
@@ -1214,13 +1306,16 @@ fn draft_split(
     let system = json!({ "role": "system", "content": prompts::system(prompt_ko) });
     let blocks = source_blocks(sources);
     let (mut prompt_tokens, mut completion_tokens) = (0u64, 0u64);
+    let mut input = InputUse::default();
 
     // 1. Section plan: the template's sections, else an outline call, else the generic outline.
     let template_sections = spec.sections(prompt_ko);
     let mut plans: Vec<prompts::SectionPlan> = if template_sections.is_empty() {
         report(0.22, "outline");
-        let budget = prompts::source_budget(model.ctx, prompts::OUTLINE_TOKENS);
-        let text = prompts::outline_user(spec, req, &blocks, budget, total, prompt_ko);
+        let want = prompts::Blocks::of(req, false, blocks.len());
+        let allow = prompts::allot(model.ctx, prompts::OUTLINE_TOKENS, want);
+        input.see(&allow, false);
+        let text = prompts::outline_user(spec, req, &blocks, &allow, total, prompt_ko);
         match call_json_with_retry(
             model,
             &system,
@@ -1254,9 +1349,12 @@ fn draft_split(
     let first_budget = prompts::section_budget(total, plans[0].weight, weights_sum);
     let head_budget = first_budget + prompts::HEAD_EXTRA_TOKENS;
     report(0.25, &format!("section 1/{n}"));
-    let budget = prompts::source_budget(model.ctx, head_budget);
-    let mut text = prompts::user(spec, req, &blocks, budget, prompt_ko);
-    text.push_str(&prompts::split_head_note(&plans[0], n, first_budget, prompt_ko));
+    let head_note = prompts::split_head_note(&plans[0], n, first_budget, prompt_ko);
+    let allow =
+        prompts::user_allowance(req, sources.len(), model.ctx, head_budget, head_note.chars().count(), prompt_ko);
+    input.see(&allow, true);
+    let mut text = prompts::user(spec, req, &blocks, &allow, prompt_ko);
+    text.push_str(&head_note);
     let (value, reply) = call_json_with_retry(
         model,
         &system,
@@ -1280,6 +1378,7 @@ fn draft_split(
             d.fields.iter().filter(|f| !f.value.trim().is_empty()).take(11).map(|f| (f.label.clone(), f.value.clone())),
         )
         .collect();
+    let facts_chars = prompts::facts_chars(&facts, prompt_ko);
     let excluded: HashSet<&str> = req.excluded_sources.iter().map(String::as_str).collect();
 
     // 3. The remaining sections.
@@ -1311,7 +1410,6 @@ fn draft_split(
                 text: &s.text,
             })
             .collect();
-        let budget = prompts::source_budget(model.ctx, budget_tokens);
         let previous = previous_summary(&d.body);
         // 0.7.0: a regeneration passes the instruction and this section's earlier text along.
         let earlier = req.previous.as_deref().and_then(|p| earlier_section_text(&p.body, &plan.heading));
@@ -1319,11 +1417,17 @@ fn draft_split(
             feedback: req.feedback.as_deref(),
             previous_section: earlier.as_deref(),
         });
+        // The facts, the tail of the text so far and the section's earlier text take room as well.
+        let mut want = prompts::Blocks::of(req, revision.is_some(), section_blocks.len());
+        want.previous = earlier.as_deref().map_or(0, |e| e.chars().count());
+        want.fixed += facts_chars + previous.chars().count();
+        let allow = prompts::allot(model.ctx, budget_tokens, want);
+        input.see(&allow, revision.is_some());
         let text = prompts::section_user(
             spec,
             req,
             &section_blocks,
-            budget,
+            &allow,
             plan,
             i + 1,
             n,
@@ -1392,6 +1496,7 @@ fn draft_split(
     } else {
         format!("Generated in {n} sections with a budget of {total} tokens.")
     });
+    let input_cuts = input.report(req, ko, &mut notes);
     d.notes.extend(notes);
     if spec.builtin_kind() == Some(TemplateKind::SupplementRequest) {
         complete_supplement(&mut d, sources);
@@ -1405,6 +1510,7 @@ fn draft_split(
         elapsed_ms: started.elapsed().as_millis() as u64,
         source: "model".into(),
         sections: sections_done,
+        input_cuts,
     })
 }
 
@@ -1440,6 +1546,21 @@ fn tail_chars(text: &str, max: usize) -> String {
     } else {
         text.to_string()
     }
+}
+
+/// Cuts the text a revision shows of the draft to `max` characters: the section being rewritten
+/// comes first, the text before and after it share what is left.
+fn fit_revision_context(current: String, before: String, after: String, max: usize) -> (String, String, String) {
+    let chars = |s: &str| s.chars().count();
+    if chars(&current) + chars(&before) + chars(&after) <= max {
+        return (current, before, after);
+    }
+    let current = truncate(&current, max);
+    let each = max.saturating_sub(chars(&current)) / 2;
+    if each == 0 {
+        return (current, String::new(), String::new());
+    }
+    (current, tail_chars(&before, each), truncate(&after, each))
 }
 
 /// The text of the section headed `heading` in an earlier draft body (without the heading).
@@ -1514,7 +1635,6 @@ fn revise(deps: &GenerateDeps<'_>, req: &DraftRequest, scope: &ReviseScope, star
         geometry: vlm.geometry,
     };
     let tokens = prompts::reply_budget(req).clamp(prompts::MIN_SECTION_TOKENS, prompts::MAX_SECTION_TOKENS);
-    let budget = prompts::source_budget(model.ctx, tokens);
     let blocks = source_blocks(&sources);
     let facts: Vec<(String, String)> = std::iter::once((tr(ko, "제목", "title"), prev.title.clone()))
         .chain(
@@ -1533,6 +1653,16 @@ fn revise(deps: &GenerateDeps<'_>, req: &DraftRequest, scope: &ReviseScope, star
     };
     let before = tail_chars(&blocks_text(&prev.body[..start]), prompts::REVISION_CONTEXT_CHARS);
     let after = truncate(&blocks_text(&prev.body[end..]), prompts::REVISION_CONTEXT_CHARS);
+    // The section and its surroundings share the context with the facts and the sources.
+    let chars = |s: &str| s.chars().count();
+    let mut want = prompts::Blocks::of(req, true, blocks.len());
+    want.previous = chars(&current) + chars(&before) + chars(&after);
+    want.fixed += prompts::facts_chars(&facts, prompt_ko);
+    let allow = prompts::allot(model.ctx, tokens, want);
+    let mut input = InputUse::default();
+    input.see(&allow, true);
+    let input_cuts = input.report(req, ko, &mut notes);
+    let (current, before, after) = fit_revision_context(current, before, after, allow.previous);
     let rv = prompts::RevisePrompt {
         rewrite,
         index,
@@ -1545,7 +1675,7 @@ fn revise(deps: &GenerateDeps<'_>, req: &DraftRequest, scope: &ReviseScope, star
         after: &after,
         instruction,
     };
-    let user_text = prompts::revise_user(&spec, req, &blocks, budget, &rv, prompt_ko);
+    let user_text = prompts::revise_user(&spec, req, &blocks, &allow, &rv, prompt_ko);
     let system = json!({ "role": "system", "content": prompts::system(prompt_ko) });
     if let Some(p) = deps.progress {
         p(0.3, "revising");
@@ -1646,6 +1776,7 @@ fn revise(deps: &GenerateDeps<'_>, req: &DraftRequest, scope: &ReviseScope, star
         elapsed_ms: started.elapsed().as_millis() as u64,
         source: "model".into(),
         sections: 1,
+        input_cuts,
     })
 }
 

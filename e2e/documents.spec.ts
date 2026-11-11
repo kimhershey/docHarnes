@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 import ko from "../src/i18n/ko.json" with { type: "json" };
 
-import { createWorkspace, freshApp, openImportPreview, tpl } from "./helpers";
+import { createWorkspace, docId, freshApp, importViaLibrary, openImportPreview, tpl, tplPattern } from "./helpers";
 
 // P2 acceptance (design §4.1): import (preview with duplicates / unsupported
 // reasons) → rendered pages → library grid/list → viewer navigation, rotation,
@@ -88,6 +88,12 @@ test.describe("P2 documents", () => {
     await expect(page.getByTestId("viewer-page")).toHaveText("1 / 12");
     await expect(page.getByTestId("viewer-image")).toBeVisible();
     await expect(page.getByTestId("viewer-text-layer")).toContainText("1쪽의 텍스트");
+    // The viewer has the keyboard as soon as the document is shown — no click needed first (DOC-2).
+    await expect(page.getByTestId("page-viewer")).toBeFocused();
+    await page.keyboard.press("ArrowRight");
+    await expect(page.getByTestId("viewer-page")).toHaveText("2 / 12");
+    await page.keyboard.press("ArrowLeft");
+    await expect(page.getByTestId("viewer-page")).toHaveText("1 / 12");
     await page.getByTestId("viewer-next").click();
     await expect(page.getByTestId("viewer-page")).toHaveText("2 / 12");
     await page.getByTestId("viewer-canvas").click();
@@ -212,7 +218,6 @@ test.describe("P2 documents", () => {
     await expect(page.getByTestId("viewer-selection-toolbar")).toContainText("1쪽의 텍스트");
     await expect(layer.locator("[data-selected]")).toHaveCount(2);
     // Enter opens the inline editor pre-filled with the selected words; Enter saves the replacement.
-    await page.getByTestId("page-viewer").focus();
     await page.keyboard.press("Enter");
     const input = page.getByTestId("viewer-text-input");
     await expect(input).toBeVisible();
@@ -228,7 +233,7 @@ test.describe("P2 documents", () => {
     // Ctrl+Z in the viewer takes the correction back (the page's own history, not the file journal) and the
     // words lose their corrected colour; Ctrl+Shift+Z re-applies it. The layer bar counts the corrections.
     await expect(page.getByTestId("viewer-text-edits-count")).toHaveText(tpl(ko.viewer.text_edit.count, { count: 1 }));
-    await page.getByTestId("page-viewer").focus();
+    // No click in between: when the editor closed, the focus went back to the viewer (DOC-2).
     await page.keyboard.press("Control+z");
     await expect(layer).toContainText("1쪽의 텍스트 레이어입니다.");
     await expect(layer.locator("[data-edited]")).toHaveCount(0);
@@ -240,7 +245,6 @@ test.describe("P2 documents", () => {
     await expect(page.getByTestId("viewer-text-source")).toHaveText(ko.viewer.text_edit.source.manual);
     // Escape drops a selection; a drag on empty space offers to add text the recogniser missed.
     await word("합계").click();
-    await page.getByTestId("page-viewer").focus();
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("viewer-selection-toolbar")).toHaveCount(0);
     // The foot of the page is below the fold: scroll the canvas down before drawing the box there.
@@ -275,5 +279,110 @@ test.describe("P2 documents", () => {
     await page.getByTestId("assistant-input").fill("첫째 쪽");
     await page.getByTestId("assistant-send").click();
     await expect(page.getByTestId("evidence-hit").first()).toContainText("메모-1p.pdf", { timeout: 15_000 });
+  });
+
+  test("Ctrl+Z after a correction on the page takes the correction back; a file batch is reverted only after asking (DOC-2)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\메모-1p.pdf"], { autoLevel: "none" });
+    const id = await docId(page, "메모-1p.pdf");
+    // A journaled file batch: 정리 moves the document.
+    await page.getByTestId("library-organize").click();
+    await page.getByTestId("organize-preview").click();
+    await expect(page.getByTestId("organize-preview-table")).toBeVisible();
+    await page.getByTestId("organize-run").click();
+    await page.getByTestId("organize-confirm").click();
+    await expect(page.getByTestId("organize-result")).toContainText(tplPattern(ko.organize.done, { failed: 0 }), { timeout: 15_000 });
+
+    // A word is corrected on the page image.
+    await page.getByTestId("nav-library").click();
+    await page.getByTestId(`doc-open-${id}`).click();
+    const layer = page.getByTestId("viewer-text-layer");
+    await layer.locator("[data-word-index]", { hasText: "1쪽의" }).first().click();
+    await page.keyboard.press("Enter");
+    await page.getByTestId("viewer-text-input").fill("첫째");
+    await page.keyboard.press("Enter");
+    await expect(layer.locator("[data-edited]")).toHaveCount(1);
+
+    // Ctrl+Z straight after saving used to revert the organise batch ("1건 되돌림") and leave the correction.
+    const undone = tplPattern(ko.palette.undo_done, {});
+    await page.keyboard.press("Control+z");
+    await expect(layer.locator("[data-edited]")).toHaveCount(0);
+    await expect(page.getByTestId("toaster")).toContainText(ko.viewer.text_edit.undone);
+    await expect(page.getByTestId("toaster")).not.toContainText(undone);
+    // With no correction left on the page the file batch is offered, not reverted.
+    await page.keyboard.press("Control+z");
+    const confirm = page.getByTestId("confirm-dialog");
+    await expect(confirm).toContainText(ko.viewer.journal.undo_title);
+    await expect(confirm).toContainText(ko.organize.history.kind.organize);
+    await page.getByTestId("confirm-cancel").click();
+    await expect(confirm).toBeHidden();
+    await expect(page.getByTestId("toaster")).not.toContainText(undone);
+    // The same from a toolbar button of the viewer (outside its own key handling); agreeing reverts the batch.
+    await page.getByTestId("viewer-rerender").focus();
+    await page.keyboard.press("Control+z");
+    await expect(confirm).toContainText(ko.viewer.journal.undo_title);
+    await page.getByTestId("confirm-ok").click();
+    await expect(page.getByTestId("toaster")).toContainText(tpl(ko.palette.undo_done, { restored: 1, skipped: 0 }));
+    // Nothing is left anywhere: a plain notice, no question.
+    await page.keyboard.press("Control+z");
+    await expect(page.getByTestId("toaster")).toContainText(ko.palette.nothing_to_undo);
+    await expect(confirm).toBeHidden();
+  });
+
+  test("a document that is being converted / rendered reads 처리 중, not 오류; cut off, it reads 중단됨 until it is rendered again (DOC-8)", async ({ page }) => {
+    // The mock at its real pace: the state during the work has to be seen.
+    await freshApp(page, {}, { fast: false });
+    await createWorkspace(page);
+    await page.getByTestId("nav-library").click();
+    await openImportPreview(page, ["D:\\scan\\계약서-12p.pdf"]);
+    await page.getByTestId("doc-import-run").click();
+    const card = page.locator('[data-testid^="doc-card-"][data-doc-name="계약서-12p.pdf"]');
+    const badge = card.locator('[data-testid^="doc-status-"]');
+    // While the import job converts / renders the document, its row carries the crash marker (status `error`).
+    await expect(card).toHaveAttribute("data-doc-status", "error", { timeout: 10_000 });
+    await expect(badge).toHaveAttribute("data-display-status", "processing");
+    await expect(badge).toHaveText(ko.documents.status.processing);
+
+    // The app goes away in the middle of the work: the marker stays, no job is alive any more.
+    await page.reload();
+    await page.getByTestId("nav-library").click();
+    await expect(badge).toHaveAttribute("data-display-status", "interrupted");
+    await expect(badge).toHaveText(ko.documents.status.interrupted);
+    await expect(badge).toHaveAttribute("title", ko.documents.status_hint.interrupted);
+    await card.locator('[data-testid^="doc-open-"]').click();
+    await expect(page.getByTestId("viewer-status")).toHaveText(ko.documents.status.interrupted);
+    await expect(page.getByTestId("viewer-doc-error")).toHaveText(ko.documents.status_hint.interrupted);
+    // 다시 렌더 processes it again.
+    await page.getByTestId("viewer-rerender").click();
+    await expect(page.getByTestId("viewer-status")).toHaveText(ko.documents.status.rendered, { timeout: 15_000 });
+    await expect(page.getByTestId("viewer-doc-error")).toHaveCount(0);
+    await page.getByTestId("viewer-back").click();
+    await expect(card).toHaveAttribute("data-doc-status", "rendered");
+    await expect(badge).toHaveText(ko.documents.status.rendered);
+  });
+
+  test("받은 문서함 chip: documents that sit only in a folder below the inbox are listed, and a folder's count is the size of its list (DOC-15)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page); // C:\Work\Docs
+    await importViaLibrary(page, ["C:\\Work\\Docs\\inbox\\2026-11\\청구서.pdf", "C:\\Work\\Docs\\inbox\\2026-11\\영수증.pdf", "D:\\scan\\계약서.pdf"], { autoLevel: "none" });
+    const cards = page.locator('[data-testid^="doc-card-"]');
+    await expect(cards).toHaveCount(3);
+    // Nothing lies in `inbox` itself. The chip counts the folders below it, and a click lists them (the selection
+    // used to be dropped at once, so the click did nothing).
+    const chip = page.getByTestId("library-today-stat-inbox");
+    await expect(chip).toContainText(tpl(ko.library.today.inbox, { count: 2 }));
+    await chip.click();
+    await expect(cards).toHaveCount(2);
+    await expect(page.locator('[data-testid^="doc-card-"][data-doc-name="계약서.pdf"]')).toHaveCount(0);
+    // The selected folder is shown in the navigation, and the number next to a folder is what its list holds.
+    const inbox = page.getByTestId("folder-inbox");
+    await expect(inbox).toHaveAttribute("aria-current", "true");
+    await expect(inbox).toContainText("2");
+    await expect(page.getByTestId("folder-inbox/2026-11")).toContainText("2");
+    await page.getByTestId("folder-inbox/2026-11").click();
+    await expect(cards).toHaveCount(2);
+    await page.getByTestId("folder-all").click();
+    await expect(cards).toHaveCount(3);
   });
 });

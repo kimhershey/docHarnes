@@ -532,65 +532,251 @@ fn leading_digits(s: &str) -> (u32, usize) {
     (digits.parse().unwrap_or(0), digits.len())
 }
 
-/// Parses an absolute date: `YYYY년 M월 [D일]`, `YYYY-MM[-DD]`, `YYYY.MM[.DD]`,
-/// `YYYY/MM[/DD]`, `YYYY년` (whole year) or `M월 [D일]` (current year, or the
-/// previous year when the month lies in the future).
-fn absolute_date(compact: &str, today: NaiveDate) -> Option<DateRange> {
-    let bytes: Vec<char> = compact.chars().collect();
+/// Units and comparison words that make the number before them a quantity, not a year
+/// ("2000 자 이내", "2000 원 이상", "2000 토큰", "2000 px").
+fn follows_as_quantity(token: &str) -> bool {
+    // Longer unit words: a prefix is enough ("토큰으로", "페이지까지", "만원이상").
+    const WORDS: [&str; 29] = [
+        "토큰",
+        "페이지",
+        "글자",
+        "단어",
+        "문자",
+        "만원",
+        "천원",
+        "억원",
+        "달러",
+        "퍼센트",
+        "픽셀",
+        "바이트",
+        "포인트",
+        "개월",
+        "이상",
+        "이하",
+        "이내",
+        "미만",
+        "초과",
+        "넘는",
+        "넘게",
+        "정도",
+        "가량",
+        "내외",
+        "tokens",
+        "characters",
+        "pixels",
+        "percent",
+        "dollars",
+    ];
+    if WORDS.iter().any(|w| token.starts_with(w)) {
+        return true;
+    }
+    // Short Latin units: the whole token ("2000 px", not "2024 pxl-report").
+    const LATIN: [&str; 13] =
+        ["won", "krw", "usd", "token", "chars", "words", "px", "dpi", "kb", "mb", "gb", "bytes", "%"];
+    if LATIN.contains(&token.trim_end_matches(['.', ',', '?', '!'])) {
+        return true;
+    }
+    // One-syllable units ("2024 원본", "2025 개발 계약서", "2024 원가" are words, not units): the
+    // unit alone or with a particle / bound word that can follow it.
+    const UNITS: [&str; 6] = ["원", "자", "건", "쪽", "개", "명"];
+    const TAILS: [&str; 20] = [
+        "의",
+        "도",
+        "만",
+        "에",
+        "씩",
+        "짜리",
+        "까지",
+        "부터",
+        "보다",
+        "이상",
+        "이하",
+        "이내",
+        "미만",
+        "초과",
+        "정도",
+        "쯤",
+        "가량",
+        "입니다",
+        "이다",
+        "이나",
+    ];
+    UNITS.iter().any(|unit| {
+        let Some(tail) = token.strip_prefix(unit) else { return false };
+        let tail = tail.trim_end_matches(['.', ',', '?', '!']);
+        tail.is_empty()
+            || TAILS.contains(&tail)
+            || [
+                crate::josa::Josa::EulReul,
+                crate::josa::Josa::IGa,
+                crate::josa::Josa::EunNeun,
+                crate::josa::Josa::EuroRo,
+            ]
+            .into_iter()
+            .any(|j| tail == crate::josa::particle(unit, j))
+    })
+}
+
+/// Labels that announce a quantity ("토큰 2048", "최대 2000", "DPI 2000"): the number after them is
+/// not a year.
+fn announces_quantity(token: &str) -> bool {
+    const LABELS: [&str; 24] = [
+        "토큰",
+        "글자",
+        "길이",
+        "크기",
+        "한도",
+        "상한",
+        "하한",
+        "최대",
+        "최소",
+        "금액",
+        "가격",
+        "예산",
+        "배율",
+        "해상도",
+        "번호",
+        "dpi",
+        "tokens",
+        "token",
+        "max",
+        "min",
+        "limit",
+        "size",
+        "budget",
+        "top-k",
+    ];
+    LABELS.iter().any(|l| token.starts_with(l))
+}
+
+/// Whether the four digits at `i` stand alone as a calendar year ("2024 영수증 합계", "(2025)").
+/// A number glued to letters ("2000자", "2048로", "v2024"), followed by a unit or a comparison
+/// ("2000 자 이내", "2000 이상"), announced as a quantity ("토큰 2000") or outside the years
+/// documents carry (1990 … next year: "토큰 2048") is not one (audit PLN-12).
+fn stands_as_year(chars: &[char], gap: &[bool], i: usize, year: i32, today: NaiveDate) -> bool {
+    if !(1990..=today.year() + 1).contains(&year) {
+        return false;
+    }
+    let end = i + 4;
+    let opened = i > 0 && "([{'\"“‘<".contains(chars[i - 1]);
+    if !(i == 0 || gap[i - 1] || opened) {
+        return false;
+    }
+    // After the digits: whitespace / the end, or closing punctuation and then whitespace / the end.
+    let mut k = end;
+    while k < chars.len() && !gap[k - 1] && ")]}'\"”’>,.?!:;~".contains(chars[k]) {
+        k += 1;
+    }
+    if !gap[k - 1] {
+        return false;
+    }
+    let word_from = |start: usize| -> String {
+        let mut s = String::new();
+        let mut p = start;
+        while p < chars.len() {
+            s.push(chars[p]);
+            if gap[p] {
+                break;
+            }
+            p += 1;
+        }
+        s
+    };
+    if follows_as_quantity(&word_from(k)) {
+        return false;
+    }
+    if i > 0 && gap[i - 1] {
+        let mut start = i - 1;
+        while start > 0 && !gap[start - 1] {
+            start -= 1;
+        }
+        if announces_quantity(&chars[start..i].iter().collect::<String>()) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Parses an absolute date: `YYYY년 M월 [D일]`, `YYYY-MM[-DD]`, `YYYY.MM[.DD]` (also the dotted
+/// `YYYY. M. D.`), `YYYY/MM[/DD]`, `YYYY년` or a four-digit year standing alone (whole year), or
+/// `M월 [D일]` (current year, or the previous year when the month lies in the future).
+///
+/// A four-digit number is a year only when 년, a date or a word boundary follows it — not in
+/// "20000원 이상", "2000자 이내" or "토큰 2048" (audit PLN-12).
+fn absolute_date(lower: &str, today: NaiveDate) -> Option<DateRange> {
+    // Whitespace is folded into a flag: `gap[i]` = whitespace (or the end of the text) follows `chars[i]`.
+    let mut chars: Vec<char> = Vec::new();
+    let mut gap: Vec<bool> = Vec::new();
+    for c in lower.chars() {
+        if c.is_whitespace() {
+            if let Some(g) = gap.last_mut() {
+                *g = true;
+            }
+        } else {
+            chars.push(c);
+            gap.push(false);
+        }
+    }
+    if let Some(g) = gap.last_mut() {
+        *g = true;
+    }
+    let compact: String = chars.iter().collect();
+    let whole_year =
+        |year: i32| range(NaiveDate::from_ymd_opt(year, 1, 1)?, NaiveDate::from_ymd_opt(year, 12, 31)?, "year");
     // 1) four-digit year
     let mut i = 0;
-    while i + 4 <= bytes.len() {
-        if bytes[i..i + 4].iter().all(|c| c.is_ascii_digit()) && (i == 0 || !bytes[i - 1].is_ascii_digit()) {
-            let year: i32 = bytes[i..i + 4].iter().collect::<String>().parse().ok()?;
-            if !(1900..=2200).contains(&year) {
-                i += 4;
-                continue;
-            }
-            let rest: String = bytes[i + 4..].iter().collect();
-            let (sep_korean, rest) = match rest.chars().next() {
-                Some('년') => (true, rest['년'.len_utf8()..].to_string()),
-                Some(c) if ['-', '.', '/'].contains(&c) => (false, rest[1..].to_string()),
-                _ => {
-                    return range(NaiveDate::from_ymd_opt(year, 1, 1)?, NaiveDate::from_ymd_opt(year, 12, 31)?, "year")
-                }
-            };
-            let (month, mlen) = leading_digits(&rest);
-            if mlen == 0 || !(1..=12).contains(&month) {
-                // "2026년" alone, possibly with "M월" elsewhere ("5월 2026년")
-                if sep_korean {
-                    if let Some((m, d)) = bare_month_day(&compact.replace(&format!("{year}년"), "")) {
-                        return month_or_day(year, m, d);
-                    }
-                    return range(NaiveDate::from_ymd_opt(year, 1, 1)?, NaiveDate::from_ymd_opt(year, 12, 31)?, "year");
-                }
-                i += 4;
-                continue;
-            }
-            let after = &rest[mlen..];
-            let after = if sep_korean { after.strip_prefix('월').unwrap_or(after) } else { after };
-            let day = if sep_korean {
-                let (d, dlen) = leading_digits(after);
-                if dlen > 0 && after[dlen..].starts_with('일') {
-                    Some(d)
-                } else {
-                    None
-                }
-            } else if let Some(stripped) = after.strip_prefix(['-', '.', '/']) {
-                let (d, dlen) = leading_digits(stripped);
-                if dlen > 0 {
-                    Some(d)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            return month_or_day(year, month, day);
+    while i + 4 <= chars.len() {
+        if !(chars[i..i + 4].iter().all(|c| c.is_ascii_digit()) && (i == 0 || !chars[i - 1].is_ascii_digit())) {
+            i += 1;
+            continue;
         }
-        i += 1;
+        let year: i32 = chars[i..i + 4].iter().collect::<String>().parse().ok()?;
+        let next = chars.get(i + 4).copied();
+        let glued = !gap[i + 3];
+        // Not a year at all, or the head of a longer number ("20000원", "20261105").
+        if !(1900..=2200).contains(&year) || (glued && next.is_some_and(|c| c.is_ascii_digit())) {
+            i += 4;
+            continue;
+        }
+        let rest: String = chars[i + 4..].iter().collect();
+        if next == Some('년') {
+            let rest = &rest['년'.len_utf8()..];
+            let (month, mlen) = leading_digits(rest);
+            // "2026년 10월 [5일]"; "2026년 3분기" / "2026년 2건" name the year only.
+            if (1..=2).contains(&mlen) && (1..=12).contains(&month) && rest[mlen..].starts_with('월') {
+                let after = &rest[mlen + '월'.len_utf8()..];
+                let (d, dlen) = leading_digits(after);
+                let day = (dlen > 0 && after[dlen..].starts_with('일')).then_some(d);
+                return month_or_day(year, month, day);
+            }
+            // "2026년" alone, possibly with "M월" elsewhere ("5월 2026년")
+            if let Some((m, d)) = bare_month_day(&compact.replace(&format!("{year}년"), "")) {
+                return month_or_day(year, m, d);
+            }
+            return whole_year(year);
+        }
+        if glued && next.is_some_and(|c| ['-', '.', '/'].contains(&c)) {
+            // "2026-10[-05]", "2026.10.05", "2026/10" — or the dotted "2026. 10. 5." with blanks,
+            // which needs the dot after the month ("2024. 12건" is a sentence end and a count).
+            let after_sep = &rest[1..];
+            let (month, mlen) = leading_digits(after_sep);
+            let spaced = gap[i + 4];
+            let dotted = next == Some('.') && after_sep[mlen..].starts_with('.');
+            if (1..=2).contains(&mlen) && (1..=12).contains(&month) && (!spaced || dotted) {
+                let day = after_sep[mlen..].strip_prefix(['-', '.', '/']).and_then(|s| {
+                    let (d, dlen) = leading_digits(s);
+                    (dlen > 0).then_some(d)
+                });
+                return month_or_day(year, month, day);
+            }
+        }
+        if stands_as_year(&chars, &gap, i, year, today) {
+            return whole_year(year);
+        }
+        i += 4;
     }
     // 2) bare "M월 [D일]"
-    let (m, d) = bare_month_day(compact)?;
+    let (m, d) = bare_month_day(&compact)?;
     let year = if m > today.month() { today.year() - 1 } else { today.year() };
     month_or_day(year, m, d)
 }
@@ -746,7 +932,7 @@ pub fn resolve_relative_date(text: &str, today: NaiveDate) -> Option<DateRange> 
             }
         }
     }
-    absolute_date(&compact, today)
+    absolute_date(&lower, today)
 }
 
 #[cfg(test)]
@@ -906,6 +1092,65 @@ mod tests {
         // leap-year February
         let r = resolve_relative_date("2024년 2월", today).unwrap();
         assert_eq!(r.to, d(2024, 2, 29));
+    }
+
+    /// Audit PLN-12: a four-digit number between 1900 and 2200 was always a year, so "20000원
+    /// 이상", "2000자 이내" and "토큰 2048" narrowed the scope to the documents of that year.
+    #[test]
+    fn four_digit_numbers_are_years_only_where_they_read_as_one() {
+        let today = NaiveDate::from_ymd_opt(2026, 11, 3).unwrap();
+        let d = |y, m, d| NaiveDate::from_ymd_opt(y, m, d).unwrap();
+        for text in [
+            "20000원 이상 영수증 합계",
+            "이 문서들 2000자 이내로 요약",
+            "토큰 2048",
+            "최대 토큰을 2000으로 설정",
+            "요약은 2000 자 이내로",
+            "2000 원 이상 영수증",
+            "2000 토큰 이내로 요약해줘",
+            "합계가 2000 이상인 영수증",
+            "토큰 2000",
+            "DPI 2000",
+            "계약서_2026.pdf 열어줘",
+            "v2024 릴리스 노트",
+            "문서번호 2024-0012 찾아줘",
+            "20261105 승인 건",
+            "2048로 올려",
+            "summarize in 2000 tokens",
+            "limit 2000",
+        ] {
+            assert_eq!(resolve_relative_date(text, today), None, "{text}");
+        }
+        let year = |text: &str, y: i32| {
+            let r = resolve_relative_date(text, today).unwrap_or_else(|| panic!("{text}: no date"));
+            assert_eq!((r.from, r.to, r.label.as_str()), (d(y, 1, 1), d(y, 12, 31), "year"), "{text}");
+        };
+        // 년 names the year whatever follows; a bare number needs word boundaries.
+        year("2024년 영수증 합계", 2024);
+        year("2000년 문서", 2000);
+        year("2026년 3분기 보고서", 2026);
+        year("2024년 2건", 2024);
+        year("2024 영수증 합계", 2024);
+        year("영수증 합계 2025", 2025);
+        year("(2025) 계약서 찾아줘", 2025);
+        year("2024, 2025 계약서", 2024);
+        year("2025 개발 계약서 찾아줘", 2025);
+        year("2024 원본 문서", 2024);
+        year("2024 원가 분석 자료", 2024);
+        year("2024 자료 정리해줘", 2024);
+        // Dates keep working, including the dotted form with blanks.
+        for (text, expect) in [
+            ("2026. 10. 5. 영수증", d(2026, 10, 5)),
+            ("2026.10.05 영수증", d(2026, 10, 5)),
+            ("2026/10/05", d(2026, 10, 5)),
+        ] {
+            let r = resolve_relative_date(text, today).unwrap();
+            assert_eq!((r.from, r.to, r.label.as_str()), (expect, expect, "day"), "{text}");
+        }
+        let r = resolve_relative_date("2026. 10. 영수증", today).unwrap();
+        assert_eq!((r.from, r.to), (d(2026, 10, 1), d(2026, 10, 31)));
+        // A sentence end followed by a count is not a dotted date.
+        year("작성 연도는 2024. 12건의 문서가 있음", 2024);
     }
 
     #[test]

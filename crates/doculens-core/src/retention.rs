@@ -14,7 +14,7 @@ pub enum RetentionItem {
     Documents,
     /// Extraction results and fields (default: same as documents).
     Extractions,
-    /// Rendered page cache — size-capped (LRU), not time based.
+    /// Rendered page cache — size-capped (LRU, `settings.cache.page_cache_max_gb`), not time based.
     PageCache,
     JobLogs,
     AppLogs,
@@ -47,6 +47,9 @@ impl RetentionItem {
 pub struct RetentionPolicy {
     pub documents_days: Option<u32>,
     pub extractions_days: Option<u32>,
+    /// Not read any more (0.8.0): the purge takes the page-cache cap from the app settings
+    /// (`cache.page_cache_max_gb`), so there is one cap. Kept so existing `workspace.json`
+    /// files and clients that send the whole policy keep working.
     pub page_cache_max_gb: f32,
     pub job_logs_days: Option<u32>,
     pub app_logs_days: Option<u32>,

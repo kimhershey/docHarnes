@@ -15,6 +15,14 @@ describe("plan editor numeric coercions (Rust u32 fields)", () => {
     expect(coerceInteger("1e3")).toBe(1000);
   });
 
+  it("coerceInteger takes a lower bound (set_retention.days: -1 = forever)", () => {
+    expect(coerceInteger("-1", -1)).toBe(-1);
+    expect(coerceInteger("-2", -1)).toBeNull();
+    expect(coerceInteger("0", -1)).toBe(0);
+    expect(coerceInteger("30", -1)).toBe(30);
+    expect(coerceInteger("", -1)).toBeUndefined();
+  });
+
   it("coerceNumber keeps fractions and negatives but rejects NaN", () => {
     expect(coerceNumber("")).toBeUndefined();
     expect(coerceNumber("0.75")).toBe(0.75);

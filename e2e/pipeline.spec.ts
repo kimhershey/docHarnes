@@ -42,6 +42,8 @@ test.describe("P4 pipeline", () => {
     const job = page.locator('[data-job-kind="pipeline"]').first();
     await expect(job).toContainText(ko.jobs.kind.pipeline);
     await expect(job.getByTestId("job-detail")).toContainText(tplPattern(ko.jobs.detail.process_summary, { processed: 2, classified: 2, extracted: 2, failed: 0 }));
+    // The job counts documents: the counter is "n / 2", not bytes ("1 B / 2 B", CON-11).
+    await expect(job.getByTestId("job-counter")).toHaveText(/^\d+ \/ 2$/);
 
     // Viewer: the OCR text sits on the page image (estimated positions for a photo); the right pane
     // only has AI 검색 and 이력 — the review itself happens in the queue.
@@ -247,5 +249,126 @@ test.describe("P4 pipeline", () => {
     const change = page.getByTestId("history-change").filter({ hasText: "recipient" }).first();
     await expect(change).toContainText(ko.pipeline.field_status.corrected);
     await expect(change).toContainText("DocuLens → ㈜한빛소프트");
+  });
+
+  test("command errors arrive in the shell's shape and read as sentences, never as codes (PIP-3)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서-1p.jpg", "D:\\scan\\개발계약서-2p.pdf"], { autoLevel: "none" });
+
+    // A bad type slug: the save command answers with the typed error `{ code: "schema_doc_type_invalid" }`.
+    await openSettingsTab(page, "schemas");
+    await page.getByTestId("schemas-new").click();
+    await page.getByTestId("schema-name").fill("발주서 시험");
+    await page.getByTestId("schema-doc-type").fill("Bad-Slug");
+    await page.getByTestId("schema-save").click();
+    await expect(page.getByTestId("toaster")).toContainText(ko.errors.reasons.schema_doc_type_invalid);
+    await expect(page.getByTestId("toaster")).not.toContainText("schema_doc_type_invalid");
+
+    // A merged-document name that is no file name: `{ code: "invalid", message: "merge_name_invalid" }`.
+    await page.getByTestId("nav-library").click();
+    for (const name of ["견적서-1p.jpg", "개발계약서-2p.pdf"]) await page.getByTestId(`doc-select-${await docId(page, name)}`).check();
+    await page.getByTestId("library-merge").click();
+    await page.getByTestId("merge-name").fill("2026/계약 묶음");
+    await page.getByTestId("merge-run").click();
+    await expect(page.getByTestId("toaster")).toContainText(ko.errors.reasons.merge_name_invalid);
+    await expect(page.getByTestId("toaster")).not.toContainText("merge_name_invalid");
+    await expect(page.getByTestId("merge-dialog")).toBeVisible();
+  });
+
+  test("review queue: re-extraction asks first, and page text corrected by hand survives unless the reviewer starts over (PIP-2)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await processEstimate(page);
+    const id = await docId(page, "견적서-1p.jpg");
+    const layer = page.getByTestId("viewer-text-layer");
+    const openViewer = async () => {
+      await page.getByTestId("nav-library").click();
+      await page.getByTestId(`doc-open-${id}`).click();
+      await expect(layer).toBeVisible();
+    };
+    /** Finished processing jobs on 작업 현황 (the first one is `processEstimate`). */
+    const processed = async (count: number) => {
+      await page.getByTestId("nav-jobs").click();
+      await page.getByTestId("jobs-tab-finished").click();
+      await expect(page.locator('[data-job-kind="pipeline"][data-job-state="done"]')).toHaveCount(count, { timeout: 20_000 });
+    };
+
+    // A word of the recognised page text is corrected by hand.
+    await openViewer();
+    await layer.locator("[data-word-index]").first().click();
+    await page.getByTestId("page-viewer").focus();
+    await page.keyboard.press("Enter");
+    await page.getByTestId("viewer-text-input").fill("손교정");
+    await page.keyboard.press("Enter");
+    await expect(layer).toContainText("손교정");
+    await expect(page.getByTestId("viewer-text-source")).toHaveText(ko.viewer.text_edit.source.manual);
+
+    // 검토함 > "잔글씨로 재추출" asks like the library's 처리 menu; cancelling starts nothing.
+    await page.getByTestId("nav-review").click();
+    await expect(page.locator('[data-testid^="review-item-"]').first()).toBeVisible();
+    const dialog = page.getByTestId("review-reextract-dialog");
+    await page.getByTestId("review-reextract-fine-print").click();
+    await expect(dialog).toContainText(ko.pipeline.process.confirm_title);
+    await expect(dialog).toContainText(tpl(ko.pipeline.process.confirm_body, { count: 1 }));
+    await expect(dialog.getByTestId("review-reextract-what")).toContainText("견적서-1p.jpg");
+    await expect(dialog.getByTestId("review-reextract-start-over")).not.toBeChecked();
+    await dialog.getByTestId("review-reextract-cancel").click();
+    await expect(dialog).toBeHidden();
+    // The precise mode has no "start over" choice.
+    await page.getByTestId("review-reextract-precise").click();
+    await expect(dialog).toHaveAttribute("data-mode", "precise");
+    await expect(dialog.getByTestId("review-reextract-start-over")).toHaveCount(0);
+    await dialog.getByTestId("review-reextract-cancel").click();
+    await expect(dialog).toBeHidden();
+    await processed(1);
+
+    // Confirmed without "start over": a new extraction, but no forced OCR — the corrected text is still there.
+    await page.getByTestId("nav-review").click();
+    await page.getByTestId("review-reextract-fine-print").click();
+    await dialog.getByTestId("review-reextract-ok").click();
+    await expect(page.getByTestId("toaster")).toContainText(tpl(ko.pipeline.process.started, { count: 1 }));
+    await processed(2);
+    await openViewer();
+    await expect(layer).toContainText("손교정");
+    await expect(page.getByTestId("viewer-text-source")).toHaveText(ko.viewer.text_edit.source.manual);
+
+    // Only the explicit choice reads the pages again and replaces the correction.
+    await page.getByTestId("nav-review").click();
+    await page.getByTestId("review-reextract-fine-print").click();
+    await dialog.getByTestId("review-reextract-start-over").check();
+    await dialog.getByTestId("review-reextract-ok").click();
+    await processed(3);
+    await openViewer();
+    await expect(layer).not.toContainText("손교정");
+    await expect(page.getByTestId("viewer-text-source")).toHaveText(ko.viewer.text_edit.source.ocr);
+  });
+
+  test("양식 테스트 asks before it replaces a document's results; the built-in 일반 form cannot be switched off (PIP-2, PIP-15)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await processEstimate(page);
+    await openSettingsTab(page, "schemas");
+    await page.getByTestId("schema-row-builtin-estimate").click();
+    // The estimate already has results: 테스트 asks first, and cancelling starts no job.
+    await page.getByTestId("schema-test-doc").click();
+    await page.getByRole("option").first().click(); // the only document of the workspace
+    await page.getByTestId("schema-test-run").click();
+    await expect(page.getByTestId("confirm-dialog")).toContainText(ko.pipeline.process.confirm_title);
+    await page.getByTestId("confirm-cancel").click();
+    await expect(page.getByTestId("confirm-dialog")).toBeHidden();
+    await expect(page.getByTestId("toaster")).not.toContainText(ko.schemas.editor.test_started);
+    await page.getByTestId("schema-test-run").click();
+    await page.getByTestId("confirm-ok").click();
+    await expect(page.getByTestId("toaster")).toContainText(ko.schemas.editor.test_started);
+
+    // An ordinary built-in form can be switched off; 일반 — the fallback of every 기타 document — cannot.
+    await expect(page.getByTestId("schema-enabled")).toBeEnabled();
+    const estimateTitle = await page.getByTestId("schema-title").textContent();
+    await page.getByTestId("schema-row-builtin-general").click();
+    await expect(page.getByTestId("schema-title")).not.toHaveText(estimateTitle ?? "");
+    await expect(page.getByTestId("schema-enabled")).toBeChecked();
+    await expect(page.getByTestId("schema-enabled")).toBeDisabled();
+    await expect(page.getByTestId("schema-enabled")).toHaveAttribute("data-locked", "true");
   });
 });

@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
 
+import { useModelDisplay } from "@/app/hooks/useModelDisplay";
 import { engineIndicator } from "@/app/layout/StatusBar";
 import { Badge } from "@/components/ui/badge";
 import { settingsTabPath } from "@/features/settings/tabs";
@@ -12,6 +13,8 @@ import { cn } from "@/lib/utils";
 import { useDocumentsStore } from "@/stores/documents";
 import { useEngineStore } from "@/stores/engine";
 import { useWorkspace } from "@/stores/workspace";
+
+import { folderCount } from "./folders";
 
 const OPEN_KEY = "doculens.library.today";
 
@@ -38,6 +41,7 @@ function saveOpen(open: boolean): void {
  */
 export function TodayStrip() {
   const { t } = useTranslation();
+  const modelDisplay = useModelDisplay();
   const workspace = useWorkspace();
   const setFolder = useDocumentsStore((s) => s.setFolder);
   const { data: stats } = useDocumentStats(!!workspace);
@@ -54,7 +58,8 @@ export function TodayStrip() {
     });
 
   const by = stats?.by_status ?? {};
-  const inbox = (stats?.folders ?? []).filter((f) => f.rel_dir === "inbox" || f.rel_dir.startsWith("inbox/")).reduce((n, f) => n + f.count, 0);
+  // The same count as the folder the chip selects (the inbox and the folders below it).
+  const inbox = folderCount(stats?.folders ?? [], "inbox");
   const counts: { key: "inbox" | "new" | "processing" | "review" | "done"; value: number }[] = [
     { key: "inbox", value: inbox },
     { key: "new", value: (by.new ?? 0) + (by.importing ?? 0) },
@@ -66,7 +71,8 @@ export function TodayStrip() {
   const installed = (assessment?.active_model_installed?.installed ?? false) || (index?.discovered.some((d) => d.health.kind === "ready") ?? false);
   const ind = engineIndicator(status, installed);
   const loaded = status?.models.find((m) => m.status === "loaded" || m.status === "sleeping") ?? null;
-  const modelLabel = loaded ? loaded.id : (assessment?.active_model?.display ?? t("topbar.no_model"));
+  // The registry's display name carries a Korean descriptor: translated for the English UI (UI-14).
+  const modelLabel = loaded ? loaded.id : (modelDisplay(assessment?.active_model?.display) ?? t("topbar.no_model"));
   const chip = "flex items-center gap-1 rounded-full border border-border bg-bg px-2 py-0.5";
 
   return (

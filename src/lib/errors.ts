@@ -4,6 +4,43 @@ import i18n from "@/i18n";
 
 import { errorCode, errorMessage } from "./utils";
 
+/** Reasons the document / pipeline commands word as a phrase instead of a code → their `errors.reasons.*` name. */
+const REASON_PHRASES: Record<string, string> = {
+  "nothing to import": "nothing_to_import",
+  "no files": "no_files",
+  "no documents": "no_documents",
+  "rotation must be a multiple of 90": "rotation",
+  "document_id required": "document_id_required",
+  "no fields": "no_fields",
+  "no split boundary inside the document": "no_split_boundary",
+  "merge needs at least two documents": "merge_two",
+};
+
+const CODE_SHAPE = /^[a-z][a-z0-9_]*$/;
+
+/**
+ * The `errors.reasons.*` key of an error, wherever its stable code travels (PIP-3): as the error's own `code`
+ * (the typed command errors: `{ code: "schema_name_empty" }`), as the reason of an `invalid` / `not_found`
+ * error (`"invalid value: no_findings"`), behind a detail (`"schema_not_found: <id>"`) or wrapped by another
+ * layer (`"database error: Invalid parameter name: schema_name_duplicate"`). A `not_found` error that names
+ * what is missing (`"not found: project <id>"`) maps to `<noun>_not_found`. Null when no part of the error
+ * names a reason with its own copy.
+ */
+export function errorReasonKey(e: unknown): string | null {
+  const code = errorCode(e) ?? "";
+  const parts = errorMessage(e).split(": ");
+  for (const raw of [code, ...parts]) {
+    const c = raw.trim();
+    const name = REASON_PHRASES[c] ?? (CODE_SHAPE.test(c) ? c : null);
+    if (name && i18n.exists(`errors.reasons.${name}`)) return `errors.reasons.${name}`;
+  }
+  if (code === "not_found") {
+    const noun = (parts[parts.length - 1] ?? "").trim().match(/^([a-z_]+) \S+$/)?.[1];
+    if (noun && i18n.exists(`errors.reasons.${noun}_not_found`)) return `errors.reasons.${noun}_not_found`;
+  }
+  return null;
+}
+
 /** Human-readable, localised description of an IPC/core error (falls back to the raw message). */
 export function describeError(e: unknown, t: TFunction): string {
   const message = errorMessage(e);
@@ -15,47 +52,9 @@ export function describeError(e: unknown, t: TFunction): string {
   // `engine_too_old:<version>:<min>` from the engine bridge.
   const tooOld = reason.match(/^engine_too_old:([^:]*):(\d+)/);
   if (tooOld) return `${t("models.engine_card.not_found", { error: tooOld[1] || "?" })} — ${t("models.engine_card.too_old", { min: tooOld[2] })}`;
-  // Well-known `invalid` reasons from the document commands get their own copy.
-  if (code === "invalid" || code === "not_found") {
-    const known: Record<string, string> = {
-      "nothing to import": "errors.reasons.nothing_to_import",
-      "no files": "errors.reasons.no_files",
-      "no documents": "errors.reasons.no_documents",
-      "rotation must be a multiple of 90": "errors.reasons.rotation",
-      collection_name_taken: "errors.reasons.collection_name_taken",
-      collection_name_empty: "errors.reasons.collection_name_empty",
-      glossary_term_empty: "errors.reasons.glossary_term_empty",
-      glossary_term_taken: "errors.reasons.glossary_term_taken",
-      collection_not_found: "errors.reasons.collection_not_found",
-      document_not_found: "errors.reasons.document_not_found",
-      feedback_invalid: "errors.reasons.feedback_invalid",
-      schema_name_duplicate: "errors.reasons.schema_name_duplicate",
-      version_group_empty: "errors.reasons.version_group_empty",
-      no_active_model: "errors.reasons.no_active_model",
-      embedding_model_not_installed: "errors.reasons.embedding_model_not_installed",
-      no_text: "errors.reasons.no_text",
-      "document_id required": "errors.reasons.document_id_required",
-      schema_name_empty: "errors.reasons.schema_name_empty",
-      schema_doc_type_invalid: "errors.reasons.schema_doc_type_invalid",
-      schema_invalid: "errors.reasons.schema_invalid",
-      schema_not_found: "errors.reasons.schema_not_found",
-      schema_builtin: "errors.reasons.schema_builtin",
-      field_not_found: "errors.reasons.field_not_found",
-      field_value_empty: "errors.reasons.field_value_empty",
-      change_not_found: "errors.reasons.change_not_found",
-      description_empty: "errors.reasons.description_empty",
-      no_model: "errors.reasons.no_model",
-      engine_not_running: "errors.reasons.engine_not_running",
-      model_not_loaded: "errors.reasons.model_not_loaded",
-      "no fields": "errors.reasons.no_fields",
-      "no split boundary inside the document": "errors.reasons.no_split_boundary",
-      "merge needs at least two documents": "errors.reasons.merge_two",
-      table_not_found: "errors.reasons.table_not_found",
-      plan_clarify: "errors.reasons.plan_clarify",
-    };
-    const key = known[reason.trim()];
-    if (key) return t(key);
-  }
+  // A stable reason code gets its own copy, whichever error class carries it.
+  const key = errorReasonKey(e);
+  if (key) return t(key);
   if (!code || !i18n.exists(`errors.${code}`)) return t("errors.generic", { message });
   return t(`errors.${code}`, { message: reason, ...detail });
 }

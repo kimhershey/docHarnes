@@ -11,11 +11,13 @@ import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { describeJobDetail } from "@/features/jobs/describe";
 import { DropHint, importDroppedFiles, useDocumentDropTarget } from "@/lib/dnd";
-import { useDocuments, useGenerateBudgetInfo, useGenerateTemplates, useSchemas } from "@/lib/queries";
+import { useDocuments, useGenerateBudgetInfo, useGenerateTemplates, useProjects, useSchemas } from "@/lib/queries";
+import { isComposing } from "@/lib/shortcuts";
 import { DRAFT_LENGTHS, LENGTH_TOKENS, OUTPUT_FORMATS, TOKEN_BUDGET_PRESETS, TONES, type DraftLength, type DraftRequest, type Job, type OutputFormat, type Tone } from "@/lib/types";
 import { useUiStore } from "@/stores/ui";
 
-import { documentSourceIds, formRefToPicker, pickerToFormRef, withDocumentSources } from "./draft";
+import { CharLimit } from "./CharLimit";
+import { clampTokenBudget, documentSourceIds, formRefToPicker, MIN_TOKEN_BUDGET, parseTokenBudget, pickerToFormRef, withDocumentSources } from "./draft";
 import { SourcePickerDialog } from "./SourcePickerDialog";
 
 /**
@@ -62,18 +64,32 @@ export function RequestForm({
   const ko = i18n.language.startsWith("ko");
   const detail = job ? describeJobDetail(job, t) : null;
   const canGenerate = request.content.trim().length > 0 && !running;
+  // The project a project draft belongs to (its name for the scope notice).
+  const { data: projects } = useProjects(!!request.project_id);
+  const scopeProject = request.project_id ? (projects?.find((p) => p.id === request.project_id) ?? null) : null;
   // Token budget (0.3.0): the length preset or an explicit number, capped by the active backend's limit.
   const { data: budgetInfo } = useGenerateBudgetInfo();
   const cap = budgetInfo?.cap ?? 32_768;
   const splitThreshold = budgetInfo?.split_threshold ?? 3_000;
   const presetTokens = LENGTH_TOKENS[request.length];
-  const effectiveTokens = Math.min(request.max_tokens ?? presetTokens, cap);
+  // The custom number is typed freely and applied — rounded, clamped to 200…cap — when the box loses focus or
+  // on Enter (GEN-12); `budgetText` is what is being typed (null = the box shows the stored budget).
+  const [budgetText, setBudgetText] = useState<string | null>(null);
+  const typedBudget = budgetText === null ? undefined : parseTokenBudget(budgetText, cap);
+  // The hints below follow the number being typed, as it will be applied.
+  const pendingBudget = typedBudget === undefined ? (request.max_tokens ?? null) : typedBudget;
+  const effectiveTokens = Math.min(pendingBudget ?? presetTokens, cap);
   const fmt = (n: number) => n.toLocaleString(ko ? "ko-KR" : "en-US");
   const tokPerSec = budgetInfo && !budgetInfo.gpu ? 6 : 25;
   const minutes = Math.max(1, Math.round(effectiveTokens / tokPerSec / 60));
   const budgetPicker = request.max_tokens == null ? "auto" : String(request.max_tokens);
   const budgetIsPreset = request.max_tokens == null || (TOKEN_BUDGET_PRESETS as readonly number[]).includes(request.max_tokens);
-  const setBudget = (value: number | null) => onChange({ max_tokens: value === null ? null : Math.min(cap, Math.max(200, Math.round(value))) });
+  const setBudget = (value: number | null) => onChange({ max_tokens: value === null ? null : clampTokenBudget(value, cap) });
+  const commitBudget = () => {
+    if (budgetText === null) return;
+    setBudgetText(null);
+    if (typedBudget !== undefined && typedBudget !== (request.max_tokens ?? null)) onChange({ max_tokens: typedBudget });
+  };
 
   return (
     <div className="flex flex-col gap-3" data-testid="generate-form">
@@ -108,6 +124,7 @@ export function RequestForm({
           {t("generate.form.content")} <span className="text-danger">*</span>
         </Label>
         <Textarea id="gen-content" rows={5} value={request.content} onChange={(e) => onChange({ content: e.target.value })} placeholder={t("generate.form.content_placeholder")} lang={i18n.language} data-testid="generate-content" />
+        <CharLimit text={request.content} max={budgetInfo?.content_max_chars} testId="generate-content-limit" />
       </div>
       <div className="relative flex flex-col gap-1.5" {...drop.props} data-testid="generate-sources-drop">
         <DropHint active={drop.isActive} over={drop.isOver} testId="generate-drop-hint">
@@ -144,11 +161,22 @@ export function RequestForm({
         <span>{t("generate.form.use_knowledge")}</span>
         <Switch checked={request.use_knowledge} onCheckedChange={(v) => onChange({ use_knowledge: v })} aria-label={t("generate.form.use_knowledge")} data-testid="generate-use-knowledge" />
       </label>
-      <div className="grid grid-cols-3 gap-2">
-        <div className="flex flex-col gap-1.5">
+      {/* A project draft (CON-3): its reference material is searched inside the project. Said here, with a way out. */}
+      {request.project_id && (
+        <div className="flex items-start gap-2 rounded-md border border-border bg-bg-sunken px-2 py-1.5 text-xs text-fg-muted" data-testid="generate-project-scope" data-project-id={request.project_id}>
+          <span className="min-w-0 flex-1">{scopeProject ? t("generate.form.project_scope", { name: scopeProject.name }) : projects ? t("generate.form.project_scope_missing") : t("generate.form.project_scope", { name: "…" })}</span>
+          <Button size="sm" variant="ghost" className="h-6 shrink-0 px-2 text-xs" onClick={() => onChange({ project_id: null })} data-testid="generate-project-scope-clear">
+            {t("generate.form.project_scope_clear")}
+          </Button>
+        </div>
+      )}
+      {/* 어조 and 길이 share a row, 출력 형식 has its own: three selects side by side left room for one letter each
+          in this 16–20 rem column ("격…", "H…", UI-5). */}
+      <div className="grid grid-cols-2 gap-2" data-testid="generate-options">
+        <div className="flex min-w-0 flex-col gap-1.5">
           <Label htmlFor="gen-tone">{t("generate.form.tone")}</Label>
           <Select value={request.tone} onValueChange={(v) => onChange({ tone: v as Tone })}>
-            <SelectTrigger id="gen-tone" className="h-8" aria-label={t("generate.form.tone")} data-testid="generate-tone">
+            <SelectTrigger id="gen-tone" className="h-8 px-2" aria-label={t("generate.form.tone")} data-testid="generate-tone">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -160,10 +188,10 @@ export function RequestForm({
             </SelectContent>
           </Select>
         </div>
-        <div className="flex flex-col gap-1.5">
+        <div className="flex min-w-0 flex-col gap-1.5">
           <Label htmlFor="gen-length">{t("generate.form.length")}</Label>
           <Select value={request.length} onValueChange={(v) => onChange({ length: v as DraftLength })}>
-            <SelectTrigger id="gen-length" className="h-8" aria-label={t("generate.form.length")} data-testid="generate-length">
+            <SelectTrigger id="gen-length" className="h-8 px-2" aria-label={t("generate.form.length")} data-testid="generate-length">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -175,10 +203,10 @@ export function RequestForm({
             </SelectContent>
           </Select>
         </div>
-        <div className="flex flex-col gap-1.5">
+        <div className="col-span-2 flex min-w-0 flex-col gap-1.5">
           <Label htmlFor="gen-output">{t("generate.form.output")}</Label>
           <Select value={request.output} onValueChange={(v) => onChange({ output: v as OutputFormat })}>
-            <SelectTrigger id="gen-output" className="h-8" aria-label={t("generate.form.output")} data-testid="generate-output">
+            <SelectTrigger id="gen-output" className="h-8 px-2" aria-label={t("generate.form.output")} data-testid="generate-output">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -192,13 +220,16 @@ export function RequestForm({
         </div>
       </div>
       <div className="flex flex-col gap-1.5" data-testid="generate-token-budget">
-        <div className="flex items-center justify-between gap-2">
-          <Label htmlFor="gen-budget">{t("generate.form.token_budget")}</Label>
+        {/* The label never breaks; the context / cap note drops to its own line when the column is narrow. */}
+        <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
+          <Label htmlFor="gen-budget" className="shrink-0 whitespace-nowrap">
+            {t("generate.form.token_budget")}
+          </Label>
           <span className="text-xs text-fg-subtle">{budgetInfo?.ctx ? t("generate.form.budget_info", { ctx: fmt(budgetInfo.ctx), cap: fmt(cap) }) : t("generate.form.budget_info_cap", { cap: fmt(cap) })}</span>
         </div>
         <div className="flex items-center gap-2">
           <Select value={budgetPicker} onValueChange={(v) => setBudget(v === "auto" ? null : Number(v))}>
-            <SelectTrigger id="gen-budget" className="h-8 flex-1" aria-label={t("generate.form.token_budget")} data-testid="generate-token-budget-select">
+            <SelectTrigger id="gen-budget" className="h-8 min-w-0 flex-1 px-2" aria-label={t("generate.form.token_budget")} data-testid="generate-token-budget-select">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -215,13 +246,20 @@ export function RequestForm({
           </Select>
           <Input
             type="number"
-            className="h-8 w-28 text-right tabular-nums"
-            min={200}
+            className="h-8 w-24 shrink-0 px-2 text-right tabular-nums"
+            min={MIN_TOKEN_BUDGET}
             max={cap}
             step={100}
-            value={request.max_tokens ?? ""}
+            value={budgetText ?? request.max_tokens ?? ""}
             placeholder={String(presetTokens)}
-            onChange={(e) => setBudget(e.target.value === "" ? null : Number(e.target.value))}
+            onChange={(e) => setBudgetText(e.target.value)}
+            onBlur={commitBudget}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !isComposing(e)) {
+                e.preventDefault();
+                commitBudget();
+              }
+            }}
             aria-label={t("generate.form.token_budget_custom")}
             data-testid="generate-token-budget-input"
           />

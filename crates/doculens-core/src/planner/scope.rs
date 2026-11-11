@@ -10,11 +10,40 @@ use super::{compact, Scope};
 
 /// Date a document is filed under: its document date, else the import date
 /// (design §3.5 "날짜 기준 필드는 doc_date 기본"). Returns `(YYYY-MM-DD, basis)`.
+///
+/// `doc_date` is the normalised value of the schema's date field, but a schema may type that
+/// field as plain text ("2026년10월5일", "10월 중순"): only a leading ISO date counts. The first
+/// ten bytes used to be sliced off whatever the string was, which panics inside a Hangul
+/// character (audit PLN-19).
 pub fn basis_date(doc: &DocumentRecord) -> (Option<String>, &'static str) {
-    match doc.doc_date.as_deref().map(str::trim).filter(|d| d.len() >= 10) {
-        Some(d) => (Some(d[..10].to_string()), "doc_date"),
+    let iso = doc
+        .doc_date
+        .as_deref()
+        .map(str::trim)
+        .and_then(|d| d.get(..10))
+        .filter(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").is_ok());
+    match iso {
+        Some(d) => (Some(d.to_string()), "doc_date"),
         None => (Some(doc.imported_at.format("%Y-%m-%d").to_string()), "imported_at"),
     }
+}
+
+/// Of `ids`, the documents whose latest extraction carries review work: a field the user
+/// approved, corrected, rejected or put on hold. Re-extracting such a document replaces that
+/// work (the planner's `extract` confirms first — audit PLN-3).
+pub fn reviewed_documents(conn: &Connection, ids: &[String]) -> rusqlite::Result<std::collections::HashSet<String>> {
+    let mut out = std::collections::HashSet::new();
+    for group in ids.chunks(400) {
+        let marks = vec!["?"; group.len()].join(", ");
+        let mut st = conn.prepare(&format!(
+            "SELECT DISTINCT f.document_id FROM fields f JOIN documents d ON d.id = f.document_id AND d.last_run_id = f.run_id \
+             WHERE f.status != 'auto' AND f.document_id IN ({marks})"
+        ))?;
+        for id in st.query_map(rusqlite::params_from_iter(group.iter()), |r| r.get::<_, String>(0))? {
+            out.insert(id?);
+        }
+    }
+    Ok(out)
 }
 
 /// Documents in scope, sorted by path. Deleted / importing / missing / error

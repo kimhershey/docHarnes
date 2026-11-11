@@ -10,7 +10,7 @@ use doculens_core::organize::{OrganizePlan, OrganizeRequest};
 use doculens_core::planner::Plan;
 
 use crate::jobs::Job;
-use crate::planner_bridge::{self, ExecuteResponse, PlanResponse, UiPlanContext, UndoResponse};
+use crate::planner_bridge::{self, ExecuteOptions, ExecuteResponse, PlanResponse, UiPlanContext, UndoResponse};
 use crate::state::{AppState, UiError, UiResult};
 
 #[tauri::command(async)]
@@ -24,15 +24,27 @@ pub fn planner_plan(app: AppHandle, text: String, context: Option<UiPlanContext>
 #[derive(Debug, Clone, Deserialize)]
 pub struct ExecuteArgs {
     pub plan: Plan,
+    /// The command as the card shows it (job subject).
     #[serde(default)]
     pub text: String,
     #[serde(default)]
     pub context: Option<UiPlanContext>,
+    /// The exact text the plan was made from — `PlanResponse.result.text` of the planning call
+    /// that produced the card. After an ask-back this is the command, the assistant's question
+    /// and the user's reply; the reply is where "전부" was said, so the documents-required check
+    /// reads this text (audit PLN-7). Absent = `text`.
+    #[serde(default)]
+    pub planned_text: Option<String>,
+    /// `true`: validate and preview the (edited) plan without running it — the response carries
+    /// `preview: { plan, preview, issues }` instead of `job_id` / `execution` (audit PLN-14).
+    #[serde(default)]
+    pub preview_only: bool,
 }
 
 #[tauri::command(async)]
 pub fn planner_execute(app: AppHandle, args: ExecuteArgs) -> UiResult<ExecuteResponse> {
-    planner_bridge::execute(&app, args.plan, &args.text, &args.context.unwrap_or_default())
+    let options = ExecuteOptions { planned_text: args.planned_text.as_deref(), preview_only: args.preview_only };
+    planner_bridge::execute(&app, args.plan, &args.text, &args.context.unwrap_or_default(), &options)
 }
 
 // -- organise / journal ------------------------------------------------------

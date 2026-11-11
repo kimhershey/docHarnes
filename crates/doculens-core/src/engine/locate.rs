@@ -1,6 +1,7 @@
 //! Finding the `llama-server` binary (design §3.12): environment override
-//! (development / tests), explicit setting, `<AppData>/engines/<version>/<pack>/`
-//! and finally packs bundled next to the application.
+//! (development / tests), explicit setting, then the pack of the selected backend
+//! from one pool — `<AppData>/engines/<version>/<pack>/` (newest build) and the
+//! packs bundled next to the application for the backends AppData does not have.
 
 use std::path::{Path, PathBuf};
 
@@ -132,36 +133,42 @@ pub struct LocateInputs<'a> {
     pub preference: BackendPreference,
 }
 
-fn newest_per_backend(packs: &[InstalledPack]) -> Vec<&InstalledPack> {
-    let mut chosen: Vec<&InstalledPack> = Vec::new();
-    for p in packs {
-        if !chosen.iter().any(|c| c.backend == p.backend) {
-            chosen.push(p);
+/// Packs shipped with the application: `<root>/<pack>/llama-server` under the bundled roots
+/// (one per backend; the first root that has it wins).
+pub fn list_bundled(roots: &[PathBuf]) -> Vec<InstalledPack> {
+    let mut out: Vec<InstalledPack> = Vec::new();
+    for root in roots {
+        let Ok(rd) = std::fs::read_dir(root) else { continue };
+        for p in rd.flatten() {
+            let Some(backend) = pack_backend(&p.file_name().to_string_lossy()) else { continue };
+            let bin = p.path().join(binary_name());
+            if bin.is_file() && !out.iter().any(|o| o.backend == backend) {
+                out.push(InstalledPack { backend, version: "bundled".into(), build_number: None, path: bin });
+            }
         }
     }
-    chosen
+    out
 }
 
-fn pick(
-    packs: &[InstalledPack],
-    gpu: Option<&GpuInfo>,
-    preference: BackendPreference,
-    source: EngineSource,
-) -> Option<EngineBinary> {
-    let newest = newest_per_backend(packs);
-    let installed: Vec<Backend> = newest.iter().map(|p| p.backend).collect();
-    if installed.is_empty() {
-        return None;
+/// Every pack the app can run, one per backend: the newest pack under
+/// `<AppData>/engines/<version>/` wins, the bundled packs fill in the backends that have none
+/// there. The two sources are one pool — a CUDA pack unpacked into AppData must not hide the
+/// CPU / Vulkan packs that came with the installer.
+pub fn available_packs(engines_dir: &Path, bundled_roots: &[PathBuf]) -> Vec<(InstalledPack, EngineSource)> {
+    let mut out: Vec<(InstalledPack, EngineSource)> = Vec::new();
+    let app_data = list_installed(engines_dir).into_iter().map(|p| (p, EngineSource::AppData));
+    let bundled = list_bundled(bundled_roots).into_iter().map(|p| (p, EngineSource::Bundled));
+    for (pack, source) in app_data.chain(bundled) {
+        if !out.iter().any(|(o, _)| o.backend == pack.backend) {
+            out.push((pack, source));
+        }
     }
-    let backend = hw::select_backend(gpu, &installed, preference);
-    let pack = newest.iter().find(|p| p.backend == backend).or_else(|| newest.first())?;
-    Some(EngineBinary {
-        path: pack.path.clone(),
-        backend: pack.backend,
-        version: Some(pack.version.clone()),
-        build_number: pack.build_number,
-        source,
-    })
+    out
+}
+
+/// The pack that would run for `backend`, if any (AppData first, then bundled).
+pub fn find_pack(engines_dir: &Path, bundled_roots: &[PathBuf], backend: Backend) -> Option<InstalledPack> {
+    available_packs(engines_dir, bundled_roots).into_iter().map(|(p, _)| p).find(|p| p.backend == backend)
 }
 
 /// Resolves the binary to run (see module docs for the precedence).
@@ -196,26 +203,28 @@ pub fn locate(inputs: &LocateInputs) -> Result<EngineBinary> {
         }
         return Err(CoreError::EngineNotFound(p.display().to_string()));
     }
-    let packs = list_installed(inputs.engines_dir);
-    if let Some(b) = pick(&packs, inputs.gpu, inputs.preference, EngineSource::AppData) {
-        return Ok(b);
+    let packs = available_packs(inputs.engines_dir, inputs.bundled_roots);
+    if packs.is_empty() {
+        return Err(CoreError::EngineNotFound(inputs.engines_dir.display().to_string()));
     }
-    for root in inputs.bundled_roots {
-        let mut packs = Vec::new();
-        if let Ok(rd) = std::fs::read_dir(root) {
-            for p in rd.flatten() {
-                let Some(backend) = pack_backend(&p.file_name().to_string_lossy()) else { continue };
-                let bin = p.path().join(binary_name());
-                if bin.is_file() {
-                    packs.push(InstalledPack { backend, version: "bundled".into(), build_number: None, path: bin });
-                }
-            }
-        }
-        if let Some(b) = pick(&packs, inputs.gpu, inputs.preference, EngineSource::Bundled) {
-            return Ok(b);
-        }
-    }
-    Err(CoreError::EngineNotFound(inputs.engines_dir.display().to_string()))
+    let installed: Vec<Backend> = packs.iter().map(|(p, _)| p.backend).collect();
+    let backend = hw::select_backend(inputs.gpu, &installed, inputs.preference);
+    // No substitute when the selected backend has no pack: running another one (a CUDA binary
+    // although the user chose CPU, CUDA on a driver that is too old) is what must not happen.
+    let Some((pack, source)) = packs.iter().find(|(p, _)| p.backend == backend) else {
+        return Err(CoreError::EngineNotFound(format!(
+            "no {} pack under {} or next to the application",
+            backend.as_str(),
+            inputs.engines_dir.display()
+        )));
+    };
+    Ok(EngineBinary {
+        path: pack.path.clone(),
+        backend: pack.backend,
+        version: Some(pack.version.clone()),
+        build_number: pack.build_number,
+        source: *source,
+    })
 }
 
 /// Runs `llama-server --version` and extracts the build number
@@ -388,5 +397,91 @@ mod tests {
         let b = locate(&inputs).unwrap();
         assert_eq!(b.source, EngineSource::Override);
         assert_eq!(b.backend, Backend::Vulkan);
+    }
+
+    fn gpu(name: &str, cuda: Option<(u32, u32)>, source: GpuSource) -> GpuInfo {
+        GpuInfo {
+            index: 0,
+            name: name.into(),
+            vendor: GpuVendor::guess_from_name(name),
+            total_mib: 8192,
+            free_mib: Some(7000),
+            driver_version: None,
+            cuda_driver_version: cuda,
+            compute_capability: None,
+            source,
+        }
+    }
+
+    /// PLT-11: the Lite installer bundles the CPU and Vulkan packs and the guide has the user
+    /// unpack a CUDA pack into AppData. The AppData pack must not hide the bundled ones.
+    #[test]
+    fn app_data_and_bundled_packs_are_one_pool() {
+        let tmp = tempfile::tempdir().unwrap();
+        let engines = tmp.path().join("appdata").join("engines");
+        let bundled = tmp.path().join("install").join("engines");
+        touch(&engines.join("b12066").join("cu121").join(binary_name()));
+        touch(&bundled.join("cpu").join(binary_name()));
+        touch(&bundled.join("vulkan").join(binary_name()));
+        // The same folder listed twice (resource dir = exe dir) and a missing root are harmless.
+        let roots = vec![bundled.clone(), bundled.clone(), tmp.path().join("nowhere")];
+        let run = |gpu: Option<&GpuInfo>, preference| {
+            locate(&LocateInputs { engines_dir: &engines, bundled_roots: &roots, override_path: None, gpu, preference })
+        };
+        let pool = available_packs(&engines, &roots);
+        assert_eq!(pool.len(), 3, "{pool:?}");
+        assert_eq!(
+            find_pack(&engines, &roots, Backend::Vulkan).unwrap().path,
+            bundled.join("vulkan").join(binary_name())
+        );
+        assert!(find_pack(&engines, &roots, Backend::Cu129).is_none());
+
+        let nvidia = gpu("NVIDIA GeForce RTX 4060", Some((12, 6)), GpuSource::Nvml);
+        let b = run(Some(&nvidia), BackendPreference::Auto).unwrap();
+        assert_eq!(
+            (b.backend, b.source, b.version.as_deref()),
+            (Backend::Cu121, EngineSource::AppData, Some("b12066"))
+        );
+        // Backend set to CPU / Vulkan: the bundled pack runs, not the CUDA binary from AppData.
+        let b = run(Some(&nvidia), BackendPreference::Cpu).unwrap();
+        assert_eq!((b.backend, b.source), (Backend::Cpu, EngineSource::Bundled));
+        assert_eq!(b.path, bundled.join("cpu").join(binary_name()));
+        let b = run(Some(&nvidia), BackendPreference::Vulkan).unwrap();
+        assert_eq!((b.backend, b.source), (Backend::Vulkan, EngineSource::Bundled));
+        // A driver too old for the CUDA pack: bundled Vulkan instead of a CUDA start that fails.
+        let old_driver = gpu("NVIDIA GeForce GTX 1660", Some((11, 8)), GpuSource::Nvml);
+        assert_eq!(run(Some(&old_driver), BackendPreference::Auto).unwrap().backend, Backend::Vulkan);
+        // An AMD card the Vulkan pack listed (PLT-4), and a PC without any GPU.
+        let amd = gpu("AMD Radeon RX 7600", None, GpuSource::Engine);
+        assert_eq!(run(Some(&amd), BackendPreference::Auto).unwrap().backend, Backend::Vulkan);
+        assert_eq!(run(None, BackendPreference::Auto).unwrap().backend, Backend::Cpu);
+        assert_eq!(run(None, BackendPreference::Vulkan).unwrap().backend, Backend::Vulkan);
+
+        // The same backend in both places: the pack the user installed wins.
+        touch(&engines.join("b12070").join("vulkan").join(binary_name()));
+        let b = run(Some(&amd), BackendPreference::Auto).unwrap();
+        assert_eq!((b.source, b.version.as_deref()), (EngineSource::AppData, Some("b12070")));
+    }
+
+    /// PLT-11: when the selected backend has no pack anywhere, nothing else is started in its place.
+    #[test]
+    fn a_missing_pack_is_an_error_not_another_backend() {
+        let tmp = tempfile::tempdir().unwrap();
+        let engines = tmp.path().join("engines");
+        touch(&engines.join("b12066").join("cu121").join(binary_name()));
+        let nvidia = gpu("NVIDIA GeForce RTX 4060", Some((12, 6)), GpuSource::Nvml);
+        let run = |gpu: Option<&GpuInfo>, preference| {
+            locate(&LocateInputs { engines_dir: &engines, bundled_roots: &[], override_path: None, gpu, preference })
+        };
+        assert_eq!(run(Some(&nvidia), BackendPreference::Auto).unwrap().backend, Backend::Cu121);
+        for (gpu, preference) in [
+            (Some(&nvidia), BackendPreference::Cpu),
+            (None, BackendPreference::Auto),
+            (None, BackendPreference::Vulkan),
+        ] {
+            let err = run(gpu, preference).unwrap_err();
+            assert_eq!(err.code(), "engine_not_found");
+            assert!(err.to_string().contains("no cpu pack"), "{err}");
+        }
     }
 }

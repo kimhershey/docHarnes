@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { card, createWorkspace, docId, freshApp, importViaLibrary, openAssistantScreen, openModelsAdvanced, openSettingsTab } from "./helpers";
+import ko from "../src/i18n/ko.json" with { type: "json" };
+import { card, createWorkspace, docId, freshApp, importViaLibrary, openAssistantScreen, openModelsAdvanced, openSettingsTab, tpl } from "./helpers";
 
 // 0.6.0 (plan docs/plan/v0.6.0.md): every screen action as an assistant command, against the browser
 // mock — a document op (rotate), a confirmed file op (merge), a catalog setting (UI scale), a reference
@@ -107,6 +108,74 @@ test.describe("0.6.0 agent ops", () => {
     await page.getByTestId("nav-projects").click();
     await expect(page.getByTestId("page-projects")).toBeVisible();
     await expect(page.locator('[data-testid^="project-card-"][data-project-name="한빛 심사"]')).toHaveCount(0);
+  });
+
+  // CON-9 / CON-10: the detail line of these two steps read the payload in another shape than the executor
+  // sends (`applied` 0 vs null, `term` an entry vs a string): "배정 0건" for a run that only suggests, an
+  // empty term name. The mock sends the executor's shapes.
+  test("result details: a glossary term shows its name, a suggestion-only classification is not '배정 0건'", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    // (The classification needs a project to suggest.)
+    await page.getByTestId("nav-projects").click();
+    await page.getByTestId("projects-new").click();
+    await page.getByTestId("project-name").fill("한빛 심사");
+    await page.getByTestId("project-submit").click();
+    await expect(page.getByTestId("page-project")).toBeVisible();
+    await openAssistantScreen(page);
+
+    await send(page, "용어 '공급가액'은 '부가세를 뺀 금액'으로 등록해줘");
+    await approveIfPending(page, assistantCard(page, "plan").last());
+    const term = assistantCard(page, "result").last();
+    await expect(term).toHaveAttribute("data-result-status", "done", { timeout: 15_000 });
+    await expect(term.getByTestId("result-agent-detail")).toContainText(tpl(ko.planner.result.detail.define_term, { action: ko.planner.params.term_save, term: "공급가액" }));
+
+    await send(page, "미배정 문서 프로젝트로 자동 분류");
+    await approveIfPending(page, assistantCard(page, "plan").last());
+    const classified = assistantCard(page, "result").last();
+    await expect(classified).toHaveAttribute("data-result-status", "done", { timeout: 15_000 });
+    await expect(classified.getByTestId("result-agent-detail")).toContainText(tpl(ko.planner.result.detail.classify_preview, { suggested: 0 }));
+    await expect(classified.getByTestId("result-agent-detail")).not.toContainText("배정");
+  });
+
+  // PLN-17: an op the UI runs itself can fail. Only a toast said so; the card kept its "실행됨" / ✓.
+  test("a UI op that fails is shown as failed: the executed card and a result card's step", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openAssistantScreen(page);
+
+    // Runs at once (no confirmation): the folder is not a workspace, so nothing was opened.
+    await send(page, "워크스페이스 D:\\NoSuch 열어");
+    const executed = assistantCard(page, "executed").last();
+    await expect(executed).toBeVisible({ timeout: 15_000 });
+    await expect(executed).toHaveAttribute("data-executed-status", "failed");
+    await expect(executed).toContainText(ko.assistant.executed_failed);
+    await expect(executed.getByTestId("executed-failure")).toHaveCount(1);
+    await expect(executed.getByTestId("executed-failure")).toContainText("D:\\NoSuch");
+    // Still in the first workspace.
+    await expect(page.getByTestId("workspace-switcher")).toHaveAttribute("title", "C:\\Work\\Docs");
+
+    // (Enter instead of the send button from here on: the failure toast lies over the button for a while.)
+    const sendWithEnter = async (text: string) => {
+      await page.getByTestId("assistant-input").fill(text);
+      await page.getByTestId("assistant-input").press("Enter");
+    };
+    // Confirmed plan → result card: the model is not installed, so the UI's delete fails on its step.
+    await sendWithEnter("12B 모델 삭제해줘");
+    const plan = assistantCard(page, "plan").last();
+    await expect(plan).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    await plan.getByTestId("plan-execute").click();
+    const result = assistantCard(page, "result").last();
+    await expect(result).toBeVisible({ timeout: 15_000 });
+    await expect(result.getByTestId("result-step-0")).toHaveAttribute("data-ui-status", "failed");
+    await expect(result.getByTestId("result-ui-error")).toBeVisible();
+    await expect(result).toHaveAttribute("data-result-status", "failed");
+
+    // An op that works keeps the plain "실행했습니다" card.
+    await sendWithEnter("UI 배율 125%로");
+    const ok = assistantCard(page, "executed").last();
+    await expect(ok).toHaveAttribute("data-executed-status", "done", { timeout: 15_000 });
+    await expect(ok.getByTestId("executed-failure")).toHaveCount(0);
   });
 
   test("engine: '엔진 꺼' is confirmed and the engine card shows it stopped", async ({ page }) => {

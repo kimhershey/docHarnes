@@ -27,11 +27,23 @@ const types: DocTypeInfo[] = [
 const rule: Rule = { id: "r1", description: "사업자번호 일치", left: { doc_type: "tax_invoice", field: "supplier.brn", value: null }, op: "eq", right: { doc_type: "business_registration", field: "registration_no", value: null }, tolerance: null, required: true, enabled: true };
 
 describe("rule helpers", () => {
-  it("lists scalar field paths with group prefixes and skips tables", () => {
+  it("lists scalar field paths, group children and table columns with their prefixes", () => {
     const opts = fieldOptions(schemaForType(schemas, "tax_invoice"));
-    expect(opts.map((o) => o.path)).toEqual(["supplier.brn", "supplier.name", "grand_total"]);
+    expect(opts.map((o) => o.path)).toEqual(["supplier.brn", "supplier.name", "grand_total", "items.item"]);
     expect(opts[0]!.label_ko).toBe("공급자 공급자 사업자등록번호");
+    // A table column is an operand like the core's `fields_of_def` lists it (PRJ-15).
+    expect(opts[3]).toMatchObject({ path: "items.item", label_ko: "품목 품목", label_en: "items item", column: true });
+    expect(opts.slice(0, 3).every((o) => !o.column)).toBe(true);
     expect(fieldOptions(null)).toEqual([]);
+  });
+
+  it("a rule on a table column is resolved, labelled and complete (PRJ-15)", () => {
+    const onColumn: Rule = { ...rule, left: { doc_type: "tax_invoice", field: "items.item", value: null }, op: "present", right: null };
+    expect(unresolvedOperands(onColumn, schemas, types)).toEqual([]);
+    expect(operandLabel(onColumn.left, types, schemas, "ko")).toBe("세금계산서 · 품목 품목");
+    expect(ruleComplete(onColumn)).toBe(true);
+    // A column the table does not have is still a problem.
+    expect(unresolvedOperands({ ...onColumn, left: { doc_type: "tax_invoice", field: "items.bogus", value: null } }, schemas, types)).toEqual(["left"]);
   });
 
   it("summarises a rule in Korean and labels literals", () => {

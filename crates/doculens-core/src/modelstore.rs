@@ -27,6 +27,8 @@ pub const MODEL_JSON: &str = "model.json";
 pub const HASH_CACHE_FILE: &str = ".doculens-hashes.json";
 /// Files modified more recently than this are treated as still being copied.
 pub const COPY_SETTLE_SECONDS: u64 = 5;
+/// Downloads and copies are written as `<name>.gguf.part` and renamed when complete.
+const PART_SUFFIX: &str = ".gguf.part";
 
 /// `general.architecture` → prompt profile for architectures the pipeline
 /// knows how to drive. The registry ships Gemma 4 / EmbeddingGemma 2 (0.4.0); the
@@ -284,15 +286,29 @@ fn scan_file(path: &Path, read_headers: bool) -> ScannedFile {
     ScannedFile { path: path.to_path_buf(), name, size, modified, stable, meta, hashes: None, error }
 }
 
-/// Scans one drop-in folder. Returns `None` for folders without any GGUF.
+/// Scans one drop-in folder. Returns `None` for folders without any GGUF
+/// (finished, or unfinished as `*.gguf.part`).
 pub fn scan_model_folder(
     folder: &Path,
     registry: &Registry,
     cache: Option<&HashCache>,
     opts: ScanOptions,
 ) -> Option<DiscoveredModel> {
+    scan_folder(folder, registry, cache, opts).map(|(model, _missing)| model)
+}
+
+/// [`scan_model_folder`] plus the names of the files the model still lacks (split parts,
+/// unfinished downloads) — also while the folder reports `Copying`.
+fn scan_folder(
+    folder: &Path,
+    registry: &Registry,
+    cache: Option<&HashCache>,
+    opts: ScanOptions,
+) -> Option<(DiscoveredModel, Vec<String>)> {
     let folder_name = folder.file_name()?.to_string_lossy().into_owned();
     let mut ggufs: Vec<PathBuf> = Vec::new();
+    // Unfinished downloads / copies: (final file name, bytes on disk so far).
+    let mut partials: Vec<(String, u64)> = Vec::new();
     let mut license_files = Vec::new();
     let mut model_json = None;
     let rd = fs::read_dir(folder).ok()?;
@@ -302,18 +318,25 @@ pub fn scan_model_folder(
         if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
             continue;
         }
-        if name.to_ascii_lowercase().ends_with(".gguf") {
+        let lower = name.to_ascii_lowercase();
+        if lower.ends_with(".gguf") {
             ggufs.push(p);
+        } else if lower.ends_with(PART_SUFFIX) && lower.len() > PART_SUFFIX.len() {
+            let final_name = name[..name.len() - ".part".len()].to_string();
+            partials.push((final_name, entry.metadata().map(|m| m.len()).unwrap_or(0)));
         } else if name == MODEL_JSON {
             model_json = fs::read(&p).ok().and_then(|b| serde_json::from_slice::<ModelJson>(&b).ok());
         } else if is_license_file(&name) {
             license_files.push(name);
         }
     }
-    if ggufs.is_empty() {
+    // A `.part` next to its finished file is a leftover of a repeated copy, not a missing file.
+    partials.retain(|(n, _)| !ggufs.iter().any(|g| g.file_name().is_some_and(|f| f.to_string_lossy() == n.as_str())));
+    if ggufs.is_empty() && partials.is_empty() {
         return None;
     }
     ggufs.sort();
+    partials.sort();
 
     let mut weights: Vec<(Option<(u16, u16)>, ScannedFile)> = Vec::new();
     let mut mmproj: Option<ScannedFile> = None;
@@ -396,15 +419,59 @@ pub fn scan_model_folder(
     } else {
         ModelRole::Llm
     });
-    let total_bytes: u64 = ordered.iter().map(|f| f.size).sum::<u64>() + mmproj.as_ref().map_or(0, |f| f.size);
     let hashed = !ordered.is_empty() && ordered.iter().chain(mmproj.iter()).all(|f| f.hashes.is_some());
 
     // Registry matching (hash first, then names).
-    let registry_match = match_registry(registry, &ordered, mmproj.as_ref());
+    let mut registry_match = match_registry(registry, &ordered, mmproj.as_ref());
+
+    // An unfinished download / copy (`*.gguf.part`, PLT-13): the folder is listed as incomplete,
+    // so it can be deleted from the model list, and downloading the model again resumes the file.
+    let mut partial_bytes = 0u64;
+    if !partials.is_empty() {
+        let partial_names: Vec<&str> = partials.iter().map(|(n, _)| n.as_str()).collect();
+        let unfinished =
+            if registry_match.is_none() { unfinished_download(registry, &ordered, &partial_names) } else { None };
+        if let Some(entry) = unfinished {
+            registry_match = Some(RegistryMatch { id: entry.id.clone(), by: MatchBy::Name, verified: None });
+        }
+        let entry = registry_match.as_ref().and_then(|m| registry.get(&m.id));
+        let listed = |name: &str| entry.is_some_and(|e| e.files.iter().any(|f| f.name.eq_ignore_ascii_case(name)));
+        // A partial file belongs to the model when nothing usable is here yet, or when it is a
+        // file the model needs (a split part, the mmproj of a model without one, a file of the
+        // registry entry). Any other `.part` is a stray leftover and must not make a complete
+        // model "incomplete".
+        let mut wanted: Vec<&str> = Vec::new();
+        for (name, size) in &partials {
+            if ordered.is_empty()
+                || missing.iter().any(|m| m.eq_ignore_ascii_case(name))
+                || (mmproj.is_none() && gguf::is_mmproj_name(name))
+                || listed(name)
+            {
+                partial_bytes += size;
+                wanted.push(name);
+            }
+        }
+        // … and with it the files of the entry that were not started yet.
+        let on_disk = |name: &str| ordered.iter().chain(mmproj.iter()).any(|f| f.name.eq_ignore_ascii_case(name));
+        let not_started: Vec<&str> = match entry {
+            Some(e) if unfinished.is_some() || !wanted.is_empty() => {
+                e.files.iter().map(|f| f.name.as_str()).filter(|n| !on_disk(n)).collect()
+            }
+            _ => Vec::new(),
+        };
+        for name in wanted.into_iter().chain(not_started) {
+            if !missing.iter().any(|m| m.eq_ignore_ascii_case(name)) {
+                missing.push(name.to_string());
+            }
+        }
+    }
+    // Partial files of the model count: they are what the folder occupies on disk.
+    let total_bytes: u64 =
+        ordered.iter().map(|f| f.size).sum::<u64>() + mmproj.as_ref().map_or(0, |f| f.size) + partial_bytes;
 
     let mut warnings = Vec::new();
     let health = if ordered.is_empty() {
-        ModelHealth::Incomplete { missing: vec!["weights".into()] }
+        ModelHealth::Incomplete { missing: if missing.is_empty() { vec!["weights".into()] } else { missing.clone() } }
     } else if let Some(err) = ordered.iter().chain(mmproj.iter()).find_map(|f| f.error.clone()) {
         if ordered.iter().chain(mmproj.iter()).any(|f| !f.stable) {
             ModelHealth::Copying
@@ -457,7 +524,7 @@ pub fn scan_model_folder(
         })
         .unwrap_or_else(|| folder_name.clone());
 
-    Some(DiscoveredModel {
+    let model = DiscoveredModel {
         folder: folder.to_path_buf(),
         folder_name,
         id,
@@ -478,7 +545,8 @@ pub fn scan_model_folder(
         registry_match,
         hashed,
         scanned_at: Utc::now(),
-    })
+    };
+    Some((model, missing))
 }
 
 fn match_registry(registry: &Registry, weights: &[ScannedFile], mmproj: Option<&ScannedFile>) -> Option<RegistryMatch> {
@@ -501,16 +569,21 @@ fn match_registry(registry: &Registry, weights: &[ScannedFile], mmproj: Option<&
         }
     }
     if let Some((_, entry)) = best {
-        let all_pins_match = entry.files.iter().all(|pf| match &pf.sha256 {
+        let pin_matches = |pf: &ModelFile| match &pf.sha256 {
             Some(pin) => files.iter().any(|sf| hash_of(sf) == Some(pin.as_str())),
             None => true,
-        });
+        };
+        // Weights pins decide validity. A differing mmproj (other precision, a later upload) only
+        // leaves the folder unverified — the same rule as the name match below.
+        let weights_match = entry.files.iter().filter(|pf| !pf.is_mmproj()).all(pin_matches);
+        let mmproj_match = entry.files.iter().filter(|pf| pf.is_mmproj()).all(pin_matches);
         let all_hashed = files.iter().all(|f| f.hashes.is_some());
-        return Some(RegistryMatch {
-            id: entry.id.clone(),
-            by: MatchBy::Hash,
-            verified: Some(all_pins_match && all_hashed),
-        });
+        let verified = match (weights_match && all_hashed, mmproj_match) {
+            (false, _) => Some(false),
+            (true, true) => Some(true),
+            (true, false) => None,
+        };
+        return Some(RegistryMatch { id: entry.id.clone(), by: MatchBy::Hash, verified });
     }
     // By name: every registry file name present.
     for entry in &registry.models {
@@ -539,6 +612,23 @@ fn match_registry(registry: &Registry, weights: &[ScannedFile], mmproj: Option<&
         return Some(RegistryMatch { id: entry.id.clone(), by: MatchBy::Name, verified });
     }
     None
+}
+
+/// The registry entry an unfinished download in a folder belongs to (the folder holds `.part`
+/// files and matches no entry completely): the entry whose weights file is there — finished, or
+/// as `.part` when the folder has no finished weights of anything else. Weights names are unique
+/// per entry; the mmproj is shared and identifies nothing.
+fn unfinished_download<'a>(
+    registry: &'a Registry,
+    weights: &[ScannedFile],
+    partial_names: &[&str],
+) -> Option<&'a ModelEntry> {
+    registry.models.iter().find(|e| {
+        e.weights_file().is_some_and(|w| {
+            weights.iter().any(|sf| sf.name.eq_ignore_ascii_case(&w.name))
+                || (weights.is_empty() && partial_names.iter().any(|p| p.eq_ignore_ascii_case(&w.name)))
+        })
+    })
 }
 
 /// Lower-cases and replaces anything outside `[a-z0-9._-]` with `-`.
@@ -637,17 +727,23 @@ pub struct InstallState {
     pub warnings: Vec<String>,
 }
 
+/// Whether a scanned folder holds this registry model: built-in entries match through
+/// `registry_match`; user-added entries (synthesised from a folder) match by their id.
+fn holds_model(d: &DiscoveredModel, model: &ModelEntry) -> bool {
+    match &d.registry_match {
+        Some(m) => m.id == model.id,
+        None => model.user_added && d.id == model.id,
+    }
+}
+
+/// True when a ready folder holds this model (what [`install_state`] reports as `installed`).
+pub fn is_installed(model: &ModelEntry, discovered: &[DiscoveredModel]) -> bool {
+    discovered.iter().any(|d| d.health.is_ready() && holds_model(d, model))
+}
+
 /// Installation state of a registry model given the scan results.
 pub fn install_state(models_dir: &Path, model: &ModelEntry, discovered: &[DiscoveredModel]) -> InstallState {
-    // Built-in entries match through `registry_match`; user-added entries
-    // (synthesised from a folder) match by their id.
-    let candidates: Vec<&DiscoveredModel> = discovered
-        .iter()
-        .filter(|d| match &d.registry_match {
-            Some(m) => m.id == model.id,
-            None => model.user_added && d.id == model.id,
-        })
-        .collect();
+    let candidates: Vec<&DiscoveredModel> = discovered.iter().filter(|d| holds_model(d, model)).collect();
     // Prefer a ready, hash-verified folder.
     let best = candidates
         .iter()
@@ -804,7 +900,8 @@ pub fn merged_registry(base: &Registry, discovered: &[DiscoveredModel]) -> Regis
     let mut out = base.clone();
     let mut seen: BTreeSet<String> = out.models.iter().map(|m| m.id.clone()).collect();
     for d in discovered {
-        if d.registry_match.is_some() || matches!(d.health, ModelHealth::Invalid { .. }) {
+        // A folder without weights (only an mmproj, or only an unfinished `.part`) is no model.
+        if d.registry_match.is_some() || matches!(d.health, ModelHealth::Invalid { .. }) || d.weights.is_empty() {
             continue;
         }
         let mut entry = entry_from_discovered(d);
@@ -858,9 +955,48 @@ pub struct ImportPlan {
     pub already_present: bool,
 }
 
+/// A folder among the import sources stands for the model it holds, read with the drop-in folder
+/// rule (`scan_model_folder`): the weights — one file or a complete split set — and the mmproj.
+/// The guide and the assistant ("모델 폴더 D:\models\x 가져와") hand over the folder, not its files.
+fn expand_import_sources(sources: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let no_registry = Registry {
+        schema_version: 1,
+        models: Vec::new(),
+        tier_defaults: BTreeMap::new(),
+        adaptive: BTreeMap::new(),
+        default_embedding: None,
+        fallback_family: None,
+    };
+    let mut out: Vec<PathBuf> = Vec::new();
+    for src in sources {
+        if !src.is_dir() {
+            out.push(src.clone());
+            continue;
+        }
+        let opts = ScanOptions { read_headers: true, use_hash_cache: false };
+        let found = scan_folder(src, &no_registry, None, opts).filter(|(d, _)| d.all_files().next().is_some());
+        let Some((model, missing)) = found else {
+            return Err(CoreError::Invalid(format!("no .gguf files in folder: {}", src.display())));
+        };
+        if !missing.is_empty() {
+            return Err(CoreError::Invalid(format!(
+                "the model in {} is incomplete, missing: {}",
+                src.display(),
+                missing.join(", ")
+            )));
+        }
+        out.extend(model.all_files().map(|f| f.path.clone()));
+    }
+    // A folder and one of its own files selected together: every file once.
+    let mut seen = BTreeSet::new();
+    out.retain(|p| seen.insert(p.clone()));
+    Ok(out)
+}
+
 /// Validates the selected files and decides the destination folder. When a
 /// single weights file is chosen and the same directory holds exactly one
-/// `mmproj*.gguf`, it is paired automatically (§3.3.4).
+/// `mmproj*.gguf`, it is paired automatically (§3.3.4). A selected folder is
+/// replaced by the model files inside it.
 pub fn plan_import(
     models_dir: &Path,
     sources: &[PathBuf],
@@ -870,9 +1006,10 @@ pub fn plan_import(
     if sources.is_empty() {
         return Err(CoreError::Invalid("no files selected".into()));
     }
+    let sources = expand_import_sources(sources)?;
     let mut files: Vec<ImportPlanFile> = Vec::new();
     let mut warnings = Vec::new();
-    for src in sources {
+    for src in &sources {
         let name = src.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         if !name.to_ascii_lowercase().ends_with(".gguf") {
             return Err(CoreError::Invalid(format!("not a .gguf file: {name}")));
@@ -989,16 +1126,94 @@ pub struct ImportProgress {
     pub total: u64,
 }
 
+/// Bytes the current user can still write on the volume that holds `path` (the nearest existing
+/// ancestor is asked); `None` when the platform does not tell.
+pub fn free_disk_space(path: &Path) -> Option<u64> {
+    let mut dir = path;
+    while !dir.exists() {
+        dir = dir.parent()?;
+    }
+    free_space_of(dir)
+}
+
+#[cfg(unix)]
+fn free_space_of(dir: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
+    // SAFETY: `path` is a NUL-terminated string and `st` a properly sized, writable `statvfs`.
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(path.as_ptr(), &mut st) } != 0 {
+        return None;
+    }
+    Some((st.f_bavail as u64).saturating_mul(st.f_frsize as u64))
+}
+
+#[cfg(windows)]
+fn free_space_of(dir: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    let mut wide: Vec<u16> = dir.as_os_str().encode_wide().collect();
+    // A UNC name must end with a backslash; a trailing one is fine for every directory.
+    if wide.last() != Some(&u16::from(b'\\')) {
+        wide.push(u16::from(b'\\'));
+    }
+    wide.push(0);
+    let mut free_for_caller = 0u64;
+    // SAFETY: `wide` is a NUL-terminated UTF-16 path; the two unused out-pointers may be null.
+    let ok = unsafe {
+        windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free_for_caller,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    (ok != 0).then_some(free_for_caller)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn free_space_of(_dir: &Path) -> Option<u64> {
+    None
+}
+
+fn human_bytes(bytes: u64) -> String {
+    const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+    if bytes as f64 >= GIB {
+        format!("{:.1} GiB", bytes as f64 / GIB)
+    } else {
+        format!("{} MiB", bytes.div_ceil(MIB))
+    }
+}
+
+/// Fails when the volume of `dir` cannot take `needed` more bytes, so a multi-GB copy or
+/// download stops before the first byte instead of at "disk full" (an unknown free space passes).
+pub fn ensure_free_space(dir: &Path, needed: u64) -> Result<()> {
+    match free_disk_space(dir) {
+        Some(free) if free < needed => Err(CoreError::io(
+            dir,
+            std::io::Error::new(
+                std::io::ErrorKind::StorageFull,
+                format!("not enough disk space: {} needed, {} free", human_bytes(needed), human_bytes(free)),
+            ),
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// Executes an import plan. Files are written as `<name>.part` and renamed
-/// on completion; cancelling (`progress` returns `false`) removes the partial
-/// file. Returns the destination folder.
+/// on completion; a cancelled (`progress` returns `false`) or failed copy
+/// removes its partial file. Returns the destination folder.
 pub fn run_import(plan: &ImportPlan, progress: &mut dyn FnMut(&ImportProgress) -> bool) -> Result<PathBuf> {
     let target = &plan.target_folder;
     fs::create_dir_all(target).map_err(|e| CoreError::io(target, e))?;
+    let in_place =
+        |f: &ImportPlanFile| fs::metadata(target.join(&f.dest_name)).map(|m| m.len() == f.size).unwrap_or(false);
+    if plan.mode == ImportMode::Copy {
+        ensure_free_space(target, plan.files.iter().filter(|f| !in_place(f)).map(|f| f.size).sum())?;
+    }
     let mut total_done = 0u64;
     for f in &plan.files {
         let dest = target.join(&f.dest_name);
-        if fs::metadata(&dest).map(|m| m.len() == f.size).unwrap_or(false) {
+        if in_place(f) {
             total_done += f.size;
             continue;
         }
@@ -1011,7 +1226,11 @@ pub fn run_import(plan: &ImportPlan, progress: &mut dyn FnMut(&ImportProgress) -
             _ => false,
         };
         if !done {
-            copy_with_progress(&f.source, &part, f.size, &mut |done| {
+            if plan.mode != ImportMode::Copy {
+                // Move / link across volumes falls back to a copy.
+                ensure_free_space(target, f.size)?;
+            }
+            let copied = copy_with_progress(&f.source, &part, f.size, &mut |done| {
                 progress(&ImportProgress {
                     file: f.dest_name.clone(),
                     file_done: done,
@@ -1019,8 +1238,13 @@ pub fn run_import(plan: &ImportPlan, progress: &mut dyn FnMut(&ImportProgress) -
                     total_done: total_done + done,
                     total: plan.total_bytes,
                 })
-            })?;
-            fs::rename(&part, &dest).map_err(|e| CoreError::io(&dest, e))?;
+            })
+            .and_then(|()| fs::rename(&part, &dest).map_err(|e| CoreError::io(&dest, e)));
+            if let Err(e) = copied {
+                // Cancelled, unreadable source, disk full …: no multi-GB `.part` stays behind.
+                let _ = fs::remove_file(&part);
+                return Err(e);
+            }
             if plan.mode == ImportMode::Move {
                 let _ = fs::remove_file(&f.source);
             }
@@ -1205,6 +1429,12 @@ pub fn download_file(
         response.headers().get("Content-Length").and_then(|v| v.to_str().ok()?.parse::<u64>().ok())
     }
     .or(req.expected_size);
+
+    // The rest of the file has to fit before anything is written (a partial file stays for a
+    // resume once space was made).
+    if let (Some(total), Some(folder)) = (total, dest.parent()) {
+        ensure_free_space(folder, total.saturating_sub(resumed_from))?;
+    }
 
     let mut file = if append {
         fs::OpenOptions::new().append(true).open(&part).map_err(|e| CoreError::io(&part, e))?
@@ -1422,6 +1652,12 @@ mod tests {
         assert!(!st2.installed);
         assert_eq!(st2.folder, Some(models.join("gemma4-e4b-q4km")));
         assert_eq!(st2.missing_files.len(), 2);
+        assert!(is_installed(reg.get("gemma4-e4b-q6k").unwrap(), &found));
+        assert!(!is_installed(reg.get("gemma4-e4b-q4km").unwrap(), &found));
+
+        // "자동" (PLT-3): today's free VRAM recommends Q5_K_M, the folder on disk holds Q6_K.
+        let auto = reg.auto_model(Tier::Vram8gb, Some(7_000), &|m| is_installed(m, &found)).unwrap();
+        assert_eq!(auto.id, "gemma4-e4b-q6k");
     }
 
     #[test]
@@ -1537,6 +1773,10 @@ mod tests {
         let models = tmp.path().join("models");
         make_folder(&models, "q", "gemma-4-E4B-it-Q4_K_M.gguf", true);
         let mut reg = Registry::builtin();
+        // The built-in entries are pinned to the real files (PKG-6); this test pins the synthetic folder itself.
+        for f in reg.models.iter_mut().flat_map(|m| m.files.iter_mut()) {
+            f.sha256 = None;
+        }
         let found = scan_models_dir(&models, &reg, ScanOptions::default());
         let mut calls = 0;
         let hashes = hash_model(&models, &found[0], &mut |_, _, _| {
@@ -1562,6 +1802,27 @@ mod tests {
         assert_eq!(found[0].registry_match.as_ref().unwrap().verified, Some(false));
         assert_eq!(found[0].health, ModelHealth::Invalid { reason: "hash_mismatch".into() });
         assert!(calls > 0);
+    }
+
+    /// PKG-6: the built-in entries pin their mmproj too. The right weights next to another mmproj
+    /// (other precision, a later upload) must stay usable — unverified, not `hash_mismatch`.
+    #[test]
+    fn hash_match_with_another_mmproj_stays_usable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let models = tmp.path().join("models");
+        make_folder(&models, "q", "gemma-4-E4B-it-Q4_K_M.gguf", true);
+        let mut reg = Registry::builtin();
+        let found = scan_models_dir(&models, &reg, ScanOptions::default());
+        let hashes = hash_model(&models, &found[0], &mut |_, _, _| true).unwrap();
+        let sha = hashes.iter().find(|(n, _)| n == "gemma-4-E4B-it-Q4_K_M.gguf").unwrap().1.sha256.clone();
+        // weights pinned to this folder's file, mmproj left at the built-in (real) pin
+        let m = reg.models.iter_mut().find(|m| m.id == "gemma4-e4b-q4km").unwrap();
+        m.files[0].sha256 = Some(sha);
+        assert!(m.files[1].is_mmproj() && m.files[1].sha256.is_some());
+        let found = scan_models_dir(&models, &reg, ScanOptions::default());
+        let rm = found[0].registry_match.as_ref().unwrap();
+        assert_eq!((rm.id.as_str(), rm.by, rm.verified), ("gemma4-e4b-q4km", MatchBy::Hash, None));
+        assert!(found[0].health.is_ready(), "{:?}", found[0].health);
     }
 
     #[test]
@@ -1690,5 +1951,226 @@ mod tests {
         assert!(!t.contains(&Tier::Vram6gb));
         assert!(t.contains(&Tier::Vram8gb));
         assert!(!t.contains(&Tier::CpuOnly));
+    }
+
+    /// PLT-12: the guide and the assistant ("모델 폴더 … 가져와") hand the import a folder.
+    #[test]
+    fn import_plan_accepts_a_model_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("usb").join("gemma e4b");
+        fs::create_dir_all(src.join("nested")).unwrap();
+        write_minimal_gguf(
+            &src.join("gemma-4-E4B-it-Q6_K.gguf"),
+            &synthetic_gemma4_metadata("Gemma 4 E4B", 18, true),
+            &[("a", &[4096], 0)],
+        )
+        .unwrap();
+        write_minimal_gguf(&src.join("mmproj-F16.gguf"), &mmproj_meta(), &[("v", &[64], 1)]).unwrap();
+        fs::write(src.join("LICENSE"), "apache").unwrap();
+        fs::write(src.join("README.md"), "notes").unwrap();
+        let models = tmp.path().join("models");
+
+        let plan = plan_import(&models, std::slice::from_ref(&src), ImportMode::Copy, None).unwrap();
+        let names = |p: &ImportPlan| p.files.iter().map(|f| f.dest_name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&plan), ["gemma-4-E4B-it-Q6_K.gguf", "mmproj-F16.gguf"]);
+        assert!(plan.has_vision && !plan.auto_paired_mmproj);
+        assert_eq!(plan.folder_name, "gemma-4-e4b-it-q6_k");
+        assert_eq!(plan.license_files, vec![src.join("LICENSE")]);
+        let folder = run_import(&plan, &mut |_| true).unwrap();
+        for name in ["gemma-4-E4B-it-Q6_K.gguf", "mmproj-F16.gguf", "LICENSE"] {
+            assert!(folder.join(name).is_file(), "{name}");
+        }
+        assert!(!folder.join("README.md").exists());
+        let found = scan_models_dir(&models, &Registry::builtin(), ScanOptions::default());
+        assert_eq!(found.len(), 1);
+        assert!(found[0].health.is_ready(), "{:?}", found[0].health);
+        assert_eq!(found[0].id, "gemma4-e4b-q6k");
+
+        // The folder together with one of its own files: every file once.
+        let both = [src.clone(), src.join("mmproj-F16.gguf")];
+        assert_eq!(plan_import(&models, &both, ImportMode::Copy, Some("again")).unwrap().files.len(), 2);
+
+        // A split set comes over in split order …
+        let split = tmp.path().join("usb").join("big");
+        fs::create_dir_all(&split).unwrap();
+        for i in [2u16, 1u16] {
+            write_minimal_gguf(
+                &split.join(format!("Big-Q4_K_M-{i:05}-of-00002.gguf")),
+                &synthetic_qwen35_metadata("Big", 15, true),
+                &[("a", &[8], 0)],
+            )
+            .unwrap();
+        }
+        let plan = plan_import(&models, std::slice::from_ref(&split), ImportMode::Copy, None).unwrap();
+        assert_eq!(names(&plan), ["Big-Q4_K_M-00001-of-00002.gguf", "Big-Q4_K_M-00002-of-00002.gguf"]);
+        // … and an incomplete one is refused with the missing part named.
+        fs::remove_file(split.join("Big-Q4_K_M-00002-of-00002.gguf")).unwrap();
+        let err = plan_import(&models, std::slice::from_ref(&split), ImportMode::Copy, None).unwrap_err();
+        assert!(err.to_string().contains("Big-Q4_K_M-00002-of-00002.gguf"), "{err}");
+
+        // A folder without model files and a file that is no GGUF are still rejected.
+        let empty = tmp.path().join("usb").join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        fs::write(empty.join("readme.txt"), "x").unwrap();
+        let err = plan_import(&models, std::slice::from_ref(&empty), ImportMode::Copy, None).unwrap_err();
+        assert!(err.to_string().contains("no .gguf files in folder"), "{err}");
+        assert!(plan_import(&models, &[src.join("LICENSE")], ImportMode::Copy, None).is_err());
+    }
+
+    /// PLT-13: a cancelled or failed download leaves `<name>.gguf.part` behind (kept for a resume).
+    /// The folder has to show up in the model list — it could neither be seen nor deleted.
+    #[test]
+    fn unfinished_downloads_are_listed_as_incomplete() {
+        let tmp = tempfile::tempdir().unwrap();
+        let models = tmp.path().join("models");
+        let reg = Registry::builtin();
+        let entry = reg.get("gemma4-e4b-q6k").unwrap();
+        let incomplete =
+            |names: &[&str]| ModelHealth::Incomplete { missing: names.iter().map(|n| n.to_string()).collect() };
+
+        // The download of gemma4-e4b-q6k stopped inside the weights file.
+        let dir = models.join("gemma4-e4b-q6k");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("gemma-4-E4B-it-Q6_K.gguf.part"), vec![0u8; 3000]).unwrap();
+        let found = scan_models_dir(&models, &reg, ScanOptions::default());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, "gemma4-e4b-q6k");
+        assert_eq!(found[0].health, incomplete(&["gemma-4-E4B-it-Q6_K.gguf", "mmproj-F16.gguf"]));
+        assert_eq!((found[0].weights.len(), found[0].total_bytes), (0, 3000));
+        let st = install_state(&models, entry, &found);
+        assert!(!st.installed && !is_installed(entry, &found));
+        assert_eq!((st.folder, st.missing_files.len()), (Some(dir.clone()), 2));
+        // No phantom registry entry for the half-downloaded folder.
+        assert_eq!(merged_registry(&reg, &found).models.len(), reg.models.len());
+
+        // The weights finished, the mmproj did not.
+        fs::remove_file(dir.join("gemma-4-E4B-it-Q6_K.gguf.part")).unwrap();
+        write_minimal_gguf(
+            &dir.join("gemma-4-E4B-it-Q6_K.gguf"),
+            &synthetic_gemma4_metadata("Gemma 4 E4B", 18, true),
+            &[("a", &[32], 0)],
+        )
+        .unwrap();
+        fs::write(dir.join("mmproj-F16.gguf.part"), vec![0u8; 500]).unwrap();
+        backdate(&dir);
+        let found = scan_models_dir(&models, &reg, ScanOptions::default());
+        assert_eq!(found[0].health, incomplete(&["mmproj-F16.gguf"]));
+        assert_eq!(found[0].registry_match.as_ref().map(|m| m.id.as_str()), Some("gemma4-e4b-q6k"));
+        assert!(!is_installed(entry, &found));
+        assert_eq!(merged_registry(&reg, &found).models.len(), reg.models.len());
+
+        // Finished: ready. A stray `.part` of something else, or one next to its own finished
+        // file, does not turn the complete model "incomplete".
+        fs::remove_file(dir.join("mmproj-F16.gguf.part")).unwrap();
+        write_minimal_gguf(&dir.join("mmproj-F16.gguf"), &mmproj_meta(), &[("v.x", &[8], 1)]).unwrap();
+        fs::write(dir.join("mmproj-F16.gguf.part"), b"x").unwrap();
+        fs::write(dir.join("Other-Q4_K_M.gguf.part"), vec![0u8; 700]).unwrap();
+        backdate(&dir);
+        let found = scan_models_dir(&models, &reg, ScanOptions::default());
+        assert!(found[0].health.is_ready(), "{:?}", found[0].health);
+        assert!(is_installed(entry, &found));
+        let on_disk: u64 = found[0].all_files().map(|f| f.size).sum();
+        assert_eq!(found[0].total_bytes, on_disk);
+
+        // An unfinished copy of an unknown model: listed under its folder, deletable, no model.
+        let other = models.join("custom");
+        fs::create_dir_all(&other).unwrap();
+        fs::write(other.join("Custom-Q4.gguf.part"), vec![0u8; 10]).unwrap();
+        let found = scan_models_dir(&models, &reg, ScanOptions::default());
+        assert_eq!(found.len(), 2);
+        let custom = found.iter().find(|d| d.folder_name == "custom").unwrap();
+        assert_eq!(custom.health, incomplete(&["Custom-Q4.gguf"]));
+        assert!(custom.registry_match.is_none());
+        assert_eq!(merged_registry(&reg, &found).models.len(), reg.models.len());
+        delete_model_folder(&models, &other).unwrap();
+        assert_eq!(scan_models_dir(&models, &reg, ScanOptions::default()).len(), 1);
+    }
+
+    /// PLT-13: a copy that fails leaves no `.part`, and one that cannot fit does not start.
+    #[test]
+    fn failed_copies_clean_up_and_space_is_checked_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("usb");
+        fs::create_dir_all(&src).unwrap();
+        write_minimal_gguf(
+            &src.join("Small-Q4_K_M.gguf"),
+            &synthetic_qwen35_metadata("Small", 15, true),
+            &[("a", &[64], 0)],
+        )
+        .unwrap();
+        let models = tmp.path().join("models");
+        let target = models.join("small");
+        let plan = plan_import(&models, &[src.join("Small-Q4_K_M.gguf")], ImportMode::Copy, Some("small")).unwrap();
+
+        assert!(free_disk_space(tmp.path()).is_some_and(|free| free > 0));
+        // A folder that does not exist yet is judged by its nearest existing ancestor.
+        assert!(free_disk_space(&tmp.path().join("not").join("there")).is_some());
+        ensure_free_space(tmp.path(), 1).unwrap();
+        let err = ensure_free_space(tmp.path(), u64::MAX).unwrap_err();
+        assert!(err.to_string().contains("not enough disk space"), "{err}");
+        assert_eq!((human_bytes(3 * MIB / 2), human_bytes(5 << 30)), ("2 MiB".to_string(), "5.0 GiB".to_string()));
+
+        // More bytes than the volume has: refused before anything is written.
+        let mut huge = plan.clone();
+        huge.files[0].size = u64::MAX / 2;
+        let mut reports = 0;
+        let err = run_import(&huge, &mut |_| {
+            reports += 1;
+            true
+        })
+        .unwrap_err();
+        assert_eq!((err.code(), reports), ("io", 0));
+        assert!(fs::read_dir(&target).unwrap().next().is_none(), "nothing may be written");
+
+        // The source cannot be read to the end (a directory in its place: it opens, reads fail).
+        #[cfg(unix)]
+        {
+            let mut broken = plan.clone();
+            broken.files[0].source = src.clone();
+            assert!(run_import(&broken, &mut |_| true).is_err());
+            assert!(fs::read_dir(&target).unwrap().next().is_none(), "the partial copy must be removed");
+        }
+
+        // The untouched plan still imports afterwards.
+        run_import(&plan, &mut |_| true).unwrap();
+        assert!(target.join("Small-Q4_K_M.gguf").is_file());
+        assert!(!target.join("Small-Q4_K_M.gguf.part").exists());
+    }
+
+    /// PLT-13: a download that cannot fit is refused once the size is known, before a `.part`
+    /// file is created.
+    #[test]
+    fn download_checks_the_free_space_before_writing() {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 2048];
+            let _ = stream.read(&mut request);
+            // 1 EiB announced; the body never comes.
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1152921504606846976\r\nConnection: close\r\n\r\n");
+        });
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("m").join("huge.gguf");
+        let req = DownloadRequest {
+            url: format!("http://127.0.0.1:{port}/huge.gguf"),
+            dest: dest.clone(),
+            expected_size: None,
+            expected_sha256: None,
+        };
+        // The environment's proxy settings must not decide whether this loopback test passes.
+        let agent = ureq::Agent::config_builder().proxy(None).http_status_as_error(false).build().new_agent();
+        let mut reports = 0;
+        let err = download_file(&agent, &req, &mut |_, _| {
+            reports += 1;
+            true
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("not enough disk space"), "{err}");
+        assert_eq!(reports, 0);
+        assert!(fs::read_dir(tmp.path().join("m")).unwrap().next().is_none(), "no partial file may be created");
+        server.join().unwrap();
     }
 }

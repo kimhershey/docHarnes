@@ -2,6 +2,7 @@ import { ChevronDown, ChevronRight, Download, FolderInput, FolderOpen, Hash, Lis
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { useModelDisplay } from "@/app/hooks/useModelDisplay";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -97,6 +98,7 @@ function HealthBadge({ health }: { health: ModelHealth | null | undefined }) {
  */
 export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const { t, i18n } = useTranslation();
+  const modelName = useModelDisplay();
   const settings = useSettingsStore((s) => s.settings);
   const setTierMode = useSettingsStore((s) => s.setTierMode);
   const setActiveModel = useSettingsStore((s) => s.setActiveModel);
@@ -191,11 +193,11 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
               <SelectContent>
                 <SelectItem value="auto">
                   {t("models.active_auto")}
-                  {assessment?.recommended_model ? ` — ${assessment.recommended_model.display}` : ""}
+                  {assessment?.recommended_model ? ` — ${modelName(assessment.recommended_model.display)}` : ""}
                 </SelectItem>
                 {vlms.map((m) => (
                   <SelectItem key={m.id} value={m.id}>
-                    {m.display}
+                    {modelName(m.display)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -203,7 +205,7 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
           </div>
           {active && (
             <div className="flex flex-wrap items-center gap-2 text-sm" data-testid="active-model-state">
-              <span className="font-medium">{active.display}</span>
+              <span className="font-medium">{modelName(active.display)}</span>
               <Badge variant={activeInstalled ? "ok" : "warn"}>{activeInstalled ? t("common.installed") : t("common.not_installed")}</Badge>
               {assessment?.active_model_installed?.verified === true && <Badge variant="info">{t("models.verified")}</Badge>}
               {activeLoaded && <Badge variant="ok">{t("models.instance.loaded")}</Badge>}
@@ -387,7 +389,7 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
                         <tr key={d.folder} data-testid={`discovered-${d.folder_name}`}>
                           <td className="py-2 pr-3 min-w-56">
                             <div className="flex flex-wrap items-center gap-1.5">
-                              <span className="font-medium">{d.display}</span>
+                              <span className="font-medium">{modelName(d.display)}</span>
                               {d.registry_match ? (
                                 <Badge variant={d.registry_match.verified === true ? "info" : "outline"} title={d.registry_match.id}>
                                   {d.registry_match.verified === true ? t("models.verified") : t(`models.matched_by.${d.registry_match.by}`)}
@@ -502,7 +504,7 @@ export function ModelsPage({ embedded = false }: { embedded?: boolean } = {}) {
                       <tr key={m.id} className={isActive ? "bg-accent-soft/40" : undefined} data-testid={`registry-${m.id}`}>
                         <td className="py-2 pr-3 min-w-64">
                           <div className="flex flex-wrap items-center gap-1.5">
-                            <span className="font-medium">{m.display}</span>
+                            <span className="font-medium">{modelName(m.display)}</span>
                             {isRecommended && <Badge variant="info">{t("models.recommended")}</Badge>}
                             {m.user_added && <Badge variant="muted">{t("models.user_added")}</Badge>}
                             {!m.verified && !m.user_added && <Badge variant="outline">{t("models.unverified")}</Badge>}

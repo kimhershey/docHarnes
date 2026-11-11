@@ -281,6 +281,77 @@ fn real_llama_server_load_chat_switch() {
         if !output_parser_500 && !rambling {
             assert!(planned.raw.as_deref().is_some_and(json_shape), "plan output not constrained: {:?}", planned.raw);
         }
+
+        // 0.8.0 (audit PLN-1): the server's json-schema-to-grammar writes required properties in the
+        // order of `properties`, and the request body used to carry them sorted by name — a plan had
+        // to start with `confidence` and `set_setting` with `key`. The body is written in each
+        // schema's `required` order now, so whatever a model with random weights says, the reply
+        // starts with what it understood and every operation starts with its name. Checked for the
+        // every-op grammar and for the system family (the `set_setting` alternatives per value type).
+        use doculens_core::planner::{schema as plan_schema, OpFamily};
+        for (name, schema) in [
+            ("every op", plan_schema::plan_schema()),
+            ("system family", plan_schema::plan_schema_for(&OpFamily::System.ops())),
+        ] {
+            let req = ChatRequest {
+                model: first.clone(),
+                messages: vec![serde_json::json!({ "role": "user", "content": "UI 배율 120%" })],
+                max_tokens: Some(96),
+                chat_template_kwargs: Some(prompts::template_kwargs()),
+                ..Default::default()
+            }
+            .json_schema("plan", schema);
+            let reply = match m.chat(&req) {
+                Ok(r) => r,
+                // (the same random-weights artefact as above)
+                Err(e) if e.to_string().contains("does not match the expected") => {
+                    eprintln!("plan grammar order ({name}): skipped, output parser 500");
+                    continue;
+                }
+                Err(e) => dump(&m, "plan grammar order", &e),
+            };
+            let t = reply.content.trim_start();
+            let body = t.strip_prefix("```json").or_else(|| t.strip_prefix("```")).unwrap_or(t);
+            let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+            eprintln!("plan grammar order ({name}) → {:?}", compact.chars().take(200).collect::<String>());
+            assert!(
+                compact.starts_with("{\"summary\":"),
+                "the plan grammar ({name}) must start with the summary, got {compact:?}"
+            );
+            for (key, later) in
+                [("summary", "unmet"), ("unmet", "intent"), ("intent", "scope"), ("scope", "operations")]
+            {
+                let (Some(a), Some(b)) = (compact.find(&format!("\"{key}\":")), compact.find(&format!("\"{later}\":")))
+                else {
+                    continue; // cut off before the later key
+                };
+                assert!(a < b, "{key} must come before {later} ({name}): {compact:?}");
+            }
+            if let Some(at) = compact.find("\"operations\":[{") {
+                let first_key = &compact[at + "\"operations\":[{".len()..];
+                assert!(
+                    first_key.starts_with("\"op\":") || first_key.is_empty(),
+                    "an op must start with its name: {compact:?}"
+                );
+            }
+        }
+        // The routing grammar with the two reply routes is accepted as well.
+        let route = ChatRequest {
+            model: first.clone(),
+            messages: vec![serde_json::json!({ "role": "user", "content": "안녕하세요" })],
+            max_tokens: Some(32),
+            chat_template_kwargs: Some(prompts::template_kwargs()),
+            ..Default::default()
+        }
+        .json_schema("families", plan_schema::family_schema());
+        match m.chat(&route) {
+            Ok(r) => {
+                eprintln!("routing grammar → {:?}", r.content);
+                assert!(json_shape(&r.content), "routing output not constrained: {}", r.content);
+            }
+            Err(e) if e.to_string().contains("does not match the expected") => {}
+            Err(e) => dump(&m, "routing grammar", &e),
+        }
     }
 
     // Every other grammar the app sends through the real server: the form / NL-schema metaschema

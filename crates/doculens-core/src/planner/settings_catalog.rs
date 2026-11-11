@@ -116,7 +116,6 @@ pub const SETTINGS: &[SettingSpec] = &[
     s("cache.keep_thumbnails", ValueType::Bool, "썸네일 보관", "keep thumbnails"),
     // privacy
     s("privacy.pii_masking", ValueType::Bool, "개인정보 마스킹", "PII masking"),
-    sc("privacy.db_encryption", ValueType::Bool, "DB 암호화", "database encryption"),
     // notifications
     s("notifications.job_complete", ValueType::Bool, "작업 완료 알림", "job-complete notification"),
     s("notifications.prevent_sleep_during_jobs", ValueType::Bool, "배치 중 절전 방지", "prevent sleep during jobs"),
@@ -207,7 +206,6 @@ pub const SETTING_KEYS: &[&str] = &[
     "cache.page_cache_max_gb",
     "cache.keep_thumbnails",
     "privacy.pii_masking",
-    "privacy.db_encryption",
     "notifications.job_complete",
     "notifications.prevent_sleep_during_jobs",
     "knowledge.auto_index",
@@ -254,7 +252,7 @@ pub const NAMES: &[(&str, &[&str])] = &[
     ("ui.reduced_motion", &["움직임 줄이기", "애니메이션 줄이기", "reduced motion"]),
     ("ui.sidebar_collapsed", &["사이드바 접기", "사이드바", "sidebar"]),
     ("models.tier_mode", &["티어 선택", "티어 모드", "tier mode"]),
-    ("models.manual_tier", &["수동 티어", "manual tier"]),
+    ("models.manual_tier", &["수동 티어", "티어", "manual tier", "tier"]),
     ("models.active_model", &["활성 모델", "사용 모델", "active model"]),
     ("models.profile", &["프로파일", "추론 프로파일", "profile", "inference profile"]),
     ("models.backend", &["백엔드", "엔진 백엔드", "backend", "engine backend"]),
@@ -289,7 +287,6 @@ pub const NAMES: &[(&str, &[&str])] = &[
     ),
     ("cache.keep_thumbnails", &["썸네일 보관", "썸네일 유지", "keep thumbnails"]),
     ("privacy.pii_masking", &["개인정보 마스킹", "pii 마스킹", "마스킹", "pii masking", "masking"]),
-    ("privacy.db_encryption", &["db 암호화", "데이터베이스 암호화", "database encryption"]),
     ("notifications.job_complete", &["작업 완료 알림", "완료 알림", "알림", "job notification", "notifications"]),
     ("notifications.prevent_sleep_during_jobs", &["절전 방지", "배치 중 절전 방지", "prevent sleep"]),
     ("knowledge.auto_index", &["자동 색인", "auto index", "automatic indexing"]),
@@ -445,6 +442,31 @@ impl ValueShape {
     }
 }
 
+/// The catalog as data for the UI (`src/lib/settingsCatalog.json`). The UI's catalog is built from
+/// this file, so a range has one home (audit CON-8: the two catalogs and `settings.rs` disagreed —
+/// "근거 컨텍스트 토큰 40000" passed the planner and failed in the UI, "top-k 50" was saved as 32).
+pub fn export_json() -> Value {
+    use serde_json::json;
+    Value::Array(
+        SETTINGS
+            .iter()
+            .map(|s| {
+                let ty = match s.ty {
+                    ValueType::Bool => json!({ "kind": "boolean" }),
+                    ValueType::Int { min, max } => json!({ "kind": "integer", "min": min, "max": max }),
+                    ValueType::IntChoice(choices) => json!({ "kind": "integer", "choices": choices }),
+                    ValueType::Float { min, max, percent } => {
+                        json!({ "kind": "number", "min": min, "max": max, "percent": percent })
+                    }
+                    ValueType::Enum(values) => json!({ "kind": "enum", "values": values }),
+                    ValueType::Str => json!({ "kind": "string" }),
+                };
+                json!({ "key": s.key, "type": ty, "confirm": s.confirm })
+            })
+            .collect(),
+    )
+}
+
 /// Canonical catalog key of `key` (alias-aware, case-insensitive, `/` tolerated), with its spec.
 pub fn find(key: &str) -> Option<(&'static str, &'static SettingSpec)> {
     let k = key.trim().to_lowercase().replace('/', ".");
@@ -579,6 +601,50 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// `src/lib/settingsCatalog.json` is this table. Regenerate with
+    /// `DOCULENS_WRITE_CATALOG=1 cargo test -p doculens-core --lib settings_catalog` and commit it.
+    #[test]
+    fn the_ui_catalog_file_is_this_table() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/lib/settingsCatalog.json");
+        let expected = serde_json::to_string_pretty(&export_json()).unwrap() + "\n";
+        if std::env::var_os("DOCULENS_WRITE_CATALOG").is_some() {
+            std::fs::write(&path, &expected).unwrap();
+        }
+        let actual = std::fs::read_to_string(&path).unwrap_or_default().replace("\r\n", "\n");
+        assert!(
+            actual == expected,
+            "{} is stale: run `DOCULENS_WRITE_CATALOG=1 cargo test -p doculens-core --lib settings_catalog` and commit it",
+            path.display()
+        );
+    }
+
+    /// The ranges are the ones `AppSettings::normalize` keeps: a value the catalog accepts is the
+    /// value that is saved.
+    #[test]
+    fn accepted_values_survive_normalisation() {
+        use crate::settings::AppSettings;
+        for spec in SETTINGS {
+            let Some((section, field)) = spec.key.split_once('.') else { continue };
+            let edges: Vec<Value> = match spec.ty {
+                ValueType::Int { min, max } => vec![Value::from(min), Value::from(max)],
+                ValueType::IntChoice(choices) => choices.iter().map(|c| Value::from(*c)).collect(),
+                ValueType::Float { min, max, .. } => vec![Value::from(min), Value::from(max)],
+                _ => continue,
+            };
+            for edge in edges {
+                let mut v = serde_json::to_value(AppSettings::default()).unwrap();
+                assert!(v[section].get(field).is_some(), "{} is not a settings field", spec.key);
+                v[section][field] = edge.clone();
+                let mut settings: AppSettings = serde_json::from_value(v).unwrap();
+                settings.normalize();
+                let saved = serde_json::to_value(&settings).unwrap();
+                let got = saved[section][field].as_f64().unwrap();
+                let want = edge.as_f64().unwrap();
+                assert!((got - want).abs() < 1e-6, "{}: {want} is accepted but saved as {got}", spec.key);
+            }
+        }
+    }
+
     #[test]
     fn setting_keys_match_the_catalog() {
         let mut expected: Vec<&str> = SETTINGS.iter().map(|s| s.key).collect();
@@ -591,8 +657,10 @@ mod tests {
         keys.sort_unstable();
         keys.dedup();
         assert_eq!(keys.len(), SETTING_KEYS.len(), "duplicate keys");
-        // Every settings struct field the plan names has an entry (count from plan §1.5 + journal_days).
-        assert_eq!(SETTINGS.len(), 47);
+        // Every settings field the assistant may change has an entry, plus `journal_days`. 0.8.0
+        // took `privacy.db_encryption` out: nothing encrypts the database, so there is no switch.
+        assert_eq!(SETTINGS.len(), 46);
+        assert!(find("privacy.db_encryption").is_none());
     }
 
     #[test]

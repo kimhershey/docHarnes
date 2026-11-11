@@ -1,10 +1,18 @@
 // Draft edit helpers of the 문서 생성 screen: field / cell edits, applying validator
 // suggestions, body block text round-trips, source lists and the form picker mapping.
+import i18next from "i18next";
 import { describe, expect, it } from "vitest";
 
+import en from "@/i18n/en.json";
+import ko from "@/i18n/ko.json";
 import type { Draft, DraftIssue, SchemaRecord, TemplateInfo } from "@/lib/types";
 
-import { addRow, applySuggestion, blockText, blockWithText, documentSourceIds, formRefToPicker, hasBlockingIssues, insertBlock, moveBlock, newBlock, parseIssuePath, pickerToFormRef, pickerToReviseScope, removeBlock, removeRow, reviseRequest, reviseScopeLabel, reviseScopeToPicker, sectionAt, sectionsOf, setBlockLevel, setFieldValue, toggleExcluded, withDocumentSources } from "./draft";
+import { addRow, anchorScope, applySuggestion, blockInputText, blockText, blockWithText, charCount, clampTokenBudget, documentSourceIds, followScopeAnchor, formRefToPicker, hasBlockingIssues, insertBlock, issueLocation, MIN_TOKEN_BUDGET, moveBlock, newBlock, NO_SCOPE, parseIssuePath, parseTokenBudget, pickerToFormRef, scopeSectionOrdinal, withScopeOrdinal, pickerToReviseScope, removeBlock, removeRow, reviseRequest, reviseScopeLabel, reviseScopeToPicker, sectionAt, sectionsOf, setBlockLevel, setFieldValue, toggleExcluded, withDocumentSources } from "./draft";
+
+const instance = i18next.createInstance();
+await instance.init({ lng: "ko", fallbackLng: false, resources: { ko: { translation: ko }, en: { translation: en } }, interpolation: { escapeValue: false } });
+const t = instance.t.bind(instance);
+const tEn = ((k: string, o?: Record<string, unknown>) => instance.t(k, { ...o, lng: "en" })) as typeof t;
 
 function draft(): Draft {
   return {
@@ -41,6 +49,14 @@ function draft(): Draft {
   };
 }
 
+describe("charCount (GEN-14)", () => {
+  it("counts characters like the core: code points, so an emoji or a Hangul syllable is one", () => {
+    expect(charCount("")).toBe(0);
+    expect(charCount("견적서 ABC")).toBe(7);
+    expect(charCount("📄📄")).toBe(2);
+  });
+});
+
 describe("draft edits", () => {
   it("marks edited fields and keeps the others", () => {
     const d = setFieldValue(draft(), "recipient", "㈜두리");
@@ -74,6 +90,19 @@ describe("draft edits", () => {
     expect(parseIssuePath("x")).toEqual({ kind: "other" });
   });
 
+  it("says where an issue is in the draft's own words, not as an internal path (UI-8)", () => {
+    const d = draft();
+    expect(issueLocation(d, "fields.total", t)).toBe("합계금액");
+    expect(issueLocation(d, "tables.items[0].amount", t)).toBe("견적 품목 1행 · 금액");
+    expect(issueLocation(d, "body[1]", t)).toBe("본문 블록 2 · 문단");
+    expect(issueLocation(d, "body[2]", t)).toBe("본문 블록 3 · 목록");
+    expect(issueLocation(d, "body[0]", tEn)).toBe("Body block 1 · heading");
+    // A key the draft no longer has falls back to the key; a path of another shape is shown as it is.
+    expect(issueLocation(d, "fields.gone", t)).toBe("gone");
+    expect(issueLocation(d, "tables.items[3].extra", t)).toBe("견적 품목 4행 · extra");
+    expect(issueLocation(d, "title", t)).toBe("title");
+  });
+
   it("adds and removes table rows", () => {
     const d = addRow(draft(), "items");
     expect(d.tables[0]!.rows).toHaveLength(2);
@@ -87,6 +116,44 @@ describe("draft edits", () => {
     expect(blockWithText(list, "x\n\ny ")).toEqual({ kind: "list", items: ["x", "y"], ordered: false });
     expect(blockWithText(draft().body[1]!, "새 문단")).toEqual({ kind: "paragraph", text: "새 문단" });
     expect(blockText(draft().body[3]!)).toBe("");
+  });
+
+  it("keeps a list box as typed while the draft holds the cleaned items (GEN-5: Enter and spaces were swallowed)", () => {
+    // Typing "첫째 항목⏎둘째 항목" key by key: after every keystroke the box must show exactly what was typed.
+    let block = newBlock("list");
+    let typed = "";
+    for (const key of ["첫째", " ", "항목", "\n", "둘째", " ", "항목"]) {
+      typed += key;
+      block = blockWithText(block, typed);
+      expect(blockInputText(block, typed)).toBe(typed);
+    }
+    expect(typed).toBe("첫째 항목\n둘째 항목");
+    expect(block).toEqual({ kind: "list", items: ["첫째 항목", "둘째 항목"], ordered: false });
+    // A blank line and trailing spaces stay in the box until it loses focus (typed = null): then the cleaned items show.
+    const loose = "첫째 항목 \n\n둘째 항목\n";
+    block = blockWithText(block, loose);
+    expect(blockInputText(block, loose)).toBe(loose);
+    expect(blockInputText(block, null)).toBe("첫째 항목\n둘째 항목");
+    // A change from outside (a revision replaced the items) wins over the stale typed text.
+    expect(blockInputText({ kind: "list", items: ["다른 항목"], ordered: false }, loose)).toBe("다른 항목");
+    // Headings and paragraphs are stored as typed, so the box is the block.
+    expect(blockInputText(blockWithText(draft().body[1]!, "끝에 공백 "), "끝에 공백 ")).toBe("끝에 공백 ");
+  });
+
+  it("applies a typed token budget once, clamped to 200…cap (GEN-12: per-keystroke clamping turned 6000 into 32768)", () => {
+    const cap = 32_768;
+    // What the box holds while "6000" is typed is never a budget on its own: only the final text is applied.
+    expect(parseTokenBudget("6000", cap)).toBe(6000);
+    expect(parseTokenBudget(" 12000 ", cap)).toBe(12000);
+    expect(parseTokenBudget("6", cap)).toBe(200);
+    expect(parseTokenBudget("99999", cap)).toBe(cap);
+    expect(parseTokenBudget("2600.4", cap)).toBe(2600);
+    // Empty = back to the length preset; not a number = keep the stored value.
+    expect(parseTokenBudget("", cap)).toBeNull();
+    expect(parseTokenBudget("  ", cap)).toBeNull();
+    expect(parseTokenBudget("abc", cap)).toBeUndefined();
+    expect(clampTokenBudget(24_000, 16_384)).toBe(16_384);
+    expect(clampTokenBudget(-5, cap)).toBe(MIN_TOKEN_BUDGET);
   });
 
   it("builds the whole-draft revision request with previous, the trimmed instruction and exclusions", () => {
@@ -155,6 +222,46 @@ describe("draft edits", () => {
     expect(reviseScopeLabel({ scope: "insert_after", section: null }, two, true)).toBe("끝에 새 절");
     expect(reviseScopeLabel({ scope: "insert_after", section: 1 }, two, false)).toBe("new section after 1. 견적 조건");
     expect(reviseScopeLabel({ scope: "whole" }, two, true)).toBe("전체");
+  });
+
+  it("follows the section a scope names across edits and gives it up when it is gone (GEN-10)", () => {
+    const h = (text: string, level = 2) => ({ kind: "heading", level, text }) as const;
+    const p = (text: string) => ({ kind: "paragraph", text, source: null }) as const;
+    const body = [h("개요"), p("a"), h("일정"), p("b"), h("결론"), p("c")];
+    expect(scopeSectionOrdinal("section:3")).toBe(3);
+    expect(scopeSectionOrdinal("insert_after:2")).toBe(2);
+    expect(scopeSectionOrdinal("whole")).toBeNull();
+    expect(scopeSectionOrdinal("insert_after:end")).toBeNull();
+    expect(scopeSectionOrdinal(NO_SCOPE)).toBeNull();
+    expect(withScopeOrdinal("insert_after:2", 3)).toBe("insert_after:3");
+    expect(anchorScope("whole", body)).toBeNull();
+    expect(anchorScope("section:9", body)).toBeNull();
+    const anchor = anchorScope("section:3", body)!;
+    expect(anchor).toEqual({ ordinal: 3, heading: "결론", count: 3 });
+    // Text edits and a new paragraph leave the section where it is.
+    expect(followScopeAnchor(anchor, [h("개요"), p("a"), p("새 문단"), h("일정"), p("b"), h("결론"), p("c 수정")])).toBe(3);
+    // A section inserted before it, or removed before it, shifts the ordinal: the scope follows the heading.
+    expect(followScopeAnchor(anchor, [h("개요"), p("a"), h("배경"), h("일정"), p("b"), h("결론"), p("c")])).toBe(4);
+    expect(followScopeAnchor(anchor, [h("개요"), p("a"), p("b"), h("결론"), p("c")])).toBe(2);
+    // Moved up: still the same section.
+    expect(followScopeAnchor(anchor, [h("개요"), p("a"), h("결론"), p("c"), h("일정"), p("b")])).toBe(2);
+    // Its heading retyped in place: same ordinal (the anchor is re-taken with the new heading by the caller).
+    expect(followScopeAnchor(anchor, [h("개요"), p("a"), h("일정"), p("b"), h("결론 및 제언"), p("c")])).toBe(3);
+    // Its heading block removed (the section merged into the one before), demoted to a sub-heading, or the body replaced: gone.
+    expect(followScopeAnchor(anchor, [h("개요"), p("a"), h("일정"), p("b"), p("c")])).toBeNull();
+    expect(followScopeAnchor(anchor, [h("개요"), p("a"), h("일정"), p("b"), h("결론", 3), p("c")])).toBeNull();
+    expect(followScopeAnchor(anchor, [])).toBeNull();
+    // The old code kept "section:2" when section 2 was removed (now another section) and fell back to "whole" for the last one.
+    const second = anchorScope("section:2", body)!;
+    expect(followScopeAnchor(second, [h("개요"), p("a"), p("b"), h("결론"), p("c")])).toBeNull();
+    // Two sections with the same heading after a structural change: ambiguous, so not guessed.
+    const twin = anchorScope("section:2", [h("개요"), h("항목"), h("항목")])!;
+    expect(followScopeAnchor(twin, [h("머리말"), h("개요"), h("항목"), h("항목")])).toBeNull();
+    // An untitled leading section is followed like any other.
+    const lead = anchorScope("section:1", [p("머리말"), h("개요")])!;
+    expect(lead.heading).toBeNull();
+    expect(followScopeAnchor(lead, [p("머리말 수정"), h("개요")])).toBe(1);
+    expect(followScopeAnchor(lead, [h("개요")])).toBeNull();
   });
 
   it("builds the revision request and maps the scope picker", () => {

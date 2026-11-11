@@ -1134,6 +1134,9 @@ fn model_path_requeries_once_with_feedback() {
     assert!(plans[0].messages.len() < full, "{} < {full}", plans[0].messages.len());
 }
 
+/// 0.8.0 audit fixes on the deterministic side (validation, scope, phrase rules): `tests/deterministic_side.rs`.
+mod deterministic_side;
+
 // ---------------------------------------------------------------------------
 // Executor
 // ---------------------------------------------------------------------------
@@ -1774,6 +1777,9 @@ mod exec_tests {
         assert!(ex.steps[0].error.as_deref().unwrap().contains("없는 템플릿"), "{:?}", ex.steps[0]);
         assert_eq!(w.db.with(|c| projects_repo::get_template(c, &tpl.id)).unwrap().unwrap().rules.len(), 1);
     }
+
+    /// 0.8.0 audit fixes in the executor and its previews: `tests/exec_tests/audit_fixes.rs`.
+    mod audit_fixes;
 }
 
 #[test]
@@ -2095,8 +2101,39 @@ fn model_plans_are_checked_against_the_sentence() {
     assert!(codes(&r).contains(&"unmet_request".to_string()), "{r:?}");
     assert!(r.plan.requires_confirmation);
     assert_eq!(r.plan.unmet.as_deref(), Some("메일로 보내기"));
+    // A value the setting does not accept, twice: the question names the setting and its range.
+    let chat = StageChat::new();
+    chat.push("families", json!({ "families": ["system"] }));
+    chat.push("plan", reply(json!([{ "op": "set_setting", "key": "ui.scale_percent", "value": 300 }]), ""));
+    let r = plan(Some(&deps(&chat)), "글자가 너무 작으니 화면을 세 배로 키워줘", &c, PlanMode::ModelFirst).unwrap();
+    assert!(r.plan.is_clarification(), "{r:?}");
+    let question = r.plan.clarification_question.clone().unwrap_or_default();
+    assert!(question.contains("UI 배율(%)") && question.contains("90~150"), "{question}");
+    assert!(!question.contains("must be"), "{question}");
     // "Nothing to do" is answered, not shown as an empty plan.
     let r = run("음, 그렇구나.", "system", reply(json!([{ "op": "noop" }]), ""));
     assert!(matches!(&r.plan.operations[..], [Op::Answer { mode: Some(AnswerMode::Chat), .. }]), "{r:?}");
     assert!(!r.plan.requires_confirmation && r.plan.scope.is_empty());
+}
+
+/// "프로젝트별로 요약해줘" asks for every project: the assistant's "현재 프로젝트" scope is not a
+/// filter on it, by rule or by model; any other summary inside the scope stays in the project.
+#[test]
+fn a_summary_per_project_is_not_narrowed_to_the_open_project() {
+    let mut c = ctx();
+    c.projects = vec![ProjectSummary { id: "p-hanbit".into(), name: "한빛 납품".into(), status: "active".into() }];
+    c.scope_project = Some("p-hanbit".into());
+    let project_of = |p: &Plan| p.scope.filter.project_id.clone();
+    let r = plan(None, "프로젝트별로 요약해줘", &c, PlanMode::RulesFirst).unwrap();
+    assert!(matches!(&r.plan.operations[..], [Op::Summarize { group_by: Some(SummaryGroup::Project), .. }]), "{r:?}");
+    assert_eq!(project_of(&r.plan), None, "{r:?}");
+    let chat = StageChat::new();
+    chat.push("families", json!({ "families": ["ask"] }));
+    chat.push("plan", json!({ "summary": "s", "unmet": "", "intent": "summarize", "scope": {}, "operations": [{ "op": "summarize", "target": "set" }], "requires_confirmation": false, "confidence": 0.9 }));
+    let r = plan(Some(&deps(&chat)), "프로젝트 별 내용을 요약해줘", &c, PlanMode::ModelFirst).unwrap();
+    assert!(matches!(&r.plan.operations[..], [Op::Summarize { group_by: Some(SummaryGroup::Project), .. }]), "{r:?}");
+    // The validator filled the open project in before the split was put back: taken out again.
+    assert_eq!(project_of(&r.plan), None, "{r:?}");
+    let r = plan(None, "유형별로 요약해줘", &c, PlanMode::RulesFirst).unwrap();
+    assert_eq!(project_of(&r.plan).as_deref(), Some("p-hanbit"), "{r:?}");
 }

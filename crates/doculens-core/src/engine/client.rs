@@ -285,6 +285,10 @@ impl ChatResponse {
 
 fn agent(connect: Duration, global: Option<Duration>) -> ureq::Agent {
     ureq::Agent::config_builder()
+        // The sidecar listens on the loopback only. ureq's default configuration picks a proxy
+        // up from ALL_PROXY / HTTPS_PROXY / HTTP_PROXY: on a PC that sets one without NO_PROXY the
+        // proxy would be asked for 127.0.0.1 and `/health` would never answer.
+        .proxy(None)
         .http_status_as_error(false)
         .timeout_connect(Some(connect))
         .timeout_global(global)
@@ -604,6 +608,46 @@ mod tests {
         assert_eq!(url_encode("a/b:c"), "a%2Fb%3Ac");
         assert_eq!(base64_encode(b"hi"), "aGk=");
         assert_eq!(base64_encode(b"hello"), "aGVsbG8=");
+    }
+
+    /// PLT-8: a proxy from the environment must never be used for the loopback sidecar. The check
+    /// runs in a child process that starts with proxy variables set and NO_PROXY removed (changing
+    /// the environment of this multi-threaded test binary would race the other tests).
+    #[test]
+    fn loopback_requests_ignore_environment_proxies() {
+        const CHILD: &str = "DOCULENS_TEST_PROXY_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+            cmd.args([
+                "--exact",
+                "engine::client::tests::loopback_requests_ignore_environment_proxies",
+                "--nocapture",
+                "--test-threads=1",
+            ]);
+            // Removed first: on Windows the names are case-insensitive.
+            for name in ["all_proxy", "https_proxy", "http_proxy", "no_proxy", "NO_PROXY"] {
+                cmd.env_remove(name);
+            }
+            // A closed port: a request sent through this "proxy" fails at once.
+            for name in ["ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY"] {
+                cmd.env(name, "http://127.0.0.1:9");
+            }
+            let out = cmd.env(CHILD, "1").output().unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                out.status.success() && stdout.contains("1 passed"),
+                "child run failed:\n{stdout}\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            return;
+        }
+        assert!(ureq::Proxy::try_from_env().is_some(), "the child must start with a proxy in its environment");
+        let router = FakeRouter::start(FakeRouterConfig { models: vec!["m".into()], ..Default::default() }).unwrap();
+        let c = RouterClient::new("127.0.0.1", router.port, None);
+        assert!(c.control.config().proxy().is_none() && c.long.config().proxy().is_none());
+        assert!(c.health().unwrap(), "/health must be reached directly, not through the proxy");
+        assert_eq!(c.models().unwrap().len(), 1);
+        router.stop();
     }
 
     #[test]

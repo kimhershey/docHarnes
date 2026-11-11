@@ -32,6 +32,14 @@ function emptyDraft(): SchemaDraft {
   return { id: null, name: "", name_en: null, doc_type: "", source: "user", description_ko: null, description_en: null, definition: { fields: [newFieldDef("field_1")], rules: [] }, form_document_id: null, note: null };
 }
 
+/**
+ * The built-in `general` form is the fallback every 기타 / unclassified document is extracted with
+ * (`pipeline::run::resolve_schema`), so while it is on it cannot be switched off (PIP-15).
+ */
+function isLockedOn(s: SchemaRecord): boolean {
+  return s.source === "builtin" && s.doc_type === "general" && s.enabled;
+}
+
 /** A schema the user just saved under a new type slug: offers to re-classify the documents typed "other". */
 interface NewType {
   slug: string;
@@ -299,7 +307,9 @@ export function SchemasPage() {
       toast(describeError(e, t), "danger");
     }
   };
+  const generalLocked = !!selected && isLockedOn(selected);
   const setEnabled = async (s: SchemaRecord, enabled: boolean) => {
+    if (!enabled && isLockedOn(s)) return;
     try {
       await api.pipelineSchemaSetEnabled(s.id, enabled);
     } catch (e) {
@@ -318,14 +328,24 @@ export function SchemasPage() {
         form_document_id: null,
       }),
     );
-  const testRun = async () => {
+  // 테스트 (PIP-2): an extraction of the picked document with this form. It is not a forced run — a forced run
+  // classifies and reads the pages again, replacing page text corrected by hand — and when the document already
+  // has results it asks first, like the library's 처리 menu: the new run replaces its fields and their review.
+  const testRun = () => {
     if (!draft?.id || !testDoc) return;
-    try {
-      await api.pipelineProcess({ document_ids: [testDoc], level: "extract", schema: { kind: "id", id: draft.id }, force: true });
-      toast(t("schemas.editor.test_started"), "info");
-    } catch (e) {
-      toast(describeError(e, t), "danger");
-    }
+    const schemaId = draft.id;
+    const docId = testDoc;
+    const start = async () => {
+      try {
+        await api.pipelineProcess({ document_ids: [docId], level: "extract", schema: { kind: "id", id: schemaId } });
+        toast(t("schemas.editor.test_started"), "info");
+      } catch (e) {
+        toast(describeError(e, t), "danger");
+      }
+    };
+    const doc = docs?.find((d) => d.id === docId);
+    if (doc && doc.extracted_at === null && doc.review_status !== "done") return void start();
+    setConfirm({ title: t("pipeline.process.confirm_title"), description: t("pipeline.process.confirm_body", { count: 1 }), confirmLabel: t("pipeline.process.confirm_ok"), danger: true, onConfirm: start });
   };
   const reclassify = async () => {
     const ids = (otherDocs ?? []).map((d) => d.id);
@@ -392,23 +412,26 @@ export function SchemasPage() {
               <CardDescription className="text-xs">{t("schemas.mapping.hint")}</CardDescription>
             </CardHeader>
             <CardContent className="p-3 pt-0">
-              <table className="w-full text-xs" data-testid="schemas-mapping">
+              {/* Two equal columns (`table-fixed`): a slug stays on one line and is cut with an ellipsis (the whole slug in
+                  the tooltip) instead of breaking mid-word in the narrow pane; the label wraps at its spaces. */}
+              <table className="w-full table-fixed text-xs" data-testid="schemas-mapping">
                 <thead>
                   <tr className="text-left text-fg-subtle">
-                    <th scope="col" className="py-1 font-medium">
+                    <th scope="col" className="py-1 pr-2 font-medium">
                       {t("schemas.mapping.type")}
                     </th>
-                    <th scope="col" colSpan={2} className="py-1 font-medium">
+                    <th scope="col" className="py-1 font-medium">
                       {t("schemas.mapping.schema")}
                     </th>
                   </tr>
                 </thead>
                 <tbody>
                   {(docTypes ?? []).map((d) => (
-                    <tr key={d.slug} className="border-t border-border">
-                      <td className="py-1 font-mono">{d.slug}</td>
+                    <tr key={d.slug} className="border-t border-border" data-testid={`schemas-mapping-row-${d.slug}`}>
+                      <td className="truncate py-1 pr-2 font-mono" title={d.slug}>
+                        {d.slug}
+                      </td>
                       <td className="py-1">{ko ? d.label_ko : d.label_en}</td>
-                      <td className="py-1 text-right text-fg-subtle">{d.builtin ? t("schemas.mapping.builtin") : t("schemas.mapping.user")}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -442,8 +465,11 @@ export function SchemasPage() {
                 <span className="ml-auto flex flex-wrap items-center gap-1">
                   {selected && (
                     <>
-                      <label className="mr-2 flex items-center gap-1 text-xs">
-                        <Switch checked={selected.enabled} onCheckedChange={(v) => void setEnabled(selected, v)} aria-label={t("schemas.enabled")} />
+                      {/* The built-in `general` form is what every 기타 / unclassified document is extracted with: switched
+                          off, those documents fail with schema_not_found (PIP-15), so it stays on (a form that is
+                          already off can still be switched back on). */}
+                      <label className="mr-2 flex items-center gap-1 text-xs" title={generalLocked ? t("schemas.general_locked") : undefined}>
+                        <Switch checked={selected.enabled} onCheckedChange={(v) => void setEnabled(selected, v)} disabled={generalLocked} aria-label={t("schemas.enabled")} data-testid="schema-enabled" data-locked={generalLocked || undefined} />
                         {t("schemas.enabled")}
                       </label>
                       <Button size="sm" variant="ghost" onClick={() => void setDefault(selected)} disabled={selected.is_default} data-testid="schema-set-default">
@@ -536,7 +562,7 @@ export function SchemasPage() {
                           ))}
                         </SelectContent>
                       </Select>
-                      <Button size="sm" variant="secondary" onClick={() => void testRun()} disabled={!testDoc} data-testid="schema-test-run">
+                      <Button size="sm" variant="secondary" onClick={testRun} disabled={!testDoc} data-testid="schema-test-run">
                         {t("schemas.editor.test")}
                       </Button>
                     </CardContent>

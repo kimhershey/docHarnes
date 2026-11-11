@@ -156,6 +156,19 @@ impl EngineStatus {
     pub fn loaded_models(&self) -> impl Iterator<Item = &ModelInstanceStatus> {
         self.models.iter().filter(|m| m.is_usable())
     }
+    /// GPU memory (bytes) the loaded instances hold right now: the router's `memory.effective`
+    /// device bytes plus the mmproj; `file_bytes(id)` stands in for an instance the router gives
+    /// no figure for. Sleeping instances have released their memory; a CPU engine uses none.
+    pub fn gpu_bytes_in_use(&self, file_bytes: &dyn Fn(&str) -> Option<u64>) -> u64 {
+        if !self.binary.as_ref().is_some_and(|b| b.backend != crate::hw::Backend::Cpu) {
+            return 0;
+        }
+        self.models
+            .iter()
+            .filter(|m| m.is_loaded())
+            .map(|m| m.memory_effective_bytes.or_else(|| file_bytes(&m.id)).unwrap_or(0))
+            .sum()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -503,7 +516,22 @@ impl EngineManager {
                 ..EngineStatus::default()
             };
         });
-        launch(&self.inner, &cfg, generation)?;
+        if let Err(e) = launch(&self.inner, &cfg, generation) {
+            // `launch` records the failures it sees once the process exists (early exit, no
+            // `/health`). When the process could not be created at all (binary blocked or missing,
+            // no free port) nothing else leaves "starting", and the start button stays disabled.
+            let message = e.to_string();
+            self.inner.log(LogLine::app(format!("engine start failed: {message}")));
+            self.inner.update_status(|s| {
+                if s.state == EngineState::Starting {
+                    s.state = EngineState::Stopped;
+                    s.pid = None;
+                    s.port = None;
+                    s.last_error = Some(message.clone());
+                }
+            });
+            return Err(e);
+        }
         spawn_monitor(&self.inner, generation);
         spawn_sse(&self.inner, generation);
         Ok(self.inner.status())
@@ -886,6 +914,42 @@ mod tests {
         assert!(is_running_status("loading") && !is_usable_status("loading"));
     }
 
+    /// PLT-3: what the engine itself holds on the GPU (given back to the tier judgement).
+    #[test]
+    fn gpu_memory_in_use_counts_loaded_instances_only() {
+        let binary = |backend| EngineBinary {
+            path: "/x/llama-server".into(),
+            backend,
+            version: None,
+            build_number: None,
+            source: EngineSource::AppData,
+        };
+        let model = |id: &str, status: &str, bytes: Option<u64>| ModelInstanceStatus {
+            id: id.into(),
+            status: status.into(),
+            memory_effective_bytes: bytes,
+            ..Default::default()
+        };
+        let mut st = EngineStatus {
+            state: EngineState::Running,
+            binary: Some(binary(Backend::Cu121)),
+            models: vec![
+                model("loaded", "loaded", Some(6_000)),
+                model("no-figure", "loaded", None),
+                model("sleeping", "sleeping", Some(4_000)),
+                model("idle", "unloaded", None),
+            ],
+            ..Default::default()
+        };
+        let files = |id: &str| (id == "no-figure").then_some(700u64);
+        assert_eq!(st.gpu_bytes_in_use(&files), 6_700);
+        assert_eq!(st.gpu_bytes_in_use(&|_| None), 6_000);
+        st.binary = Some(binary(Backend::Cpu));
+        assert_eq!(st.gpu_bytes_in_use(&files), 0);
+        st.binary = None;
+        assert_eq!(st.gpu_bytes_in_use(&files), 0);
+    }
+
     #[test]
     fn stopped_manager_reports_not_running() {
         let m = EngineManager::new();
@@ -895,6 +959,44 @@ mod tests {
         assert!(m.recent_logs(10).is_empty());
         // stop on a stopped manager is a no-op
         m.stop().unwrap();
+        assert_eq!(m.status().state, EngineState::Stopped);
+    }
+
+    /// PLT-14: when the sidecar cannot even be created (binary blocked by antivirus or missing, no
+    /// free port) the engine must not stay "starting" — the start button is disabled in that state.
+    #[test]
+    fn failed_launch_leaves_the_engine_stopped_with_the_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let binary = EngineBinary {
+            path: tmp.path().join("missing-llama-server"),
+            backend: Backend::Cpu,
+            version: None,
+            build_number: None,
+            source: EngineSource::Env,
+        };
+        let cfg = EngineConfig::new(binary, tmp.path().join("presets.ini"), tmp.path().to_path_buf());
+        let m = EngineManager::new();
+        let events = m.subscribe();
+        let err = m.start(cfg.clone()).unwrap_err();
+        assert!(err.to_string().contains("cannot start"), "{err}");
+        let st = m.status();
+        assert_eq!(st.state, EngineState::Stopped);
+        assert!(!m.is_starting());
+        assert!(st.last_error.as_deref().is_some_and(|e| e.contains("cannot start")), "{:?}", st.last_error);
+        assert_eq!((st.pid, st.port), (None, None));
+        // The webview hears about the final state, and the reason is in the engine log.
+        let states: Vec<EngineState> = events
+            .try_iter()
+            .filter_map(|e| match e {
+                EngineEvent::Status { status } => Some(status.state),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(states.first(), Some(&EngineState::Starting));
+        assert_eq!(states.last(), Some(&EngineState::Stopped));
+        assert!(m.recent_logs(10).iter().any(|l| l.text.contains("engine start failed")));
+        // Starting again is possible and fails the same clean way.
+        assert!(m.start(cfg).is_err());
         assert_eq!(m.status().state, EngineState::Stopped);
     }
 }

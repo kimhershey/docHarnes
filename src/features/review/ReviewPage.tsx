@@ -26,6 +26,9 @@ import { usePipelineStore } from "@/stores/pipeline";
 import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 
+import { reextractProcessRequest, type ReextractRequest } from "./reextract";
+import { ReextractDialog } from "./ReextractDialog";
+
 /** Estimated row height (three text lines + padding); mounted rows are measured. */
 /** Queue row estimate in rem (three text lines + padding) until the rendered rows are measured; rem so it follows the UI 배율. */
 const ROW_EST_REM = 4.5;
@@ -129,6 +132,7 @@ export function ReviewPage() {
   const [editValue, setEditValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [handled, setHandled] = useState(0);
+  const [reextractAsk, setReextractAsk] = useState<ReextractRequest | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLUListElement | null>(null);
@@ -251,10 +255,14 @@ export function ReviewPage() {
       setBusy(false);
     }
   };
-  const reextract = async (profile: "fine_print" | null, precise: boolean) => {
-    if (!current) return;
+  // Re-extraction replaces the document's fields and with them the approvals / corrections of this queue, so it
+  // asks first like the library's 처리 menu, and it is not a forced run unless the reviewer says so (PIP-2).
+  const askReextract = (mode: ReextractRequest["mode"]) => {
+    if (current) setReextractAsk({ documentId: current.document_id, documentName: current.document_name, mode });
+  };
+  const reextract = async (request: ReextractRequest, startOver: boolean) => {
     try {
-      await api.pipelineProcess({ document_ids: [current.document_id], level: "extract", force: true, profile, precise });
+      await api.pipelineProcess(reextractProcessRequest(request, startOver));
       toast(t("pipeline.process.started", { count: 1 }), "info");
     } catch (e) {
       toast(describeError(e, t), "danger");
@@ -299,7 +307,7 @@ export function ReviewPage() {
   const docChipName = filter.document ? (list.find((x) => x.document_id === filter.document)?.document_name ?? shortId(filter.document)) : null;
 
   return (
-    <div ref={rootRef} tabIndex={-1} onKeyDown={onKeyDown} className="flex h-full min-h-0 flex-col outline-none" data-testid="page-review">
+    <div ref={rootRef} tabIndex={-1} onKeyDown={onKeyDown} className="relative flex h-full min-h-0 flex-col outline-none" data-testid="page-review">
       <header className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
         <div className="mr-auto">
           <h1 className="text-lg font-semibold">{t("review.title")}</h1>
@@ -394,10 +402,10 @@ export function ReviewPage() {
                     <ExternalLink />
                     {t("review.open_doc")}
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={() => void reextract("fine_print", false)}>
+                  <Button size="sm" variant="ghost" onClick={() => askReextract("fine_print")} data-testid="review-reextract-fine-print">
                     {t("review.reextract")}
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={() => void reextract(null, true)}>
+                  <Button size="sm" variant="ghost" onClick={() => askReextract("precise")} data-testid="review-reextract-precise">
                     {t("review.reextract_precise")}
                   </Button>
                   <Button size="sm" variant="ghost" onClick={() => void approveDocument()} disabled={busy} data-testid="review-approve-doc">
@@ -505,6 +513,7 @@ export function ReviewPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <ReextractDialog request={reextractAsk} onClose={() => setReextractAsk(null)} onConfirm={(request, startOver) => void reextract(request, startOver)} />
     </div>
   );
 }

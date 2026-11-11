@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -17,20 +17,26 @@ function defaultName(draft: Draft): string {
   return `${date}_${draft.title || "document"}`.replace(/[\\/:*?"<>|]/g, "_");
 }
 
-/** "저장": output format, file name, library registration → `generate_save`. */
+/**
+ * "저장": output format, file name, library registration → `generate_save`. Every format registers — Markdown
+ * too, as a text document (GEN-9: the switch used to be off and disabled for .md while the hint said it registers).
+ */
 export function SaveDialog({ open, onOpenChange, draft, defaultOutput, busy, error, onSave }: { open: boolean; onOpenChange: (o: boolean) => void; draft: Draft; defaultOutput: OutputFormat; busy: boolean; error: string | null; onSave: (req: SaveRequest) => void }) {
   const { t } = useTranslation();
   const [output, setOutput] = useState<OutputFormat>(defaultOutput);
   const [fileName, setFileName] = useState("");
   const [register, setRegister] = useState(true);
   const [overwrite, setOverwrite] = useState(false);
+  // Reset when the dialog opens, not while it is open (a draft refreshed behind it would wipe the typed name).
+  const wasOpen = useRef(false);
   useEffect(() => {
-    if (open) {
+    if (open && !wasOpen.current) {
       setOutput(defaultOutput);
       setFileName(defaultName(draft));
       setRegister(true);
       setOverwrite(false);
     }
+    wasOpen.current = open;
   }, [open, defaultOutput, draft]);
   const blocking = draft.issues.filter((i) => i.blocking).length;
   return (
@@ -67,7 +73,7 @@ export function SaveDialog({ open, onOpenChange, draft, defaultOutput, busy, err
           </div>
           <label className="flex items-center justify-between gap-2 text-sm">
             <span>{t("generate.save.register")}</span>
-            <Switch checked={register} onCheckedChange={setRegister} disabled={output === "md"} aria-label={t("generate.save.register")} data-testid="generate-save-register" />
+            <Switch checked={register} onCheckedChange={setRegister} aria-label={t("generate.save.register")} data-testid="generate-save-register" />
           </label>
           <label className="flex items-center justify-between gap-2 text-sm">
             <span>{t("generate.save.overwrite")}</span>
@@ -88,7 +94,7 @@ export function SaveDialog({ open, onOpenChange, draft, defaultOutput, busy, err
           <Button variant="secondary" onClick={() => onOpenChange(false)}>
             {t("common.cancel")}
           </Button>
-          <Button disabled={busy || !fileName.trim()} onClick={() => onSave({ draft, output, file_name: fileName.trim(), folder: null, register: output === "md" ? false : register, overwrite })} data-testid="generate-save-confirm">
+          <Button disabled={busy || !fileName.trim()} onClick={() => onSave({ draft, output, file_name: fileName.trim(), folder: null, register, overwrite })} data-testid="generate-save-confirm">
             {t("generate.save.confirm")}
           </Button>
         </DialogFooter>

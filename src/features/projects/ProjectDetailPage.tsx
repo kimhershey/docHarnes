@@ -21,6 +21,7 @@ import { useProjectsStore } from "@/stores/projects";
 import { useUiStore } from "@/stores/ui";
 
 import { CommonReferencePage } from "./CommonReferencePage";
+import { projectDocCounts } from "./docCounts";
 import { DocumentsTab } from "./DocumentsTab";
 import { NewProjectDialog, todayIso } from "./NewProjectDialog";
 import { PhaseBadges } from "./ProjectsPage";
@@ -253,7 +254,7 @@ function ProjectView({ id }: { id: string }) {
             </span>
           )}
           <Badge variant="outline" data-testid="project-doc-counts">
-            {t("projects.detail.doc_counts", { work: p.document_count, reference: refDocs?.length ?? 0 })}
+            {t("projects.detail.doc_counts", projectDocCounts(detail.documents, refDocs))}
           </Badge>
           {p.missing_count > 0 && <Badge variant="danger">{t("projects.card.missing", { count: p.missing_count })}</Badge>}
           {generating && (

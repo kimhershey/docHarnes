@@ -121,6 +121,12 @@ pub struct HardwareSummary {
     pub ram_total_mib: u64,
     pub ram_available_mib: u64,
     pub gpus: Vec<GpuInfo>,
+    /// GPU memory (MiB) the DocuLens engine itself held when `gpus` was read (set by the shell;
+    /// 0 for a bare probe). The tier is defined on the VRAM that is free before DocuLens loads
+    /// anything (§2.6), so [`assess`] gives this back: a reading taken while a model is loaded
+    /// must not drop the tier.
+    #[serde(default)]
+    pub engine_used_mib: u64,
     /// Whether the NVML library could be loaded (false on non-NVIDIA machines).
     pub nvml_available: bool,
     pub probed_at: DateTime<Utc>,
@@ -159,6 +165,7 @@ pub fn probe() -> HardwareSummary {
         ram_total_mib: sys.total_memory() / MIB,
         ram_available_mib: sys.available_memory() / MIB,
         gpus,
+        engine_used_mib: 0,
         nvml_available,
         probed_at: Utc::now(),
     }
@@ -233,7 +240,10 @@ impl Backend {
 
 /// Backend selection rule (design §3.3.1 / §3.12): NVIDIA + CUDA pack
 /// installed → cu129 if driver CUDA ≥ 12.8, cu121 if ≥ 12.1; any other GPU
-/// → Vulkan (when a Vulkan engine is installed); otherwise CPU.
+/// → Vulkan (when a Vulkan engine is installed); otherwise CPU. An explicit
+/// Vulkan preference is honoured even when no GPU was detected (detection only
+/// covers NVML and what a Vulkan pack lists; the user knows the machine).
+/// The result is one of `installed`, or `Cpu` as the last resort.
 pub fn select_backend(
     gpu: Option<&GpuInfo>,
     installed: &[Backend],
@@ -251,7 +261,8 @@ pub fn select_backend(
                 None
             }
         });
-    let vulkan_choice = if gpu.is_some() && has(Backend::Vulkan) { Some(Backend::Vulkan) } else { None };
+    let vulkan_choice =
+        if (gpu.is_some() || preference == P::Vulkan) && has(Backend::Vulkan) { Some(Backend::Vulkan) } else { None };
 
     match preference {
         P::Cpu => Backend::Cpu,
@@ -274,6 +285,7 @@ pub enum TierBasis {
 pub struct TierAssessment {
     pub tier: Tier,
     pub basis: TierBasis,
+    /// Free VRAM the tier was judged on: the reading plus the engine's own use at that moment.
     pub free_vram_mib: Option<u64>,
     pub total_vram_mib: Option<u64>,
     pub gpu_name: Option<String>,
@@ -284,7 +296,8 @@ pub struct TierAssessment {
 /// Warning strings are stable i18n keys (`hw.warn.*`), resolved by the UI.
 pub fn assess(hw: &HardwareSummary, models: &ModelSettings) -> TierAssessment {
     let gpu = hw.primary_gpu();
-    let free = gpu.and_then(|g| g.free_mib);
+    // What the engine itself holds is not "taken" VRAM for the tier (never more than the card has).
+    let free = gpu.and_then(|g| g.free_mib.map(|f| (f + hw.engine_used_mib).min(g.total_mib.max(f))));
     let mut warnings = Vec::new();
 
     let (tier, basis) = match (models.tier_mode, models.manual_tier) {
@@ -292,7 +305,7 @@ pub fn assess(hw: &HardwareSummary, models: &ModelSettings) -> TierAssessment {
         _ => match gpu {
             None => (Tier::CpuOnly, TierBasis::NoGpu),
             Some(g) => (
-                Tier::from_free_vram_mib(g.free_mib.or(Some(g.total_mib))),
+                Tier::from_free_vram_mib(free.or(Some(g.total_mib))),
                 match g.source {
                     GpuSource::Engine => TierBasis::EngineFreeVram,
                     _ => TierBasis::NvmlFreeVram,
@@ -403,6 +416,25 @@ mod tests {
         assert_eq!(select_backend(Some(&g), &all, BackendPreference::Vulkan), Backend::Vulkan);
     }
 
+    /// PLT-4: NVML only sees NVIDIA cards, so on an AMD / Intel PC no GPU may be known.
+    #[test]
+    fn explicit_vulkan_is_honoured_without_a_detected_gpu() {
+        let lite = [Backend::Vulkan, Backend::Cpu];
+        assert_eq!(select_backend(None, &lite, BackendPreference::Vulkan), Backend::Vulkan);
+        // … but only when a Vulkan pack exists, and "auto" still needs a GPU to leave the CPU.
+        assert_eq!(select_backend(None, &[Backend::Cpu], BackendPreference::Vulkan), Backend::Cpu);
+        assert_eq!(select_backend(None, &lite, BackendPreference::Auto), Backend::Cpu);
+        assert_eq!(select_backend(None, &lite, BackendPreference::Cuda), Backend::Cpu);
+        // A GPU the Vulkan pack listed (source = engine, no CUDA details) selects Vulkan on "auto".
+        let mut amd = gpu("AMD Radeon RX 7600", 8176, Some(7900), None);
+        amd.source = GpuSource::Engine;
+        assert_eq!(select_backend(Some(&amd), &lite, BackendPreference::Auto), Backend::Vulkan);
+        assert_eq!(select_backend(Some(&amd), &lite, BackendPreference::Cuda), Backend::Vulkan);
+        assert_eq!(select_backend(Some(&amd), &lite, BackendPreference::Cpu), Backend::Cpu);
+        // Whatever is selected is installed, except the CPU last resort.
+        assert_eq!(select_backend(Some(&amd), &[Backend::Cu121], BackendPreference::Auto), Backend::Cpu);
+    }
+
     #[test]
     fn assessment_manual_override_and_warnings() {
         let hw = HardwareSummary {
@@ -415,6 +447,7 @@ mod tests {
             ram_total_mib: 4096,
             ram_available_mib: 2048,
             gpus: vec![gpu("NVIDIA GeForce RTX 4060", 8192, Some(7000), Some((12, 8)))],
+            engine_used_mib: 0,
             nvml_available: true,
             probed_at: Utc::now(),
         };
@@ -435,6 +468,48 @@ mod tests {
         assert_eq!(a.basis, TierBasis::NoGpu);
         assert!(a.warnings.contains(&"hw.warn.cpu_only_slow".to_string()));
         assert!(a.warnings.contains(&"hw.warn.no_nvml".to_string()));
+    }
+
+    /// PLT-3: a probe taken while the engine holds a model sees little free VRAM. The tier is
+    /// about what is free for DocuLens, so the engine's own share is given back.
+    #[test]
+    fn tier_ignores_the_vram_the_engine_itself_uses() {
+        let base = HardwareSummary {
+            os: "Windows".into(),
+            os_version: "11".into(),
+            hostname: "pc".into(),
+            cpu_name: "cpu".into(),
+            cpu_cores_physical: Some(8),
+            cpu_cores_logical: 16,
+            ram_total_mib: 32_768,
+            ram_available_mib: 20_000,
+            gpus: vec![gpu("NVIDIA GeForce RTX 3060 Ti", 8_188, Some(7_126), Some((12, 6)))],
+            engine_used_mib: 0,
+            nvml_available: true,
+            probed_at: Utc::now(),
+        };
+        let idle = assess(&base, &ModelSettings::default());
+        assert_eq!((idle.tier, idle.free_vram_mib), (Tier::Vram8gb, Some(7_126)));
+        // The same PC refreshed with Gemma 4 E4B Q6_K loaded (≈ 6 GiB on the card).
+        let loaded = HardwareSummary {
+            gpus: vec![gpu("NVIDIA GeForce RTX 3060 Ti", 8_188, Some(1_026), Some((12, 6)))],
+            engine_used_mib: 6_100,
+            ..base.clone()
+        };
+        let a = assess(&loaded, &ModelSettings::default());
+        assert_eq!((a.tier, a.free_vram_mib), (Tier::Vram8gb, Some(7_126)));
+        // Without the engine's share the same reading would have meant "CPU only".
+        let raw = HardwareSummary { engine_used_mib: 0, ..loaded.clone() };
+        assert_eq!(assess(&raw, &ModelSettings::default()).tier, Tier::CpuOnly);
+        // Another program holding VRAM still lowers the tier, and the sum never exceeds the card.
+        let busy = HardwareSummary {
+            gpus: vec![gpu("NVIDIA GeForce RTX 3060 Ti", 8_188, Some(500), Some((12, 6)))],
+            engine_used_mib: 4_000,
+            ..base.clone()
+        };
+        assert_eq!(assess(&busy, &ModelSettings::default()).tier, Tier::Vram6gb);
+        let over = HardwareSummary { engine_used_mib: 50_000, ..base };
+        assert_eq!(assess(&over, &ModelSettings::default()).free_vram_mib, Some(8_188));
     }
 
     #[test]

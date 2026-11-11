@@ -1,4 +1,5 @@
-import { AlertCircle, Bot, Briefcase, HelpCircle, Paperclip, Send, Sparkles, User, X } from "lucide-react";
+import type { TFunction } from "i18next";
+import { AlertCircle, Bot, Briefcase, HelpCircle, Paperclip, Plus, Send, Sparkles, User, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router";
@@ -14,7 +15,7 @@ import { describeJobError } from "@/features/jobs/describe";
 import { AnswerCard } from "@/features/knowledge/AnswerCard";
 import { openCitation } from "@/features/knowledge/AnswersPanel";
 import { settingsTabPath } from "@/features/settings/tabs";
-import { describePreRoute, executePreRoute, executeUiOps } from "@/lib/commands";
+import { describePreRoute, executePreRoute, executeUiOps, type UiOpResult } from "@/lib/commands";
 import { docsFromIds, DropHint, importDroppedFiles, useDocumentDropTarget, type DragDoc } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
 import { askBackText, isCancelCommand, isSlashCommand, loadRouting } from "@/lib/assistant-control";
@@ -22,7 +23,7 @@ import { looksLikeFollowUp } from "@/lib/follow-up";
 import { api } from "@/lib/ipc";
 import { useDocument, useKnowledgeStatus, usePipelineStatus } from "@/lib/queries";
 import { isComposing, matchesChord } from "@/lib/shortcuts";
-import { isJobFinished, type AnswerRequest, type Job, type Plan, type PlanExecution, type PlanIssue, type PlanResponse, type PreRouteResult, type SearchMode, type SearchScope, type UiPlanContext } from "@/lib/types";
+import { isJobFinished, type AnswerRequest, type Job, type Op, type Plan, type PlanExecution, type PlanIssue, type PlanResponse, type PreRouteResult, type SearchMode, type SearchScope, type UiPlanContext } from "@/lib/types";
 import { errorCode, isMac } from "@/lib/utils";
 import { selectMessages, useAssistantStore, type ClarifyStatus, type Message, type NewMessage, type PlanMessage } from "@/stores/assistant";
 import { useAttachmentsStore } from "@/stores/attachments";
@@ -41,7 +42,7 @@ import { conversationTurns } from "./conversation";
 import { clarificationQuestion, isPlanExecution, planKind, requiresConfirmation, sourceLabel, uiContextFor } from "./describePlan";
 import { EvidenceCard } from "./evidence";
 import { ExecutionCard } from "./ExecutionCard";
-import { UI_OPS } from "./opSpecs";
+import { UI_OPS, missingRequiredParams, paramDesc } from "./opSpecs";
 import { PlanCard } from "./PlanCard";
 import { ResultCard } from "./ResultCard";
 import { SessionList, SessionPicker } from "./SessionList";
@@ -54,6 +55,30 @@ export function looksLikeQuestion(text: string): boolean {
 
 function hasOpenLayer(): boolean {
   return document.querySelector('[role="dialog"], [role="listbox"], [role="menu"], [cmdk-dialog]') !== null;
+}
+
+/** An "executed" card whose UI ops did not all run says so: `failed` when none ran, `partial` when some did (PLN-17). */
+function executedStatus(m: Message): "done" | "partial" | "failed" {
+  if (m.role !== "assistant" || m.kind !== "executed" || !m.failures || m.failures.length === 0) return "done";
+  return (m.ran ?? 0) > 0 ? "partial" : "failed";
+}
+
+/** The card's badge text. */
+function executedLabel(m: Message, t: TFunction): string {
+  const status = executedStatus(m);
+  return status === "done" ? t("assistant.executed") : status === "partial" ? t("assistant.executed_partial") : t("assistant.executed_failed");
+}
+
+/** Keeps what became of a finished job's UI actions on that job's execution card (in whichever loaded chat it is). */
+function recordJobUiResults(jobId: string, results: UiOpResult[]): void {
+  if (results.length === 0) return;
+  const store = useAssistantStore.getState();
+  for (const [sid, list] of Object.entries(store.messagesBySession)) {
+    const card = list.find((m) => m.role === "assistant" && m.kind === "execution" && m.jobId === jobId);
+    if (!card) continue;
+    store.patch(sid, card.id, (m) => (m.role === "assistant" && m.kind === "execution" ? { ...m, uiResults: results } : m));
+    return;
+  }
 }
 
 /** The three scopes of 0.5.0 (plan §0): everything, the current project, or the selected / attached / open documents. */
@@ -95,6 +120,9 @@ export function AssistantPage() {
   const activeId = useAssistantStore((s) => s.activeId);
   const sessions = useAssistantStore((s) => s.sessions);
   const hydrating = useAssistantStore((s) => s.hydrating);
+  // The active chat's stored messages are read / could not be read (it takes no input before they are, KNO-15).
+  const sessionLoaded = useAssistantStore((s) => s.activeId !== null && s.loaded[s.activeId] === true);
+  const sessionLoadFailed = useAssistantStore((s) => s.activeId !== null && s.loadFailed[s.activeId] === true);
   const pendingUiActions = useAssistantStore((s) => s.pendingUiActions);
   const jobs = useJobsStore((s) => s.jobs);
   // The last viewed document is offered as a scope only while no library selection exists (the
@@ -145,24 +173,37 @@ export function AssistantPage() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const consumed = useRef<string | null>(null);
   const observing = useRef(new Set<string>());
+  /** Jobs started from this page whose end has not been reported to it yet (see `onJobFinished`). */
+  const startedJobs = useRef(new Set<string>());
   const examples = t("assistant.examples", { returnObjects: true }) as string[];
 
-  // The conversation is keyed by the workspace path (a switch also clears it through `resetDocumentQueries`).
+  // The conversation is keyed by the workspace path (a switch also clears it through `resetDocumentQueries`,
+  // which unbinds the store even when the same folder is opened again).
   const workspacePath = workspace?.path ?? null;
+  const boundWorkspace = useAssistantStore((s) => s.workspace);
   useEffect(() => {
-    useAssistantStore.getState().bind(workspacePath);
-  }, [workspacePath]);
+    if (boundWorkspace !== workspacePath) useAssistantStore.getState().bind(workspacePath);
+  }, [workspacePath, boundWorkspace]);
 
-  // Every request writes into the session it started in (`sid`), even if the user switches meanwhile.
-  const push = (sid: string, m: NewMessage) => useAssistantStore.getState().push(sid, m);
-  const patch = (sid: string, id: number, f: (m: Message) => Message) => useAssistantStore.getState().patch(sid, id, f);
-  const patchPlan = (sid: string, id: number, f: (m: PlanMessage) => PlanMessage) => patch(sid, id, (m) => (m.role === "assistant" && m.kind === "plan" ? f(m) : m));
+  // Every request writes into the session it started in (`sid`), even if the user switches chats meanwhile —
+  // and only while that conversation still exists. The helpers below belong to the render whose handler
+  // started the request, so they carry the workspace generation of that moment: a card that arrives after a
+  // workspace switch (the assistant's own "워크스페이스 … 열어" included) or after its chat was deleted is
+  // dropped by the store instead of being written into the other workspace's database (KNO-2).
+  const generation = useAssistantStore((s) => s.generation);
+  const push = (sid: string, m: NewMessage) => useAssistantStore.getState().push(sid, m, generation);
+  // A patch is stored at once (a settled card must not come back unsettled after a restart, KNO-9); `defer`
+  // is for the plan editor, whose every keystroke is a patch.
+  const patch = (sid: string, id: number, f: (m: Message) => Message, defer = false) => useAssistantStore.getState().patch(sid, id, f, { generation, defer });
+  const patchPlan = (sid: string, id: number, f: (m: PlanMessage) => PlanMessage, defer = false) => patch(sid, id, (m) => (m.role === "assistant" && m.kind === "plan" ? f(m) : m), defer);
   const messagesOf = (sid: string) => useAssistantStore.getState().messagesBySession[sid] ?? [];
+  /** Whether the conversation a request started in is still there: when not, the request stops (no card, no side effect). */
+  const live = (sid: string) => useAssistantStore.getState().accepts(sid, generation);
 
   const anyPending = messages.some((m) => m.role === "assistant" && m.kind === "answer" && m.pending);
   // How much of the conversation the next question / command will carry.
   const memoryTurns = useMemo(() => conversationTurns(messages).length, [messages]);
-  const busy = anyPending || planning || hydrating || activeId === null;
+  const busy = anyPending || planning || hydrating || activeId === null || !sessionLoaded;
   const activePlan = [...messages].reverse().find((m): m is PlanMessage => m.role === "assistant" && m.kind === "plan" && m.status === "pending") ?? null;
   const pendingClarify = [...messages].reverse().find((m): m is Extract<Message, { kind: "clarify" }> => m.role === "assistant" && m.kind === "clarify" && m.status === "pending") ?? null;
 
@@ -186,14 +227,20 @@ export function AssistantPage() {
 
   /**
    * Knowledge scope of the selector: 현재 프로젝트 = the project's work documents ∪ its reference group ∪ the
-   * common reference material (`project_id`, plan §2); 선택 문서 asks about those documents only.
+   * common reference material (`project_id`, plan §2). 선택 문서 asks about those documents — and, while a
+   * project is the context (the chip in the header), together with that project's reference material and the
+   * common one: `project_id` next to explicit `documents` means exactly that (0.5.0 plan A; PRJ-13). Without
+   * a project it is those documents alone.
    */
   const knowledgeScope = (): SearchScope => {
     const s: SearchScope = { latest_only: knowledge?.latest_only ?? true };
     if (scope === "project" && currentProject) s.project_id = currentProject;
     if (scope === "selection" && selectionIds.length > 0) {
       s.documents = selectionIds;
-      if (selectionKind === "attached") s.latest_only = false;
+      // The named documents are searched whatever their edition (the core exempts them from "최신본만"); with
+      // a project the setting keeps applying to the reference material that comes along.
+      if (currentProject) s.project_id = currentProject;
+      else if (selectionKind === "attached") s.latest_only = false;
     }
     return s;
   };
@@ -220,6 +267,7 @@ export function AssistantPage() {
   };
 
   const askKnowledge = async (sid: string, question: string, extra: Partial<AnswerRequest> = {}) => {
+    if (!live(sid)) return;
     // The conversation so far travels with every question (the model resolves "그 문서", "아까 금액");
     // the previous evidence is kept for an explicit follow-up or a question that leans on the
     // conversation, so an unrelated question is still retrieved afresh and can end in "no evidence".
@@ -259,23 +307,31 @@ export function AssistantPage() {
     void api.knowledgeAnswerCancel(requestId).catch(() => undefined);
   };
 
-  const runUiActions = useCallback(
-    async (ops: Plan["operations"]) => {
-      if (ops.length === 0) return;
-      await executeUiOps(ops, navigate, t);
-    },
-    [navigate, t],
-  );
+  /** Runs the UI's part of a plan; one result per op, so the card can show an op that failed as failed. */
+  const runUiActions = useCallback(async (ops: Plan["operations"]): Promise<UiOpResult[]> => (ops.length === 0 ? [] : executeUiOps(ops, navigate, t)), [navigate, t]);
 
   /** Sends a (confirmed, possibly edited) plan to the executor: a job or an inline execution. */
   const runPlan = async (sid: string, m: PlanMessage) => {
     const id = m.id;
-    if (m.status !== "pending") return;
+    if (m.status !== "pending" || !live(sid)) return;
+    // A required value the editor left empty never reaches the validator — the IPC layer rejects the plan with
+    // a raw "missing field `…`". The card names the field instead and the plan stays as it is (CON-12).
+    const missing = missingRequiredParams(m.plan.operations);
+    if (missing.length > 0) {
+      const errors: PlanIssue[] = missing.map(({ index, param }) => ({ path: `operations[${index}].${param.name}`, code: "param_required", message: t("planner.editor.required_missing", { label: paramDesc(param, i18n.language) }), blocking: true }));
+      patchPlan(sid, id, (x) => ({ ...x, errors }));
+      return;
+    }
     patchPlan(sid, id, (x) => ({ ...x, status: "executing", errors: null }));
     try {
-      const res = await api.plannerExecute(m.plan, m.text, m.context);
+      // A plan made from a 되묻기 goes with the text it was made from: the executor re-checks the plan against
+      // the user's words (a "전부" in the reply is what allows a plan without a scope).
+      const res = await api.plannerExecute(m.plan, m.text, m.context, m.plannedText ?? null);
+      // The workspace was switched (or the chat deleted) meanwhile: nothing of this run belongs here any more.
+      if (!live(sid)) return;
       patchPlan(sid, id, (x) => ({ ...x, status: "done", editing: false }));
       if (res.job_id) {
+        startedJobs.current.add(res.job_id);
         // The job's `ui_actions` run when its finished state is observed here (once, even after navigating away).
         useAssistantStore.getState().trackJob(
           res.job_id,
@@ -283,8 +339,10 @@ export function AssistantPage() {
         );
         push(sid, { role: "assistant", kind: "execution", text: m.text, response: m.response, plan: m.plan, jobId: res.job_id });
       } else if (res.execution) {
-        push(sid, { role: "assistant", kind: "result", text: m.text, response: m.response, plan: m.plan, execution: res.execution });
-        await runUiActions(res.execution.ui_actions);
+        const resultId = push(sid, { role: "assistant", kind: "result", text: m.text, response: m.response, plan: m.plan, execution: res.execution });
+        // The UI's part of the plan runs now; what became of it is kept on the result card (PLN-17).
+        const uiResults = await runUiActions(res.execution.ui_actions);
+        if (uiResults.length > 0) patch(sid, resultId, (x) => (x.role === "assistant" && x.kind === "result" ? { ...x, uiResults } : x));
       }
     } catch (e) {
       const code = errorCode(e);
@@ -308,6 +366,12 @@ export function AssistantPage() {
     if (m) await runPlan(sid, m);
   };
 
+  /** 되돌리기 on an executed card: puts the previous values back and marks the card. */
+  const undoExecuted = async (sid: string, id: number, ops: Op[]) => {
+    const results = await executeUiOps(ops, navigate, t);
+    if (results.every((r) => r.ok)) patch(sid, id, (m) => (m.role === "assistant" && m.kind === "executed" ? { ...m, undone: true } : m));
+  };
+
   const cancelPlan = (sid: string, id: number) => patchPlan(sid, id, (x) => ({ ...x, status: "cancelled", editing: false }));
   const patchClarify = (sid: string, id: number, status: ClarifyStatus) => patch(sid, id, (m) => (m.role === "assistant" && m.kind === "clarify" ? { ...m, status } : m));
   const cancelClarify = (sid: string, id: number) => patchClarify(sid, id, "cancelled");
@@ -329,7 +393,7 @@ export function AssistantPage() {
    * model together with the original command and the question — routed by rule, never guessed.
    */
   const askBack = async (sid: string, messageId: number, original: string, question: string, reply: string) => {
-    if (busy) return;
+    if (busy || !live(sid)) return;
     patchClarify(sid, messageId, "answered");
     patchPlan(sid, messageId, (x) => ({ ...x, status: "cancelled", editing: false }));
     push(sid, { role: "user", text: reply });
@@ -345,11 +409,18 @@ export function AssistantPage() {
       return;
     }
     setPlanningSession(null);
-    await handlePlan(sid, original, response, context);
+    // The card keeps the user's sentence as its text and the composed text as what the plan was made from.
+    await handlePlan(sid, original, response, context, composed);
   };
 
-  /** Routes a planner response to the matching card / action. */
-  const handlePlan = async (sid: string, textValue: string, response: PlanResponse, context: UiPlanContext) => {
+  /**
+   * Routes a planner response to the matching card / action. `plannedText`: the text the planner read when
+   * it was not `textValue` (a 되묻기); a plan card keeps it for the executor (PLN-7).
+   */
+  const handlePlan = async (sid: string, textValue: string, response: PlanResponse, context: UiPlanContext, plannedText?: string) => {
+    // An interpretation that arrives for a conversation that is gone (workspace switched, chat deleted) is
+    // dropped as a whole: no card, no answer request and no immediate execution in the other workspace.
+    if (!live(sid)) return;
     const plan = response.result.plan;
     switch (planKind(plan)) {
       case "clarify":
@@ -359,42 +430,65 @@ export function AssistantPage() {
       case "help":
         push(sid, { role: "assistant", kind: "help" });
         return;
+      case "noop":
+        // Nothing to do: one line instead of an empty plan card and a "건너뜀" result (audit USR-3).
+        push(sid, { role: "assistant", kind: "reply", text: t("assistant.nothing_to_do"), source: sourceLabel(response.result.source, t) });
+        return;
       case "answer": {
-        const op = plan.operations.find((o) => o.op === "answer");
-        const question = op && op.op === "answer" ? op.question : textValue;
+        const found = plan.operations.find((o) => o.op === "answer");
+        const op = found && found.op === "answer" ? found : null;
+        const question = op ? op.question : textValue;
+        // A ready reply (a fixed greeting, "this cannot be done"): shown as it is, no model call.
+        if (op?.reply) {
+          push(sid, { role: "assistant", kind: "reply", text: op.reply, source: sourceLabel(response.result.source, t) });
+          return;
+        }
         const base = knowledgeScope();
         if (plan.scope.doc_ids && plan.scope.doc_ids.length > 0) base.documents = plan.scope.doc_ids;
         if (plan.scope.folder) base.folder = plan.scope.folder;
+        // mode=chat: small talk, nothing is looked up. mode=general: not about the documents — evidence when
+        // there is some, general knowledge (marked as such) otherwise, whatever the setting says.
         // knowledge=false: the sentence carries the text to work on — answer from it, look nothing up.
-        const retrieve = !(op && op.op === "answer" && op.knowledge === false);
-        await askKnowledge(sid, question, { scope: base, retrieve });
+        const style = op?.mode === "chat" ? "chat" : op?.mode === "general" ? "general" : null;
+        const retrieve = style !== "chat" && op?.knowledge !== false;
+        await askKnowledge(sid, question, { scope: base, retrieve, ...(style ? { style } : {}), ...(style === "general" ? { allow_general: true } : {}) });
         return;
       }
       case "ui":
         if (!requiresConfirmation(response)) {
-          const summaries = await executeUiOps(plan.operations, navigate, t);
-          push(sid, { role: "assistant", kind: "executed", text: summaries.join(" · ") || plan.summary || textValue, source: sourceLabel(response.result.source, t), confidence: plan.confidence });
+          const results = await executeUiOps(plan.operations, navigate, t);
+          const ran = results.filter((r) => r.ok);
+          const failures = results.filter((r) => !r.ok).map((r) => r.error ?? "");
+          // The card says what ran — or, when nothing ran, what was asked for — and lists the ops that failed.
+          const summary = ran.map((r) => r.summary).filter(Boolean).join(" · ") || plan.summary || textValue;
+          // What a settings change replaced can be put back from the card (last change first).
+          const undo = ran.flatMap((r) => r.undo ?? []).reverse();
+          push(sid, { role: "assistant", kind: "executed", text: summary, source: sourceLabel(response.result.source, t), confidence: plan.confidence, ...(failures.length > 0 ? { failures, ran: ran.length } : {}), ...(undo.length > 0 ? { undo } : {}) });
           return;
         }
         break;
       default:
         break;
     }
-    const card: NewMessage = { role: "assistant", kind: "plan", text: textValue, response, plan, context, status: "pending", errors: null, editing: false };
+    const card: NewMessage = { role: "assistant", kind: "plan", text: textValue, ...(plannedText ? { plannedText } : {}), response, plan, context, status: "pending", errors: null, editing: false };
     const id = push(sid, card);
     // An immediate execution works from the message itself (the store is updated synchronously).
     if (!requiresConfirmation(response)) await runPlan(sid, { ...card, id } as PlanMessage);
   };
 
-  const send = async (value: string) => {
+  /**
+   * Sends a sentence. `searchOnly` is the "근거만 찾기" mode of this one call: a caller that has just
+   * switched the mode passes the new value, since the `evidenceOnly` this closure sees is still the old one.
+   */
+  const send = async (value: string, searchOnly: boolean = evidenceOnly) => {
     const v = value.trim();
     // The session the command belongs to is fixed here: a switch while it runs does not redirect its cards.
     const sid = useAssistantStore.getState().activeId;
-    if (!v || busy || !sid) return;
+    if (!v || busy || !sid || !live(sid)) return;
     setText("");
     push(sid, { role: "user", text: v, attachments: scope === "selection" && selectionKind === "attached" ? attached.map((d) => ({ id: d.id, name: d.name })) : undefined });
     // 0. "근거만 찾기": every sentence is a search (slash commands still run).
-    if (evidenceOnly && !isSlashCommand(v)) {
+    if (searchOnly && !isSlashCommand(v)) {
       await findEvidence(sid, v);
       return;
     }
@@ -412,6 +506,7 @@ export function AssistantPage() {
       } catch {
         route = null;
       }
+      if (!live(sid)) return;
       if (route?.matched && route.op === "help") {
         push(sid, { role: "assistant", kind: "help" });
         return;
@@ -443,15 +538,26 @@ export function AssistantPage() {
     await handlePlan(sid, v, response, context);
   };
 
-  // Text handed over by another screen (command palette, pre-router help) is sent into the active session once it exists.
+  // Text handed over by another screen (command palette, pre-router help) is sent into the active session once
+  // it exists and its messages are read. While the assistant is in the middle of an answer or an
+  // interpretation `send` takes nothing: the sentence then waits in the composer (after what is already typed
+  // there) instead of being lost (KNO-10).
   useEffect(() => {
-    if (pending && !hydrating && activeId && consumed.current !== pending) {
-      consumed.current = pending;
-      setPending(null);
-      void send(pending);
+    if (!pending) {
+      consumed.current = null; // the same sentence may be handed over again later
+      return;
     }
+    if (hydrating || !activeId || !sessionLoaded || consumed.current === pending) return;
+    consumed.current = pending;
+    setPending(null);
+    if (anyPending || planning) {
+      setText((current) => (current.trim() ? `${current.trimEnd()}\n${pending}` : pending));
+      window.setTimeout(() => inputRef.current?.focus(), 0);
+      return;
+    }
+    void send(pending);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pending, hydrating, activeId]);
+  }, [pending, hydrating, activeId, sessionLoaded]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
@@ -494,7 +600,7 @@ export function AssistantPage() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, activePlan?.id, pendingClarify?.id, shortcuts?.execute_plan, shortcuts?.close]);
+  }, [activeId, generation, activePlan?.id, pendingClarify?.id, shortcuts?.execute_plan, shortcuts?.close]);
 
   // Owed `ui_actions` of job-backed plans: run once when the finished job is observed (on mount and on
   // every job update), whether or not the execution card was mounted when the job finished.
@@ -512,7 +618,7 @@ export function AssistantPage() {
           const full = job && !isPlanExecution(job.result) ? await store.fetch(jobId) : job;
           const execution = full && isPlanExecution(full.result) ? full.result : null;
           const ops = useAssistantStore.getState().claimUiActions(jobId, execution ? execution.ui_actions : []);
-          if (ops && ops.length > 0) await runUiActions(ops);
+          if (ops && ops.length > 0) recordJobUiResults(jobId, await runUiActions(ops));
         } finally {
           observing.current.delete(jobId);
         }
@@ -547,11 +653,16 @@ export function AssistantPage() {
   };
 
   const onJobFinished = useCallback(
-    (execution: PlanExecution | null, job: Job) => {
+    (execution: PlanExecution | null, job: Job, live: boolean) => {
+      // A job this page started and has not reported yet counts as watched even when it failed before its
+      // card could see it running.
+      const startedHere = startedJobs.current.delete(job.id);
       if (execution) {
         const ops = useAssistantStore.getState().claimUiActions(job.id, execution.ui_actions);
-        if (ops) void runUiActions(ops);
-      } else if (job.state === "failed") {
+        if (ops) void runUiActions(ops).then((results) => recordJobUiResults(job.id, results));
+      } else if (job.state === "failed" && (live || startedHere)) {
+        // Only a failure that happens now is announced: the card of a job that failed earlier says so itself,
+        // and a toast on every reopening of the chat (session switch, restart) is noise (KNO-11).
         const message = describeJobError(job, t);
         if (message) useUiStore.getState().toast(message, "danger");
       }
@@ -586,8 +697,10 @@ export function AssistantPage() {
       <div className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2">
         <h1 className="text-base font-semibold">{t("assistant.title")}</h1>
         <SessionPicker sessions={sessions} activeId={activeId} onSelect={(id) => void store().select(id)} />
-        <Button variant="ghost" size="sm" onClick={() => void store().newSession().catch(reportError)} disabled={hydrating} data-testid="assistant-new-chat-header">
-          {t("assistant.new_chat")}
+        {/* The rail has "새 채팅" (`SessionList`); this one stands in for it only where the rail is hidden (below `md`), under the same name. */}
+        <Button variant="ghost" size="sm" className="md:hidden" onClick={() => void store().newSession().catch(reportError)} disabled={hydrating} data-testid="assistant-new-chat-header">
+          <Plus className="size-4" aria-hidden="true" />
+          {t("assistant.sessions.new")}
         </Button>
         <div className="ml-auto flex flex-wrap items-center gap-3 text-xs text-fg-muted">
           <label className="flex items-center gap-1" title={t("assistant.evidence.hint")}>
@@ -649,8 +762,17 @@ export function AssistantPage() {
         </div>
       </div>
 
-      <div ref={listRef} className="flex-1 overflow-y-auto p-4" data-testid="assistant-messages">
-        {messages.length === 0 && (
+      <div ref={listRef} className="relative flex-1 overflow-y-auto p-4" data-testid="assistant-messages">
+        {sessionLoadFailed && (
+          <div className="mx-auto mb-3 flex max-w-3xl flex-wrap items-center gap-2 rounded-lg border border-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert" data-testid="assistant-load-failed">
+            <AlertCircle className="size-4 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 flex-1">{t("assistant.sessions.load_failed")}</span>
+            <Button size="sm" variant="outline" onClick={() => activeId && void store().reload(activeId)} data-testid="assistant-load-retry">
+              {t("common.retry")}
+            </Button>
+          </div>
+        )}
+        {messages.length === 0 && sessionLoaded && (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-fg-muted">
             <Sparkles className="size-8 text-accent" aria-hidden="true" />
             <p>{t("assistant.empty")}</p>
@@ -663,10 +785,12 @@ export function AssistantPage() {
             )}
           </div>
         )}
+        {/* A card never grows past the column (UI-2): the row's children may shrink (`*:min-w-0` — a flex item is
+            otherwise as wide as its longest unbreakable line) and long paths inside the cards wrap. */}
         <div className="mx-auto flex max-w-3xl flex-col gap-3">
           {messages.map((m) =>
             m.role === "user" ? (
-              <div key={m.id} className="flex items-start gap-2 self-end">
+              <div key={m.id} className="flex max-w-full items-start gap-2 self-end *:min-w-0">
                 <div className="rounded-lg bg-accent px-3 py-2 text-sm text-accent-fg selectable">
                   {m.text}
                   {m.attachments && m.attachments.length > 0 && (
@@ -683,7 +807,7 @@ export function AssistantPage() {
                 <User className="mt-2 size-4 text-fg-muted" aria-hidden="true" />
               </div>
             ) : (
-              <div key={m.id} className="flex items-start gap-2">
+              <div key={m.id} className="flex items-start gap-2 *:min-w-0">
                 <Bot className="mt-2 size-4 shrink-0 text-accent" aria-hidden="true" />
                 {m.kind === "answer" && (
                   <div className="w-full" data-testid="assistant-card-answer">
@@ -693,7 +817,10 @@ export function AssistantPage() {
                       streamText={streams[m.requestId] ?? ""}
                       error={m.error}
                       onCitation={(c) => openCitation(navigate, c)}
-                      onAskGeneral={() => void askKnowledge(sid, m.request.question, { allow_general: true, keep_chunks: [] })}
+                      // "일반 지식으로 답하기": the stored request again — the scope (and history) of the original
+                      // question, not what the selector shows by now (KNO-13) — with general knowledge allowed.
+                      // Not from a record (CON-16): its request was cut to fit, the scope's documents included.
+                      onAskGeneral={m.clipped === "all" ? undefined : () => void askKnowledge(sid, m.request.question, { ...m.request, allow_general: true, keep_chunks: [] })}
                       onFeedback={(id, v) => void feedback(sid, m.id, id, v)}
                       onCancel={m.pending && cancelling !== m.requestId ? () => cancelAnswer(m.requestId) : undefined}
                     />
@@ -707,7 +834,12 @@ export function AssistantPage() {
                     errors={m.errors}
                     editing={m.editing}
                     active={activePlan?.id === m.id}
-                    onChange={(plan) => patchPlan(sid, m.id, (x) => ({ ...x, plan, errors: null }))}
+                    // An edit drops the preview of the plan before it; the card fetches the one of the edited plan
+                    // and hands it back (PLN-14).
+                    editedPreview={m.preview}
+                    clipped={m.clipped}
+                    onPreview={(preview) => patchPlan(sid, m.id, (x) => ({ ...x, preview }), true)}
+                    onChange={(plan) => patchPlan(sid, m.id, (x) => ({ ...x, plan, errors: null, preview: undefined }), true)}
                     onExecute={() => void execute(sid, m.id)}
                     onCancel={() => cancelPlan(sid, m.id)}
                     onRephrase={() => focusInput(m.text)}
@@ -724,13 +856,15 @@ export function AssistantPage() {
                     pending={m.pending}
                     embeddingReady={embeddingReady}
                     onAsk={(q) => {
+                      // "이 결과로 질문": the model is asked now — not another search (KNO-4).
                       setEvidenceOnly(false);
-                      void send(q);
+                      void send(q, false);
                     }}
                   />
                 )}
-                {m.kind === "execution" && <ExecutionCard jobId={m.jobId} plan={m.plan} response={m.response} onFinished={onJobFinished} />}
-                {m.kind === "result" && <ResultCard execution={m.execution} plan={m.plan} response={m.response} />}
+                {/* The execution card's result comes from the job book, whole: only a record (`all`) is marked. */}
+                {m.kind === "execution" && <ExecutionCard jobId={m.jobId} plan={m.plan} response={m.response} uiResults={m.uiResults} onFinished={onJobFinished} clipped={m.clipped === "all" ? "all" : undefined} />}
+                {m.kind === "result" && <ResultCard execution={m.execution} plan={m.plan} response={m.response} uiResults={m.uiResults} clipped={m.clipped} />}
                 {m.kind === "clarify" && (
                   <ClarifyCard
                     question={clarificationQuestion(m.response.result.plan) || t("planner.clarify.fallback")}
@@ -745,17 +879,47 @@ export function AssistantPage() {
                     onCancel={() => cancelClarify(sid, m.id)}
                   />
                 )}
+                {m.kind === "reply" && (
+                  <div className="w-full rounded-lg border border-border bg-bg-elevated p-3 text-sm" role="group" aria-label={t("assistant.reply_label")} data-testid="assistant-card-reply">
+                    <p className="whitespace-pre-line selectable">{m.text}</p>
+                    <p className="mt-1 text-xs text-fg-subtle">{t("planner.card.source", { source: m.source })}</p>
+                  </div>
+                )}
                 {(m.kind === "executed" || m.kind === "help" || m.kind === "error") && (
-                  <div className="w-full rounded-lg border border-border bg-bg-elevated p-3 text-sm" role="group" aria-label={m.kind === "help" ? t("assistant.help_title") : m.kind === "error" ? t("common.error") : t("assistant.executed")} data-testid={`assistant-card-${m.kind}`}>
+                  <div
+                    className="w-full rounded-lg border border-border bg-bg-elevated p-3 text-sm"
+                    role="group"
+                    aria-label={m.kind === "help" ? t("assistant.help_title") : m.kind === "error" ? t("common.error") : executedLabel(m, t)}
+                    data-testid={`assistant-card-${m.kind}`}
+                    data-executed-status={m.kind === "executed" ? executedStatus(m) : undefined}
+                  >
                     {m.kind === "executed" && (
                       <div className="flex flex-col gap-1">
                         <div className="flex items-center gap-2">
-                          <Badge variant="ok">{t("assistant.executed")}</Badge>
+                          <Badge variant={executedStatus(m) === "done" ? "ok" : executedStatus(m) === "failed" ? "danger" : "warn"}>{executedLabel(m, t)}</Badge>
                           <span className="text-xs text-fg-subtle">
                             {m.source} · {t("assistant.confidence", { value: m.confidence.toFixed(2) })}
                           </span>
                         </div>
                         <p className="selectable">{m.text}</p>
+                        {m.undo && m.undo.length > 0 && (
+                          <div className="flex items-center gap-2">
+                            {m.undone ? (
+                              <span className="text-xs text-fg-muted" data-testid="executed-undone">
+                                {t("assistant.undone")}
+                              </span>
+                            ) : (
+                              <Button size="sm" variant="outline" onClick={() => activeId && void undoExecuted(activeId, m.id, m.undo ?? [])} data-testid="executed-undo">
+                                {t("assistant.undo_change")}
+                              </Button>
+                            )}
+                          </div>
+                        )}
+                        {(m.failures ?? []).map((failure, i) => (
+                          <p key={i} className="text-xs text-danger selectable" role="alert" data-testid="executed-failure">
+                            {t("planner.result.step_failed", { error: failure })}
+                          </p>
+                        ))}
                       </div>
                     )}
                     {m.kind === "help" && (
@@ -770,7 +934,7 @@ export function AssistantPage() {
                     {m.kind === "error" && (
                       <div className="flex items-start gap-2 text-danger" role="alert">
                         <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-                        <p className="selectable">{m.text}</p>
+                        <p className="min-w-0 selectable">{m.text}</p>
                       </div>
                     )}
                   </div>

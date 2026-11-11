@@ -60,6 +60,39 @@ test.describe("P6 projects", () => {
     await expect(page.getByTestId("checklist-wbs")).toHaveAttribute("data-missing", "false");
     await expect(page.getByTestId("checklist-test_report")).toHaveAttribute("data-missing", "false");
 
+    // UI-4: no column of the table is squeezed. The type ("요구사항정의서" used to break into three lines), the
+    // status and the date stay on one line; the path is a second line under the name.
+    const srsRow = page.getByTestId(`project-doc-${srs}`);
+    /** Number of text lines in a cell of the requirements row (the line boxes of its text nodes). */
+    const lines = (testId: string) =>
+      srsRow.getByTestId(testId).evaluate((el) => {
+        const tops = new Set<number>();
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          for (const r of range.getClientRects()) tops.add(Math.round(r.top));
+        }
+        return tops.size;
+      });
+    await expect(srsRow.getByTestId("project-doc-type")).toHaveText(ko.documents.doc_types.srs);
+    for (const cell of ["project-doc-name", "project-doc-type", "project-doc-status", "project-doc-review", "project-doc-added"]) expect(await lines(cell), `${cell} is one line`).toBe(1);
+    const nameBox = (await srsRow.getByTestId("project-doc-name").boundingBox())!;
+    const pathBox = (await srsRow.getByTestId("project-doc-path").boundingBox())!;
+    expect(pathBox.y, "the path is under the name").toBeGreaterThanOrEqual(nameBox.y + nameBox.height - 1);
+    await expect(srsRow.getByTestId("project-doc-path")).toHaveAttribute("title", /요구사항정의서-v1\.2\.pdf$/);
+    // A narrower tab (a small window, or 1280 px at about 150 %): the less important columns give way instead of
+    // squeezing the others, and nothing scrolls sideways.
+    await page.setViewportSize({ width: 860, height: 800 });
+    await expect(srsRow.getByTestId("project-doc-added")).toBeHidden();
+    await expect(srsRow.getByTestId("project-doc-review")).toBeHidden();
+    await expect(srsRow.getByTestId("project-doc-status")).toBeVisible();
+    for (const cell of ["project-doc-type", "project-doc-status"]) expect(await lines(cell), `${cell} is one line when narrow`).toBe(1);
+    expect((await srsRow.getByTestId("project-doc-name").boundingBox())!.width, "the name keeps a readable width").toBeGreaterThan(150);
+    for (const box of [page.locator("main#main"), page.getByTestId("project-documents-drop")]) expect(await box.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await expect(srsRow.getByTestId("project-doc-added")).toBeVisible();
+
     // Rules: the template's three rules, then two sentences converted in the grid.
     await page.getByTestId("project-tab-rules").click();
     await expect(page.getByTestId("rule-list").locator('[data-testid^="rule-"][data-rule-enabled]')).toHaveCount(3);
@@ -160,6 +193,63 @@ test.describe("P6 projects", () => {
     await rules.last().getByTestId("rule-delete").click();
     await expect(rules).toHaveCount(4, { timeout: 10_000 });
     await expect(page.getByTestId("toaster")).toContainText(ko.projects.rules.deleted);
+  });
+
+  test("보완요청서: a missing required document is a finding of its own, and nothing ticked sends nothing (PRJ-2)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    const { srs, test } = await importTrio(page);
+    await page.getByTestId("nav-projects").click();
+    await page.getByTestId("projects-new").click();
+    await page.getByTestId("project-name").fill("서류 누락 사업");
+    await page.getByTestId("project-template").click();
+    await page.getByRole("option", { name: ko.projects.templates.builtin.internal_dev }).click();
+    await page.getByTestId("project-submit").click();
+    await expect(page.getByTestId("page-project")).toBeVisible();
+    // The WBS is left out: the checklist misses it and the rule that compares it cannot be checked.
+    await page.getByTestId("project-add-documents").click();
+    await page.getByTestId(`project-add-doc-${srs}`).check();
+    await page.getByTestId(`project-add-doc-${test}`).check();
+    await page.getByTestId("project-add-done").click();
+    await expect(page.getByTestId("project-documents-table").locator("tbody tr")).toHaveCount(2);
+    await expect(page.getByTestId("checklist-wbs")).toHaveAttribute("data-missing", "true");
+    await page.getByTestId("project-check-header").click();
+    await expect(page.getByTestId("project-verdicts")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("verdict-missing")).toContainText("1");
+
+    await page.getByTestId("project-supplement").click();
+    const dialog = page.getByTestId("supplement-dialog");
+    await expect(dialog).toBeVisible();
+    // The missing document is a row of its own, ticked (it used to be a note that dropped out of the request as
+    // soon as a rule finding was ticked); the rule that only failed for lack of that document is offered, not ticked.
+    const missingDoc = dialog.getByTestId("supplement-finding-missing_doc:wbs");
+    await expect(missingDoc).toBeChecked();
+    await expect(dialog.locator('[data-testid="supplement-row"][data-kind="missing_doc"]')).toContainText("WBS");
+    const ruleRow = dialog.locator('[data-testid="supplement-row"][data-kind="result"]');
+    await expect(ruleRow).toHaveCount(1);
+    await expect(ruleRow).toHaveAttribute("data-verdict", "missing");
+    await expect(ruleRow).toContainText(ko.projects.supplement.covered);
+    await expect(dialog.getByTestId("supplement-findings").locator("input:checked")).toHaveCount(1);
+    // Nothing ticked: no request (an empty selection would stand for "everything").
+    await missingDoc.uncheck();
+    await expect(dialog.getByTestId("supplement-generate")).toBeDisabled();
+    await expect(dialog.getByTestId("supplement-pick-one")).toBeVisible();
+    await dialog.getByTestId("supplement-select-all").click();
+    await expect(dialog.getByTestId("supplement-findings").locator("input:checked")).toHaveCount(2);
+    await ruleRow.locator("input").uncheck();
+    await expect(missingDoc).toBeChecked();
+    // The request carries the missing document.
+    await dialog.getByTestId("supplement-generate").click();
+    await expect(page.getByTestId("page-generate")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("generate-title")).toHaveValue(/보완요청서/);
+    const requested = page.getByTestId("generate-table-findings").locator('[data-testid^="generate-row-findings-"]');
+    await expect(requested).toHaveCount(1);
+    await expect(requested.first().locator("input").nth(1)).toHaveValue(/WBS/);
+    // A project draft keeps its project (CON-3): the form says where reference material is searched, with a way out.
+    const projectScope = page.getByTestId("generate-project-scope");
+    await expect(projectScope).toContainText(tpl(ko.generate.form.project_scope, { name: "서류 누락 사업" }));
+    await page.getByTestId("generate-project-scope-clear").click();
+    await expect(projectScope).toHaveCount(0);
   });
 
   test("shared document: the second project keeps a tracked copy under its folder, dropped with the membership", async ({ page }) => {

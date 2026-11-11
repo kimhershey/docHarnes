@@ -1,7 +1,7 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
-  "serialNumber": "urn:uuid:4ec34815-f346-8acc-9bdd-574abb1abc45",
+  "serialNumber": "urn:uuid:a3af579a-d2df-8e0b-86df-fb6dec80744b",
   "version": 1,
   "metadata": {
     "tools": {
@@ -13989,6 +13989,35 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/tauri-plugin-single-instance@2.5.5",
+      "name": "tauri-plugin-single-instance",
+      "version": "2.5.5",
+      "scope": "required",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "purl": "pkg:cargo/tauri-plugin-single-instance@2.5.5",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/tauri-apps/plugins-workspace"
+        }
+      ],
+      "properties": [
+        {
+          "name": "doculens:ecosystem",
+          "value": "cargo"
+        },
+        {
+          "name": "doculens:scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/tauri-runtime@2.12.2",
       "name": "tauri-runtime",
       "version": "2.12.2",
@@ -20611,6 +20640,29 @@
         {
           "name": "doculens:note",
           "value": "cpu + vulkan packs (official release zips); Lite and Full installers"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:generic/llvm-openmp?bundled_with=llama.cpp%40b12066",
+      "name": "LLVM OpenMP runtime (libomp.dll, inside the llama.cpp packs)",
+      "version": "bundled with llama.cpp b12066",
+      "scope": "required",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 WITH LLVM-exception"
+        }
+      ],
+      "purl": "pkg:generic/llvm-openmp?bundled_with=llama.cpp%40b12066",
+      "properties": [
+        {
+          "name": "doculens:ecosystem",
+          "value": "bundled-asset"
+        },
+        {
+          "name": "doculens:note",
+          "value": "libomp.dll + LICENSE-LLVM-OpenMP in every official pack folder"
         }
       ]
     },

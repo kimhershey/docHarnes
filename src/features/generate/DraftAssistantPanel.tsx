@@ -7,9 +7,12 @@ import { Input, Textarea } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Spinner } from "@/components/ui/spinner";
+import { useGenerateBudgetInfo } from "@/lib/queries";
 import type { Draft } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
-import { sectionsOf } from "./draft";
+import { CharLimit } from "./CharLimit";
+import { NO_SCOPE, sectionsOf } from "./draft";
 
 /** One finished revision: what was asked, where, and the note the draft recorded. */
 export interface ReviseLogEntry {
@@ -20,8 +23,9 @@ export interface ReviseLogEntry {
 }
 
 /**
- * 초안 어시스턴트 (0.7.0 plan §1.5) — the bottom of the request column once a draft exists: a scope (the whole
- * draft, one section to rewrite, a new section after one or at the end), an instruction and the run button.
+ * 초안 어시스턴트 (0.7.0 plan §1.5) — in the request column once a draft exists, below the form (`placement`
+ * "bottom") or, in the screen's narrow layout, above it ("top", UI-5): a scope (the whole draft, one section to
+ * rewrite, a new section after one or at the end), an instruction and the run button.
  * The revision is the ordinary draft job with `DraftRequest.revise`; the page follows it like a generation
  * and appends the outcome to the log. The ref is the instruction box, focused by the editor's per-section
  * "AI 수정" buttons.
@@ -30,6 +34,7 @@ export const DraftAssistantPanel = forwardRef<
   HTMLTextAreaElement,
   {
     draft: Draft;
+    placement?: "top" | "bottom";
     /** Scope picker value (`reviseScopeToPicker`). */
     scope: string;
     onScope: (value: string) => void;
@@ -42,14 +47,17 @@ export const DraftAssistantPanel = forwardRef<
     excludedCount: number;
     log: ReviseLogEntry[];
   }
->(function DraftAssistantPanel({ draft, scope, onScope, heading, onHeading, instruction, onInstruction, onRun, running, excludedCount, log }, ref) {
+>(function DraftAssistantPanel({ draft, placement = "bottom", scope, onScope, heading, onHeading, instruction, onInstruction, onRun, running, excludedCount, log }, ref) {
   const { t, i18n } = useTranslation();
+  const { data: budgetInfo } = useGenerateBudgetInfo();
   const sections = sectionsOf(draft.body);
   const untitled = t("generate.revise.untitled");
-  const canRun = instruction.trim().length > 0 && !running;
+  // No scope (the picked section was removed by an edit, GEN-10): nothing runs until one is picked again.
+  const noScope = scope === NO_SCOPE;
+  const canRun = instruction.trim().length > 0 && !running && !noScope;
   const isInsert = scope.startsWith("insert_after:");
   return (
-    <section className="flex flex-col gap-2 border-t border-border pt-3" aria-labelledby="gen-revise-title" data-testid="generate-revise-panel">
+    <section className={cn("flex flex-col gap-2 border-border", placement === "top" ? "border-b pb-3" : "border-t pt-3")} aria-labelledby="gen-revise-title" data-testid="generate-revise-panel" data-placement={placement}>
       <h2 id="gen-revise-title" className="flex items-center gap-1.5 text-sm font-semibold">
         <Sparkles className="size-4 text-accent" aria-hidden="true" />
         {t("generate.revise.title")}
@@ -58,8 +66,8 @@ export const DraftAssistantPanel = forwardRef<
       <div className="flex flex-col gap-1.5">
         <Label htmlFor="gen-revise-scope">{t("generate.revise.scope")}</Label>
         <Select value={scope} onValueChange={onScope}>
-          <SelectTrigger id="gen-revise-scope" className="h-8" aria-label={t("generate.revise.scope")} data-testid="generate-revise-scope">
-            <SelectValue />
+          <SelectTrigger id="gen-revise-scope" className={cn("h-8", noScope && "border-warn")} aria-label={t("generate.revise.scope")} data-testid="generate-revise-scope" data-scope={noScope ? "none" : scope}>
+            <SelectValue placeholder={t("generate.revise.scope_none")} />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="whole" data-testid="generate-revise-scope-whole">
@@ -80,6 +88,11 @@ export const DraftAssistantPanel = forwardRef<
             </SelectItem>
           </SelectContent>
         </Select>
+        {noScope && (
+          <p className="text-xs text-warn" role="status" data-testid="generate-revise-scope-lost">
+            {t("generate.revise.scope_lost")}
+          </p>
+        )}
       </div>
       {isInsert && (
         <div className="flex flex-col gap-1.5">
@@ -106,6 +119,7 @@ export const DraftAssistantPanel = forwardRef<
           lang={i18n.language}
           data-testid="generate-revise-instruction"
         />
+        <CharLimit text={instruction} max={budgetInfo?.instruction_max_chars} testId="generate-revise-limit" />
       </div>
       {excludedCount > 0 && <p className="text-xs text-fg-muted">{t("generate.form.excluded_hint", { count: excludedCount })}</p>}
       <Button variant="secondary" onClick={onRun} disabled={!canRun} data-testid="generate-revise-run">

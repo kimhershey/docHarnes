@@ -1,7 +1,8 @@
 import { create } from "zustand";
 
+import type { UiOpResult } from "@/lib/commands";
 import { api } from "@/lib/ipc";
-import type { Answer, AnswerRequest, ChatMessageRow, ChatSessionSummary, Op, Plan, PlanExecution, PlanIssue, PlanResponse, SearchMode, SearchResponse, UiPlanContext } from "@/lib/types";
+import type { Answer, AnswerRequest, ChatMessageRow, ChatSessionSummary, Op, Plan, PlanExecution, PlanIssue, PlanPreview, PlanResponse, SearchMode, SearchResponse, UiPlanContext } from "@/lib/types";
 import { errorCode, errorMessage } from "@/lib/utils";
 
 import { useAttachmentsStore } from "./attachments";
@@ -11,25 +12,65 @@ export type PlanStatus = "pending" | "executing" | "done" | "cancelled";
 /** Clarification card lifecycle: waiting for the user's reply, replied to (되묻기), or cancelled. */
 export type ClarifyStatus = "pending" | "answered" | "cancelled";
 
-export type Message =
+/**
+ * Set on the stored copy of a message that was too large to be stored whole (`storedMessage`) — so on a
+ * message read back after a restart, never on one made in this session:
+ * - `lists`: the lists that are only shown (the rows of a preview or of a result, id lists nothing reads) hold
+ *   their first rows, and `<name>_total` next to a list says how many there were. The plan, its scope and
+ *   what the card's buttons need are whole.
+ * - `all`: even that did not fit. Every long list — the document ids of a scope included — and every long
+ *   text is cut. The message is a record: nothing may run from it again (a plan that was waiting for
+ *   approval is stored as cancelled).
+ */
+export type Clipped = "lists" | "all";
+
+export type Message = { clipped?: Clipped } & (
   | { id: number; createdAt?: string; role: "user"; text: string; attachments?: { id: string; name: string }[] }
-  | { id: number; createdAt?: string; role: "assistant"; kind: "executed"; text: string; source: string; confidence: number }
+  /** UI ops that ran at once. `failures`: the errors of the ops that failed (absent = all ran), `ran`: how many did run. */
+  /**
+   * `undo` (0.8.0): the ops that put back what a settings change replaced ("UI 배율 100 → 130" → back to 100);
+   * `undone` once they ran.
+   */
+  | { id: number; createdAt?: string; role: "assistant"; kind: "executed"; text: string; source: string; confidence: number; failures?: string[]; ran?: number; undo?: Op[]; undone?: boolean }
+  /** A ready reply shown as it is (0.8.0): a fixed greeting, "nothing to do", "this cannot be done". No model call. */
+  | { id: number; createdAt?: string; role: "assistant"; kind: "reply"; text: string; source: string }
   | { id: number; createdAt?: string; role: "assistant"; kind: "answer"; requestId: string; request: AnswerRequest; answer: Answer | null; error: unknown; pending: boolean }
   | { id: number; createdAt?: string; role: "assistant"; kind: "help" }
-  | { id: number; createdAt?: string; role: "assistant"; kind: "plan"; text: string; response: PlanResponse; plan: Plan; context: UiPlanContext; status: PlanStatus; errors: PlanIssue[] | null; editing: boolean }
-  | { id: number; createdAt?: string; role: "assistant"; kind: "execution"; text: string; response: PlanResponse; plan: Plan; jobId: string }
-  | { id: number; createdAt?: string; role: "assistant"; kind: "result"; text: string; response: PlanResponse; plan: Plan; execution: PlanExecution }
+  /**
+   * `text` is the user's sentence. `plannedText` is set when the plan was made from something else — the
+   * 되묻기 text (`askBackText`: sentence + question + reply) — and goes to the executor with the plan
+   * (`ExecuteArgs.planned_text`), which re-checks the plan against the text it was made from (PLN-7).
+   */
+  /**
+   * `preview`: the preview of `plan` once the user edited it — `response.preview` is the preview of the plan
+   * as interpreted (PLN-14). Absent while `plan` is unedited, and dropped at every edit until the fresh one
+   * arrives; so when set it always belongs to `plan`.
+   */
+  | { id: number; createdAt?: string; role: "assistant"; kind: "plan"; text: string; plannedText?: string; response: PlanResponse; plan: Plan; preview?: PlanPreview; context: UiPlanContext; status: PlanStatus; errors: PlanIssue[] | null; editing: boolean }
+  /** `uiResults`: what became of the execution's `ui_actions` once the UI ran them (one per action, in order). */
+  | { id: number; createdAt?: string; role: "assistant"; kind: "execution"; text: string; response: PlanResponse; plan: Plan; jobId: string; uiResults?: UiOpResult[] }
+  | { id: number; createdAt?: string; role: "assistant"; kind: "result"; text: string; response: PlanResponse; plan: Plan; execution: PlanExecution; uiResults?: UiOpResult[] }
   | { id: number; createdAt?: string; role: "assistant"; kind: "clarify"; text: string; response: PlanResponse; status: ClarifyStatus }
   /** "근거만 찾기" (0.5.0): the hits of a knowledge search, no model call. */
   | { id: number; createdAt?: string; role: "assistant"; kind: "evidence"; query: string; mode: SearchMode; response: SearchResponse | null; error: unknown; pending: boolean }
-  | { id: number; createdAt?: string; role: "assistant"; kind: "error"; text: string };
+  | { id: number; createdAt?: string; role: "assistant"; kind: "error"; text: string }
+);
 
 export type PlanMessage = Extract<Message, { kind: "plan" }>;
+
+export interface PatchOptions {
+  /** The workspace generation the request started in (see `accepts`). */
+  generation?: number;
+  /** Write after `PATCH_WRITE_DELAY_MS` without further patches instead of at once (plan editor input). */
+  defer?: boolean;
+}
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 export type NewMessage = DistributiveOmit<Message, "id" | "createdAt">;
 
 /** The stable empty list (a selector must return the same reference while nothing changes). */
 export const EMPTY_MESSAGES: Message[] = [];
+/** What `push` returns for a message that was not accepted (see `accepts`): no message has this id. */
+export const DROPPED = -1;
 /** Auto titles: the first user message clipped to this many characters (the core applies the same rule). */
 export const AUTO_TITLE_CHARS = 40;
 const ACTIVE_KEY = "doculens.assistant.active";
@@ -39,31 +80,66 @@ const ACTIVE_KEY = "doculens.assistant.active";
  * message list, stored in the workspace DB through the `chat_*` commands (the UI's message
  * JSON as it is; the core only derives the auto title). The store is the live cache: the
  * session list and the active session's messages are hydrated when the workspace is bound,
- * the other sessions' messages when they are selected. Messages are written after `push`
- * and after every `patch` (a card settling: answer done, plan status change, edit) — never
- * on stream deltas, which live in the knowledge store. The `ui_actions` owed by job-backed
+ * the other sessions' messages when they are selected. Messages are written at `push` and
+ * at every `patch` (a card settling: answer done, plan status change) — at once, so a plan
+ * that ran is not restored as "승인 대기" (and run again) when the app closes right after;
+ * only the plan editor's keystrokes are written together after a short delay
+ * (`flushChatWrites` sends those before the workspace is switched or the page goes away).
+ * Stream deltas are never written; they live in the knowledge store. The `ui_actions` owed by job-backed
  * plans are tracked by job id per workspace, whichever session is open, so the assistant
  * page can run them exactly once when it observes the finished job.
+ *
+ * A request can outlive its conversation: the workspace is switched (by the user, or by the
+ * assistant's own "워크스페이스 … 열어") or the chat is deleted while a plan / answer is still on
+ * its way. What such a request writes afterwards must go nowhere — the backend is already on the
+ * other workspace's database and re-creates a session it does not know, which leaves an untitled
+ * ghost chat there. So a request captures `generation` together with its session id when it
+ * starts, and `push` / `patch` drop what arrives for another generation or for a session that
+ * is no longer listed (`accepts`).
  */
 interface AssistantState {
   /** Workspace the conversations belong to (null = none yet). */
   workspace: string | null;
+  /** Counts the workspaces this store was bound to: it changes on every switch (`bind` to another path, `resetAssistant`). */
+  generation: number;
   /** The session list / active messages are being loaded (the composer waits). */
   hydrating: boolean;
   sessions: ChatSessionSummary[];
   activeId: string | null;
   messagesBySession: Record<string, Message[]>;
-  /** Sessions whose messages were loaded from the backend. */
+  /**
+   * Sessions whose messages were loaded from the backend. Message ids continue after the highest stored
+   * one, so nothing is accepted for a session before it is loaded: a message numbered without knowing the
+   * stored ones would replace the stored message with the same number (KNO-15).
+   */
   loaded: Record<string, boolean>;
+  /** Sessions whose stored messages could not be read; they stay closed for writing until `reload` succeeds. */
+  loadFailed: Record<string, boolean>;
   /** Job id → UI ops the plan contained (replaced by the execution's `ui_actions` once known) that have not run yet. */
   pendingUiActions: Record<string, Op[]>;
   nextId: number;
   /** Binds the conversations to a workspace; a different path starts afresh and hydrates. */
   bind: (workspace: string | null) => void;
   hydrate: () => Promise<void>;
-  /** Appends to the session captured when the request started (never "whatever is active now"). */
-  push: (sessionId: string, message: NewMessage) => number;
-  patch: (sessionId: string, id: number, f: (m: Message) => Message) => void;
+  /**
+   * Whether a request that started in `generation` (omitted = now) may still write into `sessionId`:
+   * the store is on the same workspace and the session is one of its chats (not deleted meanwhile).
+   */
+  accepts: (sessionId: string, generation?: number) => boolean;
+  /**
+   * Appends to the session captured when the request started (never "whatever is active now").
+   * Returns the message id, or `DROPPED` when the conversation is gone (`accepts`) or its stored
+   * messages are not loaded (yet).
+   */
+  push: (sessionId: string, message: NewMessage, generation?: number) => number;
+  /** "다시 시도": reads the messages of a session whose load failed. */
+  reload: (id: string) => Promise<void>;
+  /**
+   * Changes a message. The new state is written at once — a card that settled (plan executed / cancelled,
+   * answer finished, question answered) must not be restored in its earlier state after a restart —
+   * unless `defer` is set: keystroke-wise edits are written together shortly after the last one.
+   */
+  patch: (sessionId: string, id: number, f: (m: Message) => Message, options?: PatchOptions) => void;
   /** "새 채팅": a fresh session (the active one is reused while it is still empty). Resolves to its id. */
   newSession: () => Promise<string | null>;
   select: (id: string) => Promise<void>;
@@ -108,7 +184,7 @@ function withoutHistory<T extends { history?: unknown }>(ctx: T): T {
  * conversation history their `context` and `response.context` carry (otherwise every card would store every
  * earlier turn again).
  */
-function storable(m: Message): unknown {
+function storable(m: Message): Message {
   if (m.role !== "assistant") return m;
   if (m.kind === "answer" || m.kind === "evidence") return { ...m, error: storableError(m.error) };
   if (m.kind === "plan") return { ...m, context: withoutHistory(m.context), response: { ...m.response, context: withoutHistory(m.response.context) } };
@@ -116,6 +192,119 @@ function storable(m: Message): unknown {
     return { ...m, response: { ...m.response, context: withoutHistory(m.response.context) } };
   }
   return m;
+}
+
+/**
+ * What a stored message may take. `chat_message_put` refuses a message above 2,000,000 bytes of JSON
+ * (`src-tauri/src/commands/knowledge.rs`); the budget leaves room to spare, since the backend measures its
+ * own serialisation.
+ */
+const STORED_BUDGET_BYTES = 1_500_000;
+/** Rows kept of a list that is only shown, tried in this order until the message fits. */
+const KEPT_ROWS = [200, 50, 10] as const;
+/** A record (`Clipped` "all") keeps this many entries of every list and this many characters of every text (tried in this order). */
+const RECORD_ROWS = 10;
+const RECORD_CHARS = [20_000, 2_000, 200] as const;
+
+function fitsStore(value: unknown): boolean {
+  const json = JSON.stringify(value) ?? "";
+  // A UTF-16 unit is at most three bytes of UTF-8: most messages need no counting.
+  return json.length * 3 <= STORED_BUDGET_BYTES || new TextEncoder().encode(json).length <= STORED_BUDGET_BYTES;
+}
+
+/** The first `chars` characters of a long text (never half of a surrogate pair — that is not valid JSON for the backend). */
+function cutText(text: string, chars: number): string {
+  if (text.length <= chars) return text;
+  const last = text.charCodeAt(chars - 1);
+  return `${text.slice(0, last >= 0xd800 && last <= 0xdbff ? chars - 1 : chars)}…`;
+}
+
+/**
+ * `value` with every list longer than `rows` cut to its first `rows` entries (and every text longer than
+ * `chars`, when given). A cut list that is a property gets `<key>_total` next to it: how many there were.
+ */
+function clip(value: unknown, rows: number, chars = Number.POSITIVE_INFINITY): unknown {
+  if (typeof value === "string") return cutText(value, chars);
+  if (Array.isArray(value)) return (value.length > rows ? value.slice(0, rows) : value).map((v) => clip(v, rows, chars));
+  if (typeof value !== "object" || value === null) return value;
+  const record = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [key, v] of Object.entries(record)) out[key] = clip(v, rows, chars);
+  for (const [key, v] of Object.entries(record)) {
+    if (!Array.isArray(v) || v.length <= rows) continue;
+    // A list cut before (a message read back and written again) keeps the total it came with.
+    const known = record[`${key}_total`];
+    out[`${key}_total`] = Math.max(v.length, typeof known === "number" ? known : 0);
+  }
+  return out;
+}
+
+/** The steps of a preview / an execution with the lists of each payload cut (the steps themselves stay). */
+function clipSteps<T extends { payload: unknown }>(steps: T[], rows: number): T[] {
+  return Array.isArray(steps) ? steps.map((s) => ({ ...s, payload: clip(s.payload, rows) })) : steps;
+}
+
+/** A preview with its lists cut: the document ids and the rows of each step's payload. */
+function clipPreview<T extends PlanPreview | null | undefined>(preview: T, rows: number): T {
+  if (!preview) return preview;
+  const { steps, ...rest } = preview;
+  return { ...(clip(rest, rows) as typeof rest), steps: clipSteps(steps, rows) } as T;
+}
+
+/** A planner response with the lists that are only shown cut: its preview and the selection its context echoes. */
+function clipResponse(response: PlanResponse, rows: number): PlanResponse {
+  const context = response.context ? { ...response.context, ...(clip({ selected_doc_ids: response.context.selected_doc_ids }, rows) as { selected_doc_ids: string[] }) } : response.context;
+  return { ...response, preview: clipPreview(response.preview, rows), context };
+}
+
+/**
+ * The message with the lists cut that are only shown — never the plan, its scope, the context it runs with,
+ * the undo batches or the UI ops of an execution: what a card does after a restart is what it did before.
+ * The same object when the message has no such list.
+ */
+function withClippedLists(m: Message, rows: number): Message {
+  if (m.role !== "assistant") return m;
+  switch (m.kind) {
+    case "plan":
+      return { ...m, response: clipResponse(m.response, rows), ...(m.preview ? { preview: clipPreview(m.preview, rows) } : {}) };
+    case "execution":
+    case "clarify":
+      return { ...m, response: clipResponse(m.response, rows) };
+    case "result": {
+      const { steps, ui_actions, batches, ...rest } = m.execution;
+      const execution: PlanExecution = { ...(clip(rest, rows) as typeof rest), steps: clipSteps(steps, rows), ui_actions, batches };
+      return { ...m, response: clipResponse(m.response, rows), execution };
+    }
+    default:
+      return m;
+  }
+}
+
+/**
+ * The message as `chat_message_put` gets it. The backend takes 2,000,000 bytes per message; a card above
+ * that was not stored at all and was gone from the chat after a restart (CON-16) — the preview of a file
+ * op lists every file, about 400 bytes each. So a message over the budget is stored smaller (`Clipped`):
+ * first with the lists that are only shown cut to their first rows — the counts beside them are those of
+ * the whole — and, when it is the document ids of the scope itself (or one long text) that do not fit, as a
+ * record nothing runs from. The message on screen stays whole either way.
+ */
+export function storedMessage(m: Message): Message {
+  const whole = storable(m);
+  if (fitsStore(whole)) return whole;
+  for (const rows of KEPT_ROWS) {
+    const lists = withClippedLists(whole, rows);
+    if (lists === whole) break;
+    const cut: Message = { ...lists, clipped: whole.clipped === "all" ? "all" : "lists" };
+    if (fitsStore(cut)) return cut;
+  }
+  let record = whole;
+  for (const chars of RECORD_CHARS) {
+    record = { ...(clip(whole, RECORD_ROWS, chars) as Message), clipped: "all" };
+    if (fitsStore(record)) break;
+  }
+  // The ids of its scope are a count now: a plan that was waiting cannot be approved from this copy.
+  if (record.role === "assistant" && record.kind === "plan" && (record.status === "pending" || record.status === "executing")) return { ...record, status: "cancelled", editing: false };
+  return record;
 }
 
 const INTERRUPTED = { code: "chat_interrupted", message: "chat_interrupted" };
@@ -160,90 +349,174 @@ function touch(sessions: ChatSessionSummary[], id: string, message: Message, cre
   return [next, ...sessions.filter((s) => s.id !== id)];
 }
 
-/** Patches of one message are written together, this long after the last one (plan edits are keystroke-wise). */
+/** Deferred patches of one message (plan edits are keystroke-wise) are written together, this long after the last one. */
 export const PATCH_WRITE_DELAY_MS = 300;
-const pendingWrites = new Map<string, { timer: ReturnType<typeof setTimeout>; write: () => void }>();
 
-/** Writes every pending patch now (tests; the app relies on the delay being short). */
-export function flushChatWrites(): void {
-  for (const [key, w] of pendingWrites) {
-    clearTimeout(w.timer);
-    pendingWrites.delete(key);
-    w.write();
+/**
+ * One slot per message with something to write. At most one write of a message is in flight — a newer
+ * state waits for it, so the stored message can never go back to an older one — and a waiting patch is
+ * written once its delay has passed. A slot belongs to the workspace generation it was opened in.
+ */
+interface WriteSlot {
+  sessionId: string;
+  id: number;
+  generation: number;
+  timer: ReturnType<typeof setTimeout> | null;
+  inflight: Promise<void> | null;
+  /** The message changed while a write was in flight: write once more when that one is done. */
+  again: boolean;
+}
+const writeSlots = new Map<string, WriteSlot>();
+/** Sessions being deleted: nothing more is written into them. */
+const removing = new Set<string>();
+
+/** Writes the message's latest state now (after the write in flight, if there is one). */
+function writeNow(key: string, slot: WriteSlot): void {
+  if (slot.timer) {
+    clearTimeout(slot.timer);
+    slot.timer = null;
+  }
+  if (slot.inflight) {
+    slot.again = true;
+    return;
+  }
+  slot.again = false;
+  const s = useAssistantStore.getState();
+  // The workspace may have changed or the chat been deleted while the write waited: then it goes nowhere.
+  const m = s.accepts(slot.sessionId, slot.generation) ? (s.messagesBySession[slot.sessionId] ?? []).find((x) => x.id === slot.id) : undefined;
+  if (!m) {
+    if (writeSlots.get(key) === slot) writeSlots.delete(key);
+    return;
+  }
+  slot.inflight = api
+    .chatMessagePut(slot.sessionId, m.id, storedMessage(m))
+    .then(
+      () => undefined,
+      (e: unknown) => console.warn("chat message not stored", e),
+    )
+    .then(() => {
+      slot.inflight = null;
+      if (slot.again) writeNow(key, slot);
+      else if (!slot.timer && writeSlots.get(key) === slot) writeSlots.delete(key);
+    });
+}
+
+function scheduleWrite(sessionId: string, id: number, generation: number, delayMs: number): void {
+  const key = `${sessionId}/${id}`;
+  let slot = writeSlots.get(key);
+  if (!slot || slot.generation !== generation) {
+    slot = { sessionId, id, generation, timer: null, inflight: null, again: false };
+    writeSlots.set(key, slot);
+  }
+  const current = slot;
+  if (delayMs <= 0) {
+    writeNow(key, current);
+    return;
+  }
+  if (current.timer) clearTimeout(current.timer);
+  current.timer = setTimeout(() => {
+    current.timer = null;
+    writeNow(key, current);
+  }, delayMs);
+}
+
+/** Forgets what is still waiting (all of it, or one session's); writes in flight finish on their own. */
+function dropWaitingWrites(sessionId?: string): void {
+  for (const [key, slot] of [...writeSlots]) {
+    if (sessionId !== undefined && slot.sessionId !== sessionId) continue;
+    if (slot.timer) clearTimeout(slot.timer);
+    slot.timer = null;
+    slot.again = false;
+    if (sessionId === undefined || !slot.inflight) writeSlots.delete(key);
   }
 }
 
+/** Resolves once no write of the session is in flight any more. */
+async function writesSettled(sessionId: string): Promise<void> {
+  for (;;) {
+    const inflight = [...writeSlots.values()].filter((s) => s.sessionId === sessionId && s.inflight).map((s) => s.inflight);
+    if (inflight.length === 0) return;
+    await Promise.all(inflight);
+  }
+}
+
+/**
+ * Writes every waiting patch now; resolves once nothing is in flight any more. To be awaited before the
+ * backend is told to open / close a workspace: afterwards the writes would reach the other database, so
+ * `bind` / `resetAssistant` can only drop what is still waiting.
+ */
+export async function flushChatWrites(): Promise<void> {
+  for (;;) {
+    for (const [key, slot] of [...writeSlots]) if (slot.timer) writeNow(key, slot);
+    const inflight = [...writeSlots.values()].filter((s) => s.inflight).map((s) => s.inflight);
+    if (inflight.length === 0) return;
+    await Promise.all(inflight);
+  }
+}
+
+// The page is going away (window closed, reload): send what still waits. Best effort — the calls are
+// asynchronous — which is why state transitions never wait in the first place.
+if (typeof window !== "undefined") window.addEventListener("pagehide", () => void flushChatWrites());
+
 export const useAssistantStore = create<AssistantState>((set, get) => {
-  const write = (sessionId: string, m: Message) => {
-    void api.chatMessagePut(sessionId, m.id, storable(m)).catch((e: unknown) => console.warn("chat message not stored", e));
-  };
-  /** A new message is written at once. */
-  const persist = (sessionId: string, m: Message) => {
-    const key = `${sessionId}/${m.id}`;
-    const w = pendingWrites.get(key);
-    if (w) {
-      clearTimeout(w.timer);
-      pendingWrites.delete(key);
-    }
-    write(sessionId, m);
-  };
-  /** A patched message is written once the patches settle (the latest state of the message at that time). */
-  const persistSoon = (sessionId: string, id: number) => {
-    const key = `${sessionId}/${id}`;
-    const prev = pendingWrites.get(key);
-    if (prev) clearTimeout(prev.timer);
-    const doWrite = () => {
-      pendingWrites.delete(key);
-      const m = (get().messagesBySession[sessionId] ?? []).find((x) => x.id === id);
-      if (m) write(sessionId, m);
-    };
-    pendingWrites.set(key, { timer: setTimeout(doWrite, PATCH_WRITE_DELAY_MS), write: doWrite });
-  };
   const bumpNextId = (rows: ChatMessageRow[]) => {
     const max = rows.reduce((acc, r) => Math.max(acc, r.seq), 0);
     if (max >= get().nextId) set({ nextId: max + 1 });
   };
-  /** Loads a session's messages once (the workspace may change meanwhile: then the result is dropped). */
+  /**
+   * Loads a session's messages once (the workspace may change meanwhile: then the result is dropped).
+   * A failed read leaves the session unloaded — shown with a retry, closed for writing — instead of
+   * pretending it is empty.
+   */
   const load = async (id: string) => {
-    const ws = get().workspace;
+    const generation = get().generation;
     if (get().loaded[id]) return;
     try {
       const rows = await api.chatMessagesList(id);
-      if (get().workspace !== ws) return;
+      if (get().generation !== generation || !get().sessions.some((x) => x.id === id)) return;
       const messages = rows.map(restoreMessage).filter((m): m is Message => m !== null);
       bumpNextId(rows);
-      set((s) => ({ messagesBySession: { ...s.messagesBySession, [id]: messages }, loaded: { ...s.loaded, [id]: true } }));
+      set((s) => {
+        const loadFailed = { ...s.loadFailed };
+        delete loadFailed[id];
+        return { messagesBySession: { ...s.messagesBySession, [id]: messages }, loaded: { ...s.loaded, [id]: true }, loadFailed };
+      });
     } catch (e) {
       console.warn("chat session not loaded", e);
-      if (get().workspace !== ws) return;
-      set((s) => ({ messagesBySession: { ...s.messagesBySession, [id]: s.messagesBySession[id] ?? [] }, loaded: { ...s.loaded, [id]: true } }));
+      if (get().generation !== generation) return;
+      set((s) => ({ loadFailed: { ...s.loadFailed, [id]: true } }));
     }
   };
 
   return {
     workspace: null,
+    generation: 0,
     hydrating: false,
     sessions: [],
     activeId: null,
     messagesBySession: {},
     loaded: {},
+    loadFailed: {},
     pendingUiActions: {},
     nextId: 1,
 
     bind: (workspace) => {
       if (get().workspace === workspace) return;
-      set({ workspace, sessions: [], activeId: null, messagesBySession: {}, loaded: {}, pendingUiActions: {}, hydrating: workspace !== null });
+      // The backend is already on the other workspace: what still waits to be written belongs to the old one.
+      dropWaitingWrites();
+      set((s) => ({ workspace, generation: s.generation + 1, sessions: [], activeId: null, messagesBySession: {}, loaded: {}, loadFailed: {}, pendingUiActions: {}, hydrating: workspace !== null }));
       if (workspace !== null) void get().hydrate();
     },
 
     hydrate: async () => {
       const ws = get().workspace;
+      const generation = get().generation;
       if (!ws) return;
       try {
         let sessions = await api.chatSessionsList();
-        if (get().workspace !== ws) return;
+        if (get().generation !== generation) return;
         if (sessions.length === 0) sessions = [await api.chatSessionCreate(null)];
-        if (get().workspace !== ws) return;
+        if (get().generation !== generation) return;
         const remembered = readActive(ws);
         const activeId = (sessions.find((s) => s.id === remembered) ?? sessions[0]!).id;
         set({ sessions, activeId });
@@ -252,11 +525,18 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
       } catch (e) {
         console.warn("chat sessions not loaded", e);
       } finally {
-        if (get().workspace === ws) set({ hydrating: false });
+        if (get().generation === generation) set({ hydrating: false });
       }
     },
 
-    push: (sessionId, message) => {
+    accepts: (sessionId, generation) => {
+      const s = get();
+      if (generation !== undefined && generation !== s.generation) return false;
+      return !removing.has(sessionId) && s.sessions.some((x) => x.id === sessionId);
+    },
+
+    push: (sessionId, message, generation) => {
+      if (!get().accepts(sessionId, generation) || !get().loaded[sessionId]) return DROPPED;
       const id = get().nextId;
       const createdAt = new Date().toISOString();
       const m = { ...message, id, createdAt } as Message;
@@ -265,11 +545,13 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
         messagesBySession: { ...s.messagesBySession, [sessionId]: [...(s.messagesBySession[sessionId] ?? []), m] },
         sessions: touch(s.sessions, sessionId, m, createdAt, true),
       }));
-      persist(sessionId, m);
+      // A new message is written at once.
+      scheduleWrite(sessionId, id, get().generation, 0);
       return id;
     },
 
-    patch: (sessionId, id, f) => {
+    patch: (sessionId, id, f, options) => {
+      if (!get().accepts(sessionId, options?.generation)) return;
       let patched = false;
       set((s) => {
         const list = s.messagesBySession[sessionId];
@@ -281,15 +563,17 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
         });
         return { messagesBySession: { ...s.messagesBySession, [sessionId]: next } };
       });
-      if (patched) persistSoon(sessionId, id);
+      // Either way the latest state of the message at the time of the write is what gets stored.
+      if (patched) scheduleWrite(sessionId, id, get().generation, options?.defer ? PATCH_WRITE_DELAY_MS : 0);
     },
 
     newSession: async () => {
-      const { activeId, messagesBySession, workspace } = get();
+      const { activeId, messagesBySession, loaded, workspace, generation } = get();
       if (!workspace) return null;
-      if (activeId && (messagesBySession[activeId] ?? []).length === 0) return activeId;
+      // (An active chat that is not loaded is not known to be empty.)
+      if (activeId && loaded[activeId] && (messagesBySession[activeId] ?? []).length === 0) return activeId;
       const created = await api.chatSessionCreate(null);
-      if (get().workspace !== workspace) return null;
+      if (get().generation !== generation) return null;
       set((s) => ({
         sessions: [created, ...s.sessions.filter((x) => x.id !== created.id)],
         activeId: created.id,
@@ -310,6 +594,16 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
       await load(id);
     },
 
+    reload: async (id) => {
+      if (!get().sessions.some((s) => s.id === id)) return;
+      set((s) => {
+        const loadFailed = { ...s.loadFailed };
+        delete loadFailed[id];
+        return { loadFailed };
+      });
+      await load(id);
+    },
+
     rename: async (id, title) => {
       const clean = title.trim();
       if (!clean) return;
@@ -318,17 +612,35 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     },
 
     remove: async (id) => {
-      const workspace = get().workspace;
-      await api.chatSessionDelete(id);
-      if (get().workspace !== workspace) return;
+      const { workspace, generation } = get();
+      // From here on nothing is written into the session: a message that reached the backend after the
+      // delete would make it re-create the session (an untitled ghost chat). Writes already on their way
+      // are let through first.
+      removing.add(id);
+      dropWaitingWrites(id);
+      try {
+        await writesSettled(id);
+        await api.chatSessionDelete(id);
+      } catch (e) {
+        removing.delete(id);
+        throw e;
+      }
+      if (get().generation !== generation) {
+        removing.delete(id);
+        return;
+      }
       const wasActive = get().activeId === id;
       set((s) => {
         const messagesBySession = { ...s.messagesBySession };
         delete messagesBySession[id];
         const loaded = { ...s.loaded };
         delete loaded[id];
-        return { sessions: s.sessions.filter((x) => x.id !== id), messagesBySession, loaded, activeId: wasActive ? null : s.activeId };
+        const loadFailed = { ...s.loadFailed };
+        delete loadFailed[id];
+        return { sessions: s.sessions.filter((x) => x.id !== id), messagesBySession, loaded, loadFailed, activeId: wasActive ? null : s.activeId };
       });
+      // No longer listed: `accepts` refuses it from the list alone.
+      removing.delete(id);
       if (!wasActive) {
         useAttachmentsStore.getState().dropSession(id);
         return;
@@ -336,7 +648,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
       let next = get().sessions[0]?.id ?? null;
       if (!next) {
         const created = await api.chatSessionCreate(null);
-        if (get().workspace !== workspace) return;
+        if (get().generation !== generation) return;
         set((s) => ({ sessions: [created, ...s.sessions], messagesBySession: { ...s.messagesBySession, [created.id]: [] }, loaded: { ...s.loaded, [created.id]: true } }));
         next = created.id;
       }
@@ -364,5 +676,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
 
 /** Workspace switch: the conversations and the owed UI actions belong to the old workspace. */
 export function resetAssistant(): void {
-  useAssistantStore.setState({ workspace: null, hydrating: false, sessions: [], activeId: null, messagesBySession: {}, loaded: {}, pendingUiActions: {} });
+  // Called once the backend is on the other workspace: nothing of the old conversations may be written any more.
+  dropWaitingWrites();
+  useAssistantStore.setState((s) => ({ workspace: null, generation: s.generation + 1, hydrating: false, sessions: [], activeId: null, messagesBySession: {}, loaded: {}, loadFailed: {}, pendingUiActions: {} }));
 }

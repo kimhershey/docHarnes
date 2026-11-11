@@ -483,36 +483,14 @@ impl JobBook {
         }
         let _gate = self.create_gate.lock().unwrap_or_else(|e| e.into_inner());
         loop {
-            let (engine_busy, io_running, next) = {
+            let next = {
                 let Ok(jobs) = self.jobs.lock() else { return };
                 let Ok(specs) = self.specs.lock() else { return };
-                let lane_of = |j: &Job| specs.get(&j.id).map(JobSpec::lane).unwrap_or(Lane::Io);
-                let engine_busy = jobs.iter().any(|j| {
-                    matches!(j.state, JobState::Running | JobState::Paused)
-                        && ((j.persistent && lane_of(j) == Lane::Engine)
-                            || (!j.persistent && j.kind == JobKind::Pipeline))
-                });
-                let io_running = jobs
-                    .iter()
-                    .filter(|j| {
-                        j.persistent
-                            && matches!(j.state, JobState::Running | JobState::Paused)
-                            && lane_of(j) == Lane::Io
-                    })
-                    .count();
-                let mut queued: Vec<&Job> =
-                    jobs.iter().filter(|j| j.persistent && j.state == JobState::Queued).collect();
-                queued.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.created_at.cmp(&b.created_at)));
-                let next = queued
-                    .into_iter()
-                    .find(|j| match lane_of(j) {
-                        Lane::Engine => !engine_busy,
-                        Lane::Io => io_running < IO_LIMIT,
-                    })
-                    .map(|j| j.id.clone());
-                (engine_busy, io_running, next)
+                let Ok(controls) = self.controls.lock() else { return };
+                next_to_start(&jobs, &|j| specs.get(&j.id).map(JobSpec::lane).unwrap_or(Lane::Io), &|id| {
+                    controls.contains_key(id)
+                })
             };
-            let _ = (engine_busy, io_running);
             let Some(id) = next else { return };
             self.start(app, &id);
         }
@@ -710,7 +688,7 @@ impl JobBook {
         if interrupted > 0 {
             log::info!("jobs: {interrupted} job(s) interrupted by the previous shutdown");
         }
-        for rec in &list {
+        for rec in restore_order(&list) {
             if let (Some(spec), Ok(mut s)) = (rec.spec.clone(), self.specs.lock()) {
                 s.insert(rec.id.clone(), spec);
             }
@@ -764,6 +742,40 @@ impl JobBook {
     }
 }
 
+/// The queued persistent job to start next: highest priority first, oldest first among equals,
+/// one engine-lane job at a time and at most `IO_LIMIT` I/O-lane jobs. A lane is held by running
+/// jobs and by paused jobs that have a worker (`has_worker`: paused while running, they wait
+/// inside the job). A job paused before it ever started — or restored paused after a restart —
+/// has no worker and holds nothing; counting it kept every later job queued for ever.
+fn next_to_start(jobs: &[Job], lane_of: &dyn Fn(&Job) -> Lane, has_worker: &dyn Fn(&str) -> bool) -> Option<String> {
+    let holds_lane = |j: &Job| j.state == JobState::Running || (j.state == JobState::Paused && has_worker(&j.id));
+    let engine_busy = jobs.iter().any(|j| {
+        holds_lane(j)
+            && ((j.persistent && lane_of(j) == Lane::Engine) || (!j.persistent && j.kind == JobKind::Pipeline))
+    });
+    let io_running = jobs.iter().filter(|j| j.persistent && holds_lane(j) && lane_of(j) == Lane::Io).count();
+    let mut queued: Vec<&Job> = jobs.iter().filter(|j| j.persistent && j.state == JobState::Queued).collect();
+    queued.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.created_at.cmp(&b.created_at)));
+    queued
+        .into_iter()
+        .find(|j| match lane_of(j) {
+            Lane::Engine => !engine_busy,
+            Lane::Io => io_running < IO_LIMIT,
+        })
+        .map(|j| j.id.clone())
+}
+
+/// Order in which the jobs of a workspace database enter the in-memory list. `core_jobs::list`
+/// returns the active jobs followed by the finished ones newest first; the list in memory is
+/// oldest first (new jobs are appended, the finished tabs show it reversed, and `push` trims
+/// the oldest finished entries from the front). So: finished jobs by finish time, then the
+/// active ones in their scheduling order.
+fn restore_order(list: &[JobRecord]) -> Vec<&JobRecord> {
+    let (mut finished, active): (Vec<&JobRecord>, Vec<&JobRecord>) = list.iter().partition(|r| r.state.is_finished());
+    finished.sort_by(|a, b| a.finished_at.cmp(&b.finished_at).then(a.created_at.cmp(&b.created_at)));
+    finished.into_iter().chain(active).collect()
+}
+
 impl Job {
     fn kind_name(&self) -> &'static str {
         match self.kind {
@@ -777,5 +789,138 @@ impl Job {
             JobKind::Maintenance => "maintenance",
             _ => "job",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn job(id: &str, kind: JobKind, state: JobState, persistent: bool, minute: i64) -> Job {
+        let at = DateTime::parse_from_rfc3339("2026-11-11T09:00:00Z").unwrap().with_timezone(&Utc)
+            + chrono::Duration::minutes(minute);
+        Job {
+            id: id.into(),
+            kind,
+            subject: String::new(),
+            state,
+            progress: None,
+            detail: None,
+            bytes_done: None,
+            bytes_total: None,
+            error: None,
+            cancel_requested: false,
+            created_at: at,
+            updated_at: at,
+            finished_at: None,
+            priority: JobPriority::Normal,
+            persistent,
+            attempts: 0,
+            result: None,
+            label: None,
+        }
+    }
+
+    /// Lane by job kind, as the specs would give it.
+    fn lane_of(j: &Job) -> Lane {
+        match j.kind {
+            JobKind::Pipeline | JobKind::Plan | JobKind::Draft => Lane::Engine,
+            _ => Lane::Io,
+        }
+    }
+
+    /// PLT-7: a job paused while it waited in the queue (or restored paused after a restart) has
+    /// no worker. It must not hold the engine lane — the jobs behind it stayed queued for ever.
+    #[test]
+    fn a_job_paused_before_it_started_does_not_block_its_lane() {
+        let no_worker = |_: &str| false;
+        let jobs = vec![
+            job("paused", JobKind::Pipeline, JobState::Paused, true, 0),
+            job("next", JobKind::Pipeline, JobState::Queued, true, 1),
+            job("later", JobKind::Draft, JobState::Queued, true, 2),
+        ];
+        assert_eq!(next_to_start(&jobs, &lane_of, &no_worker).as_deref(), Some("next"));
+        // Paused while running: the worker waits inside the job and still owns the engine.
+        let has_worker = |id: &str| id == "paused";
+        assert_eq!(next_to_start(&jobs, &lane_of, &has_worker), None);
+        // … but the I/O lane is free in both cases.
+        let mut with_io = jobs.clone();
+        with_io.push(job("export", JobKind::Export, JobState::Queued, true, 3));
+        assert_eq!(next_to_start(&with_io, &lane_of, &has_worker).as_deref(), Some("export"));
+
+        // The same on the I/O lane: paused-in-queue exports do not use up the two slots.
+        let io = vec![
+            job("p1", JobKind::Export, JobState::Paused, true, 0),
+            job("p2", JobKind::Organize, JobState::Paused, true, 1),
+            job("queued", JobKind::Export, JobState::Queued, true, 2),
+        ];
+        assert_eq!(next_to_start(&io, &lane_of, &no_worker).as_deref(), Some("queued"));
+        assert_eq!(next_to_start(&io, &lane_of, &|_| true), None);
+    }
+
+    #[test]
+    fn scheduling_keeps_priority_order_and_the_single_engine_slot() {
+        let no_worker = |_: &str| false;
+        let mut high = job("high", JobKind::Plan, JobState::Queued, true, 5);
+        high.priority = JobPriority::High;
+        let mut jobs = vec![
+            job("old", JobKind::Pipeline, JobState::Queued, true, 0),
+            job("new", JobKind::Pipeline, JobState::Queued, true, 1),
+            high,
+            job("finished", JobKind::Pipeline, JobState::Done, true, -5),
+        ];
+        assert_eq!(next_to_start(&jobs, &lane_of, &no_worker).as_deref(), Some("high"));
+        jobs.retain(|j| j.id != "high");
+        assert_eq!(next_to_start(&jobs, &lane_of, &no_worker).as_deref(), Some("old"));
+        // A running engine job — persistent or a lightweight pipeline job — holds the lane.
+        jobs.push(job("running", JobKind::Draft, JobState::Running, true, -1));
+        assert_eq!(next_to_start(&jobs, &lane_of, &no_worker), None);
+        jobs.retain(|j| j.id != "running");
+        jobs.push(job("light", JobKind::Pipeline, JobState::Running, false, -1));
+        assert_eq!(next_to_start(&jobs, &lane_of, &no_worker), None);
+        // Lightweight jobs are never started by the scheduler.
+        let light_only = vec![job("light", JobKind::DocumentImport, JobState::Queued, false, 0)];
+        assert_eq!(next_to_start(&light_only, &lane_of, &no_worker), None);
+    }
+
+    fn record(id: &str, state: CoreState, finished_minute: Option<i64>) -> JobRecord {
+        let base = DateTime::parse_from_rfc3339("2026-11-11T09:00:00Z").unwrap().with_timezone(&Utc);
+        let mut r = JobRecord::new(JobSpec::Maintenance, id, JobPriority::Normal);
+        r.id = id.into();
+        r.state = state;
+        r.created_at = base;
+        r.finished_at = finished_minute.map(|m| base + chrono::Duration::minutes(m));
+        r
+    }
+
+    /// PLT-17: finished jobs come back oldest first, like the list they were in before the
+    /// restart — the finished tabs show it reversed and the cap trims from the front.
+    #[test]
+    fn restored_finished_jobs_keep_their_order() {
+        // What `core_jobs::list` returns: active jobs, then finished ones newest first.
+        let mut list = vec![record("queued", CoreState::Queued, None), record("paused", CoreState::Paused, None)];
+        for minute in (1..=MAX_FINISHED as i64).rev() {
+            let state = if minute % 2 == 0 { CoreState::Done } else { CoreState::Failed };
+            list.push(record(&format!("f{minute:02}"), state, Some(minute)));
+        }
+        let ids: Vec<&str> = restore_order(&list).into_iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(&ids[..3], ["f01", "f02", "f03"]);
+        assert_eq!(&ids[MAX_FINISHED - 1..], ["f50", "queued", "paused"]);
+
+        let book = JobBook::default();
+        for rec in restore_order(&list) {
+            book.push(JobBook::view(rec));
+        }
+        let in_memory = |book: &JobBook| book.list().into_iter().map(|j| j.id).collect::<Vec<_>>();
+        assert_eq!(in_memory(&book)[..2], ["f01", "f02"]);
+        // One more job finishes: the cap drops the oldest finished job, not the most recent ones.
+        let mut newest = JobBook::view(&record("f51", CoreState::Done, Some(51)));
+        newest.state = JobState::Done;
+        book.push(newest);
+        let now = in_memory(&book);
+        assert_eq!(now.len(), MAX_FINISHED + 2);
+        assert!(!now.contains(&"f01".to_string()) && now.contains(&"f50".to_string()));
+        assert_eq!(now.last().map(String::as_str), Some("f51"));
+        assert_eq!(now[0], "f02");
     }
 }

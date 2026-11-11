@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
+import { useModelDisplay } from "@/app/hooks/useModelDisplay";
 import { ThemeMenu } from "@/app/layout/ThemeMenu";
 
 import { WorkspaceChooser } from "../workspace/WorkspaceChooser";
@@ -23,6 +24,7 @@ type Step = 0 | 1 | 2;
 
 export function OnboardingWizard() {
   const { t } = useTranslation();
+  const modelName = useModelDisplay();
   const workspace = useWorkspaceStore((s) => s.current);
   const setActive = useUiStore((s) => s.setOnboardingActive);
   const [step, setStep] = useState<Step>(workspace ? 1 : 0);
@@ -154,7 +156,7 @@ export function OnboardingWizard() {
               {assessment?.active_model && (
                 <div className="flex flex-wrap items-center gap-2 text-sm text-fg-muted" data-testid="onboarding-model-state">
                   <span>
-                    {t("onboarding.hardware.recommended")}: <strong className="text-fg">{assessment.active_model.display}</strong>
+                    {t("onboarding.hardware.recommended")}: <strong className="text-fg">{modelName(assessment.active_model.display)}</strong>
                   </span>
                   {installed && <span className="text-ok">{t("onboarding.model.installed")}</span>}
                   <Button variant="link" size="sm" onClick={() => setFilesOpen(true)}>

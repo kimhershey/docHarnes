@@ -150,7 +150,7 @@ export function RuleSummary({ rule, className }: { rule: Rule; className?: strin
   const { data: schemas } = useSchemas();
   const unresolved = unresolvedOperands(rule, schemas, docTypes);
   return (
-    <span className={cn("flex flex-wrap items-center gap-1 text-xs", className)} data-testid="rule-summary">
+    <span className={cn("relative flex flex-wrap items-center gap-1 text-xs", className)} data-testid="rule-summary">
       <span className={cn("font-mono", unresolved.length > 0 && "text-danger")}>{ruleSummary(rule, docTypes, schemas, i18n.language, t)}</span>
       {rule.right && isLiteral(rule.right) && rule.op !== "present" && <span className="sr-only">{operandLabel(rule.right, docTypes, schemas, i18n.language)}</span>}
       {!rule.required && <Badge variant="muted">{t("projects.rules.optional")}</Badge>}

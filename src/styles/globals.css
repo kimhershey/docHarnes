@@ -160,11 +160,27 @@
 html {
   font-size: calc(16px * var(--ui-scale, 1));
   height: 100%;
+  /* The window itself never scrolls: the app shell fills the viewport and every screen scrolls inside its own
+     boxes (0.7.0 audit UI-1). */
+  overflow: hidden;
+}
+
+/* `body` and `#root` are positioned clip boxes of exactly the viewport's size. An absolutely positioned element
+   without a positioned ancestor (a `sr-only` caption inside a scroll box that is `position: static`, a Radix
+   hidden form control) is laid out against the nearest positioned box, is not clipped by the scroll boxes in
+   between and widens the scroll area of that outer box — which used to be the document, so the whole window
+   scrolled. Now it ends here and is cut off: `clip` (unlike `hidden`) cannot be scrolled by focus or script
+   either. `hidden` is the fallback for engines without `clip`. */
+body,
+#root {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+  overflow: clip;
 }
 
 body {
   margin: 0;
-  height: 100%;
   background: var(--bg);
   color: var(--fg);
   font-family: var(--font-sans);
@@ -175,10 +191,6 @@ body {
   text-rendering: optimizeLegibility;
   user-select: none;
   cursor: default;
-}
-
-#root {
-  height: 100%;
 }
 
 ::selection {

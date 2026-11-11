@@ -117,7 +117,15 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
         }
     }
 
-    let scoped = |plan: Plan| guard_scope(plan, text, ko);
+    let scoped = |plan: Plan| {
+        let mut plan = guard_scope(plan, text, ko);
+        // A plan let through because the sentence said "전부": inside the "현재 프로젝트" scope
+        // that is the project, not the library (the validator skipped the default for it).
+        if !plan.is_clarification() {
+            validate::apply_default_scope(&mut plan, ctx);
+        }
+        plan
+    };
     if mode == PlanMode::ModelFirst {
         // Slash commands stay deterministic; every other sentence is the model's to read.
         if text.starts_with('/') {
@@ -223,7 +231,12 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
             result.completion_tokens += c;
             result.source = PlanSource::Model;
             result.route = Some(reply_mode.as_str().to_string());
-            result.plan = reply_plan(text, reply_mode, ko);
+            let mut p = reply_plan(text, reply_mode, ko);
+            // A text that came with the request is worked on as it is, whatever the route was called.
+            if guard::carried_text(text).is_some() {
+                guard::make_text_only(text, &mut p, ko);
+            }
+            result.plan = p;
             return Ok(result);
         }
         Ok((Route::Families(families), (p, c))) => {
@@ -298,6 +311,16 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
         result.raw = Some(reply.content.clone());
         let parsed = parse_and_validate(&value, ctx, date.as_ref());
         match parsed {
+            // "Nothing to do" from one family's grammar may be a command of another family:
+            // one more try with every op before it is taken as small talk.
+            Ok((plan, _)) if guard::is_noop_only(&plan) && kinds.is_some() && !widened => {
+                widened = true;
+                kinds = None;
+                plan_schema = schema::plan_schema();
+                feedback = None;
+                attempt = 1;
+                continue;
+            }
             Ok((mut plan, mut issues)) => {
                 result.source = PlanSource::Model;
                 // A sentence that carries its own text is answered from that text, not from the library.
@@ -309,6 +332,11 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
                 guard::noop_to_chat(text, &mut plan, ko);
                 // What the sentence does not support is confirmed, whatever the model's confidence.
                 issues.extend(guard::contract_checks(text, &mut plan, ko));
+                // A split by project the checks put back: the validator had already filled the open
+                // project in as the default scope, which would leave one group.
+                if validate::per_project(&plan) && plan.scope.filter.project_id == ctx.scope_project {
+                    plan.scope.filter.project_id = None;
+                }
                 result.issues = issues;
                 result.plan = scoped(finalize(plan, ko));
                 return Ok(result);
@@ -328,10 +356,29 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
         }
     }
     // Two rejected attempts → clarification with the first error.
-    let first = result.issues.iter().find(|i| i.blocking).map(|i| i.message.clone()).unwrap_or_default();
+    let first = result.issues.iter().find(|i| i.blocking);
+    let question = first
+        .and_then(|i| setting_range_question(i, ko))
+        .unwrap_or_else(|| clarification_text(ko, &first.map(|i| i.message.clone()).unwrap_or_default()));
     result.source = PlanSource::Model;
-    result.plan = Plan::clarify(clarification_text(ko, &first), 0.0);
+    result.plan = Plan::clarify(question, 0.0);
     Ok(result)
+}
+
+/// A settings value the validator rejected twice is asked about in the user's words: the
+/// setting's label and what it accepts, not the validator's English message (audit CON-8).
+fn setting_range_question(issue: &PlanIssue, ko: bool) -> Option<String> {
+    use super::settings_catalog as catalog;
+    if issue.code != "setting_value" {
+        return None;
+    }
+    let (_, spec) = catalog::find(issue.message.split_whitespace().next()?)?;
+    let range = catalog::range_hint(spec, ko);
+    Some(if ko {
+        format!("{} 설정에 넣을 수 있는 값은 {range}입니다. 어떤 값으로 바꿀까요?", spec.label_ko)
+    } else {
+        format!("{} accepts {range}. Which value should I set?", spec.label_en)
+    })
 }
 
 /// What the first model call made of the turn.

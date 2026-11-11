@@ -8,14 +8,14 @@ pub mod pipeline;
 pub mod planner;
 pub mod projects;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
 use doculens_core::engine::{ChatRequest, EngineDevice, EngineStatus, LogLine, ModelInstanceStatus};
-use doculens_core::hw::{self, GpuSource, HardwareSummary};
+use doculens_core::hw::{GpuSource, HardwareSummary};
 use doculens_core::modelstore::{self, ImportMode, ImportPlan, InstallState};
 use doculens_core::paths::normalize_user_path;
 use doculens_core::prerouter::{self, DateRange, PreRouteResult};
@@ -177,17 +177,35 @@ pub struct OpenArgs {
     pub force_unlock: bool,
 }
 
+/// The hooks that follow `docs_bridge::before_workspace_change`: they clear the switching flag,
+/// restart the watchers and bring back the job queue of whichever workspace is open now. Every
+/// "before" must be followed by them, whatever happened in between — otherwise the queue, the
+/// inbox watcher, auto-index, auto-processing and the purge stay off until the app restarts.
+fn after_workspace_change(app: &AppHandle) {
+    engine_bridge::on_workspace_changed(app);
+    crate::docs_bridge::on_workspace_changed(app);
+    crate::knowledge_bridge::on_workspace_changed(app);
+    crate::pipeline_bridge::on_workspace_changed(app);
+}
+
+/// Opens (or creates) `path` and makes it the current workspace.
+fn switch_workspace(app: &AppHandle, state: &AppState, path: &Path, opts: OpenOptions) -> UiResult<WorkspaceView> {
+    let _one_at_a_time = state.workspace_switch.lock().unwrap_or_else(|e| e.into_inner());
+    // The target is opened first. When that fails (folder gone, drive unplugged, locked by
+    // another instance) the workspace that is open has not been touched: its jobs keep running
+    // and its inbox is still watched.
+    let prepared = state.prepare_workspace(path, opts)?;
+    crate::docs_bridge::before_workspace_change(app);
+    let installed = state.install_workspace(path, prepared);
+    after_workspace_change(app);
+    installed?;
+    state.with_workspace(view)
+}
+
 #[tauri::command(async)]
 pub fn workspace_open(app: AppHandle, state: State<'_, AppState>, args: OpenArgs) -> UiResult<WorkspaceView> {
     let path = normalize_user_path(&args.path);
-    crate::docs_bridge::before_workspace_change(&app);
-    state.open_workspace_inner(&path, OpenOptions { force_unlock: args.force_unlock, ..Default::default() })?;
-    let v = state.with_workspace(view)?;
-    engine_bridge::on_workspace_changed(&app);
-    crate::docs_bridge::on_workspace_changed(&app);
-    crate::knowledge_bridge::on_workspace_changed(&app);
-    crate::pipeline_bridge::on_workspace_changed(&app);
-    Ok(v)
+    switch_workspace(&app, &state, &path, OpenOptions { force_unlock: args.force_unlock, ..Default::default() })
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -205,28 +223,17 @@ pub struct CreateArgs {
 pub fn workspace_create(app: AppHandle, state: State<'_, AppState>, args: CreateArgs) -> UiResult<WorkspaceView> {
     let path = normalize_user_path(&args.path);
     let locale = args.locale.or_else(|| state.settings_snapshot().ok().map(|s| s.ui.language));
-    crate::docs_bridge::before_workspace_change(&app);
-    state.open_workspace_inner(
-        &path,
-        OpenOptions { create: true, name: args.name, locale, force_unlock: args.force_unlock },
-    )?;
-    let v = state.with_workspace(view)?;
-    engine_bridge::on_workspace_changed(&app);
-    crate::docs_bridge::on_workspace_changed(&app);
-    crate::knowledge_bridge::on_workspace_changed(&app);
-    crate::pipeline_bridge::on_workspace_changed(&app);
-    Ok(v)
+    let opts = OpenOptions { create: true, name: args.name, locale, force_unlock: args.force_unlock };
+    switch_workspace(&app, &state, &path, opts)
 }
 
 #[tauri::command(async)]
 pub fn workspace_close(app: AppHandle, state: State<'_, AppState>) -> UiResult<()> {
+    let _one_at_a_time = state.workspace_switch.lock().unwrap_or_else(|e| e.into_inner());
     crate::docs_bridge::before_workspace_change(&app);
-    state.close_workspace()?;
-    engine_bridge::on_workspace_changed(&app);
-    crate::docs_bridge::on_workspace_changed(&app);
-    crate::knowledge_bridge::on_workspace_changed(&app);
-    crate::pipeline_bridge::on_workspace_changed(&app);
-    Ok(())
+    let closed = state.close_workspace();
+    after_workspace_change(&app);
+    closed
 }
 
 #[tauri::command]
@@ -260,7 +267,7 @@ pub fn workspace_set_preferred_model(state: State<'_, AppState>, model_id: Optio
 pub fn hw_probe(state: State<'_, AppState>, refresh: Option<bool>) -> UiResult<HardwareSummary> {
     if refresh.unwrap_or(false) {
         let mut guard = state.hardware.lock().map_err(|_| UiError::poisoned())?;
-        *guard = Some(hw::probe());
+        *guard = Some(engine_bridge::probe_hardware(&state));
     }
     state.hardware()
 }
@@ -505,8 +512,11 @@ pub fn engine_list_devices(app: AppHandle, state: State<'_, AppState>) -> UiResu
     let devices = doculens_core::engine::devices::list_devices(&binary.path, Duration::from_secs(60))?;
     if !devices.is_empty() {
         let gpus = doculens_core::engine::devices::to_gpu_infos(&devices);
+        // The free figures were read just now, with whatever the engine has loaded.
+        let engine_used_mib = engine_bridge::engine_vram_in_use_mib(&state);
         let mut guard = state.hardware.lock().map_err(|_| UiError::poisoned())?;
         if let Some(hw) = guard.as_mut() {
+            hw.engine_used_mib = engine_used_mib;
             // Keep NVML driver/CC details when the names match.
             let mut merged = gpus;
             for g in &mut merged {
@@ -569,4 +579,168 @@ pub fn prerouter_route(text: String) -> PreRouteResult {
 pub fn prerouter_resolve_date(text: String) -> Option<DateRange> {
     let today = chrono::Local::now().date_naive();
     prerouter::resolve_relative_date(&text, today)
+}
+
+// ---------------------------------------------------------------------------
+// Files shown outside the app
+// ---------------------------------------------------------------------------
+
+/// What `reveal_path` showed: the path itself, or (`exact = false`) the nearest folder above it
+/// that still exists.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Revealed {
+    pub path: PathBuf,
+    pub exact: bool,
+}
+
+/// The thing to show for `path`: itself when it exists, else the nearest existing folder above it.
+fn reveal_target(path: &Path) -> Option<Revealed> {
+    if path.exists() {
+        return Some(Revealed { path: path.to_path_buf(), exact: true });
+    }
+    let folder = path.ancestors().skip(1).find(|p| !p.as_os_str().is_empty() && p.is_dir())?;
+    Some(Revealed { path: folder.to_path_buf(), exact: false })
+}
+
+/// "폴더 열기": selects `path` in the file manager. A file that was moved or deleted since (an
+/// organised document, a cleaned-up export) used to make the button do nothing; now the nearest
+/// folder that still exists opens.
+#[tauri::command(async)]
+pub fn reveal_path(path: String) -> UiResult<Revealed> {
+    let requested = normalize_user_path(&path);
+    let shown = reveal_target(&requested).ok_or_else(|| UiError::from(CoreError::NotFound(path.clone())))?;
+    let result = if shown.exact {
+        tauri_plugin_opener::reveal_item_in_dir(&shown.path)
+    } else {
+        tauri_plugin_opener::open_path(&shown.path, None::<&str>)
+    };
+    result.map_err(|e| UiError::invalid(format!("cannot show {}: {e}", shown.path.display())))?;
+    Ok(shown)
+}
+
+/// Documents that ship with the app, opened from 설정 › 정보 (never a web address: the app is
+/// made for offline PCs, and the installed version is the one that counts).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppDocument {
+    /// `THIRD-PARTY-NOTICES.md` next to the application.
+    Notices,
+    /// `licenses/THIRD-PARTY-LICENSES.txt` next to the application.
+    Licenses,
+    /// The design document this build was made from (carried inside the binary).
+    DesignDoc,
+}
+
+const DESIGN_DOC_NAME: &str = "doculens-design-v1.1.md";
+const DESIGN_DOC: &str = include_str!("../../../docs/design/doculens-design-v1.1.md");
+
+impl AppDocument {
+    /// Path below the application's resource folder (`None`: not a bundled file).
+    fn resource_path(self) -> Option<&'static str> {
+        match self {
+            AppDocument::Notices => Some("THIRD-PARTY-NOTICES.md"),
+            AppDocument::Licenses => Some("licenses/THIRD-PARTY-LICENSES.txt"),
+            AppDocument::DesignDoc => None,
+        }
+    }
+}
+
+/// First of `roots` that holds the bundled file `relative`.
+fn bundled_file(roots: &[PathBuf], relative: &str) -> Option<PathBuf> {
+    roots.iter().map(|root| root.join(relative)).find(|p| p.is_file())
+}
+
+/// Writes the embedded design document to `<app data>/docs/` (again only when it differs, e.g.
+/// after an update) and returns its path.
+fn materialize_design_doc(app_data: &Path) -> Result<PathBuf, CoreError> {
+    let dir = app_data.join("docs");
+    let path = dir.join(DESIGN_DOC_NAME);
+    if std::fs::read_to_string(&path).is_ok_and(|current| current == DESIGN_DOC) {
+        return Ok(path);
+    }
+    std::fs::create_dir_all(&dir).map_err(|e| CoreError::io(&dir, e))?;
+    std::fs::write(&path, DESIGN_DOC).map_err(|e| CoreError::io(&path, e))?;
+    Ok(path)
+}
+
+/// Opens one of the app's own documents in a text viewer and returns the file's path.
+#[tauri::command(async)]
+pub fn open_app_document(app: AppHandle, state: State<'_, AppState>, document: AppDocument) -> UiResult<PathBuf> {
+    let path = match document.resource_path() {
+        Some(relative) => {
+            let mut roots = Vec::new();
+            if let Ok(dir) = app.path().resource_dir() {
+                roots.push(dir);
+            }
+            if let Some(dir) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf)) {
+                roots.push(dir);
+            }
+            bundled_file(&roots, relative).ok_or_else(|| UiError::from(CoreError::NotFound(relative.to_string())))?
+        }
+        None => materialize_design_doc(&state.app_paths.root)?,
+    };
+    // `.md` has no default application on a plain Windows install; Notepad is always there.
+    let viewer = if cfg!(windows) { Some("notepad") } else { None };
+    tauri_plugin_opener::open_path(&path, viewer)
+        .or_else(|_| tauri_plugin_opener::reveal_item_in_dir(&path))
+        .map_err(|e| UiError::invalid(format!("cannot open {}: {e}", path.display())))?;
+    Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::test_support::TempDir;
+
+    /// PKG-15: "폴더 열기" for a file that is gone shows the nearest folder that still exists.
+    #[test]
+    fn reveal_falls_back_to_the_nearest_existing_folder() {
+        let tmp = TempDir::new();
+        let exports = tmp.path().join("ws").join("exports");
+        std::fs::create_dir_all(&exports).unwrap();
+        let file = exports.join("집계.xlsx");
+        std::fs::write(&file, b"x").unwrap();
+        assert_eq!(reveal_target(&file), Some(Revealed { path: file.clone(), exact: true }));
+        assert_eq!(reveal_target(&exports), Some(Revealed { path: exports.clone(), exact: true }));
+        // The file was deleted; then its folder as well.
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(reveal_target(&file), Some(Revealed { path: exports.clone(), exact: false }));
+        let deep = exports.join("2026").join("11").join("집계.xlsx");
+        assert_eq!(reveal_target(&deep), Some(Revealed { path: exports.clone(), exact: false }));
+        std::fs::remove_dir_all(tmp.path().join("ws")).unwrap();
+        assert_eq!(reveal_target(&file), Some(Revealed { path: tmp.path().to_path_buf(), exact: false }));
+        // Nothing to show for an empty or relative path that leads nowhere.
+        assert_eq!(reveal_target(Path::new("")), None);
+        assert_eq!(reveal_target(Path::new("no-such-folder-anywhere/x.pdf")), None);
+    }
+
+    /// PKG-7: the notices and license texts come from the installed files, the design document
+    /// from the binary — no web address involved.
+    #[test]
+    fn app_documents_are_local_files() {
+        let tmp = TempDir::new();
+        let resources = tmp.path().join("install");
+        std::fs::create_dir_all(resources.join("licenses")).unwrap();
+        std::fs::write(resources.join("THIRD-PARTY-NOTICES.md"), b"# notices").unwrap();
+        std::fs::write(resources.join("licenses").join("THIRD-PARTY-LICENSES.txt"), b"MIT").unwrap();
+        let roots = vec![tmp.path().join("elsewhere"), resources.clone()];
+        for (doc, file) in [
+            (AppDocument::Notices, resources.join("THIRD-PARTY-NOTICES.md")),
+            (AppDocument::Licenses, resources.join("licenses").join("THIRD-PARTY-LICENSES.txt")),
+        ] {
+            assert_eq!(bundled_file(&roots, doc.resource_path().unwrap()), Some(file));
+        }
+        assert_eq!(bundled_file(&roots[..1], "THIRD-PARTY-NOTICES.md"), None);
+        assert_eq!(AppDocument::DesignDoc.resource_path(), None);
+        assert_eq!(serde_json::from_str::<AppDocument>("\"design_doc\"").unwrap(), AppDocument::DesignDoc);
+
+        // The design document is written once and refreshed when the file differs.
+        let app_data = tmp.path().join("appdata");
+        let path = materialize_design_doc(&app_data).unwrap();
+        assert_eq!(path, app_data.join("docs").join(DESIGN_DOC_NAME));
+        assert!(DESIGN_DOC.contains("DocuLens") && std::fs::read_to_string(&path).unwrap() == DESIGN_DOC);
+        std::fs::write(&path, "an older copy").unwrap();
+        assert_eq!(materialize_design_doc(&app_data).unwrap(), path);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), DESIGN_DOC);
+    }
 }

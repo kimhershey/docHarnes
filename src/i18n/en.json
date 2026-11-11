@@ -229,7 +229,6 @@
   },
   "assistant": {
     "title": "AI Assistant",
-    "new_chat": "New chat",
     "sessions": {
       "title": "Chats",
       "new": "New chat",
@@ -239,7 +238,8 @@
       "untitled": "New chat",
       "empty": "No chats yet.",
       "messages": "{{count}} message(s)",
-      "menu": "Menu of {{title}}"
+      "menu": "Menu of {{title}}",
+      "load_failed": "The conversation of this chat could not be loaded. Nothing can be sent until it is."
     },
     "scope": {
       "label": "Scope",
@@ -263,6 +263,12 @@
     "help_title": "Help",
     "help_body": "Natural-language commands become a plan card (steps · impact · preview) that runs after your approval. Examples: process inbox, last month's receipt total, tax invoices → Excel, move receipts into monthly folders, summarize the selected documents, undo the last rename. Instant commands: /theme dark|light|system|high-contrast, /lang ko|en, /open <screen>, /job pause, /undo. Questions are answered from the reference material with per-sentence sources. Ctrl+Enter approves · Esc cancels · Ctrl+Z undoes.",
     "executed": "Done",
+    "executed_partial": "Partly done",
+    "executed_failed": "Failed",
+    "clipped": {
+      "lists": "This card was large, so only the first rows of its lists were kept. The counts are those of the whole.",
+      "all": "This card was too large to keep: only a summary was stored. Its document list is partial, so nothing can be run or counted again from it."
+    },
     "date_resolved": "Date range: {{from}} – {{to}} ({{label}})",
     "source_slash": "slash command",
     "source_phrase": "phrase rule",
@@ -301,7 +307,11 @@
       "model_first": "Model",
       "rules_first": "Rules (legacy)",
       "hint": "Model: only slash commands and reply / cancel are handled by rules, everything else by the model (default). Rules (legacy): phrase rules first, the model only when they fail."
-    }
+    },
+    "nothing_to_do": "I found nothing to do. Ask about your documents, or tell me a task — import, organise, extract, summarise.",
+    "reply_label": "Assistant reply",
+    "undo_change": "Undo",
+    "undone": "Put back to the previous value."
   },
   "planner": {
     "ops": {
@@ -373,7 +383,8 @@
       "prerouter": "slash",
       "rules": "phrase rule",
       "model": "model",
-      "none": "none"
+      "none": "none",
+      "fast": "read directly"
     },
     "fn": {
       "sum": "sum",
@@ -410,13 +421,21 @@
       "only_low_confidence": "low-confidence fields only",
       "only_failed": "failed-validation fields only",
       "only_all": "all fields",
-      "scope": "scope: {{scope}}",
+      "reindex_fts": "keyword index",
+      "reindex_vec": "vector index",
+      "reindex_all": "all indexes",
       "top_k": "{{count}} results",
       "each_doc": "per document",
       "set": "one summary",
       "short": "short",
       "long": "long",
-      "group_by": "group_by={{value}}",
+      "group_month": "per month",
+      "group_vendor": "per vendor",
+      "group_doc_type": "per type",
+      "group_project": "per project",
+      "folder_grouped": "folders {{group}} ({{path}})",
+      "folder_template": "folder {{path}}",
+      "name_template": "file name {{template}}",
       "include_unreviewed": "include unreviewed",
       "with_unreviewed": "include unreviewed",
       "dry_run": "preview only",
@@ -425,6 +444,7 @@
       "default_path": "(default path)",
       "columns": "{{count}} columns",
       "layout_sheet_per_type": "sheet per type",
+      "layout_sheet_per_project": "sheet per project",
       "layout_single": "single sheet",
       "include": "extra columns: {{list}}",
       "target_fields": "fields",
@@ -537,7 +557,12 @@
       "maintenance_inbox_scan": "scan the inbox",
       "default_value": "default",
       "engine_start": "start",
-      "engine_stop": "stop"
+      "engine_stop": "stop",
+      "mode_chat": "conversation",
+      "mode_general": "not about the documents",
+      "summary_group_project": "one per project",
+      "summary_group_doc_type": "one per type",
+      "summary_group_folder": "one per folder"
     },
     "scope": {
       "title": "Scope",
@@ -553,7 +578,8 @@
       "step": "{{index}}. {{op}}",
       "param_default": "(default)",
       "list_hint": "comma-separated",
-      "scalar_hint": "string · number · true/false"
+      "scalar_hint": "string · number · true/false",
+      "required_missing": "A required value is empty: {{label}}"
     },
     "card": {
       "title": "Plan",
@@ -588,6 +614,9 @@
       "cancelled": "Cancelled",
       "invalid": "The plan cannot run. Edit it and try again.",
       "preview_error": "Preview update failed: {{message}}",
+      "preview_refreshing": "Previewing the edited plan…",
+      "step_documents": "{{count}} document(s)",
+      "step_delete": "{{count}} document(s) to the recycle bin",
       "preview_caption": "Organise preview (from → to)",
       "columns": {
         "from": "From",
@@ -599,7 +628,8 @@
       "retention_shorter": "The retention period gets shorter — expired data is deleted by the next purge run.",
       "rule_description": "Rule: {{description}}",
       "ask_back": "Reply",
-      "ask_back_placeholder": "Ask about this plan or say what to change"
+      "ask_back_placeholder": "Ask about this plan or say what to change",
+      "impact_no_scope": "Side effects: {{effects}}"
     },
     "execution": {
       "title": "Running · job #{{id}}",
@@ -667,7 +697,10 @@
         "classify_preview": "{{suggested}} suggestions — apply on the projects screen",
         "manage_schema": "{{action}} · '{{name}}'"
       },
-      "open_document": "Open document"
+      "open_document": "Open document",
+      "summary_group_docs": "{{count}} document(s)",
+      "summary_by_document": "{{count}} per-document summaries",
+      "summary_skipped": "{{count}} document(s) without text skipped: {{names}}"
     },
     "aggregate": {
       "title": "Aggregate — {{summary}}",
@@ -754,7 +787,9 @@
       "maintenance_clear_jobs": "Finished jobs cleared.",
       "maintenance_rescan": "Library rescan started.",
       "maintenance_rescan_busy": "Rescan after the running document job finishes.",
-      "maintenance_inbox_scan": "Inbox scanned."
+      "maintenance_inbox_scan": "Inbox scanned.",
+      "set_setting_changed": "Setting changed: {{key}} {{from}} → {{to}}",
+      "set_setting_same": "{{key}} is already {{value}}."
     },
     "settings": {
       "ui_theme": "Theme",
@@ -789,7 +824,6 @@
       "cache_page_cache_max_gb": "Page cache limit (GB)",
       "cache_keep_thumbnails": "Keep thumbnails",
       "privacy_pii_masking": "Mask personal identifiers",
-      "privacy_db_encryption": "Database encryption",
       "notifications_job_complete": "Job-complete notification",
       "notifications_prevent_sleep_during_jobs": "Prevent sleep during jobs",
       "knowledge_auto_index": "Index automatically",
@@ -866,6 +900,12 @@
       "balanced": "Balanced",
       "speed": "Speed",
       "fine_print": "Fine print"
+    },
+    "display_terms": {
+      "low_headroom": "low memory",
+      "accuracy": "accuracy",
+      "balanced": "balanced",
+      "embedding": "embedding"
     },
     "backends": {
       "auto": "Automatic",
@@ -1056,6 +1096,7 @@
       "organize_reviewed_only": "Organize/move reviewed documents only",
       "inbox_watch": "Watch the inbox folder",
       "cache": "Page cache cap",
+      "cache_hint": "Above this size the purge job deletes the page images that have gone unused the longest. Anything used in the last 7 days stays.",
       "hint": "How far imported documents are processed automatically, the review-queue threshold and extraction options.",
       "inbox_auto_level": "Auto-processing for inbox files",
       "ocr_digital_pdf": "OCR pages that already have a text layer",
@@ -1090,7 +1131,6 @@
       "forever": "Forever",
       "same_as_documents": "Same as documents",
       "immediate": "Purge immediately",
-      "page_cache": "Page cache cap (GB, LRU)",
       "purge_enabled": "Run the daily purge job",
       "purge_hour": "Purge time",
       "purge_log": "Show purge history",
@@ -1163,6 +1203,7 @@
       "licenses": "Open-source notices",
       "licenses_hint": "Only licenses without a source-disclosure obligation are used (Apache-2.0 / MIT / BSD / ISC / OFL …). All model weights are Apache-2.0 (Gemma 4, EmbeddingGemma 2).",
       "notices": "Open THIRD-PARTY-NOTICES",
+      "license_texts": "Open the license texts",
       "design_doc": "Design document",
       "font": "Font: Pretendard Variable (OFL-1.1, unmodified file bundled)"
     },
@@ -1256,6 +1297,24 @@
       "no_fields": "No fields selected.",
       "no_split_boundary": "Pick a split page inside the document (page 2 or later).",
       "merge_two": "Select at least two documents to merge.",
+      "merge_name_invalid": "That name cannot be used for the merged document. Shorten it and leave out / \\ : * ? \" < > |.",
+      "export_exists": "A file with that name already exists. Turn on overwrite or change the name.",
+      "export_over_document": "A document registered in the library is at that path and cannot be overwritten. Change the file name.",
+      "export_over_form": "Cannot save on top of the form file that is being filled. Change the file name.",
+      "path_is_document": "The export path points at a document registered in the library. Choose another file name or folder.",
+      "path_outside": "Cannot save to a path outside the workspace.",
+      "project_not_found": "Project not found (it may have been deleted).",
+      "project_name_empty": "Enter a project name.",
+      "name_empty": "Enter a name.",
+      "template_not_found": "Project template not found (it may have been deleted).",
+      "template_builtin": "Built-in templates cannot be changed or deleted (duplicate and edit instead).",
+      "template_name_empty": "Enter a template name.",
+      "rule_not_found": "Rule not found (it may have been deleted).",
+      "no_check_run": "There is no consistency check result yet. Run the consistency check first.",
+      "no_findings": "Nothing to put in the supplement request. Pick at least one mismatch or missing item.",
+      "content_empty": "Enter the content to write.",
+      "revise_previous_missing": "There is no draft to revise. Open or create a draft first.",
+      "revise_instruction_empty": "Enter the revision instruction.",
       "table_not_found": "Table not found.",
       "plan_clarify": "The plan is a clarification question — answer it first."
     }
@@ -1404,10 +1463,11 @@
       "kind": "Format",
       "all": "All",
       "doc_type": "Type",
-      "review": "Review"
+      "review": "Review",
+      "labelled": "{{label}}: {{value}}"
     },
     "empty_title": "No documents yet",
-    "empty_body": "Drop PDF, image, HWP, HWPX or DOCX files here or click Import. Files placed in inbox/ are registered automatically.",
+    "empty_body": "Drop PDF, image, HWP/HWPX/HML, DOC/DOCX, XLS/XLSX, PPT/PPTX, RTF or text files here or click Import. Files placed in inbox/ are registered automatically.",
     "no_match": "No documents match the filter.",
     "drop_overlay": "Drop here to import",
     "selected": "{{count}} selected",
@@ -1488,7 +1548,13 @@
       "reviewed": "Reviewed",
       "archived": "Archived",
       "missing": "File missing",
-      "error": "Error"
+      "error": "Error",
+      "processing": "Processing",
+      "interrupted": "Interrupted"
+    },
+    "status_hint": {
+      "processing": "Conversion / rendering is in progress.",
+      "interrupted": "Processing stopped before it finished. Re-render the document to process it again."
     },
     "kind": {
       "pdf": "PDF",
@@ -1542,7 +1608,7 @@
   },
   "import_docs": {
     "title": "Import documents",
-    "description": "Registers PDF, image, HWP, HWPX and DOCX files and renders their pages. Files outside the workspace are copied into the chosen folder.",
+    "description": "Registers PDF, image, HWP/HWPX/HML, DOC/DOCX, XLS/XLSX, PPT/PPTX, RTF and text files and renders their pages. Files outside the workspace are copied into the chosen folder.",
     "pick": "Choose files…",
     "paths_label": "File paths (one per line)",
     "paths_placeholder": "e.g. D:\\scan\\receipt-3p.pdf",
@@ -1585,6 +1651,15 @@
   },
   "viewer": {
     "back": "Documents",
+    "journal": {
+      "undo_title": "Undo a file operation",
+      "undo_body": "This page has no text correction to undo. Undo the last file operation (organise / rename / delete) instead? It has nothing to do with this document's text corrections.",
+      "undo_ok": "Undo the file operation",
+      "redo_title": "Redo a file operation",
+      "redo_body": "This page has no text correction to redo. Redo the file operation that was undone last instead?",
+      "redo_ok": "Redo",
+      "batch": "Target: {{kind}} · {{count}} item(s) · {{date}}"
+    },
     "page": "{{page}} / {{total}}",
     "prev": "Previous page",
     "next": "Next page",
@@ -2061,6 +2136,7 @@
     "default": "Default",
     "set_default": "Make default for this type",
     "enabled": "Used by the classifier",
+    "general_locked": "This is the fallback form for unclassified (Other) documents, so it cannot be switched off.",
     "version": "v{{version}}",
     "source": {
       "builtin": "Built-in",
@@ -2141,9 +2217,7 @@
       "title": "Type → field set mapping",
       "hint": "The classifier's type enum is built from the enabled field sets' type slugs. Registered forms take precedence over samples.",
       "type": "Type",
-      "schema": "Default field set",
-      "builtin": "Built-in",
-      "user": "User"
+      "schema": "Default field set"
     },
     "nl": {
       "title": "Create a field set from a description",
@@ -2222,6 +2296,12 @@
     "doc_approved": "{{count}} field(s) approved.",
     "reextract": "Re-extract (fine print)",
     "reextract_precise": "Re-extract (precision mode)",
+    "reextract_what": {
+      "fine_print": "Extracts '{{name}}' again with the fine-print profile (higher resolution).",
+      "precise": "Extracts '{{name}}' again in precision mode (two passes compared)."
+    },
+    "reextract_start_over": "Start over with classification and OCR",
+    "reextract_start_over_hint": "Reads the page text again. Page text you corrected by hand is replaced by the new OCR result too.",
     "open_doc": "Open document",
     "value": "Value",
     "evidence": "Evidence",
@@ -2464,7 +2544,23 @@
     "drafts": "Drafts",
     "open_in_generate": "Open in Generate",
     "handoff": "The generated draft is open. Check the preview and save it.",
+    "reloaded": "Loaded the latest saved draft: it includes changes made elsewhere.",
+    "store": {
+      "copy_newer": "The original draft was edited after the job started, so the result was stored as a new draft instead of over it. The original is still in the draft list.",
+      "copy_cancelled": "What the cancelled job had written was stored as a new draft. The original draft is unchanged.",
+      "not_saved_deleted": "The draft was deleted while the job ran, so the result was not stored in the draft list. Edit or save it to keep it.",
+      "not_saved_failed": "The result could not be stored in the draft list. Edit or save it to keep it."
+    },
+    "cut": {
+      "content": "Only the first {{passed}} of the {{chars}} characters of the content were passed to the model.",
+      "feedback": "Only the first {{passed}} of the {{chars}} characters of the instruction were passed to the model."
+    },
     "form": {
+      "char_count": "{{count}} / {{max}} characters",
+      "char_over": "only the first {{max}} are passed to the model",
+      "project_scope": "Reference material is searched inside the project '{{name}}'.",
+      "project_scope_missing": "This draft belongs to a project that no longer exists. Clear the scope to search for reference material.",
+      "project_scope_clear": "Clear scope",
       "title": "Request",
       "template": "Form / template",
       "template_auto": "(auto — inferred from the content)",
@@ -2575,6 +2671,8 @@
       "scope_section": "Rewrite {{index}}. {{heading}}",
       "scope_insert_after": "New section after {{index}}. {{heading}}",
       "scope_append": "New section at the end",
+      "scope_none": "Pick a scope",
+      "scope_lost": "The section picked for rewriting was removed by an edit, so the scope was cleared. Pick the scope again.",
       "untitled": "(untitled)",
       "heading": "New section heading (optional)",
       "heading_placeholder": "e.g. Conclusion",
@@ -2623,6 +2721,14 @@
       "move_up": "Move up",
       "move_down": "Move down",
       "level_toggle": "Heading level {{level}} → {{next}}",
+      "issue_at_cell": "{{table}} row {{row}} · {{column}}",
+      "issue_at_body": "Body block {{index}} · {{kind}}",
+      "block_kind": {
+        "heading": "heading",
+        "paragraph": "paragraph",
+        "list": "list",
+        "table_ref": "table"
+      },
       "body_empty": "The body is empty."
     },
     "issue_codes": {
@@ -2635,6 +2741,8 @@
       "template_unknown_field": "Unknown field"
     },
     "save": {
+      "omitted_body": "{{count}} body block(s) left out",
+      "omitted_body_hint": "A registered form takes fields and tables only. Save as PDF or Markdown to keep the body.",
       "title": "Save",
       "hint": "Saves under documents/generated/ in the workspace and registers the file in Documents as a generated document.",
       "format": "Format",
@@ -2671,6 +2779,9 @@
     },
     "result": {
       "meta": "{{fields}} fields · {{issues}} issues · {{source}}"
+    },
+    "layout": {
+      "panes": "Switch between preview and editor"
     },
     "open_busy_title": "A draft is being generated",
     "open_busy": "Another draft is being generated on the Compose screen. If you open this one now, the running job's result stays available on the Activity screen."
@@ -2907,6 +3018,11 @@
       "hint": "Drafts a supplement request from the selected mismatch / missing findings; review and save it on the generate screen.",
       "findings": "Findings",
       "select_all": "Select all",
+      "missing_doc": "{{type}} document required",
+      "missing_doc_message": "No {{type}} document in the project.",
+      "covered": "Not selected by default: the missing-document item above already asks for it.",
+      "undetermined_hint": "Undetermined items cannot go into the request. Extract / review the documents and run the check again.",
+      "pick_one": "Select at least one item for the request.",
       "output": "Output",
       "generate": "Generate",
       "generating": "Drafting…",

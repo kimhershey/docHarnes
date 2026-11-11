@@ -4,6 +4,8 @@ import { subscribe } from "@/lib/ipc";
 import { queryClient, queryKeys } from "@/lib/query-client";
 import { EVENTS, type PipelineChanged, type ReviewReason } from "@/lib/types";
 
+import { refreshProjectsForDocuments } from "./projects";
+
 /** Pipeline UI state that survives navigation plus the `pipeline://changed` wiring. */
 interface PipelineState {
   initialized: boolean;
@@ -26,13 +28,14 @@ interface PipelineState {
 
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
-function invalidateSoon(key: string, keys: readonly (readonly unknown[])[]) {
+function invalidateSoon(key: string, keys: readonly (readonly unknown[])[], also?: () => void) {
   if (timers.has(key)) return;
   timers.set(
     key,
     setTimeout(() => {
       timers.delete(key);
       for (const k of keys) void queryClient.invalidateQueries({ queryKey: k as unknown[] });
+      also?.();
     }, 150),
   );
 }
@@ -58,7 +61,8 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
           invalidateSoon("status", [queryKeys.pipelineStatus]);
           break;
         default:
-          invalidateSoon("pipeline", [queryKeys.pipelineStatus, ["pipeline", "fields"], ["pipeline", "runs"], ["pipeline", "history"], ["pipeline", "review"], ["pipeline", "tables"], queryKeys.documents]);
+          // A document was classified / extracted / reviewed: the library and the project screens (type, status, checklist) follow.
+          invalidateSoon("pipeline", [queryKeys.pipelineStatus, ["pipeline", "fields"], ["pipeline", "runs"], ["pipeline", "history"], ["pipeline", "review"], ["pipeline", "tables"], queryKeys.documents], refreshProjectsForDocuments);
       }
     });
   },
