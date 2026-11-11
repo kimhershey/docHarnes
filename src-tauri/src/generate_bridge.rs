@@ -42,6 +42,11 @@ pub struct BudgetInfo {
     pub cap: u32,
     /// Budgets above this are drafted section by section.
     pub split_threshold: u32,
+    /// Characters of the content (`DraftRequest.content`) and of a revision instruction
+    /// (`DraftRequest.feedback`) a prompt takes at most. A small context takes less; the draft says
+    /// what was cut (`DraftOutcome.input_cuts` and its notes).
+    pub content_max_chars: u32,
+    pub instruction_max_chars: u32,
 }
 
 pub fn budget_info(app: &AppHandle) -> UiResult<BudgetInfo> {
@@ -55,6 +60,8 @@ pub fn budget_info(app: &AppHandle) -> UiResult<BudgetInfo> {
         gpu,
         cap: settings.generation.cap(gpu),
         split_threshold: generate::prompts::SPLIT_THRESHOLD_TOKENS,
+        content_max_chars: generate::prompts::MAX_CONTENT_CHARS as u32,
+        instruction_max_chars: generate::prompts::MAX_FEEDBACK_CHARS as u32,
     })
 }
 
@@ -72,20 +79,11 @@ pub fn draft(app: &AppHandle, mut req: DraftRequest, project_id: Option<String>,
             return Err(UiError::invalid("revise_instruction_empty"));
         }
     }
-    // Caps: the body as the validator allows it, sources and feedback as the prompt takes them.
-    req.content = req.content.trim().chars().take(6_000).collect();
-    for s in &mut req.sources {
-        if let generate::SourceRef::Text { text, .. } = s {
-            if text.chars().count() > 20_000 {
-                *text = text.chars().take(20_000).collect();
-            }
-        }
-    }
-    if let Some(f) = req.feedback.as_mut() {
-        if f.chars().count() > 2_000 {
-            *f = f.chars().take(2_000).collect();
-        }
-    }
+    // Only the size stored with the job is bounded here. What a prompt takes of the content and the
+    // instruction is the core's decision (`prompts::MAX_CONTENT_CHARS` / `MAX_FEEDBACK_CHARS`, less on a
+    // small context), and the core reports a cut in the draft — cutting to those limits here as well
+    // would hide it.
+    req.bound_stored_text();
     let state = app.state::<AppState>();
     // The reply token budget is capped by the active backend (GPU 32K / CPU 8K by default, settings).
     if let Some(m) = req.max_tokens {

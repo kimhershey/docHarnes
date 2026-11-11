@@ -29,8 +29,13 @@ use super::{Draft, DraftBlock, DraftRequest, Length, Tone};
 
 /// Sampling temperature of the draft call (see the module docs).
 pub const TEMPERATURE: f32 = 0.25;
-pub const MAX_CONTENT_CHARS: usize = 2_000;
-pub const MAX_FEEDBACK_CHARS: usize = 600;
+/// Limits of the user's own text in a prompt (characters): the request's content and the
+/// instruction of a regeneration / revision. They equal what the callers accept (the planner's
+/// validator; the job bridge shows them to the screen), so nothing is lost between the request and
+/// the prompt. A small context takes less ([`allot`]); whatever is cut is reported in the draft's
+/// notes and in `DraftOutcome.input_cuts`.
+pub const MAX_CONTENT_CHARS: usize = 6_000;
+pub const MAX_FEEDBACK_CHARS: usize = 2_000;
 /// Per-source and total caps (characters) when the context size is unknown.
 pub const MAX_SOURCE_CHARS: usize = 1_400;
 pub const MAX_TOTAL_SOURCE_CHARS: usize = 4_500;

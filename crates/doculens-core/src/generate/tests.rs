@@ -2192,6 +2192,119 @@ fn regeneration_and_revision_prompts_fit_a_small_context() {
     assert!(chat3.user_prompt(1).contains("[이 절의 이전 본문]\n2절 본문입니다."), "{}", chat3.user_prompt(1));
 }
 
+/// GEN-14: the content was cut at 2,000 characters and the instruction at 600 on the way into the prompt
+/// while the job bridge (and the planner) accept 6,000 / 2,000 — the rest was dropped without a word.
+/// The prompt now takes what the callers accept, and when something is cut the draft says so.
+#[test]
+fn long_content_and_instructions_reach_the_model_or_the_draft_says_what_was_cut() {
+    let w = world();
+    let reply = json!({"title": "보고서", "fields": [], "tables": [], "body": [], "notes": []});
+    let run = |req: &DraftRequest, ctx: u32| {
+        let chat = SeqChat::json(reply.clone());
+        let vlm = Vlm::new(&chat, "scripted".into(), Profile::Balanced, None).with_context(Some(ctx));
+        let out = draft::draft(&w.deps(Some(&vlm), None), req).unwrap();
+        (out, chat.user_prompt(0))
+    };
+    // 3,000 characters of content and 900 of instruction, each ending in a marker.
+    let content = format!("{}끝머리표식A", "가".repeat(2_990));
+    let instruction = format!("{}끝머리표식B", "나".repeat(890));
+    let req = DraftRequest {
+        form_ref: Some("report".into()),
+        content: content.clone(),
+        feedback: Some(instruction.clone()),
+        use_knowledge: false,
+        ..Default::default()
+    };
+    // A GPU-sized context takes both in full: nothing to report.
+    let (out, prompt) = run(&req, 32_768);
+    assert!(prompt.contains("끝머리표식A"), "the content was cut at 2,000 characters");
+    assert!(prompt.contains("끝머리표식B"), "the instruction was cut at 600 characters");
+    assert!(!out.draft.notes.iter().any(|n| n.contains("전달했습니다")), "{:?}", out.draft.notes);
+    assert!(out.input_cuts.is_empty());
+    assert!(serde_json::to_value(&out).unwrap().get("input_cuts").is_none(), "absent when nothing was cut");
+
+    // Over the limits themselves: the first 6,000 / 2,000 characters are passed and both cuts are reported,
+    // in the notes (shown under the preview) and as `input_cuts`. ('뷁' / '쀍' occur nowhere else in a prompt.)
+    let cut = |field: &str, chars: u32, passed: u32| super::InputCut { field: field.into(), chars, passed };
+    let over = DraftRequest { content: "뷁".repeat(7_000), feedback: Some("쀍".repeat(2_500)), ..req.clone() };
+    let (out, prompt) = run(&over, 32_768);
+    assert_eq!((prompt.matches('뷁').count(), prompt.matches('쀍').count()), (6_000, 2_000));
+    assert_eq!(out.input_cuts, vec![cut("content", 7_000, 6_000), cut("feedback", 2_500, 2_000)]);
+    assert!(
+        out.draft.notes.iter().any(|n| n.starts_with("내용 7,000자 중 앞 6,000자만 모델에 전달했습니다")),
+        "{:?}",
+        out.draft.notes
+    );
+    assert!(
+        out.draft.notes.iter().any(|n| n == "수정 지시 2,500자 중 앞 2,000자만 모델에 전달했습니다."),
+        "{:?}",
+        out.draft.notes
+    );
+    assert_eq!(
+        serde_json::to_value(&out).unwrap()["input_cuts"],
+        json!([
+            {"field": "content", "chars": 7000, "passed": 6000},
+            {"field": "feedback", "chars": 2500, "passed": 2000}
+        ])
+    );
+    // The stored request keeps the whole text (a later regeneration on a bigger context can use it).
+    assert_eq!(out.draft.request.as_ref().unwrap().content.chars().count(), 7_000);
+
+    // An 8K context cannot hold 6,000 characters of content next to the reply (8,192 − 1,400 − 1,800 − 256
+    // leaves 4,736): what fits is passed and the draft says how much.
+    let long = DraftRequest { content: "뷁".repeat(6_000), feedback: None, ..req.clone() };
+    let (out, prompt) = run(&long, 8_192);
+    assert_eq!(prompt.matches('뷁').count(), 4_736);
+    assert_eq!(out.input_cuts, vec![cut("content", 6_000, 4_736)]);
+    assert!(out.draft.notes.iter().any(|n| n.starts_with("내용 6,000자 중 앞 4,736자만")), "{:?}", out.draft.notes);
+
+    // Section by section: every call has its own allowance; the smallest one is what is reported, once.
+    let section = json!({ "blocks": [{"kind": "paragraph", "text": "본문", "items": [], "source_index": null}] });
+    let chat = SeqChat::new(vec![reply.to_string(), section.to_string()]);
+    let vlm = Vlm::new(&chat, "scripted".into(), Profile::Balanced, None).with_context(Some(8_192));
+    let split = DraftRequest { max_tokens: Some(8_000), ..long.clone() };
+    let out = draft::draft(&w.deps(Some(&vlm), None), &split).unwrap();
+    assert!(out.sections > 1);
+    let calls = chat.requests.lock().unwrap().len();
+    let least = (0..calls).map(|c| chat.user_prompt(c).matches('뷁').count()).min().unwrap();
+    assert_eq!(out.input_cuts, vec![cut("content", 6_000, least as u32)]);
+    assert_eq!(out.draft.notes.iter().filter(|n| n.starts_with("내용 6,000자 중")).count(), 1, "{:?}", out.draft.notes);
+
+    // A section revision reports the cut instruction before its own note (the screen logs the last note).
+    let chat = SeqChat::new(vec![section.to_string()]);
+    let vlm = Vlm::new(&chat, "scripted".into(), Profile::Balanced, None).with_context(Some(32_768));
+    let revise = DraftRequest {
+        form_ref: Some("progress_report".into()),
+        previous: Some(Box::new(filled_progress_report())),
+        feedback: Some("쀍".repeat(2_500)),
+        revise: Some(super::ReviseScope::Section { section: 2 }),
+        use_knowledge: false,
+        ..Default::default()
+    };
+    let out = draft::draft(&w.deps(Some(&vlm), None), &revise).unwrap();
+    assert_eq!(chat.user_prompt(0).matches('쀍').count(), 2_000);
+    assert_eq!(out.input_cuts, vec![cut("feedback", 2_500, 2_000)]);
+    let notes = &out.draft.notes;
+    assert!(notes[notes.len() - 1].starts_with("AI 수정(2절"), "{notes:?}");
+    assert_eq!(notes[notes.len() - 2], "수정 지시 2,500자 중 앞 2,000자만 모델에 전달했습니다.");
+
+    // The job bridge only bounds what is stored with the job (20,000 characters per text). It used to cut
+    // the content to 6,000 and the instruction to 2,000 itself — a cut the core could not see or report.
+    let mut stored = DraftRequest {
+        content: format!("  {}  ", "뷁".repeat(7_000)),
+        feedback: Some("쀍".repeat(2_500)),
+        sources: vec![SourceRef::Text { title: None, text: "가".repeat(25_000) }],
+        ..Default::default()
+    };
+    stored.bound_stored_text();
+    assert_eq!(stored.content.chars().count(), 7_000);
+    assert_eq!(stored.feedback.as_ref().unwrap().chars().count(), 2_500);
+    assert!(matches!(&stored.sources[0], SourceRef::Text { text, .. } if text.chars().count() == 20_000));
+    stored.content = "뷁".repeat(30_000);
+    stored.bound_stored_text();
+    assert_eq!(stored.content.chars().count(), super::MAX_STORED_TEXT_CHARS);
+}
+
 #[test]
 fn a_large_budget_drafts_section_by_section_and_keeps_sections_on_cancel() {
     let w = world();

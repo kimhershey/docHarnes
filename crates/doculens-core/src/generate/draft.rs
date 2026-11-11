@@ -40,7 +40,7 @@ use super::schema;
 use super::templates::{self, compact, TemplateSpec};
 use super::{
     sections_of, Draft, DraftBlock, DraftCitation, DraftField, DraftOutcome, DraftRequest, DraftTable, GenerateDeps,
-    ReviseScope, SourceRef, TemplateKind, TemplateRef,
+    InputCut, ReviseScope, SourceRef, TemplateKind, TemplateRef,
 };
 
 /// Upper bound on numbered sources shown to the model.
@@ -1014,6 +1014,61 @@ fn is_json_failure(e: &CoreError) -> bool {
     matches!(e, CoreError::Engine(m) if m.contains("not JSON") || m.contains("cut off"))
 }
 
+/// How much of the request's own text the prompts of one job passed on: the smallest allowance
+/// of the content and of the instruction over all calls.
+#[derive(Default)]
+struct InputUse {
+    content: Option<usize>,
+    feedback: Option<usize>,
+}
+
+impl InputUse {
+    /// One prompt was built with `allow`; `with_feedback` when it shows the instruction.
+    fn see(&mut self, allow: &prompts::Allowance, with_feedback: bool) {
+        self.content = Some(self.content.map_or(allow.content, |c| c.min(allow.content)));
+        if with_feedback {
+            self.feedback = Some(self.feedback.map_or(allow.feedback, |f| f.min(allow.feedback)));
+        }
+    }
+
+    /// What was cut, with a note for the user about each.
+    fn report(&self, req: &DraftRequest, ko: bool, notes: &mut Vec<String>) -> Vec<InputCut> {
+        let n = |v: usize| super::validate::format_won(v as f64);
+        let mut cuts = Vec::new();
+        let content = req.content.trim().chars().count();
+        if let Some(passed) = self.content.filter(|p| *p < content) {
+            notes.push(if ko {
+                format!(
+                    "내용 {}자 중 앞 {}자만 모델에 전달했습니다 — 나머지는 자료(텍스트)로 추가하면 참고합니다.",
+                    n(content),
+                    n(passed)
+                )
+            } else {
+                format!(
+                    "Only the first {} of {} characters of the content reached the model; add the rest as a text source.",
+                    n(passed),
+                    n(content)
+                )
+            });
+            cuts.push(InputCut { field: "content".into(), chars: content as u32, passed: passed as u32 });
+        }
+        let feedback = req.feedback.as_deref().map_or(0, |f| f.trim().chars().count());
+        if let Some(passed) = self.feedback.filter(|p| *p < feedback) {
+            notes.push(if ko {
+                format!("수정 지시 {}자 중 앞 {}자만 모델에 전달했습니다.", n(feedback), n(passed))
+            } else {
+                format!(
+                    "Only the first {} of {} characters of the instruction reached the model.",
+                    n(passed),
+                    n(feedback)
+                )
+            });
+            cuts.push(InputCut { field: "feedback".into(), chars: feedback as u32, passed: passed as u32 });
+        }
+        cuts
+    }
+}
+
 /// A request that works on an earlier draft: a revision scope, an instruction (`feedback`) or the
 /// draft itself (`previous`). Only the model can apply these — the rule-based 보완요청서 path would
 /// ignore the instruction and rebuild the body and the item table from the findings, dropping
@@ -1062,6 +1117,7 @@ pub fn draft(deps: &GenerateDeps<'_>, req: &DraftRequest) -> Result<DraftOutcome
                 elapsed_ms: elapsed(&started),
                 source: "rules".into(),
                 sections: 0,
+                input_cuts: Vec::new(),
             });
         }
         return Err(CoreError::EngineNotRunning);
@@ -1084,6 +1140,9 @@ pub fn draft(deps: &GenerateDeps<'_>, req: &DraftRequest) -> Result<DraftOutcome
         return draft_split(deps, &model, &spec, req, &sources, reply_tokens, notes, started);
     }
     let allow = prompts::user_allowance(req, sources.len(), vlm.ctx, reply_tokens, 0, prompt_ko);
+    let mut input = InputUse::default();
+    input.see(&allow, true);
+    let input_cuts = input.report(req, deps.ko(), &mut notes);
     let blocks = source_blocks(&sources);
     let user_text = prompts::user(&spec, req, &blocks, &allow, prompt_ko);
     let system = json!({ "role": "system", "content": prompts::system(prompt_ko) });
@@ -1111,6 +1170,7 @@ pub fn draft(deps: &GenerateDeps<'_>, req: &DraftRequest) -> Result<DraftOutcome
         elapsed_ms: elapsed(&started),
         source: "model".into(),
         sections: 1,
+        input_cuts,
     })
 }
 
@@ -1234,6 +1294,7 @@ fn draft_split(
     let system = json!({ "role": "system", "content": prompts::system(prompt_ko) });
     let blocks = source_blocks(sources);
     let (mut prompt_tokens, mut completion_tokens) = (0u64, 0u64);
+    let mut input = InputUse::default();
 
     // 1. Section plan: the template's sections, else an outline call, else the generic outline.
     let template_sections = spec.sections(prompt_ko);
@@ -1241,6 +1302,7 @@ fn draft_split(
         report(0.22, "outline");
         let want = prompts::Blocks::of(req, false, blocks.len());
         let allow = prompts::allot(model.ctx, prompts::OUTLINE_TOKENS, want);
+        input.see(&allow, false);
         let text = prompts::outline_user(spec, req, &blocks, &allow, total, prompt_ko);
         match call_json_with_retry(
             model,
@@ -1278,6 +1340,7 @@ fn draft_split(
     let head_note = prompts::split_head_note(&plans[0], n, first_budget, prompt_ko);
     let allow =
         prompts::user_allowance(req, sources.len(), model.ctx, head_budget, head_note.chars().count(), prompt_ko);
+    input.see(&allow, true);
     let mut text = prompts::user(spec, req, &blocks, &allow, prompt_ko);
     text.push_str(&head_note);
     let (value, reply) = call_json_with_retry(
@@ -1347,6 +1410,7 @@ fn draft_split(
         want.previous = earlier.as_deref().map_or(0, |e| e.chars().count());
         want.fixed += facts_chars + previous.chars().count();
         let allow = prompts::allot(model.ctx, budget_tokens, want);
+        input.see(&allow, revision.is_some());
         let text = prompts::section_user(
             spec,
             req,
@@ -1420,6 +1484,7 @@ fn draft_split(
     } else {
         format!("Generated in {n} sections with a budget of {total} tokens.")
     });
+    let input_cuts = input.report(req, ko, &mut notes);
     d.notes.extend(notes);
     if spec.builtin_kind() == Some(TemplateKind::SupplementRequest) {
         complete_supplement(&mut d, sources);
@@ -1433,6 +1498,7 @@ fn draft_split(
         elapsed_ms: started.elapsed().as_millis() as u64,
         source: "model".into(),
         sections: sections_done,
+        input_cuts,
     })
 }
 
@@ -1581,6 +1647,9 @@ fn revise(deps: &GenerateDeps<'_>, req: &DraftRequest, scope: &ReviseScope, star
     want.previous = chars(&current) + chars(&before) + chars(&after);
     want.fixed += prompts::facts_chars(&facts, prompt_ko);
     let allow = prompts::allot(model.ctx, tokens, want);
+    let mut input = InputUse::default();
+    input.see(&allow, true);
+    let input_cuts = input.report(req, ko, &mut notes);
     let (current, before, after) = fit_revision_context(current, before, after, allow.previous);
     let rv = prompts::RevisePrompt {
         rewrite,
@@ -1695,6 +1764,7 @@ fn revise(deps: &GenerateDeps<'_>, req: &DraftRequest, scope: &ReviseScope, star
         elapsed_ms: started.elapsed().as_millis() as u64,
         source: "model".into(),
         sections: 1,
+        input_cuts,
     })
 }
 

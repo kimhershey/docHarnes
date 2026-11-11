@@ -312,6 +312,34 @@ pub fn sections_of(body: &[DraftBlock]) -> Vec<Section> {
     out
 }
 
+/// Characters of free text a request keeps per item when it is stored with its job (the content,
+/// the instruction, each pasted text source).
+pub const MAX_STORED_TEXT_CHARS: usize = 20_000;
+
+impl DraftRequest {
+    /// Bounds the request's free text for storage: the content (trimmed), the instruction and every
+    /// pasted text source keep [`MAX_STORED_TEXT_CHARS`] characters. This is not the prompt limit:
+    /// what the model is given of the content and the instruction is decided — and reported when it
+    /// is less than the whole — by the prompt (`prompts::MAX_CONTENT_CHARS`, `MAX_FEEDBACK_CHARS`).
+    pub fn bound_stored_text(&mut self) {
+        let bound = |text: &mut String| {
+            if text.chars().count() > MAX_STORED_TEXT_CHARS {
+                *text = text.chars().take(MAX_STORED_TEXT_CHARS).collect();
+            }
+        };
+        self.content = self.content.trim().to_string();
+        bound(&mut self.content);
+        if let Some(feedback) = self.feedback.as_mut() {
+            bound(feedback);
+        }
+        for source in &mut self.sources {
+            if let SourceRef::Text { text, .. } = source {
+                bound(text);
+            }
+        }
+    }
+}
+
 impl Default for DraftRequest {
     fn default() -> Self {
         Self {
@@ -503,6 +531,22 @@ pub struct DraftOutcome {
     /// Model calls that produced body sections (1 = one-shot draft; >1 = outline → sections flow).
     #[serde(default)]
     pub sections: u32,
+    /// The user's own text the model saw only in part: the content is limited to
+    /// `prompts::MAX_CONTENT_CHARS`, the instruction to `prompts::MAX_FEEDBACK_CHARS`, and a small
+    /// context can take less. The draft's notes carry the same in words. Empty = nothing was cut.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_cuts: Vec<InputCut>,
+}
+
+/// Part of the request's text that did not reach the model (`DraftOutcome.input_cuts`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputCut {
+    /// `content` (`DraftRequest.content`) | `feedback` (`DraftRequest.feedback`, the instruction).
+    pub field: String,
+    /// Characters the request carried.
+    pub chars: u32,
+    /// Characters passed to the model (the first ones).
+    pub passed: u32,
 }
 
 /// Save request (문서 생성 screen "저장", planner `draft_document` after confirmation).
