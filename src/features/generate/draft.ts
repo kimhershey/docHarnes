@@ -130,6 +130,25 @@ export function pickerToReviseScope(value: string, heading: string | null = null
   return { scope: "whole" };
 }
 
+/** Smallest reply-token budget the request form accepts (the largest is the backend's cap). */
+export const MIN_TOKEN_BUDGET = 200;
+
+export function clampTokenBudget(value: number, cap: number): number {
+  return Math.min(cap, Math.max(MIN_TOKEN_BUDGET, Math.round(value)));
+}
+
+/**
+ * The custom token budget as it is applied when its box loses focus or Enter is pressed (GEN-12: clamping on
+ * every keystroke turned "6000" into 32768 — "6" was already raised to 200). Empty → null (the length
+ * preset), a number → rounded and clamped to 200…cap, anything else → undefined (keep the stored value).
+ */
+export function parseTokenBudget(text: string, cap: number): number | null | undefined {
+  const s = text.trim();
+  if (s === "") return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? clampTokenBudget(n, cap) : undefined;
+}
+
 /** Text form of a block for a textarea: list items one per line. */
 export function blockText(block: DraftBlock): string {
   switch (block.kind) {

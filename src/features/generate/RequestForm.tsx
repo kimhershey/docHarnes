@@ -12,10 +12,11 @@ import { Switch } from "@/components/ui/switch";
 import { describeJobDetail } from "@/features/jobs/describe";
 import { DropHint, importDroppedFiles, useDocumentDropTarget } from "@/lib/dnd";
 import { useDocuments, useGenerateBudgetInfo, useGenerateTemplates, useSchemas } from "@/lib/queries";
+import { isComposing } from "@/lib/shortcuts";
 import { DRAFT_LENGTHS, LENGTH_TOKENS, OUTPUT_FORMATS, TOKEN_BUDGET_PRESETS, TONES, type DraftLength, type DraftRequest, type Job, type OutputFormat, type Tone } from "@/lib/types";
 import { useUiStore } from "@/stores/ui";
 
-import { documentSourceIds, formRefToPicker, pickerToFormRef, withDocumentSources } from "./draft";
+import { clampTokenBudget, documentSourceIds, formRefToPicker, MIN_TOKEN_BUDGET, parseTokenBudget, pickerToFormRef, withDocumentSources } from "./draft";
 import { SourcePickerDialog } from "./SourcePickerDialog";
 
 /**
@@ -67,13 +68,24 @@ export function RequestForm({
   const cap = budgetInfo?.cap ?? 32_768;
   const splitThreshold = budgetInfo?.split_threshold ?? 3_000;
   const presetTokens = LENGTH_TOKENS[request.length];
-  const effectiveTokens = Math.min(request.max_tokens ?? presetTokens, cap);
+  // The custom number is typed freely and applied — rounded, clamped to 200…cap — when the box loses focus or
+  // on Enter (GEN-12); `budgetText` is what is being typed (null = the box shows the stored budget).
+  const [budgetText, setBudgetText] = useState<string | null>(null);
+  const typedBudget = budgetText === null ? undefined : parseTokenBudget(budgetText, cap);
+  // The hints below follow the number being typed, as it will be applied.
+  const pendingBudget = typedBudget === undefined ? (request.max_tokens ?? null) : typedBudget;
+  const effectiveTokens = Math.min(pendingBudget ?? presetTokens, cap);
   const fmt = (n: number) => n.toLocaleString(ko ? "ko-KR" : "en-US");
   const tokPerSec = budgetInfo && !budgetInfo.gpu ? 6 : 25;
   const minutes = Math.max(1, Math.round(effectiveTokens / tokPerSec / 60));
   const budgetPicker = request.max_tokens == null ? "auto" : String(request.max_tokens);
   const budgetIsPreset = request.max_tokens == null || (TOKEN_BUDGET_PRESETS as readonly number[]).includes(request.max_tokens);
-  const setBudget = (value: number | null) => onChange({ max_tokens: value === null ? null : Math.min(cap, Math.max(200, Math.round(value))) });
+  const setBudget = (value: number | null) => onChange({ max_tokens: value === null ? null : clampTokenBudget(value, cap) });
+  const commitBudget = () => {
+    if (budgetText === null) return;
+    setBudgetText(null);
+    if (typedBudget !== undefined && typedBudget !== (request.max_tokens ?? null)) onChange({ max_tokens: typedBudget });
+  };
 
   return (
     <div className="flex flex-col gap-3" data-testid="generate-form">
@@ -215,13 +227,20 @@ export function RequestForm({
           </Select>
           <Input
             type="number"
-            className="h-8 w-28 text-right tabular-nums"
-            min={200}
+            className="h-8 w-28 shrink-0 text-right tabular-nums"
+            min={MIN_TOKEN_BUDGET}
             max={cap}
             step={100}
-            value={request.max_tokens ?? ""}
+            value={budgetText ?? request.max_tokens ?? ""}
             placeholder={String(presetTokens)}
-            onChange={(e) => setBudget(e.target.value === "" ? null : Number(e.target.value))}
+            onChange={(e) => setBudgetText(e.target.value)}
+            onBlur={commitBudget}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !isComposing(e)) {
+                e.preventDefault();
+                commitBudget();
+              }
+            }}
             aria-label={t("generate.form.token_budget_custom")}
             data-testid="generate-token-budget-input"
           />

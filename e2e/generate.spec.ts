@@ -104,6 +104,32 @@ test.describe("P6 document generation", () => {
     await page.getByTestId("generate-token-budget-24000").click();
     await expect(page.getByTestId("generate-token-budget-input")).toHaveValue("24000");
     await expect(page.getByTestId("generate-token-budget-hint")).toContainText("절별");
+    // A number typed into the box is applied when the box is left or on Enter, never per keystroke (GEN-12:
+    // "6000" used to end as 32768 because "6" was raised to 200 at once).
+    const budget = page.getByTestId("generate-token-budget-input");
+    await budget.click();
+    await page.keyboard.press("Control+a");
+    await page.keyboard.press("Delete");
+    await page.keyboard.type("6000");
+    await expect(budget).toHaveValue("6000");
+    await expect(page.getByTestId("generate-token-budget-hint")).toContainText("6,000");
+    await page.keyboard.press("Enter");
+    await expect(budget).toHaveValue("6000");
+    await expect(page.getByTestId("generate-token-budget-select")).toContainText("6,000");
+    // Out-of-range numbers are clamped once, on blur: below 200 → 200, above the cap → the cap.
+    await budget.fill("50");
+    await page.getByTestId("generate-content").focus();
+    await expect(budget).toHaveValue("200");
+    await budget.fill("99999");
+    await page.getByTestId("generate-content").focus();
+    await expect(budget).toHaveValue("32768");
+    // Emptying the box goes back to the length preset; the "문서 한 통" preset is picked again for the run below.
+    await budget.fill("");
+    await page.getByTestId("generate-content").focus();
+    await expect(page.getByTestId("generate-token-budget-hint")).toContainText("한 번에");
+    await page.getByTestId("generate-token-budget-select").click();
+    await page.getByTestId("generate-token-budget-24000").click();
+    await expect(budget).toHaveValue("24000");
     await page.getByTestId("generate-run").click();
     // Section progress is reported while the job runs, then every template section is in the draft.
     await expect(page.getByTestId("generate-progress")).toContainText("절 작성 중", { timeout: 15_000 });

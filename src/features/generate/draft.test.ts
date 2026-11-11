@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Draft, DraftIssue, SchemaRecord, TemplateInfo } from "@/lib/types";
 
-import { addRow, applySuggestion, blockInputText, blockText, blockWithText, documentSourceIds, formRefToPicker, hasBlockingIssues, insertBlock, moveBlock, newBlock, parseIssuePath, pickerToFormRef, pickerToReviseScope, removeBlock, removeRow, reviseRequest, reviseScopeLabel, reviseScopeToPicker, sectionAt, sectionsOf, setBlockLevel, setFieldValue, toggleExcluded, withDocumentSources } from "./draft";
+import { addRow, applySuggestion, blockInputText, blockText, blockWithText, clampTokenBudget, documentSourceIds, formRefToPicker, hasBlockingIssues, insertBlock, MIN_TOKEN_BUDGET, moveBlock, newBlock, parseIssuePath, parseTokenBudget, pickerToFormRef, pickerToReviseScope, removeBlock, removeRow, reviseRequest, reviseScopeLabel, reviseScopeToPicker, sectionAt, sectionsOf, setBlockLevel, setFieldValue, toggleExcluded, withDocumentSources } from "./draft";
 
 function draft(): Draft {
   return {
@@ -109,6 +109,22 @@ describe("draft edits", () => {
     expect(blockInputText({ kind: "list", items: ["다른 항목"], ordered: false }, loose)).toBe("다른 항목");
     // Headings and paragraphs are stored as typed, so the box is the block.
     expect(blockInputText(blockWithText(draft().body[1]!, "끝에 공백 "), "끝에 공백 ")).toBe("끝에 공백 ");
+  });
+
+  it("applies a typed token budget once, clamped to 200…cap (GEN-12: per-keystroke clamping turned 6000 into 32768)", () => {
+    const cap = 32_768;
+    // What the box holds while "6000" is typed is never a budget on its own: only the final text is applied.
+    expect(parseTokenBudget("6000", cap)).toBe(6000);
+    expect(parseTokenBudget(" 12000 ", cap)).toBe(12000);
+    expect(parseTokenBudget("6", cap)).toBe(200);
+    expect(parseTokenBudget("99999", cap)).toBe(cap);
+    expect(parseTokenBudget("2600.4", cap)).toBe(2600);
+    // Empty = back to the length preset; not a number = keep the stored value.
+    expect(parseTokenBudget("", cap)).toBeNull();
+    expect(parseTokenBudget("  ", cap)).toBeNull();
+    expect(parseTokenBudget("abc", cap)).toBeUndefined();
+    expect(clampTokenBudget(24_000, 16_384)).toBe(16_384);
+    expect(clampTokenBudget(-5, cap)).toBe(MIN_TOKEN_BUDGET);
   });
 
   it("builds the whole-draft revision request with previous, the trimmed instruction and exclusions", () => {
