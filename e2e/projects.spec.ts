@@ -195,6 +195,58 @@ test.describe("P6 projects", () => {
     await expect(page.getByTestId("toaster")).toContainText(ko.projects.rules.deleted);
   });
 
+  test("보완요청서: a missing required document is a finding of its own, and nothing ticked sends nothing (PRJ-2)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    const { srs, test } = await importTrio(page);
+    await page.getByTestId("nav-projects").click();
+    await page.getByTestId("projects-new").click();
+    await page.getByTestId("project-name").fill("서류 누락 사업");
+    await page.getByTestId("project-template").click();
+    await page.getByRole("option", { name: ko.projects.templates.builtin.internal_dev }).click();
+    await page.getByTestId("project-submit").click();
+    await expect(page.getByTestId("page-project")).toBeVisible();
+    // The WBS is left out: the checklist misses it and the rule that compares it cannot be checked.
+    await page.getByTestId("project-add-documents").click();
+    await page.getByTestId(`project-add-doc-${srs}`).check();
+    await page.getByTestId(`project-add-doc-${test}`).check();
+    await page.getByTestId("project-add-done").click();
+    await expect(page.getByTestId("project-documents-table").locator("tbody tr")).toHaveCount(2);
+    await expect(page.getByTestId("checklist-wbs")).toHaveAttribute("data-missing", "true");
+    await page.getByTestId("project-check-header").click();
+    await expect(page.getByTestId("project-verdicts")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId("verdict-missing")).toContainText("1");
+
+    await page.getByTestId("project-supplement").click();
+    const dialog = page.getByTestId("supplement-dialog");
+    await expect(dialog).toBeVisible();
+    // The missing document is a row of its own, ticked (it used to be a note that dropped out of the request as
+    // soon as a rule finding was ticked); the rule that only failed for lack of that document is offered, not ticked.
+    const missingDoc = dialog.getByTestId("supplement-finding-missing_doc:wbs");
+    await expect(missingDoc).toBeChecked();
+    await expect(dialog.locator('[data-testid="supplement-row"][data-kind="missing_doc"]')).toContainText("WBS");
+    const ruleRow = dialog.locator('[data-testid="supplement-row"][data-kind="result"]');
+    await expect(ruleRow).toHaveCount(1);
+    await expect(ruleRow).toHaveAttribute("data-verdict", "missing");
+    await expect(ruleRow).toContainText(ko.projects.supplement.covered);
+    await expect(dialog.getByTestId("supplement-findings").locator("input:checked")).toHaveCount(1);
+    // Nothing ticked: no request (an empty selection would stand for "everything").
+    await missingDoc.uncheck();
+    await expect(dialog.getByTestId("supplement-generate")).toBeDisabled();
+    await expect(dialog.getByTestId("supplement-pick-one")).toBeVisible();
+    await dialog.getByTestId("supplement-select-all").click();
+    await expect(dialog.getByTestId("supplement-findings").locator("input:checked")).toHaveCount(2);
+    await ruleRow.locator("input").uncheck();
+    await expect(missingDoc).toBeChecked();
+    // The request carries the missing document.
+    await dialog.getByTestId("supplement-generate").click();
+    await expect(page.getByTestId("page-generate")).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("generate-title")).toHaveValue(/보완요청서/);
+    const requested = page.getByTestId("generate-table-findings").locator('[data-testid^="generate-row-findings-"]');
+    await expect(requested).toHaveCount(1);
+    await expect(requested.first().locator("input").nth(1)).toHaveValue(/WBS/);
+  });
+
   test("shared document: the second project keeps a tracked copy under its folder, dropped with the membership", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
