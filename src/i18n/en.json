@@ -1408,7 +1408,7 @@
       "labelled": "{{label}}: {{value}}"
     },
     "empty_title": "No documents yet",
-    "empty_body": "Drop PDF, image, HWP, HWPX or DOCX files here or click Import. Files placed in inbox/ are registered automatically.",
+    "empty_body": "Drop PDF, image, HWP/HWPX/HML, DOC/DOCX, XLS/XLSX, PPT/PPTX, RTF or text files here or click Import. Files placed in inbox/ are registered automatically.",
     "no_match": "No documents match the filter.",
     "drop_overlay": "Drop here to import",
     "selected": "{{count}} selected",
@@ -1543,7 +1543,7 @@
   },
   "import_docs": {
     "title": "Import documents",
-    "description": "Registers PDF, image, HWP, HWPX and DOCX files and renders their pages. Files outside the workspace are copied into the chosen folder.",
+    "description": "Registers PDF, image, HWP/HWPX/HML, DOC/DOCX, XLS/XLSX, PPT/PPTX, RTF and text files and renders their pages. Files outside the workspace are copied into the chosen folder.",
     "pick": "Choose files…",
     "paths_label": "File paths (one per line)",
     "paths_placeholder": "e.g. D:\\scan\\receipt-3p.pdf",
