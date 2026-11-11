@@ -1095,6 +1095,84 @@ fn rules_on_documents_without_an_extraction_run_are_undetermined() {
     assert!(req.content.contains("불일치 1건"), "{}", req.content);
 }
 
+/// PRJ-11: a free-text value keeps its decimal point and its sign when it is compared — version "1.2" used to
+/// be compared as 12 ("1.2" failed against the literal 1.2 and passed against "12").
+#[test]
+fn text_values_keep_decimal_points_and_signs() {
+    use check::{normalize, normalize_text, Norm};
+    assert_eq!(normalize_text("1.2"), "1.2");
+    assert_eq!(normalize_text("V1.2.3 (최종)"), "v1.2.3최종");
+    assert_eq!(normalize_text("-5"), "-5");
+    assert_eq!(normalize_text("1,200"), "1200", "thousands separators still go");
+    assert_eq!(normalize_text("A-1"), "a1", "a hyphen inside a code still goes");
+    assert_eq!(normalize_text("3. 개요"), "3개요", "a full stop is not a decimal point");
+    assert_eq!(normalize_text("㈜한빛 상사"), "한빛상사");
+    assert_eq!(normalize_text("Hanbit Co., Ltd."), "hanbit");
+    assert_eq!(normalize(FieldKind::String, "1.2", None), Some(Norm::Text("1.2".into())));
+
+    let db = db();
+    seed_doc(
+        &db,
+        "srs1",
+        "srs",
+        ("", "2026-03-02", 0.0),
+        false,
+        &[
+            ("version", "1.2", None, Str, None),
+            ("doc_no", "V1.2-rc", None, Str, None),
+            ("approved_on", "2026.03.02", None, Str, None),
+            ("delta", "-5", None, Str, None),
+            ("page_total", "1,200", None, Str, None),
+        ],
+    );
+    seed_doc(
+        &db,
+        "wbs1",
+        "wbs",
+        ("", "2026-03-02", 0.0),
+        false,
+        &[("version", "12", None, Str, None), ("approved_on", "2026-03-02", None, Str, None)],
+    );
+    let p = project(&db, "버전", None);
+    add(&db, &p.id, &["srs1", "wbs1"]);
+    let literal = |desc: &str, field: &str, value: &str| {
+        add_rule(&db, &p.id, desc, RuleOperand::field("srs", field), RuleOp::Eq, Some(RuleOperand::literal(value)), None)
+    };
+    literal("버전은 1.2", "version", "1.2");
+    literal("버전은 12", "version", "12");
+    literal("문서번호", "doc_no", "v1.2-RC");
+    literal("증감 -5", "delta", "-5");
+    literal("증감 5", "delta", "5");
+    literal("쪽수", "page_total", "1200");
+    let pair = |desc: &str, field: &str| {
+        add_rule(
+            &db,
+            &p.id,
+            desc,
+            RuleOperand::field("srs", field),
+            RuleOp::Eq,
+            Some(RuleOperand::field("wbs", field)),
+            None,
+        )
+    };
+    pair("버전 일치", "version");
+    pair("승인일 일치", "approved_on");
+    let run = check(&deps(&db, None), &p.id, &[]).unwrap();
+    let verdict = |desc: &str| {
+        let r = run.results.iter().find(|r| r.description == desc).unwrap();
+        (r.verdict, r.message.clone())
+    };
+    assert_eq!(verdict("버전은 1.2").0, Verdict::Pass, "{}", verdict("버전은 1.2").1);
+    assert_eq!(verdict("버전은 12").0, Verdict::Mismatch, "{}", verdict("버전은 12").1);
+    assert_eq!(verdict("문서번호").0, Verdict::Pass, "{}", verdict("문서번호").1);
+    assert_eq!(verdict("증감 -5").0, Verdict::Pass, "{}", verdict("증감 -5").1);
+    assert_eq!(verdict("증감 5").0, Verdict::Mismatch, "{}", verdict("증감 5").1);
+    assert_eq!(verdict("쪽수").0, Verdict::Pass, "{}", verdict("쪽수").1);
+    assert_eq!(verdict("버전 일치").0, Verdict::Mismatch, "1.2 is not 12: {}", verdict("버전 일치").1);
+    assert!(verdict("버전 일치").1.contains("1.2"), "{}", verdict("버전 일치").1);
+    assert_eq!(verdict("승인일 일치").0, Verdict::Pass, "the same date in two spellings: {}", verdict("승인일 일치").1);
+}
+
 #[test]
 fn relations_link_shared_entities() {
     let db = db();
