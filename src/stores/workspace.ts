@@ -23,12 +23,28 @@ interface WorkspaceState {
   setPreferredModel: (modelId: string | null) => Promise<void>;
 }
 
+/**
+ * Query roots that describe the machine or the installation, not the open workspace. Every other
+ * cached query belongs to a workspace: documents, knowledge, pipeline (review queue, forms, runs),
+ * projects, drafts, the journal, the purge status, the model folder and its assessment.
+ */
+const MACHINE_QUERY_ROOTS: readonly unknown[] = [queryKeys.appInfo[0], queryKeys.hardware[0], queryKeys.engineBinary[0], queryKeys.pdfium[0]];
+
+/**
+ * Drops every workspace-scoped query result (active queries refetch from the new workspace).
+ * Invalidating alone keeps the old rows on screen until the refetch lands — and for queries that
+ * are not mounted, until their screen is opened again: review items, forms and journal batches of
+ * the previous workspace, whose ids the new one rejects.
+ */
+export function resetWorkspaceQueries(): void {
+  void queryClient.resetQueries({ predicate: (query) => !MACHINE_QUERY_ROOTS.includes(query.queryKey[0]) });
+}
+
 function afterWorkspaceChange() {
+  resetWorkspaceQueries();
   resetDocumentQueries();
   resetKnowledgeQueries();
   void useSettingsStore.getState().load();
-  void queryClient.invalidateQueries({ queryKey: queryKeys.assessment });
-  void queryClient.invalidateQueries({ queryKey: queryKeys.registry });
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set) => ({
