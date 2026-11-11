@@ -650,10 +650,15 @@ export function DocumentViewer() {
                 </Button>
               </span>
             )}
-            <span className="truncate">{page?.image_url && !page.has_text && !layout?.words.length ? t("viewer.layer.no_text") : t("viewer.layer.hint")}</span>
+            {/* One line, cut to the bar: the tooltip carries the whole hint (0.7.0 audit UI-16). */}
+            <span className="truncate" title={page?.image_url && !page.has_text && !layout?.words.length ? t("viewer.layer.no_text") : t("viewer.layer.hint")} data-testid="viewer-layer-hint">
+              {page?.image_url && !page.has_text && !layout?.words.length ? t("viewer.layer.no_text") : t("viewer.layer.hint")}
+            </span>
             {highlightQuery && (
               <span className="ml-auto flex items-center gap-1 rounded-md bg-warn-soft px-2 py-0.5 text-fg" data-testid="viewer-highlight">
-                <span className="max-w-60 truncate">{t("viewer.highlight", { q: highlightQuery })}</span>
+                <span className="max-w-60 truncate" title={t("viewer.highlight", { q: highlightQuery })}>
+                  {t("viewer.highlight", { q: highlightQuery })}
+                </span>
                 <Button size="sm" variant="ghost" className="h-5 px-1.5 text-xs" onClick={clearHighlight}>
                   {t("viewer.clear_highlight")}
                 </Button>

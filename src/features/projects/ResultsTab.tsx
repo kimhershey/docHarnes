@@ -49,7 +49,7 @@ export function ResultsTab({ detail, onCheck, checking }: { detail: ProjectDetai
   };
   return (
     <div className="flex flex-col gap-5" data-testid="project-results">
-      <section className="flex flex-col gap-3" aria-labelledby="results-check-title">
+      <section className="relative flex flex-col gap-3" aria-labelledby="results-check-title">
       <h3 id="results-check-title" className="sr-only">
         {t("projects.results.run")}
       </h3>

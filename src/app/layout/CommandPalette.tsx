@@ -85,7 +85,8 @@ export function CommandPalette() {
         autoFocus
         data-testid="palette-input"
       />
-      <Command.List className="max-h-80 overflow-y-auto p-2 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:text-fg-muted">
+      {/* The list is capped by the window as well (6 rem above the palette, the 3 rem input, a margin below): in a small window at a large UI 배율 its last items stay inside. */}
+      <Command.List className="max-h-[min(20rem,calc(100dvh-11rem))] overflow-y-auto p-2 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:text-fg-muted">
         {route && (
           <Command.Group heading={t("palette.run")} forceMount>
             <Command.Item value={`__run ${query}`} onSelect={() => void run(route)} className="palette-item" forceMount data-testid="palette-run">

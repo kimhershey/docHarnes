@@ -299,7 +299,7 @@ export function ReviewPage() {
   const docChipName = filter.document ? (list.find((x) => x.document_id === filter.document)?.document_name ?? shortId(filter.document)) : null;
 
   return (
-    <div ref={rootRef} tabIndex={-1} onKeyDown={onKeyDown} className="flex h-full min-h-0 flex-col outline-none" data-testid="page-review">
+    <div ref={rootRef} tabIndex={-1} onKeyDown={onKeyDown} className="relative flex h-full min-h-0 flex-col outline-none" data-testid="page-review">
       <header className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
         <div className="mr-auto">
           <h1 className="text-lg font-semibold">{t("review.title")}</h1>

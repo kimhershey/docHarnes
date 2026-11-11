@@ -649,7 +649,7 @@ export function AssistantPage() {
         </div>
       </div>
 
-      <div ref={listRef} className="flex-1 overflow-y-auto p-4" data-testid="assistant-messages">
+      <div ref={listRef} className="relative flex-1 overflow-y-auto p-4" data-testid="assistant-messages">
         {messages.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-fg-muted">
             <Sparkles className="size-8 text-accent" aria-hidden="true" />
