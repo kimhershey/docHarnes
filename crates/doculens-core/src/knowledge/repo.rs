@@ -377,8 +377,44 @@ pub fn set_version(conn: &Connection, input: &VersionInput) -> rusqlite::Result<
     get_version(conn, &input.document_id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
 }
 
+/// Removes a document's version row ("버전 해제"). When it was its group's latest edition, the newest
+/// remaining edition takes over, so the older ones stay superseded behind a current edition instead of
+/// being hidden for good.
 pub fn clear_version(conn: &Connection, doc_id: &str) -> rusqlite::Result<bool> {
-    Ok(conn.execute("DELETE FROM doc_versions WHERE document_id = ?1", [doc_id])? > 0)
+    let row: Option<(String, bool)> = conn
+        .query_row("SELECT group_key, is_latest FROM doc_versions WHERE document_id = ?1", [doc_id], |r| {
+            Ok((r.get(0)?, r.get::<_, i64>(1)? != 0))
+        })
+        .optional()?;
+    let Some((group, was_latest)) = row else { return Ok(false) };
+    conn.execute("DELETE FROM doc_versions WHERE document_id = ?1", [doc_id])?;
+    if was_latest {
+        promote_newest_edition(conn, &group)?;
+    }
+    Ok(true)
+}
+
+/// Marks the newest edition of a group (effective date, then import time) as its latest when the group
+/// has none. Returns the promoted document.
+fn promote_newest_edition(conn: &Connection, group_key: &str) -> rusqlite::Result<Option<String>> {
+    const LIVE: &str = "FROM doc_versions v JOIN documents d ON d.id = v.document_id \
+                        WHERE v.group_key = ?1 AND d.deleted_at IS NULL";
+    let latest: i64 =
+        conn.query_row(&format!("SELECT COUNT(*) {LIVE} AND v.is_latest = 1"), [group_key], |r| r.get(0))?;
+    if latest > 0 {
+        return Ok(None);
+    }
+    let newest: Option<String> = conn
+        .query_row(
+            &format!("SELECT v.document_id {LIVE} ORDER BY v.effective_date DESC, d.imported_at DESC LIMIT 1"),
+            [group_key],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(id) = &newest {
+        conn.execute("UPDATE doc_versions SET is_latest = 1, updated_at = ?2 WHERE document_id = ?1", params![id, now()])?;
+    }
+    Ok(newest)
 }
 
 // ---------------------------------------------------------------------------
@@ -853,7 +889,14 @@ pub fn scope_doc_ids(conn: &Connection, scope: &SearchScope) -> rusqlite::Result
     // documents whose every collection is inactive.
     let mut excluded: HashSet<String> = HashSet::new();
     if scope.latest_only {
-        let mut st = conn.prepare("SELECT document_id FROM doc_versions WHERE is_latest = 0")?;
+        // An edition is superseded only while its group still has a latest edition. Once that one is
+        // cleared, demoted, moved to another group or deleted with its document, the editions that are
+        // left are all there is — hiding them would leave the title unanswerable.
+        let mut st = conn.prepare(
+            "SELECT v.document_id FROM doc_versions v WHERE v.is_latest = 0 AND EXISTS (\
+               SELECT 1 FROM doc_versions l JOIN documents d ON d.id = l.document_id \
+               WHERE l.group_key = v.group_key AND l.is_latest = 1 AND d.deleted_at IS NULL)",
+        )?;
         excluded.extend(st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?);
     }
     if scope.collections.is_empty() && scope.active_collections_only {

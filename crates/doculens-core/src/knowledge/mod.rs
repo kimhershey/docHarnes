@@ -232,7 +232,8 @@ pub enum SearchMode {
 }
 
 /// Which documents a search / answer may draw from. Empty vectors mean "no
-/// restriction"; `latest_only` hides superseded editions (`doc_versions`).
+/// restriction"; `latest_only` hides superseded editions (`doc_versions`) while their
+/// group has a latest edition.
 ///
 /// `project_id` (0.5.0 plan A) allows the project's work documents ∪ its reference group ∪ the
 /// active groups of the 공통 참고 자료; with `documents` set as well, those documents stand in for

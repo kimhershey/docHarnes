@@ -1227,6 +1227,62 @@ fn kept_evidence_outside_the_follow_up_scope_is_dropped() {
     assert!(a.sources.iter().any(|s| s.chunk_id == old), "{:?}", a.sources);
 }
 
+/// KNO-7: once the latest edition is cleared, demoted or deleted, the editions it superseded are searchable
+/// again — they used to stay flagged "superseded" and out of the default search for good.
+#[test]
+fn editions_are_searchable_again_once_their_latest_edition_is_gone() {
+    let w = World::new();
+    let found = |w: &World, doc: &str| w.hits("숙박비 한도").iter().any(|h| h.document_id == doc);
+    let version = |w: &World, doc: &str, date: &str, latest: bool| {
+        w.db.with(|c| {
+            repo::set_version(
+                c,
+                &VersionInput {
+                    document_id: doc.into(),
+                    group_key: "출장비 규정".into(),
+                    version_label: None,
+                    effective_date: Some(date.into()),
+                    is_latest: latest,
+                    note: None,
+                },
+            )
+        })
+        .unwrap()
+    };
+    let is_latest = |w: &World, doc: &str| w.db.with(|c| repo::get_version(c, doc)).unwrap().is_some_and(|v| v.is_latest);
+    // A third, older edition (2022) joins the 2023 / 2024 editions of the fixture.
+    add_doc(&w.db, "reg0", "출장비규정_2022.pdf", DocumentRole::Knowledge, &[REGULATION_V1]);
+    index_pending(&w.index_deps(), None, false, None, &mut |_| {}).unwrap();
+    version(&w, "reg0", "2022-01-01", false);
+    assert!(found(&w, "reg2") && !found(&w, "reg1") && !found(&w, "reg0"), "the 2024 edition hides the older ones");
+
+    // 해제: clearing the latest edition promotes the newest remaining one; the oldest stays superseded.
+    assert!(w.db.with(|c| repo::clear_version(c, "reg2")).unwrap());
+    assert!(is_latest(&w, "reg1") && !is_latest(&w, "reg0"));
+    assert!(found(&w, "reg1") && !found(&w, "reg0"));
+    assert!(found(&w, "reg2"), "the cleared document is an ordinary document again");
+    assert!(!w.db.with(|c| repo::clear_version(c, "reg2")).unwrap(), "nothing left to clear");
+    // Clearing a superseded edition changes nothing for the others.
+    assert!(w.db.with(|c| repo::clear_version(c, "reg0")).unwrap());
+    assert!(is_latest(&w, "reg1"));
+    version(&w, "reg0", "2022-01-01", false);
+
+    // The latest edition's document is deleted (its version row goes with it): the group has no latest any
+    // more, so what is left is searchable.
+    w.db.with(|c| docs::delete_document(c, "reg1")).unwrap();
+    assert!(!is_latest(&w, "reg0"), "no write happened on that path");
+    assert!(found(&w, "reg0"), "a group without a latest edition hides nothing");
+
+    // Demoting the latest edition without naming another one has the same effect.
+    version(&w, "reg2", "2024-01-01", true);
+    assert!(found(&w, "reg2") && !found(&w, "reg0"));
+    version(&w, "reg2", "2024-01-01", false);
+    assert!(found(&w, "reg2") && found(&w, "reg0"));
+    // `latest_only = false` still shows every edition, and the listing leads with the newest.
+    let groups = w.db.with(repo::list_version_groups).unwrap();
+    assert_eq!(groups[0].documents.iter().map(|d| d.document_id.as_str()).collect::<Vec<_>>(), vec!["reg2", "reg0"]);
+}
+
 /// Records every request and replies with `reply`, reporting `finish_reason` like the engine does.
 struct RecordingChat {
     reply: String,
