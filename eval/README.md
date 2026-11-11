@@ -5,7 +5,7 @@
 
 ```
 eval/
-  golden/planner.json                  플래너 골든셋 100건(한국어 70·영어 20·혼합 10)
+  golden/planner.json                  플래너 골든셋 129건(0.7.0 기준: 한국어 93·영어 26·혼합 10)
   golden/planner-context.json          골든셋 실행에 쓰는 PlanContext(기준일 2026-11-08, 문서 유형·스키마·폴더·태그·모델·프로젝트)
   golden/pipeline-manifest.example.json 파이프라인 골든 매니페스트 예시(gen_fixtures 합성 샘플 기준)
   baselines/planner-rules.json         규칙+프리라우터 경로의 현재 정확도 기준선(CI 게이트가 비교)
@@ -39,15 +39,18 @@ cargo run -p doculens-eval -- --help
 cargo run -p doculens-eval -- planner --golden eval/golden/planner.json \
     --baseline eval/baselines/planner-rules.json --out eval/out/planner-rules.json
 
-# 제품 경로 전체(규칙 → 모델 1회 재질의)까지: 실제 llama-server + 드롭인 모델 폴더
+# 앱의 기본 해석과 같은 모델 우선 경로(슬래시 명령만 프리라우터, 나머지는 모델 + 재질의 1회)까지: 실제 llama-server + 드롭인 모델 폴더
 cargo run -p doculens-eval -- planner --golden eval/golden/planner.json \
     --engine <llama-server 경로> --models-dir <.doculens/models> --model gemma4-e4b-q5km \
     [--backend cpu|vulkan|cu121|cu129] [--profile balanced] --out eval/out/planner-gemma4-e4b-q5km.json
 ```
 
-- 모든 골든 명령을 `doculens_core::planner::llm::plan(None, text, &ctx)`로 돌립니다(프리라우터 → 문장 규칙; 모델이 없으면
-  `no_model` 명확화로 끝남). `--engine`이 있으면 `plan(Some(&PlannerDeps{..}), …)`로 **제품 경로**(규칙이 못 풀면 모델, 검증 실패
-  시 재질의 1회)를 한 번 더 돌려 두 결과를 모두 보고하고, 결과 파일의 1차 값은 모델 경로가 됩니다(`rules_only`에 규칙 결과 동봉).
+<!-- 0.8.0: 리드가 갱신 -->
+- 모든 골든 명령을 `doculens_core::planner::llm::plan(None, text, &ctx, PlanMode::RulesFirst)`로 돌립니다(프리라우터 → 문장 규칙;
+  규칙이 못 풀면 `no_model` 명확화로 끝남). 이것이 CI 게이트가 재는 **규칙 경로**이고, 앱에서는 해석을 "규칙(구형)"으로 바꿨을 때의
+  동작입니다. `--engine`이 있으면 `plan(Some(&PlannerDeps{..}), …, PlanMode::ModelFirst)` — 앱의 기본 해석인 **모델 우선 경로**
+  (슬래시 명령만 프리라우터, 그 밖의 문장은 모두 모델, 검증 실패 시 재질의 1회) — 를 한 번 더 돌려 두 결과를 모두 보고하고, 결과
+  파일의 1차 값은 모델 경로가 됩니다(`rules_only`에 규칙 결과 동봉). 모델 경로의 정확도는 CI에서 재지 않습니다(GPU·모델 필요).
 - 컨텍스트는 골든 파일의 `"context"`(골든 파일 기준 상대 경로) 또는 `--context <json>`; `PlanContext` 구조 그대로
   JSON으로 적습니다(`today`, `language`, `folders`, `doc_types`, `schemas`, `tags`, `current_folder`, `selected_doc_ids`,
   `current_document`, `current_page`, `document_count`, `model_ids`, `projects`, `current_project`).
@@ -77,10 +80,10 @@ cargo run -p doculens-eval -- planner --golden eval/golden/planner.json \
 - **원인 분류**(결과 JSON `cause`, 보고서 묶음): `no_rule` 규칙 없음(모델 필요) · `rule_clarified` 규칙이 되묻기로 후퇴 ·
   `over_interpretation` 과잉 해석(되묻기·무시가 정답) · `wrong_ops` 의도·연산 오판 · `params` 파라미터 누락·오류 ·
   `scope` 범위 오류.
-- 덮는 연산 종류: `OpKind::ALL` 전부(v1.0 33종 + P6 10종: `draft_document`, `register_form`, `explain`, `compare`,
-  `create_project`, `add_to_project`, `define_rule`, `check_consistency`, `request_supplement`, `set_retention`). P6 연산은
-  규칙이 아직 움직이는 중이라 연산 종류만 채점합니다(파라미터 미검사). 설계 예시 명령 12종(`docs/user-pc-checklist.md` P5)은 모두
-  포함되어 있습니다(`note: "설계 예시 n"`).
+- 덮는 연산 종류(0.7.0 기준): `OpKind::ALL` 63종 가운데 59종. `manage_template`·`merge`·`remove_from_project`·`workspace`는 아직
+  골든 항목이 없습니다. 파라미터는 `expected.params`를 적은 항목만 검사하므로 연산 종류만 채점하는 항목이 섞여 있습니다(P6에서
+  들어온 `draft_document`·`define_rule`·`check_consistency` 등의 항목은 대부분 그렇습니다). 설계 예시 명령 12종(`docs/user-pc-checklist.md` P5)은 모두
+  포함되어 있습니다(`note: "설계 예시 n"`). <!-- 0.8.0: 리드가 갱신 -->
 
 #### 회귀 게이트
 
