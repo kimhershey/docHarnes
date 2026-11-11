@@ -775,6 +775,112 @@ fn supplement_request_maps_project_json_findings() {
     assert_eq!(d2.field("due_date").unwrap().value, "2026-12-20");
 }
 
+/// GEN-1: the 초안 어시스턴트 on a rule-composed 보완요청서. A request that carries `revise`, `feedback` or
+/// `previous` is not rule-only (the job bridge loads the model for it); without a model it fails instead of
+/// being recomposed by rules, and with one the instruction reaches the model and the user's edits survive.
+#[test]
+fn supplement_request_revisions_take_the_model_path() {
+    use super::ReviseScope;
+    let w = world();
+    let base = DraftRequest {
+        form_ref: Some("supplement_request".into()),
+        content: "수신: ㈜한빛\n기한: 2026-11-30".into(),
+        sources: vec![SourceRef::Text {
+            title: Some("정합성 검사 결과".into()),
+            text: "계약서 | 서명 누락 | 계약서 3쪽 | 서명본 제출".into(),
+        }],
+        use_knowledge: false,
+        ..Default::default()
+    };
+    assert!(draft::rule_only(&base));
+    // The rule-composed draft, then edited in the 문서 작성 screen: a table cell and a body paragraph.
+    let mut prev = draft::draft(&w.deps(None, None), &base).unwrap().draft;
+    prev.tables[0].rows[0][3] = "서명본을 11월 20일까지 제출".into();
+    let edited = prev.body.iter().position(|b| matches!(b, DraftBlock::Paragraph { .. })).unwrap();
+    prev.body[edited] = DraftBlock::Paragraph { text: "사용자가 고친 근거 문단".into(), source: None };
+    let with_prev = |revise: Option<ReviseScope>, feedback: Option<&str>| DraftRequest {
+        previous: Some(Box::new(prev.clone())),
+        feedback: feedback.map(str::to_string),
+        revise,
+        ..base.clone()
+    };
+    let whole = with_prev(Some(ReviseScope::Whole), Some("더 정중하게"));
+    let section = with_prev(Some(ReviseScope::Section { section: 2 }), Some("2절을 더 정중하게"));
+    let insert =
+        with_prev(Some(ReviseScope::InsertAfter { section: None, heading: Some("문의".into()) }), Some("문의 절"));
+    let regenerate = with_prev(None, None);
+    let feedback_only = DraftRequest { feedback: Some("더 짧게".into()), ..base.clone() };
+    for (name, req) in [
+        ("whole", &whole),
+        ("section", &section),
+        ("insert", &insert),
+        ("previous", &regenerate),
+        ("feedback", &feedback_only),
+    ] {
+        assert!(!draft::rule_only(req), "{name}: the bridge must load the model");
+        // Before the fix `whole`, `previous` and `feedback` were recomposed by rules: the instruction was
+        // ignored and the edited cell / paragraph were lost.
+        let r = draft::draft(&w.deps(None, None), req);
+        assert!(matches!(r, Err(CoreError::EngineNotRunning)), "{name}: {r:?}");
+    }
+    // A blank instruction is no instruction; other templates and non-text sources were never rule-only.
+    assert!(draft::rule_only(&DraftRequest { feedback: Some("  ".into()), ..base.clone() }));
+    assert!(!draft::rule_only(&DraftRequest { sources: Vec::new(), ..base.clone() }));
+    assert!(!draft::rule_only(&DraftRequest { form_ref: Some("estimate".into()), ..base.clone() }));
+    let mut mixed = base.clone();
+    mixed.sources.push(SourceRef::Document { doc_id: "d".into() });
+    assert!(!draft::rule_only(&mixed));
+
+    // With the model, a section revision rewrites that section only: the item table stays in it, the
+    // edited cell and the other sections are untouched.
+    let para = |t: &str| json!({"kind": "paragraph", "text": t, "items": [], "source_index": null});
+    let chat = SeqChat::new(vec![json!({ "blocks": [para("아래 항목의 보완을 정중히 요청드립니다.")] }).to_string()]);
+    let vlm = Vlm::new(&chat, "scripted".into(), Profile::Balanced, None);
+    let out = draft::draft(&w.deps(Some(&vlm), None), &section).unwrap();
+    assert_eq!(out.source, "model");
+    let d = &out.draft;
+    assert_eq!(d.id, prev.id);
+    assert_eq!(d.tables[0].rows[0][3], "서명본을 11월 20일까지 제출");
+    assert!(d
+        .body
+        .iter()
+        .any(|b| matches!(b, DraftBlock::Paragraph { text, .. } if text == "사용자가 고친 근거 문단")));
+    let s2 = super::sections_of(&d.body)[1].clone();
+    assert_eq!(s2.heading.as_deref(), Some("보완 요청 사항"));
+    assert!(
+        matches!(&d.body[s2.start + 1], DraftBlock::Paragraph { text, .. } if text == "아래 항목의 보완을 정중히 요청드립니다.")
+    );
+    assert!(d.body[s2.start..s2.end].iter().any(|b| matches!(b, DraftBlock::TableRef { key } if key == "items")));
+    assert!(chat.prompt(0).contains("[수정 요청]\n2절을 더 정중하게"), "{}", chat.prompt(0));
+
+    // "전체 다시 쓰기": the model sees the edited draft and the instruction, and its reply is the result.
+    let reply = json!({
+        "title": "보완 요청",
+        "fields": [{"key": "recipient", "value": "㈜한빛", "source_index": null}],
+        "tables": [{"key": "items", "rows": [["계약서", "서명 누락", "계약서 3쪽", "서명본을 11월 20일까지 제출해 주시기 바랍니다"]]}],
+        "body": [
+            {"kind": "heading", "text": "근거", "items": [], "source_index": null},
+            para("정중히 다시 쓴 근거 문단")
+        ],
+        "notes": []
+    });
+    let chat2 = SeqChat::json(reply);
+    let vlm2 = Vlm::new(&chat2, "scripted".into(), Profile::Balanced, None);
+    let out2 = draft::draft(&w.deps(Some(&vlm2), None), &whole).unwrap();
+    assert_eq!(out2.source, "model");
+    let prompt = chat2.prompt(0);
+    assert!(prompt.contains("[이전 초안]") && prompt.contains("사용자가 고친 근거 문단"), "{prompt}");
+    assert!(prompt.contains("서명본을 11월 20일까지 제출") && prompt.contains("[수정 요청]\n더 정중하게"), "{prompt}");
+    assert_eq!(out2.draft.id, prev.id);
+    assert_eq!(out2.draft.tables[0].rows[0][3], "서명본을 11월 20일까지 제출해 주시기 바랍니다");
+    assert!(out2
+        .draft
+        .body
+        .iter()
+        .any(|b| matches!(b, DraftBlock::Paragraph { text, .. } if text == "정중히 다시 쓴 근거 문단")));
+    assert!(!out2.draft.notes.iter().any(|n| n.contains("규칙으로 작성")), "{:?}", out2.draft.notes);
+}
+
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------

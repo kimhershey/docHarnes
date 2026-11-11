@@ -10,7 +10,7 @@ use tauri::{AppHandle, Manager};
 
 use doculens_core::generate::{
     self, store, Draft, DraftOutcome, DraftRequest, DraftSummary, GenerateDeps, SaveRequest, SavedDocument,
-    TemplateInfo, TemplateKind,
+    TemplateInfo,
 };
 use doculens_core::jobs::{JobControl, JobPriority, JobSpec};
 use doculens_core::knowledge::embed::Embedder;
@@ -122,11 +122,11 @@ fn draft_label(req: &DraftRequest, db: &doculens_core::db::Db) -> String {
     }
 }
 
-/// Whether a request can be filled without the model (보완요청서 from findings).
+/// Whether a request can be filled without the model (a fresh 보완요청서 from findings). A request
+/// with `revise`, `feedback` or `previous` — the 초안 어시스턴트 on such a draft — is not: it takes
+/// the model path like any other draft.
 fn rule_only(req: &DraftRequest) -> bool {
-    req.form_ref.as_deref().and_then(TemplateKind::parse) == Some(TemplateKind::SupplementRequest)
-        && req.sources.iter().all(|s| matches!(s, generate::SourceRef::Text { .. }))
-        && !req.sources.is_empty()
+    generate::draft::rule_only(req)
 }
 
 /// Worker for `JobSpec::Draft`.

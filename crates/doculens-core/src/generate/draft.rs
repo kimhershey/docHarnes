@@ -11,8 +11,9 @@
 //! excluded documents) → `prompts` → `Vlm::call_json(Stage::NlSchema, …)`
 //! under the grammar of `schema` (one retry with a reminder when the reply is
 //! not JSON) → `Draft` with citations resolved from `source_index` →
-//! `validate`. Without a model only the 보완요청서 can be composed, by rules
-//! from the request's text sources (`source = "rules"`).
+//! `validate`. Without a model only a fresh 보완요청서 can be composed, by rules
+//! from the request's text sources (`source = "rules"`); a revision or a
+//! regeneration (`revise` / `feedback` / `previous`) always needs the model.
 
 use std::collections::{BTreeMap, HashSet};
 use std::time::Instant;
@@ -1013,6 +1014,23 @@ fn is_json_failure(e: &CoreError) -> bool {
     matches!(e, CoreError::Engine(m) if m.contains("not JSON") || m.contains("cut off"))
 }
 
+/// A request that works on an earlier draft: a revision scope, an instruction (`feedback`) or the
+/// draft itself (`previous`). Only the model can apply these — the rule-based 보완요청서 path would
+/// ignore the instruction and rebuild the body and the item table from the findings, dropping
+/// what the user changed (GEN-1).
+fn needs_model(req: &DraftRequest) -> bool {
+    req.revise.is_some() || req.previous.is_some() || req.feedback.as_deref().is_some_and(|f| !f.trim().is_empty())
+}
+
+/// Whether the host may skip loading the model: an explicit 보완요청서 composed from text sources
+/// (the findings of the projects module) and nothing that [`needs_model`].
+pub fn rule_only(req: &DraftRequest) -> bool {
+    !needs_model(req)
+        && req.form_ref.as_deref().and_then(TemplateKind::parse) == Some(TemplateKind::SupplementRequest)
+        && !req.sources.is_empty()
+        && req.sources.iter().all(|s| matches!(s, SourceRef::Text { .. }))
+}
+
 /// Produces a validated draft.
 pub fn draft(deps: &GenerateDeps<'_>, req: &DraftRequest) -> Result<DraftOutcome> {
     let started = Instant::now();
@@ -1031,7 +1049,9 @@ pub fn draft(deps: &GenerateDeps<'_>, req: &DraftRequest) -> Result<DraftOutcome
     }
     let elapsed = |s: &Instant| s.elapsed().as_millis() as u64;
     let Some(vlm) = deps.vlm else {
-        if spec.builtin_kind() == Some(TemplateKind::SupplementRequest) {
+        // Rules compose a fresh 보완요청서 only; a regeneration / revision without a model fails
+        // instead of silently ignoring the instruction (GEN-1).
+        if spec.builtin_kind() == Some(TemplateKind::SupplementRequest) && !needs_model(req) {
             let mut d = supplement_draft(&spec, req, &sources, deps.ko());
             d.notes.extend(notes);
             super::validate::validate(&mut d);
