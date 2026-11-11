@@ -343,4 +343,32 @@ test.describe("P4 pipeline", () => {
     await expect(layer).not.toContainText("손교정");
     await expect(page.getByTestId("viewer-text-source")).toHaveText(ko.viewer.text_edit.source.ocr);
   });
+
+  test("양식 테스트 asks before it replaces a document's results; the built-in 일반 form cannot be switched off (PIP-2, PIP-15)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await processEstimate(page);
+    await openSettingsTab(page, "schemas");
+    await page.getByTestId("schema-row-builtin-estimate").click();
+    // The estimate already has results: 테스트 asks first, and cancelling starts no job.
+    await page.getByTestId("schema-test-doc").click();
+    await page.getByRole("option").first().click(); // the only document of the workspace
+    await page.getByTestId("schema-test-run").click();
+    await expect(page.getByTestId("confirm-dialog")).toContainText(ko.pipeline.process.confirm_title);
+    await page.getByTestId("confirm-cancel").click();
+    await expect(page.getByTestId("confirm-dialog")).toBeHidden();
+    await expect(page.getByTestId("toaster")).not.toContainText(ko.schemas.editor.test_started);
+    await page.getByTestId("schema-test-run").click();
+    await page.getByTestId("confirm-ok").click();
+    await expect(page.getByTestId("toaster")).toContainText(ko.schemas.editor.test_started);
+
+    // An ordinary built-in form can be switched off; 일반 — the fallback of every 기타 document — cannot.
+    await expect(page.getByTestId("schema-enabled")).toBeEnabled();
+    const estimateTitle = await page.getByTestId("schema-title").textContent();
+    await page.getByTestId("schema-row-builtin-general").click();
+    await expect(page.getByTestId("schema-title")).not.toHaveText(estimateTitle ?? "");
+    await expect(page.getByTestId("schema-enabled")).toBeChecked();
+    await expect(page.getByTestId("schema-enabled")).toBeDisabled();
+    await expect(page.getByTestId("schema-enabled")).toHaveAttribute("data-locked", "true");
+  });
 });

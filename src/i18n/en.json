@@ -2079,6 +2079,7 @@
     "default": "Default",
     "set_default": "Make default for this type",
     "enabled": "Used by the classifier",
+    "general_locked": "This is the fallback form for unclassified (Other) documents, so it cannot be switched off.",
     "version": "v{{version}}",
     "source": {
       "builtin": "Built-in",

@@ -2079,6 +2079,7 @@
     "default": "기본",
     "set_default": "이 유형의 기본으로",
     "enabled": "분류에 사용",
+    "general_locked": "분류되지 않은 문서(기타)를 추출할 때 쓰는 기본 양식이라 끌 수 없습니다.",
     "version": "v{{version}}",
     "source": {
       "builtin": "내장",

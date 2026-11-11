@@ -32,6 +32,14 @@ function emptyDraft(): SchemaDraft {
   return { id: null, name: "", name_en: null, doc_type: "", source: "user", description_ko: null, description_en: null, definition: { fields: [newFieldDef("field_1")], rules: [] }, form_document_id: null, note: null };
 }
 
+/**
+ * The built-in `general` form is the fallback every 기타 / unclassified document is extracted with
+ * (`pipeline::run::resolve_schema`), so while it is on it cannot be switched off (PIP-15).
+ */
+function isLockedOn(s: SchemaRecord): boolean {
+  return s.source === "builtin" && s.doc_type === "general" && s.enabled;
+}
+
 /** A schema the user just saved under a new type slug: offers to re-classify the documents typed "other". */
 interface NewType {
   slug: string;
@@ -299,7 +307,9 @@ export function SchemasPage() {
       toast(describeError(e, t), "danger");
     }
   };
+  const generalLocked = !!selected && isLockedOn(selected);
   const setEnabled = async (s: SchemaRecord, enabled: boolean) => {
+    if (!enabled && isLockedOn(s)) return;
     try {
       await api.pipelineSchemaSetEnabled(s.id, enabled);
     } catch (e) {
@@ -452,8 +462,11 @@ export function SchemasPage() {
                 <span className="ml-auto flex flex-wrap items-center gap-1">
                   {selected && (
                     <>
-                      <label className="mr-2 flex items-center gap-1 text-xs">
-                        <Switch checked={selected.enabled} onCheckedChange={(v) => void setEnabled(selected, v)} aria-label={t("schemas.enabled")} />
+                      {/* The built-in `general` form is what every 기타 / unclassified document is extracted with: switched
+                          off, those documents fail with schema_not_found (PIP-15), so it stays on (a form that is
+                          already off can still be switched back on). */}
+                      <label className="mr-2 flex items-center gap-1 text-xs" title={generalLocked ? t("schemas.general_locked") : undefined}>
+                        <Switch checked={selected.enabled} onCheckedChange={(v) => void setEnabled(selected, v)} disabled={generalLocked} aria-label={t("schemas.enabled")} data-testid="schema-enabled" data-locked={generalLocked || undefined} />
                         {t("schemas.enabled")}
                       </label>
                       <Button size="sm" variant="ghost" onClick={() => void setDefault(selected)} disabled={selected.is_default} data-testid="schema-set-default">
