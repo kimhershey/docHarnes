@@ -664,10 +664,26 @@ function DocCard({ doc, selected, onToggle, onOpen, onOpenReview, t, typeLabel, 
   );
 }
 
-/** Column tracks in rem so they grow with the UI 배율 like the cell text (px tracks wrapped the date and size cells from 125 % up). */
-const LIST_COLS = "grid-cols-[1.75rem_minmax(0,2fr)_5rem_3.75rem_6.25rem_6.875rem_5.625rem_9.375rem_5.625rem]";
-/** Fixed tracks + gaps + padding come to ~50 rem; below that the name column would vanish, so the list scrolls sideways instead. */
-const LIST_MIN_W = "min-w-[58rem]";
+/**
+ * Column tracks in rem so they grow with the UI 배율 like the cell text (px tracks wrapped the date and size cells from 125 % up).
+ * Which columns are shown follows the width of the list itself (container queries in rem, so the UI 배율 and the folder
+ * pane count like a narrower window): select · name · status always, then 검토 (32 rem), 유형 (40 rem), 가져온 시각
+ * (48 rem), 형식 · 쪽 (60 rem) and 크기 (68 rem). The name takes what is left — at least ~14 rem at every step — so the
+ * list never needs a horizontal scrollbar (0.7.0 audit UI-6: all nine columns needed 58 rem and the default window has 52).
+ */
+const LIST_COLS =
+  "grid-cols-[1.75rem_minmax(0,1fr)_6.25rem] @[32rem]:grid-cols-[1.75rem_minmax(0,1fr)_6.25rem_5.625rem] @[40rem]:grid-cols-[1.75rem_minmax(0,1fr)_6.25rem_6.875rem_5.625rem] @[48rem]:grid-cols-[1.75rem_minmax(0,1fr)_6.25rem_6.875rem_5.625rem_9.375rem] @[60rem]:grid-cols-[1.75rem_minmax(0,1fr)_5rem_3.75rem_6.25rem_6.875rem_5.625rem_9.375rem] @[68rem]:grid-cols-[1.75rem_minmax(0,1fr)_5rem_3.75rem_6.25rem_6.875rem_5.625rem_9.375rem_5.625rem]";
+/** The header cell and the row cells of a column carry the same visibility class. */
+const LIST_COL_SHOW = {
+  kind: "hidden @[60rem]:block",
+  pages: "hidden @[60rem]:block",
+  doc_type: "hidden @[40rem]:block",
+  review: "hidden @[32rem]:block",
+  imported: "hidden @[48rem]:block",
+  size: "hidden @[68rem]:block",
+} as const;
+/** Select + status + gaps + padding come to ~10.5 rem; below 20 rem the name would vanish, so only then the list scrolls sideways. */
+const LIST_MIN_W = "min-w-[20rem]";
 
 function ListView({ docs, selected, onToggle, onOpen, onOpenReview, typeLabel, locale, dragDocs }: { docs: DocumentView[]; selected: Set<string>; dragDocs: (doc: DocumentView) => DragDoc[]; onToggle: (id: string) => void; onOpen: (id: string) => void; onOpenReview: (id: string) => void; typeLabel: (slug: string) => string; locale: string }) {
   const { t } = useTranslation();
@@ -678,23 +694,23 @@ function ListView({ docs, selected, onToggle, onOpen, onOpenReview, typeLabel, l
   useEffect(() => {
     virtualizer.measure();
   }, [rootPx, virtualizer]);
-  const headers = [
-    t("library.columns.name"),
-    t("library.columns.kind"),
-    t("library.columns.pages"),
-    t("library.columns.status"),
-    t("library.columns.doc_type"),
-    t("library.columns.review"),
-    t("library.columns.imported"),
-    t("library.columns.size"),
+  const headers: { key: "name" | "status" | keyof typeof LIST_COL_SHOW; label: string }[] = [
+    { key: "name", label: t("library.columns.name") },
+    { key: "kind", label: t("library.columns.kind") },
+    { key: "pages", label: t("library.columns.pages") },
+    { key: "status", label: t("library.columns.status") },
+    { key: "doc_type", label: t("library.columns.doc_type") },
+    { key: "review", label: t("library.columns.review") },
+    { key: "imported", label: t("library.columns.imported") },
+    { key: "size", label: t("library.columns.size") },
   ];
   return (
-    <div ref={parentRef} className="min-h-40 flex-1 overflow-auto" role="grid" aria-label={t("library.list_label")} aria-rowcount={docs.length + 1} data-testid="library-list">
+    <div ref={parentRef} className="@container min-h-40 flex-1 overflow-auto" role="grid" aria-label={t("library.list_label")} aria-rowcount={docs.length + 1} data-testid="library-list">
       <div role="row" className={cn("sticky top-0 z-10 grid items-center gap-2 border-b border-border bg-bg px-3 text-xs font-medium text-fg-muted", LIST_COLS, LIST_MIN_W)} style={{ height: rowPx }}>
         <span role="columnheader" aria-label={t("common.select")} />
         {headers.map((h) => (
-          <span key={h} role="columnheader">
-            {h}
+          <span key={h.key} role="columnheader" className={cn("truncate", h.key !== "name" && h.key !== "status" && LIST_COL_SHOW[h.key])} data-column={h.key}>
+            {h.label}
           </span>
         ))}
       </div>
@@ -728,23 +744,23 @@ function ListView({ docs, selected, onToggle, onOpen, onOpenReview, typeLabel, l
                   {doc.tags.length > 0 && <span className="ml-2 text-xs text-fg-subtle">{doc.tags.map((x) => `#${x}`).join(" ")}</span>}
                 </button>
               </span>
-              <span role="gridcell" className="text-xs">
+              <span role="gridcell" className={cn("text-xs", LIST_COL_SHOW.kind)}>
                 {t(`documents.kind.${doc.source_kind}`)}
               </span>
-              <span role="gridcell" className="text-xs tabular-nums">
+              <span role="gridcell" className={cn("text-xs tabular-nums", LIST_COL_SHOW.pages)}>
                 {doc.page_count}
               </span>
               <span role="gridcell">
                 <Badge variant={statusVariant(doc.status)}>{t(`documents.status.${doc.status}`)}</Badge>
               </span>
-              <span role="gridcell" className="min-w-0">
+              <span role="gridcell" className={cn("min-w-0", LIST_COL_SHOW.doc_type)}>
                 {doc.doc_type && (
                   <Badge variant="outline" className="max-w-full truncate" data-testid={`doc-type-${doc.id}`}>
                     {typeLabel(doc.doc_type)}
                   </Badge>
                 )}
               </span>
-              <span role="gridcell">
+              <span role="gridcell" className={LIST_COL_SHOW.review}>
                 {doc.review_status === "pending" && <ReviewBadge doc={doc} onOpen={onOpenReview} t={t} />}
                 {doc.review_status === "done" && (
                   <Badge variant="ok" data-testid={`doc-review-done-${doc.id}`}>
@@ -752,10 +768,10 @@ function ListView({ docs, selected, onToggle, onOpen, onOpenReview, typeLabel, l
                   </Badge>
                 )}
               </span>
-              <span role="gridcell" className="text-xs text-fg-muted">
+              <span role="gridcell" className={cn("text-xs text-fg-muted", LIST_COL_SHOW.imported)}>
                 {formatDate(doc.imported_at, locale)}
               </span>
-              <span role="gridcell" className="text-xs tabular-nums text-fg-muted">
+              <span role="gridcell" className={cn("text-xs tabular-nums text-fg-muted", LIST_COL_SHOW.size)}>
                 {formatBytes(doc.size_bytes)}
               </span>
             </div>
