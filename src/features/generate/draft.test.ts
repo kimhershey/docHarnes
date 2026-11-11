@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Draft, DraftIssue, SchemaRecord, TemplateInfo } from "@/lib/types";
 
-import { addRow, applySuggestion, blockText, blockWithText, documentSourceIds, formRefToPicker, hasBlockingIssues, insertBlock, moveBlock, newBlock, parseIssuePath, pickerToFormRef, pickerToReviseScope, removeBlock, removeRow, reviseRequest, reviseScopeLabel, reviseScopeToPicker, sectionAt, sectionsOf, setBlockLevel, setFieldValue, toggleExcluded, withDocumentSources } from "./draft";
+import { addRow, applySuggestion, blockInputText, blockText, blockWithText, documentSourceIds, formRefToPicker, hasBlockingIssues, insertBlock, moveBlock, newBlock, parseIssuePath, pickerToFormRef, pickerToReviseScope, removeBlock, removeRow, reviseRequest, reviseScopeLabel, reviseScopeToPicker, sectionAt, sectionsOf, setBlockLevel, setFieldValue, toggleExcluded, withDocumentSources } from "./draft";
 
 function draft(): Draft {
   return {
@@ -87,6 +87,28 @@ describe("draft edits", () => {
     expect(blockWithText(list, "x\n\ny ")).toEqual({ kind: "list", items: ["x", "y"], ordered: false });
     expect(blockWithText(draft().body[1]!, "새 문단")).toEqual({ kind: "paragraph", text: "새 문단" });
     expect(blockText(draft().body[3]!)).toBe("");
+  });
+
+  it("keeps a list box as typed while the draft holds the cleaned items (GEN-5: Enter and spaces were swallowed)", () => {
+    // Typing "첫째 항목⏎둘째 항목" key by key: after every keystroke the box must show exactly what was typed.
+    let block = newBlock("list");
+    let typed = "";
+    for (const key of ["첫째", " ", "항목", "\n", "둘째", " ", "항목"]) {
+      typed += key;
+      block = blockWithText(block, typed);
+      expect(blockInputText(block, typed)).toBe(typed);
+    }
+    expect(typed).toBe("첫째 항목\n둘째 항목");
+    expect(block).toEqual({ kind: "list", items: ["첫째 항목", "둘째 항목"], ordered: false });
+    // A blank line and trailing spaces stay in the box until it loses focus (typed = null): then the cleaned items show.
+    const loose = "첫째 항목 \n\n둘째 항목\n";
+    block = blockWithText(block, loose);
+    expect(blockInputText(block, loose)).toBe(loose);
+    expect(blockInputText(block, null)).toBe("첫째 항목\n둘째 항목");
+    // A change from outside (a revision replaced the items) wins over the stale typed text.
+    expect(blockInputText({ kind: "list", items: ["다른 항목"], ordered: false }, loose)).toBe("다른 항목");
+    // Headings and paragraphs are stored as typed, so the box is the block.
+    expect(blockInputText(blockWithText(draft().body[1]!, "끝에 공백 "), "끝에 공백 ")).toBe("끝에 공백 ");
   });
 
   it("builds the whole-draft revision request with previous, the trimmed instruction and exclusions", () => {

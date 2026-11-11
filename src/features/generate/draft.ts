@@ -143,6 +143,7 @@ export function blockText(block: DraftBlock): string {
   }
 }
 
+/** The block with `text` from its textarea; a list takes one item per line, cleaned (trimmed, empty lines dropped). */
 export function blockWithText(block: DraftBlock, text: string): DraftBlock {
   switch (block.kind) {
     case "heading":
@@ -154,6 +155,17 @@ export function blockWithText(block: DraftBlock, text: string): DraftBlock {
     case "table_ref":
       return block;
   }
+}
+
+/**
+ * What a block's textarea shows while it is being edited (GEN-5). The draft always holds a list's cleaned
+ * items, but showing those back on every keystroke swallowed Enter and spaces ("첫째 항목⏎둘째 항목" became
+ * "첫째항목둘째항목"): the box keeps the text as typed (`typed`, null once it loses focus) for as long as that
+ * text still stands for the block; a change from outside (a suggestion, a move, a revision) shows the block.
+ */
+export function blockInputText(block: DraftBlock, typed: string | null): string {
+  const text = blockText(block);
+  return typed !== null && blockText(blockWithText(block, typed)) === text ? typed : text;
 }
 
 /** Issue path → `fields.<key>` key, `tables.<key>[row].<col>` cell or `body[i]` block. */

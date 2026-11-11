@@ -1,5 +1,5 @@
 import { AlertTriangle, ArrowDown, ArrowUp, Check, ExternalLink, Heading2, List, Pilcrow, Plus, Sparkles, Trash2, Wand2 } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
 
@@ -10,7 +10,31 @@ import { Label } from "@/components/ui/label";
 import type { Draft, DraftBlock, DraftIssue } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-import { addRow, applySuggestion, blockText, blockWithText, fieldKindLabel, insertBlock, isSectionHeading, issuesFor, moveBlock, newBlock, removeBlock, removeRow, sectionAt, setBlock, setBlockLevel, setCell, setFieldValue, setTitle, type NewBlockKind } from "./draft";
+import { addRow, applySuggestion, blockInputText, blockWithText, fieldKindLabel, insertBlock, isSectionHeading, issuesFor, moveBlock, newBlock, removeBlock, removeRow, sectionAt, setBlock, setBlockLevel, setCell, setFieldValue, setTitle, type NewBlockKind } from "./draft";
+
+/**
+ * The textarea of one body block. The draft gets the block's text on every keystroke (a list: its cleaned
+ * items); the box itself keeps what was typed — a trailing space, the empty line after Enter — until it
+ * loses focus, when it shows the block again (GEN-5).
+ */
+function BlockInput({ block, index, label, lang, onBlock }: { block: DraftBlock; index: number; label: string; lang: string; onBlock: (block: DraftBlock) => void }) {
+  const [typed, setTyped] = useState<string | null>(null);
+  return (
+    <Textarea
+      rows={block.kind === "heading" ? 1 : 3}
+      value={blockInputText(block, typed)}
+      onChange={(e) => {
+        setTyped(e.target.value);
+        onBlock(blockWithText(block, e.target.value));
+      }}
+      onBlur={() => setTyped(null)}
+      className={cn("text-xs", block.kind === "heading" && "font-semibold")}
+      aria-label={label}
+      lang={lang}
+      data-testid={`generate-block-input-${index}`}
+    />
+  );
+}
 
 function IssueBadges({ issues, onApply, t }: { issues: DraftIssue[]; onApply: (i: DraftIssue) => void; t: (k: string, o?: Record<string, unknown>) => string }) {
   if (issues.length === 0) return null;
@@ -230,7 +254,7 @@ export function DraftEditor({ draft, onChange, excluded, onToggleExcluded, disab
                 )}
                 {tools(b, i)}
               </div>
-              <Textarea rows={b.kind === "heading" ? 1 : 3} value={blockText(b)} onChange={(e) => onChange(setBlock(draft, i, blockWithText(b, e.target.value)))} className={cn("text-xs", b.kind === "heading" && "font-semibold")} aria-label={label} lang={i18n.language} data-testid={`generate-block-input-${i}`} />
+              <BlockInput block={b} index={i} label={label} lang={i18n.language} onBlock={(next) => onChange(setBlock(draft, i, next))} />
               <IssueBadges issues={issues} onApply={apply} t={t} />
             </div>
           );

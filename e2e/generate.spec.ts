@@ -220,6 +220,36 @@ test.describe("P6 document generation", () => {
     await expect(page.getByTestId("generate-preview-box")).toHaveAttribute("data-scale", "1.00");
   });
 
+  test("a list block takes what is typed: Enter and spaces stay, the box is cleaned on blur (GEN-5)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openGenerate(page);
+    await page.getByTestId("generate-template").click();
+    await page.getByRole("option", { name: ko.generate.templates.meeting_minutes }).click();
+    await page.getByTestId("generate-content").fill("한빛 포털 구축 주간 회의록, 일정 점검과 리스크 논의");
+    await page.getByTestId("generate-run").click();
+    await expect(page.getByTestId("generate-preview")).toBeVisible({ timeout: 15_000 });
+
+    // "목록 추가" after the first heading: the new, empty list block is focused.
+    await page.getByTestId("draft-block-add-list-0").click();
+    const list = page.getByTestId("generate-block-input-1");
+    await expect(page.getByTestId("generate-block-1")).toHaveAttribute("data-block-kind", "list");
+    await expect(list).toBeFocused();
+    // Typed key by key — the audit's reproduction ended as "첫째항목둘째항목".
+    await page.keyboard.type("첫째 항목");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("둘째 항목");
+    await expect(list).toHaveValue("첫째 항목\n둘째 항목");
+    // The draft holds the two items: the preview lists both.
+    const srcdoc = async () => (await page.getByTestId("generate-preview-frame").getAttribute("srcdoc")) ?? "";
+    await expect.poll(srcdoc, { timeout: 10_000 }).toContain("<li>첫째 항목</li><li>둘째 항목</li>");
+    // The empty line after another Enter stays while typing and is cleaned when the box loses focus.
+    await page.keyboard.press("Enter");
+    await expect(list).toHaveValue("첫째 항목\n둘째 항목\n");
+    await page.getByTestId("generate-title").focus();
+    await expect(list).toHaveValue("첫째 항목\n둘째 항목");
+  });
+
   test("assistant: '2절 다시 써줘 …' revises the open draft (plan → result card → the generate screen); without a draft it asks to open one", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
