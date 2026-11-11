@@ -1,7 +1,7 @@
 {
   "name": "doculens",
   "private": true,
-  "version": "0.8.0",
+  "version": "0.8.1",
   "type": "module",
   "description": "DocuLens - offline VLM document processing desktop client (Tauri 2 + React + Rust)",
   "scripts": {
