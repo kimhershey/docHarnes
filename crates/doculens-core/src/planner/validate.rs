@@ -59,6 +59,10 @@ pub fn scope_required(plan: &Plan) -> Option<PlanIssue> {
     })
 }
 
+/// Upper bound of the text a text-only answer carries (a safety bound far above any context the
+/// bundled models load; the answer path cuts to what the loaded model fits and says so).
+pub const MAX_CARRIED_TEXT_CHARS: usize = 60_000;
+
 /// Whether the op reads the plan scope (the documents in scope or its project filter).
 /// Settings, navigation, project / template / schema / glossary administration and the ops that
 /// carry their own targets do not; `create_project` only takes documents the scope names.
@@ -479,8 +483,12 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
                     *k = (*k).clamp(1, 200);
                 }
             }
-            Op::Answer { question, .. } => {
-                *question = question.trim().chars().take(4_000).collect();
+            Op::Answer { question, knowledge, mode, .. } => {
+                // A sentence that carries its own text (다듬기 · 번역 · 정리) keeps it: the answer path
+                // sizes it from the loaded model's context (audit KNO-3). A question stays a question.
+                let text_only = *knowledge == Some(false) && *mode != Some(super::AnswerMode::Chat);
+                let max = if text_only { MAX_CARRIED_TEXT_CHARS } else { 4_000 };
+                *question = question.trim().chars().take(max).collect();
                 if question.is_empty() {
                     issues.push(PlanIssue::error(at("question"), "question_empty", "answer needs a question"));
                 }

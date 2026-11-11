@@ -188,7 +188,6 @@ pub fn run() {
             commands::knowledge::chat_session_delete,
             commands::knowledge::chat_messages_list,
             commands::knowledge::chat_message_put,
-            commands::knowledge::chat_messages_truncate,
             commands::knowledge::knowledge_glossary,
             commands::knowledge::knowledge_glossary_save,
             commands::knowledge::knowledge_glossary_delete,

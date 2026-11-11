@@ -855,6 +855,9 @@ pub fn run(args: &Args) -> Result<i32, String> {
             profile: None,
             pages: d.manifest.pages.clone(),
             precise: None,
+            // The golden run measures the model: hand-corrected page text is read again too.
+            reocr_manual: true,
+            ..Default::default()
         };
         eprintln!("[{}/{}] {} ({}쪽)", i + 1, docs_in.len(), d.manifest.path, page_count);
         let t = Instant::now();

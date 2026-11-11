@@ -1581,6 +1581,15 @@ impl RecordingChat {
             requests: std::sync::Mutex::new(Vec::new()),
         }
     }
+    /// System prompt of the last request.
+    fn last_system(&self) -> String {
+        let requests = self.requests.lock().unwrap();
+        let req = requests.last().expect("a request was sent");
+        req.messages.first().unwrap()["content"].as_str().unwrap_or_default().to_string()
+    }
+    fn count(&self) -> usize {
+        self.requests.lock().unwrap().len()
+    }
     /// `(user prompt, max_tokens)` of the last request.
     fn last(&self) -> (String, u32) {
         let requests = self.requests.lock().unwrap();
@@ -1705,4 +1714,95 @@ fn a_text_only_request_the_server_refuses_is_halved_and_marked() {
     short.retrieve = false;
     let err = answer(&deps, &short, &mut |_| true).unwrap_err();
     assert!(err.to_string().contains("exceeds the available context size"), "{err}");
+}
+
+/// 0.8.0 reply routes: small talk looks nothing up, is short and is not kept; a question that is not
+/// about the documents is answered whatever the general-knowledge setting says — from the sources
+/// when they answer it, marked as general knowledge when the model says they do not.
+#[test]
+fn chat_and_general_styles_answer_without_claiming_evidence() {
+    let w = World::new();
+    let before = w.db.with(|c| repo::list_answers(c, None, None, 50)).unwrap().len();
+
+    // Small talk: one short call, no retrieval, no sources, nothing saved.
+    let chat = RecordingChat::new("저는 DocuLens 어시스턴트입니다.", Some("stop"));
+    let deps = AnswerDeps {
+        search: w.search_deps(None),
+        chat: &chat,
+        model: None,
+        cancelled: None,
+        context_size: Some(8_192),
+    };
+    let mut req = AnswerRequest::question("넌 누구야?");
+    req.style = AnswerStyle::Chat;
+    let a = answer(&deps, &req, &mut |_| true).unwrap();
+    assert_eq!(a.text, "저는 DocuLens 어시스턴트입니다.");
+    assert!(a.sources.is_empty() && !a.no_evidence && !a.used_general_knowledge, "{a:?}");
+    assert_eq!(a.id, None, "small talk is not kept in the answer history");
+    let (prompt, max_tokens) = chat.last();
+    assert!(prompt.contains("[요청]") && !prompt.contains("[근거]"), "{prompt}");
+    assert!(max_tokens <= 300, "{max_tokens}");
+    let system = chat.last_system();
+    assert!(system.contains("짧고 친근하게") && system.contains("지어내지"), "{system}");
+    // A question in the knowledge base's own words is still not looked up in chat style.
+    let mut req = AnswerRequest::question("출장비 얘기 말고, 오늘 기분 어때?");
+    req.style = AnswerStyle::Chat;
+    assert!(answer(&deps, &req, &mut |_| true).unwrap().sources.is_empty());
+
+    // General, nothing found: answered from general knowledge although `allow_general` is off.
+    let general = RecordingChat::new("(일반 지식 기반 답변) 대한민국의 수도는 서울입니다.", Some("stop"));
+    let deps = AnswerDeps {
+        search: w.search_deps(None),
+        chat: &general,
+        model: None,
+        cancelled: None,
+        context_size: Some(8_192),
+    };
+    let mut req = AnswerRequest::question("플루토늄 원자로 냉각수 xyzzy 는 뭐야?");
+    req.style = AnswerStyle::General;
+    assert!(!req.allow_general);
+    let a = answer(&deps, &req, &mut |_| true).unwrap();
+    assert!(a.no_evidence && a.used_general_knowledge && a.sources.is_empty(), "{a:?}");
+    assert!(a.text.contains("서울"));
+    assert_eq!(general.count(), 1);
+
+    // General, passages found, the model uses them: an ordinary grounded answer with its citations.
+    let grounded = RecordingChat::new("출장비는 교통비, 숙박비, 식비로 구성됩니다[1].", Some("stop"));
+    let deps = AnswerDeps {
+        search: w.search_deps(None),
+        chat: &grounded,
+        model: None,
+        cancelled: None,
+        context_size: Some(8_192),
+    };
+    let mut req = AnswerRequest::question("출장비는 무엇으로 구성되나요?");
+    req.style = AnswerStyle::General;
+    let a = answer(&deps, &req, &mut |_| true).unwrap();
+    assert!(!a.sources.is_empty() && !a.used_general_knowledge && !a.no_evidence, "{a:?}");
+    assert_eq!(a.sentences[0].citations, vec![1]);
+    let system = grounded.last_system();
+    assert!(system.contains("관련이 없으면") && system.contains("(일반 지식 기반 답변)"), "{system}");
+
+    // General, passages found, the model says they do not answer the question: marked as general
+    // knowledge, and the passages it did not use are not shown as its evidence.
+    let unrelated =
+        RecordingChat::new("(일반 지식 기반 답변) 출장은 업무를 위해 근무지를 떠나는 일입니다.", Some("stop"));
+    let deps = AnswerDeps {
+        search: w.search_deps(None),
+        chat: &unrelated,
+        model: None,
+        cancelled: None,
+        context_size: Some(8_192),
+    };
+    let a = answer(&deps, &req, &mut |_| true).unwrap();
+    assert!(a.used_general_knowledge && a.no_evidence && a.sources.is_empty(), "{a:?}");
+    assert!(a.sentences.iter().all(|s| s.citations.is_empty()));
+
+    // Summaries and comparisons have no styles: a stray value changes nothing.
+    let after = w.db.with(|c| repo::list_answers(c, None, None, 50)).unwrap().len();
+    assert_eq!(after, before + 3, "the three general answers are kept, the two chat replies are not");
+    let json = serde_json::json!({ "question": "안녕", "style": "chat" });
+    assert_eq!(serde_json::from_value::<AnswerRequest>(json).unwrap().style, AnswerStyle::Chat);
+    let json = serde_json::json!({ "question": "안녕" });
+    assert_eq!(serde_json::from_value::<AnswerRequest>(json).unwrap().style, AnswerStyle::Grounded);
 }

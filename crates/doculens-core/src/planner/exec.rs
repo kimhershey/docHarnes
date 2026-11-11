@@ -815,9 +815,30 @@ fn run_step(
                 imported: None,
             })
         }
-        Op::Answer { question, cite: _, knowledge, .. } => {
+        Op::Answer { question, cite: _, knowledge, mode, reply } => {
+            // A ready reply (a greeting, "this cannot be done"): shown as it is — no model, no lookup.
+            if let Some(text) = reply.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+                let answer = crate::knowledge::Answer {
+                    kind: AnswerKind::Answer,
+                    question: question.clone(),
+                    text: text.to_string(),
+                    sentences: vec![crate::knowledge::AnswerSentence { text: text.to_string(), citations: Vec::new() }],
+                    ..Default::default()
+                };
+                return Ok(StepOutcome {
+                    summary: crate::pipeline::prompts::truncate(text, 200),
+                    payload: serde_json::to_value(&answer).unwrap_or(Value::Null),
+                    imported: None,
+                });
+            }
             let chat = deps.chat.ok_or_else(|| no_model(deps))?;
-            let retrieve = knowledge.unwrap_or(true);
+            let style = match mode {
+                Some(crate::planner::AnswerMode::Chat) => crate::knowledge::AnswerStyle::Chat,
+                Some(crate::planner::AnswerMode::General) => crate::knowledge::AnswerStyle::General,
+                _ => crate::knowledge::AnswerStyle::Grounded,
+            };
+            // Small talk and a sentence that carries its own text look nothing up.
+            let retrieve = knowledge.unwrap_or(true) && style != crate::knowledge::AnswerStyle::Chat;
             let docs_ = if !retrieve || (plan.scope.is_empty() && imported.is_none()) {
                 Vec::new()
             } else {
@@ -829,6 +850,9 @@ fn run_step(
             let _lease = LeaseGuard::acquire(deps.lease);
             let mut req = AnswerRequest::question(question);
             req.retrieve = retrieve;
+            req.style = style;
+            // A reply inside a plan run is a step result: the history keeps the answers asked as questions.
+            req.save = style != crate::knowledge::AnswerStyle::Chat;
             req.scope = SearchScope {
                 documents: ids(&docs_),
                 project_id: plan.scope.filter.project_id.clone(),
@@ -849,7 +873,8 @@ fn run_step(
             };
             let ans = answer::answer(&adeps, &req, &mut |_| !deps.cancelled())?;
             Ok(StepOutcome {
-                summary: if ans.no_evidence {
+                // An answer given from general knowledge has a text of its own to show.
+                summary: if ans.no_evidence && !ans.used_general_knowledge {
                     deps.t("근거를 찾지 못했습니다", "No evidence found").into()
                 } else {
                     crate::pipeline::prompts::truncate(&ans.text, 200)
@@ -1312,7 +1337,8 @@ fn run_step(
             };
             let ans = answer::answer(&adeps, &req, &mut |_| !deps.cancelled())?;
             Ok(StepOutcome {
-                summary: if ans.no_evidence {
+                // An answer given from general knowledge has a text of its own to show.
+                summary: if ans.no_evidence && !ans.used_general_knowledge {
                     deps.t("근거를 찾지 못했습니다", "No evidence found").into()
                 } else {
                     crate::pipeline::prompts::truncate(&ans.text, 200)
@@ -1712,18 +1738,28 @@ fn run_step(
         Op::SetRole { role } => {
             let docs_ = non_empty(working_set(deps, plan, imported)?)?;
             let target = role.as_role();
-            db.with_tx(|tx| {
+            // A document that is still in a reference group stays reference material when it is asked
+            // to become a work document (audit PRJ-4): the group decides, the summary says how many.
+            let kept = db.with_tx(|tx| {
+                let mut kept = 0usize;
                 for d in &docs_ {
-                    docs::set_role(tx, &d.id, target)?;
+                    if knowledge_repo::set_role_by_membership(tx, &d.id, target)? != target {
+                        kept += 1;
+                    }
                 }
-                Ok(())
+                Ok(kept)
             })?;
             out.documents.extend(ids(&docs_));
+            let note = match (kept, deps.ko()) {
+                (0, _) => String::new(),
+                (n, true) => format!(" (참고 자료 묶음에 들어 있는 {n}건은 참고 자료로 유지)"),
+                (n, false) => format!(" ({n} still in a reference group stay reference material)"),
+            };
             Ok(StepOutcome {
                 summary: if deps.ko() {
-                    format!("{} 역할: {}", count_label(deps, docs_.len()), role_label(target, true))
+                    format!("{} 역할: {}{note}", count_label(deps, docs_.len() - kept), role_label(target, true))
                 } else {
-                    format!("{} marked as {}", count_label(deps, docs_.len()), role_label(target, false))
+                    format!("{} marked as {}{note}", count_label(deps, docs_.len() - kept), role_label(target, false))
                 },
                 payload: json!({ "documents": ids(&docs_), "role": target }),
                 imported: None,
@@ -2374,8 +2410,9 @@ fn role_label(role: DocumentRole, ko: bool) -> &'static str {
 /// A reference group: a project's own (`project`), else a common group by id or name (`group`).
 fn resolve_group(db: &Db, group: Option<&str>, project: Option<&str>) -> Result<Option<Collection>> {
     if let Some(pid) = project.map(str::trim).filter(|p| !p.is_empty()) {
-        let name = db.with(|c| projects_repo::get_project(c, pid))?.map(|p| p.name).unwrap_or_default();
-        return Ok(Some(db.with(|c| knowledge_repo::project_reference_group(c, pid, &name))?));
+        // Looking a project's group up writes nothing: the group is stored when it first receives a
+        // document (`add_docs_to_collection`), not when a command merely names it (audit PRJ-16).
+        return Ok(Some(db.with(|c| knowledge_repo::peek_project_reference_group(c, pid))?));
     }
     let Some(g) = group.map(str::trim).filter(|g| !g.is_empty()) else { return Ok(None) };
     if let Some(col) = db.with(|c| knowledge_repo::get_collection(c, g))? {

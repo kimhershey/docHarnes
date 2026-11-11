@@ -303,13 +303,6 @@ pub fn chat_message_put(app: AppHandle, session_id: String, seq: i64, payload: s
     Ok(ctx.db.with(|c| chat::put_message(c, &session_id, seq, &payload))?)
 }
 
-/// Drops the messages of a session from `from_seq` on.
-#[tauri::command(async)]
-pub fn chat_messages_truncate(app: AppHandle, session_id: String, from_seq: i64) -> UiResult<u64> {
-    let ctx = knowledge_bridge::context(&app)?;
-    Ok(ctx.db.with(|c| chat::truncate_messages(c, &session_id, from_seq))? as u64)
-}
-
 // -- glossary / versions ----------------------------------------------------
 
 #[tauri::command(async)]

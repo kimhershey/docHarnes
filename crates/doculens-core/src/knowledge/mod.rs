@@ -560,6 +560,24 @@ pub struct AnswerRequest {
     /// What the UI is showing (resolved by the shell from the ids the UI sends).
     #[serde(default)]
     pub session: Option<SessionState>,
+    /// How the knowledge base is used (0.8.0): evidence only, a question that is not about the
+    /// documents, or small talk. Only read for plain answers (`kind = answer`).
+    #[serde(default)]
+    pub style: AnswerStyle,
+}
+
+/// How an answer treats the knowledge base — what the planner's reply routes ask for (0.8.0).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerStyle {
+    /// Evidence only: "근거 없음" when nothing is found, unless `allow_general` is set.
+    #[default]
+    Grounded,
+    /// A question that is not about the documents: answered from evidence when the knowledge base
+    /// has some, from general knowledge (marked as such) otherwise — whatever `allow_general` says.
+    General,
+    /// Small talk: nothing is looked up or cited, the reply is short and is not kept in `answers`.
+    Chat,
 }
 
 impl AnswerRequest {
@@ -582,6 +600,7 @@ impl AnswerRequest {
             min_similarity: None,
             history: Vec::new(),
             session: None,
+            style: AnswerStyle::Grounded,
         }
     }
 }
