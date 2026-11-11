@@ -394,8 +394,20 @@ pub fn retrieve(deps: &AnswerDeps<'_>, req: &AnswerRequest) -> Result<Vec<(Searc
     let query = retrieval_query(req);
     let mut hits: Vec<SearchHit> = Vec::new();
     if !req.keep_chunks.is_empty() {
-        let rows = deps.search.db.with(|c| repo::chunk_rows(c, &req.keep_chunks))?;
+        // Evidence kept from the previous answer stays inside the scope of this request: a follow-up asked
+        // with another scope (an attached document, another project, the latest editions only) must not
+        // cite — or be answered from — what that scope leaves out.
+        let (rows, allowed) = deps
+            .search
+            .db
+            .with(|c| Ok((repo::chunk_rows(c, &req.keep_chunks)?, repo::scope_doc_ids(c, &req.scope)?)))?;
+        // An explanation asked from a document draws on that document whatever the scope (as below).
+        let own = req.document_id.as_deref().filter(|_| req.kind == AnswerKind::Explain);
         for r in rows {
+            let doc = r.chunk.document_id.as_str();
+            if allowed.as_ref().is_some_and(|a| !a.contains(doc)) && own != Some(doc) {
+                continue;
+            }
             hits.push(SearchHit {
                 chunk_id: r.chunk.id,
                 document_id: r.chunk.document_id.clone(),

@@ -1173,3 +1173,56 @@ fn embedding_aborts_after_consecutive_failures_and_skips_replaced_chunks() {
     assert_eq!(report.failed, 0, "{report:?}");
     assert!(report.embedded > 0);
 }
+
+/// KNO-1: evidence kept from the previous answer stays inside the scope of the follow-up. A question asked
+/// about an attached document must not cite (or be answered from) a document outside that scope.
+#[test]
+fn kept_evidence_outside_the_follow_up_scope_is_dropped() {
+    let w = World::new();
+    let chat = ScriptedChat { reply: "답변입니다[1].".into(), model: "m".into() };
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None, context_size: None };
+    // First turn: the whole library → the 2024 regulation is cited.
+    let first = answer(&deps, &AnswerRequest::question("숙박비 한도는 얼마인가요?"), &mut |_| true).unwrap();
+    let kept: Vec<i64> = first.sources.iter().filter(|s| s.document_id == "reg2").map(|s| s.chunk_id).collect();
+    assert!(!kept.is_empty(), "{:?}", first.sources);
+    // Follow-up about the attached contract only: the regulation is out of scope now.
+    let mut follow = AnswerRequest::question("이 계약서의 지체상금 조항은?");
+    follow.scope = SearchScope::documents(&["con".to_string()]);
+    follow.keep_chunks = kept.clone();
+    let a = answer(&deps, &follow, &mut |_| true).unwrap();
+    assert!(
+        !a.sources.is_empty() && a.sources.iter().all(|s| s.document_id == "con"),
+        "{:?}",
+        a.sources.iter().map(|s| &s.document_id).collect::<Vec<_>>()
+    );
+    // Nothing in the new scope matches → "no evidence" instead of the previous sources.
+    let silent = ScriptedChat { reply: "SHOULD NOT BE CALLED".into(), model: "m".into() };
+    let silent_deps =
+        AnswerDeps { search: w.search_deps(None), chat: &silent, model: None, cancelled: None, context_size: None };
+    let mut none = AnswerRequest::question("플루토늄 원자로 냉각수 xyzzy");
+    none.scope = SearchScope::documents(&["con".to_string()]);
+    none.keep_chunks = kept.clone();
+    let a = answer(&silent_deps, &none, &mut |_| true).unwrap();
+    assert!(a.no_evidence && a.sources.is_empty(), "{:?}", a.sources);
+    assert_eq!(a.text, super::answer::no_evidence_text(true));
+    // The same scope as before keeps the evidence (the follow-up still leads with it).
+    let mut same = AnswerRequest::question("그럼 일비는?");
+    same.keep_chunks = kept.clone();
+    let a = answer(&deps, &same, &mut |_| true).unwrap();
+    assert_eq!(a.sources[0].chunk_id, kept[0]);
+    // A superseded edition kept from an explicit-document turn is dropped under the default scope …
+    let old = w.db.with(|c| repo::list_chunks(c, "reg1")).unwrap()[0].id;
+    let mut latest = AnswerRequest::question("그럼 정산 기한은?");
+    latest.keep_chunks = vec![old];
+    let a = answer(&deps, &latest, &mut |_| true).unwrap();
+    assert!(a.sources.iter().all(|s| s.document_id != "reg1"), "{:?}", a.sources);
+    // … but an explanation asked from that very document still draws on it.
+    let mut explain = AnswerRequest::question("");
+    explain.kind = AnswerKind::Explain;
+    explain.selection = Some("숙박비는 1박당 120,000원을 한도로 한다".into());
+    explain.document_id = Some("reg1".into());
+    explain.keep_chunks = vec![old];
+    let a = answer(&deps, &explain, &mut |_| true).unwrap();
+    assert!(a.sources.iter().any(|s| s.chunk_id == old), "{:?}", a.sources);
+}
