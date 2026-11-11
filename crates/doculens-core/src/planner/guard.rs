@@ -123,7 +123,13 @@ pub fn prefer_text_only_answer(text: &str, plan: &mut Plan, ko: bool) -> Option<
     }
     plan.intent = OpKind::Answer;
     plan.scope = Scope::default();
-    plan.operations = vec![Op::Answer { question: text.trim().to_string(), cite: Some(false), knowledge: Some(false) }];
+    plan.operations = vec![Op::Answer {
+        question: text.trim().to_string(),
+        cite: Some(false),
+        knowledge: Some(false),
+        mode: None,
+        reply: None,
+    }];
     plan.requires_confirmation = false;
     plan.clarification_question = None;
     plan.summary = Some(
@@ -161,6 +167,7 @@ mod tests {
             confidence: 0.9,
             clarification_question: None,
             summary: None,
+            unmet: None,
         }
     }
 
@@ -179,29 +186,29 @@ mod tests {
     #[test]
     fn a_library_wide_summary_of_a_pasted_text_becomes_a_text_only_answer() {
         let text = format!("다음 문장을 다듬어 정리해줘: {BODY}");
-        let mut plan = kb_plan(Op::Summarize { target: Some(SummarizeTarget::EachDoc), length: None });
+        let mut plan = kb_plan(Op::Summarize { target: Some(SummarizeTarget::EachDoc), length: None, group_by: None });
         let note = prefer_text_only_answer(&text, &mut plan, true).expect("re-targeted");
         assert_eq!(note.code, "text_only_answer");
         assert!(!note.blocking);
         assert_eq!(plan.intent, OpKind::Answer);
         assert!(!plan.requires_confirmation);
         assert!(
-            matches!(&plan.operations[0], Op::Answer { knowledge: Some(false), cite: Some(false), question } if question == &text)
+            matches!(&plan.operations[0], Op::Answer { knowledge: Some(false), cite: Some(false), question, .. } if question == &text)
         );
     }
 
     #[test]
     fn explicit_scopes_and_non_knowledge_ops_are_left_alone() {
         let text = format!("다음 문장을 다듬어 정리해줘: {BODY}");
-        let mut scoped = kb_plan(Op::Summarize { target: None, length: None });
+        let mut scoped = kb_plan(Op::Summarize { target: None, length: None, group_by: None });
         scoped.scope.folder = Some("documents/2026".into());
         assert!(prefer_text_only_answer(&text, &mut scoped, true).is_none());
         let mut validate = kb_plan(Op::Validate {});
         assert!(prefer_text_only_answer(&text, &mut validate, true).is_none());
-        let mut plain = kb_plan(Op::Summarize { target: None, length: None });
+        let mut plain = kb_plan(Op::Summarize { target: None, length: None, group_by: None });
         assert!(prefer_text_only_answer("지난달 계약서 요약해줘", &mut plain, true).is_none());
         // A date range the resolver filled from "12월말" inside the body is not an explicit scope.
-        let mut dated = kb_plan(Op::Summarize { target: Some(SummarizeTarget::EachDoc), length: None });
+        let mut dated = kb_plan(Op::Summarize { target: Some(SummarizeTarget::EachDoc), length: None, group_by: None });
         dated.scope.filter.date_from = Some("2025-12-01".into());
         dated.scope.filter.date_to = Some("2025-12-31".into());
         assert!(prefer_text_only_answer(&text, &mut dated, true).is_some());

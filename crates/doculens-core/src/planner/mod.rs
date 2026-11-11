@@ -440,6 +440,37 @@ pub enum SummaryLength {
     Long,
 }
 
+/// What the documents of a `summarize` are grouped by (0.8.0 plan §1.4): one combined summary per
+/// group ("프로젝트별로 요약해줘"). The executor does the grouping, not the model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SummaryGroup {
+    None,
+    Project,
+    DocType,
+    Folder,
+}
+
+/// How a turn that is not a command is answered (0.8.0 plan §1.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerMode {
+    /// Greeting / thanks / small talk: a short reply, nothing is looked up.
+    Chat,
+    /// A knowledge question that is not about the documents: evidence is used when the library
+    /// has some, general knowledge (marked as such) otherwise.
+    General,
+}
+
+impl AnswerMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AnswerMode::Chat => "chat",
+            AnswerMode::General => "general",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AggregateFn {
@@ -906,12 +937,22 @@ pub enum Op {
         /// text alone, without looking documents up.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         knowledge: Option<bool>,
+        /// `chat` / `general`: the turn is not a document question (0.8.0 plan §1.2). Absent = a
+        /// grounded answer (or, with `knowledge = false`, work on the user's own text).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<AnswerMode>,
+        /// A ready reply (fixed greeting of the fast path): shown as is, no model call.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reply: Option<String>,
     },
     Summarize {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target: Option<SummarizeTarget>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         length: Option<SummaryLength>,
+        /// One combined summary per project / document type / folder.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group_by: Option<SummaryGroup>,
     },
     Aggregate {
         #[serde(rename = "fn")]
@@ -1555,6 +1596,10 @@ pub struct Plan {
     /// One-line interpretation shown on the plan card ("해석: …").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// The part of the request the operations do not cover (0.8.0 plan §1.3) — shown on the card;
+    /// a plan that leaves something out is confirmed instead of run at once. Empty / absent = none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unmet: Option<String>,
 }
 
 impl Plan {
@@ -1569,6 +1614,7 @@ impl Plan {
             confidence,
             clarification_question: None,
             summary: Some(summary.into()),
+            unmet: None,
         }
     }
 
@@ -1582,6 +1628,7 @@ impl Plan {
             confidence,
             clarification_question: Some(q),
             summary: None,
+            unmet: None,
         }
     }
 
@@ -1803,6 +1850,9 @@ pub enum PlanSource {
     Prerouter,
     Rules,
     Model,
+    /// The whole-sentence fast path (0.8.0 plan §1.6): a settings sentence matched against the
+    /// settings catalog, or a fixed greeting — no model call.
+    Fast,
     /// No plan: the model was unavailable or every attempt was rejected.
     None,
 }
@@ -1828,4 +1878,8 @@ pub struct PlanResult {
     /// Op families the first model call chose (0.6.0 two-stage planning; empty = single stage).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub families: Vec<OpFamily>,
+    /// `chat` / `general` when the first model call read the turn as conversation or a general
+    /// question and no plan call was made (0.8.0 plan §1.2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<String>,
 }

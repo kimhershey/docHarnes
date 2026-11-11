@@ -94,6 +94,7 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
         completion_tokens: 0,
         raw: None,
         families: Vec::new(),
+        route: None,
     };
     if text.is_empty() {
         return Ok(result);

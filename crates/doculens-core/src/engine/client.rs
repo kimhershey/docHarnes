@@ -324,7 +324,12 @@ impl RouterClient {
         if let Some(a) = self.auth() {
             req = req.header("Authorization", &a);
         }
-        req.send_json(body).map_err(|e| CoreError::engine(format!("POST {path}: {e}")))
+        // Written with `jsonorder`: a JSON Schema in `response_format` must reach the server with its
+        // properties in the order its `required` list states — llama.cpp turns that order into the
+        // grammar the model has to follow (`serde_json` alone would sort them alphabetically).
+        req.header("Content-Type", "application/json")
+            .send(crate::jsonorder::to_string(body))
+            .map_err(|e| CoreError::engine(format!("POST {path}: {e}")))
     }
 
     fn read_json(path: &str, mut resp: ureq::http::Response<ureq::Body>) -> Result<Value> {

@@ -1546,6 +1546,7 @@ mod exec_tests {
             confidence: 0.9,
             clarification_question: None,
             summary: None,
+            unmet: None,
         };
         p.requires_confirmation = p.operations.iter().any(Op::needs_confirmation);
         p

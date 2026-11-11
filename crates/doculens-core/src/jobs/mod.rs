@@ -631,6 +631,7 @@ mod tests {
                 confidence: 0.9,
                 clarification_question: None,
                 summary: None,
+                unmet: None,
             }),
             text: "t".into(),
             context: Box::new(PlanContext::default()),

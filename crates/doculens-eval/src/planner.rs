@@ -130,6 +130,7 @@ fn source_name(s: PlanSource) -> &'static str {
         PlanSource::Prerouter => "prerouter",
         PlanSource::Rules => "rules",
         PlanSource::Model => "model",
+        PlanSource::Fast => "fast",
         PlanSource::None => "none",
     }
 }
