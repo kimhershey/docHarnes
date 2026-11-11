@@ -251,7 +251,8 @@
       "document_named": "Current document: {{name}}",
       "project_named": "Project: {{name}}",
       "project_clear": "Clear the project context",
-      "attached": "Attached documents ({{count}})"
+      "attached": "Attached documents ({{count}})",
+      "no_documents": "No document matches the scope you named."
     },
     "evidence": {
       "toggle": "Find evidence only",
@@ -592,6 +593,10 @@
       "show_less": "Show less",
       "held": "(held) move after review",
       "missing_values": "unknown values: {{vars}}",
+      "reasons": {
+        "project_copy": "Filed in this project as a copy, so it stays where it is",
+        "missing_file": "File not found"
+      },
       "organize_summary": "{{moves}} moves · {{held}} held · {{unchanged}} unchanged",
       "export_path": "{{count}} documents → {{path}}",
       "overwrite": "(overwrites the existing file)",
@@ -1280,6 +1285,7 @@
       "glossary_term_taken": "That term already exists.",
       "collection_not_found": "Reference group not found (it may have been deleted).",
       "document_not_found": "Document not found.",
+      "file_in_use": "The file is in use by another program, so it could not be deleted.",
       "feedback_invalid": "Invalid feedback value.",
       "schema_name_duplicate": "A field set with this name already exists. Enter another name.",
       "schema_name_empty": "Enter a field set name.",
@@ -1287,6 +1293,7 @@
       "schema_invalid": "The field set has errors; see the grammar check.",
       "schema_not_found": "Field set not found.",
       "schema_builtin": "Built-in sample forms cannot be deleted (duplicate and edit instead).",
+      "schema_general_required": "At least one 'General' form has to stay enabled.",
       "field_not_found": "Field not found.",
       "field_value_empty": "Enter a value.",
       "change_not_found": "History entry not found.",
@@ -1301,6 +1308,7 @@
       "export_exists": "A file with that name already exists. Turn on overwrite or change the name.",
       "export_over_document": "A document registered in the library is at that path and cannot be overwritten. Change the file name.",
       "export_over_form": "Cannot save on top of the form file that is being filled. Change the file name.",
+      "export_path_invalid": "The export path is not valid. Name a file, not a folder.",
       "path_is_document": "The export path points at a document registered in the library. Choose another file name or folder.",
       "path_outside": "Cannot save to a path outside the workspace.",
       "project_not_found": "Project not found (it may have been deleted).",
@@ -1312,6 +1320,8 @@
       "rule_not_found": "Rule not found (it may have been deleted).",
       "no_check_run": "There is no consistency check result yet. Run the consistency check first.",
       "no_findings": "Nothing to put in the supplement request. Pick at least one mismatch or missing item.",
+      "findings_not_requestable": "Only passed or undetermined results are selected. Pick at least one mismatch or missing item.",
+      "findings_not_in_run": "The selected results are not part of the last stored check. Run the check again, then pick.",
       "content_empty": "Enter the content to write.",
       "revise_previous_missing": "There is no draft to revise. Open or create a draft first.",
       "revise_instruction_empty": "Enter the revision instruction.",
@@ -1438,6 +1448,8 @@
       "project_not_found": "Project not found.",
       "no_check_run": "Run the consistency check first.",
       "no_findings": "There are no mismatch / missing findings.",
+      "findings_not_requestable": "Only passed or undetermined results were selected. Pick at least one mismatch or missing item.",
+      "findings_not_in_run": "The selected results are not part of the last stored check. Run the check again.",
       "document_not_found": "Document not found.",
       "no_fields": "No fields were found in the sample documents. Check that they carry text."
     },
@@ -1856,7 +1868,9 @@
     "follow_up": "Follow-up (keep previous evidence)",
     "citation_aria": "Source {{index}}: {{label}}",
     "text_only": "Answered without retrieval",
-    "text_only_hint": "Answered from the text you sent; no documents were looked up or cited."
+    "text_only_hint": "Answered from the text you sent; no documents were looked up or cited.",
+    "truncated_input": "The text you sent was long, so only its beginning was processed.",
+    "truncated_output": "The answer was cut off at the length limit."
   },
   "search": {
     "title": "Evidence",
@@ -2047,7 +2061,11 @@
       "model_none": "No vision model. Install one in Settings > AI models.",
       "confirm_title": "Replace existing extraction results",
       "confirm_body": "{{count}} document(s) already have extraction results; a new run replaces them. Approvals and corrections of the previous run stay in the History tab, but the Fields tab and the Review Inbox switch to the new results.",
-      "confirm_ok": "Extract again"
+      "confirm_ok": "Extract again",
+      "force_body": "Classification and OCR run again. Page text that was read before (OCR output) is replaced by the new result.",
+      "force_ok": "Process again",
+      "reocr_manual": "Also re-read text corrected by hand",
+      "reocr_manual_hint": "When on, page text you corrected by hand is replaced by the new OCR result too. Off: the pages you corrected stay as they are and only the others are read again."
     },
     "status": {
       "label": "Processing pipeline",
@@ -2136,7 +2154,7 @@
     "default": "Default",
     "set_default": "Make default for this type",
     "enabled": "Used by the classifier",
-    "general_locked": "This is the fallback form for unclassified (Other) documents, so it cannot be switched off.",
+    "general_locked": "At least one 'General' form — the fallback for unclassified (Other) documents — has to stay enabled, so the last one cannot be switched off or deleted.",
     "version": "v{{version}}",
     "source": {
       "builtin": "Built-in",
@@ -2306,6 +2324,10 @@
     "value": "Value",
     "evidence": "Evidence",
     "validation": "Validation",
+    "rules": {
+      "partial_page": "Only part of the page was extracted",
+      "date_ambiguous": "Date with an ambiguous day / month order"
+    },
     "page": "Page {{page}}",
     "edit_title": "Edit value",
     "edit_hint": "Type the value as printed; amounts and dates are normalised on save.",
@@ -2406,7 +2428,8 @@
       "review_pending": "Review pending",
       "missing_file": "File missing",
       "source_changed": "Source changed",
-      "document_missing": "Document missing"
+      "document_missing": "Document missing",
+      "project_copy": "Filed in this project as a copy, so it stays where it is"
     },
     "unknown_values": "Unknown values: {{vars}}",
     "show_all": "Show all ({{count}})",
@@ -2851,7 +2874,7 @@
       "checked": "Check finished — pass {{pass}} · mismatch {{mismatch}} · undetermined {{undetermined}} · missing {{missing}}",
       "supplement": "Supplement request",
       "delete": "Delete",
-      "delete_confirm": "Delete the project '{{name}}'? Its reference group goes with it; the documents stay in Documents.",
+      "delete_confirm": "Delete the project '{{name}}'? Its reference group goes with it; the documents stay in Documents. Copies in the project folder are deleted, but a copy you edited stays in the folder.",
       "deleted": "Project deleted.",
       "not_found": "Project not found.",
       "phase": "Phase",
@@ -2878,6 +2901,7 @@
       "extra": "extra",
       "add": "Pick from Documents",
       "remove": "Remove from project",
+      "remove_confirm": "Remove '{{name}}' from this project? Its copy in the project folder is deleted and the original stays. A copy you edited (differs from the original) is not deleted: it stays in the folder.",
       "open": "Open",
       "empty": "No documents yet. Pick some from Documents or drop files here.",
       "columns": {
@@ -2988,6 +3012,12 @@
       },
       "missing_types": "Missing documents: {{types}}",
       "evidence_open": "Open {{name}}",
+      "evidence_status": {
+        "not_extracted": "not extracted",
+        "pending": "pending review",
+        "rejected": "rejected",
+        "missing_document": "no document"
+      },
       "required": "required",
       "relations_title": "Relation graph",
       "report_title": "Report",
@@ -3110,7 +3140,7 @@
       "name_template": "File-name template",
       "name_default": "(empty = default file-name template)",
       "copies": "Keep copies of documents shared with other projects",
-      "copies_hint": "A document joining this project as its second (or later) project gets a tracked physical copy in the folder above; the copy follows changes of the original and is removed when the document leaves the project.",
+      "copies_hint": "A document joining this project as its second (or later) project gets a tracked physical copy in the folder above; the copy follows changes of the original and is removed when the document leaves the project (a copy you edited is not deleted: it stays where it is).",
       "export_format": "Export format",
       "export_layout": "Export layout",
       "export_path": "Export path",
