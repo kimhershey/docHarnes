@@ -1167,6 +1167,9 @@ fn run_step(
             let chat = deps.chat.ok_or_else(|| no_model(deps))?;
             let model = deps.model.clone().ok_or_else(|| no_model(deps))?;
             let id = draft_id.clone().ok_or_else(|| CoreError::Invalid("revise_draft needs a draft id".into()))?;
+            // Taken before the draft is read: a version stored after this moment is newer than the
+            // one this revision starts from.
+            let captured_at = chrono::Utc::now();
             let previous = generate::store::load(deps.paths(), &id)?;
             let revise = match scope.as_str() {
                 "section" => ReviseScope::Section { section: section.unwrap_or(1).max(1) as usize },
@@ -1198,8 +1201,24 @@ fn run_step(
                 progress: None,
             };
             progress("revise_draft", 0, 1, instruction);
-            let outcome = generate::draft(&gdeps, &req)?;
-            let _ = generate::store::save(deps.paths(), &outcome.draft);
+            let mut outcome = generate::draft(&gdeps, &req)?;
+            // The result replaces the stored draft only when that loses nothing (audit GEN-3). After
+            // a cancel — a cancelled "전체 다시 쓰기" returns the sections written so far — or when the
+            // draft was edited while the revision ran, it is stored as a new draft and the original
+            // stays; it used to be saved over the complete draft unconditionally.
+            let cancelled = deps.cancelled();
+            let input = generate::store::JobInput { previous: req.previous.as_deref(), captured_at, existed: true };
+            let stored = generate::store::save_job_result(
+                deps.paths(),
+                &mut outcome.draft,
+                &input,
+                cancelled,
+                req.language == Language::Ko,
+            )
+            .unwrap_or(generate::store::JobSave::NotSaved { reason: generate::store::SkipReason::Failed });
+            if cancelled {
+                return Err(CoreError::Cancelled);
+            }
             let what = match scope.as_str() {
                 "section" => {
                     if deps.ko() {
@@ -1223,12 +1242,35 @@ fn run_step(
                     }
                 }
             };
-            let summary = if deps.ko() {
+            let mut summary = if deps.ko() {
                 format!("'{}' 초안 {what} AI 수정 — 문서 생성 화면에서 확인·저장", outcome.draft.title)
             } else {
                 format!("Revised {what} of '{}' — review and save in the document generator", outcome.draft.title)
             };
-            Ok(StepOutcome { summary, payload: serde_json::to_value(&outcome).unwrap_or(Value::Null), imported: None })
+            {
+                use generate::store::{JobSave, SkipReason};
+                summary.push_str(match (&stored, deps.ko()) {
+                    (JobSave::Saved, _) => "",
+                    (JobSave::Copy { .. }, true) => " · 원래 초안이 그 사이 수정되어 새 초안으로 저장",
+                    (JobSave::Copy { .. }, false) => " · stored as a new draft (the original was edited meanwhile)",
+                    (JobSave::NotSaved { reason: SkipReason::Deleted }, true) => {
+                        " · 초안이 삭제되어 목록에 저장하지 않음"
+                    }
+                    (JobSave::NotSaved { reason: SkipReason::Deleted }, false) => {
+                        " · not stored (the draft was deleted)"
+                    }
+                    (JobSave::NotSaved { reason: SkipReason::Failed }, true) => " · 초안 목록에 저장하지 못함",
+                    (JobSave::NotSaved { reason: SkipReason::Failed }, false) => " · could not be stored",
+                });
+            }
+            // Serialised after the save: a copy has a new id. `draft_store` says where the result went
+            // (`{status: saved}` | `{status: copy, original, reason}` | `{status: not_saved, reason}`),
+            // as the result of a draft job does.
+            let mut payload = serde_json::to_value(&outcome).unwrap_or(Value::Null);
+            if let Some(o) = payload.as_object_mut() {
+                o.insert("draft_store".into(), serde_json::to_value(&stored).unwrap_or(Value::Null));
+            }
+            Ok(StepOutcome { summary, payload, imported: None })
         }
         Op::Explain { selection, question, scope: explain_scope, allow_general_knowledge } => {
             let chat = deps.chat.ok_or_else(|| no_model(deps))?;
