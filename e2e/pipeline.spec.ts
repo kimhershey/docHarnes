@@ -42,6 +42,8 @@ test.describe("P4 pipeline", () => {
     const job = page.locator('[data-job-kind="pipeline"]').first();
     await expect(job).toContainText(ko.jobs.kind.pipeline);
     await expect(job.getByTestId("job-detail")).toContainText(tplPattern(ko.jobs.detail.process_summary, { processed: 2, classified: 2, extracted: 2, failed: 0 }));
+    // The job counts documents: the counter is "n / 2", not bytes ("1 B / 2 B", CON-11).
+    await expect(job.getByTestId("job-counter")).toHaveText(/^\d+ \/ 2$/);
 
     // Viewer: the OCR text sits on the page image (estimated positions for a photo); the right pane
     // only has AI 검색 and 이력 — the review itself happens in the queue.
@@ -247,5 +249,30 @@ test.describe("P4 pipeline", () => {
     const change = page.getByTestId("history-change").filter({ hasText: "recipient" }).first();
     await expect(change).toContainText(ko.pipeline.field_status.corrected);
     await expect(change).toContainText("DocuLens → ㈜한빛소프트");
+  });
+
+  test("command errors arrive in the shell's shape and read as sentences, never as codes (PIP-3)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서-1p.jpg", "D:\\scan\\개발계약서-2p.pdf"], { autoLevel: "none" });
+
+    // A bad type slug: the save command answers with the typed error `{ code: "schema_doc_type_invalid" }`.
+    await openSettingsTab(page, "schemas");
+    await page.getByTestId("schemas-new").click();
+    await page.getByTestId("schema-name").fill("발주서 시험");
+    await page.getByTestId("schema-doc-type").fill("Bad-Slug");
+    await page.getByTestId("schema-save").click();
+    await expect(page.getByTestId("toaster")).toContainText(ko.errors.reasons.schema_doc_type_invalid);
+    await expect(page.getByTestId("toaster")).not.toContainText("schema_doc_type_invalid");
+
+    // A merged-document name that is no file name: `{ code: "invalid", message: "merge_name_invalid" }`.
+    await page.getByTestId("nav-library").click();
+    for (const name of ["견적서-1p.jpg", "개발계약서-2p.pdf"]) await page.getByTestId(`doc-select-${await docId(page, name)}`).check();
+    await page.getByTestId("library-merge").click();
+    await page.getByTestId("merge-name").fill("2026/계약 묶음");
+    await page.getByTestId("merge-run").click();
+    await expect(page.getByTestId("toaster")).toContainText(ko.errors.reasons.merge_name_invalid);
+    await expect(page.getByTestId("toaster")).not.toContainText("merge_name_invalid");
+    await expect(page.getByTestId("merge-dialog")).toBeVisible();
   });
 });

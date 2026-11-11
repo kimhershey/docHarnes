@@ -361,9 +361,19 @@ function lastRun(s: PState, projectId: string): CheckRun | null {
   return [...s.runs].filter((r) => r.project_id === projectId).sort((a, b) => b.finished_at.localeCompare(a.finished_at))[0] ?? null;
 }
 
-function getProject(s: PState, id: string): Project {
+// Errors in the shapes the shell sends them (PIP-3), so the UI's error copy is exercised like on the desktop.
+/** A repo code the projects bridge does not map: it arrives wrapped by the DB layer (`rusqlite::Error::InvalidParameterName` → `CoreError::Db`). */
+function dbTyped(code: string) {
+  return err("db", `database error: Invalid parameter name: ${code}`);
+}
+
+/**
+ * `missing` = how the core reports an unknown project on that path: the repo mutations with the typed
+ * `project_not_found`, `detail` / `check` / the report builders with `CoreError::NotFound("project <id>")`.
+ */
+function getProject(s: PState, id: string, missing: "typed" | "not_found" = "typed"): Project {
   const p = s.projects.find((x) => x.id === id);
-  if (!p) throw err("not_found", "project_not_found");
+  if (!p) throw missing === "typed" ? dbTyped("project_not_found") : err("not_found", `not found: project ${id}`);
   return p;
 }
 
@@ -398,8 +408,8 @@ function normalizeKeywords(keywords: string[]): string[] {
 
 function upsertProject(s: PState, input: ProjectInput): Project {
   const name = (input.name ?? "").trim();
-  if (!name) throw err("invalid", "project_name_empty");
-  if (input.template_id && !templateOf(s, input.template_id)) throw err("invalid", "template_not_found");
+  if (!name) throw dbTyped("project_name_empty");
+  if (input.template_id && !templateOf(s, input.template_id)) throw dbTyped("template_not_found");
   const clean = (v: string | null | undefined) => {
     const t = (v ?? "").trim();
     return t ? t : null;
@@ -927,7 +937,7 @@ function evaluate(r: Rule, docs: MockDoc[], isKo: boolean): RuleResult {
 
 export function check(projectId: string, ruleIds: string[]): CheckRun {
   const s = load();
-  const p = getProject(s, projectId);
+  const p = getProject(s, projectId, "not_found");
   const isKo = ko();
   const docs = docsOf(s, p.id);
   const rules = s.rules.filter((r) => r.project_id === p.id && r.rule.enabled && (ruleIds.length === 0 || ruleIds.includes(r.rule.id))).map((r) => r.rule);
@@ -1010,7 +1020,7 @@ function relationValue(f: FieldRecord): string | null {
 
 export function report(projectId: string): string {
   const s = load();
-  const p = getProject(s, projectId);
+  const p = getProject(s, projectId, "not_found");
   const d = detail(s, p);
   const isKo = ko();
   const phase = `${varsOf(p, isKo).phase}${p.overdue ? (isKo ? " (기한 경과)" : " (overdue)") : ""}`;
@@ -1053,15 +1063,31 @@ export function report(projectId: string): string {
 // 보완요청서 (projects/report.rs `supplement_request` + generate)
 // ---------------------------------------------------------------------------
 
+/** Finding id of a missing document type (`report::missing_doc_finding_id`): a `finding_ids` entry like a rule result's id. */
+export function missingDocFindingId(docType: string): string {
+  return `missing_doc:${docType}`;
+}
+
+/**
+ * Like `report::supplement_request`: `findingIds` picks rule results and missing document types
+ * (`missing_doc:<type>`); empty = every mismatch / missing finding. 판단불가 results never make a request
+ * (selecting only those fails with `no_findings`).
+ */
 export function supplementRequest(projectId: string, findingIds: string[], output: OutputFormat | null): { req: DraftRequest; draft: Draft } {
   const s = load();
-  const p = getProject(s, projectId);
+  const p = getProject(s, projectId, "not_found");
   const run = lastRun(s, p.id);
   if (!run) throw err("invalid", "no_check_run");
-  const findings = run.results.filter((r) => (findingIds.length === 0 ? r.verdict === "mismatch" || r.verdict === "missing" : findingIds.includes(r.id)));
+  const everything = findingIds.length === 0;
+  const want = (id: string) => everything || findingIds.includes(id);
+  const missingTypes = run.missing_doc_types.filter((t) => want(missingDocFindingId(t)));
+  const findings = run.results.filter((r) => {
+    if ((r.verdict !== "mismatch" && r.verdict !== "missing") || !want(r.id)) return false;
+    // A rule that only failed because a required document is absent is covered by the missing-document finding when everything is selected.
+    return !(everything && r.verdict === "missing" && run.missing_doc_types.includes(r.left?.doc_type ?? ""));
+  });
   const isKo = ko();
-  const missingTypes = findingIds.length === 0 ? run.missing_doc_types : [];
-  if (findings.length === 0 && missingTypes.length === 0) throw err("invalid", "no_findings");
+  if (findings.length === 0 && missingTypes.length === 0) throw err("invalid", "invalid value: no_findings");
   const docs = docsOf(s, p.id);
   const party = docs.flatMap((d) => pl.latestFields(d.id)).find((f) => ["contractor.name", "proposer.name", "supplier.name", "company_name", "store_name", "applicant.name"].includes(f.path) && f.value)?.value ?? null;
   const d = buildSupplementDraft({
@@ -1347,11 +1373,15 @@ export async function mockProjects(cmd: string, a: Record<string, any>): Promise
   switch (cmd) {
     case "projects_list":
       return s.projects.map((p) => ({ ...refresh(s, p) })).sort((x, y) => y.updated_at.localeCompare(x.updated_at));
-    case "project_create":
-      return createProject(a.input as ProjectInput);
+    case "project_create": {
+      const input = a.input as ProjectInput;
+      // The bridge refuses a blank name before the repo sees it.
+      if (!(input.name ?? "").trim()) throw err("invalid", "name_empty");
+      return createProject(input);
+    }
     case "project_update": {
       const input = a.input as ProjectInput;
-      if (!input.id) throw err("invalid", "project_not_found");
+      if (!input.id) throw err("invalid", "id_required");
       const p = upsertProject(s, input);
       save(s);
       renameProjectReferenceGroup(p.id, p.name);
@@ -1377,7 +1407,7 @@ export async function mockProjects(cmd: string, a: Record<string, any>): Promise
       return projectReferenceGroup(p.id, p.name);
     }
     case "project_get":
-      return detail(s, getProject(s, String(a.id)));
+      return detail(s, getProject(s, String(a.id), "not_found"));
     case "project_add_documents":
       return a.asReference ? addReferenceDocuments(String(a.id), (a.docIds as string[]) ?? []) : addDocuments(String(a.id), (a.docIds as string[]) ?? []);
     case "project_remove_document": {
@@ -1407,11 +1437,11 @@ export async function mockProjects(cmd: string, a: Record<string, any>): Promise
     case "project_template_save": {
       const input = a.input as TemplateInput;
       const name = (input.name_ko ?? "").trim();
-      if (!name) throw err("invalid", "template_name_empty");
+      if (!name) throw err("invalid", "name_empty");
       const existing = input.id ? s.templates.find((t) => t.id === input.id) : undefined;
       if (input.id && !existing) {
-        if (BUILTIN_TEMPLATES.some((t) => t.id === input.id)) throw err("invalid", "template_builtin");
-        throw err("invalid", "template_not_found");
+        if (BUILTIN_TEMPLATES.some((t) => t.id === input.id)) throw dbTyped("template_builtin");
+        throw dbTyped("template_not_found");
       }
       const tpl: ProjectTemplate = {
         id: existing?.id ?? newId(),
@@ -1432,7 +1462,7 @@ export async function mockProjects(cmd: string, a: Record<string, any>): Promise
     }
     case "project_template_delete": {
       const id = String(a.id);
-      if (BUILTIN_TEMPLATES.some((t) => t.id === id)) throw err("invalid", "template_builtin");
+      if (BUILTIN_TEMPLATES.some((t) => t.id === id)) throw dbTyped("template_builtin");
       const before = s.templates.length;
       s.templates = s.templates.filter((t) => t.id !== id);
       for (const p of s.projects) if (p.template_id === id) p.template_id = null;

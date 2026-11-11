@@ -1050,7 +1050,7 @@ export function buildDraft(req: DraftRequest, knowledge: DraftCitation[] = []): 
 export function reviseDraft(req: DraftRequest): Draft {
   const previous = req.previous;
   const scope = req.revise;
-  if (!previous || !scope) throw err("invalid", "previous_required");
+  if (!previous || !scope) throw err("invalid", "revise_previous_missing");
   const ko = req.language !== "en";
   const instruction = (req.feedback ?? "").trim();
   if (scope.scope === "whole") {
@@ -1313,7 +1313,8 @@ export function listDrafts(): DraftSummary[] {
 
 export function getDraft(id: string): Draft {
   const d = findDraft(id);
-  if (!d) throw err("not_found", "draft_not_found");
+  // `store::load`: `CoreError::NotFound("draft <id>")`.
+  if (!d) throw err("not_found", `not found: draft ${id}`);
   return d;
 }
 
@@ -1561,8 +1562,8 @@ export async function mockGenerate(cmd: string, a: Record<string, any>): Promise
       const req = a.req as DraftRequest | undefined;
       // Like `generate_bridge::draft`: an empty content is fine when a previous draft is revised / regenerated.
       if (!req || (!req.content?.trim() && !req.previous)) throw err("invalid", "content_empty");
-      if (req.revise && !req.previous) throw err("invalid", "previous_required");
-      if (req.revise && !(req.feedback ?? "").trim()) throw err("invalid", "instruction_empty");
+      if (req.revise && !req.previous) throw err("invalid", "revise_previous_missing");
+      if (req.revise && !(req.feedback ?? "").trim()) throw err("invalid", "revise_instruction_empty");
       return { job_id: submitDraftJob({ ...req, language: req.language ?? defaultLanguage() }) };
     }
     case "generate_preview": {

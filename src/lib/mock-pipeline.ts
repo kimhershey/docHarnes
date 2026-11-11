@@ -63,6 +63,16 @@ import {
 
 const KEY = "doculens.mock.pipeline";
 
+// Errors in the shapes the shell sends them (PIP-3), so the UI's error copy is exercised like on the desktop.
+/** A command that maps the core error to its stable code (`typed_error` / `retype` in commands/pipeline.rs): code = message = the code. */
+function typed(code: string) {
+  return err(code, code);
+}
+/** A repo code the command does not map: it arrives wrapped by the DB layer (`rusqlite::Error::InvalidParameterName` → `CoreError::Db`). */
+function dbTyped(code: string) {
+  return err("db", `database error: Invalid parameter name: ${code}`);
+}
+
 /**
  * `localStorage.doculens.mock.vision` = ready (default) | not_loaded | none | engine_off — set by
  * Playwright (and by hand in the browser) to exercise the no-model / engine-off paths of the UI.
@@ -1331,7 +1341,7 @@ export async function pipelineWorker(job: Job, req: ProcessRequest, ctl: JobCont
 
 /** `pipeline_process`: queues a persistent engine-lane job (one runs at a time, like the shell) and returns its id. */
 function processJob(req: ProcessRequest): string {
-  if (req.document_ids.length === 0) throw err("invalid", "no documents");
+  if (req.document_ids.length === 0) throw typed("no_documents");
   const mode = visionMode();
   if (mode === "engine_off") throw err("invalid", "engine_not_running");
   if (mode === "none") throw err("invalid", "no_model");
@@ -1494,13 +1504,13 @@ export function freeName(name: string, excludingId: string | null = null): strin
 
 function saveSchema(s: PState, draft: SchemaDraft): SchemaRecord {
   const name = draft.name.trim();
-  if (!name) throw err("invalid", "schema_name_empty");
-  if (nameExists(name, draft.id ?? null, s)) throw err("invalid", "schema_name_duplicate");
-  if (!isKey(draft.doc_type.trim())) throw err("invalid", "schema_doc_type_invalid");
-  if (lint(draft.definition).some((i) => i.level === "error")) throw err("invalid", "schema_invalid");
+  if (!name) throw typed("schema_name_empty");
+  if (nameExists(name, draft.id ?? null, s)) throw dbTyped("schema_name_duplicate");
+  if (!isKey(draft.doc_type.trim())) throw typed("schema_doc_type_invalid");
+  if (lint(draft.definition).some((i) => i.level === "error")) throw typed("schema_invalid");
   if (draft.id) {
     const cur = s.schemas.find((x) => x.id === draft.id);
-    if (!cur) throw err("invalid", "schema_not_found");
+    if (!cur) throw typed("schema_not_found");
     pushVersion(cur.id, { version: cur.version, definition: structuredClone(cur.definition), note: draft.note, created_at: now() });
     cur.name = name;
     cur.name_en = draft.name_en?.trim() || null;
@@ -1613,9 +1623,9 @@ function deriveForm(doc: MockDoc, name: string | null): SchemaDraft {
 
 function nlSchema(s: PState, description: string, baseId: string | null): SchemaDraft {
   const d = description.trim();
-  if (!d) throw err("invalid", "description_empty");
+  if (!d) throw typed("description_empty");
   const base = baseId ? s.schemas.find((x) => x.id === baseId) : undefined;
-  if (baseId && !base) throw err("invalid", "schema_not_found");
+  if (baseId && !base) throw typed("schema_not_found");
   const parts = d
     .replace(/(스키마|양식|필드|문서|만들어|추가|수정|포함|있는|해줘|줘|로|를|을|과|와|및)/g, " ")
     .split(/[,，·、\/\n:：.。]|\s{2,}|\s+/)
@@ -1873,7 +1883,7 @@ function applyReview(s: PState, ids: number[], action: ReviewAction, note: strin
   const touched = new Set<string>();
   for (const id of ids) {
     const fld = s.fields.find((x) => x.id === id);
-    if (!fld) throw err("invalid", "field_not_found");
+    if (!fld) throw typed("field_not_found");
     const old = { value: fld.value, status: fld.status };
     let status: FieldStatus = "auto";
     switch (action.kind) {
@@ -1892,7 +1902,7 @@ function applyReview(s: PState, ids: number[], action: ReviewAction, note: strin
         break;
       case "correct": {
         const v = action.value.trim();
-        if (!v) throw err("invalid", "field_value_empty");
+        if (!v) throw typed("field_value_empty");
         status = "corrected";
         const { normalized } = normalizeValue(fld.kind, v);
         fld.value = fld.kind === "rrn" || fld.kind === "account" ? normalized : v;
@@ -2013,9 +2023,16 @@ async function splitJob(docId: string, boundaries: number[]): Promise<string> {
   return job.id;
 }
 
+/** `split::safe_stem`: one path component of at most 120 bytes, no traversal, no reserved or control characters. */
+function safeStem(name: string): boolean {
+  const n = name.trim().replace(/\.pdf$/i, "").trim();
+  return n !== "" && new TextEncoder().encode(n).length <= 120 && !n.startsWith(".") && !/[/\\:*?"<>|\u0000-\u001f]/.test(n);
+}
+
 async function mergeJob(ids: string[], name: string | null): Promise<string> {
   const docs = ids.map((id) => wsDocs().find((d) => d.id === id)).filter((d): d is MockDoc => !!d);
   if (docs.length < 2) throw err("invalid", "merge needs at least two documents");
+  if (name?.trim() && !safeStem(name)) throw err("invalid", "merge_name_invalid");
   const job = createJob("document_merge", `${docs.length} documents`);
   void (async () => {
     await simulate(job.id, 2, 150, () => undefined);
@@ -2061,7 +2078,7 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
     case "pipeline_schema_delete": {
       const sc = s.schemas.find((x) => x.id === a.id);
       if (!sc) return false;
-      if (sc.source === "builtin") throw err("invalid", "schema_builtin");
+      if (sc.source === "builtin") throw typed("schema_builtin");
       s.schemas = s.schemas.filter((x) => x.id !== sc.id);
       if (sc.is_default) {
         const next = s.schemas.filter((x) => x.doc_type === sc.doc_type).sort((x, y) => Number(x.source === "builtin") - Number(y.source === "builtin"))[0];
@@ -2074,7 +2091,7 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
     }
     case "pipeline_schema_set_default": {
       const sc = s.schemas.find((x) => x.id === a.id);
-      if (!sc) throw err("invalid", "schema_not_found");
+      if (!sc) throw typed("schema_not_found");
       for (const x of s.schemas) if (x.doc_type === sc.doc_type) x.is_default = x.id === sc.id;
       save(s);
       changed("schemas", [sc.id]);
@@ -2082,7 +2099,7 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
     }
     case "pipeline_schema_set_enabled": {
       const sc = s.schemas.find((x) => x.id === a.id);
-      if (!sc) throw err("invalid", "schema_not_found");
+      if (!sc) throw typed("schema_not_found");
       sc.enabled = !!a.enabled;
       save(s);
       changed("schemas", [sc.id]);
@@ -2096,7 +2113,7 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
       const doc = wsDocs().find((d) => d.id === a.documentId);
       if (!doc) throw err("not_found", String(a.documentId));
       // Scanned forms need the vision model; HWPX / DOCX / HWP forms are derived from their structure.
-      if (visionMode() === "none" && !["hwpx", "docx", "hwp"].includes(doc.source_kind)) throw err("invalid", "no_model");
+      if (visionMode() === "none" && !["hwpx", "docx", "hwp"].includes(doc.source_kind)) throw typed("no_model");
       await new Promise((res) => setTimeout(res, 150));
       return deriveForm(doc, (a.name as string | null) ?? null);
     }
@@ -2128,8 +2145,8 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
       return nameExists(String(a.name ?? ""), (a.excludingId as string | null) ?? null, s);
     case "pipeline_document_schema": {
       const doc = wsDocs().find((d) => d.id === a.documentId);
-      if (!doc) throw err("invalid", "document_not_found");
-      if (a.schemaId && !s.schemas.some((x) => x.id === a.schemaId)) throw err("invalid", "schema_not_found");
+      if (!doc) throw typed("document_not_found");
+      if (a.schemaId && !s.schemas.some((x) => x.id === a.schemaId)) throw typed("schema_not_found");
       doc.schema_id = (a.schemaId as string | null) ?? null;
       doc.updated_at = now();
       upsertDoc(doc);
@@ -2146,7 +2163,7 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
       return s.history.filter((h) => h.document_id === a.documentId);
     case "pipeline_restore": {
       const ch = s.history.find((h) => h.id === a.changeId);
-      if (!ch) throw err("invalid", "change_not_found");
+      if (!ch) throw typed("change_not_found");
       const out = applyReview(s, [ch.field_id], ch.old_value ? { kind: "correct", value: ch.old_value } : { kind: "reject" }, "restored");
       save(s);
       changed("fields", [ch.document_id]);
