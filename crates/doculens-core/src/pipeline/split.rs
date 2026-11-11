@@ -296,6 +296,9 @@ pub fn split_document(
     split_document_observed(deps, doc, boundaries, cancel, &mut |_| {})
 }
 
+/// The part files of a split: path and page count.
+pub(crate) type PartFiles = [(PathBuf, u32)];
+
 /// [`split_document`]; `after_write` sees the part files once they are on disk and before any of
 /// them is registered (tests stand in for another importer there).
 pub(crate) fn split_document_observed(
@@ -303,7 +306,7 @@ pub(crate) fn split_document_observed(
     doc: &DocumentRecord,
     boundaries: &[u32],
     cancel: Option<&AtomicBool>,
-    after_write: &mut dyn FnMut(&[(PathBuf, u32)]),
+    after_write: &mut dyn FnMut(&PartFiles),
 ) -> Result<Vec<String>> {
     let src = pdf_source(deps, doc)?;
     let abs = doc.absolute_path(deps.paths);
