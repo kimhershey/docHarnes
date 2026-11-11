@@ -161,8 +161,9 @@ function ParamField({ index, param, value, onChange }: { index: number; param: P
   }
   // An enum list is a group of checkboxes, not a single control: label it by id instead of `htmlFor`.
   const LabelTag = type.kind === "enum_list" ? "span" : "label";
+  // (`minmax(0,1fr)`: the control column may be narrower than a long select label, which is then cut inside the control.)
   return (
-    <div className="grid grid-cols-[minmax(8rem,14rem)_1fr] items-center gap-2 text-xs">
+    <div className="grid grid-cols-[minmax(8rem,14rem)_minmax(0,1fr)] items-center gap-2 text-xs">
       <LabelTag id={`${id}-label`} htmlFor={type.kind === "enum_list" ? undefined : id} className="text-fg-muted">
         {label}
         {param.required && <span className="text-danger"> *</span>}
@@ -204,7 +205,7 @@ export function PlanEditor({ plan, context, onChange }: { plan: Plan; context: P
     <div className="flex flex-col gap-3 rounded-md border border-border bg-bg p-3" data-testid="plan-editor">
       <fieldset className="flex flex-col gap-2">
         <legend className="text-xs font-medium text-fg-muted">{t("planner.scope.title")}</legend>
-        <div className="grid grid-cols-[minmax(8rem,14rem)_1fr] items-center gap-2 text-xs">
+        <div className="grid grid-cols-[minmax(8rem,14rem)_minmax(0,1fr)] items-center gap-2 text-xs">
           <label htmlFor="plan-scope-doc-type" className="text-fg-muted">
             {t("planner.scope.doc_type")}
           </label>

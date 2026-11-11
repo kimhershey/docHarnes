@@ -22,23 +22,40 @@ async function send(page: Page, text: string) {
 }
 
 /** Runs 표준 처리 on the (already imported) receipt from the library bulk bar; the selection is cleared again. */
-async function processReceipt(page: Page) {
-  const select = page.getByTestId(`doc-select-${await docId(page, "견적서-1p.jpg")}`);
+async function processReceipt(page: Page, name = "견적서-1p.jpg") {
+  const select = page.getByTestId(`doc-select-${await docId(page, name)}`);
   await select.check();
   await page.getByTestId("library-process").click();
   await page.getByTestId("library-process-standard").click();
-  await expect(card(page, "견적서-1p.jpg")).toHaveAttribute("data-doc-status", "extracted", { timeout: 15_000 });
+  await expect(card(page, name)).toHaveAttribute("data-doc-status", "extracted", { timeout: 15_000 });
   await select.uncheck();
 }
 
 /** Approves every flagged field of the receipt in the review queue so the file operations may move it. */
-async function approveReceipt(page: Page) {
+async function approveReceipt(page: Page, name = "견적서-1p.jpg") {
   await page.getByTestId("nav-review").click();
   await expect(page.getByTestId("page-review")).toBeVisible();
   await page.getByTestId("review-approve-doc").click();
   await expect(page.getByTestId("review-empty")).toBeVisible();
   await page.getByTestId("nav-library").click();
-  await expect(card(page, "견적서-1p.jpg")).toHaveAttribute("data-doc-status", "reviewed");
+  await expect(card(page, name)).toHaveAttribute("data-doc-status", "reviewed");
+}
+
+/**
+ * Horizontal overflow of the assistant's message list (UI-2; `e2e/scale.spec.ts` checks the other screens):
+ * the list's scroll width against its width, the cards that reach past its right edge and the document root.
+ */
+async function assistantOverflow(page: Page) {
+  return page.evaluate(() => {
+    const list = document.querySelector<HTMLElement>('[data-testid="assistant-messages"]')!;
+    const right = list.getBoundingClientRect().right;
+    const cards = [...list.querySelectorAll<HTMLElement>('[data-testid^="assistant-card-"]')];
+    return {
+      list: list.scrollWidth - list.clientWidth,
+      cardsPastEdge: cards.filter((c) => c.getBoundingClientRect().right > right + 0.5).map((c) => c.dataset.testid),
+      root: document.documentElement.scrollWidth - window.innerWidth,
+    };
+  });
 }
 
 /** Plans without side effects run at once; otherwise approve the plan card. Resolves once the card reports done. */
@@ -175,6 +192,50 @@ test.describe("P5 planner", () => {
     await undo.click();
     await expect(page.getByTestId("toaster")).toContainText(tpl(ko.palette.undo_done, { restored: 1, skipped: 0 }), { timeout: 10_000 });
     await expect(undo).toBeDisabled();
+  });
+
+  // UI-2: a file-op plan lists paths; a long file name made the preview table — and with it the card and the
+  // whole message list — wider than the column (2,036 px in an 832 px column; at 150 % even ordinary names).
+  test("plan and result cards with a long file path stay inside the message column at 100 % and 150 %", async ({ page }) => {
+    test.setTimeout(60_000);
+    const name = "견적서-한빛소프트웨어-차세대-통합-문서관리-시스템-구축-사업-2차-수정-최종본-검토용-사본-1p.jpg";
+    const none = { list: 0, cardsPastEdge: [], root: 0 };
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, [`D:\\scan\\${name}`], { autoLevel: "none" });
+    await processReceipt(page, name);
+    await approveReceipt(page, name);
+
+    await openAssistant(page);
+    await send(page, "견적서 월별 폴더로 옮겨");
+    const plan = assistantCard(page, "plan").last();
+    await expect(plan).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    const row = plan.locator('[data-testid="plan-preview-row"][data-item-status="move"]').first();
+    await expect(row).toContainText(name);
+    // The whole path is in the row (wrapped) and in the cell's title.
+    await expect(row.locator("td").first()).toHaveAttribute("title", `documents/${name}`);
+    expect(await assistantOverflow(page)).toEqual(none);
+
+    // 150 %: every rem grows, the column gets narrower. (Enter, not the send button: a toast may lie over it.)
+    const sendByEnter = async (text: string) => {
+      await page.getByTestId("assistant-input").fill(text);
+      await page.getByTestId("assistant-input").press("Enter");
+    };
+    await sendByEnter("UI 배율 150%로");
+    await expect(assistantCard(page, "executed").last()).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator("html")).toHaveCSS("font-size", "24px");
+    await expect.poll(() => assistantOverflow(page)).toEqual(none);
+
+    // The result card's move log has the same paths.
+    await plan.getByTestId("plan-execute").click();
+    const result = assistantCard(page, "result").last();
+    await expect(result).toBeVisible({ timeout: 20_000 });
+    await result.getByTestId("result-toggle-moves").click();
+    await expect(result.getByTestId("result-moves")).toContainText(name);
+    await expect.poll(() => assistantOverflow(page)).toEqual(none);
+    await sendByEnter("UI 배율 100%로");
+    await expect(page.locator("html")).toHaveCSS("font-size", "16px");
+    await expect.poll(() => assistantOverflow(page)).toEqual(none);
   });
 
   // KNO-9: the card's state used to be written 300 ms after it changed, so a reload (or a workspace switch /

@@ -750,10 +750,12 @@ export function AssistantPage() {
             )}
           </div>
         )}
+        {/* A card never grows past the column (UI-2): the row's children may shrink (`*:min-w-0` — a flex item is
+            otherwise as wide as its longest unbreakable line) and long paths inside the cards wrap. */}
         <div className="mx-auto flex max-w-3xl flex-col gap-3">
           {messages.map((m) =>
             m.role === "user" ? (
-              <div key={m.id} className="flex items-start gap-2 self-end">
+              <div key={m.id} className="flex max-w-full items-start gap-2 self-end *:min-w-0">
                 <div className="rounded-lg bg-accent px-3 py-2 text-sm text-accent-fg selectable">
                   {m.text}
                   {m.attachments && m.attachments.length > 0 && (
@@ -770,7 +772,7 @@ export function AssistantPage() {
                 <User className="mt-2 size-4 text-fg-muted" aria-hidden="true" />
               </div>
             ) : (
-              <div key={m.id} className="flex items-start gap-2">
+              <div key={m.id} className="flex items-start gap-2 *:min-w-0">
                 <Bot className="mt-2 size-4 shrink-0 text-accent" aria-hidden="true" />
                 {m.kind === "answer" && (
                   <div className="w-full" data-testid="assistant-card-answer">
@@ -871,7 +873,7 @@ export function AssistantPage() {
                     {m.kind === "error" && (
                       <div className="flex items-start gap-2 text-danger" role="alert">
                         <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-                        <p className="selectable">{m.text}</p>
+                        <p className="min-w-0 selectable">{m.text}</p>
                       </div>
                     )}
                   </div>

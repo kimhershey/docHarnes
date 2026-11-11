@@ -43,8 +43,15 @@ export function OrganizeDiff({ items, index }: { items: OrganizeItem[]; index: n
           </button>
         )}
       </div>
-      <table className="w-full">
+      {/* Fixed layout: the two path columns share the card's width and a long path wraps inside its cell (the
+          full path is also the cell's title). An auto-layout table is as wide as its longest path (UI-2). */}
+      <table className="w-full table-fixed">
         <caption className="sr-only">{t("planner.card.preview_caption")}</caption>
+        <colgroup>
+          <col />
+          <col className="w-6" />
+          <col />
+        </colgroup>
         <thead className="sr-only">
           <tr>
             <th scope="col">{t("planner.card.columns.from")}</th>
@@ -55,11 +62,11 @@ export function OrganizeDiff({ items, index }: { items: OrganizeItem[]; index: n
         <tbody>
           {shown.map((item) => (
             <tr key={`${item.doc_id}-${item.from}`} className="align-top" data-testid="plan-preview-row" data-item-status={item.status}>
-              <td className="truncate py-0.5 pr-2 font-mono text-[0.6875rem] selectable" title={item.from}>
+              <td className="break-all py-0.5 pr-2 font-mono text-[0.6875rem] selectable" title={item.from}>
                 {item.from}
               </td>
               <td className="py-0.5 pr-2 text-fg-subtle">→</td>
-              <td className={cn("truncate py-0.5 font-mono text-[0.6875rem] selectable", item.status === "held" && "text-warn")} title={item.to ?? ""}>
+              <td className={cn("break-all py-0.5 font-mono text-[0.6875rem] selectable", item.status === "held" && "text-warn")} title={item.to ?? ""}>
                 {item.status === "held" ? (
                   <>
                     <AlertTriangle className="mr-1 inline size-3" aria-hidden="true" />

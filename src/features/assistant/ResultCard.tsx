@@ -39,8 +39,15 @@ function StatusIcon({ status }: { status: StepStatus }) {
 function MovesTable({ items }: { items: OrganizeItem[] }) {
   const { t } = useTranslation();
   return (
-    <table className="w-full text-xs" data-testid="result-moves">
+    // Fixed layout like the plan card's preview: long paths wrap inside their cells instead of widening the card (UI-2).
+    <table className="w-full table-fixed text-xs" data-testid="result-moves">
       <caption className="sr-only">{t("planner.result.moves_caption")}</caption>
+      <colgroup>
+        <col />
+        <col className="w-6" />
+        <col />
+        <col className="w-24" />
+      </colgroup>
       <thead className="sr-only">
         <tr>
           <th scope="col">{t("planner.card.columns.from")}</th>
@@ -52,11 +59,11 @@ function MovesTable({ items }: { items: OrganizeItem[] }) {
       <tbody>
         {items.map((item, i) => (
           <tr key={`${item.doc_id}-${i}`} className="border-t border-border align-top" data-item-status={item.status}>
-            <td className="truncate py-0.5 pr-2 font-mono text-[0.6875rem] selectable" title={item.from}>
+            <td className="break-all py-0.5 pr-2 font-mono text-[0.6875rem] selectable" title={item.from}>
               {item.from}
             </td>
             <td className="py-0.5 pr-2 text-fg-subtle">→</td>
-            <td className="truncate py-0.5 pr-2 font-mono text-[0.6875rem] selectable" title={item.to ?? ""}>
+            <td className="break-all py-0.5 pr-2 font-mono text-[0.6875rem] selectable" title={item.to ?? ""}>
               {item.to ?? "—"}
             </td>
             <td className="py-0.5">
