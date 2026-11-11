@@ -361,6 +361,8 @@ pub fn import_job(app: &AppHandle, plan: ImportPlan) -> UiResult<String> {
     let ctx = context(app)?;
     let subject = match plan.source {
         ImportSource::Inbox => "inbox".to_string(),
+        // Nothing new: the job only puts the registered documents into the collection / project.
+        _ if plan.new_count + plan.relink_count == 0 => format!("{} documents", plan.existing_ids().len()),
         _ => format!("{} files", plan.new_count + plan.relink_count),
     };
     let (job, cancel) = state.jobs.create(JobKind::DocumentImport, &subject);
@@ -404,6 +406,17 @@ pub fn import_job(app: &AppHandle, plan: ImportPlan) -> UiResult<String> {
             .map_err(|e| e.to_string())?;
             if !batch_ids.is_empty() {
                 ctx.emit(app, "batch", batch_ids.clone());
+            }
+            // Registered documents the batch met again joined its collection / project (their role
+            // may have followed the collection): the lists refresh for them as well.
+            let has_target = plan.options.collection_id.is_some() || plan.options.project_id.is_some();
+            if has_target && !report.existing.is_empty() {
+                ctx.emit(app, "updated", report.existing.clone());
+            }
+            if let Some(cid) = plan.options.collection_id.as_deref() {
+                if ctx.is_current(app) {
+                    crate::knowledge_bridge::emit_changed(app, "collections", vec![cid.to_string()]);
+                }
             }
             // §3.15: `inbox/<folder>/…` joins the project mapped to that folder (created on demand).
             let mut assigned: Vec<String> = Vec::new();

@@ -178,6 +178,30 @@ impl ImportPlan {
     pub fn importable(&self) -> impl Iterator<Item = &ImportItem> {
         self.items.iter().filter(|i| i.status.is_importable())
     }
+
+    /// Registered documents this plan merely met again — the same path, or the same content
+    /// under another path — in plan order, each id once.
+    pub fn existing_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = Vec::new();
+        for item in &self.items {
+            let id = match &item.status {
+                ImportItemStatus::AlreadyRegistered { id } => id,
+                ImportItemStatus::Duplicate { of, .. } => of,
+                _ => continue,
+            };
+            if !ids.contains(id) {
+                ids.push(id.clone());
+            }
+        }
+        ids
+    }
+
+    /// A plan with nothing to import is still worth running when it has a collection / project
+    /// to put its already registered documents into (files of the library dropped on a project
+    /// or a reference group, audit PRJ-1).
+    pub fn attaches_existing(&self) -> bool {
+        (self.options.collection_id.is_some() || self.options.project_id.is_some()) && !self.existing_ids().is_empty()
+    }
 }
 
 /// Walks `sources` (files or folders) collecting candidate files; hidden
@@ -493,6 +517,10 @@ pub struct ImportReport {
     pub batch_id: String,
     pub imported: Vec<String>,
     pub relinked: Vec<String>,
+    /// Registered documents the batch met again (same path / same content) — they were put
+    /// into the batch's collection / project like the imported ones.
+    #[serde(default)]
+    pub existing: Vec<String>,
     pub failed: Vec<(String, String)>,
     pub skipped: u32,
     pub cancelled: bool,
@@ -565,18 +593,15 @@ pub fn run(
             return Err(CoreError::Invalid("project_not_found".into()));
         }
     }
-    // Documents this batch merely re-encountered still join the collection / project.
-    if plan.options.collection_id.is_some() || plan.options.project_id.is_some() {
-        for item in &plan.items {
-            let existing = match &item.status {
-                ImportItemStatus::AlreadyRegistered { id } => Some(id.clone()),
-                ImportItemStatus::Duplicate { of, .. } => Some(of.clone()),
-                _ => None,
-            };
-            if let Some(id) = existing {
-                deps.db.with(|c| attach_to_collection(c, &plan.options, &id))?;
-            }
+    // Documents this batch merely met again still join the collection / project, and the report
+    // names them: an attach-only run (nothing new to import) is all about these ids.
+    for id in plan.existing_ids() {
+        // The plan may be minutes old: a document deleted since is simply not there to attach.
+        if deps.db.with(|c| repo::get_document(c, &id))?.is_none() {
+            continue;
         }
+        deps.db.with(|c| attach_to_collection(c, &plan.options, &id))?;
+        report.existing.push(id);
     }
     for item in plan.importable() {
         if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
@@ -1891,6 +1916,31 @@ mod tests {
         let report2 = run(&d, &p2, None, &mut |_| {}, &mut |_, _| {}).unwrap();
         assert!(report2.imported.is_empty());
         assert_eq!(e.db.with(|c| crate::projects::repo::documents_of(c, &project.id)).unwrap().len(), 1);
+        // Audit PRJ-1: a file of the library dropped on another project (or a reference group) has
+        // nothing to import — the run is still worth it, attaches the registered document and
+        // names it in the report.
+        let id = report.imported[0].clone();
+        let second = crate::projects::ProjectInput { name: "둘째 프로젝트".into(), ..Default::default() };
+        let second = e.db.with(|c| crate::projects::repo::save_project(c, &second)).unwrap();
+        let to_second = ImportOptions { project_id: Some(second.id.clone()), ..ImportOptions::default() };
+        let registered = e.paths.documents_dir().join("scan.jpg");
+        let p_dup = plan(&e.db, &e.paths, std::slice::from_ref(&ext), &to_second, ImportSource::Drop).unwrap();
+        let p_same = plan(&e.db, &e.paths, std::slice::from_ref(&registered), &to_second, ImportSource::Drop).unwrap();
+        for p in [&p_dup, &p_same] {
+            assert_eq!(p.new_count + p.relink_count, 0);
+            assert_eq!(p.existing_ids(), vec![id.clone()]);
+            assert!(p.attaches_existing());
+        }
+        assert!(matches!(p_same.items[0].status, ImportItemStatus::AlreadyRegistered { .. }));
+        let attach_only = run(&d, &p_same, None, &mut |_| {}, &mut |_, _| {}).unwrap();
+        assert_eq!((attach_only.imported.len(), attach_only.existing.clone()), (0, vec![id.clone()]));
+        let members = e.db.with(|c| crate::projects::repo::documents_of(c, &second.id)).unwrap();
+        assert_eq!(members.iter().map(|m| m.document.id.clone()).collect::<Vec<_>>(), vec![id.clone()]);
+        // Without a target there is nothing to do with documents that are already registered.
+        let plain =
+            plan(&e.db, &e.paths, std::slice::from_ref(&ext), &ImportOptions::default(), ImportSource::Drop).unwrap();
+        assert_eq!(plain.existing_ids(), vec![id.clone()]);
+        assert!(!plain.attaches_existing());
         // An unknown project is refused before anything is copied.
         RgbImage::from_pixel(60, 40, Rgb([1, 1, 1])).save(ext.join("other.jpg")).unwrap();
         let bogus = ImportOptions { project_id: Some("nope".into()), ..ImportOptions::default() };
