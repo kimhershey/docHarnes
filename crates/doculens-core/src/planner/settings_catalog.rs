@@ -445,6 +445,31 @@ impl ValueShape {
     }
 }
 
+/// The catalog as data for the UI (`src/lib/settingsCatalog.json`). The UI's catalog is built from
+/// this file, so a range has one home (audit CON-8: the two catalogs and `settings.rs` disagreed —
+/// "근거 컨텍스트 토큰 40000" passed the planner and failed in the UI, "top-k 50" was saved as 32).
+pub fn export_json() -> Value {
+    use serde_json::json;
+    Value::Array(
+        SETTINGS
+            .iter()
+            .map(|s| {
+                let ty = match s.ty {
+                    ValueType::Bool => json!({ "kind": "boolean" }),
+                    ValueType::Int { min, max } => json!({ "kind": "integer", "min": min, "max": max }),
+                    ValueType::IntChoice(choices) => json!({ "kind": "integer", "choices": choices }),
+                    ValueType::Float { min, max, percent } => {
+                        json!({ "kind": "number", "min": min, "max": max, "percent": percent })
+                    }
+                    ValueType::Enum(values) => json!({ "kind": "enum", "values": values }),
+                    ValueType::Str => json!({ "kind": "string" }),
+                };
+                json!({ "key": s.key, "type": ty, "confirm": s.confirm })
+            })
+            .collect(),
+    )
+}
+
 /// Canonical catalog key of `key` (alias-aware, case-insensitive, `/` tolerated), with its spec.
 pub fn find(key: &str) -> Option<(&'static str, &'static SettingSpec)> {
     let k = key.trim().to_lowercase().replace('/', ".");
@@ -578,6 +603,50 @@ pub fn coerce(spec: &SettingSpec, value: &mut Value) -> std::result::Result<(), 
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// `src/lib/settingsCatalog.json` is this table. Regenerate with
+    /// `DOCULENS_WRITE_CATALOG=1 cargo test -p doculens-core --lib settings_catalog` and commit it.
+    #[test]
+    fn the_ui_catalog_file_is_this_table() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/lib/settingsCatalog.json");
+        let expected = serde_json::to_string_pretty(&export_json()).unwrap() + "\n";
+        if std::env::var_os("DOCULENS_WRITE_CATALOG").is_some() {
+            std::fs::write(&path, &expected).unwrap();
+        }
+        let actual = std::fs::read_to_string(&path).unwrap_or_default().replace("\r\n", "\n");
+        assert!(
+            actual == expected,
+            "{} is stale: run `DOCULENS_WRITE_CATALOG=1 cargo test -p doculens-core --lib settings_catalog` and commit it",
+            path.display()
+        );
+    }
+
+    /// The ranges are the ones `AppSettings::normalize` keeps: a value the catalog accepts is the
+    /// value that is saved.
+    #[test]
+    fn accepted_values_survive_normalisation() {
+        use crate::settings::AppSettings;
+        for spec in SETTINGS {
+            let Some((section, field)) = spec.key.split_once('.') else { continue };
+            let edges: Vec<Value> = match spec.ty {
+                ValueType::Int { min, max } => vec![Value::from(min), Value::from(max)],
+                ValueType::IntChoice(choices) => choices.iter().map(|c| Value::from(*c)).collect(),
+                ValueType::Float { min, max, .. } => vec![Value::from(min), Value::from(max)],
+                _ => continue,
+            };
+            for edge in edges {
+                let mut v = serde_json::to_value(AppSettings::default()).unwrap();
+                assert!(v[section].get(field).is_some(), "{} is not a settings field", spec.key);
+                v[section][field] = edge.clone();
+                let mut settings: AppSettings = serde_json::from_value(v).unwrap();
+                settings.normalize();
+                let saved = serde_json::to_value(&settings).unwrap();
+                let got = saved[section][field].as_f64().unwrap();
+                let want = edge.as_f64().unwrap();
+                assert!((got - want).abs() < 1e-6, "{}: {want} is accepted but saved as {got}", spec.key);
+            }
+        }
+    }
 
     #[test]
     fn setting_keys_match_the_catalog() {

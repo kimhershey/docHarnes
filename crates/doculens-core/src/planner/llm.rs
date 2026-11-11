@@ -328,10 +328,29 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
         }
     }
     // Two rejected attempts → clarification with the first error.
-    let first = result.issues.iter().find(|i| i.blocking).map(|i| i.message.clone()).unwrap_or_default();
+    let first = result.issues.iter().find(|i| i.blocking);
+    let question = first
+        .and_then(|i| setting_range_question(i, ko))
+        .unwrap_or_else(|| clarification_text(ko, &first.map(|i| i.message.clone()).unwrap_or_default()));
     result.source = PlanSource::Model;
-    result.plan = Plan::clarify(clarification_text(ko, &first), 0.0);
+    result.plan = Plan::clarify(question, 0.0);
     Ok(result)
+}
+
+/// A settings value the validator rejected twice is asked about in the user's words: the
+/// setting's label and what it accepts, not the validator's English message (audit CON-8).
+fn setting_range_question(issue: &PlanIssue, ko: bool) -> Option<String> {
+    use super::settings_catalog as catalog;
+    if issue.code != "setting_value" {
+        return None;
+    }
+    let (_, spec) = catalog::find(issue.message.split_whitespace().next()?)?;
+    let range = catalog::range_hint(spec, ko);
+    Some(if ko {
+        format!("{} 설정에 넣을 수 있는 값은 {range}입니다. 어떤 값으로 바꿀까요?", spec.label_ko)
+    } else {
+        format!("{} accepts {range}. Which value should I set?", spec.label_en)
+    })
 }
 
 /// What the first model call made of the turn.

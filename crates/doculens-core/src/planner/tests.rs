@@ -2095,6 +2095,15 @@ fn model_plans_are_checked_against_the_sentence() {
     assert!(codes(&r).contains(&"unmet_request".to_string()), "{r:?}");
     assert!(r.plan.requires_confirmation);
     assert_eq!(r.plan.unmet.as_deref(), Some("메일로 보내기"));
+    // A value the setting does not accept, twice: the question names the setting and its range.
+    let chat = StageChat::new();
+    chat.push("families", json!({ "families": ["system"] }));
+    chat.push("plan", reply(json!([{ "op": "set_setting", "key": "ui.scale_percent", "value": 300 }]), ""));
+    let r = plan(Some(&deps(&chat)), "글자가 너무 작으니 화면을 세 배로 키워줘", &c, PlanMode::ModelFirst).unwrap();
+    assert!(r.plan.is_clarification(), "{r:?}");
+    let question = r.plan.clarification_question.clone().unwrap_or_default();
+    assert!(question.contains("UI 배율(%)") && question.contains("90~150"), "{question}");
+    assert!(!question.contains("must be"), "{question}");
     // "Nothing to do" is answered, not shown as an empty plan.
     let r = run("음, 그렇구나.", "system", reply(json!([{ "op": "noop" }]), ""));
     assert!(matches!(&r.plan.operations[..], [Op::Answer { mode: Some(AnswerMode::Chat), .. }]), "{r:?}");
