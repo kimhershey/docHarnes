@@ -23,6 +23,7 @@ use doculens_core::knowledge::repo as kb_repo;
 use doculens_core::organize::journal;
 use doculens_core::pipeline::repo as pipeline_repo;
 use doculens_core::retention::{self, FsPurge, RetentionItem, RetentionPolicy};
+use doculens_core::settings::CacheSettings;
 
 use crate::jobs::{JobKind, JobState, WorkerResult};
 use crate::pipeline_bridge;
@@ -207,10 +208,8 @@ pub fn run(app: &AppHandle, ctl: &JobControl) -> WorkerResult {
     let policy = policy(app).map_err(|e| (e.message, None))?;
     let mut summary = MaintenanceSummary::default();
     let paths = pctx.docs.paths.clone();
-    if !policy.purge_enabled {
-        summary.skipped.push("disabled".into());
-        return finish(app, &db, &paths, summary, started);
-    }
+    // `purge_enabled` only switches the daily schedule (`tick`). A job that reached this point was
+    // asked for — "지금 파기 실행" must purge with the daily run switched off as well.
     let check = |summary: &mut MaintenanceSummary| -> bool {
         if ctl.cancelled() {
             summary.cancelled = true;
@@ -340,16 +339,39 @@ pub fn run(app: &AppHandle, ctl: &JobControl) -> WorkerResult {
         }
         None => summary.skipped.push("documents".into()),
     }
-    // 8. Cache size cap: LRU over the per-document folders of pages (8/10 of the cap), thumbnails
-    //    and converted office files (1/10 each), by last use (`.last_used` marker, else render
-    //    time). `cache/tmp` is reserved for pre-masking temporaries (nothing writes it yet) and is
-    //    purged by age in step 5, not trimmed here.
-    let cap = (policy.page_cache_max_gb.max(0.5) * 1024.0 * 1024.0 * 1024.0) as u64;
-    let pages = retention::trim_lru_dirs(&paths.page_cache_dir(), cap * 8 / 10, CACHE_MIN_AGE);
-    let thumbs = retention::trim_lru_dirs(&paths.thumb_cache_dir(), cap / 10, CACHE_MIN_AGE);
-    let converted = retention::trim_lru_dirs(&paths.cache_dir().join("converted"), cap / 10, CACHE_MIN_AGE);
+    // 8. Cache size cap: LRU over the per-document folders, by last use (`.last_used` marker, else
+    //    render time). The cap is the one in the settings (처리 › 페이지 캐시 상한). `cache/tmp` is
+    //    reserved for pre-masking temporaries (nothing writes it yet) and is purged by age in
+    //    step 5, not trimmed here.
+    let cache = app.state::<AppState>().settings_snapshot().map(|s| s.cache).unwrap_or_default();
+    let caps = CacheCaps::from_settings(&cache);
+    let pages = retention::trim_lru_dirs(&paths.page_cache_dir(), caps.pages, CACHE_MIN_AGE);
+    let thumbs = match caps.thumbs {
+        Some(cap) => retention::trim_lru_dirs(&paths.thumb_cache_dir(), cap, CACHE_MIN_AGE),
+        None => FsPurge::default(),
+    };
+    let converted = retention::trim_lru_dirs(&paths.cache_dir().join("converted"), caps.converted, CACHE_MIN_AGE);
     summary.purged.cache_bytes += pages.bytes + thumbs.bytes + converted.bytes;
     finish(app, &db, &paths, summary, started)
+}
+
+/// Byte caps of the cache trim, from `settings.cache` — the one page-cache cap of the app (the
+/// workspace retention policy carried a second one up to 0.7.x). Rendered pages get 8/10 of it,
+/// thumbnails and converted office files 1/10 each; with "keep thumbnails" on (the default,
+/// design §3.6) the thumbnails are not trimmed at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CacheCaps {
+    pages: u64,
+    thumbs: Option<u64>,
+    converted: u64,
+}
+
+impl CacheCaps {
+    fn from_settings(cache: &CacheSettings) -> CacheCaps {
+        let gb = if cache.page_cache_max_gb.is_finite() { cache.page_cache_max_gb.clamp(0.5, 1000.0) } else { 5.0 };
+        let cap = (f64::from(gb) * 1024.0 * 1024.0 * 1024.0) as u64;
+        CacheCaps { pages: cap * 8 / 10, thumbs: (!cache.keep_thumbnails).then_some(cap / 10), converted: cap / 10 }
+    }
 }
 
 fn finish(
@@ -407,4 +429,37 @@ fn finish(
         return Err(("cancelled".into(), Some(value)));
     }
     Ok((Some(detail), Some(value)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// PLT-10: the purge follows the page-cache cap of the settings (처리 › 페이지 캐시 상한, the
+    /// assistant's "캐시 상한 50GB로") and the "keep thumbnails" switch.
+    #[test]
+    fn cache_caps_follow_the_settings() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let default = CacheCaps::from_settings(&CacheSettings::default());
+        assert_eq!(default, CacheCaps { pages: 4 * GIB, thumbs: None, converted: GIB / 2 });
+        let big = CacheCaps::from_settings(&CacheSettings { page_cache_max_gb: 50.0, keep_thumbnails: false });
+        assert_eq!(big, CacheCaps { pages: 40 * GIB, thumbs: Some(5 * GIB), converted: 5 * GIB });
+        // Values a hand-edited file could carry (the loader clamps them as well).
+        let tiny = CacheCaps::from_settings(&CacheSettings { page_cache_max_gb: 0.0, keep_thumbnails: true });
+        assert_eq!(tiny.pages, GIB / 2 * 8 / 10);
+        let nan = CacheCaps::from_settings(&CacheSettings { page_cache_max_gb: f32::NAN, keep_thumbnails: true });
+        assert_eq!(nan, default);
+    }
+
+    /// PLT-15, the half that can be checked without an app handle: the daily switch still stops
+    /// the schedule (no next run). That `run` itself no longer asks for the switch — so "지금 파기
+    /// 실행" purges with the daily run off — is not covered by a unit test.
+    #[test]
+    fn the_daily_switch_stops_the_schedule() {
+        let now = Local.with_ymd_and_hms(2026, 11, 11, 10, 0, 0).single().unwrap();
+        let on = RetentionPolicy { purge_enabled: true, purge_hour_local: 3, ..Default::default() };
+        let off = RetentionPolicy { purge_enabled: false, ..on.clone() };
+        assert_eq!(next_run(&on, now).map(|t| t.with_timezone(&Local).hour()), Some(3));
+        assert_eq!(next_run(&off, now), None);
+    }
 }
