@@ -31,6 +31,8 @@ async function newProject(page: Page, name: string): Promise<string> {
 
 /** Adds a library document to the open project: as a work document, or (`reference`) to its reference group. */
 async function addToOpenProject(page: Page, id: string, reference = false): Promise<void> {
+  // The project's reference group is created on demand: the 문서 tab carries its id once it exists.
+  if (reference) await expect(page.getByTestId("project-documents")).toHaveAttribute("data-group-id", /.+/, { timeout: 10_000 });
   await page.getByTestId("project-add-documents").click();
   if (reference) await page.getByTestId("project-add-kind-reference").check();
   await page.getByTestId(`project-add-doc-${id}`).check();
@@ -249,6 +251,41 @@ test.describe("assistant chat sessions", () => {
     // Asked again in the project scope: there is still no evidence, so this is the general-knowledge answer.
     await expect(second.getByTestId("answer-general-badge")).toBeVisible();
     await expect(second.getByTestId("citation-chip")).toHaveCount(0);
+  });
+
+  // PRJ-13: the guide says a question about selected / attached documents still consults the project's
+  // reference material; the 선택 문서 scope sent the documents alone.
+  test("the 선택 문서 scope with a project context also consults the project's 참고 자료", async ({ page }) => {
+    test.setTimeout(60_000);
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서.hwpx", "D:\\규정\\정보보안지침.pdf"]);
+    const estimate = await docId(page, "견적서.hwpx");
+    const guide = await docId(page, "정보보안지침.pdf");
+    await newProject(page, "한빛 포털 구축");
+    await addToOpenProject(page, estimate);
+    await addToOpenProject(page, guide, true);
+
+    // Only the estimate is selected; the project stays the context (the chip in the header).
+    await page.getByTestId("nav-library").click();
+    await page.getByTestId(`doc-select-${estimate}`).check();
+    await openAssistantScreen(page);
+    await expect(page.getByTestId("assistant-current-project")).toBeVisible();
+    await page.getByTestId("assistant-scope").click();
+    await page.getByTestId("assistant-scope-selection").click();
+    await page.getByTestId("assistant-evidence-only").click();
+    await send(page, "정보보안지침");
+    const evidence = page.locator('[data-testid="assistant-card-evidence"]');
+    await expect(evidence.last()).toHaveAttribute("data-pending", "false", { timeout: 15_000 });
+    await expect(evidence.last().locator(`[data-testid="evidence-hit"][data-doc-id="${guide}"]`).first()).toBeVisible();
+
+    // Without the project context the same search stays within the selection.
+    await page.getByTestId("assistant-current-project-clear").click();
+    await expect(page.getByTestId("assistant-current-project")).toBeHidden();
+    await send(page, "정보보안지침");
+    await expect(evidence).toHaveCount(2);
+    await expect(evidence.last()).toHaveAttribute("data-pending", "false", { timeout: 15_000 });
+    await expect(evidence.last().locator(`[data-testid="evidence-hit"][data-doc-id="${guide}"]`)).toHaveCount(0);
   });
 
   test("the input waits for the sessions and the composer sends into the active one", async ({ page }) => {

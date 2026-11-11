@@ -200,14 +200,20 @@ export function AssistantPage() {
 
   /**
    * Knowledge scope of the selector: 현재 프로젝트 = the project's work documents ∪ its reference group ∪ the
-   * common reference material (`project_id`, plan §2); 선택 문서 asks about those documents only.
+   * common reference material (`project_id`, plan §2). 선택 문서 asks about those documents — and, while a
+   * project is the context (the chip in the header), together with that project's reference material and the
+   * common one: `project_id` next to explicit `documents` means exactly that (0.5.0 plan A; PRJ-13). Without
+   * a project it is those documents alone.
    */
   const knowledgeScope = (): SearchScope => {
     const s: SearchScope = { latest_only: knowledge?.latest_only ?? true };
     if (scope === "project" && currentProject) s.project_id = currentProject;
     if (scope === "selection" && selectionIds.length > 0) {
       s.documents = selectionIds;
-      if (selectionKind === "attached") s.latest_only = false;
+      // The named documents are searched whatever their edition (the core exempts them from "최신본만"); with
+      // a project the setting keeps applying to the reference material that comes along.
+      if (currentProject) s.project_id = currentProject;
+      else if (selectionKind === "attached") s.latest_only = false;
     }
     return s;
   };
