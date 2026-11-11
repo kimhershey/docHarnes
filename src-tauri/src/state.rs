@@ -102,11 +102,23 @@ pub struct ModelIndex {
     pub signature: String,
 }
 
+/// A workspace that is open (locked, database migrated) but not the current one yet — see
+/// [`AppState::prepare_workspace`].
+#[derive(Debug)]
+pub enum PreparedWorkspace {
+    /// The requested folder is the workspace that is already open.
+    Current,
+    Opened(Box<Workspace>),
+}
+
 pub struct AppState {
     pub app_paths: AppPaths,
     pub settings: Mutex<AppSettings>,
     pub settings_status: LoadStatus,
     pub workspace: Mutex<Option<Workspace>>,
+    /// Serialises open / create / close: the "before" and "after" hooks of two switches must
+    /// not interleave.
+    pub workspace_switch: Mutex<()>,
     pub startup_workspace: Mutex<StartupWorkspaceStatus>,
     /// Built-in registry; drop-in models are merged on demand (`merged_registry`).
     pub registry: Registry,
@@ -170,6 +182,7 @@ impl AppState {
             settings: Mutex::new(settings),
             settings_status: status,
             workspace: Mutex::new(None),
+            workspace_switch: Mutex::new(()),
             startup_workspace: Mutex::new(StartupWorkspaceStatus::None),
             registry: Registry::builtin(),
             hardware: Mutex::new(None),
@@ -274,30 +287,46 @@ impl AppState {
     /// Opens (or creates) a workspace, closing the current one first, and
     /// records it as active in settings.
     pub fn open_workspace_inner(&self, path: &Path, opts: OpenOptions) -> Result<()> {
+        let prepared = self.prepare_workspace(path, opts)?;
+        self.install_workspace(path, prepared)
+    }
+
+    /// First half of a switch: opens the target (folder, manifest, lock, database) without
+    /// touching the workspace that is open. Every way a switch normally fails — the folder is
+    /// gone, the drive unplugged, the workspace locked — fails here, before anything of the
+    /// current workspace was stopped.
+    pub fn prepare_workspace(&self, path: &Path, opts: OpenOptions) -> Result<PreparedWorkspace> {
         // Re-selecting the folder that is already open must not touch the lock.
         {
             let guard = self.workspace.lock().map_err(|_| CoreError::Invalid("lock poisoned".into()))?;
-            if let Some(current) = guard.as_ref() {
-                if current.root() == path {
-                    let name = current.manifest.name.clone();
-                    drop(guard);
-                    let mut s = self.settings.lock().map_err(|_| CoreError::Invalid("lock poisoned".into()))?;
-                    s.remember_workspace(path, &name);
-                    s.save(&self.settings_path())?;
-                    return Ok(());
+            if guard.as_ref().is_some_and(|current| current.root() == path) {
+                return Ok(PreparedWorkspace::Current);
+            }
+        }
+        Ok(PreparedWorkspace::Opened(Box::new(Workspace::open(path, opts)?)))
+    }
+
+    /// Second half of a switch: the prepared workspace replaces the current one (which is
+    /// closed) and becomes the active workspace in the settings.
+    pub fn install_workspace(&self, path: &Path, prepared: PreparedWorkspace) -> Result<()> {
+        let name = {
+            let mut guard = self.workspace.lock().map_err(|_| CoreError::Invalid("lock poisoned".into()))?;
+            match prepared {
+                PreparedWorkspace::Current => match guard.as_ref() {
+                    Some(current) if current.root() == path => current.manifest.name.clone(),
+                    _ => return Err(CoreError::NoWorkspace), // closed since `prepare_workspace`
+                },
+                PreparedWorkspace::Opened(ws) => {
+                    let name = ws.manifest.name.clone();
+                    if let Some(old) = guard.take() {
+                        old.close();
+                    }
+                    *guard = Some(*ws);
+                    self.workspace_generation.fetch_add(1, Ordering::SeqCst);
+                    name
                 }
             }
-        }
-        let ws = Workspace::open(path, opts)?;
-        let name = ws.manifest.name.clone();
-        {
-            let mut guard = self.workspace.lock().map_err(|_| CoreError::Invalid("lock poisoned".into()))?;
-            if let Some(old) = guard.take() {
-                old.close();
-            }
-            *guard = Some(ws);
-            self.workspace_generation.fetch_add(1, Ordering::SeqCst);
-        }
+        };
         let mut s = self.settings.lock().map_err(|_| CoreError::Invalid("lock poisoned".into()))?;
         s.remember_workspace(path, &name);
         s.save(&self.settings_path())?;
@@ -413,6 +442,61 @@ mod tests {
         assert_eq!(saved.active_workspace.as_deref(), Some(root.as_path()), "the next start reopens it");
         // Idempotent: a second call (or an exit without a workspace) is harmless.
         state.release_workspace_for_exit();
+    }
+
+    /// PLT-2: `workspace_open` / `workspace_create` open the target before they stop anything of
+    /// the current workspace. A target that cannot be opened must leave everything as it was.
+    #[test]
+    fn a_switch_that_cannot_open_its_target_leaves_the_open_workspace_alone() {
+        let tmp = TempDir::new();
+        let state = tmp.state();
+        let a = tmp.path().join("a");
+        state.open_workspace_inner(&a, OpenOptions { create: true, ..Default::default() }).unwrap();
+        let generation = state.workspace_generation.load(Ordering::SeqCst);
+        let lock_a = WorkspacePaths::new(&a).lock_file();
+        let current = |state: &AppState| state.with_workspace(|ws| ws.root().to_path_buf()).unwrap();
+
+        // The folder is gone (unplugged drive), is no workspace, or is locked from another PC.
+        let gone = tmp.path().join("gone");
+        let plain = tmp.path().join("plain");
+        std::fs::create_dir_all(&plain).unwrap();
+        let b = tmp.path().join("b");
+        drop(Workspace::open(&b, OpenOptions { create: true, ..Default::default() }).unwrap());
+        let lock_b = WorkspacePaths::new(&b).lock_file();
+        let foreign = doculens_core::workspace::LockInfo {
+            pid: 1,
+            host: "another-pc".into(),
+            app_version: "0.0.0".into(),
+            created_at: Utc::now(),
+            token: None,
+        };
+        std::fs::write(&lock_b, serde_json::to_vec(&foreign).unwrap()).unwrap();
+        assert!(matches!(state.prepare_workspace(&gone, OpenOptions::default()), Err(CoreError::InvalidWorkspace(_))));
+        assert!(matches!(state.prepare_workspace(&plain, OpenOptions::default()), Err(CoreError::InvalidWorkspace(_))));
+        assert!(matches!(state.prepare_workspace(&b, OpenOptions::default()), Err(CoreError::WorkspaceLocked { .. })));
+        assert!(state.open_workspace_inner(&gone, OpenOptions::default()).is_err());
+
+        assert_eq!(current(&state), a);
+        assert_eq!(state.workspace_generation.load(Ordering::SeqCst), generation, "jobs of A stay valid");
+        assert!(!state.switching.load(Ordering::SeqCst), "queue / watcher / auto-index of A keep running");
+        assert!(lock_a.is_file());
+        assert_eq!(state.settings_snapshot().unwrap().active_workspace.as_deref(), Some(a.as_path()));
+
+        // A target that opens: still A until it is installed, then B with A closed and unlocked.
+        let prepared = state.prepare_workspace(&b, OpenOptions { force_unlock: true, ..Default::default() }).unwrap();
+        assert!(matches!(prepared, PreparedWorkspace::Opened(_)));
+        assert_eq!(current(&state), a);
+        state.install_workspace(&b, prepared).unwrap();
+        assert_eq!(current(&state), b);
+        assert_eq!(state.workspace_generation.load(Ordering::SeqCst), generation + 1);
+        assert!(!lock_a.exists() && lock_b.is_file());
+        assert_eq!(state.settings_snapshot().unwrap().active_workspace.as_deref(), Some(b.as_path()));
+
+        // Re-selecting the open folder opens nothing new.
+        let again = state.prepare_workspace(&b, OpenOptions::default()).unwrap();
+        assert!(matches!(again, PreparedWorkspace::Current));
+        state.install_workspace(&b, again).unwrap();
+        assert_eq!(state.workspace_generation.load(Ordering::SeqCst), generation + 1);
     }
 
     /// PLT-18: the error tells the webview whether "force unlock" can help at all.

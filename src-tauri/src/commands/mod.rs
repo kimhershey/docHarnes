@@ -8,7 +8,7 @@ pub mod pipeline;
 pub mod planner;
 pub mod projects;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -177,17 +177,35 @@ pub struct OpenArgs {
     pub force_unlock: bool,
 }
 
+/// The hooks that follow `docs_bridge::before_workspace_change`: they clear the switching flag,
+/// restart the watchers and bring back the job queue of whichever workspace is open now. Every
+/// "before" must be followed by them, whatever happened in between — otherwise the queue, the
+/// inbox watcher, auto-index, auto-processing and the purge stay off until the app restarts.
+fn after_workspace_change(app: &AppHandle) {
+    engine_bridge::on_workspace_changed(app);
+    crate::docs_bridge::on_workspace_changed(app);
+    crate::knowledge_bridge::on_workspace_changed(app);
+    crate::pipeline_bridge::on_workspace_changed(app);
+}
+
+/// Opens (or creates) `path` and makes it the current workspace.
+fn switch_workspace(app: &AppHandle, state: &AppState, path: &Path, opts: OpenOptions) -> UiResult<WorkspaceView> {
+    let _one_at_a_time = state.workspace_switch.lock().unwrap_or_else(|e| e.into_inner());
+    // The target is opened first. When that fails (folder gone, drive unplugged, locked by
+    // another instance) the workspace that is open has not been touched: its jobs keep running
+    // and its inbox is still watched.
+    let prepared = state.prepare_workspace(path, opts)?;
+    crate::docs_bridge::before_workspace_change(app);
+    let installed = state.install_workspace(path, prepared);
+    after_workspace_change(app);
+    installed?;
+    state.with_workspace(view)
+}
+
 #[tauri::command(async)]
 pub fn workspace_open(app: AppHandle, state: State<'_, AppState>, args: OpenArgs) -> UiResult<WorkspaceView> {
     let path = normalize_user_path(&args.path);
-    crate::docs_bridge::before_workspace_change(&app);
-    state.open_workspace_inner(&path, OpenOptions { force_unlock: args.force_unlock, ..Default::default() })?;
-    let v = state.with_workspace(view)?;
-    engine_bridge::on_workspace_changed(&app);
-    crate::docs_bridge::on_workspace_changed(&app);
-    crate::knowledge_bridge::on_workspace_changed(&app);
-    crate::pipeline_bridge::on_workspace_changed(&app);
-    Ok(v)
+    switch_workspace(&app, &state, &path, OpenOptions { force_unlock: args.force_unlock, ..Default::default() })
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -205,28 +223,17 @@ pub struct CreateArgs {
 pub fn workspace_create(app: AppHandle, state: State<'_, AppState>, args: CreateArgs) -> UiResult<WorkspaceView> {
     let path = normalize_user_path(&args.path);
     let locale = args.locale.or_else(|| state.settings_snapshot().ok().map(|s| s.ui.language));
-    crate::docs_bridge::before_workspace_change(&app);
-    state.open_workspace_inner(
-        &path,
-        OpenOptions { create: true, name: args.name, locale, force_unlock: args.force_unlock },
-    )?;
-    let v = state.with_workspace(view)?;
-    engine_bridge::on_workspace_changed(&app);
-    crate::docs_bridge::on_workspace_changed(&app);
-    crate::knowledge_bridge::on_workspace_changed(&app);
-    crate::pipeline_bridge::on_workspace_changed(&app);
-    Ok(v)
+    let opts = OpenOptions { create: true, name: args.name, locale, force_unlock: args.force_unlock };
+    switch_workspace(&app, &state, &path, opts)
 }
 
 #[tauri::command(async)]
 pub fn workspace_close(app: AppHandle, state: State<'_, AppState>) -> UiResult<()> {
+    let _one_at_a_time = state.workspace_switch.lock().unwrap_or_else(|e| e.into_inner());
     crate::docs_bridge::before_workspace_change(&app);
-    state.close_workspace()?;
-    engine_bridge::on_workspace_changed(&app);
-    crate::docs_bridge::on_workspace_changed(&app);
-    crate::knowledge_bridge::on_workspace_changed(&app);
-    crate::pipeline_bridge::on_workspace_changed(&app);
-    Ok(())
+    let closed = state.close_workspace();
+    after_workspace_change(&app);
+    closed
 }
 
 #[tauri::command]
