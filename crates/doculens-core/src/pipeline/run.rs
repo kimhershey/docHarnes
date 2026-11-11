@@ -181,6 +181,27 @@ fn page_image(cache: &DocumentCache, page: &PageRecord, vlm: &Vlm<'_>, tokens: u
     image::prepare(&path, vlm.geometry, tokens).map(Some)
 }
 
+/// Whether the dense-page second pass at the fine-print budget shows the model more than the
+/// first pass did. With Gemma 4 every OCR budget is capped at 1,120 tokens, and a small render
+/// fits any budget: the pass would send the same image again — twice the OCR time of a
+/// table-heavy page for the same text. `fine` is the prepared fine-print image once there is one
+/// (before that the budgets decide). A first reply that was cut at the output limit still gets
+/// the pass: the fine-print profile also carries the larger reply budget.
+pub(super) fn fine_pass_sees_more(
+    geometry: image::VisionGeometry,
+    base_tokens: u32,
+    fine_tokens: u32,
+    first: &PreparedImage,
+    fine: Option<&PreparedImage>,
+    first_truncated: bool,
+) -> bool {
+    first_truncated
+        || match fine {
+            Some(f) => (f.width, f.height) != (first.width, first.height),
+            None => geometry.clamp_budget(fine_tokens) > geometry.clamp_budget(base_tokens),
+        }
+}
+
 fn has_text(p: &PageRecord) -> bool {
     p.text.as_deref().is_some_and(|t| !t.trim().is_empty())
 }
@@ -302,9 +323,13 @@ fn process_document(
                     let fine = Vlm::new(vlm.chat, vlm.model.clone(), Profile::FinePrint, vlm.cancel)
                         .with_context(vlm.ctx)
                         .with_geometry(vlm.geometry);
-                    if let Some(img2) =
-                        page_image(&cache, page, &fine, fine.params(Stage::Ocr).image_tokens.unwrap_or(3_072))?
-                    {
+                    let fine_tokens = fine.params(Stage::Ocr).image_tokens.unwrap_or(3_072);
+                    // Skipped when it would only read the same image again (PIP-13).
+                    let sees_more = |fine_image: Option<&PreparedImage>| {
+                        fine_pass_sees_more(vlm.geometry, ocr_tokens, fine_tokens, &img, fine_image, reply.truncated)
+                    };
+                    let img2 = if sees_more(None) { page_image(&cache, page, &fine, fine_tokens)? } else { None };
+                    if let Some(img2) = img2.filter(|i| sees_more(Some(i))) {
                         match ocr::ocr_page(&fine, &img2.url, None) {
                             Ok((t2, r2)) => {
                                 usage.add(r2.usage);

@@ -401,6 +401,46 @@ fn resident_numbers_in_a_text_layer_are_masked_in_the_index_and_the_mirror() {
     assert!(!pages(true)[0].text.as_deref().unwrap().contains("900101-1234567"));
 }
 
+/// Audit PIP-13: on a dense page (many table cells) the fine-print second pass sent the very same
+/// image again when the encoder caps every budget (Gemma 4: 1,120 tokens) — double OCR time.
+#[test]
+fn the_fine_print_pass_is_skipped_when_it_would_read_the_same_image() {
+    use super::image::{prepare_image, VisionGeometry};
+    use super::prompts::{params, Stage};
+    let (base, fine) = (
+        params(Stage::Ocr, Profile::Balanced).image_tokens.unwrap(),
+        params(Stage::Ocr, Profile::FinePrint).image_tokens.unwrap(),
+    );
+    // A 200 dpi A4 render, and a small one that fits every budget.
+    let a4 = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(1654, 2339, image::Rgb([255, 255, 255])));
+    let small = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(600, 800, image::Rgb([255, 255, 255])));
+    let sees_more = |g: VisionGeometry, img: &image::DynamicImage, truncated: bool| {
+        let first = prepare_image(img, g, base).unwrap();
+        run::fine_pass_sees_more(g, base, fine, &first, None, truncated)
+            && run::fine_pass_sees_more(g, base, fine, &first, Some(&prepare_image(img, g, fine).unwrap()), truncated)
+    };
+    assert!(!sees_more(VisionGeometry::GEMMA4, &a4, false), "Gemma 4: both budgets are capped at 1,120 tokens");
+    assert!(sees_more(VisionGeometry::QWEN, &a4, false), "Qwen: 1,500 → 3,072 tokens is a bigger image");
+    assert!(!sees_more(VisionGeometry::QWEN, &small, false), "a small render is the same image at any budget");
+    assert!(sees_more(VisionGeometry::GEMMA4, &a4, true), "a cut first reply gets the larger reply budget");
+
+    // End to end with the shipped family: one OCR call for a dense page, not two.
+    let mut w = World::new();
+    w.settings.dense_cells = 4;
+    w.add_doc("d1", "dense.pdf", SourceKind::Pdf, &[None]);
+    w.chat.push("classify", classify_reply("receipt", 0));
+    w.chat.push_ocr(RECEIPT_OCR);
+    w.chat.push_ocr("두 번째 판독은 요청되지 않아야 한다");
+    assert!(super::ocr::table_cells(RECEIPT_OCR) >= 4);
+    let deps = w.deps(None);
+    let req = ProcessRequest { document_ids: vec!["d1".into()], level: PipelineLevel::Ocr, ..Default::default() };
+    let report = run::process(&deps, &req, &mut |_| {}).unwrap();
+    assert_eq!((report.failed.len(), report.ocr_pages), (0, 1), "{report:?}");
+    assert_eq!(w.chat.image_calls(), 2, "classify + one OCR call");
+    assert!(w.pages("d1")[0].text.as_deref().unwrap().contains("스타벅스"));
+    assert_eq!(w.pages("d1")[0].ocr_profile.as_deref(), Some("balanced"));
+}
+
 #[test]
 fn digital_pdf_skips_ocr_and_extracts_from_text() {
     let w = World::new();
