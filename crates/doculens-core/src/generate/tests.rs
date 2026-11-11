@@ -2715,6 +2715,131 @@ fn a_large_budget_drafts_section_by_section_and_keeps_sections_on_cancel() {
     assert_eq!(chat3.requests.lock().unwrap()[0].max_tokens, Some(2_000));
 }
 
+/// A scripted model that reports each call: `on_call(n)` runs while call `n` is "in flight".
+struct HookChat<'a> {
+    inner: SeqChat,
+    started: &'a std::sync::atomic::AtomicUsize,
+    finished: &'a std::sync::atomic::AtomicUsize,
+    on_call: &'a (dyn Fn(usize) + Sync),
+}
+
+impl ChatBackend for HookChat<'_> {
+    fn model_id(&self) -> Option<String> {
+        self.inner.model_id()
+    }
+    fn chat_stream(
+        &self,
+        req: &ChatRequest,
+        on_delta: &mut dyn FnMut(&str) -> bool,
+    ) -> crate::error::Result<ChatResponse> {
+        let n = self.started.fetch_add(1, Ordering::SeqCst) + 1;
+        (self.on_call)(n);
+        let reply = self.inner.chat_stream(req, on_delta);
+        self.finished.fetch_add(1, Ordering::SeqCst);
+        reply
+    }
+}
+
+/// PLT-5: a draft job held the engine gate from its first model call to its last, without a checkpoint:
+/// an assistant request waited for the whole draft (tens of minutes for a long one) and "일시정지" only
+/// changed the label. The job bridge now calls `EngineGate::checkpoint` from the draft's progress
+/// callback. This wires the same thing around the core: every progress report of a split draft comes
+/// between two model calls, a waiting interactive request is served there, and a paused job parks there.
+#[test]
+fn a_split_draft_lets_interactive_requests_in_and_pauses_between_sections() {
+    use crate::jobs::{EngineGate, JobControl};
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    let w = world();
+    let gate = EngineGate::new();
+    let ctl = JobControl::new(Arc::new(AtomicBool::new(false)));
+    // Model calls started / finished so far.
+    let started = AtomicUsize::new(0);
+    let finished = AtomicUsize::new(0);
+    // Calls finished when the assistant's request ran / when the paused job was found parked.
+    let served_after = AtomicUsize::new(usize::MAX);
+    let parked_after = AtomicUsize::new(usize::MAX);
+    let ran_while_paused = AtomicBool::new(false);
+    let report_during_call = AtomicBool::new(false);
+    let wait_for = |what: &str, done: &dyn Fn() -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !done() {
+            if Instant::now() > deadline {
+                ctl.resume(); // never leave the draft parked
+                panic!("timed out waiting for {what}");
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    };
+    let head = json!({
+        "title": "10월 진척 보고서",
+        "fields": [],
+        "tables": [],
+        "body": [{"kind": "heading", "text": "보고 개요", "items": [], "source_index": null}],
+        "notes": []
+    });
+    let section = json!({ "blocks": [{"kind": "paragraph", "text": "본문", "items": [], "source_index": null}] });
+    let req = DraftRequest {
+        form_ref: Some("progress_report".into()),
+        content: "한빛 포털 구축 10월 진척 보고서".into(),
+        max_tokens: Some(8_000),
+        use_knowledge: false,
+        ..Default::default()
+    };
+    let sections = std::thread::scope(|scope| {
+        let on_call = |n: usize| {
+            if n == 2 {
+                // While section 2 is being written the user asks the assistant something.
+                scope.spawn(|| {
+                    gate.interactive(|| served_after.store(finished.load(Ordering::SeqCst), Ordering::SeqCst))
+                });
+                wait_for("the assistant request to queue", &|| gate.status().waiting == 1);
+            }
+            if n == 3 {
+                // While section 3 is being written the user presses 일시정지 (what `JobBook::pause` does).
+                ctl.pause();
+                scope.spawn(|| {
+                    wait_for("the job to park", &|| !gate.status().batch_busy && finished.load(Ordering::SeqCst) >= 3);
+                    parked_after.store(finished.load(Ordering::SeqCst), Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(80));
+                    ran_while_paused.store(started.load(Ordering::SeqCst) > 3, Ordering::SeqCst);
+                    ctl.resume();
+                });
+            }
+        };
+        let chat = HookChat {
+            inner: SeqChat::new(vec![head.to_string(), section.to_string()]),
+            started: &started,
+            finished: &finished,
+            on_call: &on_call,
+        };
+        let vlm = Vlm::new(&chat, "scripted".into(), Profile::Balanced, Some(&ctl.cancel));
+        // The bridge's progress callback: report, and let go of the engine at the boundary.
+        let on_progress = |_fraction: f32, _detail: &str| {
+            if started.load(Ordering::SeqCst) != finished.load(Ordering::SeqCst) {
+                report_during_call.store(true, Ordering::SeqCst);
+            }
+            let _ = gate.checkpoint(&ctl);
+        };
+        let mut deps = w.deps(Some(&vlm), None);
+        deps.cancel = Some(&ctl.cancel);
+        deps.progress = Some(&on_progress);
+        let lease = gate.batch_begin();
+        let out = draft::draft(&deps, &req).unwrap();
+        drop(lease);
+        out.sections
+    });
+    assert_eq!(sections, 5, "the draft is complete");
+    assert!(!report_during_call.load(Ordering::SeqCst), "every progress report is a boundary between calls");
+    // Before the fix the request ran only when the whole draft was done (5 calls finished).
+    assert_eq!(served_after.load(Ordering::SeqCst), 2, "the assistant was served right after section 2");
+    assert_eq!(parked_after.load(Ordering::SeqCst), 3, "the paused job parked after the call in flight");
+    assert!(!ran_while_paused.load(Ordering::SeqCst), "no model call while paused");
+    assert!(!gate.status().batch_busy);
+}
+
 /// 0.7.0 plan §1.5: `DraftRequest.revise` rewrites one section or inserts one with a single
 /// `draft_revise` call that carries the current text, the surrounding text and the instruction;
 /// a whole regeneration of a split draft passes the instruction (and the section's earlier text)

@@ -160,8 +160,12 @@ pub fn run_draft(
     let analyzer = knowledge_bridge::analyzer(app);
     let embedder = knowledge_bridge::embedder(app, false).ok().flatten();
     let import = pctx.docs.deps();
-    // Section-level progress of a split draft ("section 3/8", "outline", "finishing").
+    // Section-level progress of a split draft ("section 3/8", "outline", "finishing") or of a revision.
+    // Every report comes between two model calls, so it is also where the job lets go of the engine:
+    // assistant requests that are waiting run now instead of after the whole draft, and a paused job
+    // parks here until it is resumed (a cancel surfaces through the flag the core checks next).
     let progress_cb = |frac: f32, detail: &str| {
+        let _ = state.gate.checkpoint(ctl);
         state.jobs.progress(&job.id, Some(frac), None, None, Some(detail.to_string()));
     };
     let deps = GenerateDeps {
@@ -179,8 +183,15 @@ pub fn run_draft(
         language: req.language,
         progress: Some(&progress_cb),
     };
-    // The model call holds the engine like any batch step (interactive requests cut in between).
+    // A model call holds the engine like any batch step; interactive requests cut in at the
+    // checkpoints between the calls (the progress callback above). The first checkpoint comes before
+    // the first call: a pause asked for while the model was loading holds the job here, and a request
+    // that is being answered right now finishes first. A rule-composed draft makes no call and does
+    // not wait for anyone.
     let _gate = state.gate.batch_begin();
+    if vlm.is_some() && state.gate.checkpoint(ctl).is_err() {
+        return Err(("cancelled".into(), None));
+    }
     state.jobs.progress(&job.id, Some(0.2), None, None, Some("drafting".into()));
     let mut outcome: DraftOutcome = generate::draft(&deps, req).map_err(|e| (e.to_string(), None))?;
     // The result replaces the stored draft it started from only when that loses nothing. After a

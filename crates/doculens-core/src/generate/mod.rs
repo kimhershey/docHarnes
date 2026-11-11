@@ -665,8 +665,10 @@ pub struct GenerateDeps<'a> {
     pub import: Option<&'a ImportDeps<'a>>,
     pub cancel: Option<&'a AtomicBool>,
     pub language: Language,
-    /// Section-level progress of a split draft: `(fraction 0..1, detail)` — the job bridge forwards
-    /// it to the job book ("section 3/8").
+    /// Section-level progress of a split draft / of a revision: `(fraction 0..1, detail)` — the job
+    /// bridge forwards it to the job book ("section 3/8"). It is called between model calls only,
+    /// never while one is in flight, and may block: the bridge uses it as the engine checkpoint
+    /// where waiting interactive requests run and a paused job parks.
     pub progress: Option<&'a ProgressFn<'a>>,
 }
 
