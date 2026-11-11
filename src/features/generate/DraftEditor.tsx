@@ -275,13 +275,20 @@ export function DraftEditor({ draft, onChange, excluded, onToggleExcluded, disab
                 <li key={i} className={cn("flex items-start gap-2 rounded-md border border-border px-2 py-1.5 text-xs", isExcluded && "opacity-60")} data-testid="generate-reference" data-excluded={isExcluded}>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1 font-medium">
-                      <span className="truncate">{r.title}</span>
+                      <span className="truncate" title={r.title}>
+                        {r.title}
+                      </span>
                       {r.page && <span className="text-fg-subtle">p.{r.page}</span>}
                       <Badge variant="muted" className="text-[0.625rem]">
                         {t(`generate.reference_source.${r.source}`, { defaultValue: r.source })}
                       </Badge>
                     </div>
-                    {r.excerpt && <div className="truncate text-fg-muted selectable">{r.excerpt}</div>}
+                    {/* One line; the whole excerpt is in the tooltip (it is cut early at a large UI 배율). */}
+                    {r.excerpt && (
+                      <div className="truncate text-fg-muted selectable" title={r.excerpt} data-testid="generate-reference-excerpt">
+                        {r.excerpt}
+                      </div>
+                    )}
                   </div>
                   {r.doc_id && (
                     <Button size="icon-sm" variant="ghost" onClick={() => navigate(`/library/${r.doc_id}${r.page ? `?page=${r.page}` : ""}`)} aria-label={t("generate.editor.open_source", { title: r.title })}>

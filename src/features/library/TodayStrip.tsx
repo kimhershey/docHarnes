@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router";
 
+import { useModelDisplay } from "@/app/hooks/useModelDisplay";
 import { engineIndicator } from "@/app/layout/StatusBar";
 import { Badge } from "@/components/ui/badge";
 import { settingsTabPath } from "@/features/settings/tabs";
@@ -40,6 +41,7 @@ function saveOpen(open: boolean): void {
  */
 export function TodayStrip() {
   const { t } = useTranslation();
+  const modelDisplay = useModelDisplay();
   const workspace = useWorkspace();
   const setFolder = useDocumentsStore((s) => s.setFolder);
   const { data: stats } = useDocumentStats(!!workspace);
@@ -69,7 +71,8 @@ export function TodayStrip() {
   const installed = (assessment?.active_model_installed?.installed ?? false) || (index?.discovered.some((d) => d.health.kind === "ready") ?? false);
   const ind = engineIndicator(status, installed);
   const loaded = status?.models.find((m) => m.status === "loaded" || m.status === "sleeping") ?? null;
-  const modelLabel = loaded ? loaded.id : (assessment?.active_model?.display ?? t("topbar.no_model"));
+  // The registry's display name carries a Korean descriptor: translated for the English UI (UI-14).
+  const modelLabel = loaded ? loaded.id : (modelDisplay(assessment?.active_model?.display) ?? t("topbar.no_model"));
   const chip = "flex items-center gap-1 rounded-full border border-border bg-bg px-2 py-0.5";
 
   return (
