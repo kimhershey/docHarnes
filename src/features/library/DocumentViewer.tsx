@@ -28,11 +28,11 @@ import { cn, formatBytes, formatDate, isMac } from "@/lib/utils";
 import { useShortcut } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 
+import { DocErrorRow, DocStatusBadge } from "./DocStatusBadge";
 import { HistoryPanel } from "./HistoryPanel";
 import { PageTextLayer } from "./PageTextLayer";
 import { RetryImage } from "./RetryImage";
 import { SplitDialog } from "./SplitMergeDialogs";
-import { statusVariant } from "./status";
 import { isContiguous, matchWords, selectionText as layerSelectionText } from "./textLayer";
 import { VersionDialog } from "./VersionDialog";
 import { ViewerKnowledgePanel } from "./ViewerKnowledgePanel";
@@ -522,9 +522,7 @@ export function DocumentViewer() {
           {doc.original_name}
         </span>
         <Badge variant="outline">{t(`documents.kind.${doc.source_kind}`)}</Badge>
-        <Badge variant={statusVariant(doc.status)} data-testid="viewer-status">
-          {t(`documents.status.${doc.status}`)}
-        </Badge>
+        <DocStatusBadge doc={doc} testId="viewer-status" />
         {doc.converted && (
           <Badge variant="info" title={doc.conversion_note ?? undefined} data-testid="viewer-converted">
             {t("viewer.converted_badge")}
@@ -793,12 +791,7 @@ export function DocumentViewer() {
                 <dd className="whitespace-pre-wrap text-warn">{doc.conversion_note}</dd>
               </>
             )}
-            {doc.error && (
-              <>
-                <dt className="text-fg-subtle">{t("common.error")}</dt>
-                <dd className="whitespace-pre-wrap text-danger selectable">{doc.error}</dd>
-              </>
-            )}
+            <DocErrorRow doc={doc} />
             {doc.pipeline_error && (
               <>
                 <dt className="text-fg-subtle">{t("viewer.process.pipeline_error")}</dt>

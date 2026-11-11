@@ -329,4 +329,36 @@ test.describe("P2 documents", () => {
     await expect(page.getByTestId("toaster")).toContainText(ko.palette.nothing_to_undo);
     await expect(confirm).toBeHidden();
   });
+
+  test("a document that is being converted / rendered reads 처리 중, not 오류; cut off, it reads 중단됨 until it is rendered again (DOC-8)", async ({ page }) => {
+    // The mock at its real pace: the state during the work has to be seen.
+    await freshApp(page, {}, { fast: false });
+    await createWorkspace(page);
+    await page.getByTestId("nav-library").click();
+    await openImportPreview(page, ["D:\\scan\\계약서-12p.pdf"]);
+    await page.getByTestId("doc-import-run").click();
+    const card = page.locator('[data-testid^="doc-card-"][data-doc-name="계약서-12p.pdf"]');
+    const badge = card.locator('[data-testid^="doc-status-"]');
+    // While the import job converts / renders the document, its row carries the crash marker (status `error`).
+    await expect(card).toHaveAttribute("data-doc-status", "error", { timeout: 10_000 });
+    await expect(badge).toHaveAttribute("data-display-status", "processing");
+    await expect(badge).toHaveText(ko.documents.status.processing);
+
+    // The app goes away in the middle of the work: the marker stays, no job is alive any more.
+    await page.reload();
+    await page.getByTestId("nav-library").click();
+    await expect(badge).toHaveAttribute("data-display-status", "interrupted");
+    await expect(badge).toHaveText(ko.documents.status.interrupted);
+    await expect(badge).toHaveAttribute("title", ko.documents.status_hint.interrupted);
+    await card.locator('[data-testid^="doc-open-"]').click();
+    await expect(page.getByTestId("viewer-status")).toHaveText(ko.documents.status.interrupted);
+    await expect(page.getByTestId("viewer-doc-error")).toHaveText(ko.documents.status_hint.interrupted);
+    // 다시 렌더 processes it again.
+    await page.getByTestId("viewer-rerender").click();
+    await expect(page.getByTestId("viewer-status")).toHaveText(ko.documents.status.rendered, { timeout: 15_000 });
+    await expect(page.getByTestId("viewer-doc-error")).toHaveCount(0);
+    await page.getByTestId("viewer-back").click();
+    await expect(card).toHaveAttribute("data-doc-status", "rendered");
+    await expect(badge).toHaveText(ko.documents.status.rendered);
+  });
 });

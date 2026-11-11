@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { IngestWizard } from "@/features/knowledge/IngestWizard";
 import { addToReferenceGroup, invalidateReference, useProjectReferenceDocs } from "@/features/knowledge/reference";
+import { DocStatusText } from "@/features/library/DocStatusBadge";
 import { docTypeLabel } from "@/features/pipeline/labels";
 import { DropHint, importDroppedFiles, useDocumentDropTarget } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
@@ -309,7 +310,7 @@ export function DocumentsTab({ detail }: { detail: ProjectDetail }) {
                       </span>
                     </td>
                     <td className={cn("whitespace-nowrap py-2 pr-3 text-fg-muted", COLUMN_FROM.status)} data-testid="project-doc-status">
-                      {t(`documents.status.${d.status}`)}
+                      <DocStatusText doc={d} />
                     </td>
                     <td className={cn("whitespace-nowrap py-2 pr-3 text-fg-muted", COLUMN_FROM.review)} data-testid="project-doc-review">
                       {row.kind === "reference" ? "—" : d.review_status === "pending" ? t("library.review_pending") : d.review_status === "done" ? t("documents.status.reviewed") : "—"}

@@ -1506,7 +1506,13 @@
       "reviewed": "Reviewed",
       "archived": "Archived",
       "missing": "File missing",
-      "error": "Error"
+      "error": "Error",
+      "processing": "Processing",
+      "interrupted": "Interrupted"
+    },
+    "status_hint": {
+      "processing": "Conversion / rendering is in progress.",
+      "interrupted": "Processing stopped before it finished. Re-render the document to process it again."
     },
     "kind": {
       "pdf": "PDF",

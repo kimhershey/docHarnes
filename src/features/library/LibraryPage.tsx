@@ -44,7 +44,7 @@ import { ImportDocumentsDialog } from "./ImportDocumentsDialog";
 import { LibraryContextMenu, type LibraryContextRequest } from "./LibraryContextMenu";
 import { RetryImage } from "./RetryImage";
 import { MergeDialog } from "./SplitMergeDialogs";
-import { statusVariant } from "./status";
+import { DocStatusBadge } from "./DocStatusBadge";
 import { TodayStrip } from "./TodayStrip";
 import { useDocumentDrop } from "./useDocumentDrop";
 
@@ -644,9 +644,7 @@ function DocCard({ doc, selected, onToggle, onOpen, onOpenReview, t, typeLabel, 
       {/* Badges live outside the open button so the review badge can be a button of its own (no nested controls). */}
       <div className="flex shrink-0 flex-wrap items-center gap-1 px-2 pb-2 text-xs text-fg-muted">
         <Badge variant="outline">{t(`documents.kind.${doc.source_kind}`)}</Badge>
-        <Badge variant={statusVariant(doc.status)} data-testid={`doc-status-${doc.id}`}>
-          {t(`documents.status.${doc.status}`)}
-        </Badge>
+        <DocStatusBadge doc={doc} testId={`doc-status-${doc.id}`} />
         {doc.converted && <Badge variant="info">{t("library.converted")}</Badge>}
         {doc.doc_type && (
           <Badge variant="outline" data-testid={`doc-type-${doc.id}`}>
@@ -735,7 +733,7 @@ function ListView({ docs, selected, onToggle, onOpen, onOpenReview, typeLabel, l
                 {doc.page_count}
               </span>
               <span role="gridcell">
-                <Badge variant={statusVariant(doc.status)}>{t(`documents.status.${doc.status}`)}</Badge>
+                <DocStatusBadge doc={doc} />
               </span>
               <span role="gridcell" className="min-w-0">
                 {doc.doc_type && (
