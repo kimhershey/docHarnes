@@ -386,6 +386,20 @@ pub fn mask_text(text: &str) -> String {
     out
 }
 
+/// Whether page texts are masked on their way into the search index (`privacy.pii_masking`).
+/// Process-wide because the indexer has no settings of its own; the shell keeps it in step with
+/// the settings whenever it builds a document context. On until told otherwise.
+static INDEX_MASKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Sets whether [`crate::documents::repo::list_pages_for_index`] masks resident numbers.
+pub fn set_index_masking(on: bool) {
+    INDEX_MASKING.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn index_masking() -> bool {
+    INDEX_MASKING.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// `true` when the text contains an unmasked resident-registration-style number.
 pub fn contains_rrn(text: &str) -> bool {
     rrn_regex().is_match(text)

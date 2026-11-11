@@ -336,6 +336,71 @@ fn manual_text_is_only_replaced_when_the_request_asks_for_it() {
     assert!(parsed.reocr_manual);
 }
 
+/// Audit PIP-7: masking covered OCR text and extracted values only. A resident number in a text
+/// layer / converted text went into the search index and the extraction mirror as printed.
+#[test]
+fn resident_numbers_in_a_text_layer_are_masked_in_the_index_and_the_mirror() {
+    let w = World::new();
+    let text = "세금계산서 (과세) 작성일자 2026.03.02\n공급자 상호 한빛상사 대표 주민 900101-1234567\n사업자등록번호 220-81-62517\n공급받는자 DocuLens\n공급가액 1,000,000 세액 100,000 합계 1,100,000";
+    w.add_doc("t1", "invoice.pdf", SourceKind::Pdf, &[Some(text)]);
+    w.chat.push("classify", classify_reply("tax_invoice", 0));
+    let kie = |evidence: &str| {
+        json!({
+            "issue_date": sv("2026.03.02", "2026.03.02", 90),
+            "tax_type": sv("과세", "과세", 90),
+            "supplier": { "brn": sv("220-81-62517", "사업자등록번호 220-81-62517", 95), "name": sv("한빛상사", evidence, 95) },
+            "buyer": { "brn": { "value": null, "evidence": null, "confidence": 0 }, "name": sv("DocuLens", "DocuLens", 80) },
+            "supply_total": sv("1,000,000", "공급가액 1,000,000", 90),
+            "tax_total": sv("100,000", "세액 100,000", 90),
+            "grand_total": sv("1,100,000", "합계 1,100,000", 90),
+            "items": []
+        })
+    };
+    w.chat.push("kie_tax_invoice", kie("상호 한빛상사 대표 주민 900101-1234567"));
+    let deps = w.deps(None);
+    let req = ProcessRequest { document_ids: vec!["t1".into()], ..Default::default() };
+    let report = run::process(&deps, &req, &mut |_| {}).unwrap();
+    assert_eq!((report.failed.len(), report.extracted, report.ocr_pages), (0, 1, 0), "{report:?}");
+
+    // The viewer keeps showing the document as it is.
+    assert!(w.pages("t1")[0].text.as_deref().unwrap().contains("900101-1234567"));
+    // The mirror on disk and the stored evidence hold the masked form only.
+    let run = &w.db.with(|c| repo::list_runs(c, "t1")).unwrap()[0];
+    let dir = w.paths.extractions_dir().join("t1").join(&run.id);
+    for name in ["p0001.md", "result.json"] {
+        let stored = std::fs::read_to_string(dir.join(name)).unwrap();
+        assert!(!stored.contains("900101-1234567"), "{name}: {stored}");
+    }
+    assert!(std::fs::read_to_string(dir.join("p0001.md")).unwrap().contains("900101-1******"));
+    let fields = w.fields("t1");
+    let name = fields.iter().find(|f| f.path == "supplier.name").unwrap();
+    assert_eq!(name.evidence.as_deref(), Some("상호 한빛상사 대표 주민 900101-1******"));
+    // The quote is still found on the page (it is looked up in the masked text): same confidence
+    // as with a quote that holds no resident number.
+    w.chat.push("kie_tax_invoice", kie("상호 한빛상사"));
+    run::process(&deps, &req, &mut |_| {}).unwrap();
+    let again = w.fields("t1");
+    let plain = again.iter().find(|f| f.path == "supplier.name").unwrap();
+    assert_eq!(name.confidence, plain.confidence);
+
+    // The search index is built from masked text; with masking off it holds the text as printed.
+    let analyzer = Analyzer::simple();
+    let idx = IndexDeps { db: &w.db, analyzer: &analyzer, options: Default::default() };
+    let report = index_pending(&idx, None, false, None, &mut |_| {}).unwrap();
+    assert_eq!(report.indexed, vec!["t1".to_string()]);
+    let chunks = w.db.with(|c| crate::knowledge::repo::list_chunks(c, "t1")).unwrap();
+    let indexed = chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>().join("\n");
+    assert!(indexed.contains("900101-1******") && !indexed.contains("900101-1234567"), "{indexed}");
+    let tokens: Vec<String> = w
+        .db
+        .with(|c| c.prepare("SELECT tokens FROM chunks")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>())
+        .unwrap();
+    assert!(tokens.iter().all(|t| !t.contains("1234567")), "{tokens:?}");
+    let pages = |mask: bool| w.db.with(|c| docs::list_pages_masked(c, "t1", mask)).unwrap();
+    assert!(pages(false)[0].text.as_deref().unwrap().contains("900101-1234567"));
+    assert!(!pages(true)[0].text.as_deref().unwrap().contains("900101-1234567"));
+}
+
 #[test]
 fn digital_pdf_skips_ocr_and_extracts_from_text() {
     let w = World::new();

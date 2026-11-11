@@ -190,6 +190,9 @@ pub fn context(app: &AppHandle) -> UiResult<DocsContext> {
     let (db, paths) = state.with_workspace(|ws| (ws.db.clone(), ws.paths.clone()))?;
     let generation = state.workspace_generation.load(Ordering::SeqCst);
     let settings = state.settings_snapshot()?;
+    // The indexer masks resident numbers in page texts by this switch (PIP-7); every index /
+    // pipeline / import job builds its context here first, so it follows the settings.
+    doculens_core::pipeline::validate::set_index_masking(settings.privacy.pii_masking);
     let render_options =
         RenderOptions { dpi: settings.processing.render_dpi.clamp(72, 600), thumbnails: true, ..Default::default() };
     let printer: Arc<dyn PdfPrinter> =

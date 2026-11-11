@@ -390,6 +390,27 @@ struct OcrColumns {
     layout: Option<String>,
 }
 
+/// The pages as the knowledge index sees them: with `privacy.pii_masking` on (the default),
+/// resident registration numbers in a text layer / converted text / hand-corrected text are
+/// masked before they are chunked, so the search index, the snippets and the answers built from
+/// it never hold them. `pages.text` itself — what the viewer shows — is left as it is.
+pub fn list_pages_for_index(conn: &Connection, id: &str) -> rusqlite::Result<Vec<PageRecord>> {
+    list_pages_masked(conn, id, crate::pipeline::validate::index_masking())
+}
+
+/// [`list_pages`] with the texts masked when `mask` is set.
+pub fn list_pages_masked(conn: &Connection, id: &str, mask: bool) -> rusqlite::Result<Vec<PageRecord>> {
+    let mut pages = list_pages(conn, id, true)?;
+    if mask {
+        for page in &mut pages {
+            if let Some(text) = page.text.as_mut().filter(|t| crate::pipeline::validate::contains_rrn(t)) {
+                *text = crate::pipeline::validate::mask_text(text);
+            }
+        }
+    }
+    Ok(pages)
+}
+
 pub fn list_pages(conn: &Connection, id: &str, with_text: bool) -> rusqlite::Result<Vec<PageRecord>> {
     let mut stmt = conn.prepare_cached(
         "SELECT document_id, page_no, width_px, height_px, width_pt, height_pt, dpi, rotation, has_text, text, is_blank, \

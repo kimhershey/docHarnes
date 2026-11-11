@@ -408,8 +408,15 @@ fn build_scalar(
         return f;
     };
     let (normalized, mut issues) = validate::validate_value(def, &raw);
+    // The page texts are masked when masking is on: a quote is looked up as printed and, when
+    // that misses, in its masked form.
     let (evidence_found, page_found) = match evidence_raw {
-        Some(e) => evidence_lookup(texts, page, e),
+        Some(e) => match evidence_lookup(texts, page, e) {
+            (Some(false), _) if opts.pii_masking && validate::contains_rrn(e) => {
+                evidence_lookup(texts, page, &validate::mask_text(e))
+            }
+            found => found,
+        },
         None => (None, page),
     };
     // PII values are looked up in their masked form (the page text is masked the same way).
@@ -508,7 +515,12 @@ pub fn build_fields(
                         };
                         if let Some(raw) = raw {
                             let (normalized, mut issues) = validate::validate_value(c, &raw);
-                            let value_found = value_lookup(c, texts, page, &raw);
+                            let value_found = match value_lookup(c, texts, page, &raw) {
+                                Some(false) if opts.pii_masking && validate::contains_rrn(&raw) => {
+                                    value_lookup(c, texts, page, &validate::mask_text(&raw))
+                                }
+                                found => found,
+                            };
                             let has_fail = issues.iter().any(|i| i.level == "fail");
                             nf.confidence = validate::confidence(ConfidenceInput {
                                 model: Some(85),

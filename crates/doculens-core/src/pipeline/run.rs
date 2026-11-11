@@ -369,8 +369,13 @@ fn process_document(
     match extract_document(deps, vlm, &schema, &pages, &req.pages, precise, progress) {
         Ok(Extracted { merged, second, usage: run_usage, pages_done, incomplete }) => {
             usage.add(run_usage);
-            let texts: BTreeMap<u32, String> =
-                pages.iter().filter(|p| has_text(p)).map(|p| (p.page_no, p.text.clone().unwrap_or_default())).collect();
+            // With masking on, values and evidence are looked up in the masked text: that is the
+            // form they are stored in (OCR text already is masked; a text layer is not).
+            let texts: BTreeMap<u32, String> = pages
+                .iter()
+                .filter(|p| has_text(p))
+                .map(|p| (p.page_no, stored_text(p.text.as_deref().unwrap_or(""), deps.pii_masking)))
+                .collect();
             let opts = FieldOptions {
                 review_threshold: deps.settings.review_threshold as f64,
                 audit_percent: deps.settings.audit_sample_percent,
@@ -384,7 +389,10 @@ fn process_document(
                 .then(|| incomplete.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>().join("; "));
             let review_pending = built.review_count > 0;
             let field_count = built.fields.len() as u32;
-            // Nothing unmasked reaches the database or the mirror (§3.8).
+            // No unmasked extraction result reaches the database or the mirror (§3.8). Page texts:
+            // OCR text is masked before it is stored; a text layer / converted text stays as the
+            // file has it in `pages.text` (the viewer shows the document) and is masked on its way
+            // into the mirror below and into the search index (`list_pages_for_index`).
             let merged = extract::mask_output(&schema.definition, &merged, deps.pii_masking);
             let second = second.map(|s| extract::mask_output(&schema.definition, &s, deps.pii_masking));
             let raw = if let Some(s) = &second { json!({ "primary": merged, "second": s }) } else { merged.clone() };
@@ -419,9 +427,21 @@ fn process_document(
                 )?;
                 repo::bump_schema_use(tx, &sid)
             })?;
-            if let Err(e) =
-                write_mirror(deps.import.paths, &doc, &run_id, &schema, &vlm.model, &built.fields, &pages, &merged)
-            {
+            // The mirror is a plain-text copy on disk: its page texts are masked like the index input.
+            let mirror_pages: Vec<PageRecord> = pages
+                .iter()
+                .map(|p| PageRecord { text: p.text.as_deref().map(|t| stored_text(t, deps.pii_masking)), ..p.clone() })
+                .collect();
+            if let Err(e) = write_mirror(
+                deps.import.paths,
+                &doc,
+                &run_id,
+                &schema,
+                &vlm.model,
+                &built.fields,
+                &mirror_pages,
+                &merged,
+            ) {
                 log::warn!("extraction mirror for {} not written: {e}", doc.id);
             }
             out.extracted = true;
@@ -642,6 +662,15 @@ pub fn write_mirror(
     let latest = paths.extractions_dir().join(&doc.id).join("LATEST");
     std::fs::write(&latest, run_id).map_err(|e| CoreError::io(&latest, e))?;
     Ok(dir)
+}
+
+/// A page text in the form it may be stored outside `pages.text`.
+fn stored_text(text: &str, pii_masking: bool) -> String {
+    if pii_masking && validate::contains_rrn(text) {
+        validate::mask_text(text)
+    } else {
+        text.to_string()
+    }
 }
 
 /// Deletes the mirror of a document (called from document deletion).
