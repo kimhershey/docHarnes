@@ -95,6 +95,9 @@ export function AssistantPage() {
   const activeId = useAssistantStore((s) => s.activeId);
   const sessions = useAssistantStore((s) => s.sessions);
   const hydrating = useAssistantStore((s) => s.hydrating);
+  // The active chat's stored messages are read / could not be read (it takes no input before they are, KNO-15).
+  const sessionLoaded = useAssistantStore((s) => s.activeId !== null && s.loaded[s.activeId] === true);
+  const sessionLoadFailed = useAssistantStore((s) => s.activeId !== null && s.loadFailed[s.activeId] === true);
   const pendingUiActions = useAssistantStore((s) => s.pendingUiActions);
   const jobs = useJobsStore((s) => s.jobs);
   // The last viewed document is offered as a scope only while no library selection exists (the
@@ -173,7 +176,7 @@ export function AssistantPage() {
   const anyPending = messages.some((m) => m.role === "assistant" && m.kind === "answer" && m.pending);
   // How much of the conversation the next question / command will carry.
   const memoryTurns = useMemo(() => conversationTurns(messages).length, [messages]);
-  const busy = anyPending || planning || hydrating || activeId === null;
+  const busy = anyPending || planning || hydrating || activeId === null || !sessionLoaded;
   const activePlan = [...messages].reverse().find((m): m is PlanMessage => m.role === "assistant" && m.kind === "plan" && m.status === "pending") ?? null;
   const pendingClarify = [...messages].reverse().find((m): m is Extract<Message, { kind: "clarify" }> => m.role === "assistant" && m.kind === "clarify" && m.status === "pending") ?? null;
 
@@ -461,15 +464,16 @@ export function AssistantPage() {
     await handlePlan(sid, v, response, context);
   };
 
-  // Text handed over by another screen (command palette, pre-router help) is sent into the active session once it exists.
+  // Text handed over by another screen (command palette, pre-router help) is sent into the active session once
+  // it exists and its messages are read.
   useEffect(() => {
-    if (pending && !hydrating && activeId && consumed.current !== pending) {
+    if (pending && !hydrating && activeId && sessionLoaded && consumed.current !== pending) {
       consumed.current = pending;
       setPending(null);
       void send(pending);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pending, hydrating, activeId]);
+  }, [pending, hydrating, activeId, sessionLoaded]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
@@ -668,7 +672,16 @@ export function AssistantPage() {
       </div>
 
       <div ref={listRef} className="flex-1 overflow-y-auto p-4" data-testid="assistant-messages">
-        {messages.length === 0 && (
+        {sessionLoadFailed && (
+          <div className="mx-auto mb-3 flex max-w-3xl flex-wrap items-center gap-2 rounded-lg border border-border bg-danger-soft px-3 py-2 text-sm text-danger" role="alert" data-testid="assistant-load-failed">
+            <AlertCircle className="size-4 shrink-0" aria-hidden="true" />
+            <span className="min-w-0 flex-1">{t("assistant.sessions.load_failed")}</span>
+            <Button size="sm" variant="outline" onClick={() => activeId && void store().reload(activeId)} data-testid="assistant-load-retry">
+              {t("common.retry")}
+            </Button>
+          </div>
+        )}
+        {messages.length === 0 && sessionLoaded && (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-fg-muted">
             <Sparkles className="size-8 text-accent" aria-hidden="true" />
             <p>{t("assistant.empty")}</p>

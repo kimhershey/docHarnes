@@ -7,7 +7,19 @@ import type { ChatMessageRow, ChatSessionSummary, Op } from "@/lib/types";
 
 const fake = vi.hoisted(() => {
   // One workspace database at a time, like the backend: `switchWorkspace` opens another (empty) one.
-  const state = { sessions: [] as ChatSessionSummary[], messages: {} as Record<string, ChatMessageRow[]>, seq: 1, puts: 0, clock: 0, log: [] as string[], putGate: null as Promise<void> | null };
+  const state = {
+    sessions: [] as ChatSessionSummary[],
+    messages: {} as Record<string, ChatMessageRow[]>,
+    seq: 1,
+    puts: 0,
+    clock: 0,
+    log: [] as string[],
+    /** While set, `chatMessagePut` / `chatMessagesList` wait for it (a call still on its way). */
+    putGate: null as Promise<void> | null,
+    listGate: null as Promise<void> | null,
+    /** This many `chatMessagesList` calls fail. */
+    listFails: 0,
+  };
   const stamp = () => new Date(Date.UTC(2026, 10, 10, 0, 0, state.clock++)).toISOString();
   const api = {
     chatSessionsList: async () =>
@@ -30,7 +42,14 @@ const fake = vi.hoisted(() => {
       state.sessions = state.sessions.filter((x) => x.id !== id);
       delete state.messages[id];
     },
-    chatMessagesList: async (id: string) => [...(state.messages[id] ?? [])],
+    chatMessagesList: async (id: string) => {
+      if (state.listGate) await state.listGate;
+      if (state.listFails > 0) {
+        state.listFails -= 1;
+        throw { code: "internal", message: "database is locked" };
+      }
+      return [...(state.messages[id] ?? [])];
+    },
     // Like the core (`chat::put_message`): a session this database does not have is re-created, untitled.
     chatMessagePut: async (id: string, seq: number, payload: unknown) => {
       if (state.putGate) await state.putGate;
@@ -62,6 +81,8 @@ const fake = vi.hoisted(() => {
     state.clock = 0;
     state.log = [];
     state.putGate = null;
+    state.listGate = null;
+    state.listFails = 0;
   };
   return { state, api, reset, switchWorkspace };
 });
@@ -366,6 +387,57 @@ describe("assistant store", () => {
     await flushed;
     expect(fake.state.log).toEqual([`put ${first}/${id}`, `put ${first}/${id}`]);
     expect((fake.state.messages[first]![0]!.payload as { text: string }).text).toBe("v2");
+  });
+
+  // KNO-15: message ids continue after the highest stored one, which is only known once the session's
+  // messages were read. A message sent before that (or after the read failed) got a low id and replaced
+  // the stored message with the same number.
+  it("does not accept a message while the chat's stored messages are still being read", async () => {
+    const a = await fake.api.chatSessionCreate("old");
+    for (let seq = 1; seq <= 5; seq += 1) await fake.api.chatMessagePut(a.id, seq, { id: seq, role: "user", text: `old ${seq}` });
+    const b = await fake.api.chatSessionCreate("new");
+    await fake.api.chatMessagePut(b.id, 1, { id: 1, role: "user", text: "later" });
+    expect(await boundTo("C:\\Work\\Docs")).toBe(b.id);
+    // The other chat is selected; its messages are on their way.
+    let open = () => {};
+    fake.state.listGate = new Promise<void>((r) => (open = r));
+    const selected = useAssistantStore.getState().select(a.id);
+    expect(useAssistantStore.getState().activeId).toBe(a.id);
+    expect(useAssistantStore.getState().loaded[a.id]).toBeFalsy();
+    expect(useAssistantStore.getState().push(a.id, { role: "user", text: "too early" })).toBe(DROPPED);
+    fake.state.listGate = null;
+    open();
+    await selected;
+    await flushChatWrites();
+    expect(fake.state.messages[a.id]!.map((r) => (r.payload as { text: string }).text)).toEqual(["old 1", "old 2", "old 3", "old 4", "old 5"]);
+    // Once read, the next message continues after the stored ones.
+    const id = useAssistantStore.getState().push(a.id, { role: "user", text: "now" });
+    expect(id).toBeGreaterThan(5);
+  });
+
+  it("keeps a chat whose messages could not be read closed for writing until a reload succeeds", async () => {
+    const a = await fake.api.chatSessionCreate(null);
+    for (let seq = 1; seq <= 3; seq += 1) await fake.api.chatMessagePut(a.id, seq, { id: seq, role: "user", text: `stored ${seq}` });
+    fake.state.listFails = 1;
+    const sid = await boundTo("C:\\Work\\Docs");
+    expect(sid).toBe(a.id);
+    const s = useAssistantStore.getState();
+    expect(s.hydrating).toBe(false);
+    expect(s.loaded[sid]).toBeFalsy();
+    expect(s.loadFailed[sid]).toBe(true);
+    // Nothing may be written: its id would start at 1 again and replace "stored 1".
+    expect(s.push(sid, { role: "user", text: "overwrites?" })).toBe(DROPPED);
+    await flushChatWrites();
+    expect((fake.state.messages[sid]![0]!.payload as { text: string }).text).toBe("stored 1");
+    // 다시 시도: the messages are read, the chat opens for writing after them.
+    await useAssistantStore.getState().reload(sid);
+    const after = useAssistantStore.getState();
+    expect(after.loaded[sid]).toBe(true);
+    expect(after.loadFailed[sid]).toBeFalsy();
+    expect(selectMessages(after).map((m) => m.id)).toEqual([1, 2, 3]);
+    expect(after.push(sid, { role: "user", text: "fine" })).toBeGreaterThan(3);
+    await flushChatWrites();
+    expect(fake.state.messages[sid]!.slice(0, 3).map((r) => (r.payload as { text: string }).text)).toEqual(["stored 1", "stored 2", "stored 3"]);
   });
 
   it("restoreMessage drops rows that are not messages", () => {

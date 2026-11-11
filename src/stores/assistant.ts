@@ -75,8 +75,14 @@ interface AssistantState {
   sessions: ChatSessionSummary[];
   activeId: string | null;
   messagesBySession: Record<string, Message[]>;
-  /** Sessions whose messages were loaded from the backend. */
+  /**
+   * Sessions whose messages were loaded from the backend. Message ids continue after the highest stored
+   * one, so nothing is accepted for a session before it is loaded: a message numbered without knowing the
+   * stored ones would replace the stored message with the same number (KNO-15).
+   */
   loaded: Record<string, boolean>;
+  /** Sessions whose stored messages could not be read; they stay closed for writing until `reload` succeeds. */
+  loadFailed: Record<string, boolean>;
   /** Job id → UI ops the plan contained (replaced by the execution's `ui_actions` once known) that have not run yet. */
   pendingUiActions: Record<string, Op[]>;
   nextId: number;
@@ -90,9 +96,12 @@ interface AssistantState {
   accepts: (sessionId: string, generation?: number) => boolean;
   /**
    * Appends to the session captured when the request started (never "whatever is active now").
-   * Returns the message id, or `DROPPED` when the conversation is gone (`accepts`).
+   * Returns the message id, or `DROPPED` when the conversation is gone (`accepts`) or its stored
+   * messages are not loaded (yet).
    */
   push: (sessionId: string, message: NewMessage, generation?: number) => number;
+  /** "다시 시도": reads the messages of a session whose load failed. */
+  reload: (id: string) => Promise<void>;
   /**
    * Changes a message. The new state is written at once — a card that settled (plan executed / cancelled,
    * answer finished, question answered) must not be restored in its earlier state after a restart —
@@ -309,20 +318,28 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     const max = rows.reduce((acc, r) => Math.max(acc, r.seq), 0);
     if (max >= get().nextId) set({ nextId: max + 1 });
   };
-  /** Loads a session's messages once (the workspace may change meanwhile: then the result is dropped). */
+  /**
+   * Loads a session's messages once (the workspace may change meanwhile: then the result is dropped).
+   * A failed read leaves the session unloaded — shown with a retry, closed for writing — instead of
+   * pretending it is empty.
+   */
   const load = async (id: string) => {
     const generation = get().generation;
     if (get().loaded[id]) return;
     try {
       const rows = await api.chatMessagesList(id);
-      if (get().generation !== generation) return;
+      if (get().generation !== generation || !get().sessions.some((x) => x.id === id)) return;
       const messages = rows.map(restoreMessage).filter((m): m is Message => m !== null);
       bumpNextId(rows);
-      set((s) => ({ messagesBySession: { ...s.messagesBySession, [id]: messages }, loaded: { ...s.loaded, [id]: true } }));
+      set((s) => {
+        const loadFailed = { ...s.loadFailed };
+        delete loadFailed[id];
+        return { messagesBySession: { ...s.messagesBySession, [id]: messages }, loaded: { ...s.loaded, [id]: true }, loadFailed };
+      });
     } catch (e) {
       console.warn("chat session not loaded", e);
       if (get().generation !== generation) return;
-      set((s) => ({ messagesBySession: { ...s.messagesBySession, [id]: s.messagesBySession[id] ?? [] }, loaded: { ...s.loaded, [id]: true } }));
+      set((s) => ({ loadFailed: { ...s.loadFailed, [id]: true } }));
     }
   };
 
@@ -334,6 +351,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     activeId: null,
     messagesBySession: {},
     loaded: {},
+    loadFailed: {},
     pendingUiActions: {},
     nextId: 1,
 
@@ -341,7 +359,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
       if (get().workspace === workspace) return;
       // The backend is already on the other workspace: what still waits to be written belongs to the old one.
       dropWaitingWrites();
-      set((s) => ({ workspace, generation: s.generation + 1, sessions: [], activeId: null, messagesBySession: {}, loaded: {}, pendingUiActions: {}, hydrating: workspace !== null }));
+      set((s) => ({ workspace, generation: s.generation + 1, sessions: [], activeId: null, messagesBySession: {}, loaded: {}, loadFailed: {}, pendingUiActions: {}, hydrating: workspace !== null }));
       if (workspace !== null) void get().hydrate();
     },
 
@@ -373,7 +391,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     },
 
     push: (sessionId, message, generation) => {
-      if (!get().accepts(sessionId, generation)) return DROPPED;
+      if (!get().accepts(sessionId, generation) || !get().loaded[sessionId]) return DROPPED;
       const id = get().nextId;
       const createdAt = new Date().toISOString();
       const m = { ...message, id, createdAt } as Message;
@@ -405,9 +423,10 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
     },
 
     newSession: async () => {
-      const { activeId, messagesBySession, workspace, generation } = get();
+      const { activeId, messagesBySession, loaded, workspace, generation } = get();
       if (!workspace) return null;
-      if (activeId && (messagesBySession[activeId] ?? []).length === 0) return activeId;
+      // (An active chat that is not loaded is not known to be empty.)
+      if (activeId && loaded[activeId] && (messagesBySession[activeId] ?? []).length === 0) return activeId;
       const created = await api.chatSessionCreate(null);
       if (get().generation !== generation) return null;
       set((s) => ({
@@ -427,6 +446,16 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
       set({ activeId: id });
       useAttachmentsStore.getState().switchSession(activeId, id);
       rememberActive(workspace, id);
+      await load(id);
+    },
+
+    reload: async (id) => {
+      if (!get().sessions.some((s) => s.id === id)) return;
+      set((s) => {
+        const loadFailed = { ...s.loadFailed };
+        delete loadFailed[id];
+        return { loadFailed };
+      });
       await load(id);
     },
 
@@ -461,7 +490,9 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
         delete messagesBySession[id];
         const loaded = { ...s.loaded };
         delete loaded[id];
-        return { sessions: s.sessions.filter((x) => x.id !== id), messagesBySession, loaded, activeId: wasActive ? null : s.activeId };
+        const loadFailed = { ...s.loadFailed };
+        delete loadFailed[id];
+        return { sessions: s.sessions.filter((x) => x.id !== id), messagesBySession, loaded, loadFailed, activeId: wasActive ? null : s.activeId };
       });
       // No longer listed: `accepts` refuses it from the list alone.
       removing.delete(id);
@@ -502,5 +533,5 @@ export const useAssistantStore = create<AssistantState>((set, get) => {
 export function resetAssistant(): void {
   // Called once the backend is on the other workspace: nothing of the old conversations may be written any more.
   dropWaitingWrites();
-  useAssistantStore.setState((s) => ({ workspace: null, generation: s.generation + 1, hydrating: false, sessions: [], activeId: null, messagesBySession: {}, loaded: {}, pendingUiActions: {} }));
+  useAssistantStore.setState((s) => ({ workspace: null, generation: s.generation + 1, hydrating: false, sessions: [], activeId: null, messagesBySession: {}, loaded: {}, loadFailed: {}, pendingUiActions: {} }));
 }

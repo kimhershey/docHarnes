@@ -239,7 +239,8 @@
       "untitled": "New chat",
       "empty": "No chats yet.",
       "messages": "{{count}} message(s)",
-      "menu": "Menu of {{title}}"
+      "menu": "Menu of {{title}}",
+      "load_failed": "The conversation of this chat could not be loaded. Nothing can be sent until it is."
     },
     "scope": {
       "label": "Scope",

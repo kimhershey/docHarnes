@@ -113,6 +113,37 @@ test.describe("assistant chat sessions", () => {
     await expect(rows(page)).toHaveCount(1);
   });
 
+  // KNO-15: message ids continue after the stored ones. A chat whose stored messages could not be read was
+  // shown as empty and took input — the new message got id 1 and replaced the stored first message.
+  test("a chat whose messages cannot be read takes no input until the retry succeeds", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openAssistantScreen(page);
+    await send(page, "/테마 다크");
+    await expect(page.locator('[data-testid="assistant-card-executed"]')).toHaveCount(1);
+    await expect(page.getByTestId("assistant-memory")).toHaveAttribute("data-turns", "2");
+
+    // The next read of the chat's messages fails (the mock's stand-in for a locked database).
+    await page.evaluate(() => localStorage.setItem("doculens.mock.chat.fail_list", "1"));
+    await page.reload();
+    await expect(page.getByTestId("app-shell")).toBeVisible();
+    await openAssistantScreen(page);
+    await expect(page.getByTestId("assistant-load-failed")).toBeVisible();
+    await expect(page.getByTestId("assistant-load-failed")).toContainText(ko.assistant.sessions.load_failed);
+    await expect(page.getByTestId("assistant-send")).toBeDisabled();
+    await expect(page.locator('[data-testid="assistant-card-executed"]')).toHaveCount(0);
+
+    await page.getByTestId("assistant-load-retry").click();
+    await expect(page.getByTestId("assistant-load-failed")).toBeHidden();
+    await expect(page.locator('[data-testid="assistant-card-executed"]')).toHaveCount(1);
+    await expect(page.getByTestId("assistant-send")).toBeEnabled();
+    // The next command continues after the stored messages instead of replacing them.
+    await send(page, "/테마 라이트");
+    await expect(page.locator('[data-testid="assistant-card-executed"]')).toHaveCount(2);
+    await expect(page.getByTestId("assistant-memory")).toHaveAttribute("data-turns", "4");
+    await expect(activeRow(page)).toContainText("/테마 다크");
+  });
+
   test("the input waits for the sessions and the composer sends into the active one", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);

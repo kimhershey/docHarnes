@@ -9,6 +9,7 @@ import { currentWorkspacePath, err } from "./mock-backend";
 import type { ChatMessageRow, ChatSessionSummary } from "./types";
 
 const KEY = "doculens.mock.chat";
+const FAIL_LIST_KEY = "doculens.mock.chat.fail_list";
 /** Auto titles: the first user message clipped to this many characters (mirrors the core). */
 export const AUTO_TITLE_CHARS = 40;
 
@@ -95,8 +96,15 @@ export async function mockChat(cmd: string, a: Record<string, any>): Promise<unk
       save(s);
       return existed;
     }
-    case "chat_messages_list":
+    case "chat_messages_list": {
+      // Test hook: `doculens.mock.chat.fail_list` = N makes the next N reads fail (a locked database).
+      const fails = Number(localStorage.getItem(FAIL_LIST_KEY) ?? "0");
+      if (fails > 0) {
+        localStorage.setItem(FAIL_LIST_KEY, String(fails - 1));
+        throw err("internal", "database is locked");
+      }
       return [...(s.messages[String(a.sessionId)] ?? [])].sort((x, y) => x.seq - y.seq);
+    }
     case "chat_message_put": {
       const id = String(a.sessionId ?? "");
       if (!id.trim()) return false;
