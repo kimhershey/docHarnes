@@ -2594,6 +2594,8 @@
       "scope_section": "{{index}}. {{heading}} 다시 쓰기",
       "scope_insert_after": "{{index}}. {{heading}} 뒤에 새 절",
       "scope_append": "끝에 새 절 추가",
+      "scope_none": "범위를 고르세요",
+      "scope_lost": "고쳐 쓰기로 고른 절이 편집으로 없어져 범위를 비웠습니다. 범위를 다시 고르세요.",
       "untitled": "(제목 없음)",
       "heading": "새 절 제목 (선택)",
       "heading_placeholder": "예: 결론",

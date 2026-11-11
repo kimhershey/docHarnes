@@ -4,6 +4,7 @@
 
 import type { TFunction } from "i18next";
 
+import { sectionsOf } from "@/lib/draft-sections";
 import type { Draft, DraftBlock, DraftIssue, DraftRequest, ReviseScope, SchemaRecord, SourceRef, TemplateInfo, TemplateRef } from "@/lib/types";
 
 export { isSectionHeading, reviseScopeLabel, sectionAt, sectionsOf, type DraftSection } from "@/lib/draft-sections";
@@ -128,6 +129,58 @@ export function pickerToReviseScope(value: string, heading: string | null = null
     return { scope: "insert_after", section: rest === "end" ? null : Math.max(1, Number(rest) || 1), heading: heading?.trim() || null };
   }
   return { scope: "whole" };
+}
+
+// -- the section a revise scope names, across edits (GEN-10) -----------------------------------------------
+// A scope stores a section ordinal. When blocks are added, removed or moved the ordinals shift: the picked
+// section is remembered by its heading and followed; when it is gone the scope is cleared — it must never
+// quietly become another section or "the whole draft".
+
+/** The picker value for "nothing picked" (the panel shows a placeholder and cannot run). */
+export const NO_SCOPE = "";
+
+/** The section ordinal in a scope picker value (`section:N` / `insert_after:N`); null for the other scopes. */
+export function scopeSectionOrdinal(value: string): number | null {
+  const m = value.match(/^(?:section|insert_after):(\d+)$/);
+  return m ? Number(m[1]) : null;
+}
+
+/** The same kind of scope on another section. */
+export function withScopeOrdinal(value: string, ordinal: number): string {
+  return value.replace(/:\d+$/, `:${ordinal}`);
+}
+
+/** What identifies the section a scope names: its ordinal and heading, and how many sections there were. */
+export interface ScopeAnchor {
+  ordinal: number;
+  heading: string | null;
+  count: number;
+}
+
+/** The anchor of the section `value` names in `body`; null when the scope names no section or the section does not exist. */
+export function anchorScope(value: string, body: DraftBlock[]): ScopeAnchor | null {
+  const ordinal = scopeSectionOrdinal(value);
+  if (ordinal === null) return null;
+  const sections = sectionsOf(body);
+  const section = sections.find((s) => s.ordinal === ordinal);
+  return section ? { ordinal, heading: section.heading, count: sections.length } : null;
+}
+
+/**
+ * Where the anchored section is in the edited body: its ordinal (possibly a new one), or null when it is gone.
+ * Same ordinal and heading → still there. Otherwise the one section with that heading (blocks were added,
+ * removed or moved around it). A heading retyped in place — no section has the old heading, the section count is
+ * unchanged — keeps the ordinal. Anything else (the section was removed or merged, or its heading is ambiguous
+ * after a structural change) → null.
+ */
+export function followScopeAnchor(anchor: ScopeAnchor, body: DraftBlock[]): number | null {
+  const sections = sectionsOf(body);
+  const at = sections.find((s) => s.ordinal === anchor.ordinal);
+  if (at && at.heading === anchor.heading) return anchor.ordinal;
+  const same = sections.filter((s) => s.heading === anchor.heading);
+  if (same.length === 1) return same[0]!.ordinal;
+  if (same.length === 0 && at && sections.length === anchor.count) return anchor.ordinal;
+  return null;
 }
 
 /** Smallest reply-token budget the request form accepts (the largest is the backend's cap). */

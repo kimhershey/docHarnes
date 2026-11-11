@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Draft, DraftIssue, SchemaRecord, TemplateInfo } from "@/lib/types";
 
-import { addRow, applySuggestion, blockInputText, blockText, blockWithText, clampTokenBudget, documentSourceIds, formRefToPicker, hasBlockingIssues, insertBlock, MIN_TOKEN_BUDGET, moveBlock, newBlock, parseIssuePath, parseTokenBudget, pickerToFormRef, pickerToReviseScope, removeBlock, removeRow, reviseRequest, reviseScopeLabel, reviseScopeToPicker, sectionAt, sectionsOf, setBlockLevel, setFieldValue, toggleExcluded, withDocumentSources } from "./draft";
+import { addRow, anchorScope, applySuggestion, blockInputText, blockText, blockWithText, clampTokenBudget, documentSourceIds, followScopeAnchor, formRefToPicker, hasBlockingIssues, insertBlock, MIN_TOKEN_BUDGET, moveBlock, newBlock, NO_SCOPE, parseIssuePath, parseTokenBudget, pickerToFormRef, scopeSectionOrdinal, withScopeOrdinal, pickerToReviseScope, removeBlock, removeRow, reviseRequest, reviseScopeLabel, reviseScopeToPicker, sectionAt, sectionsOf, setBlockLevel, setFieldValue, toggleExcluded, withDocumentSources } from "./draft";
 
 function draft(): Draft {
   return {
@@ -193,6 +193,46 @@ describe("draft edits", () => {
     expect(reviseScopeLabel({ scope: "insert_after", section: null }, two, true)).toBe("끝에 새 절");
     expect(reviseScopeLabel({ scope: "insert_after", section: 1 }, two, false)).toBe("new section after 1. 견적 조건");
     expect(reviseScopeLabel({ scope: "whole" }, two, true)).toBe("전체");
+  });
+
+  it("follows the section a scope names across edits and gives it up when it is gone (GEN-10)", () => {
+    const h = (text: string, level = 2) => ({ kind: "heading", level, text }) as const;
+    const p = (text: string) => ({ kind: "paragraph", text, source: null }) as const;
+    const body = [h("개요"), p("a"), h("일정"), p("b"), h("결론"), p("c")];
+    expect(scopeSectionOrdinal("section:3")).toBe(3);
+    expect(scopeSectionOrdinal("insert_after:2")).toBe(2);
+    expect(scopeSectionOrdinal("whole")).toBeNull();
+    expect(scopeSectionOrdinal("insert_after:end")).toBeNull();
+    expect(scopeSectionOrdinal(NO_SCOPE)).toBeNull();
+    expect(withScopeOrdinal("insert_after:2", 3)).toBe("insert_after:3");
+    expect(anchorScope("whole", body)).toBeNull();
+    expect(anchorScope("section:9", body)).toBeNull();
+    const anchor = anchorScope("section:3", body)!;
+    expect(anchor).toEqual({ ordinal: 3, heading: "결론", count: 3 });
+    // Text edits and a new paragraph leave the section where it is.
+    expect(followScopeAnchor(anchor, [h("개요"), p("a"), p("새 문단"), h("일정"), p("b"), h("결론"), p("c 수정")])).toBe(3);
+    // A section inserted before it, or removed before it, shifts the ordinal: the scope follows the heading.
+    expect(followScopeAnchor(anchor, [h("개요"), p("a"), h("배경"), h("일정"), p("b"), h("결론"), p("c")])).toBe(4);
+    expect(followScopeAnchor(anchor, [h("개요"), p("a"), p("b"), h("결론"), p("c")])).toBe(2);
+    // Moved up: still the same section.
+    expect(followScopeAnchor(anchor, [h("개요"), p("a"), h("결론"), p("c"), h("일정"), p("b")])).toBe(2);
+    // Its heading retyped in place: same ordinal (the anchor is re-taken with the new heading by the caller).
+    expect(followScopeAnchor(anchor, [h("개요"), p("a"), h("일정"), p("b"), h("결론 및 제언"), p("c")])).toBe(3);
+    // Its heading block removed (the section merged into the one before), demoted to a sub-heading, or the body replaced: gone.
+    expect(followScopeAnchor(anchor, [h("개요"), p("a"), h("일정"), p("b"), p("c")])).toBeNull();
+    expect(followScopeAnchor(anchor, [h("개요"), p("a"), h("일정"), p("b"), h("결론", 3), p("c")])).toBeNull();
+    expect(followScopeAnchor(anchor, [])).toBeNull();
+    // The old code kept "section:2" when section 2 was removed (now another section) and fell back to "whole" for the last one.
+    const second = anchorScope("section:2", body)!;
+    expect(followScopeAnchor(second, [h("개요"), p("a"), p("b"), h("결론"), p("c")])).toBeNull();
+    // Two sections with the same heading after a structural change: ambiguous, so not guessed.
+    const twin = anchorScope("section:2", [h("개요"), h("항목"), h("항목")])!;
+    expect(followScopeAnchor(twin, [h("머리말"), h("개요"), h("항목"), h("항목")])).toBeNull();
+    // An untitled leading section is followed like any other.
+    const lead = anchorScope("section:1", [p("머리말"), h("개요")])!;
+    expect(lead.heading).toBeNull();
+    expect(followScopeAnchor(lead, [p("머리말 수정"), h("개요")])).toBe(1);
+    expect(followScopeAnchor(lead, [h("개요")])).toBeNull();
   });
 
   it("builds the revision request and maps the scope picker", () => {

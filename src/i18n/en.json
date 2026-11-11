@@ -2594,6 +2594,8 @@
       "scope_section": "Rewrite {{index}}. {{heading}}",
       "scope_insert_after": "New section after {{index}}. {{heading}}",
       "scope_append": "New section at the end",
+      "scope_none": "Pick a scope",
+      "scope_lost": "The section picked for rewriting was removed by an edit, so the scope was cleared. Pick the scope again.",
       "untitled": "(untitled)",
       "heading": "New section heading (optional)",
       "heading_placeholder": "e.g. Conclusion",

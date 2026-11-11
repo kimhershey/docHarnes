@@ -18,7 +18,7 @@ import { useSettingsStore } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 import { useWorkspaceStore } from "@/stores/workspace";
 
-import { documentSourceIds, pickerToReviseScope, reviseRequest, reviseScopeLabel, sectionsOf, toggleExcluded, withDocumentSources } from "./draft";
+import { anchorScope, documentSourceIds, followScopeAnchor, NO_SCOPE, pickerToReviseScope, reviseRequest, reviseScopeLabel, scopeSectionOrdinal, toggleExcluded, withDocumentSources, withScopeOrdinal, type ScopeAnchor } from "./draft";
 import { DraftAssistantPanel, type ReviseLogEntry } from "./DraftAssistantPanel";
 import { DraftEditor } from "./DraftEditor";
 import { DraftPreview } from "./DraftPreview";
@@ -54,6 +54,9 @@ export function GeneratePage() {
   const [instruction, setInstruction] = useState("");
   const [reviseLog, setReviseLog] = useState<ReviseLogEntry[]>([]);
   const pendingRevise = useRef<{ instruction: string; scope: string } | null>(null);
+  // The section the scope names (followed across edits) and the draft the scope belongs to.
+  const scopeAnchor = useRef<ScopeAnchor | null>(null);
+  const scopeDraft = useRef<string | null>(null);
   const logSeq = useRef(0);
   const instructionRef = useRef<HTMLTextAreaElement>(null);
   const [excluded, setExcluded] = useState<string[]>([]);
@@ -190,18 +193,43 @@ export function GeneratePage() {
     })();
   }, [job, cancelPersist, persist, setDraft, editDraft, setJobId, toast, t]);
 
-  // Another draft (new, opened, handed over): the revision log and the scope belong to the old one.
+  // The scope names a section by its ordinal, and edits shift ordinals (GEN-10). The picked section is followed
+  // by its heading; when it is gone — its heading block removed, the draft rewritten — the scope is cleared and
+  // the user is told. It never quietly becomes "전체 다시 쓰기" or another section.
+  const body = draft?.body;
   useEffect(() => {
-    setReviseLog([]);
-    setReviseScope("whole");
-    setReviseHeading("");
-  }, [draftId]);
-  // A scope naming a section that no longer exists (blocks removed, draft rewritten) falls back to the whole draft.
-  const sectionCount = draft ? sectionsOf(draft.body).length : 0;
-  useEffect(() => {
-    const m = reviseScope.match(/^(?:section|insert_after):(\d+)$/);
-    if (m && Number(m[1]) > sectionCount) setReviseScope("whole");
-  }, [reviseScope, sectionCount]);
+    if (scopeDraft.current !== draftId) {
+      // Another draft (new, opened, handed over): the revision log and the scope belong to the old one.
+      scopeDraft.current = draftId;
+      scopeAnchor.current = null;
+      setReviseLog([]);
+      setReviseScope("whole");
+      setReviseHeading("");
+      return;
+    }
+    if (!body) return;
+    const anchor = scopeAnchor.current;
+    if (!anchor) {
+      scopeAnchor.current = anchorScope(reviseScope, body);
+      if (scopeSectionOrdinal(reviseScope) !== null && !scopeAnchor.current) setReviseScope(NO_SCOPE);
+      return;
+    }
+    const ordinal = followScopeAnchor(anchor, body);
+    if (ordinal === null) {
+      scopeAnchor.current = null;
+      setReviseScope(NO_SCOPE);
+      toast(t("generate.revise.scope_lost"), "warn");
+      return;
+    }
+    const next = withScopeOrdinal(reviseScope, ordinal);
+    scopeAnchor.current = anchorScope(next, body);
+    if (next !== reviseScope) setReviseScope(next);
+  }, [draftId, body, reviseScope, toast, t]);
+  /** The scope picked in the panel or by a section's "AI 수정" button. */
+  const pickScope = (value: string) => {
+    scopeAnchor.current = draft ? anchorScope(value, draft.body) : null;
+    setReviseScope(value);
+  };
 
   const start = useCallback(
     async (req: typeof request) => {
@@ -223,14 +251,14 @@ export function GeneratePage() {
   const generate = () => void start({ ...request, previous: null, feedback: null, excluded_sources: [], revise: null, language });
   /** 초안 어시스턴트: the current draft, the picked scope and the instruction go through the ordinary draft job. */
   const revise = () => {
-    if (!draft || !instruction.trim()) return;
+    if (!draft || !instruction.trim() || reviseScope === NO_SCOPE) return;
     const scope = pickerToReviseScope(reviseScope, reviseHeading);
     pendingRevise.current = { instruction: instruction.trim(), scope: reviseScopeLabel(scope, draft.body, language !== "en") };
     void start(reviseRequest({ ...request, language }, draft, instruction, scope, excluded));
   };
   /** The editor's per-section "AI 수정" button: pick that section and go to the instruction box. */
   const reviseSection = (ordinal: number) => {
-    setReviseScope(`section:${ordinal}`);
+    pickScope(`section:${ordinal}`);
     instructionRef.current?.focus();
   };
   const cancel = () => {
@@ -326,7 +354,7 @@ export function GeneratePage() {
     useGenerateStore.getState().reset(language);
     setInstruction("");
     setReviseLog([]);
-    setReviseScope("whole");
+    pickScope("whole");
     setReviseHeading("");
     setExcluded([]);
     setSaved(null);
@@ -380,7 +408,7 @@ export function GeneratePage() {
         <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[16rem_minmax(0,1fr)] grid-rows-[minmax(0,3fr)_minmax(0,2fr)] overflow-hidden @5xl:grid-cols-[18rem_minmax(0,1fr)_24rem] @5xl:grid-rows-1 @7xl:grid-cols-[20rem_minmax(0,1fr)_26rem]" data-testid="generate-layout">
           <aside className="flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto overflow-x-hidden border-r border-border p-4">
             <RequestForm request={request} onChange={(patch) => setRequest(patch)} onGenerate={generate} job={job} running={running} onCancel={cancel} />
-            {draft && <DraftAssistantPanel ref={instructionRef} draft={draft} scope={reviseScope} onScope={setReviseScope} heading={reviseHeading} onHeading={setReviseHeading} instruction={instruction} onInstruction={setInstruction} onRun={revise} running={running} excludedCount={excluded.length} log={reviseLog} />}
+            {draft && <DraftAssistantPanel ref={instructionRef} draft={draft} scope={reviseScope} onScope={pickScope} heading={reviseHeading} onHeading={setReviseHeading} instruction={instruction} onInstruction={setInstruction} onRun={revise} running={running} excludedCount={excluded.length} log={reviseLog} />}
           </aside>
           <section className="min-h-0 min-w-0 overflow-hidden" aria-label={t("generate.preview.title")}>
             <DraftPreview draft={draft} />

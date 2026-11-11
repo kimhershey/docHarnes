@@ -276,6 +276,48 @@ test.describe("P6 document generation", () => {
     await expect(list).toHaveValue("첫째 항목\n둘째 항목");
   });
 
+  test("the revise scope follows its section across edits and is cleared — never turned into 전체 다시 쓰기 — when the section is removed (GEN-10)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openGenerate(page);
+    await page.getByTestId("generate-template").click();
+    await page.getByRole("option", { name: ko.generate.templates.meeting_minutes }).click();
+    await page.getByTestId("generate-content").fill("한빛 포털 구축 주간 회의록, 일정 점검과 리스크 논의");
+    await page.getByTestId("generate-run").click();
+    await expect(page.getByTestId("generate-preview")).toBeVisible({ timeout: 15_000 });
+    const headings = page.locator('[data-testid^="generate-block-"][data-block-kind="heading"]');
+    const count = await headings.count();
+    expect(count).toBeGreaterThanOrEqual(2);
+
+    // Pick the last section with its "AI 수정" button.
+    const last = Number((await headings.last().getAttribute("data-testid"))!.replace("generate-block-", ""));
+    const lastHeading = await page.getByTestId(`generate-block-input-${last}`).inputValue();
+    await page.getByTestId(`draft-section-revise-${last}`).click();
+    const scope = page.getByTestId("generate-revise-scope");
+    await expect(scope).toContainText(lastHeading);
+    const ordinal = Number(((await scope.textContent()) ?? "").match(/(\d+)\.\s/)?.[1]);
+    expect(ordinal).toBeGreaterThanOrEqual(2);
+    await expect(scope).toHaveAttribute("data-scope", `section:${ordinal}`);
+    // A new section heading inserted above shifts the ordinals: the scope still names the picked section.
+    await page.getByTestId("draft-block-add-heading-0").click();
+    await page.getByTestId("generate-block-input-1").fill("새 절");
+    await expect(scope).toHaveAttribute("data-scope", `section:${ordinal + 1}`);
+    await expect(scope).toContainText(`${ordinal + 1}. ${lastHeading}`);
+    // Its heading block removed (the section is merged into the one before): the scope is cleared with a notice.
+    await page.getByTestId(`draft-block-remove-${last + 1}`).click();
+    await expect(scope).toHaveAttribute("data-scope", "none");
+    await expect(scope).toContainText(ko.generate.revise.scope_none);
+    await expect(page.getByTestId("generate-revise-scope-lost")).toHaveText(ko.generate.revise.scope_lost);
+    await expect(page.getByTestId("toaster")).toContainText(ko.generate.revise.scope_lost);
+    // Nothing runs without a scope; picking one again enables the button.
+    await page.getByTestId("generate-revise-instruction").fill("더 짧게");
+    await expect(page.getByTestId("generate-revise-run")).toBeDisabled();
+    await scope.click();
+    await page.getByTestId("generate-revise-scope-section-1").click();
+    await expect(page.getByTestId("generate-revise-run")).toBeEnabled();
+    await expect(page.getByTestId("generate-revise-scope-lost")).toHaveCount(0);
+  });
+
   test("saving as Markdown registers the file in the library like the other formats (GEN-9)", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
