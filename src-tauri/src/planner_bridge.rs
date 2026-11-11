@@ -571,7 +571,16 @@ fn run_pipeline(
         );
     });
     drop(_lease);
-    let report = report.map_err(|e| (e.to_string(), None))?;
+    let report = match report {
+        Ok(report) => report,
+        Err(e) => {
+            // The batch stopped part-way (the engine went away, audit PIP-6): the documents finished
+            // before that changed all the same, and the screens showing them must hear of it.
+            docs_bridge::emit_changed(app, "updated", req.document_ids.clone());
+            pctx.emit(app, "processed", req.document_ids.clone());
+            return Err((e.to_string(), None));
+        }
+    };
     let mut ids = report.processed.clone();
     ids.extend(report.failed.iter().map(|(id, _)| id.clone()));
     if !ids.is_empty() {
