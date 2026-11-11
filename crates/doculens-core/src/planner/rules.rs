@@ -266,6 +266,30 @@ fn doc_type<'a>(t: &Text<'_>, ctx: &'a PlanContext) -> Option<&'a DocTypeSummary
     best.map(|(d, _)| d)
 }
 
+/// Every document type the text names (label in either language, slug or alias). A name that is part
+/// of a longer one that is named too counts once, for the longer one ("개발 계약서" is not also "계약서").
+pub fn doc_types_named<'a>(text: &str, ctx: &'a PlanContext) -> Vec<&'a DocTypeSummary> {
+    let said = compact(text);
+    let mut hits: Vec<(&DocTypeSummary, String)> = Vec::new();
+    for d in &ctx.doc_types {
+        let aliases = crate::pipeline::schema::doc_type_aliases(&d.slug);
+        let longest = [d.label_ko.as_str(), d.label_en.as_str(), d.slug.as_str()]
+            .into_iter()
+            .chain(aliases.iter().copied())
+            .map(compact)
+            .filter(|key| key.chars().count() >= 2 && said.contains(key.as_str()))
+            .max_by_key(|key| key.chars().count());
+        if let Some(key) = longest {
+            hits.push((d, key));
+        }
+    }
+    let keys: Vec<String> = hits.iter().map(|(_, k)| k.clone()).collect();
+    hits.into_iter()
+        .filter(|(_, key)| !keys.iter().any(|other| other != key && other.contains(key.as_str())))
+        .map(|(d, _)| d)
+        .collect()
+}
+
 /// Fields of a schema mentioned in the text, in order of appearance.
 fn fields_mentioned<'a>(t: &Text<'_>, schema: &'a SchemaSummary) -> Vec<&'a FieldSummary> {
     let mut found: Vec<(usize, usize, &FieldSummary)> = Vec::new();

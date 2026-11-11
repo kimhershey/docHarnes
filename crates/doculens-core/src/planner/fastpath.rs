@@ -262,6 +262,27 @@ fn is_question(p: &str) -> bool {
     QUESTION_MARKS.iter().any(|q| p.contains(q))
 }
 
+/// Whether the user's words read as a question or a report ("…인가요?", "…로 바꿨어") rather than a
+/// request — the test the fast path applies before it reads a setting, for the guard.
+pub(super) fn reads_as_question(text: &str) -> bool {
+    let p = plain(text);
+    is_question(&p) || ends_in_past_tense(&p)
+}
+
+/// "…로 바꿨어", "…했습니다", "…됐네요": the sentence ends in a past-tense form — the user says what
+/// happened. (A syllable with the final consonant ㅆ before a sentence ending; "있어" and "겠어" share
+/// the shape and are not requests either: "…할 수 있어?", "…하면 좋겠어".)
+fn ends_in_past_tense(p: &str) -> bool {
+    const ENDINGS: &[&str] = &["어", "어요", "다", "습니다", "네", "네요", "지", "죠", "는데", "거든", "잖아"];
+    let Some(last) = p.split_whitespace().last() else { return false };
+    ENDINGS.iter().any(|e| {
+        last.strip_suffix(e).and_then(|stem| stem.chars().last()).is_some_and(|c| {
+            // Hangul syllables: 0xAC00 + (initial * 21 + vowel) * 28 + final; final 20 = ㅆ.
+            ('가'..='힣').contains(&c) && (c as u32 - 0xAC00) % 28 == 20
+        })
+    })
+}
+
 fn is_letter(c: char) -> bool {
     c.is_alphanumeric()
 }

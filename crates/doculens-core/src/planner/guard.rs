@@ -410,6 +410,43 @@ fn aggregate_group(text: &str) -> Option<GroupBy> {
 /// not a guess. Returns whether an op that drops the split is left.
 fn keep_the_split(text: &str, plan: &mut Plan) -> bool {
     let Some(split) = split_of(text) else { return false };
+    // A grouping the model chose where the sentence names another one — or one these ops do not have
+    // ("담당자별로 요약" came back as `group_by: folder` from the real model and ran) — is a guess: the
+    // sentence's own criterion goes in, or the grouping is taken out and the split reported as dropped.
+    let another_step_groups = plan.operations.iter().any(|op| match op {
+        Op::Move { group_by, .. } => !matches!(group_by, None | Some(GroupBy::None)),
+        Op::Organize { .. } | Op::Export { .. } | Op::ClassifyProjects { .. } => true,
+        _ => false,
+    });
+    let mut guessed = false;
+    if split != SplitBy::Document && !another_step_groups {
+        for op in &mut plan.operations {
+            match op {
+                Op::Summarize { group_by, .. } if !matches!(group_by, None | Some(SummaryGroup::None)) => {
+                    match summary_group(text) {
+                        Some(group) => *group_by = Some(group),
+                        None => {
+                            *group_by = None;
+                            guessed = true;
+                        }
+                    }
+                }
+                Op::Aggregate { group_by, .. } if !matches!(group_by, None | Some(GroupBy::None)) => {
+                    match aggregate_group(text) {
+                        Some(group) => *group_by = Some(group),
+                        None => {
+                            *group_by = None;
+                            guessed = true;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if guessed {
+        return true;
+    }
     // The split may belong to another step ("유형별 폴더로 정리하고 요약해줘"): a plan that
     // already groups something has taken it.
     let taken = plan.operations.iter().any(|op| match op {
@@ -498,11 +535,11 @@ fn model_is_named(text: &str, id: &str) -> bool {
     !sizes.is_empty() && sizes.iter().all(|size| t.contains(size))
 }
 
-/// `Some(what)` when a change that runs without confirmation is not something the sentence names
+/// A settings change of the plan: what it changes, and whether the sentence names it
 /// (audit USR-1: "UI 배율 120%" ran `set_profile balanced` on the model's own confidence of 0.95).
 /// Both have to be in the sentence: the setting and the value ("영어로 번역해줘" has a language,
 /// not the language setting).
-fn ungrounded(text: &str, op: &Op) -> Option<String> {
+fn setting_change(text: &str, op: &Op) -> Option<(String, bool)> {
     let named = |key: &str| {
         catalog::find(key).is_some_and(|(_, spec)| catalog::names_of(spec).iter().any(|n| fastpath::mentions(text, n)))
     };
@@ -513,28 +550,31 @@ fn ungrounded(text: &str, op: &Op) -> Option<String> {
     match op {
         Op::SetSetting { key, value } => {
             let (_, spec) = catalog::find(key)?;
-            (!grounded(key, value)).then(|| format!("{} → {}", spec.label_ko, value_text(value)))
+            Some((format!("{} → {}", spec.label_ko, value_text(value)), grounded(key, value)))
         }
         Op::SetTheme { theme } => {
             let v = Value::String(theme.as_str().to_string());
-            (!grounded("ui.theme", &v)).then(|| format!("테마 → {}", theme.as_str()))
+            Some((format!("테마 → {}", theme.as_str()), grounded("ui.theme", &v)))
         }
         Op::SetLanguage { lang } => {
             let v = Value::String(lang.as_str().to_string());
-            (!grounded("ui.language", &v)).then(|| format!("언어 → {}", lang.as_str()))
+            Some((format!("언어 → {}", lang.as_str()), grounded("ui.language", &v)))
         }
         Op::SetProfile { profile } => {
             let v = serde_json::to_value(profile).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
-            (!grounded("models.profile", &Value::String(v.clone()))).then(|| format!("추론 프로파일 → {v}"))
+            let ok = grounded("models.profile", &Value::String(v.clone()));
+            Some((format!("추론 프로파일 → {v}"), ok))
         }
-        Op::SetInboxWatch { enabled } => (!grounded("processing.inbox_watch", &Value::Bool(*enabled)))
-            .then(|| format!("inbox 감시 → {}", if *enabled { "켜기" } else { "끄기" })),
-        Op::SetModel { id } => (!model_is_named(text, id)).then(|| format!("모델 → {id}")),
+        Op::SetInboxWatch { enabled } => Some((
+            format!("inbox 감시 → {}", if *enabled { "켜기" } else { "끄기" }),
+            grounded("processing.inbox_watch", &Value::Bool(*enabled)),
+        )),
+        Op::SetModel { id } => Some((format!("모델 → {id}"), model_is_named(text, id))),
         Op::ManageModel { action: ModelAction::SetTier, tier: Some(tier), .. } => {
-            (!grounded("models.manual_tier", &Value::String(tier.clone()))).then(|| format!("티어 → {tier}"))
+            Some((format!("티어 → {tier}"), grounded("models.manual_tier", &Value::String(tier.clone()))))
         }
         Op::ManageModel { action: ModelAction::SetBackend, backend: Some(backend), .. } => {
-            (!grounded("models.backend", &Value::String(backend.clone()))).then(|| format!("백엔드 → {backend}"))
+            Some((format!("백엔드 → {backend}"), grounded("models.backend", &Value::String(backend.clone()))))
         }
         _ => None,
     }
@@ -559,6 +599,65 @@ pub fn split_check(text: &str, plan: &mut Plan, ko: bool) -> Option<PlanIssue> {
             "문장은 나눠서 처리하라고 하는데 이 기준으로는 나눌 수 없어 한 덩어리로 처리합니다"
         } else {
             "the sentence asks for one result per group, which this plan cannot do; it makes a single one"
+        },
+    ))
+}
+
+/// "배율 130으로 바꾸고 견적서 요약해줘" came back from the real model as a summary with an empty scope:
+/// every document instead of the estimates. When the user's words name exactly one document type,
+/// the plan names no documents at all and its ops take a type as a filter (never as a value — a
+/// classification target, a draft's template, a form), the type goes into the scope, as the phrase
+/// rules do for the same sentence. Returns the note for the card.
+pub fn type_filter_repair(text: &str, plan: &mut Plan, ctx: &super::PlanContext, ko: bool) -> Option<PlanIssue> {
+    if plan.is_clarification() || !plan.scope.is_empty() {
+        return None;
+    }
+    let filters_by_type = |op: &Op| {
+        matches!(
+            op,
+            Op::Summarize { .. }
+                | Op::Aggregate { .. }
+                | Op::Export { .. }
+                | Op::Extract { .. }
+                | Op::Ocr { .. }
+                | Op::Validate {}
+                | Op::Organize { .. }
+                | Op::Rename { .. }
+                | Op::Move { .. }
+                | Op::Tag { .. }
+                | Op::Delete { .. }
+        )
+    };
+    // Settings, navigation and the like may accompany them; anything else that works on documents or
+    // takes a type as its value leaves the plan alone.
+    let neutral = |op: &Op| {
+        matches!(
+            op,
+            Op::SetSetting { .. }
+                | Op::SetTheme { .. }
+                | Op::SetLanguage { .. }
+                | Op::SetProfile { .. }
+                | Op::SetModel { .. }
+                | Op::SetInboxWatch { .. }
+                | Op::Open { .. }
+                | Op::Help {}
+        )
+    };
+    if !plan.operations.iter().any(filters_by_type)
+        || !plan.operations.iter().all(|op| filters_by_type(op) || neutral(op))
+    {
+        return None;
+    }
+    let named = super::rules::doc_types_named(&super::rules::user_words(text), ctx);
+    let [only] = named.as_slice() else { return None };
+    plan.scope.filter.doc_type = Some(only.slug.clone());
+    Some(PlanIssue::warn(
+        "scope.filter.doc_type",
+        "scope_filled",
+        if ko {
+            format!("문장의 '{}'을(를) 대상 조건으로 넣었습니다", only.label_ko)
+        } else {
+            format!("'{}' from the sentence was added as the document filter", only.label_en)
         },
     ))
 }
@@ -595,17 +694,34 @@ pub fn contract_checks(text: &str, plan: &mut Plan, ko: bool) -> Vec<PlanIssue> 
     // 2. The sentence asks for one result per group and the plan makes one for everything.
     notes.extend(split_check(text, plan, ko));
     // 3. A settings change the sentence does not name.
-    let ungrounded_ops: Vec<(usize, String)> =
-        plan.operations.iter().enumerate().filter_map(|(i, op)| ungrounded(text, op).map(|w| (i, w))).collect();
-    for (i, what) in ungrounded_ops {
+    //    … or names in a sentence that is a question or a report, not a request ("DPI 200으로 바꿨어"
+    //    came back from the real model as a change to 200 and ran).
+    let not_a_request = fastpath::reads_as_question(text);
+    let changes: Vec<(usize, String, bool)> = plan
+        .operations
+        .iter()
+        .enumerate()
+        .filter_map(|(i, op)| setting_change(text, op).map(|(what, grounded)| (i, what, grounded)))
+        .collect();
+    for (i, what, grounded) in changes {
+        if grounded && !not_a_request {
+            continue;
+        }
         plan.requires_confirmation = true;
         notes.push(PlanIssue::warn(
             format!("operations[{i}]"),
             "ungrounded_change",
-            if ko {
-                format!("문장에서 이 변경의 근거를 찾지 못했습니다({what}). 맞으면 승인해 주세요")
-            } else {
-                format!("the sentence does not name this change ({what}); approve it if it is what you meant")
+            match (grounded, ko) {
+                (false, true) => format!("문장에서 이 변경의 근거를 찾지 못했습니다({what}). 맞으면 승인해 주세요"),
+                (false, false) => {
+                    format!("the sentence does not name this change ({what}); approve it if it is what you meant")
+                }
+                (true, true) => {
+                    format!("문장이 요청이 아니라 질문이나 알림으로 읽힙니다({what}). 바꾸려던 것이 맞으면 승인해 주세요")
+                }
+                (true, false) => {
+                    format!("the sentence reads as a question or a report, not a request ({what}); approve it if you meant the change")
+                }
             },
         ));
     }
@@ -697,6 +813,82 @@ mod tests {
 
     fn codes(text: &str, plan: &mut Plan) -> Vec<String> {
         contract_checks(text, plan, true).into_iter().map(|i| i.code).collect()
+    }
+
+    /// Plans the real model (Gemma 4 E4B, 0.8.0 measurement) wrote for three golden sentences, replayed.
+    #[test]
+    fn plans_the_real_model_wrote_are_caught_or_repaired() {
+        use serde_json::json;
+        // "담당자별" came back grouped by folder and ran: the guess is taken out and the split reported.
+        let mut p =
+            model_plan(vec![Op::Summarize { target: None, length: None, group_by: Some(SummaryGroup::Folder) }]);
+        assert_eq!(codes("견적서를 담당자별로 요약해줘", &mut p), vec!["grouping_dropped"]);
+        assert!(p.requires_confirmation && p.unmet.is_some());
+        assert!(matches!(&p.operations[0], Op::Summarize { group_by: None, .. }));
+        // A grouping other than the one the sentence names is replaced by the sentence's.
+        let mut p =
+            model_plan(vec![Op::Summarize { target: None, length: None, group_by: Some(SummaryGroup::Folder) }]);
+        assert!(codes("프로젝트별로 요약해줘", &mut p).is_empty());
+        assert!(matches!(&p.operations[0], Op::Summarize { group_by: Some(SummaryGroup::Project), .. }));
+        // The split belongs to the filing step: the summary is left alone.
+        let mut p = model_plan(vec![
+            Op::Move { folder: "documents/{{doc_type}}".into(), group_by: Some(GroupBy::DocType), only_reviewed: None },
+            Op::Summarize { target: None, length: None, group_by: Some(SummaryGroup::DocType) },
+        ]);
+        assert!(codes("담당자별 폴더로 옮기고 유형별로 요약해줘", &mut p).is_empty());
+
+        // "DPI 200으로 바꿨어" is a report: the change it names waits.
+        let dpi = || Op::SetSetting { key: "processing.render_dpi".into(), value: json!(200) };
+        let mut p = model_plan(vec![dpi()]);
+        assert_eq!(codes("DPI 200으로 바꿨어", &mut p), vec!["ungrounded_change"]);
+        assert!(p.requires_confirmation);
+        let mut p = model_plan(vec![dpi()]);
+        assert_eq!(codes("렌더 DPI가 200인가요?", &mut p), vec!["ungrounded_change"]);
+        // The request itself still runs.
+        let mut p = model_plan(vec![dpi()]);
+        assert!(codes("렌더 DPI를 200으로 바꿔줘", &mut p).is_empty());
+        assert!(!p.requires_confirmation);
+
+        // "배율 130으로 바꾸고 견적서 요약해줘": the summary had no scope.
+        let ctx = crate::planner::PlanContext {
+            doc_types: vec![
+                crate::planner::DocTypeSummary {
+                    slug: "estimate".into(),
+                    label_ko: "견적서".into(),
+                    label_en: "Estimate".into(),
+                },
+                crate::planner::DocTypeSummary {
+                    slug: "dev_contract".into(),
+                    label_ko: "개발 계약서".into(),
+                    label_en: "Development contract".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        let scale = || Op::SetSetting { key: "ui.scale_percent".into(), value: json!(130) };
+        let summarize = || Op::Summarize { target: Some(SummarizeTarget::EachDoc), length: None, group_by: None };
+        let mut p = model_plan(vec![scale(), summarize()]);
+        let note = type_filter_repair("배율 130으로 바꾸고 견적서 요약해줘", &mut p, &ctx, true).expect("repaired");
+        assert_eq!(note.code, "scope_filled");
+        assert_eq!(p.scope.filter.doc_type.as_deref(), Some("estimate"));
+        assert!(!p.requires_confirmation);
+        // Two types, a scope of the plan's own, or a type that is the op's value: nothing is filled in.
+        let mut p = model_plan(vec![summarize()]);
+        assert!(type_filter_repair("견적서와 개발 계약서 요약해줘", &mut p, &ctx, true).is_none());
+        let mut p = model_plan(vec![summarize()]);
+        p.scope.doc_ids = vec!["d1".into()];
+        assert!(type_filter_repair("견적서 요약해줘", &mut p, &ctx, true).is_none());
+        let mut p = model_plan(vec![Op::SetDocType { doc_type: "estimate".into() }]);
+        assert!(type_filter_repair("선택한 문서를 견적서로 분류해줘", &mut p, &ctx, true).is_none());
+        assert!(p.scope.is_empty());
+        let mut p = model_plan(vec![Op::Answer {
+            question: "견적서가 뭐야?".into(),
+            cite: None,
+            knowledge: None,
+            mode: None,
+            reply: None,
+        }]);
+        assert!(type_filter_repair("견적서가 뭐야?", &mut p, &ctx, true).is_none());
     }
 
     /// Audit USR-1: the plans the model made of the reported sentences ran on its own confidence.
