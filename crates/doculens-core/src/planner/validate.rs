@@ -630,7 +630,9 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
                 }
             }
             Op::ReviseDraft { draft_id, scope, section, heading, instruction } => {
-                *instruction = instruction.trim().chars().take(2_000).collect();
+                // Kept as the generator stores it: the prompt decides how much of it the model is
+                // given and reports what it left out. A shorter cut here was silent (audit GEN-14).
+                *instruction = instruction.trim().chars().take(crate::generate::MAX_STORED_TEXT_CHARS).collect();
                 if instruction.is_empty() {
                     issues.push(PlanIssue::error(
                         at("instruction"),
@@ -670,7 +672,8 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
                 }
             }
             Op::DraftDocument { form_ref, format_description, content, sources, .. } => {
-                *content = content.trim().chars().take(6_000).collect();
+                // As for `revise_draft.instruction`: the stored limit, not the prompt's (audit GEN-14).
+                *content = content.trim().chars().take(crate::generate::MAX_STORED_TEXT_CHARS).collect();
                 if content.is_empty() {
                     issues.push(PlanIssue::error(at("content"), "content_empty", "draft_document needs content"));
                 }
