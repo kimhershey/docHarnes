@@ -564,7 +564,8 @@
       "step": "{{index}}. {{op}}",
       "param_default": "(default)",
       "list_hint": "comma-separated",
-      "scalar_hint": "string · number · true/false"
+      "scalar_hint": "string · number · true/false",
+      "required_missing": "A required value is empty: {{label}}"
     },
     "card": {
       "title": "Plan",

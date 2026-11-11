@@ -6,12 +6,13 @@
 // value or a `required` flag differs.
 
 import { SETTING_KEYS_ALL } from "@/lib/settingsCatalog";
-import type { Language, OpKind } from "@/lib/types";
+import type { Language, Op, OpKind } from "@/lib/types";
 
 export type ParamType =
   | { kind: "string" }
   | { kind: "boolean" }
-  | { kind: "integer" }
+  /** `min`: the smallest value the field takes (default 0 — most integers are `u32` in the core). */
+  | { kind: "integer"; min?: number }
   | { kind: "number" }
   | { kind: "date" }
   | { kind: "enum"; values: readonly string[] }
@@ -276,7 +277,7 @@ const SPECS: OpSpec[] = [
     desc_ko: "보완요청서 초안 생성(미리보기)",
     desc_en: "draft a supplement request (preview)",
   },
-  { op: "set_retention", params: [p("item", en(RETENTION_ITEMS), true, "보존 항목", "retention item"), p("days", int, true, "보존 일수(-1 무기한, 0 즉시)", "days (-1 forever, 0 immediately)")], desc_ko: "보존/파기 기간 설정", desc_en: "set a retention period" },
+  { op: "set_retention", params: [p("item", en(RETENTION_ITEMS), true, "보존 항목", "retention item"), p("days", { kind: "integer", min: -1 }, true, "보존 일수(-1 무기한, 0 즉시)", "days (-1 forever, 0 immediately)")], desc_ko: "보존/파기 기간 설정", desc_en: "set a retention period" },
   { op: "set_model", params: [p("id", str, true, "모델 id", "model id")], desc_ko: "활성 모델 변경", desc_en: "switch the active model" },
   { op: "set_profile", params: [p("profile", en(PROFILES), true, "추론 프로파일", "inference profile")], desc_ko: "추론 프로파일 변경", desc_en: "set the inference profile" },
   { op: "set_theme", params: [p("theme", en(THEMES), true, "테마", "theme")], desc_ko: "테마 변경", desc_en: "set the theme" },
@@ -403,6 +404,28 @@ export const FILE_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["organize", "renam
 
 export function opSpec(op: OpKind): OpSpec {
   return OP_SPECS[op];
+}
+
+/** Whether a required parameter has no value: absent, null, or an empty list. */
+export function isMissingValue(param: ParamSpec, value: unknown): boolean {
+  if (!param.required) return false;
+  return value === undefined || value === null || (Array.isArray(value) && value.length === 0);
+}
+
+/**
+ * The required parameters a plan's operations lack. The core's op types have no default for them, so a
+ * plan sent without one never reaches the validator: the IPC layer rejects it with a raw
+ * "missing field `…`" (CON-12). The plan card names the field instead.
+ */
+export function missingRequiredParams(operations: Op[]): { index: number; param: ParamSpec }[] {
+  const out: { index: number; param: ParamSpec }[] = [];
+  operations.forEach((op, index) => {
+    const spec = (OP_SPECS as Partial<Record<string, OpSpec>>)[op.op];
+    if (!spec) return;
+    const record = op as unknown as Record<string, unknown>;
+    for (const param of spec.params) if (isMissingValue(param, record[param.name])) out.push({ index, param });
+  });
+  return out;
 }
 
 export function paramDesc(param: ParamSpec, language: Language | string): string {

@@ -269,6 +269,44 @@ test.describe("P5 planner", () => {
     await expect(assistantCard(page, "plan")).toHaveCount(1);
   });
 
+  // CON-12: clearing a required value in the plan editor sent a plan the IPC layer cannot read — a raw English
+  // "invalid args … missing field `days`" instead of a field error.
+  test("a required value cleared in the plan editor is a field error on the card, not a raw error", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openAssistant(page);
+    await send(page, "대화 기록 무기한 보관");
+    const plan = assistantCard(page, "plan").last();
+    await expect(plan).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    await plan.getByTestId("plan-edit").click();
+    const days = plan.getByTestId("plan-editor-param-0-days");
+    await expect(days).toHaveValue("-1");
+    await days.fill("");
+    await expect(days).toHaveAttribute("data-missing", "true");
+    await plan.getByTestId("plan-execute").click();
+    const errors = plan.getByTestId("plan-errors");
+    await expect(errors).toBeVisible();
+    await expect(errors).toContainText(ko.planner.editor.required_missing.replace("{{label}}", ""));
+    await expect(errors).toContainText("operations[0].days");
+    await expect(plan).toHaveAttribute("data-plan-status", "pending");
+    await expect(page.getByTestId("toaster")).not.toContainText("missing field");
+    await expect(assistantCard(page, "result")).toHaveCount(0);
+
+    // Filling the field clears the error; a day count — or -1 (무기한) again — can be typed and the plan runs.
+    await days.fill("30");
+    await expect(days).toHaveValue("30");
+    await expect(errors).toBeHidden();
+    await days.fill("-1");
+    await expect(days).toHaveValue("-1");
+    await expect(days).not.toHaveAttribute("data-missing", "true");
+    await expect(errors).toBeHidden();
+    await plan.getByTestId("plan-execute").click();
+    await expect(plan).toHaveAttribute("data-plan-status", "done", { timeout: 15_000 });
+    const result = assistantCard(page, "result").last();
+    await expect(result).toHaveAttribute("data-result-status", "done", { timeout: 15_000 });
+    await expect(result.getByTestId("result-step-0")).toHaveAttribute("data-ui-status", "done");
+  });
+
   // KNO-11: the execution card reported a finished job to the page every time it mounted, so the failure
   // toast of an old job came back whenever its chat was opened again.
   test("a failed job is announced once: reopening its chat does not toast again", async ({ page }) => {

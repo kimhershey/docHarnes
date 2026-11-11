@@ -42,7 +42,7 @@ import { conversationTurns } from "./conversation";
 import { clarificationQuestion, isPlanExecution, planKind, requiresConfirmation, sourceLabel, uiContextFor } from "./describePlan";
 import { EvidenceCard } from "./evidence";
 import { ExecutionCard } from "./ExecutionCard";
-import { UI_OPS } from "./opSpecs";
+import { UI_OPS, missingRequiredParams, paramDesc } from "./opSpecs";
 import { PlanCard } from "./PlanCard";
 import { ResultCard } from "./ResultCard";
 import { SessionList, SessionPicker } from "./SessionList";
@@ -314,6 +314,14 @@ export function AssistantPage() {
   const runPlan = async (sid: string, m: PlanMessage) => {
     const id = m.id;
     if (m.status !== "pending" || !live(sid)) return;
+    // A required value the editor left empty never reaches the validator — the IPC layer rejects the plan with
+    // a raw "missing field `…`". The card names the field instead and the plan stays as it is (CON-12).
+    const missing = missingRequiredParams(m.plan.operations);
+    if (missing.length > 0) {
+      const errors: PlanIssue[] = missing.map(({ index, param }) => ({ path: `operations[${index}].${param.name}`, code: "param_required", message: t("planner.editor.required_missing", { label: paramDesc(param, i18n.language) }), blocking: true }));
+      patchPlan(sid, id, (x) => ({ ...x, errors }));
+      return;
+    }
     patchPlan(sid, id, (x) => ({ ...x, status: "executing", errors: null }));
     try {
       const res = await api.plannerExecute(m.plan, m.text, m.context);

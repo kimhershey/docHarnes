@@ -564,7 +564,8 @@
       "step": "{{index}}. {{op}}",
       "param_default": "(기본)",
       "list_hint": "쉼표로 구분",
-      "scalar_hint": "문자열 · 숫자 · true/false"
+      "scalar_hint": "문자열 · 숫자 · true/false",
+      "required_missing": "필수 값이 비어 있습니다: {{label}}"
     },
     "card": {
       "title": "플랜",

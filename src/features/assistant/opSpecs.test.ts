@@ -4,9 +4,11 @@
 // produced (`group_by = project`) or hides a parameter altogether (`add_to_project.as_reference`).
 import { describe, expect, it } from "vitest";
 
+import type { Op } from "@/lib/types";
+
 import schemaRs from "../../../crates/doculens-core/src/planner/schema.rs?raw";
 
-import { OP_KINDS, OP_SPECS, type ParamType } from "./opSpecs";
+import { OP_KINDS, OP_SPECS, isMissingValue, missingRequiredParams, type ParamType } from "./opSpecs";
 
 interface RustParam {
   name: string;
@@ -79,6 +81,43 @@ const KINDS: Record<string, ParamType["kind"][]> = {
 };
 
 const rust = parseRustSpecs(schemaRs);
+
+// CON-12: the core's op types have no default for a required parameter, so a plan sent without one is
+// rejected by the IPC layer with a raw "missing field `doc_ids`" before any validator sees it.
+describe("missingRequiredParams", () => {
+  it("names the required parameters an edited plan lacks", () => {
+    const ops = [
+      { op: "compare", aspects: ["금액"] },
+      { op: "set_retention", item: "chats" },
+      { op: "set_setting", key: "ui.scale_percent", value: null },
+      { op: "compare", doc_ids: [] },
+    ] as unknown as Op[];
+    expect(missingRequiredParams(ops).map(({ index, param }) => `${index}.${param.name}`)).toEqual(["0.doc_ids", "1.days", "2.value", "3.doc_ids"]);
+  });
+
+  it("accepts complete plans, optional gaps and an empty required string", () => {
+    const ops: Op[] = [
+      { op: "compare", doc_ids: ["a", "b"] },
+      { op: "set_retention", item: "chats", days: 0 },
+      { op: "set_setting", key: "privacy.pii_masking", value: false },
+      { op: "organize" },
+      // "" is a value the validator judges (an empty replacement is a legitimate edit).
+      { op: "edit_text", find: "가", replace: "" },
+      { op: "validate" },
+    ];
+    expect(missingRequiredParams(ops)).toEqual([]);
+    expect(isMissingValue(OP_SPECS.edit_text.params.find((p) => p.name === "replace")!, "")).toBe(false);
+    expect(isMissingValue(OP_SPECS.organize.params.find((p) => p.name === "template")!, undefined)).toBe(false);
+  });
+
+  it("covers exactly the parameters the backend requires", () => {
+    // An op with nothing but its name lacks every required parameter of the Rust table.
+    for (const op of rust) {
+      const required = op.params.filter((p) => p.required).map((p) => p.name);
+      expect(missingRequiredParams([{ op: op.op } as unknown as Op]).map((m) => m.param.name), op.op).toEqual(required);
+    }
+  });
+});
 
 describe("opSpecs.ts mirrors planner/schema.rs", () => {
   it("parses the Rust table", () => {
