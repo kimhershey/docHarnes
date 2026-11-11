@@ -1404,7 +1404,8 @@
       "kind": "Format",
       "all": "All",
       "doc_type": "Type",
-      "review": "Review"
+      "review": "Review",
+      "labelled": "{{label}}: {{value}}"
     },
     "empty_title": "No documents yet",
     "empty_body": "Drop PDF, image, HWP, HWPX or DOCX files here or click Import. Files placed in inbox/ are registered automatically.",

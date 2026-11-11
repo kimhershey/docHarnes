@@ -1404,7 +1404,8 @@
       "kind": "형식",
       "all": "전체",
       "doc_type": "유형",
-      "review": "검토"
+      "review": "검토",
+      "labelled": "{{label}}: {{value}}"
     },
     "empty_title": "아직 문서가 없습니다",
     "empty_body": "PDF·이미지·HWP·HWPX·DOCX 파일을 여기에 끌어다 놓거나 '가져오기'를 누르세요. inbox/ 폴더에 넣어도 자동으로 등록됩니다.",

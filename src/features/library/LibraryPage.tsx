@@ -331,9 +331,12 @@ export function LibraryPage() {
               aria-label={t("library.search_placeholder")}
               data-testid="library-search"
             />
+            {/* Each filter shows its name in front of the value ("상태: 전체"): four selects that all read "전체" could
+                not be told apart without opening them (0.7.0 audit UI-7). The `aria-label` stays — a combobox does not
+                take its accessible name from its content. */}
             <Select value={status} onValueChange={(v) => setStatus(v as DocumentStatus | "all")}>
-              <SelectTrigger className="h-8 w-32" aria-label={t("library.filters.status")} data-testid="library-filter-status">
-                <SelectValue />
+              <SelectTrigger className="h-8 w-auto max-w-56" aria-label={t("library.filters.status")} data-testid="library-filter-status">
+                <SelectValue>{t("library.filters.labelled", { label: t("library.filters.status"), value: status === "all" ? t("library.filters.all") : t(`documents.status.${status}`) })}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">{t("library.filters.all")}</SelectItem>
@@ -345,8 +348,8 @@ export function LibraryPage() {
               </SelectContent>
             </Select>
             <Select value={kind} onValueChange={(v) => setKind(v as SourceKind | "all")}>
-              <SelectTrigger className="h-8 w-28" aria-label={t("library.filters.kind")} data-testid="library-filter-kind">
-                <SelectValue />
+              <SelectTrigger className="h-8 w-auto max-w-56" aria-label={t("library.filters.kind")} data-testid="library-filter-kind">
+                <SelectValue>{t("library.filters.labelled", { label: t("library.filters.kind"), value: kind === "all" ? t("library.filters.all") : t(`documents.kind.${kind}`) })}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">{t("library.filters.all")}</SelectItem>
@@ -358,8 +361,8 @@ export function LibraryPage() {
               </SelectContent>
             </Select>
             <Select value={docType} onValueChange={setDocType}>
-              <SelectTrigger className="h-8 w-36" aria-label={t("library.filters.doc_type")} data-testid="library-filter-type">
-                <SelectValue />
+              <SelectTrigger className="h-8 w-auto max-w-56" aria-label={t("library.filters.doc_type")} title={docType === "all" ? undefined : typeLabel(docType)} data-testid="library-filter-type">
+                <SelectValue>{t("library.filters.labelled", { label: t("library.filters.doc_type"), value: docType === "all" ? t("library.filters.all") : typeLabel(docType) })}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">{t("library.filters.all")}</SelectItem>
@@ -371,8 +374,8 @@ export function LibraryPage() {
               </SelectContent>
             </Select>
             <Select value={review} onValueChange={(v) => setReview(v as ReviewStatus | "all")}>
-              <SelectTrigger className="h-8 w-32" aria-label={t("library.filters.review")} data-testid="library-filter-review">
-                <SelectValue />
+              <SelectTrigger className="h-8 w-auto max-w-56" aria-label={t("library.filters.review")} data-testid="library-filter-review">
+                <SelectValue>{t("library.filters.labelled", { label: t("library.filters.review"), value: review === "all" ? t("library.filters.all") : t(`pipeline.review_status.${review}`) })}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">{t("library.filters.all")}</SelectItem>
