@@ -67,3 +67,6 @@ src-tauri/resources/licenses/*
 
 # Playwright output of parallel agents (PW_OUT_DIR=test-results-<name>)
 test-results-*/
+
+# Claude Code agent worktrees (session-local)
+.claude/worktrees/

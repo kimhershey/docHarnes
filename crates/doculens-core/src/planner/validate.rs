@@ -526,6 +526,46 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
                     issues.push(PlanIssue::error(at("question"), "question_empty", "clarify needs a question"));
                 }
             }
+            Op::ReviseDraft { draft_id, scope, section, heading, instruction } => {
+                *instruction = instruction.trim().chars().take(2_000).collect();
+                if instruction.is_empty() {
+                    issues.push(PlanIssue::error(
+                        at("instruction"),
+                        "instruction_empty",
+                        "revise_draft needs an instruction",
+                    ));
+                }
+                *scope = scope.trim().to_ascii_lowercase();
+                if !super::schema::REVISE_SCOPES.contains(&scope.as_str()) {
+                    issues.push(PlanIssue::error(
+                        at("scope"),
+                        "scope_invalid",
+                        "scope must be section, insert_after or whole",
+                    ));
+                }
+                if scope == "section" && section.is_none_or(|n| n == 0) {
+                    issues.push(PlanIssue::error(
+                        at("section"),
+                        "section_required",
+                        "revise_draft needs the section number (1-based)",
+                    ));
+                }
+                if scope == "whole" {
+                    *section = None;
+                }
+                trim_opt(heading, 200);
+                trim_opt(draft_id, 120);
+                if draft_id.is_none() {
+                    *draft_id = ctx.draft_id.clone();
+                }
+                if draft_id.is_none() {
+                    issues.push(PlanIssue::error(
+                        at("draft_id"),
+                        "draft_required",
+                        "open a draft in the document generator first",
+                    ));
+                }
+            }
             Op::DraftDocument { form_ref, format_description, content, sources, .. } => {
                 *content = content.trim().chars().take(6_000).collect();
                 if content.is_empty() {

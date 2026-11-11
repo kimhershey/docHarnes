@@ -294,8 +294,8 @@ function openWorkspace(path: string, create: boolean, name: string | null, local
       manifest: {
         workspace_id: crypto.randomUUID(),
         schema_version: 1,
-        app_version: "0.6.0",
-        last_opened_app_version: "0.6.0",
+        app_version: "0.7.0",
+        last_opened_app_version: "0.7.0",
         name: name?.trim() || basename(p),
         created_at: new Date().toISOString(),
         last_opened_at: null,
@@ -2275,7 +2275,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "app_info":
       return r({
         name: "DocuLens",
-        version: "0.6.0",
+        version: "0.7.0",
         settings_path: "(browser) localStorage:doculens.mock.settings",
         app_data_dir: "(browser)",
         engines_dir: "(browser)/engines",
@@ -2584,6 +2584,16 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       if (!current) throw err("no_workspace", "no workspace is open");
       const kb = await import("./mock-knowledge");
       return r(await kb.mockKnowledge(cmd, a));
+    }
+    case "chat_sessions_list":
+    case "chat_session_create":
+    case "chat_session_rename":
+    case "chat_session_delete":
+    case "chat_messages_list":
+    case "chat_message_put": {
+      if (!current) throw err("no_workspace", "no workspace is open");
+      const chat = await import("./mock-chat");
+      return r(await chat.mockChat(cmd, a));
     }
     case "pipeline_status":
     case "pipeline_process":

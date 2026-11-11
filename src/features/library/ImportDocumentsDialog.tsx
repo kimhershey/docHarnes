@@ -279,27 +279,34 @@ export function ImportDocumentsDialog({
               <ul className="max-h-64 divide-y divide-border overflow-y-auto rounded-md border border-border text-sm" aria-label={t("import_docs.items")}>
                 {plan.items.map((item, i) => (
                   <li key={`${i}-${item.path}`} className="flex items-center gap-2 px-3 py-1.5" data-testid="doc-import-item" data-item-status={item.status.kind}>
-                    <Badge variant={itemVariant(item)}>
-                      {item.status.kind === "duplicate" && t("import_docs.item_status.duplicate", { of: item.status.of_rel_path })}
-                      {item.status.kind === "duplicate_in_batch" && t("import_docs.item_status.duplicate_in_batch", { of: item.status.of })}
-                      {item.status.kind === "relink" && t("import_docs.item_status.relink", { old: item.status.old_rel_path })}
-                      {item.status.kind === "unsupported" && t("import_docs.item_status.unsupported")}
-                      {(item.status.kind === "new" || item.status.kind === "already_registered" || item.status.kind === "copying") &&
-                        t(`import_docs.item_status.${item.status.kind}`)}
+                    {/* A status that names another file (duplicate / relink) truncates inside its badge; the path is in the tooltip. */}
+                    <Badge variant={itemVariant(item)} className="max-w-[min(50%,16rem)] shrink-0" title={item.status.kind === "duplicate" ? item.status.of_rel_path : item.status.kind === "relink" ? item.status.old_rel_path : undefined}>
+                      <span className="min-w-0 truncate">
+                        {item.status.kind === "duplicate" && t("import_docs.item_status.duplicate", { of: item.status.of_rel_path })}
+                        {item.status.kind === "duplicate_in_batch" && t("import_docs.item_status.duplicate_in_batch", { of: item.status.of })}
+                        {item.status.kind === "relink" && t("import_docs.item_status.relink", { old: item.status.old_rel_path })}
+                        {item.status.kind === "unsupported" && t("import_docs.item_status.unsupported")}
+                        {(item.status.kind === "new" || item.status.kind === "already_registered" || item.status.kind === "copying") &&
+                          t(`import_docs.item_status.${item.status.kind}`)}
+                      </span>
                     </Badge>
                     <span className="min-w-0 flex-1 truncate" title={item.path}>
                       {item.name}
                     </span>
-                    {item.kind && <Badge variant="outline">{t(`documents.kind.${item.kind}`)}</Badge>}
+                    {item.kind && (
+                      <Badge variant="outline" className="shrink-0">
+                        {t(`documents.kind.${item.kind}`)}
+                      </Badge>
+                    )}
                     {item.note && (
-                      <span className="text-xs text-fg-muted" title={item.note} data-testid="doc-import-note">
+                      <span className="min-w-0 max-w-[12rem] truncate text-xs text-fg-muted" title={item.note} data-testid="doc-import-note">
                         {item.note}
                       </span>
                     )}
                     {item.status.kind === "unsupported" && (
-                      <span className="text-xs text-fg-muted">{t(`documents.unsupported.${item.status.reason.split(":")[0]}`, { defaultValue: item.status.reason })}</span>
+                      <span className="min-w-0 max-w-[12rem] truncate text-xs text-fg-muted">{t(`documents.unsupported.${item.status.reason.split(":")[0]}`, { defaultValue: item.status.reason })}</span>
                     )}
-                    <span className="text-xs text-fg-subtle">{formatBytes(item.size)}</span>
+                    <span className="shrink-0 text-xs text-fg-subtle">{formatBytes(item.size)}</span>
                   </li>
                 ))}
               </ul>

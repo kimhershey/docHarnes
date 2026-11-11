@@ -29,11 +29,6 @@ export function RequestForm({
   onGenerate,
   job,
   running,
-  hasDraft,
-  feedback,
-  onFeedback,
-  onRegenerate,
-  excludedCount,
   onCancel,
 }: {
   request: DraftRequest;
@@ -41,11 +36,6 @@ export function RequestForm({
   onGenerate: () => void;
   job: Job | null | undefined;
   running: boolean;
-  hasDraft: boolean;
-  feedback: string;
-  onFeedback: (text: string) => void;
-  onRegenerate: () => void;
-  excludedCount: number;
   onCancel: () => void;
 }) {
   const { t, i18n } = useTranslation();
@@ -138,7 +128,9 @@ export function RequestForm({
               const doc = sourceDocs?.find((d) => d.id === id);
               return (
                 <li key={id} className="flex items-center gap-1 rounded-full bg-bg-sunken px-2 py-0.5 text-xs">
-                  <span className="max-w-40 truncate">{doc?.title ?? doc?.original_name ?? id.slice(0, 8)}</span>
+                  <span className="max-w-40 truncate" title={doc?.original_name}>
+                    {doc?.title ?? doc?.original_name ?? id.slice(0, 8)}
+                  </span>
                   <button type="button" className="text-fg-muted hover:text-fg cursor-pointer" onClick={() => onChange({ sources: withDocumentSources(request.sources, sourceIds.filter((x) => x !== id)) })} aria-label={t("generate.form.remove_source")}>
                     <X className="size-3" />
                   </button>
@@ -261,16 +253,6 @@ export function RequestForm({
             <span>{detail ?? t("generate.form.generating")}</span>
           </div>
           <Progress value={job.state === "queued" ? null : job.progress} label={t("generate.form.generating")} />
-        </div>
-      )}
-      {hasDraft && (
-        <div className="flex flex-col gap-1.5 border-t border-border pt-3" data-testid="generate-regenerate-panel">
-          <Label htmlFor="gen-feedback">{t("generate.form.feedback")}</Label>
-          <Textarea id="gen-feedback" rows={2} value={feedback} onChange={(e) => onFeedback(e.target.value)} placeholder={t("generate.form.feedback_placeholder")} lang={i18n.language} data-testid="generate-feedback" />
-          {excludedCount > 0 && <p className="text-xs text-fg-muted">{t("generate.form.excluded_hint", { count: excludedCount })}</p>}
-          <Button variant="secondary" onClick={onRegenerate} disabled={running} data-testid="generate-regenerate">
-            {t("generate.form.regenerate")}
-          </Button>
         </div>
       )}
       <SourcePickerDialog open={pickerOpen} onOpenChange={setPickerOpen} selected={sourceIds} onChange={(ids) => onChange({ sources: withDocumentSources(request.sources, ids) })} />

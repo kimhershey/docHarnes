@@ -470,6 +470,8 @@ flowchart LR
 > `import_model`/`download_model`/`benchmark` → `manage_model`, `open_workspace` → `workspace`). `set_setting.key`는 설정 카탈로그 경로(46개)이고, 모델 호출은 계열 선택 → 계열 op 표의
 > 2단계다. 실제 op 표는 `crates/doculens-core/src/planner/schema.rs`(`OP_SPECS`)가 단일 진실 원천이다.
 
+> **0.7.0(2026-11-10, 계획 `docs/plan/v0.7.0.md`)**: 문서 작성 화면의 "재생성 지시"는 **초안 어시스턴트**(범위: 절 다시 쓰기 / 새 절 / 전체; `DraftRequest.revise`)가 되었고 같은 일을 하는 op `revise_draft`(열린 초안 = `PlanContext.draft_id`)가 플랜 스키마에 들어갔다(op 63). 어시스턴트 대화는 세션 단위로 워크스페이스 DB(`chat_sessions`·`chat_messages`, 0012)에 남는다. 프로젝트 상세의 "문서"·"참고 자료" 탭은 구분 열을 가진 "문서" 탭 하나로 합쳐졌다(저장 구조는 0.5.0 그대로).
+
 **플랜 JSON 스키마(요지)**: `intent ∈ {import, set_inbox_watch, render, rotate, split, merge, classify, set_doc_type, ocr, define_schema, register_form, extract, validate, review, reindex, search, answer, explain, aggregate, summarize, compare, draft_document, add_to_kb, manage_collection, define_term, create_project, add_to_project, define_rule, check_consistency, request_supplement, organize, rename, move, tag, delete, export, set_model, set_tier, set_profile, set_backend, import_model, download_model, benchmark, set_theme, set_language, set_setting, set_retention, open, open_workspace, job, engine, undo, redo, help, clarify, noop}`, `scope{folder, doc_ids, filter{doc_type, date_from, date_to, keyword, vendor, status, tags[], min_confidence, review_status}}`, `operations[]`(각 op는 const 타입 + 파라미터, 부록 D), `requires_confirmation`, `confidence`, `clarification_question`. 부록 D의 파라미터 스키마가 검증기의 단일 진실 원천이며, 스키마에 없는 파라미터는 거부된다. 날짜 기준 필드는 `doc_date`(문서 날짜) 기본, 없으면 가져온 날짜 — 결과 카드에 "기준: 문서 날짜" 표기.
 
 **예시 명령 → 플랜**

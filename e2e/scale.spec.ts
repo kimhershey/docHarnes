@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import ko from "../src/i18n/ko.json" with { type: "json" };
-import { card, createWorkspace, docId, freshApp, importViaLibrary } from "./helpers";
+import { card, createWorkspace, docId, freshApp, importViaLibrary, openSettingsTab } from "./helpers";
 
 // UI 배율 (설정 > 일반, Ctrl+Shift+=) scales the root font size. Boxes that were fixed in px — library cards and
 // list rows, viewer thumbnails, review rows — kept their size while the text grew and clipped it from 125 % up.
@@ -31,6 +31,43 @@ async function expectNotClipped(el: Locator): Promise<void> {
   });
   expect(r.overflowY, "content taller than its box").toBeLessThanOrEqual(1);
   expect(r.outside, "text descendants outside the box").toBe(0);
+}
+
+/** Nothing inside `el` sticks out sideways: its content fits its width and every laid-out descendant lies within its box. */
+async function expectInsideHorizontally(el: Locator): Promise<void> {
+  const r = await el.evaluate((node) => {
+    const box = node.getBoundingClientRect();
+    let outside = 0;
+    for (const child of Array.from(node.querySelectorAll("*"))) {
+      if (getComputedStyle(child).display === "none") continue;
+      const c = child.getBoundingClientRect();
+      if (c.width === 0) continue;
+      if (c.right > box.right + 1 || c.left < box.left - 1) outside++;
+    }
+    return { overflowX: node.scrollWidth - node.clientWidth, outside };
+  });
+  expect(r.overflowX, "content wider than its box").toBeLessThanOrEqual(1);
+  expect(r.outside, "descendants outside the box").toBe(0);
+}
+
+/**
+ * No horizontal scrollbar anywhere inside `el`: neither on `el` itself nor on a descendant that scrolls
+ * (`overflow-x: auto | scroll`), except the ones marked `data-hscroll="ok"` (wide tables that are meant to
+ * scroll sideways inside their own box).
+ */
+async function expectNoHorizontalOverflow(el: Locator): Promise<void> {
+  const r = await el.evaluate((node) => {
+    const bars: string[] = [];
+    for (const child of [node, ...Array.from(node.querySelectorAll("*"))]) {
+      const style = getComputedStyle(child);
+      if (style.display === "none") continue;
+      const scrolls = child === node || style.overflowX === "auto" || style.overflowX === "scroll";
+      if (!scrolls || child.getAttribute("data-hscroll") === "ok") continue;
+      if (child.scrollWidth > child.clientWidth + 1) bars.push(`${child.tagName.toLowerCase()}${child.getAttribute("data-testid") ? `[${child.getAttribute("data-testid")}]` : ""} ${child.scrollWidth}>${child.clientWidth}`);
+    }
+    return bars;
+  });
+  expect(r, "elements with a horizontal scrollbar").toEqual([]);
 }
 
 type Box = { x: number; y: number; width: number; height: number };
@@ -121,6 +158,67 @@ test.describe("UI 배율", () => {
     expect((await title.boundingBox())!.height, "title line is not squeezed").toBeGreaterThan(12);
     await expect(c.getByText(/쪽 · /)).toBeVisible();
     await expectNotClipped(c);
+  });
+});
+
+test.describe("UI 배율 — 긴 파일 이름", () => {
+  test("양식 등록 from 설정 > 양식·추출 항목: the dialog opens inside the viewport and a long file name stays inside its row and the summary box at 150 % and 90 %", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    // 70 characters, Korean and Latin, no spaces (0.7.0 item 7: the discovery badge pushed past its box at higher scales).
+    const longName = `${"가나다라마바사ABCDEFG".repeat(5)}.hwpx`;
+    await importViaLibrary(page, [`D:\\scan\\${longName}`], { autoLevel: "none" });
+    const id = await docId(page, longName);
+    for (const percent of [150, 90] as const) {
+      await setScale(page, percent);
+      await openSettingsTab(page, "schemas");
+      await page.getByTestId("schemas-register-form").click();
+      const dialog = page.getByTestId("form-register-dialog");
+      await expect(dialog).toBeVisible();
+      await expect(dialog).toBeInViewport();
+      expect((await dialog.boundingBox())!.y, "dialog starts inside the window").toBeGreaterThanOrEqual(0);
+      await page.getByTestId(`form-register-doc-${id}`).check();
+      // The row truncates the name (full name in the tooltip) instead of widening the list or the dialog.
+      await expectInsideHorizontally(page.getByTestId("form-register-docs"));
+      await expectInsideHorizontally(dialog);
+      await page.getByTestId("form-register-derive").click();
+      await expect(page.getByTestId("schema-editor")).toBeVisible({ timeout: 15_000 });
+      const summary = page.getByTestId("schema-discovery-summary");
+      await expect(summary).toBeVisible();
+      await expect(summary.getByTestId(`schema-discovery-doc-${id}`)).toHaveAttribute("title", new RegExp(longName.slice(0, 20)));
+      await expectInsideHorizontally(summary);
+      // Leaving the tab drops the unsaved draft, so the next round starts clean.
+      await openSettingsTab(page, "general");
+    }
+  });
+});
+
+test.describe("UI 배율 — 문서 작성", () => {
+  test("the preview is scaled to its column: no sideways overflow and no page scroll at 150 % and 90 % (0.7.0)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await page.getByTestId("nav-generate").click();
+    await page.getByTestId("generate-template").click();
+    await page.getByRole("option", { name: ko.generate.templates.estimate }).click();
+    await page.getByTestId("generate-content").fill("DocuLens에 백엔드개발 고급 3MM 단가 2,500,000원, 유효기간 30일 견적서");
+    await page.getByTestId("generate-run").click();
+    await expect(page.getByTestId("generate-preview-frame")).toHaveAttribute("data-loaded", "true", { timeout: 15_000 });
+    for (const percent of [150, 90] as const) {
+      await setScale(page, percent);
+      await page.getByTestId("nav-generate").click();
+      await expect(page.getByTestId("generate-preview-frame")).toBeVisible();
+      await expectNoHorizontalOverflow(page.getByTestId("page-generate"));
+      // The page itself never scrolls: each column scrolls on its own.
+      const main = page.locator("main#main");
+      expect(await main.evaluate((el) => el.scrollHeight - el.clientHeight), `main scrolls vertically at ${percent} %`).toBeLessThanOrEqual(1);
+      expect(await main.evaluate((el) => el.scrollWidth - el.clientWidth), `main scrolls sideways at ${percent} %`).toBeLessThanOrEqual(1);
+      // The A4 sheet is wider than the 1280 px window's centre column, so it is shrunk to fit and lies inside the box.
+      expect(await page.getByTestId("generate-preview-box").getAttribute("data-scale")).not.toBe("1.00");
+      const box = (await page.getByTestId("generate-preview-box").boundingBox())!;
+      const frame = (await page.getByTestId("generate-preview-frame").boundingBox())!;
+      expect(frame.x + frame.width).toBeLessThanOrEqual(box.x + box.width + 1);
+      expect(frame.y + frame.height).toBeLessThanOrEqual(box.y + box.height + 1);
+    }
   });
 });
 

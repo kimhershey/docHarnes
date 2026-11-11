@@ -38,8 +38,8 @@ use super::prompts::{self, SourceBlock};
 use super::schema;
 use super::templates::{self, compact, TemplateSpec};
 use super::{
-    Draft, DraftBlock, DraftCitation, DraftField, DraftOutcome, DraftRequest, DraftTable, GenerateDeps, SourceRef,
-    TemplateKind, TemplateRef,
+    sections_of, Draft, DraftBlock, DraftCitation, DraftField, DraftOutcome, DraftRequest, DraftTable, GenerateDeps,
+    ReviseScope, SourceRef, TemplateKind, TemplateRef,
 };
 
 /// Upper bound on numbered sources shown to the model.
@@ -631,9 +631,11 @@ fn finish_draft(d: &mut Draft, spec: &TemplateSpec, req: &DraftRequest) {
     d.language = req.language;
     d.tone = req.tone;
     d.length = req.length;
-    // Keep the request for regeneration without nesting the whole previous draft inside it.
+    // Keep the request for regeneration without nesting the whole previous draft inside it (nor the
+    // 0.7.0 revision scope, which belongs to one call).
     let mut stored = req.clone();
     stored.previous = None;
+    stored.revise = None;
     d.request = Some(Box::new(stored));
 }
 
@@ -1017,6 +1019,10 @@ pub fn draft(deps: &GenerateDeps<'_>, req: &DraftRequest) -> Result<DraftOutcome
     if deps.cancelled() {
         return Err(CoreError::Cancelled);
     }
+    // 0.7.0: a section-level revision edits `previous` in place; `Whole` is the regeneration below.
+    if let Some(scope) = req.revise.as_ref().filter(|s| !matches!(s, ReviseScope::Whole)) {
+        return revise(deps, req, scope, started);
+    }
     let spec = resolve_spec(deps.db, req)?;
     let mut notes: Vec<String> = Vec::new();
     let sources = gather_sources(deps, req, &mut notes)?;
@@ -1307,6 +1313,12 @@ fn draft_split(
             .collect();
         let budget = prompts::source_budget(model.ctx, budget_tokens);
         let previous = previous_summary(&d.body);
+        // 0.7.0: a regeneration passes the instruction and this section's earlier text along.
+        let earlier = req.previous.as_deref().and_then(|p| earlier_section_text(&p.body, &plan.heading));
+        let revision = (req.previous.is_some() || req.feedback.is_some()).then_some(prompts::SectionRevision {
+            feedback: req.feedback.as_deref(),
+            previous_section: earlier.as_deref(),
+        });
         let text = prompts::section_user(
             spec,
             req,
@@ -1318,6 +1330,7 @@ fn draft_split(
             budget_tokens,
             &facts,
             &previous,
+            revision,
             prompt_ko,
         );
         match call_json_with_retry(
@@ -1392,6 +1405,247 @@ fn draft_split(
         elapsed_ms: started.elapsed().as_millis() as u64,
         source: "model".into(),
         sections: sections_done,
+    })
+}
+
+/// Plain text of body blocks (headings as `## …`, lists joined), for prompts.
+fn blocks_text(blocks: &[DraftBlock]) -> String {
+    let mut text = String::new();
+    for b in blocks {
+        match b {
+            DraftBlock::Heading { text: t, .. } => {
+                text.push_str("\n## ");
+                text.push_str(t);
+                text.push('\n');
+            }
+            DraftBlock::Paragraph { text: t, .. } => {
+                text.push_str(t);
+                text.push(' ');
+            }
+            DraftBlock::List { items, .. } => {
+                text.push_str(&items.join("; "));
+                text.push(' ');
+            }
+            DraftBlock::TableRef { .. } => {}
+        }
+    }
+    text.trim().to_string()
+}
+
+/// Last `max` characters of a text (prefixed with an ellipsis when cut).
+fn tail_chars(text: &str, max: usize) -> String {
+    let count = text.chars().count();
+    if count > max {
+        format!("…{}", text.chars().skip(count - max).collect::<String>().trim_start())
+    } else {
+        text.to_string()
+    }
+}
+
+/// The text of the section headed `heading` in an earlier draft body (without the heading).
+fn earlier_section_text(body: &[DraftBlock], heading: &str) -> Option<String> {
+    let want = compact(heading);
+    sections_of(body)
+        .into_iter()
+        .find(|s| s.heading.as_deref().map(compact) == Some(want.clone()))
+        .map(|s| {
+            let start = if s.heading.is_some() { s.start + 1 } else { s.start };
+            truncate(&blocks_text(&body[start..s.end]), prompts::REVISION_SECTION_CHARS)
+        })
+        .filter(|t| !t.is_empty())
+}
+
+/// Revises `req.previous` in place (0.7.0 plan §1.5): one section rewritten or a new section
+/// inserted from one model call that sees the facts, the sources, the surrounding text and the
+/// instruction (`req.feedback`). Fields, tables and the other sections stay as they are.
+fn revise(deps: &GenerateDeps<'_>, req: &DraftRequest, scope: &ReviseScope, started: Instant) -> Result<DraftOutcome> {
+    let prev = req
+        .previous
+        .as_deref()
+        .ok_or_else(|| CoreError::Invalid("revise needs the draft being revised (previous)".into()))?;
+    let instruction = req
+        .feedback
+        .as_deref()
+        .map(str::trim)
+        .filter(|f| !f.is_empty())
+        .ok_or_else(|| CoreError::Invalid("revise needs an instruction (feedback)".into()))?;
+    let ko = deps.ko();
+    let prompt_ko = req.language == Language::Ko;
+    let sections = sections_of(&prev.body);
+    let (rewrite, start, end, index, heading) = match scope {
+        ReviseScope::Section { section } => {
+            let s = section.checked_sub(1).and_then(|i| sections.get(i)).ok_or_else(|| {
+                CoreError::Invalid(format!("section {section} does not exist ({} sections)", sections.len()))
+            })?;
+            (true, s.start, s.end, *section, s.heading.clone())
+        }
+        ReviseScope::InsertAfter { section, heading } => {
+            let (pos, index) = match section {
+                Some(n) => {
+                    let s = n.checked_sub(1).and_then(|i| sections.get(i)).ok_or_else(|| {
+                        CoreError::Invalid(format!("section {n} does not exist ({} sections)", sections.len()))
+                    })?;
+                    (s.end, n + 1)
+                }
+                None => (prev.body.len(), sections.len() + 1),
+            };
+            (false, pos, pos, index, heading.as_deref().map(str::trim).filter(|h| !h.is_empty()).map(str::to_string))
+        }
+        ReviseScope::Whole => unreachable!("handled by draft()"),
+    };
+    let total = if rewrite { sections.len() } else { sections.len() + 1 };
+    let spec = resolve_spec(deps.db, req)?;
+    let mut notes: Vec<String> = Vec::new();
+    let sources = gather_sources(deps, req, &mut notes)?;
+    if deps.cancelled() {
+        return Err(CoreError::Cancelled);
+    }
+    let Some(vlm) = deps.vlm else {
+        return Err(CoreError::EngineNotRunning);
+    };
+    let model = Vlm {
+        chat: vlm.chat,
+        model: vlm.model.clone(),
+        profile: vlm.profile,
+        cancel: vlm.cancel.or(deps.cancel),
+        temperature: Some(vlm.temperature.unwrap_or(prompts::TEMPERATURE)),
+        seed: vlm.seed,
+        ctx: vlm.ctx,
+        geometry: vlm.geometry,
+    };
+    let tokens = prompts::reply_budget(req).clamp(prompts::MIN_SECTION_TOKENS, prompts::MAX_SECTION_TOKENS);
+    let budget = prompts::source_budget(model.ctx, tokens);
+    let blocks = source_blocks(&sources);
+    let facts: Vec<(String, String)> = std::iter::once((tr(ko, "제목", "title"), prev.title.clone()))
+        .chain(
+            prev.fields
+                .iter()
+                .filter(|f| !f.value.trim().is_empty())
+                .take(11)
+                .map(|f| (f.label.clone(), f.value.clone())),
+        )
+        .collect();
+    let body_start = if rewrite && heading.is_some() { start + 1 } else { start };
+    let current = if rewrite {
+        truncate(&blocks_text(&prev.body[body_start..end]), prompts::REVISION_SECTION_CHARS)
+    } else {
+        String::new()
+    };
+    let before = tail_chars(&blocks_text(&prev.body[..start]), prompts::REVISION_CONTEXT_CHARS);
+    let after = truncate(&blocks_text(&prev.body[end..]), prompts::REVISION_CONTEXT_CHARS);
+    let rv = prompts::RevisePrompt {
+        rewrite,
+        index,
+        total,
+        heading: heading.as_deref(),
+        tokens,
+        facts: &facts,
+        current: &current,
+        before: &before,
+        after: &after,
+        instruction,
+    };
+    let user_text = prompts::revise_user(&spec, req, &blocks, budget, &rv, prompt_ko);
+    let system = json!({ "role": "system", "content": prompts::system(prompt_ko) });
+    if let Some(p) = deps.progress {
+        p(0.3, "revising");
+    }
+    let (value, reply) = call_json_with_retry(
+        &model,
+        &system,
+        &user_text,
+        schema::REVISE_SCHEMA_NAME,
+        &schema::section_schema(),
+        tokens,
+        prompt_ko,
+    )?;
+    let refs: Vec<&Source> = sources.iter().collect();
+    let mut new_blocks = parse_body(&value["blocks"], &refs);
+    let mut d = prev.clone();
+    if rewrite && new_blocks.is_empty() {
+        d.notes.push(tr(
+            ko,
+            "모델 응답이 비어 있어 절을 그대로 두었습니다.",
+            "The model reply was empty; the section was left as it was.",
+        ));
+    } else {
+        let mut replacement: Vec<DraftBlock> = Vec::new();
+        if rewrite {
+            if let Some(h) = &heading {
+                replacement.push(DraftBlock::Heading { level: 2, text: h.clone() });
+            }
+        } else {
+            let title = match &heading {
+                Some(h) => h.clone(),
+                None => match new_blocks.first() {
+                    Some(DraftBlock::Heading { text, .. }) if !text.trim().is_empty() => {
+                        let t = text.trim().to_string();
+                        new_blocks.remove(0);
+                        t
+                    }
+                    _ => tr(ko, "새 절", "New section"),
+                },
+            };
+            replacement.push(DraftBlock::Heading { level: 2, text: title });
+        }
+        // The model's own headings are sub-headings of the section.
+        for b in &mut new_blocks {
+            if let DraftBlock::Heading { level, .. } = b {
+                *level = 3;
+            }
+        }
+        replacement.extend(new_blocks);
+        // The model cannot emit table references: the tables the section placed stay in it (after the new text).
+        replacement.extend(prev.body[start..end].iter().filter(|b| matches!(b, DraftBlock::TableRef { .. })).cloned());
+        d.body.splice(start..end, replacement);
+    }
+    for s in &sources {
+        let c = &s.citation;
+        if !d.references.iter().any(|o| o.doc_id == c.doc_id && o.chunk_id == c.chunk_id && o.page == c.page) {
+            d.references.push(c.clone());
+        }
+    }
+    d.model = Some(model.model.clone());
+    d.updated_at = chrono::Utc::now();
+    let mut stored = req.clone();
+    stored.previous = None;
+    stored.feedback = None;
+    stored.revise = None;
+    d.request = Some(Box::new(stored));
+    for n in notes {
+        if !d.notes.contains(&n) {
+            d.notes.push(n);
+        }
+    }
+    let where_ = match (&heading, rewrite) {
+        (Some(h), true) => format!("{index}절 '{h}'"),
+        (None, true) => format!("{index}절"),
+        (Some(h), false) => format!("{index}절 '{h}' 추가"),
+        (None, false) => format!("{index}절 추가"),
+    };
+    d.notes.push(if ko {
+        format!("AI 수정({where_}): {}", truncate(instruction, 120))
+    } else {
+        format!(
+            "AI revision (section {index}{}): {}",
+            heading.as_deref().map(|h| format!(" '{h}'")).unwrap_or_default(),
+            truncate(instruction, 120)
+        )
+    });
+    if reply.truncated {
+        d.notes.push(section_truncated_note(index, heading.as_deref().unwrap_or(""), ko));
+    }
+    // Keep the newest notes (the revision note last).
+    let excess = d.notes.len().saturating_sub(12);
+    d.notes.drain(..excess);
+    super::validate::validate(&mut d);
+    Ok(DraftOutcome {
+        draft: d,
+        prompt_tokens: reply.usage.prompt,
+        completion_tokens: reply.usage.completion,
+        elapsed_ms: started.elapsed().as_millis() as u64,
+        source: "model".into(),
+        sections: 1,
     })
 }
 

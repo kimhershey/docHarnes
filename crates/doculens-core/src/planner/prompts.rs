@@ -203,6 +203,17 @@ pub fn few_shots(ko: bool) -> Vec<(String, Value)> {
             }),
         ),
         (
+            "2절을 더 자세히 써줘".to_string(),
+            json!({
+                "summary": "문서 작성 화면에 열린 초안의 2절을 더 자세히 다시 씁니다",
+                "intent": "revise_draft",
+                "scope": {},
+                "operations": [{ "op": "revise_draft", "scope": "section", "section": 2, "instruction": "2절을 더 자세히 써줘" }],
+                "requires_confirmation": false,
+                "confidence": 0.9
+            }),
+        ),
+        (
             "개발 계약서의 계약금액은 제안서의 제안 금액과 같아야 해 (프로젝트: 한빛 외주)".to_string(),
             json!({
                 "summary": "한빛 외주 프로젝트에 계약금액 = 제안 금액 규칙을 추가(규칙 그리드에서 확인)",

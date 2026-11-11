@@ -113,7 +113,7 @@ export function FormRegisterDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => (o ? onOpenChange(true) : close())}>
-      <DialogContent closeLabel={t("common.close")} data-testid="form-register-dialog" className="relative" {...drop.props}>
+      <DialogContent closeLabel={t("common.close")} data-testid="form-register-dialog" {...drop.props}>
         <DropHint active={drop.isActive} over={drop.isOver} testId="form-register-drop-hint">
           {t("schemas.form.drop_hint")}
         </DropHint>
@@ -121,8 +121,8 @@ export function FormRegisterDialog({
           <DialogTitle>{t("schemas.form.title")}</DialogTitle>
           <DialogDescription>{t("schemas.form.hint")}</DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-1">
+        <div className="flex min-w-0 flex-col gap-3">
+          <div className="flex min-w-0 flex-col gap-1">
             <Label>{t("schemas.form.document")}</Label>
             <p className="text-xs text-fg-subtle">{t("schemas.form.documents_hint")}</p>
             {docs && docs.length === 0 ? (
@@ -130,9 +130,11 @@ export function FormRegisterDialog({
             ) : (
               <div className="max-h-56 overflow-y-auto rounded-md border border-border" data-testid="form-register-docs">
                 {(docs ?? []).map((d) => (
-                  <label key={d.id} className="flex cursor-pointer items-center gap-2 px-2 py-1 text-sm hover:bg-bg-sunken">
-                    <input type="checkbox" className="size-4" checked={selected.includes(d.id)} onChange={() => toggle(d.id)} disabled={busy} data-testid={`form-register-doc-${d.id}`} />
-                    <span className="truncate">{d.title ?? d.original_name}</span>
+                  <label key={d.id} className="flex min-w-0 cursor-pointer items-center gap-2 px-2 py-1 text-sm hover:bg-bg-sunken">
+                    <input type="checkbox" className="size-4 shrink-0" checked={selected.includes(d.id)} onChange={() => toggle(d.id)} disabled={busy} data-testid={`form-register-doc-${d.id}`} />
+                    <span className="min-w-0 flex-1 truncate" title={d.original_name}>
+                      {d.title ?? d.original_name}
+                    </span>
                     <span className="ml-auto shrink-0 text-xs uppercase text-fg-subtle">{d.source_kind}</span>
                   </label>
                 ))}
@@ -153,7 +155,9 @@ export function FormRegisterDialog({
                 {t("schemas.form.deriving")}
               </span>
               <Progress value={job?.progress ?? null} label={t("schemas.form.deriving")} />
-              <span className="text-xs text-fg-subtle">{detail ?? t("schemas.pending_hint")}</span>
+              <span className="text-xs text-fg-subtle" data-testid="form-register-pending-hint">
+                {job?.state === "queued" ? t("schemas.form.waiting_hint") : (detail ?? t("schemas.pending_hint"))}
+              </span>
             </div>
           )}
         </div>

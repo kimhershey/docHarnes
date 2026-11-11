@@ -4,8 +4,9 @@ import ko from "../src/i18n/ko.json" with { type: "json" };
 import { card, createWorkspace, docId, freshApp, importViaLibrary, tpl } from "./helpers";
 
 // 0.5.0 참고 자료 (plan §2) against the browser mock: the common reference material pinned on the projects
-// screen (groups, the import wizard, documents, the 사용 toggle), a project's 참고 자료 tab (group created on
-// demand, library picker, wizard pinned to the group, deleted with the project), the "프로젝트에 넣기" dialog
+// screen (groups, the import wizard, documents, the 사용 toggle), a project's 참고 자료 on the unified 문서 tab
+// (0.7.0 plan §1.1: group created on demand, one add dialog with a kind choice, the 구분 switch, wizard pinned to
+// the group, deleted with the project), the "프로젝트에 넣기" dialog
 // (target / kind / suggestion / inline project / common group), the assistant's project scope (the mock search
 // honours `project_id`) and the advanced panel under 설정 > 참고 자료. Korean morphology / recall are covered by
 // the Rust golden-set tests.
@@ -81,7 +82,7 @@ test.describe("0.5.0 reference material", () => {
     await expect(card(page, "정보보안지침.pdf")).toBeVisible();
   });
 
-  test("project 참고 자료 tab: the group is created on demand, takes library documents and files, and goes with the project", async ({ page }) => {
+  test("project 문서 tab: 업무 문서 and 참고 자료 in one list — the group is created on demand, the kind switches, files import as 참고 자료, and the group goes with the project", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
     await importViaLibrary(page, ["D:\\scan\\요구사항정의서-v1.2.pdf", "D:\\scan\\정보보안지침.pdf"], { autoLevel: "none" });
@@ -89,24 +90,40 @@ test.describe("0.5.0 reference material", () => {
     const guide = await docId(page, "정보보안지침.pdf");
     await page.getByTestId("nav-projects").click();
     await newProject(page, "한빛 포털 구축");
-    // 업무 문서 on the 문서 tab …
+    // One 문서 tab (0.7.0 plan §1.1); the backend creates the project's reference group when the tab first loads.
+    const tab = page.getByTestId("project-documents");
+    await expect(tab).toHaveAttribute("data-group-id", /.+/);
+    await expect(page.locator('[data-testid^="project-tab-"]')).toHaveCount(4);
+    await expect(page.getByTestId("project-documents-empty")).toBeVisible();
+    // 업무 문서 — the add dialog's default kind …
     await page.getByTestId("project-add-documents").click();
+    await expect(page.getByTestId("project-add-kind-work")).toBeChecked();
     await page.getByTestId(`project-add-doc-${srs}`).check();
     await page.getByTestId("project-add-done").click();
-    await expect(page.getByTestId(`project-doc-${srs}`)).toBeVisible();
-    // … 참고 자료 on their own tab, whose group the backend creates on the first visit.
-    await page.getByTestId("project-tab-reference").click();
-    const tab = page.getByTestId("project-reference");
-    await expect(tab).toBeVisible();
-    await expect(tab).toHaveAttribute("data-group-id", /.+/);
-    await expect(page.getByTestId("project-reference-empty")).toBeVisible();
-    await page.getByTestId("project-reference-add").click();
-    await expect(page.getByTestId("project-reference-pick-dialog")).toBeVisible();
-    await page.getByTestId(`project-reference-pick-doc-${guide}`).check();
-    await page.getByTestId("project-reference-pick-done").click();
-    await expect(page.getByTestId(`project-reference-doc-${guide}`)).toBeVisible();
+    await expect(page.getByTestId(`project-doc-${srs}`)).toHaveAttribute("data-kind", "work");
+    // … and 참고 자료 from the same dialog.
+    await page.getByTestId("project-add-documents").click();
+    await page.getByTestId("project-add-kind-reference").check();
+    await page.getByTestId(`project-add-doc-${guide}`).check();
+    await page.getByTestId("project-add-done").click();
+    await expect(page.getByTestId(`project-doc-${guide}`)).toHaveAttribute("data-kind", "reference");
     await expect(page.getByTestId("toaster")).toContainText(tpl(ko.projects.reference.added, { count: 1 }));
-    // The wizard is pinned to the project's group.
+    await expect(page.getByTestId("project-doc-counts")).toHaveText(tpl(ko.projects.detail.doc_counts, { work: 1, reference: 1 }));
+    // The filter chips narrow the list.
+    await page.getByTestId("project-docs-filter-reference").click();
+    await expect(page.getByTestId("project-documents-table").locator("tbody tr")).toHaveCount(1);
+    await expect(page.getByTestId(`project-doc-${guide}`)).toBeVisible();
+    await page.getByTestId("project-docs-filter-all").click();
+    await expect(page.getByTestId("project-documents-table").locator("tbody tr")).toHaveCount(2);
+    // The 구분 button moves a document between the kinds (the role follows): the guideline becomes 업무 문서, then 참고 자료 again.
+    await page.getByTestId(`project-doc-${guide}`).getByTestId("project-doc-kind").click();
+    await expect(page.getByTestId(`project-doc-${guide}`)).toHaveAttribute("data-kind", "work", { timeout: 10_000 });
+    await expect(page.getByTestId("toaster")).toContainText(tpl(ko.projects.documents.kind_changed, { name: "정보보안지침.pdf", kind: ko.projects.put.kind_work }));
+    await expect(page.getByTestId("project-doc-counts")).toHaveText(tpl(ko.projects.detail.doc_counts, { work: 2, reference: 0 }));
+    await page.getByTestId(`project-doc-${guide}`).getByTestId("project-doc-kind").click();
+    await expect(page.getByTestId(`project-doc-${guide}`)).toHaveAttribute("data-kind", "reference", { timeout: 10_000 });
+    await expect(page.getByTestId("project-doc-counts")).toHaveText(tpl(ko.projects.detail.doc_counts, { work: 1, reference: 1 }));
+    // The wizard is pinned to the project's group: files come in as 참고 자료.
     await page.getByTestId("project-reference-ingest").click();
     await expect(page.getByTestId("ingest-wizard")).toBeVisible();
     await page.getByTestId("ingest-paths").fill("D:\\규정\\출장비규정-4p.pdf");
@@ -116,7 +133,8 @@ test.describe("0.5.0 reference material", () => {
     await expect(page.getByTestId("ingest-plan")).toBeVisible();
     await page.getByTestId("ingest-start").click();
     await expect(page.getByTestId("ingest-wizard")).toBeHidden();
-    await expect(page.getByTestId("project-reference-table").locator("tbody tr")).toHaveCount(2, { timeout: 20_000 });
+    await expect(page.getByTestId("project-documents-table").locator('tbody tr[data-kind="reference"]')).toHaveCount(2, { timeout: 20_000 });
+    await expect(page.getByTestId("project-documents-table").locator("tbody tr")).toHaveCount(3);
     // The project's group is not one of the common groups.
     await page.getByTestId("project-back").click();
     await expect(page.getByTestId("projects-common-reference")).toHaveAttribute("data-groups", "0");
@@ -161,10 +179,10 @@ test.describe("0.5.0 reference material", () => {
     await dialog.getByTestId("put-confirm").click();
     await expect(dialog).toBeHidden();
     await expect(page.getByTestId("toaster")).toContainText(tpl(ko.projects.put.done_reference, { name: "한빛상사 거래처 등록", count: 2 }));
+    // The old `?tab=reference` link lands on the unified 문서 tab (0.7.0): both rows are 참고 자료, none is 업무 문서.
     await page.goto(`/#/projects/${hanbitId}?tab=reference`);
-    await expect(page.getByTestId("project-reference-table").locator("tbody tr")).toHaveCount(2, { timeout: 10_000 });
-    await page.getByTestId("project-tab-documents").click();
-    await expect(page.getByTestId("project-documents-table")).toHaveCount(0);
+    await expect(page.getByTestId("project-documents-table").locator('tbody tr[data-kind="reference"]')).toHaveCount(2, { timeout: 10_000 });
+    await expect(page.getByTestId("project-documents-table").locator('tbody tr[data-kind="work"]')).toHaveCount(0);
 
     // The estimate also goes to the common reference material, as a new group (업무 문서 is not offered there).
     await page.goto(`/#/projects?put=${estimate}`);
@@ -224,12 +242,13 @@ test.describe("0.5.0 reference material", () => {
     await expect(second.getByTestId("citation-chip").first()).toBeVisible();
 
     // Once the guideline is the project's 참고 자료 the same question is answered within the project scope.
-    await page.goto(`/#/projects/${pid}?tab=reference`);
-    await expect(page.getByTestId("project-reference")).toHaveAttribute("data-group-id", /.+/, { timeout: 10_000 });
-    await page.getByTestId("project-reference-add").click();
-    await page.getByTestId(`project-reference-pick-doc-${guide}`).check();
-    await page.getByTestId("project-reference-pick-done").click();
-    await expect(page.getByTestId(`project-reference-doc-${guide}`)).toBeVisible();
+    await page.goto(`/#/projects/${pid}?tab=documents`);
+    await expect(page.getByTestId("project-documents")).toHaveAttribute("data-group-id", /.+/, { timeout: 10_000 });
+    await page.getByTestId("project-add-documents").click();
+    await page.getByTestId("project-add-kind-reference").check();
+    await page.getByTestId(`project-add-doc-${guide}`).check();
+    await page.getByTestId("project-add-done").click();
+    await expect(page.getByTestId(`project-doc-${guide}`)).toHaveAttribute("data-kind", "reference");
     await page.getByTestId("nav-assistant").click();
     await page.getByTestId("assistant-scope").click();
     await page.getByTestId("assistant-scope-project").click();

@@ -53,6 +53,8 @@ pub struct UiPlanContext {
     pub project_id: Option<String>,
     /// Earlier turns of the assistant conversation (oldest first).
     pub history: Vec<ConversationTurn>,
+    /// 0.7.0: the draft open in the 문서 작성 screen (default target of `revise_draft`).
+    pub draft_id: Option<String>,
     /// Interpretation mode (default: the model reads every sentence; `rules_first` is the legacy path).
     pub routing: Option<PlanMode>,
 }
@@ -150,6 +152,7 @@ pub fn build_context(app: &AppHandle, ui: &UiPlanContext) -> UiResult<PlanContex
         projects,
         current_project: ui.current_project.clone(),
         scope_project: ui.project_id.clone(),
+        draft_id: ui.draft_id.clone().filter(|d| !d.trim().is_empty()),
         history: ui.history.clone(),
     })
 }

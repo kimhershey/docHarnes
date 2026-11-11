@@ -105,14 +105,17 @@ import {
   type Screen,
   type SearchResponse,
   type StepPreview,
+  type ReviseScope,
   type StepResult,
   type Totals,
   type UiPlanContext,
   type UndoReport,
   type UndoResponse,
+  defaultDraftRequest,
 } from "./types";
 import { carriedText } from "./carried-text";
 import { docTypeAliases } from "./doc-type-aliases";
+import { reviseScopeLabel } from "./draft-sections";
 import { coerceSettingValue, resolveSettingKey, settingSpec } from "./settingsCatalog";
 import { isJobFinished, type Collection, type GlossaryEntry, type ClassifyResult, type ClassifyApplyResult, type ProjectTemplate } from "./types";
 
@@ -1144,6 +1147,61 @@ function projectRefOf(t: Text, ctx: PlanContext): string | null {
   return named?.id ?? null;
 }
 
+/** Words that name a revision of existing text (as opposed to drafting a new document). */
+const REVISE_WORDS = ["다시 써", "다시써", "고쳐", "수정", "바꿔", "자세히", "구체적", "짧게", "길게", "보완", "다듬", "rewrite", "revise", "expand", "shorten", "more detail", "improve"];
+
+/**
+ * 0.7.0 §1.5 초안 어시스턴트 as a command: "3절 다시 써줘 — 더 자세히", "2절 뒤에 새 절 추가", "결론 절 추가해줘",
+ * "초안 전체 격식체로" → `revise_draft` on the draft open on the 문서 작성 screen; without one, a clarification.
+ */
+function ruleReviseDraft(t: Text, ctx: PlanContext): Plan | null {
+  const raw = t.raw.trim();
+  const sectionNo = raw.match(/(\d+)\s*절/u) ?? raw.match(/section\s*(\d+)/iu);
+  const mentionsSection = /절|section/iu.test(raw);
+  const mentionsDraft = /초안|draft/iu.test(raw);
+  if (!mentionsSection && !mentionsDraft) return null;
+  const insert = mentionsSection && /새\s*절|새로운\s*절|절\s*(?:을|를)?\s*(?:추가|넣|만들)|add|insert|new section/iu.test(raw);
+  const rewrite = !insert && !!sectionNo && has(t, REVISE_WORDS);
+  const whole = !insert && !rewrite && /전체|whole|entire/iu.test(raw) && (mentionsDraft || has(t, REVISE_WORDS));
+  if (!insert && !rewrite && !whole) return null;
+  if (!ctx.draft_id) {
+    return clarify(tr(t.ko, "문서 작성 화면에서 초안을 먼저 여세요. 초안이 열려 있어야 절을 고치거나 추가할 수 있습니다.", "Open a draft on the generate screen first — sections can only be revised or added on an open draft."), 0.7);
+  }
+  // The instruction is the sentence minus the scope words; an empty remainder gets a default per scope.
+  const strip = (s: string) =>
+    s
+      .replace(/(\d+)\s*절/gu, " ")
+      .replace(/section\s*\d+/giu, " ")
+      .replace(/뒤에|다음에|after|초안(?:의|을|를)?|draft|전체(?:를|을)?|whole|entire/giu, " ")
+      .replace(/새(?:로운)?\s*절|new section|절\s*(?:을|를)?/giu, " ")
+      .replace(/추가(?:해\s*줘|해줘|해|하고)?|넣어\s*줘|넣어|만들어\s*줘|만들어|add|insert/giu, " ")
+      .replace(/다시\s*써\s*줘|다시\s*써줘|다시\s*써|다시\s*작성(?:해\s*줘|해줘)?|rewrite|revise/giu, " ")
+      .replace(/^[\s,.·\-—]+|[\s,.·\-—]+$/gu, "")
+      .replace(/\s{2,}/gu, " ")
+      .trim();
+  let op: Op;
+  let label: string;
+  if (insert) {
+    const after = sectionNo ? Number(sectionNo[1]) : null;
+    const quoted = quotedOf(raw);
+    const named = sectionNo ? null : raw.match(/([가-힣A-Za-z][가-힣A-Za-z·\s]{0,20}?)\s*절\s*(?:을|를)?\s*(?:추가|넣|만들)/u)?.[1]?.trim();
+    const heading = quoted ?? (named && !/^(새|새로운|new|a)$/iu.test(named) ? named : null);
+    const instruction = strip(quoted ? raw.replace(quoted, " ") : raw) || (t.ko ? `'${heading ?? "새 절"}' 절 작성` : `write the '${heading ?? "new"}' section`);
+    op = { op: "revise_draft", draft_id: ctx.draft_id, scope: "insert_after", section: after, heading, instruction };
+    label = after === null ? (t.ko ? "끝에 새 절" : "a new section at the end") : t.ko ? `${after}절 뒤에 새 절` : `a new section after section ${after}`;
+  } else if (rewrite) {
+    const n = Number(sectionNo![1]);
+    const instruction = strip(raw) || (t.ko ? "더 자연스럽게 다시 쓰기" : "rewrite more naturally");
+    op = { op: "revise_draft", draft_id: ctx.draft_id, scope: "section", section: n, instruction };
+    label = t.ko ? `${n}절 다시 쓰기` : `rewrite section ${n}`;
+  } else {
+    const instruction = strip(raw) || (t.ko ? "전체 다시 쓰기" : "rewrite the whole draft");
+    op = { op: "revise_draft", draft_id: ctx.draft_id, scope: "whole", instruction };
+    label = t.ko ? "전체 다시 쓰기" : "rewrite the whole draft";
+  }
+  return single(op, 0.84, tr(t.ko, `열린 초안을 AI로 수정합니다: ${label}`, `Revise the open draft with the AI: ${label}`));
+}
+
 /** "견적서 만들어줘 …", "이 계약서 내용으로 계약서 다시 써줘", "경비 보고서 초안 작성" → draft_document (§3.13). */
 function ruleDraftDocument(t: Text, ctx: PlanContext): Plan | null {
   if (has(t, ["스키마", "프로젝트", "규칙", "schema", "project", "rule", "양식으로등록", "양식등록", "폴더", "folder"])) return null;
@@ -1689,6 +1747,7 @@ export function rulesPlan(text: string, ctx: PlanContext): Plan | null {
     ruleCheckConsistency(t, ctx) ??
     ruleRequestSupplement(t, ctx) ??
     ruleDefineRule(t, ctx) ??
+    ruleReviseDraft(t, ctx) ??
     ruleDraftDocument(t, ctx) ??
     ruleCompare(t, ctx) ??
     ruleExplain(t, ctx) ??
@@ -1849,6 +1908,13 @@ function resolveProjectId(ref: string | null | undefined, ctx: PlanContext): str
   if (ctx.current_project && ctx.projects.some((x) => x.id === ctx.current_project)) return ctx.current_project;
   // Like `validate.rs`: no open project means `project_required`, even when only one project exists.
   return null;
+}
+
+/** The typed scope of a `revise_draft` op (plan 0.7.0 §1.5). */
+function reviseScopeOf(op: Extract<Op, { op: "revise_draft" }>): ReviseScope {
+  if (op.scope === "whole") return { scope: "whole" };
+  if (op.scope === "section") return { scope: "section", section: op.section ?? 1 };
+  return { scope: "insert_after", section: op.section ?? null, heading: op.heading ?? null };
 }
 
 /** The draft request of a `draft_document` step: sources from ids / the selection / the plan scope. */
@@ -2087,6 +2153,18 @@ export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | nul
         op.question = Array.from(op.question.trim()).slice(0, 300).join("");
         if (!op.question) issues.push(issue(at("question"), "question_empty", "clarify needs a question"));
         break;
+      // -- 0.7.0 초안 어시스턴트 --
+      case "revise_draft": {
+        op.instruction = Array.from((op.instruction ?? "").trim()).slice(0, 2000).join("");
+        if (!op.instruction) issues.push(issue(at("instruction"), "instruction_empty", "revise_draft needs an instruction"));
+        if (op.scope !== "section" && op.scope !== "insert_after" && op.scope !== "whole") issues.push(issue(at("scope"), "scope_invalid", "scope must be section, insert_after or whole"));
+        if (op.section != null && (!Number.isInteger(op.section) || op.section < 1)) issues.push(issue(at("section"), "section_invalid", "section ordinals start at 1"));
+        if (op.scope === "section" && op.section == null) issues.push(issue(at("section"), "section_required", "revise_draft section scope needs a section"));
+        if (op.heading != null && !op.heading.trim()) op.heading = null;
+        if (op.draft_id != null && !op.draft_id.trim()) op.draft_id = null;
+        if (op.draft_id == null && !ctx.draft_id) issues.push(issue(at("draft_id"), "draft_required", "revise_draft needs an open draft"));
+        break;
+      }
       // -- P6 ops --
       case "draft_document": {
         op.content = Array.from(op.content.trim()).slice(0, 4000).join("");
@@ -2344,6 +2422,7 @@ export function buildContext(ui: UiPlanContext = {}): PlanContext {
     projects: mp.projectSummaries(),
     current_project: ui.current_project ?? null,
     history: [...(ui.history ?? [])],
+    draft_id: ui.draft_id ?? null,
   };
 }
 
@@ -3647,6 +3726,16 @@ export function planPreview(plan: Plan, ctx: PlanContext): PlanPreview {
         summary = ko ? "신규 0개" : "0 new files";
         payload = { new: 0 };
         break;
+      // -- 0.7.0 초안 어시스턴트 --
+      case "revise_draft": {
+        const id = op.draft_id ?? ctx.draft_id ?? null;
+        const previous = id ? mg.findDraft(id) : null;
+        const scope = reviseScopeOf(op);
+        const label = previous ? reviseScopeLabel(scope, previous.body, ko) : op.scope;
+        summary = previous ? `'${previous.title}' · ${label} · ${op.instruction.slice(0, 60)}` : tr(ko, "열린 초안이 없습니다", "No open draft");
+        payload = { draft_id: id, title: previous?.title ?? null, scope: op.scope, section: op.section ?? null, heading: op.heading ?? null };
+        break;
+      }
       // -- P6 ops --
       case "draft_document": {
         const req = draftRequestOf(op, plan, ctx);
@@ -4040,6 +4129,19 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
       out.documents.push(...r.documents);
       out.batches.push(r.batch_id);
       return { summary: ko ? `${r.restored}건 다시 실행` : `${r.restored} redone`, payload: r };
+    }
+    // -- 0.7.0 초안 어시스턴트 --
+    case "revise_draft": {
+      // `exec.rs`: the stored draft is revised through the ordinary draft path (`DraftRequest.revise`); the payload is the `DraftOutcome`.
+      const id = op.draft_id ?? ctx.draft_id ?? null;
+      if (!id) throw err("invalid", "draft_required");
+      const previous = mg.getDraft(id);
+      const scope = reviseScopeOf(op);
+      const base = previous.request ?? defaultDraftRequest(ctx.language);
+      const req: DraftRequest = { ...base, content: base.content || previous.title, language: ctx.language, previous, feedback: op.instruction, revise: scope, excluded_sources: base.excluded_sources ?? [] };
+      const outcome = await mg.draftNow(req, ctl, (_stage, frac) => progress("revise_draft", Math.round(frac * 100), 100, previous.title.slice(0, 40)));
+      const label = reviseScopeLabel(scope, previous.body, ko);
+      return { summary: ko ? `'${outcome.draft.title}' 수정 (${label}) — 문서 작성 화면에서 확인·저장` : `Revised '${outcome.draft.title}' (${label}) — review and save in the document generator`, payload: outcome };
     }
     // -- P6 ops --
     case "draft_document": {

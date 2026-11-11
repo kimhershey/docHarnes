@@ -180,6 +180,150 @@ pub fn split_head_note(first: &SectionPlan, total: usize, tokens: u32, ko: bool)
 }
 
 /// User message of one section call of a split draft.
+/// Revision context of a section call: the instruction of a whole-draft regeneration and the
+/// section's text in the previous draft (0.7.0 `ReviseScope::Whole`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SectionRevision<'a> {
+    pub feedback: Option<&'a str>,
+    pub previous_section: Option<&'a str>,
+}
+
+/// Characters of a section's current / earlier text shown to the model.
+pub const REVISION_SECTION_CHARS: usize = 1_800;
+/// Characters of the surrounding text (before / after) shown to a revision call.
+pub const REVISION_CONTEXT_CHARS: usize = 600;
+
+fn facts_block(facts: &[(String, String)], ko: bool, out: &mut String) {
+    if facts.is_empty() {
+        return;
+    }
+    out.push_str(if ko {
+        "\n[확정 정보] (앞서 채운 값 — 그대로 쓰고 바꾸지 마세요)\n"
+    } else {
+        "\n[Settled facts] (already filled — use as is)\n"
+    });
+    for (k, v) in facts.iter().take(12) {
+        out.push_str(&format!("- {k}: {}\n", truncate(v, 120)));
+    }
+}
+
+/// What a revision call rewrites or inserts (0.7.0 plan §1.5).
+#[derive(Debug, Clone, Copy)]
+pub struct RevisePrompt<'a> {
+    /// `true` = rewrite the section `index`; `false` = insert a new section at position `index`.
+    pub rewrite: bool,
+    /// 1-based ordinal of the section (rewrite) or of the new section (insert).
+    pub index: usize,
+    /// Sections after the change.
+    pub total: usize,
+    /// The section's heading (rewrite: the current one; insert: the requested one, if any).
+    pub heading: Option<&'a str>,
+    pub tokens: u32,
+    pub facts: &'a [(String, String)],
+    /// Current text of the section being rewritten.
+    pub current: &'a str,
+    /// Tail of the text before the section and head of the text after it.
+    pub before: &'a str,
+    pub after: &'a str,
+    pub instruction: &'a str,
+}
+
+/// User message of a revision call (`DraftRequest.revise`): one section rewritten in place or a
+/// new section inserted, with the rest of the draft as context and the instruction last.
+pub fn revise_user(
+    spec: &TemplateSpec,
+    req: &DraftRequest,
+    sources: &[SourceBlock<'_>],
+    budget: usize,
+    rv: &RevisePrompt<'_>,
+    ko: bool,
+) -> String {
+    let mut out = String::with_capacity(4_096);
+    let title = rv.heading.map(|h| format!("\"{h}\"")).unwrap_or_else(|| {
+        if ko {
+            "(제목 없음)".into()
+        } else {
+            "(untitled)".into()
+        }
+    });
+    out.push_str(&if rv.rewrite {
+        if ko {
+            format!("문서의 {}/{}번째 절 {title}의 본문을 아래 [수정 요청]대로 다시 써서 JSON으로 출력하세요.\n", rv.index, rv.total)
+        } else {
+            format!("Rewrite the body of section {}/{} {title} of the document per the [Revision request] below, as JSON.\n", rv.index, rv.total)
+        }
+    } else if ko {
+        format!(
+            "문서에 새 절을 추가합니다({}/{}번째 절이 됩니다). {}\n",
+            rv.index,
+            rv.total,
+            match rv.heading {
+                Some(h) => format!("절 제목은 \"{h}\"입니다(자동으로 붙으므로 blocks에는 본문만 넣으세요)."),
+                None => "첫 블록은 새 절의 제목(heading), 그 다음이 본문입니다.".to_string(),
+            }
+        )
+    } else {
+        format!(
+            "Add a new section to the document (it becomes section {}/{}). {}\n",
+            rv.index,
+            rv.total,
+            match rv.heading {
+                Some(h) => format!("Its title is \"{h}\" (added automatically — put only the body in blocks)."),
+                None => "The first block is the new section's heading, the rest its body.".to_string(),
+            }
+        )
+    });
+    request_head(spec, req, ko, &mut out);
+    facts_block(rv.facts, ko, &mut out);
+    sources_block(sources, budget, ko, &mut out);
+    if !rv.before.trim().is_empty() {
+        out.push_str(if ko { "\n[앞 내용 요약]\n" } else { "\n[Text before]\n" });
+        out.push_str(rv.before.trim());
+        out.push('\n');
+    }
+    if rv.rewrite {
+        out.push_str(if ko { "\n[현재 절 본문]\n" } else { "\n[Current section text]\n" });
+        out.push_str(if rv.current.trim().is_empty() {
+            if ko {
+                "(비어 있음)"
+            } else {
+                "(empty)"
+            }
+        } else {
+            rv.current.trim()
+        });
+        out.push('\n');
+    }
+    if !rv.after.trim().is_empty() {
+        out.push_str(if ko { "\n[뒤 내용 요약]\n" } else { "\n[Text after]\n" });
+        out.push_str(rv.after.trim());
+        out.push('\n');
+    }
+    out.push_str(if ko { "\n[수정 요청]\n" } else { "\n[Revision request]\n" });
+    out.push_str(&truncate(rv.instruction.trim(), MAX_FEEDBACK_CHARS));
+    out.push('\n');
+    let paragraphs = (rv.tokens / 450).clamp(1, 8);
+    out.push_str(&if ko {
+        format!(
+            "\n[출력 규칙]\n- blocks: 이 절의 paragraph·list(필요하면 소제목 heading)만, 약 {} 토큰(문단 {paragraphs}개 안팎), 최대 24개 블록.\n\
+             - 수정 요청에 없는 내용은 현재 본문을 유지하고, 요청된 부분만 바꿉니다. 앞·뒤 내용과 겹치지 않게 씁니다.\n\
+             - 금액·날짜·이름은 [확정 정보]·[자료]·[내용]·[현재 절 본문]에 있는 것만 쓰고, 없는 값은 지어내지 않습니다. 자료에서 가져온 문장은 source_index를 적습니다.\n\
+             - 생각 과정 없이 JSON만 출력합니다.",
+            rv.tokens
+        )
+    } else {
+        format!(
+            "\n[Output rules]\n- blocks: only this section's paragraph / list blocks (sub-headings when needed), about {} tokens \
+             ({paragraphs} paragraphs), at most 24 blocks.\n\
+             - Keep what the revision request does not mention; change only what it asks. Do not repeat the text before or after.\n\
+             - Amounts, dates and names come only from the settled facts, the sources, the content and the current text; never invent values; cite sources with source_index.\n\
+             - Output JSON only.",
+            rv.tokens
+        )
+    });
+    out
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn section_user(
     spec: &TemplateSpec,
@@ -192,6 +336,7 @@ pub fn section_user(
     tokens: u32,
     facts: &[(String, String)],
     previous: &str,
+    revision: Option<SectionRevision<'_>>,
     ko: bool,
 ) -> String {
     let mut out = String::with_capacity(4_096);
@@ -201,21 +346,26 @@ pub fn section_user(
         format!("Write only the body of section {index}/{total} \"{}\" of the document, as JSON.\n", plan.heading)
     });
     request_head(spec, req, ko, &mut out);
-    if !facts.is_empty() {
-        out.push_str(if ko {
-            "\n[확정 정보] (앞서 채운 값 — 그대로 쓰고 바꾸지 마세요)\n"
-        } else {
-            "\n[Settled facts] (already filled — use as is)\n"
-        });
-        for (k, v) in facts.iter().take(12) {
-            out.push_str(&format!("- {k}: {}\n", truncate(v, 120)));
-        }
-    }
+    facts_block(facts, ko, &mut out);
     sources_block(sources, budget, ko, &mut out);
     if !previous.trim().is_empty() {
         out.push_str(if ko { "\n[앞 절 요약]\n" } else { "\n[Previous sections]\n" });
         out.push_str(previous.trim());
         out.push('\n');
+    }
+    // 0.7.0: a whole-draft regeneration passes the instruction and the section's earlier text to
+    // every section call (before, only the head call saw them).
+    if let Some(r) = revision {
+        if let Some(prev) = r.previous_section.map(str::trim).filter(|t| !t.is_empty()) {
+            out.push_str(if ko { "\n[이 절의 이전 본문]\n" } else { "\n[Earlier text of this section]\n" });
+            out.push_str(&truncate(prev, REVISION_SECTION_CHARS));
+            out.push('\n');
+        }
+        if let Some(fb) = r.feedback.map(str::trim).filter(|f| !f.is_empty()) {
+            out.push_str(if ko { "\n[수정 요청]\n" } else { "\n[Revision request]\n" });
+            out.push_str(&truncate(fb, MAX_FEEDBACK_CHARS));
+            out.push('\n');
+        }
     }
     let paragraphs = (tokens / 450).clamp(1, 8);
     out.push_str(&if ko {

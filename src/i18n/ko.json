@@ -230,6 +230,17 @@
   "assistant": {
     "title": "AI 어시스턴트",
     "new_chat": "새 대화",
+    "sessions": {
+      "title": "채팅",
+      "new": "새 채팅",
+      "rename": "이름 바꾸기",
+      "delete": "삭제",
+      "delete_confirm": "'{{title}}' 채팅과 그 대화를 삭제할까요? 되돌릴 수 없습니다.",
+      "untitled": "새 채팅",
+      "empty": "채팅이 없습니다.",
+      "messages": "메시지 {{count}}개",
+      "menu": "{{title}} 메뉴"
+    },
     "scope": {
       "label": "범위",
       "all": "전체",
@@ -281,7 +292,7 @@
     },
     "memory": {
       "turns": "기억 {{count}}턴",
-      "hint": "최근 대화(최대 8턴)와 현재 화면(열린 문서·선택·폴더·프로젝트)을 질문·명령과 함께 보냅니다. '새 대화'로 지웁니다."
+      "hint": "최근 대화(최대 8턴)와 현재 화면(열린 문서·선택·폴더·프로젝트)을 질문·명령과 함께 보냅니다. 채팅은 워크스페이스에 저장되며 '새 채팅'으로 새로 시작합니다."
     },
     "cancelled_pending": "대기 중인 질문·플랜을 취소했습니다.",
     "source_control": "제어",
@@ -328,6 +339,7 @@
       "clarify": "명확화",
       "noop": "없음",
       "draft_document": "문서 초안 생성",
+      "revise_draft": "초안 수정",
       "register_form": "양식 등록",
       "explain": "설명",
       "compare": "비교",
@@ -437,6 +449,10 @@
       "cache_limit_gb": "페이지 캐시 상한(GB)",
       "form": "양식 {{name}}",
       "form_auto": "양식 자동 선택",
+      "revise_whole": "전체 다시 쓰기",
+      "revise_section": "{{index}}절 다시 쓰기",
+      "revise_insert_after": "{{index}}절 뒤에 새 절",
+      "revise_append": "끝에 새 절",
       "sample_docs": "샘플 문서 {{count}}개",
       "sources": "인용 문서 {{count}}건",
       "current_document": "현재 문서",
@@ -1186,6 +1202,7 @@
   },
   "errors": {
     "io": "파일 입출력 오류: {{message}}",
+    "chat_interrupted": "앱이 닫혀 답변이 중단되었습니다. 다시 질문해 주세요.",
     "json": "설정 파일 형식 오류: {{message}}",
     "workspace_locked": "다른 인스턴스가 워크스페이스를 사용 중입니다 (pid {{pid}}, {{host}}).",
     "invalid_workspace": "워크스페이스로 사용할 수 없는 경로입니다: {{message}}",
@@ -1327,6 +1344,7 @@
       "drafting": "초안 작성 중",
       "draft_outline": "개요 작성 중",
       "draft_section": "{{index}}/{{total}}절 작성 중",
+      "draft_revising": "초안 수정 중",
       "discovering": "{{name}} · 필드 찾는 중{{page}}",
       "discovery_summary": "문서 {{docs}}개에서 필드 {{fields}}개 병합"
     },
@@ -2145,6 +2163,7 @@
       "name_hint": "비우면 문서 제목/파일명을 사용합니다.",
       "derive": "필드 도출",
       "deriving": "양식에서 필드를 찾는 중…",
+      "waiting_hint": "다른 엔진 작업(문서 처리 등)이 끝나면 시작합니다. 작업 현황에서 순서를 볼 수 있습니다.",
       "confirm": "도출된 필드를 확인·수정한 뒤 등록하세요.",
       "register": "양식 등록",
       "no_docs": "문서함에 문서가 없습니다. 먼저 양식 문서를 가져오세요.",
@@ -2465,10 +2484,7 @@
       "generate": "생성",
       "generating": "생성 중…",
       "cancel": "취소",
-      "regenerate": "다시 생성",
-      "feedback": "재생성 지시",
-      "feedback_placeholder": "예: 더 짧게, 금액을 1,200,000원으로",
-      "excluded_hint": "제외한 참고 문서 {{count}}건은 재생성에 반영됩니다.",
+      "excluded_hint": "제외한 참고 문서 {{count}}건은 다음 수정에 반영됩니다.",
       "job_failed": "생성 실패: {{message}}",
       "job_cancelled": "생성이 취소되었습니다.",
       "job_interrupted": "{{reason}} 작업 현황에서 다시 시도할 수 있습니다.",
@@ -2546,7 +2562,31 @@
       "validated": "검증 통과",
       "issues_badge": "검증 이슈 {{count}}건",
       "loading": "미리보기 갱신 중…",
-      "frame_title": "문서 미리보기"
+      "frame_title": "문서 미리보기",
+      "zoom_label": "미리보기 배율",
+      "zoom_fit": "맞춤",
+      "zoom_full": "100%"
+    },
+    "revise": {
+      "title": "초안 어시스턴트",
+      "hint": "범위를 고르고 지시를 쓰면 AI가 그 절(또는 전체)을 고쳐 씁니다. 필드·표와 다른 절은 그대로 둡니다.",
+      "scope": "범위",
+      "scope_whole": "전체 다시 쓰기",
+      "scope_section": "{{index}}. {{heading}} 다시 쓰기",
+      "scope_insert_after": "{{index}}. {{heading}} 뒤에 새 절",
+      "scope_append": "끝에 새 절 추가",
+      "untitled": "(제목 없음)",
+      "heading": "새 절 제목 (선택)",
+      "heading_placeholder": "예: 결론",
+      "instruction": "지시",
+      "instruction_placeholder": "예: 더 자세히, 금액 근거를 표로, 격식체로",
+      "run": "AI 수정",
+      "running": "수정 중…",
+      "log": "수정 이력",
+      "log_empty": "아직 수정 지시가 없습니다.",
+      "done": "반영했습니다 — {{scope}}",
+      "section_button": "AI 수정",
+      "section_button_title": "이 절을 AI로 고쳐 쓰기"
     },
     "editor": {
       "title": "편집",
@@ -2574,7 +2614,16 @@
       "paragraph": "문단",
       "list": "목록 (줄마다 한 항목)",
       "table_ref": "표 삽입: {{key}}",
-      "open_source": "{{title}} 열기"
+      "open_source": "{{title}} 열기",
+      "add_paragraph": "문단 추가",
+      "add_heading": "절 제목 추가",
+      "add_list": "목록 추가",
+      "add_block_after": "{{index}}번 블록 뒤에 추가",
+      "remove_block": "블록 삭제",
+      "move_up": "위로",
+      "move_down": "아래로",
+      "level_toggle": "제목 수준 {{level}} → {{next}}",
+      "body_empty": "본문이 비어 있습니다."
     },
     "issue_codes": {
       "required_missing": "필수 누락",
@@ -2701,11 +2750,11 @@
       "complete": "완료 처리",
       "complete_hint": "종료일을 오늘로 둡니다.",
       "reopen": "다시 열기",
-      "reopen_hint": "종료일을 지워 진행중으로 되돌립니다."
+      "reopen_hint": "종료일을 지워 진행중으로 되돌립니다.",
+      "doc_counts": "업무 {{work}} · 참고 {{reference}}"
     },
     "tabs": {
       "documents": "문서",
-      "reference": "참고 자료",
       "rules": "규칙",
       "results": "결과",
       "settings": "설정"
@@ -2719,7 +2768,7 @@
       "add": "문서함에서 고르기",
       "remove": "프로젝트에서 제외",
       "open": "열기",
-      "empty": "업무 문서가 없습니다. 문서함에서 고르거나 파일을 끌어다 놓으세요.",
+      "empty": "문서가 없습니다. 문서함에서 고르거나 파일을 끌어다 놓으세요.",
       "columns": {
         "name": "문서",
         "type": "유형",
@@ -2727,10 +2776,11 @@
         "review": "검토",
         "added": "추가일",
         "actions": "동작",
-        "path": "경로"
+        "path": "경로",
+        "kind": "구분"
       },
-      "add_title": "업무 문서 추가",
-      "add_hint": "문서함의 문서를 이 프로젝트의 업무 문서로 넣습니다. 유형이 분류된 문서는 체크리스트에 반영됩니다.",
+      "add_title": "문서 추가",
+      "add_hint": "문서함의 문서를 이 프로젝트에 넣습니다. 종류를 고르세요 — 유형이 분류된 업무 문서는 체크리스트에 반영됩니다.",
       "add_done": "추가 ({{count}})",
       "added": "문서 {{count}}건을 추가했습니다.",
       "search": "문서 검색…",
@@ -2745,7 +2795,18 @@
         "resync_hint": "원본 파일로 이 프로젝트의 사본을 다시 씁니다.",
         "resynced": "사본을 다시 동기화했습니다 (다시 씀 {{rewritten}} · 이름 변경 {{renamed}} · 생성 {{created}})."
       },
-      "title": "업무 문서"
+      "title": "문서",
+      "hint": "업무 문서는 체크리스트·정합성 검사·정리의 대상이고, 참고 자료는 질문·검색·문서 작성의 근거입니다(공통 참고 자료도 함께 쓰입니다). 구분 버튼으로 서로 바꿀 수 있습니다.",
+      "filter_all": "전체 {{count}}",
+      "filter_work": "업무 문서 {{count}}",
+      "filter_reference": "참고 자료 {{count}}",
+      "kind": "구분",
+      "kind_switch_hint": "{{kind}}(으)로 전환",
+      "kind_changed": "'{{name}}'을(를) {{kind}}(으)로 바꿨습니다.",
+      "both": "둘 다",
+      "both_hint": "업무 문서이면서 참고 자료 묶음에도 들어 있습니다. 제외하면 둘 다에서 빠집니다.",
+      "removed": "프로젝트에서 제외했습니다.",
+      "ingest_hint": "파일을 이 프로젝트의 참고 자료로 가져옵니다."
     },
     "rules": {
       "title": "정합성 규칙",

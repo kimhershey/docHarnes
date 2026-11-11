@@ -49,8 +49,10 @@ export function SourcePickerDialog({ open, onOpenChange, selected, onChange }: {
                 <li key={d.id}>
                   <label className="flex cursor-pointer items-center gap-3 px-3 py-2 hover:bg-bg-sunken">
                     <input type="checkbox" checked={picked.has(d.id)} onChange={() => toggle(d.id)} data-testid={`generate-source-${d.id}`} />
-                    <span className="min-w-0 flex-1 truncate">{d.title ?? d.original_name}</span>
-                    <span className="text-xs text-fg-subtle">{docTypeLabel(d.doc_type, docTypes, t, i18n.language)}</span>
+                    <span className="min-w-0 flex-1 truncate" title={d.original_name}>
+                      {d.title ?? d.original_name}
+                    </span>
+                    <span className="shrink-0 text-xs text-fg-subtle">{docTypeLabel(d.doc_type, docTypes, t, i18n.language)}</span>
                     {d.extracted_at && <span className="text-xs text-ok">{t("documents.status.extracted")}</span>}
                   </label>
                 </li>

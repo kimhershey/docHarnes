@@ -63,6 +63,15 @@ pub fn draft(app: &AppHandle, mut req: DraftRequest, project_id: Option<String>,
     if req.content.trim().is_empty() && req.previous.is_none() {
         return Err(UiError::invalid("content_empty"));
     }
+    // 0.7.0: a revision needs the draft it edits and an instruction.
+    if req.revise.is_some() {
+        if req.previous.is_none() {
+            return Err(UiError::invalid("revise_previous_missing"));
+        }
+        if req.feedback.as_deref().map(str::trim).unwrap_or("").is_empty() {
+            return Err(UiError::invalid("revise_instruction_empty"));
+        }
+    }
     // Caps: the body as the validator allows it, sources and feedback as the prompt takes them.
     req.content = req.content.trim().chars().take(6_000).collect();
     for s in &mut req.sources {
@@ -84,7 +93,13 @@ pub fn draft(app: &AppHandle, mut req: DraftRequest, project_id: Option<String>,
         req.max_tokens = Some(m.clamp(200, info.cap));
     }
     let pctx = pipeline_bridge::context(app)?; // a workspace must be open
-    let label = draft_label(&req, pctx.db());
+    let mut label = draft_label(&req, pctx.db());
+    if req.revise.is_some() {
+        // 0.7.0: a revision job is listed under the draft's title ("… · AI 수정").
+        let title = req.previous.as_deref().map(|d| d.title.trim().to_string()).filter(|t| !t.is_empty());
+        let ko = req.language == doculens_core::settings::Language::Ko;
+        label = format!("{} · {}", title.unwrap_or(label), if ko { "AI 수정" } else { "AI revision" });
+    }
     state.jobs.submit(
         JobSpec::Draft { req: Box::new(req), project_id, source: source.to_string() },
         &label,

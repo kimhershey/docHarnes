@@ -39,7 +39,7 @@ function plan(ops: Plan["operations"], extra: Partial<Plan> = {}): Plan {
 
 describe("op specs mirror", () => {
   it("covers every op kind with a Korean label", () => {
-    expect(OP_KINDS).toHaveLength(62);
+    expect(OP_KINDS).toHaveLength(63);
     for (const op of OP_KINDS) {
       expect(OP_SPECS[op].op).toBe(op);
       expect(opLabel(op, t)).not.toBe(`planner.ops.${op}`);
@@ -61,6 +61,12 @@ describe("summarizeOp", () => {
   });
   it("describes the P6 ops (drafts, projects, rules, retention)", () => {
     expect(summarizeOp({ op: "draft_document", form_ref: "quotation", content: "노트북 10대 견적", sources: ["a", "b"], output: "pdf" }, t, ctx)).toBe("양식 견적서 · 노트북 10대 견적 · 인용 문서 2건 · PDF");
+    // 0.7.0 초안 어시스턴트 op: the scope, the new heading and the instruction.
+    expect(summarizeOp({ op: "revise_draft", scope: "section", section: 3, instruction: "더 자세히" }, t, ctx)).toBe("3절 다시 쓰기 · 더 자세히");
+    expect(summarizeOp({ op: "revise_draft", scope: "insert_after", section: null, heading: "결론", instruction: "기대 효과 정리" }, t, ctx)).toBe("끝에 새 절 · '결론' · 기대 효과 정리");
+    expect(summarizeOp({ op: "revise_draft", scope: "insert_after", section: 2, instruction: "x" }, t, ctx)).toBe("2절 뒤에 새 절 · x");
+    expect(summarizeOp({ op: "revise_draft", scope: "whole", instruction: "격식체로" }, t, ctx)).toBe("전체 다시 쓰기 · 격식체로");
+    expect(planKind(plan([{ op: "revise_draft", scope: "whole", instruction: "x" }]))).toBe("work");
     expect(summarizeOp({ op: "create_project", name: "한빛", template: "builtin-vendor_onboarding" }, t, ctx)).toBe("'한빛' · 템플릿 거래처 등록");
     expect(summarizeOp({ op: "add_to_project", project: "p1", doc_ids: ["x"] }, t, ctx)).toBe("인증 심사 A · 문서 1건");
     // Without a named / open project the row says "현재 프로젝트" — no "only project" fallback: the validator is strict (project_required).

@@ -42,6 +42,8 @@ import type {
   AnswerKind,
   AnswerRequest,
   AppInfo,
+  ChatMessageRow,
+  ChatSessionSummary,
   Chunk,
   Collection,
   CollectionInput,
@@ -272,6 +274,14 @@ export const api = {
   knowledgeVersionSet: (input: VersionInput) => invoke<VersionInfo>("knowledge_version_set", { input }),
   knowledgeVersionClear: (documentId: string) => invoke<boolean>("knowledge_version_clear", { documentId }),
 
+  // -- assistant chat sessions (0.7.0 §1.6; messages are stored as the UI's JSON) --
+  chatSessionsList: () => invoke<ChatSessionSummary[]>("chat_sessions_list"),
+  chatSessionCreate: (title: string | null = null) => invoke<ChatSessionSummary>("chat_session_create", { title }),
+  chatSessionRename: (id: string, title: string) => invoke<void>("chat_session_rename", { id, title }),
+  chatSessionDelete: (id: string) => invoke<void>("chat_session_delete", { id }),
+  chatMessagesList: (sessionId: string) => invoke<ChatMessageRow[]>("chat_messages_list", { sessionId }),
+  chatMessagePut: (sessionId: string, seq: number, payload: unknown) => invoke<void>("chat_message_put", { sessionId, seq, payload }),
+
   // -- pipeline (P4) --
   pipelineStatus: () => invoke<PipelineStatus>("pipeline_status"),
   pipelineProcess: (req: ProcessRequest) => invoke<string | null>("pipeline_process", { req }),
@@ -344,7 +354,8 @@ export const api = {
   projectUpdate: (input: ProjectInput) => invoke<Project>("project_update", { input }),
   projectDelete: (id: string) => invoke<boolean>("project_delete", { id }),
   projectGet: (id: string) => invoke<ProjectDetail>("project_get", { id }),
-  projectAddDocuments: (id: string, docIds: string[]) => invoke<ProjectDetail>("project_add_documents", { id, docIds }),
+  /** `asReference` (0.5.0 plan §2): into the project's reference group (role 참고 자료) instead of its 업무 문서. */
+  projectAddDocuments: (id: string, docIds: string[], asReference = false) => invoke<ProjectDetail>("project_add_documents", { id, docIds, asReference }),
   projectRemoveDocument: (id: string, docId: string) => invoke<ProjectDetail>("project_remove_document", { id, docId }),
   projectSyncCopies: (id: string) => invoke<ProjectCopySyncReport>("project_sync_copies", { id }),
   projectTemplates: () => invoke<ProjectTemplate[]>("project_templates"),

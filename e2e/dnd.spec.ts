@@ -151,6 +151,7 @@ test.describe("document drag and drop", () => {
     await expect(page.getByTestId("schemas-drop-hint")).toHaveAttribute("data-over", "true");
     await page.mouse.up();
     await expect(page.getByTestId("form-register-dialog")).toBeVisible();
+    await expect(page.getByTestId("form-register-dialog")).toBeInViewport();
     await expect(page.getByTestId("form-register-doc")).toContainText("신청서.pdf");
   });
 
@@ -160,6 +161,7 @@ test.describe("document drag and drop", () => {
     await expect(page.getByTestId("page-schemas")).toBeVisible();
     await dropFiles(page, page.getByTestId("schemas-list"), ["휴가신청서.pdf"]);
     await expect(page.getByTestId("form-register-dialog")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("form-register-dialog")).toBeInViewport();
     await expect(page.getByTestId("form-register-doc")).toContainText("휴가신청서.pdf", { timeout: 15_000 });
   });
 

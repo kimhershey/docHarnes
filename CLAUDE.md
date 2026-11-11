@@ -73,7 +73,7 @@ user PC: `docs/RUN-GUIDE.md`.
   for OCR pages; v1 layouts get their rows relabelled on load; on-image edits rewrite `pages.text`),
   `convert/` HWPX·DOCX·HWP·XLSX·PPTX·text (txt/md/csv/html…) + legacy XLS/XLSB/ODS (calamine)·DOC·PPT (cfb)·RTF·HML → model
   (flow blocks + positioned `slides` for PPTX) → HTML → PDF through a `PdfPrinter` (page size from the source), fixtures),
-  `knowledge/` (0.5.0 plan A: collections are reference groups — `kind` `reference` (공통 참고 자료, no project) | `project` (one per project,
+  `knowledge/` (0.7.0: `chat` — assistant chat sessions `chat_sessions` / `chat_messages` (0012; message JSON stored as is, auto title, retention purge); 0.5.0 plan A: collections are reference groups — `kind` `reference` (공통 참고 자료, no project) | `project` (one per project,
   `project_id`; `repo::project_reference_group`), `SearchScope.project_id` = work docs ∪ project group ∪ active common groups, explicit `documents`
   stand in for the work docs; tokenize: lindera ko-dic / simple analyzer, chunker: structure-aware chunking, repo, index,
   embed: sqlite-vec + `Embedder`, search: hybrid RRF, answer: grounded answers / explain / summarize / compare with the conversation history +
@@ -86,7 +86,7 @@ user PC: `docs/RUN-GUIDE.md`.
   architecture — Gemma 4 48 px/token ≤ 1,120, Qwen drop-ins 32 px/token — picked from the model's registry arch by the shell),
   classify, ocr, extract, validate: normalisers / BRN checksum / sum rules / PII masking / confidence, run: orchestrator +
   `extractions/` mirror, review, forms: form registration + NL schemas, split: lopdf split / merge, repo),
-  `planner/` (0.6.0: 62 ops — every GUI function; `OpFamily` 8 families for the two-stage model path (family call → family op table /
+  `planner/` (0.6.0: 62 ops — every GUI function; 0.7.0: 63 with `revise_draft` (section rewrite / insert / whole of the draft open in the generator, `PlanContext.draft_id`); `OpFamily` 8 families for the two-stage model path (family call → family op table /
   grammar, `plan_schema_for`), `settings_catalog` (46 `set_setting` keys = settings paths + legacy aliases, coercion); mod: typed ops / scope / plan (appendix D v1.0 subset), schema: op spec table + PlanSchema grammar, rules:
   deterministic phrase rules (legacy `RulesFirst` mode + eval), prompts: tiered planner prompt, llm: `PlanMode::ModelFirst`
   (default; slash → pre-router, everything else → model with one re-query; no model → clarification) / `RulesFirst`, validate,
@@ -95,7 +95,7 @@ user PC: `docs/RUN-GUIDE.md`.
   mod: dry-run diff + apply, journal: `ops_journal` + `journal/ops-YYYYMM.jsonl`, LIFO undo / redo), `aggregate` (sum /
   count / avg / min / max with the reviewed / unreviewed split), `export` (XLSX / CSV / JSONL / MD / searchable PDF),
   `jobs/` (persistent job rows + specs incl. `Draft` / `Maintenance`, priorities / lanes, `JobControl` pause / cancel,
-  `EngineGate` interactive cut-in), `generate/` (P6 §3.13: built-in templates — 12 software-development templates + 보완요청서 (slug = pipeline doc type),
+  `EngineGate` interactive cut-in), `generate/` (0.7.0: `DraftRequest.revise` = `ReviseScope` section / insert_after / whole — `revise()` edits one section of `previous` with one `draft_revise` call (current text + surroundings + instruction), whole regeneration passes the instruction to every split section; `sections_of` = body runs split at level ≤ 2 headings; P6 §3.13: built-in templates — 12 software-development templates + 보완요청서 (slug = pipeline doc type),
   the 6 generic 0.1 templates kept hidden (`TemplateKind::hidden`; explicit references and saved drafts still work); grammar-safe draft schema
   (+ `draft_outline` / `draft_section`), token budget `DraftRequest.max_tokens` capped per backend (`settings.generation`) — budgets above
   ~3,000 tokens run `draft_split` (outline → head call with fields/tables → one call per section, progress callback, partial drafts on cancel), prompts, VLM
@@ -137,7 +137,7 @@ user PC: `docs/RUN-GUIDE.md`.
   `answers`; pipeline tables `schemas`, `schema_versions`, `extraction_runs`, `fields`, `field_history`; P5 tables
   `journal_batches`, `ops_journal`, `jobs`; P6 tables `projects`, `project_templates`, `project_documents`,
   `project_rules`, `project_runs`, `project_rule_results`; `pages.layout` word-box JSON (0006); `projects.keywords` (0007);
-  `collections.kind` / `collections.project_id` (0010) and the `collections` rebuild without a table-wide UNIQUE(name) (0011, schema 11)), drafts `.doculens/drafts/<id>.json`, page cache
+  `collections.kind` / `collections.project_id` (0010) and the `collections` rebuild without a table-wide UNIQUE(name) (0011), `chat_sessions` / `chat_messages` (0012, schema 12)), drafts `.doculens/drafts/<id>.json`, page cache
   `.doculens/cache/{pages,thumbs,converted}/<doc_id>/`, extraction mirror `.doculens/extractions/<doc_id>/<run_id>/`;
   DB rows store workspace-relative paths only. OCR text lives in `pages.text` (`text_source = ocr`) so the knowledge
   indexer re-chunks it.
