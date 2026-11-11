@@ -946,10 +946,9 @@ mod tests {
             matches!(&p.operations[0], Op::Answer { question, knowledge: Some(false), .. } if question.contains(&body) && question.ends_with("영어로"))
         );
         // The assistant's question alone is never a carried text ("요약" + a long question with a colon).
-        let ask = format!(
-            "견적서 요약해줘\n\n[어시스턴트 질문] 어떤 문서를 요약할까요: 라이브러리에서 선택하거나 폴더·유형·날짜를 말씀해 주세요(전체면 '전부'라고 해 주세요).\n[사용자 답변] 전부"
-        );
-        assert_eq!(carried_text(&ask), None);
+        let ask =
+            "견적서 요약해줘\n\n[어시스턴트 질문] 어떤 문서를 요약할까요: 라이브러리에서 선택하거나 폴더·유형·날짜를 말씀해 주세요(전체면 '전부'라고 해 주세요).\n[사용자 답변] 전부";
+        assert_eq!(carried_text(ask), None);
     }
 
     /// "프로젝트별" clears the open project as a filter — unless the sentence names that project.
