@@ -2274,6 +2274,7 @@ export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | nul
         break;
       }
       case "define_term":
+        op.action ??= "save"; // the core's serde default
         op.term = Array.from(op.term.trim()).slice(0, 120).join("");
         if (!op.term) issues.push(issue(at("term"), "term_required", "define_term needs a term"));
         op.synonyms = [...new Set((op.synonyms ?? []).map((x) => x.trim()).filter(Boolean))];
@@ -2310,6 +2311,7 @@ export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | nul
         break;
       }
       case "manage_template": {
+        op.action ??= "save"; // the core's serde default
         if (!["save", "delete"].includes(op.action)) issues.push(issue(at("action"), "enum_invalid", `unknown action '${String(op.action)}'`));
         if (op.template != null) {
           const tpl = mp.resolveTemplateRef(op.template);

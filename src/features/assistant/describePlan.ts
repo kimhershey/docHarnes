@@ -275,7 +275,7 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
     case "manage_reference":
       return joinParts([pt(`reference_${op.action}`), op.group ?? (op.project ? pt("project_group", { name: projectName(op.project, ctx.context, t) }) : null), op.name ? `→ '${op.name}'` : null]);
     case "define_term":
-      return joinParts([pt(`term_${op.action}`), `'${op.term}'`, op.definition ? truncate(op.definition, 40) : null, op.synonyms && op.synonyms.length > 0 ? pt("synonyms", { count: op.synonyms.length }) : null]);
+      return joinParts([pt(`term_${op.action ?? "save"}`), `'${op.term}'`, op.definition ? truncate(op.definition, 40) : null, op.synonyms && op.synonyms.length > 0 ? pt("synonyms", { count: op.synonyms.length }) : null]);
     case "set_version":
       return op.clear ? pt("version_clear") : joinParts([op.group_key ? `'${op.group_key}'` : null, op.label ?? null, op.effective_date ?? null, op.latest === false ? pt("version_old") : op.latest ? pt("version_latest") : null]);
     case "update_project": {
@@ -287,7 +287,7 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
     case "remove_from_project":
       return joinParts([projectName(op.project, ctx.context, t), op.doc_ids && op.doc_ids.length > 0 ? pt("documents_count", { count: op.doc_ids.length }) : pt("scope_documents")]);
     case "manage_template":
-      return joinParts([pt(`template_${op.action}`), op.template ? projectTemplateName(op.template, t) : op.name ? `'${op.name}'` : null, op.doc_types_required && op.doc_types_required.length > 0 ? pt("required_types", { count: op.doc_types_required.length }) : null]);
+      return joinParts([pt(`template_${op.action ?? "save"}`), op.template ? projectTemplateName(op.template, t) : op.name ? `'${op.name}'` : null, op.doc_types_required && op.doc_types_required.length > 0 ? pt("required_types", { count: op.doc_types_required.length }) : null]);
     case "classify_projects":
       return joinParts([op.apply ? pt("classify_apply") : pt("classify_preview"), op.use_model ? pt("with_model") : null]);
     case "manage_schema":

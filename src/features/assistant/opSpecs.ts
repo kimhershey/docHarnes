@@ -1,7 +1,9 @@
 // TypeScript mirror of `crates/doculens-core/src/planner/schema.rs` (`OP_SPECS`):
 // the parameter table of every planner op (appendix D) with the Korean /
 // English descriptions the inline plan editor shows. The Rust table is the
-// single source of truth for the validator; keep this file in step with it.
+// single source of truth for the validator; keep this file in step with it —
+// `opSpecs.test.ts` reads schema.rs and fails when an op, a parameter, an enum
+// value or a `required` flag differs.
 
 import { SETTING_KEYS_ALL } from "@/lib/settingsCatalog";
 import type { Language, OpKind } from "@/lib/types";
@@ -37,8 +39,9 @@ export interface OpSpec {
 export const THEMES = ["light", "dark", "system", "high-contrast"] as const;
 export const LANGS = ["ko", "en"] as const;
 export const PROFILES = ["accuracy", "balanced", "speed", "fine_print"] as const;
-export const GROUP_BY_VALUES = ["month", "vendor", "doc_type", "none"] as const;
+export const GROUP_BY_VALUES = ["month", "vendor", "doc_type", "project", "none"] as const;
 export const EXPORT_FORMAT_VALUES = ["xlsx", "csv", "jsonl", "md", "pdf_searchable"] as const;
+export const EXPORT_LAYOUT_VALUES = ["sheet_per_type", "sheet_per_project", "single"] as const;
 export const DOC_STATUSES = ["new", "rendered", "extracted", "reviewed", "archived"] as const;
 /** `set_setting.key`: the settings-catalog paths (0.6.0) plus the pre-0.6.0 aliases. */
 export const SETTING_KEYS: readonly string[] = SETTING_KEYS_ALL;
@@ -185,7 +188,7 @@ const SPECS: OpSpec[] = [
       p("format", en(EXPORT_FORMAT_VALUES), true, "형식", "format"),
       p("path", str, false, "저장 경로(워크스페이스 상대, 기본 exports/날짜_유형.확장자)", "output path (workspace-relative)"),
       p("columns", list, false, "포함할 필드(비우면 전체)", "fields to include (empty = all)"),
-      p("layout", en(["sheet_per_type", "single"]), false, "XLSX 시트 구성", "XLSX layout"),
+      p("layout", en(EXPORT_LAYOUT_VALUES), false, "XLSX 시트 구성(유형별 / 프로젝트별 / 단일)", "XLSX layout (per type / per project / single)"),
       p("include", { kind: "enum_list", values: ["evidence", "confidence", "status"] }, false, "공통 열", "extra columns"),
       p("target", en(["fields", "table", "text"]), false, "필드 / 표 / 본문 텍스트", "fields / tables / page text"),
     ],
@@ -240,11 +243,26 @@ const SPECS: OpSpec[] = [
   { op: "compare", params: [p("doc_ids", list, true, "비교할 문서 id 2~5개", "2–5 document ids"), p("aspects", list, false, "비교 관점(금액, 기간 …)", "aspects (amount, period …)")], desc_ko: "문서 비교 요약", desc_en: "compare documents" },
   {
     op: "create_project",
-    params: [p("name", str, true, "프로젝트 이름", "project name"), p("template", str, false, "프로젝트 템플릿", "project template"), p("doc_types_required", list, false, "필수 문서 유형", "required document types")],
+    params: [
+      p("name", str, true, "프로젝트 이름", "project name"),
+      p("template", str, false, "프로젝트 템플릿", "project template"),
+      p("doc_types_required", list, false, "필수 문서 유형", "required document types"),
+      p("start_date", { kind: "date" }, false, "시작일(비우면 오늘)", "start date (default: today)"),
+      p("end_date", { kind: "date" }, false, "종료일(비우면 진행중)", "end date (none = open-ended)"),
+    ],
     desc_ko: "프로젝트 만들기",
     desc_en: "create a project",
   },
-  { op: "add_to_project", params: [p("project", str, false, "프로젝트(비우면 열린 프로젝트)", "project (default: the open one)"), p("doc_ids", list, false, "문서 id(비우면 범위)", "document ids (default: the scope)")], desc_ko: "프로젝트에 문서 추가", desc_en: "add documents to a project" },
+  {
+    op: "add_to_project",
+    params: [
+      p("project", str, false, "프로젝트(비우면 열린 프로젝트)", "project (default: the open one)"),
+      p("doc_ids", list, false, "문서 id(비우면 범위)", "document ids (default: the scope)"),
+      p("as_reference", bool, false, "참고 자료로 넣기(기본: 업무 문서)", "add as reference material (default: work documents)"),
+    ],
+    desc_ko: "프로젝트에 문서 추가(업무 문서 또는 참고 자료)",
+    desc_en: "add documents to a project (work documents or reference material)",
+  },
   {
     op: "define_rule",
     params: [p("project", str, false, "프로젝트", "project"), p("template", str, false, "프로젝트 템플릿", "project template"), p("description", str, true, "규칙 설명(자연어)", "rule description (natural language)")],
@@ -302,7 +320,7 @@ const SPECS: OpSpec[] = [
     desc_ko: "참고 자료 묶음 만들기/이름/삭제/사용/문서 넣기·빼기",
     desc_en: "reference groups: create / rename / delete / enable / disable / add / remove documents",
   },
-  { op: "define_term", params: [p("action", en(TERM_ACTIONS), true, "저장/삭제", "save / delete"), p("term", str, true, "용어", "term"), p("definition", str, false, "정의", "definition"), p("synonyms", list, false, "동의어", "synonyms")], desc_ko: "용어집 항목 저장/삭제", desc_en: "save / delete a glossary term" },
+  { op: "define_term", params: [p("action", en(TERM_ACTIONS), false, "저장(기본)/삭제", "save (default) / delete"), p("term", str, true, "용어", "term"), p("definition", str, false, "정의", "definition"), p("synonyms", list, false, "동의어", "synonyms")], desc_ko: "용어집 항목 저장/삭제", desc_en: "save / delete a glossary term" },
   {
     op: "set_version",
     params: [
@@ -338,7 +356,7 @@ const SPECS: OpSpec[] = [
   {
     op: "manage_template",
     params: [
-      p("action", en(TEMPLATE_ACTIONS), true, "저장/삭제", "save / delete"),
+      p("action", en(TEMPLATE_ACTIONS), false, "저장(기본)/삭제", "save (default) / delete"),
       p("template", str, false, "템플릿 이름/ID(수정·삭제)", "template name / id (edit / delete)"),
       p("name", str, false, "템플릿 이름(새로 만들 때)", "template name (new)"),
       p("doc_types_required", list, false, "필수 문서 유형", "required document types"),

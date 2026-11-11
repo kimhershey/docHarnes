@@ -435,6 +435,7 @@
       "default_path": "(기본 경로)",
       "columns": "열 {{count}}개",
       "layout_sheet_per_type": "유형별 시트",
+      "layout_sheet_per_project": "프로젝트별 시트",
       "layout_single": "시트 하나",
       "include": "공통 열: {{list}}",
       "target_fields": "필드",

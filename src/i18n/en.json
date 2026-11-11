@@ -435,6 +435,7 @@
       "default_path": "(default path)",
       "columns": "{{count}} columns",
       "layout_sheet_per_type": "sheet per type",
+      "layout_sheet_per_project": "sheet per project",
       "layout_single": "single sheet",
       "include": "extra columns: {{list}}",
       "target_fields": "fields",

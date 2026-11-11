@@ -43,6 +43,10 @@ function enumLabel(param: ParamSpec, value: string, t: (k: string, o?: Record<st
       return ["hybrid", "keyword", "semantic"].includes(value) ? t(`search.mode.${value}`) : value;
     case "include":
       return ["evidence", "confidence", "status"].includes(value) ? t(`export.columns.${value}`) : value;
+    case "group_by":
+      return value === "none" ? t("common.none") : ["month", "vendor", "doc_type", "project"].includes(value) ? t(`planner.params.group_${value}`) : value;
+    case "layout":
+      return ["sheet_per_type", "sheet_per_project", "single"].includes(value) ? t(`planner.params.layout_${value}`) : value;
     default:
       return value;
   }
