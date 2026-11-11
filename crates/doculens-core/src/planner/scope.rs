@@ -28,6 +28,24 @@ pub fn basis_date(doc: &DocumentRecord) -> (Option<String>, &'static str) {
     }
 }
 
+/// Of `ids`, the documents whose latest extraction carries review work: a field the user
+/// approved, corrected, rejected or put on hold. Re-extracting such a document replaces that
+/// work (the planner's `extract` confirms first — audit PLN-3).
+pub fn reviewed_documents(conn: &Connection, ids: &[String]) -> rusqlite::Result<std::collections::HashSet<String>> {
+    let mut out = std::collections::HashSet::new();
+    for group in ids.chunks(400) {
+        let marks = vec!["?"; group.len()].join(", ");
+        let mut st = conn.prepare(&format!(
+            "SELECT DISTINCT f.document_id FROM fields f JOIN documents d ON d.id = f.document_id AND d.last_run_id = f.run_id \
+             WHERE f.status != 'auto' AND f.document_id IN ({marks})"
+        ))?;
+        for id in st.query_map(rusqlite::params_from_iter(group.iter()), |r| r.get::<_, String>(0))? {
+            out.insert(id?);
+        }
+    }
+    Ok(out)
+}
+
 /// Documents in scope, sorted by path. Deleted / importing / missing / error
 /// documents are never in scope. `doc_ids` and the filter intersect.
 pub fn resolve(conn: &Connection, scope: &Scope) -> rusqlite::Result<Vec<DocumentRecord>> {

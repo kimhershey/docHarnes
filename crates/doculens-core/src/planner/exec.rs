@@ -213,19 +213,70 @@ pub struct ExecProgress {
     pub current: String,
 }
 
-/// Documents the plan works on right now: the scope, narrowed to what an
-/// earlier import step registered.
+/// Documents the plan works on right now: the scope — or, once an import step has run, the
+/// documents of that import (`imported`; see [`batch_scope`]).
 fn working_set(deps: &ExecDeps<'_>, plan: &Plan, imported: Option<&[String]>) -> Result<Vec<DocumentRecord>> {
-    working_set_in(deps, &plan_scope(plan), imported)
+    working_set_in(deps, &plan_scope(plan), imported, false)
 }
 
-fn working_set_in(deps: &ExecDeps<'_>, scope: &Scope, imported: Option<&[String]>) -> Result<Vec<DocumentRecord>> {
-    let mut docs = deps.db().with(|c| scope::resolve(c, scope))?;
-    if let Some(ids) = imported {
-        let keep: HashSet<&str> = ids.iter().map(String::as_str).collect();
-        docs.retain(|d| keep.contains(d.id.as_str()));
+/// The working set of a classify / OCR / extract step. After an import the scope's type filter
+/// cannot apply to a document the classifier has not seen yet ("inbox의 견적서를 전부 처리하고 …"
+/// dropped every file it had just imported — audit PLN-4), so untyped documents stay in; a
+/// document that has a type must match it.
+fn pipeline_set(deps: &ExecDeps<'_>, plan: &Plan, imported: Option<&[String]>) -> Result<Vec<DocumentRecord>> {
+    working_set_in(deps, &plan_scope(plan), imported, true)
+}
+
+fn working_set_in(
+    deps: &ExecDeps<'_>,
+    scope: &Scope,
+    imported: Option<&[String]>,
+    untyped_pass: bool,
+) -> Result<Vec<DocumentRecord>> {
+    let Some(ids) = imported else {
+        return deps.db().with(|c| scope::resolve(c, scope));
+    };
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut batch = batch_scope(scope, ids);
+    let wanted = if untyped_pass { batch.filter.doc_type.take() } else { None };
+    let mut docs = deps.db().with(|c| scope::resolve(c, &batch))?;
+    if let Some(t) = wanted {
+        docs.retain(|d| d.doc_type.as_deref().is_none_or(|x| x == t));
     }
     Ok(docs)
+}
+
+/// The scope of the steps after an import: the documents of that import (new, re-linked and the
+/// ones it met again), filtered by what the plan's scope says about content (type, dates, vendor,
+/// tags …). Where the documents were before — a folder, a selection, a project — no longer
+/// applies. The scope used to be united with the import, so "D:\스캔\a.pdf 가져와서 요약해줘"
+/// summarised the whole library (audit PLN-4).
+fn batch_scope(scope: &Scope, ids: &[String]) -> Scope {
+    let mut s = scope.clone();
+    s.folder = None;
+    s.doc_ids = ids.to_vec();
+    s.filter.project_id = None;
+    s
+}
+
+/// The scope a step hands to the aggregate / export / organise modules: the plan's own — or,
+/// after an import step, that import's documents. `None`: the import brought no documents.
+fn step_scope(plan: &Plan, imported: Option<&[String]>) -> Option<Scope> {
+    match imported {
+        None => Some(plan.scope.clone()),
+        Some([]) => None,
+        Some(ids) => Some(batch_scope(&plan.scope, ids)),
+    }
+}
+
+fn nothing_in_scope(deps: &ExecDeps<'_>) -> StepOutcome {
+    StepOutcome {
+        summary: deps.t("대상 문서 없음", "No documents in scope").into(),
+        payload: json!({ "documents": [] }),
+        imported: None,
+    }
 }
 
 /// The scope a plan's documents come from. "선택한 문서를 한빛 프로젝트에 추가해" names the project as
@@ -438,11 +489,22 @@ fn run_step(
             )?;
             out.documents.extend(report.imported.iter().cloned());
             out.documents.extend(report.relinked.iter().cloned());
+            // The later steps work on the documents of this import: the new and re-linked ones and
+            // the ones the import met again (a file that is already registered, or whose content
+            // is — "inbox 처리" still covers what the watcher registered, and importing a file a
+            // second time still summarises that file). Never the whole scope (audit PLN-4).
             let mut all = report.imported.clone();
             all.extend(report.relinked.iter().cloned());
-            // Documents already registered from the inbox stay in scope too.
-            let existing = db.with(|c| scope::resolve(c, &plan.scope))?;
-            all.extend(existing.iter().map(|d| d.id.clone()));
+            let existing: Vec<String> = plan_
+                .items
+                .iter()
+                .filter_map(|item| match &item.status {
+                    import::ImportItemStatus::AlreadyRegistered { id } => Some(id.clone()),
+                    import::ImportItemStatus::Duplicate { of, .. } => Some(of.clone()),
+                    _ => None,
+                })
+                .collect();
+            all.extend(existing.iter().cloned());
             all.sort();
             all.dedup();
             if report.cancelled {
@@ -469,14 +531,13 @@ fn run_step(
             };
             Ok(StepOutcome {
                 summary,
-                payload: json!({ "imported": report.imported, "relinked": report.relinked, "failed": report.failed, "skipped": report.skipped }),
+                payload: json!({ "imported": report.imported, "relinked": report.relinked, "existing": existing, "failed": report.failed, "skipped": report.skipped }),
                 imported: Some(all),
             })
         }
         Op::Classify { doc_types: _, force } => pipeline_step(
             deps,
-            plan,
-            imported,
+            pipeline_set(deps, plan, imported)?,
             PipelineLevel::Classify,
             SchemaChoice::Auto,
             force.unwrap_or(false),
@@ -487,8 +548,7 @@ fn run_step(
         ),
         Op::Ocr { pages, profile, force } => pipeline_step(
             deps,
-            plan,
-            imported,
+            pipeline_set(deps, plan, imported)?,
             PipelineLevel::Ocr,
             SchemaChoice::Auto,
             force.unwrap_or(false),
@@ -517,18 +577,46 @@ fn run_step(
                 }
                 _ => SchemaChoice::Auto,
             };
-            pipeline_step(
-                deps,
-                plan,
-                imported,
-                PipelineLevel::Extract,
-                choice,
-                force.unwrap_or(false),
-                None,
-                Vec::new(),
-                progress,
-                out,
-            )
+            // A document that already has an extraction keeps it — and with it every approval and
+            // correction made in review — unless the command asks for a re-run (`force`). Every
+            // document in scope used to be extracted again (audit PLN-3).
+            let force = force.unwrap_or(false);
+            let (todo, kept): (Vec<DocumentRecord>, Vec<DocumentRecord>) =
+                pipeline_set(deps, plan, imported)?.into_iter().partition(|d| force || d.last_run_id.is_none());
+            if kept.is_empty() {
+                return pipeline_step(
+                    deps,
+                    todo,
+                    PipelineLevel::Extract,
+                    choice,
+                    force,
+                    None,
+                    Vec::new(),
+                    progress,
+                    out,
+                );
+            }
+            let note = if deps.ko() {
+                format!("이미 추출된 {}건은 건너뜀(다시 추출하려면 '다시 추출')", kept.len())
+            } else {
+                format!("{} already extracted and skipped (say 're-extract' to run them again)", kept.len())
+            };
+            let mut outcome = if todo.is_empty() {
+                StepOutcome {
+                    summary: note,
+                    payload: json!({ "documents": [], "processed": [], "extracted": 0, "review_pending": 0 }),
+                    imported: None,
+                }
+            } else {
+                let mut o =
+                    pipeline_step(deps, todo, PipelineLevel::Extract, choice, false, None, Vec::new(), progress, out)?;
+                o.summary = format!("{} · {note}", o.summary);
+                o
+            };
+            if let Some(obj) = outcome.payload.as_object_mut() {
+                obj.insert("already_extracted".into(), json!(ids(&kept)));
+            }
+            Ok(outcome)
         }
         Op::SetDocType { doc_type } => {
             let docs_ = working_set(deps, plan, imported)?;
@@ -734,12 +822,13 @@ fn run_step(
             summarize::run(deps, plan, imported, *target, *length, *group_by, progress)
         }
         Op::Aggregate { func, field, group_by, include_unreviewed } => {
+            let Some(step_scope) = step_scope(plan, imported) else { return Ok(nothing_in_scope(deps)) };
             let req = AggregateRequest {
                 func: *func,
                 field: field.clone(),
                 group_by: group_by.unwrap_or(GroupBy::None),
                 include_unreviewed: include_unreviewed.unwrap_or(false),
-                scope: plan.scope.clone(),
+                scope: step_scope,
             };
             let res = aggregate::aggregate(db, &req)?;
             let value = aggregate::format_value(res.func, res.value);
@@ -863,6 +952,7 @@ fn run_step(
             })
         }
         Op::Export { format, path, columns, layout, include, target } => {
+            let Some(step_scope) = step_scope(plan, imported) else { return Ok(nothing_in_scope(deps)) };
             let mut req = ExportRequest {
                 format: *format,
                 target: target.unwrap_or(ExportTarget::Fields),
@@ -870,10 +960,7 @@ fn run_step(
                 columns: columns.clone(),
                 layout: layout.unwrap_or(ExportLayout::SheetPerType),
                 include: include.clone(),
-                scope: match imported {
-                    Some(ids_) => super::Scope { doc_ids: ids_.to_vec(), ..plan.scope.clone() },
-                    None => plan.scope.clone(),
-                },
+                scope: step_scope,
                 only_reviewed: false,
                 overwrite: true,
                 language: deps.language,
@@ -2171,11 +2258,11 @@ fn resolve_template(db: &Db, key: &str) -> Result<Option<projects::ProjectTempla
     Ok(all.into_iter().find(|t| super::compact(&t.name_ko) == want || super::compact(&t.name_en) == want))
 }
 
+/// Runs the pipeline up to `level` over `docs_` (the step's working set, see `pipeline_set`).
 #[allow(clippy::too_many_arguments)]
 fn pipeline_step(
     deps: &ExecDeps<'_>,
-    plan: &Plan,
-    imported: Option<&[String]>,
+    docs_: Vec<DocumentRecord>,
     level: PipelineLevel,
     schema: SchemaChoice,
     force: bool,
@@ -2184,16 +2271,11 @@ fn pipeline_step(
     progress: &mut dyn FnMut(&str, u32, u32, &str),
     out: &mut PlanExecution,
 ) -> Result<StepOutcome> {
+    if docs_.is_empty() {
+        return Ok(nothing_in_scope(deps));
+    }
     let chat = deps.chat.ok_or_else(|| no_model(deps))?;
     let model = deps.model.clone().ok_or_else(|| no_model(deps))?;
-    let docs_ = working_set(deps, plan, imported)?;
-    if docs_.is_empty() {
-        return Ok(StepOutcome {
-            summary: deps.t("대상 문서 없음", "No documents in scope").into(),
-            payload: json!({ "documents": [] }),
-            imported: None,
-        });
-    }
     let _lease = LeaseGuard::acquire(deps.lease);
     let pdeps = PipelineDeps {
         import: ImportDeps {
@@ -2267,10 +2349,7 @@ fn organize_step(
     progress: &mut dyn FnMut(&str, u32, u32, &str),
     out: &mut PlanExecution,
 ) -> Result<StepOutcome> {
-    let scope_ = match imported {
-        Some(ids_) => super::Scope { doc_ids: ids_.to_vec(), ..plan.scope.clone() },
-        None => plan.scope.clone(),
-    };
+    let Some(scope_) = step_scope(plan, imported) else { return Ok(nothing_in_scope(deps)) };
     let req = OrganizeRequest { scope: scope_, name_template, folder_template, only_reviewed, language: deps.language };
     let oplan = organize::plan(deps.db(), deps.paths(), &req)?;
     if dry_run {
@@ -2423,35 +2502,90 @@ pub fn preview(
                     Err(e) => (e.to_string(), Value::Null, false),
                 }
             }
-            Op::Extract { schema_ref, fields, .. } => {
+            Op::Extract { schema_ref, fields, force } => {
                 let name = schema_ref
                     .as_deref()
                     .and_then(|id| db.with(|c| pipeline_repo::get_schema(c, id)).ok().flatten())
                     .map(|s| s.name)
                     .unwrap_or_else(|| if ko { "자동(유형별 스키마)".into() } else { "auto".into() });
-                (
-                    if ko {
-                        format!(
-                            "스키마 {name} · {}",
-                            if fields.is_empty() {
-                                "전체 필드".to_string()
-                            } else {
-                                format!("필드 {}개", fields.len())
-                            }
-                        )
+                let head = if ko {
+                    format!(
+                        "스키마 {name} · {}",
+                        if fields.is_empty() {
+                            "전체 필드".to_string()
+                        } else {
+                            format!("필드 {}개", fields.len())
+                        }
+                    )
+                } else {
+                    format!(
+                        "schema {name} · {}",
+                        if fields.is_empty() { "all fields".to_string() } else { format!("{} fields", fields.len()) }
+                    )
+                };
+                // What the step does to documents that already have an extraction (audit PLN-3):
+                // kept unless `force`; a forced run that replaces reviewed results is confirmed.
+                let force = force.unwrap_or(false);
+                let after_import = plan.operations[..index].iter().any(|o| matches!(o, Op::Import { .. }));
+                if after_import {
+                    // The working set is the import's: its documents are not known before it runs.
+                    let tail = match (ko, force) {
+                        (true, false) => "가져온 문서 대상(이미 추출된 문서는 건너뜀)",
+                        (true, true) => "가져온 문서를 다시 추출(기존 추출·검토 결과 대체)",
+                        (false, false) => "the imported documents (already extracted ones are skipped)",
+                        (false, true) => "re-extracts the imported documents (replaces existing results and reviews)",
+                    };
+                    (
+                        format!("{head} · {tail}"),
+                        json!({ "schema": name, "fields": fields, "force": force, "after_import": true }),
+                        force,
+                    )
+                } else {
+                    let extracted: Vec<String> =
+                        docs_.iter().filter(|d| d.last_run_id.is_some()).map(|d| d.id.clone()).collect();
+                    let reviewed = if force && !extracted.is_empty() {
+                        db.with(|c| scope::reviewed_documents(c, &extracted))?.len()
                     } else {
-                        format!(
-                            "schema {name} · {}",
-                            if fields.is_empty() {
-                                "all fields".to_string()
+                        0
+                    };
+                    let run = if force { docs_.len() } else { docs_.len() - extracted.len() };
+                    let tail = match (ko, force) {
+                        (true, false) if extracted.is_empty() => format!("추출 {run}건"),
+                        (true, false) => format!("추출 {run}건 · 이미 추출된 {}건은 건너뜀", extracted.len()),
+                        (true, true) if extracted.is_empty() => format!("추출 {run}건"),
+                        (true, true) => format!(
+                            "다시 추출 {run}건 — 기존 결과 {}건 대체{}",
+                            extracted.len(),
+                            if reviewed > 0 {
+                                format!("(검토한 문서 {reviewed}건 포함)")
                             } else {
-                                format!("{} fields", fields.len())
+                                String::new()
                             }
-                        )
-                    },
-                    json!({ "schema": name, "fields": fields }),
-                    false,
-                )
+                        ),
+                        (false, false) if extracted.is_empty() => format!("{run} to extract"),
+                        (false, false) => format!("{run} to extract · {} already extracted, skipped", extracted.len()),
+                        (false, true) if extracted.is_empty() => format!("{run} to extract"),
+                        (false, true) => format!(
+                            "re-extracts {run} — replaces {} existing results{}",
+                            extracted.len(),
+                            if reviewed > 0 { format!(" ({reviewed} reviewed)") } else { String::new() }
+                        ),
+                    };
+                    (
+                        format!("{head} · {tail}"),
+                        json!({
+                            "schema": name,
+                            "fields": fields,
+                            "force": force,
+                            "documents": docs_.len(),
+                            "extract": run,
+                            "already_extracted": extracted.len(),
+                            "replace": if force { extracted.len() } else { 0 },
+                            "reviewed": reviewed,
+                        }),
+                        force && reviewed > 0,
+                    )
+                }
             }
             Op::Delete { .. } => (
                 if ko {
