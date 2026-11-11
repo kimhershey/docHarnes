@@ -1158,6 +1158,27 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
         }
     }
 
+    // -- step order -------------------------------------------------------------
+    // Ops the app performs (settings, model, workspace, form / schema grids, re-index …) run after
+    // the job's document steps, whatever their place in the plan. One that a later document step
+    // depends on would silently take effect too late — "모델을 12B로 바꾸고 이 문서 다시 추출" extracted
+    // with the old model (audit PLN-11) — so such a plan is rejected and the user runs it in two commands.
+    if let Some((i, j)) = late_dependency(&plan.operations) {
+        let (first, later) = (plan.operations[i].kind().as_str(), plan.operations[j].kind().as_str());
+        let message = if ctx.language == crate::settings::Language::Ko {
+            format!(
+                "'{first}' 단계는 앱에서 문서 작업이 모두 끝난 뒤에 적용되어, 그 뒤의 '{later}' 단계에는 반영되지 않습니다. \
+                 먼저 '{first}' 단계만 따로 실행한 다음 나머지를 요청해 주세요."
+            )
+        } else {
+            format!(
+                "'{first}' is applied by the app after every document step, so the later '{later}' step would not see it: \
+                 run '{first}' as its own command first, then ask for the rest."
+            )
+        };
+        issues.push(PlanIssue::error(format!("operations[{i}]"), "ui_op_order", message));
+    }
+
     // -- derived flags ---------------------------------------------------------
     if plan.operations.iter().any(|o| matches!(o, Op::Clarify { .. })) {
         plan.intent = OpKind::Clarify;
@@ -1173,6 +1194,78 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
         || plan.operations.iter().any(Op::needs_confirmation)
         || plan.operations.iter().any(confirmed_here);
     issues
+}
+
+/// `(i, j)`: the app-side op at `i` changes something the document step at `j > i` relies on.
+fn late_dependency(ops: &[Op]) -> Option<(usize, usize)> {
+    /// What a later document step must be for the app-side op to matter to it.
+    enum Needs {
+        /// Any document step.
+        Any,
+        /// A step that calls the model.
+        Model,
+        /// A step that searches the index.
+        Index,
+        /// A step that works with extraction schemas.
+        Schema,
+    }
+    let dependency = |op: &Op| -> Option<Needs> {
+        match op {
+            Op::SetModel { .. } | Op::SetProfile { .. } | Op::ManageModel { .. } => Some(Needs::Model),
+            Op::Engine { action: super::EngineOp::Stop | super::EngineOp::Restart | super::EngineOp::Sleep } => {
+                Some(Needs::Model)
+            }
+            // Model, processing, knowledge, privacy and generation settings are read by document
+            // steps; appearance, notifications, the cache and retention are not.
+            Op::SetSetting { key, .. } => ["models.", "processing.", "knowledge.", "privacy.", "generation."]
+                .iter()
+                .any(|p| key.starts_with(p))
+                .then_some(Needs::Any),
+            Op::Workspace {
+                action: super::WorkspaceAction::Open | super::WorkspaceAction::Create | super::WorkspaceAction::Close,
+                ..
+            } => Some(Needs::Any),
+            Op::DefineSchema { .. } | Op::RegisterForm { .. } => Some(Needs::Schema),
+            Op::Maintenance { action: super::MaintenanceAction::Rescan | super::MaintenanceAction::InboxScan } => {
+                Some(Needs::Any)
+            }
+            Op::Reindex { .. } => Some(Needs::Index),
+            _ => None,
+        }
+    };
+    for (i, op) in ops.iter().enumerate() {
+        let Some(needs) = dependency(op) else { continue };
+        let later = ops.iter().enumerate().skip(i + 1).find(|(_, o)| {
+            let kind = o.kind();
+            !kind.runs_in_ui()
+                && match needs {
+                    Needs::Any => true,
+                    Needs::Model => kind.needs_model(),
+                    Needs::Index => matches!(
+                        kind,
+                        OpKind::Search
+                            | OpKind::Answer
+                            | OpKind::Explain
+                            | OpKind::Compare
+                            | OpKind::Summarize
+                            | OpKind::DraftDocument
+                    ),
+                    Needs::Schema => matches!(
+                        kind,
+                        OpKind::Classify
+                            | OpKind::Extract
+                            | OpKind::Validate
+                            | OpKind::Aggregate
+                            | OpKind::Export
+                            | OpKind::DraftDocument
+                    ),
+                }
+        });
+        if let Some((j, _)) = later {
+            return Some((i, j));
+        }
+    }
+    None
 }
 
 fn known_types(ctx: &PlanContext) -> String {
