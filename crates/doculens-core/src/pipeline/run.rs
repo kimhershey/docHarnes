@@ -202,6 +202,23 @@ pub(super) fn fine_pass_sees_more(
         }
 }
 
+/// Re-renders a page at `rotation` and takes the new size over into the record.
+fn turn_page(deps: &PipelineDeps<'_>, doc: &DocumentRecord, page: &mut PageRecord, rotation: u16) -> Result<()> {
+    let rendered = import::rotate_page(&deps.import, doc, page.page_no, rotation)?;
+    page.rotation = rotation % 360;
+    page.width_px = rendered.width_px;
+    page.height_px = rendered.height_px;
+    page.rendered_at = Some(chrono::Utc::now());
+    Ok(())
+}
+
+/// The turn the unclassified pages of a document take: the one more than half of the classified
+/// pages needed (`turns`: confirmed turn per classified page, 0 = none). A document with a few
+/// landscape tables among upright pages has no such majority and is left alone.
+pub(super) fn majority_turn(turns: &[u16]) -> Option<u16> {
+    [90u16, 180, 270].into_iter().find(|r| turns.iter().filter(|t| *t == r).count() * 2 > turns.len())
+}
+
 fn has_text(p: &PageRecord) -> bool {
     p.text.as_deref().is_some_and(|t| !t.trim().is_empty())
 }
@@ -230,6 +247,8 @@ fn process_document(
         progress("classify", None);
         let n = pages.len();
         let mut classes = Vec::new();
+        // Per classified page with an image: the turn that was applied and confirmed (0 = none).
+        let mut turns: Vec<u16> = Vec::new();
         for idx in 0..n {
             if idx >= CLASSIFY_MAX_PAGES && idx + 1 < n {
                 continue;
@@ -243,16 +262,14 @@ fn process_document(
             let (mut class, reply) =
                 classify::classify_page(vlm, doc_types, img.as_ref().map(|i| i.url.as_str()), text.as_deref())?;
             usage.add(reply.usage);
+            let mut turned = 0u16;
             if class.rotation != 0 && img.is_some() && !class.is_blank {
                 // olmOCR pattern (§3.4): rotate the render, then classify once more.
                 let page_no = pages[idx].page_no;
-                let new_rotation = (pages[idx].rotation + class.rotation) % 360;
-                match import::rotate_page(&deps.import, &doc, page_no, new_rotation) {
-                    Ok(np) => {
-                        pages[idx].rotation = new_rotation;
-                        pages[idx].width_px = np.width_px;
-                        pages[idx].height_px = np.height_px;
-                        pages[idx].rendered_at = Some(chrono::Utc::now());
+                let old_rotation = pages[idx].rotation;
+                let new_rotation = (old_rotation + class.rotation) % 360;
+                match turn_page(deps, &doc, &mut pages[idx], new_rotation) {
+                    Ok(()) => {
                         let img2 = page_image(&cache, &pages[idx], vlm, CLASSIFY_IMAGE_TOKENS)?;
                         let (c2, r2) = classify::classify_page(
                             vlm,
@@ -261,10 +278,29 @@ fn process_document(
                             text.as_deref(),
                         )?;
                         usage.add(r2.usage);
-                        class = super::PageClass { rotation: class.rotation, ..c2 };
+                        if c2.rotation != 0 {
+                            // The turned page still "needs" a turn: the detection is not to be
+                            // trusted for this page. It goes back to what it was instead of
+                            // staying in a rotation nobody confirmed.
+                            log::warn!(
+                                "pipeline {} p{page_no}: rotation {} not confirmed by the second look, undone",
+                                doc.id,
+                                class.rotation
+                            );
+                            if let Err(e) = turn_page(deps, &doc, &mut pages[idx], old_rotation) {
+                                log::warn!("rotation of {} p{page_no} not undone: {e}", doc.id);
+                            }
+                            class.rotation = 0;
+                        } else {
+                            turned = class.rotation;
+                            class = super::PageClass { rotation: class.rotation, ..c2 };
+                        }
                     }
                     Err(e) => log::warn!("rotation of {} p{page_no} failed: {e}", doc.id),
                 }
+            }
+            if img.is_some() && !class.is_blank {
+                turns.push(turned);
             }
             // The render-time pixel heuristic decides blankness; the model can only
             // confirm it (a weak or garbage model must never blank out real pages).
@@ -276,6 +312,24 @@ fn process_document(
                 pages[idx].is_blank = Some(true);
             }
             classes.push((pages[idx].page_no, class));
+        }
+        // The pages in between are not classified (first N + last): a document scanned sideways
+        // had only those turned and the rest read lying on its side. They take the turn most of
+        // the classified pages needed.
+        if let Some(turn) = majority_turn(&turns) {
+            for idx in CLASSIFY_MAX_PAGES..n.saturating_sub(1) {
+                if pages[idx].width_px == 0 {
+                    continue;
+                }
+                if deps.cancelled() {
+                    return Err(CoreError::Cancelled);
+                }
+                progress("classify", Some((idx as u32 + 1, n as u32)));
+                let new_rotation = (pages[idx].rotation + turn) % 360;
+                if let Err(e) = turn_page(deps, &doc, &mut pages[idx], new_rotation) {
+                    log::warn!("rotation of {} p{} failed: {e}", doc.id, pages[idx].page_no);
+                }
+            }
         }
         let (doc_type, language) = classify::vote(&classes);
         db.with(|c| repo::set_classified(c, &doc.id, &doc_type, Some(&language), false))?;

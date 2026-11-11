@@ -527,6 +527,83 @@ fn rotation_is_applied_and_manual_type_wins() {
     assert_eq!(doc.doc_type_source.as_deref(), Some("manual"));
 }
 
+/// Audit PIP-14 (second half): a rotation the model asks for again after the page was turned is a
+/// misdetection; the page used to stay in that unconfirmed rotation.
+#[test]
+fn a_rotation_the_second_look_does_not_confirm_is_undone() {
+    let w = World::new();
+    w.add_doc("p1", "photo.jpg", SourceKind::Image, &[None]);
+    let before = w.pages("p1")[0].clone();
+    w.chat.push("classify", classify_reply("contract", 90));
+    w.chat.push("classify", classify_reply("receipt", 90));
+    let deps = w.deps(None);
+    let req = ProcessRequest { document_ids: vec!["p1".into()], level: PipelineLevel::Classify, ..Default::default() };
+    run::process(&deps, &req, &mut |_| {}).unwrap();
+    let after = w.pages("p1")[0].clone();
+    assert_eq!(w.chat.calls("classify"), 2);
+    assert_eq!((after.rotation, after.width_px, after.height_px), (0, before.width_px, before.height_px));
+    assert_eq!(after.page_rotation, Some(0), "no turn recorded");
+    assert_eq!(w.doc("p1").doc_type.as_deref(), Some("contract"), "the class of the page as it is shown");
+    let on_disk = image::image_dimensions(DocumentCache::for_document(&w.paths, "p1").page_file(1)).unwrap();
+    assert_eq!(on_disk, (before.width_px, before.height_px), "the render is the upright one again");
+}
+
+/// Audit PIP-14 (first half): only the first 8 pages and the last one are classified, so only
+/// those were turned — a 12-page document scanned sideways kept pages 9–11 lying on their side.
+#[test]
+fn unclassified_pages_take_the_rotation_most_classified_pages_needed() {
+    assert_eq!(run::majority_turn(&[90, 90, 90, 0, 90]), Some(90));
+    assert_eq!(run::majority_turn(&[90, 0, 0, 0, 270]), None, "a few landscape pages are no majority");
+    assert_eq!(run::majority_turn(&[90, 90, 0, 0]), None, "half is not most");
+    assert_eq!(run::majority_turn(&[180]), Some(180));
+    assert_eq!(run::majority_turn(&[]), None);
+
+    let candidates = crate::documents::render::default_pdfium_candidates();
+    let Some(svc) = crate::documents::render::locate_pdfium(&candidates)
+        .and_then(|lib| crate::documents::render::RenderService::global(&lib).ok())
+    else {
+        eprintln!("rotation test: skipped (set DOCULENS_PDFIUM)");
+        return;
+    };
+    let w = World::new();
+    let pdf = w.paths.root.join("documents/sideways.pdf");
+    std::fs::create_dir_all(pdf.parent().unwrap()).unwrap();
+    let texts: Vec<String> = (1..=12).map(|i| format!("Contract page {i}")).collect();
+    crate::documents::convert::write_blank_pdf(&pdf, 12, &texts).unwrap();
+    // A small render keeps the test quick; the rotation does not depend on the resolution.
+    let render_options = RenderOptions { dpi: 48, thumbnails: false, ..Default::default() };
+    let import = ImportDeps { render: Some(svc), render_options, ..w.import_deps() };
+    let plan = crate::documents::import::plan(
+        &w.db,
+        &w.paths,
+        std::slice::from_ref(&pdf),
+        &Default::default(),
+        crate::documents::import::ImportSource::Folder,
+    )
+    .unwrap();
+    let id =
+        crate::documents::import::run(&import, &plan, None, &mut |_| {}, &mut |_, _| {}).unwrap().imported[0].clone();
+    let before = w.pages(&id);
+    assert_eq!(before.len(), 12);
+    assert!(before.iter().all(|p| p.rotation == 0 && p.width_px < p.height_px), "upright A4 renders");
+    // Pages 1–8 and 12 are classified: each asks for a quarter turn and is content after it.
+    for _ in 0..9 {
+        w.chat.push("classify", classify_reply("contract", 90));
+        w.chat.push("classify", classify_reply("contract", 0));
+    }
+    let deps = PipelineDeps { import, ..w.deps(None) };
+    let req = ProcessRequest { document_ids: vec![id.clone()], level: PipelineLevel::Classify, ..Default::default() };
+    let report = run::process(&deps, &req, &mut |_| {}).unwrap();
+    assert_eq!(report.failed, Vec::<(String, String)>::new());
+    assert_eq!(w.chat.calls("classify"), 18, "pages 9–11 are still not classified");
+    let after = w.pages(&id);
+    for p in &after {
+        assert_eq!(p.rotation, 90, "page {}", p.page_no);
+        assert!(p.width_px > p.height_px, "page {} is re-rendered turned: {}x{}", p.page_no, p.width_px, p.height_px);
+    }
+    assert_eq!(after[9].page_rotation, None, "no class of its own");
+}
+
 #[test]
 fn blank_verdict_needs_the_pixel_heuristic() {
     // A garbage model answering is_blank=true must not blank out a page the renderer saw ink on.
