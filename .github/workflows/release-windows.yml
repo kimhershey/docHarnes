@@ -36,6 +36,11 @@ on:
         type: boolean
         default: false
 
+# Read-only by default; only the job below gets a write token, for its publish step. (The build steps of that job
+# still run with it — moving the upload into a small second job is the remaining part of PKG-14.)
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build NSIS installer (${{ inputs.variant }})
@@ -49,10 +54,11 @@ jobs:
       # Release downloads: more retries than the default 4 (scripts/lib/fetch-retry.mjs).
       DOCULENS_FETCH_ATTEMPTS: "6"
     steps:
-      - uses: actions/checkout@v4
+      # Third-party actions are pinned to a commit; the comment names the release that commit is.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ inputs.ref }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -61,8 +67,12 @@ jobs:
       # version (scripts/check-versions.mjs reads the branch from GITHUB_REF_NAME).
       - name: Versions agree (Cargo.toml / Cargo.lock, package.json / lock, tauri.conf.json, mock backend, SBOM)
         run: node scripts/check-versions.mjs
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      # dtolnay/rust-toolchain: a pinned commit must be on its master branch (the per-toolchain branches such as
+      # `stable` are rewritten and garbage-collected), and master takes the toolchain as an input.
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-15
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: npm ci
 
       - name: Resolve version, engine tag and installer name
@@ -87,7 +97,7 @@ jobs:
       - name: Fetch PDFium → src-tauri/resources/pdfium/
         run: node scripts/fetch-pdfium.mjs --bundle
       - name: Cache the built ko-dic dictionary
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: src-tauri/resources/ko-dic
           key: kodic-bundle-windows-${{ hashFiles('engines/kodic.json', 'crates/doculens-kodic/**', 'scripts/fetch-kodic.mjs') }}
@@ -170,7 +180,7 @@ jobs:
       # tauri-bundler downloads the NSIS toolset (tauri-apps/binary-releases) into %LOCALAPPDATA%\tauri on first
       # use; cache it so a GitHub release-download outage (HTTP 504 seen on 2026-11-08) cannot fail the bundling step.
       - name: Cache the Tauri bundler tools (NSIS)
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~\AppData\Local\tauri
           key: tauri-tools-windows-${{ hashFiles('package-lock.json') }}
@@ -232,7 +242,7 @@ jobs:
           if ($missing.Count -gt 0) { Write-Host "::error::bundled assets missing from the installer: $($missing -join ', ')"; exit 1 }
           Write-Host "installer contents OK: $($required.Count) required entries present"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: DocuLens-Setup-${{ steps.meta.outputs.variant }}-${{ steps.meta.outputs.version }}-x64
           path: dist-installer/*

@@ -1,5 +1,10 @@
 name: CI
 
+# Third-party actions are pinned to a commit (the trailing comment names the release that commit is). The manual
+# release workflows use the same pins, so a green CI run also proves that every pin still resolves before an
+# installer build is dispatched. dtolnay/rust-toolchain is pinned on its master branch — the per-toolchain branches
+# such as `stable` are rewritten and garbage-collected — and therefore takes `toolchain: stable` as an input.
+
 on:
   push:
     branches: ["main", "phase/**", "release/**"]
@@ -14,21 +19,22 @@ jobs:
     name: Rust (core + tauri shell, Linux)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Tauri Linux dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev pkg-config patchelf
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-15
         with:
+          toolchain: stable
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Resolve the pinned PDFium build
         id: pdfium
         run: echo "tag=$(node -p "require('./engines/pdfium.json').version")" >> "$GITHUB_OUTPUT"
       - name: Cache PDFium
         id: pdfium-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: /tmp/pdfium
           key: pdfium-linux-x64-${{ steps.pdfium.outputs.tag }}
@@ -40,7 +46,7 @@ jobs:
         run: echo "ver=$(node -p "require('./engines/kodic.json').version")-lindera$(node -p "require('./engines/kodic.json').lindera")" >> "$GITHUB_OUTPUT"
       - name: Cache the built ko-dic dictionary
         id: kodic-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: /tmp/kodic
           key: kodic-${{ steps.kodic.outputs.ver }}-${{ hashFiles('crates/doculens-kodic/**', 'engines/kodic.json', 'scripts/fetch-kodic.mjs') }}
@@ -58,8 +64,8 @@ jobs:
     name: Web (typecheck, unit, build, e2e)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -72,7 +78,7 @@ jobs:
       - run: npm run e2e
         env:
           CI: "1"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
           name: playwright-report
@@ -82,15 +88,17 @@ jobs:
     name: Real llama-server (CPU) + tiny Gemma 4 fixture
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-15
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Resolve the pinned llama.cpp tag
         id: tag
         run: echo "tag=$(node -p "require('./engines/manifest.json').tag")" >> "$GITHUB_OUTPUT"
       - name: Cache the llama-server CPU build
         id: engine-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: /tmp/engine/bin
           key: llama-server-cpu-${{ steps.tag.outputs.tag }}-ubuntu-24.04-v2
@@ -126,8 +134,8 @@ jobs:
     name: License gate
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -136,8 +144,10 @@ jobs:
       # cargo-deny as a prebuilt, checksum-verified binary (the Docker-based cargo-deny-action
       # downloads its binary unauthenticated at image build time and hit "gzip: invalid magic"
       # on two consecutive runs); pinned to the version verified locally.
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@v2
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-15
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-deny@0.20.2
       - run: cargo deny check licenses bans sources
@@ -146,16 +156,18 @@ jobs:
     name: Windows compile check
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-15
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Resolve the pinned PDFium build
         id: pdfium
         shell: bash
         run: echo "tag=$(node -p "require('./engines/pdfium.json').version")" >> "$GITHUB_OUTPUT"
       - name: Cache PDFium
         id: pdfium-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ runner.temp }}\pdfium
           key: pdfium-windows-x64-${{ steps.pdfium.outputs.tag }}
@@ -178,7 +190,7 @@ jobs:
         run: echo "ver=$(node -p "require('./engines/kodic.json').version")-lindera$(node -p "require('./engines/kodic.json').lindera")" >> "$GITHUB_OUTPUT"
       - name: Cache the built ko-dic dictionary
         id: kodic-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ runner.temp }}\kodic
           key: kodic-windows-${{ steps.kodic.outputs.ver }}-${{ hashFiles('crates/doculens-kodic/**', 'engines/kodic.json', 'scripts/fetch-kodic.mjs') }}
@@ -195,8 +207,8 @@ jobs:
     name: Third-party notices / SBOM up to date
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -205,8 +217,10 @@ jobs:
       # release/<version> branch the version must also be the one in the branch name (GITHUB_REF_NAME).
       - name: Versions agree (Cargo.toml / Cargo.lock, package.json / lock, tauri.conf.json, mock backend, SBOM)
         run: node scripts/check-versions.mjs
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-15
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           cache-targets: false
       - run: npm ci
@@ -221,12 +235,14 @@ jobs:
     name: Planner golden set (eval harness, 0.5 pt regression gate)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-15
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Golden set vs baseline (fails when accuracy drops by more than 0.5 pt)
         run: cargo run -p doculens-eval -- planner --golden eval/golden/planner.json --baseline eval/baselines/planner-rules.json --out eval/out/planner-rules.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: planner-eval-results
