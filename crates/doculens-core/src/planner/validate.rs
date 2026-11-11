@@ -212,6 +212,7 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
     }
 
     // -- scope ----------------------------------------------------------------
+    let scope_reader = uses_scope(plan);
     let f = &mut plan.scope.filter;
     if let Some(folder) = plan.scope.folder.take() {
         match workspace_relative(&folder) {
@@ -252,8 +253,12 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
         }
     }
     // Relative-date phrase resolved by the pre-router: deterministic override of a missing range.
+    // Not for a plan that points at explicit documents or reads no documents at all: a date in
+    // such a sentence is a value ("이 문서를 2024년판으로 표시", "제목을 '2026 공급계약'으로",
+    // "2026 감사 대응 프로젝트 만들어줘"), and as a filter it would drop the documents the user named.
     if let Some(d) = date {
-        if f.date_from.is_none() && f.date_to.is_none() {
+        let named = plan.scope.doc_ids.iter().any(|id| !id.trim().is_empty());
+        if f.date_from.is_none() && f.date_to.is_none() && !named && scope_reader {
             f.date_from = Some(d.from.to_string());
             f.date_to = Some(d.to.to_string());
         }
