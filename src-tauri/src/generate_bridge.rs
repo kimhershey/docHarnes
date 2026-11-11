@@ -140,6 +140,10 @@ pub fn run_draft(
     pctx: &pipeline_bridge::PipelineContext,
 ) -> WorkerResult {
     let state = app.state::<AppState>();
+    let ko = req.language == doculens_core::settings::Language::Ko;
+    // Whether the draft this job revises is stored right now: a draft deleted while the job runs is
+    // not brought back by its result.
+    let existed = req.previous.as_deref().is_some_and(|p| store::exists(&pctx.docs.paths, &p.id));
     let mut model: Option<String> = None;
     let mut ctx_size = None;
     if !rule_only(req) {
@@ -178,13 +182,22 @@ pub fn run_draft(
     // The model call holds the engine like any batch step (interactive requests cut in between).
     let _gate = state.gate.batch_begin();
     state.jobs.progress(&job.id, Some(0.2), None, None, Some("drafting".into()));
-    let outcome: DraftOutcome = generate::draft(&deps, req).map_err(|e| (e.to_string(), None))?;
-    // A split draft cancelled between sections keeps what was written: save it before reporting the cancel.
-    let _ = store::save(&pctx.docs.paths, &outcome.draft);
-    if ctl.cancelled() {
+    let mut outcome: DraftOutcome = generate::draft(&deps, req).map_err(|e| (e.to_string(), None))?;
+    // The result replaces the stored draft it started from only when that loses nothing. After a
+    // cancel (a split draft keeps the sections written so far) or when the stored draft was changed
+    // after this job was created — edits made before a failed job is retried — it is stored as a new
+    // draft; a new draft is stored under its own id as before.
+    let cancelled = ctl.cancelled();
+    let input = store::JobInput { previous: req.previous.as_deref(), captured_at: job.created_at, existed };
+    let stored =
+        store::save_job_result(&pctx.docs.paths, &mut outcome.draft, &input, cancelled, ko).unwrap_or_else(|e| {
+            log::warn!("draft job {}: the result could not be stored: {e}", job.id);
+            store::JobSave::NotSaved { reason: store::SkipReason::Failed }
+        });
+    if cancelled {
         return Err(("cancelled".into(), None));
     }
-    let detail = if req.language == doculens_core::settings::Language::Ko {
+    let mut detail = if ko {
         format!(
             "{} · 필드 {} · 검토 항목 {}",
             outcome.draft.title,
@@ -199,11 +212,26 @@ pub fn run_draft(
             outcome.draft.issues.len()
         )
     };
+    detail.push_str(match (&stored, ko) {
+        (store::JobSave::Saved, _) => "",
+        (store::JobSave::Copy { .. }, true) => " · 원래 초안이 그 사이 수정되어 새 초안으로 저장",
+        (store::JobSave::Copy { .. }, false) => " · stored as a new draft (the original was edited meanwhile)",
+        (store::JobSave::NotSaved { reason: store::SkipReason::Deleted }, true) => {
+            " · 초안이 삭제되어 목록에 저장하지 않음"
+        }
+        (store::JobSave::NotSaved { reason: store::SkipReason::Deleted }, false) => {
+            " · not stored (the draft was deleted)"
+        }
+        (store::JobSave::NotSaved { reason: store::SkipReason::Failed }, true) => " · 초안 목록에 저장하지 못함",
+        (store::JobSave::NotSaved { reason: store::SkipReason::Failed }, false) => " · could not be stored",
+    });
     let mut payload = serde_json::to_value(&outcome).map_err(|e| (e.to_string(), None))?;
     if let Some(obj) = payload.as_object_mut() {
         obj.insert("project_id".into(), serde_json::json!(project_id));
         // `source` is the draft's own field (rules | model); the job origin lives under its own key.
         obj.insert("job_source".into(), serde_json::json!(source));
+        // Where the result went: `{status: saved}` | `{status: copy, original, reason}` | `{status: not_saved, reason}`.
+        obj.insert("draft_store".into(), serde_json::to_value(&stored).unwrap_or(serde_json::Value::Null));
     }
     Ok((Some(detail), Some(payload)))
 }

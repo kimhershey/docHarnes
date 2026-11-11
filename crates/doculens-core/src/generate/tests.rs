@@ -1514,6 +1514,184 @@ fn store_round_trip() {
     assert!(w.paths.drafts_dir().starts_with(w.paths.app_dir()));
 }
 
+/// GEN-3: a draft job used to write its result over the stored draft whatever had happened meanwhile — the
+/// partial result of a cancelled "전체 다시 쓰기" replaced the complete draft, a retried job put its old
+/// snapshot over newer edits, a deleted draft came back. `save_job_result` decides where a result may go.
+#[test]
+fn job_results_do_not_replace_complete_or_newer_drafts() {
+    use super::store::{save_job_result, CopyReason, JobInput, JobSave, SkipReason};
+    use chrono::{Duration, Utc};
+    let w = world();
+    let p = |t: &str| DraftBlock::Paragraph { text: t.into(), source: None };
+    // The stored draft the job starts from, exported once.
+    let mut original = quotation_draft();
+    original.id = "dr-orig".into();
+    original.saved_path = Some("documents/generated/견적.docx".into());
+    let reset = || {
+        for s in store::list(&w.paths).unwrap() {
+            store::delete(&w.paths, &s.id).unwrap();
+        }
+        store::save(&w.paths, &original).unwrap();
+    };
+    let stored = |id: &str| store::load(&w.paths, id).unwrap();
+    let ids = || {
+        let mut v: Vec<String> = store::list(&w.paths).unwrap().into_iter().map(|s| s.id).collect();
+        v.sort();
+        v
+    };
+    // What a job makes of it: the same id (a regeneration / revision keeps the id of `previous`).
+    let result = |text: &str| {
+        let mut d = original.clone();
+        d.body = vec![p(text)];
+        d
+    };
+    // The job took its input after the draft was last stored …
+    let after_save = Utc::now() + Duration::seconds(30);
+    // … or long before (a failed job retried from the job list keeps its creation time and its `previous`).
+    let hour_ago = Utc::now() - Duration::hours(1);
+    let input = |captured_at| JobInput { previous: Some(&original), captured_at, existed: true };
+
+    // 1. Nothing happened meanwhile: the result replaces the draft, and the outcome carries the stored time.
+    reset();
+    let mut d = result("고쳐 쓴 본문");
+    assert_eq!(save_job_result(&w.paths, &mut d, &input(after_save), false, true).unwrap(), JobSave::Saved);
+    assert_eq!((d.id.as_str(), ids()), ("dr-orig", vec!["dr-orig".to_string()]));
+    assert_eq!(stored("dr-orig").body, vec![p("고쳐 쓴 본문")]);
+    assert_eq!(stored("dr-orig").updated_at, d.updated_at);
+
+    // 2. Cancelled: the complete draft stays, what the job wrote so far becomes a draft of its own.
+    reset();
+    let mut partial = result("1절만 다시 쓴 부분 결과");
+    partial.notes.push("취소되어 2/8절까지만 생성했습니다 (여기까지 생성됨).".into());
+    let saved = save_job_result(&w.paths, &mut partial, &input(after_save), true, true).unwrap();
+    assert_eq!(saved, JobSave::Copy { original: "dr-orig".into(), reason: CopyReason::Cancelled });
+    assert_ne!(partial.id, "dr-orig");
+    assert_eq!(stored("dr-orig").body, original.body, "the complete draft is untouched");
+    let copy = stored(&partial.id);
+    assert_eq!(copy.body, vec![p("1절만 다시 쓴 부분 결과")]);
+    assert!(
+        copy.notes[0].starts_with("취소된 작업이 남긴 결과입니다") && copy.notes[1].contains("2/8절"),
+        "{:?}",
+        copy.notes
+    );
+    assert_eq!(copy.saved_path, None, "the export belongs to the original");
+    assert_eq!(stored("dr-orig").saved_path, original.saved_path);
+    assert_eq!(ids().len(), 2);
+    // A cancelled new draft keeps what was written under its own id, as before.
+    let mut fresh = quotation_draft();
+    let fresh_id = fresh.id.clone();
+    let no_previous = JobInput { previous: None, captured_at: after_save, existed: false };
+    assert_eq!(save_job_result(&w.paths, &mut fresh, &no_previous, true, true).unwrap(), JobSave::Saved);
+    assert!(fresh.id == fresh_id && store::exists(&w.paths, &fresh_id));
+
+    // 3. Retried after the user edited and saved the draft: the edits stay, the result goes next to them.
+    reset();
+    let mut edited = original.clone();
+    edited.body.push(p("그 사이에 사용자가 덧붙인 문단"));
+    store::save(&w.paths, &edited).unwrap();
+    let mut late = result("옛 스냅샷으로 만든 결과");
+    let saved = save_job_result(&w.paths, &mut late, &input(hour_ago), false, false).unwrap();
+    assert_eq!(saved, JobSave::Copy { original: "dr-orig".into(), reason: CopyReason::Newer });
+    assert_eq!(stored("dr-orig").body, edited.body, "the newer edits survive");
+    assert_eq!(stored(&late.id).body, vec![p("옛 스냅샷으로 만든 결과")]);
+    assert!(stored(&late.id).notes[0].starts_with("The original draft was edited after this job started"));
+
+    // 4. Newer on disk but saying the same as the job's input (the editor's save raced the job): replaced.
+    reset();
+    let mut d = result("결과");
+    assert_eq!(save_job_result(&w.paths, &mut d, &input(hour_ago), false, true).unwrap(), JobSave::Saved);
+    assert_eq!(stored("dr-orig").body, vec![p("결과")]);
+
+    // 5. Stored before the job took its input, and different from it (the request carried edits the
+    //    editor had not saved yet): replaced — the job's input was the newer one.
+    reset();
+    let mut unsaved = original.clone();
+    unsaved.title = "아직 저장되지 않은 편집".into();
+    let from_editor = JobInput { previous: Some(&unsaved), captured_at: after_save, existed: true };
+    let mut d = unsaved.clone();
+    d.body = vec![p("결과")];
+    assert_eq!(save_job_result(&w.paths, &mut d, &from_editor, false, true).unwrap(), JobSave::Saved);
+    assert_eq!(stored("dr-orig").title, "아직 저장되지 않은 편집");
+
+    // 6. Deleted while the job ran: not brought back. (A draft that was not stored when the job started is.)
+    reset();
+    store::delete(&w.paths, "dr-orig").unwrap();
+    let mut d = result("결과");
+    let saved = save_job_result(&w.paths, &mut d, &input(after_save), false, true).unwrap();
+    assert_eq!(saved, JobSave::NotSaved { reason: SkipReason::Deleted });
+    assert!(ids().is_empty());
+    let not_stored = JobInput { previous: Some(&original), captured_at: after_save, existed: false };
+    assert_eq!(save_job_result(&w.paths, &mut d, &not_stored, false, true).unwrap(), JobSave::Saved);
+    assert_eq!(ids(), ["dr-orig"]);
+
+    // The shapes the job result carries (`draft_store`).
+    let json = |s: JobSave| serde_json::to_value(s).unwrap();
+    assert_eq!(json(JobSave::Saved), json!({"status": "saved"}));
+    assert_eq!(
+        json(JobSave::Copy { original: "dr-orig".into(), reason: CopyReason::Cancelled }),
+        json!({"status": "copy", "original": "dr-orig", "reason": "cancelled"})
+    );
+    assert_eq!(
+        json(JobSave::Copy { original: "dr-orig".into(), reason: CopyReason::Newer }),
+        json!({"status": "copy", "original": "dr-orig", "reason": "newer"})
+    );
+    assert_eq!(
+        json(JobSave::NotSaved { reason: SkipReason::Deleted }),
+        json!({"status": "not_saved", "reason": "deleted"})
+    );
+}
+
+/// GEN-3, the audit's scenario end to end: "전체 다시 쓰기" of a filled draft cancelled after two of five
+/// sections. The job result is partial; stored through `save_job_result` it leaves the complete draft alone.
+#[test]
+fn a_cancelled_regeneration_keeps_the_complete_draft() {
+    use super::store::{save_job_result, CopyReason, JobInput, JobSave};
+    let w = world();
+    let complete = filled_progress_report();
+    store::save(&w.paths, &complete).unwrap();
+    let para = |t: &str| json!({"kind": "paragraph", "text": t, "items": [], "source_index": null});
+    let head = json!({
+        "title": "11월 2주차 진척 보고서",
+        "fields": [],
+        "tables": [],
+        "body": [{"kind": "heading", "text": "보고 개요", "items": [], "source_index": null}, para("새 개요")],
+        "notes": []
+    });
+    let chat = SeqChat::new(vec![head.to_string(), json!({ "blocks": [para("새 본문")] }).to_string()]);
+    let cancel = AtomicBool::new(false);
+    let vlm = Vlm::new(&chat, "scripted".into(), Profile::Balanced, Some(&cancel));
+    let on_progress = |_f: f32, detail: &str| {
+        if detail == "section 3/5" {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    };
+    let mut deps = w.deps(Some(&vlm), None);
+    deps.progress = Some(&on_progress);
+    let req = DraftRequest {
+        form_ref: Some("progress_report".into()),
+        content: "한빛 포털 구축 진척 보고서".into(),
+        max_tokens: Some(8_000),
+        previous: Some(Box::new(complete.clone())),
+        feedback: Some("더 간결하게".into()),
+        revise: Some(super::ReviseScope::Whole),
+        use_knowledge: false,
+        ..Default::default()
+    };
+    let captured_at = chrono::Utc::now();
+    let mut out = draft::draft(&deps, &req).unwrap();
+    assert_eq!(out.sections, 2, "cancelled between sections");
+    assert_eq!(out.draft.id, complete.id, "a regeneration keeps the id — it used to be stored over the draft");
+    let input = JobInput { previous: req.previous.as_deref(), captured_at, existed: true };
+    let saved = save_job_result(&w.paths, &mut out.draft, &input, true, true).unwrap();
+    assert_eq!(saved, JobSave::Copy { original: complete.id.clone(), reason: CopyReason::Cancelled });
+    let sections = |d: &Draft| super::sections_of(&d.body).len();
+    assert_eq!(sections(&store::load(&w.paths, &complete.id).unwrap()), 5, "the complete draft is still stored");
+    let partial = store::load(&w.paths, &out.draft.id).unwrap();
+    assert_eq!(sections(&partial), 2);
+    assert!(partial.notes[0].starts_with("취소된 작업이 남긴 결과입니다"), "{:?}", partial.notes);
+    assert!(partial.notes.iter().any(|n| n.contains("2/5절까지만")), "{:?}", partial.notes);
+}
+
 // ---------------------------------------------------------------------------
 // Save
 // ---------------------------------------------------------------------------
