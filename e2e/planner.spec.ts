@@ -532,13 +532,18 @@ test.describe("P5 planner", () => {
 
     // 되묻기 on a plan card: the reply re-plans with the plan as context; the old card is closed.
     await send(page, "견적서 월별 폴더로 옮겨");
-    const plan2 = assistantCard(page, "plan").last();
-    await expect(plan2).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
-    await plan2.getByTestId("plan-ask-back-input").fill("검토 안 된 것도 같이 옮겨");
-    await plan2.getByTestId("plan-ask-back").click();
-    await expect(plan2).toHaveAttribute("data-plan-status", "cancelled");
-    await expect(page.locator('[data-testid="assistant-card-plan"]')).toHaveCount(3, { timeout: 15_000 });
-    await expect(assistantCard(page, "plan").last()).toHaveAttribute("data-plan-status", "pending");
+    const plans = page.locator('[data-testid="assistant-card-plan"]');
+    await expect(plans.last()).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    // The cards so far: the aggregate's own plan card (실행됨), the cancelled one and this one. The card that is
+    // asked about is addressed by its position — `.last()` would move on to the re-planned card once it arrives
+    // (the test used to count the cards in the instant before that and failed whenever the reply was quicker).
+    const asked = (await plans.count()) - 1;
+    expect(asked).toBe(2);
+    await plans.nth(asked).getByTestId("plan-ask-back-input").fill("검토 안 된 것도 같이 옮겨");
+    await plans.nth(asked).getByTestId("plan-ask-back").click();
+    await expect(plans.nth(asked)).toHaveAttribute("data-plan-status", "cancelled");
+    await expect(plans).toHaveCount(asked + 2, { timeout: 15_000 });
+    await expect(plans.last()).toHaveAttribute("data-plan-status", "pending");
   });
 
   test("a pasted text with 다듬어줘 is answered from the text itself: no plan card, no retrieval", async ({ page }) => {
