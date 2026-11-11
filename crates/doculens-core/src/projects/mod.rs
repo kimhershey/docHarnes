@@ -35,8 +35,9 @@ pub mod rules;
 mod tests;
 
 /// Phase of a project, computed from its dates (0.3.0 plan §5; never stored): before the start
-/// → 진행예정, after the end → 완료, otherwise 진행중. A missing start counts from the creation day,
-/// a missing end keeps the project 진행중 (user decision 2026-11-10).
+/// → 진행예정, from the end date on → 완료, otherwise 진행중. A missing start counts from the creation day,
+/// a missing end keeps the project 진행중 (user decision 2026-11-10). The end date itself is 완료:
+/// "완료 처리" stores today as the end date and must show at once, not on the next day.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectPhase {
@@ -90,7 +91,7 @@ pub fn phase_for(
     let start = start.unwrap_or(created);
     if today < start {
         ProjectPhase::Planned
-    } else if end.is_some_and(|e| e < today) {
+    } else if end.is_some_and(|e| e <= today) {
         ProjectPhase::Done
     } else {
         ProjectPhase::Active
@@ -193,8 +194,8 @@ pub struct Project {
     pub end_date: Option<String>,
     /// Computed from the dates for today (plan §5).
     pub phase: ProjectPhase,
-    /// 기한 경과: the end date has passed but the project is incomplete (required documents
-    /// missing, mismatches in the last check, or never checked) — a badge, not a phase.
+    /// 기한 경과: the end date has passed (it is before today) but the project is incomplete (required
+    /// documents missing, mismatches in the last check, or never checked) — a badge, not a phase.
     pub overdue: bool,
     #[serde(default)]
     pub settings: ProjectSettings,
@@ -376,7 +377,8 @@ pub struct RuleDraft {
 pub enum Verdict {
     Pass,
     Mismatch,
-    /// A value could not be compared (missing / unparsable / review pending).
+    /// A value could not be compared (missing / unparsable / review pending, or the document has no
+    /// extraction run yet — evidence status `not_extracted`).
     Undetermined,
     /// A document of the referenced type is not in the project.
     Missing,
@@ -410,7 +412,10 @@ pub struct Evidence {
     pub value: Option<String>,
     pub normalized: Option<String>,
     pub page: Option<u32>,
-    /// Field review state at check time (`auto`, `pending`, `approved`, …).
+    /// Field review state at check time (`auto`, `pending`, `approved`, `rejected`, …), or why there is
+    /// no field: `absent` (the extraction has no such field), `not_extracted` (the document has no
+    /// extraction run yet), `missing_document` (no document of the type), `document` (a document-level
+    /// value stands in).
     pub status: Option<String>,
 }
 
@@ -442,6 +447,10 @@ pub struct CheckRun {
     pub results: Vec<RuleResult>,
     /// Required document types absent at check time.
     pub missing_doc_types: Vec<String>,
+    /// Only some of the enabled rules were run (`rule_ids`). Such a run answers that question alone: it is
+    /// returned to the caller but not stored, so it never replaces the project's last full check.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub partial: bool,
 }
 
 /// One row of the document checklist (required types from the template + extra types present).
@@ -538,7 +547,8 @@ pub fn define_rule(
 }
 
 /// Runs the project's (enabled) rules deterministically; `rule_ids` empty = all.
-/// Persists the run and updates the project's counters.
+/// A full run is persisted and updates the project's counters; a run over some of the rules
+/// (`CheckRun::partial`) is only returned.
 pub fn check(deps: &ProjectDeps<'_>, project_id: &str, rule_ids: &[String]) -> Result<CheckRun> {
     check::run(deps, project_id, rule_ids)
 }
@@ -558,8 +568,9 @@ pub fn report(db: &Db, project_id: &str, language: Language) -> Result<String> {
     report::markdown(db, project_id, language)
 }
 
-/// Builds the 보완요청서 draft request from the findings of a check run
-/// (`finding_ids` empty = every mismatch / missing); the `generate` module renders it.
+/// Builds the 보완요청서 draft request from the findings of a check run; the `generate` module renders it.
+/// `finding_ids` empty = every mismatch / missing; otherwise rule results by `RuleResult::id` and missing
+/// required documents by `missing_doc:<doc type>` (errors and details: [`report::supplement_request`]).
 pub fn supplement_request(
     db: &Db,
     project_id: &str,

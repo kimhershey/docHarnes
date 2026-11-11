@@ -1,0 +1,322 @@
+{
+ "schema_version": 1,
+ "kind": "planner",
+ "context": "../planner-context.json",
+ "today": "2026-11-08",
+ "engine": {
+  "binary": "/tmp/engine/bin/llama-server",
+  "version": null,
+  "build_number": null,
+  "backend": "cpu",
+  "tier": "cpu_only",
+  "profile": "balanced",
+  "model": "gemma4-e4b-q4km",
+  "model_display": "Gemma-4-E4B-It (Q4_K_M)",
+  "quantization": "Q4_K_M",
+  "architecture": "gemma4",
+  "has_vision": false,
+  "ctx": 8192,
+  "model_memory_bytes": null,
+  "mmproj_bytes": 0,
+  "devices": [],
+  "vram_used_mib": null,
+  "load_ms": 5147
+ },
+ "mode": "model",
+ "model": "gemma4-e4b-q4km",
+ "golden": "eval/golden/planner.json (part)",
+ "note": "merged from 1 batch runs of doculens-eval planner --engine … --model gemma4-e4b-q4km --backend cpu",
+ "total": 9,
+ "items": [
+  {
+   "id": "ko-115",
+   "category": "ko",
+   "text": "프로젝트 별 내용을 요약해줘",
+   "correct": true,
+   "source": "model",
+   "intent": "summarize",
+   "ops": [
+    "summarize"
+   ],
+   "summary": "프로젝트별로 문서를 묶어 요약합니다.",
+   "confidence": 0.9,
+   "latency_ms": 432809.89073299995,
+   "kind": "question",
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 3535,
+   "completion_tokens": 117,
+   "mismatches": [],
+   "operations": [
+    {
+     "group_by": "project",
+     "op": "summarize"
+    }
+   ],
+   "scope": {
+    "filter": {}
+   },
+   "raw": "{\n  \"summary\": \"프로젝트별로 문서를 묶어 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {},\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"group_by\": \"project\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+  },
+  {
+   "id": "ko-104",
+   "category": "ko",
+   "text": "글자가 작아서 잘 안 보여, 화면 배율을 120으로 올려줘",
+   "correct": true,
+   "source": "model",
+   "intent": "set_setting",
+   "ops": [
+    "set_setting"
+   ],
+   "summary": "UI scale percentage is set to 120%",
+   "confidence": 0.93,
+   "latency_ms": 442116.05080599996,
+   "kind": "setting",
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 4640,
+   "completion_tokens": 129,
+   "mismatches": [],
+   "operations": [
+    {
+     "key": "ui.scale_percent",
+     "op": "set_setting",
+     "value": 120
+    }
+   ],
+   "scope": {
+    "filter": {}
+   },
+   "raw": "{\n  \"summary\": \"UI scale percentage is set to 120%\",\n  \"unmet\": \"\",\n  \"intent\": \"set_setting\",\n  \"scope\": {},\n  \"operations\": [\n    {\n      \"op\": \"set_setting\",\n      \"key\": \"ui.scale_percent\",\n      \"value\": 120\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.93\n}"
+  },
+  {
+   "id": "ko-112",
+   "category": "ko",
+   "text": "애자일 방법론이 뭐야?",
+   "correct": true,
+   "source": "model",
+   "intent": "answer",
+   "ops": [
+    "answer"
+   ],
+   "summary": "문서와 무관한 질문에 답합니다(문서에 근거가 있으면 근거로)",
+   "confidence": 0.9,
+   "latency_ms": 3874.991025,
+   "kind": "question",
+   "requires_confirmation": false,
+   "route": "general",
+   "attempts": 0,
+   "prompt_tokens": 1061,
+   "completion_tokens": 12,
+   "mismatches": [],
+   "operations": [
+    {
+     "cite": true,
+     "mode": "general",
+     "op": "answer",
+     "question": "애자일 방법론이 뭐야?"
+    }
+   ],
+   "scope": {
+    "filter": {}
+   }
+  },
+  {
+   "id": "ko-111",
+   "category": "ko",
+   "text": "점심 뭐 먹을지 고민이네",
+   "correct": true,
+   "source": "model",
+   "intent": "answer",
+   "ops": [
+    "answer"
+   ],
+   "summary": "대화에 답합니다",
+   "confidence": 0.9,
+   "latency_ms": 4115.766271,
+   "kind": "chat",
+   "requires_confirmation": false,
+   "route": "chat",
+   "attempts": 0,
+   "prompt_tokens": 1062,
+   "completion_tokens": 15,
+   "mismatches": [],
+   "operations": [
+    {
+     "cite": false,
+     "knowledge": false,
+     "mode": "chat",
+     "op": "answer",
+     "question": "점심 뭐 먹을지 고민이네"
+    }
+   ],
+   "scope": {
+    "filter": {}
+   }
+  },
+  {
+   "id": "ko-119",
+   "category": "ko",
+   "text": "지난달 견적서 합계를 메일로 보내줘",
+   "correct": true,
+   "source": "model",
+   "intent": "aggregate",
+   "ops": [
+    "aggregate"
+   ],
+   "summary": "2026-10-01부터 2026-10-31까지의 견적서 합계를 계산하고 이메일로 전송합니다.",
+   "confidence": 0.8,
+   "latency_ms": 186339.403809,
+   "kind": "command",
+   "requires_confirmation": true,
+   "unmet": "이메일 전송 기능은 제공된 op 집합에 없습니다.",
+   "notes": [
+    "unmet_request"
+   ],
+   "attempts": 1,
+   "prompt_tokens": 3283,
+   "completion_tokens": 243,
+   "mismatches": [],
+   "operations": [
+    {
+     "field": "grand_total",
+     "fn": "sum",
+     "group_by": "none",
+     "include_unreviewed": false,
+     "op": "aggregate"
+    }
+   ],
+   "scope": {
+    "filter": {
+     "date_from": "2026-10-01",
+     "date_to": "2026-10-31",
+     "doc_type": "estimate"
+    }
+   },
+   "raw": "{\n  \"summary\": \"2026-10-01부터 2026-10-31까지의 견적서 합계를 계산하고 이메일로 전송합니다.\",\n  \"unmet\": \"이메일 전송 기능은 제공된 op 집합에 없습니다.\",\n  \"intent\": \"aggregate\",\n  \"scope\": {\n    \"filter\": {\n      \"date_from\": \"2026-10-01\",\n      \"date_to\": \"2026-10-31\",\n      \"doc_type\": \"estimate\"\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"aggregate\",\n      \"fn\": \"sum\",\n      \"field\": \"grand_total\",\n      \"group_by\": \"none\",\n      \"include_unreviewed\": false\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.8\n}"
+  },
+  {
+   "id": "ko-94",
+   "category": "ko",
+   "text": "UI 배율 120%",
+   "correct": true,
+   "source": "fast",
+   "intent": "set_setting",
+   "ops": [
+    "set_setting"
+   ],
+   "summary": "UI 배율(%) → 120",
+   "confidence": 1.0,
+   "latency_ms": 0.637752,
+   "kind": "setting",
+   "requires_confirmation": false,
+   "attempts": 0,
+   "prompt_tokens": 0,
+   "completion_tokens": 0,
+   "mismatches": [],
+   "operations": [
+    {
+     "key": "ui.scale_percent",
+     "op": "set_setting",
+     "value": 120
+    }
+   ],
+   "scope": {
+    "filter": {}
+   }
+  },
+  {
+   "id": "ko-96",
+   "category": "ko",
+   "text": "배율을 130 으로 변경해줘",
+   "correct": true,
+   "source": "fast",
+   "intent": "set_setting",
+   "ops": [
+    "set_setting"
+   ],
+   "summary": "UI 배율(%) → 130",
+   "confidence": 1.0,
+   "latency_ms": 0.744202,
+   "kind": "setting",
+   "requires_confirmation": false,
+   "attempts": 0,
+   "prompt_tokens": 0,
+   "completion_tokens": 0,
+   "mismatches": [],
+   "operations": [
+    {
+     "key": "ui.scale_percent",
+     "op": "set_setting",
+     "value": 130
+    }
+   ],
+   "scope": {
+    "filter": {}
+   }
+  },
+  {
+   "id": "ko-97",
+   "category": "ko",
+   "text": "DPI 를 200 으로 변경해줘",
+   "correct": true,
+   "source": "fast",
+   "intent": "set_setting",
+   "ops": [
+    "set_setting"
+   ],
+   "summary": "렌더 DPI → 200",
+   "confidence": 1.0,
+   "latency_ms": 0.659482,
+   "kind": "setting",
+   "requires_confirmation": false,
+   "attempts": 0,
+   "prompt_tokens": 0,
+   "completion_tokens": 0,
+   "mismatches": [],
+   "operations": [
+    {
+     "key": "processing.render_dpi",
+     "op": "set_setting",
+     "value": 200
+    }
+   ],
+   "scope": {
+    "filter": {}
+   }
+  },
+  {
+   "id": "ko-110",
+   "category": "ko",
+   "text": "안녕하세요.",
+   "correct": true,
+   "source": "fast",
+   "intent": "answer",
+   "ops": [
+    "answer"
+   ],
+   "summary": "인사에 답합니다",
+   "confidence": 1.0,
+   "latency_ms": 0.024432,
+   "kind": "chat",
+   "requires_confirmation": false,
+   "attempts": 0,
+   "prompt_tokens": 0,
+   "completion_tokens": 0,
+   "mismatches": [],
+   "operations": [
+    {
+     "cite": false,
+     "knowledge": false,
+     "mode": "chat",
+     "op": "answer",
+     "question": "안녕하세요.",
+     "reply": "안녕하세요! 문서에 대해 물어보시거나, 가져오기·정리·추출·요약 같은 작업을 말씀해 주세요."
+    }
+   ],
+   "scope": {
+    "filter": {}
+   }
+  }
+ ]
+}

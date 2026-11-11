@@ -330,11 +330,16 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
                 }
                 // "Nothing to do" is a turn that was not a command: reply instead of an empty card.
                 guard::noop_to_chat(text, &mut plan, ko);
+                // The one document type the sentence names is the scope of a plan that named none.
+                issues.extend(guard::type_filter_repair(text, &mut plan, ctx, ko));
                 // What the sentence does not support is confirmed, whatever the model's confidence.
                 issues.extend(guard::contract_checks(text, &mut plan, ko));
                 // A split by project the checks put back: the validator had already filled the open
                 // project in as the default scope, which would leave one group.
-                if validate::per_project(&plan) && plan.scope.filter.project_id == ctx.scope_project {
+                if validate::per_project(&plan)
+                    && plan.scope.filter.project_id == ctx.scope_project
+                    && !guard::names_scope_project(text, ctx)
+                {
                     plan.scope.filter.project_id = None;
                 }
                 result.issues = issues;

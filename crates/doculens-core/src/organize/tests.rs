@@ -437,3 +437,76 @@ fn project_variables_and_project_scope() {
     assert!(w.paths.root.join(&after.rel_path).is_file() && !w.paths.root.join(&before.rel_path).is_file());
     assert!(w.paths.root.join("한빛 포털 구축/Active_IMG_2031.jpg").is_file());
 }
+
+/// PRJ-7: "이 프로젝트 정리" files the project's own documents. A document that is in the project through a
+/// tracked copy (its original belongs to an earlier project) is left where it is — the original used to be
+/// moved next to its own copy (`_2`, then `_2_2` for the copy) and out of its first project's folder.
+#[test]
+fn project_scope_organise_leaves_documents_filed_there_as_copies() {
+    use crate::projects::{copies, repo as projects_repo, ProjectInput, DEFAULT_PROJECT_FOLDER};
+    let w = World::new();
+    w.doc("a", "documents/A 사업/계약서/계약서.pdf", b"aaa", Some("contract"), None, None, None, ReviewStatus::Done);
+    w.doc("b", "inbox/검수확인서.pdf", b"bbb", Some("contract"), None, None, None, ReviewStatus::Done);
+    let project = |name: &str| {
+        w.db.with(|c| projects_repo::save_project(c, &ProjectInput { name: name.into(), ..Default::default() }))
+            .unwrap()
+    };
+    let (first, second) = (project("A 사업"), project("B 사업"));
+    copies::add_documents(&w.db, &w.paths, &first.id, &["a".to_string()], Language::Ko).unwrap();
+    copies::add_documents(&w.db, &w.paths, &second.id, &["a".to_string(), "b".to_string()], Language::Ko).unwrap();
+    let copy = w.db.with(|c| copies::list_for_project(c, &second.id)).unwrap().remove(0);
+    assert_eq!((copy.document_id.as_str(), copy.rel_path.as_str()), ("a", "documents/B 사업/계약서/계약서.pdf"));
+
+    let req = OrganizeRequest {
+        scope: Scope {
+            filter: ScopeFilter { project_id: Some(second.id.clone()), ..Default::default() },
+            ..Scope::default()
+        },
+        name_template: None,
+        folder_template: Some(DEFAULT_PROJECT_FOLDER.into()),
+        only_reviewed: false,
+        language: Language::Ko,
+    };
+    let p = plan(&w.db, &w.paths, &req).unwrap();
+    let by_id = |id: &str| p.items.iter().find(|i| i.doc_id == id).unwrap().clone();
+    // The shared document: nothing to do here, its copy already is this project's file.
+    let shared = by_id("a");
+    assert_eq!(
+        (shared.status, shared.to.as_deref(), shared.reason.as_deref()),
+        (ItemStatus::Unchanged, None, Some("project_copy"))
+    );
+    // The project's own document is filed as usual.
+    assert_eq!(by_id("b").to.as_deref(), Some("documents/B 사업/계약서/검수확인서.pdf"));
+    assert_eq!((p.moves, p.unchanged), (1, 1));
+    let applied = apply(&w.db, &w.paths, &p, "organize", "프로젝트 정리", "test", None, &mut no_progress).unwrap();
+    assert_eq!((applied.moved, applied.failed.len()), (1, 0), "{applied:?}");
+    // The original stays in its first project's folder and the copy keeps its name.
+    assert_eq!(w.rel_path("a"), "documents/A 사업/계약서/계약서.pdf");
+    assert!(w.paths.root.join("documents/A 사업/계약서/계약서.pdf").is_file());
+    let copies_now = w.db.with(|c| copies::list_for_project(c, &second.id)).unwrap();
+    assert_eq!(copies_now.len(), 1);
+    assert_eq!(copies_now[0].rel_path, "documents/B 사업/계약서/계약서.pdf");
+    let mut files: Vec<String> = std::fs::read_dir(w.paths.root.join("documents/B 사업/계약서"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    files.sort();
+    assert_eq!(files, vec!["검수확인서.pdf", "계약서.pdf"], "no `_2` duplicates");
+    // Organising the first project still moves the original, and the copy follows its new name.
+    let home = OrganizeRequest {
+        scope: Scope {
+            filter: ScopeFilter { project_id: Some(first.id.clone()), ..Default::default() },
+            ..Scope::default()
+        },
+        name_template: Some("{{doc_type}}_{{title}}".into()),
+        ..req.clone()
+    };
+    let p = plan(&w.db, &w.paths, &home).unwrap();
+    assert_eq!(
+        p.items.iter().find(|i| i.doc_id == "a").unwrap().to.as_deref(),
+        Some("documents/A 사업/계약서/계약서_계약서.pdf")
+    );
+    apply(&w.db, &w.paths, &p, "organize", "프로젝트 정리", "test", None, &mut no_progress).unwrap();
+    let followed = w.db.with(|c| copies::list_for_project(c, &second.id)).unwrap().remove(0);
+    assert_eq!(followed.rel_path, "documents/B 사업/계약서/계약서_계약서.pdf");
+}

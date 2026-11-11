@@ -146,14 +146,19 @@ pub fn knowledge_document_collections(app: AppHandle, id: String) -> UiResult<Ve
     Ok(ctx.db.with_read(|c| repo::collections_of_document(c, &id))?)
 }
 
+/// Sets the role of documents. The role follows the memberships: a document that is still in a reference
+/// group (the common material, another project's group) stays reference material when it is asked to become
+/// a work document — the project screen's 참고 자료 → 업무 문서 switch ends with this call, and it must not
+/// change the document for everyone else. Returns the number of documents that now have `role`.
 #[tauri::command(async)]
 pub fn knowledge_set_role(app: AppHandle, ids: Vec<String>, role: DocumentRole) -> UiResult<u32> {
     let ctx = knowledge_bridge::context(&app)?;
     let n = ctx.db.with_tx(|tx| {
         let mut n = 0;
         for d in &ids {
-            docs::set_role(tx, d, role)?;
-            n += 1;
+            if repo::set_role_by_membership(tx, d, role)? == role {
+                n += 1;
+            }
         }
         Ok(n)
     })?;
@@ -296,13 +301,6 @@ pub fn chat_message_put(app: AppHandle, session_id: String, seq: i64, payload: s
     }
     let ctx = knowledge_bridge::context(&app)?;
     Ok(ctx.db.with(|c| chat::put_message(c, &session_id, seq, &payload))?)
-}
-
-/// Drops the messages of a session from `from_seq` on.
-#[tauri::command(async)]
-pub fn chat_messages_truncate(app: AppHandle, session_id: String, from_seq: i64) -> UiResult<u64> {
-    let ctx = knowledge_bridge::context(&app)?;
-    Ok(ctx.db.with(|c| chat::truncate_messages(c, &session_id, from_seq))? as u64)
 }
 
 // -- glossary / versions ----------------------------------------------------

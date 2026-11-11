@@ -197,9 +197,22 @@ fn embed_input(heading_path: Option<&str>, text: &str) -> String {
     }
 }
 
+/// Chunks without a vector above the cursor of a run.
+fn pending_after(conn: &Connection, last_id: i64) -> rusqlite::Result<u64> {
+    conn.query_row("SELECT COUNT(*) FROM chunks WHERE embedded_at IS NULL AND id > ?1", [last_id], |r| {
+        r.get::<_, i64>(0)
+    })
+    .map(|n| n as u64)
+}
+
 /// Embeds chunks without a vector in batches; HTTP calls run outside the
 /// write transaction. Returns after all pending chunks are done, a batch
 /// fails hard (e.g. the engine stopped) or `cancel` is set.
+///
+/// The run walks the chunk ids upwards until none is pending, so documents
+/// indexed while it is busy are embedded by it as well (chunk ids are never
+/// reused: new chunks are always above the cursor). A batch that failed is
+/// not retried within the run.
 pub fn embed_pending(
     db: &Db,
     embedder: &dyn Embedder,
@@ -220,12 +233,14 @@ pub fn embed_pending(
         db.with(reset_embeddings)?;
         report.reset = true;
     }
-    let total = db.with(pending_count)?;
+    // What the progress is measured against: the chunks pending at the start, grown by whatever is
+    // indexed while the run is busy.
+    let mut total = db.with(pending_count)?;
     report.remaining = total;
     let mut last_id: i64 = 0;
     let mut table_ready = false;
     let mut consecutive_failures = 0u32;
-    while report.embedded + report.failed < total {
+    loop {
         if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
             report.cancelled = true;
             break;
@@ -241,6 +256,12 @@ pub fn embed_pending(
         })?;
         if rows.is_empty() {
             break;
+        }
+        // More than was pending at the start: documents were indexed meanwhile. They belong to this run
+        // (nothing else would embed them until the next index job), and the total follows them.
+        let done = report.embedded + report.failed;
+        if done + rows.len() as u64 > total {
+            total = done + db.with(|c| pending_after(c, last_id))?;
         }
         last_id = rows.last().map(|r| r.0).unwrap_or(last_id);
         let inputs: Vec<String> =

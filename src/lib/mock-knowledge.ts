@@ -600,6 +600,18 @@ async function answer(req: AnswerRequest, requestId: string): Promise<Answer> {
     created_at: now(),
     feedback: null,
   };
+  if (req.style === "chat") {
+    // Small talk (0.8.0): a short reply — nothing is looked up, cited or kept in the answer history.
+    base.text = ko
+      ? "저는 이 PC 안에서만 동작하는 DocuLens 어시스턴트입니다. 문서에 대해 물어보시거나 가져오기·정리·추출·요약 같은 작업을 말씀해 주세요."
+      : "I am the DocuLens assistant and run on this PC only. Ask me about your documents, or tell me what to do — import, organise, extract, summarise.";
+    if (!(await stream(requestId, base.text))) throw err("cancelled", "cancelled");
+    base.sentences = [{ text: base.text, citations: [] }];
+    base.prompt_tokens = 200 + req.question.length;
+    base.completion_tokens = Math.ceil(base.text.length / 2);
+    base.elapsed_ms = Math.round(performance.now() - started);
+    return base;
+  }
   if (req.retrieve === false) {
     // Text-only request: the pasted text is the material — nothing is looked up or cited (the "model" tidies it).
     const body = carriedText(req.question) ?? req.question;
@@ -646,7 +658,8 @@ async function answer(req: AnswerRequest, requestId: string): Promise<Answer> {
     base.sources = top.map((h, i) => citation(i + 1, h));
     if (top.length === 0) {
       base.no_evidence = true;
-      if (!req.allow_general) {
+      // A question the planner routed as "not about the documents" (0.8.0) is answered either way.
+      if (!req.allow_general && req.style !== "general") {
         base.text = ko ? "참고 자료에 근거가 없습니다." : "No evidence was found in the reference material.";
         base.sentences = [{ text: base.text, citations: [] }];
         base.elapsed_ms = Math.round(performance.now() - started);

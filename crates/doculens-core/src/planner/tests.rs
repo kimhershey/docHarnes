@@ -2090,7 +2090,8 @@ fn model_plans_are_checked_against_the_sentence() {
     }
     // A criterion the op does not have is not replaced by "everything as one" behind the user's back.
     let r = run("견적서를 담당자별로 요약해줘", "ask", reply(json!([{ "op": "summarize", "target": "set" }]), ""));
-    assert_eq!(codes(&r), vec!["grouping_dropped"], "{r:?}");
+    // (the estimates the sentence names became the scope the model's plan had left empty)
+    assert_eq!(codes(&r), vec!["scope_filled", "grouping_dropped"], "{r:?}");
     assert!(r.plan.requires_confirmation && r.plan.unmet.is_some());
     // What the model itself reports as left out.
     let r = run(

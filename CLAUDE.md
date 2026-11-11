@@ -4,7 +4,7 @@
 Offline, Windows-only desktop client (Tauri 2 + React/TypeScript UI, Rust core)
 that processes Korean/English business documents with a local VLM
 (Gemma 4 E2B/E4B/12B via llama-server; embedding EmbeddingGemma 2 — no Chinese-origin models since 0.4.0, user decision 2026-11-10). Design: `docs/design/doculens-design-v1.1.md`
-(Korean, authoritative). Status and next steps: `docs/HANDOFF.md`. Open findings of the 0.7.0 audit (153 items, to be worked off on `release/0.7.1`): `docs/audit/v0.7.0.md`; the assistant harness review (root causes of misinterpretation, recommended design, decisions pending): `docs/audit/v0.7.0-harness-review.md`. How to install / run / build / verify on a
+(Korean, authoritative). Status and next steps: `docs/HANDOFF.md`. The 0.7.0 audit (153 items) was worked off in 0.8.0 — outcomes per item, and what is still open (PKG-1, PLN-20, parts of KNO-14 / PRJ-4 / PKG-11 / PKG-14): `docs/audit/v0.7.0.md` §0; the assistant harness review behind the 0.8.0 planner contract: `docs/audit/v0.7.0-harness-review.md`, the contract as implemented: `docs/plan/v0.8.0.md`. How to install / run / build / verify on a
 user PC: `docs/RUN-GUIDE.md`.
 
 ## Hard rules
@@ -78,7 +78,7 @@ user PC: `docs/RUN-GUIDE.md`.
   stand in for the work docs; tokenize: lindera ko-dic / simple analyzer, chunker: structure-aware chunking, repo, index,
   embed: sqlite-vec + `Embedder`, search: hybrid RRF, answer: grounded answers / explain / summarize / compare with the conversation history +
   screen session as context blocks, follow-up detection, an evidence budget capped by the loaded model's context with shrink-and-retry
-  on the server's context-overflow 400, and `retrieve = false` text-only answers for pasted text),
+  on the server's context-overflow 400, and `retrieve = false` text-only answers for pasted text — sized from the loaded model's context, `Answer.truncated` when cut; 0.8.0 `AnswerRequest.style`: `grounded` | `general` (answered whatever the general-knowledge setting says; sources when they answer the question, else marked "(일반 지식 기반 답변)" → `used_general_knowledge`) | `chat` (nothing looked up, short, not stored)),
   `pipeline/` (schema: built-in sample forms — 13 software-development forms (rfp, proposal, sow, srs, dev_contract, wbs,
   progress_report, meeting_minutes, test_report, change_request, acceptance, estimate, general) + the 6 pre-0.3 business forms kept
   as hidden rows (`enabled = 0`; a user switch or `repo::enable_legacy_builtins` brings one back), shared `doc_type_aliases` for the
@@ -86,8 +86,8 @@ user PC: `docs/RUN-GUIDE.md`.
   architecture — Gemma 4 48 px/token ≤ 1,120, Qwen drop-ins 32 px/token — picked from the model's registry arch by the shell),
   classify, ocr, extract, validate: normalisers / BRN checksum / sum rules / PII masking / confidence, run: orchestrator +
   `extractions/` mirror, review, forms: form registration + NL schemas, split: lopdf split / merge, repo),
-  `planner/` (0.6.0: 62 ops — every GUI function; 0.7.0: 63 with `revise_draft` (section rewrite / insert / whole of the draft open in the generator, `PlanContext.draft_id`); `OpFamily` 8 families for the two-stage model path (family call → family op table /
-  grammar, `plan_schema_for`), `settings_catalog` (46 `set_setting` keys = settings paths + legacy aliases, coercion); mod: typed ops / scope / plan (appendix D v1.0 subset), schema: op spec table + PlanSchema grammar, rules:
+  `planner/` (0.8.0 contract, `docs/plan/v0.8.0.md`: `fastpath` — a sentence that is nothing but a greeting or one whole settings sentence is planned without the model in both modes (`PlanSource::Fast`, whole-word matching, units, ask-back replies); the routing call's `chat` / `general` reply routes become a single `answer{mode}` op without a plan call; grammars are written in the schema's `required` order (`crate::jsonorder` — llama.cpp otherwise forces alphabetical keys: summary → unmet → intent → scope → operations, ops start with `op`) with one `set_setting` alternative per value shape; `guard::contract_checks` compares a model plan with the user's words — `Plan.unmet`, a split it cannot make (`summarize.group_by` none / project / doc_type / folder), a settings change the sentence does not name or names in a question / report ("…바꿨어") → `requires_confirmation` + a warning issue (`unmet_request` / `grouping_dropped` / `ungrounded_change`); `guard::type_filter_repair` puts the one document type the user's words name into the scope of a plan that named no documents (`scope_filled`); `answer.reply` = ready text. 0.6.0: 62 ops — every GUI function; 0.7.0: 63 with `revise_draft` (section rewrite / insert / whole of the draft open in the generator, `PlanContext.draft_id`); `OpFamily` 8 families for the two-stage model path (family call → family op table /
+  grammar, `plan_schema_for`), `settings_catalog` (46 `set_setting` keys = settings paths + legacy aliases, coercion; the single source of the ranges — `src/lib/settingsCatalog.json` is generated from it: `DOCULENS_WRITE_CATALOG=1 cargo test -p doculens-core --lib settings_catalog`); mod: typed ops / scope / plan (appendix D v1.0 subset), schema: op spec table + PlanSchema grammar, rules:
   deterministic phrase rules (legacy `RulesFirst` mode + eval), prompts: tiered planner prompt, llm: `PlanMode::ModelFirst`
   (default; slash → pre-router, everything else → model with one re-query; no model → clarification) / `RulesFirst`, validate,
   scope: scope → documents, exec: deterministic executor + previews, guard: a model plan that summarises the library for a sentence
@@ -106,7 +106,7 @@ user PC: `docs/RUN-GUIDE.md`.
   pass, preview → apply; `projects.keywords`, migration 0007)), `retention` (policy + purge / LRU file helpers used by the daily maintenance job).
 - `crates/doculens-kodic/` — bin that compiles the mecab-ko-dic sources into lindera's dictionary format
   (driven by `scripts/fetch-kodic.mjs`; descriptors in `assets/`).
-- `crates/doculens-eval/` — P7 evaluation harness bin (`planner` golden-set accuracy + regression gate, `pipeline`
+- `crates/doculens-eval/` — P7 evaluation harness bin (`planner` golden-set accuracy + regression gate (0.8.0: 163 items with a `kind` — chat / question / command / setting —, `expected.confirm` / `unmet` / `alt`, the count of wrong changes that would have run unconfirmed, `--ids` / `--kinds` for a part of the set; `scripts/rescore-planner.py` re-scores result files of another version), `pipeline`
   golden-manifest runner with CER / exact-match / ANLS* / F1 / latency, `scorecard` merge); golden sets and baselines
   under `eval/`.
 - `src-tauri/` — Tauri shell (`src/commands/{mod,documents,knowledge,pipeline}.rs`, `src/state.rs`, `src/engine_bridge.rs`,

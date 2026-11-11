@@ -72,7 +72,9 @@ struct DocOutcome {
     review_pending: bool,
 }
 
-/// Runs the request over its documents; failures are recorded per document.
+/// Runs the request over its documents; failures are recorded per document. A missing engine is
+/// not a document's failure: it ends the request with an error and the remaining documents stay
+/// as they were.
 pub fn process(
     deps: &PipelineDeps<'_>,
     req: &ProcessRequest,
@@ -92,11 +94,29 @@ pub fn process(
             report.skipped.push(id.clone());
         }
     }
+    // Resume (audit PIP-5): a request that is run again — a retried or resumed job — goes on
+    // with what it has not finished. Re-running the finished documents cost the time once more
+    // and replaced what the user had reviewed in between.
+    let journal = req.request_id.as_deref().filter(|id| crate::documents::is_safe_id(id));
+    let finished_before: std::collections::HashSet<String> = match journal {
+        Some(rid) => db
+            .with(|c| {
+                repo::prune_request_journals(c)?;
+                repo::request_done(c, rid)
+            })?
+            .into_iter()
+            .collect(),
+        None => Default::default(),
+    };
     let total = documents.len() as u32;
     for (i, doc) in documents.iter().enumerate() {
         if deps.cancelled() {
             report.cancelled = true;
             break;
+        }
+        if finished_before.contains(&doc.id) {
+            report.resumed.push(doc.id.clone());
+            continue;
         }
         let name = doc.title.clone().unwrap_or_else(|| doc.original_name.clone());
         let mut stage_progress = |stage: &str, page: Option<(u32, u32)>| {
@@ -111,10 +131,26 @@ pub fn process(
                 report.ocr_pages += out.ocr_pages;
                 report.extracted += out.extracted as u32;
                 report.review_pending += out.review_pending as u32;
+                if let Some(rid) = journal {
+                    let _ = db.with(|c| repo::request_mark_done(c, rid, &doc.id));
+                }
             }
             Err(CoreError::Cancelled) => {
                 report.cancelled = true;
                 break;
+            }
+            Err(e) if super::vlm::engine_unavailable(&e) => {
+                // The engine is gone — stopped, crashed, its port closed (audit PIP-6). Neither
+                // this document nor the ones after it are at fault: each would "fail" within
+                // seconds, and a batch of 300 that lost the engine at the 40th document ended
+                // with 260 documents marked 처리 오류. They stay untouched and the request fails
+                // as a whole; running it again goes on from here.
+                log::warn!(
+                    "pipeline: engine unavailable at document {} ({e}); {} document(s) left untouched",
+                    doc.id,
+                    documents.len() - i
+                );
+                return Err(if super::vlm::transport_failure(&e) { CoreError::EngineNotRunning } else { e });
             }
             Err(e) => {
                 let msg = e.to_string();
@@ -123,6 +159,11 @@ pub fn process(
                 report.failed.push((doc.id.clone(), msg));
             }
         }
+    }
+    // The request ran to its end (documents that failed were tried): nothing is left to resume.
+    // A cancelled or engine-less run keeps its journal for the next attempt.
+    if let (Some(rid), false) = (journal, report.cancelled) {
+        let _ = db.with(|c| repo::request_clear(c, rid));
     }
     progress(&ProcessProgress { done: total, total, current: String::new(), stage: "done".into(), page: None });
     Ok(report)
@@ -138,6 +179,44 @@ fn page_image(cache: &DocumentCache, page: &PageRecord, vlm: &Vlm<'_>, tokens: u
         return Ok(None);
     }
     image::prepare(&path, vlm.geometry, tokens).map(Some)
+}
+
+/// Whether the dense-page second pass at the fine-print budget shows the model more than the
+/// first pass did. With Gemma 4 every OCR budget is capped at 1,120 tokens, and a small render
+/// fits any budget: the pass would send the same image again — twice the OCR time of a
+/// table-heavy page for the same text. `fine` is the prepared fine-print image once there is one
+/// (before that the budgets decide). A first reply that was cut at the output limit still gets
+/// the pass: the fine-print profile also carries the larger reply budget.
+pub(super) fn fine_pass_sees_more(
+    geometry: image::VisionGeometry,
+    base_tokens: u32,
+    fine_tokens: u32,
+    first: &PreparedImage,
+    fine: Option<&PreparedImage>,
+    first_truncated: bool,
+) -> bool {
+    first_truncated
+        || match fine {
+            Some(f) => (f.width, f.height) != (first.width, first.height),
+            None => geometry.clamp_budget(fine_tokens) > geometry.clamp_budget(base_tokens),
+        }
+}
+
+/// Re-renders a page at `rotation` and takes the new size over into the record.
+fn turn_page(deps: &PipelineDeps<'_>, doc: &DocumentRecord, page: &mut PageRecord, rotation: u16) -> Result<()> {
+    let rendered = import::rotate_page(&deps.import, doc, page.page_no, rotation)?;
+    page.rotation = rotation % 360;
+    page.width_px = rendered.width_px;
+    page.height_px = rendered.height_px;
+    page.rendered_at = Some(chrono::Utc::now());
+    Ok(())
+}
+
+/// The turn the unclassified pages of a document take: the one more than half of the classified
+/// pages needed (`turns`: confirmed turn per classified page, 0 = none). A document with a few
+/// landscape tables among upright pages has no such majority and is left alone.
+pub(super) fn majority_turn(turns: &[u16]) -> Option<u16> {
+    [90u16, 180, 270].into_iter().find(|r| turns.iter().filter(|t| *t == r).count() * 2 > turns.len())
 }
 
 fn has_text(p: &PageRecord) -> bool {
@@ -168,6 +247,8 @@ fn process_document(
         progress("classify", None);
         let n = pages.len();
         let mut classes = Vec::new();
+        // Per classified page with an image: the turn that was applied and confirmed (0 = none).
+        let mut turns: Vec<u16> = Vec::new();
         for idx in 0..n {
             if idx >= CLASSIFY_MAX_PAGES && idx + 1 < n {
                 continue;
@@ -181,16 +262,14 @@ fn process_document(
             let (mut class, reply) =
                 classify::classify_page(vlm, doc_types, img.as_ref().map(|i| i.url.as_str()), text.as_deref())?;
             usage.add(reply.usage);
+            let mut turned = 0u16;
             if class.rotation != 0 && img.is_some() && !class.is_blank {
                 // olmOCR pattern (§3.4): rotate the render, then classify once more.
                 let page_no = pages[idx].page_no;
-                let new_rotation = (pages[idx].rotation + class.rotation) % 360;
-                match import::rotate_page(&deps.import, &doc, page_no, new_rotation) {
-                    Ok(np) => {
-                        pages[idx].rotation = new_rotation;
-                        pages[idx].width_px = np.width_px;
-                        pages[idx].height_px = np.height_px;
-                        pages[idx].rendered_at = Some(chrono::Utc::now());
+                let old_rotation = pages[idx].rotation;
+                let new_rotation = (old_rotation + class.rotation) % 360;
+                match turn_page(deps, &doc, &mut pages[idx], new_rotation) {
+                    Ok(()) => {
                         let img2 = page_image(&cache, &pages[idx], vlm, CLASSIFY_IMAGE_TOKENS)?;
                         let (c2, r2) = classify::classify_page(
                             vlm,
@@ -199,10 +278,29 @@ fn process_document(
                             text.as_deref(),
                         )?;
                         usage.add(r2.usage);
-                        class = super::PageClass { rotation: class.rotation, ..c2 };
+                        if c2.rotation != 0 {
+                            // The turned page still "needs" a turn: the detection is not to be
+                            // trusted for this page. It goes back to what it was instead of
+                            // staying in a rotation nobody confirmed.
+                            log::warn!(
+                                "pipeline {} p{page_no}: rotation {} not confirmed by the second look, undone",
+                                doc.id,
+                                class.rotation
+                            );
+                            if let Err(e) = turn_page(deps, &doc, &mut pages[idx], old_rotation) {
+                                log::warn!("rotation of {} p{page_no} not undone: {e}", doc.id);
+                            }
+                            class.rotation = 0;
+                        } else {
+                            turned = class.rotation;
+                            class = super::PageClass { rotation: class.rotation, ..c2 };
+                        }
                     }
                     Err(e) => log::warn!("rotation of {} p{page_no} failed: {e}", doc.id),
                 }
+            }
+            if img.is_some() && !class.is_blank {
+                turns.push(turned);
             }
             // The render-time pixel heuristic decides blankness; the model can only
             // confirm it (a weak or garbage model must never blank out real pages).
@@ -214,6 +312,24 @@ fn process_document(
                 pages[idx].is_blank = Some(true);
             }
             classes.push((pages[idx].page_no, class));
+        }
+        // The pages in between are not classified (first N + last): a document scanned sideways
+        // had only those turned and the rest read lying on its side. They take the turn most of
+        // the classified pages needed.
+        if let Some(turn) = majority_turn(&turns) {
+            for idx in CLASSIFY_MAX_PAGES..n.saturating_sub(1) {
+                if pages[idx].width_px == 0 {
+                    continue;
+                }
+                if deps.cancelled() {
+                    return Err(CoreError::Cancelled);
+                }
+                progress("classify", Some((idx as u32 + 1, n as u32)));
+                let new_rotation = (pages[idx].rotation + turn) % 360;
+                if let Err(e) = turn_page(deps, &doc, &mut pages[idx], new_rotation) {
+                    log::warn!("rotation of {} p{} failed: {e}", doc.id, pages[idx].page_no);
+                }
+            }
         }
         let (doc_type, language) = classify::vote(&classes);
         db.with(|c| repo::set_classified(c, &doc.id, &doc_type, Some(&language), false))?;
@@ -234,14 +350,14 @@ fn process_document(
         if !wanted || page.is_blank == Some(true) || page.width_px == 0 {
             continue;
         }
-        // OCR output and manual corrections are only replaced by a forced re-run.
-        let is_ocr = matches!(page.text_source.as_deref(), Some("ocr") | Some("manual"));
-        let do_ocr = if is_ocr {
-            req.force
-        } else if has_text(page) {
-            deps.settings.ocr_digital_pdf && (req.force || page.ocr_at.is_none())
-        } else {
-            true
+        // OCR output is only replaced by a forced re-run. A manual correction is the user's own
+        // text: force alone keeps it (the review screen's "재추출" used to wipe it), the request has
+        // to ask for it with `reocr_manual`. A page the user emptied by hand has nothing to lose.
+        let do_ocr = match page.text_source.as_deref() {
+            Some("manual") => req.force && (req.reocr_manual || !has_text(page)),
+            Some("ocr") => req.force,
+            _ if has_text(page) => deps.settings.ocr_digital_pdf && (req.force || page.ocr_at.is_none()),
+            _ => true,
         };
         if !do_ocr {
             continue;
@@ -261,9 +377,13 @@ fn process_document(
                     let fine = Vlm::new(vlm.chat, vlm.model.clone(), Profile::FinePrint, vlm.cancel)
                         .with_context(vlm.ctx)
                         .with_geometry(vlm.geometry);
-                    if let Some(img2) =
-                        page_image(&cache, page, &fine, fine.params(Stage::Ocr).image_tokens.unwrap_or(3_072))?
-                    {
+                    let fine_tokens = fine.params(Stage::Ocr).image_tokens.unwrap_or(3_072);
+                    // Skipped when it would only read the same image again (PIP-13).
+                    let sees_more = |fine_image: Option<&PreparedImage>| {
+                        fine_pass_sees_more(vlm.geometry, ocr_tokens, fine_tokens, &img, fine_image, reply.truncated)
+                    };
+                    let img2 = if sees_more(None) { page_image(&cache, page, &fine, fine_tokens)? } else { None };
+                    if let Some(img2) = img2.filter(|i| sees_more(Some(i))) {
                         match ocr::ocr_page(&fine, &img2.url, None) {
                             Ok((t2, r2)) => {
                                 usage.add(r2.usage);
@@ -295,6 +415,12 @@ fn process_document(
     }
 
     // ---- 3. extraction -----------------------------------------------------
+    if req.skip_extracted && doc.last_run_id.is_some() {
+        // An automatic run never replaces an extraction that stands (its approvals and corrections
+        // would be gone); only an explicit request extracts a document again.
+        log::info!("pipeline {}: already extracted, automatic run leaves it alone", doc.id);
+        return Ok(out);
+    }
     if extraction_pages(&pages, deps.settings.kie_max_pages as usize, &req.pages).is_empty() {
         // Blank-only / unrendered documents have nothing to extract; not an error.
         log::info!("pipeline {}: no usable pages, extraction skipped", doc.id);
@@ -320,19 +446,32 @@ fn process_document(
     })?;
     let started = Instant::now();
     match extract_document(deps, vlm, &schema, &pages, &req.pages, precise, progress) {
-        Ok((merged, second, run_usage, pages_done)) => {
+        Ok(Extracted { merged, second, usage: run_usage, pages_done, incomplete }) => {
             usage.add(run_usage);
-            let texts: BTreeMap<u32, String> =
-                pages.iter().filter(|p| has_text(p)).map(|p| (p.page_no, p.text.clone().unwrap_or_default())).collect();
+            // With masking on, values and evidence are looked up in the masked text: that is the
+            // form they are stored in (OCR text already is masked; a text layer is not).
+            let texts: BTreeMap<u32, String> = pages
+                .iter()
+                .filter(|p| has_text(p))
+                .map(|p| (p.page_no, stored_text(p.text.as_deref().unwrap_or(""), deps.pii_masking)))
+                .collect();
             let opts = FieldOptions {
                 review_threshold: deps.settings.review_threshold as f64,
                 audit_percent: deps.settings.audit_sample_percent,
                 pii_masking: deps.pii_masking,
             };
-            let built = extract::build_fields(&schema, &merged, second.as_ref(), &texts, opts, &doc.id);
+            let mut built = extract::build_fields(&schema, &merged, second.as_ref(), &texts, opts, &doc.id);
+            // A page that was cut off or failed leaves the result incomplete: it goes to review and
+            // the run says so (the history panel shows the note), instead of the document failing.
+            extract::flag_incomplete(&mut built, &incomplete);
+            let partial_note = (!incomplete.is_empty())
+                .then(|| incomplete.iter().map(|(_, n)| n.as_str()).collect::<Vec<_>>().join("; "));
             let review_pending = built.review_count > 0;
             let field_count = built.fields.len() as u32;
-            // Nothing unmasked reaches the database or the mirror (§3.8).
+            // No unmasked extraction result reaches the database or the mirror (§3.8). Page texts:
+            // OCR text is masked before it is stored; a text layer / converted text stays as the
+            // file has it in `pages.text` (the viewer shows the document) and is masked on its way
+            // into the mirror below and into the search index (`list_pages_for_index`).
             let merged = extract::mask_output(&schema.definition, &merged, deps.pii_masking);
             let second = second.map(|s| extract::mask_output(&schema.definition, &s, deps.pii_masking));
             let raw = if let Some(s) = &second { json!({ "primary": merged, "second": s }) } else { merged.clone() };
@@ -344,7 +483,7 @@ fn process_document(
                     &rid,
                     &RunOutcome {
                         status: "done",
-                        error: None,
+                        error: partial_note.as_deref(),
                         duration_ms: started.elapsed().as_millis() as u64,
                         prompt_tokens: usage.prompt,
                         completion_tokens: usage.completion,
@@ -367,9 +506,21 @@ fn process_document(
                 )?;
                 repo::bump_schema_use(tx, &sid)
             })?;
-            if let Err(e) =
-                write_mirror(deps.import.paths, &doc, &run_id, &schema, &vlm.model, &built.fields, &pages, &merged)
-            {
+            // The mirror is a plain-text copy on disk: its page texts are masked like the index input.
+            let mirror_pages: Vec<PageRecord> = pages
+                .iter()
+                .map(|p| PageRecord { text: p.text.as_deref().map(|t| stored_text(t, deps.pii_masking)), ..p.clone() })
+                .collect();
+            if let Err(e) = write_mirror(
+                deps.import.paths,
+                &doc,
+                &run_id,
+                &schema,
+                &vlm.model,
+                &built.fields,
+                &mirror_pages,
+                &merged,
+            ) {
                 log::warn!("extraction mirror for {} not written: {e}", doc.id);
             }
             out.extracted = true;
@@ -448,7 +599,23 @@ pub(crate) fn extraction_pages<'a>(pages: &'a [PageRecord], max: usize, only: &[
     chosen
 }
 
-type Extracted = (Value, Option<Value>, Usage, u32);
+/// The merged model output of a document's pages.
+struct Extracted {
+    merged: Value,
+    /// Precision-mode second sample.
+    second: Option<Value>,
+    usage: Usage,
+    /// Pages that produced a result.
+    pages_done: u32,
+    /// Pages whose result is known to be incomplete — the reply was cut off, or the page failed
+    /// while others answered — with the note shown to the reviewer.
+    incomplete: Vec<(u32, String)>,
+}
+
+/// An error that ends the whole run: nothing about one page or one document is wrong.
+fn ends_the_run(e: &CoreError) -> bool {
+    matches!(e, CoreError::Cancelled) || super::vlm::engine_unavailable(e)
+}
 
 fn extract_document(
     deps: &PipelineDeps<'_>,
@@ -468,6 +635,8 @@ fn extract_document(
     let mut usage = Usage::default();
     let mut primary: Vec<(u32, Value)> = Vec::new();
     let mut second: Vec<(u32, Value)> = Vec::new();
+    let mut incomplete: Vec<(u32, String)> = Vec::new();
+    let mut first_failure: Option<CoreError> = None;
     let total = chosen.len() as u32;
     for (i, page) in chosen.iter().enumerate() {
         if deps.cancelled() {
@@ -481,18 +650,53 @@ fn extract_document(
             image_url: img.as_ref().map(|i| i.url.as_str()),
             text: page.text.as_deref(),
         };
-        let (v, reply) = extract::extract_page(vlm, schema, &input, None)?;
-        usage.add(reply.usage);
-        primary.push((page.page_no, v));
+        // One page must not take the document down (audit PIP-8): a page that cannot be extracted
+        // is noted and the pages that answer are used.
+        let page_no = page.page_no;
+        match extract::extract_page(vlm, schema, &input, None) {
+            Ok(x) => {
+                usage.add(x.reply.usage);
+                if x.partial {
+                    incomplete.push((
+                        page_no,
+                        format!(
+                            "{page_no}쪽: 추출 응답이 길이 제한으로 잘려 일부만 추출됨 / page {page_no}: reply cut off, partial result"
+                        ),
+                    ));
+                }
+                primary.push((page_no, x.value));
+            }
+            Err(e) if ends_the_run(&e) => return Err(e),
+            Err(e) => {
+                log::warn!("kie page {page_no} failed: {e}");
+                incomplete.push((
+                    page_no,
+                    format!("{page_no}쪽: 추출 실패 — 이 쪽의 값이 빠져 있음 / page {page_no} failed: {e}"),
+                ));
+                first_failure.get_or_insert(e);
+                continue;
+            }
+        }
         if precise {
-            let (v2, r2) = extract::extract_page(vlm, schema, &input, Some(0.3))?;
-            usage.add(r2.usage);
-            second.push((page.page_no, v2));
+            // The second sample only feeds the agreement signal: without it the page's fields
+            // simply have none.
+            match extract::extract_page(vlm, schema, &input, Some(0.3)) {
+                Ok(x2) => {
+                    usage.add(x2.reply.usage);
+                    second.push((page_no, x2.value));
+                }
+                Err(e) if ends_the_run(&e) => return Err(e),
+                Err(e) => log::warn!("kie page {page_no}: precision sample failed: {e}"),
+            }
         }
     }
+    if primary.is_empty() {
+        // No page answered: the document fails with the first page's error, as before.
+        return Err(first_failure.unwrap_or_else(|| CoreError::engine("no page could be extracted")));
+    }
     let merged = extract::merge_pages(&schema.definition, &primary);
-    let merged2 = precise.then(|| extract::merge_pages(&schema.definition, &second));
-    Ok((merged, merged2, usage, total))
+    let second = precise.then(|| extract::merge_pages(&schema.definition, &second));
+    Ok(Extracted { merged, second, usage, pages_done: primary.len() as u32, incomplete })
 }
 
 /// Human-readable mirror: `extractions/<doc>/<run>/{result.json, pNNNN.md}` + `LATEST`.
@@ -537,6 +741,15 @@ pub fn write_mirror(
     let latest = paths.extractions_dir().join(&doc.id).join("LATEST");
     std::fs::write(&latest, run_id).map_err(|e| CoreError::io(&latest, e))?;
     Ok(dir)
+}
+
+/// A page text in the form it may be stored outside `pages.text`.
+fn stored_text(text: &str, pii_masking: bool) -> String {
+    if pii_masking && validate::contains_rrn(text) {
+        validate::mask_text(text)
+    } else {
+        text.to_string()
+    }
 }
 
 /// Deletes the mirror of a document (called from document deletion).

@@ -145,6 +145,24 @@ pub fn recompute_document(conn: &Connection, doc_id: &str) -> rusqlite::Result<R
     Ok(status)
 }
 
+/// The status a document with a finished extraction holds, read off its latest run's fields by
+/// the promotion rule of [`recompute_document`]: a field still waiting for review or a required
+/// field without a value keeps it `extracted`, otherwise it is `reviewed`. `None` = no fields
+/// (nothing extracted). Used when the stored status was lost (`missing` → restored, re-import).
+pub fn status_from_fields(
+    conn: &Connection,
+    doc_id: &str,
+) -> rusqlite::Result<Option<crate::documents::DocumentStatus>> {
+    use crate::documents::DocumentStatus;
+    let fields = repo::latest_fields(conn, doc_id)?;
+    if fields.is_empty() {
+        return Ok(None);
+    }
+    let pending = fields.iter().any(FieldRecord::needs_review);
+    let required_ok = fields.iter().filter(|f| f.required).all(|f| f.effective_value().is_some());
+    Ok(Some(if !pending && required_ok { DocumentStatus::Reviewed } else { DocumentStatus::Extracted }))
+}
+
 /// Approves every pending field of a document (optionally only one reason).
 pub fn approve_document(db: &Db, doc_id: &str, only: Option<ReviewReason>) -> Result<usize> {
     let filter = ReviewFilter { document_id: Some(doc_id.to_string()), reason: only, ..Default::default() };
@@ -158,14 +176,23 @@ pub fn approve_document(db: &Db, doc_id: &str, only: Option<ReviewReason>) -> Re
     Ok(ids.len())
 }
 
-/// Restores the value recorded in a history entry (viewer "이 값으로 복원").
+/// Restores the value recorded in a history entry (viewer "이 값으로 복원"). The history of a
+/// document spans all its extraction runs, the screen shows the latest one: the value goes to the
+/// field with the same path in the latest run (the entry's own row when that run is still the
+/// latest). `field_not_found` when the latest run has no such field (another schema).
 pub fn restore(db: &Db, change_id: i64) -> Result<FieldRecord> {
     let change = db.with(|c| repo::get_change(c, change_id))?.ok_or_else(|| repo::typed("change_not_found"))?;
+    let target = db
+        .with(|c| repo::latest_fields(c, &change.document_id))?
+        .into_iter()
+        .find(|f| f.path == change.path)
+        .map(|f| f.id)
+        .ok_or_else(|| repo::typed("field_not_found"))?;
     let action = match &change.old_value {
         Some(v) if !v.trim().is_empty() => ReviewAction::Correct { value: v.clone() },
         _ => ReviewAction::Reject,
     };
-    let mut out = apply(db, &[change.field_id], &action, Some("restored"))?;
+    let mut out = apply(db, &[target], &action, Some("restored"))?;
     out.pop().ok_or_else(|| repo::typed("field_not_found").into())
 }
 

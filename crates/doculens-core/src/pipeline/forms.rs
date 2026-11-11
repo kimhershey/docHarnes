@@ -109,6 +109,48 @@ pub fn slug_for_name(name: &str) -> String {
     format!("form_{}", &h.to_hex()[..6])
 }
 
+/// The type slug a new form gets when its name gave `base`.
+///
+/// The slug comes from the end of the name, so "결과보고서" and "검토보고서" both give `report`.
+/// A second form of a type is not its default and is never picked automatically: the form
+/// registered later was silently unused. When a form of the user already owns the type, the new
+/// one gets a type of its own (`report_2`, …) — the classifier then tells the two apart by their
+/// names. A type that only has the built-in sample is taken over as before (the user's form
+/// becomes its default).
+pub fn free_doc_type(conn: &rusqlite::Connection, base: &str) -> rusqlite::Result<String> {
+    let count = |slug: &str, user_only: bool| -> rusqlite::Result<i64> {
+        conn.query_row(
+            "SELECT COUNT(*) FROM schemas WHERE doc_type = ?1 AND (?2 = 0 OR source <> 'builtin')",
+            rusqlite::params![slug, user_only],
+            |r| r.get(0),
+        )
+    };
+    if !schema::is_key(base) || count(base, true)? == 0 {
+        return Ok(base.to_string());
+    }
+    // Room for the suffix inside the 40 characters of a key.
+    let stem: String = base.chars().take(36).collect();
+    for k in 2..1000 {
+        let candidate = format!("{stem}_{k}");
+        if count(&candidate, false)? == 0 {
+            return Ok(candidate);
+        }
+    }
+    Ok(base.to_string())
+}
+
+/// [`free_doc_type`] for a draft that is not saved yet (a saved schema keeps its type).
+fn settle_doc_type(db: &Db, draft: &mut SchemaDraft) {
+    if draft.id.is_some() {
+        return;
+    }
+    let base = draft.doc_type.clone();
+    match db.with(|c| free_doc_type(c, &base)) {
+        Ok(slug) => draft.doc_type = slug,
+        Err(e) => log::warn!("form type for '{}' not checked: {e}", draft.name),
+    }
+}
+
 fn is_placeholder(s: &str) -> bool {
     let t = s.trim();
     t.is_empty()
@@ -171,7 +213,7 @@ impl Collector {
         let mut seen: Vec<String> = Vec::new();
         for (i, c) in columns.iter().enumerate() {
             let label = c.trim().trim_end_matches([':', '：']).to_string();
-            let mut ck = schema::key_from_label(&label, &format!("col_{}", i + 1));
+            let mut ck = schema::column_key(schema::key_from_label(&label, &format!("col_{}", i + 1)));
             let base = ck.clone();
             let mut n = 2;
             while seen.contains(&ck) {
@@ -377,7 +419,9 @@ pub fn derive(
     doc: &DocumentRecord,
     name: Option<&str>,
 ) -> Result<SchemaDraft> {
-    discover_document(deps, vlm, doc, name, None, &mut |_, _| {}).map(|(d, _)| d)
+    let (mut draft, _) = discover_document(deps, vlm, doc, name, None, &mut |_, _| {})?;
+    settle_doc_type(deps.db, &mut draft);
+    Ok(draft)
 }
 
 /// Saves a confirmed form draft and marks the sample document as the form
@@ -386,7 +430,10 @@ pub fn register(db: &Db, draft: &SchemaDraft) -> Result<SchemaRecord> {
     let mut draft = draft.clone();
     draft.source = SchemaSource::Form;
     if draft.doc_type.trim().is_empty() || !schema::is_key(&draft.doc_type) {
+        // No type given: the name decides, without landing on a type another form of the user owns.
+        // A type the draft carries is the user's choice (the editor shows it) and is kept.
         draft.doc_type = slug_for_name(&draft.name);
+        settle_doc_type(db, &mut draft);
     }
     // Every sample document becomes a form of the type (one draft, 1..N samples since 0.3.0).
     let mut sample_docs: Vec<String> = draft.form_document_id.iter().cloned().collect();
@@ -983,6 +1030,7 @@ pub fn discover(
     }
     let min_docs = drafts.len().div_ceil(2);
     let (mut draft, stats) = merge_drafts(&drafts, name, min_docs);
+    settle_doc_type(deps.db, &mut draft);
     let notes: Vec<String> =
         summaries.iter().filter_map(|s| s.note.as_ref().map(|n| format!("{}: {n}", s.title))).collect();
     draft.note = (!notes.is_empty()).then(|| notes.join(" / "));

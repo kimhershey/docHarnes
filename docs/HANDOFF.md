@@ -1828,6 +1828,36 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   **사용자 결정 4건**(검토 문서 §8): 설정 빠른 경로, 일반 질문에 답할지(지금 기본값은 일반 지식 꺼짐), 오래 걸리는 작업의 자동 실행, 버전(구조 변경 → 규칙상 마이너; 0.7.1에 함께 넣는 쪽을 권장).
 - **다음**: 사용자 확인 뒤 `release/0.7.1`에서 §15의 묶음 1(PLN-1 → USR-1~4)부터 수정. 결정이 필요한 것 7건(PKG-1 EULA/자산, v0.7.0 게시 여부 — 0.7.1 게시 권장, 설정 문장을 규칙 먼저 볼지, USR-5 범위, 동작하지 않는 설정, 업무/참고 구분의 의미, Full 설치파일 정책)은 목록 §15.
 
+### 0.8.0 — 어시스턴트 해석(하네스) 재설계 + 0.7.0 점검 목록 153건 처리 (2026-11-11; 브랜치 `release/0.8.0`, `main` dbb598e에서 분기; 계획 `docs/plan/v0.8.0.md`, 릴리스 노트 `docs/releases/v0.8.0.md`)
+
+- **사용자 결정(2026-11-11)**: "문서와 무관한 지식 질문에 답하게 할지 → 응답하도록 하자." · "설정의 좁은 빠른 경로를 둘지 → 두기" · "오래 걸리는 작업의 자동 실행을 끌지 → 자동실행 켜두자." ·
+  "0.8.0 에 적용하고, 0.7.1 도 같이 수정해서 0.8.0 에 적용하자." · "작업이 다 끝나고 커밋이 성공하면 0.8.0 RELEASE 를 만들자." — 0.7.1은 따로 내지 않았다(`release/0.7.1`은 목록 문서만 가진 채 남음).
+- **진행 방식**: 리드가 하네스 코어·평가·통합을, 작업자 9(워크트리, 영역별 파일 소유: D1 배포·문서, F1 화면 공통, F2 기능 화면, F3 어시스턴트 화면, R2 문서·파이프라인, R3 플랫폼, R4 참고 자료·프로젝트,
+  R5 문서 작성, R6 플래너 실행기)가 점검 목록을 나눠 고친 뒤 병합. 하네스 코어는 독립 검토 1회(9건 → 8건 반영: 빠른 경로의 접두 일치가 부정문·상대 표현을 설정으로 읽던 것, 단위, 근거 검사 구멍 등),
+  통합분은 단계 말 검토 1회, 화면 후속 작업자 1. 공용 `target/`은 워크트리별 `codegen-units` 값으로 산출물 이름을 갈라 썼다(cargo `--config 'profile.dev.package.<crate>.codegen-units=N'` — 다음에도 같은 방법).
+- **하네스(플래너) — 원인과 계약**(`docs/plan/v0.8.0.md` §1, 검토 `docs/audit/v0.7.0-harness-review.md`):
+  - PLN-1: llama.cpp 문법은 스키마 `properties`의 순서대로 키를 강제하는데 serde_json 맵이 이름순이라 `clarification_question`·`confidence`가 먼저, 단계의 `op`가 인수 뒤였다 →
+    `crate::jsonorder`가 `required` 순서로 직렬화(플랜: summary → unmet → intent → scope → operations → requires_confirmation → confidence; 단계는 `op`부터). `tests/real_engine.rs`가 실제 llama-server로 순서를 확인(CI 실엔진 잡).
+  - `planner/fastpath.rs`: 문장 전체가 인사이거나 설정 하나일 때만 모델 없이 플랜(`PlanSource::Fast`, 두 해석 모드 공통). 낱말 단위 인식(붙임말·어미 표), 부정·질문·복합 문장 제외, 단위(분 ×60, % → 비율),
+    되묻기 답으로 값 완성. 설정 문법은 값 종류별 대안(`keys_of_shape`), 카탈로그 46키(`privacy.db_encryption` 제거).
+  - 계열 호출의 `chat`/`general` 경로 → 플랜 호출 없이 `answer{mode}` 한 단계(`llm::reply_plan`); `answer.reply` = 준비된 답(인사).
+  - `guard::contract_checks`: `Plan.unmet`, 나눌 수 없는 '~별'(`split_check`; 가능한 기준은 `summarize.group_by`/`aggregate.group_by`로 채움), 문장에 이름·값이 없는 설정 변경 →
+    `requires_confirmation = true` + 경고 이슈(`unmet_request`·`grouping_dropped`·`ungrounded_change`). 근거는 사용자가 쓴 말만(`rules::user_words` — 되묻기 문장의 어시스턴트 질문 제외).
+  - `knowledge::AnswerStyle`(grounded / general / chat): chat은 검색·저장 없이 짧게, general은 설정과 무관하게 답하고 근거가 질문에 답하면 근거로, 아니면 첫 줄 "(일반 지식 기반 답변)" → `used_general_knowledge`(쓰지 않은 근거는 출처에서 뺌).
+  - 화면: 답 카드(`reply`), 설정 카드의 전후 값·되돌리기(`ExecuteOutcome.undo`), 묶음 요약, 확인 사유 강조, `uses_scope`가 거짓이면 문서 수 숨김. 모의 백엔드가 같은 계약을 따른다(`e2e/harness.spec.ts`).
+- **점검 목록 결과**: `docs/audit/v0.7.0.md` §0 — 153건 중 147건 수정, 4건 부분(KNO-14 · PRJ-4 · PKG-11 · PKG-14), 2건 손대지 않음(PKG-1 결정 대기, PLN-20 사용자 결정) + 추가 PKG-16(번들 팩의 llama.cpp MIT 전문·libomp 고지) 수정.
+  결정 없이 기본값으로 처리한 것: USR-5(열만 제거), PLT-10(통합·숨김), PRJ-4(데이터 모델 유지), PKG-9(문서만).
+- **평가(PLN-21)**: 골든셋 129 → 163(종류 chat 5 · question 27 · command 100 · setting 31; `expected.confirm`/`unmet`/`alt`, "확인 없이 실행됐을 잘못된 변경" 지표, `--ids`/`--kinds`, `scripts/rescore-planner.py`).
+  규칙 경로 기준선 154/163 = 94.5 %(0.7.0을 같은 기준으로 다시 채점하면 140/163, 잘못된 변경 6 → 1). 실제 모델(Gemma 4 E4B Q4_K_M, CPU, llama-server 로컬 빌드): 결과와 한계는
+  `eval/results/planner-real-model/README.md` — 사용자 보고 문장 5개를 포함한 같은 문장에서 0.7.0은 전부 오답(set_profile·set_theme·set_theme·noop·묶음 없는 summarize), 0.8.0은 전부 정답.
+  **골든셋 전체의 실제 모델 정확도는 측정하지 않았다**(CPU에서 플랜 한 건에 수 분).
+- **동작이 달라지는 점**(릴리스 노트 §3): 강제 재처리가 손으로 고친 글자를 남김(`reocr_manual`), 표 열 키 `page` 금지, 모호한 금액·날짜는 검토로, 종료일이 오늘이면 완료, 사본 폴더는 한국어 유형 이름, 앱 단일 실행,
+  마스킹은 새로 색인하는 문서부터(`INDEX_VERSION`은 올리지 않음).
+- **남은 것 / 다음**: ① PKG-1(CUDA 자산·앱 EULA) 결정. ② PKG-11 제거 시 `%LOCALAPPDATA%\DocuLens\` 정리(NSIS 훅 `installerHooks`; 설치파일로 시험 필요). ③ PKG-14 빌드·게시 잡 분리. ④ KNO-14 취소된 요청이 프롬프트 평가 중에도
+  엔진을 놓게 하기(`chat_stream` 요청에 `return_progress` — 고정 엔진 b12066에서 지원 확인 뒤). ⑤ PRJ-4 프로젝트별 역할(데이터 모델). ⑥ 규칙 모드의 두 요청 문장(ko-105). ⑦ 실제 모델 전체 측정(GPU PC) — E2B에서 "일반 지식" 표시 누락 여부 포함.
+  ⑧ `run::process`가 `Vlm`에 `.with_geometry`를 주지 않아 Qwen 드롭인이 파이프라인에서 Gemma 기하를 쓴다(기존 문제, R2 보고). ⑨ `ProcessReport.resumed`를 작업 결과에 표시. ⑩ 체크리스트 "0.8.0" 절(Windows·GPU·실모델).
+<!-- 0.8.0-RELEASE-RECORD -->
+
 ### 테스트·검증
 
 | 항목 | 결과 (2026-11-08) |
@@ -1926,7 +1956,8 @@ P6·P7 항목.
 
 ## 다음 단계 메모 (v1.x)
 
-000000. **0.7.1 — 0.7.0 점검 목록 처리(2026-11-11)**: `docs/audit/v0.7.0.md` 153건(A 4 · B 34 · C 72 · D 43) — **아직 수정 전**. 권장 순서는 목록 §15: 묶음 1(PLN-1 문법 키 순서 → USR-1~4 설정) → 2(화면: UI-1 창 전체 스크롤·UI-3 대화상자) → 3(확인 없는 덮어쓰기) → 4(기능 불능) → 5(실행 환경) → 6(배포·고지).
+0000000. **0.8.0 — 하네스 재설계 + 점검 목록 처리(2026-11-11)**: 위 "0.8.0" 절대로 구현. 남은 것은 그 절의 "남은 것 / 다음" 10항목과 체크리스트 "0.8.0" 절, `release/0.8.0` → `main` 병합(사용자 PR).
+000000. **0.7.1 — 0.7.0 점검 목록 처리(2026-11-11)**: `docs/audit/v0.7.0.md` 153건(A 4 · B 34 · C 72 · D 43) — **0.8.0에서 처리함(위 항목; 0.7.1은 내지 않음)**. 아래는 당시 기록: 권장 순서는 목록 §15: 묶음 1(PLN-1 문법 키 순서 → USR-1~4 설정) → 2(화면: UI-1 창 전체 스크롤·UI-3 대화상자) → 3(확인 없는 덮어쓰기) → 4(기능 불능) → 5(실행 환경) → 6(배포·고지).
    결정이 필요한 것 7건(PKG-1 EULA, v0.7.0 게시 여부 등)은 사용자 확인. Release v0.7.0은 게시하지 않았고 0.7.1 게시를 권장. "점검 보고" 표시 항목은 고치기 전에 재현부터.
 00000. **0.7.0 7건 일괄(2026-11-10)**: `docs/plan/v0.7.0.md` — 위 "0.7.0" 절대로 구현·검증·CI·Lite 빌드(run 42822456037, publish=false) 완료; Release v0.7.0 게시와 `main` 병합(PR)은 사용자 확인. 남은 것은 체크리스트 "0.7.0" 절(실모델로 절 수정 품질·세션 저장·보존 파기 확인)과
    계획 §4의 범위 밖 항목(프로젝트 저장 구조 통합, 초안 어시스턴트 다중 턴, 세션 검색·내보내기).

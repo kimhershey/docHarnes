@@ -912,7 +912,8 @@ fn collections_glossary_and_version_crud() {
         })
         .unwrap();
     assert_eq!(g2.id, g.id, "case-insensitive upsert");
-    let exp = db.with(|x| repo::glossary_expansions(x, &["세금".into(), "없음".into()])).unwrap();
+    let words = |s: &str| s.split_whitespace().map(str::to_lowercase).collect::<Vec<_>>();
+    let exp = db.with(|x| repo::glossary_expansions(x, "세금 없음", &["세금".into(), "없음".into()], &words)).unwrap();
     assert_eq!(exp, vec![("세금".to_string(), vec!["VAT".to_string()])], "term keeps its original spelling");
     assert!(db.with(|x| repo::delete_glossary(x, g.id)).unwrap());
 
@@ -1172,4 +1173,657 @@ fn embedding_aborts_after_consecutive_failures_and_skips_replaced_chunks() {
     let report = embed::embed_pending(&w.db, &ok, 64, None, &mut |_, _| {}).unwrap();
     assert_eq!(report.failed, 0, "{report:?}");
     assert!(report.embedded > 0);
+}
+
+/// KNO-1: evidence kept from the previous answer stays inside the scope of the follow-up. A question asked
+/// about an attached document must not cite (or be answered from) a document outside that scope.
+#[test]
+fn kept_evidence_outside_the_follow_up_scope_is_dropped() {
+    let w = World::new();
+    let chat = ScriptedChat { reply: "답변입니다[1].".into(), model: "m".into() };
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None, context_size: None };
+    // First turn: the whole library → the 2024 regulation is cited.
+    let first = answer(&deps, &AnswerRequest::question("숙박비 한도는 얼마인가요?"), &mut |_| true).unwrap();
+    let kept: Vec<i64> = first.sources.iter().filter(|s| s.document_id == "reg2").map(|s| s.chunk_id).collect();
+    assert!(!kept.is_empty(), "{:?}", first.sources);
+    // Follow-up about the attached contract only: the regulation is out of scope now.
+    let mut follow = AnswerRequest::question("이 계약서의 지체상금 조항은?");
+    follow.scope = SearchScope::documents(&["con".to_string()]);
+    follow.keep_chunks = kept.clone();
+    let a = answer(&deps, &follow, &mut |_| true).unwrap();
+    assert!(
+        !a.sources.is_empty() && a.sources.iter().all(|s| s.document_id == "con"),
+        "{:?}",
+        a.sources.iter().map(|s| &s.document_id).collect::<Vec<_>>()
+    );
+    // Nothing in the new scope matches → "no evidence" instead of the previous sources.
+    let silent = ScriptedChat { reply: "SHOULD NOT BE CALLED".into(), model: "m".into() };
+    let silent_deps =
+        AnswerDeps { search: w.search_deps(None), chat: &silent, model: None, cancelled: None, context_size: None };
+    let mut none = AnswerRequest::question("플루토늄 원자로 냉각수 xyzzy");
+    none.scope = SearchScope::documents(&["con".to_string()]);
+    none.keep_chunks = kept.clone();
+    let a = answer(&silent_deps, &none, &mut |_| true).unwrap();
+    assert!(a.no_evidence && a.sources.is_empty(), "{:?}", a.sources);
+    assert_eq!(a.text, super::answer::no_evidence_text(true));
+    // The same scope as before keeps the evidence (the follow-up still leads with it).
+    let mut same = AnswerRequest::question("그럼 일비는?");
+    same.keep_chunks = kept.clone();
+    let a = answer(&deps, &same, &mut |_| true).unwrap();
+    assert_eq!(a.sources[0].chunk_id, kept[0]);
+    // A superseded edition kept from an explicit-document turn is dropped under the default scope …
+    let old = w.db.with(|c| repo::list_chunks(c, "reg1")).unwrap()[0].id;
+    let mut latest = AnswerRequest::question("그럼 정산 기한은?");
+    latest.keep_chunks = vec![old];
+    let a = answer(&deps, &latest, &mut |_| true).unwrap();
+    assert!(a.sources.iter().all(|s| s.document_id != "reg1"), "{:?}", a.sources);
+    // … but an explanation asked from that very document still draws on it.
+    let mut explain = AnswerRequest::question("");
+    explain.kind = AnswerKind::Explain;
+    explain.selection = Some("숙박비는 1박당 120,000원을 한도로 한다".into());
+    explain.document_id = Some("reg1".into());
+    explain.keep_chunks = vec![old];
+    let a = answer(&deps, &explain, &mut |_| true).unwrap();
+    assert!(a.sources.iter().any(|s| s.chunk_id == old), "{:?}", a.sources);
+}
+
+/// KNO-7: once the latest edition is cleared, demoted or deleted, the editions it superseded are searchable
+/// again — they used to stay flagged "superseded" and out of the default search for good.
+#[test]
+fn editions_are_searchable_again_once_their_latest_edition_is_gone() {
+    let w = World::new();
+    let found = |w: &World, doc: &str| w.hits("숙박비 한도").iter().any(|h| h.document_id == doc);
+    let version = |w: &World, doc: &str, date: &str, latest: bool| {
+        w.db.with(|c| {
+            repo::set_version(
+                c,
+                &VersionInput {
+                    document_id: doc.into(),
+                    group_key: "출장비 규정".into(),
+                    version_label: None,
+                    effective_date: Some(date.into()),
+                    is_latest: latest,
+                    note: None,
+                },
+            )
+        })
+        .unwrap()
+    };
+    let is_latest =
+        |w: &World, doc: &str| w.db.with(|c| repo::get_version(c, doc)).unwrap().is_some_and(|v| v.is_latest);
+    // A third, older edition (2022) joins the 2023 / 2024 editions of the fixture.
+    add_doc(&w.db, "reg0", "출장비규정_2022.pdf", DocumentRole::Knowledge, &[REGULATION_V1]);
+    index_pending(&w.index_deps(), None, false, None, &mut |_| {}).unwrap();
+    version(&w, "reg0", "2022-01-01", false);
+    assert!(found(&w, "reg2") && !found(&w, "reg1") && !found(&w, "reg0"), "the 2024 edition hides the older ones");
+
+    // 해제: clearing the latest edition promotes the newest remaining one; the oldest stays superseded.
+    assert!(w.db.with(|c| repo::clear_version(c, "reg2")).unwrap());
+    assert!(is_latest(&w, "reg1") && !is_latest(&w, "reg0"));
+    assert!(found(&w, "reg1") && !found(&w, "reg0"));
+    assert!(found(&w, "reg2"), "the cleared document is an ordinary document again");
+    assert!(!w.db.with(|c| repo::clear_version(c, "reg2")).unwrap(), "nothing left to clear");
+    // Clearing a superseded edition changes nothing for the others.
+    assert!(w.db.with(|c| repo::clear_version(c, "reg0")).unwrap());
+    assert!(is_latest(&w, "reg1"));
+    version(&w, "reg0", "2022-01-01", false);
+
+    // The latest edition's document is deleted (its version row goes with it): the group has no latest any
+    // more, so what is left is searchable.
+    w.db.with(|c| docs::delete_document(c, "reg1")).unwrap();
+    assert!(!is_latest(&w, "reg0"), "no write happened on that path");
+    assert!(found(&w, "reg0"), "a group without a latest edition hides nothing");
+
+    // Demoting the latest edition without naming another one has the same effect.
+    version(&w, "reg2", "2024-01-01", true);
+    assert!(found(&w, "reg2") && !found(&w, "reg0"));
+    version(&w, "reg2", "2024-01-01", false);
+    assert!(found(&w, "reg2") && found(&w, "reg0"));
+    // `latest_only = false` still shows every edition, and the listing leads with the newest.
+    let groups = w.db.with(repo::list_version_groups).unwrap();
+    assert_eq!(groups[0].documents.iter().map(|d| d.document_id.as_str()).collect::<Vec<_>>(), vec!["reg2", "reg0"]);
+}
+
+/// PRJ-16: looking at a project's reference group does not create it. The screen gets an unsaved group under
+/// the id the group will have; the row is written when the first document is added — opening a project used
+/// to leave an empty group behind (one more in the settings' list for every project ever opened).
+#[test]
+fn a_project_reference_group_is_written_on_first_use_not_when_it_is_shown() {
+    use crate::projects::{repo as projects, ProjectInput};
+    let w = World::new();
+    let project =
+        w.db.with(|c| projects::save_project(c, &ProjectInput { name: "한빛 납품".into(), ..Default::default() }))
+            .unwrap();
+    // What the project screen asks for when it opens.
+    let shown = w.db.with_read(|c| repo::peek_project_reference_group(c, &project.id)).unwrap();
+    assert_eq!(
+        (shown.kind, shown.project_id.as_deref(), shown.name.as_str(), shown.active, shown.doc_count),
+        (CollectionKind::Project, Some(project.id.as_str()), "한빛 납품", true, 0)
+    );
+    assert_eq!(shown.id, repo::project_group_id(&project.id));
+    assert!(w.db.with(repo::list_collections).unwrap().is_empty(), "nothing was written");
+    assert_eq!(w.db.with(repo::index_status).unwrap().collections, 0);
+    assert!(w.db.with(|c| repo::reference_group_of_project(c, &project.id)).unwrap().is_none());
+    // The id works wherever a collection id goes: it is a valid target and reads as an empty group.
+    assert!(w.db.with(|c| repo::collection_exists(c, &shown.id)).unwrap());
+    assert!(w.db.with(|c| repo::collection_documents(c, &shown.id)).unwrap().is_empty());
+    assert_eq!(w.db.with(|c| repo::remove_docs_from_collection(c, &shown.id, &["sec".into()])).unwrap(), 0);
+    let scope = SearchScope { collections: vec![shown.id.clone()], ..SearchScope::default() };
+    assert!(w.db.with(|c| repo::scope_doc_ids(c, &scope)).unwrap().unwrap().is_empty());
+    // The first document writes the group — under the same id, so what the screen holds stays valid.
+    assert_eq!(w.db.with(|c| repo::add_docs_to_collection(c, &shown.id, &["sec".into()])).unwrap(), 1);
+    let stored = w.db.with(|c| repo::reference_group_of_project(c, &project.id)).unwrap().unwrap();
+    assert_eq!(
+        (stored.id.as_str(), stored.kind, stored.name.as_str(), stored.doc_count),
+        (shown.id.as_str(), CollectionKind::Project, "한빛 납품", 1)
+    );
+    assert_eq!(w.db.with_read(|c| repo::peek_project_reference_group(c, &project.id)).unwrap(), stored);
+    assert!(w.db.with(|c| repo::project_reference_doc_ids(c, &project.id)).unwrap().contains("sec"));
+    assert_eq!(w.db.with(repo::list_collections).unwrap().len(), 1);
+    // The writing variant (planner, "참고 자료로 넣기") and a group made through the form use that id as well.
+    let second =
+        w.db.with(|c| projects::save_project(c, &ProjectInput { name: "두 번째".into(), ..Default::default() }))
+            .unwrap();
+    let created = w.db.with(|c| repo::project_reference_group(c, &second.id, &second.name)).unwrap();
+    assert_eq!(created.id, repo::project_group_id(&second.id));
+    let third =
+        w.db.with(|c| projects::save_project(c, &ProjectInput { name: "세 번째".into(), ..Default::default() }))
+            .unwrap();
+    let via_form =
+        w.db.with(|c| {
+            repo::save_collection(
+                c,
+                &CollectionInput {
+                    name: "임시".into(),
+                    project_id: Some(third.id.clone()),
+                    ..CollectionInput::default()
+                },
+            )
+        })
+        .unwrap();
+    assert_eq!(via_form.id, repo::project_group_id(&third.id));
+    // A group from before 0.8.0 keeps its random id; the derived id is then not a collection.
+    let old =
+        w.db.with(|c| projects::save_project(c, &ProjectInput { name: "예전 프로젝트".into(), ..Default::default() }))
+            .unwrap();
+    w.db.with(|c| {
+        c.execute(
+            "INSERT INTO collections (id, name, active, kind, project_id, created_at, updated_at) \
+             VALUES ('legacy-group', '예전 프로젝트', 1, 'project', ?1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            [&old.id],
+        )
+    })
+    .unwrap();
+    assert_eq!(w.db.with_read(|c| repo::peek_project_reference_group(c, &old.id)).unwrap().id, "legacy-group");
+    let derived = repo::project_group_id(&old.id);
+    assert!(!w.db.with(|c| repo::collection_exists(c, &derived)).unwrap());
+    let err = w.db.with(|c| repo::add_docs_to_collection(c, &derived, &["sec".into()])).unwrap_err();
+    assert!(err.to_string().contains("collection_not_found"), "{err}");
+    // Unknown projects and made-up ids are still errors.
+    assert!(!w.db.with(|c| repo::collection_exists(c, "pg-nope")).unwrap());
+    let err = w.db.with(|c| repo::add_docs_to_collection(c, "pg-nope", &["sec".into()])).unwrap_err();
+    assert!(err.to_string().contains("collection_not_found"), "{err}");
+    let err = w.db.with_read(|c| repo::peek_project_reference_group(c, "nope")).unwrap_err();
+    assert!(err.to_string().contains("project_not_found"), "{err}");
+    // Deleting the project takes its group along, written or not.
+    assert!(w.db.with(|c| projects::delete_project(c, &project.id)).unwrap());
+    assert!(w.db.with(|c| repo::get_collection(c, &shown.id)).unwrap().is_none());
+    assert!(!w.db.with(|c| repo::collection_exists(c, &shown.id)).unwrap());
+}
+
+/// PRJ-4: the role follows the memberships. A regulation that is common reference material stays reference
+/// material when one project switches its own use of it to "업무 문서" — the switch used to make it a work
+/// document everywhere (and, with a document retention period, a candidate for the next purge).
+#[test]
+fn a_document_in_a_reference_group_stays_reference_material() {
+    use crate::projects::{repo as projects, ProjectInput};
+    let w = World::new();
+    let role = |id: &str| w.db.with(|c| docs::get_document(c, id)).unwrap().unwrap().role;
+    let common =
+        w.db.with(|c| repo::save_collection(c, &CollectionInput { name: "사규".into(), ..CollectionInput::default() }))
+            .unwrap();
+    let project =
+        w.db.with(|c| projects::save_project(c, &ProjectInput { name: "한빛 납품".into(), ..Default::default() }))
+            .unwrap();
+    let group = w.db.with(|c| repo::project_reference_group(c, &project.id, &project.name)).unwrap();
+    w.db.with(|c| {
+        repo::add_docs_to_collection(c, &common.id, &["sec".into()])?;
+        repo::add_docs_to_collection(c, &group.id, &["sec".into()])
+    })
+    .unwrap();
+    assert!(w.db.with(|c| repo::in_reference_group(c, "sec")).unwrap());
+    assert!(!w.db.with(|c| repo::in_reference_group(c, "con")).unwrap());
+    // The project turns the guideline into one of its work documents (the three calls of the kind switch).
+    w.db.with(|c| {
+        repo::remove_docs_from_collection(c, &group.id, &["sec".into()])?;
+        projects::add_documents(c, &project.id, &["sec".into()])?;
+        Ok(())
+    })
+    .unwrap();
+    let now = w.db.with(|c| repo::set_role_by_membership(c, "sec", DocumentRole::Work)).unwrap();
+    assert_eq!((now, role("sec")), (DocumentRole::Knowledge, DocumentRole::Knowledge), "still in the common group");
+    assert!(w.db.with(|c| repo::in_reference_group(c, "sec")).unwrap(), "… which also keeps it from the purge");
+    assert!(w.db.with(|c| projects::member_ids(c, &project.id)).unwrap().contains(&"sec".to_string()));
+    // Out of its last group, the same request makes it a work document.
+    w.db.with(|c| repo::remove_docs_from_collection(c, &common.id, &["sec".into()])).unwrap();
+    assert!(!w.db.with(|c| repo::in_reference_group(c, "sec")).unwrap());
+    assert_eq!(w.db.with(|c| repo::set_role_by_membership(c, "sec", DocumentRole::Work)).unwrap(), DocumentRole::Work);
+    assert_eq!(role("sec"), DocumentRole::Work);
+    // Every other request is carried out as asked.
+    assert_eq!(
+        w.db.with(|c| repo::set_role_by_membership(c, "con", DocumentRole::Knowledge)).unwrap(),
+        DocumentRole::Knowledge
+    );
+    w.db.with(|c| repo::add_docs_to_collection(c, &common.id, &["con".into()])).unwrap();
+    assert_eq!(w.db.with(|c| repo::set_role_by_membership(c, "con", DocumentRole::Form)).unwrap(), DocumentRole::Form);
+    assert_eq!(role("con"), DocumentRole::Form);
+}
+
+/// KNO-6: chunks indexed while an embedding run is busy are embedded by that run — it used to stop at the
+/// number of chunks pending when it started and leave the new documents without vectors.
+#[test]
+fn an_embedding_run_picks_up_chunks_indexed_meanwhile() {
+    /// Indexes one more document while the first batch is "at the engine".
+    struct Interleaving<'a> {
+        inner: HashEmbedder,
+        world: &'a World,
+        late: std::sync::Mutex<bool>,
+    }
+    impl Embedder for Interleaving<'_> {
+        fn model_id(&self) -> &str {
+            self.inner.model_id()
+        }
+        fn embed(&self, inputs: &[String]) -> crate::error::Result<Vec<Vec<f32>>> {
+            let mut late = self.late.lock().unwrap();
+            if !*late {
+                *late = true;
+                let text = format!("{REGULATION_V2}\n제6조(부칙) 임베딩 도중에 색인된 문서이다.");
+                add_doc(&self.world.db, "late", "나중규정.pdf", DocumentRole::Knowledge, &[&text]);
+                let report = index_pending(&self.world.index_deps(), None, false, None, &mut |_| {}).unwrap();
+                assert_eq!(report.indexed, vec!["late".to_string()]);
+                assert!(report.chunks >= 3, "the late document must outnumber one batch: {}", report.chunks);
+            }
+            self.inner.embed(inputs)
+        }
+    }
+    let w = World::new();
+    let before = w.db.with(embed::pending_count).unwrap();
+    let embedder = Interleaving { inner: HashEmbedder::new(16), world: &w, late: std::sync::Mutex::new(false) };
+    let mut shown: Vec<(u64, u64)> = Vec::new();
+    let report = embed::embed_pending(&w.db, &embedder, 2, None, &mut |done, total| shown.push((done, total))).unwrap();
+    let (total, embedded) = w.db.with(repo::chunk_counts).unwrap();
+    assert!(total > before, "the late document added chunks");
+    assert_eq!((embedded, report.remaining, report.failed), (total, 0, 0), "{report:?}");
+    assert_eq!(report.embedded, total);
+    assert!(w.db.with(|c| repo::list_chunks(c, "late")).unwrap().iter().all(|c| c.embedded));
+    // The progress total follows the run instead of ending above 100 %.
+    assert!(shown.iter().all(|(done, total)| done <= total), "{shown:?}");
+    assert_eq!(shown.last(), Some(&(total, total)));
+    // The new chunks are searchable by meaning straight away.
+    let mut req = SearchRequest::new("임베딩 도중에 색인된 문서");
+    req.mode = SearchMode::Semantic;
+    let hits = search(&w.search_deps(Some(&embedder.inner)), &req).unwrap().hits;
+    assert!(
+        hits.iter().any(|h| h.document_id == "late"),
+        "{:?}",
+        hits.iter().map(|h| &h.document_id).collect::<Vec<_>>()
+    );
+}
+
+/// KNO-8: a glossary term the analyzer splits into morphemes (공급가액 → 공급 + 가액 under ko-dic) and a
+/// synonym of several words ("net amount") expand the query like a single-word term does.
+#[test]
+fn glossary_expansion_covers_compounds_and_multi_word_synonyms() {
+    let w = World::new();
+    add_doc(
+        &w.db,
+        "inv",
+        "invoice-summary.pdf",
+        DocumentRole::Knowledge,
+        &["Invoice summary\n\nThe net amount is KRW 10,909,091 before tax."],
+    );
+    index_pending(&w.index_deps(), None, false, None, &mut |_| {}).unwrap();
+    w.db.with(|c| {
+        repo::save_glossary(
+            c,
+            &GlossaryInput {
+                id: None, term: "공급가액".into(), definition: None, synonyms: vec!["net amount".into()]
+            },
+        )
+    })
+    .unwrap();
+    let docs_of = |resp: &SearchResponse| resp.hits.iter().map(|h| h.document_id.clone()).collect::<Vec<_>>();
+    // Korean compound (with a particle under ko-dic) → the English synonym.
+    let query =
+        if w.analyzer.kind() == AnalyzerKind::KoDic { "공급가액은 얼마야?" } else { "공급가액 합계" };
+    let resp = search(&w.search_deps(None), &SearchRequest::new(query)).unwrap();
+    assert_eq!(resp.expanded_terms, vec!["net amount".to_string()], "terms {:?}", resp.query_terms);
+    assert!(docs_of(&resp).contains(&"inv".to_string()), "{:?}", docs_of(&resp));
+    // Synonym of two words → the Korean term (the contract states the 공급가액).
+    let resp = search(&w.search_deps(None), &SearchRequest::new("net amount 합계")).unwrap();
+    assert_eq!(resp.expanded_terms, vec!["공급가액".to_string()], "terms {:?}", resp.query_terms);
+    assert!(docs_of(&resp).contains(&"con".to_string()), "{:?}", docs_of(&resp));
+    // Without the glossary nothing links the two.
+    let mut plain = SearchRequest::new("net amount 합계");
+    plain.expand_glossary = false;
+    assert!(!docs_of(&search(&w.search_deps(None), &plain).unwrap()).contains(&"con".to_string()));
+}
+
+/// KNO-8, analyzer-independent: glossary forms are matched as token sequences (here a stand-in for ko-dic
+/// that splits compounds and drops suffixes), guarded by the form appearing in the query text.
+#[test]
+fn glossary_forms_match_as_token_sequences() {
+    let entry = |id: i64, term: &str, synonyms: &[&str]| GlossaryEntry {
+        id,
+        term: term.into(),
+        definition: None,
+        synonyms: synonyms.iter().map(|s| s.to_string()).collect(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+    let entries = vec![
+        entry(1, "공급가액", &["net amount", "Supply Value"]),
+        entry(2, "출장비", &["여비"]),
+        entry(3, "가액", &["금액"]),
+        entry(4, "단독", &[]),
+    ];
+    // Splits the compounds a morphological dictionary would split and drops the suffix of 출장비.
+    let morphemes = |s: &str| -> Vec<String> {
+        let mut out = Vec::new();
+        for w in s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()) {
+            match w.trim_end_matches(['은', '는']) {
+                "공급가액" => out.extend(["공급".to_string(), "가액".to_string()]),
+                "출장비" => out.push("출장".to_string()),
+                other => out.push(other.to_lowercase()),
+            }
+        }
+        out
+    };
+    let expand = |query: &str| repo::expand_terms(&entries, query, &morphemes(query), &morphemes);
+    let forms = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    // A split compound: each of its terms carries the synonyms; "가액" is a term of its own as well.
+    assert_eq!(
+        expand("공급가액은 얼마"),
+        vec![
+            ("공급".to_string(), forms(&["net amount", "Supply Value"])),
+            ("가액".to_string(), forms(&["net amount", "Supply Value", "금액"])),
+        ]
+    );
+    // A synonym of several words, whatever its case and spacing in the query.
+    assert_eq!(
+        expand("what is the Net  Amount"),
+        vec![
+            ("net".to_string(), forms(&["공급가액", "Supply Value"])),
+            ("amount".to_string(), forms(&["공급가액", "Supply Value"])),
+        ]
+    );
+    // The form itself must be in the query: the morpheme 출장 alone is not 출장비.
+    assert_eq!(expand("출장 일정"), Vec::<(String, Vec<String>)>::new());
+    assert_eq!(expand("출장비 일정"), vec![("출장".to_string(), forms(&["여비"]))]);
+    // The parts of a compound in another order are not the compound; a term without synonyms adds nothing.
+    assert_eq!(expand("가액 대비 공급 단독"), vec![("가액".to_string(), forms(&["금액"]))]);
+    assert!(repo::expand_terms(&entries, "", &[], &morphemes).is_empty());
+}
+
+/// Records every request and replies with `reply`, reporting `finish_reason` like the engine does.
+struct RecordingChat {
+    reply: String,
+    finish_reason: Option<String>,
+    requests: std::sync::Mutex<Vec<ChatRequest>>,
+}
+
+impl RecordingChat {
+    fn new(reply: &str, finish_reason: Option<&str>) -> RecordingChat {
+        RecordingChat {
+            reply: reply.into(),
+            finish_reason: finish_reason.map(str::to_string),
+            requests: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+    /// System prompt of the last request.
+    fn last_system(&self) -> String {
+        let requests = self.requests.lock().unwrap();
+        let req = requests.last().expect("a request was sent");
+        req.messages.first().unwrap()["content"].as_str().unwrap_or_default().to_string()
+    }
+    fn count(&self) -> usize {
+        self.requests.lock().unwrap().len()
+    }
+    /// `(user prompt, max_tokens)` of the last request.
+    fn last(&self) -> (String, u32) {
+        let requests = self.requests.lock().unwrap();
+        let req = requests.last().expect("a request was sent");
+        (req.messages.last().unwrap()["content"].as_str().unwrap().to_string(), req.max_tokens.unwrap_or(0))
+    }
+}
+
+impl ChatBackend for RecordingChat {
+    fn model_id(&self) -> Option<String> {
+        Some("recording".into())
+    }
+    fn chat_stream(&self, req: &ChatRequest, on_delta: &mut dyn FnMut(&str) -> bool) -> Result<ChatResponse> {
+        self.requests.lock().unwrap().push(req.clone());
+        on_delta(&self.reply);
+        Ok(ChatResponse {
+            content: self.reply.clone(),
+            finish_reason: self.finish_reason.clone(),
+            ..ChatResponse::default()
+        })
+    }
+}
+
+/// A pasted text of about 6,000 characters with the instruction before and after it.
+fn long_text_request() -> AnswerRequest {
+    let body: String = (1..=200).map(|i| format!("{i}번째 문장은 금번 과업의 수행 범위와 일정을 설명함. ")).collect();
+    let mut req = AnswerRequest::question(&format!("다음 글을 다듬어줘:\n{body}\n위 글을 공문 문체로 정리해 주세요."));
+    assert!(req.question.chars().count() > 5_000);
+    req.retrieve = false;
+    req.save = false;
+    req
+}
+
+/// KNO-3: a request that brings its own text (다듬기 · 교정 · 번역) is sized from the loaded model's context —
+/// not cut at 4,000 characters in and 1,200 tokens out.
+#[test]
+fn a_text_only_request_is_sized_from_the_model_context() {
+    let w = World::new();
+    let chat = RecordingChat::new("다듬은 글입니다.", Some("stop"));
+    let deps = AnswerDeps {
+        search: w.search_deps(None),
+        chat: &chat,
+        model: None,
+        cancelled: None,
+        context_size: Some(32_768),
+    };
+    let a = answer(&deps, &long_text_request(), &mut |_| true).unwrap();
+    let (prompt, max_tokens) = chat.last();
+    assert!(prompt.contains("1번째 문장") && prompt.contains("200번째 문장"), "the whole text reaches the model");
+    assert!(prompt.contains("공문 문체로 정리"), "the closing instruction reaches the model");
+    let text_tokens = super::chunker::estimate_tokens(&long_text_request().question);
+    assert!(max_tokens >= text_tokens, "the reply may be as long as the text: {max_tokens} < {text_tokens}");
+    assert_eq!(a.truncated, None, "nothing was cut");
+    assert!(serde_json::to_value(&a).unwrap().get("truncated").is_none(), "the field is absent when nothing was cut");
+
+    // A small context: the text is cut to what fits (head + the closing instruction) and the answer says so.
+    let small = AnswerDeps {
+        search: w.search_deps(None),
+        chat: &chat,
+        model: None,
+        cancelled: None,
+        context_size: Some(4_096),
+    };
+    let a = answer(&small, &long_text_request(), &mut |_| true).unwrap();
+    let (prompt, max_tokens) = chat.last();
+    assert_eq!(a.truncated, Some(Truncation::Input));
+    assert_eq!(serde_json::to_value(&a).unwrap()["truncated"], "input");
+    assert!(prompt.contains("1번째 문장") && !prompt.contains("200번째 문장"), "the tail of the text is dropped");
+    assert!(
+        prompt.trim_end().ends_with("…\n위 글을 공문 문체로 정리해 주세요."),
+        "{:?}",
+        prompt.chars().skip(prompt.chars().count().saturating_sub(60)).collect::<String>()
+    );
+    let prompt_tokens = crate::planner::prompts::approx_tokens(&prompt);
+    assert!(prompt_tokens + max_tokens <= 4_096, "prompt {prompt_tokens} + reply {max_tokens} fit the context");
+    assert!(max_tokens >= 1_200, "{max_tokens}");
+
+    // The reply stopped at its token limit → marked as cut as well.
+    let limited = RecordingChat::new("다듬다 만 글", Some("length"));
+    let deps = AnswerDeps {
+        search: w.search_deps(None),
+        chat: &limited,
+        model: None,
+        cancelled: None,
+        context_size: Some(4_096),
+    };
+    assert_eq!(answer(&deps, &long_text_request(), &mut |_| true).unwrap().truncated, Some(Truncation::Both));
+    let mut short = AnswerRequest::question("다음 문장을 다듬어줘: 금번 과업은 당사가 수행함.");
+    short.retrieve = false;
+    short.save = false;
+    assert_eq!(answer(&deps, &short, &mut |_| true).unwrap().truncated, Some(Truncation::Output));
+    assert_eq!(limited.last().1, 1_200, "a short request keeps the standard reply limit");
+
+    // A grounded question keeps the fixed caps (and a reply cut at the limit is marked too).
+    let mut grounded = AnswerRequest::question(&format!("출장비 숙박비 한도는? {}", "가".repeat(5_000)));
+    grounded.save = false;
+    let a = answer(&deps, &grounded, &mut |_| true).unwrap();
+    let (prompt, max_tokens) = limited.last();
+    assert_eq!(max_tokens, 1_200);
+    assert!(prompt.chars().filter(|c| *c == '가').count() < 4_000, "the question is still capped at 4,000 characters");
+    assert_eq!(a.truncated, Some(Truncation::Output));
+}
+
+/// KNO-3: when the server still refuses a text-only prompt (context unknown, or its tokenizer counts more than
+/// the estimate) the text is halved and the answer is marked instead of failing.
+#[test]
+fn a_text_only_request_the_server_refuses_is_halved_and_marked() {
+    let w = World::new();
+    let strict = LimitedChat::new(2_000, "다듬은 글입니다.");
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &strict, model: None, cancelled: None, context_size: None };
+    let a = answer(&deps, &long_text_request(), &mut |_| true).unwrap();
+    let sizes = strict.sizes();
+    assert!(sizes.len() >= 2 && sizes[0] > 2_000 && *sizes.last().unwrap() <= 2_000, "{sizes:?}");
+    assert_eq!(a.truncated, Some(Truncation::Input));
+    assert_eq!(a.text, "다듬은 글입니다.");
+    // Nothing left to halve → the server's refusal is the error.
+    let tiny = LimitedChat::new(10, "x");
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &tiny, model: None, cancelled: None, context_size: None };
+    let mut short = AnswerRequest::question("다음 문장을 다듬어줘: 금번 과업은 당사가 수행함.");
+    short.retrieve = false;
+    let err = answer(&deps, &short, &mut |_| true).unwrap_err();
+    assert!(err.to_string().contains("exceeds the available context size"), "{err}");
+}
+
+/// 0.8.0 reply routes: small talk looks nothing up, is short and is not kept; a question that is not
+/// about the documents is answered whatever the general-knowledge setting says — from the sources
+/// when they answer it, marked as general knowledge when the model says they do not.
+#[test]
+fn chat_and_general_styles_answer_without_claiming_evidence() {
+    let w = World::new();
+    let before = w.db.with(|c| repo::list_answers(c, None, None, 50)).unwrap().len();
+
+    // Small talk: one short call, no retrieval, no sources, nothing saved.
+    let chat = RecordingChat::new("저는 DocuLens 어시스턴트입니다.", Some("stop"));
+    let deps = AnswerDeps {
+        search: w.search_deps(None),
+        chat: &chat,
+        model: None,
+        cancelled: None,
+        context_size: Some(8_192),
+    };
+    let mut req = AnswerRequest::question("넌 누구야?");
+    req.style = AnswerStyle::Chat;
+    let a = answer(&deps, &req, &mut |_| true).unwrap();
+    assert_eq!(a.text, "저는 DocuLens 어시스턴트입니다.");
+    assert!(a.sources.is_empty() && !a.no_evidence && !a.used_general_knowledge, "{a:?}");
+    assert_eq!(a.id, None, "small talk is not kept in the answer history");
+    let (prompt, max_tokens) = chat.last();
+    assert!(prompt.contains("[요청]") && !prompt.contains("[근거]"), "{prompt}");
+    assert!(max_tokens <= 300, "{max_tokens}");
+    let system = chat.last_system();
+    assert!(system.contains("짧고 친근하게") && system.contains("지어내지"), "{system}");
+    // A question in the knowledge base's own words is still not looked up in chat style.
+    let mut req = AnswerRequest::question("출장비 얘기 말고, 오늘 기분 어때?");
+    req.style = AnswerStyle::Chat;
+    assert!(answer(&deps, &req, &mut |_| true).unwrap().sources.is_empty());
+
+    // General, nothing found: answered from general knowledge although `allow_general` is off.
+    let general = RecordingChat::new("(일반 지식 기반 답변) 대한민국의 수도는 서울입니다.", Some("stop"));
+    let deps = AnswerDeps {
+        search: w.search_deps(None),
+        chat: &general,
+        model: None,
+        cancelled: None,
+        context_size: Some(8_192),
+    };
+    let mut req = AnswerRequest::question("플루토늄 원자로 냉각수 xyzzy 는 뭐야?");
+    req.style = AnswerStyle::General;
+    assert!(!req.allow_general);
+    let a = answer(&deps, &req, &mut |_| true).unwrap();
+    assert!(a.no_evidence && a.used_general_knowledge && a.sources.is_empty(), "{a:?}");
+    assert!(a.text.contains("서울"));
+    assert_eq!(general.count(), 1);
+
+    // General, passages found, the model uses them: an ordinary grounded answer with its citations.
+    let grounded = RecordingChat::new("출장비는 교통비, 숙박비, 식비로 구성됩니다[1].", Some("stop"));
+    let deps = AnswerDeps {
+        search: w.search_deps(None),
+        chat: &grounded,
+        model: None,
+        cancelled: None,
+        context_size: Some(8_192),
+    };
+    let mut req = AnswerRequest::question("출장비는 무엇으로 구성되나요?");
+    req.style = AnswerStyle::General;
+    let a = answer(&deps, &req, &mut |_| true).unwrap();
+    assert!(!a.sources.is_empty() && !a.used_general_knowledge && !a.no_evidence, "{a:?}");
+    assert_eq!(a.sentences[0].citations, vec![1]);
+    let system = grounded.last_system();
+    assert!(system.contains("관련이 없으면") && system.contains("(일반 지식 기반 답변)"), "{system}");
+
+    // General, passages found, the model says they do not answer the question: marked as general
+    // knowledge, and the passages it did not use are not shown as its evidence.
+    let unrelated =
+        RecordingChat::new("(일반 지식 기반 답변) 출장은 업무를 위해 근무지를 떠나는 일입니다.", Some("stop"));
+    let deps = AnswerDeps {
+        search: w.search_deps(None),
+        chat: &unrelated,
+        model: None,
+        cancelled: None,
+        context_size: Some(8_192),
+    };
+    let a = answer(&deps, &req, &mut |_| true).unwrap();
+    assert!(a.used_general_knowledge && a.no_evidence && a.sources.is_empty(), "{a:?}");
+    assert!(a.sentences.iter().all(|s| s.citations.is_empty()));
+
+    // … also when the model leaves the marker out and cites nothing, or decorates the first line; a
+    // stray citation next to the marker is removed with the sources it pointed at.
+    for reply in [
+        "출장은 업무를 위해 근무지를 떠나는 일입니다.",
+        "**(일반 지식 기반 답변)** 출장은 업무를 위해 근무지를 떠나는 일입니다 [1].",
+    ] {
+        let chat = RecordingChat::new(reply, Some("stop"));
+        let deps = AnswerDeps {
+            search: w.search_deps(None),
+            chat: &chat,
+            model: None,
+            cancelled: None,
+            context_size: Some(8_192),
+        };
+        let mut once = req.clone();
+        once.save = false;
+        let a = answer(&deps, &once, &mut |_| true).unwrap();
+        assert!(a.used_general_knowledge && a.sources.is_empty(), "{reply}: {a:?}");
+        assert!(!a.text.contains("[1]") && a.text.ends_with("일입니다."), "{}", a.text);
+    }
+
+    // Summaries and comparisons have no styles: a stray value changes nothing.
+    let after = w.db.with(|c| repo::list_answers(c, None, None, 50)).unwrap().len();
+    assert_eq!(after, before + 3, "the three general answers are kept, the two chat replies are not");
+    let json = serde_json::json!({ "question": "안녕", "style": "chat" });
+    assert_eq!(serde_json::from_value::<AnswerRequest>(json).unwrap().style, AnswerStyle::Chat);
+    let json = serde_json::json!({ "question": "안녕" });
+    assert_eq!(serde_json::from_value::<AnswerRequest>(json).unwrap().style, AnswerStyle::Grounded);
 }

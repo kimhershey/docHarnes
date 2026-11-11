@@ -178,10 +178,62 @@ impl ImportPlan {
     pub fn importable(&self) -> impl Iterator<Item = &ImportItem> {
         self.items.iter().filter(|i| i.status.is_importable())
     }
+
+    /// Registered documents this plan merely met again — the same path, or the same content
+    /// under another path — in plan order, each id once.
+    pub fn existing_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = Vec::new();
+        for item in &self.items {
+            let id = match &item.status {
+                ImportItemStatus::AlreadyRegistered { id } => id,
+                ImportItemStatus::Duplicate { of, .. } => of,
+                _ => continue,
+            };
+            if !ids.contains(id) {
+                ids.push(id.clone());
+            }
+        }
+        ids
+    }
+
+    /// A plan with nothing to import is still worth running when it has a collection / project
+    /// to put its already registered documents into (files of the library dropped on a project
+    /// or a reference group, audit PRJ-1).
+    pub fn attaches_existing(&self) -> bool {
+        (self.options.collection_id.is_some() || self.options.project_id.is_some()) && !self.existing_ids().is_empty()
+    }
+}
+
+/// File names that are never documents: the owner (lock) file Office keeps next to an open
+/// document (`~$보고서.docx`, hidden on Windows), Word's `~WRL0001.tmp`, LibreOffice's
+/// `.~lock.…#`, temporaries of browsers and of our own copies (`.crdownload`, `.part`, `.tmp` …)
+/// and shell metadata. A watched inbox registered them as broken documents (audit DOC-11).
+pub fn is_transient_name(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.starts_with("~$")
+        || lower.starts_with(".~lock.")
+        || [".tmp", ".temp", ".crdownload", ".part", ".partial", ".download"].iter().any(|ext| lower.ends_with(ext))
+        || matches!(lower.as_str(), "thumbs.db" | "ehthumbs.db" | "desktop.ini")
+}
+
+/// Hidden / system entries of a folder walk (Windows attributes: Explorer does not show them,
+/// and Office marks its owner files hidden). Dot-files are handled by name on every platform.
+#[cfg(windows)]
+fn is_hidden_or_system(entry: &std::fs::DirEntry) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
+    const FILE_ATTRIBUTE_SYSTEM: u32 = 0x4;
+    entry.metadata().is_ok_and(|m| m.file_attributes() & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM) != 0)
+}
+
+#[cfg(not(windows))]
+fn is_hidden_or_system(_entry: &std::fs::DirEntry) -> bool {
+    false
 }
 
 /// Walks `sources` (files or folders) collecting candidate files; hidden
-/// entries, `.doculens/` and symlinks are skipped. Returns `(files, truncated)`.
+/// entries, lock / temporary files, `.doculens/` and symlinks are skipped (a file named
+/// explicitly is kept and classified by the plan). Returns `(files, truncated)`.
 pub fn collect_paths(sources: &[PathBuf], max_files: usize) -> (Vec<PathBuf>, bool) {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
@@ -213,6 +265,10 @@ pub fn collect_paths(sources: &[PathBuf], max_files: usize) -> (Vec<PathBuf>, bo
                 }
                 let Ok(ft) = entry.file_type() else { continue };
                 if ft.is_symlink() {
+                    continue;
+                }
+                // Lock files, temporaries and hidden / system entries are not documents.
+                if (ft.is_file() && is_transient_name(&name)) || is_hidden_or_system(&entry) {
                     continue;
                 }
                 let path = entry.path();
@@ -274,6 +330,11 @@ pub struct Classified {
 pub fn classify(path: &Path, meta: &std::fs::Metadata) -> Classified {
     if meta.len() == 0 {
         return Classified { reason: Some("empty".into()), ..Default::default() };
+    }
+    // An Office owner file (`~$보고서.docx`) or a half-written download carries a document
+    // extension or even document bytes; it still is not a document.
+    if path.file_name().is_some_and(|n| is_transient_name(&n.to_string_lossy())) {
+        return Classified { reason: Some("unsupported_extension".into()), ..Default::default() };
     }
     if meta.len() > MAX_FILE_BYTES {
         return Classified { reason: Some("too_large".into()), ..Default::default() };
@@ -493,6 +554,10 @@ pub struct ImportReport {
     pub batch_id: String,
     pub imported: Vec<String>,
     pub relinked: Vec<String>,
+    /// Registered documents the batch met again (same path / same content) — they were put
+    /// into the batch's collection / project like the imported ones.
+    #[serde(default)]
+    pub existing: Vec<String>,
     pub failed: Vec<(String, String)>,
     pub skipped: u32,
     pub cancelled: bool,
@@ -565,18 +630,15 @@ pub fn run(
             return Err(CoreError::Invalid("project_not_found".into()));
         }
     }
-    // Documents this batch merely re-encountered still join the collection / project.
-    if plan.options.collection_id.is_some() || plan.options.project_id.is_some() {
-        for item in &plan.items {
-            let existing = match &item.status {
-                ImportItemStatus::AlreadyRegistered { id } => Some(id.clone()),
-                ImportItemStatus::Duplicate { of, .. } => Some(of.clone()),
-                _ => None,
-            };
-            if let Some(id) = existing {
-                deps.db.with(|c| attach_to_collection(c, &plan.options, &id))?;
-            }
+    // Documents this batch merely met again still join the collection / project, and the report
+    // names them: an attach-only run (nothing new to import) is all about these ids.
+    for id in plan.existing_ids() {
+        // The plan may be minutes old: a document deleted since is simply not there to attach.
+        if deps.db.with(|c| repo::get_document(c, &id))?.is_none() {
+            continue;
         }
+        deps.db.with(|c| attach_to_collection(c, &plan.options, &id))?;
+        report.existing.push(id);
     }
     for item in plan.importable() {
         if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
@@ -676,16 +738,33 @@ fn import_one(
     let keep_pages =
         relinked && doc.page_count > 0 && DocumentCache::for_document(deps.paths, &id).page_file(1).is_file();
     if keep_pages {
-        deps.db.with(|c| repo::set_status(c, &id, DocumentStatus::Rendered, None))?;
+        let status = settled_status(deps.db, &doc, DocumentStatus::Rendered);
+        deps.db.with(|c| repo::set_status(c, &id, status, None))?;
     } else {
         process_document(deps, &doc, plan.options.render, plan.options.dpi, cancel, page_progress)?;
     }
     Ok((id, relinked))
 }
 
+/// The status a document holds once its pages are there again (`rendered` is what the renderer
+/// reports: `rendered`, or `new` without page images). Rendering never takes back what the
+/// pipeline reached: `archived` stays, and while the latest extraction run stands (`last_run_id`;
+/// a content change clears it) the document stays `extracted` / `reviewed`. A document that
+/// comes back from `missing` / `importing` / `error` lost that status, so it is read off the
+/// latest run's fields.
+fn settled_status(db: &Db, doc: &DocumentRecord, rendered: DocumentStatus) -> DocumentStatus {
+    match doc.status {
+        DocumentStatus::Archived => DocumentStatus::Archived,
+        _ if doc.last_run_id.is_none() => rendered,
+        DocumentStatus::Extracted | DocumentStatus::Reviewed => doc.status,
+        _ => db.with(|c| crate::pipeline::review::status_from_fields(c, &doc.id)).ok().flatten().unwrap_or(rendered),
+    }
+}
+
 /// Inserts the row, relinks a `missing` document, or — when the path is
 /// already registered (e.g. a `missing` row at the same path whose content
 /// changed) — refreshes that row instead of hitting the UNIQUE constraint.
+/// Returns `(id, relinked)`; `relinked` means the same content came back.
 #[allow(clippy::too_many_arguments)]
 fn register(
     deps: &ImportDeps<'_>,
@@ -709,13 +788,22 @@ fn register(
         _ => deps.db.with(|c| repo::find_by_rel_path(c, rel))?.map(|d| d.id),
     };
     if let Some(id) = existing_id {
+        // Only the same content is a relink. Other content at a registered path (a `missing` row
+        // whose file was replaced — a scanner writing the next `scan_0001.pdf`) keeps the row's
+        // identity (tags, project, manual type) but nothing derived from the old file: the hash
+        // change resets the pipeline state and the page cache goes, so it is processed afresh.
+        let previous = deps.db.with(|c| repo::get_document(c, &id))?;
+        let same_content = previous.is_some_and(|d| d.content_hash == hash);
         deps.db.with_tx(|tx| {
             repo::set_rel_path(tx, &id, rel, display_name)?;
             repo::set_file_info(tx, &id, &hash, size, modified)?;
             repo::set_status(tx, &id, DocumentStatus::Importing, None)?;
             attach_to_collection(tx, &plan.options, &id)
         })?;
-        return Ok((id, true));
+        if !same_content {
+            DocumentCache::for_document(deps.paths, &id).remove_all();
+        }
+        return Ok((id, same_content));
     }
     let id = new_id();
     deps.db.with(|c| {
@@ -754,6 +842,11 @@ fn attach_to_collection(conn: &rusqlite::Connection, options: &ImportOptions, id
     Ok(())
 }
 
+/// `documents.error` of a document whose conversion / rendering is running right now (status
+/// `error` for crash safety, see [`process_document`]). The text is stable: the UI shows such a
+/// document as "처리 중" instead of a failure while a document job is alive.
+pub const PROCESSING_MARKER: &str = "interrupted while processing";
+
 /// Converts (office formats) and renders a registered document, replacing its
 /// pages and setting the final status. Errors are recorded on the document
 /// (status `error`) and returned.
@@ -767,14 +860,21 @@ pub fn process_document(
 ) -> Result<()> {
     // Crash safety: if the process dies inside a parser/renderer (abort, OOM), the row
     // must not stay `importing` (which the startup rescan would retry forever).
-    deps.db.with(|c| repo::set_status(c, &doc.id, DocumentStatus::Error, Some("interrupted while processing")))?;
-    let result = process_inner(deps, doc, render_pages, dpi, cancel, page_progress);
+    deps.db.with(|c| repo::set_status(c, &doc.id, DocumentStatus::Error, Some(PROCESSING_MARKER)))?;
+    // A panic anywhere in the conversion / rendering of this document fails this document only
+    // (the batch goes on with the next file).
+    let result =
+        convert::guard(doc.source_kind.as_str(), || process_inner(deps, doc, render_pages, dpi, cancel, page_progress));
     match &result {
         Ok(status) => {
-            deps.db.with(|c| repo::set_status(c, &doc.id, *status, None))?;
+            let settled = settled_status(deps.db, doc, *status);
+            deps.db.with(|c| repo::set_status(c, &doc.id, settled, None))?;
         }
         Err(CoreError::Cancelled) => {
-            deps.db.with(|c| repo::set_status(c, &doc.id, DocumentStatus::New, None))?;
+            // The page rows are untouched until a render completes: an extracted / reviewed /
+            // archived document keeps that status through a cancelled re-render as well.
+            let settled = settled_status(deps.db, doc, DocumentStatus::New);
+            deps.db.with(|c| repo::set_status(c, &doc.id, settled, None))?;
         }
         Err(e) => {
             let msg = e.to_string();
@@ -888,6 +988,31 @@ fn text_only_pages(text: Option<String>) -> Vec<NewPage> {
     }
 }
 
+/// The PDF a converted (office / text) document renders from. The retention purge trims
+/// `cache/converted/<id>/` by size while the page images stay, so the file may be gone: it is
+/// written again from the source document — rotating, splitting and merging need it although the
+/// viewer still shows every page (audit DOC-10).
+pub fn ensure_converted_pdf(deps: &ImportDeps<'_>, doc: &DocumentRecord) -> Result<PathBuf> {
+    let cache = DocumentCache::for_document(deps.paths, &doc.id);
+    let pdf = cache.converted_pdf();
+    if pdf.is_file() {
+        return Ok(pdf);
+    }
+    let abs = doc.absolute_path(deps.paths);
+    if !abs.is_file() {
+        return Err(CoreError::NotFound(format!("{} (file missing)", doc.rel_path)));
+    }
+    log::info!("converted PDF of document {} is gone; converting again", doc.id);
+    let conv = convert::convert(&abs, doc.source_kind, &cache.converted_dir, deps.printer)?;
+    conv.pdf.ok_or_else(|| {
+        CoreError::Convert(format!(
+            "PDF 변환본 생성 실패({}): {}",
+            conv.printer,
+            conv.print_error.unwrap_or_else(|| "no PDF".into())
+        ))
+    })
+}
+
 /// Re-renders one page with a new rotation (viewer "회전 저장").
 pub fn rotate_page(deps: &ImportDeps<'_>, doc: &DocumentRecord, page_no: u32, rotation: u16) -> Result<NewPage> {
     let rotation = rotation % 360;
@@ -902,8 +1027,8 @@ pub fn rotate_page(deps: &ImportDeps<'_>, doc: &DocumentRecord, page_no: u32, ro
             .pop()
             .ok_or_else(|| CoreError::Render("no page".into()))?,
         _ => {
-            let pdf = if doc.source_kind == SourceKind::Pdf { abs } else { cache.converted_pdf() };
             let svc = deps.render.ok_or_else(|| CoreError::Render("PDFium is not available".into()))?;
+            let pdf = if doc.source_kind == SourceKind::Pdf { abs } else { ensure_converted_pdf(deps, doc)? };
             render::render_pdf_page(svc, &pdf, &cache, &opts, page_no, rotation)?
         }
     };
@@ -1353,14 +1478,15 @@ fn rescan_one(
             } else if doc.status == DocumentStatus::Missing {
                 let cache = DocumentCache::for_document(deps.paths, &doc.id);
                 let has_pages = doc.page_count > 0 && cache.page_file(1).is_file();
+                // `missing` forgot whether the document was extracted / reviewed: the latest run tells.
+                let status = settled_status(
+                    deps.db,
+                    doc,
+                    if has_pages { DocumentStatus::Rendered } else { DocumentStatus::New },
+                );
                 deps.db.with(|c| {
                     repo::set_file_info(c, &doc.id, &hash, meta.len(), modified_at(&meta))?;
-                    repo::set_status(
-                        c,
-                        &doc.id,
-                        if has_pages { DocumentStatus::Rendered } else { DocumentStatus::New },
-                        None,
-                    )
+                    repo::set_status(c, &doc.id, status, None)
                 })?;
                 report.restored.push(doc.id.clone());
                 needs_process = !has_pages;
@@ -1410,6 +1536,8 @@ pub fn inbox_plan(db: &Db, paths: &WorkspacePaths, options: &ImportOptions) -> R
 
 /// Deletes a document: DB row, cache, and (unless `keep_file`) the file —
 /// OS trash first, `.doculens/trash/` as fallback (USB sticks, network shares).
+/// A file that cannot be removed (held open by another program) fails the deletion with
+/// [`FILE_IN_USE`] and the document stays registered.
 pub fn delete_document(deps: &ImportDeps<'_>, id: &str, keep_file: bool) -> Result<Option<PathBuf>> {
     let doc = deps.db.with(|c| repo::get_document(c, id))?.ok_or_else(|| CoreError::NotFound(id.to_string()))?;
     let abs = doc.absolute_path(deps.paths);
@@ -1421,6 +1549,9 @@ pub fn delete_document(deps: &ImportDeps<'_>, id: &str, keep_file: bool) -> Resu
                 log::info!("os trash unavailable ({e}); using the workspace trash folder");
                 moved_to = Some(move_to_workspace_trash(deps.paths, &doc.id, &doc.original_name, &abs)?);
             }
+        }
+        if abs.exists() {
+            return Err(CoreError::Invalid(FILE_IN_USE.into()));
         }
     }
     DocumentCache::for_document(deps.paths, id).remove_all();
@@ -1448,10 +1579,27 @@ pub(crate) fn move_to_workspace_trash(
     let target =
         unique_target(&trash_dir, &format!("{}_{}", &doc_id[..8.min(doc_id.len())], original_name), &|_| false);
     std::fs::rename(abs, &target).or_else(|_| copy_or_move(abs, &target, true))?;
+    original_must_be_gone(abs, &target)?;
     if let Ok(f) = std::fs::File::options().write(true).open(&target) {
         let _ = f.set_modified(SystemTime::now());
     }
     Ok(target)
+}
+
+/// Reason of a deletion that failed because the file could not be removed (`CoreError::Invalid`).
+pub const FILE_IN_USE: &str = "file_in_use";
+
+/// A file another program holds open (Word, a PDF viewer) can still be copied, but not renamed
+/// or removed: the copy-then-remove fallback then leaves the original where it was. Reporting
+/// the document as deleted would drop its row while the file stays — and an inbox scan would
+/// register it again (audit DOC-12). The trash copy is taken back and the deletion fails.
+fn original_must_be_gone(original: &Path, trash_copy: &Path) -> Result<()> {
+    if !original.exists() {
+        return Ok(());
+    }
+    let _ = std::fs::remove_file(trash_copy);
+    log::warn!("a document file could not be removed (in use by another program?)");
+    Err(CoreError::Invalid(FILE_IN_USE.into()))
 }
 
 #[cfg(test)]
@@ -1699,6 +1847,50 @@ mod tests {
         assert_eq!(plan.unsupported_count, 2);
     }
 
+    /// Audit DOC-11: Word / Excel keep an owner file `~$보고서.docx` next to an open document; a
+    /// watched inbox registered it (and other temporaries) as a broken document.
+    #[test]
+    fn lock_files_and_temporaries_are_never_documents() {
+        let e = env();
+        let inbox = e.paths.inbox_dir();
+        // 162 bytes: the user name in ANSI and UTF-16, as Word writes it.
+        let mut owner = vec![4u8];
+        owner.extend_from_slice(b"hong");
+        owner.resize(55, 0);
+        owner.extend("hong".encode_utf16().flat_map(|u| u.to_le_bytes()));
+        owner.resize(162, 0);
+        std::fs::write(inbox.join("~$보고서.docx"), &owner).unwrap();
+        std::fs::write(inbox.join("~WRL0001.tmp"), &owner).unwrap();
+        write_blank_pdf(&inbox.join("견적서.pdf.crdownload"), 1, &[]).unwrap();
+        write_blank_pdf(&inbox.join("스캔.pdf.part"), 1, &[]).unwrap();
+        std::fs::write(inbox.join("Thumbs.db"), b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1thumbs").unwrap();
+        std::fs::write(inbox.join("보고서.txt"), "본문").unwrap();
+        for entry in std::fs::read_dir(&inbox).unwrap().flatten() {
+            crate::modelstore::mark_settled(&entry.path());
+        }
+        for name in
+            ["~$보고서.docx", "~$예산.xlsx", "~WRL0001.tmp", "a.TMP", "b.pdf.crdownload", "c.pdf.part", "Thumbs.db"]
+        {
+            assert!(is_transient_name(name), "{name}");
+        }
+        for name in ["보고서.docx", "~물결 메모.txt", "temp.pdf", "part.pdf", "tmp"] {
+            assert!(!is_transient_name(name), "{name}");
+        }
+        // The inbox scan and a folder import only see the real document.
+        let p = inbox_plan(&e.db, &e.paths, &ImportOptions::default()).unwrap();
+        assert_eq!(p.items.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(), ["보고서.txt"]);
+        let folder =
+            plan(&e.db, &e.paths, std::slice::from_ref(&inbox), &ImportOptions::default(), ImportSource::Folder)
+                .unwrap();
+        assert_eq!(folder.items.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(), ["보고서.txt"]);
+        // A lock file handed over by name is listed as unsupported, never imported.
+        let named =
+            plan(&e.db, &e.paths, &[inbox.join("~$보고서.docx")], &ImportOptions::default(), ImportSource::Drop)
+                .unwrap();
+        assert_eq!(named.new_count, 0);
+        assert!(matches!(named.items[0].status, ImportItemStatus::Unsupported { .. }), "{:?}", named.items[0]);
+    }
+
     #[test]
     fn classify_lets_the_content_decide() {
         let e = env();
@@ -1797,6 +1989,39 @@ mod tests {
         }
     }
 
+    /// Audit DOC-1: a converter panic used to unwind through `run` — the job failed and the files
+    /// after the bad one were never processed.
+    #[test]
+    fn a_panic_in_one_document_does_not_stop_the_batch() {
+        struct PanickingPrinter;
+        impl PdfPrinter for PanickingPrinter {
+            fn print_to_pdf(&self, _html: &Path, _pdf: &Path, _page: convert::PageSize) -> Result<()> {
+                panic!("printer exploded")
+            }
+            fn name(&self) -> &'static str {
+                "panicking"
+            }
+        }
+        let e = env();
+        let ext = external_dir(&e);
+        std::fs::write(ext.join("a-memo.html"), "<html><body><p>R&D 센터 소개</p></body></html>").unwrap();
+        RgbImage::from_pixel(120, 80, Rgb([200, 200, 200])).save(ext.join("b-scan.jpg")).unwrap();
+        let d = ImportDeps { printer: &PanickingPrinter, ..deps(&e, None) };
+        let plan =
+            plan(&e.db, &e.paths, std::slice::from_ref(&ext), &ImportOptions::default(), ImportSource::Drop).unwrap();
+        assert_eq!(plan.new_count, 2);
+        let report = run(&d, &plan, None, &mut |_| {}, &mut |_, _| {}).unwrap();
+        assert_eq!(report.failed.len(), 1, "{report:?}");
+        assert_eq!(report.failed[0].0, "a-memo.html");
+        assert!(report.failed[0].1.contains("printer exploded"), "{:?}", report.failed);
+        assert_eq!(report.imported.len(), 1, "the file after the bad one is still imported");
+        let docs = e.db.with(|c| repo::list_documents(c, &DocumentFilter::default())).unwrap();
+        let bad = docs.iter().find(|x| x.original_name == "a-memo.html").unwrap();
+        assert_eq!(bad.status, DocumentStatus::Error);
+        assert!(bad.error.as_deref().is_some_and(|m| m.contains("printer exploded") && m != PROCESSING_MARKER));
+        assert_eq!(docs.iter().find(|x| x.original_name == "b-scan.jpg").unwrap().status, DocumentStatus::Rendered);
+    }
+
     #[test]
     fn run_attaches_the_batch_to_a_project_and_rejects_unknown_projects() {
         let e = env();
@@ -1819,6 +2044,31 @@ mod tests {
         let report2 = run(&d, &p2, None, &mut |_| {}, &mut |_, _| {}).unwrap();
         assert!(report2.imported.is_empty());
         assert_eq!(e.db.with(|c| crate::projects::repo::documents_of(c, &project.id)).unwrap().len(), 1);
+        // Audit PRJ-1: a file of the library dropped on another project (or a reference group) has
+        // nothing to import — the run is still worth it, attaches the registered document and
+        // names it in the report.
+        let id = report.imported[0].clone();
+        let second = crate::projects::ProjectInput { name: "둘째 프로젝트".into(), ..Default::default() };
+        let second = e.db.with(|c| crate::projects::repo::save_project(c, &second)).unwrap();
+        let to_second = ImportOptions { project_id: Some(second.id.clone()), ..ImportOptions::default() };
+        let registered = e.paths.documents_dir().join("scan.jpg");
+        let p_dup = plan(&e.db, &e.paths, std::slice::from_ref(&ext), &to_second, ImportSource::Drop).unwrap();
+        let p_same = plan(&e.db, &e.paths, std::slice::from_ref(&registered), &to_second, ImportSource::Drop).unwrap();
+        for p in [&p_dup, &p_same] {
+            assert_eq!(p.new_count + p.relink_count, 0);
+            assert_eq!(p.existing_ids(), vec![id.clone()]);
+            assert!(p.attaches_existing());
+        }
+        assert!(matches!(p_same.items[0].status, ImportItemStatus::AlreadyRegistered { .. }));
+        let attach_only = run(&d, &p_same, None, &mut |_| {}, &mut |_, _| {}).unwrap();
+        assert_eq!((attach_only.imported.len(), attach_only.existing.clone()), (0, vec![id.clone()]));
+        let members = e.db.with(|c| crate::projects::repo::documents_of(c, &second.id)).unwrap();
+        assert_eq!(members.iter().map(|m| m.document.id.clone()).collect::<Vec<_>>(), vec![id.clone()]);
+        // Without a target there is nothing to do with documents that are already registered.
+        let plain =
+            plan(&e.db, &e.paths, std::slice::from_ref(&ext), &ImportOptions::default(), ImportSource::Drop).unwrap();
+        assert_eq!(plain.existing_ids(), vec![id.clone()]);
+        assert!(!plain.attaches_existing());
         // An unknown project is refused before anything is copied.
         RgbImage::from_pixel(60, 40, Rgb([1, 1, 1])).save(ext.join("other.jpg")).unwrap();
         let bogus = ImportOptions { project_id: Some("nope".into()), ..ImportOptions::default() };
@@ -1845,6 +2095,29 @@ mod tests {
         let second = move_to_workspace_trash(&e.paths, "0123456789abcdef", "old.pdf", &file).unwrap();
         assert_ne!(second, moved);
         assert!(second.is_file());
+    }
+
+    /// Audit DOC-12: a file another program holds open can be copied to the trash folder but not
+    /// removed; the deletion was still reported as done (row gone, file left — and re-registered by
+    /// the next inbox scan). The state after such a copy-then-remove is checked here directly: a
+    /// lock cannot be taken on this platform's file systems.
+    #[test]
+    fn a_file_that_cannot_be_removed_fails_the_deletion() {
+        let e = env();
+        let original = e.paths.inbox_dir().join("열려 있는 문서.pdf");
+        write_blank_pdf(&original, 1, &[]).unwrap();
+        std::fs::create_dir_all(e.paths.trash_dir()).unwrap();
+        let copy = e.paths.trash_dir().join("01234567_열려 있는 문서.pdf");
+        std::fs::copy(&original, &copy).unwrap();
+        // Both files exist: the original was not removed.
+        let err = original_must_be_gone(&original, &copy).unwrap_err();
+        assert!(matches!(err, CoreError::Invalid(ref m) if m == FILE_IN_USE), "{err:?}");
+        assert!(original.is_file() && !copy.exists(), "the trash copy is taken back, the document stays");
+        // The normal outcome: the original is gone, the trash copy stays.
+        std::fs::copy(&original, &copy).unwrap();
+        std::fs::remove_file(&original).unwrap();
+        original_must_be_gone(&original, &copy).unwrap();
+        assert!(copy.is_file());
     }
 
     #[test]
@@ -1923,6 +2196,182 @@ mod tests {
         assert!(p.items.is_empty());
     }
 
+    /// Imports one image from outside the workspace into `documents/`; returns the document id.
+    fn import_image(e: &Env, name: &str, size: (u32, u32)) -> String {
+        let ext = external_dir(e);
+        let src = ext.join(name);
+        RgbImage::from_pixel(size.0, size.1, Rgb([10, 10, 10])).save(&src).unwrap();
+        let plan =
+            plan(&e.db, &e.paths, std::slice::from_ref(&src), &ImportOptions::default(), ImportSource::Drop).unwrap();
+        let report = run(&deps(e, None), &plan, None, &mut |_| {}, &mut |_, _| {}).unwrap();
+        assert_eq!(report.imported.len(), 1, "{report:?}");
+        report.imported[0].clone()
+    }
+
+    /// Gives a document a finished extraction run with one required field (`pending` = it waits
+    /// in the review queue → `extracted`, otherwise `reviewed`).
+    fn mark_extracted(e: &Env, id: &str, pending: bool) {
+        use crate::pipeline::repo as pipe;
+        let run = format!("run-{}", new_id());
+        e.db.with(|c| {
+            pipe::insert_run(
+                c,
+                &pipe::NewRun {
+                    id: &run,
+                    document_id: id,
+                    schema: None,
+                    doc_type: None,
+                    model: "scripted",
+                    profile: "balanced",
+                    precise: false,
+                },
+            )?;
+            let field = pipe::NewField {
+                path: "total".into(),
+                key: "total".into(),
+                label_ko: "합계".into(),
+                required: true,
+                value: Some("1,000".into()),
+                confidence: 0.9,
+                review_reason: pending.then_some(crate::pipeline::ReviewReason::LowConfidence),
+                ..Default::default()
+            };
+            pipe::insert_fields(c, &run, id, &[field])?;
+            pipe::set_extracted(c, id, &run, Some(0.9), pending, None, None, None)
+        })
+        .unwrap();
+    }
+
+    /// Audit DOC-4: every re-render (settings "다시 렌더", the automatic one after a cache purge,
+    /// missing → restored) wrote `rendered` over extracted / reviewed / archived.
+    #[test]
+    fn a_rerender_keeps_the_pipeline_status() {
+        let e = env();
+        let d = deps(&e, None);
+        let get = |id: &str| e.db.with(|c| repo::get_document(c, id)).unwrap().unwrap();
+        let (a, b, c) = (
+            import_image(&e, "a.png", (40, 30)),
+            import_image(&e, "b.png", (30, 40)),
+            import_image(&e, "c.png", (20, 20)),
+        );
+        mark_extracted(&e, &a, true);
+        mark_extracted(&e, &b, false);
+        e.db.with(|conn| repo::set_status(conn, &c, DocumentStatus::Archived, None)).unwrap();
+        assert_eq!(
+            (get(&a).status, get(&b).status, get(&c).status),
+            (DocumentStatus::Extracted, DocumentStatus::Reviewed, DocumentStatus::Archived)
+        );
+        for id in [&a, &b, &c] {
+            process_document(&d, &get(id), true, None, None, &mut |_| {}).unwrap();
+        }
+        assert_eq!(
+            (get(&a).status, get(&b).status, get(&c).status),
+            (DocumentStatus::Extracted, DocumentStatus::Reviewed, DocumentStatus::Archived),
+            "a re-render does not take the pipeline status back"
+        );
+        // The file disappears and comes back unchanged: `missing` forgot the status, the latest run restores it.
+        let path_a = get(&a).absolute_path(&e.paths);
+        let parked = e._dir.path().join("parked.png");
+        std::fs::rename(&path_a, &parked).unwrap();
+        assert_eq!(rescan(&d, None, &mut |_| {}).unwrap().missing, vec![a.clone()]);
+        std::fs::rename(&parked, &path_a).unwrap();
+        assert_eq!(rescan(&d, None, &mut |_| {}).unwrap().restored, vec![a.clone()]);
+        assert_eq!(get(&a).status, DocumentStatus::Extracted, "restored with its review still pending");
+        // Changed content resets what the pipeline derived, so the status is plain `rendered` again.
+        let path_b = get(&b).absolute_path(&e.paths);
+        RgbImage::from_pixel(50, 60, Rgb([200, 0, 0])).save(&path_b).unwrap();
+        let later = SystemTime::now() + Duration::from_secs(30);
+        std::fs::File::options().write(true).open(&path_b).unwrap().set_modified(later).unwrap();
+        assert_eq!(rescan(&d, None, &mut |_| {}).unwrap().changed, vec![b.clone()]);
+        let doc_b = get(&b);
+        assert_eq!((doc_b.status, doc_b.last_run_id), (DocumentStatus::Rendered, None));
+    }
+
+    /// Audit DOC-5: a different file written to the path of a `missing` document (a scanner reusing
+    /// `scan_0001.pdf`) was "relinked" and kept the old page images and text.
+    #[test]
+    fn a_different_file_at_a_missing_path_is_processed_afresh() {
+        let e = env();
+        let d = deps(&e, None);
+        let src = e.paths.inbox_dir().join("scan_0001.png");
+        RgbImage::from_pixel(64, 64, Rgb([0, 0, 0])).save(&src).unwrap();
+        crate::modelstore::mark_settled(&src);
+        let first = inbox_plan(&e.db, &e.paths, &ImportOptions::default()).unwrap();
+        let id = run(&d, &first, None, &mut |_| {}, &mut |_, _| {}).unwrap().imported[0].clone();
+        let old_hash = e.db.with(|c| repo::get_document(c, &id)).unwrap().unwrap().content_hash;
+        mark_extracted(&e, &id, true);
+        // The scanner software takes the file away, then writes the next scan under the same name.
+        std::fs::remove_file(&src).unwrap();
+        assert_eq!(rescan(&d, None, &mut |_| {}).unwrap().missing, vec![id.clone()]);
+        RgbImage::from_pixel(32, 48, Rgb([255, 255, 255])).save(&src).unwrap();
+        crate::modelstore::mark_settled(&src);
+        let second = inbox_plan(&e.db, &e.paths, &ImportOptions::default()).unwrap();
+        assert_eq!(second.items.len(), 1);
+        assert_eq!(second.items[0].status, ImportItemStatus::New, "other content: not a relink");
+        let report = run(&d, &second, None, &mut |_| {}, &mut |_, _| {}).unwrap();
+        assert_eq!((report.imported.clone(), report.relinked.clone()), (vec![id.clone()], Vec::new()), "{report:?}");
+        let doc = e.db.with(|c| repo::get_document(c, &id)).unwrap().unwrap();
+        assert_ne!(doc.content_hash, old_hash);
+        assert_eq!(
+            (doc.status, doc.last_run_id.clone()),
+            (DocumentStatus::Rendered, None),
+            "the old extraction is gone"
+        );
+        let pages = e.db.with(|c| repo::list_pages(c, &id, false)).unwrap();
+        assert_eq!((pages[0].width_px, pages[0].height_px), (32, 48), "pages come from the new file");
+        // The same file coming back after `missing` is still a relink that keeps its pages and status.
+        let again = e.paths.documents_dir().join("moved.png");
+        mark_extracted(&e, &id, true);
+        std::fs::rename(&src, &again).unwrap();
+        rescan(&d, None, &mut |_| {}).unwrap();
+        let third =
+            plan(&e.db, &e.paths, std::slice::from_ref(&again), &ImportOptions::default(), ImportSource::Folder)
+                .unwrap();
+        assert!(matches!(third.items[0].status, ImportItemStatus::Relink { .. }));
+        let report = run(&d, &third, None, &mut |_| {}, &mut |_, _| {}).unwrap();
+        assert_eq!(report.relinked, vec![id.clone()]);
+        let doc = e.db.with(|c| repo::get_document(c, &id)).unwrap().unwrap();
+        assert_eq!((doc.status, doc.rel_path.as_str()), (DocumentStatus::Extracted, "documents/moved.png"));
+    }
+
+    /// Audit DOC-6: a manual page text (with its word boxes and undo history) corrects one content;
+    /// after the file changed it stayed over the new page image.
+    #[test]
+    fn changed_content_drops_manual_page_text_and_its_history() {
+        let e = env();
+        text_doc(&e, "m1", "원래 텍스트 레이어");
+        assert!(set_page_text(&e.db, "m1", 1, "손으로 고친 텍스트").unwrap());
+        e.db.with(|c| {
+            c.execute(
+                "UPDATE documents SET vendor = '옛 거래처', doc_date = '2026-01-02', total_amount = 12500 WHERE id = 'm1'",
+                [],
+            )
+        })
+        .unwrap();
+        let page = || e.db.with(|c| repo::get_page(c, "m1", 1)).unwrap().unwrap();
+        let doc = || e.db.with(|c| repo::get_document(c, "m1")).unwrap().unwrap();
+        assert_eq!(page_text_history(&e.db, "m1", Some(1)).unwrap().entries.len(), 1);
+        // The same content (a touched file): nothing is lost.
+        e.db.with(|c| repo::set_file_info(c, "m1", "hash-m1", 10, None)).unwrap();
+        assert_eq!(
+            (page().text.as_deref(), page().text_source.as_deref()),
+            (Some("손으로 고친 텍스트"), Some("manual"))
+        );
+        assert_eq!(page_text_history(&e.db, "m1", Some(1)).unwrap().entries.len(), 1);
+        assert_eq!(doc().vendor.as_deref(), Some("옛 거래처"));
+        // Other content: the correction, its layout and its history go with the old content, and so
+        // do the vendor / date / amount the old extraction left on the document.
+        e.db.with(|c| repo::set_file_info(c, "m1", "hash-m1-v2", 12, None)).unwrap();
+        assert_eq!((page().text, page().text_source, page().has_text), (None, None, false));
+        assert!(e.db.with(|c| repo::page_layout_json(c, "m1", 1)).unwrap().is_none());
+        assert!(page_text_history(&e.db, "m1", Some(1)).unwrap().entries.is_empty());
+        assert_eq!((doc().vendor, doc().doc_date, doc().total_amount, doc().has_text_layer), (None, None, None, false));
+        // The re-render that follows stores the new file's own text.
+        let fresh = NewPage { page_no: 1, text: Some("새 텍스트 레이어".into()), ..Default::default() };
+        e.db.with(|c| repo::replace_pages(c, "m1", &[fresh], None, false, None)).unwrap();
+        assert_eq!((page().text.as_deref(), page().text_source.as_deref()), (Some("새 텍스트 레이어"), Some("layer")));
+    }
+
     #[test]
     fn full_pipeline_with_pdfium_renders_hwpx_and_pdf() {
         let Some(svc) = pdfium() else {
@@ -1961,5 +2410,35 @@ mod tests {
         assert_eq!(e.db.with(|c| repo::get_page(c, &big.id, 2)).unwrap().unwrap().rotation, 90);
         let stats = e.db.with(repo::stats).unwrap();
         assert_eq!(stats.total_pages, 103);
+    }
+
+    /// Audit DOC-10: the retention purge trims `cache/converted/` (a tenth of the cache cap) while
+    /// the page images stay; rotating a page of such an office document then failed on the missing PDF.
+    #[test]
+    fn a_purged_converted_pdf_is_written_again_for_rotation() {
+        let Some(svc) = pdfium() else {
+            eprintln!("import tests: skipped (set DOCULENS_PDFIUM)");
+            return;
+        };
+        let e = env();
+        let d = deps(&e, Some(svc));
+        let ext = external_dir(&e);
+        hwpx::write_sample_hwpx(&ext.join("견적서.hwpx"), 2, TINY_PNG).unwrap();
+        let plan =
+            plan(&e.db, &e.paths, std::slice::from_ref(&ext), &ImportOptions::default(), ImportSource::Drop).unwrap();
+        let id = run(&d, &plan, None, &mut |_| {}, &mut |_, _| {}).unwrap().imported[0].clone();
+        let doc = e.db.with(|c| repo::get_document(c, &id)).unwrap().unwrap();
+        let cache = DocumentCache::for_document(&e.paths, &id);
+        assert!(cache.converted_pdf().is_file() && cache.page_file(1).is_file());
+        std::fs::remove_dir_all(&cache.converted_dir).unwrap();
+        // The helper writes it again from the source file; the rotation works.
+        let p = rotate_page(&d, &doc, 1, 90).unwrap();
+        assert!(p.width_px > p.height_px, "A4 portrait turned: {}x{}", p.width_px, p.height_px);
+        assert!(cache.converted_pdf().is_file());
+        assert_eq!(e.db.with(|c| repo::get_page(c, &id, 1)).unwrap().unwrap().rotation, 90);
+        // A PDF document is its own source; a missing source file is still an error.
+        std::fs::remove_dir_all(&cache.converted_dir).unwrap();
+        std::fs::remove_file(doc.absolute_path(&e.paths)).unwrap();
+        assert_eq!(ensure_converted_pdf(&d, &doc).unwrap_err().code(), "not_found");
     }
 }

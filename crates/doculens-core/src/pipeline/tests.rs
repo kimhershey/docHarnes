@@ -285,30 +285,160 @@ fn scanned_receipt_runs_end_to_end() {
     assert_eq!(used, 2);
 }
 
+/// Audit PIP-2: a forced re-run (the review screen's "재추출", the form editor's "테스트") read
+/// every page again and replaced the page text the user had corrected by hand.
 #[test]
-fn manual_text_is_kept_unless_ocr_is_forced() {
+fn manual_text_is_only_replaced_when_the_request_asks_for_it() {
     let w = World::new();
-    w.add_doc("m1", "memo.pdf", SourceKind::Pdf, &[None]);
+    w.add_doc("m1", "memo.pdf", SourceKind::Pdf, &[None, None]);
     w.db.with(|c| docs::set_page_text(c, "m1", 1, "손으로 고친 영수증 텍스트")).unwrap();
     w.chat.push("classify", classify_reply("receipt", 0));
-    let deps = w.deps(None);
-    let req = ProcessRequest { document_ids: vec!["m1".into()], level: PipelineLevel::Ocr, ..Default::default() };
-    let report = run::process(&deps, &req, &mut |_| {}).unwrap();
-    assert_eq!(report.ocr_pages, 0, "manual text is not overwritten: {report:?}");
-    let page = &w.pages("m1")[0];
-    assert_eq!(page.text.as_deref(), Some("손으로 고친 영수증 텍스트"));
-    assert_eq!(page.text_source.as_deref(), Some("manual"));
-    // A forced re-run replaces it with OCR output.
     w.chat.push_ocr(RECEIPT_OCR);
-    let forced = ProcessRequest {
+    let deps = w.deps(None);
+    let source = |w: &World, page: usize| w.pages("m1")[page - 1].text_source.clone();
+    let ocr = |force: bool, reocr_manual: bool| ProcessRequest {
         document_ids: vec!["m1".into()],
         level: PipelineLevel::Ocr,
-        force: true,
+        force,
+        reocr_manual,
         ..Default::default()
     };
-    let report = run::process(&deps, &forced, &mut |_| {}).unwrap();
+    // A normal run reads the page without text and leaves the corrected one alone.
+    let report = run::process(&deps, &ocr(false, false), &mut |_| {}).unwrap();
+    assert_eq!(report.ocr_pages, 1, "manual text is not overwritten: {report:?}");
+    assert_eq!(w.pages("m1")[0].text.as_deref(), Some("손으로 고친 영수증 텍스트"));
+    assert_eq!((source(&w, 1).as_deref(), source(&w, 2).as_deref()), (Some("manual"), Some("ocr")));
+    // Force reads the OCR page again — and still keeps the manual correction.
+    let report = run::process(&deps, &ocr(true, false), &mut |_| {}).unwrap();
     assert_eq!(report.ocr_pages, 1, "{report:?}");
-    assert_eq!(w.pages("m1")[0].text_source.as_deref(), Some("ocr"));
+    assert_eq!(w.pages("m1")[0].text.as_deref(), Some("손으로 고친 영수증 텍스트"));
+    assert_eq!(source(&w, 1).as_deref(), Some("manual"));
+    // `reocr_manual` without force changes nothing.
+    assert_eq!(run::process(&deps, &ocr(false, true), &mut |_| {}).unwrap().ocr_pages, 0);
+    assert_eq!(source(&w, 1).as_deref(), Some("manual"));
+    // Only the explicit flag replaces the correction with OCR output.
+    let report = run::process(&deps, &ocr(true, true), &mut |_| {}).unwrap();
+    assert_eq!(report.ocr_pages, 2, "{report:?}");
+    assert_eq!(source(&w, 1).as_deref(), Some("ocr"));
+    assert!(w.pages("m1")[0].text.as_deref().unwrap().contains("스타벅스"));
+    // A page the user emptied by hand holds no correction: a forced run reads it again.
+    w.db.with(|c| docs::set_page_text(c, "m1", 1, "  ")).unwrap();
+    assert_eq!(source(&w, 1).as_deref(), Some("manual"));
+    assert_eq!(run::process(&deps, &ocr(false, false), &mut |_| {}).unwrap().ocr_pages, 0);
+    assert_eq!(run::process(&deps, &ocr(true, false), &mut |_| {}).unwrap().ocr_pages, 2);
+    assert_eq!(source(&w, 1).as_deref(), Some("ocr"));
+    // The request reads its flag from JSON as sent by the UI; without it the default is off.
+    let parsed: ProcessRequest =
+        serde_json::from_value(json!({ "document_ids": ["m1"], "level": "extract", "force": true })).unwrap();
+    assert!(parsed.force && !parsed.reocr_manual && !parsed.skip_extracted);
+    let parsed: ProcessRequest =
+        serde_json::from_value(json!({ "document_ids": ["m1"], "force": true, "reocr_manual": true })).unwrap();
+    assert!(parsed.reocr_manual);
+}
+
+/// Audit PIP-7: masking covered OCR text and extracted values only. A resident number in a text
+/// layer / converted text went into the search index and the extraction mirror as printed.
+#[test]
+fn resident_numbers_in_a_text_layer_are_masked_in_the_index_and_the_mirror() {
+    let w = World::new();
+    let text = "세금계산서 (과세) 작성일자 2026.03.02\n공급자 상호 한빛상사 대표 주민 900101-1234567\n사업자등록번호 220-81-62517\n공급받는자 DocuLens\n공급가액 1,000,000 세액 100,000 합계 1,100,000";
+    w.add_doc("t1", "invoice.pdf", SourceKind::Pdf, &[Some(text)]);
+    w.chat.push("classify", classify_reply("tax_invoice", 0));
+    let kie = |evidence: &str| {
+        json!({
+            "issue_date": sv("2026.03.02", "2026.03.02", 90),
+            "tax_type": sv("과세", "과세", 90),
+            "supplier": { "brn": sv("220-81-62517", "사업자등록번호 220-81-62517", 95), "name": sv("한빛상사", evidence, 95) },
+            "buyer": { "brn": { "value": null, "evidence": null, "confidence": 0 }, "name": sv("DocuLens", "DocuLens", 80) },
+            "supply_total": sv("1,000,000", "공급가액 1,000,000", 90),
+            "tax_total": sv("100,000", "세액 100,000", 90),
+            "grand_total": sv("1,100,000", "합계 1,100,000", 90),
+            "items": []
+        })
+    };
+    w.chat.push("kie_tax_invoice", kie("상호 한빛상사 대표 주민 900101-1234567"));
+    let deps = w.deps(None);
+    let req = ProcessRequest { document_ids: vec!["t1".into()], ..Default::default() };
+    let report = run::process(&deps, &req, &mut |_| {}).unwrap();
+    assert_eq!((report.failed.len(), report.extracted, report.ocr_pages), (0, 1, 0), "{report:?}");
+
+    // The viewer keeps showing the document as it is.
+    assert!(w.pages("t1")[0].text.as_deref().unwrap().contains("900101-1234567"));
+    // The mirror on disk and the stored evidence hold the masked form only.
+    let run = &w.db.with(|c| repo::list_runs(c, "t1")).unwrap()[0];
+    let dir = w.paths.extractions_dir().join("t1").join(&run.id);
+    for name in ["p0001.md", "result.json"] {
+        let stored = std::fs::read_to_string(dir.join(name)).unwrap();
+        assert!(!stored.contains("900101-1234567"), "{name}: {stored}");
+    }
+    assert!(std::fs::read_to_string(dir.join("p0001.md")).unwrap().contains("900101-1******"));
+    let fields = w.fields("t1");
+    let name = fields.iter().find(|f| f.path == "supplier.name").unwrap();
+    assert_eq!(name.evidence.as_deref(), Some("상호 한빛상사 대표 주민 900101-1******"));
+    // The quote is still found on the page (it is looked up in the masked text): same confidence
+    // as with a quote that holds no resident number.
+    w.chat.push("kie_tax_invoice", kie("상호 한빛상사"));
+    run::process(&deps, &req, &mut |_| {}).unwrap();
+    let again = w.fields("t1");
+    let plain = again.iter().find(|f| f.path == "supplier.name").unwrap();
+    assert_eq!(name.confidence, plain.confidence);
+
+    // The search index is built from masked text; with masking off it holds the text as printed.
+    let analyzer = Analyzer::simple();
+    let idx = IndexDeps { db: &w.db, analyzer: &analyzer, options: Default::default() };
+    let report = index_pending(&idx, None, false, None, &mut |_| {}).unwrap();
+    assert_eq!(report.indexed, vec!["t1".to_string()]);
+    let chunks = w.db.with(|c| crate::knowledge::repo::list_chunks(c, "t1")).unwrap();
+    let indexed = chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>().join("\n");
+    assert!(indexed.contains("900101-1******") && !indexed.contains("900101-1234567"), "{indexed}");
+    let tokens: Vec<String> = w
+        .db
+        .with(|c| c.prepare("SELECT tokens FROM chunks")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>())
+        .unwrap();
+    assert!(tokens.iter().all(|t| !t.contains("1234567")), "{tokens:?}");
+    let pages = |mask: bool| w.db.with(|c| docs::list_pages_masked(c, "t1", mask)).unwrap();
+    assert!(pages(false)[0].text.as_deref().unwrap().contains("900101-1234567"));
+    assert!(!pages(true)[0].text.as_deref().unwrap().contains("900101-1234567"));
+}
+
+/// Audit PIP-13: on a dense page (many table cells) the fine-print second pass sent the very same
+/// image again when the encoder caps every budget (Gemma 4: 1,120 tokens) — double OCR time.
+#[test]
+fn the_fine_print_pass_is_skipped_when_it_would_read_the_same_image() {
+    use super::image::{prepare_image, VisionGeometry};
+    use super::prompts::{params, Stage};
+    let (base, fine) = (
+        params(Stage::Ocr, Profile::Balanced).image_tokens.unwrap(),
+        params(Stage::Ocr, Profile::FinePrint).image_tokens.unwrap(),
+    );
+    // A 200 dpi A4 render, and a small one that fits every budget.
+    let a4 = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(1654, 2339, image::Rgb([255, 255, 255])));
+    let small = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(600, 800, image::Rgb([255, 255, 255])));
+    let sees_more = |g: VisionGeometry, img: &image::DynamicImage, truncated: bool| {
+        let first = prepare_image(img, g, base).unwrap();
+        run::fine_pass_sees_more(g, base, fine, &first, None, truncated)
+            && run::fine_pass_sees_more(g, base, fine, &first, Some(&prepare_image(img, g, fine).unwrap()), truncated)
+    };
+    assert!(!sees_more(VisionGeometry::GEMMA4, &a4, false), "Gemma 4: both budgets are capped at 1,120 tokens");
+    assert!(sees_more(VisionGeometry::QWEN, &a4, false), "Qwen: 1,500 → 3,072 tokens is a bigger image");
+    assert!(!sees_more(VisionGeometry::QWEN, &small, false), "a small render is the same image at any budget");
+    assert!(sees_more(VisionGeometry::GEMMA4, &a4, true), "a cut first reply gets the larger reply budget");
+
+    // End to end with the shipped family: one OCR call for a dense page, not two.
+    let mut w = World::new();
+    w.settings.dense_cells = 4;
+    w.add_doc("d1", "dense.pdf", SourceKind::Pdf, &[None]);
+    w.chat.push("classify", classify_reply("receipt", 0));
+    w.chat.push_ocr(RECEIPT_OCR);
+    w.chat.push_ocr("두 번째 판독은 요청되지 않아야 한다");
+    assert!(super::ocr::table_cells(RECEIPT_OCR) >= 4);
+    let deps = w.deps(None);
+    let req = ProcessRequest { document_ids: vec!["d1".into()], level: PipelineLevel::Ocr, ..Default::default() };
+    let report = run::process(&deps, &req, &mut |_| {}).unwrap();
+    assert_eq!((report.failed.len(), report.ocr_pages), (0, 1), "{report:?}");
+    assert_eq!(w.chat.image_calls(), 2, "classify + one OCR call");
+    assert!(w.pages("d1")[0].text.as_deref().unwrap().contains("스타벅스"));
+    assert_eq!(w.pages("d1")[0].ocr_profile.as_deref(), Some("balanced"));
 }
 
 #[test]
@@ -395,6 +525,83 @@ fn rotation_is_applied_and_manual_type_wins() {
     let doc = w.doc("p1");
     assert_eq!(doc.doc_type.as_deref(), Some("receipt"));
     assert_eq!(doc.doc_type_source.as_deref(), Some("manual"));
+}
+
+/// Audit PIP-14 (second half): a rotation the model asks for again after the page was turned is a
+/// misdetection; the page used to stay in that unconfirmed rotation.
+#[test]
+fn a_rotation_the_second_look_does_not_confirm_is_undone() {
+    let w = World::new();
+    w.add_doc("p1", "photo.jpg", SourceKind::Image, &[None]);
+    let before = w.pages("p1")[0].clone();
+    w.chat.push("classify", classify_reply("contract", 90));
+    w.chat.push("classify", classify_reply("receipt", 90));
+    let deps = w.deps(None);
+    let req = ProcessRequest { document_ids: vec!["p1".into()], level: PipelineLevel::Classify, ..Default::default() };
+    run::process(&deps, &req, &mut |_| {}).unwrap();
+    let after = w.pages("p1")[0].clone();
+    assert_eq!(w.chat.calls("classify"), 2);
+    assert_eq!((after.rotation, after.width_px, after.height_px), (0, before.width_px, before.height_px));
+    assert_eq!(after.page_rotation, Some(0), "no turn recorded");
+    assert_eq!(w.doc("p1").doc_type.as_deref(), Some("contract"), "the class of the page as it is shown");
+    let on_disk = image::image_dimensions(DocumentCache::for_document(&w.paths, "p1").page_file(1)).unwrap();
+    assert_eq!(on_disk, (before.width_px, before.height_px), "the render is the upright one again");
+}
+
+/// Audit PIP-14 (first half): only the first 8 pages and the last one are classified, so only
+/// those were turned — a 12-page document scanned sideways kept pages 9–11 lying on their side.
+#[test]
+fn unclassified_pages_take_the_rotation_most_classified_pages_needed() {
+    assert_eq!(run::majority_turn(&[90, 90, 90, 0, 90]), Some(90));
+    assert_eq!(run::majority_turn(&[90, 0, 0, 0, 270]), None, "a few landscape pages are no majority");
+    assert_eq!(run::majority_turn(&[90, 90, 0, 0]), None, "half is not most");
+    assert_eq!(run::majority_turn(&[180]), Some(180));
+    assert_eq!(run::majority_turn(&[]), None);
+
+    let candidates = crate::documents::render::default_pdfium_candidates();
+    let Some(svc) = crate::documents::render::locate_pdfium(&candidates)
+        .and_then(|lib| crate::documents::render::RenderService::global(&lib).ok())
+    else {
+        eprintln!("rotation test: skipped (set DOCULENS_PDFIUM)");
+        return;
+    };
+    let w = World::new();
+    let pdf = w.paths.root.join("documents/sideways.pdf");
+    std::fs::create_dir_all(pdf.parent().unwrap()).unwrap();
+    let texts: Vec<String> = (1..=12).map(|i| format!("Contract page {i}")).collect();
+    crate::documents::convert::write_blank_pdf(&pdf, 12, &texts).unwrap();
+    // A small render keeps the test quick; the rotation does not depend on the resolution.
+    let render_options = RenderOptions { dpi: 48, thumbnails: false, ..Default::default() };
+    let import = ImportDeps { render: Some(svc), render_options, ..w.import_deps() };
+    let plan = crate::documents::import::plan(
+        &w.db,
+        &w.paths,
+        std::slice::from_ref(&pdf),
+        &Default::default(),
+        crate::documents::import::ImportSource::Folder,
+    )
+    .unwrap();
+    let id =
+        crate::documents::import::run(&import, &plan, None, &mut |_| {}, &mut |_, _| {}).unwrap().imported[0].clone();
+    let before = w.pages(&id);
+    assert_eq!(before.len(), 12);
+    assert!(before.iter().all(|p| p.rotation == 0 && p.width_px < p.height_px), "upright A4 renders");
+    // Pages 1–8 and 12 are classified: each asks for a quarter turn and is content after it.
+    for _ in 0..9 {
+        w.chat.push("classify", classify_reply("contract", 90));
+        w.chat.push("classify", classify_reply("contract", 0));
+    }
+    let deps = PipelineDeps { import, ..w.deps(None) };
+    let req = ProcessRequest { document_ids: vec![id.clone()], level: PipelineLevel::Classify, ..Default::default() };
+    let report = run::process(&deps, &req, &mut |_| {}).unwrap();
+    assert_eq!(report.failed, Vec::<(String, String)>::new());
+    assert_eq!(w.chat.calls("classify"), 18, "pages 9–11 are still not classified");
+    let after = w.pages(&id);
+    for p in &after {
+        assert_eq!(p.rotation, 90, "page {}", p.page_no);
+        assert!(p.width_px > p.height_px, "page {} is re-rendered turned: {}x{}", p.page_no, p.width_px, p.height_px);
+    }
+    assert_eq!(after[9].page_rotation, None, "no class of its own");
 }
 
 #[test]
@@ -520,6 +727,167 @@ fn review_actions_history_and_promotion() {
     );
     assert_eq!(total.review_reason, Some(ReviewReason::ValidationFailed));
     assert!(review::apply(&w.db, &[supply.id], &ReviewAction::Correct { value: "  ".into() }, None).is_err());
+}
+
+/// Audit PIP-15: deleting a form or changing its type slug left the documents behind (a raw slug
+/// as the label, gone from the type filter, the sample still a "form"), and switching the
+/// built-in `general` off made every other document fail with `schema_not_found`.
+#[test]
+fn documents_follow_a_deleted_or_retyped_schema_and_general_stays() {
+    let w = World::new();
+    let code = |e: crate::error::CoreError| e.to_string();
+    // The fallback type cannot lose its last enabled schema.
+    let general = w.db.with(|c| repo::schema_for_doc_type(c, repo::GENERAL_DOC_TYPE)).unwrap().unwrap();
+    let err = w.db.with(|c| repo::set_schema_enabled(c, &general.id, false)).unwrap_err();
+    assert!(code(err).contains("schema_general_required"));
+    assert!(w.db.with(|c| repo::get_schema(c, &general.id)).unwrap().unwrap().enabled);
+    let field = || SchemaDef::new(vec![FieldDef::new("title", "제목", "Title", FieldKind::String)], &[]);
+    let draft = |name: &str, doc_type: &str| SchemaDraft {
+        name: name.into(),
+        doc_type: doc_type.into(),
+        source: SchemaSource::User,
+        definition: field(),
+        ..Default::default()
+    };
+    // With a second general schema the built-in one may be switched off; then that one is the last.
+    let mine = w.db.with(|c| repo::save_schema(c, &draft("우리 일반 문서", "general"))).unwrap();
+    w.db.with(|c| repo::set_schema_enabled(c, &general.id, false)).unwrap();
+    for refused in [
+        w.db.with(|c| repo::set_schema_enabled(c, &mine.id, false)).map(|_| ()),
+        w.db.with(|c| repo::delete_schema(c, &mine.id)).map(|_| ()),
+        w.db.with(|c| {
+            repo::save_schema(c, &SchemaDraft { id: Some(mine.id.clone()), ..draft("우리 일반 문서", "misc") })
+        })
+        .map(|_| ()),
+    ] {
+        assert!(code(refused.unwrap_err()).contains("schema_general_required"));
+    }
+    w.db.with(|c| repo::set_schema_enabled(c, &general.id, true)).unwrap();
+    assert!(w.db.with(|c| repo::delete_schema(c, &mine.id)).unwrap(), "fine once the built-in one is back");
+
+    // A registered form: the sample is the form of the type, two more documents carry the type.
+    for id in ["sample", "a", "b", "other"] {
+        w.add_doc(id, &format!("{id}.pdf"), SourceKind::Pdf, &[Some("본문")]);
+    }
+    let form = forms::register(
+        &w.db,
+        &SchemaDraft { form_document_id: Some("sample".into()), ..draft("입고 검수표", "inspection") },
+    )
+    .unwrap();
+    w.db.with(|c| {
+        docs::set_doc_type(c, "a", Some("inspection"), Some("auto"))?;
+        docs::set_doc_type(c, "b", Some("inspection"), Some("manual"))?;
+        docs::set_doc_type(c, "other", Some("contract"), Some("auto"))?;
+        repo::set_schema_override(c, "b", Some(&form.id))?;
+        c.execute("UPDATE pages SET page_doc_type = 'inspection' WHERE document_id = 'a'", [])?;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(w.doc("sample").role, DocumentRole::Form);
+    let touched = w.db.with(|c| repo::documents_of_schema(c, &form)).unwrap();
+    assert_eq!(touched, vec!["a".to_string(), "b".into(), "sample".into()]);
+
+    // A new slug: the documents of the type move with it (nothing else has the old type).
+    let renamed =
+        w.db.with_tx(|tx| {
+            repo::save_schema(
+                tx,
+                &SchemaDraft { id: Some(form.id.clone()), ..draft("입고 검수표", "acceptance_check") },
+            )
+        })
+        .unwrap();
+    assert_eq!(renamed.doc_type, "acceptance_check");
+    for id in ["sample", "a", "b"] {
+        assert_eq!(w.doc(id).doc_type.as_deref(), Some("acceptance_check"), "{id}");
+    }
+    assert_eq!(w.pages("a")[0].page_doc_type.as_deref(), Some("acceptance_check"));
+    assert_eq!(
+        (w.doc("b").doc_type_source.as_deref(), w.doc("other").doc_type.as_deref()),
+        (Some("manual"), Some("contract"))
+    );
+    assert!(w.db.with(repo::doc_types).unwrap().iter().any(|t| t.slug == "acceptance_check"));
+
+    // Moving onto a type that other schemas share and away again: only its own documents follow.
+    let to_contract = SchemaDraft { id: Some(form.id.clone()), ..draft("입고 검수표", "contract") };
+    w.db.with_tx(|tx| repo::save_schema(tx, &to_contract)).unwrap();
+    assert_eq!(w.doc("a").doc_type.as_deref(), Some("contract"));
+    let back = SchemaDraft { id: Some(form.id.clone()), ..draft("입고 검수표", "inspection") };
+    w.db.with_tx(|tx| repo::save_schema(tx, &back)).unwrap();
+    assert_eq!(w.doc("sample").doc_type.as_deref(), Some("inspection"), "its form sample");
+    assert_eq!(w.doc("b").doc_type.as_deref(), Some("inspection"), "pinned to the schema");
+    assert_eq!(w.doc("a").doc_type.as_deref(), Some("contract"), "the built-in contract type still exists");
+    assert_eq!(w.doc("other").doc_type.as_deref(), Some("contract"));
+
+    // Deleting the form: the type is gone, so its documents are unclassified work documents again.
+    assert!(w.db.with_tx(|tx| repo::delete_schema(tx, &form.id)).unwrap());
+    for id in ["sample", "b"] {
+        let d = w.doc(id);
+        assert_eq!(
+            (d.role, d.doc_type, d.doc_type_source, d.schema_id),
+            (DocumentRole::Work, None, None, None),
+            "{id}"
+        );
+        assert!(d.classified_at.is_none());
+    }
+    assert_eq!(w.doc("a").doc_type.as_deref(), Some("contract"));
+    assert_eq!(run::resolve_schema(&w.db, &w.doc("b"), &SchemaChoice::Auto).unwrap().doc_type, "general");
+
+    // A second form of a type that lives on: only its sample is released, with its type kept.
+    w.add_doc("s2", "s2.pdf", SourceKind::Pdf, &[Some("본문")]);
+    let second = forms::register(
+        &w.db,
+        &SchemaDraft { form_document_id: Some("s2".into()), ..draft("우리 계약서", "contract") },
+    )
+    .unwrap();
+    assert_eq!(w.doc("s2").role, DocumentRole::Form);
+    assert!(w.db.with_tx(|tx| repo::delete_schema(tx, &second.id)).unwrap());
+    let s2 = w.doc("s2");
+    assert_eq!(
+        (s2.role, s2.doc_type.as_deref(), s2.doc_type_source.as_deref()),
+        (DocumentRole::Work, Some("contract"), Some("manual"))
+    );
+    assert_eq!(w.doc("other").doc_type.as_deref(), Some("contract"));
+}
+
+/// Audit PIP-11: the type slug comes from the end of the form name, so "결과보고서" and
+/// "검토보고서" both became `report`; the second form was not the default and never used.
+#[test]
+fn a_second_form_with_the_same_name_ending_gets_its_own_type() {
+    let w = World::new();
+    assert_eq!(
+        (forms::slug_for_name("결과보고서"), forms::slug_for_name("검토보고서")),
+        ("report".into(), "report".into())
+    );
+    let draft = |name: &str, doc_type: &str| SchemaDraft {
+        name: name.into(),
+        doc_type: doc_type.into(),
+        definition: SchemaDef::new(vec![FieldDef::new("title", "제목", "Title", FieldKind::String)], &[]),
+        ..Default::default()
+    };
+    let first = forms::register(&w.db, &draft("결과보고서", "")).unwrap();
+    assert_eq!((first.doc_type.as_str(), first.is_default), ("report", true));
+    let second = forms::register(&w.db, &draft("검토보고서", "")).unwrap();
+    assert_eq!((second.doc_type.as_str(), second.is_default), ("report_2", true), "a type of its own, and its default");
+    let third = forms::register(&w.db, &draft("점검보고서", "")).unwrap();
+    assert_eq!(third.doc_type, "report_3");
+    for (slug, id) in [("report", &first.id), ("report_2", &second.id), ("report_3", &third.id)] {
+        assert_eq!(&w.db.with(|c| repo::schema_for_doc_type(c, slug)).unwrap().unwrap().id, id);
+    }
+    let types = w.db.with(repo::doc_types).unwrap();
+    let label = |slug: &str| types.iter().find(|t| t.slug == slug).map(|t| t.label_ko.clone());
+    assert_eq!(label("report_2").as_deref(), Some("검토보고서"), "the classifier sees it under its name");
+
+    // A type that only has the built-in sample is taken over, as before.
+    assert_eq!(forms::slug_for_name("우리 견적서"), "estimate");
+    let estimate = forms::register(&w.db, &draft("우리 견적서", "")).unwrap();
+    assert_eq!((estimate.doc_type.as_str(), estimate.is_default), ("estimate", true));
+    // A type the draft names is the user's choice.
+    let chosen = forms::register(&w.db, &draft("분기 보고서", "report")).unwrap();
+    assert_eq!((chosen.doc_type.as_str(), chosen.is_default), ("report", false));
+    // Derived drafts (the editor opens them unsaved) already carry the free type.
+    assert_eq!(w.db.with(|c| forms::free_doc_type(c, "report")).unwrap(), "report_4");
+    assert_eq!(w.db.with(|c| forms::free_doc_type(c, "rfp")).unwrap(), "rfp");
+    assert_eq!(w.db.with(|c| forms::free_doc_type(c, "brand_new")).unwrap(), "brand_new");
 }
 
 #[test]
@@ -853,6 +1221,55 @@ fn split_registers_parts_and_archives_the_original() {
     assert_eq!(lopdf::Document::load(w.paths.root.join(&m.rel_path)).unwrap().get_pages().len(), 4);
 }
 
+/// Audit DOC-3: while a split registered its parts one by one, the inbox watcher imported the
+/// parts still waiting; the split then hit the duplicate path and its rollback deleted the files
+/// of the documents the watcher had just registered.
+#[test]
+fn a_failed_split_rolls_back_only_its_own_parts() {
+    let w = World::new();
+    let path = w.paths.inbox_dir().join("batch.pdf");
+    crate::documents::convert::write_blank_pdf(&path, 4, &["a".into(), "b".into(), "c".into(), "d".into()]).unwrap();
+    let row = |id: &str, rel: &str| NewDocument {
+        id: id.into(),
+        rel_path: rel.into(),
+        original_name: rel.rsplit('/').next().unwrap().into(),
+        source_kind: SourceKind::Pdf,
+        content_hash: format!("h-{id}"),
+        size_bytes: 1,
+        file_modified_at: None,
+        role: DocumentRole::Work,
+        import_batch_id: None,
+    };
+    w.db.with(|c| docs::insert_document(c, &row("s1", "inbox/batch.pdf"))).unwrap();
+    w.db.with(|c| docs::set_status(c, "s1", DocumentStatus::Rendered, None)).unwrap();
+    let deps = w.import_deps();
+    let (part1, part2) = (w.paths.inbox_dir().join("batch_part1.pdf"), w.paths.inbox_dir().join("batch_part2.pdf"));
+    // Another importer registers part 2 between the write and the split's own registration.
+    let err = super::split::split_document_observed(&deps, &w.doc("s1"), &[3], None, &mut |parts| {
+        assert_eq!(
+            parts.iter().map(|(p, n)| (p.clone(), *n)).collect::<Vec<_>>(),
+            [(part1.clone(), 2), (part2.clone(), 2)]
+        );
+        w.db.with(|c| docs::insert_document(c, &row("watcher", "inbox/batch_part2.pdf"))).unwrap();
+    })
+    .unwrap_err();
+    assert_eq!(err.code(), "db", "{err}");
+    assert!(!part1.exists(), "the split's own unregistered part is removed");
+    assert!(part2.is_file(), "the other importer's document keeps its file");
+    assert_eq!(w.doc("watcher").rel_path, "inbox/batch_part2.pdf");
+    assert_eq!(w.doc("s1").status, DocumentStatus::Rendered, "the original is not archived by a failed split");
+    let all = w.db.with(|c| docs::list_documents(c, &Default::default())).unwrap();
+    assert_eq!(all.len(), 2, "no half-registered part rows: {:?}", all.iter().map(|d| &d.rel_path).collect::<Vec<_>>());
+
+    // A name a document still owns is not reused, even when its file is gone (a `missing` part of
+    // an earlier split used to end the next split with a UNIQUE(rel_path) error).
+    std::fs::remove_file(&part2).unwrap();
+    let ids = super::split::split_document(&deps, &w.doc("s1"), &[3], None).unwrap();
+    let rels: Vec<String> = ids.iter().map(|id| w.doc(id).rel_path).collect();
+    assert_eq!(rels, ["inbox/batch_part1.pdf", "inbox/batch_part2_2.pdf"]);
+    assert_eq!(w.doc("s1").status, DocumentStatus::Archived);
+}
+
 /// Phase-end review gaps: nothing unmasked in the run result / mirror, the
 /// precision pass samples with its own temperature, a changed file resets the
 /// pipeline state (manual type kept), revalidation is idempotent, corrections
@@ -1045,4 +1462,276 @@ fn extraction_page_budget_keeps_first_then_last() {
     assert_eq!(nos(4, &[]), vec![1, 2, 3, 5]);
     assert_eq!(nos(9, &[]), vec![1, 2, 3, 4, 5]);
     assert_eq!(nos(2, &[2, 3, 4]), vec![2, 4], "an explicit page list is honoured");
+}
+
+/// Audit PIP-1: the automatic pipeline after an import re-extracted documents that only came
+/// back under a new name (inbox default = full processing) — reviewed fields were replaced by a
+/// fresh run and the review started over.
+#[test]
+fn automatic_runs_leave_extracted_documents_alone() {
+    let w = World::new();
+    w.add_doc("r1", "receipt.pdf", SourceKind::Pdf, &[None]);
+    w.chat.push("classify", classify_reply("receipt", 0));
+    w.chat.push_ocr(RECEIPT_OCR);
+    w.chat.push("kie_receipt", receipt_kie());
+    let deps = w.deps(None);
+    run::process(&deps, &ProcessRequest { document_ids: vec!["r1".into()], ..Default::default() }, &mut |_| {})
+        .unwrap();
+    // The user corrects one field and approves the rest: the document is reviewed.
+    let approval = w.fields("r1").into_iter().find(|f| f.path == "approval_no").unwrap();
+    review::apply(&w.db, &[approval.id], &ReviewAction::Correct { value: "87654321".into() }, None).unwrap();
+    review::approve_document(&w.db, "r1", None).unwrap();
+    assert_eq!(w.doc("r1").status, DocumentStatus::Reviewed);
+    let snapshot = |w: &World| -> Vec<(String, Option<String>, FieldStatus)> {
+        w.fields("r1").into_iter().map(|f| (f.path, f.value, f.status)).collect()
+    };
+    let before = snapshot(&w);
+
+    // The automatic pipeline comes by again (the file was renamed and relinked through the inbox).
+    let auto = ProcessRequest { document_ids: vec!["r1".into()], skip_extracted: true, ..Default::default() };
+    let report = run::process(&deps, &auto, &mut |_| {}).unwrap();
+    assert_eq!((report.processed.len(), report.extracted, report.failed.len()), (1, 0, 0), "{report:?}");
+    assert_eq!(w.chat.calls("kie_receipt"), 1, "no second extraction call");
+    assert_eq!(w.db.with(|c| repo::list_runs(c, "r1")).unwrap().len(), 1);
+    assert_eq!(snapshot(&w), before, "the reviewed fields stand");
+    assert_eq!((w.doc("r1").status, w.doc("r1").review_status), (DocumentStatus::Reviewed, ReviewStatus::Done));
+
+    // The same automatic request still processes a document that has no extraction yet …
+    w.add_doc("r2", "receipt-2.pdf", SourceKind::Pdf, &[None]);
+    w.chat.push("classify", classify_reply("receipt", 0));
+    w.chat.push("kie_receipt", receipt_kie());
+    let auto = ProcessRequest { document_ids: vec!["r2".into()], skip_extracted: true, ..Default::default() };
+    assert_eq!(run::process(&deps, &auto, &mut |_| {}).unwrap().extracted, 1);
+    // … and an explicit request replaces the latest run as before (the UI confirms first).
+    w.chat.push("kie_receipt", receipt_kie());
+    let explicit = ProcessRequest { document_ids: vec!["r1".into()], ..Default::default() };
+    assert_eq!(run::process(&deps, &explicit, &mut |_| {}).unwrap().extracted, 1);
+    assert_eq!(w.db.with(|c| repo::list_runs(c, "r1")).unwrap().len(), 2);
+}
+
+/// Audit DOC-10: after the retention purge trimmed `cache/converted/`, splitting or merging an
+/// office document failed with "no converted PDF" although its pages were still shown.
+#[test]
+fn split_and_merge_write_a_purged_converted_pdf_again() {
+    let w = World::new();
+    let hwpx = w.paths.root.join("documents/견적서.hwpx");
+    std::fs::create_dir_all(hwpx.parent().unwrap()).unwrap();
+    crate::documents::convert::hwpx::write_sample_hwpx(&hwpx, 3, crate::documents::fixtures::TINY_PNG).unwrap();
+    let deps = w.import_deps();
+    let plan = crate::documents::import::plan(
+        &w.db,
+        &w.paths,
+        std::slice::from_ref(&hwpx),
+        &Default::default(),
+        crate::documents::import::ImportSource::Folder,
+    )
+    .unwrap();
+    let report = crate::documents::import::run(&deps, &plan, None, &mut |_| {}, &mut |_, _| {}).unwrap();
+    let id = report.imported[0].clone();
+    let cache = DocumentCache::for_document(&w.paths, &id);
+    assert!(cache.converted_pdf().is_file(), "stub printer: one page per section");
+    // The purge takes the document's folder under cache/converted/.
+    std::fs::remove_dir_all(&cache.converted_dir).unwrap();
+    let parts = super::split::split_document(&deps, &w.doc(&id), &[2], None).unwrap();
+    assert_eq!(parts.len(), 2);
+    assert!(cache.converted_pdf().is_file(), "written again from the source file");
+    assert_eq!(w.doc(&id).status, DocumentStatus::Archived);
+    // The same for a merge that takes the office document as a source.
+    std::fs::remove_dir_all(&cache.converted_dir).unwrap();
+    let merged = super::split::merge_documents(&deps, &[w.doc(&id), w.doc(&parts[0])], Some("합본"), None).unwrap();
+    assert_eq!(lopdf::Document::load(w.paths.root.join(&w.doc(&merged).rel_path)).unwrap().get_pages().len(), 3 + 1);
+}
+
+/// Audit PIP-4: "이 값으로 복원" on a history entry of an earlier extraction run changed the field
+/// row of that old run — the toast said restored, the value on screen (latest run) stayed.
+#[test]
+fn restore_applies_to_the_field_of_the_latest_run() {
+    let w = World::new();
+    w.add_doc("r1", "receipt.pdf", SourceKind::Pdf, &[None]);
+    w.chat.push("classify", classify_reply("receipt", 0));
+    w.chat.push_ocr(RECEIPT_OCR);
+    w.chat.push("kie_receipt", receipt_kie());
+    let deps = w.deps(None);
+    let req = ProcessRequest { document_ids: vec!["r1".into()], ..Default::default() };
+    run::process(&deps, &req, &mut |_| {}).unwrap();
+    let field = |w: &World, path: &str| w.fields("r1").into_iter().find(|f| f.path == path).unwrap();
+    let first = field(&w, "approval_no");
+    review::apply(&w.db, &[first.id], &ReviewAction::Correct { value: "87654321".into() }, None).unwrap();
+    let change = w.db.with(|c| repo::field_history(c, "r1")).unwrap().remove(0);
+    assert_eq!((change.field_id, change.old_value.as_deref()), (first.id, Some("12345678")));
+
+    // The document is extracted again: a new run with its own field rows and another value.
+    let mut again = receipt_kie();
+    again["approval_no"] = sv("99999999", "카드 승인 99999999", 60);
+    w.chat.push("kie_receipt", again);
+    run::process(&deps, &req, &mut |_| {}).unwrap();
+    let latest = field(&w, "approval_no");
+    assert_ne!(latest.id, first.id);
+    assert_eq!(latest.value.as_deref(), Some("99999999"));
+
+    // Restoring the old entry now changes what the user looks at: the latest run's field.
+    let restored = review::restore(&w.db, change.id).unwrap();
+    assert_eq!((restored.id, restored.run_id.as_str()), (latest.id, latest.run_id.as_str()));
+    assert_eq!(field(&w, "approval_no").value.as_deref(), Some("12345678"));
+    assert_eq!(field(&w, "approval_no").status, FieldStatus::Corrected);
+    let old_row = w.db.with(|c| repo::get_field(c, first.id)).unwrap().unwrap();
+    assert_eq!(old_row.value.as_deref(), Some("87654321"), "the old run's row is history, not a target");
+    let newest = w.db.with(|c| repo::field_history(c, "r1")).unwrap().remove(0);
+    assert_eq!((newest.field_id, newest.note.as_deref()), (latest.id, Some("restored")));
+
+    // A path the latest run no longer has (another schema) cannot be restored.
+    w.db.with(|c| c.execute("UPDATE fields SET path = 'gone', key = 'gone' WHERE id = ?1", [latest.id])).unwrap();
+    let err = review::restore(&w.db, change.id).unwrap_err();
+    assert!(err.to_string().contains("field_not_found"), "{err}");
+}
+
+/// Audit PIP-8: one page whose extraction reply was cut off by the length limit (a table of 30+
+/// rows on an 8K preset) failed the whole document and threw the other pages' results away.
+#[test]
+fn one_bad_page_does_not_fail_the_whole_extraction() {
+    let w = World::new();
+    let p1 = "스타벅스 역삼점\n사업자등록번호 220-81-62517\n2026-10-14 12:31\n합계 12,500";
+    w.add_doc("t1", "receipt-3p.pdf", SourceKind::Pdf, &[Some(p1), Some("품목 계속\n라떼 1 5,000"), Some("비고")]);
+    w.chat.push("classify", classify_reply("receipt", 0));
+    // Page 1 answers in full; page 2 is cut inside its second row (three attempts with a growing
+    // reply budget); page 3 answers with something that is not JSON.
+    w.chat.push("kie_receipt", receipt_kie());
+    let cut = r#"{"store_name": {"value": null, "evidence": null, "confidence": 0}, "items": [{"name": "라떼", "quantity": "1", "unit_price": "5,000", "amount": "5,000"}, {"name": "쿠"#;
+    for _ in 0..3 {
+        w.chat.push_raw("kie_receipt", cut, Some("length"));
+    }
+    w.chat.push_raw("kie_receipt", "죄송합니다, 이 쪽은 읽을 수 없습니다.", None);
+    let deps = w.deps(None);
+    let req = ProcessRequest { document_ids: vec!["t1".into()], ..Default::default() };
+    let report = run::process(&deps, &req, &mut |_| {}).unwrap();
+    assert_eq!((report.failed.len(), report.extracted, report.review_pending), (0, 1, 1), "{report:?}");
+    let runs = w.db.with(|c| repo::list_runs(c, "t1")).unwrap();
+    assert_eq!((runs[0].status.as_str(), runs[0].pages_done), ("done", 2));
+    let note = runs[0].error.as_deref().unwrap_or("");
+    assert!(note.contains("2쪽") && note.contains("3쪽") && note.contains("not JSON"), "{note}");
+
+    // Page 1's values and page 2's complete row are there; the half-written row is not.
+    let fields = w.fields("t1");
+    let f = |p: &str| fields.iter().find(|f| f.path == p).unwrap();
+    assert_eq!(f("store_name").value.as_deref(), Some("스타벅스 역삼점"));
+    assert_eq!((f("items[2].name").value.as_deref(), f("items[2].name").page), (Some("라떼"), Some(2)));
+    assert!(fields.iter().all(|f| f.row != Some(3)), "no row from the cut part");
+    // Each incomplete page leaves one marked field in the review queue.
+    let marked: Vec<&str> = fields
+        .iter()
+        .filter(|f| f.validation.iter().any(|i| i.rule == super::extract::RULE_PARTIAL_PAGE))
+        .map(|f| f.path.as_str())
+        .collect();
+    assert_eq!(marked, ["store_name", "items[2].amount"], "page 3 → first field, page 2 → its last value");
+    assert!(fields.iter().filter(|f| marked.contains(&f.path.as_str())).all(|f| f.needs_review()));
+    assert_eq!((w.doc("t1").status, w.doc("t1").review_status), (DocumentStatus::Extracted, ReviewStatus::Pending));
+
+    // When no page answers, the document fails as before.
+    w.add_doc("t2", "bad.pdf", SourceKind::Pdf, &[Some("본문")]);
+    w.db.with(|c| docs::set_doc_type(c, "t2", Some("receipt"), Some("manual"))).unwrap();
+    w.chat.push_raw("kie_receipt", "not json", None);
+    let report =
+        run::process(&deps, &ProcessRequest { document_ids: vec!["t2".into()], ..Default::default() }, &mut |_| {})
+            .unwrap();
+    assert_eq!(report.failed.len(), 1, "{report:?}");
+    assert!(report.failed[0].1.contains("not JSON"), "{:?}", report.failed);
+    assert_eq!(w.db.with(|c| repo::list_runs(c, "t2")).unwrap()[0].status, "failed");
+}
+
+/// Audit PIP-6: when the engine died or was stopped during a batch, every remaining document
+/// "failed" within seconds (300 documents, engine gone at the 40th → 260 marked 처리 오류).
+#[test]
+fn a_missing_engine_stops_the_batch_and_leaves_the_rest_untouched() {
+    let w = World::new();
+    for id in ["a", "b", "c"] {
+        w.add_doc(id, &format!("{id}.pdf"), SourceKind::Pdf, &[None]);
+    }
+    w.chat.push("classify", classify_reply("receipt", 0));
+    w.chat.push_ocr(RECEIPT_OCR);
+    w.chat.push("kie_receipt", receipt_kie());
+    let deps = w.deps(None);
+    let req = ProcessRequest { document_ids: vec!["a".into(), "b".into(), "c".into()], ..Default::default() };
+    // The engine goes away when the second document starts: its port refuses connections.
+    let refused = "POST /v1/chat/completions: io: Connection refused (os error 111)";
+    let err = run::process(&deps, &req, &mut |p| {
+        if p.done == 1 {
+            *w.chat.fail_with.lock().unwrap() = Some(refused.into());
+        }
+    })
+    .unwrap_err();
+    assert_eq!(err.code(), "engine_not_running", "{err}");
+    assert!(w.doc("a").extracted_at.is_some(), "the document before the failure is done");
+    for id in ["b", "c"] {
+        let d = w.doc(id);
+        assert!(d.pipeline_error.is_none(), "{id}: no 처리 오류 for a missing engine: {:?}", d.pipeline_error);
+        assert!(d.classified_at.is_none() && d.extracted_at.is_none(), "{id} is untouched");
+    }
+    let status = w.db.with(repo::pipeline_status).unwrap();
+    assert_eq!((status.extracted, status.failed), (1, 0));
+
+    // An error the engine answered with is still that document's failure, and the batch goes on.
+    *w.chat.fail_with.lock().unwrap() = Some("/v1/chat/completions: HTTP 400: grammar".into());
+    let rest = ProcessRequest { document_ids: vec!["b".into(), "c".into()], ..Default::default() };
+    let report = run::process(&deps, &rest, &mut |_| {}).unwrap();
+    assert_eq!(report.failed.len(), 2, "{report:?}");
+    assert!(w.doc("b").pipeline_error.is_some() && w.doc("c").pipeline_error.is_some());
+}
+
+/// Audit PIP-5: a processing job that was retried or resumed replayed its request from the first
+/// document — 60 of 100 done, stop, continue: the 60 were extracted again (the time once more, and
+/// whatever had been reviewed in between was replaced).
+#[test]
+fn a_replayed_request_goes_on_where_it_stopped() {
+    let w = World::new();
+    for id in ["a", "b", "c"] {
+        w.add_doc(id, &format!("{id}.pdf"), SourceKind::Pdf, &[None]);
+    }
+    w.chat.push("classify", classify_reply("receipt", 0));
+    w.chat.push_ocr(RECEIPT_OCR);
+    w.chat.push("kie_receipt", receipt_kie());
+    let ids: Vec<String> = vec!["a".into(), "b".into(), "c".into()];
+    let req = ProcessRequest { document_ids: ids.clone(), request_id: Some("req1".into()), ..Default::default() };
+    let runs = |id: &str| w.db.with(|c| repo::list_runs(c, id)).unwrap().len();
+
+    // First attempt: the job is cancelled when the second document starts.
+    let cancel = AtomicBool::new(false);
+    let deps = w.deps(Some(&cancel));
+    let report = run::process(&deps, &req, &mut |p| {
+        if p.done == 1 {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    })
+    .unwrap();
+    assert!(report.cancelled);
+    assert_eq!((report.processed.clone(), report.resumed.len()), (vec!["a".to_string()], 0));
+    assert_eq!((runs("a"), runs("b"), runs("c")), (1, 0, 0));
+    // Meanwhile the user reviews the finished document.
+    review::approve_document(&w.db, "a", None).unwrap();
+    let reviewed = w.doc("a").status;
+
+    // The job is retried: the same request, replayed. The finished document is left alone.
+    cancel.store(false, std::sync::atomic::Ordering::Relaxed);
+    let report = run::process(&deps, &req, &mut |_| {}).unwrap();
+    assert_eq!(report.resumed, vec!["a".to_string()]);
+    assert_eq!(report.processed, vec!["b".to_string(), "c".to_string()]);
+    assert_eq!((runs("a"), runs("b"), runs("c")), (1, 1, 1), "a is not extracted a second time");
+    assert_eq!(w.doc("a").status, reviewed, "its review stands");
+    assert_eq!(w.chat.calls("kie_receipt"), 3);
+
+    // The request ran to its end, so its journal is gone: nothing of it is left in the store,
+    // and a request without an id (or another id) processes every document as before.
+    assert!(w.db.with(|c| repo::request_done(c, "req1")).unwrap().is_empty());
+    let plain = ProcessRequest { document_ids: ids.clone(), ..Default::default() };
+    let report = run::process(&deps, &plain, &mut |_| {}).unwrap();
+    assert_eq!((report.processed.len(), report.resumed.len(), runs("a")), (3, 0, 2));
+
+    // A document that failed is not journalled: the next attempt tries it again.
+    let retry = ProcessRequest { document_ids: ids, request_id: Some("req2".into()), ..Default::default() };
+    *w.chat.fail_with.lock().unwrap() = Some("POST /v1/chat/completions: io: Connection refused (os error 111)".into());
+    w.db.with(|c| repo::request_mark_done(c, "req2", "a")).unwrap(); // as if `a` had been finished
+    assert_eq!(run::process(&deps, &retry, &mut |_| {}).unwrap_err().code(), "engine_not_running");
+    assert_eq!(w.db.with(|c| repo::request_done(c, "req2")).unwrap(), vec!["a".to_string()], "the journal is kept");
+    *w.chat.fail_with.lock().unwrap() = None;
+    let report = run::process(&deps, &retry, &mut |_| {}).unwrap();
+    assert_eq!((report.resumed.len(), report.processed.len()), (1, 2));
 }

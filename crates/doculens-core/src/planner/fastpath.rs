@@ -29,6 +29,13 @@ pub fn plan(text: &str, ctx: &PlanContext) -> Option<Plan> {
     let words = super::rules::user_words(text);
     if words != text {
         let (command, reply) = words.rsplit_once('\n')?;
+        // Only the fast path's own question is answered here ("which value?", "that value is out of
+        // range"): the command alone must already be a settings sentence without a usable value. A
+        // reply to any other question is the model's — "이 문서를 다른 언어로 번역해줘" → "어떤 언어로
+        // 번역할까요?" → "영어" names a setting ("언어") and a value of it, and is not a settings command.
+        if !setting(command, ko).is_some_and(|p| p.is_clarification()) {
+            return None;
+        }
         if let Some(p) = setting(&words, ko).filter(|p| !p.is_clarification()) {
             return Some(p);
         }
@@ -253,6 +260,27 @@ const DOING: &[&str] = &["함", "해", "해요", "합니다", "해줘"];
 
 fn is_question(p: &str) -> bool {
     QUESTION_MARKS.iter().any(|q| p.contains(q))
+}
+
+/// Whether the user's words read as a question or a report ("…인가요?", "…로 바꿨어") rather than a
+/// request — the test the fast path applies before it reads a setting, for the guard.
+pub(super) fn reads_as_question(text: &str) -> bool {
+    let p = plain(text);
+    is_question(&p) || ends_in_past_tense(&p)
+}
+
+/// "…로 바꿨어", "…했습니다", "…됐네요": the sentence ends in a past-tense form — the user says what
+/// happened. (A syllable with the final consonant ㅆ before a sentence ending; "있어" and "겠어" share
+/// the shape and are not requests either: "…할 수 있어?", "…하면 좋겠어".)
+fn ends_in_past_tense(p: &str) -> bool {
+    const ENDINGS: &[&str] = &["어", "어요", "다", "습니다", "네", "네요", "지", "죠", "는데", "거든", "잖아"];
+    let Some(last) = p.split_whitespace().last() else { return false };
+    ENDINGS.iter().any(|e| {
+        last.strip_suffix(e).and_then(|stem| stem.chars().last()).is_some_and(|c| {
+            // Hangul syllables: 0xAC00 + (initial * 21 + vowel) * 28 + final; final 20 = ㅆ.
+            ('가'..='힣').contains(&c) && (c as u32 - 0xAC00) % 28 == 20
+        })
+    })
 }
 
 fn is_letter(c: char) -> bool {
@@ -937,6 +965,18 @@ mod tests {
         // A reply to a question about something else is the model's.
         let other = "선택한 문서 삭제해줘\n\n[어시스턴트 질문] 어떤 문서를 삭제할까요?\n[사용자 답변] 배율 120";
         assert!(plan(other, &ctx()).is_none());
+        // … also when the command happens to contain a setting's name and the reply one of its values:
+        // the question was the model's, about the translation and the rendering.
+        let model_asked = |command: &str, question: &str, reply: &str| {
+            format!("{command}\n\n[어시스턴트 질문] {question}\n[사용자 답변] {reply}")
+        };
+        for (command, question, reply) in [
+            ("이 문서를 다른 언어로 번역해줘", "어떤 언어로 번역할까요?", "영어"),
+            ("해상도 높여서 다시 렌더해줘", "해상도를 몇으로 할까요?", "300"),
+            ("테마 색을 표에 맞춰 보고서 써줘", "어떤 테마로 쓸까요?", "다크"),
+        ] {
+            assert!(plan(&model_asked(command, question, reply), &ctx()).is_none(), "{command} / {reply}");
+        }
     }
 
     #[test]

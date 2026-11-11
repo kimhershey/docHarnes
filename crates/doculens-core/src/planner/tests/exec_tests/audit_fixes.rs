@@ -788,3 +788,128 @@ fn a_supplement_request_is_bound_to_its_project() {
     assert_eq!(ex.steps[0].payload["project_id"], json!(project.id));
     assert_eq!(ex.steps[0].payload["draft"]["request"]["project_id"], json!(project.id));
 }
+
+/// 0.8.0 reply routes in the executor: a ready reply needs no model, small talk looks nothing up
+/// and is not kept, and a question that is not about the documents is answered although the
+/// general-knowledge setting is off.
+#[test]
+fn answer_steps_follow_the_reply_route() {
+    let w = World::new();
+    w.add_image("d1", "inbox/a.jpg");
+    w.db.with(|c| docs::set_page_text(c, "d1", 1, "스타벅스 역삼점 영수증 합계 12,500원")).unwrap();
+    index_document(&IndexDeps { db: &w.db, analyzer: &w.analyzer, options: Default::default() }, &w.doc("d1"), true)
+        .unwrap();
+    let answer = |question: &str, knowledge: Option<bool>, mode: Option<AnswerMode>, reply: Option<&str>| {
+        plan_of(
+            vec![Op::Answer {
+                question: question.into(),
+                cite: None,
+                knowledge,
+                mode,
+                reply: reply.map(str::to_string),
+            }],
+            Scope::default(),
+        )
+    };
+    let calls = || w.chat.requests.lock().unwrap().len();
+    let saved = || w.db.with(|c| crate::knowledge::repo::list_answers(c, None, None, 50)).unwrap().len();
+
+    // A ready reply (the fast path's greeting): shown as it is.
+    let ex =
+        run(&w, &answer("안녕하세요.", Some(false), Some(AnswerMode::Chat), Some("안녕하세요! 무엇을 도와드릴까요?")));
+    assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
+    assert_eq!(ex.steps[0].payload["text"], json!("안녕하세요! 무엇을 도와드릴까요?"));
+    assert_eq!((calls(), saved()), (0, 0), "no model call, nothing kept");
+
+    // Small talk: one call without sources, although the sentence names something the library has.
+    w.chat.push_ocr("저는 DocuLens 어시스턴트입니다.");
+    let ex = run(&w, &answer("스타벅스 좋아해? 넌 누구야?", None, Some(AnswerMode::Chat), None));
+    assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
+    assert_eq!(ex.steps[0].payload["text"], json!("저는 DocuLens 어시스턴트입니다."));
+    assert_eq!(ex.steps[0].payload["sources"], json!([]));
+    assert_eq!((calls(), saved()), (1, 0));
+    let prompt = w.chat.requests.lock().unwrap()[0].messages.last().unwrap()["content"].as_str().unwrap().to_string();
+    assert!(!prompt.contains("[근거]") && !prompt.contains("12,500"), "{prompt}");
+
+    // Not about the documents: answered from general knowledge with the setting off.
+    assert!(!w.deps(None).knowledge.allow_general_knowledge);
+    // (The scripted model repeats its last unnamed reply: the queue is emptied for the next one.)
+    w.chat.ocr.lock().unwrap().clear();
+    w.chat.push_ocr("(일반 지식 기반 답변) 플루토늄은 원자번호 94번 원소입니다.");
+    let ex = run(&w, &answer("플루토늄 xyzzy 가 뭐야?", None, Some(AnswerMode::General), None));
+    assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
+    assert_eq!(ex.steps[0].payload["used_general_knowledge"], json!(true), "{:?}", ex.steps[0].payload);
+    assert!(ex.steps[0].summary.contains("플루토늄"), "the reply is the step's summary: {}", ex.steps[0].summary);
+    assert_eq!((calls(), saved()), (2, 1));
+
+    // The same question without the route stays "no evidence" and asks no model.
+    let ex = run(&w, &answer("플루토늄 xyzzy 가 뭐야?", None, None, None));
+    assert_eq!(ex.steps[0].payload["no_evidence"], json!(true));
+    assert_eq!(calls(), 2);
+
+    // A filter that matches no document (a type the library has none of) refuses a question about the
+    // documents, not one that is not about them.
+    let mut general = answer("플루토늄 xyzzy 가 뭐야?", None, Some(AnswerMode::General), None);
+    general.scope = of_type("contract");
+    let ex = run(&w, &general);
+    assert_eq!(ex.steps[0].payload["used_general_knowledge"], json!(true), "{:?}", ex.steps[0].payload);
+    assert_eq!(calls(), 3);
+}
+
+/// PRJ-16 through the assistant: a project's reference group that holds no document yet is not
+/// stored — a rename writes it first, a delete has nothing to delete.
+#[test]
+fn a_project_group_that_is_not_stored_yet_can_be_renamed_but_not_deleted() {
+    let w = World::new();
+    let project =
+        w.db.with(|c| projects_repo::save_project(c, &ProjectInput { name: "한빛 포털".into(), ..Default::default() }))
+            .unwrap();
+    let group = |action: ReferenceAction, name: Option<&str>| {
+        plan_of(
+            vec![Op::ManageReference {
+                action,
+                group: None,
+                name: name.map(str::to_string),
+                project: Some(project.id.clone()),
+            }],
+            Scope::default(),
+        )
+    };
+    let stored = || w.db.with(crate::knowledge::repo::list_collections).unwrap().len();
+    assert_eq!(stored(), 0);
+    let ex = run(&w, &group(ReferenceAction::Delete, None));
+    assert_eq!(ex.steps[0].status, StepStatus::Failed, "{:?}", ex.steps[0]);
+    assert_eq!(stored(), 0, "looking the group up wrote nothing");
+    let ex = run(&w, &group(ReferenceAction::Disable, None));
+    assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
+    assert_eq!(stored(), 1);
+}
+
+/// PRJ-4 through the assistant: "업무 문서로 바꿔줘" leaves a document that is still in a reference
+/// group reference material, and the step says so.
+#[test]
+fn set_role_keeps_reference_group_members_reference_material() {
+    let w = World::new();
+    w.add_image("d1", "inbox/a.jpg");
+    w.add_image("d2", "inbox/b.jpg");
+    let group =
+        w.db.with(|c| {
+            crate::knowledge::repo::save_collection(
+                c,
+                &crate::knowledge::CollectionInput { name: "사규".into(), active: true, ..Default::default() },
+            )
+        })
+        .unwrap();
+    w.db.with(|c| crate::knowledge::repo::add_docs_to_collection(c, &group.id, &["d1".to_string()])).unwrap();
+    w.db.with(|c| docs::set_role(c, "d1", DocumentRole::Knowledge)).unwrap();
+    w.db.with(|c| docs::set_role(c, "d2", DocumentRole::Knowledge)).unwrap();
+    let ex = run(&w, &plan_of(vec![Op::SetRole { role: RoleParam::Work }], sel(&["d1", "d2"])));
+    assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
+    assert_eq!(w.doc("d1").role, DocumentRole::Knowledge, "still in the group");
+    assert_eq!(w.doc("d2").role, DocumentRole::Work);
+    assert!(
+        ex.steps[0].summary.contains("1건") && ex.steps[0].summary.contains("참고 자료로 유지"),
+        "{}",
+        ex.steps[0].summary
+    );
+}

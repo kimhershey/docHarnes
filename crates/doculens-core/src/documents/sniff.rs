@@ -131,11 +131,15 @@ pub fn sniff(path: &Path) -> Sniff {
     if head[..head.len().min(1024)].windows(4).any(|w| w == b"%PDF") {
         return Sniff::Kind(SourceKind::Pdf);
     }
+    // "BM" (bitmap) and "MZ" (DOS / PE executable) are two ordinary letters: a note that starts
+    // with "BMW 견적서" or "MZ세대 설문" is text. They only count as a signature when the rest of
+    // the head is binary (both real headers carry NUL bytes right after the magic).
+    let two_letter_signature = |magic: &[u8]| head.starts_with(magic) && !looks_like_text(&head);
     if head.starts_with(&[0x89, b'P', b'N', b'G'])
         || head.starts_with(&[0xFF, 0xD8, 0xFF])
         || head.starts_with(b"GIF87a")
         || head.starts_with(b"GIF89a")
-        || head.starts_with(b"BM")
+        || two_letter_signature(b"BM")
         || (head.starts_with(b"RIFF") && head.len() >= 12 && &head[8..12] == b"WEBP")
         || head.starts_with(b"II*\0")
         || head.starts_with(b"MM\0*")
@@ -148,7 +152,7 @@ pub fn sniff(path: &Path) -> Sniff {
     if head.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]) {
         return sniff_cfb(&head);
     }
-    if head.starts_with(b"MZ") || head.starts_with(&[0x7F, b'E', b'L', b'F']) {
+    if two_letter_signature(b"MZ") || head.starts_with(&[0x7F, b'E', b'L', b'F']) {
         return Sniff::Unsupported("executable");
     }
     if head.starts_with(b"{\\rtf") {
@@ -251,5 +255,34 @@ mod tests {
         assert_eq!(sniff(&p("memo")), Sniff::Kind(SourceKind::Text));
         std::fs::write(p("noise.bin"), (0u8..=255).cycle().take(4096).collect::<Vec<u8>>()).unwrap();
         assert_eq!(sniff(&p("noise.bin")), Sniff::Unknown);
+    }
+
+    /// Audit DOC-14: "MZ" and "BM" are two ordinary letters. A note starting with "MZ세대" was
+    /// refused as an executable and one starting with "BMW" was imported as an image.
+    #[test]
+    fn two_letter_signatures_need_binary_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = |n: &str| dir.path().join(n);
+        std::fs::write(p("mz.txt"), "MZ세대 설문 결과\n응답자 1,200명\n").unwrap();
+        assert_eq!(sniff(&p("mz.txt")), Sniff::Kind(SourceKind::Text));
+        std::fs::write(p("bmw.txt"), "BMW 견적서\n차량 2대\n").unwrap();
+        assert_eq!(sniff(&p("bmw.txt")), Sniff::Kind(SourceKind::Text));
+        let (euc, _, _) = encoding_rs::EUC_KR.encode("MZ세대 보고서 (CP949)\n");
+        std::fs::write(p("mz-cp949.txt"), &*euc).unwrap();
+        assert_eq!(sniff(&p("mz-cp949.txt")), Sniff::Kind(SourceKind::Text));
+        std::fs::write(p("mz.html"), "MZ<html><body>세대</body></html>").unwrap();
+        assert_eq!(sniff(&p("mz.html")), Sniff::Html);
+        // Real files keep their type: a BMP written by the image crate, a DOS / PE header.
+        image::RgbImage::from_pixel(4, 4, image::Rgb([1, 2, 3])).save(p("pixel.bmp")).unwrap();
+        assert_eq!(sniff(&p("pixel.bmp")), Sniff::Kind(SourceKind::Image));
+        let mut exe = b"MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00\xFF\xFF\x00\x00".to_vec();
+        exe.resize(0x80, 0);
+        exe.extend_from_slice(b"PE\0\0");
+        std::fs::write(p("setup.exe"), &exe).unwrap();
+        assert_eq!(sniff(&p("setup.exe")), Sniff::Unsupported("executable"));
+        // The import plan follows: the note is a text document again.
+        let meta = std::fs::metadata(p("mz.txt")).unwrap();
+        let c = crate::documents::import::classify(&p("mz.txt"), &meta);
+        assert_eq!((c.kind, c.reason), (Some(SourceKind::Text), None));
     }
 }
