@@ -94,6 +94,16 @@ export function reasonVariant(r: ReviewReason | null): "ok" | "warn" | "danger" 
   }
 }
 
+/**
+ * Short name of a validation rule that has one (`review.rules.*`): `partial_page` — the page's reply was cut
+ * or the page failed, so only part of it was extracted; `date_ambiguous` — the day / month order of the date
+ * was a guess. Null for the other rules: their message says it all.
+ */
+export function validationRuleLabel(rule: string, t: TFunction): string | null {
+  if (!/^[a-z][a-z0-9_]*$/.test(rule)) return null;
+  return t(`review.rules.${rule}`, { defaultValue: "" }) || null;
+}
+
 /** Human path: `supplier.brn` → "공급자 사업자등록번호", `items[2].amount` → "품목 3행 · 금액". */
 export function fieldTitle(f: FieldRecord, t: TFunction, lang: string): string {
   const base = fieldLabel(f, lang);

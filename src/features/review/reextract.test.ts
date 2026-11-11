@@ -11,8 +11,9 @@ describe("re-extraction from the review queue (PIP-2)", () => {
     expect(req.force).toBeUndefined();
   });
 
-  it("starts over (classification and OCR again) only on the reviewer's explicit choice", () => {
-    expect(reextractProcessRequest(doc("fine_print"), true)).toEqual({ document_ids: ["d1"], level: "extract", profile: "fine_print", force: true });
+  it("starts over (classification and OCR again) only on the reviewer's explicit choice — which reads hand-corrected pages again too", () => {
+    // 0.8.0: a forced run keeps manual corrections unless `reocr_manual` goes with it; "start over" says it replaces them.
+    expect(reextractProcessRequest(doc("fine_print"), true)).toEqual({ document_ids: ["d1"], level: "extract", profile: "fine_print", force: true, reocr_manual: true });
   });
 
   it("the precise mode is an extraction with the second pass, never forced", () => {

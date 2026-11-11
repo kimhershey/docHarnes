@@ -56,12 +56,12 @@ function isReport(v: unknown): v is ImportReport {
 }
 
 /**
- * What the import job does for the documents a batch merely re-encountered (`import::run`): they join the
- * collection — taking the batch role when that is not the default — and / or the project.
+ * The documents a finished import stands for: the ones it registered or relinked plus the registered documents
+ * the batch met again (`ImportReport.existing`, 0.8.0). `planned`: the documents the plan said were already
+ * there — used for a report without the `existing` list.
  */
-async function attachExisting(ids: string[], opts: DroppedImportOptions): Promise<void> {
-  if (opts.collectionId) await api.knowledgeCollectionAdd(opts.collectionId, ids, (opts.role ?? "work") !== "work");
-  if (opts.projectId) await api.projectAddDocuments(opts.projectId, ids);
+export function importedDocumentIds(report: ImportReport, planned: Iterable<string> = []): string[] {
+  return [...new Set([...report.imported, ...report.relinked, ...(report.existing ?? planned)])];
 }
 
 /**
@@ -70,17 +70,21 @@ async function attachExisting(ids: string[], opts: DroppedImportOptions): Promis
  * import job created. Progress and failures are reported with toasts.
  *
  * With a target (`collectionId` / `projectId`) every returned document has joined it: the import job attaches
- * the batch, and when the drop holds nothing new — so no job runs — the documents are attached here (PRJ-1: the
- * drop used to report "added" without adding anything). Without a target the caller uses the ids itself.
+ * the whole batch, the documents it merely met again included — and since 0.8.0 it runs for a drop that holds
+ * nothing new as well: the job then only puts the registered documents into the target and names them in
+ * `ImportReport.existing` (PRJ-1: such a drop used to stop at "nothing to import" and report "added" without
+ * adding anything). Without a target a drop of registered files starts no job (the backend refuses a run with
+ * nothing to import and nothing to attach): the caller uses the ids itself — the assistant attaches them.
  */
 export async function importDroppedFiles(paths: string[], opts: DroppedImportOptions, t: TFunction): Promise<string[]> {
   const toast = useUiStore.getState().toast;
   const options = { ...defaultImportOptions(), role: opts.role ?? "work", collection_id: opts.collectionId ?? null, project_id: opts.projectId ?? null };
   const source = opts.source ?? "drop";
   const ids = new Set<string>();
+  const hasTarget = !!(opts.collectionId || opts.projectId);
   // After a failed import nothing is known to have joined the target, so nothing is reported as added; without a
   // target the documents already in the library still stand for the drop.
-  const afterFailure = () => (opts.collectionId || opts.projectId ? [] : [...ids]);
+  const afterFailure = () => (hasTarget ? [] : [...ids]);
   try {
     const plan = await api.documentsImportPlan(paths, options, source);
     for (const item of plan.items) {
@@ -94,22 +98,17 @@ export async function importDroppedFiles(paths: string[], opts: DroppedImportOpt
         toast(t("dnd.nothing"), "warn");
         return [];
       }
-      // Nothing new, so no import job attaches the batch: the documents the files stand for join the target here.
-      try {
-        await attachExisting([...ids], opts);
-      } catch (e) {
-        toast(describeError(e, t), "danger");
-        return [];
-      }
-      return [...ids];
-    }
-    toast(t("dnd.importing", { count: importable }), "info");
+      // Nothing new and no target: the registered documents stand for the drop as they are.
+      if (!hasTarget) return [...ids];
+      // With a target the job runs all the same: it attaches the registered documents (below).
+    } else toast(t("dnd.importing", { count: importable }), "info");
     const jobId = await api.documentsImportRun(plan.token, paths, options, source);
     const job = await waitForJob(jobId);
     const report = job && isReport(job.result) ? job.result : null;
     if (report) {
-      for (const id of [...report.imported, ...report.relinked]) ids.add(id);
       if (report.failed.length > 0) toast(t("dnd.partial_failed", { count: report.failed.length }), "warn");
+      // What the job says it imported and met again — a document deleted since the preview is not among them.
+      return importedDocumentIds(report, ids);
     } else if (job?.state === "failed") {
       toast(t("dnd.import_failed", { error: job.error ?? "" }), "danger");
       return afterFailure();
