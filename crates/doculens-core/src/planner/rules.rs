@@ -3133,35 +3133,123 @@ fn workspace_rule(t: &Text<'_>) -> Option<Plan> {
     }
     let summary = match action {
         WorkspaceAction::Open => t.t("워크스페이스를 엽니다", "Open the workspace").to_string(),
-        WorkspaceAction::Create => t.t("새 워크스페이스를 만듭니다", "Create a workspace").to_string(),
+        // The folder is spelled out: the plan is confirmed before the folder is created.
+        WorkspaceAction::Create => {
+            let p = path.as_deref().unwrap_or_default();
+            t.t(&format!("새 워크스페이스를 만듭니다: {p}"), &format!("Create a workspace: {p}")).to_string()
+        }
         WorkspaceAction::Close => t.t("워크스페이스를 닫습니다", "Close the workspace").to_string(),
         WorkspaceAction::Forget => t.t("최근 목록에서 워크스페이스를 지웁니다", "Forget the workspace").to_string(),
     };
     Some(mk(Op::Workspace { action, path }, Scope::default(), 0.86, summary))
 }
 
-/// A file-system path in the sentence (`D:\…`, `/…`, `~/…`, `C:/…`), trailing particle stripped.
-fn path_in(raw: &str) -> Option<String> {
-    for w in raw.split_whitespace() {
-        let w = w.trim_matches(|c: char| ['"', '\'', '“', '”', ',', '.'].contains(&c));
-        let looks = (w.len() >= 3 && w.as_bytes()[1] == b':' && (w.as_bytes()[2] == b'\\' || w.as_bytes()[2] == b'/'))
-            || w.starts_with("\\\\")
-            || w.starts_with('/')
-            || w.starts_with("~/");
-        if looks {
-            let mut p = w.to_string();
-            for particle in ["으로", "에서", "에는", "을", "를", "은", "는", "로", "에", "의"] {
-                if let Some(s) = p.strip_suffix(particle) {
-                    if s.chars().last().is_some_and(|c| c.is_ascii()) {
-                        p = s.to_string();
-                        break;
-                    }
-                }
-            }
-            return Some(p);
+/// Whether a word starts a file-system path: `D:\…`, `C:/…`, `\\server\…`, `/…`, `~/…`.
+fn starts_path(w: &str) -> bool {
+    let b = w.as_bytes();
+    (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/'))
+        || w.starts_with("\\\\")
+        || (w.starts_with('/') && w.len() > 1)
+        || w.starts_with("~/")
+}
+
+/// The path without a particle glued to its end ("D:\Work를", "D:\문서로" → `D:\문서`), or `None`
+/// when it ends in none. After a Hangul name the particle must be the form that name takes, so
+/// names that merely end in such a syllable are kept: `D:\경로` (경 would take 으로), `D:\가을`.
+fn without_particle(path: &str) -> Option<String> {
+    for p in ["으로", "에서", "에는", "을", "를", "은", "는", "로", "에", "의"] {
+        let Some(stem) = path.strip_suffix(p) else { continue };
+        let Some(last) = stem.chars().last() else { continue };
+        if ['\\', '/', ':'].contains(&last) {
+            continue; // the particle-looking syllable is the whole name
+        }
+        let fits = last.is_ascii()
+            || match p {
+                "을" | "를" => josa::particle(stem, josa::Josa::EulReul) == p,
+                "은" | "는" => josa::particle(stem, josa::Josa::EunNeun) == p,
+                "로" | "으로" => josa::particle(stem, josa::Josa::EuroRo) == p,
+                "에" | "에서" | "에는" => true,
+                _ => false, // 의 has one form: "D:\회의" is a name
+            };
+        if fits {
+            return Some(stem.to_string());
         }
     }
     None
+}
+
+/// A file-system path in the sentence (`D:\…`, `\\server\…`, `/…`, `~/…`, `C:/…`).
+///
+/// A quoted path is taken whole. Otherwise the path starts at the first word that looks like one
+/// and may contain blanks: the longest run of words that exists on disk wins (with or without a
+/// particle glued to its end); when nothing exists — a workspace still to be created, or a path
+/// of another machine — it runs up to the command word ("워크스페이스 D:\업무 문서 만들어" →
+/// `D:\업무 문서`) and a glued particle is dropped. It used to stop at the first blank and to
+/// keep the particle after a Hangul name (audit PLN-18).
+fn path_in(raw: &str) -> Option<String> {
+    if let Some(q) = quoted_all(raw).into_iter().find(|q| starts_path(q)) {
+        return Some(q);
+    }
+    let clean = |w: &str| -> String {
+        w.trim_matches(|c: char| ['"', '\'', '“', '”', '‘', '’', ','].contains(&c)).trim_end_matches('.').to_string()
+    };
+    let words: Vec<&str> = raw.split_whitespace().collect();
+    let start = words.iter().position(|w| starts_path(&clean(w)))?;
+    let candidate = |end: usize| clean(&words[start..end].join(" "));
+    for end in (start + 1..=words.len()).rev() {
+        let c = candidate(end);
+        if std::path::Path::new(&c).exists() {
+            return Some(c);
+        }
+        if let Some(stem) = without_particle(&c).filter(|s| std::path::Path::new(s).exists()) {
+            return Some(stem);
+        }
+    }
+    // Nothing on disk: up to the word that continues the command.
+    const VERBS: [&str; 27] = [
+        "열어",
+        "열기",
+        "열고",
+        "전환",
+        "바꿔",
+        "바꾸",
+        "만들",
+        "생성",
+        "닫아",
+        "닫기",
+        "가져와",
+        "가져오",
+        "불러와",
+        "불러오",
+        "잊어",
+        "목록에서",
+        "해줘",
+        "해주",
+        "워크스페이스",
+        "작업공간",
+        "open",
+        "switch",
+        "create",
+        "close",
+        "forget",
+        "import",
+        "workspace",
+    ];
+    const PARTICLES: [&str; 7] = ["을", "를", "로", "으로", "에", "에서", "의"];
+    let continues = |w: &str| {
+        let w = clean(w).to_lowercase();
+        PARTICLES.contains(&w.as_str())
+            || VERBS.iter().any(|v| w.starts_with(v))
+            || w == "please"
+            // "D:\models 폴더에서 가져와": 폴더 with a particle belongs to the sentence ("D:\새 폴더" is a name).
+            || (w.starts_with("폴더") && w != "폴더")
+    };
+    let mut end = start + 1;
+    while end < words.len() && !continues(words[end]) {
+        end += 1;
+    }
+    let c = candidate(end);
+    Some(without_particle(&c).unwrap_or(c))
 }
 
 /// AI models: 받기(download) · 가져오기(import) · 삭제 · 해시 검증 · 벤치마크 · 로드/언로드 · 티어 · 백엔드.
