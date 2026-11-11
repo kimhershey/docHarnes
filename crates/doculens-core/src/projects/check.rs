@@ -1026,7 +1026,8 @@ impl Env<'_> {
     }
 }
 
-/// Runs the project's enabled rules (`rule_ids` empty = all), persists the run and returns it.
+/// Runs the project's enabled rules (`rule_ids` empty = all) and returns the run. A run over every enabled
+/// rule is persisted; a partial one (`CheckRun::partial`) is not.
 pub fn run(deps: &ProjectDeps<'_>, project_id: &str, rule_ids: &[String]) -> Result<CheckRun> {
     let started_at = Utc::now();
     let loaded = deps.db.with(|c| {
@@ -1050,6 +1051,9 @@ pub fn run(deps: &ProjectDeps<'_>, project_id: &str, rule_ids: &[String]) -> Res
     };
     let env = Env { docs: &docs, ctx: &ctx, labels: &labels, ko: deps.ko(), vlm: deps.vlm };
     let run_id = documents::new_id();
+    let enabled: Vec<&Rule> = rules.iter().filter(|r| r.enabled).collect();
+    let selected: Vec<&Rule> =
+        enabled.iter().copied().filter(|r| rule_ids.is_empty() || rule_ids.contains(&r.id)).collect();
     let mut run = CheckRun {
         id: run_id.clone(),
         project_id: project_id.to_string(),
@@ -1061,8 +1065,9 @@ pub fn run(deps: &ProjectDeps<'_>, project_id: &str, rule_ids: &[String]) -> Res
         missing: 0,
         results: Vec::new(),
         missing_doc_types: required.iter().filter(|t| env.docs_of(t).is_empty()).cloned().collect(),
+        partial: selected.len() < enabled.len(),
     };
-    for rule in rules.iter().filter(|r| r.enabled && (rule_ids.is_empty() || rule_ids.contains(&r.id))) {
+    for rule in selected {
         if deps.vlm.is_some_and(|v| v.cancelled()) {
             return Err(CoreError::Cancelled);
         }
@@ -1087,7 +1092,11 @@ pub fn run(deps: &ProjectDeps<'_>, project_id: &str, rule_ids: &[String]) -> Res
         });
     }
     run.finished_at = Utc::now();
-    deps.db.with(|c| repo::insert_run(c, &run))?;
+    // The stored run is the project's "최근 검사" (card counters, report, 보완요청서): a run over some of the
+    // rules — or over none, when the ids match nothing — must not take the place of the last full one.
+    if !run.partial {
+        deps.db.with(|c| repo::insert_run(c, &run))?;
+    }
     Ok(run)
 }
 

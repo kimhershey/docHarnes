@@ -900,11 +900,28 @@ fn check_run_verdicts_with_evidence() {
     assert!(p2.last_check_at.is_some());
     assert_eq!((p2.last_pass, p2.last_mismatch, p2.last_undetermined), (8, 3, 1));
 
-    // Subset of rules, second run becomes the latest.
+    assert!(!run.partial);
+
+    // PRJ-12: a run over some of the rules answers that question only. It is returned but not stored, so the
+    // last full run stays the project's "최근 검사" (card counters, report, 보완요청서).
     let subset = check(&deps(&db, None), &p.id, std::slice::from_ref(&contract_brn.rule_id)).unwrap();
     assert_eq!(subset.results.len(), 1);
-    assert_eq!(db.with(|c| repo::list_runs(c, &p.id, 10)).unwrap().len(), 2);
-    assert_eq!(db.with(|c| repo::last_run(c, &p.id)).unwrap().unwrap().id, subset.id);
+    assert!(subset.partial);
+    assert_eq!((subset.pass, subset.mismatch, subset.undetermined, subset.missing), (1, 0, 0, 0));
+    // Rule ids that match nothing give an empty partial run — which used to replace the full result.
+    let none = check(&deps(&db, None), &p.id, &["no-such-rule".to_string()]).unwrap();
+    assert!(none.partial && none.results.is_empty());
+    assert_eq!(db.with(|c| repo::list_runs(c, &p.id, 10)).unwrap().len(), 1, "partial runs are not stored");
+    assert_eq!(db.with(|c| repo::last_run(c, &p.id)).unwrap().unwrap().id, run.id);
+    let p3 = db.with(|c| repo::get_project(c, &p.id)).unwrap().unwrap();
+    assert_eq!((p3.last_pass, p3.last_mismatch, p3.last_undetermined), (8, 3, 1), "the card keeps the full run");
+    assert_eq!(p3.last_check_at, p2.last_check_at);
+    assert!(supplement_request(&db, &p.id, &stored, &[], OutputFormat::Hwpx, Language::Ko).is_ok());
+    // Naming every enabled rule is a full run again.
+    let all_ids: Vec<String> = run.results.iter().map(|r| r.rule_id.clone()).collect();
+    let full = check(&deps(&db, None), &p.id, &all_ids).unwrap();
+    assert!(!full.partial && full.results.len() == 13);
+    assert_eq!(db.with(|c| repo::last_run(c, &p.id)).unwrap().unwrap().id, full.id);
     assert!(matches!(check(&deps(&db, None), "nope", &[]).unwrap_err(), CoreError::NotFound(_)));
 }
 

@@ -446,6 +446,10 @@ pub struct CheckRun {
     pub results: Vec<RuleResult>,
     /// Required document types absent at check time.
     pub missing_doc_types: Vec<String>,
+    /// Only some of the enabled rules were run (`rule_ids`). Such a run answers that question alone: it is
+    /// returned to the caller but not stored, so it never replaces the project's last full check.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub partial: bool,
 }
 
 /// One row of the document checklist (required types from the template + extra types present).
@@ -542,7 +546,8 @@ pub fn define_rule(
 }
 
 /// Runs the project's (enabled) rules deterministically; `rule_ids` empty = all.
-/// Persists the run and updates the project's counters.
+/// A full run is persisted and updates the project's counters; a run over some of the rules
+/// (`CheckRun::partial`) is only returned.
 pub fn check(deps: &ProjectDeps<'_>, project_id: &str, rule_ids: &[String]) -> Result<CheckRun> {
     check::run(deps, project_id, rule_ids)
 }

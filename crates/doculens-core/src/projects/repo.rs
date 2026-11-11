@@ -1209,6 +1209,7 @@ fn row_to_run(conn: &Connection, r: &Row<'_>) -> rusqlite::Result<CheckRun> {
         undetermined: r.get::<_, i64>(6)?.max(0) as u32,
         missing: r.get::<_, i64>(7)?.max(0) as u32,
         missing_doc_types: from_json(r.get(8)?),
+        partial: false, // only full runs are stored
     })
 }
 
