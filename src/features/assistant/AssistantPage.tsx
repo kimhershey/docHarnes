@@ -738,7 +738,9 @@ export function AssistantPage() {
                       streamText={streams[m.requestId] ?? ""}
                       error={m.error}
                       onCitation={(c) => openCitation(navigate, c)}
-                      onAskGeneral={() => void askKnowledge(sid, m.request.question, { allow_general: true, keep_chunks: [] })}
+                      // "일반 지식으로 답하기": the stored request again — the scope (and history) of the original
+                      // question, not what the selector shows by now (KNO-13) — with general knowledge allowed.
+                      onAskGeneral={() => void askKnowledge(sid, m.request.question, { ...m.request, allow_general: true, keep_chunks: [] })}
                       onFeedback={(id, v) => void feedback(sid, m.id, id, v)}
                       onCancel={m.pending && cancelling !== m.requestId ? () => cancelAnswer(m.requestId) : undefined}
                     />

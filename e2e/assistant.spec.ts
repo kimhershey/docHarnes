@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-import { createWorkspace, freshApp, importViaLibrary, openAssistantScreen } from "./helpers";
+import { createWorkspace, docId, freshApp, importViaLibrary, openAssistantScreen } from "./helpers";
 
 import ko from "../src/i18n/ko.json" with { type: "json" };
 
@@ -11,9 +11,32 @@ import ko from "../src/i18n/ko.json" with { type: "json" };
 const rows = (page: Page) => page.locator('[data-testid="assistant-sessions"] [data-session-id]');
 const activeRow = (page: Page) => page.locator('[data-testid="assistant-sessions"] [data-session-id][data-active="true"]');
 
+const answerCards = (page: Page) => page.locator('[data-testid="assistant-card-answer"] [data-testid="answer-card"]');
+
 async function send(page: Page, text: string) {
   await page.getByTestId("assistant-input").fill(text);
   await page.getByTestId("assistant-send").click();
+}
+
+/** Creates a project from the projects screen and leaves its page open (it becomes the assistant's 현재 프로젝트). */
+async function newProject(page: Page, name: string): Promise<string> {
+  await page.getByTestId("nav-projects").click();
+  await page.getByTestId("projects-new").click();
+  await page.getByTestId("project-name").fill(name);
+  await page.getByTestId("project-submit").click();
+  await expect(page.getByTestId("page-project")).toHaveAttribute("data-project-id", /.+/);
+  await expect(page.getByTestId("project-title")).toHaveText(name);
+  return (await page.getByTestId("page-project").getAttribute("data-project-id"))!;
+}
+
+/** Adds a library document to the open project: as a work document, or (`reference`) to its reference group. */
+async function addToOpenProject(page: Page, id: string, reference = false): Promise<void> {
+  await page.getByTestId("project-add-documents").click();
+  if (reference) await page.getByTestId("project-add-kind-reference").check();
+  await page.getByTestId(`project-add-doc-${id}`).check();
+  await page.getByTestId("project-add-done").click();
+  if (reference) await expect(page.getByTestId(`project-doc-${id}`)).toHaveAttribute("data-kind", "reference");
+  else await expect(page.getByTestId(`project-doc-${id}`)).toBeVisible();
 }
 
 test.describe("assistant chat sessions", () => {
@@ -196,6 +219,36 @@ test.describe("assistant chat sessions", () => {
     await expect(answer.first()).toHaveAttribute("data-answer-state", "done", { timeout: 15_000 });
     // One search, one answer — not a second search.
     await expect(evidence).toHaveCount(1);
+  });
+
+  // KNO-13: "일반 지식으로 답하기" built a new request from the scope selector as it is now instead of
+  // repeating the question's own request.
+  test("'일반 지식으로 답하기' asks again within the scope of the original question", async ({ page }) => {
+    test.setTimeout(60_000);
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서.hwpx", "D:\\규정\\정보보안지침.pdf"]);
+    const estimate = await docId(page, "견적서.hwpx");
+    await newProject(page, "한빛 포털 구축");
+    await addToOpenProject(page, estimate);
+
+    // Project scope: the guideline is outside it → "근거 없음".
+    await openAssistantScreen(page);
+    await page.getByTestId("assistant-scope").click();
+    await page.getByTestId("assistant-scope-project").click();
+    await send(page, "정보보안지침 내용은?");
+    const first = answerCards(page).first();
+    await expect(first).toHaveAttribute("data-answer-state", "no_evidence", { timeout: 15_000 });
+
+    // The selector moves on to 전체 — where the guideline would be found — before the button is pressed.
+    await page.getByTestId("assistant-scope").click();
+    await page.getByRole("option", { name: ko.assistant.scope.all, exact: true }).click();
+    await first.getByTestId("answer-ask-general").click();
+    const second = answerCards(page).nth(1);
+    await expect(second).toHaveAttribute("data-answer-state", "done", { timeout: 15_000 });
+    // Asked again in the project scope: there is still no evidence, so this is the general-knowledge answer.
+    await expect(second.getByTestId("answer-general-badge")).toBeVisible();
+    await expect(second.getByTestId("citation-chip")).toHaveCount(0);
   });
 
   test("the input waits for the sessions and the composer sends into the active one", async ({ page }) => {
