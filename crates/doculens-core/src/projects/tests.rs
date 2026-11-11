@@ -1724,7 +1724,9 @@ fn phase_follows_the_start_and_end_dates() {
     assert_eq!(phase_for(Some(today + chrono::Duration::days(1)), None, today, today), ProjectPhase::Planned);
     assert_eq!(phase_for(Some(today), None, today, today), ProjectPhase::Active);
     assert_eq!(phase_for(Some(d("2026-01-01")), Some(d("2026-12-31")), today, today), ProjectPhase::Active);
-    assert_eq!(phase_for(Some(d("2026-01-01")), Some(today), today, today), ProjectPhase::Active, "the end day counts");
+    assert_eq!(phase_for(Some(d("2026-01-01")), Some(today + chrono::Duration::days(1)), today, today), ProjectPhase::Active);
+    assert_eq!(phase_for(Some(d("2026-01-01")), Some(today), today, today), ProjectPhase::Done, "done from the end date on");
+    assert_eq!(phase_for(Some(today), Some(today), today, today), ProjectPhase::Done, "a one-day project");
     assert_eq!(phase_for(Some(d("2026-01-01")), Some(d("2026-11-09")), today, today), ProjectPhase::Done);
     // Without a start the creation day is the start; without an end the project never completes.
     assert_eq!(phase_for(None, None, d("2026-12-01"), today), ProjectPhase::Planned);
@@ -1737,6 +1739,40 @@ fn phase_follows_the_start_and_end_dates() {
     );
     assert!(parse_date("nope").is_none() && parse_date(" 2026-01-05 ").is_some());
     assert_eq!(parse_date("2026-01-05T09:00:00Z"), parse_date("2026-01-05"), "a timestamp keeps its day");
+}
+
+/// PRJ-5: "완료 처리" stores today as the end date — the project is 완료 at once (it used to stay 진행중
+/// until the next day), and it is not "기한 경과" on the very day it was completed.
+#[test]
+fn completing_a_project_today_takes_effect_today() {
+    let db = db();
+    let p = project(&db, "오늘 완료", Some("tpl_certification_audit"));
+    assert_eq!(p.phase, ProjectPhase::Active);
+    let today = chrono::Local::now().date_naive().to_string();
+    // What the "완료 처리" button sends: an update with today's date as the end date.
+    let done = db
+        .with(|c| {
+            repo::save_project(
+                c,
+                &ProjectInput {
+                    id: Some(p.id.clone()),
+                    name: p.name.clone(),
+                    end_date: Some(today.clone()),
+                    ..Default::default()
+                },
+            )
+        })
+        .unwrap();
+    assert_eq!((done.phase, done.end_date.as_deref()), (ProjectPhase::Done, Some(today.as_str())));
+    assert!(!done.overdue && done.missing_count == 3, "open findings, but the end date has not passed yet");
+    assert_eq!(db.with(repo::list_projects).unwrap().iter().find(|x| x.id == p.id).unwrap().phase, ProjectPhase::Done);
+    // "다시 열기" clears the end date; a date in the past is done and — with open findings — overdue.
+    db.with(|c| repo::set_dates(c, &p.id, None, Some(None))).unwrap();
+    assert_eq!(db.with(|c| repo::get_project(c, &p.id)).unwrap().unwrap().phase, ProjectPhase::Active);
+    let yesterday = (chrono::Local::now().date_naive() - chrono::Duration::days(1)).to_string();
+    db.with(|c| repo::set_dates(c, &p.id, None, Some(Some(&yesterday)))).unwrap();
+    let late = db.with(|c| repo::get_project(c, &p.id)).unwrap().unwrap();
+    assert_eq!((late.phase, late.overdue), (ProjectPhase::Done, true));
 }
 
 #[test]

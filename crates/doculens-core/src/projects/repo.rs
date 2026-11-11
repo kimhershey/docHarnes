@@ -731,6 +731,7 @@ fn fill_counters(conn: &Connection, projects: &mut [Project], only: Option<&str>
         Some(id) => st.query_map([id], map)?.collect::<rusqlite::Result<_>>()?,
         None => st.query_map([], map)?.collect::<rusqlite::Result<_>>()?,
     };
+    let today = chrono::Local::now().date_naive();
     for p in projects.iter_mut() {
         let present = types.get(&p.id).cloned().unwrap_or_default();
         p.document_count = present.len() as u32;
@@ -749,9 +750,11 @@ fn fill_counters(conn: &Connection, projects: &mut [Project], only: Option<&str>
             }
         }
         // 기한 경과 (decision 5): the end date has passed but the case is not complete — required
-        // documents are missing, the last check left mismatches, or nothing was ever checked.
+        // documents are missing, the last check left mismatches, or nothing was ever checked. The end
+        // date itself (the day "완료 처리" stores) is 완료 but not overdue yet.
+        let ended = p.end_date.as_deref().and_then(super::parse_date).is_some_and(|e| e < today);
         p.overdue = p.phase == ProjectPhase::Done
-            && p.end_date.is_some()
+            && ended
             && (p.missing_count > 0 || p.last_mismatch > 0 || p.last_check_at.is_none());
     }
     Ok(())

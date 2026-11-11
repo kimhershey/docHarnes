@@ -35,8 +35,9 @@ pub mod rules;
 mod tests;
 
 /// Phase of a project, computed from its dates (0.3.0 plan §5; never stored): before the start
-/// → 진행예정, after the end → 완료, otherwise 진행중. A missing start counts from the creation day,
-/// a missing end keeps the project 진행중 (user decision 2026-11-10).
+/// → 진행예정, from the end date on → 완료, otherwise 진행중. A missing start counts from the creation day,
+/// a missing end keeps the project 진행중 (user decision 2026-11-10). The end date itself is 완료:
+/// "완료 처리" stores today as the end date and must show at once, not on the next day.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectPhase {
@@ -90,7 +91,7 @@ pub fn phase_for(
     let start = start.unwrap_or(created);
     if today < start {
         ProjectPhase::Planned
-    } else if end.is_some_and(|e| e < today) {
+    } else if end.is_some_and(|e| e <= today) {
         ProjectPhase::Done
     } else {
         ProjectPhase::Active
@@ -193,8 +194,8 @@ pub struct Project {
     pub end_date: Option<String>,
     /// Computed from the dates for today (plan §5).
     pub phase: ProjectPhase,
-    /// 기한 경과: the end date has passed but the project is incomplete (required documents
-    /// missing, mismatches in the last check, or never checked) — a badge, not a phase.
+    /// 기한 경과: the end date has passed (it is before today) but the project is incomplete (required
+    /// documents missing, mismatches in the last check, or never checked) — a badge, not a phase.
     pub overdue: bool,
     #[serde(default)]
     pub settings: ProjectSettings,
