@@ -608,6 +608,27 @@ pub struct AnswerSentence {
     pub citations: Vec<u32>,
 }
 
+/// What had to be cut to fit the model: the text the user sent (`input`), the reply at its token limit
+/// (`output`) or both. An answer that carries it is incomplete and the UI says so.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Truncation {
+    Input,
+    Output,
+    Both,
+}
+
+impl Truncation {
+    pub fn of(input: bool, output: bool) -> Option<Truncation> {
+        match (input, output) {
+            (true, true) => Some(Truncation::Both),
+            (true, false) => Some(Truncation::Input),
+            (false, true) => Some(Truncation::Output),
+            (false, false) => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Answer {
     pub id: Option<i64>,
@@ -627,6 +648,10 @@ pub struct Answer {
     pub document_id: Option<String>,
     pub created_at: Option<DateTime<Utc>>,
     pub feedback: Option<i8>,
+    /// Set when the request text or the reply was cut (absent otherwise): `input` — the text of a
+    /// text-only request did not fit the model's context; `output` — the reply stopped at the token limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truncated: Option<Truncation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

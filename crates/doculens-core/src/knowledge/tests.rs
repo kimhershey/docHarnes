@@ -1226,3 +1226,139 @@ fn kept_evidence_outside_the_follow_up_scope_is_dropped() {
     let a = answer(&deps, &explain, &mut |_| true).unwrap();
     assert!(a.sources.iter().any(|s| s.chunk_id == old), "{:?}", a.sources);
 }
+
+/// Records every request and replies with `reply`, reporting `finish_reason` like the engine does.
+struct RecordingChat {
+    reply: String,
+    finish_reason: Option<String>,
+    requests: std::sync::Mutex<Vec<ChatRequest>>,
+}
+
+impl RecordingChat {
+    fn new(reply: &str, finish_reason: Option<&str>) -> RecordingChat {
+        RecordingChat {
+            reply: reply.into(),
+            finish_reason: finish_reason.map(str::to_string),
+            requests: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+    /// `(user prompt, max_tokens)` of the last request.
+    fn last(&self) -> (String, u32) {
+        let requests = self.requests.lock().unwrap();
+        let req = requests.last().expect("a request was sent");
+        (req.messages.last().unwrap()["content"].as_str().unwrap().to_string(), req.max_tokens.unwrap_or(0))
+    }
+}
+
+impl ChatBackend for RecordingChat {
+    fn model_id(&self) -> Option<String> {
+        Some("recording".into())
+    }
+    fn chat_stream(&self, req: &ChatRequest, on_delta: &mut dyn FnMut(&str) -> bool) -> Result<ChatResponse> {
+        self.requests.lock().unwrap().push(req.clone());
+        on_delta(&self.reply);
+        Ok(ChatResponse {
+            content: self.reply.clone(),
+            finish_reason: self.finish_reason.clone(),
+            ..ChatResponse::default()
+        })
+    }
+}
+
+/// A pasted text of about 6,000 characters with the instruction before and after it.
+fn long_text_request() -> AnswerRequest {
+    let body: String =
+        (1..=200).map(|i| format!("{i}번째 문장은 금번 과업의 수행 범위와 일정을 설명함. ")).collect();
+    let mut req = AnswerRequest::question(&format!("다음 글을 다듬어줘:\n{body}\n위 글을 공문 문체로 정리해 주세요."));
+    assert!(req.question.chars().count() > 5_000);
+    req.retrieve = false;
+    req.save = false;
+    req
+}
+
+/// KNO-3: a request that brings its own text (다듬기 · 교정 · 번역) is sized from the loaded model's context —
+/// not cut at 4,000 characters in and 1,200 tokens out.
+#[test]
+fn a_text_only_request_is_sized_from_the_model_context() {
+    let w = World::new();
+    let chat = RecordingChat::new("다듬은 글입니다.", Some("stop"));
+    let deps = AnswerDeps {
+        search: w.search_deps(None),
+        chat: &chat,
+        model: None,
+        cancelled: None,
+        context_size: Some(32_768),
+    };
+    let a = answer(&deps, &long_text_request(), &mut |_| true).unwrap();
+    let (prompt, max_tokens) = chat.last();
+    assert!(prompt.contains("1번째 문장") && prompt.contains("200번째 문장"), "the whole text reaches the model");
+    assert!(prompt.contains("공문 문체로 정리"), "the closing instruction reaches the model");
+    let text_tokens = super::chunker::estimate_tokens(&long_text_request().question);
+    assert!(max_tokens >= text_tokens, "the reply may be as long as the text: {max_tokens} < {text_tokens}");
+    assert_eq!(a.truncated, None, "nothing was cut");
+    assert!(serde_json::to_value(&a).unwrap().get("truncated").is_none(), "the field is absent when nothing was cut");
+
+    // A small context: the text is cut to what fits (head + the closing instruction) and the answer says so.
+    let small = AnswerDeps {
+        search: w.search_deps(None),
+        chat: &chat,
+        model: None,
+        cancelled: None,
+        context_size: Some(4_096),
+    };
+    let a = answer(&small, &long_text_request(), &mut |_| true).unwrap();
+    let (prompt, max_tokens) = chat.last();
+    assert_eq!(a.truncated, Some(Truncation::Input));
+    assert_eq!(serde_json::to_value(&a).unwrap()["truncated"], "input");
+    assert!(prompt.contains("1번째 문장") && !prompt.contains("200번째 문장"), "the tail of the text is dropped");
+    assert!(
+        prompt.trim_end().ends_with("…\n위 글을 공문 문체로 정리해 주세요."),
+        "{:?}",
+        prompt.chars().skip(prompt.chars().count().saturating_sub(60)).collect::<String>()
+    );
+    let prompt_tokens = crate::planner::prompts::approx_tokens(&prompt);
+    assert!(prompt_tokens + max_tokens <= 4_096, "prompt {prompt_tokens} + reply {max_tokens} fit the context");
+    assert!(max_tokens >= 1_200, "{max_tokens}");
+
+    // The reply stopped at its token limit → marked as cut as well.
+    let limited = RecordingChat::new("다듬다 만 글", Some("length"));
+    let deps = AnswerDeps { search: w.search_deps(None), chat: &limited, model: None, cancelled: None, context_size: Some(4_096) };
+    assert_eq!(answer(&deps, &long_text_request(), &mut |_| true).unwrap().truncated, Some(Truncation::Both));
+    let mut short = AnswerRequest::question("다음 문장을 다듬어줘: 금번 과업은 당사가 수행함.");
+    short.retrieve = false;
+    short.save = false;
+    assert_eq!(answer(&deps, &short, &mut |_| true).unwrap().truncated, Some(Truncation::Output));
+    assert_eq!(limited.last().1, 1_200, "a short request keeps the standard reply limit");
+
+    // A grounded question keeps the fixed caps (and a reply cut at the limit is marked too).
+    let mut grounded = AnswerRequest::question(&format!("출장비 숙박비 한도는? {}", "가".repeat(5_000)));
+    grounded.save = false;
+    let a = answer(&deps, &grounded, &mut |_| true).unwrap();
+    let (prompt, max_tokens) = limited.last();
+    assert_eq!(max_tokens, 1_200);
+    assert!(prompt.chars().filter(|c| *c == '가').count() < 4_000, "the question is still capped at 4,000 characters");
+    assert_eq!(a.truncated, Some(Truncation::Output));
+}
+
+/// KNO-3: when the server still refuses a text-only prompt (context unknown, or its tokenizer counts more than
+/// the estimate) the text is halved and the answer is marked instead of failing.
+#[test]
+fn a_text_only_request_the_server_refuses_is_halved_and_marked() {
+    let w = World::new();
+    let strict = LimitedChat::new(2_000, "다듬은 글입니다.");
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &strict, model: None, cancelled: None, context_size: None };
+    let a = answer(&deps, &long_text_request(), &mut |_| true).unwrap();
+    let sizes = strict.sizes();
+    assert!(sizes.len() >= 2 && sizes[0] > 2_000 && *sizes.last().unwrap() <= 2_000, "{sizes:?}");
+    assert_eq!(a.truncated, Some(Truncation::Input));
+    assert_eq!(a.text, "다듬은 글입니다.");
+    // Nothing left to halve → the server's refusal is the error.
+    let tiny = LimitedChat::new(10, "x");
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &tiny, model: None, cancelled: None, context_size: None };
+    let mut short = AnswerRequest::question("다음 문장을 다듬어줘: 금번 과업은 당사가 수행함.");
+    short.retrieve = false;
+    let err = answer(&deps, &short, &mut |_| true).unwrap_err();
+    assert!(err.to_string().contains("exceeds the available context size"), "{err}");
+}
