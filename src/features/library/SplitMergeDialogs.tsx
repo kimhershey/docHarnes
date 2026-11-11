@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -91,13 +91,17 @@ export function MergeDialog({ open, onOpenChange, ids, onDone }: { open: boolean
   const toast = useUiStore((s) => s.toast);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
-  // The merge order starts as the library selection; dropped documents / files append to it.
+  // The merge order starts as the library selection; dropped documents / files append to it. The dialog is
+  // reset when it opens, not while it is open: `ids` is a new array whenever the library list is refetched
+  // (an import, the auto pipeline), which used to wipe the typed name and the dropped documents (DOC-7).
   const [list, setList] = useState<string[]>(ids);
+  const wasOpen = useRef(false);
   useEffect(() => {
-    if (open) {
+    if (open && !wasOpen.current) {
       setName("");
       setList(ids);
     }
+    wasOpen.current = open;
   }, [open, ids]);
   const { data: docs } = useDocuments({ limit: 2000, sort: "imported_desc" }, open);
   const addIds = (more: string[]) => setList((l) => [...l, ...more.filter((id) => !l.includes(id))]);

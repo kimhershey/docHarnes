@@ -165,6 +165,26 @@ test.describe("document drag and drop", () => {
     await expect(page.getByTestId("form-register-doc")).toContainText("휴가신청서.pdf", { timeout: 15_000 });
   });
 
+  test("the merge dialog keeps the typed name and a dropped file while the library refreshes behind it (DOC-7)", async ({ page }) => {
+    const ids = await libraryWithDocs(page, ["C:\\scan\\계약서.pdf", "C:\\scan\\부속서.pdf"]);
+    for (const id of ids) await page.getByTestId(`doc-select-${id}`).check();
+    await page.getByTestId("library-merge").click();
+    const dialog = page.getByTestId("merge-dialog");
+    await expect(dialog.getByTestId("merge-list").locator("li")).toHaveCount(2);
+    await page.getByTestId("merge-name").fill("2026 계약 묶음");
+    // A file dropped on the dialog is imported first: every import event refetches the library list behind
+    // the dialog, which used to reset the name and the list (the dropped document vanished again).
+    await dropFiles(page, dialog, ["합의서.pdf"]);
+    await expect(dialog.getByTestId("merge-list").locator("li")).toHaveCount(3, { timeout: 20_000 });
+    await expect(dialog.getByTestId("merge-list")).toContainText("합의서.pdf");
+    await expect(card(page, "합의서.pdf")).toHaveAttribute("data-doc-status", "rendered", { timeout: 15_000 });
+    // Let the auto pipeline of the new document send its events too.
+    await page.waitForTimeout(800);
+    await expect(page.getByTestId("merge-name")).toHaveValue("2026 계약 묶음");
+    await expect(dialog.getByTestId("merge-list").locator("li")).toHaveCount(3);
+    await expect(dialog.getByTestId("merge-list")).toContainText("합의서.pdf");
+  });
+
   test("files dropped on a common reference group are imported as 참고 자료 of that group", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);
