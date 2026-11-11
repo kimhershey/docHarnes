@@ -2,7 +2,7 @@ import { create } from "zustand";
 
 import type { UiOpResult } from "@/lib/commands";
 import { api } from "@/lib/ipc";
-import type { Answer, AnswerRequest, ChatMessageRow, ChatSessionSummary, Op, Plan, PlanExecution, PlanIssue, PlanResponse, SearchMode, SearchResponse, UiPlanContext } from "@/lib/types";
+import type { Answer, AnswerRequest, ChatMessageRow, ChatSessionSummary, Op, Plan, PlanExecution, PlanIssue, PlanPreview, PlanResponse, SearchMode, SearchResponse, UiPlanContext } from "@/lib/types";
 import { errorCode, errorMessage } from "@/lib/utils";
 
 import { useAttachmentsStore } from "./attachments";
@@ -23,7 +23,12 @@ export type Message =
    * 되묻기 text (`askBackText`: sentence + question + reply) — and goes to the executor with the plan
    * (`ExecuteArgs.planned_text`), which re-checks the plan against the text it was made from (PLN-7).
    */
-  | { id: number; createdAt?: string; role: "assistant"; kind: "plan"; text: string; plannedText?: string; response: PlanResponse; plan: Plan; context: UiPlanContext; status: PlanStatus; errors: PlanIssue[] | null; editing: boolean }
+  /**
+   * `preview`: the preview of `plan` once the user edited it — `response.preview` is the preview of the plan
+   * as interpreted (PLN-14). Absent while `plan` is unedited, and dropped at every edit until the fresh one
+   * arrives; so when set it always belongs to `plan`.
+   */
+  | { id: number; createdAt?: string; role: "assistant"; kind: "plan"; text: string; plannedText?: string; response: PlanResponse; plan: Plan; preview?: PlanPreview; context: UiPlanContext; status: PlanStatus; errors: PlanIssue[] | null; editing: boolean }
   /** `uiResults`: what became of the execution's `ui_actions` once the UI ran them (one per action, in order). */
   | { id: number; createdAt?: string; role: "assistant"; kind: "execution"; text: string; response: PlanResponse; plan: Plan; jobId: string; uiResults?: UiOpResult[] }
   | { id: number; createdAt?: string; role: "assistant"; kind: "result"; text: string; response: PlanResponse; plan: Plan; execution: PlanExecution; uiResults?: UiOpResult[] }

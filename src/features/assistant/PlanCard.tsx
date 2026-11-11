@@ -1,5 +1,5 @@
 import { AlertTriangle, CheckSquare, CornerDownLeft, Pencil, Play, RotateCcw, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { Badge } from "@/components/ui/badge";
@@ -11,21 +11,23 @@ import { Switch } from "@/components/ui/switch";
 import { RuleGrid } from "@/features/projects/RuleGrid";
 import { retentionShortens } from "@/lib/commands";
 import { api } from "@/lib/ipc";
-import { DEFAULT_NAME_TEMPLATE, FOLDER_TEMPLATES, type Op, type OrganizeItem, type OrganizePlan, type Plan, type PlanIssue, type PlanResponse, type StepPreview } from "@/lib/types";
+import type { OrganizeItem, Plan, PlanIssue, PlanPreview, PlanResponse, StepPreview } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import type { PlanStatus } from "@/stores/assistant";
 import { useSettingsStore, useShortcut } from "@/stores/settings";
 import { useWorkspaceStore } from "@/stores/workspace";
 
-import { describeOrganizeError } from "@/features/organize/errors";
+import { describeExportError, describeOrganizeError } from "@/features/organize/errors";
 
 import { exportPreview, impactLine, impactOf, onlyReviewedValue, opLabel, organizePreview, requiresConfirmation, ruleDraftPreview, sourceLabel, summarizeOp, warningIssues, withOnlyReviewed } from "./describePlan";
-import { FILE_OPS } from "./opSpecs";
 import { PlanEditor } from "./PlanEditor";
+import { planKey, previewEditedPlan, previewFailure } from "./repreview";
 
 export type { PlanStatus };
 
 const PREVIEW_ROWS = 3;
+/** An edited plan is previewed this long after the last edit (the editor patches the plan per keystroke). */
+const REPREVIEW_DELAY_MS = 350;
 
 /** Organise diff preview: first rows of `payload.items` (from → to), held rows marked, "전체 보기" expands. */
 export function OrganizeDiff({ items, index }: { items: OrganizeItem[]; index: number }) {
@@ -88,17 +90,24 @@ export function OrganizeDiff({ items, index }: { items: OrganizeItem[]; index: n
   );
 }
 
-function StepPreviewView({ step, override, index }: { step: StepPreview | undefined; override: OrganizePlan | undefined; index: number }) {
+function StepPreviewView({ step, index }: { step: StepPreview | undefined; index: number }) {
   const { t } = useTranslation();
-  if (!step && !override) return null;
-  const organise = override ? { items: override.items.filter((i) => i.status === "move" || i.status === "held"), moves: override.moves, held: override.held, unchanged: override.unchanged } : organizePreview(step);
+  if (!step) return null;
+  const organise = organizePreview(step);
   const exp = exportPreview(step);
   // `define_rule`: the rule grid is the confirmation (design §3.15). `exec::preview` sends
   // `{ description, draft: RuleDraft | null }`; without a parsed draft only the sentence is shown.
   const rule = ruleDraftPreview(step);
+  // The preview of an edited step failed (unknown template variable, path outside the workspace …).
+  const failed = previewFailure(step);
   return (
     <div className="flex flex-col">
-      {step?.summary && !organise && !exp && <span className="text-xs text-fg-muted selectable">{step.summary}</span>}
+      {failed && (
+        <span className="text-xs text-danger selectable" role="alert" data-testid={`plan-preview-error-${index}`}>
+          {t("planner.card.preview_error", { message: failed })}
+        </span>
+      )}
+      {step.summary && !organise && !exp && <span className="text-xs text-fg-muted selectable">{step.summary}</span>}
       {rule?.draft && (
         <div className="mt-1" data-testid={`plan-preview-${index}`}>
           <RuleGrid rule={rule.draft.rule} readOnly unresolvedNames={rule.draft.unresolved} testId={`plan-rule-${index}`} />
@@ -152,6 +161,8 @@ export function PlanCard({
   onRephrase,
   onToggleEdit,
   onAskBack,
+  editedPreview,
+  onPreview,
 }: {
   response: PlanResponse;
   plan: Plan;
@@ -166,6 +177,10 @@ export function PlanCard({
   onToggleEdit: () => void;
   /** 되묻기: the user's reply to this plan goes back to the model with the plan as context. */
   onAskBack?: (reply: string) => void;
+  /** The preview of `plan` as edited (absent while `plan` is as interpreted, or while a fresh preview is on its way). */
+  editedPreview?: PlanPreview | null;
+  /** The preview of the edited plan arrived: the owner keeps it with the plan (and drops it at the next edit). */
+  onPreview?: (preview: PlanPreview) => void;
 }) {
   const { t, i18n } = useTranslation();
   const [reply, setReply] = useState("");
@@ -173,39 +188,54 @@ export function PlanCard({
   const closeChord = useShortcut("close") || "Escape";
   const reviewedDefault = useSettingsStore((s) => s.settings?.processing.organize_reviewed_only ?? true);
   const retention = useWorkspaceStore((s) => s.current?.manifest.retention ?? null);
-  const [overrides, setOverrides] = useState<Record<number, OrganizePlan>>({});
   const [previewError, setPreviewError] = useState<string | null>(null);
-  const { result, preview, context } = response;
-  const confirm = requiresConfirmation(response);
+  const { result, context } = response;
   const onlyReviewed = onlyReviewedValue(plan, reviewedDefault);
   const warnings = warningIssues(result.issues);
-  const impact = impactOf(plan, preview);
   const pending = status === "pending";
+  // The numbers on the card belong to the plan it shows (PLN-14): the planner's preview while the plan is as
+  // interpreted; once the scope or a parameter was edited, the preview of the edited plan — and none while
+  // that one is on its way (the card used to keep "대상 문서 3건" of the plan before the edit).
+  const key = planKey(plan);
+  const edited = key !== planKey(result.plan);
+  const preview = edited ? (editedPreview ?? null) : response.preview;
+  const refreshing = edited && !editedPreview && pending && previewError === null;
+  const impact = impactOf(plan, preview);
+  /** Whose numbers the card shows: the planner's, the edited plan's, or none (on their way / could not be made). */
+  const previewOf = !edited ? "planned" : preview ? "edited" : refreshing ? "refreshing" : "none";
+  // An edit can make a plan one that is confirmed first (an export onto an existing file, a dry run switched off).
+  const confirm = requiresConfirmation(response) || (edited && preview?.requires_confirmation === true);
+  const language = i18n.language.startsWith("ko") ? ("ko" as const) : ("en" as const);
 
-  /**
-   * Re-previews the file operations with the toggled `only_reviewed` (the executor re-plans anyway);
-   * a failed re-preview (`template_variable`, `path_outside` …) is shown next to the switch.
-   */
-  const toggleOnlyReviewed = (value: boolean) => {
-    const next = withOnlyReviewed(plan, value);
-    onChange(next);
+  useEffect(() => {
     setPreviewError(null);
-    next.operations.forEach((op, index) => {
-      if (!FILE_OPS.has(op.op)) return;
-      const o = op as Extract<Op, { op: "organize" | "rename" | "move" }>;
-      const req = {
-        scope: next.scope,
-        name_template: o.op === "move" ? null : o.op === "rename" ? o.template : (o.template ?? DEFAULT_NAME_TEMPLATE),
-        folder_template: o.op === "rename" ? null : o.op === "move" ? o.folder : (o.folder_template ?? FOLDER_TEMPLATES[o.group_by ?? "doc_type"]),
-        only_reviewed: value,
-        language: i18n.language.startsWith("ko") ? ("ko" as const) : ("en" as const),
-      };
-      void api
-        .organizePlan(req)
-        .then((p) => setOverrides((prev) => ({ ...prev, [index]: p })))
-        .catch((e: unknown) => setPreviewError(describeOrganizeError(e, t)));
-    });
-  };
+    if (!edited || editedPreview || !pending || !onPreview) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void previewEditedPlan(plan, result.plan, response.preview, api, {
+        language,
+        onlyReviewedDefault: reviewedDefault,
+        countLabel: (count) => t("planner.card.step_documents", { count }),
+        deleteLabel: (count) => t("planner.card.step_delete", { count }),
+        describeError: (e, kind) => (kind === "export" ? describeExportError(e, t) : describeOrganizeError(e, t)),
+      })
+        .then((fresh) => {
+          if (!cancelled) onPreview(fresh);
+        })
+        .catch((e: unknown) => {
+          if (!cancelled) setPreviewError(describeOrganizeError(e, t));
+        });
+    }, REPREVIEW_DELAY_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // The plan's key stands for the plan; the callbacks and the response are those of the same card.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, edited, editedPreview, pending, language, reviewedDefault]);
+
+  /** `only_reviewed` is a parameter of the file ops: toggling it edits the plan, which is previewed again like any edit. */
+  const toggleOnlyReviewed = (value: boolean) => onChange(withOnlyReviewed(plan, value));
 
   return (
     <div
@@ -265,26 +295,35 @@ export function PlanCard({
                     {t("planner.card.retention_shorter")}
                   </span>
                 )}
-                <StepPreviewView step={step} override={overrides[i]} index={i} />
+                <StepPreviewView step={step} index={i} />
               </div>
             </li>
           );
         })}
       </ol>
-      <p className="text-xs text-fg-muted" data-testid="plan-impact">
-        {impactLine(impact, t)}
-      </p>
+      {/* `data-preview`: whose numbers these are — the planner's (`planned`), the edited plan's (`edited`) or none
+          (`refreshing`; `none` = the preview failed, or the edited plan ran before its preview arrived). */}
+      {(previewOf !== "none" || previewError) && (
+        <p className="text-xs text-fg-muted" data-testid="plan-impact" data-preview={previewOf}>
+          {previewOf === "planned" || previewOf === "edited" ? (
+            impactLine(impact, t)
+          ) : previewOf === "refreshing" ? (
+            <span className="flex items-center gap-1" role="status">
+              <Spinner /> {t("planner.card.preview_refreshing")}
+            </span>
+          ) : (
+            <span className="text-danger" role="alert" data-testid="plan-preview-error">
+              {t("planner.card.preview_error", { message: previewError })}
+            </span>
+          )}
+        </p>
+      )}
       {onlyReviewed !== null && (
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <label className="flex items-center gap-2">
             <Switch checked={onlyReviewed} disabled={!pending} onCheckedChange={toggleOnlyReviewed} aria-label={t("planner.card.only_reviewed")} data-testid="plan-only-reviewed" />
             {t("planner.card.only_reviewed")}
           </label>
-          {previewError && (
-            <span className="text-danger" role="alert" data-testid="plan-only-reviewed-error">
-              {t("planner.card.preview_error", { message: previewError })}
-            </span>
-          )}
         </div>
       )}
       {warnings.length > 0 && (

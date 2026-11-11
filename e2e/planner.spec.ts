@@ -341,6 +341,76 @@ test.describe("P5 planner", () => {
     await expect(result.getByTestId("result-step-0")).toHaveAttribute("data-ui-status", "done");
   });
 
+  // PLN-14: the card kept the numbers of the plan as interpreted ("휴지통 이동 1건 · 대상 문서 1건") after the
+  // scope was widened in the editor — the approval then covered more documents than the card said.
+  test("a plan edited on its card shows the numbers of the edited plan", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서-1p.jpg", "D:\\scan\\개발계약서-2p.pdf"], { autoLevel: "none" });
+    // Classify both documents so each carries its type (the plan's scope is `doc_type = estimate`).
+    for (const name of ["견적서-1p.jpg", "개발계약서-2p.pdf"]) await page.getByTestId(`doc-select-${await docId(page, name)}`).check();
+    await page.getByTestId("library-process").click();
+    await page.getByTestId("library-process-standard").click();
+    await expect(card(page, "개발계약서-2p.pdf")).toHaveAttribute("data-doc-status", "extracted", { timeout: 15_000 });
+    for (const name of ["견적서-1p.jpg", "개발계약서-2p.pdf"]) await page.getByTestId(`doc-select-${await docId(page, name)}`).uncheck();
+
+    await openAssistant(page);
+    await send(page, "견적서 삭제해줘");
+    const plan = assistantCard(page, "plan").last();
+    await expect(plan).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    const impact = plan.getByTestId("plan-impact");
+    const line = (count: number) => tpl(ko.planner.card.impact, { effects: tpl(ko.planner.card.impact_delete, { count }), count });
+    await expect(impact).toHaveAttribute("data-preview", "planned");
+    await expect(impact).toHaveText(line(1));
+
+    // The type filter is taken off: both documents are in scope, and the card says so.
+    await plan.getByTestId("plan-edit").click();
+    await plan.getByTestId("plan-editor-scope-doc-type").click();
+    await page.getByRole("option", { name: ko.planner.scope.any }).click();
+    await expect(impact).toHaveAttribute("data-preview", "edited", { timeout: 10_000 });
+    await expect(impact).toHaveText(line(2));
+    await expect(plan.getByTestId("plan-step-0")).toContainText(tpl(ko.planner.card.step_delete, { count: 2 }));
+
+    // The edited plan and its numbers survive a restart of the app.
+    await page.waitForTimeout(600);
+    await page.reload();
+    await expect(page.getByTestId("app-shell")).toBeVisible();
+    await openAssistant(page);
+    const restored = assistantCard(page, "plan").last();
+    await expect(restored).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    await expect(restored.getByTestId("plan-impact")).toHaveAttribute("data-preview", "edited");
+    await expect(restored.getByTestId("plan-impact")).toHaveText(line(2));
+
+    // Back to the interpreted scope (the editor is restored open): the planner's own numbers again.
+    await expect(restored.getByTestId("plan-editor")).toBeVisible();
+    await restored.getByTestId("plan-editor-scope-doc-type").click();
+    await page.getByRole("option", { name: "견적서", exact: true }).click();
+    await expect(restored.getByTestId("plan-impact")).toHaveAttribute("data-preview", "planned");
+    await expect(restored.getByTestId("plan-impact")).toHaveText(line(1));
+    await restored.getByTestId("plan-cancel").click();
+    await expect(restored).toHaveAttribute("data-plan-status", "cancelled");
+
+    // A file op: the receipt waits for review, so the plan as interpreted holds it back. Switching "검토
+    // 미완료 문서는 이동하지 않음" off is an edit like any other — the diff and the counts are those of the new plan.
+    await send(page, "견적서 월별 폴더로 옮겨");
+    const move = assistantCard(page, "plan").last();
+    await expect(move).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    const step = move.getByTestId("plan-step-0");
+    await expect(step).toContainText(tpl(ko.planner.card.organize_summary, { moves: 0, held: 1, unchanged: 0 }));
+    await expect(move.getByTestId("plan-only-reviewed")).toHaveAttribute("aria-checked", "true");
+    await move.getByTestId("plan-only-reviewed").click();
+    await expect(move.getByTestId("plan-impact")).toHaveAttribute("data-preview", "edited", { timeout: 10_000 });
+    await expect(step).toContainText(tpl(ko.planner.card.organize_summary, { moves: 1, held: 0, unchanged: 0 }));
+    await expect(move.getByTestId("plan-impact")).toContainText(tpl(ko.planner.card.impact_moves, { count: 1 }));
+    await expect(move.locator('[data-testid="plan-preview-row"][data-item-status="move"]')).toHaveCount(1);
+    // A folder template the preview cannot render: the step says why instead of keeping the last diff.
+    await move.getByTestId("plan-edit").click();
+    await move.getByTestId("plan-editor-param-0-folder").fill("documents/{{nope}}");
+    await expect(move.getByTestId("plan-preview-error-0")).toContainText(tpl(ko.organize.errors.template_variable, { vars: "nope" }), { timeout: 10_000 });
+    await expect(move.locator('[data-testid="plan-preview-row"]')).toHaveCount(0);
+    await move.getByTestId("plan-cancel").click();
+  });
+
   // KNO-11: the execution card reported a finished job to the page every time it mounted, so the failure
   // toast of an old job came back whenever its chat was opened again.
   test("a failed job is announced once: reopening its chat does not toast again", async ({ page }) => {

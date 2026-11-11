@@ -600,6 +600,9 @@
       "cancelled": "Cancelled",
       "invalid": "The plan cannot run. Edit it and try again.",
       "preview_error": "Preview update failed: {{message}}",
+      "preview_refreshing": "Previewing the edited plan…",
+      "step_documents": "{{count}} document(s)",
+      "step_delete": "{{count}} document(s) to the recycle bin",
       "preview_caption": "Organise preview (from → to)",
       "columns": {
         "from": "From",

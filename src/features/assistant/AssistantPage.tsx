@@ -812,7 +812,11 @@ export function AssistantPage() {
                     errors={m.errors}
                     editing={m.editing}
                     active={activePlan?.id === m.id}
-                    onChange={(plan) => patchPlan(sid, m.id, (x) => ({ ...x, plan, errors: null }), true)}
+                    // An edit drops the preview of the plan before it; the card fetches the one of the edited plan
+                    // and hands it back (PLN-14).
+                    editedPreview={m.preview}
+                    onPreview={(preview) => patchPlan(sid, m.id, (x) => ({ ...x, preview }), true)}
+                    onChange={(plan) => patchPlan(sid, m.id, (x) => ({ ...x, plan, errors: null, preview: undefined }), true)}
                     onExecute={() => void execute(sid, m.id)}
                     onCancel={() => cancelPlan(sid, m.id)}
                     onRephrase={() => focusInput(m.text)}
