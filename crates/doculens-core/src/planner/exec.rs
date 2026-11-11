@@ -1541,14 +1541,14 @@ fn run_step(
             let run = db
                 .with(|c| projects_repo::last_run(c, &pid))?
                 .ok_or_else(|| CoreError::Invalid("no_check_run".into()))?;
-            let req =
+            let mut req =
                 projects::supplement_request(db, &pid, &run, findings, output.unwrap_or_default(), deps.language)?;
+            // The request belongs to the project it is written for: knowledge searches of the draft
+            // (and of a later regeneration from the stored request) stay inside it (audit CON-3).
+            req.bind_project(Some(pid.clone()));
             // Findings as text sources → the rule-based 보완요청서 needs no model (the shell's draft
-            // job decides the same way), so the planner never waits for the engine here.
-            let rule_only = !req.sources.is_empty()
-                && req.sources.iter().all(|s| matches!(s, SourceRef::Text { .. }))
-                && req.form_ref.as_deref().and_then(generate::TemplateKind::parse)
-                    == Some(generate::TemplateKind::SupplementRequest);
+            // job decides with the same predicate), so the planner never waits for the engine here.
+            let rule_only = generate::draft::rule_only(&req);
             let vlm = match (deps.chat, deps.model.clone()) {
                 (Some(c), Some(m)) if !rule_only => {
                     Some(Vlm::new(c, m, deps.profile, deps.cancel).with_context(deps.ctx_size))
