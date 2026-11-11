@@ -5,10 +5,11 @@
 
 ```
 eval/
-  golden/planner.json                  플래너 골든셋 129건(0.7.0 기준: 한국어 93·영어 26·혼합 10)
+  golden/planner.json                  플래너 골든셋 163건(0.8.0 기준: 한국어 121·영어 31·혼합 11; 종류별 대화 5·질문 27·명령 100·설정 31)
   golden/planner-context.json          골든셋 실행에 쓰는 PlanContext(기준일 2026-11-08, 문서 유형·스키마·폴더·태그·모델·프로젝트)
   golden/pipeline-manifest.example.json 파이프라인 골든 매니페스트 예시(gen_fixtures 합성 샘플 기준)
   baselines/planner-rules.json         규칙+프리라우터 경로의 현재 정확도 기준선(CI 게이트가 비교)
+  results/                             실제 모델로 돌린 결과 기록(판·모델별 결과 JSON과 비교 표)
 ```
 
 ## 설계와의 차이: Python → Rust
@@ -45,18 +46,46 @@ cargo run -p doculens-eval -- planner --golden eval/golden/planner.json \
     [--backend cpu|vulkan|cu121|cu129] [--profile balanced] --out eval/out/planner-gemma4-e4b-q5km.json
 ```
 
-<!-- 0.8.0: 리드가 갱신 -->
-- 모든 골든 명령을 `doculens_core::planner::llm::plan(None, text, &ctx, PlanMode::RulesFirst)`로 돌립니다(프리라우터 → 문장 규칙;
-  규칙이 못 풀면 `no_model` 명확화로 끝남). 이것이 CI 게이트가 재는 **규칙 경로**이고, 앱에서는 해석을 "규칙(구형)"으로 바꿨을 때의
-  동작입니다. `--engine`이 있으면 `plan(Some(&PlannerDeps{..}), …, PlanMode::ModelFirst)` — 앱의 기본 해석인 **모델 우선 경로**
-  (슬래시 명령만 프리라우터, 그 밖의 문장은 모두 모델, 검증 실패 시 재질의 1회) — 를 한 번 더 돌려 두 결과를 모두 보고하고, 결과
-  파일의 1차 값은 모델 경로가 됩니다(`rules_only`에 규칙 결과 동봉). 모델 경로의 정확도는 CI에서 재지 않습니다(GPU·모델 필요).
+- 모든 골든 명령을 `doculens_core::planner::llm::plan(None, text, &ctx, PlanMode::RulesFirst)`로 돌립니다(빠른 경로 → 프리라우터 →
+  문장 규칙; 규칙이 못 풀면 `no_model` 명확화로 끝남). 이것이 CI 게이트가 재는 **규칙 경로**이고, 앱에서는 해석을 "규칙(구형)"으로 바꿨을 때의
+  동작입니다. `--engine`이 있으면 `plan(Some(&PlannerDeps{..}), …, PlanMode::ModelFirst)` — 앱의 기본 해석인 **모델 우선 경로** — 를 한 번 더
+  돌려 두 결과를 모두 보고하고, 결과 파일의 1차 값은 모델 경로가 됩니다(`rules_only`에 규칙 결과 동봉). 모델 경로의 정확도는 CI에서
+  재지 않습니다(모델 필요). 0.8.0의 모델 우선 경로는 이렇게 흐릅니다.
+  1. **빠른 경로**(`planner::fastpath`, 출처 `fast`): 문장 전체가 "설정 이름 하나 + 그 타입의 값 하나"이거나 정해진 인사말이면 모델을 부르지 않습니다.
+  2. `/`로 시작하면 프리라우터(출처 `prerouter`).
+  3. **분류 호출**: 동작 계열 8개 가운데 고르거나, 명령이 아니면 `chat`(인사·잡담) / `general`(문서와 무관한 질문)을 고릅니다. 뒤의 둘이면
+     플랜 호출 없이 `answer{mode}` 하나가 됩니다(결과 JSON의 `route`).
+  4. **플랜 호출**: 고른 계열의 op 표와 문법으로 플랜을 만듭니다(검증 실패 시 재질의 1회, 그래도 안 되면 전체 op로 한 번 더).
+  5. **문장과의 대조**(`planner::guard`): 문장에 근거가 없는 설정 변경, 반영하지 못한 부분(`unmet`), 표현할 수 없는 "~별" 기준은 확인 카드가
+     됩니다(결과 JSON의 `notes`: `ungrounded_change` · `unmet_request` · `grouping_dropped`). 할 일이 없는 플랜은 대화 답변이 됩니다.
 - 컨텍스트는 골든 파일의 `"context"`(골든 파일 기준 상대 경로) 또는 `--context <json>`; `PlanContext` 구조 그대로
   JSON으로 적습니다(`today`, `language`, `folders`, `doc_types`, `schemas`, `tags`, `current_folder`, `selected_doc_ids`,
   `current_document`, `current_page`, `document_count`, `model_ids`, `projects`, `current_project`).
-- 출력: 전체·카테고리별(`ko`/`en`/`mixed`)·의도별 정확도, 플랜 출처(prerouter/rules/model/none) 분포, 불일치 전건을
-  **원인별로 묶어** 기대 플랜 / 산출 플랜 요약과 함께 출력합니다. `--verbose`는 항목마다 한 줄씩 찍습니다.
-- `--out`은 결과 JSON(항목별 정오·원인·산출 연산·범위·지연 시간·토큰 수)을 씁니다. 이 파일이 다음 기준선이 됩니다.
+- 출력: 전체·카테고리별(`ko`/`en`/`mixed`)·의도별·**종류별**(대화·질문·명령·설정) 정확도, 플랜 출처(fast/prerouter/rules/model/none) 분포,
+  **확인 없이 실행됐을 잘못된 변경** 건수, 모델 경로는 응답 시간(전체 p50·p95, 종류별 p50), 불일치 전건을 **원인별로 묶어** 기대 플랜 /
+  산출 플랜 요약과 함께 출력합니다. `--verbose`는 항목마다 한 줄씩 찍습니다.
+  - "확인 없이 실행됐을 잘못된 변경"은 기대와 다른 플랜이 무언가를 바꾸는 op를 담고 있는데 확인 카드 없이 실행되는 경우입니다.
+    2026-11-11 보고("UI 배율 120%" → 프로파일이 바뀜)가 바로 이 경우이고, 0에 가까워야 하는 수입니다.
+- `--out`은 결과 JSON(항목별 정오·원인·산출 연산·범위·확인 여부·`unmet`·`route`·`notes`·지연 시간·토큰 수)을 씁니다. 이 파일이 다음 기준선이 됩니다.
+- `--ids ko-94,ko-110`과 `--kinds chat,setting`은 골든셋의 일부만 돌립니다(CPU에서는 항목당 수십 초가 걸립니다). 회귀 게이트(`--baseline`)와는 함께 쓸 수 없습니다.
+
+#### 실제 모델로 재기 (0.8.0, 점검 PLN-21)
+
+모델 경로의 정확도는 실제 모델이 있어야 잴 수 있습니다. 0.7.0까지는 한 번도 재지 않았고, 그래서 문법의 키 순서 문제(점검 PLN-1)가 사용자 PC에서야 드러났습니다.
+
+```bash
+# 사용자 PC(Windows, 설치본의 엔진과 내려받은 모델 사용). PowerShell에서는 줄 끝의 \ 대신 ` 를 씁니다.
+cargo run -p doculens-eval --release -- planner --golden eval/golden/planner.json \
+    --engine "C:\Program Files\DocuLens\engines\vulkan\llama-server.exe" \
+    --models-dir "<작업 공간>\.doculens\models" --model gemma4-e4b-q4km \
+    --out eval/results/planner-<판>-<모델>.json --verbose
+```
+
+- `--model`은 모델 폴더 이름(= 설정 > AI 모델의 id)입니다. GPU가 있으면 163건에 몇 분, CPU만 있으면 한 시간 넘게 걸립니다.
+- 결과 파일을 `eval/results/`에 두고 커밋하면 판 사이의 비교가 됩니다. 판이 다른 결과 파일은 채점 규칙이 달라 그대로 비교할 수 없으므로
+  `python3 scripts/rescore-planner.py eval/golden/planner.json "0.7.0"=<결과> "0.8.0"=<결과> --md <표.md>`로 같은 규칙(0.8.0 골든셋)으로 다시 채점합니다.
+- 실엔진 CI 잡(`tests/real_engine.rs`)은 가중치가 무작위인 초소형 모델이라 해석의 옳고 그름은 보지 못합니다. 대신 0.8.0부터 **문법이 강제하는 키 순서**
+  (`summary`가 먼저, op는 `op`가 먼저)를 실제 llama-server로 확인합니다.
 
 #### 골든 항목 형식과 판정 규칙
 
@@ -74,16 +103,22 @@ cargo run -p doculens-eval -- planner --golden eval/golden/planner.json \
   파라미터 이름·값은 부록 D(`planner/schema.rs`의 `OP_SPECS`)의 직렬화 이름을 씁니다(`fn`, `ref`, `theme: "high-contrast"` …).
 - 항목에 `"context": { … }`를 주면 그 항목만 공용 컨텍스트의 **최상위 키를 덮어써서** 실행합니다(예: 비교 명령에
   `{"selected_doc_ids": ["d1a2", "d7f3"]}` — 선택이 없는 컨텍스트에서는 "2건 이상 선택하세요" 되묻기가 정답이므로).
+- 0.8.0에서 더해진 기대값(모두 선택): `expected.confirm`(`true` = 확인 카드를 거쳐야 함, `false` = 확인 없이 실행되어야 함),
+  `expected.unmet`(`true` = 플랜이 반영하지 못한 부분을 `unmet`에 적어야 함), `expected.alt`(똑같이 옳은 다른 플랜들 — 이 가운데 하나만 맞아도 정답;
+  예: 메일 발송 요청은 "합계만 구하고 `unmet`에 메일을 적는 플랜"과 "되묻기"가 모두 옳다).
+- 항목의 `"kind"`(`chat` | `question` | `command` | `setting`)는 종류별 집계에 쓰입니다. 적지 않으면 기대 플랜에서 정합니다(`answer{mode: chat}`·`noop` → 대화,
+  `answer`·`explain`·`summarize`·`compare`·`search` → 질문, `set_*` → 설정, 그 밖 → 명령). 반례 항목은 직접 적습니다(예: "UI 배율이 뭐야?"는 기대 플랜이 답변이지만 종류는 설정).
 - 기대값은 **규칙 출력이 아니라 사람이 기대하는 플랜**입니다. 그래서 규칙 경로의 정확도는 100%가 아니며, 불일치 목록이 규칙
   개선 작업 목록이 됩니다. 일부 항목은 의도적으로 경계 사례입니다(`ko-32` 열린 견적서에 대한 질문은 집계가 아니라 답변,
-  `ko-19` 잡담은 `noop`, `ko-70` 대상 없는 삭제는 `clarify`).
+  `ko-19` 잡담은 한 줄 답변, `ko-70` 대상 없는 삭제는 `clarify`). 0.8.0의 규칙 경로는 154/163이고, 남은 9건은 모델이 있어야 풀리는 항목입니다
+  (대화·일반 질문의 구분 5건, `unmet` 1건, 붙여 넣은 글 1건, 복합 문장 1건, 태그 범위 1건).
 - **원인 분류**(결과 JSON `cause`, 보고서 묶음): `no_rule` 규칙 없음(모델 필요) · `rule_clarified` 규칙이 되묻기로 후퇴 ·
   `over_interpretation` 과잉 해석(되묻기·무시가 정답) · `wrong_ops` 의도·연산 오판 · `params` 파라미터 누락·오류 ·
-  `scope` 범위 오류.
-- 덮는 연산 종류(0.7.0 기준): `OpKind::ALL` 63종 가운데 59종. `manage_template`·`merge`·`remove_from_project`·`workspace`는 아직
+  `scope` 범위 오류 · `confirmation` 확인 여부나 `unmet` 표시가 다름.
+- 덮는 연산 종류(0.8.0 기준): `OpKind::ALL` 63종 가운데 59종. `manage_template`·`merge`·`remove_from_project`·`workspace`는 아직
   골든 항목이 없습니다. 파라미터는 `expected.params`를 적은 항목만 검사하므로 연산 종류만 채점하는 항목이 섞여 있습니다(P6에서
   들어온 `draft_document`·`define_rule`·`check_consistency` 등의 항목은 대부분 그렇습니다). 설계 예시 명령 12종(`docs/user-pc-checklist.md` P5)은 모두
-  포함되어 있습니다(`note: "설계 예시 n"`). <!-- 0.8.0: 리드가 갱신 -->
+  포함되어 있습니다(`note: "설계 예시 n"`). 0.8.0에 더한 34건은 `note`가 "0.8.0"으로 시작합니다.
 
 #### 회귀 게이트
 
