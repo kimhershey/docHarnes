@@ -1863,7 +1863,12 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   변경 직후 수 밀리초 안에 창을 닫으면 잃을 수 있음(KNO-9 잔여). ⑯ 쓰지 않는 번역 키 `planner.ui.inbox_watch_on/off`.
 - **진행 기록**: 사용자가 작업 도중 PR #26으로 `release/0.8.0`(5c2cc30)을 `main`에 병합(45a2c1b) → `main` CI run 42983528996의 Web 잡이 `e2e/planner.spec.ts` 되묻기 테스트에서 실패. 원인은 테스트(플랜 카드 3개를 기대했으나 집계의 플랜 카드까지 4개가 맞고,
   새 카드가 도착하기 직전에 검사가 돌 때만 통과) — bcd2447에서 수정. 브랜치는 병합된 `main`에서 다시 시작했고(같은 이름), 그 뒤의 작업(화면 후속 25항목 병합 f4dbe66, 실측 반영 3ace0ef)은 PR #27. 같은 종류의 간헐 실패 2건(`planner.spec.ts` 새로 고침 테스트, `smoke.spec.ts` 테마 단축키)도 테스트에서 고침.
-<!-- 0.8.0-RELEASE-RECORD -->
+- **릴리스 기록(2026-11-11)**: 최종 커밋 **d002079**(코드는 3ace0ef, 그 위에 문서) — CI run 42992119115(push) 7개 잡 통과(3ace0ef는 run 42991891006, 되묻기 테스트 수정 bcd2447은 run 42989989599).
+  설치파일: Actions "Windows installer (manual)" run **42993106705**(`--ref release/0.8.0`, `ref=d002079…`, `variant=lite`, `publish=true`) 성공 → **Release v0.8.0** 게시(태그 `v0.8.0` = d002079, 2026-11-11T09:27:56Z).
+  자산: `DocuLens-Setup-Lite-0.8.0-x64.exe` 51,402,789 B, `.sha256`(43578a8670fc7352065c12639bbe9f34c2563d0d5143aa42ca2a27b9731870ea — GitHub가 계산한 자산 다이제스트와 일치), `THIRD-PARTY-NOTICES.md`, `sbom.cdx.json`. 설치·실행은 하지 않았다.
+  `main`: 사용자가 PR #26(5c2cc30까지; CI의 Web 잡이 되묻기 테스트로 실패)과 PR #27(d002079까지)을 병합 — 병합 커밋 69adf24의 CI run 42993194709 7개 잡 통과. `release/0.8.0`은 그 뒤 `main`에서 다시 시작했고 이 기록 커밋만 앞서 있다(다음 PR 때 함께 병합).
+- **사용자 결정(2026-11-11, 릴리스 뒤)**: PKG-1에 대해 "앞으로 lite 만 쓸려고" — Full 설치파일·CUDA 팩은 더 만들지 않는다. 이미 게시된 자산(v0.2.0의 Full 설치파일, v0.1.0의 CUDA 팩)은 그대로 두었고(내리라는 지시 없음), 문서의 "NVIDIA PC는 v0.1.0의 CUDA 팩" 안내도 그대로다 —
+  Lite 전용으로 굳히려면 그 안내와 `release-windows.yml`의 `full` 변형·`cuda-packs.yml`을 정리하는 것이 다음 일이다(앱 EULA는 그러면 필요 없음).
 
 ### 테스트·검증
 
