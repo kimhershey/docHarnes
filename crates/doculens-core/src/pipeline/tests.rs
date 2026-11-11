@@ -1198,3 +1198,46 @@ fn split_and_merge_write_a_purged_converted_pdf_again() {
     let merged = super::split::merge_documents(&deps, &[w.doc(&id), w.doc(&parts[0])], Some("합본"), None).unwrap();
     assert_eq!(lopdf::Document::load(w.paths.root.join(&w.doc(&merged).rel_path)).unwrap().get_pages().len(), 3 + 1);
 }
+
+/// Audit PIP-4: "이 값으로 복원" on a history entry of an earlier extraction run changed the field
+/// row of that old run — the toast said restored, the value on screen (latest run) stayed.
+#[test]
+fn restore_applies_to_the_field_of_the_latest_run() {
+    let w = World::new();
+    w.add_doc("r1", "receipt.pdf", SourceKind::Pdf, &[None]);
+    w.chat.push("classify", classify_reply("receipt", 0));
+    w.chat.push_ocr(RECEIPT_OCR);
+    w.chat.push("kie_receipt", receipt_kie());
+    let deps = w.deps(None);
+    let req = ProcessRequest { document_ids: vec!["r1".into()], ..Default::default() };
+    run::process(&deps, &req, &mut |_| {}).unwrap();
+    let field = |w: &World, path: &str| w.fields("r1").into_iter().find(|f| f.path == path).unwrap();
+    let first = field(&w, "approval_no");
+    review::apply(&w.db, &[first.id], &ReviewAction::Correct { value: "87654321".into() }, None).unwrap();
+    let change = w.db.with(|c| repo::field_history(c, "r1")).unwrap().remove(0);
+    assert_eq!((change.field_id, change.old_value.as_deref()), (first.id, Some("12345678")));
+
+    // The document is extracted again: a new run with its own field rows and another value.
+    let mut again = receipt_kie();
+    again["approval_no"] = sv("99999999", "카드 승인 99999999", 60);
+    w.chat.push("kie_receipt", again);
+    run::process(&deps, &req, &mut |_| {}).unwrap();
+    let latest = field(&w, "approval_no");
+    assert_ne!(latest.id, first.id);
+    assert_eq!(latest.value.as_deref(), Some("99999999"));
+
+    // Restoring the old entry now changes what the user looks at: the latest run's field.
+    let restored = review::restore(&w.db, change.id).unwrap();
+    assert_eq!((restored.id, restored.run_id.as_str()), (latest.id, latest.run_id.as_str()));
+    assert_eq!(field(&w, "approval_no").value.as_deref(), Some("12345678"));
+    assert_eq!(field(&w, "approval_no").status, FieldStatus::Corrected);
+    let old_row = w.db.with(|c| repo::get_field(c, first.id)).unwrap().unwrap();
+    assert_eq!(old_row.value.as_deref(), Some("87654321"), "the old run's row is history, not a target");
+    let newest = w.db.with(|c| repo::field_history(c, "r1")).unwrap().remove(0);
+    assert_eq!((newest.field_id, newest.note.as_deref()), (latest.id, Some("restored")));
+
+    // A path the latest run no longer has (another schema) cannot be restored.
+    w.db.with(|c| c.execute("UPDATE fields SET path = 'gone', key = 'gone' WHERE id = ?1", [latest.id])).unwrap();
+    let err = review::restore(&w.db, change.id).unwrap_err();
+    assert!(err.to_string().contains("field_not_found"), "{err}");
+}
