@@ -1770,6 +1770,9 @@ mod exec_tests {
         assert!(ex.steps[0].error.as_deref().unwrap().contains("없는 템플릿"), "{:?}", ex.steps[0]);
         assert_eq!(w.db.with(|c| projects_repo::get_template(c, &tpl.id)).unwrap().unwrap().rules.len(), 1);
     }
+
+    /// 0.8.0 audit fixes in the executor and its previews: `tests/exec_tests/audit_fixes.rs`.
+    mod audit_fixes;
 }
 
 #[test]
