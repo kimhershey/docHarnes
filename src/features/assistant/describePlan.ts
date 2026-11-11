@@ -5,6 +5,7 @@
 
 import type { TFunction } from "i18next";
 
+import type { UiOpResult } from "@/lib/commands";
 import { settingSpec } from "@/lib/settingsCatalog";
 import {
   FOLDER_TEMPLATES,
@@ -20,6 +21,7 @@ import {
   type Draft,
   type ExportPreview,
   type ExportResult,
+  type GroupBy,
   type Op,
   type OpKind,
   type OrganizeItem,
@@ -100,9 +102,41 @@ export interface SummaryContext {
   context?: PlanContext | null;
 }
 
+/** "월별" / "거래처별" / "유형별" / "프로젝트별" (null for no grouping). */
+function groupLabel(group: GroupBy | null | undefined, t: TFunction): string | null {
+  switch (group) {
+    case "month":
+      return t("planner.params.group_month");
+    case "vendor":
+      return t("planner.params.group_vendor");
+    case "doc_type":
+      return t("planner.params.group_doc_type");
+    case "project":
+      return t("planner.params.group_project");
+    default:
+      return null;
+  }
+}
+
+/** A file-name / folder template with its variables named in words: `documents/{{year}}/{{doc_type}}` → `documents/<연도>/<유형>`. */
+export function readableTemplate(template: string, t: TFunction): string {
+  return template.replace(/\{\{\s*([A-Za-z_]+)\s*\}\}/g, (_match, name: string) => `<${t(`organize.variables.${name}`, { defaultValue: name })}>`);
+}
+
+/**
+ * Where a file op puts the documents, in words (UI-15: the card showed `documents/{{doc_type}} · group_by=doc_type`):
+ * "유형별 폴더(documents/<유형>)" when the folder is the grouping's own, else "폴더 <path>".
+ */
+function folderLabel(folder: string | null | undefined, group: GroupBy | null | undefined, t: TFunction): string | null {
+  if (!folder) return null;
+  const path = readableTemplate(folder, t);
+  const grouped = group && FOLDER_TEMPLATES[group] === folder ? groupLabel(group, t) : null;
+  return grouped ? t("planner.params.folder_grouped", { group: grouped, path }) : t("planner.params.folder_template", { path });
+}
+
 /**
  * One-line parameter summary of a plan step ("스키마 영수증 · 필드 11개",
- * "documents/{{year}}/{{month}}/{{doc_type}} · group_by=month").
+ * "월별 폴더(documents/<연도>/<월>/<유형>)").
  */
 export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: "ko" }): string {
   const lang = ctx.lang;
@@ -113,7 +147,7 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
       return joinParts([
         source === "folder" ? pt("source_folder", { path: op.path ?? "" }) : source === "files" ? pt("source_files") : pt("source_inbox"),
         op.recursive ? pt("recursive") : null,
-        op.auto_pipeline ? pt("auto_pipeline", { level: op.auto_pipeline }) : null,
+        op.auto_pipeline ? pt("auto_pipeline", { level: t(`settings.processing.auto_levels.${op.auto_pipeline === "classify" ? "classify_only" : op.auto_pipeline}`) }) : null,
       ]);
     }
     case "set_inbox_watch":
@@ -143,7 +177,7 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
         op.action === "correct" && op.field ? `${op.field} = ${op.value ?? ""}` : null,
       ]);
     case "reindex":
-      return op.scope ? pt("scope", { scope: op.scope }) : "";
+      return op.scope ? pt(`reindex_${op.scope}`) : "";
     case "search":
       return joinParts([`'${op.query}'`, op.mode ? t(`search.mode.${op.mode}`) : null, op.top_k ? pt("top_k", { count: op.top_k }) : null]);
     case "answer":
@@ -151,15 +185,15 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
     case "summarize":
       return joinParts([op.target ? pt(op.target) : null, op.length ? pt(op.length) : null]);
     case "aggregate":
-      return joinParts([t(`planner.fn.${op.fn}`), op.field ?? null, op.group_by && op.group_by !== "none" ? pt("group_by", { value: op.group_by }) : null, op.include_unreviewed ? pt("include_unreviewed") : null]);
+      return joinParts([t(`planner.fn.${op.fn}`), op.field ?? null, groupLabel(op.group_by, t), op.include_unreviewed ? pt("include_unreviewed") : null]);
     case "organize": {
       const folder = op.folder_template ?? (op.group_by ? FOLDER_TEMPLATES[op.group_by] : null);
-      return joinParts([op.template ?? null, folder, op.group_by ? pt("group_by", { value: op.group_by }) : null, op.only_reviewed === false ? pt("with_unreviewed") : null, op.dry_run ? pt("dry_run") : null]);
+      return joinParts([op.template ? pt("name_template", { template: readableTemplate(op.template, t) }) : null, folderLabel(folder, op.group_by, t), op.only_reviewed === false ? pt("with_unreviewed") : null, op.dry_run ? pt("dry_run") : null]);
     }
     case "rename":
-      return joinParts([op.template, op.only_reviewed === false ? pt("with_unreviewed") : null]);
+      return joinParts([pt("name_template", { template: readableTemplate(op.template, t) }), op.only_reviewed === false ? pt("with_unreviewed") : null]);
     case "move":
-      return joinParts([op.folder, op.group_by ? pt("group_by", { value: op.group_by }) : null, op.only_reviewed === false ? pt("with_unreviewed") : null]);
+      return joinParts([folderLabel(op.folder, op.group_by, t), op.only_reviewed === false ? pt("with_unreviewed") : null]);
     case "tag":
       return joinParts([op.add && op.add.length > 0 ? `+${op.add.join(", ")}` : null, op.remove && op.remove.length > 0 ? `−${op.remove.join(", ")}` : null]);
     case "delete":
@@ -170,7 +204,7 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
         op.path ?? pt("default_path"),
         op.columns && op.columns.length > 0 ? pt("columns", { count: op.columns.length }) : null,
         op.layout ? pt(`layout_${op.layout}`) : null,
-        op.include && op.include.length > 0 ? pt("include", { list: op.include.join(", ") }) : null,
+        op.include && op.include.length > 0 ? pt("include", { list: op.include.map((column) => t(`export.columns.${column}`)).join(", ") }) : null,
         op.target && op.target !== "fields" ? pt(`target_${op.target}`) : null,
       ]);
     case "draft_document": {
@@ -241,7 +275,7 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
     case "manage_reference":
       return joinParts([pt(`reference_${op.action}`), op.group ?? (op.project ? pt("project_group", { name: projectName(op.project, ctx.context, t) }) : null), op.name ? `→ '${op.name}'` : null]);
     case "define_term":
-      return joinParts([pt(`term_${op.action}`), `'${op.term}'`, op.definition ? truncate(op.definition, 40) : null, op.synonyms && op.synonyms.length > 0 ? pt("synonyms", { count: op.synonyms.length }) : null]);
+      return joinParts([pt(`term_${op.action ?? "save"}`), `'${op.term}'`, op.definition ? truncate(op.definition, 40) : null, op.synonyms && op.synonyms.length > 0 ? pt("synonyms", { count: op.synonyms.length }) : null]);
     case "set_version":
       return op.clear ? pt("version_clear") : joinParts([op.group_key ? `'${op.group_key}'` : null, op.label ?? null, op.effective_date ?? null, op.latest === false ? pt("version_old") : op.latest ? pt("version_latest") : null]);
     case "update_project": {
@@ -253,7 +287,7 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
     case "remove_from_project":
       return joinParts([projectName(op.project, ctx.context, t), op.doc_ids && op.doc_ids.length > 0 ? pt("documents_count", { count: op.doc_ids.length }) : pt("scope_documents")]);
     case "manage_template":
-      return joinParts([pt(`template_${op.action}`), op.template ? projectTemplateName(op.template, t) : op.name ? `'${op.name}'` : null, op.doc_types_required && op.doc_types_required.length > 0 ? pt("required_types", { count: op.doc_types_required.length }) : null]);
+      return joinParts([pt(`template_${op.action ?? "save"}`), op.template ? projectTemplateName(op.template, t) : op.name ? `'${op.name}'` : null, op.doc_types_required && op.doc_types_required.length > 0 ? pt("required_types", { count: op.doc_types_required.length }) : null]);
     case "classify_projects":
       return joinParts([op.apply ? pt("classify_apply") : pt("classify_preview"), op.use_model ? pt("with_model") : null]);
     case "manage_schema":
@@ -329,9 +363,18 @@ export interface AgentStepDetail {
   openProject?: string | null;
 }
 
+/**
+ * How many entries the list `record[key]` has — or had: a card that was too large to store whole keeps the
+ * first rows of a long list and the number of all of them in `<key>_total` (`storedMessage`, CON-16).
+ */
+export function listTotal(record: Record<string, unknown>, key: string): number {
+  const list = record[key];
+  return Math.max(Array.isArray(list) ? list.length : 0, num(record[`${key}_total`]));
+}
+
 export function agentStepDetail(op: OpKind, payload: unknown, t: TFunction): AgentStepDetail | null {
   if (!isRecord(payload)) return null;
-  const docs = Array.isArray(payload.documents) ? payload.documents.length : null;
+  const docs = Array.isArray(payload.documents) ? listTotal(payload, "documents") : null;
   const dt = (key: string, vars?: Record<string, unknown>) => t(`planner.result.detail.${key}`, vars);
   switch (op) {
     case "rotate":
@@ -340,10 +383,10 @@ export function agentStepDetail(op: OpKind, payload: unknown, t: TFunction): Age
       return { text: dt("rerender", { documents: docs ?? 0 }) };
     case "split": {
       const created = Array.isArray(payload.created) ? (payload.created as unknown[]).map(String) : [];
-      return { text: dt("split", { count: created.length }), openDocument: created[0] ?? null };
+      return { text: dt("split", { count: listTotal(payload, "created") }), openDocument: created[0] ?? null };
     }
     case "merge":
-      return { text: dt("merge", { count: Array.isArray(payload.sources) ? payload.sources.length : 0 }), openDocument: str(payload.document_id) };
+      return { text: dt("merge", { count: listTotal(payload, "sources") }), openDocument: str(payload.document_id) };
     case "set_title":
       return { text: dt("set_title", { documents: docs ?? 0 }) };
     case "edit_text":
@@ -354,8 +397,11 @@ export function agentStepDetail(op: OpKind, payload: unknown, t: TFunction): Age
       const group = isRecord(payload.group) ? str(payload.group.name) : null;
       return { text: dt("manage_reference", { action: t(`planner.params.reference_${String(payload.action ?? "")}`), group: group ?? "", documents: docs ?? 0 }) };
     }
-    case "define_term":
-      return { text: dt("define_term", { action: t(`planner.params.term_${String(payload.action ?? "save")}`), term: str(payload.term) ?? "" }) };
+    case "define_term": {
+      // `exec.rs` sends the glossary entry (`term: { id, term, definition, synonyms }`); a bare string is accepted too.
+      const term = isRecord(payload.term) ? str(payload.term.term) : str(payload.term);
+      return { text: dt("define_term", { action: t(`planner.params.term_${String(payload.action ?? "save")}`), term: term ?? "" }) };
+    }
     case "set_version":
       return { text: dt("set_version", { documents: docs ?? 0, group: str(payload.group_key) ?? "" }) };
     case "update_project": {
@@ -370,8 +416,12 @@ export function agentStepDetail(op: OpKind, payload: unknown, t: TFunction): Age
       const tpl = isRecord(payload.template) ? payload.template : null;
       return { text: dt("manage_template", { action: t(`planner.params.template_${String(payload.action ?? "save")}`), name: tpl ? (str(tpl.name_ko) ?? "") : "" }) };
     }
-    case "classify_projects":
-      return { text: dt(payload.applied != null ? "classify_applied" : "classify_preview", { suggested: num(payload.suggested), applied: num(payload.applied) }) };
+    case "classify_projects": {
+      // `exec.rs`: `applied` is always a number (0 for a run that only suggests); a run that assigned carries
+      // its `apply_result`. Without that key (older payloads) a null `applied` meant "suggestions only".
+      const assigned = "apply_result" in payload ? payload.apply_result != null : payload.applied != null;
+      return { text: dt(assigned ? "classify_applied" : "classify_preview", { suggested: num(payload.suggested), applied: num(payload.applied) }) };
+    }
     case "manage_schema": {
       const schema = isRecord(payload.schema) ? payload.schema : null;
       return { text: dt("manage_schema", { action: t(`planner.params.schema_${String(payload.action ?? "")}`), name: schema ? (str(schema.name) ?? "") : "" }) };
@@ -475,7 +525,13 @@ export function uiContextFor(
 // ---------------------------------------------------------------------------
 
 export interface OrganizePreviewRows {
+  /** The rows to show: files that move or are held back. */
   items: OrganizeItem[];
+  /**
+   * How many such rows the plan has. More than `items` on a card that was stored with the first rows of its
+   * lists only (`storedMessage`): the counters are those of the whole plan.
+   */
+  total: number;
   moves: number;
   held: number;
   unchanged: number;
@@ -484,7 +540,8 @@ export interface OrganizePreviewRows {
 export function organizePreview(step: StepPreview | undefined): OrganizePreviewRows | null {
   if (!step || !isRecord(step.payload) || !Array.isArray(step.payload.items)) return null;
   const p = step.payload as unknown as OrganizePlan;
-  return { items: p.items.filter((i) => i.status === "move" || i.status === "held"), moves: num(p.moves), held: num(p.held), unchanged: num(p.unchanged) };
+  const items = p.items.filter((i) => i.status === "move" || i.status === "held");
+  return { items, total: Math.max(items.length, num(p.moves) + num(p.held)), moves: num(p.moves), held: num(p.held), unchanged: num(p.unchanged) };
 }
 
 export function exportPreview(step: StepPreview | undefined): ExportPreview | null {
@@ -595,6 +652,8 @@ export interface OrganizeOutcome {
   held: number;
   failed: number;
   items: OrganizeItem[];
+  /** How many rows the step reported (more than `items` on a card stored with the first rows only). */
+  total: number;
 }
 
 export interface ResultActions {
@@ -667,8 +726,9 @@ export function deriveResultActions(execution: PlanExecution, plan: Plan): Resul
             batchId: str(payload.batch_id),
             moved: num(payload.moved),
             held: num(payload.held),
-            failed: Array.isArray(payload.failed) ? payload.failed.length : num(payload.failed),
+            failed: Array.isArray(payload.failed) ? listTotal(payload, "failed") : num(payload.failed),
             items: (payload.items as unknown[]).filter(isRecord) as unknown as OrganizeItem[],
+            total: listTotal(payload, "items"),
           });
         }
         break;
@@ -742,4 +802,24 @@ export function deriveResultActions(execution: PlanExecution, plan: Plan): Resul
 
 export function isPlanExecution(v: unknown): v is PlanExecution {
   return isRecord(v) && Array.isArray(v.steps) && Array.isArray(v.ui_actions) && Array.isArray(v.batches);
+}
+
+/**
+ * The outcome of each step's UI action, by step index. The executor leaves UI ops to the UI: it lists
+ * them in `ui_actions` in step order and marks their steps `ui` (`skipped` for clarify / noop), so the
+ * k-th result belongs to the k-th such step.
+ */
+export function uiResultsByStep(execution: PlanExecution, results: UiOpResult[] | null | undefined): Map<number, UiOpResult> {
+  const out = new Map<number, UiOpResult>();
+  if (!results || results.length === 0) return out;
+  let k = 0;
+  for (const step of execution.steps) {
+    const result = results[k];
+    if (!result) break;
+    const handedOver = step.status === "ui" || (step.status === "skipped" && (step.op === "clarify" || step.op === "noop"));
+    if (!handedOver || result.op !== step.op) continue;
+    out.set(step.index, result);
+    k += 1;
+  }
+  return out;
 }

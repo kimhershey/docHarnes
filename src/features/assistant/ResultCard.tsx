@@ -12,15 +12,17 @@ import { openCitation } from "@/features/knowledge/AnswersPanel";
 import { RuleSummary } from "@/features/projects/RuleGrid";
 import { verdictVariant } from "@/features/projects/rules";
 import { hitHref } from "./evidence";
-import { runJournal } from "@/lib/commands";
+import { runJournal, type UiOpResult } from "@/lib/commands";
 import { revealPath } from "@/lib/ipc";
 import { SCREEN_ROUTES, type Draft, type OpKind, type OrganizeItem, type Plan, type PlanExecution, type PlanResponse, type StepStatus, type UndoReport } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import type { Clipped } from "@/stores/assistant";
 import { useGenerateStore } from "@/stores/generate";
 import { usePipelineStore } from "@/stores/pipeline";
 
 import { AggregateCard } from "./AggregateCard";
-import { agentStepDetail, aggregateRequestFor, deriveResultActions, opLabel } from "./describePlan";
+import { ClippedNote } from "./ClippedNote";
+import { agentStepDetail, aggregateRequestFor, deriveResultActions, opLabel, uiResultsByStep } from "./describePlan";
 
 function StatusIcon({ status }: { status: StepStatus }) {
   switch (status) {
@@ -39,8 +41,15 @@ function StatusIcon({ status }: { status: StepStatus }) {
 function MovesTable({ items }: { items: OrganizeItem[] }) {
   const { t } = useTranslation();
   return (
-    <table className="w-full text-xs" data-testid="result-moves">
+    // Fixed layout like the plan card's preview: long paths wrap inside their cells instead of widening the card (UI-2).
+    <table className="w-full table-fixed text-xs" data-testid="result-moves">
       <caption className="sr-only">{t("planner.result.moves_caption")}</caption>
+      <colgroup>
+        <col />
+        <col className="w-6" />
+        <col />
+        <col className="w-24" />
+      </colgroup>
       <thead className="sr-only">
         <tr>
           <th scope="col">{t("planner.card.columns.from")}</th>
@@ -52,11 +61,11 @@ function MovesTable({ items }: { items: OrganizeItem[] }) {
       <tbody>
         {items.map((item, i) => (
           <tr key={`${item.doc_id}-${i}`} className="border-t border-border align-top" data-item-status={item.status}>
-            <td className="truncate py-0.5 pr-2 font-mono text-[0.6875rem] selectable" title={item.from}>
+            <td className="break-all py-0.5 pr-2 font-mono text-[0.6875rem] selectable" title={item.from}>
               {item.from}
             </td>
             <td className="py-0.5 pr-2 text-fg-subtle">→</td>
-            <td className="truncate py-0.5 pr-2 font-mono text-[0.6875rem] selectable" title={item.to ?? ""}>
+            <td className="break-all py-0.5 pr-2 font-mono text-[0.6875rem] selectable" title={item.to ?? ""}>
               {item.to ?? "—"}
             </td>
             <td className="py-0.5">
@@ -98,7 +107,26 @@ function AgentStepLine({ op, payload }: { op: OpKind; payload: unknown }) {
  * then the actions the payloads allow — review queue, move log, undo, export
  * folder, search hits, answers / summaries and aggregate results.
  */
-export function ResultCard({ execution, plan, response, error }: { execution: PlanExecution; plan: Plan; response: PlanResponse | null; error?: string | null }) {
+export function ResultCard({
+  execution,
+  plan,
+  response,
+  error,
+  uiResults,
+  clipped,
+}: {
+  execution: PlanExecution;
+  plan: Plan;
+  response: PlanResponse | null;
+  error?: string | null;
+  /** What became of the execution's `ui_actions` (absent until the UI ran them): a failed one fails its step and the card. */
+  uiResults?: UiOpResult[] | null;
+  /**
+   * The card was read back from a copy stored smaller than it was (CON-16): it says so, and as a record
+   * (`all` — the document ids of the plan's scope are a count) it does not offer to count anything again.
+   */
+  clipped?: Clipped;
+}) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [showMoves, setShowMoves] = useState(false);
@@ -107,9 +135,13 @@ export function ResultCard({ execution, plan, response, error }: { execution: Pl
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const draftJobRunning = useDraftJobRunning();
   const actions = deriveResultActions(execution, plan);
-  const outcome = execution.cancelled ? "cancelled" : actions.failed || error ? "failed" : "done";
+  const uiByStep = uiResultsByStep(execution, uiResults);
+  const uiFailed = (uiResults ?? []).some((r) => !r.ok);
+  const outcome = execution.cancelled ? "cancelled" : actions.failed || error || uiFailed ? "failed" : "done";
   const undoBatch = actions.batches[actions.batches.length - 1] ?? null;
   const moveItems = actions.organise.flatMap((o) => o.items);
+  // The number of files, also when the card holds the first rows only.
+  const moveTotal = actions.organise.reduce((n, o) => n + o.total, 0);
   const context = response?.context ?? null;
 
   const undo = async () => {
@@ -150,26 +182,38 @@ export function ResultCard({ execution, plan, response, error }: { execution: Pl
         <span className="text-xs text-fg-subtle">{t("planner.result.title")}</span>
       </div>
       <ol className="flex flex-col gap-1" aria-label={t("planner.card.steps")}>
-        {execution.steps.map((step) => (
-          <li key={step.index} className="flex items-start gap-2" data-testid={`result-step-${step.index}`} data-step-status={step.status}>
-            <span className="mt-0.5 shrink-0">
-              <StatusIcon status={step.status} />
-            </span>
-            <div className="flex min-w-0 flex-1 flex-col">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium">{opLabel(step.op, t)}</span>
-                {step.summary && <span className="text-fg-muted selectable">{step.summary}</span>}
-                {(step.status === "skipped" || step.status === "cancelled" || step.status === "ui") && <span className="text-xs text-fg-subtle">{t(`planner.result.status.${step.status}`)}</span>}
+        {execution.steps.map((step) => {
+          // A step the executor left to the UI is `ui` whatever the UI made of it: once the UI has run it, its
+          // own outcome is the step's mark (a failed UI op used to keep the ✓, PLN-17).
+          const ui = uiByStep.get(step.index) ?? null;
+          const shown: StepStatus = ui && step.status === "ui" ? (ui.ok ? "done" : "failed") : step.status;
+          return (
+            <li key={step.index} className="flex items-start gap-2" data-testid={`result-step-${step.index}`} data-step-status={step.status} data-ui-status={ui ? (ui.ok ? "done" : "failed") : undefined}>
+              <span className="mt-0.5 shrink-0">
+                <StatusIcon status={shown} />
+              </span>
+              <div className="flex min-w-0 flex-1 flex-col">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{opLabel(step.op, t)}</span>
+                  {step.summary && <span className="text-fg-muted selectable">{step.summary}</span>}
+                  {ui?.ok && ui.summary && <span className="text-fg-muted selectable">{ui.summary}</span>}
+                  {(step.status === "skipped" || step.status === "cancelled" || (step.status === "ui" && !ui)) && <span className="text-xs text-fg-subtle">{t(`planner.result.status.${step.status}`)}</span>}
+                </div>
+                {step.error && (
+                  <span className="text-xs text-danger selectable" role="alert">
+                    {t("planner.result.step_failed", { error: step.error })}
+                  </span>
+                )}
+                {ui && !ui.ok && (
+                  <span className="text-xs text-danger selectable" role="alert" data-testid="result-ui-error">
+                    {t("planner.result.step_failed", { error: ui.error ?? "" })}
+                  </span>
+                )}
+                {step.status === "done" && <AgentStepLine op={step.op} payload={step.payload} />}
               </div>
-              {step.error && (
-                <span className="text-xs text-danger selectable" role="alert">
-                  {t("planner.result.step_failed", { error: step.error })}
-                </span>
-              )}
-              {step.status === "done" && <AgentStepLine op={step.op} payload={step.payload} />}
-            </div>
-          </li>
-        ))}
+            </li>
+          );
+        })}
       </ol>
       {error && !actions.failed && (
         <p className="text-xs text-danger selectable" role="alert">
@@ -186,7 +230,7 @@ export function ResultCard({ execution, plan, response, error }: { execution: Pl
           )}
           {moveItems.length > 0 && (
             <Button size="sm" variant="outline" aria-pressed={showMoves} onClick={() => setShowMoves((v) => !v)} data-testid="result-toggle-moves">
-              {t("planner.result.moves")} ({moveItems.length})
+              {t("planner.result.moves")} ({moveTotal})
             </Button>
           )}
           {undoBatch && (
@@ -245,7 +289,8 @@ export function ResultCard({ execution, plan, response, error }: { execution: Pl
         </div>
       ))}
       {actions.aggregates.map((a) => (
-        <AggregateCard key={a.index} result={a.result} request={a.op ? aggregateRequestFor(a.op, plan.scope, a.result.include_unreviewed) : null} summary={plan.summary ?? execution.steps[a.index]?.summary ?? ""} context={context} />
+        // Counting again takes the plan's scope: not offered on a record, whose document ids are a count.
+        <AggregateCard key={a.index} result={a.result} request={a.op && clipped !== "all" ? aggregateRequestFor(a.op, plan.scope, a.result.include_unreviewed) : null} summary={plan.summary ?? execution.steps[a.index]?.summary ?? ""} context={context} />
       ))}
       {actions.drafts.map((d) => (
         <div key={d.index} className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-bg p-2 text-xs" data-testid="result-draft">
@@ -307,6 +352,7 @@ export function ResultCard({ execution, plan, response, error }: { execution: Pl
           </Button>
         </div>
       ))}
+      <ClippedNote clipped={clipped} />
       <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
     </div>
   );

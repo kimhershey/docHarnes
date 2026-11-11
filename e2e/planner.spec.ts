@@ -22,23 +22,40 @@ async function send(page: Page, text: string) {
 }
 
 /** Runs 표준 처리 on the (already imported) receipt from the library bulk bar; the selection is cleared again. */
-async function processReceipt(page: Page) {
-  const select = page.getByTestId(`doc-select-${await docId(page, "견적서-1p.jpg")}`);
+async function processReceipt(page: Page, name = "견적서-1p.jpg") {
+  const select = page.getByTestId(`doc-select-${await docId(page, name)}`);
   await select.check();
   await page.getByTestId("library-process").click();
   await page.getByTestId("library-process-standard").click();
-  await expect(card(page, "견적서-1p.jpg")).toHaveAttribute("data-doc-status", "extracted", { timeout: 15_000 });
+  await expect(card(page, name)).toHaveAttribute("data-doc-status", "extracted", { timeout: 15_000 });
   await select.uncheck();
 }
 
 /** Approves every flagged field of the receipt in the review queue so the file operations may move it. */
-async function approveReceipt(page: Page) {
+async function approveReceipt(page: Page, name = "견적서-1p.jpg") {
   await page.getByTestId("nav-review").click();
   await expect(page.getByTestId("page-review")).toBeVisible();
   await page.getByTestId("review-approve-doc").click();
   await expect(page.getByTestId("review-empty")).toBeVisible();
   await page.getByTestId("nav-library").click();
-  await expect(card(page, "견적서-1p.jpg")).toHaveAttribute("data-doc-status", "reviewed");
+  await expect(card(page, name)).toHaveAttribute("data-doc-status", "reviewed");
+}
+
+/**
+ * Horizontal overflow of the assistant's message list (UI-2; `e2e/scale.spec.ts` checks the other screens):
+ * the list's scroll width against its width, the cards that reach past its right edge and the document root.
+ */
+async function assistantOverflow(page: Page) {
+  return page.evaluate(() => {
+    const list = document.querySelector<HTMLElement>('[data-testid="assistant-messages"]')!;
+    const right = list.getBoundingClientRect().right;
+    const cards = [...list.querySelectorAll<HTMLElement>('[data-testid^="assistant-card-"]')];
+    return {
+      list: list.scrollWidth - list.clientWidth,
+      cardsPastEdge: cards.filter((c) => c.getBoundingClientRect().right > right + 0.5).map((c) => c.dataset.testid),
+      root: document.documentElement.scrollWidth - window.innerWidth,
+    };
+  });
 }
 
 /** Plans without side effects run at once; otherwise approve the plan card. Resolves once the card reports done. */
@@ -136,6 +153,8 @@ test.describe("P5 planner", () => {
     await expect(plan).toHaveAttribute("data-plan-status", "pending");
     await expect(plan).toHaveAttribute("data-plan-active", "true");
     await expect(plan).toContainText(ko.planner.ops.move);
+    // UI-15: the step names the grouping and the folder in words, not `documents/{{year}}/… · group_by=month`.
+    await expect(plan.getByTestId("plan-step-params-0")).toHaveText(tpl(ko.planner.params.folder_grouped, { group: ko.planner.params.group_month, path: "documents/<연도>/<월>/<유형>" }));
     await expect(plan.getByTestId("plan-only-reviewed")).toBeVisible();
     await expect(plan.getByTestId("plan-impact")).toContainText(tpl(ko.planner.card.impact_moves, { count: 1 }));
     const row = plan.locator('[data-testid="plan-preview-row"][data-item-status="move"]').first();
@@ -173,6 +192,306 @@ test.describe("P5 planner", () => {
     await undo.click();
     await expect(page.getByTestId("toaster")).toContainText(tpl(ko.palette.undo_done, { restored: 1, skipped: 0 }), { timeout: 10_000 });
     await expect(undo).toBeDisabled();
+  });
+
+  // UI-2: a file-op plan lists paths; a long file name made the preview table — and with it the card and the
+  // whole message list — wider than the column (2,036 px in an 832 px column; at 150 % even ordinary names).
+  test("plan and result cards with a long file path stay inside the message column at 100 % and 150 %", async ({ page }) => {
+    test.setTimeout(60_000);
+    const name = "견적서-한빛소프트웨어-차세대-통합-문서관리-시스템-구축-사업-2차-수정-최종본-검토용-사본-1p.jpg";
+    const none = { list: 0, cardsPastEdge: [], root: 0 };
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, [`D:\\scan\\${name}`], { autoLevel: "none" });
+    await processReceipt(page, name);
+    await approveReceipt(page, name);
+
+    await openAssistant(page);
+    await send(page, "견적서 월별 폴더로 옮겨");
+    const plan = assistantCard(page, "plan").last();
+    await expect(plan).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    const row = plan.locator('[data-testid="plan-preview-row"][data-item-status="move"]').first();
+    await expect(row).toContainText(name);
+    // The whole path is in the row (wrapped) and in the cell's title.
+    await expect(row.locator("td").first()).toHaveAttribute("title", `documents/${name}`);
+    expect(await assistantOverflow(page)).toEqual(none);
+
+    // 150 %: every rem grows, the column gets narrower. (Enter, not the send button: a toast may lie over it.)
+    const sendByEnter = async (text: string) => {
+      await page.getByTestId("assistant-input").fill(text);
+      await page.getByTestId("assistant-input").press("Enter");
+    };
+    await sendByEnter("UI 배율 150%로");
+    await expect(assistantCard(page, "executed").last()).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator("html")).toHaveCSS("font-size", "24px");
+    await expect.poll(() => assistantOverflow(page)).toEqual(none);
+
+    // The result card's move log has the same paths.
+    await plan.getByTestId("plan-execute").click();
+    const result = assistantCard(page, "result").last();
+    await expect(result).toBeVisible({ timeout: 20_000 });
+    await result.getByTestId("result-toggle-moves").click();
+    await expect(result.getByTestId("result-moves")).toContainText(name);
+    await expect.poll(() => assistantOverflow(page)).toEqual(none);
+    await sendByEnter("UI 배율 100%로");
+    await expect(page.locator("html")).toHaveCSS("font-size", "16px");
+    await expect.poll(() => assistantOverflow(page)).toEqual(none);
+  });
+
+  // KNO-9: the card's state used to be written 300 ms after it changed, so a reload (or a workspace switch /
+  // the app closing) inside that window restored the finished plan as "승인 대기" — runnable again.
+  test("a plan that finished right before a reload is restored as executed, not as waiting for approval", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서-1p.jpg"], { autoLevel: "none" });
+    await processReceipt(page);
+    await approveReceipt(page);
+
+    await openAssistant(page);
+    await send(page, "견적서 월별 폴더로 옮겨");
+    const plan = assistantCard(page, "plan").last();
+    await expect(plan).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    await plan.getByTestId("plan-execute").click();
+    await expect(plan).toHaveAttribute("data-plan-status", "done", { timeout: 15_000 });
+    // No pause before the reload.
+    await page.reload();
+    await expect(page.getByTestId("app-shell")).toBeVisible();
+    await openAssistant(page);
+    const restored = assistantCard(page, "plan").last();
+    await expect(restored).toHaveAttribute("data-plan-status", "done", { timeout: 15_000 });
+    await expect(restored.getByTestId("plan-execute")).toHaveCount(0);
+    // Ctrl+Enter finds no plan waiting: the move does not run a second time.
+    await expect(assistantCard(page, "execution")).toHaveCount(1);
+    await page.getByTestId("assistant-messages").click();
+    await page.keyboard.press("Control+Enter");
+    await page.waitForTimeout(500);
+    await expect(assistantCard(page, "execution")).toHaveCount(1);
+    await expect(assistantCard(page, "plan")).toHaveCount(1);
+  });
+
+  // PLN-7: a command that changes documents but names none is answered with "어떤 문서를 … (전체면 '전부')".
+  // The plan made from the reply "전부" could not run: execution checked the scope against the original
+  // sentence, which does not say "전부". The card keeps the 되묻기 text and sends it along (`planned_text`).
+  test("a plan made by answering the scope question with '전부' can run", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서-1p.jpg", "D:\\scan\\개발계약서-2p.pdf"], { autoLevel: "none" });
+    await openAssistant(page);
+
+    // No selection, folder or type: the planner asks which documents.
+    await send(page, "태그 '긴급' 달아줘");
+    const first = assistantCard(page, "clarify").last();
+    await expect(first).toHaveAttribute("data-clarify-status", "pending", { timeout: 15_000 });
+    await expect(first.getByTestId("clarify-question")).toContainText("전부");
+    // A reply that does not name the whole library is asked again (the question's own "전부" does not count).
+    await first.getByTestId("clarify-reply").fill("그냥 해줘");
+    await first.getByTestId("clarify-ask-back").click();
+    await expect(assistantCard(page, "clarify")).toHaveCount(2, { timeout: 15_000 });
+    const second = assistantCard(page, "clarify").last();
+    await expect(second).toHaveAttribute("data-clarify-status", "pending");
+    await expect(assistantCard(page, "plan")).toHaveCount(0);
+
+    // "전부": the plan covers the library and runs.
+    await second.getByTestId("clarify-reply").fill("전부");
+    await second.getByTestId("clarify-ask-back").click();
+    const plan = assistantCard(page, "plan").last();
+    await expect(plan).toBeVisible({ timeout: 15_000 });
+    await approveIfPending(page, plan);
+    await expect(plan.getByTestId("plan-errors")).toHaveCount(0);
+    const result = assistantCard(page, "result").last();
+    await expect(result).toHaveAttribute("data-result-status", "done", { timeout: 15_000 });
+    await expect(result.getByTestId("result-step-0")).toHaveAttribute("data-step-status", "done");
+  });
+
+  // CON-12: clearing a required value in the plan editor sent a plan the IPC layer cannot read — a raw English
+  // "invalid args … missing field `days`" instead of a field error.
+  test("a required value cleared in the plan editor is a field error on the card, not a raw error", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openAssistant(page);
+    await send(page, "대화 기록 무기한 보관");
+    const plan = assistantCard(page, "plan").last();
+    await expect(plan).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    await plan.getByTestId("plan-edit").click();
+    const days = plan.getByTestId("plan-editor-param-0-days");
+    await expect(days).toHaveValue("-1");
+    await days.fill("");
+    await expect(days).toHaveAttribute("data-missing", "true");
+    await plan.getByTestId("plan-execute").click();
+    const errors = plan.getByTestId("plan-errors");
+    await expect(errors).toBeVisible();
+    await expect(errors).toContainText(ko.planner.editor.required_missing.replace("{{label}}", ""));
+    await expect(errors).toContainText("operations[0].days");
+    await expect(plan).toHaveAttribute("data-plan-status", "pending");
+    await expect(page.getByTestId("toaster")).not.toContainText("missing field");
+    await expect(assistantCard(page, "result")).toHaveCount(0);
+
+    // Filling the field clears the error; a day count — or -1 (무기한) again — can be typed and the plan runs.
+    await days.fill("30");
+    await expect(days).toHaveValue("30");
+    await expect(errors).toBeHidden();
+    await days.fill("-1");
+    await expect(days).toHaveValue("-1");
+    await expect(days).not.toHaveAttribute("data-missing", "true");
+    await expect(errors).toBeHidden();
+    await plan.getByTestId("plan-execute").click();
+    await expect(plan).toHaveAttribute("data-plan-status", "done", { timeout: 15_000 });
+    const result = assistantCard(page, "result").last();
+    await expect(result).toHaveAttribute("data-result-status", "done", { timeout: 15_000 });
+    await expect(result.getByTestId("result-step-0")).toHaveAttribute("data-ui-status", "done");
+  });
+
+  // PLN-14: the card kept the numbers of the plan as interpreted ("휴지통 이동 1건 · 대상 문서 1건") after the
+  // scope was widened in the editor — the approval then covered more documents than the card said.
+  test("a plan edited on its card shows the numbers of the edited plan", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서-1p.jpg", "D:\\scan\\개발계약서-2p.pdf"], { autoLevel: "none" });
+    // Classify both documents so each carries its type (the plan's scope is `doc_type = estimate`).
+    for (const name of ["견적서-1p.jpg", "개발계약서-2p.pdf"]) await page.getByTestId(`doc-select-${await docId(page, name)}`).check();
+    await page.getByTestId("library-process").click();
+    await page.getByTestId("library-process-standard").click();
+    await expect(card(page, "개발계약서-2p.pdf")).toHaveAttribute("data-doc-status", "extracted", { timeout: 15_000 });
+    for (const name of ["견적서-1p.jpg", "개발계약서-2p.pdf"]) await page.getByTestId(`doc-select-${await docId(page, name)}`).uncheck();
+
+    await openAssistant(page);
+    await send(page, "견적서 삭제해줘");
+    const plan = assistantCard(page, "plan").last();
+    await expect(plan).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    const impact = plan.getByTestId("plan-impact");
+    const line = (count: number) => tpl(ko.planner.card.impact, { effects: tpl(ko.planner.card.impact_delete, { count }), count });
+    await expect(impact).toHaveAttribute("data-preview", "planned");
+    await expect(impact).toHaveText(line(1));
+
+    // The type filter is taken off: both documents are in scope, and the card says so.
+    await plan.getByTestId("plan-edit").click();
+    await plan.getByTestId("plan-editor-scope-doc-type").click();
+    await page.getByRole("option", { name: ko.planner.scope.any }).click();
+    await expect(impact).toHaveAttribute("data-preview", "edited", { timeout: 10_000 });
+    await expect(impact).toHaveText(line(2));
+    await expect(plan.getByTestId("plan-step-0")).toContainText(tpl(ko.planner.card.step_delete, { count: 2 }));
+
+    // The edited plan and its numbers survive a restart of the app.
+    await page.waitForTimeout(600);
+    await page.reload();
+    await expect(page.getByTestId("app-shell")).toBeVisible();
+    await openAssistant(page);
+    const restored = assistantCard(page, "plan").last();
+    await expect(restored).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    await expect(restored.getByTestId("plan-impact")).toHaveAttribute("data-preview", "edited");
+    await expect(restored.getByTestId("plan-impact")).toHaveText(line(2));
+
+    // Back to the interpreted scope (the editor is restored open): the planner's own numbers again.
+    await expect(restored.getByTestId("plan-editor")).toBeVisible();
+    await restored.getByTestId("plan-editor-scope-doc-type").click();
+    await page.getByRole("option", { name: "견적서", exact: true }).click();
+    await expect(restored.getByTestId("plan-impact")).toHaveAttribute("data-preview", "planned");
+    await expect(restored.getByTestId("plan-impact")).toHaveText(line(1));
+    await restored.getByTestId("plan-cancel").click();
+    await expect(restored).toHaveAttribute("data-plan-status", "cancelled");
+
+    // A file op: the receipt waits for review, so the plan as interpreted holds it back. Switching "검토
+    // 미완료 문서는 이동하지 않음" off is an edit like any other — the diff and the counts are those of the new plan.
+    await send(page, "견적서 월별 폴더로 옮겨");
+    const move = assistantCard(page, "plan").last();
+    await expect(move).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    const step = move.getByTestId("plan-step-0");
+    await expect(step).toContainText(tpl(ko.planner.card.organize_summary, { moves: 0, held: 1, unchanged: 0 }));
+    await expect(move.getByTestId("plan-only-reviewed")).toHaveAttribute("aria-checked", "true");
+    await move.getByTestId("plan-only-reviewed").click();
+    await expect(move.getByTestId("plan-impact")).toHaveAttribute("data-preview", "edited", { timeout: 10_000 });
+    await expect(step).toContainText(tpl(ko.planner.card.organize_summary, { moves: 1, held: 0, unchanged: 0 }));
+    await expect(move.getByTestId("plan-impact")).toContainText(tpl(ko.planner.card.impact_moves, { count: 1 }));
+    await expect(move.locator('[data-testid="plan-preview-row"][data-item-status="move"]')).toHaveCount(1);
+    // A folder template the preview cannot render: the step says why instead of keeping the last diff.
+    await move.getByTestId("plan-edit").click();
+    await move.getByTestId("plan-editor-param-0-folder").fill("documents/{{nope}}");
+    await expect(move.getByTestId("plan-preview-error-0")).toContainText(tpl(ko.organize.errors.template_variable, { vars: "nope" }), { timeout: 10_000 });
+    await expect(move.locator('[data-testid="plan-preview-row"]')).toHaveCount(0);
+    await move.getByTestId("plan-cancel").click();
+  });
+
+  // CON-16: a plan card over thousands of files is more than the 2,000,000 bytes a stored message may have;
+  // it is stored with the first rows of its lists and the counts of all (`storedMessage`, covered by the store
+  // tests). Read back, the card shows the numbers of the whole plan and can still be approved.
+  test("a plan card read back from a smaller stored copy shows the counts of the whole plan", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서-1p.jpg"], { autoLevel: "none" });
+    await processReceipt(page);
+    await approveReceipt(page);
+    await openAssistant(page);
+    await send(page, "견적서 월별 폴더로 옮겨");
+    await expect(assistantCard(page, "plan").last()).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    await page.waitForTimeout(500);
+    // The stored copy of the same plan over 6,000 files, as `storedMessage` writes it: 200 rows, the totals beside them.
+    await page.evaluate(() => {
+      type Row = { payload: { kind?: string; clipped?: string; response: { preview: { document_count: number; document_ids: string[]; document_ids_total?: number; steps: { payload: { items: { doc_id: string; from: string }[]; items_total?: number; moves: number } }[] } } } };
+      const all = JSON.parse(localStorage.getItem("doculens.mock.chat") ?? "{}") as Record<string, { messages: Record<string, Row[]> }>;
+      for (const workspace of Object.values(all)) {
+        for (const row of Object.values(workspace.messages).flat()) {
+          const p = row.payload;
+          if (p.kind !== "plan") continue;
+          const payload = p.response.preview.steps[0]!.payload;
+          const first = payload.items[0]!;
+          payload.items = Array.from({ length: 200 }, (_, i) => (i === 0 ? first : { ...first, doc_id: `${first.doc_id}-${i}`, from: first.from.replace(".jpg", `-${i}.jpg`) }));
+          payload.items_total = 6000;
+          payload.moves = 6000;
+          p.response.preview.document_count = 6000;
+          p.response.preview.document_ids_total = 6000;
+          p.clipped = "lists";
+        }
+      }
+      localStorage.setItem("doculens.mock.chat", JSON.stringify(all));
+    });
+    await page.reload();
+    await expect(page.getByTestId("app-shell")).toBeVisible();
+    await openAssistant(page);
+    const plan = assistantCard(page, "plan").last();
+    await expect(plan).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    await expect(plan.getByTestId("plan-step-0")).toContainText(tpl(ko.planner.card.organize_summary, { moves: 6000, held: 0, unchanged: 0 }));
+    await expect(plan.getByTestId("plan-preview-count")).toHaveText(tpl(ko.planner.card.preview_count, { shown: 3, total: 6000 }));
+    await expect(plan.getByTestId("plan-impact")).toContainText(tpl(ko.planner.card.impact_moves, { count: 6000 }));
+    await expect(plan.getByTestId("card-clipped")).toHaveText(ko.assistant.clipped.lists);
+    await plan.getByTestId("plan-preview-expand").click();
+    await expect(plan.getByTestId("plan-preview-count")).toHaveText(tpl(ko.planner.card.preview_count, { shown: 200, total: 6000 }));
+    await expect(plan.getByTestId("plan-preview-row")).toHaveCount(200);
+    // The plan itself was stored whole: it runs (over the one file this workspace really has).
+    await plan.getByTestId("plan-execute").click();
+    await expect(plan).toHaveAttribute("data-plan-status", "done", { timeout: 15_000 });
+    await expect(assistantCard(page, "result").last()).toHaveAttribute("data-result-status", "done", { timeout: 20_000 });
+  });
+
+  // KNO-11: the execution card reported a finished job to the page every time it mounted, so the failure
+  // toast of an old job came back whenever its chat was opened again.
+  test("a failed job is announced once: reopening its chat does not toast again", async ({ page }) => {
+    // The mock's engine is off: a plan that needs the model fails as a job without a result.
+    await freshApp(page, { "doculens.mock.vision": "engine_off" });
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서-1p.jpg"], { autoLevel: "none" });
+    await page.getByTestId(`doc-select-${await docId(page, "견적서-1p.jpg")}`).check();
+    await openAssistant(page);
+    await page.getByTestId("assistant-scope").click();
+    await page.getByTestId("assistant-scope-selection").click();
+    await send(page, "선택 문서 요약");
+    const execution = assistantCard(page, "execution").last();
+    await expect(execution).toHaveAttribute("data-job-state", "failed", { timeout: 15_000 });
+    await expect(execution.getByTestId("execution-outcome")).toContainText(ko.errors.engine_not_running);
+    const failureToasts = page.getByTestId("toaster").getByRole("status").filter({ hasText: ko.errors.engine_not_running });
+    await expect(failureToasts).toHaveCount(1);
+    await failureToasts.getByRole("button", { name: "dismiss" }).click();
+    await expect(failureToasts).toHaveCount(0);
+
+    // Another chat and back: the card mounts again on the job that already failed.
+    const sessions = page.locator('[data-testid="assistant-sessions"] [data-session-id]');
+    await page.getByTestId("assistant-new-chat").click();
+    await expect(sessions).toHaveCount(2);
+    await expect(assistantCard(page, "execution")).toHaveCount(0);
+    await sessions.filter({ hasText: "선택 문서 요약" }).locator("button").first().click();
+    await expect(assistantCard(page, "execution").last()).toHaveAttribute("data-job-state", "failed", { timeout: 15_000 });
+    await expect(assistantCard(page, "execution").last().getByTestId("execution-outcome")).toContainText(ko.errors.engine_not_running);
+    await page.waitForTimeout(500);
+    await expect(failureToasts).toHaveCount(0);
   });
 
   test("되묻기 replies with the question's context; 취소 (button or typed) drops pending cards by rule", async ({ page }) => {

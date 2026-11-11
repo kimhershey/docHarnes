@@ -1717,13 +1717,15 @@ export type Op =
   | { op: "set_role"; role: RoleChoice }
   // §1.2 reference material
   | { op: "manage_reference"; action: ReferenceAction; group?: string | null; name?: string | null; project?: string | null }
-  | { op: "define_term"; action: TermAction; term: string; definition?: string | null; synonyms?: string[] }
+  /** `action` defaults to `save` in the core (the plan editor may leave it out). */
+  | { op: "define_term"; action?: TermAction; term: string; definition?: string | null; synonyms?: string[] }
   | { op: "set_version"; group_key?: string | null; label?: string | null; effective_date?: string | null; latest?: boolean | null; clear?: boolean | null }
   // §1.3 projects
   | { op: "update_project"; project?: string | null; name?: string | null; template?: string | null; start_date?: string | null; end_date?: string | null; owner?: string | null; intake_no?: string | null; notes?: string | null; keywords?: string[]; inbox_folder?: string | null }
   | { op: "delete_project"; project?: string | null }
   | { op: "remove_from_project"; project?: string | null; doc_ids?: string[] }
-  | { op: "manage_template"; action: TemplateAction; template?: string | null; name?: string | null; doc_types_required?: string[]; description?: string | null }
+  /** `action` defaults to `save` in the core. */
+  | { op: "manage_template"; action?: TemplateAction; template?: string | null; name?: string | null; doc_types_required?: string[]; description?: string | null }
   | { op: "classify_projects"; apply?: boolean | null; use_model?: boolean | null }
   // §1.4 forms
   | { op: "manage_schema"; action: SchemaAction; schema: string; name?: string | null }
@@ -1901,6 +1903,23 @@ export interface PlanExecution {
   /** Journal batch ids created (undo entry points). */
   batches: string[];
   restored_paths?: string[];
+}
+
+/** `planner_execute` arguments (`ExecuteArgs` in `src-tauri/src/commands/planner.rs`). */
+export interface ExecuteArgs {
+  /** The plan as the card shows it (confirmed, possibly edited). */
+  plan: Plan;
+  /** The user's sentence: the job's label. */
+  text: string;
+  context?: UiPlanContext;
+  /**
+   * The text the plan was made from, when that is not `text` itself: after a 되묻기 the planner read
+   * `askBackText(original, question, reply)` — the original sentence, the assistant's question and the
+   * user's reply. What execution re-checks against the user's words (the "전부" that allows a plan without
+   * a scope, PLN-7) must be checked against this text, or a plan the user approved cannot run. Absent /
+   * null: the plan was made from `text`.
+   */
+  planned_text?: string | null;
 }
 
 export interface ExecuteResponse {

@@ -28,6 +28,15 @@ describe("conversationTurns", () => {
     ]);
   });
 
+  it("remembers a UI op that failed as failed", () => {
+    const messages: Message[] = [
+      { id: 1, role: "user", text: "워크스페이스 D:\\NoSuch 열어" },
+      { id: 2, role: "assistant", kind: "executed", text: "워크스페이스 D:\\NoSuch을(를) 엽니다", source: "모델", confidence: 0.9, failures: ["워크스페이스로 사용할 수 없는 경로입니다"], ran: 0 },
+      { id: 3, role: "user", text: "다음" },
+    ];
+    expect(conversationTurns(messages)[1]).toEqual({ role: "assistant", text: "워크스페이스 D:\\NoSuch을(를) 엽니다 ✖ 워크스페이스로 사용할 수 없는 경로입니다" });
+  });
+
   it("keeps only the last turns and clips long ones", () => {
     const messages: Message[] = Array.from({ length: 12 }, (_, i) => ({ id: i, role: "user", text: `질문 ${i} ${"가".repeat(600)}` }) as Message);
     messages.push({ id: 99, role: "assistant", kind: "executed", text: "끝", source: "", confidence: 1 });

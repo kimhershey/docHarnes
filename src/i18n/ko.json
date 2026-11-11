@@ -229,7 +229,6 @@
   },
   "assistant": {
     "title": "AI 어시스턴트",
-    "new_chat": "새 대화",
     "sessions": {
       "title": "채팅",
       "new": "새 채팅",
@@ -239,7 +238,8 @@
       "untitled": "새 채팅",
       "empty": "채팅이 없습니다.",
       "messages": "메시지 {{count}}개",
-      "menu": "{{title}} 메뉴"
+      "menu": "{{title}} 메뉴",
+      "load_failed": "이 채팅의 대화를 불러오지 못했습니다. 불러올 때까지는 메시지를 보낼 수 없습니다."
     },
     "scope": {
       "label": "범위",
@@ -263,6 +263,12 @@
     "help_title": "도움말",
     "help_body": "자연어로 명령하면 플랜 카드(단계 · 영향 범위 · 미리보기)를 만들고 승인 후 실행합니다. 예: inbox 처리, 지난달 영수증 합계, 세금계산서 → 엑셀, 영수증 월별 폴더로 옮겨, 선택 문서 요약, 방금 이름 바꾼 거 되돌려. 바로 실행되는 명령: /테마 다크|라이트|시스템|고대비, /언어 한국어|영어, /열기 <화면>, /작업 일시정지, /되돌리기. 질문하면 참고 자료에서 근거를 찾아 문장별 출처와 함께 답합니다. Ctrl+Enter 승인 · Esc 취소 · Ctrl+Z 되돌리기.",
     "executed": "실행했습니다",
+    "executed_partial": "일부만 실행했습니다",
+    "executed_failed": "실행하지 못했습니다",
+    "clipped": {
+      "lists": "카드가 커서 목록은 앞부분만 보관했습니다. 건수는 전체 기준입니다.",
+      "all": "카드가 너무 커서 요약만 보관했습니다. 문서 목록이 일부뿐이라 이 카드에서 다시 실행하거나 계산할 수 없습니다."
+    },
     "date_resolved": "날짜 범위 해석: {{from}} ~ {{to}} ({{label}})",
     "source_slash": "슬래시 명령",
     "source_phrase": "문장 규칙",
@@ -410,13 +416,21 @@
       "only_low_confidence": "저신뢰 필드만",
       "only_failed": "검증 실패 필드만",
       "only_all": "전체 필드",
-      "scope": "범위: {{scope}}",
+      "reindex_fts": "키워드 색인",
+      "reindex_vec": "의미(벡터) 색인",
+      "reindex_all": "전체 색인",
       "top_k": "결과 {{count}}개",
       "each_doc": "문서별",
       "set": "묶음 하나로",
       "short": "짧게",
       "long": "길게",
-      "group_by": "group_by={{value}}",
+      "group_month": "월별",
+      "group_vendor": "거래처별",
+      "group_doc_type": "유형별",
+      "group_project": "프로젝트별",
+      "folder_grouped": "{{group}} 폴더({{path}})",
+      "folder_template": "폴더 {{path}}",
+      "name_template": "파일명 {{template}}",
       "include_unreviewed": "검토 대기 포함",
       "with_unreviewed": "검토 미완료 포함",
       "dry_run": "미리보기만",
@@ -425,6 +439,7 @@
       "default_path": "(기본 경로)",
       "columns": "열 {{count}}개",
       "layout_sheet_per_type": "유형별 시트",
+      "layout_sheet_per_project": "프로젝트별 시트",
       "layout_single": "시트 하나",
       "include": "공통 열: {{list}}",
       "target_fields": "필드",
@@ -553,7 +568,8 @@
       "step": "{{index}}. {{op}}",
       "param_default": "(기본)",
       "list_hint": "쉼표로 구분",
-      "scalar_hint": "문자열 · 숫자 · true/false"
+      "scalar_hint": "문자열 · 숫자 · true/false",
+      "required_missing": "필수 값이 비어 있습니다: {{label}}"
     },
     "card": {
       "title": "플랜",
@@ -588,6 +604,9 @@
       "cancelled": "취소됨",
       "invalid": "플랜을 실행할 수 없습니다. 수정 후 다시 시도하세요.",
       "preview_error": "미리보기 갱신 실패: {{message}}",
+      "preview_refreshing": "수정한 플랜의 미리보기를 다시 계산하는 중…",
+      "step_documents": "문서 {{count}}건",
+      "step_delete": "문서 {{count}}건 휴지통으로",
       "preview_caption": "정리 미리보기 (원본 → 대상)",
       "columns": {
         "from": "원본",

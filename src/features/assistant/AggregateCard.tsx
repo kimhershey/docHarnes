@@ -11,7 +11,7 @@ import { api } from "@/lib/ipc";
 import { SCREEN_ROUTES, type AggregateRequest, type AggregateResult, type PlanContext } from "@/lib/types";
 import { useUiStore } from "@/stores/ui";
 
-import { aggregateIsAmount, docTypeName, formatAggregateValue, formatAmount } from "./describePlan";
+import { aggregateIsAmount, docTypeName, formatAggregateValue, formatAmount, listTotal } from "./describePlan";
 
 /**
  * Aggregate result card (design §3.7.6 bottom right): date range + basis,
@@ -92,7 +92,8 @@ export function AggregateCard({
           </Button>
         )}
         <Button size="sm" variant={showDocs ? "secondary" : "ghost"} aria-pressed={showDocs} onClick={() => setShowDocs((v) => !v)} disabled={result.documents.length === 0} data-testid="aggregate-toggle-documents">
-          {t("planner.aggregate.documents")} ({result.documents.length})
+          {/* The number of documents, also on a card that was stored with the first rows of the list only (CON-16). */}
+          {t("planner.aggregate.documents")} ({listTotal(result as unknown as Record<string, unknown>, "documents")})
         </Button>
       </div>
       {showGroups && result.groups.length > 0 && (

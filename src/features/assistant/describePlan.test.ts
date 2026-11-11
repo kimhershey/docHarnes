@@ -6,9 +6,10 @@ import { describe, expect, it } from "vitest";
 
 import en from "@/i18n/en.json";
 import ko from "@/i18n/ko.json";
+import type { UiOpResult } from "@/lib/commands";
 import type { CheckRun, Draft, DraftOutcome, Plan, PlanContext, PlanExecution, PlanPreview, PlanResponse, Project, ProjectDetail, RuleDraft } from "@/lib/types";
 
-import { deriveResultActions, formatAmount, impactLine, impactOf, isPlanExecution, onlyReviewedValue, opLabel, planKind, projectName, requiresConfirmation, ruleDraftPreview, summarizeOp, uiContextFor, withOnlyReviewed } from "./describePlan";
+import { agentStepDetail, deriveResultActions, formatAmount, impactLine, impactOf, isPlanExecution, listTotal, onlyReviewedValue, opLabel, organizePreview, planKind, projectName, requiresConfirmation, ruleDraftPreview, summarizeOp, uiContextFor, uiResultsByStep, withOnlyReviewed } from "./describePlan";
 import { OP_KINDS, OP_SPECS, UI_OPS } from "./opSpecs";
 
 const instance = i18next.createInstance();
@@ -54,10 +55,26 @@ describe("summarizeOp", () => {
   it("describes extract / organise / export like the design rows", () => {
     expect(summarizeOp({ op: "extract", schema_ref: "s1", fields: ["a", "b", "c"] }, t, ctx)).toBe("스키마 영수증 · 필드 3개");
     expect(summarizeOp({ op: "extract" }, t, ctx)).toBe("자동(유형별 스키마) · 전체 필드");
-    expect(summarizeOp({ op: "organize", group_by: "month" }, t, ctx)).toBe("documents/{{year}}/{{month}}/{{doc_type}} · group_by=month");
-    expect(summarizeOp({ op: "move", folder: "documents/{{year}}", only_reviewed: false }, t, ctx)).toBe("documents/{{year}} · 검토 미완료 포함");
-    expect(summarizeOp({ op: "export", format: "xlsx", path: "exports/a.xlsx", columns: ["x"], include: ["status"] }, t, ctx)).toBe("XLSX · exports/a.xlsx · 열 1개 · 공통 열: status");
-    expect(summarizeOp({ op: "aggregate", fn: "sum", field: "total", group_by: "month" }, t, ctx)).toBe("합계 · total · group_by=month");
+    // UI-15: no internal notation on the card (`documents/{{doc_type}} · group_by=doc_type`) — the grouping and
+    // the template variables are named in words.
+    expect(summarizeOp({ op: "organize", group_by: "month" }, t, ctx)).toBe("월별 폴더(documents/<연도>/<월>/<유형>)");
+    expect(summarizeOp({ op: "organize", group_by: "doc_type" }, t, ctx)).toBe("유형별 폴더(documents/<유형>)");
+    expect(summarizeOp({ op: "organize", template: "{{year}}-{{month}}_{{vendor}}", folder_template: "archive/{{project}}", group_by: "month", dry_run: true }, t, ctx)).toBe("파일명 <연도>-<월>_<거래처> · 폴더 archive/<프로젝트> · 미리보기만");
+    expect(summarizeOp({ op: "move", folder: "documents/{{year}}", only_reviewed: false }, t, ctx)).toBe("폴더 documents/<연도> · 검토 미완료 포함");
+    expect(summarizeOp({ op: "move", folder: "documents/{{vendor}}/{{doc_type}}", group_by: "vendor" }, t, ctx)).toBe("거래처별 폴더(documents/<거래처>/<유형>)");
+    expect(summarizeOp({ op: "rename", template: "{{title}}_{{seq}}" }, t, ctx)).toBe("파일명 <제목>_<순번>");
+    expect(summarizeOp({ op: "export", format: "xlsx", path: "exports/a.xlsx", columns: ["x"], include: ["status"] }, t, ctx)).toBe("XLSX · exports/a.xlsx · 열 1개 · 공통 열: 상태");
+    expect(summarizeOp({ op: "aggregate", fn: "sum", field: "total", group_by: "month" }, t, ctx)).toBe("합계 · total · 월별");
+    expect(summarizeOp({ op: "aggregate", fn: "count", group_by: "none" }, t, ctx)).toBe("건수");
+    expect(summarizeOp({ op: "import", source: "inbox", auto_pipeline: "classify" }, t, ctx)).toBe("inbox/ · 자동 처리: 분류까지");
+    expect(summarizeOp({ op: "reindex", scope: "vec" }, t, ctx)).toBe("의미(벡터) 색인");
+    const en_ = instance.getFixedT("en");
+    expect(summarizeOp({ op: "organize", group_by: "project" }, en_, { lang: "en", context })).toBe("folders per project (documents/<Project>/<Type>)");
+    // No step summary shows a raw `{{variable}}` or `key=value`.
+    for (const op of [{ op: "organize", group_by: "vendor" }, { op: "move", folder: "x/{{unknown_var}}" }, { op: "rename", template: "{{name}}.{{ext}}" }] as const) {
+      const text = summarizeOp(op as never, t, ctx);
+      expect(text, text).not.toMatch(/\{\{|=/);
+    }
   });
   it("describes the P6 ops (drafts, projects, rules, retention)", () => {
     expect(summarizeOp({ op: "draft_document", form_ref: "quotation", content: "노트북 10대 견적", sources: ["a", "b"], output: "pdf" }, t, ctx)).toBe("양식 견적서 · 노트북 10대 견적 · 인용 문서 2건 · PDF");
@@ -179,6 +196,101 @@ describe("result actions", () => {
 });
 
 // The P6 ops in the shapes `exec.rs` really sends (review H1), plus the bare shapes the browser mock used to send.
+// CON-9 / CON-10: the detail line of an agent step reads the payload `planner/exec.rs` sends.
+describe("agentStepDetail", () => {
+  it("classify_projects: a run that only suggests is not shown as '배정 0건'", () => {
+    // `exec.rs`: `applied` is 0 (not null) without an assignment; `apply_result` is null.
+    const suggested = { suggested: 3, undecided: 1, applied: 0, suggestions: [], apply_result: null };
+    expect(agentStepDetail("classify_projects", suggested, t)?.text).toBe("제안 3건 — 프로젝트 화면에서 적용");
+    const assigned = { suggested: 3, undecided: 1, applied: 2, suggestions: [], apply_result: { added: 2, already: 0, project_ids: ["p1"] } };
+    expect(agentStepDetail("classify_projects", assigned, t)?.text).toBe("제안 3건 · 배정 2건");
+    // Payloads without `apply_result` (stored cards of 0.7.0, the old mock): null = suggestions only.
+    expect(agentStepDetail("classify_projects", { suggested: 3, applied: null }, t)?.text).toBe("제안 3건 — 프로젝트 화면에서 적용");
+    expect(agentStepDetail("classify_projects", { suggested: 3, applied: 2 }, t)?.text).toBe("제안 3건 · 배정 2건");
+  });
+
+  it("define_term: the term comes from the glossary entry the executor sends", () => {
+    const entry = { id: 7, term: "공급가액", definition: "부가세를 뺀 금액", synonyms: ["net amount"], created_at: "", updated_at: "" };
+    expect(agentStepDetail("define_term", { action: "save", term: entry }, t)?.text).toBe("용어 저장 · '공급가액'");
+    expect(agentStepDetail("define_term", { action: "delete", term: entry }, t)?.text).toBe("용어 삭제 · '공급가액'");
+    // A bare string still works.
+    expect(agentStepDetail("define_term", { action: "save", term: "합계" }, t)?.text).toBe("용어 저장 · '합계'");
+  });
+});
+
+// CON-16: a card that was too large to store whole is read back with the first rows of its lists and
+// `<list>_total` next to them — the numbers on the card are those of the whole.
+describe("lists of a card stored smaller", () => {
+  const rows = (n: number, status: "move" | "held" | "done") => Array.from({ length: n }, (_, i) => ({ doc_id: `d${i}`, name: `f${i}.pdf`, from: `inbox/f${i}.pdf`, to: `documents/f${i}.pdf`, status }));
+
+  it("listTotal: the list's length, or the total kept beside a cut list", () => {
+    expect(listTotal({ documents: ["a", "b"] }, "documents")).toBe(2);
+    expect(listTotal({ documents: ["a", "b"], documents_total: 6000 }, "documents")).toBe(6000);
+    expect(listTotal({}, "documents")).toBe(0);
+  });
+
+  it("the plan preview counts every row, not only the ones kept", () => {
+    const step = { index: 0, op: "move" as const, summary: "", payload: { items: [...rows(150, "move"), ...rows(50, "held")], items_total: 6000, moves: 5800, held: 200, unchanged: 0 }, confirm: true };
+    const preview = organizePreview(step)!;
+    expect(preview.items).toHaveLength(200);
+    expect(preview).toMatchObject({ total: 6000, moves: 5800, held: 200 });
+    expect(impactOf(plan([{ op: "move", folder: "x" }]), { document_count: 6000, document_ids: [], steps: [step], requires_confirmation: true })).toMatchObject({ documents: 6000, moves: 5800 });
+    // A whole preview: the total is the rows it shows.
+    expect(organizePreview({ ...step, payload: { items: [...rows(2, "move"), { ...rows(1, "move")[0]!, status: "unchanged" }], moves: 2, held: 0, unchanged: 1 } })).toMatchObject({ total: 2 });
+  });
+
+  it("the result card counts every moved file and every document of a step", () => {
+    const execution: PlanExecution = {
+      steps: [
+        { index: 0, op: "move", status: "done", summary: "", payload: { batch_id: "b1", moved: 5990, held: 0, failed: rows(10, "done"), failed_total: 10, items: rows(200, "done"), items_total: 6000 }, elapsed_ms: 1 },
+        { index: 1, op: "rotate", status: "done", summary: "", payload: { documents: ["a", "b"], documents_total: 6000, degrees: 90 }, elapsed_ms: 1 },
+      ],
+      cancelled: false,
+      documents: [],
+      ui_actions: [],
+      batches: ["b1"],
+    };
+    const actions = deriveResultActions(execution, plan([{ op: "move", folder: "x" }, { op: "rotate", degrees: 90 }]));
+    expect(actions.organise[0]).toMatchObject({ total: 6000, moved: 5990, failed: 10, batchId: "b1" });
+    expect(actions.organise[0]!.items).toHaveLength(200);
+    expect(agentStepDetail("rotate", execution.steps[1]!.payload, t)?.text).toContain("6000");
+  });
+});
+
+// PLN-17: the UI runs the steps the executor leaves to it; what became of each is shown on its step.
+describe("uiResultsByStep", () => {
+  const step = (index: number, op: PlanExecution["steps"][number]["op"], status: PlanExecution["steps"][number]["status"]): PlanExecution["steps"][number] => ({ index, op, status, summary: "", payload: null, elapsed_ms: 0 });
+  const result = (op: UiOpResult["op"], ok: boolean): UiOpResult => ({ op, ok, summary: ok ? `${op} done` : "", error: ok ? null : `${op} failed` });
+
+  it("assigns the k-th result to the k-th step the executor left to the UI", () => {
+    const execution: PlanExecution = {
+      steps: [step(0, "tag", "done"), step(1, "set_theme", "ui"), step(2, "noop", "skipped"), step(3, "manage_model", "ui")],
+      cancelled: false,
+      documents: [],
+      ui_actions: [{ op: "set_theme", theme: "dark" }, { op: "noop" }, { op: "manage_model", action: "delete", id: "x" }],
+      batches: [],
+    };
+    const map = uiResultsByStep(execution, [result("set_theme", true), result("noop", true), result("manage_model", false)]);
+    expect([...map.keys()]).toEqual([1, 2, 3]);
+    expect(map.get(1)).toMatchObject({ ok: true, summary: "set_theme done" });
+    expect(map.get(3)).toMatchObject({ ok: false, error: "manage_model failed" });
+  });
+
+  it("leaves steps without a result alone: none yet, or a step skipped after a failure", () => {
+    const execution: PlanExecution = {
+      steps: [step(0, "search", "failed"), step(1, "open", "skipped"), step(2, "set_theme", "ui")],
+      cancelled: false,
+      documents: [],
+      ui_actions: [{ op: "set_theme", theme: "dark" }],
+      batches: [],
+    };
+    expect(uiResultsByStep(execution, null).size).toBe(0);
+    expect(uiResultsByStep(execution, []).size).toBe(0);
+    // `open` was skipped by the executor (not handed over): the one result is the theme's.
+    expect([...uiResultsByStep(execution, [result("set_theme", false)]).keys()]).toEqual([2]);
+  });
+});
+
 describe("result actions (P6 payloads)", () => {
   const draft: Draft = {
     id: "d1",

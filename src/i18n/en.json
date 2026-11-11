@@ -229,7 +229,6 @@
   },
   "assistant": {
     "title": "AI Assistant",
-    "new_chat": "New chat",
     "sessions": {
       "title": "Chats",
       "new": "New chat",
@@ -239,7 +238,8 @@
       "untitled": "New chat",
       "empty": "No chats yet.",
       "messages": "{{count}} message(s)",
-      "menu": "Menu of {{title}}"
+      "menu": "Menu of {{title}}",
+      "load_failed": "The conversation of this chat could not be loaded. Nothing can be sent until it is."
     },
     "scope": {
       "label": "Scope",
@@ -263,6 +263,12 @@
     "help_title": "Help",
     "help_body": "Natural-language commands become a plan card (steps · impact · preview) that runs after your approval. Examples: process inbox, last month's receipt total, tax invoices → Excel, move receipts into monthly folders, summarize the selected documents, undo the last rename. Instant commands: /theme dark|light|system|high-contrast, /lang ko|en, /open <screen>, /job pause, /undo. Questions are answered from the reference material with per-sentence sources. Ctrl+Enter approves · Esc cancels · Ctrl+Z undoes.",
     "executed": "Done",
+    "executed_partial": "Partly done",
+    "executed_failed": "Failed",
+    "clipped": {
+      "lists": "This card was large, so only the first rows of its lists were kept. The counts are those of the whole.",
+      "all": "This card was too large to keep: only a summary was stored. Its document list is partial, so nothing can be run or counted again from it."
+    },
     "date_resolved": "Date range: {{from}} – {{to}} ({{label}})",
     "source_slash": "slash command",
     "source_phrase": "phrase rule",
@@ -410,13 +416,21 @@
       "only_low_confidence": "low-confidence fields only",
       "only_failed": "failed-validation fields only",
       "only_all": "all fields",
-      "scope": "scope: {{scope}}",
+      "reindex_fts": "keyword index",
+      "reindex_vec": "vector index",
+      "reindex_all": "all indexes",
       "top_k": "{{count}} results",
       "each_doc": "per document",
       "set": "one summary",
       "short": "short",
       "long": "long",
-      "group_by": "group_by={{value}}",
+      "group_month": "per month",
+      "group_vendor": "per vendor",
+      "group_doc_type": "per type",
+      "group_project": "per project",
+      "folder_grouped": "folders {{group}} ({{path}})",
+      "folder_template": "folder {{path}}",
+      "name_template": "file name {{template}}",
       "include_unreviewed": "include unreviewed",
       "with_unreviewed": "include unreviewed",
       "dry_run": "preview only",
@@ -425,6 +439,7 @@
       "default_path": "(default path)",
       "columns": "{{count}} columns",
       "layout_sheet_per_type": "sheet per type",
+      "layout_sheet_per_project": "sheet per project",
       "layout_single": "single sheet",
       "include": "extra columns: {{list}}",
       "target_fields": "fields",
@@ -553,7 +568,8 @@
       "step": "{{index}}. {{op}}",
       "param_default": "(default)",
       "list_hint": "comma-separated",
-      "scalar_hint": "string · number · true/false"
+      "scalar_hint": "string · number · true/false",
+      "required_missing": "A required value is empty: {{label}}"
     },
     "card": {
       "title": "Plan",
@@ -588,6 +604,9 @@
       "cancelled": "Cancelled",
       "invalid": "The plan cannot run. Edit it and try again.",
       "preview_error": "Preview update failed: {{message}}",
+      "preview_refreshing": "Previewing the edited plan…",
+      "step_documents": "{{count}} document(s)",
+      "step_delete": "{{count}} document(s) to the recycle bin",
       "preview_caption": "Organise preview (from → to)",
       "columns": {
         "from": "From",

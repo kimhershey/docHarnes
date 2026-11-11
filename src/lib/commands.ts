@@ -10,8 +10,9 @@ import { describeError } from "./errors";
 import { api } from "./ipc";
 import { queryClient, queryKeys } from "./query-client";
 import { coerceSettingValue, resolveSettingKey, setSettingByPath, settingSpec } from "./settingsCatalog";
-import { SCREEN_ROUTES, isJobFinished, type BackendPreference, type DocumentView, type Language, type Op, type PreRouteResult, type RetentionPolicy, type RetentionTarget, type Screen, type Theme, type Tier, type UndoReport } from "./types";
+import { SCREEN_ROUTES, isJobFinished, type BackendPreference, type DocumentView, type Job, type JobOp, type JobState, type Language, type Op, type OpKind, type PreRouteResult, type RetentionPolicy, type RetentionTarget, type Screen, type Theme, type Tier, type UndoReport } from "./types";
 import { errorCode, errorMessage } from "./utils";
+import { flushChatWrites } from "@/stores/assistant";
 import { useDocumentsStore } from "@/stores/documents";
 import { useEngineStore } from "@/stores/engine";
 import { useJobsStore } from "@/stores/jobs";
@@ -113,6 +114,11 @@ function toNumber(v: unknown): number {
   const n = typeof v === "number" ? v : Number(String(v).replace(/[^0-9.-]/g, ""));
   if (!Number.isFinite(n)) throw new Error(`invalid number: ${String(v)}`);
   return n;
+}
+
+/** The assistant's chat writes, sent and stored — but a workspace op does not hang on a write that is stuck. */
+function chatWritesSettled(): Promise<void> {
+  return Promise.race([flushChatWrites(), new Promise<void>((resolve) => setTimeout(resolve, 2000))]);
 }
 
 
@@ -389,10 +395,14 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
     }
     case "workspace": {
       const ws = useWorkspaceStore.getState();
+      // The conversation so far — this very command and its plan / result cards — belongs to the workspace
+      // being left: its writes must reach that database before the backend moves on (afterwards they
+      // could only be dropped).
       switch (op.action) {
         case "open": {
           const path = (op.path ?? "").trim();
           if (!path) throw new Error(t("planner.ui.path_required"));
+          await chatWritesSettled();
           const view = await ws.open(path);
           navigate(SCREEN_ROUTES.library);
           return done(t("planner.ui.workspace_open", { name: view.manifest.name || path }));
@@ -400,11 +410,13 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
         case "create": {
           const path = (op.path ?? "").trim();
           if (!path) throw new Error(t("planner.ui.path_required"));
+          await chatWritesSettled();
           const view = await ws.create(path, null, null);
           navigate(SCREEN_ROUTES.library);
           return done(t("planner.ui.workspace_create", { name: view.manifest.name || path }));
         }
         case "close":
+          await chatWritesSettled();
           await ws.close();
           return done(t("planner.ui.workspace_close"), "info");
         case "forget": {
@@ -529,11 +541,25 @@ const SETTING_LABELS: Record<string, string> = {
   journal_days: "settings.privacy.items.journal_days",
 };
 
-/** `job(id: "last")`: the most recent persistent job the action applies to. */
-function resolveJob(jobs: ReturnType<typeof useJobsStore.getState>["jobs"], id: string | null | undefined, action: string) {
+/**
+ * `job(id: "last")` / no id: the persistent job the action applies to. "작업 일시정지" / "작업 취소" mean
+ * the job that is at work — running first, then (cancel only: a paused job cannot be paused again) a
+ * paused one, then one still waiting — not simply the newest unfinished job, which is usually a queued
+ * one behind it (PLN-15). The other actions take the most recent job in a state they can act on.
+ */
+export function resolveJob(jobs: Job[], id: string | null | undefined, action: JobOp): Job | null {
   if (id && id !== "last") return jobs.find((j) => j.id === id || j.id.startsWith(id)) ?? null;
   const persistent = jobs.filter((j) => j.persistent);
   const pool = persistent.length > 0 ? persistent : jobs;
+  const newest = (list: Job[]): Job | null => [...list].sort((a, b) => b.created_at.localeCompare(a.created_at))[0] ?? null;
+  if (action === "pause" || action === "cancel") {
+    const order: JobState[] = action === "pause" ? ["running", "queued"] : ["running", "paused", "queued"];
+    for (const state of order) {
+      const hit = newest(pool.filter((j) => j.state === state));
+      if (hit) return hit;
+    }
+    return null;
+  }
   const candidates =
     action === "retry"
       ? pool.filter((j) => j.state === "failed" || j.state === "cancelled" || j.state === "interrupted")
@@ -542,21 +568,37 @@ function resolveJob(jobs: ReturnType<typeof useJobsStore.getState>["jobs"], id: 
         : action === "prioritize"
           ? pool.filter((j) => j.state === "queued" || j.state === "paused")
           : pool.filter((j) => !isJobFinished(j));
-  return [...candidates].sort((a, b) => b.created_at.localeCompare(a.created_at))[0] ?? null;
+  return newest(candidates);
 }
 
-/** Runs several UI ops in order, toasting failures; returns the summaries of the ones that ran. */
-export async function executeUiOps(ops: Op[], navigate: NavigateFunction, t: TFunction): Promise<string[]> {
-  const summaries: string[] = [];
+/** What became of one UI-side op: `executeUiOps` returns one per op, in the order of the ops. */
+export interface UiOpResult {
+  op: OpKind;
+  ok: boolean;
+  /** Translated summary of what was done (may be empty; empty for a failed op). */
+  summary: string;
+  /** Translated error of a failed op. */
+  error: string | null;
+}
+
+/**
+ * Runs several UI ops in order. A failure is toasted and does not stop the ops after it; the result
+ * says for every op whether it ran, so the card that asked for them can show a failure as one (a toast
+ * alone left the card saying "실행됨", PLN-17).
+ */
+export async function executeUiOps(ops: Op[], navigate: NavigateFunction, t: TFunction): Promise<UiOpResult[]> {
+  const results: UiOpResult[] = [];
   for (const op of ops) {
     try {
       const outcome = await executeUiOp(op, navigate, t);
-      if (outcome.summary) summaries.push(outcome.summary);
+      results.push({ op: op.op, ok: true, summary: outcome.summary, error: null });
     } catch (e) {
-      useUiStore.getState().toast(describeError(e, t), "danger");
+      const error = describeError(e, t);
+      useUiStore.getState().toast(error, "danger");
+      results.push({ op: op.op, ok: false, summary: "", error });
     }
   }
-  return summaries;
+  return results;
 }
 
 // ---------------------------------------------------------------------------

@@ -5,10 +5,11 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import type { Op, Plan, PlanContext, Scope } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 import { docTypeName, opLabel, replaceOp, withScope } from "./describePlan";
 import { coerceInteger, coerceIntList, coerceNumber } from "./numeric";
-import { OP_SPECS, paramDesc, type ParamSpec } from "./opSpecs";
+import { OP_SPECS, isMissingValue, paramDesc, type ParamSpec } from "./opSpecs";
 
 export { coerceInteger, coerceIntList, coerceNumber };
 
@@ -43,6 +44,10 @@ function enumLabel(param: ParamSpec, value: string, t: (k: string, o?: Record<st
       return ["hybrid", "keyword", "semantic"].includes(value) ? t(`search.mode.${value}`) : value;
     case "include":
       return ["evidence", "confidence", "status"].includes(value) ? t(`export.columns.${value}`) : value;
+    case "group_by":
+      return value === "none" ? t("common.none") : ["month", "vendor", "doc_type", "project"].includes(value) ? t(`planner.params.group_${value}`) : value;
+    case "layout":
+      return ["sheet_per_type", "sheet_per_project", "single"].includes(value) ? t(`planner.params.layout_${value}`) : value;
     default:
       return value;
   }
@@ -54,6 +59,10 @@ function ParamField({ index, param, value, onChange }: { index: number; param: P
   const label = paramDesc(param, i18n.language);
   const testId = `plan-editor-param-${index}-${param.name}`;
   const type = param.type;
+  // A required value that was cleared: the field is marked and the card refuses to run the plan (CON-12).
+  const missing = isMissingValue(param, value);
+  const invalid = missing ? { "aria-invalid": true as const, "data-missing": "true" } : {};
+  const fieldClass = cn("h-8", missing && "border-danger");
   let control: ReactNode;
   switch (type.kind) {
     case "boolean":
@@ -111,25 +120,28 @@ function ParamField({ index, param, value, onChange }: { index: number; param: P
       break;
     }
     case "integer":
-    case "number":
-      // Rust `u32` fields (top_k, pages): fractions are truncated, NaN / negatives rejected (review M4).
+    case "number": {
+      // Rust `u32` fields (top_k, pages): fractions are truncated, NaN / values below the minimum rejected (review M4).
+      const min = type.kind === "integer" ? (type.min ?? 0) : undefined;
       control = (
         <Input
           id={id}
           type="number"
           step={type.kind === "integer" ? 1 : "any"}
-          min={type.kind === "integer" ? 0 : undefined}
-          className="h-8"
+          min={min}
+          className={fieldClass}
           value={typeof value === "number" ? String(value) : ""}
           onChange={(e) => {
-            const v = type.kind === "integer" ? coerceInteger(e.target.value) : coerceNumber(e.target.value);
+            const v = type.kind === "integer" ? coerceInteger(e.target.value, min) : coerceNumber(e.target.value);
             if (v !== null) onChange(v);
           }}
           aria-label={label}
           data-testid={testId}
+          {...invalid}
         />
       );
       break;
+    }
     case "date":
       control = <Input id={id} type="date" className="h-8" value={typeof value === "string" ? value : ""} onChange={(e) => onChange(e.target.value || undefined)} aria-label={label} data-testid={testId} />;
       break;
@@ -138,7 +150,7 @@ function ParamField({ index, param, value, onChange }: { index: number; param: P
       control = (
         <Input
           id={id}
-          className="h-8"
+          className={fieldClass}
           value={Array.isArray(value) ? value.join(", ") : ""}
           placeholder={t("planner.editor.list_hint")}
           onChange={(e) => {
@@ -148,21 +160,23 @@ function ParamField({ index, param, value, onChange }: { index: number; param: P
           }}
           aria-label={label}
           data-testid={testId}
+          {...invalid}
         />
       );
       break;
     case "scalar":
-      control = <Input id={id} className="h-8" value={value === undefined || value === null ? "" : String(value)} placeholder={t("planner.editor.scalar_hint")} onChange={(e) => onChange(e.target.value === "" ? undefined : parseScalar(e.target.value))} aria-label={label} data-testid={testId} />;
+      control = <Input id={id} className={fieldClass} value={value === undefined || value === null ? "" : String(value)} placeholder={t("planner.editor.scalar_hint")} onChange={(e) => onChange(e.target.value === "" ? undefined : parseScalar(e.target.value))} aria-label={label} data-testid={testId} {...invalid} />;
       break;
     case "string":
     default:
-      control = <Input id={id} className="h-8" value={typeof value === "string" ? value : ""} onChange={(e) => onChange(e.target.value === "" ? (param.required ? "" : undefined) : e.target.value)} aria-label={label} data-testid={testId} />;
+      control = <Input id={id} className={fieldClass} value={typeof value === "string" ? value : ""} onChange={(e) => onChange(e.target.value === "" ? (param.required ? "" : undefined) : e.target.value)} aria-label={label} data-testid={testId} {...invalid} />;
       break;
   }
   // An enum list is a group of checkboxes, not a single control: label it by id instead of `htmlFor`.
   const LabelTag = type.kind === "enum_list" ? "span" : "label";
+  // (`minmax(0,1fr)`: the control column may be narrower than a long select label, which is then cut inside the control.)
   return (
-    <div className="grid grid-cols-[minmax(8rem,14rem)_1fr] items-center gap-2 text-xs">
+    <div className="grid grid-cols-[minmax(8rem,14rem)_minmax(0,1fr)] items-center gap-2 text-xs">
       <LabelTag id={`${id}-label`} htmlFor={type.kind === "enum_list" ? undefined : id} className="text-fg-muted">
         {label}
         {param.required && <span className="text-danger"> *</span>}
@@ -204,7 +218,7 @@ export function PlanEditor({ plan, context, onChange }: { plan: Plan; context: P
     <div className="flex flex-col gap-3 rounded-md border border-border bg-bg p-3" data-testid="plan-editor">
       <fieldset className="flex flex-col gap-2">
         <legend className="text-xs font-medium text-fg-muted">{t("planner.scope.title")}</legend>
-        <div className="grid grid-cols-[minmax(8rem,14rem)_1fr] items-center gap-2 text-xs">
+        <div className="grid grid-cols-[minmax(8rem,14rem)_minmax(0,1fr)] items-center gap-2 text-xs">
           <label htmlFor="plan-scope-doc-type" className="text-fg-muted">
             {t("planner.scope.doc_type")}
           </label>
