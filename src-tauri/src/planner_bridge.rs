@@ -232,7 +232,8 @@ fn inline_only(plan: &Plan) -> bool {
                 op.kind(),
                 OpKind::Search | OpKind::Aggregate | OpKind::Tag | OpKind::SetDocType | OpKind::Validate
             )
-            || matches!(op, Op::Review { action: planner::ReviewOp::Approve | planner::ReviewOp::Reject, .. })
+            // Review decisions are quick database writes; `show` only hands the review screen to the UI.
+            || matches!(op, Op::Review { .. })
     })
 }
 
