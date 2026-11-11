@@ -490,28 +490,76 @@ pub fn delete_glossary(conn: &Connection, id: i64) -> rusqlite::Result<bool> {
     Ok(conn.execute("DELETE FROM glossary WHERE id = ?1", [id])? > 0)
 }
 
-/// For each query term that is a glossary term or synonym (case-insensitive),
-/// the other forms of that entry. Small table: scanned in memory.
-pub fn glossary_expansions(conn: &Connection, terms: &[String]) -> rusqlite::Result<Vec<(String, Vec<String>)>> {
+/// For the query terms that make up a glossary term or synonym found in the query, the other forms of that
+/// entry (see [`expand_terms`]). Small table: scanned in memory.
+pub fn glossary_expansions(
+    conn: &Connection,
+    query: &str,
+    terms: &[String],
+    tokenize: &dyn Fn(&str) -> Vec<String>,
+) -> rusqlite::Result<Vec<(String, Vec<String>)>> {
     if terms.is_empty() {
         return Ok(Vec::new());
     }
-    let entries = list_glossary(conn)?;
-    let mut out = Vec::new();
-    for t in terms {
-        let tl = t.to_lowercase();
-        for e in &entries {
-            let mut forms: Vec<String> = std::iter::once(e.term.clone()).chain(e.synonyms.iter().cloned()).collect();
-            if forms.iter().any(|f| f.to_lowercase() == tl) {
-                forms.retain(|f| f.to_lowercase() != tl);
-                if !forms.is_empty() {
-                    out.push((t.clone(), forms));
+    Ok(expand_terms(&list_glossary(conn)?, query, terms, tokenize))
+}
+
+/// NFKC, lower-case, no whitespace: how a glossary form is looked for in the query text.
+fn compact_form(s: &str) -> String {
+    super::tokenize::normalize(s).chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// Glossary expansion of query terms: `(term, other forms of its entry)` in query order.
+///
+/// A form (the entry's term or a synonym) matches when the query text contains it — case and spacing
+/// aside — and every token the analyzer makes of it (`tokenize`, the same function that produced `terms`)
+/// is a query term. Matching the token sequence instead of the whole word is what lets a compound the
+/// dictionary splits ("공급가액" → 공급 + 가액 under ko-dic) and a synonym of several words ("net amount")
+/// expand at all; the literal check keeps "출장 일정" from expanding as "출장비" when the analyzer drops a
+/// suffix. Every term of a matched form receives the entry's other forms: `(A ∨ S) ∧ (B ∨ S)` is
+/// `(A ∧ B) ∨ S`, so the AND query still asks for the compound or its synonym.
+pub fn expand_terms(
+    entries: &[GlossaryEntry],
+    query: &str,
+    terms: &[String],
+    tokenize: &dyn Fn(&str) -> Vec<String>,
+) -> Vec<(String, Vec<String>)> {
+    let haystack = compact_form(query);
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+    for e in entries {
+        let forms: Vec<&String> = std::iter::once(&e.term).chain(e.synonyms.iter()).collect();
+        for form in &forms {
+            let key = compact_form(form);
+            if key.is_empty() || !haystack.contains(&key) {
+                continue;
+            }
+            let mut tokens = tokenize(form);
+            if tokens.is_empty() {
+                tokens.push(super::tokenize::normalize(form));
+            }
+            if !tokens.iter().all(|t| terms.contains(t)) {
+                continue;
+            }
+            let others: Vec<&String> = forms.iter().copied().filter(|f| compact_form(f) != key).collect();
+            for t in terms.iter().filter(|t| tokens.contains(t)) {
+                let at = match out.iter().position(|(term, _)| term == t) {
+                    Some(i) => i,
+                    None => {
+                        out.push((t.clone(), Vec::new()));
+                        out.len() - 1
+                    }
+                };
+                for o in &others {
+                    if !out[at].1.contains(o) {
+                        out[at].1.push((*o).clone());
+                    }
                 }
-                break;
             }
         }
     }
-    Ok(out)
+    out.retain(|(_, forms)| !forms.is_empty());
+    out.sort_by_key(|(t, _)| terms.iter().position(|x| x == t));
+    out
 }
 
 // ---------------------------------------------------------------------------

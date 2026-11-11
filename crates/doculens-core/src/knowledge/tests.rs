@@ -912,7 +912,9 @@ fn collections_glossary_and_version_crud() {
         })
         .unwrap();
     assert_eq!(g2.id, g.id, "case-insensitive upsert");
-    let exp = db.with(|x| repo::glossary_expansions(x, &["세금".into(), "없음".into()])).unwrap();
+    let words = |s: &str| s.split_whitespace().map(str::to_lowercase).collect::<Vec<_>>();
+    let exp =
+        db.with(|x| repo::glossary_expansions(x, "세금 없음", &["세금".into(), "없음".into()], &words)).unwrap();
     assert_eq!(exp, vec![("세금".to_string(), vec!["VAT".to_string()])], "term keeps its original spelling");
     assert!(db.with(|x| repo::delete_glossary(x, g.id)).unwrap());
 
@@ -1281,6 +1283,103 @@ fn editions_are_searchable_again_once_their_latest_edition_is_gone() {
     // `latest_only = false` still shows every edition, and the listing leads with the newest.
     let groups = w.db.with(repo::list_version_groups).unwrap();
     assert_eq!(groups[0].documents.iter().map(|d| d.document_id.as_str()).collect::<Vec<_>>(), vec!["reg2", "reg0"]);
+}
+
+/// KNO-8: a glossary term the analyzer splits into morphemes (공급가액 → 공급 + 가액 under ko-dic) and a
+/// synonym of several words ("net amount") expand the query like a single-word term does.
+#[test]
+fn glossary_expansion_covers_compounds_and_multi_word_synonyms() {
+    let w = World::new();
+    add_doc(
+        &w.db,
+        "inv",
+        "invoice-summary.pdf",
+        DocumentRole::Knowledge,
+        &["Invoice summary\n\nThe net amount is KRW 10,909,091 before tax."],
+    );
+    index_pending(&w.index_deps(), None, false, None, &mut |_| {}).unwrap();
+    w.db.with(|c| {
+        repo::save_glossary(
+            c,
+            &GlossaryInput {
+                id: None,
+                term: "공급가액".into(),
+                definition: None,
+                synonyms: vec!["net amount".into()],
+            },
+        )
+    })
+    .unwrap();
+    let docs_of = |resp: &SearchResponse| resp.hits.iter().map(|h| h.document_id.clone()).collect::<Vec<_>>();
+    // Korean compound (with a particle under ko-dic) → the English synonym.
+    let query = if w.analyzer.kind() == AnalyzerKind::KoDic { "공급가액은 얼마야?" } else { "공급가액 합계" };
+    let resp = search(&w.search_deps(None), &SearchRequest::new(query)).unwrap();
+    assert_eq!(resp.expanded_terms, vec!["net amount".to_string()], "terms {:?}", resp.query_terms);
+    assert!(docs_of(&resp).contains(&"inv".to_string()), "{:?}", docs_of(&resp));
+    // Synonym of two words → the Korean term (the contract states the 공급가액).
+    let resp = search(&w.search_deps(None), &SearchRequest::new("net amount 합계")).unwrap();
+    assert_eq!(resp.expanded_terms, vec!["공급가액".to_string()], "terms {:?}", resp.query_terms);
+    assert!(docs_of(&resp).contains(&"con".to_string()), "{:?}", docs_of(&resp));
+    // Without the glossary nothing links the two.
+    let mut plain = SearchRequest::new("net amount 합계");
+    plain.expand_glossary = false;
+    assert!(!docs_of(&search(&w.search_deps(None), &plain).unwrap()).contains(&"con".to_string()));
+}
+
+/// KNO-8, analyzer-independent: glossary forms are matched as token sequences (here a stand-in for ko-dic
+/// that splits compounds and drops suffixes), guarded by the form appearing in the query text.
+#[test]
+fn glossary_forms_match_as_token_sequences() {
+    let entry = |id: i64, term: &str, synonyms: &[&str]| GlossaryEntry {
+        id,
+        term: term.into(),
+        definition: None,
+        synonyms: synonyms.iter().map(|s| s.to_string()).collect(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    };
+    let entries = vec![
+        entry(1, "공급가액", &["net amount", "Supply Value"]),
+        entry(2, "출장비", &["여비"]),
+        entry(3, "가액", &["금액"]),
+        entry(4, "단독", &[]),
+    ];
+    // Splits the compounds a morphological dictionary would split and drops the suffix of 출장비.
+    let morphemes = |s: &str| -> Vec<String> {
+        let mut out = Vec::new();
+        for w in s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()) {
+            match w.trim_end_matches(['은', '는']) {
+                "공급가액" => out.extend(["공급".to_string(), "가액".to_string()]),
+                "출장비" => out.push("출장".to_string()),
+                other => out.push(other.to_lowercase()),
+            }
+        }
+        out
+    };
+    let expand = |query: &str| repo::expand_terms(&entries, query, &morphemes(query), &morphemes);
+    let forms = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    // A split compound: each of its terms carries the synonyms; "가액" is a term of its own as well.
+    assert_eq!(
+        expand("공급가액은 얼마"),
+        vec![
+            ("공급".to_string(), forms(&["net amount", "Supply Value"])),
+            ("가액".to_string(), forms(&["net amount", "Supply Value", "금액"])),
+        ]
+    );
+    // A synonym of several words, whatever its case and spacing in the query.
+    assert_eq!(
+        expand("what is the Net  Amount"),
+        vec![
+            ("net".to_string(), forms(&["공급가액", "Supply Value"])),
+            ("amount".to_string(), forms(&["공급가액", "Supply Value"])),
+        ]
+    );
+    // The form itself must be in the query: the morpheme 출장 alone is not 출장비.
+    assert_eq!(expand("출장 일정"), Vec::<(String, Vec<String>)>::new());
+    assert_eq!(expand("출장비 일정"), vec![("출장".to_string(), forms(&["여비"]))]);
+    // The parts of a compound in another order are not the compound; a term without synonyms adds nothing.
+    assert_eq!(expand("가액 대비 공급 단독"), vec![("가액".to_string(), forms(&["금액"]))]);
+    assert!(repo::expand_terms(&entries, "", &[], &morphemes).is_empty());
 }
 
 /// Records every request and replies with `reply`, reporting `finish_reason` like the engine does.
