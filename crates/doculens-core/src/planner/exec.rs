@@ -3159,6 +3159,19 @@ pub fn preview(
                     true,
                 )
             }
+            // The folder a new workspace is created in is confirmed (audit PLN-18).
+            Op::Workspace { action: super::WorkspaceAction::Create, path } => {
+                let p = path.clone().unwrap_or_default();
+                (
+                    if ko {
+                        format!("새 워크스페이스 폴더: {p}")
+                    } else {
+                        format!("New workspace folder: {p}")
+                    },
+                    json!({ "path": p }),
+                    true,
+                )
+            }
             _ => (String::new(), Value::Null, op.needs_confirmation()),
         };
         if confirm {
