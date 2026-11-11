@@ -271,6 +271,15 @@ fn step_scope(plan: &Plan, imported: Option<&[String]>) -> Option<Scope> {
     }
 }
 
+/// Whether the plan's scope restricts the documents by more than a project (or an import has
+/// defined the working set): when such a scope matches nothing, a search / answer must find
+/// nothing instead of falling back to every document (audit PLN-19).
+fn scope_narrows(plan: &Plan, imported: Option<&[String]>) -> bool {
+    let mut s = plan.scope.clone();
+    s.filter.project_id = None;
+    imported.is_some() || !s.is_empty()
+}
+
 fn nothing_in_scope(deps: &ExecDeps<'_>) -> StepOutcome {
     StepOutcome {
         summary: deps.t("대상 문서 없음", "No documents in scope").into(),
@@ -758,7 +767,25 @@ fn run_step(
             })
         }
         Op::Search { query, mode, top_k } => {
-            let docs_ = if plan.scope.is_empty() { Vec::new() } else { working_set(deps, plan, imported)? };
+            let narrowed = scope_narrows(plan, imported);
+            let docs_ = if plan.scope.is_empty() && imported.is_none() {
+                Vec::new()
+            } else {
+                working_set(deps, plan, imported)?
+            };
+            if narrowed && docs_.is_empty() {
+                // An empty document list means "everywhere" to the search: a scope that matches
+                // nothing must find nothing (audit PLN-19).
+                return Ok(StepOutcome {
+                    summary: if deps.ko() {
+                        format!("'{query}' 검색 결과 0건(범위에 해당하는 문서 없음)")
+                    } else {
+                        format!("0 hits for '{query}' (no document matches the scope)")
+                    },
+                    payload: serde_json::to_value(crate::knowledge::SearchResponse::default()).unwrap_or(Value::Null),
+                    imported: None,
+                });
+            }
             let mut req = SearchRequest::new(query);
             if let Some(m) = mode {
                 req.mode = *m;
@@ -785,10 +812,18 @@ fn run_step(
         }
         Op::Answer { question, cite: _, knowledge, .. } => {
             let chat = deps.chat.ok_or_else(|| no_model(deps))?;
+            let retrieve = knowledge.unwrap_or(true);
+            let docs_ = if !retrieve || (plan.scope.is_empty() && imported.is_none()) {
+                Vec::new()
+            } else {
+                working_set(deps, plan, imported)?
+            };
+            if retrieve && docs_.is_empty() && scope_narrows(plan, imported) {
+                return Ok(no_documents_answer(deps, question, AnswerKind::Answer));
+            }
             let _lease = LeaseGuard::acquire(deps.lease);
-            let docs_ = if plan.scope.is_empty() { Vec::new() } else { working_set(deps, plan, imported)? };
             let mut req = AnswerRequest::question(question);
-            req.retrieve = knowledge.unwrap_or(true);
+            req.retrieve = retrieve;
             req.scope = SearchScope {
                 documents: ids(&docs_),
                 project_id: plan.scope.filter.project_id.clone(),
@@ -1202,8 +1237,15 @@ fn run_step(
                     req.scope.documents = plan.scope.doc_ids.clone();
                 }
                 _ => {
-                    if !plan.scope.is_empty() {
+                    if !plan.scope.is_empty() || imported.is_some() {
                         req.scope.documents = ids(&working_set(deps, plan, imported)?);
+                        if req.scope.documents.is_empty() && scope_narrows(plan, imported) {
+                            return Ok(no_documents_answer(
+                                deps,
+                                question.as_deref().unwrap_or(""),
+                                AnswerKind::Explain,
+                            ));
+                        }
                     }
                     req.scope.project_id = plan.scope.filter.project_id.clone();
                 }
@@ -2002,7 +2044,17 @@ fn run_step(
             }
         }
         Op::ClassifyProjects { apply, use_model } => {
-            let docs_ = if plan.scope.is_empty() { Vec::new() } else { working_set(deps, plan, imported)? };
+            let scoped = !plan.scope.is_empty() || imported.is_some();
+            let docs_ = if scoped { working_set(deps, plan, imported)? } else { Vec::new() };
+            if scoped && docs_.is_empty() {
+                // No document ids means "every unassigned document" to the classifier: a scope
+                // that matches nothing must classify nothing (audit PLN-19).
+                return Ok(StepOutcome {
+                    summary: deps.t("대상 문서 없음", "No documents in scope").into(),
+                    payload: json!({ "suggested": 0, "undecided": 0, "applied": 0, "suggestions": [], "apply_result": null }),
+                    imported: None,
+                });
+            }
             let use_model = use_model.unwrap_or(false) && deps.chat.is_some() && deps.model.is_some();
             let vlm = match (use_model, deps.chat, deps.model.clone()) {
                 (true, Some(c), Some(m)) => Some(Vlm::new(c, m, deps.profile, deps.cancel).with_context(deps.ctx_size)),
@@ -2132,6 +2184,20 @@ fn run_step(
         // UI-side ops never reach here (`runs_in_ui`).
         _ => Ok(StepOutcome { summary: String::new(), payload: Value::Null, imported: None }),
     }
+}
+
+/// The outcome of an answer / explanation whose scope matches no document: "no evidence",
+/// without asking the model and without widening the search to the whole library.
+fn no_documents_answer(deps: &ExecDeps<'_>, question: &str, kind: AnswerKind) -> StepOutcome {
+    let text = deps.t("범위에 해당하는 문서가 없습니다", "No document matches the scope").to_string();
+    let answer = crate::knowledge::Answer {
+        kind,
+        question: question.to_string(),
+        text: text.clone(),
+        no_evidence: true,
+        ..Default::default()
+    };
+    StepOutcome { summary: text, payload: serde_json::to_value(&answer).unwrap_or(Value::Null), imported: None }
 }
 
 /// The field of a document's latest extraction that `review correct` names: by path
