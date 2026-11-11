@@ -1,0 +1,470 @@
+{
+ "schema_version": 1,
+ "kind": "planner",
+ "context": "../planner-context.json",
+ "today": "2026-11-08",
+ "engine": {
+  "binary": "/tmp/engine/bin/llama-server",
+  "version": null,
+  "build_number": null,
+  "backend": "cpu",
+  "tier": "cpu_only",
+  "profile": "balanced",
+  "model": "gemma4-e4b-q4km",
+  "model_display": "Gemma-4-E4B-It (Q4_K_M)",
+  "quantization": "Q4_K_M",
+  "architecture": "gemma4",
+  "has_vision": false,
+  "ctx": 8192,
+  "model_memory_bytes": null,
+  "mmproj_bytes": 0,
+  "devices": [],
+  "vram_used_mib": null,
+  "load_ms": 16780
+ },
+ "mode": "model",
+ "model": "gemma4-e4b-q4km",
+ "golden": "eval/golden/planner.json (part)",
+ "note": "merged from 2 batch runs of doculens-eval planner --engine … --model gemma4-e4b-q4km --backend cpu",
+ "total": 10,
+ "items": [
+  {
+   "id": "ko-94",
+   "category": "ko",
+   "text": "UI 배율 120%",
+   "correct": false,
+   "cause": "wrong_ops",
+   "source": "model",
+   "intent": "set_profile",
+   "ops": [
+    "set_profile"
+   ],
+   "summary": "Set UI scale to 120%",
+   "confidence": 0.95,
+   "latency_ms": 302239.73709799995,
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 3257,
+   "completion_tokens": 105,
+   "mismatches": [
+    {
+     "kind": "intent",
+     "expected": "set_setting",
+     "produced": "set_profile"
+    },
+    {
+     "kind": "ops",
+     "expected": [
+      "set_setting"
+     ],
+     "produced": [
+      "set_profile"
+     ]
+    }
+   ],
+   "operations": [
+    {
+     "op": "set_profile",
+     "profile": "balanced"
+    }
+   ],
+   "scope": {
+    "filter": {}
+   },
+   "raw": "{\n  \"confidence\": 0.95,\n  \"intent\": \"set_setting\",\n  \"operations\": [\n    {\n      \"op\": \"set_profile\",\n      \"profile\": \"balanced\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {},\n  \"summary\": \"Set UI scale to 120%\"\n}"
+  },
+  {
+   "id": "ko-96",
+   "category": "ko",
+   "text": "배율을 130 으로 변경해줘",
+   "correct": false,
+   "cause": "wrong_ops",
+   "source": "model",
+   "intent": "set_theme",
+   "ops": [
+    "set_theme"
+   ],
+   "summary": "Change the display scale to 130%",
+   "confidence": 0.95,
+   "latency_ms": 51393.038830000005,
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 3263,
+   "completion_tokens": 108,
+   "mismatches": [
+    {
+     "kind": "intent",
+     "expected": "set_setting",
+     "produced": "set_theme"
+    },
+    {
+     "kind": "ops",
+     "expected": [
+      "set_setting"
+     ],
+     "produced": [
+      "set_theme"
+     ]
+    }
+   ],
+   "operations": [
+    {
+     "op": "set_theme",
+     "theme": "high-contrast"
+    }
+   ],
+   "scope": {
+    "filter": {}
+   },
+   "raw": "{\n  \"confidence\": 0.95,\n  \"intent\": \"set_setting\",\n  \"operations\": [\n    {\n      \"op\": \"set_theme\",\n      \"theme\": \"high-contrast\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {},\n  \"summary\": \"Change the display scale to 130%\"\n}"
+  },
+  {
+   "id": "ko-97",
+   "category": "ko",
+   "text": "DPI 를 200 으로 변경해줘",
+   "correct": false,
+   "cause": "wrong_ops",
+   "source": "model",
+   "intent": "set_theme",
+   "ops": [
+    "set_theme"
+   ],
+   "summary": "Change DPI to 200",
+   "confidence": 0.95,
+   "latency_ms": 106658.140464,
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 3263,
+   "completion_tokens": 106,
+   "mismatches": [
+    {
+     "kind": "intent",
+     "expected": "set_setting",
+     "produced": "set_theme"
+    },
+    {
+     "kind": "ops",
+     "expected": [
+      "set_setting"
+     ],
+     "produced": [
+      "set_theme"
+     ]
+    }
+   ],
+   "operations": [
+    {
+     "op": "set_theme",
+     "theme": "high-contrast"
+    }
+   ],
+   "scope": {
+    "filter": {}
+   },
+   "raw": "{\n  \"confidence\": 0.95,\n  \"intent\": \"set_setting\",\n  \"operations\": [\n    {\n      \"op\": \"set_theme\",\n      \"theme\": \"high-contrast\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {},\n  \"summary\": \"Change DPI to 200\"\n}"
+  },
+  {
+   "id": "ko-110",
+   "category": "ko",
+   "text": "안녕하세요.",
+   "correct": false,
+   "cause": "wrong_ops",
+   "source": "model",
+   "intent": "noop",
+   "ops": [
+    "noop"
+   ],
+   "summary": "No operation requested, just a greeting.",
+   "confidence": 0.9,
+   "latency_ms": 73902.060025,
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 3245,
+   "completion_tokens": 97,
+   "mismatches": [
+    {
+     "kind": "intent",
+     "expected": "answer",
+     "produced": "noop"
+    },
+    {
+     "kind": "ops",
+     "expected": [
+      "answer"
+     ],
+     "produced": [
+      "noop"
+     ]
+    }
+   ],
+   "operations": [
+    {
+     "op": "noop"
+    }
+   ],
+   "scope": {
+    "filter": {}
+   },
+   "raw": "{\n  \"confidence\": 0.9,\n  \"intent\": \"noop\",\n  \"operations\": [\n    {\n      \"op\": \"noop\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {},\n  \"summary\": \"No operation requested, just a greeting.\"\n}"
+  },
+  {
+   "id": "ko-115",
+   "category": "ko",
+   "text": "프로젝트 별 내용을 요약해줘",
+   "correct": false,
+   "cause": "params",
+   "source": "model",
+   "intent": "summarize",
+   "ops": [
+    "summarize"
+   ],
+   "summary": "모든 문서의 내용을 개별적으로 요약합니다.",
+   "confidence": 0.8,
+   "latency_ms": 155323.709164,
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 2776,
+   "completion_tokens": 110,
+   "mismatches": [
+    {
+     "kind": "params",
+     "index": 0,
+     "expected": {
+      "group_by": "project"
+     },
+     "produced": {
+      "op": "summarize",
+      "target": "each_doc"
+     }
+    }
+   ],
+   "operations": [
+    {
+     "op": "summarize",
+     "target": "each_doc"
+    }
+   ],
+   "scope": {
+    "filter": {}
+   },
+   "raw": "{\n  \"confidence\": 0.8,\n  \"intent\": \"summarize\",\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"target\": \"each_doc\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {},\n  \"summary\": \"모든 문서의 내용을 개별적으로 요약합니다.\"\n}"
+  },
+  {
+   "id": "ko-104",
+   "category": "ko",
+   "text": "글자가 작아서 잘 안 보여, 화면 배율을 120으로 올려줘",
+   "correct": false,
+   "cause": "wrong_ops",
+   "source": "model",
+   "intent": "set_theme",
+   "ops": [
+    "set_theme"
+   ],
+   "summary": "Increase screen scale to 120%",
+   "confidence": 0.95,
+   "latency_ms": 186442.338692,
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 3279,
+   "completion_tokens": 105,
+   "mismatches": [
+    {
+     "kind": "intent",
+     "expected": "set_setting",
+     "produced": "set_theme"
+    },
+    {
+     "kind": "ops",
+     "expected": [
+      "set_setting"
+     ],
+     "produced": [
+      "set_theme"
+     ]
+    }
+   ],
+   "operations": [
+    {
+     "op": "set_theme",
+     "theme": "system"
+    }
+   ],
+   "scope": {
+    "filter": {}
+   },
+   "raw": "{\n  \"confidence\": 0.95,\n  \"intent\": \"set_setting\",\n  \"operations\": [\n    {\n      \"op\": \"set_theme\",\n      \"theme\": \"system\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {},\n  \"summary\": \"Increase screen scale to 120%\"\n}"
+  },
+  {
+   "id": "ko-112",
+   "category": "ko",
+   "text": "애자일 방법론이 뭐야?",
+   "correct": false,
+   "cause": "params",
+   "source": "model",
+   "intent": "answer",
+   "ops": [
+    "answer"
+   ],
+   "summary": "지식 베이스를 기반으로 '애자일 방법론'에 대해 답변합니다.",
+   "confidence": 0.9,
+   "latency_ms": 117346.533011,
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 2776,
+   "completion_tokens": 132,
+   "mismatches": [
+    {
+     "kind": "params",
+     "index": 0,
+     "expected": {
+      "mode": "general"
+     },
+     "produced": {
+      "cite": true,
+      "knowledge": true,
+      "op": "answer",
+      "question": "애자일 방법론이 뭐야?"
+     }
+    }
+   ],
+   "operations": [
+    {
+     "cite": true,
+     "knowledge": true,
+     "op": "answer",
+     "question": "애자일 방법론이 뭐야?"
+    }
+   ],
+   "scope": {
+    "filter": {}
+   },
+   "raw": "{\n  \"confidence\": 0.9,\n  \"intent\": \"answer\",\n  \"operations\": [\n    {\n      \"op\": \"answer\",\n      \"question\": \"애자일 방법론이 뭐야?\",\n      \"cite\": true,\n      \"knowledge\": true\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {},\n  \"summary\": \"지식 베이스를 기반으로 '애자일 방법론'에 대해 답변합니다.\"\n}"
+  },
+  {
+   "id": "ko-111",
+   "category": "ko",
+   "text": "점심 뭐 먹을지 고민이네",
+   "correct": false,
+   "cause": "rule_clarified",
+   "source": "model",
+   "intent": "clarify",
+   "ops": [
+    "clarify"
+   ],
+   "summary": "사용자의 고민에 대해 구체적인 요청 사항을 파악하기 위해 질문함",
+   "confidence": 0.9,
+   "latency_ms": 40351.663666,
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 3259,
+   "completion_tokens": 145,
+   "mismatches": [
+    {
+     "kind": "intent",
+     "expected": "answer",
+     "produced": "clarify"
+    },
+    {
+     "kind": "ops",
+     "expected": [
+      "answer"
+     ],
+     "produced": [
+      "clarify"
+     ]
+    }
+   ],
+   "operations": [
+    {
+     "op": "clarify",
+     "question": "점심 메뉴에 대한 고민을 해결하기 위해 어떤 종류의 정보(예: 주변 식당 추천, 특정 음식 검색 등)가 필요하신가요?"
+    }
+   ],
+   "scope": {
+    "filter": {}
+   },
+   "raw": "{\n  \"confidence\": 0.9,\n  \"intent\": \"clarify\",\n  \"operations\": [\n    {\n      \"op\": \"clarify\",\n      \"question\": \"점심 메뉴에 대한 고민을 해결하기 위해 어떤 종류의 정보(예: 주변 식당 추천, 특정 음식 검색 등)가 필요하신가요?\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {},\n  \"summary\": \"사용자의 고민에 대해 구체적인 요청 사항을 파악하기 위해 질문함\"\n}"
+  },
+  {
+   "id": "ko-119",
+   "category": "ko",
+   "text": "지난달 견적서 합계를 메일로 보내줘",
+   "correct": true,
+   "source": "model",
+   "intent": "aggregate",
+   "ops": [
+    "aggregate"
+   ],
+   "summary": "2026-10-01~2026-10-31 견적서의 합계금액 필드를 더합니다(검토 대기 분리). 이 결과를 메일로 보내려면 확인이 필요합니다.",
+   "confidence": 0.8,
+   "latency_ms": 264278.083595,
+   "requires_confirmation": true,
+   "attempts": 1,
+   "prompt_tokens": 2845,
+   "completion_tokens": 236,
+   "mismatches": [],
+   "operations": [
+    {
+     "field": "grand_total",
+     "fn": "sum",
+     "group_by": "none",
+     "include_unreviewed": false,
+     "op": "aggregate"
+    }
+   ],
+   "scope": {
+    "filter": {
+     "date_from": "2026-10-01",
+     "date_to": "2026-10-31",
+     "doc_type": "estimate"
+    }
+   },
+   "raw": "{\n  \"confidence\": 0.8,\n  \"intent\": \"aggregate\",\n  \"operations\": [\n    {\n      \"fn\": \"sum\",\n      \"op\": \"aggregate\",\n      \"field\": \"grand_total\",\n      \"group_by\": \"none\",\n      \"include_unreviewed\": false\n    }\n  ],\n  \"requires_confirmation\": true,\n  \"scope\": {\n    \"filter\": {\n      \"date_from\": \"2026-10-01\",\n      \"date_to\": \"2026-10-31\",\n      \"doc_type\": \"estimate\"\n    }\n  },\n  \"summary\": \"2026-10-01~2026-10-31 견적서의 합계금액 필드를 더합니다(검토 대기 분리). 이 결과를 메일로 보내려면 확인이 필요합니다.\"\n}"
+  },
+  {
+   "id": "ko-106",
+   "category": "ko",
+   "text": "UI 배율이 뭐야?",
+   "correct": false,
+   "cause": "rule_clarified",
+   "source": "model",
+   "intent": "clarify",
+   "ops": [
+    "clarify"
+   ],
+   "summary": "UI 배율에 대한 정의를 요청함",
+   "confidence": 0.9,
+   "latency_ms": 55071.814163,
+   "requires_confirmation": false,
+   "attempts": 1,
+   "prompt_tokens": 3253,
+   "completion_tokens": 179,
+   "mismatches": [
+    {
+     "kind": "intent",
+     "expected": "answer",
+     "produced": "clarify"
+    },
+    {
+     "kind": "ops",
+     "expected": [
+      "answer"
+     ],
+     "produced": [
+      "clarify"
+     ]
+    }
+   ],
+   "operations": [
+    {
+     "op": "clarify",
+     "question": "UI 배율이 무엇인지에 대한 설명을 요청하셨습니다. 이 질문은 시스템 설정에 대한 일반적인 질문이므로, 특정 문서나 작업에 대한 요청이 아닙니다. DocuLens의 UI 배율 설정(ui.scale_percent)에 대해 더 자세히 알고 싶으신가요, 아니면 다른 것을 문의하신 것인가요?"
+    }
+   ],
+   "scope": {
+    "filter": {}
+   },
+   "raw": "{\n  \"confidence\": 0.9,\n  \"intent\": \"clarify\",\n  \"operations\": [\n    {\n      \"op\": \"clarify\",\n      \"question\": \"UI 배율이 무엇인지에 대한 설명을 요청하셨습니다. 이 질문은 시스템 설정에 대한 일반적인 질문이므로, 특정 문서나 작업에 대한 요청이 아닙니다. DocuLens의 UI 배율 설정(ui.scale_percent)에 대해 더 자세히 알고 싶으신가요, 아니면 다른 것을 문의하신 것인가요?\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"scope\": {},\n  \"summary\": \"UI 배율에 대한 정의를 요청함\"\n}"
+  }
+ ]
+}
