@@ -324,14 +324,43 @@ fn a_scope_that_matches_nothing_finds_nothing() {
     assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
     assert_eq!(ex.steps[0].payload["no_evidence"], json!(true));
     assert_eq!(w.chat.requests.lock().unwrap().len(), before, "the model was not asked");
-    // Project suggestions over such a scope classify nothing (an empty list means every unassigned document).
-    let ex = run(&w, &plan_of(vec![Op::ClassifyProjects { apply: Some(true), use_model: None }], of_type("contract")));
-    assert_eq!(
-        (ex.steps[0].status, ex.steps[0].payload["suggested"].clone()),
-        (StepStatus::Done, json!(0)),
-        "{:?}",
-        ex.steps[0]
+    // So is an explanation.
+    let explain = plan_of(
+        vec![Op::Explain {
+            selection: Some("합계".into()),
+            question: Some("이 합계는 무엇인가?".into()),
+            scope: None,
+            allow_general_knowledge: None,
+        }],
+        of_type("contract"),
     );
+    let ex = run(&w, &explain);
+    assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
+    assert_eq!(
+        (ex.steps[0].payload["no_evidence"].clone(), ex.steps[0].payload["kind"].clone()),
+        (json!(true), json!("explain"))
+    );
+    assert_eq!(w.chat.requests.lock().unwrap().len(), before, "the model was not asked");
+    // Project suggestions: an empty id list means every unassigned document to the classifier,
+    // so a scope that matches nothing must suggest nothing.
+    w.db.with(|c| {
+        projects_repo::save_project(
+            c,
+            &ProjectInput {
+                name: "스타벅스 정산".into(),
+                keywords: Some(vec!["스타벅스".into(), "역삼점".into()]),
+                ..Default::default()
+            },
+        )
+    })
+    .unwrap();
+    let suggested = |scope: Scope| {
+        let ex = run(&w, &plan_of(vec![Op::ClassifyProjects { apply: None, use_model: None }], scope));
+        assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
+        ex.steps[0].payload["suggested"].clone()
+    };
+    assert_eq!(suggested(Scope::default()), json!(1), "the receipt matches the project's keywords");
+    assert_eq!(suggested(of_type("contract")), json!(0));
 }
 
 /// PLN-19: the first ten bytes of whatever the schema's date field held were sliced off as the
@@ -349,7 +378,8 @@ fn only_an_iso_document_date_files_a_document() {
     };
     assert_eq!(basis(Some("2026-10-05")), (Some("2026-10-05".to_string()), "doc_date"));
     assert_eq!(basis(Some(" 2026-10-05T09:30:00 ")), (Some("2026-10-05".to_string()), "doc_date"));
-    for text in ["2026년10월5일", "2026년 10월 5일 작성", "10월 중순에 작성함", "2026.10.05 (월)", "2026-13-45 "] {
+    for text in ["2026년10월5일", "2026년 10월 5일 작성", "10월 중순에 작성함", "2026.10.05 (월)", "2026-13-45 "]
+    {
         assert_eq!(basis(Some(text)), (Some(imported.clone()), "imported_at"), "{text}");
     }
     assert_eq!(basis(Some("2026-10")), (Some(imported.clone()), "imported_at"));
