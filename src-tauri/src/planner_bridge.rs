@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use doculens_core::aggregate::{self, AggregateRequest, AggregateResult};
 use doculens_core::documents::import::{self as doc_import, ImportOptions, ImportSource};
@@ -72,6 +72,32 @@ pub struct ExecuteResponse {
     pub job_id: Option<String>,
     /// Set when the plan ran inline.
     pub execution: Option<PlanExecution>,
+    /// Set for a `preview_only` call: nothing ran — the plan as the executor would take it and
+    /// the preview of its side effects (the card of an edited plan shows these).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<PlanCheck>,
+}
+
+/// A (possibly edited) plan checked the way `execute` checks it, without running it.
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanCheck {
+    /// The plan after validation (normalised parameters, default scope, confirmation flag).
+    pub plan: Plan,
+    pub preview: PlanPreview,
+    /// Non-blocking findings (blocking ones make the call fail with `plan_invalid`).
+    pub issues: Vec<planner::PlanIssue>,
+}
+
+/// What `planner_execute` is told besides the plan.
+#[derive(Debug, Clone, Default)]
+pub struct ExecuteOptions<'a> {
+    /// The exact text the plan was made from (`PlanResponse.result.text`). After an ask-back it is
+    /// the command, the assistant's question and the user's reply — the reply is where "전부" was
+    /// said, so the scope check reads this text and not the command shown on the card (audit PLN-7).
+    /// `None` = the command itself.
+    pub planned_text: Option<&'a str>,
+    /// Validate and preview only (the card of an edited plan); nothing is executed.
+    pub preview_only: bool,
 }
 
 /// The engine gate as an executor lease: model-bound steps occupy the single slot, imports and
@@ -201,6 +227,12 @@ pub fn plan(app: &AppHandle, text: &str, ui: &UiPlanContext) -> UiResult<PlanRes
             result = r;
         }
     }
+    // A plan that changes documents without naming any got here only because the sentence said
+    // "전부" (the planner's scope guard): inside the 현재 프로젝트 scope that "all" is the project.
+    // (The validator leaves such a plan's scope empty so that the guard can ask — audit PLN-6.)
+    if !result.plan.is_clarification() {
+        planner::validate::apply_default_scope(&mut result.plan, &ctx);
+    }
     let preview = if result.plan.is_clarification() {
         None
     } else {
@@ -232,16 +264,23 @@ fn inline_only(plan: &Plan) -> bool {
                 op.kind(),
                 OpKind::Search | OpKind::Aggregate | OpKind::Tag | OpKind::SetDocType | OpKind::Validate
             )
-            || matches!(op, Op::Review { action: planner::ReviewOp::Approve | planner::ReviewOp::Reject, .. })
+            // Review decisions are quick database writes; `show` only hands the review screen to the UI.
+            || matches!(op, Op::Review { .. })
     })
 }
 
-/// Executes a (confirmed, possibly edited) plan: quick plans inline, the rest
-/// as a persistent job.
-pub fn execute(app: &AppHandle, mut plan: Plan, text: &str, ui: &UiPlanContext) -> UiResult<ExecuteResponse> {
-    let ctx = build_context(app, ui)?;
-    let date = doculens_core::prerouter::resolve_relative_date(text, ctx.today);
-    let issues = planner::validate::validate(&mut plan, &ctx, date.as_ref());
+/// The checks a plan from a card passes before it runs or is previewed; returns the non-blocking
+/// findings. The plan is normalised in place and gets the 현재 프로젝트 default scope where it applies.
+fn check_for_execution(
+    plan: &mut Plan,
+    ctx: &PlanContext,
+    text: &str,
+    options: &ExecuteOptions<'_>,
+) -> UiResult<Vec<planner::PlanIssue>> {
+    // The plan comes from a card: its date range is the one the planning step resolved — or what
+    // the user made of it in the editor. The date phrase of the sentence is not applied again, or
+    // a range the user removed would come back (audit PLN-14).
+    let issues = planner::validate::validate(plan, ctx, None);
     if planner::has_errors(&issues) {
         return Err(UiError {
             code: "plan_invalid".into(),
@@ -252,18 +291,42 @@ pub fn execute(app: &AppHandle, mut plan: Plan, text: &str, ui: &UiPlanContext) 
     if plan.is_clarification() {
         return Err(UiError::invalid("plan_clarify"));
     }
-    if let Some(issue) = planner::validate::scope_required(&plan) {
-        if !planner::rules::mentions_all(text) {
-            return Err(UiError {
-                code: "plan_invalid".into(),
-                message: issue.message.clone(),
-                detail: serde_json::to_value(vec![issue]).ok(),
-            });
-        }
+    // Documents must be named unless the user said "전부" — in the text the plan was made from,
+    // which after an ask-back includes the reply (audit PLN-7).
+    let said = options.planned_text.filter(|t| !t.trim().is_empty()).unwrap_or(text);
+    if let Some(issue) = planner::validate::settle_scope(plan, ctx, said) {
+        return Err(UiError {
+            code: "plan_invalid".into(),
+            message: issue.message.clone(),
+            detail: serde_json::to_value(vec![issue]).ok(),
+        });
+    }
+    Ok(issues)
+}
+
+/// Executes a (confirmed, possibly edited) plan: quick plans inline, the rest
+/// as a persistent job. With `options.preview_only` the plan is only checked and previewed.
+pub fn execute(
+    app: &AppHandle,
+    mut plan: Plan,
+    text: &str,
+    ui: &UiPlanContext,
+    options: &ExecuteOptions<'_>,
+) -> UiResult<ExecuteResponse> {
+    let ctx = build_context(app, ui)?;
+    let issues = check_for_execution(&mut plan, &ctx, text, options)?;
+    if options.preview_only {
+        let pctx = pipeline_bridge::context(app)?;
+        let preview = exec::preview(pctx.db(), &pctx.docs.paths, &plan, &pctx.settings, ctx.language)?;
+        return Ok(ExecuteResponse {
+            job_id: None,
+            execution: None,
+            preview: Some(PlanCheck { plan, preview, issues }),
+        });
     }
     if inline_only(&plan) {
         let execution = run_inline(app, &plan, &ctx)?;
-        return Ok(ExecuteResponse { job_id: None, execution: Some(execution) });
+        return Ok(ExecuteResponse { job_id: None, execution: Some(execution), preview: None });
     }
     let state = app.state::<AppState>();
     let subject = plan.summary.clone().unwrap_or_else(|| text.to_string());
@@ -272,7 +335,7 @@ pub fn execute(app: &AppHandle, mut plan: Plan, text: &str, ui: &UiPlanContext) 
         &subject,
         JobPriority::Normal,
     )?;
-    Ok(ExecuteResponse { job_id: Some(id), execution: None })
+    Ok(ExecuteResponse { job_id: Some(id), execution: None, preview: None })
 }
 
 fn run_inline(app: &AppHandle, plan: &Plan, ctx: &PlanContext) -> UiResult<PlanExecution> {
@@ -313,7 +376,88 @@ fn after_execution(app: &AppHandle, pctx: &pipeline_bridge::PipelineContext, exe
     if !execution.batches.is_empty() {
         pctx.emit(app, "journal", Vec::new());
     }
+    emit_step_changes(app, pctx, execution);
     reimport_restored(app, pctx, &execution.restored_paths);
+}
+
+/// What the finished steps of an execution changed besides documents, as the events the screens
+/// listen to: the glossary, editions and reference groups (`knowledge://changed`), projects and
+/// their templates / rules / check results (`projects://changed`), extraction schemas and review
+/// decisions (`pipeline://changed`).
+#[derive(Debug, Default, PartialEq)]
+struct StepChanges {
+    /// `knowledge://changed` kinds (`glossary`, `versions`, `collections`).
+    knowledge: Vec<&'static str>,
+    /// `pipeline://changed` kinds (`schemas`, `review`).
+    pipeline: Vec<&'static str>,
+    /// Whether `projects://changed` is due, and the projects the payloads name.
+    projects: bool,
+    project_ids: Vec<String>,
+}
+
+fn step_changes(execution: &PlanExecution) -> StepChanges {
+    fn once(kinds: &mut Vec<&'static str>, kind: &'static str) {
+        if !kinds.contains(&kind) {
+            kinds.push(kind);
+        }
+    }
+    let mut out = StepChanges::default();
+    for step in execution.steps.iter().filter(|s| s.status == exec::StepStatus::Done) {
+        let payload = &step.payload;
+        let count = |key: &str| payload.get(key).and_then(Value::as_u64).unwrap_or(0);
+        let project_id = ["project_id", "id"]
+            .iter()
+            .find_map(|k| payload.get(k).and_then(Value::as_str))
+            .or_else(|| payload.get("project").and_then(|p| p.get("id")).and_then(Value::as_str));
+        let project = |out: &mut StepChanges| {
+            out.projects = true;
+            if let Some(id) = project_id {
+                if !out.project_ids.iter().any(|x| x == id) {
+                    out.project_ids.push(id.to_string());
+                }
+            }
+        };
+        match step.op {
+            OpKind::DefineTerm => once(&mut out.knowledge, "glossary"),
+            OpKind::SetVersion => once(&mut out.knowledge, "versions"),
+            OpKind::ManageReference => once(&mut out.knowledge, "collections"),
+            OpKind::CreateProject | OpKind::RemoveFromProject | OpKind::CheckConsistency | OpKind::DefineRule => {
+                project(&mut out)
+            }
+            // A rename renames the project's reference group, a deletion takes the group along,
+            // and `as_reference` fills it.
+            OpKind::UpdateProject | OpKind::DeleteProject | OpKind::AddToProject => {
+                project(&mut out);
+                once(&mut out.knowledge, "collections");
+            }
+            // Templates are listed on the projects screen; a rule saved to a template too.
+            OpKind::ManageTemplate => out.projects = true,
+            OpKind::ClassifyProjects if count("applied") > 0 => out.projects = true,
+            OpKind::ManageSchema => once(&mut out.pipeline, "schemas"),
+            OpKind::Review if count("changed") > 0 => once(&mut out.pipeline, "review"),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// The assistant changed the glossary, an edition, a project, a template or a schema: the screen
+/// that shows it must hear about it now, not at its next periodic refresh (audit CON-6).
+fn emit_step_changes(app: &AppHandle, pctx: &pipeline_bridge::PipelineContext, execution: &PlanExecution) {
+    if !pctx.docs.is_current(app) {
+        return; // the workspace was switched while the plan ran
+    }
+    let changes = step_changes(execution);
+    for kind in changes.knowledge {
+        knowledge_bridge::emit_changed(app, kind, Vec::new());
+    }
+    for kind in changes.pipeline {
+        pctx.emit(app, kind, execution.documents.clone());
+    }
+    if changes.projects {
+        let _ =
+            app.emit(crate::projects_bridge::PROJECTS_EVENT, serde_json::json!({ "project_ids": changes.project_ids }));
+    }
 }
 
 fn reimport_restored(app: &AppHandle, pctx: &pipeline_bridge::PipelineContext, paths: &[String]) {
@@ -720,4 +864,145 @@ fn typed(e: CoreError) -> UiError {
         return UiError { code: (*code).into(), message: m, detail: None };
     }
     e.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use doculens_core::planner::exec::{StepResult, StepStatus};
+    use serde_json::json;
+
+    fn step(op: OpKind, status: StepStatus, payload: Value) -> StepResult {
+        StepResult { index: 0, op, status, summary: String::new(), payload, error: None, elapsed_ms: 0 }
+    }
+
+    fn changes(steps: Vec<StepResult>) -> StepChanges {
+        step_changes(&PlanExecution { steps, ..PlanExecution::default() })
+    }
+
+    /// Audit CON-6: after the assistant changed the glossary, an edition, a project, a template or
+    /// a schema, the screen that shows it kept the old content until its periodic refresh.
+    #[test]
+    fn finished_steps_name_the_change_events_of_what_they_touched() {
+        let done = |op, payload| step(op, StepStatus::Done, payload);
+        let c = changes(vec![done(OpKind::DefineTerm, json!({ "action": "save" }))]);
+        assert_eq!((c.knowledge.as_slice(), c.projects, c.pipeline.is_empty()), (&["glossary"][..], false, true));
+        assert_eq!(changes(vec![done(OpKind::SetVersion, json!({}))]).knowledge, ["versions"]);
+        assert_eq!(changes(vec![done(OpKind::ManageReference, json!({}))]).knowledge, ["collections"]);
+        assert_eq!(changes(vec![done(OpKind::ManageSchema, json!({}))]).pipeline, ["schemas"]);
+        // Projects: the payloads name the project in three shapes.
+        let c = changes(vec![
+            done(OpKind::CreateProject, json!({ "id": "p1", "name": "한빛" })),
+            done(OpKind::UpdateProject, json!({ "project": { "id": "p2" } })),
+            done(OpKind::RemoveFromProject, json!({ "project_id": "p3", "removed": 1 })),
+            done(OpKind::CheckConsistency, json!({ "id": "run-1", "project_id": "p1" })),
+        ]);
+        assert!(c.projects);
+        assert_eq!(c.project_ids, ["p1", "p2", "p3"]);
+        assert_eq!(c.knowledge, ["collections"], "a project rename renames its reference group");
+        // Templates have no project: every project view refreshes (an empty id list).
+        let c = changes(vec![done(OpKind::ManageTemplate, json!({ "action": "save" }))]);
+        assert!(c.projects && c.project_ids.is_empty());
+        // Suggestions that assigned nothing, review steps that changed nothing and steps that did
+        // not finish announce nothing.
+        assert_eq!(changes(vec![done(OpKind::ClassifyProjects, json!({ "applied": 0 }))]), StepChanges::default());
+        assert!(changes(vec![done(OpKind::ClassifyProjects, json!({ "applied": 2 }))]).projects);
+        assert_eq!(changes(vec![done(OpKind::Review, json!({ "changed": 0 }))]), StepChanges::default());
+        assert_eq!(changes(vec![done(OpKind::Review, json!({ "changed": 3 }))]).pipeline, ["review"]);
+        assert_eq!(changes(vec![step(OpKind::DefineTerm, StepStatus::Failed, json!({}))]), StepChanges::default());
+        assert_eq!(changes(vec![done(OpKind::Tag, json!({ "documents": ["d1"] }))]), StepChanges::default());
+    }
+
+    fn context(scope_project: Option<&str>) -> PlanContext {
+        PlanContext {
+            today: chrono::NaiveDate::from_ymd_opt(2026, 11, 4).unwrap(),
+            projects: vec![ProjectSummary {
+                id: "p-hanbit".into(), name: "한빛 납품".into(), status: "active".into()
+            }],
+            scope_project: scope_project.map(str::to_string),
+            ..PlanContext::default()
+        }
+    }
+
+    /// "태그 '긴급' 달아줘" as a plan from a card: a tag step and whatever scope the card carries.
+    fn tag_plan(scope: planner::Scope) -> Plan {
+        let mut plan = Plan::single(Op::Tag { add: vec!["긴급".into()], remove: Vec::new() }, 0.9, "태그 추가");
+        plan.scope = scope;
+        plan
+    }
+
+    fn checked(plan: &mut Plan, ctx: &PlanContext, text: &str, planned_text: Option<&str>) -> Result<(), String> {
+        let options = ExecuteOptions { planned_text, preview_only: false };
+        check_for_execution(plan, ctx, text, &options).map(|_| ()).map_err(|e| {
+            let codes: Vec<String> = e
+                .detail
+                .as_ref()
+                .and_then(Value::as_array)
+                .map(|issues| issues.iter().filter_map(|i| i["code"].as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            format!("{}: {}", e.code, codes.join(","))
+        })
+    }
+
+    /// Audit PLN-7: a plan made after an ask-back ("… 전체면 '전부'라고 해 주세요" → "전부") could
+    /// never run — the card keeps the command only, and execution looked for "전부" in it.
+    #[test]
+    fn a_plan_runs_against_the_text_it_was_made_from() {
+        const COMMAND: &str = "태그 '긴급' 달아줘";
+        let asked = |reply: &str| {
+            format!("{COMMAND}\n\n[어시스턴트 질문] 어떤 문서에 적용할까요? 전체면 '전부'라고 해 주세요.\n[사용자 답변] {reply}")
+        };
+        let library = context(None);
+        // The card's command alone names no documents.
+        let mut plan = tag_plan(planner::Scope::default());
+        assert_eq!(checked(&mut plan, &library, COMMAND, None), Err("plan_invalid: scope_required".into()));
+        assert_eq!(checked(&mut plan, &library, COMMAND, Some("  ")), Err("plan_invalid: scope_required".into()));
+        // With the text of the planning call the reply counts — the user's reply, not the question.
+        assert_eq!(checked(&mut plan, &library, COMMAND, Some(&asked("전부"))), Ok(()));
+        assert!(plan.scope.is_empty(), "outside a project \"all\" is the library: {:?}", plan.scope);
+        assert_eq!(
+            checked(&mut plan, &library, COMMAND, Some(&asked("영수증만"))),
+            Err("plan_invalid: scope_required".into())
+        );
+        // Inside the 현재 프로젝트 scope "all" is the project (audit PLN-6).
+        let in_project = context(Some("p-hanbit"));
+        let mut plan = tag_plan(planner::Scope::default());
+        assert_eq!(checked(&mut plan, &in_project, COMMAND, None), Err("plan_invalid: scope_required".into()));
+        assert_eq!(checked(&mut plan, &in_project, COMMAND, Some(&asked("전부"))), Ok(()));
+        assert_eq!(plan.scope.filter.project_id.as_deref(), Some("p-hanbit"));
+        // A sentence that says "all" itself needs no second text.
+        let mut plan = tag_plan(planner::Scope::default());
+        assert_eq!(checked(&mut plan, &library, "모든 문서에 태그 '긴급' 달아줘", None), Ok(()));
+    }
+
+    /// Audit PLN-14: execution resolved the date phrase of the command again and wrote it into the
+    /// plan, so a range the user had removed in the plan editor came back.
+    #[test]
+    fn a_plan_from_a_card_keeps_the_date_range_it_carries() {
+        const COMMAND: &str = "지난달 영수증에 태그 '긴급' 달아줘";
+        let ctx = context(None);
+        let receipts = |from: Option<&str>, to: Option<&str>| planner::Scope {
+            filter: planner::ScopeFilter {
+                doc_type: Some("receipt".into()),
+                date_from: from.map(str::to_string),
+                date_to: to.map(str::to_string),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let range = |plan: &Plan| (plan.scope.filter.date_from.clone(), plan.scope.filter.date_to.clone());
+        // The planning step does read the phrase: this is what used to run again at execution.
+        let date = doculens_core::prerouter::resolve_relative_date(COMMAND, ctx.today);
+        let mut planned = tag_plan(receipts(None, None));
+        planner::validate::validate(&mut planned, &ctx, date.as_ref());
+        assert_eq!(range(&planned), (Some("2026-10-01".into()), Some("2026-10-31".into())));
+        // The user removed the range on the card: it stays removed.
+        let mut plan = tag_plan(receipts(None, None));
+        assert_eq!(checked(&mut plan, &ctx, COMMAND, None), Ok(()));
+        assert_eq!(range(&plan), (None, None));
+        // … or narrowed it: the plan runs with the edited range.
+        let mut plan = tag_plan(receipts(Some("2026-10-01"), Some("2026-10-15")));
+        assert_eq!(checked(&mut plan, &ctx, COMMAND, None), Ok(()));
+        assert_eq!(range(&plan), (Some("2026-10-01".into()), Some("2026-10-15".into())));
+    }
 }

@@ -4,6 +4,7 @@
 //! conservative — anything they do not recognise goes to the model.
 
 use crate::generate::{Length, OutputFormat, Tone};
+use crate::josa;
 use crate::prerouter::{self, DateRange, PreRoutedOp};
 use crate::settings::{Language, Profile};
 use chrono::{Datelike, NaiveDate};
@@ -204,9 +205,28 @@ const SELECTION_WORDS: &[&str] = &[
 ];
 const ALL_WORDS: &[&str] = &["전부", "전체", "모두", "모든", "라이브러리전체", "all documents", "everything", "all"];
 
-/// Whether the sentence explicitly targets the whole library ("전부", "모든 문서", "all documents").
+/// Whether the user's own words explicitly target the whole library ("전부", "모든 문서", "all
+/// documents"). In an ask-back text only the command and the reply count: the assistant's
+/// question says "전체면 '전부'라고 해 주세요" itself, which made every reply read as "all".
 pub fn mentions_all(text: &str) -> bool {
-    Text::new(text, true).has(ALL_WORDS)
+    Text::new(&user_words(text), true).has(ALL_WORDS)
+}
+
+/// The user's own words of an ask-back text. The assistant sends the reply to a question as
+/// `<command>\n\n[어시스턴트 질문] <question>\n[사용자 답변] <reply>` (`[Assistant question]` /
+/// `[User reply]` in English; `askBackText` in the UI) — the question is dropped. Any other text
+/// is returned as is.
+pub fn user_words(text: &str) -> String {
+    const QUESTION: [&str; 2] = ["[어시스턴트 질문]", "[Assistant question]"];
+    const REPLY: [&str; 2] = ["[사용자 답변]", "[User reply]"];
+    let Some(q_at) = QUESTION.iter().filter_map(|m| text.find(m)).min() else { return text.to_string() };
+    let (command, rest) = text.split_at(q_at);
+    // The reply follows the last reply marker (the question may quote one).
+    let reply = REPLY.iter().filter_map(|m| rest.rfind(m).map(|i| (i, &rest[i + m.len()..]))).max_by_key(|(i, _)| *i);
+    match reply {
+        Some((_, reply)) => format!("{}\n{}", command.trim_end(), reply.trim()),
+        None => command.trim_end().to_string(),
+    }
 }
 
 fn selection_ids(ctx: &PlanContext) -> Vec<String> {
@@ -334,7 +354,8 @@ fn refers_to_open_doc(t: &Text<'_>, ctx: &PlanContext) -> bool {
     })
 }
 
-fn scope_of(t: &Text<'_>, ctx: &PlanContext, dt: Option<&DocTypeSummary>, d: Option<&DateRange>) -> Scope {
+/// What the sentence itself names: the selection, a folder, a project, a type, a date range.
+fn named_scope(t: &Text<'_>, ctx: &PlanContext, dt: Option<&DocTypeSummary>, d: Option<&DateRange>) -> Scope {
     let mut scope = Scope::default();
     let open_doc_by_type = refers_to_open_doc(t, ctx);
     if t.has(SELECTION_WORDS) || open_doc_by_type {
@@ -355,12 +376,34 @@ fn scope_of(t: &Text<'_>, ctx: &PlanContext, dt: Option<&DocTypeSummary>, d: Opt
         scope.filter.doc_type = Some(dt.slug.clone());
     }
     apply_date(&mut scope, d);
-    // The assistant's "현재 프로젝트" scope (0.5.0) is the default when the sentence names no
-    // documents, folder or project of its own (filters such as a type / date intersect with it).
+    scope
+}
+
+/// The assistant's "현재 프로젝트" scope (0.5.0): the default when the sentence names no documents,
+/// folder or project of its own (filters such as a type / date intersect with it).
+fn default_project(mut scope: Scope, ctx: &PlanContext) -> Scope {
     if scope.filter.project_id.is_none() && scope.doc_ids.is_empty() && scope.folder.is_none() {
         scope.filter.project_id = ctx.scope_project.clone().filter(|p| !p.trim().is_empty());
     }
     scope
+}
+
+/// Scope of a rule that changes documents. The project scope joins what the sentence names, but
+/// it never stands in for it: with nothing named the scope stays empty (the rule falls back to
+/// the selection or asks which documents) unless the sentence says "전부" — then "all" is the
+/// project (audit PLN-6: "90도 돌려줘" used to rotate the whole open project).
+fn scope_of(t: &Text<'_>, ctx: &PlanContext, dt: Option<&DocTypeSummary>, d: Option<&DateRange>) -> Scope {
+    let scope = named_scope(t, ctx, dt, d);
+    if scope.is_empty() && !t.has(ALL_WORDS) {
+        return scope;
+    }
+    default_project(scope, ctx)
+}
+
+/// Scope of a rule that only reads or processes documents (totals, exports, search, classify /
+/// OCR / extract / summarise): the project scope is the default scope.
+fn scope_or_project(t: &Text<'_>, ctx: &PlanContext, dt: Option<&DocTypeSummary>, d: Option<&DateRange>) -> Scope {
+    default_project(named_scope(t, ctx, dt, d), ctx)
 }
 
 fn mk(op: Op, scope: Scope, confidence: f32, summary: String) -> Plan {
@@ -633,7 +676,7 @@ fn export(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     }
     let dt = doc_type(t, ctx);
     let d = date(t, ctx);
-    let mut scope = scope_of(t, ctx, dt, d.as_ref());
+    let mut scope = scope_or_project(t, ctx, dt, d.as_ref());
     if scope.folder.is_none() && scope.doc_ids.is_empty() && dt.is_none() && d.is_none() && !t.has(ALL_WORDS) {
         scope.folder = ctx.current_folder.clone();
     }
@@ -665,9 +708,10 @@ fn export(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     });
     let label = type_label(dt, t.ko, t.t("문서", "documents"));
     let summary = if t.ko {
+        // "… XLSX 파일로": the particle follows a Korean noun, not the format's Latin name.
         match columns.len() {
-            0 => format!("{label}을(를) {}(으)로 내보냅니다", format.as_str().to_uppercase()),
-            n => format!("{label}에서 {n}개 필드를 추출해 {}(으)로 내보냅니다", format.as_str().to_uppercase()),
+            0 => format!("{} {} 파일로 내보냅니다", josa::eul_reul(label), format.as_str().to_uppercase()),
+            n => format!("{label}에서 {n}개 필드를 추출해 {} 파일로 내보냅니다", format.as_str().to_uppercase()),
         }
     } else {
         match columns.len() {
@@ -757,7 +801,7 @@ fn aggregate(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     };
     let dt = doc_type(t, ctx);
     let d = date(t, ctx);
-    let scope = scope_of(t, ctx, dt, d.as_ref());
+    let scope = scope_or_project(t, ctx, dt, d.as_ref());
     let schema = dt.and_then(|d| ctx.schema_for_type(&d.slug));
     let field = if func == AggregateFn::Count {
         None
@@ -888,7 +932,8 @@ fn inbox(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     let label = type_label(dt, t.ko, t.t("문서", "documents"));
     let summary = if t.ko {
         format!(
-            "inbox의 {label}을(를) 가져와 {}{}",
+            "inbox의 {} 가져와 {}{}",
+            josa::eul_reul(label),
             if ops.len() > 1 { "분류·OCR·추출한 뒤 " } else { "등록하고 " },
             match group {
                 Some(GroupBy::Month) => "월별 폴더로 이동합니다",
@@ -1000,7 +1045,11 @@ fn organize(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         let folder = if folder.contains('/') { folder } else { format!("documents/{folder}") };
         (
             Op::Move { folder: folder.clone(), group_by: None, only_reviewed },
-            t.t(&format!("{label}을(를) {folder}/ 로 이동합니다"), &format!("Move {label} to {folder}/")).to_string(),
+            t.t(
+                &format!("{} {folder}/ 폴더로 이동합니다", josa::eul_reul(label)),
+                &format!("Move {label} to {folder}/"),
+            )
+            .to_string(),
         )
     } else if rename {
         let g = group.unwrap_or(GroupBy::DocType);
@@ -1023,7 +1072,7 @@ fn organize(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         (
             Op::Move { folder: folder_template(g).into(), group_by: Some(g), only_reviewed },
             t.t(
-                &format!("{label}을(를) {} 폴더로 이동합니다", group_word(g, true)),
+                &format!("{} {} 폴더로 이동합니다", josa::eul_reul(label), group_word(g, true)),
                 &format!("Move {label} into {} folders", group_word(g, false)),
             )
             .to_string(),
@@ -1117,7 +1166,7 @@ fn tag(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     };
     let summary = t
         .t(
-            &format!("태그 {}을(를) {}", names.join(", "), if remove { "제거합니다" } else { "추가합니다" }),
+            &format!("태그 {} {}", josa::eul_reul(&names.join(", ")), if remove { "제거합니다" } else { "추가합니다" }),
             &format!("{} tag(s) {}", if remove { "Remove" } else { "Add" }, names.join(", ")),
         )
         .to_string();
@@ -1171,7 +1220,8 @@ fn delete(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         Op::Delete { to_trash: Some(true) },
         scope,
         0.85,
-        t.t(&format!("{label}을(를) 휴지통으로 보냅니다"), &format!("Move {label} to the recycle bin")).to_string(),
+        t.t(&format!("{} 휴지통으로 보냅니다", josa::eul_reul(label)), &format!("Move {label} to the recycle bin"))
+            .to_string(),
     ))
 }
 
@@ -1192,7 +1242,7 @@ fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     let force = t.has(&["다시", "재처리", "재추출", "재분류", "재실행", "again", "redo", "force"]);
     let dt = doc_type(t, ctx);
     let d = date(t, ctx);
-    let mut scope = scope_of(t, ctx, dt, d.as_ref());
+    let mut scope = scope_or_project(t, ctx, dt, d.as_ref());
     // "프로젝트별로 요약해줘" (0.8.0): one summary per group, over the library unless documents are named.
     let summary_only = summarize && !(classify || ocr || extract || validate || generic);
     let grouping = if summary_only { super::guard::summary_group(t.raw) } else { None };
@@ -1279,7 +1329,7 @@ fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         })
         .collect();
     let summary = if t.ko {
-        format!("{label}을(를) {}합니다{}", what.join("·"), if force { "(다시 실행)" } else { "" })
+        format!("{} {}합니다{}", josa::eul_reul(label), what.join("·"), if force { "(다시 실행)" } else { "" })
     } else {
         format!("{} {label}{}", what.join(", "), if force { " (re-run)" } else { "" })
     };
@@ -1429,12 +1479,12 @@ fn search(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     }
     let d = date(t, ctx);
     let dt = doc_type(t, ctx);
-    let scope = scope_of(t, ctx, dt, d.as_ref());
+    let scope = scope_or_project(t, ctx, dt, d.as_ref());
     Some(mk(
         Op::Search { query: q.clone(), mode: None, top_k: None },
         scope,
         0.85,
-        t.t(&format!("'{q}'을(를) 검색합니다"), &format!("Search for '{q}'")).to_string(),
+        t.t(&format!("{} 검색합니다", josa::eul_reul(&format!("'{q}'"))), &format!("Search for '{q}'")).to_string(),
     ))
 }
 
@@ -2100,11 +2150,14 @@ fn draft_document(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         .to_string();
     if aggregate_first {
         let dt = doc_type(t, ctx);
-        let scope = scope_of(t, ctx, dt, date(t, ctx).as_ref());
+        let scope = scope_or_project(t, ctx, dt, date(t, ctx).as_ref());
         let agg = Op::Aggregate { func: AggregateFn::Sum, field: None, group_by: None, include_unreviewed: None };
         let summary = t
             .t(
-                &format!("{}을(를) 집계한 뒤 그 결과로 {label} 초안을 만듭니다", type_label(dt, true, "문서")),
+                &format!(
+                    "{} 집계한 뒤 그 결과로 {label} 초안을 만듭니다",
+                    josa::eul_reul(type_label(dt, true, "문서"))
+                ),
                 &format!(
                     "Aggregate the {} first, then draft a {label} from the totals",
                     type_label(dt, false, "documents")
@@ -2660,7 +2713,11 @@ fn set_retention(t: &Text<'_>) -> Option<Plan> {
         Op::SetRetention { item, days },
         Scope::default(),
         0.85,
-        t.t(&format!("{label} 보존 기간을 {period}로 설정합니다"), &format!("Keep {label} for {period}")).to_string(),
+        t.t(
+            &format!("{label} 보존 기간을 {} 설정합니다", josa::euro_ro(&period)),
+            &format!("Keep {label} for {period}"),
+        )
+        .to_string(),
     ))
 }
 
@@ -3079,35 +3136,123 @@ fn workspace_rule(t: &Text<'_>) -> Option<Plan> {
     }
     let summary = match action {
         WorkspaceAction::Open => t.t("워크스페이스를 엽니다", "Open the workspace").to_string(),
-        WorkspaceAction::Create => t.t("새 워크스페이스를 만듭니다", "Create a workspace").to_string(),
+        // The folder is spelled out: the plan is confirmed before the folder is created.
+        WorkspaceAction::Create => {
+            let p = path.as_deref().unwrap_or_default();
+            t.t(&format!("새 워크스페이스를 만듭니다: {p}"), &format!("Create a workspace: {p}")).to_string()
+        }
         WorkspaceAction::Close => t.t("워크스페이스를 닫습니다", "Close the workspace").to_string(),
         WorkspaceAction::Forget => t.t("최근 목록에서 워크스페이스를 지웁니다", "Forget the workspace").to_string(),
     };
     Some(mk(Op::Workspace { action, path }, Scope::default(), 0.86, summary))
 }
 
-/// A file-system path in the sentence (`D:\…`, `/…`, `~/…`, `C:/…`), trailing particle stripped.
-fn path_in(raw: &str) -> Option<String> {
-    for w in raw.split_whitespace() {
-        let w = w.trim_matches(|c: char| ['"', '\'', '“', '”', ',', '.'].contains(&c));
-        let looks = (w.len() >= 3 && w.as_bytes()[1] == b':' && (w.as_bytes()[2] == b'\\' || w.as_bytes()[2] == b'/'))
-            || w.starts_with("\\\\")
-            || w.starts_with('/')
-            || w.starts_with("~/");
-        if looks {
-            let mut p = w.to_string();
-            for particle in ["으로", "에서", "에는", "을", "를", "은", "는", "로", "에", "의"] {
-                if let Some(s) = p.strip_suffix(particle) {
-                    if s.chars().last().is_some_and(|c| c.is_ascii()) {
-                        p = s.to_string();
-                        break;
-                    }
-                }
-            }
-            return Some(p);
+/// Whether a word starts a file-system path: `D:\…`, `C:/…`, `\\server\…`, `/…`, `~/…`.
+fn starts_path(w: &str) -> bool {
+    let b = w.as_bytes();
+    (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/'))
+        || w.starts_with("\\\\")
+        || (w.starts_with('/') && w.len() > 1)
+        || w.starts_with("~/")
+}
+
+/// The path without a particle glued to its end ("D:\Work를", "D:\문서로" → `D:\문서`), or `None`
+/// when it ends in none. After a Hangul name the particle must be the form that name takes, so
+/// names that merely end in such a syllable are kept: `D:\경로` (경 would take 으로), `D:\가을`.
+fn without_particle(path: &str) -> Option<String> {
+    for p in ["으로", "에서", "에는", "을", "를", "은", "는", "로", "에", "의"] {
+        let Some(stem) = path.strip_suffix(p) else { continue };
+        let Some(last) = stem.chars().last() else { continue };
+        if ['\\', '/', ':'].contains(&last) {
+            continue; // the particle-looking syllable is the whole name
+        }
+        let fits = last.is_ascii()
+            || match p {
+                "을" | "를" => josa::particle(stem, josa::Josa::EulReul) == p,
+                "은" | "는" => josa::particle(stem, josa::Josa::EunNeun) == p,
+                "로" | "으로" => josa::particle(stem, josa::Josa::EuroRo) == p,
+                "에" | "에서" | "에는" => true,
+                _ => false, // 의 has one form: "D:\회의" is a name
+            };
+        if fits {
+            return Some(stem.to_string());
         }
     }
     None
+}
+
+/// A file-system path in the sentence (`D:\…`, `\\server\…`, `/…`, `~/…`, `C:/…`).
+///
+/// A quoted path is taken whole. Otherwise the path starts at the first word that looks like one
+/// and may contain blanks: the longest run of words that exists on disk wins (with or without a
+/// particle glued to its end); when nothing exists — a workspace still to be created, or a path
+/// of another machine — it runs up to the command word ("워크스페이스 D:\업무 문서 만들어" →
+/// `D:\업무 문서`) and a glued particle is dropped. It used to stop at the first blank and to
+/// keep the particle after a Hangul name (audit PLN-18).
+fn path_in(raw: &str) -> Option<String> {
+    if let Some(q) = quoted_all(raw).into_iter().find(|q| starts_path(q)) {
+        return Some(q);
+    }
+    let clean = |w: &str| -> String {
+        w.trim_matches(|c: char| ['"', '\'', '“', '”', '‘', '’', ','].contains(&c)).trim_end_matches('.').to_string()
+    };
+    let words: Vec<&str> = raw.split_whitespace().collect();
+    let start = words.iter().position(|w| starts_path(&clean(w)))?;
+    let candidate = |end: usize| clean(&words[start..end].join(" "));
+    for end in (start + 1..=words.len()).rev() {
+        let c = candidate(end);
+        if std::path::Path::new(&c).exists() {
+            return Some(c);
+        }
+        if let Some(stem) = without_particle(&c).filter(|s| std::path::Path::new(s).exists()) {
+            return Some(stem);
+        }
+    }
+    // Nothing on disk: up to the word that continues the command.
+    const VERBS: [&str; 27] = [
+        "열어",
+        "열기",
+        "열고",
+        "전환",
+        "바꿔",
+        "바꾸",
+        "만들",
+        "생성",
+        "닫아",
+        "닫기",
+        "가져와",
+        "가져오",
+        "불러와",
+        "불러오",
+        "잊어",
+        "목록에서",
+        "해줘",
+        "해주",
+        "워크스페이스",
+        "작업공간",
+        "open",
+        "switch",
+        "create",
+        "close",
+        "forget",
+        "import",
+        "workspace",
+    ];
+    const PARTICLES: [&str; 7] = ["을", "를", "로", "으로", "에", "에서", "의"];
+    let continues = |w: &str| {
+        let w = clean(w).to_lowercase();
+        PARTICLES.contains(&w.as_str())
+            || VERBS.iter().any(|v| w.starts_with(v))
+            || w == "please"
+            // "D:\models 폴더에서 가져와": 폴더 with a particle belongs to the sentence ("D:\새 폴더" is a name).
+            || (w.starts_with("폴더") && w != "폴더")
+    };
+    let mut end = start + 1;
+    while end < words.len() && !continues(words[end]) {
+        end += 1;
+    }
+    let c = candidate(end);
+    Some(without_particle(&c).unwrap_or(c))
 }
 
 /// AI models: 받기(download) · 가져오기(import) · 삭제 · 해시 검증 · 벤치마크 · 로드/언로드 · 티어 · 백엔드.
@@ -3148,7 +3293,7 @@ fn manage_model_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
             },
             Scope::default(),
             0.86,
-            t.t(&format!("모델 티어를 {tier}(으)로"), &format!("Model tier → {tier}")).to_string(),
+            t.t(&format!("모델 티어 → {tier}"), &format!("Model tier → {tier}")).to_string(),
         ));
     }
     if t.has(&["백엔드", "backend"]) {
@@ -3165,7 +3310,7 @@ fn manage_model_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
                 },
                 Scope::default(),
                 0.86,
-                t.t(&format!("엔진 백엔드를 {b}(으)로"), &format!("Engine backend → {b}")).to_string(),
+                t.t(&format!("엔진 백엔드 → {b}"), &format!("Engine backend → {b}")).to_string(),
             ));
         }
     }
@@ -3202,19 +3347,18 @@ fn manage_model_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     let Some(id) = id else {
         return Some(Plan::clarify(t.t("어느 모델인가요? 모델 ID를 알려주세요.", "Which model? Give its id."), 0.5));
     };
+    // "<id> 모델을 …": the particle follows 모델, not the Latin id.
     let summary = match action {
-        ModelAction::Download => {
-            t.t(&format!("모델 {id}을(를) 내려받습니다"), &format!("Download model {id}")).to_string()
-        }
-        ModelAction::Delete => t.t(&format!("모델 {id}을(를) 삭제합니다"), &format!("Delete model {id}")).to_string(),
+        ModelAction::Download => t.t(&format!("{id} 모델을 내려받습니다"), &format!("Download model {id}")).to_string(),
+        ModelAction::Delete => t.t(&format!("{id} 모델을 삭제합니다"), &format!("Delete model {id}")).to_string(),
         ModelAction::Verify => {
-            t.t(&format!("모델 {id}의 해시를 검증합니다"), &format!("Verify model {id}")).to_string()
+            t.t(&format!("{id} 모델의 해시를 검증합니다"), &format!("Verify model {id}")).to_string()
         }
         ModelAction::Benchmark => {
-            t.t(&format!("모델 {id}을(를) 테스트합니다"), &format!("Benchmark model {id}")).to_string()
+            t.t(&format!("{id} 모델을 테스트합니다"), &format!("Benchmark model {id}")).to_string()
         }
-        ModelAction::Load => t.t(&format!("모델 {id}을(를) 로드합니다"), &format!("Load model {id}")).to_string(),
-        _ => t.t(&format!("모델 {id}을(를) 내립니다"), &format!("Unload model {id}")).to_string(),
+        ModelAction::Load => t.t(&format!("{id} 모델을 로드합니다"), &format!("Load model {id}")).to_string(),
+        _ => t.t(&format!("{id} 모델을 내립니다"), &format!("Unload model {id}")).to_string(),
     };
     Some(mk(
         Op::ManageModel { action, id: Some(id), tier: None, backend: None, path: None },
@@ -3351,7 +3495,7 @@ fn document_edit_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
                 Op::SetRole { role },
                 scope,
                 0.85,
-                t.t(&format!("{label}(으)로 표시합니다"), &format!("Mark as {label}")).to_string(),
+                t.t(&format!("{} 표시합니다", josa::euro_ro(&label)), &format!("Mark as {label}")).to_string(),
             ));
         }
     }
@@ -3479,7 +3623,11 @@ fn document_edit_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
                 Op::SetTitle { title: title.clone() },
                 scope,
                 0.86,
-                t.t(&format!("제목을 '{title}'(으)로"), &format!("Title → '{title}'")).to_string(),
+                t.t(
+                    &format!("제목을 {} 바꿉니다", josa::euro_ro(&format!("'{title}'"))),
+                    &format!("Title → '{title}'"),
+                )
+                .to_string(),
             ));
         }
     }
@@ -3508,8 +3656,15 @@ fn document_edit_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
                 Op::EditText { find: q[0].clone(), replace: q[1].clone(), pages },
                 scope,
                 0.84,
-                t.t(&format!("'{}' → '{}'(으)로 바꿉니다", q[0], q[1]), &format!("Replace '{}' with '{}'", q[0], q[1]))
-                    .to_string(),
+                t.t(
+                    &format!(
+                        "{} {} 바꿉니다",
+                        josa::eul_reul(&format!("'{}'", q[0])),
+                        josa::euro_ro(&format!("'{}'", q[1]))
+                    ),
+                    &format!("Replace '{}' with '{}'", q[0], q[1]),
+                )
+                .to_string(),
             ));
         }
     }
@@ -3645,7 +3800,11 @@ fn reference_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
             Op::ManageReference { action: ReferenceAction::Create, group: None, name: Some(n.clone()), project: None },
             Scope::default(),
             0.86,
-            t.t(&format!("참고 자료 묶음 '{n}'을(를) 만듭니다"), &format!("Create reference group '{n}'")).to_string(),
+            t.t(
+                &format!("참고 자료 묶음 {} 만듭니다", josa::eul_reul(&format!("'{n}'"))),
+                &format!("Create reference group '{n}'"),
+            )
+            .to_string(),
         ));
     }
     let action = if t.has(&["삭제", "지워", "지우", "delete", "remove the group"]) && !t.has(&["에서", "from"])
@@ -3933,9 +4092,12 @@ fn schema_admin_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     };
     let name = if action == SchemaAction::Rename { q.last().cloned() } else { None };
     let summary = match action {
-        SchemaAction::SetDefault => {
-            t.t(&format!("'{schema}'을(를) 기본 양식으로"), &format!("Make '{schema}' the default schema")).to_string()
-        }
+        SchemaAction::SetDefault => t
+            .t(
+                &format!("{} 기본 양식으로 지정합니다", josa::eul_reul(&format!("'{schema}'"))),
+                &format!("Make '{schema}' the default schema"),
+            )
+            .to_string(),
         SchemaAction::Disable => {
             t.t(&format!("'{schema}' 양식 사용 안 함"), &format!("Disable schema '{schema}'")).to_string()
         }

@@ -18,6 +18,7 @@ use crate::documents::{repo as docs, DocumentRecord, DocumentRole};
 use crate::error::{CoreError, Result};
 use crate::export::{self, ExportRequest};
 use crate::generate::{self, DraftRequest, GenerateDeps, ReviseScope, SourceRef};
+use crate::josa;
 use crate::knowledge::answer::{self, AnswerDeps, ChatBackend};
 use crate::knowledge::embed::Embedder;
 use crate::knowledge::repo as knowledge_repo;
@@ -104,6 +105,11 @@ pub struct PlanPreview {
     pub steps: Vec<StepPreview>,
     /// Whether the plan needs the card (side effects, overwrite, deletion …).
     pub requires_confirmation: bool,
+    /// Whether any step works on the documents in scope (`validate::uses_scope`). `false` for
+    /// plans of settings / navigation / administration ops: `document_count` then says nothing
+    /// about the plan and the card should not show it.
+    #[serde(default)]
+    pub uses_scope: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -212,19 +218,79 @@ pub struct ExecProgress {
     pub current: String,
 }
 
-/// Documents the plan works on right now: the scope, narrowed to what an
-/// earlier import step registered.
+/// Documents the plan works on right now: the scope — or, once an import step has run, the
+/// documents of that import (`imported`; see [`batch_scope`]).
 fn working_set(deps: &ExecDeps<'_>, plan: &Plan, imported: Option<&[String]>) -> Result<Vec<DocumentRecord>> {
-    working_set_in(deps, &plan_scope(plan), imported)
+    working_set_in(deps, &plan_scope(plan), imported, false)
 }
 
-fn working_set_in(deps: &ExecDeps<'_>, scope: &Scope, imported: Option<&[String]>) -> Result<Vec<DocumentRecord>> {
-    let mut docs = deps.db().with(|c| scope::resolve(c, scope))?;
-    if let Some(ids) = imported {
-        let keep: HashSet<&str> = ids.iter().map(String::as_str).collect();
-        docs.retain(|d| keep.contains(d.id.as_str()));
+/// The working set of a classify / OCR / extract step. After an import the scope's type filter
+/// cannot apply to a document the classifier has not seen yet ("inbox의 견적서를 전부 처리하고 …"
+/// dropped every file it had just imported — audit PLN-4), so untyped documents stay in; a
+/// document that has a type must match it.
+fn pipeline_set(deps: &ExecDeps<'_>, plan: &Plan, imported: Option<&[String]>) -> Result<Vec<DocumentRecord>> {
+    working_set_in(deps, &plan_scope(plan), imported, true)
+}
+
+fn working_set_in(
+    deps: &ExecDeps<'_>,
+    scope: &Scope,
+    imported: Option<&[String]>,
+    untyped_pass: bool,
+) -> Result<Vec<DocumentRecord>> {
+    let Some(ids) = imported else {
+        return deps.db().with(|c| scope::resolve(c, scope));
+    };
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut batch = batch_scope(scope, ids);
+    let wanted = if untyped_pass { batch.filter.doc_type.take() } else { None };
+    let mut docs = deps.db().with(|c| scope::resolve(c, &batch))?;
+    if let Some(t) = wanted {
+        docs.retain(|d| d.doc_type.as_deref().is_none_or(|x| x == t));
     }
     Ok(docs)
+}
+
+/// The scope of the steps after an import: the documents of that import (new, re-linked and the
+/// ones it met again), filtered by what the plan's scope says about content (type, dates, vendor,
+/// tags …). Where the documents were before — a folder, a selection, a project — no longer
+/// applies. The scope used to be united with the import, so "D:\스캔\a.pdf 가져와서 요약해줘"
+/// summarised the whole library (audit PLN-4).
+fn batch_scope(scope: &Scope, ids: &[String]) -> Scope {
+    let mut s = scope.clone();
+    s.folder = None;
+    s.doc_ids = ids.to_vec();
+    s.filter.project_id = None;
+    s
+}
+
+/// The scope a step hands to the aggregate / export / organise modules: the plan's own — or,
+/// after an import step, that import's documents. `None`: the import brought no documents.
+fn step_scope(plan: &Plan, imported: Option<&[String]>) -> Option<Scope> {
+    match imported {
+        None => Some(plan.scope.clone()),
+        Some([]) => None,
+        Some(ids) => Some(batch_scope(&plan.scope, ids)),
+    }
+}
+
+/// Whether the plan's scope restricts the documents by more than a project (or an import has
+/// defined the working set): when such a scope matches nothing, a search / answer must find
+/// nothing instead of falling back to every document (audit PLN-19).
+fn scope_narrows(plan: &Plan, imported: Option<&[String]>) -> bool {
+    let mut s = plan.scope.clone();
+    s.filter.project_id = None;
+    imported.is_some() || !s.is_empty()
+}
+
+fn nothing_in_scope(deps: &ExecDeps<'_>) -> StepOutcome {
+    StepOutcome {
+        summary: deps.t("대상 문서 없음", "No documents in scope").into(),
+        payload: json!({ "documents": [] }),
+        imported: None,
+    }
 }
 
 /// The scope a plan's documents come from. "선택한 문서를 한빛 프로젝트에 추가해" names the project as
@@ -437,11 +503,22 @@ fn run_step(
             )?;
             out.documents.extend(report.imported.iter().cloned());
             out.documents.extend(report.relinked.iter().cloned());
+            // The later steps work on the documents of this import: the new and re-linked ones and
+            // the ones the import met again (a file that is already registered, or whose content
+            // is — "inbox 처리" still covers what the watcher registered, and importing a file a
+            // second time still summarises that file). Never the whole scope (audit PLN-4).
             let mut all = report.imported.clone();
             all.extend(report.relinked.iter().cloned());
-            // Documents already registered from the inbox stay in scope too.
-            let existing = db.with(|c| scope::resolve(c, &plan.scope))?;
-            all.extend(existing.iter().map(|d| d.id.clone()));
+            let existing: Vec<String> = plan_
+                .items
+                .iter()
+                .filter_map(|item| match &item.status {
+                    import::ImportItemStatus::AlreadyRegistered { id } => Some(id.clone()),
+                    import::ImportItemStatus::Duplicate { of, .. } => Some(of.clone()),
+                    _ => None,
+                })
+                .collect();
+            all.extend(existing.iter().cloned());
             all.sort();
             all.dedup();
             if report.cancelled {
@@ -468,14 +545,13 @@ fn run_step(
             };
             Ok(StepOutcome {
                 summary,
-                payload: json!({ "imported": report.imported, "relinked": report.relinked, "failed": report.failed, "skipped": report.skipped }),
+                payload: json!({ "imported": report.imported, "relinked": report.relinked, "existing": existing, "failed": report.failed, "skipped": report.skipped }),
                 imported: Some(all),
             })
         }
         Op::Classify { doc_types: _, force } => pipeline_step(
             deps,
-            plan,
-            imported,
+            pipeline_set(deps, plan, imported)?,
             PipelineLevel::Classify,
             SchemaChoice::Auto,
             force.unwrap_or(false),
@@ -486,8 +562,7 @@ fn run_step(
         ),
         Op::Ocr { pages, profile, force } => pipeline_step(
             deps,
-            plan,
-            imported,
+            pipeline_set(deps, plan, imported)?,
             PipelineLevel::Ocr,
             SchemaChoice::Auto,
             force.unwrap_or(false),
@@ -516,18 +591,46 @@ fn run_step(
                 }
                 _ => SchemaChoice::Auto,
             };
-            pipeline_step(
-                deps,
-                plan,
-                imported,
-                PipelineLevel::Extract,
-                choice,
-                force.unwrap_or(false),
-                None,
-                Vec::new(),
-                progress,
-                out,
-            )
+            // A document that already has an extraction keeps it — and with it every approval and
+            // correction made in review — unless the command asks for a re-run (`force`). Every
+            // document in scope used to be extracted again (audit PLN-3).
+            let force = force.unwrap_or(false);
+            let (todo, kept): (Vec<DocumentRecord>, Vec<DocumentRecord>) =
+                pipeline_set(deps, plan, imported)?.into_iter().partition(|d| force || d.last_run_id.is_none());
+            if kept.is_empty() {
+                return pipeline_step(
+                    deps,
+                    todo,
+                    PipelineLevel::Extract,
+                    choice,
+                    force,
+                    None,
+                    Vec::new(),
+                    progress,
+                    out,
+                );
+            }
+            let note = if deps.ko() {
+                format!("이미 추출된 {}건은 건너뜀(다시 추출하려면 '다시 추출')", kept.len())
+            } else {
+                format!("{} already extracted and skipped (say 're-extract' to run them again)", kept.len())
+            };
+            let mut outcome = if todo.is_empty() {
+                StepOutcome {
+                    summary: note,
+                    payload: json!({ "documents": [], "processed": [], "extracted": 0, "review_pending": 0 }),
+                    imported: None,
+                }
+            } else {
+                let mut o =
+                    pipeline_step(deps, todo, PipelineLevel::Extract, choice, false, None, Vec::new(), progress, out)?;
+                o.summary = format!("{} · {note}", o.summary);
+                o
+            };
+            if let Some(obj) = outcome.payload.as_object_mut() {
+                obj.insert("already_extracted".into(), json!(ids(&kept)));
+            }
+            Ok(outcome)
         }
         Op::SetDocType { doc_type } => {
             let docs_ = working_set(deps, plan, imported)?;
@@ -566,14 +669,44 @@ fn run_step(
                 imported: None,
             })
         }
-        Op::Review { action, only, field: _, value: _ } => {
-            let docs_ = working_set(deps, plan, imported)?;
+        Op::Review { action, only, field, value } => {
             let reason = match only {
                 Some(ReviewOnly::LowConfidence) => Some(ReviewReason::LowConfidence),
                 Some(ReviewOnly::Failed) => Some(ReviewReason::ValidationFailed),
                 _ => None,
             };
+            // `show`: the review screen is the app's — hand it over as a navigation action
+            // (the step used to do nothing and report "0 fields rejected", audit PLN-8).
+            if *action == ReviewOp::Show {
+                let scoped = !plan.scope.is_empty() || imported.is_some();
+                let in_scope: Option<HashSet<String>> =
+                    if scoped { Some(ids(&working_set(deps, plan, imported)?).into_iter().collect()) } else { None };
+                let pending =
+                    db.with(|c| pipeline_repo::review_queue(c, &ReviewFilter { reason, ..ReviewFilter::default() }))?;
+                let pending: Vec<&crate::pipeline::FieldRecord> =
+                    pending.iter().filter(|f| in_scope.as_ref().is_none_or(|s| s.contains(&f.document_id))).collect();
+                let mut documents: Vec<String> = pending.iter().map(|f| f.document_id.clone()).collect();
+                documents.sort();
+                documents.dedup();
+                out.ui_actions.push(Op::Open { target: super::OpenTarget::Screen, reference: "review".into() });
+                return Ok(StepOutcome {
+                    summary: if deps.ko() {
+                        format!("검토 대기 필드 {}개(문서 {}건) — 검토함을 엽니다", pending.len(), documents.len())
+                    } else {
+                        format!(
+                            "{} fields in {} documents wait for review — opening the review queue",
+                            pending.len(),
+                            documents.len()
+                        )
+                    },
+                    payload: json!({ "action": action, "review_fields": pending.len(), "documents": documents }),
+                    imported: None,
+                });
+            }
+            let docs_ = working_set(deps, plan, imported)?;
             let mut changed = 0usize;
+            // `correct`: documents whose latest extraction has no such field.
+            let mut without_field: Vec<String> = Vec::new();
             for d in &docs_ {
                 deps.checkpoint()?;
                 match action {
@@ -590,22 +723,74 @@ fn run_step(
                             changed += review::apply(db, &fids, &ReviewAction::Reject, Some("planner"))?.len();
                         }
                     }
-                    ReviewOp::Correct | ReviewOp::Show => {}
+                    ReviewOp::Correct => {
+                        let (Some(field), Some(value)) = (field.as_deref(), value.as_deref()) else {
+                            return Err(CoreError::Invalid("correct_needs_field".into()));
+                        };
+                        let fields = db.with(|c| pipeline_repo::latest_fields(c, &d.id))?;
+                        match review_field(&fields, field) {
+                            Some(f) => {
+                                let action = ReviewAction::Correct { value: value.to_string() };
+                                changed += review::apply(db, &[f.id], &action, Some("planner"))?.len();
+                            }
+                            None => without_field.push(d.id.clone()),
+                        }
+                    }
+                    ReviewOp::Show => {}
                 }
                 out.documents.push(d.id.clone());
             }
-            Ok(StepOutcome {
-                summary: if deps.ko() {
-                    format!("필드 {changed}개 {}", if *action == ReviewOp::Approve { "승인" } else { "거부" })
+            if *action == ReviewOp::Correct && changed == 0 {
+                // Nothing was corrected: say why instead of reporting a finished step.
+                return Err(CoreError::Invalid(if docs_.is_empty() {
+                    "no_documents".into()
                 } else {
-                    format!("{changed} fields {}", if *action == ReviewOp::Approve { "approved" } else { "rejected" })
-                },
-                payload: json!({ "changed": changed, "documents": ids(&docs_) }),
+                    format!("field_not_found: {}", field.as_deref().unwrap_or_default())
+                }));
+            }
+            let (done_ko, done_en) = match action {
+                ReviewOp::Approve => ("승인", "approved"),
+                ReviewOp::Reject => ("거부", "rejected"),
+                _ => ("수정", "corrected"),
+            };
+            let mut summary = if deps.ko() {
+                format!("필드 {changed}개 {done_ko}")
+            } else {
+                format!("{changed} fields {done_en}")
+            };
+            if !without_field.is_empty() {
+                summary.push_str(&if deps.ko() {
+                    format!(" · 해당 필드가 없는 문서 {}건", without_field.len())
+                } else {
+                    format!(" · {} documents without that field", without_field.len())
+                });
+            }
+            Ok(StepOutcome {
+                summary,
+                payload: json!({ "action": action, "changed": changed, "documents": ids(&docs_), "without_field": without_field }),
                 imported: None,
             })
         }
         Op::Search { query, mode, top_k } => {
-            let docs_ = if plan.scope.is_empty() { Vec::new() } else { working_set(deps, plan, imported)? };
+            let narrowed = scope_narrows(plan, imported);
+            let docs_ = if plan.scope.is_empty() && imported.is_none() {
+                Vec::new()
+            } else {
+                working_set(deps, plan, imported)?
+            };
+            if narrowed && docs_.is_empty() {
+                // An empty document list means "everywhere" to the search: a scope that matches
+                // nothing must find nothing (audit PLN-19).
+                return Ok(StepOutcome {
+                    summary: if deps.ko() {
+                        format!("'{query}' 검색 결과 0건(범위에 해당하는 문서 없음)")
+                    } else {
+                        format!("0 hits for '{query}' (no document matches the scope)")
+                    },
+                    payload: serde_json::to_value(crate::knowledge::SearchResponse::default()).unwrap_or(Value::Null),
+                    imported: None,
+                });
+            }
             let mut req = SearchRequest::new(query);
             if let Some(m) = mode {
                 req.mode = *m;
@@ -632,10 +817,18 @@ fn run_step(
         }
         Op::Answer { question, cite: _, knowledge, .. } => {
             let chat = deps.chat.ok_or_else(|| no_model(deps))?;
+            let retrieve = knowledge.unwrap_or(true);
+            let docs_ = if !retrieve || (plan.scope.is_empty() && imported.is_none()) {
+                Vec::new()
+            } else {
+                working_set(deps, plan, imported)?
+            };
+            if retrieve && docs_.is_empty() && scope_narrows(plan, imported) {
+                return Ok(no_documents_answer(deps, question, AnswerKind::Answer));
+            }
             let _lease = LeaseGuard::acquire(deps.lease);
-            let docs_ = if plan.scope.is_empty() { Vec::new() } else { working_set(deps, plan, imported)? };
             let mut req = AnswerRequest::question(question);
-            req.retrieve = knowledge.unwrap_or(true);
+            req.retrieve = retrieve;
             req.scope = SearchScope {
                 documents: ids(&docs_),
                 project_id: plan.scope.filter.project_id.clone(),
@@ -669,12 +862,13 @@ fn run_step(
             summarize::run(deps, plan, imported, *target, *length, *group_by, progress)
         }
         Op::Aggregate { func, field, group_by, include_unreviewed } => {
+            let Some(step_scope) = step_scope(plan, imported) else { return Ok(nothing_in_scope(deps)) };
             let req = AggregateRequest {
                 func: *func,
                 field: field.clone(),
                 group_by: group_by.unwrap_or(GroupBy::None),
                 include_unreviewed: include_unreviewed.unwrap_or(false),
-                scope: plan.scope.clone(),
+                scope: step_scope,
             };
             let res = aggregate::aggregate(db, &req)?;
             let value = aggregate::format_value(res.func, res.value);
@@ -798,6 +992,7 @@ fn run_step(
             })
         }
         Op::Export { format, path, columns, layout, include, target } => {
+            let Some(step_scope) = step_scope(plan, imported) else { return Ok(nothing_in_scope(deps)) };
             let mut req = ExportRequest {
                 format: *format,
                 target: target.unwrap_or(ExportTarget::Fields),
@@ -805,10 +1000,7 @@ fn run_step(
                 columns: columns.clone(),
                 layout: layout.unwrap_or(ExportLayout::SheetPerType),
                 include: include.clone(),
-                scope: match imported {
-                    Some(ids_) => super::Scope { doc_ids: ids_.to_vec(), ..plan.scope.clone() },
-                    None => plan.scope.clone(),
-                },
+                scope: step_scope,
                 only_reviewed: false,
                 overwrite: true,
                 language: deps.language,
@@ -944,6 +1136,9 @@ fn run_step(
                 tone: tone.unwrap_or_default(),
                 length: length.unwrap_or_default(),
                 language: deps.language,
+                // A draft asked for inside a project looks its reference material up in that project
+                // (work documents ∪ reference group ∪ 공통 참고 자료), not in the whole library (audit CON-3).
+                project_id: plan.scope.filter.project_id.clone(),
                 ..DraftRequest::default()
             };
             let gdeps = GenerateDeps {
@@ -972,6 +1167,9 @@ fn run_step(
             let chat = deps.chat.ok_or_else(|| no_model(deps))?;
             let model = deps.model.clone().ok_or_else(|| no_model(deps))?;
             let id = draft_id.clone().ok_or_else(|| CoreError::Invalid("revise_draft needs a draft id".into()))?;
+            // Taken before the draft is read: a version stored after this moment is newer than the
+            // one this revision starts from.
+            let captured_at = chrono::Utc::now();
             let previous = generate::store::load(deps.paths(), &id)?;
             let revise = match scope.as_str() {
                 "section" => ReviseScope::Section { section: section.unwrap_or(1).max(1) as usize },
@@ -1003,8 +1201,24 @@ fn run_step(
                 progress: None,
             };
             progress("revise_draft", 0, 1, instruction);
-            let outcome = generate::draft(&gdeps, &req)?;
-            let _ = generate::store::save(deps.paths(), &outcome.draft);
+            let mut outcome = generate::draft(&gdeps, &req)?;
+            // The result replaces the stored draft only when that loses nothing (audit GEN-3). After
+            // a cancel — a cancelled "전체 다시 쓰기" returns the sections written so far — or when the
+            // draft was edited while the revision ran, it is stored as a new draft and the original
+            // stays; it used to be saved over the complete draft unconditionally.
+            let cancelled = deps.cancelled();
+            let input = generate::store::JobInput { previous: req.previous.as_deref(), captured_at, existed: true };
+            let stored = generate::store::save_job_result(
+                deps.paths(),
+                &mut outcome.draft,
+                &input,
+                cancelled,
+                req.language == Language::Ko,
+            )
+            .unwrap_or(generate::store::JobSave::NotSaved { reason: generate::store::SkipReason::Failed });
+            if cancelled {
+                return Err(CoreError::Cancelled);
+            }
             let what = match scope.as_str() {
                 "section" => {
                     if deps.ko() {
@@ -1028,12 +1242,35 @@ fn run_step(
                     }
                 }
             };
-            let summary = if deps.ko() {
+            let mut summary = if deps.ko() {
                 format!("'{}' 초안 {what} AI 수정 — 문서 생성 화면에서 확인·저장", outcome.draft.title)
             } else {
                 format!("Revised {what} of '{}' — review and save in the document generator", outcome.draft.title)
             };
-            Ok(StepOutcome { summary, payload: serde_json::to_value(&outcome).unwrap_or(Value::Null), imported: None })
+            {
+                use generate::store::{JobSave, SkipReason};
+                summary.push_str(match (&stored, deps.ko()) {
+                    (JobSave::Saved, _) => "",
+                    (JobSave::Copy { .. }, true) => " · 원래 초안이 그 사이 수정되어 새 초안으로 저장",
+                    (JobSave::Copy { .. }, false) => " · stored as a new draft (the original was edited meanwhile)",
+                    (JobSave::NotSaved { reason: SkipReason::Deleted }, true) => {
+                        " · 초안이 삭제되어 목록에 저장하지 않음"
+                    }
+                    (JobSave::NotSaved { reason: SkipReason::Deleted }, false) => {
+                        " · not stored (the draft was deleted)"
+                    }
+                    (JobSave::NotSaved { reason: SkipReason::Failed }, true) => " · 초안 목록에 저장하지 못함",
+                    (JobSave::NotSaved { reason: SkipReason::Failed }, false) => " · could not be stored",
+                });
+            }
+            // Serialised after the save: a copy has a new id. `draft_store` says where the result went
+            // (`{status: saved}` | `{status: copy, original, reason}` | `{status: not_saved, reason}`),
+            // as the result of a draft job does.
+            let mut payload = serde_json::to_value(&outcome).unwrap_or(Value::Null);
+            if let Some(o) = payload.as_object_mut() {
+                o.insert("draft_store".into(), serde_json::to_value(&stored).unwrap_or(Value::Null));
+            }
+            Ok(StepOutcome { summary, payload, imported: None })
         }
         Op::Explain { selection, question, scope: explain_scope, allow_general_knowledge } => {
             let chat = deps.chat.ok_or_else(|| no_model(deps))?;
@@ -1047,8 +1284,15 @@ fn run_step(
                     req.scope.documents = plan.scope.doc_ids.clone();
                 }
                 _ => {
-                    if !plan.scope.is_empty() {
+                    if !plan.scope.is_empty() || imported.is_some() {
                         req.scope.documents = ids(&working_set(deps, plan, imported)?);
+                        if req.scope.documents.is_empty() && scope_narrows(plan, imported) {
+                            return Ok(no_documents_answer(
+                                deps,
+                                question.as_deref().unwrap_or(""),
+                                AnswerKind::Explain,
+                            ));
+                        }
                     }
                     req.scope.project_id = plan.scope.filter.project_id.clone();
                 }
@@ -1133,7 +1377,9 @@ fn run_step(
             };
             let project = db.with(|c| projects_repo::save_project(c, &input))?;
             let mut added = 0u32;
-            if !plan.scope.is_empty() {
+            // Only documents the plan names (or an earlier step imported) join the new project;
+            // the validator no longer fills the open project in as a default scope (audit PLN-5).
+            if !plan.scope.is_empty() || imported.is_some() {
                 let docs_ = working_set(deps, plan, imported)?;
                 if !docs_.is_empty() {
                     added = crate::projects::copies::add_documents(
@@ -1266,8 +1512,11 @@ fn run_step(
             };
             let _lease = vlm.as_ref().map(|_| LeaseGuard::acquire(deps.lease));
             let pdeps = ProjectDeps { db, vlm: vlm.as_ref(), language: deps.language };
-            let run = projects::check(&pdeps, &pid, rules)?;
-            let summary = if deps.ko() {
+            // A reference that matches no rule fails here: the check would otherwise run zero
+            // rules and that empty run would become the project's latest check (audit PRJ-12).
+            let rule_ids = resolve_rules(db, &pid, rules)?;
+            let run = projects::check(&pdeps, &pid, &rule_ids)?;
+            let mut summary = if deps.ko() {
                 format!(
                     "통과 {} · 불일치 {} · 판단불가 {} · 누락 {}",
                     run.pass, run.mismatch, run.undetermined, run.missing
@@ -1278,6 +1527,13 @@ fn run_step(
                     run.pass, run.mismatch, run.undetermined, run.missing
                 )
             };
+            if !rule_ids.is_empty() {
+                summary.push_str(&if deps.ko() {
+                    format!(" (규칙 {}개만 검사)", rule_ids.len())
+                } else {
+                    format!(" ({} rules only)", rule_ids.len())
+                });
+            }
             Ok(StepOutcome { summary, payload: serde_json::to_value(&run).unwrap_or(Value::Null), imported: None })
         }
         Op::RequestSupplement { project, findings, output } => {
@@ -1285,14 +1541,14 @@ fn run_step(
             let run = db
                 .with(|c| projects_repo::last_run(c, &pid))?
                 .ok_or_else(|| CoreError::Invalid("no_check_run".into()))?;
-            let req =
+            let mut req =
                 projects::supplement_request(db, &pid, &run, findings, output.unwrap_or_default(), deps.language)?;
+            // The request belongs to the project it is written for: knowledge searches of the draft
+            // (and of a later regeneration from the stored request) stay inside it (audit CON-3).
+            req.bind_project(Some(pid.clone()));
             // Findings as text sources → the rule-based 보완요청서 needs no model (the shell's draft
-            // job decides the same way), so the planner never waits for the engine here.
-            let rule_only = !req.sources.is_empty()
-                && req.sources.iter().all(|s| matches!(s, SourceRef::Text { .. }))
-                && req.form_ref.as_deref().and_then(generate::TemplateKind::parse)
-                    == Some(generate::TemplateKind::SupplementRequest);
+            // job decides with the same predicate), so the planner never waits for the engine here.
+            let rule_only = generate::draft::rule_only(&req);
             let vlm = match (deps.chat, deps.model.clone()) {
                 (Some(c), Some(m)) if !rule_only => {
                     Some(Vlm::new(c, m, deps.profile, deps.cancel).with_context(deps.ctx_size))
@@ -1385,7 +1641,7 @@ fn run_step(
             out.documents.extend(created.iter().cloned());
             Ok(StepOutcome {
                 summary: if deps.ko() {
-                    format!("'{}'을(를) {}개 문서로 분할", doc.original_name, created.len())
+                    format!("{} {}개 문서로 분할", josa::eul_reul(&format!("'{}'", doc.original_name)), created.len())
                 } else {
                     format!("Split '{}' into {} documents", doc.original_name, created.len())
                 },
@@ -1416,7 +1672,7 @@ fn run_step(
             out.documents.push(doc.id.clone());
             Ok(StepOutcome {
                 summary: if deps.ko() {
-                    format!("제목을 '{}'(으)로", title.trim())
+                    format!("제목을 {} 바꿈", josa::euro_ro(&format!("'{}'", title.trim())))
                 } else {
                     format!("Title set to '{}'", title.trim())
                 },
@@ -1541,7 +1797,7 @@ fn run_step(
                             let s = match action {
                                 ReferenceAction::Rename => {
                                     if ko {
-                                        format!("묶음 이름을 '{}'(으)로", saved.name)
+                                        format!("묶음 이름을 {} 바꿈", josa::euro_ro(&format!("'{}'", saved.name)))
                                     } else {
                                         format!("Group renamed to '{}'", saved.name)
                                     }
@@ -1847,7 +2103,17 @@ fn run_step(
             }
         }
         Op::ClassifyProjects { apply, use_model } => {
-            let docs_ = if plan.scope.is_empty() { Vec::new() } else { working_set(deps, plan, imported)? };
+            let scoped = !plan.scope.is_empty() || imported.is_some();
+            let docs_ = if scoped { working_set(deps, plan, imported)? } else { Vec::new() };
+            if scoped && docs_.is_empty() {
+                // No document ids means "every unassigned document" to the classifier: a scope
+                // that matches nothing must classify nothing (audit PLN-19).
+                return Ok(StepOutcome {
+                    summary: deps.t("대상 문서 없음", "No documents in scope").into(),
+                    payload: json!({ "suggested": 0, "undecided": 0, "applied": 0, "suggestions": [], "apply_result": null }),
+                    imported: None,
+                });
+            }
             let use_model = use_model.unwrap_or(false) && deps.chat.is_some() && deps.model.is_some();
             let vlm = match (use_model, deps.chat, deps.model.clone()) {
                 (true, Some(c), Some(m)) => Some(Vlm::new(c, m, deps.profile, deps.cancel).with_context(deps.ctx_size)),
@@ -1916,7 +2182,11 @@ fn run_step(
                     db.with_tx(|tx| pipeline_repo::set_default_schema(tx, &rec.id))?;
                     (
                         if ko {
-                            format!("'{}'을(를) {} 유형의 기본 양식으로", rec.name, rec.doc_type)
+                            format!(
+                                "{} {} 유형의 기본 양식으로 지정",
+                                josa::eul_reul(&format!("'{}'", rec.name)),
+                                rec.doc_type
+                            )
                         } else {
                             format!("'{}' is now the default schema of {}", rec.name, rec.doc_type)
                         },
@@ -1956,7 +2226,7 @@ fn run_step(
                     let saved = db.with_tx(|tx| pipeline_repo::save_schema(tx, &draft))?;
                     (
                         if ko {
-                            format!("양식 이름을 '{}'(으)로", saved.name)
+                            format!("양식 이름을 {} 바꿈", josa::euro_ro(&format!("'{}'", saved.name)))
                         } else {
                             format!("Schema renamed to '{}'", saved.name)
                         },
@@ -1973,6 +2243,81 @@ fn run_step(
         // UI-side ops never reach here (`runs_in_ui`).
         _ => Ok(StepOutcome { summary: String::new(), payload: Value::Null, imported: None }),
     }
+}
+
+/// The outcome of an answer / explanation whose scope matches no document: "no evidence",
+/// without asking the model and without widening the search to the whole library.
+fn no_documents_answer(deps: &ExecDeps<'_>, question: &str, kind: AnswerKind) -> StepOutcome {
+    let text = deps.t("범위에 해당하는 문서가 없습니다", "No document matches the scope").to_string();
+    let answer = crate::knowledge::Answer {
+        kind,
+        question: question.to_string(),
+        text: text.clone(),
+        no_evidence: true,
+        ..Default::default()
+    };
+    StepOutcome { summary: text, payload: serde_json::to_value(&answer).unwrap_or(Value::Null), imported: None }
+}
+
+/// The field of a document's latest extraction that `review correct` names: by path
+/// (`supplier.brn`, `items[2].amount`), by key, or by label in either language — a scalar field
+/// for a key / label, and a label the reference is only part of when exactly one field has it.
+fn review_field<'a>(
+    fields: &'a [crate::pipeline::FieldRecord],
+    reference: &str,
+) -> Option<&'a crate::pipeline::FieldRecord> {
+    let reference = reference.trim();
+    let key = compact(reference);
+    if key.is_empty() {
+        return None;
+    }
+    let scalar = || fields.iter().filter(|f| f.row.is_none());
+    fields
+        .iter()
+        .find(|f| f.path == reference)
+        .or_else(|| scalar().find(|f| compact(&f.key) == key || compact(&f.path) == key))
+        .or_else(|| scalar().find(|f| compact(&f.label_ko) == key || compact(&f.label_en) == key))
+        .or_else(|| {
+            let mut partial =
+                scalar().filter(|f| compact(&f.label_ko).contains(&key) || compact(&f.label_en).contains(&key));
+            match (partial.next(), partial.next()) {
+                (Some(f), None) => Some(f),
+                _ => None,
+            }
+        })
+}
+
+/// Resolves the rule references of `check_consistency` to rule ids: a rule id, or words of a
+/// rule's description ("계약금액 규칙만 검사해줘" → the rules that mention 계약금액). Empty = every
+/// enabled rule. A reference that matches no enabled rule is an error — the check must not run
+/// zero rules and store that as the project's latest result (audit PRJ-12).
+fn resolve_rules(db: &Db, project_id: &str, references: &[String]) -> Result<Vec<String>> {
+    if references.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rules = db.with(|c| projects_repo::rules_of(c, project_id))?;
+    let mut out: Vec<String> = Vec::new();
+    for reference in references {
+        let reference = reference.trim();
+        let words = reference.trim_end_matches("규칙").trim_end_matches("rules").trim_end_matches("rule").trim();
+        let key = compact(words);
+        let matched: Vec<&projects::Rule> = rules
+            .iter()
+            .filter(|r| r.id == reference || (key.chars().count() >= 2 && compact(&r.description).contains(&key)))
+            .collect();
+        if matched.is_empty() {
+            return Err(CoreError::Invalid(format!("rule_unknown: {reference}")));
+        }
+        if !matched.iter().any(|r| r.enabled) {
+            return Err(CoreError::Invalid(format!("rule_disabled: {reference}")));
+        }
+        for r in matched.into_iter().filter(|r| r.enabled) {
+            if !out.contains(&r.id) {
+                out.push(r.id.clone());
+            }
+        }
+    }
+    Ok(out)
 }
 
 fn non_empty(docs_: Vec<DocumentRecord>) -> Result<Vec<DocumentRecord>> {
@@ -2071,11 +2416,11 @@ fn resolve_template(db: &Db, key: &str) -> Result<Option<projects::ProjectTempla
     Ok(all.into_iter().find(|t| super::compact(&t.name_ko) == want || super::compact(&t.name_en) == want))
 }
 
+/// Runs the pipeline up to `level` over `docs_` (the step's working set, see `pipeline_set`).
 #[allow(clippy::too_many_arguments)]
 fn pipeline_step(
     deps: &ExecDeps<'_>,
-    plan: &Plan,
-    imported: Option<&[String]>,
+    docs_: Vec<DocumentRecord>,
     level: PipelineLevel,
     schema: SchemaChoice,
     force: bool,
@@ -2084,16 +2429,11 @@ fn pipeline_step(
     progress: &mut dyn FnMut(&str, u32, u32, &str),
     out: &mut PlanExecution,
 ) -> Result<StepOutcome> {
+    if docs_.is_empty() {
+        return Ok(nothing_in_scope(deps));
+    }
     let chat = deps.chat.ok_or_else(|| no_model(deps))?;
     let model = deps.model.clone().ok_or_else(|| no_model(deps))?;
-    let docs_ = working_set(deps, plan, imported)?;
-    if docs_.is_empty() {
-        return Ok(StepOutcome {
-            summary: deps.t("대상 문서 없음", "No documents in scope").into(),
-            payload: json!({ "documents": [] }),
-            imported: None,
-        });
-    }
     let _lease = LeaseGuard::acquire(deps.lease);
     let pdeps = PipelineDeps {
         import: ImportDeps {
@@ -2167,10 +2507,7 @@ fn organize_step(
     progress: &mut dyn FnMut(&str, u32, u32, &str),
     out: &mut PlanExecution,
 ) -> Result<StepOutcome> {
-    let scope_ = match imported {
-        Some(ids_) => super::Scope { doc_ids: ids_.to_vec(), ..plan.scope.clone() },
-        None => plan.scope.clone(),
-    };
+    let Some(scope_) = step_scope(plan, imported) else { return Ok(nothing_in_scope(deps)) };
     let req = OrganizeRequest { scope: scope_, name_template, folder_template, only_reviewed, language: deps.language };
     let oplan = organize::plan(deps.db(), deps.paths(), &req)?;
     if dry_run {
@@ -2243,6 +2580,7 @@ pub fn preview(
         document_ids: ids(&docs_),
         steps: Vec::new(),
         requires_confirmation: plan.requires_confirmation,
+        uses_scope: super::validate::uses_scope(plan),
     };
     for (index, op) in plan.operations.iter().enumerate() {
         let kind = op.kind();
@@ -2323,35 +2661,90 @@ pub fn preview(
                     Err(e) => (e.to_string(), Value::Null, false),
                 }
             }
-            Op::Extract { schema_ref, fields, .. } => {
+            Op::Extract { schema_ref, fields, force } => {
                 let name = schema_ref
                     .as_deref()
                     .and_then(|id| db.with(|c| pipeline_repo::get_schema(c, id)).ok().flatten())
                     .map(|s| s.name)
                     .unwrap_or_else(|| if ko { "자동(유형별 스키마)".into() } else { "auto".into() });
-                (
-                    if ko {
-                        format!(
-                            "스키마 {name} · {}",
-                            if fields.is_empty() {
-                                "전체 필드".to_string()
-                            } else {
-                                format!("필드 {}개", fields.len())
-                            }
-                        )
+                let head = if ko {
+                    format!(
+                        "스키마 {name} · {}",
+                        if fields.is_empty() {
+                            "전체 필드".to_string()
+                        } else {
+                            format!("필드 {}개", fields.len())
+                        }
+                    )
+                } else {
+                    format!(
+                        "schema {name} · {}",
+                        if fields.is_empty() { "all fields".to_string() } else { format!("{} fields", fields.len()) }
+                    )
+                };
+                // What the step does to documents that already have an extraction (audit PLN-3):
+                // kept unless `force`; a forced run that replaces reviewed results is confirmed.
+                let force = force.unwrap_or(false);
+                let after_import = plan.operations[..index].iter().any(|o| matches!(o, Op::Import { .. }));
+                if after_import {
+                    // The working set is the import's: its documents are not known before it runs.
+                    let tail = match (ko, force) {
+                        (true, false) => "가져온 문서 대상(이미 추출된 문서는 건너뜀)",
+                        (true, true) => "가져온 문서를 다시 추출(기존 추출·검토 결과 대체)",
+                        (false, false) => "the imported documents (already extracted ones are skipped)",
+                        (false, true) => "re-extracts the imported documents (replaces existing results and reviews)",
+                    };
+                    (
+                        format!("{head} · {tail}"),
+                        json!({ "schema": name, "fields": fields, "force": force, "after_import": true }),
+                        force,
+                    )
+                } else {
+                    let extracted: Vec<String> =
+                        docs_.iter().filter(|d| d.last_run_id.is_some()).map(|d| d.id.clone()).collect();
+                    let reviewed = if force && !extracted.is_empty() {
+                        db.with(|c| scope::reviewed_documents(c, &extracted))?.len()
                     } else {
-                        format!(
-                            "schema {name} · {}",
-                            if fields.is_empty() {
-                                "all fields".to_string()
+                        0
+                    };
+                    let run = if force { docs_.len() } else { docs_.len() - extracted.len() };
+                    let tail = match (ko, force) {
+                        (true, false) if extracted.is_empty() => format!("추출 {run}건"),
+                        (true, false) => format!("추출 {run}건 · 이미 추출된 {}건은 건너뜀", extracted.len()),
+                        (true, true) if extracted.is_empty() => format!("추출 {run}건"),
+                        (true, true) => format!(
+                            "다시 추출 {run}건 — 기존 결과 {}건 대체{}",
+                            extracted.len(),
+                            if reviewed > 0 {
+                                format!("(검토한 문서 {reviewed}건 포함)")
                             } else {
-                                format!("{} fields", fields.len())
+                                String::new()
                             }
-                        )
-                    },
-                    json!({ "schema": name, "fields": fields }),
-                    false,
-                )
+                        ),
+                        (false, false) if extracted.is_empty() => format!("{run} to extract"),
+                        (false, false) => format!("{run} to extract · {} already extracted, skipped", extracted.len()),
+                        (false, true) if extracted.is_empty() => format!("{run} to extract"),
+                        (false, true) => format!(
+                            "re-extracts {run} — replaces {} existing results{}",
+                            extracted.len(),
+                            if reviewed > 0 { format!(" ({reviewed} reviewed)") } else { String::new() }
+                        ),
+                    };
+                    (
+                        format!("{head} · {tail}"),
+                        json!({
+                            "schema": name,
+                            "fields": fields,
+                            "force": force,
+                            "documents": docs_.len(),
+                            "extract": run,
+                            "already_extracted": extracted.len(),
+                            "replace": if force { extracted.len() } else { 0 },
+                            "reviewed": reviewed,
+                        }),
+                        force && reviewed > 0,
+                    )
+                }
             }
             Op::Delete { .. } => (
                 if ko {
@@ -2410,7 +2803,7 @@ pub fn preview(
             // Bulk edits of several documents are confirmed first.
             Op::Tag { .. }
             | Op::SetDocType { .. }
-            | Op::Review { action: ReviewOp::Approve | ReviewOp::Reject | ReviewOp::Correct, .. } => {
+            | Op::Review { action: ReviewOp::Approve | ReviewOp::Reject, .. } => {
                 (count_label_lang(docs_.len(), ko), json!({ "documents": docs_.len() }), docs_.len() > 1)
             }
             Op::Import { source, path, paths: file_paths, recursive, .. } => match source {
@@ -2666,7 +3059,7 @@ pub fn preview(
                     match (&t, ko) {
                         (Some(t), true) => format!("템플릿 '{}' 삭제", t.name_ko),
                         (Some(t), false) => format!("Delete template '{}'", t.name_en),
-                        (None, true) => format!("템플릿 '{key}'을(를) 찾을 수 없음"),
+                        (None, true) => format!("템플릿 {} 찾을 수 없음", josa::eul_reul(&format!("'{key}'"))),
                         (None, false) => format!("Template '{key}' not found"),
                     },
                     json!({ "template": t.as_ref().map(|t| t.id.clone()), "builtin": t.as_ref().map(|t| t.builtin) }),
@@ -2679,7 +3072,7 @@ pub fn preview(
                     match (&rec, ko) {
                         (Some(r), true) => format!("양식 '{}' 삭제(사용 {}회)", r.name, r.use_count),
                         (Some(r), false) => format!("Delete schema '{}' (used {} times)", r.name, r.use_count),
-                        (None, true) => format!("양식 '{schema}'을(를) 찾을 수 없음"),
+                        (None, true) => format!("양식 {} 찾을 수 없음", josa::eul_reul(&format!("'{schema}'"))),
                         (None, false) => format!("Schema '{schema}' not found"),
                     },
                     json!({ "schema": rec.as_ref().map(|r| r.id.clone()), "builtin": rec.as_ref().map(|r| r.builtin_key.is_some()) }),
@@ -2711,6 +3104,114 @@ pub fn preview(
                     },
                     json!({ "suggested": suggested, "undecided": undecided, "apply": apply, "use_model": use_model, "suggestions": result.map(|r| r.suggestions) }),
                     apply.unwrap_or(false),
+                )
+            }
+            // A new project takes the documents the command names — the card says how many (audit PLN-5).
+            Op::CreateProject { name, .. } => {
+                let n = if plan.scope.is_empty() { 0 } else { docs_.len() };
+                (
+                    match (ko, n) {
+                        (true, 0) => format!("새 프로젝트 '{name}'(문서 없이 만듦)"),
+                        (true, n) => format!("새 프로젝트 '{name}' · 문서 {n}건을 함께 넣음"),
+                        (false, 0) => format!("New project '{name}' (no documents)"),
+                        (false, n) => format!("New project '{name}' with {n} documents"),
+                    },
+                    json!({ "name": name, "documents": n }),
+                    true,
+                )
+            }
+            // Taking documents out of a project deletes their copies in the project folder: two or
+            // more are confirmed first (audit PLN-6).
+            Op::RemoveFromProject { project, doc_ids } => {
+                let n = if doc_ids.is_empty() { docs_.len() } else { doc_ids.len() };
+                let name = project
+                    .as_deref()
+                    .and_then(|pid| db.with(|c| projects_repo::get_project(c, pid)).ok().flatten())
+                    .map(|p| p.name)
+                    .unwrap_or_default();
+                (
+                    if ko {
+                        format!("프로젝트 '{name}'에서 문서 {n}건 제외(프로젝트 폴더의 사본 삭제, 원본은 남음)")
+                    } else {
+                        format!("{n} documents leave project '{name}' (their copies in the project folder are deleted; the originals stay)")
+                    },
+                    json!({ "project_id": project, "name": name, "documents": n }),
+                    n >= 2,
+                )
+            }
+            // Which rules a partial check runs (a reference that matches none fails the step — audit PRJ-12).
+            Op::CheckConsistency { project, rules } if !rules.is_empty() => {
+                let resolved = project.as_deref().map(|pid| resolve_rules(db, pid, rules));
+                match resolved {
+                    Some(Ok(ids_)) => (
+                        if ko {
+                            format!("규칙 {}개만 검사", ids_.len())
+                        } else {
+                            format!("checks {} rules only", ids_.len())
+                        },
+                        json!({ "rules": ids_ }),
+                        false,
+                    ),
+                    Some(Err(e)) => (
+                        if ko {
+                            format!("검사할 규칙을 찾을 수 없음: {}", rules.join(", "))
+                        } else {
+                            format!("no such rule: {}", rules.join(", "))
+                        },
+                        json!({ "rules": [], "error": e.to_string() }),
+                        false,
+                    ),
+                    None => (String::new(), Value::Null, false),
+                }
+            }
+            // `review correct`: the field and its current value in each document.
+            Op::Review { action: ReviewOp::Correct, field, value, .. } => {
+                let reference = field.as_deref().unwrap_or_default();
+                let mut matches = Vec::new();
+                for d in docs_.iter().take(200) {
+                    let fields = db.with(|c| pipeline_repo::latest_fields(c, &d.id)).unwrap_or_default();
+                    if let Some(f) = review_field(&fields, reference) {
+                        matches.push(json!({ "document_id": d.id, "field_id": f.id, "path": f.path, "label_ko": f.label_ko, "label_en": f.label_en, "value": f.value }));
+                    }
+                }
+                let new = value.as_deref().unwrap_or_default();
+                let label = matches
+                    .first()
+                    .and_then(|m| m.get(if ko { "label_ko" } else { "label_en" }).and_then(Value::as_str))
+                    .filter(|l| !l.is_empty())
+                    .unwrap_or(reference)
+                    .to_string();
+                let summary = match (matches.len(), ko) {
+                    (0, true) => format!("문서 {}건에서 필드 '{reference}' 찾을 수 없음", docs_.len()),
+                    (0, false) => format!("field '{reference}' not found in {} documents", docs_.len()),
+                    (1, _) => format!(
+                        "{label}: {} → {new}",
+                        matches[0].get("value").and_then(Value::as_str).unwrap_or(if ko {
+                            "(값 없음)"
+                        } else {
+                            "(empty)"
+                        })
+                    ),
+                    (n, true) => format!("문서 {n}건의 '{label}' → {new}"),
+                    (n, false) => format!("'{label}' of {n} documents → {new}"),
+                };
+                (
+                    summary,
+                    json!({ "documents": docs_.len(), "field": reference, "value": new, "matches": matches }),
+                    true,
+                )
+            }
+            // The folder a new workspace is created in is confirmed (audit PLN-18).
+            Op::Workspace { action: super::WorkspaceAction::Create, path } => {
+                let p = path.clone().unwrap_or_default();
+                (
+                    if ko {
+                        format!("새 워크스페이스 폴더: {p}")
+                    } else {
+                        format!("New workspace folder: {p}")
+                    },
+                    json!({ "path": p }),
+                    true,
                 )
             }
             _ => (String::new(), Value::Null, op.needs_confirmation()),
