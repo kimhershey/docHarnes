@@ -77,16 +77,62 @@ pub fn vulkan_loader_present(vulkan_binary: &Path) -> bool {
     }
 }
 
-/// GPUs for a machine on which NVML reports none (AMD / Intel cards, PLT-4): what the Vulkan
-/// engine pack lists with `--list-devices`, without software rasterisers. No Vulkan loader on
-/// the PC means no Vulkan GPU, and the pack is not started at all.
+/// Whether a Vulkan device is integrated graphics (Intel UHD / Iris, AMD APU graphics): it shares
+/// the system memory and is no reason for "auto" to leave the CPU pack — most office PCs have
+/// nothing else. Taken from the backend's own flag when its init log carries one
+/// (`ggml_vulkan: 0 = Intel(R) UHD Graphics 770 (Intel Corporation) | uma: 1 | fp16: 1 | …`),
+/// else from the usual product names.
+pub fn is_integrated_gpu(device: &EngineDevice, init_log: &str) -> bool {
+    let uma_of = |line: &str| line.split("| uma:").nth(1).and_then(|rest| rest.trim_start().chars().next());
+    let lines = || init_log.lines().filter(|l| l.contains("ggml_vulkan:") && l.contains("| uma:"));
+    let by_name = format!("= {} (", device.description);
+    let by_index = device.name.strip_prefix("Vulkan").map(|i| format!("ggml_vulkan: {i} ="));
+    let flag = lines()
+        .find(|l| l.contains(&by_name))
+        .or_else(|| lines().find(|l| by_index.as_ref().is_some_and(|prefix| l.contains(prefix.as_str()))))
+        .and_then(uma_of);
+    match flag {
+        Some(uma) => uma == '1',
+        None => {
+            let d = device.description.to_lowercase();
+            [
+                "uhd graphics",
+                "hd graphics",
+                "iris",
+                "radeon(tm) graphics",
+                "radeon graphics",
+                "radeon vega",
+                "radeon(tm) vega",
+            ]
+            .iter()
+            .any(|s| d.contains(s))
+        }
+    }
+}
+
+/// The discrete GPUs in the output of a Vulkan pack's `--list-devices` (`stdout` = the device
+/// list, `init_log` = what the backend logged while starting): software rasterisers and
+/// integrated graphics are left out.
+pub fn discrete_vulkan_gpus(stdout: &str, init_log: &str) -> Vec<GpuInfo> {
+    let devices: Vec<EngineDevice> = parse_list_devices(stdout)
+        .into_iter()
+        .filter(|d| !is_software_device(&d.description) && !is_integrated_gpu(d, init_log))
+        .collect();
+    to_gpu_infos(&devices)
+}
+
+/// GPUs for a machine on which NVML reports none (AMD / Intel cards, PLT-4): the discrete GPUs
+/// the Vulkan engine pack lists with `--list-devices`. An explicit "Vulkan" backend still runs
+/// on integrated graphics; only the automatic choice ignores them. No Vulkan loader on the PC
+/// means no Vulkan GPU, and the pack is not started at all.
 pub fn probe_vulkan_gpus(vulkan_binary: &Path, timeout: Duration) -> Result<Vec<GpuInfo>> {
     if !vulkan_loader_present(vulkan_binary) {
         return Ok(Vec::new());
     }
-    let devices: Vec<EngineDevice> =
-        list_devices(vulkan_binary, timeout)?.into_iter().filter(|d| !is_software_device(&d.description)).collect();
-    Ok(to_gpu_infos(&devices))
+    let mut cmd = super::process::engine_command(vulkan_binary);
+    cmd.arg("--list-devices");
+    let out = super::process::run_with_timeout(cmd, timeout)?;
+    Ok(discrete_vulkan_gpus(&out.stdout, &format!("{}\n{}", out.stderr, out.stdout)))
 }
 
 /// Engine devices as [`GpuInfo`] rows (`source = engine`).
@@ -135,29 +181,83 @@ mod tests {
 
     /// PLT-4: fake device lists of Vulkan packs on PCs without an NVIDIA card.
     #[test]
-    fn vulkan_device_lists_become_gpus_without_software_rasterisers() {
+    fn vulkan_device_lists_become_discrete_gpus() {
         use crate::hw::{select_backend, Backend};
         use crate::settings::BackendPreference;
 
         let lite = [Backend::Vulkan, Backend::Cpu];
-        let gpus = |text: &str| {
-            let devices: Vec<EngineDevice> =
-                parse_list_devices(text).into_iter().filter(|d| !is_software_device(&d.description)).collect();
-            to_gpu_infos(&devices)
-        };
-        let amd = gpus("Available devices:\n  Vulkan0: AMD Radeon RX 7600 (8176 MiB, 7900 MiB free)\n");
+        let auto = |gpus: &[GpuInfo]| select_backend(gpus.first(), &lite, BackendPreference::Auto);
+        let amd = discrete_vulkan_gpus(
+            "Available devices:\n  Vulkan0: AMD Radeon RX 7600 (8176 MiB, 7900 MiB free)\n",
+            "ggml_vulkan: Found 1 Vulkan devices:\nggml_vulkan: 0 = AMD Radeon RX 7600 (AMD proprietary driver) | uma: 0 | fp16: 1 | bf16: 0 | warp size: 64 | shared memory: 32768 | int dot: 1 | matrix cores: none\n",
+        );
         assert_eq!(amd.len(), 1);
         assert_eq!((amd[0].vendor, amd[0].free_mib, amd[0].cuda_driver_version), (GpuVendor::Amd, Some(7900), None));
-        assert_eq!(select_backend(amd.first(), &lite, BackendPreference::Auto), Backend::Vulkan);
-        let intel = gpus("Available devices:\n  Vulkan0: Intel(R) Arc(TM) A770 Graphics (16256 MiB, 15000 MiB free)\n");
-        assert_eq!(select_backend(intel.first(), &lite, BackendPreference::Auto), Backend::Vulkan);
+        assert_eq!(auto(&amd), Backend::Vulkan);
+        // No init log at all (another llama.cpp build): the product name decides.
+        let arc = discrete_vulkan_gpus(
+            "Available devices:\n  Vulkan0: Intel(R) Arc(TM) A770 Graphics (16256 MiB, 15000 MiB free)\n",
+            "",
+        );
+        assert_eq!(auto(&arc), Backend::Vulkan);
+
         // A PC without a GPU whose Vulkan loader only offers CPU rasterisers stays on the CPU pack.
-        let none = gpus(
+        let none = discrete_vulkan_gpus(
             "Available devices:\n  Vulkan0: llvmpipe (LLVM 19.1.1, 256 bits) (31957 MiB, 31957 MiB free)\n  Vulkan1: Microsoft Basic Render Driver (16000 MiB, 16000 MiB free)\n",
+            "",
         );
         assert!(none.is_empty());
-        assert_eq!(select_backend(none.first(), &lite, BackendPreference::Auto), Backend::Cpu);
+        assert_eq!(auto(&none), Backend::Cpu);
         assert!(is_software_device("SwiftShader Device (Subzero)") && !is_software_device("AMD Radeon(TM) Graphics"));
+
+        // The usual office PC: integrated graphics only. "Auto" keeps the CPU pack (an explicit
+        // "Vulkan" still runs on it — `select_backend` honours that without a detected GPU).
+        let uhd_list = "Available devices:\n  Vulkan0: Intel(R) UHD Graphics 770 (16203 MiB, 15400 MiB free)\n";
+        let uhd_log = "ggml_vulkan: 0 = Intel(R) UHD Graphics 770 (Intel Corporation) | uma: 1 | fp16: 1 | bf16: 0 | warp size: 32 | shared memory: 4096 | int dot: 1 | matrix cores: none\n";
+        for log in [uhd_log, ""] {
+            let igpu = discrete_vulkan_gpus(uhd_list, log);
+            assert!(igpu.is_empty(), "{igpu:?}");
+            assert_eq!(auto(&igpu), Backend::Cpu);
+            assert_eq!(select_backend(igpu.first(), &lite, BackendPreference::Vulkan), Backend::Vulkan);
+        }
+        // A laptop with both: only the discrete card counts, whatever the order.
+        let both = discrete_vulkan_gpus(
+            "Available devices:\n  Vulkan0: AMD Radeon(TM) Graphics (15000 MiB, 14000 MiB free)\n  Vulkan1: AMD Radeon RX 7600M XT (8176 MiB, 7900 MiB free)\n",
+            "ggml_vulkan: 0 = AMD Radeon(TM) Graphics (AMD proprietary driver) | uma: 1 | fp16: 1\nggml_vulkan: 1 = AMD Radeon RX 7600M XT (AMD proprietary driver) | uma: 0 | fp16: 1\n",
+        );
+        assert_eq!(both.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(), ["AMD Radeon RX 7600M XT"]);
+
+        // The backend's own flag wins over the name; the index is used when the names differ.
+        let device = |name: &str, description: &str| EngineDevice {
+            name: name.into(),
+            description: description.into(),
+            total_mib: 8000,
+            free_mib: 7000,
+        };
+        assert!(!is_integrated_gpu(
+            &device("Vulkan0", "Intel(R) Iris(R) Xe MAX Graphics"),
+            "ggml_vulkan: 0 = Intel(R) Iris(R) Xe MAX Graphics (Intel Corporation) | uma: 0 | fp16: 1"
+        ));
+        assert!(is_integrated_gpu(
+            &device("Vulkan1", "Some GPU"),
+            "ggml_vulkan: 0 = A (x) | uma: 0 |\nggml_vulkan: 1 = Renamed (x) | uma: 1 |"
+        ));
+        for name in [
+            "Intel(R) Iris(R) Xe Graphics",
+            "Intel(R) HD Graphics 630",
+            "AMD Radeon(TM) Vega 8 Graphics",
+            "AMD Radeon Graphics (RADV RENOIR)",
+        ] {
+            assert!(is_integrated_gpu(&device("Vulkan0", name), ""), "{name}");
+        }
+        for name in [
+            "AMD Radeon RX 580 Series",
+            "Radeon RX Vega 64",
+            "NVIDIA GeForce GTX 1060",
+            "Intel(R) Arc(TM) B580 Graphics",
+        ] {
+            assert!(!is_integrated_gpu(&device("Vulkan0", name), ""), "{name}");
+        }
     }
 
     /// The probe itself, against a stand-in for the Vulkan pack's `llama-server --list-devices`.

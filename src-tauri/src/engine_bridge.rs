@@ -166,7 +166,8 @@ pub fn engine_vram_in_use_mib(state: &AppState) -> u64 {
 /// The shell's hardware probe: the core probe plus the engine's own share of the VRAM at this
 /// moment, so a probe taken while a model is loaded does not lower the tier (PLT-3). NVML only
 /// knows NVIDIA cards: when it finds no GPU, the Vulkan pack (AppData or bundled) is asked for
-/// its devices, so an AMD / Intel card selects the Vulkan backend and a GPU tier (PLT-4).
+/// its devices, so a discrete AMD / Intel card selects the Vulkan backend and a GPU tier
+/// (PLT-4). Integrated graphics are not counted: "auto" stays on the CPU pack there.
 pub fn probe_hardware(state: &AppState) -> HardwareSummary {
     let mut hw = hw::probe();
     hw.engine_used_mib = engine_vram_in_use_mib(state);
@@ -175,7 +176,7 @@ pub fn probe_hardware(state: &AppState) -> HardwareSummary {
         if let Some(pack) = locate::find_pack(&state.app_paths.engines_dir(), &roots, Backend::Vulkan) {
             match devices::probe_vulkan_gpus(&pack.path, VULKAN_PROBE_TIMEOUT) {
                 Ok(gpus) => {
-                    log::info!("hardware: the Vulkan pack lists {} GPU(s)", gpus.len());
+                    log::info!("hardware: the Vulkan pack lists {} discrete GPU(s)", gpus.len());
                     hw.gpus = gpus;
                 }
                 Err(e) => log::warn!("hardware: asking the Vulkan pack for its devices failed: {e}"),
