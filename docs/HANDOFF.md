@@ -1880,7 +1880,11 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   `guard::keep_the_split`이 검색도 봄; `validate::per_project`에 검색 포함; `projects::repo::all_memberships_with_reference` / `memberships_with_reference`(정리의 `project_vars`, 요약·검색 묶음). 화면: 결과 카드의 묶음 검색(`result-search-group`), `open project`, 답변 요청의 `roles`,
   선택 범위가 풀리면 열린 프로젝트로 복귀. 모의 백엔드 동기화 + `e2e/harness.spec.ts` 1건.
 - **하지 않은 것**: 문서 종류를 말하지 않았을 때의 기본값은 그대로(검색·질문은 업무 + 참고, 프로젝트 범위의 요약·파일 작업은 업무 문서만). 플랜 카드의 범위 줄에 종류를 따로 표시하지 않음(경고 줄로만 알림). 설명(`explain`) op의 역할 필터. 실제 모델 측정.
-<!-- 0.8.1-RELEASE-RECORD -->
+- **검증·릴리스 기록(2026-11-11)**: 로컬 — 코어 `planner::`·`organize::`·`knowledge::`·`projects::` 179건, clippy·fmt, 골든셋 게이트 94.5 %, `npm run typecheck`, vitest 46파일 331건, `e2e/harness.spec.ts` 10건.
+  워크스페이스 전체 `cargo test`·전체 Playwright·Windows 컴파일은 CI로만 확인: 범프 49516c3과 최종 커밋 **c18b896**의 CI(push) 7개 잡 통과.
+  설치파일: run **43001923489**(`--ref release/0.8.1`, `ref=c18b896…`, `variant=lite`, `publish=true`) 성공 → **Release v0.8.1** 게시(태그 `v0.8.1` = c18b896, 2026-11-11T10:29:56Z).
+  자산: `DocuLens-Setup-Lite-0.8.1-x64.exe` 51,413,865 B, `.sha256`(efb6e09162df5595e0bfc7c65da40e2f6d7210fb7148c15f8595928adb483602 — GitHub 자산 다이제스트와 일치), 고지문, SBOM. 설치·실행은 하지 않았다.
+  `main` 병합은 사용자 PR(`release/0.8.1` — 0.8.0 릴리스 기록 커밋 포함).
 
 ### 테스트·검증
 
