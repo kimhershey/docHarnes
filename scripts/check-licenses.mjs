@@ -5,8 +5,11 @@
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+// fileURLToPath, not `new URL(…).pathname`: the URL path is percent-encoded and starts with "/C:/…" on Windows,
+// so a checkout on Windows or under a path with spaces / Hangul pointed at a folder that does not exist.
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const NODE_MODULES = path.join(ROOT, "node_modules");
 
 const ALLOWED = new Set([
@@ -70,6 +73,11 @@ for (const p of unique.values()) {
 }
 
 console.log(`checked ${unique.size} packages`);
+if (unique.size === 0) {
+  // An empty walk is a broken setup (no `npm ci`, wrong root), never a pass.
+  console.error(`\nno packages found under ${NODE_MODULES} — run \`npm ci\` first; nothing was checked`);
+  process.exit(1);
+}
 if (review.length) {
   console.log("\nMPL-2.0 (allowed unmodified only — do not patch these packages):");
   for (const p of review) console.log(`  ${p.name}@${p.version}`);
