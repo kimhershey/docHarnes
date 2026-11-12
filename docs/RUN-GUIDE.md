@@ -316,7 +316,7 @@ px 고정이라 125 % 이상에서 글자가 잘렸음). 150 %에서는 1280 px 
 | `DOCULENS_LLAMA_SERVER=<llama-server> DOCULENS_TEST_MODELS_DIR=$PWD/crates/doculens-core/tests/fixtures cargo test -p doculens-core --test real_engine -- --nocapture` | 실제 llama-server + 초소형 Gemma 4 픽스처(채팅·이미지·KIE·플래너 문법) | 통과 |
 | `DOCULENS_FIXTURE_OUT=<dir> cargo test -p doculens-core --lib -- --ignored gen_fixtures` | 샘플 입력 문서 생성 | — |
 | `DOCULENS_EXPORT_OUT=<dir> cargo test -p doculens-core --lib -- --ignored gen_export_samples` | 내보내기 5종 샘플 파일 생성(XLSX·CSV·JSONL·MD·검색 가능 PDF) | 9개 파일 |
-| `cargo run -p doculens-eval -- planner --golden eval/golden/planner.json --baseline eval/baselines/planner-rules.json` | 플래너 골든셋(0.8.0 기준 163건: 대화 5 · 질문 27 · 명령 100 · 설정 31) 규칙 경로 정확도 + 회귀 게이트(0.5pt) | CI 게이트 |
+| `cargo run -p doculens-eval -- planner --golden eval/golden/planner.json --baseline eval/baselines/planner-rules.json` | 플래너 골든셋(1.0.0 기준 173건: 대화 5 · 질문 27 · 명령 100 · 설정 41) 규칙 경로 정확도 + 회귀 게이트(0.5pt) | CI 게이트 |
 | `cargo run -p doculens-eval -- pipeline --manifest … --engine … --model …` / `scorecard` | 실모델 파이프라인 지표(분류 F1·정확일치·ANLS*·CER·p50/p95)·양자화 스코어카드 | 사용자 PC |
 | `npm run notices` | THIRD-PARTY-NOTICES(모델·엔진 절과 크레이트·패키지 목록) · SBOM(CycloneDX) · 라이선스 전문 재생성 | CI `notices` 잡이 최신성 검사 |
 | `npm run versions:check` | `Cargo.toml`·`Cargo.lock`·`package.json`·`package-lock.json`·`tauri.conf.json`·모의 백엔드·SBOM의 버전 일치(`release/<버전>` 브랜치에서는 그 버전인지도) | CI `notices` 잡과 설치파일 워크플로의 첫 단계 |
@@ -370,7 +370,7 @@ GitHub Actions `CI`(푸시·PR)는 위 항목을 일곱 작업으로 실행합�
    검사·보완요청서, inbox 하위 폴더 매핑 (P6).
 8. **품질·배포(v1.1)** — 릴리스 설치파일(Lite) 오프라인 설치, NVIDIA PC는 CUDA 팩을 앱 데이터 폴더에 풀어 쓰기(§1.1), 평가 하네스로
    양자화 스코어카드 채우기, 파기 작업·알림·절전 방지 (P7).
-9. **골든셋**(사용자 제공) — 분류 F1·OCR CER·KIE 필드 정확도·플래너 명령→플랜 골든셋(0.8.0 기준 163건, `doculens-eval`로 측정; 실제 모델 측정 절차는 `eval/README.md`).
+9. **골든셋**(사용자 제공) — 분류 F1·OCR CER·KIE 필드 정확도·플래너 명령→플랜 골든셋(1.0.0 기준 173건, `doculens-eval`로 측정; 실제 모델 측정 절차는 `eval/README.md`).
 
 확인 결과는 이슈로 남기거나 다음 세션에 전달해 주세요. 모델 파일(크기·SHA-256·저장소 커밋)과 Windows 엔진 팩(cpu·vulkan의 SHA-256)은
 저장소에 고정돼 있으므로, 첫 PC에서는 받은 모델이 "해시 검증" 뒤 "검증됨"으로 바뀌는지만 확인하면 됩니다.

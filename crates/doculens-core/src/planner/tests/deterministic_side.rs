@@ -37,6 +37,34 @@ fn rule_summaries_pick_the_korean_particle() {
     }
 }
 
+/// 1.0.0: the phrase rules with the two thresholds and the "이미지 내 글자 추출" setting.
+#[test]
+fn rules_ask_which_threshold_and_do_not_extract_for_a_settings_name() {
+    let op = |text: &str| planned(text).plan.operations.into_iter().next();
+    let setting = |text: &str| match op(text) {
+        Some(Op::SetSetting { key, value }) => Some((key, value)),
+        _ => None,
+    };
+    // A threshold the sentence names is set; a bare one is asked about (there are two since 1.0.0).
+    assert_eq!(setting("검토 임계값 85%로 바꿔줘"), Some(("processing.review_threshold".into(), json!(0.85))));
+    assert_eq!(setting("신뢰도 기준 0.9로 설정"), Some(("processing.review_threshold".into(), json!(0.9))));
+    assert_eq!(
+        setting("2순위 추천 임계값을 70%로 올려줘").map(|(k, _)| k),
+        Some("processing.project_second_choice".to_string())
+    );
+    let bare = planned("임계값 70%로 바꿔줘").plan;
+    assert!(bare.is_clarification(), "{bare:?}");
+    assert!(bare.clarification_question.as_deref().unwrap().contains("2순위 추천 임계값"));
+    // The setting's name contains "추출": a report about it must not start an extraction.
+    for text in ["이미지 내 글자 추출 켰어", "그림 글자 추출이 켜져 있나?", "이미지 내 글자 추출 설정 바꿨어"]
+    {
+        let p = planned(text).plan;
+        assert!(!p.operations.iter().any(|o| matches!(o, Op::Extract { .. } | Op::Ocr { .. })), "{text} → {p:?}");
+    }
+    // …while a request to extract still is one.
+    assert!(matches!(op("선택한 문서 필드 추출해줘"), Some(Op::Extract { .. })));
+}
+
 /// A workspace with the project "한빛 심사" open and chosen as the assistant's scope, nothing selected.
 fn in_project() -> PlanContext {
     let mut c = ctx();
