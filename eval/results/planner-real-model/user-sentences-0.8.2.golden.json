@@ -1,0 +1,326 @@
+{
+ "schema_version": 1,
+ "context": "user-sentences-0.8.2.context.json",
+ "description": "0.8.2 user sentences",
+ "items": [
+  {
+   "id": "u-1",
+   "category": "ko",
+   "kind": "question",
+   "text": "AAA 프로젝트 내에서 AAA 가 무엇인지 요약해서 설명해줘",
+   "expected": {
+    "intent": "answer",
+    "ops": [
+     "answer"
+    ],
+    "alt": [
+     {
+      "intent": "answer",
+      "ops": [
+       "answer"
+      ],
+      "scope": {
+       "filter": {
+        "project_id": "p-aaa"
+       }
+      }
+     },
+     {
+      "intent": "summarize",
+      "ops": [
+       "summarize"
+      ],
+      "scope": {
+       "filter": {
+        "project_id": "p-aaa"
+       }
+      }
+     },
+     {
+      "intent": "explain",
+      "ops": [
+       "explain"
+      ],
+      "scope": {
+       "filter": {
+        "project_id": "p-aaa"
+       }
+      }
+     },
+     {
+      "intent": "search",
+      "ops": [
+       "search"
+      ],
+      "scope": {
+       "filter": {
+        "project_id": "p-aaa"
+       }
+      }
+     }
+    ],
+    "scope": {
+     "filter": {
+      "project_id": "p-aaa"
+     }
+    }
+   }
+  },
+  {
+   "id": "u-2",
+   "category": "ko",
+   "kind": "question",
+   "text": "AAA 프로젝트 내에서 AAA 가 무엇인지 요약해서 설명해줘\n\n[어시스턴트 질문] AAA 프로젝트와 관련된 모든 문서를 대상으로 요약하려면, 어떤 특정 문서 유형(예: 'acceptance', 'sow', 'test_report' 등)을 지정해야 하나요?\n[사용자 답변] 유형 상관없이 전부",
+   "expected": {
+    "intent": "answer",
+    "ops": [
+     "answer"
+    ],
+    "alt": [
+     {
+      "intent": "answer",
+      "ops": [
+       "answer"
+      ],
+      "scope": {
+       "filter": {
+        "project_id": "p-aaa"
+       }
+      }
+     },
+     {
+      "intent": "summarize",
+      "ops": [
+       "summarize"
+      ],
+      "scope": {
+       "filter": {
+        "project_id": "p-aaa"
+       }
+      }
+     },
+     {
+      "intent": "explain",
+      "ops": [
+       "explain"
+      ],
+      "scope": {
+       "filter": {
+        "project_id": "p-aaa"
+       }
+      }
+     },
+     {
+      "intent": "search",
+      "ops": [
+       "search"
+      ],
+      "scope": {
+       "filter": {
+        "project_id": "p-aaa"
+       }
+      }
+     }
+    ],
+    "scope": {
+     "filter": {
+      "project_id": "p-aaa"
+     }
+    }
+   }
+  },
+  {
+   "id": "u-3",
+   "category": "ko",
+   "kind": "question",
+   "text": "AAA 프로젝트에서 AAA가 무엇인지 검색해줘",
+   "expected": {
+    "intent": "search",
+    "ops": [
+     "search"
+    ],
+    "alt": [
+     {
+      "intent": "answer",
+      "ops": [
+       "answer"
+      ],
+      "scope": {
+       "filter": {
+        "project_id": "p-aaa"
+       }
+      }
+     },
+     {
+      "intent": "summarize",
+      "ops": [
+       "summarize"
+      ],
+      "scope": {
+       "filter": {
+        "project_id": "p-aaa"
+       }
+      }
+     },
+     {
+      "intent": "explain",
+      "ops": [
+       "explain"
+      ],
+      "scope": {
+       "filter": {
+        "project_id": "p-aaa"
+       }
+      }
+     },
+     {
+      "intent": "search",
+      "ops": [
+       "search"
+      ],
+      "scope": {
+       "filter": {
+        "project_id": "p-aaa"
+       }
+      }
+     }
+    ],
+    "scope": {
+     "filter": {
+      "project_id": "p-aaa"
+     }
+    }
+   }
+  },
+  {
+   "id": "u-4",
+   "category": "ko",
+   "kind": "question",
+   "text": "AAA 프로젝트에서 AAA가 무엇인지 알려줘",
+   "expected": {
+    "intent": "answer",
+    "ops": [
+     "answer"
+    ],
+    "alt": [
+     {
+      "intent": "answer",
+      "ops": [
+       "answer"
+      ],
+      "scope": {
+       "filter": {
+        "project_id": "p-aaa"
+       }
+      }
+     },
+     {
+      "intent": "summarize",
+      "ops": [
+       "summarize"
+      ],
+      "scope": {
+       "filter": {
+        "project_id": "p-aaa"
+       }
+      }
+     },
+     {
+      "intent": "explain",
+      "ops": [
+       "explain"
+      ],
+      "scope": {
+       "filter": {
+        "project_id": "p-aaa"
+       }
+      }
+     },
+     {
+      "intent": "search",
+      "ops": [
+       "search"
+      ],
+      "scope": {
+       "filter": {
+        "project_id": "p-aaa"
+       }
+      }
+     }
+    ],
+    "scope": {
+     "filter": {
+      "project_id": "p-aaa"
+     }
+    }
+   }
+  },
+  {
+   "id": "u-5",
+   "category": "ko",
+   "kind": "question",
+   "text": "AAA가 무엇인지 설명해줘",
+   "expected": {
+    "intent": "answer",
+    "ops": [
+     "answer"
+    ],
+    "alt": [
+     {
+      "intent": "answer",
+      "ops": [
+       "answer"
+      ],
+      "scope": {
+       "filter": {
+        "project_id": "p-aaa"
+       }
+      }
+     },
+     {
+      "intent": "summarize",
+      "ops": [
+       "summarize"
+      ],
+      "scope": {
+       "filter": {
+        "project_id": "p-aaa"
+       }
+      }
+     },
+     {
+      "intent": "explain",
+      "ops": [
+       "explain"
+      ],
+      "scope": {
+       "filter": {
+        "project_id": "p-aaa"
+       }
+      }
+     },
+     {
+      "intent": "search",
+      "ops": [
+       "search"
+      ],
+      "scope": {
+       "filter": {
+        "project_id": "p-aaa"
+       }
+      }
+     }
+    ],
+    "scope": {
+     "filter": {
+      "project_id": "p-aaa"
+     }
+    }
+   },
+   "context": {
+    "scope_project": "p-aaa",
+    "current_project": "p-aaa"
+   }
+  }
+ ]
+}

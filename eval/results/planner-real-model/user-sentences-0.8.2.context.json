@@ -1,0 +1,319 @@
+{
+ "today": "2026-11-08",
+ "language": "ko",
+ "folders": [
+  "inbox",
+  "documents/2026/10",
+  "documents/2026/11"
+ ],
+ "doc_types": [
+  {
+   "slug": "rfp",
+   "label_ko": "제안요청서(RFP)",
+   "label_en": "Request for proposal (RFP)"
+  },
+  {
+   "slug": "proposal",
+   "label_ko": "제안서",
+   "label_en": "Proposal"
+  },
+  {
+   "slug": "sow",
+   "label_ko": "과업지시서",
+   "label_en": "Statement of work"
+  },
+  {
+   "slug": "srs",
+   "label_ko": "요구사항 정의서",
+   "label_en": "Software requirements specification"
+  },
+  {
+   "slug": "dev_contract",
+   "label_ko": "소프트웨어 개발 계약서",
+   "label_en": "Software development contract"
+  },
+  {
+   "slug": "wbs",
+   "label_ko": "WBS·일정표",
+   "label_en": "WBS / schedule"
+  },
+  {
+   "slug": "progress_report",
+   "label_ko": "진척 보고서",
+   "label_en": "Progress report"
+  },
+  {
+   "slug": "meeting_minutes",
+   "label_ko": "회의록",
+   "label_en": "Meeting minutes"
+  },
+  {
+   "slug": "test_report",
+   "label_ko": "테스트 결과서",
+   "label_en": "Test report"
+  },
+  {
+   "slug": "change_request",
+   "label_ko": "변경요청서",
+   "label_en": "Change request"
+  },
+  {
+   "slug": "acceptance",
+   "label_ko": "검수확인서",
+   "label_en": "Acceptance certificate"
+  },
+  {
+   "slug": "estimate",
+   "label_ko": "견적서",
+   "label_en": "Estimate"
+  },
+  {
+   "slug": "general",
+   "label_ko": "일반(표/차트)",
+   "label_en": "General (table / chart)"
+  }
+ ],
+ "schemas": [
+  {
+   "id": "s-estimate",
+   "name": "견적서",
+   "name_en": "Estimate",
+   "doc_type": "estimate",
+   "fields": [
+    {
+     "key": "project_name",
+     "label_ko": "사업명",
+     "label_en": "Project name",
+     "kind": "string"
+    },
+    {
+     "key": "issue_date",
+     "label_ko": "견적일",
+     "label_en": "Issue date",
+     "kind": "date"
+    },
+    {
+     "key": "supplier",
+     "label_ko": "공급자",
+     "label_en": "Supplier",
+     "kind": "group"
+    },
+    {
+     "key": "recipient",
+     "label_ko": "수신",
+     "label_en": "Recipient",
+     "kind": "string"
+    },
+    {
+     "key": "valid_until",
+     "label_ko": "유효기간",
+     "label_en": "Valid until",
+     "kind": "date"
+    },
+    {
+     "key": "items",
+     "label_ko": "견적 내역",
+     "label_en": "Items",
+     "kind": "table"
+    },
+    {
+     "key": "supply_total",
+     "label_ko": "공급가액 합계",
+     "label_en": "Supply total",
+     "kind": "amount"
+    },
+    {
+     "key": "tax_total",
+     "label_ko": "세액 합계",
+     "label_en": "Tax total",
+     "kind": "amount"
+    },
+    {
+     "key": "grand_total",
+     "label_ko": "합계금액",
+     "label_en": "Grand total",
+     "kind": "amount"
+    },
+    {
+     "key": "note",
+     "label_ko": "비고",
+     "label_en": "Note",
+     "kind": "string"
+    }
+   ]
+  },
+  {
+   "id": "s-dev_contract",
+   "name": "소프트웨어 개발 계약서",
+   "name_en": "Software development contract",
+   "doc_type": "dev_contract",
+   "fields": [
+    {
+     "key": "title",
+     "label_ko": "계약명",
+     "label_en": "Title",
+     "kind": "string"
+    },
+    {
+     "key": "client",
+     "label_ko": "발주자(갑)",
+     "label_en": "Client (party A)",
+     "kind": "group"
+    },
+    {
+     "key": "contractor",
+     "label_ko": "수행사(을)",
+     "label_en": "Contractor (party B)",
+     "kind": "group"
+    },
+    {
+     "key": "contract_date",
+     "label_ko": "계약일",
+     "label_en": "Contract date",
+     "kind": "date"
+    },
+    {
+     "key": "period_start",
+     "label_ko": "계약기간 시작",
+     "label_en": "Period start",
+     "kind": "date"
+    },
+    {
+     "key": "period_end",
+     "label_ko": "계약기간 종료",
+     "label_en": "Period end",
+     "kind": "date"
+    },
+    {
+     "key": "amount",
+     "label_ko": "계약금액",
+     "label_en": "Contract amount",
+     "kind": "amount"
+    },
+    {
+     "key": "vat_included",
+     "label_ko": "부가세 포함 여부",
+     "label_en": "VAT included",
+     "kind": "boolean"
+    },
+    {
+     "key": "payment_terms",
+     "label_ko": "지급 조건",
+     "label_en": "Payment terms",
+     "kind": "string"
+    },
+    {
+     "key": "payments",
+     "label_ko": "대금 지급 단계",
+     "label_en": "Payment milestones",
+     "kind": "table"
+    },
+    {
+     "key": "warranty_months",
+     "label_ko": "하자보수 기간(개월)",
+     "label_en": "Warranty (months)",
+     "kind": "integer"
+    },
+    {
+     "key": "ip_owner",
+     "label_ko": "지식재산권 귀속",
+     "label_en": "IP owner",
+     "kind": "enum"
+    },
+    {
+     "key": "confidentiality",
+     "label_ko": "비밀유지 조항",
+     "label_en": "Confidentiality clause",
+     "kind": "boolean"
+    },
+    {
+     "key": "key_clauses",
+     "label_ko": "주요 조항 요약",
+     "label_en": "Key clauses",
+     "kind": "table"
+    },
+    {
+     "key": "signed",
+     "label_ko": "서명/날인 여부",
+     "label_en": "Signed / sealed",
+     "kind": "boolean"
+    }
+   ]
+  },
+  {
+   "id": "s-srs",
+   "name": "요구사항 정의서",
+   "name_en": "Software requirements specification",
+   "doc_type": "srs",
+   "fields": [
+    {
+     "key": "project_name",
+     "label_ko": "사업명",
+     "label_en": "Project name",
+     "kind": "string"
+    },
+    {
+     "key": "version",
+     "label_ko": "버전",
+     "label_en": "Version",
+     "kind": "string"
+    },
+    {
+     "key": "issue_date",
+     "label_ko": "작성일",
+     "label_en": "Issue date",
+     "kind": "date"
+    },
+    {
+     "key": "author",
+     "label_ko": "작성자",
+     "label_en": "Author",
+     "kind": "string"
+    },
+    {
+     "key": "approver",
+     "label_ko": "승인자",
+     "label_en": "Approver",
+     "kind": "string"
+    },
+    {
+     "key": "summary",
+     "label_ko": "시스템 개요",
+     "label_en": "System overview",
+     "kind": "string"
+    },
+    {
+     "key": "requirements",
+     "label_ko": "요구사항",
+     "label_en": "Requirements",
+     "kind": "table"
+    }
+   ]
+  }
+ ],
+ "tags": [
+  "경비",
+  "중요"
+ ],
+ "current_folder": "inbox",
+ "selected_doc_ids": [],
+ "current_document": "d1a2",
+ "current_page": 1,
+ "document_count": 42,
+ "model_ids": [
+  "gemma4-e4b-q4km"
+ ],
+ "projects": [
+  {
+   "id": "p-hanbit",
+   "name": "한빛 납품",
+   "status": "active"
+  },
+  {
+   "id": "p-aaa",
+   "name": "AAA",
+   "status": "active"
+  }
+ ],
+ "current_project": null
+}

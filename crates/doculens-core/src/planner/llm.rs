@@ -337,6 +337,8 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
                 if guard::answer_instead_of_asking(text, &mut plan, ctx, &result.families, ko) {
                     log::info!("planner: the model asked back on a question; answering from the documents instead");
                 }
+                // `explain` is for a piece of text the user pointed at; a question is answered.
+                guard::explain_what_was_said(text, &mut plan);
                 // The one document type the sentence names is the scope of a plan that named none.
                 issues.extend(guard::type_filter_repair(text, &mut plan, ctx, ko));
                 // … and so are the kind of document and the project it names; "X 프로젝트 열어줘" opens it.

@@ -750,11 +750,14 @@ pub fn untyped_scope(text: &str, plan: &mut Plan, ctx: &super::PlanContext, ko: 
         plan.scope.filter.doc_type = None;
         // The project's name in the type slot: `where_to_look` scopes the plan to it, nothing to say.
         let key = super::compact(&written);
-        let is_project = key.chars().count() >= 2
-            && ctx.projects.iter().any(|p| {
-                let name = super::compact(&p.name);
-                !name.is_empty() && (name.contains(&key) || key.contains(&name))
-            });
+        // (the real model also writes "project" and "project:AAA" there)
+        let is_project = key.starts_with("project")
+            || key.contains("프로젝트")
+            || (key.chars().count() >= 2
+                && ctx.projects.iter().any(|p| {
+                    let name = super::compact(&p.name);
+                    !name.is_empty() && (name.contains(&key) || key.contains(&name))
+                }));
         return (!is_project).then(|| {
             PlanIssue::warn(
                 "scope.filter.doc_type",
@@ -846,6 +849,36 @@ pub fn answer_instead_of_asking(
         "Answers from the documents".to_string()
     });
     true
+}
+
+/// 0.8.2 — the real model (Gemma 4 E4B) plans "X가 무엇인지 설명해줘" as `explain` and writes into
+/// `selection` whatever comes to it: the term ("AAA"), the whole sentence, or a note to itself
+/// ("… question 파라미터를 사용합니다. scope는 project로 설정합니다."). `explain` explains a piece of
+/// text the user pointed at, and only a part of the user's own words is one; anything else is the
+/// question itself and becomes a grounded answer to the user's sentence.
+pub fn explain_what_was_said(text: &str, plan: &mut Plan) -> bool {
+    if carried_text(text).is_some() {
+        return false;
+    }
+    let said = super::rules::user_words(text);
+    let key = super::compact(&said);
+    let mut changed = false;
+    for op in &mut plan.operations {
+        let Op::Explain { selection, .. } = op else { continue };
+        let part = selection.as_deref().map(super::compact).filter(|s| !s.is_empty());
+        let pointed_at = part
+            .as_ref()
+            .is_some_and(|s| key.contains(s.as_str()) && s.chars().count() * 10 <= key.chars().count() * 7);
+        if pointed_at {
+            continue;
+        }
+        *op = Op::Answer { question: said.trim().to_string(), cite: None, knowledge: None, mode: None, reply: None };
+        changed = true;
+    }
+    if changed && !plan.operations.iter().any(|o| o.kind() == plan.intent) {
+        plan.recompute_intent();
+    }
+    changed
 }
 
 /// The kind of document the user's words name (0.8.1): "참고 자료에서 …" → reference material,

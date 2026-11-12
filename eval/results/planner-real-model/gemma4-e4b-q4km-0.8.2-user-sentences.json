@@ -1,0 +1,471 @@
+{
+  "schema_version": 1,
+  "kind": "planner",
+  "generated_at": "2026-11-12T02:13:30Z",
+  "golden": "eval/results/planner-real-model/user-sentences-0.8.2.golden.json",
+  "golden_count": 5,
+  "context": "user-sentences-0.8.2.context.json",
+  "today": "2026-11-08",
+  "engine": {
+    "binary": "llama-server (local build)",
+    "version": null,
+    "build_number": null,
+    "backend": "cpu",
+    "tier": "cpu_only",
+    "profile": "balanced",
+    "model": "gemma4-e4b-q4km",
+    "model_display": "Gemma-4-E4B-It (Q4_K_M)",
+    "quantization": "Q4_K_M",
+    "architecture": "gemma4",
+    "has_vision": false,
+    "ctx": 8192,
+    "model_memory_bytes": null,
+    "mmproj_bytes": 0,
+    "devices": [],
+    "vram_used_mib": null,
+    "load_ms": 173318
+  },
+  "mode": "model",
+  "model": "gemma4-e4b-q4km",
+  "total": 5,
+  "correct": 5,
+  "accuracy": 1.0,
+  "by_category": {
+    "ko": {
+      "total": 5,
+      "correct": 5,
+      "accuracy": 1.0
+    }
+  },
+  "by_intent": {
+    "answer": {
+      "total": 4,
+      "correct": 4,
+      "accuracy": 1.0
+    },
+    "search": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    }
+  },
+  "by_kind": {
+    "question": {
+      "total": 5,
+      "correct": 5,
+      "accuracy": 1.0
+    }
+  },
+  "by_source": {
+    "model": 5
+  },
+  "by_cause": {},
+  "unasked_changes": 0,
+  "latency": {
+    "p50_ms": 159308.507981,
+    "p95_ms": 245817.985877,
+    "mean_ms": 153062.04979679998
+  },
+  "latency_by_kind": {
+    "question": {
+      "p50_ms": 159308.507981,
+      "p95_ms": 245817.985877,
+      "mean_ms": 153062.04979679998
+    }
+  },
+  "items": [
+    {
+      "id": "u-1",
+      "category": "ko",
+      "text": "AAA 프로젝트 내에서 AAA 가 무엇인지 요약해서 설명해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "explain",
+      "ops": [
+        "explain"
+      ],
+      "summary": "AAA 프로젝트 내에서 'AAA'가 무엇인지 지식 베이스를 근거로 설명합니다.",
+      "confidence": 0.9,
+      "latency_ms": 245817.985877,
+      "kind": "question",
+      "requires_confirmation": false,
+      "notes": [
+        "scope_filled"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 4623,
+      "completion_tokens": 174,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "explain",
+          "selection": "AAA가 무엇인지 (AAA 프로젝트 내에서) 라는 질문 형태의 질문을 사용합니다. 질문을 명확히 하기 위해 question 파라미터를 사용합니다. scope는 project로 설정합니다."
+        }
+      ],
+      "scope": {
+        "filter": {
+          "project_id": "p-aaa"
+        }
+      },
+      "raw": "{\n  \"summary\": \"AAA 프로젝트 내에서 'AAA'가 무엇인지 지식 베이스를 근거로 설명합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"explain\",\n  \"scope\": {\n    \"doc_ids\": []\n  },\n  \"operations\": [\n    {\n      \"op\": \"explain\",\n      \"selection\": \"AAA가 무엇인지 (AAA 프로젝트 내에서) 라는 질문 형태의 질문을 사용합니다. 질문을 명확히 하기 위해 question 파라미터를 사용합니다. scope는 project로 설정합니다.\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "u-2",
+      "category": "ko",
+      "text": "AAA 프로젝트 내에서 AAA 가 무엇인지 요약해서 설명해줘\n\n[어시스턴트 질문] AAA 프로젝트와 관련된 모든 문서를 대상으로 요약하려면, 어떤 특정 문서 유형(예: 'acceptance', 'sow', 'test_report' 등)을 지정해야 하나요?\n[사용자 답변] 유형 상관없이 전부",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "AAA 프로젝트 내 모든 문서의 내용을 요약하여 설명합니다.",
+      "confidence": 0.9,
+      "latency_ms": 141956.25363,
+      "kind": "question",
+      "requires_confirmation": false,
+      "notes": [
+        "scope_filled"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 3755,
+      "completion_tokens": 141,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize",
+          "target": "each_doc"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "project_id": "p-aaa"
+        }
+      },
+      "raw": "{\n  \"summary\": \"AAA 프로젝트 내 모든 문서의 내용을 요약하여 설명합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"filter\": {\n      \"doc_type\": \"project:AAA\"\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"target\": \"each_doc\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "u-3",
+      "category": "ko",
+      "text": "AAA 프로젝트에서 AAA가 무엇인지 검색해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "search",
+      "ops": [
+        "search"
+      ],
+      "summary": "AAA 프로젝트에서 'AAA'가 무엇인지 검색합니다.",
+      "confidence": 0.9,
+      "latency_ms": 30350.462396000003,
+      "kind": "question",
+      "requires_confirmation": false,
+      "notes": [
+        "doc_type_ignored",
+        "scope_filled"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 3631,
+      "completion_tokens": 152,
+      "mismatches": [],
+      "operations": [
+        {
+          "mode": "hybrid",
+          "op": "search",
+          "query": "AAA",
+          "top_k": 10
+        }
+      ],
+      "scope": {
+        "filter": {
+          "project_id": "p-aaa"
+        }
+      },
+      "raw": "{\n  \"summary\": \"AAA 프로젝트에서 'AAA'가 무엇인지 검색합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"search\",\n  \"scope\": {\n    \"filter\": {\n      \"doc_type\": \"project\"\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"search\",\n      \"query\": \"AAA\",\n      \"mode\": \"hybrid\",\n      \"top_k\": 10\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "u-4",
+      "category": "ko",
+      "text": "AAA 프로젝트에서 AAA가 무엇인지 알려줘",
+      "correct": true,
+      "source": "model",
+      "intent": "explain",
+      "ops": [
+        "explain"
+      ],
+      "summary": "AAA 프로젝트에서 'AAA'가 무엇인지 지식 베이스를 통해 설명합니다.",
+      "confidence": 0.9,
+      "latency_ms": 187877.0391,
+      "kind": "question",
+      "requires_confirmation": false,
+      "notes": [
+        "scope_filled"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 4613,
+      "completion_tokens": 142,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "explain",
+          "selection": "AAA"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "project_id": "p-aaa"
+        }
+      },
+      "raw": "{\n  \"summary\": \"AAA 프로젝트에서 'AAA'가 무엇인지 지식 베이스를 통해 설명합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"explain\",\n  \"scope\": {\n    \"doc_ids\": []\n  },\n  \"operations\": [\n    {\n      \"op\": \"explain\",\n      \"selection\": \"AAA\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9,\n  \"clarification_question\": \"\"\n}"
+    },
+    {
+      "id": "u-5",
+      "category": "ko",
+      "text": "AAA가 무엇인지 설명해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "explain",
+      "ops": [
+        "explain"
+      ],
+      "summary": "AAA가 무엇인지 지식 베이스를 근거로 설명합니다.",
+      "confidence": 0.9,
+      "latency_ms": 159308.507981,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 3681,
+      "completion_tokens": 145,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "explain",
+          "selection": "AAA가 무엇인지 설명해줘"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "project_id": "p-aaa"
+        }
+      },
+      "raw": "{\n  \"summary\": \"AAA가 무엇인지 지식 베이스를 근거로 설명합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"explain\",\n  \"scope\": {\n    \"doc_ids\": []\n  },\n  \"operations\": [\n    {\n      \"op\": \"explain\",\n      \"selection\": \"AAA가 무엇인지 설명해줘\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9,\n  \"clarification_question\": \"\"\n}"
+    }
+  ],
+  "rules_only": {
+    "mode": "rules",
+    "total": 5,
+    "correct": 4,
+    "accuracy": 0.8,
+    "by_category": {
+      "ko": {
+        "total": 5,
+        "correct": 4,
+        "accuracy": 0.8
+      }
+    },
+    "by_intent": {
+      "answer": {
+        "total": 4,
+        "correct": 3,
+        "accuracy": 0.75
+      },
+      "search": {
+        "total": 1,
+        "correct": 1,
+        "accuracy": 1.0
+      }
+    },
+    "by_kind": {
+      "question": {
+        "total": 5,
+        "correct": 4,
+        "accuracy": 0.8
+      }
+    },
+    "by_source": {
+      "rules": 5
+    },
+    "by_cause": {
+      "wrong_ops": 1
+    },
+    "unasked_changes": 1,
+    "items": [
+      {
+        "id": "u-1",
+        "category": "ko",
+        "text": "AAA 프로젝트 내에서 AAA 가 무엇인지 요약해서 설명해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "문서를 요약합니다",
+        "confidence": 0.87,
+        "latency_ms": 1.7917059999999998,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize",
+            "target": "each_doc"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa"
+          }
+        }
+      },
+      {
+        "id": "u-2",
+        "category": "ko",
+        "text": "AAA 프로젝트 내에서 AAA 가 무엇인지 요약해서 설명해줘\n\n[어시스턴트 질문] AAA 프로젝트와 관련된 모든 문서를 대상으로 요약하려면, 어떤 특정 문서 유형(예: 'acceptance', 'sow', 'test_report' 등)을 지정해야 하나요?\n[사용자 답변] 유형 상관없이 전부",
+        "correct": false,
+        "cause": "wrong_ops",
+        "source": "rules",
+        "intent": "set_doc_type",
+        "ops": [
+          "set_doc_type"
+        ],
+        "summary": "문서 유형을 테스트 결과서(으)로 설정합니다",
+        "confidence": 0.87,
+        "latency_ms": 1.691819,
+        "kind": "question",
+        "requires_confirmation": false,
+        "unasked_change": true,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [
+          {
+            "kind": "intent",
+            "expected": "answer",
+            "produced": "set_doc_type"
+          },
+          {
+            "kind": "ops",
+            "expected": [
+              "answer"
+            ],
+            "produced": [
+              "set_doc_type"
+            ]
+          }
+        ],
+        "operations": [
+          {
+            "doc_type": "test_report",
+            "op": "set_doc_type"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa"
+          }
+        }
+      },
+      {
+        "id": "u-3",
+        "category": "ko",
+        "text": "AAA 프로젝트에서 AAA가 무엇인지 검색해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "search",
+        "ops": [
+          "search"
+        ],
+        "summary": "'AAA 프로젝트에서 AAA 무엇인지'를 검색합니다",
+        "confidence": 0.85,
+        "latency_ms": 1.391926,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "search",
+            "query": "AAA 프로젝트에서 AAA 무엇인지"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa"
+          }
+        }
+      },
+      {
+        "id": "u-4",
+        "category": "ko",
+        "text": "AAA 프로젝트에서 AAA가 무엇인지 알려줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
+        "confidence": 0.8,
+        "latency_ms": 0.7542570000000001,
+        "kind": "question",
+        "requires_confirmation": false,
+        "notes": [
+          "scope_filled"
+        ],
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "cite": true,
+            "op": "answer",
+            "question": "AAA 프로젝트에서 AAA가 무엇인지 알려줘"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa"
+          }
+        }
+      },
+      {
+        "id": "u-5",
+        "category": "ko",
+        "text": "AAA가 무엇인지 설명해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
+        "confidence": 0.8,
+        "latency_ms": 0.9934769999999999,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "cite": true,
+            "op": "answer",
+            "question": "AAA가 무엇인지 설명해줘"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa"
+          }
+        }
+      }
+    ]
+  }
+}

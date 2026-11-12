@@ -2242,3 +2242,64 @@ fn a_question_needs_no_document_type() {
     assert!(r.plan.is_clarification(), "{r:?}");
     assert!(r.plan.clarification_question.clone().unwrap_or_default().contains("어떤 문서를 대상으로"), "{r:?}");
 }
+
+/// 0.8.2 — the plans Gemma 4 E4B wrote for the user's sentences (eval run of 2026-11-12, replayed):
+/// `explain` with a note to itself, the whole sentence or the term as the "selection", and the
+/// project in the type slot.
+#[test]
+fn the_plans_the_real_model_wrote_for_a_project_question_are_answered() {
+    let mut c = ctx();
+    c.projects = vec![ProjectSummary { id: "p-aaa".into(), name: "AAA".into(), status: "active".into() }];
+    let run = |c: &PlanContext, text: &str, ops: Value, scope: Value| {
+        let chat = StageChat::new();
+        chat.push("families", json!({ "families": ["ask"] }));
+        chat.push("plan", json!({ "summary": "s", "unmet": "", "intent": ops[0]["op"], "scope": scope, "operations": ops, "requires_confirmation": false, "confidence": 0.9, "clarification_question": "" }));
+        let r = plan(Some(&deps(&chat)), text, c, PlanMode::ModelFirst).unwrap();
+        assert_eq!(chat.calls("plan"), 1, "{r:?}");
+        assert!(!r.plan.is_clarification() && r.issues.iter().all(|i| !i.blocking), "{r:?}");
+        assert_eq!(r.plan.scope.filter.project_id.as_deref(), Some("p-aaa"), "{r:?}");
+        assert_eq!(r.plan.scope.filter.doc_type, None, "{r:?}");
+        r
+    };
+    // A note to itself as the selection: the user's sentence is the question.
+    let text = "AAA 프로젝트 내에서 AAA 가 무엇인지 요약해서 설명해줘";
+    let note = "AAA가 무엇인지 (AAA 프로젝트 내에서) 라는 질문 형태의 질문을 사용합니다. 질문을 명확히 하기 위해 question 파라미터를 사용합니다. scope는 project로 설정합니다.";
+    let r = run(&c, text, json!([{ "op": "explain", "selection": note }]), json!({ "doc_ids": [] }));
+    assert!(
+        matches!(&r.plan.operations[..], [Op::Answer { question, mode: None, knowledge: None, .. }] if question == text),
+        "{r:?}"
+    );
+    assert_eq!(r.plan.intent, OpKind::Answer, "{r:?}");
+    // The term the user named is a selection and stays an explanation.
+    let r = run(
+        &c,
+        "AAA 프로젝트에서 AAA가 무엇인지 알려줘",
+        json!([{ "op": "explain", "selection": "AAA" }]),
+        json!({ "doc_ids": [] }),
+    );
+    assert!(matches!(&r.plan.operations[..], [Op::Explain { selection: Some(s), .. }] if s == "AAA"), "{r:?}");
+    // The whole sentence as the selection (a project is open, none named): answered.
+    let mut open = c.clone();
+    open.scope_project = Some("p-aaa".into());
+    let asked = "AAA가 무엇인지 설명해줘";
+    let r = run(&open, asked, json!([{ "op": "explain", "selection": asked }]), json!({ "doc_ids": [] }));
+    assert!(matches!(&r.plan.operations[..], [Op::Answer { question, .. }] if question == asked), "{r:?}");
+    // The project in the type slot: "project" (search) and "project:AAA" (summary after the ask-back reply).
+    let r = run(
+        &c,
+        "AAA 프로젝트에서 AAA가 무엇인지 검색해줘",
+        json!([{ "op": "search", "query": "AAA", "mode": "hybrid", "top_k": 10 }]),
+        json!({ "filter": { "doc_type": "project" } }),
+    );
+    assert!(matches!(&r.plan.operations[..], [Op::Search { query, .. }] if query == "AAA"), "{r:?}");
+    assert!(r.issues.iter().all(|i| i.code != "doc_type_ignored"), "{r:?}");
+    let reply =
+        format!("{text}\n\n[어시스턴트 질문] 어떤 문서 유형을 지정해야 하나요?\n[사용자 답변] 유형 상관없이 전부");
+    let r = run(
+        &c,
+        &reply,
+        json!([{ "op": "summarize", "target": "each_doc" }]),
+        json!({ "filter": { "doc_type": "project:AAA" } }),
+    );
+    assert!(matches!(&r.plan.operations[..], [Op::Summarize { .. }]), "{r:?}");
+}

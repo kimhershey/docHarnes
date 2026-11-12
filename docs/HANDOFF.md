@@ -1930,9 +1930,13 @@ P6·P7 항목.
 - **구현**: `guard::untyped_scope`(`parse_and_validate`에서 검증기 앞) — 유형 칸의 `all`·"전체"류는 조건 없음(모든 플랜), 없는 유형은 묻기만 하는 플랜(`guard::only_asks`: answer·search·explain·compare·summarize)에서 뺌(`doc_type_ignored`; 그 값이 프로젝트 이름이면 알림 없이),
   문장에 없는 유형은 answer·search·explain·compare에서 뺌(요약은 모델이 고른 유형 유지 — 범위의 문서를 다 읽으므로). 문서를 바꾸는 명령은 검증기 오류·재질의 그대로, 두 번 실패하면 `llm::doc_type_question`이 한국어로 유형 목록을 안내.
   `guard::answer_instead_of_asking` — 계열 호출이 `ask` 하나로 읽은 문장에서 모델이 되묻거나(유형을 묻는 질문 / 문장에 프로젝트 이름 / 프로젝트가 열려 있음) 낮은 신뢰도로 묻기만 하는 플랜을 내면, 되묻기는 근거 답변(`answer`)으로 바꾸고 낮은 신뢰도 플랜은 그대로 실행. 그 밖의 되묻기는 유지.
+  `guard::explain_what_was_said` — 모델의 `explain`에서 `selection`이 사용자가 쓴 말의 일부(전체의 70 % 이하)가 아니면 사용자의 문장을 질문으로 하는 `answer`로 바꿈(실모델이 selection에 문장 전체·자기 메모를 적음).
   `rules::plan`은 되묻기 문장에서 `user_words`만 읽음(규칙 우선 모드에서 어시스턴트 질문의 유형 이름이 `set_doc_type`으로 읽히던 것 — 실모델 실행의 규칙 패스에서 발견). 지시문 규칙 3(ko/en)·축약 지시문에 "유형은 사용자가 말했을 때만, 되묻지 않음, 프로젝트 이름은 유형이 아님".
 - **설명/검색/알려줘**(사용자 질문에 답한 내용, 릴리스 노트 표): `search` = 대목 목록(글 생성 없음), `answer` = 검색 + 모델이 근거로 답, `explain` = 선택 문장·용어를 가리킬 때의 설명(그 밖의 "설명해줘"는 answer), `summarize` = 범위 문서 요약.
 - **하지 않은 것**: 모델 범위 문법에 프로젝트 칸 추가(문법·지시문 변경이라 실모델 전체 재측정이 필요), `doc_type`을 알려진 슬러그 enum으로 제한, 모의 백엔드 동기화(모의는 규칙 기반이라 해당 실패가 없음), 골든셋 항목 추가(모델 경로 문제라 규칙 기준선으로는 잴 수 없음 — 단위 테스트 `a_question_needs_no_document_type`이 관찰된 모델 응답을 재생).
+- **실제 모델 확인(Gemma 4 E4B Q4_K_M, CPU, `/tmp/engine/bin/llama-server`)**: 사용자 문장 5개(`eval/results/planner-real-model/user-sentences-0.8.2.golden.json` + `.context.json`, 결과 `gemma4-e4b-q4km-0.8.2-user-sentences.json`) —
+  5/5 한 번에 계획(되묻기·검증 오류 없음), 범위는 전부 `project_id = p-aaa`. 모델 출력: explain(selection에 자기 메모) / summarize + `doc_type: "project:AAA"` / search + `doc_type: "project"` / explain(selection "AAA") / explain(selection = 문장 전체). 계획 한 건 30초~4분.
+  `explain_what_was_said`는 이 측정 뒤에 넣었고 같은 모델 출력을 `the_plans_the_real_model_wrote_for_a_project_question_are_answered`가 재생한다. 답변 단계(검색 + 생성)는 실제 모델·실제 문서로 확인하지 않았다.
 <!-- 0.8.2-RELEASE-RECORD -->
 
 ## P6·P7 단계 말 리뷰 반영

@@ -72,3 +72,5 @@
 
 - `gemma4-e4b-q4km-0.7.0.json`, `gemma4-e4b-q4km-0.8.0.json` — 배치별 결과를 합친 것(문장별 플랜, 출처, 응답 시간; 다시 잰 문장의 첫 결과는 `first_measurement`).
 - `table.md` — 위 표(`python3 scripts/rescore-planner.py eval/golden/planner.json 0.7.0=… 0.8.0=… --ids … --md table.md`).
+- `gemma4-e4b-q4km-0.8.2-user-sentences.json` — 0.8.2: 사용자 PC에서 보고된 문장("AAA 프로젝트 내에서 AAA 가 무엇인지 요약해서 설명해줘")과 그 변형 5개를 같은 모델·엔진으로 돌린 결과(5/5, 되묻기·검증 오류 없음).
+  문장과 컨텍스트는 `user-sentences-0.8.2.golden.json` / `user-sentences-0.8.2.context.json`. 모델이 쓴 `explain`을 답변으로 바꾸는 검사(`guard::explain_what_was_said`)는 이 측정 뒤에 들어갔다(결과 파일의 `operations`는 그 전 모습).
