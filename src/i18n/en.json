@@ -1531,6 +1531,8 @@
     "grid_label": "Document cards",
     "import_existing_hint": "Scans the whole workspace folder (except .doculens) and opens the preview.",
     "role_knowledge": "Reference",
+    "project_badge": "Project: {{name}}",
+    "project_badge_reference": "Project: {{name}} (reference material)",
     "role_work": "Work document",
     "kb_added": "Added {{count}} documents to '{{name}}'.",
     "kb_added_one": "Added {{count}} document to '{{name}}'.",

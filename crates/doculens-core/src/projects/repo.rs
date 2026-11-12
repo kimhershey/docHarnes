@@ -1055,6 +1055,46 @@ pub fn memberships_with_reference(
     Ok(out)
 }
 
+/// A project a document belongs to (1.0.0: the project badges of the library's document cards).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct DocumentProject {
+    pub id: String,
+    pub name: String,
+    /// `true`: the document sits in the project's reference group (참고 자료), not among its work documents.
+    pub reference: bool,
+}
+
+/// The projects of every document, keyed by document id: work memberships first (oldest first), then
+/// the reference groups it sits in. A document that is both in a project keeps the work entry only.
+pub fn document_projects(conn: &Connection) -> rusqlite::Result<BTreeMap<String, Vec<DocumentProject>>> {
+    let mut out: BTreeMap<String, Vec<DocumentProject>> = BTreeMap::new();
+    let queries = [
+        (
+            "SELECT pd.document_id, p.id, p.name FROM project_documents pd JOIN projects p ON p.id = pd.project_id \
+             ORDER BY pd.added_at, pd.rowid",
+            false,
+        ),
+        (
+            "SELECT cd.document_id, p.id, p.name FROM collection_docs cd JOIN collections c ON c.id = cd.collection_id \
+             JOIN projects p ON p.id = c.project_id ORDER BY cd.added_at, cd.rowid",
+            true,
+        ),
+    ];
+    for (sql, reference) in queries {
+        let mut st = conn.prepare_cached(sql)?;
+        let rows =
+            st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+        for row in rows {
+            let (doc, id, name) = row?;
+            let list = out.entry(doc).or_default();
+            if !list.iter().any(|p| p.id == id) {
+                list.push(DocumentProject { id, name, reference });
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Document ids of a project (members that still exist).
 pub fn member_ids(conn: &Connection, project_id: &str) -> rusqlite::Result<Vec<String>> {
     let mut st = conn.prepare_cached(

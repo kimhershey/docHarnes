@@ -768,10 +768,20 @@ export interface DocumentRecord {
   pipeline_error: string | null;
 }
 
+/** A project a document belongs to (1.0.0: the project badges of the library's document cards). */
+export interface DocumentProject {
+  id: string;
+  name: string;
+  /** The document sits in the project's reference group (참고 자료), not among its work documents. */
+  reference: boolean;
+}
+
 /** `DocumentRecord` plus the URLs / paths the UI needs (`documents_list`, `documents_get`). */
 export interface DocumentView extends DocumentRecord {
   absolute_path: string;
   thumb_url: string | null;
+  /** Projects of the document, work memberships first (1.0.0; absent from views other commands return). */
+  projects?: DocumentProject[];
 }
 
 export interface PageRecord {

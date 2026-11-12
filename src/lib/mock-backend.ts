@@ -2570,8 +2570,22 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       return r(await pl.mockPlanner(cmd, a));
     }
     case "documents_list":
+    case "documents_get": {
+      // 1.0.0: the views carry the projects of each document (work members first, then reference groups).
+      const out = await mockDocuments(cmd, a);
+      const pj = await import("./mock-projects");
+      const kb = await import("./mock-knowledge");
+      const summaries = pj.projectSummaries();
+      const attach = (v: DocumentView): DocumentView => {
+        const work = summaries.filter((p) => pj.isMember(p.id, v.id)).map((p) => ({ id: p.id, name: p.name, reference: false }));
+        const reference = summaries
+          .filter((p) => !work.some((w) => w.id === p.id) && kb.projectReferenceDocIds(p.id).includes(v.id))
+          .map((p) => ({ id: p.id, name: p.name, reference: true }));
+        return { ...v, projects: [...work, ...reference] };
+      };
+      return r(Array.isArray(out) ? (out as DocumentView[]).map(attach) : attach(out as DocumentView));
+    }
     case "documents_stats":
-    case "documents_get":
     case "documents_pages":
     case "documents_page_text":
     case "documents_set_page_text":

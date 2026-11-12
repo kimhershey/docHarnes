@@ -941,6 +941,21 @@ fn reference_material_of_a_project_is_part_of_the_project() {
     })
     .unwrap();
 
+    // 1.0.0: the library's project badges — every document with its projects, work or reference;
+    // a document in two projects carries both, one in none is absent.
+    let second =
+        w.db.with(|c| projects_repo::save_project(c, &ProjectInput { name: "새봄 ERP".into(), ..Default::default() }))
+            .unwrap();
+    w.db.with(|c| projects_repo::add_documents(c, &second.id, &["work".to_string()])).unwrap();
+    let badges = w.db.with(projects_repo::document_projects).unwrap();
+    let of = |doc: &str| -> Vec<(String, bool)> {
+        badges.get(doc).map(|l| l.iter().map(|p| (p.name.clone(), p.reference)).collect()).unwrap_or_default()
+    };
+    assert_eq!(of("work"), vec![("한빛 포털".to_string(), false), ("새봄 ERP".to_string(), false)]);
+    assert_eq!(of("ref"), vec![("한빛 포털".to_string(), true)]);
+    assert!(of("other").is_empty());
+    w.db.with(|c| projects_repo::remove_document(c, &second.id, "work")).unwrap();
+
     // The scope names the kind: the project's work documents (as before), or its reference group.
     let in_project = |role: Option<RoleParam>| Scope {
         filter: ScopeFilter { project_id: Some(project.id.clone()), role, ..ScopeFilter::default() },

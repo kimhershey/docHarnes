@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import ko from "../src/i18n/ko.json" with { type: "json" };
-import { createWorkspace, docId, freshApp, importViaLibrary, openAssistantScreen, openSettingsTab } from "./helpers";
+import { card, createWorkspace, docId, freshApp, importViaLibrary, openAssistantScreen, openSettingsTab } from "./helpers";
 
 // 0.8.0 assistant harness (docs/plan/v0.8.0.md) against the browser mock. The sentences of the
 // 2026-11-11 report are the first tests: a settings sentence changes the setting it names, a greeting
@@ -382,5 +382,66 @@ test.describe("0.8.1 projects and reference material", () => {
     expect(box && box.x >= 0 && box.x + box.width <= width).toBe(true);
     await toggle.click();
     await expect.poll(() => settingsValue(page, "ui.show_assistant_steps")).toBe(false);
+  });
+  test("1.0.0: a library card shows the projects of its document as badges that stay inside the card", async ({ page }) => {
+    test.setTimeout(120_000);
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서.hwpx", "D:\\규정\\정보보안지침.pdf", "D:\\scan\\개발계약서-2p.pdf"]);
+    const estimate = await docId(page, "견적서.hwpx");
+    const guideline = await docId(page, "정보보안지침.pdf");
+    const contract = await docId(page, "개발계약서-2p.pdf");
+    // No project yet: no badge.
+    await expect(page.getByTestId(`doc-project-${estimate}`)).toHaveCount(0);
+
+    const longName = "한빛 포털 구축 2026년도 통합 유지보수 및 고도화 사업";
+    await newProject(page, longName);
+    await addToOpenProject(page, estimate);
+    // The guideline goes into the project's reference group.
+    await expect(page.getByTestId("project-documents")).toHaveAttribute("data-group-id", /.+/, { timeout: 10_000 });
+    await page.getByTestId("project-add-documents").click();
+    await page.getByTestId("project-add-kind-reference").check();
+    await page.getByTestId(`project-add-doc-${guideline}`).check();
+    await page.getByTestId("project-add-done").click();
+    await expect(page.getByTestId(`project-doc-${guideline}`)).toHaveAttribute("data-kind", "reference");
+    for (const name of ["새봄 ERP", "미래 데이터 허브"]) {
+      await newProject(page, name);
+      await addToOpenProject(page, estimate);
+    }
+
+    await page.getByTestId("nav-library").click();
+    const inside = async (name: string, testId: string) => {
+      const outer = await card(page, name).boundingBox();
+      const boxes = await page.getByTestId(testId).evaluateAll((els) => els.map((e) => e.getBoundingClientRect()).map((r) => ({ left: r.left, right: r.right, top: r.top, bottom: r.bottom })));
+      expect(outer).not.toBeNull();
+      expect(boxes.length).toBeGreaterThan(0);
+      for (const b of boxes) {
+        // Not wider than the card, and not cut off below it either (the card grows with its badge rows).
+        expect(b.left).toBeGreaterThanOrEqual(outer!.x - 0.5);
+        expect(b.right).toBeLessThanOrEqual(outer!.x + outer!.width + 0.5);
+        expect(b.top).toBeGreaterThanOrEqual(outer!.y - 0.5);
+        expect(b.bottom).toBeLessThanOrEqual(outer!.y + outer!.height + 0.5);
+      }
+    };
+    // Three projects: two badges and "+1"; the long name is cut inside its badge, the full name is the tooltip.
+    const badges = page.getByTestId(`doc-project-${estimate}`);
+    await expect(badges).toHaveCount(2, { timeout: 10_000 });
+    await expect(badges.first()).toHaveAttribute("title", ko.library.project_badge.replace("{{name}}", longName));
+    await expect(page.getByTestId(`doc-project-more-${estimate}`)).toHaveText("+1");
+    await inside("견적서.hwpx", `doc-project-${estimate}`);
+    // Reference material of a project carries the badge too; a document in no project has none.
+    await expect(page.getByTestId(`doc-project-${guideline}`)).toHaveCount(1);
+    await expect(page.getByTestId(`doc-project-${guideline}`)).toHaveAttribute("data-reference", "true");
+    await expect(page.getByTestId(`doc-project-${contract}`)).toHaveCount(0);
+
+    // At the largest UI scale the badges still stay inside the card.
+    await openAssistantScreen(page);
+    await send(page, "UI 배율 150으로 바꿔줘");
+    await expect.poll(() => settingsValue(page, "ui.scale_percent"), { timeout: 15_000 }).toBe(150);
+    await page.getByTestId("nav-library").click();
+    await expect(badges).toHaveCount(2, { timeout: 10_000 });
+    await inside("견적서.hwpx", `doc-project-${estimate}`);
+    await inside("견적서.hwpx", `doc-project-more-${estimate}`);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   });
 });
