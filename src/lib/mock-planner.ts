@@ -1043,6 +1043,7 @@ function ruleMaintenance(t: Text): Plan | null {
 
 const CATALOG_PHRASES: [string[], string][] = [
   [["ui배율", "ui 배율", "화면배율", "화면 배율", "uiscale", "ui scale", "배율을"], "ui.scale_percent"],
+  [["2순위추천임계", "2순위 추천 임계", "2순위임계", "2순위 임계", "2순위추천기준", "2순위 추천 기준", "프로젝트분류임계", "프로젝트 분류 임계", "프로젝트분류기준", "프로젝트 분류 기준", "secondchoicethreshold", "second choice threshold"], "processing.project_second_choice"],
   [["검토임계", "검토 임계", "reviewthreshold", "review threshold"], "processing.review_threshold"],
   [["렌더dpi", "렌더 dpi", "renderdpi", "render dpi", "기본dpi", "dpi를"], "processing.render_dpi"],
   [["자동임베딩", "자동 임베딩", "autoembed", "auto embed", "임베딩자동", "임베딩 자동"], "knowledge.auto_embed"],
@@ -1095,7 +1096,8 @@ function ruleCatalogSetting(t: Text): Plan | null {
     value = quotedOf(t.raw);
     if (value === null) return null;
   } else {
-    const n = firstNumber(t.raw.replace(/dpi/i, ""));
+    // (a number that is part of the setting's name — "2순위 추천 임계값" — is not the value)
+    const n = firstNumber(t.raw.replace(/dpi/i, "").replace(/\d+\s*순위/g, ""));
     if (n === null) return null;
     value = n;
   }

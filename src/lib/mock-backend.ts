@@ -153,6 +153,7 @@ export function defaultSettings(): AppSettings {
       inbox_auto_level: "full",
       render_dpi: 200,
       review_threshold: 0.8,
+      project_second_choice: 0.6,
       audit_sample_percent: 5,
       organize_reviewed_only: true,
       inbox_watch: true,

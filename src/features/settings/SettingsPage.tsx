@@ -517,6 +517,19 @@ function ProcessingTab() {
           <Slider min={0.5} max={1} step={0.05} value={[p.review_threshold]} onValueCommit={([v]) => void commitThreshold(v ?? 0.8)} className="w-56" aria-label={t("settings.processing.review_threshold")} data-testid="settings-review-threshold" />
           <span className="w-12 text-sm tabular-nums">{p.review_threshold.toFixed(2)}</span>
         </Row>
+        {/* 1.0.0: 프로젝트 분류(2순위 추천 임계값) — shown and typed as a percentage, stored as 0..1. */}
+        <Row label={t("settings.processing.project_second_choice")} hint={t("settings.processing.project_second_choice_hint")} htmlFor="project-second-choice">
+          <NumberField
+            id="project-second-choice"
+            value={Math.round((p.project_second_choice ?? 0.6) * 100)}
+            min={0}
+            max={100}
+            step={5}
+            onCommit={(v) => void update((s) => void (s.processing.project_second_choice = Math.min(100, Math.max(0, v)) / 100))}
+            testId="settings-project-second-choice"
+          />
+          <span className="text-sm text-fg-muted">%</span>
+        </Row>
         <Row label={t("settings.processing.audit_sample")} htmlFor="audit-sample">
           <NumberField id="audit-sample" value={p.audit_sample_percent} min={0} max={100} step={1} onCommit={(v) => void update((s) => void (s.processing.audit_sample_percent = v))} testId="settings-audit-sample" />
           <span className="text-sm text-fg-muted">%</span>

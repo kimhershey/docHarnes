@@ -267,6 +267,10 @@ pub struct ProcessingSettings {
     /// Re-OCR dense pages (≥ `dense_cells` table cells) at the fine-print budget.
     pub dense_reocr: bool,
     pub dense_cells: u16,
+    /// 1.0.0 — 프로젝트 분류(2순위 추천 임계값): when documents are assigned to projects in bulk, the
+    /// second-best project of the classifier is ticked as well once its confidence reaches this
+    /// (0.0–1.0; default 0.6). 1.0 never ticks a second project.
+    pub project_second_choice: f32,
 }
 
 impl Default for ProcessingSettings {
@@ -284,6 +288,7 @@ impl Default for ProcessingSettings {
             precise_mode: false,
             dense_reocr: true,
             dense_cells: 80,
+            project_second_choice: 0.6,
         }
     }
 }
@@ -650,6 +655,7 @@ impl AppSettings {
         self.processing.audit_sample_percent = self.processing.audit_sample_percent.min(100);
         self.processing.kie_max_pages = self.processing.kie_max_pages.clamp(1, 32);
         self.processing.dense_cells = self.processing.dense_cells.clamp(10, 2000);
+        self.processing.project_second_choice = self.processing.project_second_choice.clamp(0.0, 1.0);
         self.models.resident_models_max = self.models.resident_models_max.clamp(1, 4);
         self.cache.page_cache_max_gb = self.cache.page_cache_max_gb.clamp(0.5, 1000.0);
         if self.models.active_model.trim().is_empty() {
@@ -785,6 +791,7 @@ mod tests {
                 precise_mode: true,
                 dense_reocr: false,
                 dense_cells: 120,
+                project_second_choice: 0.75,
             },
             cache: CacheSettings { page_cache_max_gb: 42.5, keep_thumbnails: false },
             privacy: PrivacySettings { pii_masking: false, db_encryption: true },

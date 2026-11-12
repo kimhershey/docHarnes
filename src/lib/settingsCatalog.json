@@ -229,6 +229,16 @@
   },
   {
     "confirm": false,
+    "key": "processing.project_second_choice",
+    "type": {
+      "kind": "number",
+      "max": 1.0,
+      "min": 0.0,
+      "percent": true
+    }
+  },
+  {
+    "confirm": false,
     "key": "processing.organize_reviewed_only",
     "type": {
       "kind": "boolean"

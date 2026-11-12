@@ -91,6 +91,12 @@ pub const SETTINGS: &[SettingSpec] = &[
     ),
     s("processing.audit_sample_percent", ValueType::Int { min: 0, max: 100 }, "감사 표본(%)", "audit sample (%)"),
     s(
+        "processing.project_second_choice",
+        ValueType::Float { min: 0.0, max: 1.0, percent: true },
+        "프로젝트 분류(2순위 추천 임계값)",
+        "project classification (second-choice threshold)",
+    ),
+    s(
         "processing.organize_reviewed_only",
         ValueType::Bool,
         "검토 완료 문서만 정리",
@@ -198,6 +204,7 @@ pub const SETTING_KEYS: &[&str] = &[
     "processing.render_dpi",
     "processing.review_threshold",
     "processing.audit_sample_percent",
+    "processing.project_second_choice",
     "processing.organize_reviewed_only",
     "processing.inbox_watch",
     "processing.ocr_digital_pdf",
@@ -290,6 +297,20 @@ pub const NAMES: &[(&str, &[&str])] = &[
         &["렌더 dpi", "렌더링 dpi", "렌더링 해상도", "렌더 해상도", "해상도", "dpi", "render dpi", "resolution"],
     ),
     ("processing.review_threshold", &["검토 임계값", "검토 기준", "review threshold"]),
+    (
+        "processing.project_second_choice",
+        &[
+            "프로젝트 분류 2순위 추천 임계값",
+            "프로젝트 분류(2순위 추천 임계값)",
+            "2순위 추천 임계값",
+            "2순위 임계값",
+            "2순위 추천 기준",
+            "프로젝트 분류 임계값",
+            "프로젝트 분류 기준",
+            "second choice threshold",
+            "second-choice threshold",
+        ],
+    ),
     ("processing.audit_sample_percent", &["감사 표본", "audit sample"]),
     ("processing.organize_reviewed_only", &["검토 완료만 정리", "검토 완료 문서만 정리", "reviewed only"]),
     ("processing.inbox_watch", &["inbox 감시", "받은 문서함 감시", "폴더 감시", "inbox watch", "inbox watching"]),
@@ -676,7 +697,7 @@ mod tests {
         assert_eq!(keys.len(), SETTING_KEYS.len(), "duplicate keys");
         // Every settings field the assistant may change has an entry, plus `journal_days`. 0.8.0
         // took `privacy.db_encryption` out: nothing encrypts the database, so there is no switch.
-        assert_eq!(SETTINGS.len(), 47);
+        assert_eq!(SETTINGS.len(), 48);
         assert!(find("privacy.db_encryption").is_none());
     }
 

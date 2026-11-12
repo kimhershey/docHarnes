@@ -55,6 +55,8 @@ export interface ProcessingSettings {
   inbox_auto_level: AutoProcessingLevel;
   render_dpi: number;
   review_threshold: number;
+  /** 1.0.0 — 프로젝트 분류(2순위 추천 임계값), 0..1: the classifier's second project is ticked from this confidence up. */
+  project_second_choice: number;
   audit_sample_percent: number;
   organize_reviewed_only: boolean;
   inbox_watch: boolean;

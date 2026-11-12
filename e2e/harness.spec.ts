@@ -513,4 +513,22 @@ test.describe("0.8.1 projects and reference material", () => {
     await expect(page.getByTestId(`project-doc-${estimate}`)).toBeVisible();
     await expect(page.getByTestId(`project-doc-${guideline}`)).toBeVisible();
   });
+  test("1.0.0: 프로젝트 분류(2순위 추천 임계값) is a setting that a sentence can change", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openAssistantScreen(page);
+    expect(await settingsValue(page, "processing.project_second_choice")).toBe(0.6);
+    // Not the exact label: a near wording names the same setting.
+    await send(page, "2순위 추천 임계값 70%로 바꿔줘");
+    await expect.poll(() => settingsValue(page, "processing.project_second_choice"), { timeout: 15_000 }).toBe(0.7);
+    // 설정 > 처리 shows it as a percentage, inside the window.
+    await openSettingsTab(page, "processing");
+    const field = page.getByTestId("settings-project-second-choice");
+    await expect(field).toHaveValue("70");
+    const box = (await field.boundingBox())!;
+    expect(box.x >= 0 && box.x + box.width <= (page.viewportSize()?.width ?? 0)).toBe(true);
+    await field.fill("85");
+    await field.blur();
+    await expect.poll(() => settingsValue(page, "processing.project_second_choice")).toBe(0.85);
+  });
 });
