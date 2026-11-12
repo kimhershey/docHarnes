@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import ko from "../src/i18n/ko.json" with { type: "json" };
-import { createWorkspace, docId, freshApp, importViaLibrary, openAssistantScreen, openSettingsTab } from "./helpers";
+import { card, createWorkspace, docId, freshApp, importViaLibrary, openAssistantScreen, openSettingsTab } from "./helpers";
 
 // 0.8.0 assistant harness (docs/plan/v0.8.0.md) against the browser mock. The sentences of the
 // 2026-11-11 report are the first tests: a settings sentence changes the setting it names, a greeting
@@ -339,5 +339,219 @@ test.describe("0.8.1 projects and reference material", () => {
     await expect(hits.first()).toContainText("정보보안지침");
     await expect(reference.getByTestId("result-search")).not.toContainText("견적서");
     await expect(reference.getByTestId("result-search")).not.toContainText("개발계약서");
+  });
+  test("1.0.0: the chosen steps are listed only when switched on; a plan that needs a confirmation always lists them", async ({ page }) => {
+    test.setTimeout(90_000);
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서.hwpx", "D:\\scan\\개발계약서-2p.pdf"]);
+    await openAssistantScreen(page);
+    const plans = assistantCard(page, "plan");
+
+    // Off by default: a search runs at once and its card shows the reading and the result, not the step list.
+    expect(await settingsValue(page, "ui.show_assistant_steps")).toBe(false);
+    await send(page, "납품 기한 검색해줘");
+    await expect(plans).toHaveCount(1, { timeout: 15_000 });
+    await expect(plans.nth(0).getByTestId("plan-summary")).toBeVisible();
+    await expect(assistantCard(page, "result")).toHaveCount(1, { timeout: 15_000 });
+    await expect(plans.nth(0).getByTestId("plan-steps")).toHaveCount(0);
+
+    // A deletion waits for approval, so what it will do is listed whatever the setting says.
+    await send(page, "견적서 삭제해줘");
+    await expect(plans).toHaveCount(2, { timeout: 15_000 });
+    await expect(plans.nth(1)).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    await expect(plans.nth(1).getByTestId("plan-steps")).toBeVisible();
+    await expect(plans.nth(1).getByTestId("plan-step-0")).toHaveAttribute("data-op", "delete");
+    await plans.nth(1).getByTestId("plan-cancel").click();
+
+    // Switched on by a sentence: the next search lists its step.
+    await send(page, "어시스턴트 작업 표시 켜줘");
+    await expect.poll(() => settingsValue(page, "ui.show_assistant_steps"), { timeout: 15_000 }).toBe(true);
+    await send(page, "검수 조건 검색해줘");
+    await expect(plans).toHaveCount(3, { timeout: 15_000 });
+    await expect(plans.nth(2).getByTestId("plan-step-0")).toHaveAttribute("data-op", "search");
+    // … and the card that ran before follows the setting too.
+    await expect(plans.nth(0).getByTestId("plan-steps")).toBeVisible();
+
+    // The switch in 설정 > 일반 shows the same value and stays inside the window.
+    await openSettingsTab(page, "general");
+    const toggle = page.getByTestId("settings-assistant-steps");
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    const box = await toggle.boundingBox();
+    const width = page.viewportSize()?.width ?? 0;
+    expect(box && box.x >= 0 && box.x + box.width <= width).toBe(true);
+    await toggle.click();
+    await expect.poll(() => settingsValue(page, "ui.show_assistant_steps")).toBe(false);
+  });
+  test("1.0.0: a library card shows the projects of its document as badges that stay inside the card", async ({ page }) => {
+    test.setTimeout(120_000);
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서.hwpx", "D:\\규정\\정보보안지침.pdf", "D:\\scan\\개발계약서-2p.pdf"]);
+    const estimate = await docId(page, "견적서.hwpx");
+    const guideline = await docId(page, "정보보안지침.pdf");
+    const contract = await docId(page, "개발계약서-2p.pdf");
+    // No project yet: no badge.
+    await expect(page.getByTestId(`doc-project-${estimate}`)).toHaveCount(0);
+
+    const longName = "한빛 포털 구축 2026년도 통합 유지보수 및 고도화 사업";
+    await newProject(page, longName);
+    await addToOpenProject(page, estimate);
+    // The guideline goes into the project's reference group.
+    await expect(page.getByTestId("project-documents")).toHaveAttribute("data-group-id", /.+/, { timeout: 10_000 });
+    await page.getByTestId("project-add-documents").click();
+    await page.getByTestId("project-add-kind-reference").check();
+    await page.getByTestId(`project-add-doc-${guideline}`).check();
+    await page.getByTestId("project-add-done").click();
+    await expect(page.getByTestId(`project-doc-${guideline}`)).toHaveAttribute("data-kind", "reference");
+    for (const name of ["새봄 ERP", "미래 데이터 허브"]) {
+      await newProject(page, name);
+      await addToOpenProject(page, estimate);
+    }
+
+    await page.getByTestId("nav-library").click();
+    const inside = async (name: string, testId: string) => {
+      const outer = await card(page, name).boundingBox();
+      const boxes = await page.getByTestId(testId).evaluateAll((els) => els.map((e) => e.getBoundingClientRect()).map((r) => ({ left: r.left, right: r.right, top: r.top, bottom: r.bottom })));
+      expect(outer).not.toBeNull();
+      expect(boxes.length).toBeGreaterThan(0);
+      for (const b of boxes) {
+        // Not wider than the card, and not cut off below it either (the card grows with its badge rows).
+        expect(b.left).toBeGreaterThanOrEqual(outer!.x - 0.5);
+        expect(b.right).toBeLessThanOrEqual(outer!.x + outer!.width + 0.5);
+        expect(b.top).toBeGreaterThanOrEqual(outer!.y - 0.5);
+        expect(b.bottom).toBeLessThanOrEqual(outer!.y + outer!.height + 0.5);
+      }
+    };
+    // Three projects: two badges and "+1"; the long name is cut inside its badge, the full name is the tooltip.
+    const badges = page.getByTestId(`doc-project-${estimate}`);
+    await expect(badges).toHaveCount(2, { timeout: 10_000 });
+    await expect(badges.first()).toHaveAttribute("title", ko.library.project_badge.replace("{{name}}", longName));
+    await expect(page.getByTestId(`doc-project-more-${estimate}`)).toHaveText("+1");
+    await inside("견적서.hwpx", `doc-project-${estimate}`);
+    // Reference material of a project carries the badge too; a document in no project has none.
+    await expect(page.getByTestId(`doc-project-${guideline}`)).toHaveCount(1);
+    await expect(page.getByTestId(`doc-project-${guideline}`)).toHaveAttribute("data-reference", "true");
+    await expect(page.getByTestId(`doc-project-${contract}`)).toHaveCount(0);
+
+    // At the largest UI scale the badges still stay inside the card.
+    await openAssistantScreen(page);
+    await send(page, "UI 배율 150으로 바꿔줘");
+    await expect.poll(() => settingsValue(page, "ui.scale_percent"), { timeout: 15_000 }).toBe(150);
+    await page.getByTestId("nav-library").click();
+    await expect(badges).toHaveCount(2, { timeout: 10_000 });
+    await inside("견적서.hwpx", `doc-project-${estimate}`);
+    await inside("견적서.hwpx", `doc-project-more-${estimate}`);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  });
+  test("1.0.0: document pickers have select all / none and narrow to a project's documents", async ({ page }) => {
+    test.setTimeout(120_000);
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서.hwpx", "D:\\규정\\정보보안지침.pdf", "D:\\scan\\개발계약서-2p.pdf"]);
+    const estimate = await docId(page, "견적서.hwpx");
+    const guideline = await docId(page, "정보보안지침.pdf");
+    const contract = await docId(page, "개발계약서-2p.pdf");
+    await newProject(page, "한빛 포털");
+    await addToOpenProject(page, estimate);
+    await expect(page.getByTestId("project-documents")).toHaveAttribute("data-group-id", /.+/, { timeout: 10_000 });
+    await page.getByTestId("project-add-documents").click();
+    await page.getByTestId("project-add-kind-reference").check();
+    await page.getByTestId(`project-add-doc-${guideline}`).check();
+    await page.getByTestId("project-add-done").click();
+    await expect(page.getByTestId(`project-doc-${guideline}`)).toHaveAttribute("data-kind", "reference");
+    const count = (n: number) => ko.common.selected_count.replace("{{count}}", String(n));
+
+    // 문서 작성 → 원본 고르기: select all / none act on the visible rows.
+    await page.getByTestId("nav-generate").click();
+    await page.getByTestId("generate-pick-sources").click();
+    const dialog = page.getByTestId("generate-sources-dialog");
+    await expect(dialog).toBeVisible();
+    const boxes = dialog.locator('input[type="checkbox"]');
+    await expect(boxes).toHaveCount(3);
+    await expect(page.getByTestId("generate-sources-select-count")).toHaveText(count(0));
+    await expect(page.getByTestId("generate-sources-select-none")).toBeDisabled();
+    await page.getByTestId("generate-sources-select-all").click();
+    await expect(page.getByTestId("generate-sources-select-count")).toHaveText(count(3));
+    await expect(page.getByTestId("generate-sources-select-all")).toBeDisabled();
+    await page.getByTestId("generate-sources-select-none").click();
+    await expect(page.getByTestId("generate-sources-select-count")).toHaveText(count(0));
+    // Narrowed to the project: its work document and its reference material, picked in one go.
+    await page.getByTestId("generate-sources-project").click();
+    await page.getByRole("option", { name: "한빛 포털" }).click();
+    await expect(boxes).toHaveCount(2);
+    await expect(page.getByTestId(`generate-source-${contract}`)).toHaveCount(0);
+    await page.getByTestId("generate-sources-select-all").click();
+    await expect(page.getByTestId("generate-sources-select-count")).toHaveText(count(2));
+    // Back to every document: the two stay picked, the third is not.
+    await page.getByTestId("generate-sources-project").click();
+    await page.getByRole("option", { name: ko.projects.filter.all }).click();
+    await expect(boxes).toHaveCount(3);
+    await expect(page.getByTestId(`generate-source-${estimate}`)).toBeChecked();
+    await expect(page.getByTestId(`generate-source-${guideline}`)).toBeChecked();
+    await expect(page.getByTestId(`generate-source-${contract}`)).not.toBeChecked();
+    // The added controls stay inside the dialog, and the dialog inside the window.
+    const outer = (await dialog.boundingBox())!;
+    for (const id of ["generate-sources-project", "generate-sources-select"]) {
+      const b = (await page.getByTestId(id).boundingBox())!;
+      expect(b.x).toBeGreaterThanOrEqual(outer.x - 0.5);
+      expect(b.x + b.width).toBeLessThanOrEqual(outer.x + outer.width + 0.5);
+    }
+    expect(outer.x >= 0 && outer.x + outer.width <= (page.viewportSize()?.width ?? 0)).toBe(true);
+    await page.getByTestId("generate-sources-done").click();
+    await expect(page.getByTestId("generate-sources").locator("li")).toHaveCount(2);
+
+    // 프로젝트의 문서 추가: another project's documents are picked the same way.
+    await newProject(page, "새봄 ERP");
+    await page.getByTestId("project-add-documents").click();
+    await page.getByTestId("project-add-project").click();
+    await page.getByRole("option", { name: "한빛 포털" }).click();
+    await expect(page.getByTestId("project-add-dialog").locator('input[type="checkbox"]')).toHaveCount(2);
+    await page.getByTestId("project-add-select-all").click();
+    await expect(page.getByTestId("project-add-select-count")).toHaveText(count(2));
+    await page.getByTestId("project-add-done").click();
+    await expect(page.getByTestId(`project-doc-${estimate}`)).toBeVisible();
+    await expect(page.getByTestId(`project-doc-${guideline}`)).toBeVisible();
+  });
+  test("1.0.0: 프로젝트 분류(2순위 추천 임계값) is a setting that a sentence can change", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openAssistantScreen(page);
+    expect(await settingsValue(page, "processing.project_second_choice")).toBe(0.6);
+    // Not the exact label: a near wording names the same setting.
+    await send(page, "2순위 추천 임계값 70%로 바꿔줘");
+    await expect.poll(() => settingsValue(page, "processing.project_second_choice"), { timeout: 15_000 }).toBe(0.7);
+    // 설정 > 처리 shows it as a percentage, inside the window.
+    await openSettingsTab(page, "processing");
+    const field = page.getByTestId("settings-project-second-choice");
+    await expect(field).toHaveValue("70");
+    const box = (await field.boundingBox())!;
+    expect(box.x >= 0 && box.x + box.width <= (page.viewportSize()?.width ?? 0)).toBe(true);
+    await field.fill("85");
+    await field.blur();
+    await expect.poll(() => settingsValue(page, "processing.project_second_choice")).toBe(0.85);
+  });
+
+  test("1.0.0: 이미지 내 글자 추출 is off by default, a switch in 설정 > 처리 and a sentence turn it on", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openSettingsTab(page, "processing");
+    const toggle = page.getByTestId("settings-ocr-figures");
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await expect(page.getByText(ko.settings.processing.ocr_figures, { exact: true })).toBeVisible();
+    // The hint says what it costs; the row stays inside the window.
+    await expect(page.getByText(ko.settings.processing.ocr_figures_hint)).toBeVisible();
+    const box = (await toggle.boundingBox())!;
+    expect(box.x >= 0 && box.x + box.width <= (page.viewportSize()?.width ?? 0)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await toggle.click();
+    await expect.poll(() => settingsValue(page, "processing.ocr_figures")).toBe(true);
+    // By a sentence, with a near wording; the other OCR switch is not touched.
+    await openAssistantScreen(page);
+    await send(page, "그림 글자 추출 꺼줘");
+    await expect.poll(() => settingsValue(page, "processing.ocr_figures"), { timeout: 15_000 }).toBe(false);
+    await send(page, "이미지 내 글자 추출 켜줘");
+    await expect.poll(() => settingsValue(page, "processing.ocr_figures"), { timeout: 15_000 }).toBe(true);
+    expect(await settingsValue(page, "processing.ocr_digital_pdf")).toBe(false);
   });
 });

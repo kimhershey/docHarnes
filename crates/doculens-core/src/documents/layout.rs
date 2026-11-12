@@ -43,6 +43,9 @@ pub struct Word {
     pub line: u32,
     #[serde(default, skip_serializing_if = "is_false")]
     pub edited: bool,
+    /// 1.0.0 §6: read from a picture of the page; the box is estimated inside the picture.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fig: bool,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -54,6 +57,23 @@ pub struct PageLayout {
     pub version: u8,
     pub source: LayoutSource,
     pub words: Vec<Word>,
+    /// 1.0.0 §6: the pictures of the page whose text was read into `words`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub figures: Vec<FigureMark>,
+}
+
+/// A picture the model read (1.0.0 §6 "이미지 내 글자 추출"): where it is on the page (fractions),
+/// a hash of its pixels and how many words it put into the layout. Kept so the picture is not read
+/// again by the next run, and so a picture without text is not asked about twice.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FigureMark {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub hash: String,
+    #[serde(default)]
+    pub words: u32,
 }
 
 /// A character box reported by PDFium: PDF points, origin bottom-left, unrotated page.
@@ -90,7 +110,7 @@ const INK_LUMA: u8 = 160;
 
 impl PageLayout {
     pub fn empty(source: LayoutSource) -> PageLayout {
-        PageLayout { version: LAYOUT_VERSION, source, words: Vec::new() }
+        PageLayout { version: LAYOUT_VERSION, source, words: Vec::new(), figures: Vec::new() }
     }
 
     pub fn to_json(&self) -> String {
@@ -150,7 +170,13 @@ impl PageLayout {
         if start >= end {
             return String::new();
         }
-        PageLayout { version: self.version, source: self.source, words: self.words[start..end].to_vec() }.text()
+        PageLayout {
+            version: self.version,
+            source: self.source,
+            words: self.words[start..end].to_vec(),
+            figures: Vec::new(),
+        }
+        .text()
     }
 
     /// Rotates every box clockwise by `delta` degrees (multiples of 90; the page image was rotated
@@ -167,6 +193,39 @@ impl PageLayout {
             w.w = width;
             w.h = height;
         }
+        for f in &mut self.figures {
+            let (x, y, width, height) = rotate_box(f.x, f.y, f.w, f.h, delta);
+            f.x = x;
+            f.y = y;
+            f.w = width;
+            f.h = height;
+        }
+    }
+
+    /// Whether the picture at `bbox` was read already: a mark at the same place (within a hundredth of
+    /// the page on every edge).
+    pub fn has_figure(&self, bbox: (f32, f32, f32, f32)) -> bool {
+        const TOL: f32 = 0.01;
+        let (x, y, w, h) = bbox;
+        self.figures.iter().any(|f| {
+            (f.x - x).abs() <= TOL
+                && (f.y - y).abs() <= TOL
+                && (f.x + f.w - x - w).abs() <= TOL
+                && (f.y + f.h - y - h).abs() <= TOL
+        })
+    }
+
+    /// Words whose centre lies inside `bbox` and that were not read from a picture: text drawn over
+    /// the picture — a scan with its own text layer, a slide background. Such a picture has its words.
+    pub fn words_inside(&self, bbox: (f32, f32, f32, f32)) -> usize {
+        let (x, y, w, h) = bbox;
+        self.words
+            .iter()
+            .filter(|word| {
+                let (cx, cy) = (word.x + word.w / 2.0, word.y + word.h / 2.0);
+                !word.fig && cx >= x && cx <= x + w && cy >= y && cy <= y + h
+            })
+            .count()
     }
 
     /// Bounding box of the words `start..end`, if any.
@@ -460,7 +519,7 @@ pub fn from_chars(chars: &[CharBox], page_box: PageBox, rotation: u16) -> PageLa
         let fh = (r.top - r.bottom) / height_pt;
         let (x, y, w, h) = rotate_box(fx, fy, fw, fh, rotation);
         let (x, y, w, h) = finish_box(x, y, w, h);
-        layout.words.push(Word { t: r.text.clone(), x, y, w, h, line, edited: false });
+        layout.words.push(Word { t: r.text.clone(), x, y, w, h, line, edited: false, fig: false });
     }
     layout
 }
@@ -495,7 +554,7 @@ fn place_words(words: &[&str], x0: f32, width: f32, y: f32, h: f32, line: u32, e
     for w in words {
         let ww = units(w) * scale;
         let (bx, by, bw, bh) = finish_box(x, y, ww, h);
-        out.push(Word { t: (*w).to_string(), x: bx, y: by, w: bw, h: bh, line, edited });
+        out.push(Word { t: (*w).to_string(), x: bx, y: by, w: bw, h: bh, line, edited, fig: false });
         x += ww + gap * scale;
     }
     out
@@ -869,12 +928,22 @@ pub fn apply_edit(layout: &mut PageLayout, text: &str, start: usize, end: usize,
     let fresh: Vec<Word> = if new_words.len() == old.len() {
         old.iter()
             .zip(new_words.iter())
-            .map(|(o, t)| Word { t: (*t).to_string(), x: o.x, y: o.y, w: o.w, h: o.h, line: o.line, edited: true })
+            .map(|(o, t)| Word {
+                t: (*t).to_string(),
+                x: o.x,
+                y: o.y,
+                w: o.w,
+                h: o.h,
+                line: o.line,
+                edited: true,
+                fig: o.fig,
+            })
             .collect()
     } else if new_words.is_empty() {
         Vec::new()
     } else {
-        let tmp = PageLayout { version: LAYOUT_VERSION, source: layout.source, words: old.clone() };
+        let tmp =
+            PageLayout { version: LAYOUT_VERSION, source: layout.source, words: old.clone(), figures: Vec::new() };
         let (x, y, w, h) = tmp.bbox(0, old.len()).unwrap_or((0.0, 0.0, 0.2, 0.02));
         let same_line = old.iter().all(|o| o.line == line);
         let (y, h) = if same_line { (y, h) } else { (old[0].y, old[0].h) };
@@ -943,6 +1012,156 @@ pub fn add_words(layout: &mut PageLayout, text: &str, bbox: (f32, f32, f32, f32)
     for (i, w) in fresh.into_iter().enumerate() {
         layout.words.insert(idx + i, w);
     }
+    s
+}
+
+// ---------------------------------------------------------------------------
+// Pictures (1.0.0 §6 "이미지 내 글자 추출")
+// ---------------------------------------------------------------------------
+
+/// The box of a page object (PDF points, content space, see [`PageBox`]) as fractions of the rendered
+/// page — the mapping [`from_chars`] applies to glyph boxes. `None` for a box outside the page.
+pub fn object_box(
+    left: f32,
+    right: f32,
+    bottom: f32,
+    top: f32,
+    page_box: PageBox,
+    rotation: u16,
+) -> Option<(f32, f32, f32, f32)> {
+    if !(page_box.width > 0.0 && page_box.height > 0.0) {
+        return None;
+    }
+    let (l, r) = if left <= right { (left, right) } else { (right, left) };
+    let (b, t) = if bottom <= top { (bottom, top) } else { (top, bottom) };
+    // Clipped to the page: a picture that bleeds over the edge is read where it shows.
+    let l = l.max(page_box.left);
+    let r = r.min(page_box.left + page_box.width);
+    let b = b.max(page_box.bottom);
+    let t = t.min(page_box.bottom + page_box.height);
+    if !(r > l && t > b) {
+        return None;
+    }
+    let fx = (l - page_box.left) / page_box.width;
+    let fw = (r - l) / page_box.width;
+    let fy = 1.0 - (t - page_box.bottom) / page_box.height;
+    let fh = (t - b) / page_box.height;
+    Some(rotate_box(fx, fy, fw, fh, rotation))
+}
+
+/// Puts the text the model read from a picture into the page (1.0.0 §6). `figure` is the layout of
+/// `figure_text` estimated on the picture's own pixels ([`estimate`]: fractions of the picture); its
+/// words are moved to where the picture sits on the page (`bbox`, fractions of the page), marked
+/// [`Word::fig`] and inserted as one block — after the text above the picture in its column — so they
+/// can be selected on the page image like any other word. The page text gets the same lines at the
+/// same place, without a label (user decision: no "[그림] …"). A mark is left in `layout.figures` even
+/// when the picture has no text. Returns the new page text.
+pub fn add_figure(
+    layout: &mut PageLayout,
+    text: &str,
+    bbox: (f32, f32, f32, f32),
+    figure: &PageLayout,
+    figure_text: &str,
+    hash: &str,
+) -> String {
+    let (bx, by, bw, bh) = bbox;
+    layout.figures.retain(|f| {
+        !((f.x - bx).abs() <= 0.01 && (f.y - by).abs() <= 0.01 && (f.w - bw).abs() <= 0.01 && (f.h - bh).abs() <= 0.01)
+    });
+    layout.figures.push(FigureMark {
+        x: bx,
+        y: by,
+        w: bw,
+        h: bh,
+        hash: hash.to_string(),
+        words: figure.words.len() as u32,
+    });
+    if figure.words.is_empty() {
+        return text.to_string();
+    }
+    // Where the block goes: after the last word (in text order) that sits above the middle of the
+    // picture in the picture's own column, to the end of that word's line; without one, before the
+    // first word below the picture; else at the end.
+    let centre = by + bh / 2.0;
+    let in_column = |w: &Word| w.x < bx + bw && w.x + w.w > bx;
+    let above = layout.words.iter().rposition(|w| in_column(w) && w.y + w.h / 2.0 < centre);
+    let idx = match above {
+        Some(i) => {
+            let line = layout.words[i].line;
+            let mut j = i + 1;
+            while j < layout.words.len()
+                && layout.words[j].line == line
+                && layout.words[j].y + layout.words[j].h / 2.0 < centre
+            {
+                j += 1;
+            }
+            j
+        }
+        None => layout.words.iter().position(|w| w.y + w.h / 2.0 > centre).unwrap_or(layout.words.len()),
+    };
+    // The page text: the picture's lines as lines of their own at the same place.
+    let spans = locate_all(text, &layout.words);
+    let block = figure_text.trim();
+    let mut s = text.to_string();
+    let at = (idx..layout.words.len()).find_map(|i| spans.get(i).copied().flatten()).map(|(start, _)| start);
+    match at {
+        Some(at) if idx < layout.words.len() => {
+            let before = if at == 0 || s[..at].ends_with('\n') { "" } else { "\n" };
+            s.insert_str(at, &format!("{before}{block}\n"));
+        }
+        _ => {
+            let kept = s.trim_end().len();
+            s.truncate(kept);
+            if !s.is_empty() {
+                s.push('\n');
+            }
+            s.push_str(block);
+        }
+    }
+    // The words: line ids of their own (a line is a group of words, not a position).
+    let base = layout.words.iter().map(|w| w.line).max().map_or(0, |l| l + 1);
+    let fresh = figure.words.iter().map(|w| {
+        let (x, y, ww, hh) = finish_box(bx + w.x * bw, by + w.y * bh, w.w * bw, w.h * bh);
+        Word { t: w.t.clone(), x, y, w: ww, h: hh, line: base + w.line, edited: false, fig: true }
+    });
+    let tail = layout.words.split_off(idx);
+    layout.words.extend(fresh);
+    layout.words.extend(tail);
+    s
+}
+
+/// Takes the words read from pictures back out of the page (a forced re-run reads them afresh) and
+/// forgets the marks. Returns the page text without their lines.
+pub fn remove_figures(layout: &mut PageLayout, text: &str) -> String {
+    layout.figures.clear();
+    if !layout.words.iter().any(|w| w.fig) {
+        return text.to_string();
+    }
+    let spans = locate_all(text, &layout.words);
+    let mut s = text.to_string();
+    // Runs of picture words, last first so the byte offsets before them stay valid.
+    let mut end = layout.words.len();
+    while end > 0 {
+        if !layout.words[end - 1].fig {
+            end -= 1;
+            continue;
+        }
+        let mut start = end - 1;
+        while start > 0 && layout.words[start - 1].fig {
+            start -= 1;
+        }
+        let found: Vec<(usize, usize)> = spans[start..end].iter().flatten().copied().collect();
+        if let (Some(first), Some(last)) = (found.first(), found.last()) {
+            // The whole lines the block occupied, with the line break that followed it.
+            let from = s[..first.0].rfind('\n').map_or(0, |i| i + 1);
+            let to = s[last.1..].find('\n').map_or(s.len(), |i| last.1 + i + 1);
+            s.replace_range(from..to, "");
+        }
+        end = start;
+    }
+    layout.words.retain(|w| !w.fig);
+    let kept = s.trim_end().len();
+    s.truncate(kept);
     s
 }
 
@@ -1327,6 +1546,129 @@ mod tests {
         assert!((row2.y * 400.0 - 164.0).abs() <= 2.0, "{row2:?}");
         // The title line still spans its own ink extent.
         assert!((layout.words[0].x * 600.0 - 60.0).abs() < 3.0);
+    }
+
+    /// A page with a title, a body line above and one below a picture; the picture is the box
+    /// (0.2, 0.4, 0.6, 0.2) and its own pixels carry two ink lines.
+    fn page_with_picture() -> (PageLayout, String, GrayImage) {
+        let word = |t: &str, x: f32, y: f32, line: u32| Word {
+            t: t.into(),
+            x,
+            y,
+            w: 0.1,
+            h: 0.02,
+            line,
+            edited: false,
+            fig: false,
+        };
+        let layout = PageLayout {
+            version: LAYOUT_VERSION,
+            source: LayoutSource::Layer,
+            words: vec![
+                word("시스템", 0.1, 0.1, 0),
+                word("구성도", 0.25, 0.1, 0),
+                word("위", 0.1, 0.3, 1),
+                word("문단", 0.25, 0.3, 1),
+                word("아래", 0.1, 0.7, 2),
+                word("문단", 0.25, 0.7, 2),
+            ],
+            figures: Vec::new(),
+        };
+        let mut img = GrayImage::from_pixel(300, 100, image::Luma([255]));
+        for (y0, x0, x1) in [(20u32, 30u32, 270u32), (60, 30, 200)] {
+            for y in y0..y0 + 14 {
+                for x in x0..x1 {
+                    img.put_pixel(x, y, image::Luma([0]));
+                }
+            }
+        }
+        (layout, "시스템 구성도\n위 문단\n아래 문단".to_string(), img)
+    }
+
+    #[test]
+    fn picture_text_joins_the_layer_where_the_picture_is_and_can_be_taken_out_again() {
+        let (mut layout, text, img) = page_with_picture();
+        let bbox = (0.2, 0.4, 0.6, 0.2);
+        let read = "웹 서버 | WAS\nDB 서버";
+        let figure = estimate(&img, read);
+        assert_eq!(
+            figure.words.iter().map(|w| w.t.as_str()).collect::<Vec<_>>(),
+            ["웹", "서버", "|", "WAS", "DB", "서버"]
+        );
+        let new_text = add_figure(&mut layout, &text, bbox, &figure, read, "h1");
+        // The lines sit between the paragraph above the picture and the one below — no label.
+        assert_eq!(new_text, "시스템 구성도\n위 문단\n웹 서버 | WAS\nDB 서버\n아래 문단");
+        assert_eq!(layout.text(), new_text, "the layout says what the text says");
+        let fig: Vec<&Word> = layout.words.iter().filter(|w| w.fig).collect();
+        assert_eq!(fig.len(), 6);
+        // Every picture word lies inside the picture's box on the page, on the picture's two lines.
+        for w in &fig {
+            assert!(w.x >= 0.2 - 1e-4 && w.x + w.w <= 0.8 + 1e-4, "{w:?}");
+            assert!(w.y >= 0.4 - 1e-4 && w.y + w.h <= 0.6 + 1e-4, "{w:?}");
+        }
+        assert!(fig[0].y < fig[4].y, "the second line is below the first");
+        assert_ne!(fig[0].line, fig[4].line);
+        assert!(fig.iter().all(|w| w.line > 2), "line ids of their own");
+        // The words of the layer are where they were.
+        assert_eq!(layout.words[2].t, "위");
+        assert_eq!(layout.words.last().unwrap().t, "문단");
+        // The mark: the same box is not read again; a box elsewhere is.
+        assert_eq!(layout.figures.len(), 1);
+        assert_eq!((layout.figures[0].hash.as_str(), layout.figures[0].words), ("h1", 6));
+        assert!(layout.has_figure((0.2, 0.4, 0.6, 0.2)) && layout.has_figure((0.205, 0.398, 0.6, 0.2)));
+        assert!(!layout.has_figure((0.2, 0.7, 0.6, 0.2)));
+        // The layout survives the JSON round trip with its marks and the `fig` flags.
+        let back = PageLayout::from_json(&layout.to_json()).unwrap();
+        assert_eq!(back, layout);
+        // Words over the picture that are not its own are counted (a scan with a text layer).
+        assert_eq!(layout.words_inside(bbox), 0);
+        assert_eq!(layout.words_inside((0.0, 0.25, 1.0, 0.1)), 2);
+
+        // A forced re-run takes them out: the text and the layout are as they were.
+        let (before, _, _) = page_with_picture();
+        let restored = remove_figures(&mut layout, &new_text);
+        assert_eq!(restored, text);
+        assert_eq!(layout, before);
+    }
+
+    #[test]
+    fn a_picture_without_text_only_leaves_its_mark_and_a_picture_at_the_end_is_appended() {
+        let (mut layout, text, img) = page_with_picture();
+        let empty = PageLayout::empty(LayoutSource::Estimated);
+        let same = add_figure(&mut layout, &text, (0.2, 0.4, 0.6, 0.2), &empty, "", "none");
+        assert_eq!(same, text);
+        assert!(layout.has_figure((0.2, 0.4, 0.6, 0.2)) && layout.words.iter().all(|w| !w.fig));
+        // A picture below every word: its text goes to the end.
+        let figure = estimate(&img, "끝 그림");
+        let appended = add_figure(&mut layout, &text, (0.2, 0.8, 0.6, 0.15), &figure, "끝 그림", "h2");
+        assert_eq!(appended, format!("{text}\n끝 그림"));
+        assert!(layout.words.last().unwrap().fig);
+        // A picture above every word: its text goes first.
+        let figure = estimate(&img, "머리 그림");
+        let (mut layout, text, _) = page_with_picture();
+        let first = add_figure(&mut layout, &text, (0.1, 0.0, 0.5, 0.05), &figure, "머리 그림", "h3");
+        assert_eq!(first, format!("머리 그림\n{text}"));
+        assert!(layout.words[0].fig && layout.words[1].fig && !layout.words[2].fig);
+    }
+
+    #[test]
+    fn object_boxes_use_the_mapping_of_the_glyph_boxes() {
+        let page = PageBox::new(600.0, 800.0);
+        // PDF space has its origin at the bottom left: a picture 100 pt from the top.
+        let b = object_box(60.0, 360.0, 500.0, 700.0, page, 0).unwrap();
+        let close = |a: f32, e: f32| (a - e).abs() < 1e-4;
+        assert!(close(b.0, 0.1) && close(b.1, 0.125) && close(b.2, 0.5) && close(b.3, 0.25), "{b:?}");
+        // A box that bleeds over the edge is clipped to the page; one outside it is nothing.
+        let clipped = object_box(-50.0, 300.0, 700.0, 900.0, page, 0).unwrap();
+        assert!(close(clipped.0, 0.0) && close(clipped.1, 0.0) && close(clipped.2, 0.5) && close(clipped.3, 0.125));
+        assert_eq!(object_box(700.0, 900.0, 0.0, 100.0, page, 0), None);
+        // A turned page turns the box like the words.
+        let turned = object_box(60.0, 360.0, 500.0, 700.0, page, 90).unwrap();
+        assert_eq!(turned, rotate_box(0.1, 0.125, 0.5, 0.25, 90));
+        let mut layout = PageLayout::empty(LayoutSource::Layer);
+        layout.figures.push(FigureMark { x: 0.1, y: 0.125, w: 0.5, h: 0.25, hash: "h".into(), words: 0 });
+        layout.rotate(90);
+        assert!(layout.has_figure(turned));
     }
 
     #[test]

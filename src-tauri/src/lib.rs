@@ -271,6 +271,7 @@ pub fn run() {
             commands::projects::project_request_supplement,
             commands::projects::project_classify_preview,
             commands::projects::project_classify_apply,
+            commands::projects::project_assign,
             commands::projects::maintenance_status,
             commands::projects::maintenance_run_now,
         ])

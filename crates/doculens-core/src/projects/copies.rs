@@ -333,12 +333,44 @@ pub fn add_documents(
 /// Removes a document from a project together with its copy in that project (a copy the user edited
 /// keeps its file, see [`remove_copy_file`]).
 pub fn remove_document(db: &Db, paths: &WorkspacePaths, project_id: &str, doc_id: &str) -> Result<bool> {
+    drop_membership_copy(db, paths, project_id, doc_id)?;
+    db.with(|c| repo::remove_document(c, project_id, doc_id))
+}
+
+/// Ends the copy a document has in a project it leaves (a copy the user edited keeps its file, see
+/// [`remove_copy_file`]). The membership row is the caller's.
+pub(super) fn drop_membership_copy(db: &Db, paths: &WorkspacePaths, project_id: &str, doc_id: &str) -> Result<()> {
     let copies = db.with(|c| list_for_document(c, doc_id))?;
     for copy in copies.iter().filter(|c| c.project_id == project_id) {
         remove_copy_file(paths, copy);
         db.with(|c| delete_row(c, doc_id, project_id))?;
     }
-    db.with(|c| repo::remove_document(c, project_id, doc_id))
+    Ok(())
+}
+
+/// Writes the copy of a document that joined `project_id` while it already belonged to another project —
+/// when the project keeps copies, the document is (still) one of its work documents and the original
+/// file exists. The membership row is the caller's ([`super::assign`] writes many in one transaction).
+pub(super) fn write_membership_copy(db: &Db, paths: &WorkspacePaths, project_id: &str, doc_id: &str) -> Result<()> {
+    let Some(project) = db.with(|c| repo::get_project(c, project_id))? else { return Ok(()) };
+    if !project.settings.copies {
+        return Ok(());
+    }
+    let member: i64 = db.with(|c| {
+        c.query_row(
+            "SELECT COUNT(*) FROM project_documents WHERE project_id = ?1 AND document_id = ?2",
+            params![project_id, doc_id],
+            |r| r.get(0),
+        )
+    })?;
+    if member == 0 {
+        return Ok(());
+    }
+    let Some(doc) = db.with(|c| docs::get_document(c, doc_id))? else { return Ok(()) };
+    if !from_rel_path(&paths.root, &doc.rel_path).is_file() {
+        return Ok(());
+    }
+    ensure_copy(db, paths, &project, &doc).map(|_| ())
 }
 
 /// Ends the tracking of every copy of a project (before the project row goes) and deletes the copy files

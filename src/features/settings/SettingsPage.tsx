@@ -219,6 +219,14 @@ function GeneralTab() {
         <Row label={t("settings.general.sidebar")}>
           <Switch checked={settings.ui.sidebar_collapsed} onCheckedChange={(v) => void update((s) => void (s.ui.sidebar_collapsed = v))} aria-label={t("settings.general.sidebar")} />
         </Row>
+        <Row label={t("settings.general.assistant_steps")} hint={t("settings.general.assistant_steps_hint")}>
+          <Switch
+            checked={settings.ui.show_assistant_steps ?? false}
+            onCheckedChange={(v) => void update((s) => void (s.ui.show_assistant_steps = v))}
+            aria-label={t("settings.general.assistant_steps")}
+            data-testid="settings-assistant-steps"
+          />
+        </Row>
         <Row label={t("settings.notifications.job_complete")} hint={t("settings.notifications.job_complete_hint")}>
           <Switch checked={settings.notifications.job_complete} onCheckedChange={(v) => void update((s) => void (s.notifications.job_complete = v))} aria-label={t("settings.notifications.job_complete")} data-testid="settings-notify-job-complete" />
         </Row>
@@ -480,6 +488,9 @@ function ProcessingTab() {
         <Row label={t("settings.processing.ocr_digital_pdf")} hint={t("settings.processing.ocr_digital_pdf_hint")}>
           <Switch checked={p.ocr_digital_pdf} onCheckedChange={(v) => void update((s) => void (s.processing.ocr_digital_pdf = v))} aria-label={t("settings.processing.ocr_digital_pdf")} data-testid="settings-ocr-digital" />
         </Row>
+        <Row label={t("settings.processing.ocr_figures")} hint={t("settings.processing.ocr_figures_hint")}>
+          <Switch checked={p.ocr_figures ?? false} onCheckedChange={(v) => void update((s) => void (s.processing.ocr_figures = v))} aria-label={t("settings.processing.ocr_figures")} data-testid="settings-ocr-figures" />
+        </Row>
         <Row label={t("settings.processing.kie_max_pages")} hint={t("settings.processing.kie_max_pages_hint")} htmlFor="kie-max-pages">
           <NumberField id="kie-max-pages" value={p.kie_max_pages} min={1} max={32} step={1} onCommit={(v) => void update((s) => void (s.processing.kie_max_pages = v))} testId="settings-kie-max-pages" />
         </Row>
@@ -508,6 +519,19 @@ function ProcessingTab() {
         >
           <Slider min={0.5} max={1} step={0.05} value={[p.review_threshold]} onValueCommit={([v]) => void commitThreshold(v ?? 0.8)} className="w-56" aria-label={t("settings.processing.review_threshold")} data-testid="settings-review-threshold" />
           <span className="w-12 text-sm tabular-nums">{p.review_threshold.toFixed(2)}</span>
+        </Row>
+        {/* 1.0.0: 프로젝트 분류(2순위 추천 임계값) — shown and typed as a percentage, stored as 0..1. */}
+        <Row label={t("settings.processing.project_second_choice")} hint={t("settings.processing.project_second_choice_hint")} htmlFor="project-second-choice">
+          <NumberField
+            id="project-second-choice"
+            value={Math.round((p.project_second_choice ?? 0.6) * 100)}
+            min={0}
+            max={100}
+            step={5}
+            onCommit={(v) => void update((s) => void (s.processing.project_second_choice = Math.min(100, Math.max(0, v)) / 100))}
+            testId="settings-project-second-choice"
+          />
+          <span className="text-sm text-fg-muted">%</span>
         </Row>
         <Row label={t("settings.processing.audit_sample")} htmlFor="audit-sample">
           <NumberField id="audit-sample" value={p.audit_sample_percent} min={0} max={100} step={1} onCommit={(v) => void update((s) => void (s.processing.audit_sample_percent = v))} testId="settings-audit-sample" />

@@ -12,6 +12,7 @@ use doculens_core::documents::import::{
 use doculens_core::documents::layout::PageLayout;
 use doculens_core::documents::{repo, DocumentFilter, DocumentRecord, LibraryStats, PageRecord};
 use doculens_core::paths::normalize_user_path;
+use doculens_core::projects::repo::DocumentProject;
 use doculens_core::CoreError;
 
 use crate::docs_bridge::{self, PdfiumInfo};
@@ -25,6 +26,9 @@ pub struct DocumentView {
     pub record: DocumentRecord,
     pub absolute_path: PathBuf,
     pub thumb_url: Option<String>,
+    /// 1.0.0: the projects the document belongs to (work document or reference material) — the
+    /// library card's project badges. Filled by `documents_list` / `documents_get`; empty elsewhere.
+    pub projects: Vec<DocumentProject>,
 }
 
 pub(crate) fn view(app: &AppHandle, d: DocumentRecord) -> UiResult<DocumentView> {
@@ -32,7 +36,21 @@ pub(crate) fn view(app: &AppHandle, d: DocumentRecord) -> UiResult<DocumentView>
     let paths = state.with_workspace(|ws| ws.paths.clone())?;
     let version = d.updated_at.timestamp_millis().to_string();
     let thumb_url = (d.page_count > 0).then(|| protocol::page_url(&d.id, 1, true, Some(&version)));
-    Ok(DocumentView { absolute_path: d.absolute_path(&paths), thumb_url, record: d })
+    Ok(DocumentView { absolute_path: d.absolute_path(&paths), thumb_url, record: d, projects: Vec::new() })
+}
+
+/// Attaches the project memberships to document views (one read of the membership tables).
+fn with_projects(db: &doculens_core::db::Db, mut views: Vec<DocumentView>) -> UiResult<Vec<DocumentView>> {
+    if views.is_empty() {
+        return Ok(views);
+    }
+    let mut map = db.with(doculens_core::projects::repo::document_projects)?;
+    for v in &mut views {
+        if let Some(list) = map.remove(&v.record.id) {
+            v.projects = list;
+        }
+    }
+    Ok(views)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -58,7 +76,8 @@ pub fn documents_list(app: AppHandle, filter: Option<DocumentFilter>) -> UiResul
     let ctx = docs_bridge::context(&app)?;
     let filter = filter.unwrap_or_default();
     let docs = ctx.db.with(|c| repo::list_documents(c, &filter))?;
-    docs.into_iter().map(|d| view(&app, d)).collect()
+    let views = docs.into_iter().map(|d| view(&app, d)).collect::<UiResult<Vec<_>>>()?;
+    with_projects(&ctx.db, views)
 }
 
 #[tauri::command(async)]
@@ -70,7 +89,9 @@ pub fn documents_stats(app: AppHandle) -> UiResult<LibraryStats> {
 #[tauri::command(async)]
 pub fn documents_get(app: AppHandle, id: String) -> UiResult<DocumentView> {
     let d = docs_bridge::document(&app, &id)?;
-    view(&app, d)
+    let ctx = docs_bridge::context(&app)?;
+    let mut views = with_projects(&ctx.db, vec![view(&app, d)?])?;
+    views.pop().ok_or_else(|| UiError::invalid("not_found"))
 }
 
 #[tauri::command(async)]

@@ -5,7 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { docTypeLabel } from "@/features/pipeline/labels";
+import { SelectAllBar } from "@/components/ui/select-all-bar";
 import { useDocTypes, useDocuments } from "@/lib/queries";
+
+import { inProject, ProjectFilterSelect } from "./ProjectFilterSelect";
 import { cn } from "@/lib/utils";
 
 /** What a document is to a project (0.5.0 plan A): 업무 문서 or 참고 자료. */
@@ -44,18 +47,20 @@ export function AddDocumentsDialog({
   const { data: docs } = useDocuments({ limit: 500, sort: "imported_desc", query: query.trim() || null }, open);
   const { data: docTypes } = useDocTypes(open);
   const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [project, setProject] = useState<string | null>(null);
   const [kind, setKind] = useState<DocKind>(defaultKind);
   useEffect(() => {
     if (open) {
       setPicked(new Set());
       setQuery("");
+      setProject(null);
       setKind(defaultKind);
     }
   }, [open, defaultKind]);
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return (docs ?? []).filter((d) => !excludeIds.includes(d.id) && (!q || d.original_name.toLowerCase().includes(q) || (d.title ?? "").toLowerCase().includes(q)));
-  }, [docs, excludeIds, query]);
+    return (docs ?? []).filter((d) => !excludeIds.includes(d.id) && inProject(d, project) && (!q || d.original_name.toLowerCase().includes(q) || (d.title ?? "").toLowerCase().includes(q)));
+  }, [docs, excludeIds, query, project]);
   const toggle = (id: string) =>
     setPicked((s) => {
       const next = new Set(s);
@@ -72,7 +77,14 @@ export function AddDocumentsDialog({
           <DialogTitle>{title ?? t("projects.documents.add_title")}</DialogTitle>
           <DialogDescription>{hint ?? t("projects.documents.add_hint")}</DialogDescription>
         </DialogHeader>
-        <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("projects.documents.search")} aria-label={t("projects.documents.search")} data-testid={`${p}-search`} />
+        {/* 1.0.0: search, project filter (documents of another project) and select all / none. */}
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <div className="min-w-[12rem] flex-1">
+            <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("projects.documents.search")} aria-label={t("projects.documents.search")} data-testid={`${p}-search`} />
+          </div>
+          <ProjectFilterSelect value={project} onChange={setProject} enabled={open} testId={`${p}-project`} />
+        </div>
+        <SelectAllBar visibleIds={list.map((d) => d.id)} picked={picked} onChange={setPicked} testId={`${p}-select`} />
         <div className="max-h-80 min-w-0 overflow-y-auto rounded-md border border-border">
           {list.length === 0 ? (
             <p className="p-3 text-sm text-fg-muted">{t("projects.documents.none")}</p>

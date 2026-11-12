@@ -1262,6 +1262,18 @@ fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     if t.is_question() {
         return None;
     }
+    // 1.0.0: "이미지 내 글자 추출" / "그림 글자 추출" is the name of a setting, not a request to extract.
+    if t.has(&[
+        "이미지내글자",
+        "이미지안글자",
+        "이미지글자추출",
+        "그림내글자",
+        "그림안글자",
+        "그림글자",
+        "text in images",
+    ]) {
+        return None;
+    }
     let classify = t.has(&["분류", "classif*", "유형판정", "유형을정"]);
     let ocr = t.has(&["ocr", "문자인식", "텍스트인식", "글자인식", "텍스트추출"]);
     let extract = t.has(&["추출", "extract*", "필드뽑", "값뽑", "kie"]) && !t.has(&["텍스트추출"]);
@@ -2920,7 +2932,33 @@ fn quick_settings(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
             ));
         }
         if t.has(&["임계", "threshold", "기준값", "신뢰도 기준", "confidence threshold"]) {
+            // The value as written — "0.9로", "85%로" — and not a digit of the setting's own name
+            // ("2순위"). The word-wise parse above reads "0.9로" as nothing, or as 0.
+            let n = threshold_value(t.raw).unwrap_or(n);
             let v = if n > 1.0 { n / 100.0 } else { n };
+            // 1.0.0: there are two thresholds. One the sentence names is set; a bare "임계값" is asked
+            // about — it used to mean the review threshold, the only one there was.
+            if t.has(&["2순위", "프로젝트 분류", "second choice", "second-choice"]) {
+                return Some(mk(
+                    Op::SetSetting { key: "processing.project_second_choice".into(), value: serde_json::json!(v) },
+                    Scope::default(),
+                    0.85,
+                    t.t(
+                        &format!("프로젝트 분류(2순위 추천 임계값)를 {v}로"),
+                        &format!("Second-choice threshold → {v}"),
+                    )
+                    .to_string(),
+                ));
+            }
+            if !t.has(&["검토", "신뢰도", "review", "confidence"]) {
+                return Some(Plan::clarify(
+                    t.t(
+                        "임계값이 두 가지입니다. 어느 것을 바꿀까요? — 검토 임계값 / 프로젝트 분류(2순위 추천 임계값)",
+                        "There are two thresholds. Which one: the review threshold or the project classification (second-choice) threshold?",
+                    ),
+                    0.5,
+                ));
+            }
             return Some(mk(
                 Op::SetSetting { key: "processing.review_threshold".into(), value: serde_json::json!(v) },
                 Scope::default(),
@@ -3003,6 +3041,31 @@ fn quick_settings(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
 // ---------------------------------------------------------------------------
 // 0.6.0: every GUI function as a command (plan §4 phrases)
 // ---------------------------------------------------------------------------
+
+/// The value of a threshold sentence: the first number that is not the rank in "2순위" ("2순위 추천
+/// 임계값 70%로" → 70, "신뢰도 기준 0.9로" → 0.9).
+fn threshold_value(raw: &str) -> Option<f64> {
+    let chars: Vec<char> = raw.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if !chars[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < chars.len()
+            && (chars[i].is_ascii_digit() || (chars[i] == '.' && chars.get(i + 1).is_some_and(char::is_ascii_digit)))
+        {
+            i += 1;
+        }
+        let rest: String = chars[i..].iter().take(3).collect();
+        if rest.trim_start().starts_with("순위") {
+            continue;
+        }
+        return chars[start..i].iter().collect::<String>().parse().ok();
+    }
+    None
+}
 
 /// Numbers in the sentence (digits with an optional decimal part; "90도", "125%", "3쪽" → 90, 125, 3).
 fn numbers(raw: &str) -> Vec<f64> {
@@ -3430,9 +3493,14 @@ fn generic_setting_rule(t: &Text<'_>) -> Option<Plan> {
         (&["워밍업", "warm up", "warmup"], "models.warmup_after_load"),
         (&["정밀 모드", "정밀모드", "precise mode"], "processing.precise_mode"),
         (&["디지털 pdf", "digital pdf"], "processing.ocr_digital_pdf"),
+        (
+            &["이미지 내 글자", "이미지 글자 추출", "그림 글자", "그림 내 글자", "text in images"],
+            "processing.ocr_figures",
+        ),
         (&["검토 완료만 정리", "검토 완료 문서만", "reviewed only"], "processing.organize_reviewed_only"),
         (&["빽빽한 표", "dense table", "dense re-ocr"], "processing.dense_reocr"),
         (&["사이드바 접", "sidebar collapsed", "collapse the sidebar"], "ui.sidebar_collapsed"),
+        (&["작업 표시", "단계 표시", "assistant steps", "chosen steps"], "ui.show_assistant_steps"),
         (&["움직임 줄이", "reduced motion"], "ui.reduced_motion"),
         (&["비전 인코더", "vision encoder", "vision on cpu"], "models.vision_on_cpu"),
     ];

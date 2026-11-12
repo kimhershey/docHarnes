@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "context": "planner-context.json",
-  "description": "플래너 골든셋(0.3.0: SW 개발 문서 기준) — 명령 → 기대 플랜 100건(한국어 70·영어 20·혼합 10). 기대값은 규칙 출력이 아니라 사람이 기대하는 플랜입니다. 비교 규칙은 eval/README.md 참조. 0.6.0: 에이전트 op(회전·분할·제목·글자·역할·참고 자료·용어·판·프로젝트 수정/삭제·자동 분류·양식·설정 카탈로그·모델·엔진·유지보수) 25건 추가. 0.7.0: 초안 어시스턴트 op revise_draft(절 다시 쓰기·새 절·전체; context.draft_id = 열린 초안) 4건. 0.8.0: 2026-11-11 사용자 보고 문장과 변형·반례 34건 — 설정(빠른 경로·문장 속 설정·범위 밖·반례), 대화, 문서와 무관한 질문, 묶음 요약, 표현할 수 없는 요청, 붙여 넣은 글. 항목의 kind(chat|question|command|setting)별 정확도와 expected.confirm·unmet·alt를 쓴다.",
+  "description": "플래너 골든셋(0.3.0: SW 개발 문서 기준) — 명령 → 기대 플랜 100건(한국어 70·영어 20·혼합 10). 기대값은 규칙 출력이 아니라 사람이 기대하는 플랜입니다. 비교 규칙은 eval/README.md 참조. 0.6.0: 에이전트 op(회전·분할·제목·글자·역할·참고 자료·용어·판·프로젝트 수정/삭제·자동 분류·양식·설정 카탈로그·모델·엔진·유지보수) 25건 추가. 0.7.0: 초안 어시스턴트 op revise_draft(절 다시 쓰기·새 절·전체; context.draft_id = 열린 초안) 4건. 0.8.0: 2026-11-11 사용자 보고 문장과 변형·반례 34건 — 설정(빠른 경로·문장 속 설정·범위 밖·반례), 대화, 문서와 무관한 질문, 묶음 요약, 표현할 수 없는 요청, 붙여 넣은 글. 항목의 kind(chat|question|command|setting)별 정확도와 expected.confirm·unmet·alt를 쓴다. 1.0.0: 새 설정 세 개(고른 작업 표시 · 프로젝트 분류 2순위 추천 임계값 · 이미지 내 글자 추출)의 문장 8건과 반례 2건(어느 임계값인지 묻기, 명령이 아닌 알림) 추가 → 173건.",
   "items": [
     {
       "id": "ko-01",
@@ -3089,6 +3089,212 @@
         "confirm": false
       },
       "note": "0.8.0 붙여 넣은 글(PLN-16) — 문서함을 찾지 않는다"
+    },
+    {
+      "id": "ko-122",
+      "category": "ko",
+      "text": "어시스턴트 작업 표시 켜줘",
+      "expected": {
+        "intent": "set_setting",
+        "ops": [
+          "set_setting"
+        ],
+        "params": [
+          {
+            "key": "ui.show_assistant_steps",
+            "value": true
+          }
+        ],
+        "confirm": false
+      },
+      "kind": "setting",
+      "note": "1.0.0 새 설정(5절): 고른 작업 표시"
+    },
+    {
+      "id": "ko-123",
+      "category": "ko",
+      "text": "고른 작업 표시 꺼줘",
+      "expected": {
+        "intent": "set_setting",
+        "ops": [
+          "set_setting"
+        ],
+        "params": [
+          {
+            "key": "ui.show_assistant_steps",
+            "value": false
+          }
+        ],
+        "confirm": false
+      },
+      "kind": "setting",
+      "note": "1.0.0 새 설정(5절): 비슷한 이름"
+    },
+    {
+      "id": "ko-124",
+      "category": "ko",
+      "text": "프로젝트 분류 2순위 추천 임계값 70%로 바꿔줘",
+      "expected": {
+        "intent": "set_setting",
+        "ops": [
+          "set_setting"
+        ],
+        "params": [
+          {
+            "key": "processing.project_second_choice",
+            "value": 0.7
+          }
+        ],
+        "confirm": false
+      },
+      "kind": "setting",
+      "note": "1.0.0 새 설정(12-B): 표시 문구 그대로"
+    },
+    {
+      "id": "ko-125",
+      "category": "ko",
+      "text": "2순위 임계값 55%",
+      "expected": {
+        "intent": "set_setting",
+        "ops": [
+          "set_setting"
+        ],
+        "params": [
+          {
+            "key": "processing.project_second_choice",
+            "value": 0.55
+          }
+        ],
+        "confirm": false
+      },
+      "kind": "setting",
+      "note": "1.0.0 새 설정(12-B): 짧은 꼴 — 이름의 '2'는 값이 아니다"
+    },
+    {
+      "id": "ko-126",
+      "category": "ko",
+      "text": "이미지 내 글자 추출 켜줘",
+      "expected": {
+        "intent": "set_setting",
+        "ops": [
+          "set_setting"
+        ],
+        "params": [
+          {
+            "key": "processing.ocr_figures",
+            "value": true
+          }
+        ],
+        "confirm": false
+      },
+      "kind": "setting",
+      "note": "1.0.0 새 설정(6-5): 표시 문구 그대로"
+    },
+    {
+      "id": "ko-127",
+      "category": "ko",
+      "text": "그림 글자 추출 꺼줘",
+      "expected": {
+        "intent": "set_setting",
+        "ops": [
+          "set_setting"
+        ],
+        "params": [
+          {
+            "key": "processing.ocr_figures",
+            "value": false
+          }
+        ],
+        "confirm": false
+      },
+      "kind": "setting",
+      "note": "1.0.0 새 설정(6-5): 비슷한 이름"
+    },
+    {
+      "id": "en-32",
+      "category": "en",
+      "text": "turn on extract text in images",
+      "expected": {
+        "intent": "set_setting",
+        "ops": [
+          "set_setting"
+        ],
+        "params": [
+          {
+            "key": "processing.ocr_figures",
+            "value": true
+          }
+        ],
+        "confirm": false
+      },
+      "kind": "setting",
+      "note": "1.0.0 new setting (6-5)"
+    },
+    {
+      "id": "en-33",
+      "category": "en",
+      "text": "set the second-choice threshold to 80%",
+      "expected": {
+        "intent": "set_setting",
+        "ops": [
+          "set_setting"
+        ],
+        "params": [
+          {
+            "key": "processing.project_second_choice",
+            "value": 0.8
+          }
+        ],
+        "confirm": false
+      },
+      "kind": "setting",
+      "note": "1.0.0 new setting (12-B)"
+    },
+    {
+      "id": "ko-128",
+      "category": "ko",
+      "text": "임계값 70%로 바꿔줘",
+      "expected": {
+        "intent": "clarify",
+        "ops": [
+          "clarify"
+        ]
+      },
+      "kind": "setting",
+      "note": "1.0.0 임계값이 둘(검토 임계값 · 2순위 추천 임계값)이라 어느 것인지 묻는다(12-B-3)"
+    },
+    {
+      "id": "ko-129",
+      "category": "ko",
+      "text": "이미지 내 글자 추출 켰어",
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "params": [
+          {
+            "mode": "chat"
+          }
+        ],
+        "confirm": false,
+        "alt": [
+          {
+            "intent": "noop",
+            "ops": [
+              "noop"
+            ]
+          },
+          {
+            "intent": "clarify",
+            "ops": [
+              "clarify"
+            ]
+          }
+        ]
+      },
+      "kind": "setting",
+      "note": "1.0.0 반례: 명령이 아니라 알림(ko-109와 같은 꼴)"
     }
   ]
 }

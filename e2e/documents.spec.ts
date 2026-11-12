@@ -151,7 +151,7 @@ test.describe("P2 documents", () => {
     await openImportPreview(page, ["D:\\a\\one.pdf", "D:\\a\\two.docx"]);
     await page.getByTestId("doc-import-run").click();
     await expect(page.locator('[data-testid^="doc-card-"][data-doc-status="rendered"]')).toHaveCount(2, { timeout: 15_000 });
-    await page.getByLabel("모두 선택").check();
+    await page.getByLabel("전체 선택").check();
     await expect(page.getByTestId("library-selected")).toHaveText("2개 선택");
     // A filter that hides the selection also drops it from the bulk actions.
     await page.getByTestId("library-filter-kind").click();
@@ -159,7 +159,7 @@ test.describe("P2 documents", () => {
     await expect(page.getByTestId("library-selected")).toHaveCount(0);
     await page.getByTestId("library-filter-kind").click();
     await page.getByRole("option", { name: "전체" }).click();
-    await page.getByLabel("모두 선택").check();
+    await page.getByLabel("전체 선택").check();
     // 다시 렌더 lives in the right-click menu (plan §3): on a selected card it covers the whole selection.
     await page.locator('[data-testid^="doc-card-"]').first().click({ button: "right" });
     await page.getByTestId("library-context-rerender").click();
@@ -168,7 +168,7 @@ test.describe("P2 documents", () => {
     await page.getByTestId("jobs-tab-finished").click();
     await expect(page.locator('[data-job-kind="document_render"]').first().getByTestId("job-detail")).toHaveText("2개 렌더 완료");
     await page.getByTestId("nav-library").click();
-    await page.getByLabel("모두 선택").check();
+    await page.getByLabel("전체 선택").check();
     await page.getByTestId("library-delete").click();
     await expect(page.getByTestId("confirm-dialog")).toContainText("2개");
     await page.getByTestId("confirm-ok").click();

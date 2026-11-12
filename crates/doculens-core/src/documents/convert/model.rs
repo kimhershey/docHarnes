@@ -69,24 +69,65 @@ pub struct Shape {
     pub rotation_deg: f32,
     pub flip_h: bool,
     pub flip_v: bool,
-    /// CSS colour (`#rrggbb`) of a solid fill.
+    /// CSS colour (`#rrggbb`) of a solid fill (the first stop of a gradient fill).
     pub fill: Option<String>,
+    /// A gradient fill (1.0.0); drawn instead of `fill` when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_gradient: Option<Gradient>,
     /// Outline colour and width in points.
     pub line: Option<(String, f32)>,
     /// Preset geometry hint (`ellipse`, `roundRect`, …); `None` = rectangle.
     pub geometry: Option<String>,
+    /// The outlines of a shape that is not a box (1.0.0: a custom geometry, an arrow, a chevron …);
+    /// drawn instead of the box when present.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<GeoPath>,
     pub kind: ShapeKind,
+}
+
+/// One outline of a shape: SVG path data (`M` `L` `C` `Q` `A` `Z`, absolute) in a 0–1000 square that is
+/// stretched over the shape's box.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct GeoPath {
+    pub d: String,
+    /// The path is only stroked (`fill="none"`).
+    #[serde(default)]
+    pub no_fill: bool,
+    /// The path is only filled (`stroke="0"`).
+    #[serde(default)]
+    pub no_stroke: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Slide {
     pub width_mm: f32,
     pub height_mm: f32,
-    /// Solid background colour when the slide / layout / master declares one.
+    /// Solid background colour when the slide / layout / master declares one (the first stop of a
+    /// gradient background).
     pub background: Option<String>,
+    /// A gradient background (1.0.0); drawn instead of `background` when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_gradient: Option<Gradient>,
+    /// A tiled background picture (1.0.0): image id and the size of one tile in millimetres. A
+    /// stretched background picture is the slide's first shape instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_tile: Option<(String, f32, f32)>,
     /// Z-order (document order): later shapes draw over earlier ones.
     pub shapes: Vec<Shape>,
     pub notes: Vec<Paragraph>,
+}
+
+/// A gradient: its colour stops and either the direction it runs in or the point it spreads from.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct Gradient {
+    /// Degrees clockwise from "left to right" (0 = left → right, 90 = top → bottom), as DrawingML counts.
+    pub angle_deg: f32,
+    /// `(position in percent, #RRGGBB)`, in order.
+    pub stops: Vec<(f32, String)>,
+    /// A path gradient ("from the centre", "from a corner"): the point the first stop sits at, in
+    /// percent of the box; `None` = a linear gradient along `angle_deg`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub center: Option<(f32, f32)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -175,6 +216,9 @@ pub struct Table {
     pub rows: Vec<Vec<Cell>>,
     /// Column widths in millimetres when known (same length as the widest row).
     pub col_widths_mm: Vec<f32>,
+    /// Row heights in millimetres when the source gives them (1.0.0: PPTX tables); a row grows with its text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub row_heights_mm: Vec<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -183,6 +227,25 @@ pub struct Cell {
     pub row_span: u16,
     pub col_span: u16,
     pub header: bool,
+    /// How the cell is drawn when the source says so (1.0.0: PPTX table styles and cell properties).
+    /// `None`: the writer's own plain look.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<Box<CellStyle>>,
+}
+
+/// The look of a table cell: what a PPTX table style and the cell's own properties add up to.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct CellStyle {
+    /// Background (`#RRGGBB`); `None` = transparent.
+    pub fill: Option<String>,
+    /// Text colour the table style gives the cell (a run with a colour of its own keeps it).
+    pub color: Option<String>,
+    /// The table style sets the cell's text bold (header row, first column …).
+    pub bold: bool,
+    /// Borders left, right, top, bottom as `(colour, width in pt)`; `None` = no line.
+    pub borders: [Option<(String, f32)>; 4],
+    /// `top` | `middle` | `bottom`.
+    pub valign: Option<String>,
 }
 
 impl Cell {
@@ -253,6 +316,7 @@ mod tests {
                         Cell { blocks: vec![Block::Paragraph(Paragraph::plain("b\nc"))], ..Default::default() },
                     ]],
                     col_widths_mm: vec![],
+                    row_heights_mm: Vec::new(),
                 }),
                 Block::PageBreak,
                 Block::Paragraph(Paragraph::plain("둘째 쪽")),

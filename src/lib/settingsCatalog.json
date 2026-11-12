@@ -53,6 +53,13 @@
   },
   {
     "confirm": false,
+    "key": "ui.show_assistant_steps",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": false,
     "key": "models.tier_mode",
     "type": {
       "kind": "enum",
@@ -222,6 +229,16 @@
   },
   {
     "confirm": false,
+    "key": "processing.project_second_choice",
+    "type": {
+      "kind": "number",
+      "max": 1.0,
+      "min": 0.0,
+      "percent": true
+    }
+  },
+  {
+    "confirm": false,
     "key": "processing.organize_reviewed_only",
     "type": {
       "kind": "boolean"
@@ -237,6 +254,13 @@
   {
     "confirm": false,
     "key": "processing.ocr_digital_pdf",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": false,
+    "key": "processing.ocr_figures",
     "type": {
       "kind": "boolean"
     }

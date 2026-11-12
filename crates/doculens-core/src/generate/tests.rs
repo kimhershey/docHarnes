@@ -3009,3 +3009,87 @@ fn revise_edits_one_section_in_place_and_split_regeneration_carries_the_instruct
     let p3 = chat5.prompt(3);
     assert!(p3.contains("[수정 요청]") && !p3.contains("[이 절의 이전 본문]"), "{p3}");
 }
+
+/// 1.0.0 — user report: "문서 작성에서 인용 문서 외의 문서들에서 내용을 가져다가 글을 작성". A draft is
+/// written from the documents the user cites: their own text, and passages looked up inside them.
+/// Other documents come in only when the user switches the reference lookup on, and then only
+/// reference material — never a work document that was not cited.
+#[test]
+fn a_draft_is_written_from_the_cited_documents_only() {
+    let w = world();
+    let filler = "개요 ".repeat(1_400); // pushes the second page beyond the body excerpt
+    w.add_doc(
+        "cited",
+        "한빛-계약서.pdf",
+        DocumentRole::Work,
+        &[
+            &format!("한빛 포털 구축 계약서\n{filler}"),
+            "제9조 지체상금\n지체상금 : 납품 기한 초과 시 하루에 계약 금액의 0.25 % 를 낸다.",
+        ],
+    );
+    w.add_doc(
+        "other",
+        "새봄-계약서.pdf",
+        DocumentRole::Work,
+        &["새봄 ERP 계약서\n제9조 지체상금\n지체상금 : 납품 기한 초과 시 하루에 계약 금액의 0.1 % 를 낸다."],
+    );
+    w.add_doc(
+        "rule",
+        "계약관리지침.pdf",
+        DocumentRole::Knowledge,
+        &["계약 관리 지침\n지체상금 상한 : 계약 금액의 10 % . 납품 기한 연장 은 서면으로 합의한다."],
+    );
+    let analyzer = Analyzer::simple();
+    for id in ["cited", "other", "rule"] {
+        let doc = w.db.with(|c| docs::get_document(c, id)).unwrap().unwrap();
+        index_document(&IndexDeps { db: &w.db, analyzer: &analyzer, options: Default::default() }, &doc, true).unwrap();
+    }
+    let mut deps = w.deps(None, None);
+    deps.knowledge = Some(SearchDeps { db: &w.db, analyzer: &analyzer, embedder: None });
+    let docs_of = |req: &DraftRequest| -> Vec<(String, String)> {
+        let mut notes = Vec::new();
+        draft::gather_sources(&deps, req, &mut notes)
+            .unwrap()
+            .into_iter()
+            .map(|s| (s.citation.doc_id.unwrap_or_default(), s.citation.source))
+            .collect()
+    };
+    let req = DraftRequest {
+        content: "지체상금 납품 기한 검토 의견".into(),
+        sources: vec![SourceRef::Document { doc_id: "cited".into() }],
+        ..Default::default()
+    };
+    // The default: nothing but the cited document — its own text plus the passage found inside it
+    // (page 2, beyond the excerpt). The other contract says the same words and stays out.
+    assert!(!req.use_knowledge, "the reference lookup is off by default");
+    let got = docs_of(&req);
+    assert!(got.iter().all(|(doc, source)| doc == "cited" && source == "document"), "{got:?}");
+    assert!(got.len() >= 2, "the cited document and a passage of it: {got:?}");
+    let mut notes = Vec::new();
+    let sources = draft::gather_sources(&deps, &req, &mut notes).unwrap();
+    let seen: Vec<(Option<u32>, String)> =
+        sources.iter().map(|s| (s.citation.page, s.text.chars().take(40).collect())).collect();
+    // (the clause sits beyond the body excerpt: only the lookup inside the document brings it in)
+    assert!(!sources[0].text.contains("0.25"), "{seen:?}");
+    assert!(sources.iter().skip(1).any(|s| s.citation.chunk_id.is_some() && s.text.contains("0.25")), "{seen:?}");
+    assert!(notes.is_empty(), "{notes:?}");
+    // The cited document brings its body along even without extracted fields.
+    assert!(
+        sources[0].text.contains("[본문]") && sources[0].text.contains("한빛 포털 구축 계약서"),
+        "{}",
+        sources[0].text
+    );
+
+    // Switched on: the reference material is asked as well — the guideline, not the other contract.
+    let with_reference = DraftRequest { use_knowledge: true, ..req.clone() };
+    let got = docs_of(&with_reference);
+    assert!(got.iter().any(|(doc, source)| doc == "rule" && source == "knowledge"), "{got:?}");
+    assert!(got.iter().all(|(doc, _)| doc != "other"), "{got:?}");
+
+    // Nothing cited and the lookup off: the draft is written from the content alone.
+    let bare = DraftRequest { sources: Vec::new(), ..req.clone() };
+    assert!(docs_of(&bare).is_empty());
+    // An explicit knowledge query is the user asking for that lookup: it still searches as before.
+    let asked = DraftRequest { sources: vec![SourceRef::Knowledge { query: "지체상금".into() }], ..req.clone() };
+    assert!(docs_of(&asked).iter().any(|(doc, _)| doc == "other"), "{:?}", docs_of(&asked));
+}

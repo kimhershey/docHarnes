@@ -1043,6 +1043,7 @@ function ruleMaintenance(t: Text): Plan | null {
 
 const CATALOG_PHRASES: [string[], string][] = [
   [["ui배율", "ui 배율", "화면배율", "화면 배율", "uiscale", "ui scale", "배율을"], "ui.scale_percent"],
+  [["2순위추천임계", "2순위 추천 임계", "2순위임계", "2순위 임계", "2순위추천기준", "2순위 추천 기준", "프로젝트분류임계", "프로젝트 분류 임계", "프로젝트분류기준", "프로젝트 분류 기준", "secondchoicethreshold", "second choice threshold"], "processing.project_second_choice"],
   [["검토임계", "검토 임계", "reviewthreshold", "review threshold"], "processing.review_threshold"],
   [["렌더dpi", "렌더 dpi", "renderdpi", "render dpi", "기본dpi", "dpi를"], "processing.render_dpi"],
   [["자동임베딩", "자동 임베딩", "autoembed", "auto embed", "임베딩자동", "임베딩 자동"], "knowledge.auto_embed"],
@@ -1055,6 +1056,7 @@ const CATALOG_PHRASES: [string[], string][] = [
   [["일반지식", "일반 지식", "generalknowledge", "general knowledge"], "knowledge.allow_general_knowledge"],
   [["애니메이션", "animation", "motion"], "ui.reduced_motion"],
   [["사이드바", "sidebar"], "ui.sidebar_collapsed"],
+  [["작업표시", "작업 표시", "단계표시", "단계 표시", "assistantsteps", "assistant steps", "chosensteps", "chosen steps"], "ui.show_assistant_steps"],
   [["캐시상한", "캐시 상한", "캐시한도", "cachelimit", "cache limit", "pagecache", "page cache"], "cache.page_cache_max_gb"],
   [["근거청크", "근거 청크", "topk", "top k"], "knowledge.top_k"],
   [["근거토큰", "근거 토큰", "contexttokens", "context tokens"], "knowledge.context_tokens"],
@@ -1062,6 +1064,7 @@ const CATALOG_PHRASES: [string[], string][] = [
   [["엔진자동시작", "엔진 자동 시작", "autostart", "auto start"], "models.auto_start_engine"],
   [["예열", "warmup", "warm up"], "models.warmup_after_load"],
   [["검토완료문서만", "검토 완료 문서만", "reviewedonly", "reviewed only"], "processing.organize_reviewed_only"],
+  [["이미지내글자", "이미지 내 글자", "이미지안글자", "이미지글자추출", "그림내글자", "그림안글자", "그림글자", "그림 글자", "textinimages", "text in images"], "processing.ocr_figures"],
   [["디지털pdf", "디지털 pdf", "텍스트레이어", "텍스트 레이어"], "processing.ocr_digital_pdf"],
   [["추출쪽수", "추출 쪽수", "추출에보내는", "kiepages", "kie pages"], "processing.kie_max_pages"],
   [["썸네일", "thumbnail"], "cache.keep_thumbnails"],
@@ -1094,7 +1097,8 @@ function ruleCatalogSetting(t: Text): Plan | null {
     value = quotedOf(t.raw);
     if (value === null) return null;
   } else {
-    const n = firstNumber(t.raw.replace(/dpi/i, ""));
+    // (a number that is part of the setting's name — "2순위 추천 임계값" — is not the value)
+    const n = firstNumber(t.raw.replace(/dpi/i, "").replace(/\d+\s*순위/g, ""));
     if (n === null) return null;
     value = n;
   }
@@ -2058,7 +2062,8 @@ function draftRequestOf(op: Extract<Op, { op: "draft_document" }>, plan: Plan, c
     tone: op.tone ?? "formal",
     length: op.length ?? "medium",
     language: ctx.language,
-    use_knowledge: true,
+    // 1.0.0: a draft is written from what the sentence cites; the reference lookup is opt-in.
+    use_knowledge: false,
     feedback: null,
     previous: null,
     excluded_sources: [],

@@ -49,7 +49,13 @@ pub const MAX_SOURCES: usize = 12;
 const KNOWLEDGE_HITS_EXPLICIT: usize = 6;
 const KNOWLEDGE_HITS_CONTENT: usize = 4;
 /// Page text added for a document source (after its fields).
-const PAGE_TEXT_CHARS: usize = 800;
+/// Body text a cited document brings along (1.0.0: its pages in order, whatever was extracted —
+/// 0.8.2 gave the first page's first 800 characters, and only to documents with fewer than three
+/// extracted fields). The prompt budget (`prompts::allot`) still cuts the sources to the context.
+const BODY_TEXT_CHARS: usize = 3_000;
+/// Passages looked up inside the cited documents for the content / for one section.
+const CITED_HITS_CONTENT: usize = 4;
+const CITED_HITS_SECTION: usize = 3;
 const EXCERPT_CHARS: usize = 160;
 /// Default 보완 기한 when the request names none.
 const DEFAULT_DUE_DAYS: i64 = 14;
@@ -186,17 +192,29 @@ fn document_source(db: &Db, doc_id: &str, ko: bool) -> Result<Option<Source>> {
     for ((table, r), cells) in rows {
         text.push_str(&format!("{table}[{r}]: {}\n", cells.join(" | ")));
     }
-    // Page text (first page) when there are no / few extracted fields.
-    if scalar_lines < 3 {
-        let pages = db.with(|c| docs::list_pages(c, doc_id, true))?;
-        if let Some(t) = pages.iter().find_map(|p| p.text.as_deref()).map(str::trim).filter(|t| !t.is_empty()) {
-            text.push_str(if ko { "[본문]\n" } else { "[text]\n" });
-            text.push_str(&truncate(t, PAGE_TEXT_CHARS));
-            text.push('\n');
-            if page.is_none() {
-                page = Some(1);
-            }
+    // The body: the pages in order up to `BODY_TEXT_CHARS`. A cited document is what the draft is
+    // written from, so its text comes along whether or not fields were extracted from it.
+    let _ = scalar_lines;
+    let pages = db.with(|c| docs::list_pages(c, doc_id, true))?;
+    let mut body = String::new();
+    for p in &pages {
+        let Some(t) = p.text.as_deref().map(str::trim).filter(|t| !t.is_empty()) else { continue };
+        let room = BODY_TEXT_CHARS.saturating_sub(body.chars().count());
+        if room == 0 {
+            break;
         }
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        body.push_str(&truncate(t, room));
+        if page.is_none() {
+            page = Some(p.page_no);
+        }
+    }
+    if !body.is_empty() {
+        text.push_str(if ko { "[본문]\n" } else { "[text]\n" });
+        text.push_str(&body);
+        text.push('\n');
     }
     if text.trim().is_empty() {
         text.push_str(if ko { "(추출된 내용 없음)" } else { "(nothing extracted)" });
@@ -310,12 +328,40 @@ fn text_source(title: Option<&str>, text: &str, ko: bool) -> Source {
 }
 
 #[allow(clippy::too_many_arguments)]
-/// Where a draft's knowledge searches look: the request's project (plan A) or everything.
+/// Where an explicit knowledge query (`SourceRef::Knowledge`) looks: the request's project (plan A)
+/// or everything. The user asked for that lookup in so many words.
 fn knowledge_scope(req: &DraftRequest) -> SearchScope {
     match req.project_id.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
         Some(p) => SearchScope::project(p),
         None => SearchScope::default(),
     }
+}
+
+/// The documents the request cites (`SourceRef::Document`), in order, once each.
+fn cited_documents(req: &DraftRequest) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for s in &req.sources {
+        if let SourceRef::Document { doc_id } = s {
+            if !out.contains(doc_id) {
+                out.push(doc_id.clone());
+            }
+        }
+    }
+    out
+}
+
+/// 1.0.0 — passages for the content and for each section are looked up **inside the cited documents**
+/// (user report: "인용 문서 외의 문서들에서 내용을 가져다가 글을 작성"). `None` when nothing is cited.
+fn cited_scope(req: &DraftRequest) -> Option<SearchScope> {
+    let documents = cited_documents(req);
+    (!documents.is_empty()).then(|| SearchScope { documents, ..SearchScope::default() })
+}
+
+/// 1.0.0 — what `use_knowledge` ("참고 자료에서 근거 더 찾기") adds: reference material only — the
+/// project's reference group and the 공통 참고 자료 when the draft has a project, every active
+/// reference group otherwise. Work documents the user did not cite are never searched for a draft.
+fn reference_scope(req: &DraftRequest) -> SearchScope {
+    SearchScope { roles: vec![crate::documents::DocumentRole::Knowledge], ..knowledge_scope(req) }
 }
 
 /// One knowledge lookup for a draft: where to look, what for, how many hits, and whether the
@@ -325,6 +371,8 @@ struct KnowledgeLookup<'a> {
     query: &'a str,
     limit: usize,
     explicit: bool,
+    /// `document`: a passage of a cited document; `knowledge`: one the search added.
+    label: &'static str,
 }
 
 fn knowledge_sources(
@@ -335,7 +383,7 @@ fn knowledge_sources(
     out: &mut Vec<Source>,
     notes: &mut Vec<String>,
 ) -> Result<()> {
-    let KnowledgeLookup { scope, query, limit, explicit } = lookup;
+    let KnowledgeLookup { scope, query, limit, explicit, label } = lookup;
     let ko = deps.ko();
     let Some(kdeps): Option<&SearchDeps<'_>> = deps.knowledge.as_ref() else {
         let n = tr(
@@ -383,7 +431,7 @@ fn knowledge_sources(
                 title: h.title.clone(),
                 page: Some(h.page_start),
                 chunk_id: Some(h.chunk_id),
-                source: "knowledge".into(),
+                source: label.into(),
                 excerpt: Some(truncate(h.snippet.trim(), EXCERPT_CHARS)),
             },
             text,
@@ -440,15 +488,44 @@ pub fn gather_sources(deps: &GenerateDeps<'_>, req: &DraftRequest, notes: &mut V
                 }
             }
             SourceRef::Knowledge { query } => {
-                let lookup = KnowledgeLookup { scope: &scope, query, limit: KNOWLEDGE_HITS_EXPLICIT, explicit: true };
+                let lookup = KnowledgeLookup {
+                    scope: &scope,
+                    query,
+                    limit: KNOWLEDGE_HITS_EXPLICIT,
+                    explicit: true,
+                    label: "knowledge",
+                };
                 knowledge_sources(deps, lookup, &excluded, &mut seen, &mut out, notes)?
             }
         }
     }
-    if req.use_knowledge && !req.content.trim().is_empty() {
+    if !req.content.trim().is_empty() {
         let q = truncate(req.content.trim(), 300);
-        let lookup = KnowledgeLookup { scope: &scope, query: &q, limit: KNOWLEDGE_HITS_CONTENT, explicit: false };
-        knowledge_sources(deps, lookup, &excluded, &mut seen, &mut out, notes)?;
+        // 1.0.0: what the content is about is looked up inside the cited documents first — always,
+        // that is reading what the user pointed at (an index that is not there is no news: the
+        // documents' own text is in the sources already).
+        if let Some(cited) = cited_scope(req).filter(|_| deps.knowledge.is_some()) {
+            let lookup = KnowledgeLookup {
+                scope: &cited,
+                query: &q,
+                limit: CITED_HITS_CONTENT,
+                explicit: false,
+                label: "document",
+            };
+            knowledge_sources(deps, lookup, &HashSet::new(), &mut seen, &mut out, &mut Vec::new())?;
+        }
+        // … and beyond them only when the user switched that on, and then in the reference material only.
+        if req.use_knowledge {
+            let reference = reference_scope(req);
+            let lookup = KnowledgeLookup {
+                scope: &reference,
+                query: &q,
+                limit: KNOWLEDGE_HITS_CONTENT,
+                explicit: false,
+                label: "knowledge",
+            };
+            knowledge_sources(deps, lookup, &excluded, &mut seen, &mut out, notes)?;
+        }
     }
     out.truncate(MAX_SOURCES);
     Ok(out)
@@ -1391,13 +1468,33 @@ fn draft_split(
         let budget_tokens = prompts::section_budget(total, plan.weight, weights_sum);
         // Extra knowledge for this section (its heading as the query), numbered after the shared sources.
         let mut extra: Vec<Source> = Vec::new();
-        if req.use_knowledge && deps.knowledge.is_some() {
-            let mut seen: HashSet<i64> = HashSet::new();
+        if deps.knowledge.is_some() {
+            // 1.0.0: the section's passages come from the cited documents; the reference material
+            // is asked only when the user switched that on (never the other work documents).
+            let mut seen: HashSet<i64> = sources.iter().filter_map(|s| s.citation.chunk_id).collect();
             let mut scratch = Vec::new();
-            let scope = knowledge_scope(req);
-            let lookup = KnowledgeLookup { scope: &scope, query: &plan.heading, limit: 3, explicit: false };
-            let _ = knowledge_sources(deps, lookup, &excluded, &mut seen, &mut extra, &mut scratch);
-            extra.truncate(3);
+            if let Some(cited) = cited_scope(req) {
+                let lookup = KnowledgeLookup {
+                    scope: &cited,
+                    query: &plan.heading,
+                    limit: CITED_HITS_SECTION,
+                    explicit: false,
+                    label: "document",
+                };
+                let _ = knowledge_sources(deps, lookup, &HashSet::new(), &mut seen, &mut extra, &mut scratch);
+            }
+            if req.use_knowledge && extra.len() < CITED_HITS_SECTION {
+                let reference = reference_scope(req);
+                let lookup = KnowledgeLookup {
+                    scope: &reference,
+                    query: &plan.heading,
+                    limit: CITED_HITS_SECTION - extra.len(),
+                    explicit: false,
+                    label: "knowledge",
+                };
+                let _ = knowledge_sources(deps, lookup, &excluded, &mut seen, &mut extra, &mut scratch);
+            }
+            extra.truncate(CITED_HITS_SECTION);
         }
         let combined: Vec<&Source> = sources.iter().chain(extra.iter()).collect();
         let section_blocks: Vec<SourceBlock<'_>> = combined

@@ -232,7 +232,8 @@ fn table(ctx: &mut Ctx<'_>, t: &hwp::hwp::paragraph::control::table::TableContro
         for p in &c.paragraph_list.paragraphs {
             paragraph_blocks(ctx, p, &mut blocks);
         }
-        let cell = Cell { blocks, row_span: c.row_span.max(1), col_span: c.col_span.max(1), header: false };
+        let cell =
+            Cell { blocks, row_span: c.row_span.max(1), col_span: c.col_span.max(1), header: false, style: None };
         let row = c.row as usize;
         if row >= rows.len() {
             rows.resize(row + 1, Vec::new());
@@ -253,7 +254,7 @@ fn table(ctx: &mut Ctx<'_>, t: &hwp::hwp::paragraph::control::table::TableContro
     if col_widths.iter().any(|w| *w <= 0.0) {
         col_widths.clear();
     }
-    Table { rows, col_widths_mm: col_widths }
+    Table { rows, col_widths_mm: col_widths, row_heights_mm: Vec::new() }
 }
 
 pub fn read(path: &Path) -> Result<DocModel> {

@@ -11,6 +11,8 @@ import { describeJobDetail, describeJobError } from "@/features/jobs/describe";
 import { DropHint, importDroppedFiles, useDocumentDropTarget } from "@/lib/dnd";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
+import { SelectAllBar } from "@/components/ui/select-all-bar";
+import { inProject, ProjectFilterSelect } from "@/features/projects/ProjectFilterSelect";
 import { useDocuments } from "@/lib/queries";
 import { isJobFinished, isSchemaDiscoveryOutcome, type SchemaDiscoveryOutcome } from "@/lib/types";
 import { useJob, useJobsStore } from "@/stores/jobs";
@@ -39,6 +41,8 @@ export function FormRegisterDialog({
   const toast = useUiStore((s) => s.toast);
   const { data: docs } = useDocuments({ limit: 500, sort: "imported_desc" }, open);
   const [selected, setSelected] = useState<string[]>([]);
+  const [project, setProject] = useState<string | null>(null);
+  const visibleDocs = useMemo(() => (docs ?? []).filter((d) => inProject(d, project)), [docs, project]);
   const [name, setName] = useState("");
   const [jobId, setJobId] = useState<string | null>(null);
   const job = useJob(jobId);
@@ -125,11 +129,23 @@ export function FormRegisterDialog({
           <div className="flex min-w-0 flex-col gap-1">
             <Label>{t("schemas.form.document")}</Label>
             <p className="text-xs text-fg-subtle">{t("schemas.form.documents_hint")}</p>
+            {/* 1.0.0: project filter and select all / none over the visible documents. */}
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <ProjectFilterSelect value={project} onChange={setProject} enabled={open} testId="form-register-project" />
+              <SelectAllBar
+                className="min-w-[12rem] flex-1"
+                visibleIds={visibleDocs.map((d) => d.id)}
+                picked={new Set(selected)}
+                onChange={(next) => setSelected((cur) => [...cur.filter((id) => next.has(id)), ...[...next].filter((id) => !cur.includes(id))])}
+                disabled={busy}
+                testId="form-register-select"
+              />
+            </div>
             {docs && docs.length === 0 ? (
               <p className="text-sm text-fg-muted">{t("schemas.form.no_docs")}</p>
             ) : (
               <div className="max-h-56 overflow-y-auto rounded-md border border-border" data-testid="form-register-docs">
-                {(docs ?? []).map((d) => (
+                {visibleDocs.map((d) => (
                   <label key={d.id} className="flex min-w-0 cursor-pointer items-center gap-2 px-2 py-1 text-sm hover:bg-bg-sunken">
                     <input type="checkbox" className="size-4 shrink-0" checked={selected.includes(d.id)} onChange={() => toggle(d.id)} disabled={busy} data-testid={`form-register-doc-${d.id}`} />
                     <span className="min-w-0 flex-1 truncate" title={d.original_name}>

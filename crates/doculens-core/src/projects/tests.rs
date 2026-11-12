@@ -2199,3 +2199,152 @@ fn copy_folders_do_not_depend_on_the_ui_language() {
     assert_eq!(r, copies::SyncReport::default(), "nothing moves at the next rescan");
     assert_eq!(w.copies_of(&b.id)[0].rel_path, copy.rel_path);
 }
+
+// ---------------------------------------------------------------------------
+// 1.0.0 §12 / §12-B: one assignment of many documents to many projects
+// ---------------------------------------------------------------------------
+
+fn place(doc: &str, project: &str, reference: bool) -> assign::Placement {
+    assign::Placement { doc_id: doc.into(), project_id: project.into(), reference }
+}
+
+fn pair(doc: &str, project: &str) -> classify::Assignment {
+    classify::Assignment { doc_id: doc.into(), project_id: project.into() }
+}
+
+fn ids(list: &[&str]) -> Vec<String> {
+    list.iter().map(|s| s.to_string()).collect()
+}
+
+impl CopyWorld {
+    /// `(work documents, reference documents)` of a project, each sorted.
+    fn members(&self, project_id: &str) -> (Vec<String>, Vec<String>) {
+        use crate::knowledge::repo as knowledge_repo;
+        let mut work = self.db.with(|c| repo::member_ids(c, project_id)).unwrap();
+        let mut reference = self
+            .db
+            .with(|c| match knowledge_repo::reference_group_of_project(c, project_id)? {
+                Some(g) => knowledge_repo::collection_doc_ids(c, &g.id),
+                None => Ok(Vec::new()),
+            })
+            .unwrap();
+        work.sort();
+        reference.sort();
+        (work, reference)
+    }
+
+    fn role(&self, id: &str) -> DocumentRole {
+        self.db.with(|c| docs::get_document(c, id)).unwrap().unwrap().role
+    }
+
+    fn assign(&self, req: &assign::AssignRequest) -> assign::AssignOutcome {
+        assign_documents(&self.db, &self.paths, req).unwrap()
+    }
+}
+
+#[test]
+fn one_assignment_puts_documents_in_several_projects_and_can_be_undone() {
+    let w = CopyWorld::new();
+    for (id, name) in [("d1", "계약서"), ("d2", "제안서"), ("d3", "규정")] {
+        w.doc(id, &format!("documents/{name}.pdf"), name.as_bytes(), "contract");
+    }
+    let (a, b, c) = (w.project("AAA", None), w.project("BBB", None), w.project("CCC", None));
+    // d1 is in AAA already. The sheet: every document in AAA, d2 in BBB as well, d3 as reference material
+    // of AAA and CCC — plus a project that was deleted meanwhile and a document that is gone.
+    assert_eq!(w.add(&a.id, &["d1"]), 1);
+    let out = w.assign(&assign::AssignRequest {
+        add: vec![
+            place("d1", &a.id, false),
+            place("d2", &a.id, false),
+            place("d2", &b.id, false),
+            place("d3", &a.id, true),
+            place("d3", &c.id, true),
+            place("d2", "no-such-project", false),
+            place("ghost", &a.id, false),
+        ],
+        ..Default::default()
+    });
+    assert_eq!((out.added, out.removed, out.moved, out.unchanged), (4, 0, 0, 2), "{out:?}");
+    assert_eq!(out.missing_projects, ids(&["no-such-project"]));
+    assert_eq!(out.roles_changed, 1, "d3 became reference material");
+    let tally =
+        |id: &str| out.projects.iter().find(|t| t.project_id == id).map(|t| (t.added, t.removed, t.moved)).unwrap();
+    assert_eq!((tally(&a.id), tally(&b.id), tally(&c.id)), ((2, 0, 0), (1, 0, 0), (1, 0, 0)));
+    assert_eq!(out.projects[0].project_name, "AAA");
+    assert_eq!(w.members(&a.id), (ids(&["d1", "d2"]), ids(&["d3"])));
+    assert_eq!(w.members(&b.id), (ids(&["d2"]), ids(&[])));
+    assert_eq!(w.members(&c.id), (ids(&[]), ids(&["d3"])));
+    assert_eq!((w.role("d2"), w.role("d3")), (DocumentRole::Work, DocumentRole::Knowledge));
+    // The second work project of d2 gets its tracked copy, as with the single-project command.
+    assert_eq!(w.copies_of(&b.id).len(), 1);
+    assert!(w.copies_of(&a.id).is_empty());
+
+    // One "되돌리기" puts everything back; the membership that was there before stays.
+    let back = w.assign(&out.undo);
+    assert_eq!((back.added, back.removed, back.roles_changed), (0, 4, 1), "{back:?}");
+    assert_eq!(w.members(&a.id), (ids(&["d1"]), ids(&[])));
+    assert_eq!(w.members(&b.id), (ids(&[]), ids(&[])));
+    assert_eq!(w.members(&c.id), (ids(&[]), ids(&[])));
+    assert_eq!(w.role("d3"), DocumentRole::Work);
+    assert!(w.copies_of(&b.id).is_empty());
+}
+
+#[test]
+fn unticked_pairs_leave_the_project_and_a_kind_change_moves_the_memberships() {
+    let w = CopyWorld::new();
+    w.doc("d1", "documents/계약서.pdf", b"contract", "contract");
+    w.doc("d2", "documents/규정.pdf", b"rules", "general");
+    let (a, b) = (w.project("AAA", None), w.project("BBB", None));
+    assert_eq!(w.add(&a.id, &["d1", "d2"]), 2);
+    assert_eq!(w.add(&b.id, &["d1", "d2"]), 2);
+    assert_eq!(w.copies_of(&b.id).len(), 2);
+    // d1 leaves BBB (its copy goes with it); d2 becomes reference material in both projects.
+    let out = w.assign(&assign::AssignRequest {
+        remove: vec![pair("d1", &b.id), pair("d1", "gone"), pair("ghost", &a.id)],
+        add: vec![place("d2", &a.id, true), place("d2", &b.id, true)],
+        ..Default::default()
+    });
+    assert_eq!((out.added, out.removed, out.moved, out.unchanged, out.roles_changed), (0, 1, 2, 1, 1), "{out:?}");
+    assert_eq!(out.missing_projects, ids(&["gone"]));
+    assert_eq!(w.members(&a.id), (ids(&["d1"]), ids(&["d2"])));
+    assert_eq!(w.members(&b.id), (ids(&[]), ids(&["d2"])));
+    assert_eq!(w.role("d2"), DocumentRole::Knowledge);
+    assert!(w.copies_of(&b.id).is_empty(), "no copy without a work membership");
+    let mut touched = out.doc_ids.clone();
+    touched.sort();
+    assert_eq!((touched, out.group_ids.len()), (ids(&["d1", "d2"]), 2));
+
+    // A work document of AAA again: BBB still holds it as reference material, so the role stays.
+    let out = w.assign(&assign::AssignRequest { add: vec![place("d2", &a.id, false)], ..Default::default() });
+    assert_eq!((out.moved, out.roles_changed), (1, 0), "{out:?}");
+    assert_eq!(w.role("d2"), DocumentRole::Knowledge);
+    assert_eq!(w.members(&a.id), (ids(&["d1", "d2"]), ids(&[])));
+    // …and of BBB: no reference group holds it any more, so it is a work document again.
+    let out = w.assign(&assign::AssignRequest { add: vec![place("d2", &b.id, false)], ..Default::default() });
+    assert_eq!((out.moved, out.roles_changed), (1, 1), "{out:?}");
+    assert_eq!(w.role("d2"), DocumentRole::Work);
+    assert_eq!(w.copies_of(&b.id).len(), 1, "a second work project again");
+
+    let back = w.assign(&out.undo);
+    assert_eq!((back.moved, back.roles_changed), (1, 1), "{back:?}");
+    assert_eq!(w.members(&b.id), (ids(&[]), ids(&["d2"])));
+    assert_eq!(w.role("d2"), DocumentRole::Knowledge);
+    assert!(w.copies_of(&b.id).is_empty());
+}
+
+#[test]
+fn the_undo_of_an_assignment_restores_the_role_a_document_had() {
+    let w = CopyWorld::new();
+    w.doc("f1", "documents/양식.pdf", b"form", "general");
+    w.db.with(|c| docs::set_role(c, "f1", DocumentRole::Form)).unwrap();
+    let a = w.project("AAA", None);
+    let out = w.assign(&assign::AssignRequest { add: vec![place("f1", &a.id, true)], ..Default::default() });
+    assert_eq!(w.role("f1"), DocumentRole::Knowledge);
+    assert_eq!(out.undo.roles, vec![assign::RoleChange { doc_id: "f1".into(), role: DocumentRole::Form }]);
+    w.assign(&out.undo);
+    assert_eq!(w.role("f1"), DocumentRole::Form);
+    assert_eq!(w.members(&a.id), (ids(&[]), ids(&[])));
+    // An empty request is a no-op.
+    let none = w.assign(&assign::AssignRequest::default());
+    assert!(none.undo.is_empty() && none.projects.is_empty());
+}

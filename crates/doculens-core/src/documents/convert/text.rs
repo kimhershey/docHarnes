@@ -159,12 +159,13 @@ fn rows_to_table(rows: Vec<Vec<String>>, header: bool, notes: &mut Vec<String>) 
                         row_span: 1,
                         col_span: 1,
                         header: header && i == 0,
+                        style: None,
                     }
                 })
                 .collect()
         })
         .collect();
-    Table { rows, col_widths_mm: Vec::new() }
+    Table { rows, col_widths_mm: Vec::new(), row_heights_mm: Vec::new() }
 }
 
 fn csv_model(text: &str, delim: char) -> DocModel {

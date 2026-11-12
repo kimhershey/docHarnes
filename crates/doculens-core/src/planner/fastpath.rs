@@ -935,6 +935,34 @@ mod tests {
         assert_eq!(setting_of("개인정보 마스킹 사용 안 해"), Some(("privacy.pii_masking".into(), json!(false))));
         assert_eq!(setting_of("개인정보 마스킹 사용"), Some(("privacy.pii_masking".into(), json!(true))));
         assert_eq!(setting_of("turn on pii masking"), Some(("privacy.pii_masking".into(), json!(true))));
+        // 1.0.0: whether the assistant lists the operations it chose.
+        let steps = |on: bool| Some(("ui.show_assistant_steps".to_string(), json!(on)));
+        assert_eq!(setting_of("어시스턴트 작업 표시 꺼줘"), steps(false));
+        assert_eq!(setting_of("어시스턴트 작업 표시 켜줘"), steps(true));
+        assert_eq!(setting_of("고른 작업 표시 켜"), steps(true));
+        assert_eq!(setting_of("작업 단계 표시 끄기"), steps(false));
+        // A job notification is another setting; a sentence that is not a whole settings sentence goes to the model.
+        assert_eq!(setting_of("작업 완료 알림 꺼줘").map(|(k, _)| k), Some("notifications.job_complete".to_string()));
+        assert_eq!(setting_of("무슨 작업을 골랐는지 보여주지 마"), None);
+        // 1.0.0: 프로젝트 분류(2순위 추천 임계값) — percent or ratio, under several names.
+        let second = |v: f64| Some(("processing.project_second_choice".to_string(), json!(v)));
+        assert_eq!(setting_of("프로젝트 분류 2순위 추천 임계값 70%로 바꿔줘"), second(0.7));
+        assert_eq!(setting_of("2순위 추천 임계값 0.8로 설정"), second(0.8));
+        assert_eq!(setting_of("2순위 임계값 55%"), second(0.55));
+        assert_eq!(setting_of("프로젝트 분류 기준 90%로"), second(0.9));
+        // 1.0.0: 이미지 내 글자 추출 — the switch for reading the text inside a page's pictures.
+        let figures = |on: bool| Some(("processing.ocr_figures".to_string(), json!(on)));
+        assert_eq!(setting_of("이미지 내 글자 추출 켜줘"), figures(true));
+        assert_eq!(setting_of("이미지 내 글자 추출 꺼줘"), figures(false));
+        assert_eq!(setting_of("그림 글자 추출 켜"), figures(true));
+        assert_eq!(setting_of("그림 안 글자 추출 사용"), figures(true));
+        // The other OCR switch keeps its own name.
+        assert_eq!(setting_of("디지털 pdf ocr 켜줘").map(|(k, _)| k), Some("processing.ocr_digital_pdf".to_string()));
+        // The review threshold keeps its own name.
+        assert_eq!(
+            setting_of("검토 임계값 85%로 바꿔줘").map(|(k, _)| k),
+            Some("processing.review_threshold".to_string())
+        );
         assert_eq!(setting_of("배율 120으로 올려줘"), Some(("ui.scale_percent".into(), json!(120))));
         assert_eq!(setting_of("절전 대기 5분"), Some(("models.sleep_idle_seconds".into(), json!(300))));
         assert_eq!(setting_of("절전 대기 90초로"), Some(("models.sleep_idle_seconds".into(), json!(90))));

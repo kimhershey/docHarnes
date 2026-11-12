@@ -6,6 +6,9 @@
     "preview_mode": "Browser preview mode (no Tauri · mock backend)"
   },
   "common": {
+    "select_all": "Select all",
+    "select_none": "Clear all",
+    "selected_count": "{{count}} selected",
     "ok": "OK",
     "cancel": "Cancel",
     "save": "Save",
@@ -805,6 +808,7 @@
       "ui_scale_percent": "UI scale",
       "ui_reduced_motion": "Reduce motion",
       "ui_sidebar_collapsed": "Collapse the sidebar",
+      "ui_show_assistant_steps": "Show the assistant's chosen steps",
       "models_tier_mode": "Tier mode",
       "models_manual_tier": "Manual tier",
       "models_active_model": "Active model",
@@ -821,10 +825,12 @@
       "processing_inbox_auto_level": "Inbox auto-processing",
       "processing_render_dpi": "Default render DPI",
       "processing_review_threshold": "Review threshold",
+      "processing_project_second_choice": "Project classification (second-choice threshold)",
       "processing_audit_sample_percent": "Audit sample of confident fields",
       "processing_organize_reviewed_only": "Organise reviewed documents only",
       "processing_inbox_watch": "Watch the inbox folder",
       "processing_ocr_digital_pdf": "OCR despite a text layer",
+      "processing_ocr_figures": "Extract text in images",
       "processing_kie_max_pages": "Pages sent to extraction",
       "processing_precise_mode": "Precise mode",
       "processing_dense_reocr": "Re-OCR dense pages",
@@ -1065,7 +1071,9 @@
       "reduced_motion_system": "Follow system",
       "reduced_motion_on": "Always reduce",
       "reduced_motion_off": "Never reduce",
-      "sidebar": "Collapse sidebar"
+      "sidebar": "Collapse sidebar",
+      "assistant_steps": "Show the assistant's chosen steps",
+      "assistant_steps_hint": "Lists which operations the assistant chose for requests that run at once (questions, searches, summaries). Operations that need a confirmation — deleting, moving, changing settings — are always listed."
     },
     "theme": {
       "title": "Theme",
@@ -1100,6 +1108,8 @@
       "review_threshold": "Review threshold",
       "review_threshold_hint": "Fields below this confidence go to the Review Inbox.",
       "review_threshold_scope": "Applies to new extractions and to 'Re-run validation' in the Fields tab; flags of already extracted documents stay as they are.",
+      "project_second_choice": "Project classification (second-choice threshold)",
+      "project_second_choice_hint": "When documents are put into projects in bulk, the classifier's second project is ticked as well once its confidence reaches this value. 100 % never ticks a second project.",
       "audit_sample": "Random audit sample of high-confidence fields",
       "organize_reviewed_only": "Organize/move reviewed documents only",
       "inbox_watch": "Watch the inbox folder",
@@ -1109,6 +1119,8 @@
       "inbox_auto_level": "Auto-processing for inbox files",
       "ocr_digital_pdf": "OCR pages that already have a text layer",
       "ocr_digital_pdf_hint": "By default the text layer of digital PDFs is used as is (§3.4 hybrid).",
+      "ocr_figures": "Extract text in images",
+      "ocr_figures_hint": "Reads the text inside the pictures — diagrams, screen captures, tables pasted as images — of documents that have their own text layer (digital PDFs, converted PPT / Word / HWP) and adds it to the page's text layer, so it can be selected on the picture, searched and asked about. One model call per picture: on a CPU this adds minutes per document. It applies to documents processed from now on; process a document again to apply it to one already processed.",
       "kie_max_pages": "Pages sent to the extractor",
       "kie_max_pages_hint": "First N−1 pages plus the last one. Raise it for long contracts.",
       "precise_mode": "Precision mode (second sample agreement)",
@@ -1329,7 +1341,8 @@
       "revise_previous_missing": "There is no draft to revise. Open or create a draft first.",
       "revise_instruction_empty": "Enter the revision instruction.",
       "table_not_found": "Table not found.",
-      "plan_clarify": "The plan is a clarification question — answer it first."
+      "plan_clarify": "The plan is a clarification question — answer it first.",
+      "no_vision_projector": "This model has no vision projector (mmproj) file, so it cannot read images. Load a model that comes with its projector file on the Models screen."
     }
   },
   "startup": {
@@ -1401,6 +1414,7 @@
       "loading_model": "loading model",
       "embed_rebuilt": "{{summary}} (rebuilt for a new model)",
       "process_summary": "processed {{processed}} · classified {{classified}} · OCR {{ocr}} pages · extracted {{extracted}} · review {{review}} · failed {{failed}}",
+      "figures_read": "pictures read {{count}}",
       "split_summary": "split into {{count}}",
       "merge_summary": "merged {{count}}",
       "plan_summary": "plan {{done}}/{{total}} · {{summary}}",
@@ -1418,7 +1432,8 @@
       "draft_section": "Writing section {{index}}/{{total}}",
       "draft_revising": "Revising the draft",
       "discovering": "{{name}} · finding fields{{page}}",
-      "discovery_summary": "{{fields}} fields merged from {{docs}} documents"
+      "discovery_summary": "{{fields}} fields merged from {{docs}} documents",
+      "reading_figures": "Reading pictures"
     },
     "empty_queued": "No queued jobs.",
     "empty_failed": "No failed jobs.",
@@ -1454,7 +1469,8 @@
       "findings_not_requestable": "Only passed or undetermined results were selected. Pick at least one mismatch or missing item.",
       "findings_not_in_run": "The selected results are not part of the last stored check. Run the check again.",
       "document_not_found": "Document not found.",
-      "no_fields": "No fields were found in the sample documents. Check that they carry text."
+      "no_fields": "No fields were found in the sample documents. Check that they carry text.",
+      "no_vision_projector": "The model has no vision projector (mmproj) file, so page images cannot be read. Load a model that comes with its projector file on the Models screen and run this again. The documents that were not processed were left as they were."
     },
     "result_loading": "Loading result…"
   },
@@ -1528,6 +1544,8 @@
     "grid_label": "Document cards",
     "import_existing_hint": "Scans the whole workspace folder (except .doculens) and opens the preview.",
     "role_knowledge": "Reference",
+    "project_badge": "Project: {{name}}",
+    "project_badge_reference": "Project: {{name}} (reference material)",
     "role_work": "Work document",
     "kb_added": "Added {{count}} documents to '{{name}}'.",
     "kb_added_one": "Added {{count}} document to '{{name}}'.",
@@ -1816,6 +1834,7 @@
         "manual": "Edited"
       },
       "edited_title": "Corrected by hand — the page image itself is unchanged; this text is what search, questions and extraction use.",
+      "figure_title": "Read from a picture — its position inside the picture is an estimate. Select it to correct a wrong word.",
       "count": "{{count}} edits",
       "undo": "Undo text edit (Ctrl+Z)",
       "redo": "Redo text edit (Ctrl+Shift+Z)",
@@ -2599,7 +2618,8 @@
       "sources_hint": "The extracted fields of the chosen documents are quoted with their sources.",
       "pick_sources": "Pick documents…",
       "remove_source": "Remove quoted document",
-      "use_knowledge": "Use knowledge-base evidence",
+      "use_knowledge": "Also look in the reference material",
+      "use_knowledge_hint": "A draft is written from the documents you cite. Switch this on to add passages found in the reference material (the project's and the common one). Work documents you did not cite are never used.",
       "tone": "Tone",
       "length": "Length",
       "output": "Output",
@@ -2671,8 +2691,8 @@
       "model": "model"
     },
     "reference_source": {
-      "document": "document",
-      "knowledge": "reference material",
+      "document": "Cited document",
+      "knowledge": "Reference search",
       "aggregate": "aggregate",
       "text": "text"
     },
@@ -2813,6 +2833,10 @@
     "open_busy": "Another draft is being generated on the Compose screen. If you open this one now, the running job's result stays available on the Activity screen."
   },
   "projects": {
+    "filter": {
+      "label": "Narrow to a project",
+      "all": "All projects · every document"
+    },
     "title": "Projects",
     "new": "New project",
     "templates_manage": "Templates",
@@ -3228,7 +3252,58 @@
       "confirm": "Put",
       "done_work": "{{count}} work document(s) put into '{{name}}'.",
       "done_reference": "{{count}} document(s) put into the reference material of '{{name}}'.",
-      "open_target": "Open"
+      "open_target": "Open",
+      "mode": "How",
+      "mode_same": "All into the same projects",
+      "mode_same_hint": "Every picked document goes into every ticked project.",
+      "mode_sheet": "Per document",
+      "mode_sheet_hint": "Each document gets its own projects and kind.",
+      "projects_pick": "Projects (pick one or more)",
+      "columns_hint": "Ticked projects become the columns of the table below.",
+      "suggest_switched": "The suggestions differ per document, so this switched to \"Per document\".",
+      "suggest_filled": "The suggestion filled {{count}} cell(s). Check them before adding.",
+      "suggest_filled_none": "The suggestion had no new cell to fill.",
+      "done_assign": "Project assignment applied — {{detail}}",
+      "done_piece": "{{name}}: {{parts}}",
+      "done_added": "{{count}} added",
+      "done_removed": "{{count}} removed",
+      "done_moved": "{{count}} changed kind",
+      "done_unchanged": "{{count}} pair(s) were already in place and left as they were.",
+      "done_nothing": "Nothing changed: everything was already in place.",
+      "done_missing": "{{count}} project(s) no longer exist and were skipped.",
+      "undo": "Undo",
+      "undone": "The last project assignment was undone.",
+      "sheet_loading": "Loading the documents…",
+      "sheet_search": "Search documents…",
+      "sheet_unassigned_only": "Only documents without a project",
+      "sheet_doc": "Document",
+      "sheet_no_columns": "Tick projects above to give the table its columns.",
+      "sheet_no_rows": "No document matches.",
+      "sheet_column_all": "{{name}}: add / remove for every visible document",
+      "sheet_cell": "{{doc}} — {{project}}",
+      "sheet_row_select": "Select the row of {{doc}}",
+      "sheet_kind_switch": "Click to switch between work document and reference material. The document gets this kind in every project it goes into.",
+      "sheet_bulk": "For the {{count}} selected row(s)",
+      "sheet_bulk_project": "Pick a project",
+      "sheet_bulk_add": "Add",
+      "sheet_bulk_remove": "Remove",
+      "sheet_bulk_work": "As work documents",
+      "sheet_bulk_reference": "As reference material",
+      "sheet_candidate": "Candidate {{name}} {{percent}}%",
+      "sheet_candidate_hint": "The classifier's next candidate. Click to tick it.",
+      "sheet_legend": "Tinted cell = added now (dashed: suggested) · red cell = removed. Unticking a project the document is in takes it out of that project (the document stays in the library).",
+      "summary": "What will be applied",
+      "summary_none": "Nothing changes.",
+      "summary_add": "{{name}}: add {{count}}",
+      "summary_remove": "{{name}}: remove {{count}}",
+      "summary_move": "{{name}}: {{count}} change kind",
+      "summary_unassigned": "{{count}} document(s) without a project",
+      "remove_confirm_title": "{{count}} document(s) leave a project",
+      "remove_confirm_body": "The documents below leave the projects named. They are not deleted and stay in the library.",
+      "remove_confirm_ok": "Remove and apply",
+      "remove_confirm_back": "Back",
+      "column_locked": "A picked document is in this project, so its column stays.",
+      "current": "Current project"
     }
   },
   "dnd": {

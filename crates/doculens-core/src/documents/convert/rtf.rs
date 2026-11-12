@@ -333,7 +333,11 @@ pub(crate) fn blocks_from_lines(text: &str) -> Vec<Block> {
                 r.push(Cell { row_span: 1, col_span: 1, ..Default::default() });
             }
         }
-        blocks.push(Block::Table(Table { rows: std::mem::take(rows), col_widths_mm: Vec::new() }));
+        blocks.push(Block::Table(Table {
+            rows: std::mem::take(rows),
+            col_widths_mm: Vec::new(),
+            row_heights_mm: Vec::new(),
+        }));
     };
     for line in text.split('\n') {
         let trimmed = line.trim_end();
@@ -352,6 +356,7 @@ pub(crate) fn blocks_from_lines(text: &str) -> Vec<Block> {
                         row_span: 1,
                         col_span: 1,
                         header: false,
+                        style: None,
                     }
                 })
                 .collect();

@@ -133,7 +133,7 @@ export function defaultSettings(): AppSettings {
     schema_version: 1,
     active_workspace: null,
     workspaces: [],
-    ui: { theme: "system", language: "ko", scale_percent: 100, reduced_motion: "system", sidebar_collapsed: false },
+    ui: { theme: "system", language: "ko", scale_percent: 100, reduced_motion: "system", sidebar_collapsed: false, show_assistant_steps: false },
     models: {
       tier_mode: "auto",
       manual_tier: null,
@@ -153,10 +153,12 @@ export function defaultSettings(): AppSettings {
       inbox_auto_level: "full",
       render_dpi: 200,
       review_threshold: 0.8,
+      project_second_choice: 0.6,
       audit_sample_percent: 5,
       organize_reviewed_only: true,
       inbox_watch: true,
       ocr_digital_pdf: false,
+      ocr_figures: false,
       kie_max_pages: 4,
       precise_mode: false,
       dense_reocr: true,
@@ -294,8 +296,8 @@ function openWorkspace(path: string, create: boolean, name: string | null, local
       manifest: {
         workspace_id: crypto.randomUUID(),
         schema_version: 1,
-        app_version: "0.8.2",
-        last_opened_app_version: "0.8.2",
+        app_version: "1.0.0",
+        last_opened_app_version: "1.0.0",
         name: name?.trim() || basename(p),
         created_at: new Date().toISOString(),
         last_opened_at: null,
@@ -2314,7 +2316,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "app_info":
       return r({
         name: "DocuLens",
-        version: "0.8.2",
+        version: "1.0.0",
         settings_path: "(browser) localStorage:doculens.mock.settings",
         app_data_dir: "(browser)",
         engines_dir: "(browser)/engines",
@@ -2570,8 +2572,22 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       return r(await pl.mockPlanner(cmd, a));
     }
     case "documents_list":
+    case "documents_get": {
+      // 1.0.0: the views carry the projects of each document (work members first, then reference groups).
+      const out = await mockDocuments(cmd, a);
+      const pj = await import("./mock-projects");
+      const kb = await import("./mock-knowledge");
+      const summaries = pj.projectSummaries();
+      const attach = (v: DocumentView): DocumentView => {
+        const work = summaries.filter((p) => pj.isMember(p.id, v.id)).map((p) => ({ id: p.id, name: p.name, reference: false }));
+        const reference = summaries
+          .filter((p) => !work.some((w) => w.id === p.id) && kb.projectReferenceDocIds(p.id).includes(v.id))
+          .map((p) => ({ id: p.id, name: p.name, reference: true }));
+        return { ...v, projects: [...work, ...reference] };
+      };
+      return r(Array.isArray(out) ? (out as DocumentView[]).map(attach) : attach(out as DocumentView));
+    }
     case "documents_stats":
-    case "documents_get":
     case "documents_pages":
     case "documents_page_text":
     case "documents_set_page_text":
@@ -2718,6 +2734,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "project_request_supplement":
     case "project_classify_preview":
     case "project_classify_apply":
+    case "project_assign":
     case "project_reference_group":
     case "maintenance_status":
     case "maintenance_run_now": {

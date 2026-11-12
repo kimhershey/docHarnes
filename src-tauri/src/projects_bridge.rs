@@ -12,6 +12,7 @@ use doculens_core::documents::{repo as docs, DocumentRole};
 use doculens_core::generate::OutputFormat;
 use doculens_core::knowledge::{repo as knowledge_repo, Collection};
 use doculens_core::pipeline::vlm::Vlm;
+use doculens_core::projects::assign::{AssignOutcome, AssignRequest};
 use doculens_core::projects::classify::{ApplyResult, Assignment, ClassifyRequest, ClassifyResult};
 use doculens_core::projects::copies::SyncReport;
 use doculens_core::projects::{
@@ -213,6 +214,21 @@ pub fn classify_apply(app: &AppHandle, assignments: Vec<Assignment>) -> UiResult
     let result = projects::apply_classification(pctx.db(), &assignments)?;
     emit(app, result.project_ids.clone());
     Ok(result)
+}
+
+/// 1.0.0 §12: every (document, project) pair of the "프로젝트에 넣기" dialog in one request — documents
+/// put in several projects, pairs taken out, each document as 업무 문서 or 참고 자료.
+pub fn assign(app: &AppHandle, req: AssignRequest) -> UiResult<AssignOutcome> {
+    let pctx = pipeline_bridge::context(app)?;
+    let out = projects::assign_documents(pctx.db(), &pctx.docs.paths, &req)?;
+    if !out.group_ids.is_empty() {
+        knowledge_bridge::emit_changed(app, "collections", out.group_ids.clone());
+    }
+    if !out.doc_ids.is_empty() {
+        docs_bridge::emit_changed(app, "updated", out.doc_ids.clone());
+    }
+    emit(app, out.projects.iter().map(|t| t.project_id.clone()).collect());
+    Ok(out)
 }
 
 pub fn save_rule(app: &AppHandle, id: &str, rule: Rule) -> UiResult<Rule> {

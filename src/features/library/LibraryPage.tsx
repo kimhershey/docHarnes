@@ -27,6 +27,7 @@ import {
   type DocumentFilter,
   type DocumentSort,
   type DocumentStatus,
+  type DocumentProject,
   type DocumentView,
   type ImportSource,
   type ReviewStatus,
@@ -664,8 +665,36 @@ function DocCard({ doc, selected, onToggle, onOpen, onOpenReview, t, typeLabel, 
             {t("library.role_knowledge")}
           </Badge>
         )}
+        <ProjectBadges doc={doc} />
       </div>
     </div>
+  );
+}
+
+/**
+ * 1.0.0: the projects a document belongs to, as badges of the card's badge row. They must not push
+ * the card wider: a long name is cut inside the badge (the full name is the tooltip), and beyond
+ * `max` projects the rest fold into one "+n" badge.
+ */
+function ProjectBadges({ doc, max = 2 }: { doc: DocumentView; max?: number }) {
+  const { t } = useTranslation();
+  const projects = doc.projects ?? [];
+  if (projects.length === 0) return null;
+  const label = (p: DocumentProject) => t(p.reference ? "library.project_badge_reference" : "library.project_badge", { name: p.name });
+  const rest = projects.slice(max);
+  return (
+    <>
+      {projects.slice(0, max).map((p) => (
+        <Badge key={p.id} variant="default" className="inline-block max-w-[9rem] truncate align-middle" title={label(p)} data-testid={`doc-project-${doc.id}`} data-project-id={p.id} data-reference={p.reference}>
+          {p.name}
+        </Badge>
+      ))}
+      {rest.length > 0 && (
+        <Badge variant="muted" title={rest.map(label).join("\n")} data-testid={`doc-project-more-${doc.id}`}>
+          +{rest.length}
+        </Badge>
+      )}
+    </>
   );
 }
 
@@ -746,6 +775,12 @@ function ListView({ docs, selected, onToggle, onOpen, onOpenReview, typeLabel, l
                 <button type="button" className="max-w-full truncate text-left hover:underline" onClick={() => onOpen(doc.id)} title={doc.rel_path} data-testid={`doc-open-${doc.id}`}>
                   {doc.title ?? doc.original_name}
                   {doc.role === "knowledge" && <span className="ml-2 rounded bg-info-soft px-1 text-xs text-info">{t("library.role_knowledge")}</span>}
+                  {(doc.projects ?? []).slice(0, 2).map((p) => (
+                    <span key={p.id} className="ml-2 rounded bg-accent-soft px-1 text-xs" data-testid={`doc-row-project-${doc.id}`}>
+                      {p.name}
+                    </span>
+                  ))}
+                  {(doc.projects ?? []).length > 2 && <span className="ml-1 text-xs text-fg-subtle">+{(doc.projects ?? []).length - 2}</span>}
                   {doc.tags.length > 0 && <span className="ml-2 text-xs text-fg-subtle">{doc.tags.map((x) => `#${x}`).join(" ")}</span>}
                 </button>
               </span>

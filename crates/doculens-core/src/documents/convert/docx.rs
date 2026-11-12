@@ -282,7 +282,7 @@ fn table(ctx: &mut Ctx<'_>, tbl: &Element) -> Table {
             let mut blocks = Vec::new();
             body_blocks(ctx, tc, &mut blocks);
             row.push(Raw {
-                cell: Cell { blocks, row_span: 1, col_span: span as u16, header: false },
+                cell: Cell { blocks, row_span: 1, col_span: span as u16, header: false, style: None },
                 grid_col,
                 v_continue,
             });
@@ -329,7 +329,7 @@ fn table(ctx: &mut Ctx<'_>, tbl: &Element) -> Table {
         }
     }
     rows.retain(|r| !r.is_empty());
-    Table { rows, col_widths_mm: col_widths }
+    Table { rows, col_widths_mm: col_widths, row_heights_mm: Vec::new() }
 }
 
 /// Body-level children: paragraphs, tables, content controls, section breaks.

@@ -12,13 +12,15 @@ use serde_json::{json, Value};
 
 use crate::db::Db;
 use crate::documents::import::{self, ImportDeps};
-use crate::documents::{repo as docs, DocumentCache, DocumentRecord, PageRecord};
+use crate::documents::layout::{self, LayoutSource, PageLayout};
+use crate::documents::{render, repo as docs, DocumentCache, DocumentRecord, PageRecord, SourceKind};
 use crate::error::{CoreError, Result};
 use crate::knowledge::answer::ChatBackend;
 use crate::paths::WorkspacePaths;
 use crate::settings::{ProcessingSettings, Profile};
 
 use super::extract::{self, FieldOptions, PageInput};
+use super::figures::{self, FigureBox, FigureText, PictureSignature};
 use super::image::{self, PreparedImage};
 use super::prompts::{Stage, CLASSIFY_IMAGE_TOKENS};
 use super::repo::{self, NewField, NewRun, RunOutcome};
@@ -68,6 +70,7 @@ pub fn profile_name(p: Profile) -> &'static str {
 struct DocOutcome {
     classified: bool,
     ocr_pages: u32,
+    figures_read: u32,
     extracted: bool,
     review_pending: bool,
 }
@@ -129,6 +132,7 @@ pub fn process(
                 report.processed.push(doc.id.clone());
                 report.classified += out.classified as u32;
                 report.ocr_pages += out.ocr_pages;
+                report.figures_read += out.figures_read;
                 report.extracted += out.extracted as u32;
                 report.review_pending += out.review_pending as u32;
                 if let Some(rid) = journal {
@@ -151,6 +155,16 @@ pub fn process(
                     documents.len() - i
                 );
                 return Err(if super::vlm::transport_failure(&e) { CoreError::EngineNotRunning } else { e });
+            }
+            Err(e) if super::vlm::no_vision_projector(&e) => {
+                // The loaded model has no vision projector (1.0.0 §6-8): no page image can be read, by
+                // this document or the next. As with a lost engine the batch stops with the reason and
+                // the documents stay as they were, instead of each being marked 처리 오류.
+                log::warn!(
+                    "pipeline: the model has no vision projector; {} document(s) left untouched",
+                    documents.len() - i
+                );
+                return Err(e);
             }
             Err(e) => {
                 let msg = e.to_string();
@@ -219,8 +233,162 @@ pub(super) fn majority_turn(turns: &[u16]) -> Option<u16> {
     [90u16, 180, 270].into_iter().find(|r| turns.iter().filter(|t| *t == r).count() * 2 > turns.len())
 }
 
+/// OCR stage, second part (1.0.0 §6 "이미지 내 글자 추출"): the text inside the pictures of pages that
+/// have their own text layer. The page is not sent through OCR — its text is exact —; each picture
+/// worth reading ([`figures::choose`]) is cut out of the page render and read on its own, and what it
+/// says goes into the page text and the word layout where the picture sits. A picture is read once:
+/// its mark stays in the layout, and the same picture on another page of the document (a logo) reuses
+/// the answer. A forced run takes the earlier picture words out and reads again. Returns the number
+/// of pictures that had text.
+#[allow(clippy::needless_range_loop)]
+fn read_figures(
+    deps: &PipelineDeps<'_>,
+    vlm: &Vlm<'_>,
+    req: &ProcessRequest,
+    doc: &DocumentRecord,
+    pages: &mut [PageRecord],
+    usage: &mut Usage,
+    progress: StageProgress<'_>,
+) -> Result<u32> {
+    let cache = DocumentCache::for_document(deps.import.paths, &doc.id);
+    // The pictures are found in the PDF (the source, or the converted PDF of an office document).
+    let Some(svc) = deps.import.render else { return Ok(0) };
+    if doc.source_kind == SourceKind::Image {
+        return Ok(0);
+    }
+    let pdf =
+        if doc.source_kind == SourceKind::Pdf { doc.absolute_path(deps.import.paths) } else { cache.converted_pdf() };
+    if !pdf.is_file() {
+        return Ok(0);
+    }
+    let tokens = vlm.params(Stage::Ocr).image_tokens.unwrap_or(1_500);
+    let mut known: Vec<(PictureSignature, Option<FigureText>)> = Vec::new();
+    let mut calls = 0usize;
+    let mut read = 0u32;
+    let n = pages.len();
+    for idx in 0..n {
+        let page = &pages[idx];
+        let wanted = req.pages.is_empty() || req.pages.contains(&page.page_no);
+        let own_layer = matches!(page.text_source.as_deref(), Some("layer") | Some("converted"));
+        if !wanted || !own_layer || !has_text(page) || page.width_px == 0 {
+            continue;
+        }
+        if deps.cancelled() {
+            return Err(CoreError::Cancelled);
+        }
+        let page_no = page.page_no;
+        let Some(mut page_layout) = import::ensure_layout(&deps.import, doc, page_no)? else { continue };
+        let mut text = page.text.clone().unwrap_or_default();
+        let mut changed = false;
+        if req.force && (!page_layout.figures.is_empty() || page_layout.words.iter().any(|w| w.fig)) {
+            text = layout::remove_figures(&mut page_layout, &text);
+            changed = true;
+        }
+        let found = match render::pdf_page_figures(svc, &pdf, page_no) {
+            Ok(f) => f,
+            Err(e) => {
+                log::warn!("pictures of {} p{page_no}: {e}", doc.id);
+                continue;
+            }
+        };
+        let rotation = (found.rotation + page.rotation) % 360;
+        let boxes: Vec<FigureBox> = found
+            .boxes
+            .iter()
+            .filter_map(|&(l, r, b, t)| layout::object_box(l, r, b, t, found.page_box, rotation))
+            .collect();
+        let chosen: Vec<FigureBox> = figures::choose(&boxes, (page.width_px, page.height_px), &page_layout)
+            .into_iter()
+            .filter(|b| !page_layout.has_figure(*b))
+            .collect();
+        let image_path = cache.page_file(page_no);
+        if !chosen.is_empty() && image_path.is_file() {
+            let page_image = render::decode_image(&image_path)?;
+            for bbox in &chosen {
+                if deps.cancelled() {
+                    return Err(CoreError::Cancelled);
+                }
+                let cut = figures::crop(&page_image, *bbox);
+                let signature = PictureSignature::of(&cut);
+                let said = match known.iter().find(|(k, _)| k.same(&signature)) {
+                    Some((_, said)) => said.clone(),
+                    None => {
+                        if calls >= figures::MAX_PER_DOCUMENT {
+                            log::info!("pictures of {}: the limit of {calls} per document is reached", doc.id);
+                            break;
+                        }
+                        progress("figures", Some((idx as u32 + 1, n as u32)));
+                        let prepared = image::prepare_image(&cut, vlm.geometry, tokens)?;
+                        let (raw, reply) = figures::read_picture(vlm, &prepared.url)?;
+                        usage.add(reply.usage);
+                        calls += 1;
+                        let raw = if deps.pii_masking { raw.map(|t| validate::mask_text(&t)) } else { raw };
+                        let said = raw.as_deref().and_then(figures::figure_text);
+                        known.push((signature.clone(), said.clone()));
+                        said
+                    }
+                };
+                let (figure_layout, plain) = match &said {
+                    Some(t) => (layout::estimate(&cut.to_luma8(), &t.markup), t.plain.as_str()),
+                    None => (PageLayout::empty(LayoutSource::Estimated), ""),
+                };
+                text = layout::add_figure(&mut page_layout, &text, *bbox, &figure_layout, plain, &signature.hex());
+                changed = true;
+                read += said.is_some() as u32;
+            }
+        }
+        if changed {
+            deps.db().with(|c| docs::set_page_figure_text(c, &doc.id, page_no, &text, &page_layout.to_json()))?;
+            pages[idx].text = (!text.trim().is_empty()).then_some(text);
+        }
+    }
+    Ok(read)
+}
+
 fn has_text(p: &PageRecord) -> bool {
     p.text.as_deref().is_some_and(|t| !t.trim().is_empty())
+}
+
+/// Renders the page images that are gone again (1.0.0 §6-8). The page cache is evicted by the retention
+/// LRU and can be cleared by hand; every stage below skips a page without an image, so such a document
+/// used to finish "processed" with its scanned pages never read. A page that needs its image — it has no
+/// text of its own — and still has none fails the document with the reason, instead of passing in silence.
+fn restore_page_images(
+    deps: &PipelineDeps<'_>,
+    doc: &DocumentRecord,
+    pages: &mut [PageRecord],
+    cache: &DocumentCache,
+) -> Result<()> {
+    let mut failure: Option<CoreError> = None;
+    for page in pages.iter_mut() {
+        if page.width_px == 0 || cache.page_file(page.page_no).is_file() {
+            continue;
+        }
+        if deps.cancelled() {
+            return Err(CoreError::Cancelled);
+        }
+        match import::rotate_page(&deps.import, doc, page.page_no, page.rotation) {
+            Ok(rendered) => {
+                log::info!("page image of {} p{} was gone; rendered again", doc.id, page.page_no);
+                page.width_px = rendered.width_px;
+                page.height_px = rendered.height_px;
+                page.rendered_at = Some(chrono::Utc::now());
+            }
+            Err(e) => {
+                log::warn!("page image of {} p{} is gone and could not be rendered again: {e}", doc.id, page.page_no);
+                failure.get_or_insert(e);
+            }
+        }
+    }
+    let unreadable = |p: &PageRecord| {
+        p.width_px > 0 && p.is_blank != Some(true) && !has_text(p) && !cache.page_file(p.page_no).is_file()
+    };
+    match failure {
+        Some(e) if pages.iter().any(unreadable) => Err(CoreError::Render(format!(
+            "쪽 그림이 없어 다시 만들려 했지만 실패했습니다(문서를 다시 렌더한 뒤 처리하세요): {e}"
+        ))),
+        _ => Ok(()),
+    }
 }
 
 #[allow(clippy::needless_range_loop)]
@@ -239,6 +407,7 @@ fn process_document(
         return Err(CoreError::Invalid("no pages (render the document first)".into()));
     }
     let cache = DocumentCache::for_document(deps.import.paths, &doc.id);
+    restore_page_images(deps, &doc, &mut pages, &cache)?;
     let mut out = DocOutcome::default();
     let mut usage = Usage::default();
 
@@ -409,6 +578,9 @@ fn process_document(
         page.text_source = Some("ocr".into());
         page.ocr_at = Some(chrono::Utc::now());
         out.ocr_pages += 1;
+    }
+    if deps.settings.ocr_figures {
+        out.figures_read = read_figures(deps, vlm, req, &doc, &mut pages, &mut usage, progress)?;
     }
     if req.level == PipelineLevel::Ocr {
         return Ok(out);

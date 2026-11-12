@@ -37,6 +37,17 @@ function scheduleInvalidate() {
   }, 150);
 }
 
+let libraryTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Refetches the library's document lists only (the project screens have their own wiring). */
+function scheduleLibraryRefresh() {
+  if (libraryTimer) return;
+  libraryTimer = setTimeout(() => {
+    libraryTimer = null;
+    void queryClient.invalidateQueries({ queryKey: queryKeys.documents });
+  }, 150);
+}
+
 export const useDocumentsStore = create<DocumentsState>((set, get) => ({
   initialized: false,
   view: "grid",
@@ -48,6 +59,10 @@ export const useDocumentsStore = create<DocumentsState>((set, get) => ({
     if (get().initialized) return;
     set({ initialized: true });
     await subscribe<DocumentsChanged>(EVENTS.documentsChanged, () => scheduleInvalidate());
+    // 1.0.0: the document cards show their projects — a membership change (work documents:
+    // `projects://changed`, reference material: `knowledge://changed`) refreshes the library too.
+    await subscribe(EVENTS.projectsChanged, () => scheduleLibraryRefresh());
+    await subscribe(EVENTS.knowledgeChanged, () => scheduleLibraryRefresh());
   },
 
   setView: (view) => set({ view }),

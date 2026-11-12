@@ -56,6 +56,10 @@ pub struct Candidate {
     pub project_id: String,
     pub project_name: String,
     pub score: f32,
+    /// 1.0.0: the score on the scale the suggestion's confidence uses (0..1) — what the
+    /// "프로젝트 분류(2순위 추천 임계값)" setting is compared with.
+    #[serde(default)]
+    pub confidence: f32,
     pub reasons: Vec<String>,
 }
 
@@ -380,7 +384,13 @@ pub fn suggest(deps: &ProjectDeps<'_>, req: &ClassifyRequest) -> Result<Classify
             .iter()
             .map(|p| {
                 let (s, reasons) = score(doc, p, ko);
-                Candidate { project_id: p.project.id.clone(), project_name: p.project.name.clone(), score: s, reasons }
+                Candidate {
+                    project_id: p.project.id.clone(),
+                    project_name: p.project.name.clone(),
+                    score: s,
+                    confidence: confidence_of(s, 0.0),
+                    reasons,
+                }
             })
             .filter(|c| c.score > 0.0)
             .collect();

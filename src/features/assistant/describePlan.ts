@@ -477,6 +477,22 @@ export function requiresConfirmation(response: PlanResponse): boolean {
   return response.result.plan.requires_confirmation || response.preview?.requires_confirmation === true;
 }
 
+/** Operations that only ask about the documents: nothing is changed, created or opened. */
+const ASKING_OPS: ReadonlySet<string> = new Set(["search", "answer", "summarize", "explain", "compare", "aggregate"]);
+
+/**
+ * 1.0.0: whether a card lists the operations the assistant chose. Only a plan that does nothing but
+ * ask (questions, searches, summaries, comparisons, totals) follows the `ui.show_assistant_steps`
+ * setting, which is off by default. Everything else always lists its steps — a plan that needs a
+ * confirmation, and any plan that changes or creates something (an export, a settings change, a
+ * file operation): what runs stays visible (user decision 2026-11-12: "중요한 동작들은 항상 보여주기").
+ */
+export function showsChosenSteps(setting: boolean | undefined, plan: Plan, response: PlanResponse | null): boolean {
+  if (setting === true || plan.requires_confirmation || (response !== null && requiresConfirmation(response))) return true;
+  const ops = plan.operations ?? [];
+  return ops.length === 0 || !ops.every((op) => ASKING_OPS.has(op.op));
+}
+
 /** The `only_reviewed` value of the plan's file operations (null when it has none). */
 export function onlyReviewedValue(plan: Plan, fallback: boolean): boolean | null {
   const ops = plan.operations.filter((o) => FILE_OPS.has(o.op)) as Extract<Op, { op: "organize" | "rename" | "move" }>[];

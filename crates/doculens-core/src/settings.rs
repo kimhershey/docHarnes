@@ -173,6 +173,10 @@ pub struct UiSettings {
     pub scale_percent: u16,
     pub reduced_motion: ReducedMotion,
     pub sidebar_collapsed: bool,
+    /// 1.0.0: show which operations the assistant chose on plans that run without a
+    /// confirmation (questions, searches, summaries). Off by default; a plan that needs a
+    /// confirmation always lists its steps.
+    pub show_assistant_steps: bool,
 }
 
 impl Default for UiSettings {
@@ -183,6 +187,7 @@ impl Default for UiSettings {
             scale_percent: 100,
             reduced_motion: ReducedMotion::System,
             sidebar_collapsed: false,
+            show_assistant_steps: false,
         }
     }
 }
@@ -255,6 +260,9 @@ pub struct ProcessingSettings {
     /// Run the VLM OCR even on pages that carry a PDF text layer (off: the
     /// text layer is used as is — design §3.4 "digital PDF hybrid").
     pub ocr_digital_pdf: bool,
+    /// 1.0.0 "이미지 내 글자 추출": read the text inside the pictures of pages that have their own text
+    /// layer (one model call per picture) and put it into the page's word layout. Off by default.
+    pub ocr_figures: bool,
     /// Pages per document sent to the field extractor (first N−1 + last page).
     pub kie_max_pages: u8,
     /// Precision mode: a second extraction sample (T=0.3) whose agreement feeds the confidence.
@@ -262,6 +270,10 @@ pub struct ProcessingSettings {
     /// Re-OCR dense pages (≥ `dense_cells` table cells) at the fine-print budget.
     pub dense_reocr: bool,
     pub dense_cells: u16,
+    /// 1.0.0 — 프로젝트 분류(2순위 추천 임계값): when documents are assigned to projects in bulk, the
+    /// second-best project of the classifier is ticked as well once its confidence reaches this
+    /// (0.0–1.0; default 0.6). 1.0 never ticks a second project.
+    pub project_second_choice: f32,
 }
 
 impl Default for ProcessingSettings {
@@ -275,10 +287,12 @@ impl Default for ProcessingSettings {
             organize_reviewed_only: true,
             inbox_watch: true,
             ocr_digital_pdf: false,
+            ocr_figures: false,
             kie_max_pages: 4,
             precise_mode: false,
             dense_reocr: true,
             dense_cells: 80,
+            project_second_choice: 0.6,
         }
     }
 }
@@ -645,6 +659,7 @@ impl AppSettings {
         self.processing.audit_sample_percent = self.processing.audit_sample_percent.min(100);
         self.processing.kie_max_pages = self.processing.kie_max_pages.clamp(1, 32);
         self.processing.dense_cells = self.processing.dense_cells.clamp(10, 2000);
+        self.processing.project_second_choice = self.processing.project_second_choice.clamp(0.0, 1.0);
         self.models.resident_models_max = self.models.resident_models_max.clamp(1, 4);
         self.cache.page_cache_max_gb = self.cache.page_cache_max_gb.clamp(0.5, 1000.0);
         if self.models.active_model.trim().is_empty() {
@@ -751,6 +766,7 @@ mod tests {
                 scale_percent: 130,
                 reduced_motion: ReducedMotion::On,
                 sidebar_collapsed: true,
+                show_assistant_steps: true,
             },
             models: ModelSettings {
                 tier_mode: TierMode::Manual,
@@ -775,10 +791,12 @@ mod tests {
                 organize_reviewed_only: false,
                 inbox_watch: false,
                 ocr_digital_pdf: true,
+                ocr_figures: true,
                 kie_max_pages: 9,
                 precise_mode: true,
                 dense_reocr: false,
                 dense_cells: 120,
+                project_second_choice: 0.75,
             },
             cache: CacheSettings { page_cache_max_gb: 42.5, keep_thumbnails: false },
             privacy: PrivacySettings { pii_masking: false, db_encryption: true },

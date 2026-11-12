@@ -310,6 +310,22 @@ export function attachToCollection(collectionId: string, docIds: string[], role:
   changed("collections", [collectionId]);
 }
 
+/** Takes a document out of a project's reference group; the group id when it was there (`project_assign`). */
+export function detachFromProjectGroup(projectId: string, docId: string): string | null {
+  const s = load();
+  const c = s.collections.find((x) => x.kind === "project" && x.project_id === projectId);
+  if (!c || !(s.collectionDocs[c.id] ?? []).includes(docId)) return null;
+  s.collectionDocs[c.id] = (s.collectionDocs[c.id] ?? []).filter((d) => d !== docId);
+  save(s);
+  changed("collections", [c.id]);
+  return c.id;
+}
+
+/** Sets the role of documents (`project_assign` restores roles with it). */
+export function setDocumentRole(ids: string[], role: DocumentRole): number {
+  return setRole(ids, role);
+}
+
 function setRole(ids: string[], role: DocumentRole): number {
   const all = loadDocs();
   let n = 0;

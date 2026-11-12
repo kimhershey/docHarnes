@@ -24,12 +24,15 @@ import {
   type WorkerOutcome,
 } from "./mock-backend";
 import { buildSupplementDraft, submitDraftJob } from "./mock-generate";
-import { attachToCollection, deleteProjectReferenceGroup, projectReferenceGroup, referenceDocIds, renameProjectReferenceGroup } from "./mock-knowledge";
+import { attachToCollection, deleteProjectReferenceGroup, detachFromProjectGroup, projectReferenceDocIds, projectReferenceGroup, referenceDocIds, renameProjectReferenceGroup, setDocumentRole } from "./mock-knowledge";
 import * as pl from "./mock-pipeline";
 import {
   DEFAULT_PROJECT_FOLDER,
   DEFAULT_PROJECT_SETTINGS,
   EVENTS,
+  type AssignOutcome,
+  type AssignProjectTally,
+  type AssignRequest,
   type CheckRun,
   type ChecklistItem,
   type ClassifyApplyResult,
@@ -41,6 +44,7 @@ import {
   type Draft,
   type DraftRequest,
   type DocumentCopy,
+  type DocumentRole,
   type Evidence,
   type FieldRecord,
   type Job,
@@ -1353,7 +1357,7 @@ export function classifySuggest(req: ClassifyRequest): ClassifyResult {
     const candidates: ClassifyCandidate[] = projects
       .map((p) => {
         const { score, reasons } = scoreDoc(s, d, p, isKo);
-        return { project_id: p.id, project_name: p.name, score, reasons };
+        return { project_id: p.id, project_name: p.name, score, confidence: score > 0 ? Math.min(0.98, score / (score + 2)) : 0, reasons };
       })
       .filter((c) => c.score > 0)
       .sort((a, b) => b.score - a.score);
@@ -1403,6 +1407,138 @@ export function classifyApply(assignments: ClassifyAssignment[]): ClassifyApplyR
     added += load().members.filter((m) => m.project_id === pid).length - before;
   }
   return { added, project_ids: [...byProject.keys()] };
+}
+
+/**
+ * `project_assign` (projects/assign.rs): takes the `remove` pairs out, puts the `add` places in — a document
+ * that is in the project on the other side moves over —, sets the `roles`, and returns the request that undoes it.
+ */
+export function assignDocuments(req: AssignRequest): AssignOutcome {
+  const s = load();
+  const out: AssignOutcome = { projects: [], added: 0, removed: 0, moved: 0, roles_changed: 0, unchanged: 0, missing_projects: [], doc_ids: [], group_ids: [], undo: { remove: [], add: [], roles: [] } };
+  const rolesBefore = new Map<string, DocumentRole>();
+  const roleOf = (id: string): DocumentRole | null => wsDocs().find((d) => d.id === id)?.role ?? null;
+  const project = (id: string): Project | null => {
+    const p = s.projects.find((x) => x.id === id) ?? null;
+    if (!p && !out.missing_projects.includes(id)) out.missing_projects.push(id);
+    return p;
+  };
+  const tally = (p: Project): AssignProjectTally => {
+    let t = out.projects.find((x) => x.project_id === p.id);
+    if (!t) {
+      t = { project_id: p.id, project_name: p.name, added: 0, removed: 0, moved: 0 };
+      out.projects.push(t);
+    }
+    return t;
+  };
+  const touched = (id: string) => void (out.doc_ids.includes(id) || out.doc_ids.push(id));
+  const group = (id: string) => void (out.group_ids.includes(id) || out.group_ids.push(id));
+  const isWork = (pid: string, did: string) => s.members.some((m) => m.project_id === pid && m.doc_id === did);
+  const leaveWork = (pid: string, did: string) => {
+    s.members = s.members.filter((m) => !(m.project_id === pid && m.doc_id === did));
+    s.copies = s.copies.filter((c) => !(c.project_id === pid && c.document_id === did));
+  };
+  const setRole = (id: string, before: DocumentRole, role: DocumentRole) => {
+    if (before === role) return;
+    if (!rolesBefore.has(id)) rolesBefore.set(id, before);
+    setDocumentRole([id], role);
+  };
+
+  for (const pair of req.remove ?? []) {
+    const p = project(pair.project_id);
+    if (!p) continue;
+    const work = isWork(p.id, pair.doc_id);
+    if (work) leaveWork(p.id, pair.doc_id);
+    const g = detachFromProjectGroup(p.id, pair.doc_id);
+    if (g) group(g);
+    if (!work && !g) {
+      out.unchanged += 1;
+      continue;
+    }
+    tally(p).removed += 1;
+    out.removed += 1;
+    touched(pair.doc_id);
+    out.undo.add.push({ doc_id: pair.doc_id, project_id: p.id, reference: !work });
+  }
+  for (const place of req.add ?? []) {
+    const p = project(place.project_id);
+    if (!p) continue;
+    const doc = wsDocs().find((d) => d.id === place.doc_id);
+    if (!doc) {
+      out.unchanged += 1;
+      continue;
+    }
+    const work = isWork(p.id, doc.id);
+    const inGroup = projectReferenceDocIds(p.id).includes(doc.id);
+    let moved: boolean;
+    if (place.reference) {
+      if (inGroup && !work) {
+        out.unchanged += 1;
+        continue;
+      }
+      if (!inGroup) {
+        const g = projectReferenceGroup(p.id, p.name);
+        attachToCollection(g.id, [doc.id], "work");
+        group(g.id);
+      }
+      moved = work;
+      if (work) leaveWork(p.id, doc.id);
+      setRole(doc.id, doc.role, "knowledge");
+    } else {
+      if (work && !inGroup) {
+        out.unchanged += 1;
+        continue;
+      }
+      if (!work) {
+        const shared = s.members.some((m) => m.doc_id === doc.id && m.project_id !== p.id);
+        s.members.push({ project_id: p.id, doc_id: doc.id, added_at: now() });
+        if (shared && { ...DEFAULT_PROJECT_SETTINGS, ...(p.settings ?? {}) }.copies) {
+          const stamp = now();
+          s.copies.push({ document_id: doc.id, project_id: p.id, rel_path: copyTarget(s, p, doc), content_hash: doc.content_hash, size_bytes: doc.size_bytes, state: "synced", created_at: stamp, synced_at: stamp });
+        }
+      }
+      moved = inGroup;
+      if (inGroup) {
+        const g = detachFromProjectGroup(p.id, doc.id);
+        if (g) group(g);
+        // The role follows the memberships: still in another reference group → still reference material.
+        if (doc.role === "knowledge" && !referenceDocIds().has(doc.id)) setRole(doc.id, doc.role, "work");
+      }
+    }
+    const t = tally(p);
+    if (moved) {
+      t.moved += 1;
+      out.moved += 1;
+      out.undo.add.push({ doc_id: doc.id, project_id: p.id, reference: !place.reference });
+    } else {
+      t.added += 1;
+      out.added += 1;
+      out.undo.remove.push({ doc_id: doc.id, project_id: p.id });
+    }
+    touched(doc.id);
+  }
+  for (const change of req.roles ?? []) {
+    const before = roleOf(change.doc_id);
+    if (before && before !== change.role) {
+      setRole(change.doc_id, before, change.role);
+      touched(change.doc_id);
+    }
+  }
+  for (const [id, before] of rolesBefore) {
+    if (roleOf(id) !== before) {
+      out.roles_changed += 1;
+      out.undo.roles!.push({ doc_id: id, role: before });
+    }
+  }
+  for (const t of out.projects) {
+    const p = s.projects.find((x) => x.id === t.project_id);
+    if (!p) continue;
+    p.updated_at = now();
+    refresh(s, p);
+  }
+  save(s);
+  changed(out.projects.map((t) => t.project_id));
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -1539,6 +1675,8 @@ export async function mockProjects(cmd: string, a: Record<string, any>): Promise
       return classifySuggest((a.req ?? {}) as ClassifyRequest);
     case "project_classify_apply":
       return classifyApply((a.assignments ?? []) as ClassifyAssignment[]);
+    case "project_assign":
+      return assignDocuments((a.req ?? { remove: [], add: [] }) as AssignRequest);
     case "maintenance_status":
       return maintenanceStatus();
     case "maintenance_run_now":

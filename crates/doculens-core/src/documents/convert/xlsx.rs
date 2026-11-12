@@ -337,11 +337,11 @@ fn sheet_table(
                 Some(t) => vec![Block::Paragraph(Paragraph::plain(t.clone()))],
                 None => Vec::new(),
             };
-            row.push(Cell { blocks, row_span, col_span, header: false });
+            row.push(Cell { blocks, row_span, col_span, header: false, style: None });
         }
         rows.push(row);
     }
-    Some(Table { rows, col_widths_mm: column_widths(sheet, min_col, max_col) })
+    Some(Table { rows, col_widths_mm: column_widths(sheet, min_col, max_col), row_heights_mm: Vec::new() })
 }
 
 pub fn read(path: &Path) -> Result<DocModel> {

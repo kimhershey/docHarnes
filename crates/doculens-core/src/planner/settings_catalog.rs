@@ -60,6 +60,7 @@ pub const SETTINGS: &[SettingSpec] = &[
     s("ui.scale_percent", ValueType::Int { min: 90, max: 150 }, "UI 배율(%)", "UI scale (%)"),
     s("ui.reduced_motion", ValueType::Enum(REDUCED_MOTION), "움직임 줄이기", "reduced motion"),
     s("ui.sidebar_collapsed", ValueType::Bool, "사이드바 접기", "sidebar collapsed"),
+    s("ui.show_assistant_steps", ValueType::Bool, "어시스턴트가 고른 작업 표시", "show the assistant's chosen steps"),
     // models
     s("models.tier_mode", ValueType::Enum(TIER_MODES), "티어 선택(자동/수동)", "tier mode"),
     s("models.manual_tier", ValueType::Enum(TIERS), "수동 티어", "manual tier"),
@@ -90,6 +91,12 @@ pub const SETTINGS: &[SettingSpec] = &[
     ),
     s("processing.audit_sample_percent", ValueType::Int { min: 0, max: 100 }, "감사 표본(%)", "audit sample (%)"),
     s(
+        "processing.project_second_choice",
+        ValueType::Float { min: 0.0, max: 1.0, percent: true },
+        "프로젝트 분류(2순위 추천 임계값)",
+        "project classification (second-choice threshold)",
+    ),
+    s(
         "processing.organize_reviewed_only",
         ValueType::Bool,
         "검토 완료 문서만 정리",
@@ -97,6 +104,7 @@ pub const SETTINGS: &[SettingSpec] = &[
     ),
     s("processing.inbox_watch", ValueType::Bool, "inbox 감시", "inbox watching"),
     s("processing.ocr_digital_pdf", ValueType::Bool, "디지털 PDF도 OCR", "OCR digital PDFs too"),
+    s("processing.ocr_figures", ValueType::Bool, "이미지 내 글자 추출", "extract text in images"),
     s("processing.kie_max_pages", ValueType::Int { min: 1, max: 32 }, "추출 최대 쪽수", "extraction page limit"),
     s("processing.precise_mode", ValueType::Bool, "정밀 모드", "precise mode"),
     s("processing.dense_reocr", ValueType::Bool, "빽빽한 표 재OCR", "re-OCR dense tables"),
@@ -179,6 +187,7 @@ pub const SETTING_KEYS: &[&str] = &[
     "ui.scale_percent",
     "ui.reduced_motion",
     "ui.sidebar_collapsed",
+    "ui.show_assistant_steps",
     "models.tier_mode",
     "models.manual_tier",
     "models.active_model",
@@ -196,9 +205,11 @@ pub const SETTING_KEYS: &[&str] = &[
     "processing.render_dpi",
     "processing.review_threshold",
     "processing.audit_sample_percent",
+    "processing.project_second_choice",
     "processing.organize_reviewed_only",
     "processing.inbox_watch",
     "processing.ocr_digital_pdf",
+    "processing.ocr_figures",
     "processing.kie_max_pages",
     "processing.precise_mode",
     "processing.dense_reocr",
@@ -251,6 +262,21 @@ pub const NAMES: &[(&str, &[&str])] = &[
     ),
     ("ui.reduced_motion", &["움직임 줄이기", "애니메이션 줄이기", "reduced motion"]),
     ("ui.sidebar_collapsed", &["사이드바 접기", "사이드바", "sidebar"]),
+    (
+        "ui.show_assistant_steps",
+        &[
+            "어시스턴트가 고른 작업 표시",
+            "어시스턴트 작업 표시",
+            "고른 작업 표시",
+            "선택한 작업 표시",
+            "작업 표시",
+            "작업 단계 표시",
+            "단계 표시",
+            "assistant steps",
+            "chosen steps",
+            "show steps",
+        ],
+    ),
     ("models.tier_mode", &["티어 선택", "티어 모드", "tier mode"]),
     ("models.manual_tier", &["수동 티어", "티어", "manual tier", "tier"]),
     ("models.active_model", &["활성 모델", "사용 모델", "active model"]),
@@ -273,10 +299,41 @@ pub const NAMES: &[(&str, &[&str])] = &[
         &["렌더 dpi", "렌더링 dpi", "렌더링 해상도", "렌더 해상도", "해상도", "dpi", "render dpi", "resolution"],
     ),
     ("processing.review_threshold", &["검토 임계값", "검토 기준", "review threshold"]),
+    (
+        "processing.project_second_choice",
+        &[
+            "프로젝트 분류 2순위 추천 임계값",
+            "프로젝트 분류(2순위 추천 임계값)",
+            "2순위 추천 임계값",
+            "2순위 임계값",
+            "2순위 추천 기준",
+            "프로젝트 분류 임계값",
+            "프로젝트 분류 기준",
+            "second choice threshold",
+            "second-choice threshold",
+        ],
+    ),
     ("processing.audit_sample_percent", &["감사 표본", "audit sample"]),
     ("processing.organize_reviewed_only", &["검토 완료만 정리", "검토 완료 문서만 정리", "reviewed only"]),
     ("processing.inbox_watch", &["inbox 감시", "받은 문서함 감시", "폴더 감시", "inbox watch", "inbox watching"]),
     ("processing.ocr_digital_pdf", &["디지털 pdf ocr", "디지털 pdf도 ocr", "ocr digital pdf"]),
+    (
+        "processing.ocr_figures",
+        &[
+            "이미지 내 글자 추출",
+            "이미지 안 글자 추출",
+            "이미지 글자 추출",
+            "그림 내 글자 추출",
+            "그림 안 글자 추출",
+            "그림 글자 추출",
+            "그림 글자 읽기",
+            "그림 ocr",
+            "이미지 ocr",
+            "extract text in images",
+            "text in images",
+            "figure ocr",
+        ],
+    ),
     ("processing.kie_max_pages", &["추출 최대 쪽수", "추출 쪽수", "최대 쪽수", "extraction page limit", "max pages"]),
     ("processing.precise_mode", &["정밀 모드", "precise mode"]),
     ("processing.dense_reocr", &["빽빽한 표 재ocr", "잔글씨 재ocr", "dense re-ocr"]),
@@ -659,7 +716,7 @@ mod tests {
         assert_eq!(keys.len(), SETTING_KEYS.len(), "duplicate keys");
         // Every settings field the assistant may change has an entry, plus `journal_days`. 0.8.0
         // took `privacy.db_encryption` out: nothing encrypts the database, so there is no switch.
-        assert_eq!(SETTINGS.len(), 46);
+        assert_eq!(SETTINGS.len(), 49);
         assert!(find("privacy.db_encryption").is_none());
     }
 

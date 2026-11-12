@@ -24,6 +24,7 @@ use crate::pipeline::vlm::Vlm;
 use crate::planner::{ExportFormat, ExportLayout, GroupBy};
 use crate::settings::Language;
 
+pub mod assign;
 pub mod check;
 pub mod classify;
 pub mod copies;
@@ -591,6 +592,15 @@ pub fn classify(deps: &ProjectDeps<'_>, req: &classify::ClassifyRequest) -> Resu
 /// Writes the accepted document → project assignments.
 pub fn apply_classification(db: &Db, assignments: &[classify::Assignment]) -> Result<classify::ApplyResult> {
     classify::apply(db, assignments)
+}
+
+/// Puts documents in projects and takes them out, many pairs at once (1.0.0 §12; see [`assign`]).
+pub fn assign_documents(
+    db: &Db,
+    paths: &crate::paths::WorkspacePaths,
+    req: &assign::AssignRequest,
+) -> Result<assign::AssignOutcome> {
+    assign::assign(db, paths, req)
 }
 
 /// `inbox/<folder>/file` → the project mapped to that inbox subfolder (created on demand

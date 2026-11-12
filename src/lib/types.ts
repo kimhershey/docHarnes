@@ -31,6 +31,8 @@ export interface UiSettings {
   scale_percent: number;
   reduced_motion: ReducedMotion;
   sidebar_collapsed: boolean;
+  /** 1.0.0: list the chosen operations on plans that run without a confirmation (off by default). */
+  show_assistant_steps: boolean;
 }
 
 export interface ModelSettings {
@@ -53,10 +55,14 @@ export interface ProcessingSettings {
   inbox_auto_level: AutoProcessingLevel;
   render_dpi: number;
   review_threshold: number;
+  /** 1.0.0 — 프로젝트 분류(2순위 추천 임계값), 0..1: the classifier's second project is ticked from this confidence up. */
+  project_second_choice: number;
   audit_sample_percent: number;
   organize_reviewed_only: boolean;
   inbox_watch: boolean;
   ocr_digital_pdf: boolean;
+  /** 1.0.0 "이미지 내 글자 추출": read the text inside the pictures of pages that have their own text layer. */
+  ocr_figures: boolean;
   kie_max_pages: number;
   precise_mode: boolean;
   dense_reocr: boolean;
@@ -766,10 +772,20 @@ export interface DocumentRecord {
   pipeline_error: string | null;
 }
 
+/** A project a document belongs to (1.0.0: the project badges of the library's document cards). */
+export interface DocumentProject {
+  id: string;
+  name: string;
+  /** The document sits in the project's reference group (참고 자료), not among its work documents. */
+  reference: boolean;
+}
+
 /** `DocumentRecord` plus the URLs / paths the UI needs (`documents_list`, `documents_get`). */
 export interface DocumentView extends DocumentRecord {
   absolute_path: string;
   thumb_url: string | null;
+  /** Projects of the document, work memberships first (1.0.0; absent from views other commands return). */
+  projects?: DocumentProject[];
 }
 
 export interface PageRecord {
@@ -814,6 +830,8 @@ export interface PageWord {
   /** Reading-order line index (0-based). */
   line: number;
   edited?: boolean;
+  /** Read from a picture of the page (설정 "이미지 내 글자 추출"); the box is estimated inside the picture. */
+  fig?: boolean;
 }
 
 /** Positioned text layer of a page: selection and correction happen on the page image. */
@@ -821,6 +839,8 @@ export interface PageLayout {
   version: number;
   source: LayoutSource;
   words: PageWord[];
+  /** Pictures of the page whose text was read into `words` (1.0.0). */
+  figures?: { x: number; y: number; w: number; h: number; hash: string; words: number }[];
 }
 
 /** One correction of a page's text (viewer 이력 "글자 수정"); `undone` after Ctrl+Z (0.3.0 item 7). */
@@ -1333,6 +1353,8 @@ export interface ProcessReport {
   failed: [string, string][];
   classified: number;
   ocr_pages: number;
+  /** Pictures whose text was read into their page (1.0.0 "이미지 내 글자 추출"). */
+  figures_read?: number;
   extracted: number;
   review_pending: number;
   cancelled: boolean;
@@ -2313,7 +2335,7 @@ export interface InputCut {
 export type DraftStoreOutcome = { status: "saved" } | { status: "copy"; original: string; reason: "cancelled" | "newer" } | { status: "not_saved"; reason: "deleted" | "failed" };
 
 export function defaultDraftRequest(language: Language = "ko"): DraftRequest {
-  return { form_ref: null, format_description: null, content: "", sources: [], output: "hwpx", tone: "formal", length: "medium", language, use_knowledge: true, feedback: null, previous: null, excluded_sources: [], max_tokens: null, revise: null };
+  return { form_ref: null, format_description: null, content: "", sources: [], output: "hwpx", tone: "formal", length: "medium", language, use_knowledge: false, feedback: null, previous: null, excluded_sources: [], max_tokens: null, revise: null };
 }
 
 export interface DraftCitation {
@@ -2570,6 +2592,8 @@ export interface ClassifyCandidate {
   project_id: string;
   project_name: string;
   score: number;
+  /** The score on the suggestion's 0..1 scale — what `processing.project_second_choice` is compared with (1.0.0). */
+  confidence?: number;
   reasons: string[];
 }
 export interface ClassifySuggestion {
@@ -2598,6 +2622,46 @@ export interface ClassifyAssignment {
 export interface ClassifyApplyResult {
   added: number;
   project_ids: string[];
+}
+
+/** A document's place in a project (1.0.0 §12): among its work documents or in its reference group. */
+export interface AssignPlacement {
+  doc_id: string;
+  project_id: string;
+  /** `true` = 참고 자료 (the project's reference group), `false` = 업무 문서. */
+  reference: boolean;
+}
+export interface AssignRoleChange {
+  doc_id: string;
+  role: DocumentRole;
+}
+/** `project_assign`: pairs to take out (applied first), places to put documents in, roles to set last (written by `undo`). */
+export interface AssignRequest {
+  remove: ClassifyAssignment[];
+  add: AssignPlacement[];
+  roles?: AssignRoleChange[];
+}
+export interface AssignProjectTally {
+  project_id: string;
+  project_name: string;
+  added: number;
+  removed: number;
+  /** Stayed in the project and changed sides (업무 문서 ↔ 참고 자료). */
+  moved: number;
+}
+export interface AssignOutcome {
+  projects: AssignProjectTally[];
+  added: number;
+  removed: number;
+  moved: number;
+  roles_changed: number;
+  /** Pairs that changed nothing (already in place, not there to take out, unknown document). */
+  unchanged: number;
+  missing_projects: string[];
+  doc_ids: string[];
+  group_ids: string[];
+  /** The request that puts everything back. */
+  undo: AssignRequest;
 }
 
 export type RuleOp = "eq" | "neq" | "gte" | "lte" | "within_pct" | "present" | "matches";
