@@ -1937,7 +1937,11 @@ P6·P7 항목.
 - **실제 모델 확인(Gemma 4 E4B Q4_K_M, CPU, `/tmp/engine/bin/llama-server`)**: 사용자 문장 5개(`eval/results/planner-real-model/user-sentences-0.8.2.golden.json` + `.context.json`, 결과 `gemma4-e4b-q4km-0.8.2-user-sentences.json`) —
   5/5 한 번에 계획(되묻기·검증 오류 없음), 범위는 전부 `project_id = p-aaa`. 모델 출력: explain(selection에 자기 메모) / summarize + `doc_type: "project:AAA"` / search + `doc_type: "project"` / explain(selection "AAA") / explain(selection = 문장 전체). 계획 한 건 30초~4분.
   `explain_what_was_said`는 이 측정 뒤에 넣었고 같은 모델 출력을 `the_plans_the_real_model_wrote_for_a_project_question_are_answered`가 재생한다. 답변 단계(검색 + 생성)는 실제 모델·실제 문서로 확인하지 않았다.
-<!-- 0.8.2-RELEASE-RECORD -->
+- **검증·릴리스 기록(2026-11-12)**: 로컬 — 코어 `planner::` 85건, clippy·fmt, 골든셋 게이트 94.5 %(154/163, 변함없음). 워크스페이스 전체 `cargo test`·vitest·Playwright·Windows 컴파일은 CI로만 확인:
+  범프 e416df2(run 43137130141), 63c2243(run 43138856194), 최종 커밋 **05ad4e3**(run 43140374065) 모두 통과. 독립 코드 검토·Windows 설치 실행 없음.
+  설치파일: run **43141224749**(`--ref release/0.8.2`, `ref=05ad4e3…`, `variant=lite`, `publish=true`) 성공 → **Release v0.8.2** 게시(태그 `v0.8.2` = 05ad4e3, 2026-11-12T02:35:52Z).
+  `DocuLens-Setup-Lite-0.8.2-x64.exe` 51,422,142 B, sha256 `021139ec1fbb2f5f5132ad08b3d23cb4afbdef4ad84dfd04fdf54a70d715fdcb`(게시된 `.sha256`·자산 다이제스트와 일치) + `.sha256`·`THIRD-PARTY-NOTICES.md`·`sbom.cdx.json`.
+- **다음**: `release/0.8.2`를 `main`에 병합(0.8.1·0.8.0 릴리스 기록 포함 — 0.8.1 브랜치는 따로 병합할 필요 없음). 모델 범위 문법에 프로젝트 칸을 주는 구조 수정과 E2B·골든셋 전체 실모델 측정은 남아 있다.
 
 ## P6·P7 단계 말 리뷰 반영
 
