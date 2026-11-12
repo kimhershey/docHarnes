@@ -14,7 +14,9 @@ PlanSchema JSON 한 개로 바꿉니다. 규칙:\n\
 1. JSON만 출력합니다(설명·마크다운 금지). 표에 없는 op나 파라미터는 절대 쓰지 않습니다.\n\
 2. operations는 실행 순서대로 최대 12개. 하나의 명령이 여러 단계면 순서대로 나열합니다(가져오기 → 분류 → OCR → 추출 → 정리/내보내기).\n\
 3. scope는 대상 문서 범위입니다: 폴더(folder), 선택 문서(doc_ids), 필터(doc_type 슬러그·날짜·거래처·태그·상태). \
-'이 문서/선택 문서'는 컨텍스트의 선택 문서를 뜻하므로 doc_ids에 그 id를 넣습니다. 전체 문서면 scope를 비웁니다.\n\
+'이 문서/선택 문서'는 컨텍스트의 선택 문서를 뜻하므로 doc_ids에 그 id를 넣습니다. 전체 문서면 scope를 비웁니다. \
+doc_type은 사용자가 문서 유형을 말했을 때만 넣고, 말하지 않았으면 비워 둡니다(유형을 되묻지 않습니다). 프로젝트 이름은 유형이 \
+아닙니다 — 문장의 프로젝트는 앱이 적용하므로 scope에 적지 않습니다.\n\
 4. 날짜는 YYYY-MM-DD. '지난달·올해·최근 30일' 같은 표현은 제공된 날짜 범위를 그대로 씁니다.\n\
 5. 유형·스키마·필드 이름은 컨텍스트 목록에 있는 것만 씁니다(슬러그 또는 키). 목록에 없으면 추측하지 말고 clarify 하나만 넣고 \
 clarification_question에 무엇을 물을지 적습니다.\n\
@@ -48,7 +50,9 @@ PlanSchema JSON built only from the ops below. Rules:\n\
 1. Output JSON only (no prose, no markdown). Never use an op or parameter that is not in the table.\n\
 2. operations run in order, at most 12. Multi-step commands list every step (import → classify → ocr → extract → organise / export).\n\
 3. scope selects the documents: folder, selected doc_ids, or a filter (doc_type slug, dates, vendor, tags, status). \
-'this document / the selection' means the context's selected documents → put their ids in doc_ids. Leave scope empty for the whole library.\n\
+'this document / the selection' means the context's selected documents → put their ids in doc_ids. Leave scope empty for the whole library. \
+Set doc_type only when the user names a document type; otherwise leave it out (never ask which type). A project's name is not a type — \
+the app applies the project a sentence names, do not write it into scope.\n\
 4. Dates are YYYY-MM-DD. For phrases like 'last month' copy the provided date range.\n\
 5. Use only types, schemas and fields listed in the context (slugs / keys). If something is missing, do not guess: emit a single clarify op \
 and put the question in clarification_question.\n\
@@ -629,7 +633,7 @@ fn tiny_messages(
     let system = format!(
         "Plan the user's command as ONE JSON object {{summary, unmet, intent, scope, operations[], requires_confirmation, confidence}} \
 (unmet = the part of the request the ops cannot express, \"\" when none). \
-Use only these ops: {}. Scope filters: doc_type ({}), date_from/date_to (YYYY-MM-DD), doc_ids. \
+Use only these ops: {}. Scope filters: doc_type ({}; only when the user names a type), date_from/date_to (YYYY-MM-DD), doc_ids. \
 If the command is unclear emit a single clarify op. Today {}.",
         names.join(", "),
         types.join(", "),

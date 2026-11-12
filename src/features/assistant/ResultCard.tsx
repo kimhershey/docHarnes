@@ -258,25 +258,40 @@ export function ResultCard({
         </div>
       )}
       {showMoves && moveItems.length > 0 && <MovesTable items={moveItems} />}
-      {actions.searches.map((s) => (
-        <div key={s.index} className="flex flex-col gap-1" data-testid="result-search">
-          <span className="text-xs text-fg-muted">{t("planner.result.hits", { count: s.response.hits.length })}</span>
-          <div className="flex flex-wrap gap-1">
-            {s.response.hits.map((h) => (
-              <button
-                key={h.chunk_id}
-                type="button"
-                className={cn("max-w-full truncate rounded-full bg-accent-soft px-2 py-0.5 text-xs text-accent hover:bg-accent hover:text-accent-fg cursor-pointer")}
-                title={h.snippet}
-                onClick={() => navigate(hitHref(h, s.query))}
-                data-testid="result-hit"
-              >
-                {h.title} · {t("answer.citation_page", { page: h.page_start })}
-              </button>
-            ))}
+      {actions.searches.map((s) => {
+        const chip = (h: (typeof s.response.hits)[number]) => (
+          <button
+            key={h.chunk_id}
+            type="button"
+            className={cn("max-w-full truncate rounded-full bg-accent-soft px-2 py-0.5 text-xs text-accent hover:bg-accent hover:text-accent-fg cursor-pointer")}
+            title={h.snippet}
+            onClick={() => navigate(hitHref(h, s.query))}
+            data-testid="result-hit"
+          >
+            {h.title} · {t("answer.citation_page", { page: h.page_start })}
+          </button>
+        );
+        return (
+          <div key={s.index} className="flex flex-col gap-1" data-testid="result-search">
+            <span className="text-xs text-fg-muted">{t("planner.result.hits", { count: s.response.hits.length })}</span>
+            {s.groups.length > 0 ? (
+              // "프로젝트별로 검색" (0.8.1): the same hits under the project / type / folder they belong to.
+              <div className="flex flex-col gap-1.5" data-testid="result-search-groups">
+                {s.groups.map((g) => (
+                  <div key={g.key || g.label} className="flex flex-col gap-1" data-testid="result-search-group">
+                    <span className="text-xs font-medium text-fg">
+                      {g.label} · {t("planner.result.hits", { count: g.hits.length })}
+                    </span>
+                    <div className="flex flex-wrap gap-1">{g.hits.map((i) => s.response.hits[i]).filter((h) => h !== undefined).map(chip)}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-1">{s.response.hits.map(chip)}</div>
+            )}
           </div>
-        </div>
-      ))}
+        );
+      })}
       {actions.answers.map((a) => (
         <AnswerCard key={a.index} answer={a.answer} compact onCitation={(c) => openCitation(navigate, c)} />
       ))}

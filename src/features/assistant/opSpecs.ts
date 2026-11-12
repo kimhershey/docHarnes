@@ -140,7 +140,7 @@ const SPECS: OpSpec[] = [
   { op: "reindex", params: [p("scope", en(["fts", "vec", "all"]), false, "색인 범위", "index scope")], desc_ko: "검색 색인 재생성", desc_en: "rebuild the search index" },
   {
     op: "search",
-    params: [p("query", str, true, "검색어", "query"), p("mode", en(["hybrid", "keyword", "semantic"]), false, "검색 방식", "search mode"), p("top_k", int, false, "결과 수", "result count")],
+    params: [p("query", str, true, "검색어", "query"), p("mode", en(["hybrid", "keyword", "semantic"]), false, "검색 방식", "search mode"), p("top_k", int, false, "결과 수", "result count"), p("group_by", en(["none", "project", "doc_type", "folder"]), false, "결과를 프로젝트·문서 유형·폴더별로 묶어 보이기", "show the hits per project / document type / folder")],
     desc_ko: "문서 검색",
     desc_en: "search documents",
   },
@@ -289,7 +289,7 @@ const SPECS: OpSpec[] = [
   { op: "set_setting", params: [p("key", en(SETTING_KEYS), true, "설정 키(섹션.항목, 예: processing.render_dpi)", "setting key (section.field, e.g. processing.render_dpi)"), p("value", { kind: "scalar" }, true, "값", "value")], desc_ko: "설정 값 변경(설정 카탈로그의 모든 항목)", desc_en: "change a setting (any catalog item)" },
   {
     op: "open",
-    params: [p("target", en(["document", "page", "folder", "screen"]), true, "열 대상", "what to open"), p("ref", str, true, "문서 이름/id, 'doc:page', 폴더, 화면 이름", "document name / id, 'doc:page', folder or screen")],
+    params: [p("target", en(["document", "page", "folder", "screen", "project"]), true, "열 대상", "what to open"), p("ref", str, true, "문서 이름/id, 'doc:page', 폴더, 화면 이름", "document name / id, 'doc:page', folder or screen")],
     desc_ko: "문서/쪽/폴더/화면 열기",
     desc_en: "open a document / page / folder / screen",
   },

@@ -248,7 +248,7 @@ pub(super) fn run(
             db.with(|c| {
                 Ok(GroupInfo {
                     projects: projects_repo::list_projects(c)?.into_iter().map(|p| (p.id, p.name)).collect(),
-                    memberships: projects_repo::memberships(c, &ids)?,
+                    memberships: projects_repo::memberships_with_reference(c, &ids)?,
                     type_labels: Vec::new(),
                 })
             })?

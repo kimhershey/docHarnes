@@ -1706,7 +1706,10 @@ mod exec_tests {
         cancel.store(false, Ordering::Relaxed);
 
         // Search runs without a model (no hits on an un-indexed workspace, but no error).
-        let plan = plan_of(vec![Op::Search { query: "스타벅스".into(), mode: None, top_k: Some(5) }], Scope::default());
+        let plan = plan_of(
+            vec![Op::Search { query: "스타벅스".into(), mode: None, group_by: None, top_k: Some(5) }],
+            Scope::default(),
+        );
         let ex = exec::run(&deps, &plan, &mut |_| {}).unwrap();
         assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
         assert_eq!(ex.steps[0].payload["hits"].as_array().map(Vec::len), Some(0));
@@ -2137,4 +2140,166 @@ fn a_summary_per_project_is_not_narrowed_to_the_open_project() {
     assert_eq!(project_of(&r.plan), None, "{r:?}");
     let r = plan(None, "유형별로 요약해줘", &c, PlanMode::RulesFirst).unwrap();
     assert_eq!(project_of(&r.plan).as_deref(), Some("p-hanbit"), "{r:?}");
+}
+
+/// 0.8.2 — what the user's PC showed for "AAA 프로젝트 내에서 AAA 가 무엇인지 요약해서 설명해줘": first a
+/// question about the document type, then (after "유형 상관없이 전부") "unknown document type 'all'".
+/// A type is a condition only when the user's words name one; a question is answered.
+#[test]
+fn a_question_needs_no_document_type() {
+    let mut c = ctx();
+    c.projects = vec![ProjectSummary { id: "p-aaa".into(), name: "AAA".into(), status: "active".into() }];
+    let text = "AAA 프로젝트 내에서 AAA 가 무엇인지 요약해서 설명해줘";
+    let asked = "AAA 프로젝트와 관련된 모든 문서를 대상으로 요약하려면, 어떤 특정 문서 유형(예: 'acceptance', 'sow', 'test_report' 등)을 지정해야 하나요?";
+    let run = |c: &PlanContext, text: &str, reply: Value| {
+        let chat = StageChat::new();
+        chat.push("families", json!({ "families": ["ask"] }));
+        chat.push("plan", reply);
+        let r = plan(Some(&deps(&chat)), text, c, PlanMode::ModelFirst).unwrap();
+        (r, chat.calls("plan"))
+    };
+    let reply = |ops: Value, scope: Value, confidence: f64| json!({ "summary": "s", "unmet": "", "intent": "answer", "scope": scope, "operations": ops, "requires_confirmation": false, "confidence": confidence });
+    let project_of = |p: &Plan| p.scope.filter.project_id.clone();
+
+    // 1. The model asks which type: the app answers from the project the sentence names.
+    let mut clarify = reply(json!([{ "op": "clarify", "question": asked }]), json!({}), 0.5);
+    clarify["clarification_question"] = json!(asked);
+    let (r, _) = run(&c, text, clarify.clone());
+    assert!(!r.plan.is_clarification() && !has_errors(&r.issues), "{r:?}");
+    assert!(
+        matches!(&r.plan.operations[..], [Op::Answer { question, mode: None, knowledge: None, reply: None, .. }] if question == text),
+        "{r:?}"
+    );
+    assert_eq!(project_of(&r.plan).as_deref(), Some("p-aaa"), "{r:?}");
+    assert!(!r.plan.requires_confirmation && r.plan.clarification_question.is_none(), "{r:?}");
+    // … the same with a project open and none named, and for a type question without any project.
+    let mut open = ctx();
+    open.projects = c.projects.clone();
+    open.scope_project = Some("p-aaa".into());
+    let (r, _) = run(&open, "이게 무엇인지 설명해줘", clarify.clone());
+    assert!(matches!(&r.plan.operations[..], [Op::Answer { .. }]), "{r:?}");
+    assert_eq!(project_of(&r.plan).as_deref(), Some("p-aaa"), "{r:?}");
+    let (r, _) = run(&ctx(), "납품 기한이 언제인지 알려줘", clarify.clone());
+    assert!(matches!(&r.plan.operations[..], [Op::Answer { .. }]) && r.plan.scope.is_empty(), "{r:?}");
+    // A question the app cannot settle is still asked.
+    let which = reply(json!([{ "op": "clarify", "question": "어떤 문서를 요약할까요?" }]), json!({}), 0.4);
+    let (r, _) = run(&ctx(), "그 문서 요약해줘", which);
+    assert!(r.plan.is_clarification(), "{r:?}");
+
+    // 2. The reply "유형 상관없이 전부": `all` (or the project's name) in the type slot is no condition.
+    let ask_back = format!("{text}\n\n[어시스턴트 질문] {asked}\n[사용자 답변] 유형 상관없이 전부");
+    for written in ["all", "ALL", "전체", "모든 문서", "AAA", "AAA 프로젝트"] {
+        for ops in
+            [json!([{ "op": "summarize", "target": "set" }]), json!([{ "op": "answer", "question": "AAA가 무엇인가" }])]
+        {
+            let (r, calls) = run(&c, &ask_back, reply(ops, json!({ "filter": { "doc_type": written } }), 0.9));
+            assert_eq!(calls, 1, "{written}: {r:?}");
+            assert!(!r.plan.is_clarification() && r.issues.iter().all(|i| !i.blocking), "{written}: {r:?}");
+            assert_eq!(r.plan.scope.filter.doc_type, None, "{written}: {r:?}");
+            assert_eq!(project_of(&r.plan).as_deref(), Some("p-aaa"), "{written}: {r:?}");
+            assert!(r.issues.iter().all(|i| i.code != "doc_type_ignored"), "{written}: {r:?}");
+        }
+    }
+
+    // 3. A type that does not exist is left out of a question and said so …
+    let answer = json!([{ "op": "answer", "question": "AAA가 무엇인가" }]);
+    let (r, calls) = run(&c, text, reply(answer.clone(), json!({ "filter": { "doc_type": "overview" } }), 0.9));
+    assert_eq!((calls, r.plan.scope.filter.doc_type.clone()), (1, None), "{r:?}");
+    assert!(
+        r.issues.iter().any(|i| i.code == "doc_type_ignored" && !i.blocking && i.message.contains("overview")),
+        "{r:?}"
+    );
+    // … and so is a type the sentence does not name; one it names stays, and a summary keeps the model's.
+    let (r, _) = run(&c, text, reply(answer.clone(), json!({ "filter": { "doc_type": "contract" } }), 0.9));
+    assert_eq!(r.plan.scope.filter.doc_type, None, "{r:?}");
+    assert!(r.issues.iter().any(|i| i.code == "doc_type_ignored" && i.message.contains("계약서")), "{r:?}");
+    let (r, _) = run(
+        &c,
+        "AAA 프로젝트 계약서에서 위약금이 얼마인지 알려줘",
+        reply(answer.clone(), json!({ "filter": { "doc_type": "contract" } }), 0.9),
+    );
+    assert_eq!(r.plan.scope.filter.doc_type.as_deref(), Some("contract"), "{r:?}");
+    assert_eq!(project_of(&r.plan).as_deref(), Some("p-aaa"), "{r:?}");
+    let summary = json!([{ "op": "summarize", "target": "set" }]);
+    let (r, _) =
+        run(&c, "회의 기록 요약해줘", reply(summary.clone(), json!({ "filter": { "doc_type": "contract" } }), 0.9));
+    assert_eq!(r.plan.scope.filter.doc_type.as_deref(), Some("contract"), "{r:?}");
+
+    // 4. A question the model was unsure about is answered, not turned into "맞나요?".
+    let (r, _) = run(&c, text, reply(answer.clone(), json!({}), 0.3));
+    assert!(matches!(&r.plan.operations[..], [Op::Answer { .. }]) && !r.plan.is_clarification(), "{r:?}");
+
+    // 5. A command keeps its type check: an unknown type is asked about in Korean, with the types that exist …
+    let delete = json!([{ "op": "delete" }]);
+    let (r, calls) =
+        run(&c, "보고서 삭제해줘", reply(delete.clone(), json!({ "filter": { "doc_type": "report" } }), 0.9));
+    assert!(calls >= 2 && r.plan.is_clarification(), "{r:?}");
+    let question = r.plan.clarification_question.clone().unwrap_or_default();
+    assert!(question.contains("'report' 문서 유형을 알아보지 못했습니다") && question.contains("계약서"), "{question}");
+    assert!(!question.contains("unknown document type"), "{question}");
+    // … and `all` on a command is no type, so the command still has to say which documents.
+    let (r, _) = run(&c, "문서 삭제해줘", reply(delete, json!({ "filter": { "doc_type": "all" } }), 0.9));
+    assert!(r.plan.is_clarification(), "{r:?}");
+    assert!(r.plan.clarification_question.clone().unwrap_or_default().contains("어떤 문서를 대상으로"), "{r:?}");
+}
+
+/// 0.8.2 — the plans Gemma 4 E4B wrote for the user's sentences (eval run of 2026-11-12, replayed):
+/// `explain` with a note to itself, the whole sentence or the term as the "selection", and the
+/// project in the type slot.
+#[test]
+fn the_plans_the_real_model_wrote_for_a_project_question_are_answered() {
+    let mut c = ctx();
+    c.projects = vec![ProjectSummary { id: "p-aaa".into(), name: "AAA".into(), status: "active".into() }];
+    let run = |c: &PlanContext, text: &str, ops: Value, scope: Value| {
+        let chat = StageChat::new();
+        chat.push("families", json!({ "families": ["ask"] }));
+        chat.push("plan", json!({ "summary": "s", "unmet": "", "intent": ops[0]["op"], "scope": scope, "operations": ops, "requires_confirmation": false, "confidence": 0.9, "clarification_question": "" }));
+        let r = plan(Some(&deps(&chat)), text, c, PlanMode::ModelFirst).unwrap();
+        assert_eq!(chat.calls("plan"), 1, "{r:?}");
+        assert!(!r.plan.is_clarification() && r.issues.iter().all(|i| !i.blocking), "{r:?}");
+        assert_eq!(r.plan.scope.filter.project_id.as_deref(), Some("p-aaa"), "{r:?}");
+        assert_eq!(r.plan.scope.filter.doc_type, None, "{r:?}");
+        r
+    };
+    // A note to itself as the selection: the user's sentence is the question.
+    let text = "AAA 프로젝트 내에서 AAA 가 무엇인지 요약해서 설명해줘";
+    let note = "AAA가 무엇인지 (AAA 프로젝트 내에서) 라는 질문 형태의 질문을 사용합니다. 질문을 명확히 하기 위해 question 파라미터를 사용합니다. scope는 project로 설정합니다.";
+    let r = run(&c, text, json!([{ "op": "explain", "selection": note }]), json!({ "doc_ids": [] }));
+    assert!(
+        matches!(&r.plan.operations[..], [Op::Answer { question, mode: None, knowledge: None, .. }] if question == text),
+        "{r:?}"
+    );
+    assert_eq!(r.plan.intent, OpKind::Answer, "{r:?}");
+    // The term the user named is a selection and stays an explanation.
+    let r = run(
+        &c,
+        "AAA 프로젝트에서 AAA가 무엇인지 알려줘",
+        json!([{ "op": "explain", "selection": "AAA" }]),
+        json!({ "doc_ids": [] }),
+    );
+    assert!(matches!(&r.plan.operations[..], [Op::Explain { selection: Some(s), .. }] if s == "AAA"), "{r:?}");
+    // The whole sentence as the selection (a project is open, none named): answered.
+    let mut open = c.clone();
+    open.scope_project = Some("p-aaa".into());
+    let asked = "AAA가 무엇인지 설명해줘";
+    let r = run(&open, asked, json!([{ "op": "explain", "selection": asked }]), json!({ "doc_ids": [] }));
+    assert!(matches!(&r.plan.operations[..], [Op::Answer { question, .. }] if question == asked), "{r:?}");
+    // The project in the type slot: "project" (search) and "project:AAA" (summary after the ask-back reply).
+    let r = run(
+        &c,
+        "AAA 프로젝트에서 AAA가 무엇인지 검색해줘",
+        json!([{ "op": "search", "query": "AAA", "mode": "hybrid", "top_k": 10 }]),
+        json!({ "filter": { "doc_type": "project" } }),
+    );
+    assert!(matches!(&r.plan.operations[..], [Op::Search { query, .. }] if query == "AAA"), "{r:?}");
+    assert!(r.issues.iter().all(|i| i.code != "doc_type_ignored"), "{r:?}");
+    let reply =
+        format!("{text}\n\n[어시스턴트 질문] 어떤 문서 유형을 지정해야 하나요?\n[사용자 답변] 유형 상관없이 전부");
+    let r = run(
+        &c,
+        &reply,
+        json!([{ "op": "summarize", "target": "each_doc" }]),
+        json!({ "filter": { "doc_type": "project:AAA" } }),
+    );
+    assert!(matches!(&r.plan.operations[..], [Op::Summarize { .. }]), "{r:?}");
 }

@@ -767,6 +767,7 @@
       "inbox_watch_on": "inbox 감시를 켰습니다.",
       "inbox_watch_off": "inbox 감시를 껐습니다.",
       "document_not_found": "문서를 찾지 못했습니다: {{ref}}",
+      "open_project": "프로젝트를 엽니다",
       "unknown_screen": "알 수 없는 화면: {{ref}}",
       "noop": "아무 것도 하지 않았습니다.",
       "register_form": "'{{name}}' 양식 등록을 시작합니다(필드 그리드 확인).",

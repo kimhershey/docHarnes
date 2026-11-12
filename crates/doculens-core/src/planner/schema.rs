@@ -166,6 +166,7 @@ pub const OP_SPECS: &[OpSpec] = &[
             p("query", ParamType::Str, true, "검색어", "query"),
             p("mode", ParamType::Enum(&["hybrid", "keyword", "semantic"]), false, "검색 방식", "search mode"),
             p("top_k", ParamType::Int, false, "결과 수", "result count"),
+            p("group_by", ParamType::Enum(SUMMARY_GROUPS), false, "결과를 프로젝트·문서 유형·폴더별로 묶어 보이기(‘프로젝트별로’)", "show the hits per project / document type / folder ('by project')"),
         ],
         desc_ko: "문서 검색",
         desc_en: "search documents",
@@ -414,11 +415,11 @@ pub const OP_SPECS: &[OpSpec] = &[
     OpSpec {
         kind: OpKind::Open,
         params: &[
-            p("target", ParamType::Enum(&["document", "page", "folder", "screen"]), true, "열 대상", "what to open"),
-            p("ref", ParamType::Str, true, "문서 이름/id, 'doc:page', 폴더, 화면 이름", "document name / id, 'doc:page', folder or screen"),
+            p("target", ParamType::Enum(&["document", "page", "folder", "screen", "project"]), true, "열 대상(프로젝트를 열라는 말은 project)", "what to open (a project → project)"),
+            p("ref", ParamType::Str, true, "문서 이름/id, 'doc:page', 폴더, 화면 이름, 프로젝트 이름/id", "document name / id, 'doc:page', folder, screen, or project name / id"),
         ],
-        desc_ko: "문서/쪽/폴더/화면 열기",
-        desc_en: "open a document / page / folder / screen",
+        desc_ko: "문서/쪽/폴더/화면/프로젝트 열기",
+        desc_en: "open a document / page / folder / screen / project",
     },
     OpSpec {
         kind: OpKind::Job,
@@ -754,7 +755,8 @@ pub fn scope_schema() -> Value {
                     "status": { "enum": DOC_STATUSES },
                     "tags": { "type": "array", "items": { "type": "string" }, "maxItems": 20 },
                     "min_confidence": { "type": "number" },
-                    "review_status": { "enum": ["none", "pending", "done"] }
+                    "review_status": { "enum": ["none", "pending", "done"] },
+                    "role": { "enum": ["work", "knowledge"] }
                 },
                 "additionalProperties": false
             }

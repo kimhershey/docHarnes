@@ -41,6 +41,7 @@ export function planScopeIsEmpty(scope: Scope | undefined, ignoreProject = false
     (f.tags ?? []).length === 0 &&
     f.min_confidence == null &&
     !f.review_status &&
+    !f.role &&
     (ignoreProject || !f.project_id)
   );
 }
@@ -57,7 +58,7 @@ export function planScopeIsEmpty(scope: Scope | undefined, ignoreProject = false
  * - `none`: the scope narrows to nothing — no document of that type / date / folder. The answer is "no
  *   evidence" for that scope; an empty document list in a request would mean "everything".
  */
-export type PlanAnswerScope = { kind: "selector" } | { kind: "none" } | { kind: "documents"; documents: string[]; projectId: string | null };
+export type PlanAnswerScope = { kind: "selector" } | { kind: "none" } | { kind: "documents"; documents: string[]; projectId: string | null; role?: "work" | "knowledge" | "form" | null };
 
 export function planAnswerScope(plan: Pick<Plan, "scope">, preview: Pick<PlanPreview, "document_ids"> | null | undefined): PlanAnswerScope {
   // Without a preview nothing is known about what the scope resolves to (a response of an older shell).
@@ -65,5 +66,7 @@ export function planAnswerScope(plan: Pick<Plan, "scope">, preview: Pick<PlanPre
   const documents = preview.document_ids ?? [];
   // A project alone does not narrow the documents: with none of its own the project still has its reference material.
   if (documents.length === 0 && !planScopeIsEmpty(plan.scope, true)) return { kind: "none" };
-  return { kind: "documents", documents, projectId: plan.scope.filter?.project_id || null };
+  // 0.8.1: "참고 자료에서 …" / "업무 문서만 …" travels as the role of the search scope.
+  const role = plan.scope.filter?.role ?? null;
+  return { kind: "documents", documents, projectId: plan.scope.filter?.project_id || null, ...(role ? { role } : {}) };
 }

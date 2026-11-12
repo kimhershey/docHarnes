@@ -48,7 +48,7 @@ DocuLens를 **실제 Windows PC에서 설치·실행·빌드·검증**하는 절
 
 1. GitHub Releases에서 `DocuLens-Setup-Lite-<버전>-x64.exe`와 같은 이름의 `.sha256` 파일을 받습니다
    (최신 판: https://github.com/kimhershey/docHarnes/releases/latest ; 판별 변경 내용은 `docs/releases/v<버전>.md`).
-   0.3.0부터는 판마다 Lite 설치파일과 `.sha256`·고지·SBOM만 올립니다. Release가 있는 판은 v0.1.0~v0.4.0, v0.6.0, v0.8.0이고,
+   0.3.0부터는 판마다 Lite 설치파일과 `.sha256`·고지·SBOM만 올립니다. Release가 있는 판은 v0.1.0~v0.4.0, v0.6.0, v0.8.0~v0.8.2이고,
    0.5.0과 0.7.0은 Release가 없습니다(0.5.0의 변경은 0.6.0 판에, 0.7.0의 변경은 0.8.0 판에 들어 있음).
    - 아직 릴리스에 올리지 않은 빌드(`publish=false`)는 Actions의 해당 실행 페이지 하단 **Artifacts**에서
      `DocuLens-Setup-<Lite|Full>-<버전>-x64` zip으로 받습니다(GitHub 로그인 필요, 90일 보관). zip 안에 설치파일과 `.sha256`이 있습니다.

@@ -648,6 +648,8 @@ pub enum OpenTarget {
     Page,
     Folder,
     Screen,
+    /// 0.8.1: a project's page (`ref` = project id or name).
+    Project,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -929,6 +931,9 @@ pub enum Op {
         mode: Option<SearchMode>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         top_k: Option<u32>,
+        /// 0.8.1: the hits shown per project / document type / folder ("프로젝트별로 검색해줘").
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group_by: Option<SummaryGroup>,
     },
     Answer {
         question: String,
@@ -1552,6 +1557,11 @@ pub struct ScopeFilter {
     /// Documents of one project (id; the validator resolves names) — plan §6 project scope.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
+    /// The kind of document (0.8.1): `work` = 업무 문서, `knowledge` = 참고 자료 ("참고 자료에서 …").
+    /// With a project, `knowledge` is the project's reference group. `None` = as before: a
+    /// project's work documents, or every kind without a project.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<RoleParam>,
 }
 
 impl ScopeFilter {
@@ -1563,6 +1573,7 @@ impl ScopeFilter {
             && self.vendor.is_none()
             && self.status.is_none()
             && self.project_id.is_none()
+            && self.role.is_none()
             && self.tags.is_empty()
             && self.min_confidence.is_none()
             && self.review_status.is_none()

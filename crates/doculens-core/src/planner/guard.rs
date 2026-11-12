@@ -462,7 +462,9 @@ fn keep_the_split(text: &str, plan: &mut Plan) -> bool {
         Op::Move { group_by, .. } => !matches!(group_by, None | Some(GroupBy::None)),
         Op::Organize { .. } | Op::Export { .. } | Op::ClassifyProjects { .. } => true,
         Op::Aggregate { group_by, .. } => !matches!(group_by, None | Some(GroupBy::None)),
-        Op::Summarize { group_by, .. } => !matches!(group_by, None | Some(SummaryGroup::None)),
+        Op::Summarize { group_by, .. } | Op::Search { group_by, .. } => {
+            !matches!(group_by, None | Some(SummaryGroup::None))
+        }
         _ => false,
     });
     if taken {
@@ -480,6 +482,15 @@ fn keep_the_split(text: &str, plan: &mut Plan) -> bool {
                     *group_by = Some(group);
                 } else {
                     dropped = true;
+                }
+            }
+            // "프로젝트별로 검색해줘" (0.8.1): the hits per project / type / folder.
+            Op::Search { group_by, .. }
+                if split != SplitBy::Document && matches!(group_by, None | Some(SummaryGroup::None)) =>
+            {
+                match summary_group(text) {
+                    Some(group) => *group_by = Some(group),
+                    None => dropped = true,
                 }
             }
             Op::Aggregate { group_by, .. }
@@ -669,6 +680,354 @@ pub fn type_filter_repair(text: &str, plan: &mut Plan, ctx: &super::PlanContext,
             format!("'{}' from the sentence was added as the document filter", only.label_en)
         },
     ))
+}
+
+/// Plans that only ask about what the documents say: questions, searches, explanations,
+/// comparisons and summaries. Nothing is changed, so they are answered rather than asked back.
+pub fn only_asks(plan: &Plan) -> bool {
+    !plan.operations.is_empty()
+        && plan.operations.iter().all(|op| {
+            matches!(
+                op,
+                Op::Answer { .. } | Op::Search { .. } | Op::Explain { .. } | Op::Compare { .. } | Op::Summarize { .. }
+            )
+        })
+}
+
+/// What a model writes into the type slot to say "whatever the type".
+fn every_type(value: &str) -> bool {
+    const ALL: &[&str] = &[
+        "",
+        "all",
+        "any",
+        "every",
+        "everything",
+        "none",
+        "null",
+        "alltypes",
+        "anytype",
+        "alldocuments",
+        "document",
+        "documents",
+        "전체",
+        "전부",
+        "모두",
+        "모든",
+        "문서",
+        "모든문서",
+        "전체문서",
+        "모든유형",
+        "전체유형",
+        "없음",
+        "상관없음",
+        "무관",
+    ];
+    ALL.contains(&super::compact(value).as_str())
+}
+
+/// 0.8.2 — a type is a condition only when the user's words name one. The scope the model writes has
+/// no place for "this project" or "everything", so on the user's PC "AAA 프로젝트 내에서 AAA가 무엇인지
+/// 설명해줘" came back with the type slot filled with `all` (the validator rejected the plan twice:
+/// "unknown document type 'all'"). Run before the validator:
+/// - "all" / "전체" in the type slot is no condition, for every plan;
+/// - a type that does not exist is left out of a plan that only asks (a command keeps the
+///   validator's error and its re-query: leaving the condition out would widen what it changes);
+/// - a type the user's words do not name is left out of a question / search / explanation /
+///   comparison (a summary keeps the type the model chose: it reads every document in scope).
+pub fn untyped_scope(text: &str, plan: &mut Plan, ctx: &super::PlanContext, ko: bool) -> Option<PlanIssue> {
+    let written = plan.scope.filter.doc_type.clone()?;
+    if ctx.doc_types.is_empty() {
+        return None;
+    }
+    let Some(known) = ctx.doc_type(&written) else {
+        if every_type(&written) {
+            plan.scope.filter.doc_type = None;
+            return None;
+        }
+        if !only_asks(plan) {
+            return None;
+        }
+        plan.scope.filter.doc_type = None;
+        // The project's name in the type slot: `where_to_look` scopes the plan to it, nothing to say.
+        let key = super::compact(&written);
+        // (the real model also writes "project" and "project:AAA" there)
+        let is_project = key.starts_with("project")
+            || key.contains("프로젝트")
+            || (key.chars().count() >= 2
+                && ctx.projects.iter().any(|p| {
+                    let name = super::compact(&p.name);
+                    !name.is_empty() && (name.contains(&key) || key.contains(&name))
+                }));
+        return (!is_project).then(|| {
+            PlanIssue::warn(
+                "scope.filter.doc_type",
+                "doc_type_ignored",
+                if ko {
+                    format!("'{written}' 유형은 없어 유형 조건 없이 진행합니다")
+                } else {
+                    format!("there is no document type '{written}'; continuing without a type condition")
+                },
+            )
+        });
+    };
+    let retrieves = plan
+        .operations
+        .iter()
+        .all(|op| matches!(op, Op::Answer { .. } | Op::Search { .. } | Op::Explain { .. } | Op::Compare { .. }));
+    if plan.operations.is_empty() || !retrieves {
+        return None;
+    }
+    let named = super::rules::doc_types_named(&super::rules::user_words(text), ctx);
+    if named.iter().any(|d| d.slug == known.slug) {
+        return None;
+    }
+    let (label_ko, label_en) = (known.label_ko.clone(), known.label_en.clone());
+    plan.scope.filter.doc_type = None;
+    Some(PlanIssue::warn(
+        "scope.filter.doc_type",
+        "doc_type_ignored",
+        if ko {
+            format!("문장에 없는 유형 조건('{label_ko}')은 빼고 찾습니다")
+        } else {
+            format!("the type condition '{label_en}' is not in the sentence and was left out")
+        },
+    ))
+}
+
+/// 0.8.2 — a sentence the routing call read as a question / search / summary is answered, not
+/// answered with a question the app can settle itself: which type of document (never needed to
+/// read), or where to look when the sentence names a project or one is open. A clarification
+/// becomes a grounded answer to the user's words (`where_to_look` then scopes it); a plan that only
+/// asks and came with a low confidence runs as planned. Any other question is still asked.
+pub fn answer_instead_of_asking(
+    text: &str,
+    plan: &mut Plan,
+    ctx: &super::PlanContext,
+    families: &[super::OpFamily],
+    ko: bool,
+) -> bool {
+    if families != [super::OpFamily::Ask] || carried_text(text).is_some() {
+        return false;
+    }
+    // Either the model asked back, or it planned a question / search / summary it was unsure about
+    // (which `finalize` would turn into "… 맞나요?").
+    let unsure = !plan.is_clarification() && only_asks(plan) && plan.confidence < super::MIN_CONFIDENCE;
+    if !plan.is_clarification() && !unsure {
+        return false;
+    }
+    let question = plan
+        .clarification_question
+        .clone()
+        .or_else(|| {
+            plan.operations.iter().find_map(|op| match op {
+                Op::Clarify { question } => Some(question.clone()),
+                _ => None,
+            })
+        })
+        .unwrap_or_default();
+    let lower = question.to_lowercase();
+    let about_type = ["유형", "종류", "형식", "doc_type", "document type", "type of document"]
+        .iter()
+        .any(|w| lower.contains(w))
+        || ctx.doc_types.iter().any(|d| d.slug.len() >= 3 && lower.contains(&format!("'{}'", d.slug.to_lowercase())));
+    if !(about_type || project_named(text, ctx).is_some() || ctx.scope_project.is_some()) {
+        return false;
+    }
+    plan.clarification_question = None;
+    plan.confidence = plan.confidence.max(super::MIN_CONFIDENCE);
+    if unsure {
+        return true;
+    }
+    let said = super::rules::user_words(text);
+    plan.operations =
+        vec![Op::Answer { question: said.trim().to_string(), cite: None, knowledge: None, mode: None, reply: None }];
+    plan.intent = super::OpKind::Answer;
+    plan.requires_confirmation = false;
+    plan.summary = Some(if ko {
+        "문서에서 찾아 답합니다".to_string()
+    } else {
+        "Answers from the documents".to_string()
+    });
+    true
+}
+
+/// 0.8.2 — the real model (Gemma 4 E4B) plans "X가 무엇인지 설명해줘" as `explain` and writes into
+/// `selection` whatever comes to it: the term ("AAA"), the whole sentence, or a note to itself
+/// ("… question 파라미터를 사용합니다. scope는 project로 설정합니다."). `explain` explains a piece of
+/// text the user pointed at, and only a part of the user's own words is one; anything else is the
+/// question itself and becomes a grounded answer to the user's sentence.
+pub fn explain_what_was_said(text: &str, plan: &mut Plan) -> bool {
+    if carried_text(text).is_some() {
+        return false;
+    }
+    let said = super::rules::user_words(text);
+    let key = super::compact(&said);
+    let mut changed = false;
+    for op in &mut plan.operations {
+        let Op::Explain { selection, .. } = op else { continue };
+        let part = selection.as_deref().map(super::compact).filter(|s| !s.is_empty());
+        let pointed_at = part
+            .as_ref()
+            .is_some_and(|s| key.contains(s.as_str()) && s.chars().count() * 10 <= key.chars().count() * 7);
+        if pointed_at {
+            continue;
+        }
+        *op = Op::Answer { question: said.trim().to_string(), cite: None, knowledge: None, mode: None, reply: None };
+        changed = true;
+    }
+    if changed && !plan.operations.iter().any(|o| o.kind() == plan.intent) {
+        plan.recompute_intent();
+    }
+    changed
+}
+
+/// The kind of document the user's words name (0.8.1): "참고 자료에서 …" → reference material,
+/// "업무 문서만 …" → work documents. Both named: the one that is not ruled out ("참고 자료 말고").
+fn kind_named(text: &str) -> Option<super::RoleParam> {
+    const REFERENCE: &[&str] =
+        &["참고자료", "참고문서", "레퍼런스", "referencematerial", "referencedocument", "references"];
+    const WORK: &[&str] = &["업무문서", "작업문서", "workdocument"];
+    const NOT: &[&str] = &["말고", "빼고", "제외", "아니라", "except", "notthe", "butnot"];
+    let said = super::compact(&super::rules::user_words(text));
+    let find = |words: &[&str]| words.iter().filter_map(|w| said.find(w).map(|at| at + w.len())).min();
+    let ruled_out = |end: usize| {
+        let after: String = said[end..].chars().take(6).collect();
+        NOT.iter().any(|n| after.contains(n))
+    };
+    match (find(REFERENCE), find(WORK)) {
+        (Some(r), None) => (!ruled_out(r)).then_some(super::RoleParam::Knowledge),
+        (None, Some(w)) => (!ruled_out(w)).then_some(super::RoleParam::Work),
+        (Some(r), Some(w)) => match (ruled_out(r), ruled_out(w)) {
+            (true, false) => Some(super::RoleParam::Work),
+            (false, true) => Some(super::RoleParam::Knowledge),
+            _ => None,
+        },
+        (None, None) => None,
+    }
+}
+
+/// The one project the user's words name (a name that is part of a longer named one counts for the longer).
+fn project_named<'a>(text: &str, ctx: &'a super::PlanContext) -> Option<&'a super::ProjectSummary> {
+    let said = super::compact(&super::rules::user_words(text));
+    let hits: Vec<(&super::ProjectSummary, String)> = ctx
+        .projects
+        .iter()
+        .map(|p| (p, super::compact(&p.name)))
+        .filter(|(_, name)| name.chars().count() >= 2 && said.contains(name.as_str()))
+        .collect();
+    let keys: Vec<&String> = hits.iter().map(|(_, k)| k).collect();
+    let mut own = hits.iter().filter(|(_, k)| !keys.iter().any(|o| *o != k && o.contains(k.as_str())));
+    match (own.next(), own.next()) {
+        (Some((p, _)), None) => Some(p),
+        _ => None,
+    }
+}
+
+/// Ops that only read the documents in scope: the scope may be narrowed for them from the user's words.
+fn reads_documents(op: &Op) -> bool {
+    match op {
+        Op::Search { .. } | Op::Summarize { .. } | Op::Explain { .. } | Op::Aggregate { .. } | Op::Export { .. } => {
+            true
+        }
+        Op::Answer { knowledge, mode, .. } => *knowledge != Some(false) && mode.is_none(),
+        _ => false,
+    }
+}
+
+/// 0.8.1: what the user's words say about where to look goes into a plan that left it out — the kind
+/// of document ("참고 자료에서 …"; the plan grammar had no place for it before), the project a sentence
+/// names ("한빛 프로젝트에서 …"; the model's scope cannot name a project), and "X 프로젝트 열어줘", which
+/// the model could only express as a folder or the library screen. Applied to model and rule plans.
+pub fn where_to_look(text: &str, plan: &mut Plan, ctx: &super::PlanContext, ko: bool) -> Vec<PlanIssue> {
+    let mut notes = Vec::new();
+    if plan.is_clarification() || plan.operations.is_empty() {
+        return notes;
+    }
+    let said = super::compact(&super::rules::user_words(text));
+    // "X 프로젝트 열어줘": the project's page, not a folder or the library.
+    if let [Op::Open { target, reference }] = plan.operations.as_mut_slice() {
+        let wants_folder = ["폴더", "folder"].iter().any(|w| said.contains(w));
+        if !matches!(target, super::OpenTarget::Project | super::OpenTarget::Page) && !wants_folder {
+            if let Some(p) = project_named(text, ctx) {
+                *target = super::OpenTarget::Project;
+                *reference = p.id.clone();
+                plan.summary = Some(if ko {
+                    format!("'{}' 프로젝트를 엽니다", p.name)
+                } else {
+                    format!("Open the project '{}'", p.name)
+                });
+            }
+        }
+        return notes;
+    }
+    if !plan.operations.iter().all(reads_documents) {
+        return notes;
+    }
+    let named_documents = !plan.scope.doc_ids.is_empty() || plan.scope.folder.is_some();
+    if plan.scope.filter.role.is_none() {
+        if let Some(kind) = kind_named(text) {
+            plan.scope.filter.role = Some(kind);
+            // (the words that named the kind are not what to search for)
+            for op in &mut plan.operations {
+                if let Op::Search { query, .. } = op {
+                    let cleaned = [
+                        "참고 자료에서",
+                        "참고자료에서",
+                        "참고 자료만",
+                        "참고자료만",
+                        "참고 자료",
+                        "참고자료",
+                        "업무 문서에서",
+                        "업무문서에서",
+                        "업무 문서만",
+                        "업무 문서",
+                        "업무문서",
+                    ]
+                    .iter()
+                    .fold(query.clone(), |q, w| q.replace(w, " "));
+                    // (the phrase rules may have taken "자료" / "문서" out of the query already)
+                    let cleaned = cleaned
+                        .split_whitespace()
+                        .filter(|w| !["참고", "업무", "에서", "만", "참고에서", "업무에서"].contains(w))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    if !cleaned.is_empty() {
+                        *query = cleaned;
+                    }
+                }
+            }
+            let label = match (kind, ko) {
+                (super::RoleParam::Knowledge, true) => "참고 자료",
+                (super::RoleParam::Knowledge, false) => "reference material",
+                (_, true) => "업무 문서",
+                (_, false) => "work documents",
+            };
+            notes.push(PlanIssue::warn(
+                "scope.filter.role",
+                "scope_filled",
+                if ko {
+                    format!("문장대로 {label}만 대상으로 합니다")
+                } else {
+                    format!("only {label}, as the sentence says")
+                },
+            ));
+        }
+    }
+    if plan.scope.filter.project_id.is_none() && !named_documents && !super::validate::per_project(plan) {
+        if let Some(p) = project_named(text, ctx) {
+            plan.scope.filter.project_id = Some(p.id.clone());
+            notes.push(PlanIssue::warn(
+                "scope.filter.project_id",
+                "scope_filled",
+                if ko {
+                    format!("문장의 '{}' 프로젝트를 대상으로 합니다", p.name)
+                } else {
+                    format!("the project '{}' from the sentence is the scope", p.name)
+                },
+            ));
+        }
+    }
+    notes
 }
 
 /// Checks a model plan against the sentence it was made from (0.8.0 plan §1.3 / §1.5). Anything
@@ -924,6 +1283,86 @@ mod tests {
         assert!(type_filter_repair("견적서가 뭐야?", &mut p, &ctx, true).is_none());
     }
 
+    /// 0.8.1: where to look comes from the user's words — the kind of document, the project, and
+    /// "X 프로젝트 열어줘" opens the project instead of a folder or the library.
+    #[test]
+    fn the_sentence_says_where_to_look() {
+        let ctx = crate::planner::PlanContext {
+            projects: vec![
+                crate::planner::ProjectSummary {
+                    id: "p1".into(), name: "한빛 포털".into(), status: "active".into()
+                },
+                crate::planner::ProjectSummary { id: "p2".into(), name: "새봄 ERP".into(), status: "active".into() },
+            ],
+            ..Default::default()
+        };
+        let search = |q: &str| Op::Search { query: q.into(), mode: None, top_k: None, group_by: None };
+        let codes = |text: &str, p: &mut Plan| -> Vec<String> {
+            where_to_look(text, p, &ctx, true).into_iter().map(|i| i.code).collect()
+        };
+        // The kind of document; the words that named it leave the query.
+        let mut p = model_plan(vec![search("참고 자료에서 납품 기한")]);
+        assert_eq!(codes("참고 자료에서 납품 기한 검색해줘", &mut p), vec!["scope_filled"]);
+        assert_eq!(p.scope.filter.role, Some(crate::planner::RoleParam::Knowledge));
+        assert!(matches!(&p.operations[0], Op::Search { query, .. } if query == "납품 기한"));
+        let mut p = model_plan(vec![Op::Summarize { target: None, length: None, group_by: None }]);
+        codes("업무 문서만 요약해줘", &mut p);
+        assert_eq!(p.scope.filter.role, Some(crate::planner::RoleParam::Work));
+        let mut p = model_plan(vec![search("납품 기한")]);
+        codes("참고 자료 말고 업무 문서에서 납품 기한 찾아줘", &mut p);
+        assert_eq!(p.scope.filter.role, Some(crate::planner::RoleParam::Work));
+        // Nothing said, or an op that is about reference groups: untouched.
+        let mut p = model_plan(vec![search("납품 기한")]);
+        assert!(codes("납품 기한 검색해줘", &mut p).is_empty() && p.scope.filter.role.is_none());
+        let mut p = model_plan(vec![Op::SetRole { role: crate::planner::RoleParam::Knowledge }]);
+        assert!(codes("선택한 문서를 참고 자료로 바꿔줘", &mut p).is_empty() && p.scope.filter.role.is_none());
+
+        // The project the sentence names is the scope.
+        let mut p = model_plan(vec![search("납품 기한")]);
+        assert_eq!(codes("한빛 포털 프로젝트에서 납품 기한 검색해줘", &mut p), vec!["scope_filled"]);
+        assert_eq!(p.scope.filter.project_id.as_deref(), Some("p1"));
+        // … not when the hits are wanted per project, and not when two projects are named.
+        let mut p = model_plan(vec![Op::Search {
+            query: "납품".into(),
+            mode: None,
+            top_k: None,
+            group_by: Some(SummaryGroup::Project),
+        }]);
+        assert!(codes("한빛 포털 말고 프로젝트별로 납품 검색", &mut p).is_empty());
+        let mut p = model_plan(vec![search("납품")]);
+        assert!(codes("한빛 포털과 새봄 ERP에서 납품 검색", &mut p).is_empty() && p.scope.filter.project_id.is_none());
+
+        // "X 프로젝트 열어줘" came back as a folder / the library screen.
+        for op in [
+            Op::Open { target: crate::planner::OpenTarget::Folder, reference: "한빛 포털".into() },
+            Op::Open { target: crate::planner::OpenTarget::Screen, reference: "library".into() },
+        ] {
+            let mut p = model_plan(vec![op]);
+            codes("한빛 포털 프로젝트 열어줘", &mut p);
+            assert!(
+                matches!(&p.operations[0], Op::Open { target: crate::planner::OpenTarget::Project, reference } if reference == "p1"),
+                "{:?}",
+                p.operations
+            );
+        }
+        // A folder that is asked for stays a folder.
+        let mut p = model_plan(vec![Op::Open {
+            target: crate::planner::OpenTarget::Folder,
+            reference: "한빛 포털".into(),
+        }]);
+        codes("한빛 포털 폴더 열어줘", &mut p);
+        assert!(matches!(&p.operations[0], Op::Open { target: crate::planner::OpenTarget::Folder, .. }));
+
+        // "프로젝트별로 검색해줘": the search keeps the split; one it cannot make is reported.
+        let mut p = model_plan(vec![search("납품 기한")]);
+        assert!(contract_checks("프로젝트별로 납품 기한 검색해줘", &mut p, true).is_empty());
+        assert!(matches!(&p.operations[0], Op::Search { group_by: Some(SummaryGroup::Project), .. }));
+        let mut p = model_plan(vec![search("납품 기한")]);
+        let notes: Vec<String> =
+            contract_checks("담당자별로 납품 기한 검색해줘", &mut p, true).into_iter().map(|i| i.code).collect();
+        assert_eq!(notes, vec!["grouping_dropped"]);
+    }
+
     /// Audit USR-1: the plans the model made of the reported sentences ran on its own confidence.
     #[test]
     fn a_settings_change_the_sentence_does_not_name_is_confirmed_first() {
@@ -1031,7 +1470,7 @@ mod tests {
             None
         );
         // Ops that are not settings changes are not this check's business.
-        let mut p = model_plan(vec![Op::Search { query: "한빛".into(), mode: None, top_k: None }]);
+        let mut p = model_plan(vec![Op::Search { query: "한빛".into(), mode: None, top_k: None, group_by: None }]);
         assert!(codes("한빛 계약 찾아줘", &mut p).is_empty());
     }
 

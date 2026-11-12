@@ -1701,7 +1701,7 @@ export type ModelTierChoice = Tier | "auto";
 export type WorkspaceAction = "open" | "create" | "close" | "forget";
 export type MaintenanceAction = "purge_now" | "clear_finished_jobs" | "rescan" | "inbox_scan";
 export type RoleChoice = "work" | "knowledge" | "form";
-export type OpenTarget = "document" | "page" | "folder" | "screen";
+export type OpenTarget = "document" | "page" | "folder" | "screen" | "project";
 /** `explain.scope` (appendix D). */
 /** `reference` = the 공통 참고 자료 (0.5.0; `collection` was its pre-0.5.0 name and still deserialises in Rust). */
 export type ExplainScope = "kb" | "reference" | "project" | "document";
@@ -1721,7 +1721,7 @@ export type Op =
   | { op: "validate" }
   | { op: "review"; action: ReviewOp; field?: string | null; value?: string | null; only?: ReviewOnly | null }
   | { op: "reindex"; scope?: "fts" | "vec" | "all" | null }
-  | { op: "search"; query: string; mode?: SearchMode | null; top_k?: number | null }
+  | { op: "search"; query: string; mode?: SearchMode | null; top_k?: number | null; group_by?: SummaryGroup | null }
   /**
    * `mode` (0.8.0): the turn is not a document question — `chat` = greeting / small talk (nothing is looked
    * up), `general` = a question that is not about the documents (evidence when there is some, general
@@ -1801,6 +1801,8 @@ export interface ScopeFilter {
   review_status?: ReviewStatus | null;
   /** Documents of one project (plan §6 project scope). */
   project_id?: string | null;
+  /** 0.8.1: the kind of document — `work` = 업무 문서, `knowledge` = 참고 자료 (a project's reference group with `project_id`). */
+  role?: "work" | "knowledge" | "form" | null;
 }
 
 export interface Scope {

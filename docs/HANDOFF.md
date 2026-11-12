@@ -1863,7 +1863,28 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
   변경 직후 수 밀리초 안에 창을 닫으면 잃을 수 있음(KNO-9 잔여). ⑯ 쓰지 않는 번역 키 `planner.ui.inbox_watch_on/off`.
 - **진행 기록**: 사용자가 작업 도중 PR #26으로 `release/0.8.0`(5c2cc30)을 `main`에 병합(45a2c1b) → `main` CI run 42983528996의 Web 잡이 `e2e/planner.spec.ts` 되묻기 테스트에서 실패. 원인은 테스트(플랜 카드 3개를 기대했으나 집계의 플랜 카드까지 4개가 맞고,
   새 카드가 도착하기 직전에 검사가 돌 때만 통과) — bcd2447에서 수정. 브랜치는 병합된 `main`에서 다시 시작했고(같은 이름), 그 뒤의 작업(화면 후속 25항목 병합 f4dbe66, 실측 반영 3ace0ef)은 PR #27. 같은 종류의 간헐 실패 2건(`planner.spec.ts` 새로 고침 테스트, `smoke.spec.ts` 테마 단축키)도 테스트에서 고침.
-<!-- 0.8.0-RELEASE-RECORD -->
+- **릴리스 기록(2026-11-11)**: 최종 커밋 **d002079**(코드는 3ace0ef, 그 위에 문서) — CI run 42992119115(push) 7개 잡 통과(3ace0ef는 run 42991891006, 되묻기 테스트 수정 bcd2447은 run 42989989599).
+  설치파일: Actions "Windows installer (manual)" run **42993106705**(`--ref release/0.8.0`, `ref=d002079…`, `variant=lite`, `publish=true`) 성공 → **Release v0.8.0** 게시(태그 `v0.8.0` = d002079, 2026-11-11T09:27:56Z).
+  자산: `DocuLens-Setup-Lite-0.8.0-x64.exe` 51,402,789 B, `.sha256`(43578a8670fc7352065c12639bbe9f34c2563d0d5143aa42ca2a27b9731870ea — GitHub가 계산한 자산 다이제스트와 일치), `THIRD-PARTY-NOTICES.md`, `sbom.cdx.json`. 설치·실행은 하지 않았다.
+  `main`: 사용자가 PR #26(5c2cc30까지; CI의 Web 잡이 되묻기 테스트로 실패)과 PR #27(d002079까지)을 병합 — 병합 커밋 69adf24의 CI run 42993194709 7개 잡 통과. `release/0.8.0`은 그 뒤 `main`에서 다시 시작했고 이 기록 커밋만 앞서 있다(다음 PR 때 함께 병합).
+- **사용자 결정(2026-11-11, 릴리스 뒤)**: PKG-1에 대해 "앞으로 lite 만 쓸려고" — Full 설치파일·CUDA 팩은 더 만들지 않는다. 이미 게시된 자산(v0.2.0의 Full 설치파일, v0.1.0의 CUDA 팩)은 그대로 두었고(내리라는 지시 없음), 문서의 "NVIDIA PC는 v0.1.0의 CUDA 팩" 안내도 그대로다 —
+  Lite 전용으로 굳히려면 그 안내와 `release-windows.yml`의 `full` 변형·`cuda-packs.yml`을 정리하는 것이 다음 일이다(앱 EULA는 그러면 필요 없음).
+
+### 0.8.1 — 프로젝트의 참고 자료 · 문장이 말한 범위 (2026-11-11; 브랜치 `release/0.8.1`, `main` 69adf24에서 분기; 릴리스 노트 `docs/releases/v0.8.1.md`)
+
+- **사용자 보고(0.8.0 설치 뒤)**: ① 검색·요약이 참고 자료가 아니라 업무 문서에서 읽는다 ② 검색이 프로젝트별로 실행되지 않는다(프로젝트를 연 채 검색 / "프로젝트별로 검색") ③ 폴더별 정리에서 참고 자료의 문서가 프로젝트로 인식되지 않는다 ④ "프로젝트 열어줘"가 문서함 폴더 화면으로 간다.
+  사용자 결정: "1, 2, 3, 4 전부 수행 및 0.8.1 릴리즈", 검증은 토큰을 아끼도록 줄인다(항목별 단위 테스트 + 타입 검사 + 관련 E2E + CI 한 번; 독립 검토·실모델 재측정 없음). 참고 자료 구분은 없애지 않고 조건을 추가하는 쪽(사용자 선택).
+- **원인**: 프로젝트의 문서가 두 군데(업무 = `project_documents`, 참고 = 프로젝트 참고 자료 묶음 `collections.project_id` + `collection_docs`)에 있는데 플랜 범위·정리·묶음이 앞쪽만 읽었다. 플랜 문법의 범위에는 프로젝트(`project_id`는 문법 밖)와 문서 종류를 적을 자리가 없었고, `open`에는 프로젝트 대상이 없었다.
+- **구현**: `ScopeFilter.role`(work | knowledge; 프로젝트와 함께면 knowledge = 그 프로젝트의 참고 묶음) — `scope::resolve`, 검색·답변의 `SearchScope.roles`; `Op::Search.group_by` + `exec::search_groups`(payload `groups: [{key,label,hits:[색인]}]`);
+  `OpenTarget::Project`(검증기가 이름 → id); `guard::where_to_look`(모델·규칙 플랜 공통: 사용자가 쓴 말의 종류·프로젝트 이름을 범위에 채움 `scope_filled`, "X 프로젝트 열어줘"를 프로젝트 열기로 바꿈; 읽기 전용 op에만 적용);
+  `guard::keep_the_split`이 검색도 봄; `validate::per_project`에 검색 포함; `projects::repo::all_memberships_with_reference` / `memberships_with_reference`(정리의 `project_vars`, 요약·검색 묶음). 화면: 결과 카드의 묶음 검색(`result-search-group`), `open project`, 답변 요청의 `roles`,
+  선택 범위가 풀리면 열린 프로젝트로 복귀. 모의 백엔드 동기화 + `e2e/harness.spec.ts` 1건.
+- **하지 않은 것**: 문서 종류를 말하지 않았을 때의 기본값은 그대로(검색·질문은 업무 + 참고, 프로젝트 범위의 요약·파일 작업은 업무 문서만). 플랜 카드의 범위 줄에 종류를 따로 표시하지 않음(경고 줄로만 알림). 설명(`explain`) op의 역할 필터. 실제 모델 측정.
+- **검증·릴리스 기록(2026-11-11)**: 로컬 — 코어 `planner::`·`organize::`·`knowledge::`·`projects::` 179건, clippy·fmt, 골든셋 게이트 94.5 %, `npm run typecheck`, vitest 46파일 331건, `e2e/harness.spec.ts` 10건.
+  워크스페이스 전체 `cargo test`·전체 Playwright·Windows 컴파일은 CI로만 확인: 범프 49516c3과 최종 커밋 **c18b896**의 CI(push) 7개 잡 통과.
+  설치파일: run **43001923489**(`--ref release/0.8.1`, `ref=c18b896…`, `variant=lite`, `publish=true`) 성공 → **Release v0.8.1** 게시(태그 `v0.8.1` = c18b896, 2026-11-11T10:29:56Z).
+  자산: `DocuLens-Setup-Lite-0.8.1-x64.exe` 51,413,865 B, `.sha256`(efb6e09162df5595e0bfc7c65da40e2f6d7210fb7148c15f8595928adb483602 — GitHub 자산 다이제스트와 일치), 고지문, SBOM. 설치·실행은 하지 않았다.
+  `main` 병합은 사용자 PR(`release/0.8.1` — 0.8.0 릴리스 기록 커밋 포함).
 
 ### 테스트·검증
 
@@ -1899,6 +1920,28 @@ PDFium·ko-dic 지정. 결과(5회차, 2026-11-04):
 이 환경에서 못 한 것: 설치파일의 릴리스 게시(권한 정책; 설치파일·CUDA 팩 빌드는 Windows 러너에서 완료), 실제 Qwen3.5-4B로 초안 품질·
 규칙 변환 품질·파이프라인 지표, 한컴/Word에서 생성 HWPX/DOCX 열기, OS 토스트·절전 방지 실동작 — 모두 `docs/user-pc-checklist.md`
 P6·P7 항목.
+
+### 0.8.2 — 유형이 필요 없는 질문 (2026-11-12; 브랜치 `release/0.8.2`, `release/0.8.1` 6514e99에서 분기 — 0.8.1이 아직 `main`에 병합되지 않음; 릴리스 노트 `docs/releases/v0.8.2.md`)
+
+- **사용자 보고(0.8.1 설치 뒤)**: "AAA 프로젝트 내에서 AAA 가 무엇인지 요약해서 설명해줘" → 어시스턴트가 문서 유형을 되물음 → "유형 상관없이 전부" → "명령을 해석하지 못했습니다(unknown document type 'all'; known: …)".
+  사용자 지시: "유형이 조건에 없는 질문에 대해서 출력 가능하게 만들어줘. 이 부분이 수정될 경우에 내 질문에 문제 없이 응답이 가능한지 확인해줘. 남은 플랜 한도 내에서 작업 후 릴리즈까지 병행해줘" + "설명/검색/알려줘 의 차이가 무엇인지 확인해줘".
+- **원인**: ① 모델이 쓰는 범위(`scope_schema`)에 프로젝트를 적을 자리가 없어(프로젝트는 `guard::where_to_look`이 문장에서 채움) 모델이 가장 가까운 `filter.doc_type`을 골랐다. ② `doc_type`은 문법상 자유 문자열인데 검증기는 목록에 없는 값을 차단 오류로 처리 →
+  재질의·넓힌 재시도까지 실패하면 검증기의 영어 메시지가 `clarification_text`에 그대로 들어갔다. ③ 모델의 `clarify`는 필요 여부를 따지지 않고 통과했고, 0.8.1의 `where_to_look`은 되묻기·검증 실패에서는 돌지 않았다. ④ 지시문 규칙 5("유형이 목록에 없으면 clarify")가 유형 되묻기를 부추겼다.
+- **구현**: `guard::untyped_scope`(`parse_and_validate`에서 검증기 앞) — 유형 칸의 `all`·"전체"류는 조건 없음(모든 플랜), 없는 유형은 묻기만 하는 플랜(`guard::only_asks`: answer·search·explain·compare·summarize)에서 뺌(`doc_type_ignored`; 그 값이 프로젝트 이름이면 알림 없이),
+  문장에 없는 유형은 answer·search·explain·compare에서 뺌(요약은 모델이 고른 유형 유지 — 범위의 문서를 다 읽으므로). 문서를 바꾸는 명령은 검증기 오류·재질의 그대로, 두 번 실패하면 `llm::doc_type_question`이 한국어로 유형 목록을 안내.
+  `guard::answer_instead_of_asking` — 계열 호출이 `ask` 하나로 읽은 문장에서 모델이 되묻거나(유형을 묻는 질문 / 문장에 프로젝트 이름 / 프로젝트가 열려 있음) 낮은 신뢰도로 묻기만 하는 플랜을 내면, 되묻기는 근거 답변(`answer`)으로 바꾸고 낮은 신뢰도 플랜은 그대로 실행. 그 밖의 되묻기는 유지.
+  `guard::explain_what_was_said` — 모델의 `explain`에서 `selection`이 사용자가 쓴 말의 일부(전체의 70 % 이하)가 아니면 사용자의 문장을 질문으로 하는 `answer`로 바꿈(실모델이 selection에 문장 전체·자기 메모를 적음).
+  `rules::plan`은 되묻기 문장에서 `user_words`만 읽음(규칙 우선 모드에서 어시스턴트 질문의 유형 이름이 `set_doc_type`으로 읽히던 것 — 실모델 실행의 규칙 패스에서 발견). 지시문 규칙 3(ko/en)·축약 지시문에 "유형은 사용자가 말했을 때만, 되묻지 않음, 프로젝트 이름은 유형이 아님".
+- **설명/검색/알려줘**(사용자 질문에 답한 내용, 릴리스 노트 표): `search` = 대목 목록(글 생성 없음), `answer` = 검색 + 모델이 근거로 답, `explain` = 선택 문장·용어를 가리킬 때의 설명(그 밖의 "설명해줘"는 answer), `summarize` = 범위 문서 요약.
+- **하지 않은 것**: 모델 범위 문법에 프로젝트 칸 추가(문법·지시문 변경이라 실모델 전체 재측정이 필요), `doc_type`을 알려진 슬러그 enum으로 제한, 모의 백엔드 동기화(모의는 규칙 기반이라 해당 실패가 없음), 골든셋 항목 추가(모델 경로 문제라 규칙 기준선으로는 잴 수 없음 — 단위 테스트 `a_question_needs_no_document_type`이 관찰된 모델 응답을 재생).
+- **실제 모델 확인(Gemma 4 E4B Q4_K_M, CPU, `/tmp/engine/bin/llama-server`)**: 사용자 문장 5개(`eval/results/planner-real-model/user-sentences-0.8.2.golden.json` + `.context.json`, 결과 `gemma4-e4b-q4km-0.8.2-user-sentences.json`) —
+  5/5 한 번에 계획(되묻기·검증 오류 없음), 범위는 전부 `project_id = p-aaa`. 모델 출력: explain(selection에 자기 메모) / summarize + `doc_type: "project:AAA"` / search + `doc_type: "project"` / explain(selection "AAA") / explain(selection = 문장 전체). 계획 한 건 30초~4분.
+  `explain_what_was_said`는 이 측정 뒤에 넣었고 같은 모델 출력을 `the_plans_the_real_model_wrote_for_a_project_question_are_answered`가 재생한다. 답변 단계(검색 + 생성)는 실제 모델·실제 문서로 확인하지 않았다.
+- **검증·릴리스 기록(2026-11-12)**: 로컬 — 코어 `planner::` 85건, clippy·fmt, 골든셋 게이트 94.5 %(154/163, 변함없음). 워크스페이스 전체 `cargo test`·vitest·Playwright·Windows 컴파일은 CI로만 확인:
+  범프 e416df2(run 43137130141), 63c2243(run 43138856194), 최종 커밋 **05ad4e3**(run 43140374065) 모두 통과. 독립 코드 검토·Windows 설치 실행 없음.
+  설치파일: run **43141224749**(`--ref release/0.8.2`, `ref=05ad4e3…`, `variant=lite`, `publish=true`) 성공 → **Release v0.8.2** 게시(태그 `v0.8.2` = 05ad4e3, 2026-11-12T02:35:52Z).
+  `DocuLens-Setup-Lite-0.8.2-x64.exe` 51,422,142 B, sha256 `021139ec1fbb2f5f5132ad08b3d23cb4afbdef4ad84dfd04fdf54a70d715fdcb`(게시된 `.sha256`·자산 다이제스트와 일치) + `.sha256`·`THIRD-PARTY-NOTICES.md`·`sbom.cdx.json`.
+- **다음**: `release/0.8.2`를 `main`에 병합(0.8.1·0.8.0 릴리스 기록 포함 — 0.8.1 브랜치는 따로 병합할 필요 없음). 모델 범위 문법에 프로젝트 칸을 주는 구조 수정과 E2B·골든셋 전체 실모델 측정은 남아 있다.
 
 ## P6·P7 단계 말 리뷰 반영
 

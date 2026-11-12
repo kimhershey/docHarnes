@@ -250,6 +250,11 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
           navigate(SCREEN_ROUTES[screen]);
           return { summary: t("palette.open_screen", { screen: t(`nav.${screen}`) }) };
         }
+        case "project": {
+          // The planner resolves a project's name to its id (0.8.1: "한빛 프로젝트 열어줘" opens its page).
+          navigate(`/projects/${encodeURIComponent(op.ref.trim())}`);
+          return { summary: t("planner.ui.open_project") };
+        }
         case "folder": {
           const folder = op.ref.trim().replace(/[\\/]+$/, "");
           const target = folder === "" || folder === "all" || folder === "*" ? null : folder;

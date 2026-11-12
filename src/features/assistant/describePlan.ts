@@ -690,7 +690,8 @@ export interface ResultActions {
   reviewDocuments: string[];
   organise: OrganizeOutcome[];
   exports: { index: number; result: ExportResult }[];
-  searches: { index: number; query: string; response: SearchResponse }[];
+  /** `groups` (0.8.1): the hits per project / type / folder — indexes into `response.hits`. */
+  searches: { index: number; query: string; response: SearchResponse; groups: { key: string; label: string; hits: number[] }[] }[];
   answers: { index: number; answer: Answer }[];
   /**
    * `groups` (0.8.0): one combined summary per project / type / folder, or the single "묶음 하나로" summary;
@@ -775,7 +776,12 @@ export function deriveResultActions(execution: PlanExecution, plan: Plan): Resul
         if (isRecord(payload) && typeof payload.path === "string" && typeof payload.absolute === "string") out.exports.push({ index: step.index, result: payload as unknown as ExportResult });
         break;
       case "search":
-        if (isRecord(payload) && Array.isArray(payload.hits)) out.searches.push({ index: step.index, query: op && op.op === "search" ? op.query : "", response: payload as unknown as SearchResponse });
+        if (isRecord(payload) && Array.isArray(payload.hits)) out.searches.push({
+            index: step.index,
+            query: op && op.op === "search" ? op.query : "",
+            response: payload as unknown as SearchResponse,
+            groups: (Array.isArray(payload.groups) ? (payload.groups as unknown[]) : []).filter(isRecord).map((g) => ({ key: String(g.key ?? ""), label: String(g.label ?? ""), hits: Array.isArray(g.hits) ? (g.hits as unknown[]).filter((n): n is number => typeof n === "number") : [] })),
+          });
         break;
       case "answer":
       case "explain":

@@ -4,7 +4,7 @@
 use rusqlite::Connection;
 
 use crate::documents::repo::list_documents;
-use crate::documents::{DocumentFilter, DocumentRecord, DocumentSort, DocumentStatus};
+use crate::documents::{DocumentFilter, DocumentRecord, DocumentRole, DocumentSort, DocumentStatus};
 
 use super::{compact, Scope};
 
@@ -66,11 +66,22 @@ pub fn resolve(conn: &Connection, scope: &Scope) -> rusqlite::Result<Vec<Documen
         docs.retain(|d| scope.doc_ids.contains(&d.id));
     }
     // Project scope (plan §6): the project's members only (an unknown project → nothing).
+    // "참고 자료에서 …" / "업무 문서만 …" (0.8.1): the kind of document, when the sentence names one.
+    let role = f.role.map(super::RoleParam::as_role);
     if let Some(pid) = f.project_id.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
-        let mut st = conn.prepare_cached("SELECT document_id FROM project_documents WHERE project_id = ?1")?;
-        let members: std::collections::HashSet<String> =
-            st.query_map([pid], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
+        // A project holds its work documents (`project_documents`) and its 참고 자료 (its reference
+        // group): the latter only when the scope asks for reference material.
+        let members: std::collections::HashSet<String> = if role == Some(DocumentRole::Knowledge) {
+            crate::knowledge::repo::project_reference_doc_ids(conn, pid)?
+        } else {
+            let mut st = conn.prepare_cached("SELECT document_id FROM project_documents WHERE project_id = ?1")?;
+            let rows = st.query_map([pid], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
+            rows
+        };
         docs.retain(|d| members.contains(&d.id));
+    }
+    if let Some(role) = role {
+        docs.retain(|d| d.role == role);
     }
     if let Some((from, to)) = f.date_range() {
         docs.retain(|d| {
