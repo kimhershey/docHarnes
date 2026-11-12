@@ -48,7 +48,7 @@ export function defaultSupplementSelection(rows: SupplementRow[]): string[] {
   return rows.filter((r) => r.selectable && !r.covered).map((r) => r.id);
 }
 
-/** Every row that can go into the request ("모두 선택"). */
+/** Every row that can go into the request ("전체 선택"). */
 export function selectableSupplementIds(rows: SupplementRow[]): string[] {
   return rows.filter((r) => r.selectable).map((r) => r.id);
 }

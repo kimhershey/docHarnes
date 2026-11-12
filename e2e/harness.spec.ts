@@ -444,4 +444,73 @@ test.describe("0.8.1 projects and reference material", () => {
     await inside("견적서.hwpx", `doc-project-more-${estimate}`);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   });
+  test("1.0.0: document pickers have select all / none and narrow to a project's documents", async ({ page }) => {
+    test.setTimeout(120_000);
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서.hwpx", "D:\\규정\\정보보안지침.pdf", "D:\\scan\\개발계약서-2p.pdf"]);
+    const estimate = await docId(page, "견적서.hwpx");
+    const guideline = await docId(page, "정보보안지침.pdf");
+    const contract = await docId(page, "개발계약서-2p.pdf");
+    await newProject(page, "한빛 포털");
+    await addToOpenProject(page, estimate);
+    await expect(page.getByTestId("project-documents")).toHaveAttribute("data-group-id", /.+/, { timeout: 10_000 });
+    await page.getByTestId("project-add-documents").click();
+    await page.getByTestId("project-add-kind-reference").check();
+    await page.getByTestId(`project-add-doc-${guideline}`).check();
+    await page.getByTestId("project-add-done").click();
+    await expect(page.getByTestId(`project-doc-${guideline}`)).toHaveAttribute("data-kind", "reference");
+    const count = (n: number) => ko.common.selected_count.replace("{{count}}", String(n));
+
+    // 문서 작성 → 원본 고르기: select all / none act on the visible rows.
+    await page.getByTestId("nav-generate").click();
+    await page.getByTestId("generate-pick-sources").click();
+    const dialog = page.getByTestId("generate-sources-dialog");
+    await expect(dialog).toBeVisible();
+    const boxes = dialog.locator('input[type="checkbox"]');
+    await expect(boxes).toHaveCount(3);
+    await expect(page.getByTestId("generate-sources-select-count")).toHaveText(count(0));
+    await expect(page.getByTestId("generate-sources-select-none")).toBeDisabled();
+    await page.getByTestId("generate-sources-select-all").click();
+    await expect(page.getByTestId("generate-sources-select-count")).toHaveText(count(3));
+    await expect(page.getByTestId("generate-sources-select-all")).toBeDisabled();
+    await page.getByTestId("generate-sources-select-none").click();
+    await expect(page.getByTestId("generate-sources-select-count")).toHaveText(count(0));
+    // Narrowed to the project: its work document and its reference material, picked in one go.
+    await page.getByTestId("generate-sources-project").click();
+    await page.getByRole("option", { name: "한빛 포털" }).click();
+    await expect(boxes).toHaveCount(2);
+    await expect(page.getByTestId(`generate-source-${contract}`)).toHaveCount(0);
+    await page.getByTestId("generate-sources-select-all").click();
+    await expect(page.getByTestId("generate-sources-select-count")).toHaveText(count(2));
+    // Back to every document: the two stay picked, the third is not.
+    await page.getByTestId("generate-sources-project").click();
+    await page.getByRole("option", { name: ko.projects.filter.all }).click();
+    await expect(boxes).toHaveCount(3);
+    await expect(page.getByTestId(`generate-source-${estimate}`)).toBeChecked();
+    await expect(page.getByTestId(`generate-source-${guideline}`)).toBeChecked();
+    await expect(page.getByTestId(`generate-source-${contract}`)).not.toBeChecked();
+    // The added controls stay inside the dialog, and the dialog inside the window.
+    const outer = (await dialog.boundingBox())!;
+    for (const id of ["generate-sources-project", "generate-sources-select"]) {
+      const b = (await page.getByTestId(id).boundingBox())!;
+      expect(b.x).toBeGreaterThanOrEqual(outer.x - 0.5);
+      expect(b.x + b.width).toBeLessThanOrEqual(outer.x + outer.width + 0.5);
+    }
+    expect(outer.x >= 0 && outer.x + outer.width <= (page.viewportSize()?.width ?? 0)).toBe(true);
+    await page.getByTestId("generate-sources-done").click();
+    await expect(page.getByTestId("generate-sources").locator("li")).toHaveCount(2);
+
+    // 프로젝트의 문서 추가: another project's documents are picked the same way.
+    await newProject(page, "새봄 ERP");
+    await page.getByTestId("project-add-documents").click();
+    await page.getByTestId("project-add-project").click();
+    await page.getByRole("option", { name: "한빛 포털" }).click();
+    await expect(page.getByTestId("project-add-dialog").locator('input[type="checkbox"]')).toHaveCount(2);
+    await page.getByTestId("project-add-select-all").click();
+    await expect(page.getByTestId("project-add-select-count")).toHaveText(count(2));
+    await page.getByTestId("project-add-done").click();
+    await expect(page.getByTestId(`project-doc-${estimate}`)).toBeVisible();
+    await expect(page.getByTestId(`project-doc-${guideline}`)).toBeVisible();
+  });
 });

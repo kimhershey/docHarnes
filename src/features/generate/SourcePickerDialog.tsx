@@ -6,11 +6,14 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { docTypeLabel } from "@/features/pipeline/labels";
 import { useDocTypes, useDocuments } from "@/lib/queries";
+import { SelectAllBar } from "@/components/ui/select-all-bar";
+import { inProject, ProjectFilterSelect } from "@/features/projects/ProjectFilterSelect";
 
 /** Picks the library documents whose extracted fields a draft quotes (§3.13 "내용 = … 추출 결과 인용"). */
 export function SourcePickerDialog({ open, onOpenChange, selected, onChange }: { open: boolean; onOpenChange: (o: boolean) => void; selected: string[]; onChange: (ids: string[]) => void }) {
   const { t, i18n } = useTranslation();
   const [query, setQuery] = useState("");
+  const [project, setProject] = useState<string | null>(null);
   // The search text goes to the backend (name / title / text match) so the pick is not limited to the first page.
   const { data: docs } = useDocuments({ limit: 500, sort: "imported_desc", query: query.trim() || null }, open);
   const { data: docTypes } = useDocTypes(open);
@@ -22,13 +25,14 @@ export function SourcePickerDialog({ open, onOpenChange, selected, onChange }: {
     if (open && !wasOpen.current) {
       setPicked(new Set(selected));
       setQuery("");
+      setProject(null);
     }
     wasOpen.current = open;
   }, [open, selected]);
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return (docs ?? []).filter((d) => d.role !== "generated" && (!q || d.original_name.toLowerCase().includes(q) || (d.title ?? "").toLowerCase().includes(q)));
-  }, [docs, query]);
+    return (docs ?? []).filter((d) => d.role !== "generated" && inProject(d, project) && (!q || d.original_name.toLowerCase().includes(q) || (d.title ?? "").toLowerCase().includes(q)));
+  }, [docs, query, project]);
   const toggle = (id: string) =>
     setPicked((s) => {
       const next = new Set(s);
@@ -43,7 +47,14 @@ export function SourcePickerDialog({ open, onOpenChange, selected, onChange }: {
           <DialogTitle>{t("generate.sources_dialog.title")}</DialogTitle>
           <DialogDescription>{t("generate.sources_dialog.hint")}</DialogDescription>
         </DialogHeader>
-        <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("generate.sources_dialog.search")} aria-label={t("generate.sources_dialog.search")} data-testid="generate-sources-search" />
+        {/* 1.0.0: search, project filter and select all / none — the row wraps on a narrow dialog. */}
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <div className="min-w-[12rem] flex-1">
+    <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("generate.sources_dialog.search")} aria-label={t("generate.sources_dialog.search")} data-testid="generate-sources-search" />
+          </div>
+          <ProjectFilterSelect value={project} onChange={setProject} enabled={open} testId="generate-sources-project" />
+        </div>
+        <SelectAllBar visibleIds={list.map((d) => d.id)} picked={picked} onChange={setPicked} testId="generate-sources-select" />
         <div className="max-h-80 overflow-y-auto rounded-md border border-border">
           {list.length === 0 ? (
             <p className="p-3 text-sm text-fg-muted">{t("generate.sources_dialog.empty")}</p>

@@ -6,6 +6,9 @@
     "preview_mode": "Browser preview mode (no Tauri · mock backend)"
   },
   "common": {
+    "select_all": "Select all",
+    "select_none": "Clear all",
+    "selected_count": "{{count}} selected",
     "ok": "OK",
     "cancel": "Cancel",
     "save": "Save",
@@ -2819,6 +2822,10 @@
     "open_busy": "Another draft is being generated on the Compose screen. If you open this one now, the running job's result stays available on the Activity screen."
   },
   "projects": {
+    "filter": {
+      "label": "Narrow to a project",
+      "all": "All projects · every document"
+    },
     "title": "Projects",
     "new": "New project",
     "templates_manage": "Templates",
