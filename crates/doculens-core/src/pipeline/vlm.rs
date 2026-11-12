@@ -77,6 +77,22 @@ fn is_output_format_error(e: &CoreError) -> bool {
     matches!(e, CoreError::Engine(m) if m.contains("does not match the expected"))
 }
 
+/// The reason code of a model that cannot take images (1.0.0 §6-8). The screens translate it
+/// (`errors.reasons.*` / `jobs.error.*`): the engine's own text was shown as it came, in English.
+pub const NO_VISION_PROJECTOR: &str = "no_vision_projector";
+
+/// llama-server's answer to an image sent to a model that was loaded without its vision projector:
+/// "image input is not supported - hint: if this is unexpected, you may need to provide the mmproj".
+/// Asking again cannot help, and every further page image would get the same answer.
+pub fn no_vision(e: &CoreError) -> bool {
+    matches!(e, CoreError::Engine(m) if m.contains("image input is not supported"))
+}
+
+/// `true` for the error [`Vlm::call`] makes of [`no_vision`].
+pub fn no_vision_projector(e: &CoreError) -> bool {
+    matches!(e, CoreError::Invalid(m) if m == NO_VISION_PROJECTOR)
+}
+
 /// The request never reached a working server: the engine client failed before any HTTP
 /// status arrived (`POST <path>: io: Connection refused …`, a connect timeout) or the
 /// connection broke while the reply was streamed (`stream: …`) — the process is gone.
@@ -191,6 +207,10 @@ impl Vlm<'_> {
             let req = self.request(stage, messages, schema, temperature, seed, budget);
             match self.chat.complete_cancellable(&req, &cancelled) {
                 Err(CoreError::Cancelled) => return Err(CoreError::Cancelled),
+                Err(e) if no_vision(&e) => {
+                    log::warn!("{}: the model takes no images ({e})", stage.as_str());
+                    return Err(CoreError::Invalid(NO_VISION_PROJECTOR.into()));
+                }
                 Err(e) if is_client_error(&e) => return Err(e),
                 Err(e) => {
                     log::warn!("{} attempt {attempt}: {e}", stage.as_str());
@@ -697,6 +717,13 @@ mod tests {
             assert!(!engine_unavailable(&engine(answered)), "{answered}");
         }
         assert!(!engine_unavailable(&CoreError::Cancelled));
+        // A model without its projector is neither: the reason is named, and it is not a lost engine.
+        let no_projector = engine(
+            "/v1/chat/completions: HTTP 500: image input is not supported - hint: if this is unexpected, you may need to provide the mmproj",
+        );
+        assert!(no_vision(&no_projector) && !engine_unavailable(&no_projector));
+        assert!(!no_vision(&engine("/v1/chat/completions: HTTP 400: grammar")));
+        assert!(no_vision_projector(&CoreError::Invalid(NO_VISION_PROJECTOR.into())));
         assert!(
             transport_failure(&engine("GET /health: io: Connection refused"))
                 && !transport_failure(&CoreError::EngineNotRunning)

@@ -1338,7 +1338,8 @@
       "revise_previous_missing": "There is no draft to revise. Open or create a draft first.",
       "revise_instruction_empty": "Enter the revision instruction.",
       "table_not_found": "Table not found.",
-      "plan_clarify": "The plan is a clarification question — answer it first."
+      "plan_clarify": "The plan is a clarification question — answer it first.",
+      "no_vision_projector": "This model has no vision projector (mmproj) file, so it cannot read images. Load a model that comes with its projector file on the Models screen."
     }
   },
   "startup": {
@@ -1463,7 +1464,8 @@
       "findings_not_requestable": "Only passed or undetermined results were selected. Pick at least one mismatch or missing item.",
       "findings_not_in_run": "The selected results are not part of the last stored check. Run the check again.",
       "document_not_found": "Document not found.",
-      "no_fields": "No fields were found in the sample documents. Check that they carry text."
+      "no_fields": "No fields were found in the sample documents. Check that they carry text.",
+      "no_vision_projector": "The model has no vision projector (mmproj) file, so page images cannot be read. Load a model that comes with its projector file on the Models screen and run this again. The documents that were not processed were left as they were."
     },
     "result_loading": "Loading result…"
   },

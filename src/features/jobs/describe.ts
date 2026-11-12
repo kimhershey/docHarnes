@@ -131,6 +131,8 @@ const ERROR_CODES: Record<string, string> = {
   interrupted: "jobs.error.interrupted",
   cancelled: "jobs.error.cancelled",
   no_model: "jobs.error.no_model",
+  // The loaded model takes no images (`pipeline::vlm::NO_VISION_PROJECTOR`; arrives as "invalid value: no_vision_projector").
+  no_vision_projector: "jobs.error.no_vision_projector",
   export_exists: "jobs.error.export_exists",
   path_outside: "jobs.error.path_outside",
   no_documents: "jobs.error.no_documents",

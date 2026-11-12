@@ -632,6 +632,59 @@ fn blank_verdict_needs_the_pixel_heuristic() {
 }
 
 #[test]
+fn a_page_image_that_is_gone_is_rendered_again_before_the_document_is_read() {
+    let w = World::new();
+    // A scanned image whose cached page was evicted (retention LRU) or deleted by hand.
+    w.add_doc("s1", "receipt.jpg", SourceKind::Image, &[None]);
+    let cache = DocumentCache::for_document(&w.paths, "s1");
+    std::fs::remove_file(cache.page_file(1)).unwrap();
+    w.chat.push("classify", classify_reply("receipt", 0));
+    w.chat.push_ocr(RECEIPT_OCR);
+    w.chat.push("kie_receipt", receipt_kie());
+    let deps = w.deps(None);
+    let req = ProcessRequest { document_ids: vec!["s1".into()], ..Default::default() };
+    let report = run::process(&deps, &req, &mut |_| {}).unwrap();
+    // It used to end "processed" with no page read: every stage skipped the page without an image.
+    assert_eq!(report.processed, vec!["s1".to_string()], "{report:?}");
+    assert_eq!(report.ocr_pages, 1);
+    assert!(cache.page_file(1).is_file(), "the page image is back");
+    assert_eq!(w.pages("s1")[0].text_source.as_deref(), Some("ocr"));
+    assert!(w.chat.image_calls() >= 2, "classification and OCR saw the page");
+
+    // No renderer for a scanned PDF: the document fails with the reason instead of passing unread.
+    w.add_doc("p1", "scan.pdf", SourceKind::Pdf, &[None]);
+    std::fs::remove_file(DocumentCache::for_document(&w.paths, "p1").page_file(1)).unwrap();
+    let req = ProcessRequest { document_ids: vec!["p1".into()], ..Default::default() };
+    let report = run::process(&deps, &req, &mut |_| {}).unwrap();
+    assert!(report.processed.is_empty(), "{report:?}");
+    assert_eq!(report.failed.len(), 1);
+    assert!(report.failed[0].1.contains("쪽 그림이 없어"), "{:?}", report.failed);
+    assert!(w.doc("p1").pipeline_error.as_deref().unwrap().contains("쪽 그림이 없어"));
+    assert_eq!(w.pages("p1")[0].text, None);
+}
+
+#[test]
+fn a_model_without_its_vision_projector_stops_the_batch_with_a_named_reason() {
+    let w = World::new();
+    w.add_doc("a", "a.pdf", SourceKind::Pdf, &[None]);
+    w.add_doc("b", "b.pdf", SourceKind::Pdf, &[None]);
+    // llama-server's reply to an image when the model was loaded without mmproj.
+    *w.chat.fail_with.lock().unwrap() = Some(
+        "/v1/chat/completions: HTTP 500: image input is not supported - hint: if this is unexpected, you may need to provide the mmproj"
+            .into(),
+    );
+    let deps = w.deps(None);
+    let req = ProcessRequest { document_ids: vec!["a".into(), "b".into()], ..Default::default() };
+    let err = run::process(&deps, &req, &mut |_| {}).unwrap_err();
+    // The reason the screens translate — not the engine's English text, and asked once, not per retry.
+    assert!(super::vlm::no_vision_projector(&err), "{err:?}");
+    assert_eq!(w.chat.requests.lock().unwrap().len(), 1, "no retry, and the second document is not tried");
+    // Neither document is marked as failed: nothing about them is wrong.
+    assert!(w.doc("a").pipeline_error.is_none() && w.doc("b").pipeline_error.is_none());
+    assert_eq!(w.doc("a").status, DocumentStatus::Rendered);
+}
+
+#[test]
 fn cancellation_and_failures_are_isolated() {
     let w = World::new();
     w.add_doc("a", "a.pdf", SourceKind::Pdf, &[None]);

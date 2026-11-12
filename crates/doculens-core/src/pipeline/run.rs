@@ -152,6 +152,16 @@ pub fn process(
                 );
                 return Err(if super::vlm::transport_failure(&e) { CoreError::EngineNotRunning } else { e });
             }
+            Err(e) if super::vlm::no_vision_projector(&e) => {
+                // The loaded model has no vision projector (1.0.0 §6-8): no page image can be read, by
+                // this document or the next. As with a lost engine the batch stops with the reason and
+                // the documents stay as they were, instead of each being marked 처리 오류.
+                log::warn!(
+                    "pipeline: the model has no vision projector; {} document(s) left untouched",
+                    documents.len() - i
+                );
+                return Err(e);
+            }
             Err(e) => {
                 let msg = e.to_string();
                 log::warn!("pipeline {}: {msg}", doc.id);
@@ -223,6 +233,48 @@ fn has_text(p: &PageRecord) -> bool {
     p.text.as_deref().is_some_and(|t| !t.trim().is_empty())
 }
 
+/// Renders the page images that are gone again (1.0.0 §6-8). The page cache is evicted by the retention
+/// LRU and can be cleared by hand; every stage below skips a page without an image, so such a document
+/// used to finish "processed" with its scanned pages never read. A page that needs its image — it has no
+/// text of its own — and still has none fails the document with the reason, instead of passing in silence.
+fn restore_page_images(
+    deps: &PipelineDeps<'_>,
+    doc: &DocumentRecord,
+    pages: &mut [PageRecord],
+    cache: &DocumentCache,
+) -> Result<()> {
+    let mut failure: Option<CoreError> = None;
+    for page in pages.iter_mut() {
+        if page.width_px == 0 || cache.page_file(page.page_no).is_file() {
+            continue;
+        }
+        if deps.cancelled() {
+            return Err(CoreError::Cancelled);
+        }
+        match import::rotate_page(&deps.import, doc, page.page_no, page.rotation) {
+            Ok(rendered) => {
+                log::info!("page image of {} p{} was gone; rendered again", doc.id, page.page_no);
+                page.width_px = rendered.width_px;
+                page.height_px = rendered.height_px;
+                page.rendered_at = Some(chrono::Utc::now());
+            }
+            Err(e) => {
+                log::warn!("page image of {} p{} is gone and could not be rendered again: {e}", doc.id, page.page_no);
+                failure.get_or_insert(e);
+            }
+        }
+    }
+    let unreadable = |p: &PageRecord| {
+        p.width_px > 0 && p.is_blank != Some(true) && !has_text(p) && !cache.page_file(p.page_no).is_file()
+    };
+    match failure {
+        Some(e) if pages.iter().any(unreadable) => Err(CoreError::Render(format!(
+            "쪽 그림이 없어 다시 만들려 했지만 실패했습니다(문서를 다시 렌더한 뒤 처리하세요): {e}"
+        ))),
+        _ => Ok(()),
+    }
+}
+
 #[allow(clippy::needless_range_loop)]
 fn process_document(
     deps: &PipelineDeps<'_>,
@@ -239,6 +291,7 @@ fn process_document(
         return Err(CoreError::Invalid("no pages (render the document first)".into()));
     }
     let cache = DocumentCache::for_document(deps.import.paths, &doc.id);
+    restore_page_images(deps, &doc, &mut pages, &cache)?;
     let mut out = DocOutcome::default();
     let mut usage = Usage::default();
 

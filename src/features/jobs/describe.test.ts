@@ -82,6 +82,7 @@ describe("describeJobError", () => {
     expect(describeJobError(job({ error: "interrupted" }), t)).toBe(ko.jobs.error.interrupted);
     expect(describeJobError(job({ error: "cancelled" }), t)).toBe(ko.jobs.error.cancelled);
     expect(describeJobError(job({ error: "no_model" }), t)).toBe(ko.jobs.error.no_model);
+    expect(describeJobError(job({ error: "invalid value: no_vision_projector" }), t)).toBe(ko.jobs.error.no_vision_projector);
     expect(describeJobError(job({ error: "export_exists" }), t)).toBe(ko.jobs.error.export_exists);
     expect(describeJobError(job({ error: "path_outside" }), t)).toBe(ko.jobs.error.path_outside);
     expect(describeJobError(job({ error: "no_documents" }), t)).toBe(ko.jobs.error.no_documents);
