@@ -103,7 +103,7 @@ user PC: `docs/RUN-GUIDE.md`.
   drafts store under `.doculens/drafts/`), `projects/` (P6 §3.15: projects / templates / rules repo, NL → rule JSON,
   deterministic consistency check with evidence, relation graph, Markdown report, 보완요청서 request builder, inbox
   subfolder → project mapping, `classify`: title / content → project suggestions (rule scores + optional grammar-bound model
-  pass, preview → apply; `projects.keywords`, migration 0007)), `retention` (policy + purge / LRU file helpers used by the daily maintenance job).
+  pass, preview → apply; `projects.keywords`, migration 0007; 1.0.0 `Candidate.confidence`), `assign` (1.0.0: `project_assign` — many (document, project) pairs put in / taken out / moved between 업무 문서 and 참고 자료 in one transaction, tracked copies settled after it, the outcome carries its undo request; the "프로젝트에 넣기" dialog `src/features/projects/{PutInProjectDialog,AssignSheet}.tsx` + `assign.ts` sends one request for several projects or for the per-document sheet)), `retention` (policy + purge / LRU file helpers used by the daily maintenance job).
 - `crates/doculens-kodic/` — bin that compiles the mecab-ko-dic sources into lindera's dictionary format
   (driven by `scripts/fetch-kodic.mjs`; descriptors in `assets/`).
 - `crates/doculens-eval/` — P7 evaluation harness bin (`planner` golden-set accuracy + regression gate (0.8.0: 163 items with a `kind` — chat / question / command / setting —, `expected.confirm` / `unmet` / `alt`, the count of wrong changes that would have run unconfirmed, `--ids` / `--kinds` for a part of the set; `scripts/rescore-planner.py` re-scores result files of another version), `pipeline`
