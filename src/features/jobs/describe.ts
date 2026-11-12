@@ -47,6 +47,8 @@ export function describeJobPriority(priority: JobPriority | undefined, t: TFunct
 /** Stage word of a plan / pipeline progress line: pipeline levels, planner ops, else verbatim. */
 export function describeStage(stage: string, t: TFunction): string {
   if (stage === "classify" || stage === "ocr" || stage === "extract") return t(`pipeline.levels.${stage}`);
+  // 1.0.0 "이미지 내 글자 추출": the pictures of a page are read after its OCR stage (`run::read_figures`).
+  if (stage === "figures") return t("jobs.detail.reading_figures");
   // `exec.rs` reports the model call of a `draft_document` step as the "draft" stage.
   if (stage === "draft") return t("jobs.detail.drafting");
   return t(`planner.ops.${stage}`, { defaultValue: stage });

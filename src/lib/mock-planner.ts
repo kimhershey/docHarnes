@@ -1064,6 +1064,7 @@ const CATALOG_PHRASES: [string[], string][] = [
   [["엔진자동시작", "엔진 자동 시작", "autostart", "auto start"], "models.auto_start_engine"],
   [["예열", "warmup", "warm up"], "models.warmup_after_load"],
   [["검토완료문서만", "검토 완료 문서만", "reviewedonly", "reviewed only"], "processing.organize_reviewed_only"],
+  [["이미지내글자", "이미지 내 글자", "이미지안글자", "이미지글자추출", "그림내글자", "그림안글자", "그림글자", "그림 글자", "textinimages", "text in images"], "processing.ocr_figures"],
   [["디지털pdf", "디지털 pdf", "텍스트레이어", "텍스트 레이어"], "processing.ocr_digital_pdf"],
   [["추출쪽수", "추출 쪽수", "추출에보내는", "kiepages", "kie pages"], "processing.kie_max_pages"],
   [["썸네일", "thumbnail"], "cache.keep_thumbnails"],

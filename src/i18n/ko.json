@@ -830,6 +830,7 @@
       "processing_organize_reviewed_only": "검토 완료 문서만 정리/이동",
       "processing_inbox_watch": "inbox 폴더 감시",
       "processing_ocr_digital_pdf": "텍스트 레이어가 있어도 OCR",
+      "processing_ocr_figures": "이미지 내 글자 추출",
       "processing_kie_max_pages": "추출에 보내는 쪽수",
       "processing_precise_mode": "정밀 모드",
       "processing_dense_reocr": "밀집 페이지 재OCR",
@@ -1118,6 +1119,8 @@
       "inbox_auto_level": "inbox 감시 자동 처리",
       "ocr_digital_pdf": "텍스트 레이어가 있어도 OCR 실행",
       "ocr_digital_pdf_hint": "기본은 디지털 PDF의 텍스트 레이어를 그대로 사용합니다(§3.4 하이브리드).",
+      "ocr_figures": "이미지 내 글자 추출",
+      "ocr_figures_hint": "글자 층이 있는 문서(디지털 PDF, PPT·Word·한글 변환본) 안의 그림 — 구성도, 화면 캡처, 그림으로 넣은 표 — 에 든 글자를 읽어 쪽의 글자 층에 넣습니다. 그림 위를 드래그해 선택하거나 검색·질문할 수 있게 됩니다. 그림마다 모델을 한 번 부르므로 CPU에서는 문서당 수 분이 더 걸립니다. 켠 뒤에 처리하는 문서부터 적용되며, 이미 처리한 문서는 다시 처리하면 반영됩니다.",
       "kie_max_pages": "추출에 보내는 쪽수",
       "kie_max_pages_hint": "앞 N−1쪽 + 마지막 쪽. 긴 계약서는 늘리세요.",
       "precise_mode": "정밀 모드(2회 샘플 일치도)",
@@ -1411,6 +1414,7 @@
       "loading_model": "모델 로드 중",
       "embed_rebuilt": "{{summary}} (모델 교체로 재생성)",
       "process_summary": "처리 {{processed}} · 분류 {{classified}} · OCR {{ocr}}쪽 · 추출 {{extracted}} · 검토 {{review}} · 실패 {{failed}}",
+      "figures_read": "그림 글자 {{count}}개",
       "split_summary": "{{count}}개로 분할",
       "merge_summary": "{{count}}개 병합",
       "plan_summary": "플랜 {{done}}/{{total}} · {{summary}}",
@@ -1428,7 +1432,8 @@
       "draft_section": "{{index}}/{{total}}절 작성 중",
       "draft_revising": "초안 수정 중",
       "discovering": "{{name}} · 필드 찾는 중{{page}}",
-      "discovery_summary": "문서 {{docs}}개에서 필드 {{fields}}개 병합"
+      "discovery_summary": "문서 {{docs}}개에서 필드 {{fields}}개 병합",
+      "reading_figures": "그림 글자 읽기"
     },
     "empty_queued": "대기 중인 작업이 없습니다.",
     "empty_failed": "실패한 작업이 없습니다.",
@@ -1829,6 +1834,7 @@
         "manual": "직접 수정"
       },
       "edited_title": "직접 수정한 글자 — 원본 이미지는 바뀌지 않으며, 이 글자가 검색·질문·추출에 쓰입니다.",
+      "figure_title": "그림에서 읽은 글자 — 위치는 그림 안에서 추정한 것입니다. 틀린 글자는 선택해 고칠 수 있습니다.",
       "count": "수정 {{count}}건",
       "undo": "글자 수정 되돌리기 (Ctrl+Z)",
       "redo": "글자 수정 다시 실행 (Ctrl+Shift+Z)",

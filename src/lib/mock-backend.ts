@@ -158,6 +158,7 @@ export function defaultSettings(): AppSettings {
       organize_reviewed_only: true,
       inbox_watch: true,
       ocr_digital_pdf: false,
+      ocr_figures: false,
       kie_max_pages: 4,
       precise_mode: false,
       dense_reocr: true,

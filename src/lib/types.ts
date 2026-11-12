@@ -61,6 +61,8 @@ export interface ProcessingSettings {
   organize_reviewed_only: boolean;
   inbox_watch: boolean;
   ocr_digital_pdf: boolean;
+  /** 1.0.0 "이미지 내 글자 추출": read the text inside the pictures of pages that have their own text layer. */
+  ocr_figures: boolean;
   kie_max_pages: number;
   precise_mode: boolean;
   dense_reocr: boolean;
@@ -828,6 +830,8 @@ export interface PageWord {
   /** Reading-order line index (0-based). */
   line: number;
   edited?: boolean;
+  /** Read from a picture of the page (설정 "이미지 내 글자 추출"); the box is estimated inside the picture. */
+  fig?: boolean;
 }
 
 /** Positioned text layer of a page: selection and correction happen on the page image. */
@@ -835,6 +839,8 @@ export interface PageLayout {
   version: number;
   source: LayoutSource;
   words: PageWord[];
+  /** Pictures of the page whose text was read into `words` (1.0.0). */
+  figures?: { x: number; y: number; w: number; h: number; hash: string; words: number }[];
 }
 
 /** One correction of a page's text (viewer 이력 "글자 수정"); `undone` after Ctrl+Z (0.3.0 item 7). */
@@ -1347,6 +1353,8 @@ export interface ProcessReport {
   failed: [string, string][];
   classified: number;
   ocr_pages: number;
+  /** Pictures whose text was read into their page (1.0.0 "이미지 내 글자 추출"). */
+  figures_read?: number;
   extracted: number;
   review_pending: number;
   cancelled: boolean;

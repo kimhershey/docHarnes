@@ -488,6 +488,9 @@ function ProcessingTab() {
         <Row label={t("settings.processing.ocr_digital_pdf")} hint={t("settings.processing.ocr_digital_pdf_hint")}>
           <Switch checked={p.ocr_digital_pdf} onCheckedChange={(v) => void update((s) => void (s.processing.ocr_digital_pdf = v))} aria-label={t("settings.processing.ocr_digital_pdf")} data-testid="settings-ocr-digital" />
         </Row>
+        <Row label={t("settings.processing.ocr_figures")} hint={t("settings.processing.ocr_figures_hint")}>
+          <Switch checked={p.ocr_figures ?? false} onCheckedChange={(v) => void update((s) => void (s.processing.ocr_figures = v))} aria-label={t("settings.processing.ocr_figures")} data-testid="settings-ocr-figures" />
+        </Row>
         <Row label={t("settings.processing.kie_max_pages")} hint={t("settings.processing.kie_max_pages_hint")} htmlFor="kie-max-pages">
           <NumberField id="kie-max-pages" value={p.kie_max_pages} min={1} max={32} step={1} onCommit={(v) => void update((s) => void (s.processing.kie_max_pages = v))} testId="settings-kie-max-pages" />
         </Row>

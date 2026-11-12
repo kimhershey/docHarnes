@@ -279,6 +279,8 @@ mod tests {
             t.markup,
             "그림 2. 구성도\n인증 서버\n결제 게이트웨이\n<table><tr><td>구간</td><td>평균(ms)</td></tr></table>\n<table><tr><td>로그인</td><td>84</td></tr></table>"
         );
+        // A dot inside a label is part of the label; only a leading bullet is dropped.
+        assert_eq!(figure_text("· 알림 서비스 (SMS·메일)").unwrap().plain, "알림 서비스 (SMS·메일)");
         // An HTML table the model wrote all the same.
         let t =
             figure_text("<table><tr><th>구간</th><th>최대</th></tr><tr><td>결제 승인</td><td>905</td></tr></table>")

@@ -3430,6 +3430,10 @@ fn generic_setting_rule(t: &Text<'_>) -> Option<Plan> {
         (&["워밍업", "warm up", "warmup"], "models.warmup_after_load"),
         (&["정밀 모드", "정밀모드", "precise mode"], "processing.precise_mode"),
         (&["디지털 pdf", "digital pdf"], "processing.ocr_digital_pdf"),
+        (
+            &["이미지 내 글자", "이미지 글자 추출", "그림 글자", "그림 내 글자", "text in images"],
+            "processing.ocr_figures",
+        ),
         (&["검토 완료만 정리", "검토 완료 문서만", "reviewed only"], "processing.organize_reviewed_only"),
         (&["빽빽한 표", "dense table", "dense re-ocr"], "processing.dense_reocr"),
         (&["사이드바 접", "sidebar collapsed", "collapse the sidebar"], "ui.sidebar_collapsed"),

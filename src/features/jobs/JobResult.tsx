@@ -120,6 +120,7 @@ export function JobResult({ job }: { job: Job }) {
     return (
       <span className="text-xs text-fg-muted" data-testid="job-result-process">
         {t("jobs.detail.process_summary", { processed: result.processed.length, classified: result.classified, ocr: result.ocr_pages, extracted: result.extracted, review: typeof result.review_pending === "number" ? result.review_pending : 0, failed: result.failed.length })}
+        {typeof result.figures_read === "number" && result.figures_read > 0 ? ` · ${t("jobs.detail.figures_read", { count: result.figures_read })}` : ""}
       </span>
     );
   }

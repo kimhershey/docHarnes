@@ -44,6 +44,7 @@ const KNOWN_FLAGS: &[&str] = &[
     "workspace",
     "limit",
     "precise",
+    "figures",
     "verbose",
     "help",
 ];
@@ -51,7 +52,7 @@ const KNOWN_FLAGS: &[&str] = &[
 pub const USAGE: &str = "doculens-eval pipeline --manifest <json> --out <dir> [--dry-run]
                        [--engine <llama-server> --models-dir <dir> --model <id>] [--pdfium <lib>]
                        [--backend cpu|vulkan|cu121|cu129] [--profile accuracy|balanced|speed] [--workspace <dir>]
-                       [--limit <n>] [--precise] [--verbose]";
+                       [--limit <n>] [--precise] [--figures] [--verbose]";
 
 // ---------------------------------------------------------------------------
 // Manifest
@@ -829,7 +830,12 @@ pub fn run(args: &Args) -> Result<i32, String> {
         vram.samples = 1;
     }
 
-    let settings = ProcessingSettings { precise_mode: args.flag("precise"), ..Default::default() };
+    // `--figures`: also read the text inside the pictures of pages with a text layer (설정 "이미지 내 글자 추출").
+    let settings = ProcessingSettings {
+        precise_mode: args.flag("precise"),
+        ocr_figures: args.flag("figures"),
+        ..Default::default()
+    };
     let deps = PipelineDeps {
         import: ImportDeps { db: &ws.db, paths: &ws.paths, render: render_svc, printer: &printer, render_options },
         chat: &running.manager,

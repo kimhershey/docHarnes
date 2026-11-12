@@ -137,8 +137,11 @@ cargo run -p doculens-eval -- pipeline --manifest eval/golden/pipeline-manifest.
 # 실제 실행: 평가용 워크스페이스를 만들고 가져오기 → 분류 → OCR → 추출 → 채점
 cargo run -p doculens-eval -- pipeline --manifest <골든 매니페스트.json> --out eval/out/gemma4-e4b-q5km \
     --engine <llama-server> --models-dir <.doculens/models> --model gemma4-e4b-q5km \
-    [--pdfium <libpdfium.so|pdfium.dll|폴더>] [--backend cu121] [--profile accuracy] [--precise] [--limit 5] [--verbose]
+    [--pdfium <libpdfium.so|pdfium.dll|폴더>] [--backend cu121] [--profile accuracy] [--precise] [--figures] [--limit 5] [--verbose]
 ```
+
+`--figures`는 설정 "이미지 내 글자 추출"(`processing.ocr_figures`)을 켜고 돌립니다: 글자 층이 있는 쪽의 그림만 따로 읽어
+쪽 글과 글자 층에 넣습니다(그림마다 모델 호출 1회, PDFium 필요).
 
 흐름: `--out/workspace`(또는 `--workspace <dir>`)에 DocuLens 워크스페이스를 만들고(`Workspace::open(create)` + 내장 양식
 `ensure_builtins`), 매니페스트 문서를 **복사·렌더**해 가져온 뒤(`documents::import::{plan, run}`, PDF는 PDFium 필요 — `--pdfium`,

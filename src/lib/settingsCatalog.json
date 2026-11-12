@@ -260,6 +260,13 @@
   },
   {
     "confirm": false,
+    "key": "processing.ocr_figures",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": false,
     "key": "processing.kie_max_pages",
     "type": {
       "kind": "integer",

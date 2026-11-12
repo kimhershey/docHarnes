@@ -531,4 +531,27 @@ test.describe("0.8.1 projects and reference material", () => {
     await field.blur();
     await expect.poll(() => settingsValue(page, "processing.project_second_choice")).toBe(0.85);
   });
+
+  test("1.0.0: 이미지 내 글자 추출 is off by default, a switch in 설정 > 처리 and a sentence turn it on", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await openSettingsTab(page, "processing");
+    const toggle = page.getByTestId("settings-ocr-figures");
+    await expect(toggle).toHaveAttribute("aria-checked", "false");
+    await expect(page.getByText(ko.settings.processing.ocr_figures, { exact: true })).toBeVisible();
+    // The hint says what it costs; the row stays inside the window.
+    await expect(page.getByText(ko.settings.processing.ocr_figures_hint)).toBeVisible();
+    const box = (await toggle.boundingBox())!;
+    expect(box.x >= 0 && box.x + box.width <= (page.viewportSize()?.width ?? 0)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await toggle.click();
+    await expect.poll(() => settingsValue(page, "processing.ocr_figures")).toBe(true);
+    // By a sentence, with a near wording; the other OCR switch is not touched.
+    await openAssistantScreen(page);
+    await send(page, "그림 글자 추출 꺼줘");
+    await expect.poll(() => settingsValue(page, "processing.ocr_figures"), { timeout: 15_000 }).toBe(false);
+    await send(page, "이미지 내 글자 추출 켜줘");
+    await expect.poll(() => settingsValue(page, "processing.ocr_figures"), { timeout: 15_000 }).toBe(true);
+    expect(await settingsValue(page, "processing.ocr_digital_pdf")).toBe(false);
+  });
 });

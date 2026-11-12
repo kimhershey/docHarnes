@@ -950,6 +950,14 @@ mod tests {
         assert_eq!(setting_of("2순위 추천 임계값 0.8로 설정"), second(0.8));
         assert_eq!(setting_of("2순위 임계값 55%"), second(0.55));
         assert_eq!(setting_of("프로젝트 분류 기준 90%로"), second(0.9));
+        // 1.0.0: 이미지 내 글자 추출 — the switch for reading the text inside a page's pictures.
+        let figures = |on: bool| Some(("processing.ocr_figures".to_string(), json!(on)));
+        assert_eq!(setting_of("이미지 내 글자 추출 켜줘"), figures(true));
+        assert_eq!(setting_of("이미지 내 글자 추출 꺼줘"), figures(false));
+        assert_eq!(setting_of("그림 글자 추출 켜"), figures(true));
+        assert_eq!(setting_of("그림 안 글자 추출 사용"), figures(true));
+        // The other OCR switch keeps its own name.
+        assert_eq!(setting_of("디지털 pdf ocr 켜줘").map(|(k, _)| k), Some("processing.ocr_digital_pdf".to_string()));
         // The review threshold keeps its own name.
         assert_eq!(
             setting_of("검토 임계값 85%로 바꿔줘").map(|(k, _)| k),

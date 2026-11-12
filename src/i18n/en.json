@@ -830,6 +830,7 @@
       "processing_organize_reviewed_only": "Organise reviewed documents only",
       "processing_inbox_watch": "Watch the inbox folder",
       "processing_ocr_digital_pdf": "OCR despite a text layer",
+      "processing_ocr_figures": "Extract text in images",
       "processing_kie_max_pages": "Pages sent to extraction",
       "processing_precise_mode": "Precise mode",
       "processing_dense_reocr": "Re-OCR dense pages",
@@ -1118,6 +1119,8 @@
       "inbox_auto_level": "Auto-processing for inbox files",
       "ocr_digital_pdf": "OCR pages that already have a text layer",
       "ocr_digital_pdf_hint": "By default the text layer of digital PDFs is used as is (§3.4 hybrid).",
+      "ocr_figures": "Extract text in images",
+      "ocr_figures_hint": "Reads the text inside the pictures — diagrams, screen captures, tables pasted as images — of documents that have their own text layer (digital PDFs, converted PPT / Word / HWP) and adds it to the page's text layer, so it can be selected on the picture, searched and asked about. One model call per picture: on a CPU this adds minutes per document. It applies to documents processed from now on; process a document again to apply it to one already processed.",
       "kie_max_pages": "Pages sent to the extractor",
       "kie_max_pages_hint": "First N−1 pages plus the last one. Raise it for long contracts.",
       "precise_mode": "Precision mode (second sample agreement)",
@@ -1411,6 +1414,7 @@
       "loading_model": "loading model",
       "embed_rebuilt": "{{summary}} (rebuilt for a new model)",
       "process_summary": "processed {{processed}} · classified {{classified}} · OCR {{ocr}} pages · extracted {{extracted}} · review {{review}} · failed {{failed}}",
+      "figures_read": "pictures read {{count}}",
       "split_summary": "split into {{count}}",
       "merge_summary": "merged {{count}}",
       "plan_summary": "plan {{done}}/{{total}} · {{summary}}",
@@ -1428,7 +1432,8 @@
       "draft_section": "Writing section {{index}}/{{total}}",
       "draft_revising": "Revising the draft",
       "discovering": "{{name}} · finding fields{{page}}",
-      "discovery_summary": "{{fields}} fields merged from {{docs}} documents"
+      "discovery_summary": "{{fields}} fields merged from {{docs}} documents",
+      "reading_figures": "Reading pictures"
     },
     "empty_queued": "No queued jobs.",
     "empty_failed": "No failed jobs.",
@@ -1829,6 +1834,7 @@
         "manual": "Edited"
       },
       "edited_title": "Corrected by hand — the page image itself is unchanged; this text is what search, questions and extraction use.",
+      "figure_title": "Read from a picture — its position inside the picture is an estimate. Select it to correct a wrong word.",
       "count": "{{count}} edits",
       "undo": "Undo text edit (Ctrl+Z)",
       "redo": "Redo text edit (Ctrl+Shift+Z)",

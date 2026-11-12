@@ -282,16 +282,19 @@ export function PageTextLayer({
         data-word-index={i}
         data-selected={isSelected || undefined}
         data-edited={w.edited || undefined}
+        data-fig={w.fig || undefined}
         className={cn(
           "absolute overflow-hidden whitespace-nowrap rounded-[2px] leading-none",
           visible ? "flex items-center text-[#0b6a8a]" : "text-transparent",
           isHit ? "bg-warn-soft/80 ring-1 ring-warn/60" : isSelected ? "bg-accent/35 ring-1 ring-accent" : visible ? "bg-white ring-1 ring-[#0b6a8a]/40" : "hover:bg-accent/15",
+          // A word read from a picture: its box is an estimate, shown as such when pointed at.
+          w.fig && !visible && !isHit && !isSelected && "hover:outline-dashed hover:outline-1 hover:outline-accent",
         )}
         style={{
           ...px([w.x, w.y, w.w, w.h]),
           fontSize: visible ? fitFontSize(w.t, w.w * size.w, w.h * size.h) : Math.max(6, w.h * size.h * 0.78),
         }}
-        title={visible ? t("viewer.text_edit.edited_title") : undefined}
+        title={visible ? t("viewer.text_edit.edited_title") : w.fig ? t("viewer.text_edit.figure_title") : undefined}
       >
         {w.t}
       </Box>,

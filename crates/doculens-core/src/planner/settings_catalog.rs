@@ -104,6 +104,7 @@ pub const SETTINGS: &[SettingSpec] = &[
     ),
     s("processing.inbox_watch", ValueType::Bool, "inbox 감시", "inbox watching"),
     s("processing.ocr_digital_pdf", ValueType::Bool, "디지털 PDF도 OCR", "OCR digital PDFs too"),
+    s("processing.ocr_figures", ValueType::Bool, "이미지 내 글자 추출", "extract text in images"),
     s("processing.kie_max_pages", ValueType::Int { min: 1, max: 32 }, "추출 최대 쪽수", "extraction page limit"),
     s("processing.precise_mode", ValueType::Bool, "정밀 모드", "precise mode"),
     s("processing.dense_reocr", ValueType::Bool, "빽빽한 표 재OCR", "re-OCR dense tables"),
@@ -208,6 +209,7 @@ pub const SETTING_KEYS: &[&str] = &[
     "processing.organize_reviewed_only",
     "processing.inbox_watch",
     "processing.ocr_digital_pdf",
+    "processing.ocr_figures",
     "processing.kie_max_pages",
     "processing.precise_mode",
     "processing.dense_reocr",
@@ -315,6 +317,23 @@ pub const NAMES: &[(&str, &[&str])] = &[
     ("processing.organize_reviewed_only", &["검토 완료만 정리", "검토 완료 문서만 정리", "reviewed only"]),
     ("processing.inbox_watch", &["inbox 감시", "받은 문서함 감시", "폴더 감시", "inbox watch", "inbox watching"]),
     ("processing.ocr_digital_pdf", &["디지털 pdf ocr", "디지털 pdf도 ocr", "ocr digital pdf"]),
+    (
+        "processing.ocr_figures",
+        &[
+            "이미지 내 글자 추출",
+            "이미지 안 글자 추출",
+            "이미지 글자 추출",
+            "그림 내 글자 추출",
+            "그림 안 글자 추출",
+            "그림 글자 추출",
+            "그림 글자 읽기",
+            "그림 ocr",
+            "이미지 ocr",
+            "extract text in images",
+            "text in images",
+            "figure ocr",
+        ],
+    ),
     ("processing.kie_max_pages", &["추출 최대 쪽수", "추출 쪽수", "최대 쪽수", "extraction page limit", "max pages"]),
     ("processing.precise_mode", &["정밀 모드", "precise mode"]),
     ("processing.dense_reocr", &["빽빽한 표 재ocr", "잔글씨 재ocr", "dense re-ocr"]),
@@ -697,7 +716,7 @@ mod tests {
         assert_eq!(keys.len(), SETTING_KEYS.len(), "duplicate keys");
         // Every settings field the assistant may change has an entry, plus `journal_days`. 0.8.0
         // took `privacy.db_encryption` out: nothing encrypts the database, so there is no switch.
-        assert_eq!(SETTINGS.len(), 48);
+        assert_eq!(SETTINGS.len(), 49);
         assert!(find("privacy.db_encryption").is_none());
     }
 
