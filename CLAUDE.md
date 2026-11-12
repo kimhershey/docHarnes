@@ -71,7 +71,7 @@ user PC: `docs/RUN-GUIDE.md`.
   classification (`sniff`: magic bytes / zip & CFB entries → `import::classify`), render via PDFium, `layout` (word boxes of the
   page text: PDFium char boxes grouped into visual rows (wrapped table cells), or a rulings-free ink-band / cell-cluster estimate
   for OCR pages; v1 layouts get their rows relabelled on load; on-image edits rewrite `pages.text`),
-  `convert/` HWPX·DOCX·HWP·XLSX·PPTX·text (txt/md/csv/html…) + legacy XLS/XLSB/ODS (calamine)·DOC·PPT (cfb)·RTF·HML → model
+  `convert/` HWPX·DOCX·HWP·XLSX·PPTX (1.0.0: slide tables keep their look — `CellStyle` from `ppt/tableStyles.xml` + the built-in default table style, cell `tcPr`, row heights; a placeholder inherits position / size / colour / anchor / alignment slide → layout → master)·text (txt/md/csv/html…) + legacy XLS/XLSB/ODS (calamine)·DOC·PPT (cfb)·RTF·HML → model
   (flow blocks + positioned `slides` for PPTX) → HTML → PDF through a `PdfPrinter` (page size from the source), fixtures),
   `knowledge/` (0.7.0: `chat` — assistant chat sessions `chat_sessions` / `chat_messages` (0012; message JSON stored as is, auto title, retention purge); 0.5.0 plan A: collections are reference groups — `kind` `reference` (공통 참고 자료, no project) | `project` (one per project,
   `project_id`; `repo::project_reference_group`), `SearchScope.project_id` = work docs ∪ project group ∪ active common groups, explicit `documents`

@@ -85,6 +85,7 @@ pub fn read(path: &Path) -> Result<DocModel> {
                         row_span: 1,
                         col_span: 1,
                         header: false,
+                        style: None,
                     }
                 })
                 .collect();
@@ -121,7 +122,7 @@ pub fn read(path: &Path) -> Result<DocModel> {
             }
         }
         model.blocks.push(Block::Paragraph(Paragraph { heading: Some(2), ..Paragraph::plain(name.clone()) }));
-        model.blocks.push(Block::Table(Table { rows, col_widths_mm: Vec::new() }));
+        model.blocks.push(Block::Table(Table { rows, col_widths_mm: Vec::new(), row_heights_mm: Vec::new() }));
     }
     if model.blocks.is_empty() {
         model.notes.push("내용이 있는 시트가 없습니다".into());

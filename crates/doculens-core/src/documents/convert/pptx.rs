@@ -24,7 +24,8 @@ use std::path::Path;
 use crate::error::{CoreError, Result};
 
 use super::model::{
-    Align, Block, Cell, DocModel, ImageData, ListKind, Paragraph, Run, Shape, ShapeKind, Slide, Table, VAnchor,
+    Align, Block, Cell, CellStyle, DocModel, ImageData, ListKind, Paragraph, Run, Shape, ShapeKind, Slide, Table,
+    VAnchor,
 };
 use super::xlsx::{read_rels, resolve_target};
 use super::xml::{self, Element};
@@ -385,6 +386,10 @@ struct PhEntry {
     xfrm: Option<Xfrm>,
     size_pt: Option<f32>,
     color: Option<String>,
+    /// Vertical anchor of the placeholder's text (`bodyPr@anchor`), when it declares one.
+    anchor: Option<VAnchor>,
+    /// Alignment of its first-level paragraphs (`lstStyle/lvl1pPr@algn`), when it declares one.
+    align: Option<Align>,
 }
 
 /// Placeholder shapes of a layout / master shape tree.
@@ -413,6 +418,12 @@ impl PhDefaults {
                 xfrm: xfrm_of(sp),
                 size_pt: def_rpr.and_then(|r| r.attr_f32("sz")).map(|s| s / 100.0),
                 color: def_rpr.and_then(|r| colors.fill(r)).flatten(),
+                anchor: sp.child("txBody").and_then(declared_anchor),
+                align: sp
+                    .child("txBody")
+                    .and_then(|b| b.child("lstStyle"))
+                    .and_then(|l| l.child("lvl1pPr"))
+                    .and_then(declared_align),
             });
         }
         d
@@ -435,6 +446,9 @@ struct TextStyles {
     title: (Option<f32>, Option<String>),
     body: (Option<f32>, Option<String>),
     other: (Option<f32>, Option<String>),
+    /// First-level alignment of the master's title and body styles (`lvl1pPr@algn`).
+    title_align: Option<Align>,
+    body_align: Option<Align>,
 }
 
 impl TextStyles {
@@ -448,7 +462,19 @@ impl TextStyles {
         t.title = read("titleStyle");
         t.body = read("bodyStyle");
         t.other = read("otherStyle");
+        let align = |name: &str| styles.child(name).and_then(|s| s.child("lvl1pPr")).and_then(declared_align);
+        t.title_align = align("titleStyle");
+        t.body_align = align("bodyStyle");
         t
+    }
+
+    /// The alignment a placeholder's paragraphs take when nothing nearer says otherwise.
+    fn align_for(&self, fam: &str) -> Option<Align> {
+        match fam {
+            "title" => self.title_align,
+            "body" | "subTitle" => self.body_align,
+            _ => None,
+        }
     }
 
     fn for_family(&self, fam: &str, is_placeholder: bool) -> (f32, Option<String>) {
@@ -488,16 +514,22 @@ fn run_props(r: &Element, colors: Option<&Colors>) -> (bool, bool, bool, Option<
     )
 }
 
+/// `algn` of a paragraph property element (`pPr`, `lvl1pPr`), when it declares one.
+fn declared_align(pr: &Element) -> Option<Align> {
+    match pr.attr("algn")? {
+        "ctr" => Some(Align::Center),
+        "r" => Some(Align::Right),
+        "just" | "dist" => Some(Align::Justify),
+        "l" => Some(Align::Left),
+        _ => None,
+    }
+}
+
 /// One `a:p` → paragraph. `bulleted_default` says whether the shape inherits bullets (body placeholders).
 fn paragraph(p: &Element, bulleted_default: bool, colors: Option<&Colors>) -> Paragraph {
     let mut para = Paragraph::default();
     if let Some(pr) = p.child("pPr") {
-        para.align = match pr.attr("algn") {
-            Some("ctr") => Align::Center,
-            Some("r") => Align::Right,
-            Some("just") | Some("dist") => Align::Justify,
-            _ => Align::Left,
-        };
+        para.align = declared_align(pr).unwrap_or(Align::Left);
         para.level = pr.attr_u32("lvl").unwrap_or(0).min(8) as u8;
         para.list = if pr.child("buNone").is_some() {
             None
@@ -550,17 +582,161 @@ fn text_body(body: &Element, heading: Option<u8>, bulleted_default: bool, out: &
     }
 }
 
+// ---------------------------------------------------------------------------
+// Tables (1.0.0 plan §1-2: cell fills, borders, row heights and table styles)
+// ---------------------------------------------------------------------------
+
+/// The id of PowerPoint's default table style, "Medium Style 2 - Accent 1".
+const DEFAULT_TABLE_STYLE_ID: &str = "{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}";
+
+/// The definition of the default table style. A presentation names a built-in style by id and
+/// carries no definition for it (`ppt/tableStyles.xml` lists only the styles that are not built in),
+/// so the one nearly every table uses is kept here, in the form PowerPoint writes it: a header row
+/// on the accent colour with white bold text, the body on a light tint of it in bands, white lines.
+const DEFAULT_TABLE_STYLE: &str = r#"<a:tblStyle xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" styleId="{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}" styleName="Medium Style 2 - Accent 1"><a:wholeTbl><a:tcTxStyle><a:fontRef idx="minor"><a:prstClr val="black"/></a:fontRef><a:schemeClr val="dk1"/></a:tcTxStyle><a:tcStyle><a:tcBdr><a:left><a:ln w="12700" cmpd="sng"><a:solidFill><a:schemeClr val="lt1"/></a:solidFill></a:ln></a:left><a:right><a:ln w="12700" cmpd="sng"><a:solidFill><a:schemeClr val="lt1"/></a:solidFill></a:ln></a:right><a:top><a:ln w="12700" cmpd="sng"><a:solidFill><a:schemeClr val="lt1"/></a:solidFill></a:ln></a:top><a:bottom><a:ln w="12700" cmpd="sng"><a:solidFill><a:schemeClr val="lt1"/></a:solidFill></a:ln></a:bottom><a:insideH><a:ln w="12700" cmpd="sng"><a:solidFill><a:schemeClr val="lt1"/></a:solidFill></a:ln></a:insideH><a:insideV><a:ln w="12700" cmpd="sng"><a:solidFill><a:schemeClr val="lt1"/></a:solidFill></a:ln></a:insideV></a:tcBdr><a:fill><a:solidFill><a:schemeClr val="accent1"><a:tint val="20000"/></a:schemeClr></a:solidFill></a:fill></a:tcStyle></a:wholeTbl><a:band1H><a:tcStyle><a:tcBdr/><a:fill><a:solidFill><a:schemeClr val="accent1"><a:tint val="40000"/></a:schemeClr></a:solidFill></a:fill></a:tcStyle></a:band1H><a:band2H><a:tcStyle><a:tcBdr/></a:tcStyle></a:band2H><a:band1V><a:tcStyle><a:tcBdr/><a:fill><a:solidFill><a:schemeClr val="accent1"><a:tint val="40000"/></a:schemeClr></a:solidFill></a:fill></a:tcStyle></a:band1V><a:band2V><a:tcStyle><a:tcBdr/></a:tcStyle></a:band2V><a:lastCol><a:tcTxStyle b="on"><a:fontRef idx="minor"><a:prstClr val="black"/></a:fontRef><a:schemeClr val="lt1"/></a:tcTxStyle><a:tcStyle><a:tcBdr/><a:fill><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></a:fill></a:tcStyle></a:lastCol><a:firstCol><a:tcTxStyle b="on"><a:fontRef idx="minor"><a:prstClr val="black"/></a:fontRef><a:schemeClr val="lt1"/></a:tcTxStyle><a:tcStyle><a:tcBdr/><a:fill><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></a:fill></a:tcStyle></a:firstCol><a:lastRow><a:tcTxStyle b="on"><a:fontRef idx="minor"><a:prstClr val="black"/></a:fontRef><a:schemeClr val="lt1"/></a:tcTxStyle><a:tcStyle><a:tcBdr><a:top><a:ln w="38100" cmpd="sng"><a:solidFill><a:schemeClr val="lt1"/></a:solidFill></a:ln></a:top></a:tcBdr><a:fill><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></a:fill></a:tcStyle></a:lastRow><a:firstRow><a:tcTxStyle b="on"><a:fontRef idx="minor"><a:prstClr val="black"/></a:fontRef><a:schemeClr val="lt1"/></a:tcTxStyle><a:tcStyle><a:tcBdr><a:bottom><a:ln w="38100" cmpd="sng"><a:solidFill><a:schemeClr val="lt1"/></a:solidFill></a:ln></a:bottom></a:tcBdr><a:fill><a:solidFill><a:schemeClr val="accent1"/></a:solidFill></a:fill></a:tcStyle></a:firstRow></a:tblStyle>"#;
+
+/// The table styles of a presentation by id: the definitions in `ppt/tableStyles.xml` and the
+/// built-in default. They stay XML — their colours are theme colours, resolved per slide.
+#[derive(Debug, Default)]
+struct TableStyles {
+    defs: HashMap<String, Element>,
+}
+
+impl TableStyles {
+    fn load(archive: &mut Archive) -> TableStyles {
+        let mut defs = HashMap::new();
+        if let Ok(builtin) = xml::parse(DEFAULT_TABLE_STYLE.as_bytes()) {
+            defs.insert(DEFAULT_TABLE_STYLE_ID.to_string(), builtin);
+        }
+        if let Ok(Some(list)) = read_part(archive, "ppt/tableStyles.xml") {
+            for style in list.children_named("tblStyle") {
+                if let Some(id) = style.attr("styleId") {
+                    defs.insert(id.to_string(), style.clone());
+                }
+            }
+        }
+        TableStyles { defs }
+    }
+}
+
+/// A border as a table style or a cell declares it: `Some(None)` = explicitly no line.
+type Border = Option<Option<(String, f32)>>;
+
+/// What one part of a table style (`wholeTbl`, `firstRow`, `band1H` …) declares; `None` = left to
+/// the parts below it.
+#[derive(Debug, Clone, Default)]
+struct TablePart {
+    fill: Option<Option<String>>,
+    /// left, right, top, bottom, insideH, insideV.
+    borders: [Border; 6],
+    color: Option<String>,
+    bold: Option<bool>,
+}
+
+fn table_line(ln: &Element, colors: &Colors) -> Option<(String, f32)> {
+    if ln.child("noFill").is_some() {
+        return None;
+    }
+    let width = ln.attr_f32("w").map(emu_to_pt).unwrap_or(1.0).max(0.25);
+    colors.fill(ln).flatten().map(|c| (c, width))
+}
+
+fn table_part(style: &Element, name: &str, colors: &Colors) -> Option<TablePart> {
+    let part = style.child(name)?;
+    let mut out = TablePart::default();
+    if let Some(tx) = part.child("tcTxStyle") {
+        out.bold = match tx.attr("b") {
+            Some("on") => Some(true),
+            Some("off") => Some(false),
+            _ => None,
+        };
+        // The colour element sits next to `fontRef` (which carries a placeholder colour of its own).
+        out.color = tx.elements().filter(|e| e.name != "fontRef").find_map(|e| colors.resolve(e));
+    }
+    if let Some(tc) = part.child("tcStyle") {
+        out.fill = tc.child("fill").and_then(|f| colors.fill(f));
+        if let Some(bdr) = tc.child("tcBdr") {
+            for (i, side) in ["left", "right", "top", "bottom", "insideH", "insideV"].iter().enumerate() {
+                if let Some(ln) = bdr.child(side).and_then(|b| b.child("ln")) {
+                    out.borders[i] = Some(table_line(ln, colors));
+                }
+            }
+        }
+    }
+    Some(out)
+}
+
+/// Where a cell sits in the region a style part covers (the whole table, one row, one column).
+#[derive(Clone, Copy)]
+struct Edges {
+    left: bool,
+    right: bool,
+    top: bool,
+    bottom: bool,
+}
+
+/// Lays a style part over a cell: an outer border of the part goes to the cells on that edge of the
+/// part's region, the inside borders to the edges between its cells.
+fn overlay(style: &mut CellStyle, part: &TablePart, at: Edges) {
+    if let Some(fill) = &part.fill {
+        style.fill = fill.clone();
+    }
+    if let Some(color) = &part.color {
+        style.color = Some(color.clone());
+    }
+    if let Some(bold) = part.bold {
+        style.bold = bold;
+    }
+    let [left, right, top, bottom, inside_h, inside_v] = &part.borders;
+    let sides = [
+        if at.left { left } else { inside_v },
+        if at.right { right } else { inside_v },
+        if at.top { top } else { inside_h },
+        if at.bottom { bottom } else { inside_h },
+    ];
+    for (slot, side) in style.borders.iter_mut().zip(sides) {
+        if let Some(line) = side {
+            *slot = line.clone();
+        }
+    }
+}
+
 /// `a:tbl` → table (`gridSpan` / `rowSpan` spans; `hMerge` / `vMerge` continuation cells dropped).
-fn table(tbl: &Element, colors: Option<&Colors>) -> Table {
-    let header_first = tbl.child("tblPr").and_then(|p| p.attr_bool("firstRow")).unwrap_or(false);
+/// On a slide (`look` given) the cells also get their look: the table style named by
+/// `tableStyleId` — whole table, bands, first / last column, first / last row, in that order —
+/// and on top of it the cell's own `tcPr` (fill, `lnL` / `lnR` / `lnT` / `lnB`, anchor).
+fn table(tbl: &Element, colors: Option<&Colors>, look: Option<&TableStyles>) -> Table {
+    let pr = tbl.child("tblPr");
+    let flag = |name: &str| pr.and_then(|p| p.attr_bool(name)).unwrap_or(false);
+    let header_first = flag("firstRow");
     let col_widths_mm: Vec<f32> = tbl
         .child("tblGrid")
         .map(|g| g.children_named("gridCol").filter_map(|c| c.attr_f32("w")).map(emu_to_mm).collect())
         .unwrap_or_default();
+    let style_el = match (look, colors) {
+        (Some(styles), Some(_)) => pr
+            .and_then(|p| p.child("tableStyleId"))
+            .map(|e| e.text().trim().to_string())
+            .and_then(|id| styles.defs.get(&id)),
+        _ => None,
+    };
+    let part = |name: &str| match (style_el, colors) {
+        (Some(st), Some(c)) => table_part(st, name, c),
+        _ => None,
+    };
+    let whole = part("wholeTbl");
+    let bands_h = [part("band1H"), part("band2H")];
+    let bands_v = [part("band1V"), part("band2V")];
+    let (first_row, last_row) = (part("firstRow"), part("lastRow"));
+    let (first_col, last_col) = (part("firstCol"), part("lastCol"));
+    let trs: Vec<&Element> = tbl.children_named("tr").collect();
+    let n_rows = trs.len();
+    let n_cols = col_widths_mm.len().max(trs.first().map_or(0, |tr| tr.children_named("tc").count()));
     let mut rows = Vec::new();
-    for (i, tr) in tbl.children_named("tr").enumerate() {
+    let mut row_heights_mm = Vec::new();
+    for (i, tr) in trs.iter().enumerate() {
         let mut row = Vec::new();
-        for tc in tr.children_named("tc") {
+        for (c, tc) in tr.children_named("tc").enumerate() {
             if tc.attr_bool("hMerge").unwrap_or(false) || tc.attr_bool("vMerge").unwrap_or(false) {
                 continue;
             }
@@ -573,18 +749,84 @@ fn table(tbl: &Element, colors: Option<&Colors>) -> Table {
                     }
                 }
             }
-            row.push(Cell {
-                blocks,
-                row_span: tc.attr_u32("rowSpan").unwrap_or(1).max(1).min(u16::MAX as u32) as u16,
-                col_span: tc.attr_u32("gridSpan").unwrap_or(1).max(1).min(u16::MAX as u32) as u16,
-                header: header_first && i == 0,
-            });
+            let row_span = tc.attr_u32("rowSpan").unwrap_or(1).max(1).min(u16::MAX as u32) as u16;
+            let col_span = tc.attr_u32("gridSpan").unwrap_or(1).max(1).min(u16::MAX as u32) as u16;
+            // The cell's look: only on a slide, and only when a style or the cell itself says something.
+            let mut style = None;
+            if let (Some(colors), true) = (colors, look.is_some()) {
+                let (last_r, last_c) = (i + row_span as usize >= n_rows, c + col_span as usize >= n_cols);
+                let in_table = Edges { left: c == 0, right: last_c, top: i == 0, bottom: last_r };
+                let in_row = Edges { top: true, bottom: true, ..in_table };
+                let in_col = Edges { left: true, right: true, ..in_table };
+                let is_first_row = flag("firstRow") && i == 0;
+                let is_last_row = flag("lastRow") && last_r && n_rows > 1;
+                let is_first_col = flag("firstCol") && c == 0;
+                let is_last_col = flag("lastCol") && last_c && n_cols > 1;
+                let mut st = CellStyle::default();
+                let mut styled = false;
+                if let Some(p) = &whole {
+                    overlay(&mut st, p, in_table);
+                    styled = true;
+                }
+                if flag("bandRow") && !is_first_row && !is_last_row {
+                    let band = (i - flag("firstRow") as usize) % 2;
+                    if let Some(p) = &bands_h[band] {
+                        overlay(&mut st, p, in_row);
+                        styled = true;
+                    }
+                }
+                if flag("bandCol") && !is_first_col && !is_last_col {
+                    let band = (c - flag("firstCol") as usize) % 2;
+                    if let Some(p) = &bands_v[band] {
+                        overlay(&mut st, p, in_col);
+                        styled = true;
+                    }
+                }
+                for (on, p, at) in [
+                    (is_first_col, &first_col, in_col),
+                    (is_last_col, &last_col, in_col),
+                    (is_first_row, &first_row, in_row),
+                    (is_last_row, &last_row, in_row),
+                ] {
+                    if let (true, Some(p)) = (on, p) {
+                        overlay(&mut st, p, at);
+                        styled = true;
+                    }
+                }
+                if let Some(tc_pr) = tc.child("tcPr") {
+                    if let Some(fill) = colors.fill(tc_pr) {
+                        st.fill = fill;
+                        styled = true;
+                    }
+                    for (slot, name) in st.borders.iter_mut().zip(["lnL", "lnR", "lnT", "lnB"]) {
+                        if let Some(ln) = tc_pr.child(name) {
+                            *slot = table_line(ln, colors);
+                            styled = true;
+                        }
+                    }
+                    st.valign = match tc_pr.attr("anchor") {
+                        Some("ctr") => Some("middle".to_string()),
+                        Some("b") => Some("bottom".to_string()),
+                        Some("t") => Some("top".to_string()),
+                        _ => None,
+                    };
+                    styled |= st.valign.is_some();
+                }
+                if styled {
+                    style = Some(Box::new(st));
+                }
+            }
+            row.push(Cell { blocks, row_span, col_span, header: header_first && i == 0, style });
         }
         if !row.is_empty() {
             rows.push(row);
+            row_heights_mm.push(tr.attr_f32("h").map(emu_to_mm).unwrap_or(0.0));
         }
     }
-    Table { rows, col_widths_mm }
+    if look.is_none() || row_heights_mm.iter().all(|h| *h <= 0.0) {
+        row_heights_mm.clear();
+    }
+    Table { rows, col_widths_mm, row_heights_mm }
 }
 
 // ---------------------------------------------------------------------------
@@ -625,6 +867,8 @@ struct Ctx<'a> {
     notes: Vec<String>,
     /// Total bytes of embedded images kept (OOM guard).
     image_bytes: usize,
+    /// Table styles of the presentation (1.0.0).
+    table_styles: TableStyles,
 }
 
 impl Ctx<'_> {
@@ -767,7 +1011,7 @@ fn shape_blocks(ctx: &mut Ctx<'_>, sp: &Element, out: &mut Vec<Block>, title: &m
         }
         "graphicFrame" => {
             if let Some(tbl) = sp.find("tbl") {
-                out.push(Block::Table(table(tbl, None)));
+                out.push(Block::Table(table(tbl, None, None)));
             } else if sp.find("chart").is_some() {
                 ctx.notes.push("차트는 변환본에 자리만 표시됩니다".into());
             } else if sp.find("relIds").is_some() {
@@ -828,13 +1072,19 @@ struct Inherited {
 
 const DEFAULT_INSETS_MM: [f32; 4] = [2.54, 1.27, 2.54, 1.27];
 
+/// The vertical anchor a text body declares itself (`None`: left to the layout / master placeholder).
+fn declared_anchor(body: &Element) -> Option<VAnchor> {
+    match body.child("bodyPr").and_then(|p| p.attr("anchor")) {
+        Some("ctr") => Some(VAnchor::Middle),
+        Some("b") => Some(VAnchor::Bottom),
+        Some("t") => Some(VAnchor::Top),
+        _ => None,
+    }
+}
+
 fn body_props(body: &Element) -> (VAnchor, [f32; 4], f32) {
     let pr = body.child("bodyPr");
-    let anchor = match pr.and_then(|p| p.attr("anchor")) {
-        Some("ctr") => VAnchor::Middle,
-        Some("b") => VAnchor::Bottom,
-        _ => VAnchor::Top,
-    };
+    let anchor = declared_anchor(body).unwrap_or(VAnchor::Top);
     let inset = |n: &str, default: f32| pr.and_then(|p| p.attr_f32(n)).map(emu_to_mm).unwrap_or(default);
     let insets = [inset("lIns", 2.54), inset("tIns", 1.27), inset("rIns", 2.54), inset("bIns", 1.27)];
     let scale = pr
@@ -874,29 +1124,67 @@ fn slide_shapes(ctx: &mut Ctx<'_>, tree: &Element, inh: &Inherited, stack: &mut 
                 if matches!(kind, Some("sldNum") | Some("dt") | Some("ftr")) {
                     continue;
                 }
-                let inherited = ph.as_ref().and_then(|p| inh.layout.lookup(p).or_else(|| inh.master.lookup(p)));
-                let Some(geo) = xfrm_of(sp).or_else(|| inherited.and_then(|e| e.xfrm)) else { continue };
+                // A placeholder takes what it does not declare from the layout's placeholder, and what that
+                // one does not declare from the master's — property by property. A layout usually repeats
+                // the title placeholder without a position: stopping at the layout dropped the title (and
+                // any body placed by the master) from the slide.
+                let from_layout = ph.as_ref().and_then(|p| inh.layout.lookup(p));
+                let from_master = ph.as_ref().and_then(|p| inh.master.lookup(p));
+                let Some(geo) = xfrm_of(sp)
+                    .or_else(|| from_layout.and_then(|e| e.xfrm))
+                    .or_else(|| from_master.and_then(|e| e.xfrm))
+                else {
+                    continue;
+                };
                 let geo = to_slide(stack, geo);
                 let sp_pr = sp.child("spPr");
                 let fill = sp_pr.and_then(|p| inh.colors.fill(p)).flatten();
                 let line = sp_pr.and_then(|p| inh.colors.line(p));
                 let fam = ph_family(kind);
                 let body = sp.child("txBody");
+                // Alignment the paragraphs inherit: the shape's own list style, the layout's placeholder,
+                // the master's, then the master's text style (a title is centred there, not on the slide).
+                let inherited_align = body
+                    .and_then(|b| b.child("lstStyle"))
+                    .and_then(|l| l.child("lvl1pPr"))
+                    .and_then(declared_align)
+                    .or_else(|| from_layout.and_then(|e| e.align))
+                    .or_else(|| from_master.and_then(|e| e.align))
+                    .or_else(|| ph.as_ref().and_then(|_| inh.styles.align_for(fam)));
                 let paragraphs: Vec<Paragraph> = body
                     .map(|b| {
                         let bulleted = ph.is_some() && fam == "body";
-                        b.children_named("p").map(|p| paragraph(p, bulleted, Some(&inh.colors))).collect()
+                        b.children_named("p")
+                            .map(|p| {
+                                let mut para = paragraph(p, bulleted, Some(&inh.colors));
+                                let own = p.child("pPr").and_then(declared_align);
+                                if let (None, Some(a)) = (own, inherited_align) {
+                                    para.align = a;
+                                }
+                                para
+                            })
+                            .collect()
                     })
                     .unwrap_or_default();
                 let has_text = paragraphs.iter().any(|p| !p.is_empty());
                 if !has_text && fill.is_none() && line.is_none() {
                     continue;
                 }
-                let (anchor, insets_mm, font_scale) =
-                    body.map(body_props).unwrap_or((VAnchor::Top, DEFAULT_INSETS_MM, 1.0));
+                let (_, insets_mm, font_scale) = body.map(body_props).unwrap_or((VAnchor::Top, DEFAULT_INSETS_MM, 1.0));
+                let anchor = body
+                    .and_then(declared_anchor)
+                    .or_else(|| from_layout.and_then(|e| e.anchor))
+                    .or_else(|| from_master.and_then(|e| e.anchor))
+                    .unwrap_or(VAnchor::Top);
                 let (style_pt, style_color) = inh.styles.for_family(fam, ph.is_some());
-                let default_pt = inherited.and_then(|e| e.size_pt).unwrap_or(style_pt);
-                let default_color = inherited.and_then(|e| e.color.clone()).or(style_color);
+                let default_pt = from_layout
+                    .and_then(|e| e.size_pt)
+                    .or_else(|| from_master.and_then(|e| e.size_pt))
+                    .unwrap_or(style_pt);
+                let default_color = from_layout
+                    .and_then(|e| e.color.clone())
+                    .or_else(|| from_master.and_then(|e| e.color.clone()))
+                    .or(style_color);
                 let mut shape = mm_shape(
                     geo,
                     ShapeKind::Text { paragraphs, anchor, font_scale, insets_mm, default_pt, default_color },
@@ -923,7 +1211,7 @@ fn slide_shapes(ctx: &mut Ctx<'_>, tree: &Element, inh: &Inherited, stack: &mut 
                 let Some(geo) = xfrm_of(sp) else { continue };
                 let geo = to_slide(stack, geo);
                 let kind = if let Some(tbl) = sp.find("tbl") {
-                    ShapeKind::Table(table(tbl, Some(&inh.colors)))
+                    ShapeKind::Table(table(tbl, Some(&inh.colors), Some(&ctx.table_styles)))
                 } else if sp.find("chart").is_some() {
                     ShapeKind::Placeholder { label: "차트".into() }
                 } else if sp.find("relIds").is_some() {
@@ -1024,6 +1312,7 @@ pub fn read(path: &Path) -> Result<DocModel> {
                 .collect()
         })
         .unwrap_or_default();
+    let table_styles = TableStyles::load(&mut archive);
     let mut ctx = Ctx {
         archive: &mut archive,
         rels: HashMap::new(),
@@ -1031,6 +1320,7 @@ pub fn read(path: &Path) -> Result<DocModel> {
         loaded: HashMap::new(),
         notes: Vec::new(),
         image_bytes: 0,
+        table_styles,
     };
     // Layouts / masters / themes are shared between slides: parse each once.
     let mut parts: HashMap<String, Option<Element>> = HashMap::new();
@@ -1273,6 +1563,241 @@ pub(crate) mod tests {
         out.into_inner()
     }
 
+    /// A one-slide deck from raw parts (the parts every reader path needs are added around them).
+    /// `master` = (the master's shapes, what follows its shape tree — `p:txStyles`).
+    fn write_deck(path: &Path, slide: &str, layout: &str, master: (&str, &str), table_styles: Option<&str>) {
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+        let ns = r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main""#;
+        let rel = |id: &str, kind: &str, target: &str| {
+            format!(
+                r#"<Relationship Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{kind}" Target="{target}"/>"#
+            )
+        };
+        let rels = |items: &[String]| {
+            format!(
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{}</Relationships>"#,
+                items.concat()
+            )
+        };
+        let tree = |inner: &str| {
+            format!(
+                r#"<p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{inner}</p:spTree></p:cSld>"#
+            )
+        };
+        let mut parts: Vec<(&str, String)> = vec![
+            ("_rels/.rels", rels(&[rel("rId1", "officeDocument", "ppt/presentation.xml")])),
+            (
+                "ppt/presentation.xml",
+                format!(r#"<p:presentation {ns}><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst><p:sldIdLst><p:sldId id="256" r:id="rId2"/></p:sldIdLst><p:sldSz cx="9144000" cy="6858000"/></p:presentation>"#),
+            ),
+            (
+                "ppt/_rels/presentation.xml.rels",
+                rels(&[rel("rId1", "slideMaster", "slideMasters/slideMaster1.xml"), rel("rId2", "slide", "slides/slide1.xml")]),
+            ),
+            ("ppt/slides/slide1.xml", format!(r#"<p:sld {ns}>{}</p:sld>"#, tree(slide))),
+            ("ppt/slides/_rels/slide1.xml.rels", rels(&[rel("rId1", "slideLayout", "../slideLayouts/slideLayout1.xml")])),
+            ("ppt/slideLayouts/slideLayout1.xml", format!(r#"<p:sldLayout {ns}>{}</p:sldLayout>"#, tree(layout))),
+            (
+                "ppt/slideLayouts/_rels/slideLayout1.xml.rels",
+                rels(&[rel("rId1", "slideMaster", "../slideMasters/slideMaster1.xml")]),
+            ),
+            (
+                "ppt/slideMasters/slideMaster1.xml",
+                format!(r#"<p:sldMaster {ns}>{}{}</p:sldMaster>"#, tree(master.0), master.1),
+            ),
+            ("ppt/slideMasters/_rels/slideMaster1.xml.rels", rels(&[rel("rId1", "theme", "../theme/theme1.xml")])),
+            (
+                "ppt/theme/theme1.xml",
+                r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:themeElements><a:clrScheme name="t"><a:dk1><a:srgbClr val="000000"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="44546A"/></a:dk2><a:lt2><a:srgbClr val="E7E6E6"/></a:lt2><a:accent1><a:srgbClr val="4F81BD"/></a:accent1><a:accent2><a:srgbClr val="C0504D"/></a:accent2></a:clrScheme></a:themeElements></a:theme>"#.to_string(),
+            ),
+        ];
+        if let Some(styles) = table_styles {
+            parts.push(("ppt/tableStyles.xml", styles.to_string()));
+        }
+        let mut z = zip::ZipWriter::new(File::create(path).unwrap());
+        for (name, data) in parts {
+            z.start_file(name, SimpleFileOptions::default()).unwrap();
+            z.write_all(data.as_bytes()).unwrap();
+        }
+        z.finish().unwrap();
+    }
+
+    fn table_xml(style_id: &str, flags: &str, cells: &[&[&str]], first_cell_pr: &str) -> String {
+        let cols = cells[0].len();
+        let grid: String = (0..cols).map(|_| r#"<a:gridCol w="1800000"/>"#).collect();
+        let mut rows = String::new();
+        for (r, row) in cells.iter().enumerate() {
+            rows.push_str(r#"<a:tr h="360000">"#);
+            for (c, text) in row.iter().enumerate() {
+                let pr = if r == 0 && c == 0 { first_cell_pr } else { "<a:tcPr/>" };
+                rows.push_str(&format!(
+                    r#"<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{text}</a:t></a:r></a:p></a:txBody>{pr}</a:tc>"#
+                ));
+            }
+            rows.push_str("</a:tr>");
+        }
+        format!(
+            r#"<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="9" name="T"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="900000" y="1800000"/><a:ext cx="5400000" cy="1440000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblPr {flags}><a:tableStyleId>{style_id}</a:tableStyleId></a:tblPr><a:tblGrid>{grid}</a:tblGrid>{rows}</a:tbl></a:graphicData></a:graphic></p:graphicFrame>"#
+        )
+    }
+
+    fn slide_tables(model: &DocModel) -> Vec<&Table> {
+        model.slides[0]
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.kind {
+                ShapeKind::Table(t) => Some(t),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// 1.0.0 §1-2: a table keeps its look — the built-in default style, a style the file defines, the
+    /// cell's own fill / border / anchor on top, row heights — and the page view keeps it in the HTML.
+    #[test]
+    fn slide_tables_keep_their_style_fills_and_borders() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tables.pptx");
+        let cells: &[&[&str]] = &[&["구분", "1분기", "2분기"], &["매출", "1,200", "1,450"], &["비용", "800", "910"]];
+        let own = r#"<a:tcPr anchor="ctr"><a:lnB w="25400"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></a:lnB><a:solidFill><a:srgbClr val="FFE066"/></a:solidFill></a:tcPr>"#;
+        let custom_id = "{11111111-2222-3333-4444-555555555555}";
+        let custom = format!(
+            r#"<a:tblStyleLst xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" def="{DEFAULT_TABLE_STYLE_ID}"><a:tblStyle styleId="{custom_id}" styleName="Ours"><a:wholeTbl><a:tcTxStyle><a:schemeClr val="dk1"/></a:tcTxStyle><a:tcStyle><a:tcBdr><a:insideH><a:ln w="6350"><a:solidFill><a:schemeClr val="accent2"/></a:solidFill></a:ln></a:insideH><a:left><a:ln><a:noFill/></a:ln></a:left></a:tcBdr><a:fill><a:noFill/></a:fill></a:tcStyle></a:wholeTbl><a:firstCol><a:tcTxStyle b="on"><a:schemeClr val="accent2"/></a:tcTxStyle><a:tcStyle><a:tcBdr/></a:tcStyle></a:firstCol></a:tblStyle></a:tblStyleLst>"#
+        );
+        let slide = [
+            table_xml(DEFAULT_TABLE_STYLE_ID, r#"firstRow="1" bandRow="1""#, cells, own),
+            table_xml(custom_id, r#"firstCol="1""#, cells, "<a:tcPr/>"),
+            table_xml("{DEADBEEF-0000-0000-0000-000000000000}", r#"firstRow="1""#, cells, "<a:tcPr/>"),
+        ]
+        .concat();
+        write_deck(&path, &slide, "", ("", ""), Some(&custom));
+        let model = read(&path).unwrap();
+        let tables = slide_tables(&model);
+        assert_eq!(tables.len(), 3);
+        let style = |t: &Table, r: usize, c: usize| t.rows[r][c].style.as_deref().cloned();
+        let line = |color: &str, pt: f32| Some((color.to_string(), pt));
+
+        // The default style: header on the accent colour in white bold with a 3 pt rule under it, the
+        // body in two tints of it, 1 pt white lines; row heights as the file gives them.
+        let t = tables[0];
+        assert_eq!(t.row_heights_mm.len(), 3);
+        assert!((t.row_heights_mm[0] - emu_to_mm(360_000.0)).abs() < 0.01);
+        let head = style(t, 0, 1).unwrap();
+        assert_eq!((head.fill.as_deref(), head.color.as_deref(), head.bold), (Some("#4F81BD"), Some("#FFFFFF"), true));
+        assert_eq!(
+            head.borders,
+            [line("#FFFFFF", 1.0), line("#FFFFFF", 1.0), line("#FFFFFF", 1.0), line("#FFFFFF", 3.0)]
+        );
+        let (band1, band2) = (style(t, 1, 0).unwrap(), style(t, 2, 0).unwrap());
+        assert_eq!((band1.fill.as_deref(), band2.fill.as_deref()), (Some("#B9CDE5"), Some("#DCE6F2")));
+        assert!(!band1.bold && band1.color.as_deref() == Some("#000000"));
+        // The cell's own properties lie on top of the style: fill, bottom line, anchor.
+        let own = style(t, 0, 0).unwrap();
+        assert_eq!(own.fill.as_deref(), Some("#FFE066"));
+        assert_eq!(own.borders[3], line("#FF0000", 2.0));
+        assert_eq!(own.valign.as_deref(), Some("middle"));
+        assert!(own.bold, "still a header cell of the style");
+
+        // A style the file defines: no fill, lines between the rows only, the first column emphasised.
+        let t = tables[1];
+        let first = style(t, 1, 0).unwrap();
+        assert_eq!((first.fill.as_deref(), first.color.as_deref(), first.bold), (None, Some("#C0504D"), true));
+        assert_eq!(first.borders, [None, None, line("#C0504D", 0.5), line("#C0504D", 0.5)]);
+        let inner = style(t, 0, 1).unwrap();
+        assert_eq!((inner.color.as_deref(), inner.bold), (Some("#000000"), false));
+        assert_eq!(inner.borders, [None, None, None, line("#C0504D", 0.5)], "no line on the table's outer top edge");
+        // A style nobody defines: the plain look, as before.
+        assert!(tables[2].rows.iter().flatten().all(|c| c.style.is_none()));
+        assert!(tables[2].rows[0][0].header);
+
+        // The page view writes the look into the cells; the reading-order view stays plain.
+        let html = super::super::html::to_html(&model);
+        assert!(html.contains(r#"<tr style="height:33.33%">"#), "{}", &html[..html.len().min(400)]);
+        assert!(html.contains("background:#4F81BD;color:#FFFFFF;font-weight:700;"));
+        assert!(
+            html.contains("background:#FFE066;")
+                && html.contains("border-bottom:2.00pt solid #FF0000;vertical-align:middle;")
+        );
+        assert!(html.contains("background:transparent;color:#C0504D;font-weight:700;border-left:none;"));
+        let flow: Vec<&Table> = model
+            .blocks
+            .iter()
+            .filter_map(|b| match b {
+                Block::Table(t) => Some(t),
+                _ => None,
+            })
+            .collect();
+        assert!(flow.iter().all(|t| t.row_heights_mm.is_empty() && t.rows.iter().flatten().all(|c| c.style.is_none())));
+    }
+
+    /// 1.0.0 §1: a placeholder takes what it leaves out from the layout's placeholder and, past that, from
+    /// the master's — a layout that repeats the title without a position used to lose the title.
+    #[test]
+    fn a_placeholder_inherits_through_the_layout_to_the_master() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("inherit.pptx");
+        let ph = |extra: &str, text: &str| {
+            format!(
+                r#"<p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr>{extra}<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp>"#
+            )
+        };
+        let slide = ph("<p:spPr/>", "분기별 실적");
+        let layout = ph("<p:spPr/>", "레이아웃 제목");
+        // The master places the title, anchors it in the middle; its title style centres it at 40 pt.
+        let master_title = r#"<p:sp><p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="457200" y="274638"/><a:ext cx="8229600" cy="1143000"/></a:xfrm></p:spPr><p:txBody><a:bodyPr anchor="ctr"/><a:lstStyle/><a:p><a:r><a:t>마스터 제목</a:t></a:r></a:p></p:txBody></p:sp>"#;
+        let master_tail = r#"<p:txStyles><p:titleStyle><a:lvl1pPr algn="ctr"><a:defRPr sz="4000"/></a:lvl1pPr></p:titleStyle></p:txStyles>"#;
+        write_deck(&path, &slide, &layout, (master_title, master_tail), None);
+        let model = read(&path).unwrap();
+        let title = model.slides[0]
+            .shapes
+            .iter()
+            .find(|s| matches!(&s.kind, ShapeKind::Text { paragraphs, .. } if paragraphs[0].text() == "분기별 실적"))
+            .expect("the title is on the slide");
+        assert!((title.x_mm - emu_to_mm(457_200.0)).abs() < 0.01 && (title.y_mm - emu_to_mm(274_638.0)).abs() < 0.01);
+        assert!((title.w_mm - emu_to_mm(8_229_600.0)).abs() < 0.01);
+        match &title.kind {
+            ShapeKind::Text { paragraphs, anchor, default_pt, .. } => {
+                assert_eq!((*anchor, *default_pt), (VAnchor::Middle, 40.0));
+                assert_eq!(paragraphs[0].align, Align::Center, "the master's title style centres it");
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// Diagnostic (ignored): `DOCULENS_PPTX_DUMP=<pptx> [DOCULENS_PPTX_DUMP_OUT=<html>]` converts a real
+    /// presentation, prints what each slide holds and writes the HTML the PDF is printed from.
+    #[test]
+    #[ignore]
+    fn dump_pptx() {
+        let Some(path) = std::env::var_os("DOCULENS_PPTX_DUMP").map(std::path::PathBuf::from) else { return };
+        let model = read(&path).unwrap();
+        for (i, slide) in model.slides.iter().enumerate() {
+            println!("slide {}: background {:?}, {} shape(s)", i + 1, slide.background, slide.shapes.len());
+            for sh in &slide.shapes {
+                match &sh.kind {
+                    ShapeKind::Table(t) => {
+                        println!("  table {}x{} heights {:?}", t.rows.len(), t.col_widths_mm.len(), t.row_heights_mm);
+                        for row in &t.rows {
+                            for c in row {
+                                println!("    [{}] {:?}", c.text().trim(), c.style);
+                            }
+                        }
+                    }
+                    other => println!(
+                        "  {:.0}x{:.0} mm {}",
+                        sh.w_mm,
+                        sh.h_mm,
+                        format!("{other:?}").chars().take(100).collect::<String>()
+                    ),
+                }
+            }
+        }
+        if let Some(out) = std::env::var_os("DOCULENS_PPTX_DUMP_OUT") {
+            std::fs::write(out, crate::documents::convert::html::to_html(&model)).unwrap();
+        }
+    }
+
     #[test]
     fn reads_generated_pptx() {
         let dir = tempfile::tempdir().unwrap();
@@ -1352,7 +1877,9 @@ pub(crate) mod tests {
         match &title.kind {
             ShapeKind::Text { default_pt, anchor, .. } => {
                 assert_eq!(*default_pt, 60.0);
-                assert_eq!(*anchor, VAnchor::Top, "the slide's own bodyPr wins over the layout's anchor");
+                // The slide's `<a:bodyPr/>` declares no anchor: the layout placeholder's `anchor="b"` holds
+                // (1.0.0 — an attribute a placeholder leaves out is inherited, not reset).
+                assert_eq!(*anchor, VAnchor::Bottom);
             }
             _ => unreachable!(),
         }

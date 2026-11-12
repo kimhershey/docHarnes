@@ -78,13 +78,14 @@ fn table(tbl: &Element, notes: &mut Vec<String>) -> Table {
                 row_span: cell.attr_u32("RowSpan").unwrap_or(1).max(1).min(u16::MAX as u32) as u16,
                 col_span: cell.attr_u32("ColSpan").unwrap_or(1).max(1).min(u16::MAX as u32) as u16,
                 header: cell.attr_bool("Header").unwrap_or(false),
+                style: None,
             });
         }
         if !cells.is_empty() {
             rows.push(cells);
         }
     }
-    Table { rows, col_widths_mm: Vec::new() }
+    Table { rows, col_widths_mm: Vec::new(), row_heights_mm: Vec::new() }
 }
 
 pub fn read(path: &Path) -> Result<DocModel> {

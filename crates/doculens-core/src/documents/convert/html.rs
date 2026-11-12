@@ -421,8 +421,15 @@ fn slide_table_html(t: &Table, out: &mut String) {
             out.push_str("</colgroup>");
         }
     }
-    for row in &t.rows {
-        out.push_str("<tr>");
+    // Row heights as shares of the frame (the table fills its frame; a row still grows with its text).
+    let total_h: f32 = t.row_heights_mm.iter().sum();
+    for (r, row) in t.rows.iter().enumerate() {
+        match t.row_heights_mm.get(r).filter(|h| **h > 0.0 && total_h > 0.0) {
+            Some(h) => {
+                let _ = write!(out, "<tr style=\"height:{:.2}%\">", h / total_h * 100.0);
+            }
+            None => out.push_str("<tr>"),
+        }
         for c in row {
             let tag = if c.header { "th" } else { "td" };
             out.push('<');
@@ -432,6 +439,35 @@ fn slide_table_html(t: &Table, out: &mut String) {
             }
             if c.col_span > 1 {
                 let _ = write!(out, " colspan=\"{}\"", c.col_span);
+            }
+            if let Some(st) = &c.style {
+                // The look the presentation gives the cell (table style + cell properties) replaces the
+                // plain grey grid. Every value is checked before it is written into the style.
+                out.push_str(" style=\"");
+                match st.fill.as_deref().filter(|f| is_css_color(f)) {
+                    Some(f) => {
+                        let _ = write!(out, "background:{f};");
+                    }
+                    None => out.push_str("background:transparent;"),
+                }
+                if let Some(color) = st.color.as_deref().filter(|x| is_css_color(x)) {
+                    let _ = write!(out, "color:{color};");
+                }
+                let _ = write!(out, "font-weight:{};", if st.bold { 700 } else { 400 });
+                for (side, border) in ["left", "right", "top", "bottom"].iter().zip(&st.borders) {
+                    match border {
+                        Some((color, w)) if is_css_color(color) && w.is_finite() => {
+                            let _ = write!(out, "border-{side}:{:.2}pt solid {color};", w.clamp(0.25, 12.0));
+                        }
+                        _ => {
+                            let _ = write!(out, "border-{side}:none;");
+                        }
+                    }
+                }
+                if let Some(v) = st.valign.as_deref().filter(|v| matches!(*v, "top" | "middle" | "bottom")) {
+                    let _ = write!(out, "vertical-align:{v};");
+                }
+                out.push('"');
             }
             out.push('>');
             let paras: Vec<Paragraph> = c
@@ -714,6 +750,7 @@ mod tests {
                         ],
                     ],
                     col_widths_mm: vec![50.0, 50.0],
+                    row_heights_mm: Vec::new(),
                 }),
                 Block::PageBreak,
                 Block::Image { id: "img1".into(), width_mm: Some(300.0), height_mm: None },

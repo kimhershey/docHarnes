@@ -314,7 +314,8 @@ fn table(ctx: &mut Ctx<'_>, tbl: &Element) -> Table {
                     paragraph_blocks(ctx, p, &mut blocks);
                 }
             }
-            let cell = Cell { blocks, row_span, col_span, header: tc.attr_bool("header").unwrap_or(false) };
+            let cell =
+                Cell { blocks, row_span, col_span, header: tc.attr_bool("header").unwrap_or(false), style: None };
             if row >= rows.len() {
                 rows.resize(row + 1, Vec::new());
             }
@@ -325,7 +326,7 @@ fn table(ctx: &mut Ctx<'_>, tbl: &Element) -> Table {
     if col_widths.iter().any(|w| *w <= 0.0) {
         col_widths.clear();
     }
-    Table { rows, col_widths_mm: col_widths }
+    Table { rows, col_widths_mm: col_widths, row_heights_mm: Vec::new() }
 }
 
 /// Parses `Contents/content.hpf`: ordered section hrefs and binary items.

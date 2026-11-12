@@ -335,7 +335,11 @@ pub(crate) fn blocks_from_marks(text: &str, props: Option<&[MarkProps]>) -> Vec<
                 r.push(Cell { row_span: 1, col_span: 1, ..Default::default() });
             }
         }
-        blocks.push(Block::Table(Table { rows: std::mem::take(rows), col_widths_mm: Vec::new() }));
+        blocks.push(Block::Table(Table {
+            rows: std::mem::take(rows),
+            col_widths_mm: Vec::new(),
+            row_heights_mm: Vec::new(),
+        }));
     }
 
     for ch in text.chars() {
@@ -391,6 +395,7 @@ pub(crate) fn blocks_from_marks(text: &str, props: Option<&[MarkProps]>) -> Vec<
                             row_span: 1,
                             col_span: 1,
                             header: false,
+                            style: None,
                         })
                         .collect();
                     if !row.is_empty() {
@@ -443,6 +448,7 @@ pub(crate) fn blocks_from_marks(text: &str, props: Option<&[MarkProps]>) -> Vec<
                 row_span: 1,
                 col_span: 1,
                 header: false,
+                style: None,
             })
             .collect();
         rows.push(row);

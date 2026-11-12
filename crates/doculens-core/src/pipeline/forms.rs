@@ -1052,7 +1052,13 @@ mod tests {
     use crate::documents::convert::model::{Cell, Paragraph, Table};
 
     fn cell(s: &str) -> Cell {
-        Cell { blocks: vec![Block::Paragraph(Paragraph::plain(s))], row_span: 1, col_span: 1, header: false }
+        Cell {
+            blocks: vec![Block::Paragraph(Paragraph::plain(s))],
+            row_span: 1,
+            col_span: 1,
+            style: None,
+            header: false,
+        }
     }
 
     #[test]
@@ -1068,6 +1074,7 @@ mod tests {
                         vec![cell("합계금액"), cell("")],
                     ],
                     col_widths_mm: vec![],
+                    row_heights_mm: Vec::new(),
                 }),
                 Block::Paragraph(Paragraph::plain("견적 내역")),
                 Block::Table(Table {
@@ -1076,6 +1083,7 @@ mod tests {
                         vec![cell(""), cell(""), cell(""), cell(""), cell("")],
                     ],
                     col_widths_mm: vec![],
+                    row_heights_mm: Vec::new(),
                 }),
                 Block::Paragraph(Paragraph::plain("유효기간: ______\n비고 ____")),
             ],

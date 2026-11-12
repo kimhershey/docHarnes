@@ -773,7 +773,7 @@ fn para(runs: Vec<Run>, heading: Option<u8>, align: Align, list: Option<ListKind
 fn cell(text: &str, header: bool, col_span: u16) -> Cell {
     let blocks: Vec<Block> =
         text.split('\n').map(|line| para(vec![run(line, header)], None, Align::Left, None)).collect();
-    Cell { blocks, row_span: 1, col_span, header }
+    Cell { blocks, row_span: 1, col_span, header, style: None }
 }
 
 /// The draft as a format-independent document model (title, field grid, body, item tables).

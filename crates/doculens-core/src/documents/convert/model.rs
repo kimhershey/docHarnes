@@ -175,6 +175,9 @@ pub struct Table {
     pub rows: Vec<Vec<Cell>>,
     /// Column widths in millimetres when known (same length as the widest row).
     pub col_widths_mm: Vec<f32>,
+    /// Row heights in millimetres when the source gives them (1.0.0: PPTX tables); a row grows with its text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub row_heights_mm: Vec<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -183,6 +186,25 @@ pub struct Cell {
     pub row_span: u16,
     pub col_span: u16,
     pub header: bool,
+    /// How the cell is drawn when the source says so (1.0.0: PPTX table styles and cell properties).
+    /// `None`: the writer's own plain look.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<Box<CellStyle>>,
+}
+
+/// The look of a table cell: what a PPTX table style and the cell's own properties add up to.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct CellStyle {
+    /// Background (`#RRGGBB`); `None` = transparent.
+    pub fill: Option<String>,
+    /// Text colour the table style gives the cell (a run with a colour of its own keeps it).
+    pub color: Option<String>,
+    /// The table style sets the cell's text bold (header row, first column …).
+    pub bold: bool,
+    /// Borders left, right, top, bottom as `(colour, width in pt)`; `None` = no line.
+    pub borders: [Option<(String, f32)>; 4],
+    /// `top` | `middle` | `bottom`.
+    pub valign: Option<String>,
 }
 
 impl Cell {
@@ -253,6 +275,7 @@ mod tests {
                         Cell { blocks: vec![Block::Paragraph(Paragraph::plain("b\nc"))], ..Default::default() },
                     ]],
                     col_widths_mm: vec![],
+                    row_heights_mm: Vec::new(),
                 }),
                 Block::PageBreak,
                 Block::Paragraph(Paragraph::plain("둘째 쪽")),
