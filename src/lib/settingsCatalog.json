@@ -53,6 +53,13 @@
   },
   {
     "confirm": false,
+    "key": "ui.show_assistant_steps",
+    "type": {
+      "kind": "boolean"
+    }
+  },
+  {
+    "confirm": false,
     "key": "models.tier_mode",
     "type": {
       "kind": "enum",

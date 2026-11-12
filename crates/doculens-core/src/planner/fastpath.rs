@@ -935,6 +935,15 @@ mod tests {
         assert_eq!(setting_of("개인정보 마스킹 사용 안 해"), Some(("privacy.pii_masking".into(), json!(false))));
         assert_eq!(setting_of("개인정보 마스킹 사용"), Some(("privacy.pii_masking".into(), json!(true))));
         assert_eq!(setting_of("turn on pii masking"), Some(("privacy.pii_masking".into(), json!(true))));
+        // 1.0.0: whether the assistant lists the operations it chose.
+        let steps = |on: bool| Some(("ui.show_assistant_steps".to_string(), json!(on)));
+        assert_eq!(setting_of("어시스턴트 작업 표시 꺼줘"), steps(false));
+        assert_eq!(setting_of("어시스턴트 작업 표시 켜줘"), steps(true));
+        assert_eq!(setting_of("고른 작업 표시 켜"), steps(true));
+        assert_eq!(setting_of("작업 단계 표시 끄기"), steps(false));
+        // A job notification is another setting; a sentence that is not a whole settings sentence goes to the model.
+        assert_eq!(setting_of("작업 완료 알림 꺼줘").map(|(k, _)| k), Some("notifications.job_complete".to_string()));
+        assert_eq!(setting_of("무슨 작업을 골랐는지 보여주지 마"), None);
         assert_eq!(setting_of("배율 120으로 올려줘"), Some(("ui.scale_percent".into(), json!(120))));
         assert_eq!(setting_of("절전 대기 5분"), Some(("models.sleep_idle_seconds".into(), json!(300))));
         assert_eq!(setting_of("절전 대기 90초로"), Some(("models.sleep_idle_seconds".into(), json!(90))));

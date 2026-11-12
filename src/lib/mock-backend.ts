@@ -133,7 +133,7 @@ export function defaultSettings(): AppSettings {
     schema_version: 1,
     active_workspace: null,
     workspaces: [],
-    ui: { theme: "system", language: "ko", scale_percent: 100, reduced_motion: "system", sidebar_collapsed: false },
+    ui: { theme: "system", language: "ko", scale_percent: 100, reduced_motion: "system", sidebar_collapsed: false, show_assistant_steps: false },
     models: {
       tier_mode: "auto",
       manual_tier: null,

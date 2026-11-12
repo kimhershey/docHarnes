@@ -805,6 +805,7 @@
       "ui_scale_percent": "UI 배율",
       "ui_reduced_motion": "애니메이션 줄이기",
       "ui_sidebar_collapsed": "사이드바 접기",
+      "ui_show_assistant_steps": "어시스턴트가 고른 작업 표시",
       "models_tier_mode": "티어 산정",
       "models_manual_tier": "수동 티어",
       "models_active_model": "활성 모델",
@@ -1065,7 +1066,9 @@
       "reduced_motion_system": "시스템 설정 따름",
       "reduced_motion_on": "항상 줄이기",
       "reduced_motion_off": "줄이지 않음",
-      "sidebar": "사이드바 접기"
+      "sidebar": "사이드바 접기",
+      "assistant_steps": "어시스턴트가 고른 작업 표시",
+      "assistant_steps_hint": "질문·검색·요약처럼 바로 실행되는 요청에서 어시스턴트가 어떤 작업을 골랐는지 보여 줍니다. 삭제·이동·설정 변경처럼 확인이 필요한 작업은 이 설정과 관계없이 항상 보여 줍니다."
     },
     "theme": {
       "title": "테마",

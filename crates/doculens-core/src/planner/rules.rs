@@ -3433,6 +3433,7 @@ fn generic_setting_rule(t: &Text<'_>) -> Option<Plan> {
         (&["검토 완료만 정리", "검토 완료 문서만", "reviewed only"], "processing.organize_reviewed_only"),
         (&["빽빽한 표", "dense table", "dense re-ocr"], "processing.dense_reocr"),
         (&["사이드바 접", "sidebar collapsed", "collapse the sidebar"], "ui.sidebar_collapsed"),
+        (&["작업 표시", "단계 표시", "assistant steps", "chosen steps"], "ui.show_assistant_steps"),
         (&["움직임 줄이", "reduced motion"], "ui.reduced_motion"),
         (&["비전 인코더", "vision encoder", "vision on cpu"], "models.vision_on_cpu"),
     ];

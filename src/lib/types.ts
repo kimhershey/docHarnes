@@ -31,6 +31,8 @@ export interface UiSettings {
   scale_percent: number;
   reduced_motion: ReducedMotion;
   sidebar_collapsed: boolean;
+  /** 1.0.0: list the chosen operations on plans that run without a confirmation (off by default). */
+  show_assistant_steps: boolean;
 }
 
 export interface ModelSettings {

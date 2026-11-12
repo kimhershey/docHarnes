@@ -340,4 +340,47 @@ test.describe("0.8.1 projects and reference material", () => {
     await expect(reference.getByTestId("result-search")).not.toContainText("견적서");
     await expect(reference.getByTestId("result-search")).not.toContainText("개발계약서");
   });
+  test("1.0.0: the chosen steps are listed only when switched on; a plan that needs a confirmation always lists them", async ({ page }) => {
+    test.setTimeout(90_000);
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서.hwpx", "D:\\scan\\개발계약서-2p.pdf"]);
+    await openAssistantScreen(page);
+    const plans = assistantCard(page, "plan");
+
+    // Off by default: a search runs at once and its card shows the reading and the result, not the step list.
+    expect(await settingsValue(page, "ui.show_assistant_steps")).toBe(false);
+    await send(page, "납품 기한 검색해줘");
+    await expect(plans).toHaveCount(1, { timeout: 15_000 });
+    await expect(plans.nth(0).getByTestId("plan-summary")).toBeVisible();
+    await expect(assistantCard(page, "result")).toHaveCount(1, { timeout: 15_000 });
+    await expect(plans.nth(0).getByTestId("plan-steps")).toHaveCount(0);
+
+    // A deletion waits for approval, so what it will do is listed whatever the setting says.
+    await send(page, "견적서 삭제해줘");
+    await expect(plans).toHaveCount(2, { timeout: 15_000 });
+    await expect(plans.nth(1)).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    await expect(plans.nth(1).getByTestId("plan-steps")).toBeVisible();
+    await expect(plans.nth(1).getByTestId("plan-step-0")).toHaveAttribute("data-op", "delete");
+    await plans.nth(1).getByTestId("plan-cancel").click();
+
+    // Switched on by a sentence: the next search lists its step.
+    await send(page, "어시스턴트 작업 표시 켜줘");
+    await expect.poll(() => settingsValue(page, "ui.show_assistant_steps"), { timeout: 15_000 }).toBe(true);
+    await send(page, "검수 조건 검색해줘");
+    await expect(plans).toHaveCount(3, { timeout: 15_000 });
+    await expect(plans.nth(2).getByTestId("plan-step-0")).toHaveAttribute("data-op", "search");
+    // … and the card that ran before follows the setting too.
+    await expect(plans.nth(0).getByTestId("plan-steps")).toBeVisible();
+
+    // The switch in 설정 > 일반 shows the same value and stays inside the window.
+    await openSettingsTab(page, "general");
+    const toggle = page.getByTestId("settings-assistant-steps");
+    await expect(toggle).toHaveAttribute("aria-checked", "true");
+    const box = await toggle.boundingBox();
+    const width = page.viewportSize()?.width ?? 0;
+    expect(box && box.x >= 0 && box.x + box.width <= width).toBe(true);
+    await toggle.click();
+    await expect.poll(() => settingsValue(page, "ui.show_assistant_steps")).toBe(false);
+  });
 });

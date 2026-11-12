@@ -19,10 +19,11 @@ import { cn } from "@/lib/utils";
 import type { Clipped } from "@/stores/assistant";
 import { useGenerateStore } from "@/stores/generate";
 import { usePipelineStore } from "@/stores/pipeline";
+import { useSettingsStore } from "@/stores/settings";
 
 import { AggregateCard } from "./AggregateCard";
 import { ClippedNote } from "./ClippedNote";
-import { agentStepDetail, aggregateRequestFor, deriveResultActions, opLabel, organizeReasonText, uiResultsByStep } from "./describePlan";
+import { agentStepDetail, aggregateRequestFor, deriveResultActions, opLabel, organizeReasonText, showsChosenSteps, uiResultsByStep } from "./describePlan";
 
 function StatusIcon({ status }: { status: StepStatus }) {
   switch (status) {
@@ -132,6 +133,8 @@ export function ResultCard({
   clipped?: Clipped;
 }) {
   const { t } = useTranslation();
+  const stepsSetting = useSettingsStore((s) => s.settings?.ui.show_assistant_steps ?? false);
+  const showOps = showsChosenSteps(stepsSetting, plan, response);
   const navigate = useNavigate();
   const [showMoves, setShowMoves] = useState(false);
   const [undone, setUndone] = useState<UndoReport | null>(null);
@@ -198,7 +201,12 @@ export function ResultCard({
               </span>
               <div className="flex min-w-0 flex-1 flex-col">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium">{opLabel(step.op, t)}</span>
+                  {/* The operation's name follows the "고른 작업 표시" setting; a row that would say nothing else keeps it. */}
+                  {(showOps || !(step.summary || (ui?.ok && ui.summary))) && (
+                    <span className="font-medium" data-testid={`result-step-op-${step.index}`}>
+                      {opLabel(step.op, t)}
+                    </span>
+                  )}
                   {step.summary && <span className="text-fg-muted selectable">{step.summary}</span>}
                   {ui?.ok && ui.summary && <span className="text-fg-muted selectable">{ui.summary}</span>}
                   {(step.status === "skipped" || step.status === "cancelled" || (step.status === "ui" && !ui)) && <span className="text-xs text-fg-subtle">{t(`planner.result.status.${step.status}`)}</span>}

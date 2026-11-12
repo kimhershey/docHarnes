@@ -805,6 +805,7 @@
       "ui_scale_percent": "UI scale",
       "ui_reduced_motion": "Reduce motion",
       "ui_sidebar_collapsed": "Collapse the sidebar",
+      "ui_show_assistant_steps": "Show the assistant's chosen steps",
       "models_tier_mode": "Tier mode",
       "models_manual_tier": "Manual tier",
       "models_active_model": "Active model",
@@ -1065,7 +1066,9 @@
       "reduced_motion_system": "Follow system",
       "reduced_motion_on": "Always reduce",
       "reduced_motion_off": "Never reduce",
-      "sidebar": "Collapse sidebar"
+      "sidebar": "Collapse sidebar",
+      "assistant_steps": "Show the assistant's chosen steps",
+      "assistant_steps_hint": "Lists which operations the assistant chose for requests that run at once (questions, searches, summaries). Operations that need a confirmation — deleting, moving, changing settings — are always listed."
     },
     "theme": {
       "title": "Theme",

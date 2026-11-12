@@ -173,6 +173,10 @@ pub struct UiSettings {
     pub scale_percent: u16,
     pub reduced_motion: ReducedMotion,
     pub sidebar_collapsed: bool,
+    /// 1.0.0: show which operations the assistant chose on plans that run without a
+    /// confirmation (questions, searches, summaries). Off by default; a plan that needs a
+    /// confirmation always lists its steps.
+    pub show_assistant_steps: bool,
 }
 
 impl Default for UiSettings {
@@ -183,6 +187,7 @@ impl Default for UiSettings {
             scale_percent: 100,
             reduced_motion: ReducedMotion::System,
             sidebar_collapsed: false,
+            show_assistant_steps: false,
         }
     }
 }
@@ -751,6 +756,7 @@ mod tests {
                 scale_percent: 130,
                 reduced_motion: ReducedMotion::On,
                 sidebar_collapsed: true,
+                show_assistant_steps: true,
             },
             models: ModelSettings {
                 tier_mode: TierMode::Manual,

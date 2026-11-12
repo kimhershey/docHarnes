@@ -9,7 +9,7 @@ import ko from "@/i18n/ko.json";
 import type { UiOpResult } from "@/lib/commands";
 import type { CheckRun, Draft, DraftOutcome, Plan, PlanContext, PlanExecution, PlanPreview, PlanResponse, Project, ProjectDetail, RuleDraft } from "@/lib/types";
 
-import { agentStepDetail, deriveResultActions, formatAmount, impactLine, impactOf, isPlanExecution, listTotal, onlyReviewedValue, opLabel, organizePreview, organizeReasonText, planKind, unmetRequestNote, projectName, requiresConfirmation, ruleDraftPreview, summarizeOp, uiContextFor, uiResultsByStep, withOnlyReviewed } from "./describePlan";
+import { agentStepDetail, deriveResultActions, formatAmount, impactLine, impactOf, isPlanExecution, listTotal, onlyReviewedValue, opLabel, organizePreview, organizeReasonText, planKind, unmetRequestNote, projectName, requiresConfirmation, ruleDraftPreview, summarizeOp, uiContextFor, uiResultsByStep, withOnlyReviewed, showsChosenSteps } from "./describePlan";
 import { OP_KINDS, OP_SPECS, UI_OPS } from "./opSpecs";
 
 const instance = i18next.createInstance();
@@ -391,5 +391,36 @@ describe("result actions (P6 payloads)", () => {
     expect(preview(ruleDraft)).toEqual({ draft: ruleDraft, description: "사업자번호 일치" });
     expect(preview({ items: [] })).toBeNull();
     expect(ruleDraftPreview(undefined)).toBeNull();
+  });
+});
+
+describe("showsChosenSteps (1.0.0)", () => {
+  const plan = (requires_confirmation: boolean, ops: string[] = ["search"]) =>
+    ({ requires_confirmation, operations: ops.map((op) => ({ op })) }) as unknown as Plan;
+  const response = (planConfirm: boolean, previewConfirm: boolean | null) =>
+    ({ result: { plan: plan(planConfirm) }, preview: previewConfirm === null ? null : { requires_confirmation: previewConfirm } }) as unknown as PlanResponse;
+
+  it("follows the setting for a plan that runs at once", () => {
+    expect(showsChosenSteps(false, plan(false), response(false, false))).toBe(false);
+    expect(showsChosenSteps(undefined, plan(false), null)).toBe(false);
+    expect(showsChosenSteps(true, plan(false), response(false, false))).toBe(true);
+  });
+
+  it("only plans that do nothing but ask can hide their steps", () => {
+    for (const op of ["search", "answer", "summarize", "explain", "compare", "aggregate"]) {
+      expect(showsChosenSteps(false, plan(false, [op]), null), op).toBe(false);
+    }
+    // An export creates a file, a settings change changes the app: listed whatever the setting says.
+    for (const op of ["export", "set_setting", "open", "ocr", "tag"]) {
+      expect(showsChosenSteps(false, plan(false, [op]), null), op).toBe(true);
+    }
+    expect(showsChosenSteps(false, plan(false, ["search", "export"]), null)).toBe(true);
+  });
+
+  it("always lists the steps of a plan that needs a confirmation", () => {
+    expect(showsChosenSteps(false, plan(true), null)).toBe(true);
+    // The planner's plan or its preview asked for the confirmation (an edited copy may have dropped the flag).
+    expect(showsChosenSteps(false, plan(false), response(true, null))).toBe(true);
+    expect(showsChosenSteps(false, plan(false), response(false, true))).toBe(true);
   });
 });

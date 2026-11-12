@@ -60,6 +60,7 @@ pub const SETTINGS: &[SettingSpec] = &[
     s("ui.scale_percent", ValueType::Int { min: 90, max: 150 }, "UI 배율(%)", "UI scale (%)"),
     s("ui.reduced_motion", ValueType::Enum(REDUCED_MOTION), "움직임 줄이기", "reduced motion"),
     s("ui.sidebar_collapsed", ValueType::Bool, "사이드바 접기", "sidebar collapsed"),
+    s("ui.show_assistant_steps", ValueType::Bool, "어시스턴트가 고른 작업 표시", "show the assistant's chosen steps"),
     // models
     s("models.tier_mode", ValueType::Enum(TIER_MODES), "티어 선택(자동/수동)", "tier mode"),
     s("models.manual_tier", ValueType::Enum(TIERS), "수동 티어", "manual tier"),
@@ -179,6 +180,7 @@ pub const SETTING_KEYS: &[&str] = &[
     "ui.scale_percent",
     "ui.reduced_motion",
     "ui.sidebar_collapsed",
+    "ui.show_assistant_steps",
     "models.tier_mode",
     "models.manual_tier",
     "models.active_model",
@@ -251,6 +253,21 @@ pub const NAMES: &[(&str, &[&str])] = &[
     ),
     ("ui.reduced_motion", &["움직임 줄이기", "애니메이션 줄이기", "reduced motion"]),
     ("ui.sidebar_collapsed", &["사이드바 접기", "사이드바", "sidebar"]),
+    (
+        "ui.show_assistant_steps",
+        &[
+            "어시스턴트가 고른 작업 표시",
+            "어시스턴트 작업 표시",
+            "고른 작업 표시",
+            "선택한 작업 표시",
+            "작업 표시",
+            "작업 단계 표시",
+            "단계 표시",
+            "assistant steps",
+            "chosen steps",
+            "show steps",
+        ],
+    ),
     ("models.tier_mode", &["티어 선택", "티어 모드", "tier mode"]),
     ("models.manual_tier", &["수동 티어", "티어", "manual tier", "tier"]),
     ("models.active_model", &["활성 모델", "사용 모델", "active model"]),
@@ -659,7 +676,7 @@ mod tests {
         assert_eq!(keys.len(), SETTING_KEYS.len(), "duplicate keys");
         // Every settings field the assistant may change has an entry, plus `journal_days`. 0.8.0
         // took `privacy.db_encryption` out: nothing encrypts the database, so there is no switch.
-        assert_eq!(SETTINGS.len(), 46);
+        assert_eq!(SETTINGS.len(), 47);
         assert!(find("privacy.db_encryption").is_none());
     }
 

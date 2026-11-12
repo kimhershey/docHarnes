@@ -20,7 +20,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { describeExportError, describeOrganizeError } from "@/features/organize/errors";
 
 import { ClippedNote } from "./ClippedNote";
-import { exportPreview, impactLine, impactOf, onlyReviewedValue, opLabel, organizePreview, organizeReasonText, requiresConfirmation, ruleDraftPreview, sourceLabel, summarizeOp, warningIssues, withOnlyReviewed } from "./describePlan";
+import { exportPreview, impactLine, impactOf, onlyReviewedValue, opLabel, organizePreview, organizeReasonText, requiresConfirmation, ruleDraftPreview, showsChosenSteps, sourceLabel, summarizeOp, warningIssues, withOnlyReviewed } from "./describePlan";
 import { PlanEditor } from "./PlanEditor";
 import { planKey, previewEditedPlan, previewFailure } from "./repreview";
 
@@ -198,12 +198,14 @@ export function PlanCard({
   const executeChord = useShortcut("execute_plan") || "Ctrl+Enter";
   const closeChord = useShortcut("close") || "Escape";
   const reviewedDefault = useSettingsStore((s) => s.settings?.processing.organize_reviewed_only ?? true);
+  const stepsSetting = useSettingsStore((s) => s.settings?.ui.show_assistant_steps ?? false);
   const retention = useWorkspaceStore((s) => s.current?.manifest.retention ?? null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const { result, context } = response;
   const onlyReviewed = onlyReviewedValue(plan, reviewedDefault);
   const warnings = warningIssues(result.issues);
   const pending = status === "pending";
+  const showSteps = showsChosenSteps(stepsSetting, plan, response) || editing || (errors?.length ?? 0) > 0;
   // The numbers on the card belong to the plan it shows (PLN-14): the planner's preview while the plan is as
   // interpreted; once the scope or a parameter was edited, the preview of the edited plan — and none while
   // that one is on its way (the card used to keep "대상 문서 3건" of the plan before the edit).
@@ -285,7 +287,10 @@ export function PlanCard({
         {t("planner.card.interpretation", { summary: plan.summary ?? result.text })}
       </p>
       {result.date && <p className="text-xs text-fg-muted">{t("assistant.date_resolved", { from: result.date.from, to: result.date.to, label: result.date.label })}</p>}
-      <ol className="flex flex-col gap-1" aria-label={t("planner.card.steps")}>
+      {/* 1.0.0: the chosen operations are listed when the plan needs a confirmation (always), is being
+          edited or was rejected, or when the user switched the list on (설정 > 일반). */}
+      {showSteps && (
+      <ol className="flex flex-col gap-1" aria-label={t("planner.card.steps")} data-testid="plan-steps">
         {plan.operations.map((op, i) => {
           const step = preview?.steps.find((s) => s.index === i);
           const params = summarizeOp(op, t, { lang: i18n.language, context });
@@ -315,6 +320,7 @@ export function PlanCard({
           );
         })}
       </ol>
+      )}
       {/* `data-preview`: whose numbers these are — the planner's (`planned`), the edited plan's (`edited`) or none
           (`refreshing`; `none` = the preview failed, or the edited plan ran before its preview arrived). */}
       {(previewOf !== "none" || previewError) && (

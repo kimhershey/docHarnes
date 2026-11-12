@@ -1055,6 +1055,7 @@ const CATALOG_PHRASES: [string[], string][] = [
   [["일반지식", "일반 지식", "generalknowledge", "general knowledge"], "knowledge.allow_general_knowledge"],
   [["애니메이션", "animation", "motion"], "ui.reduced_motion"],
   [["사이드바", "sidebar"], "ui.sidebar_collapsed"],
+  [["작업표시", "작업 표시", "단계표시", "단계 표시", "assistantsteps", "assistant steps", "chosensteps", "chosen steps"], "ui.show_assistant_steps"],
   [["캐시상한", "캐시 상한", "캐시한도", "cachelimit", "cache limit", "pagecache", "page cache"], "cache.page_cache_max_gb"],
   [["근거청크", "근거 청크", "topk", "top k"], "knowledge.top_k"],
   [["근거토큰", "근거 토큰", "contexttokens", "context tokens"], "knowledge.context_tokens"],

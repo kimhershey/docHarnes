@@ -219,6 +219,14 @@ function GeneralTab() {
         <Row label={t("settings.general.sidebar")}>
           <Switch checked={settings.ui.sidebar_collapsed} onCheckedChange={(v) => void update((s) => void (s.ui.sidebar_collapsed = v))} aria-label={t("settings.general.sidebar")} />
         </Row>
+        <Row label={t("settings.general.assistant_steps")} hint={t("settings.general.assistant_steps_hint")}>
+          <Switch
+            checked={settings.ui.show_assistant_steps ?? false}
+            onCheckedChange={(v) => void update((s) => void (s.ui.show_assistant_steps = v))}
+            aria-label={t("settings.general.assistant_steps")}
+            data-testid="settings-assistant-steps"
+          />
+        </Row>
         <Row label={t("settings.notifications.job_complete")} hint={t("settings.notifications.job_complete_hint")}>
           <Switch checked={settings.notifications.job_complete} onCheckedChange={(v) => void update((s) => void (s.notifications.job_complete = v))} aria-label={t("settings.notifications.job_complete")} data-testid="settings-notify-job-complete" />
         </Row>
