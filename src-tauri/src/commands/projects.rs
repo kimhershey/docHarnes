@@ -4,6 +4,7 @@ use tauri::AppHandle;
 
 use doculens_core::generate::OutputFormat;
 use doculens_core::knowledge::Collection;
+use doculens_core::projects::assign::{AssignOutcome, AssignRequest};
 use doculens_core::projects::copies::SyncReport;
 use doculens_core::projects::{
     CheckRun, Project, ProjectDetail, ProjectInput, ProjectTemplate, Rule, RuleDraft, TemplateInput,
@@ -134,6 +135,13 @@ pub fn project_classify_preview(
     req: doculens_core::projects::classify::ClassifyRequest,
 ) -> UiResult<doculens_core::projects::classify::ClassifyResult> {
     projects_bridge::classify_preview(&app, req)
+}
+
+/// 1.0.0 §12: the "프로젝트에 넣기" dialog's whole sheet at once (several projects per document, pairs
+/// taken out, the kind per document). The outcome carries the request that undoes it.
+#[tauri::command(async)]
+pub fn project_assign(app: AppHandle, req: AssignRequest) -> UiResult<AssignOutcome> {
+    projects_bridge::assign(&app, req)
 }
 
 /// 자동 분류 apply: the accepted document → project rows.

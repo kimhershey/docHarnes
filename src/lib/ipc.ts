@@ -10,6 +10,8 @@ import type {
   MaintenanceStatus,
   OutputFormat,
   ClassifyApplyResult,
+  AssignOutcome,
+  AssignRequest,
   ClassifyAssignment,
   ClassifyRequest,
   ClassifyResult,
@@ -376,6 +378,8 @@ export const api = {
     invoke<{ job_id: string }>("project_request_supplement", { id, findingIds, output }),
   projectClassifyPreview: (req: ClassifyRequest) => invoke<ClassifyResult>("project_classify_preview", { req }),
   projectClassifyApply: (assignments: ClassifyAssignment[]) => invoke<ClassifyApplyResult>("project_classify_apply", { assignments }),
+  /** 1.0.0 §12: every (document, project) pair of the "프로젝트에 넣기" dialog in one request. */
+  projectAssign: (req: AssignRequest) => invoke<AssignOutcome>("project_assign", { req }),
   /** The project's reference group (0.5.0 plan §2), created on first use. */
   projectReferenceGroup: (id: string) => invoke<Collection>("project_reference_group", { id }),
 

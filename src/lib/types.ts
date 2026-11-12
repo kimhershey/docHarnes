@@ -2584,6 +2584,8 @@ export interface ClassifyCandidate {
   project_id: string;
   project_name: string;
   score: number;
+  /** The score on the suggestion's 0..1 scale — what `processing.project_second_choice` is compared with (1.0.0). */
+  confidence?: number;
   reasons: string[];
 }
 export interface ClassifySuggestion {
@@ -2612,6 +2614,46 @@ export interface ClassifyAssignment {
 export interface ClassifyApplyResult {
   added: number;
   project_ids: string[];
+}
+
+/** A document's place in a project (1.0.0 §12): among its work documents or in its reference group. */
+export interface AssignPlacement {
+  doc_id: string;
+  project_id: string;
+  /** `true` = 참고 자료 (the project's reference group), `false` = 업무 문서. */
+  reference: boolean;
+}
+export interface AssignRoleChange {
+  doc_id: string;
+  role: DocumentRole;
+}
+/** `project_assign`: pairs to take out (applied first), places to put documents in, roles to set last (written by `undo`). */
+export interface AssignRequest {
+  remove: ClassifyAssignment[];
+  add: AssignPlacement[];
+  roles?: AssignRoleChange[];
+}
+export interface AssignProjectTally {
+  project_id: string;
+  project_name: string;
+  added: number;
+  removed: number;
+  /** Stayed in the project and changed sides (업무 문서 ↔ 참고 자료). */
+  moved: number;
+}
+export interface AssignOutcome {
+  projects: AssignProjectTally[];
+  added: number;
+  removed: number;
+  moved: number;
+  roles_changed: number;
+  /** Pairs that changed nothing (already in place, not there to take out, unknown document). */
+  unchanged: number;
+  missing_projects: string[];
+  doc_ids: string[];
+  group_ids: string[];
+  /** The request that puts everything back. */
+  undo: AssignRequest;
 }
 
 export type RuleOp = "eq" | "neq" | "gte" | "lte" | "within_pct" | "present" | "matches";
