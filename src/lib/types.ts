@@ -2325,7 +2325,7 @@ export interface InputCut {
 export type DraftStoreOutcome = { status: "saved" } | { status: "copy"; original: string; reason: "cancelled" | "newer" } | { status: "not_saved"; reason: "deleted" | "failed" };
 
 export function defaultDraftRequest(language: Language = "ko"): DraftRequest {
-  return { form_ref: null, format_description: null, content: "", sources: [], output: "hwpx", tone: "formal", length: "medium", language, use_knowledge: true, feedback: null, previous: null, excluded_sources: [], max_tokens: null, revise: null };
+  return { form_ref: null, format_description: null, content: "", sources: [], output: "hwpx", tone: "formal", length: "medium", language, use_knowledge: false, feedback: null, previous: null, excluded_sources: [], max_tokens: null, revise: null };
 }
 
 export interface DraftCitation {

@@ -390,6 +390,8 @@ fn only_an_iso_document_date_files_a_document() {
 /// CON-3: a draft asked for inside a project looked its reference material up in the whole
 /// library. The planner hands the scope's project to the generator, whose knowledge search then
 /// stays inside the project (work documents ∪ reference group ∪ 공통 참고 자료).
+/// 1.0.0: a draft cites documents or it cites none — the scope's documents become its sources, and
+/// passages are looked up inside them; there is no library-wide lookup behind the user's back.
 #[test]
 fn a_draft_inside_a_project_takes_its_references_from_that_project() {
     let w = World::new();
@@ -442,12 +444,13 @@ fn a_draft_inside_a_project_takes_its_references_from_that_project() {
         let prompt = serde_json::to_string(&w.chat.requests.lock().unwrap().last().unwrap().messages).unwrap();
         (d["request"]["project_id"].clone(), from, prompt)
     };
-    // Without a project the whole library is the reference material.
+    // 1.0.0: nothing is cited and no lookup was asked for — the draft is written from the sentence
+    // alone (it used to pull passages out of the whole library, whatever the documents were).
     let (project_id, from, prompt) = draft(Scope::default());
     assert!(project_id.is_null(), "{project_id}");
-    assert_eq!(from, ["in", "out"]);
-    assert!(prompt.contains("기능 시험") && prompt.contains("성능 시험"), "{prompt}");
-    // Inside the project the other customer's minutes stay out of the draft.
+    assert!(from.is_empty(), "{from:?}");
+    assert!(!prompt.contains("기능 시험") && !prompt.contains("성능 시험"), "{prompt}");
+    // Inside the project its documents are what the draft cites; the other customer's minutes stay out.
     let in_project = Scope {
         filter: ScopeFilter { project_id: Some(project.id.clone()), ..ScopeFilter::default() },
         ..Scope::default()

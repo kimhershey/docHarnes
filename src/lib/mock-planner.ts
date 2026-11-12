@@ -2059,7 +2059,8 @@ function draftRequestOf(op: Extract<Op, { op: "draft_document" }>, plan: Plan, c
     tone: op.tone ?? "formal",
     length: op.length ?? "medium",
     language: ctx.language,
-    use_knowledge: true,
+    // 1.0.0: a draft is written from what the sentence cites; the reference lookup is opt-in.
+    use_knowledge: false,
     feedback: null,
     previous: null,
     excluded_sources: [],

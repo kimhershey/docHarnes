@@ -2604,7 +2604,8 @@
       "sources_hint": "선택한 문서의 추출 결과를 값과 출처로 인용합니다.",
       "pick_sources": "문서 선택…",
       "remove_source": "인용 문서 제거",
-      "use_knowledge": "참고 자료 근거 사용",
+      "use_knowledge": "참고 자료에서 근거 더 찾기",
+      "use_knowledge_hint": "초안은 고른 문서의 내용으로 씁니다. 아래 스위치를 켜면 참고 자료(프로젝트 참고 자료와 공통 참고 자료)에서 관련 대목을 더 찾아 씁니다. 고르지 않은 업무 문서는 쓰지 않습니다.",
       "tone": "어조",
       "length": "길이",
       "output": "출력 형식",
@@ -2676,8 +2677,8 @@
       "model": "모델"
     },
     "reference_source": {
-      "document": "문서",
-      "knowledge": "참고 자료",
+      "document": "고른 문서",
+      "knowledge": "참고 자료 검색",
       "aggregate": "집계",
       "text": "텍스트"
     },

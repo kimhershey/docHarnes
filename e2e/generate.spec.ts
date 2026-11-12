@@ -151,6 +151,10 @@ test.describe("P6 document generation", () => {
     const invoice = await docId(page, "개발계약서-2p.pdf");
     await openGenerate(page);
 
+    // 1.0.0: a draft is written from the cited documents — the reference lookup is off until it is switched on.
+    await expect(page.getByTestId("generate-use-knowledge")).toHaveAttribute("aria-checked", "false");
+    await expect(page.getByTestId("generate-use-knowledge-hint")).toBeVisible();
+
     // Quote the imported document: it shows up as a reference of the draft.
     await page.getByTestId("generate-template").click();
     await page.getByRole("option", { name: ko.generate.templates.progress_report }).click();

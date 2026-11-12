@@ -243,7 +243,9 @@ pub struct DraftRequest {
     pub tone: Tone,
     pub length: Length,
     pub language: Language,
-    /// Search the knowledge base for grounding even without an explicit `Knowledge` source.
+    /// 1.0.0: also look for passages in the reference material (the project's reference group and
+    /// the 공통 참고 자료) — never in work documents the user did not cite. Off by default; passages
+    /// inside the cited documents are looked up whatever this says.
     pub use_knowledge: bool,
     /// Regeneration instructions ("더 짧게", "금액을 1,200,000원으로") — applied on top of `previous`.
     pub feedback: Option<String>,
@@ -366,7 +368,8 @@ impl Default for DraftRequest {
             tone: Tone::default(),
             length: Length::default(),
             language: Language::Ko,
-            use_knowledge: true,
+            // 1.0.0: off by default — a draft is written from what the user cites.
+            use_knowledge: false,
             feedback: None,
             previous: None,
             excluded_sources: Vec::new(),

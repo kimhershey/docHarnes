@@ -157,6 +157,10 @@ export function RequestForm({
           </ul>
         )}
       </div>
+      {/* 1.0.0: off by default — the draft is written from the cited documents; switched on, the reference material is searched as well. */}
+      <p className="text-xs text-fg-subtle" data-testid="generate-use-knowledge-hint">
+        {t("generate.form.use_knowledge_hint")}
+      </p>
       <label className="flex items-center justify-between gap-2 text-sm">
         <span>{t("generate.form.use_knowledge")}</span>
         <Switch checked={request.use_knowledge} onCheckedChange={(v) => onChange({ use_knowledge: v })} aria-label={t("generate.form.use_knowledge")} data-testid="generate-use-knowledge" />

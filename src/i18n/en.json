@@ -2604,7 +2604,8 @@
       "sources_hint": "The extracted fields of the chosen documents are quoted with their sources.",
       "pick_sources": "Pick documents…",
       "remove_source": "Remove quoted document",
-      "use_knowledge": "Use knowledge-base evidence",
+      "use_knowledge": "Also look in the reference material",
+      "use_knowledge_hint": "A draft is written from the documents you cite. Switch this on to add passages found in the reference material (the project's and the common one). Work documents you did not cite are never used.",
       "tone": "Tone",
       "length": "Length",
       "output": "Output",
@@ -2676,8 +2677,8 @@
       "model": "model"
     },
     "reference_source": {
-      "document": "document",
-      "knowledge": "reference material",
+      "document": "Cited document",
+      "knowledge": "Reference search",
       "aggregate": "aggregate",
       "text": "text"
     },
