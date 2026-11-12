@@ -24,8 +24,8 @@ use std::path::Path;
 use crate::error::{CoreError, Result};
 
 use super::model::{
-    Align, Block, Cell, CellStyle, DocModel, ImageData, ListKind, Paragraph, Run, Shape, ShapeKind, Slide, Table,
-    VAnchor,
+    Align, Block, Cell, CellStyle, DocModel, GeoPath, Gradient, ImageData, ListKind, Paragraph, Run, Shape, ShapeKind,
+    Slide, Table, VAnchor,
 };
 use super::xlsx::{read_rels, resolve_target};
 use super::xml::{self, Element};
@@ -58,6 +58,8 @@ fn read_part(archive: &mut Archive, name: &str) -> Result<Option<Element>> {
 pub struct Colors {
     scheme: HashMap<String, String>,
     map: HashMap<String, String>,
+    /// Widths of the theme's line styles (`fmtScheme/lnStyleLst`), points — what `lnRef idx` picks.
+    line_widths_pt: Vec<f32>,
 }
 
 impl Colors {
@@ -70,7 +72,27 @@ impl Colors {
                 }
             }
         }
+        let lines = theme
+            .and_then(|t| t.child("themeElements"))
+            .and_then(|t| t.child("fmtScheme"))
+            .and_then(|f| f.child("lnStyleLst"));
+        if let Some(lines) = lines {
+            c.line_widths_pt =
+                lines.children_named("ln").map(|l| l.attr_f32("w").map(emu_to_pt).unwrap_or(0.75)).collect();
+        }
         c
+    }
+
+    /// The same colours with `phClr` standing for `color` — how a theme fill / a style reference is read.
+    fn with_placeholder(&self, color: &str) -> Colors {
+        let mut c = self.clone();
+        c.scheme.insert("phClr".into(), color.to_string());
+        c
+    }
+
+    /// Width of the theme's `idx`-th line style (1-based), points.
+    fn line_width_pt(&self, idx: usize) -> f32 {
+        idx.checked_sub(1).and_then(|i| self.line_widths_pt.get(i)).copied().unwrap_or(0.75)
     }
 
     fn set_map(&mut self, clr_map: Option<&Element>) {
@@ -112,6 +134,10 @@ impl Colors {
         if let Some(gf) = parent.child("gradFill") {
             let stop = gf.child("gsLst").and_then(|l| l.children_named("gs").next());
             return Some(stop.and_then(|gs| gs.elements().next()).and_then(|c| self.resolve(c)));
+        }
+        if let Some(pf) = parent.child("pattFill") {
+            // A pattern is drawn as the colour it is laid on.
+            return Some(pf.child("bgClr").and_then(|c| c.elements().next()).and_then(|c| self.resolve(c)));
         }
         None
     }
@@ -883,6 +909,15 @@ impl Ctx<'_> {
         result
     }
 
+    /// The size a stored picture has on a slide at its own scale, millimetres (PowerPoint lays a
+    /// picture without resolution data out at 96 dpi).
+    fn image_size_mm(&self, id: &str) -> Option<(f32, f32)> {
+        let img = self.images.iter().find(|i| i.id == id)?;
+        let (w, h) =
+            image::ImageReader::new(Cursor::new(&img.bytes)).with_guessed_format().ok()?.into_dimensions().ok()?;
+        Some((w as f32 * 25.4 / 96.0, h as f32 * 25.4 / 96.0))
+    }
+
     fn load_image(&mut self, part: &str, crop: Option<Crop>) -> Option<String> {
         let name = xml::find_zip_entry(self.archive, part)?;
         let mime = xml::mime_for_name(&name).to_string();
@@ -1109,14 +1144,246 @@ fn mm_shape(x: Xfrm, kind: ShapeKind) -> Shape {
         flip_h: x.flip_h,
         flip_v: x.flip_v,
         fill: None,
+        fill_gradient: None,
         line: None,
         geometry: None,
+        paths: Vec::new(),
         kind,
     }
 }
 
-fn slide_shapes(ctx: &mut Ctx<'_>, tree: &Element, inh: &Inherited, stack: &mut Vec<GroupTx>, out: &mut Vec<Shape>) {
+/// The outlines of a shape that is not a box (1.0.0): a custom geometry's own paths, or one of the common
+/// presets as a polygon — in a 0–1000 square stretched over the shape. Empty: drawn as a box (with the
+/// `geometry` hint for rounded ones).
+fn paths_of(sp_pr: Option<&Element>, own: (f32, f32), on_slide: (f32, f32)) -> Vec<GeoPath> {
+    let Some(pr) = sp_pr else { return Vec::new() };
+    if let Some(cust) = pr.child("custGeom") {
+        return custom_paths(cust, own).unwrap_or_default();
+    }
+    pr.child("prstGeom")
+        .and_then(|g| preset_path(g, on_slide))
+        .map(|d| vec![GeoPath { d, ..Default::default() }])
+        .unwrap_or_default()
+}
+
+/// `a:custGeom/pathLst` as SVG path data. `None` when a coordinate is a guide name instead of a number
+/// (a formula-driven shape) or a command is unknown — the caller falls back to the box.
+fn custom_paths(cust: &Element, (w, h): (f32, f32)) -> Option<Vec<GeoPath>> {
+    use std::fmt::Write as _;
+    let mut out = Vec::new();
+    for path in cust.child("pathLst")?.children_named("path") {
+        // The path's own coordinate space; without one, the shape's size in EMU.
+        let pw = path.attr_f32("w").filter(|v| *v > 0.0).unwrap_or(w);
+        let ph = path.attr_f32("h").filter(|v| *v > 0.0).unwrap_or(h);
+        if pw <= 0.0 || ph <= 0.0 {
+            return None;
+        }
+        let number = |e: &Element, name: &str| e.attr(name)?.trim().parse::<f32>().ok().filter(|v| v.is_finite());
+        let mut d = String::new();
+        let mut cur = (0.0f32, 0.0f32);
+        for cmd in path.elements() {
+            let pts: Vec<(f32, f32)> = cmd
+                .children_named("pt")
+                .map(|pt| Some((number(pt, "x")? * 1000.0 / pw, number(pt, "y")? * 1000.0 / ph)))
+                .collect::<Option<_>>()?;
+            match (cmd.name.as_str(), pts.as_slice()) {
+                ("moveTo", [p]) => {
+                    let _ = write!(d, "M{:.1} {:.1}", p.0, p.1);
+                    cur = *p;
+                }
+                ("lnTo", [p]) => {
+                    let _ = write!(d, "L{:.1} {:.1}", p.0, p.1);
+                    cur = *p;
+                }
+                ("cubicBezTo", [a, b, c]) => {
+                    let _ = write!(d, "C{:.1} {:.1} {:.1} {:.1} {:.1} {:.1}", a.0, a.1, b.0, b.1, c.0, c.1);
+                    cur = *c;
+                }
+                ("quadBezTo", [a, b]) => {
+                    let _ = write!(d, "Q{:.1} {:.1} {:.1} {:.1}", a.0, a.1, b.0, b.1);
+                    cur = *b;
+                }
+                ("arcTo", []) => {
+                    // From the current point along an ellipse of radii wR / hR: `stAng` is where the
+                    // current point sits on it, `swAng` how far the arc turns (clockwise when positive).
+                    let (rx, ry) = (number(cmd, "wR")? * 1000.0 / pw, number(cmd, "hR")? * 1000.0 / ph);
+                    let (start, sweep) = (number(cmd, "stAng")? / 60_000.0, number(cmd, "swAng")? / 60_000.0);
+                    let center = (cur.0 - rx * start.to_radians().cos(), cur.1 - ry * start.to_radians().sin());
+                    // In pieces of at most a half turn, so that a full circle is drawn too.
+                    let pieces = (sweep.abs() / 180.0).ceil().max(1.0);
+                    for i in 1..=pieces as u32 {
+                        let angle = (start + sweep * i as f32 / pieces).to_radians();
+                        let end = (center.0 + rx * angle.cos(), center.1 + ry * angle.sin());
+                        let _ = write!(
+                            d,
+                            "A{:.1} {:.1} 0 0 {} {:.1} {:.1}",
+                            rx.abs(),
+                            ry.abs(),
+                            u8::from(sweep > 0.0),
+                            end.0,
+                            end.1
+                        );
+                        cur = end;
+                    }
+                }
+                ("close", _) => d.push('Z'),
+                _ => return None,
+            }
+        }
+        if !d.is_empty() {
+            out.push(GeoPath {
+                d,
+                no_fill: path.attr("fill") == Some("none"),
+                no_stroke: matches!(path.attr("stroke"), Some("0") | Some("false")),
+            });
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// The common preset shapes that are polygons (triangles, diamond, parallelogram, trapezoid, hexagon,
+/// pentagon arrow, chevron, block arrows), with their adjust values; `None` for every other preset.
+fn preset_path(geom: &Element, (w, h): (f32, f32)) -> Option<String> {
+    use std::fmt::Write as _;
+    let prst = geom.attr("prst")?;
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    // `avLst/gd name="adj" fmla="val 25000"`, in 1/100000.
+    let adj = |name: &str, default: f32| {
+        geom.child("avLst")
+            .and_then(|l| l.children_named("gd").find(|g| g.attr("name") == Some(name)))
+            .and_then(|g| g.attr("fmla"))
+            .and_then(|f| f.trim().strip_prefix("val"))
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .unwrap_or(default)
+            / 100_000.0
+    };
+    // Lengths the presets measure against the shorter side, as x / y in the 0–1000 square.
+    let short = w.min(h);
+    let sx = |f: f32| (short * f / w * 1000.0).clamp(0.0, 1000.0);
+    let sy = |f: f32| (short * f / h * 1000.0).clamp(0.0, 1000.0);
+    let pts: Vec<(f32, f32)> = match prst {
+        "triangle" => vec![((adj("adj", 50_000.0) * 1000.0).clamp(0.0, 1000.0), 0.0), (1000.0, 1000.0), (0.0, 1000.0)],
+        "rtTriangle" => vec![(0.0, 0.0), (1000.0, 1000.0), (0.0, 1000.0)],
+        "diamond" | "flowChartDecision" => vec![(500.0, 0.0), (1000.0, 500.0), (500.0, 1000.0), (0.0, 500.0)],
+        "parallelogram" | "flowChartInputOutput" => {
+            let dx = sx(adj("adj", 25_000.0));
+            vec![(dx, 0.0), (1000.0, 0.0), (1000.0 - dx, 1000.0), (0.0, 1000.0)]
+        }
+        "trapezoid" => {
+            let dx = sx(adj("adj", 25_000.0));
+            vec![(dx, 0.0), (1000.0 - dx, 0.0), (1000.0, 1000.0), (0.0, 1000.0)]
+        }
+        "hexagon" => {
+            let dx = sx(adj("adj", 25_000.0));
+            vec![(dx, 0.0), (1000.0 - dx, 0.0), (1000.0, 500.0), (1000.0 - dx, 1000.0), (dx, 1000.0), (0.0, 500.0)]
+        }
+        "homePlate" => {
+            let dx = sx(adj("adj", 50_000.0));
+            vec![(0.0, 0.0), (1000.0 - dx, 0.0), (1000.0, 500.0), (1000.0 - dx, 1000.0), (0.0, 1000.0)]
+        }
+        "chevron" => {
+            let dx = sx(adj("adj", 50_000.0));
+            vec![(0.0, 0.0), (1000.0 - dx, 0.0), (1000.0, 500.0), (1000.0 - dx, 1000.0), (0.0, 1000.0), (dx, 500.0)]
+        }
+        "rightArrow" | "leftArrow" => {
+            // adj1: thickness of the shaft (of the height), adj2: length of the head (of the shorter side).
+            let (t, dx) = ((adj("adj1", 50_000.0) * 500.0).clamp(0.0, 500.0), sx(adj("adj2", 50_000.0)));
+            let right = vec![
+                (0.0, 500.0 - t),
+                (1000.0 - dx, 500.0 - t),
+                (1000.0 - dx, 0.0),
+                (1000.0, 500.0),
+                (1000.0 - dx, 1000.0),
+                (1000.0 - dx, 500.0 + t),
+                (0.0, 500.0 + t),
+            ];
+            if prst == "leftArrow" {
+                right.into_iter().map(|(x, y)| (1000.0 - x, y)).collect()
+            } else {
+                right
+            }
+        }
+        "downArrow" | "upArrow" => {
+            let (t, dy) = ((adj("adj1", 50_000.0) * 500.0).clamp(0.0, 500.0), sy(adj("adj2", 50_000.0)));
+            let down = vec![
+                (500.0 - t, 0.0),
+                (500.0 + t, 0.0),
+                (500.0 + t, 1000.0 - dy),
+                (1000.0, 1000.0 - dy),
+                (500.0, 1000.0),
+                (0.0, 1000.0 - dy),
+                (500.0 - t, 1000.0 - dy),
+            ];
+            if prst == "upArrow" {
+                down.into_iter().map(|(x, y)| (x, 1000.0 - y)).collect()
+            } else {
+                down
+            }
+        }
+        _ => return None,
+    };
+    let mut d = String::new();
+    for (i, (x, y)) in pts.iter().enumerate() {
+        let _ = write!(d, "{}{x:.1} {y:.1}", if i == 0 { 'M' } else { 'L' });
+    }
+    d.push('Z');
+    Some(d)
+}
+
+/// What a shape's `p:style` gives where its `spPr` is silent: a shape drawn in PowerPoint keeps its fill
+/// (accent colour), its outline and its text colour only there.
+#[derive(Default)]
+struct ShapeStyle {
+    fill: Option<String>,
+    line: Option<(String, f32)>,
+    font: Option<String>,
+}
+
+fn shape_style(sp: &Element, colors: &Colors) -> ShapeStyle {
+    let Some(style) = sp.child("style") else { return ShapeStyle::default() };
+    // `idx="0"` = "none of the theme's styles"; the colour child is the style's `phClr`.
+    let reference = |name: &str| {
+        let r = style.child(name)?;
+        let idx = r.attr("idx").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(0);
+        Some((idx, r.elements().next().and_then(|c| colors.resolve(c))))
+    };
+    ShapeStyle {
+        fill: reference("fillRef").filter(|(idx, _)| *idx > 0).and_then(|(_, c)| c),
+        line: reference("lnRef").filter(|(idx, _)| *idx > 0).and_then(|(idx, c)| Some((c?, colors.line_width_pt(idx)))),
+        font: style.child("fontRef").and_then(|r| r.elements().next()).and_then(|c| colors.resolve(c)),
+    }
+}
+
+/// Outline of a shape: `spPr/ln` when it names a colour, else the style's line (`ln` may still give
+/// the width); `noFill` — no line.
+fn outline(colors: &Colors, sp_pr: Option<&Element>, style: &ShapeStyle) -> Option<(String, f32)> {
+    let Some(ln) = sp_pr.and_then(|p| p.child("ln")) else { return style.line.clone() };
+    if ln.child("noFill").is_some() {
+        return None;
+    }
+    let width = ln.attr_f32("w").map(emu_to_pt);
+    match colors.fill(ln).flatten() {
+        Some(c) => Some((c, width.unwrap_or(0.75).max(0.25))),
+        None => style.line.clone().map(|(c, w)| (c, width.unwrap_or(w).max(0.25))),
+    }
+}
+
+/// The shapes of a shape tree, positioned on the slide. `decor`: the tree is a master's or a layout's —
+/// its placeholders are templates for the slides, not something drawn, so only its own shapes count.
+fn slide_shapes(
+    ctx: &mut Ctx<'_>,
+    tree: &Element,
+    inh: &Inherited,
+    stack: &mut Vec<GroupTx>,
+    out: &mut Vec<Shape>,
+    decor: bool,
+) {
     for sp in tree.elements() {
+        if decor && placeholder_of(sp).is_some() {
+            continue;
+        }
         match sp.name.as_str() {
             "sp" => {
                 let ph = placeholder_of(sp);
@@ -1138,8 +1405,20 @@ fn slide_shapes(ctx: &mut Ctx<'_>, tree: &Element, inh: &Inherited, stack: &mut 
                 };
                 let geo = to_slide(stack, geo);
                 let sp_pr = sp.child("spPr");
-                let fill = sp_pr.and_then(|p| inh.colors.fill(p)).flatten();
-                let line = sp_pr.and_then(|p| inh.colors.line(p));
+                let style = shape_style(sp, &inh.colors);
+                // A picture fill is drawn as a picture under the shape's text.
+                let picture_fill = sp_pr.and_then(|p| p.child("blipFill")).is_some();
+                let picture = sp_pr.and_then(|p| {
+                    let (r_id, crop) = blip_of(p);
+                    r_id.and_then(|r| ctx.image_for(&r, crop))
+                });
+                let fill = match sp_pr.and_then(|p| inh.colors.fill(p)) {
+                    Some(declared) => declared,
+                    None if picture_fill => None,
+                    None => style.fill.clone(),
+                };
+                let fill_gradient = sp_pr.and_then(|p| p.child("gradFill")).and_then(|g| gradient_of(g, &inh.colors));
+                let line = outline(&inh.colors, sp_pr, &style);
                 let fam = ph_family(kind);
                 let body = sp.child("txBody");
                 // Alignment the paragraphs inherit: the shape's own list style, the layout's placeholder,
@@ -1166,6 +1445,11 @@ fn slide_shapes(ctx: &mut Ctx<'_>, tree: &Element, inh: &Inherited, stack: &mut 
                             .collect()
                     })
                     .unwrap_or_default();
+                if let Some(id) = picture {
+                    let mut under = mm_shape(geo, ShapeKind::Picture { id });
+                    under.geometry = geometry_of(sp_pr);
+                    out.push(under);
+                }
                 let has_text = paragraphs.iter().any(|p| !p.is_empty());
                 if !has_text && fill.is_none() && line.is_none() {
                     continue;
@@ -1184,14 +1468,19 @@ fn slide_shapes(ctx: &mut Ctx<'_>, tree: &Element, inh: &Inherited, stack: &mut 
                 let default_color = from_layout
                     .and_then(|e| e.color.clone())
                     .or_else(|| from_master.and_then(|e| e.color.clone()))
+                    .or(style.font)
                     .or(style_color);
                 let mut shape = mm_shape(
                     geo,
                     ShapeKind::Text { paragraphs, anchor, font_scale, insets_mm, default_pt, default_color },
                 );
                 shape.fill = fill;
+                shape.fill_gradient = fill_gradient;
                 shape.line = line;
                 shape.geometry = geometry_of(sp_pr);
+                // A custom geometry is laid out in its own shape's size, a preset by the size it has on the slide.
+                let own = xfrm_of(sp).unwrap_or(geo);
+                shape.paths = paths_of(sp_pr, (own.w, own.h), (geo.w, geo.h));
                 out.push(shape);
             }
             "pic" => {
@@ -1203,7 +1492,7 @@ fn slide_shapes(ctx: &mut Ctx<'_>, tree: &Element, inh: &Inherited, stack: &mut 
                     None => ShapeKind::Placeholder { label: "이미지".into() },
                 };
                 let mut shape = mm_shape(geo, kind);
-                shape.line = sp.child("spPr").and_then(|p| inh.colors.line(p));
+                shape.line = outline(&inh.colors, sp.child("spPr"), &shape_style(sp, &inh.colors));
                 shape.geometry = geometry_of(sp.child("spPr"));
                 out.push(shape);
             }
@@ -1227,7 +1516,8 @@ fn slide_shapes(ctx: &mut Ctx<'_>, tree: &Element, inh: &Inherited, stack: &mut 
                 let Some(geo) = xfrm_of(sp) else { continue };
                 let geo = to_slide(stack, geo);
                 let mut shape = mm_shape(geo, ShapeKind::Line);
-                shape.line = sp.child("spPr").and_then(|p| inh.colors.line(p)).or(Some(("#000000".into(), 0.75)));
+                shape.line = outline(&inh.colors, sp.child("spPr"), &shape_style(sp, &inh.colors))
+                    .or(Some(("#000000".into(), 0.75)));
                 out.push(shape);
             }
             "grpSp" => {
@@ -1235,7 +1525,7 @@ fn slide_shapes(ctx: &mut Ctx<'_>, tree: &Element, inh: &Inherited, stack: &mut 
                 if let Some(t) = tx {
                     stack.push(t);
                 }
-                slide_shapes(ctx, sp, inh, stack, out);
+                slide_shapes(ctx, sp, inh, stack, out, decor);
                 if tx.is_some() {
                     stack.pop();
                 }
@@ -1245,14 +1535,86 @@ fn slide_shapes(ctx: &mut Ctx<'_>, tree: &Element, inh: &Inherited, stack: &mut 
     }
 }
 
-/// Solid background declared on a slide / layout / master `cSld`.
-fn background_of(root: &Element, colors: &Colors) -> Option<String> {
+/// What the `cSld/bg` of a slide / layout / master declares (1.0.0 §1-1: pictures and gradients too).
+enum Background {
+    Solid(String),
+    Gradient(Gradient),
+    /// A picture: the relationship id in the declaring part's rels, its crop, and the scale of one
+    /// tile when it is tiled instead of stretched over the slide.
+    Picture {
+        r_id: String,
+        crop: Option<Crop>,
+        tile: Option<(f32, f32)>,
+    },
+}
+
+fn background_of(root: &Element, colors: &Colors, theme: Option<&Element>) -> Option<Background> {
     let bg = root.child("cSld")?.child("bg")?;
     if let Some(pr) = bg.child("bgPr") {
-        return colors.fill(pr).flatten();
+        if let (Some(r_id), crop) = blip_of(pr) {
+            let scale =
+                |t: &Element, name: &str| t.attr_f32(name).filter(|v| *v > 0.0).unwrap_or(100_000.0) / 100_000.0;
+            let tile = pr.child("blipFill").and_then(|f| f.child("tile")).map(|t| (scale(t, "sx"), scale(t, "sy")));
+            return Some(Background::Picture { r_id, crop, tile });
+        }
+        if let Some(gradient) = pr.child("gradFill").and_then(|g| gradient_of(g, colors)) {
+            return Some(Background::Gradient(gradient));
+        }
+        return colors.fill(pr).flatten().map(Background::Solid);
     }
+    // `bgRef idx="1001…"` picks one of the theme's background fills, where `phClr` stands for the colour
+    // given here. A picture fill of the theme is left to that colour.
     let bg_ref = bg.child("bgRef")?;
-    bg_ref.elements().next().and_then(|c| colors.resolve(c))
+    let color = bg_ref.elements().next().and_then(|c| colors.resolve(c))?;
+    let idx = bg_ref.attr("idx").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(0);
+    let themed = idx
+        .checked_sub(1001)
+        .and_then(|i| theme?.child("themeElements")?.child("fmtScheme")?.child("bgFillStyleLst")?.elements().nth(i));
+    if let Some(fill) = themed {
+        let colors = colors.with_placeholder(&color);
+        match fill.name.as_str() {
+            "gradFill" => {
+                if let Some(gradient) = gradient_of(fill, &colors) {
+                    return Some(Background::Gradient(gradient));
+                }
+            }
+            "solidFill" => {
+                if let Some(c) = fill.elements().next().and_then(|c| colors.resolve(c)) {
+                    return Some(Background::Solid(c));
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(Background::Solid(color))
+}
+
+/// `a:gradFill` with at least two stops: linear along `lin@ang`, or — a path gradient — spreading from
+/// the centre of its focus rectangle (the first stop sits there, the last at the edge).
+fn gradient_of(grad: &Element, colors: &Colors) -> Option<Gradient> {
+    let mut stops: Vec<(f32, String)> = grad
+        .child("gsLst")?
+        .children_named("gs")
+        .filter_map(|gs| {
+            let pos = gs.attr_f32("pos")? / 1000.0;
+            let color = gs.elements().next().and_then(|c| colors.resolve(c))?;
+            Some((pos.clamp(0.0, 100.0), color))
+        })
+        .collect();
+    if stops.len() < 2 {
+        return None;
+    }
+    stops.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let center = grad.child("path").map(|path| {
+        let rect = path.child("fillToRect");
+        let side = |name: &str| rect.and_then(|r| r.attr_f32(name)).unwrap_or(0.0) / 1000.0;
+        (
+            ((100.0 + side("l") - side("r")) / 2.0).clamp(0.0, 100.0),
+            ((100.0 + side("t") - side("b")) / 2.0).clamp(0.0, 100.0),
+        )
+    });
+    let angle_deg = grad.child("lin").and_then(|l| l.attr_f32("ang")).unwrap_or(0.0) / 60_000.0;
+    Some(Gradient { angle_deg, stops, center })
 }
 
 /// The part a relationship of `kind` (`slideLayout`, `slideMaster`, `theme`, `notesSlide`) points to.
@@ -1356,12 +1718,48 @@ pub fn read(path: &Path) -> Result<DocModel> {
         };
         let mut colors = Colors::from_theme(theme.as_ref());
         colors.set_map(master.as_ref().and_then(|m| m.child("clrMap")));
-        if let Some(over) = slide.child("clrMapOvr").and_then(|o| o.child("overrideClrMapping")) {
-            colors.set_map(Some(over));
+        // A layout or the slide may swap the colour map (a dark slide in a light deck); what it shows of
+        // the master is then drawn with that map too.
+        for part in [layout.as_ref(), Some(&slide)] {
+            if let Some(over) = part.and_then(|p| p.child("clrMapOvr")).and_then(|o| o.child("overrideClrMapping")) {
+                colors.set_map(Some(over));
+            }
         }
-        let background = background_of(&slide, &colors)
-            .or_else(|| layout.as_ref().and_then(|l| background_of(l, &colors)))
-            .or_else(|| master.as_ref().and_then(|m| background_of(m, &colors)));
+        // The background comes from the first of slide → layout → master that declares one; a picture
+        // is looked up in the relationships of the part that declares it.
+        let slide_rels = ctx.rels.clone();
+        let declared = [(Some(&slide), &slide_rels), (layout.as_ref(), &layout_rels), (master.as_ref(), &master_rels)]
+            .into_iter()
+            .find_map(|(part, rels)| {
+                part.and_then(|p| background_of(p, &colors, theme.as_ref())).map(|bg| (bg, rels.clone()))
+            });
+        let mut background = None;
+        let mut background_gradient = None;
+        let mut background_picture = None;
+        let mut background_tile = None;
+        match declared {
+            Some((Background::Solid(c), _)) => background = Some(c),
+            Some((Background::Gradient(g), _)) => {
+                background = g.stops.first().map(|s| s.1.clone());
+                background_gradient = Some(g);
+            }
+            Some((Background::Picture { r_id, crop, tile }, rels)) => {
+                ctx.rels = rels;
+                let id = ctx.image_for(&r_id, crop);
+                ctx.rels = slide_rels.clone();
+                // Tiled at the picture's own size times the tile scale; stretched over the slide otherwise
+                // (and when the size cannot be read).
+                let tile_mm = id
+                    .as_deref()
+                    .zip(tile)
+                    .and_then(|(id, (sx, sy))| ctx.image_size_mm(id).map(|(w, h)| (w * sx, h * sy)));
+                match (id, tile_mm) {
+                    (Some(id), Some((w, h))) => background_tile = Some((id, w, h)),
+                    (id, _) => background_picture = id,
+                }
+            }
+            None => {}
+        }
         fn tree_of(e: &Option<Element>) -> Option<&Element> {
             e.as_ref().and_then(|x| x.child("cSld")).and_then(|c| c.child("spTree"))
         }
@@ -1405,11 +1803,42 @@ pub fn read(path: &Path) -> Result<DocModel> {
             title = slide_title;
         }
 
-        // -- positioned view
+        // -- positioned view: the background picture, what the master and the layout draw themselves
+        //    (logos, bands, fixed text — not their placeholders), then the slide's own shapes on top.
         let mut shapes = Vec::new();
+        if let Some(id) = background_picture {
+            shapes.push(Shape {
+                x_mm: 0.0,
+                y_mm: 0.0,
+                w_mm: slide_size_mm.0,
+                h_mm: slide_size_mm.1,
+                rotation_deg: 0.0,
+                flip_h: false,
+                flip_v: false,
+                fill: None,
+                fill_gradient: None,
+                line: None,
+                geometry: None,
+                paths: Vec::new(),
+                kind: ShapeKind::Picture { id },
+            });
+        }
+        // "배경 그래픽 숨기기": on the slide it hides the master's and the layout's shapes, on the layout
+        // the master's.
+        let shows = |part: Option<&Element>| part.and_then(|p| p.attr_bool("showMasterSp")).unwrap_or(true);
+        if shows(Some(&slide)) {
+            for (part, rels, shown) in [(&master, &master_rels, shows(layout.as_ref())), (&layout, &layout_rels, true)]
+            {
+                if let (Some(decor), true) = (tree_of(part), shown) {
+                    ctx.rels = rels.clone();
+                    slide_shapes(&mut ctx, decor, &inh, &mut Vec::new(), &mut shapes, true);
+                }
+            }
+            ctx.rels = slide_rels.clone();
+        }
         if let Some(tree) = tree {
             let mut stack = Vec::new();
-            slide_shapes(&mut ctx, tree, &inh, &mut stack, &mut shapes);
+            slide_shapes(&mut ctx, tree, &inh, &mut stack, &mut shapes, false);
         }
 
         // Speaker notes.
@@ -1429,6 +1858,8 @@ pub fn read(path: &Path) -> Result<DocModel> {
             width_mm: slide_size_mm.0,
             height_mm: slide_size_mm.1,
             background: inh.background,
+            background_gradient,
+            background_tile,
             shapes,
             notes: notes_paras,
         });
@@ -1566,61 +1997,399 @@ pub(crate) mod tests {
     /// A one-slide deck from raw parts (the parts every reader path needs are added around them).
     /// `master` = (the master's shapes, what follows its shape tree — `p:txStyles`).
     fn write_deck(path: &Path, slide: &str, layout: &str, master: (&str, &str), table_styles: Option<&str>) {
-        use std::io::Write;
-        use zip::write::SimpleFileOptions;
-        let ns = r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main""#;
-        let rel = |id: &str, kind: &str, target: &str| {
-            format!(
-                r#"<Relationship Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{kind}" Target="{target}"/>"#
-            )
-        };
-        let rels = |items: &[String]| {
-            format!(
-                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{}</Relationships>"#,
-                items.concat()
-            )
-        };
-        let tree = |inner: &str| {
-            format!(
-                r#"<p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{inner}</p:spTree></p:cSld>"#
-            )
-        };
-        let mut parts: Vec<(&str, String)> = vec![
-            ("_rels/.rels", rels(&[rel("rId1", "officeDocument", "ppt/presentation.xml")])),
-            (
-                "ppt/presentation.xml",
-                format!(r#"<p:presentation {ns}><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst><p:sldIdLst><p:sldId id="256" r:id="rId2"/></p:sldIdLst><p:sldSz cx="9144000" cy="6858000"/></p:presentation>"#),
-            ),
-            (
-                "ppt/_rels/presentation.xml.rels",
-                rels(&[rel("rId1", "slideMaster", "slideMasters/slideMaster1.xml"), rel("rId2", "slide", "slides/slide1.xml")]),
-            ),
-            ("ppt/slides/slide1.xml", format!(r#"<p:sld {ns}>{}</p:sld>"#, tree(slide))),
-            ("ppt/slides/_rels/slide1.xml.rels", rels(&[rel("rId1", "slideLayout", "../slideLayouts/slideLayout1.xml")])),
-            ("ppt/slideLayouts/slideLayout1.xml", format!(r#"<p:sldLayout {ns}>{}</p:sldLayout>"#, tree(layout))),
-            (
-                "ppt/slideLayouts/_rels/slideLayout1.xml.rels",
-                rels(&[rel("rId1", "slideMaster", "../slideMasters/slideMaster1.xml")]),
-            ),
-            (
-                "ppt/slideMasters/slideMaster1.xml",
-                format!(r#"<p:sldMaster {ns}>{}{}</p:sldMaster>"#, tree(master.0), master.1),
-            ),
-            ("ppt/slideMasters/_rels/slideMaster1.xml.rels", rels(&[rel("rId1", "theme", "../theme/theme1.xml")])),
-            (
-                "ppt/theme/theme1.xml",
-                r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:themeElements><a:clrScheme name="t"><a:dk1><a:srgbClr val="000000"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="44546A"/></a:dk2><a:lt2><a:srgbClr val="E7E6E6"/></a:lt2><a:accent1><a:srgbClr val="4F81BD"/></a:accent1><a:accent2><a:srgbClr val="C0504D"/></a:accent2></a:clrScheme></a:themeElements></a:theme>"#.to_string(),
-            ),
-        ];
-        if let Some(styles) = table_styles {
-            parts.push(("ppt/tableStyles.xml", styles.to_string()));
+        Deck { slide, layout, master: master.0, master_tail: master.1, table_styles, ..Default::default() }.write(path);
+    }
+
+    /// The raw parts of a one-slide test deck. A `*_bg` goes before that part's shape tree (`p:bg`), a
+    /// `*_attrs` onto its root element; `picture` is stored as `ppt/media/image1.png` and related as
+    /// `rId9` from the slide, the layout and the master. The theme has three line widths (0.5 / 1 / 1.5 pt)
+    /// and three background fills (`phClr`, `phClr` tinted, a top-to-bottom gradient `phClr` → black).
+    #[derive(Default)]
+    struct Deck<'a> {
+        slide: &'a str,
+        layout: &'a str,
+        master: &'a str,
+        master_tail: &'a str,
+        slide_bg: &'a str,
+        layout_bg: &'a str,
+        master_bg: &'a str,
+        slide_attrs: &'a str,
+        layout_attrs: &'a str,
+        table_styles: Option<&'a str>,
+        picture: Option<Vec<u8>>,
+    }
+
+    impl Deck<'_> {
+        fn write(&self, path: &Path) {
+            use std::io::Write;
+            use zip::write::SimpleFileOptions;
+            let ns = r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main""#;
+            let rel = |id: &str, kind: &str, target: &str| {
+                format!(
+                    r#"<Relationship Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{kind}" Target="{target}"/>"#
+                )
+            };
+            let rels = |items: &[String]| {
+                format!(
+                    r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{}</Relationships>"#,
+                    items.concat()
+                )
+            };
+            // Every part may show the picture.
+            let with_picture = |mut items: Vec<String>| {
+                if self.picture.is_some() {
+                    items.push(rel("rId9", "image", "../media/image1.png"));
+                }
+                rels(&items)
+            };
+            let tree = |bg: &str, inner: &str| {
+                format!(
+                    r#"<p:cSld>{bg}<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{inner}</p:spTree></p:cSld>"#
+                )
+            };
+            let mut parts: Vec<(&str, String)> = vec![
+                ("_rels/.rels", rels(&[rel("rId1", "officeDocument", "ppt/presentation.xml")])),
+                (
+                    "ppt/presentation.xml",
+                    format!(r#"<p:presentation {ns}><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst><p:sldIdLst><p:sldId id="256" r:id="rId2"/></p:sldIdLst><p:sldSz cx="9144000" cy="6858000"/></p:presentation>"#),
+                ),
+                (
+                    "ppt/_rels/presentation.xml.rels",
+                    rels(&[rel("rId1", "slideMaster", "slideMasters/slideMaster1.xml"), rel("rId2", "slide", "slides/slide1.xml")]),
+                ),
+                (
+                    "ppt/slides/slide1.xml",
+                    format!(r#"<p:sld {ns} {}>{}</p:sld>"#, self.slide_attrs, tree(self.slide_bg, self.slide)),
+                ),
+                (
+                    "ppt/slides/_rels/slide1.xml.rels",
+                    with_picture(vec![rel("rId1", "slideLayout", "../slideLayouts/slideLayout1.xml")]),
+                ),
+                (
+                    "ppt/slideLayouts/slideLayout1.xml",
+                    format!(r#"<p:sldLayout {ns} {}>{}</p:sldLayout>"#, self.layout_attrs, tree(self.layout_bg, self.layout)),
+                ),
+                (
+                    "ppt/slideLayouts/_rels/slideLayout1.xml.rels",
+                    with_picture(vec![rel("rId1", "slideMaster", "../slideMasters/slideMaster1.xml")]),
+                ),
+                (
+                    "ppt/slideMasters/slideMaster1.xml",
+                    format!(r#"<p:sldMaster {ns}>{}{}</p:sldMaster>"#, tree(self.master_bg, self.master), self.master_tail),
+                ),
+                (
+                    "ppt/slideMasters/_rels/slideMaster1.xml.rels",
+                    with_picture(vec![rel("rId1", "theme", "../theme/theme1.xml")]),
+                ),
+                (
+                    "ppt/theme/theme1.xml",
+                    r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:themeElements><a:clrScheme name="t"><a:dk1><a:srgbClr val="000000"/></a:dk1><a:lt1><a:srgbClr val="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="44546A"/></a:dk2><a:lt2><a:srgbClr val="E7E6E6"/></a:lt2><a:accent1><a:srgbClr val="4F81BD"/></a:accent1><a:accent2><a:srgbClr val="C0504D"/></a:accent2></a:clrScheme><a:fmtScheme name="t"><a:fillStyleLst/><a:lnStyleLst><a:ln w="6350"/><a:ln w="12700"/><a:ln w="19050"/></a:lnStyleLst><a:effectStyleLst/><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"><a:tint val="50000"/></a:schemeClr></a:solidFill><a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"/></a:gs><a:gs pos="100000"><a:srgbClr val="000000"/></a:gs></a:gsLst><a:lin ang="5400000" scaled="0"/></a:gradFill></a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>"#.to_string(),
+                ),
+            ];
+            if let Some(styles) = self.table_styles {
+                parts.push(("ppt/tableStyles.xml", styles.to_string()));
+            }
+            let mut z = zip::ZipWriter::new(File::create(path).unwrap());
+            for (name, data) in parts {
+                z.start_file(name, SimpleFileOptions::default()).unwrap();
+                z.write_all(data.as_bytes()).unwrap();
+            }
+            if let Some(bytes) = &self.picture {
+                z.start_file("ppt/media/image1.png", SimpleFileOptions::default()).unwrap();
+                z.write_all(bytes).unwrap();
+            }
+            z.finish().unwrap();
         }
-        let mut z = zip::ZipWriter::new(File::create(path).unwrap());
-        for (name, data) in parts {
-            z.start_file(name, SimpleFileOptions::default()).unwrap();
-            z.write_all(data.as_bytes()).unwrap();
+    }
+
+    /// A PNG of one colour, `w` × `h` pixels.
+    fn png(w: u32, h: u32) -> Vec<u8> {
+        let mut out = Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(w, h, image::Rgba([40, 90, 160, 255]))
+            .write_to(&mut out, image::ImageFormat::Png)
+            .unwrap();
+        out.into_inner()
+    }
+
+    /// A shape at a fixed place: its `spPr` extras (fill, line), its `p:style`, its text.
+    fn drawn(id: u32, sp_pr: &str, style: &str, text: &str) -> String {
+        format!(
+            r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="S{id}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="914400" y="{}"/><a:ext cx="1828800" cy="457200"/></a:xfrm>{sp_pr}</p:spPr>{style}<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp>"#,
+            id * 600_000
+        )
+    }
+
+    fn texts(slide: &Slide) -> Vec<String> {
+        slide
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.kind {
+                ShapeKind::Text { paragraphs, .. } => Some(paragraphs.iter().map(|p| p.text()).collect::<String>()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    const PICTURE_BG: &str = r#"<p:bg><p:bgPr><a:blipFill><a:blip r:embed="rId9"/><a:stretch><a:fillRect/></a:stretch></a:blipFill></p:bgPr></p:bg>"#;
+
+    /// 1.0.0 §1-1: the background is the first one declared going slide → layout → master, and it may be
+    /// a picture (stretched or tiled) or a gradient (linear, from a point, or one of the theme's).
+    #[test]
+    fn a_slide_background_may_be_a_picture_or_a_gradient() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bg.pptx");
+        let title = drawn(2, "", "", "제목");
+
+        // The master's picture, stretched: the first thing drawn, over the whole slide.
+        Deck { slide: &title, master_bg: PICTURE_BG, picture: Some(png(64, 32)), ..Default::default() }.write(&path);
+        let model = read(&path).unwrap();
+        let slide = &model.slides[0];
+        assert_eq!((slide.background.as_deref(), &slide.background_gradient), (None, &None));
+        let first = &slide.shapes[0];
+        assert!(matches!(&first.kind, ShapeKind::Picture { id } if model.images.iter().any(|i| &i.id == id)));
+        assert_eq!((first.x_mm, first.y_mm), (0.0, 0.0));
+        assert!((first.w_mm - slide.width_mm).abs() < 0.01 && (first.h_mm - slide.height_mm).abs() < 0.01);
+        assert_eq!(texts(slide), ["제목"]);
+
+        // The slide's own gradient wins over the master's picture.
+        let gradient = r#"<p:bg><p:bgPr><a:gradFill><a:gsLst><a:gs pos="100000"><a:srgbClr val="BDD7EE"/></a:gs><a:gs pos="0"><a:srgbClr val="1F3864"/></a:gs></a:gsLst><a:lin ang="5400000" scaled="0"/></a:gradFill></p:bgPr></p:bg>"#;
+        Deck {
+            slide: &title,
+            slide_bg: gradient,
+            master_bg: PICTURE_BG,
+            picture: Some(png(64, 32)),
+            ..Default::default()
         }
-        z.finish().unwrap();
+        .write(&path);
+        let model = read(&path).unwrap();
+        let slide = &model.slides[0];
+        let expected =
+            Gradient { angle_deg: 90.0, stops: vec![(0.0, "#1F3864".into()), (100.0, "#BDD7EE".into())], center: None };
+        assert_eq!(slide.background_gradient.as_ref(), Some(&expected));
+        assert_eq!(
+            slide.background.as_deref(),
+            Some("#1F3864"),
+            "the first stop stands in where gradients are not drawn"
+        );
+        assert!(!slide.shapes.iter().any(|s| matches!(s.kind, ShapeKind::Picture { .. })));
+        let html = crate::documents::convert::html::to_html(&model);
+        assert!(html.contains("background:linear-gradient(180.0deg, #1F3864 0.0%, #BDD7EE 100.0%);"), "{html}");
+
+        // A gradient spreading from the centre.
+        let radial = r#"<p:bg><p:bgPr><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FFFFFF"/></a:gs><a:gs pos="100000"><a:srgbClr val="548235"/></a:gs></a:gsLst><a:path path="circle"><a:fillToRect l="50000" t="50000" r="50000" b="50000"/></a:path></a:gradFill></p:bgPr></p:bg>"#;
+        Deck { slide: &title, layout_bg: radial, ..Default::default() }.write(&path);
+        let model = read(&path).unwrap();
+        assert_eq!(model.slides[0].background_gradient.as_ref().and_then(|g| g.center), Some((50.0, 50.0)));
+        let html = crate::documents::convert::html::to_html(&model);
+        assert!(
+            html.contains("background:radial-gradient(farthest-corner at 50.0% 50.0%, #FFFFFF 0.0%, #548235 100.0%);")
+        );
+
+        // The theme's third background fill, with the referenced colour as its `phClr`.
+        let themed = r#"<p:bg><p:bgRef idx="1003"><a:schemeClr val="accent1"/></p:bgRef></p:bg>"#;
+        Deck { slide: &title, master_bg: themed, ..Default::default() }.write(&path);
+        let model = read(&path).unwrap();
+        let expected =
+            Gradient { angle_deg: 90.0, stops: vec![(0.0, "#4F81BD".into()), (100.0, "#000000".into())], center: None };
+        assert_eq!(model.slides[0].background_gradient.as_ref(), Some(&expected));
+        // … and its first: the colour itself.
+        let plain = r#"<p:bg><p:bgRef idx="1001"><a:schemeClr val="accent2"/></p:bgRef></p:bg>"#;
+        Deck { slide: &title, master_bg: plain, ..Default::default() }.write(&path);
+        let model = read(&path).unwrap();
+        assert_eq!(
+            (model.slides[0].background.as_deref(), &model.slides[0].background_gradient),
+            (Some("#C0504D"), &None)
+        );
+
+        // A tiled picture: one tile is the picture at 96 dpi times the tile's scale.
+        let tiled = r#"<p:bg><p:bgPr><a:blipFill><a:blip r:embed="rId9"/><a:tile tx="0" ty="0" sx="50000" sy="100000" flip="none" algn="tl"/></a:blipFill></p:bgPr></p:bg>"#;
+        Deck { slide: &title, slide_bg: tiled, picture: Some(png(64, 32)), ..Default::default() }.write(&path);
+        let model = read(&path).unwrap();
+        let slide = &model.slides[0];
+        let (id, w, h) = slide.background_tile.clone().expect("tiled");
+        assert!((w - 64.0 * 25.4 / 96.0 * 0.5).abs() < 0.01 && (h - 32.0 * 25.4 / 96.0).abs() < 0.01, "{w} x {h}");
+        assert!(!slide.shapes.iter().any(|s| matches!(s.kind, ShapeKind::Picture { .. })), "not stretched as well");
+        let html = crate::documents::convert::html::to_html(&model);
+        assert!(
+            html.contains(&format!(
+                "background-image:url('img/{id}');background-size:8.47mm 8.47mm;background-repeat:repeat;"
+            )),
+            "{html}"
+        );
+    }
+
+    /// 1.0.0 §1-1: what the master and the layout draw themselves (a band, a logo, fixed text) is on
+    /// every slide under the slide's own shapes — their placeholders are not, and "hide background
+    /// graphics" (`showMasterSp="0"`) takes them away.
+    #[test]
+    fn a_slide_shows_what_its_master_and_layout_draw() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("decor.pptx");
+        let placeholder = |kind: &str, text: &str| {
+            format!(
+                r#"<p:sp><p:nvSpPr><p:cNvPr id="2" name="P"/><p:cNvSpPr/><p:nvPr><p:ph type="{kind}"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="457200" y="274638"/><a:ext cx="8229600" cy="1143000"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp>"#
+            )
+        };
+        let band = r#"<a:solidFill><a:srgbClr val="C00000"/></a:solidFill>"#;
+        let logo = r#"<p:pic><p:nvPicPr><p:cNvPr id="7" name="Logo"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="rId9"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x="7315200" y="228600"/><a:ext cx="1463040" cy="487680"/></a:xfrm></p:spPr></p:pic>"#;
+        let master =
+            [placeholder("title", "마스터 제목 서식"), drawn(3, band, "", "사내 한정"), logo.to_string()].concat();
+        let layout = [placeholder("title", "레이아웃 제목 서식"), drawn(4, "", "", "레이아웃 글")].concat();
+        let slide = placeholder("title", "분기별 실적");
+        let deck =
+            Deck { slide: &slide, layout: &layout, master: &master, picture: Some(png(48, 16)), ..Default::default() };
+
+        deck.write(&path);
+        let model = read(&path).unwrap();
+        let shapes = &model.slides[0].shapes;
+        assert_eq!(
+            texts(&model.slides[0]),
+            ["사내 한정", "레이아웃 글", "분기별 실적"],
+            "master, layout, then the slide"
+        );
+        assert_eq!(shapes[0].fill.as_deref(), Some("#C00000"));
+        assert!(
+            matches!(shapes[1].kind, ShapeKind::Picture { .. }),
+            "the master's logo, from the master's relationships"
+        );
+        assert!((shapes[1].x_mm - emu_to_mm(7_315_200.0)).abs() < 0.01);
+        // The reading-order view stays the slide's own content.
+        let flow: String = model.blocks.iter().map(|b| format!("{b:?}")).collect();
+        assert!(flow.contains("분기별 실적") && !flow.contains("사내 한정") && !flow.contains("레이아웃 글"));
+
+        // Hidden on the slide: neither the layout's nor the master's.
+        Deck { slide_attrs: r#"showMasterSp="0""#, ..deck }.write(&path);
+        let model = read(&path).unwrap();
+        assert_eq!(texts(&model.slides[0]), ["분기별 실적"]);
+        assert_eq!(model.slides[0].shapes.len(), 1);
+
+        // Hidden on the layout: the layout's own stay, the master's go.
+        let deck =
+            Deck { slide: &slide, layout: &layout, master: &master, picture: Some(png(48, 16)), ..Default::default() };
+        Deck { layout_attrs: r#"showMasterSp="0""#, ..deck }.write(&path);
+        let model = read(&path).unwrap();
+        assert_eq!(texts(&model.slides[0]), ["레이아웃 글", "분기별 실적"]);
+        assert!(!model.slides[0].shapes.iter().any(|s| matches!(s.kind, ShapeKind::Picture { .. })));
+    }
+
+    /// 1.0.0 §1-1: a shape drawn in PowerPoint names no colours in its `spPr` — fill, outline and text
+    /// colour come from its `p:style`; what `spPr` does say wins (no fill, a gradient, a picture).
+    #[test]
+    fn a_drawn_shape_takes_its_colours_from_its_style() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("style.pptx");
+        let style = r#"<p:style><a:lnRef idx="2"><a:schemeClr val="accent2"/></a:lnRef><a:fillRef idx="1"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="lt1"/></a:fontRef></p:style>"#;
+        let none = r#"<p:style><a:lnRef idx="0"><a:schemeClr val="accent2"/></a:lnRef><a:fillRef idx="0"><a:schemeClr val="accent1"/></a:fillRef><a:fontRef idx="minor"><a:schemeClr val="dk1"/></a:fontRef></p:style>"#;
+        let gradient = r#"<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="C00000"/></a:gs><a:gs pos="100000"><a:srgbClr val="FFC000"/></a:gs></a:gsLst><a:lin ang="0" scaled="0"/></a:gradFill>"#;
+        let picture = r#"<a:blipFill><a:blip r:embed="rId9"/><a:stretch><a:fillRect/></a:stretch></a:blipFill>"#;
+        let slide = [
+            drawn(1, "", style, "스타일"),
+            drawn(2, r#"<a:noFill/><a:ln><a:noFill/></a:ln>"#, style, "없음"),
+            drawn(3, r#"<a:ln w="38100"/>"#, style, "선 굵기만"),
+            drawn(4, gradient, style, "그라데이션"),
+            drawn(5, picture, style, "그림"),
+            drawn(6, "", none, "스타일 없음"),
+        ]
+        .concat();
+        Deck { slide: &slide, picture: Some(png(48, 16)), ..Default::default() }.write(&path);
+        let model = read(&path).unwrap();
+        let slide = &model.slides[0];
+        let shape = |text: &str| {
+            slide
+                .shapes
+                .iter()
+                .find(|s| matches!(&s.kind, ShapeKind::Text { paragraphs, .. } if paragraphs[0].text() == text))
+                .unwrap_or_else(|| panic!("{text}"))
+        };
+        let text_color = |s: &Shape| match &s.kind {
+            ShapeKind::Text { default_color, .. } => default_color.clone(),
+            _ => None,
+        };
+        let styled = shape("스타일");
+        assert_eq!(styled.fill.as_deref(), Some("#4F81BD"));
+        assert_eq!(styled.line, Some(("#C0504D".to_string(), 1.0)), "the theme's second line width");
+        assert_eq!(text_color(styled).as_deref(), Some("#FFFFFF"));
+        assert_eq!((shape("없음").fill.as_deref(), &shape("없음").line), (None, &None));
+        assert_eq!(
+            shape("선 굵기만").line,
+            Some(("#C0504D".to_string(), 3.0)),
+            "the style's colour at the shape's width"
+        );
+        let g = shape("그라데이션");
+        assert_eq!(g.fill.as_deref(), Some("#C00000"));
+        assert_eq!(g.fill_gradient.as_ref().map(|g| (g.angle_deg, g.stops.len())), Some((0.0, 2)));
+        // A picture fill: the picture, then the text over it without the style's fill.
+        let at = slide.shapes.iter().position(|s| std::ptr::eq(s, shape("그림"))).unwrap();
+        assert!(matches!(slide.shapes[at - 1].kind, ShapeKind::Picture { .. }));
+        assert_eq!((slide.shapes[at - 1].x_mm, slide.shapes[at - 1].w_mm), (shape("그림").x_mm, shape("그림").w_mm));
+        assert_eq!(shape("그림").fill, None);
+        let bare = shape("스타일 없음");
+        assert_eq!((bare.fill.as_deref(), &bare.line), (None, &None), "idx 0 = none of the theme's styles");
+        assert_eq!(text_color(bare).as_deref(), Some("#000000"));
+        let html = crate::documents::convert::html::to_html(&model);
+        assert!(html.contains("background:linear-gradient(90.0deg, #C00000 0.0%, #FFC000 100.0%);"), "{html}");
+    }
+
+    /// 1.0.0 §1-1: a shape that is not a box is drawn by its outline — a custom geometry's own path
+    /// (lines, curves, arcs) or a common preset as a polygon; a formula-driven custom geometry stays a box.
+    #[test]
+    fn shapes_that_are_not_boxes_keep_their_outline() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("outline.pptx");
+        let fill = r#"<a:solidFill><a:srgbClr val="4F81BD"/></a:solidFill>"#;
+        let custom = |points: &str| {
+            format!(
+                r#"<a:custGeom><a:avLst/><a:gdLst/><a:pathLst><a:path w="1000" h="1000">{points}</a:path></a:pathLst></a:custGeom>{fill}"#
+            )
+        };
+        // A flat-bottomed arch: half a turn clockwise from the left end over the top.
+        let arch = custom(
+            r#"<a:moveTo><a:pt x="0" y="500"/></a:moveTo><a:arcTo wR="500" hR="500" stAng="10800000" swAng="10800000"/><a:lnTo><a:pt x="1000" y="1000"/></a:lnTo><a:lnTo><a:pt x="0" y="1000"/></a:lnTo><a:close/>"#,
+        );
+        let curve = custom(
+            r#"<a:moveTo><a:pt x="0" y="600"/></a:moveTo><a:cubicBezTo><a:pt x="250" y="0"/><a:pt x="500" y="1000"/><a:pt x="1000" y="200"/></a:cubicBezTo><a:quadBezTo><a:pt x="1000" y="900"/><a:pt x="0" y="1000"/></a:quadBezTo><a:close/>"#,
+        );
+        let guided =
+            custom(r#"<a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="r" y="b"/></a:lnTo><a:close/>"#);
+        let preset =
+            |prst: &str, av: &str| format!(r#"<a:prstGeom prst="{prst}"><a:avLst>{av}</a:avLst></a:prstGeom>{fill}"#);
+        let slide = [
+            drawn(1, &arch, "", "아치"),
+            drawn(2, &curve, "", "곡선"),
+            drawn(3, &guided, "", "수식"),
+            // 4 : 1 boxes — the point of a chevron is half the shorter side deep.
+            drawn(4, &preset("chevron", ""), "", "단계"),
+            drawn(5, &preset("rightArrow", r#"<a:gd name="adj2" fmla="val 100000"/>"#), "", "화살표")
+                .replace("<a:xfrm>", r#"<a:xfrm flipH="1">"#),
+            drawn(6, &preset("roundRect", ""), "", "둥근"),
+        ]
+        .concat();
+        Deck { slide: &slide, ..Default::default() }.write(&path);
+        let model = read(&path).unwrap();
+        let shape = |text: &str| {
+            model.slides[0]
+                .shapes
+                .iter()
+                .find(|s| matches!(&s.kind, ShapeKind::Text { paragraphs, .. } if paragraphs[0].text() == text))
+                .unwrap_or_else(|| panic!("{text}"))
+        };
+        let d = |text: &str| shape(text).paths.iter().map(|p| p.d.as_str()).collect::<Vec<_>>().join(" | ");
+        assert_eq!(d("아치"), "M0.0 500.0A500.0 500.0 0 0 1 1000.0 500.0L1000.0 1000.0L0.0 1000.0Z");
+        assert_eq!(d("곡선"), "M0.0 600.0C250.0 0.0 500.0 1000.0 1000.0 200.0Q1000.0 900.0 0.0 1000.0Z");
+        assert!(shape("수식").paths.is_empty(), "a guide name is not a coordinate: drawn as a box");
+        assert_eq!(d("단계"), "M0.0 0.0L875.0 0.0L1000.0 500.0L875.0 1000.0L0.0 1000.0L125.0 500.0Z");
+        assert_eq!(d("화살표"), "M0.0 250.0L750.0 250.0L750.0 0.0L1000.0 500.0L750.0 1000.0L750.0 750.0L0.0 750.0Z");
+        assert!(shape("둥근").paths.is_empty() && shape("둥근").geometry.as_deref() == Some("roundRect"));
+
+        let html = crate::documents::convert::html::to_html(&model);
+        assert!(html.contains(r##"<path d="M0.0 0.0L875.0 0.0L1000.0 500.0L875.0 1000.0L0.0 1000.0L125.0 500.0Z" fill="#4F81BD" stroke="none""##), "{html}");
+        // The flip turns the outline; the text is not mirrored with it.
+        assert!(html.contains(
+            r#"<svg class="geo" viewBox="0 0 1000 1000" preserveAspectRatio="none" style="transform:scaleX(-1)">"#
+        ));
+        assert!(!html.contains("transform:scaleX(-1);transform-origin"), "{html}");
+        // An outlined shape has no box behind it; a box (the formula-driven one, the rounded one) does.
+        assert_eq!(html.matches("background:#4F81BD;").count(), 2, "{html}");
     }
 
     fn table_xml(style_id: &str, flags: &str, cells: &[&[&str]], first_cell_pr: &str) -> String {
@@ -1773,7 +2542,14 @@ pub(crate) mod tests {
         let Some(path) = std::env::var_os("DOCULENS_PPTX_DUMP").map(std::path::PathBuf::from) else { return };
         let model = read(&path).unwrap();
         for (i, slide) in model.slides.iter().enumerate() {
-            println!("slide {}: background {:?}, {} shape(s)", i + 1, slide.background, slide.shapes.len());
+            println!(
+                "slide {}: background {:?} gradient {:?} tile {:?}, {} shape(s)",
+                i + 1,
+                slide.background,
+                slide.background_gradient,
+                slide.background_tile,
+                slide.shapes.len()
+            );
             for sh in &slide.shapes {
                 match &sh.kind {
                     ShapeKind::Table(t) => {
@@ -1785,16 +2561,22 @@ pub(crate) mod tests {
                         }
                     }
                     other => println!(
-                        "  {:.0}x{:.0} mm {}",
+                        "  {:.0}x{:.0} mm at {:.0},{:.0} fill {:?}{} line {:?} {}",
                         sh.w_mm,
                         sh.h_mm,
-                        format!("{other:?}").chars().take(100).collect::<String>()
+                        sh.x_mm,
+                        sh.y_mm,
+                        sh.fill,
+                        if sh.fill_gradient.is_some() { " (gradient)" } else { "" },
+                        sh.line,
+                        format!("{other:?}").chars().take(90).collect::<String>()
                     ),
                 }
             }
         }
+        // A directory: `index.html` with its pictures under `img/`, as the PDF printer gets them.
         if let Some(out) = std::env::var_os("DOCULENS_PPTX_DUMP_OUT") {
-            std::fs::write(out, crate::documents::convert::html::to_html(&model)).unwrap();
+            crate::documents::convert::html::write_bundle(&model, Path::new(&out)).unwrap();
         }
     }
 

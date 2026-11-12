@@ -9,7 +9,9 @@ use std::path::Path;
 
 use crate::error::{CoreError, Result};
 
-use super::model::{Align, Block, Cell, DocModel, ListKind, Paragraph, Run, Shape, ShapeKind, Slide, Table, VAnchor};
+use super::model::{
+    Align, Block, Cell, DocModel, GeoPath, Gradient, ListKind, Paragraph, Run, Shape, ShapeKind, Slide, Table, VAnchor,
+};
 
 /// Escapes text for element content / attribute values.
 pub fn escape(s: &str) -> String {
@@ -256,8 +258,10 @@ const SLIDE_CSS: &str = r#"
 html, body { margin: 0; padding: 0; background: #fff; color: #111; }
 body { font-family: "Pretendard Variable", Pretendard, "Noto Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", "Nanum Gothic", sans-serif; }
 .slide { position: relative; overflow: hidden; background: #fff; page-break-after: always; break-after: page; }
+.slide, .slide * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 .slide:last-child { page-break-after: auto; break-after: auto; }
 .shape { position: absolute; box-sizing: border-box; overflow: hidden; }
+.shape svg.geo { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; }
 .shape .tx { position: absolute; left: 0; right: 0; display: flex; flex-direction: column; box-sizing: border-box; }
 .tx.top { top: 0; } .tx.middle { top: 0; bottom: 0; justify-content: center; } .tx.bottom { bottom: 0; }
 .shape p { margin: 0; line-height: 1.2; word-break: keep-all; overflow-wrap: anywhere; }
@@ -336,29 +340,106 @@ fn slide_paragraphs_html(
     }
 }
 
+/// The CSS of a gradient; `None` when a stop is not a plain colour or a number is not finite (nothing
+/// unchecked reaches a style attribute).
+fn gradient_css(g: &Gradient) -> Option<String> {
+    let stops: Vec<String> = g
+        .stops
+        .iter()
+        .filter(|(pos, c)| pos.is_finite() && is_css_color(c))
+        .map(|(pos, c)| format!("{c} {:.1}%", pos.clamp(0.0, 100.0)))
+        .collect();
+    if stops.len() < 2 || stops.len() != g.stops.len() {
+        return None;
+    }
+    match g.center {
+        Some((x, y)) if x.is_finite() && y.is_finite() => Some(format!(
+            "radial-gradient(farthest-corner at {:.1}% {:.1}%, {})",
+            x.clamp(0.0, 100.0),
+            y.clamp(0.0, 100.0),
+            stops.join(", ")
+        )),
+        Some(_) => None,
+        // DrawingML counts clockwise from "left to right"; CSS from "bottom to top".
+        None if g.angle_deg.is_finite() => {
+            Some(format!("linear-gradient({:.1}deg, {})", (g.angle_deg + 90.0).rem_euclid(360.0), stops.join(", ")))
+        }
+        None => None,
+    }
+}
+
+/// Path data the reader wrote itself: commands, digits and separators only.
+fn is_path_data(d: &str) -> bool {
+    !d.is_empty() && d.len() <= 400_000 && d.chars().all(|c| "MLCQAZ0123456789 .-".contains(c))
+}
+
+/// The outlines of a text shape that is not a box, as an SVG laid over the shape's box: filled and
+/// stroked like the box would be. A flip turns the outline, never the text.
+fn outline_svg(sh: &Shape, paths: &[&GeoPath]) -> String {
+    let fill = sh.fill.as_deref().filter(|c| is_css_color(c)).unwrap_or("none");
+    let (stroke, width) = match &sh.line {
+        Some((c, w)) if is_css_color(c) && w.is_finite() => (c.as_str(), w.max(0.25) * 96.0 / 72.0),
+        _ => ("none", 0.0),
+    };
+    let flip = match (sh.flip_h, sh.flip_v) {
+        (true, true) => " style=\"transform:scale(-1,-1)\"",
+        (true, false) => " style=\"transform:scaleX(-1)\"",
+        (false, true) => " style=\"transform:scaleY(-1)\"",
+        (false, false) => "",
+    };
+    let mut svg = format!("<svg class=\"geo\" viewBox=\"0 0 1000 1000\" preserveAspectRatio=\"none\"{flip}>");
+    for p in paths {
+        let _ = write!(
+            svg,
+            "<path d=\"{}\" fill=\"{}\" stroke=\"{}\" stroke-width=\"{width:.2}\" vector-effect=\"non-scaling-stroke\"/>",
+            p.d,
+            if p.no_fill { "none" } else { fill },
+            if p.no_stroke { "none" } else { stroke },
+        );
+    }
+    svg.push_str("</svg>");
+    svg
+}
+
 fn shape_html(sh: &Shape, img_src: &dyn Fn(&str) -> String, out: &mut String) {
     let mut style = format!("left:{};top:{};width:{};height:{};", mm(sh.x_mm), mm(sh.y_mm), mm(sh.w_mm), mm(sh.h_mm));
-    if let Some(f) = sh.fill.as_deref().filter(|c| is_css_color(c)) {
-        let _ = write!(style, "background:{f};");
-    }
-    if let Some((c, w)) = &sh.line {
-        if is_css_color(c) && !matches!(sh.kind, ShapeKind::Line) {
-            let _ = write!(style, "border:{:.2}pt solid {c};", w.max(0.25));
+    let is_text = matches!(sh.kind, ShapeKind::Text { .. });
+    // A text shape with outlines of its own is drawn by them; every other one as a box.
+    let paths: Vec<&GeoPath> =
+        if is_text { sh.paths.iter().filter(|p| is_path_data(&p.d)).collect() } else { Vec::new() };
+    if paths.is_empty() {
+        if let Some(g) = sh.fill_gradient.as_ref().and_then(gradient_css) {
+            let _ = write!(style, "background:{g};");
+        } else if let Some(f) = sh.fill.as_deref().filter(|c| is_css_color(c)) {
+            let _ = write!(style, "background:{f};");
         }
-    }
-    match sh.geometry.as_deref() {
-        Some("ellipse") => style.push_str("border-radius:50%;"),
-        Some("roundRect") | Some("round2SameRect") | Some("snipRoundRect") => style.push_str("border-radius:2.5mm;"),
-        _ => {}
+        if let Some((c, w)) = &sh.line {
+            if is_css_color(c) && !matches!(sh.kind, ShapeKind::Line) {
+                let _ = write!(style, "border:{:.2}pt solid {c};", w.max(0.25));
+            }
+        }
+        match sh.geometry.as_deref() {
+            Some("ellipse") | Some("flowChartConnector") => style.push_str("border-radius:50%;"),
+            // The default corner of a rounded rectangle: a sixth of its shorter side.
+            Some("roundRect") | Some("round2SameRect") | Some("snipRoundRect") | Some("flowChartAlternateProcess") => {
+                let _ = write!(style, "border-radius:{};", mm(sh.w_mm.min(sh.h_mm) / 6.0));
+            }
+            Some("flowChartTerminator") => {
+                let _ = write!(style, "border-radius:{};", mm(sh.w_mm.min(sh.h_mm) / 2.0));
+            }
+            _ => {}
+        }
     }
     let mut transform = String::new();
     if sh.rotation_deg.abs() > 0.01 {
         let _ = write!(transform, "rotate({:.2}deg) ", sh.rotation_deg);
     }
-    if sh.flip_h {
+    // A flipped picture or line is mirrored; a flipped text shape keeps its text readable (its outline
+    // is mirrored instead, and a box looks the same either way).
+    if sh.flip_h && !is_text {
         transform.push_str("scaleX(-1) ");
     }
-    if sh.flip_v {
+    if sh.flip_v && !is_text {
         transform.push_str("scaleY(-1) ");
     }
     if !transform.is_empty() {
@@ -367,6 +448,9 @@ fn shape_html(sh: &Shape, img_src: &dyn Fn(&str) -> String, out: &mut String) {
     match &sh.kind {
         ShapeKind::Text { paragraphs, anchor, font_scale, insets_mm, default_pt, default_color } => {
             let _ = write!(out, "<div class=\"shape\" style=\"{style}\">");
+            if !paths.is_empty() {
+                out.push_str(&outline_svg(sh, &paths));
+            }
             let anchor_class = match anchor {
                 VAnchor::Top => "top",
                 VAnchor::Middle => "middle",
@@ -503,12 +587,26 @@ pub fn render_slides_html(title: Option<&str>, slides: &[Slide], img_src: impl F
     let _ = write!(out, ".slide {{ width: {}; height: {}; }}", mm(w), mm(h));
     out.push_str("</style></head>\n<body>\n");
     for (i, slide) in slides.iter().enumerate() {
-        let bg = slide
-            .background
-            .as_deref()
-            .filter(|c| is_css_color(c))
-            .map(|c| format!(" style=\"background:{c}\""))
-            .unwrap_or_default();
+        // A gradient when the slide has one, else the solid colour; a tiled picture lies over either.
+        let mut style = String::new();
+        if let Some(g) = slide.background_gradient.as_ref().and_then(gradient_css) {
+            let _ = write!(style, "background:{g};");
+        } else if let Some(c) = slide.background.as_deref().filter(|c| is_css_color(c)) {
+            let _ = write!(style, "background:{c};");
+        }
+        if let Some((id, w, h)) = &slide.background_tile {
+            let src = img_src(id);
+            let plain = !src.contains(['\'', '"', '(', ')', '\\', ' ']);
+            if plain && w.is_finite() && h.is_finite() && *w >= 0.5 && *h >= 0.5 {
+                let _ = write!(
+                    style,
+                    "background-image:url('{src}');background-size:{} {};background-repeat:repeat;",
+                    mm(*w),
+                    mm(*h)
+                );
+            }
+        }
+        let bg = if style.is_empty() { String::new() } else { format!(" style=\"{style}\"") };
         let _ = writeln!(out, "<section class=\"slide\" data-slide=\"{}\"{bg}>", i + 1);
         for sh in &slide.shapes {
             shape_html(sh, &img_src, &mut out);
@@ -604,6 +702,8 @@ mod tests {
             width_mm: 338.67,
             height_mm: 190.5,
             background: Some("#102040".into()),
+            background_gradient: None,
+            background_tile: None,
             shapes: vec![
                 Shape {
                     x_mm: 10.0,
@@ -614,8 +714,10 @@ mod tests {
                     flip_h: false,
                     flip_v: false,
                     fill: Some("#2F5597".into()),
+                    fill_gradient: None,
                     line: Some(("#1F3864".into(), 1.5)),
                     geometry: Some("roundRect".into()),
+                    paths: Vec::new(),
                     kind: ShapeKind::Text {
                         paragraphs: vec![
                             text("제목"),
@@ -637,8 +739,10 @@ mod tests {
                     flip_h: true,
                     flip_v: false,
                     fill: None,
+                    fill_gradient: None,
                     line: None,
                     geometry: None,
+                    paths: Vec::new(),
                     kind: ShapeKind::Picture { id: "img1".into() },
                 },
                 Shape {
@@ -650,8 +754,10 @@ mod tests {
                     flip_h: false,
                     flip_v: false,
                     fill: None,
+                    fill_gradient: None,
                     line: Some(("#7F7F7F".into(), 1.0)),
                     geometry: Some("line".into()),
+                    paths: Vec::new(),
                     kind: ShapeKind::Line,
                 },
                 Shape {
@@ -663,8 +769,10 @@ mod tests {
                     flip_h: false,
                     flip_v: false,
                     fill: None,
+                    fill_gradient: None,
                     line: None,
                     geometry: None,
+                    paths: Vec::new(),
                     kind: ShapeKind::Placeholder { label: "차트".into() },
                 },
             ],
@@ -681,7 +789,7 @@ mod tests {
         assert_eq!(html.matches("<section class=\"slide\"").count(), 2);
         assert_eq!(html.matches("class=\"slide notes\"").count(), 1, "only the first slide has notes");
         assert!(html.contains("background:#102040"));
-        assert!(html.contains("left:10.00mm;top:20.00mm;width:100.00mm;height:30.00mm;background:#2F5597;border:1.50pt solid #1F3864;border-radius:2.5mm;"));
+        assert!(html.contains("left:10.00mm;top:20.00mm;width:100.00mm;height:30.00mm;background:#2F5597;border:1.50pt solid #1F3864;border-radius:5.00mm;"));
         assert!(html.contains("class=\"tx middle\""));
         // 40 pt default × 0.5 autofit = 20 pt; the level-1 bullet is one step smaller (36 × 0.5).
         assert!(html.contains("font-size:20.0pt;color:#FFFFFF;"), "{html}");
