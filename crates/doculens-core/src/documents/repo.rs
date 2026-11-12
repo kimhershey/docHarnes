@@ -492,6 +492,28 @@ pub fn set_page_layout(conn: &Connection, id: &str, page_no: u32, layout_json: O
     Ok(n > 0)
 }
 
+/// Stores the page text and word layout after the text of the page's pictures was read into them
+/// (1.0.0 §6). The page keeps its `text_source`: its own text is still the layer's, the pictures only
+/// added to it. Returns false when the page does not exist.
+pub fn set_page_figure_text(
+    conn: &Connection,
+    id: &str,
+    page_no: u32,
+    text: &str,
+    layout_json: &str,
+) -> rusqlite::Result<bool> {
+    let value = (!text.trim().is_empty()).then_some(text.trim_end());
+    let n = conn.execute(
+        "UPDATE pages SET text = ?3, has_text = ?4, layout = ?5 WHERE document_id = ?1 AND page_no = ?2",
+        params![id, page_no as i64, value, value.is_some() as i64, layout_json],
+    )?;
+    if n == 0 {
+        return Ok(false);
+    }
+    conn.execute("UPDATE documents SET updated_at = ?2 WHERE id = ?1", params![id, ts(&Utc::now())])?;
+    Ok(true)
+}
+
 /// Stores an edit made on the page image: the rewritten page text (`text_source = 'manual'`) together
 /// with the word layout that carries the edited boxes. Returns false when the page does not exist.
 pub fn set_page_text_and_layout(

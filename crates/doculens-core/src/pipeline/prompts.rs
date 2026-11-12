@@ -161,6 +161,17 @@ pub fn ocr() -> String {
         .to_string()
 }
 
+/// The prompt for one picture of a page (1.0.0 §6 "이미지 내 글자 추출"): a diagram, a screen capture,
+/// a chart or a table pasted as an image. Plain lines, no markup — they go into the page text as they are.
+pub fn figure() -> String {
+    "이 그림(구성도·화면 캡처·차트·표 그림) 안에 보이는 글자를 읽는 순서대로 그대로 옮겨 적으세요.\n\
+     - 한 줄에 한 덩어리씩 쓰세요: 상자 하나의 라벨, 문장 하나, 표의 한 행. 표의 칸은 ' | '로 나누세요.\n\
+     - HTML·Markdown 표기, 머리 기호, 번호를 덧붙이지 마세요.\n\
+     - 한글·한자·영문·숫자는 인쇄된 그대로 옮기고 번역·요약·설명을 하지 마세요. 그림이 무엇인지 묘사하지 마세요.\n\
+     - 읽을 수 있는 글자가 전혀 없으면 null 만 출력하세요."
+        .to_string()
+}
+
 /// KIE prompt: schema summary + OCR / text-layer anchor text (§3.4 "2단계 추출 원칙").
 pub fn kie(def: &SchemaDef, doc_type_label: &str, page_no: u32, page_count: u32, text: Option<&str>) -> String {
     let mut s = format!(

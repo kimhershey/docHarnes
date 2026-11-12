@@ -260,6 +260,9 @@ pub struct ProcessingSettings {
     /// Run the VLM OCR even on pages that carry a PDF text layer (off: the
     /// text layer is used as is — design §3.4 "digital PDF hybrid").
     pub ocr_digital_pdf: bool,
+    /// 1.0.0 "이미지 내 글자 추출": read the text inside the pictures of pages that have their own text
+    /// layer (one model call per picture) and put it into the page's word layout. Off by default.
+    pub ocr_figures: bool,
     /// Pages per document sent to the field extractor (first N−1 + last page).
     pub kie_max_pages: u8,
     /// Precision mode: a second extraction sample (T=0.3) whose agreement feeds the confidence.
@@ -284,6 +287,7 @@ impl Default for ProcessingSettings {
             organize_reviewed_only: true,
             inbox_watch: true,
             ocr_digital_pdf: false,
+            ocr_figures: false,
             kie_max_pages: 4,
             precise_mode: false,
             dense_reocr: true,
@@ -787,6 +791,7 @@ mod tests {
                 organize_reviewed_only: false,
                 inbox_watch: false,
                 ocr_digital_pdf: true,
+                ocr_figures: true,
                 kie_max_pages: 9,
                 precise_mode: true,
                 dense_reocr: false,

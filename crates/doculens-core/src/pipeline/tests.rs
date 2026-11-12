@@ -35,6 +35,8 @@ struct World {
     _dir: tempfile::TempDir,
     chat: StageChat,
     settings: ProcessingSettings,
+    /// PDFium, for the tests that need the real renderer (`None`: the stub world of the other tests).
+    render: Option<&'static crate::documents::render::RenderService>,
 }
 
 impl World {
@@ -50,14 +52,14 @@ impl World {
         db.with(repo::enable_legacy_builtins).unwrap();
         // No random audit sampling in tests (deterministic review queues).
         let settings = ProcessingSettings { audit_sample_percent: 0, ..ProcessingSettings::default() };
-        World { db, paths, _dir: dir, chat: StageChat::new(), settings }
+        World { db, paths, _dir: dir, chat: StageChat::new(), settings, render: None }
     }
 
     fn import_deps(&self) -> ImportDeps<'_> {
         ImportDeps {
             db: &self.db,
             paths: &self.paths,
-            render: None,
+            render: self.render,
             printer: &StubPdfPrinter,
             render_options: RenderOptions::default(),
         }
@@ -661,6 +663,101 @@ fn a_page_image_that_is_gone_is_rendered_again_before_the_document_is_read() {
     assert!(report.failed[0].1.contains("쪽 그림이 없어"), "{:?}", report.failed);
     assert!(w.doc("p1").pipeline_error.as_deref().unwrap().contains("쪽 그림이 없어"));
     assert_eq!(w.pages("p1")[0].text, None);
+}
+
+/// 1.0.0 §6 "이미지 내 글자 추출". Needs PDFium (the pictures are found in the PDF), like the render tests.
+#[test]
+fn the_text_of_a_picture_joins_the_page_it_is_on() {
+    use crate::documents::render::{self, RenderService};
+    let Some(lib) = render::locate_pdfium(&render::default_pdfium_candidates()) else {
+        eprintln!("picture tests: skipped (set DOCULENS_PDFIUM to the pdfium library)");
+        return;
+    };
+    let mut w = World::new();
+    w.render = Some(RenderService::global(&lib).unwrap());
+    // A real PDF: one line of text, a 300 × 200 pt picture under it and a thin rule (also an image).
+    let rel = "documents/figure.pdf";
+    let abs = w.paths.root.join(rel);
+    std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+    render::figure_tests::write_pdf_with_picture(&abs);
+    w.db.with(|c| {
+        docs::insert_document(
+            c,
+            &NewDocument {
+                id: "f1".into(),
+                rel_path: rel.into(),
+                original_name: "figure.pdf".into(),
+                source_kind: SourceKind::Pdf,
+                content_hash: "hash-f1".into(),
+                size_bytes: 10,
+                file_modified_at: None,
+                role: DocumentRole::Work,
+                import_batch_id: None,
+            },
+        )
+    })
+    .unwrap();
+    crate::documents::import::process_document(&w.import_deps(), &w.doc("f1"), true, None, None, &mut |_| {}).unwrap();
+    let page = w.pages("f1").remove(0);
+    assert_eq!((page.text.as_deref(), page.text_source.as_deref()), (Some("System overview"), Some("layer")));
+
+    w.chat.push("classify", classify_reply("general", 0));
+    w.chat.push_ocr("웹 서버 | WAS\nDB 서버");
+    let req = ProcessRequest { document_ids: vec!["f1".into()], level: PipelineLevel::Ocr, ..Default::default() };
+    let layout_of = |w: &World| {
+        let json = w.db.with(|c| docs::page_layout_json(c, "f1", 1)).unwrap();
+        json.and_then(|j| crate::documents::layout::PageLayout::from_json(&j))
+    };
+
+    // Off (the default): the page is as it was and nothing is asked about its picture.
+    let report = run::process(&w.deps(None), &req, &mut |_| {}).unwrap();
+    assert_eq!((report.figures_read, report.ocr_pages), (0, 0), "{report:?}");
+    assert_eq!(w.pages("f1")[0].text.as_deref(), Some("System overview"));
+    let asked = w.chat.requests.lock().unwrap().len();
+
+    // On: the picture is read — not the page, not the rule — and its lines follow the text above it.
+    w.settings.ocr_figures = true;
+    let mut stages: Vec<String> = Vec::new();
+    let report = run::process(&w.deps(None), &req, &mut |p| stages.push(p.stage.clone())).unwrap();
+    assert_eq!((report.figures_read, report.ocr_pages), (1, 0), "{report:?}");
+    assert!(stages.contains(&"figures".to_string()), "{stages:?}");
+    assert_eq!(w.chat.requests.lock().unwrap().len(), asked + 1, "one call: the picture");
+    let page = w.pages("f1").remove(0);
+    assert_eq!(page.text.as_deref(), Some("System overview\n웹 서버  WAS\nDB 서버"));
+    assert_eq!(page.text_source.as_deref(), Some("layer"), "the page's own text is still its layer");
+    let layout = layout_of(&w).unwrap();
+    assert_eq!(layout.figures.len(), 1, "{:?}", layout.figures);
+    let fig: Vec<_> = layout.words.iter().filter(|x| x.fig).collect();
+    assert_eq!(fig.iter().map(|x| x.t.as_str()).collect::<Vec<_>>(), ["웹", "서버", "WAS", "DB", "서버"]);
+    // The words lie inside the picture: 60..360 pt of 600 across, 100..300 pt of 800 down.
+    for x in &fig {
+        assert!(
+            x.x >= 0.1 - 0.01 && x.x + x.w <= 0.6 + 0.01 && x.y >= 0.125 - 0.01 && x.y + x.h <= 0.375 + 0.01,
+            "{x:?}"
+        );
+    }
+    assert!(!layout.words[0].fig && layout.words[0].t == "System");
+
+    // Run again: the picture has its mark and is not read twice.
+    let report = run::process(&w.deps(None), &req, &mut |_| {}).unwrap();
+    assert_eq!(report.figures_read, 0);
+    assert_eq!(w.chat.requests.lock().unwrap().len(), asked + 1);
+    // A forced run reads it afresh; the earlier lines are replaced, not doubled.
+    w.chat.ocr.lock().unwrap().clear(); // (the scripted backend repeats its last reply)
+    w.chat.push_ocr("웹 서버 | WAS\nDB 서버\n배치 서버");
+    let forced = ProcessRequest { force: true, ..req.clone() };
+    let report = run::process(&w.deps(None), &forced, &mut |_| {}).unwrap();
+    assert_eq!(report.figures_read, 1);
+    assert_eq!(w.pages("f1")[0].text.as_deref(), Some("System overview\n웹 서버  WAS\nDB 서버\n배치 서버"));
+    assert_eq!(layout_of(&w).unwrap().words.iter().filter(|x| x.fig).count(), 7);
+    // A picture without text only leaves its mark.
+    w.chat.ocr.lock().unwrap().clear();
+    w.chat.push_ocr("null");
+    let report = run::process(&w.deps(None), &forced, &mut |_| {}).unwrap();
+    assert_eq!(report.figures_read, 0);
+    assert_eq!(w.pages("f1")[0].text.as_deref(), Some("System overview"));
+    let layout = layout_of(&w).unwrap();
+    assert!(layout.figures.len() == 1 && layout.words.iter().all(|x| !x.fig));
 }
 
 #[test]

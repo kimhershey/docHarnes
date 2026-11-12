@@ -10,6 +10,7 @@
 
 pub mod classify;
 pub mod extract;
+pub mod figures;
 pub mod forms;
 pub mod image;
 pub mod ocr;
@@ -131,7 +132,7 @@ pub struct ProcessProgress {
     pub done: u32,
     pub total: u32,
     pub current: String,
-    /// `classify` | `ocr` | `extract` | `validate`
+    /// `classify` | `ocr` | `figures` | `extract` | `validate`
     pub stage: String,
     pub page: Option<(u32, u32)>,
 }
@@ -148,6 +149,9 @@ pub struct ProcessReport {
     pub failed: Vec<(String, String)>,
     pub classified: u32,
     pub ocr_pages: u32,
+    /// Pictures whose text was read into their page (1.0.0 §6, `processing.ocr_figures`).
+    #[serde(default)]
+    pub figures_read: u32,
     pub extracted: u32,
     pub review_pending: u32,
     pub cancelled: bool,

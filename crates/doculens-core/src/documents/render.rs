@@ -437,6 +437,49 @@ pub fn pdf_page_chars(svc: &RenderService, pdf: &Path, page_no: u32) -> Result<P
     })
 }
 
+/// The pictures of one PDF page (1.0.0 §6 "이미지 내 글자 추출"): the boxes of its image objects in the
+/// content space of [`PageChars`] — `(left, right, bottom, top)` in points — for
+/// `documents::layout::object_box`.
+pub struct PageFigures {
+    pub page_box: PageBox,
+    pub rotation: u16,
+    pub boxes: Vec<(f32, f32, f32, f32)>,
+}
+
+/// Image objects of a page. Pictures inside a form XObject (a placed sub-drawing) are reported by the
+/// box of the form: PDFium gives the objects inside it in the form's own coordinates.
+pub fn pdf_page_figures(svc: &RenderService, pdf: &Path, page_no: u32) -> Result<PageFigures> {
+    let pdf = pdf.to_path_buf();
+    svc.run(move |p| {
+        let doc = p.load_pdf_from_file(&pdf, None).map_err(|e| pdfium_err("open", e))?;
+        let page =
+            doc.pages().get(page_no.max(1).saturating_sub(1) as PdfPageIndex).map_err(|e| pdfium_err("page", e))?;
+        let page_box = boundary_box(&page);
+        let rotation = match page.rotation() {
+            Ok(PdfPageRenderRotation::Degrees90) => 90,
+            Ok(PdfPageRenderRotation::Degrees180) => 180,
+            Ok(PdfPageRenderRotation::Degrees270) => 270,
+            _ => 0,
+        };
+        let mut boxes = Vec::new();
+        for object in page.objects().iter() {
+            let pictured = match object.object_type() {
+                PdfPageObjectType::Image => true,
+                PdfPageObjectType::XObjectForm => object
+                    .as_x_object_form_object()
+                    .is_some_and(|form| form.iter().any(|o| o.object_type() == PdfPageObjectType::Image)),
+                _ => false,
+            };
+            if !pictured {
+                continue;
+            }
+            let Ok(q) = object.bounds() else { continue };
+            boxes.push((q.left().value, q.right().value, q.bottom().value, q.top().value));
+        }
+        Ok(PageFigures { page_box, rotation, boxes })
+    })
+}
+
 /// Re-renders a single PDF page (viewer rotation / DPI change).
 pub fn render_pdf_page(
     svc: &RenderService,
@@ -632,6 +675,115 @@ mod tests {
             render_pdf(svc, &pdf, &cache, &opts, &HashMap::new(), Some(&cancel), &mut |_, _| {}),
             Err(CoreError::Cancelled)
         ));
+    }
+}
+
+/// 1.0.0 §6: the pictures of a page are found with their boxes (needs PDFium, like the render tests).
+#[cfg(test)]
+pub(crate) mod figure_tests {
+    use super::*;
+    use crate::documents::layout;
+    use lopdf::content::{Content, Operation};
+    use lopdf::{dictionary, Document, Object, Stream};
+
+    /// A 600 × 800 pt page with a line of text, a 300 × 200 pt picture at (60, 500) and a thin rule
+    /// drawn from a second image.
+    pub(crate) fn write_pdf_with_picture(path: &Path) {
+        let mut doc = Document::with_version("1.5");
+        let pages_id = doc.new_object_id();
+        let font_id = doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" });
+        let image = |w: i64, h: i64| {
+            Stream::new(
+                dictionary! {
+                    "Type" => "XObject", "Subtype" => "Image", "Width" => w, "Height" => h,
+                    "ColorSpace" => "DeviceGray", "BitsPerComponent" => 8,
+                },
+                (0..w * h).map(|i| if i % 3 == 0 { 0u8 } else { 255 }).collect(),
+            )
+        };
+        let picture = doc.add_object(image(30, 20));
+        let rule = doc.add_object(image(40, 1));
+        let n = |v: i64| Object::Integer(v);
+        let place = |name: &str, w: i64, h: i64, x: i64, y: i64| {
+            vec![
+                Operation::new("q", vec![]),
+                Operation::new("cm", vec![n(w), n(0), n(0), n(h), n(x), n(y)]),
+                Operation::new("Do", vec![Object::Name(name.as_bytes().to_vec())]),
+                Operation::new("Q", vec![]),
+            ]
+        };
+        let mut operations = vec![
+            Operation::new("BT", vec![]),
+            Operation::new("Tf", vec![Object::Name(b"F1".to_vec()), n(12)]),
+            Operation::new("Td", vec![n(60), n(740)]),
+            Operation::new("Tj", vec![Object::string_literal("System overview")]),
+            Operation::new("ET", vec![]),
+        ];
+        operations.extend(place("Im1", 300, 200, 60, 500));
+        operations.extend(place("Im2", 480, 2, 60, 100));
+        let content = doc.add_object(Stream::new(dictionary! {}, Content { operations }.encode().unwrap()));
+        let page = doc.add_object(dictionary! {
+            "Type" => "Page", "Parent" => pages_id, "Contents" => content,
+            "MediaBox" => vec![n(0), n(0), n(600), n(800)],
+            "Resources" => dictionary! {
+                "Font" => dictionary! { "F1" => font_id },
+                "XObject" => dictionary! { "Im1" => picture, "Im2" => rule },
+            },
+        });
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => vec![page.into()], "Count" => 1 }),
+        );
+        let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        doc.trailer.set("Root", catalog);
+        doc.save(path).unwrap();
+    }
+
+    /// Diagnostic (ignored): `DOCULENS_FIGURE_DUMP=<pdf>` prints the picture boxes of every page.
+    #[test]
+    #[ignore]
+    fn dump_figures() {
+        let Some(pdf) = std::env::var_os("DOCULENS_FIGURE_DUMP").map(PathBuf::from) else { return };
+        let lib = locate_pdfium(&default_pdfium_candidates()).expect("pdfium");
+        let svc = RenderService::global(&lib).unwrap();
+        for page_no in 1..=pdf_page_count(svc, &pdf).unwrap() {
+            let f = pdf_page_figures(svc, &pdf, page_no).unwrap();
+            println!("page {page_no}: box {:?} rotation {} pictures {}", f.page_box, f.rotation, f.boxes.len());
+            for &(l, r, b, t) in &f.boxes {
+                println!(
+                    "  pt l={l:.1} r={r:.1} b={b:.1} t={t:.1} -> {:?}",
+                    layout::object_box(l, r, b, t, f.page_box, f.rotation)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_pictures_of_a_page_are_found_with_their_boxes() {
+        let Some(lib) = locate_pdfium(&default_pdfium_candidates()) else {
+            eprintln!("figure tests: skipped (set DOCULENS_PDFIUM to the pdfium library)");
+            return;
+        };
+        let svc = RenderService::global(&lib).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let pdf = dir.path().join("figure.pdf");
+        write_pdf_with_picture(&pdf);
+        let figures = pdf_page_figures(svc, &pdf, 1).unwrap();
+        assert_eq!(figures.boxes.len(), 2, "{:?}", figures.boxes);
+        let boxes: Vec<(f32, f32, f32, f32)> = figures
+            .boxes
+            .iter()
+            .filter_map(|&(l, r, b, t)| layout::object_box(l, r, b, t, figures.page_box, figures.rotation))
+            .collect();
+        let close = |a: f32, e: f32| (a - e).abs() < 2e-3;
+        // The picture: 60..360 pt of 600 across, its top 100 pt below the page top (800 − 700).
+        let (x, y, w, h) = boxes[0];
+        assert!(close(x, 0.1) && close(y, 0.125) && close(w, 0.5) && close(h, 0.25), "{:?}", boxes[0]);
+        // The rule: full text width, a hair high.
+        assert!(close(boxes[1].2, 0.8) && boxes[1].3 < 0.01, "{:?}", boxes[1]);
+        // The text of the page is not a picture.
+        let chars = pdf_page_chars(svc, &pdf, 1).unwrap().chars;
+        assert_eq!(chars.iter().map(|c| c.ch).collect::<String>(), "System overview");
     }
 }
 
