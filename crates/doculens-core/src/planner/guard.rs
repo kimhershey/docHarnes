@@ -682,6 +682,172 @@ pub fn type_filter_repair(text: &str, plan: &mut Plan, ctx: &super::PlanContext,
     ))
 }
 
+/// Plans that only ask about what the documents say: questions, searches, explanations,
+/// comparisons and summaries. Nothing is changed, so they are answered rather than asked back.
+pub fn only_asks(plan: &Plan) -> bool {
+    !plan.operations.is_empty()
+        && plan.operations.iter().all(|op| {
+            matches!(
+                op,
+                Op::Answer { .. } | Op::Search { .. } | Op::Explain { .. } | Op::Compare { .. } | Op::Summarize { .. }
+            )
+        })
+}
+
+/// What a model writes into the type slot to say "whatever the type".
+fn every_type(value: &str) -> bool {
+    const ALL: &[&str] = &[
+        "",
+        "all",
+        "any",
+        "every",
+        "everything",
+        "none",
+        "null",
+        "alltypes",
+        "anytype",
+        "alldocuments",
+        "document",
+        "documents",
+        "전체",
+        "전부",
+        "모두",
+        "모든",
+        "문서",
+        "모든문서",
+        "전체문서",
+        "모든유형",
+        "전체유형",
+        "없음",
+        "상관없음",
+        "무관",
+    ];
+    ALL.contains(&super::compact(value).as_str())
+}
+
+/// 0.8.2 — a type is a condition only when the user's words name one. The scope the model writes has
+/// no place for "this project" or "everything", so on the user's PC "AAA 프로젝트 내에서 AAA가 무엇인지
+/// 설명해줘" came back with the type slot filled with `all` (the validator rejected the plan twice:
+/// "unknown document type 'all'"). Run before the validator:
+/// - "all" / "전체" in the type slot is no condition, for every plan;
+/// - a type that does not exist is left out of a plan that only asks (a command keeps the
+///   validator's error and its re-query: leaving the condition out would widen what it changes);
+/// - a type the user's words do not name is left out of a question / search / explanation /
+///   comparison (a summary keeps the type the model chose: it reads every document in scope).
+pub fn untyped_scope(text: &str, plan: &mut Plan, ctx: &super::PlanContext, ko: bool) -> Option<PlanIssue> {
+    let written = plan.scope.filter.doc_type.clone()?;
+    if ctx.doc_types.is_empty() {
+        return None;
+    }
+    let Some(known) = ctx.doc_type(&written) else {
+        if every_type(&written) {
+            plan.scope.filter.doc_type = None;
+            return None;
+        }
+        if !only_asks(plan) {
+            return None;
+        }
+        plan.scope.filter.doc_type = None;
+        // The project's name in the type slot: `where_to_look` scopes the plan to it, nothing to say.
+        let key = super::compact(&written);
+        let is_project = key.chars().count() >= 2
+            && ctx.projects.iter().any(|p| {
+                let name = super::compact(&p.name);
+                !name.is_empty() && (name.contains(&key) || key.contains(&name))
+            });
+        return (!is_project).then(|| {
+            PlanIssue::warn(
+                "scope.filter.doc_type",
+                "doc_type_ignored",
+                if ko {
+                    format!("'{written}' 유형은 없어 유형 조건 없이 진행합니다")
+                } else {
+                    format!("there is no document type '{written}'; continuing without a type condition")
+                },
+            )
+        });
+    };
+    let retrieves = plan
+        .operations
+        .iter()
+        .all(|op| matches!(op, Op::Answer { .. } | Op::Search { .. } | Op::Explain { .. } | Op::Compare { .. }));
+    if plan.operations.is_empty() || !retrieves {
+        return None;
+    }
+    let named = super::rules::doc_types_named(&super::rules::user_words(text), ctx);
+    if named.iter().any(|d| d.slug == known.slug) {
+        return None;
+    }
+    let (label_ko, label_en) = (known.label_ko.clone(), known.label_en.clone());
+    plan.scope.filter.doc_type = None;
+    Some(PlanIssue::warn(
+        "scope.filter.doc_type",
+        "doc_type_ignored",
+        if ko {
+            format!("문장에 없는 유형 조건('{label_ko}')은 빼고 찾습니다")
+        } else {
+            format!("the type condition '{label_en}' is not in the sentence and was left out")
+        },
+    ))
+}
+
+/// 0.8.2 — a sentence the routing call read as a question / search / summary is answered, not
+/// answered with a question the app can settle itself: which type of document (never needed to
+/// read), or where to look when the sentence names a project or one is open. A clarification
+/// becomes a grounded answer to the user's words (`where_to_look` then scopes it); a plan that only
+/// asks and came with a low confidence runs as planned. Any other question is still asked.
+pub fn answer_instead_of_asking(
+    text: &str,
+    plan: &mut Plan,
+    ctx: &super::PlanContext,
+    families: &[super::OpFamily],
+    ko: bool,
+) -> bool {
+    if families != [super::OpFamily::Ask] || carried_text(text).is_some() {
+        return false;
+    }
+    // Either the model asked back, or it planned a question / search / summary it was unsure about
+    // (which `finalize` would turn into "… 맞나요?").
+    let unsure = !plan.is_clarification() && only_asks(plan) && plan.confidence < super::MIN_CONFIDENCE;
+    if !plan.is_clarification() && !unsure {
+        return false;
+    }
+    let question = plan
+        .clarification_question
+        .clone()
+        .or_else(|| {
+            plan.operations.iter().find_map(|op| match op {
+                Op::Clarify { question } => Some(question.clone()),
+                _ => None,
+            })
+        })
+        .unwrap_or_default();
+    let lower = question.to_lowercase();
+    let about_type = ["유형", "종류", "형식", "doc_type", "document type", "type of document"]
+        .iter()
+        .any(|w| lower.contains(w))
+        || ctx.doc_types.iter().any(|d| d.slug.len() >= 3 && lower.contains(&format!("'{}'", d.slug.to_lowercase())));
+    if !(about_type || project_named(text, ctx).is_some() || ctx.scope_project.is_some()) {
+        return false;
+    }
+    plan.clarification_question = None;
+    plan.confidence = plan.confidence.max(super::MIN_CONFIDENCE);
+    if unsure {
+        return true;
+    }
+    let said = super::rules::user_words(text);
+    plan.operations =
+        vec![Op::Answer { question: said.trim().to_string(), cite: None, knowledge: None, mode: None, reply: None }];
+    plan.intent = super::OpKind::Answer;
+    plan.requires_confirmation = false;
+    plan.summary = Some(if ko {
+        "문서에서 찾아 답합니다".to_string()
+    } else {
+        "Answers from the documents".to_string()
+    });
+    true
+}
+
 /// The kind of document the user's words name (0.8.1): "참고 자료에서 …" → reference material,
 /// "업무 문서만 …" → work documents. Both named: the one that is not ruled out ("참고 자료 말고").
 fn kind_named(text: &str) -> Option<super::RoleParam> {

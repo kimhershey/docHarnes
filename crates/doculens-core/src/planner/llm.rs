@@ -311,7 +311,7 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
         result.prompt_tokens += reply.usage.prompt;
         result.completion_tokens += reply.usage.completion;
         result.raw = Some(reply.content.clone());
-        let parsed = parse_and_validate(&value, ctx, date.as_ref());
+        let parsed = parse_and_validate(&value, text, ctx, date.as_ref(), ko);
         match parsed {
             // "Nothing to do" from one family's grammar may be a command of another family:
             // one more try with every op before it is taken as small talk.
@@ -332,6 +332,11 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
                 }
                 // "Nothing to do" is a turn that was not a command: reply instead of an empty card.
                 guard::noop_to_chat(text, &mut plan, ko);
+                // A question is answered, not answered with a question the app can settle itself
+                // (which type of document; where to look when a project is named or open).
+                if guard::answer_instead_of_asking(text, &mut plan, ctx, &result.families, ko) {
+                    log::info!("planner: the model asked back on a question; answering from the documents instead");
+                }
                 // The one document type the sentence names is the scope of a plan that named none.
                 issues.extend(guard::type_filter_repair(text, &mut plan, ctx, ko));
                 // … and so are the kind of document and the project it names; "X 프로젝트 열어줘" opens it.
@@ -367,11 +372,33 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
     // Two rejected attempts → clarification with the first error.
     let first = result.issues.iter().find(|i| i.blocking);
     let question = first
-        .and_then(|i| setting_range_question(i, ko))
+        .and_then(|i| setting_range_question(i, ko).or_else(|| doc_type_question(i, ctx, ko)))
         .unwrap_or_else(|| clarification_text(ko, &first.map(|i| i.message.clone()).unwrap_or_default()));
     result.source = PlanSource::Model;
     result.plan = Plan::clarify(question, 0.0);
     Ok(result)
+}
+
+/// A document type the validator rejected twice (a command: a question never fails on a type) is
+/// asked about in the user's language, with the types that exist (0.8.2).
+fn doc_type_question(issue: &PlanIssue, ctx: &PlanContext, ko: bool) -> Option<String> {
+    if issue.code != "doc_type_unknown" {
+        return None;
+    }
+    let written = issue.message.split('\'').nth(1).unwrap_or_default();
+    let known: Vec<&str> =
+        ctx.doc_types.iter().take(20).map(|d| if ko { d.label_ko.as_str() } else { d.label_en.as_str() }).collect();
+    Some(if ko {
+        format!(
+            "'{written}' 문서 유형을 알아보지 못했습니다. 유형을 빼고 다시 말씀해 주시거나 다음 중에서 골라 주세요: {}",
+            known.join(", ")
+        )
+    } else {
+        format!(
+            "I do not know the document type '{written}'. Say it again without a type, or pick one of: {}",
+            known.join(", ")
+        )
+    })
 }
 
 /// A settings value the validator rejected twice is asked about in the user's words: the
@@ -477,11 +504,17 @@ fn reported_counts(e: &CoreError) -> Option<(u32, u32)> {
 
 fn parse_and_validate(
     value: &Value,
+    text: &str,
     ctx: &PlanContext,
     date: Option<&prerouter::DateRange>,
+    ko: bool,
 ) -> std::result::Result<(Plan, Vec<PlanIssue>), Vec<PlanIssue>> {
     let mut plan = validate::parse_plan(value).map_err(|i| vec![i])?;
-    let issues = validate::validate(&mut plan, ctx, date);
+    // A type is a condition only when the user's words name one (0.8.2): "all" in the type slot,
+    // or a type no question needs, must not fail the plan.
+    let untyped = guard::untyped_scope(text, &mut plan, ctx, ko);
+    let mut issues = validate::validate(&mut plan, ctx, date);
+    issues.extend(untyped);
     if has_errors(&issues) {
         Err(issues)
     } else {

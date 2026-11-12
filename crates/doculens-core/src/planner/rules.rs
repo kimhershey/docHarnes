@@ -4164,7 +4164,11 @@ fn agent_ops(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
 
 /// Tries the rules in order; `None` leaves the command to the model.
 pub fn plan(text: &str, ctx: &PlanContext) -> Option<Plan> {
-    let raw = text.trim();
+    // Of an ask-back text only the user's words are read (0.8.2): the assistant's question names
+    // types and settings of its own ("… 'sow', 'test_report' 등을 지정해야 하나요?" was read as a
+    // command to set the document type).
+    let said = user_words(text);
+    let raw = said.trim();
     if raw.is_empty() {
         return None;
     }
