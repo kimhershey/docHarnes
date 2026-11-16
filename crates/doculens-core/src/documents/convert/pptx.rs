@@ -23,9 +23,10 @@ use std::path::Path;
 
 use crate::error::{CoreError, Result};
 
+use super::chart;
 use super::model::{
-    Align, Block, Cell, CellStyle, DocModel, GeoPath, Gradient, ImageData, ListKind, Paragraph, Run, Shape, ShapeKind,
-    Slide, Table, VAnchor,
+    Align, Block, Cell, CellStyle, Chart, ChartPlot, DocModel, GeoPath, Gradient, ImageData, ListKind, Paragraph, Run,
+    Shape, ShapeKind, Slide, Table, VAnchor,
 };
 use super::xlsx::{read_rels, resolve_target};
 use super::xml::{self, Element};
@@ -88,6 +89,11 @@ impl Colors {
         let mut c = self.clone();
         c.scheme.insert("phClr".into(), color.to_string());
         c
+    }
+
+    /// The theme's accent colour for the `index`-th series of a chart (accent1 … accent6, then again).
+    pub fn accent(&self, index: usize) -> Option<String> {
+        self.scheme(&format!("accent{}", index % 6 + 1))
     }
 
     /// Width of the theme's `idx`-th line style (1-based), points.
@@ -895,9 +901,24 @@ struct Ctx<'a> {
     image_bytes: usize,
     /// Table styles of the presentation (1.0.0).
     table_styles: TableStyles,
+    /// Colours of the slide being read — what a chart's theme colours resolve with.
+    colors: Colors,
+    /// Chart part → the chart read from it (the reading-order view and the page view share it).
+    charts: HashMap<String, Option<Chart>>,
 }
 
 impl Ctx<'_> {
+    /// The chart a graphic frame points to (`c:chart r:id`), read from its part's stored values.
+    fn chart_of(&mut self, frame: &Element) -> Option<Chart> {
+        let part = self.rels.get(frame.find("chart")?.attr("id")?)?.clone();
+        if let Some(known) = self.charts.get(&part) {
+            return known.clone();
+        }
+        let chart = read_part(self.archive, &part).ok().flatten().and_then(|root| chart::read(&root, &self.colors));
+        self.charts.insert(part, chart.clone());
+        chart
+    }
+
     fn image_for(&mut self, r_id: &str, crop: Option<Crop>) -> Option<String> {
         let part = self.rels.get(r_id)?.clone();
         let key = (part.clone(), crop.map(|c| c.key()).unwrap_or_default());
@@ -1048,7 +1069,19 @@ fn shape_blocks(ctx: &mut Ctx<'_>, sp: &Element, out: &mut Vec<Block>, title: &m
             if let Some(tbl) = sp.find("tbl") {
                 out.push(Block::Table(table(tbl, None, None)));
             } else if sp.find("chart").is_some() {
-                ctx.notes.push("차트는 변환본에 자리만 표시됩니다".into());
+                // The chart's data, so that its values are in the text of the document.
+                match ctx.chart_of(sp) {
+                    Some(c) => {
+                        if let Some(t) = c.title.as_deref().filter(|t| !t.trim().is_empty()) {
+                            out.push(Block::Paragraph(Paragraph::plain(t)));
+                        }
+                        if c.plot == ChartPlot::Other {
+                            ctx.notes.push("그리지 못하는 종류의 차트는 데이터 표로 표시됩니다".into());
+                        }
+                        out.push(Block::Table(chart::data_table(&c)));
+                    }
+                    None => ctx.notes.push("읽을 수 없는 차트는 변환본에 자리만 표시됩니다".into()),
+                }
             } else if sp.find("relIds").is_some() {
                 ctx.notes.push("SmartArt는 변환본에 자리만 표시됩니다".into());
             } else if sp.find("oleObj").is_some() {
@@ -1502,7 +1535,11 @@ fn slide_shapes(
                 let kind = if let Some(tbl) = sp.find("tbl") {
                     ShapeKind::Table(table(tbl, Some(&inh.colors), Some(&ctx.table_styles)))
                 } else if sp.find("chart").is_some() {
-                    ShapeKind::Placeholder { label: "차트".into() }
+                    match ctx.chart_of(sp) {
+                        Some(c) if c.plot == ChartPlot::Other => ShapeKind::Table(chart::data_table(&c)),
+                        Some(c) => ShapeKind::Chart(c),
+                        None => ShapeKind::Placeholder { label: "차트".into() },
+                    }
                 } else if sp.find("relIds").is_some() {
                     ShapeKind::Placeholder { label: "SmartArt".into() }
                 } else if sp.find("oleObj").is_some() {
@@ -1683,6 +1720,8 @@ pub fn read(path: &Path) -> Result<DocModel> {
         notes: Vec::new(),
         image_bytes: 0,
         table_styles,
+        colors: Colors::default(),
+        charts: HashMap::new(),
     };
     // Layouts / masters / themes are shared between slides: parse each once.
     let mut parts: HashMap<String, Option<Element>> = HashMap::new();
@@ -1770,6 +1809,8 @@ pub fn read(path: &Path) -> Result<DocModel> {
             colors,
             background,
         };
+
+        ctx.colors = inh.colors.clone();
 
         // -- reading-order view
         if slide_no > 1 {
@@ -2017,6 +2058,8 @@ pub(crate) mod tests {
         layout_attrs: &'a str,
         table_styles: Option<&'a str>,
         picture: Option<Vec<u8>>,
+        /// `ppt/charts/chart1.xml`, related as `rId8` from the slide.
+        chart: Option<&'a str>,
     }
 
     impl Deck<'_> {
@@ -2063,7 +2106,13 @@ pub(crate) mod tests {
                 ),
                 (
                     "ppt/slides/_rels/slide1.xml.rels",
-                    with_picture(vec![rel("rId1", "slideLayout", "../slideLayouts/slideLayout1.xml")]),
+                    with_picture(match self.chart {
+                        Some(_) => vec![
+                            rel("rId1", "slideLayout", "../slideLayouts/slideLayout1.xml"),
+                            rel("rId8", "chart", "../charts/chart1.xml"),
+                        ],
+                        None => vec![rel("rId1", "slideLayout", "../slideLayouts/slideLayout1.xml")],
+                    }),
                 ),
                 (
                     "ppt/slideLayouts/slideLayout1.xml",
@@ -2088,6 +2137,9 @@ pub(crate) mod tests {
             ];
             if let Some(styles) = self.table_styles {
                 parts.push(("ppt/tableStyles.xml", styles.to_string()));
+            }
+            if let Some(chart) = self.chart {
+                parts.push(("ppt/charts/chart1.xml", chart.to_string()));
             }
             let mut z = zip::ZipWriter::new(File::create(path).unwrap());
             for (name, data) in parts {
@@ -2328,6 +2380,43 @@ pub(crate) mod tests {
         assert_eq!(text_color(bare).as_deref(), Some("#000000"));
         let html = crate::documents::convert::html::to_html(&model);
         assert!(html.contains("background:linear-gradient(90.0deg, #C00000 0.0%, #FFC000 100.0%);"), "{html}");
+    }
+
+    /// 1.0.0 §1-3: a chart is drawn again from the values stored in its part (theme colours for the
+    /// series that name none), its data is in the reading-order text, and a part that cannot be read
+    /// keeps the labelled frame.
+    #[test]
+    fn a_chart_is_drawn_from_its_stored_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("chart.pptx");
+        let frame = r#"<p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="4" name="Chart"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="914400" y="914400"/><a:ext cx="5486400" cy="3657600"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rId8"/></a:graphicData></a:graphic></p:graphicFrame>"#;
+        Deck { slide: frame, chart: Some(chart::SAMPLE_CHART), ..Default::default() }.write(&path);
+        let model = read(&path).unwrap();
+        let shape = &model.slides[0].shapes[0];
+        let ShapeKind::Chart(c) = &shape.kind else { panic!("{:?}", shape.kind) };
+        assert!((shape.w_mm - emu_to_mm(5_486_400.0)).abs() < 0.01);
+        assert_eq!(c.title.as_deref(), Some("분기별 실적"));
+        // accent1 for the first series, the hand-picked red, the line's accent2 — from the deck's theme.
+        assert_eq!(c.series.iter().map(|s| s.color.as_str()).collect::<Vec<_>>(), ["#4F81BD", "#C00000", "#C0504D"]);
+        let html = crate::documents::convert::html::to_html(&model);
+        assert!(
+            html.contains("<svg class=\"chart\"")
+                && html.contains(">분기별 실적</text>")
+                && html.contains(">1,200</text>")
+        );
+        // The values are in the document's text, as a table under the chart's title.
+        let text = model.text();
+        for part in ["분기별 실적", "2분기", "1,380", "목표", "1,100"] {
+            assert!(text.contains(part), "{part}: {text}");
+        }
+        assert!(model.notes.is_empty(), "{:?}", model.notes);
+
+        // No series this reader knows: the frame stays, with a note.
+        let empty = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:layout/></c:plotArea></c:chart></c:chartSpace>"#;
+        Deck { slide: frame, chart: Some(empty), ..Default::default() }.write(&path);
+        let model = read(&path).unwrap();
+        assert!(matches!(&model.slides[0].shapes[0].kind, ShapeKind::Placeholder { label } if label == "차트"));
+        assert!(model.notes.iter().any(|n| n.contains("차트")));
     }
 
     /// 1.0.0 §1-1: a shape that is not a box is drawn by its outline — a custom geometry's own path
