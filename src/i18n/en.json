@@ -1367,6 +1367,7 @@
       "edit_action_unsupported": "This action does not go with this kind of file. Paragraphs and table rows are edited in HWPX / DOCX / PPTX, cell values in XLSX.",
       "edit_cell_address": "The cell address could not be read. Write it like B3 or SheetName!B3 (the sheet's name exactly as in the file).",
       "edit_cell_formula": "This cell holds a formula, so its value is not changed. Change a cell the formula reads, or edit it in Excel.",
+      "edit_table_header": "The header cell of an Excel table is not changed. It is the name of the table's column, and Excel takes a file where the two differ for a damaged one. Change the header in Excel.",
       "edit_picture_missing": "This picture was not found in the file. Close the dialog and open it again to read the list of pictures anew.",
       "edit_picture_format": "A picture of this format (EMF, WMF, SVG …) cannot be replaced. Only PNG, JPEG, GIF and BMP pictures are.",
       "edit_picture_unreadable": "The new picture file could not be read. Check the path, that it is a PNG, JPEG, GIF, BMP, WebP or TIFF file, and that it is 50 MB or smaller."

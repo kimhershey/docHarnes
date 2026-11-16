@@ -11,7 +11,7 @@
 //!   opened. A formula whose reads cannot be followed (a name, a table, a shared formula without its
 //!   text) counts as reading everything.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
 
 use chrono::NaiveDate;
@@ -23,6 +23,8 @@ use super::{local, Archive, CoreError, Part, Result};
 /// Reason codes.
 pub const ADDRESS: &str = "edit_cell_address";
 pub const FORMULA: &str = "edit_cell_formula";
+/// The header cell of a table (Excel's "표"): its text is the column's name in the table's own part too.
+pub const TABLE_HEADER: &str = "edit_table_header";
 /// Note: results of formulas were taken out to be computed again (with their number).
 pub const FORMULAS_CLEARED: &str = "edit_formulas_cleared";
 
@@ -39,6 +41,63 @@ pub struct Workbook {
     pub date1904: bool,
     /// Per cell style (`s`): the cell shows a date.
     pub date_styles: Vec<bool>,
+    /// The header rows of the tables (Excel's "표") of a sheet, by its part (lower case):
+    /// `(first column, last column, row)`. A header cell's text is the name of the column in the
+    /// table's own part and in the formulas that name it; Excel takes a file where the two differ
+    /// for a damaged one, so those cells are left to Excel.
+    pub table_headers: HashMap<String, Vec<(u32, u32, u32)>>,
+}
+
+impl Workbook {
+    pub fn in_table_header(&self, part: &str, col: u32, row: u32) -> bool {
+        self.table_headers
+            .get(&part.to_ascii_lowercase())
+            .is_some_and(|headers| headers.iter().any(|(from, to, r)| *r == row && (*from..=*to).contains(&col)))
+    }
+}
+
+/// `xl/worksheets` + `../tables/table1.xml` → `xl/tables/table1.xml`.
+fn resolve(base: &str, target: &str) -> String {
+    if let Some(absolute) = target.strip_prefix('/') {
+        return absolute.to_string();
+    }
+    let mut parts: Vec<&str> = base.split('/').filter(|p| !p.is_empty()).collect();
+    for step in target.split('/') {
+        match step {
+            ".." => {
+                parts.pop();
+            }
+            "." | "" => {}
+            other => parts.push(other),
+        }
+    }
+    parts.join("/")
+}
+
+/// The header rows of the tables a sheet shows (its relationships name the table parts).
+fn table_headers(archive: &mut Archive, sheet_part: &str) -> Vec<(u32, u32, u32)> {
+    let Some((folder, file)) = sheet_part.rsplit_once('/') else { return Vec::new() };
+    let Some(rels) = read_text(archive, &format!("{folder}/_rels/{file}.rels")) else { return Vec::new() };
+    let mut out = Vec::new();
+    for rel in start_tags(&rels).iter().filter(|e| local(e.name().as_ref()) == "Relationship") {
+        if !attribute(rel, "Type").is_some_and(|t| t.ends_with("/table")) {
+            continue;
+        }
+        let Some(xml) = attribute(rel, "Target").and_then(|t| read_text(archive, &resolve(folder, &t))) else {
+            continue;
+        };
+        let Some(table) = start_tags(&xml).into_iter().find(|e| local(e.name().as_ref()) == "table") else { continue };
+        // A table has one header row unless it says it has none.
+        if attribute(&table, "headerRowCount").is_some_and(|n| n.trim() == "0") {
+            continue;
+        }
+        let Some(range) = attribute(&table, "ref") else { continue };
+        let (from, to) = range.split_once(':').unwrap_or((range.as_str(), range.as_str()));
+        if let (Some((c1, r1)), Some((c2, r2))) = (parse_cell(from), parse_cell(to)) {
+            out.push((c1.min(c2), c1.max(c2), r1.min(r2)));
+        }
+    }
+    out
 }
 
 fn attribute(e: &BytesStart<'_>, key: &str) -> Option<String> {
@@ -111,8 +170,14 @@ pub fn workbook(archive: &mut Archive) -> Result<Workbook> {
             Some((name, part.to_ascii_lowercase()))
         })
         .collect();
+    let sheets: Vec<(String, String)> = sheets;
     let date_styles = crate::documents::convert::xlsx::date_styles(archive);
-    Ok(Workbook { sheets, date1904, date_styles })
+    let table_headers = sheets
+        .iter()
+        .map(|(_, part)| (part.clone(), table_headers(archive, part)))
+        .filter(|(_, headers)| !headers.is_empty())
+        .collect();
+    Ok(Workbook { sheets, date1904, date_styles, table_headers })
 }
 
 /// `B3` → (2, 3); `$B$3` too.
@@ -216,15 +281,21 @@ fn typed(value: &str, shows_a_date: bool, date1904: bool) -> Value {
     }
 }
 
-/// One `<c>` of a row: where it is in the events and what it holds.
+/// One `<c>` of a row: what it holds.
 struct Found {
-    start: usize,
-    end: usize,
     style: Option<String>,
     kind: Option<String>,
     value: Option<String>,
     inline: String,
     formula: bool,
+}
+
+/// A cell [`Part::set_cell`] made, kept until the sheet's new cells are written together.
+pub(super) struct NewCell {
+    events: Vec<Event<'static>>,
+    /// What the cell shows now (the "before" of a later edit of the same cell).
+    shown: String,
+    style: Option<String>,
 }
 
 impl Part {
@@ -273,8 +344,6 @@ impl Part {
         let end = self.close_of(start);
         let tag = self.start_tag(start);
         let mut found = Found {
-            start,
-            end,
             style: tag.and_then(|e| attribute(e, "s")),
             kind: tag.and_then(|e| attribute(e, "t")),
             value: None,
@@ -312,8 +381,8 @@ impl Part {
         match cell.kind.as_deref() {
             Some("s") => raw.trim().parse::<usize>().ok().and_then(|i| shared.get(i).cloned()).unwrap_or_default(),
             Some("inlineStr") => cell.inline.clone(),
-            Some(_) => raw,
-            None => {
+            // A number: the default, which openpyxl and LibreOffice write out as `t="n"`.
+            None | Some("n") => {
                 let dated = cell
                     .style
                     .as_deref()
@@ -326,11 +395,48 @@ impl Part {
                     _ => raw,
                 }
             }
+            // A boolean, an error value, a formula's text result.
+            Some(_) => raw,
         }
     }
 
+    /// The sheet's `sheetData` element, its end and the prefix its element names carry.
+    fn sheet_data(&self) -> Option<(usize, usize, String, String)> {
+        let start = (0..self.events.len())
+            .find(|i| self.start_tag(*i).is_some_and(|e| local(e.name().as_ref()) == "sheetData"))?;
+        let qualified = self.start_tag(start).map(|e| e.name().as_ref().to_string()).unwrap_or_default();
+        let prefix = qualified.rsplit_once(':').map(|(p, _)| format!("{p}:")).unwrap_or_default();
+        Some((start, self.close_of(start), qualified, prefix))
+    }
+
+    /// The rows of the sheet that carry their number: `(event index, row number)`.
+    fn numbered_rows(&self, sheet_data: usize, data_end: usize) -> Vec<(usize, u32)> {
+        self.children(sheet_data, data_end)
+            .into_iter()
+            .filter(|(_, name)| name == "row")
+            .filter_map(|(i, _)| {
+                let n = self.start_tag(i).and_then(|e| attribute(e, "r"))?.trim().parse::<u32>().ok()?;
+                Some((i, n))
+            })
+            .collect()
+    }
+
+    /// The cells of the row at `r` that carry their address: `(event index, column)`.
+    fn addressed_cells(&self, r: usize) -> Vec<(usize, u32)> {
+        self.children(r, self.close_of(r))
+            .into_iter()
+            .filter(|(_, name)| name == "c")
+            .filter_map(|(i, _)| {
+                let at = self.start_tag(i).and_then(|e| attribute(e, "r"))?;
+                Some((i, parse_cell(&at)?.0))
+            })
+            .collect()
+    }
+
     /// Sets the value of the cell at (`col`, `row`) of this sheet. Returns what the cell showed and
-    /// what it shows now.
+    /// what it shows now. The cell is kept aside until [`Part::place_cells`] writes every new cell
+    /// of the sheet at once — rows and cells stand in order in a sheet, whatever the order of the
+    /// request, and a cell or a row asked for twice is written once.
     pub(super) fn set_cell(
         &mut self,
         col: u32,
@@ -339,41 +445,28 @@ impl Part {
         wb: &Workbook,
         shared: &[String],
     ) -> std::result::Result<(String, String), &'static str> {
-        let sheet_data = (0..self.events.len())
-            .find(|i| self.start_tag(*i).is_some_and(|e| local(e.name().as_ref()) == "sheetData"))
-            .ok_or(ADDRESS)?;
-        let data_end = self.close_of(sheet_data);
-        let qualified = self.start_tag(sheet_data).map(|e| e.name().as_ref().to_string()).unwrap_or_default();
-        let prefix = qualified.rsplit_once(':').map(|(p, _)| format!("{p}:")).unwrap_or_default();
+        let (sheet_data, data_end, _, prefix) = self.sheet_data().ok_or(ADDRESS)?;
         let address = format!("{}{row}", column_name(col));
 
-        let rows = self.children(sheet_data, data_end);
-        let number = |part: &Part, i: usize| {
-            part.start_tag(i).and_then(|e| attribute(e, "r")).and_then(|r| r.trim().parse::<u32>().ok())
+        // What the cell holds: the value an earlier edit of this request gave it, or the file's.
+        let (style, before) = match self.new_cells.get(&(row, col)) {
+            Some(earlier) => (earlier.style.clone(), earlier.shown.clone()),
+            None => {
+                let own_row = self.numbered_rows(sheet_data, data_end).into_iter().find(|(_, n)| *n == row);
+                let old = own_row
+                    .and_then(|(r, _)| self.addressed_cells(r).into_iter().find(|(_, c)| *c == col))
+                    .map(|(i, _)| self.read_cell(i));
+                if old.as_ref().is_some_and(|c| c.formula) {
+                    return Err(FORMULA);
+                }
+                let before = old.as_ref().map(|c| self.shown_value(c, wb, shared)).unwrap_or_default();
+                (old.and_then(|c| c.style), before)
+            }
         };
-        let own_row = rows.iter().find(|(i, name)| name == "row" && number(self, *i) == Some(row)).map(|(i, _)| *i);
-        let cells: Vec<(usize, u32)> = match own_row {
-            Some(r) => self
-                .children(r, self.close_of(r))
-                .into_iter()
-                .filter(|(_, name)| name == "c")
-                .filter_map(|(i, _)| {
-                    let at = self.start_tag(i).and_then(|e| attribute(e, "r"))?;
-                    Some((i, parse_cell(&at)?.0))
-                })
-                .collect(),
-            None => Vec::new(),
-        };
-        let old = cells.iter().find(|(_, c)| *c == col).map(|(i, _)| self.read_cell(*i));
-        if old.as_ref().is_some_and(|c| c.formula) {
-            return Err(FORMULA);
-        }
-        let style = old.as_ref().and_then(|c| c.style.clone());
         let shows_a_date = style
             .as_deref()
             .and_then(|s| s.trim().parse::<usize>().ok())
             .is_some_and(|s| wb.date_styles.get(s).copied().unwrap_or(false));
-        let before = old.as_ref().map(|c| self.shown_value(c, wb, shared)).unwrap_or_default();
         let new = typed(value, shows_a_date, wb.date1904);
 
         // -- the cell as it is written
@@ -410,55 +503,6 @@ impl Part {
                 cell.push(Event::End(BytesEnd::new(c_name)));
             }
         }
-
-        // -- where it goes
-        match (own_row, &old) {
-            // In place of the cell that was there.
-            (Some(_), Some(c)) => {
-                self.cut.push((c.start, c.end));
-                self.before.entry(c.start).or_default().extend(cell);
-            }
-            // A new cell in its row: before the first cell to its right, else at the end of the row.
-            (Some(r), None) => {
-                let row_end = self.close_of(r);
-                match (cells.iter().find(|(_, c)| *c > col), row_end > r) {
-                    (Some((next, _)), _) => self.before.entry(*next).or_default().extend(cell),
-                    (None, true) => self.before.entry(row_end).or_default().extend(cell),
-                    // `<row r="3"/>`: the row opens up.
-                    (None, false) => {
-                        let Some(head) = self.start_tag(r).cloned() else { return Err(ADDRESS) };
-                        let name = head.name().as_ref().to_string();
-                        self.cut.push((r, r));
-                        let slot = self.before.entry(r).or_default();
-                        slot.push(Event::Start(head));
-                        slot.extend(cell);
-                        slot.push(Event::End(BytesEnd::new(name)));
-                    }
-                }
-            }
-            // A new row: before the first row below it, else at the end of the sheet's rows.
-            (None, _) => {
-                let row_name = format!("{prefix}row");
-                let mut head = BytesStart::new(row_name.clone());
-                head.push_attribute(("r", row.to_string().as_str()));
-                let mut new_row = vec![Event::Start(head)];
-                new_row.extend(cell);
-                new_row.push(Event::End(BytesEnd::new(row_name)));
-                let below = rows.iter().find(|(i, name)| name == "row" && number(self, *i).is_some_and(|n| n > row));
-                match (below, data_end > sheet_data) {
-                    (Some((next, _)), _) => self.before.entry(*next).or_default().extend(new_row),
-                    (None, true) => self.before.entry(data_end).or_default().extend(new_row),
-                    // `<sheetData/>`: the sheet gets its first row.
-                    (None, false) => {
-                        self.cut.push((sheet_data, sheet_data));
-                        let slot = self.before.entry(sheet_data).or_default();
-                        slot.push(Event::Start(BytesStart::new(qualified.clone())));
-                        slot.extend(new_row);
-                        slot.push(Event::End(BytesEnd::new(qualified)));
-                    }
-                }
-            }
-        }
         let after = match new {
             Value::Empty => String::new(),
             Value::Text(text) => text,
@@ -467,7 +511,77 @@ impl Part {
             }
             Value::Number(n) => n,
         };
+        self.new_cells.insert((row, col), NewCell { events: cell, shown: after.clone(), style });
         Ok((before, after))
+    }
+
+    /// Writes the cells [`Part::set_cell`] kept aside into the sheet, rows and cells in their order:
+    /// a cell in place of the one that was there, a new cell before the first cell to its right (or
+    /// at the end of its row), a new row — one for all its cells — before the first row below it (or
+    /// at the end of the sheet's rows).
+    pub(super) fn place_cells(&mut self) {
+        let new_cells = std::mem::take(&mut self.new_cells);
+        if new_cells.is_empty() {
+            return;
+        }
+        let Some((sheet_data, data_end, qualified, prefix)) = self.sheet_data() else { return };
+        let rows = self.numbered_rows(sheet_data, data_end);
+        let mut by_row: BTreeMap<u32, Vec<(u32, Vec<Event<'static>>)>> = BTreeMap::new();
+        for ((row, col), cell) in new_cells {
+            by_row.entry(row).or_default().push((col, cell.events));
+        }
+        // The rows of a sheet that has none yet (`<sheetData/>`).
+        let mut first_rows: Vec<Event<'static>> = Vec::new();
+        for (row, cells) in by_row {
+            match rows.iter().find(|(_, n)| *n == row).map(|(r, _)| *r) {
+                Some(r) => {
+                    let row_end = self.close_of(r);
+                    if row_end == r {
+                        // `<row r="3"/>`: the row opens up.
+                        let Some(head) = self.start_tag(r).cloned() else { continue };
+                        let name = head.name().as_ref().to_string();
+                        self.cut.push((r, r));
+                        let slot = self.before.entry(r).or_default();
+                        slot.push(Event::Start(head));
+                        slot.extend(cells.into_iter().flat_map(|(_, events)| events));
+                        slot.push(Event::End(BytesEnd::new(name)));
+                        continue;
+                    }
+                    let there = self.addressed_cells(r);
+                    for (col, events) in cells {
+                        let at = match there.iter().find(|(_, c)| *c == col) {
+                            Some((old, _)) => {
+                                self.cut.push((*old, self.close_of(*old)));
+                                *old
+                            }
+                            None => there.iter().find(|(_, c)| *c > col).map_or(row_end, |(next, _)| *next),
+                        };
+                        self.before.entry(at).or_default().extend(events);
+                    }
+                }
+                None => {
+                    let row_name = format!("{prefix}row");
+                    let mut head = BytesStart::new(row_name.clone());
+                    head.push_attribute(("r", row.to_string().as_str()));
+                    let mut new_row = vec![Event::Start(head)];
+                    new_row.extend(cells.into_iter().flat_map(|(_, events)| events));
+                    new_row.push(Event::End(BytesEnd::new(row_name)));
+                    if data_end == sheet_data {
+                        first_rows.extend(new_row);
+                    } else {
+                        let at = rows.iter().find(|(_, n)| *n > row).map_or(data_end, |(next, _)| *next);
+                        self.before.entry(at).or_default().extend(new_row);
+                    }
+                }
+            }
+        }
+        if !first_rows.is_empty() {
+            self.cut.push((sheet_data, sheet_data));
+            let slot = self.before.entry(sheet_data).or_default();
+            slot.push(Event::Start(BytesStart::new(qualified.clone())));
+            slot.extend(first_rows);
+            slot.push(Event::End(BytesEnd::new(qualified)));
+        }
     }
 
     /// The cells of this sheet whose text comes from one of the shared strings `changed`, or from an

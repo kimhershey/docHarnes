@@ -1367,6 +1367,7 @@
       "edit_action_unsupported": "이 작업은 이 형식의 파일에는 쓸 수 없습니다. 문단과 표의 행은 HWPX · DOCX · PPTX에서, 칸 값은 XLSX에서 고칩니다.",
       "edit_cell_address": "칸 주소를 읽지 못했습니다. B3 또는 시트이름!B3처럼 적어 주세요(시트 이름은 파일에 있는 그대로).",
       "edit_cell_formula": "이 칸에는 수식이 들어 있어 값을 바꾸지 않습니다. 수식이 읽는 칸의 값을 바꾸거나 Excel에서 고쳐 주세요.",
+      "edit_table_header": "Excel 표의 머리글 칸은 바꾸지 않습니다. 머리글은 표의 열 이름이라서, 파일 안에서 따로 바꾸면 Excel이 파일을 손상된 것으로 보고 복구하려 합니다. 머리글은 Excel에서 고쳐 주세요.",
       "edit_picture_missing": "이 그림을 파일에서 찾지 못했습니다. 대화상자를 닫았다가 다시 열어 그림 목록을 새로 읽어 주세요.",
       "edit_picture_format": "이 형식의 그림(EMF · WMF · SVG 등)은 바꿀 수 없습니다. PNG · JPEG · GIF · BMP 그림만 바꿉니다.",
       "edit_picture_unreadable": "새 그림 파일을 읽지 못했습니다. 경로가 맞는지, PNG · JPEG · GIF · BMP · WebP · TIFF 파일인지, 50 MB 이하인지 확인하세요."

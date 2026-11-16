@@ -1961,6 +1961,9 @@ P6·P7 항목.
 - **2-1절 4단계 — 그림 바꾸기 · 엑셀 칸 값**(2026-11-16, 사용자 결정 "추가 후 1.0.0 으로 RELEASE 생성"): 코어 `documents/edit/{pictures,cells}.rs`(6067307) — `Action::ReplacePicture`(그림 부분의 이름 · 형식 유지, 틀은 그대로),
   `Action::SetCell`(칸 스타일 유지, 수식 칸 거절, 바뀐 칸을 읽는 수식의 저장된 결과를 지우고 `fullCalcOnLoad` — 수식 계산기 없음), `EditReport.notes`. 명령 `documents_edit_pictures`, 대화상자에 "칸 값 바꾸기"와 "그림 바꾸기 (N)" 목록,
   모의 백엔드 · 단위 · E2E. Excel / Word / PowerPoint / 한컴오피스로 수정본을 열어 보는 확인과 Windows 파일 열기 창은 사용자 PC 체크리스트에 남겼다.
+- **원본 고치기 결과물의 LibreOffice 왕복 확인(2026-11-16)**: 이 환경에 LibreOffice 24.2 · openpyxl · python-docx · python-pptx가 있다. 그것들로 만든 파일 여섯 개에 편집을 적용해 다시 읽고 LibreOffice로 열었다(수식 재계산까지 통과).
+  찾아 고친 결함: 숫자 칸 `t="n"`의 날짜 표시, 여러 run에 걸친 글 바꾸기의 서식 번짐(`differences` — 달라지는 글자만 고침), 한 요청의 새 칸들이 같은 번호의 행을 둘 만들던 것(`place_cells`). Excel 표의 머리글 칸은 거절한다(`edit_table_header`). 실제 파일로 다시 돌리는 법: CLAUDE.md "Commands"의 `edit_file` 진단 테스트.
+  MS Office · 한컴오피스 · HWPX는 여전히 사용자 PC 확인 항목이다.
 - **결정 4-3 반영(2026-11-16)**: "참고 자료로 지정해줘"(`set_role` knowledge)는 역할을 바꾸지 않고 실행기가 화면 동작 `open`/`assign`을 넣어 "프로젝트에 넣기"를 참고 자료 쪽으로 연다(`/projects?classify=<ids>&as=reference`,
   `PutInProjectDialog.defaultKind`). 확인 카드 없음 — 대화상자에서 확정. 골든셋 179건(규칙 경로 170/179).
 - **사용자 결정(2026-11-16)**: 4단계까지 넣고 1.0.0 Release 생성 / "이 문서를 참고 자료로 지정해줘" = 선택 문서들을 프로젝트로 분류하며 참고 자료로 넣는 화면을 연다 / 문서 작성의 "참고 자료에서 근거 더 찾기" 기본 꺼짐 확인 /
