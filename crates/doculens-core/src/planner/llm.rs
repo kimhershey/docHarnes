@@ -349,6 +349,11 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
                 issues.extend(guard::type_filter_repair(text, &mut plan, ctx, ko));
                 // … and so are the kind of document and the project it names; "X 프로젝트 열어줘" opens it.
                 issues.extend(guard::where_to_look(text, &mut plan, ctx, ko));
+                // The texts a replacement quotes are what changes, not where: no date range from them,
+                // and with no documents named, the selection or the open document.
+                if guard::edit_target(text, &mut plan, ctx) {
+                    log::info!("planner: a text replacement takes its documents from the words outside the quotes");
+                }
                 // What the sentence does not support is confirmed, whatever the model's confidence.
                 issues.extend(guard::contract_checks(text, &mut plan, ko));
                 // A split by project the checks put back: the validator had already filled the open

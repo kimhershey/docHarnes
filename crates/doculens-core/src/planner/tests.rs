@@ -2494,6 +2494,60 @@ fn a_question_that_points_at_the_open_document_is_answered_from_it() {
     assert!(matches!(&r.plan.operations[..], [Op::Answer { mode: Some(AnswerMode::General), .. }]), "{r:?}");
 }
 
+/// 1.0.0 §2-1 — text replacements as Gemma 4 E4B planned them (eval run of 2026-11-16, ko-130 and
+/// ko-75, replayed): the date between the quotes as the scope's date range, and no scope at all with
+/// a document open.
+#[test]
+fn a_text_replacement_takes_its_documents_from_the_words_outside_the_quotes() {
+    let run = |c: &PlanContext, text: &str, scope: Value, op: Value| {
+        let chat = StageChat::new();
+        chat.push("families", json!({ "families": ["documents"] }));
+        chat.push("plan", json!({ "summary": "s", "unmet": "", "intent": "edit_text", "scope": scope, "operations": [op], "requires_confirmation": true, "confidence": 0.95 }));
+        let r = plan(Some(&deps(&chat)), text, c, PlanMode::ModelFirst).unwrap();
+        assert!(r.issues.iter().all(|i| !i.blocking), "{r:?}");
+        r
+    };
+    let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let mut c = ctx();
+    c.selected_doc_ids.clear();
+    c.current_document = Some("d-open".into());
+
+    // The date is the text to change: the open document, not the documents of that day.
+    let text = "원본에서 '11월 30일'을 '12월 31일'로 바꿔줘";
+    let dated = json!({ "filter": { "date_from": "2026-11-30", "date_to": "2026-11-30" } });
+    let op = json!({ "op": "edit_text", "find": "11월 30일", "replace": "12월 31일", "original": true });
+    let r = run(&c, text, dated.clone(), op.clone());
+    assert!(matches!(&r.plan.operations[..], [Op::EditText { original: Some(true), .. }]), "{r:?}");
+    assert_eq!((r.plan.scope.doc_ids.clone(), r.plan.scope.filter.is_empty()), (ids(&["d-open"]), true), "{r:?}");
+    assert!(r.plan.requires_confirmation, "{r:?}");
+    // No scope at all: the open document, or the selection when there is one (`original: false` is no parameter).
+    let text = "'㈜한빛'을 '(주)한빛'으로 바꿔줘";
+    let page_text = json!({ "op": "edit_text", "find": "㈜한빛", "replace": "(주)한빛", "original": false });
+    let r = run(&c, text, json!({}), page_text.clone());
+    assert!(matches!(&r.plan.operations[..], [Op::EditText { original: None, .. }]), "{r:?}");
+    assert_eq!(r.plan.scope.doc_ids, ids(&["d-open"]), "{r:?}");
+    c.selected_doc_ids = ids(&["d-1", "d-2"]);
+    assert_eq!(run(&c, text, json!({}), page_text.clone()).plan.scope.doc_ids, ids(&["d-1", "d-2"]));
+    c.selected_doc_ids.clear();
+    // A keyword that is the quoted text itself is no condition either.
+    let r = run(&c, text, json!({ "filter": { "keyword": "㈜한빛" } }), page_text.clone());
+    assert_eq!((r.plan.scope.doc_ids.clone(), r.plan.scope.filter.is_empty()), (ids(&["d-open"]), true), "{r:?}");
+
+    // A period the user's own words carry stays a condition, and so do the documents the model named.
+    let text = "지난달 문서에서 '11월 30일'을 '12월 31일'로 바꿔줘";
+    let last_month = json!({ "filter": { "date_from": "2026-10-01", "date_to": "2026-10-31" } });
+    let r = run(&c, text, last_month, op.clone());
+    assert_eq!(r.plan.scope.filter.date_from.as_deref(), Some("2026-10-01"), "{r:?}");
+    assert!(r.plan.scope.doc_ids.is_empty(), "{r:?}");
+    let r = run(&c, "원본에서 '11월 30일'을 '12월 31일'로 바꿔줘", json!({ "doc_ids": ["d-7"] }), op.clone());
+    assert_eq!(r.plan.scope.doc_ids, ids(&["d-7"]), "{r:?}");
+
+    // Nothing open or selected: the app asks which documents, as before.
+    c.current_document = None;
+    let r = run(&c, "'㈜한빛'을 '(주)한빛'으로 바꿔줘", json!({}), page_text);
+    assert!(r.plan.is_clarification(), "{r:?}");
+}
+
 /// 0.8.2 — the plans Gemma 4 E4B wrote for the user's sentences (eval run of 2026-11-12, replayed):
 /// `explain` with a note to itself, the whole sentence or the term as the "selection", and the
 /// project in the type slot.

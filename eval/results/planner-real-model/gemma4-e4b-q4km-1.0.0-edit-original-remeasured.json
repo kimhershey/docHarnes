@@ -1,0 +1,244 @@
+{
+  "schema_version": 1,
+  "kind": "planner",
+  "generated_at": "2026-11-16T03:47:14Z",
+  "golden": "eval/golden/planner.json",
+  "golden_count": 2,
+  "context": "eval/golden/planner-context.json",
+  "today": "2026-11-08",
+  "engine": {
+    "binary": "llama-server (local build)",
+    "version": null,
+    "build_number": null,
+    "backend": "cpu",
+    "tier": "cpu_only",
+    "profile": "balanced",
+    "model": "gemma4-e4b-q4km",
+    "model_display": "Gemma 4 E4B (Q4_K_M, 저여유)",
+    "quantization": "Q4_K_M",
+    "architecture": "gemma4",
+    "has_vision": true,
+    "ctx": 8192,
+    "model_memory_bytes": null,
+    "mmproj_bytes": 990372672,
+    "devices": [],
+    "vram_used_mib": null,
+    "load_ms": 5803
+  },
+  "mode": "model",
+  "model": "gemma4-e4b-q4km",
+  "total": 2,
+  "correct": 2,
+  "accuracy": 1.0,
+  "by_category": {
+    "ko": {
+      "total": 2,
+      "correct": 2,
+      "accuracy": 1.0
+    }
+  },
+  "by_intent": {
+    "edit_text": {
+      "total": 2,
+      "correct": 2,
+      "accuracy": 1.0
+    }
+  },
+  "by_kind": {
+    "command": {
+      "total": 2,
+      "correct": 2,
+      "accuracy": 1.0
+    }
+  },
+  "by_source": {
+    "model": 2
+  },
+  "by_cause": {},
+  "unasked_changes": 0,
+  "latency": {
+    "p50_ms": 37286.497544,
+    "p95_ms": 137684.735279,
+    "mean_ms": 87485.6164115
+  },
+  "latency_by_kind": {
+    "command": {
+      "p50_ms": 37286.497544,
+      "p95_ms": 137684.735279,
+      "mean_ms": 87485.6164115
+    }
+  },
+  "items": [
+    {
+      "id": "ko-75",
+      "category": "ko",
+      "text": "'㈜한빛'을 '(주)한빛'으로 바꿔줘",
+      "correct": true,
+      "source": "model",
+      "intent": "edit_text",
+      "ops": [
+        "edit_text"
+      ],
+      "summary": "문서 내에서 '㈜한빛'을 '(주)한빛'으로 텍스트 치환을 요청합니다.",
+      "confidence": 0.95,
+      "latency_ms": 137684.735279,
+      "kind": "command",
+      "requires_confirmation": true,
+      "attempts": 1,
+      "prompt_tokens": 3721,
+      "completion_tokens": 150,
+      "mismatches": [],
+      "operations": [
+        {
+          "find": "㈜한빛",
+          "op": "edit_text",
+          "replace": "(주)한빛"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"문서 내에서 '㈜한빛'을 '(주)한빛'으로 텍스트 치환을 요청합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"edit_text\",\n  \"scope\": {},\n  \"operations\": [\n    {\n      \"op\": \"edit_text\",\n      \"find\": \"㈜한빛\",\n      \"replace\": \"(주)한빛\",\n      \"original\": false\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.95\n}"
+    },
+    {
+      "id": "ko-130",
+      "category": "ko",
+      "text": "원본에서 '11월 30일'을 '12월 31일'로 바꿔줘",
+      "correct": true,
+      "source": "model",
+      "intent": "edit_text",
+      "ops": [
+        "edit_text"
+      ],
+      "summary": "지정된 날짜 범위의 원본 문서에서 '11월 30일'을 '12월 31일'로 텍스트를 찾아 바꾸어 원본 파일을 수정합니다.",
+      "confidence": 0.95,
+      "latency_ms": 37286.497544,
+      "kind": "command",
+      "requires_confirmation": true,
+      "attempts": 1,
+      "prompt_tokens": 3801,
+      "completion_tokens": 222,
+      "mismatches": [],
+      "operations": [
+        {
+          "find": "11월 30일",
+          "op": "edit_text",
+          "original": true,
+          "replace": "12월 31일"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"지정된 날짜 범위의 원본 문서에서 '11월 30일'을 '12월 31일'로 텍스트를 찾아 바꾸어 원본 파일을 수정합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"edit_text\",\n  \"scope\": {\n    \"filter\": {\n      \"date_from\": \"2026-11-30\",\n      \"date_to\": \"2026-11-30\"\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"edit_text\",\n      \"find\": \"11월 30일\",\n      \"replace\": \"12월 31일\",\n      \"original\": true\n    }\n  ],\n  \"requires_confirmation\": true,\n  \"confidence\": 0.95\n}"
+    }
+  ],
+  "rules_only": {
+    "mode": "rules",
+    "total": 2,
+    "correct": 2,
+    "accuracy": 1.0,
+    "by_category": {
+      "ko": {
+        "total": 2,
+        "correct": 2,
+        "accuracy": 1.0
+      }
+    },
+    "by_intent": {
+      "edit_text": {
+        "total": 2,
+        "correct": 2,
+        "accuracy": 1.0
+      }
+    },
+    "by_kind": {
+      "command": {
+        "total": 2,
+        "correct": 2,
+        "accuracy": 1.0
+      }
+    },
+    "by_source": {
+      "rules": 2
+    },
+    "by_cause": {},
+    "unasked_changes": 0,
+    "items": [
+      {
+        "id": "ko-75",
+        "category": "ko",
+        "text": "'㈜한빛'을 '(주)한빛'으로 바꿔줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "edit_text",
+        "ops": [
+          "edit_text"
+        ],
+        "summary": "'㈜한빛'을 '(주)한빛'으로 바꿉니다",
+        "confidence": 0.84,
+        "latency_ms": 1.426048,
+        "kind": "command",
+        "requires_confirmation": true,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "find": "㈜한빛",
+            "op": "edit_text",
+            "replace": "(주)한빛"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ],
+          "filter": {}
+        }
+      },
+      {
+        "id": "ko-130",
+        "category": "ko",
+        "text": "원본에서 '11월 30일'을 '12월 31일'로 바꿔줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "edit_text",
+        "ops": [
+          "edit_text"
+        ],
+        "summary": "'11월 30일'을 '12월 31일'로 바꿉니다",
+        "confidence": 0.84,
+        "latency_ms": 1.366506,
+        "kind": "command",
+        "requires_confirmation": true,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "find": "11월 30일",
+            "op": "edit_text",
+            "original": true,
+            "replace": "12월 31일"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ],
+          "filter": {}
+        }
+      }
+    ]
+  },
+  "note": "1.0.0 §2-1 with guard::edit_target: the two replacement sentences again (same model output, the open document as the target)."
+}

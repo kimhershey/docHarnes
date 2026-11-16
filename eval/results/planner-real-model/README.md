@@ -106,7 +106,7 @@
 - `ko-57` "UI를 영어로 바꿔줘"는 맞게 읽었지만 확인 카드가 뜹니다. 문장에 설정 이름("언어")이 없어서입니다(설정 이름과 값이 둘 다 문장에 있어야 확인 없이 실행 — 0.8.0의 규칙 그대로).
 - `ko-55` "이 조항이 무슨 뜻인지 설명해줘": 모델이 **문서를 찾지 않는 답변**(`knowledge: false` · `mode: general`, 범위 없음)으로 적었습니다. 채점 기준(`answer`도 정답)으로는 맞지만 열린 문서의 조항을 묻는 말이므로,
   이 측정 뒤에 `guard::document_question`을 열린 문서 · 선택한 문서를 가리키는 질문("이 조항" · "이 문서" · "this clause")에도 적용했습니다 — 답변을 문서 근거로 되돌리고 범위를 열린 문서로 채웁니다
-  (이 모델 출력을 재생하는 단위 테스트 `a_question_that_points_at_the_open_document_is_answered_from_it`).
+  (이 모델 출력을 재생하는 단위 테스트 `a_question_that_points_at_the_open_document_is_answered_from_it`; 다시 잰 결과는 아래 8문장 표).
 
 ### 사용자 문장 5개 (0.8.2의 `user-sentences-0.8.2.golden.json`) — 2/5 → 5/5
 
@@ -121,6 +121,27 @@
 | u-4 | AAA 프로젝트에서 AAA가 무엇인지 알려줘 | ✕ answer {"knowledge": false, "mode": "general"} | ○ answer · 범위 {"filter": {"project_id": "p-aaa"}} |
 | u-5 | AAA가 무엇인지 설명해줘 | ✕ answer {"knowledge": false, "mode": "general"} | ○ answer · 범위 {"filter": {"project_id": "p-aaa"}} |
 
+### 열린 문서를 가리키는 질문 · 원본 고치기 문장 8개 — 6/8 → 8/8
+
+위 `ko-55`의 검사를 넓힌 뒤, 그리고 `edit_text`에 `original`(원본 파일을 고쳐 새 판으로 저장 — 계획 2-1절)을 더한 뒤 쟀습니다. 첫 측정에서 글자 바꾸기 두 문장이 대상을 잘못 잡았습니다:
+모델이 `ko-75`에는 범위를 비워 두었고(문서가 열려 있는데도 앱이 "어떤 문서를 대상으로 할까요?"라고 되물음), `ko-130`에는 따옴표 안의 "11월 30일"을 범위의 날짜 조건으로 적었습니다(그날의 문서를 찾게 됨).
+검사 `guard::edit_target`을 넣고 두 문장을 다시 쟀습니다 — 따옴표 안의 글은 바꿀 글이지 조건이 아니고, 대상을 말하지 않은 글자 바꾸기는 선택한 문서, 없으면 열린 문서에 합니다(규칙 경로와 같음). 실행 전에는 항상 확인 카드가 뜹니다.
+
+| id | 문장 | 첫 측정 | 검사 후 |
+|---|---|---|---|
+| ko-05 | 이 계약서의 계약기간과 위약금 조항 알려줘 | ○ answer · 범위 {"doc_ids": ["d1a2"]} | (다시 재지 않음) |
+| ko-55 | 이 조항이 무슨 뜻인지 설명해줘 | ○ answer · 범위 {"doc_ids": ["d1a2"]} | (다시 재지 않음) |
+| ko-75 | '㈜한빛'을 '(주)한빛'으로 바꿔줘 | ✕ clarify | ○ edit_text {"find": "㈜한빛", "replace": "(주)한빛"} · 확인 카드 · 범위 {"doc_ids": ["d1a2"]} |
+| ko-106 | UI 배율이 뭐야? | ○ answer {"mode": "general"} | (다시 재지 않음) |
+| ko-112 | 애자일 방법론이 뭐야? | ○ answer {"mode": "general"} | (다시 재지 않음) |
+| ko-130 | 원본에서 '11월 30일'을 '12월 31일'로 바꿔줘 | ✕ edit_text {"find": "11월 30일", "original": true, "replace": "12월 31일"} · 확인 카드 · 범위 {"filter": {"date_from": "2026-11-30", "date_to": "2026-11-30"}} — 따옴표 안의 날짜가 조건이 됨 | ○ edit_text {"find": "11월 30일", "original": true, "replace": "12월 31일"} · 확인 카드 · 범위 {"doc_ids": ["d1a2"]} |
+| ko-131 | 이 문서 원본 파일의 '㈜한빛'을 '(주)한빛'으로 고쳐서 새 판으로 저장해줘 | ○ edit_text {"find": "㈜한빛", "original": true, "replace": "(주)한빛"} · 확인 카드 · 범위 {"doc_ids": ["d1a2"]} | (다시 재지 않음) |
+| en-34 | replace 'Nov 30' with 'Dec 31' in the origi… | ○ edit_text {"find": "Nov 30", "original": true, "replace": "Dec 31"} · 확인 카드 · 범위 {"doc_ids": ["d1a2"]} | (다시 재지 않음) |
+
+- `ko-55`는 이제 열린 문서(`d1a2`)에서 찾아 답하는 질문으로 나옵니다. 일반 지식 질문(`ko-106` · `ko-112`)은 문서가 열려 있어도 그대로입니다.
+- 원본 고치기 세 문장(`ko-130` · `ko-131` · `en-34`)은 모두 `original: true`와 확인 카드로 나왔고, "원본"을 말하지 않은 `ko-75`에는 `original`이 없습니다.
+- 첫 측정의 채점은 대상을 보지 않아 `ko-130`이 정답으로 찍혔습니다(결과 파일에는 7/8). 그 뒤 네 문장의 기대값에 대상(열린 문서)을 넣었고, 위 표의 첫 측정은 그 기준으로 적었습니다.
+
 ## 파일
 
 - `gemma4-e4b-q4km-0.7.0.json`, `gemma4-e4b-q4km-0.8.0.json` — 배치별 결과를 합친 것(문장별 플랜, 출처, 응답 시간; 다시 잰 문장의 첫 결과는 `first_measurement`).
@@ -129,4 +150,5 @@
   문장과 컨텍스트는 `user-sentences-0.8.2.golden.json` / `user-sentences-0.8.2.context.json`. 모델이 쓴 `explain`을 답변으로 바꾸는 검사(`guard::explain_what_was_said`)는 이 측정 뒤에 들어갔다(결과 파일의 `operations`는 그 전 모습).
 - `gemma4-e4b-q4km-1.0.0-section4.json` — 1.0.0 4절: 골든셋 20문장(`--ids ko-05,ko-07,ko-14,ko-53,ko-54,ko-55,ko-56,ko-57,en-14,mx-06,mx-07,ko-98,ko-104,ko-105,ko-106,ko-108,ko-109,ko-111,ko-112,ko-115`).
 - `gemma4-e4b-q4km-1.0.0-user-sentences-before-guard.json`, `gemma4-e4b-q4km-1.0.0-user-sentences.json` — 1.0.0 4절: 사용자 문장 5개, `guard::document_question`을 넣기 전과 후.
+- `gemma4-e4b-q4km-1.0.0-edit-original.json`, `gemma4-e4b-q4km-1.0.0-edit-original-remeasured.json` — 1.0.0 2-1절: 위 8문장(`--ids ko-55,ko-05,ko-106,ko-112,ko-75,ko-130,ko-131,en-34`)과, `guard::edit_target`을 넣은 뒤의 두 문장.
   결과 파일의 경로(`golden` · `context` · `engine.binary`)는 저장소 기준으로 고쳐 적었다.

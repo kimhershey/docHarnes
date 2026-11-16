@@ -266,6 +266,26 @@ pub fn pointed_at(text: &str, ctx: &PlanContext) -> Vec<String> {
     }
 }
 
+/// Whether the user's own words carry a date or a period outside the quoted texts.
+pub fn dated_outside_quotes(text: &str, today: NaiveDate) -> bool {
+    let outside = unquoted(&user_words(text));
+    absolute_date(&outside, today).is_some() || prerouter::resolve_relative_date(&outside, today).is_some()
+}
+
+/// The documents a text replacement works on by the phrase rules' reading (`document_edit_rule`):
+/// what the words outside the quotes name — the selection words, a folder, a project — else the
+/// selection, or the open document. Empty when the sentence says "전부" without naming a place, or
+/// when nothing is open or selected.
+pub fn edit_scope(text: &str, ctx: &PlanContext) -> Scope {
+    let outside = unquoted(&user_words(text));
+    let t = Text::new(&outside, true);
+    let mut scope = scope_of(&t, ctx, None, None);
+    if scope.is_empty() && !t.has(ALL_WORDS) {
+        scope.doc_ids = selection_ids(ctx);
+    }
+    scope
+}
+
 fn selection_ids(ctx: &PlanContext) -> Vec<String> {
     if !ctx.selected_doc_ids.is_empty() {
         ctx.selected_doc_ids.clone()

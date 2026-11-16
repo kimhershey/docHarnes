@@ -922,6 +922,52 @@ pub fn document_question(text: &str, plan: &mut Plan, ctx: &super::PlanContext) 
     changed
 }
 
+/// 1.0.0 §2-1 — a text replacement as Gemma 4 E4B planned it (eval run of 2026-11-16): the date
+/// between the quotes of "원본에서 '11월 30일'을 '12월 31일'로 바꿔줘" came back as the scope's date
+/// range, and "'㈜한빛'을 '(주)한빛'으로 바꿔줘" with no scope at all although a document was open (the
+/// app then asked which documents). The texts between the quotes are what changes, never where to
+/// look: a date range the words outside them do not carry is dropped, so is a keyword that is the
+/// text itself, and a replacement that then names no documents works on what the phrase rules would
+/// take — the selection, or else the open document (`rules::edit_scope`). The step is confirmed
+/// either way.
+pub fn edit_target(text: &str, plan: &mut Plan, ctx: &super::PlanContext) -> bool {
+    if plan.is_clarification() {
+        return false;
+    }
+    let texts: Vec<String> = plan
+        .operations
+        .iter()
+        .filter_map(|op| match op {
+            Op::EditText { find, replace, .. } => Some([super::compact(find), super::compact(replace)]),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    if texts.is_empty() {
+        return false;
+    }
+    let mut changed = false;
+    let filter = &mut plan.scope.filter;
+    if (filter.date_from.is_some() || filter.date_to.is_some()) && !super::rules::dated_outside_quotes(text, ctx.today)
+    {
+        filter.date_from = None;
+        filter.date_to = None;
+        changed = true;
+    }
+    if filter.keyword.as_deref().map(super::compact).is_some_and(|k| texts.contains(&k)) {
+        filter.keyword = None;
+        changed = true;
+    }
+    if plan.scope.is_empty() {
+        let scope = super::rules::edit_scope(text, ctx);
+        if !scope.is_empty() {
+            plan.scope = scope;
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// The kind of document the user's words name (0.8.1): "참고 자료에서 …" → reference material,
 /// "업무 문서만 …" → work documents. Both named: the one that is not ruled out ("참고 자료 말고").
 fn kind_named(text: &str) -> Option<super::RoleParam> {
