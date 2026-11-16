@@ -10,7 +10,8 @@
 use std::io::{Cursor, Read};
 use std::path::Path;
 
-use image::{DynamicImage, ImageFormat, ImageReader};
+use image::metadata::Orientation;
+use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
 use serde::{Deserialize, Serialize};
 
 use super::{Archive, CoreError, Result, SourceKind};
@@ -266,13 +267,19 @@ pub fn swap(
     let new = std::fs::read(path).map_err(|_| UNREADABLE)?;
     let reader = ImageReader::new(Cursor::new(new.as_slice())).with_guessed_format().map_err(|_| UNREADABLE)?;
     let source = reader.format().ok_or(UNREADABLE)?;
-    let image = reader.decode().map_err(|_| UNREADABLE)?;
+    let mut decoder = reader.into_decoder().map_err(|_| UNREADABLE)?;
+    // A photo says which way is up in its EXIF data; the frame knows nothing of that (an office
+    // program turns the frame when the photo is put in), so the picture itself is turned.
+    let turned = decoder.orientation().unwrap_or(Orientation::NoTransforms);
+    let mut image = DynamicImage::from_decoder(decoder).map_err(|_| UNREADABLE)?;
+    image.apply_orientation(turned);
     let (width, height) = (image.width(), image.height());
     if width == 0 || height == 0 {
         return Err(UNREADABLE);
     }
-    // The same format goes in as it is (no second compression); another one is written anew.
-    let bytes = if source == target {
+    // The same format goes in as it is (no second compression); another one — or a picture that
+    // had to be turned — is written anew.
+    let bytes = if source == target && turned == Orientation::NoTransforms {
         new
     } else {
         let mut out = Vec::new();

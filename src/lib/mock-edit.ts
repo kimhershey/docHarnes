@@ -290,6 +290,9 @@ function plan(d: MockDoc, edits: EditReplacement[]): { report: EditReport; pages
   const workbook = d.source_kind === "xlsx";
   if (edits.some((e) => (workbook ? STRUCTURAL.includes(e.action ?? "replace") : e.action === "set_cell"))) throw err("invalid", "edit_action_unsupported");
   if (edits.some((e) => [e.find, e.replace, ...(e.cells ?? [])].some((text) => /[\r\n]/.test(text)))) throw err("invalid", "edit_line_break");
+  // What XML cannot hold (core `check`): the control characters below a blank but the tab, U+FFFE, U+FFFF.
+  // eslint-disable-next-line no-control-regex
+  if (edits.some((e) => [e.find, e.replace, ...(e.cells ?? [])].some((text) => /[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffe\uffff]/.test(text)))) throw err("invalid", "edit_control_character");
   const pages = fileTexts(d);
   const report: EditReport = { found: edits.map(() => 0), replaced: edits.map(() => 0), changes: [], parts: [] };
   const parts = new Set<string>();

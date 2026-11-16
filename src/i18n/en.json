@@ -1353,6 +1353,7 @@
       "edit_signed": "A digitally signed document is not edited (the signature would break).",
       "edit_find_empty": "Enter the text to find.",
       "edit_line_break": "A text with a line break cannot be replaced. Only text inside one paragraph is.",
+      "edit_control_character": "The text holds a character a file cannot store (an invisible control character). Pasted text can bring one along: type the text again.",
       "edit_too_many": "At most 200 replacements can be made at once.",
       "edit_nothing_found": "Nothing to change was found. Check that the text is typed exactly as in the document.",
       "edit_too_many_editions": "There are too many edited copies with this name. Tidy the older ones up and try again.",
@@ -1368,6 +1369,7 @@
       "edit_cell_address": "The cell address could not be read. Write it like B3 or SheetName!B3 (the sheet's name exactly as in the file).",
       "edit_cell_formula": "This cell holds a formula, so its value is not changed. Change a cell the formula reads, or edit it in Excel.",
       "edit_table_header": "The header cell of an Excel table is not changed. It is the name of the table's column, and Excel takes a file where the two differ for a damaged one. Change the header in Excel.",
+      "edit_cells_unaddressed": "This sheet is stored without an address on every cell, so cell values are not changed. Save the file once in Excel and import it again.",
       "edit_picture_missing": "This picture was not found in the file. Close the dialog and open it again to read the list of pictures anew.",
       "edit_picture_format": "A picture of this format (EMF, WMF, SVG …) cannot be replaced. Only PNG, JPEG, GIF and BMP pictures are.",
       "edit_picture_unreadable": "The new picture file could not be read. Check the path, that it is a PNG, JPEG, GIF, BMP, WebP or TIFF file, and that it is 50 MB or smaller."

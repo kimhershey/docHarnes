@@ -25,6 +25,8 @@ pub const ADDRESS: &str = "edit_cell_address";
 pub const FORMULA: &str = "edit_cell_formula";
 /// The header cell of a table (Excel's "표"): its text is the column's name in the table's own part too.
 pub const TABLE_HEADER: &str = "edit_table_header";
+/// The sheet's rows or cells do not say where they stand (no `r`): they are not counted here.
+pub const UNADDRESSED: &str = "edit_cells_unaddressed";
 /// Note: results of formulas were taken out to be computed again (with their number).
 pub const FORMULAS_CLEARED: &str = "edit_formulas_cleared";
 
@@ -33,11 +35,18 @@ const MAX_COL: u32 = 16_384;
 const MAX_ROW: u32 = 1_048_576;
 /// Formula cells above which the reads are not followed: every stored result goes.
 const MAX_FOLLOWED_FORMULAS: usize = 20_000;
+/// Comparisons of a changed cell with a range a formula reads, above which the rest is not
+/// followed either (a sheet of many ranges and long chains).
+const MAX_RANGE_CHECKS: usize = 20_000_000;
+/// Cells of an array formula's range that are followed one by one.
+const MAX_ARRAY_CELLS: u64 = 50_000;
 
 /// What the cells module has to know of the workbook around the sheets.
 pub struct Workbook {
     /// Sheet names in their order, with the part of each (lower case).
     pub sheets: Vec<(String, String)>,
+    /// The first sheet that is not hidden: where an address without a sheet's name points.
+    pub first_shown: usize,
     pub date1904: bool,
     /// Per cell style (`s`): the cell shows a date.
     pub date_styles: Vec<bool>,
@@ -100,14 +109,14 @@ fn table_headers(archive: &mut Archive, sheet_part: &str) -> Vec<(u32, u32, u32)
     out
 }
 
-fn attribute(e: &BytesStart<'_>, key: &str) -> Option<String> {
+pub(super) fn attribute(e: &BytesStart<'_>, key: &str) -> Option<String> {
     e.try_get_attribute(key)
         .ok()
         .flatten()
         .and_then(|a| a.normalized_value(XmlVersion::Implicit1_0).ok().map(|v| v.into_owned()))
 }
 
-fn read_text(archive: &mut Archive, name: &str) -> Option<String> {
+pub(super) fn read_text(archive: &mut Archive, name: &str) -> Option<String> {
     let wanted = name.to_ascii_lowercase();
     let index = (0..archive.len()).find(|i| {
         archive.by_index(*i).ok().and_then(|e| e.name().ok().map(|n| n.to_ascii_lowercase() == wanted)) == Some(true)
@@ -118,7 +127,7 @@ fn read_text(archive: &mut Archive, name: &str) -> Option<String> {
 }
 
 /// The start tags of a part's XML, in order.
-fn start_tags(xml: &str) -> Vec<BytesStart<'static>> {
+pub(super) fn start_tags(xml: &str) -> Vec<BytesStart<'static>> {
     let mut reader = quick_xml::Reader::from_reader(xml.as_bytes());
     let mut buf = Vec::new();
     let mut out = Vec::new();
@@ -152,11 +161,12 @@ pub fn workbook(archive: &mut Archive) -> Result<Workbook> {
         .find(|e| local(e.name().as_ref()) == "workbookPr")
         .and_then(|e| attribute(e, "date1904"))
         .is_some_and(|v| matches!(v.trim(), "1" | "true"));
-    let sheets = tags
+    let listed: Vec<(String, String, bool)> = tags
         .iter()
         .filter(|e| local(e.name().as_ref()) == "sheet")
         .filter_map(|e| {
             let name = attribute(e, "name")?;
+            let hidden = attribute(e, "state").is_some_and(|s| s != "visible");
             let id = e.attributes().flatten().find_map(|a| {
                 (local(a.key.as_ref()) == "id" && a.key.as_ref() != "sheetId")
                     .then(|| a.normalized_value(XmlVersion::Implicit1_0).ok().map(|v| v.into_owned()))
@@ -167,17 +177,18 @@ pub fn workbook(archive: &mut Archive) -> Result<Workbook> {
                 Some(absolute) => absolute.to_string(),
                 None => format!("xl/{target}"),
             };
-            Some((name, part.to_ascii_lowercase()))
+            Some((name, part.to_ascii_lowercase(), hidden))
         })
         .collect();
-    let sheets: Vec<(String, String)> = sheets;
+    let first_shown = listed.iter().position(|(_, _, hidden)| !hidden).unwrap_or(0);
+    let sheets: Vec<(String, String)> = listed.into_iter().map(|(name, part, _)| (name, part)).collect();
     let date_styles = crate::documents::convert::xlsx::date_styles(archive);
     let table_headers = sheets
         .iter()
         .map(|(_, part)| (part.clone(), table_headers(archive, part)))
         .filter(|(_, headers)| !headers.is_empty())
         .collect();
-    Ok(Workbook { sheets, date1904, date_styles, table_headers })
+    Ok(Workbook { sheets, first_shown, date1904, date_styles, table_headers })
 }
 
 /// `B3` → (2, 3); `$B$3` too.
@@ -461,6 +472,26 @@ impl Part {
             .collect()
     }
 
+    /// The style a new cell of this row / column takes: the row's when the row has one of its own
+    /// (`customFormat`), else the one its column gives its cells (`<cols>`) — as a spreadsheet
+    /// program does, so that a date typed into an empty cell of a date column is a date.
+    fn style_for(&self, row: Option<usize>, col: u32) -> Option<String> {
+        let own = |part: &Part, i: usize, key: &str| part.start_tag(i).and_then(|e| attribute(e, key));
+        if let Some(r) = row {
+            if own(self, r, "customFormat").is_some_and(|v| matches!(v.trim(), "1" | "true")) {
+                return own(self, r, "s");
+            }
+        }
+        (0..self.events.len())
+            .filter(|i| self.start_tag(*i).is_some_and(|e| local(e.name().as_ref()) == "col"))
+            .find(|i| {
+                let number = |key: &str| own(self, *i, key).and_then(|v| v.trim().parse::<u32>().ok());
+                matches!((number("min"), number("max")), (Some(min), Some(max)) if (min..=max).contains(&col))
+            })
+            .and_then(|i| own(self, i, "style"))
+            .filter(|style| style.trim() != "0")
+    }
+
     /// Sets the value of the cell at (`col`, `row`) of this sheet. Returns what the cell showed and
     /// what it shows now. The cell is kept aside until [`Part::place_cells`] writes every new cell
     /// of the sheet at once — rows and cells stand in order in a sheet, whatever the order of the
@@ -480,15 +511,26 @@ impl Part {
         let (style, before) = match self.new_cells.get(&(row, col)) {
             Some(earlier) => (earlier.style.clone(), earlier.shown.clone()),
             None => {
-                let own_row = self.numbered_rows(sheet_data, data_end).into_iter().find(|(_, n)| *n == row);
-                let old = own_row
-                    .and_then(|(r, _)| self.addressed_cells(r).into_iter().find(|(_, c)| *c == col))
-                    .map(|(i, _)| self.read_cell(i));
-                if old.as_ref().is_some_and(|c| c.formula) {
-                    return Err(FORMULA);
+                // Rows and cells may leave out where they stand (`r`) and count on their order
+                // instead; this reader goes by the addresses, so such a sheet is left alone.
+                let named = |part: &Part, from: usize, to: usize, name: &str| {
+                    part.children(from, to).into_iter().filter(|(_, n)| n == name).count()
+                };
+                let rows = self.numbered_rows(sheet_data, data_end);
+                if rows.len() != named(self, sheet_data, data_end, "row") {
+                    return Err(UNADDRESSED);
                 }
-                let before = old.as_ref().map(|c| self.shown_value(c, wb, shared)).unwrap_or_default();
-                (old.and_then(|c| c.style), before)
+                let own_row = rows.into_iter().find(|(_, n)| *n == row).map(|(r, _)| r);
+                let there = own_row.map(|r| self.addressed_cells(r)).unwrap_or_default();
+                if own_row.is_some_and(|r| there.len() != named(self, r, self.close_of(r), "c")) {
+                    return Err(UNADDRESSED);
+                }
+                match there.into_iter().find(|(_, c)| *c == col).map(|(i, _)| self.read_cell(i)) {
+                    Some(old) if old.formula => return Err(FORMULA),
+                    Some(old) => (old.style.clone(), self.shown_value(&old, wb, shared)),
+                    // A cell that is not there yet looks like its row, or else like its column.
+                    None => (self.style_for(own_row, col), String::new()),
+                }
             }
         };
         let shows_a_date = style
@@ -664,7 +706,8 @@ fn reads(formula: &str) -> Option<Vec<Read_>> {
                 i += if chars[i] == '\'' { 2 } else { 1 };
             }
             i += 1;
-            if chars.get(i) != Some(&'!') || name.contains('[') {
+            // No `!` behind it, another workbook, or a range of sheets (`'1월:3월'!B2`).
+            if chars.get(i) != Some(&'!') || name.contains('[') || name.contains(':') {
                 return None;
             }
             i += 1;
@@ -718,6 +761,10 @@ fn reads(formula: &str) -> Option<Vec<Read_>> {
                     Some(other) => parse_cell(&other)?,
                     None => (c1, r1),
                 };
+                // `Q1:Q4!B2`: what looked like a range of cells names a range of sheets.
+                if chars.get(i) == Some(&'!') {
+                    return None;
+                }
                 out.push(Read_ { sheet: sheet.take(), cols: (c1.min(c2), c1.max(c2)), rows: (r1.min(r2), r1.max(r2)) });
             } else if let (Some(c1), Some(':')) = (letters_only(&token), chars.get(i).copied()) {
                 // Whole columns: `A:C`.
@@ -761,21 +808,36 @@ fn reads(formula: &str) -> Option<Vec<Read_>> {
     Some(out)
 }
 
+/// A block of cells: its first and last column, its first and last row.
+type Block = ((u32, u32), (u32, u32));
+
 /// A cell with a formula: where its stored result is, and what it reads.
 struct FormulaCell {
     part: usize,
     at: (u32, u32),
     result: Option<(usize, usize)>,
-    reads: Option<Vec<Read_>>,
+    /// The cells it reads, their sheets resolved to parts; `None` when they cannot be followed.
+    reads: Option<Vec<(usize, Block)>>,
+    /// An array formula: the cells its results fill (`ref`), this one included.
+    fills: Option<Block>,
 }
 
 /// Takes the stored results out of every formula that reads one of the `changed` cells — directly or
 /// through other formulas — and returns how many. `sheet_of` maps a part index to the sheet's name.
+///
+/// A formula that cannot be followed (a name, a table column, a sheet this workbook does not have,
+/// cells made up when it runs, a shared formula without its text) counts as reading everything.
+/// The cells an array formula fills go stale with it. The walk is a worklist over the cells that
+/// changed: a formula is looked at when a cell it reads is reached, not once per round.
 pub fn clear_dependents(parts: &mut [Part], sheet_of: &HashMap<usize, String>, changed: &[(usize, u32, u32)]) -> u32 {
     if changed.is_empty() {
         return 0;
     }
+    let lower = |name: &str| name.to_lowercase();
+    let part_of_sheet: HashMap<String, usize> = sheet_of.iter().map(|(p, name)| (lower(name), *p)).collect();
     let mut formulas: Vec<FormulaCell> = Vec::new();
+    // The stored values of the cells that hold no formula of their own (an array's other cells).
+    let mut values: HashMap<(usize, u32, u32), (usize, usize)> = HashMap::new();
     for &p in sheet_of.keys() {
         let part = &parts[p];
         for i in 0..part.events.len() {
@@ -786,56 +848,120 @@ pub fn clear_dependents(parts: &mut [Part], sheet_of: &HashMap<usize, String>, c
                 continue;
             };
             let children = part.children(i, part.close_of(i));
-            let Some((f, _)) = children.iter().find(|(_, name)| name == "f") else { continue };
+            let result = children.iter().find(|(_, name)| name == "v").map(|(v, _)| (*v, part.close_of(*v)));
+            let Some((f, _)) = children.iter().find(|(_, name)| name == "f") else {
+                if let Some(range) = result {
+                    values.insert((p, at.0, at.1), range);
+                }
+                continue;
+            };
+            let tag = part.start_tag(*f);
+            let kind = tag.and_then(|e| attribute(e, "t"));
             let text = part.inner_text(*f);
-            formulas.push(FormulaCell {
-                part: p,
-                at,
-                result: children.iter().find(|(_, name)| name == "v").map(|(v, _)| (*v, part.close_of(*v))),
-                // A shared formula's followers carry no text of their own.
-                reads: if text.trim().is_empty() { None } else { reads(&text) },
-            });
+            // A shared formula's followers carry no text of their own; a data table's cells are
+            // computed from its row and column inputs.
+            let reads = if text.trim().is_empty() || kind.as_deref() == Some("dataTable") {
+                None
+            } else {
+                reads(&text).and_then(|list| {
+                    list.into_iter()
+                        .map(|read| {
+                            let on = match &read.sheet {
+                                Some(name) => *part_of_sheet.get(&lower(name))?,
+                                None => p,
+                            };
+                            Some((on, (read.cols, read.rows)))
+                        })
+                        .collect::<Option<Vec<_>>>()
+                })
+            };
+            let fills = (kind.as_deref() == Some("array"))
+                .then(|| tag.and_then(|e| attribute(e, "ref")))
+                .flatten()
+                .and_then(|range| {
+                    let (from, to) = range.split_once(':').unwrap_or((range.as_str(), range.as_str()));
+                    let ((c1, r1), (c2, r2)) = (parse_cell(from)?, parse_cell(to)?);
+                    Some(((c1.min(c2), c1.max(c2)), (r1.min(r2), r1.max(r2))))
+                });
+            formulas.push(FormulaCell { part: p, at, result, reads, fills });
         }
     }
-    let lower = |name: &str| name.to_lowercase();
-    let part_of_sheet: HashMap<String, usize> = sheet_of.iter().map(|(p, name)| (lower(name), *p)).collect();
-    let mut touched: HashSet<(usize, u32, u32)> = changed.iter().copied().collect();
-    let mut stale = vec![false; formulas.len()];
-    let follow = formulas.len() <= MAX_FOLLOWED_FORMULAS;
-    loop {
-        let mut grew = false;
-        for (n, formula) in formulas.iter().enumerate() {
-            if stale[n] {
-                continue;
-            }
-            let hit = match (&formula.reads, follow) {
-                (Some(reads), true) => reads.iter().any(|read| {
-                    let part = match &read.sheet {
-                        Some(name) => part_of_sheet.get(&lower(name)).copied(),
-                        None => Some(formula.part),
-                    };
-                    touched.iter().any(|(p, col, row)| {
-                        Some(*p) == part
-                            && (read.cols.0..=read.cols.1).contains(col)
-                            && (read.rows.0..=read.rows.1).contains(row)
-                    })
-                }),
-                // Not followed: it may read anything.
-                _ => true,
-            };
-            if hit {
-                stale[n] = true;
-                grew |= touched.insert((formula.part, formula.at.0, formula.at.1));
+
+    // Who reads a cell: the formulas that name it alone, and the ranges that may hold it.
+    let mut alone: HashMap<(usize, u32, u32), Vec<usize>> = HashMap::new();
+    let mut ranges: Vec<(usize, Block, usize)> = Vec::new();
+    for (n, formula) in formulas.iter().enumerate() {
+        for (on, (cols, rows)) in formula.reads.iter().flatten() {
+            if cols.0 == cols.1 && rows.0 == rows.1 {
+                alone.entry((*on, cols.0, rows.0)).or_default().push(n);
+            } else {
+                ranges.push((*on, (*cols, *rows), n));
             }
         }
-        if !grew {
+    }
+    let mut stale = vec![false; formulas.len()];
+    let mut queue: Vec<(usize, u32, u32)> = changed.to_vec();
+    let mut reached: HashSet<(usize, u32, u32)> = HashSet::new();
+    let mut everything = formulas.len() > MAX_FOLLOWED_FORMULAS;
+    let mut checks = 0usize;
+    // A formula goes stale: its own cell, and the cells an array fills, are changed cells now.
+    let mark = |n: usize, stale: &mut Vec<bool>, queue: &mut Vec<(usize, u32, u32)>, everything: &mut bool| {
+        if std::mem::replace(&mut stale[n], true) {
+            return;
+        }
+        let formula = &formulas[n];
+        queue.push((formula.part, formula.at.0, formula.at.1));
+        if let Some((cols, rows)) = formula.fills {
+            let cells = u64::from(cols.1 - cols.0 + 1) * u64::from(rows.1 - rows.0 + 1);
+            if cells > MAX_ARRAY_CELLS {
+                *everything = true;
+                return;
+            }
+            for col in cols.0..=cols.1 {
+                queue.extend((rows.0..=rows.1).map(|row| (formula.part, col, row)));
+            }
+        }
+    };
+    for n in (0..formulas.len()).filter(|n| formulas[*n].reads.is_none()) {
+        mark(n, &mut stale, &mut queue, &mut everything);
+    }
+    while let Some(cell) = queue.pop() {
+        if everything {
             break;
         }
+        if !reached.insert(cell) {
+            continue;
+        }
+        for n in alone.get(&cell).into_iter().flatten() {
+            mark(*n, &mut stale, &mut queue, &mut everything);
+        }
+        for (on, (cols, rows), n) in &ranges {
+            if stale[*n] {
+                continue;
+            }
+            checks += 1;
+            if *on == cell.0 && (cols.0..=cols.1).contains(&cell.1) && (rows.0..=rows.1).contains(&cell.2) {
+                mark(*n, &mut stale, &mut queue, &mut everything);
+            }
+        }
+        everything |= checks > MAX_RANGE_CHECKS;
     }
+    if everything {
+        stale.iter_mut().for_each(|s| *s = true);
+    }
+
     let mut cleared = 0u32;
     for (formula, _) in formulas.iter().zip(&stale).filter(|(_, stale)| **stale) {
         if let Some(range) = formula.result {
             parts[formula.part].cut.push(range);
+        }
+        // The other cells of an array hold results of the same formula.
+        if let Some((cols, rows)) = formula.fills {
+            let filled = values.iter().filter(|((p, col, row), _)| {
+                *p == formula.part && (cols.0..=cols.1).contains(col) && (rows.0..=rows.1).contains(row)
+            });
+            let cut: Vec<(usize, usize)> = filled.map(|(_, range)| *range).collect();
+            parts[formula.part].cut.extend(cut);
         }
         cleared += 1;
     }

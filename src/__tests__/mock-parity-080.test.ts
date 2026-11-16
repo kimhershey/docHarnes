@@ -631,6 +631,9 @@ describe("original-file edits: paragraphs and table rows (documents::edit)", () 
     expect((await text(doc))[0]).toBe("제3조 납품\n① 납품 기한은 11월 30일로 한다.\n② 납품 장소는 발주처로 한다.");
     // A line break is markup, not a character — in a new paragraph too.
     await expect(preview(doc, [{ find: "제3조", replace: "가\n나", action: "insert_after" }])).rejects.toMatchObject({ message: "edit_line_break" });
+    // A character XML cannot hold (pasted text brings a vertical tab along) is refused; a tab is a character.
+    await expect(preview(doc, [{ find: "제3조", replace: "가\u000b나" }])).rejects.toMatchObject({ message: "edit_control_character" });
+    expect((await preview(doc, [{ find: "제3조", replace: "제3조\t(납품)" }])).problems ?? []).toEqual([]);
   });
 
   it("a table row is added above / below the row that holds the text, or taken out", async () => {
