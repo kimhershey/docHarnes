@@ -20,6 +20,11 @@
 //! HWPX tables get their `rowCnt` / `rowAddr` counted again, a PPTX table's frame grows or shrinks by
 //! the row's height.
 //!
+//! Step 4: a picture of the package is replaced by another one (`pictures` — the frame that shows it
+//! stays, the new picture is written in the old one's format), and a workbook (XLSX) is edited: text
+//! in its strings is replaced, a cell gets a new value by its address (`cells` — the cell's style
+//! stays; results of formulas that read the cell are taken out to be computed again).
+//!
 //! Left alone, with a reason: documents with tracked changes, digitally signed packages; and, for the
 //! structure, anything that is more than text (a section break, a table or a picture inside the
 //! paragraph, a field, a text box with a second copy, vertically merged cells). The edited file is
@@ -44,6 +49,11 @@ use crate::knowledge::{repo as knowledge_repo, VersionInput};
 use crate::pipeline::prompts::{self, Stage};
 use crate::pipeline::vlm::Vlm;
 use crate::projects::assign::{AssignRequest, Placement};
+
+mod cells;
+mod pictures;
+
+pub use pictures::Picture;
 
 /// Largest text part rewritten (decompressed).
 const MAX_XML_BYTES: u64 = 64 * 1024 * 1024;
@@ -73,6 +83,12 @@ pub const LAST_ROW: &str = "edit_last_row";
 pub const NOT_IN_TABLE: &str = "edit_not_in_table";
 pub const ROW_MERGED: &str = "edit_row_merged";
 pub const ROW_CELLS: &str = "edit_row_cells";
+/// The action does not go with this kind of file (a table row in a workbook, a cell in a document).
+pub const ACTION_UNSUPPORTED: &str = "edit_action_unsupported";
+pub use cells::{ADDRESS as CELL_ADDRESS, FORMULA as CELL_FORMULA, FORMULAS_CLEARED};
+pub use pictures::{
+    FORMAT as PICTURE_FORMAT, MISSING as PICTURE_MISSING, RATIO as PICTURE_RATIO, UNREADABLE as PICTURE_UNREADABLE,
+};
 
 /// What an edit does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -91,6 +107,11 @@ pub enum Action {
     InsertRowBefore,
     /// The table row that holds `find` is taken out.
     DeleteRow,
+    /// XLSX: the cell at the address `find` (`B3`, `견적!B3`) gets the value `replace`.
+    SetCell,
+    /// The picture part `find` (`word/media/image1.png`, as `pictures` lists it) is replaced by the
+    /// picture file at the path `replace`.
+    ReplacePicture,
 }
 
 impl Action {
@@ -100,6 +121,11 @@ impl Action {
 
     fn on_rows(self) -> bool {
         matches!(self, Action::InsertRowAfter | Action::InsertRowBefore | Action::DeleteRow)
+    }
+
+    /// Paragraphs and table rows: what a document, a slide deck has — a workbook has cells.
+    fn structural(self) -> bool {
+        self.on_rows() || matches!(self, Action::InsertAfter | Action::InsertBefore | Action::DeleteParagraph)
     }
 }
 
@@ -181,6 +207,21 @@ pub struct EditReport {
     /// Edits that cannot be made as asked (`preview` lists them; `apply` refuses with the first).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub problems: Vec<Problem>,
+    /// What the user should know about an edit that is made all the same.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<Note>,
+}
+
+/// A remark on an edit that is made: a picture whose proportions differ from the one it replaces, the
+/// number of formula results taken out to be computed again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Note {
+    /// Which edit of the request (0-based).
+    pub edit: usize,
+    pub code: String,
+    /// The number the note is about (0 when it has none).
+    #[serde(default)]
+    pub count: u32,
 }
 
 impl EditReport {
@@ -191,7 +232,18 @@ impl EditReport {
 
 /// Whether a file of this kind can be edited in place.
 pub fn supported(kind: SourceKind) -> bool {
-    matches!(kind, SourceKind::Hwpx | SourceKind::Docx | SourceKind::Pptx)
+    matches!(kind, SourceKind::Hwpx | SourceKind::Docx | SourceKind::Pptx | SourceKind::Xlsx)
+}
+
+/// The pictures of a document's own file: what `Action::ReplacePicture` can name.
+pub fn pictures(src: &Path, kind: SourceKind) -> Result<Vec<Picture>> {
+    if !supported(kind) {
+        return Err(CoreError::Invalid(UNSUPPORTED.into()));
+    }
+    let file = File::open(src).map_err(|e| CoreError::io(src, e))?;
+    let mut archive = zip::ZipArchive::new(BufReader::new(file))
+        .map_err(|e| CoreError::Convert(format!("not a zip archive: {e}")))?;
+    pictures::list(&mut archive, kind)
 }
 
 /// What `apply` would change, without writing anything.
@@ -424,6 +476,13 @@ fn text_part(kind: SourceKind, name: &str) -> Option<(u32, Option<u32>)> {
         }
         SourceKind::Hwpx => numbered("contents/section").map(|n| (n, Some(n + 1))),
         SourceKind::Pptx => numbered("ppt/slides/slide").map(|n| (n, Some(n))),
+        // The strings every sheet shares first, then the sheets (their inline strings and cells), and
+        // the workbook itself (it is told to compute again when cells change).
+        SourceKind::Xlsx => match lower.as_str() {
+            "xl/sharedstrings.xml" => Some((0, None)),
+            "xl/workbook.xml" => Some((100_000, None)),
+            _ => numbered("xl/worksheets/sheet").map(|n| (1 + n.min(99_998), None)),
+        },
         _ => None,
     }
 }
@@ -446,6 +505,11 @@ fn check(kind: SourceKind, edits: &[Replacement]) -> Result<()> {
     for e in edits {
         if e.find.trim().is_empty() {
             return Err(CoreError::Invalid(EMPTY_FIND.into()));
+        }
+        // Paragraphs and table rows are a document's, cells a workbook's.
+        let workbook = kind == SourceKind::Xlsx;
+        if (workbook && e.action.structural()) || (!workbook && e.action == Action::SetCell) {
+            return Err(CoreError::Invalid(ACTION_UNSUPPORTED.into()));
         }
         // A paragraph is one line of text here: a line break is markup, not a character.
         let broken = |t: &str| t.contains(['\n', '\r']);
@@ -495,20 +559,66 @@ fn run(src: &Path, kind: SourceKind, edits: &[Replacement], out: Option<&Path>) 
 
     // -- plan: one replacement after the other, each over the text the ones before it left
     let mut report = EditReport { found: vec![0; edits.len()], replaced: vec![0; edits.len()], ..Default::default() };
+    // XLSX: the sheets by name, the date system and styles; the cells that got a new value.
+    let workbook = if kind == SourceKind::Xlsx { Some(cells::workbook(&mut archive)?) } else { None };
+    let mut set_cells: Vec<(usize, u32, u32)> = Vec::new();
+    // The picture parts that get new bytes.
+    let mut swapped: HashMap<String, Vec<u8>> = HashMap::new();
     for (n, edit) in edits.iter().enumerate() {
-        if !edit.action.is_replace() {
-            if let Err(code) = structure(&mut parts, n, edit, kind, &mut report) {
-                report.problems.push(Problem { edit: n, code: code.to_string() });
+        let done: std::result::Result<(), &'static str> = match edit.action {
+            Action::Replace => {
+                let mut seen = 0u32;
+                for part in &mut parts {
+                    part.replace(n, edit, &mut seen, &mut report);
+                }
+                report.found[n] = seen;
+                Ok(())
             }
-            continue;
+            Action::SetCell => match &workbook {
+                Some(wb) => set_cell(&mut parts, wb, n, edit, &mut report).map(|at| set_cells.push(at)),
+                None => Err(ACTION_UNSUPPORTED),
+            },
+            Action::ReplacePicture => pictures::swap(&mut archive, kind, &edit.find, Path::new(edit.replace.trim()))
+                .map(|swap| {
+                    report.found[n] = 1;
+                    report.replaced[n] = 1;
+                    let part = edit.find.trim().to_string();
+                    if swap.stretched {
+                        report.notes.push(Note { edit: n, code: PICTURE_RATIO.into(), count: 0 });
+                    }
+                    report.changes.push(Change {
+                        part: part.clone(),
+                        unit: None,
+                        edit: n,
+                        action: edit.action,
+                        before: swap.before,
+                        after: swap.after,
+                    });
+                    swapped.insert(part.to_ascii_lowercase(), swap.bytes);
+                }),
+            _ => structure(&mut parts, n, edit, kind, &mut report),
+        };
+        if let Err(code) = done {
+            report.problems.push(Problem { edit: n, code: code.to_string() });
         }
-        let mut seen = 0u32;
-        for part in &mut parts {
-            part.replace(n, edit, &mut seen, &mut report);
+    }
+    // XLSX: formulas that read a changed cell lose their stored result, and the workbook is computed
+    // again when it is opened.
+    if let Some(wb) = &workbook {
+        let cleared = recompute(&mut parts, wb, &set_cells);
+        if cleared > 0 {
+            let edit = edits.iter().position(|e| e.action == Action::SetCell).unwrap_or(0);
+            report.notes.push(Note { edit, code: FORMULAS_CLEARED.into(), count: cleared });
         }
-        report.found[n] = seen;
     }
     report.parts = parts.iter().filter(|p| p.changed()).map(|p| p.name.clone()).collect();
+    let swapped_parts: Vec<String> = edits
+        .iter()
+        .enumerate()
+        .filter(|(n, e)| e.action == Action::ReplacePicture && report.replaced[*n] > 0)
+        .map(|(_, e)| e.find.trim().to_string())
+        .collect();
+    report.parts.extend(swapped_parts);
 
     // -- write: the changed parts from their events, everything else as it is
     let Some(out) = out else { return Ok(report) };
@@ -523,7 +633,7 @@ fn run(src: &Path, kind: SourceKind, edits: &[Replacement], out: Option<&Path>) 
     for i in 0..archive.len() {
         let entry = archive.by_index(i).map_err(|e| CoreError::Convert(format!("zip entry {i}: {e}")))?;
         let name = entry.name().map(|n| n.into_owned()).unwrap_or_default();
-        match rewritten.get(name.as_str()) {
+        match rewritten.get(name.as_str()).or_else(|| swapped.get(&name.to_ascii_lowercase())) {
             Some(bytes) => {
                 let opts = entry.options();
                 drop(entry);
@@ -535,6 +645,77 @@ fn run(src: &Path, kind: SourceKind, edits: &[Replacement], out: Option<&Path>) 
     }
     writer.finish().map_err(|e| CoreError::Convert(e.to_string()))?;
     Ok(report)
+}
+
+/// One `SetCell` edit: resolves the address and sets the value. Returns the cell that changed
+/// (part index, column, row).
+fn set_cell(
+    parts: &mut [Part],
+    wb: &cells::Workbook,
+    n: usize,
+    edit: &Replacement,
+    report: &mut EditReport,
+) -> std::result::Result<(usize, u32, u32), &'static str> {
+    let (sheet, col, row) = cells::parse_address(&edit.find).ok_or(CELL_ADDRESS)?;
+    let (name, part_name) = match &sheet {
+        Some(wanted) => wb.sheets.iter().find(|(name, _)| name.to_lowercase() == wanted.to_lowercase()),
+        None => wb.sheets.first(),
+    }
+    .ok_or(CELL_ADDRESS)?;
+    let at = parts.iter().position(|p| p.name.to_ascii_lowercase() == *part_name).ok_or(CELL_ADDRESS)?;
+    report.found[n] = 1;
+    // The texts of the shared strings, by their index.
+    let shared: Vec<String> = parts
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case("xl/sharedStrings.xml"))
+        .map(|p| (0..p.paragraphs.len()).map(|i| p.text_of(i)).collect())
+        .unwrap_or_default();
+    let (before, after) = parts[at].set_cell(col, row, &edit.replace, wb, &shared)?;
+    report.replaced[n] = 1;
+    let address =
+        format!("{name}!{}", edit.find.trim().rsplit('!').next().unwrap_or_default().replace('$', "").to_uppercase());
+    if report.changes.len() < MAX_CHANGES {
+        report.changes.push(Change {
+            part: parts[at].name.clone(),
+            unit: None,
+            edit: n,
+            action: Action::SetCell,
+            before: format!("{address} = {before}"),
+            after: format!("{address} = {after}"),
+        });
+    }
+    Ok((at, col, row))
+}
+
+/// XLSX, after the edits: the stored results of the formulas that read a changed cell — one that got
+/// a new value, or one whose text was replaced — are taken out, and the workbook is told to compute
+/// everything when it is opened. Returns how many results were taken out.
+fn recompute(parts: &mut [Part], wb: &cells::Workbook, set: &[(usize, u32, u32)]) -> u32 {
+    let sheet_of: HashMap<usize, String> = wb
+        .sheets
+        .iter()
+        .filter_map(|(name, part)| {
+            Some((parts.iter().position(|p| p.name.to_ascii_lowercase() == *part)?, name.clone()))
+        })
+        .collect();
+    let mut changed: Vec<(usize, u32, u32)> = set.to_vec();
+    // Cells whose text is a shared string that was edited, or an inline string that was.
+    let edited_strings: HashSet<usize> = parts
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case("xl/sharedStrings.xml"))
+        .map(|p| (0..p.paragraphs.len()).filter(|i| p.paragraphs[*i].changed).collect())
+        .unwrap_or_default();
+    for &p in sheet_of.keys() {
+        changed.extend(parts[p].cells_with_changed_text(&edited_strings).into_iter().map(|(col, row)| (p, col, row)));
+    }
+    if changed.is_empty() {
+        return 0;
+    }
+    let cleared = cells::clear_dependents(parts, &sheet_of, &changed);
+    if let Some(book) = parts.iter_mut().find(|p| p.name.eq_ignore_ascii_case("xl/workbook.xml")) {
+        cells::recalculate_on_load(book);
+    }
+    cleared
 }
 
 // ---------------------------------------------------------------------------
@@ -827,6 +1008,8 @@ struct Part {
     recount: HashMap<usize, i64>,
     /// PPTX: what a frame's height (`a:ext cy`, by event index) grows by.
     grown: HashMap<usize, i64>,
+    /// Attributes a start tag (by event index) is written with instead of its own.
+    attributes: HashMap<usize, Vec<(String, String)>>,
 }
 
 /// An open element while a part is read: what it means for the text inside it.
@@ -844,6 +1027,8 @@ enum Open {
     /// PPTX `p:graphicFrame` and its `p:xfrm`.
     Frame,
     Xfrm,
+    /// XLSX `rPh`: how a string is read aloud — not its text.
+    Phonetic,
     Other,
 }
 
@@ -923,6 +1108,7 @@ impl Part {
             cut: Vec::new(),
             recount: HashMap::new(),
             grown: HashMap::new(),
+            attributes: HashMap::new(),
         };
 
         let mut stack: Vec<Open> = Vec::new();
@@ -1015,8 +1201,14 @@ impl Part {
                 part.tables[t].merged = true;
             }
             let boxed = stack.contains(&Open::Alternate);
+            // The unit a text is matched in: a paragraph — in a workbook, one string (a shared one,
+            // or one written into its cell).
+            let unit = match kind {
+                SourceKind::Xlsx => matches!(name, "si" | "is"),
+                _ => name == "p",
+            };
             let open = match name {
-                "p" => {
+                _ if unit => {
                     part.paragraphs.push(Paragraph {
                         nodes: Vec::new(),
                         caches: Vec::new(),
@@ -1034,7 +1226,8 @@ impl Part {
                     });
                     Open::Paragraph(part.paragraphs.len() - 1)
                 }
-                "t" => Open::Text(i),
+                "rPh" if kind == SourceKind::Xlsx => Open::Phonetic,
+                "t" if !stack.contains(&Open::Phonetic) => Open::Text(i),
                 "linesegarray" => Open::Cache(i),
                 "Fallback" => Open::Fallback,
                 "AlternateContent" => Open::Alternate,
@@ -1109,7 +1302,7 @@ impl Part {
 
     /// Paragraphs or rows were added or taken out.
     fn structural(&self) -> bool {
-        !(self.before.is_empty() && self.after.is_empty() && self.cut.is_empty())
+        !(self.before.is_empty() && self.after.is_empty() && self.cut.is_empty() && self.attributes.is_empty())
     }
 
     fn text_of(&self, p: usize) -> String {
@@ -1580,7 +1773,7 @@ impl Part {
         }
         // DOCX keeps the blanks at the ends of a `<w:t>` only when it is told to.
         let preserve: HashSet<usize> = match kind {
-            SourceKind::Docx => new_text
+            SourceKind::Docx | SourceKind::Xlsx => new_text
                 .values()
                 .filter(|n| n.text.starts_with(char::is_whitespace) || n.text.ends_with(char::is_whitespace))
                 .map(|n| n.element)
@@ -1630,6 +1823,17 @@ struct Output<'a> {
 impl Output<'_> {
     /// Writes one event; `at` is its index in the part (`None` for an added one).
     fn emit(&mut self, ev: &Event<'_>, at: Option<usize>) -> std::io::Result<()> {
+        // A start tag that is written with other attributes than its own.
+        if let Some(set) = at.and_then(|i| self.part.attributes.get(&i)) {
+            let rewrite = |tag: &BytesStart<'_>| {
+                set.iter().fold(tag.to_owned(), |tag, (key, value)| with_attribute(&tag, key, value))
+            };
+            match ev {
+                Event::Start(tag) => return self.writer.write_event(Event::Start(rewrite(tag))),
+                Event::Empty(tag) => return self.writer.write_event(Event::Empty(rewrite(tag))),
+                _ => {}
+            }
+        }
         match ev {
             Event::Start(s) => match local(s.name().as_ref()) {
                 "tbl" => {
@@ -1773,7 +1977,7 @@ fn structure(
         Action::InsertRowAfter => part.insert_row(at, &edit.row_cells(), false, kind)?,
         Action::InsertRowBefore => part.insert_row(at, &edit.row_cells(), true, kind)?,
         Action::DeleteRow => part.delete_row(at, kind)?,
-        Action::Replace => return Ok(()),
+        Action::Replace | Action::SetCell | Action::ReplacePicture => return Ok(()),
     };
     report.replaced[n] = 1;
     if report.changes.len() < MAX_CHANGES {
@@ -2007,7 +2211,9 @@ mod tests {
         // Nothing found is not an error: the report says so.
         let none = preview(&ok, SourceKind::Docx, &one("없는 글", "x")).unwrap();
         assert_eq!((none.total(), none.parts.len()), (0, 0));
-        assert!(supported(SourceKind::Hwpx) && !supported(SourceKind::Hwp) && !supported(SourceKind::Xlsx));
+        // The open formats; the binary ones of the same programs are read, not edited.
+        assert!(supported(SourceKind::Hwpx) && supported(SourceKind::Xlsx));
+        assert!(!supported(SourceKind::Hwp) && !supported(SourceKind::Xls) && !supported(SourceKind::Pdf));
     }
 
     /// The edited copy becomes the latest edition: a new file next to the original (which keeps its
@@ -2638,5 +2844,321 @@ mod tests {
         assert!(!far.is_empty() && far[0] == 0, "{far:?}");
         // A short document goes whole.
         assert_eq!(shown_paragraphs(&texts[..5], "아무 말"), vec![0, 1, 2, 3, 4]);
+    }
+
+    // -- step 4: pictures and workbook cells --------------------------------------------------------
+
+    fn picture(width: u32, height: u32, format: image::ImageFormat) -> Vec<u8> {
+        let image =
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(width, height, image::Rgb([200, 30, 30])));
+        let mut bytes = Vec::new();
+        image.write_to(&mut std::io::Cursor::new(&mut bytes), format).unwrap();
+        bytes
+    }
+
+    fn package_bytes(path: &Path, parts: &[(&str, &[u8])]) {
+        use zip::write::SimpleFileOptions;
+        let mut z = zip::ZipWriter::new(File::create(path).unwrap());
+        for (name, data) in parts {
+            z.start_file(*name, SimpleFileOptions::default()).unwrap();
+            z.write_all(data).unwrap();
+        }
+        z.finish().unwrap();
+    }
+
+    fn bytes_of(path: &Path, name: &str) -> Vec<u8> {
+        let mut archive = zip::ZipArchive::new(BufReader::new(File::open(path).unwrap())).unwrap();
+        let mut bytes = Vec::new();
+        archive.by_name(name).unwrap().read_to_end(&mut bytes).unwrap();
+        bytes
+    }
+
+    /// A picture is replaced by another one: the part keeps its name and its format, the frame and
+    /// every other part stay the same bytes.
+    #[test]
+    fn a_picture_is_replaced_in_its_frame() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("report.docx");
+        let body = format!(
+            r#"<w:document {W} xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:t>구성도</w:t></w:r></w:p><w:p><w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="3600000" cy="1800000"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:blipFill><a:blip r:embed="rId1"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p></w:body></w:document>"#
+        );
+        let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/media/image1.png" TargetMode="External"/></Relationships>"#;
+        let old = picture(40, 20, image::ImageFormat::Png);
+        package_bytes(
+            &src,
+            &[
+                ("word/document.xml", body.as_bytes()),
+                ("word/_rels/document.xml.rels", rels.as_bytes()),
+                ("word/media/image1.png", &old),
+                ("word/media/image2.emf", b"not a picture this reader can read"),
+            ],
+        );
+
+        // What there is to replace.
+        let listed = pictures(&src, SourceKind::Docx).unwrap();
+        assert_eq!(listed.len(), 2, "{listed:?}");
+        let first = &listed[0];
+        assert_eq!(
+            (first.part.as_str(), first.format.as_str(), first.width, first.height),
+            ("word/media/image1.png", "png", 40, 20)
+        );
+        assert!(first.replaceable && first.bytes == old.len() as u64);
+        assert_eq!(first.used_in, vec!["word/document.xml".to_string()]);
+        assert!(first.thumbnail.as_deref().is_some_and(|t| t.starts_with("data:image/png;base64,")), "{first:?}");
+        let second = &listed[1];
+        assert_eq!(
+            (second.format.as_str(), second.width, second.replaceable, second.thumbnail.is_none()),
+            ("emf", 0, false, true)
+        );
+        assert!(matches!(pictures(&src, SourceKind::Pdf), Err(CoreError::Invalid(c)) if c == UNSUPPORTED));
+
+        // A JPEG takes the place of the PNG: it is written as a PNG, under the same name.
+        let jpeg = dir.path().join("새 구성도.jpg");
+        std::fs::write(&jpeg, picture(80, 40, image::ImageFormat::Jpeg)).unwrap();
+        let swap = |part: &str, file: &Path| Replacement {
+            action: Action::ReplacePicture,
+            ..Replacement::text(part, file.to_string_lossy())
+        };
+        let out = dir.path().join("report (수정).docx");
+        let r = apply(&src, SourceKind::Docx, &[swap("word/media/image1.png", &jpeg)], &out).unwrap();
+        assert_eq!((r.found.clone(), r.replaced.clone(), r.total()), (vec![1], vec![1], 1));
+        assert_eq!(r.parts, vec!["word/media/image1.png".to_string()]);
+        assert_eq!(
+            (r.changes[0].action, r.changes[0].before.as_str(), r.changes[0].after.as_str()),
+            (Action::ReplacePicture, "40×20 PNG", "80×40 JPEG → PNG")
+        );
+        assert!(r.notes.is_empty() && r.problems.is_empty(), "{r:?}");
+        let written = bytes_of(&out, "word/media/image1.png");
+        assert_eq!(image::guess_format(&written).unwrap(), image::ImageFormat::Png);
+        let decoded = image::load_from_memory(&written).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (80, 40));
+        // The frame, the relationships and the other picture are the same bytes.
+        for name in ["word/document.xml", "word/_rels/document.xml.rels", "word/media/image2.emf"] {
+            assert_eq!(bytes_of(&out, name), bytes_of(&src, name), "{name}");
+        }
+
+        // The same format goes in as it is; other proportions are said (the frame keeps the old ones).
+        let square = dir.path().join("square.png");
+        let square_bytes = picture(30, 30, image::ImageFormat::Png);
+        std::fs::write(&square, &square_bytes).unwrap();
+        let r = apply(&src, SourceKind::Docx, &[swap("word/media/image1.png", &square)], &out).unwrap();
+        assert_eq!(r.changes[0].after, "30×30 PNG");
+        assert_eq!(r.notes, vec![Note { edit: 0, code: PICTURE_RATIO.into(), count: 0 }]);
+        assert_eq!(bytes_of(&out, "word/media/image1.png"), square_bytes);
+
+        // What cannot be done says why, and nothing is written.
+        let text_file = dir.path().join("notes.txt");
+        std::fs::write(&text_file, "그림이 아님").unwrap();
+        let code = |edit: Replacement| {
+            let r = preview(&src, SourceKind::Docx, &[edit]).unwrap();
+            assert_eq!(r.replaced, vec![0]);
+            r.problems.first().map(|p| p.code.clone()).unwrap_or_default()
+        };
+        assert_eq!(code(swap("word/media/image9.png", &jpeg)), PICTURE_MISSING);
+        assert_eq!(code(swap("word/document.xml", &jpeg)), PICTURE_MISSING);
+        assert_eq!(code(swap("word/media/image2.emf", &jpeg)), PICTURE_FORMAT);
+        assert_eq!(code(swap("word/media/image1.png", &text_file)), PICTURE_UNREADABLE);
+        assert_eq!(code(swap("word/media/image1.png", &dir.path().join("없는 파일.png"))), PICTURE_UNREADABLE);
+        let gone = dir.path().join("none.docx");
+        assert!(matches!(
+            apply(&src, SourceKind::Docx, &[swap("word/media/image2.emf", &jpeg)], &gone),
+            Err(CoreError::Invalid(c)) if c == PICTURE_FORMAT
+        ));
+        assert!(!gone.exists());
+
+        // HWPX keeps its pictures in `BinData/`; a slide's picture names every part that shows it.
+        let hwpx = dir.path().join("a.hwpx");
+        package_bytes(&hwpx, &[("Contents/section0.xml", b"<hs:sec/>"), ("BinData/image1.png", &old)]);
+        let listed = pictures(&hwpx, SourceKind::Hwpx).unwrap();
+        assert_eq!((listed.len(), listed[0].part.as_str(), listed[0].used_in.len()), (1, "BinData/image1.png", 0));
+        let pptx = dir.path().join("a.pptx");
+        let uses = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Target="../media/image1.png"/></Relationships>"#;
+        package_bytes(
+            &pptx,
+            &[
+                ("ppt/slides/slide1.xml", b"<p:sld/>"),
+                ("ppt/slides/_rels/slide1.xml.rels", uses.as_bytes()),
+                ("ppt/slideLayouts/_rels/slideLayout2.xml.rels", uses.as_bytes()),
+                ("ppt/media/image1.png", &old),
+            ],
+        );
+        let listed = pictures(&pptx, SourceKind::Pptx).unwrap();
+        assert_eq!(
+            listed[0].used_in,
+            vec!["ppt/slideLayouts/slideLayout2.xml".to_string(), "ppt/slides/slide1.xml".to_string()]
+        );
+    }
+
+    const X: &str = r#"xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
+
+    /// Two sheets: an estimate with prices, quantities, amounts (formulas), a total and a delivery
+    /// date; a summary that reads the estimate's total, a name, and numbers of its own.
+    fn workbook(dir: &Path) -> std::path::PathBuf {
+        let strings = ["품목", "단가", "수량", "금액", "노트북", "합계", "납기"]
+            .iter()
+            .map(|s| format!("<si><t>{s}</t></si>"))
+            .collect::<String>();
+        let sheet1 = format!(
+            r#"<worksheet {X}><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="s"><v>2</v></c><c r="D1" t="s"><v>3</v></c></row><row r="2"><c r="A2" t="s"><v>4</v></c><c r="B2" s="1"><v>1250000</v></c><c r="C2"><v>4</v></c><c r="D2" s="1"><f>B2*C2</f><v>5000000</v></c></row><row r="3"><c r="A3" t="inlineStr"><is><t>모니터</t></is></c><c r="B3" s="1"><v>350000</v></c><c r="C3"><v>2</v></c><c r="D3" s="1"><f>B3*C3</f><v>700000</v></c></row><row r="5"><c r="A5" t="s"><v>5</v></c><c r="D5" s="1"><f>SUM(D2:D3)</f><v>5700000</v></c></row><row r="6"><c r="A6" t="s"><v>6</v></c><c r="B6" s="2"><v>46082</v></c></row></sheetData></worksheet>"#
+        );
+        let sheet2 = format!(
+            r#"<worksheet {X}><sheetData><row r="1"><c r="A1"><f>견적!D5*1.1</f><v>6270000</v></c></row><row r="2"><c r="A2"><f>SUM(금액)</f><v>1</v></c></row><row r="3"><c r="A3"><v>7</v></c></row><row r="4"><c r="A4"><f>A3*2</f><v>14</v></c></row></sheetData></worksheet>"#
+        );
+        let path = dir.join("estimate.xlsx");
+        package(
+            &path,
+            &[
+                (
+                    "xl/workbook.xml",
+                    &format!(
+                        r#"<workbook {X}><sheets><sheet name="견적" sheetId="1" r:id="rId1"/><sheet name="요약" sheetId="2" r:id="rId2"/></sheets></workbook>"#
+                    ),
+                ),
+                (
+                    "xl/_rels/workbook.xml.rels",
+                    r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Target="worksheets/sheet2.xml"/></Relationships>"#,
+                ),
+                ("xl/sharedStrings.xml", &format!(r#"<sst {X} count="7" uniqueCount="7">{strings}</sst>"#)),
+                (
+                    "xl/styles.xml",
+                    &format!(
+                        r#"<styleSheet {X}><cellXfs count="3"><xf numFmtId="0"/><xf numFmtId="3"/><xf numFmtId="14"/></cellXfs></styleSheet>"#
+                    ),
+                ),
+                ("xl/worksheets/sheet1.xml", &sheet1),
+                ("xl/worksheets/sheet2.xml", &sheet2),
+            ],
+        );
+        path
+    }
+
+    /// A cell gets a new value by its address and keeps its style; a date goes into a date cell as a
+    /// date; formulas that read a changed cell are computed again by the spreadsheet program.
+    #[test]
+    fn workbook_cells_get_new_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = workbook(dir.path());
+        let out = dir.path().join("estimate (수정).xlsx");
+        let cell = |address: &str, value: &str| edit(Action::SetCell, address, value);
+        let edits = vec![
+            cell("B2", "1,300,000"),
+            cell("견적!b6", "2026-12-31"),
+            // A cell that was not there, in a row that was; and one in a row that was not.
+            cell("요약!C3", "확인 필요"),
+            cell("'견적'!A9", "비고"),
+        ];
+        let r = apply(&src, SourceKind::Xlsx, &edits, &out).unwrap();
+        assert_eq!((r.found.clone(), r.replaced.clone()), (vec![1; 4], vec![1; 4]), "{r:?}");
+        assert_eq!(
+            r.changes.iter().map(|c| (c.action, c.before.as_str(), c.after.as_str())).collect::<Vec<_>>(),
+            vec![
+                (Action::SetCell, "견적!B2 = 1250000", "견적!B2 = 1300000"),
+                (Action::SetCell, "견적!B6 = 2026-03-01", "견적!B6 = 2026-12-31"),
+                (Action::SetCell, "요약!C3 = ", "요약!C3 = 확인 필요"),
+                (Action::SetCell, "견적!A9 = ", "견적!A9 = 비고"),
+            ]
+        );
+        // D2, D5, 요약!A1 read B2 (the last two through other formulas); 요약!A2 reads a name.
+        assert_eq!(r.notes, vec![Note { edit: 0, code: FORMULAS_CLEARED.into(), count: 4 }]);
+        let sheet1 = part_of(&out, "xl/worksheets/sheet1.xml");
+        // The style stays, the value is a number; the date is the day's number in its date style.
+        assert!(
+            sheet1.contains(
+                r#"<c r="B2" s="1"><v>1300000</v></c><c r="C2"><v>4</v></c><c r="D2" s="1"><f>B2*C2</f></c>"#
+            ),
+            "{sheet1}"
+        );
+        assert!(sheet1.contains(r#"<c r="B6" s="2"><v>46387</v></c>"#), "{sheet1}");
+        assert!(sheet1.contains(r#"<c r="D3" s="1"><f>B3*C3</f><v>700000</v></c>"#), "{sheet1}");
+        assert!(sheet1.contains(r#"<c r="D5" s="1"><f>SUM(D2:D3)</f></c>"#), "{sheet1}");
+        assert!(
+            sheet1.ends_with(
+                r#"<row r="9"><c r="A9" t="inlineStr"><is><t>비고</t></is></c></row></sheetData></worksheet>"#
+            ),
+            "{sheet1}"
+        );
+        let sheet2 = part_of(&out, "xl/worksheets/sheet2.xml");
+        assert!(
+            sheet2.contains(r#"<row r="1"><c r="A1"><f>견적!D5*1.1</f></c></row><row r="2"><c r="A2"><f>SUM(금액)</f></c></row><row r="3"><c r="A3"><v>7</v></c><c r="C3" t="inlineStr"><is><t>확인 필요</t></is></c></row><row r="4"><c r="A4"><f>A3*2</f><v>14</v></c></row>"#),
+            "{sheet2}"
+        );
+        // The workbook is computed in full when it is opened; the strings and styles are untouched.
+        assert!(part_of(&out, "xl/workbook.xml").contains(r#"</sheets><calcPr fullCalcOnLoad="1"/></workbook>"#));
+        for name in ["xl/sharedStrings.xml", "xl/styles.xml", "xl/_rels/workbook.xml.rels"] {
+            assert_eq!(part_of(&out, name), part_of(&src, name), "{name}");
+        }
+        // The app's own reader: the new values, and no result that was computed before the change.
+        let text = convert::read_document(&out, SourceKind::Xlsx).unwrap().text();
+        for needle in ["1300000", "2026-12-31", "확인 필요", "비고", "700000", "14"] {
+            assert!(text.contains(needle), "{needle}: {text}");
+        }
+        for stale in ["1250000", "5000000", "5700000", "6270000", "2026-03-01"] {
+            assert!(!text.contains(stale), "{stale}: {text}");
+        }
+
+        // A cell with a formula, an address that names nothing: said, and nothing is written.
+        let code = |e: Replacement| {
+            let r = preview(&src, SourceKind::Xlsx, &[e]).unwrap();
+            r.problems.first().map(|p| p.code.clone()).unwrap_or_default()
+        };
+        assert_eq!(code(cell("D2", "0")), CELL_FORMULA);
+        assert_eq!(code(cell("없는 시트!A1", "x")), CELL_ADDRESS);
+        assert_eq!(code(cell("3B", "x")), CELL_ADDRESS);
+        // An emptied cell keeps its style; a cell without a change of anything a formula reads clears nothing known …
+        let r = apply(&src, SourceKind::Xlsx, &[cell("C3", "")], &out).unwrap();
+        assert!(part_of(&out, "xl/worksheets/sheet1.xml")
+            .contains(r#"<c r="B3" s="1"><v>350000</v></c><c r="C3"/><c r="D3" s="1"><f>B3*C3</f></c>"#));
+        // … D3, D5, 요약!A1, and the formula that reads a name.
+        assert_eq!(r.notes[0].count, 4);
+        // Paragraphs and rows are a document's, cells a workbook's.
+        for (kind, e) in [
+            (SourceKind::Xlsx, edit(Action::InsertAfter, "노트북", "x")),
+            (SourceKind::Xlsx, edit(Action::DeleteRow, "노트북", "")),
+        ] {
+            assert!(matches!(preview(&src, kind, &[e]), Err(CoreError::Invalid(c)) if c == ACTION_UNSUPPORTED));
+        }
+        let docx = structured_docx(dir.path(), false);
+        assert!(
+            matches!(preview(&docx, SourceKind::Docx, &[cell("B2", "1")]), Err(CoreError::Invalid(c)) if c == ACTION_UNSUPPORTED)
+        );
+    }
+
+    /// Text in a workbook is replaced in its strings — the ones the cells share and the ones written
+    /// into a cell — and the cells that show it are counted as changed.
+    #[test]
+    fn workbook_text_is_replaced_in_its_strings() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = workbook(dir.path());
+        let out = dir.path().join("estimate (수정).xlsx");
+        let r = apply(
+            &src,
+            SourceKind::Xlsx,
+            &[Replacement::text("노트북", "노트북 15형"), Replacement::text("모니터", "모니터 27형 ")],
+            &out,
+        )
+        .unwrap();
+        assert_eq!((r.found.clone(), r.replaced.clone()), (vec![1, 1], vec![1, 1]), "{r:?}");
+        assert_eq!(
+            r.parts,
+            vec![
+                "xl/sharedStrings.xml".to_string(),
+                "xl/worksheets/sheet1.xml".to_string(),
+                "xl/worksheets/sheet2.xml".to_string(),
+                "xl/workbook.xml".to_string()
+            ]
+        );
+        assert!(part_of(&out, "xl/sharedStrings.xml").contains("<si><t>노트북 15형</t></si><si><t>합계</t></si>"));
+        assert!(part_of(&out, "xl/worksheets/sheet1.xml")
+            .contains(r#"<c r="A3" t="inlineStr"><is><t xml:space="preserve">모니터 27형 </t></is></c>"#));
+        // No formula reads A2 or A3 — but the one that reads a name may: its result goes.
+        assert_eq!(r.notes, vec![Note { edit: 0, code: FORMULAS_CLEARED.into(), count: 1 }]);
+        let sheet2 = part_of(&out, "xl/worksheets/sheet2.xml");
+        assert!(
+            sheet2.contains(r#"<c r="A1"><f>견적!D5*1.1</f><v>6270000</v></c>"#)
+                && sheet2.contains(r#"<c r="A2"><f>SUM(금액)</f></c>"#),
+            "{sheet2}"
+        );
+        let text = convert::read_document(&out, SourceKind::Xlsx).unwrap().text();
+        assert!(text.contains("노트북 15형") && text.contains("모니터 27형") && text.contains("5700000"), "{text}");
     }
 }
