@@ -798,6 +798,8 @@ function ruleSetRole(t: Text, ctx: PlanContext): Plan | null {
   const scope = docScope(t, ctx);
   if (!scope.doc_ids?.length) return clarify(tr(t.ko, "어떤 문서의 역할을 바꿀까요? 문서를 열거나 선택해 주세요.", "Which documents? Open or select them."), 0.5);
   const label = { work: tr(t.ko, "업무 문서", "work document"), knowledge: tr(t.ko, "참고 자료", "reference material"), form: tr(t.ko, "양식", "form") }[role];
+  // Reference material belongs to a project: the step opens "프로젝트에 넣기" on 참고 자료 (1.0.0, core `rules::document_edit_rule`).
+  if (role === "knowledge") return single({ op: "set_role", role }, 0.88, tr(t.ko, "문서를 프로젝트의 참고 자료로 넣는 화면을 엽니다", 'Open "Put in project" to add the documents as reference material'), scope);
   return single({ op: "set_role", role }, 0.88, tr(t.ko, `문서 ${scope.doc_ids.length}건을 ${label}(으)로 표시합니다`, `Mark ${scope.doc_ids.length} documents as ${label}`), scope);
 }
 
@@ -2327,6 +2329,9 @@ export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | nul
           const p = workspaceRelative(op.ref);
           if (p === null) issues.push(issue(at("ref"), "path_invalid", `'${op.ref}' is not a workspace folder`));
           else op.ref = p;
+        } else if (op.target === "assign") {
+          // The executor writes this target for a `set_role` step; a plan does not.
+          issues.push(issue(at("target"), "target_unknown", "open.target 'assign' is not a plan target (use set_role with role knowledge)"));
         } else if (!op.ref) issues.push(issue(at("ref"), "ref_empty", "open needs a reference"));
         break;
       case "job":
@@ -4383,7 +4388,7 @@ export function planPreview(plan: Plan, ctx: PlanContext): PlanPreview {
         break;
       }
       case "set_role":
-        summary = `${countLabel(docs.length, ko)} → ${op.role}`;
+        summary = op.role === "knowledge" ? (ko ? `${countLabel(docs.length, ko)}: 프로젝트의 참고 자료로 넣는 화면을 엽니다` : `${countLabel(docs.length, ko)}: opens "Put in project" on reference material`) : `${countLabel(docs.length, ko)} → ${op.role}`;
         payload = { documents: docs.length, role: op.role };
         break;
       case "manage_reference":
@@ -4970,6 +4975,15 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
     case "set_role": {
       const docs = workingSet(plan, imported);
       if (docs.length === 0) throw err("invalid", "no_documents");
+      if (op.role === "knowledge") {
+        // Core `exec`: nothing is changed here — the documents go to "프로젝트에 넣기", opened on 참고 자료.
+        out.ui_actions.push({ op: "open", target: "assign", ref: `reference:${idsOf(docs).join(",")}` });
+        out.documents.push(...idsOf(docs));
+        return {
+          summary: ko ? `${countLabel(docs.length, ko)}: 프로젝트의 참고 자료로 넣는 화면을 엽니다 — 넣을 프로젝트를 확인하세요` : `${countLabel(docs.length, ko)}: opening "Put in project" on reference material — confirm the projects there`,
+          payload: { documents: idsOf(docs), role: "knowledge", assign: true },
+        };
+      }
       await mockKnowledge("knowledge_set_role", { ids: idsOf(docs), role: op.role });
       out.documents.push(...idsOf(docs));
       return { summary: ko ? `${countLabel(docs.length, ko)} 역할 → ${op.role}` : `${countLabel(docs.length, ko)} → role ${op.role}`, payload: { documents: idsOf(docs), role: op.role } };

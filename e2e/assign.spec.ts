@@ -233,6 +233,67 @@ test.describe("1.0.0 프로젝트에 넣기: several projects", () => {
     await expect(page.getByTestId("toaster")).toContainText(tpl(ko.projects.put.done_piece, { name: "새봄 ERP", parts: tpl(ko.projects.put.done_added, { count: 2 }) }));
   });
 
+  // User decision 2026-11-16 (plan 4-3): "이 문서를 참고 자료로 지정해줘" does not flip a mark on the
+  // documents — it opens this dialog on 참고 자료, with the classifier's suggestion, and the user confirms.
+  test("어시스턴트 '참고 자료로 지정해줘': the selected documents open the dialog on 참고 자료; nothing changes before it is confirmed", async ({ page }) => {
+    test.setTimeout(120_000);
+    await freshApp(page);
+    await createWorkspace(page);
+    const names = ["한빛-포털-보안-지침.pdf", "한빛-포털-개발-표준.pdf"];
+    await importViaLibrary(page, names.map((n) => `D:\\규정\\${n}`), { autoLevel: "none" });
+    const [d1, d2] = [await docId(page, names[0]!), await docId(page, names[1]!)];
+    const hanbit = await newProject(page, "한빛 포털 구축", "한빛, 포털");
+    const saebom = await newProject(page, "새봄 ERP", "새봄, erp");
+
+    await page.getByTestId("nav-library").click();
+    await page.getByTestId(`doc-select-${d1}`).check();
+    await page.getByTestId(`doc-select-${d2}`).check();
+    await openAssistantScreen(page);
+    await page.getByTestId("assistant-scope").click();
+    await page.getByTestId("assistant-scope-selection").click();
+    await page.getByTestId("assistant-input").fill("이 문서를 참고 자료로 지정해줘");
+    await page.getByTestId("assistant-send").click();
+
+    // No confirmation card in between: the dialog is where the user decides.
+    const dialog = page.getByTestId("put-dialog");
+    await expect(dialog).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("page-projects")).toBeVisible();
+    await expect(dialog).toHaveAttribute("data-mode", "same");
+    await expect(dialog.getByTestId("put-kind-reference")).toBeChecked();
+    await expect(dialog.getByTestId("put-kind-work")).not.toBeChecked();
+    // Both documents name 한빛 포털: the suggestion ticks that project, and only that one.
+    await expect(dialog.getByTestId(`put-project-${hanbit}`)).toBeChecked({ timeout: 10_000 });
+    await expect(dialog.getByTestId(`put-project-${saebom}`)).not.toBeChecked();
+    // Closing the dialog leaves the documents as they were: work documents in no project.
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await page.getByTestId("nav-library").click();
+    await expect(page.getByTestId(`doc-project-${d1}`)).toHaveCount(0);
+    await expect(page.getByTestId(`doc-role-${d1}`)).toHaveCount(0);
+
+    // The card of the conversation says what was opened; asked again, the dialog is confirmed this time.
+    await openAssistantScreen(page);
+    const result = page.locator('[data-testid="assistant-card-result"]').last();
+    await expect(result).toHaveAttribute("data-result-status", "done");
+    await expect(result).toContainText(tpl(ko.planner.result.detail.set_role_assign, { documents: 2 }));
+    // (the visit to the projects screen made its project the assistant's scope: back to the selection)
+    await page.getByTestId("assistant-scope").click();
+    await page.getByTestId("assistant-scope-selection").click();
+    await page.getByTestId("assistant-input").fill("선택한 문서를 참고 자료로 지정해줘");
+    await page.getByTestId("assistant-send").click();
+    await expect(dialog).toBeVisible({ timeout: 15_000 });
+    await expect(dialog.getByTestId("put-kind-reference")).toBeChecked();
+    await expect(dialog.getByTestId(`put-project-${hanbit}`)).toBeChecked({ timeout: 10_000 });
+    await dialog.getByTestId("put-confirm").click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByTestId("toaster")).toContainText(tpl(ko.projects.put.done_reference, { name: "한빛 포털 구축", count: 2 }));
+    await page.getByTestId("nav-library").click();
+    await expect.poll(() => badgeNames(page, d1)).toEqual(["한빛 포털 구축"]);
+    await expect.poll(() => badgeNames(page, d2)).toEqual(["한빛 포털 구축"]);
+    // (the 참고 자료 badge of the card)
+    await expect(page.getByTestId(`doc-role-${d1}`)).toBeVisible();
+  });
+
   test("the sheet stays inside the window at UI 배율 150 %: it scrolls in its own box, header and document column stay in view", async ({ page }) => {
     test.setTimeout(240_000);
     await freshApp(page);

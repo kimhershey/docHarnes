@@ -275,7 +275,8 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
     case "edit_text":
       return joinParts([`'${truncate(op.find, 30)}' → '${truncate(op.replace, 30)}'`, op.original ? pt("original_file") : null, !op.original && op.pages && op.pages.length > 0 ? pt("pages", { count: op.pages.length }) : null]);
     case "set_role":
-      return pt(`role_${op.role}`);
+      // Reference material belongs to a project: the step opens "프로젝트에 넣기" on 참고 자료 (1.0.0).
+      return op.role === "knowledge" ? pt("role_knowledge_assign") : pt(`role_${op.role}`);
     case "manage_reference":
       return joinParts([pt(`reference_${op.action}`), op.group ?? (op.project ? pt("project_group", { name: projectName(op.project, ctx.context, t) }) : null), op.name ? `→ '${op.name}'` : null]);
     case "define_term":
@@ -410,6 +411,7 @@ export function agentStepDetail(op: OpKind, payload: unknown, t: TFunction): Age
       }
       return { text: dt("edit_text", { replaced: num(payload.replaced), documents: docs ?? 0 }) };
     case "set_role":
+      if (payload.assign === true) return { text: dt("set_role_assign", { documents: docs ?? 0 }) };
       return { text: dt("set_role", { documents: docs ?? 0, role: str(payload.role) ? t(`planner.params.role_${String(payload.role)}`) : "" }) };
     case "manage_reference": {
       const group = isRecord(payload.group) ? str(payload.group.name) : null;
@@ -888,19 +890,28 @@ export function isPlanExecution(v: unknown): v is PlanExecution {
 /**
  * The outcome of each step's UI action, by step index. The executor leaves UI ops to the UI: it lists
  * them in `ui_actions` in step order and marks their steps `ui` (`skipped` for clarify / noop), so the
- * k-th result belongs to the k-th such step.
+ * results belong to those steps in order — except the actions a core step added on its own.
  */
 export function uiResultsByStep(execution: PlanExecution, results: UiOpResult[] | null | undefined): Map<number, UiOpResult> {
   const out = new Map<number, UiOpResult>();
   if (!results || results.length === 0) return out;
   let k = 0;
   for (const step of execution.steps) {
-    const result = results[k];
-    if (!result) break;
+    if (k >= results.length) break;
     const handedOver = step.status === "ui" || (step.status === "skipped" && (step.op === "clarify" || step.op === "noop"));
-    if (!handedOver || result.op !== step.op) continue;
-    out.set(step.index, result);
-    k += 1;
+    if (!handedOver) continue;
+    // An action a core step added itself (it opens a screen: the review queue, "프로젝트에 넣기") stands
+    // between the results of the UI steps: it belongs to no `ui` step and is passed over. The results
+    // are in the order of `ui_actions`; `open` → `assign` is only ever written by the executor.
+    const added = (i: number) => {
+      const action = execution.ui_actions[i];
+      return action?.op === "open" && action.target === "assign";
+    };
+    let at = k;
+    while (at < results.length && (added(at) || results[at]!.op !== step.op)) at += 1;
+    if (at >= results.length) continue;
+    out.set(step.index, results[at]!);
+    k = at + 1;
   }
   return out;
 }

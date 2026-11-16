@@ -671,6 +671,11 @@ pub enum OpenTarget {
     Screen,
     /// 0.8.1: a project's page (`ref` = project id or name).
     Project,
+    /// 1.0.0 (user decision 2026-11-16): the "프로젝트에 넣기" dialog for the documents of a step —
+    /// `ref` = `reference:<id>,<id>…` (the dialog opens on 참고 자료, with the classifier's
+    /// suggestions). Written by the executor (`set_role` to reference material), never by a
+    /// planner: the model's grammar does not offer it and a plan that holds it is refused.
+    Assign,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1478,6 +1483,9 @@ impl Op {
             // 0.6.0
             // 1.0.0 §2-1: the edited copy of the original is a new file next to it.
             Op::EditText { original: Some(true), .. } => SideEffect::FileCreate,
+            // "참고 자료로 지정": the documents are handed to the "프로젝트에 넣기" dialog — nothing
+            // changes before the user confirms there.
+            Op::SetRole { role: RoleParam::Knowledge } => SideEffect::None,
             Op::Rotate { .. }
             | Op::Rerender { .. }
             | Op::SetTitle { .. }

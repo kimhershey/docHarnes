@@ -637,6 +637,12 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
                             format!("'{reference}' is not a workspace folder"),
                         )),
                     },
+                    // The executor writes this target for a `set_role` step; a plan does not.
+                    OpenTarget::Assign => issues.push(PlanIssue::error(
+                        at("target"),
+                        "target_unknown",
+                        "open.target 'assign' is not a plan target (use set_role with role knowledge)",
+                    )),
                     _ => {
                         if reference.is_empty() {
                             issues.push(PlanIssue::error(at("ref"), "ref_empty", "open needs a reference"));

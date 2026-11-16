@@ -554,6 +554,40 @@ describe("planner (rules, validate, guard)", () => {
     const again = await planner.runPlan(withScope([payload.edition.doc_id]), ctx, null, () => undefined);
     expect(again.steps[0]).toMatchObject({ status: "failed", error: "edit_nothing_found" });
   });
+
+  // 1.0.0, user decision 2026-11-16 (plan 4-3): "참고 자료로 지정해줘" opens "프로젝트에 넣기" on 참고 자료 —
+  // `rules::document_edit_rule`, `exec` (`set_role` knowledge → `open` / `assign`), `validate`.
+  it("documents asked to become reference material are handed to the put-in-project dialog; nothing changes before that", async () => {
+    const ids = await importDocs(["보안지침.pdf", "개발계약서.docx"]);
+    const [a, b] = [ids["보안지침.pdf"]!, ids["개발계약서.docx"]!];
+    const ctx = planner.buildContext({ selected_doc_ids: [a, b] });
+    for (const text of ["이 문서를 참고 자료로 지정해줘", "선택한 문서를 참고 자료로 표시", "mark these as reference material"]) {
+      const planned = planner.planText(text, ctx);
+      expect(planned.plan.operations, text).toEqual([{ op: "set_role", role: "knowledge" }]);
+      expect(planned.plan.requires_confirmation, text).toBe(false);
+      expect(planned.issues.filter((i) => i.blocking), text).toEqual([]);
+    }
+    const planned = planner.planText("이 문서를 참고 자료로 지정해줘", ctx);
+    expect(planned.plan.summary).toBe("문서를 프로젝트의 참고 자료로 넣는 화면을 엽니다");
+    expect(planner.planPreview(planned.plan, ctx).steps[0]).toMatchObject({ op: "set_role", summary: "문서 2건: 프로젝트의 참고 자료로 넣는 화면을 엽니다" });
+
+    const role = async (id: string) => (await backend.mockInvoke<{ role: string }>("documents_get", { id })).role;
+    const exec = await planner.runPlan(planned.plan, ctx, null, () => undefined);
+    expect(exec.steps[0]).toMatchObject({ status: "done", payload: { documents: expect.arrayContaining([a, b]), role: "knowledge", assign: true } });
+    // (the documents come in the order of the working set, not of the selection)
+    const handed = (exec.steps[0]!.payload as { documents: string[] }).documents;
+    expect(handed).toHaveLength(2);
+    expect(exec.ui_actions).toEqual([{ op: "open", target: "assign", ref: `reference:${handed.join(",")}` }]);
+    expect([await role(a), await role(b)]).toEqual(["work", "work"]);
+    // A work document / a form is still a mark on the document itself.
+    const form = planner.planText("이 문서를 양식으로 표시", ctx);
+    const marked = await planner.runPlan(form.plan, ctx, null, () => undefined);
+    expect(marked.ui_actions).toEqual([]);
+    expect(await role(a)).toBe("form");
+    // Only the executor writes the dialog's target: a plan that holds it is refused.
+    const direct: Plan = { ...planned.plan, operations: [{ op: "open", target: "assign", ref: `reference:${a}` }] };
+    expect(planner.validatePlan(direct, ctx, null).map((i) => i.code)).toContain("target_unknown");
+  });
 });
 
 // 1.0.0 §2-1 step 2 (`documents::edit`: `structure`, `Part::{insert_paragraph, delete_paragraph, insert_row,

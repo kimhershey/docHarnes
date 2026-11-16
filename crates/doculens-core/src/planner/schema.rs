@@ -508,8 +508,8 @@ pub const OP_SPECS: &[OpSpec] = &[
     OpSpec {
         kind: OpKind::SetRole,
         params: &[p("role", ParamType::Enum(ROLES), true, "업무 문서 / 참고 자료 / 양식", "work / knowledge (reference) / form")],
-        desc_ko: "문서 역할 표시(업무 문서·참고 자료·양식)",
-        desc_en: "mark documents as work documents, reference material or forms",
+        desc_ko: "문서 역할 표시(업무 문서·양식); 참고 자료(knowledge)는 프로젝트의 참고 자료로 넣는 화면을 연다",
+        desc_en: "mark documents as work documents or forms; knowledge opens the dialog that puts them into projects as reference material",
     },
     OpSpec {
         kind: OpKind::ManageReference,

@@ -255,6 +255,15 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
           navigate(`/projects/${encodeURIComponent(op.ref.trim())}`);
           return { summary: t("planner.ui.open_project") };
         }
+        case "assign": {
+          // 1.0.0: "참고 자료로 지정해줘" hands its documents to "프로젝트에 넣기" — opened on 참고 자료, with the
+          // classifier's suggestions; nothing changes before the user confirms there.
+          const [kind, list = ""] = op.ref.split(":");
+          const ids = list.split(",").map((id) => id.trim()).filter(Boolean);
+          if (ids.length === 0) throw new Error(t("planner.ui.document_not_found", { ref: op.ref }));
+          navigate(`${SCREEN_ROUTES.projects}?classify=${ids.map(encodeURIComponent).join(",")}${kind === "reference" ? "&as=reference" : ""}`);
+          return { summary: t("planner.ui.open_assign", { count: ids.length }) };
+        }
         case "folder": {
           const folder = op.ref.trim().replace(/[\\/]+$/, "");
           const target = folder === "" || folder === "all" || folder === "*" ? null : folder;

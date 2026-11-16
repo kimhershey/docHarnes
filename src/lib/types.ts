@@ -1800,7 +1800,8 @@ export type ModelTierChoice = Tier | "auto";
 export type WorkspaceAction = "open" | "create" | "close" | "forget";
 export type MaintenanceAction = "purge_now" | "clear_finished_jobs" | "rescan" | "inbox_scan";
 export type RoleChoice = "work" | "knowledge" | "form";
-export type OpenTarget = "document" | "page" | "folder" | "screen" | "project";
+/** `assign` is written by the executor only (a `set_role` step to reference material): `ref` = `reference:<id>,<id>…` opens "프로젝트에 넣기" on 참고 자료 for those documents. */
+export type OpenTarget = "document" | "page" | "folder" | "screen" | "project" | "assign";
 /** `explain.scope` (appendix D). */
 /** `reference` = the 공통 참고 자료 (0.5.0; `collection` was its pre-0.5.0 name and still deserialises in Rust). */
 export type ExplainScope = "kb" | "reference" | "project" | "document";

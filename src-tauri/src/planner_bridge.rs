@@ -266,6 +266,8 @@ fn inline_only(plan: &Plan) -> bool {
             )
             // Review decisions are quick database writes; `show` only hands the review screen to the UI.
             || matches!(op, Op::Review { .. })
+            // "참고 자료로 지정" only hands its documents to the "프로젝트에 넣기" dialog (1.0.0).
+            || matches!(op, Op::SetRole { role: planner::RoleParam::Knowledge })
     })
 }
 

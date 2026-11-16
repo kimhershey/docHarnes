@@ -3398,6 +3398,68 @@
       },
       "kind": "command",
       "note": "1.0.0 §2-1 edit the original file"
+    },
+    {
+      "id": "ko-132",
+      "category": "ko",
+      "text": "이 문서를 참고 자료로 지정해줘",
+      "expected": {
+        "intent": "set_role",
+        "ops": [
+          "set_role"
+        ],
+        "params": [
+          {
+            "role": "knowledge"
+          }
+        ],
+        "confirm": false,
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      },
+      "kind": "command",
+      "note": "1.0.0 결정 4-3(2026-11-16): 참고 자료로 지정 = 선택 문서를 프로젝트의 참고 자료로 넣는 화면을 연다(set_role knowledge가 화면을 열고, 확인 카드 없이 화면에서 확정)"
+    },
+    {
+      "id": "ko-133",
+      "category": "ko",
+      "text": "선택한 문서들 참고자료로 지정",
+      "expected": {
+        "intent": "set_role",
+        "ops": [
+          "set_role"
+        ],
+        "params": [
+          {
+            "role": "knowledge"
+          }
+        ],
+        "confirm": false
+      },
+      "kind": "command",
+      "note": "1.0.0 결정 4-3: 띄어쓰기 없는 '참고자료', 명사로 끝나는 지시"
+    },
+    {
+      "id": "en-35",
+      "category": "en",
+      "text": "mark this document as reference material",
+      "expected": {
+        "intent": "set_role",
+        "ops": [
+          "set_role"
+        ],
+        "params": [
+          {
+            "role": "knowledge"
+          }
+        ],
+        "confirm": false
+      },
+      "kind": "command",
+      "note": "1.0.0 decision 4-3: opens \"Put in project\" on reference material"
     }
   ]
 }

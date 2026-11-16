@@ -1866,6 +1866,33 @@ fn run_step(
                 imported: None,
             })
         }
+        // 1.0.0 (user decision 2026-11-16): "참고 자료로 지정" does not flip a flag. Reference material
+        // belongs to a project (or to the common material), so the documents are handed to the
+        // "프로젝트에 넣기" dialog — opened on 참고 자료, with the classifier's suggestions — and nothing
+        // changes before the user confirms there.
+        Op::SetRole { role: super::RoleParam::Knowledge } => {
+            let list = ids(&non_empty(working_set(deps, plan, imported)?)?);
+            out.ui_actions.push(Op::Open {
+                target: super::OpenTarget::Assign,
+                reference: format!("reference:{}", list.join(",")),
+            });
+            out.documents.extend(list.clone());
+            Ok(StepOutcome {
+                summary: if deps.ko() {
+                    format!(
+                        "{}: 프로젝트의 참고 자료로 넣는 화면을 엽니다 — 넣을 프로젝트를 확인하세요",
+                        count_label(deps, list.len())
+                    )
+                } else {
+                    format!(
+                        "{}: opening \"Put in project\" on reference material — confirm the projects there",
+                        count_label(deps, list.len())
+                    )
+                },
+                payload: json!({ "documents": list, "role": DocumentRole::Knowledge, "assign": true }),
+                imported: None,
+            })
+        }
         Op::SetRole { role } => {
             let docs_ = non_empty(working_set(deps, plan, imported)?)?;
             let target = role.as_role();

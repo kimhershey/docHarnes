@@ -3610,6 +3610,27 @@ fn setting_plan(t: &Text<'_>, key: &str, value: Value) -> Plan {
     )
 }
 
+/// "…로 표시 / 바꿔 / 지정": the words that mark documents with a role (not "양식으로 등록").
+const ROLE_MARK_WORDS: [&str; 6] = ["로 표시", "로 바꿔", "로 지정", "mark as", "mark this", "mark these"];
+const REFERENCE_ROLE_WORDS: [&str; 4] = ["참고 자료", "참고자료", "지식 문서", "reference"];
+
+/// Whether the user's words mark documents as reference material without saying where it goes
+/// ("이 문서를 참고 자료로 지정해줘") — what the phrase rules plan as `set_role` to `knowledge`.
+pub fn marks_as_reference(text: &str) -> bool {
+    let said = user_words(text);
+    let t = Text::new(&said, true);
+    !t.is_question() && t.has(&ROLE_MARK_WORDS) && !t.has(&["등록", "register"]) && t.has(&REFERENCE_ROLE_WORDS)
+}
+
+/// What a plan says when its step opens "프로젝트에 넣기" on 참고 자료 (1.0.0, user decision 2026-11-16).
+pub fn reference_dialog_summary(ko: bool) -> &'static str {
+    if ko {
+        "문서를 프로젝트의 참고 자료로 넣는 화면을 엽니다"
+    } else {
+        "Open \"Put in project\" to add the documents as reference material"
+    }
+}
+
 /// Documents: 회전 · 다시 렌더 · 분할 · 병합 · 제목 · 글자 바꾸기 · 역할 표시.
 fn document_edit_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     if t.is_question() {
@@ -3623,9 +3644,8 @@ fn document_edit_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         scope
     };
     // 역할: "참고 자료로 표시", "업무 문서로 바꿔", "양식으로 표시" (not "양식으로 등록" = register_form).
-    if t.has(&["로 표시", "로 바꿔", "로 지정", "mark as", "mark this", "mark these"]) && !t.has(&["등록", "register"])
-    {
-        let role = if t.has(&["참고 자료", "참고자료", "지식 문서", "reference"]) {
+    if t.has(&ROLE_MARK_WORDS) && !t.has(&["등록", "register"]) {
+        let role = if t.has(&REFERENCE_ROLE_WORDS) {
             Some(RoleParam::Knowledge)
         } else if t.has(&["업무 문서", "업무문서", "work document"]) {
             Some(RoleParam::Work)
@@ -3647,12 +3667,14 @@ fn document_edit_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
                 RoleParam::Work => t.t("업무 문서", "work documents").to_string(),
                 RoleParam::Form => t.t("양식", "forms").to_string(),
             };
-            return Some(mk(
-                Op::SetRole { role },
-                scope,
-                0.85,
-                t.t(&format!("{} 표시합니다", josa::euro_ro(&label)), &format!("Mark as {label}")).to_string(),
-            ));
+            // Reference material belongs to a project: the step opens "프로젝트에 넣기" on 참고 자료
+            // (1.0.0, user decision 2026-11-16) instead of flipping the role.
+            let summary = if role == RoleParam::Knowledge {
+                reference_dialog_summary(t.ko).to_string()
+            } else {
+                t.t(&format!("{} 표시합니다", josa::euro_ro(&label)), &format!("Mark as {label}")).to_string()
+            };
+            return Some(mk(Op::SetRole { role }, scope, 0.85, summary));
         }
     }
     // 회전
