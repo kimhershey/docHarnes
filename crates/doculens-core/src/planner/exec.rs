@@ -1817,7 +1817,7 @@ fn run_step(
             let doc = one_document(working_set(deps, plan, imported)?, EDIT_ONE_DOCUMENT)?;
             deps.checkpoint()?;
             progress("edit", 0, 1, &doc.original_name);
-            let edits = [edit::Replacement { find: find.clone(), replace: replace.clone(), occurrence: None }];
+            let edits = [edit::Replacement::text(find.clone(), replace.clone())];
             let edition = edit::save_edition(&deps.import, &doc, &edits, deps.ko())?;
             out.documents.push(edition.doc_id.clone());
             let name = edition.rel_path.rsplit('/').next().unwrap_or(&edition.rel_path).to_string();
@@ -3206,7 +3206,7 @@ pub fn preview(
             ),
             Op::EditText { find, replace, original: Some(true), .. } => {
                 // What the file itself holds — the same count the step will report.
-                let edits = [edit::Replacement { find: find.clone(), replace: replace.clone(), occurrence: None }];
+                let edits = [edit::Replacement::text(find.clone(), replace.clone())];
                 let report = match docs_.as_slice() {
                     [d] => edit::preview(&d.absolute_path(paths), d.source_kind, &edits).map_err(|e| match e {
                         CoreError::Invalid(code) => code,
