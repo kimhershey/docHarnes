@@ -4361,7 +4361,7 @@ export function planPreview(plan: Plan, ctx: PlanContext): PlanPreview {
         if (op.original) {
           // What the file itself holds (the mock: the page text of the one document).
           const one = docs.length === 1 ? docs[0]! : null;
-          const editable = one && ["hwpx", "docx", "pptx"].includes(one.source_kind);
+          const editable = one && ["hwpx", "docx", "pptx", "xlsx"].includes(one.source_kind);
           const n = one && editable ? one.pages.reduce((sum, pg) => sum + (pg.text ? pg.text.split(op.find).length - 1 : 0), 0) : 0;
           const reason = !one ? "edit_original_needs_one_document" : !editable ? "edit_unsupported_format" : null;
           // `exec.rs::edit_reason`: the reason as a sentence.

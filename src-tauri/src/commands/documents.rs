@@ -318,13 +318,22 @@ pub fn documents_rotate_page(app: AppHandle, id: String, page_no: u32, rotation:
     Ok(page_view(page))
 }
 
-/// 1.0.0 §2-1: what replacing text in the document's own file (HWPX / DOCX / PPTX) would change — the
-/// paragraphs before and after. Nothing is written.
+/// 1.0.0 §2-1: what the edits would change in the document's own file (HWPX / DOCX / PPTX / XLSX) — the
+/// paragraphs, cells and pictures before and after. Nothing is written.
 #[tauri::command(async)]
 pub fn documents_edit_preview(app: AppHandle, id: String, edits: Vec<Replacement>) -> UiResult<EditReport> {
     let ctx = docs_bridge::context(&app)?;
     let doc = docs_bridge::document(&app, &id)?;
     Ok(edit::preview(&doc.absolute_path(&ctx.paths), doc.source_kind, &edits)?)
+}
+
+/// 1.0.0 §2-1 step 4: the pictures of the document's own file — what a `replace_picture` edit can name
+/// (part, size, format, where it is shown, a small thumbnail). Nothing is written.
+#[tauri::command(async)]
+pub fn documents_edit_pictures(app: AppHandle, id: String) -> UiResult<Vec<edit::Picture>> {
+    let ctx = docs_bridge::context(&app)?;
+    let doc = docs_bridge::document(&app, &id)?;
+    Ok(edit::pictures(&doc.absolute_path(&ctx.paths), doc.source_kind)?)
 }
 
 /// 1.0.0 §2-1 step 3: what an instruction in words ("3조의 납품 기한을 12월 31일로 바꿔줘") means for

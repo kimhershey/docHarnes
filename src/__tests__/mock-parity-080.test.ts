@@ -668,4 +668,90 @@ describe("original-file edits: paragraphs and table rows (documents::edit)", () 
     const edition = await backend.mockInvoke<{ doc_id: string }>("documents_edit_save", { id: doc, edits });
     expect(await text(edition.doc_id)).toEqual([expect.stringContaining("합계 13,500원"), expect.stringContaining("합계 13,500원")]);
   });
+
+  // Step 4 (`documents::edit::cells`): a workbook has cells, not paragraphs.
+  it("a workbook cell gets a new value; a formula stays, and the ones that read the cell are counted", async () => {
+    const ids = await importDocs(["견적서.xlsx", "개발계약서.docx"]);
+    const book = ids["견적서.xlsx"]!;
+    setFileText(book, 1, "항목\t단가\t수량\t금액\n설계\t1250000\t4\t=B2*C2\n개발\t350000\t2\t=B3*C3\n합계\t\t\t=SUM(D2:D3)");
+    setFileText(book, 2, "총액\t=Sheet1!D4\n담당\t김하늘\n코드\t");
+    const edits: EditRequest[] = [
+      { find: "b2", replace: "1,300,000", action: "set_cell" },
+      { find: "Sheet2!B2", replace: "이바다", action: "set_cell" },
+      // A code keeps its zeros; a cell that was not there is made.
+      { find: "'Sheet2'!$B$3", replace: "007", action: "set_cell" },
+      { find: "Sheet1!F6", replace: "비고", action: "set_cell" },
+      { find: "설계", replace: "분석 · 설계" },
+    ];
+    const report = await preview(book, edits);
+    expect(report.problems ?? []).toEqual([]);
+    expect(report).toMatchObject({ found: [1, 1, 1, 1, 1], replaced: [1, 1, 1, 1, 1] });
+    expect(report.changes.map((c) => [c.action ?? "replace", c.part, c.before, c.after])).toEqual([
+      ["set_cell", "xl/worksheets/sheet1.xml", "Sheet1!B2 = 1250000", "Sheet1!B2 = 1300000"],
+      ["set_cell", "xl/worksheets/sheet2.xml", "Sheet2!B2 = 김하늘", "Sheet2!B2 = 이바다"],
+      ["set_cell", "xl/worksheets/sheet2.xml", "Sheet2!B3 = ", "Sheet2!B3 = 007"],
+      ["set_cell", "xl/worksheets/sheet1.xml", "Sheet1!F6 = ", "Sheet1!F6 = 비고"],
+      ["replace", "xl/sharedStrings.xml", expect.stringContaining("설계"), expect.stringContaining("분석 · 설계")],
+    ]);
+    // D2 reads B2, D4 reads D2 (a range), Sheet2!B1 reads D4: three results are computed again; D3 is not.
+    expect(report.notes).toEqual([{ edit: 0, code: "edit_formulas_cleared", count: 3 }]);
+    const edition = await backend.mockInvoke<{ doc_id: string; rel_path: string }>("documents_edit_save", { id: book, edits });
+    expect(edition.rel_path).toMatch(/견적서 \(수정\)\.xlsx$/);
+    expect(await text(edition.doc_id)).toEqual([
+      "항목\t단가\t수량\t금액\n분석 · 설계\t1300000\t4\t=B2*C2\n개발\t350000\t2\t=B3*C3\n합계\t\t\t=SUM(D2:D3)\n\n\t\t\t\t\t비고",
+      "총액\t=Sheet1!D4\n담당\t이바다\n코드\t007",
+    ]);
+    expect((await text(book))[0]).toContain("1250000");
+
+    const code = async (edit: EditRequest) => (await preview(book, [edit])).problems?.[0]?.code ?? null;
+    expect(await code({ find: "D2", replace: "1", action: "set_cell" })).toBe("edit_cell_formula");
+    expect(await code({ find: "없는시트!A1", replace: "1", action: "set_cell" })).toBe("edit_cell_address");
+    expect(await code({ find: "둘째 칸", replace: "1", action: "set_cell" })).toBe("edit_cell_address");
+    expect(await code({ find: "XFE1", replace: "1", action: "set_cell" })).toBe("edit_cell_address");
+    // An emptied cell is a change too: D3 reads C3, and the sum and the total read on from there.
+    expect(await preview(book, [{ find: "C3", replace: " ", action: "set_cell" }])).toMatchObject({ replaced: [1], notes: [{ edit: 0, code: "edit_formulas_cleared", count: 3 }] });
+    // Paragraphs and table rows are a document's, cells a workbook's.
+    await expect(preview(book, [{ find: "설계", replace: "x", action: "insert_after" }])).rejects.toMatchObject({ message: "edit_action_unsupported" });
+    await expect(preview(ids["개발계약서.docx"]!, [{ find: "B2", replace: "1", action: "set_cell" }])).rejects.toMatchObject({ message: "edit_action_unsupported" });
+  });
+
+  // Step 4 (`documents::edit::pictures`): a picture is replaced inside its frame, in its own format.
+  it("a picture of the file is replaced by another one; what cannot be written is refused", async () => {
+    const ids = await importDocs(["제안서.pptx", "스캔본.pdf"]);
+    const deck = ids["제안서.pptx"]!;
+    const listed = await backend.mockInvoke<import("@/lib/types").EditPicture[]>("documents_edit_pictures", { id: deck });
+    expect(listed.map((p) => [p.part, p.format, p.width, p.height, p.replaceable])).toEqual([
+      ["ppt/media/image1.png", "png", 640, 360, true],
+      ["ppt/media/image2.jpeg", "jpeg", 800, 600, true],
+      ["ppt/media/image3.emf", "emf", 0, 0, false],
+    ]);
+    expect(listed[0]).toMatchObject({ used_in: ["ppt/slides/slide1.xml"], thumbnail: expect.stringMatching(/^data:image\//) });
+    await expect(backend.mockInvoke("documents_edit_pictures", { id: ids["스캔본.pdf"]! })).rejects.toMatchObject({ message: "edit_unsupported_format" });
+
+    const edits: EditRequest[] = [
+      { find: "ppt/media/image1.png", replace: "D:\\그림\\새 로고 800x800.jpg", action: "replace_picture" },
+      { find: "PPT/media/image2.jpeg", replace: "D:\\그림\\표지.jpeg", action: "replace_picture" },
+      { find: "2쪽", replace: "둘째 장" },
+    ];
+    const report = await preview(deck, edits);
+    expect(report.problems ?? []).toEqual([]);
+    expect(report.replaced).toEqual([1, 1, 1]);
+    expect(report.changes.filter((c) => c.action === "replace_picture").map((c) => [c.part, c.before, c.after])).toEqual([
+      ["ppt/media/image1.png", "640×360 PNG", "800×800 JPEG → PNG"],
+      ["PPT/media/image2.jpeg", "800×600 JPEG", "800×600 JPEG"],
+    ]);
+    // The square picture goes into a wide frame.
+    expect(report.notes).toEqual([{ edit: 0, code: "edit_picture_ratio", count: 0 }]);
+    expect(report.parts).toEqual(expect.arrayContaining(["ppt/media/image1.png", "ppt/slides/slide2.xml"]));
+    const edition = await backend.mockInvoke<{ doc_id: string }>("documents_edit_save", { id: deck, edits });
+    const after = await backend.mockInvoke<import("@/lib/types").EditPicture[]>("documents_edit_pictures", { id: edition.doc_id });
+    expect(after.map((p) => [p.width, p.height])).toEqual([[800, 800], [800, 600], [0, 0]]);
+    expect((await backend.mockInvoke<import("@/lib/types").EditPicture[]>("documents_edit_pictures", { id: deck }))[0]).toMatchObject({ width: 640, height: 360 });
+
+    const code = async (edit: EditRequest) => (await preview(deck, [edit])).problems?.[0]?.code ?? null;
+    expect(await code({ find: "ppt/media/image9.png", replace: "D:\\a.png", action: "replace_picture" })).toBe("edit_picture_missing");
+    expect(await code({ find: "ppt/media/image3.emf", replace: "D:\\a.png", action: "replace_picture" })).toBe("edit_picture_format");
+    expect(await code({ find: "ppt/media/image1.png", replace: "D:\\메모.txt", action: "replace_picture" })).toBe("edit_picture_unreadable");
+    await expect(backend.mockInvoke("documents_edit_save", { id: deck, edits: [{ find: "ppt/media/image3.emf", replace: "D:\\a.png", action: "replace_picture" }] })).rejects.toMatchObject({ message: "edit_picture_format" });
+  });
 });

@@ -1648,6 +1648,8 @@ export interface MockDoc extends DocumentRecord {
   pages: MockPage[];
   /** Page text corrections with their undo bookkeeping (documents/import.rs `page_text_history`). */
   text_history?: MockTextHistoryRow[];
+  /** Pictures of the file that were replaced in this edition (`mock-edit.ts`): part → [width, height]. */
+  picture_sizes?: Record<string, [number, number]>;
 }
 
 /** Pipeline columns added in P4 (older stored documents get the defaults). */
@@ -2588,6 +2590,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       return r(Array.isArray(out) ? (out as DocumentView[]).map(attach) : attach(out as DocumentView));
     }
     case "documents_edit_preview":
+    case "documents_edit_pictures":
     case "documents_edit_suggest":
     case "documents_edit_save":
       return r(await (await import("./mock-edit")).mockEdit(cmd, a));
