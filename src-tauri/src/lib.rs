@@ -161,6 +161,7 @@ pub fn run() {
             commands::documents::documents_set_doc_type,
             commands::documents::documents_set_title,
             commands::documents::documents_edit_preview,
+            commands::documents::documents_edit_suggest,
             commands::documents::documents_edit_save,
             commands::documents::documents_tags,
             commands::documents::documents_set_inbox_watch,

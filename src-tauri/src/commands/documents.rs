@@ -327,6 +327,24 @@ pub fn documents_edit_preview(app: AppHandle, id: String, edits: Vec<Replacement
     Ok(edit::preview(&doc.absolute_path(&ctx.paths), doc.source_kind, &edits)?)
 }
 
+/// 1.0.0 §2-1 step 3: what an instruction in words ("3조의 납품 기한을 12월 31일로 바꿔줘") means for
+/// the document's own file — the loaded model names the texts to change, each is checked against the
+/// file. Nothing is written: the edits go through `documents_edit_preview` like any others.
+#[tauri::command(async)]
+pub fn documents_edit_suggest(app: AppHandle, id: String, instruction: String) -> UiResult<edit::Suggestion> {
+    let ctx = docs_bridge::context(&app)?;
+    let doc = docs_bridge::document(&app, &id)?;
+    let pctx = crate::pipeline_bridge::context(&app)?;
+    let state = app.state::<AppState>();
+    let ko = state.settings.lock().map(|s| s.ui.language == doculens_core::settings::Language::Ko).unwrap_or(true);
+    // The loaded model only (the user is waiting on a dialog), and not behind a batch job.
+    let Some(vlm) = crate::projects_bridge::dialog_model(&app, &state, &pctx, "edit_suggest") else {
+        return Err(UiError::invalid("no_model"));
+    };
+    let path = doc.absolute_path(&ctx.paths);
+    Ok(state.gate.interactive(|| edit::suggest(&vlm, &path, doc.source_kind, &instruction, ko))?)
+}
+
 /// Saves the edited copy next to the original and registers it as the latest edition of the document
 /// (same title, type, tags, projects). The original file is not touched.
 #[tauri::command(async)]

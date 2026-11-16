@@ -85,7 +85,7 @@ import type {
   DocumentRole,
   DocumentView,
   EditReplacement,
-  EditReport,
+  EditReport, EditSuggestion,
   Edition,
   EngineBinaryInfo,
   EngineDevice,
@@ -250,6 +250,8 @@ export const api = {
   documentsEditPreview: (id: string, edits: EditReplacement[]) => invoke<EditReport>("documents_edit_preview", { id, edits }),
   /** Saves the edited copy as the latest edition; the original file stays as it is. */
   documentsEditSave: (id: string, edits: EditReplacement[]) => invoke<Edition>("documents_edit_save", { id, edits }),
+  /** What an instruction in words changes in the original file, as the loaded model reads it (nothing is written). */
+  documentsEditSuggest: (id: string, instruction: string) => invoke<EditSuggestion>("documents_edit_suggest", { id, instruction }),
   documentsTags: () => invoke<[string, number][]>("documents_tags"),
   documentsSetInboxWatch: (enabled: boolean) => invoke<boolean>("documents_set_inbox_watch", { enabled }),
   documentsPdfiumInfo: () => invoke<PdfiumInfo>("documents_pdfium_info"),

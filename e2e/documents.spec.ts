@@ -582,4 +582,38 @@ test.describe("P2 documents", () => {
     // The new edition has no corrections of its own: its file holds the right amount.
     await expect(page.getByTestId("viewer-text-edits-count")).toHaveCount(0);
   });
+
+  // 1.0.0 §2-1 step 3: an instruction in words — the model finds the place, the dialog shows it before saving.
+  test("1.0.0: 원본 고치기 — an instruction in words becomes a line of the request and its preview", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\docs\\개발계약서.docx"]);
+    const original = await docId(page, "개발계약서.docx");
+    await page.getByTestId(`doc-open-${original}`).click();
+    await page.getByTestId("viewer-edit-original").click();
+    await expect(page.getByTestId("edit-original-dialog")).toBeVisible();
+    await expect(page.getByTestId("edit-original-suggest")).toBeDisabled();
+
+    // A sentence that names no change: the reason is shown, the lines stay as they were.
+    await page.getByTestId("edit-original-instruction").fill("좀 더 보기 좋게");
+    await page.getByTestId("edit-original-suggest").click();
+    await expect(page.getByTestId("toaster")).toContainText("어느 글을 무엇으로 바꿀지");
+    await expect(page.getByTestId("edit-original-find-0")).toHaveValue("");
+
+    // The amount is on both pages; the suggestion is pinned to the one place and previewed at once.
+    await page.getByTestId("edit-original-instruction").fill("12,500원을 13,000원으로 바꿔줘");
+    await page.getByTestId("edit-original-instruction").press("Enter");
+    await expect(page.getByTestId("edit-original-find-0")).toHaveValue("12,500원");
+    await expect(page.getByTestId("edit-original-replace-0")).toHaveValue("13,000원");
+    await expect(page.getByTestId("edit-original-occurrence-0")).toHaveValue("1");
+    await expect(page.getByTestId("edit-original-preview")).toHaveAttribute("data-total", "1");
+    await expect(page.getByTestId("edit-original-change-0")).toContainText("합계 13,000원");
+    // Every place instead of the one: the user clears "몇 번째" and looks again.
+    await page.getByTestId("edit-original-occurrence-0").fill("");
+    await page.getByTestId("edit-original-preview-run").click();
+    await expect(page.getByTestId("edit-original-preview")).toHaveAttribute("data-total", "2");
+    await page.getByTestId("edit-original-save").click();
+    await expect(page.getByTestId("edit-original-dialog")).toHaveCount(0);
+    await expect(page.getByTestId("toaster")).toContainText("개발계약서 (수정).docx");
+  });
 });

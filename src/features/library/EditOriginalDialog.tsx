@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
-import { ArrowRight, History, Plus, X } from "lucide-react";
+import { ArrowRight, History, Plus, Sparkles, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -42,9 +42,10 @@ const textLabel = (a: EditAction) => (a === "replace" ? "replace" : a.includes("
 
 /** The request of one row (core `documents::edit::Replacement`). */
 export function editOf(row: Row): EditReplacement {
-  if (row.action === "replace") return { find: row.find, replace: row.replace };
   const which = Number.parseInt(row.occurrence, 10);
-  return { find: row.find, replace: takesText(row.action) ? row.replace : "", action: row.action, ...(Number.isFinite(which) && which >= 1 ? { occurrence: which } : {}) };
+  const occurrence = Number.isFinite(which) && which >= 1 ? { occurrence: which } : {};
+  if (row.action === "replace") return { find: row.find, replace: row.replace, ...occurrence };
+  return { find: row.find, replace: takesText(row.action) ? row.replace : "", action: row.action, ...occurrence };
 }
 
 /**
@@ -62,6 +63,9 @@ export function EditOriginalDialog({ open, onOpenChange, doc, initialFind }: { o
   const [busy, setBusy] = useState(false);
   // What was put right in the viewer (the page text) and is still wrong in the file.
   const [corrections, setCorrections] = useState<EditReplacement[]>([]);
+  // An instruction in words: the model finds the places, the lines below show them.
+  const [instruction, setInstruction] = useState("");
+  const [suggesting, setSuggesting] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -70,6 +74,7 @@ export function EditOriginalDialog({ open, onOpenChange, doc, initialFind }: { o
     setRows([{ ...EMPTY, find: first }]);
     setReport(null);
     setCorrections([]);
+    setInstruction("");
     let stale = false;
     api
       .documentsPageTextHistory(doc.id, null)
@@ -102,6 +107,28 @@ export function EditOriginalDialog({ open, onOpenChange, doc, initialFind }: { o
       return next.length > 0 ? next : [EMPTY];
     });
     setReport(null);
+  };
+  /** The model's reading of the instruction becomes lines, and their preview is shown at once. */
+  const suggest = async () => {
+    if (!instruction.trim() || suggesting) return;
+    setSuggesting(true);
+    try {
+      const s = await api.documentsEditSuggest(doc.id, instruction);
+      if (s.dropped > 0) toast(t("viewer.edit_original.suggest_dropped", { count: s.dropped }), "warn");
+      if (s.edits.length === 0) {
+        toast(s.note || t("viewer.edit_original.suggest_none"), "warn");
+        return;
+      }
+      const kept = rows.filter((r) => r.find.trim() !== "");
+      const next = [...kept, ...s.edits.map((e) => ({ ...EMPTY, find: e.find, replace: e.replace, occurrence: e.occurrence != null ? String(e.occurrence) : "" }))].slice(0, MAX_ROWS);
+      setRows(next);
+      toast(t("viewer.edit_original.suggested", { count: s.edits.length }), "ok");
+      setReport(await api.documentsEditPreview(doc.id, next.map(editOf)));
+    } catch (e) {
+      toast(describeError(e, t), "danger");
+    } finally {
+      setSuggesting(false);
+    }
   };
   const preview = async () => {
     setBusy(true);
@@ -141,6 +168,23 @@ export function EditOriginalDialog({ open, onOpenChange, doc, initialFind }: { o
         <p className="text-sm text-fg-muted" data-testid="edit-original-lead">
           {t("viewer.edit_original.lead")}
         </p>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <Input
+            className="min-w-40 flex-1"
+            value={instruction}
+            onChange={(e) => setInstruction(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.nativeEvent.isComposing) void suggest();
+            }}
+            placeholder={t("viewer.edit_original.instruction")}
+            aria-label={t("viewer.edit_original.instruction")}
+            data-testid="edit-original-instruction"
+          />
+          <Button size="sm" variant="outline" className="shrink-0" onClick={() => void suggest()} disabled={busy || suggesting || instruction.trim() === ""} title={t("viewer.edit_original.suggest_hint")} data-testid="edit-original-suggest" data-busy={suggesting || undefined}>
+            <Sparkles />
+            {t("viewer.edit_original.suggest")}
+          </Button>
+        </div>
         <div className="flex flex-col gap-2">
           {rows.map((r, i) => {
             const n = editRow.indexOf(i);
@@ -169,7 +213,7 @@ export function EditOriginalDialog({ open, onOpenChange, doc, initialFind }: { o
                       <Input className="min-w-40 flex-1" value={r.replace} onChange={(e) => change(i, { replace: e.target.value })} placeholder={t(`viewer.edit_original.${textLabel(r.action)}`)} aria-label={t(`viewer.edit_original.${textLabel(r.action)}`)} data-testid={`edit-original-replace-${i}`} />
                     </>
                   )}
-                  {r.action !== "replace" && (
+                  {(r.action !== "replace" || r.occurrence !== "") && (
                     <Input className="w-24 shrink-0" type="number" min={1} value={r.occurrence} onChange={(e) => change(i, { occurrence: e.target.value })} placeholder={t("viewer.edit_original.occurrence")} aria-label={t("viewer.edit_original.occurrence")} data-testid={`edit-original-occurrence-${i}`} />
                   )}
                   {done !== null && (

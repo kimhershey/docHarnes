@@ -1927,7 +1927,13 @@
       },
       "blank": "(empty)",
       "from_viewer": "Bring the viewer's corrections ({{count}})",
-      "from_viewer_hint": "Apply the words corrected in the viewer to the original file as well. The same word elsewhere in the document changes too — check the preview."
+      "from_viewer_hint": "Apply the words corrected in the viewer to the original file as well. The same word elsewhere in the document changes too — check the preview.",
+      "instruction": "Say it in words — e.g. change the delivery date in clause 3 to December 31",
+      "suggest": "Find what to change",
+      "suggest_hint": "The AI finds the places to change and puts them into the lines below. Check the changes before saving.",
+      "suggest_none": "Nothing to change was found. Say more precisely what should become what.",
+      "suggest_dropped": "{{count}} suggestion(s) of the AI did not match the document's text and were left out.",
+      "suggested": "{{count}} suggestion(s) added. Check the changes below."
     }
   },
   "answer": {

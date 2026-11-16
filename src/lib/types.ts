@@ -1006,6 +1006,17 @@ export interface EditReport {
   /** Edits that cannot be made as asked (a reason code each); nothing is saved while there is one. */
   problems?: { edit: number; code: string }[];
 }
+/** What the model makes of an instruction in words (core `documents::edit::Suggestion`): edits for the preview, nothing is changed. */
+export interface EditSuggestion {
+  /** Replacements, each pinned (`occurrence`) to the one place the model pointed at. */
+  edits: EditReplacement[];
+  /** Suggested edits left out: the text was not in the paragraph the model named. */
+  dropped: number;
+  /** What the model says about the instruction (why nothing was found). */
+  note: string;
+  shown: number;
+  paragraphs: number;
+}
 /** The edited copy, registered as the latest edition of the document it was made from. */
 export interface Edition {
   report: EditReport;

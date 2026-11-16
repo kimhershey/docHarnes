@@ -630,6 +630,26 @@ describe("original-file edits: paragraphs and table rows (documents::edit)", () 
     expect(await code({ find: "산출물", replace: "", action: "delete_row" })).toBe("edit_last_row");
   });
 
+  // Step 3 (`documents::edit::suggest`): an instruction in words becomes replacements pinned to one place.
+  it("an instruction in words becomes a replacement at the place it names", async () => {
+    const ids = await importDocs(["개발계약서.docx", "스캔본.pdf"]);
+    const doc = ids["개발계약서.docx"]!;
+    const suggest = (id: string, instruction: string) => backend.mockInvoke<import("@/lib/types").EditSuggestion>("documents_edit_suggest", { id, instruction });
+    // The amount is on both pages: the suggestion names the first place only.
+    const s = await suggest(doc, "12,500원을 13,000원으로 바꿔줘");
+    expect(s).toMatchObject({ edits: [{ find: "12,500원", replace: "13,000원", occurrence: 1 }], dropped: 0, note: "" });
+    expect((await preview(doc, s.edits)).replaced).toEqual([1]);
+    // What is not in the document is left out; a sentence that names no change says so.
+    expect(await suggest(doc, "99,999원을 1원으로 바꿔줘")).toMatchObject({ edits: [], dropped: 1 });
+    expect((await suggest(doc, "좀 더 보기 좋게")).note).not.toBe("");
+    await expect(suggest(doc, "  ")).rejects.toMatchObject({ message: "description_empty" });
+    await expect(suggest(ids["스캔본.pdf"]!, "가를 나로 바꿔줘")).rejects.toMatchObject({ message: "edit_unsupported_format" });
+    // No model loaded: there is nobody to ask.
+    localStorage.setItem("doculens.mock.vision", "none");
+    await expect(suggest(doc, "12,500원을 13,000원으로 바꿔줘")).rejects.toMatchObject({ message: "no_model" });
+    localStorage.removeItem("doculens.mock.vision");
+  });
+
   // Step 3: the file still holds what the page read before a correction in the viewer.
   it("a correction made in the viewer does not reach the file until it is made there too", async () => {
     const ids = await importDocs(["개발계약서.docx"]);

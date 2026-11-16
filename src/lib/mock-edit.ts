@@ -4,7 +4,7 @@
 // are the core's — which formats, what a request may hold, how occurrences are counted, how the edited copy
 // is named and registered as the latest edition next to its original.
 import { emit, err, upsertDoc, wsDocs, type MockDoc } from "./mock-backend";
-import { EVENTS, type DocumentsChanged, type EditChange, type EditReplacement, type EditReport, type Edition, type VersionGroup } from "./types";
+import { EVENTS, type DocumentsChanged, type EditChange, type EditReplacement, type EditReport, type EditSuggestion, type Edition, type VersionGroup } from "./types";
 
 const EDITABLE = ["hwpx", "docx", "pptx"];
 const MAX_EDITS = 200;
@@ -21,6 +21,44 @@ function partOf(d: MockDoc, page: number): { part: string; unit: number | null }
   if (d.source_kind === "pptx") return { part: `ppt/slides/slide${page}.xml`, unit: page };
   if (d.source_kind === "hwpx") return { part: "Contents/section0.xml", unit: 1 };
   return { part: "word/document.xml", unit: null };
+}
+
+/** The file holds what a page read before the viewer's corrections: they change the page text, not the file. */
+function fileTexts(d: MockDoc): (string | null)[] {
+  return d.pages.map((p) => {
+    const first = (d.text_history ?? []).find((row) => row.page_no === p.page_no);
+    return first ? first.previous.text : p.text;
+  });
+}
+
+/** Whether the mock has a loaded model (`mock-pipeline.ts`: `doculens.mock.vision`). */
+function modelLoaded(): boolean {
+  try {
+    const mode = localStorage.getItem("doculens.mock.vision");
+    return !(mode === "not_loaded" || mode === "none" || mode === "engine_off");
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * `documents_edit_suggest` (core `documents::edit::suggest`). The mock has no model: an instruction of the
+ * shape "A를 B로 바꿔줘" / "replace A with B" names the text itself, and the first paragraph that holds it is
+ * the place — pinned by `occurrence`, as the core pins the place the model points at.
+ */
+function suggest(d: MockDoc, instruction: string): EditSuggestion {
+  if (!instruction.trim()) throw err("invalid", "description_empty");
+  if (!EDITABLE.includes(d.source_kind)) throw err("invalid", "edit_unsupported_format");
+  if (!modelLoaded()) throw err("invalid", "no_model");
+  const paragraphs = fileTexts(d)
+    .flatMap((text) => (text ?? "").split("\n"))
+    .filter((line) => line.trim() !== "");
+  const counts = { shown: paragraphs.length, paragraphs: paragraphs.length };
+  const said = instruction.match(/^(.+?)[을를]\s+(.+?)(?:으로|로)\s*(?:바꿔|고쳐|수정|변경)/u) ?? instruction.match(/^replace\s+(.+?)\s+with\s+(.+?)[.!]?$/i);
+  if (!said) return { edits: [], dropped: 0, note: "어느 글을 무엇으로 바꿀지 문장에서 찾지 못했습니다.", ...counts };
+  const [find, replace] = [said[1]!.trim(), said[2]!.trim()];
+  if (!paragraphs.some((line) => line.includes(find))) return { edits: [], dropped: 1, note: "", ...counts };
+  return { edits: [{ find, replace, occurrence: 1 }], dropped: 0, note: "", ...counts };
 }
 
 /** A paragraph's (or a row's) text as a report shows it (core `shown`). */
@@ -101,11 +139,7 @@ function plan(d: MockDoc, edits: EditReplacement[]): { report: EditReport; pages
   if (edits.length === 0 || edits.some((e) => !e.find.trim())) throw err("invalid", "edit_find_empty");
   if (edits.length > MAX_EDITS) throw err("invalid", "edit_too_many");
   if (edits.some((e) => [e.find, e.replace, ...(e.cells ?? [])].some((text) => /[\r\n]/.test(text)))) throw err("invalid", "edit_line_break");
-  // The file holds what the page read before the viewer's corrections: they change the page text, not the file.
-  const pages = d.pages.map((p) => {
-    const first = (d.text_history ?? []).find((row) => row.page_no === p.page_no);
-    return first ? first.previous.text : p.text;
-  });
+  const pages = fileTexts(d);
   const report: EditReport = { found: edits.map(() => 0), replaced: edits.map(() => 0), changes: [], parts: [] };
   const parts = new Set<string>();
   edits.forEach((e, n) => {
@@ -171,9 +205,10 @@ function pad(n: number): string {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function mockEdit(cmd: string, a: Record<string, any>): Promise<EditReport | Edition> {
+export async function mockEdit(cmd: string, a: Record<string, any>): Promise<EditReport | Edition | EditSuggestion> {
   const d = wsDocs().find((x) => x.id === a.id);
   if (!d) throw err("not_found", String(a.id));
+  if (cmd === "documents_edit_suggest") return suggest(d, String(a.instruction ?? ""));
   const edits = (a.edits ?? []) as EditReplacement[];
   const { report, pages } = plan(d, edits);
   if (cmd === "documents_edit_preview") return report;

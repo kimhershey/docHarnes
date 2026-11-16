@@ -173,7 +173,7 @@ fn loaded_model(app: &AppHandle) -> Option<(String, Option<u32>)> {
 /// The loaded model for a dialog request — unless a batch job is inside a page right now: the
 /// dialog then runs without the model (phrase rules, plain comparisons) instead of waiting for
 /// the page boundary behind the batch.
-fn dialog_model<'a>(
+pub(crate) fn dialog_model<'a>(
     app: &AppHandle,
     state: &'a AppState,
     pctx: &pipeline_bridge::PipelineContext,
