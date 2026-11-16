@@ -1951,7 +1951,7 @@ P6·P7 항목.
   설치파일: run **43834932639**(`--ref release/1.0.0`, `ref=3eed6d5…`, `variant=lite`, `publish=true`) 성공 → **Release v1.0.0** 게시(태그 `v1.0.0` = 3eed6d5, 2026-11-16T09:13:20Z, 본문 = `docs/releases/v1.0.0.md`).
   `DocuLens-Setup-Lite-1.0.0-x64.exe` 51,985,462 B, sha256 `f9f14321e640254d5984ec372dad4adf4d1a550d10609c9f863bb74350317130`(게시된 `.sha256` · 자산 다이제스트와 일치) + `.sha256` · `THIRD-PARTY-NOTICES.md` · `sbom.cdx.json`.
   Full 설치파일은 만들지 않았다(1.0.0은 Lite만).
-- **다음**: `release/1.0.0`을 `main`에 병합(PR kimhershey/docHarnes#31 — 사용자가 한다). 사용자 PC 확인은 `docs/user-pc-checklist.md`의 "1.0.0" 절 — 특히 원본 고치기로 만든 파일을 Word · Excel · PowerPoint · 한컴오피스에서 여는 것(이 환경에서는 LibreOffice로만 확인).
+- **다음**: `release/1.0.0`의 남은 커밋을 `main`에 병합(열려 있는 PR kimhershey/docHarnes#33 — 사용자가 한다; #31 · #32는 이미 병합돼 `main`은 9e6c275까지 들어 있다). 사용자 PC 확인은 `docs/user-pc-checklist.md`의 "1.0.0" 절 — 특히 원본 고치기로 만든 파일을 Word · Excel · PowerPoint · 한컴오피스에서 여는 것(이 환경에서는 LibreOffice로만 확인).
   다음 판 후보는 아래 "남은 항목"과 "1.1.0으로 넘긴 것".
 
 - **이어서 할 때 읽을 것**: `docs/plan/v1.0.0.md` 0절의 "다음 시작 지점"과 진행 표. 항목 하나가 끝날 때마다 커밋 · 푸시하고 그 표를 고친다. 이 절은 요약이다.
