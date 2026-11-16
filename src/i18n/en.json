@@ -512,6 +512,7 @@
       "merge_default_name": "automatic name",
       "role_work": "work document",
       "role_knowledge": "reference material",
+      "role_knowledge_assign": "reference material — opens \"Put in project\"",
       "role_form": "form",
       "reference_create": "create group",
       "reference_rename": "rename",
@@ -696,6 +697,7 @@
         "set_title": "{{documents}} documents",
         "edit_text": "{{replaced}} replaced · {{documents}} documents",
         "set_role": "{{documents}} documents → {{role}}",
+        "set_role_assign": "{{documents}} document(s) → confirm in \"Put in project\" (reference material)",
         "manage_reference": "{{action}} · {{group}} · {{documents}} documents",
         "define_term": "{{action}} · '{{term}}'",
         "set_version": "{{documents}} documents · '{{group}}'",
@@ -773,6 +775,7 @@
       "inbox_watch_off": "Inbox watching turned off.",
       "document_not_found": "Document not found: {{ref}}",
       "open_project": "Opening the project",
+      "open_assign": "Opening \"Put in project\" for {{count}} document(s) as reference material",
       "unknown_screen": "Unknown screen: {{ref}}",
       "noop": "Nothing to do.",
       "register_form": "Form registration of '{{name}}' started (confirm the field grid).",
@@ -1345,11 +1348,12 @@
       "table_not_found": "Table not found.",
       "plan_clarify": "The plan is a clarification question — answer it first.",
       "no_vision_projector": "This model has no vision projector (mmproj) file, so it cannot read images. Load a model that comes with its projector file on the Models screen.",
-      "edit_unsupported_format": "This format cannot be edited in place. Only HWPX, DOCX and PPTX can (save HWP / DOC / PPT files in the newer format first, then import them).",
+      "edit_unsupported_format": "This format cannot be edited in place. Only HWPX, DOCX, PPTX and XLSX can (save HWP / DOC / PPT / XLS files in the newer format first, then import them).",
       "edit_tracked_changes": "A document with tracked changes is not edited. Accept or reject all changes in the office program and import it again.",
       "edit_signed": "A digitally signed document is not edited (the signature would break).",
       "edit_find_empty": "Enter the text to find.",
       "edit_line_break": "A text with a line break cannot be replaced. Only text inside one paragraph is.",
+      "edit_control_character": "The text holds a character a file cannot store (an invisible control character). Pasted text can bring one along: type the text again.",
       "edit_too_many": "At most 200 replacements can be made at once.",
       "edit_nothing_found": "Nothing to change was found. Check that the text is typed exactly as in the document.",
       "edit_too_many_editions": "There are too many edited copies with this name. Tidy the older ones up and try again.",
@@ -1360,7 +1364,15 @@
       "edit_last_row": "The last row of a table cannot be deleted.",
       "edit_not_in_table": "This text is not inside a table. To change a table row, enter a text one of its cells holds.",
       "edit_row_merged": "Rows are not added to or taken out of a table with cells merged down. Please change it in the office program.",
-      "edit_row_cells": "The new row has more cells than the table has columns."
+      "edit_row_cells": "The new row has more cells than the table has columns.",
+      "edit_action_unsupported": "This action does not go with this kind of file. Paragraphs and table rows are edited in HWPX / DOCX / PPTX, cell values in XLSX.",
+      "edit_cell_address": "The cell address could not be read. Write it like B3 or SheetName!B3 (the sheet's name exactly as in the file).",
+      "edit_cell_formula": "This cell holds a formula, so its value is not changed. Change a cell the formula reads, or edit it in Excel.",
+      "edit_table_header": "The header cell of an Excel table is not changed. It is the name of the table's column, and Excel takes a file where the two differ for a damaged one. Change the header in Excel.",
+      "edit_cells_unaddressed": "This sheet is stored without an address on every cell, so cell values are not changed. Save the file once in Excel and import it again.",
+      "edit_picture_missing": "This picture was not found in the file. Close the dialog and open it again to read the list of pictures anew.",
+      "edit_picture_format": "A picture of this format (EMF, WMF, SVG …) cannot be replaced. Only PNG, JPEG, GIF and BMP pictures are.",
+      "edit_picture_unreadable": "The new picture file could not be read. Check the path, that it is a PNG, JPEG, GIF, BMP, WebP or TIFF file, and that it is 50 MB or smaller."
     }
   },
   "startup": {
@@ -1879,7 +1891,7 @@
     },
     "edit_original": {
       "menu": "Edit original",
-      "hint": "Change text in the original file and save it as a new edition (formatting stays)",
+      "hint": "Change text, cell values and pictures in the original file and save it as a new edition (formatting stays)",
       "title": "Edit the original file",
       "lead": "Change text inside the original file, or add and delete paragraphs and table rows. Font, size, tables, pictures and page setup stay as they are; a new paragraph or row is modelled on the one next to it. The original file is not touched: the edited copy is saved as a new edition of the same document.",
       "find": "Text to find (exactly as in the document)",
@@ -1906,7 +1918,8 @@
         "delete_paragraph": "Delete a paragraph",
         "insert_row_after": "Add a table row (below)",
         "insert_row_before": "Add a table row (above)",
-        "delete_row": "Delete a table row"
+        "delete_row": "Delete a table row",
+        "set_cell": "Set a cell's value"
       },
       "anchor_paragraph": "Text in the paragraph next to it",
       "anchor_row": "Text in the row next to it",
@@ -1923,7 +1936,9 @@
         "delete_paragraph": "Paragraph deleted",
         "insert_row_after": "Added below this row",
         "insert_row_before": "Added above this row",
-        "delete_row": "Row deleted"
+        "delete_row": "Row deleted",
+        "set_cell": "Cell value",
+        "replace_picture": "Picture replaced"
       },
       "blank": "(empty)",
       "from_viewer": "Bring the viewer's corrections ({{count}})",
@@ -1933,7 +1948,37 @@
       "suggest_hint": "The AI finds the places to change and puts them into the lines below. Check the changes before saving.",
       "suggest_none": "Nothing to change was found. Say more precisely what should become what.",
       "suggest_dropped": "{{count}} suggestion(s) of the AI did not match the document's text and were left out.",
-      "suggested": "{{count}} suggestion(s) added. Check the changes below."
+      "suggested": "{{count}} suggestion(s) added. Check the changes below.",
+      "lead_workbook": "Change text inside the original workbook, or give a cell a new value. The cell's formatting (font, borders, number format), the other sheets and the charts stay as they are; formulas that read a changed cell are computed again when Excel opens the file. The original file is not touched: the edited copy is saved as a new edition of the same document.",
+      "cell_address": "Cell address (e.g. B3, Estimate!B3)",
+      "cell_value": "New value (empty clears the cell)",
+      "pictures": {
+        "toggle": "Replace pictures ({{count}})",
+        "hint": "The frame a picture sits in keeps its size and place; only the picture changes. The new picture is saved in the format of the old one, and every place that shows the same picture changes with it.",
+        "pick": "Replace",
+        "pick_title": "Choose the new picture",
+        "filter_name": "Pictures",
+        "path": "Path of the new picture file",
+        "clear": "Do not replace this picture",
+        "fixed": "Cannot be replaced",
+        "replaced": "Replaced",
+        "chosen": "{{count}} chosen",
+        "size": "{{width}}×{{height}} {{format}}",
+        "where": {
+          "body": "Body",
+          "header": "Header",
+          "footer": "Footer",
+          "slide": "Slide {{n}}",
+          "layout": "Slide layout",
+          "master": "Slide master",
+          "notes": "Slide notes",
+          "sheet": "Sheet"
+        }
+      },
+      "notes": {
+        "edit_formulas_cleared": "The stored results of {{count}} formula(s) that read a changed cell were cleared. Excel computes them again when it opens the file (until it is saved from there, those cells look empty in this app's viewer).",
+        "edit_picture_ratio": "{{name}}: the new picture's proportions differ from the old one's. The frame keeps its size, so the picture may look stretched or squeezed."
+      }
     }
   },
   "answer": {

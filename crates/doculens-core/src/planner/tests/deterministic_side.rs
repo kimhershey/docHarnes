@@ -12,7 +12,9 @@ fn rule_summaries_pick_the_korean_particle() {
     assert_eq!(summary("세금계산서 → 엑셀"), "세금계산서를 XLSX 파일로 내보냅니다");
     assert_eq!(summary("영수증 csv로 내보내"), "영수증을 CSV 파일로 내보냅니다");
     assert_eq!(summary("작년 계약서 전부 삭제"), "계약서를 휴지통으로 보냅니다");
-    assert_eq!(summary("이 문서를 참고 자료로 표시"), "참고 자료로 표시합니다");
+    // (reference material is not a mark any more: the step opens "프로젝트에 넣기" — 1.0.0)
+    assert_eq!(summary("이 문서를 참고 자료로 표시"), "문서를 프로젝트의 참고 자료로 넣는 화면을 엽니다");
+    assert_eq!(summary("이 문서를 업무 문서로 표시"), "업무 문서로 표시합니다");
     assert_eq!(summary("이 문서를 양식으로 표시"), "양식으로 표시합니다");
     assert_eq!(summary("제목을 '2026 공급계약'으로 바꿔"), "제목을 '2026 공급계약'으로 바꿉니다");
     assert_eq!(summary("제목을 '한빛 2차'로 바꿔"), "제목을 '한빛 2차'로 바꿉니다");

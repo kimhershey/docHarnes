@@ -20,7 +20,7 @@ import { useWorkspace } from "@/stores/workspace";
 
 import { ClassifyDialog } from "./ClassifyDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
-import { PutInProjectDialog, type PutTarget } from "./PutInProjectDialog";
+import { PutInProjectDialog, type PutKind, type PutTarget } from "./PutInProjectDialog";
 import { TemplatesDialog } from "./TemplatesDialog";
 
 export function phaseVariant(p: ProjectPhase): "ok" | "warn" | "danger" | "muted" | "info" {
@@ -234,18 +234,21 @@ export function ProjectsPage() {
   const [classify, setClassify] = useState<{ open: boolean; docIds: string[] }>({ open: false, docIds: [] });
   // "프로젝트에 넣기": library hand-offs arrive as `?put=<ids>` / `?classify=<ids>` (the latter runs the suggestion).
   const [searchParams, setSearchParams] = useSearchParams();
-  const [put, setPut] = useState<{ open: boolean; docIds: string[]; target: PutTarget; suggest: boolean }>({ open: false, docIds: [], target: "project", suggest: false });
+  // `&as=reference` opens it on 참고 자료 (the assistant's "참고 자료로 지정해줘").
+  const [put, setPut] = useState<{ open: boolean; docIds: string[]; target: PutTarget; suggest: boolean; kind: PutKind }>({ open: false, docIds: [], target: "project", suggest: false, kind: "work" });
   const putParam = searchParams.get("put");
   const classifyParam = searchParams.get("classify");
+  const asParam = searchParams.get("as");
   useEffect(() => {
     if ((putParam === null && classifyParam === null) || !workspace) return;
     const ids = (putParam ?? classifyParam ?? "").split(",").filter(Boolean);
-    if (ids.length > 0) setPut({ open: true, docIds: ids, target: "project", suggest: classifyParam !== null });
+    if (ids.length > 0) setPut({ open: true, docIds: ids, target: "project", suggest: classifyParam !== null, kind: asParam === "reference" ? "reference" : "work" });
     const next = new URLSearchParams(searchParams);
     next.delete("put");
     next.delete("classify");
+    next.delete("as");
     setSearchParams(next, { replace: true });
-  }, [putParam, classifyParam, searchParams, setSearchParams, workspace]);
+  }, [putParam, classifyParam, asParam, searchParams, setSearchParams, workspace]);
   const ko = i18n.language.startsWith("ko");
   const templateName = (id: string | null) => {
     const tpl = templates?.find((x) => x.id === id);
@@ -271,7 +274,7 @@ export function ProjectsPage() {
     });
   // Documents / files dropped on the sidebar's 프로젝트 entry (or on the 공통 참고 자료 card) go through the dialog;
   // files are imported first, then put like documents.
-  const openPut = (ids: string[], target: PutTarget) => ids.length > 0 && setPut({ open: true, docIds: ids, target, suggest: false });
+  const openPut = (ids: string[], target: PutTarget) => ids.length > 0 && setPut({ open: true, docIds: ids, target, suggest: false, kind: "work" });
   const putFiles = (paths: string[], target: PutTarget) => void importDroppedFiles(paths, {}, t).then((ids) => openPut(ids, target));
   const pendingDocs = useAttachmentsStore((s) => s.pendingProjectDocs);
   const pendingPaths = useAttachmentsStore((s) => s.pendingProjectPaths);
@@ -370,7 +373,7 @@ export function ProjectsPage() {
         )}
       </div>
       <NewProjectDialog open={newOpen} onOpenChange={setNewOpen} onSaved={(p) => navigate(`/projects/${p.id}`)} />
-      <PutInProjectDialog open={put.open} onOpenChange={(o) => setPut((s) => ({ ...s, open: o }))} docIds={put.docIds} defaultTarget={put.target} autoSuggest={put.suggest} />
+      <PutInProjectDialog open={put.open} onOpenChange={(o) => setPut((s) => ({ ...s, open: o }))} docIds={put.docIds} defaultTarget={put.target} defaultKind={put.kind} autoSuggest={put.suggest} />
       <TemplatesDialog open={templatesOpen} onOpenChange={setTemplatesOpen} />
       <ClassifyDialog open={classify.open} onOpenChange={(o) => setClassify((c) => ({ ...c, open: o }))} docIds={classify.docIds} projects={list} />
     </div>

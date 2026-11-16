@@ -755,6 +755,13 @@ fn agent_rules_cover_every_gui_function() {
         "{:?}",
         planned("이 문서를 참고 자료로 표시").plan
     );
+    // The user's sentence (decision 4-3): the step opens "프로젝트에 넣기" on 참고 자료, and says so.
+    let r = planned("이 문서를 참고 자료로 지정해줘");
+    assert!(matches!(&r.plan.operations[..], [Op::SetRole { role: RoleParam::Knowledge }]), "{r:?}");
+    assert!(
+        r.plan.summary.as_deref().is_some_and(|s| s.contains("참고 자료로 넣는 화면")) && !r.plan.requires_confirmation,
+        "{r:?}"
+    );
     // reference material
     assert!(
         matches!(op("'사규' 참고 자료 묶음 만들어"), Op::ManageReference { action: ReferenceAction::Create, name: Some(n), .. } if n == "사규")
@@ -1516,8 +1523,33 @@ mod exec_tests {
         // title / role
         run1(Op::SetTitle { title: "2026 공급계약".into() }, sel(&["d1"]));
         assert_eq!(w.doc("d1").title.as_deref(), Some("2026 공급계약"));
-        run1(Op::SetRole { role: RoleParam::Knowledge }, sel(&["d1", "d2"]));
-        assert_eq!(w.doc("d2").role, DocumentRole::Knowledge);
+        // A work document / a form is a mark on the document. Reference material is not (1.0.0, user
+        // decision 2026-11-16): the documents go to the "프로젝트에 넣기" dialog, opened on 참고 자료,
+        // and nothing changes before the user confirms there.
+        run1(Op::SetRole { role: RoleParam::Form }, sel(&["d2"]));
+        assert_eq!(w.doc("d2").role, DocumentRole::Form);
+        run1(Op::SetRole { role: RoleParam::Work }, sel(&["d2"]));
+        assert_eq!(w.doc("d2").role, DocumentRole::Work);
+        let hand_over = Op::SetRole { role: RoleParam::Knowledge };
+        assert_eq!(hand_over.side_effect(), SideEffect::None);
+        let ex = exec::run(&w.deps(None), &plan_of(vec![hand_over], sel(&["d1", "d2"])), &mut |_| {}).unwrap();
+        assert!(matches!(ex.steps[0].status, StepStatus::Done), "{:?}", ex.steps[0]);
+        assert!(ex.steps[0].summary.contains("참고 자료로 넣는 화면"), "{:?}", ex.steps[0]);
+        assert_eq!(ex.steps[0].payload["assign"], true);
+        assert_eq!(ex.ui_actions, vec![Op::Open { target: OpenTarget::Assign, reference: "reference:d1,d2".into() }]);
+        assert_eq!((w.doc("d1").role, w.doc("d2").role), (DocumentRole::Work, DocumentRole::Work));
+        // Without documents there is nothing to hand over; and a plan cannot name the dialog itself.
+        let ex = exec::run(
+            &w.deps(None),
+            &plan_of(vec![Op::SetRole { role: RoleParam::Knowledge }], sel(&["none"])),
+            &mut |_| {},
+        )
+        .unwrap();
+        assert!(matches!(ex.steps[0].status, StepStatus::Failed) && ex.ui_actions.is_empty(), "{:?}", ex.steps[0]);
+        let mut direct =
+            plan_of(vec![Op::Open { target: OpenTarget::Assign, reference: "reference:d1".into() }], Scope::default());
+        let issues = validate::validate(&mut direct, &PlanContext::default(), None);
+        assert!(issues.iter().any(|i| i.code == "target_unknown"), "{issues:?}");
         // find / replace with history
         let p = run1(
             Op::EditText { find: "㈜한빛".into(), replace: "(주)한빛".into(), pages: Vec::new(), original: None },

@@ -116,6 +116,14 @@ fn style_kinds(archive: &mut Archive) -> Result<Vec<NumKind>> {
         .unwrap_or_default())
 }
 
+/// Per cell style index: the cell shows a date (with or without a time) — what an edit of the cell
+/// has to know to write a date as a date (`documents::edit`).
+pub(crate) fn date_styles(archive: &mut Archive) -> Vec<bool> {
+    style_kinds(archive)
+        .map(|kinds| kinds.iter().map(|k| matches!(k, NumKind::Date | NumKind::DateTime)).collect())
+        .unwrap_or_default()
+}
+
 /// Date / time detection in a custom format code (quoted text and `[…]` sections ignored).
 fn classify_format(code: &str) -> NumKind {
     let mut bare = String::new();

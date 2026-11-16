@@ -354,6 +354,10 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
                 if guard::edit_target(text, &mut plan, ctx) {
                     log::info!("planner: a text replacement takes its documents from the words outside the quotes");
                 }
+                // "참고 자료로 지정" names no place: the dialog is where the user picks one.
+                if guard::reference_place(text, &mut plan, ctx, ko) {
+                    log::info!("planner: reference material at a place the sentence does not name; opening the dialog");
+                }
                 // What the sentence does not support is confirmed, whatever the model's confidence.
                 issues.extend(guard::contract_checks(text, &mut plan, ko));
                 // A split by project the checks put back: the validator had already filled the open

@@ -616,4 +616,142 @@ test.describe("P2 documents", () => {
     await expect(page.getByTestId("edit-original-dialog")).toHaveCount(0);
     await expect(page.getByTestId("toaster")).toContainText("개발계약서 (수정).docx");
   });
+
+  test("1.0.0: 원본 고치기 — a workbook cell gets a new value (step 4)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\docs\\견적서.xlsx"]);
+    const book = await docId(page, "견적서.xlsx");
+    await page.getByTestId(`doc-open-${book}`).click();
+    await page.getByTestId("viewer-edit-original").click();
+    const dialog = page.getByTestId("edit-original-dialog");
+    await expect(dialog).toBeVisible();
+    await expect(page.getByTestId("edit-original-lead")).toContainText("엑셀");
+    await expect(page.getByTestId("edit-original-lead")).toContainText("원본 파일은 건드리지 않고");
+    // Cells are named by their address: there is no instruction in words for a workbook.
+    await expect(page.getByTestId("edit-original-instruction")).toHaveCount(0);
+
+    // A workbook has cells, not paragraphs: the row offers a text replacement or a cell's value.
+    await page.getByTestId("edit-original-action-0").click();
+    await expect(page.getByTestId("edit-original-action-0-set_cell")).toBeVisible();
+    await expect(page.getByTestId("edit-original-action-0-insert_after")).toHaveCount(0);
+    await expect(page.getByTestId("edit-original-action-0-delete_row")).toHaveCount(0);
+    await page.getByTestId("edit-original-action-0-set_cell").click();
+    await expect(page.getByTestId("edit-original-find-0")).toHaveAttribute("placeholder", /칸 주소/);
+    await expect(page.getByTestId("edit-original-occurrence-0")).toHaveCount(0);
+
+    // An address that is none: the row says so and nothing can be saved.
+    await page.getByTestId("edit-original-find-0").fill("둘째 칸");
+    await page.getByTestId("edit-original-replace-0").fill("13,000");
+    await page.getByTestId("edit-original-preview-run").click();
+    await expect(page.getByTestId("edit-original-problem-0")).toHaveAttribute("data-code", "edit_cell_address");
+    await expect(page.getByTestId("edit-original-problem-0")).toContainText("칸 주소를 읽지 못했습니다");
+    await expect(page.getByTestId("edit-original-save")).toBeDisabled();
+
+    // (the mock's sheet is its page text: A2 holds "합계 12,500원"; a number loses its separators)
+    await page.getByTestId("edit-original-find-0").fill("a2");
+    await page.getByTestId("edit-original-add").click();
+    await page.getByTestId("edit-original-action-1").click();
+    await page.getByTestId("edit-original-action-1-set_cell").click();
+    await page.getByTestId("edit-original-find-1").fill("Sheet2!B1");
+    await page.getByTestId("edit-original-replace-1").fill("1,300,000");
+    await page.getByTestId("edit-original-preview-run").click();
+    await expect(page.getByTestId("edit-original-preview")).toHaveAttribute("data-total", "2");
+    await expect(page.getByTestId("edit-original-preview")).toHaveAttribute("data-problems", "0");
+    await expect(page.getByTestId("edit-original-count-0")).toHaveText("1곳");
+    const first = page.getByTestId("edit-original-change-0");
+    await expect(first).toHaveAttribute("data-action", "set_cell");
+    await expect(first).toContainText("칸 값");
+    await expect(first).toContainText("Sheet1!A2 = 합계 12,500원");
+    await expect(first).toContainText("Sheet1!A2 = 13000");
+    await expect(page.getByTestId("edit-original-change-1")).toContainText("Sheet2!B1 = 1300000");
+
+    await page.getByTestId("edit-original-save").click();
+    await expect(dialog).toHaveCount(0);
+    const toast = page.getByTestId("toaster").locator("div", { hasText: "새 판으로 저장했습니다" }).first();
+    await expect(toast).toContainText("견적서 (수정).xlsx");
+    await page.getByTestId("toast-action").first().click();
+    await expect(page.getByTestId("viewer-name")).toContainText("견적서 (수정).xlsx");
+    await expect(page.getByTestId("viewer-text-layer")).toContainText("13000");
+    await expect(page.getByTestId("viewer-text-layer")).not.toContainText("12,500원");
+  });
+
+  test("1.0.0: 원본 고치기 — a picture is replaced inside its frame (step 4)", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\docs\\제안서.pptx"]);
+    const deck = await docId(page, "제안서.pptx");
+    // At a UI scale of 150 %: the picture rows wrap inside the dialog.
+    await openAssistantScreen(page);
+    await page.getByTestId("assistant-input").fill("UI 배율 150으로 바꿔줘");
+    await page.getByTestId("assistant-send").click();
+    await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).fontSize), { timeout: 15_000 }).toBe("24px");
+    await page.getByTestId("nav-library").click();
+    await page.getByTestId(`doc-open-${deck}`).click();
+    await page.getByTestId("viewer-edit-original").click();
+    const dialog = page.getByTestId("edit-original-dialog");
+    await expect(dialog).toBeVisible();
+
+    // The pictures of the file are listed on demand: two that can be replaced, a drawing that cannot.
+    const toggle = page.getByTestId("edit-original-pictures-toggle");
+    await expect(toggle).toHaveAttribute("data-count", "3");
+    await expect(page.getByTestId("edit-original-pictures")).toHaveCount(0);
+    await toggle.click();
+    await expect(page.getByTestId("edit-original-pictures")).toBeVisible();
+    await expect(page.getByTestId("edit-original-picture-0")).toContainText("image1.png");
+    await expect(page.getByTestId("edit-original-picture-0")).toContainText("640×360 PNG");
+    await expect(page.getByTestId("edit-original-picture-0")).toContainText("슬라이드 1");
+    await expect(page.getByTestId("edit-original-picture-fixed-2")).toHaveText("바꿀 수 없는 형식");
+    await expect(page.getByTestId("edit-original-picture-pick-2")).toHaveCount(0);
+    // Nothing is asked yet: there is nothing to preview.
+    await expect(page.getByTestId("edit-original-preview-run")).toBeDisabled();
+
+    // A file that is no picture: the reason stands at the picture and nothing can be saved.
+    await page.getByTestId("edit-original-picture-pick-0").click();
+    await page.getByTestId("edit-original-picture-path-0").fill("D:\\그림\\메모.txt");
+    await page.getByTestId("edit-original-preview-run").click();
+    await expect(page.getByTestId("edit-original-picture-problem-0")).toHaveAttribute("data-code", "edit_picture_unreadable");
+    await expect(page.getByTestId("edit-original-save")).toBeDisabled();
+
+    // A square picture for a wide frame, next to a text replacement: both are in the preview, with a remark.
+    await page.getByTestId("edit-original-picture-path-0").fill("D:\\그림\\새 로고 800x800.jpg");
+    await expect(page.getByTestId("edit-original-preview")).toHaveCount(0);
+    await page.getByTestId("edit-original-find-0").fill("12,500원");
+    await page.getByTestId("edit-original-replace-0").fill("13,000원");
+    await page.getByTestId("edit-original-preview-run").click();
+    // (the mock's deck has four slides with the amount on each)
+    await expect(page.getByTestId("edit-original-preview")).toHaveAttribute("data-total", "5");
+    await expect(page.getByTestId("edit-original-picture-state-0")).toHaveText("바뀜");
+    await expect(page.getByTestId("edit-original-picture-problem-0")).toHaveCount(0);
+    await expect(toggle).toContainText("1개 고름");
+    const note = page.getByTestId("edit-original-note-0");
+    await expect(note).toHaveAttribute("data-code", "edit_picture_ratio");
+    await expect(note).toContainText("image1.png");
+    const swapped = page.locator('[data-testid^="edit-original-change-"][data-action="replace_picture"]');
+    await expect(swapped).toHaveCount(1);
+    await expect(swapped).toContainText("640×360 PNG");
+    await expect(swapped).toContainText("800×800 JPEG → PNG");
+    await expect(swapped).toContainText("image1.png · 그림 바꾸기");
+    // The dialog stays inside the window, and nothing in it runs out sideways.
+    const box = (await dialog.boundingBox())!;
+    const view = page.viewportSize()!;
+    expect(box.x >= 0 && box.y >= 0 && box.x + box.width <= view.width && box.y + box.height <= view.height).toBe(true);
+    expect(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+
+    await page.getByTestId("edit-original-save").click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByTestId("toaster")).toContainText("제안서 (수정).pptx");
+    // The edition holds the new picture; a picture taken back out of the request is not asked for.
+    await page.getByTestId("toast-action").first().click();
+    await expect(page.getByTestId("viewer-name")).toContainText("제안서 (수정).pptx");
+    await page.getByTestId("viewer-edit-original").click();
+    await page.getByTestId("edit-original-pictures-toggle").click();
+    await expect(page.getByTestId("edit-original-picture-0")).toContainText("800×800 PNG");
+    await page.getByTestId("edit-original-picture-pick-1").click();
+    await page.getByTestId("edit-original-picture-path-1").fill("D:\\그림\\표지.jpeg");
+    await expect(page.getByTestId("edit-original-preview-run")).toBeEnabled();
+    await page.getByTestId("edit-original-picture-clear-1").click();
+    await expect(page.getByTestId("edit-original-picture-path-1")).toHaveCount(0);
+    await expect(page.getByTestId("edit-original-preview-run")).toBeDisabled();
+  });
 });

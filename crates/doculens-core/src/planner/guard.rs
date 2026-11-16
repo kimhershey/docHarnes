@@ -968,6 +968,46 @@ pub fn edit_target(text: &str, plan: &mut Plan, ctx: &super::PlanContext) -> boo
     changed
 }
 
+/// 1.0.0, user decision 2026-11-16 (plan 4-3) — "참고 자료로 지정" names no place, so the documents
+/// go to the "프로젝트에 넣기" dialog and the user picks the projects there (`set_role` to
+/// `knowledge`). Gemma 4 E4B answered "선택한 문서들 참고자료로 지정" with `manage_reference add` and a
+/// project the sentence never names (eval run of the same day): the documents would have gone into
+/// a project of the model's choosing, behind one confirmation. A plan that puts documents into
+/// reference material for a sentence that only marks them, at a place the user's words do not
+/// name, becomes the step that opens the dialog. A place the words do name — a project, a group,
+/// the common material — is the user's and stays. The plan of that step, whoever wrote it, says
+/// what it does and is not confirmed twice: nothing changes before the dialog is.
+pub fn reference_place(text: &str, plan: &mut Plan, ctx: &super::PlanContext, ko: bool) -> bool {
+    let opens = matches!(plan.operations.as_slice(), [Op::SetRole { role: super::RoleParam::Knowledge }]);
+    let puts_in = matches!(
+        plan.operations.as_slice(),
+        [Op::ManageReference { action: super::ReferenceAction::Add, .. }]
+            | [Op::AddToProject { as_reference: true, .. }]
+    );
+    let repaired = puts_in && super::rules::marks_as_reference(text) && !names_a_place(text, ctx);
+    if repaired {
+        plan.operations = vec![Op::SetRole { role: super::RoleParam::Knowledge }];
+        plan.intent = OpKind::SetRole;
+    }
+    if opens || repaired {
+        plan.summary = Some(super::rules::reference_dialog_summary(ko).to_string());
+        plan.requires_confirmation = false;
+    }
+    repaired
+}
+
+/// Whether the user's words say where reference material goes: a project (the word, or the name of
+/// one), a group, the common material.
+fn names_a_place(text: &str, ctx: &super::PlanContext) -> bool {
+    const PLACE: [&str; 9] = ["프로젝트", "project", "묶음", "그룹", "컬렉션", "collection", "group", "공통", "common"];
+    let said = super::compact(&super::rules::user_words(text));
+    PLACE.iter().any(|w| said.contains(w))
+        || ctx.projects.iter().any(|p| {
+            let name = super::compact(&p.name);
+            !name.is_empty() && said.contains(&name)
+        })
+}
+
 /// The kind of document the user's words name (0.8.1): "참고 자료에서 …" → reference material,
 /// "업무 문서만 …" → work documents. Both named: the one that is not ruled out ("참고 자료 말고").
 fn kind_named(text: &str) -> Option<super::RoleParam> {
@@ -1754,5 +1794,67 @@ mod tests {
         }]);
         restore_carried_text(&text, &mut p);
         assert!(matches!(&p.operations[0], Op::Answer { question, .. } if question == "계약 기간은?"));
+    }
+
+    /// 1.0.0, user decision 2026-11-16 — "참고 자료로 지정" opens "프로젝트에 넣기" on 참고 자료. The
+    /// plan Gemma 4 E4B wrote for "선택한 문서들 참고자료로 지정" (eval run of the same day), replayed:
+    /// `manage_reference add` into a project the sentence does not name.
+    #[test]
+    fn reference_material_at_a_place_nobody_named_opens_the_dialog() {
+        use crate::planner::{ReferenceAction, RoleParam};
+        let ctx = crate::planner::PlanContext {
+            projects: vec![crate::planner::ProjectSummary {
+                id: "p-hanbit".into(),
+                name: "한빛 납품".into(),
+                status: "active".into(),
+            }],
+            ..Default::default()
+        };
+        let add = |project: Option<&str>, group: Option<&str>| Op::ManageReference {
+            action: ReferenceAction::Add,
+            group: group.map(str::to_string),
+            name: None,
+            project: project.map(str::to_string),
+        };
+        let opens = |p: &Plan| matches!(p.operations.as_slice(), [Op::SetRole { role: RoleParam::Knowledge }]);
+
+        let mut p = model_plan(vec![add(Some("p-hanbit"), None)]);
+        p.requires_confirmation = true;
+        assert!(reference_place("선택한 문서들 참고자료로 지정", &mut p, &ctx, true));
+        assert!(opens(&p) && p.intent == OpKind::SetRole && !p.requires_confirmation, "{p:?}");
+        assert_eq!(p.summary.as_deref(), Some("문서를 프로젝트의 참고 자료로 넣는 화면을 엽니다"));
+        // The same for the project's reference material written as a project membership.
+        let mut p = model_plan(vec![Op::AddToProject { project: None, doc_ids: Vec::new(), as_reference: true }]);
+        assert!(reference_place("mark these as reference material", &mut p, &ctx, false) && opens(&p));
+
+        // A place the user's words name is the user's: the project, a group, the common material.
+        for text in [
+            "선택한 문서들 한빛 납품 참고자료로 지정",
+            "이 문서를 이 프로젝트의 참고 자료로 지정해줘",
+            "이 문서를 '사규' 묶음의 참고 자료로 지정해줘",
+            "이 문서를 공통 참고 자료로 지정해줘",
+        ] {
+            let mut p = model_plan(vec![add(Some("p-hanbit"), None)]);
+            assert!(!reference_place(text, &mut p, &ctx, true) && !opens(&p), "{text}");
+        }
+        // A sentence that puts documents in ("넣어줘", "추가") is not a mark: it stays what it is.
+        let mut p = model_plan(vec![add(None, None)]);
+        assert!(!reference_place("이 문서를 참고 자료에 넣어줘", &mut p, &ctx, true) && !opens(&p));
+        // Work documents are not this guard's.
+        let mut p = model_plan(vec![Op::AddToProject { project: None, doc_ids: Vec::new(), as_reference: false }]);
+        assert!(!reference_place("이 문서를 참고 자료로 지정해줘", &mut p, &ctx, true) && !opens(&p));
+        // The step the model wrote itself is left as it is; its plan says what the step does and
+        // is not confirmed twice (the dialog is where the user confirms).
+        let mut p = model_plan(vec![Op::SetRole { role: RoleParam::Knowledge }]);
+        p.requires_confirmation = true;
+        assert!(!reference_place("이 문서를 참고 자료로 지정해줘", &mut p, &ctx, true));
+        assert!(
+            opens(&p) && !p.requires_confirmation && p.summary.as_deref().is_some_and(|s| s.contains("화면을 엽니다"))
+        );
+        // … and a mark as a work document is untouched.
+        let mut p = model_plan(vec![Op::SetRole { role: RoleParam::Work }]);
+        p.requires_confirmation = true;
+        assert!(!reference_place("이 문서를 업무 문서로 표시", &mut p, &ctx, true));
+        assert!(p.requires_confirmation && p.summary.as_deref() == Some("s"));
     }
 }

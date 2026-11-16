@@ -84,6 +84,7 @@ import type {
   DocumentImportPlan,
   DocumentRole,
   DocumentView,
+  EditPicture,
   EditReplacement,
   EditReport, EditSuggestion,
   Edition,
@@ -248,6 +249,8 @@ export const api = {
   documentsSetTitle: (id: string, title: string | null) => invoke<DocumentView>("documents_set_title", { id, title }),
   /** 1.0.0 §2-1: what replacing text in the document's own file would change (nothing is written). */
   documentsEditPreview: (id: string, edits: EditReplacement[]) => invoke<EditReport>("documents_edit_preview", { id, edits }),
+  /** 1.0.0 §2-1 step 4: the pictures of the document's own file (what `replace_picture` can name). */
+  documentsEditPictures: (id: string) => invoke<EditPicture[]>("documents_edit_pictures", { id }),
   /** Saves the edited copy as the latest edition; the original file stays as it is. */
   documentsEditSave: (id: string, edits: EditReplacement[]) => invoke<Edition>("documents_edit_save", { id, edits }),
   /** What an instruction in words changes in the original file, as the loaded model reads it (nothing is written). */
@@ -433,6 +436,17 @@ export async function pickGgufFiles(title: string, defaultPath?: string): Promis
   });
   if (Array.isArray(result)) return result;
   return typeof result === "string" ? [result] : [];
+}
+
+/** The picture formats the core reads for a replacement (`image` crate features of the workspace). */
+export const PICTURE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "bmp", "webp", "tif", "tiff"];
+
+/** Native single-file picker for a picture (Tauri only). Returns null when cancelled or unavailable. */
+export async function pickPictureFile(title: string, filterName: string): Promise<string | null> {
+  if (!isTauri) return null;
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const result = await open({ directory: false, multiple: false, title, filters: [{ name: filterName, extensions: PICTURE_EXTENSIONS }] });
+  return typeof result === "string" ? result : null;
 }
 
 /** Native single-file picker for the llama-server binary (Tauri only). */

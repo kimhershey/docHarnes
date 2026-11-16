@@ -23,7 +23,7 @@ import { useSettings } from "@/stores/settings";
 import { useUiStore } from "@/stores/ui";
 
 import { AssignSheet } from "./AssignSheet";
-import { fillFromSuggestions, sameForAllRequest, setCells, sheetColumns, sheetRequest, sheetRows, sheetSummary, suggestedProjects, type SheetRow } from "./assign";
+import { fillFromSuggestions, sameForAllRequest, setCells, setKind as setRowsKind, sheetColumns, sheetRequest, sheetRows, sheetSummary, suggestedProjects, type SheetRow } from "./assign";
 
 const NEW_GROUP = "__new__";
 /** The documents of the sheet come from the library list (it carries each document's projects). */
@@ -83,6 +83,7 @@ export function PutInProjectDialog({
   docIds,
   defaultProjectId = null,
   defaultTarget = "project",
+  defaultKind = "work",
   autoSuggest = false,
   onDone,
 }: {
@@ -92,6 +93,8 @@ export function PutInProjectDialog({
   defaultProjectId?: string | null;
   /** Pre-selected target (`common` for the old "지식 베이스에 추가" entry points). */
   defaultTarget?: PutTarget;
+  /** Pre-selected kind: `reference` when the documents were asked to become reference material ("참고 자료로 지정해줘") — the rows of the sheet start as 참고 자료 too. */
+  defaultKind?: PutKind;
   /** Run the classify preview as soon as the dialog opens (the library's "프로젝트로 분류"). */
   autoSuggest?: boolean;
   onDone?: (result: PutResult) => void;
@@ -127,7 +130,7 @@ export function PutInProjectDialog({
     const first = defaultProjectId;
     setTarget(defaultTarget);
     setMode("same");
-    setKind(defaultTarget === "common" ? "reference" : "work");
+    setKind(defaultTarget === "common" ? "reference" : defaultKind);
     setPicked(new Set(first ? [first] : []));
     setQuery("");
     setNewProject({ open: false, name: "" });
@@ -158,7 +161,11 @@ export function PutInProjectDialog({
   }, [library, docIds]);
   // The rows are built once per opening: a refetch of the library must not throw the user's ticks away.
   useEffect(() => {
-    if (open && sheet && rows === null && sheetDocs) setRows(sheetRows(sheetDocs));
+    if (open && sheet && rows === null && sheetDocs) {
+      const fresh = sheetRows(sheetDocs);
+      // Asked to become reference material: every row starts as 참고 자료 (a row can still be set back).
+      setRows(defaultKind === "reference" ? setRowsKind(fresh, fresh.map((r) => r.id), "reference") : fresh);
+    }
   }, [open, sheet, rows, sheetDocs]);
   // A suggestion that arrived before the rows (or that switched to the sheet) fills them once they exist.
   useEffect(() => {

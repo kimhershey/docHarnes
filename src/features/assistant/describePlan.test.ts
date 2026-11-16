@@ -358,6 +358,25 @@ describe("uiResultsByStep", () => {
     // `open` was skipped by the executor (not handed over): the one result is the theme's.
     expect([...uiResultsByStep(execution, [result("set_theme", false)]).keys()]).toEqual([2]);
   });
+
+  it("passes over the action a core step added itself (the dialog of 'reference material', the review queue)", () => {
+    // "참고 자료로 지정하고 프로젝트 화면 열고 테마 바꿔줘": the first step ran in the core and opened the dialog.
+    const execution: PlanExecution = {
+      steps: [step(0, "set_role", "done"), step(1, "open", "ui"), step(2, "set_theme", "ui")],
+      cancelled: false,
+      documents: ["a"],
+      ui_actions: [{ op: "open", target: "assign", ref: "reference:a" }, { op: "open", target: "screen", ref: "projects" }, { op: "set_theme", theme: "dark" }],
+      batches: [],
+    };
+    const results: UiOpResult[] = [{ ...result("open", true), summary: "dialog" }, { ...result("open", true), summary: "screen" }, result("set_theme", false)];
+    const map = uiResultsByStep(execution, results);
+    expect([...map.keys()]).toEqual([1, 2]);
+    expect(map.get(1)).toMatchObject({ summary: "screen" });
+    expect(map.get(2)).toMatchObject({ ok: false });
+    // An action of another kind that a core step added (review → its queue) no longer stops the ones after it.
+    const reviewed: PlanExecution = { ...execution, steps: [step(0, "review", "done"), step(1, "set_theme", "ui")], ui_actions: [{ op: "open", target: "screen", ref: "review" }, { op: "set_theme", theme: "dark" }] };
+    expect([...uiResultsByStep(reviewed, [result("open", true), result("set_theme", true)]).keys()]).toEqual([1]);
+  });
 });
 
 describe("result actions (P6 payloads)", () => {

@@ -142,6 +142,25 @@
 - 원본 고치기 세 문장(`ko-130` · `ko-131` · `en-34`)은 모두 `original: true`와 확인 카드로 나왔고, "원본"을 말하지 않은 `ko-75`에는 `original`이 없습니다.
 - 첫 측정의 채점은 대상을 보지 않아 `ko-130`이 정답으로 찍혔습니다(결과 파일에는 7/8). 그 뒤 네 문장의 기대값에 대상(열린 문서)을 넣었고, 위 표의 첫 측정은 그 기준으로 적었습니다.
 
+### "참고 자료로 지정" 문장 4개 — 3/4 → 4/4
+
+사용자 결정(2026-11-16, 계획 4-3): "이 문서를 참고 자료로 지정해줘"는 문서에 표시만 붙이지 않고 "프로젝트에 넣기" 화면을 참고 자료 쪽으로 엽니다(`set_role`의 `knowledge`가 그 일을 합니다 —
+실행기가 화면 동작을 넘기고, 바뀌는 것은 대화상자에서 확인할 때입니다). 동작 설명을 그렇게 고친 뒤 네 문장을 쟀습니다.
+
+| id | 문장 | 첫 측정 | 검사 후 |
+|---|---|---|---|
+| ko-76 | 이 문서를 참고 자료로 표시 | ○ set_role {"role": "knowledge"} | ○ (같음) |
+| ko-132 | 이 문서를 참고 자료로 지정해줘 | ○ set_role {"role": "knowledge"} | ○ (같음) |
+| ko-133 | 선택한 문서들 참고자료로 지정 | ✕ manage_reference {"action": "add", "project": "한빛 납품"} · 확인 카드 — 문장에 없는 프로젝트를 모델이 골랐음 | ○ set_role {"role": "knowledge"} |
+| en-35 | mark this document as reference material | ○ set_role {"role": "knowledge"} | ○ (같음) |
+
+- `ko-133`에서 모델은 문장이 말하지 않은 프로젝트("한빛 납품" — 측정 컨텍스트에 있는 프로젝트)의 참고 자료에 넣겠다고 적었습니다. 확인 카드가 뜨므로 바로 실행되지는 않지만, 확인을 누르면 사용자가 고르지 않은
+  프로젝트에 들어갑니다. 검사 `guard::reference_place`를 넣었습니다 — 문장이 표시만 하는 말("…로 지정 / 표시")이고 프로젝트 · 묶음 · 공통 자료를 말하지 않았는데 계획이 어딘가에 넣는 것이면
+  화면을 여는 단계로 바꿉니다. 문장이 프로젝트나 묶음을 말했으면 그대로 둡니다.
+- 네 문장 모두 확인 카드 없이 나옵니다(화면을 여는 단계는 아무것도 바꾸지 않으므로). 계획의 요약 문장은 누가 썼든 "문서를 프로젝트의 참고 자료로 넣는 화면을 엽니다"로 맞춥니다.
+- 응답 시간은 문장당 22 ~ 125초였습니다(CPU). 첫 문장과 영어 문장(지시문이 영어라 4,040토큰)이 약 2분, 같은 한국어 지시문(약 2,960토큰)을 이어 쓴 두 문장이 22초입니다.
+- 네 문장만 잰 것입니다. "참고 자료로 넣어줘" · 프로젝트 이름을 말한 문장 · E2B · GPU는 재지 않았습니다.
+
 ## 파일
 
 - `gemma4-e4b-q4km-0.7.0.json`, `gemma4-e4b-q4km-0.8.0.json` — 배치별 결과를 합친 것(문장별 플랜, 출처, 응답 시간; 다시 잰 문장의 첫 결과는 `first_measurement`).
@@ -151,4 +170,5 @@
 - `gemma4-e4b-q4km-1.0.0-section4.json` — 1.0.0 4절: 골든셋 20문장(`--ids ko-05,ko-07,ko-14,ko-53,ko-54,ko-55,ko-56,ko-57,en-14,mx-06,mx-07,ko-98,ko-104,ko-105,ko-106,ko-108,ko-109,ko-111,ko-112,ko-115`).
 - `gemma4-e4b-q4km-1.0.0-user-sentences-before-guard.json`, `gemma4-e4b-q4km-1.0.0-user-sentences.json` — 1.0.0 4절: 사용자 문장 5개, `guard::document_question`을 넣기 전과 후.
 - `gemma4-e4b-q4km-1.0.0-edit-original.json`, `gemma4-e4b-q4km-1.0.0-edit-original-remeasured.json` — 1.0.0 2-1절: 위 8문장(`--ids ko-55,ko-05,ko-106,ko-112,ko-75,ko-130,ko-131,en-34`)과, `guard::edit_target`을 넣은 뒤의 두 문장.
+- `gemma4-e4b-q4km-1.0.0-reference-material-before-guard.json`, `gemma4-e4b-q4km-1.0.0-reference-material.json` — 1.0.0 결정 4-3: 위 4문장(`--ids ko-76,ko-132,ko-133,en-35`), `guard::reference_place`를 넣기 전과 후.
   결과 파일의 경로(`golden` · `context` · `engine.binary`)는 저장소 기준으로 고쳐 적었다.

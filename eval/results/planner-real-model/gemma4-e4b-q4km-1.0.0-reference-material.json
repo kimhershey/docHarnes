@@ -1,0 +1,377 @@
+{
+  "schema_version": 1,
+  "kind": "planner",
+  "generated_at": "2026-11-16T06:47:14Z",
+  "golden": "eval/golden/planner.json",
+  "golden_count": 4,
+  "context": "eval/golden/planner-context.json",
+  "today": "2026-11-08",
+  "engine": {
+    "binary": "llama-server (local build)",
+    "version": null,
+    "build_number": null,
+    "backend": "cpu",
+    "tier": "cpu_only",
+    "profile": "balanced",
+    "model": "gemma4-e4b-q4km",
+    "model_display": "Gemma 4 E4B (Q4_K_M, 저여유)",
+    "quantization": "Q4_K_M",
+    "architecture": "gemma4",
+    "has_vision": true,
+    "ctx": 8192,
+    "model_memory_bytes": null,
+    "mmproj_bytes": 990372672,
+    "devices": [],
+    "vram_used_mib": null,
+    "load_ms": 18827
+  },
+  "mode": "model",
+  "model": "gemma4-e4b-q4km",
+  "total": 4,
+  "correct": 4,
+  "accuracy": 1.0,
+  "by_category": {
+    "en": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "ko": {
+      "total": 3,
+      "correct": 3,
+      "accuracy": 1.0
+    }
+  },
+  "by_intent": {
+    "set_role": {
+      "total": 4,
+      "correct": 4,
+      "accuracy": 1.0
+    }
+  },
+  "by_kind": {
+    "command": {
+      "total": 4,
+      "correct": 4,
+      "accuracy": 1.0
+    }
+  },
+  "by_source": {
+    "model": 4
+  },
+  "by_cause": {},
+  "unasked_changes": 0,
+  "latency": {
+    "p50_ms": 22404.246046,
+    "p95_ms": 125258.719957,
+    "mean_ms": 72408.556711
+  },
+  "latency_by_kind": {
+    "command": {
+      "p50_ms": 22404.246046,
+      "p95_ms": 125258.719957,
+      "mean_ms": 72408.556711
+    }
+  },
+  "items": [
+    {
+      "id": "ko-76",
+      "category": "ko",
+      "text": "이 문서를 참고 자료로 표시",
+      "correct": true,
+      "source": "model",
+      "intent": "set_role",
+      "ops": [
+        "set_role"
+      ],
+      "summary": "문서를 프로젝트의 참고 자료로 넣는 화면을 엽니다",
+      "confidence": 1.0,
+      "latency_ms": 119649.798762,
+      "kind": "command",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 2954,
+      "completion_tokens": 145,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "set_role",
+          "role": "knowledge"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"현재 문서를 참고 자료(knowledge)로 표시합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"set_role\",\n  \"scope\": {\n    \"doc_ids\": [\n      \"d1a2\"\n    ]\n  },\n  \"operations\": [\n    {\n      \"op\": \"set_role\",\n      \"role\": \"knowledge\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 1.0,\n  \"clarification_question\": \"\"\n}"
+    },
+    {
+      "id": "ko-132",
+      "category": "ko",
+      "text": "이 문서를 참고 자료로 지정해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "set_role",
+      "ops": [
+        "set_role"
+      ],
+      "summary": "문서를 프로젝트의 참고 자료로 넣는 화면을 엽니다",
+      "confidence": 1.0,
+      "latency_ms": 22404.246046,
+      "kind": "command",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 2958,
+      "completion_tokens": 145,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "set_role",
+          "role": "knowledge"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"현재 문서를 참고 자료(knowledge)로 지정합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"set_role\",\n  \"scope\": {\n    \"doc_ids\": [\n      \"d1a2\"\n    ]\n  },\n  \"operations\": [\n    {\n      \"op\": \"set_role\",\n      \"role\": \"knowledge\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 1.0,\n  \"clarification_question\": \"\"\n}"
+    },
+    {
+      "id": "ko-133",
+      "category": "ko",
+      "text": "선택한 문서들 참고자료로 지정",
+      "correct": true,
+      "source": "model",
+      "intent": "set_role",
+      "ops": [
+        "set_role"
+      ],
+      "summary": "문서를 프로젝트의 참고 자료로 넣는 화면을 엽니다",
+      "confidence": 0.95,
+      "latency_ms": 22321.462079,
+      "kind": "command",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 2960,
+      "completion_tokens": 146,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "set_role",
+          "role": "knowledge"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"선택된 문서들을 참고 자료로 지정합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"manage_reference\",\n  \"scope\": {\n    \"doc_ids\": [\n      \"d1a2\"\n    ]\n  },\n  \"operations\": [\n    {\n      \"op\": \"manage_reference\",\n      \"action\": \"add\",\n      \"project\": \"한빛 납품\"\n    }\n  ],\n  \"requires_confirmation\": true,\n  \"confidence\": 0.95\n}"
+    },
+    {
+      "id": "en-35",
+      "category": "en",
+      "text": "mark this document as reference material",
+      "correct": true,
+      "source": "model",
+      "intent": "set_role",
+      "ops": [
+        "set_role"
+      ],
+      "summary": "문서를 프로젝트의 참고 자료로 넣는 화면을 엽니다",
+      "confidence": 0.95,
+      "latency_ms": 125258.719957,
+      "kind": "command",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 4040,
+      "completion_tokens": 133,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "set_role",
+          "role": "knowledge"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"현재 문서를 참고 자료로 표시합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"set_role\",\n  \"scope\": {\n    \"doc_ids\": [\"d1a2\"]\n  },\n  \"operations\": [\n    {\n      \"op\": \"set_role\",\n      \"role\": \"knowledge\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.95\n}"
+    }
+  ],
+  "rules_only": {
+    "mode": "rules",
+    "total": 4,
+    "correct": 4,
+    "accuracy": 1.0,
+    "by_category": {
+      "en": {
+        "total": 1,
+        "correct": 1,
+        "accuracy": 1.0
+      },
+      "ko": {
+        "total": 3,
+        "correct": 3,
+        "accuracy": 1.0
+      }
+    },
+    "by_intent": {
+      "set_role": {
+        "total": 4,
+        "correct": 4,
+        "accuracy": 1.0
+      }
+    },
+    "by_kind": {
+      "command": {
+        "total": 4,
+        "correct": 4,
+        "accuracy": 1.0
+      }
+    },
+    "by_source": {
+      "rules": 4
+    },
+    "by_cause": {},
+    "unasked_changes": 0,
+    "items": [
+      {
+        "id": "ko-76",
+        "category": "ko",
+        "text": "이 문서를 참고 자료로 표시",
+        "correct": true,
+        "source": "rules",
+        "intent": "set_role",
+        "ops": [
+          "set_role"
+        ],
+        "summary": "문서를 프로젝트의 참고 자료로 넣는 화면을 엽니다",
+        "confidence": 0.85,
+        "latency_ms": 2.541626,
+        "kind": "command",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "set_role",
+            "role": "knowledge"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ],
+          "filter": {}
+        }
+      },
+      {
+        "id": "ko-132",
+        "category": "ko",
+        "text": "이 문서를 참고 자료로 지정해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "set_role",
+        "ops": [
+          "set_role"
+        ],
+        "summary": "문서를 프로젝트의 참고 자료로 넣는 화면을 엽니다",
+        "confidence": 0.85,
+        "latency_ms": 1.9903199999999999,
+        "kind": "command",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "set_role",
+            "role": "knowledge"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ],
+          "filter": {}
+        }
+      },
+      {
+        "id": "ko-133",
+        "category": "ko",
+        "text": "선택한 문서들 참고자료로 지정",
+        "correct": true,
+        "source": "rules",
+        "intent": "set_role",
+        "ops": [
+          "set_role"
+        ],
+        "summary": "문서를 프로젝트의 참고 자료로 넣는 화면을 엽니다",
+        "confidence": 0.85,
+        "latency_ms": 1.9200000000000002,
+        "kind": "command",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "set_role",
+            "role": "knowledge"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ],
+          "filter": {}
+        }
+      },
+      {
+        "id": "en-35",
+        "category": "en",
+        "text": "mark this document as reference material",
+        "correct": true,
+        "source": "rules",
+        "intent": "set_role",
+        "ops": [
+          "set_role"
+        ],
+        "summary": "문서를 프로젝트의 참고 자료로 넣는 화면을 엽니다",
+        "confidence": 0.85,
+        "latency_ms": 1.227846,
+        "kind": "command",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "set_role",
+            "role": "knowledge"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ],
+          "filter": {}
+        }
+      }
+    ]
+  }
+}

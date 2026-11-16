@@ -971,11 +971,13 @@ export interface DocumentImportPlan {
 }
 
 /** What an edit of the original file does (core `documents::edit::Action`). */
-export type EditAction = "replace" | "insert_after" | "insert_before" | "delete_paragraph" | "insert_row_after" | "insert_row_before" | "delete_row";
+export type EditAction = "replace" | "insert_after" | "insert_before" | "delete_paragraph" | "insert_row_after" | "insert_row_before" | "delete_row" | "set_cell" | "replace_picture";
 /**
  * 1.0.0 §2-1 (core `documents::edit`): one edit in the document's own file. A replacement: `find` as it stands
- * in a paragraph becomes `replace`. Any other `action`: `find` names the place — the paragraph, or the table
- * row, that holds this text — and `replace` (a new row: the cells, split at `|`, or `cells`) is the new text.
+ * in a paragraph becomes `replace`. A paragraph / row action: `find` names the place — the paragraph, or the
+ * table row, that holds this text — and `replace` (a new row: the cells, split at `|`, or `cells`) is the new
+ * text. `set_cell` (XLSX): `find` is the cell's address (`B3`, `견적!B3`), `replace` its new value.
+ * `replace_picture`: `find` is the picture's part (as `EditPicture.part`), `replace` the path of the new picture file.
  */
 export interface EditReplacement {
   find: string;
@@ -993,7 +995,7 @@ export interface EditChange {
   unit?: number | null;
   /** Which replacement of the request (0-based). */
   edit: number;
-  /** Absent for a replacement. An insertion: `before` = the paragraph / row it stands next to, `after` = the new text; a removal: `after` is empty. */
+  /** Absent for a replacement. An insertion: `before` = the paragraph / row it stands next to, `after` = the new text; a removal: `after` is empty. A cell: `시트!B3 = value` before and after; a picture: `640×480 PNG` and `800×600 JPEG → PNG`. */
   action?: EditAction;
   before: string;
   after: string;
@@ -1005,6 +1007,24 @@ export interface EditReport {
   parts: string[];
   /** Edits that cannot be made as asked (a reason code each); nothing is saved while there is one. */
   problems?: { edit: number; code: string }[];
+  /** Remarks on edits that are made all the same: `edit_picture_ratio`, `edit_formulas_cleared` (with `count`). */
+  notes?: { edit: number; code: string; count: number }[];
+}
+/** One picture of a document's own file (core `documents::edit::Picture`): what a `replace_picture` edit can name. */
+export interface EditPicture {
+  /** The part of the package (`word/media/image1.png`). */
+  part: string;
+  /** `png` | `jpeg` | `gif` | `bmp`, or the extension of a format that cannot be replaced (`emf` …). */
+  format: string;
+  /** Pixels (0 when the picture cannot be read). */
+  width: number;
+  height: number;
+  bytes: number;
+  replaceable: boolean;
+  /** The parts that show the picture (`word/document.xml`, `ppt/slides/slide3.xml`, a layout …). */
+  used_in: string[];
+  /** A small PNG as a data URL. */
+  thumbnail?: string | null;
 }
 /** What the model makes of an instruction in words (core `documents::edit::Suggestion`): edits for the preview, nothing is changed. */
 export interface EditSuggestion {
@@ -1780,7 +1800,8 @@ export type ModelTierChoice = Tier | "auto";
 export type WorkspaceAction = "open" | "create" | "close" | "forget";
 export type MaintenanceAction = "purge_now" | "clear_finished_jobs" | "rescan" | "inbox_scan";
 export type RoleChoice = "work" | "knowledge" | "form";
-export type OpenTarget = "document" | "page" | "folder" | "screen" | "project";
+/** `assign` is written by the executor only (a `set_role` step to reference material): `ref` = `reference:<id>,<id>…` opens "프로젝트에 넣기" on 참고 자료 for those documents. */
+export type OpenTarget = "document" | "page" | "folder" | "screen" | "project" | "assign";
 /** `explain.scope` (appendix D). */
 /** `reference` = the 공통 참고 자료 (0.5.0; `collection` was its pre-0.5.0 name and still deserialises in Rust). */
 export type ExplainScope = "kb" | "reference" | "project" | "document";
