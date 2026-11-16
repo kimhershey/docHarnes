@@ -385,4 +385,80 @@ test.describe("P2 documents", () => {
     await page.getByTestId("folder-all").click();
     await expect(cards).toHaveCount(3);
   });
+
+  test("1.0.0: 원본 고치기 — a replacement is previewed, then saved as a new edition next to the original", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\docs\\개발계약서.docx", "D:\\docs\\스캔본.pdf"]);
+    const original = await docId(page, "개발계약서.docx");
+    const scan = await docId(page, "스캔본.pdf");
+
+    // Only formats whose own file can be edited in place offer it.
+    await page.getByTestId(`doc-open-${scan}`).click();
+    await expect(page.getByTestId("page-viewer")).toBeVisible();
+    await expect(page.getByTestId("viewer-edit-original")).toHaveCount(0);
+    await page.getByTestId("viewer-back").click();
+
+    await page.getByTestId(`doc-open-${original}`).click();
+    await expect(page.getByTestId("viewer-name")).toContainText("개발계약서.docx");
+    await page.getByTestId("viewer-edit-original").click();
+    const dialog = page.getByTestId("edit-original-dialog");
+    await expect(dialog).toBeVisible();
+    await expect(page.getByTestId("edit-original-lead")).toContainText("원본 파일은 건드리지 않고");
+    // Nothing is saved before the changes were looked at.
+    await expect(page.getByTestId("edit-original-save")).toBeDisabled();
+    await expect(page.getByTestId("edit-original-preview-run")).toBeDisabled();
+
+    // A text that is not in the document: the row says so and there is nothing to save.
+    await page.getByTestId("edit-original-find-0").fill("없는 글");
+    await page.getByTestId("edit-original-replace-0").fill("x");
+    await page.getByTestId("edit-original-preview-run").click();
+    await expect(page.getByTestId("edit-original-count-0")).toHaveText("없음");
+    await expect(page.getByTestId("edit-original-preview")).toHaveAttribute("data-total", "0");
+    await expect(page.getByTestId("edit-original-save")).toBeDisabled();
+
+    // Two replacements: the preview shows each paragraph before and after.
+    await page.getByTestId("edit-original-find-0").fill("12,500원");
+    await page.getByTestId("edit-original-replace-0").fill("13,000원");
+    await expect(page.getByTestId("edit-original-preview")).toHaveCount(0);
+    await page.getByTestId("edit-original-add").click();
+    await page.getByTestId("edit-original-find-1").fill("텍스트 레이어");
+    await page.getByTestId("edit-original-replace-1").fill("본문");
+    await page.getByTestId("edit-original-preview-run").click();
+    // (the mock's DOCX has two pages with the same two lines each)
+    await expect(page.getByTestId("edit-original-preview")).toHaveAttribute("data-total", "4");
+    await expect(page.getByTestId("edit-original-count-0")).toHaveText("2곳");
+    await expect(page.getByTestId("edit-original-count-1")).toHaveText("2곳");
+    await expect(page.getByTestId("edit-original-change-0")).toContainText("합계 12,500원");
+    await expect(page.getByTestId("edit-original-change-0")).toContainText("합계 13,000원");
+    // The dialog stays inside the window.
+    const box = (await dialog.boundingBox())!;
+    const view = page.viewportSize()!;
+    expect(box.x >= 0 && box.y >= 0 && box.x + box.width <= view.width && box.y + box.height <= view.height).toBe(true);
+
+    await page.getByTestId("edit-original-save").click();
+    await expect(dialog).toHaveCount(0);
+    const toast = page.getByTestId("toaster").locator("div", { hasText: "새 판으로 저장했습니다" }).first();
+    await expect(toast).toContainText("개발계약서 (수정).docx");
+    // "열기" goes to the new edition: its text carries both changes and it is the latest edition.
+    await page.getByTestId("toast-action").first().click();
+    await expect(page.getByTestId("viewer-name")).toContainText("개발계약서 (수정).docx");
+    const layer = page.getByTestId("viewer-text-layer");
+    await expect(layer).toContainText("13,000원");
+    await expect(layer).toContainText("1쪽의 본문입니다");
+    await page.getByTestId("viewer-version").click();
+    await expect(page.getByTestId("version-label")).toHaveValue(/^수정 20\d\d-\d\d-\d\d \d\d:\d\d$/);
+    await expect(page.getByTestId("version-latest")).toBeChecked();
+    await page.keyboard.press("Escape");
+    // The original is as it was — its text, and it stepped back to an earlier edition called 원본.
+    await page.getByTestId("viewer-back").click();
+    await expect(page.locator('[data-testid^="doc-card-"]')).toHaveCount(3);
+    await page.getByTestId(`doc-open-${original}`).click();
+    await expect(page.getByTestId("viewer-name")).toContainText("개발계약서.docx");
+    await expect(layer).toContainText("12,500원");
+    await expect(layer).toContainText("텍스트 레이어입니다");
+    await page.getByTestId("viewer-version").click();
+    await expect(page.getByTestId("version-label")).toHaveValue("원본");
+    await expect(page.getByTestId("version-latest")).not.toBeChecked();
+  });
 });

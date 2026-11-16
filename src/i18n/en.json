@@ -1342,7 +1342,15 @@
       "revise_instruction_empty": "Enter the revision instruction.",
       "table_not_found": "Table not found.",
       "plan_clarify": "The plan is a clarification question — answer it first.",
-      "no_vision_projector": "This model has no vision projector (mmproj) file, so it cannot read images. Load a model that comes with its projector file on the Models screen."
+      "no_vision_projector": "This model has no vision projector (mmproj) file, so it cannot read images. Load a model that comes with its projector file on the Models screen.",
+      "edit_unsupported_format": "This format cannot be edited in place. Only HWPX, DOCX and PPTX can (save HWP / DOC / PPT files in the newer format first, then import them).",
+      "edit_tracked_changes": "A document with tracked changes is not edited. Accept or reject all changes in the office program and import it again.",
+      "edit_signed": "A digitally signed document is not edited (the signature would break).",
+      "edit_find_empty": "Enter the text to find.",
+      "edit_line_break": "A text with a line break cannot be replaced. Only text inside one paragraph is.",
+      "edit_too_many": "At most 200 replacements can be made at once.",
+      "edit_nothing_found": "Nothing to change was found. Check that the text is typed exactly as in the document.",
+      "edit_too_many_editions": "There are too many edited copies with this name. Tidy the older ones up and try again."
     }
   },
   "startup": {
@@ -1858,6 +1866,28 @@
       "run": "Run #{{n}}",
       "empty_value": "(none)",
       "table_row": "{{table}} row {{row}}"
+    },
+    "edit_original": {
+      "menu": "Edit original",
+      "hint": "Change text in the original file and save it as a new edition (formatting stays)",
+      "title": "Edit the original file",
+      "lead": "Only the characters change inside the original file. Fonts, sizes, tables, pictures and page setup stay as they are. The original file is not touched; the edited copy is saved as a new edition of the same document.",
+      "find": "Text to find (exactly as in the document)",
+      "replace": "Replace with",
+      "add_row": "Add a replacement",
+      "remove_row": "Remove this row",
+      "preview": "Preview",
+      "preview_first": "Preview the changes first",
+      "save": "Save as a new edition",
+      "places": "{{count}} place(s)",
+      "not_found": "not found",
+      "summary": "{{count}} place(s) will change.",
+      "nothing": "Nothing to change was found. Check that the text is typed exactly as in the document (spaces included). A text that runs across paragraphs is not found.",
+      "more": "Only the first {{shown}} are shown; the rest change as well.",
+      "slide": "Slide {{n}}",
+      "section": "Section {{n}}",
+      "saved": "Changed {{count}} place(s) and saved a new edition: {{name}}",
+      "open": "Open"
     }
   },
   "answer": {

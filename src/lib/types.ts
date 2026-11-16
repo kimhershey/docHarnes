@@ -970,6 +970,39 @@ export interface DocumentImportPlan {
   truncated: boolean;
 }
 
+/** 1.0.0 §2-1 (core `documents::edit`): one replacement in the document's own file — `find` as it stands in a paragraph. */
+export interface EditReplacement {
+  find: string;
+  replace: string;
+  /** Only the n-th occurrence in the document (1-based); absent = every occurrence. */
+  occurrence?: number | null;
+}
+export interface EditChange {
+  /** The part of the package (`word/document.xml`, `ppt/slides/slide3.xml` …). */
+  part: string;
+  /** Slide (PPTX) / section (HWPX) number when the part has one. */
+  unit?: number | null;
+  /** Which replacement of the request (0-based). */
+  edit: number;
+  before: string;
+  after: string;
+}
+export interface EditReport {
+  found: number[];
+  replaced: number[];
+  changes: EditChange[];
+  parts: string[];
+}
+/** The edited copy, registered as the latest edition of the document it was made from. */
+export interface Edition {
+  report: EditReport;
+  doc_id: string;
+  rel_path: string;
+  version_label: string;
+  projects: number;
+  warnings: string[];
+}
+
 export interface DocumentsChanged {
   kind: "imported" | "updated" | "removed" | "rescanned" | "batch";
   ids: string[];

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
+use doculens_core::documents::edit::{self, EditReport, Edition, Replacement};
 use doculens_core::documents::import::{
     self, ImportOptions, ImportPlan, ImportSource, PageTextHistory, PageTextRevert,
 };
@@ -315,6 +316,38 @@ pub fn documents_rotate_page(app: AppHandle, id: String, page_no: u32, rotation:
         .ok_or_else(|| CoreError::NotFound(format!("page {page_no}")))?;
     docs_bridge::emit_changed(&app, "updated", vec![id]);
     Ok(page_view(page))
+}
+
+/// 1.0.0 §2-1: what replacing text in the document's own file (HWPX / DOCX / PPTX) would change — the
+/// paragraphs before and after. Nothing is written.
+#[tauri::command(async)]
+pub fn documents_edit_preview(app: AppHandle, id: String, edits: Vec<Replacement>) -> UiResult<EditReport> {
+    let ctx = docs_bridge::context(&app)?;
+    let doc = docs_bridge::document(&app, &id)?;
+    Ok(edit::preview(&doc.absolute_path(&ctx.paths), doc.source_kind, &edits)?)
+}
+
+/// Saves the edited copy next to the original and registers it as the latest edition of the document
+/// (same title, type, tags, projects). The original file is not touched.
+#[tauri::command(async)]
+pub fn documents_edit_save(app: AppHandle, id: String, edits: Vec<Replacement>) -> UiResult<Edition> {
+    let ctx = docs_bridge::context(&app)?;
+    let doc = docs_bridge::document(&app, &id)?;
+    let ko = app
+        .state::<AppState>()
+        .settings
+        .lock()
+        .map(|s| s.ui.language == doculens_core::settings::Language::Ko)
+        .unwrap_or(true);
+    let edition = edit::save_edition(&ctx.deps(), &doc, &edits, ko)?;
+    docs_bridge::emit_changed(&app, "imported", vec![edition.doc_id.clone()]);
+    docs_bridge::emit_changed(&app, "updated", vec![id.clone()]);
+    crate::knowledge_bridge::emit_changed(&app, "versions", vec![id, edition.doc_id.clone()]);
+    if edition.projects > 0 {
+        crate::projects_bridge::emit_changed(&app, Vec::new());
+    }
+    crate::knowledge_bridge::auto_index(&app);
+    Ok(edition)
 }
 
 #[tauri::command(async)]

@@ -84,6 +84,9 @@ import type {
   DocumentImportPlan,
   DocumentRole,
   DocumentView,
+  EditReplacement,
+  EditReport,
+  Edition,
   EngineBinaryInfo,
   EngineDevice,
   EngineStatus,
@@ -243,6 +246,10 @@ export const api = {
   documentsSetTags: (id: string, tags: string[]) => invoke<DocumentView>("documents_set_tags", { id, tags }),
   documentsSetDocType: (id: string, docType: string | null) => invoke<DocumentView>("documents_set_doc_type", { id, docType }),
   documentsSetTitle: (id: string, title: string | null) => invoke<DocumentView>("documents_set_title", { id, title }),
+  /** 1.0.0 §2-1: what replacing text in the document's own file would change (nothing is written). */
+  documentsEditPreview: (id: string, edits: EditReplacement[]) => invoke<EditReport>("documents_edit_preview", { id, edits }),
+  /** Saves the edited copy as the latest edition; the original file stays as it is. */
+  documentsEditSave: (id: string, edits: EditReplacement[]) => invoke<Edition>("documents_edit_save", { id, edits }),
   documentsTags: () => invoke<[string, number][]>("documents_tags"),
   documentsSetInboxWatch: (enabled: boolean) => invoke<boolean>("documents_set_inbox_watch", { enabled }),
   documentsPdfiumInfo: () => invoke<PdfiumInfo>("documents_pdfium_info"),

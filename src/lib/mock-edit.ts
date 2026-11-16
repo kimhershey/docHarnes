@@ -1,0 +1,144 @@
+// Browser-mode stand-in for the core's format-preserving edit (1.0.0 §2-1, `documents::edit`): the mock has
+// no files, so a replacement runs over the page text of the document, one line = one paragraph. The rules
+// are the core's — which formats, what a request may hold, how occurrences are counted, how the edited copy
+// is named and registered as the latest edition next to its original.
+import { emit, err, upsertDoc, wsDocs, type MockDoc } from "./mock-backend";
+import { EVENTS, type DocumentsChanged, type EditChange, type EditReplacement, type EditReport, type Edition, type VersionGroup } from "./types";
+
+const EDITABLE = ["hwpx", "docx", "pptx"];
+const MAX_EDITS = 200;
+const MAX_CHANGES = 300;
+const CONTEXT = 40;
+
+function around(text: string, from: number, to: number): string {
+  const head = Array.from(text.slice(0, from));
+  const tail = Array.from(text.slice(to));
+  return `${head.length > CONTEXT ? "…" : ""}${head.slice(-CONTEXT).join("")}${text.slice(from, to)}${tail.slice(0, CONTEXT).join("")}${tail.length > CONTEXT ? "…" : ""}`;
+}
+
+function partOf(d: MockDoc, page: number): { part: string; unit: number | null } {
+  if (d.source_kind === "pptx") return { part: `ppt/slides/slide${page}.xml`, unit: page };
+  if (d.source_kind === "hwpx") return { part: "Contents/section0.xml", unit: 1 };
+  return { part: "word/document.xml", unit: null };
+}
+
+/** The page texts after the replacements, and what changed. */
+function plan(d: MockDoc, edits: EditReplacement[]): { report: EditReport; pages: (string | null)[] } {
+  if (!EDITABLE.includes(d.source_kind)) throw err("invalid", "edit_unsupported_format");
+  if (edits.length === 0 || edits.some((e) => !e.find.trim())) throw err("invalid", "edit_find_empty");
+  if (edits.length > MAX_EDITS) throw err("invalid", "edit_too_many");
+  if (edits.some((e) => /[\r\n]/.test(e.find) || /[\r\n]/.test(e.replace))) throw err("invalid", "edit_line_break");
+  const pages = d.pages.map((p) => p.text);
+  const report: EditReport = { found: edits.map(() => 0), replaced: edits.map(() => 0), changes: [], parts: [] };
+  const parts = new Set<string>();
+  edits.forEach((e, n) => {
+    let seen = 0;
+    pages.forEach((text, i) => {
+      if (text == null) return;
+      const where = partOf(d, d.pages[i]!.page_no);
+      pages[i] = text
+        .split("\n")
+        .map((line) => {
+          const taken: number[] = [];
+          let out = "";
+          let from = 0;
+          for (let at = line.indexOf(e.find); at >= 0; at = line.indexOf(e.find, from)) {
+            seen += 1;
+            const take = e.occurrence == null || e.occurrence === seen;
+            out += line.slice(from, at) + (take ? e.replace : e.find);
+            if (take) taken.push(at);
+            from = at + e.find.length;
+          }
+          if (taken.length === 0) return line;
+          out += line.slice(from);
+          report.replaced[n]! += taken.length;
+          parts.add(where.part);
+          taken.forEach((at, k) => {
+            if (report.changes.length >= MAX_CHANGES) return;
+            const moved = at + (e.replace.length - e.find.length) * k;
+            const change: EditChange = { part: where.part, unit: where.unit, edit: n, before: around(line, at, at + e.find.length), after: around(out, moved, moved + e.replace.length) };
+            report.changes.push(change);
+          });
+          return out;
+        })
+        .join("\n");
+    });
+    report.found[n] = seen;
+  });
+  report.parts = [...parts];
+  return { report, pages };
+}
+
+/** `계약서.docx` → `계약서 (수정).docx`, `계약서 (수정 2).docx` …; an edition of an edition counts on from the same stem. */
+function editionPath(d: MockDoc): { rel: string; name: string } {
+  const dot = d.original_name.lastIndexOf(".");
+  const ext = dot > 0 ? d.original_name.slice(dot) : "";
+  const stem = (dot > 0 ? d.original_name.slice(0, dot) : d.original_name).replace(/ \(수정(?: \d+)?\)$/, "");
+  const slash = d.rel_path.lastIndexOf("/");
+  const folder = slash >= 0 ? d.rel_path.slice(0, slash + 1) : "";
+  const taken = new Set(wsDocs().map((x) => x.rel_path));
+  for (let n = 1; n < 1000; n += 1) {
+    const name = n === 1 ? `${stem} (수정)${ext}` : `${stem} (수정 ${n})${ext}`;
+    if (!taken.has(folder + name)) return { rel: folder + name, name };
+  }
+  throw err("invalid", "edit_too_many_editions");
+}
+
+function pad(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function mockEdit(cmd: string, a: Record<string, any>): Promise<EditReport | Edition> {
+  const d = wsDocs().find((x) => x.id === a.id);
+  if (!d) throw err("not_found", String(a.id));
+  const edits = (a.edits ?? []) as EditReplacement[];
+  const { report, pages } = plan(d, edits);
+  if (cmd === "documents_edit_preview") return report;
+  if (report.replaced.reduce((x, y) => x + y, 0) === 0) throw err("invalid", "edit_nothing_found");
+
+  const stamp = new Date();
+  const iso = stamp.toISOString();
+  const { rel, name } = editionPath(d);
+  const copy: MockDoc = {
+    ...structuredClone(d),
+    id: crypto.randomUUID().replace(/-/g, ""),
+    rel_path: rel,
+    original_name: name,
+    content_hash: `edited-${d.id}-${iso}`,
+    file_modified_at: iso,
+    imported_at: iso,
+    updated_at: iso,
+    text_history: [],
+    pages: d.pages.map((p, i) => ({ ...structuredClone(p), text: pages[i] ?? p.text, layout: null })),
+  };
+  upsertDoc(copy);
+
+  // Editions: the original steps back (kept as "원본" when it had no label), the copy is the latest.
+  const kb = await import("./mock-knowledge");
+  const groups = (await kb.mockKnowledge("knowledge_versions", {})) as VersionGroup[];
+  const before = groups.flatMap((g) => g.documents).find((v) => v.document_id === d.id) ?? null;
+  const group = before?.group_key ?? (d.title?.trim() || d.original_name);
+  const label = `수정 ${stamp.getFullYear()}-${pad(stamp.getMonth() + 1)}-${pad(stamp.getDate())} ${pad(stamp.getHours())}:${pad(stamp.getMinutes())}`;
+  await kb.mockKnowledge("knowledge_version_set", {
+    input: { document_id: d.id, group_key: group, version_label: before?.version_label ?? "원본", effective_date: before?.effective_date ?? null, is_latest: false, note: before?.note ?? null },
+  });
+  await kb.mockKnowledge("knowledge_version_set", {
+    input: { document_id: copy.id, group_key: group, version_label: label, effective_date: iso.slice(0, 10), is_latest: true, note: null },
+  });
+
+  // Where the original is, the edition is: its projects, on the same side.
+  const pj = await import("./mock-projects");
+  const add = pj
+    .projectSummaries()
+    .map((p) => (pj.isMember(p.id, d.id) ? { doc_id: copy.id, project_id: p.id, reference: false } : kb.projectReferenceDocIds(p.id).includes(d.id) ? { doc_id: copy.id, project_id: p.id, reference: true } : null))
+    .filter((x): x is { doc_id: string; project_id: string; reference: boolean } => x !== null);
+  if (add.length > 0) pj.assignDocuments({ remove: [], add });
+  // The memberships may have changed the role: an edition keeps its original's.
+  const stored = wsDocs().find((x) => x.id === copy.id);
+  if (stored && stored.role !== d.role) upsertDoc({ ...stored, role: d.role });
+
+  emit(EVENTS.documentsChanged, { kind: "imported", ids: [copy.id] } satisfies DocumentsChanged);
+  emit(EVENTS.documentsChanged, { kind: "updated", ids: [d.id] } satisfies DocumentsChanged);
+  return { report, doc_id: copy.id, rel_path: rel, version_label: label, projects: add.length, warnings: [] };
+}
