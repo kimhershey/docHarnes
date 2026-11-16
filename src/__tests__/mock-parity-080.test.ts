@@ -24,6 +24,9 @@ const knowledge = await import("@/lib/mock-knowledge");
 
 const FINISHED = ["done", "failed", "cancelled", "interrupted"];
 
+type EditRequest = import("@/lib/types").EditReplacement;
+type EditOutcome = import("@/lib/types").EditReport;
+
 async function sleep(ms: number): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
 }
@@ -550,5 +553,75 @@ describe("planner (rules, validate, guard)", () => {
     // Nothing left to change in the new edition: the step fails with the reason code the card words.
     const again = await planner.runPlan(withScope([payload.edition.doc_id]), ctx, null, () => undefined);
     expect(again.steps[0]).toMatchObject({ status: "failed", error: "edit_nothing_found" });
+  });
+});
+
+// 1.0.0 §2-1 step 2 (`documents::edit`: `structure`, `Part::{insert_paragraph, delete_paragraph, insert_row,
+// delete_row}`): a paragraph is a line of the mock's page text, a table row a line with tabs.
+describe("original-file edits: paragraphs and table rows (documents::edit)", () => {
+  const preview = (id: string, edits: EditRequest[]) => backend.mockInvoke<EditOutcome>("documents_edit_preview", { id, edits });
+  const text = async (id: string) => (await pages(id)).map((p) => p.text ?? "");
+
+  it("a paragraph is added next to the one that holds the text, or taken out; several places ask which one", async () => {
+    const ids = await importDocs(["개발계약서.docx"]);
+    const doc = ids["개발계약서.docx"]!;
+    await backend.mockInvoke("documents_set_page_text", { id: doc, pageNo: 1, text: "제3조 납품\n① 납품 기한은 11월 30일로 한다.\n② 납품 장소는 발주처로 한다." });
+    await backend.mockInvoke("documents_set_page_text", { id: doc, pageNo: 2, text: "산출물\t기한\n설계서\t10월 31일\n소스 코드\t11월 30일\n끝." });
+
+    // "납품" is in three paragraphs: nothing is done before the request says which one.
+    const vague = await preview(doc, [{ find: "납품", replace: "③ 검수는 14일 안에 마친다.", action: "insert_after" }]);
+    expect(vague).toMatchObject({ found: [3], replaced: [0], problems: [{ edit: 0, code: "edit_anchor_ambiguous" }], changes: [] });
+    await expect(backend.mockInvoke("documents_edit_save", { id: doc, edits: [{ find: "납품", replace: "x", action: "insert_after" }] })).rejects.toMatchObject({ message: "edit_anchor_ambiguous" });
+
+    const edits: EditRequest[] = [
+      { find: "② 납품 장소", replace: "③ 검수는 14일 안에 마친다.", action: "insert_after" },
+      { find: "납품", replace: "(2026년 계약)", action: "insert_before", occurrence: 1 },
+      { find: "① 납품 기한", replace: "", action: "delete_paragraph" },
+    ];
+    const report = await preview(doc, edits);
+    expect(report.problems ?? []).toEqual([]);
+    expect(report.replaced).toEqual([1, 1, 1]);
+    expect(report.changes.map((c) => [c.action, c.before, c.after])).toEqual([
+      ["insert_after", "② 납품 장소는 발주처로 한다.", "③ 검수는 14일 안에 마친다."],
+      ["insert_before", "제3조 납품", "(2026년 계약)"],
+      ["delete_paragraph", "① 납품 기한은 11월 30일로 한다.", ""],
+    ]);
+    // Nothing was written by the previews; the save makes a new edition and leaves the original as it was.
+    const edition = await backend.mockInvoke<{ doc_id: string; report: EditOutcome }>("documents_edit_save", { id: doc, edits });
+    expect((await text(edition.doc_id))[0]).toBe("(2026년 계약)\n제3조 납품\n② 납품 장소는 발주처로 한다.\n③ 검수는 14일 안에 마친다.");
+    expect((await text(doc))[0]).toBe("제3조 납품\n① 납품 기한은 11월 30일로 한다.\n② 납품 장소는 발주처로 한다.");
+    // A line break is markup, not a character — in a new paragraph too.
+    await expect(preview(doc, [{ find: "제3조", replace: "가\n나", action: "insert_after" }])).rejects.toMatchObject({ message: "edit_line_break" });
+  });
+
+  it("a table row is added above / below the row that holds the text, or taken out", async () => {
+    const ids = await importDocs(["개발계약서.docx"]);
+    const doc = ids["개발계약서.docx"]!;
+    await backend.mockInvoke("documents_set_page_text", { id: doc, pageNo: 1, text: "납품 기한은 11월 30일로 한다." });
+    await backend.mockInvoke("documents_set_page_text", { id: doc, pageNo: 2, text: "산출물\t기한\n설계서\t10월 31일\n소스 코드\t11월 30일\n끝." });
+    const edits: EditRequest[] = [
+      { find: "설계서", replace: "시험 결과서 | 11월 15일", action: "insert_row_after" },
+      { find: "설계서", replace: "", cells: ["착수 보고서"], action: "insert_row_before" },
+      // "11월 30일" is in a paragraph and in a row: the row is the one place for a row edit.
+      { find: "11월 30일", replace: "", action: "delete_row" },
+    ];
+    const report = await preview(doc, edits);
+    expect(report).toMatchObject({ found: [1, 1, 1], replaced: [1, 1, 1] });
+    expect(report.changes.map((c) => [c.action, c.before, c.after])).toEqual([
+      ["insert_row_after", "설계서 | 10월 31일", "시험 결과서 | 11월 15일"],
+      ["insert_row_before", "설계서 | 10월 31일", "착수 보고서"],
+      ["delete_row", "소스 코드 | 11월 30일", ""],
+    ]);
+    const edition = await backend.mockInvoke<{ doc_id: string }>("documents_edit_save", { id: doc, edits });
+    expect((await text(edition.doc_id))[1]).toBe("산출물\t기한\n착수 보고서\t\n설계서\t10월 31일\n시험 결과서\t11월 15일\n끝.");
+
+    const code = async (edit: EditRequest) => (await preview(doc, [edit])).problems?.[0]?.code ?? null;
+    expect(await code({ find: "설계서", replace: "a | b | c", action: "insert_row_after" })).toBe("edit_row_cells");
+    expect(await code({ find: "납품 기한", replace: "", action: "delete_row" })).toBe("edit_not_in_table");
+    expect(await code({ find: "없는 글", replace: "", action: "delete_row" })).toBeNull();
+    // The only paragraph of a page stays; the last row of a table stays.
+    expect(await code({ find: "납품 기한", replace: "", action: "delete_paragraph" })).toBe("edit_last_paragraph");
+    await backend.mockInvoke("documents_set_page_text", { id: doc, pageNo: 2, text: "산출물\t기한\n끝." });
+    expect(await code({ find: "산출물", replace: "", action: "delete_row" })).toBe("edit_last_row");
   });
 });

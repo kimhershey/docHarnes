@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 import ko from "../src/i18n/ko.json" with { type: "json" };
 
-import { createWorkspace, docId, freshApp, importViaLibrary, openImportPreview, tpl, tplPattern } from "./helpers";
+import { createWorkspace, docId, freshApp, importViaLibrary, openAssistantScreen, openImportPreview, tpl, tplPattern } from "./helpers";
 
 // P2 acceptance (design §4.1): import (preview with duplicates / unsupported
 // reasons) → rendered pages → library grid/list → viewer navigation, rotation,
@@ -460,5 +460,80 @@ test.describe("P2 documents", () => {
     await page.getByTestId("viewer-version").click();
     await expect(page.getByTestId("version-label")).toHaveValue("원본");
     await expect(page.getByTestId("version-latest")).not.toBeChecked();
+  });
+
+  // 1.0.0 §2-1 step 2: a paragraph next to another, a paragraph taken out, and what cannot be done.
+  test("1.0.0: 원본 고치기 — a paragraph is added and one is taken out; a text in several places asks which one", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\docs\\개발계약서.docx"]);
+    const original = await docId(page, "개발계약서.docx");
+    // At a UI scale of 150 %: the rows of the dialog wrap instead of running out of it (plan §11).
+    await openAssistantScreen(page);
+    await page.getByTestId("assistant-input").fill("UI 배율 150으로 바꿔줘");
+    await page.getByTestId("assistant-send").click();
+    await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).fontSize), { timeout: 15_000 }).toBe("24px");
+    await page.getByTestId("nav-library").click();
+    await page.getByTestId(`doc-open-${original}`).click();
+    await page.getByTestId("viewer-edit-original").click();
+    const dialog = page.getByTestId("edit-original-dialog");
+    await expect(dialog).toBeVisible();
+    const act = async (row: number, action: string) => {
+      await page.getByTestId(`edit-original-action-${row}`).click();
+      await page.getByTestId(`edit-original-action-${row}-${action}`).click();
+      await expect(page.getByTestId(`edit-original-row-${row}`)).toHaveAttribute("data-action", action);
+    };
+
+    // A new paragraph after the one that holds "합계 12,500원" — both pages have such a line.
+    await act(0, "insert_after");
+    await expect(page.getByTestId("edit-original-find-0")).toHaveAttribute("placeholder", "기준 문단에 들어 있는 글");
+    await page.getByTestId("edit-original-find-0").fill("합계 12,500원");
+    await page.getByTestId("edit-original-replace-0").fill("부가세 별도");
+    await page.getByTestId("edit-original-preview-run").click();
+    await expect(page.getByTestId("edit-original-problem-0")).toHaveText("이 글이 든 곳이 2곳입니다. 더 길게 적거나 몇 번째인지 넣으세요.");
+    await expect(page.getByTestId("edit-original-count-0")).toHaveText("확인 필요");
+    await expect(page.getByTestId("edit-original-preview")).toHaveAttribute("data-problems", "1");
+    // Nothing is saved while an edit is not settled.
+    await expect(page.getByTestId("edit-original-save")).toBeDisabled();
+
+    // The second of the two; the first line of page 1 goes; and a row edit on a text outside tables says why.
+    await page.getByTestId("edit-original-occurrence-0").fill("2");
+    await page.getByTestId("edit-original-add").click();
+    await act(1, "delete_paragraph");
+    await expect(page.getByTestId("edit-original-replace-1")).toHaveCount(0);
+    await page.getByTestId("edit-original-find-1").fill("1쪽의 텍스트 레이어");
+    await page.getByTestId("edit-original-add").click();
+    await act(2, "delete_row");
+    await page.getByTestId("edit-original-find-2").fill("2쪽의 텍스트");
+    await page.getByTestId("edit-original-preview-run").click();
+    await expect(page.getByTestId("edit-original-problem-2")).toHaveText(ko.errors.reasons.edit_not_in_table);
+    await expect(page.getByTestId("edit-original-count-0")).toHaveText("1곳");
+    await expect(page.getByTestId("edit-original-save")).toBeDisabled();
+    // Three rows with their fields stay inside the window (the rows wrap instead of widening the dialog).
+    const box = (await dialog.boundingBox())!;
+    const view = page.viewportSize()!;
+    expect(box.x >= 0 && box.y >= 0 && box.x + box.width <= view.width && box.y + box.height <= view.height).toBe(true);
+    expect(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+
+    await page.getByTestId("edit-original-remove-2").click();
+    await page.getByTestId("edit-original-preview-run").click();
+    const preview = page.getByTestId("edit-original-preview");
+    await expect(preview).toHaveAttribute("data-total", "2");
+    await expect(preview).toHaveAttribute("data-problems", "0");
+    await expect(page.getByTestId("edit-original-change-0")).toHaveAttribute("data-action", "insert_after");
+    await expect(page.getByTestId("edit-original-change-0")).toContainText("이 문단 뒤에 추가");
+    await expect(page.getByTestId("edit-original-change-0")).toContainText("+ 부가세 별도");
+    await expect(page.getByTestId("edit-original-change-1")).toContainText("문단 삭제");
+    await expect(page.getByTestId("edit-original-change-1")).toContainText("1쪽의 텍스트 레이어입니다.");
+
+    await page.getByTestId("edit-original-save").click();
+    await expect(dialog).toHaveCount(0);
+    await page.getByTestId("toast-action").first().click();
+    await expect(page.getByTestId("viewer-name")).toContainText("개발계약서 (수정).docx");
+    // Page 1 lost its first line; the new paragraph stands on page 2, after the total.
+    const layer = page.getByTestId("viewer-text-layer");
+    await expect(layer).toContainText("합계 12,500원");
+    await expect(layer).not.toContainText("1쪽의 텍스트 레이어");
+    await expect(layer).not.toContainText("부가세 별도");
   });
 });

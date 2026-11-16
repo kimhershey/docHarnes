@@ -22,16 +22,93 @@ function partOf(d: MockDoc, page: number): { part: string; unit: number | null }
   return { part: "word/document.xml", unit: null };
 }
 
-/** The page texts after the replacements, and what changed. */
+/** A paragraph's (or a row's) text as a report shows it (core `shown`). */
+function shown(text: string): string {
+  const chars = Array.from(text);
+  return chars.length > 2 * CONTEXT ? `${chars.slice(0, 2 * CONTEXT).join("")}…` : text;
+}
+
+/** The cell texts of a new row (core `Replacement::row_cells`). */
+function cellsOf(e: EditReplacement): string[] {
+  if (e.cells && e.cells.length > 0) return e.cells.map((c) => c.trim());
+  return e.replace.trim() ? e.replace.split("|").map((c) => c.trim()) : [];
+}
+
+/**
+ * One structure edit (core `structure`): a paragraph is a line of the page text, a table row a line whose
+ * cells are separated by tabs (what the core's reader makes of a table). Returns the reason it cannot be
+ * made as asked, or null.
+ */
+function structure(d: MockDoc, pages: (string | null)[], e: EditReplacement, n: number, report: EditReport, parts: Set<string>): string | null {
+  const action = e.action!;
+  const onRows = action.includes("row");
+  const places: { page: number; line: number }[] = [];
+  let outsideATable = false;
+  pages.forEach((text, i) => {
+    (text ?? "").split("\n").forEach((line, k) => {
+      if (text == null || !line.includes(e.find)) return;
+      if (onRows && !line.includes("\t")) outsideATable = true;
+      else places.push({ page: i, line: k });
+    });
+  });
+  report.found[n] = places.length;
+  if (places.length === 0) return onRows && outsideATable ? "edit_not_in_table" : null;
+  if (e.occurrence != null && (e.occurrence < 1 || e.occurrence > places.length)) return null;
+  if (e.occurrence == null && places.length > 1) return "edit_anchor_ambiguous";
+  const at = places[(e.occurrence ?? 1) - 1]!;
+  const lines = pages[at.page]!.split("\n");
+  const anchor = lines[at.line]!;
+  const isRow = (k: number) => lines[k] !== undefined && lines[k]!.includes("\t");
+  let after = "";
+  switch (action) {
+    case "insert_after":
+    case "insert_before":
+      lines.splice(at.line + (action === "insert_after" ? 1 : 0), 0, e.replace);
+      after = e.replace;
+      break;
+    case "delete_paragraph":
+      if (lines.length <= 1) return "edit_last_paragraph";
+      lines.splice(at.line, 1);
+      break;
+    case "insert_row_after":
+    case "insert_row_before": {
+      const cells = cellsOf(e);
+      const width = anchor.split("\t").length;
+      if (cells.length > width) return "edit_row_cells";
+      lines.splice(at.line + (action === "insert_row_after" ? 1 : 0), 0, Array.from({ length: width }, (_, c) => cells[c] ?? "").join("\t"));
+      after = cells.join(" | ");
+      break;
+    }
+    case "delete_row":
+      if (!isRow(at.line - 1) && !isRow(at.line + 1)) return "edit_last_row";
+      lines.splice(at.line, 1);
+      break;
+    default:
+      return null;
+  }
+  pages[at.page] = lines.join("\n");
+  const where = partOf(d, d.pages[at.page]!.page_no);
+  parts.add(where.part);
+  report.replaced[n] = 1;
+  if (report.changes.length < MAX_CHANGES) report.changes.push({ part: where.part, unit: where.unit, edit: n, action, before: shown(onRows ? anchor.split("\t").join(" | ") : anchor), after });
+  return null;
+}
+
+/** The page texts after the edits, and what changed. */
 function plan(d: MockDoc, edits: EditReplacement[]): { report: EditReport; pages: (string | null)[] } {
   if (!EDITABLE.includes(d.source_kind)) throw err("invalid", "edit_unsupported_format");
   if (edits.length === 0 || edits.some((e) => !e.find.trim())) throw err("invalid", "edit_find_empty");
   if (edits.length > MAX_EDITS) throw err("invalid", "edit_too_many");
-  if (edits.some((e) => /[\r\n]/.test(e.find) || /[\r\n]/.test(e.replace))) throw err("invalid", "edit_line_break");
+  if (edits.some((e) => [e.find, e.replace, ...(e.cells ?? [])].some((text) => /[\r\n]/.test(text)))) throw err("invalid", "edit_line_break");
   const pages = d.pages.map((p) => p.text);
   const report: EditReport = { found: edits.map(() => 0), replaced: edits.map(() => 0), changes: [], parts: [] };
   const parts = new Set<string>();
   edits.forEach((e, n) => {
+    if (e.action && e.action !== "replace") {
+      const code = structure(d, pages, e, n, report, parts);
+      if (code) (report.problems ??= []).push({ edit: n, code });
+      return;
+    }
     let seen = 0;
     pages.forEach((text, i) => {
       if (text == null) return;
@@ -95,6 +172,8 @@ export async function mockEdit(cmd: string, a: Record<string, any>): Promise<Edi
   const edits = (a.edits ?? []) as EditReplacement[];
   const { report, pages } = plan(d, edits);
   if (cmd === "documents_edit_preview") return report;
+  // Nothing is written while one of the edits cannot be made as asked.
+  if (report.problems?.[0]) throw err("invalid", report.problems[0].code);
   if (report.replaced.reduce((x, y) => x + y, 0) === 0) throw err("invalid", "edit_nothing_found");
 
   const stamp = new Date();
