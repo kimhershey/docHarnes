@@ -116,6 +116,7 @@ import {
   type UndoReport,
   type UndoResponse,
   defaultDraftRequest,
+  type Edition,
 } from "./types";
 import { carriedText } from "./carried-text";
 import { docTypeAliases } from "./doc-type-aliases";
@@ -761,14 +762,30 @@ function ruleSetTitle(t: Text, ctx: PlanContext): Plan | null {
   return single({ op: "set_title", title }, 0.9, tr(t.ko, `제목을 '${title}'(으)로 바꿉니다`, `Set the title to '${title}'`), scope);
 }
 
+/** The quoted texts of a sentence, in order. */
+function quotedPair(t: Text): string[] {
+  return [...t.raw.matchAll(/[“"']([^”"']{1,80})[”"']/gu)].map((m) => m[1]!);
+}
+
+/** Two quoted texts and a verb of replacing: "'A'를 'B'로 바꿔줘". */
+function isReplacement(t: Text): boolean {
+  return quotedPair(t).length >= 2 && has(t, ["바꿔", "바꾸", "고쳐", "수정", "교체", "치환", "replace", "change", "correct"]);
+}
+
 /** "'㈜한빛'을 '(주)한빛'으로 바꿔줘", "replace 'A' with 'B'". */
 function ruleEditText(t: Text, ctx: PlanContext): Plan | null {
   if (has(t, ["제목", "title", "프로젝트", "project", "이름을", "rename", "폴더", "folder", "태그", "tag", "묶음", "용어", "glossary", "모델", "model", "테마", "theme", "언어", "language", "설정", "setting"])) return null;
-  const pair = [...t.raw.matchAll(/[“"']([^”"']{1,80})[”"']/gu)].map((m) => m[1]!);
+  const pair = quotedPair(t);
   if (pair.length < 2) return null;
-  if (!has(t, ["바꿔", "바꾸", "고쳐", "수정", "치환", "replace", "change", "correct"])) return null;
+  if (!isReplacement(t)) return null;
   const scope = docScope(t, ctx);
   if (!scope.doc_ids?.length) return clarify(tr(t.ko, "어떤 문서의 글자를 바꿀까요? 문서를 열거나 선택해 주세요.", "In which document? Open or select one."), 0.5);
+  // "원본에서 …", "원본 파일을 …", "새 판으로 …": the document's own file (1.0.0 §2-1, core rules).
+  // The words between the quotes are the text to change, not a word about where.
+  const outside = mkText(pair.reduce((rest, quoted) => rest.split(quoted).join(" "), t.raw), t.ko);
+  if (has(outside, ["원본", "파일 자체", "새 판", "서식 그대로", "서식 유지", "original file", "the original", "new edition"])) {
+    return single({ op: "edit_text", find: pair[0]!, replace: pair[1]!, pages: [], original: true }, 0.86, tr(t.ko, `원본 파일에서 '${pair[0]}'을(를) '${pair[1]}'(으)로 바꿔 새 판으로 저장합니다`, `Replace '${pair[0]}' with '${pair[1]}' in the original file and save a new edition`), scope);
+  }
   return single({ op: "edit_text", find: pair[0]!, replace: pair[1]!, pages: [] }, 0.86, tr(t.ko, `'${pair[0]}'을(를) '${pair[1]}'(으)로 바꿉니다 (쪽 글자, 이력 저장)`, `Replace '${pair[0]}' with '${pair[1]}' in the page text (history kept)`), scope);
 }
 
@@ -857,6 +874,8 @@ function ruleDefineTerm(t: Text): Plan | null {
 function ruleSetVersion(t: Text, ctx: PlanContext): Plan | null {
   if (!has(t, ["년판", "판으로", "구판", "신판", "최신본", "개정판", "버전으로", "edition", "version"])) return null;
   if (has(t, ["앱", "app", "모델", "model", "엔진", "engine"])) return null;
+  // "'A'를 'B'로 바꿔서 새 판으로 저장해줘" is a replacement in the original file (`ruleEditText`), not a version mark.
+  if (isReplacement(t)) return null;
   const scope = docScope(t, ctx);
   if (!scope.doc_ids?.length) return clarify(tr(t.ko, "어떤 문서의 판본을 표시할까요? 문서를 열거나 선택해 주세요.", "Which document? Open or select one."), 0.5);
   if (has(t, ["판본지워", "판본 지워", "판본해제", "clear the version", "not a version"])) return single({ op: "set_version", clear: true }, 0.86, tr(t.ko, "판본 표시를 지웁니다", "Clear the version mark"), scope);
@@ -2426,6 +2445,11 @@ export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | nul
       case "edit_text":
         if (!op.find) issues.push(issue(at("find"), "find_required", "edit_text needs the text to find"));
         op.pages = [...new Set((op.pages ?? []).filter((n) => n >= 1))].sort((a, b) => a - b);
+        if (op.original !== true) delete op.original;
+        else {
+          op.pages = [];
+          if (/[\r\n]/.test(op.find) || /[\r\n]/.test(op.replace)) issues.push(issue(at("find"), "edit_line_break", "a text with a line break cannot be replaced in the original file"));
+        }
         if (scopeIsEmpty(plan.scope)) issues.push(issue("scope", "scope_required", "edit_text needs documents (open or select them)"));
         break;
       case "set_role":
@@ -4334,6 +4358,23 @@ export function planPreview(plan: Plan, ctx: PlanContext): PlanPreview {
         payload = { documents: docs.length };
         break;
       case "edit_text": {
+        if (op.original) {
+          // What the file itself holds (the mock: the page text of the one document).
+          const one = docs.length === 1 ? docs[0]! : null;
+          const editable = one && ["hwpx", "docx", "pptx"].includes(one.source_kind);
+          const n = one && editable ? one.pages.reduce((sum, pg) => sum + (pg.text ? pg.text.split(op.find).length - 1 : 0), 0) : 0;
+          const reason = !one ? "edit_original_needs_one_document" : !editable ? "edit_unsupported_format" : null;
+          // `exec.rs::edit_reason`: the reason as a sentence.
+          const why = !one
+            ? ko ? "문서 한 건만 열거나 선택해 주세요" : "open or select exactly one document"
+            : ko ? "HWPX · DOCX · PPTX 파일만 원본을 고칠 수 있습니다" : "only HWPX / DOCX / PPTX files can be edited in place";
+          summary = reason
+            ? ko ? `원본 파일을 고칠 수 없습니다: ${why}` : `the original file cannot be edited: ${why}`
+            : ko ? `원본 파일에서 '${op.find}' ${n}곳 → '${op.replace}' (서식 유지, 새 판으로 저장)` : `${n} matches of '${op.find}' in the original file → '${op.replace}' (formatting kept, saved as a new edition)`;
+          payload = reason ? { matches: 0, original: true, error: reason } : { matches: n, original: true };
+          confirm = true;
+          break;
+        }
         let matches = 0;
         for (const d of docs) for (const pg of d.pages) if (pg.text && (op.pages!.length === 0 || op.pages!.includes(pg.page_no))) matches += pg.text.split(op.find).length - 1;
         summary = ko ? `'${op.find}' → '${op.replace}' · 일치 ${matches}곳 (${countLabel(docs.length, ko)})` : `'${op.find}' → '${op.replace}' · ${matches} matches (${countLabel(docs.length, ko)})`;
@@ -4894,6 +4935,18 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
     case "edit_text": {
       const docs = workingSet(plan, imported);
       if (docs.length === 0) throw err("invalid", "no_documents");
+      if (op.original) {
+        if (docs.length !== 1) throw err("invalid", "edit_original_needs_one_document");
+        const { mockEdit } = await import("./mock-edit");
+        const edition = (await mockEdit("documents_edit_save", { id: docs[0]!.id, edits: [{ find: op.find, replace: op.replace }] })) as Edition;
+        out.documents.push(edition.doc_id);
+        const total = edition.report.replaced.reduce((a, b) => a + b, 0);
+        const name = edition.rel_path.split("/").pop() ?? edition.rel_path;
+        return {
+          summary: ko ? `원본에서 '${op.find}' → '${op.replace}' ${total}곳을 고쳐 새 판으로 저장: ${name}` : `Replaced '${op.find}' with '${op.replace}' ${total} times in the original; saved as a new edition: ${name}`,
+          payload: { documents: [edition.doc_id], original: docs[0]!.id, replaced: total, edition },
+        };
+      }
       let replaced = 0;
       for (const d of docs) {
         let touched = false;

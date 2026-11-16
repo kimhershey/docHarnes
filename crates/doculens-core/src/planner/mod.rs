@@ -1226,12 +1226,16 @@ pub enum Op {
     SetTitle {
         title: String,
     },
-    /// Find / replace in the page text of the documents in scope (recorded in the text history).
+    /// Find / replace in the page text of the documents in scope (recorded in the text history) — or,
+    /// with `original`, inside the document's own file (1.0.0 §2-1: HWPX / DOCX / PPTX; the formatting
+    /// stays and the edited copy is saved as the latest edition, `documents::edit`).
     EditText {
         find: String,
         replace: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pages: Vec<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        original: Option<bool>,
     },
     SetRole {
         role: RoleParam,
@@ -1472,6 +1476,8 @@ impl Op {
             | Op::Clarify { .. }
             | Op::Noop {} => SideEffect::None,
             // 0.6.0
+            // 1.0.0 §2-1: the edited copy of the original is a new file next to it.
+            Op::EditText { original: Some(true), .. } => SideEffect::FileCreate,
             Op::Rotate { .. }
             | Op::Rerender { .. }
             | Op::SetTitle { .. }

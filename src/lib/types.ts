@@ -1823,7 +1823,8 @@ export type Op =
   | { op: "split"; boundaries?: number[]; every?: number | null }
   | { op: "merge"; name?: string | null }
   | { op: "set_title"; title: string }
-  | { op: "edit_text"; find: string; replace: string; pages?: number[] }
+  /** `original`: in the document's own file — formatting kept, saved as the latest edition (1.0.0 §2-1). */
+  | { op: "edit_text"; find: string; replace: string; pages?: number[]; original?: boolean | null }
   | { op: "set_role"; role: RoleChoice }
   // §1.2 reference material
   | { op: "manage_reference"; action: ReferenceAction; group?: string | null; name?: string | null; project?: string | null }

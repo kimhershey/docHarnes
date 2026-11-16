@@ -62,6 +62,33 @@ test.describe("0.6.0 agent ops", () => {
     await expect(card(page, "계약 묶음.pdf")).toBeVisible({ timeout: 15_000 });
   });
 
+  // 1.0.0 §2-1: "원본 고치기" asked in words — `edit_text` with `original` changes the file itself.
+  test("edit the original: \"원본에서 '12,500원'을 '13,000원'으로 바꿔줘\" is shown first, then saved as a new edition", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\docs\\개발계약서.docx"], { autoLevel: "none" });
+    await card(page, "개발계약서.docx").locator('[data-testid^="doc-open-"]').click();
+    await expect(page.getByTestId("page-viewer")).toBeVisible();
+
+    await openAssistantScreen(page);
+    await send(page, "이 문서 원본에서 '12,500원'을 '13,000원'으로 바꿔줘");
+    const plan = assistantCard(page, "plan").last();
+    // A file is never changed unasked: the card says where the text changes and how often the file holds it.
+    await expect(plan).toHaveAttribute("data-plan-status", "pending");
+    await expect(plan.getByTestId("plan-step-params-0")).toContainText("원본 파일(새 판으로 저장)");
+    await expect(plan).toContainText("원본 파일에서 '12,500원' 2곳 → '13,000원' (서식 유지, 새 판으로 저장)");
+    await plan.getByTestId("plan-execute").click();
+    await expect(plan).toHaveAttribute("data-plan-status", "done", { timeout: 15_000 });
+    const result = assistantCard(page, "result").last();
+    await expect(result).toHaveAttribute("data-result-status", "done", { timeout: 15_000 });
+    await expect(result.getByTestId("result-agent-detail")).toContainText("원본에서 2곳 수정 · 새 판 개발계약서 (수정).docx");
+
+    // The edited copy stands next to the original in the library; the original is still there.
+    await page.getByTestId("nav-library").click();
+    await expect(card(page, "개발계약서 (수정).docx")).toBeVisible({ timeout: 15_000 });
+    await expect(card(page, "개발계약서.docx")).toBeVisible();
+  });
+
   test("setting: 'UI 배율 125%로' changes the catalog setting at once", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);

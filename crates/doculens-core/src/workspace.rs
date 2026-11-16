@@ -655,7 +655,18 @@ mod tests {
         write_lock(&paths, holder.id());
         drop(holder.stdin.take());
         let _ = holder.wait();
-        assert_eq!(read_lock(&paths).0, LockState::Stale);
+        // Windows keeps an exited process listed for as long as someone holds a handle to it — here
+        // this test's own `Child` (CI run of 2026-11-16: `HeldHere` right after `wait`). The handle
+        // goes first, and the process list gets a moment to follow.
+        drop(holder);
+        let stale = (0..50).any(|_| {
+            let gone = read_lock(&paths).0 == LockState::Stale;
+            if !gone {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            gone
+        });
+        assert!(stale, "{:?}", read_lock(&paths));
         drop(Workspace::open(&root, OpenOptions::default()).unwrap());
         assert!(!paths.lock_file().exists());
     }

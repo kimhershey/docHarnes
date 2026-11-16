@@ -567,7 +567,8 @@
       "mode_general": "문서와 무관한 질문",
       "summary_group_project": "프로젝트별 묶음",
       "summary_group_doc_type": "유형별 묶음",
-      "summary_group_folder": "폴더별 묶음"
+      "summary_group_folder": "폴더별 묶음",
+      "original_file": "원본 파일(새 판으로 저장)"
     },
     "scope": {
       "title": "범위",
@@ -705,7 +706,8 @@
         "manage_template": "{{action}} · '{{name}}'",
         "classify_applied": "제안 {{suggested}}건 · 배정 {{applied}}건",
         "classify_preview": "제안 {{suggested}}건 — 프로젝트 화면에서 적용",
-        "manage_schema": "{{action}} · '{{name}}'"
+        "manage_schema": "{{action}} · '{{name}}'",
+        "edit_original": "원본에서 {{replaced}}곳 수정 · 새 판 {{name}}"
       },
       "open_document": "문서 열기",
       "summary_group_docs": "문서 {{count}}건",
@@ -1350,7 +1352,8 @@
       "edit_line_break": "줄바꿈이 든 글은 바꿀 수 없습니다. 한 문단 안의 글만 바꿉니다.",
       "edit_too_many": "한 번에 바꿀 수 있는 글은 200개까지입니다.",
       "edit_nothing_found": "바꿀 곳을 찾지 못했습니다. 문서에 적힌 그대로 입력했는지 확인하세요.",
-      "edit_too_many_editions": "같은 이름의 수정본이 너무 많습니다. 예전 수정본을 정리한 뒤 다시 시도하세요."
+      "edit_too_many_editions": "같은 이름의 수정본이 너무 많습니다. 예전 수정본을 정리한 뒤 다시 시도하세요.",
+      "edit_original_needs_one_document": "원본 파일은 한 번에 문서 한 건만 고칩니다. 문서를 하나만 열거나 선택해 주세요."
     }
   },
   "startup": {

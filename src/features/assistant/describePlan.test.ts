@@ -4,12 +4,13 @@
 import i18next from "i18next";
 import { describe, expect, it } from "vitest";
 
+import { initI18n } from "@/i18n";
 import en from "@/i18n/en.json";
 import ko from "@/i18n/ko.json";
 import type { UiOpResult } from "@/lib/commands";
 import type { CheckRun, Draft, DraftOutcome, Plan, PlanContext, PlanExecution, PlanPreview, PlanResponse, Project, ProjectDetail, RuleDraft } from "@/lib/types";
 
-import { agentStepDetail, deriveResultActions, formatAmount, impactLine, impactOf, isPlanExecution, listTotal, onlyReviewedValue, opLabel, organizePreview, organizeReasonText, planKind, unmetRequestNote, projectName, requiresConfirmation, ruleDraftPreview, summarizeOp, uiContextFor, uiResultsByStep, withOnlyReviewed, showsChosenSteps } from "./describePlan";
+import { agentStepDetail, deriveResultActions, formatAmount, impactLine, impactOf, isPlanExecution, listTotal, onlyReviewedValue, opLabel, organizePreview, organizeReasonText, planKind, unmetRequestNote, projectName, requiresConfirmation, ruleDraftPreview, summarizeOp, uiContextFor, uiResultsByStep, withOnlyReviewed, showsChosenSteps, stepErrorText } from "./describePlan";
 import { OP_KINDS, OP_SPECS, UI_OPS } from "./opSpecs";
 
 const instance = i18next.createInstance();
@@ -105,6 +106,15 @@ describe("summarizeOp", () => {
     expect(summarizeOp({ op: "set_setting", key: "render_dpi", value: 200 }, t, ctx)).toBe("기본 렌더 DPI = 200");
     expect(summarizeOp({ op: "job", action: "pause" }, t, ctx)).toBe("일시정지 · 마지막 작업");
     expect(summarizeOp({ op: "undo" }, t, ctx)).toBe("마지막 파일 작업");
+  });
+  // 1.0.0 §2-1: the same op changes the page text, or — with `original` — the document's own file.
+  it("edit_text says where it changes the text: the page text, or the original file", () => {
+    expect(summarizeOp({ op: "edit_text", find: "㈜한빛", replace: "(주)한빛", pages: [2, 3] }, t, ctx)).toBe("'㈜한빛' → '(주)한빛' · 2쪽");
+    expect(summarizeOp({ op: "edit_text", find: "11월 30일", replace: "12월 31일", original: true }, t, ctx)).toBe("'11월 30일' → '12월 31일' · 원본 파일(새 판으로 저장)");
+    // A file has no pages: a page list next to `original` is not shown.
+    expect(summarizeOp({ op: "edit_text", find: "a", replace: "b", pages: [1], original: true }, t, ctx)).toBe("'a' → 'b' · 원본 파일(새 판으로 저장)");
+    const en_ = instance.getFixedT("en");
+    expect(summarizeOp({ op: "edit_text", find: "a", replace: "b", original: true }, en_, { lang: "en", context })).toBe("'a' → 'b' · original file (new edition)");
   });
 });
 
@@ -215,6 +225,28 @@ describe("agentStepDetail", () => {
     expect(agentStepDetail("define_term", { action: "delete", term: entry }, t)?.text).toBe("용어 삭제 · '공급가액'");
     // A bare string still works.
     expect(agentStepDetail("define_term", { action: "save", term: "합계" }, t)?.text).toBe("용어 저장 · '합계'");
+  });
+
+  it("edit_text: an edit of the original file names the new edition, an edit of the page text counts documents", () => {
+    // `exec.rs`: `{ documents, replaced, pages }` for the page text …
+    expect(agentStepDetail("edit_text", { documents: ["a", "b"], replaced: 5, pages: 3 }, t)?.text).toBe("5곳 수정 · 문서 2건");
+    // … and `{ documents: [new id], original, replaced, edition }` for the file itself (`documents::edit::Edition`).
+    const edition = { report: { found: [2], replaced: [2], changes: [], parts: 1 }, doc_id: "d2", rel_path: "documents/2026/개발계약서 (수정).docx", version_label: "수정 2026-11-16 10:00", projects: [], warnings: [] };
+    expect(agentStepDetail("edit_text", { documents: ["d2"], original: "d1", replaced: 2, edition }, t)?.text).toBe("원본에서 2곳 수정 · 새 판 개발계약서 (수정).docx");
+  });
+
+  it("a failed step is told in a sentence when its error carries a reason code", () => {
+    // `exec.rs`: `StepResult.error` is the error's text — "invalid value: <code>" for a reason code.
+    // (which codes have a sentence is asked of the app's own i18n instance)
+    initI18n("ko");
+    const en_ = instance.getFixedT("en");
+    expect(stepErrorText("invalid value: edit_nothing_found", t)).toBe(ko.errors.reasons.edit_nothing_found);
+    expect(stepErrorText("invalid value: edit_original_needs_one_document", t)).toBe(ko.errors.reasons.edit_original_needs_one_document);
+    expect(stepErrorText("invalid value: edit_tracked_changes", en_)).toBe(en.errors.reasons.edit_tracked_changes);
+    // The browser mock sends the bare code.
+    expect(stepErrorText("edit_nothing_found", t)).toBe(ko.errors.reasons.edit_nothing_found);
+    // Anything else is shown as it came.
+    expect(stepErrorText("conversion failed: word/document.xml: xml: unexpected end", t)).toBe("conversion failed: word/document.xml: xml: unexpected end");
   });
 });
 

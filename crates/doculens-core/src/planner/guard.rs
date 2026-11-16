@@ -890,13 +890,19 @@ pub fn explain_what_was_said(text: &str, plan: &mut Plan) -> bool {
 /// `mode: general` (eval run of 2026-11-16: three of the five user sentences of 0.8.2). A question
 /// that names a project of the workspace and brings no text of its own is about that project's
 /// documents, whatever the model called it: the answer becomes a grounded one (`where_to_look` then
-/// scopes it to the project). A question that names no project keeps the model's reading.
+/// scopes it to the project). So is a question that points at what is open or selected — "이 조항이
+/// 무슨 뜻인지 설명해줘" came out as `knowledge: false` + `mode: general` with an empty scope (same
+/// run, ko-55): it is answered from that document. Any other question keeps the model's reading.
 pub fn document_question(text: &str, plan: &mut Plan, ctx: &super::PlanContext) -> bool {
     // "instruction: text" keeps the model's reading however short the text is (`carried_text` asks
     // for a text of some length before it takes the plan over).
     let command = super::rules::command_of(text).trim();
     let brings_a_text = command.contains([':', '：', '\n', '"', '“', '「', '『']) && has_rewrite_verb(command);
-    if brings_a_text || project_named(text, ctx).is_none() {
+    if brings_a_text {
+        return false;
+    }
+    let at_hand = super::rules::pointed_at(text, ctx);
+    if at_hand.is_empty() && project_named(text, ctx).is_none() {
         return false;
     }
     let mut changed = false;
@@ -908,6 +914,10 @@ pub fn document_question(text: &str, plan: &mut Plan, ctx: &super::PlanContext) 
             *mode = None;
             changed = true;
         }
+    }
+    // The model left the scope out with the lookup: the document the words point at.
+    if changed && !at_hand.is_empty() && plan.scope.is_empty() {
+        plan.scope.doc_ids = at_hand;
     }
     changed
 }

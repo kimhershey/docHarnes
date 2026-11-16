@@ -238,6 +238,34 @@ pub fn command_of(text: &str) -> &str {
     }
 }
 
+/// Parts of a document the user can point at ("이 조항이 무슨 뜻이야?").
+const PART_WORDS: &[&str] = &[
+    "이조항",
+    "이문장",
+    "이부분",
+    "이단락",
+    "이항목",
+    "이표",
+    "this clause",
+    "this sentence",
+    "this paragraph",
+    "this section",
+    "this table",
+];
+
+/// The documents a sentence that points at "this" one is about — the selection, or else the open
+/// document — when the user's own words do point: "이 문서", "이 계약서", "이 조항", "this clause".
+/// Empty when nothing is pointed at, or nothing is open or selected.
+pub fn pointed_at(text: &str, ctx: &PlanContext) -> Vec<String> {
+    let said = user_words(text);
+    let t = Text::new(&said, true);
+    if t.has(SELECTION_WORDS) || t.has(PART_WORDS) {
+        selection_ids(ctx)
+    } else {
+        Vec::new()
+    }
+}
+
 fn selection_ids(ctx: &PlanContext) -> Vec<String> {
     if !ctx.selected_doc_ids.is_empty() {
         ctx.selected_doc_ids.clone()
@@ -3740,7 +3768,7 @@ fn document_edit_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         }
     }
     // 글자 바꾸기: 두 개의 따옴표 + 바꿔/replace
-    if t.has(&["바꿔", "바꾸", "교체", "치환", "replace"])
+    if t.has(&["바꿔", "바꾸", "고쳐", "교체", "치환", "replace"])
         && !t.has(&["모델", "model", "테마", "theme", "언어", "유형", "제목", "이름"])
     {
         let q = quoted_all(t.raw);
@@ -3760,8 +3788,27 @@ fn document_edit_rule(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
             } else {
                 Vec::new()
             };
+            // "원본에서 …", "원본 파일을 …", "새 판으로 …": the document's own file (1.0.0 §2-1).
+            // The words between the quotes are the text to change, not a word about where.
+            let mut outside = t.raw.to_string();
+            for quoted in &q {
+                outside = outside.replace(quoted.as_str(), " ");
+            }
+            let original = Text::new(&outside, t.ko)
+                .has(&[
+                    "원본",
+                    "파일 자체",
+                    "새 판",
+                    "서식 그대로",
+                    "서식 유지",
+                    "original file",
+                    "the original",
+                    "new edition",
+                ])
+                .then_some(true);
+            let pages = if original.is_some() { Vec::new() } else { pages };
             return Some(mk(
-                Op::EditText { find: q[0].clone(), replace: q[1].clone(), pages },
+                Op::EditText { find: q[0].clone(), replace: q[1].clone(), pages, original },
                 scope,
                 0.84,
                 t.t(

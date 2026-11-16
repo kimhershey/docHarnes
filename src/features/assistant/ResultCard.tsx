@@ -23,7 +23,7 @@ import { useSettingsStore } from "@/stores/settings";
 
 import { AggregateCard } from "./AggregateCard";
 import { ClippedNote } from "./ClippedNote";
-import { agentStepDetail, aggregateRequestFor, deriveResultActions, opLabel, organizeReasonText, showsChosenSteps, uiResultsByStep } from "./describePlan";
+import { agentStepDetail, aggregateRequestFor, deriveResultActions, opLabel, organizeReasonText, showsChosenSteps, stepErrorText, uiResultsByStep } from "./describePlan";
 
 function StatusIcon({ status }: { status: StepStatus }) {
   switch (status) {
@@ -213,7 +213,7 @@ export function ResultCard({
                 </div>
                 {step.error && (
                   <span className="text-xs text-danger selectable" role="alert">
-                    {t("planner.result.step_failed", { error: step.error })}
+                    {t("planner.result.step_failed", { error: stepErrorText(step.error, t) })}
                   </span>
                 )}
                 {ui && !ui.ok && (

@@ -567,7 +567,8 @@
       "mode_general": "not about the documents",
       "summary_group_project": "one per project",
       "summary_group_doc_type": "one per type",
-      "summary_group_folder": "one per folder"
+      "summary_group_folder": "one per folder",
+      "original_file": "original file (new edition)"
     },
     "scope": {
       "title": "Scope",
@@ -705,7 +706,8 @@
         "manage_template": "{{action}} · '{{name}}'",
         "classify_applied": "{{suggested}} suggestions · {{applied}} assigned",
         "classify_preview": "{{suggested}} suggestions — apply on the projects screen",
-        "manage_schema": "{{action}} · '{{name}}'"
+        "manage_schema": "{{action}} · '{{name}}'",
+        "edit_original": "{{replaced}} changed in the original · new edition {{name}}"
       },
       "open_document": "Open document",
       "summary_group_docs": "{{count}} document(s)",
@@ -1350,7 +1352,8 @@
       "edit_line_break": "A text with a line break cannot be replaced. Only text inside one paragraph is.",
       "edit_too_many": "At most 200 replacements can be made at once.",
       "edit_nothing_found": "Nothing to change was found. Check that the text is typed exactly as in the document.",
-      "edit_too_many_editions": "There are too many edited copies with this name. Tidy the older ones up and try again."
+      "edit_too_many_editions": "There are too many edited copies with this name. Tidy the older ones up and try again.",
+      "edit_original_needs_one_document": "The original file is edited one document at a time. Open or select exactly one document."
     }
   },
   "startup": {

@@ -731,8 +731,25 @@ fn agent_rules_cover_every_gui_function() {
         planned("제목을 '2026 공급계약'으로 바꿔").plan
     );
     assert!(
-        matches!(op("'㈜한빛'을 '(주)한빛'으로 바꿔줘"), Op::EditText { find, replace, .. } if find == "㈜한빛" && replace == "(주)한빛")
+        matches!(op("'㈜한빛'을 '(주)한빛'으로 바꿔줘"), Op::EditText { find, replace, original: None, .. } if find == "㈜한빛" && replace == "(주)한빛")
     );
+    // (a word between the quotes is the text to change, not a word about where)
+    assert!(
+        matches!(op("'원본'을 '사본'으로 바꿔줘"), Op::EditText { find, replace, original: None, .. } if find == "원본" && replace == "사본")
+    );
+    // 1.0.0 §2-1: "원본에서 …" is the document's own file — formatting kept, saved as a new edition.
+    for text in [
+        "원본에서 '11월 30일'을 '12월 31일'로 바꿔줘",
+        "원본에서 '11월 30일'을 '12월 31일'로 고쳐줘",
+        "이 문서 원본 파일의 '11월 30일'을 '12월 31일'로 교체하고 새 판으로 저장해",
+    ] {
+        let r = planned(text);
+        assert!(
+            matches!(&r.plan.operations[..], [Op::EditText { find, replace, original: Some(true), pages }] if find == "11월 30일" && replace == "12월 31일" && pages.is_empty()),
+            "{r:?}"
+        );
+        assert!(r.plan.requires_confirmation, "{r:?}");
+    }
     assert!(
         matches!(op("이 문서를 참고 자료로 표시"), Op::SetRole { role: RoleParam::Knowledge }),
         "{:?}",
@@ -1360,6 +1377,118 @@ mod exec_tests {
         );
     }
 
+    /// 1.0.0 §2-1: `edit_text` with `original` changes the document's own file — the card says what the
+    /// file holds, the step writes a copy that becomes the latest edition, and a format without an
+    /// editable file fails with its reason instead of touching the page text.
+    #[test]
+    fn the_text_edit_op_can_change_the_original_file() {
+        use crate::knowledge::repo as knowledge_repo;
+        let w = World::new();
+        w.add_image("d1", "inbox/a.jpg");
+        let run1 = |op: Op, scope: Scope| -> serde_json::Value {
+            let plan = plan_of(vec![op], scope);
+            let ex = exec::run(&w.deps(None), &plan, &mut |_| {}).unwrap();
+            assert!(matches!(ex.steps[0].status, StepStatus::Done), "{:?}", ex.steps[0]);
+            ex.steps[0].payload.clone()
+        };
+        let sel = |ids: &[&str]| Scope { doc_ids: ids.iter().map(|s| s.to_string()).collect(), ..Scope::default() };
+
+        use std::io::Write;
+        let abs = w.paths.root.join("inbox/contract.docx");
+        let mut z = zip::ZipWriter::new(std::fs::File::create(&abs).unwrap());
+        z.start_file("word/document.xml", zip::write::SimpleFileOptions::default()).unwrap();
+        z.write_all(r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>납품 기한은 11월 30일</w:t></w:r></w:p></w:body></w:document>"#.as_bytes()).unwrap();
+        z.finish().unwrap();
+        w.db.with(|c| {
+            docs::insert_document(
+                c,
+                &NewDocument {
+                    id: "dx".into(),
+                    rel_path: "inbox/contract.docx".into(),
+                    original_name: "contract.docx".into(),
+                    source_kind: SourceKind::Docx,
+                    content_hash: "h".into(),
+                    size_bytes: 1,
+                    file_modified_at: None,
+                    role: DocumentRole::Work,
+                    import_batch_id: None,
+                },
+            )?;
+            docs::set_status(c, "dx", DocumentStatus::Rendered, None)
+        })
+        .unwrap();
+        let edit = |find: &str| Op::EditText {
+            find: find.into(),
+            replace: "12월 31일".into(),
+            pages: Vec::new(),
+            original: Some(true),
+        };
+        // The card says what the file holds before anything is written.
+        let preview = exec::preview(
+            &w.db,
+            &w.paths,
+            &plan_of(vec![edit("11월 30일")], sel(&["dx"])),
+            &Default::default(),
+            Language::Ko,
+        )
+        .unwrap();
+        assert!(preview.steps[0].summary.contains("원본 파일에서 '11월 30일' 1곳"), "{:?}", preview.steps[0]);
+        let p = run1(edit("11월 30일"), sel(&["dx"]));
+        assert_eq!((p["replaced"].as_u64(), p["original"].as_str()), (Some(1), Some("dx")));
+        assert_eq!(p["edition"]["rel_path"], "inbox/contract (수정).docx");
+        let copy = p["documents"][0].as_str().unwrap().to_string();
+        assert!(w.paths.root.join("inbox/contract (수정).docx").is_file());
+        assert_eq!(w.doc(&copy).source_kind, SourceKind::Docx);
+        let latest = w.db.with(|c| knowledge_repo::get_version(c, &copy)).unwrap().unwrap();
+        assert!(latest.is_latest && latest.version_label.unwrap_or_default().starts_with("수정 "));
+        // A format without an editable file says so instead of touching the page text — on the card,
+        // as a sentence, before anything runs …
+        let cannot = |ids: &[&str]| {
+            let p = exec::preview(
+                &w.db,
+                &w.paths,
+                &plan_of(vec![edit("한빛")], sel(ids)),
+                &Default::default(),
+                Language::Ko,
+            )
+            .unwrap();
+            assert!(p.steps[0].confirm, "{:?}", p.steps[0]);
+            (p.steps[0].summary.clone(), p.steps[0].payload["error"].as_str().unwrap_or_default().to_string())
+        };
+        assert_eq!(
+            cannot(&["d1"]),
+            (
+                "원본 파일을 고칠 수 없습니다: HWPX · DOCX · PPTX 파일만 원본을 고칠 수 있습니다".to_string(),
+                crate::documents::edit::UNSUPPORTED.to_string()
+            )
+        );
+        // … and one file at a time.
+        assert_eq!(
+            cannot(&["dx", "d1"]),
+            (
+                "원본 파일을 고칠 수 없습니다: 문서 한 건만 열거나 선택해 주세요".to_string(),
+                "edit_original_needs_one_document".to_string()
+            )
+        );
+        // … and the step fails with the reason code when it is run all the same.
+        for (ids, code) in
+            [(&["d1"][..], "edit_unsupported_format"), (&["dx", "d1"][..], "edit_original_needs_one_document")]
+        {
+            let ex = exec::run(&w.deps(None), &plan_of(vec![edit("한빛")], sel(ids)), &mut |_| {}).unwrap();
+            assert!(matches!(ex.steps[0].status, StepStatus::Failed), "{:?}", ex.steps[0]);
+            assert_eq!(
+                ex.steps[0].error.as_deref(),
+                Some(format!("invalid value: {code}").as_str()),
+                "{:?}",
+                ex.steps[0]
+            );
+        }
+        // A text the file does not hold: nothing is written.
+        let ex = exec::run(&w.deps(None), &plan_of(vec![edit("없는 글")], sel(&["dx"])), &mut |_| {}).unwrap();
+        assert_eq!(ex.steps[0].error.as_deref(), Some("invalid value: edit_nothing_found"), "{:?}", ex.steps[0]);
+        assert!(!w.paths.root.join("inbox/contract (수정 2).docx").exists());
+    }
+
     /// 0.6.0: the new core ops run against the workspace — rotate (relative), title, role,
     /// text replacement, reference groups, glossary, editions, project edits / membership /
     /// deletion, templates, schema management and project suggestions.
@@ -1390,8 +1519,10 @@ mod exec_tests {
         run1(Op::SetRole { role: RoleParam::Knowledge }, sel(&["d1", "d2"]));
         assert_eq!(w.doc("d2").role, DocumentRole::Knowledge);
         // find / replace with history
-        let p =
-            run1(Op::EditText { find: "㈜한빛".into(), replace: "(주)한빛".into(), pages: Vec::new() }, sel(&["d1"]));
+        let p = run1(
+            Op::EditText { find: "㈜한빛".into(), replace: "(주)한빛".into(), pages: Vec::new(), original: None },
+            sel(&["d1"]),
+        );
         assert_eq!(p["replaced"], 2);
         let text = w.db.with(|c| docs::page_text_state(c, "d1", 1)).unwrap().unwrap().text.unwrap();
         assert!(text.contains("(주)한빛") && !text.contains('㈜'), "{text}");
@@ -1460,7 +1591,8 @@ mod exec_tests {
             sel(&["d1"]),
         );
         let groups = w.db.with(knowledge_repo::list_version_groups).unwrap();
-        assert_eq!(groups[0].documents[0].version_label.as_deref(), Some("2024"));
+        let group = groups.iter().find(|g| g.group_key == "공급계약").expect("the group");
+        assert_eq!(group.documents[0].version_label.as_deref(), Some("2024"));
         run1(
             Op::SetVersion { group_key: None, label: None, effective_date: None, latest: None, clear: Some(true) },
             sel(&["d1"]),
@@ -1559,7 +1691,7 @@ mod exec_tests {
         // previews of the confirmed ops carry their counts
         w.db.with(|c| docs::set_page_text(c, "d2", 1, "㈜한빛")).unwrap();
         let plan = plan_of(
-            vec![Op::EditText { find: "㈜한빛".into(), replace: "x".into(), pages: Vec::new() }],
+            vec![Op::EditText { find: "㈜한빛".into(), replace: "x".into(), pages: Vec::new(), original: None }],
             sel(&["d1", "d2"]),
         );
         let preview = exec::preview(&w.db, &w.paths, &plan, &ProcessingSettings::default(), Language::Ko).unwrap();
@@ -2314,6 +2446,52 @@ fn a_question_that_names_a_project_is_answered_from_its_documents() {
     let text = "다음 문장을 다듬어줘: AAA 프로젝트의 과업은 당사가 수행하며 기한은 12월말까지로 함";
     let r = run(&c, text, json!({ "op": "answer", "question": text, "cite": false, "knowledge": false }));
     assert!(matches!(&r.plan.operations[..], [Op::Answer { knowledge: Some(false), .. }]), "{r:?}");
+}
+
+/// 1.0.0 §4-1 — "이 조항이 무슨 뜻인지 설명해줘" as Gemma 4 E4B wrote it without `explain` in its op
+/// table (eval run of 2026-11-16, ko-55, replayed): an answer that looks nothing up, with an empty
+/// scope. A question that points at what is open or selected is answered from that document.
+#[test]
+fn a_question_that_points_at_the_open_document_is_answered_from_it() {
+    let run = |c: &PlanContext, text: &str, scope: Value| {
+        let chat = StageChat::new();
+        chat.push("families", json!({ "families": ["ask"] }));
+        let op = json!({ "op": "answer", "question": text, "cite": true, "knowledge": false, "mode": "general" });
+        chat.push("plan", json!({ "summary": "s", "unmet": "", "intent": "answer", "scope": scope, "operations": [op], "requires_confirmation": false, "confidence": 0.8, "clarification_question": "" }));
+        let r = plan(Some(&deps(&chat)), text, c, PlanMode::ModelFirst).unwrap();
+        assert!(!r.plan.is_clarification() && r.issues.iter().all(|i| !i.blocking), "{r:?}");
+        r
+    };
+    let grounded = |r: &PlanResult| matches!(&r.plan.operations[..], [Op::Answer { mode: None, knowledge: None, .. }]);
+    let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let mut c = ctx();
+    c.selected_doc_ids.clear();
+    c.current_document = Some("d-open".into());
+    // The open document …
+    for text in ["이 조항이 무슨 뜻인지 설명해줘", "이 문서가 어떤 문서인지 알려줘", "what does this clause mean?"]
+    {
+        let r = run(&c, text, json!({}));
+        assert!(grounded(&r), "{text}: {r:?}");
+        assert_eq!(r.plan.scope.doc_ids, ids(&["d-open"]), "{text}: {r:?}");
+    }
+    // … or the selection, which goes first.
+    c.selected_doc_ids = ids(&["d-1", "d-2"]);
+    let r = run(&c, "선택한 문서들이 무슨 내용인지 알려줘", json!({}));
+    assert!(grounded(&r), "{r:?}");
+    assert_eq!(r.plan.scope.doc_ids, ids(&["d-1", "d-2"]), "{r:?}");
+    // A scope the model did name is kept.
+    let r = run(&c, "이 조항이 무슨 뜻인지 설명해줘", json!({ "doc_ids": ["d-2"] }));
+    assert!(grounded(&r), "{r:?}");
+    assert_eq!(r.plan.scope.doc_ids, ids(&["d-2"]), "{r:?}");
+    // A question about the world points at nothing: general knowledge, whatever is open.
+    let r = run(&c, "애자일 방법론이 뭐야?", json!({}));
+    assert!(matches!(&r.plan.operations[..], [Op::Answer { mode: Some(AnswerMode::General), .. }]), "{r:?}");
+    assert!(r.plan.scope.doc_ids.is_empty(), "{r:?}");
+    // Nothing open or selected: there is no document to look in, the model's reading stays.
+    c.selected_doc_ids.clear();
+    c.current_document = None;
+    let r = run(&c, "이 조항이 무슨 뜻인지 설명해줘", json!({}));
+    assert!(matches!(&r.plan.operations[..], [Op::Answer { mode: Some(AnswerMode::General), .. }]), "{r:?}");
 }
 
 /// 0.8.2 — the plans Gemma 4 E4B wrote for the user's sentences (eval run of 2026-11-12, replayed):

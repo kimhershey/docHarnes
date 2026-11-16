@@ -946,7 +946,7 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
                     issues.push(PlanIssue::error(at("title"), "title_empty", "set_title needs a title"));
                 }
             }
-            Op::EditText { find, replace, pages } => {
+            Op::EditText { find, replace, pages, original } => {
                 *find = find.chars().take(500).collect();
                 *replace = replace.chars().take(2_000).collect();
                 if find.trim().is_empty() {
@@ -955,6 +955,20 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
                 pages.retain(|p| *p >= 1);
                 pages.sort_unstable();
                 pages.dedup();
+                if *original == Some(false) {
+                    *original = None;
+                }
+                if *original == Some(true) {
+                    // The file has no pages, and a paragraph of it is one line.
+                    pages.clear();
+                    if find.contains(['\n', '\r']) || replace.contains(['\n', '\r']) {
+                        issues.push(PlanIssue::error(
+                            at("find"),
+                            crate::documents::edit::LINE_BREAK,
+                            "a text with a line break cannot be replaced in the original file",
+                        ));
+                    }
+                }
             }
             Op::SetRole { .. } => {}
             Op::ManageReference { action, group, name, project } => {
