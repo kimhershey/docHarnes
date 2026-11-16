@@ -2587,6 +2587,10 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
       };
       return r(Array.isArray(out) ? (out as DocumentView[]).map(attach) : attach(out as DocumentView));
     }
+    case "documents_edit_preview":
+    case "documents_edit_suggest":
+    case "documents_edit_save":
+      return r(await (await import("./mock-edit")).mockEdit(cmd, a));
     case "documents_stats":
     case "documents_pages":
     case "documents_page_text":

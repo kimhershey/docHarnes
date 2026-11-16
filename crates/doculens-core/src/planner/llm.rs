@@ -337,12 +337,23 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
                 if guard::answer_instead_of_asking(text, &mut plan, ctx, &result.families, ko) {
                     log::info!("planner: the model asked back on a question; answering from the documents instead");
                 }
+                // A question that names a project is about its documents, not general knowledge.
+                if guard::document_question(text, &mut plan, ctx) {
+                    log::info!(
+                        "planner: an answer that looked nothing up names a project; answering from its documents"
+                    );
+                }
                 // `explain` is for a piece of text the user pointed at; a question is answered.
                 guard::explain_what_was_said(text, &mut plan);
                 // The one document type the sentence names is the scope of a plan that named none.
                 issues.extend(guard::type_filter_repair(text, &mut plan, ctx, ko));
                 // … and so are the kind of document and the project it names; "X 프로젝트 열어줘" opens it.
                 issues.extend(guard::where_to_look(text, &mut plan, ctx, ko));
+                // The texts a replacement quotes are what changes, not where: no date range from them,
+                // and with no documents named, the selection or the open document.
+                if guard::edit_target(text, &mut plan, ctx) {
+                    log::info!("planner: a text replacement takes its documents from the words outside the quotes");
+                }
                 // What the sentence does not support is confirmed, whatever the model's confidence.
                 issues.extend(guard::contract_checks(text, &mut plan, ko));
                 // A split by project the checks put back: the validator had already filled the open

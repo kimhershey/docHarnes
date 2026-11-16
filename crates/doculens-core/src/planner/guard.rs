@@ -569,7 +569,11 @@ fn setting_change(text: &str, op: &Op) -> Option<(String, bool)> {
     };
     match op {
         Op::SetSetting { key, value } => {
-            let (_, spec) = catalog::find(key)?;
+            let (canonical, spec) = catalog::find(key)?;
+            // A model is named by what tells the models apart ("12B"), not by the setting's label.
+            if let ("models.active_model", Some(id)) = (canonical, value.as_str().filter(|v| *v != "auto")) {
+                return Some((format!("모델 → {id}"), model_is_named(text, id)));
+            }
             Some((format!("{} → {}", spec.label_ko, value_text(value)), grounded(key, value)))
         }
         Op::SetTheme { theme } => {
@@ -877,6 +881,89 @@ pub fn explain_what_was_said(text: &str, plan: &mut Plan) -> bool {
     }
     if changed && !plan.operations.iter().any(|o| o.kind() == plan.intent) {
         plan.recompute_intent();
+    }
+    changed
+}
+
+/// 1.0.0 §4-1 — with `explain` out of the model's op table, Gemma 4 E4B writes "AAA가 무엇인지 설명해줘" as
+/// an `answer` that looks nothing up: `knowledge: false` (meant for a text the user pasted) or
+/// `mode: general` (eval run of 2026-11-16: three of the five user sentences of 0.8.2). A question
+/// that names a project of the workspace and brings no text of its own is about that project's
+/// documents, whatever the model called it: the answer becomes a grounded one (`where_to_look` then
+/// scopes it to the project). So is a question that points at what is open or selected — "이 조항이
+/// 무슨 뜻인지 설명해줘" came out as `knowledge: false` + `mode: general` with an empty scope (same
+/// run, ko-55): it is answered from that document. Any other question keeps the model's reading.
+pub fn document_question(text: &str, plan: &mut Plan, ctx: &super::PlanContext) -> bool {
+    // "instruction: text" keeps the model's reading however short the text is (`carried_text` asks
+    // for a text of some length before it takes the plan over).
+    let command = super::rules::command_of(text).trim();
+    let brings_a_text = command.contains([':', '：', '\n', '"', '“', '「', '『']) && has_rewrite_verb(command);
+    if brings_a_text {
+        return false;
+    }
+    let at_hand = super::rules::pointed_at(text, ctx);
+    if at_hand.is_empty() && project_named(text, ctx).is_none() {
+        return false;
+    }
+    let mut changed = false;
+    for op in &mut plan.operations {
+        let Op::Answer { knowledge, mode, reply, .. } = op else { continue };
+        let looks_nothing_up = *knowledge == Some(false) || *mode == Some(super::AnswerMode::General);
+        if reply.is_none() && *mode != Some(super::AnswerMode::Chat) && looks_nothing_up {
+            *knowledge = None;
+            *mode = None;
+            changed = true;
+        }
+    }
+    // The model left the scope out with the lookup: the document the words point at.
+    if changed && !at_hand.is_empty() && plan.scope.is_empty() {
+        plan.scope.doc_ids = at_hand;
+    }
+    changed
+}
+
+/// 1.0.0 §2-1 — a text replacement as Gemma 4 E4B planned it (eval run of 2026-11-16): the date
+/// between the quotes of "원본에서 '11월 30일'을 '12월 31일'로 바꿔줘" came back as the scope's date
+/// range, and "'㈜한빛'을 '(주)한빛'으로 바꿔줘" with no scope at all although a document was open (the
+/// app then asked which documents). The texts between the quotes are what changes, never where to
+/// look: a date range the words outside them do not carry is dropped, so is a keyword that is the
+/// text itself, and a replacement that then names no documents works on what the phrase rules would
+/// take — the selection, or else the open document (`rules::edit_scope`). The step is confirmed
+/// either way.
+pub fn edit_target(text: &str, plan: &mut Plan, ctx: &super::PlanContext) -> bool {
+    if plan.is_clarification() {
+        return false;
+    }
+    let texts: Vec<String> = plan
+        .operations
+        .iter()
+        .filter_map(|op| match op {
+            Op::EditText { find, replace, .. } => Some([super::compact(find), super::compact(replace)]),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    if texts.is_empty() {
+        return false;
+    }
+    let mut changed = false;
+    let filter = &mut plan.scope.filter;
+    if (filter.date_from.is_some() || filter.date_to.is_some()) && !super::rules::dated_outside_quotes(text, ctx.today)
+    {
+        filter.date_from = None;
+        filter.date_to = None;
+        changed = true;
+    }
+    if filter.keyword.as_deref().map(super::compact).is_some_and(|k| texts.contains(&k)) {
+        filter.keyword = None;
+        changed = true;
+    }
+    if plan.scope.is_empty() {
+        let scope = super::rules::edit_scope(text, ctx);
+        if !scope.is_empty() {
+            plan.scope = scope;
+            changed = true;
+        }
     }
     changed
 }

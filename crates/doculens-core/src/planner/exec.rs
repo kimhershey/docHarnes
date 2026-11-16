@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use crate::aggregate::{self, AggregateRequest};
 use crate::db::Db;
 use crate::documents::import::{self, ImportDeps, ImportOptions};
-use crate::documents::{repo as docs, DocumentRecord, DocumentRole};
+use crate::documents::{edit, repo as docs, DocumentRecord, DocumentRole};
 use crate::error::{CoreError, Result};
 use crate::export::{self, ExportRequest};
 use crate::generate::{self, DraftRequest, GenerateDeps, ReviseScope, SourceRef};
@@ -1812,7 +1812,32 @@ fn run_step(
                 imported: None,
             })
         }
-        Op::EditText { find, replace, pages } => {
+        // 1.0.0 §2-1: in the document's own file — formatting kept, saved as the latest edition.
+        Op::EditText { find, replace, original: Some(true), .. } => {
+            let doc = one_document(working_set(deps, plan, imported)?, EDIT_ONE_DOCUMENT)?;
+            deps.checkpoint()?;
+            progress("edit", 0, 1, &doc.original_name);
+            let edits = [edit::Replacement::text(find.clone(), replace.clone())];
+            let edition = edit::save_edition(&deps.import, &doc, &edits, deps.ko())?;
+            out.documents.push(edition.doc_id.clone());
+            let name = edition.rel_path.rsplit('/').next().unwrap_or(&edition.rel_path).to_string();
+            let replaced = edition.report.total();
+            Ok(StepOutcome {
+                summary: if deps.ko() {
+                    format!("원본에서 '{find}' → '{replace}' {replaced}곳을 고쳐 새 판으로 저장: {name}")
+                } else {
+                    format!("Replaced '{find}' with '{replace}' {replaced} times in the original; saved as a new edition: {name}")
+                },
+                payload: json!({
+                    "documents": [edition.doc_id],
+                    "original": doc.id,
+                    "replaced": replaced,
+                    "edition": edition,
+                }),
+                imported: None,
+            })
+        }
+        Op::EditText { find, replace, pages, .. } => {
             let docs_ = non_empty(working_set(deps, plan, imported)?)?;
             let (mut replaced, mut touched) = (0usize, 0usize);
             for d in &docs_ {
@@ -2491,6 +2516,25 @@ fn non_empty(docs_: Vec<DocumentRecord>) -> Result<Vec<DocumentRecord>> {
 }
 
 /// Exactly one document in scope (`code` names the op's need otherwise).
+/// `edit_text` with `original` works on the file of one document.
+const EDIT_ONE_DOCUMENT: &str = "edit_original_needs_one_document";
+
+/// Why a document's own file cannot be edited, as the preview says it (the reason codes of
+/// `documents::edit`; anything else is shown as it came).
+fn edit_reason(code: &str, ko: bool) -> String {
+    let (k, e) = match code {
+        edit::UNSUPPORTED => (
+            "HWPX · DOCX · PPTX 파일만 원본을 고칠 수 있습니다",
+            "only HWPX / DOCX / PPTX files can be edited in place",
+        ),
+        edit::TRACKED_CHANGES => ("변경 내용 추적이 들어 있는 문서입니다", "the document has tracked changes"),
+        edit::SIGNED => ("전자서명이 된 문서입니다", "the document is signed"),
+        EDIT_ONE_DOCUMENT => ("문서 한 건만 열거나 선택해 주세요", "open or select exactly one document"),
+        other => return other.to_string(),
+    };
+    if ko { k } else { e }.to_string()
+}
+
 fn one_document(docs_: Vec<DocumentRecord>, code: &str) -> Result<DocumentRecord> {
     match docs_.len() {
         0 => Err(CoreError::Invalid("no_documents".into())),
@@ -3160,7 +3204,38 @@ pub fn preview(
                 json!({ "documents": docs_.len(), "name": name }),
                 true,
             ),
-            Op::EditText { find, replace, pages } => {
+            Op::EditText { find, replace, original: Some(true), .. } => {
+                // What the file itself holds — the same count the step will report.
+                let edits = [edit::Replacement::text(find.clone(), replace.clone())];
+                let report = match docs_.as_slice() {
+                    [d] => edit::preview(&d.absolute_path(paths), d.source_kind, &edits).map_err(|e| match e {
+                        CoreError::Invalid(code) => code,
+                        other => other.to_string(),
+                    }),
+                    _ => Err(EDIT_ONE_DOCUMENT.to_string()),
+                };
+                match report {
+                    Ok(r) => (
+                        if ko {
+                            format!("원본 파일에서 '{find}' {}곳 → '{replace}' (서식 유지, 새 판으로 저장)", r.total())
+                        } else {
+                            format!("{} matches of '{find}' in the original file → '{replace}' (formatting kept, saved as a new edition)", r.total())
+                        },
+                        json!({ "matches": r.total(), "changes": r.changes.iter().take(20).collect::<Vec<_>>(), "original": true }),
+                        true,
+                    ),
+                    Err(reason) => (
+                        if ko {
+                            format!("원본 파일을 고칠 수 없습니다: {}", edit_reason(&reason, ko))
+                        } else {
+                            format!("the original file cannot be edited: {}", edit_reason(&reason, ko))
+                        },
+                        json!({ "matches": 0, "original": true, "error": reason }),
+                        true,
+                    ),
+                }
+            }
+            Op::EditText { find, replace, pages, .. } => {
                 let mut matches = 0usize;
                 let mut touched = 0usize;
                 for d in &docs_ {

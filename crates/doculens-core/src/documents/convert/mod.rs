@@ -14,6 +14,7 @@
 //! Text is extracted straight from the model, so converted documents are
 //! searchable without OCR even when printing fails.
 
+pub mod chart;
 pub mod doc;
 pub mod docx;
 pub mod hml;

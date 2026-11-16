@@ -334,7 +334,11 @@ fn an_app_side_change_before_a_step_that_depends_on_it_is_rejected() {
     );
     let issue = validate::validate(&mut p, &c, None).into_iter().find(|i| i.code == "ui_op_order").unwrap();
     assert_eq!(issue.path, "operations[0]");
-    assert!(issue.message.contains("'set_model' 단계") && issue.message.contains("'extract'"), "{}", issue.message);
+    assert!(
+        issue.message.contains("'설정 변경(활성 모델)' 단계") && issue.message.contains("'extract'"),
+        "{}",
+        issue.message
+    );
     let chat = StageChat::new();
     let reply = json!({ "summary": "모델 변경 후 재추출", "intent": "set_model", "scope": { "doc_ids": ["d1a2"] }, "operations": [{ "op": "set_model", "id": "gemma4-12b-q4km" }, { "op": "extract", "force": true }], "requires_confirmation": false, "confidence": 0.9 });
     for _ in 0..3 {
@@ -342,7 +346,11 @@ fn an_app_side_change_before_a_step_that_depends_on_it_is_rejected() {
     }
     let r = plan(Some(&deps(&chat)), "모델을 12B로 바꾸고 이 문서 다시 추출해줘", &c, PlanMode::ModelFirst).unwrap();
     assert!(r.plan.is_clarification(), "{:?}", r.plan);
-    assert!(r.plan.clarification_question.as_deref().unwrap_or_default().contains("set_model"), "{:?}", r.plan);
+    assert!(
+        r.plan.clarification_question.as_deref().unwrap_or_default().contains("설정 변경(활성 모델)"),
+        "{:?}",
+        r.plan
+    );
 }
 
 /// PLN-18 ('규칙' mode): a path with blanks was cut at the first one, a particle after a Hangul

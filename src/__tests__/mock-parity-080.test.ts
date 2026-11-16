@@ -24,6 +24,9 @@ const knowledge = await import("@/lib/mock-knowledge");
 
 const FINISHED = ["done", "failed", "cancelled", "interrupted"];
 
+type EditRequest = import("@/lib/types").EditReplacement;
+type EditOutcome = import("@/lib/types").EditReport;
+
 async function sleep(ms: number): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
 }
@@ -433,7 +436,8 @@ describe("planner (rules, validate, guard)", () => {
     };
     // A vague wish: the (simulated) model picks a theme on its own.
     const vague = read("눈이 편한 화면으로 해줘");
-    expect(vague.ops).toEqual([{ op: "set_theme", theme: "dark" }]);
+    // (1.0.0 §4-2: a settings change is `set_setting`, whichever path planned it — core `Op::canonical`.)
+    expect(vague.ops).toEqual([{ op: "set_setting", key: "ui.theme", value: "dark" }]);
     expect(vague.confirm).toBe(true);
     expect(vague.notes).toHaveLength(1);
     expect(vague.notes[0]).toContain("ui.theme → dark");
@@ -442,7 +446,7 @@ describe("planner (rules, validate, guard)", () => {
     // Named values and switches the sentence says are grounded: no note, no approval.
     for (const text of ["다크 모드로 바꾸고 언어를 영어로", "시스템 테마로 바꾸고 언어를 한국어로"]) {
       const said = read(text);
-      expect(said.ops.map((o) => o.op), text).toEqual(["set_theme", "set_language"]);
+      expect(said.ops.map((o) => (o.op === "set_setting" ? o.key : o.op)), text).toEqual(["ui.theme", "ui.language"]);
       expect(said.notes, text).toEqual([]);
       expect(said.confirm, text).toBe(false);
     }
@@ -492,5 +496,176 @@ describe("planner (rules, validate, guard)", () => {
     expect(whole.groups!.map((g) => [g.key, g.label])).toEqual([["all", "전체"]]);
     // Per-document summaries only: no groups.
     expect((await run(null)).groups).toBeUndefined();
+  });
+
+  // 1.0.0 §2-1: `edit_text.original` — `rules::document_edit_rule`, `validate`, `exec` preview / run.
+  it("a replacement asked for 'in the original' changes the file itself and saves a new edition", async () => {
+    const ids = await importDocs(["개발계약서.docx", "스캔본.pdf"]);
+    const [docx, pdf] = [ids["개발계약서.docx"]!, ids["스캔본.pdf"]!];
+    const ctx = planner.buildContext({ selected_doc_ids: [docx] });
+    const first = (text: string) => planner.rulesPlan(text, ctx)?.operations[0];
+    // The page text, unless the sentence names the original, the file itself or a new edition.
+    expect(first("'12,500원'을 '13,000원'으로 바꿔줘")).toEqual({ op: "edit_text", find: "12,500원", replace: "13,000원", pages: [] });
+    // A word between the quotes is the text to change, not a word about where.
+    expect(first("'원본'을 '사본'으로 바꿔줘")).toEqual({ op: "edit_text", find: "원본", replace: "사본", pages: [] });
+    for (const text of ["원본에서 '12,500원'을 '13,000원'으로 바꿔줘", "원본에서 '12,500원'을 '13,000원'으로 고쳐줘", "'12,500원'을 '13,000원'으로 바꿔서 새 판으로 저장해줘", "replace '12,500원' with '13,000원' in the original file"]) {
+      expect(first(text), text).toEqual({ op: "edit_text", find: "12,500원", replace: "13,000원", pages: [], original: true });
+    }
+
+    // A change of a file is always shown first; the preview counts what the file holds.
+    const planned = planner.planText("원본에서 '12,500원'을 '13,000원'으로 바꿔줘", ctx);
+    expect(planned.issues.filter((i) => i.blocking)).toEqual([]);
+    expect(planned.plan.requires_confirmation).toBe(true);
+    const preview = planner.planPreview(planned.plan, ctx);
+    expect(preview.requires_confirmation).toBe(true);
+    expect(preview.steps[0]).toMatchObject({ op: "edit_text", confirm: true, summary: "원본 파일에서 '12,500원' 2곳 → '13,000원' (서식 유지, 새 판으로 저장)", payload: { matches: 2, original: true } });
+
+    // A file that cannot be edited in place, or more than one document: said before anything runs.
+    const withScope = (doc_ids: string[]): Plan => ({ ...planned.plan, scope: { folder: null, doc_ids, filter: {} } });
+    expect(planner.planPreview(withScope([pdf]), ctx).steps[0]).toMatchObject({ summary: "원본 파일을 고칠 수 없습니다: HWPX · DOCX · PPTX 파일만 원본을 고칠 수 있습니다", payload: { matches: 0, error: "edit_unsupported_format" } });
+    expect(planner.planPreview(withScope([docx, pdf]), ctx).steps[0]).toMatchObject({ summary: "원본 파일을 고칠 수 없습니다: 문서 한 건만 열거나 선택해 주세요", payload: { error: "edit_original_needs_one_document" } });
+    const tooMany = await planner.runPlan(withScope([docx, pdf]), ctx, null, () => undefined);
+    // (the shell's text is "invalid value: <code>"; the result card words either form — `stepErrorText`)
+    expect(tooMany.steps[0]).toMatchObject({ status: "failed", error: "edit_original_needs_one_document" });
+
+    // The validator: a file has no pages, a paragraph of it is one line, `original: false` is no parameter.
+    const check = (op: Plan["operations"][number]) => {
+      const plan: Plan = { ...planned.plan, operations: [op] };
+      return { codes: planner.validatePlan(plan, ctx, null).map((i) => i.code), op: plan.operations[0] };
+    };
+    expect(check({ op: "edit_text", find: "a", replace: "b", pages: [3, 1, 3], original: true }).op).toEqual({ op: "edit_text", find: "a", replace: "b", pages: [], original: true });
+    expect(check({ op: "edit_text", find: "a", replace: "b", pages: [3, 1, 3], original: false }).op).toEqual({ op: "edit_text", find: "a", replace: "b", pages: [1, 3] });
+    expect(check({ op: "edit_text", find: "a\nb", replace: "c", original: true }).codes).toContain("edit_line_break");
+    expect(check({ op: "edit_text", find: "a\nb", replace: "c" }).codes).not.toContain("edit_line_break");
+
+    // Run: the edited copy is a new document — the latest edition — and the original keeps its text.
+    const exec = await planner.runPlan(planned.plan, ctx, null, () => undefined);
+    const step = exec.steps[0]!;
+    expect(step.status).toBe("done");
+    const payload = step.payload as { documents: string[]; original: string; replaced: number; edition: { doc_id: string; rel_path: string } };
+    expect(payload).toMatchObject({ original: docx, replaced: 2, documents: [payload.edition.doc_id] });
+    expect(payload.edition.rel_path).toMatch(/개발계약서 \(수정\)\.docx$/);
+    expect(exec.documents).toEqual([payload.edition.doc_id]);
+    const text = async (id: string) => (await pages(id)).map((p) => p.text ?? "").join("\n");
+    expect(await text(payload.edition.doc_id)).toContain("13,000원");
+    expect(await text(payload.edition.doc_id)).not.toContain("12,500원");
+    expect(await text(docx)).toContain("12,500원");
+    // Nothing left to change in the new edition: the step fails with the reason code the card words.
+    const again = await planner.runPlan(withScope([payload.edition.doc_id]), ctx, null, () => undefined);
+    expect(again.steps[0]).toMatchObject({ status: "failed", error: "edit_nothing_found" });
+  });
+});
+
+// 1.0.0 §2-1 step 2 (`documents::edit`: `structure`, `Part::{insert_paragraph, delete_paragraph, insert_row,
+// delete_row}`): a paragraph is a line of the mock's page text, a table row a line with tabs.
+describe("original-file edits: paragraphs and table rows (documents::edit)", () => {
+  const preview = (id: string, edits: EditRequest[]) => backend.mockInvoke<EditOutcome>("documents_edit_preview", { id, edits });
+  const text = async (id: string) => (await pages(id)).map((p) => p.text ?? "");
+  /** What the file holds on a page (set without a correction: the viewer's corrections do not reach the file). */
+  const setFileText = (id: string, pageNo: number, value: string) => {
+    const d = backend.wsDocs().find((x) => x.id === id)!;
+    backend.upsertDoc({ ...d, pages: d.pages.map((p) => (p.page_no === pageNo ? { ...p, text: value } : p)) });
+  };
+
+  it("a paragraph is added next to the one that holds the text, or taken out; several places ask which one", async () => {
+    const ids = await importDocs(["개발계약서.docx"]);
+    const doc = ids["개발계약서.docx"]!;
+    setFileText(doc, 1, "제3조 납품\n① 납품 기한은 11월 30일로 한다.\n② 납품 장소는 발주처로 한다.");
+    setFileText(doc, 2, "산출물\t기한\n설계서\t10월 31일\n소스 코드\t11월 30일\n끝.");
+
+    // "납품" is in three paragraphs: nothing is done before the request says which one.
+    const vague = await preview(doc, [{ find: "납품", replace: "③ 검수는 14일 안에 마친다.", action: "insert_after" }]);
+    expect(vague).toMatchObject({ found: [3], replaced: [0], problems: [{ edit: 0, code: "edit_anchor_ambiguous" }], changes: [] });
+    await expect(backend.mockInvoke("documents_edit_save", { id: doc, edits: [{ find: "납품", replace: "x", action: "insert_after" }] })).rejects.toMatchObject({ message: "edit_anchor_ambiguous" });
+
+    const edits: EditRequest[] = [
+      { find: "② 납품 장소", replace: "③ 검수는 14일 안에 마친다.", action: "insert_after" },
+      { find: "납품", replace: "(2026년 계약)", action: "insert_before", occurrence: 1 },
+      { find: "① 납품 기한", replace: "", action: "delete_paragraph" },
+    ];
+    const report = await preview(doc, edits);
+    expect(report.problems ?? []).toEqual([]);
+    expect(report.replaced).toEqual([1, 1, 1]);
+    expect(report.changes.map((c) => [c.action, c.before, c.after])).toEqual([
+      ["insert_after", "② 납품 장소는 발주처로 한다.", "③ 검수는 14일 안에 마친다."],
+      ["insert_before", "제3조 납품", "(2026년 계약)"],
+      ["delete_paragraph", "① 납품 기한은 11월 30일로 한다.", ""],
+    ]);
+    // Nothing was written by the previews; the save makes a new edition and leaves the original as it was.
+    const edition = await backend.mockInvoke<{ doc_id: string; report: EditOutcome }>("documents_edit_save", { id: doc, edits });
+    expect((await text(edition.doc_id))[0]).toBe("(2026년 계약)\n제3조 납품\n② 납품 장소는 발주처로 한다.\n③ 검수는 14일 안에 마친다.");
+    expect((await text(doc))[0]).toBe("제3조 납품\n① 납품 기한은 11월 30일로 한다.\n② 납품 장소는 발주처로 한다.");
+    // A line break is markup, not a character — in a new paragraph too.
+    await expect(preview(doc, [{ find: "제3조", replace: "가\n나", action: "insert_after" }])).rejects.toMatchObject({ message: "edit_line_break" });
+  });
+
+  it("a table row is added above / below the row that holds the text, or taken out", async () => {
+    const ids = await importDocs(["개발계약서.docx"]);
+    const doc = ids["개발계약서.docx"]!;
+    setFileText(doc, 1, "납품 기한은 11월 30일로 한다.");
+    setFileText(doc, 2, "산출물\t기한\n설계서\t10월 31일\n소스 코드\t11월 30일\n끝.");
+    const edits: EditRequest[] = [
+      { find: "설계서", replace: "시험 결과서 | 11월 15일", action: "insert_row_after" },
+      { find: "설계서", replace: "", cells: ["착수 보고서"], action: "insert_row_before" },
+      // "11월 30일" is in a paragraph and in a row: the row is the one place for a row edit.
+      { find: "11월 30일", replace: "", action: "delete_row" },
+    ];
+    const report = await preview(doc, edits);
+    expect(report).toMatchObject({ found: [1, 1, 1], replaced: [1, 1, 1] });
+    expect(report.changes.map((c) => [c.action, c.before, c.after])).toEqual([
+      ["insert_row_after", "설계서 | 10월 31일", "시험 결과서 | 11월 15일"],
+      ["insert_row_before", "설계서 | 10월 31일", "착수 보고서"],
+      ["delete_row", "소스 코드 | 11월 30일", ""],
+    ]);
+    const edition = await backend.mockInvoke<{ doc_id: string }>("documents_edit_save", { id: doc, edits });
+    expect((await text(edition.doc_id))[1]).toBe("산출물\t기한\n착수 보고서\t\n설계서\t10월 31일\n시험 결과서\t11월 15일\n끝.");
+
+    const code = async (edit: EditRequest) => (await preview(doc, [edit])).problems?.[0]?.code ?? null;
+    expect(await code({ find: "설계서", replace: "a | b | c", action: "insert_row_after" })).toBe("edit_row_cells");
+    expect(await code({ find: "납품 기한", replace: "", action: "delete_row" })).toBe("edit_not_in_table");
+    expect(await code({ find: "없는 글", replace: "", action: "delete_row" })).toBeNull();
+    // The only paragraph of a page stays; the last row of a table stays.
+    expect(await code({ find: "납품 기한", replace: "", action: "delete_paragraph" })).toBe("edit_last_paragraph");
+    setFileText(doc, 2, "산출물\t기한\n끝.");
+    expect(await code({ find: "산출물", replace: "", action: "delete_row" })).toBe("edit_last_row");
+  });
+
+  // Step 3 (`documents::edit::suggest`): an instruction in words becomes replacements pinned to one place.
+  it("an instruction in words becomes a replacement at the place it names", async () => {
+    const ids = await importDocs(["개발계약서.docx", "스캔본.pdf"]);
+    const doc = ids["개발계약서.docx"]!;
+    const suggest = (id: string, instruction: string) => backend.mockInvoke<import("@/lib/types").EditSuggestion>("documents_edit_suggest", { id, instruction });
+    // The amount is on both pages: the suggestion names the first place only.
+    const s = await suggest(doc, "12,500원을 13,000원으로 바꿔줘");
+    expect(s).toMatchObject({ edits: [{ find: "12,500원", replace: "13,000원", occurrence: 1 }], dropped: 0, note: "" });
+    expect((await preview(doc, s.edits)).replaced).toEqual([1]);
+    // What is not in the document is left out; a sentence that names no change says so.
+    expect(await suggest(doc, "99,999원을 1원으로 바꿔줘")).toMatchObject({ edits: [], dropped: 1 });
+    expect((await suggest(doc, "좀 더 보기 좋게")).note).not.toBe("");
+    await expect(suggest(doc, "  ")).rejects.toMatchObject({ message: "description_empty" });
+    await expect(suggest(ids["스캔본.pdf"]!, "가를 나로 바꿔줘")).rejects.toMatchObject({ message: "edit_unsupported_format" });
+    // No model loaded: there is nobody to ask.
+    localStorage.setItem("doculens.mock.vision", "none");
+    await expect(suggest(doc, "12,500원을 13,000원으로 바꿔줘")).rejects.toMatchObject({ message: "no_model" });
+    localStorage.removeItem("doculens.mock.vision");
+  });
+
+  // Step 3: the file still holds what the page read before a correction in the viewer.
+  it("a correction made in the viewer does not reach the file until it is made there too", async () => {
+    const ids = await importDocs(["개발계약서.docx"]);
+    const doc = ids["개발계약서.docx"]!;
+    const before = (await text(doc))[1]!;
+    expect(before).toContain("합계 12,500원");
+    await backend.mockInvoke("documents_set_page_text", { id: doc, pageNo: 2, text: before.replace("12,500원", "13,500원") });
+    expect((await text(doc))[1]).toContain("합계 13,500원");
+    // The corrected word is not in the file; the one it replaced is — once on each page.
+    expect((await preview(doc, [{ find: "13,500원", replace: "x" }])).found).toEqual([0]);
+    const history = await backend.mockInvoke<import("@/lib/types").PageTextHistory>("documents_page_text_history", { id: doc, pageNo: null });
+    const { correctionsOf } = await import("@/features/library/editCorrections");
+    const edits = correctionsOf(history.entries);
+    expect(edits).toEqual([{ find: "12,500원", replace: "13,500원" }]);
+    expect((await preview(doc, edits)).replaced).toEqual([2]);
+    const edition = await backend.mockInvoke<{ doc_id: string }>("documents_edit_save", { id: doc, edits });
+    expect(await text(edition.doc_id)).toEqual([expect.stringContaining("합계 13,500원"), expect.stringContaining("합계 13,500원")]);
   });
 });

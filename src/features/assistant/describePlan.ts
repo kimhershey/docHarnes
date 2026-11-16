@@ -6,6 +6,7 @@
 import type { TFunction } from "i18next";
 
 import type { UiOpResult } from "@/lib/commands";
+import { errorReasonKey } from "@/lib/errors";
 import { settingSpec } from "@/lib/settingsCatalog";
 import {
   FOLDER_TEMPLATES,
@@ -272,7 +273,7 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
     case "set_title":
       return `'${truncate(op.title, 60)}'`;
     case "edit_text":
-      return joinParts([`'${truncate(op.find, 30)}' → '${truncate(op.replace, 30)}'`, op.pages && op.pages.length > 0 ? pt("pages", { count: op.pages.length }) : null]);
+      return joinParts([`'${truncate(op.find, 30)}' → '${truncate(op.replace, 30)}'`, op.original ? pt("original_file") : null, !op.original && op.pages && op.pages.length > 0 ? pt("pages", { count: op.pages.length }) : null]);
     case "set_role":
       return pt(`role_${op.role}`);
     case "manage_reference":
@@ -375,6 +376,15 @@ export function listTotal(record: Record<string, unknown>, key: string): number 
   return Math.max(Array.isArray(list) ? list.length : 0, num(record[`${key}_total`]));
 }
 
+/**
+ * A failed step in words: the sentence of its reason code when the error carries one (`errors.reasons.*`,
+ * e.g. `"invalid value: edit_nothing_found"`), else the error as it came.
+ */
+export function stepErrorText(error: string, t: TFunction): string {
+  const key = errorReasonKey(error);
+  return key ? t(key) : error;
+}
+
 export function agentStepDetail(op: OpKind, payload: unknown, t: TFunction): AgentStepDetail | null {
   if (!isRecord(payload)) return null;
   const docs = Array.isArray(payload.documents) ? listTotal(payload, "documents") : null;
@@ -393,6 +403,11 @@ export function agentStepDetail(op: OpKind, payload: unknown, t: TFunction): Age
     case "set_title":
       return { text: dt("set_title", { documents: docs ?? 0 }) };
     case "edit_text":
+      // In the original file: the edited copy is a new document (the latest edition).
+      if (payload.edition && typeof payload.edition === "object") {
+        const rel = String((payload.edition as { rel_path?: unknown }).rel_path ?? "");
+        return { text: dt("edit_original", { replaced: num(payload.replaced), name: rel.split("/").pop() ?? rel }) };
+      }
       return { text: dt("edit_text", { replaced: num(payload.replaced), documents: docs ?? 0 }) };
     case "set_role":
       return { text: dt("set_role", { documents: docs ?? 0, role: str(payload.role) ? t(`planner.params.role_${String(payload.role)}`) : "" }) };

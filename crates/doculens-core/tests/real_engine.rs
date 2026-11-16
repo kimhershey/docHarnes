@@ -437,6 +437,65 @@ fn real_llama_server_load_chat_switch() {
         eprintln!("draft / rule grammars accepted");
     }
 
+    // 1.0.0 §2-1 step 3: the edit-suggestion grammar is accepted by the server, and the reply is
+    // checked against a real DOCX. Random weights write junk inside the grammar (the texts are not in
+    // the file, so every edit is dropped); with a real model — `DOCULENS_EXPECT_SUGGESTION=1` — the
+    // date of the clause has to come back as a replacement that lands there.
+    {
+        use doculens_core::documents::{edit, SourceKind};
+        use std::io::Write;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("contract.docx");
+        let p = |text: &str| format!("<w:p><w:r><w:t>{text}</w:t></w:r></w:p>");
+        let body = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{}{}{}{}{}{}</w:body></w:document>"#,
+            p("소프트웨어 개발 용역 계약서"),
+            p("제2조 계약 금액"),
+            p("계약 금액은 금 55,000,000원(부가가치세 포함)으로 한다."),
+            p("제3조 납품"),
+            p("① 납품 기한은 2026년 11월 30일로 한다."),
+            p("② 납품 장소는 발주처가 지정하는 곳으로 한다."),
+        );
+        let mut z = zip::ZipWriter::new(std::fs::File::create(&path).expect("docx"));
+        z.start_file("word/document.xml", zip::write::SimpleFileOptions::default()).expect("part");
+        z.write_all(body.as_bytes()).expect("write");
+        z.finish().expect("zip");
+        let vlm = Vlm::new(&m, first.clone(), Profile::Speed, None);
+        let t = Instant::now();
+        let expect = std::env::var_os("DOCULENS_EXPECT_SUGGESTION").is_some();
+        match edit::suggest(&vlm, &path, SourceKind::Docx, "3조의 납품 기한을 12월 31일로 바꿔줘", true) {
+            Ok(s) => {
+                eprintln!("edit suggestion → {s:?} in {} ms", t.elapsed().as_millis());
+                assert_eq!((s.shown, s.paragraphs), (6, 6));
+                if expect {
+                    assert!(!s.edits.is_empty(), "the model found nothing to change: {s:?}");
+                    let out = dir.path().join("contract (수정).docx");
+                    let report = edit::apply(&path, SourceKind::Docx, &s.edits, &out).expect("apply");
+                    eprintln!("applied → {:?}", report.changes);
+                    let text = doculens_core::documents::convert::read_document(&out, SourceKind::Docx)
+                        .expect("read back")
+                        .text();
+                    assert!(text.contains("12월 31일") && !text.contains("11월 30일"), "{text}");
+                    // The year the instruction did not mention is still there.
+                    assert!(text.contains("2026년 12월 31일"), "{text}");
+                    assert!(
+                        text.contains("55,000,000원") && text.contains("② 납품 장소는 발주처가 지정하는 곳으로 한다."),
+                        "{text}"
+                    );
+                }
+            }
+            // Random weights: a reply cut off at the budget, or fragments the output parser rejects.
+            Err(e) => {
+                let message = e.to_string();
+                let artefact = message.contains("was cut off")
+                    || message.contains("is not JSON")
+                    || message.contains("does not match the expected");
+                assert!(artefact && !expect, "edit-suggestion grammar / transport error: {message}");
+                eprintln!("edit suggestion: model artefact ({message})");
+            }
+        }
+    }
+
     // Hot swap when a second model exists.
     if let Some(second) = ready.get(1) {
         let t2 = Instant::now();

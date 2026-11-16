@@ -1,4 +1,4 @@
-# 플래너 — 실제 모델 측정 (0.7.0 대 0.8.0)
+# 플래너 — 실제 모델 측정 (0.7.0 대 0.8.0, 그리고 1.0.0)
 
 같은 문장을 0.7.0(`main` dbb598e)과 0.8.0(`release/0.8.0`)의 `doculens-eval planner --engine …`로 돌린 결과입니다(점검 목록 PLN-21).
 
@@ -68,9 +68,87 @@
 | ko-105 | 배율 130으로 바꾸고 견적서 요약해줘 | set_setting{key: ui.scale_percent, value: 130}, summarize · 확인 없이 실행 | set_setting{key: ui.scale_percent, value: 130}, summarize · 범위 {"doc_type": "estimate"} |
 | ko-109 | DPI 200으로 바꿨어 | set_setting{key: processing.render_dpi, value: 200} · 확인 없이 실행 | set_setting{key: processing.render_dpi, value: 200} · 확인 카드 |
 
+## 1.0.0 — 모델에게 보이는 동작을 줄인 뒤 (계획 4절)
+
+2026-11-16, 같은 모델(Gemma 4 E4B Q4_K_M; 이번에는 비전 프로젝터도 함께 로드) · 같은 엔진(llama-server, CPU, 컨텍스트 8,192)으로 쟀습니다. 골든셋 전체가 아니라 4절이 건드린 문장과 사용자 문장입니다.
+응답 시간은 다른 빌드 · 테스트와 CPU를 나눠 쓴 값이라 적지 않습니다(계획 한 건에 수 초 ~ 6분).
+
+### 4절이 건드린 20문장 — 19/20
+
+설정 전용 동작 5개(`set_theme` · `set_language` · `set_profile` · `set_model` · `set_inbox_watch`)와 `explain`을 모델의 동작 목록에서 뺀 뒤(커밋 0764b2a), 그 동작이 기대값이던 문장과 주변 문장을 돌렸습니다.
+확인 없이 실행됐을 잘못된 변경 0건.
+
+| id | 문장 | 결과 |
+|---|---|---|
+| ko-05 | 이 계약서의 계약기간과 위약금 조항 알려줘 | ○ answer · 범위 {"doc_ids": ["d1a2"]} |
+| ko-07 | 다크 테마로 바꾸고 모델을 12B로 올려 | ○ set_setting ui.theme="dark", set_setting models.active_model="gemma4-12b-q4km" |
+| ko-14 | inbox 감시 꺼줘 | ○ set_setting processing.inbox_watch=false · 모델 호출 없음 |
+| ko-53 | 모델을 E4B로 바꿔 | ○ set_setting models.active_model="gemma4-e4b-q5km" |
+| ko-54 | 정확도 우선 프로파일로 바꿔줘 | ○ set_setting models.profile="accuracy" |
+| ko-55 | 이 조항이 무슨 뜻인지 설명해줘 | ○ answer {"knowledge": false, "mode": "general"} |
+| ko-56 | 고대비 테마 켜줘 | ○ set_setting ui.theme="high-contrast" |
+| ko-57 | UI를 영어로 바꿔줘 | ○ set_setting ui.language="en" · 확인 카드 |
+| en-14 | switch to the light theme | ○ set_setting ui.theme="light" · 모델 호출 없음 |
+| mx-06 | theme dark로 바꿔줘 | ○ set_setting ui.theme="dark" · 모델 호출 없음 |
+| mx-07 | model을 12B로 switch | ○ set_setting models.active_model="gemma4-12b-q4km" |
+| ko-98 | 프로파일 정확도 | ○ set_setting models.profile="accuracy" · 모델 호출 없음 |
+| ko-104 | 글자가 작아서 잘 안 보여, 화면 배율을 120으로 올려줘 | ○ set_setting ui.scale_percent=120 |
+| ko-105 | 배율 130으로 바꾸고 견적서 요약해줘 | ○ set_setting ui.scale_percent=130, summarize {"target": "each_doc"} · 범위 {"filter": {"doc_type": "estimate"}} |
+| ko-106 | UI 배율이 뭐야? | ○ answer {"mode": "general"} |
+| ko-108 | 이 문서 해상도 300으로 다시 렌더해줘 | ○ rerender {"dpi": 300} · 범위 {"doc_ids": ["d1a2"]} |
+| ko-109 | DPI 200으로 바꿨어 | ✕ set_setting processing.render_dpi=200 · 확인 카드 |
+| ko-111 | 점심 뭐 먹을지 고민이네 | ○ answer {"knowledge": false, "mode": "chat"} |
+| ko-112 | 애자일 방법론이 뭐야? | ○ answer {"mode": "general"} |
+| ko-115 | 프로젝트 별 내용을 요약해줘 | ○ summarize {"group_by": "project"} |
+
+- 설정 문장 14건 가운데 13건이 `set_setting` 한 가지 모양으로 나왔습니다. 0.8.0에서도 잰 9문장(`ko-07` · `ko-104` · `ko-105` · `ko-106` · `ko-108` · `ko-109` · `ko-111` · `ko-112` · `ko-115`)은 정답 여부가 같습니다(둘 다 8/9; 설정 변경의 모양만 `set_setting`으로 바뀜).
+- `ko-109` "DPI 200으로 바꿨어"(알림)는 0.8.0과 같습니다: 모델은 설정 변경으로 읽고, 실행하지 않고 확인을 기다립니다.
+- `ko-57` "UI를 영어로 바꿔줘"는 맞게 읽었지만 확인 카드가 뜹니다. 문장에 설정 이름("언어")이 없어서입니다(설정 이름과 값이 둘 다 문장에 있어야 확인 없이 실행 — 0.8.0의 규칙 그대로).
+- `ko-55` "이 조항이 무슨 뜻인지 설명해줘": 모델이 **문서를 찾지 않는 답변**(`knowledge: false` · `mode: general`, 범위 없음)으로 적었습니다. 채점 기준(`answer`도 정답)으로는 맞지만 열린 문서의 조항을 묻는 말이므로,
+  이 측정 뒤에 `guard::document_question`을 열린 문서 · 선택한 문서를 가리키는 질문("이 조항" · "이 문서" · "this clause")에도 적용했습니다 — 답변을 문서 근거로 되돌리고 범위를 열린 문서로 채웁니다
+  (이 모델 출력을 재생하는 단위 테스트 `a_question_that_points_at_the_open_document_is_answered_from_it`; 다시 잰 결과는 아래 8문장 표).
+
+### 사용자 문장 5개 (0.8.2의 `user-sentences-0.8.2.golden.json`) — 2/5 → 5/5
+
+`explain`을 숨기기만 한 상태(0764b2a)에서는 "…무엇인지 설명해줘 / 알려줘" 세 문장이 문서를 찾지 않는 답변으로 빠졌습니다. 프로젝트 이름이 든 질문을 문서 근거 답변으로 되돌리는 검사
+`guard::document_question`을 넣고 다시 쟀습니다.
+
+| id | 문장 | 검사 전 | 검사 후 |
+|---|---|---|---|
+| u-1 | AAA 프로젝트 내에서 AAA 가 무엇인지 요약해서 설명해줘 | ✕ answer {"knowledge": false} | ○ answer · 범위 {"filter": {"project_id": "p-aaa"}} |
+| u-2 | AAA 프로젝트 내에서 AAA 가 무엇인지 요약해서 설명해줘(되묻기에 "유형 상관없이 전부"라고 답한 경우) | ○ summarize {"target": "set"} · 범위 {"filter": {"project_id": "p-aaa"}} | ○ summarize {"target": "set"} · 범위 {"filter": {"project_id": "p-aaa"}} |
+| u-3 | AAA 프로젝트에서 AAA가 무엇인지 검색해줘 | ○ search {"mode": "hybrid", "query": "AAA", "top_k": 10} · 범위 {"filter": {"project_id": "p-aaa"}} | ○ search {"mode": "hybrid", "query": "AAA", "top_k": 10} · 범위 {"filter": {"project_id": "p-aaa"}} |
+| u-4 | AAA 프로젝트에서 AAA가 무엇인지 알려줘 | ✕ answer {"knowledge": false, "mode": "general"} | ○ answer · 범위 {"filter": {"project_id": "p-aaa"}} |
+| u-5 | AAA가 무엇인지 설명해줘 | ✕ answer {"knowledge": false, "mode": "general"} | ○ answer · 범위 {"filter": {"project_id": "p-aaa"}} |
+
+### 열린 문서를 가리키는 질문 · 원본 고치기 문장 8개 — 6/8 → 8/8
+
+위 `ko-55`의 검사를 넓힌 뒤, 그리고 `edit_text`에 `original`(원본 파일을 고쳐 새 판으로 저장 — 계획 2-1절)을 더한 뒤 쟀습니다. 첫 측정에서 글자 바꾸기 두 문장이 대상을 잘못 잡았습니다:
+모델이 `ko-75`에는 범위를 비워 두었고(문서가 열려 있는데도 앱이 "어떤 문서를 대상으로 할까요?"라고 되물음), `ko-130`에는 따옴표 안의 "11월 30일"을 범위의 날짜 조건으로 적었습니다(그날의 문서를 찾게 됨).
+검사 `guard::edit_target`을 넣고 두 문장을 다시 쟀습니다 — 따옴표 안의 글은 바꿀 글이지 조건이 아니고, 대상을 말하지 않은 글자 바꾸기는 선택한 문서, 없으면 열린 문서에 합니다(규칙 경로와 같음). 실행 전에는 항상 확인 카드가 뜹니다.
+
+| id | 문장 | 첫 측정 | 검사 후 |
+|---|---|---|---|
+| ko-05 | 이 계약서의 계약기간과 위약금 조항 알려줘 | ○ answer · 범위 {"doc_ids": ["d1a2"]} | (다시 재지 않음) |
+| ko-55 | 이 조항이 무슨 뜻인지 설명해줘 | ○ answer · 범위 {"doc_ids": ["d1a2"]} | (다시 재지 않음) |
+| ko-75 | '㈜한빛'을 '(주)한빛'으로 바꿔줘 | ✕ clarify | ○ edit_text {"find": "㈜한빛", "replace": "(주)한빛"} · 확인 카드 · 범위 {"doc_ids": ["d1a2"]} |
+| ko-106 | UI 배율이 뭐야? | ○ answer {"mode": "general"} | (다시 재지 않음) |
+| ko-112 | 애자일 방법론이 뭐야? | ○ answer {"mode": "general"} | (다시 재지 않음) |
+| ko-130 | 원본에서 '11월 30일'을 '12월 31일'로 바꿔줘 | ✕ edit_text {"find": "11월 30일", "original": true, "replace": "12월 31일"} · 확인 카드 · 범위 {"filter": {"date_from": "2026-11-30", "date_to": "2026-11-30"}} — 따옴표 안의 날짜가 조건이 됨 | ○ edit_text {"find": "11월 30일", "original": true, "replace": "12월 31일"} · 확인 카드 · 범위 {"doc_ids": ["d1a2"]} |
+| ko-131 | 이 문서 원본 파일의 '㈜한빛'을 '(주)한빛'으로 고쳐서 새 판으로 저장해줘 | ○ edit_text {"find": "㈜한빛", "original": true, "replace": "(주)한빛"} · 확인 카드 · 범위 {"doc_ids": ["d1a2"]} | (다시 재지 않음) |
+| en-34 | replace 'Nov 30' with 'Dec 31' in the origi… | ○ edit_text {"find": "Nov 30", "original": true, "replace": "Dec 31"} · 확인 카드 · 범위 {"doc_ids": ["d1a2"]} | (다시 재지 않음) |
+
+- `ko-55`는 이제 열린 문서(`d1a2`)에서 찾아 답하는 질문으로 나옵니다. 일반 지식 질문(`ko-106` · `ko-112`)은 문서가 열려 있어도 그대로입니다.
+- 원본 고치기 세 문장(`ko-130` · `ko-131` · `en-34`)은 모두 `original: true`와 확인 카드로 나왔고, "원본"을 말하지 않은 `ko-75`에는 `original`이 없습니다.
+- 첫 측정의 채점은 대상을 보지 않아 `ko-130`이 정답으로 찍혔습니다(결과 파일에는 7/8). 그 뒤 네 문장의 기대값에 대상(열린 문서)을 넣었고, 위 표의 첫 측정은 그 기준으로 적었습니다.
+
 ## 파일
 
 - `gemma4-e4b-q4km-0.7.0.json`, `gemma4-e4b-q4km-0.8.0.json` — 배치별 결과를 합친 것(문장별 플랜, 출처, 응답 시간; 다시 잰 문장의 첫 결과는 `first_measurement`).
 - `table.md` — 위 표(`python3 scripts/rescore-planner.py eval/golden/planner.json 0.7.0=… 0.8.0=… --ids … --md table.md`).
 - `gemma4-e4b-q4km-0.8.2-user-sentences.json` — 0.8.2: 사용자 PC에서 보고된 문장("AAA 프로젝트 내에서 AAA 가 무엇인지 요약해서 설명해줘")과 그 변형 5개를 같은 모델·엔진으로 돌린 결과(5/5, 되묻기·검증 오류 없음).
   문장과 컨텍스트는 `user-sentences-0.8.2.golden.json` / `user-sentences-0.8.2.context.json`. 모델이 쓴 `explain`을 답변으로 바꾸는 검사(`guard::explain_what_was_said`)는 이 측정 뒤에 들어갔다(결과 파일의 `operations`는 그 전 모습).
+- `gemma4-e4b-q4km-1.0.0-section4.json` — 1.0.0 4절: 골든셋 20문장(`--ids ko-05,ko-07,ko-14,ko-53,ko-54,ko-55,ko-56,ko-57,en-14,mx-06,mx-07,ko-98,ko-104,ko-105,ko-106,ko-108,ko-109,ko-111,ko-112,ko-115`).
+- `gemma4-e4b-q4km-1.0.0-user-sentences-before-guard.json`, `gemma4-e4b-q4km-1.0.0-user-sentences.json` — 1.0.0 4절: 사용자 문장 5개, `guard::document_question`을 넣기 전과 후.
+- `gemma4-e4b-q4km-1.0.0-edit-original.json`, `gemma4-e4b-q4km-1.0.0-edit-original-remeasured.json` — 1.0.0 2-1절: 위 8문장(`--ids ko-55,ko-05,ko-106,ko-112,ko-75,ko-130,ko-131,en-34`)과, `guard::edit_target`을 넣은 뒤의 두 문장.
+  결과 파일의 경로(`golden` · `context` · `engine.binary`)는 저장소 기준으로 고쳐 적었다.

@@ -311,7 +311,7 @@ const SPECS: OpSpec[] = [
   { op: "split", params: [p("boundaries", { kind: "int_list" }, false, "새 문서가 시작하는 쪽 번호(2 이상)", "pages where a new document starts (≥ 2)"), p("every", int, false, "n쪽마다 나누기", "split every n pages")], desc_ko: "문서를 쪽 단위로 나누기(새 PDF 문서)", desc_en: "split a document at pages (new PDF documents)" },
   { op: "merge", params: [p("name", str, false, "합친 문서 이름", "name of the merged document")], desc_ko: "범위 문서 2~20개를 하나로 합치기", desc_en: "merge 2–20 documents into one" },
   { op: "set_title", params: [p("title", str, true, "새 제목", "new title")], desc_ko: "문서 제목 바꾸기", desc_en: "set the document title" },
-  { op: "edit_text", params: [p("find", str, true, "찾을 글자", "text to find"), p("replace", str, true, "바꿀 글자", "replacement"), p("pages", { kind: "int_list" }, false, "쪽 번호(비우면 전체)", "page numbers (empty = all)")], desc_ko: "쪽 글자 찾아 바꾸기(이력·재색인)", desc_en: "find / replace page text (history, re-index)" },
+  { op: "edit_text", params: [p("find", str, true, "찾을 글자", "text to find"), p("replace", str, true, "바꿀 글자", "replacement"), p("pages", { kind: "int_list" }, false, "쪽 번호(비우면 전체)", "page numbers (empty = all)"), p("original", bool, false, "원본 파일을 고쳐 새 판으로 저장(HWPX·DOCX·PPTX, 서식 유지)", "change the original file and save a new edition (HWPX / DOCX / PPTX)")], desc_ko: "쪽 글자 찾아 바꾸기(이력·재색인); original이면 원본 파일", desc_en: "find / replace page text (history, re-index); with original, in the file itself" },
   { op: "set_role", params: [p("role", en(ROLE_VALUES), true, "업무 문서 / 참고 자료 / 양식", "work / reference material / form")], desc_ko: "문서 역할 표시", desc_en: "set the document role" },
   // -- reference material --
   {

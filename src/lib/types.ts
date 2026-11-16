@@ -970,6 +970,63 @@ export interface DocumentImportPlan {
   truncated: boolean;
 }
 
+/** What an edit of the original file does (core `documents::edit::Action`). */
+export type EditAction = "replace" | "insert_after" | "insert_before" | "delete_paragraph" | "insert_row_after" | "insert_row_before" | "delete_row";
+/**
+ * 1.0.0 §2-1 (core `documents::edit`): one edit in the document's own file. A replacement: `find` as it stands
+ * in a paragraph becomes `replace`. Any other `action`: `find` names the place — the paragraph, or the table
+ * row, that holds this text — and `replace` (a new row: the cells, split at `|`, or `cells`) is the new text.
+ */
+export interface EditReplacement {
+  find: string;
+  replace: string;
+  /** A replacement: only the n-th occurrence (1-based), absent = every one. Other actions: the n-th paragraph / row that holds `find` (needed when several do). */
+  occurrence?: number | null;
+  /** Absent = `replace`. */
+  action?: EditAction;
+  cells?: string[];
+}
+export interface EditChange {
+  /** The part of the package (`word/document.xml`, `ppt/slides/slide3.xml` …). */
+  part: string;
+  /** Slide (PPTX) / section (HWPX) number when the part has one. */
+  unit?: number | null;
+  /** Which replacement of the request (0-based). */
+  edit: number;
+  /** Absent for a replacement. An insertion: `before` = the paragraph / row it stands next to, `after` = the new text; a removal: `after` is empty. */
+  action?: EditAction;
+  before: string;
+  after: string;
+}
+export interface EditReport {
+  found: number[];
+  replaced: number[];
+  changes: EditChange[];
+  parts: string[];
+  /** Edits that cannot be made as asked (a reason code each); nothing is saved while there is one. */
+  problems?: { edit: number; code: string }[];
+}
+/** What the model makes of an instruction in words (core `documents::edit::Suggestion`): edits for the preview, nothing is changed. */
+export interface EditSuggestion {
+  /** Replacements, each pinned (`occurrence`) to the one place the model pointed at. */
+  edits: EditReplacement[];
+  /** Suggested edits left out: the text was not in the paragraph the model named. */
+  dropped: number;
+  /** What the model says about the instruction (why nothing was found). */
+  note: string;
+  shown: number;
+  paragraphs: number;
+}
+/** The edited copy, registered as the latest edition of the document it was made from. */
+export interface Edition {
+  report: EditReport;
+  doc_id: string;
+  rel_path: string;
+  version_label: string;
+  projects: number;
+  warnings: string[];
+}
+
 export interface DocumentsChanged {
   kind: "imported" | "updated" | "removed" | "rescanned" | "batch";
   ids: string[];
@@ -1790,7 +1847,8 @@ export type Op =
   | { op: "split"; boundaries?: number[]; every?: number | null }
   | { op: "merge"; name?: string | null }
   | { op: "set_title"; title: string }
-  | { op: "edit_text"; find: string; replace: string; pages?: number[] }
+  /** `original`: in the document's own file — formatting kept, saved as the latest edition (1.0.0 §2-1). */
+  | { op: "edit_text"; find: string; replace: string; pages?: number[]; original?: boolean | null }
   | { op: "set_role"; role: RoleChoice }
   // §1.2 reference material
   | { op: "manage_reference"; action: ReferenceAction; group?: string | null; name?: string | null; project?: string | null }

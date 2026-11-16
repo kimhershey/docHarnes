@@ -494,9 +494,16 @@ pub const OP_SPECS: &[OpSpec] = &[
             p("find", ParamType::Str, true, "찾을 글자", "text to find"),
             p("replace", ParamType::Str, true, "바꿀 글자", "replacement"),
             p("pages", ParamType::IntList, false, "쪽 번호(비우면 전체)", "page numbers (empty = all)"),
+            p(
+                "original",
+                ParamType::Bool,
+                false,
+                "true = 원본 파일을 고쳐 새 판으로 저장(\"원본에서\", \"파일을\", \"새 판으로\"; HWPX·DOCX·PPTX, 서식 유지)",
+                "true = change the original file and save it as a new edition (HWPX / DOCX / PPTX, formatting kept)",
+            ),
         ],
-        desc_ko: "범위 문서의 쪽 글자 찾아 바꾸기(이력에 기록)",
-        desc_en: "find / replace in the page text of the documents in scope",
+        desc_ko: "범위 문서의 쪽 글자 찾아 바꾸기(이력에 기록); original이면 문서 한 건의 원본 파일",
+        desc_en: "find / replace in the page text of the documents in scope; with original, in one document's own file",
     },
     OpSpec {
         kind: OpKind::SetRole,
@@ -768,7 +775,7 @@ pub fn scope_schema() -> Value {
 /// The PlanSchema (§3.5) for `response_format`. `summary` comes first so the
 /// model states its interpretation before committing to operations.
 pub fn plan_schema() -> Value {
-    plan_schema_for(&OpKind::ALL)
+    plan_schema_for(&OpKind::model_kinds())
 }
 
 /// The PlanSchema restricted to `kinds` (the chosen families' ops; 0.6.0 two-stage planning).
@@ -819,7 +826,7 @@ fn type_label(ty: ParamType) -> String {
 
 /// The smallest op table: names with their required parameters (minimal prompts).
 pub fn op_names() -> String {
-    op_names_for(&OpKind::ALL)
+    op_names_for(&OpKind::model_kinds())
 }
 
 pub fn op_names_for(kinds: &[OpKind]) -> String {
@@ -841,7 +848,7 @@ pub fn op_names_for(kinds: &[OpKind]) -> String {
 /// Tool description table for the planner prompt (one line per op).
 /// `compact` drops the parameter descriptions (small-context presets).
 pub fn op_table(ko: bool, compact: bool) -> String {
-    op_table_for(&OpKind::ALL, ko, compact)
+    op_table_for(&OpKind::model_kinds(), ko, compact)
 }
 
 pub fn op_table_for(kinds: &[OpKind], ko: bool, compact: bool) -> String {

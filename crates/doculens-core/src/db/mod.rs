@@ -68,16 +68,10 @@ pub fn is_network_or_sync_folder(root: &Path) -> bool {
     let lower = s.to_lowercase();
     const SYNC_MARKERS: [&str; 7] =
         ["onedrive", "dropbox", "google drive", "googledrive", "icloud", "sharepoint", "box sync"];
-    if SYNC_MARKERS.iter().any(|m| lower.contains(m)) {
-        return true;
-    }
+    let synced = SYNC_MARKERS.iter().any(|m| lower.contains(m));
     #[cfg(windows)]
-    {
-        if is_remote_drive_windows(root) {
-            return true;
-        }
-    }
-    false
+    let synced = synced || is_remote_drive_windows(root);
+    synced
 }
 
 #[cfg(windows)]

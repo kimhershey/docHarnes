@@ -34,6 +34,11 @@ fn emit(app: &AppHandle, ids: Vec<String>) {
     let _ = app.emit(PROJECTS_EVENT, json!({ "project_ids": ids }));
 }
 
+/// `projects://changed` for a change made elsewhere (1.0.0: an edited copy joins its original's projects).
+pub fn emit_changed(app: &AppHandle, ids: Vec<String>) {
+    emit(app, ids);
+}
+
 fn language(app: &AppHandle) -> doculens_core::settings::Language {
     app.state::<AppState>().settings.lock().map(|s| s.ui.language).unwrap_or_default()
 }
@@ -168,7 +173,7 @@ fn loaded_model(app: &AppHandle) -> Option<(String, Option<u32>)> {
 /// The loaded model for a dialog request — unless a batch job is inside a page right now: the
 /// dialog then runs without the model (phrase rules, plain comparisons) instead of waiting for
 /// the page boundary behind the batch.
-fn dialog_model<'a>(
+pub(crate) fn dialog_model<'a>(
     app: &AppHandle,
     state: &'a AppState,
     pctx: &pipeline_bridge::PipelineContext,

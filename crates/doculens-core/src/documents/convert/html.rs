@@ -262,6 +262,7 @@ body { font-family: "Pretendard Variable", Pretendard, "Noto Sans KR", "Malgun G
 .slide:last-child { page-break-after: auto; break-after: auto; }
 .shape { position: absolute; box-sizing: border-box; overflow: hidden; }
 .shape svg.geo { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; }
+.shape svg.chart { display: block; width: 100%; height: 100%; }
 .shape .tx { position: absolute; left: 0; right: 0; display: flex; flex-direction: column; box-sizing: border-box; }
 .tx.top { top: 0; } .tx.middle { top: 0; bottom: 0; justify-content: center; } .tx.bottom { bottom: 0; }
 .shape p { margin: 0; line-height: 1.2; word-break: keep-all; overflow-wrap: anywhere; }
@@ -475,6 +476,13 @@ fn shape_html(sh: &Shape, img_src: &dyn Fn(&str) -> String, out: &mut String) {
             let _ = write!(out, "<div class=\"shape\" style=\"{style}\">");
             slide_table_html(t, out);
             out.push_str("</div>\n");
+        }
+        ShapeKind::Chart(c) => {
+            let _ = writeln!(
+                out,
+                "<div class=\"shape\" style=\"{style}\">{}</div>",
+                super::chart::svg(c, sh.w_mm, sh.h_mm)
+            );
         }
         ShapeKind::Placeholder { label } => {
             let _ = writeln!(out, "<div class=\"shape ph\" style=\"{style}\">{}</div>", escape(label));

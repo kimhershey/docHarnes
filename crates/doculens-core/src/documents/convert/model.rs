@@ -51,7 +51,9 @@ pub enum ShapeKind {
         id: String,
     },
     Table(Table),
-    /// Content the converter cannot draw (chart, SmartArt, OLE, vector image): a labelled frame.
+    /// A chart drawn again from its stored values (1.0.0).
+    Chart(Chart),
+    /// Content the converter cannot draw (SmartArt, OLE, vector image, an unreadable chart): a labelled frame.
     Placeholder {
         label: String,
     },
@@ -83,6 +85,89 @@ pub struct Shape {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<GeoPath>,
     pub kind: ShapeKind,
+}
+
+/// A chart as its data and the few properties that decide how it looks (1.0.0 §1-3). The writer draws
+/// it as SVG with real text.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct Chart {
+    pub title: Option<String>,
+    /// How the chart is drawn (the plot of its first series; `Other` when the parts cannot share axes).
+    pub plot: ChartPlot,
+    #[serde(default)]
+    pub stacking: Stacking,
+    pub categories: Vec<String>,
+    pub series: Vec<ChartSeries>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_title: Option<String>,
+    /// Where the legend sits (`b`, `t`, `r`, `l`); `None` = no legend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub legend: Option<char>,
+    /// Number format of the values (`0%`, `#,##0`, `0.0` …); `None` = general.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub number_format: Option<String>,
+    /// Labels on the data points: their value, their share (pies).
+    #[serde(default)]
+    pub show_values: bool,
+    #[serde(default)]
+    pub show_percent: bool,
+    /// The category axis runs in reverse order (a horizontal bar chart then starts at the top).
+    #[serde(default)]
+    pub reversed: bool,
+    /// Colours of the points of a pie / doughnut, one per category (`#RRGGBB`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub point_colors: Vec<String>,
+    /// Gap between the groups of bars, in percent of a bar's width (`c:gapWidth`).
+    #[serde(default)]
+    pub gap_width: f32,
+    /// Size of a doughnut's hole in percent of its radius.
+    #[serde(default)]
+    pub hole_size: f32,
+    /// Where the first slice of a pie starts, degrees clockwise from the top.
+    #[serde(default)]
+    pub first_slice_deg: f32,
+    /// Size of the chart's text in points when the chart sets one (`c:chartSpace/c:txPr`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_pt: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChartPlot {
+    /// Vertical bars.
+    #[default]
+    Column,
+    /// Horizontal bars.
+    Bar,
+    Line,
+    Area,
+    Pie,
+    Doughnut,
+    /// A kind that is not drawn (scatter, bubble, radar, surface …): shown as its data.
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Stacking {
+    #[default]
+    None,
+    Stacked,
+    /// Stacked to 100 %.
+    Percent,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct ChartSeries {
+    pub name: String,
+    /// One value per category; `None` = no point.
+    pub values: Vec<Option<f64>>,
+    /// `#RRGGBB`.
+    pub color: String,
+    /// How this series is drawn (a combined chart mixes columns, lines and areas).
+    pub plot: ChartPlot,
 }
 
 /// One outline of a shape: SVG path data (`M` `L` `C` `Q` `A` `Z`, absolute) in a 0–1000 square that is

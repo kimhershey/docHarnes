@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, FolderOpen, GitBranch, Maximize2, MessageSquareText, Redo2, RefreshCw, RotateCcw, RotateCw, Scissors, Trash2, Undo2, X, ZoomIn, ZoomOut } from "lucide-react";
+import { ArrowLeft, BookOpen, ChevronLeft, ChevronRight, FilePen, FolderOpen, GitBranch, Maximize2, MessageSquareText, Redo2, RefreshCw, RotateCcw, RotateCw, Scissors, Trash2, Undo2, X, ZoomIn, ZoomOut } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams, useSearchParams } from "react-router";
@@ -34,6 +34,7 @@ import { PageTextLayer } from "./PageTextLayer";
 import { RetryImage } from "./RetryImage";
 import { SplitDialog } from "./SplitMergeDialogs";
 import { isContiguous, matchWords, selectionText as layerSelectionText } from "./textLayer";
+import { EDITABLE_KINDS, EditOriginalDialog } from "./EditOriginalDialog";
 import { VersionDialog } from "./VersionDialog";
 import { ViewerKnowledgePanel } from "./ViewerKnowledgePanel";
 
@@ -86,6 +87,7 @@ export function DocumentViewer() {
   // Text selected in the plain-text fallback of pages without an image.
   const [nativeSelection, setNativeSelection] = useState("");
   const [versionOpen, setVersionOpen] = useState(false);
+  const [editOriginalOpen, setEditOriginalOpen] = useState(false);
   const [addToKb, setAddToKb] = useState(false);
   const [splitOpen, setSplitOpen] = useState(false);
   const [splitAt, setSplitAt] = useState<number | null>(null);
@@ -636,6 +638,12 @@ export function DocumentViewer() {
           <GitBranch />
           {t("viewer.version.menu")}
         </Button>
+        {EDITABLE_KINDS.includes(doc.source_kind) && (
+          <Button size="sm" variant="ghost" onClick={() => setEditOriginalOpen(true)} title={t("viewer.edit_original.hint")} data-testid="viewer-edit-original">
+            <FilePen />
+            {t("viewer.edit_original.menu")}
+          </Button>
+        )}
         <Button size="sm" variant="ghost" onClick={() => explain()} disabled={!selectionText} title={t("viewer.explain_with_chord", { chord: formatChord(explainChord, isMac()) })} data-testid="viewer-explain">
           <MessageSquareText />
           {t("viewer.explain_with_chord", { chord: formatChord(explainChord, isMac()) })}
@@ -810,6 +818,7 @@ export function DocumentViewer() {
       </div>
       <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
       <VersionDialog open={versionOpen} onOpenChange={setVersionOpen} doc={doc} />
+      <EditOriginalDialog open={editOriginalOpen} onOpenChange={setEditOriginalOpen} doc={doc} initialFind={selectionText ?? undefined} />
       <AddToCollectionDialog open={addToKb} onOpenChange={setAddToKb} docIds={[doc.id]} />
       <SplitDialog open={splitOpen} onOpenChange={setSplitOpen} doc={doc} pages={pages ?? []} initial={splitAt} />
     </div>

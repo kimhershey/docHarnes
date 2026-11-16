@@ -5,6 +5,7 @@
 //! workspace-relative paths only, so a workspace folder stays relocatable.
 
 pub mod convert;
+pub mod edit;
 pub mod fixtures;
 pub mod import;
 pub mod layout;
