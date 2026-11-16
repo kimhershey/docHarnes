@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router";
-import { ArrowRight, Plus, X } from "lucide-react";
+import { ArrowRight, History, Plus, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,11 @@ import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
 import type { DocumentView, EditAction, EditReplacement, EditReport } from "@/lib/types";
 import { useUiStore } from "@/stores/ui";
+
+import { correctionsOf } from "./editCorrections";
+
+/** How many lines the dialog holds. */
+const MAX_ROWS = 20;
 
 /** The formats whose own file can be edited in place (core `documents::edit::supported`). */
 export const EDITABLE_KINDS = ["hwpx", "docx", "pptx"];
@@ -55,6 +60,8 @@ export function EditOriginalDialog({ open, onOpenChange, doc, initialFind }: { o
   const [rows, setRows] = useState<Row[]>([EMPTY]);
   const [report, setReport] = useState<EditReport | null>(null);
   const [busy, setBusy] = useState(false);
+  // What was put right in the viewer (the page text) and is still wrong in the file.
+  const [corrections, setCorrections] = useState<EditReplacement[]>([]);
 
   useEffect(() => {
     if (!open) return;
@@ -62,6 +69,15 @@ export function EditOriginalDialog({ open, onOpenChange, doc, initialFind }: { o
     const first = (initialFind ?? "").split(/\r?\n/)[0]?.trim() ?? "";
     setRows([{ ...EMPTY, find: first }]);
     setReport(null);
+    setCorrections([]);
+    let stale = false;
+    api
+      .documentsPageTextHistory(doc.id, null)
+      .then((history) => !stale && setCorrections(correctionsOf(history.entries)))
+      .catch(() => undefined);
+    return () => {
+      stale = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, doc.id]);
 
@@ -74,6 +90,17 @@ export function EditOriginalDialog({ open, onOpenChange, doc, initialFind }: { o
 
   const change = (i: number, patch: Partial<Row>) => {
     setRows((list) => list.map((r, k) => (k === i ? { ...r, ...patch } : r)));
+    setReport(null);
+  };
+  /** The viewer's corrections become lines of the request (the ones that are not there yet). */
+  const bringCorrections = () => {
+    setRows((list) => {
+      const kept = list.filter((r) => r.find.trim() !== "");
+      const have = new Set(kept.filter((r) => r.action === "replace").map((r) => `${r.find}\u0000${r.replace}`));
+      const fresh = corrections.filter((c) => !have.has(`${c.find}\u0000${c.replace}`)).map((c) => ({ ...EMPTY, find: c.find, replace: c.replace }));
+      const next = [...kept, ...fresh].slice(0, MAX_ROWS);
+      return next.length > 0 ? next : [EMPTY];
+    });
     setReport(null);
   };
   const preview = async () => {
@@ -162,10 +189,18 @@ export function EditOriginalDialog({ open, onOpenChange, doc, initialFind }: { o
               </div>
             );
           })}
-          <Button size="sm" variant="ghost" className="self-start" onClick={() => setRows((list) => [...list, EMPTY])} disabled={rows.length >= 20} data-testid="edit-original-add">
-            <Plus />
-            {t("viewer.edit_original.add_row")}
-          </Button>
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <Button size="sm" variant="ghost" onClick={() => setRows((list) => [...list, EMPTY])} disabled={rows.length >= MAX_ROWS} data-testid="edit-original-add">
+              <Plus />
+              {t("viewer.edit_original.add_row")}
+            </Button>
+            {corrections.length > 0 && (
+              <Button size="sm" variant="ghost" onClick={bringCorrections} title={t("viewer.edit_original.from_viewer_hint")} data-testid="edit-original-from-viewer" data-count={corrections.length}>
+                <History />
+                {t("viewer.edit_original.from_viewer", { count: corrections.length })}
+              </Button>
+            )}
+          </div>
         </div>
         {report && (
           <div className="flex min-h-0 flex-col gap-1" data-testid="edit-original-preview" data-total={total} data-problems={problems.length}>

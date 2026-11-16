@@ -561,12 +561,17 @@ describe("planner (rules, validate, guard)", () => {
 describe("original-file edits: paragraphs and table rows (documents::edit)", () => {
   const preview = (id: string, edits: EditRequest[]) => backend.mockInvoke<EditOutcome>("documents_edit_preview", { id, edits });
   const text = async (id: string) => (await pages(id)).map((p) => p.text ?? "");
+  /** What the file holds on a page (set without a correction: the viewer's corrections do not reach the file). */
+  const setFileText = (id: string, pageNo: number, value: string) => {
+    const d = backend.wsDocs().find((x) => x.id === id)!;
+    backend.upsertDoc({ ...d, pages: d.pages.map((p) => (p.page_no === pageNo ? { ...p, text: value } : p)) });
+  };
 
   it("a paragraph is added next to the one that holds the text, or taken out; several places ask which one", async () => {
     const ids = await importDocs(["개발계약서.docx"]);
     const doc = ids["개발계약서.docx"]!;
-    await backend.mockInvoke("documents_set_page_text", { id: doc, pageNo: 1, text: "제3조 납품\n① 납품 기한은 11월 30일로 한다.\n② 납품 장소는 발주처로 한다." });
-    await backend.mockInvoke("documents_set_page_text", { id: doc, pageNo: 2, text: "산출물\t기한\n설계서\t10월 31일\n소스 코드\t11월 30일\n끝." });
+    setFileText(doc, 1, "제3조 납품\n① 납품 기한은 11월 30일로 한다.\n② 납품 장소는 발주처로 한다.");
+    setFileText(doc, 2, "산출물\t기한\n설계서\t10월 31일\n소스 코드\t11월 30일\n끝.");
 
     // "납품" is in three paragraphs: nothing is done before the request says which one.
     const vague = await preview(doc, [{ find: "납품", replace: "③ 검수는 14일 안에 마친다.", action: "insert_after" }]);
@@ -597,8 +602,8 @@ describe("original-file edits: paragraphs and table rows (documents::edit)", () 
   it("a table row is added above / below the row that holds the text, or taken out", async () => {
     const ids = await importDocs(["개발계약서.docx"]);
     const doc = ids["개발계약서.docx"]!;
-    await backend.mockInvoke("documents_set_page_text", { id: doc, pageNo: 1, text: "납품 기한은 11월 30일로 한다." });
-    await backend.mockInvoke("documents_set_page_text", { id: doc, pageNo: 2, text: "산출물\t기한\n설계서\t10월 31일\n소스 코드\t11월 30일\n끝." });
+    setFileText(doc, 1, "납품 기한은 11월 30일로 한다.");
+    setFileText(doc, 2, "산출물\t기한\n설계서\t10월 31일\n소스 코드\t11월 30일\n끝.");
     const edits: EditRequest[] = [
       { find: "설계서", replace: "시험 결과서 | 11월 15일", action: "insert_row_after" },
       { find: "설계서", replace: "", cells: ["착수 보고서"], action: "insert_row_before" },
@@ -621,7 +626,26 @@ describe("original-file edits: paragraphs and table rows (documents::edit)", () 
     expect(await code({ find: "없는 글", replace: "", action: "delete_row" })).toBeNull();
     // The only paragraph of a page stays; the last row of a table stays.
     expect(await code({ find: "납품 기한", replace: "", action: "delete_paragraph" })).toBe("edit_last_paragraph");
-    await backend.mockInvoke("documents_set_page_text", { id: doc, pageNo: 2, text: "산출물\t기한\n끝." });
+    setFileText(doc, 2, "산출물\t기한\n끝.");
     expect(await code({ find: "산출물", replace: "", action: "delete_row" })).toBe("edit_last_row");
+  });
+
+  // Step 3: the file still holds what the page read before a correction in the viewer.
+  it("a correction made in the viewer does not reach the file until it is made there too", async () => {
+    const ids = await importDocs(["개발계약서.docx"]);
+    const doc = ids["개발계약서.docx"]!;
+    const before = (await text(doc))[1]!;
+    expect(before).toContain("합계 12,500원");
+    await backend.mockInvoke("documents_set_page_text", { id: doc, pageNo: 2, text: before.replace("12,500원", "13,500원") });
+    expect((await text(doc))[1]).toContain("합계 13,500원");
+    // The corrected word is not in the file; the one it replaced is — once on each page.
+    expect((await preview(doc, [{ find: "13,500원", replace: "x" }])).found).toEqual([0]);
+    const history = await backend.mockInvoke<import("@/lib/types").PageTextHistory>("documents_page_text_history", { id: doc, pageNo: null });
+    const { correctionsOf } = await import("@/features/library/editCorrections");
+    const edits = correctionsOf(history.entries);
+    expect(edits).toEqual([{ find: "12,500원", replace: "13,500원" }]);
+    expect((await preview(doc, edits)).replaced).toEqual([2]);
+    const edition = await backend.mockInvoke<{ doc_id: string }>("documents_edit_save", { id: doc, edits });
+    expect(await text(edition.doc_id)).toEqual([expect.stringContaining("합계 13,500원"), expect.stringContaining("합계 13,500원")]);
   });
 });

@@ -1,5 +1,6 @@
 // Browser-mode stand-in for the core's format-preserving edit (1.0.0 §2-1, `documents::edit`): the mock has
-// no files, so a replacement runs over the page text of the document, one line = one paragraph. The rules
+// no files, so a replacement runs over the page text of the document — as it was before any correction made
+// in the viewer, which is what the file still holds —, one line = one paragraph. The rules
 // are the core's — which formats, what a request may hold, how occurrences are counted, how the edited copy
 // is named and registered as the latest edition next to its original.
 import { emit, err, upsertDoc, wsDocs, type MockDoc } from "./mock-backend";
@@ -100,7 +101,11 @@ function plan(d: MockDoc, edits: EditReplacement[]): { report: EditReport; pages
   if (edits.length === 0 || edits.some((e) => !e.find.trim())) throw err("invalid", "edit_find_empty");
   if (edits.length > MAX_EDITS) throw err("invalid", "edit_too_many");
   if (edits.some((e) => [e.find, e.replace, ...(e.cells ?? [])].some((text) => /[\r\n]/.test(text)))) throw err("invalid", "edit_line_break");
-  const pages = d.pages.map((p) => p.text);
+  // The file holds what the page read before the viewer's corrections: they change the page text, not the file.
+  const pages = d.pages.map((p) => {
+    const first = (d.text_history ?? []).find((row) => row.page_no === p.page_no);
+    return first ? first.previous.text : p.text;
+  });
   const report: EditReport = { found: edits.map(() => 0), replaced: edits.map(() => 0), changes: [], parts: [] };
   const parts = new Set<string>();
   edits.forEach((e, n) => {

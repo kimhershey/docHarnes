@@ -536,4 +536,50 @@ test.describe("P2 documents", () => {
     await expect(layer).not.toContainText("1쪽의 텍스트 레이어");
     await expect(layer).not.toContainText("부가세 별도");
   });
+
+  // 1.0.0 §2-1 step 3: a word put right in the viewer is still wrong in the file — the dialog brings the
+  // correction along as a replacement.
+  test("1.0.0: 원본 고치기 — the corrections made in the viewer are brought into the original file", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\docs\\개발계약서.docx"]);
+    const original = await docId(page, "개발계약서.docx");
+    await page.getByTestId(`doc-open-${original}`).click();
+    const layer = page.getByTestId("viewer-text-layer");
+    await expect(layer).toContainText("합계 12,500원");
+
+    // Nothing was corrected yet: nothing to bring.
+    await page.getByTestId("viewer-edit-original").click();
+    await expect(page.getByTestId("edit-original-dialog")).toBeVisible();
+    await expect(page.getByTestId("edit-original-from-viewer")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+
+    // A word is corrected on the page image (the page text changes, the file does not).
+    await layer.locator("[data-word-index]", { hasText: "12,500원" }).first().click();
+    await page.keyboard.press("Enter");
+    await page.getByTestId("viewer-text-input").fill("13,500원");
+    await page.keyboard.press("Enter");
+    await expect(layer).toContainText("합계 13,500원");
+
+    await page.getByTestId("viewer-edit-original").click();
+    const bring = page.getByTestId("edit-original-from-viewer");
+    await expect(bring).toHaveAttribute("data-count", "1");
+    await expect(bring).toContainText("뷰어에서 고친 글 가져오기 (1)");
+    await bring.click();
+    await expect(page.getByTestId("edit-original-find-0")).toHaveValue("12,500원");
+    await expect(page.getByTestId("edit-original-replace-0")).toHaveValue("13,500원");
+    // Bringing them twice adds nothing.
+    await bring.click();
+    await expect(page.getByTestId("edit-original-row-1")).toHaveCount(0);
+    // The file holds the old amount on both pages: the preview says so before anything is saved.
+    await page.getByTestId("edit-original-preview-run").click();
+    await expect(page.getByTestId("edit-original-count-0")).toHaveText("2곳");
+    await page.getByTestId("edit-original-save").click();
+    await expect(page.getByTestId("edit-original-dialog")).toHaveCount(0);
+    await page.getByTestId("toast-action").first().click();
+    await expect(page.getByTestId("viewer-name")).toContainText("개발계약서 (수정).docx");
+    await expect(layer).toContainText("합계 13,500원");
+    // The new edition has no corrections of its own: its file holds the right amount.
+    await expect(page.getByTestId("viewer-text-edits-count")).toHaveCount(0);
+  });
 });

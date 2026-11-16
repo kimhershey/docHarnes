@@ -1925,7 +1925,9 @@
         "insert_row_before": "Added above this row",
         "delete_row": "Row deleted"
       },
-      "blank": "(empty)"
+      "blank": "(empty)",
+      "from_viewer": "Bring the viewer's corrections ({{count}})",
+      "from_viewer_hint": "Apply the words corrected in the viewer to the original file as well. The same word elsewhere in the document changes too — check the preview."
     }
   },
   "answer": {
