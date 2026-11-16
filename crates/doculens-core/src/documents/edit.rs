@@ -2454,6 +2454,65 @@ mod tests {
         assert!(part_of(&out3, "word/document.xml").contains(&format!("{}{}", bold("일(금)"), plain("로 한다"))));
     }
 
+    /// However a paragraph is cut into runs, and whatever the pieces of a replacement, the text that
+    /// results is the one a plain replacement of the joined text gives: several matches in one
+    /// paragraph, matches across run borders, text that grows or shrinks, characters of several
+    /// bytes, a character with its combining mark or its skin tone, one occurrence out of several.
+    #[test]
+    fn replacements_give_the_same_text_however_the_runs_are_cut() {
+        let dir = tempfile::tempdir().unwrap();
+        let cases: &[(&[&str], &str, &str, Option<u32>)] = &[
+            (&["가나", "다라", "마바"], "나다라마", "X", None),
+            (&["a", "b", "c", "a", "b", "c"], "abc", "abcabc", None),
+            (&["aaa", "aaa"], "aa", "a", None),
+            (&["aaa", "aaa"], "a", "aa", None),
+            (&["😀👍🏽", "가\u{301}나"], "👍🏽가\u{301}", "👍가", None),
+            (&["2026", "년 ", "11", "월 ", "30", "일"], "11월 30일", "1월 3일", None),
+            (&["2026", "년 ", "11", "월 ", "30", "일"], "2026년 11월 30일", "늦어도 2027년 1월 3일까지", None),
+            (&["납품", " 기한"], "납품 기한", "기한 납품", None),
+            (&["x", "지울 글", "y"], "지울 글", "", None),
+            (&["ab", "ab", "ab"], "ab", "c", Some(2)),
+            (&["ab", "ab", "ab"], "ba", "긴 글로 바꿈", Some(2)),
+            (&["합계 ", "1", "2", ",", "5", "0", "0", "원"], "12,500", "1,250,000", None),
+            (&["끝"], "끝", "끝.", None),
+            (&["끝"], "끝", "(끝", None),
+        ];
+        for (n, (runs, find, replace, occurrence)) in cases.iter().enumerate() {
+            let src = dir.path().join(format!("{n}.docx"));
+            let body: String =
+                runs.iter().map(|t| format!(r#"<w:r><w:t xml:space="preserve">{t}</w:t></w:r>"#)).collect();
+            let xml = format!(r#"<w:document {W}><w:body><w:p>{body}</w:p></w:body></w:document>"#);
+            package(&src, &[("word/styles.xml", STYLES), ("word/document.xml", &xml)]);
+            let out = dir.path().join(format!("{n} (수정).docx"));
+            let edit = Replacement { occurrence: *occurrence, ..Replacement::text(*find, *replace) };
+            let joined: String = runs.concat();
+            let expected = match occurrence {
+                None => joined.replace(find, replace),
+                Some(k) => {
+                    let at = joined.match_indices(find).nth(*k as usize - 1).unwrap().0;
+                    format!("{}{replace}{}", &joined[..at], &joined[at + find.len()..])
+                }
+            };
+            let r = apply(&src, SourceKind::Docx, &[edit], &out).unwrap();
+            assert!(r.replaced[0] >= 1, "case {n}: {r:?}");
+            let written = part_of(&out, "word/document.xml");
+            let text: String = written
+                .split("<w:t")
+                .skip(1)
+                .filter_map(|rest| rest.split_once('>'))
+                .filter(|(head, _)| !head.ends_with('/'))
+                .filter_map(|(_, rest)| rest.split_once("</w:t>").map(|(text, _)| text))
+                .collect();
+            assert_eq!(text, expected, "case {n}: {runs:?} {find} → {replace}\n{written}");
+            // … and the app's reader takes the file.
+            assert_eq!(
+                convert::read_document(&out, SourceKind::Docx).unwrap().text().trim(),
+                expected.trim(),
+                "case {n}"
+            );
+        }
+    }
+
     /// HWPX: the changed paragraph loses its line-layout cache (한컴오피스 lays it out again), the others
     /// keep theirs; a tab inside the text stays where it is.
     #[test]
@@ -3561,17 +3620,32 @@ mod tests {
                 (
                     "xl/worksheets/sheet1.xml",
                     &format!(
-                        r#"<worksheet {X}><sheetData><row r="1"><c r="A1"><v>1</v></c></row><row r="2" ht="20"/></sheetData></worksheet>"#
+                        r#"<worksheet {X}><sheetData><row r="1"><c r="A1"><v>1</v></c><c r="C1" s="0"><v>3</v></c></row><row r="2" ht="20"/></sheetData></worksheet>"#
                     ),
                 ),
                 ("xl/worksheets/sheet2.xml", &format!(r#"<worksheet {X}><sheetData/></worksheet>"#)),
             ],
         );
         let out = dir.path().join("bare (수정).xlsx");
-        let edits =
-            vec![cell("가!C2", "9"), cell("가!A2", "7"), cell("나!B3", "x"), cell("나!A1", "y"), cell("나!A3", "z")];
+        let edits = vec![
+            cell("가!C2", "9"),
+            cell("가!A2", "7"),
+            cell("나!B3", "x"),
+            cell("나!A1", "y"),
+            cell("나!A3", "z"),
+            // A cell that is there gets a value, then a new cell goes in front of it.
+            cell("가!C1", "30"),
+            cell("가!B1", "20"),
+        ];
         let r = apply(&bare, SourceKind::Xlsx, &edits, &out).unwrap();
-        assert_eq!(r.replaced, vec![1; 5], "{r:?}");
+        assert_eq!(r.replaced, vec![1; 7], "{r:?}");
+        assert!(
+            part_of(&out, "xl/worksheets/sheet1.xml").contains(
+                r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>20</v></c><c r="C1" s="0"><v>30</v></c></row>"#
+            ),
+            "{}",
+            part_of(&out, "xl/worksheets/sheet1.xml")
+        );
         assert!(
             part_of(&out, "xl/worksheets/sheet1.xml")
                 .contains(r#"<row r="2" ht="20"><c r="A2"><v>7</v></c><c r="C2"><v>9</v></c></row></sheetData>"#),

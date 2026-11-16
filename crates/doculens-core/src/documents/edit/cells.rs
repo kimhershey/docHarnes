@@ -262,23 +262,51 @@ fn typed(value: &str, shows_a_date: bool, date1904: bool) -> Value {
         return Value::Empty;
     }
     if shows_a_date {
-        if let Some(day) = parse_date(value) {
-            return Value::Number((day - epoch(date1904)).num_days().to_string());
+        // A day before the workbook's first one has no number: it stays the text that was typed.
+        if let Some(serial) = parse_date(value).map(|day| (day - epoch(date1904)).num_days()).filter(|n| *n >= 0) {
+            return Value::Number(serial.to_string());
         }
     }
-    let plain = value.replace(',', "");
-    let digits = plain.trim_start_matches(['-', '+']);
-    let is_code = digits.len() > 1 && digits.starts_with('0') && !digits.starts_with("0.");
-    let is_number = !digits.is_empty()
-        && digits.chars().all(|c| c.is_ascii_digit() || c == '.')
-        && digits.matches('.').count() <= 1
-        && digits != "."
-        && plain.parse::<f64>().is_ok();
-    if is_number && !is_code {
-        Value::Number(plain.trim_start_matches('+').to_string())
-    } else {
-        Value::Text(value.to_string())
+    match number(value) {
+        Some(n) => Value::Number(n),
+        None => Value::Text(value.to_string()),
     }
+}
+
+/// A number as a sheet stores it: `1,300,000` → `1300000`, `+7` → `7`, `.5` → `0.5`, `5.` → `5`.
+/// A comma counts only as a thousands separator in its place (`1,2,3` is a text), and digits that
+/// start with a zero are a code (`007`).
+fn number(value: &str) -> Option<String> {
+    let (sign, digits) = match value.strip_prefix('-') {
+        Some(rest) => ("-", rest),
+        None => ("", value.strip_prefix('+').unwrap_or(value)),
+    };
+    let (whole, fraction) = match digits.split_once('.') {
+        Some((whole, fraction)) => (whole, fraction),
+        None => (digits, ""),
+    };
+    let all_digits = |s: &str| s.chars().all(|c| c.is_ascii_digit());
+    if !all_digits(fraction) {
+        return None;
+    }
+    let whole = if whole.contains(',') {
+        let mut groups = whole.split(',');
+        let first = groups.next().filter(|g| !g.is_empty() && g.len() <= 3 && all_digits(g))?;
+        let rest: Vec<&str> = groups.collect();
+        if rest.iter().any(|g| g.len() != 3 || !all_digits(g)) {
+            return None;
+        }
+        format!("{first}{}", rest.concat())
+    } else if all_digits(whole) {
+        whole.to_string()
+    } else {
+        return None;
+    };
+    if (whole.is_empty() && fraction.is_empty()) || (whole.len() > 1 && whole.starts_with('0')) {
+        return None;
+    }
+    let whole = if whole.is_empty() { "0" } else { whole.as_str() };
+    Some(if fraction.is_empty() { format!("{sign}{whole}") } else { format!("{sign}{whole}.{fraction}") })
 }
 
 /// One `<c>` of a row: what it holds.
@@ -660,6 +688,10 @@ fn reads(formula: &str) -> Option<Vec<Read_>> {
                 k += 1;
             }
             if chars.get(k) == Some(&'(') {
+                // A function that makes up the cells it reads cannot be followed.
+                if matches!(token.to_ascii_uppercase().as_str(), "INDIRECT" | "OFFSET") {
+                    return None;
+                }
                 sheet = None;
                 continue;
             }
@@ -864,6 +896,35 @@ mod tests {
         assert_eq!(text(typed("2026년 3월 1일", true, false)), "n:46082");
         assert_eq!(text(typed("2026-03-01", true, true)), "n:44620");
         assert_eq!(text(typed("다음 주", true, false)), "t:다음 주");
+        // A day before the 1904 system's first one has no number.
+        assert_eq!(text(typed("1904-01-01", true, true)), "n:0");
+        assert_eq!(text(typed("1903-12-31", true, true)), "t:1903-12-31");
+        // Signs, a bare fraction, separators in and out of their places.
+        for (typed_in, stored) in [
+            ("+7", "n:7"),
+            (".5", "n:0.5"),
+            ("-.25", "n:-0.25"),
+            ("5.", "n:5"),
+            ("0", "n:0"),
+            ("0.50", "n:0.50"),
+            ("-150,000.50", "n:-150000.50"),
+            ("1,300,000", "n:1300000"),
+            ("1,2,3", "t:1,2,3"),
+            ("12,34", "t:12,34"),
+            (",500", "t:,500"),
+            ("1,000,00", "t:1,000,00"),
+            ("1.2.3", "t:1.2.3"),
+            ("-", "t:-"),
+            (".", "t:."),
+            ("--5", "t:--5"),
+            ("1e5", "t:1e5"),
+            ("12%", "t:12%"),
+            ("１２３", "t:１２３"),
+            ("00", "t:00"),
+            ("0123.5", "t:0123.5"),
+        ] {
+            assert_eq!(text(typed(typed_in, false, false)), stored, "{typed_in}");
+        }
     }
 
     #[test]
@@ -878,8 +939,22 @@ mod tests {
         assert_eq!(rect("LOG10(100)+1E+5"), Some(vec![]));
         assert_eq!(rect("IF(A1>0,\"B2 \"\"x\"\"\",TRUE)"), Some(vec![(None, (1, 1), (1, 1))]));
         // What cannot be followed.
-        for unknown in ["SUM(금액)", "표1[합계]", "[1]Sheet1!A1", "VLOOKUP(A1,단가표,2,0)"] {
+        for unknown in [
+            "SUM(금액)",
+            "표1[합계]",
+            "[1]Sheet1!A1",
+            "VLOOKUP(A1,단가표,2,0)",
+            // Cells made up when the formula runs, and a range over several sheets.
+            "INDIRECT(\"B\"&2)",
+            "SUM(OFFSET(A1,1,1,2,1))",
+            "SUM(Sheet1:Sheet3!A1)",
+        ] {
             assert!(reads(unknown).is_none(), "{unknown}");
         }
+        // Functions whose names look like cells, with their cells.
+        assert_eq!(
+            rect("ATAN2(A1,B1)+LOG10(C1)"),
+            Some(vec![(None, (1, 1), (1, 1)), (None, (2, 2), (1, 1)), (None, (3, 3), (1, 1))])
+        );
     }
 }

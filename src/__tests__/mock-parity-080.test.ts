@@ -737,6 +737,10 @@ describe("original-file edits: paragraphs and table rows (documents::edit)", () 
     ]);
     expect((await text(book))[0]).toContain("1250000");
 
+    // What is typed and what is stored (core `cells::number`): signs, a bare fraction, commas in and out of place.
+    const stored = async (value: string) => (await preview(book, [{ find: "Sheet1!H9", replace: value, action: "set_cell" }])).changes[0]!.after.replace("Sheet1!H9 = ", "");
+    expect(await Promise.all(["+7", ".5", "5.", "-150,000.50", "1,2,3", "12,34", "1.2.3", "-", "00", "1e5"].map(stored))).toEqual(["7", "0.5", "5", "-150000.50", "1,2,3", "12,34", "1.2.3", "-", "00", "1e5"]);
+
     const code = async (edit: EditRequest) => (await preview(book, [edit])).problems?.[0]?.code ?? null;
     expect(await code({ find: "D2", replace: "1", action: "set_cell" })).toBe("edit_cell_formula");
     expect(await code({ find: "없는시트!A1", replace: "1", action: "set_cell" })).toBe("edit_cell_address");

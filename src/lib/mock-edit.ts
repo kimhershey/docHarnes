@@ -158,13 +158,18 @@ function parseAddress(text: string): { sheet: string | null; col: number; row: n
   return col >= 1 && col <= 16_384 && row >= 1 && row <= 1_048_576 ? { sheet, col, row } : null;
 }
 
-/** What a typed value is stored as (core `typed`): a number loses its thousands separators, a code like `007` stays text. */
+/**
+ * What a typed value is stored as (core `typed` / `number`): a number loses its thousands separators (a comma
+ * counts only in its place — `1,2,3` is a text), `.5` is `0.5`, and a code like `007` stays text.
+ */
 function typed(value: string): string {
   const v = value.trim();
-  const plain = v.replace(/,/g, "");
-  const digits = plain.replace(/^[-+]+/, "");
-  const isCode = digits.length > 1 && digits.startsWith("0") && !digits.startsWith("0.");
-  return /^\d*\.?\d+$|^\d+\.$/.test(digits) && Number.isFinite(Number(plain)) && !isCode ? plain.replace(/^\+/, "") : v;
+  const m = /^([-+]?)((?:\d{1,3}(?:,\d{3})+)|\d*)(?:\.(\d*))?$/.exec(v);
+  if (!m) return v;
+  const whole = m[2]!.replace(/,/g, "");
+  const fraction = m[3] ?? "";
+  if ((whole === "" && fraction === "") || (whole.length > 1 && whole.startsWith("0"))) return v;
+  return `${m[1] === "-" ? "-" : ""}${whole || "0"}${fraction ? `.${fraction}` : ""}`;
 }
 
 /** Whether the formula of a cell on sheet `own` reads the cell (`sheet`, `col`, `row`) — alone or inside a range. */
