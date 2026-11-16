@@ -213,6 +213,8 @@ fn iso_date(s: &str) -> Option<NaiveDate> {
 /// ones mean the plan must not run (`super::has_errors`).
 pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) -> Vec<PlanIssue> {
     let mut issues = Vec::new();
+    // 1.0.0 §4-2: a settings change has one shape, whichever path planned it.
+    plan.operations = std::mem::take(&mut plan.operations).into_iter().map(Op::canonical).collect();
     if plan.confidence.is_nan() {
         plan.confidence = 0.0;
     }
@@ -587,20 +589,23 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
                 }
                 let _ = ExportFormat::as_str(*format);
             }
-            Op::SetModel { id } => {
-                if !ctx.model_ids.is_empty() {
-                    let key = compact(id);
-                    match ctx.model_ids.iter().find(|m| compact(m) == key || compact(m).contains(&key)) {
-                        Some(m) => *id = m.clone(),
+            Op::SetSetting { key, value } => {
+                check_setting(key, value, &at("key"), &at("value"), &mut issues);
+                // The active model is one of the installed ones, named in full or by its size ("12B");
+                // "auto" leaves the choice to the engine.
+                let named = value.as_str().map(str::to_string).filter(|v| !v.trim().eq_ignore_ascii_case("auto"));
+                if let (true, Some(id), false) = (key == "models.active_model", named, ctx.model_ids.is_empty()) {
+                    let wanted = compact(&id);
+                    match ctx.model_ids.iter().find(|m| compact(m) == wanted || compact(m).contains(&wanted)) {
+                        Some(m) => *value = Value::String(m.clone()),
                         None => issues.push(PlanIssue::error(
-                            at("id"),
+                            at("value"),
                             "model_unknown",
                             format!("unknown model '{id}'; available: {}", ctx.model_ids.join(", ")),
                         )),
                     }
                 }
             }
-            Op::SetSetting { key, value } => check_setting(key, value, &at("key"), &at("value"), &mut issues),
             Op::Open { target, reference } => {
                 *reference = reference.trim().chars().take(300).collect();
                 match target {
@@ -1194,7 +1199,9 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
                 }
             }
             Op::Maintenance { .. } => {}
+            // The settings-only ops were rewritten to `set_setting` above.
             Op::SetInboxWatch { .. }
+            | Op::SetModel { .. }
             | Op::Validate {}
             | Op::Reindex { .. }
             | Op::Summarize { .. }
@@ -1215,8 +1222,18 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
     // depends on would silently take effect too late — "모델을 12B로 바꾸고 이 문서 다시 추출" extracted
     // with the old model (audit PLN-11) — so such a plan is rejected and the user runs it in two commands.
     if let Some((i, j)) = late_dependency(&plan.operations) {
-        let (first, later) = (plan.operations[i].kind().as_str(), plan.operations[j].kind().as_str());
-        let message = if ctx.language == crate::settings::Language::Ko {
+        let ko = ctx.language == crate::settings::Language::Ko;
+        // A settings change is named by its setting (they are all `set_setting` since 1.0.0 §4-2).
+        let first = match &plan.operations[i] {
+            Op::SetSetting { key, .. } => match settings_catalog::find(key) {
+                Some((_, spec)) if ko => format!("설정 변경({})", spec.label_ko),
+                Some((_, spec)) => format!("setting change ({})", spec.label_en),
+                None => OpKind::SetSetting.as_str().to_string(),
+            },
+            op => op.kind().as_str().to_string(),
+        };
+        let later = plan.operations[j].kind().as_str();
+        let message = if ko {
             format!(
                 "'{first}' 단계는 앱에서 문서 작업이 모두 끝난 뒤에 적용되어, 그 뒤의 '{later}' 단계에는 반영되지 않습니다. \
                  먼저 '{first}' 단계만 따로 실행한 다음 나머지를 요청해 주세요."
@@ -1263,6 +1280,10 @@ fn late_dependency(ops: &[Op]) -> Option<(usize, usize)> {
     let dependency = |op: &Op| -> Option<Needs> {
         match op {
             Op::SetModel { .. } | Op::SetProfile { .. } | Op::ManageModel { .. } => Some(Needs::Model),
+            // The same two as settings (§4-2): a later step is held back only when it uses the model.
+            Op::SetSetting { key, .. } if key == "models.active_model" || key == "models.profile" => Some(Needs::Model),
+            // Watching the inbox is not read by a document step.
+            Op::SetSetting { key, .. } if key == "processing.inbox_watch" => None,
             Op::Engine { action: super::EngineOp::Stop | super::EngineOp::Restart | super::EngineOp::Sleep } => {
                 Some(Needs::Model)
             }

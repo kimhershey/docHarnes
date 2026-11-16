@@ -320,6 +320,27 @@ impl OpKind {
         OpKind::ALL.into_iter().find(|k| k.as_str() == s)
     }
 
+    /// 1.0.0 §4: whether the model is offered the op. The five settings-only ops are spellings of
+    /// `set_setting` (§4-2; `Op::canonical`) and `explain` is a kind of `answer` (§4-1): they stay
+    /// readable — stored plans, slash commands, the rules path, the viewer — but the model's op table
+    /// and grammar do not list them, so a sentence has one way to be read.
+    pub fn model_visible(self) -> bool {
+        !matches!(
+            self,
+            OpKind::SetTheme
+                | OpKind::SetLanguage
+                | OpKind::SetModel
+                | OpKind::SetProfile
+                | OpKind::SetInboxWatch
+                | OpKind::Explain
+        )
+    }
+
+    /// Every op the model may write when no family narrowed the choice.
+    pub fn model_kinds() -> Vec<OpKind> {
+        OpKind::ALL.into_iter().filter(|k| k.model_visible()).collect()
+    }
+
     /// Where the op runs: in the core executor (`Core`), or in the UI / shell
     /// (`Ui`: settings, navigation, job and engine control, help).
     pub fn runs_in_ui(self) -> bool {
@@ -830,9 +851,10 @@ impl OpFamily {
         }
     }
 
-    /// Ops of the family plus the shared ones (`open`, `help`, `clarify`, `noop`), in `ALL` order.
+    /// Ops of the family the model is offered (`OpKind::model_visible`) plus the shared ones (`open`,
+    /// `help`, `clarify`, `noop`), in `ALL` order.
     pub fn ops(self) -> Vec<OpKind> {
-        OpKind::ALL
+        OpKind::model_kinds()
             .into_iter()
             .filter(|k| k.family() == self || matches!(k, OpKind::Open | OpKind::Help | OpKind::Clarify | OpKind::Noop))
             .collect()
@@ -840,7 +862,7 @@ impl OpFamily {
 
     /// Union of several families' ops (deduplicated, `ALL` order).
     pub fn ops_of(families: &[OpFamily]) -> Vec<OpKind> {
-        OpKind::ALL
+        OpKind::model_kinds()
             .into_iter()
             .filter(|k| {
                 families.iter().any(|f| k.family() == *f)
@@ -1326,6 +1348,23 @@ pub enum Op {
 }
 
 impl Op {
+    /// 1.0.0 §4-2: the settings-only ops as the `set_setting` they are — one op for a settings change
+    /// whichever path planned it (slash command, fast path, rules, a stored plan), so the checks, the
+    /// card and the executor see one shape. Every other op is returned as it is.
+    pub fn canonical(self) -> Op {
+        let setting = |key: &str, value: Value| Op::SetSetting { key: key.to_string(), value };
+        match self {
+            Op::SetTheme { theme } => setting("ui.theme", Value::String(theme.as_str().to_string())),
+            Op::SetLanguage { lang } => setting("ui.language", Value::String(lang.as_str().to_string())),
+            Op::SetProfile { profile } => {
+                setting("models.profile", serde_json::to_value(profile).unwrap_or(Value::Null))
+            }
+            Op::SetModel { id } => setting("models.active_model", Value::String(id)),
+            Op::SetInboxWatch { enabled } => setting("processing.inbox_watch", Value::Bool(enabled)),
+            other => other,
+        }
+    }
+
     pub fn kind(&self) -> OpKind {
         match self {
             Op::Import { .. } => OpKind::Import,

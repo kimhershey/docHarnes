@@ -337,6 +337,12 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
                 if guard::answer_instead_of_asking(text, &mut plan, ctx, &result.families, ko) {
                     log::info!("planner: the model asked back on a question; answering from the documents instead");
                 }
+                // A question that names a project is about its documents, not general knowledge.
+                if guard::document_question(text, &mut plan, ctx) {
+                    log::info!(
+                        "planner: an answer that looked nothing up names a project; answering from its documents"
+                    );
+                }
                 // `explain` is for a piece of text the user pointed at; a question is answered.
                 guard::explain_what_was_said(text, &mut plan);
                 // The one document type the sentence names is the scope of a plan that named none.

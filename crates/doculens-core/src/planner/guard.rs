@@ -569,7 +569,11 @@ fn setting_change(text: &str, op: &Op) -> Option<(String, bool)> {
     };
     match op {
         Op::SetSetting { key, value } => {
-            let (_, spec) = catalog::find(key)?;
+            let (canonical, spec) = catalog::find(key)?;
+            // A model is named by what tells the models apart ("12B"), not by the setting's label.
+            if let ("models.active_model", Some(id)) = (canonical, value.as_str().filter(|v| *v != "auto")) {
+                return Some((format!("모델 → {id}"), model_is_named(text, id)));
+            }
             Some((format!("{} → {}", spec.label_ko, value_text(value)), grounded(key, value)))
         }
         Op::SetTheme { theme } => {
@@ -877,6 +881,33 @@ pub fn explain_what_was_said(text: &str, plan: &mut Plan) -> bool {
     }
     if changed && !plan.operations.iter().any(|o| o.kind() == plan.intent) {
         plan.recompute_intent();
+    }
+    changed
+}
+
+/// 1.0.0 §4-1 — with `explain` out of the model's op table, Gemma 4 E4B writes "AAA가 무엇인지 설명해줘" as
+/// an `answer` that looks nothing up: `knowledge: false` (meant for a text the user pasted) or
+/// `mode: general` (eval run of 2026-11-16: three of the five user sentences of 0.8.2). A question
+/// that names a project of the workspace and brings no text of its own is about that project's
+/// documents, whatever the model called it: the answer becomes a grounded one (`where_to_look` then
+/// scopes it to the project). A question that names no project keeps the model's reading.
+pub fn document_question(text: &str, plan: &mut Plan, ctx: &super::PlanContext) -> bool {
+    // "instruction: text" keeps the model's reading however short the text is (`carried_text` asks
+    // for a text of some length before it takes the plan over).
+    let command = super::rules::command_of(text).trim();
+    let brings_a_text = command.contains([':', '：', '\n', '"', '“', '「', '『']) && has_rewrite_verb(command);
+    if brings_a_text || project_named(text, ctx).is_none() {
+        return false;
+    }
+    let mut changed = false;
+    for op in &mut plan.operations {
+        let Op::Answer { knowledge, mode, reply, .. } = op else { continue };
+        let looks_nothing_up = *knowledge == Some(false) || *mode == Some(super::AnswerMode::General);
+        if reply.is_none() && *mode != Some(super::AnswerMode::Chat) && looks_nothing_up {
+            *knowledge = None;
+            *mode = None;
+            changed = true;
+        }
     }
     changed
 }

@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use crate::pipeline::vlm::testing::StageChat;
 use crate::prerouter::DateRange;
-use crate::settings::{Language, Profile, Theme};
+use crate::settings::{Language, Profile};
 
 use super::exec;
 use super::llm::{self, plan, PlannerDeps};
@@ -202,12 +202,14 @@ fn example_commands_plan_without_a_model() {
 
     // 6. two settings in one sentence
     let r = planned("다크 테마로 바꾸고 모델을 12B로 올려");
-    assert_eq!(kinds(&r.plan), [OpKind::SetTheme, OpKind::SetModel], "{r:?}");
-    assert!(matches!(&r.plan.operations[0], Op::SetTheme { theme: Theme::Dark }));
-    assert!(matches!(&r.plan.operations[1], Op::SetModel { id } if id == "gemma4-12b-q4km"));
+    // (1.0.0 §4-2: a settings change is `set_setting`, whichever path planned it.)
+    let setting = |op: &Op, k: &str, v: Value| matches!(op, Op::SetSetting { key, value } if key == k && *value == v);
+    assert_eq!(kinds(&r.plan), [OpKind::SetSetting, OpKind::SetSetting], "{r:?}");
+    assert!(setting(&r.plan.operations[0], "ui.theme", json!("dark")), "{r:?}");
+    assert!(setting(&r.plan.operations[1], "models.active_model", json!("gemma4-12b-q4km")), "{r:?}");
     // Gemma's effective sizes are written "E4B" in the id but said as "4B".
     let r = planned("모델을 4B로 바꿔");
-    assert!(matches!(&r.plan.operations[0], Op::SetModel { id } if id == "gemma4-e4b-q5km"), "{r:?}");
+    assert!(setting(&r.plan.operations[0], "models.active_model", json!("gemma4-e4b-q5km")), "{r:?}");
 
     // 7. relative date + total → aggregate with the resolved range
     let r = planned("지난달 영수증 합계 얼마야?");
@@ -249,7 +251,7 @@ fn example_commands_plan_without_a_model() {
     // pre-router commands still go straight through
     let r = planned("/테마 다크");
     assert_eq!(r.source, PlanSource::Prerouter);
-    assert!(matches!(&r.plan.operations[0], Op::SetTheme { theme: Theme::Dark }));
+    assert!(setting(&r.plan.operations[0], "ui.theme", json!("dark")), "{r:?}");
     let r = planned("설정 열어줘");
     assert!(
         matches!(&r.plan.operations[0], Op::Open { target: OpenTarget::Screen, reference } if reference == "settings")
@@ -602,11 +604,23 @@ fn specs_match_serde_and_the_grammar_schema() {
     let alternatives = s["properties"]["operations"]["items"]["anyOf"].as_array().unwrap();
     let op_of = |a: &Value| a["properties"]["op"]["const"].as_str().unwrap_or_default().to_string();
     let named: std::collections::BTreeSet<String> = alternatives.iter().map(op_of).collect();
-    assert_eq!(named.len(), OP_SPECS.len());
-    assert_eq!(alternatives.iter().filter(|a| op_of(a) != "set_setting").count(), OP_SPECS.len() - 1);
+    // 1.0.0 §4: the model is offered the visible ops only — the five settings-only ops are `set_setting`
+    // and `explain` is `answer` — while every op still has a spec and still deserialises (stored plans).
+    let visible = OpKind::model_kinds();
+    assert_eq!(visible.len(), OP_SPECS.len() - 6);
+    assert_eq!(named.len(), visible.len());
+    assert_eq!(alternatives.iter().filter(|a| op_of(a) != "set_setting").count(), visible.len() - 1);
     assert_eq!(alternatives.iter().filter(|a| op_of(a) == "set_setting").count(), schema::setting_schemas().len());
     assert_eq!(s["properties"]["operations"]["maxItems"], json!(MAX_OPS));
-    assert!(s["properties"]["intent"]["enum"].as_array().unwrap().len() == OpKind::ALL.len());
+    assert!(s["properties"]["intent"]["enum"].as_array().unwrap().len() == visible.len());
+    let table = schema::op_table(true, false);
+    for hidden in ["set_theme", "set_language", "set_profile", "set_model", "set_inbox_watch", "explain"] {
+        assert!(!named.contains(hidden) && !table.contains(&format!("- {hidden}:")), "{hidden}");
+        assert!(!OpFamily::ALL.iter().any(|f| f.ops().iter().any(|k| k.as_str() == hidden)), "{hidden}");
+    }
+    assert!(named.contains("set_setting") && named.contains("answer") && named.contains("noop"));
+    assert!(serde_json::from_value::<Op>(json!({ "op": "set_theme", "theme": "dark" })).is_ok());
+    assert!(serde_json::from_value::<Op>(json!({ "op": "explain", "selection": "검수" })).is_ok());
     assert!(schema::op_table(true, false).contains("- aggregate:"));
     assert!(schema::op_table(false, true).contains("fn:sum|count|avg|min|max"));
 }
@@ -826,9 +840,15 @@ fn agent_rules_cover_every_gui_function() {
     assert!(planned("선택한 문서 하나로 합쳐줘").plan.requires_confirmation);
     assert!(!planned("이 문서 90도 돌려줘").plan.requires_confirmation);
     // The older rules keep their meaning next to the new ones.
-    assert!(matches!(op("다크 테마로 바꿔"), Op::SetTheme { .. }), "{:?}", planned("다크 테마로 바꿔").plan);
-    assert!(matches!(op("모델을 12B로 바꿔"), Op::SetModel { .. }), "{:?}", planned("모델을 12B로 바꿔").plan);
-    assert!(matches!(op("inbox 감시 꺼"), Op::SetInboxWatch { enabled: false }), "{:?}", planned("inbox 감시 꺼").plan);
+    let setting =
+        |text: &str, k: &str, v: Value| matches!(op(text), Op::SetSetting { key, value } if key == k && value == v);
+    assert!(setting("다크 테마로 바꿔", "ui.theme", json!("dark")), "{:?}", planned("다크 테마로 바꿔").plan);
+    assert!(
+        setting("모델을 12B로 바꿔", "models.active_model", json!("gemma4-12b-q4km")),
+        "{:?}",
+        planned("모델을 12B로 바꿔").plan
+    );
+    assert!(setting("inbox 감시 꺼", "processing.inbox_watch", json!(false)), "{:?}", planned("inbox 감시 꺼").plan);
     assert!(matches!(op("선택한 문서 삭제"), Op::Delete { .. }), "{:?}", planned("선택한 문서 삭제").plan);
     assert!(
         matches!(op("선택한 문서를 한빛 심사 프로젝트에 추가해"), Op::AddToProject { .. }),
@@ -1849,7 +1869,7 @@ fn model_first_mode_sends_every_sentence_but_slash_commands_to_the_model() {
     let r = plan(Some(&deps(&chat)), "다크 테마로 바꿔줘", &c, PlanMode::ModelFirst).unwrap();
     assert_eq!(r.source, PlanSource::Fast, "{r:?}");
     assert_eq!(chat.calls("plan"), 1);
-    assert!(matches!(r.plan.operations[0], Op::SetTheme { theme: Theme::Dark }));
+    assert!(matches!(&r.plan.operations[0], Op::SetSetting { key, value } if key == "ui.theme" && value == "dark"));
     // Slash commands never reach the model.
     let r = plan(Some(&deps(&chat)), "/테마 라이트", &c, PlanMode::ModelFirst).unwrap();
     assert_eq!(r.source, PlanSource::Prerouter);
@@ -2037,7 +2057,10 @@ fn whole_sentence_settings_and_greetings_skip_the_model_in_both_modes() {
         }
         let r = plan(Some(&d), "프로파일 정확도", &c, mode).unwrap();
         assert_eq!(r.source, PlanSource::Fast);
-        assert!(matches!(&r.plan.operations[..], [Op::SetProfile { profile: Profile::Accuracy }]));
+        assert!(
+            matches!(&r.plan.operations[..], [Op::SetSetting { key, value }] if key == "models.profile" && value == "accuracy"),
+            "{r:?}"
+        );
         let r = plan(Some(&d), "안녕하세요.", &c, mode).unwrap();
         assert_eq!(r.source, PlanSource::Fast);
         assert!(matches!(&r.plan.operations[..], [Op::Answer { mode: Some(AnswerMode::Chat), reply: Some(_), .. }]));
@@ -2072,7 +2095,10 @@ fn model_plans_are_checked_against_the_sentence() {
     let r = run(text, "system", reply(json!([{ "op": "set_profile", "profile": "balanced" }]), ""));
     assert_eq!(codes(&r), vec!["ungrounded_change"], "{r:?}");
     assert!(r.plan.requires_confirmation && !has_errors(&r.issues));
-    assert!(matches!(&r.plan.operations[..], [Op::SetProfile { .. }]), "the plan is kept for the user to judge");
+    assert!(
+        matches!(&r.plan.operations[..], [Op::SetSetting { key, .. }] if key == "models.profile"),
+        "the plan is kept for the user to judge: {r:?}"
+    );
     // A change the sentence names runs as before.
     let r = run(
         "눈이 아파서 그런데 다크 테마로 바꿔줄래",
@@ -2241,6 +2267,53 @@ fn a_question_needs_no_document_type() {
     let (r, _) = run(&c, "문서 삭제해줘", reply(delete, json!({ "filter": { "doc_type": "all" } }), 0.9));
     assert!(r.plan.is_clarification(), "{r:?}");
     assert!(r.plan.clarification_question.clone().unwrap_or_default().contains("어떤 문서를 대상으로"), "{r:?}");
+}
+
+/// 1.0.0 §4-1 — the same sentences without `explain` in the model's op table (eval run of 2026-11-16,
+/// replayed): Gemma 4 E4B wrote answers that look nothing up — `knowledge: false`, `mode: general`. A
+/// question that names a project is answered from that project's documents; one that names none, and a
+/// text the user brought along, keep the model's reading.
+#[test]
+fn a_question_that_names_a_project_is_answered_from_its_documents() {
+    let mut c = ctx();
+    c.projects = vec![ProjectSummary { id: "p-aaa".into(), name: "AAA".into(), status: "active".into() }];
+    let run = |c: &PlanContext, text: &str, op: Value| {
+        let chat = StageChat::new();
+        chat.push("families", json!({ "families": ["ask"] }));
+        chat.push("plan", json!({ "summary": "s", "unmet": "", "intent": "answer", "scope": { "doc_ids": [] }, "operations": [op], "requires_confirmation": false, "confidence": 0.9 }));
+        let r = plan(Some(&deps(&chat)), text, c, PlanMode::ModelFirst).unwrap();
+        assert!(!r.plan.is_clarification() && r.issues.iter().all(|i| !i.blocking), "{r:?}");
+        r
+    };
+    let grounded = |r: &PlanResult, text: &str| {
+        assert!(
+            matches!(&r.plan.operations[..], [Op::Answer { question, mode: None, knowledge: None, .. }] if question == text),
+            "{r:?}"
+        );
+        assert_eq!(r.plan.scope.filter.project_id.as_deref(), Some("p-aaa"), "{r:?}");
+    };
+    // The three plans as the model wrote them.
+    let text = "AAA 프로젝트 내에서 AAA가 무엇인지 요약해서 설명해줘";
+    grounded(&run(&c, text, json!({ "op": "answer", "question": text, "cite": true, "knowledge": false })), text);
+    let text = "AAA 프로젝트에서 AAA가 무엇인지 알려줘";
+    let general =
+        |q: &str| json!({ "op": "answer", "question": q, "cite": false, "knowledge": false, "mode": "general" });
+    grounded(&run(&c, text, general(text)), text);
+    let text = "AAA가 무엇인지 설명해줘";
+    grounded(&run(&c, text, general(text)), text);
+    // A question about the world names no project: general knowledge, with or without a project open.
+    let mut open = c.clone();
+    open.scope_project = Some("p-aaa".into());
+    for c in [&c, &open] {
+        let text = "애자일 방법론이 뭐야?";
+        let r = run(c, text, general(text));
+        assert!(matches!(&r.plan.operations[..], [Op::Answer { mode: Some(AnswerMode::General), .. }]), "{r:?}");
+        assert_eq!(r.plan.scope.filter.project_id, None, "{r:?}");
+    }
+    // A text that came with the sentence is worked on as it is, even when it names the project.
+    let text = "다음 문장을 다듬어줘: AAA 프로젝트의 과업은 당사가 수행하며 기한은 12월말까지로 함";
+    let r = run(&c, text, json!({ "op": "answer", "question": text, "cite": false, "knowledge": false }));
+    assert!(matches!(&r.plan.operations[..], [Op::Answer { knowledge: Some(false), .. }]), "{r:?}");
 }
 
 /// 0.8.2 — the plans Gemma 4 E4B wrote for the user's sentences (eval run of 2026-11-12, replayed):

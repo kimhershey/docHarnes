@@ -2073,8 +2073,30 @@ function draftRequestOf(op: Extract<Op, { op: "draft_document" }>, plan: Plan, c
 /** `validate::MAX_CARRIED_TEXT_CHARS`: the longest text a text-only answer plan carries. */
 const MAX_CARRIED_TEXT_CHARS = 60_000;
 
+/**
+ * 1.0.0 §4-2 (core `Op::canonical`): the settings-only ops as the `set_setting` they are — one shape for a
+ * settings change whichever path planned it. Every other op is returned as it is.
+ */
+export function canonicalOp(op: Op): Op {
+  switch (op.op) {
+    case "set_theme":
+      return { op: "set_setting", key: "ui.theme", value: op.theme };
+    case "set_language":
+      return { op: "set_setting", key: "ui.language", value: op.lang };
+    case "set_profile":
+      return { op: "set_setting", key: "models.profile", value: op.profile };
+    case "set_model":
+      return { op: "set_setting", key: "models.active_model", value: op.id };
+    case "set_inbox_watch":
+      return { op: "set_setting", key: "processing.inbox_watch", value: op.enabled };
+    default:
+      return op;
+  }
+}
+
 export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | null): PlanIssue[] {
   const issues: PlanIssue[] = [];
+  plan.operations = plan.operations.map(canonicalOp);
   plan.confidence = Number.isFinite(plan.confidence) ? Math.min(1, Math.max(0, plan.confidence)) : 0;
   if (plan.summary != null) {
     plan.summary = Array.from(plan.summary.trim()).slice(0, 300).join("");
@@ -2266,6 +2288,13 @@ export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | nul
         break;
       case "set_setting":
         checkSettingCatalog(op, at("value"), issues);
+        // The active model is one of the installed ones, named in full or by its size ("12B").
+        if (op.key === "models.active_model" && typeof op.value === "string" && op.value.trim().toLowerCase() !== "auto" && ctx.model_ids.length > 0) {
+          const wanted = compact(op.value);
+          const m = ctx.model_ids.find((x) => compact(x) === wanted || compact(x).includes(wanted));
+          if (m) op.value = m;
+          else issues.push(issue(at("value"), "model_unknown", `unknown model '${op.value}'; available: ${ctx.model_ids.join(", ")}`));
+        }
         break;
       case "open":
         op.ref = op.ref.trim();

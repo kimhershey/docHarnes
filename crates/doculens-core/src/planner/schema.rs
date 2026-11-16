@@ -768,7 +768,7 @@ pub fn scope_schema() -> Value {
 /// The PlanSchema (§3.5) for `response_format`. `summary` comes first so the
 /// model states its interpretation before committing to operations.
 pub fn plan_schema() -> Value {
-    plan_schema_for(&OpKind::ALL)
+    plan_schema_for(&OpKind::model_kinds())
 }
 
 /// The PlanSchema restricted to `kinds` (the chosen families' ops; 0.6.0 two-stage planning).
@@ -819,7 +819,7 @@ fn type_label(ty: ParamType) -> String {
 
 /// The smallest op table: names with their required parameters (minimal prompts).
 pub fn op_names() -> String {
-    op_names_for(&OpKind::ALL)
+    op_names_for(&OpKind::model_kinds())
 }
 
 pub fn op_names_for(kinds: &[OpKind]) -> String {
@@ -841,7 +841,7 @@ pub fn op_names_for(kinds: &[OpKind]) -> String {
 /// Tool description table for the planner prompt (one line per op).
 /// `compact` drops the parameter descriptions (small-context presets).
 pub fn op_table(ko: bool, compact: bool) -> String {
-    op_table_for(&OpKind::ALL, ko, compact)
+    op_table_for(&OpKind::model_kinds(), ko, compact)
 }
 
 pub fn op_table_for(kinds: &[OpKind], ko: bool, compact: bool) -> String {

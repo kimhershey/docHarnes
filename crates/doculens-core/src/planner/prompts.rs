@@ -261,9 +261,12 @@ pub fn few_shots(ko: bool) -> Vec<(String, Value)> {
             "switch to dark mode and use the 12B model (models: gemma4-e4b-q5km, gemma4-12b-q4km)".to_string(),
             json!({
                 "summary": "Dark theme, then switch the active model to gemma4-12b-q4km",
-                "intent": "set_theme",
+                "intent": "set_setting",
                 "scope": {},
-                "operations": [{ "op": "set_theme", "theme": "dark" }, { "op": "set_model", "id": "gemma4-12b-q4km" }],
+                "operations": [
+                    { "op": "set_setting", "key": "ui.theme", "value": "dark" },
+                    { "op": "set_setting", "key": "models.active_model", "value": "gemma4-12b-q4km" }
+                ],
                 "requires_confirmation": false,
                 "confidence": 0.9
             }),
@@ -525,7 +528,7 @@ pub fn messages_for_kinds(
     kinds: Option<&[OpKind]>,
 ) -> Vec<Value> {
     let ko = ctx.language == Language::Ko;
-    let all = OpKind::ALL;
+    let all = OpKind::model_kinds();
     let kinds: &[OpKind] = kinds.unwrap_or(&all);
     if tier == Tier::Tiny {
         return tiny_messages(ctx, text, date, feedback, kinds);

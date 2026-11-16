@@ -433,7 +433,8 @@ describe("planner (rules, validate, guard)", () => {
     };
     // A vague wish: the (simulated) model picks a theme on its own.
     const vague = read("눈이 편한 화면으로 해줘");
-    expect(vague.ops).toEqual([{ op: "set_theme", theme: "dark" }]);
+    // (1.0.0 §4-2: a settings change is `set_setting`, whichever path planned it — core `Op::canonical`.)
+    expect(vague.ops).toEqual([{ op: "set_setting", key: "ui.theme", value: "dark" }]);
     expect(vague.confirm).toBe(true);
     expect(vague.notes).toHaveLength(1);
     expect(vague.notes[0]).toContain("ui.theme → dark");
@@ -442,7 +443,7 @@ describe("planner (rules, validate, guard)", () => {
     // Named values and switches the sentence says are grounded: no note, no approval.
     for (const text of ["다크 모드로 바꾸고 언어를 영어로", "시스템 테마로 바꾸고 언어를 한국어로"]) {
       const said = read(text);
-      expect(said.ops.map((o) => o.op), text).toEqual(["set_theme", "set_language"]);
+      expect(said.ops.map((o) => (o.op === "set_setting" ? o.key : o.op)), text).toEqual(["ui.theme", "ui.language"]);
       expect(said.notes, text).toEqual([]);
       expect(said.confirm, text).toBe(false);
     }
