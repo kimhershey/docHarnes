@@ -96,6 +96,36 @@ pub fn uses_scope(plan: &Plan) -> bool {
     plan.operations.iter().any(|op| reads_scope(op, &plan.scope))
 }
 
+/// Ops that only read the documents in scope — search, questions, summaries, explanations,
+/// aggregates, exports. The kind of document may be narrowed for them from the user's words
+/// (`guard::where_to_look`), and inside a project they cover its reference material as well
+/// ([`project_reference`]).
+pub fn only_reads(op: &Op) -> bool {
+    match op {
+        Op::Search { .. } | Op::Summarize { .. } | Op::Explain { .. } | Op::Aggregate { .. } | Op::Export { .. } => {
+            true
+        }
+        Op::Answer { knowledge, mode, .. } => *knowledge != Some(false) && mode.is_none(),
+        _ => false,
+    }
+}
+
+/// 1.0.1 (user request 2026-11-17: "프로젝트 단위에서 모든 검색 및 요약 등 명령을 참고자료와 업무문서를
+/// 둘 다 포함하도록"): a plan that only reads documents and is scoped to a project covers the
+/// project's 참고 자료 next to its 업무 문서, unless the scope names one kind. A plan that changes
+/// documents (delete, move, tag, process …) keeps to the work documents, as before: what a
+/// project holds as reference material is often shared with other projects.
+///
+/// The flag follows the plan: it is recomputed whenever the scope or the operations may have
+/// changed (validation, the default scope, a project or a kind read from the sentence).
+pub fn project_reference(plan: &mut Plan) {
+    let f = &plan.scope.filter;
+    plan.scope.filter.with_reference = f.project_id.is_some()
+        && f.role.is_none()
+        && !plan.operations.is_empty()
+        && plan.operations.iter().all(only_reads);
+}
+
 /// Fills the assistant's "현재 프로젝트" scope (0.5.0) into a plan that names no documents, folder
 /// or project of its own; filters such as a type or a date range intersect with it. Returns
 /// whether the project was filled in.
@@ -109,6 +139,12 @@ pub fn uses_scope(plan: &Plan) -> bool {
 /// (see [`scope_required`]); the caller that let such a plan through because the sentence said
 /// "전부" calls it afterwards, so "all" in the project scope means the project, not the library.
 pub fn apply_default_scope(plan: &mut Plan, ctx: &PlanContext) -> bool {
+    let filled = default_project(plan, ctx);
+    project_reference(plan);
+    filled
+}
+
+fn default_project(plan: &mut Plan, ctx: &PlanContext) -> bool {
     if plan.scope.filter.project_id.is_some() || !plan.scope.doc_ids.is_empty() || plan.scope.folder.is_some() {
         return false;
     }
@@ -344,6 +380,7 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
     if scope_required(plan).is_none() {
         apply_default_scope(plan, ctx);
     }
+    project_reference(plan);
     let scope_doc_type = plan.scope.filter.doc_type.clone();
     let plan_scope_empty = plan.scope.is_empty();
     for (i, op) in plan.operations.iter_mut().enumerate() {

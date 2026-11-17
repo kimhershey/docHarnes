@@ -608,6 +608,7 @@
       "export_path": "{{count}} documents → {{path}}",
       "overwrite": "(overwrites the existing file)",
       "impact": "Side effects: {{effects}} · {{count}} documents in scope",
+      "impact_with_reference": "Side effects: {{effects}} · {{count}} documents in scope ({{reference}} of them reference material)",
       "impact_moves": "≤{{count}} file moves (journaled, undoable)",
       "impact_delete": "{{count}} to the recycle bin (undoable)",
       "impact_export": "{{count}} file(s) created",
@@ -714,7 +715,8 @@
       "open_document": "Open document",
       "summary_group_docs": "{{count}} document(s)",
       "summary_by_document": "{{count}} per-document summaries",
-      "summary_skipped": "{{count}} document(s) without text skipped: {{names}}"
+      "summary_skipped": "{{count}} document(s) without text skipped: {{names}}",
+      "summary_failed": "{{count}} document(s) could not be summarised: {{names}} — {{reason}}"
     },
     "aggregate": {
       "title": "Aggregate — {{summary}}",
@@ -1246,6 +1248,7 @@
       "allow_general": "Allow general-knowledge answers when there is no evidence",
       "allow_general_hint": "Off by default (prevents hallucination). Such answers are labelled 'general knowledge'.",
       "context_tokens": "Evidence token budget",
+      "context_tokens_hint": "How much evidence one answer carries. A larger budget also makes answers and summaries longer and more detailed (an answer up to a fifth of it, a summary a quarter, within a third of the model's context). At the default of 6,000 answers are short, as before.",
       "top_k": "Evidence chunks",
       "chunk_target": "Chunk size (tokens)",
       "min_similarity": "Semantic evidence threshold (cosine similarity)",
@@ -1293,6 +1296,8 @@
       "nothing_to_import": "Nothing new to import (all duplicates or unsupported).",
       "no_files": "Choose files or type paths.",
       "no_documents": "No documents selected.",
+      "no_reference_in_scope": "There is no reference material in this scope. Ask again without naming reference material to cover every document in the scope.",
+      "no_work_in_scope": "There are no work documents in this scope. Ask again without naming work documents to cover every document in the scope.",
       "rotation": "Rotation must be a multiple of 90 degrees.",
       "collection_name_taken": "A reference group with that name already exists.",
       "collection_name_empty": "Enter a reference group name.",

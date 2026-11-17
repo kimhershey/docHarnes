@@ -110,6 +110,11 @@ pub struct PlanPreview {
     /// about the plan and the card should not show it.
     #[serde(default)]
     pub uses_scope: bool,
+    /// 1.0.1: how many of the documents in scope the project holds as 참고 자료 only (a plan that
+    /// reads inside a project covers them next to the work documents — `ScopeFilter::with_reference`).
+    /// The card says so next to the count.
+    #[serde(default)]
+    pub reference_count: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -367,6 +372,20 @@ fn search_groups(deps: &ExecDeps<'_>, hits: &[crate::knowledge::SearchHit], grou
     // Hits outside every project / without a type come last.
     groups.sort_by_key(|g| g.0.is_empty());
     Ok(groups.into_iter().map(|(key, label, hits)| json!({ "key": key, "label": label, "hits": hits })).collect())
+}
+
+/// Why a step has no document to work on, as a reason code the card puts in words: the kind of
+/// document the scope asks for is not there (`no_reference_in_scope` — "참고 자료" was named and the
+/// scope holds none; `no_work_in_scope`), or nothing matches at all (`no_documents`).
+pub(super) fn no_documents(plan: &Plan) -> CoreError {
+    CoreError::Invalid(
+        match plan.scope.filter.role {
+            Some(crate::planner::RoleParam::Knowledge) => "no_reference_in_scope",
+            Some(crate::planner::RoleParam::Work) => "no_work_in_scope",
+            _ => "no_documents",
+        }
+        .into(),
+    )
 }
 
 fn nothing_in_scope(deps: &ExecDeps<'_>) -> StepOutcome {
@@ -2809,13 +2828,23 @@ pub fn preview(
     language: Language,
 ) -> Result<PlanPreview> {
     let ko = language == Language::Ko;
-    let docs_ = db.with(|c| scope::resolve(c, &plan_scope(plan)))?;
+    let scope_ = plan_scope(plan);
+    let docs_ = db.with(|c| scope::resolve(c, &scope_))?;
+    // Of those, the ones that are in scope as the project's reference material.
+    let reference_count = match scope_.filter.project_id.as_deref() {
+        Some(pid) if scope_.filter.with_reference && scope_.filter.role.is_none() => {
+            let work = db.with(|c| knowledge_repo::project_work_doc_ids(c, pid))?;
+            docs_.iter().filter(|d| !work.contains(&d.id)).count() as u64
+        }
+        _ => 0,
+    };
     let mut out = PlanPreview {
         document_count: docs_.len() as u64,
         document_ids: ids(&docs_),
         steps: Vec::new(),
         requires_confirmation: plan.requires_confirmation,
         uses_scope: super::validate::uses_scope(plan),
+        reference_count,
     };
     for (index, op) in plan.operations.iter().enumerate() {
         let kind = op.kind();

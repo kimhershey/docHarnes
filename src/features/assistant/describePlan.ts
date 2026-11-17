@@ -637,10 +637,12 @@ export interface Impact {
   /** Project / rule database writes. */
   projects: number;
   documents: number;
+  /** 1.0.1: of `documents`, those in scope as the project's 참고 자료 (a plan that only reads covers them too). */
+  reference: number;
 }
 
 export function impactOf(plan: Plan, preview: PlanPreview | null): Impact {
-  const impact: Impact = { moves: 0, deletes: 0, exports: 0, drafts: 0, projects: 0, documents: preview?.document_count ?? 0 };
+  const impact: Impact = { moves: 0, deletes: 0, exports: 0, drafts: 0, projects: 0, documents: preview?.document_count ?? 0, reference: preview?.reference_count ?? 0 };
   plan.operations.forEach((op, i) => {
     const step = preview?.steps.find((s) => s.index === i);
     if (FILE_OPS.has(op.op)) {
@@ -669,7 +671,9 @@ export function impactLine(impact: Impact, t: TFunction, usesScope = true): stri
     impact.projects > 0 ? t("planner.card.impact_project", { count: impact.projects }) : null,
   ].filter((x): x is string => x !== null);
   const said = effects.length > 0 ? effects.join(" · ") : t("planner.card.impact_none");
-  return usesScope ? t("planner.card.impact", { effects: said, count: impact.documents }) : t("planner.card.impact_no_scope", { effects: said });
+  if (!usesScope) return t("planner.card.impact_no_scope", { effects: said });
+  // Inside a project a plan that only reads covers the reference material as well: the count says how many.
+  return impact.reference > 0 ? t("planner.card.impact_with_reference", { effects: said, count: impact.documents, reference: impact.reference }) : t("planner.card.impact", { effects: said, count: impact.documents });
 }
 
 // ---------------------------------------------------------------------------
@@ -728,7 +732,8 @@ export interface ResultActions {
   answers: { index: number; answer: Answer }[];
   /**
    * `groups` (0.8.0): one combined summary per project / type / folder, or the single "묶음 하나로" summary;
-   * `skipped`: documents without text that were left out.
+   * `skipped`: documents without text that were left out; `failed` (1.0.1): documents the model could not
+   * summarise — the others were summarised all the same.
    */
   summaries: {
     index: number;
@@ -736,6 +741,7 @@ export interface ResultActions {
     groups: { key: string; label: string; documents: number; answer: Answer }[];
     groupBy: string | null;
     skipped: string[];
+    failed: { name: string; error: string }[];
   }[];
   aggregates: { index: number; result: AggregateResult; op: Extract<Op, { op: "aggregate" }> | null }[];
   undos: { index: number; report: UndoReport }[];
@@ -865,7 +871,8 @@ export function deriveResultActions(execution: PlanExecution, plan: Plan): Resul
             .filter((g) => isAnswer(g.answer))
             .map((g) => ({ key: String(g.key ?? ""), label: String(g.label ?? ""), documents: Array.isArray(g.document_ids) ? g.document_ids.length : 0, answer: g.answer as Answer }));
           const skipped = (Array.isArray(payload.skipped) ? (payload.skipped as unknown[]) : []).filter(isRecord).map((d) => String(d.name ?? d.document_id ?? ""));
-          out.summaries.push({ index: step.index, items, groups, groupBy: str(payload.group_by), skipped });
+          const failed = (Array.isArray(payload.failed) ? (payload.failed as unknown[]) : []).filter(isRecord).map((d) => ({ name: String(d.name ?? d.document_id ?? ""), error: String(d.error ?? "") }));
+          out.summaries.push({ index: step.index, items, groups, groupBy: str(payload.group_by), skipped, failed });
         }
         break;
       case "aggregate":

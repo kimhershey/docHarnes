@@ -588,6 +588,86 @@ describe("planner (rules, validate, guard)", () => {
     const direct: Plan = { ...planned.plan, operations: [{ op: "open", target: "assign", ref: `reference:${a}` }] };
     expect(planner.validatePlan(direct, ctx, null).map((i) => i.code)).toContain("target_unknown");
   });
+
+  // 1.0.1, user report 2026-11-17 ("요약이 자꾸 실패" — a card that said "참고 자료만 … 대상 문서 0건", and "프로젝트
+  // 단위에서 모든 검색 및 요약 등 명령을 참고자료와 업무문서를 둘 다 포함하도록"): `guard::kind_named`,
+  // `validate::project_reference`, `scope::resolve`, `exec::preview`, `exec::no_documents`.
+  it("a kind named as one more thing to cover is no restriction; inside a project a plan that reads covers both kinds", async () => {
+    for (const text of ["참고자료도 포함해서 요약해줘", "참고 자료까지 요약해줘", "참고자료와 문서를 모두 요약해줘", "참고자료 포함해서 프로젝트 요약해줘", "참고자료를 포함해서 요약해줘", "참고 자료랑 같이 요약해줘", "업무 문서도 같이 요약해줘", "참고자료와 업무문서를 둘 다 요약해줘", "summarize the documents and reference material", "summarize it including the reference documents", "summarize the reference material and the contracts"]) {
+      expect(planner.kindNamed(text), text).toBeNull();
+    }
+    for (const [text, kind] of [
+      ["참고 자료 요약해줘", "knowledge"],
+      ["참고자료만 요약해줘", "knowledge"],
+      ["참고자료를 요약해줘", "knowledge"],
+      ["참고 자료 중에서 과업 범위를 요약해줘", "knowledge"],
+      ["참고자료 과업 범위 요약", "knowledge"],
+      ["참고 자료 말고 업무 문서에서 납품 기한 찾아줘", "work"],
+      ["summarize the reference material", "knowledge"],
+      ["understand reference material first", "knowledge"],
+      ["업무문서를 요약해줘", "work"],
+    ] as const) {
+      expect(planner.kindNamed(text), text).toBe(kind);
+    }
+
+    const ids = await importDocs(["개발계약서.docx", "보안지침.pdf", "개발표준.pdf", "회의록_10월.pdf"]);
+    await indexAll();
+    const [work, ref, shared, other] = [ids["개발계약서.docx"]!, ids["보안지침.pdf"]!, ids["개발표준.pdf"]!, ids["회의록_10월.pdf"]!];
+    const hanbit = await backend.mockInvoke<{ id: string }>("project_create", { input: { name: "한빛 포털" } });
+    const saebom = await backend.mockInvoke<{ id: string }>("project_create", { input: { name: "새봄 ERP" } });
+    const empty = await backend.mockInvoke<{ id: string }>("project_create", { input: { name: "빈 프로젝트" } });
+    // 한빛: two work documents and a reference document; "개발표준" is reference material of 새봄 as well.
+    await backend.mockInvoke("project_add_documents", { id: hanbit.id, docIds: [work, shared] });
+    await backend.mockInvoke("project_add_documents", { id: hanbit.id, docIds: [ref], asReference: true });
+    await backend.mockInvoke("project_add_documents", { id: saebom.id, docIds: [shared], asReference: true });
+    const ctx = planner.buildContext();
+    const inScope = (filter: NonNullable<Plan["scope"]["filter"]>) => planner.resolveScope({ filter }).map((d) => d.id).sort();
+    const sorted = (list: string[]) => [...list].sort();
+    // Where the project holds a document decides its kind there, not the document's own mark.
+    expect(inScope({ project_id: hanbit.id })).toEqual(sorted([work, shared]));
+    expect(inScope({ project_id: hanbit.id, role: "work" })).toEqual(sorted([work, shared]));
+    expect(inScope({ project_id: hanbit.id, role: "knowledge" })).toEqual([ref]);
+    expect(inScope({ project_id: hanbit.id, with_reference: true })).toEqual(sorted([work, shared, ref]));
+    expect(inScope({ project_id: hanbit.id, role: "knowledge", with_reference: true })).toEqual([ref]);
+    expect(inScope({ project_id: saebom.id })).toEqual([]);
+    expect(inScope({ project_id: saebom.id, with_reference: true })).toEqual([shared]);
+    expect(inScope({ role: "knowledge" })).toEqual(sorted([ref, shared]));
+    expect(inScope({})).toHaveLength(4);
+    expect(other).toBeTruthy();
+
+    // The validator sets the flag for plans that only read, and for nothing else.
+    const planOf = (operations: Plan["operations"], filter: NonNullable<Plan["scope"]["filter"]>): Plan => {
+      const base = planner.planText("한빛 포털 프로젝트 요약해줘", ctx).plan;
+      const plan: Plan = { ...structuredClone(base), operations, scope: { folder: null, doc_ids: [], filter } };
+      planner.validatePlan(plan, ctx, null);
+      return plan;
+    };
+    const summarize = { op: "summarize", target: "set", length: null, group_by: null } as const;
+    expect(planOf([summarize], { project_id: hanbit.id }).scope.filter?.with_reference).toBe(true);
+    expect(planOf([summarize], { project_id: hanbit.id, role: "knowledge" }).scope.filter?.with_reference).toBeUndefined();
+    expect(planOf([{ op: "tag", add: ["확인"], remove: [] }], { project_id: hanbit.id, with_reference: true }).scope.filter?.with_reference).toBeUndefined();
+    expect(planOf([summarize], {}).scope.filter?.with_reference).toBeUndefined();
+
+    // The sentence names the project: the plan covers both kinds and the card says how many are reference material.
+    const named = planner.planText("한빛 포털 프로젝트 요약해줘", ctx);
+    expect(named.plan.scope.filter).toMatchObject({ project_id: hanbit.id, with_reference: true });
+    expect(planner.planPreview(named.plan, ctx)).toMatchObject({ document_count: 3, reference_count: 1 });
+    const exec = await planner.runPlan(named.plan, ctx, null, () => undefined);
+    expect(exec.steps[0]).toMatchObject({ op: "summarize", status: "done" });
+    expect((exec.steps[0]!.payload as { summaries: { document_id: string }[] }).summaries.map((x) => x.document_id).sort()).toEqual(sorted([work, shared, ref]));
+    // A project that holds reference material only is summarised too.
+    const onlyReference = await planner.runPlan(planOf([summarize], { project_id: saebom.id }), ctx, null, () => undefined);
+    expect(onlyReference.steps[0]).toMatchObject({ status: "done" });
+    // "참고 자료만" where there is none: the reason says what is missing.
+    const none = await planner.runPlan(planOf([summarize], { project_id: empty.id, role: "knowledge" }), ctx, null, () => undefined);
+    expect(none.steps[0]).toMatchObject({ status: "failed" });
+    expect(none.steps[0]!.error).toContain("no_reference_in_scope");
+    // A sentence that adds the reference material is not read as "reference material only".
+    const added = planner.planText("한빛 포털 프로젝트 참고자료도 포함해서 요약해줘", ctx);
+    expect(added.plan.scope.filter).toMatchObject({ project_id: hanbit.id, with_reference: true });
+    expect(added.plan.scope.filter?.role ?? null).toBeNull();
+    expect(added.issues.map((i) => i.message).join(" ")).not.toContain("참고 자료만");
+  });
 });
 
 // 1.0.0 §2-1 step 2 (`documents::edit`: `structure`, `Part::{insert_paragraph, delete_paragraph, insert_row,

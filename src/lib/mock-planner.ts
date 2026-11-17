@@ -43,7 +43,7 @@ import {
   type WorkerOutcome,
 } from "./mock-backend";
 import * as mg from "./mock-generate";
-import { mockKnowledge, projectReferenceDocIds, projectReferenceGroup } from "./mock-knowledge";
+import { mockKnowledge, projectReferenceDocIds, projectReferenceGroup, referenceDocIds } from "./mock-knowledge";
 import * as pl from "./mock-pipeline";
 import * as mp from "./mock-projects";
 import { resolveJosa } from "./josa";
@@ -306,6 +306,7 @@ function filterIsEmpty(f: Scope["filter"] | undefined): boolean {
     (f.tags ?? []).length === 0 &&
     f.min_confidence == null &&
     f.review_status == null &&
+    f.project_id == null &&
     f.role == null
   );
 }
@@ -1307,7 +1308,9 @@ function ruleDraftDocument(t: Text, ctx: PlanContext): Plan | null {
 /** "인증 심사 프로젝트 만들어", "프로젝트에 추가" (§3.15). */
 function ruleProject(t: Text, ctx: PlanContext): Plan | null {
   if (!has(t, ["프로젝트", "project", "케이스"])) return null;
-  if (has(t, ["추가", "넣어", "넣기", "포함", "add", "put"])) {
+  // (`rules.rs`: the project is where the documents go — "프로젝트에 / 프로젝트로 … 넣어". "프로젝트 참고자료도 포함해서
+  // 요약해줘" names what to cover, not a destination.)
+  if (has(t, ["프로젝트에", "프로젝트로", "케이스에", "케이스로", "intotheproject", "totheproject", "toproject", "addto", "addthis", "addthese"]) && has(t, ["추가", "넣어", "넣기", "보내", "포함", "add", "put", "move"])) {
     const ref = projectRefOf(t, ctx);
     const ids = selectionIds(ctx);
     // "참고 자료로 / 지침으로 넣어줘" → the project's reference group instead of its work documents (0.5.0 plan §2).
@@ -2579,6 +2582,8 @@ export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | nul
     if (first) plan.intent = first.op;
   }
   plan.requires_confirmation = plan.requires_confirmation || plan.operations.some(needsConfirmation);
+  // 1.0.1: inside a project a plan that only reads covers the reference material as well.
+  projectReference(plan);
   return issues;
 }
 
@@ -2927,13 +2932,17 @@ function whereToLook(text: string, plan: Plan, ctx: PlanContext, ko: boolean): P
     }
     return notes;
   }
-  const reads = plan.operations.length > 0 && plan.operations.every((op) => ["search", "summarize", "explain", "aggregate", "export"].includes(op.op) || (op.op === "answer" && op.knowledge !== false && !op.mode));
-  if (!reads) return notes;
+  if (!onlyReads(plan)) return notes;
   plan.scope.filter = plan.scope.filter ?? {};
-  const reference = ["참고자료", "참고문서", "referencematerial"].some((w) => said.includes(w));
-  const work = ["업무문서", "작업문서", "workdocument"].some((w) => said.includes(w));
-  if (plan.scope.filter.role == null && reference !== work) {
-    plan.scope.filter.role = reference ? "knowledge" : "work";
+  const saidKind = plan.scope.filter.role == null ? kindSaid(text) : null;
+  // "참고자료 포함해서 납품 기한 찾아줘": both kinds are looked at; the words that added one are not the query.
+  if (saidKind === "also") {
+    for (const op of plan.operations) if (op.op === "search") op.query = queryWithoutKind(op.query, true);
+  }
+  const kind = saidKind === "knowledge" || saidKind === "work" ? saidKind : null;
+  const reference = kind === "knowledge";
+  if (plan.scope.filter.role == null && kind !== null) {
+    plan.scope.filter.role = kind;
     for (const op of plan.operations) if (op.op === "search") op.query = op.query.replace(/(참고|업무)\s?(자료|문서)?\s?(에서|만)?(?=\s|$)/g, " ").replace(/\s+/g, " ").trim() || op.query;
     const label = reference ? (ko ? "참고 자료" : "reference material") : ko ? "업무 문서" : "work documents";
     notes.push(issue("scope.filter.role", "scope_filled", ko ? `문장대로 ${label}만 대상으로 합니다` : `only ${label}, as the sentence says`, false));
@@ -2943,7 +2952,127 @@ function whereToLook(text: string, plan: Plan, ctx: PlanContext, ko: boolean): P
     plan.scope.filter.project_id = project.id;
     notes.push(issue("scope.filter.project_id", "scope_filled", ko ? `문장의 '${project.name}' 프로젝트를 대상으로 합니다` : `the project '${project.name}' from the sentence is the scope`, false));
   }
+  projectReference(plan);
   return notes;
+}
+
+/** `validate::only_reads`: every op only reads the documents in scope (search, questions, summaries, aggregates, exports). */
+function onlyReads(plan: Plan): boolean {
+  return plan.operations.length > 0 && plan.operations.every((op) => ["search", "summarize", "explain", "aggregate", "export"].includes(op.op) || (op.op === "answer" && op.knowledge !== false && !op.mode));
+}
+
+/**
+ * `validate::project_reference` (1.0.1): inside a project a plan that only reads covers the project's 참고 자료
+ * next to its 업무 문서, unless the scope names one kind; a plan that changes documents keeps to the work documents.
+ */
+export function projectReference(plan: Plan): void {
+  const f = (plan.scope.filter = plan.scope.filter ?? {});
+  if (!!f.project_id && f.role == null && onlyReads(plan)) f.with_reference = true;
+  else delete f.with_reference;
+}
+
+/** The words around `start..end` of the compact form of `text` (`guard::around`): the word before, the particle attached, the word after. */
+function around(text: string, start: number, end: number): [string, string, string] {
+  const letter = (c: string) => /[\p{L}\p{N}]/u.test(c);
+  const chars = Array.from(text);
+  let seen = 0;
+  let from: number | null = null;
+  let to = chars.length;
+  for (let i = 0; i < chars.length; i++) {
+    if (seen >= end) {
+      to = i;
+      break;
+    }
+    if (letter(chars[i]!)) {
+      if (seen >= start && from === null) from = i;
+      seen += chars[i]!.toLowerCase().length;
+    }
+  }
+  const word = (list: string[]) => {
+    let out = "";
+    for (const c of list) {
+      if (!letter(c)) break;
+      out += c.toLowerCase();
+    }
+    return out;
+  };
+  const rest = chars.slice(to);
+  const attached = word(rest);
+  let k = Array.from(attached).length;
+  while (k < rest.length && !letter(rest[k]!)) k++;
+  const next = word(rest.slice(k));
+  const lastWord = (head: string[]): [string, number] => {
+    let e = head.length;
+    while (e > 0 && !letter(head[e - 1]!)) e--;
+    let b = e;
+    while (b > 0 && letter(head[b - 1]!)) b--;
+    return [head.slice(b, e).join("").toLowerCase(), b];
+  };
+  let [before, at] = lastWord(chars.slice(0, from ?? 0));
+  if (["the", "a", "an", "all"].includes(before)) [before] = lastWord(chars.slice(0, at));
+  return [before, attached, next];
+}
+
+/**
+ * `guard::kind_named`: the kind of document the sentence names — "참고 자료에서 …" → reference material, "업무 문서만 …"
+ * → work documents. A kind named as one more thing to cover ("참고자료도", "참고자료까지", "참고자료와 문서",
+ * "참고자료 포함해서") is not a restriction (1.0.1).
+ */
+export function kindNamed(text: string): "knowledge" | "work" | null {
+  const said = kindSaid(text);
+  return said === "knowledge" || said === "work" ? said : null;
+}
+
+/** `guard::query_without_kind`: a search query without the words that named (and, with `also`, added) a kind of document. */
+function queryWithoutKind(query: string, also: boolean): string {
+  const cleaned = query
+    .replace(/(참고|업무)\s?(자료|문서)(에서|만)?/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((w) => !["참고", "업무", "에서", "만", "참고에서", "업무에서"].includes(w))
+    .filter((w) => !also || !(w.startsWith("포함") || ["도", "까지", "와", "과", "랑", "같이", "함께", "및", "참고도", "참고까지", "참고와", "참고랑"].includes(w)))
+    .join(" ");
+  return cleaned || query;
+}
+
+/** `guard::kind_said`: one kind as the place to look, a kind as one more thing to cover ("also"), or nothing. */
+function kindSaid(text: string): "knowledge" | "work" | "also" | null {
+  const REFERENCE = ["참고자료", "참고문서", "레퍼런스", "referencematerial", "referencedocument", "references"];
+  const WORK = ["업무문서", "작업문서", "workdocument"];
+  const NOT = ["말고", "빼고", "제외", "아니라", "except", "notthe", "butnot"];
+  const JOINED = ["도", "까지", "와", "과", "랑", "이랑", "하고", "및"];
+  const AS_WELL = ["포함", "및", "그리고", "같이", "함께", "and", "plus", "too", "aswell"];
+  const LEADING = ["including", "with", "plus", "and", "also"];
+  const words = userWords(text);
+  const said = compact(words);
+  const find = (list: string[]): [number, number] | null => {
+    let best: [number, number] | null = null;
+    for (const w of list) {
+      const at = said.indexOf(w);
+      if (at >= 0 && (best === null || at < best[0] || (at === best[0] && at + w.length < best[1]))) best = [at, at + w.length];
+    }
+    return best;
+  };
+  const ruledOut = (end: number) => {
+    const after = Array.from(said.slice(end)).slice(0, 6).join("");
+    return NOT.some((n) => after.includes(n));
+  };
+  const added = ([start, end]: [number, number]) => {
+    const [before, joined, next] = around(words, start, end);
+    const english = /[a-z]$/.test(said.slice(0, end));
+    const attached = english ? joined.replace(/^s+/, "") : joined;
+    return JOINED.includes(attached) || attached.startsWith("포함") || AS_WELL.some((w) => next.startsWith(w)) || LEADING.includes(before);
+  };
+  const r = find(REFERENCE);
+  const w = find(WORK);
+  const only = (kind: "knowledge" | "work", place: [number, number]) => (ruledOut(place[1]) ? null : added(place) ? "also" : kind);
+  if (r && !w) return only("knowledge", r);
+  if (w && !r) return only("work", w);
+  if (r && w) {
+    const [outR, outW] = [ruledOut(r[1]), ruledOut(w[1])];
+    return outR && !outW ? "work" : !outR && outW ? "knowledge" : !outR && !outW ? "also" : null;
+  }
+  return null;
 }
 
 export function plannerModelEnabled(): boolean {
@@ -3116,11 +3245,18 @@ export function resolveScope(scope: Scope | undefined): MockDoc[] {
   if (f.doc_type) docs = docs.filter((d) => d.doc_type === f.doc_type);
   if (f.project_id) {
     const pid = f.project_id;
-    // 0.8.1: a project's 참고 자료 are its reference group — asked for with `role: knowledge`.
-    const reference = f.role === "knowledge" ? new Set(projectReferenceDocIds(pid)) : null;
-    docs = docs.filter((d) => (reference ? reference.has(d.id) : mp.isMember(pid, d.id)));
+    // 0.8.1: a project's 참고 자료 are its reference group — asked for with `role: knowledge`. Where the
+    // project holds a document decides its kind there, not the document's own mark (1.0.1); a plan that only
+    // reads covers both (`with_reference`).
+    const reference = new Set(projectReferenceDocIds(pid));
+    const role = f.role ?? null;
+    docs = docs.filter((d) => (role === "knowledge" ? reference.has(d.id) : mp.isMember(pid, d.id) || (role === null && !!f.with_reference && reference.has(d.id))));
+    if (role && role !== "work" && role !== "knowledge") docs = docs.filter((d) => d.role === role);
+  } else if (f.role) {
+    // Without a project the mark decides — and, for reference material, a place in a reference group.
+    const grouped = f.role === "knowledge" ? referenceDocIds() : new Set<string>();
+    docs = docs.filter((d) => d.role === f.role || grouped.has(d.id));
   }
-  if (f.role) docs = docs.filter((d) => d.role === f.role);
   const tags = f.tags ?? [];
   if (tags.length > 0) docs = docs.filter((d) => tags.every((t) => d.tags.some((x) => x.toLowerCase() === t.toLowerCase())));
   if (f.review_status) docs = docs.filter((d) => d.review_status === f.review_status);
@@ -4190,7 +4326,10 @@ export function planPreview(plan: Plan, ctx: PlanContext): PlanPreview {
   const ko = ctx.language === "ko";
   const settings = loadSettings();
   const docs = resolveScope(plan.scope);
-  const out: PlanPreview = { document_count: docs.length, document_ids: docs.map((d) => d.id), steps: [], requires_confirmation: plan.requires_confirmation, uses_scope: usesScope(plan) };
+  // Of those, the documents the project holds as 참고 자료 only (`with_reference`): the card says so.
+  const pf = plan.scope.filter ?? {};
+  const referenceCount = pf.project_id && pf.with_reference && pf.role == null ? docs.filter((d) => !mp.isMember(pf.project_id!, d.id)).length : 0;
+  const out: PlanPreview = { document_count: docs.length, document_ids: docs.map((d) => d.id), steps: [], requires_confirmation: plan.requires_confirmation, uses_scope: usesScope(plan), reference_count: referenceCount };
   plan.operations.forEach((op, index) => {
     let summary = "";
     let payload: unknown = null;
@@ -4652,7 +4791,12 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
     case "summarize": {
       requireModel();
       const docs = workingSet(plan, imported);
-      if (docs.length === 0) throw err("no_documents", "no_documents");
+      // (`exec::no_documents`: which kind of document the scope asked for and does not hold)
+      if (docs.length === 0) {
+        const kind = plan.scope.filter?.role;
+        const code = kind === "knowledge" ? "no_reference_in_scope" : kind === "work" ? "no_work_in_scope" : "no_documents";
+        throw err(code === "no_documents" ? "no_documents" : "invalid", code);
+      }
       const mode = op.length === "short" ? "one_line" : op.length === "long" ? "one_page" : "key_points";
       const summaries: { document_id: string; name: string; answer: Answer }[] = [];
       const skipped: { document_id: string; name: string }[] = [];

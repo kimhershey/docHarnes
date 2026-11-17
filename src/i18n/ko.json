@@ -608,6 +608,7 @@
       "export_path": "문서 {{count}}건 → {{path}}",
       "overwrite": "(기존 파일 덮어씀)",
       "impact": "부작용: {{effects}} · 대상 문서 {{count}}건",
+      "impact_with_reference": "부작용: {{effects}} · 대상 문서 {{count}}건(참고 자료 {{reference}}건 포함)",
       "impact_moves": "파일 이동 ≤{{count}}건(저널 기록, 되돌리기 가능)",
       "impact_delete": "휴지통 이동 {{count}}건(되돌리기 가능)",
       "impact_export": "파일 생성 {{count}}개",
@@ -714,7 +715,8 @@
       "open_document": "문서 열기",
       "summary_group_docs": "문서 {{count}}건",
       "summary_by_document": "문서별 요약 {{count}}건",
-      "summary_skipped": "본문이 없어 건너뛴 문서 {{count}}건: {{names}}"
+      "summary_skipped": "본문이 없어 건너뛴 문서 {{count}}건: {{names}}",
+      "summary_failed": "요약하지 못한 문서 {{count}}건: {{names}} — {{reason}}"
     },
     "aggregate": {
       "title": "집계 결과 — {{summary}}",
@@ -1246,6 +1248,7 @@
       "allow_general": "근거가 없으면 일반 지식으로 답변 허용",
       "allow_general_hint": "기본은 끔(환각 방지). 켜면 답변에 '일반 지식' 표시가 붙습니다.",
       "context_tokens": "근거 토큰 예산",
+      "context_tokens_hint": "한 번의 답변에 넣는 근거의 양입니다. 크게 잡으면 답변과 요약도 길고 자세해집니다(답변은 예산의 1/5, 요약은 1/4까지 · 모델 컨텍스트의 1/3 이내). 기본 6,000에서는 종전과 같이 짧게 답합니다.",
       "top_k": "근거 청크 수",
       "chunk_target": "청크 크기(토큰)",
       "min_similarity": "의미 검색 근거 임계(코사인 유사도)",
@@ -1293,6 +1296,8 @@
       "nothing_to_import": "가져올 새 파일이 없습니다(모두 중복이거나 미지원).",
       "no_files": "파일을 선택하거나 경로를 입력하세요.",
       "no_documents": "선택한 문서가 없습니다.",
+      "no_reference_in_scope": "이 범위에는 참고 자료가 없습니다. '참고 자료'라는 말을 빼고 다시 요청하면 범위의 문서 전체를 대상으로 합니다.",
+      "no_work_in_scope": "이 범위에는 업무 문서가 없습니다. '업무 문서'라는 말을 빼고 다시 요청하면 범위의 문서 전체를 대상으로 합니다.",
       "rotation": "회전 각도는 90도 단위여야 합니다.",
       "collection_name_taken": "같은 이름의 참고 자료 묶음이 이미 있습니다.",
       "collection_name_empty": "참고 자료 묶음 이름을 입력하세요.",
