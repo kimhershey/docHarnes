@@ -1141,7 +1141,7 @@ fn a_project_scope_reads_work_documents_and_reference_material() {
     // "참고 자료만" in a project without reference material: the reason says what is missing.
     let ex = run(&w, &validated(vec![summarize()], scope_of(&empty, Some(RoleParam::Knowledge), false), None));
     assert_eq!(ex.steps[0].status, StepStatus::Failed);
-    assert!(ex.steps[0].error.as_deref().unwrap().contains("no_reference_in_scope"), "{:?}", ex.steps[0].error);
+    assert!(ex.steps[0].error.as_deref().unwrap().contains("no_reference_in_project"), "{:?}", ex.steps[0].error);
     let ex = run(&w, &validated(vec![summarize()], Scope::default(), Some(&empty.id)));
     assert!(ex.steps[0].error.as_deref().unwrap().contains("no_documents"), "{:?}", ex.steps[0].error);
 

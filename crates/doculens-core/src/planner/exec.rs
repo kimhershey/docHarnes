@@ -376,10 +376,15 @@ fn search_groups(deps: &ExecDeps<'_>, hits: &[crate::knowledge::SearchHit], grou
 
 /// Why a step has no document to work on, as a reason code the card puts in words: the kind of
 /// document the scope asks for is not there (`no_reference_in_scope` — "참고 자료" was named and the
-/// scope holds none; `no_work_in_scope`), or nothing matches at all (`no_documents`).
+/// scope holds none; `no_reference_in_project` — the project has no reference material of its own,
+/// and the common reference material is not what a command inside a project works on;
+/// `no_work_in_scope`), or nothing matches at all (`no_documents`).
 pub(super) fn no_documents(plan: &Plan) -> CoreError {
+    let f = &plan.scope.filter;
+    let in_project = f.project_id.as_deref().is_some_and(|p| !p.trim().is_empty());
     CoreError::Invalid(
-        match plan.scope.filter.role {
+        match f.role {
+            Some(crate::planner::RoleParam::Knowledge) if in_project => "no_reference_in_project",
             Some(crate::planner::RoleParam::Knowledge) => "no_reference_in_scope",
             Some(crate::planner::RoleParam::Work) => "no_work_in_scope",
             _ => "no_documents",

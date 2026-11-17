@@ -1297,6 +1297,7 @@
       "no_files": "Choose files or type paths.",
       "no_documents": "No documents selected.",
       "no_reference_in_scope": "There is no reference material in this scope. Ask again without naming reference material to cover every document in the scope.",
+      "no_reference_in_project": "This project has no reference material. Ask again without naming reference material to cover every document of the project; to cover the common reference material, switch the assistant's scope to All and ask again.",
       "no_work_in_scope": "There are no work documents in this scope. Ask again without naming work documents to cover every document in the scope.",
       "rotation": "Rotation must be a multiple of 90 degrees.",
       "collection_name_taken": "A reference group with that name already exists.",

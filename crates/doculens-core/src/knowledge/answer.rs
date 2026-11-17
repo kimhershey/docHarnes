@@ -1091,6 +1091,85 @@ fn is_marker_only(s: &str) -> bool {
         && t.contains('[')
 }
 
+/// What follows the heading on a line that opens the conflicts paragraph ("상충: …",
+/// "**Conflicts:** …"), if the line does.
+fn conflict_head(line: &str) -> Option<&str> {
+    let stripped = line.trim().trim_start_matches(['#', '*', '-', ' ', '>']).trim();
+    // The plural forms come first: "Conflicts: none" must not leave "s: none" behind.
+    ["상충", "Conflicts", "conflicts", "Conflict", "conflict"]
+        .iter()
+        .find_map(|head| stripped.strip_prefix(head))
+        .filter(|rest| rest.trim_start_matches(['*', ' ']).starts_with([':', '：']))
+        .map(|rest| rest.trim_start_matches([':', '：', '*', ' ']).trim())
+}
+
+/// Whether a conflicts paragraph only says that there is none: "없음", "해당 없음", and — what a small
+/// model writes when it is asked for a detailed reply — the first rule's "근거에 없음" or a sentence
+/// like "상충되는 내용은 없습니다". What a document lacks ("구판에는 한도 규정이 없습니다[2]") is a conflict.
+fn says_no_conflict(body: &str) -> bool {
+    let t =
+        body.trim().trim_start_matches(['-', '*', '•', ' ']).trim_end_matches(['.', '!', '。']).trim().to_lowercase();
+    if t.is_empty()
+        || matches!(
+            t.as_str(),
+            "없음"
+                | "없습니다"
+                | "해당 없음"
+                | "해당없음"
+                | "none"
+                | "n/a"
+                | "no"
+                | "no conflict"
+                | "no conflicts"
+                | "not in the sources"
+        )
+    {
+        return true;
+    }
+    if t.chars().count() > 40 || t.contains('[') || t.contains('\n') {
+        return false;
+    }
+    let none = ["없음", "없습니다", "없다", "없어요"].iter().any(|w| t.contains(w));
+    let about = ["근거", "상충", "충돌", "모순", "불일치", "해당", "다른 내용", "차이"].iter().any(|w| t.contains(w));
+    (none && about) || t.starts_with("no conflict") || t.starts_with("none ") || t.starts_with("there are no conflict")
+}
+
+/// The reply without a conflicts paragraph that only says there is none. The rule asks the model to
+/// leave the paragraph out then, but a reply asked for in detail (1.0.1) often ends in
+/// "상충:\n근거에 없음" — shown as part of the answer and, on the card, as a conflict warning.
+fn without_empty_conflicts(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut keep = vec![true; lines.len()];
+    let mut i = 0;
+    while i < lines.len() {
+        let Some(first) = conflict_head(lines[i]) else {
+            i += 1;
+            continue;
+        };
+        // The paragraph runs to the next blank line.
+        let mut end = i + 1;
+        while end < lines.len() && !lines[end].trim().is_empty() {
+            end += 1;
+        }
+        let mut body = first.to_string();
+        for l in &lines[i + 1..end] {
+            if !body.is_empty() {
+                body.push('\n');
+            }
+            body.push_str(l.trim());
+        }
+        if says_no_conflict(&body) {
+            keep[i..end].iter_mut().for_each(|k| *k = false);
+        }
+        i = end;
+    }
+    if keep.iter().all(|k| *k) {
+        return text.to_string();
+    }
+    let kept: Vec<&str> = lines.iter().zip(&keep).filter(|(_, k)| **k).map(|(l, _)| *l).collect();
+    kept.join("\n").trim().to_string()
+}
+
 /// Splits the answer into sentences with their citation numbers and pulls out
 /// the conflicts paragraph ("상충:" / "Conflict:").
 pub fn parse_answer(text: &str, max_source: u32) -> (Vec<AnswerSentence>, Option<String>) {
@@ -1105,20 +1184,11 @@ pub fn parse_answer(text: &str, max_source: u32) -> (Vec<AnswerSentence>, Option
             }
             continue;
         }
-        let stripped = line.trim_start_matches(['#', '*', '-', ' ', '>']).trim();
-        // The plural forms come first: "Conflicts: none" must not leave "s: none" behind.
-        let head_rest = ["상충", "Conflicts", "conflicts", "Conflict", "conflict"]
-            .iter()
-            .find_map(|head| stripped.strip_prefix(head))
-            .filter(|rest| rest.trim_start_matches(['*', ' ']).starts_with([':', '：']));
-        let is_conflict_head = head_rest.is_some();
-        if is_conflict_head || in_conflicts {
+        let head_rest = conflict_head(line);
+        if head_rest.is_some() || in_conflicts {
             in_conflicts = true;
             // The heading's own line continues after the colon; later lines belong to the paragraph whole.
-            let body = match head_rest {
-                Some(rest) => rest.trim_start_matches([':', '：', '*', ' ']).trim(),
-                None => line,
-            };
+            let body = head_rest.unwrap_or(line);
             if !body.is_empty() {
                 let c = conflicts.get_or_insert_with(String::new);
                 if !c.is_empty() {
@@ -1197,14 +1267,7 @@ pub fn parse_answer(text: &str, max_source: u32) -> (Vec<AnswerSentence>, Option
             sentences.push(AnswerSentence { text: p.to_string(), citations: cites });
         }
     }
-    let conflicts = conflicts.filter(|c| {
-        let t = c.trim().trim_end_matches(['.', '!']).trim().to_lowercase();
-        !t.is_empty()
-            && !matches!(
-                t.as_str(),
-                "없음" | "없습니다" | "해당 없음" | "해당없음" | "none" | "n/a" | "no" | "no conflict" | "no conflicts"
-            )
-    });
+    let conflicts = conflicts.filter(|c| !says_no_conflict(c));
     (sentences, conflicts)
 }
 
@@ -1302,7 +1365,10 @@ pub fn answer(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn FnM
             Err(e) => return Err(e),
         }
     };
-    out.text = resp.content.trim().to_string();
+    // The prompts that look documents up ask for a "상충:" paragraph: one that only says there is none
+    // is not part of the answer. A text the user brought (다듬기 · 번역) comes back as the model wrote it.
+    let reply = resp.content.trim();
+    out.text = if req.retrieve && !chat { without_empty_conflicts(reply) } else { reply.to_string() };
     // The UI marks an answer whose text or reply was cut instead of showing it as complete.
     out.truncated = Truncation::of(input_cut, resp.finish_reason.as_deref() == Some("length"));
     if mixed {
@@ -1341,7 +1407,11 @@ fn summary_instruction(mode: SummaryMode, lang: Lang, reply_tokens: u32) -> Stri
         (SummaryMode::OneLine, Lang::Ko) => "문서 전체를 한 문장으로 요약하세요.".into(),
         (SummaryMode::KeyPoints, Lang::Ko) => format!(
             "핵심 내용을 {items}개 이내의 개조식(- 항목)으로 요약하세요. 금액·기한·조건 같은 수치는 그대로 적으세요.{}",
-            if items > 5 { " 항목마다 한두 문장으로 구체적으로 쓰고, 중요한 내용을 빠뜨리지 마세요." } else { "" }
+            if items > 5 {
+                " 항목마다 한두 문장으로 구체적으로 쓰고, 중요한 내용을 빠뜨리지 마세요. 머리말·맺음말 없이 항목만 쓰세요."
+            } else {
+                ""
+            }
         ),
         (SummaryMode::OnePage, Lang::Ko) => format!(
             "실무자가 읽을 {} 분량({sentences}문장 내외)의 서술식 요약을 작성하세요. 절·조항 구조를 따르고 수치는 그대로 적으세요.",
@@ -1350,7 +1420,11 @@ fn summary_instruction(mode: SummaryMode, lang: Lang, reply_tokens: u32) -> Stri
         (SummaryMode::OneLine, Lang::En) => "Summarise the whole document in one sentence.".into(),
         (SummaryMode::KeyPoints, Lang::En) => format!(
             "Summarise the key points as at most {items} bullet items (- item). Keep amounts, deadlines and conditions verbatim.{}",
-            if items > 5 { " Give each item a sentence or two and leave nothing important out." } else { "" }
+            if items > 5 {
+                " Give each item a sentence or two and leave nothing important out. Write the items only, without an introduction or a closing line."
+            } else {
+                ""
+            }
         ),
         (SummaryMode::OnePage, Lang::En) => format!(
             "Write a {} narrative summary (about {sentences} sentences) following the document's sections; keep figures verbatim.",
@@ -1450,7 +1524,7 @@ pub fn summarize(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn 
             Ok(resp) => {
                 prompt_tokens += resp.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0);
                 completion_tokens += resp.usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0);
-                partials.push(resp.content.trim().to_string());
+                partials.push(without_empty_conflicts(resp.content.trim()));
             }
             Err(e) if context_overflow(&e) => {
                 if b - a > 1 {
@@ -1521,7 +1595,7 @@ pub fn summarize(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn 
                 Ok(resp) => {
                     prompt_tokens += resp.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0);
                     completion_tokens += resp.usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0);
-                    merged.push(resp.content.trim().to_string());
+                    merged.push(without_empty_conflicts(resp.content.trim()));
                 }
                 Err(e) if context_overflow(&e) => {
                     log::info!(
@@ -1553,7 +1627,7 @@ pub fn summarize(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn 
         }
         partials = merged;
     }
-    let text = partials.pop().unwrap_or_default();
+    let text = without_empty_conflicts(&partials.pop().unwrap_or_default());
     let (sentences, conflicts) = parse_answer(&text, sources.len() as u32);
     let mut out = Answer {
         kind: AnswerKind::Summary,
@@ -1677,7 +1751,7 @@ pub fn compare(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn Fn
             Err(e) => return Err(e),
         }
     };
-    let text = resp.content.trim().to_string();
+    let text = without_empty_conflicts(resp.content.trim());
     let (sentences, conflicts) = parse_answer(&text, sources.len() as u32);
     let mut out = Answer {
         kind: AnswerKind::Compare,
@@ -1741,6 +1815,41 @@ mod tests {
         assert_eq!(c.as_deref(), Some("the 2023 edition caps it at 120,000 [2]."));
         let (_, c) = parse_answer("Answer [1].\n\nconflicts: the editions differ [2].", 2);
         assert_eq!(c.as_deref(), Some("the editions differ [2]."));
+    }
+
+    /// 1.0.1: asked for a detailed reply, the model ends it with "상충:\n근거에 없음" (real run, Gemma 4
+    /// E4B) — the paragraph was part of the answer and a conflict warning on the card.
+    #[test]
+    fn a_conflicts_paragraph_that_says_there_is_none_is_dropped() {
+        let reply = "- 계약 금액은 132,000,000원이다 [1]。\n- 하자보수 기간은 12개월이다 [2]。\n\n상충:\n근거에 없음";
+        let clean = without_empty_conflicts(reply);
+        assert_eq!(clean, "- 계약 금액은 132,000,000원이다 [1]。\n- 하자보수 기간은 12개월이다 [2]。");
+        let (s, c) = parse_answer(&clean, 2);
+        assert!(c.is_none() && s.len() == 2, "{s:?} {c:?}");
+        // (the parser alone does not take it for a conflict either)
+        assert!(parse_answer(reply, 2).1.is_none());
+        for none in [
+            "상충: 없음",
+            "**상충:** 상충되는 내용은 없습니다.",
+            "상충:\n해당 사항 없음",
+            "Conflict: not in the sources",
+            "Conflicts: There are no conflicts.",
+        ] {
+            assert_eq!(without_empty_conflicts(&format!("답변[1].\n\n{none}")), "답변[1].", "{none}");
+        }
+        // A paragraph that says how the documents differ stays — also when one of them lacks the rule.
+        for real in [
+            "상충: 구판에는 한도 규정이 없습니다[2].",
+            "상충: 2023년판은 한도를 120,000원으로 정합니다[2].",
+            "상충:\n계약서는 30일[1], 과업지시서는 45일[2]로 다릅니다.",
+        ] {
+            let text = format!("답변[1].\n\n{real}");
+            assert_eq!(without_empty_conflicts(&text), text, "{real}");
+            assert!(parse_answer(&text, 2).1.is_some(), "{real}");
+        }
+        // What follows the paragraph is kept.
+        assert_eq!(without_empty_conflicts("답변[1].\n\n상충: 없음\n\n참고: 끝."), "답변[1].\n\n\n참고: 끝.");
+        assert_eq!(without_empty_conflicts("답변[1].\n\n상충:\n- 없음"), "답변[1].");
     }
 
     #[test]

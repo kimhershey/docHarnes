@@ -661,7 +661,7 @@ describe("planner (rules, validate, guard)", () => {
     // "참고 자료만" where there is none: the reason says what is missing.
     const none = await planner.runPlan(planOf([summarize], { project_id: empty.id, role: "knowledge" }), ctx, null, () => undefined);
     expect(none.steps[0]).toMatchObject({ status: "failed" });
-    expect(none.steps[0]!.error).toContain("no_reference_in_scope");
+    expect(none.steps[0]!.error).toContain("no_reference_in_project");
     // A sentence that adds the reference material is not read as "reference material only".
     const added = planner.planText("한빛 포털 프로젝트 참고자료도 포함해서 요약해줘", ctx);
     expect(added.plan.scope.filter).toMatchObject({ project_id: hanbit.id, with_reference: true });

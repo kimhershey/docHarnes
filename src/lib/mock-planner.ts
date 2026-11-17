@@ -4794,7 +4794,8 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
       // (`exec::no_documents`: which kind of document the scope asked for and does not hold)
       if (docs.length === 0) {
         const kind = plan.scope.filter?.role;
-        const code = kind === "knowledge" ? "no_reference_in_scope" : kind === "work" ? "no_work_in_scope" : "no_documents";
+        const inProject = !!plan.scope.filter?.project_id?.trim();
+        const code = kind === "knowledge" ? (inProject ? "no_reference_in_project" : "no_reference_in_scope") : kind === "work" ? "no_work_in_scope" : "no_documents";
         throw err(code === "no_documents" ? "no_documents" : "invalid", code);
       }
       const mode = op.length === "short" ? "one_line" : op.length === "long" ? "one_page" : "key_points";

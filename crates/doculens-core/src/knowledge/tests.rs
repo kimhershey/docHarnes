@@ -594,7 +594,10 @@ fn grounded_answers_cite_sources_and_handle_no_evidence() {
     assert_eq!(streamed, chat.reply);
     assert!(!a.no_evidence && !a.used_general_knowledge);
     assert!(!a.sources.is_empty() && a.sources[0].document_id == "reg2", "{:?}", a.sources);
-    assert_eq!(a.sentences.len(), 3, "{:#?}", a.sentences);
+    // (1.0.1: the paragraph that only says "none" is not part of the answer any more — it used to be
+    // shown as its last sentence)
+    assert_eq!(a.sentences.len(), 2, "{:#?}", a.sentences);
+    assert!(!a.text.contains("상충"), "{}", a.text);
     assert_eq!(a.sentences[0].citations, vec![1]);
     assert_eq!(
         a.sentences[1].citations,
@@ -861,6 +864,20 @@ fn a_text_only_request_skips_retrieval_and_cites_nothing() {
     req.retrieve = true;
     let b = answer(&deps, &req, &mut |_| true).unwrap();
     assert!(!b.sources.is_empty() || b.no_evidence);
+}
+
+/// 1.0.1: a "상충: 없음" paragraph is dropped from an answer that looked documents up (the prompt asks
+/// for that paragraph) — not from a text the user brought, which may carry such a line of its own.
+#[test]
+fn a_text_the_user_brought_keeps_its_own_lines() {
+    let w = World::new();
+    let chat = ScriptedChat { reply: "검토 결과\n\n상충: 없음\n\n이상입니다.".into(), model: "m".into() };
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None, context_size: None };
+    let mut req = AnswerRequest::question("다음 글을 다듬어줘: 검토결과 상충: 없음 이상임");
+    req.retrieve = false;
+    let a = answer(&deps, &req, &mut |_| true).unwrap();
+    assert_eq!(a.text, chat.reply);
 }
 
 #[test]
