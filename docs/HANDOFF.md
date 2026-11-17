@@ -1990,7 +1990,7 @@ P6·P7 항목.
   실패 화면: 카드 "부작용: 없음 · 대상 문서 0건", 경고 "문장대로 참고 자료만 대상으로 합니다 (scope.filter.role)", 결과 "요약 — 실패: 선택한 문서가 없습니다". 사용자가 친 문장은 받지 못했다.
 - **원인**: (1) 문장에 "참고 자료"라는 말만 있으면 `guard::where_to_look`이 대상을 참고 자료로 좁혔다("참고자료도 포함해서"도). (2) 프로젝트 범위는 업무 문서만이었다(`scope::resolve`) — 참고 자료만 든 프로젝트는 요약할 문서가 없었다.
   (3) 답변 1,200 · 요약 1,500 토큰 한도와 "간결하게 / 5개 이내 / 10문장 내외" 지시문이 근거 토큰 예산과 무관했고, 묶음 요약은 문서별 요약을 700자로 잘라 넣었다.
-- **한 일**(커밋 67a22d7 + 뒤따르는 커밋):
+- **한 일**(커밋 67a22d7 · cb262f7):
   - `ScopeFilter.with_reference` — 프로젝트 범위에서 읽기만 하는 계획(`validate::only_reads`: 검색 · 질문 · 요약 · 설명 · 집계 · 내보내기)은 프로젝트의 참고 자료 묶음도 대상. `validate::project_reference`가 범위가 정해지는 곳마다 다시 계산(모델은 쓰지 않는다).
     `scope::resolve`는 프로젝트 안에서 문서의 종류를 그 프로젝트에 든 자리(업무 목록 / 참고 자료 묶음)로 정한다. 카드에 "(참고 자료 N건 포함)"(`PlanPreview.reference_count`).
   - `guard::kind_said`(`Only` / `Also` / `Nothing`) — "참고자료도 · 까지 · 와 · 포함해서"는 종류 조건이 아니고 검색어에서도 빠진다.
@@ -2005,7 +2005,8 @@ P6·P7 항목.
   이 실행에서 찾은 것: 자세히 쓰게 하면 모델이 "다음은 … 요약한 것입니다" 머리말과 "상충: 근거에 없음" 꼬리를 붙인다 → `answer::without_empty_conflicts` / `says_no_conflict`(상충이 없다는 단락은 답변 글과 `Answer.conflicts`에서 뺀다 —
   기본 설정의 "상충: 없음"도 이제 답변 글에 남지 않는다), 긴 요약 지시문에 "머리말·맺음말 없이 항목만". 고친 뒤 24,000으로 다시 돌려 확인(위 수치가 고친 뒤 값).
   GPU · 큰 컨텍스트(16,384 이상), 수십 쪽 문서, 사용자 문서로는 재지 못했다. 준비물: 엔진 `/tmp/engine/bin/llama-server`, 모델 폴더, ko-dic(`node scripts/fetch-kodic.mjs --dest /tmp/kodic`) — 환경이 사라지면 다시 받는다(`eval/README.md`).
-- **검증**: 로컬 전체 검증 — `cargo fmt --check`, clippy(1.100), `cargo test --workspace`(코어 557 통과 · 8 ignored), `npm run typecheck`, vitest 358, Playwright 142, 골든 게이트 170/179 = 95.0 %(변함없음). CI는 푸시한 커밋에서 확인한다(아래 줄에 기록).
+- **검증**: 로컬 전체 검증 — `cargo fmt --check`, clippy(1.100), `cargo test --workspace`(코어 557 통과 · 8 ignored), `npm run typecheck`, vitest 358, Playwright 142, 골든 게이트 170/179 = 95.0 %(변함없음). CI 7개 잡 통과: 커밋 cb262f7 — run 44004722358(push) · 44004728455(pull_request); 67a22d7 — 43998652982 · 43998661567; 버전 커밋 237bfb0 — 43993829785 · 43995768312.
+  `release/1.0.1`에는 사용자가 연 PR kimhershey/docHarnes#34가 있다(2026-11-17 01:27 UTC, 열림).
 - **이 판에서 고치지 않은 것**:
   - **PDF 그림 속 글자**(사용자 보고 "PDF OCR 아직 안되는데"; 답: 그림 속 글자만 안 됨 · '분류 + OCR' 또는 표준 처리를 실행했음 · **"아직 고치지 않기"**). 진단만 했다 — 읽히지 않는 경우:
     글자 층이 얇게 깔린 스캔(쪽에 글자 층이 조금이라도 있으면 `ocr_digital_pdf` 없이는 쪽 OCR을 하지 않는다), 폼 XObject 안에 든 그림, 띠 · 타일로 쪼개 저장된 그림, 그림 위에 글자 층 낱말이 3개 이상 있는 경우(`figures::choose`),
