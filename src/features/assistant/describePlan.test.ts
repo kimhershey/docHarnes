@@ -163,9 +163,16 @@ describe("impact line", () => {
       requires_confirmation: true,
     };
     const impact = impactOf(p, preview);
-    expect(impact).toEqual({ moves: 27, deletes: 0, exports: 0, drafts: 0, projects: 0, documents: 31 });
+    expect(impact).toEqual({ moves: 27, deletes: 0, exports: 0, drafts: 0, projects: 0, documents: 31, reference: 0 });
     expect(impactLine(impact, t)).toBe("부작용: 파일 이동 ≤27건(저널 기록, 되돌리기 가능) · 대상 문서 31건");
     expect(impactLine(impactOf(plan([{ op: "search", query: "q" }]), null), t)).toBe("부작용: 없음 · 대상 문서 0건");
+  });
+
+  it("says how many of the documents are the project's reference material (1.0.1)", () => {
+    const p = plan([{ op: "summarize" }]);
+    const preview: PlanPreview = { document_count: 5, document_ids: [], steps: [], requires_confirmation: false, uses_scope: true, reference_count: 2 };
+    expect(impactLine(impactOf(p, preview), t)).toBe("부작용: 없음 · 대상 문서 5건(참고 자료 2건 포함)");
+    expect(impactLine(impactOf(p, { ...preview, reference_count: 0 }), t)).toBe("부작용: 없음 · 대상 문서 5건");
   });
 });
 

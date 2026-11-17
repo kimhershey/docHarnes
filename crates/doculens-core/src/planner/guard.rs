@@ -1008,28 +1008,139 @@ fn names_a_place(text: &str, ctx: &super::PlanContext) -> bool {
         })
 }
 
+/// The words around a phrase of the sentence, as the user wrote them: the word before it, the
+/// particle attached to it ("참고자료**도**") and the word after it ("참고자료 **포함해서**"), all in
+/// lower case. `start..end` is the phrase in the compact form of `text` ([`super::compact`]).
+fn around(text: &str, start: usize, end: usize) -> (String, String, String) {
+    // Compact offsets → offsets in the text (a compact character is one alphanumeric character).
+    let (mut seen, mut from, mut to) = (0usize, None, text.len());
+    for (i, c) in text.char_indices() {
+        if seen >= end {
+            to = i;
+            break;
+        }
+        if c.is_alphanumeric() {
+            if seen >= start && from.is_none() {
+                from = Some(i);
+            }
+            seen += c.to_lowercase().map(char::len_utf8).sum::<usize>();
+        }
+    }
+    let word = |t: &str| t.chars().take_while(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect::<String>();
+    let rest = &text[to..];
+    let attached = word(rest);
+    let next = word(rest[attached.len().min(rest.len())..].trim_start_matches(|c: char| !c.is_alphanumeric()));
+    // The word before the phrase; an article is not it ("including the reference documents").
+    let last_word = |head: &str| -> (String, usize) {
+        let head = head.trim_end_matches(|c: char| !c.is_alphanumeric());
+        let word: String =
+            head.chars().rev().take_while(|c| c.is_alphanumeric()).collect::<Vec<_>>().into_iter().rev().collect();
+        (word.to_lowercase(), head.len() - word.len())
+    };
+    let (mut before, at) = last_word(&text[..from.unwrap_or(0)]);
+    if ["the", "a", "an", "all"].contains(&before.as_str()) {
+        before = last_word(&text[..at]).0;
+    }
+    (before, attached, next)
+}
+
 /// The kind of document the user's words name (0.8.1): "참고 자료에서 …" → reference material,
 /// "업무 문서만 …" → work documents. Both named: the one that is not ruled out ("참고 자료 말고").
-fn kind_named(text: &str) -> Option<super::RoleParam> {
+///
+/// 1.0.1: a kind that is named as one more thing to cover — "참고자료**도**", "참고자료**까지**",
+/// "참고자료**와** 문서", "참고자료 **포함해서**" — is not a restriction. The sentence used to be read
+/// as "참고 자료만", and a summary of a project without reference material failed with no document.
+/// What a sentence says about the kind of document to look at.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum KindSaid {
+    /// One kind, as the place to look: "참고 자료에서 …", "업무 문서만 …".
+    Only(super::RoleParam),
+    /// A kind as one more thing to cover, or both kinds: "참고자료도 포함해서 …".
+    Also,
+    Nothing,
+}
+
+fn kind_said(text: &str) -> KindSaid {
     const REFERENCE: &[&str] =
         &["참고자료", "참고문서", "레퍼런스", "referencematerial", "referencedocument", "references"];
     const WORK: &[&str] = &["업무문서", "작업문서", "workdocument"];
     const NOT: &[&str] = &["말고", "빼고", "제외", "아니라", "except", "notthe", "butnot"];
-    let said = super::compact(&super::rules::user_words(text));
-    let find = |words: &[&str]| words.iter().filter_map(|w| said.find(w).map(|at| at + w.len())).min();
+    // Particles that add ("도", "까지") or join ("와 문서"), the words that say "as well" after the
+    // kind, and the English ones that come before it ("including reference material").
+    const JOINED: &[&str] = &["도", "까지", "와", "과", "랑", "이랑", "하고", "및"];
+    const AS_WELL: &[&str] = &["포함", "및", "그리고", "같이", "함께", "and", "plus", "too", "aswell"];
+    const LEADING: &[&str] = &["including", "with", "plus", "and", "also"];
+    let words = super::rules::user_words(text);
+    let said = super::compact(&words);
+    // The first place a kind is named: `(start, end)` in the compact text.
+    let find = |words: &[&str]| words.iter().filter_map(|w| said.find(w).map(|at| (at, at + w.len()))).min();
     let ruled_out = |end: usize| {
         let after: String = said[end..].chars().take(6).collect();
         NOT.iter().any(|n| after.contains(n))
     };
+    let added = |(start, end): (usize, usize)| {
+        let (before, attached, next) = around(&words, start, end);
+        // (an English plural: "reference documents and …")
+        let english = said[..end].ends_with(|c: char| c.is_ascii_alphabetic());
+        let attached = if english { attached.trim_start_matches('s') } else { attached.as_str() };
+        JOINED.contains(&attached)
+            || attached.starts_with("포함")
+            || AS_WELL.iter().any(|w| next.starts_with(w))
+            || LEADING.contains(&before.as_str())
+    };
+    let only = |kind: super::RoleParam, place: (usize, usize)| match (ruled_out(place.1), added(place)) {
+        (true, _) => KindSaid::Nothing,
+        (false, true) => KindSaid::Also,
+        (false, false) => KindSaid::Only(kind),
+    };
     match (find(REFERENCE), find(WORK)) {
-        (Some(r), None) => (!ruled_out(r)).then_some(super::RoleParam::Knowledge),
-        (None, Some(w)) => (!ruled_out(w)).then_some(super::RoleParam::Work),
-        (Some(r), Some(w)) => match (ruled_out(r), ruled_out(w)) {
-            (true, false) => Some(super::RoleParam::Work),
-            (false, true) => Some(super::RoleParam::Knowledge),
-            _ => None,
+        (Some(r), None) => only(super::RoleParam::Knowledge, r),
+        (None, Some(w)) => only(super::RoleParam::Work, w),
+        (Some(r), Some(w)) => match (ruled_out(r.1), ruled_out(w.1)) {
+            (true, false) => KindSaid::Only(super::RoleParam::Work),
+            (false, true) => KindSaid::Only(super::RoleParam::Knowledge),
+            (false, false) => KindSaid::Also,
+            (true, true) => KindSaid::Nothing,
         },
-        (None, None) => None,
+        (None, None) => KindSaid::Nothing,
+    }
+}
+
+/// A search query without the words that named the kind of document to look at ("참고 자료에서 납품
+/// 기한" → "납품 기한"); with `also`, without the words that added it ("참고자료 포함해서 …") as well.
+/// A query that would be left empty stays as it was.
+fn query_without_kind(query: &str, also: bool) -> String {
+    let cleaned = [
+        "참고 자료에서",
+        "참고자료에서",
+        "참고 자료만",
+        "참고자료만",
+        "참고 자료",
+        "참고자료",
+        "업무 문서에서",
+        "업무문서에서",
+        "업무 문서만",
+        "업무 문서",
+        "업무문서",
+    ]
+    .iter()
+    .fold(query.to_string(), |q, w| q.replace(w, " "));
+    // (the phrase rules may have taken "자료" / "문서" out of the query already)
+    let cleaned = cleaned
+        .split_whitespace()
+        .filter(|w| !["참고", "업무", "에서", "만", "참고에서", "업무에서"].contains(w))
+        .filter(|w| {
+            !also
+                || !(w.starts_with("포함")
+                    || ["도", "까지", "와", "과", "랑", "같이", "함께", "및", "참고도", "참고까지", "참고와", "참고랑"]
+                        .contains(w))
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if cleaned.is_empty() {
+        query.to_string()
+    } else {
+        cleaned
     }
 }
 
@@ -1052,13 +1163,7 @@ fn project_named<'a>(text: &str, ctx: &'a super::PlanContext) -> Option<&'a supe
 
 /// Ops that only read the documents in scope: the scope may be narrowed for them from the user's words.
 fn reads_documents(op: &Op) -> bool {
-    match op {
-        Op::Search { .. } | Op::Summarize { .. } | Op::Explain { .. } | Op::Aggregate { .. } | Op::Export { .. } => {
-            true
-        }
-        Op::Answer { knowledge, mode, .. } => *knowledge != Some(false) && mode.is_none(),
-        _ => false,
-    }
+    super::validate::only_reads(op)
 }
 
 /// 0.8.1: what the user's words say about where to look goes into a plan that left it out — the kind
@@ -1092,35 +1197,21 @@ pub fn where_to_look(text: &str, plan: &mut Plan, ctx: &super::PlanContext, ko: 
     }
     let named_documents = !plan.scope.doc_ids.is_empty() || plan.scope.folder.is_some();
     if plan.scope.filter.role.is_none() {
-        if let Some(kind) = kind_named(text) {
+        let said_kind = kind_said(text);
+        if said_kind == KindSaid::Also {
+            // "참고자료 포함해서 납품 기한 찾아줘": both kinds are looked at; the words are not the query.
+            for op in &mut plan.operations {
+                if let Op::Search { query, .. } = op {
+                    *query = query_without_kind(query, true);
+                }
+            }
+        }
+        if let KindSaid::Only(kind) = said_kind {
             plan.scope.filter.role = Some(kind);
             // (the words that named the kind are not what to search for)
             for op in &mut plan.operations {
                 if let Op::Search { query, .. } = op {
-                    let cleaned = [
-                        "참고 자료에서",
-                        "참고자료에서",
-                        "참고 자료만",
-                        "참고자료만",
-                        "참고 자료",
-                        "참고자료",
-                        "업무 문서에서",
-                        "업무문서에서",
-                        "업무 문서만",
-                        "업무 문서",
-                        "업무문서",
-                    ]
-                    .iter()
-                    .fold(query.clone(), |q, w| q.replace(w, " "));
-                    // (the phrase rules may have taken "자료" / "문서" out of the query already)
-                    let cleaned = cleaned
-                        .split_whitespace()
-                        .filter(|w| !["참고", "업무", "에서", "만", "참고에서", "업무에서"].contains(w))
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    if !cleaned.is_empty() {
-                        *query = cleaned;
-                    }
+                    *query = query_without_kind(query, false);
                 }
             }
             let label = match (kind, ko) {
@@ -1154,6 +1245,8 @@ pub fn where_to_look(text: &str, plan: &mut Plan, ctx: &super::PlanContext, ko: 
             ));
         }
     }
+    // (a project or a kind read from the sentence changes what the project scope covers)
+    super::validate::project_reference(plan);
     notes
 }
 
@@ -1438,6 +1531,72 @@ mod tests {
         let mut p = model_plan(vec![search("납품 기한")]);
         codes("참고 자료 말고 업무 문서에서 납품 기한 찾아줘", &mut p);
         assert_eq!(p.scope.filter.role, Some(crate::planner::RoleParam::Work));
+        // 1.0.1: a kind named as one more thing to cover is not a restriction (the card used to say
+        // "문장대로 참고 자료만 대상으로 합니다", and the summary failed with no document).
+        for said in [
+            "참고자료도 포함해서 요약해줘",
+            "참고 자료까지 요약해줘",
+            "참고자료와 문서를 모두 요약해줘",
+            "참고자료 포함해서 프로젝트 요약해줘",
+            "참고자료를 포함해서 요약해줘",
+            "참고 자료랑 같이 요약해줘",
+            "업무 문서도 같이 요약해줘",
+            "참고자료와 업무문서를 둘 다 요약해줘",
+            "summarize the documents and reference material",
+            "summarize it including the reference documents",
+            "summarize the reference material and the contracts",
+        ] {
+            let mut p = model_plan(vec![Op::Summarize { target: None, length: None, group_by: None }]);
+            assert!(codes(said, &mut p).is_empty(), "{said}");
+            assert_eq!(p.scope.filter.role, None, "{said}");
+        }
+        // … while a kind that is the place to look or the thing asked for still is.
+        for (said, kind) in [
+            ("참고 자료 요약해줘", crate::planner::RoleParam::Knowledge),
+            ("참고자료만 요약해줘", crate::planner::RoleParam::Knowledge),
+            ("참고자료를 요약해줘", crate::planner::RoleParam::Knowledge),
+            ("참고 자료 중에서 과업 범위를 요약해줘", crate::planner::RoleParam::Knowledge),
+            ("참고자료 과업 범위 요약", crate::planner::RoleParam::Knowledge),
+            ("summarize the reference material", crate::planner::RoleParam::Knowledge),
+            ("understand reference material first", crate::planner::RoleParam::Knowledge),
+            ("업무문서를 요약해줘", crate::planner::RoleParam::Work),
+        ] {
+            let mut p = model_plan(vec![Op::Summarize { target: None, length: None, group_by: None }]);
+            assert_eq!(codes(said, &mut p), vec!["scope_filled"], "{said}");
+            assert_eq!(p.scope.filter.role, Some(kind), "{said}");
+        }
+        // Inside a project a plan that only reads covers both kinds unless the sentence names one.
+        let in_project = |ops: Vec<Op>| {
+            let mut p = model_plan(ops);
+            p.scope.filter.project_id = Some("p1".into());
+            p
+        };
+        let mut p = in_project(vec![Op::Summarize { target: None, length: None, group_by: None }]);
+        codes("참고자료도 포함해서 요약해줘", &mut p);
+        assert!(p.scope.filter.with_reference && p.scope.filter.role.is_none());
+        let mut p = in_project(vec![Op::Summarize { target: None, length: None, group_by: None }]);
+        p.scope.filter.with_reference = true;
+        codes("참고 자료만 요약해줘", &mut p);
+        assert!(!p.scope.filter.with_reference, "a kind from the sentence replaces the default of the project scope");
+        let mut p = model_plan(vec![Op::Summarize { target: None, length: None, group_by: None }]);
+        codes("한빛 포털 프로젝트 요약해줘", &mut p);
+        assert!(p.scope.filter.with_reference && p.scope.filter.project_id.as_deref() == Some("p1"));
+        // The words that add a kind are not what to search for either.
+        for (said, query, left) in [
+            ("참고자료 포함해서 납품 기한 찾아줘", "참고자료 포함해서 납품 기한", "납품 기한"),
+            ("참고자료 포함해서 납품 기한 찾아줘", "참고 포함해서 납품 기한", "납품 기한"),
+            ("참고 자료도 같이 납품 기한 찾아줘", "참고 자료도 같이 납품 기한", "납품 기한"),
+            ("참고자료와 업무문서에서 납품 기한 찾아줘", "참고자료와 업무문서에서 납품 기한", "납품 기한"),
+        ] {
+            let mut p = model_plan(vec![search(query)]);
+            assert!(codes(said, &mut p).is_empty(), "{said}");
+            assert!(
+                matches!(&p.operations[0], Op::Search { query, .. } if query == left),
+                "{said}: {:?}",
+                p.operations
+            );
+        }
+
         // Nothing said, or an op that is about reference groups: untouched.
         let mut p = model_plan(vec![search("납품 기한")]);
         assert!(codes("납품 기한 검색해줘", &mut p).is_empty() && p.scope.filter.role.is_none());

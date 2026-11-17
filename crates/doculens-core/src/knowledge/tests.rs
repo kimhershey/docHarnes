@@ -594,7 +594,10 @@ fn grounded_answers_cite_sources_and_handle_no_evidence() {
     assert_eq!(streamed, chat.reply);
     assert!(!a.no_evidence && !a.used_general_knowledge);
     assert!(!a.sources.is_empty() && a.sources[0].document_id == "reg2", "{:?}", a.sources);
-    assert_eq!(a.sentences.len(), 3, "{:#?}", a.sentences);
+    // (1.0.1: the paragraph that only says "none" is not part of the answer any more — it used to be
+    // shown as its last sentence)
+    assert_eq!(a.sentences.len(), 2, "{:#?}", a.sentences);
+    assert!(!a.text.contains("상충"), "{}", a.text);
     assert_eq!(a.sentences[0].citations, vec![1]);
     assert_eq!(
         a.sentences[1].citations,
@@ -707,11 +710,18 @@ struct LimitedChat {
     limit: u32,
     reply: String,
     sizes: std::sync::Mutex<Vec<u32>>,
+    /// Refused requests that merge partial summaries.
+    merges_refused: std::sync::Mutex<u32>,
 }
 
 impl LimitedChat {
     fn new(limit: u32, reply: &str) -> LimitedChat {
-        LimitedChat { limit, reply: reply.into(), sizes: std::sync::Mutex::new(Vec::new()) }
+        LimitedChat {
+            limit,
+            reply: reply.into(),
+            sizes: std::sync::Mutex::new(Vec::new()),
+            merges_refused: std::sync::Mutex::new(0),
+        }
     }
     fn sizes(&self) -> Vec<u32> {
         self.sizes.lock().unwrap().clone()
@@ -730,6 +740,9 @@ impl ChatBackend for LimitedChat {
             .sum();
         self.sizes.lock().unwrap().push(size);
         if size > self.limit {
+            if req.messages.iter().any(|m| m["content"].as_str().is_some_and(|c| c.contains("[부분 요약]"))) {
+                *self.merges_refused.lock().unwrap() += 1;
+            }
             return Err(CoreError::engine(format!(
                 "/v1/chat/completions: HTTP 400: request ({size} tokens) exceeds the available context size ({} tokens), try increasing it",
                 self.limit
@@ -851,6 +864,20 @@ fn a_text_only_request_skips_retrieval_and_cites_nothing() {
     req.retrieve = true;
     let b = answer(&deps, &req, &mut |_| true).unwrap();
     assert!(!b.sources.is_empty() || b.no_evidence);
+}
+
+/// 1.0.1: a "상충: 없음" paragraph is dropped from an answer that looked documents up (the prompt asks
+/// for that paragraph) — not from a text the user brought, which may carry such a line of its own.
+#[test]
+fn a_text_the_user_brought_keeps_its_own_lines() {
+    let w = World::new();
+    let chat = ScriptedChat { reply: "검토 결과\n\n상충: 없음\n\n이상입니다.".into(), model: "m".into() };
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None, context_size: None };
+    let mut req = AnswerRequest::question("다음 글을 다듬어줘: 검토결과 상충: 없음 이상임");
+    req.retrieve = false;
+    let a = answer(&deps, &req, &mut |_| true).unwrap();
+    assert_eq!(a.text, chat.reply);
 }
 
 #[test]
@@ -1826,4 +1853,111 @@ fn chat_and_general_styles_answer_without_claiming_evidence() {
     assert_eq!(serde_json::from_value::<AnswerRequest>(json).unwrap().style, AnswerStyle::Chat);
     let json = serde_json::json!({ "question": "안녕" });
     assert_eq!(serde_json::from_value::<AnswerRequest>(json).unwrap().style, AnswerStyle::Grounded);
+}
+
+/// 1.0.1 (user report 2026-11-17: "토큰 많이 설정했는데 출력이 너무 짧음"): the reply limit and what the
+/// prompts ask for follow the evidence budget — they stayed at 1,200 / 1,500 tokens, "간결하게" and "5개
+/// 이내" whatever the budget was.
+#[test]
+fn the_length_of_a_reply_follows_the_evidence_budget() {
+    let w = World::new();
+    let ask = |context_tokens: u32, context_size: Option<u32>| -> (u32, String, usize) {
+        let chat = RecordingChat::new("출장비는 실비로 정산한다 [1].", Some("stop"));
+        let deps = AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None, context_size };
+        let mut req = AnswerRequest::question("출장비 정산 기준은?");
+        req.save = false;
+        req.context_tokens = context_tokens;
+        let a = answer(&deps, &req, &mut |_| true).unwrap();
+        (chat.last().1, chat.last_system(), a.sources.len())
+    };
+    // The default budget: as before.
+    let (reply, system, _) = ask(6_000, Some(16_384));
+    assert_eq!(reply, 1_200);
+    assert!(system.contains("한국어로 간결하게 답합니다."), "{system}");
+    // The largest budget: four times as long, asked for in detail.
+    let (reply, system, _) = ask(24_000, Some(32_768));
+    assert_eq!(reply, 4_800);
+    assert!(system.contains("자세히 설명하고") && !system.contains("간결하게"), "{system}");
+    // … never more than a third of the model's context, so that the evidence still has its room.
+    let (reply, _, sources) = ask(24_000, Some(8_192));
+    assert_eq!(reply, 2_730);
+    assert!(sources >= 1);
+    let (reply, _, _) = ask(12_000, Some(32_768));
+    assert_eq!(reply, 2_400);
+    // (a context too small for the default keeps the default, as before)
+    assert_eq!(ask(24_000, Some(3_000)).0, 1_200);
+    assert_eq!(ask(24_000, None).0, 4_800);
+
+    // A summary: 1,500 tokens and five items by default, more of both with a larger budget.
+    add_long_regulation(&w);
+    let summary = |context_tokens: u32, mode: SummaryMode, context_size: Option<u32>| -> (u32, String, String) {
+        let chat = RecordingChat::new("- 핵심 [1]", Some("stop"));
+        let deps = AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None, context_size };
+        let mut req = summary_request();
+        req.context_tokens = context_tokens;
+        req.summary_mode = mode;
+        summarize(&deps, &req, &mut |_| true).unwrap();
+        let (prompt, reply) = chat.last();
+        (reply, prompt, chat.last_system())
+    };
+    let (reply, prompt, system) = summary(6_000, SummaryMode::KeyPoints, Some(32_768));
+    assert_eq!(reply, 1_500);
+    assert!(
+        prompt.contains("5개 이내의 개조식") && !prompt.contains("구체적으로"),
+        "{}",
+        &prompt[prompt.len().saturating_sub(300)..]
+    );
+    assert!(system.contains("간결하게"));
+    let (reply, prompt, system) = summary(24_000, SummaryMode::KeyPoints, Some(32_768));
+    assert_eq!(reply, 6_000);
+    assert!(
+        prompt.contains("20개 이내의 개조식") && prompt.contains("항목마다 한두 문장으로 구체적으로"),
+        "{}",
+        &prompt[prompt.len().saturating_sub(300)..]
+    );
+    assert!(system.contains("자세히 설명하고"));
+    let (reply, prompt, _) = summary(24_000, SummaryMode::OnePage, Some(32_768));
+    assert_eq!(reply, 6_000);
+    assert!(prompt.contains("여러 쪽 분량(40문장 내외)"), "{}", &prompt[prompt.len().saturating_sub(300)..]);
+    let (_, prompt, _) = summary(6_000, SummaryMode::OnePage, Some(32_768));
+    assert!(prompt.contains("한 쪽 분량(10문장 내외)"));
+    let (_, prompt, _) = summary(24_000, SummaryMode::OneLine, Some(32_768));
+    assert!(prompt.contains("한 문장으로 요약"));
+    // On a small context the limit is a third of it: 2,730 tokens, nine items.
+    let (reply, prompt, _) = summary(24_000, SummaryMode::KeyPoints, Some(8_192));
+    assert_eq!(reply, 2_730);
+    assert!(prompt.contains("9개 이내의 개조식"), "{}", &prompt[prompt.len().saturating_sub(300)..]);
+}
+
+/// 1.0.1: a merge of partial summaries the server refuses is done in smaller steps. The refused group
+/// used to be put off to the next level, built again as it was and refused again, until the summary
+/// ended in "summary does not converge".
+#[test]
+fn a_summary_whose_merge_is_refused_still_converges() {
+    let w = World::new();
+    add_long_regulation(&w);
+    // Every part of the document is answered with a long partial summary; the context is not known,
+    // so the evidence budget (24,000) lets all partials into one merge — far beyond what the server takes.
+    let partial: String =
+        (1..=12).map(|i| format!("- {i}번째 핵심 내용은 출장비 정산 기준과 증빙 서류에 관한 것이다 [{i}]\n")).collect();
+    let slot = 1_500;
+    let chat = LimitedChat::new(slot, &partial);
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None, context_size: None };
+    let a = summarize(&deps, &summary_request(), &mut |_| true).unwrap();
+    assert_eq!(a.text, partial.trim());
+    let sizes = chat.sizes();
+    assert!(*chat.merges_refused.lock().unwrap() >= 1, "a merge was refused and done in smaller steps: {sizes:?}");
+    assert!(sizes.len() < 80, "{} calls", sizes.len());
+    // A context that is known keeps every request inside it from the start.
+    let chat = LimitedChat::new(4_000, &partial);
+    let deps = AnswerDeps {
+        search: w.search_deps(None),
+        chat: &chat,
+        model: None,
+        cancelled: None,
+        context_size: Some(4_000),
+    };
+    summarize(&deps, &summary_request(), &mut |_| true).unwrap();
+    assert!(chat.sizes().iter().all(|s| *s <= 4_000), "{:?}", chat.sizes());
 }

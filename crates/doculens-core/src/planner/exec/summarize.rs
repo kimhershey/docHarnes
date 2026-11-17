@@ -19,11 +19,26 @@ use crate::projects::repo as projects_repo;
 use super::super::{Plan, SummarizeTarget, SummaryGroup, SummaryLength};
 use super::{count_label, no_model, working_set, ExecDeps, LeaseGuard, StepOutcome};
 
-/// Characters of document summaries one combining call may carry (text-only requests are clipped
-/// beyond a few thousand characters, so larger groups are combined in rounds).
-const COMBINE_CHARS: usize = 3_000;
-/// Longest single document summary quoted in a combining call.
-const ITEM_CHARS: usize = 700;
+/// What one combining call may carry, in prompt tokens: `batch` for all the document summaries it
+/// quotes (larger groups are combined in rounds), `item` for a single one.
+///
+/// Until 1.0.1 these were 3,000 and 700 characters whatever the model: a combined summary was built
+/// from the first lines of each document summary, and a longer one (user report 2026-11-17, "출력이
+/// 너무 짧음") had nothing more to say. They follow the loaded model's context now.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct CombineRoom {
+    pub batch: u32,
+    pub item: u32,
+}
+
+impl CombineRoom {
+    /// `room` = the prompt tokens a text-only request may carry ([`answer::text_room`]).
+    pub(super) fn of(room: u32) -> CombineRoom {
+        // (the instruction and the labels of the documents take a little of it)
+        let batch = room.saturating_sub(300).max(1_200);
+        CombineRoom { batch, item: (batch / 3).max(500) }
+    }
+}
 
 /// Documents of one combined summary (`docs` = indices into the working set).
 #[derive(Debug, Clone, PartialEq)]
@@ -142,24 +157,24 @@ pub(super) fn group_documents(
     }
 }
 
-fn clip(text: &str, max_chars: usize) -> String {
+fn clip(text: &str, tokens: u32) -> String {
     let t = text.trim();
-    if t.chars().count() <= max_chars {
+    if answer::text_cost(t) <= tokens {
         return t.to_string();
     }
-    let mut out: String = t.chars().take(max_chars).collect();
+    let mut out = answer::clip_to_tokens(t, tokens);
     out.push('…');
     out
 }
 
 /// Batches `(name, summary)` items so that each batch fits one combining call.
-pub(super) fn batches(items: &[(String, String)]) -> Vec<Vec<(String, String)>> {
+pub(super) fn batches(items: &[(String, String)], room: CombineRoom) -> Vec<Vec<(String, String)>> {
     let mut out: Vec<Vec<(String, String)>> = Vec::new();
-    let mut used = 0usize;
+    let mut used = 0u32;
     for (name, text) in items {
-        let text = clip(text, ITEM_CHARS);
-        let size = name.chars().count() + text.chars().count() + 8;
-        if out.is_empty() || (used + size > COMBINE_CHARS && !out.last().is_some_and(Vec::is_empty)) {
+        let text = clip(text, room.item);
+        let size = answer::text_cost(name) + answer::text_cost(&text);
+        if out.is_empty() || (used + size > room.batch && !out.last().is_some_and(Vec::is_empty)) {
             out.push(Vec::new());
             used = 0;
         }
@@ -169,18 +184,30 @@ pub(super) fn batches(items: &[(String, String)]) -> Vec<Vec<(String, String)>> 
     out
 }
 
-fn combine_prompt(label: &str, items: &[(String, String)], ko: bool) -> String {
+/// `detailed`: the reply may be long (the user raised the evidence budget), so the group summary is
+/// asked to keep what each document says instead of a few lines for all of them.
+fn combine_prompt(label: &str, items: &[(String, String)], ko: bool, detailed: bool) -> String {
     let mut s = if ko {
         format!(
             "다음은 '{label}' 묶음에 속한 문서 {}건의 문서별 요약입니다. 이 요약들만 재료로 묶음 전체를 하나로 요약하세요. \
-             여러 문서에 공통된 내용과 문서마다 다른 점을 구분하고, 요약에 없는 사실은 더하지 마세요.\n",
-            items.len()
+             여러 문서에 공통된 내용과 문서마다 다른 점을 구분하고, 요약에 없는 사실은 더하지 마세요.{}\n",
+            items.len(),
+            if detailed {
+                " 문서마다 핵심 내용(금액·기한·조건 포함)을 빠뜨리지 말고, 소제목과 항목으로 나눠 자세히 쓰세요."
+            } else {
+                ""
+            }
         )
     } else {
         format!(
             "Below are the per-document summaries of the {} documents in the group '{label}'. Write one summary of the whole group \
-             from these summaries only: say what the documents share and where they differ, and add no facts that are not in them.\n",
-            items.len()
+             from these summaries only: say what the documents share and where they differ, and add no facts that are not in them.{}\n",
+            items.len(),
+            if detailed {
+                " Keep the key points of every document (amounts, deadlines, conditions) and write in detail, with headings and bullets."
+            } else {
+                ""
+            }
         )
     };
     for (name, text) in items {
@@ -198,14 +225,17 @@ fn combine(
     context_tokens: u32,
 ) -> Result<Answer> {
     let mut items: Vec<(String, String)> = items.to_vec();
+    let room = CombineRoom::of(answer::text_room(adeps));
+    // (a summary's default reply limit is 1,500 tokens: beyond half as much again it is asked in detail)
+    let detailed = answer::summary_reply_tokens(adeps, context_tokens) > 2_250;
     loop {
-        let rounds = batches(&items);
+        let rounds = batches(&items, room);
         let last_round = rounds.len() <= 1;
         let mut next: Vec<(String, String)> = Vec::new();
         let mut answer_of_round: Option<Answer> = None;
         for (i, batch) in rounds.iter().enumerate() {
             deps.checkpoint()?;
-            let mut req = AnswerRequest::question(&combine_prompt(label, batch, deps.ko()));
+            let mut req = AnswerRequest::question(&combine_prompt(label, batch, deps.ko(), detailed));
             req.retrieve = false;
             req.save = false;
             req.context_tokens = context_tokens;
@@ -235,7 +265,8 @@ pub(super) fn run(
     let _lease = LeaseGuard::acquire(deps.lease);
     let docs = working_set(deps, plan, imported)?;
     if docs.is_empty() {
-        return Err(crate::error::CoreError::Invalid("no_documents".into()));
+        // (which kind of document the scope asked for and does not hold, when it named one)
+        return Err(super::no_documents(plan));
     }
     let mode = match length {
         Some(SummaryLength::Short) => SummaryMode::OneLine,
@@ -274,7 +305,11 @@ pub(super) fn run(
     };
     // A document without text (not processed yet, an image without OCR) has nothing to summarise.
     // It is left out and named in the result; it does not throw away the summaries made so far.
+    // Neither does a document the model could not summarise (1.0.1): one refused request used to end
+    // the whole step, and the summaries of the documents before it were lost with it. What stops
+    // every document alike — no engine, no model, a cancelled run — still ends the step.
     let mut answers: Vec<Option<Answer>> = Vec::with_capacity(docs.len());
+    let mut failures: Vec<(usize, CoreError)> = Vec::new();
     for (i, d) in docs.iter().enumerate() {
         deps.checkpoint()?;
         progress("summarize", i as u32, total, &d.original_name);
@@ -286,11 +321,28 @@ pub(super) fn run(
         match answer::summarize(&adeps, &req, &mut |_| !deps.cancelled()) {
             Ok(a) => answers.push(Some(a)),
             Err(CoreError::NotFound(reason)) if reason == "no_text" => answers.push(None),
-            Err(e) => return Err(e),
+            Err(
+                e @ (CoreError::Cancelled
+                | CoreError::EngineNotFound(_)
+                | CoreError::UnknownModel(_)
+                | CoreError::NoWorkspace
+                | CoreError::Db(_)),
+            ) => return Err(e),
+            // (the engine is gone: the next document would fail the same way within seconds)
+            Err(e) if crate::pipeline::vlm::engine_unavailable(&e) => return Err(e),
+            Err(e) => {
+                log::warn!("summary of {} failed: {e}", d.id);
+                failures.push((i, e));
+                answers.push(None);
+            }
         }
     }
     if answers.iter().all(Option::is_none) {
-        return Err(CoreError::NotFound("no_text".into()));
+        // Nothing was summarised: the reason of the first document that failed, else "no text".
+        return Err(match failures.into_iter().next() {
+            Some((_, e)) => e,
+            None => CoreError::NotFound("no_text".into()),
+        });
     }
     let summaries: Vec<Value> = docs
         .iter()
@@ -299,9 +351,14 @@ pub(super) fn run(
         .collect();
     let skipped: Vec<Value> = docs
         .iter()
+        .enumerate()
         .zip(&answers)
-        .filter(|(_, a)| a.is_none())
-        .map(|(d, _)| json!({ "document_id": d.id, "name": d.original_name, "reason": "no_text" }))
+        .filter(|((i, _), a)| a.is_none() && !failures.iter().any(|(f, _)| f == i))
+        .map(|((_, d), _)| json!({ "document_id": d.id, "name": d.original_name, "reason": "no_text" }))
+        .collect();
+    let failed: Vec<Value> = failures
+        .iter()
+        .map(|(i, e)| json!({ "document_id": docs[*i].id, "name": docs[*i].original_name, "error": e.to_string() }))
         .collect();
 
     let mut group_values: Vec<Value> = Vec::new();
@@ -351,9 +408,19 @@ pub(super) fn run(
             format!(" · {} document(s) without text skipped", skipped.len())
         });
     }
+    if !failed.is_empty() {
+        summary.push_str(&if deps.ko() {
+            format!(" · 요약하지 못한 문서 {}건", failed.len())
+        } else {
+            format!(" · {} document(s) could not be summarised", failed.len())
+        });
+    }
     let mut payload = json!({ "summaries": summaries });
     if !skipped.is_empty() {
         payload["skipped"] = Value::Array(skipped);
+    }
+    if !failed.is_empty() {
+        payload["failed"] = Value::Array(failed);
     }
     if groups.is_some() {
         payload["groups"] = Value::Array(group_values);
@@ -432,18 +499,34 @@ mod tests {
 
     #[test]
     fn long_groups_are_combined_in_rounds() {
-        let items: Vec<(String, String)> = (0..12).map(|i| (format!("문서{i}.pdf"), "가".repeat(900))).collect();
-        let b = batches(&items);
+        // The room of the smallest chat context (8,192 tokens): a batch of about 3,400 prompt tokens.
+        let room = CombineRoom::of(3_746);
+        assert_eq!((room.batch, room.item), (3_446, 1_148));
+        let items: Vec<(String, String)> = (0..12).map(|i| (format!("문서{i}.pdf"), "가".repeat(3_000))).collect();
+        let b = batches(&items, room);
+        let small = b.len();
         assert!(b.len() > 1, "{} batch(es)", b.len());
         assert_eq!(b.iter().map(Vec::len).sum::<usize>(), 12);
         for batch in &b {
-            let size: usize = batch.iter().map(|(n, t)| n.chars().count() + t.chars().count()).sum();
-            assert!(size <= COMBINE_CHARS + ITEM_CHARS, "{size}");
-            // Each quoted summary is clipped.
-            assert!(batch.iter().all(|(_, t)| t.chars().count() <= ITEM_CHARS + 1));
+            let size: u32 = batch.iter().map(|(n, t)| answer::text_cost(n) + answer::text_cost(t)).sum();
+            assert!(size <= room.batch + room.item, "{size}");
+            // Each quoted summary is clipped to its share, and says so.
+            assert!(batch.iter().all(|(_, t)| answer::text_cost(t) <= room.item + 8 && t.ends_with('…')), "{batch:?}");
         }
-        assert_eq!(batches(&items[..2]).len(), 1);
-        let prompt = combine_prompt("한빛 포털", &items[..2], true);
-        assert!(prompt.contains("'한빛 포털' 묶음") && prompt.contains("[문서0.pdf]"), "{prompt}");
+        // A summary of ordinary length is quoted whole: 700 characters used to be the limit.
+        let whole = vec![("a.pdf".to_string(), "나".repeat(900)), ("b.pdf".to_string(), "다".repeat(900))];
+        let b = batches(&whole, room);
+        assert_eq!(b.len(), 1);
+        assert!(b[0].iter().all(|(_, t)| t.chars().count() == 900), "{}", answer::text_cost(&whole[0].1));
+        // A larger context carries more in one call, and quotes each summary whole.
+        let large = batches(&items, CombineRoom::of(16_034));
+        assert!(large.len() < small, "{} of {small}", large.len());
+        assert!(large.iter().flatten().all(|(_, t)| t.chars().count() == 3_000));
+        let prompt = combine_prompt("한빛 포털", &whole, true, false);
+        assert!(
+            prompt.contains("'한빛 포털' 묶음") && prompt.contains("[a.pdf]") && !prompt.contains("자세히"),
+            "{prompt}"
+        );
+        assert!(combine_prompt("한빛 포털", &whole, true, true).contains("소제목과 항목으로 나눠 자세히"));
     }
 }

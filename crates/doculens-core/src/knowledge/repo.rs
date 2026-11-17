@@ -322,6 +322,13 @@ pub fn project_reference_doc_ids(conn: &Connection, project_id: &str) -> rusqlit
     Ok(out)
 }
 
+/// Every document that is in a reference group (a project's or a common one).
+pub fn reference_doc_ids(conn: &Connection) -> rusqlite::Result<HashSet<String>> {
+    let mut st = conn.prepare("SELECT DISTINCT document_id FROM collection_docs")?;
+    let out = st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(out)
+}
+
 pub fn collection_doc_ids(conn: &Connection, id: &str) -> rusqlite::Result<Vec<String>> {
     let mut st = conn.prepare("SELECT document_id FROM collection_docs WHERE collection_id = ?1 ORDER BY added_at")?;
     let rows = st.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<Vec<_>>>()?;

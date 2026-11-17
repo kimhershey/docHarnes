@@ -325,6 +325,11 @@ export function ResultCard({
               {t("planner.result.summary_skipped", { count: s.skipped.length, names: s.skipped.slice(0, 5).join(", ") })}
             </p>
           )}
+          {s.failed.length > 0 && (
+            <p className="text-xs text-warn" data-testid="result-summary-failed">
+              {t("planner.result.summary_failed", { count: s.failed.length, names: s.failed.slice(0, 5).map((f) => f.name).join(", "), reason: stepErrorText(s.failed[0]!.error, t) })}
+            </p>
+          )}
           {s.items.map((item) => (
             <div key={item.document_id} className="flex flex-col gap-1">
               <button type="button" className="self-start text-xs font-medium text-accent hover:underline cursor-pointer" onClick={() => navigate(`${SCREEN_ROUTES.library}/${item.document_id}`)}>

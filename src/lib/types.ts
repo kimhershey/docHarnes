@@ -1904,6 +1904,11 @@ export interface ScopeFilter {
   project_id?: string | null;
   /** 0.8.1: the kind of document — `work` = 업무 문서, `knowledge` = 참고 자료 (a project's reference group with `project_id`). */
   role?: "work" | "knowledge" | "form" | null;
+  /**
+   * 1.0.1: inside a project, a plan that only reads documents (search, questions, summaries, aggregates, exports)
+   * covers the project's 참고 자료 next to its 업무 문서. Set by the validator, absent otherwise.
+   */
+  with_reference?: boolean;
 }
 
 export interface Scope {
@@ -2042,6 +2047,8 @@ export interface PlanPreview {
   requires_confirmation: boolean;
   /** Whether any step reads the scope; `false` for settings, navigation, small talk (no "대상 문서 N건"). */
   uses_scope?: boolean;
+  /** 1.0.1: how many of the documents in scope the project holds as 참고 자료 only (the card says so). */
+  reference_count?: number;
 }
 
 export interface PlanResponse {

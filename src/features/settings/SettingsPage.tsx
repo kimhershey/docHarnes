@@ -646,8 +646,8 @@ function KnowledgeTab() {
   const k = settings.knowledge;
   const embeddings = (registry?.models ?? []).filter((m) => m.role === "embedding");
   const DEFAULT = "__default__";
-  const numberRow = (key: "context_tokens" | "top_k" | "chunk_target_tokens", label: string, min: number, max: number, step: number) => (
-    <Row label={label} htmlFor={`kb-${key}`}>
+  const numberRow = (key: "context_tokens" | "top_k" | "chunk_target_tokens", label: string, min: number, max: number, step: number, hint?: string) => (
+    <Row label={label} hint={hint} htmlFor={`kb-${key}`}>
       <NumberField
         id={`kb-${key}`}
         value={k[key]}
@@ -699,7 +699,7 @@ function KnowledgeTab() {
             <span className="w-10 text-xs tabular-nums">{k.min_vector_similarity.toFixed(2)}</span>
           </div>
         </Row>
-        {numberRow("context_tokens", t("settings.knowledge.context_tokens"), 1000, 24000, 500)}
+        {numberRow("context_tokens", t("settings.knowledge.context_tokens"), 1000, 24000, 500, t("settings.knowledge.context_tokens_hint"))}
         {numberRow("top_k", t("settings.knowledge.top_k"), 1, 20, 1)}
         {numberRow("chunk_target_tokens", t("settings.knowledge.chunk_target"), 120, 2000, 20)}
       </CardContent>

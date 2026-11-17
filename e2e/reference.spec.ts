@@ -258,6 +258,19 @@ test.describe("0.5.0 reference material", () => {
     const third = answerCards(page).nth(2);
     await expect(third).toHaveAttribute("data-answer-state", "done", { timeout: 15_000 });
     await expect(third.getByTestId("citation-chip").first()).toHaveAttribute("title", /정보보안지침/);
+
+    // 1.0.1 (user report 2026-11-17): a command that only reads covers both kinds of the project it names — the
+    // card says how many of its documents are 참고 자료, and the estimate and the guideline are both summarised.
+    await page.getByTestId("assistant-input").fill("한빛 포털 구축 프로젝트 요약해줘");
+    await page.getByTestId("assistant-send").click();
+    const result = page.locator('[data-testid="assistant-card-result"]').last();
+    await expect(result).toHaveAttribute("data-result-status", "done", { timeout: 30_000 });
+    await expect(page.getByTestId("plan-impact").last()).toHaveText(
+      tpl(ko.planner.card.impact_with_reference, { effects: ko.planner.card.impact_none, count: 2, reference: 1 }),
+    );
+    const summaries = result.getByTestId("result-summaries");
+    await expect(summaries).toContainText("견적서");
+    await expect(summaries).toContainText("정보보안지침");
   });
 
   test("settings > 참고 자료(고급): index statistics, glossary, question test and the answer log", async ({ page }) => {
