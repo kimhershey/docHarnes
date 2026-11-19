@@ -8,7 +8,7 @@ use crate::engine::{ChatRequest, ChatResponse};
 use crate::error::{CoreError, Result};
 use std::collections::HashSet;
 
-use super::answer::{answer, compare, summarize, AnswerDeps, ScriptedChat};
+use super::answer::{answer, compare, summarize, summarize_topic, AnswerDeps, ScriptedChat};
 use super::chunker::ChunkOptions;
 use super::embed::{self, Embedder, HashEmbedder};
 use super::index::{index_document, index_pending, index_status, IndexDeps, IndexOutcome};
@@ -1960,4 +1960,110 @@ fn a_summary_whose_merge_is_refused_still_converges() {
     };
     summarize(&deps, &summary_request(), &mut |_| true).unwrap();
     assert!(chat.sizes().iter().all(|s| *s <= 4_000), "{:?}", chat.sizes());
+}
+
+/// Answers the parts of a topic summary: the first part has something on the subject, the others
+/// have nothing ("관련 내용 없음") unless `all_empty` — then none has.
+struct PartChat {
+    all_empty: bool,
+    requests: std::sync::Mutex<Vec<String>>,
+}
+
+impl ChatBackend for PartChat {
+    fn model_id(&self) -> Option<String> {
+        Some("parts".into())
+    }
+    fn chat_stream(&self, req: &ChatRequest, on_delta: &mut dyn FnMut(&str) -> bool) -> Result<ChatResponse> {
+        let user = req.messages.last().unwrap()["content"].as_str().unwrap().to_string();
+        let first = user.contains("지금은 1번째 묶음") || !user.contains("번째 묶음");
+        self.requests.lock().unwrap().push(user);
+        let reply = if first && !self.all_empty {
+            "- 숙박비 한도는 1박당 150,000원이다 [1]"
+        } else {
+            "관련 내용 없음"
+        };
+        on_delta(reply);
+        Ok(ChatResponse { content: reply.into(), ..ChatResponse::default() })
+    }
+}
+
+/// 1.0.2 (user report 2026-11-19 — "AA에 대해서 요약해줘 … 요약만 하고 AA에 대한 내용을 수집하지 않음"):
+/// a summary about a subject looks the passages about it up and summarises those — in one call when
+/// they fit, part by part when they do not; parts that have nothing on the subject add nothing.
+#[test]
+fn a_topic_summary_gathers_the_passages_about_the_subject() {
+    let w = World::new();
+    add_long_regulation(&w);
+    let request = || {
+        let mut req = AnswerRequest::question("숙박비");
+        req.kind = AnswerKind::Summary;
+        req.save = false;
+        req
+    };
+    // One call when the passages fit: the request names the subject, the sources are the passages found.
+    let chat = RecordingChat::new("- 숙박비 한도는 1박당 150,000원이다 [1]", Some("stop"));
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None, context_size: None };
+    let a = summarize_topic(&deps, &request(), &mut |_| true).unwrap();
+    assert_eq!(chat.count(), 1);
+    let (user, _) = chat.last();
+    assert!(user.contains("근거에서 '숙박비'에 관한 내용만 골라 요약합니다") && user.contains("[근거]"), "{user}");
+    assert_eq!((a.kind, a.question.as_str(), a.document_id.as_deref()), (AnswerKind::Summary, "숙박비", None));
+    // The passages come from every document that says something about it, one document after another.
+    let documents: Vec<&str> = a.sources.iter().map(|s| s.document_id.as_str()).collect();
+    let mut distinct = documents.clone();
+    distinct.dedup();
+    assert!(!a.no_evidence && distinct.len() >= 2 && distinct.contains(&"big"), "{documents:?}");
+    assert_eq!(
+        distinct.len(),
+        distinct.iter().collect::<HashSet<_>>().len(),
+        "the passages of a document stand together: {documents:?}"
+    );
+    assert!(a.sources.len() <= 16, "twice the evidence chunks of an answer (8) at most: {}", a.sources.len());
+    assert!(a.text.contains("150,000원") && a.sentences[0].citations == vec![1]);
+
+    // A small context: part by part. The parts that say nothing about the subject are left out, and
+    // with one part left nothing has to be merged.
+    let chat = PartChat { all_empty: false, requests: Default::default() };
+    let deps = AnswerDeps {
+        search: w.search_deps(None),
+        chat: &chat,
+        model: None,
+        cancelled: None,
+        context_size: Some(2_600),
+    };
+    let a = summarize_topic(&deps, &request(), &mut |_| true).unwrap();
+    let sent = chat.requests.lock().unwrap().clone();
+    assert!(sent.len() > 1, "{} request(s)", sent.len());
+    assert!(sent.iter().all(|u| u.contains("이 묶음에서 '숙박비'에 관한 내용을 빠짐없이")), "{sent:?}");
+    assert!(sent.iter().all(|u| !u.contains("[부분 요약]")), "no merge of a single part");
+    assert_eq!(a.text, "- 숙박비 한도는 1박당 150,000원이다 [1]");
+    assert!(!a.no_evidence);
+    // No part has anything on it: the passages matched the words only.
+    let chat = PartChat { all_empty: true, requests: Default::default() };
+    let deps = AnswerDeps {
+        search: w.search_deps(None),
+        chat: &chat,
+        model: None,
+        cancelled: None,
+        context_size: Some(2_600),
+    };
+    let a = summarize_topic(&deps, &request(), &mut |_| true).unwrap();
+    assert!(a.no_evidence && a.sources.is_empty(), "{a:?}");
+
+    // Nothing found: no model call at all.
+    let chat = RecordingChat::new("x", None);
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None, context_size: None };
+    let mut req = request();
+    req.question = "양자 컴퓨터".into();
+    let a = summarize_topic(&deps, &req, &mut |_| true).unwrap();
+    assert!(a.no_evidence && a.sources.is_empty());
+    assert_eq!(chat.count(), 0);
+    // … and a scope that leaves the document out finds nothing either.
+    let mut req = request();
+    req.scope = SearchScope::documents(&["nope".to_string()]);
+    assert!(summarize_topic(&deps, &req, &mut |_| true).unwrap().no_evidence);
+    req.question = "  ".into();
+    assert!(summarize_topic(&deps, &req, &mut |_| true).is_err());
 }

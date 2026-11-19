@@ -1333,11 +1333,47 @@ fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         return None;
     }
     let force = t.has(&["다시", "재처리", "재추출", "재분류", "재실행", "again", "redo", "force"]);
+    let summary_only = summarize && !(classify || ocr || extract || validate || generic);
+    let summary_length = |t: &Text<'_>| {
+        if t.has(&["짧게", "한줄", "간단", "short", "brief*"]) {
+            Some(SummaryLength::Short)
+        } else if t.has(&["길게", "자세", "상세", "long", "detailed"]) {
+            Some(SummaryLength::Long)
+        } else {
+            None
+        }
+    };
+    // 1.0.2: "AA에 대해서 요약해줘" — what the documents say about the subject. Where to look is read
+    // from the words outside the phrase that names it ("보안 요구사항에 대해" names no document type),
+    // and no scope at all is every document, as for a search: nothing is asked back.
+    if summary_only {
+        if let Some(about) = super::guard::summary_topic(t.raw, ctx) {
+            let rest = Text::new(&about.rest, t.ko);
+            let dt = doc_type(&rest, ctx);
+            let d = date(&rest, ctx);
+            let mut scope = scope_or_project(&rest, ctx, dt, d.as_ref());
+            if scope.is_empty() && !selection_ids(ctx).is_empty() && rest.has(&["선택", "selected"]) {
+                scope.doc_ids = selection_ids(ctx);
+            }
+            let summary = t
+                .t(
+                    &format!("'{}'에 관한 내용을 문서에서 찾아 요약합니다", about.subject),
+                    &format!("Summarise what the documents say about '{}'", about.subject),
+                )
+                .to_string();
+            let op = Op::Summarize {
+                target: Some(SummarizeTarget::Set),
+                length: summary_length(&rest),
+                group_by: None,
+                topic: Some(about.subject),
+            };
+            return Some(mk(op, scope, 0.85, summary));
+        }
+    }
     let dt = doc_type(t, ctx);
     let d = date(t, ctx);
     let mut scope = scope_or_project(t, ctx, dt, d.as_ref());
     // "프로젝트별로 요약해줘" (0.8.0): one summary per group, over the library unless documents are named.
-    let summary_only = summarize && !(classify || ocr || extract || validate || generic);
     let grouping = if summary_only { super::guard::summary_group(t.raw) } else { None };
     if grouping == Some(super::SummaryGroup::Project)
         && scope.filter.project_id == ctx.scope_project
@@ -1371,14 +1407,7 @@ fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         } else {
             SummarizeTarget::EachDoc
         };
-        let length = if t.has(&["짧게", "한줄", "간단", "short", "brief*"]) {
-            Some(SummaryLength::Short)
-        } else if t.has(&["길게", "자세", "상세", "long", "detailed"]) {
-            Some(SummaryLength::Long)
-        } else {
-            None
-        };
-        ops.push(Op::Summarize { target: Some(target), length, group_by: grouping });
+        ops.push(Op::Summarize { target: Some(target), length: summary_length(t), group_by: grouping, topic: None });
     }
     if classify || generic {
         ops.push(Op::Classify {

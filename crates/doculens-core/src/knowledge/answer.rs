@@ -1439,7 +1439,6 @@ pub fn summarize(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn 
     let req = &clamp_request(req);
     let doc_id = req.document_id.clone().ok_or_else(|| CoreError::Invalid("document_id required".into()))?;
     let lang = detect_lang(req);
-    let ko = lang == Lang::Ko;
     let rows = deps.search.db.with(|c| {
         let chunks = repo::list_chunks(c, &doc_id)?;
         let ids: Vec<i64> = chunks.iter().map(|ch| ch.id).collect();
@@ -1450,6 +1449,60 @@ pub fn summarize(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn 
     if rows.is_empty() {
         return Err(CoreError::NotFound("no_text".into()));
     }
+    // The reply limit follows the evidence budget, and with it how much the summary is asked to say.
+    let reply = reply_limit(deps, req, MAX_SUMMARY_TOKENS);
+    let instruction = summary_instruction(req.summary_mode, lang, reply);
+    let ask = SummaryAsk {
+        whole: instruction.clone(),
+        part: Box::new(move |part, total| {
+            match lang {
+            Lang::Ko => format!("이 문서는 {total}부분으로 나뉘어 있고 지금은 {part}번째 부분입니다. 이 부분의 핵심 내용을 빠짐없이 개조식으로 정리하세요. 각 항목 끝에 근거 번호를 붙이세요."),
+            Lang::En => format!("This document comes in {total} parts; this is part {part}. List every key point of this part as bullets with source numbers."),
+        }
+        }),
+        nothing: None,
+    };
+    let mut out = summarize_rows(deps, req, &rows, &ask, reply, lang, on_delta)?;
+    out.question = if req.question.trim().is_empty() { instruction } else { req.question.clone() };
+    out.document_id = Some(doc_id);
+    out.elapsed_ms = started.elapsed().as_millis() as u64;
+    if req.save {
+        let id = deps.search.db.with(|c| repo::insert_answer(c, &out, &req.scope))?;
+        out.id = Some(id);
+    }
+    Ok(out)
+}
+
+/// What the steps of a summary ask the model for.
+struct SummaryAsk {
+    /// The request of a summary made in one pass, and of the merge of partial ones.
+    whole: String,
+    /// The request for part `n` of `total` when the passages do not fit one call.
+    part: Box<dyn Fn(usize, usize) -> String>,
+    /// What a part answers when it has nothing to add (a topic summary: "관련 내용 없음"); such a
+    /// partial result is left out of the merge.
+    nothing: Option<&'static str>,
+}
+
+/// Whether a partial result only says that its part has nothing on the subject.
+fn says_nothing(text: &str, phrase: &str) -> bool {
+    let t = text.trim().trim_start_matches(['-', '*', '•', ' ']).trim_end_matches(['.', '!', '。']).trim();
+    t.chars().count() <= phrase.chars().count() + 12 && t.contains(phrase)
+}
+
+/// The summary of `rows` (passages in the order they are to be read): one call when they fit the
+/// evidence budget, else a summary per part and a merge of those (map-reduce). The caller fills in
+/// what the answer is a summary of.
+fn summarize_rows(
+    deps: &AnswerDeps<'_>,
+    req: &AnswerRequest,
+    rows: &[repo::ChunkRow],
+    ask: &SummaryAsk,
+    reply: u32,
+    lang: Lang,
+    on_delta: &mut dyn FnMut(&str) -> bool,
+) -> Result<Answer> {
+    let ko = lang == Lang::Ko;
     let model = resolve_model(deps)?;
     let sources: Vec<Citation> = rows
         .iter()
@@ -1469,9 +1522,7 @@ pub fn summarize(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn 
         .collect();
     let texts: Vec<String> =
         rows.iter().map(|r| super::index::indexed_text(r.chunk.heading_path.as_deref(), &r.chunk.text)).collect();
-    // Groups within the context budget (the loaded model's context when known). The reply limit follows
-    // the evidence budget, and with it how much the summary is asked to say.
-    let reply = reply_limit(deps, req, MAX_SUMMARY_TOKENS);
+    // Groups within the context budget (the loaded model's context when known).
     let budget = evidence_budget(deps, req, reply, lang);
     let mut groups: Vec<(usize, usize)> = Vec::new();
     let mut start = 0;
@@ -1486,8 +1537,7 @@ pub fn summarize(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn 
         used += cost;
     }
     groups.push((start, texts.len()));
-    let instruction = summary_instruction(req.summary_mode, lang, reply);
-    let instruction = instruction.as_str();
+    let instruction = ask.whole.as_str();
     let system = system_prompt(lang, false, AnswerKind::Summary, false, detailed(reply, MAX_SUMMARY_TOKENS));
     let mut partials: Vec<String> = Vec::new();
     let mut prompt_tokens = 0;
@@ -1501,15 +1551,7 @@ pub fn summarize(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn 
         let total = part + queue.len();
         let multi = total > 1;
         let block = source_block(&sources[a..b], &texts[a..b], ko);
-        let ask = if multi {
-            if ko {
-                format!("이 문서는 {total}부분으로 나뉘어 있고 지금은 {part}번째 부분입니다. 이 부분의 핵심 내용을 빠짐없이 개조식으로 정리하세요. 각 항목 끝에 근거 번호를 붙이세요.")
-            } else {
-                format!("This document comes in {total} parts; this is part {part}. List every key point of this part as bullets with source numbers.")
-            }
-        } else {
-            instruction.to_string()
-        };
+        let ask = if multi { (ask.part)(part, total) } else { instruction.to_string() };
         let user = if ko {
             format!("[근거]\n{block}\n[요청]\n{ask}")
         } else {
@@ -1541,6 +1583,15 @@ pub fn summarize(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn 
                 log::info!("summary: prompt exceeded the context; splitting sources {}..{}", a + 1, b);
             }
             Err(e) => return Err(e),
+        }
+    }
+    // A part that had nothing on the subject adds nothing to the merge (a topic summary).
+    if let Some(phrase) = ask.nothing {
+        let kept: Vec<String> = partials.iter().filter(|p| !says_nothing(p, phrase)).cloned().collect();
+        if kept.is_empty() {
+            partials.truncate(1);
+        } else {
+            partials = kept;
         }
     }
     // Hierarchical reduce: merge partials in groups that fit the budget until one remains.
@@ -1629,20 +1680,128 @@ pub fn summarize(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn 
     }
     let text = without_empty_conflicts(&partials.pop().unwrap_or_default());
     let (sentences, conflicts) = parse_answer(&text, sources.len() as u32);
-    let mut out = Answer {
+    Ok(Answer {
         kind: AnswerKind::Summary,
-        question: if req.question.trim().is_empty() { instruction.to_string() } else { req.question.clone() },
         text,
         sentences,
         sources,
         conflicts,
         model: Some(model),
-        elapsed_ms: started.elapsed().as_millis() as u64,
         prompt_tokens,
         completion_tokens,
-        document_id: Some(doc_id),
+        ..Answer::default()
+    })
+}
+
+/// What a topic summary asks for: the summary instruction of the mode, about `topic` only.
+fn topic_ask(topic: &str, mode: SummaryMode, lang: Lang, reply_tokens: u32) -> SummaryAsk {
+    let whole = match (lang, mode) {
+        (Lang::Ko, SummaryMode::OneLine) => format!(
+            "근거에서 '{topic}'에 관한 내용만 골라 한두 문장으로 요약하세요. 근거에 '{topic}'에 관한 내용이 없으면 \"근거에 없음\"이라고만 쓰세요."
+        ),
+        (Lang::Ko, _) => format!(
+            "근거에서 '{topic}'에 관한 내용만 골라 요약합니다. {} '{topic}'에 관한 내용이 아니면 쓰지 말고, 근거에 '{topic}'에 관한 내용이 없으면 \"근거에 없음\"이라고만 쓰세요.",
+            summary_instruction(mode, lang, reply_tokens)
+        ),
+        (Lang::En, SummaryMode::OneLine) => format!(
+            "Summarise in a sentence or two what the sources say about '{topic}', and nothing else. If they say nothing about '{topic}', write only \"not in the sources\"."
+        ),
+        (Lang::En, _) => format!(
+            "Summarise what the sources say about '{topic}', and nothing else. {} If the sources say nothing about '{topic}', write only \"not in the sources\".",
+            summary_instruction(mode, lang, reply_tokens)
+        ),
+    };
+    let subject = topic.to_string();
+    SummaryAsk {
+        whole,
+        part: Box::new(move |part, total| {
+            match lang {
+            Lang::Ko => format!(
+                "근거가 {total}묶음으로 나뉘어 있고 지금은 {part}번째 묶음입니다. 이 묶음에서 '{subject}'에 관한 내용을 빠짐없이 개조식으로 정리하세요. 각 항목 끝에 근거 번호를 붙이고, '{subject}'에 관한 내용이 없으면 \"관련 내용 없음\"이라고만 쓰세요."
+            ),
+            Lang::En => format!(
+                "The sources come in {total} parts; this is part {part}. List everything this part says about '{subject}' as bullets with source numbers; if it says nothing about '{subject}', write only \"nothing relevant\"."
+            ),
+        }
+        }),
+        nothing: Some(match lang {
+            Lang::Ko => "관련 내용 없음",
+            Lang::En => "nothing relevant",
+        }),
+    }
+}
+
+/// 1.0.2 — a summary of what the documents in scope say about a subject ("AA에 대해서 요약해줘"):
+/// `req.question` is the subject. Passages about it are looked up — twice as many as an answer
+/// takes, since a summary is asked to cover the subject rather than to answer one question — and
+/// summarised like a document: in one call when they fit the evidence budget, else part by part
+/// and merged. Nothing found is an answer with `no_evidence` (no model call), not an error.
+///
+/// User report 2026-11-19: "AA에 대해서 요약해줘 … 요약만 하고 AA에 대한 내용을 수집하지 않음" — the
+/// planner had no way to say what a summary is about, and the request ended as a summary of every
+/// document in scope or as an answer that looked nothing up.
+pub fn summarize_topic(
+    deps: &AnswerDeps<'_>,
+    req: &AnswerRequest,
+    on_delta: &mut dyn FnMut(&str) -> bool,
+) -> Result<Answer> {
+    let started = Instant::now();
+    let req = &clamp_request(req);
+    // (the subject goes into the prompt between quotes)
+    let topic: String = req.question.split_whitespace().collect::<Vec<_>>().join(" ").replace(['\'', '"'], "");
+    if topic.is_empty() {
+        return Err(CoreError::Invalid("topic_empty".into()));
+    }
+    let lang = detect_lang(req);
+    let ko = lang == Lang::Ko;
+    let limit = (req.top_k * 2).clamp(8, 64);
+    let sreq = SearchRequest {
+        query: topic.clone(),
+        mode: SearchMode::Hybrid,
+        scope: req.scope.clone(),
+        limit,
+        expand_glossary: true,
+        per_document: (limit / 2).max(4),
+    };
+    let min_similarity = req.min_similarity.unwrap_or(MIN_VECTOR_SIMILARITY);
+    let hits: Vec<SearchHit> =
+        search(&deps.search, &sreq)?.hits.into_iter().filter(|h| is_evidence(h, min_similarity)).collect();
+    let nothing = |started: Instant| Answer {
+        kind: AnswerKind::Summary,
+        question: topic.clone(),
+        text: no_evidence_text(ko).to_string(),
+        no_evidence: true,
+        elapsed_ms: started.elapsed().as_millis() as u64,
         ..Answer::default()
     };
+    if hits.is_empty() {
+        return Ok(nothing(started));
+    }
+    // Read document by document — the document with the best passage first — and each in its own order.
+    let mut rank: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for h in &hits {
+        let next = rank.len();
+        rank.entry(h.document_id.clone()).or_insert(next);
+    }
+    let ids: Vec<i64> = hits.iter().map(|h| h.chunk_id).collect();
+    let mut rows = deps.search.db.with(|c| repo::chunk_rows(c, &ids))?;
+    rows.sort_by_key(|r| (rank.get(&r.chunk.document_id).copied().unwrap_or(usize::MAX), r.chunk.chunk_index));
+    if rows.is_empty() {
+        return Ok(nothing(started));
+    }
+    let reply = reply_limit(deps, req, MAX_SUMMARY_TOKENS);
+    let ask = topic_ask(&topic, req.summary_mode, lang, reply);
+    let mut out = summarize_rows(deps, req, &rows, &ask, reply, lang, on_delta)?;
+    out.question = topic.clone();
+    // The passages matched the words and still say nothing about the subject.
+    let phrase = if ko { "근거에 없음" } else { "not in the sources" };
+    if says_nothing(&out.text, phrase) || ask.nothing.is_some_and(|n| says_nothing(&out.text, n)) {
+        out.no_evidence = true;
+        out.text = no_evidence_text(ko).to_string();
+        out.sentences.clear();
+        out.sources.clear();
+    }
+    out.elapsed_ms = started.elapsed().as_millis() as u64;
     if req.save {
         let id = deps.search.db.with(|c| repo::insert_answer(c, &out, &req.scope))?;
         out.id = Some(id);

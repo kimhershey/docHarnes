@@ -1088,7 +1088,7 @@ fn a_project_scope_reads_work_documents_and_reference_material() {
         scope_project: open.map(str::to_string),
         ..PlanContext::default()
     };
-    let summarize = || Op::Summarize { target: Some(SummarizeTarget::Set), length: None, group_by: None };
+    let summarize = || Op::Summarize { target: Some(SummarizeTarget::Set), length: None, group_by: None, topic: None };
     let validated = |ops: Vec<Op>, scope: Scope, open: Option<&str>| {
         let mut plan = plan_of(ops, scope);
         validate::validate(&mut plan, &ctx(open), None);
@@ -1180,4 +1180,125 @@ fn a_project_scope_reads_work_documents_and_reference_material() {
     hits.sort();
     hits.dedup();
     assert_eq!(hits, vec!["ref", "work"]);
+}
+
+/// 1.0.2 (user report 2026-11-19 — "AA에 대해서 요약해줘 … 요약만 하고 AA에 대한 내용을 수집하지 않음"):
+/// a summary with a subject looks the passages about it up — in the scope, or everywhere without
+/// one — and summarises those. The documents that say nothing about the subject are not read, and
+/// nothing is summarised document by document.
+#[test]
+fn a_summary_about_a_subject_reads_the_passages_about_it() {
+    let w = World::new();
+    for (id, path, text) in [
+        ("work", "inbox/work.jpg", "한빛 포털 구축 계약서 납품 기한은 12월 말"),
+        ("ref", "inbox/ref.jpg", "정보보안 지침 납품 기한 준수 절차"),
+        ("shared", "inbox/shared.jpg", "공통 개발 표준 코딩 규칙"),
+        ("other", "inbox/other.jpg", "새봄 ERP 납품 기한은 3월 말"),
+    ] {
+        w.add_image(id, path);
+        w.db.with(|c| docs::set_page_text(c, id, 1, text)).unwrap();
+        index_document(&IndexDeps { db: &w.db, analyzer: &w.analyzer, options: Default::default() }, &w.doc(id), true)
+            .unwrap();
+    }
+    let about = |t: &str| Op::Summarize { target: None, length: None, group_by: None, topic: Some(t.into()) };
+    let validated = |ops: Vec<Op>, scope: Scope| {
+        let mut plan = plan_of(ops, scope);
+        let issues = validate::validate(&mut plan, &PlanContext::default(), None);
+        assert!(!crate::planner::has_errors(&issues), "{issues:?}");
+        plan
+    };
+    let cited = |ex: &exec::PlanExecution| -> Vec<String> {
+        let mut ids: Vec<String> = ex.steps[0].payload["groups"][0]["document_ids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d.as_str().unwrap().to_string())
+            .collect();
+        ids.sort();
+        ids
+    };
+    let calls = || w.chat.requests.lock().unwrap().len();
+    let last_prompt = || {
+        let requests = w.chat.requests.lock().unwrap();
+        serde_json::to_string(&requests.last().unwrap().messages).unwrap()
+    };
+
+    // No scope: every document that says something about the subject, in one summary.
+    let plan = validated(vec![about("  납품   기한 ")], Scope::default());
+    assert!(
+        matches!(&plan.operations[0], Op::Summarize { topic: Some(t), target: Some(SummarizeTarget::Set), .. } if t == "납품 기한"),
+        "{plan:?}"
+    );
+    let card = preview(&w, &plan);
+    assert!(card.steps[0].summary.contains("'납품 기한'에 관한 내용을 찾아 요약"), "{}", card.steps[0].summary);
+    assert_eq!(card.steps[0].payload["topic"], json!("납품 기한"));
+    w.chat.push_ocr("- 한빛 포털의 납품 기한은 12월 말이다 [1]\n- 새봄 ERP의 납품 기한은 3월 말이다 [2]");
+    let before = calls();
+    let ex = run(&w, &plan);
+    assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
+    assert_eq!(calls(), before + 1, "the passages fit one call");
+    assert_eq!(cited(&ex), vec!["other", "ref", "work"]);
+    let payload = &ex.steps[0].payload;
+    assert_eq!(payload["topic"], json!("납품 기한"));
+    assert!(payload["summaries"].as_array().unwrap().is_empty(), "nothing is summarised per document");
+    let answer = &payload["groups"][0]["answer"];
+    assert_eq!((answer["kind"].clone(), answer["question"].clone()), (json!("summary"), json!("납품 기한")));
+    assert_eq!(answer["sources"].as_array().unwrap().len(), 3);
+    assert!(answer["text"].as_str().unwrap().contains("12월 말"));
+    assert!(ex.steps[0].summary.contains("'납품 기한'에 관한 내용 요약 · 문서 3건"), "{}", ex.steps[0].summary);
+    let prompt = last_prompt();
+    assert!(prompt.contains("'납품 기한'에 관한 내용만 골라") && prompt.contains("한빛 포털 구축 계약서"), "{prompt}");
+    assert!(!prompt.contains("공통 개발 표준"), "a document that says nothing about it is not read: {prompt}");
+
+    // Nothing in the documents about the subject: said so, without a model call.
+    let before = calls();
+    let ex = run(&w, &validated(vec![about("양자 컴퓨터")], Scope::default()));
+    assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
+    assert_eq!(calls(), before);
+    assert!(ex.steps[0].summary.contains("'양자 컴퓨터'에 관한 내용을 범위의 문서에서 찾지 못했습니다"));
+    assert_eq!(ex.steps[0].payload["groups"][0]["answer"]["no_evidence"], json!(true));
+
+    // Inside a project: its work documents and its reference material, nothing of another project.
+    let hanbit =
+        w.db.with(|c| projects_repo::save_project(c, &ProjectInput { name: "한빛 포털".into(), ..Default::default() }))
+            .unwrap();
+    w.db.with(|c| projects_repo::add_documents(c, &hanbit.id, &["work".to_string(), "shared".to_string()])).unwrap();
+    w.db.with(|c| {
+        let group = crate::knowledge::repo::project_reference_group(c, &hanbit.id, &hanbit.name)?;
+        crate::knowledge::repo::add_docs_to_collection(c, &group.id, &["ref".to_string()])?;
+        docs::set_role(c, "ref", DocumentRole::Knowledge)
+    })
+    .unwrap();
+    let in_project = Scope {
+        filter: ScopeFilter { project_id: Some(hanbit.id.clone()), ..ScopeFilter::default() },
+        ..Scope::default()
+    };
+    let plan = validated(vec![about("납품 기한")], in_project);
+    assert!(plan.scope.filter.with_reference, "a summary about a subject only reads");
+    let ex = run(&w, &plan);
+    assert_eq!(cited(&ex), vec!["ref", "work"]);
+    // … and documents the user picked: those only.
+    let ex = run(&w, &validated(vec![about("납품 기한")], sel(&["other", "shared"])));
+    assert_eq!(cited(&ex), vec!["other"]);
+    // A scope that matches no document is told, not widened to every document.
+    let ex = run(&w, &validated(vec![about("납품 기한")], of_type("estimate")));
+    assert_eq!(ex.steps[0].status, StepStatus::Failed);
+    assert!(ex.steps[0].error.as_deref().unwrap().contains("no_documents"), "{:?}", ex.steps[0].error);
+
+    // A summary about a subject is one summary: a grouping is dropped with a note.
+    let mut grouped = plan_of(
+        vec![Op::Summarize {
+            target: Some(SummarizeTarget::EachDoc),
+            length: None,
+            group_by: Some(crate::planner::SummaryGroup::Project),
+            topic: Some("납품 기한".into()),
+        }],
+        Scope::default(),
+    );
+    let issues = validate::validate(&mut grouped, &PlanContext::default(), None);
+    assert!(issues.iter().any(|i| i.code == "grouping_dropped"), "{issues:?}");
+    assert!(matches!(&grouped.operations[0], Op::Summarize { group_by: None, target: Some(SummarizeTarget::Set), .. }));
+    // An empty subject is no subject: the documents are summarised as before.
+    let plain = validated(vec![about("   ")], sel(&["work"]));
+    assert!(matches!(&plain.operations[0], Op::Summarize { topic: None, .. }));
 }

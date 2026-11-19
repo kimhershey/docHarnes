@@ -13,7 +13,7 @@ use crate::documents::DocumentRecord;
 use crate::error::{CoreError, Result};
 use crate::knowledge::answer::{self, AnswerDeps};
 use crate::knowledge::search::SearchDeps;
-use crate::knowledge::{Answer, AnswerKind, AnswerRequest, SummaryMode};
+use crate::knowledge::{Answer, AnswerKind, AnswerRequest, SearchScope, SummaryMode};
 use crate::projects::repo as projects_repo;
 
 use super::super::{Plan, SummarizeTarget, SummaryGroup, SummaryLength};
@@ -249,6 +249,90 @@ fn combine(
         }
         items = next;
     }
+}
+
+/// 1.0.2 — "AA에 대해서 요약해줘": what the documents in scope say about `topic`, as one summary with
+/// its sources. The scope works as it does for a search — none is every document, a project also
+/// sees its reference material and the common one — and a scope that matches no document is told,
+/// not widened.
+///
+/// User report 2026-11-19: the step summarised every document in scope ("요약만 하고 AA에 대한 내용을
+/// 수집하지 않음"); a summary had no way to say what it is about.
+pub(super) fn run_topic(
+    deps: &ExecDeps<'_>,
+    plan: &Plan,
+    imported: Option<&[String]>,
+    topic: &str,
+    length: Option<SummaryLength>,
+    progress: &mut dyn FnMut(&str, u32, u32, &str),
+) -> Result<StepOutcome> {
+    let db = deps.db();
+    let chat = deps.chat.ok_or_else(|| no_model(deps))?;
+    let _lease = LeaseGuard::acquire(deps.lease);
+    // "이 프로젝트의 참고 자료에서 …": the search scope itself adds the project's reference group and
+    // the common reference material (`project_id` + `roles`), as for `search`.
+    let reference_of_project = super::project_reference_only(plan, imported);
+    let narrowed = super::scope_narrows(plan, imported) && !reference_of_project;
+    let docs = if (plan.scope.is_empty() && imported.is_none()) || reference_of_project {
+        Vec::new()
+    } else {
+        working_set(deps, plan, imported)?
+    };
+    if narrowed && docs.is_empty() {
+        // (an empty document list would mean "everywhere" to the search)
+        return Err(super::no_documents(plan));
+    }
+    deps.checkpoint()?;
+    progress("summarize", 0, 1, topic);
+    let mut req = AnswerRequest::question(topic);
+    req.kind = AnswerKind::Summary;
+    req.summary_mode = match length {
+        Some(SummaryLength::Short) => SummaryMode::OneLine,
+        Some(SummaryLength::Long) => SummaryMode::OnePage,
+        None => SummaryMode::KeyPoints,
+    };
+    req.context_tokens = deps.knowledge.context_tokens;
+    req.top_k = deps.knowledge.top_k;
+    req.min_similarity = Some(deps.knowledge.min_vector_similarity);
+    req.scope = SearchScope {
+        documents: super::ids(&docs),
+        project_id: plan.scope.filter.project_id.clone(),
+        roles: plan.scope.filter.role.map(|r| r.as_role()).into_iter().collect(),
+        latest_only: deps.knowledge.latest_only,
+        ..SearchScope::default()
+    };
+    let cancelled = || deps.cancelled();
+    let adeps = AnswerDeps {
+        search: SearchDeps { db, analyzer: deps.analyzer, embedder: deps.embedder },
+        chat,
+        model: deps.model.clone(),
+        cancelled: Some(&cancelled),
+        context_size: deps.ctx_size,
+    };
+    let ans = answer::summarize_topic(&adeps, &req, &mut |_| !deps.cancelled())?;
+    // The documents the summary draws on, in the order their passages are cited.
+    let mut cited: Vec<&str> = Vec::new();
+    for s in &ans.sources {
+        if !cited.contains(&s.document_id.as_str()) {
+            cited.push(&s.document_id);
+        }
+    }
+    let summary = match (ans.no_evidence, deps.ko()) {
+        (true, true) => format!("'{topic}'에 관한 내용을 범위의 문서에서 찾지 못했습니다"),
+        (true, false) => format!("Nothing about '{topic}' was found in the documents in scope"),
+        (false, true) => format!("'{topic}'에 관한 내용 요약 · 문서 {}건의 대목 {}곳", cited.len(), ans.sources.len()),
+        (false, false) => {
+            format!("Summary about '{topic}' · {} passage(s) of {} document(s)", ans.sources.len(), cited.len())
+        }
+    };
+    let label = if deps.ko() { format!("'{topic}'에 관한 내용") } else { format!("About '{topic}'") };
+    let payload = json!({
+        "topic": topic,
+        "summaries": [],
+        "groups": [{ "key": "topic", "label": label, "document_ids": cited, "answer": ans }],
+        "group_by": SummaryGroup::None,
+    });
+    Ok(StepOutcome { summary, payload, imported: None })
 }
 
 pub(super) fn run(

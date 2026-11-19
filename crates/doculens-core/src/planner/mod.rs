@@ -986,6 +986,11 @@ pub enum Op {
         /// One combined summary per project / document type / folder.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         group_by: Option<SummaryGroup>,
+        /// 1.0.2 — what the summary is about ("AA에 대해서 요약해줘" → `AA`): the passages about it are
+        /// looked up in the scope and summarised, with their sources. Absent = the documents in scope
+        /// are summarised themselves.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        topic: Option<String>,
     },
     Aggregate {
         #[serde(rename = "fn")]
