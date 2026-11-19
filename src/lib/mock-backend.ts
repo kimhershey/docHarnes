@@ -296,8 +296,8 @@ function openWorkspace(path: string, create: boolean, name: string | null, local
       manifest: {
         workspace_id: crypto.randomUUID(),
         schema_version: 1,
-        app_version: "1.0.1",
-        last_opened_app_version: "1.0.1",
+        app_version: "1.0.2",
+        last_opened_app_version: "1.0.2",
         name: name?.trim() || basename(p),
         created_at: new Date().toISOString(),
         last_opened_at: null,
@@ -2318,7 +2318,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "app_info":
       return r({
         name: "DocuLens",
-        version: "1.0.1",
+        version: "1.0.2",
         settings_path: "(browser) localStorage:doculens.mock.settings",
         app_data_dir: "(browser)",
         engines_dir: "(browser)/engines",
