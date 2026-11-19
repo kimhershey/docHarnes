@@ -1,0 +1,821 @@
+{
+  "schema_version": 1,
+  "kind": "planner",
+  "generated_at": "2026-11-19T13:27:57Z",
+  "golden": "eval/golden/planner.json",
+  "golden_count": 11,
+  "context": "eval/golden/planner-context.json",
+  "today": "2026-11-08",
+  "engine": {
+    "binary": "llama-server (local build)",
+    "version": null,
+    "build_number": null,
+    "backend": "cpu",
+    "tier": "cpu_only",
+    "profile": "balanced",
+    "model": "gemma4-e4b-q4km",
+    "model_display": "Gemma 4 E4B (Q4_K_M, 저여유)",
+    "quantization": "Q4_K_M",
+    "architecture": "gemma4",
+    "has_vision": true,
+    "ctx": 8192,
+    "model_memory_bytes": null,
+    "mmproj_bytes": 990372672,
+    "devices": [],
+    "vram_used_mib": null,
+    "load_ms": 9324
+  },
+  "mode": "model",
+  "model": "gemma4-e4b-q4km",
+  "total": 11,
+  "correct": 11,
+  "accuracy": 1.0,
+  "by_category": {
+    "en": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "ko": {
+      "total": 10,
+      "correct": 10,
+      "accuracy": 1.0
+    }
+  },
+  "by_intent": {
+    "summarize": {
+      "total": 11,
+      "correct": 11,
+      "accuracy": 1.0
+    }
+  },
+  "by_kind": {
+    "question": {
+      "total": 11,
+      "correct": 11,
+      "accuracy": 1.0
+    }
+  },
+  "by_source": {
+    "model": 11
+  },
+  "by_cause": {},
+  "unasked_changes": 0,
+  "latency": {
+    "p50_ms": 27473.207486,
+    "p95_ms": 298466.73462,
+    "mean_ms": 73024.81953972726
+  },
+  "latency_by_kind": {
+    "question": {
+      "p50_ms": 27473.207486,
+      "p95_ms": 298466.73462,
+      "mean_ms": 73024.81953972726
+    }
+  },
+  "items": [
+    {
+      "id": "ko-134",
+      "category": "ko",
+      "text": "AA에 대해서 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "'AA'에 관한 내용을 문서에서 찾아 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 298466.73462,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 3724,
+      "completion_tokens": 116,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize",
+          "target": "set",
+          "topic": "AA"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"사용자가 'AA'라는 주제에 대해 요약을 요청했습니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {},\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"topic\": \"AA\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "ko-135",
+      "category": "ko",
+      "text": "납품 기한에 대해서 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "'납품 기한'에 관한 내용을 문서에서 찾아 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 22535.595339,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 3730,
+      "completion_tokens": 119,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize",
+          "target": "set",
+          "topic": "납품 기한"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"납품 기한에 대한 내용을 문서에서 찾아 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {},\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"topic\": \"납품 기한\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "ko-136",
+      "category": "ko",
+      "text": "보안 요구사항에 대해 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "'보안 요구사항'에 관한 내용을 문서에서 찾아 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 22500.875242,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 3730,
+      "completion_tokens": 119,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize",
+          "target": "set",
+          "topic": "보안 요구사항"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"보안 요구사항에 대해 문서 내에서 찾아 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {},\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"topic\": \"보안 요구사항\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "ko-137",
+      "category": "ko",
+      "text": "한빛 납품 프로젝트에서 검수 기준에 대해 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "'검수 기준'에 관한 내용을 문서에서 찾아 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 162732.056413,
+      "kind": "question",
+      "requires_confirmation": false,
+      "notes": [
+        "scope_filled"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 4724,
+      "completion_tokens": 145,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize",
+          "target": "set",
+          "topic": "검수 기준"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "project_id": "p-hanbit",
+          "with_reference": true
+        }
+      },
+      "raw": "{\n  \"summary\": \"한빛 납품 프로젝트에서 검수 기준에 대한 내용을 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"filter\": {\n      \"doc_type\": \"acceptance\"\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"topic\": \"검수 기준\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "ko-138",
+      "category": "ko",
+      "text": "계약서에서 지체상금에 대해 자세히 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "'지체상금'에 관한 내용을 문서에서 찾아 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 121116.811352,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 3742,
+      "completion_tokens": 148,
+      "mismatches": [],
+      "operations": [
+        {
+          "length": "long",
+          "op": "summarize",
+          "target": "set",
+          "topic": "지체상금"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "doc_type": "dev_contract"
+        }
+      },
+      "raw": "{\n  \"summary\": \"계약서 문서들에서 지체상금에 대한 내용을 자세히 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"filter\": {\n      \"doc_type\": \"dev_contract\"\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"topic\": \"지체상금\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "ko-139",
+      "category": "ko",
+      "text": "하자보수 관련 내용을 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "'하자보수'에 관한 내용을 문서에서 찾아 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 20149.480184,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 3728,
+      "completion_tokens": 114,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize",
+          "target": "set",
+          "topic": "하자보수"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"하자보수 관련 내용을 찾아 요약합니다\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {},\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"topic\": \"하자보수\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "en-36",
+      "category": "en",
+      "text": "summarise the documents about late fees",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "'late fees'에 관한 내용을 문서에서 찾아 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 20187.760959,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 3724,
+      "completion_tokens": 113,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize",
+          "target": "set",
+          "topic": "late fees"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"Late fees에 관한 문서를 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {},\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"topic\": \"late fees\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "ko-140",
+      "category": "ko",
+      "text": "견적서에 대해 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "견적서의 내용을 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 44753.314452,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 3812,
+      "completion_tokens": 135,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "doc_type": "estimate"
+        }
+      },
+      "raw": "{\n  \"summary\": \"견적서의 내용을 요약합니다\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"filter\": {\n      \"doc_type\": \"estimate\"\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"topic\": \"견적서\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "ko-141",
+      "category": "ko",
+      "text": "이 문서에 대해 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "선택된 문서 전체를 요약합니다.",
+      "confidence": 0.9,
+      "latency_ms": 37484.066698,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 3726,
+      "completion_tokens": 130,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize",
+          "target": "each_doc"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"선택된 문서 전체를 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"doc_ids\": [\"d1a2\"]\n  },\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"target\": \"each_doc\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "ko-142",
+      "category": "ko",
+      "text": "한빛 납품에 대해서 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "'한빛 납품' 프로젝트의 문서를 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 27473.207486,
+      "kind": "question",
+      "requires_confirmation": false,
+      "notes": [
+        "scope_filled"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 3730,
+      "completion_tokens": 149,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize",
+          "target": "set"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "project_id": "p-hanbit",
+          "with_reference": true
+        }
+      },
+      "raw": "{\n  \"summary\": \"프로젝트 '한빛 납품'에 대한 내용을 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"filter\": {\n      \"doc_type\": \"project_name:한빛 납품\"\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"topic\": \"한빛 납품\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "ko-143",
+      "category": "ko",
+      "text": "이 문서에서 지체상금에 대해 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "'지체상금'에 관한 내용을 문서에서 찾아 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 25873.112192,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 3736,
+      "completion_tokens": 137,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize",
+          "target": "set",
+          "topic": "지체상금"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"선택된 문서에서 지체상금에 대한 내용을 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"doc_ids\": [\"d1a2\"]\n  },\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"topic\": \"지체상금\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    }
+  ],
+  "rules_only": {
+    "mode": "rules",
+    "total": 11,
+    "correct": 11,
+    "accuracy": 1.0,
+    "by_category": {
+      "en": {
+        "total": 1,
+        "correct": 1,
+        "accuracy": 1.0
+      },
+      "ko": {
+        "total": 10,
+        "correct": 10,
+        "accuracy": 1.0
+      }
+    },
+    "by_intent": {
+      "summarize": {
+        "total": 11,
+        "correct": 11,
+        "accuracy": 1.0
+      }
+    },
+    "by_kind": {
+      "question": {
+        "total": 11,
+        "correct": 11,
+        "accuracy": 1.0
+      }
+    },
+    "by_source": {
+      "rules": 11
+    },
+    "by_cause": {},
+    "unasked_changes": 0,
+    "items": [
+      {
+        "id": "ko-134",
+        "category": "ko",
+        "text": "AA에 대해서 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "'AA'에 관한 내용을 문서에서 찾아 요약합니다",
+        "confidence": 0.85,
+        "latency_ms": 3.599492,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize",
+            "target": "set",
+            "topic": "AA"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "ko-135",
+        "category": "ko",
+        "text": "납품 기한에 대해서 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "'납품 기한'에 관한 내용을 문서에서 찾아 요약합니다",
+        "confidence": 0.85,
+        "latency_ms": 3.212934,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize",
+            "target": "set",
+            "topic": "납품 기한"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "ko-136",
+        "category": "ko",
+        "text": "보안 요구사항에 대해 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "'보안 요구사항'에 관한 내용을 문서에서 찾아 요약합니다",
+        "confidence": 0.85,
+        "latency_ms": 3.298317,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize",
+            "target": "set",
+            "topic": "보안 요구사항"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "ko-137",
+        "category": "ko",
+        "text": "한빛 납품 프로젝트에서 검수 기준에 대해 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "'검수 기준'에 관한 내용을 문서에서 찾아 요약합니다",
+        "confidence": 0.85,
+        "latency_ms": 3.9951659999999998,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize",
+            "target": "set",
+            "topic": "검수 기준"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-hanbit",
+            "with_reference": true
+          }
+        }
+      },
+      {
+        "id": "ko-138",
+        "category": "ko",
+        "text": "계약서에서 지체상금에 대해 자세히 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "'지체상금'에 관한 내용을 문서에서 찾아 요약합니다",
+        "confidence": 0.85,
+        "latency_ms": 3.847833,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "length": "long",
+            "op": "summarize",
+            "target": "set",
+            "topic": "지체상금"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "dev_contract"
+          }
+        }
+      },
+      {
+        "id": "ko-139",
+        "category": "ko",
+        "text": "하자보수 관련 내용을 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "'하자보수'에 관한 내용을 문서에서 찾아 요약합니다",
+        "confidence": 0.85,
+        "latency_ms": 3.240088,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize",
+            "target": "set",
+            "topic": "하자보수"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "en-36",
+        "category": "en",
+        "text": "summarise the documents about late fees",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "'late fees'에 관한 내용을 문서에서 찾아 요약합니다",
+        "confidence": 0.85,
+        "latency_ms": 3.634705,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize",
+            "target": "set",
+            "topic": "late fees"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "ko-140",
+        "category": "ko",
+        "text": "견적서에 대해 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "견적서를 요약합니다",
+        "confidence": 0.87,
+        "latency_ms": 2.4441710000000003,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize",
+            "target": "each_doc"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "estimate"
+          }
+        }
+      },
+      {
+        "id": "ko-141",
+        "category": "ko",
+        "text": "이 문서에 대해 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "선택 문서를 요약합니다",
+        "confidence": 0.87,
+        "latency_ms": 1.8770580000000001,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize",
+            "target": "each_doc"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ],
+          "filter": {}
+        }
+      },
+      {
+        "id": "ko-142",
+        "category": "ko",
+        "text": "한빛 납품에 대해서 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "'한빛 납품' 프로젝트의 문서를 요약합니다",
+        "confidence": 0.85,
+        "latency_ms": 2.608128,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize",
+            "target": "set"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-hanbit",
+            "with_reference": true
+          }
+        }
+      },
+      {
+        "id": "ko-143",
+        "category": "ko",
+        "text": "이 문서에서 지체상금에 대해 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "'지체상금'에 관한 내용을 문서에서 찾아 요약합니다",
+        "confidence": 0.85,
+        "latency_ms": 3.4693549999999997,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize",
+            "target": "set",
+            "topic": "지체상금"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ],
+          "filter": {}
+        }
+      }
+    ]
+  }
+}

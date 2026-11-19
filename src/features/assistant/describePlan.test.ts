@@ -168,6 +168,26 @@ describe("impact line", () => {
     expect(impactLine(impactOf(plan([{ op: "search", query: "q" }]), null), t)).toBe("부작용: 없음 · 대상 문서 0건");
   });
 
+  it("a summary about a subject says what it is about (1.0.2)", () => {
+    const ctx = { lang: "ko", context };
+    expect(summarizeOp({ op: "summarize", target: "set", topic: "납품 기한" }, t, ctx)).toBe("'납품 기한'에 관한 내용을 찾아서");
+    expect(summarizeOp({ op: "summarize", target: "set", topic: "납품 기한", length: "long" }, t, ctx)).toBe("'납품 기한'에 관한 내용을 찾아서 · 길게");
+    expect(summarizeOp({ op: "summarize", target: "each_doc" }, t, ctx)).toBe("문서별");
+    // The result of such a step is one summary with its sources — no per-document list.
+    const answer = { id: null, kind: "summary", question: "납품 기한", text: "- 12월 말 [1]", sentences: [], sources: [], no_evidence: false, used_general_knowledge: false, conflicts: null, model: "m", elapsed_ms: 1, prompt_tokens: 1, completion_tokens: 1, document_id: null, feedback: null, feedback_note: null, created_at: "" };
+    const exec = {
+      plan: plan([{ op: "summarize", target: "set", topic: "납품 기한" }]),
+      status: "done",
+      steps: [{ index: 0, op: "summarize", status: "done", summary: "s", payload: { topic: "납품 기한", summaries: [], groups: [{ key: "topic", label: "'납품 기한'에 관한 내용", document_ids: ["a", "b"], answer }], group_by: "none" }, error: null, elapsed_ms: 1 }],
+      batches: [],
+      elapsed_ms: 1,
+    };
+    const actions = deriveResultActions(exec as never, exec.plan);
+    expect(actions.summaries).toHaveLength(1);
+    expect(actions.summaries[0]).toMatchObject({ items: [], groupBy: "none" });
+    expect(actions.summaries[0]!.groups).toEqual([{ key: "topic", label: "'납품 기한'에 관한 내용", documents: 2, answer }]);
+  });
+
   it("says how many of the documents are the project's reference material (1.0.1)", () => {
     const p = plan([{ op: "summarize" }]);
     const preview: PlanPreview = { document_count: 5, document_ids: [], steps: [], requires_confirmation: false, uses_scope: true, reference_count: 2 };

@@ -592,6 +592,131 @@ describe("planner (rules, validate, guard)", () => {
   // 1.0.1, user report 2026-11-17 ("요약이 자꾸 실패" — a card that said "참고 자료만 … 대상 문서 0건", and "프로젝트
   // 단위에서 모든 검색 및 요약 등 명령을 참고자료와 업무문서를 둘 다 포함하도록"): `guard::kind_named`,
   // `validate::project_reference`, `scope::resolve`, `exec::preview`, `exec::no_documents`.
+  // 1.0.2 (user report 2026-11-19 — "AA에 대해서 요약해줘 … 요약만 하고 AA에 대한 내용을 수집하지 않음"):
+  // `guard::about` / `summary_topic`, `rules::process`, `exec::summarize::run_topic`.
+  it("a summary about a subject gathers what the documents say about it", async () => {
+    const of = (text: string) => {
+      const a = planner.aboutOf(text);
+      return a ? [a.subject, a.rest] : null;
+    };
+    // The same sentences as `guard::tests::the_subject_of_a_sentence`.
+    expect(of("AA에 대해서 요약해줘")).toEqual(["AA", "요약해줘"]);
+    expect(of("납품 기한에 대해 요약해줘")).toEqual(["납품 기한", "요약해줘"]);
+    expect(of("보안 요구사항에 관해서 정리해줘")).toEqual(["보안 요구사항", "정리해줘"]);
+    expect(of("지체상금에 대한 내용을 요약해줘")).toEqual(["지체상금", "내용을 요약해줘"]);
+    expect(of("하자보수 관련 내용을 요약해줘")).toEqual(["하자보수", "을 요약해줘"]);
+    expect(of("보안 관련 요약")).toEqual(["보안", "요약"]);
+    expect(of("개인정보와 관련된 조항을 알려줘")).toEqual(["개인정보", "조항을 알려줘"]);
+    expect(of("한빛 납품 프로젝트에서 검수 기준에 대해 요약해줘")).toEqual(["검수 기준", "한빛 납품 프로젝트에서 요약해줘"]);
+    expect(of("AAA 프로젝트의 일정에 대해 알려줘")).toEqual(["일정", "AAA 프로젝트의 알려줘"]);
+    expect(of("프로젝트별로 지체상금에 대해 요약해줘")).toEqual(["지체상금", "프로젝트별로 요약해줘"]);
+    expect(of("자세히 계약 금액에 대해 요약해줘")).toEqual(["계약 금액", "자세히 요약해줘"]);
+    expect(of("계약 금액에 대해 자세히 요약해줘")).toEqual(["계약 금액", "자세히 요약해줘"]);
+    expect(of("summarise what the documents say about late fees.")).toEqual(["late fees", "summarise what the documents say"]);
+    expect(of("Summarize about security requirements in the Hanbit project")).toEqual(["security requirements", "Summarize in the Hanbit project"]);
+    for (const text of [
+      "이 문서에 대해 요약해줘",
+      "그것에 대해 더 알려줘",
+      "위 내용에 대해 요약해줘",
+      "선택한 문서에 대해 요약해줘",
+      "이 프로젝트에 대해 요약해줘",
+      "AAA 프로젝트에 대해 요약해줘",
+      "참고 자료에 대해 요약해줘",
+      "문서에 대해 요약해줘",
+      "summarise about this document",
+      "tell me about it",
+      "요약해줘",
+      "관련자 명단 요약해줘",
+      `다음 글을 요약해줘: ${"계약 해지에 대한 조항은 다음과 같다. ".repeat(6)}`,
+    ]) {
+      expect(of(text), text).toBeNull();
+    }
+
+    const ids = await importDocs(["개발계약서.docx", "보안지침.pdf", "회의록_10월.pdf"]);
+    await indexAll();
+    const contract = ids["개발계약서.docx"]!;
+    const ctx = planner.buildContext();
+    const topic = (text: string) => planner.summaryTopic(text, ctx)?.subject ?? null;
+    expect(topic("AA에 대해서 요약해줘")).toBe("AA");
+    expect(topic("보안 요구사항에 대해 요약해줘")).toBe("보안 요구사항");
+    expect(topic("AA에 대해 알려줘")).toBeNull();
+    expect(topic("요약에 대해 알려줘")).toBeNull();
+    expect(topic("견적서에 대해 요약해줘"), "the estimates are summarised").toBeNull();
+    // A summary to make — not one that exists already.
+    for (const text of ["AA에 대해 요약 좀 해줘", "AA에 대해서 요약 부탁해", "AA 관련 요약", "AA에 관해 간단히 요약해 주세요"]) expect(topic(text), text).toBe("AA");
+    for (const text of ["지난 회의에 대한 요약본 찾아줘", "AA에 관한 요약 보고서 열어줘", "AA에 대해 요약된 문서 보여줘"]) expect(topic(text), text).toBeNull();
+
+    // The plan: one summary of the subject, over every document when no scope is named — nothing is asked back.
+    const said = planner.planText("계약 금액에 대해서 요약해줘", ctx);
+    expect(said.plan.operations).toEqual([{ op: "summarize", target: "set", length: null, topic: "계약 금액" }]);
+    expect(planner.isClarification(said.plan)).toBe(false);
+    expect(said.plan.scope).toMatchObject({ folder: null, doc_ids: [] });
+    expect(said.plan.summary).toBe("'계약 금액'에 관한 내용을 문서에서 찾아 요약합니다");
+    const preview = planner.planPreview(said.plan, ctx);
+    expect(preview.steps[0]).toMatchObject({ summary: "'계약 금액'에 관한 내용을 찾아 요약 · 문서 3건", payload: { documents: 3, topic: "계약 금액" } });
+    // "보안 요구사항" names no document type ("요구사항" belongs to the subject); a type outside the subject does.
+    expect(planner.planText("보안 요구사항에 대해 요약해줘", ctx).plan.scope.filter?.doc_type ?? null).toBeNull();
+    expect(planner.planText("계약서에서 지체상금에 대해 요약해줘", ctx).plan.scope.filter?.doc_type).toBe("dev_contract");
+    expect(planner.planText("자세히 계약 금액에 대해 요약해줘", ctx).plan.operations[0]).toMatchObject({ length: "long", topic: "계약 금액" });
+    // A summary without a subject is the summary of the documents, as before.
+    expect(planner.planText("계약서 요약해줘", ctx).plan.operations[0]).toMatchObject({ op: "summarize", target: "each_doc" });
+    expect((planner.planText("계약서 요약해줘", ctx).plan.operations[0] as { topic?: string }).topic).toBeUndefined();
+
+    // The step: one summary with its sources; the documents that say nothing about it are not read.
+    const exec = await planner.runPlan(said.plan, ctx, null, () => undefined);
+    expect(exec.steps[0]).toMatchObject({ op: "summarize", status: "done" });
+    const payload = exec.steps[0]!.payload as { topic: string; summaries: unknown[]; groups: { key: string; label: string; document_ids: string[]; answer: Answer }[] };
+    expect(payload).toMatchObject({ topic: "계약 금액", summaries: [], group_by: "none" });
+    expect(payload.groups).toHaveLength(1);
+    expect(payload.groups[0]).toMatchObject({ key: "topic", label: "'계약 금액'에 관한 내용", document_ids: [contract] });
+    expect(payload.groups[0]!.answer).toMatchObject({ kind: "summary", question: "계약 금액", no_evidence: false });
+    expect(payload.groups[0]!.answer.sources.every((x) => x.document_id === contract)).toBe(true);
+    expect(exec.steps[0]!.summary).toContain("'계약 금액'에 관한 내용 요약 · 문서 1건");
+    // Nothing about the subject: said, not an error.
+    const none = await planner.runPlan(planner.planText("양자 컴퓨터에 대해 요약해줘", ctx).plan, ctx, null, () => undefined);
+    expect(none.steps[0]).toMatchObject({ status: "done", summary: "'양자 컴퓨터'에 관한 내용을 범위의 문서에서 찾지 못했습니다" });
+    // A scope that matches no document is told, not widened.
+    const empty: Plan = { ...structuredClone(said.plan), scope: { folder: null, doc_ids: [], filter: { doc_type: "estimate" } } };
+    planner.validatePlan(empty, ctx, null);
+    const failed = await planner.runPlan(empty, ctx, null, () => undefined);
+    expect(failed.steps[0]).toMatchObject({ status: "failed" });
+    expect(failed.steps[0]!.error).toContain("no_documents");
+    // The validator: a subject makes one summary; a grouping is dropped with a note; an empty subject is none.
+    const grouped: Plan = { ...structuredClone(said.plan), operations: [{ op: "summarize", target: "each_doc", group_by: "project", topic: "  계약   금액 " }] };
+    expect(planner.validatePlan(grouped, ctx, null).map((i) => i.code)).toContain("grouping_dropped");
+    expect(grouped.operations[0]).toMatchObject({ target: "set", group_by: null, topic: "계약 금액" });
+    const blank: Plan = { ...structuredClone(said.plan), operations: [{ op: "summarize", target: "each_doc", topic: "   " }] };
+    planner.validatePlan(blank, ctx, null);
+    expect(blank.operations[0]).toEqual({ op: "summarize", target: "each_doc" });
+
+    // What is open is where to look when the words point at it — and only then.
+    const open = { ...ctx, current_document: contract };
+    expect(planner.planText("이 문서에서 계약 금액에 대해 요약해줘", open).plan).toMatchObject({ operations: [{ op: "summarize", topic: "계약 금액" }], scope: { doc_ids: [contract] } });
+    expect(planner.planText("계약 금액에 대해 요약해줘", open).plan.scope.doc_ids).toEqual([]);
+    expect(topic("계약서 내용에 대해 요약해줘"), "the contracts are summarised").toBeNull();
+    // A subject that is the name of a project means its documents: one summary of the project, no subject to look up
+    // (`guard::summary_project`).
+    const aaa = await backend.mockInvoke<{ id: string }>("project_create", { input: { name: "AAA" } });
+    const named = planner.buildContext();
+    for (const text of ["AAA에 대해서 요약해줘", "AAA 프로젝트에 대해 요약해줘", "AAA 프로젝트에 관해서 자세히 요약해줘"]) {
+      const p = planner.planText(text, named).plan;
+      expect(p.operations, text).toEqual([{ op: "summarize", target: "set", length: text.includes("자세히") ? "long" : null }]);
+      expect(p.scope.filter, text).toMatchObject({ project_id: aaa.id, with_reference: true });
+      expect(p.summary, text).toBe("'AAA' 프로젝트의 문서를 요약합니다");
+      expect(planner.summaryTopic(text, named), text).toBeNull();
+    }
+    expect(planner.summaryTopic("AA에 대해서 요약해줘", named)?.subject, "another word than the project's name").toBe("AA");
+    // The project named as the place and its name as the subject: a subject like any other.
+    expect(planner.planText("AAA 프로젝트에서 AAA에 대해 요약해줘", named).plan).toMatchObject({
+      operations: [{ op: "summarize", target: "set", topic: "AAA" }],
+      scope: { filter: { project_id: aaa.id } },
+    });
+    expect(planner.planText("AAA 프로젝트에서 계약 금액에 대해 요약해줘", named).plan).toMatchObject({
+      operations: [{ op: "summarize", topic: "계약 금액" }],
+      scope: { filter: { project_id: aaa.id } },
+    });
+  });
+
   it("a kind named as one more thing to cover is no restriction; inside a project a plan that reads covers both kinds", async () => {
     for (const text of ["참고자료도 포함해서 요약해줘", "참고 자료까지 요약해줘", "참고자료와 문서를 모두 요약해줘", "참고자료 포함해서 프로젝트 요약해줘", "참고자료를 포함해서 요약해줘", "참고 자료랑 같이 요약해줘", "업무 문서도 같이 요약해줘", "참고자료와 업무문서를 둘 다 요약해줘", "summarize the documents and reference material", "summarize it including the reference documents", "summarize the reference material and the contracts"]) {
       expect(planner.kindNamed(text), text).toBeNull();

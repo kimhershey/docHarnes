@@ -499,6 +499,9 @@ const ALL_WORDS = ["전부", "전체", "모두", "모든", "다 ", "라이브러
 const ASK_BACK = /^([\s\S]*?)\n\n\[(?:어시스턴트 질문|Assistant question)\] [\s\S]*?\n\[(?:사용자 답변|User reply)\] ([\s\S]*)$/;
 
 /** The user's own words of a planner text: of a 되묻기 text the sentence and the reply, not the assistant's question. */
+/** `rules::PART_WORDS`: a part of what is open ("이 조항"). */
+const PART_WORDS = ["이조항", "이문장", "이부분", "이단락", "이항목", "이표", "thisclause", "thissentence", "thisparagraph", "thissection", "thistable"];
+
 function userWords(text: string): string {
   const m = text.match(ASK_BACK);
   return m ? `${m[1]!.trim()} ${m[2]!.trim()}`.trim() : text;
@@ -1717,6 +1720,158 @@ function unknownSplit(t: Text): boolean {
   return /[가-힣]{2,}\s?(별|마다)(로|\s|$)/.test(t.raw) || /\b(by|per) [a-z]+/i.test(t.raw);
 }
 
+/** `guard::About`: a subject the sentence names, and the sentence without the phrase that names it. */
+export interface About {
+  subject: string;
+  rest: string;
+}
+
+const ABOUT_MARKERS = [
+  "에 대해서는", "에 대해서도", "에 관해서는", "과 관련해서", "와 관련해서", "과 관련하여", "와 관련하여", "에 대해서", "에 대하여", "에 관해서", "에 관하여",
+  "에대해서", "에대하여", "에관해서", "에관하여", "과 관련해", "와 관련해", "과 관련된", "와 관련된", "과 관련한", "와 관련한", " 관련해서", " 관련하여",
+  " 관련 내용", " 관련 사항", " 관련 부분", "에 대해", "에 대한", "에 관해", "에 관한", "에대해", "에대한", "에관해", "에관한", " 관련해", " 관련된", " 관련한", " 관련",
+];
+const ABOUT_PLACES = ["에서는 ", "에서 ", "에 있는 ", "안의 ", "내의 ", "프로젝트의 ", "문서의 ", "자료의 "];
+const ABOUT_FILLERS = ["그리고", "그럼", "그러면", "혹시", "먼저", "우선", "좀", "또", "자세히", "자세하게", "상세히", "상세하게", "간단히", "간단하게", "간략히", "간략하게", "짧게", "길게"];
+const ABOUT_POINTERS = ["이", "그", "저", "위", "위의", "아래", "해당", "선택한", "선택된", "첨부한", "첨부된", "방금", "앞의", "앞서"];
+const ABOUT_POINTED = [
+  "이것", "이거", "그것", "그거", "저것", "저거", "여기", "이번", "이내용", "위내용", "위의내용", "아래내용", "선택문서", "문서", "문서들", "자료", "내용", "전체", "모두",
+  "모든문서", "참고자료", "참고문서", "레퍼런스", "업무문서", "작업문서", "it", "this", "that", "them", "these", "those", "everything", "thedocuments", "alldocuments",
+];
+
+function aboutKo(line: string): About | null {
+  let found: { at: number; marker: string } | null = null;
+  for (const m of ABOUT_MARKERS) {
+    let i = line.indexOf(m);
+    // ("관련" as a word of its own: not "관련자", "관련성")
+    while (i >= 0 && m === " 관련" && i + m.length < line.length && !/\s/.test(line[i + m.length]!)) i = line.indexOf(m, i + 1);
+    if (i < 0) continue;
+    if (!found || i < found.at || (i === found.at && m.length > found.marker.length)) found = { at: i, marker: m };
+  }
+  if (!found) return null;
+  const before = line.slice(0, found.at);
+  const after = line.slice(found.at + found.marker.length);
+  const cut = Math.max(0, ...ABOUT_PLACES.map((p) => (before.lastIndexOf(p) >= 0 ? before.lastIndexOf(p) + p.length : 0)));
+  let place = before.slice(0, cut);
+  let subject = before.slice(cut).trim();
+  for (;;) {
+    const sp = subject.indexOf(" ");
+    if (sp < 0) break;
+    const first = subject.slice(0, sp);
+    if (!(ABOUT_FILLERS.includes(first) || first.endsWith("별로"))) break;
+    place += `${first} `;
+    subject = subject.slice(sp + 1).trim();
+  }
+  subject = subject.replace(/^[\s"'“”‘’「」『』()[\]]+|[\s"'“”‘’「」『』()[\]]+$/g, "");
+  return { subject, rest: `${place.trim()} ${after.trim()}`.trim() };
+}
+
+/** `guard::names_a_subject`: the words name something to look up — not a pointer, not everything, not a kind of document, not a project called one. */
+function namesASubject(subject: string): boolean {
+  const key = compact(subject);
+  const lower = subject.toLowerCase();
+  const points =
+    ABOUT_POINTERS.includes(subject.split(" ")[0] ?? "") ||
+    ABOUT_POINTED.includes(key) ||
+    ["this ", "that ", "these ", "those ", "the selected", "the above", "the attached"].some((p) => lower.startsWith(p));
+  return key !== "" && Array.from(subject).length <= 80 && !points && !key.endsWith("프로젝트") && !lower.endsWith(" project");
+}
+
+function aboutEn(line: string): About | null {
+  const lower = line.toLowerCase();
+  let at = -1;
+  let marker = "";
+  for (const m of [" about ", " regarding ", " concerning "]) {
+    const i = lower.indexOf(m);
+    if (i >= 0 && (at < 0 || i < at)) [at, marker] = [i, m];
+  }
+  if (at < 0 || lower.length !== line.length) return null;
+  const tail = line.slice(at + marker.length);
+  const tailLower = lower.slice(at + marker.length);
+  const ends = [" in the ", " in ", " from the ", " from ", " within "].map((p) => tailLower.indexOf(p)).filter((i) => i >= 0);
+  const end = ends.length > 0 ? Math.min(...ends) : tail.length;
+  const subject = tail.slice(0, end).trim().replace(/[.?!,]+$/, "").replace(/^["']+|["']+$/g, "").trim();
+  return { subject, rest: `${line.slice(0, at).trim()} ${tail.slice(end).trim()}`.trim() };
+}
+
+/**
+ * `guard::about` (1.0.2): what the sentence asks to hear about — "한빛 프로젝트에서 검수 기준에 대해 요약해줘" →
+ * `검수 기준` (rest "한빛 프로젝트에서 요약해줘"). Nothing for a sentence that brings its own text, for words that only
+ * point at something ("이 문서에 대해") and for a project named as such.
+ */
+export function aboutOf(text: string): About | null {
+  const a = aboutPhrase(text);
+  return a && namesASubject(a.subject) ? a : null;
+}
+
+/** `guard::about_phrase`: the phrase that names what a sentence is about, whatever its words are. */
+function aboutPhrase(text: string): About | null {
+  if (carriedText(text)) return null;
+  const line = userWords(text).split(/\s+/).filter(Boolean).join(" ");
+  return aboutKo(line) ?? aboutEn(line);
+}
+
+/** `guard::is_type_name`: the subject is nothing but the name of a document type ("계약서", "견적서들", "계약서 내용"). */
+function isTypeName(subject: string, ctx: PlanContext): boolean {
+  let key = compact(subject);
+  if (key.startsWith("모든")) key = key.slice(2);
+  const suffix = ["들", "문서", "내용", "전체", "전부"].find((w) => key.endsWith(w));
+  if (suffix) key = key.slice(0, -suffix.length);
+  return key !== "" && ctx.doc_types.some((d) => [d.label_ko, d.label_en, d.slug, ...docTypeAliases(d.slug)].some((label) => compact(label) === key));
+}
+
+/** `guard::project_of`: the project the subject is the name of ("AAA", "AAA 프로젝트", "the AAA project"). */
+function projectOfSubject(subject: string, ctx: PlanContext): ProjectSummary | null {
+  const bare = (s: string) => {
+    const key = compact(s);
+    const cut = key.endsWith("프로젝트") ? key.slice(0, -4) : key.endsWith("project") ? key.slice(0, -7) : key;
+    return cut === "" ? key : cut;
+  };
+  const said = bare(subject);
+  const lower = subject.toLowerCase();
+  const withoutArticle = lower.startsWith("the ") ? bare(lower.slice(4)) : null;
+  return (
+    ctx.projects.find((p) => {
+      const name = bare(p.name);
+      return Array.from(name).length >= 2 && (name === said || name === withoutArticle);
+    }) ?? null
+  );
+}
+
+/** `guard::asks_summary`: the words ask for a summary to be made ("요약해줘", "요약 좀") — not for one that exists ("요약본 찾아줘"). */
+const SUMMARY_ASKS = ["요약해", "요약하", "요약좀", "요약부탁", "요약을해", "요약을부탁", "요약정리", "요약바", "요약가능", "요약만", "요약도"];
+function asksSummary(rest: string): boolean {
+  const said = compact(rest);
+  return SUMMARY_ASKS.some((a) => said.includes(a)) || said.endsWith("요약") || said.endsWith("요약을") || rest.toLowerCase().includes("summar");
+}
+
+/**
+ * `guard::subject_project`: the project a subject stands for — the subject is its name and the rest of the sentence does not
+ * already name that project as the place ("AAA 프로젝트에서 AAA에 대해 요약해줘" asks about AAA inside the project).
+ */
+function subjectProject(a: About, ctx: PlanContext): ProjectSummary | null {
+  const project = projectOfSubject(a.subject, ctx);
+  return project && !compact(a.rest).includes(compact(project.name)) ? project : null;
+}
+
+/**
+ * `guard::summary_topic`: the subject of a summary the sentence asks for ("AA에 대해서 요약해줘" → `AA`) — not a kind of
+ * document ("견적서에 대해 요약해줘": the estimates) and not a project by its name (`summaryProject`).
+ */
+export function summaryTopic(text: string, ctx: PlanContext): About | null {
+  const a = aboutOf(text);
+  if (!a) return null;
+  return asksSummary(a.rest) && !isTypeName(a.subject, ctx) && !subjectProject(a, ctx) ? a : null;
+}
+
+/** `guard::summary_project`: the project a sentence asks a summary of by naming it as the subject ("AAA에 대해서 요약해줘"). */
+export function summaryProject(text: string, ctx: PlanContext): { project: ProjectSummary; rest: string } | null {
+  const a = aboutPhrase(text);
+  if (!a || !asksSummary(a.rest)) return null;
+  const project = subjectProject(a, ctx);
+  return project ? { project, rest: a.rest } : null;
+}
+
 function ruleProcess(t: Text, ctx: PlanContext): Plan | null {
   const classify = has(t, ["분류", "classif", "유형판정", "유형을정"]);
   const ocr = has(t, ["ocr", "문자인식", "텍스트인식", "글자인식", "텍스트추출", "읽어"]);
@@ -1726,6 +1881,31 @@ function ruleProcess(t: Text, ctx: PlanContext): Plan | null {
   const generic = has(t, ["처리", "process", "돌려", "실행해"]) && !classify && !ocr && !extract && !summarize;
   if (!(classify || ocr || extract || validate || summarize || generic)) return null;
   const force = has(t, ["다시", "재", "again", "re-", "redo", "force"]);
+  const summaryLength = (x: Text) => (has(x, ["짧게", "한줄", "간단", "short", "brief"]) ? "short" : has(x, ["길게", "자세", "상세", "long", "detailed"]) ? "long" : null);
+  // 1.0.2 (`rules::process`): "AA에 대해서 요약해줘" — what the documents say about the subject. Where to look is read
+  // from the words outside the phrase that names it, and no scope at all is every document: nothing is asked back.
+  if (summarize && !(classify || ocr || extract || validate || generic)) {
+    const about = summaryTopic(t.raw, ctx);
+    if (about) {
+      const rest = mkText(about.rest, t.ko);
+      const scope = scopeOf(rest, ctx, docTypeOf(rest, ctx), dateOf(rest, ctx));
+      // ("이 문서에서 …", "이 조항에서 …": what is open or selected — `rules::pointed_at`)
+      if (scopeIsEmpty(scope) && has(rest, [...SELECTION_WORDS, ...PART_WORDS])) scope.doc_ids = selectionIds(ctx);
+      const summary = tr(t.ko, `'${about.subject}'에 관한 내용을 문서에서 찾아 요약합니다`, `Summarise what the documents say about '${about.subject}'`);
+      return single({ op: "summarize", target: "set", length: summaryLength(rest), topic: about.subject }, 0.85, summary, scope);
+    }
+    // "AAA에 대해서 요약해줘" with a project AAA: one summary of the project's documents.
+    const named = summaryProject(t.raw, ctx);
+    if (named) {
+      const rest = mkText(named.rest, t.ko);
+      const scope = scopeOf(rest, ctx, docTypeOf(rest, ctx), dateOf(rest, ctx));
+      if ((scope.doc_ids ?? []).length === 0 && !scope.folder) {
+        scope.filter = { ...(scope.filter ?? {}), project_id: named.project.id };
+        const summary = tr(t.ko, `'${named.project.name}' 프로젝트의 문서를 요약합니다`, `Summarise the documents of the project '${named.project.name}'`);
+        return single({ op: "summarize", target: "set", length: summaryLength(rest) }, 0.85, summary, scope);
+      }
+    }
+  }
   const dt = docTypeOf(t, ctx);
   const d = dateOf(t, ctx);
   const scope = scopeOf(t, ctx, dt, d);
@@ -1741,7 +1921,7 @@ function ruleProcess(t: Text, ctx: PlanContext): Plan | null {
   const ops: Op[] = [];
   if (summarize) {
     const target = has(t, ["하나로", "합쳐", "묶어", "전체요약", "together", "onesummary", "combined"]) ? "set" : "each_doc";
-    const length = has(t, ["짧게", "한줄", "간단", "short", "brief"]) ? "short" : has(t, ["길게", "자세", "상세", "long", "detailed"]) ? "long" : null;
+    const length = summaryLength(t);
     ops.push(groupBy ? { op: "summarize", target, length, group_by: groupBy } : { op: "summarize", target, length });
   }
   if (classify || generic) ops.push({ op: "classify", doc_types: dt ? [dt.slug] : [], force: force ? true : null });
@@ -2242,6 +2422,22 @@ export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | nul
         const textOnly = op.knowledge === false && op.mode !== "chat";
         op.question = Array.from(op.question.trim()).slice(0, textOnly ? MAX_CARRIED_TEXT_CHARS : 4000).join("");
         if (!op.question) issues.push(issue(at("question"), "question_empty", "answer needs a question"));
+        break;
+      }
+      case "summarize": {
+        // 1.0.2 (`validate`): a summary about a subject is one summary of the passages found — not one per
+        // document or per group. An empty subject is no subject.
+        const topic = Array.from((op.topic ?? "").split(/\s+/).filter(Boolean).join(" ")).slice(0, 200).join("");
+        if (!topic) {
+          delete op.topic;
+          break;
+        }
+        op.topic = topic;
+        op.target = "set";
+        if (op.group_by && op.group_by !== "none") {
+          op.group_by = null;
+          issues.push(issue(at("group_by"), "grouping_dropped", ctx.language === "ko" ? "주제를 정한 요약은 묶음별로 나누지 않고 하나로 만듭니다" : "a summary about a subject is one summary, not one per group", false));
+        }
         break;
       }
       case "aggregate": {
@@ -4389,10 +4585,19 @@ export function planPreview(plan: Plan, ctx: PlanContext): PlanPreview {
         } else summary = tr(ko, "다시 실행할 작업이 없습니다", "Nothing to redo");
         break;
       }
+      case "summarize":
+        // 1.0.2 (`exec::preview`): a summary about a subject looks the passages up first — the card says what it is about.
+        if (op.topic) {
+          summary = ko ? `'${op.topic}'에 관한 내용을 찾아 요약 · ${countLabel(docs.length, ko)}` : `Summary of what ${countLabel(docs.length, ko)} say about '${op.topic}'`;
+          payload = { documents: docs.length, topic: op.topic };
+          break;
+        }
+        summary = countLabel(docs.length, ko);
+        payload = { documents: docs.length };
+        break;
       case "classify":
       case "ocr":
       case "validate":
-      case "summarize":
       case "tag":
       case "set_doc_type":
         summary = countLabel(docs.length, ko);
@@ -4790,6 +4995,26 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
     }
     case "summarize": {
       requireModel();
+      if (op.topic) {
+        // 1.0.2 (`exec::summarize::run_topic`): what the documents in scope say about the subject, as one summary
+        // with its sources. No scope is every document; a scope that matches no document is told, not widened.
+        const f = plan.scope.filter ?? {};
+        const projectOnly = scopeIsEmpty({ ...plan.scope, filter: { ...f, project_id: null, with_reference: undefined } });
+        const found = scopeIsEmpty(plan.scope) && !imported ? [] : workingSet(plan, imported);
+        if (found.length === 0 && (!!imported || !(scopeIsEmpty(plan.scope) || projectOnly))) throw err("no_documents", "no_documents");
+        if (ctl) await ctl.checkpoint();
+        progress("summarize", 0, 1, op.topic);
+        const scope = { documents: idsOf(found), project_id: f.project_id ?? undefined, latest_only: settings.knowledge.latest_only, ...(f.role ? { roles: [f.role] } : {}) };
+        const got = (await mockKnowledge("knowledge_answer", { req: { question: op.topic, kind: "answer", scope, top_k: Math.min(64, Math.max(8, settings.knowledge.top_k * 2)), context_tokens: settings.knowledge.context_tokens, save: false }, requestId: `plan-${newId()}` })) as Answer;
+        const ans: Answer = { ...got, kind: "summary", question: op.topic };
+        const cited = [...new Set(ans.sources.map((s) => s.document_id))];
+        const none = ans.no_evidence || ans.sources.length === 0;
+        const summary = none
+          ? ko ? `'${op.topic}'에 관한 내용을 범위의 문서에서 찾지 못했습니다` : `Nothing about '${op.topic}' was found in the documents in scope`
+          : ko ? `'${op.topic}'에 관한 내용 요약 · 문서 ${cited.length}건의 대목 ${ans.sources.length}곳` : `Summary about '${op.topic}' · ${ans.sources.length} passage(s) of ${cited.length} document(s)`;
+        const label = ko ? `'${op.topic}'에 관한 내용` : `About '${op.topic}'`;
+        return { summary, payload: { topic: op.topic, summaries: [], groups: [{ key: "topic", label, document_ids: cited, answer: ans }], group_by: "none" } };
+      }
       const docs = workingSet(plan, imported);
       // (`exec::no_documents`: which kind of document the scope asked for and does not hold)
       if (docs.length === 0) {

@@ -362,6 +362,15 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
                 }
                 // What the sentence does not support is confirmed, whatever the model's confidence.
                 issues.extend(guard::contract_checks(text, &mut plan, ko));
+                // (one note for a split that is not made: the validator's — a grouping written next
+                // to a topic — says the same as the check's)
+                if let Some(last) = issues.iter().rposition(|i| i.code == "grouping_dropped") {
+                    let mut at = 0;
+                    issues.retain(|i| {
+                        at += 1;
+                        i.code != "grouping_dropped" || at - 1 == last
+                    });
+                }
                 // A split by project the checks put back: the validator had already filled the open
                 // project in as the default scope, which would leave one group.
                 if validate::per_project(&plan)
@@ -532,6 +541,8 @@ fn parse_and_validate(
     // A type is a condition only when the user's words name one (0.8.2): "all" in the type slot,
     // or a type no question needs, must not fail the plan.
     let untyped = guard::untyped_scope(text, &mut plan, ctx, ko);
+    // … and a summary has a subject only when they name one (1.0.2).
+    guard::unsaid_topic(text, &mut plan, ctx);
     let mut issues = validate::validate(&mut plan, ctx, date);
     issues.extend(untyped);
     if has_errors(&issues) {

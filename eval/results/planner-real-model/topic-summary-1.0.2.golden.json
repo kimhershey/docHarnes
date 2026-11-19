@@ -1,0 +1,142 @@
+{
+ "schema_version": 1,
+ "context": "topic-summary-1.0.2.context.json",
+ "description": "1.0.2 summaries about a subject (user report 2026-11-19)",
+ "items": [
+  {
+   "id": "t-1",
+   "category": "ko",
+   "kind": "question",
+   "text": "AA에 대해서 요약해줘",
+   "expected": {
+    "intent": "summarize",
+    "ops": [
+     "summarize"
+    ],
+    "params": [
+     {
+      "topic": "AA",
+      "target": "set"
+     }
+    ],
+    "confirm": false
+   },
+   "note": "사용자 보고 문장. 컨텍스트에 이름이 비슷한 프로젝트 'AAA'가 있다 — 주제는 문장의 'AA'"
+  },
+  {
+   "id": "t-2",
+   "category": "ko",
+   "kind": "question",
+   "text": "AAA에 대해서 요약해줘",
+   "expected": {
+    "intent": "summarize",
+    "ops": [
+     "summarize"
+    ],
+    "params": [
+     {
+      "topic": null,
+      "target": "set",
+      "group_by": null
+     }
+    ],
+    "confirm": false,
+    "scope": {
+     "filter": {
+      "project_id": "p-aaa"
+     }
+    }
+   },
+   "note": "주제가 프로젝트 이름: 그 프로젝트의 문서를 하나로 요약"
+  },
+  {
+   "id": "t-3",
+   "category": "ko",
+   "kind": "question",
+   "text": "납품 기한에 대해서 요약해줘",
+   "expected": {
+    "intent": "summarize",
+    "ops": [
+     "summarize"
+    ],
+    "params": [
+     {
+      "topic": "납품 기한",
+      "target": "set"
+     }
+    ],
+    "confirm": false
+   }
+  },
+  {
+   "id": "t-4",
+   "category": "ko",
+   "kind": "question",
+   "text": "보안 요구사항에 대해 요약해줘",
+   "expected": {
+    "intent": "summarize",
+    "ops": [
+     "summarize"
+    ],
+    "params": [
+     {
+      "topic": "보안 요구사항",
+      "target": "set"
+     }
+    ],
+    "confirm": false,
+    "scope": {
+     "filter": {
+      "doc_type": null
+     }
+    }
+   },
+   "note": "'요구사항'은 주제의 일부 — 문서 유형 조건이 아니다"
+  },
+  {
+   "id": "t-5",
+   "category": "ko",
+   "kind": "question",
+   "text": "한빛 납품 프로젝트에서 검수 기준에 대해 요약해줘",
+   "expected": {
+    "intent": "summarize",
+    "ops": [
+     "summarize"
+    ],
+    "params": [
+     {
+      "topic": "검수 기준",
+      "target": "set"
+     }
+    ],
+    "confirm": false,
+    "scope": {
+     "filter": {
+      "project_id": "p-hanbit",
+      "doc_type": null
+     }
+    }
+   },
+   "note": "찾을 곳은 프로젝트; '검수'는 문서 유형 조건이 아니다"
+  },
+  {
+   "id": "t-6",
+   "category": "ko",
+   "kind": "question",
+   "text": "하자보수 관련 내용을 요약해줘",
+   "expected": {
+    "intent": "summarize",
+    "ops": [
+     "summarize"
+    ],
+    "params": [
+     {
+      "topic": "하자보수",
+      "target": "set"
+     }
+    ],
+    "confirm": false
+   }
+  }
+ ]
+}

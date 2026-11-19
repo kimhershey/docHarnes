@@ -161,6 +161,74 @@
 - 응답 시간은 문장당 22 ~ 125초였습니다(CPU). 첫 문장과 영어 문장(지시문이 영어라 4,040토큰)이 약 2분, 같은 한국어 지시문(약 2,960토큰)을 이어 쓴 두 문장이 22초입니다.
 - 네 문장만 잰 것입니다. "참고 자료로 넣어줘" · 프로젝트 이름을 말한 문장 · E2B · GPU는 재지 않았습니다.
 
+## 1.0.2 — 주제가 있는 요약 (사용자 보고 2026-11-19)
+
+보고: "AA에 대해서 요약해줘 가 정상적으로 동작하지 않음. 요약만 하고 AA 에 대한 내용을 수집하지 않음." `summarize`에는 무엇에 관한 요약인지 적을 자리가 없었습니다.
+같은 모델(Gemma 4 E4B Q4_K_M, CPU, 컨텍스트 8,192)로 세 번 쟀습니다: 1.0.1 그대로, `summarize.topic`만 넣은 상태(커밋 2377469), 문장과 대조하는 검사를 넣은 뒤.
+
+### 사용자 문장과 변형 6개 (`topic-summary-1.0.2.golden.json`) — 0/6 → 3/6 → 6/6
+
+컨텍스트(`topic-summary-1.0.2.context.json`)에는 프로젝트 "한빛 납품"과 "AAA"가 있고, 열린 문서 · 선택 · 현재 프로젝트는 없습니다.
+
+| id | 문장 | 1.0.1 | 주제 칸만 넣은 뒤 | 검사 후 |
+|---|---|---|---|---|
+| t-1 | AA에 대해서 요약해줘 | ✕ summarize {"target": "each_doc"} | ✕ summarize {"target": "set", "topic": "AAA"} | ○ summarize {"target": "set", "topic": "AA"} |
+| t-2 | AAA에 대해서 요약해줘 | ✕ summarize {"group_by": "project"} | ✕ summarize {"target": "set", "topic": "AAA"} · 범위 {"filter": {"project_id": "p-aaa"}} | ○ summarize {"target": "set"} · 범위 {"filter": {"project_id": "p-aaa"}} |
+| t-3 | 납품 기한에 대해서 요약해줘 | ✕ summarize {"group_by": "none"} | ○ summarize {"target": "set", "topic": "납품 기한"} | ○ (같음) |
+| t-4 | 보안 요구사항에 대해 요약해줘 | ✕ summarize {"group_by": "none"} · 범위 {"filter": {"doc_type": "srs"}} | ○ summarize {"target": "set", "topic": "보안 요구사항"} | ○ (같음) |
+| t-5 | 한빛 납품 프로젝트에서 검수 기준에 대해 요약해줘 | ✕ summarize {"group_by": "project"} · 범위 {"filter": {"doc_type": "acceptance"}} | ✕ summarize {"target": "set", "topic": "검수 기준"} · 범위 {"filter": {"doc_type": "acceptance", "project_id": "p-hanbit"}} | ○ summarize {"target": "set", "topic": "검수 기준"} · 범위 {"filter": {"project_id": "p-hanbit"}} |
+| t-6 | 하자보수 관련 내용을 요약해줘 | ✕ summarize {"group_by": "none"} | ○ summarize {"target": "set", "topic": "하자보수"} | ○ (같음) |
+
+- **1.0.1**: 여섯 문장 모두 주제 없는 요약입니다. 범위가 비어 있으면 실행기는 라이브러리의 모든 문서를 요약합니다. `t-4`는 주제의 낱말 "요구사항"이 문서 유형(`srs`)이 됐고(`type_filter_repair`),
+  `t-2` · `t-5`는 프로젝트별 묶음으로 나왔습니다(`group_by: project`는 프로젝트 범위를 채우지 않습니다).
+- **주제 칸만 넣은 뒤**: 모델이 여섯 번 모두 `topic`을 썼습니다. 그런데 `t-1`에서는 문장의 "AA" 대신 컨텍스트의 프로젝트 이름 **"AAA"** 를 썼고, `t-2`는 프로젝트 이름을 그 프로젝트 안에서 찾는 주제 요약이 됐고,
+  `t-5`는 주제의 낱말 "검수"에서 읽은 유형(`acceptance`)으로 범위를 좁혔습니다 — 검수 기준은 계약서나 과업지시서에 적혀 있기 쉽습니다.
+- **검사 후**(`guard::summary_about` · `unsaid_topic` · `said_subject` · `scope_words`): 주제는 문장에 적힌 말이어야 하고(`t-1`), 주제의 낱말만 가리키는 유형은 범위에서 빠지고(`t-5`),
+  주제가 프로젝트 이름이면 그 프로젝트의 문서를 하나로 요약합니다(`t-2`).
+- 첫 두 결과 파일은 문장별 기대값이 동작 이름뿐이던 때에 만들어져 파일 안의 정답 수는 6/6입니다. 위 표는 `topic-summary-1.0.2.golden.json`의 기대값(주제 · 묶음 · 범위)으로 다시 채점한 것입니다
+  (`python3 scripts/rescore-planner.py eval/results/planner-real-model/topic-summary-1.0.2.golden.json 1.0.1=… 주제칸=… 검사후=…`).
+
+### 프로젝트 이름 · 가리키는 말 · 문서 유형 5개 (`topic-summary-1.0.2-open-document.golden.json`) — 5/5
+
+같은 컨텍스트에 열린 문서(`d1a2`)를 더했습니다. "모델이 쓴 것"은 모델 출력 그대로, "결과"는 검사를 거친 계획입니다.
+
+| id | 문장 | 모델이 쓴 것 | 결과 |
+|---|---|---|---|
+| p-1 | AAA에 대해서 요약해줘 | summarize {"topic": "AAA"} · 범위 {"filter": {"doc_type": "project"}} | ○ summarize {"target": "set"} · 범위 {"filter": {"project_id": "p-aaa"}} |
+| p-2 | AAA 프로젝트에 대해 요약해줘 | summarize {"topic": "AAA"} · 범위 {"filter": {"doc_type": "project"}} | ○ summarize {"target": "set"} · 범위 {"filter": {"project_id": "p-aaa"}} |
+| p-3 | 이 문서에서 지체상금에 대해 요약해줘 | summarize {"topic": "지체상금"} · 범위 {"doc_ids": ["d1a2"]} | ○ summarize {"target": "set", "topic": "지체상금"} · 범위 {"doc_ids": ["d1a2"]} |
+| p-4 | 계약서 내용에 대해 요약해줘 | summarize {"target": "each_doc"} · 범위 {"filter": {"doc_type": "dev_contract"}} | ○ (같음) |
+| p-5 | AAA 프로젝트 요약해줘 | summarize {"group_by": "project", "topic": "AAA"} · 범위 {"doc_ids": []} | ○ summarize {"target": "set"} · 범위 {"filter": {"project_id": "p-aaa"}} |
+
+- `p-5`는 "…에 대해"가 없는 문장인데도 모델이 프로젝트 이름을 주제로 쓰고 프로젝트별로 묶었습니다. 주제는 검증기 앞에서 빠지고(`guard::unsaid_topic` — 문장에 주제를 말하는 구절이 없으면 프로젝트 이름은 찾을 곳이지 찾을 말이 아닙니다),
+  문장이 프로젝트 하나를 말했고 나누라는 말이 없으므로 묶음은 그 프로젝트의 요약 하나가 됩니다(`guard::where_to_look`). 이 검사가 없으면 라이브러리 전체가 프로젝트별로 요약됩니다.
+- 문서가 열려 있어도 `p-1` · `p-2`의 범위는 문장이 말한 프로젝트이고, `p-3`은 문장이 가리킨 열린 문서입니다.
+
+### 골든셋에 넣은 11문장 — 11/11
+
+`--ids ko-134,ko-135,ko-136,ko-137,ko-138,ko-139,en-36,ko-140,ko-141,ko-142,ko-143` (컨텍스트 `eval/golden/planner-context.json`: 프로젝트 "한빛 납품", 열린 문서 `d1a2`).
+
+| id | 문장 | 모델이 쓴 것 | 결과 |
+|---|---|---|---|
+| ko-134 | AA에 대해서 요약해줘 | summarize {"topic": "AA"} | ○ summarize {"target": "set", "topic": "AA"} |
+| ko-135 | 납품 기한에 대해서 요약해줘 | summarize {"topic": "납품 기한"} | ○ summarize {"target": "set", "topic": "납품 기한"} |
+| ko-136 | 보안 요구사항에 대해 요약해줘 | summarize {"topic": "보안 요구사항"} | ○ summarize {"target": "set", "topic": "보안 요구사항"} |
+| ko-137 | 한빛 납품 프로젝트에서 검수 기준에 대해 요약해줘 | summarize {"topic": "검수 기준"} · 범위 {"filter": {"doc_type": "acceptance"}} | ○ summarize {"target": "set", "topic": "검수 기준"} · 범위 {"filter": {"project_id": "p-hanbit"}} |
+| ko-138 | 계약서에서 지체상금에 대해 자세히 요약해줘 | summarize {"topic": "지체상금"} · 범위 {"filter": {"doc_type": "dev_contract"}} | ○ summarize {"length": "long", "target": "set", "topic": "지체상금"} · 범위 {"filter": {"doc_type": "dev_contract"}} |
+| ko-139 | 하자보수 관련 내용을 요약해줘 | summarize {"topic": "하자보수"} | ○ summarize {"target": "set", "topic": "하자보수"} |
+| en-36 | summarise the documents about late fees | summarize {"topic": "late fees"} | ○ summarize {"target": "set", "topic": "late fees"} |
+| ko-140 | 견적서에 대해 요약해줘 | summarize {"topic": "견적서"} · 범위 {"filter": {"doc_type": "estimate"}} | ○ summarize {} · 범위 {"filter": {"doc_type": "estimate"}} |
+| ko-141 | 이 문서에 대해 요약해줘 | summarize {"target": "each_doc"} · 범위 {"doc_ids": ["d1a2"]} | ○ (같음) |
+| ko-142 | 한빛 납품에 대해서 요약해줘 | summarize {"topic": "한빛 납품"} · 범위 {"filter": {"doc_type": "project_name:한빛 납품"}} | ○ summarize {"target": "set"} · 범위 {"filter": {"project_id": "p-hanbit"}} |
+| ko-143 | 이 문서에서 지체상금에 대해 요약해줘 | summarize {"topic": "지체상금"} · 범위 {"doc_ids": ["d1a2"]} | ○ summarize {"target": "set", "topic": "지체상금"} · 범위 {"doc_ids": ["d1a2"]} |
+
+- 첫 측정은 10/11이었습니다. `ko-138`에서 모델이 "자세히"를 `length`에 적지 않았습니다 — 계획에 길이가 없으면 주제 밖의 말에서 읽게 했습니다(`rules::length_said`).
+- `ko-140`: 모델은 문서 유형 이름도 주제로 썼습니다. 유형 이름뿐인 주제는 검증기 앞에서 빠져, 주제 칸이 없던 때의 계획(견적서 문서들의 요약)으로 돌아갑니다.
+- `ko-142`: 모델이 프로젝트를 유형 칸에 적었습니다(`project_name:한빛 납품`). 모르는 유형은 0.8.2의 `untyped_scope`가 빼고, 프로젝트는 문장에서 읽어 채웁니다.
+- 응답 시간은 문장당 20 ~ 160초였습니다(CPU 4코어, 지시문 약 3,700 ~ 4,700토큰; 앞 문장과 지시문 머리가 달라지는 문장에서 2분 넘게 걸립니다). 다른 작업과 겹친 첫 문장 하나는 298초였습니다.
+- 잰 것은 계획까지입니다. 주제 요약의 결과물은 `crates/doculens-core/tests/real_summary.rs`(`DOCULENS_SUMMARY_TOPIC`)로 따로 돌렸습니다 — `docs/releases/v1.0.2.md` "확인한 것".
+  E2B · GPU · 임베딩을 쓰는 검색은 재지 않았습니다.
+
 ## 파일
 
 - `gemma4-e4b-q4km-0.7.0.json`, `gemma4-e4b-q4km-0.8.0.json` — 배치별 결과를 합친 것(문장별 플랜, 출처, 응답 시간; 다시 잰 문장의 첫 결과는 `first_measurement`).
@@ -172,3 +240,6 @@
 - `gemma4-e4b-q4km-1.0.0-edit-original.json`, `gemma4-e4b-q4km-1.0.0-edit-original-remeasured.json` — 1.0.0 2-1절: 위 8문장(`--ids ko-55,ko-05,ko-106,ko-112,ko-75,ko-130,ko-131,en-34`)과, `guard::edit_target`을 넣은 뒤의 두 문장.
 - `gemma4-e4b-q4km-1.0.0-reference-material-before-guard.json`, `gemma4-e4b-q4km-1.0.0-reference-material.json` — 1.0.0 결정 4-3: 위 4문장(`--ids ko-76,ko-132,ko-133,en-35`), `guard::reference_place`를 넣기 전과 후.
   결과 파일의 경로(`golden` · `context` · `engine.binary`)는 저장소 기준으로 고쳐 적었다.
+- `topic-summary-1.0.2.golden.json` / `topic-summary-1.0.2.context.json`, `topic-summary-1.0.2-open-document.golden.json` / `topic-summary-1.0.2-open-document.context.json` — 1.0.2: 위 6문장과 5문장, 그 컨텍스트.
+- `gemma4-e4b-q4km-1.0.2-topic-summary-1.0.1.json`, `gemma4-e4b-q4km-1.0.2-topic-summary-before-guard.json`, `gemma4-e4b-q4km-1.0.2-topic-summary.json` — 6문장: 1.0.1 코드, `summarize.topic`만 넣은 코드(2377469), 검사를 넣은 뒤.
+  `gemma4-e4b-q4km-1.0.2-topic-summary-open-document.json`(5문장), `gemma4-e4b-q4km-1.0.2-topic-summary-golden.json`(골든셋 11문장). 경로는 저장소 기준으로 고쳐 적었다.

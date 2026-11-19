@@ -7,7 +7,7 @@ import type { ExportPreview, ExportRequest, OrganizeItem, OrganizePlan, Organize
 import { exportPreview, impactOf, organizePreview } from "./describePlan";
 import { planKey, previewEditedPlan, previewFailure, type RepreviewDeps } from "./repreview";
 
-const options = { language: "ko" as const, onlyReviewedDefault: true, countLabel: (n: number) => `문서 ${n}건`, deleteLabel: (n: number) => `문서 ${n}건 휴지통으로`, describeError: (e: unknown) => String((e as { message?: string }).message ?? e) };
+const options = { language: "ko" as const, onlyReviewedDefault: true, countLabel: (n: number) => `문서 ${n}건`, topicLabel: (topic: string, n: number) => `'${topic}'에 관한 내용을 찾아 요약 · 문서 ${n}건`, deleteLabel: (n: number) => `문서 ${n}건 휴지통으로`, describeError: (e: unknown) => String((e as { message?: string }).message ?? e) };
 
 /** Two receipts (one review-pending) and a contract, selected by `filter.doc_type`. */
 const LIBRARY = [
