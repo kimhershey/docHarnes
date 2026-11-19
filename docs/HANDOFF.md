@@ -2052,7 +2052,7 @@ P6·P7 항목.
   - 재지 못한 것: 임베딩 모델을 함께 쓰는 검색, 대목 수십 곳을 묶음으로 나눠 합치는 경우(단위 테스트만), GPU · 사용자 문서.
 - **검증**: 로컬 전체 검증(마지막 수정까지 든 트리) — `cargo fmt --check`, clippy(1.100), `cargo test --workspace`(코어 563 통과 · 8 ignored), `npm run typecheck`, vitest 360, Playwright 143, 골든 게이트 181/190 = 95.3 %.
   CI: 버전 커밋 8f08aa7 — run 44519184385 성공(7개 잡). 코어만 든 중간 커밋 2377469 — run 44522403121은 Web 잡의 `opSpecs.test.ts`가 실패(`summarize.topic: missing` — 화면 쪽 대조표가 그 커밋에 없었다; 나머지 6개 잡은 성공).
-  화면 · 모의 백엔드 · 검사가 든 커밋의 CI는 푸시 뒤 확인해 이 줄에 적는다.
+  화면 · 모의 백엔드 · 검사가 든 커밋 10ae603 — run 44540800957 성공(7개 잡: Rust, Web(단위 + E2E), 골든 게이트, 실제 llama-server, Windows 컴파일, 라이선스, 고지/SBOM).
 - **이 판에서 고치지 않은 것**:
   - **잠긴 문서**(사용자 질문 2026-11-19 "아! 잠긴 문서는 어떻게 돼?" — 측정해서 답했고 고칠지는 답을 받지 못했다). 앱에 암호를 넣는 곳이 없다. 열기 암호가 걸린 DOCX · XLSX · PPTX는 가져오기 미리보기에서 거절("암호로 보호된 문서(암호를 해제한 뒤 가져오기)"),
     암호 PDF와 옛 DOC · XLS는 "오류" 문서로 들어오고 사유가 영어 원문 그대로(`unsupported: password_protected`, `conversion failed: encrypted`, `conversion failed: workbook: Xls error: Workbook is password protected`)이며 범위에서 말없이 빠진다.
