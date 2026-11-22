@@ -2108,10 +2108,11 @@ P6·P7 항목.
     `rules::length_said`에 "간략 · 한 문장 · 구체적 · in detail …"을 더했다. 문서별 요약 문장의 해석 문장("전체 문서의 내용을 문서별로 요약합니다.")은 `split_check`가 "범위의 문서를 모두 읽어 하나로 요약합니다"로 바꾼다.
     결과 파일 `gemma4-e4b-q4km-1.0.3-one-summary{-before-guards,}.json`, README "1.0.3" 절.
 - **검증**: 로컬 전체 검증(마지막 트리) — `cargo fmt --check`, clippy(1.100), `cargo test --workspace`(코어 566 통과 · 8 ignored), `npm run typecheck`, vitest 362, Playwright 144, 골든 게이트 192/201 = 95.5 %, 실제 모델용 12문장 규칙 경로 12/12.
-  CI: 버전 커밋 6cb98ef — run 45004530346 성공(7개 잡). 이 절의 커밋의 CI는 아래 "CI" 줄.
+  CI: 버전 커밋 6cb98ef — run 45004530346 성공(7개 잡). 코드 커밋 2c4761b — run 45013923659 성공(7개 잡). 그 뒤의 커밋(이 기록)은 문서뿐이고 `[skip ci]` 없이 올려 CI를 한 번 더 받는다 — 릴리스는 CI가 통과한 가장 뒤 커밋으로 낸다.
 - **확인하지 못한 것**: 사용자 PC(Windows · 설치파일), 문서가 많아 여러 부분으로 나눠 읽는 범위의 실제 모델 실행(자동 테스트의 모의 모델과 1.0.1의 긴 문서 측정뿐), 묶음별 요약의 결과물, E2B · 12B · GPU, 영어 문서.
 - **이 판에서 고치지 않은 것**: 주제 요약을 묶음별로 나누기, 잠긴 문서 안내 · 옛 `.ppt` 형식 판별(위 1.0.2 절), PDF 그림 속 글자(1.0.1 절), UX 검토 153건. 요약 하나의 길이는 문서 수가 아니라 근거 토큰 예산을 따른다(문서가 많으면 문서당 분량이 준다).
-- **릴리스**: 게시하지 않았다. 사용자가 지시하면 CI가 통과한 커밋으로 `gh workflow run "Windows installer (manual)" --ref release/1.0.3 -f ref=<커밋> -f variant=lite -f publish=true`.
+- **릴리스**: 게시하지 않았다(1.0.3의 Release는 사용자가 아직 지시하지 않았다). 지시가 오면 CI가 통과한 가장 뒤 커밋으로 `gh workflow run "Windows installer (manual)" --ref release/1.0.3 -f ref=<커밋 전체 해시> -f variant=lite -f publish=true`,
+  끝난 뒤 `gh api repos/kimhershey/docHarnes/releases/tags/v1.0.3`로 자산 · 체크섬을 확인하고 이 절에 기록한다.
 - **다음**: 병합은 사용자가 한다 — PR kimhershey/docHarnes#34(1.0.1 → `main`)가 먼저, 그다음 1.0.2, 1.0.3(각 브랜치는 앞 판에서 갈라졌다).
   사용자 PC 확인은 체크리스트 "1.0.3" 절 — 요약이 하나로 나오는지, 문서별 구획 없이 통합됐는지, 짧은 문서의 내용이 빠지지 않는지, 문서가 많은 프로젝트에서 걸리는 시간.
 
