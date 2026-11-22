@@ -35,7 +35,7 @@
     ],
     "params": [
      {
-      "topic": null,
+      "topic": "AAA",
       "target": "set",
       "group_by": null
      }
@@ -43,11 +43,11 @@
     "confirm": false,
     "scope": {
      "filter": {
-      "project_id": "p-aaa"
+      "project_id": null
      }
     }
    },
-   "note": "주제가 프로젝트 이름: 그 프로젝트의 문서를 하나로 요약"
+   "note": "이름만 말하면 내용 칸이다(사용자 결정 2026-11-20): 프로젝트 이름과 같아도 모든 문서에서 'AAA'를 찾는다 — 프로젝트는 'AAA 프로젝트 …'라고 말할 때"
   },
   {
    "id": "t-3",

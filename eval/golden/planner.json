@@ -3667,18 +3667,18 @@
         ],
         "params": [
           {
-            "topic": null,
+            "topic": "한빛 납품",
             "target": "set"
           }
         ],
         "scope": {
           "filter": {
-            "project_id": "p-hanbit"
+            "project_id": null
           }
         },
         "confirm": false
       },
-      "note": "1.0.2: 주제가 프로젝트 이름이면 그 프로젝트의 문서를 하나로 요약한다(프로젝트별 묶음도, 이름을 찾는 주제 요약도 아니다)",
+      "note": "1.0.2(사용자 결정 2026-11-20): 이름만 말하면 내용 칸이다 — 프로젝트 이름과 같아도 모든 문서에서 그 말을 찾는다(프로젝트 범위 없음). 프로젝트는 '한빛 납품 프로젝트 …'라고 말할 때",
       "kind": "question"
     },
     {
@@ -3704,6 +3704,159 @@
         "confirm": false
       },
       "note": "1.0.2: 열린 문서를 가리키면 그 문서 안에서 주제에 관한 대목을 찾는다",
+      "kind": "question"
+    },
+    {
+      "id": "ko-144",
+      "category": "ko",
+      "text": "한빛 납품 프로젝트의 검수 기준 내용에 대해 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": "검수 기준",
+            "target": "set"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-hanbit",
+            "doc_type": null
+          }
+        },
+        "confirm": false
+      },
+      "note": "1.0.2(사용자 결정 2026-11-20) 두 칸 모두: 프로젝트 칸 = 한빛 납품(업무 문서 + 참고 자료), 내용 칸 = 검수 기준('내용'은 주제의 일부가 아니다)",
+      "kind": "question"
+    },
+    {
+      "id": "ko-145",
+      "category": "ko",
+      "text": "한빛 납품 프로젝트의 검수 기준 내용에 대해 설명해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": "검수 기준",
+            "target": "set"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-hanbit",
+            "doc_type": null
+          }
+        },
+        "confirm": false
+      },
+      "note": "1.0.2(같은 결정): '설명'도 찾을 곳을 말했으면 같은 동작 — 프로젝트 안에서 그 내용을 모아 요약",
+      "kind": "question"
+    },
+    {
+      "id": "ko-146",
+      "category": "ko",
+      "text": "현재 문서에서 지체상금 내용에 대해서 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": "지체상금",
+            "target": "set"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ],
+          "filter": {
+            "project_id": null
+          }
+        },
+        "confirm": false
+      },
+      "note": "1.0.2(같은 결정): 프로젝트 칸은 비우고 열린 문서 안에서 내용을 찾는다",
+      "kind": "question"
+    },
+    {
+      "id": "ko-147",
+      "category": "ko",
+      "text": "한빛 납품 프로젝트 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": null,
+            "target": "set",
+            "group_by": null
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-hanbit"
+          }
+        },
+        "confirm": false
+      },
+      "note": "1.0.2(같은 결정): 프로젝트 칸만 — 그 프로젝트의 모든 문서를 요약(문서별 요약 + 전체 요약 하나). 라이브러리 전체의 프로젝트별 묶음이 아니다",
+      "kind": "question"
+    },
+    {
+      "id": "ko-148",
+      "category": "ko",
+      "text": "한빛 납품 프로젝트에 대해 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": null,
+            "target": "set",
+            "group_by": null
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-hanbit"
+          }
+        },
+        "confirm": false
+      },
+      "note": "1.0.2(같은 결정): '… 프로젝트에 대해'는 프로젝트 칸이다 — 이름을 찾는 주제 요약이 아니다",
+      "kind": "question"
+    },
+    {
+      "id": "ko-149",
+      "category": "ko",
+      "text": "지체상금에 대해 설명해줘",
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "alt": [
+          {
+            "intent": "explain",
+            "ops": [
+              "explain"
+            ]
+          }
+        ]
+      },
+      "note": "1.0.2 반례: 찾을 곳을 말하지 않은 '…에 대해 설명해줘'는 질문 그대로다(일반 지식으로 답할 수도 있다) — 주제 요약으로 바꾸지 않는다",
       "kind": "question"
     }
   ]

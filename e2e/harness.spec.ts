@@ -265,6 +265,11 @@ test.describe("0.8.0 assistant harness", () => {
     const none = assistantCard(page, "result").last();
     await expect(none).toHaveAttribute("data-result-status", "done", { timeout: 30_000 });
     await expect(none).toContainText("'양자 컴퓨터'에 관한 내용을 범위의 문서에서 찾지 못했습니다");
+
+    // "현재 문서에서 …" with nothing open or selected: the assistant asks instead of looking everywhere
+    // (user decision 2026-11-20: the open document is the place of that sentence).
+    await send(page, "현재 문서에서 정보보안 내용에 대해서 요약해줘");
+    await expect(page.locator('[data-testid="assistant-card-clarify"]').last()).toContainText("열려 있거나 선택한 문서가 없습니다", { timeout: 15_000 });
   });
 
   test("a change the sentence does not name waits for approval with the reason on the card", async ({ page }) => {

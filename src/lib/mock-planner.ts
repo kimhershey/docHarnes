@@ -1731,12 +1731,15 @@ const ABOUT_MARKERS = [
   "에대해서", "에대하여", "에관해서", "에관하여", "과 관련해", "와 관련해", "과 관련된", "와 관련된", "과 관련한", "와 관련한", " 관련해서", " 관련하여",
   " 관련 내용", " 관련 사항", " 관련 부분", "에 대해", "에 대한", "에 관해", "에 관한", "에대해", "에대한", "에관해", "에관한", " 관련해", " 관련된", " 관련한", " 관련",
 ];
-const ABOUT_PLACES = ["에서는 ", "에서 ", "에 있는 ", "안의 ", "내의 ", "프로젝트의 ", "문서의 ", "자료의 "];
+const ABOUT_PLACES = ["에서는 ", "에서 ", "에 있는 ", "안의 ", "내의 ", "프로젝트의 ", "프로젝트 내 ", "프로젝트 안 ", "문서의 ", "자료의 "];
 const ABOUT_FILLERS = ["그리고", "그럼", "그러면", "혹시", "먼저", "우선", "좀", "또", "자세히", "자세하게", "상세히", "상세하게", "간단히", "간단하게", "간략히", "간략하게", "짧게", "길게"];
 const ABOUT_POINTERS = ["이", "그", "저", "위", "위의", "아래", "해당", "선택한", "선택된", "첨부한", "첨부된", "방금", "앞의", "앞서"];
 const ABOUT_POINTED = [
   "이것", "이거", "그것", "그거", "저것", "저거", "여기", "이번", "이내용", "위내용", "위의내용", "아래내용", "선택문서", "문서", "문서들", "자료", "내용", "전체", "모두",
   "모든문서", "참고자료", "참고문서", "레퍼런스", "업무문서", "작업문서", "it", "this", "that", "them", "these", "those", "everything", "thedocuments", "alldocuments",
+  // ("주요 내용에 대해 요약", "전반에 대해", "핵심에 대해": all of it, in short — not something to look up)
+  "주요", "핵심", "전반", "전반적인", "전반적", "전체적인", "전체적", "모든", "중요", "중요한", "대략", "대략적인", "개요", "요점", "주요사항", "핵심사항", "중요사항", "주요점",
+  "themainpoints", "mainpoints", "keypoints", "thekeypoints", "overview", "theoverview", "thegist",
 ];
 
 function aboutKo(line: string): About | null {
@@ -1763,7 +1766,13 @@ function aboutKo(line: string): About | null {
     subject = subject.slice(sp + 1).trim();
   }
   subject = subject.replace(/^[\s"'“”‘’「」『』()[\]]+|[\s"'“”‘’「」『』()[\]]+$/g, "");
-  return { subject, rest: `${place.trim()} ${after.trim()}`.trim() };
+  return { subject: withoutContentWord(subject), rest: `${place.trim()} ${after.trim()}`.trim() };
+}
+
+/** `guard::without_content_word`: "BB 내용에 대해 요약해줘" is about BB. */
+function withoutContentWord(subject: string): string {
+  const head = subject.endsWith(" 내용") ? subject.slice(0, -3).trimEnd() : "";
+  return head !== "" ? head : subject;
 }
 
 /** `guard::names_a_subject`: the words name something to look up — not a pointer, not everything, not a kind of document, not a project called one. */
@@ -1845,31 +1854,103 @@ function asksSummary(rest: string): boolean {
   return SUMMARY_ASKS.some((a) => said.includes(a)) || said.endsWith("요약") || said.endsWith("요약을") || rest.toLowerCase().includes("summar");
 }
 
+/** `guard::asks_explanation`: the words outside the subject ask for it to be explained ("설명해줘"; not a "설명서"). */
+const EXPLAIN_ASKS = ["설명해", "설명하", "설명좀", "설명부탁", "설명을해", "설명을부탁", "설명바"];
+function asksExplanation(rest: string): boolean {
+  const said = compact(rest);
+  return EXPLAIN_ASKS.some((a) => said.includes(a)) || said.endsWith("설명") || said.endsWith("설명을") || rest.toLowerCase().includes("explain");
+}
+
+/** `guard::project_named`: the one project the words name. */
+function projectNamedIn(words: string, ctx: PlanContext): ProjectSummary | null {
+  const said = compact(words);
+  const named = ctx.projects.filter((p) => p.name && compact(p.name).length >= 2 && said.includes(compact(p.name)));
+  return named.length === 1 ? named[0]! : null;
+}
+
+/** `rules::points`: the words point at what is open or selected, whether or not anything is. */
+function pointsAt(words: string, ko: boolean): boolean {
+  return has(mkText(words, ko), [...SELECTION_WORDS, ...PART_WORDS]);
+}
+
+/** `guard::says_where`: the words outside the subject name a project, or what is open or selected. */
+function saysWhere(rest: string, ctx: PlanContext): boolean {
+  return projectNamedIn(rest, ctx) !== null || pointsAt(rest, true);
+}
+
+/** `guard::project_in_front`: "한빛 납품 프로젝트 검수 기준에 대해", "한빛 납품의 검수 기준에 대해" — the project is the place. */
+function projectInFront(a: About, ctx: PlanContext): About {
+  const names = ctx.projects
+    .map((p) => p.name.split(/\s+/).filter(Boolean).join(" "))
+    .filter((n) => Array.from(n).length >= 2)
+    .sort((x, y) => Array.from(y).length - Array.from(x).length);
+  for (const name of names) {
+    for (const tail of [" 프로젝트 ", "의 "]) {
+      const front = `${name}${tail}`;
+      if (!a.subject.toLowerCase().startsWith(front.toLowerCase())) continue;
+      const subject = a.subject.slice(front.length).trim();
+      if (subject === "") continue;
+      return { subject, rest: `${a.subject.slice(0, front.length).trim()} ${a.rest}`.trim() };
+    }
+  }
+  return a;
+}
+
 /**
- * `guard::subject_project`: the project a subject stands for — the subject is its name and the rest of the sentence does not
- * already name that project as the place ("AAA 프로젝트에서 AAA에 대해 요약해줘" asks about AAA inside the project).
+ * `guard::subject_project`: the project a subject names as a project ("AAA 프로젝트", "the AAA project"). The word makes it
+ * one — a name alone is something to look up (user decision 2026-11-20: the project and the content are two slots).
  */
 function subjectProject(a: About, ctx: PlanContext): ProjectSummary | null {
-  const project = projectOfSubject(a.subject, ctx);
-  return project && !compact(a.rest).includes(compact(project.name)) ? project : null;
+  const saidAsOne = compact(a.subject).endsWith("프로젝트") || a.subject.toLowerCase().endsWith(" project");
+  return saidAsOne ? projectOfSubject(a.subject, ctx) : null;
 }
 
 /**
- * `guard::summary_topic`: the subject of a summary the sentence asks for ("AA에 대해서 요약해줘" → `AA`) — not a kind of
- * document ("견적서에 대해 요약해줘": the estimates) and not a project by its name (`summaryProject`).
+ * `guard::summary_topic`: the subject of a summary the sentence asks for ("AA에 대해서 요약해줘" → `AA`, the content slot) —
+ * a summary to make, or an explanation when the sentence also says where to look ("AA 프로젝트의 BB 내용에 대해 설명해줘").
+ * Not a kind of document ("견적서에 대해 요약해줘": the estimates) and not a project called one (`summaryProject`).
  */
 export function summaryTopic(text: string, ctx: PlanContext): About | null {
-  const a = aboutOf(text);
-  if (!a) return null;
-  return asksSummary(a.rest) && !isTypeName(a.subject, ctx) && !subjectProject(a, ctx) ? a : null;
+  const phrase = aboutPhrase(text);
+  if (!phrase) return null;
+  const a = projectInFront(phrase, ctx);
+  if (!namesASubject(a.subject) || isTypeName(a.subject, ctx)) return null;
+  return asksSummary(a.rest) || (asksExplanation(a.rest) && saysWhere(a.rest, ctx)) ? a : null;
 }
 
-/** `guard::summary_project`: the project a sentence asks a summary of by naming it as the subject ("AAA에 대해서 요약해줘"). */
+/** `guard::summary_project`: the project a sentence asks a summary of by naming it as the subject ("AAA 프로젝트에 대해 요약해줘"). */
 export function summaryProject(text: string, ctx: PlanContext): { project: ProjectSummary; rest: string } | null {
   const a = aboutPhrase(text);
   if (!a || !asksSummary(a.rest)) return null;
   const project = subjectProject(a, ctx);
   return project ? { project, rest: a.rest } : null;
+}
+
+/** `guard::nothing_at_hand`: what a sentence that points at "this document" is told when none is open or selected. */
+const nothingAtHand = (ko: boolean) =>
+  ko
+    ? "어떤 문서에서 찾을까요? 열려 있거나 선택한 문서가 없습니다. 문서를 열거나 선택한 뒤 다시 요청하거나, 프로젝트 · 문서 유형을 말씀해 주세요."
+    : "Which document? None is open or selected. Open or select one and ask again, or name a project or a document type.";
+
+/** `rules::topic_plan`: the summary of what the documents say about a subject; where to look is read outside the subject. */
+function topicPlan(t: Text, ctx: PlanContext, about: About): Plan {
+  const rest = mkText(about.rest, t.ko);
+  const scope = scopeOf(rest, ctx, docTypeOf(rest, ctx), dateOf(rest, ctx));
+  // ("이 문서에서 …", "이 조항에서 …": what is open or selected — `rules::pointed_at`)
+  if (scopeIsEmpty(scope) && pointsAt(about.rest, t.ko)) {
+    scope.doc_ids = selectionIds(ctx);
+    if (scope.doc_ids.length === 0) return clarify(nothingAtHand(t.ko), 0.5);
+  }
+  const summary = tr(t.ko, `'${about.subject}'에 관한 내용을 문서에서 찾아 요약합니다`, `Summarise what the documents say about '${about.subject}'`);
+  const length = has(rest, ["짧게", "한줄", "간단", "short", "brief"]) ? "short" : has(rest, ["길게", "자세", "상세", "long", "detailed"]) ? "long" : null;
+  return single({ op: "summarize", target: "set", length, topic: about.subject }, 0.85, summary, scope);
+}
+
+/** `rules::explain_about`: with a place named, an explanation of a subject is the summary of what that place says about it. */
+function ruleExplainAbout(t: Text, ctx: PlanContext): Plan | null {
+  if (has(t, ["요약", "summar"])) return null;
+  const about = summaryTopic(t.raw, ctx);
+  return about ? topicPlan(t, ctx, about) : null;
 }
 
 function ruleProcess(t: Text, ctx: PlanContext): Plan | null {
@@ -1886,15 +1967,8 @@ function ruleProcess(t: Text, ctx: PlanContext): Plan | null {
   // from the words outside the phrase that names it, and no scope at all is every document: nothing is asked back.
   if (summarize && !(classify || ocr || extract || validate || generic)) {
     const about = summaryTopic(t.raw, ctx);
-    if (about) {
-      const rest = mkText(about.rest, t.ko);
-      const scope = scopeOf(rest, ctx, docTypeOf(rest, ctx), dateOf(rest, ctx));
-      // ("이 문서에서 …", "이 조항에서 …": what is open or selected — `rules::pointed_at`)
-      if (scopeIsEmpty(scope) && has(rest, [...SELECTION_WORDS, ...PART_WORDS])) scope.doc_ids = selectionIds(ctx);
-      const summary = tr(t.ko, `'${about.subject}'에 관한 내용을 문서에서 찾아 요약합니다`, `Summarise what the documents say about '${about.subject}'`);
-      return single({ op: "summarize", target: "set", length: summaryLength(rest), topic: about.subject }, 0.85, summary, scope);
-    }
-    // "AAA에 대해서 요약해줘" with a project AAA: one summary of the project's documents.
+    if (about) return topicPlan(t, ctx, about);
+    // "AAA 프로젝트에 대해 요약해줘": the project slot alone — one summary of the project's documents.
     const named = summaryProject(t.raw, ctx);
     if (named) {
       const rest = mkText(named.rest, t.ko);
@@ -2072,6 +2146,7 @@ export function rulesPlan(text: string, ctx: PlanContext): Plan | null {
     ruleManageSchema(t, ctx) ??
     ruleDefineSchema(t, ctx) ??
     ruleRegisterForm(t, ctx) ??
+    ruleExplainAbout(t, ctx) ??
     ruleReference(t, ctx) ??
     ruleDefineTerm(t) ??
     ruleManageTemplate(t, ctx) ??
@@ -3144,9 +3219,57 @@ function whereToLook(text: string, plan: Plan, ctx: PlanContext, ko: boolean): P
     notes.push(issue("scope.filter.role", "scope_filled", ko ? `문장대로 ${label}만 대상으로 합니다` : `only ${label}, as the sentence says`, false));
   }
   const perProject = plan.operations.some((op) => (op.op === "summarize" || op.op === "search" || op.op === "aggregate") && op.group_by === "project");
-  if (project && !plan.scope.filter.project_id && (plan.scope.doc_ids ?? []).length === 0 && plan.scope.folder == null && !perProject) {
-    plan.scope.filter.project_id = project.id;
-    notes.push(issue("scope.filter.project_id", "scope_filled", ko ? `문장의 '${project.name}' 프로젝트를 대상으로 합니다` : `the project '${project.name}' from the sentence is the scope`, false));
+  // The project slot is filled by the words outside the subject of a summary (user decision 2026-11-20):
+  // "AAA에 대해서 요약해줘" looks AAA up in every document, a project called AAA or not.
+  const topic = only && only.op === "summarize" && only.topic ? only.topic : null;
+  const place = topic ? userWords(text).split(/\s+/).filter(Boolean).join(" ").replace(topic, " ") : userWords(text);
+  const placed = topic ? projectNamedIn(place, ctx) : project;
+  const namedDocuments = (plan.scope.doc_ids ?? []).length > 0 || plan.scope.folder != null;
+  if (placed && !plan.scope.filter.project_id && !namedDocuments && !perProject) {
+    plan.scope.filter.project_id = placed.id;
+    notes.push(issue("scope.filter.project_id", "scope_filled", ko ? `문장의 '${placed.name}' 프로젝트를 대상으로 합니다` : `the project '${placed.name}' from the sentence is the scope`, false));
+  }
+  if (topic) {
+    const called = projectOfSubject(topic, ctx);
+    if (called && plan.scope.filter.project_id !== called.id) {
+      // The subject is also the name of a project: say which reading this is, and the other one.
+      notes.push(
+        issue(
+          "operations[0].topic",
+          "topic_names_project",
+          ko
+            ? `'${called.name}'은(는) 프로젝트 이름이기도 합니다. 지금은 문서에서 '${called.name}'에 관한 내용을 찾습니다. 그 프로젝트의 문서 전체를 요약하려면 "${called.name} 프로젝트 요약해줘"라고 하세요.`
+            : `'${called.name}' is also the name of a project. This looks up what the documents say about '${called.name}'; for a summary of the project's documents say "summarise the ${called.name} project".`,
+          false,
+        ),
+      );
+    } else if (!plan.scope.filter.project_id && !namedDocuments && /프로젝트|project/i.test(place) && !/프로젝트\s?별|(by|per) project/i.test(place) && !/(이|현재|지금|열린)\s?프로젝트|(this|current) project/i.test(place)) {
+      notes.push(issue("scope.filter.project_id", "project_not_found", ko ? "문장이 말한 프로젝트를 찾지 못했습니다. 프로젝트로 좁히지 않고 찾습니다." : "the project the sentence names was not found; looking without a project", false));
+    }
+  }
+  // The card names both slots: where the subject is looked up, when the sentence says so.
+  if (topic) {
+    const scoped = ctx.projects.find((p) => p.id === plan.scope.filter!.project_id) ?? null;
+    const ids = plan.scope.doc_ids ?? [];
+    const opened = ctx.current_document != null && ids.length === 1 && ids[0] === ctx.current_document;
+    const where = scoped
+      ? ko ? `'${scoped.name}' 프로젝트에서` : `the documents of the project '${scoped.name}' say`
+      : ids.length === 0
+        ? null
+        : opened
+          ? ko ? "열린 문서에서" : "the open document says"
+          : ko ? "선택한 문서에서" : "the selected documents say";
+    if (where) plan.summary = ko ? `${where} '${topic}'에 관한 내용을 찾아 요약합니다` : `Summarise what ${where} about '${topic}'`;
+  }
+  // "AA 프로젝트 요약해줘" (same decision): the project is what is summarised — one summary of all its documents next to
+  // each document's. Not when the words narrow it further or ask for the documents one by one.
+  const f = plan.scope.filter;
+  const onlyTheProject =
+    !namedDocuments && !f.doc_type && !f.date_from && !f.date_to && !f.keyword && !f.vendor && !f.status && (f.tags ?? []).length === 0 && !f.review_status && f.role == null && !!project && f.project_id === project.id;
+  const oneByOne = /문서\s?별|각\s?문서|각각|하나씩|따로따로|one by one|each document|separately/i.test(userWords(text));
+  if (onlyTheProject && !oneByOne && only && only.op === "summarize" && !only.topic && (only.group_by == null || only.group_by === "none")) {
+    only.target = "set";
+    plan.summary = ko ? `'${project!.name}' 프로젝트의 문서를 요약합니다` : `Summarise the documents of the project '${project!.name}'`;
   }
   projectReference(plan);
   return notes;

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "kind": "planner",
-  "generated_at": "2026-11-19T13:36:25Z",
+  "generated_at": "2026-11-22T04:34:15Z",
   "golden": "eval/results/planner-real-model/topic-summary-1.0.2.golden.json",
   "golden_count": 6,
   "context": "eval/results/planner-real-model/topic-summary-1.0.2.context.json",
@@ -23,7 +23,7 @@
     "mmproj_bytes": 990372672,
     "devices": [],
     "vram_used_mib": null,
-    "load_ms": 7938
+    "load_ms": 5233
   },
   "mode": "model",
   "model": "gemma4-e4b-q4km",
@@ -57,15 +57,15 @@
   "by_cause": {},
   "unasked_changes": 0,
   "latency": {
-    "p50_ms": 24950.090054,
-    "p95_ms": 158985.199364,
-    "mean_ms": 83104.69341249998
+    "p50_ms": 21763.478823,
+    "p95_ms": 150198.64468899998,
+    "mean_ms": 76479.071824
   },
   "latency_by_kind": {
     "question": {
-      "p50_ms": 24950.090054,
-      "p95_ms": 158985.199364,
-      "mean_ms": 83104.69341249998
+      "p50_ms": 21763.478823,
+      "p95_ms": 150198.64468899998,
+      "mean_ms": 76479.071824
     }
   },
   "items": [
@@ -81,7 +81,7 @@
       ],
       "summary": "'AA'에 관한 내용을 문서에서 찾아 요약합니다",
       "confidence": 0.9,
-      "latency_ms": 154896.676391,
+      "latency_ms": 137670.94466699997,
       "kind": "question",
       "requires_confirmation": false,
       "attempts": 1,
@@ -110,13 +110,13 @@
       "ops": [
         "summarize"
       ],
-      "summary": "'AAA' 프로젝트의 문서를 요약합니다",
+      "summary": "'AAA'에 관한 내용을 문서에서 찾아 요약합니다",
       "confidence": 0.9,
-      "latency_ms": 24950.090054,
+      "latency_ms": 21763.478823,
       "kind": "question",
       "requires_confirmation": false,
       "notes": [
-        "scope_filled"
+        "topic_names_project"
       ],
       "attempts": 1,
       "prompt_tokens": 3662,
@@ -125,14 +125,12 @@
       "operations": [
         {
           "op": "summarize",
-          "target": "set"
+          "target": "set",
+          "topic": "AAA"
         }
       ],
       "scope": {
-        "filter": {
-          "project_id": "p-aaa",
-          "with_reference": true
-        }
+        "filter": {}
       },
       "raw": "{\n  \"summary\": \"AAA 프로젝트에 대한 내용을 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"filter\": {\n      \"doc_type\": \"project\"\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"topic\": \"AAA\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
     },
@@ -148,7 +146,7 @@
       ],
       "summary": "'납품 기한'에 관한 내용을 문서에서 찾아 요약합니다",
       "confidence": 0.9,
-      "latency_ms": 22151.773824,
+      "latency_ms": 21037.250399,
       "kind": "question",
       "requires_confirmation": false,
       "attempts": 1,
@@ -179,7 +177,7 @@
       ],
       "summary": "'보안 요구사항'에 관한 내용을 문서에서 찾아 요약합니다",
       "confidence": 0.9,
-      "latency_ms": 22292.434744000002,
+      "latency_ms": 19180.890768,
       "kind": "question",
       "requires_confirmation": false,
       "attempts": 1,
@@ -210,7 +208,7 @@
       ],
       "summary": "'검수 기준'에 관한 내용을 문서에서 찾아 요약합니다",
       "confidence": 0.9,
-      "latency_ms": 158985.199364,
+      "latency_ms": 150198.64468899998,
       "kind": "question",
       "requires_confirmation": false,
       "notes": [
@@ -247,7 +245,7 @@
       ],
       "summary": "'하자보수'에 관한 내용을 문서에서 찾아 요약합니다",
       "confidence": 0.9,
-      "latency_ms": 115351.986098,
+      "latency_ms": 109023.221598,
       "kind": "question",
       "requires_confirmation": false,
       "attempts": 1,
@@ -311,7 +309,7 @@
         ],
         "summary": "'AA'에 관한 내용을 문서에서 찾아 요약합니다",
         "confidence": 0.85,
-        "latency_ms": 2.983274,
+        "latency_ms": 2.547602,
         "kind": "question",
         "requires_confirmation": false,
         "attempts": 0,
@@ -339,11 +337,14 @@
         "ops": [
           "summarize"
         ],
-        "summary": "'AAA' 프로젝트의 문서를 요약합니다",
+        "summary": "'AAA'에 관한 내용을 문서에서 찾아 요약합니다",
         "confidence": 0.85,
-        "latency_ms": 2.859651,
+        "latency_ms": 2.254064,
         "kind": "question",
         "requires_confirmation": false,
+        "notes": [
+          "topic_names_project"
+        ],
         "attempts": 0,
         "prompt_tokens": 0,
         "completion_tokens": 0,
@@ -351,14 +352,12 @@
         "operations": [
           {
             "op": "summarize",
-            "target": "set"
+            "target": "set",
+            "topic": "AAA"
           }
         ],
         "scope": {
-          "filter": {
-            "project_id": "p-aaa",
-            "with_reference": true
-          }
+          "filter": {}
         }
       },
       {
@@ -373,7 +372,7 @@
         ],
         "summary": "'납품 기한'에 관한 내용을 문서에서 찾아 요약합니다",
         "confidence": 0.85,
-        "latency_ms": 3.249674,
+        "latency_ms": 2.209815,
         "kind": "question",
         "requires_confirmation": false,
         "attempts": 0,
@@ -403,7 +402,7 @@
         ],
         "summary": "'보안 요구사항'에 관한 내용을 문서에서 찾아 요약합니다",
         "confidence": 0.85,
-        "latency_ms": 3.698715,
+        "latency_ms": 2.4115209999999996,
         "kind": "question",
         "requires_confirmation": false,
         "attempts": 0,
@@ -433,7 +432,7 @@
         ],
         "summary": "'검수 기준'에 관한 내용을 문서에서 찾아 요약합니다",
         "confidence": 0.85,
-        "latency_ms": 3.682407,
+        "latency_ms": 2.9040709999999996,
         "kind": "question",
         "requires_confirmation": false,
         "attempts": 0,
@@ -466,7 +465,7 @@
         ],
         "summary": "'하자보수'에 관한 내용을 문서에서 찾아 요약합니다",
         "confidence": 0.85,
-        "latency_ms": 3.080828,
+        "latency_ms": 2.332229,
         "kind": "question",
         "requires_confirmation": false,
         "attempts": 0,

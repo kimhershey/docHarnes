@@ -2051,7 +2051,8 @@ fn a_summary_about_a_subject_through_the_model_path() {
         r.plan
     );
     assert!(r.plan.scope.is_empty(), "{:?}", r.plan.scope);
-    // The project named: one summary of its documents — no subject, no split, nothing said of a split.
+    // A name alone is content, even when a project is called so (user decision 2026-11-20): every
+    // document, the grouping nobody asked for goes without a word, and the card names the other reading.
     let r = planned(
         "AAA에 대해서 요약해줘",
         json!({}),
@@ -2060,14 +2061,49 @@ fn a_summary_about_a_subject_through_the_model_path() {
     assert!(
         matches!(
             r.plan.operations.as_slice(),
-            [Op::Summarize { target: Some(SummarizeTarget::Set), group_by: None, topic: None, .. }]
+            [Op::Summarize { target: Some(SummarizeTarget::Set), group_by: None, topic: Some(t), .. }] if t == "AAA"
         ),
         "{:?}",
         r.plan
     );
-    assert_eq!(r.plan.scope.filter.project_id.as_deref(), Some("p-aaa"));
-    assert!(r.plan.scope.filter.with_reference);
-    assert_eq!(codes(&r), vec!["scope_filled"]);
+    assert!(r.plan.scope.is_empty(), "{:?}", r.plan.scope);
+    assert_eq!(codes(&r), vec!["topic_names_project"]);
+    // The project slot alone ("… 프로젝트"): one summary of its documents — no subject, no split.
+    for text in ["AAA 프로젝트 요약해줘", "AAA 프로젝트에 대해 요약해줘"] {
+        let r = planned(text, json!({}), json!({ "op": "summarize", "topic": "AAA", "group_by": "project" }));
+        assert!(
+            matches!(
+                r.plan.operations.as_slice(),
+                [Op::Summarize { target: Some(SummarizeTarget::Set), group_by: None, topic: None, .. }]
+            ),
+            "{text}: {:?}",
+            r.plan
+        );
+        assert_eq!(r.plan.scope.filter.project_id.as_deref(), Some("p-aaa"), "{text}");
+        assert!(r.plan.scope.filter.with_reference, "{text}");
+        assert_eq!(codes(&r), vec!["scope_filled"], "{text}");
+    }
+    // Both slots: the content inside the project, asked as a summary or as an explanation.
+    for (text, op) in [
+        (
+            "AAA 프로젝트의 영수증 처리 기준 내용에 대해 요약해줘",
+            json!({ "op": "summarize", "topic": "영수증 처리 기준 내용" }),
+        ),
+        (
+            "AAA 프로젝트의 영수증 처리 기준 내용에 대해 설명해줘",
+            json!({ "op": "answer", "question": "영수증 처리 기준 설명", "knowledge": false }),
+        ),
+    ] {
+        let r = planned(text, json!({ "filter": { "doc_type": "receipt" } }), op);
+        assert!(
+            matches!(r.plan.operations.as_slice(), [Op::Summarize { topic: Some(t), .. }] if t == "영수증 처리 기준"),
+            "{text}: {:?}",
+            r.plan
+        );
+        assert_eq!(r.plan.scope.filter.project_id.as_deref(), Some("p-aaa"), "{text}");
+        assert_eq!(r.plan.scope.filter.doc_type, None, "{text}: the type is a word of the subject");
+        assert!(r.plan.scope.filter.with_reference, "{text}");
+    }
     // A kind of document is no subject: the summary of the estimates, as the model's plan was before
     // it had a topic to write.
     let r = planned(
@@ -2094,6 +2130,31 @@ fn a_summary_about_a_subject_through_the_model_path() {
         r.plan
     );
     assert_eq!(r.plan.scope.filter.doc_type.as_deref(), Some("contract"), "{:?}", r.plan.scope);
+    // The routing call may take "… 설명해줘" for a turn to answer in prose (no plan call): the sentence
+    // still names what to gather and where.
+    for route in ["general", "chat"] {
+        let chat = StageChat::new();
+        chat.push("families", json!({ "families": [route] }));
+        let text = "AAA 프로젝트의 영수증 처리 기준 내용에 대해 설명해줘";
+        let r = plan(Some(&deps(&chat)), text, &c, PlanMode::ModelFirst).unwrap();
+        assert_eq!(chat.calls("plan"), 0);
+        assert!(
+            matches!(r.plan.operations.as_slice(), [Op::Summarize { target: Some(SummarizeTarget::Set), topic: Some(t), .. }] if t == "영수증 처리 기준"),
+            "{route}: {:?}",
+            r.plan
+        );
+        assert_eq!(r.plan.scope.filter.project_id.as_deref(), Some("p-aaa"), "{route}");
+        assert!(r.plan.scope.filter.with_reference && !r.plan.requires_confirmation, "{route}: {:?}", r.plan);
+    }
+    // (a question without a place keeps its route: it may be answered from general knowledge)
+    let chat = StageChat::new();
+    chat.push("families", json!({ "families": ["general"] }));
+    let r = plan(Some(&deps(&chat)), "영수증 처리 기준에 대해 설명해줘", &c, PlanMode::ModelFirst).unwrap();
+    assert!(
+        matches!(r.plan.operations.as_slice(), [Op::Answer { mode: Some(AnswerMode::General), .. }]),
+        "{:?}",
+        r.plan
+    );
     // A split the sentence asks for is not made of a summary about a subject: one note, and the card waits.
     let chat = StageChat::new();
     chat.push(

@@ -237,6 +237,19 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
             // A text that came with the request is worked on as it is, whatever the route was called.
             if guard::carried_text(text).is_some() {
                 guard::make_text_only(text, &mut p, ko);
+            } else if guard::asks_about(text, ctx) {
+                // 1.0.2: "AA 프로젝트의 BB 내용에 대해 설명해줘" may be routed as a turn to answer in
+                // prose. The sentence names what to gather and where, whatever the route was called.
+                let mut asked = p.clone();
+                let mut issues: Vec<PlanIssue> = guard::summary_about(text, &mut asked, ctx, ko).into_iter().collect();
+                issues.extend(guard::where_to_look(text, &mut asked, ctx, ko));
+                let checked = validate::validate(&mut asked, ctx, date.as_ref());
+                if !has_errors(&checked) {
+                    issues.extend(checked);
+                    result.plan = scoped(asked);
+                    result.issues = issues;
+                    return Ok(result);
+                }
             }
             result.plan = p;
             return Ok(result);
