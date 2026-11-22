@@ -170,13 +170,18 @@ describe("impact line", () => {
 
   it("a summary about a subject says what it is about (1.0.2)", () => {
     const ctx = { lang: "ko", context };
-    expect(summarizeOp({ op: "summarize", target: "set", topic: "납품 기한" }, t, ctx)).toBe("'납품 기한'에 관한 내용을 찾아서");
-    expect(summarizeOp({ op: "summarize", target: "set", topic: "납품 기한", length: "long" }, t, ctx)).toBe("'납품 기한'에 관한 내용을 찾아서 · 길게");
-    expect(summarizeOp({ op: "summarize", target: "each_doc" }, t, ctx)).toBe("문서별");
+    expect(summarizeOp({ op: "summarize", topic: "납품 기한" }, t, ctx)).toBe("'납품 기한'에 관한 내용을 찾아서");
+    expect(summarizeOp({ op: "summarize", topic: "납품 기한", length: "long" }, t, ctx)).toBe("'납품 기한'에 관한 내용을 찾아서 · 길게");
+    // 1.0.3: a summary is one result — there is no "문서별 / 묶음 하나로" to show; a plan stored before may still
+    // carry `target`, which is not shown either.
+    expect(summarizeOp({ op: "summarize" }, t, ctx)).toBe("");
+    expect(summarizeOp({ op: "summarize", length: "long" }, t, ctx)).toBe("길게");
+    expect(summarizeOp({ op: "summarize", group_by: "project" }, t, ctx)).toBe("프로젝트별 묶음");
+    expect(summarizeOp({ op: "summarize", target: "each_doc" } as never, t, ctx)).toBe("");
     // The result of such a step is one summary with its sources — no per-document list.
     const answer = { id: null, kind: "summary", question: "납품 기한", text: "- 12월 말 [1]", sentences: [], sources: [], no_evidence: false, used_general_knowledge: false, conflicts: null, model: "m", elapsed_ms: 1, prompt_tokens: 1, completion_tokens: 1, document_id: null, feedback: null, feedback_note: null, created_at: "" };
     const exec = {
-      plan: plan([{ op: "summarize", target: "set", topic: "납품 기한" }]),
+      plan: plan([{ op: "summarize", topic: "납품 기한" }]),
       status: "done",
       steps: [{ index: 0, op: "summarize", status: "done", summary: "s", payload: { topic: "납품 기한", summaries: [], groups: [{ key: "topic", label: "'납품 기한'에 관한 내용", document_ids: ["a", "b"], answer }], group_by: "none" }, error: null, elapsed_ms: 1 }],
       batches: [],
@@ -186,6 +191,21 @@ describe("impact line", () => {
     expect(actions.summaries).toHaveLength(1);
     expect(actions.summaries[0]).toMatchObject({ items: [], groupBy: "none" });
     expect(actions.summaries[0]!.groups).toEqual([{ key: "topic", label: "'납품 기한'에 관한 내용", documents: 2, answer }]);
+  });
+
+  it("the result of a summary is one summary per group; a result stored before 1.0.3 keeps its per-document ones", () => {
+    const answer = { id: null, kind: "summary", question: "q", text: "- 납품 기한은 12월 말 [1]", sentences: [], sources: [], no_evidence: false, used_general_knowledge: false, conflicts: null, model: "m", elapsed_ms: 1, prompt_tokens: 1, completion_tokens: 1, document_id: null, feedback: null, feedback_note: null, created_at: "" };
+    const of = (payload: unknown) => {
+      const exec = { plan: plan([{ op: "summarize" }]), status: "done", steps: [{ index: 0, op: "summarize", status: "done", summary: "s", payload, error: null, elapsed_ms: 1 }], batches: [], elapsed_ms: 1 };
+      return deriveResultActions(exec as never, exec.plan).summaries;
+    };
+    // 1.0.3: one group of everything, nothing per document; a document without text is named.
+    const now = of({ summaries: [], groups: [{ key: "all", label: "전체", document_ids: ["a", "b", "c"], answer }], group_by: "none", skipped: [{ document_id: "d", name: "scan.pdf", reason: "no_text" }] });
+    expect(now).toEqual([{ index: 0, items: [], groups: [{ key: "all", label: "전체", documents: 3, answer }], groupBy: "none", skipped: ["scan.pdf"], failed: [] }]);
+    // Before: a summary of each document, without groups — still shown from the chat history.
+    const before = of({ summaries: [{ document_id: "a", name: "a.pdf", answer }, { document_id: "b", name: "b.pdf", answer }] });
+    expect(before[0]).toMatchObject({ groups: [], groupBy: null });
+    expect(before[0]!.items.map((i) => i.name)).toEqual(["a.pdf", "b.pdf"]);
   });
 
   it("says how many of the documents are the project's reference material (1.0.1)", () => {

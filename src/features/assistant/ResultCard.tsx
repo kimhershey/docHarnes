@@ -305,7 +305,8 @@ export function ResultCard({
       ))}
       {actions.summaries.map((s) => (
         <div key={s.index} className="flex flex-col gap-2" data-testid="result-summaries">
-          {/* One combined summary per group comes first (0.8.0); the per-document summaries follow. */}
+          {/* One summary per group — a single one without a grouping (1.0.3). A result stored before 1.0.3 also
+              carries a summary of each document: those follow. */}
           {s.groups.length > 0 && (
             <div className="flex flex-col gap-2" data-testid="result-summary-groups" data-group-by={s.groupBy ?? "none"}>
               {s.groups.map((g) => (
@@ -331,7 +332,7 @@ export function ResultCard({
             </p>
           )}
           {s.items.map((item) => (
-            <div key={item.document_id} className="flex flex-col gap-1">
+            <div key={item.document_id} className="flex flex-col gap-1" data-testid="result-summary-document">
               <button type="button" className="self-start text-xs font-medium text-accent hover:underline cursor-pointer" onClick={() => navigate(`${SCREEN_ROUTES.library}/${item.document_id}`)}>
                 {item.name}
               </button>

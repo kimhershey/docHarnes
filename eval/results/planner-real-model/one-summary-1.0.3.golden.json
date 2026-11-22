@@ -1,0 +1,304 @@
+{
+  "schema_version": 1,
+  "context": "topic-summary-1.0.2-open-document.context.json",
+  "description": "1.0.3 (user decision 2026-11-22: \"파일별 요약은 없애고 모든 파일의 내용을 하나의 결과로 요약\") — a summary is one result of everything in scope: no summarize.target, a request for a summary of each document is told so and confirmed, a split the sentence asks for stays (a document is open; projects 한빛 납품 and AAA)",
+  "items": [
+    {
+      "id": "s-1",
+      "category": "ko",
+      "kind": "question",
+      "text": "전체 문서를 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "target": null,
+            "group_by": null,
+            "topic": null,
+            "length": null
+          }
+        ],
+        "confirm": false,
+        "scope": {
+          "filter": {
+            "project_id": null
+          }
+        }
+      },
+      "note": "범위의 모든 문서를 하나의 결과로 — 문서별 요약도, 묶음도, 확인도 없다 — 길이도 말하지 않았으니 없다(모델이 length=long을 써 왔다)"
+    },
+    {
+      "id": "s-2",
+      "category": "ko",
+      "kind": "question",
+      "text": "이 문서 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "target": null,
+            "group_by": null,
+            "topic": null,
+            "length": null
+          }
+        ],
+        "confirm": false,
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      },
+      "note": "열린 문서 하나의 요약"
+    },
+    {
+      "id": "s-3",
+      "category": "ko",
+      "kind": "question",
+      "text": "AAA 프로젝트 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "target": null,
+            "group_by": null,
+            "topic": null,
+            "length": null
+          }
+        ],
+        "confirm": false,
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa"
+          }
+        }
+      },
+      "note": "프로젝트의 문서 전체를 하나로(업무 문서 + 참고 자료)"
+    },
+    {
+      "id": "s-4",
+      "category": "ko",
+      "kind": "question",
+      "text": "이 문서를 한 줄로 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "target": null,
+            "length": "short",
+            "group_by": null
+          }
+        ],
+        "confirm": false,
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      }
+    },
+    {
+      "id": "s-5",
+      "category": "ko",
+      "kind": "question",
+      "text": "전체 문서를 문서별로 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "target": null,
+            "group_by": null,
+            "topic": null,
+            "length": null
+          }
+        ],
+        "unmet": true,
+        "confirm": true
+      },
+      "note": "문서별 요약은 만들지 않는다 — 하나로 요약한다고 알리고 확인받는다. 프로젝트 · 폴더별 묶음으로 바꿔 쓰면 추측이다"
+    },
+    {
+      "id": "s-6",
+      "category": "ko",
+      "kind": "question",
+      "text": "AAA 프로젝트 문서를 각각 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "target": null,
+            "group_by": null,
+            "topic": null,
+            "length": null
+          }
+        ],
+        "unmet": true,
+        "confirm": true,
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa"
+          }
+        }
+      },
+      "note": "'각각'도 같다"
+    },
+    {
+      "id": "s-7",
+      "category": "ko",
+      "kind": "question",
+      "text": "파일별로 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "target": null,
+            "group_by": null,
+            "topic": null,
+            "length": null
+          }
+        ],
+        "unmet": true,
+        "confirm": true
+      },
+      "note": "'파일별'도 같다"
+    },
+    {
+      "id": "s-8",
+      "category": "ko",
+      "kind": "question",
+      "text": "프로젝트별로 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "target": null,
+            "group_by": "project",
+            "topic": null,
+            "length": null
+          }
+        ],
+        "confirm": false
+      },
+      "note": "문장이 청한 묶음은 그대로: 프로젝트마다 결과 하나"
+    },
+    {
+      "id": "s-9",
+      "category": "ko",
+      "kind": "question",
+      "text": "AAA에 대해서 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": "AAA",
+            "target": null,
+            "group_by": null,
+            "length": null
+          }
+        ],
+        "confirm": false,
+        "scope": {
+          "filter": {
+            "project_id": null
+          }
+        }
+      },
+      "note": "1.0.2의 주제 요약은 그대로(대상 칸만 없어짐)"
+    },
+    {
+      "id": "s-10",
+      "category": "ko",
+      "kind": "question",
+      "text": "AAA 프로젝트의 지체상금 내용에 대해 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": "지체상금",
+            "target": null,
+            "length": null
+          }
+        ],
+        "confirm": false,
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa"
+          }
+        }
+      }
+    },
+    {
+      "id": "s-11",
+      "category": "ko",
+      "kind": "question",
+      "text": "모든 문서의 내용을 하나로 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "target": null,
+            "group_by": null,
+            "topic": null,
+            "length": null
+          }
+        ],
+        "confirm": false
+      },
+      "note": "사용자의 말 그대로: 하나의 결과 — PDF 병합이 아니다"
+    },
+    {
+      "id": "s-12",
+      "category": "en",
+      "kind": "question",
+      "text": "summarize all documents",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "target": null,
+            "group_by": null,
+            "topic": null,
+            "length": null
+          }
+        ],
+        "confirm": false
+      }
+    }
+  ]
+}

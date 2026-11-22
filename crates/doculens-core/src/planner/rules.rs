@@ -14,7 +14,7 @@ use super::{
     compact, settings_catalog, AggregateFn, AutoPipeline, DocTypeSummary, EngineOp, ExplainScope, ExportFormat,
     ExportTarget, FieldSummary, GroupBy, ImportFrom, JobOp, MaintenanceAction, ModelAction, OcrProfile, Op, OpKind,
     OpenTarget, Plan, PlanContext, ReferenceAction, RetentionTarget, ReviewOnly, ReviewOp, RoleParam, SchemaAction,
-    SchemaMode, SchemaSummary, Scope, SummarizeTarget, SummaryLength, TemplateAction, TermAction, WorkspaceAction,
+    SchemaMode, SchemaSummary, Scope, SummaryLength, TemplateAction, TermAction, WorkspaceAction,
 };
 
 /// Default folder templates per grouping (design §3.7 정리 화면).
@@ -273,11 +273,11 @@ pub fn pointed_at(text: &str, ctx: &PlanContext) -> Vec<String> {
     }
 }
 
-/// How long a summary the words ask for: "짧게 · 간단히" / "자세히 · 길게".
+/// How long a summary the words ask for: "짧게 · 간단히 · 한 줄로" / "자세히 · 길게 · 상세히".
 fn length_of(t: &Text<'_>) -> Option<SummaryLength> {
-    if t.has(&["짧게", "한줄", "간단", "short", "brief*"]) {
+    if t.has(&["짧게", "한줄", "한문장", "간단", "간략", "short", "brief*", "one line", "one sentence"]) {
         Some(SummaryLength::Short)
-    } else if t.has(&["길게", "자세", "상세", "long", "detailed"]) {
+    } else if t.has(&["길게", "자세", "상세", "구체적", "long", "detailed", "in detail", "thorough*"]) {
         Some(SummaryLength::Long)
     } else {
         None
@@ -1350,12 +1350,7 @@ fn topic_plan(t: &Text<'_>, ctx: &PlanContext, about: super::guard::About) -> Pl
             &format!("Summarise what the documents say about '{}'", about.subject),
         )
         .to_string();
-    let op = Op::Summarize {
-        target: Some(SummarizeTarget::Set),
-        length: length_of(&rest),
-        group_by: None,
-        topic: Some(about.subject),
-    };
+    let op = Op::Summarize { target: None, length: length_of(&rest), group_by: None, topic: Some(about.subject) };
     mk(op, scope, 0.85, summary)
 }
 
@@ -1419,12 +1414,7 @@ fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
                         &format!("Summarise the documents of the project '{}'", project.name),
                     )
                     .to_string();
-                let op = Op::Summarize {
-                    target: Some(SummarizeTarget::Set),
-                    length: summary_length(&rest),
-                    group_by: None,
-                    topic: None,
-                };
+                let op = Op::Summarize { target: None, length: summary_length(&rest), group_by: None, topic: None };
                 return Some(mk(op, scope, 0.85, summary));
             }
         }
@@ -1460,13 +1450,9 @@ fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     }
     let mut ops = Vec::new();
     if summarize {
-        let target = if t.has(&["하나로", "합쳐", "묶어", "전체요약", "together", "one summary", "combined"])
-        {
-            SummarizeTarget::Set
-        } else {
-            SummarizeTarget::EachDoc
-        };
-        ops.push(Op::Summarize { target: Some(target), length: summary_length(t), group_by: grouping, topic: None });
+        // (1.0.3: one summary of everything in scope — "하나로 묶어" is what a summary is, and there
+        // is none per document; a sentence that asks for one is told so by `guard::split_check`)
+        ops.push(Op::Summarize { target: None, length: summary_length(t), group_by: grouping, topic: None });
     }
     if classify || generic {
         ops.push(Op::Classify {

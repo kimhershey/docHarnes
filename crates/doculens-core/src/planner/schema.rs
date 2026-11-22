@@ -185,13 +185,12 @@ pub const OP_SPECS: &[OpSpec] = &[
     OpSpec {
         kind: OpKind::Summarize,
         params: &[
-            p("target", ParamType::Enum(&["each_doc", "set"]), false, "문서별 / 범위 전체를 묶음 하나로", "per document / the whole scope as one summary"),
             p("length", ParamType::Enum(&["short", "long"]), false, "길이", "length"),
-            p("group_by", ParamType::Enum(SUMMARY_GROUPS), false, "묶음별 요약: 프로젝트·문서 유형·폴더마다 하나씩(‘프로젝트별로’)", "one combined summary per project / document type / folder ('by project')"),
+            p("group_by", ParamType::Enum(SUMMARY_GROUPS), false, "묶음별 요약: 프로젝트·문서 유형·폴더마다 하나씩(‘프로젝트별로’). 생략하면 범위 전체를 하나로", "one summary per project / document type / folder ('by project'); omitted = one summary of the whole scope"),
             p("topic", ParamType::Str, false, "주제 — ‘○○에 대해(관해) 요약’의 ○○. 그 주제의 내용을 문서에서 찾아 요약(문서 자체를 요약할 때는 생략)", "subject — the X of 'summarise … about X': what the documents say about X is looked up and summarised (omit to summarise the documents themselves)"),
         ],
-        desc_ko: "요약",
-        desc_en: "summarise",
+        desc_ko: "요약 — 범위의 문서 내용을 모아 하나의 결과로(문서별 요약은 없음)",
+        desc_en: "summarise — the content of the documents in scope as one result (there is no summary per document)",
     },
     OpSpec {
         kind: OpKind::Aggregate,

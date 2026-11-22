@@ -43,7 +43,7 @@ import {
   type WorkerOutcome,
 } from "./mock-backend";
 import * as mg from "./mock-generate";
-import { mockKnowledge, projectReferenceDocIds, projectReferenceGroup, referenceDocIds } from "./mock-knowledge";
+import { mockKnowledge, projectReferenceDocIds, projectReferenceGroup, referenceDocIds, summarizeDocuments } from "./mock-knowledge";
 import * as pl from "./mock-pipeline";
 import * as mp from "./mock-projects";
 import { resolveJosa } from "./josa";
@@ -747,8 +747,12 @@ function ruleSplit(t: Text, ctx: PlanContext): Plan | null {
 
 /** "선택한 문서 하나로 합쳐 '계약 묶음'", "merge the selected documents". */
 function ruleMerge(t: Text, ctx: PlanContext): Plan | null {
-  if (!has(t, ["합쳐", "합치", "병합", "하나로", "merge", "combine"])) return null;
-  if (has(t, ["셀", "cell", "표를", "프로젝트", "project"])) return null;
+  // (`rules`: the words outside quotes decide — the name of the merged file may say anything)
+  const plain = mkText(t.raw.replace(/["'“‘「『][^"'”’」』]*["'”’」』]/g, " "), t.ko);
+  if (!has(plain, ["합쳐", "합치", "병합", "하나로", "merge", "combine"])) return null;
+  if (has(plain, ["셀", "cell", "표를", "프로젝트", "project", "묶음", "collection"])) return null;
+  // ("하나로 묶어 요약해줘" asks for a summary — the one result a summary is —, not for one PDF)
+  if (has(plain, ["요약", "summar", "정리", "집계", "합계", "total", "비교", "compare"])) return null;
   const ids = selectionIds(ctx);
   if (ids.length < 2) return clarify(tr(t.ko, "합칠 문서를 2개 이상 선택해 주세요.", "Select two or more documents to merge."), 0.5);
   const name = quotedOf(t.raw);
@@ -1720,6 +1724,17 @@ function unknownSplit(t: Text): boolean {
   return /[가-힣]{2,}\s?(별|마다)(로|\s|$)/.test(t.raw) || /\b(by|per) [a-z]+/i.test(t.raw);
 }
 
+/**
+ * `guard::per_document` (1.0.3): the words ask for the documents one by one ("문서별로", "파일마다", "각 문서", "각각",
+ * "하나씩") and name no other split — a summary of each document, which is not made any more.
+ */
+function perDocumentSplit(words: string, t: Text): boolean {
+  if (summaryGroupOf(t) !== null) return false;
+  if (/(문서|파일)\s?(별|마다)(로|\s|$)|각\s(문서|파일)|각각의\s(문서|파일)|\b(per|each|by) document\b/i.test(words)) return true;
+  if (unknownSplit(t)) return false;
+  return /각각|하나씩|따로따로|one by one|each file|separately/i.test(words);
+}
+
 /** `guard::About`: a subject the sentence names, and the sentence without the phrase that names it. */
 export interface About {
   subject: string;
@@ -1943,7 +1958,7 @@ function topicPlan(t: Text, ctx: PlanContext, about: About): Plan {
   }
   const summary = tr(t.ko, `'${about.subject}'에 관한 내용을 문서에서 찾아 요약합니다`, `Summarise what the documents say about '${about.subject}'`);
   const length = has(rest, ["짧게", "한줄", "간단", "short", "brief"]) ? "short" : has(rest, ["길게", "자세", "상세", "long", "detailed"]) ? "long" : null;
-  return single({ op: "summarize", target: "set", length, topic: about.subject }, 0.85, summary, scope);
+  return single({ op: "summarize", length, topic: about.subject }, 0.85, summary, scope);
 }
 
 /** `rules::explain_about`: with a place named, an explanation of a subject is the summary of what that place says about it. */
@@ -1976,7 +1991,7 @@ function ruleProcess(t: Text, ctx: PlanContext): Plan | null {
       if ((scope.doc_ids ?? []).length === 0 && !scope.folder) {
         scope.filter = { ...(scope.filter ?? {}), project_id: named.project.id };
         const summary = tr(t.ko, `'${named.project.name}' 프로젝트의 문서를 요약합니다`, `Summarise the documents of the project '${named.project.name}'`);
-        return single({ op: "summarize", target: "set", length: summaryLength(rest) }, 0.85, summary, scope);
+        return single({ op: "summarize", length: summaryLength(rest) }, 0.85, summary, scope);
       }
     }
   }
@@ -1994,9 +2009,10 @@ function ruleProcess(t: Text, ctx: PlanContext): Plan | null {
   }
   const ops: Op[] = [];
   if (summarize) {
-    const target = has(t, ["하나로", "합쳐", "묶어", "전체요약", "together", "onesummary", "combined"]) ? "set" : "each_doc";
+    // (1.0.3: one summary of everything in scope — there is none per document; a sentence that asks for
+    // one is told so by `contractChecks`)
     const length = summaryLength(t);
-    ops.push(groupBy ? { op: "summarize", target, length, group_by: groupBy } : { op: "summarize", target, length });
+    ops.push(groupBy ? { op: "summarize", length, group_by: groupBy } : { op: "summarize", length });
   }
   if (classify || generic) ops.push({ op: "classify", doc_types: dt ? [dt.slug] : [], force: force ? true : null });
   if (ocr || generic) {
@@ -2500,15 +2516,17 @@ export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | nul
         break;
       }
       case "summarize": {
-        // 1.0.2 (`validate`): a summary about a subject is one summary of the passages found — not one per
-        // document or per group. An empty subject is no subject.
+        // 1.0.3 (`validate`): `target` (each document / one set) is not a parameter any more — a summary is one
+        // result of everything in scope. A plan stored before carries it; it is cleared.
+        delete (op as { target?: unknown }).target;
+        // 1.0.2: a summary about a subject is one summary of the passages found — not one per group. An
+        // empty subject is no subject.
         const topic = Array.from((op.topic ?? "").split(/\s+/).filter(Boolean).join(" ")).slice(0, 200).join("");
         if (!topic) {
           delete op.topic;
           break;
         }
         op.topic = topic;
-        op.target = "set";
         if (op.group_by && op.group_by !== "none") {
           op.group_by = null;
           issues.push(issue(at("group_by"), "grouping_dropped", ctx.language === "ko" ? "주제를 정한 요약은 묶음별로 나누지 않고 하나로 만듭니다" : "a summary about a subject is one summary, not one per group", false));
@@ -3162,8 +3180,19 @@ function contractChecks(text: string, plan: Plan, ko: boolean): PlanIssue[] {
     plan.requires_confirmation = true;
     notes.push(issue("unmet", "unmet_request", ko ? `요청 중 반영하지 못한 부분: ${plan.unmet}` : `not covered by this plan: ${plan.unmet}`, false));
   }
+  // 1.0.3 (`guard::keep_the_split` / `split_check`): there is no summary per document. "문서별로 요약해줘" gets the
+  // one summary of them all — said and confirmed like any split that cannot be made — and a grouping written
+  // for such a sentence goes.
+  const perDocument = perDocumentSplit(said, t) && plan.operations.some((op) => op.op === "summarize");
+  if (perDocument) for (const op of plan.operations) if (op.op === "summarize") op.group_by = null;
   const splits = plan.operations.some((op) => (op.op === "summarize" && (op.group_by ?? "none") === "none") || (op.op === "aggregate" && (op.group_by ?? "none") === "none"));
-  if (splits && summaryGroupOf(t) === null && unknownSplit(t)) {
+  if (perDocument) {
+    plan.requires_confirmation = true;
+    // (the card's own sentence must not promise what the note under it takes back)
+    if (!plan.summary || perDocumentSplit(plan.summary, mkText(plan.summary, ko))) plan.summary = ko ? "범위의 문서를 모두 읽어 하나로 요약합니다" : "One summary of all the documents in scope";
+    if (!plan.unmet) plan.unmet = ko ? "문서마다 따로 요약하는 부분" : "a summary of each document";
+    notes.push(issue("operations", "grouping_dropped", ko ? "문서별 요약은 만들지 않습니다. 범위의 문서를 모두 읽어 하나의 결과로 요약합니다" : "summaries per document are not made; the documents in scope are read and summarised as one result", false));
+  } else if (splits && summaryGroupOf(t) === null && unknownSplit(t)) {
     plan.requires_confirmation = true;
     if (!plan.unmet) plan.unmet = ko ? "묶음별로 나누는 부분('~별')" : "the split into groups ('by …')";
     notes.push(issue("operations", "grouping_dropped", ko ? "문장은 나눠서 처리하라고 하는데 이 기준으로는 나눌 수 없어 한 덩어리로 처리합니다" : "the sentence asks for one result per group, which this plan cannot do; it makes a single one", false));
@@ -3261,14 +3290,12 @@ function whereToLook(text: string, plan: Plan, ctx: PlanContext, ko: boolean): P
           : ko ? "선택한 문서에서" : "the selected documents say";
     if (where) plan.summary = ko ? `${where} '${topic}'에 관한 내용을 찾아 요약합니다` : `Summarise what ${where} about '${topic}'`;
   }
-  // "AA 프로젝트 요약해줘" (same decision): the project is what is summarised — one summary of all its documents next to
-  // each document's. Not when the words narrow it further or ask for the documents one by one.
+  // "AA 프로젝트 요약해줘" (same decision): the project is what is summarised — one summary of all its documents
+  // (the only kind there is since 1.0.3), and the card says so. Not when the words narrow it further.
   const f = plan.scope.filter;
   const onlyTheProject =
     !namedDocuments && !f.doc_type && !f.date_from && !f.date_to && !f.keyword && !f.vendor && !f.status && (f.tags ?? []).length === 0 && !f.review_status && f.role == null && !!project && f.project_id === project.id;
-  const oneByOne = /문서\s?별|각\s?문서|각각|하나씩|따로따로|one by one|each document|separately/i.test(userWords(text));
-  if (onlyTheProject && !oneByOne && only && only.op === "summarize" && !only.topic && (only.group_by == null || only.group_by === "none")) {
-    only.target = "set";
+  if (onlyTheProject && only && only.op === "summarize" && !only.topic && (only.group_by == null || only.group_by === "none")) {
     plan.summary = ko ? `'${project!.name}' 프로젝트의 문서를 요약합니다` : `Summarise the documents of the project '${project!.name}'`;
   }
   projectReference(plan);
@@ -4715,7 +4742,8 @@ export function planPreview(plan: Plan, ctx: PlanContext): PlanPreview {
           payload = { documents: docs.length, topic: op.topic };
           break;
         }
-        summary = countLabel(docs.length, ko);
+        // 1.0.3: several documents make one summary — the card says so.
+        summary = (op.group_by ?? "none") === "none" && docs.length > 1 ? (ko ? `${countLabel(docs.length, ko)}의 내용을 하나로 요약` : `One summary of ${countLabel(docs.length, ko)}`) : countLabel(docs.length, ko);
         payload = { documents: docs.length };
         break;
       case "classify":
@@ -5147,29 +5175,9 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
         throw err(code === "no_documents" ? "no_documents" : "invalid", code);
       }
       const mode = op.length === "short" ? "one_line" : op.length === "long" ? "one_page" : "key_points";
-      const summaries: { document_id: string; name: string; answer: Answer }[] = [];
-      const skipped: { document_id: string; name: string }[] = [];
-      for (const [i, d] of docs.entries()) {
-        if (ctl) await ctl.checkpoint();
-        progress("summarize", i, docs.length, d.original_name);
-        try {
-          const ans = (await mockKnowledge("knowledge_answer", { req: { question: "", kind: "summary", document_id: d.id, summary_mode: mode, context_tokens: settings.knowledge.context_tokens }, requestId: `plan-${newId()}` })) as Answer;
-          summaries.push({ document_id: d.id, name: d.original_name, answer: ans });
-        } catch (e) {
-          // A document without text is left out and named; the others keep their summaries (0.8.0).
-          if (messageOf(e) !== "no_text") throw e;
-          skipped.push({ document_id: d.id, name: d.original_name });
-        }
-      }
-      if (summaries.length === 0) throw err("not_found", "no_text");
-      const made = countLabel(summaries.length, ko);
-      const tail = skipped.length > 0 ? (ko ? ` · 본문이 없는 문서 ${skipped.length}건은 건너뜀` : ` · ${skipped.length} document(s) without text skipped`) : "";
-      const payload: Record<string, unknown> = { summaries };
-      if (skipped.length > 0) payload.skipped = skipped;
       const groupBy = op.group_by ?? "none";
-      if (groupBy === "none" && op.target !== "set") return { summary: (ko ? `${made} 요약` : `Summarised ${made}`) + tail, payload };
-      // One combined summary per group (`exec::summarize::group_documents`).
-      const answered = new Map(summaries.map((x) => [x.document_id, x]));
+      // The groups that get a summary each (`exec::summarize::group_documents`): without a criterion one group
+      // of everything — named after the document when there is only one.
       const sets: { key: string; label: string; docs: string[] }[] = [];
       const put = (key: string, label: string, id: string) => {
         const g = sets.find((x) => x.key === key);
@@ -5198,28 +5206,42 @@ async function runStep(plan: Plan, op: Op, imported: string[] | null, ctx: PlanC
           const dir = relDir(d.rel_path);
           put(dir, dir || (ko ? "(최상위)" : "(top level)"), d.id);
         }
-      } else sets.push({ key: "all", label: ko ? "전체" : "All documents", docs: docs.map((d) => d.id) });
+      } else sets.push({ key: "all", label: docs.length === 1 ? docs[0]!.original_name : ko ? "전체" : "All documents", docs: docs.map((d) => d.id) });
+      // One summary per group, made from the passages of all its documents (1.0.3, user decision 2026-11-22: there
+      // is no summary per document). A document without text is left out and named.
       const groups: { key: string; label: string; document_ids: string[]; answer: Answer }[] = [];
-      for (const g of sets) {
-        // Only the documents that have a summary make up the group's summary.
-        const members = g.docs.map((id) => answered.get(id)).filter((x): x is (typeof summaries)[number] => x !== undefined);
-        if (members.length === 0) continue;
-        let answer: Answer;
-        if (members.length === 1) {
-          // A group of one document needs no combining call: its summary is the document's.
-          answer = members[0]!.answer;
-        } else {
-          // The combined summary is text made from the document summaries (a text-only answer): it cites
-          // nothing — no sources, and no `[n]` markers of the summaries it was made from.
-          const lines = members.map((m) => (m.answer.text.split("\n")[0] ?? "").replace(/\s*\[\d+(?:\s*,\s*\d+)*\]/g, "").trim()).filter(Boolean);
-          answer = { ...members[0]!.answer, id: null, kind: "answer", question: g.label, text: lines.join("\n"), sentences: lines.map((text) => ({ text, citations: [] })), sources: [], conflicts: null, document_id: null, feedback: null };
+      const covered = new Set<string>();
+      const withoutText = new Set<string>();
+      const filled = sets.filter((g) => g.docs.length > 0);
+      for (const [n, g] of filled.entries()) {
+        if (ctl) await ctl.checkpoint();
+        progress("summarize", n, filled.length, g.label);
+        try {
+          const got = await summarizeDocuments(g.docs, mode, ko, `plan-${newId()}`);
+          for (const id of got.without_text) withoutText.add(id);
+          const members = g.docs.filter((id) => !got.without_text.includes(id));
+          for (const id of members) covered.add(id);
+          groups.push({ key: g.key, label: g.label, document_ids: members, answer: got.answer });
+        } catch (e) {
+          if (messageOf(e) !== "no_text") throw e;
+          for (const id of g.docs) withoutText.add(id);
         }
-        groups.push({ key: g.key, label: g.label, document_ids: members.map((m) => m.document_id), answer });
       }
-      payload.groups = groups;
-      payload.group_by = groupBy;
+      if (groups.length === 0) throw err("not_found", "no_text");
+      const skipped = docs.filter((d) => withoutText.has(d.id)).map((d) => ({ document_id: d.id, name: d.original_name, reason: "no_text" }));
+      const made = countLabel(covered.size, ko);
+      const tail = skipped.length > 0 ? (ko ? ` · 본문이 없는 문서 ${skipped.length}건은 건너뜀` : ` · ${skipped.length} document(s) without text skipped`) : "";
+      // (`summaries` — the per-document summaries of the versions before 1.0.3 — stays as an empty list: it is
+      // how a reader of the payload tells a summary step's result)
+      const payload: Record<string, unknown> = { summaries: [], groups, group_by: groupBy };
+      if (skipped.length > 0) payload.skipped = skipped;
       const by = { project: ko ? "프로젝트별" : "by project", doc_type: ko ? "유형별" : "by type", folder: ko ? "폴더별" : "by folder", none: "" }[groupBy];
-      const summary = groupBy === "none" ? (ko ? resolveJosa(`${made}을(를) 하나로 요약`) : `One summary of ${made}`) : ko ? `${made} 요약 · ${by} 묶음 ${groups.length}개` : `Summarised ${made} · ${groups.length} group(s) ${by}`;
+      const summary =
+        groupBy !== "none"
+          ? ko ? `${made} 요약 · ${by} 묶음 ${groups.length}개` : `Summarised ${made} · ${groups.length} group(s) ${by}`
+          : covered.size === 1
+            ? ko ? `${made} 요약` : `Summarised ${made}`
+            : ko ? `${made}의 내용을 하나로 요약` : `One summary of ${made}`;
       return { summary: summary + tail, payload };
     }
     case "aggregate": {

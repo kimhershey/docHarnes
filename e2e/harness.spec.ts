@@ -239,6 +239,39 @@ test.describe("0.8.0 assistant harness", () => {
     await expect(items.nth(2)).toContainText("프로젝트 없음");
   });
 
+  // 1.0.3 (user decision 2026-11-22): "파일별 요약은 없애고 모든 파일의 내용을 하나의 결과로 요약" — a summary step
+  // makes one result of everything in scope; a sentence that asks for one per document is told so first.
+  test("'전체 문서를 요약해줘' makes one summary of all the documents, and none per document", async ({ page }) => {
+    test.setTimeout(90_000);
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서.hwpx", "D:\\scan\\개발계약서-2p.pdf", "D:\\규정\\정보보안지침.pdf"]);
+
+    await openAssistantScreen(page);
+    await send(page, "전체 문서를 요약해줘");
+    const result = assistantCard(page, "result").last();
+    await expect(result).toHaveAttribute("data-result-status", "done", { timeout: 30_000 });
+    await expect(result.getByTestId("result-summary-groups")).toHaveAttribute("data-group-by", "none");
+    const groups = result.getByTestId("result-summary-group");
+    await expect(groups).toHaveCount(1);
+    await expect(groups.first()).toContainText("전체");
+    await expect(groups.first()).toContainText("문서 3건");
+    // The one summary says which document says what, and cites each of them.
+    await expect(groups.first()).toContainText("정보보안지침");
+    await expect(result.getByTestId("result-summary-document")).toHaveCount(0);
+
+    await send(page, "전체 문서를 문서별로 요약해줘");
+    const each = assistantCard(page, "plan").last();
+    await expect(each).toHaveAttribute("data-plan-status", "pending", { timeout: 15_000 });
+    await expect(each.locator('[data-warning-code="grouping_dropped"]')).toContainText("문서별 요약은 만들지 않습니다");
+    // Confirmed, it is the same single summary.
+    await each.getByTestId("plan-execute").click();
+    const again = assistantCard(page, "result").last();
+    await expect(again).toHaveAttribute("data-result-status", "done", { timeout: 30_000 });
+    await expect(again.getByTestId("result-summary-group")).toHaveCount(1);
+    await expect(again.getByTestId("result-summary-document")).toHaveCount(0);
+  });
+
   // 1.0.2 (user report 2026-11-19): "AA에 대해서 요약해줘" summarised every document in scope, one by one, and
   // gathered nothing about AA. A summary that names its subject looks the passages about it up and makes one
   // summary of them, with their sources — no scope asked for, no per-document summaries.

@@ -184,11 +184,11 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
     case "answer":
       return joinParts([truncate(op.question, 80), op.mode ? pt(`mode_${op.mode}`) : op.knowledge === false ? pt("knowledge_text_only") : null]);
     case "summarize": {
-      // A grouping replaces "문서별 / 묶음 하나로": the group is what the summary is made per.
+      // A summary is one result of everything in scope (1.0.3) unless a grouping says what it is made per.
       const grouped = op.group_by && op.group_by !== "none";
       // 1.0.2: a summary about a subject is one summary of the passages found — the subject says what it is.
       if (op.topic) return joinParts([pt("summary_topic", { topic: truncate(op.topic, 60) }), op.length ? pt(op.length) : null]);
-      return joinParts([grouped ? pt(`summary_group_${op.group_by}`) : op.target ? pt(op.target) : null, op.length ? pt(op.length) : null]);
+      return joinParts([grouped ? pt(`summary_group_${op.group_by}`) : null, op.length ? pt(op.length) : null]);
     }
     case "aggregate":
       return joinParts([t(`planner.fn.${op.fn}`), op.field ?? null, groupLabel(op.group_by, t), op.include_unreviewed ? pt("include_unreviewed") : null]);
@@ -733,9 +733,9 @@ export interface ResultActions {
   searches: { index: number; query: string; response: SearchResponse; groups: { key: string; label: string; hits: number[] }[] }[];
   answers: { index: number; answer: Answer }[];
   /**
-   * `groups` (0.8.0): one combined summary per project / type / folder, or the single "묶음 하나로" summary;
-   * `skipped`: documents without text that were left out; `failed` (1.0.1): documents the model could not
-   * summarise — the others were summarised all the same.
+   * `groups`: the summaries — one of everything in scope (1.0.3), or one per project / type / folder (0.8.0);
+   * `items`: a summary of each document, in results stored before 1.0.3 only; `skipped`: documents without text
+   * that were left out; `failed` (1.0.1): documents of a group the model could not summarise.
    */
   summaries: {
     index: number;

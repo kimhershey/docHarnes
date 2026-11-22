@@ -1013,9 +1013,11 @@ fn run_step(
                 imported: None,
             })
         }
-        Op::Summarize { target, length, group_by, topic } => match topic.as_deref() {
+        // (`target` — each document / one set — is read from plans stored before 1.0.3 and ignored:
+        // a summary is one result of everything in scope, or one per `group_by` group)
+        Op::Summarize { target: _, length, group_by, topic } => match topic.as_deref() {
             Some(topic) => summarize::run_topic(deps, plan, imported, topic, *length, progress),
-            None => summarize::run(deps, plan, imported, *target, *length, *group_by, progress),
+            None => summarize::run(deps, plan, imported, *length, *group_by, progress),
         },
         Op::Aggregate { func, field, group_by, include_unreviewed } => {
             let Some(step_scope) = step_scope(plan, imported) else { return Ok(nothing_in_scope(deps)) };
@@ -3075,6 +3077,16 @@ pub fn preview(
                     format!("Summary of what {} say about '{topic}'", count_label_lang(docs_.len(), ko))
                 },
                 json!({ "documents": docs_.len(), "topic": topic }),
+                false,
+            ),
+            // 1.0.3: several documents make one summary — the card says so.
+            Op::Summarize { group_by: None | Some(super::SummaryGroup::None), .. } if docs_.len() > 1 => (
+                if ko {
+                    format!("{}의 내용을 하나로 요약", count_label_lang(docs_.len(), ko))
+                } else {
+                    format!("One summary of {}", count_label_lang(docs_.len(), ko))
+                },
+                json!({ "documents": docs_.len() }),
                 false,
             ),
             Op::Classify { .. } | Op::Ocr { .. } | Op::Validate {} | Op::Summarize { .. } => {

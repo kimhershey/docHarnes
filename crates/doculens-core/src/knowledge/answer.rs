@@ -198,32 +198,6 @@ fn detailed(reply_tokens: u32, base: u32) -> bool {
     reply_tokens > base * 3 / 2
 }
 
-/// The reply limit of a summary for an evidence budget, for callers that size what they hand over by it
-/// (the planner's combined summaries).
-pub fn summary_reply_tokens(deps: &AnswerDeps<'_>, context_tokens: u32) -> u32 {
-    let req = clamp_request(&AnswerRequest { context_tokens, ..AnswerRequest::question("") });
-    reply_limit(deps, &req, MAX_SUMMARY_TOKENS)
-}
-
-/// Prompt tokens a text may take in a text-only request before it is cut (half of what the context
-/// leaves), and the cost of a text counted the same way.
-pub fn text_room(deps: &AnswerDeps<'_>) -> u32 {
-    (deps.context_size.unwrap_or(FALLBACK_CONTEXT_TOKENS).saturating_sub(PROMPT_SCAFFOLD_TOKENS) / 2)
-        .max(MIN_EVIDENCE_TOKENS)
-}
-
-pub fn text_cost(text: &str) -> u32 {
-    prompt_cost(text)
-}
-
-/// `text` cut to what `tokens` prompt tokens hold (the tail goes).
-pub fn clip_to_tokens(text: &str, tokens: u32) -> String {
-    if prompt_cost(text) <= tokens {
-        return text.trim().to_string();
-    }
-    cut_to_tokens(text, tokens).0
-}
-
 fn clamp_request(req: &AnswerRequest) -> AnswerRequest {
     let mut r = req.clone();
     r.top_k = r.top_k.clamp(*TOP_K_RANGE.start(), *TOP_K_RANGE.end());
@@ -1473,6 +1447,154 @@ pub fn summarize(deps: &AnswerDeps<'_>, req: &AnswerRequest, on_delta: &mut dyn 
     Ok(out)
 }
 
+/// What one summary of several documents is asked to be (1.0.3): the shapes of a document's summary,
+/// said for all of them taken together, with more room for items. It is one summary, not one per
+/// document under a heading each — the first run with a real model (Gemma 4 E4B, 2026-11-22) wrote
+/// "**개발용역계약서.txt 요약**" and "**정보보안지침.txt 요약**" one after the other, and a "상충:"
+/// paragraph about two documents that merely speak of different things.
+fn documents_instruction(count: usize, mode: SummaryMode, lang: Lang, reply_tokens: u32) -> String {
+    let items = (reply_tokens / 150).clamp(8, 30);
+    let sentences = (reply_tokens / 150).clamp(10, 40);
+    let detailed = detailed(reply_tokens, MAX_SUMMARY_TOKENS);
+    match (mode, lang) {
+        (SummaryMode::OneLine, Lang::Ko) => format!("문서 {count}건의 내용을 통틀어 한두 문장으로 요약하세요."),
+        (SummaryMode::KeyPoints, Lang::Ko) => format!(
+            "문서 {count}건의 내용을 통틀어 하나의 요약으로 정리하세요. 문서별로 나누어 쓰지 말고(문서 이름을 제목으로 달지 않습니다) 전체 내용을 주제별로 묶어, 핵심을 {items}개 이내의 개조식(- 항목)으로 쓰세요. 어느 한 문서에 치우치지 말고 문서마다 핵심을 고루 담고, 금액·기한·조건 같은 수치는 그대로 적으세요. 같은 사항을 문서마다 다르게 적었을 때만 어느 문서의 내용인지 밝히고, 문서들이 서로 다른 주제를 다루는 것은 상충이 아니니 \"상충:\" 단락에 쓰지 마세요.{}",
+            if detailed {
+                " 항목마다 한두 문장으로 구체적으로 쓰고, 어느 문서든 중요한 내용을 빠뜨리지 마세요. 머리말·맺음말 없이 항목만 쓰세요."
+            } else {
+                " 머리말·맺음말 없이 항목만 쓰세요."
+            }
+        ),
+        (SummaryMode::OnePage, Lang::Ko) => format!(
+            "문서 {count}건의 내용을 통틀어 실무자가 읽을 {} 분량({sentences}문장 내외)의 서술식 요약 하나를 작성하세요. 문서별로 나누지 말고 주제별로 묶어 쓰되 어느 한 문서에 치우치지 말고, 수치는 그대로 적으세요. 같은 사항을 문서마다 다르게 적었을 때만 어느 문서의 내용인지 밝히고, 문서들이 서로 다른 주제를 다루는 것은 상충이 아닙니다.",
+            if sentences > 10 { "여러 쪽" } else { "한 쪽" }
+        ),
+        (SummaryMode::OneLine, Lang::En) => {
+            format!("Summarise the content of the {count} documents together in a sentence or two.")
+        }
+        (SummaryMode::KeyPoints, Lang::En) => format!(
+            "Write one summary of the content of the {count} documents taken together. Do not write a section per document (no document names as headings): arrange the key points by subject, as at most {items} bullet items (- item), covering every document and not only the first ones, with amounts, deadlines and conditions verbatim. Say which document says what only where they state the same matter differently; documents that deal with different subjects do not conflict — do not write a \"Conflict:\" paragraph for that.{}",
+            if detailed {
+                " Give each item a sentence or two and leave nothing important of any document out. Write the items only, without an introduction or a closing line."
+            } else {
+                " Write the items only, without an introduction or a closing line."
+            }
+        ),
+        (SummaryMode::OnePage, Lang::En) => format!(
+            "Write one {} narrative summary (about {sentences} sentences) of the content of the {count} documents taken together, arranged by subject and not document by document, covering every document; keep figures verbatim. Say which document says what only where they state the same matter differently; documents that deal with different subjects do not conflict.",
+            if sentences > 10 { "multi-page" } else { "one-page" }
+        ),
+    }
+}
+
+/// 1.0.3 — one summary of the content of several documents (user decision 2026-11-22: "파일별 요약은
+/// 없애고 모든 파일의 내용을 하나의 결과로 요약"). The passages of all of them are read in the order
+/// the documents are given — each document's in its own order — and summarised as one text with its
+/// sources: one call when they fit the evidence budget, else part by part and merged, as for a long
+/// document ([`summarize_rows`]). A single document is summarised as [`summarize`] does it.
+///
+/// Returns the summary and the ids of the documents that have no text (not processed yet, an image
+/// without OCR): they are left out. `NotFound("no_text")` when none of them has any.
+/// `on_step(calls made, calls expected)` follows the model calls.
+pub fn summarize_documents(
+    deps: &AnswerDeps<'_>,
+    req: &AnswerRequest,
+    documents: &[String],
+    on_delta: &mut dyn FnMut(&str) -> bool,
+    on_step: &mut dyn FnMut(u32, u32),
+) -> Result<(Answer, Vec<String>)> {
+    let started = Instant::now();
+    let req = &clamp_request(req);
+    let lang = detect_lang(req);
+    let mut rows: Vec<repo::ChunkRow> = Vec::new();
+    let mut covered: Vec<String> = Vec::new();
+    let mut without_text: Vec<String> = Vec::new();
+    for id in documents {
+        if covered.contains(id) || without_text.contains(id) {
+            continue;
+        }
+        let mut of_document = deps.search.db.with(|c| {
+            let chunks = repo::list_chunks(c, id)?;
+            let ids: Vec<i64> = chunks.iter().map(|ch| ch.id).collect();
+            repo::chunk_rows(c, &ids)
+        })?;
+        if of_document.is_empty() {
+            without_text.push(id.clone());
+            continue;
+        }
+        of_document.sort_by_key(|r| r.chunk.chunk_index);
+        rows.extend(of_document);
+        covered.push(id.clone());
+    }
+    if rows.is_empty() {
+        return Err(CoreError::NotFound("no_text".into()));
+    }
+    let reply = reply_limit(deps, req, MAX_SUMMARY_TOKENS);
+    let count = covered.len();
+    let ask = if count == 1 {
+        SummaryAsk {
+            whole: summary_instruction(req.summary_mode, lang, reply),
+            part: Box::new(move |part, total| {
+                match lang {
+                Lang::Ko => format!("이 문서는 {total}부분으로 나뉘어 있고 지금은 {part}번째 부분입니다. 이 부분의 핵심 내용을 빠짐없이 개조식으로 정리하세요. 각 항목 끝에 근거 번호를 붙이세요."),
+                Lang::En => format!("This document comes in {total} parts; this is part {part}. List every key point of this part as bullets with source numbers."),
+            }
+            }),
+            nothing: None,
+        }
+    } else {
+        SummaryAsk {
+            whole: documents_instruction(count, req.summary_mode, lang, reply),
+            part: Box::new(move |part, total| {
+                match lang {
+                Lang::Ko => format!("근거는 문서 {count}건의 내용이고 {total}묶음으로 나뉘어 있습니다. 지금은 {part}번째 묶음입니다. 이 묶음의 핵심 내용을 빠짐없이 개조식으로 정리하세요. 어느 문서의 내용인지 알 수 있게 쓰고, 각 항목 끝에 근거 번호를 붙이세요."),
+                Lang::En => format!("The sources are the content of {count} documents, in {total} parts; this is part {part}. List every key point of this part as bullets, so that it stays clear which document says what, with source numbers."),
+            }
+            }),
+            nothing: None,
+        }
+    };
+    let mut out = summarize_rows_stepwise(deps, req, &rows, &ask, reply, lang, on_delta, on_step)?;
+    out.question = if req.question.trim().is_empty() { ask.whole.clone() } else { req.question.clone() };
+    if let [only] = covered.as_slice() {
+        out.document_id = Some(only.clone());
+    } else {
+        out.sources = cited_sources(&out.sentences, std::mem::take(&mut out.sources));
+    }
+    out.elapsed_ms = started.elapsed().as_millis() as u64;
+    if req.save {
+        // (what was summarised is the scope of the saved answer)
+        let scope = SearchScope { documents: covered.clone(), ..req.scope.clone() };
+        let id = deps.search.db.with(|c| repo::insert_answer(c, &out, &scope))?;
+        out.id = Some(id);
+    }
+    Ok((out, without_text))
+}
+
+/// The sources a summary of several documents keeps: the passages its text cites. Every passage of
+/// every document was read, and a list of all of them — thousands for a library — would not say where
+/// a statement comes from (a citation keeps its number: the card looks a source up by `index`). A
+/// summary that cites nothing keeps the first passage of each document, so the documents it covers
+/// are still listed.
+fn cited_sources(sentences: &[AnswerSentence], sources: Vec<Citation>) -> Vec<Citation> {
+    let cited: std::collections::BTreeSet<u32> = sentences.iter().flat_map(|s| s.citations.iter().copied()).collect();
+    if cited.is_empty() {
+        let mut seen: Vec<String> = Vec::new();
+        return sources
+            .into_iter()
+            .filter(|c| {
+                let first = !seen.contains(&c.document_id);
+                if first {
+                    seen.push(c.document_id.clone());
+                }
+                first
+            })
+            .collect();
+    }
+    sources.into_iter().filter(|c| cited.contains(&c.index)).collect()
+}
+
 /// What the steps of a summary ask the model for.
 struct SummaryAsk {
     /// The request of a summary made in one pass, and of the merge of partial ones.
@@ -1501,6 +1623,22 @@ fn summarize_rows(
     reply: u32,
     lang: Lang,
     on_delta: &mut dyn FnMut(&str) -> bool,
+) -> Result<Answer> {
+    summarize_rows_stepwise(deps, req, rows, ask, reply, lang, on_delta, &mut |_, _| {})
+}
+
+/// [`summarize_rows`] that tells how far it is: `on_step(calls made, calls expected)` after every
+/// model call. The expected count grows when a request the server refuses is done in smaller steps.
+#[allow(clippy::too_many_arguments)]
+fn summarize_rows_stepwise(
+    deps: &AnswerDeps<'_>,
+    req: &AnswerRequest,
+    rows: &[repo::ChunkRow],
+    ask: &SummaryAsk,
+    reply: u32,
+    lang: Lang,
+    on_delta: &mut dyn FnMut(&str) -> bool,
+    on_step: &mut dyn FnMut(u32, u32),
 ) -> Result<Answer> {
     let ko = lang == Lang::Ko;
     let model = resolve_model(deps)?;
@@ -1567,6 +1705,10 @@ fn summarize_rows(
                 prompt_tokens += resp.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0);
                 completion_tokens += resp.usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0);
                 partials.push(without_empty_conflicts(resp.content.trim()));
+                // (the parts still to read, and the merge of them when there are several)
+                let made = partials.len() as u32;
+                let left = queue.len() as u32;
+                on_step(made, made + left + u32::from(made + left > 1));
             }
             Err(e) if context_overflow(&e) => {
                 if b - a > 1 {
@@ -1601,6 +1743,7 @@ fn summarize_rows(
     // next level unchanged, where the same group was built and refused again — a long document ended in
     // "summary does not converge" (1.0.1).
     let mut level = 0;
+    let mut calls = partials.len() as u32;
     while partials.len() > 1 {
         level += 1;
         if level > 12 {
@@ -1647,6 +1790,9 @@ fn summarize_rows(
                     prompt_tokens += resp.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0);
                     completion_tokens += resp.usage.as_ref().map(|u| u.completion_tokens).unwrap_or(0);
                     merged.push(without_empty_conflicts(resp.content.trim()));
+                    calls += 1;
+                    // (one more call unless this merge was the last one)
+                    on_step(calls, calls + u32::from(!(queue.is_empty() && merged.len() == 1)));
                 }
                 Err(e) if context_overflow(&e) => {
                     log::info!(

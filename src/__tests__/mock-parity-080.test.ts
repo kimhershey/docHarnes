@@ -452,7 +452,9 @@ describe("planner (rules, validate, guard)", () => {
     }
   });
 
-  it("grouped summaries follow `exec::summarize`: both projects of a shared document, a combined text without sources or markers, '유형 없음'", async () => {
+  // 1.0.3 (user decision 2026-11-22 — "파일별 요약은 없애고 모든 파일의 내용을 하나의 결과로 요약"): a summary step
+  // makes one summary of everything in scope, or one per group — never one per document.
+  it("a summary is one result of the documents in scope — or one per group — and none per document (`exec::summarize`)", async () => {
     const ids = await importDocs(["견적서_한빛.pdf", "계약서_한빛.pdf", "지침.pdf"]);
     await indexAll();
     const [estimate, contract, guide] = [ids["견적서_한빛.pdf"]!, ids["계약서_한빛.pdf"]!, ids["지침.pdf"]!];
@@ -462,14 +464,36 @@ describe("planner (rules, validate, guard)", () => {
     // The contract belongs to both projects.
     await backend.mockInvoke("project_add_documents", { id: b.id, docIds: [contract] });
     const ctx = planner.buildContext();
-    const run = async (group_by: "project" | "doc_type" | "folder" | null, target: "set" | "each_doc" = "each_doc") => {
-      const plan: Plan = { intent: "summarize", scope: { folder: null, doc_ids: [estimate, contract, guide], filter: {} }, operations: [{ op: "summarize", target, length: null, ...(group_by ? { group_by } : {}) }], requires_confirmation: false, confidence: 0.9, summary: "요약" };
-      const exec = await planner.runPlan(plan, ctx, null, () => undefined);
-      return exec.steps[0]!.payload as { summaries: { document_id: string; answer: Answer }[]; groups?: { key: string; label: string; document_ids: string[]; answer: Answer }[]; group_by?: string };
+    type Payload = { summaries: unknown[]; groups: { key: string; label: string; document_ids: string[]; answer: Answer }[]; group_by: string; skipped?: { name: string; reason: string }[] };
+    const planOf = (group_by: "project" | "doc_type" | "folder" | null, docs = [estimate, contract, guide]): Plan => ({ intent: "summarize", scope: { folder: null, doc_ids: docs, filter: {} }, operations: [{ op: "summarize", length: null, ...(group_by ? { group_by } : {}) }], requires_confirmation: false, confidence: 0.9, summary: "요약" });
+    const run = async (group_by: "project" | "doc_type" | "folder" | null, docs = [estimate, contract, guide]) => {
+      const exec = await planner.runPlan(planOf(group_by, docs), ctx, null, () => undefined);
+      expect(exec.steps[0]).toMatchObject({ op: "summarize", status: "done" });
+      return { summary: exec.steps[0]!.summary, payload: exec.steps[0]!.payload as Payload };
     };
 
+    // No criterion: the three documents in one summary — its sources are the passages it cites, of each document.
+    const whole = await run(null);
+    expect(whole.payload.summaries).toEqual([]);
+    expect(whole.payload.group_by).toBe("none");
+    expect(whole.payload.groups.map((g) => [g.key, g.label, g.document_ids])).toEqual([["all", "전체", [estimate, contract, guide]]]);
+    expect(whole.summary).toBe("문서 3건의 내용을 하나로 요약");
+    expect(planner.planPreview(planOf(null), ctx).steps[0]!.summary).toBe("문서 3건의 내용을 하나로 요약");
+    const one = whole.payload.groups[0]!.answer;
+    expect(one).toMatchObject({ kind: "summary", document_id: null });
+    expect(one.text.split("\n")).toHaveLength(3);
+    expect([...new Set(one.sources.map((c) => c.document_id))]).toEqual([estimate, contract, guide]);
+    for (const sentence of one.sentences) for (const n of sentence.citations) expect(one.sources.some((c) => c.index === n), `[${n}]`).toBe(true);
+    // One document: the summary is that document's, named after it.
+    const single = await run(null, [contract]);
+    expect(single.payload.groups.map((g) => [g.key, g.label, g.document_ids])).toEqual([["all", "계약서_한빛.pdf", [contract]]]);
+    expect(single.payload.groups[0]!.answer.document_id).toBe(contract);
+    expect(single.summary).toBe("문서 1건 요약");
+    expect(planner.planPreview(planOf(null, [contract]), ctx).steps[0]!.summary).toBe("문서 1건");
+
     const byProject = await run("project");
-    const groups = byProject.groups!;
+    const groups = byProject.payload.groups;
+    expect(byProject.payload.summaries).toEqual([]);
     // One group per project, the documents outside every project last; the shared contract is in both.
     expect(groups.map((g) => g.label).sort()).toEqual(["새봄 ERP", "프로젝트 없음", "한빛 포털"].sort());
     expect(groups[groups.length - 1]).toMatchObject({ key: "", label: "프로젝트 없음", document_ids: [guide] });
@@ -477,25 +501,52 @@ describe("planner (rules, validate, guard)", () => {
     const saebom = groups.find((g) => g.key === b.id)!;
     expect([...hanbit.document_ids].sort()).toEqual([estimate, contract].sort());
     expect(saebom.document_ids).toEqual([contract]);
-    // A combined summary is text made from the document summaries: no sources, no citation markers.
-    expect(hanbit.answer.sources).toEqual([]);
-    expect(hanbit.answer.text).not.toMatch(/\[\d+\]/);
+    // A group's summary is made from the passages of its documents: it has their sources.
+    expect([...new Set(hanbit.answer.sources.map((c) => c.document_id))].sort()).toEqual([estimate, contract].sort());
     expect(hanbit.answer.text.split("\n")).toHaveLength(2);
-    expect(hanbit.answer.id).toBeNull();
-    // A group of one document is that document's summary as it is (with its sources).
-    const contractSummary = byProject.summaries.find((x) => x.document_id === contract)!.answer;
-    expect(contractSummary.sources.length).toBeGreaterThan(0);
-    expect(saebom.answer).toEqual(contractSummary);
+    // A group of one document is that document's summary.
+    expect(saebom.answer).toMatchObject({ kind: "summary", document_id: contract });
+    expect(saebom.answer.sources.length).toBeGreaterThan(0);
+    expect(byProject.summary).toBe("문서 3건 요약 · 프로젝트별 묶음 3개");
 
     // No document has a type yet: one group, labelled "유형 없음" ("No type" in English).
     const byType = await run("doc_type");
-    expect(byType.groups!.map((g) => [g.key, g.label, g.document_ids.length])).toEqual([["", "유형 없음", 3]]);
-    expect(byType.groups![0]!.answer.sources).toEqual([]);
-    // One summary of the whole set.
-    const whole = await run(null, "set");
-    expect(whole.groups!.map((g) => [g.key, g.label])).toEqual([["all", "전체"]]);
-    // Per-document summaries only: no groups.
-    expect((await run(null)).groups).toBeUndefined();
+    expect(byType.payload.groups.map((g) => [g.key, g.label, g.document_ids.length])).toEqual([["", "유형 없음", 3]]);
+
+    // A plan stored before 1.0.3 carries `target`: the validator clears it, and the result is the same one summary.
+    const stored = planOf(null);
+    (stored.operations[0] as { target?: string }).target = "each_doc";
+    expect(planner.validatePlan(stored, ctx, null)).toEqual([]);
+    expect(stored.operations[0]).toEqual({ op: "summarize", length: null });
+  });
+
+  // 1.0.3: `guard::per_document` / `split_check` — a sentence that asks for a summary of each document gets the
+  // one summary and is told that summaries per document are not made (confirmed first).
+  it("a summary of each document is not made, and the card says so", async () => {
+    const ids = await importDocs(["견적서_한빛.pdf", "계약서_한빛.pdf"]);
+    await indexAll();
+    const ctx = planner.buildContext({ selected_doc_ids: [ids["견적서_한빛.pdf"]!, ids["계약서_한빛.pdf"]!] });
+    for (const text of ["선택한 문서를 문서별로 요약해줘", "전체 문서를 파일별로 요약해줘", "선택한 문서를 각각 요약해줘", "선택한 문서를 하나씩 요약해줘", "각 문서를 요약해줘", "summarize each document"]) {
+      const r = planner.planText(text, ctx);
+      expect(r.plan.operations.map((op) => op.op), text).toEqual(["summarize"]);
+      expect(r.plan.operations[0], text).not.toHaveProperty("target");
+      expect(r.plan.requires_confirmation, text).toBe(true);
+      expect(r.plan.unmet, text).toBeTruthy();
+      const note = r.issues.find((i) => i.code === "grouping_dropped");
+      expect(note?.message ?? "", text).toMatch(/문서별 요약은 만들지 않습니다|summaries per document are not made/);
+      // (the card's own sentence does not promise a summary of each document)
+      expect(r.plan.summary ?? "", text).not.toMatch(/문서별|파일별|각각|하나씩|each document/);
+    }
+    expect(planner.planText("선택한 문서를 문서별로 요약해줘", ctx).plan.unmet).toBe("문서마다 따로 요약하는 부분");
+    // The plain request, "하나로 묶어" and a split the op has are not such sentences.
+    for (const text of ["선택한 문서 요약해줘", "선택한 문서를 하나로 묶어 요약해줘", "전체 문서를 요약해줘", "프로젝트별로 각각 요약해줘"]) {
+      const r = planner.planText(text, ctx);
+      expect(r.plan.operations.map((op) => op.op), text).toEqual(["summarize"]);
+      expect(r.plan.requires_confirmation, text).toBe(false);
+      expect(r.issues.map((i) => i.code), text).not.toContain("grouping_dropped");
+      expect(r.plan.operations[0], text).not.toHaveProperty("target");
+    }
+    expect(planner.planText("프로젝트별로 각각 요약해줘", ctx).plan.operations[0]).toMatchObject({ op: "summarize", group_by: "project" });
   });
 
   // 1.0.0 §2-1: `edit_text.original` — `rules::document_edit_rule`, `validate`, `exec` preview / run.
@@ -648,7 +699,7 @@ describe("planner (rules, validate, guard)", () => {
 
     // The plan: one summary of the subject, over every document when no scope is named — nothing is asked back.
     const said = planner.planText("계약 금액에 대해서 요약해줘", ctx);
-    expect(said.plan.operations).toEqual([{ op: "summarize", target: "set", length: null, topic: "계약 금액" }]);
+    expect(said.plan.operations).toEqual([{ op: "summarize", length: null, topic: "계약 금액" }]);
     expect(planner.isClarification(said.plan)).toBe(false);
     expect(said.plan.scope).toMatchObject({ folder: null, doc_ids: [] });
     expect(said.plan.summary).toBe("'계약 금액'에 관한 내용을 문서에서 찾아 요약합니다");
@@ -659,7 +710,7 @@ describe("planner (rules, validate, guard)", () => {
     expect(planner.planText("계약서에서 지체상금에 대해 요약해줘", ctx).plan.scope.filter?.doc_type).toBe("dev_contract");
     expect(planner.planText("자세히 계약 금액에 대해 요약해줘", ctx).plan.operations[0]).toMatchObject({ length: "long", topic: "계약 금액" });
     // A summary without a subject is the summary of the documents, as before.
-    expect(planner.planText("계약서 요약해줘", ctx).plan.operations[0]).toMatchObject({ op: "summarize", target: "each_doc" });
+    expect(planner.planText("계약서 요약해줘", ctx).plan.operations[0]).toEqual({ op: "summarize", length: null });
     expect((planner.planText("계약서 요약해줘", ctx).plan.operations[0] as { topic?: string }).topic).toBeUndefined();
 
     // The step: one summary with its sources; the documents that say nothing about it are not read.
@@ -682,12 +733,12 @@ describe("planner (rules, validate, guard)", () => {
     expect(failed.steps[0]).toMatchObject({ status: "failed" });
     expect(failed.steps[0]!.error).toContain("no_documents");
     // The validator: a subject makes one summary; a grouping is dropped with a note; an empty subject is none.
-    const grouped: Plan = { ...structuredClone(said.plan), operations: [{ op: "summarize", target: "each_doc", group_by: "project", topic: "  계약   금액 " }] };
+    const grouped: Plan = { ...structuredClone(said.plan), operations: [{ op: "summarize", group_by: "project", topic: "  계약   금액 " }] };
     expect(planner.validatePlan(grouped, ctx, null).map((i) => i.code)).toContain("grouping_dropped");
-    expect(grouped.operations[0]).toMatchObject({ target: "set", group_by: null, topic: "계약 금액" });
-    const blank: Plan = { ...structuredClone(said.plan), operations: [{ op: "summarize", target: "each_doc", topic: "   " }] };
+    expect(grouped.operations[0]).toEqual({ op: "summarize", group_by: null, topic: "계약 금액" });
+    const blank: Plan = { ...structuredClone(said.plan), operations: [{ op: "summarize", topic: "   " }] };
     planner.validatePlan(blank, ctx, null);
-    expect(blank.operations[0]).toEqual({ op: "summarize", target: "each_doc" });
+    expect(blank.operations[0]).toEqual({ op: "summarize" });
 
     // What is open is where to look when the words point at it — and only then.
     const open = { ...ctx, current_document: contract };
@@ -699,8 +750,10 @@ describe("planner (rules, validate, guard)", () => {
     const named = planner.buildContext();
     const slots = (text: string, c = named) => {
       const r = planner.planText(text, c);
-      const op = r.plan.operations[0] as { op: string; topic?: string | null; target?: string | null };
-      return { op: op.op, project: r.plan.scope.filter?.project_id ?? null, topic: op.topic ?? null, target: op.target ?? null, docs: r.plan.scope.doc_ids ?? [], codes: r.issues.map((i) => i.code), plan: r.plan };
+      const op = r.plan.operations[0] as { op: string; topic?: string | null; group_by?: string | null };
+      // (`group`: a summary is one result unless a grouping says otherwise — there is no `target` since 1.0.3)
+      expect(op, text).not.toHaveProperty("target");
+      return { op: op.op, project: r.plan.scope.filter?.project_id ?? null, topic: op.topic ?? null, group: op.group_by ?? null, docs: r.plan.scope.doc_ids ?? [], codes: r.issues.map((i) => i.code), plan: r.plan };
     };
     // 1. Both: the content inside the project (its work documents and its reference material) — a summary or an explanation.
     for (const text of ["AAA 프로젝트의 계약 금액 내용에 대해 요약해줘", "AAA 프로젝트의 계약 금액 내용에 대해 설명해줘", "AAA 프로젝트 계약 금액에 대해 요약해줘", "AAA의 계약 금액에 대해 요약해줘"]) {
@@ -712,7 +765,7 @@ describe("planner (rules, validate, guard)", () => {
     // 2. The content alone: every document, no project — also when a project is called so (the card names the other reading).
     expect(slots("계약 금액에 대해서 요약해줘")).toMatchObject({ op: "summarize", project: null, topic: "계약 금액", docs: [] });
     const collision = slots("AAA에 대해서 요약해줘");
-    expect(collision).toMatchObject({ op: "summarize", project: null, topic: "AAA", target: "set" });
+    expect(collision).toMatchObject({ op: "summarize", project: null, topic: "AAA", group: null });
     expect(collision.codes).toContain("topic_names_project");
     expect(slots("계약 금액에 대해서 요약해줘").codes).not.toContain("topic_names_project");
     // (an explanation without a place stays a question: it may be answered from general knowledge)
@@ -729,25 +782,30 @@ describe("planner (rules, validate, guard)", () => {
     // 4. The project alone: all its documents, one summary of them — by its name with the word, as a subject or not.
     for (const text of ["AAA 프로젝트 요약해줘", "AAA 프로젝트에 대해 요약해줘", "AAA 프로젝트에 관해서 자세히 요약해줘"]) {
       const s4 = slots(text);
-      expect({ op: s4.op, project: s4.project, topic: s4.topic, target: s4.target }, text).toEqual({ op: "summarize", project: aaa.id, topic: null, target: "set" });
+      expect({ op: s4.op, project: s4.project, topic: s4.topic, group: s4.group }, text).toEqual({ op: "summarize", project: aaa.id, topic: null, group: null });
       expect(s4.plan.scope.filter, text).toMatchObject({ project_id: aaa.id, with_reference: true });
       expect(s4.plan.summary, text).toBe("'AAA' 프로젝트의 문서를 요약합니다");
       expect(planner.summaryTopic(text, named), text).toBeNull();
     }
     // ("all of it, in short" is no subject: the summary of the project)
     for (const text of ["AAA 프로젝트의 주요 내용에 대해 요약해줘", "AAA 프로젝트의 전체 내용에 대해 요약해줘", "AAA 프로젝트의 핵심에 대해 요약해줘"]) {
-      expect(slots(text), text).toMatchObject({ op: "summarize", project: aaa.id, topic: null, target: "set" });
+      expect(slots(text), text).toMatchObject({ op: "summarize", project: aaa.id, topic: null, group: null });
     }
-    // (… unless the words ask for the documents one by one, or narrow the project further)
-    expect(slots("AAA 프로젝트 문서를 각각 요약해줘").target).toBe("each_doc");
-    expect(slots("AAA 프로젝트의 계약서 요약해줘")).toMatchObject({ project: aaa.id, target: "each_doc" });
+    // (the words may narrow the project further; a summary of each document is not made any more — 1.0.3 —
+    // and the sentence that asks for one is told so and confirmed)
+    const each = slots("AAA 프로젝트 문서를 각각 요약해줘");
+    expect(each).toMatchObject({ op: "summarize", project: aaa.id, topic: null, group: null });
+    expect(each.codes).toContain("grouping_dropped");
+    expect(each.plan.requires_confirmation).toBe(true);
+    expect(slots("AAA 프로젝트의 계약서 요약해줘")).toMatchObject({ project: aaa.id, group: null });
+    expect(slots("AAA 프로젝트의 계약서 요약해줘").plan.scope.filter?.doc_type).toBe("dev_contract");
     // A project the workspace does not have is said, not silently widened.
     expect(slots("없는 프로젝트의 계약 금액에 대해 요약해줘")).toMatchObject({ project: null, topic: "계약 금액" });
     expect(slots("없는 프로젝트의 계약 금액에 대해 요약해줘").codes).toContain("project_not_found");
     expect(planner.summaryTopic("AA에 대해서 요약해줘", named)?.subject, "another word than the project's name").toBe("AA");
     // The project named as the place and its name as the subject: a subject like any other.
     expect(planner.planText("AAA 프로젝트에서 AAA에 대해 요약해줘", named).plan).toMatchObject({
-      operations: [{ op: "summarize", target: "set", topic: "AAA" }],
+      operations: [{ op: "summarize", topic: "AAA" }],
       scope: { filter: { project_id: aaa.id } },
     });
     expect(planner.planText("AAA 프로젝트에서 계약 금액에 대해 요약해줘", named).plan).toMatchObject({
@@ -806,7 +864,7 @@ describe("planner (rules, validate, guard)", () => {
       planner.validatePlan(plan, ctx, null);
       return plan;
     };
-    const summarize = { op: "summarize", target: "set", length: null, group_by: null } as const;
+    const summarize = { op: "summarize", length: null, group_by: null } as const;
     expect(planOf([summarize], { project_id: hanbit.id }).scope.filter?.with_reference).toBe(true);
     expect(planOf([summarize], { project_id: hanbit.id, role: "knowledge" }).scope.filter?.with_reference).toBeUndefined();
     expect(planOf([{ op: "tag", add: ["확인"], remove: [] }], { project_id: hanbit.id, with_reference: true }).scope.filter?.with_reference).toBeUndefined();
@@ -818,7 +876,11 @@ describe("planner (rules, validate, guard)", () => {
     expect(planner.planPreview(named.plan, ctx)).toMatchObject({ document_count: 3, reference_count: 1 });
     const exec = await planner.runPlan(named.plan, ctx, null, () => undefined);
     expect(exec.steps[0]).toMatchObject({ op: "summarize", status: "done" });
-    expect((exec.steps[0]!.payload as { summaries: { document_id: string }[] }).summaries.map((x) => x.document_id).sort()).toEqual(sorted([work, shared, ref]));
+    // (1.0.3: one summary of the three — the work documents and the reference material — and none per document)
+    const summarised = exec.steps[0]!.payload as { summaries: unknown[]; groups: { key: string; document_ids: string[] }[] };
+    expect(summarised.summaries).toEqual([]);
+    expect(summarised.groups.map((g) => g.key)).toEqual(["all"]);
+    expect([...summarised.groups[0]!.document_ids].sort()).toEqual(sorted([work, shared, ref]));
     // A project that holds reference material only is summarised too.
     const onlyReference = await planner.runPlan(planOf([summarize], { project_id: saebom.id }), ctx, null, () => undefined);
     expect(onlyReference.steps[0]).toMatchObject({ status: "done" });

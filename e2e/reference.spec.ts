@@ -268,7 +268,11 @@ test.describe("0.5.0 reference material", () => {
     await expect(page.getByTestId("plan-impact").last()).toHaveText(
       tpl(ko.planner.card.impact_with_reference, { effects: ko.planner.card.impact_none, count: 2, reference: 1 }),
     );
+    // (1.0.3: one summary of the project's documents — it names both — and none per document)
     const summaries = result.getByTestId("result-summaries");
+    await expect(summaries.getByTestId("result-summary-group")).toHaveCount(1);
+    await expect(summaries.getByTestId("result-summary-document")).toHaveCount(0);
+    await expect(summaries).toContainText("문서 2건");
     await expect(summaries).toContainText("견적서");
     await expect(summaries).toContainText("정보보안지침");
   });

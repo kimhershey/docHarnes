@@ -335,11 +335,11 @@ pub fn few_shots(ko: bool) -> Vec<(String, Value)> {
         (
             (if ko { "견적서들을 요약해서 메일로 보내줘" } else { "summarise the estimates and email them" }).to_string(),
             json!({
-                "summary": if ko { "견적서를 문서별로 요약합니다" } else { "Summarise each estimate" },
+                "summary": if ko { "견적서의 내용을 하나로 요약합니다" } else { "One summary of the estimates" },
                 "unmet": if ko { "메일로 보내기는 할 수 없습니다(오프라인 앱)" } else { "sending email is not possible (offline app)" },
                 "intent": "summarize",
                 "scope": { "filter": { "doc_type": "estimate" } },
-                "operations": [{ "op": "summarize", "target": "each_doc" }],
+                "operations": [{ "op": "summarize" }],
                 "requires_confirmation": true,
                 "confidence": 0.75
             }),
