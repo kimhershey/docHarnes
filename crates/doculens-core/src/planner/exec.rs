@@ -1013,9 +1013,10 @@ fn run_step(
                 imported: None,
             })
         }
-        Op::Summarize { target, length, group_by } => {
-            summarize::run(deps, plan, imported, *target, *length, *group_by, progress)
-        }
+        Op::Summarize { target, length, group_by, topic } => match topic.as_deref() {
+            Some(topic) => summarize::run_topic(deps, plan, imported, topic, *length, progress),
+            None => summarize::run(deps, plan, imported, *target, *length, *group_by, progress),
+        },
         Op::Aggregate { func, field, group_by, include_unreviewed } => {
             let Some(step_scope) = step_scope(plan, imported) else { return Ok(nothing_in_scope(deps)) };
             let req = AggregateRequest {
@@ -3066,6 +3067,16 @@ pub fn preview(
                     false,
                 ),
             },
+            // 1.0.2: a summary about a subject looks the passages up first — the card says what it is about.
+            Op::Summarize { topic: Some(topic), .. } => (
+                if ko {
+                    format!("'{topic}'에 관한 내용을 찾아 요약 · {}", count_label_lang(docs_.len(), ko))
+                } else {
+                    format!("Summary of what {} say about '{topic}'", count_label_lang(docs_.len(), ko))
+                },
+                json!({ "documents": docs_.len(), "topic": topic }),
+                false,
+            ),
             Op::Classify { .. } | Op::Ocr { .. } | Op::Validate {} | Op::Summarize { .. } => {
                 (count_label_lang(docs_.len(), ko), json!({ "documents": docs_.len() }), false)
             }

@@ -22,6 +22,8 @@ export interface RepreviewOptions {
   onlyReviewedDefault: boolean;
   /** "문서 N건": the line of a step that works on every document in scope. */
   countLabel: (count: number) => string;
+  /** "'AA'에 관한 내용을 찾아 요약 · 문서 N건" — the step of a summary about a subject. */
+  topicLabel: (topic: string, count: number) => string;
   /** "문서 N건 휴지통으로": the line of a `delete` step. */
   deleteLabel: (count: number) => string;
   /** A step's preview failed (unknown template variable, path outside the workspace …): the text shown instead. */
@@ -129,10 +131,17 @@ export async function previewEditedPlan(plan: Plan, original: Plan, originalPrev
       case "delete":
         steps.push({ index, op: op.op, summary: options.deleteLabel(count), payload: { documents: count }, confirm: true });
         break;
+      case "summarize":
+        // (1.0.2, `exec::preview`: a summary about a subject says what it is about)
+        if (op.topic) {
+          steps.push({ index, op: op.op, summary: options.topicLabel(op.topic, count), payload: { documents: count, topic: op.topic }, confirm: false });
+          break;
+        }
+        steps.push({ index, op: op.op, summary: options.countLabel(count), payload: { documents: count }, confirm: false });
+        break;
       case "classify":
       case "ocr":
       case "validate":
-      case "summarize":
         steps.push({ index, op: op.op, summary: options.countLabel(count), payload: { documents: count }, confirm: false });
         break;
       case "tag":

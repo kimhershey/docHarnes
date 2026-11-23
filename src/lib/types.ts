@@ -1829,7 +1829,8 @@ export type Op =
    */
   | { op: "answer"; question: string; cite?: boolean | null; knowledge?: boolean | null; mode?: AnswerMode | null; reply?: string | null }
   /** `group_by` (0.8.0): one combined summary per project / document type / folder. */
-  | { op: "summarize"; target?: "each_doc" | "set" | null; length?: "short" | "long" | null; group_by?: SummaryGroup | null }
+  /** `topic` (1.0.2): what the summary is about — the passages about it are looked up and summarised ("AA에 대해서 요약해줘"). */
+  | { op: "summarize"; target?: "each_doc" | "set" | null; length?: "short" | "long" | null; group_by?: SummaryGroup | null; topic?: string | null }
   | { op: "aggregate"; fn: AggregateFn; field?: string | null; group_by?: GroupBy | null; include_unreviewed?: boolean | null }
   | { op: "organize"; template?: string | null; folder_template?: string | null; group_by?: GroupBy | null; only_reviewed?: boolean | null; dry_run?: boolean | null }
   | { op: "rename"; template: string; only_reviewed?: boolean | null }

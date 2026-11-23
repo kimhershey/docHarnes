@@ -533,6 +533,29 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
                     issues.push(PlanIssue::error(at("question"), "question_empty", "answer needs a question"));
                 }
             }
+            Op::Summarize { target, group_by, topic, .. } => {
+                // 1.0.2: a summary about a subject is one summary of the passages found — it is not
+                // made per document or per group. An empty subject is no subject.
+                *topic = topic
+                    .take()
+                    .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect::<String>())
+                    .filter(|t| !t.is_empty());
+                if topic.is_some() {
+                    *target = Some(super::SummarizeTarget::Set);
+                    if !matches!(group_by, None | Some(super::SummaryGroup::None)) {
+                        *group_by = None;
+                        issues.push(PlanIssue::warn(
+                            at("group_by"),
+                            "grouping_dropped",
+                            if ctx.language == crate::settings::Language::Ko {
+                                "주제를 정한 요약은 묶음별로 나누지 않고 하나로 만듭니다"
+                            } else {
+                                "a summary about a subject is one summary, not one per group"
+                            },
+                        ));
+                    }
+                }
+            }
             Op::Aggregate { func, field, .. } => {
                 let needs_field = *func != AggregateFn::Count;
                 let text = field.as_deref().map(str::trim).unwrap_or("");
@@ -1261,7 +1284,6 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
             | Op::SetModel { .. }
             | Op::Validate {}
             | Op::Reindex { .. }
-            | Op::Summarize { .. }
             | Op::Delete { .. }
             | Op::SetProfile { .. }
             | Op::SetTheme { .. }

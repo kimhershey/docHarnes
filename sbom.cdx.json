@@ -1,7 +1,7 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
-  "serialNumber": "urn:uuid:efe75f2e-9c17-8a6b-ac58-465290d348fc",
+  "serialNumber": "urn:uuid:e4b41cf2-8c7f-8a4f-a387-331e476c6cab",
   "version": 1,
   "metadata": {
     "tools": {
@@ -9,15 +9,15 @@
         {
           "type": "application",
           "name": "scripts/gen-notices.mjs",
-          "version": "1.0.1"
+          "version": "1.0.2"
         }
       ]
     },
     "component": {
       "type": "application",
-      "bom-ref": "pkg:generic/doculens@1.0.1",
+      "bom-ref": "pkg:generic/doculens@1.0.2",
       "name": "DocuLens",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "description": "Offline VLM document processing desktop client (Windows, Tauri 2)",
       "licenses": [
         {

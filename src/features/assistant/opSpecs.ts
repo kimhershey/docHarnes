@@ -151,6 +151,7 @@ const SPECS: OpSpec[] = [
       p("target", en(["each_doc", "set"]), false, "문서별 / 묶음 하나로", "per document / one summary"),
       p("length", en(["short", "long"]), false, "길이", "length"),
       p("group_by", en(["none", "project", "doc_type", "folder"]), false, "묶음별 요약: 프로젝트·문서 유형·폴더마다 하나씩(‘프로젝트별로’)", "one combined summary per project / document type / folder ('by project')"),
+      p("topic", str, false, "주제 — 그 주제의 내용을 문서에서 찾아 요약(비우면 문서 자체를 요약)", "subject — what the documents say about it is looked up and summarised (empty: the documents themselves)"),
     ],
     desc_ko: "요약",
     desc_en: "summarise",

@@ -186,6 +186,8 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
     case "summarize": {
       // A grouping replaces "문서별 / 묶음 하나로": the group is what the summary is made per.
       const grouped = op.group_by && op.group_by !== "none";
+      // 1.0.2: a summary about a subject is one summary of the passages found — the subject says what it is.
+      if (op.topic) return joinParts([pt("summary_topic", { topic: truncate(op.topic, 60) }), op.length ? pt(op.length) : null]);
       return joinParts([grouped ? pt(`summary_group_${op.group_by}`) : op.target ? pt(op.target) : null, op.length ? pt(op.length) : null]);
     }
     case "aggregate":

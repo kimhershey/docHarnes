@@ -8,9 +8,14 @@
 //! DOCULENS_SUMMARY_SRC=<folder of .txt files, one document each (form feed = page break)> \
 //! [DOCULENS_SUMMARY_BUDGETS=6000,24000] [DOCULENS_SUMMARY_CHUNK=1200] [DOCULENS_SUMMARY_MODE=key_points|one_page] \
 //! [DOCULENS_SUMMARY_QUESTION=<a question asked of the documents under each budget>] [DOCULENS_KODIC=<ko-dic dir>] \
+//! [DOCULENS_SUMMARY_TOPIC=<subject>[|<subject>…]] \
 //! cargo test -p doculens-core --test real_summary -- --ignored --nocapture
 //! ```
 //! (absolute paths: the test binary runs from the crate directory)
+//!
+//! With `DOCULENS_SUMMARY_TOPIC` (1.0.2, user report of 2026-11-19: "AA에 대해서 요약해줘 … 요약만 하고 AA에
+//! 대한 내용을 수집하지 않음") the documents are not summarised one by one: for each subject the passages
+//! about it are looked up in all of them and summarised (`summarize_topic`), and the sources are listed.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -20,7 +25,7 @@ use doculens_core::documents::repo as docs;
 use doculens_core::documents::{DocumentRole, NewDocument, NewPage, SourceKind};
 use doculens_core::engine::{devices, locate, presets, EngineConfig, EngineManager, PresetContext};
 use doculens_core::hw::{Backend, Tier};
-use doculens_core::knowledge::answer::{answer, summarize, AnswerDeps};
+use doculens_core::knowledge::answer::{answer, summarize, summarize_topic, AnswerDeps};
 use doculens_core::knowledge::chunker::ChunkOptions;
 use doculens_core::knowledge::index::{index_document, IndexDeps};
 use doculens_core::knowledge::search::SearchDeps;
@@ -52,6 +57,8 @@ fn summaries_of_real_text_under_given_settings() {
         _ => SummaryMode::KeyPoints,
     };
     let question = std::env::var("DOCULENS_SUMMARY_QUESTION").ok().filter(|q| !q.trim().is_empty());
+    let topics: Vec<String> =
+        var("DOCULENS_SUMMARY_TOPIC", "").split('|').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
 
     // -- the documents ------------------------------------------------------------
     let db = Db::open_in_memory().unwrap();
@@ -162,7 +169,53 @@ fn summaries_of_real_text_under_given_settings() {
     let analyzer: &'static Analyzer = Box::leak(Box::new(analyzer));
     let mut failed = 0;
     for budget in &budgets {
-        for (id, name) in &ids {
+        for topic in &topics {
+            let adeps = AnswerDeps {
+                search: deps(db, analyzer),
+                chat: &engine,
+                model: Some(model.clone()),
+                cancelled: None,
+                context_size,
+            };
+            let mut req = AnswerRequest::question(topic);
+            req.kind = AnswerKind::Summary;
+            req.summary_mode = mode;
+            req.context_tokens = *budget;
+            req.save = false;
+            let t = Instant::now();
+            match summarize_topic(&adeps, &req, &mut |_| true) {
+                Ok(a) => {
+                    let mut from: Vec<String> = Vec::new();
+                    for s in &a.sources {
+                        let name = ids.iter().find(|(id, _)| *id == s.document_id).map(|(_, n)| n.clone());
+                        let name = name.unwrap_or_else(|| s.document_id.clone());
+                        if !from.contains(&name) {
+                            from.push(name);
+                        }
+                    }
+                    eprintln!(
+                        "\n== about '{topic}' · budget {budget}: {} s · {} passage(s) of {} document(s) {from:?} · nothing found {:?} · prompt {} tokens · reply {} tokens · {} characters · cut {:?}\n{}\n",
+                        t.elapsed().as_secs(),
+                        a.sources.len(),
+                        from.len(),
+                        a.no_evidence,
+                        a.prompt_tokens,
+                        a.completion_tokens,
+                        a.text.chars().count(),
+                        a.truncated,
+                        a.text
+                    )
+                }
+                Err(e) => {
+                    failed += 1;
+                    eprintln!(
+                        "\n== about '{topic}' · budget {budget}: FAILED after {} s: {e}\n",
+                        t.elapsed().as_secs()
+                    );
+                }
+            }
+        }
+        for (id, name) in ids.iter().filter(|_| topics.is_empty()) {
             let adeps = AnswerDeps {
                 search: deps(db, analyzer),
                 chat: &engine,

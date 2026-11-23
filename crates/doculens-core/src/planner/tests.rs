@@ -2015,6 +2015,162 @@ fn context_block_lists_the_last_conversation_turns() {
     assert!(!super::prompts::context_block(&ctx(), "", false).contains("이전 대화"));
 }
 
+/// 1.0.2 — "AA에 대해서 요약해줘" (user report 2026-11-19: "요약만 하고 AA에 대한 내용을 수집하지 않음")
+/// through the model path, with the plans Gemma 4 E4B wrote for such sentences (eval runs of that day).
+#[test]
+fn a_summary_about_a_subject_through_the_model_path() {
+    let mut c = ctx();
+    c.projects.push(ProjectSummary { id: "p-aaa".into(), name: "AAA".into(), status: "active".into() });
+    let planned = |text: &str, scope: Value, op: Value| {
+        let chat = StageChat::new();
+        chat.push(
+            "plan",
+            json!({ "summary": "요약합니다", "unmet": "", "intent": "summarize", "scope": scope, "operations": [op], "requires_confirmation": false, "confidence": 0.9 }),
+        );
+        let r = plan(Some(&deps(&chat)), text, &c, PlanMode::ModelFirst).unwrap();
+        assert_eq!(r.source, PlanSource::Model, "{text}: {r:?}");
+        assert!(!r.plan.is_clarification() && !r.plan.requires_confirmation, "{text}: {:?}", r.plan);
+        r
+    };
+    let codes = |r: &PlanResult| r.issues.iter().map(|i| i.code.clone()).collect::<Vec<_>>();
+    // 1.0.1: every document of the library, one by one — nothing about AA.
+    let r = planned("AA에 대해서 요약해줘", json!({}), json!({ "op": "summarize", "target": "each_doc" }));
+    assert!(
+        matches!(r.plan.operations.as_slice(), [Op::Summarize { target: Some(SummarizeTarget::Set), group_by: None, topic: Some(t), .. }] if t == "AA"),
+        "{:?}",
+        r.plan
+    );
+    assert!(r.plan.scope.is_empty(), "every document: {:?}", r.plan.scope);
+    assert_eq!(r.plan.summary.as_deref(), Some("'AA'에 관한 내용을 문서에서 찾아 요약합니다"));
+    assert_eq!(codes(&r), vec!["summary_topic"]);
+    // With `topic` in the op table: the name of a project of the context instead of the user's word.
+    let r = planned("AA에 대해서 요약해줘", json!({}), json!({ "op": "summarize", "topic": "AAA" }));
+    assert!(
+        matches!(r.plan.operations.as_slice(), [Op::Summarize { topic: Some(t), .. }] if t == "AA"),
+        "{:?}",
+        r.plan
+    );
+    assert!(r.plan.scope.is_empty(), "{:?}", r.plan.scope);
+    // A name alone is content, even when a project is called so (user decision 2026-11-20): every
+    // document, the grouping nobody asked for goes without a word, and the card names the other reading.
+    let r = planned(
+        "AAA에 대해서 요약해줘",
+        json!({}),
+        json!({ "op": "summarize", "topic": "AAA", "group_by": "project" }),
+    );
+    assert!(
+        matches!(
+            r.plan.operations.as_slice(),
+            [Op::Summarize { target: Some(SummarizeTarget::Set), group_by: None, topic: Some(t), .. }] if t == "AAA"
+        ),
+        "{:?}",
+        r.plan
+    );
+    assert!(r.plan.scope.is_empty(), "{:?}", r.plan.scope);
+    assert_eq!(codes(&r), vec!["topic_names_project"]);
+    // The project slot alone ("… 프로젝트"): one summary of its documents — no subject, no split.
+    for text in ["AAA 프로젝트 요약해줘", "AAA 프로젝트에 대해 요약해줘"] {
+        let r = planned(text, json!({}), json!({ "op": "summarize", "topic": "AAA", "group_by": "project" }));
+        assert!(
+            matches!(
+                r.plan.operations.as_slice(),
+                [Op::Summarize { target: Some(SummarizeTarget::Set), group_by: None, topic: None, .. }]
+            ),
+            "{text}: {:?}",
+            r.plan
+        );
+        assert_eq!(r.plan.scope.filter.project_id.as_deref(), Some("p-aaa"), "{text}");
+        assert!(r.plan.scope.filter.with_reference, "{text}");
+        assert_eq!(codes(&r), vec!["scope_filled"], "{text}");
+    }
+    // Both slots: the content inside the project, asked as a summary or as an explanation.
+    for (text, op) in [
+        (
+            "AAA 프로젝트의 영수증 처리 기준 내용에 대해 요약해줘",
+            json!({ "op": "summarize", "topic": "영수증 처리 기준 내용" }),
+        ),
+        (
+            "AAA 프로젝트의 영수증 처리 기준 내용에 대해 설명해줘",
+            json!({ "op": "answer", "question": "영수증 처리 기준 설명", "knowledge": false }),
+        ),
+    ] {
+        let r = planned(text, json!({ "filter": { "doc_type": "receipt" } }), op);
+        assert!(
+            matches!(r.plan.operations.as_slice(), [Op::Summarize { topic: Some(t), .. }] if t == "영수증 처리 기준"),
+            "{text}: {:?}",
+            r.plan
+        );
+        assert_eq!(r.plan.scope.filter.project_id.as_deref(), Some("p-aaa"), "{text}");
+        assert_eq!(r.plan.scope.filter.doc_type, None, "{text}: the type is a word of the subject");
+        assert!(r.plan.scope.filter.with_reference, "{text}");
+    }
+    // A kind of document is no subject: the summary of the estimates, as the model's plan was before
+    // it had a topic to write.
+    let r = planned(
+        "견적서에 대해 요약해줘",
+        json!({ "filter": { "doc_type": "quotation" } }),
+        json!({ "op": "summarize", "topic": "견적서" }),
+    );
+    assert!(
+        matches!(r.plan.operations.as_slice(), [Op::Summarize { target: None, group_by: None, topic: None, .. }]),
+        "{:?}",
+        r.plan
+    );
+    assert_eq!(r.plan.scope.filter.doc_type.as_deref(), Some("quotation"));
+    assert!(codes(&r).is_empty(), "{:?}", r.issues);
+    // The type the subject's words name is no place to look; the length the sentence asks is kept.
+    let r = planned(
+        "계약서에서 영수증 처리 기준에 대해 자세히 요약해줘",
+        json!({ "filter": { "doc_type": "receipt" } }),
+        json!({ "op": "summarize", "topic": "영수증 처리 기준" }),
+    );
+    assert!(
+        matches!(r.plan.operations.as_slice(), [Op::Summarize { length: Some(SummaryLength::Long), topic: Some(t), .. }] if t == "영수증 처리 기준"),
+        "{:?}",
+        r.plan
+    );
+    assert_eq!(r.plan.scope.filter.doc_type.as_deref(), Some("contract"), "{:?}", r.plan.scope);
+    // The routing call may take "… 설명해줘" for a turn to answer in prose (no plan call): the sentence
+    // still names what to gather and where.
+    for route in ["general", "chat"] {
+        let chat = StageChat::new();
+        chat.push("families", json!({ "families": [route] }));
+        let text = "AAA 프로젝트의 영수증 처리 기준 내용에 대해 설명해줘";
+        let r = plan(Some(&deps(&chat)), text, &c, PlanMode::ModelFirst).unwrap();
+        assert_eq!(chat.calls("plan"), 0);
+        assert!(
+            matches!(r.plan.operations.as_slice(), [Op::Summarize { target: Some(SummarizeTarget::Set), topic: Some(t), .. }] if t == "영수증 처리 기준"),
+            "{route}: {:?}",
+            r.plan
+        );
+        assert_eq!(r.plan.scope.filter.project_id.as_deref(), Some("p-aaa"), "{route}");
+        assert!(r.plan.scope.filter.with_reference && !r.plan.requires_confirmation, "{route}: {:?}", r.plan);
+    }
+    // (a question without a place keeps its route: it may be answered from general knowledge)
+    let chat = StageChat::new();
+    chat.push("families", json!({ "families": ["general"] }));
+    let r = plan(Some(&deps(&chat)), "영수증 처리 기준에 대해 설명해줘", &c, PlanMode::ModelFirst).unwrap();
+    assert!(
+        matches!(r.plan.operations.as_slice(), [Op::Answer { mode: Some(AnswerMode::General), .. }]),
+        "{:?}",
+        r.plan
+    );
+    // A split the sentence asks for is not made of a summary about a subject: one note, and the card waits.
+    let chat = StageChat::new();
+    chat.push(
+        "plan",
+        json!({ "summary": "요약합니다", "unmet": "", "intent": "summarize", "scope": {}, "operations": [{ "op": "summarize", "topic": "지체상금", "group_by": "project" }], "requires_confirmation": false, "confidence": 0.9 }),
+    );
+    let r = plan(Some(&deps(&chat)), "프로젝트별로 지체상금에 대해 요약해줘", &c, PlanMode::ModelFirst).unwrap();
+    assert!(
+        matches!(r.plan.operations.as_slice(), [Op::Summarize { group_by: None, topic: Some(t), .. }] if t == "지체상금"),
+        "{:?}",
+        r.plan
+    );
+    assert!(r.plan.requires_confirmation, "{:?}", r.plan);
+    assert_eq!(codes(&r).iter().filter(|c| *c == "grouping_dropped").count(), 1, "{:?}", r.issues);
+}
+
 #[test]
 fn model_first_mode_sends_every_sentence_but_slash_commands_to_the_model() {
     let c = ctx();

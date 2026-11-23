@@ -239,6 +239,39 @@ test.describe("0.8.0 assistant harness", () => {
     await expect(items.nth(2)).toContainText("프로젝트 없음");
   });
 
+  // 1.0.2 (user report 2026-11-19): "AA에 대해서 요약해줘" summarised every document in scope, one by one, and
+  // gathered nothing about AA. A summary that names its subject looks the passages about it up and makes one
+  // summary of them, with their sources — no scope asked for, no per-document summaries.
+  test("'정보보안에 대해서 요약해줘' gathers what the documents say about the subject into one summary", async ({ page }) => {
+    test.setTimeout(90_000);
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\견적서.hwpx", "D:\\규정\\정보보안지침.pdf"]);
+
+    await openAssistantScreen(page);
+    await send(page, "정보보안에 대해서 요약해줘");
+    await expect(page.getByText("'정보보안'에 관한 내용을 문서에서 찾아 요약합니다").first()).toBeVisible({ timeout: 15_000 });
+    const result = assistantCard(page, "result").last();
+    await expect(result).toHaveAttribute("data-result-status", "done", { timeout: 30_000 });
+    const groups = result.getByTestId("result-summary-group");
+    await expect(groups).toHaveCount(1);
+    await expect(groups.first()).toContainText("'정보보안'에 관한 내용");
+    // The summary is made of the guideline's passages; the estimate says nothing about the subject.
+    await expect(groups.first()).toContainText("12,500원");
+    await expect(result).not.toContainText("견적서");
+
+    // A subject no document says anything about: said so, not a failure.
+    await send(page, "양자 컴퓨터에 대해서 요약해줘");
+    const none = assistantCard(page, "result").last();
+    await expect(none).toHaveAttribute("data-result-status", "done", { timeout: 30_000 });
+    await expect(none).toContainText("'양자 컴퓨터'에 관한 내용을 범위의 문서에서 찾지 못했습니다");
+
+    // "현재 문서에서 …" with nothing open or selected: the assistant asks instead of looking everywhere
+    // (user decision 2026-11-20: the open document is the place of that sentence).
+    await send(page, "현재 문서에서 정보보안 내용에 대해서 요약해줘");
+    await expect(page.locator('[data-testid="assistant-card-clarify"]').last()).toContainText("열려 있거나 선택한 문서가 없습니다", { timeout: 15_000 });
+  });
+
   test("a change the sentence does not name waits for approval with the reason on the card", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);

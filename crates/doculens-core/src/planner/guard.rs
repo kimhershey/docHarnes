@@ -473,6 +473,8 @@ fn keep_the_split(text: &str, plan: &mut Plan) -> bool {
     let mut dropped = false;
     for op in &mut plan.operations {
         match op {
+            // A summary about a subject is one summary of the passages found (1.0.2): no split.
+            Op::Summarize { topic: Some(_), .. } => dropped = true,
             Op::Summarize { target, group_by, .. } if matches!(group_by, None | Some(SummaryGroup::None)) => {
                 if split == SplitBy::Document {
                     if *target == Some(SummarizeTarget::Set) {
@@ -672,7 +674,8 @@ pub fn type_filter_repair(text: &str, plan: &mut Plan, ctx: &super::PlanContext,
     {
         return None;
     }
-    let named = super::rules::doc_types_named(&super::rules::user_words(text), ctx);
+    // (a type the subject of a summary names is part of the subject, not a filter)
+    let named = super::rules::doc_types_named(&scope_words(text, plan), ctx);
     let [only] = named.as_slice() else { return None };
     plan.scope.filter.doc_type = Some(only.slug.clone());
     Some(PlanIssue::warn(
@@ -855,6 +858,644 @@ pub fn answer_instead_of_asking(
     true
 }
 
+/// A subject a sentence names — "…에 대해(서)", "…에 관해(서)", "…에 대한", "…에 관한", "… 관련",
+/// "about …" — and the sentence without the phrase that names it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct About {
+    pub subject: String,
+    /// The rest of the sentence: where to look and what to do ("한빛 프로젝트에서 요약해줘").
+    pub rest: String,
+}
+
+/// What the sentence asks to hear about: "한빛 프로젝트에서 검수 기준에 대해 요약해줘" → `검수 기준`
+/// (rest "한빛 프로젝트에서 요약해줘"). Nothing for a sentence that brings its own text, and nothing
+/// when the words before the marker only point at something ("이 문서에 대해", "그것에 관해", "이
+/// 프로젝트에 대해") or name a project as such ("AAA 프로젝트에 대해"): what is pointed at is where
+/// to look, not something to look up.
+pub fn about(text: &str) -> Option<About> {
+    about_phrase(text).filter(|a| names_a_subject(&a.subject))
+}
+
+/// The phrase that names what a sentence is about, cut off the sentence — whatever its words are
+/// (a subject, a pointer, the name of a project).
+fn about_phrase(text: &str) -> Option<About> {
+    if carried_text(text).is_some() {
+        return None;
+    }
+    let words = super::rules::user_words(text);
+    let line: String = words.split_whitespace().collect::<Vec<_>>().join(" ");
+    phrase_ko(&line).or_else(|| phrase_en(&line))
+}
+
+/// Whether the words of an "about" phrase name something to look up: not a pointer at what is open
+/// or selected ("이 문서", "그것", "this document"), not everything ("전체", "모든 문서"), not a kind
+/// of document ("참고 자료") and not a project called one ("AAA 프로젝트").
+fn names_a_subject(subject: &str) -> bool {
+    const POINTERS: &[&str] = &[
+        "이",
+        "그",
+        "저",
+        "위",
+        "위의",
+        "아래",
+        "해당",
+        "선택한",
+        "선택된",
+        "첨부한",
+        "첨부된",
+        "방금",
+        "앞의",
+        "앞서",
+    ];
+    const POINTED: &[&str] = &[
+        "이것",
+        "이거",
+        "그것",
+        "그거",
+        "저것",
+        "저거",
+        "여기",
+        "이번",
+        "이내용",
+        "위내용",
+        "위의내용",
+        "아래내용",
+        "선택문서",
+        "문서",
+        "문서들",
+        "자료",
+        "내용",
+        "전체",
+        "모두",
+        "모든문서",
+        // ("주요 내용에 대해 요약", "전반에 대해", "핵심에 대해": all of it, in short — not something
+        // to look up; "… 내용" has lost its last word by now)
+        "주요",
+        "핵심",
+        "전반",
+        "전반적인",
+        "전반적",
+        "전체적인",
+        "전체적",
+        "모든",
+        "중요",
+        "중요한",
+        "대략",
+        "대략적인",
+        "개요",
+        "요점",
+        "주요사항",
+        "핵심사항",
+        "중요사항",
+        "주요점",
+        "themainpoints",
+        "mainpoints",
+        "keypoints",
+        "thekeypoints",
+        "overview",
+        "theoverview",
+        "thegist",
+        // (a kind of document is where to look — `kind_said`)
+        "참고자료",
+        "참고문서",
+        "레퍼런스",
+        "업무문서",
+        "작업문서",
+        "it",
+        "this",
+        "that",
+        "them",
+        "these",
+        "those",
+        "everything",
+        "thedocuments",
+        "alldocuments",
+    ];
+    const POINTING: &[&str] = &["this ", "that ", "these ", "those ", "the selected", "the above", "the attached"];
+    let key = super::compact(subject);
+    let lower = subject.to_lowercase();
+    let points = subject.split(' ').next().is_some_and(|w| POINTERS.contains(&w))
+        || POINTED.contains(&key.as_str())
+        || POINTING.iter().any(|p| lower.starts_with(p));
+    let project = key.ends_with("프로젝트") || lower.ends_with(" project");
+    !key.is_empty() && subject.chars().count() <= 80 && !points && !project
+}
+
+fn phrase_ko(line: &str) -> Option<About> {
+    // (longest first: of the markers that start at one place the longest is the marker)
+    const MARKERS: &[&str] = &[
+        "에 대해서는",
+        "에 대해서도",
+        "에 관해서는",
+        "과 관련해서",
+        "와 관련해서",
+        "과 관련하여",
+        "와 관련하여",
+        "에 대해서",
+        "에 대하여",
+        "에 관해서",
+        "에 관하여",
+        "에대해서",
+        "에대하여",
+        "에관해서",
+        "에관하여",
+        "과 관련해",
+        "와 관련해",
+        "과 관련된",
+        "와 관련된",
+        "과 관련한",
+        "와 관련한",
+        " 관련해서",
+        " 관련하여",
+        " 관련 내용",
+        " 관련 사항",
+        " 관련 부분",
+        "에 대해",
+        "에 대한",
+        "에 관해",
+        "에 관한",
+        "에대해",
+        "에대한",
+        "에관해",
+        "에관한",
+        " 관련해",
+        " 관련된",
+        " 관련한",
+        " 관련",
+    ];
+    let (at, marker) = MARKERS
+        .iter()
+        .filter_map(|m| {
+            line.match_indices(m)
+                // ("관련" as a word of its own: not "관련자", "관련성")
+                .find(|(i, _)| *m != " 관련" || line[i + m.len()..].chars().next().is_none_or(char::is_whitespace))
+                .map(|(i, _)| (i, *m))
+        })
+        .min_by_key(|(i, m)| (*i, std::cmp::Reverse(m.len())))?;
+    let before = &line[..at];
+    let after = &line[at + marker.len()..];
+    // Where to look comes before the subject: "… 프로젝트에서 ", "계약서 중에서 ", "… 프로젝트의 ".
+    const PLACES: &[&str] = &[
+        "에서는 ",
+        "에서 ",
+        "에 있는 ",
+        "안의 ",
+        "내의 ",
+        "프로젝트의 ",
+        "프로젝트 내 ",
+        "프로젝트 안 ",
+        "문서의 ",
+        "자료의 ",
+    ];
+    let cut = PLACES.iter().filter_map(|p| before.rfind(p).map(|i| i + p.len())).max().unwrap_or(0);
+    let (mut place, mut subject) = (before[..cut].to_string(), before[cut..].trim());
+    // Words in front of the subject that are not part of it: "그리고", "먼저", "프로젝트별로".
+    while let Some((first, tail)) = subject.split_once(' ') {
+        // (how to say it — "자세히", "짧게" — is not what it is about either)
+        const FILLERS: &[&str] = &[
+            "그리고",
+            "그럼",
+            "그러면",
+            "혹시",
+            "먼저",
+            "우선",
+            "좀",
+            "또",
+            "자세히",
+            "자세하게",
+            "상세히",
+            "상세하게",
+            "간단히",
+            "간단하게",
+            "간략히",
+            "간략하게",
+            "짧게",
+            "길게",
+        ];
+        let filler = FILLERS.contains(&first) || first.ends_with("별로");
+        if !filler {
+            break;
+        }
+        place.push_str(first);
+        place.push(' ');
+        subject = tail.trim();
+    }
+    let subject = subject.trim_matches(|c: char| c.is_whitespace() || "\"'“”‘’「」『』()[]".contains(c));
+    let rest = format!("{} {}", place.trim(), after.trim()).trim().to_string();
+    Some(About { subject: without_content_word(subject).to_string(), rest })
+}
+
+/// "BB 내용에 대해 요약해줘" is about BB: the word "내용" after a subject is not a part of it (and
+/// would be looked for in every passage).
+fn without_content_word(subject: &str) -> &str {
+    match subject.strip_suffix(" 내용") {
+        Some(head) if !head.trim().is_empty() => head.trim_end(),
+        _ => subject,
+    }
+}
+
+fn phrase_en(line: &str) -> Option<About> {
+    let lower = line.to_lowercase();
+    let (at, marker) = [" about ", " regarding ", " concerning "]
+        .iter()
+        .filter_map(|m| lower.find(m).map(|i| (i, *m)))
+        .min_by_key(|(i, _)| *i)?;
+    // (lower-casing ASCII letters keeps the byte offsets; a sentence with other cased letters is left alone)
+    if lower.len() != line.len() {
+        return None;
+    }
+    let tail = &line[at + marker.len()..];
+    let tail_lower = &lower[at + marker.len()..];
+    let end = [" in the ", " in ", " from the ", " from ", " within "]
+        .iter()
+        .filter_map(|p| tail_lower.find(p))
+        .min()
+        .unwrap_or(tail.len());
+    let subject = tail[..end].trim().trim_end_matches(['.', '?', '!', ',']).trim_matches(['"', '\'']).trim();
+    let rest = format!("{} {}", line[..at].trim(), tail[end..].trim()).trim().to_string();
+    Some(About { subject: subject.to_string(), rest })
+}
+
+/// Whether `subject` is nothing but the name of a document type ("계약서", "견적서들", "계약서 내용"):
+/// "계약서에 대해 요약해줘" asks for the contracts to be summarised, not for passages about the word.
+fn is_type_name(subject: &str, ctx: &super::PlanContext) -> bool {
+    let key = super::compact(subject);
+    let key = key.strip_prefix("모든").unwrap_or(&key);
+    let key = ["들", "문서", "내용", "전체", "전부"].iter().find_map(|w| key.strip_suffix(w)).unwrap_or(key);
+    !key.is_empty()
+        && ctx.doc_types.iter().any(|d| {
+            let aliases = crate::pipeline::schema::doc_type_aliases(&d.slug);
+            [d.label_ko.as_str(), d.label_en.as_str(), d.slug.as_str()]
+                .into_iter()
+                .chain(aliases.iter().copied())
+                .any(|label| super::compact(label) == key)
+        })
+}
+
+/// The project `subject` is the name of: "AAA", "AAA 프로젝트", "the AAA project".
+fn project_of<'a>(subject: &str, ctx: &'a super::PlanContext) -> Option<&'a super::ProjectSummary> {
+    let bare = |s: &str| {
+        let key = super::compact(s);
+        let cut = key.strip_suffix("프로젝트").or_else(|| key.strip_suffix("project")).unwrap_or(&key);
+        if cut.is_empty() {
+            key
+        } else {
+            cut.to_string()
+        }
+    };
+    let said = bare(subject);
+    let said_without_article = subject.to_lowercase().strip_prefix("the ").map(bare);
+    ctx.projects.iter().find(|p| {
+        let name = bare(&p.name);
+        name.chars().count() >= 2 && (name == said || said_without_article.as_deref() == Some(name.as_str()))
+    })
+}
+
+/// Whether the words outside the phrase that names the subject ask for a summary to be made: "요약해줘",
+/// "요약 좀", "… 관련 요약". A summary that already exists is not one to make — "지난 회의에 대한 요약본
+/// 찾아줘", "…에 관한 요약 보고서 열어줘" — and "요약에 대해 알려줘" asks none.
+fn asks_summary(rest: &str) -> bool {
+    const ASKS: &[&str] = &[
+        "요약해",
+        "요약하",
+        "요약좀",
+        "요약부탁",
+        "요약을해",
+        "요약을부탁",
+        "요약정리",
+        "요약바",
+        "요약가능",
+        "요약만",
+        "요약도",
+    ];
+    let said = super::compact(rest);
+    ASKS.iter().any(|a| said.contains(a))
+        || said.ends_with("요약")
+        || said.ends_with("요약을")
+        || rest.to_lowercase().contains("summar")
+}
+
+/// Whether the words outside the subject ask for it to be explained: "설명해줘", "설명 좀" (not a
+/// "설명서").
+fn asks_explanation(rest: &str) -> bool {
+    const ASKS: &[&str] = &["설명해", "설명하", "설명좀", "설명부탁", "설명을해", "설명을부탁", "설명바"];
+    let said = super::compact(rest);
+    ASKS.iter().any(|a| said.contains(a))
+        || said.ends_with("설명")
+        || said.ends_with("설명을")
+        || rest.to_lowercase().contains("explain")
+}
+
+/// Whether the words outside the subject name where to look in the workspace: a project, or what is
+/// open or selected ("이 문서에서", "현재 문서에서").
+fn says_where(rest: &str, ctx: &super::PlanContext) -> bool {
+    project_named(rest, ctx).is_some() || super::rules::points(rest)
+}
+
+/// "한빛 납품 프로젝트 검수 기준에 대해", "한빛 납품의 검수 기준에 대해": a project named in front of
+/// the subject is where to look, not a part of what to look up. (With "…프로젝트의 / 에서 / 내" the
+/// phrase itself is cut there — `phrase_ko`.)
+fn project_in_front(mut a: About, ctx: &super::PlanContext) -> About {
+    let mut names: Vec<String> =
+        ctx.projects.iter().map(|p| p.name.split_whitespace().collect::<Vec<_>>().join(" ")).collect();
+    names.retain(|n| n.chars().count() >= 2);
+    names.sort_by_key(|n| std::cmp::Reverse(n.chars().count()));
+    for name in names {
+        for tail in [" 프로젝트 ", "의 "] {
+            let front = format!("{name}{tail}");
+            // (lower-casing ASCII letters keeps the byte offsets)
+            let same_case = a.subject.starts_with(front.as_str());
+            let (lower, lower_front) = (a.subject.to_lowercase(), front.to_lowercase());
+            let any_case =
+                lower.len() == a.subject.len() && lower_front.len() == front.len() && lower.starts_with(&lower_front);
+            if !(same_case || any_case) {
+                continue;
+            }
+            let (Some(head), Some(tail)) = (a.subject.get(..front.len()), a.subject.get(front.len()..)) else {
+                continue;
+            };
+            let subject = tail.trim().to_string();
+            if subject.is_empty() {
+                continue;
+            }
+            a.rest = format!("{} {}", head.trim(), a.rest).trim().to_string();
+            a.subject = subject;
+            return a;
+        }
+    }
+    a
+}
+
+/// The project a subject names as a project: "AAA 프로젝트", "the AAA project". The word makes it
+/// one — a name alone is something to look up (user decision 2026-11-20: the project and the
+/// content are two slots, each filled by what the sentence says: "AA 프로젝트 요약" is the project,
+/// "BB에 대해서 요약" is BB in every document, whatever BB is called).
+fn subject_project<'a>(a: &About, ctx: &'a super::PlanContext) -> Option<&'a super::ProjectSummary> {
+    let said_as_one =
+        super::compact(&a.subject).ends_with("프로젝트") || a.subject.to_lowercase().ends_with(" project");
+    if !said_as_one {
+        return None;
+    }
+    project_of(&a.subject, ctx)
+}
+
+/// The subject of a summary the sentence asks for: "AA에 대해서 요약해줘" → `AA` (the content slot).
+/// The request stands outside the phrase that names the subject: a summary to make, or — when the
+/// sentence also names where to look, a project or what is open — an explanation ("AA 프로젝트의 BB
+/// 내용에 대해 설명해줘"; without a place "…에 대해 설명해줘" stays a question, which may be answered
+/// from general knowledge). The subject is not just a set of documents: a kind of document ("견적서에
+/// 대해 요약해줘": the estimates) or a project called one ("AAA 프로젝트에 대해" — `summary_project`).
+pub fn summary_topic(text: &str, ctx: &super::PlanContext) -> Option<About> {
+    let a = project_in_front(about_phrase(text)?, ctx);
+    if !names_a_subject(&a.subject) || is_type_name(&a.subject, ctx) {
+        return None;
+    }
+    let asked = asks_summary(&a.rest) || (asks_explanation(&a.rest) && says_where(&a.rest, ctx));
+    asked.then_some(a)
+}
+
+/// The project a sentence asks a summary of by naming it as the subject — "AAA 프로젝트에 대해
+/// 요약해줘" (the project slot; the content slot stays empty) — and the rest of the sentence.
+pub fn summary_project<'a>(text: &str, ctx: &'a super::PlanContext) -> Option<(&'a super::ProjectSummary, String)> {
+    let a = about_phrase(text)?;
+    if !asks_summary(&a.rest) {
+        return None;
+    }
+    subject_project(&a, ctx).map(|p| (p, a.rest))
+}
+
+/// Whether the sentence asks for a summary of a subject or of a project it names as the subject —
+/// whatever plan or route came back for it (`summary_about`).
+pub fn asks_about(text: &str, ctx: &super::PlanContext) -> bool {
+    summary_topic(text, ctx).is_some() || summary_project(text, ctx).is_some()
+}
+
+/// Whether a subject the model wrote is one the user's words carry: every word of it stands in
+/// `said` — the subject of the sentence when it names one, else the sentence ("AA에 대해서 요약해줘"
+/// came back with the topic "AAA", the name of a project in the context — eval run of 2026-11-19) —
+/// and it names something to look up.
+fn said_subject(topic: &str, said: &str, ctx: &super::PlanContext) -> bool {
+    let sentence = super::compact(said);
+    let words: Vec<String> =
+        topic.split(|c: char| !c.is_alphanumeric()).map(super::compact).filter(|w| !w.is_empty()).collect();
+    !words.is_empty()
+        && words.iter().all(|w| sentence.contains(w.as_str()))
+        && !words.iter().any(|w| w.contains("요약") || w.contains("summar"))
+        && names_a_subject(topic)
+        && !is_type_name(topic, ctx)
+}
+
+/// The subject a summary ends with: the one the model wrote when the user's words carry it, else the
+/// subject of the sentence, else none (a sentence that names a project as the subject asks for the
+/// project's documents — `summary_project`).
+fn settled_topic(text: &str, written: Option<&str>, ctx: &super::PlanContext) -> Option<String> {
+    if summary_project(text, ctx).is_some() {
+        return None;
+    }
+    let said = super::rules::user_words(text);
+    let about = summary_topic(text, ctx);
+    let written = written
+        .map(|w| w.split_whitespace().collect::<Vec<_>>().join(" "))
+        .map(|w| without_content_word(&w).to_string());
+    let own = written.filter(|w| match &about {
+        // (the model's subject may be a part of the sentence's: "3월 회의록 보안에 대해" → "보안")
+        Some(a) => said_subject(w, &a.subject, ctx),
+        // No phrase names a subject: the name of a project is where to look, not what to look up.
+        None => said_subject(w, &said, ctx) && project_of(w, ctx).is_none(),
+    });
+    match own {
+        Some(own) => Some(own),
+        None => about.map(|a| a.subject),
+    }
+}
+
+/// Before the validator (1.0.2): the subject of a summary is one the user's words name. A topic the
+/// model added on its own — "견적서에 대해 요약해줘" came back as `topic: "견적서"`, "한빛 납품에 대해서
+/// 요약해줘" as `topic: "한빛 납품"`, the name of the project (eval run of 2026-11-19) — is taken out
+/// before the validator makes the plan the single summary a topic asks for.
+pub fn unsaid_topic(text: &str, plan: &mut Plan, ctx: &super::PlanContext) {
+    let asks_a_split = split_of(&super::rules::user_words(text)).is_some();
+    for op in &mut plan.operations {
+        if let Op::Summarize { topic, group_by, .. } = op {
+            if topic.is_some() {
+                *topic = settled_topic(text, topic.as_deref(), ctx);
+                // (a grouping the model put next to a subject and nobody asked for is not one to
+                // report as dropped: it just goes)
+                if topic.is_some() && !asks_a_split {
+                    *group_by = None;
+                }
+            }
+        }
+    }
+}
+
+/// The user's words without the subject of the summary the plan makes: what is left says where to
+/// look ("보안 요구사항에 대해 요약해줘" names no document type — "요구사항" belongs to the subject).
+fn scope_words(text: &str, plan: &Plan) -> String {
+    let said = super::rules::user_words(text);
+    let [Op::Summarize { topic: Some(topic), .. }] = plan.operations.as_slice() else { return said };
+    let line: String = said.split_whitespace().collect::<Vec<_>>().join(" ");
+    if let Some(at) = line.find(topic.as_str()) {
+        return format!("{} {}", &line[..at], &line[at + topic.len()..]);
+    }
+    // (a topic in the model's own spelling: its words go one by one)
+    let mut rest = line;
+    for word in topic.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()) {
+        if let Some(at) = rest.find(word) {
+            rest.replace_range(at..at + word.len(), " ");
+        }
+    }
+    rest
+}
+
+/// 1.0.2 — "AA에 대해서 요약해줘" (user report 2026-11-19: "요약만 하고 AA에 대한 내용을 수집하지 않음").
+/// Gemma 4 E4B plans the sentence as a plain `summarize` (eval run of 2026-11-19: six of six): every
+/// document in scope is summarised — all of the library when no scope is set — and none of it is
+/// about AA. When the user's words name the subject of a summary, a plan that only reads becomes a
+/// summary of that subject (`summarize.topic`): the passages about it are looked up in the scope and
+/// summarised. The model's own answer, search, explanation or question back for such a sentence
+/// becomes the same step — the sentence says what is wanted, and where to look needs no asking.
+///
+/// A subject the model wrote itself stays when the user's words carry it (`said_subject`); one they
+/// do not carry gives way to the subject of the sentence, or is dropped when the sentence names
+/// none ("이 문서 요약해줘" is a summary of the document whatever topic came with it).
+///
+/// Two slots, each filled by what the sentence says (user decision 2026-11-20): the project —
+/// "AA 프로젝트의 …", "AA 프로젝트에서 …", "AA 프로젝트에 대해" — and the content — "… BB (내용)에
+/// 대해". A project named as the subject ("AAA 프로젝트에 대해 요약해줘") is the project slot alone:
+/// one summary of its documents, not one per project of the library (the model's `group_by: project`
+/// with an empty scope in the same run). A name alone in the subject is content, even when a project
+/// is called so ("AAA에 대해서 요약해줘": AAA in every document; `where_to_look` says so on the card).
+///
+/// What the scope says about where to look stays, except what was taken from the subject itself: a
+/// file-name keyword that is the subject, and a document type that only the subject's words name.
+/// A sentence that points at what is open or selected ("이 문서에서 …") is about that document.
+pub fn summary_about(text: &str, plan: &mut Plan, ctx: &super::PlanContext, ko: bool) -> Option<PlanIssue> {
+    let (length, written) = match plan.operations.as_slice() {
+        [Op::Summarize { length, topic, .. }] => (*length, topic.clone()),
+        [Op::Answer { reply: None, .. }] | [Op::Search { .. }] | [Op::Explain { .. }] | [Op::Clarify { .. }] | [] => {
+            (None, None)
+        }
+        _ => return None,
+    };
+    if plan.operations.is_empty() && plan.clarification_question.is_none() {
+        return None;
+    }
+    let summarize = |plan: &mut Plan, topic: Option<String>| {
+        plan.operations =
+            vec![Op::Summarize { target: Some(super::SummarizeTarget::Set), length, group_by: None, topic }];
+        plan.intent = super::OpKind::Summarize;
+        plan.clarification_question = None;
+        plan.requires_confirmation = false;
+        plan.confidence = plan.confidence.max(super::MIN_CONFIDENCE);
+    };
+    // The subject is a project: its documents are what is summarised.
+    if let Some((project, _)) = summary_project(text, ctx) {
+        // (its name is not something to look up in its documents)
+        for op in &mut plan.operations {
+            if let Op::Summarize { topic, .. } = op {
+                *topic = None;
+            }
+        }
+        let named_documents = !plan.scope.doc_ids.is_empty() || plan.scope.folder.is_some();
+        let as_asked = matches!(
+            plan.operations.as_slice(),
+            [Op::Summarize { topic: None, group_by: None | Some(super::SummaryGroup::None), .. }]
+        ) && plan.scope.filter.project_id.as_deref() == Some(project.id.as_str());
+        if named_documents || as_asked {
+            return None;
+        }
+        summarize(plan, None);
+        plan.scope.filter.project_id = Some(project.id.clone());
+        // (the project's name is not a word to look for in file names)
+        if plan.scope.filter.keyword.as_deref().is_some_and(|k| project_of(k, ctx).is_some()) {
+            plan.scope.filter.keyword = None;
+        }
+        plan.summary = Some(if ko {
+            format!("'{}' 프로젝트의 문서를 요약합니다", project.name)
+        } else {
+            format!("Summarise the documents of the project '{}'", project.name)
+        });
+        super::validate::project_reference(plan);
+        return Some(PlanIssue::warn(
+            "scope.filter.project_id",
+            "scope_filled",
+            if ko {
+                format!("문장의 '{}' 프로젝트를 대상으로 합니다", project.name)
+            } else {
+                format!("the project '{}' from the sentence is the scope", project.name)
+            },
+        ));
+    }
+    let Some(subject) = settled_topic(text, written.as_deref(), ctx) else {
+        // A topic nobody asked for: the plain summary the sentence asks.
+        for op in &mut plan.operations {
+            if let Op::Summarize { topic, .. } = op {
+                *topic = None;
+            }
+        }
+        return None;
+    };
+    let changed = written.as_deref() != Some(subject.as_str());
+    if changed {
+        summarize(plan, Some(subject.clone()));
+    }
+    // (whoever wrote the plan, the card says the same)
+    plan.summary = Some(if ko {
+        format!("'{subject}'에 관한 내용을 문서에서 찾아 요약합니다")
+    } else {
+        format!("Summarise what the documents say about '{subject}'")
+    });
+    // Where to look: the words outside the subject.
+    let rest = scope_words(text, plan);
+    let f = &mut plan.scope.filter;
+    if f.keyword.as_deref().is_some_and(|k| {
+        let (k, s) = (super::compact(k), super::compact(&subject));
+        !k.is_empty() && (s.contains(&k) || k.contains(&s))
+    }) {
+        f.keyword = None;
+    }
+    if let Some(written) = f.doc_type.clone() {
+        let named = super::rules::doc_types_named(&rest, ctx);
+        if !named.iter().any(|d| d.slug == written) {
+            f.doc_type = None;
+        }
+    }
+    if plan.scope.is_empty() {
+        let at_hand = super::rules::pointed_at(&rest, ctx);
+        if at_hand.is_empty() && super::rules::points(&rest) {
+            // "현재 문서에서 …" with nothing open or selected: every document is not what was asked.
+            *plan = Plan::clarify(nothing_at_hand(ko).to_string(), 0.5);
+            return None;
+        }
+        plan.scope.doc_ids = at_hand;
+    }
+    // "… 자세히 요약해줘": how long, when the plan does not say (the model left it out — same run).
+    if let [Op::Summarize { length: length @ None, .. }] = plan.operations.as_mut_slice() {
+        *length = super::rules::length_said(&rest);
+    }
+    changed.then(|| {
+        PlanIssue::warn(
+            "operations[0].topic",
+            "summary_topic",
+            if ko {
+                format!("문장의 '{subject}'에 관한 내용만 모아 요약합니다")
+            } else {
+                format!("only what the documents say about '{subject}' is summarised")
+            },
+        )
+    })
+}
+
+/// What a sentence that points at "this document" is told when none is open or selected.
+pub fn nothing_at_hand(ko: bool) -> &'static str {
+    if ko {
+        "어떤 문서에서 찾을까요? 열려 있거나 선택한 문서가 없습니다. 문서를 열거나 선택한 뒤 다시 요청하거나, 프로젝트 · 문서 유형을 말씀해 주세요."
+    } else {
+        "Which document? None is open or selected. Open or select one and ask again, or name a project or a document type."
+    }
+}
+
 /// 0.8.2 — the real model (Gemma 4 E4B) plans "X가 무엇인지 설명해줘" as `explain` and writes into
 /// `selection` whatever comes to it: the term ("AAA"), the whole sentence, or a note to itself
 /// ("… question 파라미터를 사용합니다. scope는 project로 설정합니다."). `explain` explains a piece of
@@ -902,13 +1543,16 @@ pub fn document_question(text: &str, plan: &mut Plan, ctx: &super::PlanContext) 
         return false;
     }
     let at_hand = super::rules::pointed_at(text, ctx);
-    if at_hand.is_empty() && project_named(text, ctx).is_none() {
+    let place = !at_hand.is_empty() || project_named(text, ctx).is_some();
+    // 1.0.2: "AA에 대해 알려줘" names what to look up. With `knowledge: false` — meant for a text the
+    // user brought — nothing would be looked up at all; a `general` answer does look, and stays.
+    if !place && about(text).is_none() {
         return false;
     }
     let mut changed = false;
     for op in &mut plan.operations {
         let Op::Answer { knowledge, mode, reply, .. } = op else { continue };
-        let looks_nothing_up = *knowledge == Some(false) || *mode == Some(super::AnswerMode::General);
+        let looks_nothing_up = *knowledge == Some(false) || (place && *mode == Some(super::AnswerMode::General));
         if reply.is_none() && *mode != Some(super::AnswerMode::Chat) && looks_nothing_up {
             *knowledge = None;
             *mode = None;
@@ -1231,8 +1875,36 @@ pub fn where_to_look(text: &str, plan: &mut Plan, ctx: &super::PlanContext, ko: 
             ));
         }
     }
+    // 1.0.2 — "AAA 프로젝트 요약해줘" came back from Gemma 4 E4B as `group_by: project` with an empty
+    // scope (eval run of 2026-11-19): one summary per project of the library. A sentence that names
+    // one project and asks no split by project means that project — one result for it.
+    if super::validate::per_project(plan)
+        && plan.scope.filter.project_id.is_none()
+        && !named_documents
+        && split_of(&super::rules::user_words(text)) != Some(SplitBy::Project)
+        && project_named(text, ctx).is_some()
+    {
+        for op in &mut plan.operations {
+            match op {
+                Op::Summarize { target, group_by, .. } if *group_by == Some(SummaryGroup::Project) => {
+                    *group_by = None;
+                    *target = Some(super::SummarizeTarget::Set);
+                }
+                Op::Search { group_by, .. } if *group_by == Some(SummaryGroup::Project) => *group_by = None,
+                Op::Aggregate { group_by, .. } if *group_by == Some(GroupBy::Project) => *group_by = None,
+                _ => {}
+            }
+        }
+    }
+    // The project slot is filled by the words outside the subject of a summary (user decision
+    // 2026-11-20): "AAA에 대해서 요약해줘" looks AAA up in every document, a project called AAA or not.
+    let topic = match plan.operations.as_slice() {
+        [Op::Summarize { topic: Some(topic), .. }] => Some(topic.clone()),
+        _ => None,
+    };
+    let place = if topic.is_some() { scope_words(text, plan) } else { super::rules::user_words(text) };
     if plan.scope.filter.project_id.is_none() && !named_documents && !super::validate::per_project(plan) {
-        if let Some(p) = project_named(text, ctx) {
+        if let Some(p) = project_named(&place, ctx) {
             plan.scope.filter.project_id = Some(p.id.clone());
             notes.push(PlanIssue::warn(
                 "scope.filter.project_id",
@@ -1245,9 +1917,112 @@ pub fn where_to_look(text: &str, plan: &mut Plan, ctx: &super::PlanContext, ko: 
             ));
         }
     }
+    if let Some(topic) = &topic {
+        let scoped = plan.scope.filter.project_id.as_deref();
+        if let Some(p) = project_of(topic, ctx).filter(|p| scoped != Some(p.id.as_str())) {
+            // The subject is also the name of a project: say which reading this is, and the other one.
+            notes.push(PlanIssue::warn(
+                "operations[0].topic",
+                "topic_names_project",
+                if ko {
+                    format!(
+                        "'{0}'은(는) 프로젝트 이름이기도 합니다. 지금은 문서에서 '{0}'에 관한 내용을 찾습니다. 그 프로젝트의 문서 전체를 요약하려면 \"{0} 프로젝트 요약해줘\"라고 하세요.",
+                        p.name
+                    )
+                } else {
+                    format!(
+                        "'{0}' is also the name of a project. This looks up what the documents say about '{0}'; for a summary of the project's documents say \"summarise the {0} project\".",
+                        p.name
+                    )
+                },
+            ));
+        } else if scoped.is_none() && !named_documents && ctx.scope_project.is_none() && said_a_project(&place) {
+            // A project the words name and the workspace does not have: said, not silently widened.
+            notes.push(PlanIssue::warn(
+                "scope.filter.project_id",
+                "project_not_found",
+                if ko {
+                    "문장이 말한 프로젝트를 찾지 못했습니다. 프로젝트로 좁히지 않고 찾습니다.".to_string()
+                } else {
+                    "the project the sentence names was not found; looking without a project".to_string()
+                },
+            ));
+        }
+    }
+    // The card names both slots: where the subject is looked up, when the sentence says so.
+    if let Some(topic) = &topic {
+        let project = plan.scope.filter.project_id.as_deref().and_then(|id| ctx.projects.iter().find(|p| p.id == id));
+        let opened = ctx.current_document.as_ref().is_some_and(|d| plan.scope.doc_ids == [d.clone()]);
+        let place = match (project, plan.scope.doc_ids.is_empty(), opened, ko) {
+            (Some(p), _, _, true) => Some(format!("'{}' 프로젝트에서", p.name)),
+            (Some(p), _, _, false) => Some(format!("the documents of the project '{}' say", p.name)),
+            (None, false, true, true) => Some("열린 문서에서".to_string()),
+            (None, false, true, false) => Some("the open document says".to_string()),
+            (None, false, false, true) => Some("선택한 문서에서".to_string()),
+            (None, false, false, false) => Some("the selected documents say".to_string()),
+            (None, true, _, _) => None,
+        };
+        if let Some(place) = place {
+            plan.summary = Some(if ko {
+                format!("{place} '{topic}'에 관한 내용을 찾아 요약합니다")
+            } else {
+                format!("Summarise what {place} about '{topic}'")
+            });
+        }
+    }
+    // "AA 프로젝트 요약해줘" (same decision): the project is what is summarised — one summary of all
+    // its documents next to each document's. Not when the words narrow it further (a type, a period,
+    // a kind) or ask for the documents one by one.
+    let only_the_project = {
+        let f = &plan.scope.filter;
+        plan.scope.doc_ids.is_empty()
+            && plan.scope.folder.is_none()
+            && f.doc_type.is_none()
+            && f.date_from.is_none()
+            && f.date_to.is_none()
+            && f.keyword.is_none()
+            && f.vendor.is_none()
+            && f.status.is_none()
+            && f.tags.is_empty()
+            && f.review_status.is_none()
+            && f.role.is_none()
+            && project_named(text, ctx).is_some_and(|p| f.project_id.as_deref() == Some(p.id.as_str()))
+    };
+    if only_the_project && !one_by_one(&super::rules::user_words(text)) {
+        if let [Op::Summarize { target, group_by: None | Some(SummaryGroup::None), topic: None, .. }] =
+            plan.operations.as_mut_slice()
+        {
+            *target = Some(super::SummarizeTarget::Set);
+            if let Some(p) = project_named(text, ctx) {
+                plan.summary = Some(if ko {
+                    format!("'{}' 프로젝트의 문서를 요약합니다", p.name)
+                } else {
+                    format!("Summarise the documents of the project '{}'", p.name)
+                });
+            }
+        }
+    }
     // (a project or a kind read from the sentence changes what the project scope covers)
     super::validate::project_reference(plan);
     notes
+}
+
+/// Whether the words name a project as such ("… 프로젝트의", "the … project") — not a split by
+/// project, and not the open one ("이 프로젝트", "현재 프로젝트").
+fn said_a_project(words: &str) -> bool {
+    let t = super::compact(words);
+    let pointed = ["이프로젝트", "현재프로젝트", "지금프로젝트", "열린프로젝트", "thisproject", "currentproject"];
+    (t.contains("프로젝트") || t.contains("project"))
+        && split_of(words) != Some(SplitBy::Project)
+        && !pointed.iter().any(|w| t.contains(w))
+}
+
+/// Whether the words ask for the documents one by one ("문서별로", "각각", "하나씩").
+fn one_by_one(words: &str) -> bool {
+    split_of(words) == Some(SplitBy::Document)
+        || ["각각", "하나씩", "따로따로", "one by one", "each document", "separately"]
+            .iter()
+            .any(|w| words.to_lowercase().contains(w))
 }
 
 /// Checks a model plan against the sentence it was made from (0.8.0 plan §1.3 / §1.5). Anything
@@ -1353,7 +2128,12 @@ mod tests {
     #[test]
     fn a_library_wide_summary_of_a_pasted_text_becomes_a_text_only_answer() {
         let text = format!("다음 문장을 다듬어 정리해줘: {BODY}");
-        let mut plan = kb_plan(Op::Summarize { target: Some(SummarizeTarget::EachDoc), length: None, group_by: None });
+        let mut plan = kb_plan(Op::Summarize {
+            target: Some(SummarizeTarget::EachDoc),
+            length: None,
+            group_by: None,
+            topic: None,
+        });
         let note = prefer_text_only_answer(&text, &mut plan, true).expect("re-targeted");
         assert_eq!(note.code, "text_only_answer");
         assert!(!note.blocking);
@@ -1367,19 +2147,24 @@ mod tests {
     #[test]
     fn explicit_scopes_and_non_knowledge_ops_are_left_alone() {
         let text = format!("다음 문장을 다듬어 정리해줘: {BODY}");
-        let mut scoped = kb_plan(Op::Summarize { target: None, length: None, group_by: None });
+        let mut scoped = kb_plan(Op::Summarize { target: None, length: None, group_by: None, topic: None });
         scoped.scope.folder = Some("documents/2026".into());
         assert!(prefer_text_only_answer(&text, &mut scoped, true).is_none());
         let mut validate = kb_plan(Op::Validate {});
         assert!(prefer_text_only_answer(&text, &mut validate, true).is_none());
-        let mut plain = kb_plan(Op::Summarize { target: None, length: None, group_by: None });
+        let mut plain = kb_plan(Op::Summarize { target: None, length: None, group_by: None, topic: None });
         assert!(prefer_text_only_answer("지난달 계약서 요약해줘", &mut plain, true).is_none());
         // Documents the plan names are a scope too: the "text" is an instruction about them.
-        let mut selected = kb_plan(Op::Summarize { target: None, length: None, group_by: None });
+        let mut selected = kb_plan(Op::Summarize { target: None, length: None, group_by: None, topic: None });
         selected.scope.doc_ids = vec!["d1".into()];
         assert!(prefer_text_only_answer(&text, &mut selected, true).is_none());
         // A date range the resolver filled from "12월말" inside the body is not an explicit scope.
-        let mut dated = kb_plan(Op::Summarize { target: Some(SummarizeTarget::EachDoc), length: None, group_by: None });
+        let mut dated = kb_plan(Op::Summarize {
+            target: Some(SummarizeTarget::EachDoc),
+            length: None,
+            group_by: None,
+            topic: None,
+        });
         dated.scope.filter.date_from = Some("2025-12-01".into());
         dated.scope.filter.date_to = Some("2025-12-31".into());
         assert!(prefer_text_only_answer(&text, &mut dated, true).is_some());
@@ -1408,20 +2193,28 @@ mod tests {
     fn plans_the_real_model_wrote_are_caught_or_repaired() {
         use serde_json::json;
         // "담당자별" came back grouped by folder and ran: the guess is taken out and the split reported.
-        let mut p =
-            model_plan(vec![Op::Summarize { target: None, length: None, group_by: Some(SummaryGroup::Folder) }]);
+        let mut p = model_plan(vec![Op::Summarize {
+            target: None,
+            length: None,
+            group_by: Some(SummaryGroup::Folder),
+            topic: None,
+        }]);
         assert_eq!(codes("견적서를 담당자별로 요약해줘", &mut p), vec!["grouping_dropped"]);
         assert!(p.requires_confirmation && p.unmet.is_some());
         assert!(matches!(&p.operations[0], Op::Summarize { group_by: None, .. }));
         // A grouping other than the one the sentence names is replaced by the sentence's.
-        let mut p =
-            model_plan(vec![Op::Summarize { target: None, length: None, group_by: Some(SummaryGroup::Folder) }]);
+        let mut p = model_plan(vec![Op::Summarize {
+            target: None,
+            length: None,
+            group_by: Some(SummaryGroup::Folder),
+            topic: None,
+        }]);
         assert!(codes("프로젝트별로 요약해줘", &mut p).is_empty());
         assert!(matches!(&p.operations[0], Op::Summarize { group_by: Some(SummaryGroup::Project), .. }));
         // The split belongs to the filing step: the summary is left alone.
         let mut p = model_plan(vec![
             Op::Move { folder: "documents/{{doc_type}}".into(), group_by: Some(GroupBy::DocType), only_reviewed: None },
-            Op::Summarize { target: None, length: None, group_by: Some(SummaryGroup::DocType) },
+            Op::Summarize { target: None, length: None, group_by: Some(SummaryGroup::DocType), topic: None },
         ]);
         assert!(codes("담당자별 폴더로 옮기고 유형별로 요약해줘", &mut p).is_empty());
 
@@ -1478,7 +2271,8 @@ mod tests {
             ..Default::default()
         };
         let scale = || Op::SetSetting { key: "ui.scale_percent".into(), value: json!(130) };
-        let summarize = || Op::Summarize { target: Some(SummarizeTarget::EachDoc), length: None, group_by: None };
+        let summarize =
+            || Op::Summarize { target: Some(SummarizeTarget::EachDoc), length: None, group_by: None, topic: None };
         let mut p = model_plan(vec![scale(), summarize()]);
         let note = type_filter_repair("배율 130으로 바꾸고 견적서 요약해줘", &mut p, &ctx, true).expect("repaired");
         assert_eq!(note.code, "scope_filled");
@@ -1503,6 +2297,598 @@ mod tests {
         assert!(type_filter_repair("견적서가 뭐야?", &mut p, &ctx, true).is_none());
     }
 
+    fn topic_ctx() -> crate::planner::PlanContext {
+        let ty = |slug: &str, ko: &str, en: &str| crate::planner::DocTypeSummary {
+            slug: slug.into(),
+            label_ko: ko.into(),
+            label_en: en.into(),
+        };
+        crate::planner::PlanContext {
+            projects: vec![
+                crate::planner::ProjectSummary {
+                    id: "p-hanbit".into(),
+                    name: "한빛 납품".into(),
+                    status: "active".into(),
+                },
+                crate::planner::ProjectSummary { id: "p-aaa".into(), name: "AAA".into(), status: "active".into() },
+            ],
+            doc_types: vec![
+                ty("srs", "요구사항 정의서", "Software requirements specification"),
+                ty("dev_contract", "소프트웨어 개발 계약서", "Software development contract"),
+                ty("acceptance", "검수확인서", "Acceptance certificate"),
+                ty("estimate", "견적서", "Estimate"),
+            ],
+            ..Default::default()
+        }
+    }
+
+    /// 1.0.2: the subject a sentence names, and the sentence without the phrase that names it.
+    #[test]
+    fn the_subject_of_a_sentence() {
+        let of = |text: &str| about(text).map(|a| (a.subject, a.rest));
+        let some = |subject: &str, rest: &str| Some((subject.to_string(), rest.to_string()));
+        assert_eq!(of("AA에 대해서 요약해줘"), some("AA", "요약해줘"));
+        assert_eq!(of("납품 기한에 대해 요약해줘"), some("납품 기한", "요약해줘"));
+        assert_eq!(of("보안 요구사항에 관해서 정리해줘"), some("보안 요구사항", "정리해줘"));
+        assert_eq!(of("지체상금에 대한 내용을 요약해줘"), some("지체상금", "내용을 요약해줘"));
+        assert_eq!(of("하자보수 관련 내용을 요약해줘"), some("하자보수", "을 요약해줘"));
+        assert_eq!(of("보안 관련 요약"), some("보안", "요약"));
+        assert_eq!(of("개인정보와 관련된 조항을 알려줘"), some("개인정보", "조항을 알려줘"));
+        // Where to look stands in front of the subject and stays in the rest.
+        assert_eq!(
+            of("한빛 납품 프로젝트에서 검수 기준에 대해 요약해줘"),
+            some("검수 기준", "한빛 납품 프로젝트에서 요약해줘")
+        );
+        assert_eq!(of("AAA 프로젝트의 일정에 대해 알려줘"), some("일정", "AAA 프로젝트의 알려줘"));
+        assert_eq!(of("프로젝트별로 지체상금에 대해 요약해줘"), some("지체상금", "프로젝트별로 요약해줘"));
+        assert_eq!(of("자세히 계약 금액에 대해 요약해줘"), some("계약 금액", "자세히 요약해줘"));
+        assert_eq!(of("계약 금액에 대해 자세히 요약해줘"), some("계약 금액", "자세히 요약해줘"));
+        assert_eq!(
+            of("summarise what the documents say about late fees."),
+            some("late fees", "summarise what the documents say")
+        );
+        assert_eq!(
+            of("Summarize about security requirements in the Hanbit project"),
+            some("security requirements", "Summarize in the Hanbit project")
+        );
+        // Words that point at something are where to look, not a subject; a project named as such too.
+        for text in [
+            "이 문서에 대해 요약해줘",
+            "그것에 대해 더 알려줘",
+            "위 내용에 대해 요약해줘",
+            "선택한 문서에 대해 요약해줘",
+            "이 프로젝트에 대해 요약해줘",
+            "AAA 프로젝트에 대해 요약해줘",
+            "참고 자료에 대해 요약해줘",
+            "문서에 대해 요약해줘",
+            "summarise about this document",
+            "tell me about it",
+            "요약해줘",
+            "관련자 명단 요약해줘",
+        ] {
+            assert_eq!(of(text), None, "{text}");
+        }
+        // A sentence that brings its own text names no subject to look up.
+        let pasted = format!("다음 글을 요약해줘: {}", "계약 해지에 대한 조항은 다음과 같다. ".repeat(6));
+        assert_eq!(of(&pasted), None);
+
+        // The subject of a summary: the request to summarise stands outside the phrase, and a kind of
+        // document is not a subject.
+        let ctx = topic_ctx();
+        let topic = |text: &str| summary_topic(text, &ctx).map(|a| a.subject);
+        assert_eq!(topic("AA에 대해서 요약해줘").as_deref(), Some("AA"));
+        assert_eq!(topic("보안 요구사항에 대해 요약해줘").as_deref(), Some("보안 요구사항"));
+        assert_eq!(topic("AA에 대해 알려줘"), None);
+        assert_eq!(topic("요약에 대해 알려줘"), None);
+        // A summary to make — not one that exists already.
+        for text in
+            ["AA에 대해 요약 좀 해줘", "AA에 대해서 요약 부탁해", "AA 관련 요약", "AA에 관해 간단히 요약해 주세요"]
+        {
+            assert_eq!(topic(text).as_deref(), Some("AA"), "{text}");
+        }
+        for text in ["지난 회의에 대한 요약본 찾아줘", "AA에 관한 요약 보고서 열어줘", "AA에 대해 요약된 문서 보여줘"]
+        {
+            assert_eq!(topic(text), None, "{text}");
+        }
+        assert_eq!(topic("견적서에 대해 요약해줘"), None, "the estimates are summarised");
+        assert_eq!(topic("계약서들에 대해서 요약해줘"), None);
+    }
+
+    /// 1.0.2 — "AA에 대해서 요약해줘 … 요약만 하고 AA에 대한 내용을 수집하지 않음" (user report
+    /// 2026-11-19). The six plans Gemma 4 E4B wrote for such sentences (eval run of that day): a
+    /// plain `summarize` each time — per document, per project, or of one document type its words
+    /// took from the subject — and none of it about the subject.
+    #[test]
+    fn a_summary_about_a_subject_is_a_summary_of_that_subject() {
+        let ctx = topic_ctx();
+        let plain = |target, group_by| Op::Summarize { target, length: None, group_by, topic: None };
+        let run = |text: &str, mut p: Plan| {
+            let mut notes: Vec<String> = Vec::new();
+            notes.extend(summary_about(text, &mut p, &ctx, true).into_iter().map(|i| i.code));
+            notes.extend(type_filter_repair(text, &mut p, &ctx, true).into_iter().map(|i| i.code));
+            notes.extend(where_to_look(text, &mut p, &ctx, true).into_iter().map(|i| i.code));
+            (p, notes)
+        };
+        let topic_of = |p: &Plan| match p.operations.as_slice() {
+            [Op::Summarize { topic, target: Some(SummarizeTarget::Set), group_by: None, .. }] => topic.clone(),
+            other => panic!("{other:?}"),
+        };
+        // t-1: every document of the library, one by one.
+        let (p, notes) = run("AA에 대해서 요약해줘", model_plan(vec![plain(Some(SummarizeTarget::EachDoc), None)]));
+        assert_eq!(topic_of(&p).as_deref(), Some("AA"));
+        assert!(p.scope.is_empty() && !p.requires_confirmation, "{p:?}");
+        assert_eq!(notes, vec!["summary_topic"]);
+        assert_eq!(p.summary.as_deref(), Some("'AA'에 관한 내용을 문서에서 찾아 요약합니다"));
+        // t-2: one summary per project of the library. The subject is content even when a project is
+        // called so (user decision 2026-11-20): AAA is looked up in every document, and the card says
+        // how to ask for the project instead.
+        let (p, notes) = run("AAA에 대해서 요약해줘", model_plan(vec![plain(None, Some(SummaryGroup::Project))]));
+        assert_eq!(topic_of(&p).as_deref(), Some("AAA"));
+        assert!(p.scope.is_empty() && !p.requires_confirmation, "{p:?}");
+        assert_eq!(notes, vec!["summary_topic", "topic_names_project"]);
+        // t-4: "요구사항" is part of the subject — no document type is named.
+        let (p, notes) = run("보안 요구사항에 대해 요약해줘", model_plan(vec![plain(None, Some(SummaryGroup::None))]));
+        assert_eq!(topic_of(&p).as_deref(), Some("보안 요구사항"));
+        assert!(p.scope.is_empty(), "{:?}", p.scope);
+        assert_eq!(notes, vec!["summary_topic"]);
+        // t-5: the type the model took from the subject goes; the project the sentence names is the scope.
+        let mut typed = model_plan(vec![plain(None, Some(SummaryGroup::Project))]);
+        typed.scope.filter.doc_type = Some("acceptance".into());
+        let (p, _) = run("한빛 납품 프로젝트에서 검수 기준에 대해 요약해줘", typed);
+        assert_eq!(topic_of(&p).as_deref(), Some("검수 기준"));
+        assert_eq!(
+            (p.scope.filter.doc_type.as_deref(), p.scope.filter.project_id.as_deref()),
+            (None, Some("p-hanbit"))
+        );
+        // A type named outside the subject is where to look.
+        let (p, notes) = run("계약서에서 지체상금에 대해 요약해줘", model_plan(vec![plain(None, None)]));
+        assert_eq!(topic_of(&p).as_deref(), Some("지체상금"));
+        assert_eq!(p.scope.filter.doc_type.as_deref(), Some("dev_contract"));
+        assert_eq!(notes, vec!["summary_topic", "scope_filled"]);
+        // A file-name keyword that is the subject is not a filter; the length asked for stays.
+        let mut keyed = model_plan(vec![Op::Summarize {
+            target: None,
+            length: Some(crate::planner::SummaryLength::Long),
+            group_by: None,
+            topic: None,
+        }]);
+        keyed.scope.filter.keyword = Some("하자보수".into());
+        let (p, _) = run("하자보수 관련 내용을 자세히 요약해줘", keyed);
+        assert!(p.scope.is_empty(), "{:?}", p.scope);
+        assert!(
+            matches!(&p.operations[0], Op::Summarize { length: Some(crate::planner::SummaryLength::Long), topic: Some(t), .. } if t == "하자보수")
+        );
+
+        // The model's own answer, search or question back for such a sentence becomes the same step.
+        let answer = Op::Answer {
+            question: "AA에 대해서 요약해줘".into(),
+            cite: None,
+            knowledge: Some(false),
+            mode: None,
+            reply: None,
+        };
+        let search = Op::Search { query: "AA".into(), mode: None, top_k: None, group_by: None };
+        for op in [answer, search] {
+            let (p, _) = run("AA에 대해서 요약해줘", model_plan(vec![op]));
+            assert_eq!(topic_of(&p).as_deref(), Some("AA"));
+        }
+        let mut asked = Plan::clarify("어떤 문서를 요약할까요?".to_string(), 0.4);
+        assert_eq!(
+            summary_about("AA에 대해서 요약해줘", &mut asked, &ctx, true).map(|i| i.code).as_deref(),
+            Some("summary_topic")
+        );
+        assert!(
+            !asked.is_clarification()
+                && asked.clarification_question.is_none()
+                && asked.confidence >= crate::planner::MIN_CONFIDENCE
+        );
+        assert_eq!(topic_of(&asked).as_deref(), Some("AA"));
+
+        // Left as planned: a summary without a subject, a kind of document, what the words only point
+        // at, a plan that does more than read, a pasted text.
+        for text in ["요약해줘", "견적서에 대해 요약해줘", "계약서 내용에 대해 요약해줘", "이 문서에 대해 요약해줘"]
+        {
+            let mut p = model_plan(vec![plain(None, None)]);
+            assert!(summary_about(text, &mut p, &ctx, true).is_none(), "{text}");
+            assert!(matches!(&p.operations[0], Op::Summarize { topic: None, target: None, .. }), "{text}");
+        }
+        let mut two = model_plan(vec![plain(None, None), Op::Tag { add: vec!["확인".into()], remove: vec![] }]);
+        assert!(summary_about("AA에 대해서 요약하고 확인 태그 붙여줘", &mut two, &ctx, true).is_none());
+        assert_eq!(two.operations.len(), 2);
+
+        // "AA에 대해 알려줘" planned as an answer that looks nothing up is answered from the documents
+        // (a `general` answer does look documents up, and stays).
+        let nothing = |knowledge, mode| Op::Answer {
+            question: "AA에 대해 알려줘".into(),
+            cite: None,
+            knowledge,
+            mode,
+            reply: None,
+        };
+        let mut p = model_plan(vec![nothing(Some(false), None)]);
+        assert!(document_question("AA에 대해 알려줘", &mut p, &ctx));
+        assert!(matches!(&p.operations[0], Op::Answer { knowledge: None, mode: None, .. }));
+        let mut p = model_plan(vec![nothing(None, Some(crate::planner::AnswerMode::General))]);
+        assert!(!document_question("AA에 대해 알려줘", &mut p, &ctx));
+        let mut p = model_plan(vec![nothing(Some(false), None)]);
+        assert!(
+            !document_question("안녕하세요를 영어로 번역해줘", &mut p, &ctx),
+            "the phrase to translate is in the sentence"
+        );
+    }
+
+    /// 1.0.2 — with `topic` in its op table Gemma 4 E4B writes the subject itself (eval run of
+    /// 2026-11-19, six of six), and not always the one the sentence names: "AA에 대해서 요약해줘" came
+    /// back as `topic: "AAA"` (a project of the context), and "한빛 납품 프로젝트에서 검수 기준에 대해
+    /// 요약해줘" with the document type `acceptance` that only the subject's words name.
+    #[test]
+    fn a_subject_the_model_wrote_is_one_the_sentence_names() {
+        let mut ctx = topic_ctx();
+        ctx.doc_types.push(crate::planner::DocTypeSummary {
+            slug: "meeting_minutes".into(),
+            label_ko: "회의록".into(),
+            label_en: "Meeting minutes".into(),
+        });
+        let about =
+            |topic: &str| Op::Summarize { target: None, length: None, group_by: None, topic: Some(topic.into()) };
+        let run = |text: &str, mut p: Plan, ctx: &crate::planner::PlanContext| {
+            let mut notes: Vec<String> = Vec::new();
+            notes.extend(summary_about(text, &mut p, ctx, true).into_iter().map(|i| i.code));
+            notes.extend(type_filter_repair(text, &mut p, ctx, true).into_iter().map(|i| i.code));
+            notes.extend(where_to_look(text, &mut p, ctx, true).into_iter().map(|i| i.code));
+            (p, notes)
+        };
+        let topic_of = |p: &Plan| match p.operations.as_slice() {
+            [Op::Summarize { topic, .. }] => topic.clone(),
+            other => panic!("{other:?}"),
+        };
+        // The name of a project the user did not write: the subject is what the sentence says.
+        let (p, notes) = run("AA에 대해서 요약해줘", model_plan(vec![about("AAA")]), &ctx);
+        assert_eq!(topic_of(&p).as_deref(), Some("AA"));
+        assert!(p.scope.is_empty(), "{:?}", p.scope);
+        assert_eq!(notes, vec!["summary_topic"]);
+        // A name alone is content, whatever is called so: no project scope, and the card says how to
+        // ask for the project (user decision 2026-11-20).
+        for op in [
+            about("AAA"),
+            Op::Summarize { target: None, length: None, group_by: Some(SummaryGroup::Project), topic: None },
+        ] {
+            let (p, notes) = run("AAA에 대해서 요약해줘", model_plan(vec![op]), &ctx);
+            assert_eq!(topic_of(&p).as_deref(), Some("AAA"));
+            assert!(p.scope.is_empty(), "{:?}", p.scope);
+            assert_eq!(notes.last().map(String::as_str), Some("topic_names_project"), "{notes:?}");
+        }
+        // The project slot alone — the word "프로젝트" names it: one summary of its documents, no topic.
+        for text in ["AAA 프로젝트에 대해 요약해줘", "AAA 프로젝트에 관해서 요약해줘"] {
+            for op in [
+                about("AAA"),
+                Op::Summarize { target: None, length: None, group_by: Some(SummaryGroup::Project), topic: None },
+            ] {
+                let (p, notes) = run(text, model_plan(vec![op]), &ctx);
+                assert!(
+                    matches!(
+                        p.operations.as_slice(),
+                        [Op::Summarize { topic: None, target: Some(SummarizeTarget::Set), group_by: None, .. }]
+                    ),
+                    "{text}: {p:?}"
+                );
+                assert_eq!(p.scope.filter.project_id.as_deref(), Some("p-aaa"), "{text}");
+                assert_eq!(notes, vec!["scope_filled"], "{text}");
+            }
+        }
+        // Without the marker ("AAA 프로젝트 요약해줘" came back as `group_by: project` + `topic: "AAA"`
+        // with an empty scope): before the validator the topic goes, and the split nobody asked for
+        // becomes the one summary of the project the sentence names.
+        let mut split = model_plan(vec![Op::Summarize {
+            target: None,
+            length: None,
+            group_by: Some(SummaryGroup::Project),
+            topic: Some("AAA".into()),
+        }]);
+        unsaid_topic("AAA 프로젝트 요약해줘", &mut split, &ctx);
+        let (p, notes) = run("AAA 프로젝트 요약해줘", split, &ctx);
+        assert!(
+            matches!(
+                p.operations.as_slice(),
+                [Op::Summarize { topic: None, target: Some(SummarizeTarget::Set), group_by: None, .. }]
+            ),
+            "{p:?}"
+        );
+        assert_eq!(p.scope.filter.project_id.as_deref(), Some("p-aaa"));
+        assert_eq!(notes, vec!["scope_filled"]);
+        // (a split the sentence asks for stays: one summary per project of the library)
+        let per_project = model_plan(vec![Op::Summarize {
+            target: None,
+            length: None,
+            group_by: Some(SummaryGroup::Project),
+            topic: None,
+        }]);
+        let (p, _) = run("프로젝트별로 요약해줘", per_project.clone(), &ctx);
+        assert!(matches!(p.operations.as_slice(), [Op::Summarize { group_by: Some(SummaryGroup::Project), .. }]));
+        assert_eq!(p.scope.filter.project_id, None);
+        let (p, _) = run("AAA 프로젝트와 한빛 납품 프로젝트를 프로젝트별로 요약해줘", per_project, &ctx);
+        assert!(matches!(p.operations.as_slice(), [Op::Summarize { group_by: Some(SummaryGroup::Project), .. }]));
+        // The project named as the place and its name as the subject: a subject like any other.
+        for op in [about("AAA"), Op::Summarize { target: None, length: None, group_by: None, topic: None }] {
+            let (p, _) = run("AAA 프로젝트에서 AAA에 대해 요약해줘", model_plan(vec![op]), &ctx);
+            assert_eq!(topic_of(&p).as_deref(), Some("AAA"));
+            assert_eq!(p.scope.filter.project_id.as_deref(), Some("p-aaa"));
+        }
+        // (a summary the model already scoped to the project: one summary of it, nothing else to say)
+        let mut scoped = model_plan(vec![Op::Summarize { target: None, length: None, group_by: None, topic: None }]);
+        scoped.scope.filter.project_id = Some("p-aaa".into());
+        let (p, notes) = run("AAA 프로젝트에 대해 요약해줘", scoped, &ctx);
+        assert!(matches!(
+            p.operations.as_slice(),
+            [Op::Summarize { topic: None, target: Some(SummarizeTarget::Set), .. }]
+        ));
+        assert!(notes.is_empty(), "{notes:?}");
+        // The subject as the sentence has it stays, and the type its words name is no place to look.
+        let mut typed = model_plan(vec![about("검수 기준")]);
+        typed.scope.filter.doc_type = Some("acceptance".into());
+        let (p, notes) = run("한빛 납품 프로젝트에서 검수 기준에 대해 요약해줘", typed, &ctx);
+        assert_eq!(topic_of(&p).as_deref(), Some("검수 기준"));
+        assert_eq!(
+            (p.scope.filter.doc_type.as_deref(), p.scope.filter.project_id.as_deref()),
+            (None, Some("p-hanbit"))
+        );
+        assert_eq!(notes, vec!["scope_filled"]);
+        // A part of the phrase before the marker: the model's reading of what is the subject and
+        // what is the place stays, with the type the words outside its subject name.
+        let mut minutes = model_plan(vec![about("보안")]);
+        minutes.scope.filter.doc_type = Some("meeting_minutes".into());
+        let (p, notes) = run("3월 회의록 보안에 대해 요약해줘", minutes, &ctx);
+        assert_eq!(topic_of(&p).as_deref(), Some("보안"));
+        assert_eq!(p.scope.filter.doc_type.as_deref(), Some("meeting_minutes"));
+        assert!(notes.is_empty(), "{notes:?}");
+        assert_eq!(
+            p.summary.as_deref(),
+            Some("'보안'에 관한 내용을 문서에서 찾아 요약합니다"),
+            "the card says the same"
+        );
+        // How long is read from the words outside the subject when the plan does not say.
+        let (p, _) = run("계약서에서 지체상금에 대해 자세히 요약해줘", model_plan(vec![about("지체상금")]), &ctx);
+        assert!(
+            matches!(&p.operations[0], Op::Summarize { length: Some(crate::planner::SummaryLength::Long), topic: Some(t), .. } if t == "지체상금"),
+            "{p:?}"
+        );
+        assert_eq!(p.scope.filter.doc_type.as_deref(), Some("dev_contract"));
+        let (p, _) = run("상세 설계에 대해 요약해줘", model_plan(vec![about("상세 설계")]), &ctx);
+        assert!(
+            matches!(&p.operations[0], Op::Summarize { length: None, .. }),
+            "the subject's words say nothing of the length"
+        );
+        // A split the sentence asks for cannot be made of a summary about a subject: said, and confirmed.
+        let (mut p, _) = run("프로젝트별로 지체상금에 대해 요약해줘", model_plan(vec![about("지체상금")]), &ctx);
+        let notes: Vec<String> = contract_checks("프로젝트별로 지체상금에 대해 요약해줘", &mut p, true)
+            .into_iter()
+            .map(|i| i.code)
+            .collect();
+        assert_eq!(notes, vec!["grouping_dropped"]);
+        assert!(p.requires_confirmation && p.unmet.is_some(), "{p:?}");
+        assert!(
+            matches!(p.operations.as_slice(), [Op::Summarize { group_by: None, topic: Some(t), .. }] if t == "지체상금")
+        );
+        let (mut p, _) = run("지체상금에 대해 요약해줘", model_plan(vec![about("지체상금")]), &ctx);
+        assert!(contract_checks("지체상금에 대해 요약해줘", &mut p, true).is_empty() && !p.requires_confirmation);
+        // More than the subject, or other words: the subject of the sentence.
+        for written in ["AA에 대해서", "AA 시스템", "AA에 대해서 요약"] {
+            let (p, notes) = run("AA에 대해서 요약해줘", model_plan(vec![about(written)]), &ctx);
+            assert_eq!(topic_of(&p).as_deref(), Some("AA"), "{written}");
+            assert_eq!(notes, vec!["summary_topic"], "{written}");
+        }
+        // A sentence without the marker: a subject its words carry stays …
+        let (p, notes) = run("지체상금 요약해줘", model_plan(vec![about("지체상금")]), &ctx);
+        assert_eq!(topic_of(&p).as_deref(), Some("지체상금"));
+        assert!(notes.is_empty() && p.scope.is_empty(), "{notes:?} {:?}", p.scope);
+        // … and a subject nobody named is dropped: the summary the sentence asks.
+        for (text, written) in [
+            ("이 문서 요약해줘", "문서 내용"),
+            ("이 문서 요약해줘", "이 문서"),
+            ("요약해줘", "프로젝트 현황"),
+            ("견적서 요약해줘", "견적서"),
+            ("견적서에 대해 요약해줘", "견적서"),
+            ("이 문서에 대해 요약해줘", "문서"),
+        ] {
+            let mut p = model_plan(vec![about(written)]);
+            assert!(summary_about(text, &mut p, &ctx, true).is_none(), "{text}");
+            assert_eq!(topic_of(&p), None, "{text} / {written}");
+        }
+        // Before the validator the same holds (`unsaid_topic`): what it then sees is the summary the
+        // sentence asks — the target and the grouping of a plain summary stay as the model wrote them,
+        // and a grouping written next to a subject nobody asked to split goes without a word.
+        for (text, written, settled) in [
+            ("견적서에 대해 요약해줘", "견적서", None),
+            ("AAA 프로젝트에 대해 요약해줘", "AAA", None),
+            ("AAA에 대해서 요약해줘", "AAA", Some("AAA")),
+            ("AA 프로젝트의 지체상금 내용에 대해 요약해줘", "지체상금 내용", Some("지체상금")),
+            ("이 문서 요약해줘", "문서 내용", None),
+            ("AA에 대해서 요약해줘", "AAA", Some("AA")),
+            ("AA에 대해서 요약해줘", "AA", Some("AA")),
+            ("지체상금 요약해줘", "지체상금", Some("지체상금")),
+        ] {
+            let mut p = model_plan(vec![Op::Summarize {
+                target: None,
+                length: None,
+                group_by: Some(SummaryGroup::Project),
+                topic: Some(written.into()),
+            }]);
+            unsaid_topic(text, &mut p, &ctx);
+            let grouping = if settled.is_some() { None } else { Some(SummaryGroup::Project) };
+            assert!(
+                matches!(&p.operations[0], Op::Summarize { target: None, group_by, topic, .. } if topic.as_deref() == settled && *group_by == grouping),
+                "{text} / {written}: {p:?}"
+            );
+        }
+        // (a split the sentence does ask for is left for the checks to report)
+        let mut p = model_plan(vec![Op::Summarize {
+            target: None,
+            length: None,
+            group_by: Some(SummaryGroup::Project),
+            topic: Some("지체상금".into()),
+        }]);
+        unsaid_topic("프로젝트별로 지체상금에 대해 요약해줘", &mut p, &ctx);
+        assert!(matches!(
+            &p.operations[0],
+            Op::Summarize { group_by: Some(SummaryGroup::Project), topic: Some(_), .. }
+        ));
+        // What is open is where to look when the words point at it.
+        ctx.current_document = Some("d-open".into());
+        for plan in [
+            model_plan(vec![about("지체상금")]),
+            model_plan(vec![Op::Summarize { target: None, length: None, group_by: None, topic: None }]),
+        ] {
+            let (p, _) = run("이 문서에서 지체상금에 대해 요약해줘", plan, &ctx);
+            assert_eq!(topic_of(&p).as_deref(), Some("지체상금"));
+            assert_eq!(p.scope.doc_ids, vec!["d-open".to_string()]);
+        }
+        let (p, _) = run("지체상금에 대해 요약해줘", model_plan(vec![about("지체상금")]), &ctx);
+        assert!(p.scope.is_empty(), "an open document is not the scope unless the words point at it: {:?}", p.scope);
+    }
+
+    /// 1.0.2, user decision 2026-11-20 — two slots, each filled by what the sentence says:
+    /// "AA 프로젝트의 BB 내용에 대해 요약 혹은 설명" is BB inside the project AA (its work documents and
+    /// its reference material), "BB에 대해서 요약" is BB in every document, "현재 문서에서 BB 내용에
+    /// 대해서 요약" is BB inside the open document, "AA 프로젝트 요약" is all the documents of AA.
+    #[test]
+    fn the_project_slot_and_the_content_slot() {
+        let mut ctx = topic_ctx();
+        let of = |text: &str, ctx: &crate::planner::PlanContext| summary_topic(text, ctx).map(|a| (a.subject, a.rest));
+        let some = |subject: &str, rest: &str| Some((subject.to_string(), rest.to_string()));
+        // The content: "내용" after the subject is not a part of it.
+        assert_eq!(of("지체상금 내용에 대해서 요약해줘", &ctx), some("지체상금", "요약해줘"));
+        assert_eq!(
+            of("AAA 프로젝트의 지체상금 내용에 대해 요약해줘", &ctx),
+            some("지체상금", "AAA 프로젝트의 요약해줘")
+        );
+        assert_eq!(
+            of("현재 문서에서 지체상금 내용에 대해서 요약해줘", &ctx),
+            some("지체상금", "현재 문서에서 요약해줘")
+        );
+        // A project in front of the subject is the place.
+        assert_eq!(of("AAA 프로젝트 일정에 대해 요약해줘", &ctx), some("일정", "AAA 프로젝트 요약해줘"));
+        assert_eq!(of("한빛 납품의 검수 기준에 대해 요약해줘", &ctx), some("검수 기준", "한빛 납품의 요약해줘"));
+        assert_eq!(of("AAA 프로젝트 내 일정에 대해 요약해줘", &ctx), some("일정", "AAA 프로젝트 내 요약해줘"));
+        // An explanation of a subject is this step when the sentence says where to look.
+        assert_eq!(
+            of("AAA 프로젝트의 지체상금 내용에 대해 설명해줘", &ctx),
+            some("지체상금", "AAA 프로젝트의 설명해줘")
+        );
+        assert_eq!(of("이 문서에서 지체상금에 대해 설명해줘", &ctx), some("지체상금", "이 문서에서 설명해줘"));
+        assert_eq!(of("지체상금에 대해 설명해줘", &ctx), None, "a question: may be answered from general knowledge");
+        assert_eq!(of("AAA 프로젝트의 지체상금에 대한 설명서 찾아줘", &ctx), None);
+        // "All of it, in short" is no subject: the summary of the place itself.
+        for text in [
+            "AAA 프로젝트의 주요 내용에 대해 요약해줘",
+            "AAA 프로젝트의 전체 내용에 대해 요약해줘",
+            "AAA 프로젝트의 핵심에 대해 요약해줘",
+            "이 문서의 전반적인 내용에 대해 설명해줘",
+        ] {
+            assert_eq!(of(text, &ctx), None, "{text}");
+        }
+        // The project named as the subject is the project slot, not content; a name alone is content.
+        assert_eq!(of("AAA 프로젝트에 대해 요약해줘", &ctx), None);
+        assert_eq!(summary_project("AAA 프로젝트에 대해 요약해줘", &ctx).map(|(p, _)| p.id.as_str()), Some("p-aaa"));
+        assert_eq!(of("AAA에 대해서 요약해줘", &ctx), some("AAA", "요약해줘"));
+        assert!(summary_project("AAA에 대해서 요약해줘", &ctx).is_none());
+
+        let run = |text: &str, mut p: Plan, ctx: &crate::planner::PlanContext| {
+            let mut notes: Vec<String> = Vec::new();
+            unsaid_topic(text, &mut p, ctx);
+            notes.extend(summary_about(text, &mut p, ctx, true).into_iter().map(|i| i.code));
+            notes.extend(type_filter_repair(text, &mut p, ctx, true).into_iter().map(|i| i.code));
+            notes.extend(where_to_look(text, &mut p, ctx, true).into_iter().map(|i| i.code));
+            (p, notes)
+        };
+        let plain = || Op::Summarize { target: None, length: None, group_by: None, topic: None };
+        let about =
+            |topic: &str| Op::Summarize { target: None, length: None, group_by: None, topic: Some(topic.into()) };
+        let answer = |q: &str| Op::Answer { question: q.into(), cite: None, knowledge: None, mode: None, reply: None };
+        let slots = |p: &Plan| match p.operations.as_slice() {
+            [Op::Summarize { topic, .. }] => (p.scope.filter.project_id.clone(), topic.clone()),
+            other => panic!("{other:?}"),
+        };
+        let both =
+            |project: Option<&str>, topic: Option<&str>| (project.map(str::to_string), topic.map(str::to_string));
+
+        // 1. Both slots: the content inside the project — its work documents and its reference material.
+        for text in ["AAA 프로젝트의 지체상금 내용에 대해 요약해줘", "AAA 프로젝트의 지체상금 내용에 대해 설명해줘"]
+        {
+            for op in [plain(), about("지체상금"), about("지체상금 내용"), about("AAA"), answer(text)] {
+                let (p, _) = run(text, model_plan(vec![op]), &ctx);
+                assert_eq!(slots(&p), both(Some("p-aaa"), Some("지체상금")), "{text}");
+                assert!(p.scope.filter.with_reference && !p.requires_confirmation, "{text}: {p:?}");
+            }
+        }
+        let (p, _) = run("AAA 프로젝트의 지체상금 내용에 대해 요약해줘", model_plan(vec![plain()]), &ctx);
+        assert_eq!(p.summary.as_deref(), Some("'AAA' 프로젝트에서 '지체상금'에 관한 내용을 찾아 요약합니다"));
+        // 2. The content alone: every document, no project.
+        for op in [plain(), about("지체상금"), answer("지체상금에 대해서 요약해줘")] {
+            let (p, notes) = run("지체상금에 대해서 요약해줘", model_plan(vec![op]), &ctx);
+            assert_eq!(slots(&p), both(None, Some("지체상금")));
+            assert!(p.scope.is_empty(), "{:?}", p.scope);
+            assert!(!notes.iter().any(|n| n == "topic_names_project"), "{notes:?}");
+        }
+        // (an explanation without a place stays the model's answer)
+        let (p, _) = run("지체상금에 대해 설명해줘", model_plan(vec![answer("지체상금에 대해 설명해줘")]), &ctx);
+        assert!(matches!(p.operations.as_slice(), [Op::Answer { .. }]), "{p:?}");
+        // 3. The content inside what is open: no project.
+        let (p, _) = run("현재 문서에서 지체상금 내용에 대해서 요약해줘", model_plan(vec![plain()]), &ctx);
+        assert!(p.is_clarification(), "nothing is open: asked, not every document: {p:?}");
+        assert_eq!(p.clarification_question.as_deref(), Some(nothing_at_hand(true)));
+        ctx.current_document = Some("d-open".into());
+        ctx.scope_project = Some("p-hanbit".into());
+        for text in ["현재 문서에서 지체상금 내용에 대해서 요약해줘", "이 문서에서 지체상금에 대해 설명해줘"]
+        {
+            let (p, _) = run(text, model_plan(vec![plain()]), &ctx);
+            assert_eq!(slots(&p), both(None, Some("지체상금")), "{text}");
+            assert_eq!(p.scope.doc_ids, vec!["d-open".to_string()], "{text}");
+            assert_eq!(p.summary.as_deref(), Some("열린 문서에서 '지체상금'에 관한 내용을 찾아 요약합니다"), "{text}");
+        }
+        ctx.current_document = None;
+        ctx.scope_project = None;
+        // 4. The project alone: all its documents, one summary of them next to each document's.
+        for op in [
+            plain(),
+            Op::Summarize { target: Some(SummarizeTarget::EachDoc), length: None, group_by: None, topic: None },
+            Op::Summarize {
+                target: None,
+                length: None,
+                group_by: Some(SummaryGroup::Project),
+                topic: Some("AAA".into()),
+            },
+        ] {
+            let (p, notes) = run("AAA 프로젝트 요약해줘", model_plan(vec![op]), &ctx);
+            assert_eq!(slots(&p), both(Some("p-aaa"), None));
+            assert!(
+                matches!(
+                    p.operations.as_slice(),
+                    [Op::Summarize { target: Some(SummarizeTarget::Set), group_by: None, .. }]
+                ),
+                "{p:?}"
+            );
+            assert!(p.scope.filter.with_reference, "{:?}", p.scope);
+            assert_eq!(notes, vec!["scope_filled"]);
+        }
+        let (p, _) = run("AAA 프로젝트의 주요 내용에 대해 요약해줘", model_plan(vec![about("주요 내용")]), &ctx);
+        assert_eq!(slots(&p), both(Some("p-aaa"), None), "the main points of the project: its summary");
+        assert!(matches!(p.operations.as_slice(), [Op::Summarize { target: Some(SummarizeTarget::Set), .. }]));
+        // (… unless the words ask for the documents one by one, or narrow the project further)
+        let each = Op::Summarize { target: Some(SummarizeTarget::EachDoc), length: None, group_by: None, topic: None };
+        let (p, _) = run("AAA 프로젝트 문서를 각각 요약해줘", model_plan(vec![each.clone()]), &ctx);
+        assert!(matches!(p.operations.as_slice(), [Op::Summarize { target: Some(SummarizeTarget::EachDoc), .. }]));
+        let (p, _) = run("AAA 프로젝트의 계약서 요약해줘", model_plan(vec![each]), &ctx);
+        assert!(matches!(p.operations.as_slice(), [Op::Summarize { target: Some(SummarizeTarget::EachDoc), .. }]));
+        assert_eq!(
+            (p.scope.filter.project_id.as_deref(), p.scope.filter.doc_type.as_deref()),
+            (Some("p-aaa"), Some("dev_contract"))
+        );
+        // A project the workspace does not have is said, not silently widened to every document.
+        let (p, notes) = run("없는 프로젝트의 지체상금에 대해 요약해줘", model_plan(vec![plain()]), &ctx);
+        assert_eq!(slots(&p), both(None, Some("지체상금")));
+        assert!(notes.iter().any(|n| n == "project_not_found"), "{notes:?}");
+    }
+
     /// 0.8.1: where to look comes from the user's words — the kind of document, the project, and
     /// "X 프로젝트 열어줘" opens the project instead of a folder or the library.
     #[test]
@@ -1525,7 +2911,7 @@ mod tests {
         assert_eq!(codes("참고 자료에서 납품 기한 검색해줘", &mut p), vec!["scope_filled"]);
         assert_eq!(p.scope.filter.role, Some(crate::planner::RoleParam::Knowledge));
         assert!(matches!(&p.operations[0], Op::Search { query, .. } if query == "납품 기한"));
-        let mut p = model_plan(vec![Op::Summarize { target: None, length: None, group_by: None }]);
+        let mut p = model_plan(vec![Op::Summarize { target: None, length: None, group_by: None, topic: None }]);
         codes("업무 문서만 요약해줘", &mut p);
         assert_eq!(p.scope.filter.role, Some(crate::planner::RoleParam::Work));
         let mut p = model_plan(vec![search("납품 기한")]);
@@ -1546,7 +2932,7 @@ mod tests {
             "summarize it including the reference documents",
             "summarize the reference material and the contracts",
         ] {
-            let mut p = model_plan(vec![Op::Summarize { target: None, length: None, group_by: None }]);
+            let mut p = model_plan(vec![Op::Summarize { target: None, length: None, group_by: None, topic: None }]);
             assert!(codes(said, &mut p).is_empty(), "{said}");
             assert_eq!(p.scope.filter.role, None, "{said}");
         }
@@ -1561,7 +2947,7 @@ mod tests {
             ("understand reference material first", crate::planner::RoleParam::Knowledge),
             ("업무문서를 요약해줘", crate::planner::RoleParam::Work),
         ] {
-            let mut p = model_plan(vec![Op::Summarize { target: None, length: None, group_by: None }]);
+            let mut p = model_plan(vec![Op::Summarize { target: None, length: None, group_by: None, topic: None }]);
             assert_eq!(codes(said, &mut p), vec!["scope_filled"], "{said}");
             assert_eq!(p.scope.filter.role, Some(kind), "{said}");
         }
@@ -1571,14 +2957,14 @@ mod tests {
             p.scope.filter.project_id = Some("p1".into());
             p
         };
-        let mut p = in_project(vec![Op::Summarize { target: None, length: None, group_by: None }]);
+        let mut p = in_project(vec![Op::Summarize { target: None, length: None, group_by: None, topic: None }]);
         codes("참고자료도 포함해서 요약해줘", &mut p);
         assert!(p.scope.filter.with_reference && p.scope.filter.role.is_none());
-        let mut p = in_project(vec![Op::Summarize { target: None, length: None, group_by: None }]);
+        let mut p = in_project(vec![Op::Summarize { target: None, length: None, group_by: None, topic: None }]);
         p.scope.filter.with_reference = true;
         codes("참고 자료만 요약해줘", &mut p);
         assert!(!p.scope.filter.with_reference, "a kind from the sentence replaces the default of the project scope");
-        let mut p = model_plan(vec![Op::Summarize { target: None, length: None, group_by: None }]);
+        let mut p = model_plan(vec![Op::Summarize { target: None, length: None, group_by: None, topic: None }]);
         codes("한빛 포털 프로젝트 요약해줘", &mut p);
         assert!(p.scope.filter.with_reference && p.scope.filter.project_id.as_deref() == Some("p1"));
         // The words that add a kind are not what to search for either.
@@ -1763,7 +3149,7 @@ mod tests {
     /// Audit USR-4: "프로젝트 별 내용을 요약해줘" became one summary of everything.
     #[test]
     fn what_the_plan_leaves_out_is_shown_and_confirmed() {
-        let summarize = |target, group_by| Op::Summarize { target, length: None, group_by };
+        let summarize = |target, group_by| Op::Summarize { target, length: None, group_by, topic: None };
         // The model says so itself.
         let mut p = model_plan(vec![summarize(Some(SummarizeTarget::Set), None)]);
         p.unmet = Some("  프로젝트별로 나누기  ".into());

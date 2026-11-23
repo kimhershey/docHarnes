@@ -253,6 +253,13 @@ const PART_WORDS: &[&str] = &[
     "this table",
 ];
 
+/// Whether the words point at what is open or selected ("이 문서", "현재 문서", "이 조항"), whether or
+/// not anything is.
+pub fn points(words: &str) -> bool {
+    let t = Text::new(words, true);
+    t.has(SELECTION_WORDS) || t.has(PART_WORDS)
+}
+
 /// The documents a sentence that points at "this" one is about — the selection, or else the open
 /// document — when the user's own words do point: "이 문서", "이 계약서", "이 조항", "this clause".
 /// Empty when nothing is pointed at, or nothing is open or selected.
@@ -264,6 +271,22 @@ pub fn pointed_at(text: &str, ctx: &PlanContext) -> Vec<String> {
     } else {
         Vec::new()
     }
+}
+
+/// How long a summary the words ask for: "짧게 · 간단히" / "자세히 · 길게".
+fn length_of(t: &Text<'_>) -> Option<SummaryLength> {
+    if t.has(&["짧게", "한줄", "간단", "short", "brief*"]) {
+        Some(SummaryLength::Short)
+    } else if t.has(&["길게", "자세", "상세", "long", "detailed"]) {
+        Some(SummaryLength::Long)
+    } else {
+        None
+    }
+}
+
+/// `length_of` for the words of a sentence (`guard::summary_about`: the words outside the subject).
+pub fn length_said(words: &str) -> Option<SummaryLength> {
+    length_of(&Text::new(words, true))
 }
 
 /// Whether the user's own words carry a date or a period outside the quoted texts.
@@ -1306,6 +1329,46 @@ fn delete(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     ))
 }
 
+/// The summary of what the documents say about a subject (1.0.2): the content slot is the subject,
+/// where to look is read from the words outside the phrase that names it — a project, a document
+/// type, a period, what is open — and no place at all is every document.
+fn topic_plan(t: &Text<'_>, ctx: &PlanContext, about: super::guard::About) -> Plan {
+    let rest = Text::new(&about.rest, t.ko);
+    let dt = doc_type(&rest, ctx);
+    let d = date(&rest, ctx);
+    let mut scope = scope_or_project(&rest, ctx, dt, d.as_ref());
+    if scope.is_empty() {
+        // ("이 문서에서 …", "선택한 문서에서 …": what is open or selected)
+        scope.doc_ids = pointed_at(&about.rest, ctx);
+        if scope.doc_ids.is_empty() && points(&about.rest) {
+            return Plan::clarify(super::guard::nothing_at_hand(t.ko).to_string(), 0.5);
+        }
+    }
+    let summary = t
+        .t(
+            &format!("'{}'에 관한 내용을 문서에서 찾아 요약합니다", about.subject),
+            &format!("Summarise what the documents say about '{}'", about.subject),
+        )
+        .to_string();
+    let op = Op::Summarize {
+        target: Some(SummarizeTarget::Set),
+        length: length_of(&rest),
+        group_by: None,
+        topic: Some(about.subject),
+    };
+    mk(op, scope, 0.85, summary)
+}
+
+/// "AA 프로젝트의 BB 내용에 대해 설명해줘", "이 문서에서 BB에 대해 설명해줘" (user decision 2026-11-20):
+/// with a place named, an explanation of a subject is the summary of what that place says about it.
+fn explain_about(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
+    if t.is_question() || t.has(&["요약", "summar*"]) {
+        return None;
+    }
+    let about = super::guard::summary_topic(t.raw, ctx)?;
+    Some(topic_plan(t, ctx, about))
+}
+
 fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     if t.is_question() {
         return None;
@@ -1333,11 +1396,43 @@ fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         return None;
     }
     let force = t.has(&["다시", "재처리", "재추출", "재분류", "재실행", "again", "redo", "force"]);
+    let summary_only = summarize && !(classify || ocr || extract || validate || generic);
+    let summary_length = |t: &Text<'_>| length_of(t);
+    // 1.0.2: "AA에 대해서 요약해줘" — what the documents say about the subject. Where to look is read
+    // from the words outside the phrase that names it ("보안 요구사항에 대해" names no document type),
+    // and no scope at all is every document, as for a search: nothing is asked back.
+    if summary_only {
+        if let Some(about) = super::guard::summary_topic(t.raw, ctx) {
+            return Some(topic_plan(t, ctx, about));
+        }
+        // "AAA 프로젝트에 대해 요약해줘": the project slot alone — one summary of the project's documents.
+        if let Some((project, rest)) = super::guard::summary_project(t.raw, ctx) {
+            let rest = Text::new(&rest, t.ko);
+            let dt = doc_type(&rest, ctx);
+            let d = date(&rest, ctx);
+            let mut scope = named_scope(&rest, ctx, dt, d.as_ref());
+            if scope.doc_ids.is_empty() && scope.folder.is_none() {
+                scope.filter.project_id = Some(project.id.clone());
+                let summary = t
+                    .t(
+                        &format!("'{}' 프로젝트의 문서를 요약합니다", project.name),
+                        &format!("Summarise the documents of the project '{}'", project.name),
+                    )
+                    .to_string();
+                let op = Op::Summarize {
+                    target: Some(SummarizeTarget::Set),
+                    length: summary_length(&rest),
+                    group_by: None,
+                    topic: None,
+                };
+                return Some(mk(op, scope, 0.85, summary));
+            }
+        }
+    }
     let dt = doc_type(t, ctx);
     let d = date(t, ctx);
     let mut scope = scope_or_project(t, ctx, dt, d.as_ref());
     // "프로젝트별로 요약해줘" (0.8.0): one summary per group, over the library unless documents are named.
-    let summary_only = summarize && !(classify || ocr || extract || validate || generic);
     let grouping = if summary_only { super::guard::summary_group(t.raw) } else { None };
     if grouping == Some(super::SummaryGroup::Project)
         && scope.filter.project_id == ctx.scope_project
@@ -1371,14 +1466,7 @@ fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         } else {
             SummarizeTarget::EachDoc
         };
-        let length = if t.has(&["짧게", "한줄", "간단", "short", "brief*"]) {
-            Some(SummaryLength::Short)
-        } else if t.has(&["길게", "자세", "상세", "long", "detailed"]) {
-            Some(SummaryLength::Long)
-        } else {
-            None
-        };
-        ops.push(Op::Summarize { target: Some(target), length, group_by: grouping });
+        ops.push(Op::Summarize { target: Some(target), length: summary_length(t), group_by: grouping, topic: None });
     }
     if classify || generic {
         ops.push(Op::Classify {
@@ -4338,6 +4426,7 @@ pub fn plan(text: &str, ctx: &PlanContext) -> Option<Plan> {
         .or_else(|| settings_combo(&t, ctx))
         .or_else(|| quick_settings(&t, ctx))
         .or_else(|| register_form(&t, ctx))
+        .or_else(|| explain_about(&t, ctx))
         .or_else(|| project_ops(&t, ctx))
         .or_else(|| define_schema(&t, ctx))
         .or_else(|| revise_draft_rule(&t, ctx))

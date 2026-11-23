@@ -3460,6 +3460,404 @@
       },
       "kind": "command",
       "note": "1.0.0 decision 4-3: opens \"Put in project\" on reference material"
+    },
+    {
+      "id": "ko-134",
+      "category": "ko",
+      "text": "AA에 대해서 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": "AA",
+            "target": "set"
+          }
+        ],
+        "confirm": false
+      },
+      "note": "1.0.2 사용자 보고(2026-11-19): 'AA에 대해서 요약해줘'가 범위의 문서를 하나씩 요약하고 AA에 관한 내용은 모으지 않음 — 주제 요약",
+      "kind": "question"
+    },
+    {
+      "id": "ko-135",
+      "category": "ko",
+      "text": "납품 기한에 대해서 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": "납품 기한",
+            "target": "set"
+          }
+        ],
+        "confirm": false
+      },
+      "note": "1.0.2 주제 요약: 범위를 말하지 않으면 모든 문서에서 찾는다(되묻지 않음)",
+      "kind": "question"
+    },
+    {
+      "id": "ko-136",
+      "category": "ko",
+      "text": "보안 요구사항에 대해 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": "보안 요구사항"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": null
+          }
+        }
+      },
+      "note": "1.0.2 주제 요약: '요구사항'은 주제의 일부 — 문서 유형 조건이 아니다",
+      "kind": "question"
+    },
+    {
+      "id": "ko-137",
+      "category": "ko",
+      "text": "한빛 납품 프로젝트에서 검수 기준에 대해 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": "검수 기준"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-hanbit",
+            "doc_type": null
+          }
+        }
+      },
+      "note": "1.0.2 주제 요약: 찾을 곳은 주제 앞의 말(프로젝트)",
+      "kind": "question"
+    },
+    {
+      "id": "ko-138",
+      "category": "ko",
+      "text": "계약서에서 지체상금에 대해 자세히 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": "지체상금",
+            "length": "long"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "dev_contract"
+          }
+        }
+      },
+      "note": "1.0.2 주제 요약: 주제 밖에서 말한 유형은 찾을 곳",
+      "kind": "question"
+    },
+    {
+      "id": "ko-139",
+      "category": "ko",
+      "text": "하자보수 관련 내용을 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": "하자보수",
+            "target": "set"
+          }
+        ]
+      },
+      "note": "1.0.2 주제 요약: '… 관련'",
+      "kind": "question"
+    },
+    {
+      "id": "en-36",
+      "category": "en",
+      "text": "summarise the documents about late fees",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": "late fees",
+            "target": "set"
+          }
+        ]
+      },
+      "note": "1.0.2 topic summary",
+      "kind": "question"
+    },
+    {
+      "id": "ko-140",
+      "category": "ko",
+      "text": "견적서에 대해 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": null
+          }
+        ],
+        "scope": {
+          "filter": {
+            "doc_type": "estimate"
+          }
+        }
+      },
+      "note": "1.0.2 반례: 문서 유형은 주제가 아니다 — 견적서들을 요약",
+      "kind": "question"
+    },
+    {
+      "id": "ko-141",
+      "category": "ko",
+      "text": "이 문서에 대해 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": null
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        }
+      },
+      "note": "1.0.2 반례: 가리키는 말은 주제가 아니다 — 열린 문서를 요약",
+      "kind": "question"
+    },
+    {
+      "id": "ko-142",
+      "category": "ko",
+      "text": "한빛 납품에 대해서 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": "한빛 납품",
+            "target": "set"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": null
+          }
+        },
+        "confirm": false
+      },
+      "note": "1.0.2(사용자 결정 2026-11-20): 이름만 말하면 내용 칸이다 — 프로젝트 이름과 같아도 모든 문서에서 그 말을 찾는다(프로젝트 범위 없음). 프로젝트는 '한빛 납품 프로젝트 …'라고 말할 때",
+      "kind": "question"
+    },
+    {
+      "id": "ko-143",
+      "category": "ko",
+      "text": "이 문서에서 지체상금에 대해 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": "지체상금",
+            "target": "set"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ]
+        },
+        "confirm": false
+      },
+      "note": "1.0.2: 열린 문서를 가리키면 그 문서 안에서 주제에 관한 대목을 찾는다",
+      "kind": "question"
+    },
+    {
+      "id": "ko-144",
+      "category": "ko",
+      "text": "한빛 납품 프로젝트의 검수 기준 내용에 대해 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": "검수 기준",
+            "target": "set"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-hanbit",
+            "doc_type": null
+          }
+        },
+        "confirm": false
+      },
+      "note": "1.0.2(사용자 결정 2026-11-20) 두 칸 모두: 프로젝트 칸 = 한빛 납품(업무 문서 + 참고 자료), 내용 칸 = 검수 기준('내용'은 주제의 일부가 아니다)",
+      "kind": "question"
+    },
+    {
+      "id": "ko-145",
+      "category": "ko",
+      "text": "한빛 납품 프로젝트의 검수 기준 내용에 대해 설명해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": "검수 기준",
+            "target": "set"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-hanbit",
+            "doc_type": null
+          }
+        },
+        "confirm": false
+      },
+      "note": "1.0.2(같은 결정): '설명'도 찾을 곳을 말했으면 같은 동작 — 프로젝트 안에서 그 내용을 모아 요약",
+      "kind": "question"
+    },
+    {
+      "id": "ko-146",
+      "category": "ko",
+      "text": "현재 문서에서 지체상금 내용에 대해서 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": "지체상금",
+            "target": "set"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ],
+          "filter": {
+            "project_id": null
+          }
+        },
+        "confirm": false
+      },
+      "note": "1.0.2(같은 결정): 프로젝트 칸은 비우고 열린 문서 안에서 내용을 찾는다",
+      "kind": "question"
+    },
+    {
+      "id": "ko-147",
+      "category": "ko",
+      "text": "한빛 납품 프로젝트 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": null,
+            "target": "set",
+            "group_by": null
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-hanbit"
+          }
+        },
+        "confirm": false
+      },
+      "note": "1.0.2(같은 결정): 프로젝트 칸만 — 그 프로젝트의 모든 문서를 요약(문서별 요약 + 전체 요약 하나). 라이브러리 전체의 프로젝트별 묶음이 아니다",
+      "kind": "question"
+    },
+    {
+      "id": "ko-148",
+      "category": "ko",
+      "text": "한빛 납품 프로젝트에 대해 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "topic": null,
+            "target": "set",
+            "group_by": null
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-hanbit"
+          }
+        },
+        "confirm": false
+      },
+      "note": "1.0.2(같은 결정): '… 프로젝트에 대해'는 프로젝트 칸이다 — 이름을 찾는 주제 요약이 아니다",
+      "kind": "question"
+    },
+    {
+      "id": "ko-149",
+      "category": "ko",
+      "text": "지체상금에 대해 설명해줘",
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "alt": [
+          {
+            "intent": "explain",
+            "ops": [
+              "explain"
+            ]
+          }
+        ]
+      },
+      "note": "1.0.2 반례: 찾을 곳을 말하지 않은 '…에 대해 설명해줘'는 질문 그대로다(일반 지식으로 답할 수도 있다) — 주제 요약으로 바꾸지 않는다",
+      "kind": "question"
     }
   ]
 }

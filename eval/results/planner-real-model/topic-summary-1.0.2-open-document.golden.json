@@ -1,0 +1,210 @@
+{
+ "schema_version": 1,
+ "context": "topic-summary-1.0.2-open-document.context.json",
+ "description": "1.0.2 summaries about a subject: the project slot and the content slot (a document is open)",
+ "items": [
+  {
+   "id": "p-1",
+   "category": "ko",
+   "kind": "question",
+   "text": "AAA에 대해서 요약해줘",
+   "expected": {
+    "intent": "summarize",
+    "ops": [
+     "summarize"
+    ],
+    "params": [
+     {
+      "topic": "AAA",
+      "target": "set",
+      "group_by": null
+     }
+    ],
+    "confirm": false,
+    "scope": {
+     "filter": {
+      "project_id": null
+     }
+    }
+   },
+   "note": "이름만 말하면 내용 칸이다: 모든 문서에서 'AAA'를 찾는다(열린 문서도 프로젝트도 범위가 아니다)"
+  },
+  {
+   "id": "p-2",
+   "category": "ko",
+   "kind": "question",
+   "text": "AAA 프로젝트에 대해 요약해줘",
+   "expected": {
+    "intent": "summarize",
+    "ops": [
+     "summarize"
+    ],
+    "params": [
+     {
+      "topic": null,
+      "target": "set",
+      "group_by": null
+     }
+    ],
+    "confirm": false,
+    "scope": {
+     "filter": {
+      "project_id": "p-aaa"
+     }
+    }
+   }
+  },
+  {
+   "id": "p-3",
+   "category": "ko",
+   "kind": "question",
+   "text": "이 문서에서 지체상금에 대해 요약해줘",
+   "expected": {
+    "intent": "summarize",
+    "ops": [
+     "summarize"
+    ],
+    "params": [
+     {
+      "topic": "지체상금",
+      "target": "set"
+     }
+    ],
+    "confirm": false,
+    "scope": {
+     "doc_ids": [
+      "d1a2"
+     ]
+    }
+   },
+   "note": "열린 문서 안에서 주제에 관한 대목을 찾는다"
+  },
+  {
+   "id": "p-4",
+   "category": "ko",
+   "kind": "question",
+   "text": "계약서 내용에 대해 요약해줘",
+   "expected": {
+    "intent": "summarize",
+    "ops": [
+     "summarize"
+    ],
+    "params": [
+     {
+      "topic": null
+     }
+    ],
+    "confirm": false,
+    "scope": {
+     "filter": {
+      "doc_type": "dev_contract"
+     }
+    }
+   },
+   "note": "문서 유형은 주제가 아니다"
+  },
+  {
+   "id": "p-5",
+   "category": "ko",
+   "kind": "question",
+   "text": "AAA 프로젝트 요약해줘",
+   "expected": {
+    "intent": "summarize",
+    "ops": [
+     "summarize"
+    ],
+    "params": [
+     {
+      "topic": null,
+      "group_by": null
+     }
+    ],
+    "confirm": false,
+    "scope": {
+     "filter": {
+      "project_id": "p-aaa"
+     }
+    }
+   },
+   "note": "프로젝트 하나를 말했고 나누라는 말이 없다 — 프로젝트별 묶음이 아니다"
+  },
+  {
+   "id": "p-6",
+   "category": "ko",
+   "kind": "question",
+   "text": "AAA 프로젝트의 지체상금 내용에 대해 요약해줘",
+   "expected": {
+    "intent": "summarize",
+    "ops": [
+     "summarize"
+    ],
+    "params": [
+     {
+      "topic": "지체상금",
+      "target": "set"
+     }
+    ],
+    "confirm": false,
+    "scope": {
+     "filter": {
+      "project_id": "p-aaa"
+     }
+    }
+   },
+   "note": "두 칸 모두: 프로젝트 AAA 안에서 지체상금"
+  },
+  {
+   "id": "p-7",
+   "category": "ko",
+   "kind": "question",
+   "text": "AAA 프로젝트의 지체상금 내용에 대해 설명해줘",
+   "expected": {
+    "intent": "summarize",
+    "ops": [
+     "summarize"
+    ],
+    "params": [
+     {
+      "topic": "지체상금",
+      "target": "set"
+     }
+    ],
+    "confirm": false,
+    "scope": {
+     "filter": {
+      "project_id": "p-aaa"
+     }
+    }
+   },
+   "note": "'설명'도 찾을 곳을 말했으면 같은 동작"
+  },
+  {
+   "id": "p-8",
+   "category": "ko",
+   "kind": "question",
+   "text": "현재 문서에서 지체상금 내용에 대해서 요약해줘",
+   "expected": {
+    "intent": "summarize",
+    "ops": [
+     "summarize"
+    ],
+    "params": [
+     {
+      "topic": "지체상금",
+      "target": "set"
+     }
+    ],
+    "confirm": false,
+    "scope": {
+     "doc_ids": [
+      "d1a2"
+     ],
+     "filter": {
+      "project_id": null
+     }
+    }
+   },
+   "note": "프로젝트 칸은 비우고 열린 문서 안에서"
+  }
+ ]
+}

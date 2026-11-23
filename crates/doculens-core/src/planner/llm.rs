@@ -237,6 +237,19 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
             // A text that came with the request is worked on as it is, whatever the route was called.
             if guard::carried_text(text).is_some() {
                 guard::make_text_only(text, &mut p, ko);
+            } else if guard::asks_about(text, ctx) {
+                // 1.0.2: "AA 프로젝트의 BB 내용에 대해 설명해줘" may be routed as a turn to answer in
+                // prose. The sentence names what to gather and where, whatever the route was called.
+                let mut asked = p.clone();
+                let mut issues: Vec<PlanIssue> = guard::summary_about(text, &mut asked, ctx, ko).into_iter().collect();
+                issues.extend(guard::where_to_look(text, &mut asked, ctx, ko));
+                let checked = validate::validate(&mut asked, ctx, date.as_ref());
+                if !has_errors(&checked) {
+                    issues.extend(checked);
+                    result.plan = scoped(asked);
+                    result.issues = issues;
+                    return Ok(result);
+                }
             }
             result.plan = p;
             return Ok(result);
@@ -345,6 +358,8 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
                 }
                 // `explain` is for a piece of text the user pointed at; a question is answered.
                 guard::explain_what_was_said(text, &mut plan);
+                // "AA에 대해서 요약해줘": the subject the sentence names is what the summary is about.
+                issues.extend(guard::summary_about(text, &mut plan, ctx, ko));
                 // The one document type the sentence names is the scope of a plan that named none.
                 issues.extend(guard::type_filter_repair(text, &mut plan, ctx, ko));
                 // … and so are the kind of document and the project it names; "X 프로젝트 열어줘" opens it.
@@ -360,6 +375,15 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
                 }
                 // What the sentence does not support is confirmed, whatever the model's confidence.
                 issues.extend(guard::contract_checks(text, &mut plan, ko));
+                // (one note for a split that is not made: the validator's — a grouping written next
+                // to a topic — says the same as the check's)
+                if let Some(last) = issues.iter().rposition(|i| i.code == "grouping_dropped") {
+                    let mut at = 0;
+                    issues.retain(|i| {
+                        at += 1;
+                        i.code != "grouping_dropped" || at - 1 == last
+                    });
+                }
                 // A split by project the checks put back: the validator had already filled the open
                 // project in as the default scope, which would leave one group.
                 if validate::per_project(&plan)
@@ -530,6 +554,8 @@ fn parse_and_validate(
     // A type is a condition only when the user's words name one (0.8.2): "all" in the type slot,
     // or a type no question needs, must not fail the plan.
     let untyped = guard::untyped_scope(text, &mut plan, ctx, ko);
+    // … and a summary has a subject only when they name one (1.0.2).
+    guard::unsaid_topic(text, &mut plan, ctx);
     let mut issues = validate::validate(&mut plan, ctx, date);
     issues.extend(untyped);
     if has_errors(&issues) {

@@ -232,6 +232,7 @@ export function PlanCard({
         language,
         onlyReviewedDefault: reviewedDefault,
         countLabel: (count) => t("planner.card.step_documents", { count }),
+        topicLabel: (topic, count) => t("planner.card.step_topic", { topic, count }),
         deleteLabel: (count) => t("planner.card.step_delete", { count }),
         describeError: (e, kind) => (kind === "export" ? describeExportError(e, t) : describeOrganizeError(e, t)),
       })
