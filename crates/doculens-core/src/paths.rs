@@ -123,12 +123,6 @@ impl WorkspacePaths {
     pub fn logs_dir(&self) -> PathBuf {
         self.app_dir().join("logs")
     }
-    pub fn engine_pid_file(&self) -> PathBuf {
-        self.app_dir().join("engine.pid")
-    }
-    pub fn engine_key_file(&self) -> PathBuf {
-        self.app_dir().join("engine.key")
-    }
     /// Watched folder for automatic import.
     pub fn inbox_dir(&self) -> PathBuf {
         self.root.join("inbox")

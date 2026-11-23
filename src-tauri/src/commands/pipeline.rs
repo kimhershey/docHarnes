@@ -8,8 +8,8 @@ use doculens_core::pipeline::repo::{self, ReviewFilter, SchemaVersion};
 use doculens_core::pipeline::review::{self, ReviewAction};
 use doculens_core::pipeline::schema::{self, LintIssue, SchemaDef, SchemaDraft, SchemaRecord};
 use doculens_core::pipeline::{
-    forms, ocr, run, DocTypeInfo, ExtractedTable, ExtractionRun, FieldChange, FieldRecord, PipelineStatus,
-    ProcessRequest, ReviewReason,
+    forms, run, DocTypeInfo, ExtractedTable, ExtractionRun, FieldChange, FieldRecord, PipelineStatus, ProcessRequest,
+    ReviewReason,
 };
 
 use crate::docs_bridge;
@@ -64,12 +64,6 @@ pub fn pipeline_doc_types(app: AppHandle) -> UiResult<Vec<DocTypeInfo>> {
 pub fn pipeline_schemas(app: AppHandle) -> UiResult<Vec<SchemaRecord>> {
     let ctx = pipeline_bridge::context(&app)?;
     Ok(ctx.db().with_read(repo::list_schemas)?)
-}
-
-#[tauri::command(async)]
-pub fn pipeline_schema_get(app: AppHandle, id: String) -> UiResult<SchemaRecord> {
-    let ctx = pipeline_bridge::context(&app)?;
-    ctx.db().with_read(|c| repo::get_schema(c, &id))?.ok_or_else(|| UiError::invalid("schema_not_found"))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -166,11 +160,6 @@ pub fn pipeline_schema_from_nl(app: AppHandle, description: String, base_id: Opt
     pipeline_bridge::nl_schema(&app, &description, base_id.as_deref()).map_err(retype)
 }
 
-#[tauri::command(async)]
-pub fn pipeline_form_derive(app: AppHandle, document_id: String, name: Option<String>) -> UiResult<SchemaDraft> {
-    pipeline_bridge::form_derive(&app, &document_id, name.as_deref()).map_err(retype)
-}
-
 /// 0.3.0 §2: field discovery over 1..N sample documents as a job; the result opens the editor unsaved.
 #[tauri::command(async)]
 pub fn pipeline_schema_discover(app: AppHandle, document_ids: Vec<String>, name: Option<String>) -> UiResult<String> {
@@ -193,15 +182,6 @@ pub fn pipeline_form_register(app: AppHandle, draft: SchemaDraft) -> UiResult<Sc
         docs_bridge::emit_changed(&app, "updated", vec![doc.clone()]);
     }
     Ok(saved)
-}
-
-/// Per-document schema override (viewer "스키마 변경"; `None` = automatic mapping).
-#[tauri::command(async)]
-pub fn pipeline_document_schema(app: AppHandle, document_id: String, schema_id: Option<String>) -> UiResult<()> {
-    let ctx = pipeline_bridge::context(&app)?;
-    ctx.db().with(|c| repo::set_schema_override(c, &document_id, schema_id.as_deref())).map_err(typed_error)?;
-    docs_bridge::emit_changed(&app, "updated", vec![document_id]);
-    Ok(())
 }
 
 // -- runs / fields ------------------------------------------------------------
@@ -234,21 +214,6 @@ pub fn pipeline_restore(app: AppHandle, change_id: i64) -> UiResult<FieldRecord>
     ctx.emit(&app, "fields", vec![f.document_id.clone()]);
     docs_bridge::emit_changed(&app, "updated", vec![f.document_id.clone()]);
     Ok(f)
-}
-
-#[tauri::command(async)]
-pub fn pipeline_revalidate(app: AppHandle, document_id: String) -> UiResult<Vec<FieldRecord>> {
-    let ctx = pipeline_bridge::context(&app)?;
-    let fields = review::revalidate(
-        ctx.db(),
-        &document_id,
-        ctx.settings.review_threshold as f64,
-        ctx.settings.audit_sample_percent,
-    )
-    .map_err(typed_error)?;
-    ctx.emit(&app, "fields", vec![document_id.clone()]);
-    docs_bridge::emit_changed(&app, "updated", vec![document_id]);
-    Ok(fields)
 }
 
 // -- review -------------------------------------------------------------------
@@ -337,29 +302,6 @@ pub fn pipeline_review_approve_document(
 pub fn pipeline_tables(app: AppHandle, document_id: String) -> UiResult<Vec<ExtractedTable>> {
     let ctx = pipeline_bridge::context(&app)?;
     Ok(run::document_tables(ctx.db(), &document_id)?)
-}
-
-#[tauri::command(async)]
-pub fn pipeline_table_csv(app: AppHandle, document_id: String, page: u32, index: u32) -> UiResult<String> {
-    let ctx = pipeline_bridge::context(&app)?;
-    let tables = run::document_tables(ctx.db(), &document_id)?;
-    let t = tables
-        .iter()
-        .find(|t| t.page == page && t.index == index)
-        .ok_or_else(|| UiError::invalid("table_not_found"))?;
-    Ok(ocr::table_csv(t))
-}
-
-/// Writes a table's CSV to a path the user picked in the native save dialog.
-#[tauri::command(async)]
-pub fn pipeline_table_export(app: AppHandle, document_id: String, page: u32, index: u32, path: String) -> UiResult<()> {
-    let csv = pipeline_table_csv(app, document_id, page, index)?;
-    let target = doculens_core::paths::normalize_user_path(&path);
-    if target.as_os_str().is_empty() || target.is_dir() {
-        return Err(UiError::invalid("export_path_invalid"));
-    }
-    std::fs::write(&target, csv.as_bytes()).map_err(|e| doculens_core::CoreError::io(&target, e))?;
-    Ok(())
 }
 
 #[tauri::command(async)]

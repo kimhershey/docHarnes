@@ -18,7 +18,7 @@ use doculens_core::engine::{ChatRequest, EngineDevice, EngineStatus, LogLine, Mo
 use doculens_core::hw::{GpuSource, HardwareSummary};
 use doculens_core::modelstore::{self, ImportMode, ImportPlan, InstallState};
 use doculens_core::paths::normalize_user_path;
-use doculens_core::prerouter::{self, DateRange, PreRouteResult};
+use doculens_core::prerouter::{self, PreRouteResult};
 use doculens_core::registry::{self, ModelEntry};
 use doculens_core::retention::RetentionPolicy;
 use doculens_core::settings::{AppSettings, Language, Theme, TierMode};
@@ -573,12 +573,6 @@ pub fn jobs_clear_finished(state: State<'_, AppState>) {
 #[tauri::command]
 pub fn prerouter_route(text: String) -> PreRouteResult {
     prerouter::route(&text)
-}
-
-#[tauri::command]
-pub fn prerouter_resolve_date(text: String) -> Option<DateRange> {
-    let today = chrono::Local::now().date_naive();
-    prerouter::resolve_relative_date(&text, today)
 }
 
 // ---------------------------------------------------------------------------

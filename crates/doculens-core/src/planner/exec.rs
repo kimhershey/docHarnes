@@ -128,10 +128,6 @@ pub struct StepPreview {
     pub confirm: bool,
 }
 
-pub fn plan_kinds(plan: &Plan) -> Vec<OpKind> {
-    plan.operations.iter().map(Op::kind).collect()
-}
-
 /// Engine occupancy hook (§3.9 single slot): `begin` before a model-bound step, `end` after it,
 /// so interactive requests only wait during model steps, not during imports / exports.
 pub trait EngineLease {

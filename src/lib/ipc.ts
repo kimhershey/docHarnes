@@ -79,7 +79,6 @@ import type {
   SchemaRecord,
   SchemaVersionView,
   ChatTestResult,
-  DateRange,
   DocumentFilter,
   DocumentImportPlan,
   DocumentRole,
@@ -216,15 +215,12 @@ export const api = {
   jobsClearFinished: () => invoke<void>("jobs_clear_finished"),
 
   prerouterRoute: (text: string) => invoke<PreRouteResult>("prerouter_route", { text }),
-  prerouterResolveDate: (text: string) => invoke<DateRange | null>("prerouter_resolve_date", { text }),
 
   documentsList: (filter: DocumentFilter = {}) => invoke<DocumentView[]>("documents_list", { filter }),
   documentsStats: () => invoke<LibraryStats>("documents_stats"),
   documentsGet: (id: string) => invoke<DocumentView>("documents_get", { id }),
   documentsPages: (id: string, withText = false) => invoke<PageView[]>("documents_pages", { id, withText }),
   documentsPageText: (id: string, pageNo: number) => invoke<string | null>("documents_page_text", { id, pageNo }),
-  /** Manual correction of a page's text (viewer text tab); the knowledge index follows. */
-  documentsSetPageText: (id: string, pageNo: number, text: string) => invoke<boolean>("documents_set_page_text", { id, pageNo, text }),
   documentsPageLayout: (id: string, pageNo: number) => invoke<PageLayout | null>("documents_page_layout", { id, pageNo }),
   documentsEditPageWords: (id: string, pageNo: number, start: number, end: number, text: string) =>
     invoke<PageLayout>("documents_edit_page_words", { id, pageNo, start, end, text }),
@@ -255,7 +251,6 @@ export const api = {
   documentsEditSave: (id: string, edits: EditReplacement[]) => invoke<Edition>("documents_edit_save", { id, edits }),
   /** What an instruction in words changes in the original file, as the loaded model reads it (nothing is written). */
   documentsEditSuggest: (id: string, instruction: string) => invoke<EditSuggestion>("documents_edit_suggest", { id, instruction }),
-  documentsTags: () => invoke<[string, number][]>("documents_tags"),
   documentsSetInboxWatch: (enabled: boolean) => invoke<boolean>("documents_set_inbox_watch", { enabled }),
   documentsPdfiumInfo: () => invoke<PdfiumInfo>("documents_pdfium_info"),
 
@@ -303,7 +298,6 @@ export const api = {
   pipelineProcess: (req: ProcessRequest) => invoke<string | null>("pipeline_process", { req }),
   pipelineDocTypes: () => invoke<DocTypeInfo[]>("pipeline_doc_types"),
   pipelineSchemas: () => invoke<SchemaRecord[]>("pipeline_schemas"),
-  pipelineSchemaGet: (id: string) => invoke<SchemaRecord>("pipeline_schema_get", { id }),
   pipelineSchemaVersions: (id: string) => invoke<SchemaVersionView[]>("pipeline_schema_versions", { id }),
   pipelineSchemaSave: (draft: SchemaDraft) => invoke<SchemaRecord>("pipeline_schema_save", { draft }),
   pipelineSchemaDelete: (id: string) => invoke<boolean>("pipeline_schema_delete", { id }),
@@ -311,25 +305,20 @@ export const api = {
   pipelineSchemaSetEnabled: (id: string, enabled: boolean) => invoke<void>("pipeline_schema_set_enabled", { id, enabled }),
   pipelineSchemaLint: (definition: SchemaDef) => invoke<LintIssue[]>("pipeline_schema_lint", { definition }),
   pipelineSchemaFromNl: (description: string, baseId: string | null = null) => invoke<SchemaDraft>("pipeline_schema_from_nl", { description, baseId }),
-  pipelineFormDerive: (documentId: string, name: string | null = null) => invoke<SchemaDraft>("pipeline_form_derive", { documentId, name }),
   pipelineFormRegister: (draft: SchemaDraft) => invoke<SchemaRecord>("pipeline_form_register", { draft }),
   /** 0.3.0 §2: field discovery over 1..N sample documents as a job (its result is a `SchemaDiscoveryOutcome`). */
   pipelineSchemaDiscover: (documentIds: string[], name: string | null = null) => invoke<string>("pipeline_schema_discover", { documentIds, name }),
   pipelineSchemaNameExists: (name: string, excludingId: string | null = null) => invoke<boolean>("pipeline_schema_name_exists", { name, excludingId }),
-  pipelineDocumentSchema: (documentId: string, schemaId: string | null) => invoke<void>("pipeline_document_schema", { documentId, schemaId }),
   pipelineRuns: (documentId: string) => invoke<ExtractionRun[]>("pipeline_runs", { documentId }),
   pipelineFields: (documentId: string, runId: string | null = null) => invoke<FieldRecord[]>("pipeline_fields", { documentId, runId }),
   pipelineFieldHistory: (documentId: string) => invoke<FieldChange[]>("pipeline_field_history", { documentId }),
   pipelineRestore: (changeId: number) => invoke<FieldRecord>("pipeline_restore", { changeId }),
-  pipelineRevalidate: (documentId: string) => invoke<FieldRecord[]>("pipeline_revalidate", { documentId }),
   pipelineReviewQueue: (filter: ReviewFilter = {}) => invoke<ReviewItem[]>("pipeline_review_queue", { filter }),
   pipelineReviewApply: (fieldIds: number[], action: ReviewAction, note: string | null = null) =>
     invoke<FieldRecord[]>("pipeline_review_apply", { args: { field_ids: fieldIds, action, note } }),
   pipelineReviewApproveDocument: (documentId: string, reason: ReviewReason | null = null) =>
     invoke<number>("pipeline_review_approve_document", { documentId, reason }),
   pipelineTables: (documentId: string) => invoke<ExtractedTable[]>("pipeline_tables", { documentId }),
-  pipelineTableCsv: (documentId: string, page: number, index: number) => invoke<string>("pipeline_table_csv", { documentId, page, index }),
-  pipelineTableExport: (documentId: string, page: number, index: number, path: string) => invoke<void>("pipeline_table_export", { documentId, page, index, path }),
   pipelineSplit: (documentId: string, boundaries: number[]) => invoke<string>("pipeline_split", { documentId, boundaries }),
   pipelineMerge: (ids: string[], name: string | null = null) => invoke<string>("pipeline_merge", { ids, name }),
 
@@ -476,13 +465,4 @@ export async function openAppDocument(document: AppDocument): Promise<void> {
     return;
   }
   await invoke<string>("open_app_document", { document });
-}
-
-export async function openExternal(url: string): Promise<void> {
-  if (!isTauri) {
-    window.open(url, "_blank", "noopener");
-    return;
-  }
-  const opener = await import("@tauri-apps/plugin-opener");
-  await opener.openUrl(url);
 }

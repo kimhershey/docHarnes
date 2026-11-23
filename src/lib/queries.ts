@@ -2,7 +2,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { api } from "./ipc";
 import { queryClient, queryKeys } from "./query-client";
-import type { AnswerKind, DocumentFilter, ReviewFilter, SearchRequest } from "./types";
+import type { AnswerKind, DocumentFilter, ReviewFilter } from "./types";
 
 export function useAppInfo() {
   return useQuery({ queryKey: queryKeys.appInfo, queryFn: () => api.appInfo(), staleTime: Infinity });
@@ -101,17 +101,6 @@ export function useDocumentChunks(documentId: string | undefined) {
   return useQuery({ queryKey: queryKeys.chunks(documentId ?? ""), queryFn: () => api.knowledgeChunks(documentId ?? ""), enabled: !!documentId });
 }
 
-/** Runs a search when `req` is set (null = idle); previous results stay while typing. */
-export function useSearch(req: SearchRequest | null) {
-  return useQuery({
-    queryKey: queryKeys.search(req),
-    queryFn: () => api.knowledgeSearch(req as SearchRequest),
-    enabled: !!req && req.query.trim().length > 0,
-    staleTime: 15_000,
-    placeholderData: keepPreviousData,
-  });
-}
-
 // -- pipeline (P4) --
 
 export function usePipelineStatus(enabled = true) {
@@ -157,10 +146,6 @@ export function useFieldHistory(documentId: string | undefined) {
 
 export function useReviewQueue(filter: ReviewFilter, enabled = true) {
   return useQuery({ queryKey: queryKeys.reviewQueue(filter), queryFn: () => api.pipelineReviewQueue(filter), enabled, placeholderData: keepPreviousData });
-}
-
-export function useTables(documentId: string | undefined) {
-  return useQuery({ queryKey: queryKeys.tables(documentId ?? ""), queryFn: () => api.pipelineTables(documentId ?? ""), enabled: !!documentId });
 }
 
 // -- document generation / projects / maintenance (P6, P7) --

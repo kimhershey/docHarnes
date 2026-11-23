@@ -793,18 +793,6 @@ pub fn list_chunks(conn: &Connection, doc_id: &str) -> rusqlite::Result<Vec<Chun
     Ok(rows)
 }
 
-pub fn get_chunks(conn: &Connection, ids: &[i64]) -> rusqlite::Result<Vec<Chunk>> {
-    let mut out = Vec::new();
-    for group in ids.chunks(500) {
-        let mut st =
-            conn.prepare(&format!("SELECT {CHUNK_COLS} FROM chunks WHERE id IN ({})", placeholders(group.len())))?;
-        out.extend(
-            st.query_map(params_from_iter(group.iter()), chunk_from_row)?.collect::<rusqlite::Result<Vec<_>>>()?,
-        );
-    }
-    Ok(out)
-}
-
 /// `(total, embedded)` chunk counts.
 pub fn chunk_counts(conn: &Connection) -> rusqlite::Result<(u64, u64)> {
     conn.query_row(
@@ -1146,10 +1134,6 @@ pub fn list_answers(
     let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(params_from_iter(args.iter()), answer_from_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
-}
-
-pub fn get_answer(conn: &Connection, id: i64) -> rusqlite::Result<Option<SavedAnswer>> {
-    conn.query_row(&format!("SELECT {ANSWER_COLS} FROM answers WHERE id = ?1"), [id], answer_from_row).optional()
 }
 
 pub fn set_answer_feedback(

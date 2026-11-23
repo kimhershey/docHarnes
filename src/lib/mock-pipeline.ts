@@ -1992,12 +1992,6 @@ function parseTables(text: string, page: number): ExtractedTable[] {
   return out;
 }
 
-function tableCsv(t: ExtractedTable): string {
-  const q = (c: string) => (/[",\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c);
-  const lines = [t.header.length ? t.header.map(q).join(",") : null, ...t.rows.map((r) => r.map(q).join(","))].filter((x): x is string => x !== null);
-  return `﻿${lines.join("\r\n")}\r\n`;
-}
-
 function status(s: PState): PipelineStatus {
   const docs = wsDocs();
   const settings = loadSettings();
@@ -2092,11 +2086,6 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
       return docTypes(s);
     case "pipeline_schemas":
       return [...s.schemas].sort((x, y) => y.use_count - x.use_count || Number(x.source === "builtin") - Number(y.source === "builtin") || x.created_at.localeCompare(y.created_at));
-    case "pipeline_schema_get": {
-      const sc = s.schemas.find((x) => x.id === a.id);
-      if (!sc) throw err("invalid", "schema_not_found");
-      return sc;
-    }
     case "pipeline_schema_versions":
       return versionsOf(String(a.id));
     case "pipeline_schema_save": {
@@ -2141,14 +2130,6 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
       return lint(a.definition as SchemaDef);
     case "pipeline_schema_from_nl":
       return nlSchema(s, String(a.description ?? ""), (a.baseId as string | null) ?? null);
-    case "pipeline_form_derive": {
-      const doc = wsDocs().find((d) => d.id === a.documentId);
-      if (!doc) throw err("not_found", String(a.documentId));
-      // Scanned forms need the vision model; HWPX / DOCX / HWP forms are derived from their structure.
-      if (visionMode() === "none" && !["hwpx", "docx", "hwp"].includes(doc.source_kind)) throw typed("no_model");
-      await new Promise((res) => setTimeout(res, 150));
-      return deriveForm(doc, (a.name as string | null) ?? null);
-    }
     case "pipeline_form_register": {
       const draft = { ...(a.draft as SchemaDraft), source: "form" as SchemaSource };
       if (!isKey(draft.doc_type)) draft.doc_type = slugForName(draft.name);
@@ -2175,16 +2156,6 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
       return discoverJob((a.documentIds as string[] | undefined) ?? [], (a.name as string | null) ?? null);
     case "pipeline_schema_name_exists":
       return nameExists(String(a.name ?? ""), (a.excludingId as string | null) ?? null, s);
-    case "pipeline_document_schema": {
-      const doc = wsDocs().find((d) => d.id === a.documentId);
-      if (!doc) throw typed("document_not_found");
-      if (a.schemaId && !s.schemas.some((x) => x.id === a.schemaId)) throw typed("schema_not_found");
-      doc.schema_id = (a.schemaId as string | null) ?? null;
-      doc.updated_at = now();
-      upsertDoc(doc);
-      docsChanged([doc.id]);
-      return undefined;
-    }
     case "pipeline_runs":
       return s.runs.filter((r) => r.document_id === a.documentId);
     case "pipeline_fields": {
@@ -2201,8 +2172,6 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
       changed("fields", [ch.document_id]);
       return out[0];
     }
-    case "pipeline_revalidate":
-      return revalidateDocument(String(a.documentId));
     case "pipeline_review_queue":
       return reviewQueue(s, (a.filter as ReviewFilter | null) ?? {});
     case "pipeline_review_apply": {
@@ -2217,13 +2186,6 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
       return approveDocument(String(a.documentId), (a.reason as ReviewReason | null) ?? null);
     case "pipeline_tables":
       return documentTables(String(a.documentId));
-    case "pipeline_table_csv": {
-      const t = documentTables(String(a.documentId)).find((x) => x.page === a.page && x.index === a.index);
-      if (!t) throw err("invalid", "table_not_found");
-      return tableCsv(t);
-    }
-    case "pipeline_table_export":
-      return undefined;
     case "pipeline_split":
       return splitJob(String(a.documentId), (a.boundaries as number[]) ?? []);
     case "pipeline_merge":

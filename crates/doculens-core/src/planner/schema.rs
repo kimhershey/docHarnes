@@ -824,11 +824,6 @@ fn type_label(ty: ParamType) -> String {
     }
 }
 
-/// The smallest op table: names with their required parameters (minimal prompts).
-pub fn op_names() -> String {
-    op_names_for(&OpKind::model_kinds())
-}
-
 pub fn op_names_for(kinds: &[OpKind]) -> String {
     let mut out = String::new();
     for s in op_specs_for(kinds) {

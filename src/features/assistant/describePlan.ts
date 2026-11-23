@@ -534,19 +534,9 @@ export function withScope(plan: Plan, scope: Scope): Plan {
   return { ...plan, scope };
 }
 
-export function blockingIssues(issues: PlanIssue[]): PlanIssue[] {
-  return issues.filter((i) => i.blocking);
-}
-
 export function warningIssues(issues: PlanIssue[]): PlanIssue[] {
   return issues.filter((i) => !i.blocking);
 }
-
-// ---------------------------------------------------------------------------
-// UI context (default scope of a command)
-// ---------------------------------------------------------------------------
-
-export type AssistantScope = "all" | "folder" | "selection" | "document" | "knowledge" | `col:${string}`;
 
 /**
  * The UI context sent with a command: the chosen scope (folder / selection / the last viewed

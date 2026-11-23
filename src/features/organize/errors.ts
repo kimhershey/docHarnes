@@ -7,9 +7,6 @@ import { errorCode, errorMessage } from "@/lib/utils";
 const ORGANIZE_CODES = ["organize_nothing", "template_variable", "nothing_to_undo", "nothing_to_redo", "batch_already_undone", "no_documents"] as const;
 const EXPORT_CODES = ["export_exists", "path_outside", "no_documents"] as const;
 
-export type OrganizeErrorCode = (typeof ORGANIZE_CODES)[number];
-export type ExportErrorCode = (typeof EXPORT_CODES)[number];
-
 /**
  * The known code carried by an IPC error: either as `code` (`typed()` in planner_bridge.rs) or
  * inside the message of an `invalid` error (`UiError::invalid("organize_nothing")`,

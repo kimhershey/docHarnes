@@ -21,7 +21,6 @@ pub const KV_EMBEDDING_MODEL: &str = "knowledge.embedding_model";
 pub const KV_EMBEDDING_DIM: &str = "knowledge.embedding_dim";
 /// Longest input per chunk (the embedding preset runs with a 2,048-token context).
 pub const MAX_EMBED_CHARS: usize = 2_000;
-pub const DEFAULT_BATCH: usize = 16;
 
 /// Text prefixes an embedding model expects in front of queries and documents
 /// (registry `defaults.query_prefix` / `defaults.document_prefix`). Empty for

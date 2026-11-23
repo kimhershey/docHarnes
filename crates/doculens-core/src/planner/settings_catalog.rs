@@ -458,18 +458,6 @@ pub fn range_hint(spec: &SettingSpec, ko: bool) -> String {
     }
 }
 
-/// JSON Schema of a setting's value for the planner grammar: the model can only write a value of
-/// the key's type (0.8.0 plan §1.5; until 0.7 every key took any string / number / boolean).
-pub fn value_schema(ty: ValueType) -> Value {
-    match ty {
-        ValueType::Bool => serde_json::json!({ "type": "boolean" }),
-        ValueType::Int { .. } | ValueType::IntChoice(_) => serde_json::json!({ "type": "integer" }),
-        ValueType::Float { .. } => serde_json::json!({ "type": "number" }),
-        ValueType::Enum(values) => serde_json::json!({ "enum": values }),
-        ValueType::Str => serde_json::json!({ "type": "string" }),
-    }
-}
-
 /// Keys the grammar offers for one value shape: the catalog paths only. The 0.1–0.5 short keys
 /// (`ALIASES`) still deserialise, but offering two spellings of one setting gives the model a
 /// choice that means nothing.

@@ -224,13 +224,6 @@ impl Registry {
             .or(recommended)
     }
 
-    /// Models usable on a tier (by `requirements.tiers`), VLMs first.
-    pub fn models_for_tier(&self, tier: Tier) -> Vec<&ModelEntry> {
-        let mut v: Vec<&ModelEntry> = self.models.iter().filter(|m| m.requirements.tiers.contains(&tier)).collect();
-        v.sort_by_key(|m| (m.role != ModelRole::Vlm, m.id.clone()));
-        v
-    }
-
     /// Checks `models/registry.json` consistency (unique ids, resolvable
     /// defaults, every model has a weights file). Returns problems as strings.
     pub fn lint(&self) -> Vec<String> {

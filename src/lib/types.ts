@@ -669,10 +669,6 @@ export interface UiError {
   detail?: unknown;
 }
 
-export function isUiError(e: unknown): e is UiError {
-  return typeof e === "object" && e !== null && "code" in e && "message" in e;
-}
-
 export const SCREEN_ROUTES: Record<Screen, string> = {
   home: "/",
   library: "/library",
@@ -1394,7 +1390,6 @@ export interface AnswerDelta {
 // ---------------------------------------------------------------------------
 
 export type PipelineLevel = "classify" | "ocr" | "extract";
-export const PIPELINE_LEVELS: PipelineLevel[] = ["classify", "ocr", "extract"];
 export type SchemaChoice = { kind: "auto" } | { kind: "id"; id: string };
 
 export interface ProcessRequest {
@@ -1591,11 +1586,6 @@ export interface FieldRecord {
   reviewed_at: string | null;
 }
 
-/** A field whose review is still open (flagged and not approved / corrected / rejected). */
-export function fieldNeedsReview(f: FieldRecord): boolean {
-  return f.review_reason !== null && !["approved", "corrected", "rejected"].includes(f.status);
-}
-
 export interface ExtractionRun {
   id: string;
   document_id: string;
@@ -1773,7 +1763,6 @@ export type OpKind =
 
 /** Op families of the two-stage planner (0.6.0 plan §2): stage 1 picks one or two, stage 2 plans with their ops. */
 export type OpFamily = "ask" | "documents" | "reference" | "projects" | "forms" | "compose" | "output" | "system";
-export const OP_FAMILIES: OpFamily[] = ["ask", "documents", "reference", "projects", "forms", "compose", "output", "system"];
 
 export type AggregateFn = "sum" | "count" | "avg" | "min" | "max";
 export type GroupBy = "month" | "vendor" | "doc_type" | "project" | "none";
@@ -1807,7 +1796,6 @@ export type OpenTarget = "document" | "page" | "folder" | "screen" | "project" |
 export type ExplainScope = "kb" | "reference" | "project" | "document";
 /** `set_retention.item` (appendix D; the page cache is size-capped → `set_setting cache_limit_gb`). */
 export type RetentionTarget = "documents" | "extractions" | "logs" | "journal" | "chats" | "temp";
-export const RETENTION_TARGETS: RetentionTarget[] = ["documents", "extractions", "logs", "journal", "chats", "temp"];
 
 /** One plan step (appendix D parameters; optional ones may be absent or null). */
 export type Op =
@@ -2344,10 +2332,6 @@ export type TemplateKind =
   | "contract"
   | "report"
   | "minutes";
-/** Templates offered in the picker (UI order, 0.3.0: the software-development set + 보완요청서). */
-export const TEMPLATE_KINDS: TemplateKind[] = ["rfp", "proposal", "sow", "srs", "dev_contract", "wbs", "progress_report", "meeting_minutes", "test_report", "change_request", "acceptance", "estimate", "supplement_request"];
-/** The generic templates of 0.1: hidden from the picker, but drafts that use them still open. */
-export const HIDDEN_TEMPLATE_KINDS: TemplateKind[] = ["official_letter", "quotation", "transaction_statement", "contract", "report", "minutes"];
 
 export type TemplateRef = { kind: "builtin"; template: TemplateKind } | { kind: "form"; schema_id: string; doc_id?: string | null };
 
@@ -2808,7 +2792,6 @@ export interface TemplateInput {
 }
 
 export type Verdict = "pass" | "mismatch" | "undetermined" | "missing";
-export const VERDICTS: Verdict[] = ["pass", "mismatch", "undetermined", "missing"];
 
 export interface Evidence {
   doc_id: string | null;

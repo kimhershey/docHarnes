@@ -154,10 +154,6 @@ export function useActiveJobs(): Job[] {
   return useMemo(() => jobs.filter((j) => !isJobFinished(j)), [jobs]);
 }
 
-export function useJobs(): Job[] {
-  return useJobsStore((s) => s.jobs);
-}
-
 /** One job by id (null until the book knows it, or after it was cleared). */
 export function useJob(jobId: string | null): Job | null {
   const jobs = useJobsStore((s) => s.jobs);

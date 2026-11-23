@@ -43,7 +43,6 @@ export const PROFILES = ["accuracy", "balanced", "speed", "fine_print"] as const
 export const GROUP_BY_VALUES = ["month", "vendor", "doc_type", "project", "none"] as const;
 export const EXPORT_FORMAT_VALUES = ["xlsx", "csv", "jsonl", "md", "pdf_searchable"] as const;
 export const EXPORT_LAYOUT_VALUES = ["sheet_per_type", "sheet_per_project", "single"] as const;
-export const DOC_STATUSES = ["new", "rendered", "extracted", "reviewed", "archived"] as const;
 /** `set_setting.key`: the settings-catalog paths (0.6.0) plus the pre-0.6.0 aliases. */
 export const SETTING_KEYS: readonly string[] = SETTING_KEYS_ALL;
 export const ROLE_VALUES = ["work", "knowledge", "form"] as const;
@@ -406,10 +405,6 @@ export const DRAFT_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["draft_document",
 /** Journaled file operations that honour `only_reviewed`. */
 export const FILE_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["organize", "rename", "move"]);
 
-export function opSpec(op: OpKind): OpSpec {
-  return OP_SPECS[op];
-}
-
 /** Whether a required parameter has no value: absent, null, or an empty list. */
 export function isMissingValue(param: ParamSpec, value: unknown): boolean {
   if (!param.required) return false;
@@ -434,9 +429,4 @@ export function missingRequiredParams(operations: Op[]): { index: number; param:
 
 export function paramDesc(param: ParamSpec, language: Language | string): string {
   return language.startsWith("ko") ? param.desc_ko : param.desc_en;
-}
-
-export function opDesc(op: OpKind, language: Language | string): string {
-  const spec = OP_SPECS[op];
-  return language.startsWith("ko") ? spec.desc_ko : spec.desc_en;
 }

@@ -939,18 +939,6 @@ pub fn set_dates(
     Ok(())
 }
 
-/// Replaces the organise / export settings of a project.
-pub fn set_settings(conn: &Connection, id: &str, settings: &ProjectSettings) -> rusqlite::Result<()> {
-    let n = conn.execute(
-        "UPDATE projects SET settings = ?2, updated_at = ?3 WHERE id = ?1",
-        params![id, settings_json(settings), ts(&Utc::now())],
-    )?;
-    if n == 0 {
-        return Err(typed("project_not_found"));
-    }
-    Ok(())
-}
-
 fn touch(conn: &Connection, project_id: &str) -> rusqlite::Result<()> {
     conn.execute("UPDATE projects SET updated_at = ?2 WHERE id = ?1", params![project_id, ts(&Utc::now())])?;
     Ok(())

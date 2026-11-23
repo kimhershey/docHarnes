@@ -2117,6 +2117,22 @@ P6·P7 항목.
 - **다음**: 병합은 사용자가 한다 — PR kimhershey/docHarnes#34(1.0.1 → `main`)가 먼저, 그다음 1.0.2, 1.0.3(각 브랜치는 앞 판에서 갈라졌다).
   사용자 PC 확인은 체크리스트 "1.0.3" 절 — 요약이 하나로 나오는지, 문서별 구획 없이 통합됐는지, 짧은 문서의 내용이 빠지지 않는지, 문서가 많은 프로젝트에서 걸리는 시간.
 
+### 1.0.4 — 코드 정리와 간단한 오류 점검 (2026-11-23 요청; 브랜치 `release/1.0.4`, `main` ceb9830에서 분기) — Release는 게시하지 않았다
+
+- **사용자 요청(2026-11-23)**: "코드정리와 함께 오류검출 간단하게 수행해줘. 옛날것들은 다 지워버려도 괜찮아. GIT 에 남아있으니까"
+- **지운 것**(동작 변화 없음 — 어디에서도 부르지 않던 코드):
+  - 웹: 쓰이지 않는 내보내기 27개(`blockingIssues`, `opSpec` · `opDesc`, `engineSummary`, `templateVariables`, `useSearch` · `useTables` · `useJobs` · `useEngineStatus`, `types.ts`의 상수 6개 등)와 그 여파로 남은 import.
+  - 화면이 부르지 않던 명령 9개를 끝까지: `ipc.ts`의 래퍼, 셸 명령과 등록(`prerouter_resolve_date`, `documents_tags`, `documents_set_page_text`, `pipeline_schema_get`, `pipeline_form_derive`, `pipeline_document_schema`,
+    `pipeline_revalidate`, `pipeline_table_csv`, `pipeline_table_export`), `pipeline_bridge::form_derive`, 모의 백엔드의 처리기. 뷰어의 글 · 표 탭을 없앤 뒤 남아 있던 것들이다.
+    모의 백엔드의 `documents_set_page_text`만 남겼다(테스트가 쪽 글을 바꾸는 데 쓴다 — 코어의 `import::set_page_text`는 `edit_text` 단계가 계속 쓴다).
+  - 코어: 쓰이지 않는 `pub fn` 16개(`unsupported_reason`, `converted_html`, `get_text`, `is_cuda`, `get_answer`, `get_chunks`, `system_time_secs`, `engine_key_file`, `engine_pid_file`, `plan_kinds`, `has_side_effects`,
+    `op_names`, `value_schema`, `operand_label`, `set_settings`, `models_for_tier`)와 상수 3개(`DEFAULT_BATCH`, `GEMMA4_12B`, `UI_SCALE_STEP`).
+- **찾아서 고친 오류**: 오류 코드 17개에 문구가 없어 사용자에게 영어 코드가 그대로 보였다(`merge_needs_2_to_20_documents`, `boundaries_required`, `no_tables`, `folder_outside_workspace`, `topic_empty` 등). `errors.reasons`에 한국어 · 영어 문구를 넣었다.
+- **점검했고 문제가 없던 것**: 웹이 부르는 명령 179개가 모두 셸에 등록돼 있음, 코드가 쓰는 i18n 키가 모두 있음, `console.log` · `@ts-ignore` · TODO 없음, 셸의 `expect` 7곳은 모두 깨질 수 없는 불변식(테스트 도우미 포함).
+- **지우지 않은 것(저장된 데이터를 읽는 데 필요 — 지울지는 사용자 결정)**: `Op::Summarize.target`(1.0.2 이하의 대화 카드 · 대기 작업), 설정 전용 동작 5개(`set_theme` …), 숨긴 옛 양식 6종 · 옛 템플릿 6종, 설정의 옛 별칭, Qwen 계열 드롭인 모델 지원.
+  문서(옛 계획 `docs/plan/v0.3.0`~, 옛 릴리스 노트, 이 파일의 지난 절들)도 손대지 않았다.
+- **검증**: 로컬 전체 검증 — `cargo fmt --check`, clippy(1.100), `cargo test --workspace`(코어 566), `npm run typecheck`, vitest 362, Playwright 144, 골든 게이트 192/201. 찾는 데 쓴 스크립트는 저장소에 넣지 않았다.
+
 ## P6·P7 단계 말 리뷰 반영
 
 리뷰 서브에이전트 2건(Rust, 프런트엔드)의 지적을 다음과 같이 반영했다.

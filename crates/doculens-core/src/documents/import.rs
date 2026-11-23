@@ -405,11 +405,6 @@ fn kind_label(kind: SourceKind) -> &'static str {
     }
 }
 
-/// Reason a file cannot be imported (`None` = supported).
-pub fn unsupported_reason(path: &Path, meta: &std::fs::Metadata) -> Option<String> {
-    classify(path, meta).reason
-}
-
 /// Builds the import preview. Hashes every supported file (BLAKE3, ~1 GB/s)
 /// so duplicates against the workspace and within the batch are exact.
 pub fn plan(

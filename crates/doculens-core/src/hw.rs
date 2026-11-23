@@ -233,9 +233,6 @@ impl Backend {
             Backend::Cpu => "cpu",
         }
     }
-    pub fn is_cuda(self) -> bool {
-        matches!(self, Backend::Cu129 | Backend::Cu121)
-    }
 }
 
 /// Backend selection rule (design §3.3.1 / §3.12): NVIDIA + CUDA pack

@@ -1725,10 +1725,6 @@ impl Plan {
             || (self.operations.is_empty() && self.clarification_question.is_some())
     }
 
-    pub fn has_side_effects(&self) -> bool {
-        self.operations.iter().any(|o| o.side_effect() != SideEffect::None)
-    }
-
     pub fn needs_model(&self) -> bool {
         self.operations.iter().any(|o| o.kind().needs_model())
     }
