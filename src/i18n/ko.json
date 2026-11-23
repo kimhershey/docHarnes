@@ -321,7 +321,6 @@
   "planner": {
     "ops": {
       "import": "가져오기",
-      "set_inbox_watch": "inbox 감시",
       "classify": "분류",
       "set_doc_type": "유형 지정",
       "ocr": "OCR",
@@ -340,10 +339,6 @@
       "tag": "태그",
       "delete": "삭제",
       "export": "내보내기",
-      "set_model": "모델 변경",
-      "set_profile": "프로파일 변경",
-      "set_theme": "테마 변경",
-      "set_language": "언어 변경",
       "set_setting": "설정 변경",
       "open": "열기",
       "job": "작업 제어",
@@ -762,7 +757,6 @@
     "ui": {
       "set_setting": "설정 변경: {{key}} = {{value}}",
       "set_model": "모델 {{id}} 로드 중",
-      "set_profile": "프로파일: {{profile}}",
       "open_document": "문서 열기: {{name}}",
       "open_page": "{{name}} {{page}}쪽 열기",
       "open_folder": "폴더 열기: {{folder}}",
@@ -1293,6 +1287,23 @@
     "convert": "변환 실패: {{message}}",
     "render": "렌더 실패: {{message}}",
     "reasons": {
+      "boundaries_required": "몇 쪽에서 나눌지 정해 주세요. 예: '3쪽부터 나눠줘' 또는 '5쪽마다 분할'.",
+      "chat_message_too_large": "대화 내용이 너무 커서 저장하지 못했습니다. 새 대화를 시작해 주세요.",
+      "correct_needs_field": "고칠 항목과 새 값을 함께 알려 주세요.",
+      "edit_no_folder": "원본 파일이 있는 폴더를 찾지 못해 고친 파일을 저장할 수 없습니다.",
+      "folder_invalid": "이 폴더에는 저장할 수 없습니다. 작업 공간 안의 다른 폴더 이름을 쓰세요(.doculens 폴더는 쓸 수 없습니다).",
+      "folder_outside_workspace": "작업 공간 안의 폴더에만 저장할 수 있습니다.",
+      "group_key_required": "판 묶음의 이름을 알 수 없습니다. 묶음 이름을 말하거나 제목이 있는 문서를 고르세요.",
+      "merge_needs_2_to_20_documents": "합치려면 문서를 2개 이상 20개 이하로 고르세요.",
+      "name_required": "이름을 알려 주세요.",
+      "no_tables": "범위의 문서에 추출된 표가 없습니다.",
+      "paths_required": "가져올 파일을 고르거나 경로를 알려 주세요.",
+      "project_group_exists": "이 프로젝트의 참고 자료 묶음이 이미 있습니다.",
+      "rule_op_invalid": "규칙의 비교 방식을 알 수 없습니다. '같다', '이상', '이하', '포함'처럼 다시 써 주세요.",
+      "template_required": "어느 프로젝트 템플릿인지 이름을 알려 주세요.",
+      "text_empty": "문장을 입력하세요.",
+      "title_empty": "제목을 입력하세요.",
+      "topic_empty": "무엇에 관한 요약인지 주제를 알려 주세요.",
       "nothing_to_import": "가져올 새 파일이 없습니다(모두 중복이거나 미지원).",
       "no_files": "파일을 선택하거나 경로를 입력하세요.",
       "no_documents": "선택한 문서가 없습니다.",
@@ -2294,7 +2305,7 @@
       "builtin": "내장 샘플 양식",
       "empty": "아직 등록한 양식이 없습니다. '양식 등록'이나 '자연어로 만들기'로 시작하세요.",
       "disabled": "사용 안 함",
-      "hidden": "숨긴 기본 양식 {{count}}개 — 0.2 이전의 세금계산서·영수증 등. 켜면 다시 분류·추출에 쓰입니다."
+      "hidden": "꺼 둔 기본 양식 {{count}}개. 켜면 다시 분류·추출에 쓰입니다."
     },
     "new": "새 추출 항목",
     "nl_create": "자연어로 만들기",
@@ -2794,9 +2805,6 @@
     },
     "templates": {
       "official_letter": "공문",
-      "quotation": "견적서",
-      "transaction_statement": "거래명세서",
-      "contract": "계약서",
       "report": "보고서",
       "rfp": "제안요청서(RFP)",
       "proposal": "제안서",
@@ -2810,7 +2818,6 @@
       "change_request": "변경요청서",
       "acceptance": "검수확인서",
       "estimate": "견적서",
-      "minutes": "회의록",
       "supplement_request": "보완요청서"
     },
     "source": {

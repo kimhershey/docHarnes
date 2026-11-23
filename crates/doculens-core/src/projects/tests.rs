@@ -22,8 +22,8 @@ fn db() -> Db {
     let db = Db::open_in_memory().unwrap();
     db.with(pipeline_repo::ensure_builtins).unwrap();
     // The fixtures below are 0.1 business documents and templates (hidden / unseeded by default).
-    db.with(pipeline_repo::enable_legacy_builtins).unwrap();
-    db.with(|c| repo::ensure_templates(c, &repo::legacy_templates())).unwrap();
+    db.with(pipeline_repo::add_business_samples).unwrap();
+    db.with(|c| repo::ensure_templates(c, &repo::business_templates())).unwrap();
     db
 }
 
@@ -222,7 +222,7 @@ fn migration_adds_project_tables() {
 
 #[test]
 fn builtin_templates_and_user_template_crud() {
-    // A fresh workspace: the software set only (the legacy templates are not seeded).
+    // A fresh workspace: the software set only (the business templates of the fixtures are not seeded).
     let db = Db::open_in_memory().unwrap();
     db.with(pipeline_repo::ensure_builtins).unwrap();
     let pure = builtin_templates();
@@ -261,10 +261,10 @@ fn builtin_templates_and_user_template_crud() {
             }
         }
     }
-    // The legacy templates still resolve against the (re-enabled) legacy schemas.
-    db.with(pipeline_repo::enable_legacy_builtins).unwrap();
-    db.with(|c| repo::ensure_templates(c, &repo::legacy_templates())).unwrap();
-    for t in repo::legacy_templates() {
+    // The business templates of the fixtures resolve against the fixture forms.
+    db.with(pipeline_repo::add_business_samples).unwrap();
+    db.with(|c| repo::ensure_templates(c, &repo::business_templates())).unwrap();
+    for t in repo::business_templates() {
         let ctx = db.with(|c| rules::context(c, None, Some(&t.id))).unwrap();
         for r in &t.rules {
             let l = &r.left;
@@ -373,7 +373,7 @@ fn project_crud_inherits_template_rules() {
     assert!(p.last_check_at.is_none());
     let rules = db.with(|c| repo::rules_of(c, &p.id)).unwrap();
     assert_eq!(rules.len(), 3);
-    let template = repo::legacy_templates().into_iter().find(|t| t.id == "tpl_certification_audit").unwrap();
+    let template = repo::business_templates().into_iter().find(|t| t.id == "tpl_certification_audit").unwrap();
     assert!(rules
         .iter()
         .zip(&template.rules)

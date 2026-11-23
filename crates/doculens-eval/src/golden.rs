@@ -56,8 +56,7 @@ impl GoldenItem {
             "noop" => "chat",
             "answer" if chat => "chat",
             "answer" | "explain" | "summarize" | "compare" | "search" => "question",
-            "set_setting" | "set_theme" | "set_language" | "set_profile" | "set_model" | "set_inbox_watch"
-            | "set_retention" => "setting",
+            "set_setting" | "set_retention" => "setting",
             _ => "command",
         }
     }
@@ -442,7 +441,7 @@ mod tests {
         );
         assert_eq!(kind_of(json!({ "intent": "summarize", "ops": ["summarize"] })), "question");
         assert_eq!(kind_of(json!({ "intent": "set_setting", "ops": ["set_setting"] })), "setting");
-        assert_eq!(kind_of(json!({ "intent": "set_theme", "ops": ["set_theme", "set_model"] })), "setting");
+        assert_eq!(kind_of(json!({ "intent": "set_setting", "ops": ["set_setting", "set_setting"] })), "setting");
         assert_eq!(kind_of(json!({ "intent": "import", "ops": ["import", "move"] })), "command");
         // A counter-example keeps the kind it is about: "배율이 뭐야?" is a setting-shaped question.
         assert_eq!(item(json!({ "intent": "answer", "ops": ["answer"] }), Some("setting")).kind(), "setting");

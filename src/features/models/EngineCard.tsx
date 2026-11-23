@@ -12,7 +12,7 @@ import { Switch } from "@/components/ui/switch";
 import { api, isTauri, pickExecutable } from "@/lib/ipc";
 import { useEngineBinaryInfo } from "@/lib/queries";
 import { queryClient, queryKeys } from "@/lib/query-client";
-import type { EngineDevice, EngineState, EngineStatus } from "@/lib/types";
+import type { EngineDevice, EngineState } from "@/lib/types";
 import { describeError } from "@/lib/errors";
 import { isComposing } from "@/lib/shortcuts";
 import { formatBytes, formatMiB } from "@/lib/utils";
@@ -389,9 +389,4 @@ export function stateLabel(t: (k: string, o?: Record<string, unknown>) => string
     default:
       return t(`models.engine_card.state.${state.kind}`);
   }
-}
-
-export function engineSummary(status: EngineStatus | null): { loadedId: string | null; memory: number | null } {
-  const loaded = status?.models.find((m) => m.status === "loaded") ?? null;
-  return { loadedId: loaded?.id ?? null, memory: loaded?.memory_effective_bytes ?? null };
 }

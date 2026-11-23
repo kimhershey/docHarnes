@@ -194,7 +194,6 @@ impl Default for UiSettings {
 
 pub const UI_SCALE_MIN: u16 = 90;
 pub const UI_SCALE_MAX: u16 = 150;
-pub const UI_SCALE_STEP: u16 = 10;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]

@@ -290,7 +290,6 @@ fn builtin_kind(draft: &Draft) -> Option<TemplateKind> {
 /// The two parties of a contract-like template (갑 / 을), as field-key prefixes.
 fn party_prefixes(kind: Option<TemplateKind>) -> Option<(&'static str, &'static str)> {
     match kind {
-        Some(TemplateKind::Contract) => Some(("party_a", "party_b")),
         Some(TemplateKind::DevContract | TemplateKind::Sow | TemplateKind::Acceptance) => {
             Some(("client", "contractor"))
         }
@@ -364,7 +363,6 @@ fn plan(draft: &Draft) -> Plan<'_> {
     let signature_keys: &[&str] = match kind {
         Some(TemplateKind::OfficialLetter) => &["sender", "contact_person", "phone", "attachments"],
         Some(TemplateKind::SupplementRequest) => &["sender", "contact_person", "phone", "due_date", "subject"],
-        Some(TemplateKind::Contract) => &[],
         _ => &[],
     };
     let long_keys = ["summary", "attachments"];
@@ -394,8 +392,7 @@ fn plan(draft: &Draft) -> Plan<'_> {
     }
 
     // 4. Tables of item-centric templates / forms come before the body.
-    let tables_first = kind.is_none()
-        || matches!(kind, Some(TemplateKind::Quotation | TemplateKind::TransactionStatement | TemplateKind::Estimate));
+    let tables_first = kind.is_none() || matches!(kind, Some(TemplateKind::Estimate));
     let referenced: HashSet<&str> = draft
         .body
         .iter()
@@ -487,8 +484,8 @@ fn plan(draft: &Draft) -> Plan<'_> {
                 signature.push(contact.join(" · "));
             }
         }
-        Some(TemplateKind::Contract | TemplateKind::DevContract | TemplateKind::Acceptance) => {
-            let (pa, pb) = party_prefixes(kind).unwrap_or(("party_a", "party_b"));
+        Some(TemplateKind::DevContract | TemplateKind::Acceptance) => {
+            let (pa, pb) = party_prefixes(kind).unwrap_or(("client", "contractor"));
             for (p, l) in [(pa, if ko { "갑" } else { "Party A" }), (pb, if ko { "을" } else { "Party B" })] {
                 let name = value_of(&format!("{p}.name"));
                 let rep = value_of(&format!("{p}.representative"));
@@ -502,7 +499,7 @@ fn plan(draft: &Draft) -> Plan<'_> {
                 }
             }
         }
-        Some(TemplateKind::Quotation | TemplateKind::Estimate) => {
+        Some(TemplateKind::Estimate) => {
             if let Some(v) = value_of("supplier.name") {
                 signature.push(if ko { format!("{v} (인)") } else { format!("{v} (seal)") });
             }

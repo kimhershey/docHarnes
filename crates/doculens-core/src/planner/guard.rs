@@ -584,24 +584,6 @@ fn setting_change(text: &str, op: &Op) -> Option<(String, bool)> {
             }
             Some((format!("{} → {}", spec.label_ko, value_text(value)), grounded(key, value)))
         }
-        Op::SetTheme { theme } => {
-            let v = Value::String(theme.as_str().to_string());
-            Some((format!("테마 → {}", theme.as_str()), grounded("ui.theme", &v)))
-        }
-        Op::SetLanguage { lang } => {
-            let v = Value::String(lang.as_str().to_string());
-            Some((format!("언어 → {}", lang.as_str()), grounded("ui.language", &v)))
-        }
-        Op::SetProfile { profile } => {
-            let v = serde_json::to_value(profile).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
-            let ok = grounded("models.profile", &Value::String(v.clone()));
-            Some((format!("추론 프로파일 → {v}"), ok))
-        }
-        Op::SetInboxWatch { enabled } => Some((
-            format!("inbox 감시 → {}", if *enabled { "켜기" } else { "끄기" }),
-            grounded("processing.inbox_watch", &Value::Bool(*enabled)),
-        )),
-        Op::SetModel { id } => Some((format!("모델 → {id}"), model_is_named(text, id))),
         Op::ManageModel { action: ModelAction::SetTier, tier: Some(tier), .. } => {
             Some((format!("티어 → {tier}"), grounded("models.manual_tier", &Value::String(tier.clone()))))
         }
@@ -704,19 +686,7 @@ pub fn type_filter_repair(text: &str, plan: &mut Plan, ctx: &super::PlanContext,
     };
     // Settings, navigation and the like may accompany them; anything else that works on documents or
     // takes a type as its value leaves the plan alone.
-    let neutral = |op: &Op| {
-        matches!(
-            op,
-            Op::SetSetting { .. }
-                | Op::SetTheme { .. }
-                | Op::SetLanguage { .. }
-                | Op::SetProfile { .. }
-                | Op::SetModel { .. }
-                | Op::SetInboxWatch { .. }
-                | Op::Open { .. }
-                | Op::Help {}
-        )
-    };
+    let neutral = |op: &Op| matches!(op, Op::SetSetting { .. } | Op::Open { .. } | Op::Help {});
     if !plan.operations.iter().any(filters_by_type)
         || !plan.operations.iter().all(|op| filters_by_type(op) || neutral(op))
     {
@@ -1430,7 +1400,7 @@ pub fn summary_about(text: &str, plan: &mut Plan, ctx: &super::PlanContext, ko: 
         return None;
     }
     let summarize = |plan: &mut Plan, topic: Option<String>| {
-        plan.operations = vec![Op::Summarize { target: None, length, group_by: None, topic }];
+        plan.operations = vec![Op::Summarize { length, group_by: None, topic }];
         plan.intent = super::OpKind::Summarize;
         plan.clarification_question = None;
         plan.requires_confirmation = false;
@@ -2178,7 +2148,7 @@ mod tests {
     #[test]
     fn a_library_wide_summary_of_a_pasted_text_becomes_a_text_only_answer() {
         let text = format!("다음 문장을 다듬어 정리해줘: {BODY}");
-        let mut plan = kb_plan(Op::Summarize { target: None, length: None, group_by: None, topic: None });
+        let mut plan = kb_plan(Op::Summarize { length: None, group_by: None, topic: None });
         let note = prefer_text_only_answer(&text, &mut plan, true).expect("re-targeted");
         assert_eq!(note.code, "text_only_answer");
         assert!(!note.blocking);
@@ -2192,19 +2162,19 @@ mod tests {
     #[test]
     fn explicit_scopes_and_non_knowledge_ops_are_left_alone() {
         let text = format!("다음 문장을 다듬어 정리해줘: {BODY}");
-        let mut scoped = kb_plan(Op::Summarize { target: None, length: None, group_by: None, topic: None });
+        let mut scoped = kb_plan(Op::Summarize { length: None, group_by: None, topic: None });
         scoped.scope.folder = Some("documents/2026".into());
         assert!(prefer_text_only_answer(&text, &mut scoped, true).is_none());
         let mut validate = kb_plan(Op::Validate {});
         assert!(prefer_text_only_answer(&text, &mut validate, true).is_none());
-        let mut plain = kb_plan(Op::Summarize { target: None, length: None, group_by: None, topic: None });
+        let mut plain = kb_plan(Op::Summarize { length: None, group_by: None, topic: None });
         assert!(prefer_text_only_answer("지난달 계약서 요약해줘", &mut plain, true).is_none());
         // Documents the plan names are a scope too: the "text" is an instruction about them.
-        let mut selected = kb_plan(Op::Summarize { target: None, length: None, group_by: None, topic: None });
+        let mut selected = kb_plan(Op::Summarize { length: None, group_by: None, topic: None });
         selected.scope.doc_ids = vec!["d1".into()];
         assert!(prefer_text_only_answer(&text, &mut selected, true).is_none());
         // A date range the resolver filled from "12월말" inside the body is not an explicit scope.
-        let mut dated = kb_plan(Op::Summarize { target: None, length: None, group_by: None, topic: None });
+        let mut dated = kb_plan(Op::Summarize { length: None, group_by: None, topic: None });
         dated.scope.filter.date_from = Some("2025-12-01".into());
         dated.scope.filter.date_to = Some("2025-12-31".into());
         assert!(prefer_text_only_answer(&text, &mut dated, true).is_some());
@@ -2233,28 +2203,18 @@ mod tests {
     fn plans_the_real_model_wrote_are_caught_or_repaired() {
         use serde_json::json;
         // "담당자별" came back grouped by folder and ran: the guess is taken out and the split reported.
-        let mut p = model_plan(vec![Op::Summarize {
-            target: None,
-            length: None,
-            group_by: Some(SummaryGroup::Folder),
-            topic: None,
-        }]);
+        let mut p = model_plan(vec![Op::Summarize { length: None, group_by: Some(SummaryGroup::Folder), topic: None }]);
         assert_eq!(codes("견적서를 담당자별로 요약해줘", &mut p), vec!["grouping_dropped"]);
         assert!(p.requires_confirmation && p.unmet.is_some());
         assert!(matches!(&p.operations[0], Op::Summarize { group_by: None, .. }));
         // A grouping other than the one the sentence names is replaced by the sentence's.
-        let mut p = model_plan(vec![Op::Summarize {
-            target: None,
-            length: None,
-            group_by: Some(SummaryGroup::Folder),
-            topic: None,
-        }]);
+        let mut p = model_plan(vec![Op::Summarize { length: None, group_by: Some(SummaryGroup::Folder), topic: None }]);
         assert!(codes("프로젝트별로 요약해줘", &mut p).is_empty());
         assert!(matches!(&p.operations[0], Op::Summarize { group_by: Some(SummaryGroup::Project), .. }));
         // The split belongs to the filing step: the summary is left alone.
         let mut p = model_plan(vec![
             Op::Move { folder: "documents/{{doc_type}}".into(), group_by: Some(GroupBy::DocType), only_reviewed: None },
-            Op::Summarize { target: None, length: None, group_by: Some(SummaryGroup::DocType), topic: None },
+            Op::Summarize { length: None, group_by: Some(SummaryGroup::DocType), topic: None },
         ]);
         assert!(codes("담당자별 폴더로 옮기고 유형별로 요약해줘", &mut p).is_empty());
 
@@ -2311,7 +2271,7 @@ mod tests {
             ..Default::default()
         };
         let scale = || Op::SetSetting { key: "ui.scale_percent".into(), value: json!(130) };
-        let summarize = || Op::Summarize { target: None, length: None, group_by: None, topic: None };
+        let summarize = || Op::Summarize { length: None, group_by: None, topic: None };
         let mut p = model_plan(vec![scale(), summarize()]);
         let note = type_filter_repair("배율 130으로 바꾸고 견적서 요약해줘", &mut p, &ctx, true).expect("repaired");
         assert_eq!(note.code, "scope_filled");
@@ -2440,7 +2400,7 @@ mod tests {
     #[test]
     fn a_summary_about_a_subject_is_a_summary_of_that_subject() {
         let ctx = topic_ctx();
-        let plain = |target, group_by| Op::Summarize { target, length: None, group_by, topic: None };
+        let plain = |group_by| Op::Summarize { length: None, group_by, topic: None };
         let run = |text: &str, mut p: Plan| {
             let mut notes: Vec<String> = Vec::new();
             notes.extend(summary_about(text, &mut p, &ctx, true).into_iter().map(|i| i.code));
@@ -2449,11 +2409,11 @@ mod tests {
             (p, notes)
         };
         let topic_of = |p: &Plan| match p.operations.as_slice() {
-            [Op::Summarize { topic, target: None, group_by: None, .. }] => topic.clone(),
+            [Op::Summarize { topic, group_by: None, .. }] => topic.clone(),
             other => panic!("{other:?}"),
         };
         // t-1: every document of the library (one by one, until 1.0.3).
-        let (p, notes) = run("AA에 대해서 요약해줘", model_plan(vec![plain(None, None)]));
+        let (p, notes) = run("AA에 대해서 요약해줘", model_plan(vec![plain(None)]));
         assert_eq!(topic_of(&p).as_deref(), Some("AA"));
         assert!(p.scope.is_empty() && !p.requires_confirmation, "{p:?}");
         assert_eq!(notes, vec!["summary_topic"]);
@@ -2461,17 +2421,17 @@ mod tests {
         // t-2: one summary per project of the library. The subject is content even when a project is
         // called so (user decision 2026-11-20): AAA is looked up in every document, and the card says
         // how to ask for the project instead.
-        let (p, notes) = run("AAA에 대해서 요약해줘", model_plan(vec![plain(None, Some(SummaryGroup::Project))]));
+        let (p, notes) = run("AAA에 대해서 요약해줘", model_plan(vec![plain(Some(SummaryGroup::Project))]));
         assert_eq!(topic_of(&p).as_deref(), Some("AAA"));
         assert!(p.scope.is_empty() && !p.requires_confirmation, "{p:?}");
         assert_eq!(notes, vec!["summary_topic", "topic_names_project"]);
         // t-4: "요구사항" is part of the subject — no document type is named.
-        let (p, notes) = run("보안 요구사항에 대해 요약해줘", model_plan(vec![plain(None, Some(SummaryGroup::None))]));
+        let (p, notes) = run("보안 요구사항에 대해 요약해줘", model_plan(vec![plain(Some(SummaryGroup::None))]));
         assert_eq!(topic_of(&p).as_deref(), Some("보안 요구사항"));
         assert!(p.scope.is_empty(), "{:?}", p.scope);
         assert_eq!(notes, vec!["summary_topic"]);
         // t-5: the type the model took from the subject goes; the project the sentence names is the scope.
-        let mut typed = model_plan(vec![plain(None, Some(SummaryGroup::Project))]);
+        let mut typed = model_plan(vec![plain(Some(SummaryGroup::Project))]);
         typed.scope.filter.doc_type = Some("acceptance".into());
         let (p, _) = run("한빛 납품 프로젝트에서 검수 기준에 대해 요약해줘", typed);
         assert_eq!(topic_of(&p).as_deref(), Some("검수 기준"));
@@ -2480,13 +2440,12 @@ mod tests {
             (None, Some("p-hanbit"))
         );
         // A type named outside the subject is where to look.
-        let (p, notes) = run("계약서에서 지체상금에 대해 요약해줘", model_plan(vec![plain(None, None)]));
+        let (p, notes) = run("계약서에서 지체상금에 대해 요약해줘", model_plan(vec![plain(None)]));
         assert_eq!(topic_of(&p).as_deref(), Some("지체상금"));
         assert_eq!(p.scope.filter.doc_type.as_deref(), Some("dev_contract"));
         assert_eq!(notes, vec!["summary_topic", "scope_filled"]);
         // A file-name keyword that is the subject is not a filter; the length asked for stays.
         let mut keyed = model_plan(vec![Op::Summarize {
-            target: None,
             length: Some(crate::planner::SummaryLength::Long),
             group_by: None,
             topic: None,
@@ -2527,11 +2486,11 @@ mod tests {
         // at, a plan that does more than read, a pasted text.
         for text in ["요약해줘", "견적서에 대해 요약해줘", "계약서 내용에 대해 요약해줘", "이 문서에 대해 요약해줘"]
         {
-            let mut p = model_plan(vec![plain(None, None)]);
+            let mut p = model_plan(vec![plain(None)]);
             assert!(summary_about(text, &mut p, &ctx, true).is_none(), "{text}");
-            assert!(matches!(&p.operations[0], Op::Summarize { topic: None, target: None, .. }), "{text}");
+            assert!(matches!(&p.operations[0], Op::Summarize { topic: None, .. }), "{text}");
         }
-        let mut two = model_plan(vec![plain(None, None), Op::Tag { add: vec!["확인".into()], remove: vec![] }]);
+        let mut two = model_plan(vec![plain(None), Op::Tag { add: vec!["확인".into()], remove: vec![] }]);
         assert!(summary_about("AA에 대해서 요약하고 확인 태그 붙여줘", &mut two, &ctx, true).is_none());
         assert_eq!(two.operations.len(), 2);
 
@@ -2568,8 +2527,7 @@ mod tests {
             label_ko: "회의록".into(),
             label_en: "Meeting minutes".into(),
         });
-        let about =
-            |topic: &str| Op::Summarize { target: None, length: None, group_by: None, topic: Some(topic.into()) };
+        let about = |topic: &str| Op::Summarize { length: None, group_by: None, topic: Some(topic.into()) };
         let run = |text: &str, mut p: Plan, ctx: &crate::planner::PlanContext| {
             let mut notes: Vec<String> = Vec::new();
             notes.extend(summary_about(text, &mut p, ctx, true).into_iter().map(|i| i.code));
@@ -2588,10 +2546,7 @@ mod tests {
         assert_eq!(notes, vec!["summary_topic"]);
         // A name alone is content, whatever is called so: no project scope, and the card says how to
         // ask for the project (user decision 2026-11-20).
-        for op in [
-            about("AAA"),
-            Op::Summarize { target: None, length: None, group_by: Some(SummaryGroup::Project), topic: None },
-        ] {
+        for op in [about("AAA"), Op::Summarize { length: None, group_by: Some(SummaryGroup::Project), topic: None }] {
             let (p, notes) = run("AAA에 대해서 요약해줘", model_plan(vec![op]), &ctx);
             assert_eq!(topic_of(&p).as_deref(), Some("AAA"));
             assert!(p.scope.is_empty(), "{:?}", p.scope);
@@ -2599,16 +2554,11 @@ mod tests {
         }
         // The project slot alone — the word "프로젝트" names it: one summary of its documents, no topic.
         for text in ["AAA 프로젝트에 대해 요약해줘", "AAA 프로젝트에 관해서 요약해줘"] {
-            for op in [
-                about("AAA"),
-                Op::Summarize { target: None, length: None, group_by: Some(SummaryGroup::Project), topic: None },
-            ] {
+            for op in [about("AAA"), Op::Summarize { length: None, group_by: Some(SummaryGroup::Project), topic: None }]
+            {
                 let (p, notes) = run(text, model_plan(vec![op]), &ctx);
                 assert!(
-                    matches!(
-                        p.operations.as_slice(),
-                        [Op::Summarize { topic: None, target: None, group_by: None, .. }]
-                    ),
+                    matches!(p.operations.as_slice(), [Op::Summarize { topic: None, group_by: None, .. }]),
                     "{text}: {p:?}"
                 );
                 assert_eq!(p.scope.filter.project_id.as_deref(), Some("p-aaa"), "{text}");
@@ -2619,42 +2569,34 @@ mod tests {
         // with an empty scope): before the validator the topic goes, and the split nobody asked for
         // becomes the one summary of the project the sentence names.
         let mut split = model_plan(vec![Op::Summarize {
-            target: None,
             length: None,
             group_by: Some(SummaryGroup::Project),
             topic: Some("AAA".into()),
         }]);
         unsaid_topic("AAA 프로젝트 요약해줘", &mut split, &ctx);
         let (p, notes) = run("AAA 프로젝트 요약해줘", split, &ctx);
-        assert!(
-            matches!(p.operations.as_slice(), [Op::Summarize { topic: None, target: None, group_by: None, .. }]),
-            "{p:?}"
-        );
+        assert!(matches!(p.operations.as_slice(), [Op::Summarize { topic: None, group_by: None, .. }]), "{p:?}");
         assert_eq!(p.scope.filter.project_id.as_deref(), Some("p-aaa"));
         assert_eq!(notes, vec!["scope_filled"]);
         // (a split the sentence asks for stays: one summary per project of the library)
-        let per_project = model_plan(vec![Op::Summarize {
-            target: None,
-            length: None,
-            group_by: Some(SummaryGroup::Project),
-            topic: None,
-        }]);
+        let per_project =
+            model_plan(vec![Op::Summarize { length: None, group_by: Some(SummaryGroup::Project), topic: None }]);
         let (p, _) = run("프로젝트별로 요약해줘", per_project.clone(), &ctx);
         assert!(matches!(p.operations.as_slice(), [Op::Summarize { group_by: Some(SummaryGroup::Project), .. }]));
         assert_eq!(p.scope.filter.project_id, None);
         let (p, _) = run("AAA 프로젝트와 한빛 납품 프로젝트를 프로젝트별로 요약해줘", per_project, &ctx);
         assert!(matches!(p.operations.as_slice(), [Op::Summarize { group_by: Some(SummaryGroup::Project), .. }]));
         // The project named as the place and its name as the subject: a subject like any other.
-        for op in [about("AAA"), Op::Summarize { target: None, length: None, group_by: None, topic: None }] {
+        for op in [about("AAA"), Op::Summarize { length: None, group_by: None, topic: None }] {
             let (p, _) = run("AAA 프로젝트에서 AAA에 대해 요약해줘", model_plan(vec![op]), &ctx);
             assert_eq!(topic_of(&p).as_deref(), Some("AAA"));
             assert_eq!(p.scope.filter.project_id.as_deref(), Some("p-aaa"));
         }
         // (a summary the model already scoped to the project: one summary of it, nothing else to say)
-        let mut scoped = model_plan(vec![Op::Summarize { target: None, length: None, group_by: None, topic: None }]);
+        let mut scoped = model_plan(vec![Op::Summarize { length: None, group_by: None, topic: None }]);
         scoped.scope.filter.project_id = Some("p-aaa".into());
         let (p, notes) = run("AAA 프로젝트에 대해 요약해줘", scoped, &ctx);
-        assert!(matches!(p.operations.as_slice(), [Op::Summarize { topic: None, target: None, .. }]));
+        assert!(matches!(p.operations.as_slice(), [Op::Summarize { topic: None, .. }]));
         assert!(notes.is_empty(), "{notes:?}");
         // The subject as the sentence has it stays, and the type its words name is no place to look.
         let mut typed = model_plan(vec![about("검수 기준")]);
@@ -2741,7 +2683,6 @@ mod tests {
             ("지체상금 요약해줘", "지체상금", Some("지체상금")),
         ] {
             let mut p = model_plan(vec![Op::Summarize {
-                target: None,
                 length: None,
                 group_by: Some(SummaryGroup::Project),
                 topic: Some(written.into()),
@@ -2749,13 +2690,12 @@ mod tests {
             unsaid_topic(text, &mut p, &ctx);
             let grouping = if settled.is_some() { None } else { Some(SummaryGroup::Project) };
             assert!(
-                matches!(&p.operations[0], Op::Summarize { target: None, group_by, topic, .. } if topic.as_deref() == settled && *group_by == grouping),
+                matches!(&p.operations[0], Op::Summarize { group_by, topic, .. } if topic.as_deref() == settled && *group_by == grouping),
                 "{text} / {written}: {p:?}"
             );
         }
         // (a split the sentence does ask for is left for the checks to report)
         let mut p = model_plan(vec![Op::Summarize {
-            target: None,
             length: None,
             group_by: Some(SummaryGroup::Project),
             topic: Some("지체상금".into()),
@@ -2769,7 +2709,7 @@ mod tests {
         ctx.current_document = Some("d-open".into());
         for plan in [
             model_plan(vec![about("지체상금")]),
-            model_plan(vec![Op::Summarize { target: None, length: None, group_by: None, topic: None }]),
+            model_plan(vec![Op::Summarize { length: None, group_by: None, topic: None }]),
         ] {
             let (p, _) = run("이 문서에서 지체상금에 대해 요약해줘", plan, &ctx);
             assert_eq!(topic_of(&p).as_deref(), Some("지체상금"));
@@ -2833,9 +2773,8 @@ mod tests {
             notes.extend(where_to_look(text, &mut p, ctx, true).into_iter().map(|i| i.code));
             (p, notes)
         };
-        let plain = || Op::Summarize { target: None, length: None, group_by: None, topic: None };
-        let about =
-            |topic: &str| Op::Summarize { target: None, length: None, group_by: None, topic: Some(topic.into()) };
+        let plain = || Op::Summarize { length: None, group_by: None, topic: None };
+        let about = |topic: &str| Op::Summarize { length: None, group_by: None, topic: Some(topic.into()) };
         let answer = |q: &str| Op::Answer { question: q.into(), cite: None, knowledge: None, mode: None, reply: None };
         let slots = |p: &Plan| match p.operations.as_slice() {
             [Op::Summarize { topic, .. }] => (p.scope.filter.project_id.clone(), topic.clone()),
@@ -2883,34 +2822,29 @@ mod tests {
         // 4. The project alone: all its documents, in one summary.
         for op in [
             plain(),
-            Op::Summarize { target: None, length: None, group_by: None, topic: None },
-            Op::Summarize {
-                target: None,
-                length: None,
-                group_by: Some(SummaryGroup::Project),
-                topic: Some("AAA".into()),
-            },
+            Op::Summarize { length: None, group_by: None, topic: None },
+            Op::Summarize { length: None, group_by: Some(SummaryGroup::Project), topic: Some("AAA".into()) },
         ] {
             let (p, notes) = run("AAA 프로젝트 요약해줘", model_plan(vec![op]), &ctx);
             assert_eq!(slots(&p), both(Some("p-aaa"), None));
-            assert!(matches!(p.operations.as_slice(), [Op::Summarize { target: None, group_by: None, .. }]), "{p:?}");
+            assert!(matches!(p.operations.as_slice(), [Op::Summarize { group_by: None, .. }]), "{p:?}");
             assert!(p.scope.filter.with_reference, "{:?}", p.scope);
             assert_eq!(notes, vec!["scope_filled"]);
         }
         let (p, _) = run("AAA 프로젝트의 주요 내용에 대해 요약해줘", model_plan(vec![about("주요 내용")]), &ctx);
         assert_eq!(slots(&p), both(Some("p-aaa"), None), "the main points of the project: its summary");
-        assert!(matches!(p.operations.as_slice(), [Op::Summarize { target: None, .. }]));
+        assert!(matches!(p.operations.as_slice(), [Op::Summarize { .. }]));
         // (the words may narrow the project further; a summary of each document is not made any more
         // — 1.0.3 — and the sentence that asks for one is told so and confirmed)
-        let each = Op::Summarize { target: None, length: None, group_by: None, topic: None };
+        let each = Op::Summarize { length: None, group_by: None, topic: None };
         let (mut p, _) = run("AAA 프로젝트 문서를 각각 요약해줘", model_plan(vec![each.clone()]), &ctx);
-        assert!(matches!(p.operations.as_slice(), [Op::Summarize { target: None, group_by: None, .. }]));
+        assert!(matches!(p.operations.as_slice(), [Op::Summarize { group_by: None, .. }]));
         assert_eq!(p.scope.filter.project_id.as_deref(), Some("p-aaa"));
         let said = split_check("AAA 프로젝트 문서를 각각 요약해줘", &mut p, true).expect("told");
         assert_eq!(said.code, "grouping_dropped");
         assert!(said.message.contains("문서별 요약은 만들지 않습니다") && p.requires_confirmation, "{said:?}");
         let (p, _) = run("AAA 프로젝트의 계약서 요약해줘", model_plan(vec![each]), &ctx);
-        assert!(matches!(p.operations.as_slice(), [Op::Summarize { target: None, .. }]));
+        assert!(matches!(p.operations.as_slice(), [Op::Summarize { .. }]));
         assert_eq!(
             (p.scope.filter.project_id.as_deref(), p.scope.filter.doc_type.as_deref()),
             (Some("p-aaa"), Some("dev_contract"))
@@ -2943,7 +2877,7 @@ mod tests {
         assert_eq!(codes("참고 자료에서 납품 기한 검색해줘", &mut p), vec!["scope_filled"]);
         assert_eq!(p.scope.filter.role, Some(crate::planner::RoleParam::Knowledge));
         assert!(matches!(&p.operations[0], Op::Search { query, .. } if query == "납품 기한"));
-        let mut p = model_plan(vec![Op::Summarize { target: None, length: None, group_by: None, topic: None }]);
+        let mut p = model_plan(vec![Op::Summarize { length: None, group_by: None, topic: None }]);
         codes("업무 문서만 요약해줘", &mut p);
         assert_eq!(p.scope.filter.role, Some(crate::planner::RoleParam::Work));
         let mut p = model_plan(vec![search("납품 기한")]);
@@ -2964,7 +2898,7 @@ mod tests {
             "summarize it including the reference documents",
             "summarize the reference material and the contracts",
         ] {
-            let mut p = model_plan(vec![Op::Summarize { target: None, length: None, group_by: None, topic: None }]);
+            let mut p = model_plan(vec![Op::Summarize { length: None, group_by: None, topic: None }]);
             assert!(codes(said, &mut p).is_empty(), "{said}");
             assert_eq!(p.scope.filter.role, None, "{said}");
         }
@@ -2979,7 +2913,7 @@ mod tests {
             ("understand reference material first", crate::planner::RoleParam::Knowledge),
             ("업무문서를 요약해줘", crate::planner::RoleParam::Work),
         ] {
-            let mut p = model_plan(vec![Op::Summarize { target: None, length: None, group_by: None, topic: None }]);
+            let mut p = model_plan(vec![Op::Summarize { length: None, group_by: None, topic: None }]);
             assert_eq!(codes(said, &mut p), vec!["scope_filled"], "{said}");
             assert_eq!(p.scope.filter.role, Some(kind), "{said}");
         }
@@ -2989,14 +2923,14 @@ mod tests {
             p.scope.filter.project_id = Some("p1".into());
             p
         };
-        let mut p = in_project(vec![Op::Summarize { target: None, length: None, group_by: None, topic: None }]);
+        let mut p = in_project(vec![Op::Summarize { length: None, group_by: None, topic: None }]);
         codes("참고자료도 포함해서 요약해줘", &mut p);
         assert!(p.scope.filter.with_reference && p.scope.filter.role.is_none());
-        let mut p = in_project(vec![Op::Summarize { target: None, length: None, group_by: None, topic: None }]);
+        let mut p = in_project(vec![Op::Summarize { length: None, group_by: None, topic: None }]);
         p.scope.filter.with_reference = true;
         codes("참고 자료만 요약해줘", &mut p);
         assert!(!p.scope.filter.with_reference, "a kind from the sentence replaces the default of the project scope");
-        let mut p = model_plan(vec![Op::Summarize { target: None, length: None, group_by: None, topic: None }]);
+        let mut p = model_plan(vec![Op::Summarize { length: None, group_by: None, topic: None }]);
         codes("한빛 포털 프로젝트 요약해줘", &mut p);
         assert!(p.scope.filter.with_reference && p.scope.filter.project_id.as_deref() == Some("p1"));
         // The words that add a kind are not what to search for either.
@@ -3073,10 +3007,10 @@ mod tests {
         use crate::settings::{Profile, Theme};
         use serde_json::json;
         // What 0.7.0 did with "UI 배율 120%" and "DPI 를 200 으로 변경해줘".
-        let mut p = model_plan(vec![Op::SetProfile { profile: Profile::Balanced }]);
+        let mut p = model_plan(vec![Op::set_profile(Profile::Balanced)]);
         assert_eq!(codes("UI 배율 120%", &mut p), vec!["ungrounded_change"]);
         assert!(p.requires_confirmation);
-        let mut p = model_plan(vec![Op::SetTheme { theme: Theme::System }]);
+        let mut p = model_plan(vec![Op::set_theme(Theme::System)]);
         assert_eq!(codes("DPI 를 200 으로 변경해줘", &mut p), vec!["ungrounded_change"]);
         assert!(p.requires_confirmation);
         // The right key with a value the sentence does not say, and the right value on another key.
@@ -3096,9 +3030,9 @@ mod tests {
                 "이제부터 개인정보 마스킹은 꺼줘",
                 Op::SetSetting { key: "privacy.pii_masking".into(), value: json!(false) },
             ),
-            ("눈이 아파서 그런데 다크 테마로 바꿔줄래", Op::SetTheme { theme: Theme::Dark }),
-            ("프로파일을 균형으로 돌려놔", Op::SetProfile { profile: Profile::Balanced }),
-            ("모델을 12B로 올려줘", Op::SetModel { id: "gemma4-12b-q4km".into() }),
+            ("눈이 아파서 그런데 다크 테마로 바꿔줄래", Op::set_theme(Theme::Dark)),
+            ("프로파일을 균형으로 돌려놔", Op::set_profile(Profile::Balanced)),
+            ("모델을 12B로 올려줘", Op::set_model("gemma4-12b-q4km")),
         ] {
             let mut p = model_plan(vec![op]);
             assert!(codes(text, &mut p).is_empty(), "{text}: {p:?}");
@@ -3107,13 +3041,13 @@ mod tests {
         // 0.8.0 review: the value alone is not enough, a negated sentence grounds nothing, a model
         // family grounds no model, and a number is not divided for an integer setting.
         for (text, op) in [
-            ("시스템 요구사항 문서 찾아줘", Op::SetTheme { theme: Theme::System }),
-            ("이 문서를 영어로 번역해줘", Op::SetLanguage { lang: crate::settings::Language::En }),
-            ("금액을 정확하게 추출해줘", Op::SetProfile { profile: Profile::Accuracy }),
+            ("시스템 요구사항 문서 찾아줘", Op::set_theme(Theme::System)),
+            ("이 문서를 영어로 번역해줘", Op::set_language(crate::settings::Language::En)),
+            ("금액을 정확하게 추출해줘", Op::set_profile(Profile::Accuracy)),
             ("개인정보 마스킹 끄지 마세요", Op::SetSetting { key: "privacy.pii_masking".into(), value: json!(false) }),
-            ("gemma4 e2b로 바꿔", Op::SetModel { id: "gemma4-12b-q4km".into() }),
+            ("gemma4 e2b로 바꿔", Op::set_model("gemma4-12b-q4km")),
             ("근거 개수 500", Op::SetSetting { key: "knowledge.top_k".into(), value: json!(5) }),
-            ("inbox 폴더의 견적서를 처리해줘", Op::SetInboxWatch { enabled: true }),
+            ("inbox 폴더의 견적서를 처리해줘", Op::set_inbox_watch(true)),
             (
                 "엔진 다시 시작해줘",
                 Op::ManageModel {
@@ -3142,8 +3076,8 @@ mod tests {
                 "근거 컨텍스트 토큰을 8,000으로",
                 Op::SetSetting { key: "knowledge.context_tokens".into(), value: json!(8000) },
             ),
-            ("inbox 감시 꺼줘", Op::SetInboxWatch { enabled: false }),
-            ("모델을 e2b로 바꿔", Op::SetModel { id: "gemma4-e2b-q4km".into() }),
+            ("inbox 감시 꺼줘", Op::set_inbox_watch(false)),
+            ("모델을 e2b로 바꿔", Op::set_model("gemma4-e2b-q4km")),
             (
                 "엔진 백엔드를 cpu로 바꿔",
                 Op::ManageModel {
@@ -3181,7 +3115,7 @@ mod tests {
     /// Audit USR-4: "프로젝트 별 내용을 요약해줘" became one summary of everything.
     #[test]
     fn what_the_plan_leaves_out_is_shown_and_confirmed() {
-        let summarize = |group_by| Op::Summarize { target: None, length: None, group_by, topic: None };
+        let summarize = |group_by| Op::Summarize { length: None, group_by, topic: None };
         // The model says so itself.
         let mut p = model_plan(vec![summarize(None)]);
         p.unmet = Some("  프로젝트별로 나누기  ".into());
@@ -3257,7 +3191,7 @@ mod tests {
     #[test]
     fn a_summary_is_as_long_as_the_sentence_says() {
         use crate::planner::SummaryLength::{Long, Short};
-        let summarize = |length| Op::Summarize { target: None, length, group_by: None, topic: None };
+        let summarize = |length| Op::Summarize { length, group_by: None, topic: None };
         let length_of = |text: &str, written| {
             let mut p = model_plan(vec![summarize(written)]);
             unsaid_length(text, &mut p);
@@ -3313,7 +3247,7 @@ mod tests {
     /// cannot make.
     #[test]
     fn a_summary_of_each_document_is_not_made_and_said_so() {
-        let summarize = |group_by| Op::Summarize { target: None, length: None, group_by, topic: None };
+        let summarize = |group_by| Op::Summarize { length: None, group_by, topic: None };
         for text in [
             "문서별로 요약해줘",
             "파일별로 요약해줘",
@@ -3328,7 +3262,7 @@ mod tests {
             let issues = contract_checks(text, &mut p, text.chars().any(|c| ('가'..='힣').contains(&c)));
             assert_eq!(issues.iter().map(|i| i.code.as_str()).collect::<Vec<_>>(), vec!["grouping_dropped"], "{text}");
             assert!(p.requires_confirmation && p.unmet.is_some(), "{text}: {p:?}");
-            assert!(matches!(p.operations.as_slice(), [Op::Summarize { target: None, group_by: None, .. }]), "{text}");
+            assert!(matches!(p.operations.as_slice(), [Op::Summarize { group_by: None, .. }]), "{text}");
             assert!(
                 issues[0].message.contains("문서별 요약은 만들지 않습니다")
                     || issues[0].message.contains("summaries per document are not made"),
@@ -3367,12 +3301,8 @@ mod tests {
         assert!(codes("프로젝트별로 각각 요약해줘", &mut p).is_empty());
         assert!(matches!(p.operations.as_slice(), [Op::Summarize { group_by: Some(SummaryGroup::Project), .. }]));
         // A summary about a subject is one summary as well.
-        let mut p = model_plan(vec![Op::Summarize {
-            target: None,
-            length: None,
-            group_by: None,
-            topic: Some("지체상금".into()),
-        }]);
+        let mut p =
+            model_plan(vec![Op::Summarize { length: None, group_by: None, topic: Some("지체상금".into()) }]);
         assert_eq!(codes("문서별로 지체상금에 대해 요약해줘", &mut p), vec!["grouping_dropped"]);
         // The plain request says nothing of the kind, and "각각" is about another step where no summary is.
         for text in ["전체 문서를 요약해줘", "이 문서 요약해줘", "선택한 문서를 하나로 묶어 요약해줘"]

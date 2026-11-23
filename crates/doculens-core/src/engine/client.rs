@@ -4,7 +4,7 @@
 //! `/props`, `/metrics`. Loopback only; the API key travels in the
 //! `Authorization` header.
 
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -544,19 +544,6 @@ impl RouterClient {
             }
         }
         Ok(())
-    }
-
-    /// Reads the raw body of an arbitrary GET (diagnostics).
-    pub fn get_text(&self, path: &str) -> Result<(u16, String)> {
-        let mut resp = self.get(&self.control, path)?;
-        let status = resp.status().as_u16();
-        let mut text = String::new();
-        resp.body_mut()
-            .as_reader()
-            .take(1 << 20)
-            .read_to_string(&mut text)
-            .map_err(|e| CoreError::engine(e.to_string()))?;
-        Ok((status, text))
     }
 }
 

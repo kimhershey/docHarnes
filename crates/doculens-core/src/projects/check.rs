@@ -28,7 +28,7 @@ use crate::pipeline::{FieldRecord, FieldStatus};
 
 use super::repo;
 use super::rules::RuleContext;
-use super::{CheckRun, Evidence, ProjectDeps, Rule, RuleOp, RuleOperand, RuleResult, Verdict};
+use super::{CheckRun, Evidence, ProjectDeps, Rule, RuleOp, RuleResult, Verdict};
 
 /// A project document with the fields of its latest extraction run.
 #[derive(Debug, Clone)]
@@ -1098,13 +1098,4 @@ pub fn run(deps: &ProjectDeps<'_>, project_id: &str, rule_ids: &[String]) -> Res
         deps.db.with(|c| repo::insert_run(c, &run))?;
     }
     Ok(run)
-}
-
-/// Resolves the operand field label for display (grid tooltips, reports).
-pub fn operand_label(ctx: &RuleContext, op: &RuleOperand, ko: bool) -> String {
-    match (&op.doc_type, &op.field, &op.value) {
-        (Some(t), Some(f), _) => format!("{} · {}", ctx.type_label(t, ko), ctx.field_label(t, f, ko)),
-        (_, _, Some(v)) => v.clone(),
-        _ => String::new(),
-    }
 }

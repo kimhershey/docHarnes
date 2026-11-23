@@ -109,19 +109,6 @@ pub fn documents_page_text(app: AppHandle, id: String, page_no: u32) -> UiResult
     Ok(page.and_then(|p| p.text))
 }
 
-/// Saves a manual correction of a page's text (viewer text tab). The knowledge indexer picks the
-/// document up again (its text hash changed) and the library refreshes through `documents://changed`.
-#[tauri::command(async)]
-pub fn documents_set_page_text(app: AppHandle, id: String, page_no: u32, text: String) -> UiResult<bool> {
-    let ctx = docs_bridge::context(&app)?;
-    let ok = import::set_page_text(&ctx.db, &id, page_no, &text)?;
-    if ok {
-        docs_bridge::emit_changed(&app, "updated", vec![id]);
-        crate::knowledge_bridge::auto_index(&app);
-    }
-    Ok(ok)
-}
-
 /// The corrections of a page (`page_no`) or of the whole document (`None`), newest first, with whether
 /// the page can undo / redo (0.3.0 item 7).
 #[tauri::command(async)]
@@ -406,12 +393,6 @@ pub fn documents_set_title(app: AppHandle, id: String, title: Option<String>) ->
     ctx.db.with(|c| repo::set_title(c, &id, t.as_deref()))?;
     docs_bridge::emit_changed(&app, "updated", vec![id.clone()]);
     view(&app, docs_bridge::document(&app, &id)?)
-}
-
-#[tauri::command(async)]
-pub fn documents_tags(app: AppHandle) -> UiResult<Vec<(String, u64)>> {
-    let ctx = docs_bridge::context(&app)?;
-    Ok(ctx.db.with(repo::list_tags)?)
 }
 
 #[tauri::command(async)]

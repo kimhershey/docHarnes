@@ -27,10 +27,10 @@ describe("mock generate", () => {
   });
 
   it("drafts a software estimate from the sentence with a sum mismatch the validator can fix", () => {
-    // The picker offers the 12 software templates + 보완요청서; the generic 0.1 set is hidden but still resolvable by slug.
+    // The picker offers the 12 software templates + 보완요청서; the two generic layouts (공문 · 보고서) are not listed.
     const kinds = mg.listTemplates().map((t) => t.kind);
     expect(kinds).toEqual(["rfp", "proposal", "sow", "srs", "dev_contract", "wbs", "progress_report", "meeting_minutes", "test_report", "change_request", "acceptance", "estimate", "supplement_request"]);
-    expect(mg.templateInfo("quotation").kind).toBe("quotation");
+    expect(mg.templateInfo("official_letter").kind).toBe("official_letter");
     const req = { form_ref: "estimate", format_description: null, content: "DocuLens에 백엔드개발 고급 3MM 단가 2,500,000원, 유효기간 30일 견적서 만들어줘", sources: [], output: "hwpx" as const, tone: "formal" as const, length: "medium" as const, language: "ko" as const, use_knowledge: false, feedback: null, previous: null, excluded_sources: [], max_tokens: null };
     const draft = mg.buildDraft(req);
     expect(draft.template).toEqual({ kind: "builtin", template: "estimate" });
@@ -50,7 +50,7 @@ describe("mock generate", () => {
     mg.validateDraft(draft);
     expect(draft.issues.filter((i) => i.code === "sum_mismatch")).toEqual([]);
     expect(total.normalized).toBe("8250000");
-    // Free text picks the software templates only; an explicit reference may still name a hidden one.
+    // Free text picks the software templates only; an explicit reference may still name a generic layout.
     expect(mg.resolveTemplate({ ...req, form_ref: null, content: "10월 진척 보고서 써줘" })).toEqual({ kind: "builtin", template: "progress_report" });
     expect(mg.resolveTemplate({ ...req, form_ref: null, content: "협조 공문 써줘" })).toEqual({ kind: "builtin", template: "report" });
     expect(mg.resolveTemplate({ ...req, form_ref: "A4 공문 형식", content: "x" })).toEqual({ kind: "builtin", template: "official_letter" });

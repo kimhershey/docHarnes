@@ -65,10 +65,6 @@ export function registerFallbackFileHandler(handler: (paths: string[]) => void):
   return () => void fallbackFileHandlers.delete(handler);
 }
 
-export function hasFallbackFileHandler(): boolean {
-  return fallbackFileHandlers.size > 0;
-}
-
 function accepts(h: DropTargetHandlers | undefined, kind: PayloadKind): boolean {
   if (!h || h.disabled) return false;
   return kind === "documents" ? !!h.onDocuments : !!h.onFiles;

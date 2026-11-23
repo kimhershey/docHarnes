@@ -11,8 +11,6 @@ export const UNKNOWN = "미상";
 export const MAX_PATH_CHARS = 240;
 export const MAX_COMPONENT_CHARS = 120;
 
-export type TemplateVariable = (typeof TEMPLATE_VARIABLES)[number];
-
 export type Token = { kind: "lit"; text: string } | { kind: "var"; name: string };
 
 /** Splits a template into literal runs and `{{var}}` tokens (unknown names stay tokens). */
@@ -51,11 +49,6 @@ export function unknownVariables(template: string): string[] {
     if (tok.kind === "var" && !known.includes(tok.name)) out.add(tok.name);
   }
   return [...out].sort();
-}
-
-/** Variables used by the template, in order of appearance. */
-export function templateVariables(template: string): string[] {
-  return parseTemplate(template).flatMap((t) => (t.kind === "var" ? [t.name] : []));
 }
 
 const FORBIDDEN = /[<>:"/\\|?*\u0000-\u001f\u007f]/g;

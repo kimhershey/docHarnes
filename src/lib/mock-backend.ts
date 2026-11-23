@@ -242,11 +242,6 @@ export function currentWorkspacePath(): string | null {
   return current?.path ?? null;
 }
 
-/** True when a job was cancelled from the UI (shared with the knowledge mock). */
-export function isCancelled(jobId: string): boolean {
-  return cancelled.has(jobId);
-}
-
 export function err(code: string, message: string, detail?: unknown): UiError {
   return { code, message, detail };
 }
@@ -296,8 +291,8 @@ function openWorkspace(path: string, create: boolean, name: string | null, local
       manifest: {
         workspace_id: crypto.randomUUID(),
         schema_version: 1,
-        app_version: "1.0.3",
-        last_opened_app_version: "1.0.3",
+        app_version: "1.0.4",
+        last_opened_app_version: "1.0.4",
         name: name?.trim() || basename(p),
         created_at: new Date().toISOString(),
         last_opened_at: null,
@@ -2094,6 +2089,8 @@ function mockDocuments(cmd: string, a: Record<string, any>): unknown { // eslint
       const d = wsDocs().find((x) => x.id === a.id);
       return d?.pages.find((p) => p.page_no === Number(a.pageNo))?.text ?? null;
     }
+    // (no command of the app any more — 1.0.4; the tests still set a page's text through it, as the planner's
+    // `edit_text` step does in the core)
     case "documents_set_page_text": {
       const d = wsDocs().find((x) => x.id === a.id);
       const p = d?.pages.find((x) => x.page_no === Number(a.pageNo));
@@ -2287,11 +2284,6 @@ function mockDocuments(cmd: string, a: Record<string, any>): unknown { // eslint
       emit(EVENTS.documentsChanged, { kind: "updated", ids: [d.id] } satisfies DocumentsChanged);
       return docView(d);
     }
-    case "documents_tags": {
-      const counts = new Map<string, number>();
-      for (const d of wsDocs()) for (const t of d.tags) counts.set(t, (counts.get(t) ?? 0) + 1);
-      return Array.from(counts.entries()).sort(([x], [y]) => x.localeCompare(y));
-    }
     case "documents_set_inbox_watch": {
       const s = loadSettings();
       s.processing.inbox_watch = Boolean(a.enabled);
@@ -2318,7 +2310,7 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "app_info":
       return r({
         name: "DocuLens",
-        version: "1.0.3",
+        version: "1.0.4",
         settings_path: "(browser) localStorage:doculens.mock.settings",
         app_data_dir: "(browser)",
         engines_dir: "(browser)/engines",
@@ -2615,7 +2607,6 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "documents_set_tags":
     case "documents_set_doc_type":
     case "documents_set_title":
-    case "documents_tags":
     case "documents_set_inbox_watch":
     case "documents_pdfium_info":
       return r(await mockDocuments(cmd, a));
@@ -2662,7 +2653,6 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "pipeline_process":
     case "pipeline_doc_types":
     case "pipeline_schemas":
-    case "pipeline_schema_get":
     case "pipeline_schema_versions":
     case "pipeline_schema_save":
     case "pipeline_schema_delete":
@@ -2670,22 +2660,17 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     case "pipeline_schema_set_enabled":
     case "pipeline_schema_lint":
     case "pipeline_schema_from_nl":
-    case "pipeline_form_derive":
     case "pipeline_form_register":
     case "pipeline_schema_discover":
     case "pipeline_schema_name_exists":
-    case "pipeline_document_schema":
     case "pipeline_runs":
     case "pipeline_fields":
     case "pipeline_field_history":
     case "pipeline_restore":
-    case "pipeline_revalidate":
     case "pipeline_review_queue":
     case "pipeline_review_apply":
     case "pipeline_review_approve_document":
     case "pipeline_tables":
-    case "pipeline_table_csv":
-    case "pipeline_table_export":
     case "pipeline_split":
     case "pipeline_merge": {
       if (!current) throw err("no_workspace", "no workspace is open");
@@ -2751,8 +2736,6 @@ export async function mockInvoke<T>(cmd: string, args?: Record<string, unknown>)
     }
     case "prerouter_route":
       return r(mockRoute(String(a.text)));
-    case "prerouter_resolve_date":
-      return r(resolveRelativeDate(String(a.text)));
     default:
       throw err("internal", `mock backend: unknown command ${cmd}`);
   }

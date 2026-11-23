@@ -48,7 +48,7 @@ fn prerouted(text: &str, ctx: &PlanContext) -> Option<Plan> {
     let op = r.op?;
     let (op, summary) = match op {
         PreRoutedOp::SetTheme { theme } => (
-            Op::SetTheme { theme },
+            Op::set_theme(theme),
             if ko {
                 format!("테마를 {}(으)로 바꿉니다", theme.as_str())
             } else {
@@ -56,7 +56,7 @@ fn prerouted(text: &str, ctx: &PlanContext) -> Option<Plan> {
             },
         ),
         PreRoutedOp::SetLanguage { language } => (
-            Op::SetLanguage { lang: language },
+            Op::set_language(language),
             if ko {
                 format!("UI 언어를 {}(으)로 바꿉니다", language.as_str())
             } else {

@@ -72,7 +72,7 @@ export function truncate(s: string, max: number): string {
 }
 
 export function opLabel(op: OpKind, t: TFunction): string {
-  return t(`planner.ops.${op}`);
+  return t(`planner.ops.${op}`, { defaultValue: op });
 }
 
 export function sourceLabel(source: PlanSource, t: TFunction): string {
@@ -151,8 +151,6 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
         op.auto_pipeline ? pt("auto_pipeline", { level: t(`settings.processing.auto_levels.${op.auto_pipeline === "classify" ? "classify_only" : op.auto_pipeline}`) }) : null,
       ]);
     }
-    case "set_inbox_watch":
-      return op.enabled ? pt("on") : pt("off");
     case "classify":
       return joinParts([op.doc_types && op.doc_types.length > 0 ? pt("candidate_types", { count: op.doc_types.length }) : pt("all_types"), op.force ? pt("force") : null]);
     case "set_doc_type":
@@ -239,14 +237,6 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
       return joinParts([projectName(op.project, ctx.context, t), op.findings && op.findings.length > 0 ? pt("findings_count", { count: op.findings.length }) : pt("all_findings"), op.output ? op.output.toUpperCase() : null]);
     case "set_retention":
       return joinParts([t(`planner.params.retention_${op.item}`), op.days < 0 ? t("common.forever") : op.days === 0 ? t("settings.privacy.immediate") : pt("days", { count: op.days })]);
-    case "set_model":
-      return op.id;
-    case "set_profile":
-      return t(`models.profiles.${op.profile}`);
-    case "set_theme":
-      return t(`theme.${op.theme}`);
-    case "set_language":
-      return t(`language.${op.lang}`);
     case "set_setting":
       return `${settingLabel(op.key, t)} = ${String(op.value)}`;
     case "open":
@@ -310,7 +300,7 @@ export function summarizeOp(op: Op, t: TFunction, ctx: SummaryContext = { lang: 
   }
 }
 
-const TEMPLATE_KEYS = ["rfp", "proposal", "sow", "srs", "dev_contract", "wbs", "progress_report", "meeting_minutes", "test_report", "change_request", "acceptance", "estimate", "supplement_request", "official_letter", "quotation", "transaction_statement", "contract", "report", "minutes"];
+const TEMPLATE_KEYS = ["rfp", "proposal", "sow", "srs", "dev_contract", "wbs", "progress_report", "meeting_minutes", "test_report", "change_request", "acceptance", "estimate", "supplement_request", "official_letter", "report"];
 const PROJECT_TEMPLATE_KEYS: Record<string, string> = {
   "builtin-outsourcing": "outsourcing",
   "builtin-maintenance": "maintenance",
@@ -534,19 +524,9 @@ export function withScope(plan: Plan, scope: Scope): Plan {
   return { ...plan, scope };
 }
 
-export function blockingIssues(issues: PlanIssue[]): PlanIssue[] {
-  return issues.filter((i) => i.blocking);
-}
-
 export function warningIssues(issues: PlanIssue[]): PlanIssue[] {
   return issues.filter((i) => !i.blocking);
 }
-
-// ---------------------------------------------------------------------------
-// UI context (default scope of a command)
-// ---------------------------------------------------------------------------
-
-export type AssistantScope = "all" | "folder" | "selection" | "document" | "knowledge" | `col:${string}`;
 
 /**
  * The UI context sent with a command: the chosen scope (folder / selection / the last viewed

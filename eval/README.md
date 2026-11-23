@@ -115,8 +115,8 @@ cargo run -p doculens-eval --release -- planner --golden eval/golden/planner.jso
 - **원인 분류**(결과 JSON `cause`, 보고서 묶음): `no_rule` 규칙 없음(모델 필요) · `rule_clarified` 규칙이 되묻기로 후퇴 ·
   `over_interpretation` 과잉 해석(되묻기·무시가 정답) · `wrong_ops` 의도·연산 오판 · `params` 파라미터 누락·오류 ·
   `scope` 범위 오류 · `confirmation` 확인 여부나 `unmet` 표시가 다름.
-- 1.0.0(계획 4절): 설정 전용 동작 다섯 개(`set_theme` · `set_language` · `set_profile` · `set_model` · `set_inbox_watch`)는 어느 경로에서든 `set_setting`(key · value)으로 바뀌어 나오므로 기대값도 그렇게 적습니다. `explain`은 모델에게 보이지 않아(규칙 경로에는 남음) 설명 문장의 기대값에는 `alt`로 `answer`를 함께 둡니다. 모델에게 보이는 동작은 63종 가운데 57종입니다.
-- 덮는 연산 종류(0.8.0 기준): `OpKind::ALL` 63종 가운데 59종. `manage_template`·`merge`·`remove_from_project`·`workspace`는 아직
+- 설정 변경은 `set_setting`(key · value) 하나입니다(설정 전용 동작 다섯 개는 1.0.4에서 없앴습니다). 기대값도 그렇게 적습니다. `explain`은 모델에게 보이지 않아(규칙 경로에는 남음) 설명 문장의 기대값에는 `alt`로 `answer`를 함께 둡니다. 모델에게 보이는 동작은 58종 가운데 57종입니다.
+- 덮는 연산 종류: `OpKind::ALL` 58종 가운데 54종. `manage_template`·`merge`·`remove_from_project`·`workspace`는 아직
   골든 항목이 없습니다. 파라미터는 `expected.params`를 적은 항목만 검사하므로 연산 종류만 채점하는 항목이 섞여 있습니다(P6에서
   들어온 `draft_document`·`define_rule`·`check_consistency` 등의 항목은 대부분 그렇습니다). 설계 예시 명령 12종(`docs/user-pc-checklist.md` P5)은 모두
   포함되어 있습니다(`note: "설계 예시 n"`). 0.8.0에 더한 34건은 `note`가 "0.8.0"으로 시작합니다.

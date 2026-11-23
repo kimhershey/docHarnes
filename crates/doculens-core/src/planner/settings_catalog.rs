@@ -1,7 +1,6 @@
 //! The settings the assistant may change with `set_setting` (0.6.0 plan §1.5): one entry per
 //! editable field of `settings::AppSettings`, keyed by its path (`processing.render_dpi`), with
-//! the value type the validator coerces to and the labels the cards show. The 0.1–0.5 short keys
-//! (`render_dpi` …) remain as aliases. Window geometry, the workspace list and the shortcut map are
+//! the value type the validator coerces to and the labels the cards show. Window geometry, the workspace list and the shortcut map are
 //! not commands. The frontend mirrors this table (`src/lib/settingsCatalog.ts`) to apply the value.
 
 use serde_json::Value;
@@ -169,17 +168,7 @@ pub const SETTINGS: &[SettingSpec] = &[
     s("journal_days", ValueType::Int { min: 0, max: 36_500 }, "저널 보관 일수", "journal retention (days)"),
 ];
 
-/// 0.1–0.5 keys → catalog paths (`journal_days` is a catalog key of its own).
-pub const ALIASES: &[(&str, &str)] = &[
-    ("render_dpi", "processing.render_dpi"),
-    ("pii_masking", "privacy.pii_masking"),
-    ("auto_pipeline", "processing.auto_level"),
-    ("inbox_watch", "processing.inbox_watch"),
-    ("review_threshold", "processing.review_threshold"),
-    ("cache_limit_gb", "cache.page_cache_max_gb"),
-];
-
-/// Every key the grammar accepts: the catalog paths and the aliases (a literal list because the
+/// Every key the grammar accepts: the catalog paths (a literal list because the
 /// grammar wants a `&'static [&'static str]`; `tests::setting_keys_match_the_catalog` keeps it true).
 pub const SETTING_KEYS: &[&str] = &[
     "ui.theme",
@@ -231,12 +220,6 @@ pub const SETTING_KEYS: &[&str] = &[
     "generation.max_tokens_gpu",
     "generation.max_tokens_cpu",
     "journal_days",
-    "render_dpi",
-    "pii_masking",
-    "auto_pipeline",
-    "inbox_watch",
-    "review_threshold",
-    "cache_limit_gb",
 ];
 
 /// Other names users give a setting (lowercase). The labels are names too (`names_of`). Used by
@@ -458,21 +441,7 @@ pub fn range_hint(spec: &SettingSpec, ko: bool) -> String {
     }
 }
 
-/// JSON Schema of a setting's value for the planner grammar: the model can only write a value of
-/// the key's type (0.8.0 plan §1.5; until 0.7 every key took any string / number / boolean).
-pub fn value_schema(ty: ValueType) -> Value {
-    match ty {
-        ValueType::Bool => serde_json::json!({ "type": "boolean" }),
-        ValueType::Int { .. } | ValueType::IntChoice(_) => serde_json::json!({ "type": "integer" }),
-        ValueType::Float { .. } => serde_json::json!({ "type": "number" }),
-        ValueType::Enum(values) => serde_json::json!({ "enum": values }),
-        ValueType::Str => serde_json::json!({ "type": "string" }),
-    }
-}
-
-/// Keys the grammar offers for one value shape: the catalog paths only. The 0.1–0.5 short keys
-/// (`ALIASES`) still deserialise, but offering two spellings of one setting gives the model a
-/// choice that means nothing.
+/// Keys the grammar offers for one value shape.
 pub fn keys_of_shape(shape: ValueShape) -> Vec<&'static str> {
     SETTINGS.iter().filter(|s| ValueShape::of(s.ty) == shape).map(|s| s.key).collect()
 }
@@ -524,11 +493,10 @@ pub fn export_json() -> Value {
     )
 }
 
-/// Canonical catalog key of `key` (alias-aware, case-insensitive, `/` tolerated), with its spec.
+/// The catalog key of `key` (case-insensitive, `/` tolerated), with its spec.
 pub fn find(key: &str) -> Option<(&'static str, &'static SettingSpec)> {
     let k = key.trim().to_lowercase().replace('/', ".");
-    let canonical = ALIASES.iter().find(|(a, _)| *a == k).map(|(_, c)| *c).unwrap_or(k.as_str());
-    SETTINGS.iter().find(|s| s.key == canonical).map(|s| (s.key, s))
+    SETTINGS.iter().find(|s| s.key == k).map(|s| (s.key, s))
 }
 
 pub fn needs_confirmation(key: &str) -> bool {
@@ -704,12 +672,10 @@ mod tests {
 
     #[test]
     fn setting_keys_match_the_catalog() {
-        let mut expected: Vec<&str> = SETTINGS.iter().map(|s| s.key).collect();
-        expected.extend(ALIASES.iter().map(|(a, _)| *a));
-        assert_eq!(SETTING_KEYS.to_vec(), expected, "SETTING_KEYS must list the catalog paths and then the aliases");
-        for (alias, target) in ALIASES {
-            assert!(SETTINGS.iter().any(|s| s.key == *target), "{alias} → {target} is not a catalog key");
-        }
+        let expected: Vec<&str> = SETTINGS.iter().map(|s| s.key).collect();
+        assert_eq!(SETTING_KEYS.to_vec(), expected, "SETTING_KEYS must list the catalog paths");
+        // (the short keys of 0.1–0.5 — `render_dpi` … — are gone with 1.0.4)
+        assert!(find("render_dpi").is_none());
         let mut keys: Vec<&str> = SETTING_KEYS.to_vec();
         keys.sort_unstable();
         keys.dedup();
@@ -721,15 +687,15 @@ mod tests {
     }
 
     #[test]
-    fn aliases_and_coercion() {
-        let (key, spec) = find("render_dpi").unwrap();
+    fn keys_and_coercion() {
+        let (key, spec) = find("Processing/render_dpi").unwrap();
         assert_eq!(key, "processing.render_dpi");
         let mut v = json!("300");
         coerce(spec, &mut v).unwrap();
         assert_eq!(v, json!(300));
         let mut v = json!(250);
         assert!(coerce(spec, &mut v).is_err());
-        let (_, spec) = find("review_threshold").unwrap();
+        let (_, spec) = find("processing.review_threshold").unwrap();
         let mut v = json!("90%");
         coerce(spec, &mut v).unwrap();
         assert_eq!(v, json!(0.9));

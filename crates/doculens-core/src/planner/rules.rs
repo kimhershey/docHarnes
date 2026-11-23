@@ -668,12 +668,12 @@ fn settings_combo(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     for clause in &clauses {
         let ct = Text::new(clause, t.ko);
         if let Some(id) = model_id(&ct, ctx) {
-            ops.push(Op::SetModel { id });
+            ops.push(Op::set_model(&id));
             continue;
         }
         match prerouter::route(clause).op {
-            Some(PreRoutedOp::SetTheme { theme }) => ops.push(Op::SetTheme { theme }),
-            Some(PreRoutedOp::SetLanguage { language }) => ops.push(Op::SetLanguage { lang: language }),
+            Some(PreRoutedOp::SetTheme { theme }) => ops.push(Op::set_theme(theme)),
+            Some(PreRoutedOp::SetLanguage { language }) => ops.push(Op::set_language(language)),
             Some(PreRoutedOp::Open { screen }) => ops.push(Op::Open {
                 target: OpenTarget::Screen,
                 reference: screen.route().trim_start_matches('/').to_string(),
@@ -682,18 +682,24 @@ fn settings_combo(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
             None => return None,
         }
     }
-    if ops.is_empty() || (ops.len() == 1 && !matches!(ops[0], Op::SetModel { .. })) {
+    let setting = |o: &Op, k: &str| match o {
+        Op::SetSetting { key, value } if key == k => value.as_str().map(str::to_string),
+        _ => None,
+    };
+    if ops.is_empty() || (ops.len() == 1 && setting(&ops[0], "models.active_model").is_none()) {
         return None;
     }
     let summary = ops
         .iter()
         .map(|o| match o {
-            Op::SetModel { id } => t.t(&format!("모델을 {id}(으)로"), &format!("model → {id}")).to_string(),
-            Op::SetTheme { theme } => {
-                t.t(&format!("테마를 {}(으)로", theme.as_str()), &format!("theme → {}", theme.as_str())).to_string()
-            }
-            Op::SetLanguage { lang } => {
-                t.t(&format!("언어를 {}(으)로", lang.as_str()), &format!("language → {}", lang.as_str())).to_string()
+            Op::SetSetting { key, value } => {
+                let v = value.as_str().unwrap_or_default();
+                match key.as_str() {
+                    "models.active_model" => t.t(&format!("모델을 {v}(으)로"), &format!("model → {v}")).to_string(),
+                    "ui.theme" => t.t(&format!("테마를 {v}(으)로"), &format!("theme → {v}")).to_string(),
+                    "ui.language" => t.t(&format!("언어를 {v}(으)로"), &format!("language → {v}")).to_string(),
+                    _ => String::new(),
+                }
             }
             Op::Open { reference, .. } => {
                 t.t(&format!("{reference} 화면 열기"), &format!("open {reference}")).to_string()
@@ -1350,7 +1356,7 @@ fn topic_plan(t: &Text<'_>, ctx: &PlanContext, about: super::guard::About) -> Pl
             &format!("Summarise what the documents say about '{}'", about.subject),
         )
         .to_string();
-    let op = Op::Summarize { target: None, length: length_of(&rest), group_by: None, topic: Some(about.subject) };
+    let op = Op::Summarize { length: length_of(&rest), group_by: None, topic: Some(about.subject) };
     mk(op, scope, 0.85, summary)
 }
 
@@ -1414,7 +1420,7 @@ fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
                         &format!("Summarise the documents of the project '{}'", project.name),
                     )
                     .to_string();
-                let op = Op::Summarize { target: None, length: summary_length(&rest), group_by: None, topic: None };
+                let op = Op::Summarize { length: summary_length(&rest), group_by: None, topic: None };
                 return Some(mk(op, scope, 0.85, summary));
             }
         }
@@ -1452,7 +1458,7 @@ fn process(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
     if summarize {
         // (1.0.3: one summary of everything in scope — "하나로 묶어" is what a summary is, and there
         // is none per document; a sentence that asks for one is told so by `guard::split_check`)
-        ops.push(Op::Summarize { target: None, length: summary_length(t), group_by: grouping, topic: None });
+        ops.push(Op::Summarize { length: summary_length(t), group_by: grouping, topic: None });
     }
     if classify || generic {
         ops.push(Op::Classify {
@@ -2957,7 +2963,7 @@ fn quick_settings(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         let on = t.has(&["켜", "시작", "on", "enable", "start"]);
         if off || on {
             return Some(mk(
-                Op::SetInboxWatch { enabled: !off },
+                Op::set_inbox_watch(!off),
                 Scope::default(),
                 0.9,
                 t.t(
@@ -3015,7 +3021,7 @@ fn quick_settings(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         };
         if let Some(profile) = profile {
             return Some(mk(
-                Op::SetProfile { profile },
+                Op::set_profile(profile),
                 Scope::default(),
                 0.88,
                 t.t(

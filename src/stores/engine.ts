@@ -105,12 +105,3 @@ export const useEngineStore = create<EngineState>((set, get) => ({
     }
   },
 }));
-
-export function useEngineStatus(): EngineStatus | null {
-  return useEngineStore((s) => s.status);
-}
-
-/** Instances that answer requests (loaded or sleeping). */
-export function loadedModels(status: EngineStatus | null): ModelInstanceStatus[] {
-  return status?.models.filter((m) => m.status === "loaded" || m.status === "sleeping") ?? [];
-}

@@ -88,21 +88,6 @@ impl ModelArch {
         head_dim: 512,
         swa: Some(SwaLayout { window: 512, n_swa_layers: 12, n_global_layers: 3, n_head_kv_swa: 1, head_dim_swa: 256 }),
     };
-    /// Gemma 4 12B (unified): 48 layers in a 5:1 pattern (40 sliding × 8 KV heads × 256,
-    /// 8 global × 1 KV head × 512), window 1,024 — no shared layers assumed (pinned on the user PC).
-    pub const GEMMA4_12B: ModelArch = ModelArch {
-        n_layer: 48,
-        full_attention_interval: 1,
-        n_head_kv: 1,
-        head_dim: 512,
-        swa: Some(SwaLayout {
-            window: 1024,
-            n_swa_layers: 40,
-            n_global_layers: 8,
-            n_head_kv_swa: 8,
-            head_dim_swa: 256,
-        }),
-    };
     /// Qwen3.5-4B / 9B drop-ins: 32 layers, interval 4 → 8 full-attention layers,
     /// 4 KV heads × head_dim 256.
     pub const QWEN35_4B: ModelArch =

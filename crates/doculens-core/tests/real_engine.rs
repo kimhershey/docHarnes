@@ -213,8 +213,8 @@ fn real_llama_server_load_chat_switch() {
             assert!(json_shape(&reply.content), "not a JSON prefix: {}", reply.content);
         }
         // The KIE grammar of a built-in schema is accepted by the server (no 400 on the schema).
-        let receipt = pipeline::schema::builtins().into_iter().find(|b| b.key == "receipt").unwrap();
-        let kie_schema = pipeline::schema::json_schema(&receipt.def);
+        let estimate = pipeline::schema::builtin("estimate").unwrap();
+        let kie_schema = pipeline::schema::json_schema(&estimate.def);
         let kie = ChatRequest {
             model: first.clone(),
             messages: vec![user_message_with_image("extract", &img.url)],
@@ -222,7 +222,7 @@ fn real_llama_server_load_chat_switch() {
             chat_template_kwargs: Some(prompts::template_kwargs()),
             ..Default::default()
         }
-        .json_schema("kie_receipt", kie_schema);
+        .json_schema("kie_estimate", kie_schema);
         let k = m.chat(&kie).unwrap_or_else(|e| dump(&m, "pipeline kie grammar", &e));
         eprintln!("pipeline kie → {:?} finish={:?}", k.content, k.finish_reason);
         assert!(json_shape(&k.content), "KIE grammar did not constrain the output: {}", k.content);
@@ -403,10 +403,9 @@ fn real_llama_server_load_chat_switch() {
                 eprintln!("nl_schema → model artefact (random weights): {msg}");
             }
         }
-        let draft_schema =
-            doculens_core::generate::schema::json_schema(&doculens_core::generate::templates::TemplateSpec::builtin(
-                doculens_core::generate::TemplateKind::Quotation,
-            ));
+        let draft_schema = doculens_core::generate::schema::json_schema(
+            &doculens_core::generate::templates::TemplateSpec::builtin(doculens_core::generate::TemplateKind::Estimate),
+        );
         let g = m
             .chat(
                 &ChatRequest::text(&first, "견적서 초안")

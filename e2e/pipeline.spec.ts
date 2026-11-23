@@ -159,15 +159,11 @@ test.describe("P4 pipeline", () => {
     // Built-in samples are listed; NL creation opens a draft in the editor.
     await openSettingsTab(page, "schemas");
     await expect(page.getByTestId("page-schemas")).toBeVisible();
-    // 13 software forms are listed; the 6 business forms of 0.1 stay hidden (disabled) behind a disclosure.
+    // 13 software forms are listed, all switched on: no disclosure of switched-off forms.
     await expect(page.locator('[data-testid^="schema-row-builtin-"]:visible')).toHaveCount(13);
     await expect(page.locator('[data-testid="schema-row-builtin-estimate"]')).toHaveAttribute("data-schema-enabled", "true");
-    const hiddenBuiltins = page.getByTestId("schemas-hidden-builtins");
-    await expect(hiddenBuiltins).toContainText(tpl(ko.schemas.list.hidden, { count: 6 }));
-    await hiddenBuiltins.locator("summary").click();
-    await expect(page.locator('[data-testid="schema-row-builtin-tax_invoice"]')).toBeVisible();
-    await expect(page.locator('[data-testid="schema-row-builtin-tax_invoice"]')).toHaveAttribute("data-schema-enabled", "false");
-    await expect(page.locator('[data-testid^="schema-row-builtin-"]')).toHaveCount(19);
+    await expect(page.getByTestId("schemas-hidden-builtins")).toHaveCount(0);
+    await expect(page.locator('[data-testid="schema-row-builtin-tax_invoice"]')).toHaveCount(0);
     await page.getByTestId("schemas-nl-create").click();
     await page.getByTestId("nl-schema-text").fill("발주서. 발주번호, 거래처, 납기일자, 합계금액, 품목");
     await page.getByTestId("nl-schema-generate").click();

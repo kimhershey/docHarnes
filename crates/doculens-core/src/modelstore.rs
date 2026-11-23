@@ -1580,11 +1580,6 @@ pub fn scan_signature(models: &[DiscoveredModel]) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
-/// Unix timestamp helper for tests/tools.
-pub fn system_time_secs(t: SystemTime) -> u64 {
-    t.duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

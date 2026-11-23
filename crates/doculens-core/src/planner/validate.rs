@@ -249,8 +249,6 @@ fn iso_date(s: &str) -> Option<NaiveDate> {
 /// ones mean the plan must not run (`super::has_errors`).
 pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) -> Vec<PlanIssue> {
     let mut issues = Vec::new();
-    // 1.0.0 §4-2: a settings change has one shape, whichever path planned it.
-    plan.operations = std::mem::take(&mut plan.operations).into_iter().map(Op::canonical).collect();
     if plan.confidence.is_nan() {
         plan.confidence = 0.0;
     }
@@ -533,10 +531,7 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
                     issues.push(PlanIssue::error(at("question"), "question_empty", "answer needs a question"));
                 }
             }
-            Op::Summarize { target, group_by, topic, .. } => {
-                // 1.0.3: `target` (each document / one set) is not a parameter any more — a summary is
-                // one result of everything in scope. A plan stored before carries it; it is cleared.
-                *target = None;
+            Op::Summarize { group_by, topic, .. } => {
                 // 1.0.2: a summary about a subject is one summary of the passages found — it is not
                 // made per group. An empty subject is no subject.
                 *topic = topic
@@ -1280,14 +1275,9 @@ pub fn validate(plan: &mut Plan, ctx: &PlanContext, date: Option<&DateRange>) ->
             }
             Op::Maintenance { .. } => {}
             // The settings-only ops were rewritten to `set_setting` above.
-            Op::SetInboxWatch { .. }
-            | Op::SetModel { .. }
-            | Op::Validate {}
+            Op::Validate {}
             | Op::Reindex { .. }
             | Op::Delete { .. }
-            | Op::SetProfile { .. }
-            | Op::SetTheme { .. }
-            | Op::SetLanguage { .. }
             | Op::Engine { .. }
             | Op::Redo {}
             | Op::Help {}
@@ -1358,8 +1348,8 @@ fn late_dependency(ops: &[Op]) -> Option<(usize, usize)> {
     }
     let dependency = |op: &Op| -> Option<Needs> {
         match op {
-            Op::SetModel { .. } | Op::SetProfile { .. } | Op::ManageModel { .. } => Some(Needs::Model),
-            // The same two as settings (§4-2): a later step is held back only when it uses the model.
+            Op::ManageModel { .. } => Some(Needs::Model),
+            // The model and the profile: a later step is held back only when it uses the model.
             Op::SetSetting { key, .. } if key == "models.active_model" || key == "models.profile" => Some(Needs::Model),
             // Watching the inbox is not read by a document step.
             Op::SetSetting { key, .. } if key == "processing.inbox_watch" => None,
@@ -1491,7 +1481,7 @@ fn check_folder_template(t: &str, path: &str, issues: &mut Vec<PlanIssue>) {
     }
 }
 
-/// `set_setting`: the key must be a catalog path (0.1–0.5 short keys are mapped), the value is
+/// `set_setting`: the key must be a catalog path, the value is
 /// coerced to the key's type (booleans from "켜/끄", percentages, Korean enum names).
 fn check_setting(key: &mut String, value: &mut Value, key_path: &str, value_path: &str, issues: &mut Vec<PlanIssue>) {
     match settings_catalog::find(key) {

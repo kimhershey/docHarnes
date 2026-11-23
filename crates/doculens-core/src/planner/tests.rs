@@ -274,7 +274,7 @@ fn example_commands_plan_without_a_model() {
     assert!(matches!(&r.plan.operations[0], Op::Tag { add, .. } if add == &["경비", "10월"]), "{r:?}");
     assert_eq!(r.plan.scope.doc_ids, vec!["d1a2".to_string()]);
     let r = planned("이 문서 요약해줘");
-    assert!(matches!(&r.plan.operations[0], Op::Summarize { target: None, .. }), "{r:?}");
+    assert!(matches!(&r.plan.operations[0], Op::Summarize { .. }), "{r:?}");
     let r = planned("검토 완료된 영수증 거래처별 폴더로 옮겨");
     assert!(
         matches!(&r.plan.operations[0], Op::Move { group_by: Some(GroupBy::Vendor), only_reviewed: Some(true), .. }),
@@ -604,22 +604,24 @@ fn specs_match_serde_and_the_grammar_schema() {
     let alternatives = s["properties"]["operations"]["items"]["anyOf"].as_array().unwrap();
     let op_of = |a: &Value| a["properties"]["op"]["const"].as_str().unwrap_or_default().to_string();
     let named: std::collections::BTreeSet<String> = alternatives.iter().map(op_of).collect();
-    // 1.0.0 §4: the model is offered the visible ops only — the five settings-only ops are `set_setting`
-    // and `explain` is `answer` — while every op still has a spec and still deserialises (stored plans).
+    // The model is offered every op but `explain` (1.0.0 §4: a kind of `answer`, left to the rules path and
+    // the viewer). A settings change is `set_setting` and nothing else — the five settings-only ops
+    // of 0.6.0 are gone (1.0.4) and no longer deserialise.
     let visible = OpKind::model_kinds();
-    assert_eq!(visible.len(), OP_SPECS.len() - 6);
+    assert_eq!(visible.len(), OP_SPECS.len() - 1);
     assert_eq!(named.len(), visible.len());
     assert_eq!(alternatives.iter().filter(|a| op_of(a) != "set_setting").count(), visible.len() - 1);
     assert_eq!(alternatives.iter().filter(|a| op_of(a) == "set_setting").count(), schema::setting_schemas().len());
     assert_eq!(s["properties"]["operations"]["maxItems"], json!(MAX_OPS));
     assert!(s["properties"]["intent"]["enum"].as_array().unwrap().len() == visible.len());
     let table = schema::op_table(true, false);
-    for hidden in ["set_theme", "set_language", "set_profile", "set_model", "set_inbox_watch", "explain"] {
-        assert!(!named.contains(hidden) && !table.contains(&format!("- {hidden}:")), "{hidden}");
-        assert!(!OpFamily::ALL.iter().any(|f| f.ops().iter().any(|k| k.as_str() == hidden)), "{hidden}");
-    }
+    assert!(!named.contains("explain") && !table.contains("- explain:"));
+    assert!(!OpFamily::ALL.iter().any(|f| f.ops().iter().any(|k| k.as_str() == "explain")));
     assert!(named.contains("set_setting") && named.contains("answer") && named.contains("noop"));
-    assert!(serde_json::from_value::<Op>(json!({ "op": "set_theme", "theme": "dark" })).is_ok());
+    assert!(serde_json::from_value::<Op>(json!({ "op": "set_setting", "key": "ui.theme", "value": "dark" })).is_ok());
+    for gone in ["set_theme", "set_language", "set_profile", "set_model", "set_inbox_watch"] {
+        assert!(serde_json::from_value::<Op>(json!({ "op": gone })).is_err(), "{gone}");
+    }
     assert!(serde_json::from_value::<Op>(json!({ "op": "explain", "selection": "검수" })).is_ok());
     assert!(schema::op_table(true, false).contains("- aggregate:"));
     assert!(schema::op_table(false, true).contains("fn:sum|count|avg|min|max"));
@@ -984,9 +986,10 @@ fn validator_rejects_and_normalises() {
         json!({ "filter": { "doc_type": "영수증" } }),
     );
     assert!(validate::validate(&mut p, &c, None).iter().any(|i| i.code == "field_unknown" && i.blocking));
-    let mut p = plan_of(json!([{ "op": "set_setting", "key": "render_dpi", "value": 123 }]), json!({}));
+    let mut p = plan_of(json!([{ "op": "set_setting", "key": "processing.render_dpi", "value": 123 }]), json!({}));
     assert!(validate::validate(&mut p, &c, None).iter().any(|i| i.code == "setting_value"));
-    let mut p = plan_of(json!([{ "op": "set_model", "id": "llama-70b" }]), json!({}));
+    let mut p =
+        plan_of(json!([{ "op": "set_setting", "key": "models.active_model", "value": "llama-70b" }]), json!({}));
     assert!(validate::validate(&mut p, &c, None).iter().any(|i| i.code == "model_unknown"));
 
     // normalisation: label → slug, extension added, dates filled from the pre-router,
@@ -1020,7 +1023,7 @@ fn validator_rejects_and_normalises() {
 
     // set_setting coercions
     let mut p = plan_of(
-        json!([{ "op": "set_setting", "key": "review_threshold", "value": "85%" }, { "op": "set_setting", "key": "pii_masking", "value": "off" }]),
+        json!([{ "op": "set_setting", "key": "processing.review_threshold", "value": "85%" }, { "op": "set_setting", "key": "privacy.pii_masking", "value": "off" }]),
         json!({}),
     );
     assert!(!has_errors(&validate::validate(&mut p, &c, None)));
@@ -1180,26 +1183,15 @@ fn model_path_requeries_once_with_feedback() {
 
 /// 0.8.0 audit fixes on the deterministic side (validation, scope, phrase rules): `tests/deterministic_side.rs`.
 /// 1.0.3 (user decision 2026-11-22 — "파일별 요약은 없애고 모든 파일의 내용을 하나의 결과로 요약"):
-/// `summarize.target` (each_doc | set) is not a parameter any more. A plan stored before — a chat
-/// card, a queued job — still loads; the validator clears it and nothing writes it.
+/// a summary has no "each document / one set" parameter — 1.0.4 dropped the field that still read it
+/// from plans stored before, so such a plan is refused like any other unknown parameter.
 #[test]
-fn a_summary_is_one_result_and_plans_stored_before_still_load() {
-    for old in ["each_doc", "set"] {
-        let mut p: Plan = serde_json::from_value(json!({
-            "intent": "summarize",
-            "scope": { "doc_ids": ["d1a2"] },
-            "operations": [{ "op": "summarize", "target": old, "length": "long" }]
-        }))
-        .unwrap();
-        assert!(matches!(&p.operations[0], Op::Summarize { target: Some(_), .. }), "{old}");
-        let issues = validate::validate(&mut p, &ctx(), None);
-        assert!(issues.is_empty(), "{old}: {issues:?}");
-        assert!(
-            matches!(&p.operations[0], Op::Summarize { target: None, length: Some(SummaryLength::Long), .. }),
-            "{old}: {p:?}"
-        );
-        assert_eq!(serde_json::to_value(&p.operations[0]).unwrap(), json!({ "op": "summarize", "length": "long" }));
-    }
+fn a_summary_is_one_result() {
+    assert!(serde_json::from_value::<Plan>(json!({
+        "intent": "summarize",
+        "operations": [{ "op": "summarize", "target": "each_doc" }]
+    }))
+    .is_err());
     // The model is not offered the parameter: the op table and the grammar do not have it.
     let spec = schema::spec(OpKind::Summarize);
     assert_eq!(spec.params.iter().map(|p| p.name).collect::<Vec<_>>(), vec!["length", "group_by", "topic"]);
@@ -1213,7 +1205,7 @@ fn a_summary_is_one_result_and_plans_stored_before_still_load() {
         let r = planned(text);
         assert_eq!(kinds(&r.plan), [OpKind::Summarize], "{text}: {r:?}");
         assert!(
-            matches!(&r.plan.operations[0], Op::Summarize { target: None, group_by: None, topic: None, .. }),
+            matches!(&r.plan.operations[0], Op::Summarize { group_by: None, topic: None, .. }),
             "{text}: {:?}",
             r.plan
         );
@@ -1225,7 +1217,7 @@ fn a_summary_is_one_result_and_plans_stored_before_still_load() {
     {
         let r = planned(text);
         assert_eq!(kinds(&r.plan), [OpKind::Summarize], "{text}: {r:?}");
-        assert!(matches!(&r.plan.operations[0], Op::Summarize { target: None, group_by: None, .. }), "{text}");
+        assert!(matches!(&r.plan.operations[0], Op::Summarize { group_by: None, .. }), "{text}");
         assert!(r.plan.requires_confirmation && r.plan.unmet.is_some(), "{text}: {:?}", r.plan);
         let note = r.issues.iter().find(|i| i.code == "grouping_dropped").unwrap_or_else(|| panic!("{text}: {r:?}"));
         assert!(note.message.contains("문서별 요약은 만들지 않습니다"), "{text}: {}", note.message);
@@ -1253,10 +1245,7 @@ fn a_summary_is_one_result_and_plans_stored_before_still_load() {
     let r = plan(Some(&deps(&chat)), "전체 문서를 요약해줘", &ctx(), PlanMode::ModelFirst).unwrap();
     assert_eq!(r.source, PlanSource::Model, "{r:?}");
     assert!(
-        matches!(
-            r.plan.operations.as_slice(),
-            [Op::Summarize { target: None, length: None, group_by: None, topic: None }]
-        ),
+        matches!(r.plan.operations.as_slice(), [Op::Summarize { length: None, group_by: None, topic: None }]),
         "{:?}",
         r.plan
     );
@@ -1307,7 +1296,7 @@ mod exec_tests {
             }
             let db = Db::open_in_memory().unwrap();
             db.with(pipeline_repo::ensure_builtins).unwrap();
-            db.with(pipeline_repo::enable_legacy_builtins).unwrap();
+            db.with(pipeline_repo::add_business_samples).unwrap();
             World { db, paths, _dir: dir, chat: StageChat::new(), analyzer: Analyzer::simple() }
         }
 
@@ -1858,7 +1847,7 @@ mod exec_tests {
                     include: Vec::new(),
                     target: None,
                 },
-                Op::SetTheme { theme: crate::settings::Theme::Dark },
+                Op::set_theme(crate::settings::Theme::Dark),
                 Op::Move {
                     folder: "documents/{{year}}/{{month}}/{{doc_type}}".into(),
                     group_by: Some(GroupBy::Month),
@@ -1916,7 +1905,7 @@ mod exec_tests {
         assert_ne!(path, path2);
         assert!(path2.ends_with("_2.csv"), "{path2}");
         assert!(w.paths.root.join(path2).is_file());
-        assert_eq!(ex.ui_actions, vec![Op::SetTheme { theme: crate::settings::Theme::Dark }]);
+        assert_eq!(ex.ui_actions, vec![Op::set_theme(crate::settings::Theme::Dark)]);
         assert_eq!(ex.steps[6].status, StepStatus::Ui);
         // The move happened (the undo step then reverted it), both journaled.
         let mv = &ex.steps[7];
@@ -1989,7 +1978,7 @@ mod exec_tests {
         let w = World::new();
         w.db.with(projects_repo::ensure_builtins).unwrap();
         // The rule below is written against the legacy 구매 정산 template.
-        w.db.with(|c| projects_repo::ensure_templates(c, &projects_repo::legacy_templates())).unwrap();
+        w.db.with(|c| projects_repo::ensure_templates(c, &projects_repo::business_templates())).unwrap();
         let tpl =
             w.db.with(|c| {
                 projects_repo::save_template(
@@ -2120,7 +2109,7 @@ fn a_summary_about_a_subject_through_the_model_path() {
     // 1.0.1: a summary of every document of the library — nothing about AA.
     let r = planned("AA에 대해서 요약해줘", json!({}), json!({ "op": "summarize" }));
     assert!(
-        matches!(r.plan.operations.as_slice(), [Op::Summarize { target: None, group_by: None, topic: Some(t), .. }] if t == "AA"),
+        matches!(r.plan.operations.as_slice(), [Op::Summarize { group_by: None, topic: Some(t), .. }] if t == "AA"),
         "{:?}",
         r.plan
     );
@@ -2145,7 +2134,7 @@ fn a_summary_about_a_subject_through_the_model_path() {
     assert!(
         matches!(
             r.plan.operations.as_slice(),
-            [Op::Summarize { target: None, group_by: None, topic: Some(t), .. }] if t == "AAA"
+            [Op::Summarize { group_by: None, topic: Some(t), .. }] if t == "AAA"
         ),
         "{:?}",
         r.plan
@@ -2156,7 +2145,7 @@ fn a_summary_about_a_subject_through_the_model_path() {
     for text in ["AAA 프로젝트 요약해줘", "AAA 프로젝트에 대해 요약해줘"] {
         let r = planned(text, json!({}), json!({ "op": "summarize", "topic": "AAA", "group_by": "project" }));
         assert!(
-            matches!(r.plan.operations.as_slice(), [Op::Summarize { target: None, group_by: None, topic: None, .. }]),
+            matches!(r.plan.operations.as_slice(), [Op::Summarize { group_by: None, topic: None, .. }]),
             "{text}: {:?}",
             r.plan
         );
@@ -2193,7 +2182,7 @@ fn a_summary_about_a_subject_through_the_model_path() {
         json!({ "op": "summarize", "topic": "견적서" }),
     );
     assert!(
-        matches!(r.plan.operations.as_slice(), [Op::Summarize { target: None, group_by: None, topic: None, .. }]),
+        matches!(r.plan.operations.as_slice(), [Op::Summarize { group_by: None, topic: None, .. }]),
         "{:?}",
         r.plan
     );
@@ -2220,7 +2209,7 @@ fn a_summary_about_a_subject_through_the_model_path() {
         let r = plan(Some(&deps(&chat)), text, &c, PlanMode::ModelFirst).unwrap();
         assert_eq!(chat.calls("plan"), 0);
         assert!(
-            matches!(r.plan.operations.as_slice(), [Op::Summarize { target: None, topic: Some(t), .. }] if t == "영수증 처리 기준"),
+            matches!(r.plan.operations.as_slice(), [Op::Summarize { topic: Some(t), .. }] if t == "영수증 처리 기준"),
             "{route}: {:?}",
             r.plan
         );
@@ -2493,7 +2482,8 @@ fn model_plans_are_checked_against_the_sentence() {
     // The 0.7.0 misreading of a settings sentence the fast path leaves to the model.
     let text = "화면 글씨가 너무 작아서 그런데 좀 키워줄 수 있어?";
     assert!(super::fastpath::plan(text, &c).is_none());
-    let r = run(text, "system", reply(json!([{ "op": "set_profile", "profile": "balanced" }]), ""));
+    let r =
+        run(text, "system", reply(json!([{ "op": "set_setting", "key": "models.profile", "value": "balanced" }]), ""));
     assert_eq!(codes(&r), vec!["ungrounded_change"], "{r:?}");
     assert!(r.plan.requires_confirmation && !has_errors(&r.issues));
     assert!(
@@ -2504,7 +2494,7 @@ fn model_plans_are_checked_against_the_sentence() {
     let r = run(
         "눈이 아파서 그런데 다크 테마로 바꿔줄래",
         "system",
-        reply(json!([{ "op": "set_theme", "theme": "dark" }]), ""),
+        reply(json!([{ "op": "set_setting", "key": "ui.theme", "value": "dark" }]), ""),
     );
     assert!(codes(&r).is_empty() && !r.plan.requires_confirmation, "{r:?}");
     // The reported grouping sentence: one summary of everything is not what was asked. The

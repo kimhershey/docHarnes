@@ -49,7 +49,7 @@ impl World {
         let db = Db::open_in_memory().unwrap();
         db.with(repo::ensure_builtins).unwrap();
         // The 0.1 business forms the fixtures exercise are hidden by default; the tests still cover them.
-        db.with(repo::enable_legacy_builtins).unwrap();
+        db.with(repo::add_business_samples).unwrap();
         // No random audit sampling in tests (deterministic review queues).
         let settings = ProcessingSettings { audit_sample_percent: 0, ..ProcessingSettings::default() };
         World { db, paths, _dir: dir, chat: StageChat::new(), settings, render: None }
@@ -1044,11 +1044,11 @@ fn a_second_form_with_the_same_name_ending_gets_its_own_type() {
 fn schema_crud_defaults_versions_and_doc_types() {
     let w = World::new();
     let all = w.db.with(repo::list_schemas).unwrap();
-    assert_eq!(all.len(), 19, "13 software forms + 6 hidden legacy forms");
+    assert_eq!(all.len(), 19, "13 software forms + the 6 business forms of the fixtures");
     assert!(all.iter().all(|s| s.source == SchemaSource::Builtin && s.is_default && s.enabled));
     assert_eq!(w.db.with(repo::ensure_builtins).unwrap(), 0, "idempotent");
     let types = w.db.with(repo::doc_types).unwrap();
-    assert_eq!(types.len(), 19, "legacy forms re-enabled by the fixture");
+    assert_eq!(types.len(), 19, "the fixture forms are on");
     assert!(types.iter().all(|t| t.builtin));
 
     // A user schema for a new type becomes its default; a user schema for an existing type beats the sample.

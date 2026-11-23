@@ -1088,7 +1088,7 @@ fn a_project_scope_reads_work_documents_and_reference_material() {
         scope_project: open.map(str::to_string),
         ..PlanContext::default()
     };
-    let summarize = || Op::Summarize { target: None, length: None, group_by: None, topic: None };
+    let summarize = || Op::Summarize { length: None, group_by: None, topic: None };
     let validated = |ops: Vec<Op>, scope: Scope, open: Option<&str>| {
         let mut plan = plan_of(ops, scope);
         validate::validate(&mut plan, &ctx(open), None);
@@ -1204,7 +1204,7 @@ fn a_project_scope_reads_work_documents_and_reference_material() {
     // With a split a group that fails does not throw away the others (1.0.1): its documents are named
     // — unless another group's summary covers them.
     let by_project = validated(
-        vec![Op::Summarize { target: None, length: None, group_by: Some(SummaryGroup::Project), topic: None }],
+        vec![Op::Summarize { length: None, group_by: Some(SummaryGroup::Project), topic: None }],
         Scope::default(),
         None,
     );
@@ -1270,7 +1270,7 @@ fn a_summary_about_a_subject_reads_the_passages_about_it() {
         index_document(&IndexDeps { db: &w.db, analyzer: &w.analyzer, options: Default::default() }, &w.doc(id), true)
             .unwrap();
     }
-    let about = |t: &str| Op::Summarize { target: None, length: None, group_by: None, topic: Some(t.into()) };
+    let about = |t: &str| Op::Summarize { length: None, group_by: None, topic: Some(t.into()) };
     let validated = |ops: Vec<Op>, scope: Scope| {
         let mut plan = plan_of(ops, scope);
         let issues = validate::validate(&mut plan, &PlanContext::default(), None);
@@ -1295,10 +1295,7 @@ fn a_summary_about_a_subject_reads_the_passages_about_it() {
 
     // No scope: every document that says something about the subject, in one summary.
     let plan = validated(vec![about("  납품   기한 ")], Scope::default());
-    assert!(
-        matches!(&plan.operations[0], Op::Summarize { topic: Some(t), target: None, .. } if t == "납품 기한"),
-        "{plan:?}"
-    );
+    assert!(matches!(&plan.operations[0], Op::Summarize { topic: Some(t), .. } if t == "납품 기한"), "{plan:?}");
     let card = preview(&w, &plan);
     assert!(card.steps[0].summary.contains("'납품 기한'에 관한 내용을 찾아 요약"), "{}", card.steps[0].summary);
     assert_eq!(card.steps[0].payload["topic"], json!("납품 기한"));
@@ -1358,8 +1355,6 @@ fn a_summary_about_a_subject_reads_the_passages_about_it() {
     // A summary about a subject is one summary: a grouping is dropped with a note.
     let mut grouped = plan_of(
         vec![Op::Summarize {
-            // (what a plan stored before 1.0.3 may carry: read, and cleared)
-            target: Some(SummarizeTarget::EachDoc),
             length: None,
             group_by: Some(crate::planner::SummaryGroup::Project),
             topic: Some("납품 기한".into()),
@@ -1368,7 +1363,7 @@ fn a_summary_about_a_subject_reads_the_passages_about_it() {
     );
     let issues = validate::validate(&mut grouped, &PlanContext::default(), None);
     assert!(issues.iter().any(|i| i.code == "grouping_dropped"), "{issues:?}");
-    assert!(matches!(&grouped.operations[0], Op::Summarize { group_by: None, target: None, .. }));
+    assert!(matches!(&grouped.operations[0], Op::Summarize { group_by: None, .. }));
     // An empty subject is no subject: the documents are summarised as before.
     let plain = validated(vec![about("   ")], sel(&["work"]));
     assert!(matches!(&plain.operations[0], Op::Summarize { topic: None, .. }));

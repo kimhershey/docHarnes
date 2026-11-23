@@ -1,6 +1,6 @@
 import type { TFunction } from "i18next";
 
-import type { DocTypeInfo, FieldRecord, FieldStatus, ReviewReason } from "@/lib/types";
+import type { DocTypeInfo, FieldRecord, ReviewReason } from "@/lib/types";
 
 /** Built-in doc type slugs that have their own i18n labels. */
 const BUILTIN_TYPES = [
@@ -64,20 +64,6 @@ export function confidenceTone(c: number | null | undefined, threshold = DEFAULT
 export function confidenceGlyph(c: number | null | undefined, threshold = DEFAULT_REVIEW_THRESHOLD): string {
   const tone = confidenceTone(c, threshold);
   return tone === "ok" ? "✔" : tone === "warn" ? "●" : tone === "danger" ? "▲" : "–";
-}
-
-export function fieldStatusVariant(s: FieldStatus): "ok" | "warn" | "danger" | "muted" | "info" {
-  switch (s) {
-    case "approved":
-    case "corrected":
-      return "ok";
-    case "rejected":
-      return "danger";
-    case "held":
-      return "warn";
-    default:
-      return "muted";
-  }
 }
 
 export function reasonVariant(r: ReviewReason | null): "ok" | "warn" | "danger" | "muted" | "info" {

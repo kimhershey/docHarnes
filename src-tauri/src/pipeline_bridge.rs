@@ -357,22 +357,6 @@ pub fn merge_job(app: &AppHandle, ids: Vec<String>, name: Option<String>) -> UiR
 // Forms / natural-language schemas (blocking commands)
 // ---------------------------------------------------------------------------
 
-/// Derives the field list of a form document. Uses the vision model when it is
-/// already loaded; otherwise office formats are read structurally and PDFs /
-/// images fall back to text heuristics.
-pub fn form_derive(app: &AppHandle, doc_id: &str, name: Option<&str>) -> UiResult<SchemaDraft> {
-    let ctx = context(app)?;
-    let doc = docs_bridge::document(app, doc_id)?;
-    let state = app.state::<AppState>();
-    let model = vision_model(app, false, None).ok();
-    let vlm = model.map(|m| {
-        let c = model_context(&state, &m);
-        let g = vision_geometry(&state, &m);
-        Vlm::new(&state.engine, m, ctx.profile, None).with_context(c).with_geometry(g)
-    });
-    state.gate.interactive(|| Ok(forms::derive(&ctx.docs.deps(), vlm.as_ref(), &doc, name)?))
-}
-
 /// Queues a 0.3.0 §2 field discovery over the sample documents (one unsaved draft for the
 /// editor); returns the job id. Office forms need no model; scanned / PDF samples load it.
 pub fn schema_discovery_job(app: &AppHandle, doc_ids: Vec<String>, name_hint: Option<String>) -> UiResult<String> {

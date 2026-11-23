@@ -4,7 +4,7 @@ import en from "../src/i18n/en.json" with { type: "json" };
 import ko from "../src/i18n/ko.json" with { type: "json" };
 import { card, createWorkspace, docId, freshApp, importViaLibrary, openImportPreview, openModelsAdvanced, openSettingsTab, tpl } from "./helpers";
 
-// Layout guards for the 0.7.0 audit (docs/audit/v0.7.0.md): the window itself never scrolls on any screen (UI-1),
+// Layout guards for the 0.7.0 audit: the window itself never scrolls on any screen (UI-1),
 // every dialog stays inside the window with its buttons in reach at UI 배율 150 % and in the minimum window (UI-3),
 // the 문서함 list fits its box and its filters say what they filter (UI-6, UI-7), settings switches have names
 // (UI-9), toasts keep off the buttons people press next (UI-11), particles follow the word (UI-13), the English

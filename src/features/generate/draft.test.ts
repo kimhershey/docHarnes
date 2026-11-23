@@ -18,8 +18,8 @@ function draft(): Draft {
   return {
     id: "d1",
     title: "견적서",
-    template: { kind: "builtin", template: "quotation" },
-    doc_type: "quotation",
+    template: { kind: "builtin", template: "estimate" },
+    doc_type: "estimate",
     fields: [
       { key: "recipient", label: "수신", kind: "string", required: true, value: "㈜한빛", normalized: null, source: null, user_edited: false },
       { key: "total", label: "합계금액", kind: "amount", required: true, value: "13,200,000", normalized: null, source: null, user_edited: false },
@@ -158,7 +158,7 @@ describe("draft edits", () => {
 
   it("builds the whole-draft revision request with previous, the trimmed instruction and exclusions", () => {
     const d = draft();
-    const req = reviseRequest({ form_ref: "quotation", format_description: null, content: "c", sources: [], output: "hwpx", tone: "formal", length: "medium", language: "ko", use_knowledge: true, feedback: null, previous: null, excluded_sources: [], max_tokens: null }, d, "  더 짧게 ", { scope: "whole" }, ["doc1"]);
+    const req = reviseRequest({ form_ref: "estimate", format_description: null, content: "c", sources: [], output: "hwpx", tone: "formal", length: "medium", language: "ko", use_knowledge: true, feedback: null, previous: null, excluded_sources: [], max_tokens: null }, d, "  더 짧게 ", { scope: "whole" }, ["doc1"]);
     expect(req.previous).toBe(d);
     expect(req.feedback).toBe("더 짧게");
     expect(req.revise).toEqual({ scope: "whole" });
@@ -266,7 +266,7 @@ describe("draft edits", () => {
 
   it("builds the revision request and maps the scope picker", () => {
     const d = draft();
-    const req = reviseRequest({ form_ref: "quotation", format_description: null, content: "c", sources: [], output: "hwpx", tone: "formal", length: "medium", language: "ko", use_knowledge: true, feedback: null, previous: null, excluded_sources: [], max_tokens: null }, d, " 더 자세히 ", { scope: "section", section: 1 }, ["doc1"]);
+    const req = reviseRequest({ form_ref: "estimate", format_description: null, content: "c", sources: [], output: "hwpx", tone: "formal", length: "medium", language: "ko", use_knowledge: true, feedback: null, previous: null, excluded_sources: [], max_tokens: null }, d, " 더 자세히 ", { scope: "section", section: 1 }, ["doc1"]);
     expect(req.previous).toBe(d);
     expect(req.feedback).toBe("더 자세히");
     expect(req.revise).toEqual({ scope: "section", section: 1 });
@@ -286,10 +286,10 @@ describe("draft edits", () => {
     const sources = withDocumentSources([{ kind: "text", title: null, text: "t" }], ["d1", "d2"]);
     expect(documentSourceIds(sources)).toEqual(["d1", "d2"]);
     expect(sources[2]).toEqual({ kind: "text", title: null, text: "t" });
-    const templates = [{ kind: "quotation" } as TemplateInfo];
+    const templates = [{ kind: "estimate" } as TemplateInfo];
     const schemas = [{ id: "s1", name: "견적서 양식", doc_type: "quotation_form" } as SchemaRecord];
     expect(formRefToPicker(null, templates, schemas)).toBe("auto");
-    expect(formRefToPicker("quotation", templates, schemas)).toBe("tpl:quotation");
+    expect(formRefToPicker("estimate", templates, schemas)).toBe("tpl:estimate");
     expect(formRefToPicker("s1", templates, schemas)).toBe("form:s1");
     expect(formRefToPicker("견적서 양식", templates, schemas)).toBe("form:s1");
     expect(pickerToFormRef("tpl:report")).toBe("report");

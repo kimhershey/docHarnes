@@ -1465,7 +1465,7 @@ mod tests {
     use super::*;
     use crate::aggregate::tests::seed_all;
     use crate::documents::render::write_jpeg;
-    use crate::pipeline::repo::{enable_legacy_builtins, ensure_builtins};
+    use crate::pipeline::repo::{add_business_samples, ensure_builtins};
     use crate::planner::ScopeFilter;
 
     struct World {
@@ -1482,7 +1482,7 @@ mod tests {
         }
         let db = Db::open_in_memory().unwrap();
         db.with(ensure_builtins).unwrap();
-        db.with(enable_legacy_builtins).unwrap();
+        db.with(add_business_samples).unwrap();
         seed_all(&db);
         // The reviewed receipt has a cached render (searchable PDF source).
         let img = image::RgbImage::from_fn(200, 300, |x, y| {

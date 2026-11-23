@@ -286,9 +286,9 @@ pub fn builtin_templates() -> Vec<ProjectTemplate> {
     ]
 }
 
-/// The 0.1 business templates (인증 심사 · 거래처 등록 · 구매 정산): not seeded any more, kept for
-/// workspaces and tests that still hold projects made from them.
-pub fn legacy_templates() -> Vec<ProjectTemplate> {
+/// Business project templates (인증 심사 · 거래처 등록 · 구매 정산) the tests use as fixtures. Not bundled.
+#[cfg(test)]
+pub fn business_templates() -> Vec<ProjectTemplate> {
     use RuleOperand as O;
     vec![
         template(
@@ -436,7 +436,7 @@ pub fn ensure_builtins(conn: &Connection) -> rusqlite::Result<usize> {
     ensure_templates(conn, &builtin_templates())
 }
 
-/// `ensure_builtins` for an explicit set (the legacy templates, tests).
+/// `ensure_builtins` for an explicit set.
 pub fn ensure_templates(conn: &Connection, templates: &[ProjectTemplate]) -> rusqlite::Result<usize> {
     let now = ts(&Utc::now());
     let mut added = 0;
@@ -936,18 +936,6 @@ pub fn set_dates(
         "UPDATE projects SET start_date = ?2, end_date = ?3, updated_at = ?4 WHERE id = ?1",
         params![id, pick(start, &before.start_date), pick(end, &before.end_date), ts(&Utc::now())],
     )?;
-    Ok(())
-}
-
-/// Replaces the organise / export settings of a project.
-pub fn set_settings(conn: &Connection, id: &str, settings: &ProjectSettings) -> rusqlite::Result<()> {
-    let n = conn.execute(
-        "UPDATE projects SET settings = ?2, updated_at = ?3 WHERE id = ?1",
-        params![id, settings_json(settings), ts(&Utc::now())],
-    )?;
-    if n == 0 {
-        return Err(typed("project_not_found"));
-    }
     Ok(())
 }
 

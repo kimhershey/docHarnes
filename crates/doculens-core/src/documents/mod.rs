@@ -472,10 +472,6 @@ impl DocumentCache {
         self.converted_dir.join("document.pdf")
     }
 
-    pub fn converted_html(&self) -> PathBuf {
-        self.converted_dir.join("index.html")
-    }
-
     /// Removes every cached artefact of the document.
     pub fn remove_all(&self) {
         for d in [&self.pages_dir, &self.thumbs_dir, &self.converted_dir] {

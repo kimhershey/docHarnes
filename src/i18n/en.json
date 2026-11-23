@@ -321,7 +321,6 @@
   "planner": {
     "ops": {
       "import": "Import",
-      "set_inbox_watch": "Inbox watch",
       "classify": "Classify",
       "set_doc_type": "Set type",
       "ocr": "OCR",
@@ -340,10 +339,6 @@
       "tag": "Tag",
       "delete": "Delete",
       "export": "Export",
-      "set_model": "Switch model",
-      "set_profile": "Set profile",
-      "set_theme": "Set theme",
-      "set_language": "Set language",
       "set_setting": "Change setting",
       "open": "Open",
       "job": "Job control",
@@ -762,7 +757,6 @@
     "ui": {
       "set_setting": "Setting changed: {{key}} = {{value}}",
       "set_model": "Loading model {{id}}",
-      "set_profile": "Profile: {{profile}}",
       "open_document": "Opening document: {{name}}",
       "open_page": "Opening {{name}} page {{page}}",
       "open_folder": "Opening folder: {{folder}}",
@@ -1293,6 +1287,23 @@
     "convert": "Conversion failed: {{message}}",
     "render": "Render failed: {{message}}",
     "reasons": {
+      "boundaries_required": "Say where to split, e.g. 'split at page 3' or 'every 5 pages'.",
+      "chat_message_too_large": "The conversation is too large to be saved. Start a new chat.",
+      "correct_needs_field": "Name the field to correct and its new value.",
+      "edit_no_folder": "The folder of the original file was not found, so the edited copy cannot be saved.",
+      "folder_invalid": "Files cannot be saved to this folder. Use another folder name inside the workspace (the .doculens folder cannot be used).",
+      "folder_outside_workspace": "Files can only be saved inside the workspace.",
+      "group_key_required": "The edition group has no name. Name it, or pick a document that has a title.",
+      "merge_needs_2_to_20_documents": "Select between 2 and 20 documents to merge.",
+      "name_required": "A name is needed.",
+      "no_tables": "None of the documents in scope has an extracted table.",
+      "paths_required": "Choose the files to import or give their paths.",
+      "project_group_exists": "This project already has its reference group.",
+      "rule_op_invalid": "The rule's comparison was not understood. Say it as 'equals', 'at least', 'at most' or 'contains'.",
+      "template_required": "Name the project template.",
+      "text_empty": "Type a sentence.",
+      "title_empty": "Enter a title.",
+      "topic_empty": "Say what the summary is about.",
       "nothing_to_import": "Nothing new to import (all duplicates or unsupported).",
       "no_files": "Choose files or type paths.",
       "no_documents": "No documents selected.",
@@ -2294,7 +2305,7 @@
       "builtin": "Built-in sample forms",
       "empty": "No registered forms yet. Start with 'Register form' or 'Create from description'.",
       "disabled": "Disabled",
-      "hidden": "{{count}} hidden built-in forms — the tax invoice, receipt and other 0.2 forms. Switch one on to use it again."
+      "hidden": "{{count}} built-in forms switched off. Switch one on to use it for classification and extraction again."
     },
     "new": "New field set",
     "nl_create": "Create from description",
@@ -2794,9 +2805,6 @@
     },
     "templates": {
       "official_letter": "Official letter",
-      "quotation": "Quotation",
-      "transaction_statement": "Transaction statement",
-      "contract": "Contract",
       "report": "Report",
       "rfp": "Request for proposal (RFP)",
       "proposal": "Proposal",
@@ -2810,7 +2818,6 @@
       "change_request": "Change request",
       "acceptance": "Acceptance certificate",
       "estimate": "Estimate",
-      "minutes": "Minutes",
       "supplement_request": "Supplement request"
     },
     "source": {

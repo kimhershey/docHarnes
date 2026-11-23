@@ -1,8 +1,7 @@
 // Settings catalog of the planner's generic `set_setting` (0.6.0 plan §1.5): every editable field
 // of `AppSettings` by its path ("processing.render_dpi"), with the type / range the UI action uses
-// to coerce a spoken value ("125%", "켜줘", "accuracy"). The pre-0.6.0 keys (`render_dpi`,
-// `pii_masking`, …) stay valid as aliases; `journal_days` is a retention period and keeps its own
-// branch in `commands.ts`.
+// to coerce a spoken value ("125%", "켜줘", "accuracy"). `journal_days` is a retention period and
+// keeps its own branch in `commands.ts`.
 //
 // The keys, types and ranges come from `settingsCatalog.json`, which the core writes from its own
 // table (`crates/doculens-core/src/planner/settings_catalog.rs`; a core test fails when the file
@@ -11,7 +10,7 @@
 // text settings may be cleared.
 
 import catalog from "./settingsCatalog.json";
-import type { AppSettings, LegacySettingKey } from "./types";
+import type { AppSettings } from "./types";
 
 export type SettingType =
   | { kind: "boolean" }
@@ -84,25 +83,12 @@ export const SETTINGS_CATALOG: readonly SettingSpec[] = (catalog as CatalogRow[]
 
 export const SETTING_CATALOG_KEYS: readonly string[] = SETTINGS_CATALOG.map((s) => s.key);
 
-/** Pre-0.6.0 keys → catalog paths (`journal_days` is a retention period, not a settings field). */
-export const LEGACY_SETTING_KEYS: Readonly<Record<LegacySettingKey, string | null>> = {
-  render_dpi: "processing.render_dpi",
-  pii_masking: "privacy.pii_masking",
-  auto_pipeline: "processing.auto_level",
-  inbox_watch: "processing.inbox_watch",
-  review_threshold: "processing.review_threshold",
-  cache_limit_gb: "cache.page_cache_max_gb",
-  journal_days: null,
-};
+/** Every key the grammar accepts: the catalog paths and `journal_days` (a retention period, not a settings field). */
+export const SETTING_KEYS_ALL: readonly string[] = SETTING_CATALOG_KEYS.includes("journal_days") ? SETTING_CATALOG_KEYS : [...SETTING_CATALOG_KEYS, "journal_days"];
 
-/** Every key the grammar accepts: catalog paths + legacy aliases. */
-export const SETTING_KEYS_ALL: readonly string[] = [...SETTING_CATALOG_KEYS, ...Object.keys(LEGACY_SETTING_KEYS)];
-
-/** Catalog path of a key (legacy aliases resolved); `journal_days` and unknown keys come back unchanged. */
+/** The key as the catalog writes it. */
 export function resolveSettingKey(key: string): string {
-  const k = key.trim();
-  const legacy = (LEGACY_SETTING_KEYS as Record<string, string | null>)[k];
-  return legacy ?? k;
+  return key.trim();
 }
 
 export function settingSpec(key: string): SettingSpec | null {

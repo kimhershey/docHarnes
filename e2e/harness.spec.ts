@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import ko from "../src/i18n/ko.json" with { type: "json" };
 import { card, createWorkspace, docId, freshApp, importViaLibrary, openAssistantScreen, openSettingsTab } from "./helpers";
 
-// 0.8.0 assistant harness (docs/plan/v0.8.0.md) against the browser mock. The sentences of the
+// 0.8.0 assistant harness against the browser mock. The sentences of the
 // 2026-11-11 report are the first tests: a settings sentence changes the setting it names, a greeting
 // gets a reply instead of an empty plan card, "프로젝트 별 요약" makes one summary per project. Then the
 // contract of a model plan: what it leaves out or adds on its own waits for approval with a note.

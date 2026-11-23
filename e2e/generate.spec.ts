@@ -20,7 +20,7 @@ test.describe("P6 document generation", () => {
     await openGenerate(page);
     await expect(page.getByTestId("generate-empty")).toBeVisible();
 
-    // The picker offers the software templates (0.3.0); the generic 0.1 ones are hidden.
+    // The picker offers the software templates (0.3.0); the two generic layouts are not listed.
     await page.getByTestId("generate-template").click();
     await expect(page.getByTestId("generate-template-estimate")).toBeVisible();
     await expect(page.getByTestId("generate-template-rfp")).toBeVisible();

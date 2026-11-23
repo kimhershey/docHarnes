@@ -1,4 +1,4 @@
-//! Assistant chat sessions (0.7.0 item 6, `docs/plan/v0.7.0.md` §1.6): the AI assistant's
+//! Assistant chat sessions (0.7.0 item 6): the AI assistant's
 //! conversations live per workspace in `chat_sessions` / `chat_messages` (migration 0012). A
 //! message's `payload` is the UI's own JSON (user text, plan / answer / result cards …) and is
 //! stored as is — the core only derives the automatic session title from the first user message

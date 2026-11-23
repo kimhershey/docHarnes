@@ -15,7 +15,7 @@
 
 use serde_json::Value;
 
-use crate::settings::{Language, Profile, Theme};
+use crate::settings::Language;
 
 use super::settings_catalog::{self as catalog, SettingSpec, ValueType};
 use super::{AnswerMode, Op, Plan, PlanContext};
@@ -729,29 +729,7 @@ fn label(spec: &SettingSpec, ko: bool) -> &'static str {
 }
 
 fn setting_op(spec: &SettingSpec, value: Value) -> Op {
-    let text = value.as_str().unwrap_or_default();
-    match spec.key {
-        "ui.theme" => Op::SetTheme {
-            theme: match text {
-                "light" => Theme::Light,
-                "dark" => Theme::Dark,
-                "high-contrast" => Theme::HighContrast,
-                _ => Theme::System,
-            },
-        },
-        "ui.language" => Op::SetLanguage { lang: if text == "en" { Language::En } else { Language::Ko } },
-        "models.profile" => Op::SetProfile {
-            profile: match text {
-                "balanced" => Profile::Balanced,
-                "speed" => Profile::Speed,
-                "fine_print" => Profile::FinePrint,
-                _ => Profile::Accuracy,
-            },
-        },
-        // The typed op of the inbox switch predates the catalog; the executor treats both alike.
-        "processing.inbox_watch" => Op::SetInboxWatch { enabled: value.as_bool().unwrap_or(false) },
-        _ => Op::SetSetting { key: spec.key.to_string(), value },
-    }
+    Op::setting(spec.key, value)
 }
 
 fn shown(value: &Value) -> String {
@@ -812,6 +790,7 @@ fn setting(text: &str, ko: bool) -> Option<Plan> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::{Profile, Theme};
     use serde_json::json;
 
     fn ctx() -> PlanContext {
@@ -835,7 +814,7 @@ mod tests {
         assert_eq!(setting_of("UI 배율 120%"), Some(("ui.scale_percent".into(), json!(120))));
         assert_eq!(setting_of("배율을 130 으로 변경해줘"), Some(("ui.scale_percent".into(), json!(130))));
         assert_eq!(setting_of("DPI 를 200 으로 변경해줘"), Some(("processing.render_dpi".into(), json!(200))));
-        assert_eq!(op_of("프로파일 정확도"), Some(Op::SetProfile { profile: Profile::Accuracy }));
+        assert_eq!(op_of("프로파일 정확도"), Some(Op::set_profile(Profile::Accuracy)));
         // … and the short forms the rule mode missed (audit USR-2).
         assert_eq!(setting_of("화면 배율 150"), Some(("ui.scale_percent".into(), json!(150))));
         assert_eq!(setting_of("렌더링 해상도 300으로"), Some(("processing.render_dpi".into(), json!(300))));
@@ -848,14 +827,14 @@ mod tests {
         assert_eq!(setting_of("120으로 ui 배율 변경"), Some(("ui.scale_percent".into(), json!(120))));
         assert_eq!(setting_of("ui scale 140"), Some(("ui.scale_percent".into(), json!(140))));
         assert_eq!(setting_of("set the ui scale to 110"), Some(("ui.scale_percent".into(), json!(110))));
-        assert_eq!(op_of("다크 모드로 바꿔줘"), Some(Op::SetTheme { theme: Theme::Dark }));
-        assert_eq!(op_of("테마 라이트"), Some(Op::SetTheme { theme: Theme::Light }));
-        assert_eq!(op_of("테마를 고대비로"), Some(Op::SetTheme { theme: Theme::HighContrast }));
-        assert_eq!(op_of("언어 영어로 바꿔줘"), Some(Op::SetLanguage { lang: Language::En }));
-        assert_eq!(op_of("프로파일을 속도로"), Some(Op::SetProfile { profile: Profile::Speed }));
+        assert_eq!(op_of("다크 모드로 바꿔줘"), Some(Op::set_theme(Theme::Dark)));
+        assert_eq!(op_of("테마 라이트"), Some(Op::set_theme(Theme::Light)));
+        assert_eq!(op_of("테마를 고대비로"), Some(Op::set_theme(Theme::HighContrast)));
+        assert_eq!(op_of("언어 영어로 바꿔줘"), Some(Op::set_language(Language::En)));
+        assert_eq!(op_of("프로파일을 속도로"), Some(Op::set_profile(Profile::Speed)));
         assert_eq!(setting_of("자동 임베딩 꺼줘"), Some(("knowledge.auto_embed".into(), json!(false))));
-        assert_eq!(op_of("inbox 감시 켜"), Some(Op::SetInboxWatch { enabled: true }));
-        assert_eq!(op_of("inbox 감시 꺼"), Some(Op::SetInboxWatch { enabled: false }));
+        assert_eq!(op_of("inbox 감시 켜"), Some(Op::set_inbox_watch(true)));
+        assert_eq!(op_of("inbox 감시 꺼"), Some(Op::set_inbox_watch(false)));
         assert_eq!(setting_of("개인정보 마스킹 사용 안 함"), Some(("privacy.pii_masking".into(), json!(false))));
         assert_eq!(setting_of("검토 임계값 80%"), Some(("processing.review_threshold".into(), json!(0.8))));
         assert_eq!(setting_of("캐시 상한 20gb로"), Some(("cache.page_cache_max_gb".into(), json!(20.0))));

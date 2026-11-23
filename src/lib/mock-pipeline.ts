@@ -172,17 +172,6 @@ const PARTY = (ko: string, en: string, email: boolean): FieldDef[] => [
   ...(email ? [f("email1", "이메일1", "Email 1", "email")] : []),
 ];
 
-const INVOICE_ITEMS = (tax: boolean): FieldDef[] => [
-  f("month_day", "월일", "Date (MM/DD)"),
-  f("item", "품목", "Item"),
-  f("spec", "규격", "Spec"),
-  f("quantity", "수량", "Qty", "integer"),
-  f("unit_price", "단가", "Unit price", "amount"),
-  f("supply_amount", "공급가액", "Supply amount", "amount"),
-  ...(tax ? [f("tax_amount", "세액", "Tax", "amount")] : []),
-  f("note", "비고", "Note"),
-];
-
 interface BuiltinDef {
   key: string;
   name_ko: string;
@@ -191,8 +180,6 @@ interface BuiltinDef {
   desc_en: string;
   fields: FieldDef[];
   rules: string[];
-  /** 0.1 business form: defined for old documents, seeded disabled (mirror of `Builtin.hidden`). */
-  hidden?: boolean;
 }
 
 const SW_PARTY = (ko: string, en: string): FieldDef[] => [
@@ -462,127 +449,6 @@ const BUILTIN: BuiltinDef[] = [
     rules: ["supply_plus_tax_equals_total", "items_sum_equals_supply", "tax_is_ten_percent"],
   },
   {
-    key: "tax_invoice",
-    hidden: true,
-    name_ko: "세금계산서",
-    name_en: "Tax invoice",
-    desc_ko: "과세·영세율 세금계산서(전자·종이). 면세 거래는 '계산서'를 사용.",
-    desc_en: "Taxable / zero-rated tax invoice.",
-    fields: [
-      f("issue_date", "작성일자", "Issue date", "date", { required: true, example: "2026-10-14" }),
-      f("tax_type", "과세유형", "Tax type", "enum", { required: true, options: ["과세", "영세율"] }),
-      f("supplier", "공급자", "Supplier", "group", { fields: PARTY("공급자", "Supplier", false) }),
-      f("buyer", "공급받는자", "Buyer", "group", { fields: PARTY("공급받는자", "Buyer", true) }),
-      f("supply_total", "공급가액 합계", "Supply total", "amount", { required: true }),
-      f("tax_total", "세액 합계", "Tax total", "amount", { required: true }),
-      f("grand_total", "합계금액", "Grand total", "amount", { required: true }),
-      f("nts_approval_no", "국세청 승인번호", "NTS approval no."),
-      f("remarks", "비고", "Remarks"),
-      f("items", "품목", "Line items", "table", { fields: INVOICE_ITEMS(true) }),
-    ],
-    rules: ["supply_plus_tax_equals_total", "items_sum_equals_supply", "tax_is_ten_percent", "zero_rate_tax_is_zero"],
-  },
-  {
-    key: "invoice_exempt",
-    hidden: true,
-    name_ko: "계산서(면세)",
-    name_en: "Invoice (tax-exempt)",
-    desc_ko: "면세 거래의 계산서 — 세액 항목이 없음.",
-    desc_en: "Invoice for tax-exempt transactions.",
-    fields: [
-      f("issue_date", "작성일자", "Issue date", "date", { required: true }),
-      f("supplier", "공급자", "Supplier", "group", { fields: PARTY("공급자", "Supplier", false) }),
-      f("buyer", "공급받는자", "Buyer", "group", { fields: PARTY("공급받는자", "Buyer", true) }),
-      f("supply_total", "공급가액 합계", "Supply total", "amount", { required: true }),
-      f("grand_total", "합계금액", "Grand total", "amount", { required: true }),
-      f("items", "품목", "Line items", "table", { fields: INVOICE_ITEMS(false) }),
-    ],
-    rules: ["items_sum_equals_supply", "exempt_total_equals_supply"],
-  },
-  {
-    key: "receipt",
-    hidden: true,
-    name_ko: "영수증",
-    name_en: "Receipt",
-    desc_ko: "카드·현금 영수증, 간이영수증.",
-    desc_en: "Card / cash receipts.",
-    fields: [
-      f("store_name", "상호", "Store", "string", { required: true }),
-      f("brn", "사업자등록번호", "Business reg. no.", "brn"),
-      f("merchant_no", "가맹점번호", "Merchant no."),
-      f("address", "주소", "Address"),
-      f("phone", "전화", "Phone", "phone"),
-      f("datetime", "일시", "Date / time", "date", { required: true }),
-      f("items", "품목", "Items", "table", { fields: [f("name", "품명", "Item"), f("quantity", "수량", "Qty", "integer"), f("unit_price", "단가", "Unit price", "amount"), f("amount", "금액", "Amount", "amount")] }),
-      f("supply_amount", "공급가액", "Supply amount", "amount"),
-      f("vat", "부가세", "VAT", "amount"),
-      f("service_charge", "봉사료", "Service charge", "amount"),
-      f("total", "합계", "Total", "amount", { required: true }),
-      f("payment_method", "결제수단", "Payment method", "enum", { options: ["카드", "현금", "현금영수증", "간편결제", "기타"] }),
-      f("card_last4", "카드 끝 4자리", "Card last 4", "string", { regex_hint: "^[0-9]{4}$" }),
-      f("approval_no", "승인번호", "Approval no."),
-      f("cash_receipt_id", "현금영수증 식별번호", "Cash receipt id", "account"),
-    ],
-    rules: ["receipt_parts_equal_total", "items_sum_equals_total"],
-  },
-  {
-    key: "business_registration",
-    hidden: true,
-    name_ko: "사업자등록증",
-    name_en: "Business registration",
-    desc_ko: "일반·간이·면세·법인 사업자등록증.",
-    desc_en: "Business registration certificate.",
-    fields: [
-      f("tax_header", "과세유형", "Taxpayer type", "enum", { options: ["일반과세자", "간이과세자", "면세사업자", "법인사업자"] }),
-      f("registration_no", "등록번호", "Registration no.", "brn", { required: true }),
-      f("company_name", "상호(법인명)", "Company name", "string", { required: true }),
-      f("representative", "대표자", "Representative", "string", { required: true }),
-      f("birth_date", "생년월일", "Date of birth", "date", { mask: true }),
-      f("opening_date", "개업연월일", "Opening date", "date"),
-      f("business_address", "사업장 소재지", "Business address", "string", { required: true }),
-      f("business_type", "업태", "Business type"),
-      f("business_item", "종목", "Business item"),
-      f("issue_date", "발급일", "Issue date", "date"),
-      f("issuer", "발급기관", "Issuer"),
-    ],
-    rules: [],
-  },
-  {
-    key: "contract",
-    hidden: true,
-    name_ko: "계약서",
-    name_en: "Contract",
-    desc_ko: "공급·용역·임대 등 계약서.",
-    desc_en: "Supply / service / lease contracts.",
-    fields: [
-      f("title", "계약명", "Title", "string", { required: true }),
-      f("parties", "당사자", "Parties", "table", { fields: [f("role", "구분", "Role"), f("name", "명칭", "Name"), f("representative", "대표자", "Representative"), f("brn", "사업자번호", "Business reg. no.", "brn")] }),
-      f("contract_date", "계약일", "Contract date", "date"),
-      f("period_start", "계약기간 시작", "Period start", "date"),
-      f("period_end", "계약기간 종료", "Period end", "date"),
-      f("amount", "계약금액", "Amount", "amount"),
-      f("payment_terms", "지급조건", "Payment terms"),
-      f("signed", "서명/날인 여부", "Signed / sealed", "boolean"),
-    ],
-    rules: ["period_start_before_end"],
-  },
-  {
-    key: "application_form",
-    hidden: true,
-    name_ko: "신청서",
-    name_en: "Application form",
-    desc_ko: "각종 신청서·접수 서식.",
-    desc_en: "Application / request forms.",
-    fields: [
-      f("form_title", "서식명", "Form title", "string", { required: true }),
-      f("applicant", "신청인", "Applicant", "group", { fields: [f("name", "성명", "Name", "string", { required: true }), f("birth_date", "생년월일", "Date of birth", "date", { mask: true }), f("phone", "연락처", "Phone", "phone"), f("address", "주소", "Address")] }),
-      f("application_date", "신청일", "Application date", "date"),
-      f("items", "신청 항목", "Items", "table", { fields: [f("item", "항목", "Item"), f("value", "값", "Value")] }),
-      f("signed", "서명/날인 여부", "Signed / sealed", "boolean"),
-    ],
-    rules: [],
-  },
-  {
     key: "general",
     name_ko: "일반(표/차트)",
     name_en: "General (table / chart)",
@@ -610,8 +476,8 @@ function seedBuiltins(s: PState): boolean {
       definition: { fields: b.fields, rules: b.rules },
       form_document_id: null,
       builtin_key: b.key,
-      enabled: !b.hidden,
-      is_default: !taken && !b.hidden,
+      enabled: true,
+      is_default: !taken,
       use_count: 0,
       created_at: now(),
       updated_at: now(),
@@ -1992,12 +1858,6 @@ function parseTables(text: string, page: number): ExtractedTable[] {
   return out;
 }
 
-function tableCsv(t: ExtractedTable): string {
-  const q = (c: string) => (/[",\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c);
-  const lines = [t.header.length ? t.header.map(q).join(",") : null, ...t.rows.map((r) => r.map(q).join(","))].filter((x): x is string => x !== null);
-  return `﻿${lines.join("\r\n")}\r\n`;
-}
-
 function status(s: PState): PipelineStatus {
   const docs = wsDocs();
   const settings = loadSettings();
@@ -2092,11 +1952,6 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
       return docTypes(s);
     case "pipeline_schemas":
       return [...s.schemas].sort((x, y) => y.use_count - x.use_count || Number(x.source === "builtin") - Number(y.source === "builtin") || x.created_at.localeCompare(y.created_at));
-    case "pipeline_schema_get": {
-      const sc = s.schemas.find((x) => x.id === a.id);
-      if (!sc) throw err("invalid", "schema_not_found");
-      return sc;
-    }
     case "pipeline_schema_versions":
       return versionsOf(String(a.id));
     case "pipeline_schema_save": {
@@ -2141,14 +1996,6 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
       return lint(a.definition as SchemaDef);
     case "pipeline_schema_from_nl":
       return nlSchema(s, String(a.description ?? ""), (a.baseId as string | null) ?? null);
-    case "pipeline_form_derive": {
-      const doc = wsDocs().find((d) => d.id === a.documentId);
-      if (!doc) throw err("not_found", String(a.documentId));
-      // Scanned forms need the vision model; HWPX / DOCX / HWP forms are derived from their structure.
-      if (visionMode() === "none" && !["hwpx", "docx", "hwp"].includes(doc.source_kind)) throw typed("no_model");
-      await new Promise((res) => setTimeout(res, 150));
-      return deriveForm(doc, (a.name as string | null) ?? null);
-    }
     case "pipeline_form_register": {
       const draft = { ...(a.draft as SchemaDraft), source: "form" as SchemaSource };
       if (!isKey(draft.doc_type)) draft.doc_type = slugForName(draft.name);
@@ -2175,16 +2022,6 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
       return discoverJob((a.documentIds as string[] | undefined) ?? [], (a.name as string | null) ?? null);
     case "pipeline_schema_name_exists":
       return nameExists(String(a.name ?? ""), (a.excludingId as string | null) ?? null, s);
-    case "pipeline_document_schema": {
-      const doc = wsDocs().find((d) => d.id === a.documentId);
-      if (!doc) throw typed("document_not_found");
-      if (a.schemaId && !s.schemas.some((x) => x.id === a.schemaId)) throw typed("schema_not_found");
-      doc.schema_id = (a.schemaId as string | null) ?? null;
-      doc.updated_at = now();
-      upsertDoc(doc);
-      docsChanged([doc.id]);
-      return undefined;
-    }
     case "pipeline_runs":
       return s.runs.filter((r) => r.document_id === a.documentId);
     case "pipeline_fields": {
@@ -2201,8 +2038,6 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
       changed("fields", [ch.document_id]);
       return out[0];
     }
-    case "pipeline_revalidate":
-      return revalidateDocument(String(a.documentId));
     case "pipeline_review_queue":
       return reviewQueue(s, (a.filter as ReviewFilter | null) ?? {});
     case "pipeline_review_apply": {
@@ -2217,13 +2052,6 @@ export async function mockPipeline(cmd: string, a: Record<string, any>): Promise
       return approveDocument(String(a.documentId), (a.reason as ReviewReason | null) ?? null);
     case "pipeline_tables":
       return documentTables(String(a.documentId));
-    case "pipeline_table_csv": {
-      const t = documentTables(String(a.documentId)).find((x) => x.page === a.page && x.index === a.index);
-      if (!t) throw err("invalid", "table_not_found");
-      return tableCsv(t);
-    }
-    case "pipeline_table_export":
-      return undefined;
     case "pipeline_split":
       return splitJob(String(a.documentId), (a.boundaries as number[]) ?? []);
     case "pipeline_merge":
