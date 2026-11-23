@@ -249,6 +249,42 @@
 - 잰 것은 계획까지입니다. 주제 요약의 결과물은 `crates/doculens-core/tests/real_summary.rs`(`DOCULENS_SUMMARY_TOPIC`)로 따로 돌렸습니다 — `docs/releases/v1.0.2.md` "확인한 것".
   E2B · GPU · 임베딩을 쓰는 검색은 재지 않았습니다.
 
+## 1.0.3 — 요약은 결과 하나: 문서별 요약 없음 (사용자 요청 2026-11-22)
+
+"파일별 요약은 없애고 모든 파일의 내용을 하나의 결과로 요약" — `summarize.target`(each_doc · set)이 없어졌고, 요약 단계는 범위의 문서 전체를 읽어 결과 하나를 만듭니다.
+계획 쪽에서 볼 것은 세 가지였습니다: 모델이 없어진 칸 없이도 요약을 계획하는가, 문서마다 따로 요약해 달라는 문장을 어떻게 쓰는가, 문장이 청한 묶음(프로젝트별)은 남는가.
+
+### 문장 12개 (`one-summary-1.0.3.golden.json`) — 9/12 → 12/12
+
+컨텍스트는 1.0.2의 `topic-summary-1.0.2-open-document.context.json`(문서 하나가 열려 있고, 프로젝트 "한빛 납품"과 "AAA"가 있음)입니다.
+
+| id | 문장 | 가드 전 | 이 판 |
+|---|---|---|---|
+| s-1 | 전체 문서를 요약해줘 | ✕ `{length: long}` | ○ `{}` |
+| s-2 | 이 문서 요약해줘 | ○ | ○ 열린 문서 |
+| s-3 | AAA 프로젝트 요약해줘 | ○ | ○ 프로젝트 AAA(참고 자료 포함) |
+| s-4 | 이 문서를 한 줄로 요약해줘 | ○ `{length: short}` | ○ |
+| s-5 | 전체 문서를 문서별로 요약해줘 | ○ 확인 카드 | ○ 확인 카드 |
+| s-6 | AAA 프로젝트 문서를 각각 요약해줘 | ○ 확인 카드 | ○ 확인 카드 |
+| s-7 | 파일별로 요약해줘 | ○ 확인 카드 | ○ 확인 카드 |
+| s-8 | 프로젝트별로 요약해줘 | ○ `{group_by: project}` | ○ |
+| s-9 | AAA에 대해서 요약해줘 | ○ `{topic: AAA}` | ○ |
+| s-10 | AAA 프로젝트의 지체상금 내용에 대해 요약해줘 | ○ `{topic: 지체상금}` · 프로젝트 AAA | ○ |
+| s-11 | 모든 문서의 내용을 하나로 요약해줘 | ✕ `{length: long}` | ○ `{}` |
+| s-12 | summarize all documents | ✕ `{length: long}` | ○ `{}` |
+
+- 열두 문장 모두 한 번에(재질의 없이) 요약 계획이 나왔고, 없어진 `target`을 쓰려다 문법에 걸린 경우는 없었습니다.
+- **길이** — "전체 · 모든 · all"이 들어간 세 문장에 모델이 `length: long`을 붙였습니다. 문장은 길이를 말하지 않았고, `long`은 여러 쪽 분량의 서술식 요약이어서 CPU에서 몇 분이 더 걸립니다.
+  `guard::unsaid_length`(검증 전): 요약의 길이는 문장이 말한 대로 — 말하지 않았으면 비우고, "자세히" · "한 줄로"는 계획이 무엇을 썼든 넣습니다. 주제의 낱말("상세 설계에 대해")은 길이가 아닙니다.
+  첫 측정은 길이를 기대값에 넣기 전이어서 결과 파일 안의 정답 수는 12/12이고, 위 "가드 전" 열은 길이를 넣은 기대값으로 다시 채점한 것입니다
+  (`python3 scripts/rescore-planner.py eval/results/planner-real-model/one-summary-1.0.3.golden.json 가드전=…-before-guards.json 이판=….json`).
+- **문서별 요약 요청**(s-5 · s-6 · s-7) — 모델은 세 번 모두 묶음 없는 `summarize`를 썼고 `guard::split_check`가 "문서별 요약은 만들지 않습니다 …"를 붙여 확인 카드가 됐습니다.
+  모델이 쓴 해석 문장은 "전체 문서의 내용을 문서별로 요약합니다."(s-5), "파일별로 문서를 묶어 요약합니다"(s-7)여서 카드의 알림과 어긋났습니다.
+  이 판은 그런 해석 문장을 "범위의 문서를 모두 읽어 하나로 요약합니다"로 바꿉니다(프로젝트 이름을 말한 s-6의 "'AAA' 프로젝트의 문서를 요약합니다"는 그대로).
+- 응답 시간은 문장당 18 ~ 164초였습니다(CPU 4코어, 1.0.2와 같은 범위).
+- 잰 것은 계획까지입니다. 여러 문서를 하나로 요약한 결과물은 `crates/doculens-core/tests/real_summary.rs`(`DOCULENS_SUMMARY_TOGETHER=1`)로 따로 돌렸습니다 — `docs/releases/v1.0.3.md` "확인한 것".
+  E2B · GPU는 재지 않았습니다.
+
 ## 파일
 
 - `gemma4-e4b-q4km-0.7.0.json`, `gemma4-e4b-q4km-0.8.0.json` — 배치별 결과를 합친 것(문장별 플랜, 출처, 응답 시간; 다시 잰 문장의 첫 결과는 `first_measurement`).
@@ -263,3 +299,6 @@
 - `topic-summary-1.0.2.golden.json` / `topic-summary-1.0.2.context.json`, `topic-summary-1.0.2-open-document.golden.json` / `topic-summary-1.0.2-open-document.context.json` — 1.0.2: 위 6문장과 8문장, 그 컨텍스트.
 - `gemma4-e4b-q4km-1.0.2-topic-summary-1.0.1.json`, `gemma4-e4b-q4km-1.0.2-topic-summary-before-guard.json`, `gemma4-e4b-q4km-1.0.2-topic-summary.json` — 6문장: 1.0.1 코드, `summarize.topic`만 넣은 코드(2377469), 이 판.
   `gemma4-e4b-q4km-1.0.2-topic-summary-open-document.json`(8문장), `gemma4-e4b-q4km-1.0.2-topic-summary-golden.json`(골든셋 17문장). 경로는 저장소 기준으로 고쳐 적었다.
+- `one-summary-1.0.3.golden.json` — 1.0.3: 위 12문장(컨텍스트는 `topic-summary-1.0.2-open-document.context.json`). 1.0.2의 두 문장 세트는 그 판의 기대값(`target: set`)을 그대로 둔 기록이다 —
+  1.0.3부터는 이 파일로 잰다.
+- `gemma4-e4b-q4km-1.0.3-one-summary-before-guards.json`, `gemma4-e4b-q4km-1.0.3-one-summary.json` — 12문장: `guard::unsaid_length`와 해석 문장 교체를 넣기 전과 후. 경로는 저장소 기준으로 고쳐 적었다.

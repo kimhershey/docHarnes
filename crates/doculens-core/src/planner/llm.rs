@@ -554,8 +554,10 @@ fn parse_and_validate(
     // A type is a condition only when the user's words name one (0.8.2): "all" in the type slot,
     // or a type no question needs, must not fail the plan.
     let untyped = guard::untyped_scope(text, &mut plan, ctx, ko);
-    // … and a summary has a subject only when they name one (1.0.2).
+    // … and a summary has a subject only when they name one (1.0.2), and a length only when they
+    // say one (1.0.3).
     guard::unsaid_topic(text, &mut plan, ctx);
+    guard::unsaid_length(text, &mut plan);
     let mut issues = validate::validate(&mut plan, ctx, date);
     issues.extend(untyped);
     if has_errors(&issues) {

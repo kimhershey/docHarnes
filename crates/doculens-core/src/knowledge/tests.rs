@@ -8,7 +8,7 @@ use crate::engine::{ChatRequest, ChatResponse};
 use crate::error::{CoreError, Result};
 use std::collections::HashSet;
 
-use super::answer::{answer, compare, summarize, summarize_topic, AnswerDeps, ScriptedChat};
+use super::answer::{answer, compare, summarize, summarize_documents, summarize_topic, AnswerDeps, ScriptedChat};
 use super::chunker::ChunkOptions;
 use super::embed::{self, Embedder, HashEmbedder};
 use super::index::{index_document, index_pending, index_status, IndexDeps, IndexOutcome};
@@ -1985,6 +1985,128 @@ impl ChatBackend for PartChat {
         on_delta(reply);
         Ok(ChatResponse { content: reply.into(), ..ChatResponse::default() })
     }
+}
+
+/// 1.0.3 (user decision 2026-11-22 — "파일별 요약은 없애고 모든 파일의 내용을 하나의 결과로 요약"): one
+/// summary of several documents reads the passages of all of them — in one call when they fit, part
+/// by part and merged when they do not — and keeps the sources it cites, each with its document.
+#[test]
+fn several_documents_are_summarised_as_one() {
+    let w = World::new();
+    let request = || {
+        let mut req = AnswerRequest::question("");
+        req.kind = AnswerKind::Summary;
+        req
+    };
+    let ids = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let chunks_of = |id: &str| w.db.with(|c| repo::list_chunks(c, id)).unwrap().len();
+    let reg2 = chunks_of("reg2");
+
+    // The passages of all the documents in one call when they fit: the request says how many
+    // documents they are and asks for one summary of them taken together — not a section each.
+    let reply = format!("- 숙박비 한도는 1박당 150,000원이다 [1]\n- 반출은 승인을 받아야 한다 [{}]", reg2 + 1);
+    let chat = RecordingChat::new(&reply, Some("stop"));
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None, context_size: None };
+    let mut steps: Vec<(u32, u32)> = Vec::new();
+    // (a document named twice is read once; one without text is left out and returned)
+    let (a, without_text) = summarize_documents(
+        &deps,
+        &request(),
+        &ids(&["reg2", "sec", "scan", "reg2"]),
+        &mut |_| true,
+        &mut |made, expected| steps.push((made, expected)),
+    )
+    .unwrap();
+    assert_eq!((chat.count(), steps.as_slice()), (1, &[(1, 1)][..]));
+    assert_eq!(without_text, vec!["scan"]);
+    let (user, _) = chat.last();
+    assert!(
+        user.contains("문서 2건의 내용을 통틀어 하나의 요약으로 정리하세요")
+            && user.contains("문서별로 나누어 쓰지 말고"),
+        "{user}"
+    );
+    // Each passage carries its document's name; the documents come in the order they were given.
+    let (first, second) = (user.find("출장비규정_2024").unwrap(), user.find("정보보안지침").unwrap());
+    assert!(first < second, "{user}");
+    assert_eq!(user.matches("<source ").count(), reg2 + chunks_of("sec"), "every passage of both: {user}");
+    // The sources are the passages the summary cites, under the numbers the text uses.
+    assert_eq!(
+        a.sources.iter().map(|c| (c.index, c.document_id.as_str())).collect::<Vec<_>>(),
+        vec![(1, "reg2"), (reg2 as u32 + 1, "sec")]
+    );
+    assert_eq!(a.sentences.len(), 2);
+    assert_eq!((a.kind, a.document_id.as_deref()), (AnswerKind::Summary, None));
+    assert!(a.question.contains("문서 2건의 내용"), "{}", a.question);
+    // Saved once — it is a summary of no single document.
+    assert!(a.id.is_some());
+    assert_eq!(w.db.with(|c| repo::list_answers(c, Some(AnswerKind::Summary), None, 5)).unwrap().len(), 1);
+    assert!(w.db.with(|c| repo::list_answers(c, Some(AnswerKind::Summary), Some("reg2"), 5)).unwrap().is_empty());
+
+    // A summary that cites nothing still lists what it covers: the first passage of each document.
+    let bare = RecordingChat::new("- 출장비와 보안 지침을 다룬다", Some("stop"));
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &bare, model: None, cancelled: None, context_size: None };
+    let mut req = request();
+    req.save = false;
+    let (a, _) = summarize_documents(&deps, &req, &ids(&["reg2", "sec"]), &mut |_| true, &mut |_, _| {}).unwrap();
+    assert_eq!(
+        a.sources.iter().map(|c| (c.index, c.document_id.as_str())).collect::<Vec<_>>(),
+        vec![(1, "reg2"), (reg2 as u32 + 1, "sec")]
+    );
+
+    // One document: the summary is that document's, as `summarize` makes it — every passage a source.
+    let (one, none) = summarize_documents(&deps, &req, &ids(&["reg2"]), &mut |_| true, &mut |_, _| {}).unwrap();
+    assert!(none.is_empty());
+    assert_eq!((one.document_id.as_deref(), one.sources.len()), (Some("reg2"), reg2));
+    let (user, _) = bare.last();
+    assert!(user.contains("핵심 내용을 5개 이내의 개조식") && !user.contains("문서 1건"), "{user}");
+    // No text in any of them: nothing to summarise.
+    let err = summarize_documents(&deps, &req, &ids(&["scan"]), &mut |_| true, &mut |_, _| {}).unwrap_err();
+    assert!(matches!(&err, CoreError::NotFound(reason) if reason == "no_text"), "{err}");
+
+    // More than one request holds: read part by part — a part may hold passages of several documents
+    // — and merged into the one summary. Every model call is a step.
+    add_long_regulation(&w);
+    let parts = RecordingChat::new("- 요약 [1]", Some("stop"));
+    // (a 2.6K slot does not hold the ten-page regulation: several parts)
+    let deps = AnswerDeps {
+        search: w.search_deps(None),
+        chat: &parts,
+        model: None,
+        cancelled: None,
+        context_size: Some(2_600),
+    };
+    let mut req = request();
+    req.save = false;
+    let mut steps: Vec<(u32, u32)> = Vec::new();
+    let (a, _) =
+        summarize_documents(&deps, &req, &ids(&["sec", "big", "reg1"]), &mut |_| true, &mut |made, expected| {
+            steps.push((made, expected))
+        })
+        .unwrap();
+    let calls = parts.count() as u32;
+    assert!(calls >= 3, "several parts and a merge: {calls}");
+    assert_eq!(steps.iter().map(|s| s.0).collect::<Vec<_>>(), (1..=calls).collect::<Vec<_>>(), "{steps:?}");
+    assert!(steps.iter().all(|(made, expected)| made <= expected), "{steps:?}");
+    assert_eq!(steps.last(), Some(&(calls, calls)), "{steps:?}");
+    let requests: Vec<String> = parts
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|r| r.messages.last().unwrap()["content"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        requests[0].contains("근거는 문서 3건의 내용이고") && requests[0].contains("지금은 1번째 묶음"),
+        "{}",
+        requests[0]
+    );
+    // (the first part starts with the first document and goes on into the second)
+    assert!(requests[0].contains("정보보안지침") && requests[0].contains("출장비규정_전문"), "{}", requests[0]);
+    let merge = requests.last().unwrap();
+    assert!(merge.contains("[부분 요약]") && merge.contains("문서 3건의 내용을 통틀어 하나의 요약으로"), "{merge}");
+    assert_eq!(a.sources.iter().map(|c| c.index).collect::<Vec<_>>(), vec![1]);
 }
 
 /// 1.0.2 (user report 2026-11-19 — "AA에 대해서 요약해줘 … 요약만 하고 AA에 대한 내용을 수집하지 않음"):

@@ -1088,7 +1088,7 @@ fn a_project_scope_reads_work_documents_and_reference_material() {
         scope_project: open.map(str::to_string),
         ..PlanContext::default()
     };
-    let summarize = || Op::Summarize { target: Some(SummarizeTarget::Set), length: None, group_by: None, topic: None };
+    let summarize = || Op::Summarize { target: None, length: None, group_by: None, topic: None };
     let validated = |ops: Vec<Op>, scope: Scope, open: Option<&str>| {
         let mut plan = plan_of(ops, scope);
         validate::validate(&mut plan, &ctx(open), None);
@@ -1116,47 +1116,117 @@ fn a_project_scope_reads_work_documents_and_reference_material() {
     assert_eq!(serde_json::to_value(ScopeFilter::default()).unwrap(), json!({}));
     assert_eq!(serde_json::to_value(&bare).unwrap(), json!({ "with_reference": true }));
 
-    // A summary of the project: every document it holds, of either kind.
-    let names = |ex: &exec::PlanExecution| -> Vec<String> {
-        ex.steps[0].payload["summaries"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|s| s["name"].as_str().unwrap().to_string())
-            .collect()
+    // A summary of the project: every document it holds, of either kind — in one summary. 1.0.3
+    // (user decision 2026-11-22, "파일별 요약은 없애고 모든 파일의 내용을 하나의 결과로 요약"): there
+    // is no summary per document, and the documents are read together.
+    let covered = |ex: &exec::PlanExecution| -> Vec<String> {
+        let payload = &ex.steps[0].payload;
+        assert!(payload["summaries"].as_array().unwrap().is_empty(), "no summary per document: {payload}");
+        let groups = payload["groups"].as_array().unwrap();
+        assert_eq!(groups.len(), 1, "one result: {payload}");
+        groups[0]["document_ids"].as_array().unwrap().iter().map(|s| s.as_str().unwrap().to_string()).collect()
     };
-    w.chat.push_ocr("- 요약 [1]");
+    let calls = || w.chat.requests.lock().unwrap().len();
+    w.chat.push_ocr("- 납품 기한은 12월 말이고 지침의 절차를 따른다 [1][2]");
     let plan = validated(vec![summarize()], Scope::default(), Some(&hanbit.id));
     let card = preview(&w, &plan);
     assert_eq!((card.document_count, card.reference_count), (3, 1), "the card says how many are reference material");
+    assert_eq!(card.steps[0].summary, "문서 3건의 내용을 하나로 요약");
     assert_eq!(preview(&w, &validated(vec![tag("확인")], scope_of(&hanbit, None, false), None)).reference_count, 0);
+    let before = calls();
     let ex = run(&w, &plan);
     assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
-    assert_eq!(names(&ex), vec!["ref.jpg", "shared.jpg", "work.jpg"]);
-    assert_eq!(ex.steps[0].payload["groups"].as_array().unwrap().len(), 1);
+    assert_eq!(covered(&ex), vec!["ref", "shared", "work"]);
+    assert_eq!(calls() - before, 1, "the three documents fit one request: one call, not one per document");
+    assert_eq!(ex.steps[0].summary, "문서 3건의 내용을 하나로 요약");
+    let group = &ex.steps[0].payload["groups"][0];
+    assert_eq!((group["key"].clone(), group["label"].clone()), (json!("all"), json!("전체")));
+    assert_eq!(ex.steps[0].payload["group_by"], json!("none"));
+    // The request carries the passages of all three, each under its document's name, and asks for
+    // one summary of them taken together — not a section per document.
+    let request = serde_json::to_string(&w.chat.requests.lock().unwrap().last().unwrap().messages).unwrap();
+    for part in [
+        "문서 3건의 내용을 통틀어 하나의 요약으로",
+        "문서별로 나누어 쓰지 말고",
+        "정보보안 지침",
+        "공통 개발 표준",
+        "한빛 포털 구축 계약서",
+    ] {
+        assert!(request.contains(part), "{part}: {request}");
+    }
+    // The sources are the passages the summary cites — each with its document — not every passage read.
+    let sources = group["answer"]["sources"].as_array().unwrap();
+    assert_eq!(sources.iter().map(|c| c["index"].as_u64().unwrap()).collect::<Vec<_>>(), vec![1, 2], "{sources:?}");
+    assert_eq!((sources[0]["document_id"].clone(), sources[1]["document_id"].clone()), (json!("ref"), json!("shared")));
+    assert!(group["answer"]["document_id"].is_null(), "a summary of several documents belongs to none of them");
+    // A summary that cites nothing still lists the documents it covers: the first passage of each.
+    *w.chat.ocr.lock().unwrap() = vec!["- 요약".into()];
+    let ex = run(&w, &plan);
+    let sources = ex.steps[0].payload["groups"][0]["answer"]["sources"].as_array().unwrap().clone();
+    assert_eq!(
+        sources.iter().map(|c| c["document_id"].as_str().unwrap().to_string()).collect::<Vec<_>>(),
+        vec!["ref", "shared", "work"]
+    );
     // A project that holds reference material only is summarised too ("선택한 문서가 없습니다" before).
+    // One document: the summary is that document's, and named after it.
     let ex = run(&w, &validated(vec![summarize()], Scope::default(), Some(&saebom.id)));
     assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
-    assert_eq!(names(&ex), vec!["shared.jpg"]);
+    assert_eq!(covered(&ex), vec!["shared"]);
+    assert_eq!(ex.steps[0].summary, "문서 1건 요약");
+    let group = &ex.steps[0].payload["groups"][0];
+    assert_eq!(
+        (group["label"].clone(), group["answer"]["document_id"].clone()),
+        (json!("shared.jpg"), json!("shared"))
+    );
     // "참고 자료만" in a project without reference material: the reason says what is missing.
     let ex = run(&w, &validated(vec![summarize()], scope_of(&empty, Some(RoleParam::Knowledge), false), None));
     assert_eq!(ex.steps[0].status, StepStatus::Failed);
     assert!(ex.steps[0].error.as_deref().unwrap().contains("no_reference_in_project"), "{:?}", ex.steps[0].error);
     let ex = run(&w, &validated(vec![summarize()], Scope::default(), Some(&empty.id)));
     assert!(ex.steps[0].error.as_deref().unwrap().contains("no_documents"), "{:?}", ex.steps[0].error);
+    // A document without text is left out of the summary and named.
+    w.add_image("blank", "inbox/blank.jpg");
+    w.db.with(|c| projects_repo::add_documents(c, &hanbit.id, &["blank".to_string()])).unwrap();
+    let ex = run(&w, &validated(vec![summarize()], Scope::default(), Some(&hanbit.id)));
+    assert_eq!(covered(&ex), vec!["ref", "shared", "work"]);
+    let skipped = ex.steps[0].payload["skipped"].as_array().unwrap().clone();
+    assert_eq!(skipped.len(), 1);
+    assert_eq!((skipped[0]["name"].clone(), skipped[0]["reason"].clone()), (json!("blank.jpg"), json!("no_text")));
+    assert_eq!(ex.steps[0].summary, "문서 3건의 내용을 하나로 요약 · 본문이 없는 문서 1건은 건너뜀");
+    w.db.with(|c| projects_repo::remove_document(c, &hanbit.id, "blank")).unwrap();
 
-    // A document the model could not summarise does not end the step: the others are summarised and
-    // the one that failed is named.
+    // The one summary the model could not make ends the step with its reason: there is no other
+    // result to keep.
     w.chat.fail_queue.lock().unwrap().push("/v1/chat/completions: HTTP 500: slot failed".into());
     let ex = run(&w, &validated(vec![summarize()], Scope::default(), Some(&hanbit.id)));
+    assert_eq!(ex.steps[0].status, StepStatus::Failed, "{:?}", ex.steps[0]);
+    assert!(ex.steps[0].error.as_deref().unwrap().contains("HTTP 500"), "{:?}", ex.steps[0].error);
+    // With a split a group that fails does not throw away the others (1.0.1): its documents are named
+    // — unless another group's summary covers them.
+    let by_project = validated(
+        vec![Op::Summarize { target: None, length: None, group_by: Some(SummaryGroup::Project), topic: None }],
+        Scope::default(),
+        None,
+    );
+    w.chat.fail_queue.lock().unwrap().push("/v1/chat/completions: HTTP 500: slot failed".into());
+    let ex = run(&w, &by_project);
     assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
-    assert_eq!(names(&ex), vec!["shared.jpg", "work.jpg"]);
-    let failed = ex.steps[0].payload["failed"].as_array().unwrap().clone();
-    assert_eq!(failed.len(), 1);
-    assert_eq!(failed[0]["name"], json!("ref.jpg"));
+    let payload = &ex.steps[0].payload;
+    let labels: Vec<&str> =
+        payload["groups"].as_array().unwrap().iter().map(|g| g["label"].as_str().unwrap()).collect();
+    assert_eq!(labels, vec!["새봄 ERP", "프로젝트 없음"], "the first group — 한빛 포털 — failed: {payload}");
+    let failed = payload["failed"].as_array().unwrap().clone();
+    let mut names: Vec<&str> = failed.iter().map(|f| f["name"].as_str().unwrap()).collect();
+    names.sort_unstable();
+    assert_eq!(names, vec!["ref.jpg", "work.jpg"], "shared.jpg is in the summary of 새봄 ERP");
     assert!(failed[0]["error"].as_str().unwrap().contains("HTTP 500"), "{failed:?}");
-    assert!(ex.steps[0].summary.contains("요약하지 못한 문서 1건"), "{}", ex.steps[0].summary);
-    assert!(ex.steps[0].payload.get("skipped").is_none(), "a failure is not \"no text\"");
+    assert!(ex.steps[0].summary.contains("프로젝트별 묶음 2개"), "{}", ex.steps[0].summary);
+    assert!(ex.steps[0].summary.contains("요약하지 못한 문서 2건"), "{}", ex.steps[0].summary);
+    // (a failure is not "no text": only the image without text is skipped)
+    let skipped: Vec<&str> =
+        payload["skipped"].as_array().unwrap().iter().map(|x| x["name"].as_str().unwrap()).collect();
+    assert_eq!(skipped, vec!["blank.jpg"]);
+    assert!(payload["summaries"].as_array().unwrap().is_empty());
     // An engine that is gone stops the step at once, as before.
     *w.chat.fail_with.lock().unwrap() = Some("POST /v1/chat/completions: io: Connection refused (os error 111)".into());
     let ex = run(&w, &validated(vec![summarize()], Scope::default(), Some(&hanbit.id)));
@@ -1226,7 +1296,7 @@ fn a_summary_about_a_subject_reads_the_passages_about_it() {
     // No scope: every document that says something about the subject, in one summary.
     let plan = validated(vec![about("  납품   기한 ")], Scope::default());
     assert!(
-        matches!(&plan.operations[0], Op::Summarize { topic: Some(t), target: Some(SummarizeTarget::Set), .. } if t == "납품 기한"),
+        matches!(&plan.operations[0], Op::Summarize { topic: Some(t), target: None, .. } if t == "납품 기한"),
         "{plan:?}"
     );
     let card = preview(&w, &plan);
@@ -1288,6 +1358,7 @@ fn a_summary_about_a_subject_reads_the_passages_about_it() {
     // A summary about a subject is one summary: a grouping is dropped with a note.
     let mut grouped = plan_of(
         vec![Op::Summarize {
+            // (what a plan stored before 1.0.3 may carry: read, and cleared)
             target: Some(SummarizeTarget::EachDoc),
             length: None,
             group_by: Some(crate::planner::SummaryGroup::Project),
@@ -1297,7 +1368,7 @@ fn a_summary_about_a_subject_reads_the_passages_about_it() {
     );
     let issues = validate::validate(&mut grouped, &PlanContext::default(), None);
     assert!(issues.iter().any(|i| i.code == "grouping_dropped"), "{issues:?}");
-    assert!(matches!(&grouped.operations[0], Op::Summarize { group_by: None, target: Some(SummarizeTarget::Set), .. }));
+    assert!(matches!(&grouped.operations[0], Op::Summarize { group_by: None, target: None, .. }));
     // An empty subject is no subject: the documents are summarised as before.
     let plain = validated(vec![about("   ")], sel(&["work"]));
     assert!(matches!(&plain.operations[0], Op::Summarize { topic: None, .. }));

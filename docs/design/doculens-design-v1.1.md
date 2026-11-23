@@ -481,6 +481,8 @@ flowchart LR
 > 요청 중 op로 표현하지 못한 부분은 플랜의 `unmet`에 적히고 확인을 받는다. "~별·마다"는 op가 그 기준을 가지면(요약: 프로젝트·유형·폴더, 집계: 월·거래처·유형·프로젝트) 채워 넣고, 가지지 않으면 확인을 받는다. 할 일이 없는 플랜(`noop`)은 대화 답변이 된다.
 > `set_setting`의 문법은 값의 타입별 대안으로 나뉘어 키와 값의 타입이 어긋날 수 없고, 프롬프트에는 `키 = 한국어 라벨 [범위]` 표가 들어간다. 설정 범위는 코어 카탈로그 한 곳에서 화면용 카탈로그(`src/lib/settingsCatalog.json`)까지 만든다.
 > `summarize`는 `group_by`(프로젝트·유형·폴더)를 가지며 묶음마다 문서별 요약을 합친 요약 하나를 만든다(`target = set`도 같은 방식으로 실제 구현).
+> **1.0.3(사용자 결정 2026-11-22 — "파일별 요약은 없애고 모든 파일의 내용을 하나의 결과로 요약")**: 요약은 범위의 문서 전체를 읽어 결과 하나를 만든다. 문서별 요약과 `target`은 없어졌고
+> (저장된 플랜의 값은 읽기만 한다), `group_by`가 있으면 묶음마다 그 묶음 문서 전체의 요약 하나다. 문서마다 따로 요약해 달라는 문장은 하나로 요약한다고 알리고 확인받는다.
 > 측정: 골든셋 163건(종류: 대화·질문·명령·설정), 실제 llama-server의 문법 순서 회귀 테스트, 실제 모델 경로의 정확도와 "확인 없이 실행됐을 잘못된 변경" 건수(`eval/README.md`).
 
 **플랜 JSON 스키마(요지)**: `intent ∈ {import, set_inbox_watch, render, rotate, split, merge, classify, set_doc_type, ocr, define_schema, register_form, extract, validate, review, reindex, search, answer, explain, aggregate, summarize, compare, draft_document, add_to_kb, manage_collection, define_term, create_project, add_to_project, define_rule, check_consistency, request_supplement, organize, rename, move, tag, delete, export, set_model, set_tier, set_profile, set_backend, import_model, download_model, benchmark, set_theme, set_language, set_setting, set_retention, open, open_workspace, job, engine, undo, redo, help, clarify, noop}`, `scope{folder, doc_ids, filter{doc_type, date_from, date_to, keyword, vendor, status, tags[], min_confidence, review_status}}`, `operations[]`(각 op는 const 타입 + 파라미터, 부록 D), `requires_confirmation`, `confidence`, `clarification_question`. 부록 D의 파라미터 스키마가 검증기의 단일 진실 원천이며, 스키마에 없는 파라미터는 거부된다. 날짜 기준 필드는 `doc_date`(문서 날짜) 기본, 없으면 가져온 날짜 — 결과 카드에 "기준: 문서 날짜" 표기.
@@ -965,7 +967,7 @@ PyMuPDF/pymupdf4llm(AGPL), poppler/pdf2image(GPL), Ghostscript/OCRmyPDF(AGPL), P
 | search | query, mode ∈ {hybrid, keyword, semantic}, top_k, filter(duplicates 포함) | 없음 | 아니오 |
 | answer | question, cite=true, scope | 없음 | 아니오 |
 | aggregate | fn ∈ {sum, count, avg, min, max}, field, group_by ∈ {month, vendor, doc_type, none}, include_unreviewed=false | 없음 | 아니오 |
-| summarize | target ∈ {each_doc, set}, length ∈ {short, long}, save=true | DB | 아니오 |
+| summarize | length ∈ {short, long}, group_by ∈ {none, project, doc_type, folder}, topic, save=true — 범위 전체를 하나의 결과로(1.0.3; 그 전의 target ∈ {each_doc, set}은 없어짐) | DB | 아니오 |
 | organize / rename / move | template, group_by, only_reviewed=true, dry_run | 파일(저널) | 예 |
 | tag | add[], remove[] | DB | 아니오 |
 | delete | to_trash=true | 파일(휴지통) | 예 |

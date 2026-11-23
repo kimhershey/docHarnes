@@ -430,8 +430,6 @@
       "reindex_vec": "vector index",
       "reindex_all": "all indexes",
       "top_k": "{{count}} results",
-      "each_doc": "per document",
-      "set": "one summary",
       "short": "short",
       "long": "long",
       "group_month": "per month",

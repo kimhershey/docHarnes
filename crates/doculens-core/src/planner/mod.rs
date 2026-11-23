@@ -448,6 +448,9 @@ pub enum ReindexScope {
     All,
 }
 
+/// What `summarize.target` said until 1.0.2: a summary of every document, or one of them all. A
+/// summary is always one result since 1.0.3 (user decision 2026-11-22) — the values are only read
+/// from plans stored before, see [`Op::Summarize`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SummarizeTarget {
@@ -978,12 +981,18 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reply: Option<String>,
     },
+    /// One summary of the content of all the documents in scope (1.0.3, user decision 2026-11-22:
+    /// "파일별 요약은 없애고 모든 파일의 내용을 하나의 결과로 요약") — or one per `group_by` group, or of
+    /// what they say about `topic`.
     Summarize {
+        /// Not a parameter any more: until 1.0.2 `each_doc` (a summary per document, the default) or
+        /// `set`. It is read so that a plan stored before 1.0.3 — a chat card, a queued job — still
+        /// loads; the validator clears it, nothing writes it and the executor does not look at it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target: Option<SummarizeTarget>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         length: Option<SummaryLength>,
-        /// One combined summary per project / document type / folder.
+        /// One summary per project / document type / folder instead of one of everything.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         group_by: Option<SummaryGroup>,
         /// 1.0.2 — what the summary is about ("AA에 대해서 요약해줘" → `AA`): the passages about it are

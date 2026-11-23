@@ -736,6 +736,55 @@ async function answer(req: AnswerRequest, requestId: string): Promise<Answer> {
   return base;
 }
 
+/**
+ * `knowledge::answer::summarize_documents` (1.0.3, user decision 2026-11-22 — "파일별 요약은 없애고 모든 파일의
+ * 내용을 하나의 결과로 요약"): one summary of the content of several documents. The passages of all of them are
+ * read in the order the documents are given, and the summary keeps the sources it cites, each with its
+ * document. A single document is summarised as the viewer does it. Documents without text are left out and
+ * returned; `no_text` when none of them has any.
+ */
+export async function summarizeDocuments(documents: string[], mode: "one_line" | "key_points" | "one_page", ko: boolean, requestId: string): Promise<{ answer: Answer; without_text: string[] }> {
+  const started = performance.now();
+  const s = load();
+  const asked = [...new Set(documents)];
+  const covered = asked.filter((id) => (s.chunks[id] ?? []).length > 0);
+  const withoutText = asked.filter((id) => !covered.includes(id));
+  if (covered.length === 0) throw err("not_found", "no_text");
+  if (covered.length === 1) return { answer: await answer({ question: "", kind: "summary", document_id: covered[0]!, summary_mode: mode, language: ko ? "ko" : "en" }, requestId), without_text: withoutText };
+  const docs = new Map(wsDocs().map((d) => [d.id, d]));
+  // Every passage is read and numbered across the documents; the "model" writes a line per document.
+  let index = 0;
+  const all = covered.flatMap((id) => (s.chunks[id] ?? []).map((c) => citation(++index, hitFromChunk(c, docs.get(c.document_id)))));
+  const firsts = covered.map((id) => all.find((c) => c.document_id === id)!);
+  const lines = mode === "one_line" ? [`${firstSentence(firsts[0]!.excerpt)} [${firsts[0]!.index}]`] : firsts.slice(0, mode === "one_page" ? 12 : 8).map((c) => `- ${c.title}: ${firstSentence(c.excerpt)} [${c.index}]`);
+  const text = lines.join("\n");
+  if (!(await stream(requestId, text))) throw err("cancelled", "cancelled");
+  const sentences = parseSentences(text, all.length);
+  const cited = new Set(sentences.flatMap((x) => x.citations));
+  const out: Answer = {
+    id: null,
+    kind: "summary",
+    question: ko ? `문서 ${covered.length}건의 내용을 통틀어 하나의 요약으로 정리하세요.` : `Write one summary of the content of the ${covered.length} documents taken together.`,
+    text,
+    sentences,
+    // (the passages the summary cites, under the numbers its text uses)
+    sources: all.filter((c) => cited.has(c.index)),
+    no_evidence: false,
+    used_general_knowledge: false,
+    conflicts: null,
+    model: "gemma4-e4b-q5km (mock)",
+    elapsed_ms: 0,
+    prompt_tokens: 400 + all.length * 300,
+    completion_tokens: Math.ceil(text.length / 2),
+    document_id: null,
+    created_at: now(),
+    feedback: null,
+  };
+  out.elapsed_ms = Math.round(performance.now() - started);
+  out.id = saveAnswer(load(), out);
+  return { answer: out, without_text: withoutText };
+}
+
 // ---------------------------------------------------------------------------
 // Dispatcher
 // ---------------------------------------------------------------------------

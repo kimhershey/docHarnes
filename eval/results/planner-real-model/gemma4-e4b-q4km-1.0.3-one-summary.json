@@ -1,0 +1,879 @@
+{
+  "schema_version": 1,
+  "kind": "planner",
+  "generated_at": "2026-11-22T10:34:34Z",
+  "golden": "eval/results/planner-real-model/one-summary-1.0.3.golden.json",
+  "golden_count": 12,
+  "context": "eval/results/planner-real-model/topic-summary-1.0.2-open-document.context.json",
+  "today": "2026-11-08",
+  "engine": {
+    "binary": "llama-server (local build)",
+    "version": null,
+    "build_number": null,
+    "backend": "cpu",
+    "tier": "cpu_only",
+    "profile": "balanced",
+    "model": "gemma4-e4b-q4km",
+    "model_display": "Gemma 4 E4B (Q4_K_M, 저여유)",
+    "quantization": "Q4_K_M",
+    "architecture": "gemma4",
+    "has_vision": true,
+    "ctx": 8192,
+    "model_memory_bytes": null,
+    "mmproj_bytes": 990372672,
+    "devices": [],
+    "vram_used_mib": null,
+    "load_ms": 6336
+  },
+  "mode": "model",
+  "model": "gemma4-e4b-q4km",
+  "total": 12,
+  "correct": 12,
+  "accuracy": 1.0,
+  "by_category": {
+    "en": {
+      "total": 1,
+      "correct": 1,
+      "accuracy": 1.0
+    },
+    "ko": {
+      "total": 11,
+      "correct": 11,
+      "accuracy": 1.0
+    }
+  },
+  "by_intent": {
+    "summarize": {
+      "total": 12,
+      "correct": 12,
+      "accuracy": 1.0
+    }
+  },
+  "by_kind": {
+    "question": {
+      "total": 12,
+      "correct": 12,
+      "accuracy": 1.0
+    }
+  },
+  "by_source": {
+    "model": 12
+  },
+  "by_cause": {},
+  "unasked_changes": 0,
+  "latency": {
+    "p50_ms": 24311.743329999998,
+    "p95_ms": 180037.723467,
+    "mean_ms": 74654.76608558335
+  },
+  "latency_by_kind": {
+    "question": {
+      "p50_ms": 24311.743329999998,
+      "p95_ms": 180037.723467,
+      "mean_ms": 74654.76608558335
+    }
+  },
+  "items": [
+    {
+      "id": "s-1",
+      "category": "ko",
+      "text": "전체 문서를 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "전체 문서의 내용을 하나의 결과로 요약합니다.",
+      "confidence": 0.9,
+      "latency_ms": 153256.592616,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 3684,
+      "completion_tokens": 114,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"전체 문서의 내용을 하나의 결과로 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {},\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"length\": \"long\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "s-2",
+      "category": "ko",
+      "text": "이 문서 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "선택된 문서의 내용을 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 22109.523325000002,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 3680,
+      "completion_tokens": 120,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"선택된 문서의 내용을 요약합니다\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"doc_ids\": [\"d1a2\"]\n  },\n  \"operations\": [\n    {\n      \"op\": \"summarize\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "s-3",
+      "category": "ko",
+      "text": "AAA 프로젝트 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "'AAA' 프로젝트의 문서를 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 24311.743329999998,
+      "kind": "question",
+      "requires_confirmation": false,
+      "notes": [
+        "scope_filled"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 3680,
+      "completion_tokens": 134,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "project_id": "p-aaa",
+          "with_reference": true
+        }
+      },
+      "raw": "{\n  \"summary\": \"AAA 프로젝트에 관련된 문서 내용을 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"filter\": {\n      \"doc_type\": \"project\"\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"topic\": \"AAA\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "s-4",
+      "category": "ko",
+      "text": "이 문서를 한 줄로 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "선택된 문서의 내용을 한 문장으로 요약합니다.",
+      "confidence": 0.9,
+      "latency_ms": 24364.952896,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 3688,
+      "completion_tokens": 132,
+      "mismatches": [],
+      "operations": [
+        {
+          "length": "short",
+          "op": "summarize"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"선택된 문서의 내용을 한 문장으로 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"doc_ids\": [\"d1a2\"]\n  },\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"length\": \"short\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "s-5",
+      "category": "ko",
+      "text": "전체 문서를 문서별로 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "범위의 문서를 모두 읽어 하나로 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 23014.176592,
+      "kind": "question",
+      "requires_confirmation": true,
+      "unmet": "문서마다 따로 요약하는 부분",
+      "notes": [
+        "grouping_dropped"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 3690,
+      "completion_tokens": 118,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"전체 문서의 내용을 문서별로 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {},\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"group_by\": \"doc_type\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "s-6",
+      "category": "ko",
+      "text": "AAA 프로젝트 문서를 각각 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "'AAA' 프로젝트의 문서를 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 180037.723467,
+      "kind": "question",
+      "requires_confirmation": true,
+      "unmet": "문서마다 따로 요약하는 부분",
+      "notes": [
+        "scope_filled",
+        "grouping_dropped"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 4670,
+      "completion_tokens": 142,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "project_id": "p-aaa",
+          "with_reference": true
+        }
+      },
+      "raw": "{\n  \"summary\": \"AAA 프로젝트의 각 문서를 개별적으로 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"filter\": {\n      \"doc_type\": \"project\"\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"group_by\": \"project\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "s-7",
+      "category": "ko",
+      "text": "파일별로 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "범위의 문서를 모두 읽어 하나로 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 121150.820024,
+      "kind": "question",
+      "requires_confirmation": true,
+      "unmet": "문서마다 따로 요약하는 부분",
+      "notes": [
+        "grouping_dropped"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 3682,
+      "completion_tokens": 116,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"파일별로 문서를 묶어 요약합니다\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {},\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"group_by\": \"folder\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "s-8",
+      "category": "ko",
+      "text": "프로젝트별로 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "프로젝트별로 문서를 묶어 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 21666.802753,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 3684,
+      "completion_tokens": 117,
+      "mismatches": [],
+      "operations": [
+        {
+          "group_by": "project",
+          "op": "summarize"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"프로젝트별로 문서를 묶어 요약합니다\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {},\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"group_by\": \"project\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "s-9",
+      "category": "ko",
+      "text": "AAA에 대해서 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "'AAA'에 관한 내용을 문서에서 찾아 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 23474.456706,
+      "kind": "question",
+      "requires_confirmation": false,
+      "notes": [
+        "topic_names_project"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 3682,
+      "completion_tokens": 133,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize",
+          "topic": "AAA"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"AAA 프로젝트에 대한 내용을 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"filter\": {\n      \"doc_type\": \"project\"\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"topic\": \"AAA\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "s-10",
+      "category": "ko",
+      "text": "AAA 프로젝트의 지체상금 내용에 대해 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "'AAA' 프로젝트에서 '지체상금'에 관한 내용을 찾아 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 166930.177348,
+      "kind": "question",
+      "requires_confirmation": false,
+      "notes": [
+        "scope_filled"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 4680,
+      "completion_tokens": 143,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize",
+          "topic": "지체상금"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "project_id": "p-aaa",
+          "with_reference": true
+        }
+      },
+      "raw": "{\n  \"summary\": \"AAA 프로젝트와 관련된 지체상금 내용을 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {\n    \"filter\": {\n      \"doc_type\": \"AAA\"\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"topic\": \"지체상금\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "s-11",
+      "category": "ko",
+      "text": "모든 문서의 내용을 하나로 요약해줘",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "모든 문서의 내용을 하나의 결과로 요약합니다.",
+      "confidence": 0.9,
+      "latency_ms": 115869.395488,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 3690,
+      "completion_tokens": 114,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"모든 문서의 내용을 하나의 결과로 요약합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {},\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"length\": \"long\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "s-12",
+      "category": "en",
+      "text": "summarize all documents",
+      "correct": true,
+      "source": "model",
+      "intent": "summarize",
+      "ops": [
+        "summarize"
+      ],
+      "summary": "모든 문서의 내용을 하나로 요약합니다",
+      "confidence": 0.9,
+      "latency_ms": 19670.828482,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 3676,
+      "completion_tokens": 113,
+      "mismatches": [],
+      "operations": [
+        {
+          "op": "summarize"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"모든 문서의 내용을 하나로 요약합니다\",\n  \"unmet\": \"\",\n  \"intent\": \"summarize\",\n  \"scope\": {},\n  \"operations\": [\n    {\n      \"op\": \"summarize\",\n      \"length\": \"long\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    }
+  ],
+  "rules_only": {
+    "mode": "rules",
+    "total": 12,
+    "correct": 12,
+    "accuracy": 1.0,
+    "by_category": {
+      "en": {
+        "total": 1,
+        "correct": 1,
+        "accuracy": 1.0
+      },
+      "ko": {
+        "total": 11,
+        "correct": 11,
+        "accuracy": 1.0
+      }
+    },
+    "by_intent": {
+      "summarize": {
+        "total": 12,
+        "correct": 12,
+        "accuracy": 1.0
+      }
+    },
+    "by_kind": {
+      "question": {
+        "total": 12,
+        "correct": 12,
+        "accuracy": 1.0
+      }
+    },
+    "by_source": {
+      "rules": 12
+    },
+    "by_cause": {},
+    "unasked_changes": 0,
+    "items": [
+      {
+        "id": "s-1",
+        "category": "ko",
+        "text": "전체 문서를 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "문서를 요약합니다",
+        "confidence": 0.87,
+        "latency_ms": 2.229193,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "s-2",
+        "category": "ko",
+        "text": "이 문서 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "선택 문서를 요약합니다",
+        "confidence": 0.87,
+        "latency_ms": 1.7150100000000001,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ],
+          "filter": {}
+        }
+      },
+      {
+        "id": "s-3",
+        "category": "ko",
+        "text": "AAA 프로젝트 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "'AAA' 프로젝트의 문서를 요약합니다",
+        "confidence": 0.87,
+        "latency_ms": 1.909626,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa",
+            "with_reference": true
+          }
+        }
+      },
+      {
+        "id": "s-4",
+        "category": "ko",
+        "text": "이 문서를 한 줄로 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "선택 문서를 요약합니다",
+        "confidence": 0.87,
+        "latency_ms": 1.8586919999999998,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "length": "short",
+            "op": "summarize"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ],
+          "filter": {}
+        }
+      },
+      {
+        "id": "s-5",
+        "category": "ko",
+        "text": "전체 문서를 문서별로 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "문서를 요약합니다",
+        "confidence": 0.87,
+        "latency_ms": 2.031352,
+        "kind": "question",
+        "requires_confirmation": true,
+        "unmet": "문서마다 따로 요약하는 부분",
+        "notes": [
+          "grouping_dropped"
+        ],
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "s-6",
+        "category": "ko",
+        "text": "AAA 프로젝트 문서를 각각 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "'AAA' 프로젝트의 문서를 요약합니다",
+        "confidence": 0.87,
+        "latency_ms": 2.2107799999999997,
+        "kind": "question",
+        "requires_confirmation": true,
+        "unmet": "문서마다 따로 요약하는 부분",
+        "notes": [
+          "grouping_dropped"
+        ],
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa",
+            "with_reference": true
+          }
+        }
+      },
+      {
+        "id": "s-7",
+        "category": "ko",
+        "text": "파일별로 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "선택 문서를 요약합니다",
+        "confidence": 0.87,
+        "latency_ms": 1.9736630000000002,
+        "kind": "question",
+        "requires_confirmation": true,
+        "unmet": "문서마다 따로 요약하는 부분",
+        "notes": [
+          "grouping_dropped"
+        ],
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize"
+          }
+        ],
+        "scope": {
+          "doc_ids": [
+            "d1a2"
+          ],
+          "filter": {}
+        }
+      },
+      {
+        "id": "s-8",
+        "category": "ko",
+        "text": "프로젝트별로 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "문서를 요약합니다",
+        "confidence": 0.87,
+        "latency_ms": 2.640358,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "group_by": "project",
+            "op": "summarize"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "s-9",
+        "category": "ko",
+        "text": "AAA에 대해서 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "'AAA'에 관한 내용을 문서에서 찾아 요약합니다",
+        "confidence": 0.85,
+        "latency_ms": 2.2585800000000003,
+        "kind": "question",
+        "requires_confirmation": false,
+        "notes": [
+          "topic_names_project"
+        ],
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize",
+            "topic": "AAA"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "s-10",
+        "category": "ko",
+        "text": "AAA 프로젝트의 지체상금 내용에 대해 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "'AAA' 프로젝트에서 '지체상금'에 관한 내용을 찾아 요약합니다",
+        "confidence": 0.85,
+        "latency_ms": 3.297065,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize",
+            "topic": "지체상금"
+          }
+        ],
+        "scope": {
+          "filter": {
+            "project_id": "p-aaa",
+            "with_reference": true
+          }
+        }
+      },
+      {
+        "id": "s-11",
+        "category": "ko",
+        "text": "모든 문서의 내용을 하나로 요약해줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "문서를 요약합니다",
+        "confidence": 0.87,
+        "latency_ms": 3.1406009999999998,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "s-12",
+        "category": "en",
+        "text": "summarize all documents",
+        "correct": true,
+        "source": "rules",
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "summary": "문서를 요약합니다",
+        "confidence": 0.87,
+        "latency_ms": 2.971335,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "op": "summarize"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      }
+    ]
+  }
+}

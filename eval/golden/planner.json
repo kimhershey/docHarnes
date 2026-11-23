@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "context": "planner-context.json",
-  "description": "플래너 골든셋(0.3.0: SW 개발 문서 기준) — 명령 → 기대 플랜 100건(한국어 70·영어 20·혼합 10). 기대값은 규칙 출력이 아니라 사람이 기대하는 플랜입니다. 비교 규칙은 eval/README.md 참조. 0.6.0: 에이전트 op(회전·분할·제목·글자·역할·참고 자료·용어·판·프로젝트 수정/삭제·자동 분류·양식·설정 카탈로그·모델·엔진·유지보수) 25건 추가. 0.7.0: 초안 어시스턴트 op revise_draft(절 다시 쓰기·새 절·전체; context.draft_id = 열린 초안) 4건. 0.8.0: 2026-11-11 사용자 보고 문장과 변형·반례 34건 — 설정(빠른 경로·문장 속 설정·범위 밖·반례), 대화, 문서와 무관한 질문, 묶음 요약, 표현할 수 없는 요청, 붙여 넣은 글. 항목의 kind(chat|question|command|setting)별 정확도와 expected.confirm·unmet·alt를 쓴다. 1.0.0: 새 설정 세 개(고른 작업 표시 · 프로젝트 분류 2순위 추천 임계값 · 이미지 내 글자 추출)의 문장 8건과 반례 2건(어느 임계값인지 묻기, 명령이 아닌 알림) 추가 → 173건. 1.0.0 §4-2: 설정 전용 동작(set_theme · set_language · set_profile · set_model · set_inbox_watch)의 기대값을 set_setting(key · value)으로 바꿈 — 어느 경로로 해석하든 설정 변경은 한 가지 모양이다. 1.0.0 §2-1: 원본 고치기(edit_text.original — 원본 파일을 고쳐 새 판으로 저장) 문장 3건 추가, ko-75는 original이 없어야 함 → 176건. 이 네 문장은 대상(열린 문서)도 검사한다 — 따옴표 안의 글(날짜 포함)은 조건이 아니다.",
+  "description": "플래너 골든셋(0.3.0: SW 개발 문서 기준) — 명령 → 기대 플랜 100건(한국어 70·영어 20·혼합 10). 기대값은 규칙 출력이 아니라 사람이 기대하는 플랜입니다. 비교 규칙은 eval/README.md 참조. 0.6.0: 에이전트 op(회전·분할·제목·글자·역할·참고 자료·용어·판·프로젝트 수정/삭제·자동 분류·양식·설정 카탈로그·모델·엔진·유지보수) 25건 추가. 0.7.0: 초안 어시스턴트 op revise_draft(절 다시 쓰기·새 절·전체; context.draft_id = 열린 초안) 4건. 0.8.0: 2026-11-11 사용자 보고 문장과 변형·반례 34건 — 설정(빠른 경로·문장 속 설정·범위 밖·반례), 대화, 문서와 무관한 질문, 묶음 요약, 표현할 수 없는 요청, 붙여 넣은 글. 항목의 kind(chat|question|command|setting)별 정확도와 expected.confirm·unmet·alt를 쓴다. 1.0.0: 새 설정 세 개(고른 작업 표시 · 프로젝트 분류 2순위 추천 임계값 · 이미지 내 글자 추출)의 문장 8건과 반례 2건(어느 임계값인지 묻기, 명령이 아닌 알림) 추가 → 173건. 1.0.0 §4-2: 설정 전용 동작(set_theme · set_language · set_profile · set_model · set_inbox_watch)의 기대값을 set_setting(key · value)으로 바꿈 — 어느 경로로 해석하든 설정 변경은 한 가지 모양이다. 1.0.0 §2-1: 원본 고치기(edit_text.original — 원본 파일을 고쳐 새 판으로 저장) 문장 3건 추가, ko-75는 original이 없어야 함 → 176건. 이 네 문장은 대상(열린 문서)도 검사한다 — 따옴표 안의 글(날짜 포함)은 조건이 아니다. 1.0.2: 주제가 있는 요약과 프로젝트 칸 · 내용 칸 17건 → 196건(이 줄은 1.0.3에서 덧붙임). 1.0.3(사용자 결정 2026-11-22): 요약은 범위 전체를 하나의 결과로 만든다 — summarize.target(each_doc · set)은 없어졌고 기대값은 target이 없어야 한다(null). 문서별 요약을 청하는 문장 4건(알리고 확인받기)과 반례 1건 추가 → 201건.",
   "items": [
     {
       "id": "ko-01",
@@ -651,7 +651,7 @@
         ],
         "params": [
           {
-            "target": "each_doc",
+            "target": null,
             "length": "short"
           }
         ],
@@ -673,7 +673,7 @@
         ],
         "params": [
           {
-            "target": "set",
+            "target": null,
             "length": "long"
           }
         ],
@@ -1458,7 +1458,7 @@
         ],
         "params": [
           {
-            "target": "each_doc",
+            "target": null,
             "length": "short"
           }
         ],
@@ -1759,7 +1759,7 @@
         ],
         "params": [
           {
-            "target": "each_doc",
+            "target": null,
             "length": "short"
           }
         ],
@@ -3035,7 +3035,7 @@
         ],
         "params": [
           {
-            "target": "set",
+            "target": null,
             "group_by": null
           }
         ]
@@ -3473,7 +3473,7 @@
         "params": [
           {
             "topic": "AA",
-            "target": "set"
+            "target": null
           }
         ],
         "confirm": false
@@ -3493,7 +3493,7 @@
         "params": [
           {
             "topic": "납품 기한",
-            "target": "set"
+            "target": null
           }
         ],
         "confirm": false
@@ -3584,7 +3584,7 @@
         "params": [
           {
             "topic": "하자보수",
-            "target": "set"
+            "target": null
           }
         ]
       },
@@ -3603,7 +3603,7 @@
         "params": [
           {
             "topic": "late fees",
-            "target": "set"
+            "target": null
           }
         ]
       },
@@ -3668,7 +3668,7 @@
         "params": [
           {
             "topic": "한빛 납품",
-            "target": "set"
+            "target": null
           }
         ],
         "scope": {
@@ -3693,7 +3693,7 @@
         "params": [
           {
             "topic": "지체상금",
-            "target": "set"
+            "target": null
           }
         ],
         "scope": {
@@ -3718,7 +3718,7 @@
         "params": [
           {
             "topic": "검수 기준",
-            "target": "set"
+            "target": null
           }
         ],
         "scope": {
@@ -3744,7 +3744,7 @@
         "params": [
           {
             "topic": "검수 기준",
-            "target": "set"
+            "target": null
           }
         ],
         "scope": {
@@ -3770,7 +3770,7 @@
         "params": [
           {
             "topic": "지체상금",
-            "target": "set"
+            "target": null
           }
         ],
         "scope": {
@@ -3798,7 +3798,7 @@
         "params": [
           {
             "topic": null,
-            "target": "set",
+            "target": null,
             "group_by": null
           }
         ],
@@ -3809,7 +3809,7 @@
         },
         "confirm": false
       },
-      "note": "1.0.2(같은 결정): 프로젝트 칸만 — 그 프로젝트의 모든 문서를 요약(문서별 요약 + 전체 요약 하나). 라이브러리 전체의 프로젝트별 묶음이 아니다",
+      "note": "1.0.2(같은 결정): 프로젝트 칸만 — 그 프로젝트의 모든 문서를 하나로 요약(1.0.3: 문서별 요약은 없다). 라이브러리 전체의 프로젝트별 묶음이 아니다",
       "kind": "question"
     },
     {
@@ -3824,7 +3824,7 @@
         "params": [
           {
             "topic": null,
-            "target": "set",
+            "target": null,
             "group_by": null
           }
         ],
@@ -3857,6 +3857,138 @@
         ]
       },
       "note": "1.0.2 반례: 찾을 곳을 말하지 않은 '…에 대해 설명해줘'는 질문 그대로다(일반 지식으로 답할 수도 있다) — 주제 요약으로 바꾸지 않는다",
+      "kind": "question"
+    },
+    {
+      "id": "ko-150",
+      "category": "ko",
+      "text": "선택한 문서를 문서별로 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "target": null,
+            "group_by": null,
+            "topic": null,
+            "length": null
+          }
+        ],
+        "unmet": true,
+        "confirm": true
+      },
+      "context": {
+        "selected_doc_ids": [
+          "d1a2",
+          "d7f3"
+        ]
+      },
+      "note": "1.0.3(사용자 결정 2026-11-22 \"파일별 요약은 없애고 모든 파일의 내용을 하나의 결과로 요약\"): 문서별 요약은 만들지 않는다 — 하나로 요약하고, 그렇게 한다고 알린 뒤 확인받는다",
+      "kind": "question"
+    },
+    {
+      "id": "ko-151",
+      "category": "ko",
+      "text": "전체 문서를 파일별로 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "target": null,
+            "group_by": null,
+            "topic": null,
+            "length": null
+          }
+        ],
+        "unmet": true,
+        "confirm": true
+      },
+      "note": "1.0.3: '파일별'도 같다 — 모델이 프로젝트·폴더별 묶음으로 바꿔 쓰면 추측이다",
+      "kind": "question"
+    },
+    {
+      "id": "ko-152",
+      "category": "ko",
+      "text": "선택한 문서를 각각 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "target": null,
+            "group_by": null,
+            "topic": null,
+            "length": null
+          }
+        ],
+        "unmet": true,
+        "confirm": true
+      },
+      "context": {
+        "selected_doc_ids": [
+          "d1a2",
+          "d7f3"
+        ]
+      },
+      "note": "1.0.3: '각각 · 하나씩 · 따로따로'도 문서마다 따로 요약해 달라는 말이다",
+      "kind": "question"
+    },
+    {
+      "id": "ko-153",
+      "category": "ko",
+      "text": "전체 문서를 요약해줘",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "target": null,
+            "group_by": null,
+            "topic": null,
+            "length": null
+          }
+        ],
+        "confirm": false
+      },
+      "note": "1.0.3: 범위의 모든 문서를 하나의 결과로 요약 — 나누라는 말이 없으면 묶음도, 확인도 없다",
+      "kind": "question"
+    },
+    {
+      "id": "en-37",
+      "category": "en",
+      "text": "summarize each document",
+      "expected": {
+        "intent": "summarize",
+        "ops": [
+          "summarize"
+        ],
+        "params": [
+          {
+            "target": null,
+            "group_by": null,
+            "topic": null,
+            "length": null
+          }
+        ],
+        "unmet": true,
+        "confirm": true
+      },
+      "context": {
+        "selected_doc_ids": [
+          "d1a2",
+          "d7f3"
+        ]
+      },
+      "note": "1.0.3: a summary per document is not made — one summary, said and confirmed",
       "kind": "question"
     }
   ]

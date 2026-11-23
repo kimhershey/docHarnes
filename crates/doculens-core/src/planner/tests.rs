@@ -274,7 +274,7 @@ fn example_commands_plan_without_a_model() {
     assert!(matches!(&r.plan.operations[0], Op::Tag { add, .. } if add == &["경비", "10월"]), "{r:?}");
     assert_eq!(r.plan.scope.doc_ids, vec!["d1a2".to_string()]);
     let r = planned("이 문서 요약해줘");
-    assert!(matches!(&r.plan.operations[0], Op::Summarize { target: Some(SummarizeTarget::EachDoc), .. }), "{r:?}");
+    assert!(matches!(&r.plan.operations[0], Op::Summarize { target: None, .. }), "{r:?}");
     let r = planned("검토 완료된 영수증 거래처별 폴더로 옮겨");
     assert!(
         matches!(&r.plan.operations[0], Op::Move { group_by: Some(GroupBy::Vendor), only_reviewed: Some(true), .. }),
@@ -1040,7 +1040,7 @@ fn model_first_answers_a_pasted_text_from_the_text_itself_not_the_library() {
     let text = format!("다음 문장을 다듬어 정리해줘: {body}");
     let chat = StageChat::new();
     // What happened on the user's PC: the model read it as a library-wide per-document summary.
-    chat.push("plan", json!({ "summary": "제공된 문장을 다듬어 정리합니다", "intent": "summarize", "scope": {}, "operations": [{ "op": "summarize", "target": "each_doc" }], "requires_confirmation": false, "confidence": 0.95 }));
+    chat.push("plan", json!({ "summary": "제공된 문장을 다듬어 정리합니다", "intent": "summarize", "scope": {}, "operations": [{ "op": "summarize" }], "requires_confirmation": false, "confidence": 0.95 }));
     let r = plan(Some(&deps(&chat)), &text, &ctx(), PlanMode::ModelFirst).unwrap();
     assert_eq!(r.source, PlanSource::Model);
     assert!(
@@ -1179,6 +1179,90 @@ fn model_path_requeries_once_with_feedback() {
 }
 
 /// 0.8.0 audit fixes on the deterministic side (validation, scope, phrase rules): `tests/deterministic_side.rs`.
+/// 1.0.3 (user decision 2026-11-22 — "파일별 요약은 없애고 모든 파일의 내용을 하나의 결과로 요약"):
+/// `summarize.target` (each_doc | set) is not a parameter any more. A plan stored before — a chat
+/// card, a queued job — still loads; the validator clears it and nothing writes it.
+#[test]
+fn a_summary_is_one_result_and_plans_stored_before_still_load() {
+    for old in ["each_doc", "set"] {
+        let mut p: Plan = serde_json::from_value(json!({
+            "intent": "summarize",
+            "scope": { "doc_ids": ["d1a2"] },
+            "operations": [{ "op": "summarize", "target": old, "length": "long" }]
+        }))
+        .unwrap();
+        assert!(matches!(&p.operations[0], Op::Summarize { target: Some(_), .. }), "{old}");
+        let issues = validate::validate(&mut p, &ctx(), None);
+        assert!(issues.is_empty(), "{old}: {issues:?}");
+        assert!(
+            matches!(&p.operations[0], Op::Summarize { target: None, length: Some(SummaryLength::Long), .. }),
+            "{old}: {p:?}"
+        );
+        assert_eq!(serde_json::to_value(&p.operations[0]).unwrap(), json!({ "op": "summarize", "length": "long" }));
+    }
+    // The model is not offered the parameter: the op table and the grammar do not have it.
+    let spec = schema::spec(OpKind::Summarize);
+    assert_eq!(spec.params.iter().map(|p| p.name).collect::<Vec<_>>(), vec!["length", "group_by", "topic"]);
+    assert!(spec.desc_ko.contains("하나의 결과") && spec.desc_en.contains("one result"));
+    let grammar = schema::plan_schema().to_string();
+    assert!(!grammar.contains("each_doc"), "the grammar still knows a summary per document");
+
+    // The phrase rules: one summary whatever the sentence says about "하나로" — and no target.
+    for text in ["이 문서 요약해줘", "선택한 문서들 하나로 묶어서 자세히 요약", "전체 문서를 요약해줘"]
+    {
+        let r = planned(text);
+        assert_eq!(kinds(&r.plan), [OpKind::Summarize], "{text}: {r:?}");
+        assert!(
+            matches!(&r.plan.operations[0], Op::Summarize { target: None, group_by: None, topic: None, .. }),
+            "{text}: {:?}",
+            r.plan
+        );
+        assert!(!r.plan.requires_confirmation, "{text}: {:?}", r.plan);
+    }
+    // A sentence that asks for a summary of each document gets the one summary and is told that
+    // summaries per document are not made — confirmed first.
+    for text in ["선택한 문서를 문서별로 요약해줘", "전체 문서를 파일별로 요약해줘", "선택한 문서를 각각 요약해줘"]
+    {
+        let r = planned(text);
+        assert_eq!(kinds(&r.plan), [OpKind::Summarize], "{text}: {r:?}");
+        assert!(matches!(&r.plan.operations[0], Op::Summarize { target: None, group_by: None, .. }), "{text}");
+        assert!(r.plan.requires_confirmation && r.plan.unmet.is_some(), "{text}: {:?}", r.plan);
+        let note = r.issues.iter().find(|i| i.code == "grouping_dropped").unwrap_or_else(|| panic!("{text}: {r:?}"));
+        assert!(note.message.contains("문서별 요약은 만들지 않습니다"), "{text}: {}", note.message);
+    }
+    // Through the model path as well.
+    let chat = StageChat::new();
+    chat.push("families", json!({ "families": ["ask"] }));
+    chat.push(
+        "plan",
+        json!({ "summary": "문서별로 요약합니다", "unmet": "", "intent": "summarize", "scope": {}, "operations": [{ "op": "summarize" }], "requires_confirmation": false, "confidence": 0.9 }),
+    );
+    let r = plan(Some(&deps(&chat)), "전체 문서를 문서별로 요약해줘", &ctx(), PlanMode::ModelFirst).unwrap();
+    assert_eq!(r.source, PlanSource::Model, "{r:?}");
+    assert!(r.plan.requires_confirmation && r.plan.unmet.is_some(), "{:?}", r.plan);
+    assert_eq!(r.issues.iter().filter(|i| i.code == "grouping_dropped").count(), 1, "{:?}", r.issues);
+    // (the card's sentence says what will be done, not what the model read)
+    assert_eq!(r.plan.summary.as_deref(), Some("범위의 문서를 모두 읽어 하나로 요약합니다"));
+    // What Gemma 4 E4B wrote for "전체 문서를 요약해줘" (eval run of 2026-11-22): a length nobody asked for.
+    let chat = StageChat::new();
+    chat.push("families", json!({ "families": ["ask"] }));
+    chat.push(
+        "plan",
+        json!({ "summary": "전체 문서의 내용을 하나의 결과로 요약합니다.", "unmet": "", "intent": "summarize", "scope": {}, "operations": [{ "op": "summarize", "length": "long" }], "requires_confirmation": false, "confidence": 0.9 }),
+    );
+    let r = plan(Some(&deps(&chat)), "전체 문서를 요약해줘", &ctx(), PlanMode::ModelFirst).unwrap();
+    assert_eq!(r.source, PlanSource::Model, "{r:?}");
+    assert!(
+        matches!(
+            r.plan.operations.as_slice(),
+            [Op::Summarize { target: None, length: None, group_by: None, topic: None }]
+        ),
+        "{:?}",
+        r.plan
+    );
+    assert!(!r.plan.requires_confirmation && r.issues.is_empty(), "{r:?}");
+}
+
 mod deterministic_side;
 
 // ---------------------------------------------------------------------------
@@ -2033,10 +2117,10 @@ fn a_summary_about_a_subject_through_the_model_path() {
         r
     };
     let codes = |r: &PlanResult| r.issues.iter().map(|i| i.code.clone()).collect::<Vec<_>>();
-    // 1.0.1: every document of the library, one by one — nothing about AA.
-    let r = planned("AA에 대해서 요약해줘", json!({}), json!({ "op": "summarize", "target": "each_doc" }));
+    // 1.0.1: a summary of every document of the library — nothing about AA.
+    let r = planned("AA에 대해서 요약해줘", json!({}), json!({ "op": "summarize" }));
     assert!(
-        matches!(r.plan.operations.as_slice(), [Op::Summarize { target: Some(SummarizeTarget::Set), group_by: None, topic: Some(t), .. }] if t == "AA"),
+        matches!(r.plan.operations.as_slice(), [Op::Summarize { target: None, group_by: None, topic: Some(t), .. }] if t == "AA"),
         "{:?}",
         r.plan
     );
@@ -2061,7 +2145,7 @@ fn a_summary_about_a_subject_through_the_model_path() {
     assert!(
         matches!(
             r.plan.operations.as_slice(),
-            [Op::Summarize { target: Some(SummarizeTarget::Set), group_by: None, topic: Some(t), .. }] if t == "AAA"
+            [Op::Summarize { target: None, group_by: None, topic: Some(t), .. }] if t == "AAA"
         ),
         "{:?}",
         r.plan
@@ -2072,10 +2156,7 @@ fn a_summary_about_a_subject_through_the_model_path() {
     for text in ["AAA 프로젝트 요약해줘", "AAA 프로젝트에 대해 요약해줘"] {
         let r = planned(text, json!({}), json!({ "op": "summarize", "topic": "AAA", "group_by": "project" }));
         assert!(
-            matches!(
-                r.plan.operations.as_slice(),
-                [Op::Summarize { target: Some(SummarizeTarget::Set), group_by: None, topic: None, .. }]
-            ),
+            matches!(r.plan.operations.as_slice(), [Op::Summarize { target: None, group_by: None, topic: None, .. }]),
             "{text}: {:?}",
             r.plan
         );
@@ -2139,7 +2220,7 @@ fn a_summary_about_a_subject_through_the_model_path() {
         let r = plan(Some(&deps(&chat)), text, &c, PlanMode::ModelFirst).unwrap();
         assert_eq!(chat.calls("plan"), 0);
         assert!(
-            matches!(r.plan.operations.as_slice(), [Op::Summarize { target: Some(SummarizeTarget::Set), topic: Some(t), .. }] if t == "영수증 처리 기준"),
+            matches!(r.plan.operations.as_slice(), [Op::Summarize { target: None, topic: Some(t), .. }] if t == "영수증 처리 기준"),
             "{route}: {:?}",
             r.plan
         );
@@ -2429,16 +2510,13 @@ fn model_plans_are_checked_against_the_sentence() {
     // The reported grouping sentence: one summary of everything is not what was asked. The
     // criterion is in the sentence, so the 0.7.0 plan is repaired; the right plan passes as it is.
     let text = "프로젝트 별 내용을 요약해줘";
-    for ops in [
-        json!([{ "op": "summarize", "target": "set" }]),
-        json!([{ "op": "summarize", "target": "set", "group_by": "project" }]),
-    ] {
+    for ops in [json!([{ "op": "summarize" }]), json!([{ "op": "summarize", "group_by": "project" }])] {
         let r = run(text, "ask", reply(ops, ""));
         assert!(codes(&r).is_empty() && r.plan.unmet.is_none() && !r.plan.requires_confirmation, "{r:?}");
         assert!(matches!(&r.plan.operations[..], [Op::Summarize { group_by: Some(SummaryGroup::Project), .. }]));
     }
     // A criterion the op does not have is not replaced by "everything as one" behind the user's back.
-    let r = run("견적서를 담당자별로 요약해줘", "ask", reply(json!([{ "op": "summarize", "target": "set" }]), ""));
+    let r = run("견적서를 담당자별로 요약해줘", "ask", reply(json!([{ "op": "summarize" }]), ""));
     // (the estimates the sentence names became the scope the model's plan had left empty)
     assert_eq!(codes(&r), vec!["scope_filled", "grouping_dropped"], "{r:?}");
     assert!(r.plan.requires_confirmation && r.plan.unmet.is_some());
@@ -2479,7 +2557,7 @@ fn a_summary_per_project_is_not_narrowed_to_the_open_project() {
     assert_eq!(project_of(&r.plan), None, "{r:?}");
     let chat = StageChat::new();
     chat.push("families", json!({ "families": ["ask"] }));
-    chat.push("plan", json!({ "summary": "s", "unmet": "", "intent": "summarize", "scope": {}, "operations": [{ "op": "summarize", "target": "set" }], "requires_confirmation": false, "confidence": 0.9 }));
+    chat.push("plan", json!({ "summary": "s", "unmet": "", "intent": "summarize", "scope": {}, "operations": [{ "op": "summarize" }], "requires_confirmation": false, "confidence": 0.9 }));
     let r = plan(Some(&deps(&chat)), "프로젝트 별 내용을 요약해줘", &c, PlanMode::ModelFirst).unwrap();
     assert!(matches!(&r.plan.operations[..], [Op::Summarize { group_by: Some(SummaryGroup::Project), .. }]), "{r:?}");
     // The validator filled the open project in before the split was put back: taken out again.
@@ -2535,9 +2613,7 @@ fn a_question_needs_no_document_type() {
     // 2. The reply "유형 상관없이 전부": `all` (or the project's name) in the type slot is no condition.
     let ask_back = format!("{text}\n\n[어시스턴트 질문] {asked}\n[사용자 답변] 유형 상관없이 전부");
     for written in ["all", "ALL", "전체", "모든 문서", "AAA", "AAA 프로젝트"] {
-        for ops in
-            [json!([{ "op": "summarize", "target": "set" }]), json!([{ "op": "answer", "question": "AAA가 무엇인가" }])]
-        {
+        for ops in [json!([{ "op": "summarize" }]), json!([{ "op": "answer", "question": "AAA가 무엇인가" }])] {
             let (r, calls) = run(&c, &ask_back, reply(ops, json!({ "filter": { "doc_type": written } }), 0.9));
             assert_eq!(calls, 1, "{written}: {r:?}");
             assert!(!r.plan.is_clarification() && r.issues.iter().all(|i| !i.blocking), "{written}: {r:?}");
@@ -2566,7 +2642,7 @@ fn a_question_needs_no_document_type() {
     );
     assert_eq!(r.plan.scope.filter.doc_type.as_deref(), Some("contract"), "{r:?}");
     assert_eq!(project_of(&r.plan).as_deref(), Some("p-aaa"), "{r:?}");
-    let summary = json!([{ "op": "summarize", "target": "set" }]);
+    let summary = json!([{ "op": "summarize" }]);
     let (r, _) =
         run(&c, "회의 기록 요약해줘", reply(summary.clone(), json!({ "filter": { "doc_type": "contract" } }), 0.9));
     assert_eq!(r.plan.scope.filter.doc_type.as_deref(), Some("contract"), "{r:?}");
@@ -2788,11 +2864,6 @@ fn the_plans_the_real_model_wrote_for_a_project_question_are_answered() {
     assert!(r.issues.iter().all(|i| i.code != "doc_type_ignored"), "{r:?}");
     let reply =
         format!("{text}\n\n[어시스턴트 질문] 어떤 문서 유형을 지정해야 하나요?\n[사용자 답변] 유형 상관없이 전부");
-    let r = run(
-        &c,
-        &reply,
-        json!([{ "op": "summarize", "target": "each_doc" }]),
-        json!({ "filter": { "doc_type": "project:AAA" } }),
-    );
+    let r = run(&c, &reply, json!([{ "op": "summarize" }]), json!({ "filter": { "doc_type": "project:AAA" } }));
     assert!(matches!(&r.plan.operations[..], [Op::Summarize { .. }]), "{r:?}");
 }
