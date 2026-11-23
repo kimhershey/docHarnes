@@ -321,7 +321,6 @@
   "planner": {
     "ops": {
       "import": "Import",
-      "set_inbox_watch": "Inbox watch",
       "classify": "Classify",
       "set_doc_type": "Set type",
       "ocr": "OCR",
@@ -340,10 +339,6 @@
       "tag": "Tag",
       "delete": "Delete",
       "export": "Export",
-      "set_model": "Switch model",
-      "set_profile": "Set profile",
-      "set_theme": "Set theme",
-      "set_language": "Set language",
       "set_setting": "Change setting",
       "open": "Open",
       "job": "Job control",
@@ -762,7 +757,6 @@
     "ui": {
       "set_setting": "Setting changed: {{key}} = {{value}}",
       "set_model": "Loading model {{id}}",
-      "set_profile": "Profile: {{profile}}",
       "open_document": "Opening document: {{name}}",
       "open_page": "Opening {{name}} page {{page}}",
       "open_folder": "Opening folder: {{folder}}",
@@ -2311,7 +2305,7 @@
       "builtin": "Built-in sample forms",
       "empty": "No registered forms yet. Start with 'Register form' or 'Create from description'.",
       "disabled": "Disabled",
-      "hidden": "{{count}} hidden built-in forms — the tax invoice, receipt and other 0.2 forms. Switch one on to use it again."
+      "hidden": "{{count}} built-in forms switched off. Switch one on to use it for classification and extraction again."
     },
     "new": "New field set",
     "nl_create": "Create from description",
@@ -2811,9 +2805,6 @@
     },
     "templates": {
       "official_letter": "Official letter",
-      "quotation": "Quotation",
-      "transaction_statement": "Transaction statement",
-      "contract": "Contract",
       "report": "Report",
       "rfp": "Request for proposal (RFP)",
       "proposal": "Proposal",
@@ -2827,7 +2818,6 @@
       "change_request": "Change request",
       "acceptance": "Acceptance certificate",
       "estimate": "Estimate",
-      "minutes": "Minutes",
       "supplement_request": "Supplement request"
     },
     "source": {

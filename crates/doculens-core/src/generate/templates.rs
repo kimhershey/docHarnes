@@ -1,8 +1,8 @@
 //! Built-in templates. Since 0.3.0 the visible set is the software-development
 //! set (제안요청서·제안서·과업지시서·요구사항 정의서·개발 계약서·WBS·진척 보고서·
 //! 회의록·테스트 결과서·변경요청서·검수확인서·견적서) plus the 보완요청서 of §3.15;
-//! the generic 0.1 templates (공문·견적서(품목)·거래명세서·계약서·보고서·회의록) stay
-//! defined but hidden. Slugs and field keys equal the pipeline's built-in schemas
+//! two generic layouts (공문 · 보고서) stay out of the picker. Slugs and field keys
+//! of the software set equal the pipeline's built-in schemas
 //! (`project_name`, `amount`, `supply_total`, `grand_total`, `supplier.name`,
 //! `items[]` 역할·등급·투입 MM·단가·공급가액 …) so extracted fields of source
 //! documents map onto template fields by key and registered forms fill the same way.
@@ -846,15 +846,15 @@ pub fn list() -> Vec<TemplateInfo> {
     all
 }
 
-/// Every built-in template, the hidden generic ones of 0.1 included.
+/// Every built-in template, the two generic layouts included.
 pub fn list_all() -> Vec<TemplateInfo> {
     let mut all = list();
-    all.extend(legacy_list());
+    all.extend(generic_list());
     all
 }
 
-/// The generic templates of 0.1 (hidden since 0.3.0).
-fn legacy_list() -> Vec<TemplateInfo> {
+/// The two generic layouts (공문 · 보고서): out of the picker.
+fn generic_list() -> Vec<TemplateInfo> {
     use FieldKind::*;
     vec![
         TemplateInfo {
@@ -879,110 +879,6 @@ fn legacy_list() -> Vec<TemplateInfo> {
             keywords: strings(&["공문", "공문서", "시행문", "협조문", "official letter", "formal letter", "letter"]),
         },
         TemplateInfo {
-            kind: TemplateKind::Quotation,
-            name_ko: "견적서".into(),
-            name_en: "Quotation".into(),
-            description_ko: "공급자·수신처·품목 표(수량×단가=공급가액)·합계·견적 조건.".into(),
-            description_en: "Supplier, recipient, item table (qty × unit price), totals and terms.".into(),
-            fields: {
-                let mut f = vec![
-                    field("document_no", "견적번호", "Quotation no.", String, false),
-                    field("issue_date", "견적일자", "Quotation date", Date, true),
-                    field("recipient", "수신", "Recipient", String, true),
-                    field("valid_until", "유효기간", "Valid until", String, false),
-                ];
-                f.extend(party("supplier", "공급자", "Supplier", true));
-                f.extend(vec![
-                    field("contact_person", "담당자", "Contact person", String, false),
-                    field("supply_total", "공급가액 합계", "Supply total", Amount, false),
-                    field("tax_total", "세액 합계", "Tax total", Amount, false),
-                    field("grand_total", "합계금액", "Grand total", Amount, true),
-                    field("payment_terms", "결제조건", "Payment terms", String, false),
-                    field("delivery_date", "납기", "Delivery", String, false),
-                    field("remarks", "비고", "Remarks", String, false),
-                    table("items", "품목", "Items", item_columns(), true),
-                ]);
-                f
-            },
-            sections_ko: strings(&["견적 조건", "비고"]),
-            sections_en: strings(&["Terms", "Notes"]),
-            keywords: strings(&["견적", "견적서", "quotation", "quote", "estimate"]),
-        },
-        TemplateInfo {
-            kind: TemplateKind::TransactionStatement,
-            name_ko: "거래명세서".into(),
-            name_en: "Transaction statement".into(),
-            description_ko: "공급자·공급받는자·품목 표·공급가액/세액/합계.".into(),
-            description_en: "Supplier, buyer, item table and supply / tax / grand totals.".into(),
-            fields: {
-                let mut f = vec![
-                    field("document_no", "명세서 번호", "Statement no.", String, false),
-                    field("issue_date", "거래일자", "Transaction date", Date, true),
-                ];
-                f.extend(party("supplier", "공급자", "Supplier", true));
-                f.extend(party("buyer", "공급받는자", "Buyer", true));
-                f.extend(vec![
-                    field("supply_total", "공급가액 합계", "Supply total", Amount, false),
-                    field("tax_total", "세액 합계", "Tax total", Amount, false),
-                    field("grand_total", "합계금액", "Grand total", Amount, true),
-                    field("remarks", "비고", "Remarks", String, false),
-                    table("items", "품목", "Items", item_columns(), true),
-                ]);
-                f
-            },
-            sections_ko: strings(&["비고"]),
-            sections_en: strings(&["Notes"]),
-            keywords: strings(&[
-                "거래명세",
-                "거래명세서",
-                "거래명세표",
-                "명세서",
-                "transaction statement",
-                "statement",
-            ]),
-        },
-        TemplateInfo {
-            kind: TemplateKind::Contract,
-            name_ko: "계약서".into(),
-            name_en: "Contract".into(),
-            description_ko: "갑·을 당사자, 계약일·기간·금액·지급조건과 조항(제1조…).".into(),
-            description_en: "Parties, date, period, amount, payment terms and numbered articles.".into(),
-            fields: {
-                let mut f = vec![
-                    field("title", "계약명", "Title", String, true),
-                    field("contract_date", "계약일", "Contract date", Date, true),
-                ];
-                f.extend(party("party_a", "갑", "Party A", true));
-                f.extend(party("party_b", "을", "Party B", true));
-                f.extend(vec![
-                    field("period_start", "계약기간 시작", "Period start", Date, false),
-                    field("period_end", "계약기간 종료", "Period end", Date, false),
-                    field("amount", "계약금액", "Contract amount", Amount, false),
-                    field("payment_terms", "지급조건", "Payment terms", String, false),
-                ]);
-                f
-            },
-            sections_ko: strings(&[
-                "제1조 (목적)",
-                "제2조 (계약금액)",
-                "제3조 (계약기간)",
-                "제4조 (대금 지급)",
-                "제5조 (당사자의 의무)",
-                "제6조 (계약의 해지)",
-                "제7조 (분쟁 해결)",
-            ]),
-            sections_en: strings(&[
-                "Article 1 (Purpose)",
-                "Article 2 (Contract amount)",
-                "Article 3 (Term)",
-                "Article 4 (Payment)",
-                "Article 5 (Obligations)",
-                "Article 6 (Termination)",
-                "Article 7 (Disputes)",
-            ]),
-            keywords: strings(&["계약", "계약서", "contract", "agreement"]),
-        },
-        TemplateInfo {
             kind: TemplateKind::Report,
             name_ko: "보고서".into(),
             name_en: "Report".into(),
@@ -1001,38 +897,10 @@ fn legacy_list() -> Vec<TemplateInfo> {
             sections_en: strings(&["Overview", "Status", "Details", "Conclusion"]),
             keywords: strings(&["보고서", "보고", "정산서", "결과 보고", "report", "summary report"]),
         },
-        TemplateInfo {
-            kind: TemplateKind::Minutes,
-            name_ko: "회의록".into(),
-            name_en: "Meeting minutes".into(),
-            description_ko: "일시·장소·참석자와 안건·논의 내용·결정 사항·조치 사항 표.".into(),
-            description_en: "Date, place, attendees, agenda, discussion, decisions and action items.".into(),
-            fields: vec![
-                field("title", "회의명", "Meeting", String, true),
-                field("meeting_date", "일시", "Date", Date, true),
-                field("location", "장소", "Place", String, false),
-                field("attendees", "참석자", "Attendees", String, true),
-                field("recorder", "작성자", "Recorded by", String, false),
-                table(
-                    "action_items",
-                    "조치 사항",
-                    "Action items",
-                    vec![
-                        column("item", "항목", "Item", String),
-                        column("owner", "담당자", "Owner", String),
-                        column("due_date", "기한", "Due", Date),
-                    ],
-                    false,
-                ),
-            ],
-            sections_ko: strings(&["안건", "논의 내용", "결정 사항", "향후 일정"]),
-            sections_en: strings(&["Agenda", "Discussion", "Decisions", "Next steps"]),
-            keywords: strings(&["회의록", "회의", "minutes", "meeting minutes", "meeting"]),
-        },
     ]
 }
 
-/// One built-in template (hidden kinds included).
+/// One built-in template.
 pub fn get(kind: TemplateKind) -> TemplateInfo {
     list_all().into_iter().find(|t| t.kind == kind).expect("every TemplateKind has a template")
 }
@@ -1048,13 +916,13 @@ pub fn compact(s: &str) -> String {
 }
 
 /// Visible built-in template whose keyword occurs in `text` (longest keyword wins, so
-/// "개발 계약서" beats "계약서"); the hidden generic templates are not matched from free text.
+/// "개발 계약서" beats "계약서"); the generic layouts are not matched from free text.
 pub fn match_keywords(text: &str) -> Option<TemplateKind> {
     match_in(&list(), text)
 }
 
 /// Like [`match_keywords`] but over every template: an explicit format reference ("A4 공문 형식")
-/// may still name a hidden generic template.
+/// may still name a generic layout.
 pub fn match_keywords_any(text: &str) -> Option<TemplateKind> {
     match_in(&list_all(), text)
 }

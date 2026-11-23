@@ -41,12 +41,12 @@ function plan(ops: Plan["operations"], extra: Partial<Plan> = {}): Plan {
 
 describe("op specs mirror", () => {
   it("covers every op kind with a Korean label", () => {
-    expect(OP_KINDS).toHaveLength(63);
+    expect(OP_KINDS).toHaveLength(58);
     for (const op of OP_KINDS) {
       expect(OP_SPECS[op].op).toBe(op);
       expect(opLabel(op, t)).not.toBe(`planner.ops.${op}`);
     }
-    expect(UI_OPS.has("set_theme")).toBe(true);
+    expect(UI_OPS.has("set_setting")).toBe(true);
     expect(UI_OPS.has("export")).toBe(false);
   });
 });
@@ -78,7 +78,7 @@ describe("summarizeOp", () => {
     }
   });
   it("describes the P6 ops (drafts, projects, rules, retention)", () => {
-    expect(summarizeOp({ op: "draft_document", form_ref: "quotation", content: "노트북 10대 견적", sources: ["a", "b"], output: "pdf" }, t, ctx)).toBe("양식 견적서 · 노트북 10대 견적 · 인용 문서 2건 · PDF");
+    expect(summarizeOp({ op: "draft_document", form_ref: "estimate", content: "노트북 10대 견적", sources: ["a", "b"], output: "pdf" }, t, ctx)).toBe("양식 견적서 · 노트북 10대 견적 · 인용 문서 2건 · PDF");
     // 0.7.0 초안 어시스턴트 op: the scope, the new heading and the instruction.
     expect(summarizeOp({ op: "revise_draft", scope: "section", section: 3, instruction: "더 자세히" }, t, ctx)).toBe("3절 다시 쓰기 · 더 자세히");
     expect(summarizeOp({ op: "revise_draft", scope: "insert_after", section: null, heading: "결론", instruction: "기대 효과 정리" }, t, ctx)).toBe("끝에 새 절 · '결론' · 기대 효과 정리");
@@ -100,10 +100,10 @@ describe("summarizeOp", () => {
     expect(planKind(plan([{ op: "draft_document", content: "x" }]))).toBe("work");
   });
   it("resolves labels for settings, theme, type and screen ops", () => {
-    expect(summarizeOp({ op: "set_theme", theme: "dark" }, t, ctx)).toBe("다크");
+    expect(summarizeOp({ op: "set_setting", key: "ui.theme", value: "dark" }, t, ctx)).toBe("테마 = dark");
     expect(summarizeOp({ op: "set_doc_type", doc_type: "receipt" }, t, ctx)).toBe("영수증");
     expect(summarizeOp({ op: "open", target: "screen", ref: "settings" }, t, ctx)).toBe("화면 · 설정");
-    expect(summarizeOp({ op: "set_setting", key: "render_dpi", value: 200 }, t, ctx)).toBe("기본 렌더 DPI = 200");
+    expect(summarizeOp({ op: "set_setting", key: "processing.render_dpi", value: 200 }, t, ctx)).toBe("기본 렌더 DPI = 200");
     expect(summarizeOp({ op: "job", action: "pause" }, t, ctx)).toBe("일시정지 · 마지막 작업");
     expect(summarizeOp({ op: "undo" }, t, ctx)).toBe("마지막 파일 작업");
   });
@@ -123,8 +123,8 @@ describe("plan classification and editing", () => {
     expect(planKind(plan([{ op: "clarify", question: "?" }], { intent: "clarify" }))).toBe("clarify");
     expect(planKind(plan([{ op: "help" }]))).toBe("help");
     expect(planKind(plan([{ op: "answer", question: "합계?" }]))).toBe("answer");
-    expect(planKind(plan([{ op: "set_theme", theme: "dark" }, { op: "set_language", lang: "en" }]))).toBe("ui");
-    expect(planKind(plan([{ op: "set_theme", theme: "dark" }, { op: "export", format: "csv" }]))).toBe("work");
+    expect(planKind(plan([{ op: "set_setting", key: "ui.theme", value: "dark" }, { op: "set_setting", key: "ui.language", value: "en" }]))).toBe("ui");
+    expect(planKind(plan([{ op: "set_setting", key: "ui.theme", value: "dark" }, { op: "export", format: "csv" }]))).toBe("work");
   });
   it("binds only_reviewed to every file op", () => {
     const p = plan([{ op: "extract" }, { op: "move", folder: "x" }, { op: "rename", template: "{{name}}", only_reviewed: false }]);
@@ -177,7 +177,6 @@ describe("impact line", () => {
     expect(summarizeOp({ op: "summarize" }, t, ctx)).toBe("");
     expect(summarizeOp({ op: "summarize", length: "long" }, t, ctx)).toBe("길게");
     expect(summarizeOp({ op: "summarize", group_by: "project" }, t, ctx)).toBe("프로젝트별 묶음");
-    expect(summarizeOp({ op: "summarize", target: "each_doc" } as never, t, ctx)).toBe("");
     // The result of such a step is one summary with its sources — no per-document list.
     const answer = { id: null, kind: "summary", question: "납품 기한", text: "- 12월 말 [1]", sentences: [], sources: [], no_evidence: false, used_general_knowledge: false, conflicts: null, model: "m", elapsed_ms: 1, prompt_tokens: 1, completion_tokens: 1, document_id: null, feedback: null, feedback_note: null, created_at: "" };
     const exec = {
@@ -380,49 +379,49 @@ describe("uiResultsByStep", () => {
 
   it("assigns the k-th result to the k-th step the executor left to the UI", () => {
     const execution: PlanExecution = {
-      steps: [step(0, "tag", "done"), step(1, "set_theme", "ui"), step(2, "noop", "skipped"), step(3, "manage_model", "ui")],
+      steps: [step(0, "tag", "done"), step(1, "set_setting", "ui"), step(2, "noop", "skipped"), step(3, "manage_model", "ui")],
       cancelled: false,
       documents: [],
-      ui_actions: [{ op: "set_theme", theme: "dark" }, { op: "noop" }, { op: "manage_model", action: "delete", id: "x" }],
+      ui_actions: [{ op: "set_setting", key: "ui.theme", value: "dark" }, { op: "noop" }, { op: "manage_model", action: "delete", id: "x" }],
       batches: [],
     };
-    const map = uiResultsByStep(execution, [result("set_theme", true), result("noop", true), result("manage_model", false)]);
+    const map = uiResultsByStep(execution, [result("set_setting", true), result("noop", true), result("manage_model", false)]);
     expect([...map.keys()]).toEqual([1, 2, 3]);
-    expect(map.get(1)).toMatchObject({ ok: true, summary: "set_theme done" });
+    expect(map.get(1)).toMatchObject({ ok: true, summary: "set_setting done" });
     expect(map.get(3)).toMatchObject({ ok: false, error: "manage_model failed" });
   });
 
   it("leaves steps without a result alone: none yet, or a step skipped after a failure", () => {
     const execution: PlanExecution = {
-      steps: [step(0, "search", "failed"), step(1, "open", "skipped"), step(2, "set_theme", "ui")],
+      steps: [step(0, "search", "failed"), step(1, "open", "skipped"), step(2, "set_setting", "ui")],
       cancelled: false,
       documents: [],
-      ui_actions: [{ op: "set_theme", theme: "dark" }],
+      ui_actions: [{ op: "set_setting", key: "ui.theme", value: "dark" }],
       batches: [],
     };
     expect(uiResultsByStep(execution, null).size).toBe(0);
     expect(uiResultsByStep(execution, []).size).toBe(0);
     // `open` was skipped by the executor (not handed over): the one result is the theme's.
-    expect([...uiResultsByStep(execution, [result("set_theme", false)]).keys()]).toEqual([2]);
+    expect([...uiResultsByStep(execution, [result("set_setting", false)]).keys()]).toEqual([2]);
   });
 
   it("passes over the action a core step added itself (the dialog of 'reference material', the review queue)", () => {
     // "참고 자료로 지정하고 프로젝트 화면 열고 테마 바꿔줘": the first step ran in the core and opened the dialog.
     const execution: PlanExecution = {
-      steps: [step(0, "set_role", "done"), step(1, "open", "ui"), step(2, "set_theme", "ui")],
+      steps: [step(0, "set_role", "done"), step(1, "open", "ui"), step(2, "set_setting", "ui")],
       cancelled: false,
       documents: ["a"],
-      ui_actions: [{ op: "open", target: "assign", ref: "reference:a" }, { op: "open", target: "screen", ref: "projects" }, { op: "set_theme", theme: "dark" }],
+      ui_actions: [{ op: "open", target: "assign", ref: "reference:a" }, { op: "open", target: "screen", ref: "projects" }, { op: "set_setting", key: "ui.theme", value: "dark" }],
       batches: [],
     };
-    const results: UiOpResult[] = [{ ...result("open", true), summary: "dialog" }, { ...result("open", true), summary: "screen" }, result("set_theme", false)];
+    const results: UiOpResult[] = [{ ...result("open", true), summary: "dialog" }, { ...result("open", true), summary: "screen" }, result("set_setting", false)];
     const map = uiResultsByStep(execution, results);
     expect([...map.keys()]).toEqual([1, 2]);
     expect(map.get(1)).toMatchObject({ summary: "screen" });
     expect(map.get(2)).toMatchObject({ ok: false });
     // An action of another kind that a core step added (review → its queue) no longer stops the ones after it.
-    const reviewed: PlanExecution = { ...execution, steps: [step(0, "review", "done"), step(1, "set_theme", "ui")], ui_actions: [{ op: "open", target: "screen", ref: "review" }, { op: "set_theme", theme: "dark" }] };
-    expect([...uiResultsByStep(reviewed, [result("open", true), result("set_theme", true)]).keys()]).toEqual([1]);
+    const reviewed: PlanExecution = { ...execution, steps: [step(0, "review", "done"), step(1, "set_setting", "ui")], ui_actions: [{ op: "open", target: "screen", ref: "review" }, { op: "set_setting", key: "ui.theme", value: "dark" }] };
+    expect([...uiResultsByStep(reviewed, [result("open", true), result("set_setting", true)]).keys()]).toEqual([1]);
   });
 });
 
@@ -430,8 +429,8 @@ describe("result actions (P6 payloads)", () => {
   const draft: Draft = {
     id: "d1",
     title: "견적서",
-    template: { kind: "builtin", template: "quotation" },
-    doc_type: "quotation",
+    template: { kind: "builtin", template: "estimate" },
+    doc_type: "estimate",
     fields: [{ key: "total", label: "합계", value: "1", kind: "amount", required: true, normalized: null, source: null, user_edited: false }],
     tables: [],
     body: [],

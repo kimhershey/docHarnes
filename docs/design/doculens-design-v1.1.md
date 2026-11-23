@@ -182,7 +182,7 @@
 | 라이선스 원문(HF LICENSE) 미열람 | 구현 전 HF에서 LICENSE/NOTICE 확보·보관(9B GGUF 메타데이터 apache-2.0은 확인됨), GGUF SHA-256 고정, SBOM 기록 |
 | 고해상도 페이지에서 비전 인코더 OOM(8 GB Vulkan #21750: 9B/8B급 2,600+ 토큰에서 크래시) | 4B 기본 + `image-max-tokens` 상한(CUDA 2,200, Vulkan 1,440), 잔글씨 프로파일은 영역 크롭으로 대체 |
 
-### 2.8 0.4.0 모델 교체 (2026-11-10; 사용자 결정 "모든 중국계 LLM 제외, 8 GB 이내 모델 탑재", 계획 `docs/plan/v0.4.0.md`)
+### 2.8 0.4.0 모델 교체 (2026-11-10; 사용자 결정 "모든 중국계 LLM 제외, 8 GB 이내 모델 탑재")
 
 Qwen3.5·Qwen3-VL(Alibaba)과 bge-m3(BAAI)를 레지스트리에서 모두 빼고 **Gemma 4**(Google DeepMind, Apache-2.0, 2026-04)와
 **EmbeddingGemma 2**(Google, Apache-2.0, 2026-10)로 바꿨다. 다운로드·드롭인·USB 복사 방식(§3.3.4)은 그대로이고 레지스트리 항목만 바뀐다.
@@ -464,15 +464,15 @@ flowchart LR
   J --> R[결과 카드 + 인용(문서:페이지:영역)]
 ```
 
-> **0.6.0(2026-11-10, 사용자 결정 "AI 에이전트가 소프트웨어 기능 전부 수행", 계획 `docs/plan/v0.6.0.md`)**: 아래 요지의 GUI 전용 op들은 모두 플래너 op가 되었다
+> **0.6.0(2026-11-10, 사용자 결정 "AI 에이전트가 소프트웨어 기능 전부 수행")**: 아래 요지의 GUI 전용 op들은 모두 플래너 op가 되었다
 > (`rotate`·`rerender`·`split`·`merge`·`set_title`·`edit_text`·`set_role`·`manage_reference`·`define_term`·`set_version`·`update_project`·`delete_project`·`remove_from_project`·
 > `manage_template`·`classify_projects`·`manage_schema`·`manage_model`·`workspace`·`maintenance`; `add_to_kb`/`manage_collection` → `manage_reference`, `set_tier`/`set_backend`/
 > `import_model`/`download_model`/`benchmark` → `manage_model`, `open_workspace` → `workspace`). `set_setting.key`는 설정 카탈로그 경로(46개)이고, 모델 호출은 계열 선택 → 계열 op 표의
 > 2단계다. 실제 op 표는 `crates/doculens-core/src/planner/schema.rs`(`OP_SPECS`)가 단일 진실 원천이다.
 
-> **0.7.0(2026-11-10, 계획 `docs/plan/v0.7.0.md`)**: 문서 작성 화면의 "재생성 지시"는 **초안 어시스턴트**(범위: 절 다시 쓰기 / 새 절 / 전체; `DraftRequest.revise`)가 되었고 같은 일을 하는 op `revise_draft`(열린 초안 = `PlanContext.draft_id`)가 플랜 스키마에 들어갔다(op 63). 어시스턴트 대화는 세션 단위로 워크스페이스 DB(`chat_sessions`·`chat_messages`, 0012)에 남는다. 프로젝트 상세의 "문서"·"참고 자료" 탭은 구분 열을 가진 "문서" 탭 하나로 합쳐졌다(저장 구조는 0.5.0 그대로).
+> **0.7.0(2026-11-10)**: 문서 작성 화면의 "재생성 지시"는 **초안 어시스턴트**(범위: 절 다시 쓰기 / 새 절 / 전체; `DraftRequest.revise`)가 되었고 같은 일을 하는 op `revise_draft`(열린 초안 = `PlanContext.draft_id`)가 플랜 스키마에 들어갔다(op 63). 어시스턴트 대화는 세션 단위로 워크스페이스 DB(`chat_sessions`·`chat_messages`, 0012)에 남는다. 프로젝트 상세의 "문서"·"참고 자료" 탭은 구분 열을 가진 "문서" 탭 하나로 합쳐졌다(저장 구조는 0.5.0 그대로).
 
-> **0.8.0(2026-11-11, 사용자 PC 보고 "설정을 정상적으로 조작하지 못함"·"근거 확인이 필요 없는 질문을 판별하지 못함", 계획 `docs/plan/v0.8.0.md`, 검토 `docs/audit/v0.7.0-harness-review.md`)**: 위 그림의 "Pre-router → 플래너 → 검증기" 사이에 네 가지가 더해졌다.
+> **0.8.0(2026-11-11, 사용자 PC 보고 "설정을 정상적으로 조작하지 못함"·"근거 확인이 필요 없는 질문을 판별하지 못함")**: 위 그림의 "Pre-router → 플래너 → 검증기" 사이에 네 가지가 더해졌다.
 > ① **순서**: llama.cpp는 문법의 키 순서를 스키마 `properties`의 순서로 고정하는데, 요청 본문이 키를 이름순으로 내보내고 있었다(플랜은 `confidence`부터, `set_setting`은 `key`부터 써야 했다).
 > 요청 본문을 각 스키마의 `required` 순서로 쓴다(`jsonorder`). 플랜은 `summary → unmet → intent → scope → operations → requires_confirmation → confidence`, op는 `op`부터.
 > ② **글로 답하는 길**: 1단계 분류가 계열 8개 말고 `chat`(인사·잡담)·`general`(문서와 무관한 질문)을 고를 수 있고, 이때는 플랜 호출 없이 `answer{mode}` 하나가 된다(`chat`은 검색 없이, `general`은 근거가 있으면 근거로·없으면 일반 지식으로 "문서 근거 없이 답함" 표시).
@@ -562,7 +562,7 @@ flowchart LR
 
 **3.7.2 화면별 설계**
 
-> **0.5.0(2026-11-10, 사용자 결정 "A안 실행 + GUI 정리 + 사이드바 용어", 계획 `docs/plan/v0.5.0.md`)**: 아래 표는 v1.0~0.4.0의 화면 구성이다. 0.5.0부터 사이드바는
+> **0.5.0(2026-11-10, 사용자 결정 "A안 실행 + GUI 정리 + 사이드바 용어")**: 아래 표는 v1.0~0.4.0의 화면 구성이다. 0.5.0부터 사이드바는
 > **문서함 · AI 어시스턴트 · 검토함 · 프로젝트 · 문서 작성 · 작업 현황 · 설정** 7개이고, 홈은 문서함 상단의 "오늘 할 일" 띠로, 검색은 AI 어시스턴트의
 > "근거만 찾기"로, 추출 스키마/양식·모델 관리자·지식 베이스(버전·용어집·질문 테스트·답변 기록·색인 통계)는 설정의 **양식·추출 항목 · AI 모델 · 참고 자료** 탭으로,
 > 정리/내보내기는 문서함의 버튼(이력은 작업 현황의 "정리 이력" 탭)으로 옮겼다. 지식 베이스의 "컬렉션"은 **참고 자료 묶음**이 되어 프로젝트(§3.15)에 흡수된다(§3.14·§3.15 머리말).
@@ -758,7 +758,7 @@ flowchart LR
 > 컬렉션이 모두 여기로; 데이터 이동 없음, 마이그레이션 0010)에 묶음 단위로 둔다. 어시스턴트·근거만 찾기·문서 작성·플래너 `answer`의 "현재 프로젝트" 범위
 > (`SearchScope.project_id`)는 **업무 문서 ∪ 프로젝트 참고 자료 ∪ 활성 공통 참고 자료**이며 근거 칩이 업무 문서/참고 자료를 구분한다. 적재 마법사는 "프로젝트에 넣기"
 > 대화상자의 "파일에서 가져오기" 단계가 되고, 버전·용어집·질문 테스트·답변 기록·색인 통계는 설정 > 참고 자료(고급)로 옮겼다. 폴더 감시(`watch_folder`)는 더 이상 쓰지
-> 않는다. 아래 본문의 "컬렉션"은 "참고 자료 묶음"으로, "지식 베이스 화면"은 위 위치로 읽는다. 계획: `docs/plan/v0.5.0.md`.
+> 않는다. 아래 본문의 "컬렉션"은 "참고 자료 묶음"으로, "지식 베이스 화면"은 위 위치로 읽는다. 계획: `docs/plan/v0.5.0.md`(1.0.4에서 지운 문서 — git 기록).
 
 **3.14.1 지식 베이스 구축("사전지식 넣기")**
 - 대상: 사내 규정·지침·매뉴얼, 법령·고시 발췌, 과거 작성 문서(공문·보고서·계약서·견적서), 양식, FAQ/용어집. 형식: PDF(디지털/스캔)·HWP/HWPX·DOCX·이미지·Markdown/TXT.
@@ -904,7 +904,7 @@ doculens/
 
 ## 부록 B. 사용자 PC에서 검증할 항목(HF 차단·실측 불가로 미확정)
 > **0.4.0(2026-11-10)**: 아래 1·2·4·10·13·14번의 Qwen3.5 / bge-m3 항목은 §2.8의 Gemma 4(E2B/E4B/12B) / EmbeddingGemma 2로 대체되었다. 0.4.0에서 확인할
-> 항목은 `docs/plan/v0.4.0.md` §9와 `docs/user-pc-checklist.md` "0.4.0 — 모델 교체" 절에 있다(Gemma 4 LICENSE 원문·GGUF SHA-256 고정, `print_info`의
+> 항목은 `docs/plan/v0.4.0.md`(1.0.4에서 지운 문서 — git 기록) §9와 `docs/user-pc-checklist.md` "0.4.0 — 모델 교체" 절에 있다(Gemma 4 LICENSE 원문·GGUF SHA-256 고정, `print_info`의
 > sliding_window/shared_kv_layers, PLE 표 호스트 상주 확인, 한국어 골든셋 측정, EmbeddingGemma 2 유사도 임계값).
 1. `Qwen/Qwen3.5-4B` 모델 카드의 LICENSE/NOTICE 원문 확보(Apache-2.0 확인; 0.8B/2B/9B/27B도 사이즈별 개별 확인 — Qwen2.5 세대는 3B만 Qwen Research License였던 전례) 및 사용 GGUF 저장소(unsloth 등)의 라이선스·SHA-256 고정; GGUF 텐서 타입 덤프로 GDN 민감 텐서(`linear_attn.in_proj_a/b`, ssm_alpha/beta)가 Q8_0/F16으로 유지됐는지 확인.
 2. llama-server 첫 로드 `print_info`: n_layer 32, n_head_kv 4, head_dim 256, full_attention_interval 4 → KV 32 KiB/토큰(공개 로그로 1차 확인됨 — 로컬 재확인); mmproj 크기(F16 ≈0.65 GB, ViT 24층×1024) 확인.

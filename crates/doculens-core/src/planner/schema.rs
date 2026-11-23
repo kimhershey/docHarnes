@@ -91,12 +91,6 @@ pub const OP_SPECS: &[OpSpec] = &[
         desc_en: "import documents (inbox / folder)",
     },
     OpSpec {
-        kind: OpKind::SetInboxWatch,
-        params: &[p("enabled", ParamType::Bool, true, "inbox 감시 켜기/끄기", "inbox watching on/off")],
-        desc_ko: "inbox 폴더 감시 설정",
-        desc_en: "toggle inbox watching",
-    },
-    OpSpec {
         kind: OpKind::Classify,
         params: &[
             p("doc_types", ParamType::StrList, false, "후보 유형 슬러그(비우면 전체)", "candidate type slugs (empty = all)"),
@@ -378,30 +372,6 @@ pub const OP_SPECS: &[OpSpec] = &[
         ],
         desc_ko: "보존/파기 기간 설정",
         desc_en: "set a retention period",
-    },
-    OpSpec {
-        kind: OpKind::SetModel,
-        params: &[p("id", ParamType::Str, true, "모델 id", "model id")],
-        desc_ko: "활성 모델 변경",
-        desc_en: "switch the active model",
-    },
-    OpSpec {
-        kind: OpKind::SetProfile,
-        params: &[p("profile", ParamType::Enum(PROFILES), true, "추론 프로파일", "inference profile")],
-        desc_ko: "추론 프로파일 변경",
-        desc_en: "set the inference profile",
-    },
-    OpSpec {
-        kind: OpKind::SetTheme,
-        params: &[p("theme", ParamType::Enum(THEMES), true, "테마", "theme")],
-        desc_ko: "테마 변경",
-        desc_en: "set the theme",
-    },
-    OpSpec {
-        kind: OpKind::SetLanguage,
-        params: &[p("lang", ParamType::Enum(LANGS), true, "UI 언어", "UI language")],
-        desc_ko: "UI 언어 변경",
-        desc_en: "set the UI language",
     },
     OpSpec {
         kind: OpKind::SetSetting,

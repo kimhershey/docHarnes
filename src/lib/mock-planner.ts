@@ -229,7 +229,7 @@ function messageOf(e: unknown): string {
 // Plans: op helpers (planner/mod.rs)
 // ---------------------------------------------------------------------------
 
-const UI_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["define_schema", "set_model", "set_profile", "set_theme", "set_language", "set_setting", "open", "job", "engine", "help", "clarify", "noop", "reindex", "set_inbox_watch", "register_form", "set_retention", "manage_model", "workspace", "maintenance"]);
+const UI_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["define_schema", "set_setting", "open", "job", "engine", "help", "clarify", "noop", "reindex", "register_form", "set_retention", "manage_model", "workspace", "maintenance"]);
 
 /** Ops the UI / shell performs itself (`OpKind::runs_in_ui`). */
 export function runsInUi(kind: OpKind): boolean {
@@ -1441,26 +1441,26 @@ function ruleSettingsCombo(t: Text, ctx: PlanContext): Plan | null {
     const ct = mkText(clause, t.ko);
     const id = modelId(ct, ctx);
     if (id) {
-      ops.push({ op: "set_model", id });
+      ops.push({ op: "set_setting", key: "models.active_model", value: id });
       continue;
     }
     const r = mockRoute(clause);
-    if (r.op === "set_theme") ops.push({ op: "set_theme", theme: r.theme });
-    else if (r.op === "set_language") ops.push({ op: "set_language", lang: r.language });
+    if (r.op === "set_theme") ops.push({ op: "set_setting", key: "ui.theme", value: r.theme });
+    else if (r.op === "set_language") ops.push({ op: "set_setting", key: "ui.language", value: r.language });
     else if (r.op === "open") ops.push({ op: "open", target: "screen", ref: screenRef(r.screen) });
     else if (r.op === "help") ops.push({ op: "help" });
     else return null;
   }
-  if (ops.length === 0 || (ops.length === 1 && ops[0]?.op !== "set_model")) return null;
+  const settingOf = (o: Op | undefined, key: string): string | null => (o && o.op === "set_setting" && o.key === key ? String(o.value) : null);
+  if (ops.length === 0 || (ops.length === 1 && settingOf(ops[0], "models.active_model") === null)) return null;
   const summary = ops
     .map((o) => {
       switch (o.op) {
-        case "set_model":
-          return tr(t.ko, `모델을 ${o.id}(으)로`, `model → ${o.id}`);
-        case "set_theme":
-          return tr(t.ko, `테마를 ${o.theme}(으)로`, `theme → ${o.theme}`);
-        case "set_language":
-          return tr(t.ko, `언어를 ${o.lang}(으)로`, `language → ${o.lang}`);
+        case "set_setting":
+          if (o.key === "models.active_model") return tr(t.ko, `모델을 ${o.value}(으)로`, `model → ${o.value}`);
+          if (o.key === "ui.theme") return tr(t.ko, `테마를 ${o.value}(으)로`, `theme → ${o.value}`);
+          if (o.key === "ui.language") return tr(t.ko, `언어를 ${o.value}(으)로`, `language → ${o.value}`);
+          return "";
         case "open":
           return tr(t.ko, `${o.ref} 화면 열기`, `open ${o.ref}`);
         default:
@@ -2287,36 +2287,6 @@ function checkSetting(op: Extract<Op, { op: "set_setting" }>, path: string, issu
   const v = op.value;
   const num = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v.trim().replace(/%$/, "")) : Number.NaN;
   switch (op.key) {
-    case "render_dpi":
-      if ([150, 200, 300].includes(num)) op.value = num;
-      else bad("render_dpi must be 150, 200 or 300");
-      break;
-    case "pii_masking":
-    case "inbox_watch": {
-      if (typeof v === "boolean") break;
-      const s = String(v).trim().toLowerCase();
-      if (["true", "on", "켜기", "yes"].includes(s)) op.value = true;
-      else if (["false", "off", "끄기", "no"].includes(s)) op.value = false;
-      else bad("value must be true or false");
-      break;
-    }
-    case "auto_pipeline": {
-      const s = String(v).trim();
-      if (["none", "classify_only", "classify_and_ocr", "full"].includes(s)) op.value = s;
-      else if (s === "classify") op.value = "classify_only";
-      else if (s === "ocr") op.value = "classify_and_ocr";
-      else bad("auto_pipeline must be none, classify_only, classify_and_ocr or full");
-      break;
-    }
-    case "review_threshold":
-      if (num >= 0 && num <= 1) op.value = num;
-      else if (num > 1 && num <= 100) op.value = num / 100;
-      else bad("review_threshold must be between 0 and 1");
-      break;
-    case "cache_limit_gb":
-      if (num >= 0.5 && num <= 1000) op.value = num;
-      else bad("cache_limit_gb must be between 0.5 and 1000");
-      break;
     case "journal_days":
       if (num >= 0 && num <= 36_500) op.value = Math.trunc(num);
       else bad("journal_days must be between 0 and 36500");
@@ -2368,30 +2338,8 @@ function draftRequestOf(op: Extract<Op, { op: "draft_document" }>, plan: Plan, c
 /** `validate::MAX_CARRIED_TEXT_CHARS`: the longest text a text-only answer plan carries. */
 const MAX_CARRIED_TEXT_CHARS = 60_000;
 
-/**
- * 1.0.0 §4-2 (core `Op::canonical`): the settings-only ops as the `set_setting` they are — one shape for a
- * settings change whichever path planned it. Every other op is returned as it is.
- */
-export function canonicalOp(op: Op): Op {
-  switch (op.op) {
-    case "set_theme":
-      return { op: "set_setting", key: "ui.theme", value: op.theme };
-    case "set_language":
-      return { op: "set_setting", key: "ui.language", value: op.lang };
-    case "set_profile":
-      return { op: "set_setting", key: "models.profile", value: op.profile };
-    case "set_model":
-      return { op: "set_setting", key: "models.active_model", value: op.id };
-    case "set_inbox_watch":
-      return { op: "set_setting", key: "processing.inbox_watch", value: op.enabled };
-    default:
-      return op;
-  }
-}
-
 export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | null): PlanIssue[] {
   const issues: PlanIssue[] = [];
-  plan.operations = plan.operations.map(canonicalOp);
   plan.confidence = Number.isFinite(plan.confidence) ? Math.min(1, Math.max(0, plan.confidence)) : 0;
   if (plan.summary != null) {
     plan.summary = Array.from(plan.summary.trim()).slice(0, 300).join("");
@@ -2516,9 +2464,6 @@ export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | nul
         break;
       }
       case "summarize": {
-        // 1.0.3 (`validate`): `target` (each document / one set) is not a parameter any more — a summary is one
-        // result of everything in scope. A plan stored before carries it; it is cleared.
-        delete (op as { target?: unknown }).target;
         // 1.0.2: a summary about a subject is one summary of the passages found — not one per group. An
         // empty subject is no subject.
         const topic = Array.from((op.topic ?? "").split(/\s+/).filter(Boolean).join(" ")).slice(0, 200).join("");
@@ -2591,14 +2536,6 @@ export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | nul
         }
         break;
       }
-      case "set_model":
-        if (ctx.model_ids.length > 0) {
-          const key = compact(op.id);
-          const m = ctx.model_ids.find((x) => compact(x) === key || compact(x).includes(key));
-          if (m) op.id = m;
-          else issues.push(issue(at("id"), "model_unknown", `unknown model '${op.id}'; available: ${ctx.model_ids.join(", ")}`));
-        }
-        break;
       case "set_setting":
         checkSettingCatalog(op, at("value"), issues);
         // The active model is one of the installed ones, named in full or by its size ("12B").
@@ -2681,7 +2618,7 @@ export function validatePlan(plan: Plan, ctx: PlanContext, date: DateRange | nul
         break;
       case "explain":
         if (!(op.selection ?? "").trim() && !(op.question ?? "").trim()) issues.push(issue(at("question"), "question_empty", "explain needs a selection or a question"));
-        if (op.scope != null && !["kb", "reference", "collection", "project", "document"].includes(op.scope)) issues.push(issue(at("scope"), "enum_invalid", `unknown scope '${String(op.scope)}'`));
+        if (op.scope != null && !["kb", "reference", "project", "document"].includes(op.scope)) issues.push(issue(at("scope"), "enum_invalid", `unknown scope '${String(op.scope)}'`));
         break;
       case "compare":
         op.doc_ids = [...new Set((op.doc_ids ?? []).map((d) => d.trim()).filter(Boolean))];
@@ -2937,10 +2874,10 @@ function prerouted(text: string, ctx: PlanContext): { plan: Plan; confidence: nu
   let op: Op;
   let summary: string;
   if (r.op === "set_theme") {
-    op = { op: "set_theme", theme: r.theme };
+    op = { op: "set_setting", key: "ui.theme", value: r.theme };
     summary = ko ? `테마를 ${r.theme}(으)로 바꿉니다` : `Switch the theme to ${r.theme}`;
   } else if (r.op === "set_language") {
-    op = { op: "set_language", lang: r.language };
+    op = { op: "set_setting", key: "ui.language", value: r.language };
     summary = ko ? `UI 언어를 ${r.language}(으)로 바꿉니다` : `Switch the UI language to ${r.language}`;
   } else if (r.op === "open") {
     op = { op: "open", target: "screen", ref: screenRef(r.screen) };
@@ -3015,7 +2952,7 @@ function pleasantry(text: string): boolean | null {
 }
 
 const NOT_A_COMMAND = ["?", "？", "뭐야", "뭐지", "뭔가", "무엇", "무슨", "알려", "어떻게", "얼마", "어디", "왜", "하지마", "하지 마", "말고", "말아", "않", "what", "how", "why", "which", "don't", "do not", "never"];
-const SETTING_OPS: readonly OpKind[] = ["set_setting", "set_theme", "set_language", "set_profile", "set_inbox_watch"];
+const SETTING_OPS: readonly OpKind[] = ["set_setting"];
 
 /**
  * The narrow fast path (0.8.0, both interpretation modes): a sentence that is nothing but a greeting, or
@@ -3101,7 +3038,7 @@ function vagueScalePlan(t: Text): Plan | null {
  */
 function vagueThemePlan(t: Text): Plan | null {
   if (!has(t, ["눈이편", "눈이 편", "눈아파", "눈이 아파", "눈부", "easyontheeyes", "easy on the eyes"])) return null;
-  return single({ op: "set_theme", theme: "dark" }, 0.8, tr(t.ko, "테마를 다크로 바꿉니다", "Switch the theme to dark"));
+  return single({ op: "set_setting", key: "ui.theme", value: "dark" }, 0.8, tr(t.ko, "테마를 다크로 바꿉니다", "Switch the theme to dark"));
 }
 
 const ON_WORDS = ["켜", "활성", "on", "enable", "사용", "allow", "허용", "줄이기", "줄여"];
@@ -3144,14 +3081,6 @@ function valueSaid(t: Text, key: string, value: string | boolean): boolean {
 /** The settings op as `[setting, value]` when its value is a name or a switch (numbers have their own check). */
 function namedChange(op: Op): [string, string | boolean] | null {
   switch (op.op) {
-    case "set_theme":
-      return ["ui.theme", op.theme];
-    case "set_language":
-      return ["ui.language", op.lang];
-    case "set_profile":
-      return ["models.profile", op.profile];
-    case "set_inbox_watch":
-      return ["processing.inbox_watch", op.enabled];
     case "set_setting": {
       const key = resolveSettingKey(op.key);
       const kind = settingSpec(key)?.type.kind;

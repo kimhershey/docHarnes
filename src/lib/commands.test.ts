@@ -182,11 +182,11 @@ describe("undo of a settings change", () => {
   it("names the setting an op writes", () => {
     expect(settingOfOp(scale(120))).toEqual({ path: "ui.scale_percent", value: 120 });
     // Legacy keys resolve to their catalog path.
-    expect(settingOfOp({ op: "set_setting", key: "render_dpi", value: 300 })).toEqual({ path: "processing.render_dpi", value: 300 });
-    expect(settingOfOp({ op: "set_theme", theme: "dark" })).toEqual({ path: "ui.theme", value: "dark" });
-    expect(settingOfOp({ op: "set_language", lang: "en" })).toEqual({ path: "ui.language", value: "en" });
-    expect(settingOfOp({ op: "set_profile", profile: "accuracy" })).toEqual({ path: "models.profile", value: "accuracy" });
-    expect(settingOfOp({ op: "set_inbox_watch", enabled: false })).toEqual({ path: "processing.inbox_watch", value: false });
+    expect(settingOfOp({ op: "set_setting", key: "processing.render_dpi", value: 300 })).toEqual({ path: "processing.render_dpi", value: 300 });
+    expect(settingOfOp({ op: "set_setting", key: "ui.theme", value: "dark" })).toEqual({ path: "ui.theme", value: "dark" });
+    expect(settingOfOp({ op: "set_setting", key: "ui.language", value: "en" })).toEqual({ path: "ui.language", value: "en" });
+    expect(settingOfOp({ op: "set_setting", key: "models.profile", value: "accuracy" })).toEqual({ path: "models.profile", value: "accuracy" });
+    expect(settingOfOp({ op: "set_setting", key: "processing.inbox_watch", value: false })).toEqual({ path: "processing.inbox_watch", value: false });
     // A retention period is not a settings path; other ops change no setting.
     expect(settingOfOp({ op: "set_setting", key: "journal_days", value: 30 })).toBeNull();
     expect(settingOfOp({ op: "help" })).toBeNull();
@@ -226,22 +226,22 @@ describe("undo of a settings change", () => {
   });
 
   it("(a) theme, language and profile undo check the same", async () => {
-    const theme = await run({ op: "set_theme", theme: "dark" });
-    expect(theme).toMatchObject({ undo: [{ op: "set_theme", theme: "system" }], applied: [{ op: "set_theme", theme: "dark" }] });
-    await run({ op: "set_theme", theme: "light" });
+    const theme = await run({ op: "set_setting", key: "ui.theme", value: "dark" });
+    expect(theme).toMatchObject({ undo: [{ op: "set_setting", key: "ui.theme", value: "system" }], applied: [{ op: "set_setting", key: "ui.theme", value: "dark" }] });
+    await run({ op: "set_setting", key: "ui.theme", value: "light" });
     expect(await undo(theme)).toBe("stale");
     expect(settings().ui.theme).toBe("light");
 
     const profileBefore = settings().models.profile;
-    const profile = await run({ op: "set_profile", profile: "fine_print" });
-    expect(profile).toMatchObject({ undo: [{ op: "set_profile", profile: profileBefore }], applied: [{ op: "set_profile", profile: "fine_print" }] });
+    const profile = await run({ op: "set_setting", key: "models.profile", value: "fine_print" });
+    expect(profile).toMatchObject({ undo: [{ op: "set_setting", key: "models.profile", value: profileBefore }], applied: [{ op: "set_setting", key: "models.profile", value: "fine_print" }] });
     expect(await undo(profile)).toBe("undone");
     expect(settings().models.profile).toBe(profileBefore);
     expect(await undo(profile)).toBe("stale");
 
-    const language = await run({ op: "set_language", lang: "en" });
-    expect(language).toMatchObject({ undo: [{ op: "set_language", lang: "ko" }], applied: [{ op: "set_language", lang: "en" }] });
-    await run({ op: "set_language", lang: "ko" });
+    const language = await run({ op: "set_setting", key: "ui.language", value: "en" });
+    expect(language).toMatchObject({ undo: [{ op: "set_setting", key: "ui.language", value: "ko" }], applied: [{ op: "set_setting", key: "ui.language", value: "en" }] });
+    await run({ op: "set_setting", key: "ui.language", value: "ko" });
     expect(await undo(language)).toBe("stale");
     expect(settings().ui.language).toBe("ko");
   });
@@ -254,11 +254,11 @@ describe("undo of a settings change", () => {
   });
 
   it("several changes of one sentence are undone together or not at all; the results carry what was applied", async () => {
-    const results = await executeUiOps([scale(120), { op: "set_theme", theme: "dark" }], navigate, t);
-    expect(results.map((r) => r.applied)).toEqual([[scale(120)], [{ op: "set_theme", theme: "dark" }]]);
+    const results = await executeUiOps([scale(120), { op: "set_setting", key: "ui.theme", value: "dark" }], navigate, t);
+    expect(results.map((r) => r.applied)).toEqual([[scale(120)], [{ op: "set_setting", key: "ui.theme", value: "dark" }]]);
     const undoOps = results.flatMap((r) => r.undo ?? []).reverse();
     const applied = results.flatMap((r) => r.applied ?? []);
-    await run({ op: "set_theme", theme: "light" });
+    await run({ op: "set_setting", key: "ui.theme", value: "light" });
     // One of the two was changed again: neither is put back.
     expect(await undoSettingsChange(undoOps, applied, navigate, t)).toBe("stale");
     expect(settings().ui).toMatchObject({ scale_percent: 120, theme: "light" });
@@ -283,14 +283,14 @@ describe("undo of a settings change", () => {
   it("(c) `set_inbox_watch` reads like the setting it is: before → after, 'already', and an undo", async () => {
     expect(settings().processing.inbox_watch).toBe(true);
     const label = ko.planner.settings.processing_inbox_watch;
-    const off = await run({ op: "set_inbox_watch", enabled: false });
+    const off = await run({ op: "set_setting", key: "processing.inbox_watch", value: false });
     expect(settings().processing.inbox_watch).toBe(false);
     expect((await api.settingsGet()).processing.inbox_watch).toBe(false);
     expect(off.summary).toBe(ko.planner.ui.set_setting_changed.replace("{{key}}", label).replace("{{from}}", ko.planner.params.on).replace("{{to}}", ko.planner.params.off));
     expect(off.undo).toEqual([{ op: "set_setting", key: "processing.inbox_watch", value: true }]);
     expect(off.applied).toEqual([{ op: "set_setting", key: "processing.inbox_watch", value: false }]);
     // Already off: the card says so and offers nothing to undo.
-    const again = await run({ op: "set_inbox_watch", enabled: false });
+    const again = await run({ op: "set_setting", key: "processing.inbox_watch", value: false });
     expect(again.summary).toBe(ko.planner.ui.set_setting_same.replace("{{key}}", label).replace("{{value}}", ko.planner.params.off));
     expect(again.undo).toBeUndefined();
     expect(await undo(off)).toBe("undone");

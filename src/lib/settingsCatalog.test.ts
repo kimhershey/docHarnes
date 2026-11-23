@@ -54,7 +54,5 @@ describe("settings catalog", () => {
     expect(coerceSettingValue(spec("processing.auto_level"), "classify")).toBe("classify_only");
     expect(coerceSettingValue(spec("knowledge.embedding_model"), "기본값")).toBeNull();
     expect(() => coerceSettingValue(spec("models.active_model"), "")).toThrow();
-    // Legacy keys resolve to their catalog paths.
-    expect(spec("render_dpi").key).toBe("processing.render_dpi");
   });
 });

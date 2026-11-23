@@ -113,18 +113,15 @@ pub enum TemplateKind {
     Acceptance,
     Estimate,
     SupplementRequest,
-    // The generic set of 0.1, hidden since 0.3.0 (user decision 2026-11-10): not listed in the
-    // picker and not matched from free text, but an explicit reference and saved drafts keep working.
+    // The two generic layouts: not listed in the picker and not matched from free text. `Report` is
+    // the layout of a draft that names no form; `OfficialLetter` is reached by an explicit reference
+    // ("공문 형식으로").
     OfficialLetter,
-    Quotation,
-    TransactionStatement,
-    Contract,
     Report,
-    Minutes,
 }
 
 impl TemplateKind {
-    pub const ALL: [TemplateKind; 19] = [
+    pub const ALL: [TemplateKind; 15] = [
         TemplateKind::Rfp,
         TemplateKind::Proposal,
         TemplateKind::Sow,
@@ -139,11 +136,7 @@ impl TemplateKind {
         TemplateKind::Estimate,
         TemplateKind::SupplementRequest,
         TemplateKind::OfficialLetter,
-        TemplateKind::Quotation,
-        TemplateKind::TransactionStatement,
-        TemplateKind::Contract,
         TemplateKind::Report,
-        TemplateKind::Minutes,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -162,11 +155,7 @@ impl TemplateKind {
             TemplateKind::Estimate => "estimate",
             TemplateKind::SupplementRequest => "supplement_request",
             TemplateKind::OfficialLetter => "official_letter",
-            TemplateKind::Quotation => "quotation",
-            TemplateKind::TransactionStatement => "transaction_statement",
-            TemplateKind::Contract => "contract",
             TemplateKind::Report => "report",
-            TemplateKind::Minutes => "minutes",
         }
     }
 
@@ -174,17 +163,9 @@ impl TemplateKind {
         TemplateKind::ALL.into_iter().find(|k| k.as_str() == s.trim())
     }
 
-    /// The generic templates of 0.1: kept for explicit references and saved drafts, out of the picker.
+    /// The two generic layouts: out of the picker.
     pub fn hidden(self) -> bool {
-        matches!(
-            self,
-            TemplateKind::OfficialLetter
-                | TemplateKind::Quotation
-                | TemplateKind::TransactionStatement
-                | TemplateKind::Contract
-                | TemplateKind::Report
-                | TemplateKind::Minutes
-        )
+        matches!(self, TemplateKind::OfficialLetter | TemplateKind::Report)
     }
 
     /// The templates the UI offers and free text is matched against, in UI order.
@@ -697,7 +678,7 @@ pub fn templates() -> Vec<TemplateInfo> {
     templates::list()
 }
 
-/// Every built-in template, the hidden generic ones included (explicit references, old drafts).
+/// Every built-in template, the two generic layouts included.
 pub fn templates_all() -> Vec<TemplateInfo> {
     templates::list_all()
 }

@@ -309,7 +309,7 @@ mod tests {
         }];
         let c = classify(&types);
         assert!(c.contains("- receipt: 영수증 / Receipt") && c.contains("- other"));
-        let def = &crate::pipeline::schema::builtin("receipt").unwrap().def;
+        let def = &crate::pipeline::schema::sample("receipt").def;
         let k = kie(def, "영수증", 1, 2, Some("합계 12,500"));
         assert!(k.contains("store_name") && k.contains("합계 12,500") && k.contains("items[]"));
         assert!(kie(def, "영수증", 1, 1, None).contains("이미지만 사용"));
@@ -332,7 +332,7 @@ mod tests {
             + &"<tr><td></td><td></td></tr>".repeat(40)
             + "</table>";
         assert!(!looks_looped(&table));
-        assert!(kie(&crate::pipeline::schema::builtin("tax_invoice").unwrap().def, "x", 1, 1, Some("본문"))
+        assert!(kie(&crate::pipeline::schema::sample("tax_invoice").def, "x", 1, 1, Some("본문"))
             .contains("<page_text>\n본문\n</page_text>"));
         assert_eq!(text_budget(None, 1_024, 2_048, 900, 4_000), 4_000);
         assert_eq!(text_budget(Some(16_384), 1_024, 2_048, 900, 4_000), 4_000);

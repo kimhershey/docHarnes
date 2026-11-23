@@ -97,7 +97,7 @@ vi.mock("@/lib/ipc", () => ({ api: fake.api }));
 import { useAttachmentsStore } from "./attachments";
 import { DROPPED, PATCH_WRITE_DELAY_MS, flushChatWrites, resetAssistant, restoreMessage, selectMessages, storedMessage, useAssistantStore, type Message, type NewMessage, type PlanMessage } from "./assistant";
 
-const theme: Op = { op: "set_theme", theme: "dark" };
+const theme: Op = { op: "set_setting", key: "ui.theme", value: "dark" };
 const open: Op = { op: "open", target: "screen", ref: "jobs" };
 
 const jsonBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;

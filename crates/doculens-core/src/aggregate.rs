@@ -609,7 +609,7 @@ pub(crate) mod tests {
     fn db() -> Db {
         let db = Db::open_in_memory().unwrap();
         db.with(repo::ensure_builtins).unwrap();
-        db.with(repo::enable_legacy_builtins).unwrap();
+        db.with(repo::add_business_samples).unwrap();
         seed_all(&db);
         db
     }
@@ -760,7 +760,7 @@ pub(crate) mod tests {
     fn resolves_fields_by_key_and_labels() {
         let db = Db::open_in_memory().unwrap();
         db.with(repo::ensure_builtins).unwrap();
-        db.with(repo::enable_legacy_builtins).unwrap();
+        db.with(repo::add_business_samples).unwrap();
         let receipt = db.with(|c| repo::schema_for_doc_type(c, "receipt")).unwrap().unwrap().definition;
         let invoice = db.with(|c| repo::schema_for_doc_type(c, "tax_invoice")).unwrap().unwrap().definition;
         let key = |def: &SchemaDef, t: Option<&str>| resolve_field(def, t).map(|f| f.key.clone());

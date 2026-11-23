@@ -622,7 +622,7 @@ pub fn build_fields(
         with_value.iter().map(|f| f.confidence).fold(None, |m: Option<f64>, c| Some(m.map_or(c, |x| x.min(c))));
     let review_count = fields.iter().filter(|f| f.review_reason.is_some()).count() as u32;
     let text_of = |paths: &[&str]| paths.iter().find_map(|p| values.text(p).map(str::to_string));
-    // The counterparty of the software set (수행사 · 제안사 · 발주기관) or of the legacy forms.
+    // The counterparty of the software set (수행사 · 제안사 · 발주기관) or of a business form.
     let vendor = text_of(&[
         "contractor.name",
         "proposer.name",
@@ -659,7 +659,7 @@ mod tests {
     use chrono::Utc;
 
     fn receipt_schema() -> SchemaRecord {
-        let b = schema::builtins().into_iter().find(|b| b.key == "receipt").unwrap();
+        let b = schema::sample("receipt");
         SchemaRecord {
             id: "builtin-receipt".into(),
             name: b.name_ko.into(),

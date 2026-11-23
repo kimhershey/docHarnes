@@ -243,7 +243,7 @@ fn ops_that_take_no_documents_get_no_default_scope() {
         json!([{ "op": "define_term", "term": "MM", "definition": "맨먼스" }]),
         json!([{ "op": "manage_template", "name": "유지보수" }]),
         json!([{ "op": "check_consistency" }]),
-        json!([{ "op": "set_theme", "theme": "dark" }]),
+        json!([{ "op": "set_setting", "key": "ui.theme", "value": "dark" }]),
         json!([{ "op": "classify_projects" }]),
         json!([{ "op": "remove_from_project", "doc_ids": ["d1", "d2"] }]),
     ] {
@@ -308,8 +308,8 @@ fn an_app_side_change_before_a_step_that_depends_on_it_is_rejected() {
         validate::validate(&mut p, &c, None).into_iter().filter(|i| i.blocking).map(|i| i.code).collect()
     };
     for ops in [
-        json!([{ "op": "set_model", "id": "gemma4-12b-q4km" }, { "op": "extract", "force": true }]),
-        json!([{ "op": "set_profile", "profile": "accuracy" }, { "op": "ocr" }]),
+        json!([{ "op": "set_setting", "key": "models.active_model", "value": "gemma4-12b-q4km" }, { "op": "extract", "force": true }]),
+        json!([{ "op": "set_setting", "key": "models.profile", "value": "accuracy" }, { "op": "ocr" }]),
         json!([{ "op": "set_setting", "key": "processing.render_dpi", "value": 300 }, { "op": "rerender" }]),
         json!([{ "op": "workspace", "action": "open", "path": "D:\\Work" }, { "op": "tag", "add": ["x"] }]),
         json!([{ "op": "register_form", "doc_ref": "d1a2" }, { "op": "extract" }]),
@@ -319,11 +319,11 @@ fn an_app_side_change_before_a_step_that_depends_on_it_is_rejected() {
         assert_eq!(errors(ops.clone()), ["ui_op_order"], "{ops}");
     }
     for ops in [
-        json!([{ "op": "extract", "force": true }, { "op": "set_model", "id": "gemma4-12b-q4km" }]),
-        json!([{ "op": "set_theme", "theme": "dark" }, { "op": "extract" }]),
-        json!([{ "op": "set_model", "id": "gemma4-12b-q4km" }, { "op": "tag", "add": ["x"] }]),
+        json!([{ "op": "extract", "force": true }, { "op": "set_setting", "key": "models.active_model", "value": "gemma4-12b-q4km" }]),
+        json!([{ "op": "set_setting", "key": "ui.theme", "value": "dark" }, { "op": "extract" }]),
+        json!([{ "op": "set_setting", "key": "models.active_model", "value": "gemma4-12b-q4km" }, { "op": "tag", "add": ["x"] }]),
         json!([{ "op": "set_setting", "key": "ui.scale_percent", "value": 120 }, { "op": "ocr" }]),
-        json!([{ "op": "set_model", "id": "gemma4-12b-q4km" }, { "op": "set_theme", "theme": "dark" }]),
+        json!([{ "op": "set_setting", "key": "models.active_model", "value": "gemma4-12b-q4km" }, { "op": "set_setting", "key": "ui.theme", "value": "dark" }]),
         json!([{ "op": "engine", "action": "start" }, { "op": "summarize" }]),
         json!([{ "op": "open", "target": "screen", "ref": "review" }, { "op": "extract" }]),
     ] {
@@ -331,7 +331,7 @@ fn an_app_side_change_before_a_step_that_depends_on_it_is_rejected() {
     }
     // The finding names both steps in the UI language and reaches the user as the question.
     let mut p = plan_of(
-        json!([{ "op": "set_model", "id": "gemma4-12b-q4km" }, { "op": "extract", "force": true }]),
+        json!([{ "op": "set_setting", "key": "models.active_model", "value": "gemma4-12b-q4km" }, { "op": "extract", "force": true }]),
         json!({ "doc_ids": ["d1a2"] }),
     );
     let issue = validate::validate(&mut p, &c, None).into_iter().find(|i| i.code == "ui_op_order").unwrap();
@@ -342,7 +342,7 @@ fn an_app_side_change_before_a_step_that_depends_on_it_is_rejected() {
         issue.message
     );
     let chat = StageChat::new();
-    let reply = json!({ "summary": "모델 변경 후 재추출", "intent": "set_model", "scope": { "doc_ids": ["d1a2"] }, "operations": [{ "op": "set_model", "id": "gemma4-12b-q4km" }, { "op": "extract", "force": true }], "requires_confirmation": false, "confidence": 0.9 });
+    let reply = json!({ "summary": "모델 변경 후 재추출", "intent": "set_setting", "scope": { "doc_ids": ["d1a2"] }, "operations": [{ "op": "set_setting", "key": "models.active_model", "value": "gemma4-12b-q4km" }, { "op": "extract", "force": true }], "requires_confirmation": false, "confidence": 0.9 });
     for _ in 0..3 {
         chat.push("plan", reply.clone());
     }

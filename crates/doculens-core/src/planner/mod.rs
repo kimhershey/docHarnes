@@ -54,7 +54,6 @@ pub const MIN_CONFIDENCE: f32 = 0.6;
 #[serde(rename_all = "snake_case")]
 pub enum OpKind {
     Import,
-    SetInboxWatch,
     Classify,
     SetDocType,
     Ocr,
@@ -85,10 +84,6 @@ pub enum OpKind {
     CheckConsistency,
     RequestSupplement,
     SetRetention,
-    SetModel,
-    SetProfile,
-    SetTheme,
-    SetLanguage,
     SetSetting,
     Open,
     Job,
@@ -121,9 +116,8 @@ pub enum OpKind {
 }
 
 impl OpKind {
-    pub const ALL: [OpKind; 63] = [
+    pub const ALL: [OpKind; 58] = [
         OpKind::Import,
-        OpKind::SetInboxWatch,
         OpKind::Classify,
         OpKind::SetDocType,
         OpKind::Ocr,
@@ -153,10 +147,6 @@ impl OpKind {
         OpKind::CheckConsistency,
         OpKind::RequestSupplement,
         OpKind::SetRetention,
-        OpKind::SetModel,
-        OpKind::SetProfile,
-        OpKind::SetTheme,
-        OpKind::SetLanguage,
         OpKind::SetSetting,
         OpKind::Open,
         OpKind::Job,
@@ -190,7 +180,6 @@ impl OpKind {
     pub fn as_str(self) -> &'static str {
         match self {
             OpKind::Import => "import",
-            OpKind::SetInboxWatch => "set_inbox_watch",
             OpKind::Classify => "classify",
             OpKind::SetDocType => "set_doc_type",
             OpKind::Ocr => "ocr",
@@ -220,10 +209,6 @@ impl OpKind {
             OpKind::CheckConsistency => "check_consistency",
             OpKind::RequestSupplement => "request_supplement",
             OpKind::SetRetention => "set_retention",
-            OpKind::SetModel => "set_model",
-            OpKind::SetProfile => "set_profile",
-            OpKind::SetTheme => "set_theme",
-            OpKind::SetLanguage => "set_language",
             OpKind::SetSetting => "set_setting",
             OpKind::Open => "open",
             OpKind::Job => "job",
@@ -296,12 +281,7 @@ impl OpKind {
             OpKind::ReviseDraft => OpFamily::Compose,
             OpKind::Aggregate | OpKind::Export => OpFamily::Output,
             OpKind::SetSetting
-            | OpKind::SetTheme
-            | OpKind::SetLanguage
-            | OpKind::SetModel
-            | OpKind::SetProfile
             | OpKind::SetRetention
-            | OpKind::SetInboxWatch
             | OpKind::ManageModel
             | OpKind::Engine
             | OpKind::Workspace
@@ -327,11 +307,6 @@ impl OpKind {
     pub fn model_visible(self) -> bool {
         !matches!(
             self,
-            OpKind::SetTheme
-                | OpKind::SetLanguage
-                | OpKind::SetModel
-                | OpKind::SetProfile
-                | OpKind::SetInboxWatch
                 | OpKind::Explain
         )
     }
@@ -347,10 +322,6 @@ impl OpKind {
         matches!(
             self,
             OpKind::DefineSchema
-                | OpKind::SetModel
-                | OpKind::SetProfile
-                | OpKind::SetTheme
-                | OpKind::SetLanguage
                 | OpKind::SetSetting
                 | OpKind::Open
                 | OpKind::Job
@@ -359,7 +330,6 @@ impl OpKind {
                 | OpKind::Clarify
                 | OpKind::Noop
                 | OpKind::Reindex
-                | OpKind::SetInboxWatch
                 | OpKind::RegisterForm
                 | OpKind::SetRetention
                 | OpKind::ManageModel
@@ -446,16 +416,6 @@ pub enum ReindexScope {
     Fts,
     Vec,
     All,
-}
-
-/// What `summarize.target` said until 1.0.2: a summary of every document, or one of them all. A
-/// summary is always one result since 1.0.3 (user decision 2026-11-22) — the values are only read
-/// from plans stored before, see [`Op::Summarize`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SummarizeTarget {
-    EachDoc,
-    Set,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -548,8 +508,7 @@ impl GroupBy {
 pub enum ExplainScope {
     #[default]
     Kb,
-    /// The 공통 참고 자료 (pre-0.5.0 `collection`; the old name still deserialises).
-    #[serde(alias = "collection")]
+    /// The 공통 참고 자료.
     Reference,
     Project,
     Document,
@@ -902,9 +861,6 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         auto_pipeline: Option<AutoPipeline>,
     },
-    SetInboxWatch {
-        enabled: bool,
-    },
     Classify {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         doc_types: Vec<String>,
@@ -985,11 +941,6 @@ pub enum Op {
     /// "파일별 요약은 없애고 모든 파일의 내용을 하나의 결과로 요약") — or one per `group_by` group, or of
     /// what they say about `topic`.
     Summarize {
-        /// Not a parameter any more: until 1.0.2 `each_doc` (a summary per document, the default) or
-        /// `set`. It is read so that a plan stored before 1.0.3 — a chat card, a queued job — still
-        /// loads; the validator clears it, nothing writes it and the executor does not look at it.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        target: Option<SummarizeTarget>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         length: Option<SummaryLength>,
         /// One summary per project / document type / folder instead of one of everything.
@@ -1179,20 +1130,7 @@ pub enum Op {
         item: RetentionTarget,
         days: i64,
     },
-    SetModel {
-        id: String,
-    },
-    SetProfile {
-        profile: Profile,
-    },
-    SetTheme {
-        theme: Theme,
-    },
-    SetLanguage {
-        lang: Language,
-    },
-    /// `key` is a settings-catalog path (`processing.render_dpi`; `planner::settings_catalog`),
-    /// the 0.1–0.5 short keys (`render_dpi` …) still deserialise and are mapped by the validator.
+    /// `key` is a settings-catalog path (`processing.render_dpi`; `planner::settings_catalog`).
     SetSetting {
         key: String,
         value: Value,
@@ -1371,27 +1309,29 @@ pub enum Op {
 }
 
 impl Op {
-    /// 1.0.0 §4-2: the settings-only ops as the `set_setting` they are — one op for a settings change
-    /// whichever path planned it (slash command, fast path, rules, a stored plan), so the checks, the
-    /// card and the executor see one shape. Every other op is returned as it is.
-    pub fn canonical(self) -> Op {
-        let setting = |key: &str, value: Value| Op::SetSetting { key: key.to_string(), value };
-        match self {
-            Op::SetTheme { theme } => setting("ui.theme", Value::String(theme.as_str().to_string())),
-            Op::SetLanguage { lang } => setting("ui.language", Value::String(lang.as_str().to_string())),
-            Op::SetProfile { profile } => {
-                setting("models.profile", serde_json::to_value(profile).unwrap_or(Value::Null))
-            }
-            Op::SetModel { id } => setting("models.active_model", Value::String(id)),
-            Op::SetInboxWatch { enabled } => setting("processing.inbox_watch", Value::Bool(enabled)),
-            other => other,
-        }
+    /// A settings change: the one op for it, whichever path plans it (slash command, fast path, rules).
+    pub fn setting(key: &str, value: Value) -> Op {
+        Op::SetSetting { key: key.to_string(), value }
+    }
+    pub fn set_theme(theme: Theme) -> Op {
+        Op::setting("ui.theme", Value::String(theme.as_str().to_string()))
+    }
+    pub fn set_language(lang: Language) -> Op {
+        Op::setting("ui.language", Value::String(lang.as_str().to_string()))
+    }
+    pub fn set_profile(profile: Profile) -> Op {
+        Op::setting("models.profile", serde_json::to_value(profile).unwrap_or(Value::Null))
+    }
+    pub fn set_model(id: &str) -> Op {
+        Op::setting("models.active_model", Value::String(id.to_string()))
+    }
+    pub fn set_inbox_watch(enabled: bool) -> Op {
+        Op::setting("processing.inbox_watch", Value::Bool(enabled))
     }
 
     pub fn kind(&self) -> OpKind {
         match self {
             Op::Import { .. } => OpKind::Import,
-            Op::SetInboxWatch { .. } => OpKind::SetInboxWatch,
             Op::Classify { .. } => OpKind::Classify,
             Op::SetDocType { .. } => OpKind::SetDocType,
             Op::Ocr { .. } => OpKind::Ocr,
@@ -1421,10 +1361,6 @@ impl Op {
             Op::CheckConsistency { .. } => OpKind::CheckConsistency,
             Op::RequestSupplement { .. } => OpKind::RequestSupplement,
             Op::SetRetention { .. } => OpKind::SetRetention,
-            Op::SetModel { .. } => OpKind::SetModel,
-            Op::SetProfile { .. } => OpKind::SetProfile,
-            Op::SetTheme { .. } => OpKind::SetTheme,
-            Op::SetLanguage { .. } => OpKind::SetLanguage,
             Op::SetSetting { .. } => OpKind::SetSetting,
             Op::Open { .. } => OpKind::Open,
             Op::Job { .. } => OpKind::Job,
@@ -1480,12 +1416,7 @@ impl Op {
             Op::Review { .. } => SideEffect::Database,
             Op::Summarize { .. } | Op::Tag { .. } | Op::Reindex { .. } => SideEffect::Database,
             Op::DefineSchema { .. } => SideEffect::Database,
-            Op::SetInboxWatch { .. }
-            | Op::SetModel { .. }
-            | Op::SetProfile { .. }
-            | Op::SetTheme { .. }
-            | Op::SetLanguage { .. }
-            | Op::SetSetting { .. } => SideEffect::Settings,
+            Op::SetSetting { .. } => SideEffect::Settings,
             Op::Job { .. } | Op::Engine { .. } => SideEffect::Control,
             Op::Search { .. }
             | Op::Answer { .. }

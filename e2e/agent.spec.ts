@@ -3,7 +3,7 @@ import { expect, test, type Page } from "@playwright/test";
 import ko from "../src/i18n/ko.json" with { type: "json" };
 import { card, createWorkspace, docId, freshApp, importViaLibrary, openAssistantScreen, openModelsAdvanced, openSettingsTab, tpl } from "./helpers";
 
-// 0.6.0 (plan docs/plan/v0.6.0.md): every screen action as an assistant command, against the browser
+// 0.6.0: every screen action as an assistant command, against the browser
 // mock — a document op (rotate), a confirmed file op (merge), a catalog setting (UI scale), a reference
 // group, a project deletion and an engine stop. The Rust tests cover the rules / validator / executor.
 

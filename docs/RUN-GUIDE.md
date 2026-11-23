@@ -119,7 +119,7 @@ npm install
 
 ### 2.3 모델 준비
 
-`models/registry.json`의 항목(0.4.0부터 **Gemma 4 + EmbeddingGemma 2**, 모두 Apache-2.0; 중국계 모델은 사용자 결정으로 제외 — `docs/plan/v0.4.0.md`):
+`models/registry.json`의 항목(0.4.0부터 **Gemma 4 + EmbeddingGemma 2**, 모두 Apache-2.0; 중국계 모델은 사용자 결정으로 제외 — `docs/plan/v0.4.0.md`(1.0.4에서 지운 문서 — git 기록)):
 
 | id | 표시 이름 | 대상 티어 | 파일(Hugging Face 저장소) |
 |---|---|---|---|

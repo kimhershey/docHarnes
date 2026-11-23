@@ -85,7 +85,6 @@ const SPECS: OpSpec[] = [
     desc_ko: "문서 가져오기(inbox/폴더/파일 경로)",
     desc_en: "import documents (inbox / folder / file paths)",
   },
-  { op: "set_inbox_watch", params: [p("enabled", bool, true, "inbox 감시 켜기/끄기", "inbox watching on/off")], desc_ko: "inbox 폴더 감시 설정", desc_en: "toggle inbox watching" },
   {
     op: "classify",
     params: [p("doc_types", list, false, "후보 유형 슬러그(비우면 전체)", "candidate type slugs (empty = all)"), p("force", bool, false, "이미 분류된 문서도 다시", "re-classify classified documents")],
@@ -203,7 +202,7 @@ const SPECS: OpSpec[] = [
   {
     op: "draft_document",
     params: [
-      p("form_ref", str, false, "등록 양식(이름·유형) 또는 내장 템플릿(quotation, official_letter, contract, report, minutes, transaction_statement)", "registered form (name / type) or a built-in template"),
+      p("form_ref", str, false, "등록 양식(이름·유형) 또는 내장 템플릿(estimate, dev_contract, meeting_minutes, official_letter, report …)", "registered form (name / type) or a built-in template"),
       p("format_description", str, false, "형식 자연어 설명", "layout description (natural language)"),
       p("content", str, true, "문서 내용(자연어)", "what the document should say"),
       p("sources", list, false, "인용할 문서 id, selection, aggregate", "document ids to quote, selection, aggregate"),
@@ -281,10 +280,6 @@ const SPECS: OpSpec[] = [
     desc_en: "draft a supplement request (preview)",
   },
   { op: "set_retention", params: [p("item", en(RETENTION_ITEMS), true, "보존 항목", "retention item"), p("days", { kind: "integer", min: -1 }, true, "보존 일수(-1 무기한, 0 즉시)", "days (-1 forever, 0 immediately)")], desc_ko: "보존/파기 기간 설정", desc_en: "set a retention period" },
-  { op: "set_model", params: [p("id", str, true, "모델 id", "model id")], desc_ko: "활성 모델 변경", desc_en: "switch the active model" },
-  { op: "set_profile", params: [p("profile", en(PROFILES), true, "추론 프로파일", "inference profile")], desc_ko: "추론 프로파일 변경", desc_en: "set the inference profile" },
-  { op: "set_theme", params: [p("theme", en(THEMES), true, "테마", "theme")], desc_ko: "테마 변경", desc_en: "set the theme" },
-  { op: "set_language", params: [p("lang", en(LANGS), true, "UI 언어", "UI language")], desc_ko: "UI 언어 변경", desc_en: "set the UI language" },
   { op: "set_setting", params: [p("key", en(SETTING_KEYS), true, "설정 키(섹션.항목, 예: processing.render_dpi)", "setting key (section.field, e.g. processing.render_dpi)"), p("value", { kind: "scalar" }, true, "값", "value")], desc_ko: "설정 값 변경(설정 카탈로그의 모든 항목)", desc_en: "change a setting (any catalog item)" },
   {
     op: "open",
@@ -394,7 +389,7 @@ export const OP_SPECS: Readonly<Record<OpKind, OpSpec>> = Object.fromEntries(SPE
 export const OP_KINDS: readonly OpKind[] = SPECS.map((s) => s.op);
 
 /** Ops the UI / shell performs itself (`OpKind::runs_in_ui`). */
-export const UI_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["define_schema", "set_model", "set_profile", "set_theme", "set_language", "set_setting", "open", "job", "engine", "help", "clarify", "noop", "reindex", "set_inbox_watch", "register_form", "set_retention", "manage_model", "workspace", "maintenance"]);
+export const UI_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["define_schema", "set_setting", "open", "job", "engine", "help", "clarify", "noop", "reindex", "register_form", "set_retention", "manage_model", "workspace", "maintenance"]);
 
 /** Ops that need the vision / chat model (`OpKind::needs_model`). */
 export const MODEL_OPS: ReadonlySet<OpKind> = new Set<OpKind>(["classify", "ocr", "extract", "answer", "summarize", "import", "draft_document", "revise_draft", "explain", "compare", "define_rule", "request_supplement"]);

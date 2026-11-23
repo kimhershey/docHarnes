@@ -53,7 +53,7 @@ fn world() -> World {
     }
     let db = Db::open_in_memory().unwrap();
     db.with(prepo::ensure_builtins).unwrap();
-    db.with(prepo::enable_legacy_builtins).unwrap();
+    db.with(prepo::add_business_samples).unwrap();
     World { db, paths, _dir: dir }
 }
 
@@ -235,7 +235,7 @@ fn col(key: &str, label: &str, kind: FieldKind) -> DraftColumn {
 /// A quotation draft with two items (supply 2,400,000 + 40,000) and no totals.
 fn quotation_draft() -> Draft {
     use FieldKind::*;
-    let mut d = Draft { template: TemplateRef::Builtin { template: TemplateKind::Quotation }, ..Default::default() };
+    let mut d = Draft { template: TemplateRef::Builtin { template: TemplateKind::Estimate }, ..Default::default() };
     d.title = "노트북 공급 견적서".into();
     d.doc_type = Some("quotation".into());
     d.fields = vec![
@@ -308,13 +308,13 @@ fn model_reply() -> Value {
 
 #[test]
 fn templates_are_consistent_and_render() {
-    // 12 software templates + 보완요청서 are offered; the 6 generic ones of 0.1 stay hidden but defined.
+    // 12 software templates + 보완요청서 are offered; the two generic layouts (공문 · 보고서) are not listed.
     let visible = templates::list();
     assert_eq!(visible.len(), 13);
     assert!(visible.iter().all(|t| !t.kind.hidden()));
     assert_eq!(TemplateKind::visible().count(), 13);
     let all = templates::list_all();
-    assert_eq!(all.len(), 19);
+    assert_eq!(all.len(), 15);
     // Generation slugs equal the pipeline's document types for the software set.
     for k in TemplateKind::visible().filter(|k| *k != TemplateKind::SupplementRequest) {
         assert!(crate::pipeline::schema::builtin(k.as_str()).is_some(), "{k:?} has no pipeline schema");
@@ -363,12 +363,13 @@ fn templates_are_consistent_and_render() {
     assert_eq!(templates::match_keywords("개발 계약서 초안"), Some(TemplateKind::DevContract));
     assert_eq!(templates::match_keywords("10월 진척 보고서"), Some(TemplateKind::ProgressReport));
     assert_eq!(templates::match_keywords("아무 내용"), None);
-    // Hidden generic templates: not matched from free text, still reachable by an explicit reference.
+    // The generic layouts: not matched from free text, reachable by an explicit reference.
     assert_eq!(templates::match_keywords("A4 공문 형식"), None);
     assert_eq!(templates::match_keywords_any("A4 공문 형식"), Some(TemplateKind::OfficialLetter));
-    assert!(templates::get(TemplateKind::Quotation).kind.hidden());
+    assert!(templates::get(TemplateKind::Report).kind.hidden());
+    assert!(TemplateKind::parse("quotation").is_none() && TemplateKind::parse("minutes").is_none());
     // A pipeline schema becomes a spec with group paths and table columns.
-    let tax = crate::pipeline::schema::builtins().into_iter().find(|b| b.key == "tax_invoice").unwrap();
+    let tax = crate::pipeline::schema::sample("tax_invoice");
     let rec = crate::pipeline::schema::SchemaRecord {
         id: "builtin-tax_invoice".into(),
         name: tax.name_ko.into(),
@@ -460,8 +461,8 @@ fn resolve_template_prefers_registered_forms_then_keywords() {
     );
     // Built-in template names and keywords.
     assert_eq!(
-        super::resolve_template(&w.db, &req(Some("quotation"), "")).unwrap(),
-        TemplateRef::Builtin { template: TemplateKind::Quotation }
+        super::resolve_template(&w.db, &req(Some("estimate"), "")).unwrap(),
+        TemplateRef::Builtin { template: TemplateKind::Estimate }
     );
     assert_eq!(
         super::resolve_template(&w.db, &req(Some("A4 공문 형식"), "")).unwrap(),
@@ -1064,7 +1065,7 @@ fn validation_covers_sums_checksums_required_and_dates() {
         tax.issues
     );
     // Period order on contracts.
-    let mut c = Draft { template: TemplateRef::Builtin { template: TemplateKind::Contract }, ..Default::default() };
+    let mut c = Draft { template: TemplateRef::Builtin { template: TemplateKind::DevContract }, ..Default::default() };
     c.fields = vec![
         field("period_start", "계약기간 시작", FieldKind::Date, false, "2026-12-01"),
         field("period_end", "계약기간 종료", FieldKind::Date, false, "2026-01-01"),
@@ -1291,19 +1292,6 @@ fn amount_fields_are_classified_as_money_or_plain_numbers() {
         ("estimate", "grand_total"),
         ("estimate", "items.unit_price"),
         ("estimate", "items.supply_amount"),
-        ("quotation", "supply_total"),
-        ("quotation", "tax_total"),
-        ("quotation", "grand_total"),
-        ("quotation", "items.unit_price"),
-        ("quotation", "items.supply_amount"),
-        ("quotation", "items.tax_amount"),
-        ("transaction_statement", "supply_total"),
-        ("transaction_statement", "tax_total"),
-        ("transaction_statement", "grand_total"),
-        ("transaction_statement", "items.unit_price"),
-        ("transaction_statement", "items.supply_amount"),
-        ("transaction_statement", "items.tax_amount"),
-        ("contract", "amount"),
     ];
     let numbers = [
         ("rfp", "evaluation.points"),

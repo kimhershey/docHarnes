@@ -38,14 +38,6 @@ export function settingOfOp(op: Op): { path: string; value: unknown } | null {
   switch (op.op) {
     case "set_setting":
       return op.key === "journal_days" ? null : { path: resolveSettingKey(op.key), value: op.value };
-    case "set_theme":
-      return { path: "ui.theme", value: op.theme };
-    case "set_language":
-      return { path: "ui.language", value: op.lang };
-    case "set_profile":
-      return { path: "models.profile", value: op.profile };
-    case "set_inbox_watch":
-      return { path: "processing.inbox_watch", value: op.enabled };
     default:
       return null;
   }
@@ -84,14 +76,14 @@ export async function executePreRoute(result: PreRouteResult, navigate: Navigate
       await settings.setTheme(result.theme);
       const summary = t("theme.changed", { theme: t(`theme.${result.theme}`) });
       ui.toast(summary, "ok");
-      return { summary, ...(before && before !== result.theme ? { undo: [{ op: "set_theme", theme: before }], applied: [{ op: "set_theme", theme: result.theme }] } : {}) };
+      return { summary, ...(before && before !== result.theme ? { undo: [{ op: "set_setting", key: "ui.theme", value: before }], applied: [{ op: "set_setting", key: "ui.theme", value: result.theme }] } : {}) };
     }
     case "set_language": {
       const before = settings.settings?.ui.language;
       await settings.setLanguage(result.language);
       const summary = t("language.changed", { language: t(`language.${result.language}`) });
       ui.toast(summary, "ok");
-      return { summary, ...(before && before !== result.language ? { undo: [{ op: "set_language", lang: before }], applied: [{ op: "set_language", lang: result.language }] } : {}) };
+      return { summary, ...(before && before !== result.language ? { undo: [{ op: "set_setting", key: "ui.language", value: before }], applied: [{ op: "set_setting", key: "ui.language", value: result.language }] } : {}) };
     }
     case "open": {
       navigate(SCREEN_ROUTES[result.screen]);
@@ -167,10 +159,6 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
     return { summary };
   };
   switch (op.op) {
-    case "set_theme":
-      return executePreRoute({ matched: true, source: "phrase", confidence: 1, normalized_text: "", op: "set_theme", theme: op.theme }, navigate, t);
-    case "set_language":
-      return executePreRoute({ matched: true, source: "phrase", confidence: 1, normalized_text: "", op: "set_language", language: op.lang }, navigate, t);
     case "help":
       return executePreRoute({ matched: true, source: "phrase", confidence: 1, normalized_text: "", op: "help" }, navigate, t);
     case "set_setting": {
@@ -230,17 +218,6 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
           ? [{ op: "set_setting", key: "models.manual_tier", value: manualTierBefore }]
           : [{ op: "set_setting", key: path, value: before as string | number | boolean }];
       return { ...done(t("planner.ui.set_setting_changed", { key: t(spec.label), from: label(before), to: label(after) })), undo, applied: [{ op: "set_setting", key: path, value: after as string | number | boolean }] };
-    }
-    case "set_model": {
-      await settings.setActiveModel(op.id);
-      await useEngineStore.getState().loadModel(op.id);
-      return done(t("planner.ui.set_model", { id: op.id }), "info");
-    }
-    case "set_profile": {
-      const before = settings.settings?.models.profile;
-      await settings.update((d) => void (d.models.profile = op.profile));
-      const said = done(t("planner.ui.set_profile", { profile: t(`models.profiles.${op.profile}`) }));
-      return before && before !== op.profile ? { ...said, undo: [{ op: "set_profile", profile: before }], applied: [{ op: "set_profile", profile: op.profile }] } : said;
     }
     case "open": {
       switch (op.target) {
@@ -361,10 +338,6 @@ export async function executeUiOp(op: Op, navigate: NavigateFunction, t: TFuncti
       if (scope === "vec" || scope === "all") await api.knowledgeEmbed(true);
       return done(t("planner.ui.reindex"), "info");
     }
-    case "set_inbox_watch":
-      // "inbox 감시 꺼" (the planner's fast path) is the setting `processing.inbox_watch`: the same card —
-      // before → after, "already off", 되돌리기 — as `set_setting` for it.
-      return executeUiOp({ op: "set_setting", key: "processing.inbox_watch", value: op.enabled }, navigate, t);
     case "register_form": {
       // §3.4.0 form registration: the schema screen's dialog derives the fields and confirms them in the grid.
       const ref = (op.doc_ref ?? "").trim();

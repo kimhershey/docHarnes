@@ -321,7 +321,6 @@
   "planner": {
     "ops": {
       "import": "가져오기",
-      "set_inbox_watch": "inbox 감시",
       "classify": "분류",
       "set_doc_type": "유형 지정",
       "ocr": "OCR",
@@ -340,10 +339,6 @@
       "tag": "태그",
       "delete": "삭제",
       "export": "내보내기",
-      "set_model": "모델 변경",
-      "set_profile": "프로파일 변경",
-      "set_theme": "테마 변경",
-      "set_language": "언어 변경",
       "set_setting": "설정 변경",
       "open": "열기",
       "job": "작업 제어",
@@ -762,7 +757,6 @@
     "ui": {
       "set_setting": "설정 변경: {{key}} = {{value}}",
       "set_model": "모델 {{id}} 로드 중",
-      "set_profile": "프로파일: {{profile}}",
       "open_document": "문서 열기: {{name}}",
       "open_page": "{{name}} {{page}}쪽 열기",
       "open_folder": "폴더 열기: {{folder}}",
@@ -2311,7 +2305,7 @@
       "builtin": "내장 샘플 양식",
       "empty": "아직 등록한 양식이 없습니다. '양식 등록'이나 '자연어로 만들기'로 시작하세요.",
       "disabled": "사용 안 함",
-      "hidden": "숨긴 기본 양식 {{count}}개 — 0.2 이전의 세금계산서·영수증 등. 켜면 다시 분류·추출에 쓰입니다."
+      "hidden": "꺼 둔 기본 양식 {{count}}개. 켜면 다시 분류·추출에 쓰입니다."
     },
     "new": "새 추출 항목",
     "nl_create": "자연어로 만들기",
@@ -2811,9 +2805,6 @@
     },
     "templates": {
       "official_letter": "공문",
-      "quotation": "견적서",
-      "transaction_statement": "거래명세서",
-      "contract": "계약서",
       "report": "보고서",
       "rfp": "제안요청서(RFP)",
       "proposal": "제안서",
@@ -2827,7 +2818,6 @@
       "change_request": "변경요청서",
       "acceptance": "검수확인서",
       "estimate": "견적서",
-      "minutes": "회의록",
       "supplement_request": "보완요청서"
     },
     "source": {

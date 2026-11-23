@@ -122,7 +122,7 @@ describe("missingRequiredParams", () => {
 describe("opSpecs.ts mirrors planner/schema.rs", () => {
   it("parses the Rust table", () => {
     // 63 ops at 0.7.0; the parser must not silently lose entries or parameters.
-    expect(rust.length).toBeGreaterThanOrEqual(63);
+    expect(rust.length).toBeGreaterThanOrEqual(58);
     expect(new Set(rust.map((o) => o.op)).size).toBe(rust.length);
     expect(rust.find((o) => o.op === "export")?.params.map((p) => p.name)).toEqual(["format", "path", "columns", "layout", "include", "target"]);
     expect(rust.find((o) => o.op === "aggregate")?.params.find((p) => p.name === "group_by")?.values).toContain("project");

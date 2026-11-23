@@ -1009,9 +1009,7 @@ fn run_step(
                 imported: None,
             })
         }
-        // (`target` — each document / one set — is read from plans stored before 1.0.3 and ignored:
-        // a summary is one result of everything in scope, or one per `group_by` group)
-        Op::Summarize { target: _, length, group_by, topic } => match topic.as_deref() {
+        Op::Summarize { length, group_by, topic } => match topic.as_deref() {
             Some(topic) => summarize::run_topic(deps, plan, imported, topic, *length, progress),
             None => summarize::run(deps, plan, imported, *length, *group_by, progress),
         },

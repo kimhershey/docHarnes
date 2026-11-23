@@ -980,10 +980,6 @@ pub struct Builtin {
     pub description_ko: &'static str,
     pub description_en: &'static str,
     pub def: SchemaDef,
-    /// Kept for workspaces that classified documents with it, but not offered: inserted (or
-    /// switched) to `enabled = 0`, left out of the classifier enum and of `builtin_doc_types`.
-    /// The 0.3.0 default set is software-development paperwork; the 0.1 business forms are hidden.
-    pub hidden: bool,
 }
 
 fn party(prefix_ko: &str, prefix_en: &str, with_email: bool) -> Vec<FieldDef> {
@@ -1006,6 +1002,7 @@ fn party(prefix_ko: &str, prefix_en: &str, with_email: bool) -> Vec<FieldDef> {
     v
 }
 
+#[cfg(test)]
 fn invoice_items(with_tax: bool) -> Vec<FieldDef> {
     use FieldKind::*;
     let mut v = vec![
@@ -1023,6 +1020,7 @@ fn invoice_items(with_tax: bool) -> Vec<FieldDef> {
     v
 }
 
+#[cfg(test)]
 fn payment_group() -> FieldDef {
     use FieldKind::*;
     FieldDef::new("payment", "결제", "Payment", Group).with(vec![
@@ -1102,19 +1100,12 @@ fn staffing_items() -> Vec<FieldDef> {
     ]
 }
 
-/// The software-development document set (0.3.0 defaults) followed by the hidden 0.1 business forms.
+/// The bundled sample forms: the software-development document set.
 pub fn builtins() -> Vec<Builtin> {
-    let mut out = software_builtins();
-    out.extend(legacy_builtins());
-    out
-}
-
-fn software_builtins() -> Vec<Builtin> {
     use FieldKind::*;
     vec![
         Builtin {
             key: "rfp",
-            hidden: false,
             doc_type: "rfp",
             name_ko: "제안요청서(RFP)",
             name_en: "Request for proposal (RFP)",
@@ -1143,7 +1134,6 @@ fn software_builtins() -> Vec<Builtin> {
         },
         Builtin {
             key: "proposal",
-            hidden: false,
             doc_type: "proposal",
             name_ko: "제안서",
             name_en: "Proposal",
@@ -1174,7 +1164,6 @@ fn software_builtins() -> Vec<Builtin> {
         },
         Builtin {
             key: "sow",
-            hidden: false,
             doc_type: "sow",
             name_ko: "과업지시서",
             name_en: "Statement of work",
@@ -1210,7 +1199,6 @@ fn software_builtins() -> Vec<Builtin> {
         },
         Builtin {
             key: "srs",
-            hidden: false,
             doc_type: "srs",
             name_ko: "요구사항 정의서",
             name_en: "Software requirements specification",
@@ -1231,7 +1219,6 @@ fn software_builtins() -> Vec<Builtin> {
         },
         Builtin {
             key: "dev_contract",
-            hidden: false,
             doc_type: "dev_contract",
             name_ko: "소프트웨어 개발 계약서",
             name_en: "Software development contract",
@@ -1268,7 +1255,6 @@ fn software_builtins() -> Vec<Builtin> {
         },
         Builtin {
             key: "wbs",
-            hidden: false,
             doc_type: "wbs",
             name_ko: "WBS·일정표",
             name_en: "WBS / schedule",
@@ -1300,7 +1286,6 @@ fn software_builtins() -> Vec<Builtin> {
         },
         Builtin {
             key: "progress_report",
-            hidden: false,
             doc_type: "progress_report",
             name_ko: "진척 보고서",
             name_en: "Progress report",
@@ -1338,7 +1323,6 @@ fn software_builtins() -> Vec<Builtin> {
         },
         Builtin {
             key: "meeting_minutes",
-            hidden: false,
             doc_type: "meeting_minutes",
             name_ko: "회의록",
             name_en: "Meeting minutes",
@@ -1373,7 +1357,6 @@ fn software_builtins() -> Vec<Builtin> {
         },
         Builtin {
             key: "test_report",
-            hidden: false,
             doc_type: "test_report",
             name_ko: "테스트 결과서",
             name_en: "Test report",
@@ -1411,7 +1394,6 @@ fn software_builtins() -> Vec<Builtin> {
         },
         Builtin {
             key: "change_request",
-            hidden: false,
             doc_type: "change_request",
             name_ko: "변경요청서",
             name_en: "Change request",
@@ -1438,7 +1420,6 @@ fn software_builtins() -> Vec<Builtin> {
         },
         Builtin {
             key: "acceptance",
-            hidden: false,
             doc_type: "acceptance",
             name_ko: "검수확인서",
             name_en: "Acceptance certificate",
@@ -1463,7 +1444,6 @@ fn software_builtins() -> Vec<Builtin> {
         },
         Builtin {
             key: "estimate",
-            hidden: false,
             doc_type: "estimate",
             name_ko: "견적서",
             name_en: "Estimate",
@@ -1487,7 +1467,6 @@ fn software_builtins() -> Vec<Builtin> {
         },
         Builtin {
             key: "general",
-            hidden: false,
             doc_type: "general",
             name_ko: "일반(표/차트)",
             name_en: "General (table / chart)",
@@ -1513,14 +1492,14 @@ fn software_builtins() -> Vec<Builtin> {
     ]
 }
 
-/// The 0.1 business forms (세금계산서 · 계산서 · 영수증 · 사업자등록증 · 계약서 · 신청서): still defined so
-/// that documents already classified with them keep their fields and labels, but hidden by default.
-pub fn legacy_builtins() -> Vec<Builtin> {
+/// Business forms (세금계산서 · 계산서 · 영수증 · 사업자등록증 · 계약서 · 신청서) the tests use as fixtures:
+/// amounts, registration numbers and sum rules. Not bundled.
+#[cfg(test)]
+pub fn business_samples() -> Vec<Builtin> {
     use FieldKind::*;
     vec![
         Builtin {
             key: "tax_invoice",
-            hidden: true,
             doc_type: "tax_invoice",
             name_ko: "세금계산서",
             name_en: "Tax invoice",
@@ -1554,7 +1533,6 @@ pub fn legacy_builtins() -> Vec<Builtin> {
         },
         Builtin {
             key: "invoice_exempt",
-            hidden: true,
             doc_type: "invoice_exempt",
             name_ko: "계산서(면세)",
             name_en: "Invoice (tax-exempt)",
@@ -1580,7 +1558,6 @@ pub fn legacy_builtins() -> Vec<Builtin> {
         },
         Builtin {
             key: "receipt",
-            hidden: true,
             doc_type: "receipt",
             name_ko: "영수증",
             name_en: "Receipt",
@@ -1624,7 +1601,6 @@ pub fn legacy_builtins() -> Vec<Builtin> {
         },
         Builtin {
             key: "business_registration",
-            hidden: true,
             doc_type: "business_registration",
             name_ko: "사업자등록증",
             name_en: "Business registration",
@@ -1657,7 +1633,6 @@ pub fn legacy_builtins() -> Vec<Builtin> {
         },
         Builtin {
             key: "contract",
-            hidden: true,
             doc_type: "contract",
             name_ko: "계약서",
             name_en: "Contract",
@@ -1689,7 +1664,6 @@ pub fn legacy_builtins() -> Vec<Builtin> {
         },
         Builtin {
             key: "application_form",
-            hidden: true,
             doc_type: "application_form",
             name_ko: "신청서",
             name_en: "Application form",
@@ -1767,14 +1741,20 @@ pub fn doc_type_aliases(slug: &str) -> &'static [&'static str] {
     }
 }
 
-/// One bundled sample form by key (software set or hidden legacy).
+/// One bundled sample form by key.
 pub fn builtin(key: &str) -> Option<Builtin> {
     builtins().into_iter().find(|b| b.key == key)
 }
 
-/// Slugs of the offered sample forms (classifier enum when nothing else is registered); hidden legacy forms excluded.
+/// Slugs of the sample forms (classifier enum when nothing else is registered).
 pub fn builtin_doc_types() -> Vec<&'static str> {
-    builtins().into_iter().filter(|b| !b.hidden).map(|b| b.doc_type).collect()
+    builtins().into_iter().map(|b| b.doc_type).collect()
+}
+
+/// One of the business forms the tests use as fixtures.
+#[cfg(test)]
+pub fn sample(key: &str) -> Builtin {
+    business_samples().into_iter().find(|b| b.key == key).expect("a business sample form")
 }
 
 #[cfg(test)]
@@ -1802,17 +1782,16 @@ mod tests {
             assert_eq!(v["properties"]["value"]["type"], json!(["string", "null"]));
             assert!(!prompt_summary(&b.def, true).is_empty());
         }
-        assert_eq!(builtins().iter().filter(|b| !b.hidden).count(), 13);
-        assert_eq!(builtins().iter().filter(|b| b.hidden).count(), 6, "the 0.1 business forms stay defined, hidden");
+        assert_eq!(builtins().len(), 13);
         let dts = builtin_doc_types();
         assert!(dts.contains(&"rfp") && dts.contains(&"estimate") && dts.contains(&"general"), "{dts:?}");
-        assert!(!dts.contains(&"tax_invoice") && !dts.contains(&"receipt"), "hidden forms are not offered: {dts:?}");
+        assert!(!dts.contains(&"tax_invoice") && !dts.contains(&"receipt"), "the old business forms are gone: {dts:?}");
         let keys: Vec<&str> = builtins().iter().map(|b| b.key).collect();
         let mut unique = keys.clone();
         unique.sort_unstable();
         unique.dedup();
         assert_eq!(unique.len(), keys.len(), "keys are unique");
-        assert!(builtin("tax_invoice").is_some_and(|b| b.hidden) && builtin("wbs").is_some_and(|b| !b.hidden));
+        assert!(builtin("tax_invoice").is_none() && builtin("wbs").is_some());
     }
 
     #[test]

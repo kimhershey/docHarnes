@@ -1088,7 +1088,7 @@ mod tests {
 
     #[test]
     fn cross_field_rules_detect_mismatches() {
-        let def = &schema::builtin("tax_invoice").unwrap().def;
+        let def = &schema::sample("tax_invoice").def;
         let ok = values_from(
             &[
                 ("supply_total".into(), Some("1000000".into())),
@@ -1115,7 +1115,7 @@ mod tests {
         let r = document_rules(def, &bad);
         let fails: Vec<&str> = r.iter().filter(|(_, i)| i.level == "fail").map(|(p, _)| p.as_str()).collect();
         assert!(fails.contains(&"grand_total") && fails.contains(&"tax_total"), "{r:?}");
-        let receipt = &schema::builtin("receipt").unwrap().def;
+        let receipt = &schema::sample("receipt").def;
         let v = values_from(
             &[
                 ("supply_amount".into(), Some("10000".into())),
@@ -1127,7 +1127,7 @@ mod tests {
         let r = document_rules(receipt, &v);
         assert!(r.iter().any(|(p, i)| p == "total" && i.level == "fail"));
         assert!(r.iter().any(|(p, i)| p == "total" && i.rule == schema::RULE_ITEMS_SUM_TOTAL && i.level == "ok"));
-        let contract = &schema::builtin("contract").unwrap().def;
+        let contract = &schema::sample("contract").def;
         let v = values_from(
             &[("period_start".into(), Some("2026-12-01".into())), ("period_end".into(), Some("2026-01-01".into()))],
             &[],

@@ -512,12 +512,6 @@ describe("planner (rules, validate, guard)", () => {
     // No document has a type yet: one group, labelled "유형 없음" ("No type" in English).
     const byType = await run("doc_type");
     expect(byType.payload.groups.map((g) => [g.key, g.label, g.document_ids.length])).toEqual([["", "유형 없음", 3]]);
-
-    // A plan stored before 1.0.3 carries `target`: the validator clears it, and the result is the same one summary.
-    const stored = planOf(null);
-    (stored.operations[0] as { target?: string }).target = "each_doc";
-    expect(planner.validatePlan(stored, ctx, null)).toEqual([]);
-    expect(stored.operations[0]).toEqual({ op: "summarize", length: null });
   });
 
   // 1.0.3: `guard::per_document` / `split_check` — a sentence that asks for a summary of each document gets the

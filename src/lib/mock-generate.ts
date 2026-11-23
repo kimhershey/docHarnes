@@ -452,8 +452,8 @@ const TEMPLATES: TemplateInfo[] = [
   },
 ];
 
-/** The generic templates of 0.1 (hidden since 0.3.0): not listed, not keyword-matched from free text; explicit refs and old drafts still work. */
-const LEGACY_TEMPLATES: TemplateInfo[] = [
+/** The two generic layouts (공문 · 보고서): not listed, not keyword-matched from free text; `report` is the layout of a draft that names no form. */
+const GENERIC_TEMPLATES: TemplateInfo[] = [
   {
     kind: "official_letter",
     name_ko: "공문",
@@ -466,57 +466,6 @@ const LEGACY_TEMPLATES: TemplateInfo[] = [
     keywords: ["공문", "협조문", "안내문", "official letter", "letter"],
   },
   {
-    kind: "quotation",
-    name_ko: "견적서",
-    name_en: "Quotation",
-    description_ko: "수신처·공급자·품목(품명·규격·수량·단가·금액)·합계·유효기간.",
-    description_en: "Recipient, supplier, line items, total and validity.",
-    fields: [
-      tf("recipient", "수신", "Recipient", "string", true),
-      tf("date", "견적일자", "Date", "date", true),
-      tf("supplier", "공급자", "Supplier", "string", true),
-      tf("supplier_brn", "공급자 사업자등록번호", "Supplier business reg. no.", "brn"),
-      tf("valid_until", "유효기간", "Valid until", "date"),
-      tf("total", "합계금액", "Total", "amount", true),
-      tf("note", "비고", "Note"),
-      tf("items", "견적 품목", "Items", "table", true, ITEM_COLUMNS),
-    ],
-    sections_ko: ["견적 조건"],
-    sections_en: ["Terms"],
-    keywords: ["견적", "견적서", "quotation", "quote"],
-  },
-  {
-    kind: "transaction_statement",
-    name_ko: "거래명세서",
-    name_en: "Transaction statement",
-    description_ko: "공급자·공급받는자·거래일·품목·공급가액·세액·합계.",
-    description_en: "Supplier, buyer, date, items, supply / tax / grand total.",
-    fields: [
-      tf("date", "거래일자", "Date", "date", true),
-      tf("supplier", "공급자", "Supplier", "string", true),
-      tf("supplier_brn", "공급자 사업자등록번호", "Supplier business reg. no.", "brn"),
-      tf("buyer", "공급받는자", "Buyer", "string", true),
-      tf("supply_total", "공급가액 합계", "Supply total", "amount"),
-      tf("tax_total", "세액 합계", "Tax total", "amount"),
-      tf("total", "합계금액", "Grand total", "amount", true),
-      tf("items", "거래 품목", "Items", "table", true, [col("item_name", "품명"), col("spec", "규격"), col("quantity", "수량", "integer"), col("unit_price", "단가", "amount"), col("amount", "공급가액", "amount"), col("tax", "세액", "amount")]),
-    ],
-    sections_ko: ["비고"],
-    sections_en: ["Notes"],
-    keywords: ["거래명세서", "명세서", "transaction statement", "statement"],
-  },
-  {
-    kind: "contract",
-    name_ko: "계약서",
-    name_en: "Contract",
-    description_ko: "계약명·갑·을·계약기간·계약금액·지급조건과 조항 본문.",
-    description_en: "Title, parties, period, amount, payment terms and clauses.",
-    fields: [tf("title", "계약명", "Title", "string", true), tf("party_a", "갑", "Party A", "string", true), tf("party_b", "을", "Party B", "string", true), tf("contract_date", "계약일", "Contract date", "date", true), tf("period_start", "계약기간 시작", "Period start", "date"), tf("period_end", "계약기간 종료", "Period end", "date"), tf("amount", "계약금액", "Amount", "amount"), tf("payment_terms", "지급조건", "Payment terms")],
-    sections_ko: ["제1조 (목적)", "제2조 (계약 기간)", "제3조 (대금 및 지급)", "제4조 (기타)"],
-    sections_en: ["Article 1 (Purpose)", "Article 2 (Term)", "Article 3 (Payment)", "Article 4 (Miscellaneous)"],
-    keywords: ["계약", "계약서", "contract", "agreement"],
-  },
-  {
     kind: "report",
     name_ko: "보고서",
     name_en: "Report",
@@ -527,19 +476,8 @@ const LEGACY_TEMPLATES: TemplateInfo[] = [
     sections_en: ["Overview", "Status", "Analysis", "Conclusion"],
     keywords: ["보고서", "보고", "report", "정산서", "결과보고"],
   },
-  {
-    kind: "minutes",
-    name_ko: "회의록",
-    name_en: "Minutes",
-    description_ko: "회의명·일시·장소·참석자·안건·논의·결정 사항·후속 조치.",
-    description_en: "Meeting, date, place, attendees, agenda, discussion, decisions, actions.",
-    fields: [tf("title", "회의명", "Meeting", "string", true), tf("date", "일시", "Date", "date", true), tf("place", "장소", "Place"), tf("attendees", "참석자", "Attendees"), tf("recorder", "작성자", "Recorder")],
-    sections_ko: ["안건", "논의 내용", "결정 사항", "후속 조치"],
-    sections_en: ["Agenda", "Discussion", "Decisions", "Actions"],
-    keywords: ["회의록", "회의", "minutes", "meeting"],
-  },
 ];
-const ALL_TEMPLATES: TemplateInfo[] = [...TEMPLATES, ...LEGACY_TEMPLATES];
+const ALL_TEMPLATES: TemplateInfo[] = [...TEMPLATES, ...GENERIC_TEMPLATES];
 
 export function listTemplates(): TemplateInfo[] {
   return TEMPLATES;
@@ -583,7 +521,7 @@ export function resolveTemplate(req: DraftRequest): TemplateRef {
     if (schema && schema.source === "form") return { kind: "form", schema_id: schema.id, doc_id: schema.form_document_id };
     if (builtin) return { kind: "builtin", template: builtin.kind };
     if (schema) return { kind: "form", schema_id: schema.id, doc_id: schema.form_document_id };
-    // "A4 공문 형식": an explicit format reference may still name a hidden generic template.
+    // "A4 공문 형식": an explicit format reference may still name a generic layout.
     const byKeyword = matchKeywords(key, ALL_TEMPLATES);
     if (byKeyword) return { kind: "builtin", template: byKeyword };
   }
@@ -794,7 +732,7 @@ export function buildDraft(req: DraftRequest, knowledge: DraftCitation[] = []): 
   const title =
     keepEdited(previous, "title")?.value ??
     hints.title ??
-    (template.kind === "builtin" && (template.template === "quotation" || template.template === "estimate") && hints.recipient ? `${hints.recipient} ${layout.name}` : null) ??
+    (template.kind === "builtin" && template.template === "estimate" && hints.recipient ? `${hints.recipient} ${layout.name}` : null) ??
     (req.content.length <= 40 ? req.content.replace(/\s*(만들어|작성|써)[^ ]*$/u, "").trim() || layout.name : `${layout.name} — ${today()}`);
 
   // -- tables first (totals are derived from the item rows), then the scalar fields --------

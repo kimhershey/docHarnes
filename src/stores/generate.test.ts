@@ -29,8 +29,8 @@ const { persistDraft, resetGenerate, sameDraftContent, syncDraftWithStore, useGe
 const draft: Draft = {
   id: "d1",
   title: "견적서",
-  template: { kind: "builtin", template: "quotation" },
-  doc_type: "quotation",
+  template: { kind: "builtin", template: "estimate" },
+  doc_type: "estimate",
   fields: [{ key: "note", label: "비고", kind: "string", required: false, value: "", normalized: null, source: null, user_edited: false }],
   tables: [],
   body: [{ kind: "heading", level: 2, text: "개요" }, { kind: "paragraph", text: "처음 생성한 문단.", source: null }],
@@ -42,7 +42,7 @@ const draft: Draft = {
   created_at: "2026-11-11T08:00:00Z",
   updated_at: "2026-11-11T08:00:00Z",
   model: null,
-  request: { form_ref: "quotation", format_description: null, content: "노트북 10대", sources: [], output: "pdf", tone: "concise", length: "short", language: "ko", use_knowledge: false, feedback: "더 짧게", previous: null, excluded_sources: ["x"] },
+  request: { form_ref: "estimate", format_description: null, content: "노트북 10대", sources: [], output: "pdf", tone: "concise", length: "short", language: "ko", use_knowledge: false, feedback: "더 짧게", previous: null, excluded_sources: ["x"] },
   notes: [],
   saved_path: null,
   saved_doc_id: null,
@@ -81,7 +81,7 @@ describe("generate store", () => {
     expect(s.draft).toBe(draft);
     expect(s.handoff).toBe(true);
     expect(s.jobId).toBeNull();
-    expect(s.request).toMatchObject({ form_ref: "quotation", content: "노트북 10대", output: "pdf", feedback: null, previous: null, excluded_sources: ["x"] });
+    expect(s.request).toMatchObject({ form_ref: "estimate", content: "노트북 10대", output: "pdf", feedback: null, previous: null, excluded_sources: ["x"] });
     s.consumeHandoff();
     expect(state().handoff).toBe(false);
   });

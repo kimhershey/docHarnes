@@ -1697,7 +1697,6 @@ export interface PipelineChanged {
 
 export type OpKind =
   | "import"
-  | "set_inbox_watch"
   | "classify"
   | "set_doc_type"
   | "ocr"
@@ -1727,10 +1726,6 @@ export type OpKind =
   | "check_consistency"
   | "request_supplement"
   | "set_retention"
-  | "set_model"
-  | "set_profile"
-  | "set_theme"
-  | "set_language"
   | "set_setting"
   | "open"
   | "job"
@@ -1771,8 +1766,6 @@ export const EXPORT_FORMATS: ExportFormat[] = ["xlsx", "csv", "jsonl", "md", "pd
 export type ExportLayout = "sheet_per_type" | "sheet_per_project" | "single";
 export type ExportInclude = "evidence" | "confidence" | "status";
 export type ExportTarget = "fields" | "table" | "text";
-/** The pre-0.6.0 `set_setting` keys; still accepted as aliases of their catalog paths (`src/lib/settingsCatalog.ts`). */
-export type LegacySettingKey = "render_dpi" | "pii_masking" | "auto_pipeline" | "inbox_watch" | "review_threshold" | "cache_limit_gb" | "journal_days";
 /** `set_setting.key` (0.6.0): a settings-catalog path such as `processing.render_dpi`, or a legacy alias. */
 export type SettingKey = string;
 export type ReviewOp = "show" | "approve" | "reject" | "correct";
@@ -1800,7 +1793,6 @@ export type RetentionTarget = "documents" | "extractions" | "logs" | "journal" |
 /** One plan step (appendix D parameters; optional ones may be absent or null). */
 export type Op =
   | { op: "import"; source?: "inbox" | "folder" | "files"; path?: string | null; paths?: string[]; recursive?: boolean | null; auto_pipeline?: "none" | "classify" | "full" | null }
-  | { op: "set_inbox_watch"; enabled: boolean }
   | { op: "classify"; doc_types?: string[]; force?: boolean | null }
   | { op: "set_doc_type"; doc_type: string }
   | { op: "ocr"; pages?: number[]; profile?: "standard" | "fine_print" | null; force?: boolean | null }
@@ -1818,7 +1810,7 @@ export type Op =
   | { op: "answer"; question: string; cite?: boolean | null; knowledge?: boolean | null; mode?: AnswerMode | null; reply?: string | null }
   /**
    * One summary of the content of all the documents in scope (1.0.3, user decision 2026-11-22 — there is none per
-   * document; plans stored before may still carry `target: "each_doc" | "set"`, which is ignored).
+   * document).
    * `group_by` (0.8.0): one summary per project / document type / folder instead.
    * `topic` (1.0.2): what the summary is about — the passages about it are looked up and summarised ("AA에 대해서 요약해줘").
    */
@@ -1842,10 +1834,6 @@ export type Op =
   | { op: "check_consistency"; project?: string | null; rules?: string[] }
   | { op: "request_supplement"; project?: string | null; findings?: string[]; output?: OutputFormat | null }
   | { op: "set_retention"; item: RetentionTarget; days: number }
-  | { op: "set_model"; id: string }
-  | { op: "set_profile"; profile: Profile }
-  | { op: "set_theme"; theme: Theme }
-  | { op: "set_language"; lang: Language }
   | { op: "set_setting"; key: SettingKey; value: string | number | boolean }
   | { op: "open"; target: OpenTarget; ref: string }
   | { op: "job"; action: JobOp; id?: string | null }
@@ -2327,11 +2315,7 @@ export type TemplateKind =
   | "estimate"
   | "supplement_request"
   | "official_letter"
-  | "quotation"
-  | "transaction_statement"
-  | "contract"
-  | "report"
-  | "minutes";
+  | "report";
 
 export type TemplateRef = { kind: "builtin"; template: TemplateKind } | { kind: "form"; schema_id: string; doc_id?: string | null };
 
