@@ -1611,10 +1611,18 @@ pub struct ScopeFilter {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
     /// The kind of document (0.8.1): `work` = 업무 문서, `knowledge` = 참고 자료 ("참고 자료에서 …").
-    /// With a project, `knowledge` is the project's reference group. `None` = as before: a
-    /// project's work documents, or every kind without a project.
+    /// With a project, `knowledge` is the project's reference group and `work` its work documents,
+    /// whatever mark a document carries elsewhere. `None` = a project's work documents (and its
+    /// reference material with [`ScopeFilter::with_reference`]), or every kind without a project.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<RoleParam>,
+    /// 1.0.1 (user request 2026-11-17): inside a project, a plan that only reads documents — search,
+    /// questions, summaries, aggregates, exports — covers the project's 참고 자료 as well as its 업무
+    /// 문서. Set by the validator ([`validate::project_reference`]), never by the model; a plan that
+    /// changes documents keeps to the work documents. Not a restriction: it does not count for
+    /// [`ScopeFilter::is_empty`].
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub with_reference: bool,
 }
 
 impl ScopeFilter {

@@ -1016,3 +1016,168 @@ fn reference_material_of_a_project_is_part_of_the_project() {
         .unwrap();
     assert!(vars.contains_key("work") && vars.contains_key("ref") && !vars.contains_key("other"), "{:?}", vars.keys());
 }
+
+/// 1.0.1 (user report 2026-11-17 — "요약이 자꾸 실패", a card that said "참고 자료만 … 대상 문서 0건 …
+/// 선택한 문서가 없습니다", and "프로젝트 단위에서 모든 검색 및 요약 등 명령을 참고자료와 업무문서를 둘 다
+/// 포함하도록"): inside a project a plan that only reads covers the work documents and the reference
+/// material; a plan that changes documents keeps to the work documents.
+#[test]
+fn a_project_scope_reads_work_documents_and_reference_material() {
+    let w = World::new();
+    for (id, path, text) in [
+        ("work", "inbox/work.jpg", "한빛 포털 구축 계약서 납품 기한은 12월 말"),
+        ("ref", "inbox/ref.jpg", "정보보안 지침 납품 기한 준수 절차"),
+        ("shared", "inbox/shared.jpg", "공통 개발 표준 코딩 규칙"),
+        ("other", "inbox/other.jpg", "새봄 ERP 납품 기한은 3월 말"),
+    ] {
+        w.add_image(id, path);
+        w.db.with(|c| docs::set_page_text(c, id, 1, text)).unwrap();
+        index_document(&IndexDeps { db: &w.db, analyzer: &w.analyzer, options: Default::default() }, &w.doc(id), true)
+            .unwrap();
+    }
+    let project = |name: &str| {
+        w.db.with(|c| projects_repo::save_project(c, &ProjectInput { name: name.into(), ..Default::default() }))
+            .unwrap()
+    };
+    let (hanbit, saebom, empty) = (project("한빛 포털"), project("새봄 ERP"), project("빈 프로젝트"));
+    let reference = |p: &crate::projects::Project, doc: &str| {
+        w.db.with(|c| {
+            let group = crate::knowledge::repo::project_reference_group(c, &p.id, &p.name)?;
+            crate::knowledge::repo::add_docs_to_collection(c, &group.id, &[doc.to_string()])?;
+            docs::set_role(c, doc, DocumentRole::Knowledge)
+        })
+        .unwrap()
+    };
+    // 한빛: two work documents and one reference document. "shared" is a work document here and
+    // reference material of 새봄, so its own mark says "knowledge".
+    w.db.with(|c| projects_repo::add_documents(c, &hanbit.id, &["work".to_string(), "shared".to_string()])).unwrap();
+    reference(&hanbit, "ref");
+    reference(&saebom, "shared");
+    // 새봄 holds reference material only.
+    assert_eq!(w.doc("shared").role, DocumentRole::Knowledge);
+
+    let scope_of = |p: &crate::projects::Project, role: Option<RoleParam>, with_reference: bool| Scope {
+        filter: ScopeFilter { project_id: Some(p.id.clone()), role, with_reference, ..ScopeFilter::default() },
+        ..Scope::default()
+    };
+    let resolved = |scope: &Scope| -> Vec<String> {
+        w.db.with(|c| crate::planner::scope::resolve(c, scope)).unwrap().into_iter().map(|d| d.id).collect()
+    };
+    // Where the project holds a document decides its kind there, not the document's own mark.
+    assert_eq!(resolved(&scope_of(&hanbit, None, false)), vec!["shared", "work"]);
+    assert_eq!(resolved(&scope_of(&hanbit, Some(RoleParam::Work), false)), vec!["shared", "work"]);
+    assert_eq!(resolved(&scope_of(&hanbit, Some(RoleParam::Knowledge), false)), vec!["ref"]);
+    assert_eq!(resolved(&scope_of(&hanbit, None, true)), vec!["ref", "shared", "work"]);
+    // (a kind named in the scope wins over the flag)
+    assert_eq!(resolved(&scope_of(&hanbit, Some(RoleParam::Knowledge), true)), vec!["ref"]);
+    assert_eq!(resolved(&scope_of(&saebom, None, false)), Vec::<String>::new());
+    assert_eq!(resolved(&scope_of(&saebom, None, true)), vec!["shared"]);
+    // Without a project: the mark, or a place in a reference group.
+    w.db.with(|c| docs::set_role(c, "ref", DocumentRole::Work)).unwrap();
+    let everywhere =
+        Scope { filter: ScopeFilter { role: Some(RoleParam::Knowledge), ..Default::default() }, ..Default::default() };
+    assert_eq!(resolved(&everywhere), vec!["ref", "shared"]);
+    w.db.with(|c| docs::set_role(c, "ref", DocumentRole::Knowledge)).unwrap();
+
+    // The validator sets the flag for plans that only read, and for nothing else.
+    let ctx = |open: Option<&str>| PlanContext {
+        projects: [&hanbit, &saebom, &empty]
+            .iter()
+            .map(|p| ProjectSummary { id: p.id.clone(), name: p.name.clone(), status: "active".into() })
+            .collect(),
+        scope_project: open.map(str::to_string),
+        ..PlanContext::default()
+    };
+    let summarize = || Op::Summarize { target: Some(SummarizeTarget::Set), length: None, group_by: None };
+    let validated = |ops: Vec<Op>, scope: Scope, open: Option<&str>| {
+        let mut plan = plan_of(ops, scope);
+        validate::validate(&mut plan, &ctx(open), None);
+        plan
+    };
+    // … the open project is the default scope: both kinds.
+    let plan = validated(vec![summarize()], Scope::default(), Some(&hanbit.id));
+    assert_eq!(plan.scope.filter.project_id.as_deref(), Some(hanbit.id.as_str()));
+    assert!(plan.scope.filter.with_reference);
+    assert!(!plan.scope.is_empty());
+    // … a kind in the scope: that kind only.
+    let plan = validated(vec![summarize()], scope_of(&hanbit, Some(RoleParam::Knowledge), false), None);
+    assert!(!plan.scope.filter.with_reference);
+    // … a plan that changes documents: the work documents, as before.
+    let plan = validated(vec![tag("확인")], scope_of(&hanbit, None, true), None);
+    assert!(!plan.scope.filter.with_reference, "a plan that changes documents does not reach the reference material");
+    let plan = validated(vec![summarize(), tag("확인")], scope_of(&hanbit, None, false), None);
+    assert!(!plan.scope.filter.with_reference);
+    // … no project: nothing to add.
+    let plan = validated(vec![summarize()], Scope::default(), None);
+    assert!(!plan.scope.filter.with_reference && plan.scope.filter.project_id.is_none());
+    // The flag is no restriction of its own and is left out of a plan's JSON when it is off.
+    let bare = ScopeFilter { with_reference: true, ..ScopeFilter::default() };
+    assert!(bare.is_empty());
+    assert_eq!(serde_json::to_value(ScopeFilter::default()).unwrap(), json!({}));
+    assert_eq!(serde_json::to_value(&bare).unwrap(), json!({ "with_reference": true }));
+
+    // A summary of the project: every document it holds, of either kind.
+    let names = |ex: &exec::PlanExecution| -> Vec<String> {
+        ex.steps[0].payload["summaries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    w.chat.push_ocr("- 요약 [1]");
+    let plan = validated(vec![summarize()], Scope::default(), Some(&hanbit.id));
+    let card = preview(&w, &plan);
+    assert_eq!((card.document_count, card.reference_count), (3, 1), "the card says how many are reference material");
+    assert_eq!(preview(&w, &validated(vec![tag("확인")], scope_of(&hanbit, None, false), None)).reference_count, 0);
+    let ex = run(&w, &plan);
+    assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
+    assert_eq!(names(&ex), vec!["ref.jpg", "shared.jpg", "work.jpg"]);
+    assert_eq!(ex.steps[0].payload["groups"].as_array().unwrap().len(), 1);
+    // A project that holds reference material only is summarised too ("선택한 문서가 없습니다" before).
+    let ex = run(&w, &validated(vec![summarize()], Scope::default(), Some(&saebom.id)));
+    assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
+    assert_eq!(names(&ex), vec!["shared.jpg"]);
+    // "참고 자료만" in a project without reference material: the reason says what is missing.
+    let ex = run(&w, &validated(vec![summarize()], scope_of(&empty, Some(RoleParam::Knowledge), false), None));
+    assert_eq!(ex.steps[0].status, StepStatus::Failed);
+    assert!(ex.steps[0].error.as_deref().unwrap().contains("no_reference_in_project"), "{:?}", ex.steps[0].error);
+    let ex = run(&w, &validated(vec![summarize()], Scope::default(), Some(&empty.id)));
+    assert!(ex.steps[0].error.as_deref().unwrap().contains("no_documents"), "{:?}", ex.steps[0].error);
+
+    // A document the model could not summarise does not end the step: the others are summarised and
+    // the one that failed is named.
+    w.chat.fail_queue.lock().unwrap().push("/v1/chat/completions: HTTP 500: slot failed".into());
+    let ex = run(&w, &validated(vec![summarize()], Scope::default(), Some(&hanbit.id)));
+    assert_eq!(ex.steps[0].status, StepStatus::Done, "{:?}", ex.steps[0]);
+    assert_eq!(names(&ex), vec!["shared.jpg", "work.jpg"]);
+    let failed = ex.steps[0].payload["failed"].as_array().unwrap().clone();
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0]["name"], json!("ref.jpg"));
+    assert!(failed[0]["error"].as_str().unwrap().contains("HTTP 500"), "{failed:?}");
+    assert!(ex.steps[0].summary.contains("요약하지 못한 문서 1건"), "{}", ex.steps[0].summary);
+    assert!(ex.steps[0].payload.get("skipped").is_none(), "a failure is not \"no text\"");
+    // An engine that is gone stops the step at once, as before.
+    *w.chat.fail_with.lock().unwrap() = Some("POST /v1/chat/completions: io: Connection refused (os error 111)".into());
+    let ex = run(&w, &validated(vec![summarize()], Scope::default(), Some(&hanbit.id)));
+    assert_eq!(ex.steps[0].status, StepStatus::Failed);
+    *w.chat.fail_with.lock().unwrap() = None;
+
+    // A question inside the project finds the reference material as well (it did before: the search
+    // scope adds the project's reference group by itself).
+    let plan = validated(
+        vec![Op::Search { query: "납품 기한".into(), mode: None, top_k: None, group_by: None }],
+        Scope::default(),
+        Some(&hanbit.id),
+    );
+    let ex = run(&w, &plan);
+    let mut hits: Vec<String> = ex.steps[0].payload["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["document_id"].as_str().unwrap().to_string())
+        .collect();
+    hits.sort();
+    hits.dedup();
+    assert_eq!(hits, vec!["ref", "work"]);
+}

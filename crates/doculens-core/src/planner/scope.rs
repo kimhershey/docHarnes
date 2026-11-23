@@ -70,18 +70,38 @@ pub fn resolve(conn: &Connection, scope: &Scope) -> rusqlite::Result<Vec<Documen
     let role = f.role.map(super::RoleParam::as_role);
     if let Some(pid) = f.project_id.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
         // A project holds its work documents (`project_documents`) and its 참고 자료 (its reference
-        // group): the latter only when the scope asks for reference material.
-        let members: std::collections::HashSet<String> = if role == Some(DocumentRole::Knowledge) {
-            crate::knowledge::repo::project_reference_doc_ids(conn, pid)?
-        } else {
+        // group). Which of the two a document is here is decided by where the project holds it, not
+        // by the document's own mark: a regulation that is reference material of another project is
+        // still this project's work document (1.0.1 — the mark used to drop it from "업무 문서만").
+        let work = || -> rusqlite::Result<std::collections::HashSet<String>> {
             let mut st = conn.prepare_cached("SELECT document_id FROM project_documents WHERE project_id = ?1")?;
             let rows = st.query_map([pid], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
-            rows
+            Ok(rows)
+        };
+        let members = match role {
+            Some(DocumentRole::Knowledge) => crate::knowledge::repo::project_reference_doc_ids(conn, pid)?,
+            Some(_) => work()?,
+            // 1.0.1: a plan that only reads covers both (`ScopeFilter::with_reference`).
+            None if f.with_reference => {
+                let mut both = work()?;
+                both.extend(crate::knowledge::repo::project_reference_doc_ids(conn, pid)?);
+                both
+            }
+            None => work()?,
         };
         docs.retain(|d| members.contains(&d.id));
-    }
-    if let Some(role) = role {
-        docs.retain(|d| d.role == role);
+        if let Some(role) = role.filter(|r| !matches!(r, DocumentRole::Work | DocumentRole::Knowledge)) {
+            docs.retain(|d| d.role == role);
+        }
+    } else if let Some(role) = role {
+        // Without a project the mark decides — and, for reference material, a place in a reference
+        // group (the mark follows the groups, but a document may have been marked by hand since).
+        let grouped = if role == DocumentRole::Knowledge {
+            crate::knowledge::repo::reference_doc_ids(conn)?
+        } else {
+            std::collections::HashSet::new()
+        };
+        docs.retain(|d| d.role == role || grouped.contains(&d.id));
     }
     if let Some((from, to)) = f.date_range() {
         docs.retain(|d| {
