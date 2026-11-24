@@ -1,0 +1,734 @@
+{
+  "schema_version": 1,
+  "kind": "planner",
+  "generated_at": "2026-11-24T07:41:53Z",
+  "golden": "eval/results/planner-real-model/polish-1.0.6.golden.json",
+  "golden_count": 7,
+  "context": "eval/results/planner-real-model/topic-summary-1.0.2-open-document.context.json",
+  "today": "2026-11-08",
+  "engine": {
+    "binary": "engine/bin/llama-server",
+    "version": null,
+    "build_number": null,
+    "backend": "cpu",
+    "tier": "cpu_only",
+    "profile": "balanced",
+    "model": "gemma4-e4b-q4km",
+    "model_display": "Gemma 4 E4B (Q4_K_M, 저여유)",
+    "quantization": "Q4_K_M",
+    "architecture": "gemma4",
+    "has_vision": true,
+    "ctx": 8192,
+    "model_memory_bytes": null,
+    "mmproj_bytes": 990372672,
+    "devices": [],
+    "vram_used_mib": null,
+    "load_ms": 63863
+  },
+  "mode": "model",
+  "model": "gemma4-e4b-q4km",
+  "total": 7,
+  "correct": 1,
+  "accuracy": 0.14285714285714285,
+  "by_category": {
+    "ko": {
+      "total": 7,
+      "correct": 1,
+      "accuracy": 0.14285714285714285
+    }
+  },
+  "by_intent": {
+    "answer": {
+      "total": 7,
+      "correct": 1,
+      "accuracy": 0.14285714285714285
+    }
+  },
+  "by_kind": {
+    "question": {
+      "total": 7,
+      "correct": 1,
+      "accuracy": 0.14285714285714285
+    }
+  },
+  "by_source": {
+    "model": 7
+  },
+  "by_cause": {
+    "rule_clarified": 3,
+    "wrong_ops": 3
+  },
+  "unasked_changes": 0,
+  "latency": {
+    "p50_ms": 162605.01909800002,
+    "p95_ms": 254859.894186,
+    "mean_ms": 159640.86259571425
+  },
+  "latency_by_kind": {
+    "question": {
+      "p50_ms": 162605.01909800002,
+      "p95_ms": 254859.894186,
+      "mean_ms": 159640.86259571425
+    }
+  },
+  "items": [
+    {
+      "id": "d-1",
+      "category": "ko",
+      "text": "이 문장 다듬어줘: 본 계약의 납품 기한은 계약 체결일로부터 60일로 하며 지체 시에는 지체상금을 부과하는 것으로 한다고 되어 있음",
+      "correct": true,
+      "source": "model",
+      "intent": "answer",
+      "ops": [
+        "answer"
+      ],
+      "summary": "보내 주신 글을 문서 검색 없이 요청대로 다듬습니다",
+      "confidence": 0.95,
+      "latency_ms": 162784.613608,
+      "kind": "question",
+      "requires_confirmation": false,
+      "notes": [
+        "text_only_answer"
+      ],
+      "attempts": 1,
+      "prompt_tokens": 3258,
+      "completion_tokens": 173,
+      "mismatches": [],
+      "operations": [
+        {
+          "cite": false,
+          "knowledge": false,
+          "op": "answer",
+          "question": "이 문장 다듬어줘: 본 계약의 납품 기한은 계약 체결일로부터 60일로 하며 지체 시에는 지체상금을 부과하는 것으로 한다고 되어 있음"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"제공된 문장을 다듬어 자연스럽고 명확하게 수정합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"draft_document\",\n  \"scope\": {},\n  \"operations\": [\n    {\n      \"op\": \"draft_document\",\n      \"content\": \"본 계약의 납품 기한은 계약 체결일로부터 60일로 하며 지체 시에는 지체상금을 부과하는 것으로 한다고 되어 있음\",\n      \"output\": \"md\",\n      \"tone\": \"concise\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.95\n}"
+    },
+    {
+      "id": "d-2",
+      "category": "ko",
+      "text": "방금 답변 좀 더 자연스럽게 다듬어줘",
+      "correct": false,
+      "cause": "wrong_ops",
+      "source": "model",
+      "intent": "edit_text",
+      "ops": [
+        "edit_text"
+      ],
+      "summary": "사용자가 이전 답변의 텍스트를 더 자연스럽게 다듬어 달라고 요청함",
+      "confidence": 0.9,
+      "latency_ms": 254859.894186,
+      "kind": "question",
+      "requires_confirmation": true,
+      "attempts": 1,
+      "prompt_tokens": 3718,
+      "completion_tokens": 144,
+      "mismatches": [
+        {
+          "kind": "intent",
+          "expected": "answer",
+          "produced": "edit_text"
+        },
+        {
+          "kind": "ops",
+          "expected": [
+            "answer"
+          ],
+          "produced": [
+            "edit_text"
+          ]
+        }
+      ],
+      "operations": [
+        {
+          "find": "방금 답변",
+          "op": "edit_text",
+          "replace": "더 자연스러운 표현"
+        }
+      ],
+      "scope": {
+        "doc_ids": [
+          "d1a2"
+        ],
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"사용자가 이전 답변의 텍스트를 더 자연스럽게 다듬어 달라고 요청함\",\n  \"unmet\": \"\",\n  \"intent\": \"edit_text\",\n  \"scope\": {},\n  \"operations\": [\n    {\n      \"op\": \"edit_text\",\n      \"find\": \"방금 답변\",\n      \"replace\": \"더 자연스러운 표현\",\n      \"pages\": []\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.9\n}"
+    },
+    {
+      "id": "d-3",
+      "category": "ko",
+      "text": "위 내용 수정해줘",
+      "correct": false,
+      "cause": "rule_clarified",
+      "source": "model",
+      "intent": "clarify",
+      "ops": [
+        "clarify"
+      ],
+      "summary": "사용자가 이전 명령을 수정하라고 요청했지만, 구체적인 수정 내용이 제공되지 않았습니다.",
+      "confidence": 0.5,
+      "latency_ms": 100232.410601,
+      "kind": "question",
+      "requires_confirmation": false,
+      "unmet": "구체적인 수정 지시가 없습니다.",
+      "attempts": 1,
+      "prompt_tokens": 3704,
+      "completion_tokens": 128,
+      "mismatches": [
+        {
+          "kind": "intent",
+          "expected": "answer",
+          "produced": "clarify"
+        },
+        {
+          "kind": "ops",
+          "expected": [
+            "answer"
+          ],
+          "produced": [
+            "clarify"
+          ]
+        }
+      ],
+      "operations": [
+        {
+          "op": "clarify",
+          "question": "어떤 부분을 어떻게 수정해야 할지 구체적으로 알려주세요."
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\"summary\":\"사용자가 이전 명령을 수정하라고 요청했지만, 구체적인 수정 내용이 제공되지 않았습니다.\",\"unmet\":\"구체적인 수정 지시가 없습니다.\",\"intent\":\"clarify\",\"scope\":{},\"operations\":[{\"op\":\"clarify\",\"question\":\"어떤 부분을 어떻게 수정해야 할지 구체적으로 알려주세요.\"}],\"requires_confirmation\":false,\"confidence\":0.5,\"clarification_question\":\"어떤 부분을 어떻게 수정해야 할지 구체적으로 알려주세요.\"}"
+    },
+    {
+      "id": "d-4",
+      "category": "ko",
+      "text": "더 간결하게 수정해줘",
+      "correct": false,
+      "cause": "rule_clarified",
+      "source": "model",
+      "intent": "clarify",
+      "ops": [
+        "clarify"
+      ],
+      "summary": "사용자가 이전 명령을 더 간결하게 수정해달라고 요청했지만, 구체적인 수정 방향이 제시되지 않았으므로, 이전 명령의 의도를 파악하기 위해 추가적인 정보가 필요합니다.",
+      "confidence": 0.6,
+      "latency_ms": 162605.01909800002,
+      "kind": "question",
+      "requires_confirmation": false,
+      "unmet": "",
+      "attempts": 1,
+      "prompt_tokens": 3708,
+      "completion_tokens": 177,
+      "mismatches": [
+        {
+          "kind": "intent",
+          "expected": "answer",
+          "produced": "clarify"
+        },
+        {
+          "kind": "ops",
+          "expected": [
+            "answer"
+          ],
+          "produced": [
+            "clarify"
+          ]
+        }
+      ],
+      "operations": [
+        {
+          "op": "clarify",
+          "question": "어떤 명령을 더 간결하게 수정해야 하나요? 이전 명령을 다시 말씀해주시거나, 수정하고 싶은 내용을 구체적으로 알려주세요."
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"사용자가 이전 명령을 더 간결하게 수정해달라고 요청했지만, 구체적인 수정 방향이 제시되지 않았으므로, 이전 명령의 의도를 파악하기 위해 추가적인 정보가 필요합니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"clarify\",\n  \"scope\": {},\n  \"operations\": [\n    {\n      \"op\": \"clarify\",\n      \"question\": \"어떤 명령을 더 간결하게 수정해야 하나요? 이전 명령을 다시 말씀해주시거나, 수정하고 싶은 내용을 구체적으로 알려주세요.\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.6\n}"
+    },
+    {
+      "id": "d-5",
+      "category": "ko",
+      "text": "요구사항 부분을 좀 다듬어줘",
+      "correct": false,
+      "cause": "wrong_ops",
+      "source": "model",
+      "intent": "open",
+      "ops": [
+        "open"
+      ],
+      "summary": "요구사항 정의서의 요구사항 부분을 다듬어 달라는 요청입니다.",
+      "confidence": 0.7,
+      "latency_ms": 176990.872174,
+      "kind": "question",
+      "requires_confirmation": false,
+      "attempts": 1,
+      "prompt_tokens": 3712,
+      "completion_tokens": 184,
+      "mismatches": [
+        {
+          "kind": "intent",
+          "expected": "answer",
+          "produced": "open"
+        },
+        {
+          "kind": "ops",
+          "expected": [
+            "answer"
+          ],
+          "produced": [
+            "open"
+          ]
+        }
+      ],
+      "operations": [
+        {
+          "op": "open",
+          "ref": "documents",
+          "target": "folder"
+        }
+      ],
+      "scope": {
+        "filter": {
+          "doc_type": "srs"
+        }
+      },
+      "raw": "{\n  \"summary\": \"요구사항 정의서의 요구사항 부분을 다듬어 달라는 요청입니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"edit_text\",\n  \"scope\": {\n    \"filter\": {\n      \"doc_type\": \"srs\"\n    }\n  },\n  \"operations\": [\n    {\n      \"op\": \"open\",\n      \"target\": \"folder\",\n      \"ref\": \"documents\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.7,\n  \"clarification_question\": \"어떤 요구사항 정의서의 어떤 부분을 다듬어야 하나요? (문서 ID 또는 파일 이름 필요)\"\n}"
+    },
+    {
+      "id": "d-6",
+      "category": "ko",
+      "text": "이 내용으로 보고서 작성해줘",
+      "correct": false,
+      "cause": "rule_clarified",
+      "source": "model",
+      "intent": "clarify",
+      "ops": [
+        "clarify"
+      ],
+      "summary": "사용자가 제공한 내용으로 보고서를 작성하도록 요청했지만, 실제 내용이 누락되어 명확한 작업을 수행할 수 없습니다.",
+      "confidence": 0.5,
+      "latency_ms": 121031.209156,
+      "kind": "question",
+      "requires_confirmation": false,
+      "unmet": "보고서 작성을 위한 내용이 제공되지 않았습니다.",
+      "attempts": 1,
+      "prompt_tokens": 3188,
+      "completion_tokens": 174,
+      "mismatches": [
+        {
+          "kind": "intent",
+          "expected": "answer",
+          "produced": "clarify"
+        },
+        {
+          "kind": "ops",
+          "expected": [
+            "answer"
+          ],
+          "produced": [
+            "clarify"
+          ]
+        }
+      ],
+      "operations": [
+        {
+          "op": "clarify",
+          "question": "보고서를 작성할 내용을 제공해 주시겠어요?"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"사용자가 제공한 내용으로 보고서를 작성하도록 요청했지만, 실제 내용이 누락되어 명확한 작업을 수행할 수 없습니다.\",\n  \"unmet\": \"보고서 작성을 위한 내용이 제공되지 않았습니다.\",\n  \"intent\": \"clarify\",\n  \"scope\": {},\n  \"operations\": [\n    {\n      \"op\": \"clarify\",\n      \"question\": \"보고서를 작성할 내용을 제공해 주시겠어요?\"\n    }\n  ],\n  \"requires_confirmation\": false,\n  \"confidence\": 0.5,\n  \"clarification_question\": \"보고서를 작성할 내용을 제공해 주시겠어요?\"\n}"
+    },
+    {
+      "id": "d-7",
+      "category": "ko",
+      "text": "다듬어서 새 문서로 만들어줘",
+      "correct": false,
+      "cause": "wrong_ops",
+      "source": "model",
+      "intent": "draft_document",
+      "ops": [
+        "draft_document"
+      ],
+      "summary": "사용자가 제공한 내용을 다듬어 새로운 문서로 생성하라는 요청입니다.",
+      "confidence": 0.7,
+      "latency_ms": 138982.019347,
+      "kind": "question",
+      "requires_confirmation": true,
+      "attempts": 1,
+      "prompt_tokens": 4276,
+      "completion_tokens": 147,
+      "mismatches": [
+        {
+          "kind": "intent",
+          "expected": "answer",
+          "produced": "draft_document"
+        },
+        {
+          "kind": "ops",
+          "expected": [
+            "answer"
+          ],
+          "produced": [
+            "draft_document"
+          ]
+        }
+      ],
+      "operations": [
+        {
+          "content": "<command>\n다듬어서 새 문서로 만들어줘\n</command>",
+          "op": "draft_document",
+          "output": "hwpx"
+        }
+      ],
+      "scope": {
+        "filter": {}
+      },
+      "raw": "{\n  \"summary\": \"사용자가 제공한 내용을 다듬어 새로운 문서로 생성하라는 요청입니다.\",\n  \"unmet\": \"\",\n  \"intent\": \"draft_document\",\n  \"scope\": {},\n  \"operations\": [\n    {\n      \"op\": \"draft_document\",\n      \"content\": \"<command>\\n다듬어서 새 문서로 만들어줘\\n</command>\",\n      \"output\": \"hwpx\"\n    }\n  ],\n  \"requires_confirmation\": true,\n  \"confidence\": 0.7\n}"
+    }
+  ],
+  "rules_only": {
+    "mode": "rules",
+    "total": 7,
+    "correct": 2,
+    "accuracy": 0.2857142857142857,
+    "by_category": {
+      "ko": {
+        "total": 7,
+        "correct": 2,
+        "accuracy": 0.2857142857142857
+      }
+    },
+    "by_intent": {
+      "answer": {
+        "total": 7,
+        "correct": 2,
+        "accuracy": 0.2857142857142857
+      }
+    },
+    "by_kind": {
+      "question": {
+        "total": 7,
+        "correct": 2,
+        "accuracy": 0.2857142857142857
+      }
+    },
+    "by_source": {
+      "none": 3,
+      "rules": 4
+    },
+    "by_cause": {
+      "no_rule": 3,
+      "wrong_ops": 2
+    },
+    "unasked_changes": 0,
+    "items": [
+      {
+        "id": "d-1",
+        "category": "ko",
+        "text": "이 문장 다듬어줘: 본 계약의 납품 기한은 계약 체결일로부터 60일로 하며 지체 시에는 지체상금을 부과하는 것으로 한다고 되어 있음",
+        "correct": false,
+        "cause": "no_rule",
+        "source": "none",
+        "intent": "clarify",
+        "ops": [
+          "clarify"
+        ],
+        "summary": "규칙으로 해석할 수 없는 명령이고 모델이 로드되지 않아 플랜을 만들 수 없습니다. 모델을 로드하거나 명령을 바꿔 주세요.",
+        "confidence": 0.0,
+        "latency_ms": 24.030317999999998,
+        "kind": "question",
+        "requires_confirmation": false,
+        "notes": [
+          "no_model"
+        ],
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [
+          {
+            "kind": "intent",
+            "expected": "answer",
+            "produced": "clarify"
+          },
+          {
+            "kind": "ops",
+            "expected": [
+              "answer"
+            ],
+            "produced": [
+              "clarify"
+            ]
+          }
+        ],
+        "operations": [
+          {
+            "op": "clarify",
+            "question": "규칙으로 해석할 수 없는 명령이고 모델이 로드되지 않아 플랜을 만들 수 없습니다. 모델을 로드하거나 명령을 바꿔 주세요."
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "d-2",
+        "category": "ko",
+        "text": "방금 답변 좀 더 자연스럽게 다듬어줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
+        "confidence": 0.7,
+        "latency_ms": 6.963067,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "cite": true,
+            "op": "answer",
+            "question": "방금 답변 좀 더 자연스럽게 다듬어줘"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "d-3",
+        "category": "ko",
+        "text": "위 내용 수정해줘",
+        "correct": false,
+        "cause": "no_rule",
+        "source": "none",
+        "intent": "clarify",
+        "ops": [
+          "clarify"
+        ],
+        "summary": "규칙으로 해석할 수 없는 명령이고 모델이 로드되지 않아 플랜을 만들 수 없습니다. 모델을 로드하거나 명령을 바꿔 주세요.",
+        "confidence": 0.0,
+        "latency_ms": 3.23517,
+        "kind": "question",
+        "requires_confirmation": false,
+        "notes": [
+          "no_model"
+        ],
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [
+          {
+            "kind": "intent",
+            "expected": "answer",
+            "produced": "clarify"
+          },
+          {
+            "kind": "ops",
+            "expected": [
+              "answer"
+            ],
+            "produced": [
+              "clarify"
+            ]
+          }
+        ],
+        "operations": [
+          {
+            "op": "clarify",
+            "question": "규칙으로 해석할 수 없는 명령이고 모델이 로드되지 않아 플랜을 만들 수 없습니다. 모델을 로드하거나 명령을 바꿔 주세요."
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "d-4",
+        "category": "ko",
+        "text": "더 간결하게 수정해줘",
+        "correct": false,
+        "cause": "no_rule",
+        "source": "none",
+        "intent": "clarify",
+        "ops": [
+          "clarify"
+        ],
+        "summary": "규칙으로 해석할 수 없는 명령이고 모델이 로드되지 않아 플랜을 만들 수 없습니다. 모델을 로드하거나 명령을 바꿔 주세요.",
+        "confidence": 0.0,
+        "latency_ms": 2.049697,
+        "kind": "question",
+        "requires_confirmation": false,
+        "notes": [
+          "no_model"
+        ],
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [
+          {
+            "kind": "intent",
+            "expected": "answer",
+            "produced": "clarify"
+          },
+          {
+            "kind": "ops",
+            "expected": [
+              "answer"
+            ],
+            "produced": [
+              "clarify"
+            ]
+          }
+        ],
+        "operations": [
+          {
+            "op": "clarify",
+            "question": "규칙으로 해석할 수 없는 명령이고 모델이 로드되지 않아 플랜을 만들 수 없습니다. 모델을 로드하거나 명령을 바꿔 주세요."
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "d-5",
+        "category": "ko",
+        "text": "요구사항 부분을 좀 다듬어줘",
+        "correct": true,
+        "source": "rules",
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "summary": "지식 베이스·문서에서 근거를 찾아 답합니다",
+        "confidence": 0.7,
+        "latency_ms": 2.676796,
+        "kind": "question",
+        "requires_confirmation": false,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [],
+        "operations": [
+          {
+            "cite": true,
+            "op": "answer",
+            "question": "요구사항 부분을 좀 다듬어줘"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "d-6",
+        "category": "ko",
+        "text": "이 내용으로 보고서 작성해줘",
+        "correct": false,
+        "cause": "wrong_ops",
+        "source": "rules",
+        "intent": "draft_document",
+        "ops": [
+          "draft_document"
+        ],
+        "summary": "보고서 초안을 만들어 문서 생성 화면에서 보여 줍니다",
+        "confidence": 0.82,
+        "latency_ms": 4.312687,
+        "kind": "question",
+        "requires_confirmation": true,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [
+          {
+            "kind": "intent",
+            "expected": "answer",
+            "produced": "draft_document"
+          },
+          {
+            "kind": "ops",
+            "expected": [
+              "answer"
+            ],
+            "produced": [
+              "draft_document"
+            ]
+          }
+        ],
+        "operations": [
+          {
+            "content": "이 내용으로 보고서 작성해줘",
+            "form_ref": "report",
+            "op": "draft_document",
+            "sources": [
+              "d1a2"
+            ]
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      },
+      {
+        "id": "d-7",
+        "category": "ko",
+        "text": "다듬어서 새 문서로 만들어줘",
+        "correct": false,
+        "cause": "wrong_ops",
+        "source": "rules",
+        "intent": "draft_document",
+        "ops": [
+          "draft_document"
+        ],
+        "summary": "문서 초안을 만들어 문서 생성 화면에서 보여 줍니다",
+        "confidence": 0.82,
+        "latency_ms": 2.6802789999999996,
+        "kind": "question",
+        "requires_confirmation": true,
+        "attempts": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "mismatches": [
+          {
+            "kind": "intent",
+            "expected": "answer",
+            "produced": "draft_document"
+          },
+          {
+            "kind": "ops",
+            "expected": [
+              "answer"
+            ],
+            "produced": [
+              "draft_document"
+            ]
+          }
+        ],
+        "operations": [
+          {
+            "content": "다듬어서 새 문서로 만들어줘",
+            "op": "draft_document"
+          }
+        ],
+        "scope": {
+          "filter": {}
+        }
+      }
+    ]
+  }
+}

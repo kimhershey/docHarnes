@@ -2019,6 +2019,8 @@ export interface PlanContext {
   history: ConversationTurn[];
   /** Draft open on the 문서 작성 screen (0.7.0; default target of `revise_draft`). */
   draft_id?: string | null;
+  /** 1.0.6: the assistant's last reply in full, while a sentence is planned (not in the context a response carries). */
+  last_reply?: string | null;
 }
 
 export interface ProjectSummary {
@@ -2043,6 +2045,12 @@ export interface UiPlanContext {
   project_id?: string | null;
   /** Earlier turns of the assistant conversation (oldest first). */
   history?: ConversationTurn[];
+  /**
+   * 1.0.6: the assistant's last reply of the conversation in full — the turns of `history` are cut — for
+   * "방금 답변 다듬어줘" (`conversation.ts::lastReply`). `""` = there is none. Sent with the planning call only;
+   * never kept on a card.
+   */
+  last_reply?: string | null;
   /** Interpretation mode (omitted = model first). */
   routing?: PlanMode | null;
   /** Draft open on the 문서 작성 screen (0.7.0): the default target of `revise_draft`. */

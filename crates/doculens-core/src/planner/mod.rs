@@ -1765,6 +1765,12 @@ pub struct PlanContext {
     /// ("그것도 엑셀로", "같은 폴더로").
     #[serde(default)]
     pub history: Vec<ConversationTurn>,
+    /// 1.0.6: the assistant's last reply in the conversation, in full — the text "방금 답변 다듬어줘"
+    /// works on (`guard::polish_request`). The turns of `history` are cut for the prompt, so the
+    /// shell sends the reply whole: `Some("")` says that there is none, `None` (a context without
+    /// the field) leaves the last assistant turn of `history` as the reply. Never part of a prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_reply: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1796,6 +1802,7 @@ impl Default for PlanContext {
             scope_project: None,
             draft_id: None,
             history: Vec::new(),
+            last_reply: None,
         }
     }
 }

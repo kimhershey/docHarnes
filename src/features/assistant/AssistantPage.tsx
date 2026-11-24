@@ -40,7 +40,7 @@ import { useWorkspaceStore } from "@/stores/workspace";
 import { planAnswerScope, sameSearchScope } from "./answerScope";
 import { choicesOf, chosenResponse, plannedTextOf } from "./choices";
 import { ClarifyCard } from "./ClarifyCard";
-import { conversationTurns } from "./conversation";
+import { conversationTurns, lastReply } from "./conversation";
 import { clarificationQuestion, isPlanExecution, planKind, requiresConfirmation, sourceLabel, uiContextFor, unmetRequestNote } from "./describePlan";
 import { EvidenceCard } from "./evidence";
 import { ExecutionCard } from "./ExecutionCard";
@@ -417,7 +417,8 @@ export function AssistantPage() {
     setPlanningSession(sid);
     let response: PlanResponse;
     try {
-      response = await api.plannerPlan(composed, context);
+      // (the last reply in full goes with the planning call only — "방금 답변 다듬어줘"; the card keeps `context`)
+      response = await api.plannerPlan(composed, { ...context, last_reply: lastReply(messagesOf(sid)) });
     } catch (e) {
       setPlanningSession(null);
       push(sid, { role: "assistant", kind: "error", text: describeError(e, t) });
@@ -599,7 +600,9 @@ export function AssistantPage() {
     setPlanningSession(sid);
     let response: PlanResponse;
     try {
-      response = await api.plannerPlan(v, context);
+      // 1.0.6: the turns of `history` are cut for the prompt; a request to polish "방금 답변" works on the whole
+      // reply, which goes with this call only (the card keeps `context`, without it).
+      response = await api.plannerPlan(v, { ...context, last_reply: lastReply(messagesOf(sid)) });
     } catch (e) {
       setPlanningSession(null);
       // Planner unavailable: questions still reach the knowledge base; anything else is reported.

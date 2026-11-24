@@ -43,7 +43,7 @@ import {
   type VersionInfo,
   type VersionInput,
 } from "./types";
-import { carriedText } from "./carried-text";
+import { textToWorkOn } from "./carried-text";
 
 const KEY = "doculens.mock.knowledge";
 const EMBEDDING_FLAG = "doculens.mock.embedding"; // "1" = EmbeddingGemma 2 installed + loaded
@@ -676,7 +676,8 @@ async function answer(req: AnswerRequest, requestId: string): Promise<Answer> {
   }
   if (req.retrieve === false) {
     // Text-only request: the pasted text is the material — nothing is looked up or cited (the "model" tidies it).
-    const whole = carriedText(req.question) ?? req.question;
+    // (1.0.6: also the reply a polish request works on — "방금 답변 다듬어줘:\n<the last reply>")
+    const whole = textToWorkOn(req.question);
     // A text that does not fit the model's context is read from its beginning only, and the answer says so
     // (`Answer.truncated`, KNO-3).
     const body = whole.length > TEXT_ONLY_CHARS ? whole.slice(0, TEXT_ONLY_CHARS) : whole;

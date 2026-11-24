@@ -120,6 +120,7 @@ import {
   type Edition,
 } from "./types";
 import { carriedText } from "./carried-text";
+import { polishRequest, polishWhat } from "./polish-request";
 import { docTypeAliases } from "./doc-type-aliases";
 import { reviseScopeLabel } from "./draft-sections";
 import { coerceSettingValue, resolveSettingKey, settingSpec } from "./settingsCatalog";
@@ -1313,6 +1314,25 @@ function ruleDraftDocument(t: Text, ctx: PlanContext): Plan | null {
   return single(op, 0.86, tr(t.ko, `${name} 초안을 만듭니다 (미리보기 후 저장)`, `Draft a ${name} (preview, then save)`));
 }
 
+/**
+ * 1.0.6 (user decision 2026-11-24, `rules::polish`): "다듬어줘 / 수정해줘" asks for the wording of a text to be
+ * worked on — the text the sentence brings, or else the assistant's last reply — and is answered in the chat:
+ * one text-only `answer`, nothing looked up, no document written. With no text at hand the text is asked for.
+ * `text`: the planner text (a 되묻기 text as it came).
+ */
+function rulePolish(text: string, ctx: PlanContext, ko: boolean): Plan | null {
+  const asked = polishRequest(
+    text,
+    ctx,
+    DRAFT_TEMPLATES.map(([word]) => word),
+  );
+  if (!asked) return null;
+  if (asked.question === null) return clarify(polishWhat(ko), 0.5);
+  const plan = single({ op: "answer", question: asked.question, knowledge: false }, 0.85, ko ? "글을 다듬어 답합니다" : "Polishes the text in the reply");
+  plan.requires_confirmation = false;
+  return plan;
+}
+
 /** "인증 심사 프로젝트 만들어", "프로젝트에 추가" (§3.15). */
 function ruleProject(t: Text, ctx: PlanContext): Plan | null {
   if (!has(t, ["프로젝트", "project", "케이스"])) return null;
@@ -2194,6 +2214,8 @@ export function rulesPlan(text: string, ctx: PlanContext): Plan | null {
     ruleDefineRule(t, ctx) ??
     ruleReviseDraft(t, ctx) ??
     ruleDraftDocument(t, ctx) ??
+    // (a replacement with its two quoted texts, a title, a page, a file are not polish requests: `polishRequest`)
+    rulePolish(raw, ctx, t.ko) ??
     ruleCompare(t, ctx) ??
     ruleExplain(t, ctx) ??
     ruleExport(t, ctx) ??
@@ -2878,6 +2900,7 @@ export function buildContext(ui: UiPlanContext = {}): PlanContext {
     current_project: ui.current_project ?? null,
     history: [...(ui.history ?? [])],
     draft_id: ui.draft_id ?? null,
+    ...(ui.last_reply != null ? { last_reply: ui.last_reply } : {}),
   };
 }
 
@@ -3398,6 +3421,8 @@ export function planChoices(text: string, plan: Plan, ctx: PlanContext, ko: bool
   if (isClarification(plan) || ASK_BACK.test(text)) return null;
   const only = plan.operations.length === 1 ? plan.operations[0]! : null;
   if (!only || !(only.op === "summarize" || (only.op === "answer" && !only.reply) || only.op === "search" || only.op === "explain")) return null;
+  // (an answer over a text the user brought or over the last reply looks nothing up: there is no place to choose — 1.0.6)
+  if (only.op === "answer" && only.knowledge === false && !only.mode) return null;
   const phrase = aboutPhrase(text);
   if (!phrase) return null;
   const a = projectInFront(phrase, ctx);
@@ -3596,8 +3621,9 @@ export function planText(text: string, ctx: PlanContext, opts: { model?: boolean
       return result;
     }
     const said = mkText(userWords(t), ko);
+    // (the reply to "어떤 글을 다듬을까요?" is the text to work on: the polish rule reads the 되묻기 text as it came)
     const understood =
-      (askBack ? (rulesPlan(`${askBack[1]!.trim()} ${askBack[2]!.trim()}`.trim(), ctx) ?? rulesPlan(askBack[2]!.trim(), ctx)) : rulesPlan(t, ctx)) ?? vagueScalePlan(said) ?? vagueThemePlan(said);
+      (askBack ? (rulePolish(t, ctx, ko) ?? rulesPlan(`${askBack[1]!.trim()} ${askBack[2]!.trim()}`.trim(), ctx) ?? rulesPlan(askBack[2]!.trim(), ctx)) : rulesPlan(t, ctx)) ?? vagueScalePlan(said) ?? vagueThemePlan(said);
     if (understood && accept(understood, "model")) {
       // What the plan leaves out or adds on its own makes it one the user confirms (`guard::contract_checks`).
       result.issues.push(...contractChecks(t, result.plan, ko));
@@ -5972,7 +5998,9 @@ export async function mockPlanner(cmd: string, a: Record<string, any>): Promise<
       // ones that carry its name; when the two differ the user says which are meant before anything is previewed.
       if (!isClarification(result.plan) && (result.choices ?? []).length === 0) askWith(result, typeChoices(result.plan, ctx, ctx.language === "ko"));
       const preview = isClarification(result.plan) ? null : planPreview(result.plan, ctx);
-      return { result, preview, context: ctx } satisfies PlanResponse;
+      // (`planner_bridge::plan`: the reply sent along for a polish request is not handed back with the context)
+      const { last_reply: _sent, ...context } = ctx;
+      return { result, preview, context } satisfies PlanResponse;
     }
     case "planner_execute": {
       const args = (a.args ?? {}) as Partial<ExecuteArgs>;

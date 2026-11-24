@@ -4,7 +4,7 @@
 import type { ConversationTurn } from "@/lib/types";
 import type { Message } from "@/stores/assistant";
 
-import { clarificationQuestion } from "./describePlan";
+import { clarificationQuestion, deriveResultActions } from "./describePlan";
 
 /** Turns kept for the model (the most recent ones) and the length of each. */
 export const MAX_MEMORY_TURNS = 8;
@@ -60,4 +60,31 @@ export function conversationTurns(messages: Message[], max = MAX_MEMORY_TURNS): 
   }
   if (turns.length > 0 && turns[turns.length - 1]!.role === "user") turns.pop();
   return turns.filter((t) => t.text.length > 0).slice(-max);
+}
+
+/**
+ * 1.0.6: the assistant's last reply of the conversation, in full — what "방금 답변 다듬어줘" works on. The turns
+ * of `conversationTurns` are cut to fit a prompt; this is the whole text of the most recent answer, or of the
+ * summaries / answers of the most recent result card. Cards in between that say nothing to polish (a setting
+ * that ran, a question back, an error) are passed over; an answer that found nothing is not a reply. `""` when
+ * there is none — also for a reply read back from a stored copy that was cut (`clipped: "all"`): a part of a
+ * reply is not polished as if it were the reply.
+ */
+export function lastReply(messages: Message[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.role !== "assistant") continue;
+    if (m.kind === "answer") {
+      if (m.pending || !m.answer) continue;
+      if (m.clipped === "all" || (m.answer.no_evidence && !m.answer.used_general_knowledge)) return "";
+      const text = m.answer.text.trim();
+      if (text) return text;
+    } else if (m.kind === "result") {
+      const actions = deriveResultActions(m.execution, m.plan);
+      const texts = [...actions.answers.map((a) => a.answer.text), ...actions.summaries.flatMap((s) => s.groups.map((g) => (s.groups.length > 1 && g.label ? `${g.label}\n${g.answer.text}` : g.answer.text)))].map((t) => t.trim()).filter(Boolean);
+      if (texts.length === 0) continue;
+      return m.clipped === "all" ? "" : texts.join("\n\n");
+    }
+  }
+  return "";
 }

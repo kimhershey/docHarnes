@@ -93,6 +93,7 @@ fn ctx() -> PlanContext {
         current_project: None,
         scope_project: None,
         history: Vec::new(),
+        last_reply: None,
     }
 }
 
@@ -1254,6 +1255,7 @@ fn a_summary_is_one_result() {
 
 mod deterministic_side;
 mod v105;
+mod v106;
 
 // ---------------------------------------------------------------------------
 // Executor

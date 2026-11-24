@@ -237,6 +237,10 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
             result.source = PlanSource::Model;
             result.route = Some(reply_mode.as_str().to_string());
             let mut p = reply_plan(text, reply_mode, ko);
+            // "방금 답변 다듬어줘" routed as conversation: the reply works on the last reply in full.
+            if polished(&mut result, p.clone(), text, ctx, ko) {
+                return Ok(result);
+            }
             // A text that came with the request is worked on as it is, whatever the route was called.
             if guard::carried_text(text).is_some() {
                 guard::make_text_only(text, &mut p, ko);
@@ -350,6 +354,13 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
                 if let Some(note) = guard::prefer_text_only_answer(text, &mut plan, ko) {
                     issues.push(note);
                 }
+                // 1.0.6 (user decision 2026-11-24): a request to polish / fix / revise wording is
+                // answered in the chat — it does not write a document, change one or open anything.
+                // The answer works on the text the sentence brought or on the last reply and looks
+                // nothing up: the guards below (where to look, which reading) have nothing to settle.
+                if polished(&mut result, plan.clone(), text, ctx, ko) {
+                    return Ok(result);
+                }
                 // "Nothing to do" is a turn that was not a command: reply instead of an empty card.
                 guard::noop_to_chat(text, &mut plan, ko);
                 // A question is answered, not answered with a question the app can settle itself
@@ -436,8 +447,25 @@ pub fn plan(deps: Option<&PlannerDeps<'_>>, text: &str, ctx: &PlanContext, mode:
         .and_then(|i| setting_range_question(i, ko).or_else(|| doc_type_question(i, ctx, ko)))
         .unwrap_or_else(|| clarification_text(ko, &first.map(|i| i.message.clone()).unwrap_or_default()));
     result.source = PlanSource::Model;
+    // (a polish request the model twice wrote as something that does not validate — `revise_draft`
+    // with no draft open — is still a polish request)
+    if polished(&mut result, Plan::clarify(question.clone(), 0.0), text, ctx, ko) {
+        return Ok(result);
+    }
     result.plan = Plan::clarify(question, 0.0);
     Ok(result)
+}
+
+/// 1.0.6: `plan` taken over by [`guard::polish_in_chat`] is the result as it stands — a text-only
+/// answer (or the question for the text) with the note for the card. Returns whether it was.
+fn polished(result: &mut PlanResult, mut plan: Plan, text: &str, ctx: &PlanContext, ko: bool) -> bool {
+    let Some(note) = guard::polish_in_chat(text, &mut plan, ctx, ko) else { return false };
+    log::info!("planner: a request to polish wording is answered in the chat, from the text at hand");
+    result.source = PlanSource::Model;
+    result.plan = plan;
+    result.issues = note.into_iter().collect();
+    result.choices.clear();
+    true
 }
 
 /// A document type the validator rejected twice (a command: a question never fails on a type) is

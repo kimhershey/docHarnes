@@ -369,6 +369,43 @@ test.describe("assistant chat sessions", () => {
     await expect(long.getByTestId("answer-truncated")).toHaveAttribute("data-truncated", "input");
   });
 
+  // 1.0.6 (user decision 2026-11-24): "다듬어줘 / 수정해줘" is not document writing — the last answer is worked
+  // on in the chat; with nothing to work on the text is asked for.
+  test("'방금 답변 다듬어줘' after an answer is answered in the chat, not in 문서 작성", async ({ page }) => {
+    test.setTimeout(60_000);
+    await freshApp(page);
+    await createWorkspace(page);
+    await importViaLibrary(page, ["D:\\scan\\한빛_견적서.pdf"], { autoLevel: "none" });
+    await openAssistantScreen(page);
+    await send(page, "한빛 내용은?");
+    const first = answerCards(page).nth(0);
+    await expect(first).toHaveAttribute("data-answer-state", "done", { timeout: 15_000 });
+    // (citations are chips in a grounded answer and plain "[1]" in the text that is worked on: compare the letters)
+    const letters = (text: string | null) => (text ?? "").replace(/[^\p{L}]/gu, "");
+    const said = letters(await first.getByTestId("answer-text").textContent());
+    expect(said.length).toBeGreaterThan(4);
+
+    await send(page, "방금 답변 좀 더 자연스럽게 다듬어줘");
+    const polished = answerCards(page).nth(1);
+    await expect(polished).toHaveAttribute("data-answer-state", "done", { timeout: 15_000 });
+    // The reply works on the first answer's text (the mock "model" hands it back tidied): nothing was looked
+    // up, the instruction is not part of the result, and no plan card, question or draft came of it.
+    await expect(polished.getByTestId("answer-text-only")).toBeVisible();
+    const again = letters(await polished.getByTestId("answer-text").textContent());
+    expect(again).toBe(said);
+    expect(again).not.toContain("다듬어줘");
+    await expect(page.locator('[data-testid="assistant-card-plan"]')).toHaveCount(0);
+    await expect(page.getByTestId("assistant-card-clarify")).toHaveCount(0);
+    await expect(page.getByTestId("page-assistant")).toBeVisible();
+    await expect(page.getByTestId("page-generate")).toHaveCount(0);
+
+    // A new chat has no reply to work on: the text is asked for.
+    await page.getByTestId("assistant-new-chat").click();
+    await send(page, "위 내용 수정해줘");
+    await expect(page.getByTestId("clarify-question")).toContainText("어떤 글을 다듬을까요?", { timeout: 15_000 });
+    await expect(answerCards(page)).toHaveCount(0);
+  });
+
   test("the input waits for the sessions and the composer sends into the active one", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);

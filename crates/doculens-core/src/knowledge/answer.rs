@@ -289,6 +289,17 @@ fn clamp_request(req: &AnswerRequest) -> AnswerRequest {
     r.question = r.question.trim().chars().take(max_question).collect();
     r.selection = r.selection.as_ref().map(|s| s.trim().chars().take(MAX_QUESTION_CHARS).collect());
     r.keep_chunks.truncate(*TOP_K_RANGE.end() as usize);
+    // 1.0.6: a text-only request may work on an earlier reply of the conversation ("방금 답변
+    // 다듬어줘" — the planner puts the whole reply into the request). The history must not bring that
+    // reply a second time, cut to the length of a turn.
+    if is_text_only(&r) {
+        let text = collapse(&r.question);
+        r.history.retain(|t| {
+            let said = collapse(&t.text);
+            let said = said.trim_end_matches('…').trim_end();
+            t.role != TurnRole::Assistant || said.is_empty() || !text.contains(said)
+        });
+    }
     // History: the last turns only, each shortened and stripped of prompt-structure lines.
     let skip = r.history.len().saturating_sub(MAX_HISTORY_TURNS);
     r.history = r
@@ -491,9 +502,14 @@ fn halve_text(req: &AnswerRequest) -> Option<AnswerRequest> {
     Some(AnswerRequest { question, ..req.clone() })
 }
 
+/// The text with every run of whitespace as one space.
+fn collapse(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Collapses whitespace and cuts the text to `max` characters (with an ellipsis).
 fn shorten(text: &str, max: usize) -> String {
-    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let collapsed = collapse(text);
     if collapsed.chars().count() <= max {
         collapsed
     } else {
@@ -2615,6 +2631,39 @@ mod tests {
         assert_eq!(clamp_request(&r).question.chars().count(), 6_000);
         r.kind = AnswerKind::Compare;
         assert_eq!(clamp_request(&r).question.chars().count(), MAX_QUESTION_CHARS, "only plain answers bring a text");
+    }
+
+    /// 1.0.6: "방금 답변 다듬어줘" — the request carries the whole last reply; the history does not bring
+    /// it again (the UI's turns are cut to 500 characters and end in "…").
+    #[test]
+    fn a_text_only_request_over_the_last_reply_does_not_repeat_it_in_the_history() {
+        use super::super::ConversationTurn;
+        let reply: String = (1..=60).map(|i| format!("{i}번 조항은 납품과   검수에 관한 내용입니다.\n")).collect();
+        let cut = format!("{}…", collapse(&reply).chars().take(499).collect::<String>());
+        let mut r = AnswerRequest::question(&format!("방금 답변 다듬어줘:\n{reply}"));
+        r.retrieve = false;
+        r.history = vec![
+            ConversationTurn::user("납품 조항 알려줘"),
+            ConversationTurn::assistant("먼저 드린 다른 답변입니다."),
+            ConversationTurn::user("검수 조항도 알려줘"),
+            ConversationTurn::assistant(&cut),
+        ];
+        let clamped = clamp_request(&r);
+        let turns: Vec<&str> = clamped.history.iter().map(|t| t.text.as_str()).collect();
+        assert_eq!(turns, ["납품 조항 알려줘", "먼저 드린 다른 답변입니다.", "검수 조항도 알려줘"]);
+        let prompt = user_prompt(&clamped, None, Lang::Ko);
+        assert_eq!(prompt.matches("어시스턴트: ").count(), 1, "{prompt}");
+        assert_eq!(prompt.matches("\n2번 조항은").count(), 1, "{prompt}");
+        assert!(prompt.contains("60번 조항은"), "the request keeps the whole reply");
+        // The reply in full (a context that sends it uncut) goes the same way; a question keeps its history.
+        r.history[3] = ConversationTurn::assistant(&reply);
+        assert_eq!(clamp_request(&r).history.len(), 3);
+        r.retrieve = true;
+        assert_eq!(clamp_request(&r).history.len(), 4, "a question that looks documents up keeps every turn");
+        // Small talk carries no text to work on.
+        r.retrieve = false;
+        r.style = AnswerStyle::Chat;
+        assert_eq!(clamp_request(&r).history.len(), 4);
     }
 
     /// KNO-14: a request that is stuck (queued behind a batch job, or at the engine before its first token)

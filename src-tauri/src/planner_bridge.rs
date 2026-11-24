@@ -53,6 +53,9 @@ pub struct UiPlanContext {
     pub project_id: Option<String>,
     /// Earlier turns of the assistant conversation (oldest first).
     pub history: Vec<ConversationTurn>,
+    /// 1.0.6: the assistant's last reply of the conversation in full (the turns of `history` are
+    /// cut) — what "방금 답변 다듬어줘" works on. An empty text says that there is none.
+    pub last_reply: Option<String>,
     /// 0.7.0: the draft open in the 문서 작성 screen (default target of `revise_draft`).
     pub draft_id: Option<String>,
     /// Interpretation mode (default: the model reads every sentence; `rules_first` is the legacy path).
@@ -180,6 +183,7 @@ pub fn build_context(app: &AppHandle, ui: &UiPlanContext) -> UiResult<PlanContex
         scope_project: ui.project_id.clone(),
         draft_id: ui.draft_id.clone().filter(|d| !d.trim().is_empty()),
         history: ui.history.clone(),
+        last_reply: ui.last_reply.clone(),
     })
 }
 
@@ -266,6 +270,10 @@ pub fn plan(app: &AppHandle, text: &str, ui: &UiPlanContext) -> UiResult<PlanRes
         }
         Some(preview)
     };
+    // The context goes back to the UI, which keeps it on the card: the reply sent along for a polish
+    // request has done its work and is not stored a second time with every card.
+    let mut ctx = ctx;
+    ctx.last_reply = None;
     Ok(PlanResponse { result, preview, context: ctx })
 }
 

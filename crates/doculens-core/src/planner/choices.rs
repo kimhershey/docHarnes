@@ -88,6 +88,11 @@ pub fn overlap(text: &str, plan: &Plan, ctx: &PlanContext, ko: bool) -> Option<(
     if !matches!(op, Op::Summarize { .. } | Op::Answer { reply: None, .. } | Op::Search { .. } | Op::Explain { .. }) {
         return None;
     }
+    // (an answer over a text the user brought or over the last reply looks nothing up: there is
+    // no place to choose — 1.0.6)
+    if matches!(op, Op::Answer { knowledge: Some(false), mode: None, .. }) {
+        return None;
+    }
     let a = guard::subject_of(text, ctx)?;
     let summarised = guard::asks_summary(&a.rest);
     let told = !summarised && guard::asks_explanation(&a.rest);

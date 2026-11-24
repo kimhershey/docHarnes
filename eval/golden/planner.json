@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "context": "planner-context.json",
-  "description": "플래너 골든셋(0.3.0: SW 개발 문서 기준) — 명령 → 기대 플랜 100건(한국어 70·영어 20·혼합 10). 기대값은 규칙 출력이 아니라 사람이 기대하는 플랜입니다. 비교 규칙은 eval/README.md 참조. 0.6.0: 에이전트 op(회전·분할·제목·글자·역할·참고 자료·용어·판·프로젝트 수정/삭제·자동 분류·양식·설정 카탈로그·모델·엔진·유지보수) 25건 추가. 0.7.0: 초안 어시스턴트 op revise_draft(절 다시 쓰기·새 절·전체; context.draft_id = 열린 초안) 4건. 0.8.0: 2026-11-11 사용자 보고 문장과 변형·반례 34건 — 설정(빠른 경로·문장 속 설정·범위 밖·반례), 대화, 문서와 무관한 질문, 묶음 요약, 표현할 수 없는 요청, 붙여 넣은 글. 항목의 kind(chat|question|command|setting)별 정확도와 expected.confirm·unmet·alt를 쓴다. 1.0.0: 새 설정 세 개(고른 작업 표시 · 프로젝트 분류 2순위 추천 임계값 · 이미지 내 글자 추출)의 문장 8건과 반례 2건(어느 임계값인지 묻기, 명령이 아닌 알림) 추가 → 173건. 1.0.0 §4-2: 설정 전용 동작(set_theme · set_language · set_profile · set_model · set_inbox_watch)의 기대값을 set_setting(key · value)으로 바꿈 — 어느 경로로 해석하든 설정 변경은 한 가지 모양이다. 1.0.0 §2-1: 원본 고치기(edit_text.original — 원본 파일을 고쳐 새 판으로 저장) 문장 3건 추가, ko-75는 original이 없어야 함 → 176건. 이 네 문장은 대상(열린 문서)도 검사한다 — 따옴표 안의 글(날짜 포함)은 조건이 아니다. 1.0.2: 주제가 있는 요약과 프로젝트 칸 · 내용 칸 17건 → 196건(이 줄은 1.0.3에서 덧붙임). 1.0.3(사용자 결정 2026-11-22): 요약은 범위 전체를 하나의 결과로 만든다 — summarize.target(each_doc · set)은 없어졌고 기대값은 target이 없어야 한다(null). 문서별 요약을 청하는 문장 4건(알리고 확인받기)과 반례 1건 추가 → 201건. 1.0.5(사용자 결정 A · B · C, 보고 G): '알려줘'는 답변(장소와 주제가 있으면 주제 요약), 검색 · 질문은 문서 유형을 조건으로 삼지 않음(ko-31), 주제가 프로젝트 이름 · 문서 유형 이름과 같으면 선택지로 되묻기(expected.choices = 선택지 key 목록; ko-140 · ko-142 기대값 변경), 프로젝트 참고 자료 범위에 문장에 없는 조건 없음 — 13건 추가 → 214건.",
+  "description": "플래너 골든셋(0.3.0: SW 개발 문서 기준) — 명령 → 기대 플랜 100건(한국어 70·영어 20·혼합 10). 기대값은 규칙 출력이 아니라 사람이 기대하는 플랜입니다. 비교 규칙은 eval/README.md 참조. 0.6.0: 에이전트 op(회전·분할·제목·글자·역할·참고 자료·용어·판·프로젝트 수정/삭제·자동 분류·양식·설정 카탈로그·모델·엔진·유지보수) 25건 추가. 0.7.0: 초안 어시스턴트 op revise_draft(절 다시 쓰기·새 절·전체; context.draft_id = 열린 초안) 4건. 0.8.0: 2026-11-11 사용자 보고 문장과 변형·반례 34건 — 설정(빠른 경로·문장 속 설정·범위 밖·반례), 대화, 문서와 무관한 질문, 묶음 요약, 표현할 수 없는 요청, 붙여 넣은 글. 항목의 kind(chat|question|command|setting)별 정확도와 expected.confirm·unmet·alt를 쓴다. 1.0.0: 새 설정 세 개(고른 작업 표시 · 프로젝트 분류 2순위 추천 임계값 · 이미지 내 글자 추출)의 문장 8건과 반례 2건(어느 임계값인지 묻기, 명령이 아닌 알림) 추가 → 173건. 1.0.0 §4-2: 설정 전용 동작(set_theme · set_language · set_profile · set_model · set_inbox_watch)의 기대값을 set_setting(key · value)으로 바꿈 — 어느 경로로 해석하든 설정 변경은 한 가지 모양이다. 1.0.0 §2-1: 원본 고치기(edit_text.original — 원본 파일을 고쳐 새 판으로 저장) 문장 3건 추가, ko-75는 original이 없어야 함 → 176건. 이 네 문장은 대상(열린 문서)도 검사한다 — 따옴표 안의 글(날짜 포함)은 조건이 아니다. 1.0.2: 주제가 있는 요약과 프로젝트 칸 · 내용 칸 17건 → 196건(이 줄은 1.0.3에서 덧붙임). 1.0.3(사용자 결정 2026-11-22): 요약은 범위 전체를 하나의 결과로 만든다 — summarize.target(each_doc · set)은 없어졌고 기대값은 target이 없어야 한다(null). 문서별 요약을 청하는 문장 4건(알리고 확인받기)과 반례 1건 추가 → 201건. 1.0.5(사용자 결정 A · B · C, 보고 G): '알려줘'는 답변(장소와 주제가 있으면 주제 요약), 검색 · 질문은 문서 유형을 조건으로 삼지 않음(ko-31), 주제가 프로젝트 이름 · 문서 유형 이름과 같으면 선택지로 되묻기(expected.choices = 선택지 key 목록; ko-140 · ko-142 기대값 변경), 프로젝트 참고 자료 범위에 문장에 없는 조건 없음 — 13건 추가 → 214건. 1.0.6(사용자 결정 2026-11-24 \"다듬어줘/수정해줘 는 문서 작성이 아님. 문서 작성은 새 문서 혹은 문서를 명시했을 때만\"): 글을 다듬어 · 고쳐 달라는 문장은 채팅에서 글로 답한다 — 문장에 든 글, 없으면 앞선 답변 전체(context.history의 마지막 어시스턴트 말)로 answer(knowledge: false)를 만들고, 다듬을 글이 없으면 묻는다. 실측 문장 5개(앞선 답변이 있을 때 4건 · 없을 때 2건 · 붙여 넣은 글 1건)와 반례 4건, 영어 1건 추가 → 226건.",
   "items": [
     {
       "id": "ko-01",
@@ -4283,6 +4283,393 @@
         "confirm": false
       },
       "note": "1.0.5(G): 요약만 청한 문장이다 — 참고 자료를 바꾸는 단계(manage_reference)가 끼면 안 되고(실모델이 넣었다), 요약은 유형 조건을 유지한다",
+      "kind": "question"
+    },
+    {
+      "id": "ko-166",
+      "category": "ko",
+      "text": "이 문장 다듬어줘: 본 계약의 납품 기한은 계약 체결일로부터 60일로 하며 지체 시에는 지체상금을 부과하는 것으로 한다고 되어 있음",
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "params": [
+          {
+            "knowledge": false,
+            "mode": null,
+            "question": "이 문장 다듬어줘: 본 계약의 납품 기한은 계약 체결일로부터 60일로 하며 지체 시에는 지체상금을 부과하는 것으로 한다고 되어 있음"
+          }
+        ],
+        "scope": {
+          "doc_ids": null
+        },
+        "confirm": false
+      },
+      "note": "1.0.6(사용자 결정 2026-11-24 \"다듬어줘/수정해줘 는 문서 작성이 아님\"): 문장에 든 글을 다듬는다 — '이 문장'은 열린 문서를 가리키는 말이 아니고, 새 문서도 쓰지 않는다(실모델: draft_document)",
+      "kind": "question"
+    },
+    {
+      "id": "ko-167",
+      "category": "ko",
+      "text": "방금 답변 좀 더 자연스럽게 다듬어줘",
+      "context": {
+        "history": [
+          {
+            "role": "user",
+            "text": "납품 기한 알려줘"
+          },
+          {
+            "role": "assistant",
+            "text": "납품 기한은 계약 체결일로부터 60일입니다 [1].\n지체 시에는 지체상금이 부과됩니다 [2].\n검수는 납품 후 14일 안에 마칩니다 [3]."
+          }
+        ]
+      },
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "params": [
+          {
+            "knowledge": false,
+            "mode": null,
+            "question": "방금 답변 좀 더 자연스럽게 다듬어줘:\n납품 기한은 계약 체결일로부터 60일입니다 [1].\n지체 시에는 지체상금이 부과됩니다 [2].\n검수는 납품 후 14일 안에 마칩니다 [3]."
+          }
+        ],
+        "scope": {
+          "folder": null,
+          "doc_ids": null,
+          "filter": {
+            "project_id": null
+          }
+        },
+        "confirm": false,
+        "choices": []
+      },
+      "note": "1.0.6: 앞선 답변 전체를 채팅에서 다듬는다 — 요청 뒤에 답변 전문을 붙인 answer(knowledge: false), 범위 · 확인 없음(실모델: 열린 문서의 edit_text)",
+      "kind": "question"
+    },
+    {
+      "id": "ko-168",
+      "category": "ko",
+      "text": "위 내용 수정해줘",
+      "context": {
+        "history": [
+          {
+            "role": "user",
+            "text": "납품 기한 알려줘"
+          },
+          {
+            "role": "assistant",
+            "text": "납품 기한은 계약 체결일로부터 60일입니다 [1].\n지체 시에는 지체상금이 부과됩니다 [2].\n검수는 납품 후 14일 안에 마칩니다 [3]."
+          }
+        ]
+      },
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "params": [
+          {
+            "knowledge": false,
+            "mode": null
+          }
+        ],
+        "scope": {
+          "folder": null,
+          "doc_ids": null,
+          "filter": {
+            "project_id": null
+          }
+        },
+        "confirm": false,
+        "choices": []
+      },
+      "note": "1.0.6: '수정해줘'도 글을 가리키는 말(위 내용)과 함께면 다듬기다 — 문서 작성도, 원본 고치기도 아니다(실모델: 되묻기)",
+      "kind": "question"
+    },
+    {
+      "id": "ko-169",
+      "category": "ko",
+      "text": "더 간결하게 수정해줘",
+      "context": {
+        "history": [
+          {
+            "role": "user",
+            "text": "납품 기한 알려줘"
+          },
+          {
+            "role": "assistant",
+            "text": "납품 기한은 계약 체결일로부터 60일입니다 [1].\n지체 시에는 지체상금이 부과됩니다 [2].\n검수는 납품 후 14일 안에 마칩니다 [3]."
+          }
+        ]
+      },
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "params": [
+          {
+            "knowledge": false,
+            "mode": null
+          }
+        ],
+        "scope": {
+          "folder": null,
+          "doc_ids": null,
+          "filter": {
+            "project_id": null
+          }
+        },
+        "confirm": false,
+        "choices": []
+      },
+      "note": "1.0.6: 어떻게 읽히게 할지(더 간결하게)를 말한 '수정해줘' — 앞선 답변을 다듬는다(실모델: 되묻기)",
+      "kind": "question"
+    },
+    {
+      "id": "ko-170",
+      "category": "ko",
+      "text": "요구사항 부분을 좀 다듬어줘",
+      "context": {
+        "history": [
+          {
+            "role": "user",
+            "text": "납품 기한 알려줘"
+          },
+          {
+            "role": "assistant",
+            "text": "납품 기한은 계약 체결일로부터 60일입니다 [1].\n지체 시에는 지체상금이 부과됩니다 [2].\n검수는 납품 후 14일 안에 마칩니다 [3]."
+          }
+        ]
+      },
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "params": [
+          {
+            "knowledge": false,
+            "mode": null
+          }
+        ],
+        "scope": {
+          "folder": null,
+          "doc_ids": null,
+          "filter": {
+            "project_id": null
+          }
+        },
+        "confirm": false,
+        "choices": []
+      },
+      "note": "1.0.6: 앞선 답변의 한 부분을 다듬어 달라는 말 — 문서함을 열지도(실모델: open), '요구사항' 필드나 유형의 문서를 찾지도 않는다",
+      "kind": "question"
+    },
+    {
+      "id": "ko-171",
+      "category": "ko",
+      "text": "방금 답변 좀 더 자연스럽게 다듬어줘",
+      "expected": {
+        "intent": "clarify",
+        "ops": [
+          "clarify"
+        ],
+        "choices": []
+      },
+      "note": "1.0.6: 다듬을 글이 없다(붙여 넣은 글도 앞선 답변도 없음) — 글을 달라고 묻는다. 열린 문서를 고치지 않는다",
+      "kind": "question"
+    },
+    {
+      "id": "ko-172",
+      "category": "ko",
+      "text": "위 내용 수정해줘",
+      "expected": {
+        "intent": "clarify",
+        "ops": [
+          "clarify"
+        ],
+        "choices": []
+      },
+      "note": "1.0.6: 다듬을 글이 없으면 묻는다",
+      "kind": "question"
+    },
+    {
+      "id": "ko-173",
+      "category": "ko",
+      "text": "다듬어서 새 문서로 만들어줘",
+      "context": {
+        "history": [
+          {
+            "role": "user",
+            "text": "납품 기한 알려줘"
+          },
+          {
+            "role": "assistant",
+            "text": "납품 기한은 계약 체결일로부터 60일입니다 [1].\n지체 시에는 지체상금이 부과됩니다 [2].\n검수는 납품 후 14일 안에 마칩니다 [3]."
+          }
+        ]
+      },
+      "expected": {
+        "intent": "draft_document",
+        "ops": [
+          "draft_document"
+        ]
+      },
+      "note": "1.0.6 반례: 새 문서를 청하면 문서 작성이다",
+      "kind": "command"
+    },
+    {
+      "id": "ko-174",
+      "category": "ko",
+      "text": "이 내용으로 보고서 작성해줘",
+      "expected": {
+        "intent": "draft_document",
+        "ops": [
+          "draft_document"
+        ],
+        "alt": [
+          {
+            "intent": "clarify",
+            "ops": [
+              "clarify"
+            ]
+          }
+        ]
+      },
+      "note": "1.0.6 반례: 문서(보고서)를 명시하면 문서 작성이다 — 어떤 내용인지 되묻는 것도 맞다",
+      "kind": "command"
+    },
+    {
+      "id": "ko-175",
+      "category": "ko",
+      "text": "테마 수정해줘",
+      "context": {
+        "history": [
+          {
+            "role": "user",
+            "text": "납품 기한 알려줘"
+          },
+          {
+            "role": "assistant",
+            "text": "납품 기한은 계약 체결일로부터 60일입니다 [1].\n지체 시에는 지체상금이 부과됩니다 [2].\n검수는 납품 후 14일 안에 마칩니다 [3]."
+          }
+        ]
+      },
+      "expected": {
+        "intent": "clarify",
+        "ops": [
+          "clarify"
+        ],
+        "alt": [
+          {
+            "intent": "open",
+            "ops": [
+              "open"
+            ]
+          }
+        ]
+      },
+      "note": "1.0.6 반례: 설정을 가리키는 '수정해줘'는 다듬기가 아니다 — 어떤 테마인지 묻거나 설정 화면을 연다(앞선 답변을 다듬지 않는다)",
+      "kind": "setting"
+    },
+    {
+      "id": "ko-176",
+      "category": "ko",
+      "text": "더 간결하게 수정해줘",
+      "context": {
+        "draft_id": "dr1",
+        "history": [
+          {
+            "role": "user",
+            "text": "납품 기한 알려줘"
+          },
+          {
+            "role": "assistant",
+            "text": "납품 기한은 계약 체결일로부터 60일입니다 [1].\n지체 시에는 지체상금이 부과됩니다 [2].\n검수는 납품 후 14일 안에 마칩니다 [3]."
+          }
+        ]
+      },
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "params": [
+          {
+            "knowledge": false,
+            "mode": null
+          }
+        ],
+        "scope": {
+          "folder": null,
+          "doc_ids": null,
+          "filter": {
+            "project_id": null
+          }
+        },
+        "confirm": false,
+        "choices": [],
+        "alt": [
+          {
+            "intent": "revise_draft",
+            "ops": [
+              "revise_draft"
+            ],
+            "params": [
+              {
+                "scope": "whole"
+              }
+            ]
+          }
+        ]
+      },
+      "note": "1.0.6: 문서 작성 화면에 초안이 열려 있을 때 — 그 초안의 수정(revise_draft)으로 읽으면 그대로 두고, 그렇지 않으면 채팅에서 다듬는다. 새 문서(draft_document)는 아니다",
+      "kind": "question"
+    },
+    {
+      "id": "en-39",
+      "category": "en",
+      "text": "polish the last answer",
+      "context": {
+        "history": [
+          {
+            "role": "user",
+            "text": "납품 기한 알려줘"
+          },
+          {
+            "role": "assistant",
+            "text": "납품 기한은 계약 체결일로부터 60일입니다 [1].\n지체 시에는 지체상금이 부과됩니다 [2].\n검수는 납품 후 14일 안에 마칩니다 [3]."
+          }
+        ]
+      },
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "params": [
+          {
+            "knowledge": false,
+            "mode": null,
+            "question": "polish the last answer:\n납품 기한은 계약 체결일로부터 60일입니다 [1].\n지체 시에는 지체상금이 부과됩니다 [2].\n검수는 납품 후 14일 안에 마칩니다 [3]."
+          }
+        ],
+        "scope": {
+          "folder": null,
+          "doc_ids": null,
+          "filter": {
+            "project_id": null
+          }
+        },
+        "confirm": false,
+        "choices": []
+      },
+      "note": "1.0.6: a request to polish wording is answered in the chat, over the whole last reply",
       "kind": "question"
     }
   ]

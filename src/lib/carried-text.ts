@@ -3,7 +3,7 @@
 // text-only answer).
 
 /** Verbs that act on text the user supplied (mirrors `planner::guard`). */
-const REWRITE_WORDS = ["다듬", "정리해", "정리 해", "교정", "맞춤법", "번역", "고쳐", "다시 써", "다시써", "윤문", "요약해", "줄여", "풀어 써", "풀어써", "바꿔 써", "존댓말", "반말", "문장으로", "개조식으로", "매끄럽", "rewrite", "polish", "proofread", "translate", "tidy", "rephrase", "paraphrase", "summarise", "summarize", "shorten", "grammar", "formal", "bullet"];
+const REWRITE_WORDS = ["다듬", "정리해", "정리 해", "교정", "맞춤법", "번역", "고쳐", "다시 써", "다시써", "윤문", "요약해", "줄여", "풀어 써", "풀어써", "바꿔 써", "존댓말", "반말", "문장으로", "개조식으로", "매끄럽", "수정해", "수정 해", "수정 부탁", "수정 좀", "손봐", "손 봐", "rewrite", "polish", "proofread", "translate", "tidy", "rephrase", "paraphrase", "summarise", "summarize", "shorten", "grammar", "formal", "bullet", "revise", "refine", "reword"];
 const MIN_BODY_CHARS = 60;
 const MAX_INSTRUCTION_CHARS = 160;
 
@@ -35,3 +35,15 @@ export function carriedText(text: string): string | null {
   return null;
 }
 
+/**
+ * The text a text-only request works on: what the sentence carries, else — for a request laid out as
+ * "instruction:\ntext" (1.0.6: a polish request over the assistant's last reply, `polish-request.ts`) — what
+ * follows the instruction, else the whole request.
+ */
+export function textToWorkOn(question: string): string {
+  const carried = carriedText(question);
+  if (carried) return carried;
+  const at = question.indexOf(":\n");
+  const head = at < 0 ? "" : question.slice(0, at);
+  return at >= 0 && head.trim() && !head.includes("\n") && Array.from(head).length <= MAX_INSTRUCTION_CHARS && question.slice(at + 2).trim() ? question.slice(at + 2).trim() : question;
+}

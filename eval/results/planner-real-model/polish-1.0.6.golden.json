@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "context": "topic-summary-1.0.2-open-document.context.json",
+  "description": "1.0.6(사용자 결정 2026-11-24: \"다듬어줘/수정해줘 는 문서 작성이 아님. 문서 작성은 새 문서 혹은 문서를 명시했을 때만 문서로 작성하도록 함.\") — 글을 다듬어 · 고쳐 달라는 문장 5개와 문서를 청하는 문장 2개. 컨텍스트: 문서 하나가 열려 있고 프로젝트 '한빛 납품'과 'AAA'가 있으며 이전 대화는 없다. 기대값: d-1은 문장에 든 글로 답하는 answer(knowledge: false), d-2 ~ d-5는 다듬을 글(붙여 넣은 글도, 앞선 답변도)이 없으므로 글을 달라고 되묻기 — 앞선 답변이 있을 때 그 답변 전체로 answer를 만드는 것은 eval/golden/planner.json(ko-167 ~ ko-170)과 planner/tests/v106.rs가 본다. d-6은 보고서를 명시했으므로 draft_document(내용이 무엇인지 되묻는 것도 맞음), d-7은 새 문서를 청했으므로 draft_document. 수정 전 측정은 gemma4-e4b-q4km-1.0.6-polish-before.json — 그 파일의 정답 표시는 기대값을 채우기 전(일곱 문장 모두 answer로 둔 자리 채움) 것이라 쓰지 않는다: 모델이 쓴 계획(items[].raw · operations)을 볼 것.",
+  "items": [
+    {
+      "id": "d-1",
+      "category": "ko",
+      "kind": "question",
+      "text": "이 문장 다듬어줘: 본 계약의 납품 기한은 계약 체결일로부터 60일로 하며 지체 시에는 지체상금을 부과하는 것으로 한다고 되어 있음",
+      "expected": {
+        "intent": "answer",
+        "ops": [
+          "answer"
+        ],
+        "params": [
+          {
+            "knowledge": false,
+            "mode": null
+          }
+        ],
+        "scope": {
+          "folder": null,
+          "doc_ids": null
+        },
+        "confirm": false
+      },
+      "note": "문장에 든 글을 다듬는다 — 문서를 찾지도, 새 문서를 쓰지도 않는다(실모델: draft_document → 기존 가드가 answer로 바꿈)"
+    },
+    {
+      "id": "d-2",
+      "category": "ko",
+      "kind": "question",
+      "text": "방금 답변 좀 더 자연스럽게 다듬어줘",
+      "expected": {
+        "intent": "clarify",
+        "ops": [
+          "clarify"
+        ]
+      },
+      "note": "이전 대화가 없다: 다듬을 글을 달라고 묻는다(실모델: 열린 문서에서 '방금 답변'을 '더 자연스러운 표현'으로 바꾸는 edit_text)"
+    },
+    {
+      "id": "d-3",
+      "category": "ko",
+      "kind": "question",
+      "text": "위 내용 수정해줘",
+      "expected": {
+        "intent": "clarify",
+        "ops": [
+          "clarify"
+        ]
+      },
+      "note": "이전 대화가 없다: 다듬을 글을 달라고 묻는다(실모델: 되묻기 — 무엇을 어떻게 고칠지)"
+    },
+    {
+      "id": "d-4",
+      "category": "ko",
+      "kind": "question",
+      "text": "더 간결하게 수정해줘",
+      "expected": {
+        "intent": "clarify",
+        "ops": [
+          "clarify"
+        ]
+      },
+      "note": "이전 대화가 없다: 다듬을 글을 달라고 묻는다(실모델: 되묻기)"
+    },
+    {
+      "id": "d-5",
+      "category": "ko",
+      "kind": "question",
+      "text": "요구사항 부분을 좀 다듬어줘",
+      "expected": {
+        "intent": "clarify",
+        "ops": [
+          "clarify"
+        ]
+      },
+      "note": "이전 대화가 없다: 다듬을 글을 달라고 묻는다(실모델: 문서함 폴더 열기 open)"
+    },
+    {
+      "id": "d-6",
+      "category": "ko",
+      "kind": "command",
+      "text": "이 내용으로 보고서 작성해줘",
+      "expected": {
+        "intent": "draft_document",
+        "ops": [
+          "draft_document"
+        ],
+        "alt": [
+          {
+            "intent": "clarify",
+            "ops": [
+              "clarify"
+            ]
+          }
+        ]
+      },
+      "note": "보고서를 명시했다: 문서 작성(어떤 내용인지 되묻는 것도 맞다 — 실모델: 되묻기)"
+    },
+    {
+      "id": "d-7",
+      "category": "ko",
+      "kind": "command",
+      "text": "다듬어서 새 문서로 만들어줘",
+      "expected": {
+        "intent": "draft_document",
+        "ops": [
+          "draft_document"
+        ]
+      },
+      "note": "새 문서를 청했다: 문서 작성(실모델: draft_document)"
+    }
+  ]
+}

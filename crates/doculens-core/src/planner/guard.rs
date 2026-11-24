@@ -48,6 +48,14 @@ const REWRITE_KO: &[&str] = &[
     "문장으로",
     "개조식으로",
     "매끄럽",
+    // 1.0.6: "수정해줘: …" / "손봐줘: …" bring a text as much as "다듬어줘: …" does (request forms:
+    // "수정된 계약서 요약: …" does not).
+    "수정해",
+    "수정 해",
+    "수정 부탁",
+    "수정 좀",
+    "손봐",
+    "손 봐",
 ];
 const REWRITE_EN: &[&str] = &[
     "rewrite",
@@ -63,6 +71,9 @@ const REWRITE_EN: &[&str] = &[
     "grammar",
     "formal",
     "bullet",
+    "revise",
+    "refine",
+    "reword",
 ];
 /// Words of an instruction that asks for a document to be written, not for its text to be worked on.
 const DRAFT_WORDS: &[&str] =
@@ -176,6 +187,578 @@ pub fn prefer_text_only_answer(text: &str, plan: &mut Plan, ko: bool) -> Option<
             "the sentence carries its own text; answering from it instead of searching documents"
         },
     ))
+}
+
+// ---------------------------------------------------------------------------
+// 1.0.6 — "다듬어줘 / 수정해줘" is not document writing
+// ---------------------------------------------------------------------------
+//
+// User decision 2026-11-24: "다듬어줘/수정해줘 는 문서 작성이 아님. 문서 작성은 새 문서 혹은 문서를
+// 명시했을 때만 문서로 작성하도록 함." A request to polish / fix / revise wording is answered in the
+// chat as text; the 문서 작성 screen (`draft_document` / `revise_draft`) is for a sentence that asks for
+// a new document or names one. Measured the same day (Gemma 4 E4B): "방금 답변 좀 더 자연스럽게
+// 다듬어줘" came back as `edit_text` over the open document, "요구사항 부분을 좀 다듬어줘" as `open` of a
+// folder, "위 내용 수정해줘" and "더 간결하게 수정해줘" as questions back — and, with a conversation
+// behind them, such sentences were written as `draft_document` / `revise_draft`.
+
+/// Verbs that are about wording, whatever they are said of. (Request forms of the nouns: "교정
+/// 일정", "윤문 비용" are not requests.)
+const POLISH_VERBS: &[&str] = &[
+    "다듬",
+    "손봐",
+    "윤문해",
+    "윤문 좀",
+    "윤문 부탁",
+    "교정해",
+    "교정 좀",
+    "교정 부탁",
+    "교정 봐",
+    "polish*",
+    "proofread*",
+    "reword*",
+    "refine*",
+    "rephras*",
+];
+/// "Write it again": about wording next to a word for the text ([`TEXT_WORDS`]) or a manner
+/// ([`MANNER_WORDS`]), with a text the sentence brings, or when the sentence says nothing else
+/// ("다시 써줘") — "지난달 합계 다시 써줘" is not.
+const AGAIN_VERBS: &[&str] = &["다시 써", "다시 작성", "다시 적어", "rewrit*", "rewrote"];
+/// Verbs that change anything at all — a setting, a field, a project. They ask for wording to be
+/// worked on only next to a word for the text, a manner, or a text the sentence brings. Request
+/// forms only: "수정된 내용", "수정 이력" are not requests.
+const CHANGE_VERBS: &[&str] = &["수정해", "수정하", "수정 부탁", "수정 좀", "수정 바", "고쳐", "revise*"];
+/// "더 간결하게", "좀 더 자연스럽게": a request on their own only when the sentence says nothing else.
+const POLISH_ADVERBS: &[&str] = &["자연스럽게", "간결하게", "매끄럽게"];
+/// What was done, not what to do: "어떤 부분을 다듬었는지 알려줘", "수정했어".
+const DONE_FORMS: &[&str] = &["다듬었", "수정했", "고쳤", "교정했", "윤문했", "손봤"];
+/// A noun that is itself the request when the sentence ends in it ("이 문장 교정", "위 내용 수정").
+const REQUEST_NOUNS: &[&str] = &["수정", "교정", "윤문"];
+/// How a text is to read — what makes "수정해줘" a request about wording.
+const MANNER_WORDS: &[&str] = &[
+    "자연스럽",
+    "간결",
+    "매끄럽",
+    "짧게",
+    "쉽게",
+    "정중",
+    "공손",
+    "부드럽게",
+    "명확하게",
+    "깔끔하게",
+    "말투",
+    "어투",
+    "어조",
+    "문체",
+    "존댓말",
+    "반말",
+    "격식",
+    "오타",
+    "맞춤법",
+    "띄어쓰기",
+    "문법",
+    "typo*",
+    "grammar",
+    "spelling",
+    "concise*",
+    "natural*",
+    "formal*",
+    "polite*",
+    "shorter",
+    "simpler",
+    "tone",
+];
+/// Words for the text of a conversation, as whole words (a particle may follow): "방금 답변", "위
+/// 내용", "이 문장", "요구사항 부분".
+const TEXT_WORDS: &[&str] = &[
+    "방금",
+    "아까",
+    "위",
+    "앞",
+    "이전",
+    "직전",
+    "마지막",
+    "답변",
+    "대답",
+    "응답",
+    "답",
+    "내용",
+    "글",
+    "윗글",
+    "문장",
+    "문구",
+    "표현",
+    "문단",
+    "단락",
+    "부분",
+    "요약",
+    "요약문",
+    "설명",
+    "이거",
+    "그거",
+    "이것",
+    "그것",
+    "이걸",
+    "그걸",
+    "above",
+    "previous",
+    "last",
+    "answer",
+    "reply",
+    "response",
+    "text",
+    "sentence",
+    "sentences",
+    "paragraph",
+    "wording",
+    "summary",
+    "it",
+    "this",
+    "that",
+];
+/// Words that say nothing of their own.
+const FILLER_WORDS: &[&str] = &[
+    "좀", "더", "좀더", "조금", "약간", "다시", "한번", "한", "번", "훨씬", "살짝", "이", "그", "저", "please", "a",
+    "bit", "more", "much", "little", "the", "make", "again",
+];
+/// "Do it" — "해줘", "써줘", "바꿔줘", "말해줘", "부탁해": whole words, and the beginnings of words.
+const DO_WORDS: &[&str] = &["해", "써", "줘"];
+const DO_STEMS: &[&str] = &[
+    "해줘",
+    "해주",
+    "해줄",
+    "해봐",
+    "써줘",
+    "써주",
+    "써줄",
+    "써봐",
+    "작성해",
+    "바꿔",
+    "말해",
+    "적어",
+    "부탁",
+    "주세요",
+    "줄래",
+    "주실",
+    "rewrit",
+];
+/// A document is asked for: "새 문서로", "보고서로 작성해줘", "초안 만들어줘", "create a document".
+/// (The names of the documents the generator writes are [`rules::names_template`].)
+const DOCUMENT_WORDS: &[&str] = &[
+    "문서",
+    "파일",
+    "초안",
+    "양식",
+    "서식",
+    "작성해",
+    "작성 해",
+    "작성하",
+    "만들",
+    "생성",
+    "document*",
+    "file*",
+    "draft*",
+    "create",
+    "compose",
+    "generate",
+    "make a",
+    "prepare a",
+    "write a",
+];
+/// Things of the app a sentence may ask to change: "테마 수정해줘", "프로젝트 이름 고쳐줘", "제목 다듬어줘".
+const APP_WORDS: &[&str] = &[
+    "설정",
+    "테마",
+    "언어",
+    "모델",
+    "프로필",
+    "프로젝트",
+    "태그",
+    "스키마",
+    "규칙",
+    "템플릿",
+    "파일명",
+    "이름",
+    "제목",
+    "폴더",
+    "유형",
+    "필드",
+    "워크스페이스",
+    "참고 자료",
+    "원본",
+    "페이지",
+    "그림",
+    "시트",
+    "엔진",
+    "단축키",
+    "글꼴",
+    "배율",
+    "theme",
+    "model",
+    "profile",
+    "project*",
+    "tag*",
+    "schema*",
+    "rule*",
+    "template*",
+    "filename",
+    "folder*",
+    "field*",
+    "setting*",
+    "workspace",
+    "page*",
+    "cell*",
+    "sheet*",
+];
+/// The same, for words too short to look for inside others ("3쪽", "값을").
+const APP_SHORT_WORDS: &[&str] = &["쪽", "값", "칸", "셀"];
+/// Something else is asked for along with it: the plan the model made of the whole sentence stays.
+/// (What is said of the text itself — "중복은 지우고 다듬어줘" — is part of the request: a plan with a
+/// step that deletes or moves documents is not taken over anyway.)
+const OTHER_ACTIONS: &[&str] = &[
+    "저장",
+    "내보내",
+    "메일",
+    "인쇄",
+    "찾아",
+    "검색",
+    "열어",
+    "export*",
+    "save",
+    "send",
+    "email",
+    "print",
+    "find",
+    "search",
+    "open",
+];
+/// "다듬지 마", "수정하지 말고": not a request.
+const NEGATIONS: &[&str] = &[
+    "다듬지 마",
+    "다듬지 말",
+    "수정하지 마",
+    "수정하지 말",
+    "고치지 마",
+    "고치지 말",
+    "교정하지 마",
+    "교정하지 말",
+    "손보지 마",
+    "손보지 말",
+    "쓰지 마",
+    "쓰지 말",
+    "don't",
+    "do not",
+    "never",
+];
+/// A question about polishing ("어떻게 다듬어?", "수정하는 방법 알려줘", "글 다듬는 법") is a question.
+const QUESTION_WORDS: &[&str] = &["방법", "는 법", "요령", "어떻게", "how to", "how do", "how can"];
+const REQUEST_ENDINGS: &[&str] =
+    &["줘", "주세요", "줄래", "줄 수", "줄수", "주실", "주시겠", "주겠", "please", "can you", "could you", "would you"];
+/// A reply to the assistant's question this long is the text itself ("어떤 글을 다듬을까요?" → the text).
+const MIN_REPLY_BODY_CHARS: usize = 20;
+/// A single quoted passage this long is the text to work on, not a term inside the request.
+const MIN_QUOTED_BODY_CHARS: usize = 10;
+
+/// A request to polish / fix / revise the wording of a text ([`polish_request`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Polish {
+    /// What is asked: the user's words without the text they bring.
+    pub instruction: String,
+    /// The request and the text to work on, as the text-only answer takes them ("instruction:
+    /// text", the way [`carried_text`] reads it back). `None`: there is no text to work on.
+    pub question: Option<String>,
+    /// Whether the text is the assistant's last reply (else the sentence brought it).
+    pub from_reply: bool,
+}
+
+/// The words of `text`, lower-case, without punctuation, each without one trailing particle.
+fn word_stems(text: &str) -> Vec<String> {
+    const PARTICLES: &[&str] =
+        &["에서", "으로", "에는", "에도", "까지", "을", "를", "은", "는", "이", "가", "의", "도", "만", "로", "에"];
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            PARTICLES.iter().find_map(|p| w.strip_suffix(p).filter(|stem| !stem.is_empty())).unwrap_or(w).to_string()
+        })
+        .collect()
+}
+
+/// Whether the words carry any word of a polish request (which a body's instruction must).
+fn has_polish_word(words: &str) -> bool {
+    let says = |list: &[&str]| super::rules::says(words, list);
+    says(POLISH_VERBS) || says(AGAIN_VERBS) || says(CHANGE_VERBS) || says(POLISH_ADVERBS) || ends_in_request_noun(words)
+}
+
+fn ends_in_request_noun(words: &str) -> bool {
+    let words = words.trim_end_matches(|c: char| !c.is_alphanumeric());
+    REQUEST_NOUNS.iter().any(|n| words.ends_with(n))
+}
+
+/// The instruction and the text of a sentence that brings its text along, however short the text:
+/// "instruction: text", "instruction ⏎ text", "text ⏎ instruction", one quoted passage, or — in a
+/// reply to the assistant's question — the reply.
+fn brought_text(text: &str) -> Option<(String, String)> {
+    let command = super::rules::command_of(text);
+    if let Some(body) = carried_text(text) {
+        let said = super::rules::user_words(text);
+        return Some((said.replace(body, " "), body.to_string()));
+    }
+    if command.len() != text.len() {
+        // A reply to a question back: the command is the request, a reply of some length the text.
+        let said = super::rules::user_words(text);
+        let reply = said[command.len().min(said.len())..].trim();
+        return (reply.chars().count() >= MIN_REPLY_BODY_CHARS && !has_polish_word(reply) && has_polish_word(command))
+            .then(|| (command.trim().to_string(), reply.to_string()));
+    }
+    let said = command.trim();
+    for sep in [':', '：', '\n'] {
+        let between_digits = |pos: usize| {
+            said[..pos].chars().next_back().is_some_and(|c| c.is_ascii_digit())
+                && said[pos + sep.len_utf8()..].chars().next().is_some_and(|c| c.is_ascii_digit())
+        };
+        if let Some(pos) = said.match_indices(sep).map(|(i, _)| i).find(|i| !between_digits(*i)) {
+            let (head, tail) = (said[..pos].trim(), said[pos + sep.len_utf8()..].trim());
+            if head.chars().count() <= MAX_INSTRUCTION_CHARS && has_polish_word(head) && tail.chars().count() >= 2 {
+                return Some((head.to_string(), tail.to_string()));
+            }
+        }
+    }
+    if let Some(pos) = said.rfind('\n') {
+        let (body, tail) = (said[..pos].trim(), said[pos..].trim());
+        if tail.chars().count() <= MAX_INSTRUCTION_CHARS && has_polish_word(tail) && body.chars().count() >= 2 {
+            return Some((tail.to_string(), body.to_string()));
+        }
+    }
+    if let [quoted] = super::rules::quotes(said).as_slice() {
+        // (a passage opens at the beginning of a word: the apostrophes of "it's … doesn't" quote nothing)
+        let opens_a_word = said
+            .find(quoted.as_str())
+            .is_some_and(|at| said[..at].trim_end().chars().rev().nth(1).is_none_or(char::is_whitespace));
+        let outside = super::rules::outside_quotes(said);
+        if opens_a_word && quoted.chars().count() >= MIN_QUOTED_BODY_CHARS && has_polish_word(&outside) {
+            return Some((outside.trim().to_string(), quoted.clone()));
+        }
+    }
+    None
+}
+
+/// The assistant's last reply of the conversation, in full: what the shell sent as such
+/// (`PlanContext::last_reply`), else the last assistant turn of the history — but not the question a
+/// reply to a question back answers.
+fn last_reply(text: &str, ctx: &super::PlanContext) -> Option<String> {
+    if let Some(reply) = ctx.last_reply.as_deref() {
+        return Some(reply.trim().to_string()).filter(|r| !r.is_empty());
+    }
+    let asked = super::compact(&text[super::rules::command_of(text).len()..]);
+    ctx.history
+        .iter()
+        .rev()
+        .filter(|t| t.role == crate::knowledge::TurnRole::Assistant)
+        .map(|t| t.text.trim())
+        .find(|t| {
+            let key = super::compact(t.trim_end_matches('…'));
+            !key.is_empty() && (asked.is_empty() || !asked.contains(&key))
+        })
+        .map(str::to_string)
+}
+
+/// Whether the user's words ask for the wording of a text to be polished / fixed / revised and for
+/// nothing else — by the words alone ([`polish_request`] also asks the phrase rules). When in
+/// doubt, they do not:
+/// - a verb about wording ([`POLISH_VERBS`]) asks for it; a verb that changes anything
+///   ([`CHANGE_VERBS`]: "수정해줘", "고쳐줘") only next to a word for the text, a manner, or a text the
+///   sentence brings ("공급가액 수정해줘" is a field, "테마 수정해줘" a setting); "다시 써줘" also when the
+///   sentence says nothing else; "더 간결하게" only then ("간결하게 요약해줘" is a summary);
+/// - not when a document is asked for or named (a new document, a draft, a form, one of the
+///   generator's documents, a document type or a form of the workspace, a file, a section of a
+///   draft, the open or selected documents), a thing of the app is named (a setting, a project, a
+///   tag, a title, a page …), what to find and what to put instead are quoted (`edit_text`),
+///   something else is asked for too (save, export, search …), or the sentence is a question, a
+///   report of what was done, or says not to.
+///
+/// The text to work on: what the sentence brings, else the assistant's last reply ([`last_reply`]).
+pub fn polish_words(text: &str, ctx: &super::PlanContext) -> Option<Polish> {
+    let brought = brought_text(text);
+    let instruction = match &brought {
+        Some((instruction, _)) => instruction.clone(),
+        None => super::rules::user_words(text),
+    };
+    let instruction = instruction.trim();
+    if instruction.is_empty() || instruction.chars().count() > MAX_INSTRUCTION_CHARS {
+        return None;
+    }
+    let says = |list: &[&str]| super::rules::says(instruction, list);
+    let stems = word_stems(instruction);
+    let stem_in = |list: &[&str]| stems.iter().any(|s| list.contains(&s.as_str()));
+    // 1. What asks for it.
+    let wording = says(POLISH_VERBS);
+    let again = says(AGAIN_VERBS);
+    let change = says(CHANGE_VERBS) || ends_in_request_noun(instruction);
+    let adverb = says(POLISH_ADVERBS);
+    let about_text = brought.is_some() || stem_in(TEXT_WORDS) || says(MANNER_WORDS);
+    let nothing_else = stems.iter().all(|s| {
+        FILLER_WORDS.contains(&s.as_str())
+            || TEXT_WORDS.contains(&s.as_str())
+            || DO_WORDS.contains(&s.as_str())
+            || DO_STEMS.iter().any(|d| s.starts_with(d))
+            || super::rules::says(s, MANNER_WORDS)
+    });
+    if !(wording || ((again || change) && about_text) || ((again || adverb) && nothing_else)) {
+        return None;
+    }
+    // 2. What it is not. ("다시 써줘" and "다시 작성해줘" write the text again, not a document.)
+    let compact = super::compact(instruction);
+    let lower = instruction.to_lowercase();
+    let without_again = instruction.replace("다시 작성", " ").replace("다시작성", " ");
+    let asks_document = super::rules::says(&without_again, DOCUMENT_WORDS)
+        || super::rules::names_template(instruction)
+        || super::rules::names_section(instruction)
+        || ctx
+            .doc_types
+            .iter()
+            .flat_map(|d| [&d.label_ko, &d.label_en])
+            .chain(ctx.schemas.iter().map(|s| &s.name))
+            .any(|name| {
+                let key = super::compact(name);
+                key.chars().count() >= 3 && compact.contains(&key)
+            });
+    let names_app_thing = says(APP_WORDS)
+        || super::rules::points_at_documents(instruction)
+        || stems.iter().any(|s| {
+            let word = s.trim_start_matches(|c: char| c.is_ascii_digit());
+            APP_SHORT_WORDS.contains(&word)
+        });
+    let replaces = super::rules::quotes(instruction).len() >= 2;
+    let question = says(QUESTION_WORDS)
+        || (instruction.ends_with(['?', '？']) && !REQUEST_ENDINGS.iter().any(|w| lower.contains(w)));
+    let not_asked = says(NEGATIONS) || says(DONE_FORMS) || question;
+    if asks_document || names_app_thing || replaces || says(OTHER_ACTIONS) || not_asked {
+        return None;
+    }
+    // 3. The text to work on.
+    let head =
+        instruction.trim_end_matches(|c: char| !c.is_alphanumeric()).split_whitespace().collect::<Vec<_>>().join(" ");
+    let layout = |body: &str| {
+        let room = super::validate::MAX_CARRIED_TEXT_CHARS.saturating_sub(head.chars().count() + 2);
+        format!("{head}:\n{}", body.trim().chars().take(room).collect::<String>())
+    };
+    Some(match brought {
+        // (a plain sentence that brings its text is the request as the user wrote it)
+        Some((_, body)) => {
+            let whole = super::rules::command_of(text).len() == text.len();
+            Polish {
+                instruction: head.clone(),
+                question: Some(if whole { text.trim().to_string() } else { layout(&body) }),
+                from_reply: false,
+            }
+        }
+        None => {
+            let reply = last_reply(text, ctx);
+            Polish { instruction: head.clone(), question: reply.as_deref().map(layout), from_reply: reply.is_some() }
+        }
+    })
+}
+
+/// [`polish_words`] for a sentence the phrase rules do not read as a command of the app: every
+/// reading they already have of a sentence with "수정" — a settings change, a replacement with its
+/// two quoted texts, a project / tag / form / rule edit, a revision of a section of the draft — stays.
+pub fn polish_request(text: &str, ctx: &super::PlanContext) -> Option<Polish> {
+    let asked = polish_words(text, ctx)?;
+    (!super::rules::reads_as_command(&asked.instruction, ctx)).then_some(asked)
+}
+
+/// What is asked when a polish request has no text to work on.
+pub fn polish_what(ko: bool) -> &'static str {
+    if ko {
+        "어떤 글을 다듬을까요? 글을 함께 보내 주시거나, 답변을 받은 뒤 '방금 답변 다듬어줘'라고 해 주세요."
+    } else {
+        "Which text? Send it along with the request, or ask again after an answer (\"polish the last answer\")."
+    }
+}
+
+/// The plan of a polish request: one text-only `answer` over the request and its text — nothing is
+/// looked up, nothing is confirmed, no scope — or the question for the text when there is none.
+pub fn polish_plan(asked: &Polish, confidence: f32, ko: bool) -> Plan {
+    let Some(question) = asked.question.clone() else {
+        return Plan::clarify(polish_what(ko), confidence.min(0.5));
+    };
+    let mut plan = Plan::single(
+        Op::Answer { question, cite: None, knowledge: Some(false), mode: None, reply: None },
+        confidence.max(super::MIN_CONFIDENCE),
+        if ko { "글을 다듬어 답합니다" } else { "Polishes the text in the reply" },
+    );
+    plan.requires_confirmation = false;
+    plan
+}
+
+/// Whether `find` stands between quotes in the user's words ("'갑'을 '을'로 수정해줘").
+fn find_is_quoted(text: &str, find: &str) -> bool {
+    let key = super::compact(find);
+    !key.is_empty() && super::rules::quotes(&super::rules::user_words(text)).iter().any(|q| super::compact(q) == key)
+}
+
+/// 1.0.6 — a polish request is answered in the chat. A model plan that takes it elsewhere becomes
+/// the text-only answer of [`polish_plan`] (or the question for the text): a new document
+/// (`draft_document`), a revision of a draft when none is open (`revise_draft`; with a draft open in
+/// 문서 작성 the request is about that draft and stays), a replacement in the documents whose `find`
+/// the sentence does not quote (`edit_text`), `open`, `search`, `explain`, `summarize`, an answer
+/// that is not already over the text the sentence brought, "nothing to do", or a question back.
+/// Any other plan — a settings change, a tag, a title — keeps the model's reading. Returns the note
+/// for the card (none for the question).
+pub fn polish_in_chat(text: &str, plan: &mut Plan, ctx: &super::PlanContext, ko: bool) -> Option<Option<PlanIssue>> {
+    let asked = polish_request(text, ctx)?;
+    // A pasted text and a plan over documents it names — a folder, a filter, document ids: "the
+    // text" is an instruction about them, the reading `prefer_text_only_answer` leaves alone.
+    let about_documents = carried_text(text).is_some()
+        && explicit_scope(plan)
+        && plan.operations.iter().all(|op| {
+            matches!(
+                op,
+                Op::Summarize { .. } | Op::Explain { .. } | Op::Compare { .. } | Op::Search { .. } | Op::Answer { .. }
+            )
+        });
+    if about_documents {
+        return None;
+    }
+    let elsewhere = plan.is_clarification()
+        || (!plan.operations.is_empty()
+            && plan.operations.iter().all(|op| match op {
+                Op::DraftDocument { .. }
+                | Op::Open { .. }
+                | Op::Search { .. }
+                | Op::Explain { .. }
+                | Op::Summarize { .. }
+                | Op::Noop {}
+                | Op::Clarify { .. } => true,
+                Op::ReviseDraft { .. } => ctx.draft_id.is_none(),
+                Op::EditText { find, .. } => !find_is_quoted(text, find),
+                // (the answer over the user's whole sentence is the one this guard would make)
+                Op::Answer { question, knowledge, mode, reply, .. } => {
+                    reply.is_none()
+                        && !(asked.question.as_deref() == Some(question.as_str())
+                            && *knowledge == Some(false)
+                            && mode.is_none())
+                }
+                _ => false,
+            }));
+    if !elsewhere {
+        return None;
+    }
+    let confidence = if plan.is_clarification() { 0.85 } else { plan.confidence.max(0.85) };
+    *plan = polish_plan(&asked, confidence, ko);
+    if plan.is_clarification() {
+        return Some(None);
+    }
+    Some(Some(PlanIssue::warn(
+        "operations",
+        "text_only_answer",
+        match (asked.from_reply, ko) {
+            (true, true) => "방금 답변을 요청대로 다듬어 채팅으로 답합니다(문서를 만들거나 고치지 않습니다)",
+            (true, false) => "works on the last reply and answers in the chat; no document is written or changed",
+            (false, true) => "문장에 글이 들어 있어 문서를 찾는 대신 그 글로 답합니다",
+            (false, false) => "the sentence carries its own text; answering from it instead of searching documents",
+        },
+    )))
 }
 
 // ---------------------------------------------------------------------------

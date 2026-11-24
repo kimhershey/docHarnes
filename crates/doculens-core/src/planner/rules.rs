@@ -260,6 +260,12 @@ pub fn points(words: &str) -> bool {
     t.has(SELECTION_WORDS) || t.has(PART_WORDS)
 }
 
+/// Whether the words point at documents — the open one, the selection, a page ("이 문서", "선택한
+/// 문서", "this file") — and not merely at a part of a text ("이 문장", "이 부분").
+pub fn points_at_documents(words: &str) -> bool {
+    Text::new(words, true).has(SELECTION_WORDS)
+}
+
 /// The documents a sentence that points at "this" one is about — the selection, or else the open
 /// document — when the user's own words do point: "이 문서", "이 계약서", "이 조항", "this clause".
 /// Empty when nothing is pointed at, or nothing is open or selected.
@@ -299,6 +305,28 @@ pub fn dated_outside_quotes(text: &str, today: NaiveDate) -> bool {
 /// a part of the compact text, an English word as a whole word (`"move"` is not in "remove").
 pub fn says(words: &str, triggers: &[&str]) -> bool {
     Text::new(words, true).has(triggers)
+}
+
+/// Whether the words name one of the documents the generator writes ("보고서", "회의록", "견적서",
+/// "contract" … — [`TEMPLATE_WORDS`]).
+pub fn names_template(words: &str) -> bool {
+    let t = Text::new(words, true);
+    TEMPLATE_WORDS.iter().any(|(_, _, _, names)| t.has(names))
+}
+
+/// Whether the words name a section of a draft ("3절", "결론 절", "section 2").
+pub fn names_section(words: &str) -> bool {
+    section_ordinal(words).is_some() || has_section_word(words)
+}
+
+/// The quoted segments of the words, in order.
+pub fn quotes(words: &str) -> Vec<String> {
+    quoted_all(words)
+}
+
+/// The words without their quoted segments.
+pub fn outside_quotes(words: &str) -> String {
+    unquoted(words)
 }
 
 /// Whether the user's own words say anything about a date or a period (1.0.5, `guard::unsaid_scope`):
@@ -4479,6 +4507,41 @@ fn agent_ops(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
         .or_else(|| generic_setting_rule(t))
 }
 
+/// The rules of what the app itself holds and does — undo, jobs, the engine, models, settings,
+/// reference material, projects, forms and schemas, the documents' own edits (title, a replacement
+/// with its two quoted texts …), drafts. They are tried first: a sentence one of them reads is that
+/// command, whatever else its words could mean.
+fn commands(t: &Text<'_>, ctx: &PlanContext) -> Option<Plan> {
+    undo_redo(t)
+        .or_else(|| job_control(t))
+        .or_else(|| engine(t))
+        .or_else(|| agent_ops(t, ctx))
+        .or_else(|| set_retention(t))
+        .or_else(|| settings_combo(t, ctx))
+        .or_else(|| quick_settings(t, ctx))
+        .or_else(|| register_form(t, ctx))
+        .or_else(|| explain_about(t, ctx))
+        .or_else(|| project_ops(t, ctx))
+        .or_else(|| define_schema(t, ctx))
+        .or_else(|| revise_draft_rule(t, ctx))
+        .or_else(|| draft_document(t, ctx))
+}
+
+/// Whether the phrase rules read the words as a command of the app ([`commands`]): such a sentence
+/// keeps that reading — it is not a request to polish a text (`guard::polish_request`).
+pub fn reads_as_command(words: &str, ctx: &PlanContext) -> bool {
+    let raw = words.trim();
+    !raw.is_empty() && commands(&Text::new(raw, ctx.language == Language::Ko), ctx).is_some()
+}
+
+/// 1.0.6 (user decision 2026-11-24): "다듬어줘 / 수정해줘" asks for the wording of a text to be worked
+/// on — the text the sentence brings, or else the assistant's last reply — and is answered in the
+/// chat. With no text at hand the text is asked for.
+fn polish(text: &str, ctx: &PlanContext) -> Option<Plan> {
+    let asked = super::guard::polish_words(text, ctx)?;
+    Some(super::guard::polish_plan(&asked, 0.85, ctx.language == Language::Ko))
+}
+
 /// Tries the rules in order; `None` leaves the command to the model.
 pub fn plan(text: &str, ctx: &PlanContext) -> Option<Plan> {
     // Of an ask-back text only the user's words are read (0.8.2): the assistant's question names
@@ -4490,19 +4553,11 @@ pub fn plan(text: &str, ctx: &PlanContext) -> Option<Plan> {
         return None;
     }
     let t = Text::new(raw, ctx.language == Language::Ko);
-    undo_redo(&t)
-        .or_else(|| job_control(&t))
-        .or_else(|| engine(&t))
-        .or_else(|| agent_ops(&t, ctx))
-        .or_else(|| set_retention(&t))
-        .or_else(|| settings_combo(&t, ctx))
-        .or_else(|| quick_settings(&t, ctx))
-        .or_else(|| register_form(&t, ctx))
-        .or_else(|| explain_about(&t, ctx))
-        .or_else(|| project_ops(&t, ctx))
-        .or_else(|| define_schema(&t, ctx))
-        .or_else(|| revise_draft_rule(&t, ctx))
-        .or_else(|| draft_document(&t, ctx))
+    // (The polish rule stands before the rules for files — "위 답변을 표로 정리해서 다듬어줘" is not
+    // a request to sort documents into folders. Its own word lists keep it off a sentence that names
+    // a document, a file, a folder, a tag or a thing to save, send or find.)
+    commands(&t, ctx)
+        .or_else(|| polish(text, ctx))
         .or_else(|| export(&t, ctx))
         .or_else(|| aggregate(&t, ctx))
         .or_else(|| inbox(&t, ctx))
