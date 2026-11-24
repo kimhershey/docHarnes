@@ -11,9 +11,9 @@ import { AnswerCard } from "@/features/knowledge/AnswerCard";
 import { openCitation } from "@/features/knowledge/AnswersPanel";
 import { RuleSummary } from "@/features/projects/RuleGrid";
 import { verdictVariant } from "@/features/projects/rules";
-import { hitHref } from "./evidence";
 import { runJournal, type UiOpResult } from "@/lib/commands";
 import { revealPath } from "@/lib/ipc";
+import { sourceHref, sourcePageLabel } from "@/lib/sourcePage";
 import { SCREEN_ROUTES, type Draft, type OpKind, type OrganizeItem, type Plan, type PlanExecution, type PlanResponse, type StepStatus, type UndoReport } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import type { Clipped } from "@/stores/assistant";
@@ -273,10 +273,10 @@ export function ResultCard({
             type="button"
             className={cn("max-w-full truncate rounded-full bg-accent-soft px-2 py-0.5 text-xs text-accent hover:bg-accent hover:text-accent-fg cursor-pointer")}
             title={h.snippet}
-            onClick={() => navigate(hitHref(h, s.query))}
+            onClick={() => navigate(sourceHref(h, s.query))}
             data-testid="result-hit"
           >
-            {h.title} · {t("answer.citation_page", { page: h.page_start })}
+            {[h.title, sourcePageLabel(h, t)].filter(Boolean).join(" · ")}
           </button>
         );
         return (

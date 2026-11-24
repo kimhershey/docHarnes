@@ -2011,6 +2011,7 @@
     "open_source": "Open source",
     "citation_page": "p.{{page}}",
     "citation_pages": "p.{{from}}-{{to}}",
+    "citation_page_in": "p.{{page}} (passage on pp. {{from}}–{{to}})",
     "copy": "Copy",
     "copied": "Copied.",
     "meta": "{{model}} · {{ms}}ms",

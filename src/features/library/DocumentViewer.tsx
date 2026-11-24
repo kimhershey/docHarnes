@@ -23,6 +23,7 @@ import { api, revealPath } from "@/lib/ipc";
 import { useDocTypes, useDocument, useDocumentChunks, useDocumentCollections, useDocumentPages, useDocumentTextHistory, useFields, usePipelineStatus } from "@/lib/queries";
 import { queryClient, queryKeys } from "@/lib/query-client";
 import { formatChord, isComposing, matchesChord } from "@/lib/shortcuts";
+import { sourceHref, sourcePage } from "@/lib/sourcePage";
 import type { Citation, DocumentView, PageTextRevert, PageView } from "@/lib/types";
 import { cn, formatBytes, formatDate, isMac } from "@/lib/utils";
 import { useShortcut } from "@/stores/settings";
@@ -33,7 +34,7 @@ import { HistoryPanel } from "./HistoryPanel";
 import { PageTextLayer } from "./PageTextLayer";
 import { RetryImage } from "./RetryImage";
 import { SplitDialog } from "./SplitMergeDialogs";
-import { isContiguous, matchWords, selectionText as layerSelectionText } from "./textLayer";
+import { isContiguous, matchWords, passageNeedles, selectionText as layerSelectionText } from "./textLayer";
 import { EDITABLE_KINDS, EditOriginalDialog } from "./EditOriginalDialog";
 import { VersionDialog } from "./VersionDialog";
 import { ViewerKnowledgePanel } from "./ViewerKnowledgePanel";
@@ -162,10 +163,21 @@ export function DocumentViewer() {
   };
   const onCitation = (c: Citation) => {
     if (c.document_id !== id) {
-      navigate(`/library/${c.document_id}?page=${c.page_start}&chunk=${c.chunk_id}`);
+      navigate(sourceHref(c));
       return;
     }
-    setPageNo(c.page_start);
+    // A source of the open document (1.0.5): the page it is shown with and its passage marked — what the
+    // link from another screen does. It used to turn to the passage's first page and mark nothing.
+    const sourceAt = sourcePage(c);
+    const next = new URLSearchParams(searchParams);
+    next.delete("q");
+    next.delete("tab");
+    next.set("chunk", String(c.chunk_id));
+    if (sourceAt === null) next.delete("page");
+    else next.set("page", String(sourceAt));
+    setSearchParams(next, { replace: true });
+    // (the same source again after turning pages: the address does not change)
+    if (sourceAt !== null) setPageNo(sourceAt);
   };
 
   const total = pages?.length ?? 0;
@@ -197,15 +209,12 @@ export function DocumentViewer() {
   const highlightNeedles = useMemo(() => {
     if (highlightQuery.trim()) return highlightQuery.split(/\s+/).map((w) => w.trim()).filter((w) => w.length >= 1);
     if (!citedChunk) return [];
-    // A citation without a query: mark the opening lines of the cited passage.
-    const body = citedChunk.heading_path && citedChunk.text.startsWith(citedChunk.heading_path) ? citedChunk.text.slice(citedChunk.heading_path.length) : citedChunk.text;
-    return body
-      .split("\n")
-      .map((l) => l.trim())
-      .filter((l) => l.length >= 4)
-      .slice(0, 3)
-      .map((l) => Array.from(l).slice(0, 80).join(""));
-  }, [highlightQuery, citedChunk]);
+    // A citation without a query: mark the first lines of the cited passage that stand on this page (a passage
+    // runs over several pages, and the page opened is the one of the match — 1.0.5).
+    const pageText = text?.toLowerCase();
+    const onPage = (line: string) => (page?.image_url ? matchWords(layout, [line]).size > 0 : !!pageText && pageText.includes(line.toLowerCase()));
+    return passageNeedles(citedChunk, onPage);
+  }, [highlightQuery, citedChunk, layout, text, page?.image_url]);
   const highlights = useMemo<[number, number][]>(() => {
     if (!text || highlightNeedles.length === 0) return [];
     const chars = Array.from(text);

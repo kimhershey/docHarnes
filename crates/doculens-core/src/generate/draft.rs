@@ -429,7 +429,9 @@ fn knowledge_sources(
             citation: DraftCitation {
                 doc_id: Some(h.document_id.clone()),
                 title: h.title.clone(),
-                page: Some(h.page_start),
+                // (the page of the match the excerpt shows — none for a document whose pages say
+                // nothing about where its text is; 1.0.5, `knowledge::locate`)
+                page: h.match_page,
                 chunk_id: Some(h.chunk_id),
                 source: label.into(),
                 excerpt: Some(truncate(h.snippet.trim(), EXCERPT_CHARS)),

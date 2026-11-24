@@ -1197,6 +1197,11 @@ export interface SearchHit {
   score: number;
   channels: SearchChannel[];
   vector_similarity: number | null;
+  /**
+   * 1.0.5 — the page the match stands on (the passage covers `page_start..page_end`); `null`: the document's
+   * pages say nothing about where its text is, no page is shown. Read through `@/lib/sourcePage`.
+   */
+  match_page?: number | null;
 }
 
 export interface SearchResponse {
@@ -1323,6 +1328,12 @@ export interface Citation {
   clause: string | null;
   score: number;
   excerpt: string;
+  /**
+   * 1.0.5 — the page to show and to open: where the question's words stand in the passage, or where the passage
+   * begins (a summary's source). `null`: no page is shown; absent: a source stored before 1.0.5 (`page_start`).
+   * Read through `@/lib/sourcePage`.
+   */
+  match_page?: number | null;
 }
 
 export interface AnswerSentence {

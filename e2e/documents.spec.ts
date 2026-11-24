@@ -144,6 +144,41 @@ test.describe("P2 documents", () => {
     await expect(page.getByTestId("library-empty")).toBeVisible();
   });
 
+  // 1.0.5 (user report "근거로 출력하는 위치와 검색의 위치가 문서에서 찾은 내용과 맞지 않음"): a summary lists the
+  // passages it cites, and a source of the open document turns to its page with the passage marked — it used
+  // to turn the page and mark nothing.
+  test("viewer: a summary's source turns to its page and marks the passage there", async ({ page }) => {
+    await freshApp(page);
+    await createWorkspace(page);
+    await page.getByTestId("nav-library").click();
+    await openImportPreview(page, ["D:\\scan\\계약서-12p.pdf"]);
+    await page.getByTestId("doc-import-run").click();
+    const card = page.locator('[data-testid^="doc-card-"][data-doc-name="계약서-12p.pdf"]');
+    await expect(card).toHaveAttribute("data-doc-status", "rendered", { timeout: 15_000 });
+    await card.locator('[data-testid^="doc-open-"]').click();
+    await expect(page.getByTestId("viewer-page")).toHaveText("1 / 12");
+
+    await page.getByTestId("viewer-summary-run").click();
+    const panel = page.getByTestId("viewer-qa");
+    const sources = panel.getByTestId("answer-source");
+    await expect(sources.first()).toBeAttached({ timeout: 20_000 });
+    // The sources are the five passages the summary cites — not every passage of the twelve pages.
+    await expect(sources).toHaveCount(5);
+    await panel.locator("details summary").first().click();
+    await expect(panel.locator("details ol li").nth(2)).toContainText("계약서-12p.pdf · p.3");
+
+    await sources.nth(2).click();
+    await expect(page.getByTestId("viewer-page")).toHaveText("3 / 12");
+    await expect(page).toHaveURL(/[?&]chunk=\d+/);
+    await expect(page.getByTestId("viewer-text-layer").locator("mark").first()).toBeVisible();
+    // The same source again after turning the page.
+    await page.getByTestId("viewer-next").click();
+    await expect(page.getByTestId("viewer-page")).toHaveText("4 / 12");
+    await sources.nth(2).click();
+    await expect(page.getByTestId("viewer-page")).toHaveText("3 / 12");
+    await expect(page.getByTestId("viewer-text-layer").locator("mark").first()).toBeVisible();
+  });
+
   test("library bulk actions: selection follows the filter, re-render job, delete, inbox toggle", async ({ page }) => {
     await freshApp(page);
     await createWorkspace(page);

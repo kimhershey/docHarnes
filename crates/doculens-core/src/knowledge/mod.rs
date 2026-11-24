@@ -11,6 +11,7 @@ pub mod chat;
 pub mod chunker;
 pub mod embed;
 pub mod index;
+pub(crate) mod locate;
 pub mod repo;
 pub mod search;
 pub mod tokenize;
@@ -361,6 +362,14 @@ pub struct SearchHit {
     /// Cosine similarity from the vector channel (None when not a vector hit).
     #[serde(default)]
     pub vector_similarity: Option<f32>,
+    /// 1.0.5 — the page the match stands on: the first highlight of the snippet, or the start of the
+    /// passage when nothing is highlighted. A passage covers `page_start..=page_end` — two or three
+    /// pages at the usual chunk size — and the label and the link of a hit used to say `page_start`
+    /// whatever page the words were on (user report "근거로 출력하는 위치와 검색의 위치가 문서에서 찾은
+    /// 내용과 맞지 않음"). `None`: the pages of the document say nothing about where its text is (a
+    /// converted document whose whole text is kept on page 1) — no page is shown ([`locate`]).
+    #[serde(default)]
+    pub match_page: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -607,6 +616,7 @@ impl AnswerRequest {
 
 /// One numbered source shown to the model (`[n]`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(from = "StoredCitation")]
 pub struct Citation {
     pub index: u32,
     pub chunk_id: i64,
@@ -619,6 +629,51 @@ pub struct Citation {
     pub score: f32,
     /// Short excerpt for the UI.
     pub excerpt: String,
+    /// 1.0.5 — the page to show and to open for this source: where the question's words stand in the
+    /// passage ([`SearchHit::match_page`]), or where the passage begins (a summary's source). `None`:
+    /// the document's pages say nothing about where its text is — no page is shown. A source stored
+    /// before 1.0.5 has no such field and reads as the page it was shown with, `page_start`.
+    pub match_page: Option<u32>,
+}
+
+/// A [`Citation`] as it is read: one without `match_page` (an answer stored before 1.0.5) is not one
+/// whose page is unknown (`null`).
+#[derive(Deserialize)]
+struct StoredCitation {
+    index: u32,
+    chunk_id: i64,
+    document_id: String,
+    title: String,
+    page_start: u32,
+    page_end: u32,
+    heading_path: Option<String>,
+    clause: Option<String>,
+    score: f32,
+    excerpt: String,
+    #[serde(default, deserialize_with = "present")]
+    match_page: Option<Option<u32>>,
+}
+
+fn present<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<Option<u32>>, D::Error> {
+    Option::<u32>::deserialize(d).map(Some)
+}
+
+impl From<StoredCitation> for Citation {
+    fn from(c: StoredCitation) -> Citation {
+        Citation {
+            index: c.index,
+            chunk_id: c.chunk_id,
+            document_id: c.document_id,
+            title: c.title,
+            page_start: c.page_start,
+            page_end: c.page_end,
+            heading_path: c.heading_path,
+            clause: c.clause,
+            score: c.score,
+            excerpt: c.excerpt,
+            match_page: c.match_page.unwrap_or(Some(c.page_start)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

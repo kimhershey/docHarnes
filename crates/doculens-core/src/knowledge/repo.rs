@@ -599,8 +599,9 @@ pub fn glossary_expansions(
     Ok(expand_terms(&list_glossary(conn)?, query, terms, tokenize))
 }
 
-/// NFKC, lower-case, no whitespace: how a glossary form is looked for in the query text.
-fn compact_form(s: &str) -> String {
+/// NFKC, lower-case, no whitespace: how a glossary form is looked for in the query text, and a
+/// passage on the pages of its document ([`super::locate`]).
+pub(crate) fn compact_form(s: &str) -> String {
     super::tokenize::normalize(s).chars().filter(|c| !c.is_whitespace()).collect()
 }
 

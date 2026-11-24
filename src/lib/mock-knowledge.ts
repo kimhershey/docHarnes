@@ -368,6 +368,8 @@ function hitFromChunk(c: Chunk, d: MockDoc | undefined, channels: SearchHit["cha
     score: 1,
     channels,
     vector_similarity: null,
+    // (the mock's passages are on one page each: the match is on it)
+    match_page: c.page_start,
   };
 }
 
@@ -529,6 +531,7 @@ function search(req: SearchRequest): SearchResponse {
       score: Number(h.score.toFixed(4)),
       channels: h.channels,
       vector_similarity: h.sim,
+      match_page: h.chunk.page_start,
     });
     if (resp.hits.length >= limit) break;
   }
@@ -558,7 +561,26 @@ function citation(index: number, h: SearchHit): Citation {
     clause: h.clause,
     score: h.score,
     excerpt: h.text.replace(/\s+/g, " ").slice(0, 160),
+    match_page: h.match_page ?? h.page_start,
   };
+}
+
+/**
+ * `knowledge::answer::cite_in_order` (1.0.5): a summary lists the passages its text cites, numbered 1, 2, … in
+ * the order the text first cites them — the `[n]` markers are rewritten to match. One that cites nothing keeps
+ * the first passage of each document.
+ */
+function citeInOrder(text: string, all: Citation[]): { text: string; sources: Citation[] } {
+  const order: number[] = [];
+  for (const m of text.matchAll(/\[(\d+(?:\s*,\s*\d+)*)\]/g)) {
+    for (const n of (m[1] ?? "").split(",").map((x) => Number(x.trim()))) if (n > 0 && n <= all.length && !order.includes(n)) order.push(n);
+  }
+  if (order.length === 0) {
+    const firsts = all.filter((c, i) => all.findIndex((x) => x.document_id === c.document_id) === i);
+    return { text, sources: firsts.map((c, i) => ({ ...c, index: i + 1 })) };
+  }
+  const renumbered = text.replace(/\[(\d+(?:\s*,\s*\d+)*)\]/g, (_, inner: string) => `[${inner.replace(/\d+/g, (n) => String(order.includes(Number(n)) ? order.indexOf(Number(n)) + 1 : n))}]`);
+  return { text: renumbered, sources: order.map((n, i) => ({ ...all.find((c) => c.index === n)!, index: i + 1 })) };
 }
 
 const cancelledAnswers = new Set<string>();
@@ -685,6 +707,12 @@ async function answer(req: AnswerRequest, requestId: string): Promise<Answer> {
           ? [`${firstSentence(base.sources[0]?.excerpt ?? "")} [1]`]
           : base.sources.slice(0, mode === "one_page" ? 8 : 5).map((c) => `- ${firstSentence(c.excerpt)} [${c.index}]`);
     base.text = lines.join("\n");
+    // A summary lists the passages it cites (1.0.5) — a comparison keeps every passage it was shown.
+    if (kind === "summary") {
+      const cited = citeInOrder(base.text, base.sources);
+      base.text = cited.text;
+      base.sources = cited.sources;
+    }
     base.question = req.question.trim() || (ko ? (kind === "compare" ? "두 문서 비교" : "문서 요약") : kind === "compare" ? "Compare documents" : "Document summary");
   } else {
     // Like the core: a follow-up ("그건 누가 작성했어?") is retrieved together with the previous question.
@@ -757,18 +785,17 @@ export async function summarizeDocuments(documents: string[], mode: "one_line" |
   const all = covered.flatMap((id) => (s.chunks[id] ?? []).map((c) => citation(++index, hitFromChunk(c, docs.get(c.document_id)))));
   const firsts = covered.map((id) => all.find((c) => c.document_id === id)!);
   const lines = mode === "one_line" ? [`${firstSentence(firsts[0]!.excerpt)} [${firsts[0]!.index}]`] : firsts.slice(0, mode === "one_page" ? 12 : 8).map((c) => `- ${c.title}: ${firstSentence(c.excerpt)} [${c.index}]`);
-  const text = lines.join("\n");
+  // (the passages the summary cites, numbered in the order it cites them — `cite_in_order`, 1.0.5)
+  const { text, sources } = citeInOrder(lines.join("\n"), all);
   if (!(await stream(requestId, text))) throw err("cancelled", "cancelled");
-  const sentences = parseSentences(text, all.length);
-  const cited = new Set(sentences.flatMap((x) => x.citations));
+  const sentences = parseSentences(text, sources.length);
   const out: Answer = {
     id: null,
     kind: "summary",
     question: ko ? `문서 ${covered.length}건의 내용을 통틀어 하나의 요약으로 정리하세요.` : `Write one summary of the content of the ${covered.length} documents taken together.`,
     text,
     sentences,
-    // (the passages the summary cites, under the numbers its text uses)
-    sources: all.filter((c) => cited.has(c.index)),
+    sources,
     no_evidence: false,
     used_general_knowledge: false,
     conflicts: null,

@@ -8,9 +8,10 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { describeError } from "@/lib/errors";
 import { api } from "@/lib/ipc";
+import { sourceHref, sourcePageLabel } from "@/lib/sourcePage";
 import type { SearchResponse } from "@/lib/types";
 
-import { hitHref, Snippet } from "./hit";
+import { Snippet } from "./hit";
 
 /** "Which evidence does this question retrieve?" — search only, no model call (설정 > 참고 자료(고급)). */
 export function QuestionTestPanel() {
@@ -69,10 +70,10 @@ export function QuestionTestPanel() {
               <li key={h.chunk_id} className="rounded-md border border-border p-2 text-sm" data-testid="kb-test-hit">
                 <div className="flex flex-wrap items-center gap-2 text-xs text-fg-subtle">
                   <span className="font-medium text-fg">[{i + 1}]</span>
-                  <button type="button" className="text-fg hover:underline cursor-pointer" onClick={() => navigate(hitHref(h, question))}>
+                  <button type="button" className="text-fg hover:underline cursor-pointer" onClick={() => navigate(sourceHref(h, question))}>
                     {h.title}
                   </button>
-                  <span>{h.page_start === h.page_end ? t("answer.citation_page", { page: h.page_start }) : t("answer.citation_pages", { from: h.page_start, to: h.page_end })}</span>
+                  {sourcePageLabel(h, t) && <span>{sourcePageLabel(h, t)}</span>}
                   {h.clause && <span>§ {h.clause}</span>}
                   <span className="ml-auto flex gap-1">
                     {h.channels.map((c) => (

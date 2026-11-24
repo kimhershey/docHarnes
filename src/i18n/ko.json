@@ -2011,6 +2011,7 @@
     "open_source": "근거 열기",
     "citation_page": "p.{{page}}",
     "citation_pages": "p.{{from}}-{{to}}",
+    "citation_page_in": "p.{{page}} ({{from}}–{{to}}쪽 대목)",
     "copy": "복사",
     "copied": "복사했습니다.",
     "meta": "{{model}} · {{ms}}ms",

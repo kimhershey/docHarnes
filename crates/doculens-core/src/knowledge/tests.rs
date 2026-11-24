@@ -31,6 +31,11 @@ fn analyzer() -> Analyzer {
 }
 
 fn add_doc(db: &Db, id: &str, name: &str, role: DocumentRole, pages: &[&str]) {
+    add_doc_as(db, id, name, role, pages, false)
+}
+
+/// `converted`: the pages are those of the PDF a HWPX / DOCX / PPTX / XLSX file was printed to.
+fn add_doc_as(db: &Db, id: &str, name: &str, role: DocumentRole, pages: &[&str], converted: bool) {
     db.with(|c| {
         docs::insert_document(
             c,
@@ -61,7 +66,7 @@ fn add_doc(db: &Db, id: &str, name: &str, role: DocumentRole, pages: &[&str]) {
                 is_blank: None,
             })
             .collect();
-        docs::replace_pages(c, id, &new_pages, None, false, None)?;
+        docs::replace_pages(c, id, &new_pages, None, converted, None)?;
         docs::set_status(c, id, DocumentStatus::Rendered, None)
     })
     .unwrap();
@@ -684,8 +689,13 @@ fn summaries_map_reduce_and_comparisons() {
     req.context_tokens = 150; // forces several groups → map-reduce
     let a = summarize(&deps, &req, &mut |_| true).unwrap();
     assert_eq!(a.kind, AnswerKind::Summary);
+    // 1.0.5: the sources are the passages the summary cites — not every passage of the document.
     let chunks = w.db.with(|c| repo::list_chunks(c, "reg2")).unwrap();
-    assert_eq!(a.sources.len(), chunks.len());
+    assert!(chunks.len() > 2, "{}", chunks.len());
+    assert_eq!(
+        a.sources.iter().map(|s| (s.index, s.chunk_id)).collect::<Vec<_>>(),
+        vec![(1, chunks[0].id), (2, chunks[1].id)]
+    );
     assert_eq!(a.sentences.len(), 2);
     assert_eq!(a.sentences[1].citations, vec![2]);
     assert!(a.id.is_some());
@@ -712,6 +722,8 @@ struct LimitedChat {
     sizes: std::sync::Mutex<Vec<u32>>,
     /// Refused requests that merge partial summaries.
     merges_refused: std::sync::Mutex<u32>,
+    /// The `<source>` blocks of the requests it answered.
+    sources_read: std::sync::Mutex<usize>,
 }
 
 impl LimitedChat {
@@ -721,6 +733,7 @@ impl LimitedChat {
             reply: reply.into(),
             sizes: std::sync::Mutex::new(Vec::new()),
             merges_refused: std::sync::Mutex::new(0),
+            sources_read: std::sync::Mutex::new(0),
         }
     }
     fn sizes(&self) -> Vec<u32> {
@@ -748,6 +761,11 @@ impl ChatBackend for LimitedChat {
                 self.limit
             )));
         }
+        *self.sources_read.lock().unwrap() += req
+            .messages
+            .iter()
+            .map(|m| m["content"].as_str().unwrap_or("").matches("<source id=").count())
+            .sum::<usize>();
         on_delta(&self.reply);
         Ok(ChatResponse { content: self.reply.clone(), ..ChatResponse::default() })
     }
@@ -815,7 +833,9 @@ fn summaries_fit_the_model_context_and_split_when_the_server_still_refuses() {
     let sizes = strict.sizes();
     assert!(sizes[0] >= full && sizes.len() >= 2 && *sizes.last().unwrap() < full, "{sizes:?}");
     let chunks = w.db.with(|c| repo::list_chunks(c, "big")).unwrap();
-    assert_eq!(a.sources.len(), chunks.len(), "every chunk still reaches the summary");
+    assert_eq!(*strict.sources_read.lock().unwrap(), chunks.len(), "every chunk still reaches the summary");
+    // (… and the summary lists the one it cites)
+    assert_eq!(a.sources.iter().map(|s| (s.index, s.chunk_id)).collect::<Vec<_>>(), vec![(1, chunks[0].id)]);
 }
 
 #[test]
@@ -2030,11 +2050,14 @@ fn several_documents_are_summarised_as_one() {
     let (first, second) = (user.find("출장비규정_2024").unwrap(), user.find("정보보안지침").unwrap());
     assert!(first < second, "{user}");
     assert_eq!(user.matches("<source ").count(), reg2 + chunks_of("sec"), "every passage of both: {user}");
-    // The sources are the passages the summary cites, under the numbers the text uses.
+    // The sources are the passages the summary cites, numbered in the order it cites them (1.0.5):
+    // the first passage of the second document was read as number `reg2 + 1` and is source 2.
     assert_eq!(
         a.sources.iter().map(|c| (c.index, c.document_id.as_str())).collect::<Vec<_>>(),
-        vec![(1, "reg2"), (reg2 as u32 + 1, "sec")]
+        vec![(1, "reg2"), (2, "sec")]
     );
+    assert_eq!(a.text, "- 숙박비 한도는 1박당 150,000원이다 [1]\n- 반출은 승인을 받아야 한다 [2]");
+    assert_eq!(a.sentences.iter().map(|s| s.citations.clone()).collect::<Vec<_>>(), vec![vec![1], vec![2]]);
     assert_eq!(a.sentences.len(), 2);
     assert_eq!((a.kind, a.document_id.as_deref()), (AnswerKind::Summary, None));
     assert!(a.question.contains("문서 2건의 내용"), "{}", a.question);
@@ -2052,13 +2075,16 @@ fn several_documents_are_summarised_as_one() {
     let (a, _) = summarize_documents(&deps, &req, &ids(&["reg2", "sec"]), &mut |_| true, &mut |_, _| {}).unwrap();
     assert_eq!(
         a.sources.iter().map(|c| (c.index, c.document_id.as_str())).collect::<Vec<_>>(),
-        vec![(1, "reg2"), (reg2 as u32 + 1, "sec")]
+        vec![(1, "reg2"), (2, "sec")]
     );
 
-    // One document: the summary is that document's, as `summarize` makes it — every passage a source.
+    // One document: the summary is that document's, as `summarize` makes it — with the sources it
+    // cites, like any other (1.0.5; it cites none here: the document's first passage).
     let (one, none) = summarize_documents(&deps, &req, &ids(&["reg2"]), &mut |_| true, &mut |_, _| {}).unwrap();
     assert!(none.is_empty());
-    assert_eq!((one.document_id.as_deref(), one.sources.len()), (Some("reg2"), reg2));
+    assert_eq!(one.document_id.as_deref(), Some("reg2"));
+    assert_eq!(one.sources.iter().map(|c| c.index).collect::<Vec<_>>(), vec![1]);
+    assert!(reg2 > 1, "{reg2}");
     let (user, _) = bare.last();
     assert!(user.contains("핵심 내용을 5개 이내의 개조식") && !user.contains("문서 1건"), "{user}");
     // No text in any of them: nothing to summarise.
@@ -2188,4 +2214,153 @@ fn a_topic_summary_gathers_the_passages_about_the_subject() {
     assert!(summarize_topic(&deps, &req, &mut |_| true).unwrap().no_evidence);
     req.question = "  ".into();
     assert!(summarize_topic(&deps, &req, &mut |_| true).is_err());
+}
+
+/// A three-page document short enough to be one chunk: the maintenance terms are on page 1, the
+/// penalty on page 2, the rest on page 3.
+const TERMS_PAGES: [&str; 3] = [
+    "유지보수 계약 조건\n\n본 계약의 유지보수 기간은 검수 완료일부터 12개월로 한다.",
+    "장애 대응은 접수 후 4시간 이내에 착수하며 위약금은 월 대금의 5%로 한다.",
+    "기타 사항은 양 당사자가 협의하여 정한다.",
+];
+
+/// 1.0.5 (user report "근거로 출력하는 위치와 검색의 위치가 문서에서 찾은 내용과 맞지 않음"): a chunk
+/// covers several pages, and a hit / a source is shown on the page its match stands on — not on the
+/// chunk's first page.
+#[test]
+fn a_match_is_shown_on_its_own_page_of_a_passage_that_covers_several() {
+    let w = World::new();
+    add_doc(&w.db, "terms", "유지보수조건.pdf", DocumentRole::Work, &TERMS_PAGES);
+    index_pending(&w.index_deps(), None, false, None, &mut |_| {}).unwrap();
+    let chunks = w.db.with(|c| repo::list_chunks(c, "terms")).unwrap();
+    assert_eq!(chunks.iter().map(|c| (c.page_start, c.page_end)).collect::<Vec<_>>(), vec![(1, 3)], "{chunks:?}");
+
+    let hit = |query: &str| {
+        let mut req = SearchRequest::new(query);
+        req.scope = SearchScope::documents(&["terms".to_string()]);
+        search(&w.search_deps(None), &req).unwrap().hits.into_iter().next().unwrap()
+    };
+    let h = hit("위약금");
+    assert_eq!((h.page_start, h.page_end, h.match_page), (1, 3, Some(2)), "{h:?}");
+    assert_eq!(hit("유지보수 기간").match_page, Some(1));
+    assert_eq!(hit("협의").match_page, Some(3));
+    // A passage on one page is on that page.
+    let single = w.hits("지체상금").into_iter().find(|h| h.document_id == "con").unwrap();
+    assert_eq!((single.page_start, single.page_end, single.match_page), (2, 2, Some(2)));
+
+    // The answer's source carries the page of the hit it was made from.
+    let chat = ScriptedChat { reply: "위약금은 월 대금의 5%입니다[1].".into(), model: "m".into() };
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None, context_size: None };
+    let mut req = AnswerRequest::question("위약금은 얼마인가요?");
+    req.scope = SearchScope::documents(&["terms".to_string()]);
+    let a = answer(&deps, &req, &mut |_| true).unwrap();
+    assert_eq!((a.sources[0].page_start, a.sources[0].page_end, a.sources[0].match_page), (1, 3, Some(2)), "{a:?}");
+    // (its excerpt holds the match: for a long passage it is the text around it, not the opening lines)
+    assert!(a.sources[0].excerpt.contains("위약금은 월 대금의 5%"), "{}", a.sources[0].excerpt);
+    // … and comes back with it from the stored answer; a source stored before 1.0.5 has no such
+    // field and keeps the page it was shown with — it is not one whose page is unknown.
+    let saved = w.db.with(|c| repo::list_answers(c, Some(AnswerKind::Answer), None, 1)).unwrap();
+    assert_eq!(saved[0].sources[0].match_page, Some(2));
+    let mut old = serde_json::to_value(&a.sources[0]).unwrap();
+    old.as_object_mut().unwrap().remove("match_page");
+    assert_eq!(serde_json::from_value::<Citation>(old.clone()).unwrap().match_page, Some(1));
+    old["match_page"] = serde_json::Value::Null;
+    assert_eq!(serde_json::from_value::<Citation>(old).unwrap().match_page, None);
+
+    // A summary's source is where its passage begins.
+    let chat = ScriptedChat { reply: "- 위약금은 월 대금의 5%이다[1].".into(), model: "m".into() };
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None, context_size: None };
+    let mut req = AnswerRequest::question("");
+    req.kind = AnswerKind::Summary;
+    req.document_id = Some("terms".into());
+    req.save = false;
+    let a = summarize(&deps, &req, &mut |_| true).unwrap();
+    assert_eq!(a.sources.iter().map(|s| (s.index, s.match_page)).collect::<Vec<_>>(), vec![(1, Some(1))]);
+    // … and a summary about a subject shows each passage where the subject's words stand.
+    let mut req = AnswerRequest::question("위약금");
+    req.kind = AnswerKind::Summary;
+    req.scope = SearchScope::documents(&["terms".to_string()]);
+    req.save = false;
+    let a = summarize_topic(&deps, &req, &mut |_| true).unwrap();
+    assert_eq!(a.sources.iter().map(|s| (s.page_start, s.match_page)).collect::<Vec<_>>(), vec![(1, Some(2))]);
+}
+
+/// 1.0.5: a converted document whose printed pages carry no text keeps its whole text on page 1
+/// (`documents::import`) while the viewer shows every page — "p.1" is no place then, and none is given.
+#[test]
+fn a_converted_document_with_its_text_on_page_one_has_no_page_to_show() {
+    let w = World::new();
+    let whole = TERMS_PAGES.join("\n\n");
+    add_doc_as(&w.db, "hwpx", "유지보수조건.hwpx", DocumentRole::Work, &[&whole, "", ""], true);
+    // The same shape in a PDF of its own — a text layer on the first page only — is on page 1.
+    add_doc(&w.db, "cover", "유지보수조건_스캔.pdf", DocumentRole::Work, &[&whole, "", ""]);
+    // A converted document whose pages have their text is located like any other.
+    add_doc_as(&w.db, "docx", "유지보수조건.docx", DocumentRole::Work, &TERMS_PAGES, true);
+    index_pending(&w.index_deps(), None, false, None, &mut |_| {}).unwrap();
+    let page = |id: &str| {
+        let mut req = SearchRequest::new("위약금");
+        req.scope = SearchScope::documents(&[id.to_string()]);
+        let h = search(&w.search_deps(None), &req).unwrap().hits.into_iter().next().unwrap();
+        (h.page_start, h.match_page)
+    };
+    assert_eq!(page("hwpx"), (1, None));
+    assert_eq!(page("cover"), (1, Some(1)));
+    assert_eq!(page("docx"), (1, Some(2)));
+
+    let chat = ScriptedChat { reply: "위약금은 월 대금의 5%입니다[1].".into(), model: "m".into() };
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None, context_size: None };
+    let mut req = AnswerRequest::question("위약금은 얼마인가요?");
+    req.scope = SearchScope::documents(&["hwpx".to_string()]);
+    req.save = false;
+    let a = answer(&deps, &req, &mut |_| true).unwrap();
+    assert_eq!((a.sources[0].document_id.as_str(), a.sources[0].match_page), ("hwpx", None));
+    // Evidence kept for a follow-up, and a summary's sources, have none either.
+    let mut follow = AnswerRequest::question("그럼 기간은?");
+    follow.scope = req.scope.clone();
+    follow.keep_chunks = vec![a.sources[0].chunk_id];
+    follow.save = false;
+    assert_eq!(answer(&deps, &follow, &mut |_| true).unwrap().sources[0].match_page, None);
+    let mut req = AnswerRequest::question("");
+    req.kind = AnswerKind::Summary;
+    req.save = false;
+    let (a, _) =
+        summarize_documents(&deps, &req, &["hwpx".to_string(), "docx".to_string()], &mut |_| true, &mut |_, _| {})
+            .unwrap();
+    assert_eq!(
+        a.sources.iter().map(|s| (s.index, s.document_id.as_str(), s.match_page)).collect::<Vec<_>>(),
+        vec![(1, "hwpx", None)]
+    );
+}
+
+/// 1.0.5: a summary lists the passages it cites, numbered in the order its text first cites them —
+/// the summary of one document used to list every passage, its `[n]` being the passage's place in
+/// the document.
+#[test]
+fn a_summary_numbers_the_sources_it_cites_from_one() {
+    let w = World::new();
+    add_long_regulation(&w);
+    let chunks = w.db.with(|c| repo::list_chunks(c, "big")).unwrap();
+    assert!(chunks.len() >= 7, "{}", chunks.len());
+    let chat = ScriptedChat {
+        reply: "- 숙박비 한도는 1박당 150,000원이다 [3].\n- 정산서는 7일 이내에 제출한다 [7][3].\n- 일비는 30,000원이다 [출처 7, 99].".into(),
+        model: "m".into(),
+    };
+    let deps =
+        AnswerDeps { search: w.search_deps(None), chat: &chat, model: None, cancelled: None, context_size: None };
+    let a = summarize(&deps, &summary_request(), &mut |_| true).unwrap();
+    assert_eq!(
+        a.text,
+        "- 숙박비 한도는 1박당 150,000원이다 [1].\n- 정산서는 7일 이내에 제출한다 [2][1].\n- 일비는 30,000원이다 [출처 2, 99]."
+    );
+    assert_eq!(
+        a.sources.iter().map(|s| (s.index, s.chunk_id)).collect::<Vec<_>>(),
+        vec![(1, chunks[2].id), (2, chunks[6].id)]
+    );
+    assert_eq!(a.sentences.iter().map(|s| s.citations.clone()).collect::<Vec<_>>(), vec![vec![1], vec![2, 1], vec![2]]);
+    // The stored summary is the renumbered one.
+    let saved = w.db.with(|c| repo::list_answers(c, Some(AnswerKind::Summary), Some("big"), 1)).unwrap();
+    assert_eq!((saved[0].text.as_str(), saved[0].sources.len()), (a.text.as_str(), 2));
 }

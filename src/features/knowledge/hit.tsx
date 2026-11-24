@@ -1,11 +1,3 @@
-import type { SearchHit } from "@/lib/types";
-
-/** Link to the viewer at the hit's page with the query highlighted. */
-export function hitHref(hit: Pick<SearchHit, "document_id" | "page_start" | "chunk_id">, query: string): string {
-  const params = new URLSearchParams({ page: String(hit.page_start), q: query, chunk: String(hit.chunk_id) });
-  return `/library/${hit.document_id}?${params.toString()}`;
-}
-
 /** A snippet with its highlight ranges (character offsets) rendered as `<mark>`. */
 export function Snippet({ text, highlights }: { text: string; highlights: [number, number][] }) {
   const chars = Array.from(text);
