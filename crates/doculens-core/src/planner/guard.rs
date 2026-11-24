@@ -703,6 +703,7 @@ fn find_is_quoted(text: &str, find: &str) -> bool {
 /// 문서 작성 the request is about that draft and stays), a replacement in the documents whose `find`
 /// the sentence does not quote (`edit_text`), `open`, `search`, `explain`, `summarize`, an answer
 /// that is not already over the text the sentence brought, "nothing to do", or a question back.
+/// So is a step that processes documents (`extract`, `ocr`, `classify`, `validate`, `aggregate`).
 /// Any other plan — a settings change, a tag, a title — keeps the model's reading. Returns the note
 /// for the card (none for the question).
 pub fn polish_in_chat(text: &str, plan: &mut Plan, ctx: &super::PlanContext, ko: bool) -> Option<Option<PlanIssue>> {
@@ -730,6 +731,11 @@ pub fn polish_in_chat(text: &str, plan: &mut Plan, ctx: &super::PlanContext, ko:
                 | Op::Summarize { .. }
                 | Op::Noop {}
                 | Op::Clarify { .. } => true,
+                // (processing the documents is not what a sentence about wording asks: "요구사항 부분을
+                // 좀 다듬어줘" came back as `extract` + an unquoted `edit_text` — eval run of 2026-11-24)
+                Op::Extract { .. } | Op::Ocr { .. } | Op::Classify { .. } | Op::Validate {} | Op::Aggregate { .. } => {
+                    true
+                }
                 Op::ReviseDraft { .. } => ctx.draft_id.is_none(),
                 Op::EditText { find, .. } => !find_is_quoted(text, find),
                 // (the answer over the user's whole sentence is the one this guard would make)

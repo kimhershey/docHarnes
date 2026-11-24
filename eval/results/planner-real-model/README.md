@@ -67,10 +67,20 @@
 
 읽는 법: 잰 것은 계획까지입니다. 선택지를 고른 뒤의 실행, 유형 겹침 선택지(DB가 필요)는 이 측정에 없습니다. E2B · GPU는 재지 않았습니다.
 
+## 1.0.6 — "다듬어줘 / 수정해줘"는 문서 작성이 아님 (사용자 결정 2026-11-24)
+
+**앞 대화가 없을 때 (7문장, `polish-1.0.6.golden.json`)** — 고치기 전에는 "방금 답변 좀 더 자연스럽게 다듬어줘"가 문서의 글 바꾸기(`edit_text`, find "방금 답변")로, "요구사항 부분을 좀 다듬어줘"가 폴더 열기로 나왔습니다. 고친 뒤 **7/7**: 글을 함께 보낸 문장은 그 글로 답하고, 글이 없는 네 문장은 어떤 글인지 묻고, "다듬어서 새 문서로 만들어줘"는 문서 작성입니다.
+
+**앞 답변이 있을 때 (골든셋 6문장, `--ids ko-167,ko-168,ko-169,ko-170,ko-173,ko-176`)** — **6/6**: 직전 답변 전체를 다듬는 답변(`answer{knowledge:false}`, 질문 = "지시문:\n직전 답변")이 됩니다.
+`ko-170` "요구사항 부분을 좀 다듬어줘"는 첫 측정에서 모델이 `extract` + `edit_text`(find "요구사항")를 써서 틀렸습니다. 문서를 처리하는 단계(`extract` · `ocr` · `classify` · `validate` · `aggregate`)도 `guard::polish_in_chat`이 넘겨받게 하고 그 문장만 다시 재서 맞았습니다(결과 파일의 `first_measurement`).
+
+고치기 전 결과 파일의 정답 표시는 기대값을 채우기 전 것이라 쓰지 않습니다. 잰 것은 계획까지입니다 — 다듬은 글 자체의 품질은 재지 않았습니다. 문장당 24 ~ 201초.
+
 ## 파일
 
 - `one-summary-1.0.3.golden.json` — 1.0.3의 12문장. 컨텍스트는 `topic-summary-1.0.2-open-document.context.json`.
 - `project-reference-1.0.5.golden.json` — 1.0.5의 8문장(컨텍스트는 같은 파일). `gemma4-e4b-q4km-1.0.5-project-reference-before.json` / `…-project-reference.json` — 고치기 전과 후.
 - `gemma4-e4b-q4km-1.0.5-tell-type-choices.json` — 골든셋 11문장(문장은 `eval/golden/planner.json`).
+- `polish-1.0.6.golden.json` — 1.0.6의 7문장. `gemma4-e4b-q4km-1.0.6-polish-before.json` / `…-polish.json` — 고치기 전과 후, `…-polish-with-reply.json` — 앞 답변이 있는 골든셋 6문장.
 - `one-summary-1.0.3.golden.json`의 s-9("AAA에 대해서 요약해줘")는 1.0.5에서 기대값이 선택지 세 개의 되묻기로 바뀌었습니다(1.0.3 결과 파일은 그대로).
 - `gemma4-e4b-q4km-1.0.3-one-summary-before-guards.json`, `gemma4-e4b-q4km-1.0.3-one-summary.json` — 12문장: `guard::unsaid_length`와 해석 문장 교체를 넣기 전과 후. 경로는 저장소 기준으로 고쳐 적었다.

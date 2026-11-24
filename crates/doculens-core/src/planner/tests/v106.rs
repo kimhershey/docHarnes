@@ -194,7 +194,16 @@ fn the_text_to_work_on_is_what_the_sentence_brings_or_the_last_reply_in_full() {
 /// work on.
 #[test]
 fn a_model_plan_that_takes_a_polish_request_elsewhere_is_answered_in_the_chat() {
-    let measured: [(&str, &str, Value); 4] = [
+    let measured: [(&str, &str, Value); 5] = [
+        // ko-170 with a reply behind it: fields extracted and "요구사항" replaced in the documents
+        (
+            MEASURED[3],
+            "edit_text",
+            json!([
+                { "op": "extract", "schema_ref": "s-srs" },
+                { "op": "edit_text", "find": "요구사항", "replace": "다듬어진 요구사항", "pages": [] }
+            ]),
+        ),
         // d-2: a replacement in the open document
         (
             MEASURED[0],
